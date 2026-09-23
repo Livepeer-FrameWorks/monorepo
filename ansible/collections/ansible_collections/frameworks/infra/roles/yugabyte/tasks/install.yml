@@ -53,6 +53,24 @@
     shell: /usr/sbin/nologin
     state: present
 
+- name: Ensure FrameWorks runtime directory
+  ansible.builtin.file:
+    path: /var/lib/frameworks
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Ensure private Yugabyte relayout directories
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    owner: "{{ yugabyte_relayout_operator_user }}"
+    mode: "0700"
+  loop:
+    - "{{ yugabyte_relayout_dump_dir }}"
+    - "{{ yugabyte_relayout_worker_dir }}"
+
 - name: Ensure yugabyte directories
   ansible.builtin.file:
     path: "{{ item }}"

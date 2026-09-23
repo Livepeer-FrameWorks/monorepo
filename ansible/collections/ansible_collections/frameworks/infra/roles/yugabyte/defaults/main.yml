@@ -20,6 +20,12 @@ yugabyte_install_dir: /opt/yugabyte
 yugabyte_data_dir: /var/lib/yugabyte/data
 yugabyte_cores_dir: /var/lib/yugabyte/cores
 yugabyte_tarball_path: /tmp/yugabyte.tar.gz
+# The CLI runs relayout workers as the manifest's SSH automation user. These
+# private directories are provisioned for that user; their root-owned parent
+# remains non-writable so worker records cannot be forged by another account.
+yugabyte_relayout_operator_user: root
+yugabyte_relayout_dump_dir: /var/lib/frameworks/relayout
+yugabyte_relayout_worker_dir: /var/lib/frameworks/relayout-workers
 
 # Network / cluster topology. master_addresses is a comma-separated list of
 # host:7100 for every yb-master in the ensemble; for single-node it's this

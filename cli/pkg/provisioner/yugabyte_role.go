@@ -37,21 +37,26 @@ func yugabyteRoleVars(ctx context.Context, host inventory.Host, config ServiceCo
 	if masterAddresses == "" {
 		masterAddresses = fmt.Sprintf("%s:7100", meshOrExternal(config.Metadata, host))
 	}
+	relayoutOperatorUser := strings.TrimSpace(host.User)
+	if relayoutOperatorUser == "" {
+		relayoutOperatorUser = "root"
+	}
 
 	vars := map[string]any{
-		"yugabyte_artifact_url":        artifact.URL,
-		"yugabyte_artifact_checksum":   artifact.Checksum,
-		"yugabyte_version":             releaseVersion(config.Version, artifact.Version),
-		"yugabyte_node_address":        meshOrExternal(config.Metadata, host),
-		"yugabyte_master_addresses":    masterAddresses,
-		"yugabyte_replication_factor":  rf,
-		"yugabyte_ysql_port":           port,
-		"yugabyte_placement_cloud":     "frameworks",
-		"yugabyte_placement_region":    "eu",
-		"yugabyte_placement_zone":      fmt.Sprintf("eu-%d", max(nodeID, 1)),
-		"yugabyte_node_id":             nodeID,
-		"yugabyte_restart_scope":       yugabyteRestartScope(config.Metadata),
-		"yugabyte_allow_engine_change": metaBool(config.Metadata, "allow_engine_change", false),
+		"yugabyte_artifact_url":           artifact.URL,
+		"yugabyte_artifact_checksum":      artifact.Checksum,
+		"yugabyte_version":                releaseVersion(config.Version, artifact.Version),
+		"yugabyte_node_address":           meshOrExternal(config.Metadata, host),
+		"yugabyte_master_addresses":       masterAddresses,
+		"yugabyte_replication_factor":     rf,
+		"yugabyte_ysql_port":              port,
+		"yugabyte_placement_cloud":        "frameworks",
+		"yugabyte_placement_region":       "eu",
+		"yugabyte_placement_zone":         fmt.Sprintf("eu-%d", max(nodeID, 1)),
+		"yugabyte_node_id":                nodeID,
+		"yugabyte_restart_scope":          yugabyteRestartScope(config.Metadata),
+		"yugabyte_allow_engine_change":    metaBool(config.Metadata, "allow_engine_change", false),
+		"yugabyte_relayout_operator_user": relayoutOperatorUser,
 	}
 
 	if dbs, ok := config.Metadata["databases"].([]map[string]string); ok && len(dbs) > 0 {

@@ -49,6 +49,11 @@ argument_specs:
         required: false
         default: false
         description: Allow changing the engine of a node that already joined the universe; set only by cluster upgrade.
+      yugabyte_relayout_operator_user:
+        type: str
+        required: false
+        default: root
+        description: SSH automation user that owns the private relayout dump and worker directories.
       yugabyte_master_addresses:
         type: str
         required: false

@@ -34,6 +34,18 @@ func TestYugabyteRoleVarsPassesDatabaseOwnerPassword(t *testing.T) {
 	}
 }
 
+func TestYugabyteRoleVarsPassesRelayoutOperatorUser(t *testing.T) {
+	host := nilHost()
+	host.User = "mistserver"
+	vars, err := yugabyteRoleVars(context.Background(), host, ServiceConfig{}, mockPrivateerHelpers())
+	if err != nil {
+		t.Fatalf("yugabyteRoleVars: %v", err)
+	}
+	if got := vars["yugabyte_relayout_operator_user"]; got != "mistserver" {
+		t.Fatalf("yugabyte_relayout_operator_user = %v, want mistserver", got)
+	}
+}
+
 func TestYugabyteRoleVarsRejectsRuntimeOwnerCollision(t *testing.T) {
 	_, err := yugabyteRoleVars(context.Background(), nilHost(), ServiceConfig{
 		Metadata: map[string]any{
@@ -57,6 +69,21 @@ func TestYugabyteRoleUsesPerDatabasePasswords(t *testing.T) {
 	} {
 		if !strings.Contains(content, want) {
 			t.Fatalf("yugabyte init should keep owner/runtime credentials independent; missing %q:\n%s", want, content)
+		}
+	}
+}
+
+func TestYugabyteRoleProvisionsRelayoutDirectories(t *testing.T) {
+	content := readRepoFile(t, "ansible/collections/ansible_collections/frameworks/infra/roles/yugabyte/tasks/install.yml")
+	for _, want := range []string{
+		"Ensure private Yugabyte relayout directories",
+		`owner: "{{ yugabyte_relayout_operator_user }}"`,
+		`mode: "0700"`,
+		`"{{ yugabyte_relayout_dump_dir }}"`,
+		`"{{ yugabyte_relayout_worker_dir }}"`,
+	} {
+		if !strings.Contains(content, want) {
+			t.Fatalf("yugabyte install should provision private relayout paths; missing %q:\n%s", want, content)
 		}
 	}
 }
