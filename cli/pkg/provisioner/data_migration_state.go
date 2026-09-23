@@ -22,6 +22,11 @@ type DataMigrationLedger struct {
 	Statuses map[string]string
 }
 
+type dataMigrationLedgerTarget struct {
+	database string
+	schema   string
+}
+
 // ReadDataMigrationLedgers reads _data_migrations (id, status) per database over SSH, using the SAME production access
 // path as ReadMigrationLedger (psql as the postgres OS user over the local socket, or ysqlsh for Yugabyte). It is
 // fail-closed: a genuine connection/query error is returned so the caller refuses rather than deploying against an
@@ -38,27 +43,51 @@ func ReadDataMigrationLedgers(
 	if pg == nil {
 		return nil, fmt.Errorf("read data-migration ledger: nil postgres config")
 	}
-	names := migrationLedgerDatabaseNames(databases)
-	out := make(map[string]DataMigrationLedger, len(names))
-	for _, db := range names {
+	targets := dataMigrationLedgerTargets(databases)
+	out := make(map[string]DataMigrationLedger, len(targets))
+	for _, target := range targets {
 		var (
 			led DataMigrationLedger
 			err error
 		)
 		if pg.IsYugabyte() {
-			led, err = readDataMigrationLedgerYugabyteSSH(ctx, sshPool, host, pg, db)
+			led, err = readDataMigrationLedgerYugabyteSSH(ctx, sshPool, host, pg, target.database, target.schema)
 		} else {
-			led, err = readDataMigrationLedgerSSH(ctx, sshPool, host, db)
+			led, err = readDataMigrationLedgerSSH(ctx, sshPool, host, target.database, target.schema)
 		}
 		if err != nil {
-			return nil, fmt.Errorf("%s: %w", db, err)
+			return nil, fmt.Errorf("%s: %w", target.database, err)
 		}
-		out[db] = led
+		out[target.database] = led
 	}
 	return out, nil
 }
 
-func readDataMigrationLedgerSSH(ctx context.Context, sshPool *ssh.Pool, host inventory.Host, dbName string) (DataMigrationLedger, error) {
+func dataMigrationLedgerTargets(databases []SchemaDatabase) []dataMigrationLedgerTarget {
+	out := make([]dataMigrationLedgerTarget, 0, len(databases))
+	seen := map[string]struct{}{}
+	for _, database := range databases {
+		normalized, ok := normalizeSchemaDatabase(database)
+		if !ok {
+			continue
+		}
+		if _, ok := seen[normalized.Name]; ok {
+			continue
+		}
+		out = append(out, dataMigrationLedgerTarget{database: normalized.Name, schema: normalized.Schema})
+		seen[normalized.Name] = struct{}{}
+	}
+	return out
+}
+
+func dataMigrationLedgerRelation(schemaName string) (string, error) {
+	if !simpleDBIdentifier.MatchString(schemaName) {
+		return "", fmt.Errorf("invalid schema name %q", schemaName)
+	}
+	return schemaName + "._data_migrations", nil
+}
+
+func readDataMigrationLedgerSSH(ctx context.Context, sshPool *ssh.Pool, host inventory.Host, dbName, schemaName string) (DataMigrationLedger, error) {
 	if sshPool == nil {
 		return DataMigrationLedger{}, errors.New("ssh pool is nil")
 	}
@@ -68,6 +97,10 @@ func readDataMigrationLedgerSSH(ctx context.Context, sshPool *ssh.Pool, host inv
 	if !simpleDBIdentifier.MatchString(dbName) {
 		return DataMigrationLedger{}, fmt.Errorf("invalid database name %q", dbName)
 	}
+	relation, err := dataMigrationLedgerRelation(schemaName)
+	if err != nil {
+		return DataMigrationLedger{}, err
+	}
 
 	cfg := &ssh.ConnectionConfig{
 		Address:  host.ExternalIP,
@@ -76,7 +109,7 @@ func readDataMigrationLedgerSSH(ctx context.Context, sshPool *ssh.Pool, host inv
 		HostName: host.Name,
 		Timeout:  30 * time.Second,
 	}
-	cmd := fmt.Sprintf(`sudo -u postgres psql -tAF '|' -d %s -c "SELECT id, status FROM _data_migrations"`, dbName)
+	cmd := fmt.Sprintf(`sudo -u postgres psql -tAF '|' -d %s -c "SELECT id, status FROM %s"`, dbName, relation)
 	runCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
 	defer cancel()
 
@@ -91,12 +124,12 @@ func readDataMigrationLedgerSSH(ctx context.Context, sshPool *ssh.Pool, host inv
 		if isUndefinedDatabaseOutput(result.Stderr) {
 			return DataMigrationLedger{Exists: false}, nil
 		}
-		if isUndefinedDataMigrationTableOutput(result.Stderr) || isUndefinedDataMigrationTableOutput(result.Stdout) {
+		if isUndefinedDataMigrationTableOutput(result.Stderr, relation) || isUndefinedDataMigrationTableOutput(result.Stdout, relation) {
 			return DataMigrationLedger{Exists: true, Statuses: map[string]string{}}, nil
 		}
 		return DataMigrationLedger{}, fmt.Errorf("psql exit %d: %s", result.ExitCode, strings.TrimSpace(result.Stderr))
 	}
-	if isUndefinedDataMigrationTableOutput(result.Stdout) {
+	if isUndefinedDataMigrationTableOutput(result.Stdout, relation) {
 		return DataMigrationLedger{Exists: true, Statuses: map[string]string{}}, nil
 	}
 	statuses, perr := parseDataMigrationPipeOutput(result.Stdout)
@@ -106,7 +139,7 @@ func readDataMigrationLedgerSSH(ctx context.Context, sshPool *ssh.Pool, host inv
 	return DataMigrationLedger{Exists: true, Statuses: statuses}, nil
 }
 
-func readDataMigrationLedgerYugabyteSSH(ctx context.Context, sshPool *ssh.Pool, host inventory.Host, pg *inventory.PostgresConfig, dbName string) (DataMigrationLedger, error) {
+func readDataMigrationLedgerYugabyteSSH(ctx context.Context, sshPool *ssh.Pool, host inventory.Host, pg *inventory.PostgresConfig, dbName, schemaName string) (DataMigrationLedger, error) {
 	if sshPool == nil {
 		return DataMigrationLedger{}, errors.New("ssh pool is nil")
 	}
@@ -115,6 +148,10 @@ func readDataMigrationLedgerYugabyteSSH(ctx context.Context, sshPool *ssh.Pool, 
 	}
 	if !simpleDBIdentifier.MatchString(dbName) {
 		return DataMigrationLedger{}, fmt.Errorf("invalid database name %q", dbName)
+	}
+	relation, err := dataMigrationLedgerRelation(schemaName)
+	if err != nil {
+		return DataMigrationLedger{}, err
 	}
 
 	runner, err := sshPool.Get(&ssh.ConnectionConfig{
@@ -137,7 +174,7 @@ func readDataMigrationLedgerYugabyteSSH(ctx context.Context, sshPool *ssh.Pool, 
 		Database: dbName,
 	}
 	statuses := map[string]string{}
-	err = exec.QueryRows(queryCtx, conn, `SELECT id, status FROM _data_migrations`, nil, func(scan func(dest ...any) error) error {
+	err = exec.QueryRows(queryCtx, conn, `SELECT id, status FROM `+relation, nil, func(scan func(dest ...any) error) error {
 		var id, status string
 		if scanErr := scan(&id, &status); scanErr != nil {
 			return scanErr
@@ -179,8 +216,8 @@ func isUndefinedDatabaseOutput(s string) bool {
 	return strings.Contains(s, "does not exist") && strings.Contains(s, "database ")
 }
 
-func isUndefinedDataMigrationTableOutput(s string) bool {
-	return strings.Contains(s, `relation "_data_migrations" does not exist`)
+func isUndefinedDataMigrationTableOutput(s, relation string) bool {
+	return strings.Contains(s, `relation "`+relation+`" does not exist`)
 }
 
 func isUndefinedDatabaseErr(err error) bool {
