@@ -28,15 +28,41 @@ type subscriptionsFixture struct {
 	MaxReconnects int `json:"maxReconnects"`
 	Cases         []struct {
 		Name        string             `json:"name"`
+		Operation   string             `json:"operation"`
+		Variables   vars               `json:"variables"`
 		Tokens      []*string          `json:"tokens"`
 		Connections []connectionScript `json:"connections"`
 		Expect      struct {
-			Connections   int            `json:"connections"`
-			Authorization []*string      `json:"authorization"`
-			EventIDs      []string       `json:"eventIds"`
-			Error         map[string]any `json:"error"`
+			Connections   int               `json:"connections"`
+			Authorization []*string         `json:"authorization"`
+			EventIDs      []string          `json:"eventIds"`
+			Events        []json.RawMessage `json:"events"`
+			Subscribed    []map[string]any  `json:"subscribed"`
+			Error         map[string]any    `json:"error"`
 		} `json:"expect"`
 	} `json:"cases"`
+}
+
+// withoutNulls returns v with every null object member removed, at any depth.
+func withoutNulls(v any) any {
+	switch t := v.(type) {
+	case map[string]any:
+		out := map[string]any{}
+		for k, member := range t {
+			if member != nil {
+				out[k] = withoutNulls(member)
+			}
+		}
+		return out
+	case []any:
+		out := make([]any, len(t))
+		for i, item := range t {
+			out[i] = withoutNulls(item)
+		}
+		return out
+	default:
+		return v
+	}
 }
 
 var testUpgrader = websocket.Upgrader{
@@ -45,13 +71,14 @@ var testUpgrader = websocket.Upgrader{
 }
 
 // scriptedWSServer plays connection scripts in order and records the
-// Authorization value of every connection_init.
+// Authorization value of every connection_init and the payload of every
+// subscribe message.
 type scriptedWSServer struct {
 	mu            sync.Mutex
 	scripts       []connectionScript
 	connections   int
 	authorization []*string
-	subscribed    map[string]any
+	subscribed    []map[string]any
 }
 
 func (s *scriptedWSServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -106,7 +133,7 @@ func (s *scriptedWSServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			_ = conn.WriteJSON(map[string]any{"type": "connection_ack"})
 		case "subscribe":
 			s.mu.Lock()
-			s.subscribed = msg.Payload
+			s.subscribed = append(s.subscribed, msg.Payload)
 			s.mu.Unlock()
 			for _, data := range script.Next {
 				_ = conn.WriteJSON(map[string]any{"id": msg.ID, "type": "next", "payload": map[string]any{"data": data}})
@@ -164,20 +191,44 @@ func TestSubscriptions(t *testing.T) {
 			}
 			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 			defer cancel()
+			operation := tc.Operation
+			if operation == "" {
+				operation = "TenantEvents"
+			}
+			subscribe, ok := subscriptionCalls[operation]
+			if !ok {
+				t.Fatalf("no generated subscription %s", operation)
+			}
+			events := []any{}
 			eventIDs := []string{}
 			var subErr error
-			for ev, err := range SubscribeTenantEvents(ctx, sc, nil, nil) {
+			for ev, err := range subscribe(ctx, sc, tc.Variables) {
 				if err != nil {
 					subErr = err
 					break
 				}
-				eventIDs = append(eventIDs, ev.TenantEvents.Id)
+				events = append(events, ev)
+				if te, ok := ev.(*TenantEventsResponse); ok {
+					eventIDs = append(eventIDs, te.TenantEvents.Id)
+				}
 			}
-			if !jsonEqual(eventIDs, tc.Expect.EventIDs) {
+			if tc.Expect.EventIDs != nil && !jsonEqual(eventIDs, tc.Expect.EventIDs) {
 				t.Errorf("event ids = %v, want %v", eventIDs, tc.Expect.EventIDs)
+			}
+			if tc.Expect.Events != nil && !jsonEqual(events, tc.Expect.Events) {
+				t.Errorf("events = %s, want %s", mustJSON(events), mustJSON(tc.Expect.Events))
 			}
 			server.mu.Lock()
 			defer server.mu.Unlock()
+			if tc.Expect.Subscribed != nil {
+				sent := make([]any, len(server.subscribed))
+				for i, payload := range server.subscribed {
+					sent[i] = withoutNulls(map[string]any{"operationName": payload["operationName"], "variables": payload["variables"]})
+				}
+				if !jsonEqual(sent, tc.Expect.Subscribed) {
+					t.Errorf("subscribed = %s, want %s", mustJSON(sent), mustJSON(tc.Expect.Subscribed))
+				}
+			}
 			if server.connections != tc.Expect.Connections {
 				t.Errorf("connections = %d, want %d", server.connections, tc.Expect.Connections)
 			}

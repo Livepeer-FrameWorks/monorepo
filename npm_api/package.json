@@ -22,6 +22,11 @@
       "types": "./dist/subscriptions.d.ts",
       "default": "./dist/subscriptions.js"
     },
+    "./select": {
+      "source": "./src/select.ts",
+      "types": "./dist/select.d.ts",
+      "default": "./dist/select.js"
+    },
     "./webhooks": {
       "source": "./src/webhooks.ts",
       "types": "./dist/webhooks.d.ts",
@@ -39,7 +44,7 @@
   },
   "scripts": {
     "build": "rm -rf dist && tsc -p tsconfig.build.json",
-    "codegen": "graphql-codegen --config codegen.ts && node codegen/descriptions.mjs",
+    "codegen": "graphql-codegen --config codegen.ts && node codegen/descriptions.mjs && node codegen/select.mjs",
     "type-check": "tsc -p tsconfig.json --noEmit && tsc -p examples/tsconfig.json --noEmit",
     "lint": "eslint .",
     "test": "vitest run",
@@ -59,6 +64,7 @@
     }
   },
   "devDependencies": {
+    "@genql/cli": "6.3.4",
     "@graphql-codegen/add": "^7.1.0",
     "@graphql-codegen/cli": "^7.4.1",
     "@graphql-codegen/typed-document-node": "^7.1.0",

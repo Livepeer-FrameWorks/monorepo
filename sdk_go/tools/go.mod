@@ -8,6 +8,7 @@ go 1.27.0
 require (
 	github.com/Khan/genqlient v0.8.1
 	github.com/vektah/gqlparser/v2 v2.5.19
+	golang.org/x/tools v0.44.0
 )
 
 require (
@@ -17,6 +18,5 @@ require (
 	github.com/bmatcuk/doublestar/v4 v4.6.1 // indirect
 	golang.org/x/mod v0.35.0 // indirect
 	golang.org/x/sync v0.20.0 // indirect
-	golang.org/x/tools v0.44.0 // indirect
 	gopkg.in/yaml.v2 v2.4.0 // indirect
 )

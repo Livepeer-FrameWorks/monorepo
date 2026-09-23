@@ -30,7 +30,6 @@ query ListStreamKeys($streamId: ID!, $page: ConnectionInput) {
 
 query ListPushTargets($streamId: ID!) {
   stream(id: $streamId) {
-    id
     pushTargets {
       ...PushTargetFields
     }

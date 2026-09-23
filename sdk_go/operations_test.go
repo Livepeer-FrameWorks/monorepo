@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"io"
+	"iter"
 	"net/http"
 	"net/http/httptest"
 	"sort"
@@ -37,144 +38,22 @@ func arg[T any](v vars, name string) T {
 	return out
 }
 
+// operationCall is one entry of operationCalls, which genclient generates
+// into operation_calls_gen_test.go from the generated function signatures.
 type operationCall struct {
 	query string
 	call  func(ctx context.Context, c *Client, v vars) (any, error)
 }
 
-// operationCalls calls every generated query and mutation function with the
-// fixture's variables. TestGeneratedOperations fails when the fixture has an
-// operation this table lacks.
-var operationCalls = map[string]operationCall{
-	"AbortVodUpload": {AbortVodUpload_Operation, func(ctx context.Context, c *Client, v vars) (any, error) {
-		return AbortVodUpload(ctx, c, arg[string](v, "uploadId"))
-	}},
-	"CompleteVodUpload": {CompleteVodUpload_Operation, func(ctx context.Context, c *Client, v vars) (any, error) {
-		return CompleteVodUpload(ctx, c, arg[CompleteVodUploadInput](v, "input"))
-	}},
-	"CreateClip": {CreateClip_Operation, func(ctx context.Context, c *Client, v vars) (any, error) {
-		return CreateClip(ctx, c, arg[CreateClipInput](v, "input"))
-	}},
-	"CreateDeveloperToken": {CreateDeveloperToken_Operation, func(ctx context.Context, c *Client, v vars) (any, error) {
-		return CreateDeveloperToken(ctx, c, arg[CreateDeveloperTokenInput](v, "input"))
-	}},
-	"CreatePushTarget": {CreatePushTarget_Operation, func(ctx context.Context, c *Client, v vars) (any, error) {
-		return CreatePushTarget(ctx, c, arg[string](v, "streamId"), arg[CreatePushTargetInput](v, "input"))
-	}},
-	"CreateSigningKey": {CreateSigningKey_Operation, func(ctx context.Context, c *Client, v vars) (any, error) {
-		return CreateSigningKey(ctx, c, arg[CreateSigningKeyInput](v, "input"))
-	}},
-	"CreateStream": {CreateStream_Operation, func(ctx context.Context, c *Client, v vars) (any, error) {
-		return CreateStream(ctx, c, arg[CreateStreamInput](v, "input"))
-	}},
-	"CreateStreamKey": {CreateStreamKey_Operation, func(ctx context.Context, c *Client, v vars) (any, error) {
-		return CreateStreamKey(ctx, c, arg[string](v, "streamId"), arg[CreateStreamKeyInput](v, "input"))
-	}},
-	"CreateVodUpload": {CreateVodUpload_Operation, func(ctx context.Context, c *Client, v vars) (any, error) {
-		return CreateVodUpload(ctx, c, arg[CreateVodUploadInput](v, "input"))
-	}},
-	"DeleteClip": {DeleteClip_Operation, func(ctx context.Context, c *Client, v vars) (any, error) {
-		return DeleteClip(ctx, c, arg[string](v, "id"))
-	}},
-	"DeleteDVR": {DeleteDVR_Operation, func(ctx context.Context, c *Client, v vars) (any, error) {
-		return DeleteDVR(ctx, c, arg[string](v, "dvrHash"))
-	}},
-	"DeletePushTarget": {DeletePushTarget_Operation, func(ctx context.Context, c *Client, v vars) (any, error) {
-		return DeletePushTarget(ctx, c, arg[string](v, "id"))
-	}},
-	"DeleteStream": {DeleteStream_Operation, func(ctx context.Context, c *Client, v vars) (any, error) {
-		return DeleteStream(ctx, c, arg[string](v, "id"))
-	}},
-	"DeleteStreamKey": {DeleteStreamKey_Operation, func(ctx context.Context, c *Client, v vars) (any, error) {
-		return DeleteStreamKey(ctx, c, arg[string](v, "streamId"), arg[string](v, "keyId"))
-	}},
-	"DeleteVodAsset": {DeleteVodAsset_Operation, func(ctx context.Context, c *Client, v vars) (any, error) {
-		return DeleteVodAsset(ctx, c, arg[string](v, "id"))
-	}},
-	"GetClip": {GetClip_Operation, func(ctx context.Context, c *Client, v vars) (any, error) {
-		return GetClip(ctx, c, arg[string](v, "id"))
-	}},
-	"GetDVRChapter": {GetDVRChapter_Operation, func(ctx context.Context, c *Client, v vars) (any, error) {
-		return GetDVRChapter(ctx, c, arg[string](v, "dvrId"), arg[float64](v, "startMs"), arg[float64](v, "endMs"), arg[*DVRChapterMode](v, "mode"), arg[*int](v, "intervalSeconds"))
-	}},
-	"GetSigningKey": {GetSigningKey_Operation, func(ctx context.Context, c *Client, v vars) (any, error) {
-		return GetSigningKey(ctx, c, arg[string](v, "id"))
-	}},
-	"GetStream": {GetStream_Operation, func(ctx context.Context, c *Client, v vars) (any, error) {
-		return GetStream(ctx, c, arg[string](v, "id"))
-	}},
-	"GetTenantUsage": {GetTenantUsage_Operation, func(ctx context.Context, c *Client, v vars) (any, error) {
-		return GetTenantUsage(ctx, c, arg[*TimeRangeInput](v, "timeRange"))
-	}},
-	"GetUsageAggregates": {GetUsageAggregates_Operation, func(ctx context.Context, c *Client, v vars) (any, error) {
-		return GetUsageAggregates(ctx, c, arg[TimeRangeInput](v, "timeRange"), arg[*string](v, "granularity"), arg[[]string](v, "usageTypes"))
-	}},
-	"GetVodAsset": {GetVodAsset_Operation, func(ctx context.Context, c *Client, v vars) (any, error) {
-		return GetVodAsset(ctx, c, arg[string](v, "id"))
-	}},
-	"GetVodUploadStatus": {GetVodUploadStatus_Operation, func(ctx context.Context, c *Client, v vars) (any, error) {
-		return GetVodUploadStatus(ctx, c, arg[string](v, "uploadId"))
-	}},
-	"ListArtifacts": {ListArtifacts_Operation, func(ctx context.Context, c *Client, v vars) (any, error) {
-		return ListArtifacts(ctx, c, arg[*StorageArtifactsInput](v, "input"))
-	}},
-	"ListDVRChapters": {ListDVRChapters_Operation, func(ctx context.Context, c *Client, v vars) (any, error) {
-		return ListDVRChapters(ctx, c, arg[string](v, "dvrId"), arg[*DVRChapterMode](v, "mode"), arg[*int](v, "intervalSeconds"), arg[*float64](v, "rangeStartMs"), arg[*float64](v, "rangeEndMs"), arg[*int](v, "pageSize"), arg[*string](v, "pageToken"))
-	}},
-	"ListDeveloperTokens": {ListDeveloperTokens_Operation, func(ctx context.Context, c *Client, v vars) (any, error) {
-		return ListDeveloperTokens(ctx, c, arg[*ConnectionInput](v, "page"))
-	}},
-	"ListPushTargets": {ListPushTargets_Operation, func(ctx context.Context, c *Client, v vars) (any, error) {
-		return ListPushTargets(ctx, c, arg[string](v, "streamId"))
-	}},
-	"ListSigningKeys": {ListSigningKeys_Operation, func(ctx context.Context, c *Client, v vars) (any, error) {
-		return ListSigningKeys(ctx, c, arg[*string](v, "status"), arg[*ConnectionInput](v, "page"))
-	}},
-	"ListStreamKeys": {ListStreamKeys_Operation, func(ctx context.Context, c *Client, v vars) (any, error) {
-		return ListStreamKeys(ctx, c, arg[string](v, "streamId"), arg[*ConnectionInput](v, "page"))
-	}},
-	"ListStreams": {ListStreams_Operation, func(ctx context.Context, c *Client, v vars) (any, error) {
-		return ListStreams(ctx, c, arg[*ConnectionInput](v, "page"), arg[*string](v, "search"))
-	}},
-	"ListUsageRecords": {ListUsageRecords_Operation, func(ctx context.Context, c *Client, v vars) (any, error) {
-		return ListUsageRecords(ctx, c, arg[*ConnectionInput](v, "page"), arg[*TimeRangeInput](v, "timeRange"))
-	}},
-	"RefreshStreamKey": {RefreshStreamKey_Operation, func(ctx context.Context, c *Client, v vars) (any, error) {
-		return RefreshStreamKey(ctx, c, arg[string](v, "id"))
-	}},
-	"ResolveIngestEndpoint": {ResolveIngestEndpoint_Operation, func(ctx context.Context, c *Client, v vars) (any, error) {
-		return ResolveIngestEndpoint(ctx, c, arg[string](v, "streamKey"), arg[*MediaIngestProtocol](v, "protocol"))
-	}},
-	"ResolveViewerEndpoint": {ResolveViewerEndpoint_Operation, func(ctx context.Context, c *Client, v vars) (any, error) {
-		return ResolveViewerEndpoint(ctx, c, arg[string](v, "contentId"), arg[*MediaViewerProtocol](v, "protocol"))
-	}},
-	"RevokeDeveloperToken": {RevokeDeveloperToken_Operation, func(ctx context.Context, c *Client, v vars) (any, error) {
-		return RevokeDeveloperToken(ctx, c, arg[string](v, "id"))
-	}},
-	"RevokeSigningKey": {RevokeSigningKey_Operation, func(ctx context.Context, c *Client, v vars) (any, error) {
-		return RevokeSigningKey(ctx, c, arg[string](v, "id"))
-	}},
-	"ServerInfo": {ServerInfo_Operation, func(ctx context.Context, c *Client, _ vars) (any, error) {
-		return ServerInfo(ctx, c)
-	}},
-	"SetPlaybackPolicy": {SetPlaybackPolicy_Operation, func(ctx context.Context, c *Client, v vars) (any, error) {
-		return SetPlaybackPolicy(ctx, c, arg[SetPlaybackPolicyInput](v, "input"))
-	}},
-	"StartDVR": {StartDVR_Operation, func(ctx context.Context, c *Client, v vars) (any, error) {
-		return StartDVR(ctx, c, arg[string](v, "streamId"))
-	}},
-	"StopDVR": {StopDVR_Operation, func(ctx context.Context, c *Client, v vars) (any, error) {
-		return StopDVR(ctx, c, arg[string](v, "dvrHash"))
-	}},
-	"TestPlaybackAccess": {TestPlaybackAccess_Operation, func(ctx context.Context, c *Client, v vars) (any, error) {
-		return TestPlaybackAccess(ctx, c, arg[TestPlaybackAccessInput](v, "input"))
-	}},
-	"UpdatePushTarget": {UpdatePushTarget_Operation, func(ctx context.Context, c *Client, v vars) (any, error) {
-		return UpdatePushTarget(ctx, c, arg[string](v, "id"), arg[UpdatePushTargetInput](v, "input"))
-	}},
-	"UpdateStream": {UpdateStream_Operation, func(ctx context.Context, c *Client, v vars) (any, error) {
-		return UpdateStream(ctx, c, arg[string](v, "id"), arg[UpdateStreamInput](v, "input"))
-	}},
+// anyEvents adapts a typed subscription to the subscriptionCalls table.
+func anyEvents[T any](seq iter.Seq2[*T, error]) iter.Seq2[any, error] {
+	return func(yield func(any, error) bool) {
+		for ev, err := range seq {
+			if !yield(ev, err) {
+				return
+			}
+		}
+	}
 }
 
 // sentVariablesMatch reports whether the variables sent carry every fixture
@@ -262,11 +141,10 @@ func mustJSON(v any) string {
 	return string(b)
 }
 
+// testSubscriptionOperation subscribes through the operation's generated
+// Subscribe function.
 func testSubscriptionOperation(t *testing.T, name string, variables vars, data json.RawMessage) {
 	t.Helper()
-	if name != "TenantEvents" {
-		t.Fatalf("no subscription wrapper for %s", name)
-	}
 	var mu sync.Mutex
 	var subscribed map[string]any
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -303,8 +181,13 @@ func testSubscriptionOperation(t *testing.T, name string, variables vars, data j
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	var events []*TenantEventsResponse
-	for ev, err := range SubscribeTenantEvents(ctx, sc, arg[[]string](variables, "types"), arg[*string](variables, "streamId")) {
+
+	subscribe, ok := subscriptionCalls[name]
+	if !ok {
+		t.Fatalf("no call for %s in subscriptionCalls", name)
+	}
+	var events []any
+	for ev, err := range subscribe(ctx, sc, variables) {
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -317,7 +200,7 @@ func testSubscriptionOperation(t *testing.T, name string, variables vars, data j
 	}
 	mu.Lock()
 	defer mu.Unlock()
-	if subscribed["operationName"] != name || subscribed["query"] != TenantEvents_Operation {
+	if subscribed["operationName"] != name {
 		t.Errorf("subscribed with %v", subscribed["operationName"])
 	}
 }

@@ -17,6 +17,7 @@ lists the plugin."""
 from __future__ import annotations
 
 import ast
+from pathlib import Path
 
 from ariadne_codegen.plugins.base import Plugin
 from graphql import (
@@ -31,6 +32,7 @@ from graphql import (
     OperationType,
     SelectionSetNode,
     get_named_type,
+    parse,
 )
 from graphql.language import ExecutableDefinitionNode
 
@@ -93,23 +95,51 @@ class ForwardCompatPlugin(Plugin):
     def generate_result_types_module(
         self, module: ast.Module, operation_definition: ExecutableDefinitionNode
     ) -> ast.Module:
-        return _domain_fragment_names(_add_attribute_docstrings(_open_unions(module)))
+        return _domain_fragment_names(
+            _add_attribute_docstrings(_open_unions(module)), self._fragment_names()
+        )
 
     def generate_fragments_module(
         self, module: ast.Module, fragments_definitions: dict[str, FragmentDefinitionNode]
     ) -> ast.Module:
-        return _domain_fragment_names(_add_attribute_docstrings(_open_unions(module)))
+        return _domain_fragment_names(
+            _add_attribute_docstrings(_open_unions(module)), self._fragment_names()
+        )
 
     def generate_init_module(self, module: ast.Module) -> ast.Module:
-        return _domain_fragment_names(module)
+        return _domain_fragment_names(module, self._fragment_names())
+
+    def _fragment_names(self) -> list[str]:
+        """The fragment names of the operation documents this run reads,
+        longest first."""
+        cached: list[str] | None = getattr(self, "_fragments", None)
+        if cached is None:
+            settings = self.config_dict.get("tool", {}).get("ariadne-codegen", self.config_dict)
+            names = set()
+            for path in Path(settings["queries_path"]).rglob("*.graphql"):
+                for definition in parse(path.read_text()).definitions:
+                    if isinstance(definition, FragmentDefinitionNode):
+                        names.add(definition.name.value)
+            cached = sorted(names, key=lambda n: (-len(n), n))
+            self._fragments = cached
+        return cached
 
 
-def _domain_fragment_names(module: ast.Module) -> ast.Module:
+def _domain_fragment_names(module: ast.Module, fragments: list[str]) -> ast.Module:
     """Remove the GraphQL fragment convention's ``Fields`` suffix from
-    generated Python model names and every reference to them."""
+    generated Python model names and every reference to them: StreamFields
+    becomes Stream and StreamFieldsPlaybackPolicy StreamPlaybackPolicy. Only
+    a fragment name's suffix is removed, so a class for a field named fields
+    (MediaPlacementErrorFields) keeps its name."""
 
     def clean(name: str) -> str:
-        return name.replace("Fields", "")
+        # ariadne-codegen writes forward references as names in quotes.
+        if len(name) > 1 and name[0] == name[-1] == '"':
+            return f'"{clean(name[1:-1])}"'
+        for fragment in fragments:
+            if fragment.endswith("Fields") and name.startswith(fragment):
+                return fragment[: -len("Fields")] + name[len(fragment) :]
+        return name
 
     class Rename(ast.NodeTransformer):
         def visit_ClassDef(self, node: ast.ClassDef) -> ast.AST:
@@ -272,12 +302,24 @@ def _find_selection_type(
 def _operation_description(
     schema: GraphQLSchema, definition: OperationDefinitionNode
 ) -> str | None:
-    root = _definition_root(schema, definition)
-    for selection in definition.selection_set.selections:
-        if isinstance(selection, FieldNode):
-            field = _field_map(root).get(selection.name.value)
-            return field.description if field else None
-    return None
+    """The description of the field the operation targets: its root field, or
+    the last field of a path such as analytics { usage { streaming {
+    streamAnalyticsSummary(...) } } } (operationTarget in
+    scripts/sdkcontract/ops.go)."""
+    parent: GraphQLNamedType | None = _definition_root(schema, definition)
+    selections = definition.selection_set.selections
+    description = None
+    while parent is not None and len(selections) == 1 and isinstance(selections[0], FieldNode):
+        field = _field_map(parent).get(selections[0].name.value)
+        if field is None:
+            break
+        description = field.description
+        children = selections[0].selection_set.selections if selections[0].selection_set else ()
+        if len(children) != 1 or not isinstance(children[0], FieldNode) or children[0].selection_set is None:
+            break
+        parent = get_named_type(field.type)
+        selections = children
+    return description
 
 
 def _open_unions(module: ast.Module) -> ast.Module:

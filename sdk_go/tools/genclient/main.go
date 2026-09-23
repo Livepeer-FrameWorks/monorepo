@@ -1,6 +1,14 @@
 // Command genclient generates the Go SDK's typed operations: it runs
-// genqlient on the given config and then opens every generated union to
-// members a newer server adds.
+// genqlient on the given config, replaces each subscription function with
+// one on the SDK's SubscriptionClient, and then opens every generated union
+// to members a newer server adds.
+//
+// genqlient's subscription functions take its own graphql.WebSocketClient
+// and deliver events on a channel. The SDK runs subscriptions on
+// SubscriptionClient (graphql-transport-ws with reconnects and typed
+// errors), so genclient replaces each one, with its WsResponse type and
+// ForwardData helper, by Subscribe<Operation>, which passes genqlient's
+// variables struct to the SDK's generic Subscribe.
 //
 // genqlient decodes a union by switching on __typename and fails on a
 // __typename it was not generated with. The SDK declares a range of server
@@ -67,6 +75,9 @@ func run(configPath string) error {
 	}
 	for name, src := range files {
 		if strings.HasSuffix(name, ".go") {
+			if src, err = subscriptionFunctions(src, schema); err != nil {
+				return fmt.Errorf("%s: %w", name, err)
+			}
 			if src, err = documentOperations(src, schema); err != nil {
 				return fmt.Errorf("%s: %w", name, err)
 			}
@@ -80,8 +91,123 @@ func run(configPath string) error {
 		if err := os.WriteFile(name, src, 0o644); err != nil {
 			return err
 		}
+		if filepath.Base(name) == filepath.Base(config.Generated) {
+			calls, err := operationCalls(src)
+			if err != nil {
+				return fmt.Errorf("%s: %w", name, err)
+			}
+			if err := os.WriteFile(filepath.Join(filepath.Dir(name), callsFile), calls, 0o644); err != nil {
+				return err
+			}
+		}
 	}
 	return nil
+}
+
+// callsFile holds, next to the generated operations, the test table that
+// calls each of them. Its function signatures come from genqlient, so the
+// table is generated from them rather than kept by hand.
+const callsFile = "operation_calls_gen_test.go"
+
+type generatedFunc struct {
+	name   string
+	params [][2]string // name, Go type
+	ws     bool
+}
+
+// operationCalls renders the SDK test tables for the functions in generated:
+// operationCalls runs each query and mutation function with fixture
+// variables decoded into its parameter types, and subscriptionCalls runs each
+// subscription's Subscribe function the same way.
+func operationCalls(generated []byte) ([]byte, error) {
+	fset := token.NewFileSet()
+	file, err := parser.ParseFile(fset, "generated.go", generated, 0)
+	if err != nil {
+		return nil, err
+	}
+	var funcs []generatedFunc
+	for _, decl := range file.Decls {
+		fn, ok := decl.(*ast.FuncDecl)
+		if !ok || fn.Recv != nil || !fn.Name.IsExported() || len(fn.Type.Params.List) < 2 {
+			continue
+		}
+		var f generatedFunc
+		switch client := fn.Type.Params.List[1].Type.(type) {
+		case *ast.SelectorExpr:
+			if client.Sel.Name != "Client" {
+				continue
+			}
+			f = generatedFunc{name: fn.Name.Name}
+		case *ast.StarExpr:
+			sc, ok := client.X.(*ast.Ident)
+			if !ok || sc.Name != "SubscriptionClient" || !strings.HasPrefix(fn.Name.Name, subscriptionPrefix) {
+				continue
+			}
+			f = generatedFunc{name: fn.Name.Name, ws: true}
+		default:
+			continue
+		}
+		for _, p := range fn.Type.Params.List[2:] {
+			var typ bytes.Buffer
+			if err := format.Node(&typ, fset, p.Type); err != nil {
+				return nil, err
+			}
+			for _, n := range p.Names {
+				f.params = append(f.params, [2]string{n.Name, typ.String()})
+			}
+		}
+		funcs = append(funcs, f)
+	}
+	sort.Slice(funcs, func(i, j int) bool { return funcs[i].name < funcs[j].name })
+
+	var b strings.Builder
+	b.WriteString("// operationCalls calls every generated query and mutation function with the\n// fixture's variables.\nvar operationCalls = map[string]operationCall{\n")
+	for _, f := range funcs {
+		if f.ws {
+			continue
+		}
+		v := "v"
+		if len(f.params) == 0 {
+			v = "_"
+		}
+		fmt.Fprintf(&b, "\t%q: {%s_Operation, func(ctx context.Context, c *Client, %s vars) (any, error) {\n\t\treturn %s(ctx, c", f.name, f.name, v, f.name)
+		for _, p := range f.params {
+			fmt.Fprintf(&b, ", arg[%s](v, %q)", p[1], p[0])
+		}
+		b.WriteString(")\n\t}},\n")
+	}
+	b.WriteString("}\n\n// subscriptionCalls subscribes to every generated subscription through its\n// Subscribe function with the fixture's variables.\nvar subscriptionCalls = map[string]func(ctx context.Context, sc *SubscriptionClient, v vars) iter.Seq2[any, error]{\n")
+	for _, f := range funcs {
+		if !f.ws {
+			continue
+		}
+		v := "v"
+		if len(f.params) == 0 {
+			v = "_"
+		}
+		fmt.Fprintf(&b, "\t%q: func(ctx context.Context, sc *SubscriptionClient, %s vars) iter.Seq2[any, error] {\n\t\treturn anyEvents(%s(ctx, sc", strings.TrimPrefix(f.name, subscriptionPrefix), v, f.name)
+		for _, p := range f.params {
+			fmt.Fprintf(&b, ", arg[%s](v, %q)", p[1], p[0])
+		}
+		b.WriteString("))\n\t},\n")
+	}
+	b.WriteString("}\n")
+	body := b.String()
+	imports := []string{"context", "iter"}
+	if strings.Contains(body, "json.") {
+		imports = append(imports, "encoding/json")
+	}
+	if strings.Contains(body, "time.") {
+		imports = append(imports, "time")
+	}
+	sort.Strings(imports)
+	var head strings.Builder
+	head.WriteString("// Code generated by sdk_go/tools/genclient from generated.go. DO NOT EDIT.\n\npackage frameworks\n\nimport (\n")
+	for _, imp := range imports {
+		fmt.Fprintf(&head, "\t%q\n", imp)
+	}
+	head.WriteString(")\n\n")
+	return format.Source([]byte(head.String() + body))
 }
 
 func loadSchema(paths []string) (*gqlast.Schema, error) {
@@ -165,12 +291,27 @@ func operationDescription(schema *gqlast.Schema, source, operationName string) (
 	if operation == nil {
 		return "", fmt.Errorf("operation not found")
 	}
-	for _, selection := range operation.SelectionSet {
-		if field, ok := selection.(*gqlast.Field); ok && field.Definition != nil {
-			return field.Definition.Description, nil
+	// The operation's target is its root field, or the last field of a
+	// path such as analytics { usage { streaming { streamAnalyticsSummary } } }
+	// (operationTarget in scripts/sdkcontract/ops.go).
+	description := ""
+	selections := operation.SelectionSet
+	for len(selections) == 1 {
+		field, ok := selections[0].(*gqlast.Field)
+		if !ok || field.Definition == nil {
+			break
 		}
+		description = field.Definition.Description
+		if len(field.SelectionSet) != 1 {
+			break
+		}
+		child, ok := field.SelectionSet[0].(*gqlast.Field)
+		if !ok || len(child.SelectionSet) == 0 {
+			break
+		}
+		selections = field.SelectionSet
 	}
-	return "", nil
+	return description, nil
 }
 
 // openUnions rewrites genqlient output so each union accepts *UnknownMember.

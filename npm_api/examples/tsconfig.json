@@ -5,6 +5,7 @@
     "rootDir": "..",
     "paths": {
       "@livepeer-frameworks/api": ["../src/index.ts"],
+      "@livepeer-frameworks/api/select": ["../src/select.ts"],
       "@livepeer-frameworks/api/subscriptions": ["../src/subscriptions.ts"],
       "@livepeer-frameworks/api/webhooks": ["../src/webhooks.ts"]
     }

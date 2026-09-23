@@ -79,6 +79,7 @@ jobs:
               - 'cli/internal/releases/**'
               - '.github/workflows/release.yml'
               - 'website_docs/src/content/docs/operators/configuration-reference.mdx'
+              - 'website_docs/src/content/docs/builders/api-schema/**'
               - 'pkg/graphql/**'
               - 'pkg/proto/events/**'
               - 'pkg/events/**'
@@ -542,11 +543,17 @@ jobs:
       - uses: actions/setup-python@v6
         with:
           python-version: "3.13"
-      - name: Contract tool
+      - name: Contract tool and exhaustive SDK coverage audit
         run: make test-sdkcontract
+      - name: Public schema artifact matches schema.graphql
+        run: make verify-public-schema
+      - name: Default operations match the public schema
+        run: make verify-ops
+      - name: No experimental field is past its until release
+        run: make verify-experimental-fields
       - name: Operations validate on every supported release
         run: make verify-api-compat
-      - name: No breaking schema change to a field a live SDK line uses
+      - name: No breaking change to the public schema since the oldest live release
         run: make verify-schema-compat
       - name: TypeScript SDK (tsc, eslint, vitest, examples)
         run: make test-sdk-ts

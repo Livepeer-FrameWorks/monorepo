@@ -1,5 +1,9 @@
 // Command sdkcontract maintains the public SDK operation contract in
-// pkg/graphql/public: it lints the curated operations, keeps the operation
+// pkg/graphql/public: it writes the public schema (schema.graphql without its
+// @internal fields) that every other step reads, generates the default
+// operations (pkg/graphql/public/generated, defaultops.go), reports
+// @experimental fields against their until release, lints the public
+// operations, audits their coverage of the public schema, keeps the operation
 // manifest of each SDK line (majors/v<N>.json), emits the per-language
 // manifest and event registry the SDK runtimes compile in, and runs the two
 // compatibility checks:
@@ -7,8 +11,10 @@
 //	api-compat     every operation of every live SDK line validates against
 //	               the schema of every stable release at or above the line's
 //	               minimum server, and no operation's since rises within a line
-//	schema-compat  the working-tree schema makes no breaking change, relative
-//	               to the latest release tag, to anything a live line uses
+//	schema-compat  the working-tree public schema makes no breaking change to
+//	               anything reachable in the latest release tag's public
+//	               schema; report only while that tag is older than the
+//	               oldest live minimum server (schemadiff.go)
 package main
 
 import (
@@ -17,8 +23,6 @@ import (
 	"os"
 	"sort"
 	"strings"
-
-	"github.com/vektah/gqlparser/v2/ast"
 )
 
 func main() {
@@ -38,6 +42,12 @@ func main() {
 	switch cmd {
 	case "audit":
 		err = runAudit(*repo)
+	case "public-schema":
+		err = runPublicSchema(*repo, *check)
+	case "generate-ops":
+		err = runGenerateOps(*repo, *check)
+	case "experimental":
+		err = runExperimental(*repo)
 	case "reference":
 		err = runReference(*repo, *check)
 	case "lint":
@@ -60,7 +70,7 @@ func main() {
 }
 
 func printUsage() {
-	fmt.Fprintln(os.Stderr, "usage: sdkcontract audit|reference|lint|manifest|emit|api-compat|schema-compat [-repo DIR] [-check] [-lang ts|go|py]")
+	fmt.Fprintln(os.Stderr, "usage: sdkcontract public-schema|generate-ops|experimental|audit|reference|lint|manifest|emit|api-compat|schema-compat [-repo DIR] [-check] [-lang ts|go|py]")
 	os.Exit(2)
 }
 
@@ -73,7 +83,7 @@ func runLint(repo string) error {
 	if err != nil {
 		return err
 	}
-	schema, err := loadSchema(repo, headRef)
+	schema, err := loadPublicSchema(repo, headRef)
 	if err != nil {
 		return err
 	}
@@ -94,7 +104,7 @@ func currentLine(repo string) (*supportFile, *manifest, manifestLine, error) {
 	if err != nil {
 		return nil, nil, manifestLine{}, err
 	}
-	head, err := loadSchema(repo, headRef)
+	head, err := loadPublicSchema(repo, headRef)
 	if err != nil {
 		return nil, nil, manifestLine{}, err
 	}
@@ -131,7 +141,7 @@ func runManifest(repo string, check bool) error {
 	if err != nil {
 		return err
 	}
-	head, err := loadSchema(repo, headRef)
+	head, err := loadPublicSchema(repo, headRef)
 	if err != nil {
 		return err
 	}
@@ -288,91 +298,5 @@ func runAPICompat(repo string) error {
 		fmt.Printf("sdkcontract: no stable release at or above %s yet; validated against the working tree only\n", line.MinServer)
 	}
 	fmt.Printf("sdkcontract: %d operations of line %s validate on %s\n", len(computed.Operations), support.Current, strings.Join(checked, ", "))
-	return nil
-}
-
-func runSchemaCompat(repo string) error {
-	support, err := loadSupport(repo)
-	if err != nil {
-		return err
-	}
-	matrix, err := loadMatrix(repo)
-	if err != nil {
-		return err
-	}
-	if len(matrix.Tags) == 0 {
-		fmt.Println("sdkcontract: no release tag reachable; nothing to compare against")
-		return nil
-	}
-	latest := matrix.Tags[len(matrix.Tags)-1]
-	cache := newSchemaCache(repo)
-	oldS, err := cache.get(latest.String())
-	if err != nil {
-		return err
-	}
-	newS, err := cache.get(headRef)
-	if err != nil {
-		return err
-	}
-
-	ops, err := loadOperations(repo)
-	if err != nil {
-		return err
-	}
-	m, err := loadManifest(repo, majorOf(support.Current))
-	if err != nil {
-		return err
-	}
-	documents := map[string]string{}
-	var oldestMin *semver
-	for _, line := range support.Lines {
-		if line.Status != lineLive {
-			continue
-		}
-		min, _ := parseSemver(line.MinServer)
-		if oldestMin == nil || min.Less(*oldestMin) {
-			oldestMin = &min
-		}
-		if line.Line == support.Current {
-			for _, op := range ops {
-				documents[line.Line+"/"+op.Name] = op.Document
-			}
-			continue
-		}
-		for _, op := range m.Lines[line.Line].Operations {
-			documents[line.Line+"/"+op.Name] = op.Document
-		}
-	}
-
-	u := newUsage()
-	var problems []string
-	names := make([]string, 0, len(documents))
-	for name := range documents {
-		names = append(names, name)
-	}
-	sort.Strings(names)
-	for _, name := range names {
-		if uerr := collectUsage(oldS, documents[name], u); uerr != nil {
-			return fmt.Errorf("%s: %w", name, uerr)
-		}
-		if verr := validates(newS, documents[name]); verr != nil {
-			problems = append(problems, fmt.Sprintf("%s does not validate on the working tree: %v", name, verr))
-		}
-	}
-
-	var exempt *ast.Schema
-	for _, t := range matrix.Tags {
-		if oldestMin != nil && t == *oldestMin {
-			if exempt, err = cache.get(t.String()); err != nil {
-				return err
-			}
-		}
-	}
-	problems = append(problems, breakingChanges(oldS, newS, exempt, u)...)
-	if len(problems) > 0 {
-		return failList(fmt.Sprintf("breaking schema changes since %s to parts live SDK lines use", latest), problems)
-	}
-	fmt.Printf("sdkcontract: schema changes since %s keep %d fields, %d arguments, and %d input types of the live SDK lines compatible\n",
-		latest, len(u.outputFields), len(u.arguments), len(u.inputTypes))
 	return nil
 }

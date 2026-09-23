@@ -1,11 +1,17 @@
 import type { CodegenConfig } from "@graphql-codegen/cli";
 
-// Typed documents for the curated public operations in pkg/graphql/public.
-// String mode emits each document as a typed string, so the package has no
-// graphql runtime dependency.
+// Typed documents for the public operations in pkg/graphql/public, hand-written
+// and generated/, against the public schema. String mode emits each document as a typed
+// string, so the package has no graphql runtime dependency.
 const config: CodegenConfig = {
-  schema: "../pkg/graphql/schema.graphql",
-  documents: ["../pkg/graphql/public/**/*.graphql"],
+  schema: "../pkg/graphql/public/schema.public.graphql",
+  documents: [
+    "../pkg/graphql/public/fragments/**/*.graphql",
+    "../pkg/graphql/public/queries/**/*.graphql",
+    "../pkg/graphql/public/mutations/**/*.graphql",
+    "../pkg/graphql/public/subscriptions/**/*.graphql",
+    "../pkg/graphql/public/generated/*.graphql",
+  ],
   ignoreNoDocuments: false,
   generates: {
     "src/generated/graphql.ts": {

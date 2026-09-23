@@ -6,51 +6,76 @@ import (
 	"strings"
 
 	"github.com/vektah/gqlparser/v2/ast"
-	"github.com/vektah/gqlparser/v2/parser"
 )
 
-// rootCoverage compares schema entry points with the root fields selected by
-// public SDK operation documents. It does not infer whether a field is safe
-// to publish from its name or description.
-func rootCoverage(schema *ast.Schema, ops []operation) (map[string][]string, error) {
-	covered := map[string][]string{}
-	for _, op := range ops {
-		doc, err := parser.ParseQuery(&ast.Source{Name: op.File, Input: op.Document})
-		if err != nil {
-			return nil, fmt.Errorf("%s: %w", op.File, err)
-		}
-		for _, definition := range doc.Operations {
-			root := string(definition.Operation)
-			var rootType *ast.Definition
-			switch definition.Operation {
-			case ast.Query:
-				rootType = schema.Query
-			case ast.Mutation:
-				rootType = schema.Mutation
-			case ast.Subscription:
-				rootType = schema.Subscription
-			}
-			if rootType == nil {
-				return nil, fmt.Errorf("%s: schema has no %s root", op.Name, root)
-			}
-			for _, selection := range definition.SelectionSet {
-				field, ok := selection.(*ast.Field)
-				if !ok {
-					return nil, fmt.Errorf("%s: root selection must be a field", op.Name)
-				}
-				if rootType.Fields.ForName(field.Name) == nil {
-					return nil, fmt.Errorf("%s: %s.%s is not in the schema", op.Name, root, field.Name)
-				}
-				key := root + "." + field.Name
-				covered[key] = append(covered[key], op.Name)
-			}
-		}
-	}
-	return covered, nil
+// targetCoverage is the SDK operation coverage of the public schema's
+// targets (opTargets).
+type targetCoverage struct {
+	// Missing lists targets no operation addresses.
+	Missing []string
+	// Namespaces lists targets whose default selection is empty; their
+	// argument fields are targets of their own.
+	Namespaces []string
+	// Extra lists operations whose target is not a default target, such as
+	// ListPushTargets on query.stream.pushTargets.
+	Extra []string
+	// Targets and HandWritten count, per root kind, the targets with an
+	// operation and those whose operation is hand-written.
+	Targets, HandWritten map[ast.Operation]int
+	Nested               int
+	ListOnly             []string
 }
 
+// coverage checks that every target of schema has an operation. The loader
+// already guarantees at most one.
+func coverage(schema *ast.Schema, ops []operation) targetCoverage {
+	byTarget := map[string]operation{}
+	for _, op := range ops {
+		byTarget[op.Target] = op
+	}
+	targets, listOnly := opTargets(schema)
+	b := newSelectionBuilder(schema)
+	c := targetCoverage{Targets: map[ast.Operation]int{}, HandWritten: map[ast.Operation]int{}, ListOnly: listOnly}
+	known := map[string]bool{}
+	for _, t := range targets {
+		key := t.key()
+		known[key] = true
+		op, ok := byTarget[key]
+		def := schema.Types[t.field().Type.Name()]
+		if !ok && def.Kind != ast.Scalar && def.Kind != ast.Enum && len(b.targetSelection(def)) == 0 {
+			c.Namespaces = append(c.Namespaces, key)
+			continue
+		}
+		c.Targets[t.Kind]++
+		if len(t.Path) > 1 {
+			c.Nested++
+		}
+		switch {
+		case !ok:
+			c.Missing = append(c.Missing, key)
+		case !strings.HasPrefix(op.File, generatedOpsDir+"/"):
+			c.HandWritten[t.Kind]++
+		}
+	}
+	for _, op := range ops {
+		if !known[op.Target] {
+			c.Extra = append(c.Extra, op.Name+" ("+op.Target+")")
+		}
+	}
+	sort.Strings(c.Missing)
+	sort.Strings(c.Namespaces)
+	sort.Strings(c.Extra)
+	return c
+}
+
+// runAudit reports the SDK coverage of the public schema and fails when a
+// root field or argument field has no operation.
 func runAudit(repo string) error {
-	schema, err := loadSchema(repo, headRef)
+	full, err := loadFullSchema(repo, headRef)
+	if err != nil {
+		return err
+	}
+	schema, err := publicSchema(full)
 	if err != nil {
 		return err
 	}
@@ -58,45 +83,44 @@ func runAudit(repo string) error {
 	if err != nil {
 		return err
 	}
-	covered, err := rootCoverage(schema, ops)
-	if err != nil {
-		return err
-	}
+	c := coverage(schema, ops)
 	for _, root := range []struct {
-		name string
-		def  *ast.Definition
+		kind     ast.Operation
+		def      *ast.Definition
+		fullRoot *ast.Definition
 	}{
-		{"query", schema.Query},
-		{"mutation", schema.Mutation},
-		{"subscription", schema.Subscription},
+		{ast.Query, schema.Query, full.Query},
+		{ast.Mutation, schema.Mutation, full.Mutation},
+		{ast.Subscription, schema.Subscription, full.Subscription},
 	} {
 		if root.def == nil {
 			continue
 		}
-		var missing []string
-		count, excluded, deprecated := 0, 0, 0
+		internal, deprecated := 0, 0
+		for _, field := range root.fullRoot.Fields {
+			if _, ok := internalReason(field); ok {
+				internal++
+			}
+		}
 		for _, field := range root.def.Fields {
-			if strings.HasPrefix(field.Name, "__") {
-				continue
-			}
-			if _, private := privateRootFields[root.name+"."+field.Name]; private {
-				excluded++
-				continue
-			}
-			count++
-			if field.Directives.ForName("deprecated") != nil {
+			if isDeprecated(field.Directives) {
 				deprecated++
 			}
-			if len(covered[root.name+"."+field.Name]) == 0 {
-				missing = append(missing, field.Name)
-			}
 		}
-		sort.Strings(missing)
-		fmt.Printf("%s: %d reference fields, %d typed, %d untyped (%d deprecated), %d private excluded\n", root.name, count, count-len(missing), len(missing), deprecated, excluded)
-		if len(missing) > 0 {
-			fmt.Printf("  uncovered: %s\n", strings.Join(missing, ", "))
-		}
+		fmt.Printf("%s: %d targets with an operation (%d hand-written); %d deprecated and %d internal root fields excluded\n",
+			root.kind, c.Targets[root.kind], c.HandWritten[root.kind], deprecated, internal)
+	}
+	fmt.Printf("argument fields below Query: %d with an operation; %d reachable only through lists, unions, or interfaces (custom selection): %s\n",
+		c.Nested, len(c.ListOnly), strings.Join(c.ListOnly, ", "))
+	if len(c.Namespaces) > 0 {
+		fmt.Printf("namespaces without an operation of their own: %s\n", strings.Join(c.Namespaces, ", "))
+	}
+	if len(c.Extra) > 0 {
+		fmt.Printf("hand-written operations beyond the default targets: %s\n", strings.Join(c.Extra, ", "))
 	}
 	fmt.Printf("SDK operation documents: %d\n", len(ops))
+	if len(c.Missing) > 0 {
+		return failList("public fields without an SDK operation; run make generate-ops", c.Missing)
+	}
 	return nil
 }

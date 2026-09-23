@@ -83,7 +83,9 @@ func gitOutput(repo string, args ...string) ([]byte, error) {
 	return out, nil
 }
 
-func loadSchema(repo, ref string) (*ast.Schema, error) {
+// loadFullSchema loads the schema at ref including its @internal fields.
+// Everything that describes the public contract uses loadPublicSchema.
+func loadFullSchema(repo, ref string) (*ast.Schema, error) {
 	text, err := schemaSource(repo, ref)
 	if err != nil {
 		return nil, err

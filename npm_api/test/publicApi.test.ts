@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import * as gatewayProbe from "../src/gatewayProbe.js";
 import * as root from "../src/index.js";
+import * as select from "../src/select.js";
 import * as subscriptions from "../src/subscriptions.js";
 import * as webhooks from "../src/webhooks.js";
 
@@ -14,6 +15,10 @@ describe("public API", () => {
 
   it("subscriptions entry exports", () => {
     expect(Object.keys(subscriptions).sort()).toMatchSnapshot();
+  });
+
+  it("select entry exports", () => {
+    expect(Object.keys(select).sort()).toMatchSnapshot();
   });
 
   it("webhooks entry exports", () => {

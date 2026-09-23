@@ -1,9 +1,11 @@
-# ariadne-codegen: the async client, its models, and the TenantEvents
-# subscription, from every curated public operation. Run from sdk_python/ by
-# make graphql-sdk-py, after codegen/sync.toml.
+# ariadne-codegen: the async client, its models, and the subscriptions, from
+# every public operation, hand-written and generated, against the public
+# schema. make graphql-sdk-py copies the operations to build/async-operations
+# (pkg/graphql/public also holds the schema) and runs this from sdk_python/,
+# after codegen/sync.toml.
 [tool.ariadne-codegen]
-schema_path = "../pkg/graphql/schema.graphql"
-queries_path = "../pkg/graphql/public"
+schema_path = "../pkg/graphql/public/schema.public.graphql"
+queries_path = "build/async-operations"
 target_package_path = "src/livepeer_frameworks/_generated"
 target_package_name = "graphql"
 client_name = "AsyncGraphQLClient"

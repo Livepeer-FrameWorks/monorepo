@@ -90,7 +90,13 @@ const (
 // *NetworkError when reconnects run out. Any other close or network error,
 // before or after the acknowledgement, reconnects with backoff; each
 // acknowledged connection starts the MaxReconnects count again.
-func Subscribe[T any](ctx context.Context, sc *SubscriptionClient, operationName, query string, variables map[string]any) iter.Seq2[*T, error] {
+//
+// Every public subscription has a generated Subscribe<Operation> function
+// (SubscribeTenantEvents, SubscribeLiveStreamEvents, ...) that calls
+// Subscribe with its document, response type, and variables struct; call
+// Subscribe directly only for a document of your own. variables is encoded
+// as the subscribe message's variables; nil sends an empty object.
+func Subscribe[T any](ctx context.Context, sc *SubscriptionClient, operationName, query string, variables any) iter.Seq2[*T, error] {
 	return func(yield func(*T, error) bool) {
 		if variables == nil {
 			variables = map[string]any{}
@@ -242,17 +248,4 @@ func (sc *SubscriptionClient) runConnection(ctx context.Context, subscribe []byt
 			return outcomeDone, acked, nil
 		}
 	}
-}
-
-// SubscribeTenantEvents subscribes to the tenant's public events, optionally
-// only the given types and only events naming streamID.
-func SubscribeTenantEvents(ctx context.Context, sc *SubscriptionClient, types []string, streamID *string) iter.Seq2[*TenantEventsResponse, error] {
-	vars := map[string]any{}
-	if types != nil {
-		vars["types"] = types
-	}
-	if streamID != nil {
-		vars["streamId"] = *streamID
-	}
-	return Subscribe[TenantEventsResponse](ctx, sc, "TenantEvents", TenantEvents_Operation, vars)
 }

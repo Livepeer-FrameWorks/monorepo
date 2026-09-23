@@ -161,13 +161,36 @@ graphql-tray:
 graphql-all: graphql graphql-frontend graphql-tray graphql-sdk
 
 .PHONY: sdk-audit sdk-manifest generate-graphql-reference verify-graphql-reference verify-api-compat verify-schema-compat test-sdkcontract graphql-sdk graphql-sdk-ts test-sdk-ts \
-	verify-sdk-generated sdk-release-gates sdk-version-sync
+	verify-sdk-generated sdk-release-gates sdk-version-sync generate-public-schema verify-public-schema verify-experimental-fields \
+	generate-ops verify-ops
 
 # Public SDK contract (pkg/graphql/public, docs/standards/graphql-deprecation.md).
-# sdk-manifest rewrites the current line of majors/v<N>.json from the curated
+# generate-public-schema writes pkg/graphql/public/schema.public.graphql, the
+# schema without its @internal fields, which every SDK generator reads.
+# generate-ops writes pkg/graphql/public/generated/: a default operation for
+# every public root field and argument field no hand-written operation
+# replaces (scripts/sdkcontract/defaultops.go has the rules).
+# sdk-manifest rewrites the current line of majors/v<N>.json from all public
 # operations; the compatibility checks read release schemas with git show, so
 # they need the release tags fetched.
 SDKCONTRACT = cd scripts/sdkcontract && go run .
+
+generate-public-schema:
+	@$(SDKCONTRACT) public-schema -repo ../..
+
+verify-public-schema:
+	@$(SDKCONTRACT) public-schema -repo ../.. -check
+
+generate-ops: generate-public-schema
+	@$(SDKCONTRACT) generate-ops -repo ../..
+
+verify-ops:
+	@$(SDKCONTRACT) generate-ops -repo ../.. -check
+
+# Lists every @experimental field; fails once the pending release reaches a
+# field's until release.
+verify-experimental-fields:
+	@$(SDKCONTRACT) experimental -repo ../..
 
 sdk-audit:
 	@$(SDKCONTRACT) audit -repo ../..
@@ -178,7 +201,7 @@ generate-graphql-reference:
 verify-graphql-reference:
 	@$(SDKCONTRACT) reference -repo ../.. -check
 
-sdk-manifest:
+sdk-manifest: generate-ops
 	@$(SDKCONTRACT) manifest -repo ../..
 
 verify-api-compat:
@@ -189,6 +212,7 @@ verify-schema-compat:
 
 test-sdkcontract:
 	@cd scripts/sdkcontract && go mod tidy && go test ./... -count=1
+	@$(SDKCONTRACT) audit -repo ../..
 
 # SDK code generation. Each target regenerates one SDK from pkg/graphql/public
 # and pkg/proto/events/public/v1; none touches api_gateway or the webapp.
@@ -196,8 +220,8 @@ SDK_BUF = go run github.com/bufbuild/buf/cmd/buf@v1.72.0
 
 graphql-sdk: graphql-sdk-ts graphql-sdk-go graphql-sdk-py
 
-SDK_GENERATED = pkg/graphql/public/majors sdk_conformance/operations.json npm_api/src/generated \
-	sdk_go/generated.go sdk_go/manifest_gen.go sdk_go/events_gen.go \
+SDK_GENERATED = pkg/graphql/public/schema.public.graphql pkg/graphql/public/generated pkg/graphql/public/majors sdk_conformance/operations.json \
+	npm_api/src/generated sdk_go/generated.go sdk_go/operation_calls_gen_test.go sdk_go/manifest_gen.go sdk_go/events_gen.go \
 	sdk_python/src/livepeer_frameworks/_generated
 
 # Regenerates every SDK and fails when the committed generated code differs.
@@ -216,8 +240,11 @@ sdk-version-sync:
 	@$(SDKCONTRACT) emit -lang py -repo ../..
 
 # Every gate an SDK release needs; scripts/publish-packages.sh runs it before
-# any language publishes.
-sdk-release-gates: test-sdkcontract verify-api-compat verify-schema-compat verify-sdk-generated \
+# any language publishes. test-sdkcontract includes sdk-audit. The -check
+# targets run before verify-sdk-generated, which regenerates the public schema
+# and default operations in place.
+sdk-release-gates: test-sdkcontract verify-public-schema verify-ops verify-graphql-reference verify-experimental-fields \
+	verify-api-compat verify-schema-compat verify-sdk-generated \
 	test-sdk-ts test-sdk-go sdk-py-venv test-sdk-py typecheck-sdk-py
 
 graphql-sdk-ts: sdk-manifest
@@ -246,6 +273,8 @@ test-sdk-go:
 # flavour per run and rejects subscriptions in a sync client, so the sync run
 # reads a copy of the operations without subscriptions and the async run then
 # writes the same models plus the subscription module into the same package.
+# The async run reads a copy too, because pkg/graphql/public also holds the
+# public schema, which is not an operation document.
 SDK_PY_VENV = sdk_python/.venv
 SDK_PY_GEN = sdk_python/src/livepeer_frameworks/_generated
 
@@ -265,11 +294,16 @@ graphql-sdk-py: sdk-manifest sdk-py-venv
 	@$(SDKCONTRACT) emit -lang py -repo ../..
 	@rm -rf $(SDK_PY_GEN)/proto $(SDK_PY_GEN)/graphql sdk_python/build/sync-operations
 	@PATH="$(CURDIR)/$(SDK_PY_VENV)/bin:$$PATH" $(SDK_BUF) generate pkg/proto --template sdk_python/buf.gen.yaml --path pkg/proto/events/public/v1
-	@mkdir -p sdk_python/build/sync-operations
+	@rm -rf sdk_python/build/async-operations
+	@mkdir -p sdk_python/build/sync-operations/generated sdk_python/build/async-operations
 	@cp -R pkg/graphql/public/fragments pkg/graphql/public/queries pkg/graphql/public/mutations sdk_python/build/sync-operations/
+	@cp pkg/graphql/public/generated/fragments.graphql pkg/graphql/public/generated/queries.graphql \
+		pkg/graphql/public/generated/mutations.graphql sdk_python/build/sync-operations/generated/
+	@cp -R pkg/graphql/public/fragments pkg/graphql/public/queries pkg/graphql/public/mutations pkg/graphql/public/subscriptions \
+		pkg/graphql/public/generated sdk_python/build/async-operations/
 	@cd sdk_python && PYTHONPATH=codegen .venv/bin/ariadne-codegen client --config codegen/sync.toml >/dev/null
 	@cd sdk_python && PYTHONPATH=codegen .venv/bin/ariadne-codegen client --config codegen/async.toml >/dev/null
-	@rm -rf sdk_python/build/sync-operations
+	@rm -rf sdk_python/build/sync-operations sdk_python/build/async-operations
 
 test-sdk-py: sdk-py-venv
 	@cd sdk_python && .venv/bin/pytest -q

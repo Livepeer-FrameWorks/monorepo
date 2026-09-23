@@ -3,25 +3,28 @@ package main
 import (
 	"reflect"
 	"testing"
-
-	"github.com/vektah/gqlparser/v2"
-	"github.com/vektah/gqlparser/v2/ast"
 )
 
-func TestRootCoverageCountsRootFieldOnly(t *testing.T) {
-	schema, err := gqlparser.LoadSchema(&ast.Source{Input: `
-type Query { stream: Stream, platform: Platform }
+func TestCoverageRequiresEveryTarget(t *testing.T) {
+	schema := mustSchema(t, `
+type Query { stream(id: ID!): Stream, analytics: Analytics!, platform: Platform }
 type Stream { id: ID! }
 type Platform { id: ID! }
-`})
-	if err != nil {
-		t.Fatal(err)
+type Analytics { usage(streamId: ID!): Usage }
+type Usage { views: Int! }
+`)
+	ops := mustOps(t, `
+query GetStream($id: ID!) { stream(id: $id) { id } }
+query GetUsage($streamId: ID!) { analytics { usage(streamId: $streamId) { views } } }
+`)
+	c := coverage(schema, ops)
+	if !reflect.DeepEqual(c.Missing, []string{"query.platform"}) {
+		t.Fatalf("missing = %v", c.Missing)
 	}
-	got, err := rootCoverage(schema, []operation{{Name: "GetStream", Document: "query GetStream { stream { id } }"}})
-	if err != nil {
-		t.Fatal(err)
+	if !reflect.DeepEqual(c.Namespaces, []string{"query.analytics"}) {
+		t.Fatalf("namespaces = %v", c.Namespaces)
 	}
-	if !reflect.DeepEqual(got, map[string][]string{"query.stream": {"GetStream"}}) {
-		t.Fatalf("root coverage = %#v", got)
+	if c.Nested != 1 || c.HandWritten["query"] != 2 {
+		t.Fatalf("coverage = %+v", c)
 	}
 }

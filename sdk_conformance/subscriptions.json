@@ -1,5 +1,5 @@
 {
-  "description": "Subscriptions over graphql-transport-ws. Each case runs TenantEvents against a scripted WebSocket server; connections[i] scripts the i-th connection. onInit is what the server does after connection_init: ack; close with closeCode and closeReason; or reset, which drops the TCP connection without a close frame. After ack the server sends each item of next as a next message for the subscription, then errors with error when given, then ends with then: complete (a complete message) or drop (a close with dropCode). tokens are the values the token function returns, one per call; the client reads the token for every connection. A 4403 close before connection_ack is the gateway rejecting the Authorization value: an AuthenticationError that is never retried. Any other close or connection failure before the ack (the gateway closes 1013 when it could not check the token) and any drop after the ack reconnects and resubscribes. maxReconnects bounds consecutive reconnects without an acknowledged connection between them: an ack starts the count again, and when it runs out the subscription fails with NetworkError. expect.authorization lists the Authorization value of each connection_init payload.",
+  "description": "Subscriptions over graphql-transport-ws. Each case runs operation (TenantEvents when absent) through the SDK's generated function for it, with variables (none when absent), against a scripted WebSocket server; connections[i] scripts the i-th connection. onInit is what the server does after connection_init: ack; close with closeCode and closeReason; or reset, which drops the TCP connection without a close frame. After ack the server sends each item of next as a next message for the subscription, then errors with error when given, then ends with then: complete (a complete message) or drop (a close with dropCode). tokens are the values the token function returns, one per call; the client reads the token for every connection. A 4403 close before connection_ack is the gateway rejecting the Authorization value: an AuthenticationError that is never retried. Any other close or connection failure before the ack (the gateway closes 1013 when it could not check the token) and any drop after the ack reconnects and resubscribes. maxReconnects bounds consecutive reconnects without an acknowledged connection between them: an ack starts the count again, and when it runs out the subscription fails with NetworkError. expect.authorization lists the Authorization value of each connection_init payload. expect.eventIds lists tenantEvents.id of each event; expect.events, when given, lists each event as the SDK decoded it, encoded back to JSON. expect.subscribed, when given, lists the operationName and variables of each subscribe message, variables compared with null members removed (an SDK may send an unset optional input field as null).",
   "maxReconnects": 3,
   "cases": [
     {
@@ -388,6 +388,95 @@
           "Bearer token-6"
         ],
         "eventIds": ["evt-20", "evt-21", "evt-22", "evt-23", "evt-24", "evt-25"]
+      }
+    },
+    {
+      "name": "SkipperChat decodes each union member and resubscribes with its variables after a drop",
+      "operation": "SkipperChat",
+      "variables": {
+        "input": {
+          "message": "Why did my stream go idle?"
+        }
+      },
+      "tokens": ["token-1", "token-2"],
+      "connections": [
+        {
+          "onInit": "ack",
+          "next": [
+            {
+              "skipperChat": {
+                "__typename": "SkipperToolStartEvent",
+                "tool": "get_stream_health"
+              }
+            },
+            {
+              "skipperChat": {
+                "__typename": "SkipperToken",
+                "content": "The encoder stopped sending"
+              }
+            }
+          ],
+          "then": "drop",
+          "dropCode": 1001
+        },
+        {
+          "onInit": "ack",
+          "next": [
+            {
+              "skipperChat": {
+                "__typename": "SkipperDone",
+                "conversationId": "conv-7",
+                "tokensInput": 412,
+                "tokensOutput": 96
+              }
+            }
+          ],
+          "then": "complete"
+        }
+      ],
+      "expect": {
+        "connections": 2,
+        "authorization": ["Bearer token-1", "Bearer token-2"],
+        "subscribed": [
+          {
+            "operationName": "SkipperChat",
+            "variables": {
+              "input": {
+                "message": "Why did my stream go idle?"
+              }
+            }
+          },
+          {
+            "operationName": "SkipperChat",
+            "variables": {
+              "input": {
+                "message": "Why did my stream go idle?"
+              }
+            }
+          }
+        ],
+        "events": [
+          {
+            "skipperChat": {
+              "__typename": "SkipperToolStartEvent",
+              "tool": "get_stream_health"
+            }
+          },
+          {
+            "skipperChat": {
+              "__typename": "SkipperToken",
+              "content": "The encoder stopped sending"
+            }
+          },
+          {
+            "skipperChat": {
+              "__typename": "SkipperDone",
+              "conversationId": "conv-7",
+              "tokensInput": 412,
+              "tokensOutput": 96
+            }
+          }
+        ]
       }
     }
   ]

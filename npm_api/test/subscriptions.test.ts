@@ -1,9 +1,15 @@
 import type { AddressInfo } from "node:net";
 
-import { describe, expect, it } from "vitest";
+import { describe, expect, expectTypeOf, it } from "vitest";
 import { WebSocketServer } from "ws";
 
-import { TenantEventsDocument } from "../src/generated/graphql.js";
+import * as documents from "../src/generated/graphql.js";
+import {
+  SkipperChatDocument,
+  type SkipperChatSubscription,
+  TenantEventsDocument,
+  type TenantEventsSubscription,
+} from "../src/generated/graphql.js";
 import { createSubscriptionClient } from "../src/subscriptions.js";
 import { errorMismatches, type ExpectedError, loadFixture } from "./fixtures.js";
 
@@ -21,18 +27,59 @@ interface SubscriptionsFixture {
   maxReconnects: number;
   cases: Array<{
     name: string;
+    operation?: string;
+    variables?: Record<string, unknown>;
     tokens: Array<string | null>;
     connections: ConnectionScript[];
     expect: {
       connections: number;
       authorization: Array<string | null>;
-      eventIds: string[];
+      eventIds?: string[];
+      events?: unknown[];
+      subscribed?: Array<{ operationName: string; variables: unknown }>;
       error?: ExpectedError;
     };
   }>;
 }
 
 const fixture = loadFixture<SubscriptionsFixture>("subscriptions.json");
+
+function documentFor(name: string): string {
+  const doc = (documents as Record<string, unknown>)[`${name}Document`];
+  if (doc === undefined) {
+    throw new Error(`no generated document ${name}Document`);
+  }
+  return String(doc);
+}
+
+/** Returns value with every null object member removed, at any depth. */
+function withoutNulls(value: unknown): unknown {
+  if (Array.isArray(value)) {
+    return value.map(withoutNulls);
+  }
+  if (value !== null && typeof value === "object") {
+    return Object.fromEntries(
+      Object.entries(value)
+        .filter(([, member]) => member !== null)
+        .map(([key, member]) => [key, withoutNulls(member)])
+    );
+  }
+  return value;
+}
+
+describe("subscription typing", () => {
+  it("types each subscription's events and variables from its generated document", () => {
+    const client = createSubscriptionClient({ url: "ws://127.0.0.1:1" });
+    expectTypeOf(client.subscribe(TenantEventsDocument, {})).toEqualTypeOf<
+      AsyncGenerator<TenantEventsSubscription, void, undefined>
+    >();
+    expectTypeOf(
+      client.subscribe(SkipperChatDocument, { input: { message: "hello" } })
+    ).toEqualTypeOf<AsyncGenerator<SkipperChatSubscription, void, undefined>>();
+    // @ts-expect-error: SkipperChat's input variable is required.
+    void client.subscribe(SkipperChatDocument, {});
+  });
+});
 
 describe("subscriptions (sdk_conformance/subscriptions.json)", () => {
   for (const tc of fixture.cases) {
@@ -44,6 +91,7 @@ describe("subscriptions (sdk_conformance/subscriptions.json)", () => {
         handleProtocols: (protocols) =>
           protocols.has("graphql-transport-ws") ? "graphql-transport-ws" : false,
       });
+      const subscribed: Array<{ operationName: unknown; variables: unknown }> = [];
       wss.on("connection", (socket) => {
         const script = tc.connections[connections++];
         socket.on("message", (raw) => {
@@ -67,6 +115,10 @@ describe("subscriptions (sdk_conformance/subscriptions.json)", () => {
             return;
           }
           if (msg.type === "subscribe" && script) {
+            subscribed.push({
+              operationName: msg.payload?.operationName,
+              variables: msg.payload?.variables,
+            });
             for (const data of script.next ?? []) {
               socket.send(JSON.stringify({ id: msg.id, type: "next", payload: { data } }));
             }
@@ -88,11 +140,12 @@ describe("subscriptions (sdk_conformance/subscriptions.json)", () => {
         maxReconnects: fixture.maxReconnects,
         retryWait: () => Promise.resolve(),
       });
-      const eventIds: string[] = [];
+      const operation = tc.operation ?? "TenantEvents";
+      const events: unknown[] = [];
       let error: unknown = null;
       try {
-        for await (const data of client.subscribe(TenantEventsDocument, {})) {
-          eventIds.push(data.tenantEvents.id);
+        for await (const data of client.subscribe(documentFor(operation), tc.variables ?? {})) {
+          events.push(data);
         }
       } catch (err) {
         error = err;
@@ -100,7 +153,16 @@ describe("subscriptions (sdk_conformance/subscriptions.json)", () => {
         await client.close();
         await new Promise((resolve) => wss.close(resolve));
       }
-      expect(eventIds).toEqual(tc.expect.eventIds);
+      if (tc.expect.eventIds) {
+        const eventIds = (events as TenantEventsSubscription[]).map((e) => e.tenantEvents.id);
+        expect(eventIds).toEqual(tc.expect.eventIds);
+      }
+      if (tc.expect.events) {
+        expect(events).toEqual(tc.expect.events);
+      }
+      if (tc.expect.subscribed) {
+        expect(subscribed.map(withoutNulls)).toEqual(tc.expect.subscribed);
+      }
       expect(connections).toBe(tc.expect.connections);
       expect(authorization).toEqual(tc.expect.authorization);
       if (tc.expect.error) {

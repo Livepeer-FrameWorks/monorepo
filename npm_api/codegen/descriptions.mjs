@@ -18,8 +18,9 @@ const packageRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const repositoryRoot = resolve(packageRoot, "..");
 const generatedPath = join(packageRoot, "src/generated/graphql.ts");
 const schema = buildSchema(
-  readFileSync(join(repositoryRoot, "pkg/graphql/schema.graphql"), "utf8")
+  readFileSync(join(repositoryRoot, "pkg/graphql/public/schema.public.graphql"), "utf8")
 );
+const operationDirectories = ["fragments", "queries", "mutations", "subscriptions", "generated"];
 
 function graphqlFiles(directory) {
   return readdirSync(directory, { withFileTypes: true }).flatMap((entry) => {
@@ -28,9 +29,9 @@ function graphqlFiles(directory) {
   });
 }
 
-const definitions = graphqlFiles(join(repositoryRoot, "pkg/graphql/public")).flatMap(
-  (path) => parse(readFileSync(path, "utf8")).definitions
-);
+const definitions = operationDirectories
+  .flatMap((directory) => graphqlFiles(join(repositoryRoot, "pkg/graphql/public", directory)))
+  .flatMap((path) => parse(readFileSync(path, "utf8")).definitions);
 const fragments = new Map();
 const operations = new Map();
 for (const definition of definitions) {
@@ -74,12 +75,25 @@ for (const fragment of fragments.values()) {
 for (const operation of operations.values())
   collectAliases(operation.selectionSet, operationRoot(operation));
 
+// The description of the field an operation targets: its root field, or,
+// for an operation that selects a path such as analytics { usage { streaming
+// { streamAnalyticsSummary(...) } } }, the last field of that path (the rule
+// of operationTarget in scripts/sdkcontract/ops.go).
 function rootFieldDescription(operation) {
-  const root = operationRoot(operation);
-  const fieldNode = operation.selectionSet.selections.find(
-    (selection) => selection.kind === Kind.FIELD
-  );
-  return root && fieldNode ? root.getFields()[fieldNode.name.value]?.description : undefined;
+  let parent = operationRoot(operation);
+  let selections = operation.selectionSet.selections;
+  let description;
+  while (parent && selections.length === 1 && selections[0].kind === Kind.FIELD) {
+    const fields = isObjectType(parent) || isInterfaceType(parent) ? parent.getFields() : {};
+    const field = fields[selections[0].name.value];
+    if (!field) break;
+    description = field.description;
+    const next = selections[0].selectionSet?.selections ?? [];
+    if (next.length !== 1 || next[0].kind !== Kind.FIELD || !next[0].selectionSet) break;
+    parent = getNamedType(field.type);
+    selections = next;
+  }
+  return description;
 }
 
 function propertyName(member) {

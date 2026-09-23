@@ -21,14 +21,20 @@ class FrameWorksClient(GraphQLClient):
     server_status() returns the server's version as the serverInfo gate saw it.
     url defaults to DEFAULT_GRAPHQL_URL; pass it explicitly for a self-hosted
     or staging Bridge.
+
+    The sync client has no subscriptions: ariadne-codegen generates
+    subscription methods only for an async client, so they are on
+    AsyncFrameWorksClient.
     """
 
 
 class AsyncFrameWorksClient(AsyncGraphQLClient):
-    """Async client with the same methods as FrameWorksClient, plus the
-    subscriptions (tenant_events), which run over WebSocket at ws_url
-    (default: url with ws(s):// and /ws appended). token may also be an
-    async function. url defaults to DEFAULT_GRAPHQL_URL."""
+    """Async client with the same methods as FrameWorksClient, plus one async
+    iterator method per public subscription (tenant_events,
+    live_stream_events, skipper_chat, ...), each yielding the operation's
+    pydantic model. Subscriptions run over WebSocket at ws_url (default: url
+    with ws(s):// and /ws appended). token may also be an async function.
+    url defaults to DEFAULT_GRAPHQL_URL."""
 
 
 __all__ = ["AsyncFrameWorksClient", "DEFAULT_GRAPHQL_URL", "FrameWorksClient"]

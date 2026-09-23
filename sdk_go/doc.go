@@ -2,7 +2,9 @@
 //
 // generated.go holds one typed function per public operation (for example
 // GetStream, CreateStream, ListStreams); pass a *Client as their
-// graphql.Client. The hand-written runtime adds authentication, retries,
+// graphql.Client. Each public subscription is a Subscribe<Operation>
+// function (SubscribeTenantEvents, SubscribeLiveStreamEvents, ...) that runs
+// on a *SubscriptionClient. The hand-written runtime adds authentication, retries,
 // typed errors, the serverInfo version check, pagination, subscriptions,
 // VOD uploads, playback token signing, and webhook verification.
 //
