@@ -10,7 +10,7 @@ policy for changing them. `make verify-api-compat` and `make verify-schema-compa
 
 - **Line.** Under 0.x, a minor version is its own line (0.1, 0.2, ...), because a 0.x minor release may break. From
   1.0 on, a major version is a line.
-- **Live lines.** A line is `live` or `retired`. Under 0.x only the latest minor line is live.
+- **Live lines.** A line is `live` or `retired` as declared in `support.yaml`. The current 0.1 and 0.2 lines are both live and checked.
 - **Minimum server.** Each line names `min_server`, a stable release (`vMAJOR.MINOR.PATCH`). A live line supports every
   stable release at or above it. Release candidates and development builds are not supported releases: the SDKs treat
   their version as unverified and skip every version check.
@@ -56,7 +56,7 @@ selects in the release notes, since consumer code branching on it only reaches i
 To remove an operation, change one incompatibly, or raise the minimum server:
 
 1. Add a changeset with a minor bump (under 0.x) or a major bump (from 1.0).
-2. Add the new line to `support.yaml` as `current`, with its `min_server`, and mark the previous line `retired`.
+2. Add the new line to `support.yaml` as `current`, with its `min_server`. Mark an older line `retired` only when its support commitment ends.
 3. Run `make graphql-all`; `make sdk-manifest` writes the new line's entry, and the previous line's entry stays frozen.
 4. Deprecate the schema elements the new line stops using. They can be removed once the minimum server of every live
    line already has them deprecated.

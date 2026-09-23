@@ -3838,7 +3838,6 @@ Authenticate using a signed message from an Ethereum wallet. Returns a JWT token
 - `input`: `WalletLoginInput!` ([WalletLoginInput](/builders/api-schema/types-s-z/#walletlogininput)) — The wallet input containing address, message, and signature.
 
 
-
 ---
 # Queries
 https://logbook.frameworks.network/builders/api-schema/queries
@@ -4850,7 +4849,6 @@ The public event types an endpoint can subscribe to, as used in eventTypes. &#34
 **SDK:** Raw GraphQL only
 
 
-
 ---
 # Subscriptions
 https://logbook.frameworks.network/builders/api-schema/subscriptions
@@ -5001,7 +4999,6 @@ Public events of the current tenant, as webhooks deliver them: stream lifecycle,
 
 - `types`: `[String!]`
 - `streamId`: `ID`
-
 
 
 ---
@@ -7122,7 +7119,6 @@ Values of frameworks.events.public.v1.SuspensionReason, named as in the proto an
 - **overallFailureRate**: `Float!`
 
 
-
 ---
 # Types G-L
 https://logbook.frameworks.network/builders/api-schema/types-g-l
@@ -7642,7 +7638,6 @@ Successful email link response.
 - **frozenVodBytes**: `Int!`
 - **syncedArtifactCount**: `Int!`
 - **syncedArtifactBytes**: `Int!`
-
 
 
 ---
@@ -9652,7 +9647,6 @@ Snapshot of how much traffic a node is currently serving.
 
 - **activeStreams**: `Int!`
 - **activeViewers**: `Int!`
-
 
 
 ---
@@ -12120,7 +12114,6 @@ Result from submitting an x402 payment for settlement.
 - **newBalanceCents**: `Int` — New balance in cents (if available).
 - **txHash**: `String` — Blockchain transaction hash (if available).
 - **message**: `String!` — Human-readable status message.
-
 
 
 ---

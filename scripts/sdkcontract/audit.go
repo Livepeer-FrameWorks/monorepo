@@ -74,18 +74,25 @@ func runAudit(repo string) error {
 			continue
 		}
 		var missing []string
-		count := 0
+		count, excluded, deprecated := 0, 0, 0
 		for _, field := range root.def.Fields {
 			if strings.HasPrefix(field.Name, "__") {
 				continue
 			}
+			if _, private := privateRootFields[root.name+"."+field.Name]; private {
+				excluded++
+				continue
+			}
 			count++
+			if field.Directives.ForName("deprecated") != nil {
+				deprecated++
+			}
 			if len(covered[root.name+"."+field.Name]) == 0 {
 				missing = append(missing, field.Name)
 			}
 		}
 		sort.Strings(missing)
-		fmt.Printf("%s: %d schema fields, %d covered, %d uncovered\n", root.name, count, count-len(missing), len(missing))
+		fmt.Printf("%s: %d reference fields, %d typed, %d untyped (%d deprecated), %d private excluded\n", root.name, count, count-len(missing), len(missing), deprecated, excluded)
 		if len(missing) > 0 {
 			fmt.Printf("  uncovered: %s\n", strings.Join(missing, ", "))
 		}
