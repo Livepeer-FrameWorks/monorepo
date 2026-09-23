@@ -33,6 +33,8 @@ FrameWorks is an alternative to managed video APIs like Mux, Bunny Stream, and L
 - MCP Discovery: https://bridge.frameworks.network/.well-known/mcp.json
 - MCP Endpoint: POST https://bridge.frameworks.network/mcp (streamable-http)
 - GraphQL: POST https://bridge.frameworks.network/graphql
+- [GraphQL schema reference](https://logbook.frameworks.network/builders/api-schema/): Public operations, arguments, types, and deprecations
+- [SDKs](https://logbook.frameworks.network/builders/sdks/): Typed TypeScript, Go, and Python operations
 - Wallet Login: GraphQL mutation walletLogin at https://bridge.frameworks.network/graphql
 
 ## Auth
