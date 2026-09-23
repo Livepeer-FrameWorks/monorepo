@@ -24,6 +24,33 @@ schema {
 }
 
 """
+Marks a field that a tenant credential cannot use: it requires the
+platform_operator grant or the service token. The gateway enforces that in
+the resolver; the directive has no runtime effect. The public schema
+(pkg/graphql/public/schema.public.graphql), which the SDKs and the API
+reference are generated from, leaves out these fields and every type only
+they reach.
+"""
+directive @internal(
+  "The credential the field requires, for readers of the full schema."
+  reason: String!
+) on FIELD_DEFINITION
+
+"""
+Marks a public field that is not stable yet. It stays in the public schema,
+the SDKs, and the API reference, without a compatibility promise. `until` is
+the platform release (vMAJOR.MINOR.PATCH) by which the field either loses this
+directive or is removed; make verify-experimental-fields fails once the
+pending release reaches it.
+"""
+directive @experimental(
+  "What is not stable yet."
+  reason: String!
+  "The platform release by which the field graduates or is removed."
+  until: String!
+) on FIELD_DEFINITION
+
+"""
 Relay-style global node interface.
 All fetchable objects implement this interface and can be retrieved by their global ID.
 """
@@ -88,7 +115,7 @@ type Query {
   platform_operator grant (RFC 9068 roles claim) and is audit-logged; all
   other callers receive an authorization error.
   """
-  platform: Platform!
+  platform: Platform! @internal(reason: "Requires the platform_operator grant.")
 
   """
   Incidents raised by platform alerting on clusters the current tenant owns,
@@ -643,7 +670,7 @@ type Query {
     Filter by token kind.
     """
     kind: String
-  ): BootstrapTokenConnection!
+  ): BootstrapTokenConnection! @internal(reason: "Requires the service token.")
 
   """
   Retrieve a single DVR chapter, including its finalized playbackId.
@@ -1619,7 +1646,7 @@ type Mutation {
     Updated subscription terms.
     """
     input: UpdateSubscriptionCustomTermsInput!
-  ): TenantSubscription
+  ): TenantSubscription @internal(reason: "Requires the platform_operator grant.")
 
   """
   Update the current tenant's profile.
@@ -1901,7 +1928,7 @@ type Mutation {
     Token configuration.
     """
     input: CreateBootstrapTokenInput!
-  ): CreateBootstrapTokenResult!
+  ): CreateBootstrapTokenResult! @internal(reason: "Requires the service token.")
 
   """
   Revoke a bootstrap token (service token required).
@@ -1911,7 +1938,7 @@ type Mutation {
     The token ID to revoke.
     """
     id: ID!
-  ): RevokeBootstrapTokenResult!
+  ): RevokeBootstrapTokenResult! @internal(reason: "Requires the service token.")
 
   """
   Create an additional stream key for a stream.

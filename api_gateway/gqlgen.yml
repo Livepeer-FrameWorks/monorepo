@@ -2,6 +2,14 @@
 schema:
   - ../pkg/graphql/schema.graphql
 
+# Visibility metadata for scripts/sdkcontract (the public schema, the SDKs, and
+# the API reference). Resolvers enforce access; no runtime hook is generated.
+directives:
+  internal:
+    skip_runtime: true
+  experimental:
+    skip_runtime: true
+
 # Where should the generated server code go?
 exec:
   filename: graph/generated/generated.go
