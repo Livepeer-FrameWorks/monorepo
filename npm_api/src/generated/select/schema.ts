@@ -1325,7 +1325,7 @@ export type CryptoAsset = 'ETH' | 'USDC' | 'LPT'
 
 /**
  * Result from creating a crypto top-up.
- * 
+ *
  * The price is locked at this response. Send exactly `expectedAmountToken` of
  * `asset` to `depositAddress`; on confirmation, the balance is credited at
  * `quotedPriceUsd` regardless of price drift inside the address TTL.
@@ -1363,7 +1363,7 @@ export interface CryptoTopupResult {
 
 /**
  * Status of a crypto top-up (for polling).
- * 
+ *
  * `status` cycles: pending → confirming → completed (or expired).
  */
 export interface CryptoTopupStatus {
@@ -1508,7 +1508,7 @@ export interface DVRChapter {
  * ranges are produced for finalized replay artifacts. Configured at the
  * Stream level via updateStream and snapshotted onto the DVR artifact at
  * StartDVR.
- * 
+ *
  * UTC-only — civil-time chapters resolve at the edge.
  */
 export type DVRChapterMode = 'WINDOW_SIZED' | 'FIXED_INTERVAL' | 'NONE'
@@ -2750,12 +2750,12 @@ export interface MessagesConnection {
 /**
  * Short-lived credentials that let an authorized operator open the
  * MistServer admin UI on a specific edge node.
- * 
+ *
  * The webapp POSTs `sessionToken` (in the form body, NOT a query string)
  * to `postUrl`. Helmsman validates the token against Foghorn, sets an
  * HttpOnly, Secure, SameSite=Lax cookie scoped to `Path=/_mist`, and
  * redirects the browser to `/_mist/` where the LSP UI loads.
- * 
+ *
  * `sessionToken` is bound to one nodeId via the JWT's `node_id` claim;
  * replay against any other edge node fails. `expiresAt` is Unix seconds.
  */
@@ -2833,7 +2833,7 @@ export interface MultistreamStatusChanged {
 
 /**
  * Root Mutation type - the entry point for all write operations.
- * 
+ *
  * All mutations return union types with explicit error states per GraphQL best practices.
  * Check the result type to handle success/error cases appropriately.
  */
@@ -2945,7 +2945,7 @@ export interface Mutation {
     createEnrollmentToken: CreateEnrollmentTokenResult
     /**
      * Bootstrap a new edge using only an opaque bootstrap token.
-     * 
+     *
      * Public — the bootstrap token is itself the credential. Bridge resolves
      * the token's cluster via Quartermaster, finds the cluster's assigned
      * Foghorn, and proxies a PreRegisterEdge call so the operator never has
@@ -3116,7 +3116,7 @@ export interface Mutation {
      * to (NOT a query parameter, so the token doesn't leak via referrers / URL
      * history / access logs). On success the browser sets a `fw_mist_admin`
      * cookie scoped to /_mist and is redirected to /_mist/.
-     * 
+     *
      * Authority is infrastructure ownership, not subscriber access: Mist admin
      * access is effectively shell on the edge box, so only owner/admin users
      * in the cluster owner tenant can open it. Holders of the platform_operator
@@ -4104,7 +4104,7 @@ export interface QualityTierSummary {
 
 /**
  * Root Query type - the entry point for all read operations.
- * 
+ *
  * List and object fields are nullable per GraphQL best practices,
  * enabling graceful degradation when individual services are unavailable.
  * Most connection fields are non-null, but some may be nullable when upstream data is optional.
@@ -4314,7 +4314,7 @@ export interface Query {
     signingKeysConnection: SigningKeysConnection
     /**
      * Retrieve a single DVR chapter, including its finalized playbackId.
-     * 
+     *
      * Chapters are produced by the finalization queue as canonical .mkv
      * VOD artifacts. Historical chapter mode is configured at the Stream level
      * (Stream.dvrChapterMode) and snapshotted at StartDVR. Modes:
@@ -8006,13 +8006,13 @@ export interface ConnectionEventsConnectionGenqlSelection{
 /**
  * Standard cursor-based pagination input for all connections.
  * Follows the Relay Connection specification for consistent pagination.
- * 
+ *
  * ## Forward Pagination
  * Use `first` and `after` to paginate forward:
  * ```graphql
  * streamsConnection(page: { first: 10, after: "cursor..." })
  * ```
- * 
+ *
  * ## Backward Pagination
  * Use `last` and `before` to paginate backward:
  * ```graphql
@@ -8406,7 +8406,7 @@ export interface CreateWebhookEndpointResultGenqlSelection{
 
 /**
  * Result from creating a crypto top-up.
- * 
+ *
  * The price is locked at this response. Send exactly `expectedAmountToken` of
  * `asset` to `depositAddress`; on confirmation, the balance is credited at
  * `quotedPriceUsd` regardless of price drift inside the address TTL.
@@ -8445,7 +8445,7 @@ export interface CryptoTopupResultGenqlSelection{
 
 /**
  * Status of a crypto top-up (for polling).
- * 
+ *
  * `status` cycles: pending → confirming → completed (or expired).
  */
 export interface CryptoTopupStatusGenqlSelection{
@@ -9968,12 +9968,12 @@ export interface MessagesConnectionGenqlSelection{
 /**
  * Short-lived credentials that let an authorized operator open the
  * MistServer admin UI on a specific edge node.
- * 
+ *
  * The webapp POSTs `sessionToken` (in the form body, NOT a query string)
  * to `postUrl`. Helmsman validates the token against Foghorn, sets an
  * HttpOnly, Secure, SameSite=Lax cookie scoped to `Path=/_mist`, and
  * redirects the browser to `/_mist/` where the LSP UI loads.
- * 
+ *
  * `sessionToken` is bound to one nodeId via the JWT's `node_id` claim;
  * replay against any other edge node fails. `expiresAt` is Unix seconds.
  */
@@ -10066,7 +10066,7 @@ export interface MultistreamStatusChangedGenqlSelection{
 
 /**
  * Root Mutation type - the entry point for all write operations.
- * 
+ *
  * All mutations return union types with explicit error states per GraphQL best practices.
  * Check the result type to handle success/error cases appropriately.
  */
@@ -10078,7 +10078,7 @@ export interface MutationGenqlSelection{
     /** Update an existing stream's configuration. */
     updateStream?: (UpdateStreamResultGenqlSelection & { __args: {
     /** The stream ID. */
-    id: Scalars['ID'], 
+    id: Scalars['ID'],
     /** Updated stream configuration. */
     input: UpdateStreamInput} })
     /** Delete a stream and all associated data. */
@@ -10149,7 +10149,7 @@ export interface MutationGenqlSelection{
      */
     submitX402Payment?: (SubmitX402PaymentResultGenqlSelection & { __args: {
     /** Base64-encoded x402 payment payload. */
-    payment: Scalars['String'], 
+    payment: Scalars['String'],
     /**
      * Optional resource being paid for. Viewer resources credit their resolved
      * owner tenant; omission defaults to the authenticated tenant.
@@ -10162,11 +10162,11 @@ export interface MutationGenqlSelection{
      */
     createStripeCheckout?: (StripeCheckoutResultGenqlSelection & { __args: {
     /** The billing tier to subscribe to. */
-    tierId: Scalars['ID'], 
+    tierId: Scalars['ID'],
     /** Billing period: 'monthly' or 'yearly'. */
-    billingPeriod: Scalars['String'], 
+    billingPeriod: Scalars['String'],
     /** URL to redirect to after successful checkout. */
-    successUrl: Scalars['String'], 
+    successUrl: Scalars['String'],
     /** URL to redirect to if user cancels. */
     cancelUrl: Scalars['String']} })
     /**
@@ -10184,9 +10184,9 @@ export interface MutationGenqlSelection{
      */
     createMollieFirstPayment?: (MollieFirstPaymentResultGenqlSelection & { __args: {
     /** The billing tier to subscribe to. */
-    tierId: Scalars['ID'], 
+    tierId: Scalars['ID'],
     /** Payment method: 'ideal', 'creditcard', 'bancontact'. */
-    method: Scalars['String'], 
+    method: Scalars['String'],
     /** URL to redirect to after payment. */
     redirectUrl: Scalars['String']} })
     /**
@@ -10195,9 +10195,9 @@ export interface MutationGenqlSelection{
      */
     createMollieSubscription?: (MollieSubscriptionResultGenqlSelection & { __args: {
     /** The billing tier to subscribe to. */
-    tierId: Scalars['ID'], 
+    tierId: Scalars['ID'],
     /** The mandate ID from the first payment. */
-    mandateId: Scalars['String'], 
+    mandateId: Scalars['String'],
     /** Optional description for the subscription. */
     description?: (Scalars['String'] | null)} })
     /**
@@ -10244,14 +10244,14 @@ export interface MutationGenqlSelection{
      */
     createEnrollmentToken?: (CreateEnrollmentTokenResultGenqlSelection & { __args: {
     /** Cluster to create the token for. */
-    clusterId: Scalars['ID'], 
+    clusterId: Scalars['ID'],
     /** Token display name. */
-    name?: (Scalars['String'] | null), 
+    name?: (Scalars['String'] | null),
     /** Time-to-live (e.g. "24h", "7d"). Defaults to 30 days. */
     ttl?: (Scalars['String'] | null)} })
     /**
      * Bootstrap a new edge using only an opaque bootstrap token.
-     * 
+     *
      * Public — the bootstrap token is itself the credential. Bridge resolves
      * the token's cluster via Quartermaster, finds the cluster's assigned
      * Foghorn, and proxies a PreRegisterEdge call so the operator never has
@@ -10261,7 +10261,7 @@ export interface MutationGenqlSelection{
     /** Update marketplace settings for a cluster. */
     updateClusterMarketplace?: (UpdateClusterResultGenqlSelection & { __args: {
     /** The cluster ID. */
-    clusterId: Scalars['ID'], 
+    clusterId: Scalars['ID'],
     /** Updated marketplace settings. */
     input: UpdateClusterMarketplaceInput} })
     /** Create an invite for a cluster. */
@@ -10275,7 +10275,7 @@ export interface MutationGenqlSelection{
     /** Request to subscribe to a cluster. */
     requestClusterSubscription?: (ClusterSubscriptionResultGenqlSelection & { __args: {
     /** The cluster ID. */
-    clusterId: Scalars['ID'], 
+    clusterId: Scalars['ID'],
     /** Optional invite token. */
     inviteToken?: (Scalars['String'] | null)} })
     /** Accept a cluster invite. */
@@ -10289,7 +10289,7 @@ export interface MutationGenqlSelection{
     /** Reject a pending cluster subscription request. */
     rejectClusterSubscription?: (ClusterSubscriptionResultGenqlSelection & { __args: {
     /** The subscription ID to reject. */
-    subscriptionId: Scalars['ID'], 
+    subscriptionId: Scalars['ID'],
     /** Optional rejection reason. */
     reason?: (Scalars['String'] | null)} })
     /**
@@ -10341,7 +10341,7 @@ export interface MutationGenqlSelection{
      */
     rotateWebhookEndpointSecret?: (RotateWebhookEndpointSecretResultGenqlSelection & { __args: {
     /** The endpoint ID. */
-    id: Scalars['ID'], 
+    id: Scalars['ID'],
     /** Stop signing with the previous secret immediately. */
     revokePrevious?: (Scalars['Boolean'] | null)} })
     /**
@@ -10387,13 +10387,13 @@ export interface MutationGenqlSelection{
     /** Create an additional stream key for a stream. */
     createStreamKey?: (CreateStreamKeyResultGenqlSelection & { __args: {
     /** The stream ID (Stream.id, Relay global ID). */
-    streamId: Scalars['ID'], 
+    streamId: Scalars['ID'],
     /** Stream key configuration. */
     input: CreateStreamKeyInput} })
     /** Delete a stream key. */
     deleteStreamKey?: (DeleteStreamKeyResultGenqlSelection & { __args: {
     /** The stream ID (Stream.id, Relay global ID). */
-    streamId: Scalars['ID'], 
+    streamId: Scalars['ID'],
     /** The key ID to delete. */
     keyId: Scalars['ID']} })
     /**
@@ -10402,13 +10402,13 @@ export interface MutationGenqlSelection{
      */
     createPushTarget?: (PushTargetGenqlSelection & { __args: {
     /** The stream ID (Stream.id, Relay global ID). */
-    streamId: Scalars['ID'], 
+    streamId: Scalars['ID'],
     /** Push target configuration. */
     input: CreatePushTargetInput} })
     /** Update a multistream push target. */
     updatePushTarget?: (PushTargetGenqlSelection & { __args: {
     /** The push target ID. */
-    id: Scalars['ID'], 
+    id: Scalars['ID'],
     /** Fields to update. */
     input: UpdatePushTargetInput} })
     /** Delete a multistream push target. */
@@ -10498,7 +10498,7 @@ export interface MutationGenqlSelection{
      * to (NOT a query parameter, so the token doesn't leak via referrers / URL
      * history / access logs). On success the browser sets a `fw_mist_admin`
      * cookie scoped to /_mist and is redirected to /_mist/.
-     * 
+     *
      * Authority is infrastructure ownership, not subscriber access: Mist admin
      * access is effectively shell on the edge box, so only owner/admin users
      * in the cluster owner tenant can open it. Holders of the platform_operator
@@ -11647,7 +11647,7 @@ export interface QualityTierSummaryGenqlSelection{
 
 /**
  * Root Query type - the entry point for all read operations.
- * 
+ *
  * List and object fields are nullable per GraphQL best practices,
  * enabling graceful degradation when individual services are unavailable.
  * Most connection fields are non-null, but some may be nullable when upstream data is optional.
@@ -11664,7 +11664,7 @@ export interface QueryGenqlSelection{
      */
     incidentsConnection?: (IncidentsConnectionGenqlSelection & { __args?: {
     /** Pagination options. */
-    page?: (ConnectionInput | null), 
+    page?: (ConnectionInput | null),
     /** Optional status and cluster filters. */
     filter?: (IncidentFilterInput | null)} })
     /**
@@ -11686,7 +11686,7 @@ export interface QueryGenqlSelection{
     /** List all streams for the current tenant with pagination. */
     streamsConnection?: (StreamsConnectionGenqlSelection & { __args?: {
     /** Pagination options. */
-    page?: (ConnectionInput | null), 
+    page?: (ConnectionInput | null),
     /**
      * Optional server-side name search (title / internal name). Enables an account-wide
      * picker instead of only the first page.
@@ -11703,7 +11703,7 @@ export interface QueryGenqlSelection{
     /** List all stream keys for a specific stream. */
     streamKeysConnection?: (StreamKeysConnectionGenqlSelection & { __args: {
     /** Pagination options. */
-    page?: (ConnectionInput | null), 
+    page?: (ConnectionInput | null),
     /** The stream ID to list keys for (Stream.id, Relay global ID). */
     streamId: Scalars['ID']} })
     /** Fetch a single clip by its global ID. */
@@ -11742,9 +11742,9 @@ export interface QueryGenqlSelection{
     /** List balance transactions for the tenant with pagination. */
     balanceTransactionsConnection?: (BalanceTransactionsConnectionGenqlSelection & { __args: {
     /** Pagination options. */
-    page?: (ConnectionInput | null), 
+    page?: (ConnectionInput | null),
     /** Filter by transaction type: topup, usage, refund, adjustment. */
-    transactionType?: (Scalars['String'] | null), 
+    transactionType?: (Scalars['String'] | null),
     /** Time range to query. */
     timeRange?: (TimeRangeInput | null)} })
     /** Get aggregated usage metrics for the tenant. */
@@ -11754,15 +11754,15 @@ export interface QueryGenqlSelection{
     /** List detailed usage records with pagination. */
     usageRecordsConnection?: (UsageRecordsConnectionGenqlSelection & { __args?: {
     /** Pagination options. */
-    page?: (ConnectionInput | null), 
+    page?: (ConnectionInput | null),
     /** Time range to query. */
     timeRange?: (TimeRangeInput | null)} })
     /** Get aggregated usage data grouped by time interval. */
     usageAggregates?: (UsageAggregateGenqlSelection & { __args: {
     /** Time range to query (required). */
-    timeRange: TimeRangeInput, 
+    timeRange: TimeRangeInput,
     /** Aggregation granularity: hourly, daily, or monthly. */
-    granularity?: (Scalars['String'] | null), 
+    granularity?: (Scalars['String'] | null),
     /** Filter by usage types. */
     usageTypes?: (Scalars['String'][] | null)} })
     /** Get the current tenant's profile and settings. */
@@ -11778,11 +11778,11 @@ export interface QueryGenqlSelection{
     /** List nodes (edge servers) with optional filters. */
     nodesConnection?: (NodesConnectionGenqlSelection & { __args?: {
     /** Pagination options. */
-    page?: (ConnectionInput | null), 
+    page?: (ConnectionInput | null),
     /** Filter by cluster ID. */
-    clusterId?: (Scalars['String'] | null), 
+    clusterId?: (Scalars['String'] | null),
     /** Filter by node status. */
-    status?: (NodeStatus | null), 
+    status?: (NodeStatus | null),
     /** Filter by node type. */
     type?: (Scalars['String'] | null)} })
     /** Fetch a single node by its global ID. */
@@ -11796,7 +11796,7 @@ export interface QueryGenqlSelection{
      */
     orchestratorsConnection?: (OrchestratorsConnectionGenqlSelection & { __args?: {
     /** Pagination options. */
-    page?: (ConnectionInput | null), 
+    page?: (ConnectionInput | null),
     /** Optional filter to a single orchestrator (eth address). */
     orchAddr?: (Scalars['String'] | null)} })
     /**
@@ -11823,17 +11823,17 @@ export interface QueryGenqlSelection{
      * rollups (5m or 1h). `meanLatencyMs` is server-pre-computed; callers don't
      * divide latency_sum/latency_count themselves.
      */
-    orchestratorPerformanceSeries?: (OrchestratorPerformancePointGenqlSelection & { __args: {orchAddr: Scalars['String'], timeRange: TimeRangeInput, 
+    orchestratorPerformanceSeries?: (OrchestratorPerformancePointGenqlSelection & { __args: {orchAddr: Scalars['String'], timeRange: TimeRangeInput,
     /** Rollup interval. "5m" (default) or "1h". */
-    interval?: (Scalars['String'] | null), 
+    interval?: (Scalars['String'] | null),
     /** Optional drill-down filters. */
     gatewayId?: (Scalars['String'] | null), resolvedIp?: (Scalars['String'] | null)} })
     /** Discover service instances by type. */
     discoverServicesConnection?: (ServiceInstancesConnectionGenqlSelection & { __args: {
     /** Pagination options. */
-    page?: (ConnectionInput | null), 
+    page?: (ConnectionInput | null),
     /** Service type to discover (e.g., mistserver, foghorn). */
-    type: Scalars['String'], 
+    type: Scalars['String'],
     /** Filter by cluster ID. */
     clusterId?: (Scalars['String'] | null)} })
     /**
@@ -11893,7 +11893,7 @@ export interface QueryGenqlSelection{
     /** List pending subscription requests (paginated). */
     pendingSubscriptionsConnection?: (ClusterSubscriptionConnectionGenqlSelection & { __args: {
     /** Pagination options. */
-    page?: (ConnectionInput | null), 
+    page?: (ConnectionInput | null),
     /** The cluster ID. */
     clusterId: Scalars['ID']} })
     /**
@@ -11904,7 +11904,7 @@ export interface QueryGenqlSelection{
     /** List invites for a cluster (paginated). */
     clusterInvitesConnection?: (ClusterInviteConnectionGenqlSelection & { __args: {
     /** Pagination options. */
-    page?: (ConnectionInput | null), 
+    page?: (ConnectionInput | null),
     /** The cluster ID. */
     clusterId: Scalars['ID']} })
     /**
@@ -11932,15 +11932,15 @@ export interface QueryGenqlSelection{
      */
     webhookDeliveriesConnection?: (WebhookDeliveriesConnectionGenqlSelection & { __args?: {
     /** Only deliveries to this endpoint. */
-    endpointId?: (Scalars['ID'] | null), 
+    endpointId?: (Scalars['ID'] | null),
     /** Only deliveries in these statuses. */
-    statuses?: (WebhookDeliveryStatus[] | null), 
+    statuses?: (WebhookDeliveryStatus[] | null),
     /** Only deliveries of this event type, e.g. "stream.live". */
-    eventType?: (Scalars['String'] | null), 
+    eventType?: (Scalars['String'] | null),
     /** Only deliveries of this event. */
-    eventId?: (Scalars['ID'] | null), 
+    eventId?: (Scalars['ID'] | null),
     /** Only deliveries created at or after this time. */
-    createdAfter?: (Scalars['Time'] | null), 
+    createdAfter?: (Scalars['Time'] | null),
     /** Only deliveries created before this time. */
     createdBefore?: (Scalars['Time'] | null), page?: (ConnectionInput | null)} })
     /** Get one webhook delivery with every HTTP attempt. */
@@ -11958,7 +11958,7 @@ export interface QueryGenqlSelection{
     status?: (Scalars['String'] | null), page?: (ConnectionInput | null)} })
     /**
      * Retrieve a single DVR chapter, including its finalized playbackId.
-     * 
+     *
      * Chapters are produced by the finalization queue as canonical .mkv
      * VOD artifacts. Historical chapter mode is configured at the Stream level
      * (Stream.dvrChapterMode) and snapshotted at StartDVR. Modes:
@@ -11969,13 +11969,13 @@ export interface QueryGenqlSelection{
      */
     dvrChapter?: (DVRChapterGenqlSelection & { __args: {
     /** DVR recording identifier — accepts either DVRRequest.id (UUID) or DVRRequest.dvrHash. */
-    dvrId: Scalars['ID'], 
+    dvrId: Scalars['ID'],
     /** Historical chapter mode; null defaults to the recording's policy snapshot. */
-    mode?: (DVRChapterMode | null), 
+    mode?: (DVRChapterMode | null),
     /** Required for FIXED_INTERVAL mode. */
-    intervalSeconds?: (Scalars['Int'] | null), 
+    intervalSeconds?: (Scalars['Int'] | null),
     /** UTC epoch milliseconds (start of range). */
-    startMs: Scalars['Float'], 
+    startMs: Scalars['Float'],
     /** UTC epoch milliseconds (end of range, exclusive). */
     endMs: Scalars['Float']} })
     /**
@@ -11984,17 +11984,17 @@ export interface QueryGenqlSelection{
      */
     dvrChapters?: (DVRChaptersPageGenqlSelection & { __args: {
     /** DVR recording identifier — accepts either DVRRequest.id (UUID) or DVRRequest.dvrHash. */
-    dvrId: Scalars['ID'], 
+    dvrId: Scalars['ID'],
     /** Restrict to chapters of this mode; null = all. */
-    mode?: (DVRChapterMode | null), 
+    mode?: (DVRChapterMode | null),
     /** Required when filtering by FIXED_INTERVAL. */
-    intervalSeconds?: (Scalars['Int'] | null), 
+    intervalSeconds?: (Scalars['Int'] | null),
     /** UTC epoch ms lower bound; 0 = no lower bound. */
-    rangeStartMs?: (Scalars['Float'] | null), 
+    rangeStartMs?: (Scalars['Float'] | null),
     /** UTC epoch ms upper bound; 0 = no upper bound. */
-    rangeEndMs?: (Scalars['Float'] | null), 
+    rangeEndMs?: (Scalars['Float'] | null),
     /** Default 200. Max 1000. */
-    pageSize?: (Scalars['Int'] | null), 
+    pageSize?: (Scalars['Int'] | null),
     /** Keyset cursor from a previous page's nextPageToken. */
     pageToken?: (Scalars['String'] | null)} })
     /** Fetch a single VOD asset by ID. */
@@ -12021,7 +12021,7 @@ export interface QueryGenqlSelection{
      */
     resolveViewerEndpoint?: (ViewerEndpointResponseGenqlSelection & { __args: {
     /** Playback ID for live streams or VOD uploads, or artifact playback ID for clips/DVR. */
-    contentId: Scalars['String'], 
+    contentId: Scalars['String'],
     /** Optional playback constraint. A different format is never substituted. Omit to select a node with any playable Mist output and receive its full catalog. */
     protocol?: (MediaViewerProtocol | null)} })
     /**
@@ -12065,7 +12065,7 @@ export interface QueryGenqlSelection{
      */
     messagesConnection?: (MessagesConnectionGenqlSelection & { __args: {
     /** The conversation ID. */
-    conversationId: Scalars['ID'], 
+    conversationId: Scalars['ID'],
     /** Pagination options. */
     page?: (ConnectionInput | null)} })
     /**
@@ -13491,9 +13491,9 @@ export interface StreamingUsageGenqlSelection{
      * Pre-aggregated analytics summaries for multiple streams.
      * Returns sorted, paginated results with tenant-wide share percentages.
      */
-    streamAnalyticsSummariesConnection?: (StreamAnalyticsSummaryConnectionGenqlSelection & { __args: {page?: (ConnectionInput | null), timeRange: TimeRangeInput, 
+    streamAnalyticsSummariesConnection?: (StreamAnalyticsSummaryConnectionGenqlSelection & { __args: {page?: (ConnectionInput | null), timeRange: TimeRangeInput,
     /** Sort field (default: EGRESS_GB for cost attribution). */
-    sortBy?: (StreamSummarySortField | null), 
+    sortBy?: (StreamSummarySortField | null),
     /** Sort direction (default: DESC for top results first). */
     sortOrder?: (SortOrder | null)} })
     viewerHoursHourlyConnection?: (ViewerHoursHourlyConnectionGenqlSelection & { __args?: {page?: (ConnectionInput | null), streamId?: (Scalars['ID'] | null), timeRange?: (TimeRangeInput | null), noCache?: (Scalars['Boolean'] | null)} })
@@ -14928,7 +14928,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isAPIUsage"')
       return APIUsage_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const APIUsageConnection_possibleTypes: string[] = ['APIUsageConnection']
@@ -14936,7 +14936,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isAPIUsageConnection"')
       return APIUsageConnection_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const APIUsageEdge_possibleTypes: string[] = ['APIUsageEdge']
@@ -14944,7 +14944,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isAPIUsageEdge"')
       return APIUsageEdge_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const APIUsageOperationSummary_possibleTypes: string[] = ['APIUsageOperationSummary']
@@ -14952,7 +14952,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isAPIUsageOperationSummary"')
       return APIUsageOperationSummary_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const APIUsageRecord_possibleTypes: string[] = ['APIUsageRecord']
@@ -14960,7 +14960,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isAPIUsageRecord"')
       return APIUsageRecord_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const APIUsageSummary_possibleTypes: string[] = ['APIUsageSummary']
@@ -14968,7 +14968,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isAPIUsageSummary"')
       return APIUsageSummary_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const AbortVodUploadResult_possibleTypes: string[] = ['DeleteSuccess','NotFoundError','AuthError']
@@ -14976,7 +14976,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isAbortVodUploadResult"')
       return AbortVodUploadResult_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const AccountSuspended_possibleTypes: string[] = ['AccountSuspended']
@@ -14984,7 +14984,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isAccountSuspended"')
       return AccountSuspended_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const Analytics_possibleTypes: string[] = ['Analytics']
@@ -14992,7 +14992,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isAnalytics"')
       return Analytics_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const AnalyticsHealth_possibleTypes: string[] = ['AnalyticsHealth']
@@ -15000,7 +15000,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isAnalyticsHealth"')
       return AnalyticsHealth_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const AnalyticsInfra_possibleTypes: string[] = ['AnalyticsInfra']
@@ -15008,7 +15008,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isAnalyticsInfra"')
       return AnalyticsInfra_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const AnalyticsLifecycle_possibleTypes: string[] = ['AnalyticsLifecycle']
@@ -15016,7 +15016,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isAnalyticsLifecycle"')
       return AnalyticsLifecycle_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const AnalyticsUsage_possibleTypes: string[] = ['AnalyticsUsage']
@@ -15024,7 +15024,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isAnalyticsUsage"')
       return AnalyticsUsage_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const ApiTokenCreated_possibleTypes: string[] = ['ApiTokenCreated']
@@ -15032,7 +15032,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isApiTokenCreated"')
       return ApiTokenCreated_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const ApiTokenRevoked_possibleTypes: string[] = ['ApiTokenRevoked']
@@ -15040,7 +15040,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isApiTokenRevoked"')
       return ApiTokenRevoked_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const ArtifactEvent_possibleTypes: string[] = ['ArtifactEvent']
@@ -15048,7 +15048,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isArtifactEvent"')
       return ArtifactEvent_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const ArtifactEventEdge_possibleTypes: string[] = ['ArtifactEventEdge']
@@ -15056,7 +15056,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isArtifactEventEdge"')
       return ArtifactEventEdge_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const ArtifactEventsConnection_possibleTypes: string[] = ['ArtifactEventsConnection']
@@ -15064,7 +15064,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isArtifactEventsConnection"')
       return ArtifactEventsConnection_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const ArtifactState_possibleTypes: string[] = ['ArtifactState']
@@ -15072,7 +15072,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isArtifactState"')
       return ArtifactState_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const ArtifactStateEdge_possibleTypes: string[] = ['ArtifactStateEdge']
@@ -15080,7 +15080,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isArtifactStateEdge"')
       return ArtifactStateEdge_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const ArtifactStatesConnection_possibleTypes: string[] = ['ArtifactStatesConnection']
@@ -15088,7 +15088,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isArtifactStatesConnection"')
       return ArtifactStatesConnection_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const ArtifactTrack_possibleTypes: string[] = ['ArtifactTrack']
@@ -15096,7 +15096,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isArtifactTrack"')
       return ArtifactTrack_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const AssetNodeCopies_possibleTypes: string[] = ['AssetNodeCopies']
@@ -15104,7 +15104,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isAssetNodeCopies"')
       return AssetNodeCopies_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const AssetNodeCopy_possibleTypes: string[] = ['AssetNodeCopy']
@@ -15112,7 +15112,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isAssetNodeCopy"')
       return AssetNodeCopy_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const AuthError_possibleTypes: string[] = ['AuthError']
@@ -15120,7 +15120,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isAuthError"')
       return AuthError_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const AvailableCluster_possibleTypes: string[] = ['AvailableCluster']
@@ -15128,7 +15128,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isAvailableCluster"')
       return AvailableCluster_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const AvailableClusterConnection_possibleTypes: string[] = ['AvailableClusterConnection']
@@ -15136,7 +15136,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isAvailableClusterConnection"')
       return AvailableClusterConnection_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const AvailableClusterEdge_possibleTypes: string[] = ['AvailableClusterEdge']
@@ -15144,7 +15144,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isAvailableClusterEdge"')
       return AvailableClusterEdge_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const BalanceTransaction_possibleTypes: string[] = ['BalanceTransaction']
@@ -15152,7 +15152,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isBalanceTransaction"')
       return BalanceTransaction_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const BalanceTransactionEdge_possibleTypes: string[] = ['BalanceTransactionEdge']
@@ -15160,7 +15160,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isBalanceTransactionEdge"')
       return BalanceTransactionEdge_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const BalanceTransactionsConnection_possibleTypes: string[] = ['BalanceTransactionsConnection']
@@ -15168,7 +15168,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isBalanceTransactionsConnection"')
       return BalanceTransactionsConnection_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const BillingAddress_possibleTypes: string[] = ['BillingAddress']
@@ -15176,7 +15176,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isBillingAddress"')
       return BillingAddress_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const BillingDetails_possibleTypes: string[] = ['BillingDetails']
@@ -15184,7 +15184,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isBillingDetails"')
       return BillingDetails_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const BillingDetailsUpdated_possibleTypes: string[] = ['BillingDetailsUpdated']
@@ -15192,7 +15192,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isBillingDetailsUpdated"')
       return BillingDetailsUpdated_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const BillingFeatures_possibleTypes: string[] = ['BillingFeatures']
@@ -15200,7 +15200,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isBillingFeatures"')
       return BillingFeatures_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const BillingStatus_possibleTypes: string[] = ['BillingStatus']
@@ -15208,7 +15208,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isBillingStatus"')
       return BillingStatus_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const BillingTier_possibleTypes: string[] = ['BillingTier']
@@ -15216,7 +15216,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isBillingTier"')
       return BillingTier_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const BootstrapEdgeResponse_possibleTypes: string[] = ['BootstrapEdgeResponse']
@@ -15224,7 +15224,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isBootstrapEdgeResponse"')
       return BootstrapEdgeResponse_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const BootstrapEdgeResult_possibleTypes: string[] = ['BootstrapEdgeResponse','ValidationError','AuthError']
@@ -15232,7 +15232,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isBootstrapEdgeResult"')
       return BootstrapEdgeResult_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const BootstrapToken_possibleTypes: string[] = ['BootstrapToken']
@@ -15240,7 +15240,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isBootstrapToken"')
       return BootstrapToken_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const BufferEvent_possibleTypes: string[] = ['BufferEvent']
@@ -15248,7 +15248,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isBufferEvent"')
       return BufferEvent_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const BufferEventEdge_possibleTypes: string[] = ['BufferEventEdge']
@@ -15256,7 +15256,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isBufferEventEdge"')
       return BufferEventEdge_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const BufferEventsConnection_possibleTypes: string[] = ['BufferEventsConnection']
@@ -15264,7 +15264,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isBufferEventsConnection"')
       return BufferEventsConnection_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const Capabilities_possibleTypes: string[] = ['Capabilities']
@@ -15272,7 +15272,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isCapabilities"')
       return Capabilities_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const CardTopupResult_possibleTypes: string[] = ['CardTopupResult']
@@ -15280,7 +15280,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isCardTopupResult"')
       return CardTopupResult_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const ChangeBillingTierPayload_possibleTypes: string[] = ['ChangeBillingTierPayload']
@@ -15288,7 +15288,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isChangeBillingTierPayload"')
       return ChangeBillingTierPayload_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const ChangeBillingTierResult_possibleTypes: string[] = ['ChangeBillingTierPayload','ValidationError','AuthError']
@@ -15296,7 +15296,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isChangeBillingTierResult"')
       return ChangeBillingTierResult_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const CityMetric_possibleTypes: string[] = ['CityMetric']
@@ -15304,7 +15304,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isCityMetric"')
       return CityMetric_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const ClientMetrics5m_possibleTypes: string[] = ['ClientMetrics5m']
@@ -15312,7 +15312,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isClientMetrics5m"')
       return ClientMetrics5m_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const ClientMetrics5mConnection_possibleTypes: string[] = ['ClientMetrics5mConnection']
@@ -15320,7 +15320,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isClientMetrics5mConnection"')
       return ClientMetrics5mConnection_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const ClientMetrics5mEdge_possibleTypes: string[] = ['ClientMetrics5mEdge']
@@ -15328,7 +15328,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isClientMetrics5mEdge"')
       return ClientMetrics5mEdge_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const ClientQoeSummary_possibleTypes: string[] = ['ClientQoeSummary']
@@ -15336,7 +15336,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isClientQoeSummary"')
       return ClientQoeSummary_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const Clip_possibleTypes: string[] = ['Clip']
@@ -15344,7 +15344,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isClip"')
       return Clip_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const ClipFailed_possibleTypes: string[] = ['ClipFailed']
@@ -15352,7 +15352,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isClipFailed"')
       return ClipFailed_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const ClipReady_possibleTypes: string[] = ['ClipReady']
@@ -15360,7 +15360,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isClipReady"')
       return ClipReady_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const ClipRequested_possibleTypes: string[] = ['ClipRequested']
@@ -15368,7 +15368,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isClipRequested"')
       return ClipRequested_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const Cluster_possibleTypes: string[] = ['Cluster']
@@ -15376,7 +15376,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isCluster"')
       return Cluster_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const ClusterAccess_possibleTypes: string[] = ['ClusterAccess']
@@ -15384,7 +15384,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isClusterAccess"')
       return ClusterAccess_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const ClusterAccessConnection_possibleTypes: string[] = ['ClusterAccessConnection']
@@ -15392,7 +15392,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isClusterAccessConnection"')
       return ClusterAccessConnection_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const ClusterAccessEdge_possibleTypes: string[] = ['ClusterAccessEdge']
@@ -15400,7 +15400,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isClusterAccessEdge"')
       return ClusterAccessEdge_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const ClusterBootOps_possibleTypes: string[] = ['ClusterBootOps']
@@ -15408,7 +15408,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isClusterBootOps"')
       return ClusterBootOps_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const ClusterCapabilities_possibleTypes: string[] = ['ClusterCapabilities']
@@ -15416,7 +15416,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isClusterCapabilities"')
       return ClusterCapabilities_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const ClusterEdge_possibleTypes: string[] = ['ClusterEdge']
@@ -15424,7 +15424,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isClusterEdge"')
       return ClusterEdge_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const ClusterInvite_possibleTypes: string[] = ['ClusterInvite']
@@ -15432,7 +15432,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isClusterInvite"')
       return ClusterInvite_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const ClusterInviteConnection_possibleTypes: string[] = ['ClusterInviteConnection']
@@ -15440,7 +15440,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isClusterInviteConnection"')
       return ClusterInviteConnection_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const ClusterInviteEdge_possibleTypes: string[] = ['ClusterInviteEdge']
@@ -15448,7 +15448,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isClusterInviteEdge"')
       return ClusterInviteEdge_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const ClusterMediaCapabilities_possibleTypes: string[] = ['ClusterMediaCapabilities']
@@ -15456,7 +15456,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isClusterMediaCapabilities"')
       return ClusterMediaCapabilities_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const ClusterPairTraffic_possibleTypes: string[] = ['ClusterPairTraffic']
@@ -15464,7 +15464,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isClusterPairTraffic"')
       return ClusterPairTraffic_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const ClusterQoeOps_possibleTypes: string[] = ['ClusterQoeOps']
@@ -15472,7 +15472,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isClusterQoeOps"')
       return ClusterQoeOps_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const ClusterSubscription_possibleTypes: string[] = ['ClusterSubscription']
@@ -15480,7 +15480,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isClusterSubscription"')
       return ClusterSubscription_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const ClusterSubscriptionConnection_possibleTypes: string[] = ['ClusterSubscriptionConnection']
@@ -15488,7 +15488,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isClusterSubscriptionConnection"')
       return ClusterSubscriptionConnection_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const ClusterSubscriptionEdge_possibleTypes: string[] = ['ClusterSubscriptionEdge']
@@ -15496,7 +15496,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isClusterSubscriptionEdge"')
       return ClusterSubscriptionEdge_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const ClusterSubscriptionResult_possibleTypes: string[] = ['ClusterSubscription','ValidationError','NotFoundError','AuthError']
@@ -15504,7 +15504,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isClusterSubscriptionResult"')
       return ClusterSubscriptionResult_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const ClusterWorkload_possibleTypes: string[] = ['ClusterWorkload']
@@ -15512,7 +15512,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isClusterWorkload"')
       return ClusterWorkload_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const ClustersConnection_possibleTypes: string[] = ['ClustersConnection']
@@ -15520,7 +15520,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isClustersConnection"')
       return ClustersConnection_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const CompleteVodUploadResult_possibleTypes: string[] = ['VodAsset','ValidationError','NotFoundError','AuthError']
@@ -15528,7 +15528,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isCompleteVodUploadResult"')
       return CompleteVodUploadResult_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const ConnectionEvent_possibleTypes: string[] = ['ConnectionEvent']
@@ -15536,7 +15536,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isConnectionEvent"')
       return ConnectionEvent_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const ConnectionEventEdge_possibleTypes: string[] = ['ConnectionEventEdge']
@@ -15544,7 +15544,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isConnectionEventEdge"')
       return ConnectionEventEdge_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const ConnectionEventsConnection_possibleTypes: string[] = ['ConnectionEventsConnection']
@@ -15552,7 +15552,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isConnectionEventsConnection"')
       return ConnectionEventsConnection_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const Conversation_possibleTypes: string[] = ['Conversation']
@@ -15560,7 +15560,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isConversation"')
       return Conversation_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const ConversationEdge_possibleTypes: string[] = ['ConversationEdge']
@@ -15568,7 +15568,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isConversationEdge"')
       return ConversationEdge_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const ConversationsConnection_possibleTypes: string[] = ['ConversationsConnection']
@@ -15576,7 +15576,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isConversationsConnection"')
       return ConversationsConnection_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const CostEntry_possibleTypes: string[] = ['CostEntry']
@@ -15584,7 +15584,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isCostEntry"')
       return CostEntry_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const CountryMetric_possibleTypes: string[] = ['CountryMetric']
@@ -15592,7 +15592,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isCountryMetric"')
       return CountryMetric_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const CountryMetrics_possibleTypes: string[] = ['CountryMetrics']
@@ -15600,7 +15600,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isCountryMetrics"')
       return CountryMetrics_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const CountryTimeSeries_possibleTypes: string[] = ['CountryTimeSeries']
@@ -15608,7 +15608,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isCountryTimeSeries"')
       return CountryTimeSeries_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const CreateClipResult_possibleTypes: string[] = ['Clip','ValidationError','NotFoundError','AuthError']
@@ -15616,7 +15616,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isCreateClipResult"')
       return CreateClipResult_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const CreateClusterInviteResult_possibleTypes: string[] = ['ClusterInvite','ValidationError','NotFoundError','AuthError']
@@ -15624,7 +15624,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isCreateClusterInviteResult"')
       return CreateClusterInviteResult_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const CreateConversationResult_possibleTypes: string[] = ['Conversation','ValidationError','AuthError']
@@ -15632,7 +15632,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isCreateConversationResult"')
       return CreateConversationResult_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const CreateDeveloperTokenResult_possibleTypes: string[] = ['DeveloperToken','ValidationError','RateLimitError','AuthError']
@@ -15640,7 +15640,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isCreateDeveloperTokenResult"')
       return CreateDeveloperTokenResult_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const CreateEdgeClusterResponse_possibleTypes: string[] = ['CreateEdgeClusterResponse']
@@ -15648,7 +15648,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isCreateEdgeClusterResponse"')
       return CreateEdgeClusterResponse_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const CreateEdgeClusterResult_possibleTypes: string[] = ['CreateEdgeClusterResponse','ValidationError','AuthError']
@@ -15656,7 +15656,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isCreateEdgeClusterResult"')
       return CreateEdgeClusterResult_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const CreateEnrollmentTokenResponse_possibleTypes: string[] = ['CreateEnrollmentTokenResponse']
@@ -15664,7 +15664,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isCreateEnrollmentTokenResponse"')
       return CreateEnrollmentTokenResponse_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const CreateEnrollmentTokenResult_possibleTypes: string[] = ['CreateEnrollmentTokenResponse','ValidationError','AuthError']
@@ -15672,7 +15672,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isCreateEnrollmentTokenResult"')
       return CreateEnrollmentTokenResult_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const CreatePaymentResult_possibleTypes: string[] = ['Payment','ValidationError','AuthError']
@@ -15680,7 +15680,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isCreatePaymentResult"')
       return CreatePaymentResult_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const CreateSigningKeyResult_possibleTypes: string[] = ['CreateSigningKeySuccess','ValidationError','RateLimitError','AuthError']
@@ -15688,7 +15688,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isCreateSigningKeyResult"')
       return CreateSigningKeyResult_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const CreateSigningKeySuccess_possibleTypes: string[] = ['CreateSigningKeySuccess']
@@ -15696,7 +15696,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isCreateSigningKeySuccess"')
       return CreateSigningKeySuccess_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const CreateStreamKeyResult_possibleTypes: string[] = ['StreamKey','ValidationError','NotFoundError','AuthError']
@@ -15704,7 +15704,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isCreateStreamKeyResult"')
       return CreateStreamKeyResult_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const CreateStreamResult_possibleTypes: string[] = ['Stream','ValidationError','AuthError']
@@ -15712,7 +15712,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isCreateStreamResult"')
       return CreateStreamResult_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const CreateVodUploadResult_possibleTypes: string[] = ['VodUploadSession','ValidationError','AuthError']
@@ -15720,7 +15720,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isCreateVodUploadResult"')
       return CreateVodUploadResult_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const CreateWebhookEndpointResult_possibleTypes: string[] = ['WebhookEndpointSecret','ValidationError','AuthError']
@@ -15728,7 +15728,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isCreateWebhookEndpointResult"')
       return CreateWebhookEndpointResult_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const CryptoTopupResult_possibleTypes: string[] = ['CryptoTopupResult']
@@ -15736,7 +15736,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isCryptoTopupResult"')
       return CryptoTopupResult_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const CryptoTopupStatus_possibleTypes: string[] = ['CryptoTopupStatus']
@@ -15744,7 +15744,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isCryptoTopupStatus"')
       return CryptoTopupStatus_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const CurrencyConversion_possibleTypes: string[] = ['CurrencyConversion']
@@ -15752,7 +15752,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isCurrencyConversion"')
       return CurrencyConversion_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const CustomDomainFailed_possibleTypes: string[] = ['CustomDomainFailed']
@@ -15760,7 +15760,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isCustomDomainFailed"')
       return CustomDomainFailed_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const CustomDomainStatus_possibleTypes: string[] = ['CustomDomainStatus']
@@ -15768,7 +15768,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isCustomDomainStatus"')
       return CustomDomainStatus_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const CustomDomainVerified_possibleTypes: string[] = ['CustomDomainVerified']
@@ -15776,7 +15776,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isCustomDomainVerified"')
       return CustomDomainVerified_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const DVRChapter_possibleTypes: string[] = ['DVRChapter']
@@ -15784,7 +15784,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isDVRChapter"')
       return DVRChapter_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const DVRChapterRef_possibleTypes: string[] = ['DVRChapterRef']
@@ -15792,7 +15792,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isDVRChapterRef"')
       return DVRChapterRef_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const DVRChaptersPage_possibleTypes: string[] = ['DVRChaptersPage']
@@ -15800,7 +15800,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isDVRChaptersPage"')
       return DVRChaptersPage_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const DVRRequest_possibleTypes: string[] = ['DVRRequest']
@@ -15808,7 +15808,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isDVRRequest"')
       return DVRRequest_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const DeleteClipResult_possibleTypes: string[] = ['DeleteSuccess','NotFoundError','AuthError']
@@ -15816,7 +15816,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isDeleteClipResult"')
       return DeleteClipResult_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const DeleteDVRResult_possibleTypes: string[] = ['DeleteSuccess','NotFoundError','AuthError']
@@ -15824,7 +15824,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isDeleteDVRResult"')
       return DeleteDVRResult_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const DeleteStreamKeyResult_possibleTypes: string[] = ['DeleteSuccess','NotFoundError','AuthError']
@@ -15832,7 +15832,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isDeleteStreamKeyResult"')
       return DeleteStreamKeyResult_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const DeleteStreamResult_possibleTypes: string[] = ['DeleteSuccess','NotFoundError','AuthError']
@@ -15840,7 +15840,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isDeleteStreamResult"')
       return DeleteStreamResult_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const DeleteSuccess_possibleTypes: string[] = ['DeleteSuccess']
@@ -15848,7 +15848,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isDeleteSuccess"')
       return DeleteSuccess_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const DeleteVodAssetResult_possibleTypes: string[] = ['DeleteSuccess','NotFoundError','AuthError']
@@ -15856,7 +15856,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isDeleteVodAssetResult"')
       return DeleteVodAssetResult_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const DeleteWebhookEndpointResult_possibleTypes: string[] = ['DeleteSuccess','NotFoundError','AuthError']
@@ -15864,7 +15864,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isDeleteWebhookEndpointResult"')
       return DeleteWebhookEndpointResult_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const DeveloperToken_possibleTypes: string[] = ['DeveloperToken']
@@ -15872,7 +15872,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isDeveloperToken"')
       return DeveloperToken_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const DeveloperTokenEdge_possibleTypes: string[] = ['DeveloperTokenEdge']
@@ -15880,7 +15880,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isDeveloperTokenEdge"')
       return DeveloperTokenEdge_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const DeveloperTokensConnection_possibleTypes: string[] = ['DeveloperTokensConnection']
@@ -15888,7 +15888,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isDeveloperTokensConnection"')
       return DeveloperTokensConnection_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const EdgeTelemetrySetup_possibleTypes: string[] = ['EdgeTelemetrySetup']
@@ -15896,7 +15896,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isEdgeTelemetrySetup"')
       return EdgeTelemetrySetup_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const EffectiveRetention_possibleTypes: string[] = ['EffectiveRetention']
@@ -15904,7 +15904,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isEffectiveRetention"')
       return EffectiveRetention_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const EntitlementEntry_possibleTypes: string[] = ['EntitlementEntry']
@@ -15912,7 +15912,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isEntitlementEntry"')
       return EntitlementEntry_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const Error_possibleTypes: string[] = ['AuthError','NotFoundError','RateLimitError','ValidationError']
@@ -15920,7 +15920,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isError"')
       return Error_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const EventArtifact_possibleTypes: string[] = ['EventArtifact']
@@ -15928,7 +15928,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isEventArtifact"')
       return EventArtifact_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const EventMoney_possibleTypes: string[] = ['EventMoney']
@@ -15936,7 +15936,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isEventMoney"')
       return EventMoney_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const FederationEvent_possibleTypes: string[] = ['FederationEvent']
@@ -15944,7 +15944,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isFederationEvent"')
       return FederationEvent_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const FederationEventCount_possibleTypes: string[] = ['FederationEventCount']
@@ -15952,7 +15952,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isFederationEventCount"')
       return FederationEventCount_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const FederationEventEdge_possibleTypes: string[] = ['FederationEventEdge']
@@ -15960,7 +15960,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isFederationEventEdge"')
       return FederationEventEdge_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const FederationEventsConnection_possibleTypes: string[] = ['FederationEventsConnection']
@@ -15968,7 +15968,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isFederationEventsConnection"')
       return FederationEventsConnection_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const FederationSummary_possibleTypes: string[] = ['FederationSummary']
@@ -15976,7 +15976,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isFederationSummary"')
       return FederationSummary_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const GeoBucket_possibleTypes: string[] = ['GeoBucket']
@@ -15984,7 +15984,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isGeoBucket"')
       return GeoBucket_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const GeographicDistribution_possibleTypes: string[] = ['GeographicDistribution']
@@ -15992,7 +15992,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isGeographicDistribution"')
       return GeographicDistribution_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const Incident_possibleTypes: string[] = ['Incident']
@@ -16000,7 +16000,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isIncident"')
       return Incident_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const IncidentAlert_possibleTypes: string[] = ['IncidentAlert']
@@ -16008,7 +16008,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isIncidentAlert"')
       return IncidentAlert_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const IncidentDetail_possibleTypes: string[] = ['IncidentDetail']
@@ -16016,7 +16016,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isIncidentDetail"')
       return IncidentDetail_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const IncidentEdge_possibleTypes: string[] = ['IncidentEdge']
@@ -16024,7 +16024,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isIncidentEdge"')
       return IncidentEdge_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const IncidentMutationResult_possibleTypes: string[] = ['Incident','ValidationError','NotFoundError','AuthError']
@@ -16032,7 +16032,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isIncidentMutationResult"')
       return IncidentMutationResult_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const IncidentTimelineEvent_possibleTypes: string[] = ['IncidentTimelineEvent']
@@ -16040,7 +16040,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isIncidentTimelineEvent"')
       return IncidentTimelineEvent_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const IncidentUpdatedEvent_possibleTypes: string[] = ['IncidentUpdatedEvent']
@@ -16048,7 +16048,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isIncidentUpdatedEvent"')
       return IncidentUpdatedEvent_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const IncidentsConnection_possibleTypes: string[] = ['IncidentsConnection']
@@ -16056,7 +16056,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isIncidentsConnection"')
       return IncidentsConnection_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const InfrastructureNode_possibleTypes: string[] = ['InfrastructureNode']
@@ -16064,7 +16064,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isInfrastructureNode"')
       return InfrastructureNode_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const IngestEndpoint_possibleTypes: string[] = ['IngestEndpoint']
@@ -16072,7 +16072,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isIngestEndpoint"')
       return IngestEndpoint_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const IngestEndpointResponse_possibleTypes: string[] = ['IngestEndpointResponse']
@@ -16080,7 +16080,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isIngestEndpointResponse"')
       return IngestEndpointResponse_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const IngestMetadata_possibleTypes: string[] = ['IngestMetadata']
@@ -16088,7 +16088,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isIngestMetadata"')
       return IngestMetadata_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const Invoice_possibleTypes: string[] = ['Invoice']
@@ -16096,7 +16096,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isInvoice"')
       return Invoice_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const InvoiceCreated_possibleTypes: string[] = ['InvoiceCreated']
@@ -16104,7 +16104,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isInvoiceCreated"')
       return InvoiceCreated_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const InvoiceEdge_possibleTypes: string[] = ['InvoiceEdge']
@@ -16112,7 +16112,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isInvoiceEdge"')
       return InvoiceEdge_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const InvoicePaid_possibleTypes: string[] = ['InvoicePaid']
@@ -16120,7 +16120,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isInvoicePaid"')
       return InvoicePaid_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const InvoicePayment_possibleTypes: string[] = ['InvoicePayment']
@@ -16128,7 +16128,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isInvoicePayment"')
       return InvoicePayment_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const InvoicePaymentEdge_possibleTypes: string[] = ['InvoicePaymentEdge']
@@ -16136,7 +16136,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isInvoicePaymentEdge"')
       return InvoicePaymentEdge_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const InvoicePaymentsConnection_possibleTypes: string[] = ['InvoicePaymentsConnection']
@@ -16144,7 +16144,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isInvoicePaymentsConnection"')
       return InvoicePaymentsConnection_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const InvoicesConnection_possibleTypes: string[] = ['InvoicesConnection']
@@ -16152,7 +16152,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isInvoicesConnection"')
       return InvoicesConnection_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const LineItem_possibleTypes: string[] = ['LineItem']
@@ -16160,7 +16160,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isLineItem"')
       return LineItem_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const LinkEmailPayload_possibleTypes: string[] = ['LinkEmailPayload']
@@ -16168,7 +16168,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isLinkEmailPayload"')
       return LinkEmailPayload_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const LinkEmailResult_possibleTypes: string[] = ['LinkEmailPayload','ValidationError','AuthError']
@@ -16176,7 +16176,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isLinkEmailResult"')
       return LinkEmailResult_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const LinkWalletResult_possibleTypes: string[] = ['WalletIdentity','ValidationError','AuthError']
@@ -16184,7 +16184,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isLinkWalletResult"')
       return LinkWalletResult_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const LiveNode_possibleTypes: string[] = ['LiveNode']
@@ -16192,7 +16192,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isLiveNode"')
       return LiveNode_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const LiveUsageSummary_possibleTypes: string[] = ['LiveUsageSummary']
@@ -16200,7 +16200,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isLiveUsageSummary"')
       return LiveUsageSummary_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const ManagedSourceView_possibleTypes: string[] = ['ManagedSourceView']
@@ -16208,7 +16208,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isManagedSourceView"')
       return ManagedSourceView_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const MarketplaceCluster_possibleTypes: string[] = ['MarketplaceCluster']
@@ -16216,7 +16216,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isMarketplaceCluster"')
       return MarketplaceCluster_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const MarketplaceClusterConnection_possibleTypes: string[] = ['MarketplaceClusterConnection']
@@ -16224,7 +16224,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isMarketplaceClusterConnection"')
       return MarketplaceClusterConnection_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const MarketplaceClusterEdge_possibleTypes: string[] = ['MarketplaceClusterEdge']
@@ -16232,7 +16232,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isMarketplaceClusterEdge"')
       return MarketplaceClusterEdge_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const MediaCapacityConsent_possibleTypes: string[] = ['MediaCapacityConsent']
@@ -16240,7 +16240,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isMediaCapacityConsent"')
       return MediaCapacityConsent_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const MediaCapacityConsentChange_possibleTypes: string[] = ['MediaCapacityConsentChange']
@@ -16248,7 +16248,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isMediaCapacityConsentChange"')
       return MediaCapacityConsentChange_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const MediaCapacityConsentChangeResult_possibleTypes: string[] = ['MediaCapacityConsentChange','MediaPlacementError','AuthError','NotFoundError']
@@ -16256,7 +16256,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isMediaCapacityConsentChangeResult"')
       return MediaCapacityConsentChangeResult_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const MediaCapacityConsentResult_possibleTypes: string[] = ['MediaCapacityConsent','MediaPlacementError','AuthError','NotFoundError']
@@ -16264,7 +16264,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isMediaCapacityConsentResult"')
       return MediaCapacityConsentResult_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const MediaPlacementActions_possibleTypes: string[] = ['MediaPlacementActions']
@@ -16272,7 +16272,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isMediaPlacementActions"')
       return MediaPlacementActions_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const MediaPlacementAllow_possibleTypes: string[] = ['MediaPlacementAllow']
@@ -16280,7 +16280,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isMediaPlacementAllow"')
       return MediaPlacementAllow_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const MediaPlacementCandidateExplanation_possibleTypes: string[] = ['MediaPlacementCandidateExplanation']
@@ -16288,7 +16288,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isMediaPlacementCandidateExplanation"')
       return MediaPlacementCandidateExplanation_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const MediaPlacementChange_possibleTypes: string[] = ['MediaPlacementChange']
@@ -16296,7 +16296,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isMediaPlacementChange"')
       return MediaPlacementChange_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const MediaPlacementChangeResult_possibleTypes: string[] = ['MediaPlacementChange','MediaPlacementError','AuthError','NotFoundError']
@@ -16304,7 +16304,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isMediaPlacementChangeResult"')
       return MediaPlacementChangeResult_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const MediaPlacementConstraints_possibleTypes: string[] = ['MediaPlacementConstraints']
@@ -16312,7 +16312,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isMediaPlacementConstraints"')
       return MediaPlacementConstraints_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const MediaPlacementDifference_possibleTypes: string[] = ['MediaPlacementDifference']
@@ -16320,7 +16320,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isMediaPlacementDifference"')
       return MediaPlacementDifference_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const MediaPlacementEffectivePolicy_possibleTypes: string[] = ['MediaPlacementEffectivePolicy']
@@ -16328,7 +16328,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isMediaPlacementEffectivePolicy"')
       return MediaPlacementEffectivePolicy_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const MediaPlacementError_possibleTypes: string[] = ['MediaPlacementError']
@@ -16336,7 +16336,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isMediaPlacementError"')
       return MediaPlacementError_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const MediaPlacementFeatures_possibleTypes: string[] = ['MediaPlacementFeatures']
@@ -16344,7 +16344,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isMediaPlacementFeatures"')
       return MediaPlacementFeatures_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const MediaPlacementFieldError_possibleTypes: string[] = ['MediaPlacementFieldError']
@@ -16352,7 +16352,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isMediaPlacementFieldError"')
       return MediaPlacementFieldError_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const MediaPlacementGroup_possibleTypes: string[] = ['MediaPlacementGroup']
@@ -16360,7 +16360,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isMediaPlacementGroup"')
       return MediaPlacementGroup_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const MediaPlacementImpact_possibleTypes: string[] = ['MediaPlacementImpact']
@@ -16368,7 +16368,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isMediaPlacementImpact"')
       return MediaPlacementImpact_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const MediaPlacementOption_possibleTypes: string[] = ['MediaPlacementOption']
@@ -16376,7 +16376,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isMediaPlacementOption"')
       return MediaPlacementOption_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const MediaPlacementOptionsConnection_possibleTypes: string[] = ['MediaPlacementOptionsConnection']
@@ -16384,7 +16384,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isMediaPlacementOptionsConnection"')
       return MediaPlacementOptionsConnection_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const MediaPlacementOptionsResult_possibleTypes: string[] = ['MediaPlacementOptionsConnection','MediaPlacementError','AuthError','NotFoundError']
@@ -16392,7 +16392,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isMediaPlacementOptionsResult"')
       return MediaPlacementOptionsResult_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const MediaPlacementPolicyResult_possibleTypes: string[] = ['MediaPlacementPolicyState','MediaPlacementError','AuthError','NotFoundError']
@@ -16400,7 +16400,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isMediaPlacementPolicyResult"')
       return MediaPlacementPolicyResult_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const MediaPlacementPolicyState_possibleTypes: string[] = ['MediaPlacementPolicyState']
@@ -16408,7 +16408,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isMediaPlacementPolicyState"')
       return MediaPlacementPolicyState_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const MediaPlacementPreferences_possibleTypes: string[] = ['MediaPlacementPreferences']
@@ -16416,7 +16416,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isMediaPlacementPreferences"')
       return MediaPlacementPreferences_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const MediaPlacementPreview_possibleTypes: string[] = ['MediaPlacementPreview']
@@ -16424,7 +16424,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isMediaPlacementPreview"')
       return MediaPlacementPreview_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const MediaPlacementPreviewResult_possibleTypes: string[] = ['MediaPlacementPreview','MediaPlacementError','AuthError','NotFoundError']
@@ -16432,7 +16432,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isMediaPlacementPreviewResult"')
       return MediaPlacementPreviewResult_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const MediaPlacementPrice_possibleTypes: string[] = ['MediaPlacementPrice']
@@ -16440,7 +16440,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isMediaPlacementPrice"')
       return MediaPlacementPrice_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const MediaPlacementRecipient_possibleTypes: string[] = ['MediaPlacementRecipient']
@@ -16448,7 +16448,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isMediaPlacementRecipient"')
       return MediaPlacementRecipient_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const MediaPlacementReview_possibleTypes: string[] = ['MediaPlacementReview']
@@ -16456,7 +16456,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isMediaPlacementReview"')
       return MediaPlacementReview_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const MediaPlacementReviewResult_possibleTypes: string[] = ['MediaPlacementReview','MediaPlacementError','AuthError','NotFoundError']
@@ -16464,7 +16464,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isMediaPlacementReviewResult"')
       return MediaPlacementReviewResult_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const MediaPlacementRollout_possibleTypes: string[] = ['MediaPlacementRollout']
@@ -16472,7 +16472,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isMediaPlacementRollout"')
       return MediaPlacementRollout_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const MediaPlacementRules_possibleTypes: string[] = ['MediaPlacementRules']
@@ -16480,7 +16480,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isMediaPlacementRules"')
       return MediaPlacementRules_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const MediaPlacementScope_possibleTypes: string[] = ['MediaPlacementScope']
@@ -16488,7 +16488,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isMediaPlacementScope"')
       return MediaPlacementScope_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const MediaPlacementSelector_possibleTypes: string[] = ['MediaPlacementSelector']
@@ -16496,7 +16496,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isMediaPlacementSelector"')
       return MediaPlacementSelector_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const MediaPlacementTransition_possibleTypes: string[] = ['MediaPlacementTransition']
@@ -16504,7 +16504,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isMediaPlacementTransition"')
       return MediaPlacementTransition_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const MediaPlacementVerbPolicy_possibleTypes: string[] = ['MediaPlacementVerbPolicy']
@@ -16512,7 +16512,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isMediaPlacementVerbPolicy"')
       return MediaPlacementVerbPolicy_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const MediaPlacementWarning_possibleTypes: string[] = ['MediaPlacementWarning']
@@ -16520,7 +16520,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isMediaPlacementWarning"')
       return MediaPlacementWarning_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const MediaRetentionBounds_possibleTypes: string[] = ['MediaRetentionBounds']
@@ -16528,7 +16528,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isMediaRetentionBounds"')
       return MediaRetentionBounds_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const MediaRetentionPolicy_possibleTypes: string[] = ['MediaRetentionPolicy']
@@ -16536,7 +16536,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isMediaRetentionPolicy"')
       return MediaRetentionPolicy_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const Message_possibleTypes: string[] = ['Message']
@@ -16544,7 +16544,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isMessage"')
       return Message_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const MessageEdge_possibleTypes: string[] = ['MessageEdge']
@@ -16552,7 +16552,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isMessageEdge"')
       return MessageEdge_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const MessagesConnection_possibleTypes: string[] = ['MessagesConnection']
@@ -16560,7 +16560,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isMessagesConnection"')
       return MessagesConnection_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const MistAdminSession_possibleTypes: string[] = ['MistAdminSession']
@@ -16568,7 +16568,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isMistAdminSession"')
       return MistAdminSession_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const MollieFirstPayment_possibleTypes: string[] = ['MollieFirstPayment']
@@ -16576,7 +16576,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isMollieFirstPayment"')
       return MollieFirstPayment_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const MollieFirstPaymentResult_possibleTypes: string[] = ['MollieFirstPayment','ValidationError','NotFoundError','AuthError']
@@ -16584,7 +16584,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isMollieFirstPaymentResult"')
       return MollieFirstPaymentResult_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const MollieMandate_possibleTypes: string[] = ['MollieMandate']
@@ -16592,7 +16592,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isMollieMandate"')
       return MollieMandate_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const MollieSubscription_possibleTypes: string[] = ['MollieSubscription']
@@ -16600,7 +16600,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isMollieSubscription"')
       return MollieSubscription_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const MollieSubscriptionResult_possibleTypes: string[] = ['MollieSubscription','ValidationError','NotFoundError','AuthError']
@@ -16608,7 +16608,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isMollieSubscriptionResult"')
       return MollieSubscriptionResult_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const MultistreamStatusChanged_possibleTypes: string[] = ['MultistreamStatusChanged']
@@ -16616,7 +16616,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isMultistreamStatusChanged"')
       return MultistreamStatusChanged_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const Mutation_possibleTypes: string[] = ['Mutation']
@@ -16624,7 +16624,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isMutation"')
       return Mutation_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const MySubscriptionEdge_possibleTypes: string[] = ['MySubscriptionEdge']
@@ -16632,7 +16632,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isMySubscriptionEdge"')
       return MySubscriptionEdge_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const MySubscriptionsConnection_possibleTypes: string[] = ['MySubscriptionsConnection']
@@ -16640,7 +16640,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isMySubscriptionsConnection"')
       return MySubscriptionsConnection_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const NetworkClusterStatus_possibleTypes: string[] = ['NetworkClusterStatus']
@@ -16648,7 +16648,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isNetworkClusterStatus"')
       return NetworkClusterStatus_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const NetworkNode_possibleTypes: string[] = ['NetworkNode']
@@ -16656,7 +16656,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isNetworkNode"')
       return NetworkNode_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const NetworkPeerConnection_possibleTypes: string[] = ['NetworkPeerConnection']
@@ -16664,7 +16664,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isNetworkPeerConnection"')
       return NetworkPeerConnection_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const NetworkServiceInstance_possibleTypes: string[] = ['NetworkServiceInstance']
@@ -16672,7 +16672,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isNetworkServiceInstance"')
       return NetworkServiceInstance_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const NetworkStatus_possibleTypes: string[] = ['NetworkStatus']
@@ -16680,7 +16680,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isNetworkStatus"')
       return NetworkStatus_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const Node_possibleTypes: string[] = ['APIUsageRecord','ArtifactEvent','BufferEvent','ClientMetrics5m','Clip','Cluster','ConnectionEvent','Conversation','InfrastructureNode','Message','NodeMetric','NodeMetricHourly','NodePerformance5m','ProcessingUsageRecord','QualityTierDaily','SigningKey','StorageEvent','StorageUsageRecord','Stream','StreamAnalyticsDaily','StreamConnectionHourly','StreamEvent','StreamHealth5m','StreamHealthMetric','TenantDailyStat','TrackListEvent','ViewerGeoHourly','ViewerHoursHourly','ViewerSession','VodAsset']
@@ -16688,7 +16688,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isNode"')
       return Node_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const NodeEdge_possibleTypes: string[] = ['NodeEdge']
@@ -16696,7 +16696,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isNodeEdge"')
       return NodeEdge_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const NodeMetric_possibleTypes: string[] = ['NodeMetric']
@@ -16704,7 +16704,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isNodeMetric"')
       return NodeMetric_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const NodeMetricEdge_possibleTypes: string[] = ['NodeMetricEdge']
@@ -16712,7 +16712,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isNodeMetricEdge"')
       return NodeMetricEdge_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const NodeMetricHourly_possibleTypes: string[] = ['NodeMetricHourly']
@@ -16720,7 +16720,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isNodeMetricHourly"')
       return NodeMetricHourly_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const NodeMetricHourlyEdge_possibleTypes: string[] = ['NodeMetricHourlyEdge']
@@ -16728,7 +16728,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isNodeMetricHourlyEdge"')
       return NodeMetricHourlyEdge_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const NodeMetrics1hConnection_possibleTypes: string[] = ['NodeMetrics1hConnection']
@@ -16736,7 +16736,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isNodeMetrics1hConnection"')
       return NodeMetrics1hConnection_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const NodeMetricsAggregated_possibleTypes: string[] = ['NodeMetricsAggregated']
@@ -16744,7 +16744,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isNodeMetricsAggregated"')
       return NodeMetricsAggregated_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const NodeMetricsConnection_possibleTypes: string[] = ['NodeMetricsConnection']
@@ -16752,7 +16752,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isNodeMetricsConnection"')
       return NodeMetricsConnection_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const NodePerformance5m_possibleTypes: string[] = ['NodePerformance5m']
@@ -16760,7 +16760,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isNodePerformance5m"')
       return NodePerformance5m_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const NodePerformance5mConnection_possibleTypes: string[] = ['NodePerformance5mConnection']
@@ -16768,7 +16768,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isNodePerformance5mConnection"')
       return NodePerformance5mConnection_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const NodePerformance5mEdge_possibleTypes: string[] = ['NodePerformance5mEdge']
@@ -16776,7 +16776,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isNodePerformance5mEdge"')
       return NodePerformance5mEdge_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const NodesConnection_possibleTypes: string[] = ['NodesConnection']
@@ -16784,7 +16784,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isNodesConnection"')
       return NodesConnection_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const NotFoundError_possibleTypes: string[] = ['NotFoundError']
@@ -16792,7 +16792,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isNotFoundError"')
       return NotFoundError_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const OpenMistAdminSessionResult_possibleTypes: string[] = ['MistAdminSession','ValidationError','NotFoundError','AuthError']
@@ -16800,7 +16800,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isOpenMistAdminSessionResult"')
       return OpenMistAdminSessionResult_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const Orchestrator_possibleTypes: string[] = ['Orchestrator']
@@ -16808,7 +16808,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isOrchestrator"')
       return Orchestrator_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const OrchestratorCapabilityPrice_possibleTypes: string[] = ['OrchestratorCapabilityPrice']
@@ -16816,7 +16816,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isOrchestratorCapabilityPrice"')
       return OrchestratorCapabilityPrice_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const OrchestratorInstance_possibleTypes: string[] = ['OrchestratorInstance']
@@ -16824,7 +16824,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isOrchestratorInstance"')
       return OrchestratorInstance_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const OrchestratorPerformancePoint_possibleTypes: string[] = ['OrchestratorPerformancePoint']
@@ -16832,7 +16832,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isOrchestratorPerformancePoint"')
       return OrchestratorPerformancePoint_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const OrchestratorVantage_possibleTypes: string[] = ['OrchestratorVantage']
@@ -16840,7 +16840,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isOrchestratorVantage"')
       return OrchestratorVantage_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const OrchestratorWithDetails_possibleTypes: string[] = ['OrchestratorWithDetails']
@@ -16848,7 +16848,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isOrchestratorWithDetails"')
       return OrchestratorWithDetails_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const OrchestratorsConnection_possibleTypes: string[] = ['OrchestratorsConnection']
@@ -16856,7 +16856,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isOrchestratorsConnection"')
       return OrchestratorsConnection_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const PageInfo_possibleTypes: string[] = ['PageInfo']
@@ -16864,7 +16864,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isPageInfo"')
       return PageInfo_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const Payment_possibleTypes: string[] = ['Payment']
@@ -16872,7 +16872,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isPayment"')
       return Payment_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const PaymentFailed_possibleTypes: string[] = ['PaymentFailed']
@@ -16880,7 +16880,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isPaymentFailed"')
       return PaymentFailed_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const PlatformOverview_possibleTypes: string[] = ['PlatformOverview']
@@ -16888,7 +16888,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isPlatformOverview"')
       return PlatformOverview_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const PlaybackAccessDecision_possibleTypes: string[] = ['PlaybackAccessDecision']
@@ -16896,7 +16896,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isPlaybackAccessDecision"')
       return PlaybackAccessDecision_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const PlaybackInstance_possibleTypes: string[] = ['PlaybackInstance']
@@ -16904,7 +16904,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isPlaybackInstance"')
       return PlaybackInstance_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const PlaybackJwtClaimRequirement_possibleTypes: string[] = ['PlaybackJwtClaimRequirement']
@@ -16912,7 +16912,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isPlaybackJwtClaimRequirement"')
       return PlaybackJwtClaimRequirement_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const PlaybackJwtPolicy_possibleTypes: string[] = ['PlaybackJwtPolicy']
@@ -16920,7 +16920,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isPlaybackJwtPolicy"')
       return PlaybackJwtPolicy_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const PlaybackMetadata_possibleTypes: string[] = ['PlaybackMetadata']
@@ -16928,7 +16928,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isPlaybackMetadata"')
       return PlaybackMetadata_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const PlaybackPolicy_possibleTypes: string[] = ['PlaybackPolicy']
@@ -16936,7 +16936,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isPlaybackPolicy"')
       return PlaybackPolicy_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const PlaybackTrack_possibleTypes: string[] = ['PlaybackTrack']
@@ -16944,7 +16944,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isPlaybackTrack"')
       return PlaybackTrack_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const PlaybackWebhookPolicy_possibleTypes: string[] = ['PlaybackWebhookPolicy']
@@ -16952,7 +16952,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isPlaybackWebhookPolicy"')
       return PlaybackWebhookPolicy_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const PlayerBootSummary_possibleTypes: string[] = ['PlayerBootSummary']
@@ -16960,7 +16960,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isPlayerBootSummary"')
       return PlayerBootSummary_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const PlayerBootTimeSeriesBucket_possibleTypes: string[] = ['PlayerBootTimeSeriesBucket']
@@ -16968,7 +16968,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isPlayerBootTimeSeriesBucket"')
       return PlayerBootTimeSeriesBucket_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const PrepaidBalance_possibleTypes: string[] = ['PrepaidBalance']
@@ -16976,7 +16976,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isPrepaidBalance"')
       return PrepaidBalance_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const PricingRule_possibleTypes: string[] = ['PricingRule']
@@ -16984,7 +16984,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isPricingRule"')
       return PricingRule_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const ProcessingUsage_possibleTypes: string[] = ['ProcessingUsage']
@@ -16992,7 +16992,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isProcessingUsage"')
       return ProcessingUsage_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const ProcessingUsageConnection_possibleTypes: string[] = ['ProcessingUsageConnection']
@@ -17000,7 +17000,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isProcessingUsageConnection"')
       return ProcessingUsageConnection_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const ProcessingUsageEdge_possibleTypes: string[] = ['ProcessingUsageEdge']
@@ -17008,7 +17008,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isProcessingUsageEdge"')
       return ProcessingUsageEdge_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const ProcessingUsageRecord_possibleTypes: string[] = ['ProcessingUsageRecord']
@@ -17016,7 +17016,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isProcessingUsageRecord"')
       return ProcessingUsageRecord_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const ProcessingUsageSummary_possibleTypes: string[] = ['ProcessingUsageSummary']
@@ -17024,7 +17024,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isProcessingUsageSummary"')
       return ProcessingUsageSummary_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const PromoteToPaidPayload_possibleTypes: string[] = ['PromoteToPaidPayload']
@@ -17032,7 +17032,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isPromoteToPaidPayload"')
       return PromoteToPaidPayload_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const PromoteToPaidResult_possibleTypes: string[] = ['PromoteToPaidPayload','ValidationError','AuthError']
@@ -17040,7 +17040,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isPromoteToPaidResult"')
       return PromoteToPaidResult_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const PublicEvent_possibleTypes: string[] = ['PublicEvent']
@@ -17048,7 +17048,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isPublicEvent"')
       return PublicEvent_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const PublicEventData_possibleTypes: string[] = ['AccountSuspended','ApiTokenCreated','ApiTokenRevoked','BillingDetailsUpdated','InvoiceCreated','InvoicePaid','PaymentFailed','TopupCredited','ClipFailed','ClipReady','ClipRequested','CustomDomainFailed','CustomDomainVerified','MultistreamStatusChanged','RecordingFailed','RecordingReady','StreamConnected','StreamCreated','StreamDeleted','StreamIdle','StreamKeyRotated','StreamLive','StreamUpdated','UploadAborted','UploadCompleted','UploadCreated','UploadFailed','UploadReady']
@@ -17056,7 +17056,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isPublicEventData"')
       return PublicEventData_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const PullSourceEvent_possibleTypes: string[] = ['PullSourceEvent']
@@ -17064,7 +17064,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isPullSourceEvent"')
       return PullSourceEvent_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const PullSourceView_possibleTypes: string[] = ['PullSourceView']
@@ -17072,7 +17072,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isPullSourceView"')
       return PullSourceView_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const PushTarget_possibleTypes: string[] = ['PushTarget']
@@ -17080,7 +17080,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isPushTarget"')
       return PushTarget_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const QualityTierDaily_possibleTypes: string[] = ['QualityTierDaily']
@@ -17088,7 +17088,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isQualityTierDaily"')
       return QualityTierDaily_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const QualityTierDailyConnection_possibleTypes: string[] = ['QualityTierDailyConnection']
@@ -17096,7 +17096,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isQualityTierDailyConnection"')
       return QualityTierDailyConnection_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const QualityTierDailyEdge_possibleTypes: string[] = ['QualityTierDailyEdge']
@@ -17104,7 +17104,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isQualityTierDailyEdge"')
       return QualityTierDailyEdge_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const QualityTierSummary_possibleTypes: string[] = ['QualityTierSummary']
@@ -17112,7 +17112,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isQualityTierSummary"')
       return QualityTierSummary_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const Query_possibleTypes: string[] = ['Query']
@@ -17120,7 +17120,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isQuery"')
       return Query_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const RateLimitError_possibleTypes: string[] = ['RateLimitError']
@@ -17128,7 +17128,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isRateLimitError"')
       return RateLimitError_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const RebufferingEvent_possibleTypes: string[] = ['RebufferingEvent']
@@ -17136,7 +17136,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isRebufferingEvent"')
       return RebufferingEvent_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const RebufferingEventEdge_possibleTypes: string[] = ['RebufferingEventEdge']
@@ -17144,7 +17144,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isRebufferingEventEdge"')
       return RebufferingEventEdge_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const RebufferingEventsConnection_possibleTypes: string[] = ['RebufferingEventsConnection']
@@ -17152,7 +17152,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isRebufferingEventsConnection"')
       return RebufferingEventsConnection_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const RecordingFailed_possibleTypes: string[] = ['RecordingFailed']
@@ -17160,7 +17160,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isRecordingFailed"')
       return RecordingFailed_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const RecordingReady_possibleTypes: string[] = ['RecordingReady']
@@ -17168,7 +17168,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isRecordingReady"')
       return RecordingReady_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const RecordingRetentionCap_possibleTypes: string[] = ['RecordingRetentionCap']
@@ -17176,7 +17176,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isRecordingRetentionCap"')
       return RecordingRetentionCap_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const ReplayWebhookDeliveriesResult_possibleTypes: string[] = ['WebhookReplayResult','ValidationError','NotFoundError','AuthError']
@@ -17184,7 +17184,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isReplayWebhookDeliveriesResult"')
       return ReplayWebhookDeliveriesResult_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const ReplayWebhookDeliveryResult_possibleTypes: string[] = ['WebhookDelivery','ValidationError','NotFoundError','AuthError']
@@ -17192,7 +17192,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isReplayWebhookDeliveryResult"')
       return ReplayWebhookDeliveryResult_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const RevokeClusterInviteResult_possibleTypes: string[] = ['DeleteSuccess','NotFoundError','AuthError']
@@ -17200,7 +17200,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isRevokeClusterInviteResult"')
       return RevokeClusterInviteResult_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const RevokeDeveloperTokenResult_possibleTypes: string[] = ['DeleteSuccess','NotFoundError','AuthError']
@@ -17208,7 +17208,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isRevokeDeveloperTokenResult"')
       return RevokeDeveloperTokenResult_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const RevokeSigningKeyResult_possibleTypes: string[] = ['SigningKey','NotFoundError','AuthError']
@@ -17216,7 +17216,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isRevokeSigningKeyResult"')
       return RevokeSigningKeyResult_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const RotateWebhookEndpointSecretResult_possibleTypes: string[] = ['WebhookEndpointSecret','NotFoundError','AuthError']
@@ -17224,7 +17224,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isRotateWebhookEndpointSecretResult"')
       return RotateWebhookEndpointSecretResult_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const RoutingCountryStat_possibleTypes: string[] = ['RoutingCountryStat']
@@ -17232,7 +17232,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isRoutingCountryStat"')
       return RoutingCountryStat_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const RoutingEfficiency_possibleTypes: string[] = ['RoutingEfficiency']
@@ -17240,7 +17240,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isRoutingEfficiency"')
       return RoutingEfficiency_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const RoutingEvent_possibleTypes: string[] = ['RoutingEvent']
@@ -17248,7 +17248,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isRoutingEvent"')
       return RoutingEvent_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const RoutingEventEdge_possibleTypes: string[] = ['RoutingEventEdge']
@@ -17256,7 +17256,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isRoutingEventEdge"')
       return RoutingEventEdge_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const RoutingEventsConnection_possibleTypes: string[] = ['RoutingEventsConnection']
@@ -17264,7 +17264,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isRoutingEventsConnection"')
       return RoutingEventsConnection_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const RoutingImpactPreview_possibleTypes: string[] = ['RoutingImpactPreview']
@@ -17272,7 +17272,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isRoutingImpactPreview"')
       return RoutingImpactPreview_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const SendMessageResult_possibleTypes: string[] = ['Message','ValidationError','NotFoundError','AuthError']
@@ -17280,7 +17280,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isSendMessageResult"')
       return SendMessageResult_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const ServerInfo_possibleTypes: string[] = ['ServerInfo']
@@ -17288,7 +17288,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isServerInfo"')
       return ServerInfo_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const ServiceInstance_possibleTypes: string[] = ['ServiceInstance']
@@ -17296,7 +17296,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isServiceInstance"')
       return ServiceInstance_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const ServiceInstanceEdge_possibleTypes: string[] = ['ServiceInstanceEdge']
@@ -17304,7 +17304,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isServiceInstanceEdge"')
       return ServiceInstanceEdge_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const ServiceInstanceHealth_possibleTypes: string[] = ['ServiceInstanceHealth']
@@ -17312,7 +17312,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isServiceInstanceHealth"')
       return ServiceInstanceHealth_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const ServiceInstancesConnection_possibleTypes: string[] = ['ServiceInstancesConnection']
@@ -17320,7 +17320,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isServiceInstancesConnection"')
       return ServiceInstancesConnection_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const SessionQoeSummary_possibleTypes: string[] = ['SessionQoeSummary']
@@ -17328,7 +17328,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isSessionQoeSummary"')
       return SessionQoeSummary_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const SessionQoeTimeSeriesBucket_possibleTypes: string[] = ['SessionQoeTimeSeriesBucket']
@@ -17336,7 +17336,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isSessionQoeTimeSeriesBucket"')
       return SessionQoeTimeSeriesBucket_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const SetMediaRetentionPolicyResult_possibleTypes: string[] = ['MediaRetentionPolicy','ValidationError','AuthError']
@@ -17344,7 +17344,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isSetMediaRetentionPolicyResult"')
       return SetMediaRetentionPolicyResult_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const SetNodeModeResult_possibleTypes: string[] = ['InfrastructureNode','ValidationError','NotFoundError','AuthError']
@@ -17352,7 +17352,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isSetNodeModeResult"')
       return SetNodeModeResult_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const SetPlaybackPolicyResult_possibleTypes: string[] = ['Stream','VodAsset','Clip','ValidationError','NotFoundError','AuthError']
@@ -17360,7 +17360,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isSetPlaybackPolicyResult"')
       return SetPlaybackPolicyResult_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const SetPreferredClusterResult_possibleTypes: string[] = ['Cluster','ValidationError','NotFoundError','AuthError']
@@ -17368,7 +17368,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isSetPreferredClusterResult"')
       return SetPreferredClusterResult_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const SetStreamRetentionOverridesResult_possibleTypes: string[] = ['StreamRetentionOverrides','ValidationError','NotFoundError','AuthError']
@@ -17376,7 +17376,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isSetStreamRetentionOverridesResult"')
       return SetStreamRetentionOverridesResult_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const SigningKey_possibleTypes: string[] = ['SigningKey']
@@ -17384,7 +17384,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isSigningKey"')
       return SigningKey_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const SigningKeyEdge_possibleTypes: string[] = ['SigningKeyEdge']
@@ -17392,7 +17392,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isSigningKeyEdge"')
       return SigningKeyEdge_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const SigningKeysConnection_possibleTypes: string[] = ['SigningKeysConnection']
@@ -17400,7 +17400,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isSigningKeysConnection"')
       return SigningKeysConnection_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const SkipperChatEvent_possibleTypes: string[] = ['SkipperToken','SkipperToolStartEvent','SkipperToolEndEvent','SkipperMeta','SkipperDone']
@@ -17408,7 +17408,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isSkipperChatEvent"')
       return SkipperChatEvent_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const SkipperCitation_possibleTypes: string[] = ['SkipperCitation']
@@ -17416,7 +17416,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isSkipperCitation"')
       return SkipperCitation_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const SkipperConfidenceBlock_possibleTypes: string[] = ['SkipperConfidenceBlock']
@@ -17424,7 +17424,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isSkipperConfidenceBlock"')
       return SkipperConfidenceBlock_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const SkipperConversation_possibleTypes: string[] = ['SkipperConversation']
@@ -17432,7 +17432,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isSkipperConversation"')
       return SkipperConversation_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const SkipperConversationSummary_possibleTypes: string[] = ['SkipperConversationSummary']
@@ -17440,7 +17440,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isSkipperConversationSummary"')
       return SkipperConversationSummary_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const SkipperDone_possibleTypes: string[] = ['SkipperDone']
@@ -17448,7 +17448,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isSkipperDone"')
       return SkipperDone_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const SkipperInvestigationEvent_possibleTypes: string[] = ['SkipperInvestigationEvent']
@@ -17456,7 +17456,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isSkipperInvestigationEvent"')
       return SkipperInvestigationEvent_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const SkipperMessage_possibleTypes: string[] = ['SkipperMessage']
@@ -17464,7 +17464,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isSkipperMessage"')
       return SkipperMessage_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const SkipperMeta_possibleTypes: string[] = ['SkipperMeta']
@@ -17472,7 +17472,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isSkipperMeta"')
       return SkipperMeta_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const SkipperReport_possibleTypes: string[] = ['SkipperReport']
@@ -17480,7 +17480,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isSkipperReport"')
       return SkipperReport_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const SkipperReportRecommendation_possibleTypes: string[] = ['SkipperReportRecommendation']
@@ -17488,7 +17488,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isSkipperReportRecommendation"')
       return SkipperReportRecommendation_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const SkipperReportsConnection_possibleTypes: string[] = ['SkipperReportsConnection']
@@ -17496,7 +17496,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isSkipperReportsConnection"')
       return SkipperReportsConnection_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const SkipperToken_possibleTypes: string[] = ['SkipperToken']
@@ -17504,7 +17504,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isSkipperToken"')
       return SkipperToken_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const SkipperToolDetail_possibleTypes: string[] = ['SkipperToolDetail']
@@ -17512,7 +17512,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isSkipperToolDetail"')
       return SkipperToolDetail_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const SkipperToolEndEvent_possibleTypes: string[] = ['SkipperToolEndEvent']
@@ -17520,7 +17520,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isSkipperToolEndEvent"')
       return SkipperToolEndEvent_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const SkipperToolStartEvent_possibleTypes: string[] = ['SkipperToolStartEvent']
@@ -17528,7 +17528,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isSkipperToolStartEvent"')
       return SkipperToolStartEvent_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const SourceLocation_possibleTypes: string[] = ['SourceLocation']
@@ -17536,7 +17536,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isSourceLocation"')
       return SourceLocation_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const SourceLocationCluster_possibleTypes: string[] = ['SourceLocationCluster']
@@ -17544,7 +17544,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isSourceLocationCluster"')
       return SourceLocationCluster_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const StartDVRResult_possibleTypes: string[] = ['DVRRequest','ValidationError','NotFoundError','AuthError']
@@ -17552,7 +17552,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isStartDVRResult"')
       return StartDVRResult_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const StopDVRResult_possibleTypes: string[] = ['DeleteSuccess','NotFoundError','AuthError']
@@ -17560,7 +17560,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isStopDVRResult"')
       return StopDVRResult_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const StorageArtifact_possibleTypes: string[] = ['StorageArtifact']
@@ -17568,7 +17568,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isStorageArtifact"')
       return StorageArtifact_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const StorageArtifactKindCounts_possibleTypes: string[] = ['StorageArtifactKindCounts']
@@ -17576,7 +17576,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isStorageArtifactKindCounts"')
       return StorageArtifactKindCounts_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const StorageArtifactsConnection_possibleTypes: string[] = ['StorageArtifactsConnection']
@@ -17584,7 +17584,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isStorageArtifactsConnection"')
       return StorageArtifactsConnection_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const StorageCostProjection_possibleTypes: string[] = ['StorageCostProjection']
@@ -17592,7 +17592,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isStorageCostProjection"')
       return StorageCostProjection_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const StorageEvent_possibleTypes: string[] = ['StorageEvent']
@@ -17600,7 +17600,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isStorageEvent"')
       return StorageEvent_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const StorageEventEdge_possibleTypes: string[] = ['StorageEventEdge']
@@ -17608,7 +17608,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isStorageEventEdge"')
       return StorageEventEdge_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const StorageEventsConnection_possibleTypes: string[] = ['StorageEventsConnection']
@@ -17616,7 +17616,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isStorageEventsConnection"')
       return StorageEventsConnection_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const StorageSnapshot_possibleTypes: string[] = ['StorageSnapshot']
@@ -17624,7 +17624,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isStorageSnapshot"')
       return StorageSnapshot_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const StorageUsage_possibleTypes: string[] = ['StorageUsage']
@@ -17632,7 +17632,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isStorageUsage"')
       return StorageUsage_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const StorageUsageConnection_possibleTypes: string[] = ['StorageUsageConnection']
@@ -17640,7 +17640,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isStorageUsageConnection"')
       return StorageUsageConnection_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const StorageUsageEdge_possibleTypes: string[] = ['StorageUsageEdge']
@@ -17648,7 +17648,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isStorageUsageEdge"')
       return StorageUsageEdge_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const StorageUsageRecord_possibleTypes: string[] = ['StorageUsageRecord']
@@ -17656,7 +17656,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isStorageUsageRecord"')
       return StorageUsageRecord_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const Stream_possibleTypes: string[] = ['Stream']
@@ -17664,7 +17664,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isStream"')
       return Stream_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const StreamAnalyticsDaily_possibleTypes: string[] = ['StreamAnalyticsDaily']
@@ -17672,7 +17672,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isStreamAnalyticsDaily"')
       return StreamAnalyticsDaily_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const StreamAnalyticsDailyConnection_possibleTypes: string[] = ['StreamAnalyticsDailyConnection']
@@ -17680,7 +17680,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isStreamAnalyticsDailyConnection"')
       return StreamAnalyticsDailyConnection_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const StreamAnalyticsDailyEdge_possibleTypes: string[] = ['StreamAnalyticsDailyEdge']
@@ -17688,7 +17688,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isStreamAnalyticsDailyEdge"')
       return StreamAnalyticsDailyEdge_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const StreamAnalyticsSummary_possibleTypes: string[] = ['StreamAnalyticsSummary']
@@ -17696,7 +17696,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isStreamAnalyticsSummary"')
       return StreamAnalyticsSummary_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const StreamAnalyticsSummaryConnection_possibleTypes: string[] = ['StreamAnalyticsSummaryConnection']
@@ -17704,7 +17704,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isStreamAnalyticsSummaryConnection"')
       return StreamAnalyticsSummaryConnection_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const StreamAnalyticsSummaryEdge_possibleTypes: string[] = ['StreamAnalyticsSummaryEdge']
@@ -17712,7 +17712,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isStreamAnalyticsSummaryEdge"')
       return StreamAnalyticsSummaryEdge_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const StreamConnected_possibleTypes: string[] = ['StreamConnected']
@@ -17720,7 +17720,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isStreamConnected"')
       return StreamConnected_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const StreamConnectionHourly_possibleTypes: string[] = ['StreamConnectionHourly']
@@ -17728,7 +17728,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isStreamConnectionHourly"')
       return StreamConnectionHourly_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const StreamConnectionHourlyConnection_possibleTypes: string[] = ['StreamConnectionHourlyConnection']
@@ -17736,7 +17736,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isStreamConnectionHourlyConnection"')
       return StreamConnectionHourlyConnection_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const StreamConnectionHourlyEdge_possibleTypes: string[] = ['StreamConnectionHourlyEdge']
@@ -17744,7 +17744,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isStreamConnectionHourlyEdge"')
       return StreamConnectionHourlyEdge_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const StreamCreated_possibleTypes: string[] = ['StreamCreated']
@@ -17752,7 +17752,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isStreamCreated"')
       return StreamCreated_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const StreamDeleted_possibleTypes: string[] = ['StreamDeleted']
@@ -17760,7 +17760,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isStreamDeleted"')
       return StreamDeleted_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const StreamEdge_possibleTypes: string[] = ['StreamEdge']
@@ -17768,7 +17768,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isStreamEdge"')
       return StreamEdge_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const StreamEvent_possibleTypes: string[] = ['StreamEvent']
@@ -17776,7 +17776,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isStreamEvent"')
       return StreamEvent_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const StreamEventEdge_possibleTypes: string[] = ['StreamEventEdge']
@@ -17784,7 +17784,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isStreamEventEdge"')
       return StreamEventEdge_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const StreamEventsConnection_possibleTypes: string[] = ['StreamEventsConnection']
@@ -17792,7 +17792,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isStreamEventsConnection"')
       return StreamEventsConnection_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const StreamHealth5m_possibleTypes: string[] = ['StreamHealth5m']
@@ -17800,7 +17800,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isStreamHealth5m"')
       return StreamHealth5m_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const StreamHealth5mConnection_possibleTypes: string[] = ['StreamHealth5mConnection']
@@ -17808,7 +17808,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isStreamHealth5mConnection"')
       return StreamHealth5mConnection_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const StreamHealth5mEdge_possibleTypes: string[] = ['StreamHealth5mEdge']
@@ -17816,7 +17816,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isStreamHealth5mEdge"')
       return StreamHealth5mEdge_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const StreamHealthMetric_possibleTypes: string[] = ['StreamHealthMetric']
@@ -17824,7 +17824,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isStreamHealthMetric"')
       return StreamHealthMetric_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const StreamHealthMetricEdge_possibleTypes: string[] = ['StreamHealthMetricEdge']
@@ -17832,7 +17832,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isStreamHealthMetricEdge"')
       return StreamHealthMetricEdge_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const StreamHealthMetricsConnection_possibleTypes: string[] = ['StreamHealthMetricsConnection']
@@ -17840,7 +17840,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isStreamHealthMetricsConnection"')
       return StreamHealthMetricsConnection_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const StreamHealthSummary_possibleTypes: string[] = ['StreamHealthSummary']
@@ -17848,7 +17848,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isStreamHealthSummary"')
       return StreamHealthSummary_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const StreamIdle_possibleTypes: string[] = ['StreamIdle']
@@ -17856,7 +17856,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isStreamIdle"')
       return StreamIdle_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const StreamKey_possibleTypes: string[] = ['StreamKey']
@@ -17864,7 +17864,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isStreamKey"')
       return StreamKey_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const StreamKeyEdge_possibleTypes: string[] = ['StreamKeyEdge']
@@ -17872,7 +17872,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isStreamKeyEdge"')
       return StreamKeyEdge_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const StreamKeyRotated_possibleTypes: string[] = ['StreamKeyRotated']
@@ -17880,7 +17880,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isStreamKeyRotated"')
       return StreamKeyRotated_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const StreamKeysConnection_possibleTypes: string[] = ['StreamKeysConnection']
@@ -17888,7 +17888,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isStreamKeysConnection"')
       return StreamKeysConnection_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const StreamLive_possibleTypes: string[] = ['StreamLive']
@@ -17896,7 +17896,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isStreamLive"')
       return StreamLive_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const StreamMetrics_possibleTypes: string[] = ['StreamMetrics']
@@ -17904,7 +17904,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isStreamMetrics"')
       return StreamMetrics_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const StreamRetentionOverrides_possibleTypes: string[] = ['StreamRetentionOverrides']
@@ -17912,7 +17912,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isStreamRetentionOverrides"')
       return StreamRetentionOverrides_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const StreamTrack_possibleTypes: string[] = ['StreamTrack']
@@ -17920,7 +17920,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isStreamTrack"')
       return StreamTrack_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const StreamUpdated_possibleTypes: string[] = ['StreamUpdated']
@@ -17928,7 +17928,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isStreamUpdated"')
       return StreamUpdated_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const StreamValidation_possibleTypes: string[] = ['StreamValidation']
@@ -17936,7 +17936,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isStreamValidation"')
       return StreamValidation_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const StreamingConfig_possibleTypes: string[] = ['StreamingConfig']
@@ -17944,7 +17944,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isStreamingConfig"')
       return StreamingConfig_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const StreamingUsage_possibleTypes: string[] = ['StreamingUsage']
@@ -17952,7 +17952,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isStreamingUsage"')
       return StreamingUsage_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const StreamsConnection_possibleTypes: string[] = ['StreamsConnection']
@@ -17960,7 +17960,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isStreamsConnection"')
       return StreamsConnection_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const StripeBillingPortalResult_possibleTypes: string[] = ['StripeBillingPortalSession','ValidationError','NotFoundError','AuthError']
@@ -17968,7 +17968,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isStripeBillingPortalResult"')
       return StripeBillingPortalResult_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const StripeBillingPortalSession_possibleTypes: string[] = ['StripeBillingPortalSession']
@@ -17976,7 +17976,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isStripeBillingPortalSession"')
       return StripeBillingPortalSession_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const StripeCheckoutResult_possibleTypes: string[] = ['StripeCheckoutSession','ValidationError','NotFoundError','AuthError']
@@ -17984,7 +17984,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isStripeCheckoutResult"')
       return StripeCheckoutResult_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const StripeCheckoutSession_possibleTypes: string[] = ['StripeCheckoutSession']
@@ -17992,7 +17992,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isStripeCheckoutSession"')
       return StripeCheckoutSession_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const SubmitX402PaymentResult_possibleTypes: string[] = ['X402PaymentResult','ValidationError','NotFoundError','AuthError']
@@ -18000,7 +18000,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isSubmitX402PaymentResult"')
       return SubmitX402PaymentResult_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const Subscription_possibleTypes: string[] = ['Subscription']
@@ -18008,7 +18008,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isSubscription"')
       return Subscription_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const SystemHealthEvent_possibleTypes: string[] = ['SystemHealthEvent']
@@ -18016,7 +18016,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isSystemHealthEvent"')
       return SystemHealthEvent_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const Tenant_possibleTypes: string[] = ['Tenant']
@@ -18024,7 +18024,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isTenant"')
       return Tenant_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const TenantAnalyticsDaily_possibleTypes: string[] = ['TenantAnalyticsDaily']
@@ -18032,7 +18032,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isTenantAnalyticsDaily"')
       return TenantAnalyticsDaily_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const TenantAnalyticsDailyConnection_possibleTypes: string[] = ['TenantAnalyticsDailyConnection']
@@ -18040,7 +18040,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isTenantAnalyticsDailyConnection"')
       return TenantAnalyticsDailyConnection_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const TenantAnalyticsDailyEdge_possibleTypes: string[] = ['TenantAnalyticsDailyEdge']
@@ -18048,7 +18048,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isTenantAnalyticsDailyEdge"')
       return TenantAnalyticsDailyEdge_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const TenantCapabilities_possibleTypes: string[] = ['TenantCapabilities']
@@ -18056,7 +18056,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isTenantCapabilities"')
       return TenantCapabilities_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const TenantDailyStat_possibleTypes: string[] = ['TenantDailyStat']
@@ -18064,7 +18064,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isTenantDailyStat"')
       return TenantDailyStat_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const TenantEvent_possibleTypes: string[] = ['TenantEvent']
@@ -18072,7 +18072,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isTenantEvent"')
       return TenantEvent_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const TenantStorageUsage_possibleTypes: string[] = ['TenantStorageUsage']
@@ -18080,7 +18080,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isTenantStorageUsage"')
       return TenantStorageUsage_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const TenantSubscription_possibleTypes: string[] = ['TenantSubscription']
@@ -18088,7 +18088,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isTenantSubscription"')
       return TenantSubscription_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const TenantUsage_possibleTypes: string[] = ['TenantUsage']
@@ -18096,7 +18096,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isTenantUsage"')
       return TenantUsage_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const TestPlaybackAccessResult_possibleTypes: string[] = ['PlaybackAccessDecision','ValidationError','NotFoundError','AuthError']
@@ -18104,7 +18104,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isTestPlaybackAccessResult"')
       return TestPlaybackAccessResult_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const TestWebhookEndpointResult_possibleTypes: string[] = ['WebhookTestResult','NotFoundError','RateLimitError','AuthError']
@@ -18112,7 +18112,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isTestWebhookEndpointResult"')
       return TestWebhookEndpointResult_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const ThumbnailAssets_possibleTypes: string[] = ['ThumbnailAssets']
@@ -18120,7 +18120,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isThumbnailAssets"')
       return ThumbnailAssets_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const TimeRange_possibleTypes: string[] = ['TimeRange']
@@ -18128,7 +18128,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isTimeRange"')
       return TimeRange_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const TopAssetEntry_possibleTypes: string[] = ['TopAssetEntry']
@@ -18136,7 +18136,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isTopAssetEntry"')
       return TopAssetEntry_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const TopupCredited_possibleTypes: string[] = ['TopupCredited']
@@ -18144,7 +18144,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isTopupCredited"')
       return TopupCredited_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const TrackListEvent_possibleTypes: string[] = ['TrackListEvent']
@@ -18152,7 +18152,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isTrackListEvent"')
       return TrackListEvent_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const TrackListEventEdge_possibleTypes: string[] = ['TrackListEventEdge']
@@ -18160,7 +18160,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isTrackListEventEdge"')
       return TrackListEventEdge_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const TrackListEventsConnection_possibleTypes: string[] = ['TrackListEventsConnection']
@@ -18168,7 +18168,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isTrackListEventsConnection"')
       return TrackListEventsConnection_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const TrackListUpdate_possibleTypes: string[] = ['TrackListUpdate']
@@ -18176,7 +18176,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isTrackListUpdate"')
       return TrackListUpdate_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const UnlinkWalletResult_possibleTypes: string[] = ['DeleteSuccess','NotFoundError','AuthError']
@@ -18184,7 +18184,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isUnlinkWalletResult"')
       return UnlinkWalletResult_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const UpdateClusterResult_possibleTypes: string[] = ['Cluster','ValidationError','NotFoundError','AuthError']
@@ -18192,7 +18192,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isUpdateClusterResult"')
       return UpdateClusterResult_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const UpdateMediaRetentionResult_possibleTypes: string[] = ['EffectiveRetention','ValidationError','NotFoundError','AuthError']
@@ -18200,7 +18200,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isUpdateMediaRetentionResult"')
       return UpdateMediaRetentionResult_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const UpdateStreamResult_possibleTypes: string[] = ['Stream','ValidationError','NotFoundError','AuthError']
@@ -18208,7 +18208,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isUpdateStreamResult"')
       return UpdateStreamResult_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const UpdateTenantResult_possibleTypes: string[] = ['Tenant','ValidationError','AuthError']
@@ -18216,7 +18216,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isUpdateTenantResult"')
       return UpdateTenantResult_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const UpdateWebhookEndpointResult_possibleTypes: string[] = ['WebhookEndpoint','ValidationError','NotFoundError','AuthError']
@@ -18224,7 +18224,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isUpdateWebhookEndpointResult"')
       return UpdateWebhookEndpointResult_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const UploadAborted_possibleTypes: string[] = ['UploadAborted']
@@ -18232,7 +18232,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isUploadAborted"')
       return UploadAborted_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const UploadCompleted_possibleTypes: string[] = ['UploadCompleted']
@@ -18240,7 +18240,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isUploadCompleted"')
       return UploadCompleted_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const UploadCreated_possibleTypes: string[] = ['UploadCreated']
@@ -18248,7 +18248,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isUploadCreated"')
       return UploadCreated_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const UploadFailed_possibleTypes: string[] = ['UploadFailed']
@@ -18256,7 +18256,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isUploadFailed"')
       return UploadFailed_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const UploadReady_possibleTypes: string[] = ['UploadReady']
@@ -18264,7 +18264,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isUploadReady"')
       return UploadReady_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const UsageAggregate_possibleTypes: string[] = ['UsageAggregate']
@@ -18272,7 +18272,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isUsageAggregate"')
       return UsageAggregate_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const UsageEntry_possibleTypes: string[] = ['UsageEntry']
@@ -18280,7 +18280,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isUsageEntry"')
       return UsageEntry_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const UsageRecord_possibleTypes: string[] = ['UsageRecord']
@@ -18288,7 +18288,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isUsageRecord"')
       return UsageRecord_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const UsageRecordEdge_possibleTypes: string[] = ['UsageRecordEdge']
@@ -18296,7 +18296,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isUsageRecordEdge"')
       return UsageRecordEdge_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const UsageRecordsConnection_possibleTypes: string[] = ['UsageRecordsConnection']
@@ -18304,7 +18304,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isUsageRecordsConnection"')
       return UsageRecordsConnection_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const User_possibleTypes: string[] = ['User']
@@ -18312,7 +18312,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isUser"')
       return User_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const ValidationError_possibleTypes: string[] = ['ValidationError']
@@ -18320,7 +18320,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isValidationError"')
       return ValidationError_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const ViewerCountBucket_possibleTypes: string[] = ['ViewerCountBucket']
@@ -18328,7 +18328,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isViewerCountBucket"')
       return ViewerCountBucket_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const ViewerCountBucketEdge_possibleTypes: string[] = ['ViewerCountBucketEdge']
@@ -18336,7 +18336,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isViewerCountBucketEdge"')
       return ViewerCountBucketEdge_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const ViewerEndpoint_possibleTypes: string[] = ['ViewerEndpoint']
@@ -18344,7 +18344,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isViewerEndpoint"')
       return ViewerEndpoint_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const ViewerEndpointResponse_possibleTypes: string[] = ['ViewerEndpointResponse']
@@ -18352,7 +18352,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isViewerEndpointResponse"')
       return ViewerEndpointResponse_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const ViewerGeoHourly_possibleTypes: string[] = ['ViewerGeoHourly']
@@ -18360,7 +18360,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isViewerGeoHourly"')
       return ViewerGeoHourly_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const ViewerGeoHourlyConnection_possibleTypes: string[] = ['ViewerGeoHourlyConnection']
@@ -18368,7 +18368,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isViewerGeoHourlyConnection"')
       return ViewerGeoHourlyConnection_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const ViewerGeoHourlyEdge_possibleTypes: string[] = ['ViewerGeoHourlyEdge']
@@ -18376,7 +18376,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isViewerGeoHourlyEdge"')
       return ViewerGeoHourlyEdge_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const ViewerGeographic_possibleTypes: string[] = ['ViewerGeographic']
@@ -18384,7 +18384,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isViewerGeographic"')
       return ViewerGeographic_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const ViewerGeographicEdge_possibleTypes: string[] = ['ViewerGeographicEdge']
@@ -18392,7 +18392,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isViewerGeographicEdge"')
       return ViewerGeographicEdge_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const ViewerGeographicsConnection_possibleTypes: string[] = ['ViewerGeographicsConnection']
@@ -18400,7 +18400,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isViewerGeographicsConnection"')
       return ViewerGeographicsConnection_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const ViewerHoursHourly_possibleTypes: string[] = ['ViewerHoursHourly']
@@ -18408,7 +18408,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isViewerHoursHourly"')
       return ViewerHoursHourly_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const ViewerHoursHourlyConnection_possibleTypes: string[] = ['ViewerHoursHourlyConnection']
@@ -18416,7 +18416,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isViewerHoursHourlyConnection"')
       return ViewerHoursHourlyConnection_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const ViewerHoursHourlyEdge_possibleTypes: string[] = ['ViewerHoursHourlyEdge']
@@ -18424,7 +18424,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isViewerHoursHourlyEdge"')
       return ViewerHoursHourlyEdge_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const ViewerMetrics_possibleTypes: string[] = ['ViewerMetrics']
@@ -18432,7 +18432,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isViewerMetrics"')
       return ViewerMetrics_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const ViewerSession_possibleTypes: string[] = ['ViewerSession']
@@ -18440,7 +18440,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isViewerSession"')
       return ViewerSession_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const ViewerSessionEdge_possibleTypes: string[] = ['ViewerSessionEdge']
@@ -18448,7 +18448,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isViewerSessionEdge"')
       return ViewerSessionEdge_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const ViewerSessionsConnection_possibleTypes: string[] = ['ViewerSessionsConnection']
@@ -18456,7 +18456,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isViewerSessionsConnection"')
       return ViewerSessionsConnection_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const ViewerTimeSeriesConnection_possibleTypes: string[] = ['ViewerTimeSeriesConnection']
@@ -18464,7 +18464,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isViewerTimeSeriesConnection"')
       return ViewerTimeSeriesConnection_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const VodAsset_possibleTypes: string[] = ['VodAsset']
@@ -18472,7 +18472,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isVodAsset"')
       return VodAsset_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const VodRetention_possibleTypes: string[] = ['VodRetention']
@@ -18480,7 +18480,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isVodRetention"')
       return VodRetention_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const VodRetentionAsset_possibleTypes: string[] = ['VodRetentionAsset']
@@ -18488,7 +18488,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isVodRetentionAsset"')
       return VodRetentionAsset_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const VodRetentionAssetConnection_possibleTypes: string[] = ['VodRetentionAssetConnection']
@@ -18496,7 +18496,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isVodRetentionAssetConnection"')
       return VodRetentionAssetConnection_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const VodRetentionAssetEdge_possibleTypes: string[] = ['VodRetentionAssetEdge']
@@ -18504,7 +18504,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isVodRetentionAssetEdge"')
       return VodRetentionAssetEdge_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const VodRetentionPoint_possibleTypes: string[] = ['VodRetentionPoint']
@@ -18512,7 +18512,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isVodRetentionPoint"')
       return VodRetentionPoint_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const VodUploadPart_possibleTypes: string[] = ['VodUploadPart']
@@ -18520,7 +18520,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isVodUploadPart"')
       return VodUploadPart_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const VodUploadSession_possibleTypes: string[] = ['VodUploadSession']
@@ -18528,7 +18528,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isVodUploadSession"')
       return VodUploadSession_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const VodUploadStatus_possibleTypes: string[] = ['VodUploadStatus']
@@ -18536,7 +18536,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isVodUploadStatus"')
       return VodUploadStatus_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const VodUploadStatusResult_possibleTypes: string[] = ['VodUploadStatus','ValidationError','NotFoundError','AuthError']
@@ -18544,7 +18544,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isVodUploadStatusResult"')
       return VodUploadStatusResult_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const VodUploadedPart_possibleTypes: string[] = ['VodUploadedPart']
@@ -18552,7 +18552,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isVodUploadedPart"')
       return VodUploadedPart_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const WalletIdentity_possibleTypes: string[] = ['WalletIdentity']
@@ -18560,7 +18560,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isWalletIdentity"')
       return WalletIdentity_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const WalletLoginPayload_possibleTypes: string[] = ['WalletLoginPayload']
@@ -18568,7 +18568,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isWalletLoginPayload"')
       return WalletLoginPayload_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const WalletLoginResult_possibleTypes: string[] = ['WalletLoginPayload','ValidationError']
@@ -18576,7 +18576,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isWalletLoginResult"')
       return WalletLoginResult_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const WebhookDeliveriesConnection_possibleTypes: string[] = ['WebhookDeliveriesConnection']
@@ -18584,7 +18584,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isWebhookDeliveriesConnection"')
       return WebhookDeliveriesConnection_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const WebhookDelivery_possibleTypes: string[] = ['WebhookDelivery']
@@ -18592,7 +18592,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isWebhookDelivery"')
       return WebhookDelivery_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const WebhookDeliveryAttempt_possibleTypes: string[] = ['WebhookDeliveryAttempt']
@@ -18600,7 +18600,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isWebhookDeliveryAttempt"')
       return WebhookDeliveryAttempt_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const WebhookDeliveryEdge_possibleTypes: string[] = ['WebhookDeliveryEdge']
@@ -18608,7 +18608,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isWebhookDeliveryEdge"')
       return WebhookDeliveryEdge_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const WebhookEndpoint_possibleTypes: string[] = ['WebhookEndpoint']
@@ -18616,7 +18616,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isWebhookEndpoint"')
       return WebhookEndpoint_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const WebhookEndpointEdge_possibleTypes: string[] = ['WebhookEndpointEdge']
@@ -18624,7 +18624,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isWebhookEndpointEdge"')
       return WebhookEndpointEdge_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const WebhookEndpointResult_possibleTypes: string[] = ['WebhookEndpoint','NotFoundError','AuthError']
@@ -18632,7 +18632,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isWebhookEndpointResult"')
       return WebhookEndpointResult_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const WebhookEndpointSecret_possibleTypes: string[] = ['WebhookEndpointSecret']
@@ -18640,7 +18640,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isWebhookEndpointSecret"')
       return WebhookEndpointSecret_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const WebhookEndpointsConnection_possibleTypes: string[] = ['WebhookEndpointsConnection']
@@ -18648,7 +18648,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isWebhookEndpointsConnection"')
       return WebhookEndpointsConnection_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const WebhookReplayResult_possibleTypes: string[] = ['WebhookReplayResult']
@@ -18656,7 +18656,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isWebhookReplayResult"')
       return WebhookReplayResult_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const WebhookTestResult_possibleTypes: string[] = ['WebhookTestResult']
@@ -18664,7 +18664,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isWebhookTestResult"')
       return WebhookTestResult_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 
     const X402PaymentResult_possibleTypes: string[] = ['X402PaymentResult']
@@ -18672,7 +18672,7 @@ export interface X402PaymentResultGenqlSelection{
       if (!obj?.__typename) throw new Error('__typename is missing in "isX402PaymentResult"')
       return X402PaymentResult_possibleTypes.includes(obj.__typename)
     }
-    
+
 
 export const enumBufferState = {
    FULL: 'FULL' as const,

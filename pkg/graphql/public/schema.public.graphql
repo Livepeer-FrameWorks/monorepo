@@ -4581,7 +4581,7 @@ type Mutation {
   ): CreateEnrollmentTokenResult!
   """
   Bootstrap a new edge using only an opaque bootstrap token.
-  
+
   Public — the bootstrap token is itself the credential. Bridge resolves
   the token's cluster via Quartermaster, finds the cluster's assigned
   Foghorn, and proxies a PreRegisterEdge call so the operator never has
@@ -4976,7 +4976,7 @@ type Mutation {
   to (NOT a query parameter, so the token doesn't leak via referrers / URL
   history / access logs). On success the browser sets a `fw_mist_admin`
   cookie scoped to /_mist and is redirected to /_mist/.
-  
+
   Authority is infrastructure ownership, not subscriber access: Mist admin
   access is effectively shell on the edge box, so only owner/admin users
   in the cluster owner tenant can open it. Holders of the platform_operator
@@ -6680,7 +6680,7 @@ type Query {
   page: ConnectionInput): SigningKeysConnection!
   """
   Retrieve a single DVR chapter, including its finalized playbackId.
-  
+
   Chapters are produced by the finalization queue as canonical .mkv
   VOD artifacts. Historical chapter mode is configured at the Stream level
   (Stream.dvrChapterMode) and snapshotted at StartDVR. Modes:

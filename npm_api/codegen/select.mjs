@@ -5,6 +5,7 @@
 // entry sends operations through the SDK client, so Genql's own client,
 // fetcher, and batcher are left out. Genql writes extensionless relative
 // imports; the package is native ESM, so each gets its .js extension.
+// Trailing whitespace is stripped from every kept file.
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
@@ -64,6 +65,8 @@ try {
     if (file === "types.ts") {
       output = typedTypeMap(output);
     }
+    // Genql leaves trailing spaces on its empty JSDoc lines (" * ").
+    output = output.replace(/[ \t]+$/gm, "");
     const target = join(outputDir, file);
     mkdirSync(dirname(target), { recursive: true });
     writeFileSync(target, header + output);

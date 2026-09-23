@@ -158,7 +158,14 @@ func renderPublicSchema(full *ast.Schema) (string, error) {
 		formatter.NewFormatter(&buf, formatter.WithIndent("  ")).FormatSchemaDocument(block)
 		parts = append(parts, strings.TrimRight(buf.String(), "\n"))
 	}
-	return publicSchemaHeader + strings.Join(parts, "\n\n") + "\n", nil
+	// The formatter indents the empty lines of block-string descriptions;
+	// block-string parsing drops that whitespace, so trimming it leaves every
+	// description unchanged.
+	lines := strings.Split(publicSchemaHeader+strings.Join(parts, "\n\n"), "\n")
+	for i, line := range lines {
+		lines[i] = strings.TrimRight(line, " \t")
+	}
+	return strings.Join(lines, "\n") + "\n", nil
 }
 
 func sortedKeys[V any](m map[string]V) []string {
