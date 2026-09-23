@@ -16,13 +16,21 @@
             with open(path, encoding="utf-8") as handle:
                 data = json.load(handle)
         config = data.setdefault("config", {})
-        if config.get("controller") == wanted:
+        controller = config.get("controller")
+        if (
+            isinstance(controller, dict)
+            and controller.get("interface") == wanted["interface"]
+            and controller.get("port") == wanted["port"]
+        ):
             print("unchanged")
             sys.exit(0)
         if mode == "check":
             print("changed")
             sys.exit(0)
-        config["controller"] = wanted
+        if not isinstance(controller, dict):
+            controller = {}
+        controller.update(wanted)
+        config["controller"] = controller
         tmp_path = path + ".tmp"
         with open(tmp_path, "w", encoding="utf-8") as handle:
             json.dump(data, handle, separators=(",", ":"))
