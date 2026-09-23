@@ -1,9 +1,9 @@
 # livepeer-frameworks
 
 Typed Python client for the [FrameWorks](https://frameworks.network) GraphQL API. It ships a sync
-and an async client generated from FrameWorks' curated public operations, with pydantic models,
-retries, pagination, typed errors, a VOD upload helper, playback token signing, and webhook
-verification.
+and an async client generated from the public GraphQL schema, with a method for every public root
+field and argument-taking field, pydantic models, retries, pagination, typed errors, a VOD upload
+helper, playback token signing, and webhook verification.
 
 ```sh
 pip install livepeer-frameworks
@@ -35,6 +35,31 @@ Queries are retried on network errors and HTTP 408, 429, and 5xx. A mutation is 
 the request provably never reached the server: the connection could not be established, or the
 gateway answered 429. It is never sent again after a timeout, a dropped connection, or a 5xx,
 because the gateway does not deduplicate replayed mutations.
+
+## Subscriptions
+
+Every public subscription is an async iterator method on `AsyncFrameWorksClient` (`tenant_events`,
+`live_stream_events`, `skipper_chat`, ...) that yields the operation's pydantic model:
+
+```python
+async with AsyncFrameWorksClient(token="YOUR_API_TOKEN") as fw:
+    async for event in fw.tenant_events(types=["stream.live", "stream.idle"]):
+        print(event.tenant_events.type_, event.tenant_events.subject)
+```
+
+The sync `FrameWorksClient` has no subscription methods: ariadne-codegen, which generates the
+clients, emits subscriptions only for an async client.
+
+## Custom documents
+
+Every public root field and argument-taking field has a generated method with a default
+selection. The Python SDK has no typed builder for other selections: ariadne-codegen 0.19's custom
+operation builder generates only queries and mutations (no subscriptions), and returns
+`dict[str, Any]` with custom scalars undecoded (`Time` arrives as a `str`, where the generated
+methods return `datetime`). For other selections, send your own document through the client's
+`execute` (queries and mutations; `get_data` returns the data) or the async client's `execute_ws`
+(subscriptions), which use the SDK's authentication, retries, and typed errors. Give it an
+operation name of your own: the server version check looks up an SDK operation's release by name.
 
 ## Versions
 

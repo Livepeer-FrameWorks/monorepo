@@ -1,0 +1,945 @@
+---
+title: Clusters and infrastructure
+description: Clusters and infrastructure in the generated public GraphQL reference.
+sidebar:
+  order: 14
+---
+
+[GraphQL schema reference](/builders/api-schema/) · [API guide](/builders/api-reference/) · [SDKs](/builders/sdks/)
+
+Clusters, the marketplace, subscriptions and invites, edge enrollment, nodes, services, and orchestrators.
+
+Types used by more than one domain are on [Shared types](/builders/api-schema/shared/).
+
+## Queries
+
+### Query.cluster
+
+Fetch a single cluster by ID.
+
+```graphql
+cluster(
+  id: ID!
+): Cluster
+```
+
+**Returns:** `Cluster` ([Cluster](/builders/api-schema/clusters-types/#cluster))
+
+**Arguments**
+
+- `id`: `ID!` — The cluster ID.
+
+**SDK**
+
+| Operation | Selects | TypeScript | Go | Python |
+| --- | --- | --- | --- | --- |
+| GetCluster | `cluster` | `GetClusterDocument` | `GetCluster` | `get_cluster` |
+| GetClusterNodesConnection | `cluster.nodesConnection` | `GetClusterNodesConnectionDocument` | `GetClusterNodesConnection` | `get_cluster_nodes_connection` |
+
+### Query.clusterInvites
+
+**Deprecated:** Use clusterInvitesConnection instead
+
+List invites for a cluster.
+
+```graphql
+clusterInvites(
+  clusterId: ID!
+): [ClusterInvite!]!
+```
+
+**Returns:** `[ClusterInvite!]!` ([ClusterInvite](/builders/api-schema/clusters-types/#clusterinvite))
+
+**Arguments**
+
+- `clusterId`: `ID!`
+
+**SDK:** none; deprecated fields get no generated operation. Use the replacement the deprecation names, or send a GraphQL document through the SDK's raw client.
+
+### Query.clusterInvitesConnection
+
+List invites for a cluster (paginated).
+
+```graphql
+clusterInvitesConnection(
+  page: ConnectionInput
+  clusterId: ID!
+): ClusterInviteConnection!
+```
+
+**Returns:** `ClusterInviteConnection!` ([ClusterInviteConnection](/builders/api-schema/clusters-types/#clusterinviteconnection))
+
+**Arguments**
+
+- `page`: `ConnectionInput` ([ConnectionInput](/builders/api-schema/shared/#connectioninput)) — Pagination options.
+- `clusterId`: `ID!` — The cluster ID.
+
+**SDK**
+
+| Operation | TypeScript | Go | Python |
+| --- | --- | --- | --- |
+| GetClusterInvitesConnection | `GetClusterInvitesConnectionDocument` | `GetClusterInvitesConnection` | `get_cluster_invites_connection` |
+
+### Query.clustersAccess
+
+**Deprecated:** Use clustersAccessConnection instead
+
+List clusters the tenant has access to.
+
+```graphql
+clustersAccess(
+  first: Int = 50
+  after: String
+): [ClusterAccess!]
+```
+
+**Returns:** `[ClusterAccess!]` ([ClusterAccess](/builders/api-schema/clusters-types/#clusteraccess))
+
+**Arguments**
+
+- `first`: `Int` (default `50`)
+- `after`: `String`
+
+**SDK:** none; deprecated fields get no generated operation. Use the replacement the deprecation names, or send a GraphQL document through the SDK's raw client.
+
+### Query.clustersAccessConnection
+
+List clusters the tenant has access to (paginated).
+
+```graphql
+clustersAccessConnection(
+  page: ConnectionInput
+): ClusterAccessConnection!
+```
+
+**Returns:** `ClusterAccessConnection!` ([ClusterAccessConnection](/builders/api-schema/clusters-types/#clusteraccessconnection))
+
+**Arguments**
+
+- `page`: `ConnectionInput` ([ConnectionInput](/builders/api-schema/shared/#connectioninput))
+
+**SDK**
+
+| Operation | TypeScript | Go | Python |
+| --- | --- | --- | --- |
+| GetClustersAccessConnection | `GetClustersAccessConnectionDocument` | `GetClustersAccessConnection` | `get_clusters_access_connection` |
+
+### Query.clustersAvailable
+
+**Deprecated:** Use clustersAvailableConnection instead
+
+List available clusters for subscription.
+
+```graphql
+clustersAvailable(
+  first: Int = 50
+  after: String
+): [AvailableCluster!]
+```
+
+**Returns:** `[AvailableCluster!]` ([AvailableCluster](/builders/api-schema/clusters-types/#availablecluster))
+
+**Arguments**
+
+- `first`: `Int` (default `50`)
+- `after`: `String`
+
+**SDK:** none; deprecated fields get no generated operation. Use the replacement the deprecation names, or send a GraphQL document through the SDK's raw client.
+
+### Query.clustersAvailableConnection
+
+List available clusters for subscription (paginated).
+
+```graphql
+clustersAvailableConnection(
+  page: ConnectionInput
+): AvailableClusterConnection!
+```
+
+**Returns:** `AvailableClusterConnection!` ([AvailableClusterConnection](/builders/api-schema/clusters-types/#availableclusterconnection))
+
+**Arguments**
+
+- `page`: `ConnectionInput` ([ConnectionInput](/builders/api-schema/shared/#connectioninput))
+
+**SDK**
+
+| Operation | TypeScript | Go | Python |
+| --- | --- | --- | --- |
+| GetClustersAvailableConnection | `GetClustersAvailableConnectionDocument` | `GetClustersAvailableConnection` | `get_clusters_available_connection` |
+
+### Query.clustersConnection
+
+List clusters the tenant has access to.
+
+```graphql
+clustersConnection(
+  page: ConnectionInput
+): ClustersConnection!
+```
+
+**Returns:** `ClustersConnection!` ([ClustersConnection](/builders/api-schema/clusters-types/#clustersconnection))
+
+**Arguments**
+
+- `page`: `ConnectionInput` ([ConnectionInput](/builders/api-schema/shared/#connectioninput)) — Pagination options.
+
+**SDK**
+
+| Operation | TypeScript | Go | Python |
+| --- | --- | --- | --- |
+| GetClustersConnection | `GetClustersConnectionDocument` | `GetClustersConnection` | `get_clusters_connection` |
+
+### Query.discoverServicesConnection
+
+Discover service instances by type.
+
+```graphql
+discoverServicesConnection(
+  page: ConnectionInput
+  type: String!
+  clusterId: String
+): ServiceInstancesConnection!
+```
+
+**Returns:** `ServiceInstancesConnection!` ([ServiceInstancesConnection](/builders/api-schema/shared/#serviceinstancesconnection))
+
+**Arguments**
+
+- `page`: `ConnectionInput` ([ConnectionInput](/builders/api-schema/shared/#connectioninput)) — Pagination options.
+- `type`: `String!` — Service type to discover (e.g., mistserver, foghorn).
+- `clusterId`: `String` — Filter by cluster ID.
+
+**SDK**
+
+| Operation | TypeScript | Go | Python |
+| --- | --- | --- | --- |
+| GetDiscoverServicesConnection | `GetDiscoverServicesConnectionDocument` | `GetDiscoverServicesConnection` | `get_discover_services_connection` |
+
+### Query.marketplaceCluster
+
+Get details for a specific marketplace cluster.
+
+```graphql
+marketplaceCluster(
+  clusterId: String!
+): MarketplaceCluster
+```
+
+**Returns:** `MarketplaceCluster` ([MarketplaceCluster](/builders/api-schema/clusters-types/#marketplacecluster))
+
+**Arguments**
+
+- `clusterId`: `String!` — The cluster ID.
+
+**SDK**
+
+| Operation | TypeScript | Go | Python |
+| --- | --- | --- | --- |
+| GetMarketplaceCluster | `GetMarketplaceClusterDocument` | `GetMarketplaceCluster` | `get_marketplace_cluster` |
+
+### Query.marketplaceClusters
+
+**Deprecated:** Use marketplaceClustersConnection instead
+
+List clusters available in the marketplace.
+
+```graphql
+marketplaceClusters(
+  first: Int = 50
+  after: String
+): [MarketplaceCluster!]!
+```
+
+**Returns:** `[MarketplaceCluster!]!` ([MarketplaceCluster](/builders/api-schema/clusters-types/#marketplacecluster))
+
+**Arguments**
+
+- `first`: `Int` (default `50`)
+- `after`: `String`
+
+**SDK:** none; deprecated fields get no generated operation. Use the replacement the deprecation names, or send a GraphQL document through the SDK's raw client.
+
+### Query.marketplaceClustersConnection
+
+List clusters available in the marketplace (paginated).
+
+```graphql
+marketplaceClustersConnection(
+  page: ConnectionInput
+): MarketplaceClusterConnection!
+```
+
+**Returns:** `MarketplaceClusterConnection!` ([MarketplaceClusterConnection](/builders/api-schema/clusters-types/#marketplaceclusterconnection))
+
+**Arguments**
+
+- `page`: `ConnectionInput` ([ConnectionInput](/builders/api-schema/shared/#connectioninput)) — Pagination options.
+
+**SDK**
+
+| Operation | TypeScript | Go | Python |
+| --- | --- | --- | --- |
+| GetMarketplaceClustersConnection | `GetMarketplaceClustersConnectionDocument` | `GetMarketplaceClustersConnection` | `get_marketplace_clusters_connection` |
+
+### Query.myClusterInvites
+
+**Deprecated:** Use myClusterInvitesConnection instead
+
+List cluster invites sent to the current tenant.
+
+```graphql
+myClusterInvites: [ClusterInvite!]!
+```
+
+**Returns:** `[ClusterInvite!]!` ([ClusterInvite](/builders/api-schema/clusters-types/#clusterinvite))
+
+**SDK:** none; deprecated fields get no generated operation. Use the replacement the deprecation names, or send a GraphQL document through the SDK's raw client.
+
+### Query.myClusterInvitesConnection
+
+List cluster invites sent to the current tenant (paginated).
+
+```graphql
+myClusterInvitesConnection(
+  page: ConnectionInput
+): ClusterInviteConnection!
+```
+
+**Returns:** `ClusterInviteConnection!` ([ClusterInviteConnection](/builders/api-schema/clusters-types/#clusterinviteconnection))
+
+**Arguments**
+
+- `page`: `ConnectionInput` ([ConnectionInput](/builders/api-schema/shared/#connectioninput))
+
+**SDK**
+
+| Operation | TypeScript | Go | Python |
+| --- | --- | --- | --- |
+| GetMyClusterInvitesConnection | `GetMyClusterInvitesConnectionDocument` | `GetMyClusterInvitesConnection` | `get_my_cluster_invites_connection` |
+
+### Query.mySubscriptions
+
+**Deprecated:** Use mySubscriptionsConnection instead
+
+List clusters the tenant is subscribed to.
+
+```graphql
+mySubscriptions(
+  first: Int = 50
+  after: String
+): [Cluster!]!
+```
+
+**Returns:** `[Cluster!]!` ([Cluster](/builders/api-schema/clusters-types/#cluster))
+
+**Arguments**
+
+- `first`: `Int` (default `50`)
+- `after`: `String`
+
+**SDK:** none; deprecated fields get no generated operation. Use the replacement the deprecation names, or send a GraphQL document through the SDK's raw client.
+
+### Query.mySubscriptionsConnection
+
+List clusters the tenant is subscribed to (paginated).
+
+```graphql
+mySubscriptionsConnection(
+  page: ConnectionInput
+): MySubscriptionsConnection!
+```
+
+**Returns:** `MySubscriptionsConnection!` ([MySubscriptionsConnection](/builders/api-schema/clusters-types/#mysubscriptionsconnection))
+
+**Arguments**
+
+- `page`: `ConnectionInput` ([ConnectionInput](/builders/api-schema/shared/#connectioninput))
+
+**SDK**
+
+| Operation | TypeScript | Go | Python |
+| --- | --- | --- | --- |
+| GetMySubscriptionsConnection | `GetMySubscriptionsConnectionDocument` | `GetMySubscriptionsConnection` | `get_my_subscriptions_connection` |
+
+### Query.nodesConnection
+
+List nodes (edge servers) with optional filters.
+
+```graphql
+nodesConnection(
+  page: ConnectionInput
+  clusterId: String
+  status: NodeStatus
+  type: String
+): NodesConnection!
+```
+
+**Returns:** `NodesConnection!` ([NodesConnection](/builders/api-schema/clusters-types/#nodesconnection))
+
+**Arguments**
+
+- `page`: `ConnectionInput` ([ConnectionInput](/builders/api-schema/shared/#connectioninput)) — Pagination options.
+- `clusterId`: `String` — Filter by cluster ID.
+- `status`: `NodeStatus` ([NodeStatus](/builders/api-schema/shared/#nodestatus)) — Filter by node status.
+- `type`: `String` — Filter by node type.
+
+**SDK**
+
+| Operation | TypeScript | Go | Python |
+| --- | --- | --- | --- |
+| GetNodesConnection | `GetNodesConnectionDocument` | `GetNodesConnection` | `get_nodes_connection` |
+
+### Query.orchestrator
+
+Fetch a public orchestrator with every known instance and per-(gateway, instance) vantage. Side-panel data source for the federation map.
+
+```graphql
+orchestrator(
+  orchAddr: String!
+): OrchestratorWithDetails
+```
+
+**Returns:** `OrchestratorWithDetails` ([OrchestratorWithDetails](/builders/api-schema/clusters-types/#orchestratorwithdetails))
+
+**Arguments**
+
+- `orchAddr`: `String!` — The orchestrator&#39;s eth address (hex).
+
+**SDK**
+
+| Operation | TypeScript | Go | Python |
+| --- | --- | --- | --- |
+| GetOrchestrator | `GetOrchestratorDocument` | `GetOrchestrator` | `get_orchestrator` |
+
+### Query.orchestratorInstances
+
+List public per-instance rows. Each carries its own price/capabilities/hardware — usually consistent across an orch&#39;s pool but not guaranteed. Use the optional `orchAddr` filter to scope to one orch.
+
+```graphql
+orchestratorInstances(
+  orchAddr: String
+): [OrchestratorInstance!]!
+```
+
+**Returns:** `[OrchestratorInstance!]!` ([OrchestratorInstance](/builders/api-schema/clusters-types/#orchestratorinstance))
+
+**Arguments**
+
+- `orchAddr`: `String`
+
+**SDK**
+
+| Operation | TypeScript | Go | Python |
+| --- | --- | --- | --- |
+| GetOrchestratorInstances | `GetOrchestratorInstancesDocument` | `GetOrchestratorInstances` | `get_orchestrator_instances` |
+
+### Query.orchestratorPerformanceSeries
+
+Time-series performance points for an orchestrator from the discovery rollups (5m or 1h). `meanLatencyMs` is server-pre-computed; callers don&#39;t divide latency_sum/latency_count themselves.
+
+```graphql
+orchestratorPerformanceSeries(
+  orchAddr: String!
+  timeRange: TimeRangeInput!
+  interval: String
+  gatewayId: String
+  resolvedIp: String
+): [OrchestratorPerformancePoint!]!
+```
+
+**Returns:** `[OrchestratorPerformancePoint!]!` ([OrchestratorPerformancePoint](/builders/api-schema/clusters-types/#orchestratorperformancepoint))
+
+**Arguments**
+
+- `orchAddr`: `String!`
+- `timeRange`: `TimeRangeInput!` ([TimeRangeInput](/builders/api-schema/shared/#timerangeinput))
+- `interval`: `String` — Rollup interval. &#34;5m&#34; (default) or &#34;1h&#34;.
+- `gatewayId`: `String` — Optional drill-down filters.
+- `resolvedIp`: `String`
+
+**SDK**
+
+| Operation | TypeScript | Go | Python |
+| --- | --- | --- | --- |
+| GetOrchestratorPerformanceSeries | `GetOrchestratorPerformanceSeriesDocument` | `GetOrchestratorPerformanceSeries` | `get_orchestrator_performance_series` |
+
+### Query.orchestratorVantages
+
+List per-(gateway, instance) vantage observations. Multi-region observation surfaces here as multiple rows. Use the optional `orchAddr` filter to scope to one orchestrator.
+
+```graphql
+orchestratorVantages(
+  orchAddr: String
+): [OrchestratorVantage!]!
+```
+
+**Returns:** `[OrchestratorVantage!]!` ([OrchestratorVantage](/builders/api-schema/clusters-types/#orchestratorvantage))
+
+**Arguments**
+
+- `orchAddr`: `String`
+
+**SDK**
+
+| Operation | TypeScript | Go | Python |
+| --- | --- | --- | --- |
+| GetOrchestratorVantages | `GetOrchestratorVantagesDocument` | `GetOrchestratorVantages` | `get_orchestrator_vantages` |
+
+### Query.orchestratorsConnection
+
+List orchestrators discovered by Livepeer gateways under this cluster owner tenant. Federation-map data source. Vantage-independent; the per-region table comes from `orchestratorVantages`.
+
+```graphql
+orchestratorsConnection(
+  page: ConnectionInput
+  orchAddr: String
+): OrchestratorsConnection!
+```
+
+**Returns:** `OrchestratorsConnection!` ([OrchestratorsConnection](/builders/api-schema/clusters-types/#orchestratorsconnection))
+
+**Arguments**
+
+- `page`: `ConnectionInput` ([ConnectionInput](/builders/api-schema/shared/#connectioninput)) — Pagination options.
+- `orchAddr`: `String` — Optional filter to a single orchestrator (eth address).
+
+**SDK**
+
+| Operation | TypeScript | Go | Python |
+| --- | --- | --- | --- |
+| GetOrchestratorsConnection | `GetOrchestratorsConnectionDocument` | `GetOrchestratorsConnection` | `get_orchestrators_connection` |
+
+### Query.pendingSubscriptions
+
+**Deprecated:** Use pendingSubscriptionsConnection instead
+
+List pending subscription requests for a cluster.
+
+```graphql
+pendingSubscriptions(
+  clusterId: ID!
+): [ClusterSubscription!]!
+```
+
+**Returns:** `[ClusterSubscription!]!` ([ClusterSubscription](/builders/api-schema/clusters-types/#clustersubscription))
+
+**Arguments**
+
+- `clusterId`: `ID!`
+
+**SDK:** none; deprecated fields get no generated operation. Use the replacement the deprecation names, or send a GraphQL document through the SDK's raw client.
+
+### Query.pendingSubscriptionsConnection
+
+List pending subscription requests (paginated).
+
+```graphql
+pendingSubscriptionsConnection(
+  page: ConnectionInput
+  clusterId: ID!
+): ClusterSubscriptionConnection!
+```
+
+**Returns:** `ClusterSubscriptionConnection!` ([ClusterSubscriptionConnection](/builders/api-schema/clusters-types/#clustersubscriptionconnection))
+
+**Arguments**
+
+- `page`: `ConnectionInput` ([ConnectionInput](/builders/api-schema/shared/#connectioninput)) — Pagination options.
+- `clusterId`: `ID!` — The cluster ID.
+
+**SDK**
+
+| Operation | TypeScript | Go | Python |
+| --- | --- | --- | --- |
+| GetPendingSubscriptionsConnection | `GetPendingSubscriptionsConnectionDocument` | `GetPendingSubscriptionsConnection` | `get_pending_subscriptions_connection` |
+
+### Query.serviceInstancesHealth
+
+Check health status of service instances for owned infrastructure.
+
+```graphql
+serviceInstancesHealth(
+  serviceId: String
+): [ServiceInstanceHealth!]
+```
+
+**Returns:** `[ServiceInstanceHealth!]` ([ServiceInstanceHealth](/builders/api-schema/shared/#serviceinstancehealth))
+
+**Arguments**
+
+- `serviceId`: `String` — Filter by service ID.
+
+**SDK**
+
+| Operation | TypeScript | Go | Python |
+| --- | --- | --- | --- |
+| GetServiceInstancesHealth | `GetServiceInstancesHealthDocument` | `GetServiceInstancesHealth` | `get_service_instances_health` |
+
+## Mutations
+
+### Mutation.acceptClusterInvite
+
+Accept a cluster invite.
+
+```graphql
+acceptClusterInvite(
+  inviteToken: String!
+): ClusterSubscriptionResult!
+```
+
+**Returns:** `ClusterSubscriptionResult!` ([ClusterSubscriptionResult](/builders/api-schema/clusters-types/#clustersubscriptionresult))
+
+**Arguments**
+
+- `inviteToken`: `String!` — The invite token.
+
+**SDK**
+
+| Operation | TypeScript | Go | Python |
+| --- | --- | --- | --- |
+| AcceptClusterInvite | `AcceptClusterInviteDocument` | `AcceptClusterInvite` | `accept_cluster_invite` |
+
+### Mutation.acknowledgeIncident
+
+Acknowledge an incident. The incident stays open until its alerts resolve or someone resolves it.
+
+```graphql
+acknowledgeIncident(
+  id: ID!
+): IncidentMutationResult!
+```
+
+**Returns:** `IncidentMutationResult!` ([IncidentMutationResult](/builders/api-schema/shared/#incidentmutationresult))
+
+**Arguments**
+
+- `id`: `ID!`
+
+**SDK**
+
+| Operation | TypeScript | Go | Python |
+| --- | --- | --- | --- |
+| AcknowledgeIncident | `AcknowledgeIncidentDocument` | `AcknowledgeIncident` | `acknowledge_incident` |
+
+### Mutation.approveClusterSubscription
+
+Approve a pending cluster subscription request.
+
+```graphql
+approveClusterSubscription(
+  subscriptionId: ID!
+): ClusterSubscriptionResult!
+```
+
+**Returns:** `ClusterSubscriptionResult!` ([ClusterSubscriptionResult](/builders/api-schema/clusters-types/#clustersubscriptionresult))
+
+**Arguments**
+
+- `subscriptionId`: `ID!` — The subscription ID to approve.
+
+**SDK**
+
+| Operation | TypeScript | Go | Python |
+| --- | --- | --- | --- |
+| ApproveClusterSubscription | `ApproveClusterSubscriptionDocument` | `ApproveClusterSubscription` | `approve_cluster_subscription` |
+
+### Mutation.bootstrapEdge
+
+Bootstrap a new edge using only an opaque bootstrap token. Public — the bootstrap token is itself the credential. Bridge resolves the token&#39;s cluster via Quartermaster, finds the cluster&#39;s assigned Foghorn, and proxies a PreRegisterEdge call so the operator never has to know cluster topology.
+
+```graphql
+bootstrapEdge(
+  input: BootstrapEdgeInput!
+): BootstrapEdgeResult!
+```
+
+**Returns:** `BootstrapEdgeResult!` ([BootstrapEdgeResult](/builders/api-schema/clusters-types/#bootstrapedgeresult))
+
+**Arguments**
+
+- `input`: `BootstrapEdgeInput!` ([BootstrapEdgeInput](/builders/api-schema/clusters-types/#bootstrapedgeinput))
+
+**SDK**
+
+| Operation | TypeScript | Go | Python |
+| --- | --- | --- | --- |
+| BootstrapEdge | `BootstrapEdgeDocument` | `BootstrapEdge` | `bootstrap_edge` |
+
+### Mutation.createClusterInvite
+
+Create an invite for a cluster.
+
+```graphql
+createClusterInvite(
+  input: CreateClusterInviteInput!
+): CreateClusterInviteResult!
+```
+
+**Returns:** `CreateClusterInviteResult!` ([CreateClusterInviteResult](/builders/api-schema/clusters-types/#createclusterinviteresult))
+
+**Arguments**
+
+- `input`: `CreateClusterInviteInput!` ([CreateClusterInviteInput](/builders/api-schema/clusters-types/#createclusterinviteinput)) — Invite configuration.
+
+**SDK**
+
+| Operation | TypeScript | Go | Python |
+| --- | --- | --- | --- |
+| CreateClusterInvite | `CreateClusterInviteDocument` | `CreateClusterInvite` | `create_cluster_invite` |
+
+### Mutation.createEdgeCluster
+
+Create an edge cluster with automatic Foghorn assignment and enrollment token.
+
+```graphql
+createEdgeCluster(
+  input: CreateEdgeClusterInput!
+): CreateEdgeClusterResult!
+```
+
+**Returns:** `CreateEdgeClusterResult!` ([CreateEdgeClusterResult](/builders/api-schema/clusters-types/#createedgeclusterresult))
+
+**Arguments**
+
+- `input`: `CreateEdgeClusterInput!` ([CreateEdgeClusterInput](/builders/api-schema/clusters-types/#createedgeclusterinput)) — Edge cluster configuration.
+
+**SDK**
+
+| Operation | TypeScript | Go | Python |
+| --- | --- | --- | --- |
+| CreateEdgeCluster | `CreateEdgeClusterDocument` | `CreateEdgeCluster` | `create_edge_cluster` |
+
+### Mutation.createEnrollmentToken
+
+Create an enrollment token for an existing cluster. Requires active subscription to the cluster.
+
+```graphql
+createEnrollmentToken(
+  clusterId: ID!
+  name: String
+  ttl: String
+): CreateEnrollmentTokenResult!
+```
+
+**Returns:** `CreateEnrollmentTokenResult!` ([CreateEnrollmentTokenResult](/builders/api-schema/clusters-types/#createenrollmenttokenresult))
+
+**Arguments**
+
+- `clusterId`: `ID!` — Cluster to create the token for.
+- `name`: `String` — Token display name.
+- `ttl`: `String` — Time-to-live (e.g. &#34;24h&#34;, &#34;7d&#34;). Defaults to 30 days.
+
+**SDK**
+
+| Operation | TypeScript | Go | Python |
+| --- | --- | --- | --- |
+| CreateEnrollmentToken | `CreateEnrollmentTokenDocument` | `CreateEnrollmentToken` | `create_enrollment_token` |
+
+### Mutation.openMistAdminSession
+
+Open the MistServer admin UI on a specific edge node. Returns a short-TTL session token plus the per-edge POST URL the webapp must submit the token to (NOT a query parameter, so the token doesn&#39;t leak via referrers / URL history / access logs). On success the browser sets a `fw_mist_admin` cookie scoped to /_mist and is redirected to /_mist/. Authority is infrastructure ownership, not subscriber access: Mist admin access is effectively shell on the edge box, so only owner/admin users in the cluster owner tenant can open it. Holders of the platform_operator grant are allowed as break-glass. Anything else returns AuthError without exposing whether the node exists.
+
+```graphql
+openMistAdminSession(
+  input: OpenMistAdminSessionInput!
+): OpenMistAdminSessionResult!
+```
+
+**Returns:** `OpenMistAdminSessionResult!` ([OpenMistAdminSessionResult](/builders/api-schema/clusters-types/#openmistadminsessionresult))
+
+**Arguments**
+
+- `input`: `OpenMistAdminSessionInput!` ([OpenMistAdminSessionInput](/builders/api-schema/clusters-types/#openmistadminsessioninput))
+
+**SDK**
+
+| Operation | TypeScript | Go | Python |
+| --- | --- | --- | --- |
+| OpenMistAdminSession | `OpenMistAdminSessionDocument` | `OpenMistAdminSession` | `open_mist_admin_session` |
+
+### Mutation.rejectClusterSubscription
+
+Reject a pending cluster subscription request.
+
+```graphql
+rejectClusterSubscription(
+  subscriptionId: ID!
+  reason: String
+): ClusterSubscriptionResult!
+```
+
+**Returns:** `ClusterSubscriptionResult!` ([ClusterSubscriptionResult](/builders/api-schema/clusters-types/#clustersubscriptionresult))
+
+**Arguments**
+
+- `subscriptionId`: `ID!` — The subscription ID to reject.
+- `reason`: `String` — Optional rejection reason.
+
+**SDK**
+
+| Operation | TypeScript | Go | Python |
+| --- | --- | --- | --- |
+| RejectClusterSubscription | `RejectClusterSubscriptionDocument` | `RejectClusterSubscription` | `reject_cluster_subscription` |
+
+### Mutation.requestClusterSubscription
+
+Request to subscribe to a cluster.
+
+```graphql
+requestClusterSubscription(
+  clusterId: ID!
+  inviteToken: String
+): ClusterSubscriptionResult!
+```
+
+**Returns:** `ClusterSubscriptionResult!` ([ClusterSubscriptionResult](/builders/api-schema/clusters-types/#clustersubscriptionresult))
+
+**Arguments**
+
+- `clusterId`: `ID!` — The cluster ID.
+- `inviteToken`: `String` — Optional invite token.
+
+**SDK**
+
+| Operation | TypeScript | Go | Python |
+| --- | --- | --- | --- |
+| RequestClusterSubscription | `RequestClusterSubscriptionDocument` | `RequestClusterSubscription` | `request_cluster_subscription` |
+
+### Mutation.revokeClusterInvite
+
+Revoke a cluster invite.
+
+```graphql
+revokeClusterInvite(
+  inviteId: ID!
+): RevokeClusterInviteResult!
+```
+
+**Returns:** `RevokeClusterInviteResult!` ([RevokeClusterInviteResult](/builders/api-schema/clusters-types/#revokeclusterinviteresult))
+
+**Arguments**
+
+- `inviteId`: `ID!` — The invite ID to revoke.
+
+**SDK**
+
+| Operation | TypeScript | Go | Python |
+| --- | --- | --- | --- |
+| RevokeClusterInvite | `RevokeClusterInviteDocument` | `RevokeClusterInvite` | `revoke_cluster_invite` |
+
+### Mutation.setNodeMode
+
+Set a node&#39;s operational mode. Drains/maintenance bleed traffic away from the node; restoring with NORMAL re-admits it to routing. Reason is recorded in Foghorn&#39;s audit trail.
+
+```graphql
+setNodeMode(
+  input: SetNodeModeInput!
+): SetNodeModeResult!
+```
+
+**Returns:** `SetNodeModeResult!` ([SetNodeModeResult](/builders/api-schema/clusters-types/#setnodemoderesult))
+
+**Arguments**
+
+- `input`: `SetNodeModeInput!` ([SetNodeModeInput](/builders/api-schema/clusters-types/#setnodemodeinput))
+
+**SDK**
+
+| Operation | TypeScript | Go | Python |
+| --- | --- | --- | --- |
+| SetNodeMode | `SetNodeModeDocument` | `SetNodeMode` | `set_node_mode` |
+
+### Mutation.setPreferredCluster
+
+Set the tenant&#39;s preferred cluster. Must be a subscribed cluster. Used by routing services when choosing tenant-preferred infrastructure.
+
+```graphql
+setPreferredCluster(
+  clusterId: ID!
+): SetPreferredClusterResult!
+```
+
+**Returns:** `SetPreferredClusterResult!` ([SetPreferredClusterResult](/builders/api-schema/clusters-types/#setpreferredclusterresult))
+
+**Arguments**
+
+- `clusterId`: `ID!` — The cluster ID to set as preferred.
+
+**SDK**
+
+| Operation | TypeScript | Go | Python |
+| --- | --- | --- | --- |
+| SetPreferredCluster | `SetPreferredClusterDocument` | `SetPreferredCluster` | `set_preferred_cluster` |
+
+### Mutation.subscribeToCluster
+
+Subscribe to a cluster for streaming access.
+
+```graphql
+subscribeToCluster(
+  clusterId: ID!
+): Boolean!
+```
+
+**Returns:** `Boolean!`
+
+**Arguments**
+
+- `clusterId`: `ID!` — The cluster ID to subscribe to.
+
+**SDK**
+
+| Operation | TypeScript | Go | Python |
+| --- | --- | --- | --- |
+| SubscribeToCluster | `SubscribeToClusterDocument` | `SubscribeToCluster` | `subscribe_to_cluster` |
+
+### Mutation.unsubscribeFromCluster
+
+Unsubscribe from a cluster.
+
+```graphql
+unsubscribeFromCluster(
+  clusterId: ID!
+): Boolean!
+```
+
+**Returns:** `Boolean!`
+
+**Arguments**
+
+- `clusterId`: `ID!` — The cluster ID to unsubscribe from.
+
+**SDK**
+
+| Operation | TypeScript | Go | Python |
+| --- | --- | --- | --- |
+| UnsubscribeFromCluster | `UnsubscribeFromClusterDocument` | `UnsubscribeFromCluster` | `unsubscribe_from_cluster` |
+
+### Mutation.updateClusterMarketplace
+
+Update marketplace settings for a cluster.
+
+```graphql
+updateClusterMarketplace(
+  clusterId: ID!
+  input: UpdateClusterMarketplaceInput!
+): UpdateClusterResult!
+```
+
+**Returns:** `UpdateClusterResult!` ([UpdateClusterResult](/builders/api-schema/clusters-types/#updateclusterresult))
+
+**Arguments**
+
+- `clusterId`: `ID!` — The cluster ID.
+- `input`: `UpdateClusterMarketplaceInput!` ([UpdateClusterMarketplaceInput](/builders/api-schema/clusters-types/#updateclustermarketplaceinput)) — Updated marketplace settings.
+
+**SDK**
+
+| Operation | TypeScript | Go | Python |
+| --- | --- | --- | --- |
+| UpdateClusterMarketplace | `UpdateClusterMarketplaceDocument` | `UpdateClusterMarketplace` | `update_cluster_marketplace` |
+
+## Types
+
+- [Clusters and infrastructure types](/builders/api-schema/clusters-types/): [AvailableCluster](/builders/api-schema/clusters-types/#availablecluster), [AvailableClusterConnection](/builders/api-schema/clusters-types/#availableclusterconnection), [AvailableClusterEdge](/builders/api-schema/clusters-types/#availableclusteredge), [BootstrapEdgeInput](/builders/api-schema/clusters-types/#bootstrapedgeinput), [BootstrapEdgeResponse](/builders/api-schema/clusters-types/#bootstrapedgeresponse), [BootstrapEdgeResult](/builders/api-schema/clusters-types/#bootstrapedgeresult), [BootstrapToken](/builders/api-schema/clusters-types/#bootstraptoken), [Cluster](/builders/api-schema/clusters-types/#cluster), [ClusterAccess](/builders/api-schema/clusters-types/#clusteraccess), [ClusterAccessConnection](/builders/api-schema/clusters-types/#clusteraccessconnection), [ClusterAccessEdge](/builders/api-schema/clusters-types/#clusteraccessedge), [ClusterEdge](/builders/api-schema/clusters-types/#clusteredge), [ClusterInvite](/builders/api-schema/clusters-types/#clusterinvite), [ClusterInviteConnection](/builders/api-schema/clusters-types/#clusterinviteconnection), [ClusterInviteEdge](/builders/api-schema/clusters-types/#clusterinviteedge), [ClusterPricingModel](/builders/api-schema/clusters-types/#clusterpricingmodel), [ClusterSubscription](/builders/api-schema/clusters-types/#clustersubscription), [ClusterSubscriptionConnection](/builders/api-schema/clusters-types/#clustersubscriptionconnection), [ClusterSubscriptionEdge](/builders/api-schema/clusters-types/#clustersubscriptionedge), [ClusterSubscriptionResult](/builders/api-schema/clusters-types/#clustersubscriptionresult), [ClusterSubscriptionStatus](/builders/api-schema/clusters-types/#clustersubscriptionstatus), [ClusterVisibility](/builders/api-schema/clusters-types/#clustervisibility), [ClustersConnection](/builders/api-schema/clusters-types/#clustersconnection), [CreateClusterInviteInput](/builders/api-schema/clusters-types/#createclusterinviteinput), [CreateClusterInviteResult](/builders/api-schema/clusters-types/#createclusterinviteresult), [CreateEdgeClusterInput](/builders/api-schema/clusters-types/#createedgeclusterinput), [CreateEdgeClusterResponse](/builders/api-schema/clusters-types/#createedgeclusterresponse), [CreateEdgeClusterResult](/builders/api-schema/clusters-types/#createedgeclusterresult), [CreateEnrollmentTokenResponse](/builders/api-schema/clusters-types/#createenrollmenttokenresponse), [CreateEnrollmentTokenResult](/builders/api-schema/clusters-types/#createenrollmenttokenresult), [EdgeTelemetrySetup](/builders/api-schema/clusters-types/#edgetelemetrysetup), [InfrastructureNode](/builders/api-schema/clusters-types/#infrastructurenode), [LiveNode](/builders/api-schema/clusters-types/#livenode), [MarketplaceCluster](/builders/api-schema/clusters-types/#marketplacecluster), [MarketplaceClusterConnection](/builders/api-schema/clusters-types/#marketplaceclusterconnection), [MarketplaceClusterEdge](/builders/api-schema/clusters-types/#marketplaceclusteredge), [MistAdminSession](/builders/api-schema/clusters-types/#mistadminsession), [MySubscriptionEdge](/builders/api-schema/clusters-types/#mysubscriptionedge), [MySubscriptionsConnection](/builders/api-schema/clusters-types/#mysubscriptionsconnection), [NodeEdge](/builders/api-schema/clusters-types/#nodeedge), [NodeOperationalMode](/builders/api-schema/clusters-types/#nodeoperationalmode), [NodesConnection](/builders/api-schema/clusters-types/#nodesconnection), [OpenMistAdminSessionInput](/builders/api-schema/clusters-types/#openmistadminsessioninput), [OpenMistAdminSessionResult](/builders/api-schema/clusters-types/#openmistadminsessionresult), [Orchestrator](/builders/api-schema/clusters-types/#orchestrator), [OrchestratorCapabilityPrice](/builders/api-schema/clusters-types/#orchestratorcapabilityprice), [OrchestratorInstance](/builders/api-schema/clusters-types/#orchestratorinstance), [OrchestratorPerformancePoint](/builders/api-schema/clusters-types/#orchestratorperformancepoint), [OrchestratorVantage](/builders/api-schema/clusters-types/#orchestratorvantage), [OrchestratorWithDetails](/builders/api-schema/clusters-types/#orchestratorwithdetails), [OrchestratorsConnection](/builders/api-schema/clusters-types/#orchestratorsconnection), [RevokeClusterInviteResult](/builders/api-schema/clusters-types/#revokeclusterinviteresult), [RoutingImpactPreview](/builders/api-schema/clusters-types/#routingimpactpreview), [SetNodeModeInput](/builders/api-schema/clusters-types/#setnodemodeinput), [SetNodeModeResult](/builders/api-schema/clusters-types/#setnodemoderesult), [SetPreferredClusterResult](/builders/api-schema/clusters-types/#setpreferredclusterresult), [UpdateClusterMarketplaceInput](/builders/api-schema/clusters-types/#updateclustermarketplaceinput), [UpdateClusterResult](/builders/api-schema/clusters-types/#updateclusterresult)

@@ -1,0 +1,690 @@
+---
+title: Media and storage
+description: Media and storage in the generated public GraphQL reference.
+sidebar:
+  order: 2
+---
+
+[GraphQL schema reference](/builders/api-schema/) · [API guide](/builders/api-reference/) · [SDKs](/builders/sdks/)
+
+Clips, DVR recordings, VOD uploads and assets, storage artifacts, retention, and media placement.
+
+Types used by more than one domain are on [Shared types](/builders/api-schema/shared/).
+
+## Queries
+
+### Query.clip
+
+Fetch a single clip by its global ID.
+
+```graphql
+clip(
+  id: ID!
+): Clip
+```
+
+**Returns:** `Clip` ([Clip](/builders/api-schema/shared/#clip))
+
+**Arguments**
+
+- `id`: `ID!` — The global ID of the clip.
+
+**SDK**
+
+| Operation | TypeScript | Go | Python |
+| --- | --- | --- | --- |
+| GetClip | `GetClipDocument` | `GetClip` | `get_clip` |
+
+### Query.clusterMediaConsent
+
+```graphql
+clusterMediaConsent(
+  clusterId: ID!
+): MediaCapacityConsentResult!
+```
+
+**Returns:** `MediaCapacityConsentResult!` ([MediaCapacityConsentResult](/builders/api-schema/media-types/#mediacapacityconsentresult))
+
+**Arguments**
+
+- `clusterId`: `ID!`
+
+**SDK**
+
+| Operation | TypeScript | Go | Python |
+| --- | --- | --- | --- |
+| GetClusterMediaConsent | `GetClusterMediaConsentDocument` | `GetClusterMediaConsent` | `get_cluster_media_consent` |
+
+### Query.clusterMediaConsentChange
+
+```graphql
+clusterMediaConsentChange(
+  clusterId: ID!
+  idempotencyKey: String!
+): MediaCapacityConsentChangeResult!
+```
+
+**Returns:** `MediaCapacityConsentChangeResult!` ([MediaCapacityConsentChangeResult](/builders/api-schema/media-types/#mediacapacityconsentchangeresult))
+
+**Arguments**
+
+- `clusterId`: `ID!`
+- `idempotencyKey`: `String!`
+
+**SDK**
+
+| Operation | TypeScript | Go | Python |
+| --- | --- | --- | --- |
+| GetClusterMediaConsentChange | `GetClusterMediaConsentChangeDocument` | `GetClusterMediaConsentChange` | `get_cluster_media_consent_change` |
+
+### Query.dvrChapter
+
+Retrieve a single DVR chapter, including its finalized playbackId. Chapters are produced by the finalization queue as canonical .mkv VOD artifacts. Historical chapter mode is configured at the Stream level (Stream.dvrChapterMode) and snapshotted at StartDVR. Modes: - WINDOW_SIZED: sequential fixed-length chapters of size tier.MaxWindowSeconds since the recording&#39;s start. - FIXED_INTERVAL: UTC-only buckets of intervalSeconds, anchored at unix epoch 0.
+
+```graphql
+dvrChapter(
+  dvrId: ID!
+  mode: DVRChapterMode
+  intervalSeconds: Int
+  startMs: Float!
+  endMs: Float!
+): DVRChapter
+```
+
+**Returns:** `DVRChapter` ([DVRChapter](/builders/api-schema/media-types/#dvrchapter))
+
+**Arguments**
+
+- `dvrId`: `ID!` — DVR recording identifier — accepts either DVRRequest.id (UUID) or DVRRequest.dvrHash.
+- `mode`: `DVRChapterMode` ([DVRChapterMode](/builders/api-schema/shared/#dvrchaptermode)) — Historical chapter mode; null defaults to the recording&#39;s policy snapshot.
+- `intervalSeconds`: `Int` — Required for FIXED_INTERVAL mode.
+- `startMs`: `Float!` — UTC epoch milliseconds (start of range).
+- `endMs`: `Float!` — UTC epoch milliseconds (end of range, exclusive).
+
+**SDK**
+
+| Operation | TypeScript | Go | Python |
+| --- | --- | --- | --- |
+| GetDVRChapter | `GetDVRChapterDocument` | `GetDVRChapter` | `get_dvr_chapter` |
+
+### Query.dvrChapters
+
+List chapters for a DVR recording. Paginated for unbounded artifact lifetime — default 200 per page, max 1000.
+
+```graphql
+dvrChapters(
+  dvrId: ID!
+  mode: DVRChapterMode
+  intervalSeconds: Int
+  rangeStartMs: Float
+  rangeEndMs: Float
+  pageSize: Int
+  pageToken: String
+): DVRChaptersPage
+```
+
+**Returns:** `DVRChaptersPage` ([DVRChaptersPage](/builders/api-schema/media-types/#dvrchapterspage))
+
+**Arguments**
+
+- `dvrId`: `ID!` — DVR recording identifier — accepts either DVRRequest.id (UUID) or DVRRequest.dvrHash.
+- `mode`: `DVRChapterMode` ([DVRChapterMode](/builders/api-schema/shared/#dvrchaptermode)) — Restrict to chapters of this mode; null = all.
+- `intervalSeconds`: `Int` — Required when filtering by FIXED_INTERVAL.
+- `rangeStartMs`: `Float` — UTC epoch ms lower bound; 0 = no lower bound.
+- `rangeEndMs`: `Float` — UTC epoch ms upper bound; 0 = no upper bound.
+- `pageSize`: `Int` — Default 200. Max 1000.
+- `pageToken`: `String` — Keyset cursor from a previous page&#39;s nextPageToken.
+
+**SDK**
+
+| Operation | TypeScript | Go | Python |
+| --- | --- | --- | --- |
+| ListDVRChapters | `ListDVRChaptersDocument` | `ListDVRChapters` | `list_dvr_chapters` |
+
+### Query.mediaPlacementChange
+
+```graphql
+mediaPlacementChange(
+  scope: MediaPlacementScopeInput!
+  idempotencyKey: String!
+): MediaPlacementChangeResult!
+```
+
+**Returns:** `MediaPlacementChangeResult!` ([MediaPlacementChangeResult](/builders/api-schema/media-types/#mediaplacementchangeresult))
+
+**Arguments**
+
+- `scope`: `MediaPlacementScopeInput!` ([MediaPlacementScopeInput](/builders/api-schema/media-types/#mediaplacementscopeinput))
+- `idempotencyKey`: `String!`
+
+**SDK**
+
+| Operation | TypeScript | Go | Python |
+| --- | --- | --- | --- |
+| GetMediaPlacementChange | `GetMediaPlacementChangeDocument` | `GetMediaPlacementChange` | `get_media_placement_change` |
+
+### Query.mediaPlacementOptions
+
+```graphql
+mediaPlacementOptions(
+  scope: MediaPlacementScopeInput!
+  filter: MediaPlacementOptionsFilter
+  after: String
+  first: Int = 50
+): MediaPlacementOptionsResult!
+```
+
+**Returns:** `MediaPlacementOptionsResult!` ([MediaPlacementOptionsResult](/builders/api-schema/media-types/#mediaplacementoptionsresult))
+
+**Arguments**
+
+- `scope`: `MediaPlacementScopeInput!` ([MediaPlacementScopeInput](/builders/api-schema/media-types/#mediaplacementscopeinput))
+- `filter`: `MediaPlacementOptionsFilter` ([MediaPlacementOptionsFilter](/builders/api-schema/media-types/#mediaplacementoptionsfilter))
+- `after`: `String`
+- `first`: `Int` (default `50`)
+
+**SDK**
+
+| Operation | TypeScript | Go | Python |
+| --- | --- | --- | --- |
+| GetMediaPlacementOptions | `GetMediaPlacementOptionsDocument` | `GetMediaPlacementOptions` | `get_media_placement_options` |
+
+### Query.mediaPlacementPolicy
+
+Tenant-bound placement intent and actual enforcement progress.
+
+```graphql
+mediaPlacementPolicy(
+  scope: MediaPlacementScopeInput!
+): MediaPlacementPolicyResult!
+```
+
+**Returns:** `MediaPlacementPolicyResult!` ([MediaPlacementPolicyResult](/builders/api-schema/media-types/#mediaplacementpolicyresult))
+
+**Arguments**
+
+- `scope`: `MediaPlacementScopeInput!` ([MediaPlacementScopeInput](/builders/api-schema/media-types/#mediaplacementscopeinput))
+
+**SDK**
+
+| Operation | TypeScript | Go | Python |
+| --- | --- | --- | --- |
+| GetMediaPlacementPolicy | `GetMediaPlacementPolicyDocument` | `GetMediaPlacementPolicy` | `get_media_placement_policy` |
+
+### Query.mediaRetentionPolicy
+
+Tenant-default retention policy + entitlement bounds + the value the cascade (per-asset override → tenant default → tier entitlement) would resolve to today. Used by the webapp&#39;s &#34;Storage retention defaults&#34; panel to size sliders and explain the allowed range.
+
+```graphql
+mediaRetentionPolicy: MediaRetentionPolicy!
+```
+
+**Returns:** `MediaRetentionPolicy!` ([MediaRetentionPolicy](/builders/api-schema/media-types/#mediaretentionpolicy))
+
+**SDK**
+
+| Operation | TypeScript | Go | Python |
+| --- | --- | --- | --- |
+| GetMediaRetentionPolicy | `GetMediaRetentionPolicyDocument` | `GetMediaRetentionPolicy` | `get_media_retention_policy` |
+
+### Query.previewMediaPlacement
+
+Read-only evaluation. Never claims ingest, reserves capacity, or starts a source pull.
+
+```graphql
+previewMediaPlacement(
+  input: PreviewMediaPlacementInput!
+): MediaPlacementPreviewResult!
+```
+
+**Returns:** `MediaPlacementPreviewResult!` ([MediaPlacementPreviewResult](/builders/api-schema/media-types/#mediaplacementpreviewresult))
+
+**Arguments**
+
+- `input`: `PreviewMediaPlacementInput!` ([PreviewMediaPlacementInput](/builders/api-schema/media-types/#previewmediaplacementinput))
+
+**SDK**
+
+| Operation | TypeScript | Go | Python |
+| --- | --- | --- | --- |
+| GetPreviewMediaPlacement | `GetPreviewMediaPlacementDocument` | `GetPreviewMediaPlacement` | `get_preview_media_placement` |
+
+### Query.reviewClusterMediaConsentChange
+
+```graphql
+reviewClusterMediaConsentChange(
+  input: ReviewMediaCapacityConsentInput!
+): MediaPlacementReviewResult!
+```
+
+**Returns:** `MediaPlacementReviewResult!` ([MediaPlacementReviewResult](/builders/api-schema/media-types/#mediaplacementreviewresult))
+
+**Arguments**
+
+- `input`: `ReviewMediaCapacityConsentInput!` ([ReviewMediaCapacityConsentInput](/builders/api-schema/media-types/#reviewmediacapacityconsentinput))
+
+**SDK**
+
+| Operation | TypeScript | Go | Python |
+| --- | --- | --- | --- |
+| GetReviewClusterMediaConsentChange | `GetReviewClusterMediaConsentChangeDocument` | `GetReviewClusterMediaConsentChange` | `get_review_cluster_media_consent_change` |
+
+### Query.reviewMediaPlacementChange
+
+```graphql
+reviewMediaPlacementChange(
+  input: ReviewMediaPlacementChangeInput!
+): MediaPlacementReviewResult!
+```
+
+**Returns:** `MediaPlacementReviewResult!` ([MediaPlacementReviewResult](/builders/api-schema/media-types/#mediaplacementreviewresult))
+
+**Arguments**
+
+- `input`: `ReviewMediaPlacementChangeInput!` ([ReviewMediaPlacementChangeInput](/builders/api-schema/media-types/#reviewmediaplacementchangeinput))
+
+**SDK**
+
+| Operation | TypeScript | Go | Python |
+| --- | --- | --- | --- |
+| GetReviewMediaPlacementChange | `GetReviewMediaPlacementChangeDocument` | `GetReviewMediaPlacementChange` | `get_review_media_placement_change` |
+
+### Query.storageArtifactsConnection
+
+Unified storage artifact browser for the account Storage page. Search, kind filters, stream scoping, sorting, and pagination are resolved server-side against the tenant artifact registry.
+
+```graphql
+storageArtifactsConnection(
+  input: StorageArtifactsInput
+): StorageArtifactsConnection!
+```
+
+**Returns:** `StorageArtifactsConnection!` ([StorageArtifactsConnection](/builders/api-schema/media-types/#storageartifactsconnection))
+
+**Arguments**
+
+- `input`: `StorageArtifactsInput` ([StorageArtifactsInput](/builders/api-schema/media-types/#storageartifactsinput))
+
+**SDK**
+
+| Operation | TypeScript | Go | Python |
+| --- | --- | --- | --- |
+| ListArtifacts | `ListArtifactsDocument` | `ListArtifacts` | `list_artifacts` |
+
+### Query.vodAsset
+
+Fetch a single VOD asset by ID.
+
+```graphql
+vodAsset(
+  id: ID!
+): VodAsset
+```
+
+**Returns:** `VodAsset` ([VodAsset](/builders/api-schema/shared/#vodasset))
+
+**Arguments**
+
+- `id`: `ID!` — The VOD asset ID.
+
+**SDK**
+
+| Operation | TypeScript | Go | Python |
+| --- | --- | --- | --- |
+| GetVodAsset | `GetVodAssetDocument` | `GetVodAsset` | `get_vod_asset` |
+
+### Query.vodUploadStatus
+
+Read server-authoritative state of an in-flight VOD upload session. Polling complement to the upload events of tenantEvents; intended for reload-recovery and agent workflows that need a request/response shape.
+
+```graphql
+vodUploadStatus(
+  uploadId: ID!
+): VodUploadStatusResult!
+```
+
+**Returns:** `VodUploadStatusResult!` ([VodUploadStatusResult](/builders/api-schema/media-types/#voduploadstatusresult))
+
+**Arguments**
+
+- `uploadId`: `ID!` — Upload session ID returned by createVodUpload.
+
+**SDK**
+
+| Operation | TypeScript | Go | Python |
+| --- | --- | --- | --- |
+| GetVodUploadStatus | `GetVodUploadStatusDocument` | `GetVodUploadStatus` | `get_vod_upload_status` |
+
+## Mutations
+
+### Mutation.abortVodUpload
+
+Abort an in-progress VOD upload.
+
+```graphql
+abortVodUpload(
+  uploadId: ID!
+): AbortVodUploadResult!
+```
+
+**Returns:** `AbortVodUploadResult!` ([AbortVodUploadResult](/builders/api-schema/media-types/#abortvoduploadresult))
+
+**Arguments**
+
+- `uploadId`: `ID!` — The upload ID to abort.
+
+**SDK**
+
+| Operation | TypeScript | Go | Python |
+| --- | --- | --- | --- |
+| AbortVodUpload | `AbortVodUploadDocument` | `AbortVodUpload` | `abort_vod_upload` |
+
+### Mutation.applyClusterMediaConsentChange
+
+```graphql
+applyClusterMediaConsentChange(
+  input: ApplyMediaCapacityConsentInput!
+): MediaCapacityConsentChangeResult!
+```
+
+**Returns:** `MediaCapacityConsentChangeResult!` ([MediaCapacityConsentChangeResult](/builders/api-schema/media-types/#mediacapacityconsentchangeresult))
+
+**Arguments**
+
+- `input`: `ApplyMediaCapacityConsentInput!` ([ApplyMediaCapacityConsentInput](/builders/api-schema/media-types/#applymediacapacityconsentinput))
+
+**SDK**
+
+| Operation | TypeScript | Go | Python |
+| --- | --- | --- | --- |
+| ApplyClusterMediaConsentChange | `ApplyClusterMediaConsentChangeDocument` | `ApplyClusterMediaConsentChange` | `apply_cluster_media_consent_change` |
+
+### Mutation.applyMediaPlacementChange
+
+Atomically saves the requested verbs. Saved does not mean effective on every cell.
+
+```graphql
+applyMediaPlacementChange(
+  input: ApplyMediaPlacementChangeInput!
+): MediaPlacementChangeResult!
+```
+
+**Returns:** `MediaPlacementChangeResult!` ([MediaPlacementChangeResult](/builders/api-schema/media-types/#mediaplacementchangeresult))
+
+**Arguments**
+
+- `input`: `ApplyMediaPlacementChangeInput!` ([ApplyMediaPlacementChangeInput](/builders/api-schema/media-types/#applymediaplacementchangeinput))
+
+**SDK**
+
+| Operation | TypeScript | Go | Python |
+| --- | --- | --- | --- |
+| ApplyMediaPlacementChange | `ApplyMediaPlacementChangeDocument` | `ApplyMediaPlacementChange` | `apply_media_placement_change` |
+
+### Mutation.completeVodUpload
+
+Complete a VOD upload after all parts are uploaded. Triggers processing and thumbnail generation.
+
+```graphql
+completeVodUpload(
+  input: CompleteVodUploadInput!
+): CompleteVodUploadResult!
+```
+
+**Returns:** `CompleteVodUploadResult!` ([CompleteVodUploadResult](/builders/api-schema/media-types/#completevoduploadresult))
+
+**Arguments**
+
+- `input`: `CompleteVodUploadInput!` ([CompleteVodUploadInput](/builders/api-schema/media-types/#completevoduploadinput)) — Upload completion data.
+
+**SDK**
+
+| Operation | TypeScript | Go | Python |
+| --- | --- | --- | --- |
+| CompleteVodUpload | `CompleteVodUploadDocument` | `CompleteVodUpload` | `complete_vod_upload` |
+
+### Mutation.createClip
+
+Create a clip from a live or recorded stream. Clips are short video segments extracted from a stream.
+
+```graphql
+createClip(
+  input: CreateClipInput!
+): CreateClipResult!
+```
+
+**Returns:** `CreateClipResult!` ([CreateClipResult](/builders/api-schema/media-types/#createclipresult))
+
+**Arguments**
+
+- `input`: `CreateClipInput!` ([CreateClipInput](/builders/api-schema/media-types/#createclipinput)) — Clip configuration including time range.
+
+**SDK**
+
+| Operation | TypeScript | Go | Python |
+| --- | --- | --- | --- |
+| CreateClip | `CreateClipDocument` | `CreateClip` | `create_clip` |
+
+### Mutation.createVodUpload
+
+Create a new VOD upload session. Returns presigned URLs for multipart upload.
+
+```graphql
+createVodUpload(
+  input: CreateVodUploadInput!
+): CreateVodUploadResult!
+```
+
+**Returns:** `CreateVodUploadResult!` ([CreateVodUploadResult](/builders/api-schema/media-types/#createvoduploadresult))
+
+**Arguments**
+
+- `input`: `CreateVodUploadInput!` ([CreateVodUploadInput](/builders/api-schema/media-types/#createvoduploadinput)) — Upload configuration.
+
+**SDK**
+
+| Operation | TypeScript | Go | Python |
+| --- | --- | --- | --- |
+| CreateVodUpload | `CreateVodUploadDocument` | `CreateVodUpload` | `create_vod_upload` |
+
+### Mutation.deleteClip
+
+Delete a clip.
+
+```graphql
+deleteClip(
+  id: ID!
+): DeleteClipResult!
+```
+
+**Returns:** `DeleteClipResult!` ([DeleteClipResult](/builders/api-schema/media-types/#deleteclipresult))
+
+**Arguments**
+
+- `id`: `ID!` — The clip ID to delete.
+
+**SDK**
+
+| Operation | TypeScript | Go | Python |
+| --- | --- | --- | --- |
+| DeleteClip | `DeleteClipDocument` | `DeleteClip` | `delete_clip` |
+
+### Mutation.deleteDVR
+
+Delete a DVR recording.
+
+```graphql
+deleteDVR(
+  dvrHash: ID!
+): DeleteDVRResult!
+```
+
+**Returns:** `DeleteDVRResult!` ([DeleteDVRResult](/builders/api-schema/media-types/#deletedvrresult))
+
+**Arguments**
+
+- `dvrHash`: `ID!` — The DVR hash to delete.
+
+**SDK**
+
+| Operation | TypeScript | Go | Python |
+| --- | --- | --- | --- |
+| DeleteDVR | `DeleteDVRDocument` | `DeleteDVR` | `delete_dvr` |
+
+### Mutation.deleteVodAsset
+
+Delete a VOD asset.
+
+```graphql
+deleteVodAsset(
+  id: ID!
+): DeleteVodAssetResult!
+```
+
+**Returns:** `DeleteVodAssetResult!` ([DeleteVodAssetResult](/builders/api-schema/media-types/#deletevodassetresult))
+
+**Arguments**
+
+- `id`: `ID!` — The VOD asset ID to delete.
+
+**SDK**
+
+| Operation | TypeScript | Go | Python |
+| --- | --- | --- | --- |
+| DeleteVodAsset | `DeleteVodAssetDocument` | `DeleteVodAsset` | `delete_vod_asset` |
+
+### Mutation.resetMediaRetentionOverride
+
+Clear a per-asset retention override and recompute the horizon from the tenant default (or tier entitlement when no tenant default is set).
+
+```graphql
+resetMediaRetentionOverride(
+  input: ResetMediaRetentionOverrideInput!
+): UpdateMediaRetentionResult!
+```
+
+**Returns:** `UpdateMediaRetentionResult!` ([UpdateMediaRetentionResult](/builders/api-schema/media-types/#updatemediaretentionresult))
+
+**Arguments**
+
+- `input`: `ResetMediaRetentionOverrideInput!` ([ResetMediaRetentionOverrideInput](/builders/api-schema/media-types/#resetmediaretentionoverrideinput))
+
+**SDK**
+
+| Operation | TypeScript | Go | Python |
+| --- | --- | --- | --- |
+| ResetMediaRetentionOverride | `ResetMediaRetentionOverrideDocument` | `ResetMediaRetentionOverride` | `reset_media_retention_override` |
+
+### Mutation.setMediaRetentionPolicy
+
+Set the tenant per-class retention default. `targetType` picks the asset class (VOD, DVR, or CLIP). `days` is in [0, tier cap] where 0 means &#34;keep forever&#34; — only honored on uncapped (paid) tiers; Free clamps to its cap at write time. `clear: true` NULLs the column so the tenant inherits the per-class system default (VOD: keep forever; DVR/clip: 30d). The tier cap is exposed via `mediaRetentionPolicy.bounds.maxRecordingRetentionDays`.
+
+```graphql
+setMediaRetentionPolicy(
+  input: SetMediaRetentionPolicyInput!
+): SetMediaRetentionPolicyResult!
+```
+
+**Returns:** `SetMediaRetentionPolicyResult!` ([SetMediaRetentionPolicyResult](/builders/api-schema/media-types/#setmediaretentionpolicyresult))
+
+**Arguments**
+
+- `input`: `SetMediaRetentionPolicyInput!` ([SetMediaRetentionPolicyInput](/builders/api-schema/media-types/#setmediaretentionpolicyinput))
+
+**SDK**
+
+| Operation | TypeScript | Go | Python |
+| --- | --- | --- | --- |
+| SetMediaRetentionPolicy | `SetMediaRetentionPolicyDocument` | `SetMediaRetentionPolicy` | `set_media_retention_policy` |
+
+### Mutation.setStreamRetentionOverrides
+
+Write per-stream retention overrides for DVR and clip artifacts created on this stream. Unspecified input fields are left alone; passing -1 on a field clears the override (falls back to the tenant default). Values exceeding the tier cap are clamped at write time.
+
+```graphql
+setStreamRetentionOverrides(
+  input: SetStreamRetentionOverridesInput!
+): SetStreamRetentionOverridesResult!
+```
+
+**Returns:** `SetStreamRetentionOverridesResult!` ([SetStreamRetentionOverridesResult](/builders/api-schema/media-types/#setstreamretentionoverridesresult))
+
+**Arguments**
+
+- `input`: `SetStreamRetentionOverridesInput!` ([SetStreamRetentionOverridesInput](/builders/api-schema/media-types/#setstreamretentionoverridesinput))
+
+**SDK**
+
+| Operation | TypeScript | Go | Python |
+| --- | --- | --- | --- |
+| SetStreamRetentionOverrides | `SetStreamRetentionOverridesDocument` | `SetStreamRetentionOverrides` | `set_stream_retention_overrides` |
+
+### Mutation.startDVR
+
+Start DVR recording for a live stream. DVR creates one continuous archive session. Live seekback is bounded by the resolved DVR policy; archive playback uses virtual chapters.
+
+```graphql
+startDVR(
+  streamId: ID!
+): StartDVRResult!
+```
+
+**Returns:** `StartDVRResult!` ([StartDVRResult](/builders/api-schema/media-types/#startdvrresult))
+
+**Arguments**
+
+- `streamId`: `ID!` — The stream ID to start DVR for (Stream.id, Relay global ID).
+
+**SDK**
+
+| Operation | TypeScript | Go | Python |
+| --- | --- | --- | --- |
+| StartDVR | `StartDVRDocument` | `StartDVR` | `start_dvr` |
+
+### Mutation.stopDVR
+
+Stop DVR recording for a stream.
+
+```graphql
+stopDVR(
+  dvrHash: ID!
+): StopDVRResult!
+```
+
+**Returns:** `StopDVRResult!` ([StopDVRResult](/builders/api-schema/media-types/#stopdvrresult))
+
+**Arguments**
+
+- `dvrHash`: `ID!` — The DVR hash to stop.
+
+**SDK**
+
+| Operation | TypeScript | Go | Python |
+| --- | --- | --- | --- |
+| StopDVR | `StopDVRDocument` | `StopDVR` | `stop_dvr` |
+
+### Mutation.updateMediaRetention
+
+Apply a per-asset retention override on a finalized DVR recording, clip, or VOD asset (set targetType accordingly). Override beats tenant default beats tier entitlement. Active assets are rejected — retention applies post-finalize.
+
+```graphql
+updateMediaRetention(
+  input: UpdateMediaRetentionInput!
+): UpdateMediaRetentionResult!
+```
+
+**Returns:** `UpdateMediaRetentionResult!` ([UpdateMediaRetentionResult](/builders/api-schema/media-types/#updatemediaretentionresult))
+
+**Arguments**
+
+- `input`: `UpdateMediaRetentionInput!` ([UpdateMediaRetentionInput](/builders/api-schema/media-types/#updatemediaretentioninput))
+
+**SDK**
+
+| Operation | TypeScript | Go | Python |
+| --- | --- | --- | --- |
+| UpdateMediaRetention | `UpdateMediaRetentionDocument` | `UpdateMediaRetention` | `update_media_retention` |
+
+## Types
+
+- [Media and storage types](/builders/api-schema/media-types/): [AbortVodUploadResult](/builders/api-schema/media-types/#abortvoduploadresult), [ApplyMediaCapacityConsentInput](/builders/api-schema/media-types/#applymediacapacityconsentinput), [ApplyMediaPlacementChangeInput](/builders/api-schema/media-types/#applymediaplacementchangeinput), [ArtifactTrack](/builders/api-schema/media-types/#artifacttrack), [ClipCreationMode](/builders/api-schema/media-types/#clipcreationmode), [CompleteVodUploadInput](/builders/api-schema/media-types/#completevoduploadinput), [CompleteVodUploadResult](/builders/api-schema/media-types/#completevoduploadresult), [CreateClipInput](/builders/api-schema/media-types/#createclipinput), [CreateClipResult](/builders/api-schema/media-types/#createclipresult), [CreateVodUploadInput](/builders/api-schema/media-types/#createvoduploadinput), [CreateVodUploadResult](/builders/api-schema/media-types/#createvoduploadresult), [DVRChapter](/builders/api-schema/media-types/#dvrchapter), [DVRChapterRef](/builders/api-schema/media-types/#dvrchapterref), [DVRChapterState](/builders/api-schema/media-types/#dvrchapterstate), [DVRChaptersPage](/builders/api-schema/media-types/#dvrchapterspage), [DVRRequest](/builders/api-schema/media-types/#dvrrequest), [DeleteClipResult](/builders/api-schema/media-types/#deleteclipresult), [DeleteDVRResult](/builders/api-schema/media-types/#deletedvrresult), [DeleteVodAssetResult](/builders/api-schema/media-types/#deletevodassetresult), [MediaCapacityConsent](/builders/api-schema/media-types/#mediacapacityconsent), [MediaCapacityConsentChange](/builders/api-schema/media-types/#mediacapacityconsentchange), [MediaCapacityConsentChangeResult](/builders/api-schema/media-types/#mediacapacityconsentchangeresult), [MediaCapacityConsentResult](/builders/api-schema/media-types/#mediacapacityconsentresult), [MediaPlacementActions](/builders/api-schema/media-types/#mediaplacementactions), [MediaPlacementAllow](/builders/api-schema/media-types/#mediaplacementallow), [MediaPlacementAllowInput](/builders/api-schema/media-types/#mediaplacementallowinput), [MediaPlacementCandidateExplanation](/builders/api-schema/media-types/#mediaplacementcandidateexplanation), [MediaPlacementChange](/builders/api-schema/media-types/#mediaplacementchange), [MediaPlacementChangeResult](/builders/api-schema/media-types/#mediaplacementchangeresult), [MediaPlacementCharging](/builders/api-schema/media-types/#mediaplacementcharging), [MediaPlacementClass](/builders/api-schema/media-types/#mediaplacementclass), [MediaPlacementConstraints](/builders/api-schema/media-types/#mediaplacementconstraints), [MediaPlacementConstraintsInput](/builders/api-schema/media-types/#mediaplacementconstraintsinput), [MediaPlacementCoordinatesInput](/builders/api-schema/media-types/#mediaplacementcoordinatesinput), [MediaPlacementDifference](/builders/api-schema/media-types/#mediaplacementdifference), [MediaPlacementEffectivePolicy](/builders/api-schema/media-types/#mediaplacementeffectivepolicy), [MediaPlacementError](/builders/api-schema/media-types/#mediaplacementerror), [MediaPlacementErrorCode](/builders/api-schema/media-types/#mediaplacementerrorcode), [MediaPlacementFeatures](/builders/api-schema/media-types/#mediaplacementfeatures), [MediaPlacementFieldError](/builders/api-schema/media-types/#mediaplacementfielderror), [MediaPlacementGroup](/builders/api-schema/media-types/#mediaplacementgroup), [MediaPlacementGroupInput](/builders/api-schema/media-types/#mediaplacementgroupinput), [MediaPlacementImpact](/builders/api-schema/media-types/#mediaplacementimpact), [MediaPlacementOption](/builders/api-schema/media-types/#mediaplacementoption), [MediaPlacementOptionKind](/builders/api-schema/media-types/#mediaplacementoptionkind), [MediaPlacementOptionsConnection](/builders/api-schema/media-types/#mediaplacementoptionsconnection), [MediaPlacementOptionsFilter](/builders/api-schema/media-types/#mediaplacementoptionsfilter), [MediaPlacementOptionsResult](/builders/api-schema/media-types/#mediaplacementoptionsresult), [MediaPlacementOrder](/builders/api-schema/media-types/#mediaplacementorder), [MediaPlacementPolicyResult](/builders/api-schema/media-types/#mediaplacementpolicyresult), [MediaPlacementPolicyState](/builders/api-schema/media-types/#mediaplacementpolicystate), [MediaPlacementPreferences](/builders/api-schema/media-types/#mediaplacementpreferences), [MediaPlacementPreferencesInput](/builders/api-schema/media-types/#mediaplacementpreferencesinput), [MediaPlacementPreview](/builders/api-schema/media-types/#mediaplacementpreview), [MediaPlacementPreviewResult](/builders/api-schema/media-types/#mediaplacementpreviewresult), [MediaPlacementPrice](/builders/api-schema/media-types/#mediaplacementprice), [MediaPlacementRecipient](/builders/api-schema/media-types/#mediaplacementrecipient), [MediaPlacementReview](/builders/api-schema/media-types/#mediaplacementreview), [MediaPlacementReviewResult](/builders/api-schema/media-types/#mediaplacementreviewresult), [MediaPlacementRollout](/builders/api-schema/media-types/#mediaplacementrollout), [MediaPlacementRolloutStatus](/builders/api-schema/media-types/#mediaplacementrolloutstatus), [MediaPlacementRules](/builders/api-schema/media-types/#mediaplacementrules), [MediaPlacementRulesInput](/builders/api-schema/media-types/#mediaplacementrulesinput), [MediaPlacementScope](/builders/api-schema/media-types/#mediaplacementscope), [MediaPlacementScopeInput](/builders/api-schema/media-types/#mediaplacementscopeinput), [MediaPlacementScopeKind](/builders/api-schema/media-types/#mediaplacementscopekind), [MediaPlacementSelector](/builders/api-schema/media-types/#mediaplacementselector), [MediaPlacementSelectorInput](/builders/api-schema/media-types/#mediaplacementselectorinput), [MediaPlacementSpillover](/builders/api-schema/media-types/#mediaplacementspillover), [MediaPlacementTransition](/builders/api-schema/media-types/#mediaplacementtransition), [MediaPlacementUpdateKind](/builders/api-schema/media-types/#mediaplacementupdatekind), [MediaPlacementVerb](/builders/api-schema/media-types/#mediaplacementverb), [MediaPlacementVerbPolicy](/builders/api-schema/media-types/#mediaplacementverbpolicy), [MediaPlacementVerbUpdateInput](/builders/api-schema/media-types/#mediaplacementverbupdateinput), [MediaPlacementWarning](/builders/api-schema/media-types/#mediaplacementwarning), [MediaPlacementWarningSeverity](/builders/api-schema/media-types/#mediaplacementwarningseverity), [MediaRetentionBounds](/builders/api-schema/media-types/#mediaretentionbounds), [MediaRetentionPolicy](/builders/api-schema/media-types/#mediaretentionpolicy), [MediaRetentionTarget](/builders/api-schema/media-types/#mediaretentiontarget), [PreviewMediaPlacementInput](/builders/api-schema/media-types/#previewmediaplacementinput), [ResetMediaRetentionOverrideInput](/builders/api-schema/media-types/#resetmediaretentionoverrideinput), [ReviewMediaCapacityConsentInput](/builders/api-schema/media-types/#reviewmediacapacityconsentinput), [ReviewMediaPlacementChangeInput](/builders/api-schema/media-types/#reviewmediaplacementchangeinput), [SetMediaRetentionPolicyInput](/builders/api-schema/media-types/#setmediaretentionpolicyinput), [SetMediaRetentionPolicyResult](/builders/api-schema/media-types/#setmediaretentionpolicyresult), [SetStreamRetentionOverridesInput](/builders/api-schema/media-types/#setstreamretentionoverridesinput), [SetStreamRetentionOverridesResult](/builders/api-schema/media-types/#setstreamretentionoverridesresult), [SortDirection](/builders/api-schema/media-types/#sortdirection), [StartDVRResult](/builders/api-schema/media-types/#startdvrresult), [StopDVRResult](/builders/api-schema/media-types/#stopdvrresult), [StorageArtifact](/builders/api-schema/media-types/#storageartifact), [StorageArtifactKindCounts](/builders/api-schema/media-types/#storageartifactkindcounts), [StorageArtifactSortField](/builders/api-schema/media-types/#storageartifactsortfield), [StorageArtifactsConnection](/builders/api-schema/media-types/#storageartifactsconnection), [StorageArtifactsInput](/builders/api-schema/media-types/#storageartifactsinput), [UpdateMediaRetentionInput](/builders/api-schema/media-types/#updatemediaretentioninput), [UpdateMediaRetentionResult](/builders/api-schema/media-types/#updatemediaretentionresult), [VodUploadCompletedPart](/builders/api-schema/media-types/#voduploadcompletedpart), [VodUploadPart](/builders/api-schema/media-types/#voduploadpart), [VodUploadSession](/builders/api-schema/media-types/#voduploadsession), [VodUploadStatus](/builders/api-schema/media-types/#voduploadstatus), [VodUploadStatusResult](/builders/api-schema/media-types/#voduploadstatusresult), [VodUploadedPart](/builders/api-schema/media-types/#voduploadedpart)

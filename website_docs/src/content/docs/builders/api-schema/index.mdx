@@ -1,21 +1,34 @@
 ---
 title: GraphQL schema reference
-description: Generated public GraphQL fields and types.
+description: Generated public GraphQL fields and types, by domain.
+sidebar:
+  order: 0
 ---
 
-Generated from `pkg/graphql/schema.graphql` by `make generate-graphql-reference`. This reference covers GraphQL fields available to tenant and public clients. Operator-only and service-token-only entry points are excluded. A field can still require a token, a role, ownership, or a product capability; read its description and the [authentication guide](/builders/api-reference/#authentication).
+Generated from the public schema [`pkg/graphql/public/schema.public.graphql`](https://github.com/Livepeer-FrameWorks/monorepo/blob/master/pkg/graphql/public/schema.public.graphql) by `make generate-graphql-reference`. This reference covers GraphQL fields available to tenant and public clients. Operator-only and service-token-only fields, marked `@internal` in `pkg/graphql/schema.graphql`, are not part of the public schema. A field can still require a token, a role, ownership, or a product capability; read its description and the [authentication guide](/builders/api-reference/#authentication).
 
-**SDK contract:** A field marked **Typed SDK document** has a named operation in the TypeScript, Go, and Python SDKs. Only that document and the schema elements it selects are checked by `make verify-api-compat` and `make verify-schema-compat`. Other fields are callable through raw GraphQL, but do not carry that SDK compatibility promise. See [SDK versions](/builders/sdks/#versions).
+## Domains
 
-## Operations
+| Domain | Queries | Mutations | Subscriptions | Types |
+| --- | --- | --- | --- | --- |
+| [Streams](/builders/api-schema/streams/) | 6 | 9 | 0 | 26 |
+| [Media and storage](/builders/api-schema/media/) | 15 | 15 | 0 | 103 |
+| [Access and playback](/builders/api-schema/access/) | 4 | 6 | 0 | 30 |
+| [Live subscriptions](/builders/api-schema/live/) | 0 | 0 | 13 | 58 |
+| [Analytics](/builders/api-schema/analytics/) | 1 | 0 | 0 | 122 |
+| [Webhooks](/builders/api-schema/webhooks/) | 5 | 9 | 0 | 24 |
+| [Incidents](/builders/api-schema/incidents/) | 2 | 3 | 0 | 7 |
+| [Account and tenant](/builders/api-schema/account/) | 1 | 5 | 0 | 14 |
+| [Billing and usage](/builders/api-schema/billing/) | 13 | 12 | 0 | 61 |
+| [Clusters and infrastructure](/builders/api-schema/clusters/) | 25 | 16 | 0 | 58 |
+| [Platform](/builders/api-schema/platform/) | 4 | 0 | 0 | 11 |
+| [Skipper](/builders/api-schema/skipper/) | 5 | 3 | 0 | 6 |
+| [Support conversations](/builders/api-schema/support/) | 3 | 2 | 0 | 8 |
+| [Shared types](/builders/api-schema/shared/) | – | – | – | 69 |
 
-- [Queries (84)](/builders/api-schema/queries/)
-- [Mutations (81)](/builders/api-schema/mutations/)
-- [Subscriptions (13)](/builders/api-schema/subscriptions/)
+## How to read this reference
 
-## Types
-
-- [Types A-F (172)](/builders/api-schema/types-a-f/)
-- [Types G-L (39)](/builders/api-schema/types-g-l/)
-- [Types M-R (176)](/builders/api-schema/types-m-r/)
-- [Types S-Z (214)](/builders/api-schema/types-s-z/)
+- Each domain page lists its root queries, mutations, and subscriptions, then the types that only that domain's root fields reach. Types reached from two or more domains are on [Shared types](/builders/api-schema/shared/).
+- A root field shows its GraphQL signature, return type, arguments with defaults, description, and deprecation. Every type name links to its definition.
+- **Experimental until vX.Y.Z** marks a field that is public but not stable yet: it graduates or is removed by that platform release, and it is exempt from the schema compatibility check until then.
+- **SDK** lists the generated operations that select a root field, with the TypeScript document, Go function, and Python method names. Python generates subscriptions in its async client only. Every root field that is not deprecated has one; a deprecated field is reachable through each SDK's raw GraphQL client. See the [SDK guide](/builders/sdks/).

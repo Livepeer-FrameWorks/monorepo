@@ -386,15 +386,19 @@ req.Header.Set("Authorization", "Bearer YOUR_TOKEN")
 resp, _ := http.DefaultClient.Do(req)
 ```
 
-For TypeScript, Go, and Python, the [SDKs](/builders/sdks) ship typed operations for streams,
-media, uploads, playback access, push targets, developer tokens, usage, and events. For other
-languages, use any GraphQL client or generate typed bindings from the schema.
+For TypeScript, Go, and Python, the [SDKs](/builders/sdks) ship a generated typed operation for
+every public root field that is not deprecated and every argument-taking field below `Query`. For
+other languages, use any GraphQL client or generate typed bindings from the
+[public schema](https://github.com/Livepeer-FrameWorks/monorepo/blob/master/pkg/graphql/public/schema.public.graphql).
 
 ## Schema Reference
 
 Browse the [generated GraphQL schema reference](/builders/api-schema/) for public entry points,
-arguments, return types, descriptions, and deprecations. It labels fields with typed SDK
-operation documents. Operator-only and service-token-only entry points are excluded.
+arguments, return types, descriptions, and deprecations. It has one page per domain (for example
+[Streams](/builders/api-schema/streams/), [Media and storage](/builders/api-schema/media/), and
+[Analytics](/builders/api-schema/analytics/)) plus a [Shared types](/builders/api-schema/shared/)
+page, and lists the SDK operation names for each root field. Operator-only and service-token-only
+entry points are excluded.
 
 The live schema is also available via introspection:
 

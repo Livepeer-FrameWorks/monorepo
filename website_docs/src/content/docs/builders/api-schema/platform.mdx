@@ -1,0 +1,215 @@
+---
+title: Platform
+description: Platform in the generated public GraphQL reference.
+sidebar:
+  order: 16
+---
+
+[GraphQL schema reference](/builders/api-schema/) · [API guide](/builders/api-reference/) · [SDKs](/builders/sdks/)
+
+Server info, capabilities, network status, and global object lookup by ID.
+
+Types used by more than one domain are on [Shared types](/builders/api-schema/shared/).
+
+## Queries
+
+### Query.capabilities
+
+What the current tenant can use, built only from gates the platform enforces. Describes enforcement; it never grants access itself.
+
+```graphql
+capabilities: Capabilities!
+```
+
+**Returns:** `Capabilities!` ([Capabilities](/builders/api-schema/platform/#capabilities))
+
+**SDK**
+
+| Operation | TypeScript | Go | Python |
+| --- | --- | --- | --- |
+| GetCapabilities | `GetCapabilitiesDocument` | `GetCapabilities` | `get_capabilities` |
+
+### Query.networkStatus
+
+Public network status: cluster topology, node counts, peer connections. No tenant data exposed. Part of public allowlist.
+
+```graphql
+networkStatus: NetworkStatus
+```
+
+**Returns:** `NetworkStatus` ([NetworkStatus](/builders/api-schema/platform/#networkstatus))
+
+**SDK**
+
+| Operation | TypeScript | Go | Python |
+| --- | --- | --- | --- |
+| GetNetworkStatus | `GetNetworkStatusDocument` | `GetNetworkStatus` | `get_network_status` |
+
+### Query.node
+
+Fetch a single node by its global ID.
+
+```graphql
+node(
+  id: ID!
+): Node
+```
+
+**Returns:** `Node` ([Node](/builders/api-schema/shared/#node))
+
+**Arguments**
+
+- `id`: `ID!` — The global ID of the node.
+
+**SDK**
+
+| Operation | TypeScript | Go | Python |
+| --- | --- | --- | --- |
+| GetNode | `GetNodeDocument` | `GetNode` | `get_node` |
+
+### Query.serverInfo
+
+Platform release and shipped product features. Readable without authentication so clients can detect what this server supports before signing in.
+
+```graphql
+serverInfo: ServerInfo!
+```
+
+**Returns:** `ServerInfo!` ([ServerInfo](/builders/api-schema/platform/#serverinfo))
+
+**SDK**
+
+| Operation | TypeScript | Go | Python |
+| --- | --- | --- | --- |
+| ServerInfo | `ServerInfoDocument` | `ServerInfo` | `server_info` |
+
+## Types
+
+### Capabilities
+
+**object**
+
+Enforced gates for the current tenant. Each section is read from the service that enforces it and cached per tenant for 30 seconds. When that service is unavailable, the last cached section is returned; without one the section is null and the response carries an error.
+
+- **tenant**: `TenantCapabilities` ([TenantCapabilities](/builders/api-schema/platform/#tenantcapabilities))
+- **clusters**: `[ClusterCapabilities!]` ([ClusterCapabilities](/builders/api-schema/platform/#clustercapabilities))
+- **observedAt**: `Time!` ([Time](/builders/api-schema/shared/#time)) — When the oldest returned section was read from its source.
+
+### ClusterCapabilities
+
+**object**
+
+A cluster the tenant is entitled to route to.
+
+- **clusterId**: `String!`
+- **clusterName**: `String!`
+- **role**: `String!` — preferred, official, or subscribed.
+- **accessLevel**: `String!` — Access level of the tenant&#39;s grant (shared, dedicated, priority).
+- **media**: `ClusterMediaCapabilities!` ([ClusterMediaCapabilities](/builders/api-schema/platform/#clustermediacapabilities))
+
+### ClusterMediaCapabilities
+
+**object**
+
+Media verbs a cluster accepts for the tenant now. Each is true only when the capacity owner&#39;s consent permits it and at least one active edge node reported the capability within the health freshness window, so it can lag by up to that window.
+
+- **ingest**: `Boolean!`
+- **playback**: `Boolean!`
+- **storage**: `Boolean!`
+- **processing**: `Boolean!`
+
+### NetworkClusterStatus
+
+**object**
+
+- **clusterId**: `String!`
+- **name**: `String!`
+- **region**: `String!`
+- **latitude**: `Float!`
+- **longitude**: `Float!`
+- **nodeCount**: `Int!`
+- **healthyNodeCount**: `Int!`
+- **peerCount**: `Int!`
+- **status**: `String!`
+- **clusterType**: `String!`
+- **shortDescription**: `String`
+- **currentStreams**: `Int!`
+- **currentViewers**: `Int!`
+- **egressMbps**: `Int!`
+- **egressCapacityMbps**: `Int!`
+- **ingressMbps**: `Int!`
+- **services**: `[String!]!`
+
+### NetworkNode
+
+**object**
+
+- **nodeId**: `String!`
+- **name**: `String!`
+- **nodeType**: `String!`
+- **latitude**: `Float!`
+- **longitude**: `Float!`
+- **status**: `String!`
+- **clusterId**: `String!`
+
+### NetworkPeerConnection
+
+**object**
+
+- **sourceCluster**: `String!`
+- **targetCluster**: `String!`
+- **connected**: `Boolean!`
+- **connectionType**: `String!`
+
+### NetworkServiceInstance
+
+**object**
+
+- **instanceId**: `String!`
+- **serviceId**: `String!`
+- **clusterId**: `String!`
+- **nodeId**: `String`
+- **status**: `String!`
+- **healthStatus**: `String!`
+
+### NetworkStatus
+
+**object**
+
+- **clusters**: `[NetworkClusterStatus!]!` ([NetworkClusterStatus](/builders/api-schema/platform/#networkclusterstatus))
+- **peerConnections**: `[NetworkPeerConnection!]!` ([NetworkPeerConnection](/builders/api-schema/platform/#networkpeerconnection))
+- **nodes**: `[NetworkNode!]!` ([NetworkNode](/builders/api-schema/platform/#networknode))
+- **serviceInstances**: `[NetworkServiceInstance!]!` ([NetworkServiceInstance](/builders/api-schema/platform/#networkserviceinstance))
+- **totalNodes**: `Int!`
+- **healthyNodes**: `Int!`
+- **updatedAt**: `Time!` ([Time](/builders/api-schema/shared/#time))
+
+### RecordingRetentionCap
+
+**object**
+
+Recording retention bound from the tenant&#39;s billing tier.
+
+- **capped**: `Boolean!` — Whether a maximum applies.
+- **maxDays**: `Int` — Maximum retention in days when capped.
+
+### ServerInfo
+
+**object**
+
+Release and shipped feature set of this server.
+
+- **version**: `String!` — Platform release version, for example v0.3.11.
+- **features**: `[String!]!` — Sorted slugs of shipped product features in the platform feature registry.
+
+### TenantCapabilities
+
+**object**
+
+Tenant-wide gates.
+
+- **platformOperator**: `Boolean!` — Whether the caller holds the platform operator grant.
+- **recordingRetention**: `RecordingRetentionCap!` ([RecordingRetentionCap](/builders/api-schema/platform/#recordingretentioncap)) — Upper bound on recording retention the tenant can set.
+- **processingCustomizable**: `Boolean!` — Whether the tenant may override the tier&#39;s processing profiles.
+- **customSubdomain**: `Boolean!` — Whether the tenant&#39;s custom subdomain alias is published.
+- **customDomain**: `Boolean!` — Whether the tenant&#39;s custom domain is published.

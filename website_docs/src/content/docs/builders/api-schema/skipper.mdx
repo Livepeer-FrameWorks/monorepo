@@ -1,0 +1,256 @@
+---
+title: Skipper
+description: Skipper in the generated public GraphQL reference.
+sidebar:
+  order: 17
+---
+
+[GraphQL schema reference](/builders/api-schema/) · [API guide](/builders/api-reference/) · [SDKs](/builders/sdks/)
+
+Skipper, the AI assistant: conversations and reports.
+
+Types used by more than one domain are on [Shared types](/builders/api-schema/shared/).
+
+## Queries
+
+### Query.skipperConversation
+
+Get a single Skipper conversation with full message history.
+
+```graphql
+skipperConversation(
+  id: ID!
+): SkipperConversation!
+```
+
+**Returns:** `SkipperConversation!` ([SkipperConversation](/builders/api-schema/skipper/#skipperconversation))
+
+**Arguments**
+
+- `id`: `ID!`
+
+**SDK**
+
+| Operation | TypeScript | Go | Python |
+| --- | --- | --- | --- |
+| GetSkipperConversation | `GetSkipperConversationDocument` | `GetSkipperConversation` | `get_skipper_conversation` |
+
+### Query.skipperConversations
+
+List Skipper AI consultant conversations for the current user.
+
+```graphql
+skipperConversations(
+  limit: Int
+  offset: Int
+): [SkipperConversationSummary!]!
+```
+
+**Returns:** `[SkipperConversationSummary!]!` ([SkipperConversationSummary](/builders/api-schema/skipper/#skipperconversationsummary))
+
+**Arguments**
+
+- `limit`: `Int`
+- `offset`: `Int`
+
+**SDK**
+
+| Operation | TypeScript | Go | Python |
+| --- | --- | --- | --- |
+| GetSkipperConversations | `GetSkipperConversationsDocument` | `GetSkipperConversations` | `get_skipper_conversations` |
+
+### Query.skipperReport
+
+Fetch a single Skipper investigation report by id. Returns null when the report does not exist or is not owned by the current tenant.
+
+```graphql
+skipperReport(
+  id: ID!
+): SkipperReport
+```
+
+**Returns:** `SkipperReport` ([SkipperReport](/builders/api-schema/skipper/#skipperreport))
+
+**Arguments**
+
+- `id`: `ID!`
+
+**SDK**
+
+| Operation | TypeScript | Go | Python |
+| --- | --- | --- | --- |
+| GetSkipperReport | `GetSkipperReportDocument` | `GetSkipperReport` | `get_skipper_report` |
+
+### Query.skipperReports
+
+List Skipper investigation reports for the current tenant. Returns newest first with read/unread status and counts.
+
+```graphql
+skipperReports(
+  limit: Int
+  offset: Int
+): SkipperReportsConnection!
+```
+
+**Returns:** `SkipperReportsConnection!` ([SkipperReportsConnection](/builders/api-schema/skipper/#skipperreportsconnection))
+
+**Arguments**
+
+- `limit`: `Int`
+- `offset`: `Int`
+
+**SDK**
+
+| Operation | TypeScript | Go | Python |
+| --- | --- | --- | --- |
+| GetSkipperReports | `GetSkipperReportsDocument` | `GetSkipperReports` | `get_skipper_reports` |
+
+### Query.skipperUnreadReportCount
+
+Get count of unread Skipper investigation reports.
+
+```graphql
+skipperUnreadReportCount: Int!
+```
+
+**Returns:** `Int!`
+
+**SDK**
+
+| Operation | TypeScript | Go | Python |
+| --- | --- | --- | --- |
+| GetSkipperUnreadReportCount | `GetSkipperUnreadReportCountDocument` | `GetSkipperUnreadReportCount` | `get_skipper_unread_report_count` |
+
+## Mutations
+
+### Mutation.deleteSkipperConversation
+
+Delete a Skipper conversation.
+
+```graphql
+deleteSkipperConversation(
+  id: ID!
+): Boolean!
+```
+
+**Returns:** `Boolean!`
+
+**Arguments**
+
+- `id`: `ID!`
+
+**SDK**
+
+| Operation | TypeScript | Go | Python |
+| --- | --- | --- | --- |
+| DeleteSkipperConversation | `DeleteSkipperConversationDocument` | `DeleteSkipperConversation` | `delete_skipper_conversation` |
+
+### Mutation.markSkipperReportsRead
+
+Mark Skipper investigation reports as read. Pass specific IDs, or omit to mark all as read. Returns the number of reports marked.
+
+```graphql
+markSkipperReportsRead(
+  ids: [ID!]
+): Int!
+```
+
+**Returns:** `Int!`
+
+**Arguments**
+
+- `ids`: `[ID!]`
+
+**SDK**
+
+| Operation | TypeScript | Go | Python |
+| --- | --- | --- | --- |
+| MarkSkipperReportsRead | `MarkSkipperReportsReadDocument` | `MarkSkipperReportsRead` | `mark_skipper_reports_read` |
+
+### Mutation.updateSkipperConversation
+
+Update the title of a Skipper conversation.
+
+```graphql
+updateSkipperConversation(
+  id: ID!
+  title: String!
+): SkipperConversationSummary!
+```
+
+**Returns:** `SkipperConversationSummary!` ([SkipperConversationSummary](/builders/api-schema/skipper/#skipperconversationsummary))
+
+**Arguments**
+
+- `id`: `ID!`
+- `title`: `String!`
+
+**SDK**
+
+| Operation | TypeScript | Go | Python |
+| --- | --- | --- | --- |
+| UpdateSkipperConversation | `UpdateSkipperConversationDocument` | `UpdateSkipperConversation` | `update_skipper_conversation` |
+
+## Types
+
+### SkipperConversation
+
+**object**
+
+- **id**: `ID!`
+- **title**: `String!`
+- **messages**: `[SkipperMessage!]!` ([SkipperMessage](/builders/api-schema/skipper/#skippermessage))
+- **createdAt**: `Time!` ([Time](/builders/api-schema/shared/#time))
+- **updatedAt**: `Time!` ([Time](/builders/api-schema/shared/#time))
+
+### SkipperConversationSummary
+
+**object**
+
+- **id**: `ID!`
+- **title**: `String!`
+- **createdAt**: `Time!` ([Time](/builders/api-schema/shared/#time))
+- **updatedAt**: `Time!` ([Time](/builders/api-schema/shared/#time))
+
+### SkipperMessage
+
+**object**
+
+- **id**: `ID!`
+- **role**: `String!`
+- **content**: `String!`
+- **confidence**: `String`
+- **sources**: `JSON` ([JSON](/builders/api-schema/shared/#json))
+- **toolsUsed**: `JSON` ([JSON](/builders/api-schema/shared/#json))
+- **confidenceBlocks**: `JSON` ([JSON](/builders/api-schema/shared/#json))
+- **tokensInput**: `Int!`
+- **tokensOutput**: `Int!`
+- **createdAt**: `Time!` ([Time](/builders/api-schema/shared/#time))
+
+### SkipperReport
+
+**object**
+
+- **id**: `ID!`
+- **trigger**: `String!`
+- **summary**: `String!`
+- **metricsReviewed**: `[String!]!`
+- **rootCause**: `String!`
+- **recommendations**: `[SkipperReportRecommendation!]!` ([SkipperReportRecommendation](/builders/api-schema/skipper/#skipperreportrecommendation))
+- **createdAt**: `Time!` ([Time](/builders/api-schema/shared/#time))
+- **readAt**: `Time` ([Time](/builders/api-schema/shared/#time))
+
+### SkipperReportRecommendation
+
+**object**
+
+- **text**: `String!`
+- **confidence**: `String!`
+
+### SkipperReportsConnection
+
+**object**
+
+- **nodes**: `[SkipperReport!]!` ([SkipperReport](/builders/api-schema/skipper/#skipperreport))
+- **totalCount**: `Int!`
+- **unreadCount**: `Int!`

@@ -1,0 +1,615 @@
+---
+title: Streams
+description: Streams in the generated public GraphQL reference.
+sidebar:
+  order: 1
+---
+
+[GraphQL schema reference](/builders/api-schema/) · [API guide](/builders/api-reference/) · [SDKs](/builders/sdks/)
+
+Live streams, stream keys, push targets, and ingest endpoint resolution.
+
+Types used by more than one domain are on [Shared types](/builders/api-schema/shared/).
+
+## Queries
+
+### Query.resolveIngestEndpoint
+
+Resolve a stream key to ingest endpoints for StreamCrafter. Returns node-specific advertised protocols. A requested protocol filters candidates before ranking; it is not permission to substitute a different protocol.
+
+```graphql
+resolveIngestEndpoint(
+  streamKey: String!
+  protocol: MediaIngestProtocol
+): IngestEndpointResponse
+```
+
+**Returns:** `IngestEndpointResponse` ([IngestEndpointResponse](/builders/api-schema/streams/#ingestendpointresponse))
+
+**Arguments**
+
+- `streamKey`: `String!` — The stream key.
+- `protocol`: `MediaIngestProtocol` ([MediaIngestProtocol](/builders/api-schema/streams/#mediaingestprotocol))
+
+**SDK**
+
+| Operation | TypeScript | Go | Python |
+| --- | --- | --- | --- |
+| ResolveIngestEndpoint | `ResolveIngestEndpointDocument` | `ResolveIngestEndpoint` | `resolve_ingest_endpoint` |
+
+### Query.stream
+
+Fetch a single stream by its global ID.
+
+```graphql
+stream(
+  id: ID!
+): Stream
+```
+
+**Returns:** `Stream` ([Stream](/builders/api-schema/shared/#stream))
+
+**Arguments**
+
+- `id`: `ID!` — The global ID of the stream.
+
+**SDK**
+
+| Operation | Selects | TypeScript | Go | Python |
+| --- | --- | --- | --- | --- |
+| GetRecentPullSourceEvents | `stream.recentPullSourceEvents` | `GetRecentPullSourceEventsDocument` | `GetRecentPullSourceEvents` | `get_recent_pull_source_events` |
+| GetStream | `stream` | `GetStreamDocument` | `GetStream` | `get_stream` |
+| ListPushTargets | `stream.pushTargets` | `ListPushTargetsDocument` | `ListPushTargets` | `list_push_targets` |
+
+### Query.streamKeysConnection
+
+List all stream keys for a specific stream.
+
+```graphql
+streamKeysConnection(
+  page: ConnectionInput
+  streamId: ID!
+): StreamKeysConnection!
+```
+
+**Returns:** `StreamKeysConnection!` ([StreamKeysConnection](/builders/api-schema/streams/#streamkeysconnection))
+
+**Arguments**
+
+- `page`: `ConnectionInput` ([ConnectionInput](/builders/api-schema/shared/#connectioninput)) — Pagination options.
+- `streamId`: `ID!` — The stream ID to list keys for (Stream.id, Relay global ID).
+
+**SDK**
+
+| Operation | TypeScript | Go | Python |
+| --- | --- | --- | --- |
+| ListStreamKeys | `ListStreamKeysDocument` | `ListStreamKeys` | `list_stream_keys` |
+
+### Query.streamingConfig
+
+Cluster-aware streaming configuration for the authenticated tenant. Returns preferred and official cluster domains for building protocol-specific URLs. Null when not authenticated or cluster routing unavailable — frontend falls back to env vars.
+
+```graphql
+streamingConfig: StreamingConfig
+```
+
+**Returns:** `StreamingConfig` ([StreamingConfig](/builders/api-schema/streams/#streamingconfig))
+
+**SDK**
+
+| Operation | TypeScript | Go | Python |
+| --- | --- | --- | --- |
+| GetStreamingConfig | `GetStreamingConfigDocument` | `GetStreamingConfig` | `get_streaming_config` |
+
+### Query.streamsConnection
+
+List all streams for the current tenant with pagination.
+
+```graphql
+streamsConnection(
+  page: ConnectionInput
+  search: String
+): StreamsConnection!
+```
+
+**Returns:** `StreamsConnection!` ([StreamsConnection](/builders/api-schema/streams/#streamsconnection))
+
+**Arguments**
+
+- `page`: `ConnectionInput` ([ConnectionInput](/builders/api-schema/shared/#connectioninput)) — Pagination options.
+- `search`: `String` — Optional server-side name search (title / internal name). Enables an account-wide picker instead of only the first page.
+
+**SDK**
+
+| Operation | TypeScript | Go | Python |
+| --- | --- | --- | --- |
+| ListStreams | `ListStreamsDocument` | `ListStreams` | `list_streams` |
+
+### Query.validateStreamKey
+
+Validate a stream key and return the associated stream info.
+
+```graphql
+validateStreamKey(
+  streamKey: String!
+): StreamValidation
+```
+
+**Returns:** `StreamValidation` ([StreamValidation](/builders/api-schema/streams/#streamvalidation))
+
+**Arguments**
+
+- `streamKey`: `String!` — The stream key to validate.
+
+**SDK**
+
+| Operation | TypeScript | Go | Python |
+| --- | --- | --- | --- |
+| GetValidateStreamKey | `GetValidateStreamKeyDocument` | `GetValidateStreamKey` | `get_validate_stream_key` |
+
+## Mutations
+
+### Mutation.createPushTarget
+
+Add a multistream push target to a stream. When the stream goes live, it will automatically push to all enabled targets.
+
+```graphql
+createPushTarget(
+  streamId: ID!
+  input: CreatePushTargetInput!
+): PushTarget!
+```
+
+**Returns:** `PushTarget!` ([PushTarget](/builders/api-schema/shared/#pushtarget))
+
+**Arguments**
+
+- `streamId`: `ID!` — The stream ID (Stream.id, Relay global ID).
+- `input`: `CreatePushTargetInput!` ([CreatePushTargetInput](/builders/api-schema/streams/#createpushtargetinput)) — Push target configuration.
+
+**SDK**
+
+| Operation | TypeScript | Go | Python |
+| --- | --- | --- | --- |
+| CreatePushTarget | `CreatePushTargetDocument` | `CreatePushTarget` | `create_push_target` |
+
+### Mutation.createStream
+
+Create a new stream for live broadcasting.
+
+```graphql
+createStream(
+  input: CreateStreamInput!
+): CreateStreamResult!
+```
+
+**Returns:** `CreateStreamResult!` ([CreateStreamResult](/builders/api-schema/streams/#createstreamresult))
+
+**Arguments**
+
+- `input`: `CreateStreamInput!` ([CreateStreamInput](/builders/api-schema/streams/#createstreaminput)) — Stream configuration.
+
+**SDK**
+
+| Operation | TypeScript | Go | Python |
+| --- | --- | --- | --- |
+| CreateStream | `CreateStreamDocument` | `CreateStream` | `create_stream` |
+
+### Mutation.createStreamKey
+
+Create an additional stream key for a stream.
+
+```graphql
+createStreamKey(
+  streamId: ID!
+  input: CreateStreamKeyInput!
+): CreateStreamKeyResult!
+```
+
+**Returns:** `CreateStreamKeyResult!` ([CreateStreamKeyResult](/builders/api-schema/streams/#createstreamkeyresult))
+
+**Arguments**
+
+- `streamId`: `ID!` — The stream ID (Stream.id, Relay global ID).
+- `input`: `CreateStreamKeyInput!` ([CreateStreamKeyInput](/builders/api-schema/streams/#createstreamkeyinput)) — Stream key configuration.
+
+**SDK**
+
+| Operation | TypeScript | Go | Python |
+| --- | --- | --- | --- |
+| CreateStreamKey | `CreateStreamKeyDocument` | `CreateStreamKey` | `create_stream_key` |
+
+### Mutation.deletePushTarget
+
+Delete a multistream push target.
+
+```graphql
+deletePushTarget(
+  id: ID!
+): DeleteSuccess!
+```
+
+**Returns:** `DeleteSuccess!` ([DeleteSuccess](/builders/api-schema/shared/#deletesuccess))
+
+**Arguments**
+
+- `id`: `ID!` — The push target ID.
+
+**SDK**
+
+| Operation | TypeScript | Go | Python |
+| --- | --- | --- | --- |
+| DeletePushTarget | `DeletePushTargetDocument` | `DeletePushTarget` | `delete_push_target` |
+
+### Mutation.deleteStream
+
+Delete a stream and all associated data.
+
+```graphql
+deleteStream(
+  id: ID!
+): DeleteStreamResult!
+```
+
+**Returns:** `DeleteStreamResult!` ([DeleteStreamResult](/builders/api-schema/streams/#deletestreamresult))
+
+**Arguments**
+
+- `id`: `ID!` — The stream ID to delete.
+
+**SDK**
+
+| Operation | TypeScript | Go | Python |
+| --- | --- | --- | --- |
+| DeleteStream | `DeleteStreamDocument` | `DeleteStream` | `delete_stream` |
+
+### Mutation.deleteStreamKey
+
+Delete a stream key.
+
+```graphql
+deleteStreamKey(
+  streamId: ID!
+  keyId: ID!
+): DeleteStreamKeyResult!
+```
+
+**Returns:** `DeleteStreamKeyResult!` ([DeleteStreamKeyResult](/builders/api-schema/streams/#deletestreamkeyresult))
+
+**Arguments**
+
+- `streamId`: `ID!` — The stream ID (Stream.id, Relay global ID).
+- `keyId`: `ID!` — The key ID to delete.
+
+**SDK**
+
+| Operation | TypeScript | Go | Python |
+| --- | --- | --- | --- |
+| DeleteStreamKey | `DeleteStreamKeyDocument` | `DeleteStreamKey` | `delete_stream_key` |
+
+### Mutation.refreshStreamKey
+
+Generate a new stream key, invalidating the old one.
+
+```graphql
+refreshStreamKey(
+  id: ID!
+): UpdateStreamResult!
+```
+
+**Returns:** `UpdateStreamResult!` ([UpdateStreamResult](/builders/api-schema/streams/#updatestreamresult))
+
+**Arguments**
+
+- `id`: `ID!` — The stream ID.
+
+**SDK**
+
+| Operation | TypeScript | Go | Python |
+| --- | --- | --- | --- |
+| RefreshStreamKey | `RefreshStreamKeyDocument` | `RefreshStreamKey` | `refresh_stream_key` |
+
+### Mutation.updatePushTarget
+
+Update a multistream push target.
+
+```graphql
+updatePushTarget(
+  id: ID!
+  input: UpdatePushTargetInput!
+): PushTarget!
+```
+
+**Returns:** `PushTarget!` ([PushTarget](/builders/api-schema/shared/#pushtarget))
+
+**Arguments**
+
+- `id`: `ID!` — The push target ID.
+- `input`: `UpdatePushTargetInput!` ([UpdatePushTargetInput](/builders/api-schema/streams/#updatepushtargetinput)) — Fields to update.
+
+**SDK**
+
+| Operation | TypeScript | Go | Python |
+| --- | --- | --- | --- |
+| UpdatePushTarget | `UpdatePushTargetDocument` | `UpdatePushTarget` | `update_push_target` |
+
+### Mutation.updateStream
+
+Update an existing stream&#39;s configuration.
+
+```graphql
+updateStream(
+  id: ID!
+  input: UpdateStreamInput!
+): UpdateStreamResult!
+```
+
+**Returns:** `UpdateStreamResult!` ([UpdateStreamResult](/builders/api-schema/streams/#updatestreamresult))
+
+**Arguments**
+
+- `id`: `ID!` — The stream ID.
+- `input`: `UpdateStreamInput!` ([UpdateStreamInput](/builders/api-schema/streams/#updatestreaminput)) — Updated stream configuration.
+
+**SDK**
+
+| Operation | TypeScript | Go | Python |
+| --- | --- | --- | --- |
+| UpdateStream | `UpdateStreamDocument` | `UpdateStream` | `update_stream` |
+
+## Types
+
+### CreatePushTargetInput
+
+**input_object**
+
+- **platform**: `String` — Platform identifier (twitch, youtube, facebook, kick, x, custom).
+- **name**: `String!` — User-friendly label for this target.
+- **targetUri**: `String!` — Full target URI including stream key (e.g., rtmp://live.twitch.tv/app/live_xxxx).
+
+### CreateStreamInput
+
+**input_object**
+
+Input for creating a new live stream.
+
+- **name**: `String!` — Human-readable name for the stream.
+- **description**: `String` — Optional description for the stream.
+- **record**: `Boolean` — Enable DVR recording (default: false).
+- **ingestMode**: `IngestMode` ([IngestMode](/builders/api-schema/shared/#ingestmode)) — Source ingest model. Defaults to PUSH.
+- **pullSource**: `PullSourceInput` ([PullSourceInput](/builders/api-schema/streams/#pullsourceinput)) — Pull-source configuration. Required when ingestMode is PULL.
+- **sourceLocation**: `SourceLocationInput` ([SourceLocationInput](/builders/api-schema/streams/#sourcelocationinput)) — Where the source may be ingested. Omitted means ANY. Required for private and multicast pull sources.
+
+### CreateStreamKeyInput
+
+**input_object**
+
+Input for creating an additional stream key.
+
+- **name**: `String!` — Human-readable name for the key.
+
+### CreateStreamKeyResult
+
+**union**
+
+- Member: [StreamKey](/builders/api-schema/streams/#streamkey)
+- Member: [ValidationError](/builders/api-schema/shared/#validationerror)
+- Member: [NotFoundError](/builders/api-schema/shared/#notfounderror)
+- Member: [AuthError](/builders/api-schema/shared/#autherror)
+
+### CreateStreamResult
+
+**union**
+
+- Member: [Stream](/builders/api-schema/shared/#stream)
+- Member: [ValidationError](/builders/api-schema/shared/#validationerror)
+- Member: [AuthError](/builders/api-schema/shared/#autherror)
+
+### DeleteStreamKeyResult
+
+**union**
+
+- Member: [DeleteSuccess](/builders/api-schema/shared/#deletesuccess)
+- Member: [NotFoundError](/builders/api-schema/shared/#notfounderror)
+- Member: [AuthError](/builders/api-schema/shared/#autherror)
+
+### DeleteStreamResult
+
+**union**
+
+- Member: [DeleteSuccess](/builders/api-schema/shared/#deletesuccess)
+- Member: [NotFoundError](/builders/api-schema/shared/#notfounderror)
+- Member: [AuthError](/builders/api-schema/shared/#autherror)
+
+### IngestEndpoint
+
+**object**
+
+- **nodeId**: `String!`
+- **baseUrl**: `String!`
+- **whipUrl**: `String`
+- **rtmpUrl**: `String`
+- **srtUrl**: `String`
+- **region**: `String`
+- **loadScore**: `Float`
+- **kind**: `IngestEndpointKind!` ([IngestEndpointKind](/builders/api-schema/streams/#ingestendpointkind))
+- **clusterId**: `String!`
+
+### IngestEndpointKind
+
+**enum**
+
+- `INGEST_ENDPOINT_KIND_UNSPECIFIED`
+- `INGEST_ENDPOINT_KIND_TENANT_ALIAS`
+- `INGEST_ENDPOINT_KIND_ROOT_POOL`
+- `INGEST_ENDPOINT_KIND_CLUSTER_POOL`
+- `INGEST_ENDPOINT_KIND_NODE_SPECIFIC`
+
+### IngestEndpointResponse
+
+**object**
+
+- **primary**: `IngestEndpoint!` ([IngestEndpoint](/builders/api-schema/streams/#ingestendpoint))
+- **fallbacks**: `[IngestEndpoint!]!` ([IngestEndpoint](/builders/api-schema/streams/#ingestendpoint))
+- **metadata**: `IngestMetadata` ([IngestMetadata](/builders/api-schema/streams/#ingestmetadata))
+
+### IngestMetadata
+
+**object**
+
+- **streamId**: `ID!`
+- **stream**: `Stream` ([Stream](/builders/api-schema/shared/#stream))
+- **streamKey**: `String!`
+- **tenantId**: `String!`
+- **recordingEnabled**: `Boolean!`
+- **title**: `String`
+- **description**: `String`
+
+### MediaIngestProtocol
+
+**enum**
+
+- `WHIP`
+- `RTMP`
+- `SRT`
+
+### PullSourceInput
+
+**input_object**
+
+- **sourceUri**: `String` — Upstream RTSP, SRT, RIST, HLS, DTSC, or TS source URI. Required when creating or replacing a pull source.
+- **enabled**: `Boolean` — Whether the media plane may pull from the source.
+
+### SourceLocationClusterInput
+
+**input_object**
+
+- **clusterId**: `ID!`
+- **nodeIds**: `[ID!]!` — Nodes of this cluster the source may run on. Empty means any node of the cluster. Only nodes of clusters the tenant owns are accepted.
+
+### SourceLocationInput
+
+**input_object**
+
+Replaces the stream&#39;s own ingest restriction. Private and multicast pull sources require RESTRICTED with clusters that allow private pull sources.
+
+- **mode**: `SourceLocationMode!` ([SourceLocationMode](/builders/api-schema/shared/#sourcelocationmode)) — ANY or RESTRICTED. CUSTOM is rejected.
+- **clusters**: `[SourceLocationClusterInput!]!` ([SourceLocationClusterInput](/builders/api-schema/streams/#sourcelocationclusterinput)) — Required and non-empty for RESTRICTED; must be empty for ANY.
+- **avoidNodeIds**: `[ID!]!` — Nodes the source must never run on. Only nodes of clusters the tenant owns are accepted.
+
+### StreamEdge
+
+**object**
+
+- **cursor**: `String!`
+- **node**: `Stream!` ([Stream](/builders/api-schema/shared/#stream))
+
+### StreamKey
+
+**object**
+
+- **id**: `ID!`
+- **streamId**: `ID!`
+- **stream**: `Stream` ([Stream](/builders/api-schema/shared/#stream))
+- **keyValue**: `String!`
+- **keyName**: `String`
+- **isActive**: `Boolean!`
+- **lastUsedAt**: `Time` ([Time](/builders/api-schema/shared/#time))
+- **createdAt**: `Time!` ([Time](/builders/api-schema/shared/#time))
+
+### StreamKeyEdge
+
+**object**
+
+- **cursor**: `String!`
+- **node**: `StreamKey!` ([StreamKey](/builders/api-schema/streams/#streamkey))
+
+### StreamKeysConnection
+
+**object**
+
+- **edges**: `[StreamKeyEdge!]!` ([StreamKeyEdge](/builders/api-schema/streams/#streamkeyedge))
+- **nodes**: `[StreamKey!]!` ([StreamKey](/builders/api-schema/streams/#streamkey))
+- **pageInfo**: `PageInfo!` ([PageInfo](/builders/api-schema/shared/#pageinfo))
+- **totalCount**: `Int!`
+
+### StreamValidation
+
+**object**
+
+- **status**: `ValidationStatus!` ([ValidationStatus](/builders/api-schema/streams/#validationstatus))
+- **streamKey**: `String!`
+- **error**: `String`
+
+### StreamingConfig
+
+**object**
+
+- **preferredClusterLabel**: `String`
+- **ingestDomain**: `String`
+- **edgeDomain**: `String`
+- **playDomain**: `String`
+- **officialClusterLabel**: `String`
+- **officialIngestDomain**: `String`
+- **officialEdgeDomain**: `String`
+- **officialPlayDomain**: `String`
+- **globalIngestDomain**: `String`
+- **globalEdgeDomain**: `String`
+- **globalPlayDomain**: `String`
+- **globalLivepeerDomain**: `String`
+- **tenantIngestDomain**: `String`
+- **tenantEdgeDomain**: `String`
+- **tenantPlayDomain**: `String`
+- **tenantLivepeerDomain**: `String`
+- **srtPort**: `Int`
+- **rtmpPort**: `Int`
+
+### StreamsConnection
+
+**object**
+
+- **edges**: `[StreamEdge!]!` ([StreamEdge](/builders/api-schema/streams/#streamedge))
+- **nodes**: `[Stream!]!` ([Stream](/builders/api-schema/shared/#stream))
+- **pageInfo**: `PageInfo!` ([PageInfo](/builders/api-schema/shared/#pageinfo))
+- **totalCount**: `Int!`
+
+### UpdatePushTargetInput
+
+**input_object**
+
+- **name**: `String` — Updated label.
+- **targetUri**: `String` — Updated target URI.
+- **isEnabled**: `Boolean` — Enable or disable this target.
+
+### UpdateStreamInput
+
+**input_object**
+
+Input for updating an existing stream. All fields are optional - only provided fields are updated.
+
+- **name**: `String` — New name for the stream.
+- **description**: `String` — New description for the stream.
+- **record**: `Boolean` — Enable or disable DVR recording.
+- **ingestMode**: `IngestMode` ([IngestMode](/builders/api-schema/shared/#ingestmode)) — Ingest model cannot be changed after create; sending a different value returns a validation error.
+- **pullSource**: `PullSourceInput` ([PullSourceInput](/builders/api-schema/streams/#pullsourceinput)) — Update the pull-source configuration for an existing pull stream.
+- **sourceLocation**: `SourceLocationInput` ([SourceLocationInput](/builders/api-schema/streams/#sourcelocationinput)) — Replace where the source may be ingested. Omitted keeps the current location. Rejected for managed streams.
+- **dvrChapterMode**: `DVRChapterMode` ([DVRChapterMode](/builders/api-schema/shared/#dvrchaptermode)) — Historical chapter rotation mode. Snapshotted onto the DVR artifact at StartDVR; changes take effect on the next recording, not in-flight. NONE means rolling DVR playback only: recording still runs, but no finalized chapter artifacts are produced for historical replay.
+- **dvrChapterIntervalSeconds**: `Int` — Chapter interval in seconds. Required when dvrChapterMode = FIXED_INTERVAL. Minimum 3600 (1 hour).
+- **monitoring**: `MonitoringToggle` ([MonitoringToggle](/builders/api-schema/shared/#monitoringtoggle)) — Per-stream Skipper monitoring override. INHERIT follows the tenant tier.
+
+### UpdateStreamResult
+
+**union**
+
+- Member: [Stream](/builders/api-schema/shared/#stream)
+- Member: [ValidationError](/builders/api-schema/shared/#validationerror)
+- Member: [NotFoundError](/builders/api-schema/shared/#notfounderror)
+- Member: [AuthError](/builders/api-schema/shared/#autherror)
+
+### ValidationStatus
+
+**enum**
+
+- `VALID`
+- `INVALID`
+- `ERROR`

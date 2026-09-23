@@ -1,0 +1,913 @@
+---
+title: Live subscriptions
+description: Live subscriptions in the generated public GraphQL reference.
+sidebar:
+  order: 5
+---
+
+[GraphQL schema reference](/builders/api-schema/) · [API guide](/builders/api-reference/) · [SDKs](/builders/sdks/)
+
+Every GraphQL subscription: stream, viewer, storage, processing, incident, and tenant event feeds.
+
+Types used by more than one domain are on [Shared types](/builders/api-schema/shared/).
+
+## Subscriptions
+
+### Subscription.liveConnectionEvents
+
+Individual viewer connection/disconnection events. High volume - filter by streamId in production for performance.
+
+```graphql
+liveConnectionEvents(
+  streamId: ID
+): ConnectionEvent!
+```
+
+**Returns:** `ConnectionEvent!` ([ConnectionEvent](/builders/api-schema/shared/#connectionevent))
+
+**Arguments**
+
+- `streamId`: `ID`
+
+**SDK**
+
+| Operation | TypeScript | Go | Python |
+| --- | --- | --- | --- |
+| LiveConnectionEvents | `LiveConnectionEventsDocument` | `SubscribeLiveConnectionEvents` | `live_connection_events` (async) |
+
+### Subscription.liveConversationUpdates
+
+Real-time conversation lifecycle updates (created/updated/status changes). Optionally filter by conversationId.
+
+```graphql
+liveConversationUpdates(
+  conversationId: ID
+): Conversation!
+```
+
+**Returns:** `Conversation!` ([Conversation](/builders/api-schema/shared/#conversation))
+
+**Arguments**
+
+- `conversationId`: `ID` — The conversation ID to watch (optional).
+
+**SDK**
+
+| Operation | TypeScript | Go | Python |
+| --- | --- | --- | --- |
+| LiveConversationUpdates | `LiveConversationUpdatesDocument` | `SubscribeLiveConversationUpdates` | `live_conversation_updates` (async) |
+
+### Subscription.liveFirehose
+
+Firehose subscription receiving ALL tenant events in a single stream. Combines stream, analytics, and system events for unified dashboards. Use the type and channel fields to filter/route events client-side.
+
+```graphql
+liveFirehose: TenantEvent!
+```
+
+**Returns:** `TenantEvent!` ([TenantEvent](/builders/api-schema/live/#tenantevent))
+
+**SDK**
+
+| Operation | TypeScript | Go | Python |
+| --- | --- | --- | --- |
+| LiveFirehose | `LiveFirehoseDocument` | `SubscribeLiveFirehose` | `live_firehose` (async) |
+
+### Subscription.liveIncidentUpdates
+
+Changes to incidents on clusters the current tenant owns. For platform operators, changes to every incident: platform scope and every tenant.
+
+```graphql
+liveIncidentUpdates: IncidentUpdatedEvent!
+```
+
+**Returns:** `IncidentUpdatedEvent!` ([IncidentUpdatedEvent](/builders/api-schema/live/#incidentupdatedevent))
+
+**SDK**
+
+| Operation | TypeScript | Go | Python |
+| --- | --- | --- | --- |
+| LiveIncidentUpdates | `LiveIncidentUpdatesDocument` | `SubscribeLiveIncidentUpdates` | `live_incident_updates` (async) |
+
+### Subscription.liveMessageReceived
+
+Real-time message events for a conversation. Fires when agent replies are received.
+
+```graphql
+liveMessageReceived(
+  conversationId: ID!
+): Message!
+```
+
+**Returns:** `Message!` ([Message](/builders/api-schema/shared/#message))
+
+**Arguments**
+
+- `conversationId`: `ID!` — The conversation ID to watch.
+
+**SDK**
+
+| Operation | TypeScript | Go | Python |
+| --- | --- | --- | --- |
+| LiveMessageReceived | `LiveMessageReceivedDocument` | `SubscribeLiveMessageReceived` | `live_message_received` (async) |
+
+### Subscription.liveProcessingEvents
+
+Transcoding and processing usage events. Optionally filter by streamId.
+
+```graphql
+liveProcessingEvents(
+  streamId: ID
+): ProcessingUsageRecord!
+```
+
+**Returns:** `ProcessingUsageRecord!` ([ProcessingUsageRecord](/builders/api-schema/shared/#processingusagerecord))
+
+**Arguments**
+
+- `streamId`: `ID`
+
+**SDK**
+
+| Operation | TypeScript | Go | Python |
+| --- | --- | --- | --- |
+| LiveProcessingEvents | `LiveProcessingEventsDocument` | `SubscribeLiveProcessingEvents` | `live_processing_events` (async) |
+
+### Subscription.liveStorageEvents
+
+Storage events for recordings and artifacts. Optionally filter by streamId.
+
+```graphql
+liveStorageEvents(
+  streamId: ID
+): StorageEvent!
+```
+
+**Returns:** `StorageEvent!` ([StorageEvent](/builders/api-schema/shared/#storageevent))
+
+**Arguments**
+
+- `streamId`: `ID`
+
+**SDK**
+
+| Operation | TypeScript | Go | Python |
+| --- | --- | --- | --- |
+| LiveStorageEvents | `LiveStorageEventsDocument` | `SubscribeLiveStorageEvents` | `live_storage_events` (async) |
+
+### Subscription.liveStreamEvents
+
+Stream lifecycle events including start, stop, and health changes. Optionally filter to a specific stream, or receive all tenant streams.
+
+```graphql
+liveStreamEvents(
+  streamId: ID
+): StreamEvent!
+```
+
+**Returns:** `StreamEvent!` ([StreamEvent](/builders/api-schema/shared/#streamevent))
+
+**Arguments**
+
+- `streamId`: `ID`
+
+**SDK**
+
+| Operation | TypeScript | Go | Python |
+| --- | --- | --- | --- |
+| LiveStreamEvents | `LiveStreamEventsDocument` | `SubscribeLiveStreamEvents` | `live_stream_events` (async) |
+
+### Subscription.liveSystemHealth
+
+System-wide health and infrastructure events. Requires authentication; tenant-scoped updates.
+
+```graphql
+liveSystemHealth: SystemHealthEvent!
+```
+
+**Returns:** `SystemHealthEvent!` ([SystemHealthEvent](/builders/api-schema/live/#systemhealthevent))
+
+**SDK**
+
+| Operation | TypeScript | Go | Python |
+| --- | --- | --- | --- |
+| LiveSystemHealth | `LiveSystemHealthDocument` | `SubscribeLiveSystemHealth` | `live_system_health` (async) |
+
+### Subscription.liveTrackListUpdates
+
+Track list updates when stream quality tiers change. Fires when tracks are added, removed, or quality changes.
+
+```graphql
+liveTrackListUpdates(
+  streamId: ID!
+): TrackListUpdate!
+```
+
+**Returns:** `TrackListUpdate!` ([TrackListUpdate](/builders/api-schema/live/#tracklistupdate))
+
+**Arguments**
+
+- `streamId`: `ID!`
+
+**SDK**
+
+| Operation | TypeScript | Go | Python |
+| --- | --- | --- | --- |
+| LiveTrackListUpdates | `LiveTrackListUpdatesDocument` | `SubscribeLiveTrackListUpdates` | `live_track_list_updates` (async) |
+
+### Subscription.liveViewerMetrics
+
+Real-time viewer count and engagement metrics for a stream. Updates every few seconds while the stream is live.
+
+```graphql
+liveViewerMetrics(
+  streamId: ID!
+): ViewerMetrics!
+```
+
+**Returns:** `ViewerMetrics!` ([ViewerMetrics](/builders/api-schema/live/#viewermetrics))
+
+**Arguments**
+
+- `streamId`: `ID!`
+
+**SDK**
+
+| Operation | TypeScript | Go | Python |
+| --- | --- | --- | --- |
+| LiveViewerMetrics | `LiveViewerMetricsDocument` | `SubscribeLiveViewerMetrics` | `live_viewer_metrics` (async) |
+
+### Subscription.skipperChat
+
+Stream chat events from the Skipper AI consultant. Receives token chunks, tool lifecycle events, metadata, and completion signal. Creates a new conversation if conversationId is omitted.
+
+```graphql
+skipperChat(
+  input: SkipperChatInput!
+): SkipperChatEvent!
+```
+
+**Returns:** `SkipperChatEvent!` ([SkipperChatEvent](/builders/api-schema/live/#skipperchatevent))
+
+**Arguments**
+
+- `input`: `SkipperChatInput!` ([SkipperChatInput](/builders/api-schema/live/#skipperchatinput))
+
+**SDK**
+
+| Operation | TypeScript | Go | Python |
+| --- | --- | --- | --- |
+| SkipperChat | `SkipperChatDocument` | `SubscribeSkipperChat` | `skipper_chat` (async) |
+
+### Subscription.tenantEvents
+
+Public events of the current tenant, as webhooks deliver them: stream lifecycle, clip, recording, and upload lifecycle, multistream status, API tokens, billing, account, and custom domain events. Each event&#39;s data is the registered payload of its type. Pass types to receive only those event types (e.g. [&#34;clip.ready&#34;, &#34;clip.failed&#34;]); pass streamId to receive only events whose payload names that stream.
+
+```graphql
+tenantEvents(
+  types: [String!]
+  streamId: ID
+): PublicEvent!
+```
+
+**Returns:** `PublicEvent!` ([PublicEvent](/builders/api-schema/live/#publicevent))
+
+**Arguments**
+
+- `types`: `[String!]`
+- `streamId`: `ID`
+
+**SDK**
+
+| Operation | TypeScript | Go | Python |
+| --- | --- | --- | --- |
+| TenantEvents | `TenantEventsDocument` | `SubscribeTenantEvents` | `tenant_events` (async) |
+
+## Types
+
+### AccountSuspended
+
+**object**
+
+`account.suspended` event. Aggregate: `tenants`.
+
+- **reason**: `EventSuspensionReason!` ([EventSuspensionReason](/builders/api-schema/live/#eventsuspensionreason))
+
+### ApiTokenCreated
+
+**object**
+
+`api_token.created` event. Aggregate: `api_tokens`.
+
+- **tokenId**: `ID!`
+- **name**: `String!`
+- **permissions**: `[String!]!`
+- **expiresAt**: `Time` ([Time](/builders/api-schema/shared/#time))
+
+### ApiTokenRevoked
+
+**object**
+
+`api_token.revoked` event. Aggregate: `api_tokens`.
+
+- **tokenId**: `ID!`
+
+### BillingDetailsUpdated
+
+**object**
+
+`billing.details_updated` event. Aggregate: `tenants`.
+
+- **changedFields**: `[String!]!`
+
+### ClipFailed
+
+**object**
+
+`clip.failed` event. Aggregate: `artifacts`.
+
+- **artifact**: `EventArtifact` ([EventArtifact](/builders/api-schema/live/#eventartifact))
+- **reason**: `EventMediaFailureReason!` ([EventMediaFailureReason](/builders/api-schema/live/#eventmediafailurereason))
+
+### ClipReady
+
+**object**
+
+`clip.ready` event. Aggregate: `artifacts`.
+
+- **artifact**: `EventArtifact` ([EventArtifact](/builders/api-schema/live/#eventartifact))
+- **durationMs**: `Int!`
+- **sizeBytes**: `Int!`
+
+### ClipRequested
+
+**object**
+
+`clip.requested` event. Aggregate: `artifacts`.
+
+- **artifact**: `EventArtifact` ([EventArtifact](/builders/api-schema/live/#eventartifact))
+- **durationMs**: `Int!`
+
+### CustomDomainFailed
+
+**object**
+
+`custom_domain.failed` event. Aggregate: `custom_domains`.
+
+- **domain**: `String!`
+- **reason**: `EventCustomDomainFailureReason!` ([EventCustomDomainFailureReason](/builders/api-schema/live/#eventcustomdomainfailurereason))
+
+### CustomDomainVerified
+
+**object**
+
+`custom_domain.verified` event. Aggregate: `custom_domains`.
+
+- **domain**: `String!`
+
+### EventArtifact
+
+**object**
+
+Part of a public event payload (frameworks.events.public.v1.Artifact).
+
+- **artifactId**: `ID!`
+- **kind**: `EventArtifactKind!` ([EventArtifactKind](/builders/api-schema/live/#eventartifactkind))
+- **streamId**: `ID!`
+- **playbackId**: `ID!`
+
+### EventArtifactKind
+
+**enum**
+
+Values of frameworks.events.public.v1.ArtifactKind, named as in the proto and the webhook JSON.
+
+- `ARTIFACT_KIND_UNSPECIFIED`
+- `ARTIFACT_KIND_CLIP`
+- `ARTIFACT_KIND_RECORDING`
+- `ARTIFACT_KIND_UPLOAD`
+
+### EventCustomDomainFailureReason
+
+**enum**
+
+Values of frameworks.events.public.v1.CustomDomainFailureReason, named as in the proto and the webhook JSON.
+
+- `CUSTOM_DOMAIN_FAILURE_REASON_UNSPECIFIED`
+- `CUSTOM_DOMAIN_FAILURE_REASON_VERIFICATION_EXPIRED`
+- `CUSTOM_DOMAIN_FAILURE_REASON_CERTIFICATE_FAILED`
+
+### EventIngestProtocol
+
+**enum**
+
+Values of frameworks.events.public.v1.IngestProtocol, named as in the proto and the webhook JSON.
+
+- `INGEST_PROTOCOL_UNSPECIFIED`
+- `INGEST_PROTOCOL_RTMP`
+- `INGEST_PROTOCOL_SRT`
+- `INGEST_PROTOCOL_WHIP`
+- `INGEST_PROTOCOL_PULL`
+
+### EventMediaFailureReason
+
+**enum**
+
+Values of frameworks.events.public.v1.MediaFailureReason, named as in the proto and the webhook JSON.
+
+- `MEDIA_FAILURE_REASON_UNSPECIFIED`
+- `MEDIA_FAILURE_REASON_SOURCE_UNAVAILABLE`
+- `MEDIA_FAILURE_REASON_PROCESSING_FAILED`
+- `MEDIA_FAILURE_REASON_STORAGE_FAILED`
+- `MEDIA_FAILURE_REASON_INVALID_INPUT`
+- `MEDIA_FAILURE_REASON_QUOTA_EXCEEDED`
+- `MEDIA_FAILURE_REASON_TIMED_OUT`
+
+### EventMoney
+
+**object**
+
+Part of a public event payload (frameworks.events.public.v1.Money).
+
+- **amountMinor**: `Int!`
+- **currency**: `String!`
+
+### EventMultistreamStatus
+
+**enum**
+
+Values of frameworks.events.public.v1.MultistreamStatus, named as in the proto and the webhook JSON.
+
+- `MULTISTREAM_STATUS_UNSPECIFIED`
+- `MULTISTREAM_STATUS_IDLE`
+- `MULTISTREAM_STATUS_PENDING`
+- `MULTISTREAM_STATUS_PUSHING`
+- `MULTISTREAM_STATUS_RETRYING`
+- `MULTISTREAM_STATUS_STOPPING`
+- `MULTISTREAM_STATUS_FAILED`
+
+### EventPaymentFailureReason
+
+**enum**
+
+Values of frameworks.events.public.v1.PaymentFailureReason, named as in the proto and the webhook JSON.
+
+- `PAYMENT_FAILURE_REASON_UNSPECIFIED`
+- `PAYMENT_FAILURE_REASON_DECLINED`
+- `PAYMENT_FAILURE_REASON_INSUFFICIENT_FUNDS`
+- `PAYMENT_FAILURE_REASON_EXPIRED_METHOD`
+- `PAYMENT_FAILURE_REASON_AUTHENTICATION_REQUIRED`
+- `PAYMENT_FAILURE_REASON_PROCESSING_ERROR`
+
+### EventSuspensionReason
+
+**enum**
+
+Values of frameworks.events.public.v1.SuspensionReason, named as in the proto and the webhook JSON.
+
+- `SUSPENSION_REASON_UNSPECIFIED`
+- `SUSPENSION_REASON_BALANCE_EXHAUSTED`
+- `SUSPENSION_REASON_PAYMENT_OVERDUE`
+- `SUSPENSION_REASON_POLICY`
+
+### IncidentUpdatedEvent
+
+**object**
+
+Change to an incident the subscriber can see.
+
+- **incidentId**: `ID!`
+- **clusterId**: `String`
+- **status**: `IncidentStatus!` ([IncidentStatus](/builders/api-schema/shared/#incidentstatus))
+- **severity**: `String!`
+- **title**: `String!`
+- **change**: `String!` — Timeline change that produced the update, e.g. opened, alert_firing, acknowledged, resolved.
+- **updatedAt**: `Time!` ([Time](/builders/api-schema/shared/#time))
+
+### InvoiceCreated
+
+**object**
+
+`billing.invoice_created` event. Aggregate: `invoices`.
+
+- **invoiceId**: `ID!`
+- **amountDue**: `EventMoney` ([EventMoney](/builders/api-schema/live/#eventmoney))
+- **periodStart**: `Time` ([Time](/builders/api-schema/shared/#time))
+- **periodEnd**: `Time` ([Time](/builders/api-schema/shared/#time))
+- **dueAt**: `Time` ([Time](/builders/api-schema/shared/#time))
+
+### InvoicePaid
+
+**object**
+
+`billing.invoice_paid` event. Aggregate: `invoices`.
+
+- **invoiceId**: `ID!`
+- **amountPaid**: `EventMoney` ([EventMoney](/builders/api-schema/live/#eventmoney))
+
+### MultistreamStatusChanged
+
+**object**
+
+`multistream.status_changed` event. Aggregate: `push_targets`.
+
+- **streamId**: `ID!`
+- **targetId**: `ID!`
+- **targetName**: `String!`
+- **status**: `EventMultistreamStatus!` ([EventMultistreamStatus](/builders/api-schema/live/#eventmultistreamstatus))
+- **previousStatus**: `EventMultistreamStatus!` ([EventMultistreamStatus](/builders/api-schema/live/#eventmultistreamstatus))
+
+### PaymentFailed
+
+**object**
+
+`billing.payment_failed` event. Aggregate: `payments`.
+
+- **paymentId**: `ID!`
+- **invoiceId**: `ID!`
+- **amount**: `EventMoney` ([EventMoney](/builders/api-schema/live/#eventmoney))
+- **reason**: `EventPaymentFailureReason!` ([EventPaymentFailureReason](/builders/api-schema/live/#eventpaymentfailurereason))
+- **provider**: `String!`
+- **providerReferenceId**: `ID!`
+
+### PublicEvent
+
+**object**
+
+A public tenant event as its owning service emitted it. data is the registered message of type, unchanged; webhooks deliver the same message.
+
+- **id**: `ID!` — Event ID, stable across redeliveries.
+- **type**: `String!` — Registered event type, e.g. stream.live.
+- **time**: `Time!` ([Time](/builders/api-schema/shared/#time)) — When the state change committed.
+- **subject**: `String!` — The aggregate the event belongs to, as &lt;aggregate&gt;/&lt;id&gt;, e.g. streams/&lt;stream id&gt;.
+- **data**: `PublicEventData!` ([PublicEventData](/builders/api-schema/live/#publiceventdata))
+
+### PublicEventData
+
+**union**
+
+Payload of a PublicEvent: one member per public event type. Fields of the same name can have different types across members (reason is a different enum per event family); alias them when one selection covers several.
+
+- Member: [AccountSuspended](/builders/api-schema/live/#accountsuspended)
+- Member: [ApiTokenCreated](/builders/api-schema/live/#apitokencreated)
+- Member: [ApiTokenRevoked](/builders/api-schema/live/#apitokenrevoked)
+- Member: [BillingDetailsUpdated](/builders/api-schema/live/#billingdetailsupdated)
+- Member: [InvoiceCreated](/builders/api-schema/live/#invoicecreated)
+- Member: [InvoicePaid](/builders/api-schema/live/#invoicepaid)
+- Member: [PaymentFailed](/builders/api-schema/live/#paymentfailed)
+- Member: [TopupCredited](/builders/api-schema/live/#topupcredited)
+- Member: [ClipFailed](/builders/api-schema/live/#clipfailed)
+- Member: [ClipReady](/builders/api-schema/live/#clipready)
+- Member: [ClipRequested](/builders/api-schema/live/#cliprequested)
+- Member: [CustomDomainFailed](/builders/api-schema/live/#customdomainfailed)
+- Member: [CustomDomainVerified](/builders/api-schema/live/#customdomainverified)
+- Member: [MultistreamStatusChanged](/builders/api-schema/live/#multistreamstatuschanged)
+- Member: [RecordingFailed](/builders/api-schema/live/#recordingfailed)
+- Member: [RecordingReady](/builders/api-schema/live/#recordingready)
+- Member: [StreamConnected](/builders/api-schema/live/#streamconnected)
+- Member: [StreamCreated](/builders/api-schema/live/#streamcreated)
+- Member: [StreamDeleted](/builders/api-schema/live/#streamdeleted)
+- Member: [StreamIdle](/builders/api-schema/live/#streamidle)
+- Member: [StreamKeyRotated](/builders/api-schema/live/#streamkeyrotated)
+- Member: [StreamLive](/builders/api-schema/live/#streamlive)
+- Member: [StreamUpdated](/builders/api-schema/live/#streamupdated)
+- Member: [UploadAborted](/builders/api-schema/live/#uploadaborted)
+- Member: [UploadCompleted](/builders/api-schema/live/#uploadcompleted)
+- Member: [UploadCreated](/builders/api-schema/live/#uploadcreated)
+- Member: [UploadFailed](/builders/api-schema/live/#uploadfailed)
+- Member: [UploadReady](/builders/api-schema/live/#uploadready)
+
+### RecordingFailed
+
+**object**
+
+`recording.failed` event. Aggregate: `artifacts`.
+
+- **artifact**: `EventArtifact` ([EventArtifact](/builders/api-schema/live/#eventartifact))
+- **reason**: `EventMediaFailureReason!` ([EventMediaFailureReason](/builders/api-schema/live/#eventmediafailurereason))
+
+### RecordingReady
+
+**object**
+
+`recording.ready` event. Aggregate: `artifacts`.
+
+- **artifact**: `EventArtifact` ([EventArtifact](/builders/api-schema/live/#eventartifact))
+- **durationMs**: `Int!`
+- **sizeBytes**: `Int!`
+
+### SkipperChatEvent
+
+**union**
+
+- Member: [SkipperToken](/builders/api-schema/live/#skippertoken)
+- Member: [SkipperToolStartEvent](/builders/api-schema/live/#skippertoolstartevent)
+- Member: [SkipperToolEndEvent](/builders/api-schema/live/#skippertoolendevent)
+- Member: [SkipperMeta](/builders/api-schema/live/#skippermeta)
+- Member: [SkipperDone](/builders/api-schema/live/#skipperdone)
+
+### SkipperChatInput
+
+**input_object**
+
+- **conversationId**: `ID`
+- **message**: `String!`
+- **pageUrl**: `String`
+- **mode**: `SkipperMode` ([SkipperMode](/builders/api-schema/live/#skippermode))
+
+### SkipperCitation
+
+**object**
+
+- **label**: `String!`
+- **url**: `String!`
+
+### SkipperConfidenceBlock
+
+**object**
+
+- **content**: `String!`
+- **confidence**: `String!`
+- **sources**: `[SkipperCitation!]!` ([SkipperCitation](/builders/api-schema/live/#skippercitation))
+
+### SkipperDone
+
+**object**
+
+- **conversationId**: `ID!`
+- **tokensInput**: `Int!`
+- **tokensOutput**: `Int!`
+
+### SkipperInvestigationEvent
+
+**object**
+
+- **reportId**: `String!`
+- **resourceType**: `String!`
+
+### SkipperMeta
+
+**object**
+
+- **confidence**: `String!`
+- **citations**: `[SkipperCitation!]!` ([SkipperCitation](/builders/api-schema/live/#skippercitation))
+- **externalLinks**: `[SkipperCitation!]!` ([SkipperCitation](/builders/api-schema/live/#skippercitation))
+- **details**: `[SkipperToolDetail!]!` ([SkipperToolDetail](/builders/api-schema/live/#skippertooldetail))
+- **blocks**: `[SkipperConfidenceBlock!]` ([SkipperConfidenceBlock](/builders/api-schema/live/#skipperconfidenceblock))
+
+### SkipperMode
+
+**enum**
+
+- `DEFAULT`
+- `DOCS`
+
+### SkipperToken
+
+**object**
+
+- **content**: `String!`
+
+### SkipperToolDetail
+
+**object**
+
+- **title**: `String!`
+- **payload**: `JSON!` ([JSON](/builders/api-schema/shared/#json))
+
+### SkipperToolEndEvent
+
+**object**
+
+- **tool**: `String!`
+- **error**: `String`
+
+### SkipperToolStartEvent
+
+**object**
+
+- **tool**: `String!`
+
+### StorageSnapshot
+
+**object**
+
+- **nodeId**: `String!`
+- **timestamp**: `Int!`
+- **tenantId**: `String`
+- **location**: `String`
+- **storageScope**: `String`
+- **usage**: `[TenantStorageUsage!]!` ([TenantStorageUsage](/builders/api-schema/live/#tenantstorageusage))
+
+### StreamConnected
+
+**object**
+
+`stream.connected` event. Aggregate: `streams`.
+
+- **streamId**: `ID!`
+- **protocol**: `EventIngestProtocol!` ([EventIngestProtocol](/builders/api-schema/live/#eventingestprotocol))
+
+### StreamCreated
+
+**object**
+
+`stream.created` event. Aggregate: `streams`.
+
+- **streamId**: `ID!`
+- **name**: `String!`
+- **playbackId**: `ID!`
+
+### StreamDeleted
+
+**object**
+
+`stream.deleted` event. Aggregate: `streams`.
+
+- **streamId**: `ID!`
+
+### StreamIdle
+
+**object**
+
+`stream.idle` event. Aggregate: `streams`.
+
+- **streamId**: `ID!`
+
+### StreamKeyRotated
+
+**object**
+
+`stream.key_rotated` event. Aggregate: `streams`.
+
+- **streamId**: `ID!`
+
+### StreamLive
+
+**object**
+
+`stream.live` event. Aggregate: `streams`.
+
+- **streamId**: `ID!`
+
+### StreamUpdated
+
+**object**
+
+`stream.updated` event. Aggregate: `streams`.
+
+- **streamId**: `ID!`
+- **changedFields**: `[String!]!`
+
+### SystemHealthEvent
+
+**object**
+
+- **nodeId**: `ID`
+- **node**: `String!`
+- **location**: `String!`
+- **status**: `NodeStatus!` ([NodeStatus](/builders/api-schema/shared/#nodestatus))
+- **cpuTenths**: `Int!`
+- **isHealthy**: `Boolean!`
+- **ramMax**: `Float`
+- **ramCurrent**: `Float`
+- **diskTotalBytes**: `Float`
+- **diskUsedBytes**: `Float`
+- **shmTotalBytes**: `Float`
+- **shmUsedBytes**: `Float`
+- **timestamp**: `Time!` ([Time](/builders/api-schema/shared/#time))
+
+### TenantEvent
+
+**object**
+
+- **type**: `String!`
+- **channel**: `String!`
+- **timestamp**: `Time!` ([Time](/builders/api-schema/shared/#time))
+- **streamEvent**: `StreamEvent` ([StreamEvent](/builders/api-schema/shared/#streamevent))
+- **viewerMetrics**: `ViewerMetrics` ([ViewerMetrics](/builders/api-schema/live/#viewermetrics))
+- **connectionEvent**: `ConnectionEvent` ([ConnectionEvent](/builders/api-schema/shared/#connectionevent))
+- **trackListUpdate**: `TrackListUpdate` ([TrackListUpdate](/builders/api-schema/live/#tracklistupdate))
+- **storageEvent**: `StorageEvent` ([StorageEvent](/builders/api-schema/shared/#storageevent))
+- **storageSnapshot**: `StorageSnapshot` ([StorageSnapshot](/builders/api-schema/live/#storagesnapshot))
+- **processingEvent**: `ProcessingUsageRecord` ([ProcessingUsageRecord](/builders/api-schema/shared/#processingusagerecord))
+- **routingEvent**: `RoutingEvent` ([RoutingEvent](/builders/api-schema/shared/#routingevent))
+- **systemHealthEvent**: `SystemHealthEvent` ([SystemHealthEvent](/builders/api-schema/live/#systemhealthevent))
+- **skipperInvestigation**: `SkipperInvestigationEvent` ([SkipperInvestigationEvent](/builders/api-schema/live/#skipperinvestigationevent))
+- **incidentUpdated**: `IncidentUpdatedEvent` ([IncidentUpdatedEvent](/builders/api-schema/live/#incidentupdatedevent))
+
+### TenantStorageUsage
+
+**object**
+
+- **tenantId**: `String!`
+- **totalBytes**: `Float!`
+- **fileCount**: `Int!`
+- **dvrBytes**: `Float!`
+- **clipBytes**: `Float!`
+- **vodBytes**: `Float!`
+- **frozenDvrBytes**: `Float!`
+- **frozenClipBytes**: `Float!`
+- **frozenVodBytes**: `Float!`
+
+### TopupCredited
+
+**object**
+
+`billing.topup_credited` event. Aggregate: `topups`.
+
+- **topupId**: `ID!`
+- **amount**: `EventMoney` ([EventMoney](/builders/api-schema/live/#eventmoney))
+
+### TrackListUpdate
+
+**object**
+
+- **streamId**: `ID!`
+- **stream**: `Stream` ([Stream](/builders/api-schema/shared/#stream))
+- **tracks**: `[StreamTrack!]` ([StreamTrack](/builders/api-schema/shared/#streamtrack))
+- **totalTracks**: `Int`
+- **videoTrackCount**: `Int`
+- **audioTrackCount**: `Int`
+- **qualityTier**: `String`
+- **primaryWidth**: `Int`
+- **primaryHeight**: `Int`
+- **primaryFps**: `Float`
+- **primaryVideoBitrate**: `Int`
+- **primaryVideoCodec**: `String`
+- **primaryAudioBitrate**: `Int`
+- **primaryAudioCodec**: `String`
+- **primaryAudioChannels**: `Int`
+- **primaryAudioSampleRate**: `Int`
+
+### UploadAborted
+
+**object**
+
+`upload.aborted` event. Aggregate: `artifacts`.
+
+- **artifact**: `EventArtifact` ([EventArtifact](/builders/api-schema/live/#eventartifact))
+
+### UploadCompleted
+
+**object**
+
+`upload.completed` event. Aggregate: `artifacts`.
+
+- **artifact**: `EventArtifact` ([EventArtifact](/builders/api-schema/live/#eventartifact))
+- **sizeBytes**: `Int!`
+
+### UploadCreated
+
+**object**
+
+`upload.created` event. Aggregate: `artifacts`.
+
+- **artifact**: `EventArtifact` ([EventArtifact](/builders/api-schema/live/#eventartifact))
+- **filename**: `String!`
+- **expectedSizeBytes**: `Int!`
+
+### UploadFailed
+
+**object**
+
+`upload.failed` event. Aggregate: `artifacts`.
+
+- **artifact**: `EventArtifact` ([EventArtifact](/builders/api-schema/live/#eventartifact))
+- **reason**: `EventMediaFailureReason!` ([EventMediaFailureReason](/builders/api-schema/live/#eventmediafailurereason))
+
+### UploadReady
+
+**object**
+
+`upload.ready` event. Aggregate: `artifacts`.
+
+- **artifact**: `EventArtifact` ([EventArtifact](/builders/api-schema/live/#eventartifact))
+- **durationMs**: `Int!`
+- **sizeBytes**: `Int!`
+
+### ViewerMetrics
+
+**object**
+
+- **nodeId**: `String!`
+- **streamId**: `ID!`
+- **stream**: `Stream` ([Stream](/builders/api-schema/shared/#stream))
+- **action**: `String!`
+- **protocol**: `String!`
+- **host**: `String`
+- **sessionId**: `String`
+- **connectionTime**: `Float`
+- **position**: `Float`
+- **bandwidthInBps**: `Int`
+- **bandwidthOutBps**: `Int`
+- **bytesDownloaded**: `Float`
+- **bytesUploaded**: `Float`
+- **packetsSent**: `Int`
+- **packetsLost**: `Int`
+- **packetsRetransmitted**: `Int`
+- **timestamp**: `Int!`
+- **clientCountry**: `String`
+- **clientCity**: `String`
+- **clientLatitude**: `Float`
+- **clientLongitude**: `Float`

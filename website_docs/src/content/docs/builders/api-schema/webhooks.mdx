@@ -1,0 +1,573 @@
+---
+title: Webhooks
+description: Webhooks in the generated public GraphQL reference.
+sidebar:
+  order: 9
+---
+
+[GraphQL schema reference](/builders/api-schema/) · [API guide](/builders/api-reference/) · [SDKs](/builders/sdks/)
+
+Webhook endpoints, deliveries, replays, and event types.
+
+Types used by more than one domain are on [Shared types](/builders/api-schema/shared/).
+
+## Queries
+
+### Query.webhookDeliveriesConnection
+
+List webhook deliveries newest first, optionally filtered. Only forward pagination is supported.
+
+```graphql
+webhookDeliveriesConnection(
+  endpointId: ID
+  statuses: [WebhookDeliveryStatus!]
+  eventType: String
+  eventId: ID
+  createdAfter: Time
+  createdBefore: Time
+  page: ConnectionInput
+): WebhookDeliveriesConnection!
+```
+
+**Returns:** `WebhookDeliveriesConnection!` ([WebhookDeliveriesConnection](/builders/api-schema/webhooks/#webhookdeliveriesconnection))
+
+**Arguments**
+
+- `endpointId`: `ID` — Only deliveries to this endpoint.
+- `statuses`: `[WebhookDeliveryStatus!]` ([WebhookDeliveryStatus](/builders/api-schema/webhooks/#webhookdeliverystatus)) — Only deliveries in these statuses.
+- `eventType`: `String` — Only deliveries of this event type, e.g. &#34;stream.live&#34;.
+- `eventId`: `ID` — Only deliveries of this event.
+- `createdAfter`: `Time` ([Time](/builders/api-schema/shared/#time)) — Only deliveries created at or after this time.
+- `createdBefore`: `Time` ([Time](/builders/api-schema/shared/#time)) — Only deliveries created before this time.
+- `page`: `ConnectionInput` ([ConnectionInput](/builders/api-schema/shared/#connectioninput))
+
+**SDK**
+
+| Operation | TypeScript | Go | Python |
+| --- | --- | --- | --- |
+| GetWebhookDeliveriesConnection | `GetWebhookDeliveriesConnectionDocument` | `GetWebhookDeliveriesConnection` | `get_webhook_deliveries_connection` |
+
+### Query.webhookDelivery
+
+Get one webhook delivery with every HTTP attempt.
+
+```graphql
+webhookDelivery(
+  id: ID!
+): WebhookDelivery
+```
+
+**Returns:** `WebhookDelivery` ([WebhookDelivery](/builders/api-schema/webhooks/#webhookdelivery))
+
+**Arguments**
+
+- `id`: `ID!`
+
+**SDK**
+
+| Operation | TypeScript | Go | Python |
+| --- | --- | --- | --- |
+| GetWebhookDelivery | `GetWebhookDeliveryDocument` | `GetWebhookDelivery` | `get_webhook_delivery` |
+
+### Query.webhookEndpoint
+
+Get one of the tenant&#39;s webhook endpoints.
+
+```graphql
+webhookEndpoint(
+  id: ID!
+): WebhookEndpoint
+```
+
+**Returns:** `WebhookEndpoint` ([WebhookEndpoint](/builders/api-schema/webhooks/#webhookendpoint))
+
+**Arguments**
+
+- `id`: `ID!`
+
+**SDK**
+
+| Operation | TypeScript | Go | Python |
+| --- | --- | --- | --- |
+| GetWebhookEndpoint | `GetWebhookEndpointDocument` | `GetWebhookEndpoint` | `get_webhook_endpoint` |
+
+### Query.webhookEndpointsConnection
+
+List the tenant&#39;s webhook endpoints, oldest first. A tenant has at most 10, so one page holds them all.
+
+```graphql
+webhookEndpointsConnection(
+  page: ConnectionInput
+): WebhookEndpointsConnection!
+```
+
+**Returns:** `WebhookEndpointsConnection!` ([WebhookEndpointsConnection](/builders/api-schema/webhooks/#webhookendpointsconnection))
+
+**Arguments**
+
+- `page`: `ConnectionInput` ([ConnectionInput](/builders/api-schema/shared/#connectioninput))
+
+**SDK**
+
+| Operation | TypeScript | Go | Python |
+| --- | --- | --- | --- |
+| GetWebhookEndpointsConnection | `GetWebhookEndpointsConnectionDocument` | `GetWebhookEndpointsConnection` | `get_webhook_endpoints_connection` |
+
+### Query.webhookEventTypes
+
+The public event types an endpoint can subscribe to, as used in eventTypes. &#34;*&#34; subscribes to every type.
+
+```graphql
+webhookEventTypes: [String!]!
+```
+
+**Returns:** `[String!]!`
+
+**SDK**
+
+| Operation | TypeScript | Go | Python |
+| --- | --- | --- | --- |
+| GetWebhookEventTypes | `GetWebhookEventTypesDocument` | `GetWebhookEventTypes` | `get_webhook_event_types` |
+
+## Mutations
+
+### Mutation.createWebhookEndpoint
+
+Create an outbound webhook endpoint. The response carries the signing secret once; it is never returned again. A tenant can have at most 10 endpoints.
+
+```graphql
+createWebhookEndpoint(
+  input: CreateWebhookEndpointInput!
+): CreateWebhookEndpointResult!
+```
+
+**Returns:** `CreateWebhookEndpointResult!` ([CreateWebhookEndpointResult](/builders/api-schema/webhooks/#createwebhookendpointresult))
+
+**Arguments**
+
+- `input`: `CreateWebhookEndpointInput!` ([CreateWebhookEndpointInput](/builders/api-schema/webhooks/#createwebhookendpointinput))
+
+**SDK**
+
+| Operation | TypeScript | Go | Python |
+| --- | --- | --- | --- |
+| CreateWebhookEndpoint | `CreateWebhookEndpointDocument` | `CreateWebhookEndpoint` | `create_webhook_endpoint` |
+
+### Mutation.deleteWebhookEndpoint
+
+Delete an endpoint with its signing secrets and delivery log.
+
+```graphql
+deleteWebhookEndpoint(
+  id: ID!
+): DeleteWebhookEndpointResult!
+```
+
+**Returns:** `DeleteWebhookEndpointResult!` ([DeleteWebhookEndpointResult](/builders/api-schema/webhooks/#deletewebhookendpointresult))
+
+**Arguments**
+
+- `id`: `ID!` — The endpoint ID.
+
+**SDK**
+
+| Operation | TypeScript | Go | Python |
+| --- | --- | --- | --- |
+| DeleteWebhookEndpoint | `DeleteWebhookEndpointDocument` | `DeleteWebhookEndpoint` | `delete_webhook_endpoint` |
+
+### Mutation.disableWebhookEndpoint
+
+Disable an endpoint. Its pending deliveries are skipped.
+
+```graphql
+disableWebhookEndpoint(
+  id: ID!
+): WebhookEndpointResult!
+```
+
+**Returns:** `WebhookEndpointResult!` ([WebhookEndpointResult](/builders/api-schema/webhooks/#webhookendpointresult))
+
+**Arguments**
+
+- `id`: `ID!` — The endpoint ID.
+
+**SDK**
+
+| Operation | TypeScript | Go | Python |
+| --- | --- | --- | --- |
+| DisableWebhookEndpoint | `DisableWebhookEndpointDocument` | `DisableWebhookEndpoint` | `disable_webhook_endpoint` |
+
+### Mutation.enableWebhookEndpoint
+
+Enable a disabled endpoint. Deliveries skipped while it was disabled are not sent again; replay them with replayWebhookDeliveries.
+
+```graphql
+enableWebhookEndpoint(
+  id: ID!
+): WebhookEndpointResult!
+```
+
+**Returns:** `WebhookEndpointResult!` ([WebhookEndpointResult](/builders/api-schema/webhooks/#webhookendpointresult))
+
+**Arguments**
+
+- `id`: `ID!` — The endpoint ID.
+
+**SDK**
+
+| Operation | TypeScript | Go | Python |
+| --- | --- | --- | --- |
+| EnableWebhookEndpoint | `EnableWebhookEndpointDocument` | `EnableWebhookEndpoint` | `enable_webhook_endpoint` |
+
+### Mutation.replayWebhookDeliveries
+
+Send again the failed and skipped deliveries of one endpoint created in [createdAfter, createdBefore), oldest first, at most 1000 per call. Call again while hasMore is true.
+
+```graphql
+replayWebhookDeliveries(
+  endpointId: ID!
+  createdAfter: Time!
+  createdBefore: Time!
+): ReplayWebhookDeliveriesResult!
+```
+
+**Returns:** `ReplayWebhookDeliveriesResult!` ([ReplayWebhookDeliveriesResult](/builders/api-schema/webhooks/#replaywebhookdeliveriesresult))
+
+**Arguments**
+
+- `endpointId`: `ID!`
+- `createdAfter`: `Time!` ([Time](/builders/api-schema/shared/#time))
+- `createdBefore`: `Time!` ([Time](/builders/api-schema/shared/#time))
+
+**SDK**
+
+| Operation | TypeScript | Go | Python |
+| --- | --- | --- | --- |
+| ReplayWebhookDeliveries | `ReplayWebhookDeliveriesDocument` | `ReplayWebhookDeliveries` | `replay_webhook_deliveries` |
+
+### Mutation.replayWebhookDelivery
+
+Send a finished delivery again under the same ID, so the receiver sees the same webhook-id. The endpoint must be enabled.
+
+```graphql
+replayWebhookDelivery(
+  id: ID!
+): ReplayWebhookDeliveryResult!
+```
+
+**Returns:** `ReplayWebhookDeliveryResult!` ([ReplayWebhookDeliveryResult](/builders/api-schema/webhooks/#replaywebhookdeliveryresult))
+
+**Arguments**
+
+- `id`: `ID!` — The delivery ID.
+
+**SDK**
+
+| Operation | TypeScript | Go | Python |
+| --- | --- | --- | --- |
+| ReplayWebhookDelivery | `ReplayWebhookDeliveryDocument` | `ReplayWebhookDelivery` | `replay_webhook_delivery` |
+
+### Mutation.rotateWebhookEndpointSecret
+
+Replace an endpoint&#39;s signing secret and return the new one once. The previous secret keeps signing alongside it for 24 hours, unless revokePrevious is true.
+
+```graphql
+rotateWebhookEndpointSecret(
+  id: ID!
+  revokePrevious: Boolean = false
+): RotateWebhookEndpointSecretResult!
+```
+
+**Returns:** `RotateWebhookEndpointSecretResult!` ([RotateWebhookEndpointSecretResult](/builders/api-schema/webhooks/#rotatewebhookendpointsecretresult))
+
+**Arguments**
+
+- `id`: `ID!` — The endpoint ID.
+- `revokePrevious`: `Boolean` (default `false`) — Stop signing with the previous secret immediately.
+
+**SDK**
+
+| Operation | TypeScript | Go | Python |
+| --- | --- | --- | --- |
+| RotateWebhookEndpointSecret | `RotateWebhookEndpointSecretDocument` | `RotateWebhookEndpointSecret` | `rotate_webhook_endpoint_secret` |
+
+### Mutation.testWebhookEndpoint
+
+Send a signed webhook.test event to the endpoint and wait for the result. At most one test per endpoint every 10 seconds.
+
+```graphql
+testWebhookEndpoint(
+  id: ID!
+): TestWebhookEndpointResult!
+```
+
+**Returns:** `TestWebhookEndpointResult!` ([TestWebhookEndpointResult](/builders/api-schema/webhooks/#testwebhookendpointresult))
+
+**Arguments**
+
+- `id`: `ID!` — The endpoint ID.
+
+**SDK**
+
+| Operation | TypeScript | Go | Python |
+| --- | --- | --- | --- |
+| TestWebhookEndpoint | `TestWebhookEndpointDocument` | `TestWebhookEndpoint` | `test_webhook_endpoint` |
+
+### Mutation.updateWebhookEndpoint
+
+Change an endpoint&#39;s URL, description, or event types. Omitted fields keep their value.
+
+```graphql
+updateWebhookEndpoint(
+  id: ID!
+  input: UpdateWebhookEndpointInput!
+): UpdateWebhookEndpointResult!
+```
+
+**Returns:** `UpdateWebhookEndpointResult!` ([UpdateWebhookEndpointResult](/builders/api-schema/webhooks/#updatewebhookendpointresult))
+
+**Arguments**
+
+- `id`: `ID!` — The endpoint ID.
+- `input`: `UpdateWebhookEndpointInput!` ([UpdateWebhookEndpointInput](/builders/api-schema/webhooks/#updatewebhookendpointinput))
+
+**SDK**
+
+| Operation | TypeScript | Go | Python |
+| --- | --- | --- | --- |
+| UpdateWebhookEndpoint | `UpdateWebhookEndpointDocument` | `UpdateWebhookEndpoint` | `update_webhook_endpoint` |
+
+## Types
+
+### CreateWebhookEndpointInput
+
+**input_object**
+
+- **url**: `String!` — An https URL of a public host.
+- **description**: `String`
+- **eventTypes**: `[String!]!` — Public event types to receive; &#34;*&#34; receives every type. See webhookEventTypes.
+- **apiVersion**: `String` — Public event package version; defaults to &#34;v1&#34;.
+
+### CreateWebhookEndpointResult
+
+**union**
+
+- Member: [WebhookEndpointSecret](/builders/api-schema/webhooks/#webhookendpointsecret)
+- Member: [ValidationError](/builders/api-schema/shared/#validationerror)
+- Member: [AuthError](/builders/api-schema/shared/#autherror)
+
+### DeleteWebhookEndpointResult
+
+**union**
+
+- Member: [DeleteSuccess](/builders/api-schema/shared/#deletesuccess)
+- Member: [NotFoundError](/builders/api-schema/shared/#notfounderror)
+- Member: [AuthError](/builders/api-schema/shared/#autherror)
+
+### ReplayWebhookDeliveriesResult
+
+**union**
+
+- Member: [WebhookReplayResult](/builders/api-schema/webhooks/#webhookreplayresult)
+- Member: [ValidationError](/builders/api-schema/shared/#validationerror)
+- Member: [NotFoundError](/builders/api-schema/shared/#notfounderror)
+- Member: [AuthError](/builders/api-schema/shared/#autherror)
+
+### ReplayWebhookDeliveryResult
+
+**union**
+
+- Member: [WebhookDelivery](/builders/api-schema/webhooks/#webhookdelivery)
+- Member: [ValidationError](/builders/api-schema/shared/#validationerror)
+- Member: [NotFoundError](/builders/api-schema/shared/#notfounderror)
+- Member: [AuthError](/builders/api-schema/shared/#autherror)
+
+### RotateWebhookEndpointSecretResult
+
+**union**
+
+- Member: [WebhookEndpointSecret](/builders/api-schema/webhooks/#webhookendpointsecret)
+- Member: [NotFoundError](/builders/api-schema/shared/#notfounderror)
+- Member: [AuthError](/builders/api-schema/shared/#autherror)
+
+### TestWebhookEndpointResult
+
+**union**
+
+- Member: [WebhookTestResult](/builders/api-schema/webhooks/#webhooktestresult)
+- Member: [NotFoundError](/builders/api-schema/shared/#notfounderror)
+- Member: [RateLimitError](/builders/api-schema/shared/#ratelimiterror)
+- Member: [AuthError](/builders/api-schema/shared/#autherror)
+
+### UpdateWebhookEndpointInput
+
+**input_object**
+
+- **url**: `String`
+- **description**: `String`
+- **eventTypes**: `[String!]` — Replaces the subscribed event types when set.
+
+### UpdateWebhookEndpointResult
+
+**union**
+
+- Member: [WebhookEndpoint](/builders/api-schema/webhooks/#webhookendpoint)
+- Member: [ValidationError](/builders/api-schema/shared/#validationerror)
+- Member: [NotFoundError](/builders/api-schema/shared/#notfounderror)
+- Member: [AuthError](/builders/api-schema/shared/#autherror)
+
+### WebhookDeliveriesConnection
+
+**object**
+
+- **edges**: `[WebhookDeliveryEdge!]!` ([WebhookDeliveryEdge](/builders/api-schema/webhooks/#webhookdeliveryedge))
+- **nodes**: `[WebhookDelivery!]!` ([WebhookDelivery](/builders/api-schema/webhooks/#webhookdelivery))
+- **pageInfo**: `PageInfo!` ([PageInfo](/builders/api-schema/shared/#pageinfo))
+- **totalCount**: `Int!`
+
+### WebhookDelivery
+
+**object**
+
+One delivery of one event to one endpoint, or a test delivery.
+
+- **id**: `ID!` — Delivery ID. A replay keeps it.
+- **endpointId**: `ID!`
+- **eventId**: `ID` — The event ID, sent as webhook-id and as the body&#39;s id. Null for test deliveries.
+- **eventType**: `String!`
+- **kind**: `WebhookDeliveryKind!` ([WebhookDeliveryKind](/builders/api-schema/webhooks/#webhookdeliverykind))
+- **status**: `WebhookDeliveryStatus!` ([WebhookDeliveryStatus](/builders/api-schema/webhooks/#webhookdeliverystatus))
+- **attempts**: `Int!` — Attempts since the delivery was created or last replayed.
+- **nextAttemptAt**: `Time` ([Time](/builders/api-schema/shared/#time)) — When the next attempt is due; null unless pending.
+- **lastStatusCode**: `Int!` — HTTP status of the last attempt; 0 when no response arrived.
+- **lastErrorClass**: `String!` — Failure class of the last attempt: http_status, redirect, timeout, connection, tls, dns, or blocked_destination; internal when FrameWorks could not sign or render the delivery; empty after a success.
+- **deliveredAt**: `Time` ([Time](/builders/api-schema/shared/#time))
+- **replayCount**: `Int!`
+- **lastReplayedAt**: `Time` ([Time](/builders/api-schema/shared/#time))
+- **createdAt**: `Time!` ([Time](/builders/api-schema/shared/#time))
+- **updatedAt**: `Time!` ([Time](/builders/api-schema/shared/#time))
+- **attemptHistory**: `[WebhookDeliveryAttempt!]!` ([WebhookDeliveryAttempt](/builders/api-schema/webhooks/#webhookdeliveryattempt)) — Every HTTP attempt, oldest first. Loaded by the webhookDelivery query; empty in connections.
+
+### WebhookDeliveryAttempt
+
+**object**
+
+One HTTP attempt of a delivery.
+
+- **id**: `ID!`
+- **attemptNumber**: `Int!`
+- **statusCode**: `Int!` — HTTP status; 0 when no response arrived.
+- **errorClass**: `String!`
+- **latencyMs**: `Int!`
+- **responseExcerpt**: `String!` — At most 1 KiB of the response body.
+- **attemptedAt**: `Time!` ([Time](/builders/api-schema/shared/#time))
+
+### WebhookDeliveryEdge
+
+**object**
+
+- **cursor**: `String!`
+- **node**: `WebhookDelivery!` ([WebhookDelivery](/builders/api-schema/webhooks/#webhookdelivery))
+
+### WebhookDeliveryKind
+
+**enum**
+
+- `EVENT`
+- `TEST`
+
+### WebhookDeliveryStatus
+
+**enum**
+
+- `PENDING` — Waiting for the first attempt or a retry.
+- `SUCCEEDED`
+- `FAILED` — Every attempt of the retry schedule (about 3 days) failed, or a test delivery failed.
+- `SKIPPED` — The endpoint was disabled before the delivery succeeded.
+
+### WebhookEndpoint
+
+**object**
+
+An outbound webhook endpoint. FrameWorks POSTs the tenant&#39;s public events of the subscribed types to its URL, signed with the Standard Webhooks scheme (webhook-id, webhook-timestamp, webhook-signature headers).
+
+- **id**: `ID!` — Endpoint ID.
+- **url**: `String!` — The https URL deliveries are sent to.
+- **description**: `String!` — Free-text description.
+- **eventTypes**: `[String!]!` — Public event types the endpoint receives; &#34;*&#34; receives every type.
+- **apiVersion**: `String!` — Public event package version the payloads are rendered with, e.g. &#34;v1&#34;.
+- **status**: `WebhookEndpointStatus!` ([WebhookEndpointStatus](/builders/api-schema/webhooks/#webhookendpointstatus))
+- **disabledReason**: `WebhookEndpointDisabledReason` ([WebhookEndpointDisabledReason](/builders/api-schema/webhooks/#webhookendpointdisabledreason)) — Why the endpoint is disabled; null while enabled.
+- **disabledAt**: `Time` ([Time](/builders/api-schema/shared/#time)) — When the endpoint was disabled; null while enabled.
+- **consecutiveFailures**: `Int!` — Failed attempts since the last successful delivery.
+- **failingSince**: `Time` ([Time](/builders/api-schema/shared/#time)) — First failed attempt since the last successful delivery.
+- **lastSuccessAt**: `Time` ([Time](/builders/api-schema/shared/#time))
+- **lastFailureAt**: `Time` ([Time](/builders/api-schema/shared/#time))
+- **previousSecretExpiresAt**: `Time` ([Time](/builders/api-schema/shared/#time)) — Until when the previous signing secret still signs deliveries; null when there is none.
+- **createdAt**: `Time!` ([Time](/builders/api-schema/shared/#time))
+- **updatedAt**: `Time!` ([Time](/builders/api-schema/shared/#time))
+
+### WebhookEndpointDisabledReason
+
+**enum**
+
+- `USER` — Disabled through the API or dashboard.
+- `FAILING` — Disabled automatically after at least 20 consecutive failed attempts over at least 5 days without a success.
+
+### WebhookEndpointEdge
+
+**object**
+
+- **cursor**: `String!`
+- **node**: `WebhookEndpoint!` ([WebhookEndpoint](/builders/api-schema/webhooks/#webhookendpoint))
+
+### WebhookEndpointResult
+
+**union**
+
+- Member: [WebhookEndpoint](/builders/api-schema/webhooks/#webhookendpoint)
+- Member: [NotFoundError](/builders/api-schema/shared/#notfounderror)
+- Member: [AuthError](/builders/api-schema/shared/#autherror)
+
+### WebhookEndpointSecret
+
+**object**
+
+An endpoint with its signing secret, returned only when the secret is created or rotated.
+
+- **endpoint**: `WebhookEndpoint!` ([WebhookEndpoint](/builders/api-schema/webhooks/#webhookendpoint))
+- **secret**: `String!` — The signing secret, &#34;whsec_&#34; followed by base64. Store it now; it is never shown again.
+
+### WebhookEndpointStatus
+
+**enum**
+
+- `ENABLED`
+- `DISABLED`
+
+### WebhookEndpointsConnection
+
+**object**
+
+- **edges**: `[WebhookEndpointEdge!]!` ([WebhookEndpointEdge](/builders/api-schema/webhooks/#webhookendpointedge))
+- **nodes**: `[WebhookEndpoint!]!` ([WebhookEndpoint](/builders/api-schema/webhooks/#webhookendpoint))
+- **pageInfo**: `PageInfo!` ([PageInfo](/builders/api-schema/shared/#pageinfo))
+- **totalCount**: `Int!`
+
+### WebhookReplayResult
+
+**object**
+
+The result of a range replay.
+
+- **replayedCount**: `Int!`
+- **hasMore**: `Boolean!` — More failed or skipped deliveries remain in the range.
+
+### WebhookTestResult
+
+**object**
+
+The result of a test delivery.
+
+- **delivery**: `WebhookDelivery!` ([WebhookDelivery](/builders/api-schema/webhooks/#webhookdelivery))
+- **attempt**: `WebhookDeliveryAttempt!` ([WebhookDeliveryAttempt](/builders/api-schema/webhooks/#webhookdeliveryattempt))

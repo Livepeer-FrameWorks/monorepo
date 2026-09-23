@@ -1,0 +1,719 @@
+---
+title: Analytics types S–V
+description: Analytics types S–V in the generated public GraphQL reference.
+sidebar:
+  order: 8
+---
+
+[GraphQL schema reference](/builders/api-schema/) · [API guide](/builders/api-reference/) · [SDKs](/builders/sdks/) · Types of [Analytics](/builders/api-schema/analytics/)
+
+## SessionQoeSummary
+
+**object**
+
+Viewer-experienced QoE summary. Ratios are sum(numerator)/sum(denominator) over the player-reported session beacons; rebufferingRatio is the headline QoE number.
+
+- **sessionCount**: `Int!`
+- **playedHours**: `Float!`
+- **rebufferingRatio**: `Float!`
+- **rebuffersPerHour**: `Float!`
+- **avgRebufferMs**: `Float!`
+- **frameDropRatio**: `Float!`
+- **playbackFailureRate**: `Float!`
+- **ebvsRate**: `Float!`
+- **avgBitrateBps**: `Float!`
+- **abrSwitchesPerHour**: `Float!`
+- **avgLiveEdgeLatencyMs**: `Float!`
+
+## SessionQoeTimeSeriesBucket
+
+**object**
+
+One toStartOfInterval window of the viewer-experienced QoE summary. Ratios are sum(numerator)/sum(denominator) over the per-session rollup; `sessionCount` and `playedHours` are the per-bucket denominators.
+
+- **timestamp**: `Time!` ([Time](/builders/api-schema/shared/#time))
+- **sessionCount**: `Int!`
+- **playedHours**: `Float!`
+- **rebufferingRatio**: `Float!`
+- **frameDropRatio**: `Float!`
+- **avgBitrateBps**: `Float!`
+
+## SortOrder
+
+**enum**
+
+Sort direction for ordered results.
+
+- `ASC` — Ascending order (oldest first, A-Z).
+- `DESC` — Descending order (newest first, Z-A).
+
+## StorageEventEdge
+
+**object**
+
+- **cursor**: `String!`
+- **node**: `StorageEvent!` ([StorageEvent](/builders/api-schema/shared/#storageevent))
+
+## StorageEventsConnection
+
+**object**
+
+- **edges**: `[StorageEventEdge!]!` ([StorageEventEdge](/builders/api-schema/analytics-types-s-v/#storageeventedge))
+- **nodes**: `[StorageEvent!]!` ([StorageEvent](/builders/api-schema/shared/#storageevent))
+- **pageInfo**: `PageInfo!` ([PageInfo](/builders/api-schema/shared/#pageinfo))
+- **totalCount**: `Int!`
+
+## StorageUsage
+
+**object**
+
+- **storageUsageConnection**: `StorageUsageConnection!` ([StorageUsageConnection](/builders/api-schema/analytics-types-s-v/#storageusageconnection))
+  - `page`: `ConnectionInput` ([ConnectionInput](/builders/api-schema/shared/#connectioninput))
+  - `nodeId`: `String`
+  - `storageScope`: `String`
+  - `timeRange`: `TimeRangeInput` ([TimeRangeInput](/builders/api-schema/shared/#timerangeinput))
+  - `noCache`: `Boolean` (default `false`)
+
+## StorageUsageConnection
+
+**object**
+
+- **edges**: `[StorageUsageEdge!]!` ([StorageUsageEdge](/builders/api-schema/analytics-types-s-v/#storageusageedge))
+- **nodes**: `[StorageUsageRecord!]!` ([StorageUsageRecord](/builders/api-schema/analytics-types-s-v/#storageusagerecord))
+- **pageInfo**: `PageInfo!` ([PageInfo](/builders/api-schema/shared/#pageinfo))
+- **totalCount**: `Int!`
+
+## StorageUsageEdge
+
+**object**
+
+- **cursor**: `String!`
+- **node**: `StorageUsageRecord!` ([StorageUsageRecord](/builders/api-schema/analytics-types-s-v/#storageusagerecord))
+
+## StorageUsageRecord
+
+**object**
+
+Implements [Node](/builders/api-schema/shared/#node).
+
+- **id**: `ID!`
+- **timestamp**: `Time!` ([Time](/builders/api-schema/shared/#time))
+- **nodeId**: `String!`
+- **storageScope**: `String!`
+- **totalBytes**: `Float!`
+- **fileCount**: `Int!`
+- **dvrBytes**: `Float!`
+- **clipBytes**: `Float!`
+- **vodBytes**: `Float!`
+- **frozenDvrBytes**: `Float!`
+- **frozenClipBytes**: `Float!`
+- **frozenVodBytes**: `Float!`
+
+## StreamAnalyticsDaily
+
+**object**
+
+Implements [Node](/builders/api-schema/shared/#node).
+
+- **id**: `ID!`
+- **day**: `Time!` ([Time](/builders/api-schema/shared/#time))
+- **streamId**: `ID!`
+- **stream**: `Stream` ([Stream](/builders/api-schema/shared/#stream))
+- **totalViews**: `Int!`
+- **uniqueViewers**: `Int!`
+- **uniqueCountries**: `Int!`
+- **uniqueCities**: `Int!`
+- **egressBytes**: `Float!`
+
+## StreamAnalyticsDailyConnection
+
+**object**
+
+- **edges**: `[StreamAnalyticsDailyEdge!]!` ([StreamAnalyticsDailyEdge](/builders/api-schema/analytics-types-s-v/#streamanalyticsdailyedge))
+- **nodes**: `[StreamAnalyticsDaily!]!` ([StreamAnalyticsDaily](/builders/api-schema/analytics-types-s-v/#streamanalyticsdaily))
+- **pageInfo**: `PageInfo!` ([PageInfo](/builders/api-schema/shared/#pageinfo))
+- **totalCount**: `Int!`
+
+## StreamAnalyticsDailyEdge
+
+**object**
+
+- **cursor**: `String!`
+- **node**: `StreamAnalyticsDaily!` ([StreamAnalyticsDaily](/builders/api-schema/analytics-types-s-v/#streamanalyticsdaily))
+
+## StreamAnalyticsSummary
+
+**object**
+
+- **streamId**: `ID!`
+- **stream**: `Stream` ([Stream](/builders/api-schema/shared/#stream))
+- **timeRange**: `TimeRange!` ([TimeRange](/builders/api-schema/analytics-types-s-v/#timerange))
+- **rangeAvgViewers**: `Float!`
+- **rangePeakConcurrentViewers**: `Int!`
+- **rangeTotalViews**: `Int!`
+- **rangeTotalSessions**: `Int!`
+- **rangeAvgBufferHealth**: `Float!`
+- **rangeAvgBitrate**: `Int!`
+- **rangeAvgFps**: `Float!`
+- **rangePacketLossRate**: `Float`
+- **rangeAvgConnectionTime**: `Float`
+- **rangeViewerHours**: `Float!`
+- **rangeEgressGb**: `Float!`
+- **rangeAvgSessionSeconds**: `Float!`
+- **rangeAvgBytesPerSession**: `Float!`
+- **rangeUniqueViewers**: `Int!`
+- **rangeUniqueCountries**: `Int!`
+- **rangeRebufferCount**: `Int!`
+- **rangeIssueCount**: `Int!`
+- **rangeBufferDryCount**: `Int!`
+- **rangeQuality**: `QualityTierSummary!` ([QualityTierSummary](/builders/api-schema/analytics-types-a-r/#qualitytiersummary))
+- **rangeEgressSharePercent**: `Float` — This stream&#39;s percentage of tenant total egress (only set in bulk queries).
+- **rangeViewerSharePercent**: `Float` — This stream&#39;s percentage of tenant total unique viewers (only set in bulk queries).
+- **rangeViewerHoursSharePercent**: `Float` — This stream&#39;s percentage of tenant total viewer hours (only set in bulk queries).
+
+## StreamAnalyticsSummaryConnection
+
+**object**
+
+Connection for paginated stream analytics summaries. Returns pre-aggregated summaries for multiple streams with share percentages.
+
+- **edges**: `[StreamAnalyticsSummaryEdge!]!` ([StreamAnalyticsSummaryEdge](/builders/api-schema/analytics-types-s-v/#streamanalyticssummaryedge))
+- **nodes**: `[StreamAnalyticsSummary!]!` ([StreamAnalyticsSummary](/builders/api-schema/analytics-types-s-v/#streamanalyticssummary))
+- **pageInfo**: `PageInfo!` ([PageInfo](/builders/api-schema/shared/#pageinfo))
+- **totalCount**: `Int!`
+
+## StreamAnalyticsSummaryEdge
+
+**object**
+
+Edge for StreamAnalyticsSummary connection.
+
+- **cursor**: `String!`
+- **node**: `StreamAnalyticsSummary!` ([StreamAnalyticsSummary](/builders/api-schema/analytics-types-s-v/#streamanalyticssummary))
+
+## StreamConnectionHourly
+
+**object**
+
+Implements [Node](/builders/api-schema/shared/#node).
+
+- **id**: `ID!`
+- **hour**: `Time!` ([Time](/builders/api-schema/shared/#time))
+- **streamId**: `ID!`
+- **stream**: `Stream` ([Stream](/builders/api-schema/shared/#stream))
+- **totalBytes**: `Float!`
+- **uniqueViewers**: `Int!`
+- **totalSessions**: `Int!`
+
+## StreamConnectionHourlyConnection
+
+**object**
+
+- **edges**: `[StreamConnectionHourlyEdge!]!` ([StreamConnectionHourlyEdge](/builders/api-schema/analytics-types-s-v/#streamconnectionhourlyedge))
+- **nodes**: `[StreamConnectionHourly!]!` ([StreamConnectionHourly](/builders/api-schema/analytics-types-s-v/#streamconnectionhourly))
+- **pageInfo**: `PageInfo!` ([PageInfo](/builders/api-schema/shared/#pageinfo))
+- **totalCount**: `Int!`
+
+## StreamConnectionHourlyEdge
+
+**object**
+
+- **cursor**: `String!`
+- **node**: `StreamConnectionHourly!` ([StreamConnectionHourly](/builders/api-schema/analytics-types-s-v/#streamconnectionhourly))
+
+## StreamEventEdge
+
+**object**
+
+- **cursor**: `String!`
+- **node**: `StreamEvent!` ([StreamEvent](/builders/api-schema/shared/#streamevent))
+
+## StreamEventsConnection
+
+**object**
+
+- **edges**: `[StreamEventEdge!]!` ([StreamEventEdge](/builders/api-schema/analytics-types-s-v/#streameventedge))
+- **nodes**: `[StreamEvent!]!` ([StreamEvent](/builders/api-schema/shared/#streamevent))
+- **pageInfo**: `PageInfo!` ([PageInfo](/builders/api-schema/shared/#pageinfo))
+- **totalCount**: `Int!`
+
+## StreamHealth5m
+
+**object**
+
+Implements [Node](/builders/api-schema/shared/#node).
+
+- **id**: `ID!`
+- **timestamp**: `Time!` ([Time](/builders/api-schema/shared/#time))
+- **nodeId**: `String`
+- **rebufferCount**: `Int!`
+- **issueCount**: `Int!`
+- **sampleIssues**: `String`
+- **avgBitrate**: `Int!`
+- **avgFps**: `Float!`
+- **avgBufferHealth**: `Float!`
+- **avgFrameJitterMs**: `Float`
+- **maxFrameJitterMs**: `Float`
+- **bufferDryCount**: `Int!`
+- **qualityTier**: `String`
+
+## StreamHealth5mConnection
+
+**object**
+
+- **edges**: `[StreamHealth5mEdge!]!` ([StreamHealth5mEdge](/builders/api-schema/analytics-types-s-v/#streamhealth5medge))
+- **nodes**: `[StreamHealth5m!]!` ([StreamHealth5m](/builders/api-schema/analytics-types-s-v/#streamhealth5m))
+- **pageInfo**: `PageInfo!` ([PageInfo](/builders/api-schema/shared/#pageinfo))
+- **totalCount**: `Int!`
+
+## StreamHealth5mEdge
+
+**object**
+
+- **cursor**: `String!`
+- **node**: `StreamHealth5m!` ([StreamHealth5m](/builders/api-schema/analytics-types-s-v/#streamhealth5m))
+
+## StreamHealthMetric
+
+**object**
+
+Implements [Node](/builders/api-schema/shared/#node).
+
+- **id**: `ID!`
+- **timestamp**: `Time!` ([Time](/builders/api-schema/shared/#time))
+- **streamId**: `ID!`
+- **stream**: `Stream` ([Stream](/builders/api-schema/shared/#stream))
+- **nodeId**: `String!`
+- **issuesDescription**: `String`
+- **hasIssues**: `Boolean!`
+- **bitrate**: `Int`
+- **fps**: `Float`
+- **width**: `Int`
+- **height**: `Int`
+- **codec**: `String`
+- **qualityTier**: `String`
+- **gopSize**: `Int`
+- **frameMsMax**: `Float`
+- **frameMsMin**: `Float`
+- **framesMax**: `Int`
+- **framesMin**: `Int`
+- **keyframeMsMax**: `Float`
+- **keyframeMsMin**: `Float`
+- **frameJitterMs**: `Float`
+- **trackCount**: `Int`
+- **bufferState**: `BufferState!` ([BufferState](/builders/api-schema/analytics-types-a-r/#bufferstate))
+- **bufferHealth**: `Float`
+- **bufferSize**: `Int`
+- **audioChannels**: `Int`
+- **audioSampleRate**: `Int`
+- **audioCodec**: `String`
+- **audioBitrate**: `Int`
+- **trackMetadata**: `JSON` ([JSON](/builders/api-schema/shared/#json))
+
+## StreamHealthMetricEdge
+
+**object**
+
+- **cursor**: `String!`
+- **node**: `StreamHealthMetric!` ([StreamHealthMetric](/builders/api-schema/analytics-types-s-v/#streamhealthmetric))
+
+## StreamHealthMetricsConnection
+
+**object**
+
+- **edges**: `[StreamHealthMetricEdge!]!` ([StreamHealthMetricEdge](/builders/api-schema/analytics-types-s-v/#streamhealthmetricedge))
+- **nodes**: `[StreamHealthMetric!]!` ([StreamHealthMetric](/builders/api-schema/analytics-types-s-v/#streamhealthmetric))
+- **pageInfo**: `PageInfo!` ([PageInfo](/builders/api-schema/shared/#pageinfo))
+- **totalCount**: `Int!`
+
+## StreamHealthSummary
+
+**object**
+
+Pre-aggregated stream health summary from stream_health_5m.
+
+- **avgBitrate**: `Float!`
+- **avgFps**: `Float!`
+- **avgBufferHealth**: `Float!`
+- **totalRebufferCount**: `Int!`
+- **totalIssueCount**: `Int!`
+- **sampleCount**: `Int!`
+- **hasActiveIssues**: `Boolean!`
+- **currentQualityTier**: `String`
+
+## StreamSummarySortField
+
+**enum**
+
+Sort field for stream analytics summaries.
+
+- `EGRESS_GB` — Sort by egress bandwidth (cost attribution).
+- `UNIQUE_VIEWERS` — Sort by unique viewers (engagement).
+- `TOTAL_VIEWS` — Sort by total views (popularity).
+- `VIEWER_HOURS` — Sort by viewer hours (watch time).
+
+## StreamingUsage
+
+**object**
+
+Streaming usage analytics. `streamId` arguments accept Stream.id (Relay global ID).
+
+- **viewerGeographicsConnection**: `ViewerGeographicsConnection!` ([ViewerGeographicsConnection](/builders/api-schema/analytics-types-s-v/#viewergeographicsconnection))
+  - `page`: `ConnectionInput` ([ConnectionInput](/builders/api-schema/shared/#connectioninput))
+  - `streamId`: `ID`
+  - `timeRange`: `TimeRangeInput` ([TimeRangeInput](/builders/api-schema/shared/#timerangeinput))
+- **geographicDistribution**: `GeographicDistribution` ([GeographicDistribution](/builders/api-schema/analytics-types-a-r/#geographicdistribution))
+  - `streamId`: `ID`
+  - `timeRange`: `TimeRangeInput` ([TimeRangeInput](/builders/api-schema/shared/#timerangeinput))
+  - `topN`: `Int` (default `10`)
+- **streamAnalyticsSummary**: `StreamAnalyticsSummary!` ([StreamAnalyticsSummary](/builders/api-schema/analytics-types-s-v/#streamanalyticssummary))
+  - `streamId`: `ID!`
+  - `timeRange`: `TimeRangeInput` ([TimeRangeInput](/builders/api-schema/shared/#timerangeinput))
+- **streamAnalyticsSummariesConnection**: `StreamAnalyticsSummaryConnection!` ([StreamAnalyticsSummaryConnection](/builders/api-schema/analytics-types-s-v/#streamanalyticssummaryconnection)) — Pre-aggregated analytics summaries for multiple streams. Returns sorted, paginated results with tenant-wide share percentages.
+  - `page`: `ConnectionInput` ([ConnectionInput](/builders/api-schema/shared/#connectioninput))
+  - `timeRange`: `TimeRangeInput!` ([TimeRangeInput](/builders/api-schema/shared/#timerangeinput))
+  - `sortBy`: `StreamSummarySortField` ([StreamSummarySortField](/builders/api-schema/analytics-types-s-v/#streamsummarysortfield)) (default `EGRESS_GB`) — Sort field (default: EGRESS_GB for cost attribution).
+  - `sortOrder`: `SortOrder` ([SortOrder](/builders/api-schema/analytics-types-s-v/#sortorder)) (default `DESC`) — Sort direction (default: DESC for top results first).
+- **viewerHoursHourlyConnection**: `ViewerHoursHourlyConnection!` ([ViewerHoursHourlyConnection](/builders/api-schema/analytics-types-s-v/#viewerhourshourlyconnection))
+  - `page`: `ConnectionInput` ([ConnectionInput](/builders/api-schema/shared/#connectioninput))
+  - `streamId`: `ID`
+  - `timeRange`: `TimeRangeInput` ([TimeRangeInput](/builders/api-schema/shared/#timerangeinput))
+  - `noCache`: `Boolean` (default `false`)
+- **viewerGeoHourlyConnection**: `ViewerGeoHourlyConnection!` ([ViewerGeoHourlyConnection](/builders/api-schema/analytics-types-s-v/#viewergeohourlyconnection))
+  - `page`: `ConnectionInput` ([ConnectionInput](/builders/api-schema/shared/#connectioninput))
+  - `timeRange`: `TimeRangeInput` ([TimeRangeInput](/builders/api-schema/shared/#timerangeinput))
+  - `noCache`: `Boolean` (default `false`)
+- **viewerTimeSeriesConnection**: `ViewerTimeSeriesConnection!` ([ViewerTimeSeriesConnection](/builders/api-schema/analytics-types-s-v/#viewertimeseriesconnection))
+  - `page`: `ConnectionInput` ([ConnectionInput](/builders/api-schema/shared/#connectioninput))
+  - `streamId`: `ID!`
+  - `timeRange`: `TimeRangeInput` ([TimeRangeInput](/builders/api-schema/shared/#timerangeinput))
+  - `interval`: `String`
+- **qualityTierDailyConnection**: `QualityTierDailyConnection!` ([QualityTierDailyConnection](/builders/api-schema/analytics-types-a-r/#qualitytierdailyconnection))
+  - `page`: `ConnectionInput` ([ConnectionInput](/builders/api-schema/shared/#connectioninput))
+  - `streamId`: `ID`
+  - `timeRange`: `TimeRangeInput` ([TimeRangeInput](/builders/api-schema/shared/#timerangeinput))
+  - `noCache`: `Boolean` (default `false`)
+- **streamConnectionHourlyConnection**: `StreamConnectionHourlyConnection!` ([StreamConnectionHourlyConnection](/builders/api-schema/analytics-types-s-v/#streamconnectionhourlyconnection))
+  - `page`: `ConnectionInput` ([ConnectionInput](/builders/api-schema/shared/#connectioninput))
+  - `streamId`: `ID`
+  - `timeRange`: `TimeRangeInput` ([TimeRangeInput](/builders/api-schema/shared/#timerangeinput))
+  - `noCache`: `Boolean` (default `false`)
+- **tenantAnalyticsDailyConnection**: `TenantAnalyticsDailyConnection!` ([TenantAnalyticsDailyConnection](/builders/api-schema/analytics-types-s-v/#tenantanalyticsdailyconnection))
+  - `page`: `ConnectionInput` ([ConnectionInput](/builders/api-schema/shared/#connectioninput))
+  - `timeRange`: `TimeRangeInput` ([TimeRangeInput](/builders/api-schema/shared/#timerangeinput))
+  - `noCache`: `Boolean` (default `false`)
+- **streamAnalyticsDailyConnection**: `StreamAnalyticsDailyConnection!` ([StreamAnalyticsDailyConnection](/builders/api-schema/analytics-types-s-v/#streamanalyticsdailyconnection))
+  - `page`: `ConnectionInput` ([ConnectionInput](/builders/api-schema/shared/#connectioninput))
+  - `streamId`: `ID`
+  - `timeRange`: `TimeRangeInput` ([TimeRangeInput](/builders/api-schema/shared/#timerangeinput))
+  - `noCache`: `Boolean` (default `false`)
+
+## TenantAnalyticsDaily
+
+**object**
+
+- **id**: `ID!`
+- **day**: `Time!` ([Time](/builders/api-schema/shared/#time))
+- **totalStreams**: `Int!`
+- **totalViews**: `Int!`
+- **uniqueViewers**: `Int!`
+- **egressBytes**: `Float!`
+
+## TenantAnalyticsDailyConnection
+
+**object**
+
+- **edges**: `[TenantAnalyticsDailyEdge!]!` ([TenantAnalyticsDailyEdge](/builders/api-schema/analytics-types-s-v/#tenantanalyticsdailyedge))
+- **nodes**: `[TenantAnalyticsDaily!]!` ([TenantAnalyticsDaily](/builders/api-schema/analytics-types-s-v/#tenantanalyticsdaily))
+- **pageInfo**: `PageInfo!` ([PageInfo](/builders/api-schema/shared/#pageinfo))
+- **totalCount**: `Int!`
+
+## TenantAnalyticsDailyEdge
+
+**object**
+
+- **cursor**: `String!`
+- **node**: `TenantAnalyticsDaily!` ([TenantAnalyticsDaily](/builders/api-schema/analytics-types-s-v/#tenantanalyticsdaily))
+
+## TenantDailyStat
+
+**object**
+
+Implements [Node](/builders/api-schema/shared/#node).
+
+- **id**: `ID!`
+- **date**: `Time!` ([Time](/builders/api-schema/shared/#time))
+- **egressGb**: `Float!`
+- **viewerHours**: `Float!`
+- **uniqueViewers**: `Int!`
+- **totalSessions**: `Int!`
+- **totalViews**: `Int!`
+
+## TimeRange
+
+**object**
+
+Time range returned in query results.
+
+- **start**: `Time!` ([Time](/builders/api-schema/shared/#time)) — Start of the time range.
+- **end**: `Time!` ([Time](/builders/api-schema/shared/#time)) — End of the time range.
+
+## TopAssetEntry
+
+**object**
+
+One ranked asset for the Top Assets surface — cross-kind, ranked server-side by audience sessions in the window. `kind` badges the asset type; title/playbackId are composed from the catalog. (Named distinctly from the periscope proto TopAsset to avoid gqlgen autobinding to that message.)
+
+- **artifactHash**: `String!`
+- **kind**: `StorageArtifactKind!` ([StorageArtifactKind](/builders/api-schema/shared/#storageartifactkind))
+- **totalSessions**: `Int!`
+- **watchHours**: `Float!`
+- **durationS**: `Int!`
+- **title**: `String`
+- **playbackId**: `String`
+
+## TrackListEvent
+
+**object**
+
+Implements [Node](/builders/api-schema/shared/#node).
+
+- **id**: `ID!`
+- **streamId**: `ID!`
+- **stream**: `Stream` ([Stream](/builders/api-schema/shared/#stream))
+- **nodeId**: `String`
+- **trackList**: `String!`
+- **trackCount**: `Int!`
+- **timestamp**: `Time!` ([Time](/builders/api-schema/shared/#time))
+- **tracks**: `[StreamTrack!]` ([StreamTrack](/builders/api-schema/shared/#streamtrack))
+
+## TrackListEventEdge
+
+**object**
+
+- **cursor**: `String!`
+- **node**: `TrackListEvent!` ([TrackListEvent](/builders/api-schema/analytics-types-s-v/#tracklistevent))
+
+## TrackListEventsConnection
+
+**object**
+
+- **edges**: `[TrackListEventEdge!]!` ([TrackListEventEdge](/builders/api-schema/analytics-types-s-v/#tracklisteventedge))
+- **nodes**: `[TrackListEvent!]!` ([TrackListEvent](/builders/api-schema/analytics-types-s-v/#tracklistevent))
+- **pageInfo**: `PageInfo!` ([PageInfo](/builders/api-schema/shared/#pageinfo))
+- **totalCount**: `Int!`
+
+## ViewerCountBucket
+
+**object**
+
+- **timestamp**: `Time!` ([Time](/builders/api-schema/shared/#time))
+- **viewerCount**: `Int!`
+- **streamId**: `ID`
+- **stream**: `Stream` ([Stream](/builders/api-schema/shared/#stream))
+
+## ViewerCountBucketEdge
+
+**object**
+
+- **cursor**: `String!`
+- **node**: `ViewerCountBucket!` ([ViewerCountBucket](/builders/api-schema/analytics-types-s-v/#viewercountbucket))
+
+## ViewerGeoHourly
+
+**object**
+
+Implements [Node](/builders/api-schema/shared/#node).
+
+- **id**: `ID!`
+- **hour**: `Time!` ([Time](/builders/api-schema/shared/#time))
+- **countryCode**: `String!`
+- **viewerCount**: `Int!`
+- **viewerHours**: `Float!`
+- **egressGb**: `Float!`
+
+## ViewerGeoHourlyConnection
+
+**object**
+
+- **edges**: `[ViewerGeoHourlyEdge!]!` ([ViewerGeoHourlyEdge](/builders/api-schema/analytics-types-s-v/#viewergeohourlyedge))
+- **nodes**: `[ViewerGeoHourly!]!` ([ViewerGeoHourly](/builders/api-schema/analytics-types-s-v/#viewergeohourly))
+- **pageInfo**: `PageInfo!` ([PageInfo](/builders/api-schema/shared/#pageinfo))
+- **totalCount**: `Int!`
+
+## ViewerGeoHourlyEdge
+
+**object**
+
+- **cursor**: `String!`
+- **node**: `ViewerGeoHourly!` ([ViewerGeoHourly](/builders/api-schema/analytics-types-s-v/#viewergeohourly))
+
+## ViewerGeographic
+
+**object**
+
+- **timestamp**: `Time!` ([Time](/builders/api-schema/shared/#time))
+- **streamId**: `ID`
+- **stream**: `Stream` ([Stream](/builders/api-schema/shared/#stream))
+- **nodeId**: `String`
+- **countryCode**: `String`
+- **city**: `String`
+- **latitude**: `Float`
+- **longitude**: `Float`
+- **viewerCount**: `Int`
+- **connectionAddr**: `String`
+- **eventType**: `String`
+- **source**: `String`
+- **sessionDurationSeconds**: `Int`
+- **bytesTransferred**: `Float`
+- **connector**: `String`
+
+## ViewerGeographicEdge
+
+**object**
+
+- **cursor**: `String!`
+- **node**: `ViewerGeographic!` ([ViewerGeographic](/builders/api-schema/analytics-types-s-v/#viewergeographic))
+
+## ViewerGeographicsConnection
+
+**object**
+
+- **edges**: `[ViewerGeographicEdge!]!` ([ViewerGeographicEdge](/builders/api-schema/analytics-types-s-v/#viewergeographicedge))
+- **nodes**: `[ViewerGeographic!]!` ([ViewerGeographic](/builders/api-schema/analytics-types-s-v/#viewergeographic))
+- **pageInfo**: `PageInfo!` ([PageInfo](/builders/api-schema/shared/#pageinfo))
+- **totalCount**: `Int!`
+
+## ViewerHoursHourly
+
+**object**
+
+Implements [Node](/builders/api-schema/shared/#node).
+
+- **id**: `ID!`
+- **hour**: `Time!` ([Time](/builders/api-schema/shared/#time))
+- **streamId**: `ID`
+- **stream**: `Stream` ([Stream](/builders/api-schema/shared/#stream))
+- **countryCode**: `String`
+- **uniqueViewers**: `Int!`
+- **totalSessionSeconds**: `Int!`
+- **totalBytes**: `Float!`
+- **viewerHours**: `Float!`
+- **egressGb**: `Float!`
+
+## ViewerHoursHourlyConnection
+
+**object**
+
+- **edges**: `[ViewerHoursHourlyEdge!]!` ([ViewerHoursHourlyEdge](/builders/api-schema/analytics-types-s-v/#viewerhourshourlyedge))
+- **nodes**: `[ViewerHoursHourly!]!` ([ViewerHoursHourly](/builders/api-schema/analytics-types-s-v/#viewerhourshourly))
+- **pageInfo**: `PageInfo!` ([PageInfo](/builders/api-schema/shared/#pageinfo))
+- **totalCount**: `Int!`
+
+## ViewerHoursHourlyEdge
+
+**object**
+
+- **cursor**: `String!`
+- **node**: `ViewerHoursHourly!` ([ViewerHoursHourly](/builders/api-schema/analytics-types-s-v/#viewerhourshourly))
+
+## ViewerSession
+
+**object**
+
+Implements [Node](/builders/api-schema/shared/#node).
+
+- **id**: `ID!`
+- **timestamp**: `Time!` ([Time](/builders/api-schema/shared/#time))
+- **streamId**: `ID!`
+- **stream**: `Stream` ([Stream](/builders/api-schema/shared/#stream))
+- **nodeId**: `String`
+- **sessionId**: `String!`
+- **connectedAt**: `Time` ([Time](/builders/api-schema/shared/#time))
+- **disconnectedAt**: `Time` ([Time](/builders/api-schema/shared/#time))
+- **connector**: `String`
+- **countryCode**: `String`
+- **city**: `String`
+- **latitude**: `Float`
+- **longitude**: `Float`
+- **durationSeconds**: `Int`
+- **bytesUp**: `Float`
+- **bytesDown**: `Float`
+- **connectionQuality**: `Float`
+- **bufferHealth**: `Float`
+- **clientBucket**: `GeoBucket` ([GeoBucket](/builders/api-schema/shared/#geobucket))
+
+## ViewerSessionEdge
+
+**object**
+
+- **cursor**: `String!`
+- **node**: `ViewerSession!` ([ViewerSession](/builders/api-schema/analytics-types-s-v/#viewersession))
+
+## ViewerSessionsConnection
+
+**object**
+
+- **edges**: `[ViewerSessionEdge!]!` ([ViewerSessionEdge](/builders/api-schema/analytics-types-s-v/#viewersessionedge))
+- **nodes**: `[ViewerSession!]!` ([ViewerSession](/builders/api-schema/analytics-types-s-v/#viewersession))
+- **pageInfo**: `PageInfo!` ([PageInfo](/builders/api-schema/shared/#pageinfo))
+- **totalCount**: `Int!`
+
+## ViewerTimeSeriesConnection
+
+**object**
+
+- **edges**: `[ViewerCountBucketEdge!]!` ([ViewerCountBucketEdge](/builders/api-schema/analytics-types-s-v/#viewercountbucketedge))
+- **nodes**: `[ViewerCountBucket!]!` ([ViewerCountBucket](/builders/api-schema/analytics-types-s-v/#viewercountbucket))
+- **pageInfo**: `PageInfo!` ([PageInfo](/builders/api-schema/shared/#pageinfo))
+- **totalCount**: `Int!`
+
+## VodRetention
+
+**object**
+
+VOD retention curve for an artifact. retention(T) = points[T].reached / totalSessions (monotonic non-increasing); density(T) = points[T].secondsWatched (the &#34;most replayed&#34; curve). Buckets are fixed-width (bucketWidthS) along the asset timeline. These differ because a seek-to-end raises reach without adding density.
+
+- **bucketWidthS**: `Int!`
+- **assetDurationS**: `Int!`
+- **totalSessions**: `Int!`
+- **points**: `[VodRetentionPoint!]!` ([VodRetentionPoint](/builders/api-schema/analytics-types-s-v/#vodretentionpoint))
+
+## VodRetentionAsset
+
+**object**
+
+A VOD asset with retention data in the window. Eligibility + stats (sessions, duration, lastSeen) come from analytics; title/playbackId are composed from the catalog by artifactHash — both may be null when the asset is uncatalogued (e.g. deleted but retention still within TTL).
+
+- **artifactHash**: `String!`
+- **totalSessions**: `Int!`
+- **durationS**: `Int!`
+- **lastSeen**: `Time!` ([Time](/builders/api-schema/shared/#time))
+- **title**: `String`
+- **playbackId**: `String`
+
+## VodRetentionAssetConnection
+
+**object**
+
+- **edges**: `[VodRetentionAssetEdge!]!` ([VodRetentionAssetEdge](/builders/api-schema/analytics-types-s-v/#vodretentionassetedge))
+- **nodes**: `[VodRetentionAsset!]!` ([VodRetentionAsset](/builders/api-schema/analytics-types-s-v/#vodretentionasset))
+- **pageInfo**: `PageInfo!` ([PageInfo](/builders/api-schema/shared/#pageinfo))
+- **totalCount**: `Int!`
+
+## VodRetentionAssetEdge
+
+**object**
+
+- **cursor**: `String!`
+- **node**: `VodRetentionAsset!` ([VodRetentionAsset](/builders/api-schema/analytics-types-s-v/#vodretentionasset))
+
+## VodRetentionPoint
+
+**object**
+
+One point of the VOD retention curve: a fixed-width timeline bucket with its watched-seconds density and the count of sessions that reached it.
+
+- **bucketIndex**: `Int!`
+- **secondsWatched**: `Float!`
+- **reached**: `Int!` — Sessions whose furthest playhead position is at or beyond this bucket (audience retention numerator).

@@ -1,11 +1,11 @@
 # @livepeer-frameworks/api
 
-Typed client for the FrameWorks GraphQL API. It ships the public operation set as typed
-documents, plus the parts every integration writes by hand otherwise: retries, pagination, typed errors, a server
-version check, VOD uploads, playback token signing, and webhook verification.
+Typed client for the FrameWorks GraphQL API. It ships a typed document for every public root field and argument-taking
+field of the public schema, typed custom selections, and the parts every integration writes by hand otherwise: retries,
+pagination, typed errors, a server version check, VOD uploads, playback token signing, and webhook verification.
 
 The Go (`github.com/Livepeer-FrameWorks/sdk-go`) and Python (`livepeer-frameworks`) SDKs are generated from the same
-operations and share this package's version.
+schema and operations and share this package's version.
 
 ```sh
 npm install @livepeer-frameworks/api
@@ -32,7 +32,44 @@ console.log(stream.streamKey, stream.playbackId);
 | ---------------------------------------- | --------------------------------------------------------------------- |
 | `@livepeer-frameworks/api`               | client, typed documents, errors, pagination, uploads, playback tokens |
 | `@livepeer-frameworks/api/subscriptions` | WebSocket subscriptions (needs the `graphql-ws` peer dependency)      |
+| `@livepeer-frameworks/api/select`        | typed custom selections over the whole public schema                  |
 | `@livepeer-frameworks/api/webhooks`      | webhook signature verification and typed event parsing                |
+
+## Custom selections
+
+Every public root field and argument-taking field has a generated document with a default selection. For fields beyond
+it, `@livepeer-frameworks/api/select` builds typed operations from selection objects (generated with
+[Genql](https://genql.dev) from the public schema) and sends them through an existing client, so authentication,
+retries, typed errors, and the server version check are the same as for `client.request`:
+
+```ts
+import { createClient } from "@livepeer-frameworks/api";
+import { createSelectClient } from "@livepeer-frameworks/api/select";
+import { createSubscriptionClient } from "@livepeer-frameworks/api/subscriptions";
+
+const select = createSelectClient(createClient({ url, token }), {
+  subscriptions: createSubscriptionClient({ url: wsUrl, token }), // only for subscription()
+});
+
+const { stream } = await select.query({
+  stream: { __args: { id }, name: true, metrics: { status: true, currentViewers: true } },
+});
+
+const { createStream } = await select.mutation({
+  createStream: {
+    __args: { input: { name: "Launch stream" } },
+    __typename: true,
+    on_Stream: { id: true, streamKey: true },
+    on_ValidationError: { message: true, field: true },
+  },
+});
+```
+
+`__args` passes arguments, `on_<Type>` selects a union member or interface implementation, and `__scalar: true`
+selects every scalar field of a level. A selected field the schema does not have throws `TypeError` before anything is
+sent. A union result is typed as the union of its members; select `__typename` to narrow it. `__name` names the
+operation, and may not reuse an SDK operation name. The entry carries the schema's type map (about 20 kB gzipped), which
+the main entry does not include.
 
 ## Versions
 

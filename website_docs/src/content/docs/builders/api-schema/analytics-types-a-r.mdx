@@ -1,0 +1,938 @@
+---
+title: Analytics types A–R
+description: Analytics types A–R in the generated public GraphQL reference.
+sidebar:
+  order: 7
+---
+
+[GraphQL schema reference](/builders/api-schema/) · [API guide](/builders/api-reference/) · [SDKs](/builders/sdks/) · Types of [Analytics](/builders/api-schema/analytics/)
+
+## APIUsage
+
+**object**
+
+API usage analytics. Tracks GraphQL API request counts by auth type, operation type, and operation name.
+
+- **apiUsageConnection**: `APIUsageConnection!` ([APIUsageConnection](/builders/api-schema/analytics-types-a-r/#apiusageconnection))
+  - `page`: `ConnectionInput` ([ConnectionInput](/builders/api-schema/shared/#connectioninput))
+  - `authType`: `String`
+  - `operationType`: `String`
+  - `timeRange`: `TimeRangeInput` ([TimeRangeInput](/builders/api-schema/shared/#timerangeinput))
+  - `noCache`: `Boolean` (default `false`)
+
+## APIUsageConnection
+
+**object**
+
+- **edges**: `[APIUsageEdge!]!` ([APIUsageEdge](/builders/api-schema/analytics-types-a-r/#apiusageedge))
+- **nodes**: `[APIUsageRecord!]!` ([APIUsageRecord](/builders/api-schema/analytics-types-a-r/#apiusagerecord))
+- **pageInfo**: `PageInfo!` ([PageInfo](/builders/api-schema/shared/#pageinfo))
+- **totalCount**: `Int!`
+- **summaries**: `[APIUsageSummary!]!` ([APIUsageSummary](/builders/api-schema/analytics-types-a-r/#apiusagesummary))
+- **operationSummaries**: `[APIUsageOperationSummary!]!` ([APIUsageOperationSummary](/builders/api-schema/analytics-types-a-r/#apiusageoperationsummary))
+
+## APIUsageEdge
+
+**object**
+
+- **cursor**: `String!`
+- **node**: `APIUsageRecord!` ([APIUsageRecord](/builders/api-schema/analytics-types-a-r/#apiusagerecord))
+
+## APIUsageOperationSummary
+
+**object**
+
+- **operationType**: `String!`
+- **totalRequests**: `Int!`
+- **totalErrors**: `Int!`
+- **uniqueOperations**: `Int!`
+- **avgDurationMs**: `Float!`
+- **totalComplexity**: `Int!`
+
+## APIUsageRecord
+
+**object**
+
+Implements [Node](/builders/api-schema/shared/#node).
+
+- **id**: `ID!`
+- **timestamp**: `Time!` ([Time](/builders/api-schema/shared/#time))
+- **authType**: `String!`
+- **operationType**: `String!`
+- **operationName**: `String!`
+- **requestCount**: `Int!`
+- **errorCount**: `Int!`
+- **totalDurationMs**: `Float!`
+- **totalComplexity**: `Int!`
+- **uniqueUsers**: `Int!`
+- **uniqueTokens**: `Int!`
+
+## APIUsageSummary
+
+**object**
+
+- **date**: `Time!` ([Time](/builders/api-schema/shared/#time))
+- **authType**: `String!`
+- **totalRequests**: `Int!`
+- **totalErrors**: `Int!`
+- **avgDurationMs**: `Float!`
+- **totalComplexity**: `Int!`
+- **uniqueUsers**: `Int!`
+- **uniqueTokens**: `Int!`
+
+## Analytics
+
+**object**
+
+Unified analytics surface for all platform metrics. Organized into logical domains: usage, health, lifecycle, and infrastructure.
+
+- **overview**: `PlatformOverview` ([PlatformOverview](/builders/api-schema/analytics-types-a-r/#platformoverview)) — Platform-wide overview metrics for the given time range.
+  - `timeRange`: `TimeRangeInput` ([TimeRangeInput](/builders/api-schema/shared/#timerangeinput)) — Time range for the overview.
+- **usage**: `AnalyticsUsage!` ([AnalyticsUsage](/builders/api-schema/analytics-types-a-r/#analyticsusage)) — Usage analytics: streaming hours, storage, and processing.
+- **health**: `AnalyticsHealth!` ([AnalyticsHealth](/builders/api-schema/analytics-types-a-r/#analyticshealth)) — Health analytics: stream quality, rebuffering, client QoE.
+- **lifecycle**: `AnalyticsLifecycle!` ([AnalyticsLifecycle](/builders/api-schema/analytics-types-a-r/#analyticslifecycle)) — Lifecycle analytics: stream events, artifacts, connections.
+- **infra**: `AnalyticsInfra!` ([AnalyticsInfra](/builders/api-schema/analytics-types-a-r/#analyticsinfra)) — Infrastructure analytics: routing, node metrics, services.
+
+## AnalyticsHealth
+
+**object**
+
+Health analytics for streams. `streamId` arguments accept Stream.id (Relay global ID).
+
+- **streamHealthConnection**: `StreamHealthMetricsConnection!` ([StreamHealthMetricsConnection](/builders/api-schema/analytics-types-s-v/#streamhealthmetricsconnection))
+  - `page`: `ConnectionInput` ([ConnectionInput](/builders/api-schema/shared/#connectioninput))
+  - `streamId`: `ID`
+  - `timeRange`: `TimeRangeInput` ([TimeRangeInput](/builders/api-schema/shared/#timerangeinput))
+  - `noCache`: `Boolean` (default `false`)
+- **streamHealth5mConnection**: `StreamHealth5mConnection!` ([StreamHealth5mConnection](/builders/api-schema/analytics-types-s-v/#streamhealth5mconnection))
+  - `page`: `ConnectionInput` ([ConnectionInput](/builders/api-schema/shared/#connectioninput))
+  - `streamId`: `ID!`
+  - `timeRange`: `TimeRangeInput` ([TimeRangeInput](/builders/api-schema/shared/#timerangeinput))
+  - `noCache`: `Boolean` (default `false`)
+- **rebufferingEventsConnection**: `RebufferingEventsConnection!` ([RebufferingEventsConnection](/builders/api-schema/analytics-types-a-r/#rebufferingeventsconnection))
+  - `page`: `ConnectionInput` ([ConnectionInput](/builders/api-schema/shared/#connectioninput))
+  - `streamId`: `ID`
+  - `nodeId`: `String`
+  - `timeRange`: `TimeRangeInput` ([TimeRangeInput](/builders/api-schema/shared/#timerangeinput))
+  - `noCache`: `Boolean` (default `false`)
+- **clientQoeConnection**: `ClientMetrics5mConnection!` ([ClientMetrics5mConnection](/builders/api-schema/analytics-types-a-r/#clientmetrics5mconnection))
+  - `page`: `ConnectionInput` ([ConnectionInput](/builders/api-schema/shared/#connectioninput))
+  - `streamId`: `ID`
+  - `nodeId`: `String`
+  - `timeRange`: `TimeRangeInput` ([TimeRangeInput](/builders/api-schema/shared/#timerangeinput))
+  - `noCache`: `Boolean` (default `false`)
+- **streamHealthSummary**: `StreamHealthSummary!` ([StreamHealthSummary](/builders/api-schema/analytics-types-s-v/#streamhealthsummary)) — Pre-aggregated health summary for dashboard views. Replaces paginated streamHealthConnection when only scalar stats are needed.
+  - `streamId`: `ID`
+  - `timeRange`: `TimeRangeInput` ([TimeRangeInput](/builders/api-schema/shared/#timerangeinput))
+  - `noCache`: `Boolean` (default `false`)
+- **clientQoeSummary**: `ClientQoeSummary!` ([ClientQoeSummary](/builders/api-schema/analytics-types-a-r/#clientqoesummary)) — Pre-aggregated client QoE summary for dashboard views. Replaces paginated clientQoeConnection when only scalar stats are needed.
+  - `streamId`: `ID`
+  - `timeRange`: `TimeRangeInput` ([TimeRangeInput](/builders/api-schema/shared/#timerangeinput))
+  - `noCache`: `Boolean` (default `false`)
+- **playerBootSummary**: `PlayerBootSummary!` ([PlayerBootSummary](/builders/api-schema/analytics-types-a-r/#playerbootsummary)) — Player startup (boot) summary for the tenant that owns the content. Diagnostic.
+  - `streamId`: `ID`
+  - `artifactHash`: `String`
+  - `timeRange`: `TimeRangeInput` ([TimeRangeInput](/builders/api-schema/shared/#timerangeinput))
+  - `noCache`: `Boolean` (default `false`)
+- **sessionQoeSummary**: `SessionQoeSummary!` ([SessionQoeSummary](/builders/api-schema/analytics-types-s-v/#sessionqoesummary)) — Viewer-experienced QoE summary (rebuffering, frame drops, bitrate, EBVS) for the tenant that owns the content. Read-time ratios over the player-reported session beacons. Diagnostic only — never billing/viewer-count truth.
+  - `streamId`: `ID`
+  - `artifactHash`: `String`
+  - `timeRange`: `TimeRangeInput` ([TimeRangeInput](/builders/api-schema/shared/#timerangeinput))
+  - `noCache`: `Boolean` (default `false`)
+- **vodRetention**: `VodRetention!` ([VodRetention](/builders/api-schema/analytics-types-s-v/#vodretention)) — VOD retention curve for one artifact: per-bucket watched-seconds (density / &#34;most replayed&#34;) plus reached-count audience retention (sessions reaching each bucket). `artifactHash` is required.
+  - `artifactHash`: `String!`
+  - `timeRange`: `TimeRangeInput` ([TimeRangeInput](/builders/api-schema/shared/#timerangeinput))
+  - `noCache`: `Boolean` (default `false`)
+- **playerBootTimeSeries**: `[PlayerBootTimeSeriesBucket!]!` ([PlayerBootTimeSeriesBucket](/builders/api-schema/analytics-types-a-r/#playerboottimeseriesbucket)) — Player startup summary bucketed over time (read-time TTF percentiles per `interval` window: &#34;5m&#34;/&#34;15m&#34;/&#34;1h&#34;/&#34;1d&#34;). Companion to playerBootSummary for trend charts. `bootCount` per bucket is the denominator for low-sample windows.
+  - `streamId`: `ID`
+  - `artifactHash`: `String`
+  - `timeRange`: `TimeRangeInput` ([TimeRangeInput](/builders/api-schema/shared/#timerangeinput))
+  - `interval`: `String` (default `&#34;1h&#34;`)
+  - `noCache`: `Boolean` (default `false`)
+- **sessionQoeTimeSeries**: `[SessionQoeTimeSeriesBucket!]!` ([SessionQoeTimeSeriesBucket](/builders/api-schema/analytics-types-s-v/#sessionqoetimeseriesbucket)) — Viewer-experienced QoE bucketed over time (per-`interval` rebuffering/frame-drop/ bitrate). Companion to sessionQoeSummary for trend charts. `sessionCount` and `playedHours` per bucket are the denominators for low-sample windows.
+  - `streamId`: `ID`
+  - `artifactHash`: `String`
+  - `timeRange`: `TimeRangeInput` ([TimeRangeInput](/builders/api-schema/shared/#timerangeinput))
+  - `interval`: `String` (default `&#34;1h&#34;`)
+  - `noCache`: `Boolean` (default `false`)
+- **vodRetentionAssets**: `VodRetentionAssetConnection!` ([VodRetentionAssetConnection](/builders/api-schema/analytics-types-s-v/#vodretentionassetconnection)) — VOD assets that have retention data in the window — the picker backing the retention view. Eligibility (VOD content with real reach samples) is owned by analytics; title/playbackId are composed from the catalog by artifactHash.
+  - `page`: `ConnectionInput` ([ConnectionInput](/builders/api-schema/shared/#connectioninput))
+  - `timeRange`: `TimeRangeInput` ([TimeRangeInput](/builders/api-schema/shared/#timerangeinput))
+  - `noCache`: `Boolean` (default `false`)
+- **topAssets**: `[TopAssetEntry!]!` ([TopAssetEntry](/builders/api-schema/analytics-types-s-v/#topassetentry)) — Top assets by audience in the window — server-ranked by sessions, across every kind (VOD, clip, DVR, chapter). Backs the &#34;Top Assets&#34; table on the analytics overview. title/playbackId are composed from the catalog by artifactHash.
+  - `timeRange`: `TimeRangeInput` ([TimeRangeInput](/builders/api-schema/shared/#timerangeinput))
+  - `limit`: `Int` (default `10`)
+- **artifactNodeCopies**: `AssetNodeCopies!` ([AssetNodeCopies](/builders/api-schema/analytics-types-a-r/#assetnodecopies)) — Nodes currently holding a transient LOCAL COPY of one artifact (not the durable object-storage copy), from the node-copy telemetry the media plane emits. `role` is `origin` (producer/relay source) or `cache` (synced pull); `isComplete` marks a full local copy. Read-through relay block caches are not represented. Node geo is enriched from the infrastructure registry. `artifactHash` is required. When `truncated` is true the node set was capped and is NOT exhaustive.
+  - `artifactHash`: `String!`
+
+## AnalyticsInfra
+
+**object**
+
+Infrastructure analytics. `streamId` arguments accept Stream.id (Relay global ID) where present.
+
+- **routingEventsConnection**: `RoutingEventsConnection!` ([RoutingEventsConnection](/builders/api-schema/analytics-types-a-r/#routingeventsconnection))
+  - `page`: `ConnectionInput` ([ConnectionInput](/builders/api-schema/shared/#connectioninput))
+  - `streamId`: `ID`
+  - `timeRange`: `TimeRangeInput` ([TimeRangeInput](/builders/api-schema/shared/#timerangeinput))
+  - `subjectTenantId`: `ID`
+  - `clusterId`: `String`
+  - `noCache`: `Boolean` (default `false`)
+- **nodeMetricsConnection**: `NodeMetricsConnection!` ([NodeMetricsConnection](/builders/api-schema/shared/#nodemetricsconnection))
+  - `page`: `ConnectionInput` ([ConnectionInput](/builders/api-schema/shared/#connectioninput))
+  - `nodeId`: `String`
+  - `timeRange`: `TimeRangeInput` ([TimeRangeInput](/builders/api-schema/shared/#timerangeinput))
+  - `noCache`: `Boolean` (default `false`)
+- **nodeMetrics1hConnection**: `NodeMetrics1hConnection!` ([NodeMetrics1hConnection](/builders/api-schema/shared/#nodemetrics1hconnection))
+  - `page`: `ConnectionInput` ([ConnectionInput](/builders/api-schema/shared/#connectioninput))
+  - `timeRange`: `TimeRangeInput` ([TimeRangeInput](/builders/api-schema/shared/#timerangeinput))
+  - `nodeId`: `String`
+  - `noCache`: `Boolean` (default `false`)
+- **nodeMetricsAggregated**: `[NodeMetricsAggregated!]!` ([NodeMetricsAggregated](/builders/api-schema/analytics-types-a-r/#nodemetricsaggregated))
+  - `timeRange`: `TimeRangeInput` ([TimeRangeInput](/builders/api-schema/shared/#timerangeinput))
+  - `nodeId`: `String`
+  - `noCache`: `Boolean` (default `false`)
+- **nodePerformance5mConnection**: `NodePerformance5mConnection!` ([NodePerformance5mConnection](/builders/api-schema/analytics-types-a-r/#nodeperformance5mconnection))
+  - `page`: `ConnectionInput` ([ConnectionInput](/builders/api-schema/shared/#connectioninput))
+  - `nodeId`: `String`
+  - `timeRange`: `TimeRangeInput` ([TimeRangeInput](/builders/api-schema/shared/#timerangeinput))
+  - `noCache`: `Boolean` (default `false`)
+- **serviceInstancesConnection**: `ServiceInstancesConnection!` ([ServiceInstancesConnection](/builders/api-schema/shared/#serviceinstancesconnection))
+  - `page`: `ConnectionInput` ([ConnectionInput](/builders/api-schema/shared/#connectioninput))
+  - `clusterId`: `String`
+  - `nodeId`: `String`
+  - `status`: `InstanceStatus` ([InstanceStatus](/builders/api-schema/shared/#instancestatus))
+- **serviceInstancesHealth**: `[ServiceInstanceHealth!]` ([ServiceInstanceHealth](/builders/api-schema/shared/#serviceinstancehealth))
+  - `serviceId`: `String`
+- **routingEfficiency**: `RoutingEfficiency!` ([RoutingEfficiency](/builders/api-schema/analytics-types-a-r/#routingefficiency)) — Pre-aggregated routing efficiency summary for dashboard views. Replaces client-side aggregation of raw routingEventsConnection data.
+  - `streamId`: `ID`
+  - `timeRange`: `TimeRangeInput` ([TimeRangeInput](/builders/api-schema/shared/#timerangeinput))
+  - `noCache`: `Boolean` (default `false`)
+- **clusterTrafficMatrix**: `[ClusterPairTraffic!]!` ([ClusterPairTraffic](/builders/api-schema/analytics-types-a-r/#clusterpairtraffic)) — Cross-cluster routing traffic matrix from hourly rollups.
+  - `timeRange`: `TimeRangeInput` ([TimeRangeInput](/builders/api-schema/shared/#timerangeinput))
+  - `noCache`: `Boolean` (default `false`)
+- **clusterBootOps**: `[ClusterBootOps!]!` ([ClusterBootOps](/builders/api-schema/analytics-types-a-r/#clusterbootops)) — Player startup (boot) operations aggregate for clusters the caller owns. Aggregate/redacted; only token-attributed boot rows are included.
+  - `clusterId`: `ID`
+  - `timeRange`: `TimeRangeInput` ([TimeRangeInput](/builders/api-schema/shared/#timerangeinput))
+  - `noCache`: `Boolean` (default `false`)
+- **clusterQoeOps**: `[ClusterQoeOps!]!` ([ClusterQoeOps](/builders/api-schema/analytics-types-a-r/#clusterqoeops)) — Cluster-ops viewer-QoE aggregate per serving node/protocol, for operators of clusters they own. Aggregate/redacted; only token-attributed rows are included.
+  - `clusterId`: `ID`
+  - `timeRange`: `TimeRangeInput` ([TimeRangeInput](/builders/api-schema/shared/#timerangeinput))
+  - `noCache`: `Boolean` (default `false`)
+- **clusterWorkload**: `[ClusterWorkload!]!` ([ClusterWorkload](/builders/api-schema/analytics-types-a-r/#clusterworkload)) — Aggregate/redacted media work on clusters the caller owns. Contains placement and volume only; never tenant, content, stream, session, URL, or client IDs.
+  - `clusterId`: `ID`
+  - `timeRange`: `TimeRangeInput` ([TimeRangeInput](/builders/api-schema/shared/#timerangeinput))
+  - `noCache`: `Boolean` (default `false`)
+- **federationEventsConnection**: `FederationEventsConnection!` ([FederationEventsConnection](/builders/api-schema/analytics-types-a-r/#federationeventsconnection)) — Federation events: origin pulls, peer connections, leader elections, etc.
+  - `timeRange`: `TimeRangeInput!` ([TimeRangeInput](/builders/api-schema/shared/#timerangeinput))
+  - `first`: `Int`
+  - `eventType`: `String`
+  - `noCache`: `Boolean` (default `false`)
+- **federationSummary**: `FederationSummary!` ([FederationSummary](/builders/api-schema/analytics-types-a-r/#federationsummary)) — Aggregated federation summary: event counts by type, latency, failure rate.
+  - `timeRange`: `TimeRangeInput!` ([TimeRangeInput](/builders/api-schema/shared/#timerangeinput))
+  - `noCache`: `Boolean` (default `false`)
+
+## AnalyticsLifecycle
+
+**object**
+
+Lifecycle analytics for streams and artifacts. `streamId` arguments accept Stream.id (Relay global ID).
+
+- **streamEventsConnection**: `StreamEventsConnection!` ([StreamEventsConnection](/builders/api-schema/analytics-types-s-v/#streameventsconnection))
+  - `page`: `ConnectionInput` ([ConnectionInput](/builders/api-schema/shared/#connectioninput))
+  - `streamId`: `ID!`
+  - `timeRange`: `TimeRangeInput` ([TimeRangeInput](/builders/api-schema/shared/#timerangeinput))
+  - `noCache`: `Boolean` (default `false`)
+- **bufferEventsConnection**: `BufferEventsConnection!` ([BufferEventsConnection](/builders/api-schema/analytics-types-a-r/#buffereventsconnection))
+  - `page`: `ConnectionInput` ([ConnectionInput](/builders/api-schema/shared/#connectioninput))
+  - `streamId`: `ID!`
+  - `timeRange`: `TimeRangeInput` ([TimeRangeInput](/builders/api-schema/shared/#timerangeinput))
+  - `noCache`: `Boolean` (default `false`)
+- **artifactEventsConnection**: `ArtifactEventsConnection!` ([ArtifactEventsConnection](/builders/api-schema/analytics-types-a-r/#artifacteventsconnection))
+  - `page`: `ConnectionInput` ([ConnectionInput](/builders/api-schema/shared/#connectioninput))
+  - `streamId`: `ID`
+  - `stage`: `String`
+  - `contentType`: `String`
+  - `timeRange`: `TimeRangeInput` ([TimeRangeInput](/builders/api-schema/shared/#timerangeinput))
+  - `noCache`: `Boolean` (default `false`)
+- **storageEventsConnection**: `StorageEventsConnection!` ([StorageEventsConnection](/builders/api-schema/analytics-types-s-v/#storageeventsconnection))
+  - `page`: `ConnectionInput` ([ConnectionInput](/builders/api-schema/shared/#connectioninput))
+  - `assetType`: `String`
+  - `streamId`: `ID`
+  - `timeRange`: `TimeRangeInput` ([TimeRangeInput](/builders/api-schema/shared/#timerangeinput))
+  - `noCache`: `Boolean` (default `false`)
+- **connectionEventsConnection**: `ConnectionEventsConnection!` ([ConnectionEventsConnection](/builders/api-schema/analytics-types-a-r/#connectioneventsconnection))
+  - `page`: `ConnectionInput` ([ConnectionInput](/builders/api-schema/shared/#connectioninput))
+  - `streamId`: `ID`
+  - `timeRange`: `TimeRangeInput` ([TimeRangeInput](/builders/api-schema/shared/#timerangeinput))
+  - `noCache`: `Boolean` (default `false`)
+- **viewerSessionsConnection**: `ViewerSessionsConnection!` ([ViewerSessionsConnection](/builders/api-schema/analytics-types-s-v/#viewersessionsconnection))
+  - `page`: `ConnectionInput` ([ConnectionInput](/builders/api-schema/shared/#connectioninput))
+  - `streamId`: `ID`
+  - `timeRange`: `TimeRangeInput` ([TimeRangeInput](/builders/api-schema/shared/#timerangeinput))
+  - `noCache`: `Boolean` (default `false`)
+- **trackListConnection**: `TrackListEventsConnection!` ([TrackListEventsConnection](/builders/api-schema/analytics-types-s-v/#tracklisteventsconnection))
+  - `page`: `ConnectionInput` ([ConnectionInput](/builders/api-schema/shared/#connectioninput))
+  - `streamId`: `ID!`
+  - `timeRange`: `TimeRangeInput` ([TimeRangeInput](/builders/api-schema/shared/#timerangeinput))
+  - `noCache`: `Boolean` (default `false`)
+- **artifactStatesConnection**: `ArtifactStatesConnection!` ([ArtifactStatesConnection](/builders/api-schema/analytics-types-a-r/#artifactstatesconnection))
+  - `page`: `ConnectionInput` ([ConnectionInput](/builders/api-schema/shared/#connectioninput))
+  - `streamId`: `ID`
+  - `contentType`: `String`
+  - `stage`: `String`
+
+## AnalyticsUsage
+
+**object**
+
+Usage analytics grouped by type.
+
+- **streaming**: `StreamingUsage!` ([StreamingUsage](/builders/api-schema/analytics-types-s-v/#streamingusage)) — Streaming usage: viewer hours, geographic distribution, quality tiers.
+- **storage**: `StorageUsage!` ([StorageUsage](/builders/api-schema/analytics-types-s-v/#storageusage)) — Storage usage: disk utilization by node and scope.
+- **processing**: `ProcessingUsage!` ([ProcessingUsage](/builders/api-schema/analytics-types-a-r/#processingusage)) — Processing usage: transcoding, clipping, DVR operations.
+- **api**: `APIUsage!` ([APIUsage](/builders/api-schema/analytics-types-a-r/#apiusage)) — API usage: GraphQL request counts, auth type breakdown, operation analytics.
+
+## ArtifactEvent
+
+**object**
+
+Implements [Node](/builders/api-schema/shared/#node).
+
+- **id**: `ID!`
+- **timestamp**: `Time!` ([Time](/builders/api-schema/shared/#time))
+- **streamId**: `ID!`
+- **stream**: `Stream` ([Stream](/builders/api-schema/shared/#stream))
+- **playbackId**: `String`
+- **stage**: `String!`
+- **contentType**: `String`
+- **startUnix**: `Int`
+- **stopUnix**: `Int`
+- **ingestNodeId**: `String`
+- **percent**: `Int`
+- **message**: `String`
+- **filePath**: `String`
+- **s3Url**: `String`
+- **sizeBytes**: `Float`
+- **expiresAt**: `Int`
+
+## ArtifactEventEdge
+
+**object**
+
+- **cursor**: `String!`
+- **node**: `ArtifactEvent!` ([ArtifactEvent](/builders/api-schema/analytics-types-a-r/#artifactevent))
+
+## ArtifactEventsConnection
+
+**object**
+
+- **edges**: `[ArtifactEventEdge!]!` ([ArtifactEventEdge](/builders/api-schema/analytics-types-a-r/#artifacteventedge))
+- **nodes**: `[ArtifactEvent!]!` ([ArtifactEvent](/builders/api-schema/analytics-types-a-r/#artifactevent))
+- **pageInfo**: `PageInfo!` ([PageInfo](/builders/api-schema/shared/#pageinfo))
+- **totalCount**: `Int!`
+
+## ArtifactState
+
+**object**
+
+- **streamId**: `ID!`
+- **stream**: `Stream` ([Stream](/builders/api-schema/shared/#stream))
+- **playbackId**: `String`
+- **contentType**: `String!`
+- **stage**: `String!`
+- **progressPercent**: `Int!`
+- **errorMessage**: `String`
+- **requestedAt**: `Time!` ([Time](/builders/api-schema/shared/#time))
+- **startedAt**: `Time` ([Time](/builders/api-schema/shared/#time))
+- **completedAt**: `Time` ([Time](/builders/api-schema/shared/#time))
+- **clipStartUnix**: `Int`
+- **clipStopUnix**: `Int`
+- **segmentCount**: `Int`
+- **manifestPath**: `String`
+- **filePath**: `String`
+- **s3Url**: `String`
+- **sizeBytes**: `Float`
+- **processingNodeId**: `String`
+- **expiresAt**: `Time` ([Time](/builders/api-schema/shared/#time))
+
+## ArtifactStateEdge
+
+**object**
+
+- **cursor**: `String!`
+- **node**: `ArtifactState!` ([ArtifactState](/builders/api-schema/analytics-types-a-r/#artifactstate))
+
+## ArtifactStatesConnection
+
+**object**
+
+- **edges**: `[ArtifactStateEdge!]!` ([ArtifactStateEdge](/builders/api-schema/analytics-types-a-r/#artifactstateedge))
+- **nodes**: `[ArtifactState!]!` ([ArtifactState](/builders/api-schema/analytics-types-a-r/#artifactstate))
+- **pageInfo**: `PageInfo!` ([PageInfo](/builders/api-schema/shared/#pageinfo))
+- **totalCount**: `Int!`
+
+## AssetNodeCopies
+
+**object**
+
+A node-copy listing plus whether it was capped at the per-request limit. When `truncated` is true, `copies` is not exhaustive — present the count as a lower bound (e.g. &#34;500+&#34;) or a &#34;results truncated&#34; note, never as an exact total.
+
+- **copies**: `[AssetNodeCopy!]!` ([AssetNodeCopy](/builders/api-schema/analytics-types-a-r/#assetnodecopy))
+- **truncated**: `Boolean!`
+
+## AssetNodeCopy
+
+**object**
+
+One node&#39;s current local copy of an artifact. `role` is `origin` (a producer node&#39;s copy) or `cache` (a synced copy on another node).
+
+- **nodeId**: `String!`
+- **nodeName**: `String`
+- **clusterId**: `String`
+- **region**: `String`
+- **latitude**: `Float`
+- **longitude**: `Float`
+- **role**: `String!`
+- **isComplete**: `Boolean!`
+- **sizeBytes**: `Float`
+- **updatedAt**: `Time` ([Time](/builders/api-schema/shared/#time))
+
+## BufferEvent
+
+**object**
+
+Implements [Node](/builders/api-schema/shared/#node).
+
+- **id**: `ID!`
+- **eventId**: `ID!`
+- **timestamp**: `Time!` ([Time](/builders/api-schema/shared/#time))
+- **nodeId**: `String`
+- **bufferState**: `BufferState!` ([BufferState](/builders/api-schema/analytics-types-a-r/#bufferstate))
+- **eventData**: `String`
+- **payload**: `JSON` ([JSON](/builders/api-schema/shared/#json))
+
+## BufferEventEdge
+
+**object**
+
+- **cursor**: `String!`
+- **node**: `BufferEvent!` ([BufferEvent](/builders/api-schema/analytics-types-a-r/#bufferevent))
+
+## BufferEventsConnection
+
+**object**
+
+- **edges**: `[BufferEventEdge!]!` ([BufferEventEdge](/builders/api-schema/analytics-types-a-r/#buffereventedge))
+- **nodes**: `[BufferEvent!]!` ([BufferEvent](/builders/api-schema/analytics-types-a-r/#bufferevent))
+- **pageInfo**: `PageInfo!` ([PageInfo](/builders/api-schema/shared/#pageinfo))
+- **totalCount**: `Int!`
+
+## BufferState
+
+**enum**
+
+- `FULL`
+- `EMPTY`
+- `DRY`
+- `RECOVER`
+
+## CityMetric
+
+**object**
+
+- **city**: `String!`
+- **countryCode**: `String`
+- **viewerCount**: `Int!`
+- **percentage**: `Float!`
+- **latitude**: `Float`
+- **longitude**: `Float`
+
+## ClientMetrics5m
+
+**object**
+
+Implements [Node](/builders/api-schema/shared/#node).
+
+- **id**: `ID!`
+- **timestamp**: `Time!` ([Time](/builders/api-schema/shared/#time))
+- **streamId**: `ID!`
+- **stream**: `Stream` ([Stream](/builders/api-schema/shared/#stream))
+- **nodeId**: `String!`
+- **activeSessions**: `Int!`
+- **avgBandwidthIn**: `Float!`
+- **avgBandwidthOut**: `Float!`
+- **avgConnectionTime**: `Float!`
+- **packetLossRate**: `Float`
+
+## ClientMetrics5mConnection
+
+**object**
+
+- **edges**: `[ClientMetrics5mEdge!]!` ([ClientMetrics5mEdge](/builders/api-schema/analytics-types-a-r/#clientmetrics5medge))
+- **nodes**: `[ClientMetrics5m!]!` ([ClientMetrics5m](/builders/api-schema/analytics-types-a-r/#clientmetrics5m))
+- **pageInfo**: `PageInfo!` ([PageInfo](/builders/api-schema/shared/#pageinfo))
+- **totalCount**: `Int!`
+
+## ClientMetrics5mEdge
+
+**object**
+
+- **cursor**: `String!`
+- **node**: `ClientMetrics5m!` ([ClientMetrics5m](/builders/api-schema/analytics-types-a-r/#clientmetrics5m))
+
+## ClientQoeSummary
+
+**object**
+
+Pre-aggregated client QoE summary from client_qoe_5m.
+
+- **avgPacketLossRate**: `Float`
+- **peakPacketLossRate**: `Float`
+- **avgBandwidthIn**: `Float!`
+- **avgBandwidthOut**: `Float!`
+- **avgConnectionTime**: `Float!`
+- **totalActiveSessions**: `Int!`
+
+## ClusterBootOps
+
+**object**
+
+Cluster-ops boot aggregate for operators of the serving cluster. Aggregate and redacted: never exposes content/stream/session/URL/tenant identifiers. Populated only from token-attributed rows.
+
+- **servingClusterId**: `String!`
+- **nodeId**: `String!`
+- **protocol**: `String!`
+- **bootCount**: `Int!`
+- **errorCount**: `Int!`
+- **p95TtfMs**: `Float!`
+- **cacheHitRatio**: `Float!`
+
+## ClusterPairTraffic
+
+**object**
+
+- **clusterId**: `String!`
+- **remoteClusterId**: `String!`
+- **eventCount**: `Int!`
+- **successCount**: `Int!`
+- **avgLatencyMs**: `Float!`
+- **avgDistanceKm**: `Float!`
+- **successRate**: `Float!`
+- **maxLatencyMs**: `Float!`
+- **localLatitude**: `Float`
+- **localLongitude**: `Float`
+- **remoteLatitude**: `Float`
+- **remoteLongitude**: `Float`
+
+## ClusterQoeOps
+
+**object**
+
+Cluster-ops viewer-QoE aggregate per serving node/protocol (token-attributed, redacted — no content/stream/session identifiers).
+
+- **servingClusterId**: `String!`
+- **nodeId**: `String!`
+- **protocol**: `String!`
+- **sessionCount**: `Int!`
+- **rebufferingRatio**: `Float!`
+- **frameDropRatio**: `Float!`
+- **avgBitrateBps**: `Float!`
+
+## ClusterWorkload
+
+**object**
+
+- **clusterId**: `String!`
+- **nodeId**: `String!`
+- **workKind**: `String!`
+- **measurementKind**: `String!` — Whether metrics describe the requested window or a freshness-bounded current observation.
+- **storageScope**: `String` — Storage residency scope for current storage observations (`hot` or `cold`).
+- **observedAt**: `Time` ([Time](/builders/api-schema/shared/#time)) — Source observation time for current rows.
+- **eventCount**: `Int!`
+- **activeCount**: `Int!`
+- **bytes**: `Float!`
+- **mediaSeconds**: `Float!`
+- **errorCount**: `Int!`
+
+## ConnectionEventEdge
+
+**object**
+
+- **cursor**: `String!`
+- **node**: `ConnectionEvent!` ([ConnectionEvent](/builders/api-schema/shared/#connectionevent))
+
+## ConnectionEventsConnection
+
+**object**
+
+- **edges**: `[ConnectionEventEdge!]!` ([ConnectionEventEdge](/builders/api-schema/analytics-types-a-r/#connectioneventedge))
+- **nodes**: `[ConnectionEvent!]!` ([ConnectionEvent](/builders/api-schema/shared/#connectionevent))
+- **pageInfo**: `PageInfo!` ([PageInfo](/builders/api-schema/shared/#pageinfo))
+- **totalCount**: `Int!`
+
+## CountryMetric
+
+**object**
+
+- **countryCode**: `String!`
+- **viewerCount**: `Int!`
+- **percentage**: `Float!`
+
+## CountryTimeSeries
+
+**object**
+
+- **timestamp**: `Time!` ([Time](/builders/api-schema/shared/#time))
+- **countryCode**: `String!`
+- **viewerCount**: `Int!`
+
+## FederationEvent
+
+**object**
+
+- **timestamp**: `Time!` ([Time](/builders/api-schema/shared/#time))
+- **eventType**: `String!`
+- **localCluster**: `String!`
+- **remoteCluster**: `String!`
+- **streamName**: `String`
+- **streamId**: `ID`
+- **sourceNode**: `String`
+- **destNode**: `String`
+- **dtscUrl**: `String`
+- **latencyMs**: `Float`
+- **timeToLiveMs**: `Float`
+- **failureReason**: `String`
+- **queriedClusters**: `Int`
+- **respondingClusters**: `Int`
+- **totalCandidates**: `Int`
+- **bestRemoteScore**: `Int`
+- **peerCluster**: `String`
+- **role**: `String!`
+- **reason**: `String`
+- **streamTenantId**: `ID`
+- **controlCellId**: `String`
+- **originClusterId**: `String`
+
+## FederationEventCount
+
+**object**
+
+- **eventType**: `String!`
+- **count**: `Int!`
+- **failureCount**: `Int!`
+- **avgLatencyMs**: `Float!`
+
+## FederationEventEdge
+
+**object**
+
+- **cursor**: `String!`
+- **node**: `FederationEvent!` ([FederationEvent](/builders/api-schema/analytics-types-a-r/#federationevent))
+
+## FederationEventsConnection
+
+**object**
+
+- **edges**: `[FederationEventEdge!]!` ([FederationEventEdge](/builders/api-schema/analytics-types-a-r/#federationeventedge))
+- **pageInfo**: `PageInfo!` ([PageInfo](/builders/api-schema/shared/#pageinfo))
+- **totalCount**: `Int!`
+
+## FederationSummary
+
+**object**
+
+- **eventCounts**: `[FederationEventCount!]!` ([FederationEventCount](/builders/api-schema/analytics-types-a-r/#federationeventcount))
+- **totalEvents**: `Int!`
+- **overallAvgLatencyMs**: `Float!`
+- **overallFailureRate**: `Float!`
+
+## GeographicDistribution
+
+**object**
+
+- **timeRange**: `TimeRange!` ([TimeRange](/builders/api-schema/analytics-types-s-v/#timerange))
+- **streamId**: `ID`
+- **stream**: `Stream` ([Stream](/builders/api-schema/shared/#stream))
+- **topCountries**: `[CountryMetric!]!` ([CountryMetric](/builders/api-schema/analytics-types-a-r/#countrymetric))
+- **topCities**: `[CityMetric!]!` ([CityMetric](/builders/api-schema/analytics-types-a-r/#citymetric))
+- **uniqueCountries**: `Int!`
+- **uniqueCities**: `Int!`
+- **totalViewers**: `Int!`
+- **viewersByCountry**: `[CountryTimeSeries!]!` ([CountryTimeSeries](/builders/api-schema/analytics-types-a-r/#countrytimeseries))
+
+## NodeMetricsAggregated
+
+**object**
+
+- **nodeId**: `String!`
+- **clusterId**: `String`
+- **avgCpu**: `Float!`
+- **avgMemory**: `Float!`
+- **avgDisk**: `Float!`
+- **avgShm**: `Float!`
+- **totalBandwidthIn**: `Float!`
+- **totalBandwidthOut**: `Float!`
+- **sampleCount**: `Int!`
+
+## NodePerformance5m
+
+**object**
+
+Implements [Node](/builders/api-schema/shared/#node).
+
+- **id**: `ID!`
+- **timestamp**: `Time!` ([Time](/builders/api-schema/shared/#time))
+- **nodeId**: `String!`
+- **avgCpu**: `Float!`
+- **maxCpu**: `Float!`
+- **avgMemory**: `Float!`
+- **maxMemory**: `Float!`
+- **totalBandwidth**: `Float!`
+- **avgStreams**: `Int!`
+- **maxStreams**: `Int!`
+
+## NodePerformance5mConnection
+
+**object**
+
+- **edges**: `[NodePerformance5mEdge!]!` ([NodePerformance5mEdge](/builders/api-schema/analytics-types-a-r/#nodeperformance5medge))
+- **nodes**: `[NodePerformance5m!]!` ([NodePerformance5m](/builders/api-schema/analytics-types-a-r/#nodeperformance5m))
+- **pageInfo**: `PageInfo!` ([PageInfo](/builders/api-schema/shared/#pageinfo))
+- **totalCount**: `Int!`
+
+## NodePerformance5mEdge
+
+**object**
+
+- **cursor**: `String!`
+- **node**: `NodePerformance5m!` ([NodePerformance5m](/builders/api-schema/analytics-types-a-r/#nodeperformance5m))
+
+## PlatformOverview
+
+**object**
+
+- **totalStreams**: `Int!`
+- **activeStreams**: `Int!`
+- **totalViewers**: `Int!`
+- **averageViewers**: `Float!`
+- **totalBandwidth**: `Float!`
+- **peakBandwidth**: `Float!`
+- **streamHours**: `Float!`
+- **egressGb**: `Float!`
+- **peakViewers**: `Int!`
+- **timeRange**: `TimeRange!` ([TimeRange](/builders/api-schema/analytics-types-s-v/#timerange))
+- **totalUploadBytes**: `Float!`
+- **totalDownloadBytes**: `Float!`
+- **viewerHours**: `Float!`
+- **deliveredMinutes**: `Float!`
+- **uniqueViewers**: `Int!`
+- **ingestHours**: `Float!`
+- **peakConcurrentViewers**: `Int!`
+- **totalViews**: `Int!`
+- **dailyStats**: `[TenantDailyStat!]!` ([TenantDailyStat](/builders/api-schema/analytics-types-s-v/#tenantdailystat))
+  - `days`: `Int` (default `7`)
+
+## PlayerBootSummary
+
+**object**
+
+Player startup (boot) summary from player_boot_samples. Diagnostic only — never a viewer-count or billing source. TTF percentiles are computed at read time over boots that reached first frame; counts cover all rows.
+
+- **bootCount**: `Int!`
+- **errorCount**: `Int!`
+- **p50TtfMs**: `Float!`
+- **p95TtfMs**: `Float!`
+- **p99TtfMs**: `Float!`
+- **avgGatewayResolveMs**: `Float!`
+- **avgMistHydrateMs**: `Float!`
+- **avgPlayerSelectMs**: `Float!`
+- **avgConnectMs**: `Float!`
+- **avgPrebufferMs**: `Float!`
+- **cacheHitRatio**: `Float!`
+
+## PlayerBootTimeSeriesBucket
+
+**object**
+
+One toStartOfInterval window of the boot-startup summary. TTF percentiles are computed at read time per bucket; `bootCount` is the per-bucket denominator.
+
+- **timestamp**: `Time!` ([Time](/builders/api-schema/shared/#time))
+- **bootCount**: `Int!`
+- **p50TtfMs**: `Float!`
+- **p95TtfMs**: `Float!`
+- **p99TtfMs**: `Float!`
+
+## ProcessingUsage
+
+**object**
+
+Processing usage analytics. `streamId` arguments accept Stream.id (Relay global ID).
+
+- **processingUsageConnection**: `ProcessingUsageConnection!` ([ProcessingUsageConnection](/builders/api-schema/analytics-types-a-r/#processingusageconnection))
+  - `page`: `ConnectionInput` ([ConnectionInput](/builders/api-schema/shared/#connectioninput))
+  - `streamId`: `ID`
+  - `processType`: `String`
+  - `timeRange`: `TimeRangeInput` ([TimeRangeInput](/builders/api-schema/shared/#timerangeinput))
+  - `noCache`: `Boolean` (default `false`)
+
+## ProcessingUsageConnection
+
+**object**
+
+- **edges**: `[ProcessingUsageEdge!]!` ([ProcessingUsageEdge](/builders/api-schema/analytics-types-a-r/#processingusageedge))
+- **nodes**: `[ProcessingUsageRecord!]!` ([ProcessingUsageRecord](/builders/api-schema/shared/#processingusagerecord))
+- **pageInfo**: `PageInfo!` ([PageInfo](/builders/api-schema/shared/#pageinfo))
+- **totalCount**: `Int!`
+- **summaries**: `[ProcessingUsageSummary!]!` ([ProcessingUsageSummary](/builders/api-schema/analytics-types-a-r/#processingusagesummary))
+
+## ProcessingUsageEdge
+
+**object**
+
+- **cursor**: `String!`
+- **node**: `ProcessingUsageRecord!` ([ProcessingUsageRecord](/builders/api-schema/shared/#processingusagerecord))
+
+## ProcessingUsageSummary
+
+**object**
+
+- **date**: `Time!` ([Time](/builders/api-schema/shared/#time))
+- **livepeerSeconds**: `Float!`
+- **livepeerSegmentCount**: `Int!`
+- **livepeerUniqueStreams**: `Int!`
+- **livepeerH264Seconds**: `Float!`
+- **livepeerVp9Seconds**: `Float!`
+- **livepeerAv1Seconds**: `Float!`
+- **livepeerHevcSeconds**: `Float!`
+- **nativeAvSeconds**: `Float!`
+- **nativeAvSegmentCount**: `Int!`
+- **nativeAvUniqueStreams**: `Int!`
+- **nativeAvH264Seconds**: `Float!`
+- **nativeAvVp9Seconds**: `Float!`
+- **nativeAvAv1Seconds**: `Float!`
+- **nativeAvHevcSeconds**: `Float!`
+- **nativeAvAacSeconds**: `Float!`
+- **nativeAvOpusSeconds**: `Float!`
+- **audioSeconds**: `Float!`
+- **videoSeconds**: `Float!`
+
+## QualityTierDaily
+
+**object**
+
+Implements [Node](/builders/api-schema/shared/#node).
+
+- **id**: `ID!`
+- **day**: `Time!` ([Time](/builders/api-schema/shared/#time))
+- **streamId**: `ID!`
+- **stream**: `Stream` ([Stream](/builders/api-schema/shared/#stream))
+- **tier2160pMinutes**: `Int!`
+- **tier1440pMinutes**: `Int!`
+- **tier1080pMinutes**: `Int!`
+- **tier720pMinutes**: `Int!`
+- **tier480pMinutes**: `Int!`
+- **tierSdMinutes**: `Int!`
+- **primaryTier**: `String!`
+- **codecH264Minutes**: `Int!`
+- **codecH265Minutes**: `Int!`
+- **codecVp9Minutes**: `Int!`
+- **codecAv1Minutes**: `Int!`
+- **avgBitrate**: `Int!`
+- **avgFps**: `Float!`
+
+## QualityTierDailyConnection
+
+**object**
+
+- **edges**: `[QualityTierDailyEdge!]!` ([QualityTierDailyEdge](/builders/api-schema/analytics-types-a-r/#qualitytierdailyedge))
+- **nodes**: `[QualityTierDaily!]!` ([QualityTierDaily](/builders/api-schema/analytics-types-a-r/#qualitytierdaily))
+- **pageInfo**: `PageInfo!` ([PageInfo](/builders/api-schema/shared/#pageinfo))
+- **totalCount**: `Int!`
+
+## QualityTierDailyEdge
+
+**object**
+
+- **cursor**: `String!`
+- **node**: `QualityTierDaily!` ([QualityTierDaily](/builders/api-schema/analytics-types-a-r/#qualitytierdaily))
+
+## QualityTierSummary
+
+**object**
+
+- **tier2160pMinutes**: `Int!`
+- **tier1440pMinutes**: `Int!`
+- **tier1080pMinutes**: `Int!`
+- **tier720pMinutes**: `Int!`
+- **tier480pMinutes**: `Int!`
+- **tierSdMinutes**: `Int!`
+- **codecH264Minutes**: `Int!`
+- **codecH265Minutes**: `Int!`
+- **codecVp9Minutes**: `Int!`
+- **codecAv1Minutes**: `Int!`
+
+## RebufferingEvent
+
+**object**
+
+- **timestamp**: `Time!` ([Time](/builders/api-schema/shared/#time))
+- **streamId**: `ID!`
+- **stream**: `Stream` ([Stream](/builders/api-schema/shared/#stream))
+- **nodeId**: `String!`
+- **bufferState**: `BufferState!` ([BufferState](/builders/api-schema/analytics-types-a-r/#bufferstate))
+- **previousState**: `BufferState!` ([BufferState](/builders/api-schema/analytics-types-a-r/#bufferstate))
+- **rebufferStart**: `Boolean!`
+- **rebufferEnd**: `Boolean!`
+
+## RebufferingEventEdge
+
+**object**
+
+- **cursor**: `String!`
+- **node**: `RebufferingEvent!` ([RebufferingEvent](/builders/api-schema/analytics-types-a-r/#rebufferingevent))
+
+## RebufferingEventsConnection
+
+**object**
+
+- **edges**: `[RebufferingEventEdge!]!` ([RebufferingEventEdge](/builders/api-schema/analytics-types-a-r/#rebufferingeventedge))
+- **nodes**: `[RebufferingEvent!]!` ([RebufferingEvent](/builders/api-schema/analytics-types-a-r/#rebufferingevent))
+- **pageInfo**: `PageInfo!` ([PageInfo](/builders/api-schema/shared/#pageinfo))
+- **totalCount**: `Int!`
+
+## RoutingCountryStat
+
+**object**
+
+- **countryCode**: `String!`
+- **requestCount**: `Int!`
+
+## RoutingEfficiency
+
+**object**
+
+Pre-aggregated routing efficiency summary (replaces client-side aggregation of raw routing events).
+
+- **totalDecisions**: `Int!`
+- **successCount**: `Int!`
+- **successRate**: `Float!`
+- **avgRoutingDistance**: `Float!`
+- **avgLatencyMs**: `Float!`
+- **topCountries**: `[RoutingCountryStat!]!` ([RoutingCountryStat](/builders/api-schema/analytics-types-a-r/#routingcountrystat))
+
+## RoutingEventEdge
+
+**object**
+
+- **cursor**: `String!`
+- **node**: `RoutingEvent!` ([RoutingEvent](/builders/api-schema/shared/#routingevent))
+
+## RoutingEventsConnection
+
+**object**
+
+- **edges**: `[RoutingEventEdge!]!` ([RoutingEventEdge](/builders/api-schema/analytics-types-a-r/#routingeventedge))
+- **nodes**: `[RoutingEvent!]!` ([RoutingEvent](/builders/api-schema/shared/#routingevent))
+- **pageInfo**: `PageInfo!` ([PageInfo](/builders/api-schema/shared/#pageinfo))
+- **totalCount**: `Int!`

@@ -1,0 +1,674 @@
+---
+title: Clusters and infrastructure types
+description: Clusters and infrastructure types in the generated public GraphQL reference.
+sidebar:
+  order: 15
+---
+
+[GraphQL schema reference](/builders/api-schema/) · [API guide](/builders/api-reference/) · [SDKs](/builders/sdks/) · Types of [Clusters and infrastructure](/builders/api-schema/clusters/)
+
+## AvailableCluster
+
+**object**
+
+- **clusterId**: `String!`
+- **clusterName**: `String!`
+- **tiers**: `[String!]!`
+- **autoEnroll**: `Boolean!`
+
+## AvailableClusterConnection
+
+**object**
+
+- **edges**: `[AvailableClusterEdge!]!` ([AvailableClusterEdge](/builders/api-schema/clusters-types/#availableclusteredge))
+- **nodes**: `[AvailableCluster!]!` ([AvailableCluster](/builders/api-schema/clusters-types/#availablecluster))
+- **pageInfo**: `PageInfo!` ([PageInfo](/builders/api-schema/shared/#pageinfo))
+- **totalCount**: `Int!`
+
+## AvailableClusterEdge
+
+**object**
+
+- **cursor**: `String!`
+- **node**: `AvailableCluster!` ([AvailableCluster](/builders/api-schema/clusters-types/#availablecluster))
+
+## BootstrapEdgeInput
+
+**input_object**
+
+- **token**: `String!` — Bootstrap token issued by createEdgeCluster or createEnrollmentToken.
+- **externalIp**: `String` — External IP of the edge being bootstrapped (helps Foghorn assign a domain).
+- **preferredNodeId**: `String` — Caller-supplied node id hint; Foghorn may ignore.
+
+## BootstrapEdgeResponse
+
+**object**
+
+Result of a successful bootstrapEdge call. Carries everything the edge needs to come online: its identity, its assigned Foghorn for runtime traffic, and (if the cluster issues per-node certs) its initial TLS material plus the cluster&#39;s internal CA bundle.
+
+- **nodeId**: `String!`
+- **edgeDomain**: `String!`
+- **poolDomain**: `String`
+- **clusterSlug**: `String!`
+- **clusterId**: `String!`
+- **foghornGrpcAddr**: `String!`
+- **certPem**: `String`
+- **keyPem**: `String`
+- **internalCaBundle**: `String`
+- **telemetry**: `EdgeTelemetrySetup` ([EdgeTelemetrySetup](/builders/api-schema/clusters-types/#edgetelemetrysetup))
+
+## BootstrapEdgeResult
+
+**union**
+
+- Member: [BootstrapEdgeResponse](/builders/api-schema/clusters-types/#bootstrapedgeresponse)
+- Member: [ValidationError](/builders/api-schema/shared/#validationerror)
+- Member: [AuthError](/builders/api-schema/shared/#autherror)
+
+## BootstrapToken
+
+**object**
+
+A bootstrap token for provisioning new infrastructure nodes. Used during initial node registration to authenticate join requests.
+
+- **id**: `ID!` — Unique token identifier.
+- **name**: `String!` — Human-readable name for the token.
+- **token**: `String` — The secret token value (only returned on creation).
+- **kind**: `String!` — Token type (edge_node, service).
+- **clusterId**: `String` — Target cluster UUID for node tokens (not the Relay ID).
+- **expectedIp**: `String` — Expected IP address for validation.
+- **metadata**: `JSON` ([JSON](/builders/api-schema/shared/#json)) — Additional metadata for the token.
+- **usageLimit**: `Int` — Maximum number of times this token can be used.
+- **usageCount**: `Int!` — Number of times this token has been used.
+- **expiresAt**: `Time` ([Time](/builders/api-schema/shared/#time)) — When the token expires.
+- **usedAt**: `Time` ([Time](/builders/api-schema/shared/#time)) — When the token was last used.
+- **createdBy**: `String` — User who created the token.
+- **createdAt**: `Time!` ([Time](/builders/api-schema/shared/#time)) — When the token was created.
+
+## Cluster
+
+**object**
+
+A streaming cluster containing one or more infrastructure nodes. Clusters provide isolated capacity for streaming workloads.
+
+Implements [Node](/builders/api-schema/shared/#node).
+
+- **id**: `ID!` — Global unique identifier for Relay compatibility.
+- **clusterId**: `String!` — Internal cluster identifier (UUID).
+- **clusterName**: `String!` — Human-readable cluster name.
+- **clusterType**: `String!` — Cluster architecture type (dedicated, shared, hybrid).
+- **deploymentModel**: `String!` — Deployment model (platform, private, hybrid).
+- **baseUrl**: `String!` — Base URL for cluster API access.
+- **databaseUrl**: `String` — Internal database connection URL.
+- **periscopeUrl**: `String` — Analytics query endpoint URL.
+- **kafkaBrokers**: `[String!]` — Kafka broker addresses for event streaming.
+- **maxConcurrentStreams**: `Int!` — Maximum allowed concurrent streams.
+- **maxConcurrentViewers**: `Int!` — Maximum allowed concurrent viewers.
+- **maxBandwidthMbps**: `Int!` — Maximum allowed bandwidth in Mbps.
+- **healthStatus**: `String!` — Cluster health status (healthy, degraded, critical).
+- **isActive**: `Boolean!` — Whether the cluster is operational.
+- **isDefaultCluster**: `Boolean!` — Whether this is the tenant&#39;s default cluster.
+- **isPlatformOfficial**: `Boolean!` — Whether this cluster is a platform-official regional/control cell.
+- **regionId**: `String` — Operational region identifier for this cluster.
+- **isSubscribed**: `Boolean!` — Whether the current tenant is subscribed.
+- **createdAt**: `Time` ([Time](/builders/api-schema/shared/#time)) — When the cluster was created.
+- **updatedAt**: `Time` ([Time](/builders/api-schema/shared/#time)) — When the cluster was last updated.
+- **ownerTenantId**: `ID` — Tenant that owns this cluster (for private clusters).
+- **visibility**: `ClusterVisibility!` ([ClusterVisibility](/builders/api-schema/clusters-types/#clustervisibility)) — Marketplace visibility (PUBLIC, PRIVATE, INVITE_ONLY).
+- **pricingModel**: `ClusterPricingModel!` ([ClusterPricingModel](/builders/api-schema/clusters-types/#clusterpricingmodel)) — Pricing model for subscriptions.
+- **monthlyPriceCents**: `Int` — Monthly subscription price in cents.
+- **requiresApproval**: `Boolean!` — Whether access requires owner approval.
+- **shortDescription**: `String` — Short marketplace description.
+- **nodesConnection**: `NodesConnection` ([NodesConnection](/builders/api-schema/clusters-types/#nodesconnection)) — Paginated list of nodes in this cluster.
+  - `page`: `ConnectionInput` ([ConnectionInput](/builders/api-schema/shared/#connectioninput))
+
+## ClusterAccess
+
+**object**
+
+- **clusterId**: `String!`
+- **clusterName**: `String!`
+- **accessLevel**: `String!`
+- **resourceLimits**: `JSON` ([JSON](/builders/api-schema/shared/#json))
+- **allowPrivatePullSources**: `Boolean!` — Whether the cluster may pull from private (RFC 1918) and multicast sources.
+
+## ClusterAccessConnection
+
+**object**
+
+- **edges**: `[ClusterAccessEdge!]!` ([ClusterAccessEdge](/builders/api-schema/clusters-types/#clusteraccessedge))
+- **nodes**: `[ClusterAccess!]!` ([ClusterAccess](/builders/api-schema/clusters-types/#clusteraccess))
+- **pageInfo**: `PageInfo!` ([PageInfo](/builders/api-schema/shared/#pageinfo))
+- **totalCount**: `Int!`
+
+## ClusterAccessEdge
+
+**object**
+
+- **cursor**: `String!`
+- **node**: `ClusterAccess!` ([ClusterAccess](/builders/api-schema/clusters-types/#clusteraccess))
+
+## ClusterEdge
+
+**object**
+
+- **cursor**: `String!`
+- **node**: `Cluster!` ([Cluster](/builders/api-schema/clusters-types/#cluster))
+
+## ClusterInvite
+
+**object**
+
+- **id**: `ID!`
+- **clusterId**: `String!`
+- **invitedTenantId**: `ID!`
+- **inviteToken**: `String`
+- **accessLevel**: `String!`
+- **resourceLimits**: `JSON` ([JSON](/builders/api-schema/shared/#json))
+- **status**: `String!`
+- **createdBy**: `ID!`
+- **createdAt**: `Time!` ([Time](/builders/api-schema/shared/#time))
+- **expiresAt**: `Time` ([Time](/builders/api-schema/shared/#time))
+- **acceptedAt**: `Time` ([Time](/builders/api-schema/shared/#time))
+- **invitedTenantName**: `String`
+- **clusterName**: `String`
+
+## ClusterInviteConnection
+
+**object**
+
+- **edges**: `[ClusterInviteEdge!]!` ([ClusterInviteEdge](/builders/api-schema/clusters-types/#clusterinviteedge))
+- **nodes**: `[ClusterInvite!]!` ([ClusterInvite](/builders/api-schema/clusters-types/#clusterinvite))
+- **pageInfo**: `PageInfo!` ([PageInfo](/builders/api-schema/shared/#pageinfo))
+- **totalCount**: `Int!`
+
+## ClusterInviteEdge
+
+**object**
+
+- **cursor**: `String!`
+- **node**: `ClusterInvite!` ([ClusterInvite](/builders/api-schema/clusters-types/#clusterinvite))
+
+## ClusterPricingModel
+
+**enum**
+
+- `FREE_UNMETERED`
+- `METERED`
+- `MONTHLY`
+- `TIER_INHERIT`
+- `CUSTOM`
+
+## ClusterSubscription
+
+**object**
+
+- **id**: `ID!`
+- **tenantId**: `ID!`
+- **clusterId**: `String!`
+- **accessLevel**: `String!`
+- **subscriptionStatus**: `ClusterSubscriptionStatus!` ([ClusterSubscriptionStatus](/builders/api-schema/clusters-types/#clustersubscriptionstatus))
+- **resourceLimits**: `JSON` ([JSON](/builders/api-schema/shared/#json))
+- **requestedAt**: `Time` ([Time](/builders/api-schema/shared/#time))
+- **approvedAt**: `Time` ([Time](/builders/api-schema/shared/#time))
+- **approvedBy**: `ID`
+- **rejectionReason**: `String`
+- **expiresAt**: `Time` ([Time](/builders/api-schema/shared/#time))
+- **createdAt**: `Time!` ([Time](/builders/api-schema/shared/#time))
+- **updatedAt**: `Time!` ([Time](/builders/api-schema/shared/#time))
+- **clusterName**: `String`
+- **tenantName**: `String`
+
+## ClusterSubscriptionConnection
+
+**object**
+
+- **edges**: `[ClusterSubscriptionEdge!]!` ([ClusterSubscriptionEdge](/builders/api-schema/clusters-types/#clustersubscriptionedge))
+- **nodes**: `[ClusterSubscription!]!` ([ClusterSubscription](/builders/api-schema/clusters-types/#clustersubscription))
+- **pageInfo**: `PageInfo!` ([PageInfo](/builders/api-schema/shared/#pageinfo))
+- **totalCount**: `Int!`
+
+## ClusterSubscriptionEdge
+
+**object**
+
+- **cursor**: `String!`
+- **node**: `ClusterSubscription!` ([ClusterSubscription](/builders/api-schema/clusters-types/#clustersubscription))
+
+## ClusterSubscriptionResult
+
+**union**
+
+- Member: [ClusterSubscription](/builders/api-schema/clusters-types/#clustersubscription)
+- Member: [ValidationError](/builders/api-schema/shared/#validationerror)
+- Member: [NotFoundError](/builders/api-schema/shared/#notfounderror)
+- Member: [AuthError](/builders/api-schema/shared/#autherror)
+
+## ClusterSubscriptionStatus
+
+**enum**
+
+- `PENDING_APPROVAL`
+- `ACTIVE`
+- `SUSPENDED`
+- `REJECTED`
+
+## ClusterVisibility
+
+**enum**
+
+- `PUBLIC`
+- `UNLISTED`
+- `PRIVATE`
+
+## ClustersConnection
+
+**object**
+
+- **edges**: `[ClusterEdge!]!` ([ClusterEdge](/builders/api-schema/clusters-types/#clusteredge))
+- **nodes**: `[Cluster!]!` ([Cluster](/builders/api-schema/clusters-types/#cluster))
+- **pageInfo**: `PageInfo!` ([PageInfo](/builders/api-schema/shared/#pageinfo))
+- **totalCount**: `Int!`
+
+## CreateClusterInviteInput
+
+**input_object**
+
+Input for creating a cluster access invite.
+
+- **clusterId**: `ID!` — Target cluster ID.
+- **invitedTenantId**: `ID!` — Tenant to invite.
+- **accessLevel**: `String` — Access level (read, write, admin).
+- **resourceLimits**: `JSON` ([JSON](/builders/api-schema/shared/#json)) — Resource limits for the invited tenant.
+- **expiresInDays**: `Int` — Days until invite expires.
+
+## CreateClusterInviteResult
+
+**union**
+
+- Member: [ClusterInvite](/builders/api-schema/clusters-types/#clusterinvite)
+- Member: [ValidationError](/builders/api-schema/shared/#validationerror)
+- Member: [NotFoundError](/builders/api-schema/shared/#notfounderror)
+- Member: [AuthError](/builders/api-schema/shared/#autherror)
+
+## CreateEdgeClusterInput
+
+**input_object**
+
+- **clusterName**: `String!` — Human-readable cluster name.
+- **shortDescription**: `String` — Short description.
+- **controlClusterId**: `ID` — Optional platform-official cluster/cell to control this edge cluster.
+
+## CreateEdgeClusterResponse
+
+**object**
+
+- **cluster**: `Cluster!` ([Cluster](/builders/api-schema/clusters-types/#cluster))
+- **bootstrapToken**: `BootstrapToken!` ([BootstrapToken](/builders/api-schema/clusters-types/#bootstraptoken))
+- **foghornAddr**: `String!`
+
+## CreateEdgeClusterResult
+
+**union**
+
+- Member: [CreateEdgeClusterResponse](/builders/api-schema/clusters-types/#createedgeclusterresponse)
+- Member: [ValidationError](/builders/api-schema/shared/#validationerror)
+- Member: [AuthError](/builders/api-schema/shared/#autherror)
+
+## CreateEnrollmentTokenResponse
+
+**object**
+
+- **bootstrapToken**: `BootstrapToken!` ([BootstrapToken](/builders/api-schema/clusters-types/#bootstraptoken))
+
+## CreateEnrollmentTokenResult
+
+**union**
+
+- Member: [CreateEnrollmentTokenResponse](/builders/api-schema/clusters-types/#createenrollmenttokenresponse)
+- Member: [ValidationError](/builders/api-schema/shared/#validationerror)
+- Member: [AuthError](/builders/api-schema/shared/#autherror)
+
+## EdgeTelemetrySetup
+
+**object**
+
+- **enabled**: `Boolean!`
+- **writeUrl**: `String`
+- **bearerToken**: `String`
+
+## InfrastructureNode
+
+**object**
+
+An infrastructure node in a cluster (edge server, origin, transcoder). Nodes handle stream ingest, transcoding, and delivery to viewers.
+
+Implements [Node](/builders/api-schema/shared/#node).
+
+- **id**: `ID!` — Global unique identifier for Relay compatibility.
+- **nodeId**: `String!` — Internal node identifier (UUID).
+- **clusterId**: `String!` — Cluster this node belongs to.
+- **nodeName**: `String!` — Human-readable node name.
+- **nodeType**: `String!` — Node role (edge, origin, transcoder, hybrid).
+- **internalIp**: `String` — Private network IP address.
+- **externalIp**: `String` — Public IP address for external access.
+- **wireguardIp**: `String` — WireGuard mesh network IP.
+- **wireguardPublicKey**: `String` — WireGuard public key for mesh peering.
+- **region**: `String` — Geographic region (us-east, eu-west, etc.).
+- **latitude**: `Float` — GPS latitude.
+- **longitude**: `Float` — GPS longitude.
+- **availabilityZone**: `String` — Availability zone within region.
+- **cpuCores**: `Int` — Number of CPU cores.
+- **memoryGb**: `Int` — Memory in gigabytes.
+- **diskGb**: `Int` — Disk storage in gigabytes.
+- **lastHeartbeat**: `Time` ([Time](/builders/api-schema/shared/#time)) — Last heartbeat timestamp from node agent.
+- **tags**: `JSON` ([JSON](/builders/api-schema/shared/#json)) — Custom tags for node organization.
+- **metadata**: `JSON` ([JSON](/builders/api-schema/shared/#json)) — Additional node metadata.
+- **createdAt**: `Time` ([Time](/builders/api-schema/shared/#time)) — When the node was registered.
+- **updatedAt**: `Time` ([Time](/builders/api-schema/shared/#time)) — When the node was last updated.
+- **metricsConnection**: `NodeMetricsConnection!` ([NodeMetricsConnection](/builders/api-schema/shared/#nodemetricsconnection)) — Paginated time-series metrics for this node.
+  - `page`: `ConnectionInput` ([ConnectionInput](/builders/api-schema/shared/#connectioninput))
+  - `timeRange`: `TimeRangeInput` ([TimeRangeInput](/builders/api-schema/shared/#timerangeinput))
+- **metrics1hConnection**: `NodeMetrics1hConnection!` ([NodeMetrics1hConnection](/builders/api-schema/shared/#nodemetrics1hconnection)) — Hourly aggregated metrics for this node.
+  - `page`: `ConnectionInput` ([ConnectionInput](/builders/api-schema/shared/#connectioninput))
+  - `timeRange`: `TimeRangeInput` ([TimeRangeInput](/builders/api-schema/shared/#timerangeinput))
+- **liveState**: `LiveNode` ([LiveNode](/builders/api-schema/clusters-types/#livenode)) — Real-time state from the analytics data plane.
+- **effectiveMode**: `NodeOperationalMode!` ([NodeOperationalMode](/builders/api-schema/clusters-types/#nodeoperationalmode)) — Current operational mode (normal / draining / maintenance). Read from Foghorn&#39;s per-node heartbeat. Changes via setNodeMode.
+- **routingImpactPreview**: `RoutingImpactPreview!` ([RoutingImpactPreview](/builders/api-schema/clusters-types/#routingimpactpreview)) — Current traffic on this node. Operators use these counts to understand how much live traffic is affected before draining or entering maintenance. Counts come from Foghorn&#39;s GetNodeHealth.
+
+## LiveNode
+
+**object**
+
+- **nodeId**: `String!`
+- **tenantId**: `ID!`
+- **cpuPercent**: `Float!`
+- **ramUsedBytes**: `Float!` — Used memory in MiB (field name is historical).
+- **ramTotalBytes**: `Float!` — Total memory in MiB (field name is historical).
+- **diskUsedBytes**: `Float!`
+- **diskTotalBytes**: `Float!`
+- **upSpeed**: `Float!`
+- **downSpeed**: `Float!`
+- **activeStreams**: `Int!`
+- **isHealthy**: `Boolean!`
+- **latitude**: `Float!`
+- **longitude**: `Float!`
+- **location**: `String!`
+- **metadata**: `JSON` ([JSON](/builders/api-schema/shared/#json))
+- **updatedAt**: `Time!` ([Time](/builders/api-schema/shared/#time))
+
+## MarketplaceCluster
+
+**object**
+
+- **clusterId**: `String!`
+- **clusterName**: `String!`
+- **shortDescription**: `String`
+- **visibility**: `ClusterVisibility!` ([ClusterVisibility](/builders/api-schema/clusters-types/#clustervisibility))
+- **pricingModel**: `ClusterPricingModel!` ([ClusterPricingModel](/builders/api-schema/clusters-types/#clusterpricingmodel))
+- **monthlyPriceCents**: `Int`
+- **requiresApproval**: `Boolean!`
+- **ownerName**: `String`
+- **maxConcurrentStreams**: `Int!`
+- **maxConcurrentViewers**: `Int!`
+- **currentUtilization**: `Float`
+- **isSubscribed**: `Boolean!`
+- **subscriptionStatus**: `ClusterSubscriptionStatus` ([ClusterSubscriptionStatus](/builders/api-schema/clusters-types/#clustersubscriptionstatus))
+- **isEligible**: `Boolean!` — Whether the tenant can subscribe based on billing tier.
+- **denialReason**: `String` — Generic reason if the tenant is not eligible.
+
+## MarketplaceClusterConnection
+
+**object**
+
+- **edges**: `[MarketplaceClusterEdge!]!` ([MarketplaceClusterEdge](/builders/api-schema/clusters-types/#marketplaceclusteredge))
+- **nodes**: `[MarketplaceCluster!]!` ([MarketplaceCluster](/builders/api-schema/clusters-types/#marketplacecluster))
+- **pageInfo**: `PageInfo!` ([PageInfo](/builders/api-schema/shared/#pageinfo))
+- **totalCount**: `Int!`
+
+## MarketplaceClusterEdge
+
+**object**
+
+- **cursor**: `String!`
+- **node**: `MarketplaceCluster!` ([MarketplaceCluster](/builders/api-schema/clusters-types/#marketplacecluster))
+
+## MistAdminSession
+
+**object**
+
+Short-lived credentials that let an authorized operator open the MistServer admin UI on a specific edge node. The webapp POSTs `sessionToken` (in the form body, NOT a query string) to `postUrl`. Helmsman validates the token against Foghorn, sets an HttpOnly, Secure, SameSite=Lax cookie scoped to `Path=/_mist`, and redirects the browser to `/_mist/` where the LSP UI loads. `sessionToken` is bound to one nodeId via the JWT&#39;s `node_id` claim; replay against any other edge node fails. `expiresAt` is Unix seconds.
+
+- **postUrl**: `String!` — Per-edge URL to POST the session token to (e.g. https://edge-us-1.media-us-1.frameworks.network/_mist-session).
+- **sessionToken**: `String!` — Short-TTL JWT to submit as the `session_token` form field. Treat as a secret.
+- **expiresAt**: `Int!` — Unix-seconds expiry of the token. The webapp can refuse to open if already past.
+
+## MySubscriptionEdge
+
+**object**
+
+- **cursor**: `String!`
+- **node**: `Cluster!` ([Cluster](/builders/api-schema/clusters-types/#cluster))
+
+## MySubscriptionsConnection
+
+**object**
+
+- **edges**: `[MySubscriptionEdge!]!` ([MySubscriptionEdge](/builders/api-schema/clusters-types/#mysubscriptionedge))
+- **nodes**: `[Cluster!]!` ([Cluster](/builders/api-schema/clusters-types/#cluster))
+- **pageInfo**: `PageInfo!` ([PageInfo](/builders/api-schema/shared/#pageinfo))
+- **totalCount**: `Int!`
+
+## NodeEdge
+
+**object**
+
+- **cursor**: `String!`
+- **node**: `InfrastructureNode!` ([InfrastructureNode](/builders/api-schema/clusters-types/#infrastructurenode))
+
+## NodeOperationalMode
+
+**enum**
+
+Operational mode controlling whether a node accepts new sessions. The mode is set via setNodeMode and snapshotted onto the node&#39;s heartbeat; routing inspects it via GetNodeHealth and steers around drained / maintenance nodes.
+
+- `NORMAL` — Accepts new viewers and ingest. Default.
+- `DRAINING` — Existing viewers continue; new viewers are routed elsewhere. Use before maintenance to bleed load gracefully.
+- `MAINTENANCE` — Hard out — node is removed from routing entirely. Existing sessions terminate.
+
+## NodesConnection
+
+**object**
+
+- **edges**: `[NodeEdge!]!` ([NodeEdge](/builders/api-schema/clusters-types/#nodeedge))
+- **nodes**: `[InfrastructureNode!]!` ([InfrastructureNode](/builders/api-schema/clusters-types/#infrastructurenode))
+- **pageInfo**: `PageInfo!` ([PageInfo](/builders/api-schema/shared/#pageinfo))
+- **totalCount**: `Int!`
+
+## OpenMistAdminSessionInput
+
+**input_object**
+
+- **nodeId**: `ID!` — Node identifier — accepts the InfrastructureNode.id (Relay global) or nodeId (raw UUID).
+
+## OpenMistAdminSessionResult
+
+**union**
+
+- Member: [MistAdminSession](/builders/api-schema/clusters-types/#mistadminsession)
+- Member: [ValidationError](/builders/api-schema/shared/#validationerror)
+- Member: [NotFoundError](/builders/api-schema/shared/#notfounderror)
+- Member: [AuthError](/builders/api-schema/shared/#autherror)
+
+## Orchestrator
+
+**object**
+
+Identity-level orchestrator row — keyed by eth address. An orchestrator typically fronts N instances behind a load-balanced DNS hostname; per-instance config (price, capabilities, hardware) lives on `OrchestratorInstance` and can legitimately differ across instances even under the same eth address.
+
+- **tenantId**: `ID!`
+- **orchAddr**: `String!`
+- **lastSeen**: `Time!` ([Time](/builders/api-schema/shared/#time))
+- **updatedAt**: `Time!` ([Time](/builders/api-schema/shared/#time))
+
+## OrchestratorCapabilityPrice
+
+**object**
+
+One per-capability price entry. The gateway emits these as typed `OrchestratorCapabilityPriceEntry` proto messages; if `capability` is empty it falls back to `pos:&lt;N&gt;` reflecting the index in upstream&#39;s `capabilities_prices` array. Prices are exposed as ETH-denominated decimal strings so clients never handle wei-scale integers through JSON floats.
+
+- **capability**: `String!`
+- **pricePerUnitEth**: `String!`
+- **pixelsPerUnit**: `String!`
+
+## OrchestratorInstance
+
+**object**
+
+Per-instance state. One per (tenant, orch_addr, resolved_ip). Multiple instances of the same orch can have independent prices, capabilities, and hardware — the side panel renders this list so divergence is visible.
+
+- **tenantId**: `ID!`
+- **orchAddr**: `String!`
+- **resolvedIp**: `String!`
+- **canonicalUrl**: `String!`
+- **advertisedNodeUrls**: `[String!]!`
+- **capabilities**: `[String!]!`
+- **pricePerUnitEth**: `String!`
+- **pixelsPerUnit**: `String!`
+- **capabilityPrices**: `[OrchestratorCapabilityPrice!]!` ([OrchestratorCapabilityPrice](/builders/api-schema/clusters-types/#orchestratorcapabilityprice))
+- **hardware**: `String!`
+- **source**: `String!`
+- **lastSeen**: `Time!` ([Time](/builders/api-schema/shared/#time))
+- **updatedAt**: `Time!` ([Time](/builders/api-schema/shared/#time))
+
+## OrchestratorPerformancePoint
+
+**object**
+
+One sample from discovery and outcome rollups. Discovery metrics are per-vantage; transcode and AI outcome metrics are keyed by the gateway and the resolved instance IP observed by the gateway.
+
+- **timestamp**: `Time!` ([Time](/builders/api-schema/shared/#time))
+- **gatewayId**: `String!`
+- **gatewayRegion**: `String!`
+- **resolvedIp**: `String!`
+- **attempts**: `Float!`
+- **successes**: `Float!`
+- **failures**: `Float!`
+- **meanLatencyMs**: `Float!`
+- **maxLatencyMs**: `Int!`
+- **transcodeAttempts**: `Float!`
+- **transcodeSuccesses**: `Float!`
+- **transcodeFailures**: `Float!`
+- **transcodeMeanOverallMs**: `Float!`
+- **transcodeMaxOverallMs**: `Int!`
+- **transcodePixels**: `Float!`
+- **aiAttempts**: `Float!`
+- **aiSuccesses**: `Float!`
+- **aiFailures**: `Float!`
+- **aiMeanLatencyMs**: `Float!`
+- **aiMaxLatencyMs**: `Int!`
+
+## OrchestratorVantage
+
+**object**
+
+Per-vantage observation: one row per (cluster owner tenant, gateway, orch address, resolved IP). DNS round-robin / geo-anycast surfaces as multiple vantages with different `resolvedIp`.
+
+- **tenantId**: `ID!`
+- **gatewayId**: `String!`
+- **gatewayRegion**: `String!`
+- **orchAddr**: `String!`
+- **resolvedIp**: `String!`
+- **latitude**: `Float!`
+- **longitude**: `Float!`
+- **city**: `String!`
+- **countryCode**: `String!`
+- **geoSource**: `String!`
+- **geoResolvedAt**: `Time!` ([Time](/builders/api-schema/shared/#time))
+- **latestLatencyMs**: `Int!`
+- **score**: `Float!`
+- **dialedRecently**: `Boolean!`
+- **lastSeen**: `Time!` ([Time](/builders/api-schema/shared/#time))
+
+## OrchestratorWithDetails
+
+**object**
+
+Detail response: orchestrator identity + every known instance (with their own price/capabilities/hardware) + every per-(gateway, instance) vantage. Used by the federation map&#39;s side panel.
+
+- **orchestrator**: `Orchestrator!` ([Orchestrator](/builders/api-schema/clusters-types/#orchestrator))
+- **instances**: `[OrchestratorInstance!]!` ([OrchestratorInstance](/builders/api-schema/clusters-types/#orchestratorinstance))
+- **vantages**: `[OrchestratorVantage!]!` ([OrchestratorVantage](/builders/api-schema/clusters-types/#orchestratorvantage))
+
+## OrchestratorsConnection
+
+**object**
+
+Pagination wrapper for orchestrator listing.
+
+- **nodes**: `[Orchestrator!]!` ([Orchestrator](/builders/api-schema/clusters-types/#orchestrator))
+- **totalCount**: `Int!`
+
+## RevokeClusterInviteResult
+
+**union**
+
+- Member: [DeleteSuccess](/builders/api-schema/shared/#deletesuccess)
+- Member: [NotFoundError](/builders/api-schema/shared/#notfounderror)
+- Member: [AuthError](/builders/api-schema/shared/#autherror)
+
+## RoutingImpactPreview
+
+**object**
+
+Snapshot of how much traffic a node is currently serving.
+
+- **activeStreams**: `Int!`
+- **activeViewers**: `Int!`
+
+## SetNodeModeInput
+
+**input_object**
+
+- **nodeId**: `ID!` — Node identifier — accepts the InfrastructureNode.id (Relay global) or nodeId (raw UUID).
+- **mode**: `NodeOperationalMode!` ([NodeOperationalMode](/builders/api-schema/clusters-types/#nodeoperationalmode))
+- **reason**: `String` — Free-text reason recorded in Foghorn&#39;s audit trail. Defaults to the calling user/agent identity.
+
+## SetNodeModeResult
+
+**union**
+
+- Member: [InfrastructureNode](/builders/api-schema/clusters-types/#infrastructurenode)
+- Member: [ValidationError](/builders/api-schema/shared/#validationerror)
+- Member: [NotFoundError](/builders/api-schema/shared/#notfounderror)
+- Member: [AuthError](/builders/api-schema/shared/#autherror)
+
+## SetPreferredClusterResult
+
+**union**
+
+- Member: [Cluster](/builders/api-schema/clusters-types/#cluster)
+- Member: [ValidationError](/builders/api-schema/shared/#validationerror)
+- Member: [NotFoundError](/builders/api-schema/shared/#notfounderror)
+- Member: [AuthError](/builders/api-schema/shared/#autherror)
+
+## UpdateClusterMarketplaceInput
+
+**input_object**
+
+Input for updating cluster marketplace settings.
+
+- **visibility**: `ClusterVisibility` ([ClusterVisibility](/builders/api-schema/clusters-types/#clustervisibility)) — Marketplace visibility (PUBLIC, UNLISTED, PRIVATE).
+- **pricingModel**: `ClusterPricingModel` ([ClusterPricingModel](/builders/api-schema/clusters-types/#clusterpricingmodel)) — Pricing model for subscriptions.
+- **monthlyPriceCents**: `Int` — Monthly subscription price in cents.
+- **requiresApproval**: `Boolean` — Whether access requires owner approval.
+- **shortDescription**: `String` — Short marketplace description.
+
+## UpdateClusterResult
+
+**union**
+
+- Member: [Cluster](/builders/api-schema/clusters-types/#cluster)
+- Member: [ValidationError](/builders/api-schema/shared/#validationerror)
+- Member: [NotFoundError](/builders/api-schema/shared/#notfounderror)
+- Member: [AuthError](/builders/api-schema/shared/#autherror)

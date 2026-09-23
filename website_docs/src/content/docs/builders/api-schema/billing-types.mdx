@@ -1,0 +1,778 @@
+---
+title: Billing and usage types
+description: Billing and usage types in the generated public GraphQL reference.
+sidebar:
+  order: 13
+---
+
+[GraphQL schema reference](/builders/api-schema/) · [API guide](/builders/api-reference/) · [SDKs](/builders/sdks/) · Types of [Billing and usage](/builders/api-schema/billing/)
+
+## BalanceTransaction
+
+**object**
+
+A single balance transaction (top-up, usage deduction, refund, etc.).
+
+- **id**: `ID!` — Unique transaction identifier.
+- **tenantId**: `String!` — Owning tenant identifier.
+- **amountCents**: `Int!` — Amount in cents (positive = credit, negative = debit).
+- **balanceAfterCents**: `Int!` — Balance after this transaction.
+- **transactionType**: `String!` — Transaction type: topup, usage, refund, adjustment.
+- **description**: `String` — Human-readable description.
+- **referenceId**: `String` — Reference to related object (crypto payment, usage record, etc.).
+- **referenceType**: `String` — Type of the referenced object.
+- **createdAt**: `Time!` ([Time](/builders/api-schema/shared/#time)) — When the transaction occurred.
+
+## BalanceTransactionEdge
+
+**object**
+
+Balance transaction connection for pagination.
+
+- **cursor**: `String!`
+- **node**: `BalanceTransaction!` ([BalanceTransaction](/builders/api-schema/billing-types/#balancetransaction))
+
+## BalanceTransactionsConnection
+
+**object**
+
+- **edges**: `[BalanceTransactionEdge!]!` ([BalanceTransactionEdge](/builders/api-schema/billing-types/#balancetransactionedge))
+- **nodes**: `[BalanceTransaction!]!` ([BalanceTransaction](/builders/api-schema/billing-types/#balancetransaction))
+- **pageInfo**: `PageInfo!` ([PageInfo](/builders/api-schema/shared/#pageinfo))
+- **totalCount**: `Int!`
+
+## BillingAddress
+
+**object**
+
+Structured billing address for invoices.
+
+- **street**: `String!` — Street address line 1.
+- **city**: `String!` — City name.
+- **state**: `String` — State or province.
+- **postalCode**: `String!` — Postal or ZIP code.
+- **country**: `String!` — ISO 3166-1 alpha-2 country code.
+
+## BillingAddressInput
+
+**input_object**
+
+Input for billing address.
+
+- **street**: `String!` — Street address line 1.
+- **city**: `String!` — City name.
+- **state**: `String` — State or province.
+- **postalCode**: `String!` — Postal or ZIP code.
+- **country**: `String!` — ISO 3166-1 alpha-2 country code.
+
+## BillingDetails
+
+**object**
+
+Billing details for a tenant. These are optional for Free and small simplified top-ups, and required when paid postpaid collection or a full invoice needs them.
+
+- **email**: `String` — Billing contact email.
+- **name**: `String` — Customer legal or person name shown on full invoices.
+- **company**: `String` — Company name for invoices.
+- **vatNumber**: `String` — VAT number (EU format: XX123456789).
+- **address**: `BillingAddress` ([BillingAddress](/builders/api-schema/billing-types/#billingaddress)) — Structured billing address.
+- **isComplete**: `Boolean!` — True if all full-invoice fields are present (legal name + email + address).
+- **updatedAt**: `Time` ([Time](/builders/api-schema/shared/#time)) — When billing details were last updated.
+- **presentmentCurrency**: `Currency` ([Currency](/builders/api-schema/billing-types/#currency)) — Currency the tenant is invoiced and charged in (EUR, USD, GBP), derived from the billing address country. It cannot change while a provider subscription, an open invoice, or a card first payment started in the last day exists.
+
+## BillingFeatures
+
+**object**
+
+Contractual and enforced properties of a billing tier. Usage limits are entitlements, not features.
+
+- **supportLevel**: `String!` — Support level (community, email, priority, dedicated).
+- **sla**: `Boolean!` — Whether SLA guarantees apply.
+- **processingCustomizable**: `Boolean!` — Whether the tenant may override the tier&#39;s processing profiles.
+
+## BillingStatus
+
+**object**
+
+- **currentTier**: `BillingTier` ([BillingTier](/builders/api-schema/billing-types/#billingtier))
+- **subscription**: `TenantSubscription` ([TenantSubscription](/builders/api-schema/billing-types/#tenantsubscription))
+- **billingStatus**: `String!`
+- **paymentMethods**: `[PaymentMethod!]!` ([PaymentMethod](/builders/api-schema/billing-types/#paymentmethod)) — Invoice payment methods currently configured for this tenant.
+- **collectionReady**: `Boolean!` — True only after a reusable postpaid provider subscription or mandate is confirmed.
+- **collectionProvider**: `String` — Confirmed postpaid collection provider, when ready.
+- **setupProviders**: `[String!]!` — Fully configured providers that can start postpaid setup.
+- **recentPayments**: `[InvoicePayment!]!` ([InvoicePayment](/builders/api-schema/billing-types/#invoicepayment)) — Recent invoice payments, newest first. Retry or resume through createPayment on the invoice.
+- **nextBillingDate**: `Time` ([Time](/builders/api-schema/shared/#time))
+- **trialEndsAt**: `Time` ([Time](/builders/api-schema/shared/#time))
+- **outstandingAmount**: `Float!`
+- **currency**: `String!`
+- **liveUsage**: `LiveUsageSummary!` ([LiveUsageSummary](/builders/api-schema/billing-types/#liveusagesummary))
+- **invoicePreview**: `Invoice` ([Invoice](/builders/api-schema/billing-types/#invoice))
+
+## BillingTier
+
+**object**
+
+A subscription tier defining pricing rules, entitlements, and features. Tenants subscribe to a tier which determines their billing and capabilities.
+
+- **id**: `ID!` — Unique tier identifier.
+- **tierName**: `String!` — Internal tier name (payg, free, supporter, developer, production, enterprise).
+- **tierLevel**: `Int!` — Numeric ordering of tiers; 0 = payg (prepaid), 1 = free, 5 = enterprise. Used to compare upgrade vs downgrade direction.
+- **displayName**: `String!` — User-facing tier name.
+- **description**: `String` — Tier description for marketing.
+- **basePrice**: `Float!` — Base monthly price.
+- **currency**: `String!` — Currency code (USD, EUR, etc.).
+- **billingPeriod**: `String!` — Billing period (monthly, yearly).
+- **features**: `BillingFeatures!` ([BillingFeatures](/builders/api-schema/billing-types/#billingfeatures)) — Feature flags for this tier.
+- **pricingRules**: `[PricingRule!]!` ([PricingRule](/builders/api-schema/billing-types/#pricingrule)) — Priced behaviors per meter (rating engine input).
+- **entitlements**: `[EntitlementEntry!]!` ([EntitlementEntry](/builders/api-schema/billing-types/#entitlemententry)) — Non-billing grants (e.g. recording_retention_days). Values are JSON-encoded strings.
+- **supportLevel**: `String` — Support level included (community, email, priority, dedicated).
+- **slaLevel**: `String` — SLA guarantee level for enterprise tiers.
+- **meteringEnabled**: `Boolean!` — Whether usage metering is enabled for this tier.
+- **isEnterprise**: `Boolean!` — Whether this is an enterprise tier with custom terms.
+
+## CardPaymentProvider
+
+**enum**
+
+Card payment provider for top-ups.
+
+- `STRIPE` — Stripe checkout.
+- `MOLLIE` — Mollie checkout.
+
+## CardTopupResult
+
+**object**
+
+Result from creating a card top-up checkout session.
+
+- **topupId**: `ID!` — Internal top-up ID for tracking.
+- **checkoutUrl**: `String!` — URL to redirect user for checkout.
+- **expiresAt**: `Time!` ([Time](/builders/api-schema/shared/#time)) — When the checkout session expires.
+- **amountCents**: `Int!` — Amount charged, in cents of `currency`.
+- **currency**: `Currency!` ([Currency](/builders/api-schema/billing-types/#currency)) — Tenant presentment currency the checkout charges in (EUR, USD, GBP).
+- **conversion**: `CurrencyConversion` ([CurrencyConversion](/builders/api-schema/billing-types/#currencyconversion)) — EUR amount the top-up credits, locked at the ECB rate when the checkout was created.
+
+## ChangeBillingTierPayload
+
+**object**
+
+Result of a postpaid tier change. Either appliedTier is set (immediate upgrade) or pendingTier + effectiveAt are set (scheduled downgrade at period end).
+
+- **success**: `Boolean!` — Whether the request was accepted.
+- **message**: `String!` — Human-readable status message.
+- **appliedTier**: `BillingTier` ([BillingTier](/builders/api-schema/billing-types/#billingtier)) — Set on immediate upgrade — the new active tier.
+- **pendingTier**: `BillingTier` ([BillingTier](/builders/api-schema/billing-types/#billingtier)) — Set on scheduled downgrade — the staged target tier.
+- **effectiveAt**: `Time` ([Time](/builders/api-schema/shared/#time)) — When a scheduled downgrade will take effect.
+
+## ChangeBillingTierResult
+
+**union**
+
+- Member: [ChangeBillingTierPayload](/builders/api-schema/billing-types/#changebillingtierpayload)
+- Member: [ValidationError](/builders/api-schema/shared/#validationerror)
+- Member: [AuthError](/builders/api-schema/shared/#autherror)
+
+## CostEntry
+
+**object**
+
+- **resourceType**: `String!`
+- **cost**: `Float!`
+
+## CountryMetrics
+
+**object**
+
+- **countryCode**: `String!`
+- **viewerCount**: `Int!`
+- **viewerHours**: `Float!`
+- **egressGb**: `Float!`
+
+## CreateCardTopupInput
+
+**input_object**
+
+Input for creating a card-based prepaid balance top-up.
+
+- **amountCents**: `Int!` — Amount to charge, in cents of the tenant&#39;s presentment currency. Minimum 500 cents; maximum 10,000,000 cents.
+- **provider**: `CardPaymentProvider!` ([CardPaymentProvider](/builders/api-schema/billing-types/#cardpaymentprovider)) — Payment provider to use.
+- **successUrl**: `String!` — URL to redirect after successful payment.
+- **cancelUrl**: `String!` — URL to redirect if user cancels.
+- **billingEmail**: `String` — Optional billing email for invoice.
+- **billingName**: `String` — Optional billing name for invoice.
+- **billingCompany**: `String` — Optional company name for invoice.
+- **billingVatNumber**: `String` — Optional VAT number for invoice.
+
+## CreateCryptoTopupInput
+
+**input_object**
+
+Input for creating a crypto top-up deposit address.
+
+- **amountCents**: `Int!` — Amount in cents of the tenant&#39;s presentment currency. Minimum 1 cent; maximum 10,000,000 cents.
+- **asset**: `CryptoAsset!` ([CryptoAsset](/builders/api-schema/billing-types/#cryptoasset)) — Crypto asset to receive (ETH or USDC; LPT not yet supported).
+
+## CreatePaymentInput
+
+**input_object**
+
+- **invoiceId**: `ID!`
+- **method**: `PaymentMethod!` ([PaymentMethod](/builders/api-schema/billing-types/#paymentmethod))
+- **returnUrl**: `String`
+
+## CreatePaymentResult
+
+**union**
+
+- Member: [Payment](/builders/api-schema/billing-types/#payment)
+- Member: [ValidationError](/builders/api-schema/shared/#validationerror)
+- Member: [AuthError](/builders/api-schema/shared/#autherror)
+
+## CryptoAsset
+
+**enum**
+
+Supported crypto assets for top-up (ETH network only).
+
+- `ETH` — Native Ethereum
+- `USDC` — USDC stablecoin (ERC-20)
+- `LPT` — Livepeer Token (ERC-20). Currently reserved — prepaid top-ups gated until a non-Chainlink price source is wired.
+
+## CryptoTopupResult
+
+**object**
+
+Result from creating a crypto top-up. The price is locked at this response. Send exactly `expectedAmountToken` of `asset` to `depositAddress`; on confirmation, the balance is credited at `quotedPriceUsd` regardless of price drift inside the address TTL.
+
+- **topupId**: `ID!` — Internal top-up ID for tracking/polling.
+- **depositAddress**: `String!` — HD-derived Ethereum address to send funds to.
+- **asset**: `CryptoAsset!` ([CryptoAsset](/builders/api-schema/billing-types/#cryptoasset)) — Asset to send (ETH or USDC).
+- **assetSymbol**: `String!` — Human-readable asset symbol (&#34;ETH&#34; &#124; &#34;USDC&#34;).
+- **expectedAmountCents**: `Int!` — Echo of input amountCents, in cents of the tenant&#39;s presentment currency.
+- **expiresAt**: `Time!` ([Time](/builders/api-schema/shared/#time)) — When this deposit address expires (24 hours from creation).
+- **expectedAmountBaseUnits**: `String!` — Token base units to send (decimal string; wei for 18-decimal assets).
+- **expectedAmountToken**: `String!` — Human-friendly decimal of expectedAmountBaseUnits, e.g. &#34;0.01515&#34;.
+- **quotedPriceUsd**: `String!` — Locked USD price per 1 whole token, e.g. &#34;3300.45&#34;.
+- **quoteSource**: `String!` — Source of the price quote (&#34;chainlink&#34; &#124; &#34;one_to_one&#34;).
+- **quotedAt**: `Time!` ([Time](/builders/api-schema/shared/#time)) — When the price was locked.
+- **network**: `String!` — Network the deposit address lives on (&#34;ethereum&#34; &#124; &#34;arbitrum&#34; &#124; &#34;base&#34;).
+- **conversion**: `CurrencyConversion` ([CurrencyConversion](/builders/api-schema/billing-types/#currencyconversion)) — Presentment amount and the EUR credit it converts to, locked with the quote.
+
+## CryptoTopupStatus
+
+**object**
+
+Status of a crypto top-up (for polling). `status` cycles: pending → confirming → completed (or expired).
+
+- **id**: `ID!` — Top-up ID.
+- **depositAddress**: `String!` — Deposit address.
+- **asset**: `CryptoAsset!` ([CryptoAsset](/builders/api-schema/billing-types/#cryptoasset)) — Asset being received.
+- **status**: `String!` — Current status: pending, confirming, completed, expired.
+- **txHash**: `String` — Blockchain transaction hash (when detected).
+- **confirmations**: `Int!` — Number of block confirmations.
+- **receivedAmountBaseUnits**: `String` — Amount received in token base units (decimal string).
+- **receivedAmountToken**: `String` — Human-friendly decimal of receivedAmountBaseUnits.
+- **creditedAmountCents**: `Int` — Amount credited to balance in `creditedAmountCurrency` cents.
+- **creditedAmountCurrency**: `String` — Ledger currency of the credit, EUR.
+- **quoteSource**: `String` — Source of the locked price quote (&#34;chainlink&#34; &#124; &#34;one_to_one&#34;).
+- **network**: `String` — Network the deposit address lives on.
+- **expiresAt**: `Time!` ([Time](/builders/api-schema/shared/#time)) — When the deposit address expires.
+- **detectedAt**: `Time` ([Time](/builders/api-schema/shared/#time)) — When payment was first detected on-chain.
+- **completedAt**: `Time` ([Time](/builders/api-schema/shared/#time)) — When balance was credited.
+- **conversion**: `CurrencyConversion` ([CurrencyConversion](/builders/api-schema/billing-types/#currencyconversion)) — Presentment amount and the EUR credit it converts to, locked with the quote.
+
+## Currency
+
+**scalar**
+
+## CurrencyConversion
+
+**object**
+
+Conversion of a payment into the EUR prepaid ledger and invoice currency. EUR amounts use the identity rate.
+
+- **originalAmountCents**: `Int!` — Amount charged, in cents of `originalCurrency`.
+- **originalCurrency**: `Currency!` ([Currency](/builders/api-schema/billing-types/#currency)) — Currency charged (EUR, USD, GBP).
+- **eurAmountCents**: `Int!` — EUR cents credited or applied.
+- **unitsPerEur**: `String!` — Units of `originalCurrency` one euro buys, as a decimal string (&#34;1&#34; for EUR).
+- **source**: `String!` — Rate source: identity (EUR), ecb (ECB reference rate), or legacy_quote (USD rate quoted before ECB rates were stored).
+- **referenceDate**: `String!` — ECB reference date of the rate (YYYY-MM-DD).
+
+## EntitlementEntry
+
+**object**
+
+A key-value entitlement entry. Values are JSON-encoded for type flexibility.
+
+- **key**: `String!`
+- **value**: `String!`
+
+## Invoice
+
+**object**
+
+A billing invoice for a subscription period. Includes base subscription and metered usage charges. Amounts are computed in EUR; a finalized invoice is presented and charged in the tenant&#39;s presentment currency at the ECB rate of its finalization date.
+
+- **id**: `ID!` — Unique invoice identifier.
+- **amount**: `Money!` ([Money](/builders/api-schema/billing-types/#money)) — Total amount due in EUR (after credits applied).
+- **baseAmount**: `Money!` ([Money](/builders/api-schema/billing-types/#money)) — Base subscription amount in EUR.
+- **meteredAmount**: `Money!` ([Money](/builders/api-schema/billing-types/#money)) — Metered usage charges in EUR (net; 0 while usage is waived during beta).
+- **grossMeteredAmount**: `Money!` ([Money](/builders/api-schema/billing-types/#money)) — Unwaived metered total — what usage would have cost. Equals meteredAmount when usage is not waived; the would-have-cost figure when it is.
+- **prepaidCreditApplied**: `Money!` ([Money](/builders/api-schema/billing-types/#money)) — Prepaid balance credit applied to this invoice, in EUR.
+- **currency**: `Currency!` ([Currency](/builders/api-schema/billing-types/#currency)) — Currency of the amounts above, EUR.
+- **presentmentAmountCents**: `Int` — Total charged, in cents of `presentmentCurrency`. Null until the invoice is finalized.
+- **presentmentCurrency**: `String` — Currency the invoice is presented and charged in (EUR, USD, GBP). Empty until the invoice is finalized.
+- **presentmentUnitsPerEur**: `String` — Units of `presentmentCurrency` one euro buys at finalization, as a decimal string. Empty until the invoice is finalized.
+- **presentmentReferenceDate**: `String` — ECB reference date of the presentment rate (YYYY-MM-DD). Empty until the invoice is finalized.
+- **finalizedAt**: `Time` ([Time](/builders/api-schema/shared/#time)) — When the invoice was finalized and its presentment amount fixed.
+- **status**: `InvoiceStatus!` ([InvoiceStatus](/builders/api-schema/billing-types/#invoicestatus)) — Invoice status (draft, open, paid, void).
+- **dueDate**: `Time!` ([Time](/builders/api-schema/shared/#time)) — Payment due date.
+- **paidAt**: `Time` ([Time](/builders/api-schema/shared/#time)) — When payment was received.
+- **createdAt**: `Time!` ([Time](/builders/api-schema/shared/#time)) — When the invoice was created.
+- **updatedAt**: `Time!` ([Time](/builders/api-schema/shared/#time)) — When the invoice was last updated.
+- **periodStart**: `Time` ([Time](/builders/api-schema/shared/#time)) — Billing period start date.
+- **periodEnd**: `Time` ([Time](/builders/api-schema/shared/#time)) — Billing period end date.
+- **usageDetails**: `JSON` ([JSON](/builders/api-schema/shared/#json)) — Detailed usage breakdown (JSON).
+- **lineItems**: `[LineItem!]!` ([LineItem](/builders/api-schema/billing-types/#lineitem)) — Individual line items on the invoice.
+
+## InvoiceEdge
+
+**object**
+
+- **cursor**: `String!`
+- **node**: `Invoice!` ([Invoice](/builders/api-schema/billing-types/#invoice))
+
+## InvoicePayment
+
+**object**
+
+A tenant-visible invoice payment record. Provider secrets and raw payloads are never exposed.
+
+- **id**: `ID!`
+- **invoiceId**: `ID!`
+- **method**: `String!`
+- **amount**: `Money!` ([Money](/builders/api-schema/billing-types/#money))
+- **currency**: `Currency!` ([Currency](/builders/api-schema/billing-types/#currency))
+- **status**: `String!`
+- **confirmedAt**: `Time` ([Time](/builders/api-schema/shared/#time))
+- **createdAt**: `Time!` ([Time](/builders/api-schema/shared/#time))
+- **updatedAt**: `Time!` ([Time](/builders/api-schema/shared/#time))
+- **conversion**: `CurrencyConversion` ([CurrencyConversion](/builders/api-schema/billing-types/#currencyconversion)) — Amount charged and the EUR amount applied to the invoice, at the ECB rate of payment creation.
+
+## InvoicePaymentEdge
+
+**object**
+
+- **cursor**: `String!`
+- **node**: `InvoicePayment!` ([InvoicePayment](/builders/api-schema/billing-types/#invoicepayment))
+
+## InvoicePaymentsConnection
+
+**object**
+
+- **edges**: `[InvoicePaymentEdge!]!` ([InvoicePaymentEdge](/builders/api-schema/billing-types/#invoicepaymentedge))
+- **nodes**: `[InvoicePayment!]!` ([InvoicePayment](/builders/api-schema/billing-types/#invoicepayment))
+- **pageInfo**: `PageInfo!` ([PageInfo](/builders/api-schema/shared/#pageinfo))
+- **totalCount**: `Int!`
+
+## InvoiceStatus
+
+**enum**
+
+Invoice lifecycle status.
+
+- `DRAFT` — Invoice being prepared, not yet sent.
+- `PENDING` — Invoice sent, awaiting payment.
+- `PAID` — Invoice paid in full.
+- `OVERDUE` — Payment past due date.
+- `FAILED` — Payment processing failed.
+- `MANUAL_REVIEW` — Invoice requires operator review and cannot be paid.
+- `CANCELLED` — Invoice cancelled.
+
+## InvoicesConnection
+
+**object**
+
+- **edges**: `[InvoiceEdge!]!` ([InvoiceEdge](/builders/api-schema/billing-types/#invoiceedge))
+- **nodes**: `[Invoice!]!` ([Invoice](/builders/api-schema/billing-types/#invoice))
+- **pageInfo**: `PageInfo!` ([PageInfo](/builders/api-schema/shared/#pageinfo))
+- **totalCount**: `Int!`
+
+## LineItem
+
+**object**
+
+A single line item on an invoice or usage preview, produced by the rating engine. Decimal quantities are strings to preserve precision.
+
+- **lineKey**: `String!` — Stable identity: &#39;base_subscription&#39;, &#39;meter:&lt;name&gt;:&lt;cluster_id&gt;:&lt;yyyymm&gt;&#39;.
+- **meter**: `String!` — Meter name; empty for base_subscription.
+- **description**: `String!` — Description of the charge.
+- **quantity**: `String!` — Total quantity used (decimal as string).
+- **includedQuantity**: `String!` — Free quantity (decimal as string).
+- **billableQuantity**: `String!` — Billable quantity (decimal as string).
+- **unitPrice**: `String!` — Price per unit (decimal as string).
+- **total**: `String!` — Total for this line item (= billableQuantity * unitPrice), decimal as string.
+- **currency**: `String!` — Currency (ISO 4217).
+- **clusterId**: `String` — Cluster id this line was attributed to; null for tenant-scoped lines (base_subscription).
+- **clusterName**: `String` — Display name of the cluster, joined from Quartermaster at read time. Null when clusterId is null.
+- **clusterKind**: `String` — platform_official &#124; tenant_private &#124; third_party_marketplace; null when clusterId is null.
+- **pricingSource**: `String!` — Why the line was priced as it was: tier, cluster_metered, cluster_monthly, cluster_custom, free_unmetered, self_hosted, included_subscription.
+- **pricingLabel**: `String!` — Human-readable label of pricingSource (e.g. &#39;Self-hosted (no charge)&#39;, &#39;Marketplace metered&#39;). Empty when not populated by the gateway.
+- **unit**: `String!` — Canonical quantity unit.
+- **dimensions**: `JSON!` ([JSON](/builders/api-schema/shared/#json)) — Bounded pricing dimensions such as codec, rendition, backend, or model.
+
+## LiveUsageSummary
+
+**object**
+
+- **tenantId**: `String`
+- **periodStart**: `Time` ([Time](/builders/api-schema/shared/#time))
+- **periodEnd**: `Time` ([Time](/builders/api-schema/shared/#time))
+- **streamHours**: `Float!`
+- **egressGb**: `Float!`
+- **peakBandwidthMbps**: `Float!`
+- **displayStorageGb**: `Float!`
+- **livepeerH264Seconds**: `Float!`
+- **livepeerVp9Seconds**: `Float!`
+- **livepeerAv1Seconds**: `Float!`
+- **livepeerHevcSeconds**: `Float!`
+- **nativeAvH264Seconds**: `Float!`
+- **nativeAvVp9Seconds**: `Float!`
+- **nativeAvAv1Seconds**: `Float!`
+- **nativeAvHevcSeconds**: `Float!`
+- **nativeAvAacSeconds**: `Float!`
+- **nativeAvOpusSeconds**: `Float!`
+- **totalStreams**: `Int!`
+- **totalViewers**: `Int!`
+- **viewerHours**: `Float!`
+- **maxViewers**: `Int!`
+- **uniqueUsers**: `Int!`
+- **livepeerSegmentCount**: `Int!`
+- **livepeerUniqueStreams**: `Int!`
+- **nativeAvSegmentCount**: `Int!`
+- **nativeAvUniqueStreams**: `Int!`
+- **uniqueCountries**: `Int!`
+- **uniqueCities**: `Int!`
+- **geoBreakdown**: `[CountryMetrics!]!` ([CountryMetrics](/builders/api-schema/billing-types/#countrymetrics))
+- **clipsCreated**: `Int!`
+- **clipsDeleted**: `Int!`
+- **dvrCreated**: `Int!`
+- **dvrDeleted**: `Int!`
+- **vodCreated**: `Int!`
+- **vodDeleted**: `Int!`
+- **clipBytes**: `Int!`
+- **dvrBytes**: `Int!`
+- **vodBytes**: `Int!`
+- **frozenClipBytes**: `Int!`
+- **frozenDvrBytes**: `Int!`
+- **frozenVodBytes**: `Int!`
+- **syncedArtifactCount**: `Int!`
+- **syncedArtifactBytes**: `Int!`
+
+## MollieFirstPayment
+
+**object**
+
+Mollie First Payment - redirect URL for initial payment that creates a mandate.
+
+- **paymentId**: `ID!` — Mollie payment ID (tr_xxx).
+- **customerId**: `String!` — Mollie customer ID (cst_xxx).
+- **paymentUrl**: `String!` — URL to redirect user to for payment.
+
+## MollieFirstPaymentResult
+
+**union**
+
+- Member: [MollieFirstPayment](/builders/api-schema/billing-types/#molliefirstpayment)
+- Member: [ValidationError](/builders/api-schema/shared/#validationerror)
+- Member: [NotFoundError](/builders/api-schema/shared/#notfounderror)
+- Member: [AuthError](/builders/api-schema/shared/#autherror)
+
+## MollieMandate
+
+**object**
+
+Mollie Mandate - recurring payment authorization for a customer.
+
+- **mandateId**: `ID!` — Mollie mandate ID (mdt_xxx).
+- **customerId**: `String!` — Mollie customer ID (cst_xxx).
+- **status**: `String!` — Mandate status (valid, pending, invalid, revoked).
+- **method**: `String!` — Mandate method (directdebit, creditcard, ideal).
+- **details**: `JSON` ([JSON](/builders/api-schema/shared/#json)) — Mandate details (bank/card info).
+- **createdAt**: `Time` ([Time](/builders/api-schema/shared/#time)) — Mandate creation timestamp.
+
+## MollieSubscription
+
+**object**
+
+Mollie Subscription - recurring subscription created after mandate is valid.
+
+- **subscriptionId**: `ID!` — Mollie subscription ID (sub_xxx).
+- **status**: `String!` — Subscription status (active, pending, etc.).
+- **nextPaymentDate**: `String` — Next payment date (ISO 8601).
+
+## MollieSubscriptionResult
+
+**union**
+
+- Member: [MollieSubscription](/builders/api-schema/billing-types/#molliesubscription)
+- Member: [ValidationError](/builders/api-schema/shared/#validationerror)
+- Member: [NotFoundError](/builders/api-schema/shared/#notfounderror)
+- Member: [AuthError](/builders/api-schema/shared/#autherror)
+
+## Money
+
+**scalar**
+
+## Payment
+
+**object**
+
+- **id**: `ID!`
+- **paymentUrl**: `String`
+- **walletAddress**: `String`
+- **amount**: `Money!` ([Money](/builders/api-schema/billing-types/#money))
+- **currency**: `Currency!` ([Currency](/builders/api-schema/billing-types/#currency))
+- **method**: `PaymentMethod!` ([PaymentMethod](/builders/api-schema/billing-types/#paymentmethod))
+- **status**: `PaymentStatus!` ([PaymentStatus](/builders/api-schema/billing-types/#paymentstatus))
+- **expiresAt**: `Time` ([Time](/builders/api-schema/shared/#time))
+- **qrCode**: `String`
+- **expectedAmountBaseUnits**: `String`
+- **expectedAmountToken**: `String`
+- **quotedPriceUsd**: `String`
+- **quoteSource**: `String`
+- **assetSymbol**: `String`
+- **network**: `String`
+- **quotedAt**: `Time` ([Time](/builders/api-schema/shared/#time))
+- **createdAt**: `Time!` ([Time](/builders/api-schema/shared/#time))
+- **conversion**: `CurrencyConversion` ([CurrencyConversion](/builders/api-schema/billing-types/#currencyconversion)) — Amount charged and the EUR amount applied to the invoice, at the ECB rate of payment creation.
+
+## PaymentMethod
+
+**enum**
+
+Supported payment methods.
+
+- `CARD` — Credit/debit card via the configured card provider.
+- `CRYPTO_ETH` — Ethereum invoice payment.
+- `CRYPTO_USDC` — USDC invoice payment.
+
+## PaymentStatus
+
+**enum**
+
+Payment processing status.
+
+- `PENDING` — Payment initiated, awaiting confirmation.
+- `CONFIRMED` — Payment successfully processed.
+- `FAILED` — Payment failed or declined.
+
+## PrepaidBalance
+
+**object**
+
+Prepaid balance for wallet-based accounts. Wallet-only accounts MUST use prepaid billing (balance-based, pay first).
+
+- **id**: `ID!` — Unique balance record identifier.
+- **tenantId**: `String!` — Owning tenant identifier.
+- **balanceCents**: `Int!` — Settled ledger balance in cents before active usage reservations.
+- **reservedBalanceCents**: `Int!` — Active in-flight usage reservations in cents.
+- **availableBalanceCents**: `Int!` — Spendable balance after active reservations (balanceCents - reservedBalanceCents).
+- **currency**: `String!` — Ledger currency, always EUR.
+- **lowBalanceThresholdCents**: `Int!` — Alert threshold in cents.
+- **isLowBalance**: `Boolean!` — True if available balance is below threshold.
+- **drainRateCentsPerHour**: `Int!` — Estimated spend rate in cents per hour (based on last hour&#39;s usage).
+- **createdAt**: `Time!` ([Time](/builders/api-schema/shared/#time)) — When the balance was created.
+- **updatedAt**: `Time!` ([Time](/builders/api-schema/shared/#time)) — When the balance was last updated.
+
+## PricingRule
+
+**object**
+
+A pricing rule: how a meter rates to money. Decimal fields are strings to preserve precision.
+
+- **meter**: `String!` — Canonical meter name (for example delivered_minutes, storage_gb_seconds_cold, media_seconds, or a marketplace-defined meter).
+- **model**: `String!` — Pricing model (tiered_graduated, all_usage, dimensioned).
+- **currency**: `String!` — Currency (ISO 4217).
+- **includedQuantity**: `String!` — Free quantity included before billing kicks in.
+- **unitPrice**: `String!` — Price per unit (decimal as string).
+- **configJson**: `String!` — Model-specific config (for example dimension selector rates); JSON-encoded.
+
+## PromoteToPaidPayload
+
+**object**
+
+Successful promotion to postpaid billing.
+
+- **success**: `Boolean!` — Whether the promotion succeeded.
+- **message**: `String!` — Human-readable status message.
+- **newBillingModel**: `String!` — The new billing model (postpaid).
+- **creditBalanceCents**: `Int!` — Prepaid balance carried forward as credit (in cents).
+- **subscriptionId**: `ID!` — The new subscription ID.
+
+## PromoteToPaidResult
+
+**union**
+
+- Member: [PromoteToPaidPayload](/builders/api-schema/billing-types/#promotetopaidpayload)
+- Member: [ValidationError](/builders/api-schema/shared/#validationerror)
+- Member: [AuthError](/builders/api-schema/shared/#autherror)
+
+## StripeBillingPortalResult
+
+**union**
+
+- Member: [StripeBillingPortalSession](/builders/api-schema/billing-types/#stripebillingportalsession)
+- Member: [ValidationError](/builders/api-schema/shared/#validationerror)
+- Member: [NotFoundError](/builders/api-schema/shared/#notfounderror)
+- Member: [AuthError](/builders/api-schema/shared/#autherror)
+
+## StripeBillingPortalSession
+
+**object**
+
+Stripe Billing Portal Session - redirect URL for subscription management.
+
+- **portalUrl**: `String!` — URL to redirect user to for billing management.
+
+## StripeCheckoutResult
+
+**union**
+
+- Member: [StripeCheckoutSession](/builders/api-schema/billing-types/#stripecheckoutsession)
+- Member: [ValidationError](/builders/api-schema/shared/#validationerror)
+- Member: [NotFoundError](/builders/api-schema/shared/#notfounderror)
+- Member: [AuthError](/builders/api-schema/shared/#autherror)
+
+## StripeCheckoutSession
+
+**object**
+
+Stripe Checkout Session - redirect URL for hosted checkout.
+
+- **sessionId**: `ID!` — Stripe Checkout Session ID (cs_xxx).
+- **checkoutUrl**: `String!` — URL to redirect user to for checkout.
+
+## SubmitX402PaymentResult
+
+**union**
+
+- Member: [X402PaymentResult](/builders/api-schema/billing-types/#x402paymentresult)
+- Member: [ValidationError](/builders/api-schema/shared/#validationerror)
+- Member: [NotFoundError](/builders/api-schema/shared/#notfounderror)
+- Member: [AuthError](/builders/api-schema/shared/#autherror)
+
+## TenantSubscription
+
+**object**
+
+- **id**: `ID!`
+- **tenantId**: `ID!`
+- **tierId**: `String!`
+- **status**: `String!`
+- **billingEmail**: `String!`
+- **startedAt**: `Time!` ([Time](/builders/api-schema/shared/#time))
+- **trialEndsAt**: `Time` ([Time](/builders/api-schema/shared/#time))
+- **nextBillingDate**: `Time` ([Time](/builders/api-schema/shared/#time))
+- **cancelledAt**: `Time` ([Time](/builders/api-schema/shared/#time))
+- **customFeatures**: `BillingFeatures` ([BillingFeatures](/builders/api-schema/billing-types/#billingfeatures))
+- **pricingOverrides**: `[PricingRule!]!` ([PricingRule](/builders/api-schema/billing-types/#pricingrule))
+- **entitlementOverrides**: `[EntitlementEntry!]!` ([EntitlementEntry](/builders/api-schema/billing-types/#entitlemententry))
+- **paymentMethod**: `String`
+- **billingModel**: `String!`
+- **pendingTier**: `BillingTier` ([BillingTier](/builders/api-schema/billing-types/#billingtier))
+- **pendingEffectiveAt**: `Time` ([Time](/builders/api-schema/shared/#time))
+- **pendingReason**: `String`
+- **presentmentCurrency**: `Currency!` ([Currency](/builders/api-schema/billing-types/#currency)) — Currency the tenant is invoiced and charged in (EUR, USD, GBP), derived from the billing country. The prepaid ledger is always EUR.
+- **createdAt**: `Time!` ([Time](/builders/api-schema/shared/#time))
+- **updatedAt**: `Time!` ([Time](/builders/api-schema/shared/#time))
+
+## TenantUsage
+
+**object**
+
+- **billingPeriod**: `String!`
+- **usage**: `[UsageEntry!]!` ([UsageEntry](/builders/api-schema/billing-types/#usageentry))
+- **costs**: `[CostEntry!]!` ([CostEntry](/builders/api-schema/billing-types/#costentry))
+- **totalCost**: `Float!`
+- **currency**: `String!`
+- **lineItems**: `[LineItem!]!` ([LineItem](/builders/api-schema/billing-types/#lineitem)) — Rated line items for the period (rating engine output).
+- **baseAmount**: `String!` — Decimal-string base subscription portion.
+- **usageAmount**: `String!` — Decimal-string metered portion.
+
+## UpdateBillingDetailsInput
+
+**input_object**
+
+Input for updating billing details.
+
+- **email**: `String` — Billing contact email.
+- **name**: `String` — Customer legal or person name shown on full invoices.
+- **company**: `String` — Company name for invoices.
+- **vatNumber**: `String` — VAT number (EU format: XX123456789).
+- **address**: `BillingAddressInput` ([BillingAddressInput](/builders/api-schema/billing-types/#billingaddressinput)) — Structured billing address.
+
+## UsageAggregate
+
+**object**
+
+- **usageType**: `String!`
+- **periodStart**: `Time` ([Time](/builders/api-schema/shared/#time))
+- **periodEnd**: `Time` ([Time](/builders/api-schema/shared/#time))
+- **usageValue**: `Float!`
+- **granularity**: `String!`
+
+## UsageEntry
+
+**object**
+
+- **resourceType**: `String!`
+- **amount**: `Float!`
+
+## UsageRecord
+
+**object**
+
+- **id**: `ID!`
+- **clusterId**: `String`
+- **clusterName**: `String`
+- **usageType**: `String!`
+- **unit**: `String!` — Canonical physical unit for usageValue.
+- **dimensions**: `JSON!` ([JSON](/builders/api-schema/shared/#json)) — Bounded dimensions that distinguish records for the same meter.
+- **usageValue**: `Float!`
+- **createdAt**: `Time` ([Time](/builders/api-schema/shared/#time))
+- **periodStart**: `Time` ([Time](/builders/api-schema/shared/#time))
+- **periodEnd**: `Time` ([Time](/builders/api-schema/shared/#time))
+- **granularity**: `String`
+
+## UsageRecordEdge
+
+**object**
+
+- **cursor**: `String!`
+- **node**: `UsageRecord!` ([UsageRecord](/builders/api-schema/billing-types/#usagerecord))
+
+## UsageRecordsConnection
+
+**object**
+
+- **edges**: `[UsageRecordEdge!]!` ([UsageRecordEdge](/builders/api-schema/billing-types/#usagerecordedge))
+- **nodes**: `[UsageRecord!]!` ([UsageRecord](/builders/api-schema/billing-types/#usagerecord))
+- **pageInfo**: `PageInfo!` ([PageInfo](/builders/api-schema/shared/#pageinfo))
+- **totalCount**: `Int!`
+
+## X402PaymentResult
+
+**object**
+
+Result from submitting an x402 payment for settlement.
+
+- **success**: `Boolean!` — Whether the payment settlement succeeded.
+- **isAuthOnly**: `Boolean!` — True if this was an auth-only payload (always false for settlement).
+- **tenantId**: `ID!` — Tenant that was credited.
+- **walletAddress**: `String!` — Wallet address that paid.
+- **creditedCents**: `Int!` — Amount credited in cents.
+- **newBalanceCents**: `Int` — New balance in cents (if available).
+- **txHash**: `String` — Blockchain transaction hash (if available).
+- **message**: `String!` — Human-readable status message.

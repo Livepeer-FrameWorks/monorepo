@@ -1,0 +1,284 @@
+---
+title: Account and tenant
+description: Account and tenant in the generated public GraphQL reference.
+sidebar:
+  order: 11
+---
+
+[GraphQL schema reference](/builders/api-schema/) · [API guide](/builders/api-reference/) · [SDKs](/builders/sdks/)
+
+The tenant, wallet and email identities.
+
+Types used by more than one domain are on [Shared types](/builders/api-schema/shared/).
+
+## Queries
+
+### Query.tenant
+
+Get the current tenant&#39;s profile and settings.
+
+```graphql
+tenant: Tenant
+```
+
+**Returns:** `Tenant` ([Tenant](/builders/api-schema/account/#tenant))
+
+**SDK**
+
+| Operation | TypeScript | Go | Python |
+| --- | --- | --- | --- |
+| GetTenant | `GetTenantDocument` | `GetTenant` | `get_tenant` |
+
+## Mutations
+
+### Mutation.linkEmail
+
+Link an email to a wallet-only account. This enables the upgrade path from prepaid to postpaid billing. A verification email will be sent to confirm the address.
+
+```graphql
+linkEmail(
+  input: LinkEmailInput!
+): LinkEmailResult!
+```
+
+**Returns:** `LinkEmailResult!` ([LinkEmailResult](/builders/api-schema/account/#linkemailresult))
+
+**Arguments**
+
+- `input`: `LinkEmailInput!` ([LinkEmailInput](/builders/api-schema/account/#linkemailinput)) — Email and password to set on the account.
+
+**SDK**
+
+| Operation | TypeScript | Go | Python |
+| --- | --- | --- | --- |
+| LinkEmail | `LinkEmailDocument` | `LinkEmail` | `link_email` |
+
+### Mutation.linkWallet
+
+Link an additional wallet to the current user&#39;s account. Requires an existing authenticated session.
+
+```graphql
+linkWallet(
+  input: WalletLoginInput!
+): LinkWalletResult!
+```
+
+**Returns:** `LinkWalletResult!` ([LinkWalletResult](/builders/api-schema/account/#linkwalletresult))
+
+**Arguments**
+
+- `input`: `WalletLoginInput!` ([WalletLoginInput](/builders/api-schema/account/#walletlogininput)) — The wallet input containing address, message, and signature.
+
+**SDK**
+
+| Operation | TypeScript | Go | Python |
+| --- | --- | --- | --- |
+| LinkWallet | `LinkWalletDocument` | `LinkWallet` | `link_wallet` |
+
+### Mutation.unlinkWallet
+
+Unlink a wallet from the current user&#39;s account. Cannot unlink the last wallet if user has no email.
+
+```graphql
+unlinkWallet(
+  walletId: ID!
+): UnlinkWalletResult!
+```
+
+**Returns:** `UnlinkWalletResult!` ([UnlinkWalletResult](/builders/api-schema/account/#unlinkwalletresult))
+
+**Arguments**
+
+- `walletId`: `ID!` — The wallet identity ID to unlink.
+
+**SDK**
+
+| Operation | TypeScript | Go | Python |
+| --- | --- | --- | --- |
+| UnlinkWallet | `UnlinkWalletDocument` | `UnlinkWallet` | `unlink_wallet` |
+
+### Mutation.updateTenant
+
+Update the current tenant&#39;s profile.
+
+```graphql
+updateTenant(
+  input: UpdateTenantInput!
+): UpdateTenantResult!
+```
+
+**Returns:** `UpdateTenantResult!` ([UpdateTenantResult](/builders/api-schema/account/#updatetenantresult))
+
+**Arguments**
+
+- `input`: `UpdateTenantInput!` ([UpdateTenantInput](/builders/api-schema/account/#updatetenantinput)) — Updated tenant configuration.
+
+**SDK**
+
+| Operation | TypeScript | Go | Python |
+| --- | --- | --- | --- |
+| UpdateTenant | `UpdateTenantDocument` | `UpdateTenant` | `update_tenant` |
+
+### Mutation.walletLogin
+
+Authenticate using a signed message from an Ethereum wallet. Returns a JWT token for API access. Creates a new account if the wallet has not been seen before (auto-provisioning).
+
+```graphql
+walletLogin(
+  input: WalletLoginInput!
+): WalletLoginResult!
+```
+
+**Returns:** `WalletLoginResult!` ([WalletLoginResult](/builders/api-schema/account/#walletloginresult))
+
+**Arguments**
+
+- `input`: `WalletLoginInput!` ([WalletLoginInput](/builders/api-schema/account/#walletlogininput)) — The wallet input containing address, message, and signature.
+
+**SDK**
+
+| Operation | TypeScript | Go | Python |
+| --- | --- | --- | --- |
+| WalletLogin | `WalletLoginDocument` | `WalletLogin` | `wallet_login` |
+
+## Types
+
+### CustomDomainStatus
+
+**object**
+
+Verification + certificate lifecycle for a tenant&#39;s BYO domain. Returned by Navigator&#39;s GetCustomDomainStatus and surfaced verbatim so the dashboard can guide the operator through the manual DNS setup.
+
+- **domain**: `String!` — The domain Navigator is tracking (mirrors Tenant.customDomain).
+- **state**: `String!` — pending_verification &#124; verified &#124; pending_alias &#124; cert_issuing &#124; cert_issued &#124; cert_failed &#124; verification_failed &#124; tearing_down — verbatim from Navigator. pending_alias means the CNAMEs are verified and the domain waits for the tenant alias certificate. verification_failed means the CNAMEs were not verified within the fixed verification period.
+- **requiredTrafficCname**: `String` — CNAME the operator points their public hostname at so the platform&#39;s TLS ingress receives traffic.
+- **requiredAcmeChallengeCname**: `String` — CNAME the operator points `_acme-challenge.&lt;their-domain&gt;` at so Navigator can complete DNS-01 issuance via the `acme-dns.&lt;root&gt;` delegated subzone.
+- **lastVerifiedAt**: `Time` ([Time](/builders/api-schema/shared/#time)) — Wall-clock UTC of the last successful verification check (null when never).
+- **certIssuedAt**: `Time` ([Time](/builders/api-schema/shared/#time)) — Wall-clock UTC of the most recent successful cert issuance (null when never).
+- **certExpiresAt**: `Time` ([Time](/builders/api-schema/shared/#time)) — Wall-clock UTC of the current cert&#39;s expiry (null when no cert).
+- **lastError**: `String` — Most recent error from verification / issuance, null when clean.
+
+### LinkEmailInput
+
+**input_object**
+
+Input for linking email to a wallet-only account.
+
+- **email**: `String!` — Email address to link.
+- **password**: `String!` — Password to set for email-based login.
+
+### LinkEmailPayload
+
+**object**
+
+Successful email link response.
+
+- **success**: `Boolean!` — Whether the operation succeeded.
+- **message**: `String!` — Human-readable status message.
+- **verificationSent**: `Boolean!` — Whether a verification email was sent.
+
+### LinkEmailResult
+
+**union**
+
+- Member: [LinkEmailPayload](/builders/api-schema/account/#linkemailpayload)
+- Member: [ValidationError](/builders/api-schema/shared/#validationerror)
+- Member: [AuthError](/builders/api-schema/shared/#autherror)
+
+### LinkWalletResult
+
+**union**
+
+- Member: [WalletIdentity](/builders/api-schema/account/#walletidentity)
+- Member: [ValidationError](/builders/api-schema/shared/#validationerror)
+- Member: [AuthError](/builders/api-schema/shared/#autherror)
+
+### Tenant
+
+**object**
+
+- **id**: `ID!`
+- **name**: `String!`
+- **subdomain**: `String` — Platform-managed tenant DNS label. When set and the tenant alias has issued TLS, playback uses foghorn.&lt;subdomain&gt;.cdn.&lt;root&gt; instead of the global Foghorn host.
+- **cluster**: `String`
+- **createdAt**: `Time!` ([Time](/builders/api-schema/shared/#time))
+- **customDomain**: `String` — BYO domain configured for this tenant. Null when the tenant has not opted in.
+- **customDomainStatus**: `CustomDomainStatus` ([CustomDomainStatus](/builders/api-schema/account/#customdomainstatus)) — Lifecycle state for the BYO domain, surfacing the CNAMEs the operator must publish for verification + traffic plus any current error/expiry timestamps. Null when no customDomain is configured.
+- **monitoringEnabled**: `Boolean!` — Tenant-wide Skipper AI monitoring master switch. Default true.
+
+### UnlinkWalletResult
+
+**union**
+
+- Member: [DeleteSuccess](/builders/api-schema/shared/#deletesuccess)
+- Member: [NotFoundError](/builders/api-schema/shared/#notfounderror)
+- Member: [AuthError](/builders/api-schema/shared/#autherror)
+
+### UpdateTenantInput
+
+**input_object**
+
+Input for updating tenant settings.
+
+- **name**: `String` — New tenant name.
+- **settings**: `JSON` ([JSON](/builders/api-schema/shared/#json)) — Custom settings JSON. Supports primaryClusterId, subdomain, customDomain, and deploymentModel.
+- **customDomain**: `String` — BYO domain. Empty string clears it; null leaves it unchanged. Navigator picks up the change on the next reconciler tick and starts/teardowns the verification + cert lifecycle accordingly.
+- **monitoringEnabled**: `Boolean` — Tenant-wide Skipper AI monitoring master switch. null leaves it unchanged.
+
+### UpdateTenantResult
+
+**union**
+
+- Member: [Tenant](/builders/api-schema/account/#tenant)
+- Member: [ValidationError](/builders/api-schema/shared/#validationerror)
+- Member: [AuthError](/builders/api-schema/shared/#autherror)
+
+### User
+
+**object**
+
+- **id**: `ID!`
+- **email**: `String` — User&#39;s email address. Null for wallet-only accounts.
+- **name**: `String`
+- **role**: `String!`
+- **createdAt**: `Time!` ([Time](/builders/api-schema/shared/#time))
+- **wallets**: `[WalletIdentity!]!` ([WalletIdentity](/builders/api-schema/account/#walletidentity)) — Linked wallet addresses for this user.
+
+### WalletIdentity
+
+**object**
+
+A linked cryptocurrency wallet for authentication. Users can link multiple wallets across different chains.
+
+- **id**: `ID!` — Unique identifier for this wallet link.
+- **address**: `String!` — The wallet address (chain-specific format, e.g. 0x... for Ethereum).
+- **createdAt**: `Time!` ([Time](/builders/api-schema/shared/#time)) — When this wallet was linked.
+- **lastAuthAt**: `Time` ([Time](/builders/api-schema/shared/#time)) — When this wallet was last used for authentication.
+
+### WalletLoginInput
+
+**input_object**
+
+Input for wallet-based authentication. The signature proves ownership of the wallet address.
+
+- **address**: `String!` — Ethereum address (0x-prefixed, 40 hex characters).
+- **message**: `String!` — Message that was signed, including timestamp and nonce for replay protection.
+- **signature**: `String!` — EIP-191 personal_sign signature (0x-prefixed, 65 bytes hex).
+
+### WalletLoginPayload
+
+**object**
+
+Successful wallet login response containing JWT and user info.
+
+- **token**: `String!` — JWT access token for API authentication.
+- **user**: `User!` ([User](/builders/api-schema/account/#user)) — The authenticated user.
+- **expiresAt**: `Time!` ([Time](/builders/api-schema/shared/#time)) — When the token expires.
+- **isNewAccount**: `Boolean!` — True if this was a new account created by the login.
+
+### WalletLoginResult
+
+**union**
+
+- Member: [WalletLoginPayload](/builders/api-schema/account/#walletloginpayload)
+- Member: [ValidationError](/builders/api-schema/shared/#validationerror)

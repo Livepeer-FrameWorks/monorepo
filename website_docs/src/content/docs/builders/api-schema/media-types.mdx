@@ -1,0 +1,1082 @@
+---
+title: Media and storage types
+description: Media and storage types in the generated public GraphQL reference.
+sidebar:
+  order: 3
+---
+
+[GraphQL schema reference](/builders/api-schema/) · [API guide](/builders/api-reference/) · [SDKs](/builders/sdks/) · Types of [Media and storage](/builders/api-schema/media/)
+
+## AbortVodUploadResult
+
+**union**
+
+- Member: [DeleteSuccess](/builders/api-schema/shared/#deletesuccess)
+- Member: [NotFoundError](/builders/api-schema/shared/#notfounderror)
+- Member: [AuthError](/builders/api-schema/shared/#autherror)
+
+## ApplyMediaCapacityConsentInput
+
+**input_object**
+
+- **clusterId**: `ID!`
+- **expectedRevision**: `String!`
+- **allowIngest**: `Boolean!`
+- **allowServe**: `Boolean!`
+- **allowExternalSource**: `Boolean!`
+- **reviewToken**: `String!`
+- **idempotencyKey**: `String!`
+- **acknowledgedWarningIds**: `[String!]!`
+
+## ApplyMediaPlacementChangeInput
+
+**input_object**
+
+- **scope**: `MediaPlacementScopeInput!` ([MediaPlacementScopeInput](/builders/api-schema/media-types/#mediaplacementscopeinput))
+- **expectedRevision**: `String!`
+- **expectedParentRevision**: `String!`
+- **updates**: `[MediaPlacementVerbUpdateInput!]!` ([MediaPlacementVerbUpdateInput](/builders/api-schema/media-types/#mediaplacementverbupdateinput))
+- **reviewToken**: `String!`
+- **idempotencyKey**: `String!`
+- **acknowledgedWarningIds**: `[String!]!`
+
+## ArtifactTrack
+
+**object**
+
+A single A/V (or meta) track of a finalized artifact.
+
+- **type**: `String!` — &#34;video&#34; &#124; &#34;audio&#34; &#124; &#34;meta&#34;
+- **codec**: `String!`
+- **width**: `Int`
+- **height**: `Int`
+- **fps**: `Float`
+- **resolution**: `String`
+- **bitrateKbps**: `Int`
+- **channels**: `Int`
+- **sampleRate**: `Int`
+
+## ClipCreationMode
+
+**enum**
+
+Clip creation mode determines how time fields are interpreted.
+
+- `ABSOLUTE` — Use startUnix and stopUnix as Unix timestamps in seconds.
+- `RELATIVE` — Use startMedia and stopMedia as seconds from stream start.
+- `DURATION` — Use startUnix (or startMedia) plus duration.
+- `CLIP_NOW` — Clip the last N seconds from the current live position.
+
+## CompleteVodUploadInput
+
+**input_object**
+
+Input for completing a multipart VOD upload. Call after all parts have been uploaded to S3.
+
+- **uploadId**: `ID!` — Upload session ID from createVodUpload.
+- **parts**: `[VodUploadCompletedPart!]!` ([VodUploadCompletedPart](/builders/api-schema/media-types/#voduploadcompletedpart)) — ETags from each successfully uploaded part.
+
+## CompleteVodUploadResult
+
+**union**
+
+- Member: [VodAsset](/builders/api-schema/shared/#vodasset)
+- Member: [ValidationError](/builders/api-schema/shared/#validationerror)
+- Member: [NotFoundError](/builders/api-schema/shared/#notfounderror)
+- Member: [AuthError](/builders/api-schema/shared/#autherror)
+
+## CreateClipInput
+
+**input_object**
+
+Input for creating a clip from a live stream&#39;s DVR buffer. Time specification depends on the selected mode.
+
+- **streamId**: `ID!` — Stream to create the clip from (Stream.id, Relay global ID).
+- **title**: `String!` — Display title for the clip.
+- **description**: `String` — Optional description.
+- **mode**: `ClipCreationMode` ([ClipCreationMode](/builders/api-schema/media-types/#clipcreationmode)) — Time mode (ABSOLUTE, RELATIVE, DURATION, CLIP_NOW). Default: ABSOLUTE.
+- **startUnix**: `Int` — Start time as Unix timestamp (ABSOLUTE/DURATION mode).
+- **stopUnix**: `Int` — End time as Unix timestamp (ABSOLUTE mode).
+- **startMedia**: `Int` — Start time as seconds from stream start (RELATIVE mode).
+- **stopMedia**: `Int` — End time as seconds from stream start (RELATIVE mode).
+- **duration**: `Int` — Clip duration in seconds (DURATION/CLIP_NOW mode).
+- **expiresAt**: `Int` — Optional expiration as Unix timestamp.
+- **startTime**: `Int` — Deprecated: Use startUnix instead. **Deprecated:** Use startUnix instead
+- **endTime**: `Int` — Deprecated: Use stopUnix instead. **Deprecated:** Use stopUnix instead
+
+## CreateClipResult
+
+**union**
+
+- Member: [Clip](/builders/api-schema/shared/#clip)
+- Member: [ValidationError](/builders/api-schema/shared/#validationerror)
+- Member: [NotFoundError](/builders/api-schema/shared/#notfounderror)
+- Member: [AuthError](/builders/api-schema/shared/#autherror)
+
+## CreateVodUploadInput
+
+**input_object**
+
+Input for initiating a multipart VOD upload. Returns presigned S3 URLs for uploading file parts.
+
+- **filename**: `String!` — Original filename (for metadata and content-type detection).
+- **sizeBytes**: `Float!` — Total file size in bytes (required for part calculation).
+- **contentType**: `String` — MIME type (video/mp4, video/webm, etc.). Auto-detected if omitted.
+- **title**: `String` — Optional display title for the asset.
+- **description**: `String` — Optional description for the asset.
+
+## CreateVodUploadResult
+
+**union**
+
+- Member: [VodUploadSession](/builders/api-schema/media-types/#voduploadsession)
+- Member: [ValidationError](/builders/api-schema/shared/#validationerror)
+- Member: [AuthError](/builders/api-schema/shared/#autherror)
+
+## DVRChapter
+
+**object**
+
+A single chapter view of a DVR recording. playbackId is the Commodore-minted public key for the chapter&#39;s VOD-shaped artifact; chapter playback uses the same artifact playback path as any VOD (not dvr+).
+
+- **chapterId**: `ID!`
+- **state**: `DVRChapterState!` ([DVRChapterState](/builders/api-schema/media-types/#dvrchapterstate))
+- **playbackId**: `String` — Public playback key minted by Commodore; null until finalization dispatches.
+- **isCurrent**: `Boolean!`
+- **hasGaps**: `Boolean!`
+- **segmentCount**: `Int!`
+- **wallClockStartUnixMs**: `Float!` — Absolute Unix epoch ms of the playable MKV span start; falls back to the scheduled chapter start before finalization.
+- **wallClockEndUnixMs**: `Float!` — Absolute Unix epoch ms of the playable MKV span end; falls back to the scheduled chapter end before finalization.
+- **playableNow**: `Boolean!` — True when state ∈ &#123;FINALIZED, FROZEN, RECLAIMED&#125;.
+- **lastFailureReason**: `String` — Last finalization failure message (operator-facing); null on success or in-progress.
+
+## DVRChapterRef
+
+**object**
+
+A reference to a chapter for the chapter list UI. Same shape as DVRChapter without the timeline-zero derivations.
+
+- **chapterId**: `ID!`
+- **mode**: `DVRChapterMode!` ([DVRChapterMode](/builders/api-schema/shared/#dvrchaptermode))
+- **intervalSeconds**: `Int`
+- **startMs**: `Float!`
+- **endMs**: `Float!`
+- **isCurrent**: `Boolean!`
+- **state**: `DVRChapterState!` ([DVRChapterState](/builders/api-schema/media-types/#dvrchapterstate))
+- **playbackId**: `String` — Public playback key minted by Commodore; null until finalization dispatches.
+- **hasGaps**: `Boolean!`
+- **segmentCount**: `Int!`
+- **lastFailureReason**: `String`
+
+## DVRChapterState
+
+**enum**
+
+Chapter finalization state machine. Chapter playback resolves to the chapter artifact&#39;s playbackId once state &gt;= FINALIZED.
+
+- `OPEN` — Recording in progress (chapter sweeper opened the boundary).
+- `CLOSED` — Boundary reached; awaiting finalization.
+- `FINALIZING` — Processing job in flight on the recording origin.
+- `FINALIZED` — Chapter artifact produced; not yet synced to S3.
+- `FROZEN` — Chapter artifact + .dtsh synced to S3; safe to reclaim source segments.
+- `RECLAIMED` — Source segments deleted; row remains as metadata. Playback uses the artifact.
+- `FAILED_SOURCE_MISSING` — Recovery exhausted — at least one source segment was missing from both local and the recovery freeze.
+- `FAILED_PERMANENT` — Unrecoverable input (ledger invariants violated, repeated retries exhausted).
+
+## DVRChaptersPage
+
+**object**
+
+A page of DVR chapter refs. Paginated for unbounded artifact lifetime: default page size is 200 and maximum page size is 1000.
+
+- **chapters**: `[DVRChapterRef!]!` ([DVRChapterRef](/builders/api-schema/media-types/#dvrchapterref))
+- **nextPageToken**: `String`
+
+## DVRRequest
+
+**object**
+
+- **id**: `ID`
+- **dvrHash**: `ID!`
+- **playbackId**: `String!`
+- **streamId**: `ID!`
+- **sourceStreamId**: `String`
+- **stream**: `Stream` ([Stream](/builders/api-schema/shared/#stream))
+- **title**: `String`
+- **createdAt**: `Time!` ([Time](/builders/api-schema/shared/#time))
+- **updatedAt**: `Time!` ([Time](/builders/api-schema/shared/#time))
+- **expiresAt**: `Time` ([Time](/builders/api-schema/shared/#time))
+- **isExpired**: `Boolean!` — Whether the DVR has passed its retention date (expiresAt &lt; now).
+- **effectiveRetention**: `EffectiveRetention` ([EffectiveRetention](/builders/api-schema/shared/#effectiveretention)) — Resolved retention horizon for this recording with the source of the decision (per-asset override → tenant default → tier entitlement). Available on finalized recordings; null while the recording is active (retention applies post-finalize).
+- **storageCost**: `StorageCostProjection` ([StorageCostProjection](/builders/api-schema/shared/#storagecostprojection)) — Marginal storage cost for this recording on the tenant&#39;s tier. Null for tenants without a storage meter (self-hosted, fully tenant-private clusters). Computed from sizeBytes in GiB × unit_price_per_gb_hour × hours_held.
+- **storageNodeId**: `String`
+- **status**: `String`
+- **startedAt**: `Time` ([Time](/builders/api-schema/shared/#time))
+- **endedAt**: `Time` ([Time](/builders/api-schema/shared/#time))
+- **durationSeconds**: `Int`
+- **sizeBytes**: `Float`
+- **manifestPath**: `String`
+- **errorMessage**: `String`
+- **storageLocation**: `String`
+- **syncStatus**: `String` — Current S3 sync state (pending, in_progress, synced, failed, lost_local).
+- **hasLocalCopy**: `Boolean` — Present full local node copy (origin or cache): true when at least one node holds a complete local copy, false when none remain (playback via read-through relay from S3). Null when the placement overlay (Periscope) is unavailable — unknown, not &#39;no local copy&#39;. Durable S3-only state is derived by consumers as isSynced &amp;&amp; hasLocalCopy == false.
+- **isSynced**: `Boolean` — True when S3 has an authoritative copy.
+- **isFinalized**: `Boolean` — True when the S3 copy includes the Mist .dtsh index.
+- **frozenAt**: `Time` ([Time](/builders/api-schema/shared/#time))
+- **s3Url**: `String`
+- **thumbnailAssets**: `ThumbnailAssets` ([ThumbnailAssets](/builders/api-schema/shared/#thumbnailassets)) — Server-resolved Chandler URLs for the DVR&#39;s poster and sprite thumbnails. Null until Foghorn confirms the thumbnail upload.
+
+## DeleteClipResult
+
+**union**
+
+- Member: [DeleteSuccess](/builders/api-schema/shared/#deletesuccess)
+- Member: [NotFoundError](/builders/api-schema/shared/#notfounderror)
+- Member: [AuthError](/builders/api-schema/shared/#autherror)
+
+## DeleteDVRResult
+
+**union**
+
+- Member: [DeleteSuccess](/builders/api-schema/shared/#deletesuccess)
+- Member: [NotFoundError](/builders/api-schema/shared/#notfounderror)
+- Member: [AuthError](/builders/api-schema/shared/#autherror)
+
+## DeleteVodAssetResult
+
+**union**
+
+- Member: [DeleteSuccess](/builders/api-schema/shared/#deletesuccess)
+- Member: [NotFoundError](/builders/api-schema/shared/#notfounderror)
+- Member: [AuthError](/builders/api-schema/shared/#autherror)
+
+## MediaCapacityConsent
+
+**object**
+
+- **clusterId**: `ID!`
+- **revision**: `String!`
+- **allowIngest**: `Boolean!`
+- **allowServe**: `Boolean!`
+- **allowExternalSource**: `Boolean!`
+- **canManage**: `Boolean!`
+- **rollout**: `MediaPlacementRollout!` ([MediaPlacementRollout](/builders/api-schema/media-types/#mediaplacementrollout))
+
+## MediaCapacityConsentChange
+
+**object**
+
+- **clusterId**: `ID!`
+- **idempotencyKey**: `String!`
+- **revision**: `String!`
+- **digest**: `String!`
+- **rollout**: `MediaPlacementRollout!` ([MediaPlacementRollout](/builders/api-schema/media-types/#mediaplacementrollout))
+- **createdAt**: `Time!` ([Time](/builders/api-schema/shared/#time))
+
+## MediaCapacityConsentChangeResult
+
+**union**
+
+- Member: [MediaCapacityConsentChange](/builders/api-schema/media-types/#mediacapacityconsentchange)
+- Member: [MediaPlacementError](/builders/api-schema/media-types/#mediaplacementerror)
+- Member: [AuthError](/builders/api-schema/shared/#autherror)
+- Member: [NotFoundError](/builders/api-schema/shared/#notfounderror)
+
+## MediaCapacityConsentResult
+
+**union**
+
+- Member: [MediaCapacityConsent](/builders/api-schema/media-types/#mediacapacityconsent)
+- Member: [MediaPlacementError](/builders/api-schema/media-types/#mediaplacementerror)
+- Member: [AuthError](/builders/api-schema/shared/#autherror)
+- Member: [NotFoundError](/builders/api-schema/shared/#notfounderror)
+
+## MediaPlacementActions
+
+**object**
+
+- **canRead**: `Boolean!`
+- **canPreview**: `Boolean!`
+- **canManage**: `Boolean!`
+- **canInspectPrivateCandidates**: `Boolean!`
+
+## MediaPlacementAllow
+
+**object**
+
+- **any**: `[MediaPlacementSelector!]!` ([MediaPlacementSelector](/builders/api-schema/media-types/#mediaplacementselector))
+
+## MediaPlacementAllowInput
+
+**input_object**
+
+- **any**: `[MediaPlacementSelectorInput!]!` ([MediaPlacementSelectorInput](/builders/api-schema/media-types/#mediaplacementselectorinput))
+
+## MediaPlacementCandidateExplanation
+
+**object**
+
+- **clusterId**: `ID!`
+- **clusterName**: `String!`
+- **region**: `String`
+- **nodeId**: `ID` — Only returned when private candidate inspection is authorized.
+- **groupId**: `String`
+- **reason**: `String!`
+- **distanceKm**: `Float`
+- **requiresSourcePull**: `Boolean!`
+- **price**: `MediaPlacementPrice` ([MediaPlacementPrice](/builders/api-schema/media-types/#mediaplacementprice))
+
+## MediaPlacementChange
+
+**object**
+
+- **scope**: `MediaPlacementScope!` ([MediaPlacementScope](/builders/api-schema/media-types/#mediaplacementscope))
+- **idempotencyKey**: `String!`
+- **revision**: `String!`
+- **parentRevision**: `String!`
+- **digest**: `String!`
+- **rollout**: `MediaPlacementRollout!` ([MediaPlacementRollout](/builders/api-schema/media-types/#mediaplacementrollout))
+- **createdAt**: `Time!` ([Time](/builders/api-schema/shared/#time))
+
+## MediaPlacementChangeResult
+
+**union**
+
+- Member: [MediaPlacementChange](/builders/api-schema/media-types/#mediaplacementchange)
+- Member: [MediaPlacementError](/builders/api-schema/media-types/#mediaplacementerror)
+- Member: [AuthError](/builders/api-schema/shared/#autherror)
+- Member: [NotFoundError](/builders/api-schema/shared/#notfounderror)
+
+## MediaPlacementCharging
+
+**enum**
+
+- `RATED`
+- `PERMANENTLY_FREE`
+
+## MediaPlacementClass
+
+**enum**
+
+- `PLATFORM_OFFICIAL`
+- `TENANT_PRIVATE`
+- `THIRD_PARTY_MARKETPLACE`
+
+## MediaPlacementConstraints
+
+**object**
+
+- **allow**: `MediaPlacementAllow` ([MediaPlacementAllow](/builders/api-schema/media-types/#mediaplacementallow))
+- **deny**: `[MediaPlacementSelector!]!` ([MediaPlacementSelector](/builders/api-schema/media-types/#mediaplacementselector))
+
+## MediaPlacementConstraintsInput
+
+**input_object**
+
+- **allow**: `MediaPlacementAllowInput` ([MediaPlacementAllowInput](/builders/api-schema/media-types/#mediaplacementallowinput)) — Omitted means no additional restriction; an explicit empty any list allows nothing.
+- **deny**: `[MediaPlacementSelectorInput!]!` ([MediaPlacementSelectorInput](/builders/api-schema/media-types/#mediaplacementselectorinput))
+
+## MediaPlacementCoordinatesInput
+
+**input_object**
+
+- **latitude**: `Float!`
+- **longitude**: `Float!`
+
+## MediaPlacementDifference
+
+**object**
+
+- **path**: `String!`
+- **label**: `String!`
+- **before**: `String!`
+- **after**: `String!`
+
+## MediaPlacementEffectivePolicy
+
+**object**
+
+- **schemaVersion**: `Int!`
+- **digest**: `String!`
+- **layers**: `[MediaPlacementConstraints!]!` ([MediaPlacementConstraints](/builders/api-schema/media-types/#mediaplacementconstraints))
+- **groups**: `[MediaPlacementGroup!]!` ([MediaPlacementGroup](/builders/api-schema/media-types/#mediaplacementgroup))
+
+## MediaPlacementError
+
+**object**
+
+- **code**: `MediaPlacementErrorCode!` ([MediaPlacementErrorCode](/builders/api-schema/media-types/#mediaplacementerrorcode))
+- **message**: `String!`
+- **fields**: `[MediaPlacementFieldError!]!` ([MediaPlacementFieldError](/builders/api-schema/media-types/#mediaplacementfielderror))
+- **currentRevision**: `String`
+- **parentRevision**: `String`
+- **retryAfterSeconds**: `Int`
+
+## MediaPlacementErrorCode
+
+**enum**
+
+- `INVALID_INPUT`
+- `REVISION_CONFLICT`
+- `STALE_REVIEW`
+- `IDEMPOTENCY_CONFLICT`
+- `UNSUPPORTED`
+- `UNAVAILABLE`
+- `RATE_LIMITED`
+
+## MediaPlacementFeatures
+
+**object**
+
+- **schemaVersion**: `Int!`
+- **geographicSpillover**: `Boolean!`
+- **priceOrdering**: `Boolean!`
+- **supportedPresets**: `[String!]!`
+
+## MediaPlacementFieldError
+
+**object**
+
+- **path**: `String!`
+- **groupId**: `String`
+- **message**: `String!`
+
+## MediaPlacementGroup
+
+**object**
+
+- **id**: `String!`
+- **match**: `MediaPlacementSelector!` ([MediaPlacementSelector](/builders/api-schema/media-types/#mediaplacementselector))
+- **order**: `MediaPlacementOrder!` ([MediaPlacementOrder](/builders/api-schema/media-types/#mediaplacementorder))
+- **spillover**: `MediaPlacementSpillover!` ([MediaPlacementSpillover](/builders/api-schema/media-types/#mediaplacementspillover))
+- **maxDistanceKm**: `Float!`
+- **geoHoleDistanceKm**: `Float!`
+- **minImprovementKm**: `Float!`
+- **priceCurrency**: `String`
+- **priceUnit**: `String`
+
+## MediaPlacementGroupInput
+
+**input_object**
+
+- **id**: `String!`
+- **match**: `MediaPlacementSelectorInput!` ([MediaPlacementSelectorInput](/builders/api-schema/media-types/#mediaplacementselectorinput))
+- **order**: `MediaPlacementOrder!` ([MediaPlacementOrder](/builders/api-schema/media-types/#mediaplacementorder))
+- **spillover**: `MediaPlacementSpillover!` ([MediaPlacementSpillover](/builders/api-schema/media-types/#mediaplacementspillover))
+- **maxDistanceKm**: `Float!` — Hard maximum distance in km. Zero means unbounded.
+- **geoHoleDistanceKm**: `Float!` — Soft threshold for geographic spill; must be positive for GEO_HOLE modes.
+- **minImprovementKm**: `Float!`
+- **priceCurrency**: `String`
+- **priceUnit**: `String`
+
+## MediaPlacementImpact
+
+**object**
+
+- **affectedStreams**: `Int!`
+- **activePublishers**: `Int!`
+- **complete**: `Boolean!`
+- **existingSessionsRetained**: `Boolean!`
+
+## MediaPlacementOption
+
+**object**
+
+- **id**: `ID!`
+- **name**: `String!`
+- **kind**: `MediaPlacementOptionKind!` ([MediaPlacementOptionKind](/builders/api-schema/media-types/#mediaplacementoptionkind))
+- **clusterClass**: `MediaPlacementClass` ([MediaPlacementClass](/builders/api-schema/media-types/#mediaplacementclass))
+- **region**: `String`
+- **ownerId**: `ID`
+- **clusterId**: `ID` — Cluster of a NODE option.
+- **eligible**: `Boolean!`
+- **reason**: `String`
+
+## MediaPlacementOptionKind
+
+**enum**
+
+- `CLUSTER`
+- `OPERATOR`
+- `REGION`
+- `NODE` — A node of a cluster the tenant owns.
+
+## MediaPlacementOptionsConnection
+
+**object**
+
+- **nodes**: `[MediaPlacementOption!]!` ([MediaPlacementOption](/builders/api-schema/media-types/#mediaplacementoption))
+- **pageInfo**: `PageInfo!` ([PageInfo](/builders/api-schema/shared/#pageinfo))
+
+## MediaPlacementOptionsFilter
+
+**input_object**
+
+- **query**: `String`
+- **kind**: `MediaPlacementOptionKind` ([MediaPlacementOptionKind](/builders/api-schema/media-types/#mediaplacementoptionkind))
+- **classes**: `[MediaPlacementClass!]` ([MediaPlacementClass](/builders/api-schema/media-types/#mediaplacementclass))
+- **clusterId**: `ID` — Limits NODE options to one cluster.
+
+## MediaPlacementOptionsResult
+
+**union**
+
+- Member: [MediaPlacementOptionsConnection](/builders/api-schema/media-types/#mediaplacementoptionsconnection)
+- Member: [MediaPlacementError](/builders/api-schema/media-types/#mediaplacementerror)
+- Member: [AuthError](/builders/api-schema/shared/#autherror)
+- Member: [NotFoundError](/builders/api-schema/shared/#notfounderror)
+
+## MediaPlacementOrder
+
+**enum**
+
+- `DISTANCE`
+- `PRICE`
+
+## MediaPlacementPolicyResult
+
+**union**
+
+- Member: [MediaPlacementPolicyState](/builders/api-schema/media-types/#mediaplacementpolicystate)
+- Member: [MediaPlacementError](/builders/api-schema/media-types/#mediaplacementerror)
+- Member: [AuthError](/builders/api-schema/shared/#autherror)
+- Member: [NotFoundError](/builders/api-schema/shared/#notfounderror)
+
+## MediaPlacementPolicyState
+
+**object**
+
+- **scope**: `MediaPlacementScope!` ([MediaPlacementScope](/builders/api-schema/media-types/#mediaplacementscope))
+- **revision**: `String!`
+- **parentRevision**: `String!`
+- **activeRevision**: `String`
+- **activeParentRevision**: `String`
+- **verbs**: `[MediaPlacementVerbPolicy!]!` ([MediaPlacementVerbPolicy](/builders/api-schema/media-types/#mediaplacementverbpolicy))
+- **rollout**: `MediaPlacementRollout!` ([MediaPlacementRollout](/builders/api-schema/media-types/#mediaplacementrollout))
+- **actions**: `MediaPlacementActions!` ([MediaPlacementActions](/builders/api-schema/media-types/#mediaplacementactions))
+- **features**: `MediaPlacementFeatures!` ([MediaPlacementFeatures](/builders/api-schema/media-types/#mediaplacementfeatures))
+
+## MediaPlacementPreferences
+
+**object**
+
+- **groups**: `[MediaPlacementGroup!]!` ([MediaPlacementGroup](/builders/api-schema/media-types/#mediaplacementgroup))
+
+## MediaPlacementPreferencesInput
+
+**input_object**
+
+- **groups**: `[MediaPlacementGroupInput!]!` ([MediaPlacementGroupInput](/builders/api-schema/media-types/#mediaplacementgroupinput))
+
+## MediaPlacementPreview
+
+**object**
+
+- **scope**: `MediaPlacementScope!` ([MediaPlacementScope](/builders/api-schema/media-types/#mediaplacementscope))
+- **verb**: `MediaPlacementVerb!` ([MediaPlacementVerb](/builders/api-schema/media-types/#mediaplacementverb))
+- **revision**: `String!`
+- **parentRevision**: `String!`
+- **digest**: `String!`
+- **reason**: `String!`
+- **selected**: `MediaPlacementCandidateExplanation` ([MediaPlacementCandidateExplanation](/builders/api-schema/media-types/#mediaplacementcandidateexplanation))
+- **candidates**: `[MediaPlacementCandidateExplanation!]!` ([MediaPlacementCandidateExplanation](/builders/api-schema/media-types/#mediaplacementcandidateexplanation))
+- **transitions**: `[MediaPlacementTransition!]!` ([MediaPlacementTransition](/builders/api-schema/media-types/#mediaplacementtransition))
+- **observedAt**: `Time!` ([Time](/builders/api-schema/shared/#time))
+- **expiresAt**: `Time!` ([Time](/builders/api-schema/shared/#time))
+- **complete**: `Boolean!`
+- **sourceEvaluated**: `Boolean!`
+- **activeIngestClusterId**: `ID`
+
+## MediaPlacementPreviewResult
+
+**union**
+
+- Member: [MediaPlacementPreview](/builders/api-schema/media-types/#mediaplacementpreview)
+- Member: [MediaPlacementError](/builders/api-schema/media-types/#mediaplacementerror)
+- Member: [AuthError](/builders/api-schema/shared/#autherror)
+- Member: [NotFoundError](/builders/api-schema/shared/#notfounderror)
+
+## MediaPlacementPrice
+
+**object**
+
+- **amountMicros**: `String!`
+- **currency**: `String!`
+- **unit**: `String!`
+- **revision**: `String!`
+- **expiresAt**: `Time!` ([Time](/builders/api-schema/shared/#time))
+
+## MediaPlacementRecipient
+
+**object**
+
+- **id**: `ID!`
+- **name**: `String!`
+- **status**: `MediaPlacementRolloutStatus!` ([MediaPlacementRolloutStatus](/builders/api-schema/media-types/#mediaplacementrolloutstatus))
+- **reason**: `String`
+- **authorityExpiresAt**: `Time` ([Time](/builders/api-schema/shared/#time))
+
+## MediaPlacementReview
+
+**object**
+
+- **reviewToken**: `String!`
+- **digest**: `String!`
+- **expiresAt**: `Time!` ([Time](/builders/api-schema/shared/#time))
+- **differences**: `[MediaPlacementDifference!]!` ([MediaPlacementDifference](/builders/api-schema/media-types/#mediaplacementdifference))
+- **warnings**: `[MediaPlacementWarning!]!` ([MediaPlacementWarning](/builders/api-schema/media-types/#mediaplacementwarning))
+- **impact**: `MediaPlacementImpact!` ([MediaPlacementImpact](/builders/api-schema/media-types/#mediaplacementimpact))
+
+## MediaPlacementReviewResult
+
+**union**
+
+- Member: [MediaPlacementReview](/builders/api-schema/media-types/#mediaplacementreview)
+- Member: [MediaPlacementError](/builders/api-schema/media-types/#mediaplacementerror)
+- Member: [AuthError](/builders/api-schema/shared/#autherror)
+- Member: [NotFoundError](/builders/api-schema/shared/#notfounderror)
+
+## MediaPlacementRollout
+
+**object**
+
+- **status**: `MediaPlacementRolloutStatus!` ([MediaPlacementRolloutStatus](/builders/api-schema/media-types/#mediaplacementrolloutstatus))
+- **requiredRecipients**: `Int!`
+- **appliedRecipients**: `Int!`
+- **pendingRecipients**: `[MediaPlacementRecipient!]!` ([MediaPlacementRecipient](/builders/api-schema/media-types/#mediaplacementrecipient))
+- **existingSessionsRetained**: `Boolean!`
+- **updatedAt**: `Time` ([Time](/builders/api-schema/shared/#time))
+
+## MediaPlacementRolloutStatus
+
+**enum**
+
+- `NOT_CONFIGURED`
+- `PENDING`
+- `EFFECTIVE`
+- `BLOCKED`
+- `SUPERSEDED`
+
+## MediaPlacementRules
+
+**object**
+
+- **schemaVersion**: `Int!`
+- **constraints**: `MediaPlacementConstraints!` ([MediaPlacementConstraints](/builders/api-schema/media-types/#mediaplacementconstraints))
+- **preferences**: `MediaPlacementPreferences` ([MediaPlacementPreferences](/builders/api-schema/media-types/#mediaplacementpreferences))
+
+## MediaPlacementRulesInput
+
+**input_object**
+
+- **schemaVersion**: `Int!`
+- **constraints**: `MediaPlacementConstraintsInput!` ([MediaPlacementConstraintsInput](/builders/api-schema/media-types/#mediaplacementconstraintsinput))
+- **preferences**: `MediaPlacementPreferencesInput` ([MediaPlacementPreferencesInput](/builders/api-schema/media-types/#mediaplacementpreferencesinput)) — Omitted inherits preference order; an explicit empty groups list denies all destinations.
+
+## MediaPlacementScope
+
+**object**
+
+- **kind**: `MediaPlacementScopeKind!` ([MediaPlacementScopeKind](/builders/api-schema/media-types/#mediaplacementscopekind))
+- **streamId**: `ID`
+
+## MediaPlacementScopeInput
+
+**input_object**
+
+- **kind**: `MediaPlacementScopeKind!` ([MediaPlacementScopeKind](/builders/api-schema/media-types/#mediaplacementscopekind))
+- **streamId**: `ID`
+
+## MediaPlacementScopeKind
+
+**enum**
+
+- `TENANT`
+- `STREAM`
+
+## MediaPlacementSelector
+
+**object**
+
+- **clusterIds**: `[ID!]!`
+- **nodeIds**: `[ID!]!`
+- **ownerIds**: `[ID!]!`
+- **regions**: `[String!]!`
+- **classes**: `[MediaPlacementClass!]!` ([MediaPlacementClass](/builders/api-schema/media-types/#mediaplacementclass))
+- **charging**: `[MediaPlacementCharging!]!` ([MediaPlacementCharging](/builders/api-schema/media-types/#mediaplacementcharging))
+
+## MediaPlacementSelectorInput
+
+**input_object**
+
+Fields combine with AND; values within a field combine with OR. Empty matches all entitled capacity.
+
+- **clusterIds**: `[ID!]`
+- **nodeIds**: `[ID!]` — Nodes of clusters the tenant owns.
+- **ownerIds**: `[ID!]`
+- **regions**: `[String!]`
+- **classes**: `[MediaPlacementClass!]` ([MediaPlacementClass](/builders/api-schema/media-types/#mediaplacementclass))
+- **charging**: `[MediaPlacementCharging!]` ([MediaPlacementCharging](/builders/api-schema/media-types/#mediaplacementcharging))
+
+## MediaPlacementSpillover
+
+**enum**
+
+- `NEVER`
+- `CAPACITY_ONLY`
+- `GEO_HOLE`
+- `CAPACITY_OR_GEO_HOLE`
+
+## MediaPlacementTransition
+
+**object**
+
+- **fromGroup**: `String!`
+- **reason**: `String!`
+
+## MediaPlacementUpdateKind
+
+**enum**
+
+- `SET`
+- `CLEAR`
+
+## MediaPlacementVerb
+
+**enum**
+
+- `INGEST`
+- `SERVE`
+
+## MediaPlacementVerbPolicy
+
+**object**
+
+- **verb**: `MediaPlacementVerb!` ([MediaPlacementVerb](/builders/api-schema/media-types/#mediaplacementverb))
+- **ownRules**: `MediaPlacementRules` ([MediaPlacementRules](/builders/api-schema/media-types/#mediaplacementrules))
+- **inheritedRules**: `MediaPlacementRules` ([MediaPlacementRules](/builders/api-schema/media-types/#mediaplacementrules))
+- **requestedEffective**: `MediaPlacementEffectivePolicy!` ([MediaPlacementEffectivePolicy](/builders/api-schema/media-types/#mediaplacementeffectivepolicy)) — Compiled requested intent; enforcement progress is reported separately.
+
+## MediaPlacementVerbUpdateInput
+
+**input_object**
+
+- **verb**: `MediaPlacementVerb!` ([MediaPlacementVerb](/builders/api-schema/media-types/#mediaplacementverb))
+- **kind**: `MediaPlacementUpdateKind!` ([MediaPlacementUpdateKind](/builders/api-schema/media-types/#mediaplacementupdatekind))
+- **rules**: `MediaPlacementRulesInput` ([MediaPlacementRulesInput](/builders/api-schema/media-types/#mediaplacementrulesinput))
+
+## MediaPlacementWarning
+
+**object**
+
+- **id**: `String!`
+- **severity**: `MediaPlacementWarningSeverity!` ([MediaPlacementWarningSeverity](/builders/api-schema/media-types/#mediaplacementwarningseverity))
+- **message**: `String!`
+- **acknowledgementRequired**: `Boolean!`
+
+## MediaPlacementWarningSeverity
+
+**enum**
+
+- `INFO`
+- `WARNING`
+
+## MediaRetentionBounds
+
+**object**
+
+Upper bounds for customer-set media retention, derived from the tenant&#39;s tier entitlement at request time.
+
+- **maxRecordingRetentionDays**: `Int!` — Maximum retention days the tenant&#39;s tier permits. 0 = no cap (paid-tier baseline); Free tier sets a finite cap as the anti-abuse guardrail.
+
+## MediaRetentionPolicy
+
+**object**
+
+Tenant-default retention policy: per-class overrides + the values the cascade would resolve to today for a hypothetical new artifact of each class (no per-stream context).
+
+- **bounds**: `MediaRetentionBounds!` ([MediaRetentionBounds](/builders/api-schema/media-types/#mediaretentionbounds))
+- **updatedBy**: `String` — User who last touched the policy. Null when no tenant override is set.
+- **updatedAt**: `Time` ([Time](/builders/api-schema/shared/#time))
+- **defaultVodRetentionDays**: `Int` — Per-class tenant default for VOD uploads. Null = inherit the system default (keep forever). 0 = no auto-expire (paid-tier baseline). Free tier clamps to the tier cap at write time.
+- **defaultDvrRetentionDays**: `Int` — Per-class tenant default for DVR recordings. Null = inherit the system default (30d). 0 = no auto-expire (paid only).
+- **defaultClipRetentionDays**: `Int` — Per-class tenant default for clips. Null = inherit the system default (30d). 0 = no auto-expire (paid only).
+- **effectiveVodRetentionDays**: `Int!` — Effective VOD horizon the cascade resolves to today (0 = keep forever).
+- **effectiveDvrRetentionDays**: `Int!` — Effective DVR horizon the cascade resolves to today (0 = keep forever).
+- **effectiveClipRetentionDays**: `Int!` — Effective clip horizon the cascade resolves to today (0 = keep forever).
+
+## MediaRetentionTarget
+
+**enum**
+
+Asset class targeted by a retention operation. Each class has its own column in commodore.tenant_media_retention_policies and (for DVR/clip) on commodore.streams; the cascade reads them in order at artifact create time.
+
+- `DVR`
+- `CLIP`
+- `VOD`
+
+## PreviewMediaPlacementInput
+
+**input_object**
+
+- **scope**: `MediaPlacementScopeInput!` ([MediaPlacementScopeInput](/builders/api-schema/media-types/#mediaplacementscopeinput))
+- **verb**: `MediaPlacementVerb!` ([MediaPlacementVerb](/builders/api-schema/media-types/#mediaplacementverb))
+- **streamId**: `ID`
+- **protocol**: `String`
+- **coordinates**: `MediaPlacementCoordinatesInput` ([MediaPlacementCoordinatesInput](/builders/api-schema/media-types/#mediaplacementcoordinatesinput))
+- **draftUpdate**: `MediaPlacementVerbUpdateInput` ([MediaPlacementVerbUpdateInput](/builders/api-schema/media-types/#mediaplacementverbupdateinput)) — Omitted evaluates saved rules; CLEAR previews inheritance for this verb.
+- **expectedRevision**: `String`
+- **expectedParentRevision**: `String`
+
+## ResetMediaRetentionOverrideInput
+
+**input_object**
+
+- **targetType**: `MediaRetentionTarget!` ([MediaRetentionTarget](/builders/api-schema/media-types/#mediaretentiontarget))
+- **targetId**: `ID!`
+
+## ReviewMediaCapacityConsentInput
+
+**input_object**
+
+- **clusterId**: `ID!`
+- **expectedRevision**: `String!`
+- **allowIngest**: `Boolean!`
+- **allowServe**: `Boolean!`
+- **allowExternalSource**: `Boolean!`
+
+## ReviewMediaPlacementChangeInput
+
+**input_object**
+
+- **scope**: `MediaPlacementScopeInput!` ([MediaPlacementScopeInput](/builders/api-schema/media-types/#mediaplacementscopeinput))
+- **expectedRevision**: `String!`
+- **expectedParentRevision**: `String!`
+- **updates**: `[MediaPlacementVerbUpdateInput!]!` ([MediaPlacementVerbUpdateInput](/builders/api-schema/media-types/#mediaplacementverbupdateinput))
+
+## SetMediaRetentionPolicyInput
+
+**input_object**
+
+- **targetType**: `MediaRetentionTarget!` ([MediaRetentionTarget](/builders/api-schema/media-types/#mediaretentiontarget)) — Which class to write: VOD, DVR, or CLIP.
+- **days**: `Int` — Days to retain new artifacts of this class. Range: 0 ≤ value ≤ tier cap (tier cap of 0 means uncapped). 0 = no auto-expire (only honored on uncapped tiers; Free clamps to the cap at write time). Ignored when clear = true.
+- **clear**: `Boolean` — When true, NULLs out the per-class column so the tenant inherits the system default (VOD: keep forever, DVR/clip: 30d). days is ignored.
+
+## SetMediaRetentionPolicyResult
+
+**union**
+
+- Member: [MediaRetentionPolicy](/builders/api-schema/media-types/#mediaretentionpolicy)
+- Member: [ValidationError](/builders/api-schema/shared/#validationerror)
+- Member: [AuthError](/builders/api-schema/shared/#autherror)
+
+## SetStreamRetentionOverridesInput
+
+**input_object**
+
+- **streamId**: `ID!`
+- **dvrRetentionDaysOverride**: `Int` — Per-class override values. Unset on a field leaves the column alone; setting a value writes it (0 = no auto-expire, &gt;0 = days). To remove an existing override and fall back to the tenant default, set the matching clear*Override flag.
+- **clipRetentionDaysOverride**: `Int`
+- **clearDvrRetentionOverride**: `Boolean`
+- **clearClipRetentionOverride**: `Boolean`
+
+## SetStreamRetentionOverridesResult
+
+**union**
+
+- Member: [StreamRetentionOverrides](/builders/api-schema/shared/#streamretentionoverrides)
+- Member: [ValidationError](/builders/api-schema/shared/#validationerror)
+- Member: [NotFoundError](/builders/api-schema/shared/#notfounderror)
+- Member: [AuthError](/builders/api-schema/shared/#autherror)
+
+## SortDirection
+
+**enum**
+
+- `ASC`
+- `DESC`
+
+## StartDVRResult
+
+**union**
+
+- Member: [DVRRequest](/builders/api-schema/media-types/#dvrrequest)
+- Member: [ValidationError](/builders/api-schema/shared/#validationerror)
+- Member: [NotFoundError](/builders/api-schema/shared/#notfounderror)
+- Member: [AuthError](/builders/api-schema/shared/#autherror)
+
+## StopDVRResult
+
+**union**
+
+- Member: [DeleteSuccess](/builders/api-schema/shared/#deletesuccess)
+- Member: [NotFoundError](/builders/api-schema/shared/#notfounderror)
+- Member: [AuthError](/builders/api-schema/shared/#autherror)
+
+## StorageArtifact
+
+**object**
+
+- **key**: `ID!`
+- **kind**: `StorageArtifactKind!` ([StorageArtifactKind](/builders/api-schema/shared/#storageartifactkind))
+- **id**: `ID!`
+- **hash**: `String!`
+- **playbackId**: `String`
+- **streamId**: `ID`
+- **streamTitle**: `String!`
+- **title**: `String!`
+- **secondaryLabel**: `String!`
+- **description**: `String` — User-provided description (VOD uploads and clips); null when unset.
+- **errorMessage**: `String` — Processing failure detail for a failed artifact; null when not failed.
+- **sizeBytes**: `Float`
+- **status**: `String!`
+- **storageLocation**: `String`
+- **storageClusterId**: `String` — ID of the storage cluster the artifact is durably stored in (control-plane truth from Commodore).
+- **syncStatus**: `String`
+- **hasLocalCopy**: `Boolean` — Present full local node copy (origin or cache): true when at least one node holds a complete local copy, false when none remain (playback via read-through relay from S3). Null when the placement overlay (Periscope) is unavailable — unknown, not &#39;no local copy&#39;. Durable S3-only state is derived by consumers as isSynced &amp;&amp; hasLocalCopy == false.
+- **isSynced**: `Boolean`
+- **isFinalized**: `Boolean`
+- **createdAt**: `Time!` ([Time](/builders/api-schema/shared/#time))
+- **updatedAt**: `Time!` ([Time](/builders/api-schema/shared/#time))
+- **expiresAt**: `Time` ([Time](/builders/api-schema/shared/#time))
+- **effectiveRetention**: `EffectiveRetention` ([EffectiveRetention](/builders/api-schema/shared/#effectiveretention))
+- **storageCost**: `StorageCostProjection` ([StorageCostProjection](/builders/api-schema/shared/#storagecostprojection))
+- **deleteId**: `ID!`
+- **retentionId**: `ID!`
+- **thumbnailUrl**: `String`
+- **thumbnailAssets**: `ThumbnailAssets` ([ThumbnailAssets](/builders/api-schema/shared/#thumbnailassets)) — Poster + hover-scrub sprite assets, when the artifact has thumbnails.
+- **durationSeconds**: `Float` — Media duration in seconds. Clips retain their requested duration until measured; DVR/VOD duration may be null until finalized.
+- **tracks**: `[ArtifactTrack!]!` ([ArtifactTrack](/builders/api-schema/media-types/#artifacttrack)) — Finalized A/V track summary (per track), captured from the completion-validated processing result and projected onto the catalog. Empty until finalized.
+
+## StorageArtifactKindCounts
+
+**object**
+
+Per-kind artifact counts for the account (or filtered scope), for the library tabs/tiles.
+
+- **total**: `Int!`
+- **vod**: `Int!`
+- **dvr**: `Int!`
+- **chapter**: `Int!`
+- **clip**: `Int!`
+
+## StorageArtifactSortField
+
+**enum**
+
+- `CREATED_AT`
+- `TITLE`
+- `KIND`
+- `SIZE_BYTES`
+- `EXPIRES_AT`
+
+## StorageArtifactsConnection
+
+**object**
+
+- **nodes**: `[StorageArtifact!]!` ([StorageArtifact](/builders/api-schema/media-types/#storageartifact))
+- **totalCount**: `Int!`
+- **hasNextPage**: `Boolean!`
+- **limit**: `Int!`
+- **offset**: `Int!`
+- **lifecycleAvailable**: `Boolean!` — True only when EVERY returned row&#39;s lifecycle is actually known — resolved from the durable catalog projection or the live overlay. A not-yet-projected/backfilled row makes this false so the client shows an &#34;unknown&#34; lifecycle state rather than reporting the artifacts as not-synced. Per-row availability is derivable from whether syncStatus is set.
+- **kindCounts**: `StorageArtifactKindCounts!` ([StorageArtifactKindCounts](/builders/api-schema/media-types/#storageartifactkindcounts)) — Authoritative per-kind counts under the active search/stream scope (ignoring the kind filter).
+
+## StorageArtifactsInput
+
+**input_object**
+
+- **first**: `Int`
+- **offset**: `Int`
+- **streamId**: `ID`
+- **kinds**: `[StorageArtifactKind!]` ([StorageArtifactKind](/builders/api-schema/shared/#storageartifactkind))
+- **search**: `String`
+- **status**: `String` — Account-wide status filter applied server-side before count/facets/pagination: &#34;ready&#34; &#124; &#34;failed&#34; &#124; &#34;processing&#34; &#124; &#34;expired&#34;. Empty = all.
+- **artifactHash**: `String` — Exact artifact-hash match — the canonical lookup for asset detail/analytics routes. Takes precedence over `search`; combine with `first: 1` to fetch a single artifact without a fuzzy scan or page cap.
+- **sort**: `StorageArtifactSortField` ([StorageArtifactSortField](/builders/api-schema/media-types/#storageartifactsortfield))
+- **direction**: `SortDirection` ([SortDirection](/builders/api-schema/media-types/#sortdirection))
+
+## UpdateMediaRetentionInput
+
+**input_object**
+
+- **targetType**: `MediaRetentionTarget!` ([MediaRetentionTarget](/builders/api-schema/media-types/#mediaretentiontarget))
+- **targetId**: `ID!` — Canonical asset ID — accepts either the asset&#39;s UUID or its hash.
+- **retentionDays**: `Int` — Either retentionDays (relative to NOW) or retentionUntil must be set.
+- **retentionUntil**: `Time` ([Time](/builders/api-schema/shared/#time))
+
+## UpdateMediaRetentionResult
+
+**union**
+
+- Member: [EffectiveRetention](/builders/api-schema/shared/#effectiveretention)
+- Member: [ValidationError](/builders/api-schema/shared/#validationerror)
+- Member: [NotFoundError](/builders/api-schema/shared/#notfounderror)
+- Member: [AuthError](/builders/api-schema/shared/#autherror)
+
+## VodUploadCompletedPart
+
+**input_object**
+
+Completed part info returned by S3 after each part upload.
+
+- **partNumber**: `Int!` — 1-indexed part number.
+- **etag**: `String!` — ETag header value returned by S3 on part upload.
+
+## VodUploadPart
+
+**object**
+
+Individual part upload instruction with presigned S3 URL.
+
+- **partNumber**: `Int!` — 1-indexed part number.
+- **presignedUrl**: `String!` — Presigned PUT URL for uploading this part.
+
+## VodUploadSession
+
+**object**
+
+Response from createVodUpload with S3 multipart upload instructions. Use the presigned URLs to upload file parts directly to S3.
+
+- **id**: `ID!` — Upload session ID (S3 uploadId).
+- **artifactId**: `ID!` — Internal artifact ID.
+- **artifactHash**: `String!` — Hash for playback URL resolution.
+- **playbackId**: `String!` — Public playback identifier.
+- **partSize**: `Float!` — Recommended part size in bytes.
+- **parts**: `[VodUploadPart!]!` ([VodUploadPart](/builders/api-schema/media-types/#voduploadpart)) — Presigned URLs for each part.
+- **expiresAt**: `Time!` ([Time](/builders/api-schema/shared/#time)) — When presigned URLs expire (typically 2 hours).
+
+## VodUploadStatus
+
+**object**
+
+Server-authoritative state of an in-flight multipart upload. Returned as a polling complement to the upload events of the tenantEvents subscription, used for reload-recovery and agent (MCP) workflows.
+
+- **uploadId**: `ID!` — Opaque upload session ID returned by createVodUpload; preserve unchanged when resuming.
+- **state**: `VodAssetStatus!` ([VodAssetStatus](/builders/api-schema/shared/#vodassetstatus)) — Current state of the upload session.
+- **expiresAt**: `Time` ([Time](/builders/api-schema/shared/#time)) — S3 multipart session deadline. Past this point, state is EXPIRED.
+- **retentionUntil**: `Time` ([Time](/builders/api-schema/shared/#time)) — Asset retention deadline (informational; distinct from upload-session expiry).
+- **uploadedParts**: `[VodUploadedPart!]!` ([VodUploadedPart](/builders/api-schema/media-types/#voduploadedpart)) — Parts S3 has already received.
+- **missingParts**: `[Int!]!` — Part numbers still missing for completion (1-indexed).
+- **lastErrorCode**: `String` — Last error code emitted by the pipeline, if any.
+- **artifactHash**: `String` — Hash for playback URL resolution.
+- **playbackId**: `ID` — Public playback identifier (available once known).
+
+## VodUploadStatusResult
+
+**union**
+
+- Member: [VodUploadStatus](/builders/api-schema/media-types/#voduploadstatus)
+- Member: [ValidationError](/builders/api-schema/shared/#validationerror)
+- Member: [NotFoundError](/builders/api-schema/shared/#notfounderror)
+- Member: [AuthError](/builders/api-schema/shared/#autherror)
+
+## VodUploadedPart
+
+**object**
+
+A part S3 has already received for an in-flight multipart upload (returned by ListParts). Used by the client uploader to reconcile local resume state against the server.
+
+- **partNumber**: `Int!` — 1-indexed part number.
+- **etag**: `String!` — ETag header value returned by S3.
+- **sizeBytes**: `Float!` — Size of the uploaded part in bytes.

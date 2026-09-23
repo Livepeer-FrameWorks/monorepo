@@ -1,0 +1,575 @@
+---
+title: Access and playback
+description: Access and playback in the generated public GraphQL reference.
+sidebar:
+  order: 4
+---
+
+[GraphQL schema reference](/builders/api-schema/) · [API guide](/builders/api-reference/) · [SDKs](/builders/sdks/)
+
+Playback signing keys, developer tokens, playback policy, and viewer endpoint resolution.
+
+Types used by more than one domain are on [Shared types](/builders/api-schema/shared/).
+
+## Queries
+
+### Query.developerTokensConnection
+
+List API tokens for programmatic access. Used to authenticate requests to the Developer API.
+
+```graphql
+developerTokensConnection(
+  page: ConnectionInput
+): DeveloperTokensConnection!
+```
+
+**Returns:** `DeveloperTokensConnection!` ([DeveloperTokensConnection](/builders/api-schema/access/#developertokensconnection))
+
+**Arguments**
+
+- `page`: `ConnectionInput` ([ConnectionInput](/builders/api-schema/shared/#connectioninput))
+
+**SDK**
+
+| Operation | TypeScript | Go | Python |
+| --- | --- | --- | --- |
+| ListDeveloperTokens | `ListDeveloperTokensDocument` | `ListDeveloperTokens` | `list_developer_tokens` |
+
+### Query.resolveViewerEndpoint
+
+Resolve a playback ID to viewer endpoints (HLS, DASH, etc.). Used by players to get the optimal CDN endpoint for playback.
+
+```graphql
+resolveViewerEndpoint(
+  contentId: String!
+  protocol: MediaViewerProtocol
+): ViewerEndpointResponse
+```
+
+**Returns:** `ViewerEndpointResponse` ([ViewerEndpointResponse](/builders/api-schema/access/#viewerendpointresponse))
+
+**Arguments**
+
+- `contentId`: `String!` — Playback ID for live streams or VOD uploads, or artifact playback ID for clips/DVR.
+- `protocol`: `MediaViewerProtocol` ([MediaViewerProtocol](/builders/api-schema/access/#mediaviewerprotocol)) — Optional playback constraint. A different format is never substituted. Omit to select a node with any playable Mist output and receive its full catalog.
+
+**SDK**
+
+| Operation | TypeScript | Go | Python |
+| --- | --- | --- | --- |
+| ResolveViewerEndpoint | `ResolveViewerEndpointDocument` | `ResolveViewerEndpoint` | `resolve_viewer_endpoint` |
+
+### Query.signingKey
+
+Get a single playback signing key by ID. Tenant-scoped.
+
+```graphql
+signingKey(
+  id: ID!
+): SigningKey
+```
+
+**Returns:** `SigningKey` ([SigningKey](/builders/api-schema/access/#signingkey))
+
+**Arguments**
+
+- `id`: `ID!`
+
+**SDK**
+
+| Operation | TypeScript | Go | Python |
+| --- | --- | --- | --- |
+| GetSigningKey | `GetSigningKeyDocument` | `GetSigningKey` | `get_signing_key` |
+
+### Query.signingKeysConnection
+
+List the tenant&#39;s playback signing keys with optional status filter.
+
+```graphql
+signingKeysConnection(
+  status: String
+  page: ConnectionInput
+): SigningKeysConnection!
+```
+
+**Returns:** `SigningKeysConnection!` ([SigningKeysConnection](/builders/api-schema/access/#signingkeysconnection))
+
+**Arguments**
+
+- `status`: `String` — Filter by status: &#39;active&#39; or &#39;revoked&#39;. Empty = all.
+- `page`: `ConnectionInput` ([ConnectionInput](/builders/api-schema/shared/#connectioninput))
+
+**SDK**
+
+| Operation | TypeScript | Go | Python |
+| --- | --- | --- | --- |
+| ListSigningKeys | `ListSigningKeysDocument` | `ListSigningKeys` | `list_signing_keys` |
+
+## Mutations
+
+### Mutation.createDeveloperToken
+
+Create a new API token for programmatic access.
+
+```graphql
+createDeveloperToken(
+  input: CreateDeveloperTokenInput!
+): CreateDeveloperTokenResult!
+```
+
+**Returns:** `CreateDeveloperTokenResult!` ([CreateDeveloperTokenResult](/builders/api-schema/access/#createdevelopertokenresult))
+
+**Arguments**
+
+- `input`: `CreateDeveloperTokenInput!` ([CreateDeveloperTokenInput](/builders/api-schema/access/#createdevelopertokeninput)) — Token configuration.
+
+**SDK**
+
+| Operation | TypeScript | Go | Python |
+| --- | --- | --- | --- |
+| CreateDeveloperToken | `CreateDeveloperTokenDocument` | `CreateDeveloperToken` | `create_developer_token` |
+
+### Mutation.createSigningKey
+
+Generate a new ES256 playback signing keypair. The private key is returned ONCE in the response and never stored or returned again — capture it. Up to 10 active keys per tenant; revoke before re-creating.
+
+```graphql
+createSigningKey(
+  input: CreateSigningKeyInput!
+): CreateSigningKeyResult!
+```
+
+**Returns:** `CreateSigningKeyResult!` ([CreateSigningKeyResult](/builders/api-schema/access/#createsigningkeyresult))
+
+**Arguments**
+
+- `input`: `CreateSigningKeyInput!` ([CreateSigningKeyInput](/builders/api-schema/access/#createsigningkeyinput))
+
+**SDK**
+
+| Operation | TypeScript | Go | Python |
+| --- | --- | --- | --- |
+| CreateSigningKey | `CreateSigningKeyDocument` | `CreateSigningKey` | `create_signing_key` |
+
+### Mutation.revokeDeveloperToken
+
+Revoke an API token.
+
+```graphql
+revokeDeveloperToken(
+  id: ID!
+): RevokeDeveloperTokenResult!
+```
+
+**Returns:** `RevokeDeveloperTokenResult!` ([RevokeDeveloperTokenResult](/builders/api-schema/access/#revokedevelopertokenresult))
+
+**Arguments**
+
+- `id`: `ID!` — The token ID to revoke.
+
+**SDK**
+
+| Operation | TypeScript | Go | Python |
+| --- | --- | --- | --- |
+| RevokeDeveloperToken | `RevokeDeveloperTokenDocument` | `RevokeDeveloperToken` | `revoke_developer_token` |
+
+### Mutation.revokeSigningKey
+
+Mark an active signing key as revoked. Triggers session re-evaluation across the tenant&#39;s protected playback objects: viewers with valid auth continue (possibly with a brief reconnect), revoked viewers are denied.
+
+```graphql
+revokeSigningKey(
+  id: ID!
+): RevokeSigningKeyResult!
+```
+
+**Returns:** `RevokeSigningKeyResult!` ([RevokeSigningKeyResult](/builders/api-schema/access/#revokesigningkeyresult))
+
+**Arguments**
+
+- `id`: `ID!`
+
+**SDK**
+
+| Operation | TypeScript | Go | Python |
+| --- | --- | --- | --- |
+| RevokeSigningKey | `RevokeSigningKeyDocument` | `RevokeSigningKey` | `revoke_signing_key` |
+
+### Mutation.setPlaybackPolicy
+
+Set or clear the playback access policy on a stream, VOD asset, or clip. Exactly one of streamId / vodAssetId / clipId must be set in the input. Webhook secrets are write-only on input and never returned in queries. Mutating a policy invalidates Foghorn caches and re-runs USER_NEW for affected sessions; valid viewers continue, invalid ones are denied.
+
+```graphql
+setPlaybackPolicy(
+  input: SetPlaybackPolicyInput!
+): SetPlaybackPolicyResult!
+```
+
+**Returns:** `SetPlaybackPolicyResult!` ([SetPlaybackPolicyResult](/builders/api-schema/access/#setplaybackpolicyresult))
+
+**Arguments**
+
+- `input`: `SetPlaybackPolicyInput!` ([SetPlaybackPolicyInput](/builders/api-schema/access/#setplaybackpolicyinput))
+
+**SDK**
+
+| Operation | TypeScript | Go | Python |
+| --- | --- | --- | --- |
+| SetPlaybackPolicy | `SetPlaybackPolicyDocument` | `SetPlaybackPolicy` | `set_playback_policy` |
+
+### Mutation.testPlaybackAccess
+
+Run the same evaluator the live USER_NEW path uses against a caller- supplied JWT (or webhook test request) without registering a viewer session. Mutation, not query, because webhook mode (fireWebhook=true) fires a real outbound HTTPS request to the customer URL. Tenant ownership of the playback target is validated server-side.
+
+```graphql
+testPlaybackAccess(
+  input: TestPlaybackAccessInput!
+): TestPlaybackAccessResult!
+```
+
+**Returns:** `TestPlaybackAccessResult!` ([TestPlaybackAccessResult](/builders/api-schema/access/#testplaybackaccessresult))
+
+**Arguments**
+
+- `input`: `TestPlaybackAccessInput!` ([TestPlaybackAccessInput](/builders/api-schema/access/#testplaybackaccessinput))
+
+**SDK**
+
+| Operation | TypeScript | Go | Python |
+| --- | --- | --- | --- |
+| TestPlaybackAccess | `TestPlaybackAccessDocument` | `TestPlaybackAccess` | `test_playback_access` |
+
+## Types
+
+### CreateDeveloperTokenInput
+
+**input_object**
+
+Input for creating a developer API token.
+
+- **name**: `String!` — Human-readable name for the token.
+- **permissions**: `String` — Comma-separated permission scopes (read:streams, write:streams, etc.).
+- **expiresIn**: `Int` — Days until expiration (null = non-expiring).
+
+### CreateDeveloperTokenResult
+
+**union**
+
+- Member: [DeveloperToken](/builders/api-schema/access/#developertoken)
+- Member: [ValidationError](/builders/api-schema/shared/#validationerror)
+- Member: [RateLimitError](/builders/api-schema/shared/#ratelimiterror)
+- Member: [AuthError](/builders/api-schema/shared/#autherror)
+
+### CreateSigningKeyInput
+
+**input_object**
+
+- **name**: `String!` — Display label for the key (e.g. &#39;staging&#39;, &#39;rotation-2026-q2&#39;).
+
+### CreateSigningKeyResult
+
+**union**
+
+- Member: [CreateSigningKeySuccess](/builders/api-schema/access/#createsigningkeysuccess)
+- Member: [ValidationError](/builders/api-schema/shared/#validationerror)
+- Member: [RateLimitError](/builders/api-schema/shared/#ratelimiterror)
+- Member: [AuthError](/builders/api-schema/shared/#autherror)
+
+### CreateSigningKeySuccess
+
+**object**
+
+Returned exactly once on createSigningKey. Capture privateKeyPem before the response is discarded — FrameWorks does not store it and cannot return it again. Lose the private key, revoke and create a new one.
+
+- **signingKey**: `SigningKey!` ([SigningKey](/builders/api-schema/access/#signingkey))
+- **privateKeyPem**: `String!` — ES256 private key in PEM format. Shown ONCE; never stored, never logged.
+
+### DeveloperToken
+
+**object**
+
+An API token for programmatic access to the GraphQL API. Tokens have scoped permissions and optional expiration.
+
+- **id**: `ID!` — Unique token identifier.
+- **tokenName**: `String!` — Human-readable name for the token.
+- **tokenValue**: `String` — The secret token value (only returned on creation, null thereafter).
+- **permissions**: `[String!]!` — List of granted permissions (read:streams, write:streams, etc.).
+- **status**: `String!` — Token status (active, revoked, expired).
+- **lastUsedAt**: `Time` ([Time](/builders/api-schema/shared/#time)) — When the token was last used for API access.
+- **expiresAt**: `Time` ([Time](/builders/api-schema/shared/#time)) — When the token expires (null for non-expiring).
+- **createdAt**: `Time` ([Time](/builders/api-schema/shared/#time)) — When the token was created.
+
+### DeveloperTokenEdge
+
+**object**
+
+- **cursor**: `String!`
+- **node**: `DeveloperToken!` ([DeveloperToken](/builders/api-schema/access/#developertoken))
+
+### DeveloperTokensConnection
+
+**object**
+
+- **edges**: `[DeveloperTokenEdge!]!` ([DeveloperTokenEdge](/builders/api-schema/access/#developertokenedge))
+- **nodes**: `[DeveloperToken!]!` ([DeveloperToken](/builders/api-schema/access/#developertoken))
+- **pageInfo**: `PageInfo!` ([PageInfo](/builders/api-schema/shared/#pageinfo))
+- **totalCount**: `Int!`
+
+### MediaViewerProtocol
+
+**enum**
+
+Playback format required when selecting and preparing a viewer destination.
+
+- `WEBRTC`
+- `WHEP`
+- `HLS`
+- `DASH`
+- `HLS_CMAF`
+- `MEWS`
+- `MEWS_WEBM`
+- `MP4`
+- `WEBM`
+- `MKV`
+- `TS`
+- `AAC`
+- `H264`
+- `H264_WS`
+- `RAW_WS`
+- `JSON_WS`
+- `FLV`
+- `HDS`
+- `SMOOTHSTREAMING`
+- `SDP`
+- `MIST_HTML`
+- `RTMP`
+- `RTSP`
+- `SRT`
+- `DTSC`
+
+### PlaybackAccessDecision
+
+**object**
+
+Structured result of a dry-run policy evaluation. Mirrors Foghorn&#39;s PlaybackDecision struct.
+
+- **allowed**: `Boolean!`
+- **policyType**: `String!` — Resolved policy type: &#39;public&#39; &#124; &#39;jwt&#39; &#124; &#39;webhook&#39; &#124; &#39;&#39; when no policy was found.
+- **reason**: `String` — Empty on allow; deny reason token (e.g. &#39;jwt-expired&#39;, &#39;webhook-deny-403&#39;) otherwise.
+- **detail**: `String` — Free-form context for the operator (verifier error string, HTTP status as text).
+- **kid**: `String` — JWT key ID claimed by the token (extracted before verification).
+- **claimsJson**: `String` — JSON-encoded JWT claims map. On allow, the verified claims. On deny, an unverified parse of the payload — useful for diagnosing aud / required- claim mismatches but never trustworthy as an auth signal.
+- **webhookStatus**: `Int` — HTTP status code from the customer webhook (0 if no call was made).
+- **webhookLatencyMs**: `Int` — End-to-end RTT for the webhook call in milliseconds (0 if no call was made).
+- **resolvedInternalName**: `String` — Internal MistServer name the evaluator resolved against. Always populated when a target was found.
+
+### PlaybackInstance
+
+**object**
+
+- **nodeId**: `String!`
+- **viewers**: `Int!`
+- **bufferState**: `String`
+- **bytesUp**: `Float`
+- **bytesDown**: `Float`
+- **totalConnections**: `Int`
+- **inputs**: `Int`
+- **lastUpdate**: `Time` ([Time](/builders/api-schema/shared/#time))
+
+### PlaybackJwtClaimRequirementInput
+
+**input_object**
+
+- **name**: `String!`
+- **jsonValue**: `String!` — JSON-encoded expected value (e.g. `&#34;pro&#34;`, `true`, `42`).
+
+### PlaybackJwtPolicyInput
+
+**input_object**
+
+- **allowedKids**: `[String!]` — Allowed signing key IDs. Empty = any active tenant key.
+- **requiredAudience**: `[String!]` — If set, the viewer JWT&#39;s `aud` claim must contain at least one of these.
+- **requiredClaimsJson**: `[PlaybackJwtClaimRequirementInput!]` ([PlaybackJwtClaimRequirementInput](/builders/api-schema/access/#playbackjwtclaimrequirementinput)) — Required claim constraints. Each entry&#39;s value is JSON-encoded for type flexibility.
+
+### PlaybackMetadata
+
+**object**
+
+- **status**: `String!`
+- **isLive**: `Boolean!`
+- **viewers**: `Int!`
+- **bufferState**: `String`
+- **tracks**: `[PlaybackTrack!]` ([PlaybackTrack](/builders/api-schema/access/#playbacktrack))
+- **protocolHints**: `[String!]`
+- **instances**: `[PlaybackInstance!]` ([PlaybackInstance](/builders/api-schema/access/#playbackinstance))
+- **dvrStatus**: `String`
+- **dvrSourceUri**: `String`
+- **contentId**: `String!`
+- **contentType**: `String!`
+- **title**: `String`
+- **description**: `String`
+- **durationSeconds**: `Int`
+- **recordingSizeBytes**: `Float`
+- **clipSource**: `String`
+- **createdAt**: `Time` ([Time](/builders/api-schema/shared/#time))
+- **thumbnailAssets**: `ThumbnailAssets` ([ThumbnailAssets](/builders/api-schema/shared/#thumbnailassets))
+- **telemetryToken**: `String` — Short-lived signed token binding the resolved serving endpoint. The player echoes it on its boot-telemetry beacon so Bridge can trust cluster attribution. Infrastructure attribution only — carries no viewer identity.
+
+### PlaybackPolicyInput
+
+**input_object**
+
+- **type**: `PlaybackPolicyType!` ([PlaybackPolicyType](/builders/api-schema/shared/#playbackpolicytype))
+- **jwt**: `PlaybackJwtPolicyInput` ([PlaybackJwtPolicyInput](/builders/api-schema/access/#playbackjwtpolicyinput)) — Required when type == JWT.
+- **webhook**: `PlaybackWebhookPolicyInput` ([PlaybackWebhookPolicyInput](/builders/api-schema/access/#playbackwebhookpolicyinput)) — Required when type == WEBHOOK.
+
+### PlaybackTrack
+
+**object**
+
+- **type**: `String!`
+- **codec**: `String!`
+- **bitrateKbps**: `Int!`
+- **width**: `Int!`
+- **height**: `Int!`
+- **channels**: `Int!`
+- **sampleRate**: `Int!`
+
+### PlaybackWebhookPolicyInput
+
+**input_object**
+
+- **url**: `String!` — https URL FrameWorks will POST to on each viewer connect.
+- **secret**: `String` — HMAC-SHA256 secret used to sign outbound webhook bodies. Write-only: persisted via field-level encryption and never returned in queries. Required when creating a webhook policy. Omit when updating an existing webhook policy to keep the currently configured secret.
+- **timeoutMs**: `Int` — Outbound POST timeout in milliseconds. Server caps at 10000; default 5000.
+
+### RevokeDeveloperTokenResult
+
+**union**
+
+- Member: [DeleteSuccess](/builders/api-schema/shared/#deletesuccess)
+- Member: [NotFoundError](/builders/api-schema/shared/#notfounderror)
+- Member: [AuthError](/builders/api-schema/shared/#autherror)
+
+### RevokeSigningKeyResult
+
+**union**
+
+- Member: [SigningKey](/builders/api-schema/access/#signingkey)
+- Member: [NotFoundError](/builders/api-schema/shared/#notfounderror)
+- Member: [AuthError](/builders/api-schema/shared/#autherror)
+
+### SetPlaybackPolicyInput
+
+**input_object**
+
+- **streamId**: `ID` — Exactly one of streamId, vodAssetId, or clipId must be provided.
+- **vodAssetId**: `ID`
+- **clipId**: `ID`
+- **policy**: `PlaybackPolicyInput!` ([PlaybackPolicyInput](/builders/api-schema/access/#playbackpolicyinput))
+
+### SetPlaybackPolicyResult
+
+**union**
+
+- Member: [Stream](/builders/api-schema/shared/#stream)
+- Member: [VodAsset](/builders/api-schema/shared/#vodasset)
+- Member: [Clip](/builders/api-schema/shared/#clip)
+- Member: [ValidationError](/builders/api-schema/shared/#validationerror)
+- Member: [NotFoundError](/builders/api-schema/shared/#notfounderror)
+- Member: [AuthError](/builders/api-schema/shared/#autherror)
+
+### SigningKey
+
+**object**
+
+A customer-managed signing key for issuing viewer playback JWTs. The private key is returned exactly once at creation time (in CreateSigningKeySuccess); FrameWorks stores only the public key. Up to 10 active keys per tenant.
+
+Implements [Node](/builders/api-schema/shared/#node).
+
+- **id**: `ID!`
+- **kid**: `String!` — Short ID embedded in JWT header (`kid`) for fast key lookup.
+- **name**: `String!` — Customer-supplied label.
+- **algorithm**: `SigningKeyAlgorithm!` ([SigningKeyAlgorithm](/builders/api-schema/access/#signingkeyalgorithm)) — Algorithm — ES256 only for v1.
+- **publicKeyPem**: `String!` — Public key in PEM format. The private key is never stored.
+- **status**: `SigningKeyStatus!` ([SigningKeyStatus](/builders/api-schema/access/#signingkeystatus)) — Lifecycle status.
+- **createdAt**: `Time!` ([Time](/builders/api-schema/shared/#time))
+- **lastUsedAt**: `Time` ([Time](/builders/api-schema/shared/#time)) — Last time a JWT signed by this key successfully verified at playback.
+- **revokedAt**: `Time` ([Time](/builders/api-schema/shared/#time)) — When the key was revoked (null if active).
+
+### SigningKeyAlgorithm
+
+**enum**
+
+Algorithm used to sign viewer playback JWTs. ES256 only for v1.
+
+- `ES256`
+
+### SigningKeyEdge
+
+**object**
+
+- **cursor**: `String!`
+- **node**: `SigningKey!` ([SigningKey](/builders/api-schema/access/#signingkey))
+
+### SigningKeyStatus
+
+**enum**
+
+Lifecycle status of a signing key.
+
+- `ACTIVE`
+- `REVOKED`
+
+### SigningKeysConnection
+
+**object**
+
+- **edges**: `[SigningKeyEdge!]!` ([SigningKeyEdge](/builders/api-schema/access/#signingkeyedge))
+- **nodes**: `[SigningKey!]!` ([SigningKey](/builders/api-schema/access/#signingkey))
+- **pageInfo**: `PageInfo!` ([PageInfo](/builders/api-schema/shared/#pageinfo))
+- **totalCount**: `Int!`
+
+### TestPlaybackAccessInput
+
+**input_object**
+
+Inputs for testPlaybackAccess. Exactly one of playbackId / internalName must be set (the server rejects both-set and neither-set). viewerToken is required for JWT policies and is forwarded to the webhook payload for webhook policies. fireWebhook gates a real outbound HTTPS call to the customer URL. That call uses the same SSRF-hardened evaluator path as live viewer admission, and customer endpoints may log, rate-limit, or trigger side effects from the test request. When playbackId is supplied, the server resolves the canonical internalName before invoking the evaluator so webhook payloads carry the same streamName the live USER_NEW path would.
+
+- **playbackId**: `String`
+- **internalName**: `String`
+- **viewerToken**: `String` — JWT to test (required for type=jwt; passed through in the webhook payload for type=webhook).
+- **viewerIp**: `String`
+- **requestUrl**: `String`
+- **connector**: `String`
+- **sessionId**: `String`
+- **fireWebhook**: `Boolean` — Webhook policies only: when true, Foghorn will POST to the configured customer URL with an HMAC-signed payload (same path the live evaluator uses). When false, the evaluator returns reason=&#34;webhook-test-skipped&#34; without making the call so operators can inspect the resolved policy without side effects.
+
+### TestPlaybackAccessResult
+
+**union**
+
+- Member: [PlaybackAccessDecision](/builders/api-schema/access/#playbackaccessdecision)
+- Member: [ValidationError](/builders/api-schema/shared/#validationerror)
+- Member: [NotFoundError](/builders/api-schema/shared/#notfounderror)
+- Member: [AuthError](/builders/api-schema/shared/#autherror)
+
+### ViewerEndpoint
+
+**object**
+
+- **nodeId**: `String!`
+- **baseUrl**: `String!`
+- **protocol**: `String!`
+- **url**: `String!`
+- **geoDistance**: `Float`
+- **loadScore**: `Float`
+- **outputs**: `JSON` ([JSON](/builders/api-schema/shared/#json))
+
+### ViewerEndpointResponse
+
+**object**
+
+- **primary**: `ViewerEndpoint` ([ViewerEndpoint](/builders/api-schema/access/#viewerendpoint))
+- **fallbacks**: `[ViewerEndpoint!]!` ([ViewerEndpoint](/builders/api-schema/access/#viewerendpoint))
+- **metadata**: `PlaybackMetadata` ([PlaybackMetadata](/builders/api-schema/access/#playbackmetadata))

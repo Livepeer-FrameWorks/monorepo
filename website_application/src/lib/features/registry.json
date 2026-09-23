@@ -3775,9 +3775,9 @@
           "area": "",
           "kind": "product",
           "audience": "product",
-          "description": "SDKs for TypeScript (Node 22+ and browsers), Go, and Python, generated from one curated operation set and released under one version. Each has typed operations for streams, stream keys, clips, DVR, VOD, uploads, playback access control, push targets, developer tokens, usage, and the tenantEvents subscription, plus retries, pagination, typed errors, a server version check, a multipart VOD upload helper, playback JWT signing, and Standard Webhooks verification with typed event parsing.",
+          "description": "SDKs for TypeScript (Node 22+ and browsers), Go, and Python, generated from the public GraphQL schema and released under one version. Each has a generated typed operation for every public root query, mutation, and subscription and every argument-taking field below Query, with a default selection; TypeScript adds typed custom selections over the whole public schema (the select entry), Go and Python take custom documents through the client. Around them are retries, pagination, typed errors, a server version check, a multipart VOD upload helper, playback JWT signing, and Standard Webhooks verification with typed event parsing.",
           "status": "partial",
-          "gap_reason": "TypeScript, Go, and Python SDKs ship; there are no SDKs for PHP, Ruby, Elixir, Java, or C#, which use the GraphQL API and the Standard Webhooks libraries directly.",
+          "gap_reason": "TypeScript, Go, and Python SDKs ship with generated coverage of the whole public schema; Go and Python have no typed builder for custom selections (custom documents only), and there are no SDKs for PHP, Ruby, Elixir, Java, or C#, which use the GraphQL API and the Standard Webhooks libraries directly.",
           "required_surfaces": {
             "docs": {
               "required": true

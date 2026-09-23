@@ -1,7 +1,7 @@
 # FrameWorks Go SDK
 
-Typed Go client for the FrameWorks GraphQL API: one generated function per
-public operation, plus retries, typed errors, a server version check,
+Typed Go client for the FrameWorks GraphQL API: a generated function for
+every public root field and argument-taking field, plus retries, typed errors, a server version check,
 pagination, subscriptions, VOD uploads, playback token signing, and webhook
 verification.
 
@@ -26,6 +26,50 @@ stream, err := frameworks.ExpectResult[*frameworks.CreateStreamCreateStream](res
 
 More examples are in `examples/`; the guide is at
 https://logbook.frameworks.network/builders/sdks.
+
+## Custom documents
+
+Every public root field and argument-taking field has a generated function
+with a default selection. For other selections, write your own operation
+documents against the public schema,
+[`pkg/graphql/public/schema.public.graphql`](https://github.com/Livepeer-FrameWorks/monorepo/blob/master/pkg/graphql/public/schema.public.graphql),
+and generate typed functions with [genqlient](https://github.com/Khan/genqlient)
+in your own module, binding the custom scalars as the SDK does:
+
+```yaml
+# genqlient.yaml
+schema: schema.public.graphql
+operations: [operations/*.graphql]
+generated: frameworksops/generated.go
+package: frameworksops
+bindings:
+  Time: { type: time.Time }
+  JSON: { type: encoding/json.RawMessage }
+  Currency: { type: string }
+  Money: { type: string }
+```
+
+`*frameworks.Client` implements genqlient's `graphql.Client`, so the generated
+functions take it directly and run through `MakeRequest`: the same
+authentication, retries, typed errors, and server version check as the SDK's
+own functions. A document can also be sent without code generation:
+
+```go
+var data struct {
+	Stream *struct {
+		Name string `json:"name"`
+	} `json:"stream"`
+}
+err := client.MakeRequest(ctx, &graphql.Request{
+	Query:     `query StreamName($id: ID!) { stream(id: $id) { name } }`,
+	OpName:    "StreamName",
+	Variables: map[string]any{"id": streamID},
+}, &graphql.Response{Data: &data})
+```
+
+`MakeRequest` runs queries and mutations; subscriptions use a
+`SubscriptionClient`. Give custom operations names of your own: the server
+version check looks up an SDK operation's release by its name.
 
 ## Versions
 

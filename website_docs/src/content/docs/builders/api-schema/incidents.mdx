@@ -1,0 +1,207 @@
+---
+title: Incidents
+description: Incidents in the generated public GraphQL reference.
+sidebar:
+  order: 10
+---
+
+[GraphQL schema reference](/builders/api-schema/) · [API guide](/builders/api-reference/) · [SDKs](/builders/sdks/)
+
+Incidents affecting the tenant, with acknowledgement, assignment, notes, and resolution.
+
+Types used by more than one domain are on [Shared types](/builders/api-schema/shared/).
+
+## Queries
+
+### Query.incident
+
+One incident with its alerts and timeline. Null when the incident does not exist or is not visible to the caller.
+
+```graphql
+incident(
+  id: ID!
+): IncidentDetail
+```
+
+**Returns:** `IncidentDetail` ([IncidentDetail](/builders/api-schema/incidents/#incidentdetail))
+
+**Arguments**
+
+- `id`: `ID!`
+
+**SDK**
+
+| Operation | TypeScript | Go | Python |
+| --- | --- | --- | --- |
+| GetIncident | `GetIncidentDocument` | `GetIncident` | `get_incident` |
+
+### Query.incidentsConnection
+
+Incidents raised by platform alerting on clusters the current tenant owns, newest first.
+
+```graphql
+incidentsConnection(
+  page: ConnectionInput
+  filter: IncidentFilterInput
+): IncidentsConnection!
+```
+
+**Returns:** `IncidentsConnection!` ([IncidentsConnection](/builders/api-schema/incidents/#incidentsconnection))
+
+**Arguments**
+
+- `page`: `ConnectionInput` ([ConnectionInput](/builders/api-schema/shared/#connectioninput)) — Pagination options.
+- `filter`: `IncidentFilterInput` ([IncidentFilterInput](/builders/api-schema/incidents/#incidentfilterinput)) — Optional status and cluster filters.
+
+**SDK**
+
+| Operation | TypeScript | Go | Python |
+| --- | --- | --- | --- |
+| GetIncidentsConnection | `GetIncidentsConnectionDocument` | `GetIncidentsConnection` | `get_incidents_connection` |
+
+## Mutations
+
+### Mutation.addIncidentNote
+
+Add a note to an incident&#39;s timeline.
+
+```graphql
+addIncidentNote(
+  id: ID!
+  body: String!
+): IncidentMutationResult!
+```
+
+**Returns:** `IncidentMutationResult!` ([IncidentMutationResult](/builders/api-schema/shared/#incidentmutationresult))
+
+**Arguments**
+
+- `id`: `ID!`
+- `body`: `String!`
+
+**SDK**
+
+| Operation | TypeScript | Go | Python |
+| --- | --- | --- | --- |
+| AddIncidentNote | `AddIncidentNoteDocument` | `AddIncidentNote` | `add_incident_note` |
+
+### Mutation.assignIncident
+
+Assign an incident to a user of the incident&#39;s tenant. A null assignee clears the assignment.
+
+```graphql
+assignIncident(
+  id: ID!
+  assigneeUserId: ID
+): IncidentMutationResult!
+```
+
+**Returns:** `IncidentMutationResult!` ([IncidentMutationResult](/builders/api-schema/shared/#incidentmutationresult))
+
+**Arguments**
+
+- `id`: `ID!`
+- `assigneeUserId`: `ID`
+
+**SDK**
+
+| Operation | TypeScript | Go | Python |
+| --- | --- | --- | --- |
+| AssignIncident | `AssignIncidentDocument` | `AssignIncident` | `assign_incident` |
+
+### Mutation.resolveIncident
+
+Resolve an incident manually. Repeats of the same firing alerts do not reopen it; a new alert opens a new incident.
+
+```graphql
+resolveIncident(
+  id: ID!
+): IncidentMutationResult!
+```
+
+**Returns:** `IncidentMutationResult!` ([IncidentMutationResult](/builders/api-schema/shared/#incidentmutationresult))
+
+**Arguments**
+
+- `id`: `ID!`
+
+**SDK**
+
+| Operation | TypeScript | Go | Python |
+| --- | --- | --- | --- |
+| ResolveIncident | `ResolveIncidentDocument` | `ResolveIncident` | `resolve_incident` |
+
+## Types
+
+### IncidentAlert
+
+**object**
+
+- **fingerprint**: `String!`
+- **status**: `String!` — firing or resolved.
+- **labels**: `JSON!` ([JSON](/builders/api-schema/shared/#json))
+- **annotations**: `JSON!` ([JSON](/builders/api-schema/shared/#json))
+- **startsAt**: `Time!` ([Time](/builders/api-schema/shared/#time))
+- **endsAt**: `Time` ([Time](/builders/api-schema/shared/#time))
+- **generatorUrl**: `String`
+
+### IncidentDetail
+
+**object**
+
+- **incident**: `Incident!` ([Incident](/builders/api-schema/shared/#incident))
+- **alerts**: `[IncidentAlert!]!` ([IncidentAlert](/builders/api-schema/incidents/#incidentalert))
+- **timeline**: `[IncidentTimelineEvent!]!` ([IncidentTimelineEvent](/builders/api-schema/incidents/#incidenttimelineevent)) — Oldest first.
+
+### IncidentEdge
+
+**object**
+
+- **cursor**: `String!`
+- **node**: `Incident!` ([Incident](/builders/api-schema/shared/#incident))
+
+### IncidentEventKind
+
+**enum**
+
+- `ALERT_FIRING`
+- `ALERT_RESOLVED`
+- `ACKNOWLEDGED`
+- `ASSIGNED`
+- `NOTE`
+- `RESOLVED`
+- `INVESTIGATION_ATTACHED`
+- `NOTIFIED`
+- `SCOPE_CHANGED` — The incident&#39;s visibility moved after its cluster owner was confirmed.
+
+### IncidentFilterInput
+
+**input_object**
+
+- **statuses**: `[IncidentStatus!]` ([IncidentStatus](/builders/api-schema/shared/#incidentstatus)) — Empty or omitted matches every status.
+- **clusterId**: `String`
+
+### IncidentTimelineEvent
+
+**object**
+
+- **id**: `ID!`
+- **kind**: `IncidentEventKind!` ([IncidentEventKind](/builders/api-schema/incidents/#incidenteventkind))
+- **actorUserId**: `ID` — Null for events produced by alerting or services.
+- **createdAt**: `Time!` ([Time](/builders/api-schema/shared/#time))
+- **note**: `String` — NOTE events.
+- **assignedTo**: `ID` — ASSIGNED events; null clears the assignment.
+- **reportId**: `ID` — INVESTIGATION_ATTACHED events: the Skipper report.
+- **channel**: `String` — NOTIFIED events: email, slack, or discord.
+- **resolution**: `IncidentResolution` ([IncidentResolution](/builders/api-schema/shared/#incidentresolution)) — RESOLVED events.
+- **alertFingerprint**: `String` — ALERT_FIRING and ALERT_RESOLVED events.
+- **alertname**: `String` — ALERT_FIRING and ALERT_RESOLVED events.
+
+### IncidentsConnection
+
+**object**
+
+- **edges**: `[IncidentEdge!]!` ([IncidentEdge](/builders/api-schema/incidents/#incidentedge))
+- **nodes**: `[Incident!]!` ([Incident](/builders/api-schema/shared/#incident))
+- **pageInfo**: `PageInfo!` ([PageInfo](/builders/api-schema/shared/#pageinfo))
+- **totalCount**: `Int!`

@@ -1,0 +1,572 @@
+---
+title: Billing and usage
+description: Billing and usage in the generated public GraphQL reference.
+sidebar:
+  order: 12
+---
+
+[GraphQL schema reference](/builders/api-schema/) · [API guide](/builders/api-reference/) · [SDKs](/builders/sdks/)
+
+Billing tiers, invoices, payments, top-ups, prepaid balance, and usage records.
+
+Types used by more than one domain are on [Shared types](/builders/api-schema/shared/).
+
+## Queries
+
+### Query.balanceTransactionsConnection
+
+List balance transactions for the tenant with pagination.
+
+```graphql
+balanceTransactionsConnection(
+  page: ConnectionInput
+  transactionType: String
+  timeRange: TimeRangeInput
+): BalanceTransactionsConnection!
+```
+
+**Returns:** `BalanceTransactionsConnection!` ([BalanceTransactionsConnection](/builders/api-schema/billing-types/#balancetransactionsconnection))
+
+**Arguments**
+
+- `page`: `ConnectionInput` ([ConnectionInput](/builders/api-schema/shared/#connectioninput)) — Pagination options.
+- `transactionType`: `String` — Filter by transaction type: topup, usage, refund, adjustment.
+- `timeRange`: `TimeRangeInput` ([TimeRangeInput](/builders/api-schema/shared/#timerangeinput)) — Time range to query.
+
+**SDK**
+
+| Operation | TypeScript | Go | Python |
+| --- | --- | --- | --- |
+| GetBalanceTransactionsConnection | `GetBalanceTransactionsConnectionDocument` | `GetBalanceTransactionsConnection` | `get_balance_transactions_connection` |
+
+### Query.billingDetails
+
+Get billing details for the current tenant. Email and address are required before funding or postpaid setup. A VAT/tax identifier is optional customer-supplied data and is not automatically verified.
+
+```graphql
+billingDetails: BillingDetails
+```
+
+**Returns:** `BillingDetails` ([BillingDetails](/builders/api-schema/billing-types/#billingdetails))
+
+**SDK**
+
+| Operation | TypeScript | Go | Python |
+| --- | --- | --- | --- |
+| GetBillingDetails | `GetBillingDetailsDocument` | `GetBillingDetails` | `get_billing_details` |
+
+### Query.billingStatus
+
+Get the current billing status including subscription tier and usage.
+
+```graphql
+billingStatus: BillingStatus
+```
+
+**Returns:** `BillingStatus` ([BillingStatus](/builders/api-schema/billing-types/#billingstatus))
+
+**SDK**
+
+| Operation | TypeScript | Go | Python |
+| --- | --- | --- | --- |
+| GetBillingStatus | `GetBillingStatusDocument` | `GetBillingStatus` | `get_billing_status` |
+
+### Query.billingTiers
+
+List available billing tiers and their pricing.
+
+```graphql
+billingTiers: [BillingTier!]
+```
+
+**Returns:** `[BillingTier!]` ([BillingTier](/builders/api-schema/billing-types/#billingtier))
+
+**SDK**
+
+| Operation | TypeScript | Go | Python |
+| --- | --- | --- | --- |
+| GetBillingTiers | `GetBillingTiersDocument` | `GetBillingTiers` | `get_billing_tiers` |
+
+### Query.invoice
+
+Fetch a single invoice by ID.
+
+```graphql
+invoice(
+  id: ID!
+): Invoice
+```
+
+**Returns:** `Invoice` ([Invoice](/builders/api-schema/billing-types/#invoice))
+
+**Arguments**
+
+- `id`: `ID!` — The invoice ID.
+
+**SDK**
+
+| Operation | TypeScript | Go | Python |
+| --- | --- | --- | --- |
+| GetInvoice | `GetInvoiceDocument` | `GetInvoice` | `get_invoice` |
+
+### Query.invoicesConnection
+
+List invoices for the current tenant.
+
+```graphql
+invoicesConnection(
+  page: ConnectionInput
+): InvoicesConnection!
+```
+
+**Returns:** `InvoicesConnection!` ([InvoicesConnection](/builders/api-schema/billing-types/#invoicesconnection))
+
+**Arguments**
+
+- `page`: `ConnectionInput` ([ConnectionInput](/builders/api-schema/shared/#connectioninput)) — Pagination options.
+
+**SDK**
+
+| Operation | TypeScript | Go | Python |
+| --- | --- | --- | --- |
+| GetInvoicesConnection | `GetInvoicesConnectionDocument` | `GetInvoicesConnection` | `get_invoices_connection` |
+
+### Query.mollieMandates
+
+List Mollie mandates for the current tenant.
+
+```graphql
+mollieMandates: [MollieMandate!]!
+```
+
+**Returns:** `[MollieMandate!]!` ([MollieMandate](/builders/api-schema/billing-types/#molliemandate))
+
+**SDK**
+
+| Operation | TypeScript | Go | Python |
+| --- | --- | --- | --- |
+| GetMollieMandates | `GetMollieMandatesDocument` | `GetMollieMandates` | `get_mollie_mandates` |
+
+### Query.payment
+
+Fetch one invoice payment owned by the current tenant.
+
+```graphql
+payment(
+  id: ID!
+): InvoicePayment
+```
+
+**Returns:** `InvoicePayment` ([InvoicePayment](/builders/api-schema/billing-types/#invoicepayment))
+
+**Arguments**
+
+- `id`: `ID!`
+
+**SDK**
+
+| Operation | TypeScript | Go | Python |
+| --- | --- | --- | --- |
+| GetPayment | `GetPaymentDocument` | `GetPayment` | `get_payment` |
+
+### Query.paymentsConnection
+
+List invoice payments owned by the current tenant.
+
+```graphql
+paymentsConnection(
+  page: ConnectionInput
+  invoiceId: ID
+  status: String
+  method: String
+): InvoicePaymentsConnection!
+```
+
+**Returns:** `InvoicePaymentsConnection!` ([InvoicePaymentsConnection](/builders/api-schema/billing-types/#invoicepaymentsconnection))
+
+**Arguments**
+
+- `page`: `ConnectionInput` ([ConnectionInput](/builders/api-schema/shared/#connectioninput))
+- `invoiceId`: `ID`
+- `status`: `String`
+- `method`: `String`
+
+**SDK**
+
+| Operation | TypeScript | Go | Python |
+| --- | --- | --- | --- |
+| GetPaymentsConnection | `GetPaymentsConnectionDocument` | `GetPaymentsConnection` | `get_payments_connection` |
+
+### Query.prepaidBalance
+
+Get the current prepaid balance for the tenant, held in EUR. Only available for tenants with billing_model = &#39;prepaid&#39;.
+
+```graphql
+prepaidBalance: PrepaidBalance
+```
+
+**Returns:** `PrepaidBalance` ([PrepaidBalance](/builders/api-schema/billing-types/#prepaidbalance))
+
+**SDK**
+
+| Operation | TypeScript | Go | Python |
+| --- | --- | --- | --- |
+| GetPrepaidBalance | `GetPrepaidBalanceDocument` | `GetPrepaidBalance` | `get_prepaid_balance` |
+
+### Query.tenantUsage
+
+Get aggregated usage metrics for the tenant.
+
+```graphql
+tenantUsage(
+  timeRange: TimeRangeInput
+): TenantUsage
+```
+
+**Returns:** `TenantUsage` ([TenantUsage](/builders/api-schema/billing-types/#tenantusage))
+
+**Arguments**
+
+- `timeRange`: `TimeRangeInput` ([TimeRangeInput](/builders/api-schema/shared/#timerangeinput)) — Time range to query.
+
+**SDK**
+
+| Operation | TypeScript | Go | Python |
+| --- | --- | --- | --- |
+| GetTenantUsage | `GetTenantUsageDocument` | `GetTenantUsage` | `get_tenant_usage` |
+
+### Query.usageAggregates
+
+Get aggregated usage data grouped by time interval.
+
+```graphql
+usageAggregates(
+  timeRange: TimeRangeInput!
+  granularity: String = "daily"
+  usageTypes: [String!]
+): [UsageAggregate!]!
+```
+
+**Returns:** `[UsageAggregate!]!` ([UsageAggregate](/builders/api-schema/billing-types/#usageaggregate))
+
+**Arguments**
+
+- `timeRange`: `TimeRangeInput!` ([TimeRangeInput](/builders/api-schema/shared/#timerangeinput)) — Time range to query (required).
+- `granularity`: `String` (default `&#34;daily&#34;`) — Aggregation granularity: hourly, daily, or monthly.
+- `usageTypes`: `[String!]` — Filter by usage types.
+
+**SDK**
+
+| Operation | TypeScript | Go | Python |
+| --- | --- | --- | --- |
+| GetUsageAggregates | `GetUsageAggregatesDocument` | `GetUsageAggregates` | `get_usage_aggregates` |
+
+### Query.usageRecordsConnection
+
+List detailed usage records with pagination.
+
+```graphql
+usageRecordsConnection(
+  page: ConnectionInput
+  timeRange: TimeRangeInput
+): UsageRecordsConnection!
+```
+
+**Returns:** `UsageRecordsConnection!` ([UsageRecordsConnection](/builders/api-schema/billing-types/#usagerecordsconnection))
+
+**Arguments**
+
+- `page`: `ConnectionInput` ([ConnectionInput](/builders/api-schema/shared/#connectioninput)) — Pagination options.
+- `timeRange`: `TimeRangeInput` ([TimeRangeInput](/builders/api-schema/shared/#timerangeinput)) — Time range to query.
+
+**SDK**
+
+| Operation | TypeScript | Go | Python |
+| --- | --- | --- | --- |
+| ListUsageRecords | `ListUsageRecordsDocument` | `ListUsageRecords` | `list_usage_records` |
+
+## Mutations
+
+### Mutation.changeBillingTier
+
+Change the postpaid billing tier. Upgrades apply immediately and reconcile cluster access; downgrades are scheduled for the current billing period end so the tenant keeps paid entitlements until the period closes.
+
+```graphql
+changeBillingTier(
+  tierId: ID!
+): ChangeBillingTierResult!
+```
+
+**Returns:** `ChangeBillingTierResult!` ([ChangeBillingTierResult](/builders/api-schema/billing-types/#changebillingtierresult))
+
+**Arguments**
+
+- `tierId`: `ID!` — The target billing tier. Must be an active postpaid tier (tier_level &gt;= 1).
+
+**SDK**
+
+| Operation | TypeScript | Go | Python |
+| --- | --- | --- | --- |
+| ChangeBillingTier | `ChangeBillingTierDocument` | `ChangeBillingTier` | `change_billing_tier` |
+
+### Mutation.createCardTopup
+
+Create a card checkout session for prepaid balance top-up. Returns a URL to redirect the user to Stripe/Mollie checkout. After successful payment, balance is credited automatically via webhook.
+
+```graphql
+createCardTopup(
+  input: CreateCardTopupInput!
+): CardTopupResult!
+```
+
+**Returns:** `CardTopupResult!` ([CardTopupResult](/builders/api-schema/billing-types/#cardtopupresult))
+
+**Arguments**
+
+- `input`: `CreateCardTopupInput!` ([CreateCardTopupInput](/builders/api-schema/billing-types/#createcardtopupinput))
+
+**SDK**
+
+| Operation | TypeScript | Go | Python |
+| --- | --- | --- | --- |
+| CreateCardTopup | `CreateCardTopupDocument` | `CreateCardTopup` | `create_card_topup` |
+
+### Mutation.createCryptoTopup
+
+Create a crypto deposit address for prepaid balance top-up. Returns an HD-derived address for the agent to send crypto. This is the agent-friendly payment method - no human-in-the-loop required.
+
+```graphql
+createCryptoTopup(
+  input: CreateCryptoTopupInput!
+): CryptoTopupResult!
+```
+
+**Returns:** `CryptoTopupResult!` ([CryptoTopupResult](/builders/api-schema/billing-types/#cryptotopupresult))
+
+**Arguments**
+
+- `input`: `CreateCryptoTopupInput!` ([CreateCryptoTopupInput](/builders/api-schema/billing-types/#createcryptotopupinput))
+
+**SDK**
+
+| Operation | TypeScript | Go | Python |
+| --- | --- | --- | --- |
+| CreateCryptoTopup | `CreateCryptoTopupDocument` | `CreateCryptoTopup` | `create_crypto_topup` |
+
+### Mutation.createMollieFirstPayment
+
+Create a Mollie first payment to establish a mandate. For iDEAL: User pays via bank → SEPA Direct Debit mandate is created. For card: User enters card → card mandate is created. After successful payment, call createMollieSubscription to start recurring billing.
+
+```graphql
+createMollieFirstPayment(
+  tierId: ID!
+  method: String!
+  redirectUrl: String!
+): MollieFirstPaymentResult!
+```
+
+**Returns:** `MollieFirstPaymentResult!` ([MollieFirstPaymentResult](/builders/api-schema/billing-types/#molliefirstpaymentresult))
+
+**Arguments**
+
+- `tierId`: `ID!` — The billing tier to subscribe to.
+- `method`: `String!` — Payment method: &#39;ideal&#39;, &#39;creditcard&#39;, &#39;bancontact&#39;.
+- `redirectUrl`: `String!` — URL to redirect to after payment.
+
+**SDK**
+
+| Operation | TypeScript | Go | Python |
+| --- | --- | --- | --- |
+| CreateMollieFirstPayment | `CreateMollieFirstPaymentDocument` | `CreateMollieFirstPayment` | `create_mollie_first_payment` |
+
+### Mutation.createMollieSubscription
+
+Create a Mollie subscription after mandate is valid. Call this after the first payment webhook confirms mandate creation.
+
+```graphql
+createMollieSubscription(
+  tierId: ID!
+  mandateId: String!
+  description: String
+): MollieSubscriptionResult!
+```
+
+**Returns:** `MollieSubscriptionResult!` ([MollieSubscriptionResult](/builders/api-schema/billing-types/#molliesubscriptionresult))
+
+**Arguments**
+
+- `tierId`: `ID!` — The billing tier to subscribe to.
+- `mandateId`: `String!` — The mandate ID from the first payment.
+- `description`: `String` — Optional description for the subscription.
+
+**SDK**
+
+| Operation | TypeScript | Go | Python |
+| --- | --- | --- | --- |
+| CreateMollieSubscription | `CreateMollieSubscriptionDocument` | `CreateMollieSubscription` | `create_mollie_subscription` |
+
+### Mutation.createPayment
+
+Create a payment for subscription or usage.
+
+```graphql
+createPayment(
+  input: CreatePaymentInput!
+): CreatePaymentResult!
+```
+
+**Returns:** `CreatePaymentResult!` ([CreatePaymentResult](/builders/api-schema/billing-types/#createpaymentresult))
+
+**Arguments**
+
+- `input`: `CreatePaymentInput!` ([CreatePaymentInput](/builders/api-schema/billing-types/#createpaymentinput)) — Payment details.
+
+**SDK**
+
+| Operation | TypeScript | Go | Python |
+| --- | --- | --- | --- |
+| CreatePayment | `CreatePaymentDocument` | `CreatePayment` | `create_payment` |
+
+### Mutation.createStripeBillingPortal
+
+Create a Stripe Billing Portal session. Returns a URL to redirect the user to manage their subscription.
+
+```graphql
+createStripeBillingPortal(
+  returnUrl: String!
+): StripeBillingPortalResult!
+```
+
+**Returns:** `StripeBillingPortalResult!` ([StripeBillingPortalResult](/builders/api-schema/billing-types/#stripebillingportalresult))
+
+**Arguments**
+
+- `returnUrl`: `String!` — URL to redirect to when user is done.
+
+**SDK**
+
+| Operation | TypeScript | Go | Python |
+| --- | --- | --- | --- |
+| CreateStripeBillingPortal | `CreateStripeBillingPortalDocument` | `CreateStripeBillingPortal` | `create_stripe_billing_portal` |
+
+### Mutation.createStripeCheckout
+
+Create a Stripe Checkout Session for subscription setup. Returns a URL to redirect the user to Stripe&#39;s hosted checkout page. After successful payment, user is redirected to successUrl.
+
+```graphql
+createStripeCheckout(
+  tierId: ID!
+  billingPeriod: String!
+  successUrl: String!
+  cancelUrl: String!
+): StripeCheckoutResult!
+```
+
+**Returns:** `StripeCheckoutResult!` ([StripeCheckoutResult](/builders/api-schema/billing-types/#stripecheckoutresult))
+
+**Arguments**
+
+- `tierId`: `ID!` — The billing tier to subscribe to.
+- `billingPeriod`: `String!` — Billing period: &#39;monthly&#39; or &#39;yearly&#39;.
+- `successUrl`: `String!` — URL to redirect to after successful checkout.
+- `cancelUrl`: `String!` — URL to redirect to if user cancels.
+
+**SDK**
+
+| Operation | TypeScript | Go | Python |
+| --- | --- | --- | --- |
+| CreateStripeCheckout | `CreateStripeCheckoutDocument` | `CreateStripeCheckout` | `create_stripe_checkout` |
+
+### Mutation.cryptoTopupStatus
+
+Check the status of a crypto top-up (for polling). Returns current status, confirmations, and credited amount when complete.
+
+```graphql
+cryptoTopupStatus(
+  topupId: ID!
+): CryptoTopupStatus!
+```
+
+**Returns:** `CryptoTopupStatus!` ([CryptoTopupStatus](/builders/api-schema/billing-types/#cryptotopupstatus))
+
+**Arguments**
+
+- `topupId`: `ID!`
+
+**SDK**
+
+| Operation | TypeScript | Go | Python |
+| --- | --- | --- | --- |
+| CryptoTopupStatusMutation | `CryptoTopupStatusMutationDocument` | `CryptoTopupStatusMutation` | `crypto_topup_status_mutation` |
+
+### Mutation.promoteToPaid
+
+Switch from prepaid to a selected postpaid tier. A verified email is always required. Free needs no billing profile or payment provider; paid tiers require confirmed provider collection. Existing prepaid balance is carried forward as account credit.
+
+```graphql
+promoteToPaid(
+  tierId: ID!
+): PromoteToPaidResult!
+```
+
+**Returns:** `PromoteToPaidResult!` ([PromoteToPaidResult](/builders/api-schema/billing-types/#promotetopaidresult))
+
+**Arguments**
+
+- `tierId`: `ID!` — The billing tier to subscribe to.
+
+**SDK**
+
+| Operation | TypeScript | Go | Python |
+| --- | --- | --- | --- |
+| PromoteToPaid | `PromoteToPaidDocument` | `PromoteToPaid` | `promote_to_paid` |
+
+### Mutation.submitX402Payment
+
+Submit an x402 payment payload to settle a 402 response or top up balance. Authenticated members may settle viewer resources; direct top-ups and non-viewer resources require billing management authority on the target tenant.
+
+```graphql
+submitX402Payment(
+  payment: String!
+  resource: String
+): SubmitX402PaymentResult!
+```
+
+**Returns:** `SubmitX402PaymentResult!` ([SubmitX402PaymentResult](/builders/api-schema/billing-types/#submitx402paymentresult))
+
+**Arguments**
+
+- `payment`: `String!` — Base64-encoded x402 payment payload.
+- `resource`: `String` — Optional resource being paid for. Viewer resources credit their resolved owner tenant; omission defaults to the authenticated tenant.
+
+**SDK**
+
+| Operation | TypeScript | Go | Python |
+| --- | --- | --- | --- |
+| SubmitX402Payment | `SubmitX402PaymentDocument` | `SubmitX402Payment` | `submit_x_402_payment` |
+
+### Mutation.updateBillingDetails
+
+Update billing details for the current tenant. Required before any payment for VAT invoicing.
+
+```graphql
+updateBillingDetails(
+  input: UpdateBillingDetailsInput!
+): BillingDetails!
+```
+
+**Returns:** `BillingDetails!` ([BillingDetails](/builders/api-schema/billing-types/#billingdetails))
+
+**Arguments**
+
+- `input`: `UpdateBillingDetailsInput!` ([UpdateBillingDetailsInput](/builders/api-schema/billing-types/#updatebillingdetailsinput))
+
+**SDK**
+
+| Operation | TypeScript | Go | Python |
+| --- | --- | --- | --- |
+| UpdateBillingDetails | `UpdateBillingDetailsDocument` | `UpdateBillingDetails` | `update_billing_details` |
+
+## Types
+
+- [Billing and usage types](/builders/api-schema/billing-types/): [BalanceTransaction](/builders/api-schema/billing-types/#balancetransaction), [BalanceTransactionEdge](/builders/api-schema/billing-types/#balancetransactionedge), [BalanceTransactionsConnection](/builders/api-schema/billing-types/#balancetransactionsconnection), [BillingAddress](/builders/api-schema/billing-types/#billingaddress), [BillingAddressInput](/builders/api-schema/billing-types/#billingaddressinput), [BillingDetails](/builders/api-schema/billing-types/#billingdetails), [BillingFeatures](/builders/api-schema/billing-types/#billingfeatures), [BillingStatus](/builders/api-schema/billing-types/#billingstatus), [BillingTier](/builders/api-schema/billing-types/#billingtier), [CardPaymentProvider](/builders/api-schema/billing-types/#cardpaymentprovider), [CardTopupResult](/builders/api-schema/billing-types/#cardtopupresult), [ChangeBillingTierPayload](/builders/api-schema/billing-types/#changebillingtierpayload), [ChangeBillingTierResult](/builders/api-schema/billing-types/#changebillingtierresult), [CostEntry](/builders/api-schema/billing-types/#costentry), [CountryMetrics](/builders/api-schema/billing-types/#countrymetrics), [CreateCardTopupInput](/builders/api-schema/billing-types/#createcardtopupinput), [CreateCryptoTopupInput](/builders/api-schema/billing-types/#createcryptotopupinput), [CreatePaymentInput](/builders/api-schema/billing-types/#createpaymentinput), [CreatePaymentResult](/builders/api-schema/billing-types/#createpaymentresult), [CryptoAsset](/builders/api-schema/billing-types/#cryptoasset), [CryptoTopupResult](/builders/api-schema/billing-types/#cryptotopupresult), [CryptoTopupStatus](/builders/api-schema/billing-types/#cryptotopupstatus), [Currency](/builders/api-schema/billing-types/#currency), [CurrencyConversion](/builders/api-schema/billing-types/#currencyconversion), [EntitlementEntry](/builders/api-schema/billing-types/#entitlemententry), [Invoice](/builders/api-schema/billing-types/#invoice), [InvoiceEdge](/builders/api-schema/billing-types/#invoiceedge), [InvoicePayment](/builders/api-schema/billing-types/#invoicepayment), [InvoicePaymentEdge](/builders/api-schema/billing-types/#invoicepaymentedge), [InvoicePaymentsConnection](/builders/api-schema/billing-types/#invoicepaymentsconnection), [InvoiceStatus](/builders/api-schema/billing-types/#invoicestatus), [InvoicesConnection](/builders/api-schema/billing-types/#invoicesconnection), [LineItem](/builders/api-schema/billing-types/#lineitem), [LiveUsageSummary](/builders/api-schema/billing-types/#liveusagesummary), [MollieFirstPayment](/builders/api-schema/billing-types/#molliefirstpayment), [MollieFirstPaymentResult](/builders/api-schema/billing-types/#molliefirstpaymentresult), [MollieMandate](/builders/api-schema/billing-types/#molliemandate), [MollieSubscription](/builders/api-schema/billing-types/#molliesubscription), [MollieSubscriptionResult](/builders/api-schema/billing-types/#molliesubscriptionresult), [Money](/builders/api-schema/billing-types/#money), [Payment](/builders/api-schema/billing-types/#payment), [PaymentMethod](/builders/api-schema/billing-types/#paymentmethod), [PaymentStatus](/builders/api-schema/billing-types/#paymentstatus), [PrepaidBalance](/builders/api-schema/billing-types/#prepaidbalance), [PricingRule](/builders/api-schema/billing-types/#pricingrule), [PromoteToPaidPayload](/builders/api-schema/billing-types/#promotetopaidpayload), [PromoteToPaidResult](/builders/api-schema/billing-types/#promotetopaidresult), [StripeBillingPortalResult](/builders/api-schema/billing-types/#stripebillingportalresult), [StripeBillingPortalSession](/builders/api-schema/billing-types/#stripebillingportalsession), [StripeCheckoutResult](/builders/api-schema/billing-types/#stripecheckoutresult), [StripeCheckoutSession](/builders/api-schema/billing-types/#stripecheckoutsession), [SubmitX402PaymentResult](/builders/api-schema/billing-types/#submitx402paymentresult), [TenantSubscription](/builders/api-schema/billing-types/#tenantsubscription), [TenantUsage](/builders/api-schema/billing-types/#tenantusage), [UpdateBillingDetailsInput](/builders/api-schema/billing-types/#updatebillingdetailsinput), [UsageAggregate](/builders/api-schema/billing-types/#usageaggregate), [UsageEntry](/builders/api-schema/billing-types/#usageentry), [UsageRecord](/builders/api-schema/billing-types/#usagerecord), [UsageRecordEdge](/builders/api-schema/billing-types/#usagerecordedge), [UsageRecordsConnection](/builders/api-schema/billing-types/#usagerecordsconnection), [X402PaymentResult](/builders/api-schema/billing-types/#x402paymentresult)

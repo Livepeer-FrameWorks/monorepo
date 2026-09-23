@@ -1,0 +1,204 @@
+---
+title: Support conversations
+description: Support conversations in the generated public GraphQL reference.
+sidebar:
+  order: 18
+---
+
+[GraphQL schema reference](/builders/api-schema/) · [API guide](/builders/api-reference/) · [SDKs](/builders/sdks/)
+
+Support conversations and their messages.
+
+Types used by more than one domain are on [Shared types](/builders/api-schema/shared/).
+
+## Queries
+
+### Query.conversation
+
+Fetch a single conversation by ID.
+
+```graphql
+conversation(
+  id: ID!
+): Conversation
+```
+
+**Returns:** `Conversation` ([Conversation](/builders/api-schema/shared/#conversation))
+
+**Arguments**
+
+- `id`: `ID!` — The conversation ID.
+
+**SDK**
+
+| Operation | TypeScript | Go | Python |
+| --- | --- | --- | --- |
+| GetConversation | `GetConversationDocument` | `GetConversation` | `get_conversation` |
+
+### Query.conversationsConnection
+
+List all support conversations for the current tenant. Conversations are ordered by last activity, most recent first.
+
+```graphql
+conversationsConnection(
+  page: ConnectionInput
+): ConversationsConnection!
+```
+
+**Returns:** `ConversationsConnection!` ([ConversationsConnection](/builders/api-schema/support/#conversationsconnection))
+
+**Arguments**
+
+- `page`: `ConnectionInput` ([ConnectionInput](/builders/api-schema/shared/#connectioninput)) — Pagination options.
+
+**SDK**
+
+| Operation | TypeScript | Go | Python |
+| --- | --- | --- | --- |
+| GetConversationsConnection | `GetConversationsConnectionDocument` | `GetConversationsConnection` | `get_conversations_connection` |
+
+### Query.messagesConnection
+
+List messages in a conversation. Messages are ordered chronologically, oldest first.
+
+```graphql
+messagesConnection(
+  conversationId: ID!
+  page: ConnectionInput
+): MessagesConnection!
+```
+
+**Returns:** `MessagesConnection!` ([MessagesConnection](/builders/api-schema/support/#messagesconnection))
+
+**Arguments**
+
+- `conversationId`: `ID!` — The conversation ID.
+- `page`: `ConnectionInput` ([ConnectionInput](/builders/api-schema/shared/#connectioninput)) — Pagination options.
+
+**SDK**
+
+| Operation | TypeScript | Go | Python |
+| --- | --- | --- | --- |
+| GetMessagesConnection | `GetMessagesConnectionDocument` | `GetMessagesConnection` | `get_messages_connection` |
+
+## Mutations
+
+### Mutation.createConversation
+
+Create a new support conversation. Optionally include an initial message.
+
+```graphql
+createConversation(
+  input: CreateConversationInput!
+): CreateConversationResult!
+```
+
+**Returns:** `CreateConversationResult!` ([CreateConversationResult](/builders/api-schema/support/#createconversationresult))
+
+**Arguments**
+
+- `input`: `CreateConversationInput!` ([CreateConversationInput](/builders/api-schema/support/#createconversationinput)) — Conversation configuration.
+
+**SDK**
+
+| Operation | TypeScript | Go | Python |
+| --- | --- | --- | --- |
+| CreateConversation | `CreateConversationDocument` | `CreateConversation` | `create_conversation` |
+
+### Mutation.sendMessage
+
+Send a message in an existing conversation. Messages are delivered to support agents in real-time.
+
+```graphql
+sendMessage(
+  input: SendMessageInput!
+): SendMessageResult!
+```
+
+**Returns:** `SendMessageResult!` ([SendMessageResult](/builders/api-schema/support/#sendmessageresult))
+
+**Arguments**
+
+- `input`: `SendMessageInput!` ([SendMessageInput](/builders/api-schema/support/#sendmessageinput)) — Message configuration.
+
+**SDK**
+
+| Operation | TypeScript | Go | Python |
+| --- | --- | --- | --- |
+| SendMessage | `SendMessageDocument` | `SendMessage` | `send_message` |
+
+## Types
+
+### ConversationEdge
+
+**object**
+
+A conversation edge in a connection.
+
+- **node**: `Conversation!` ([Conversation](/builders/api-schema/shared/#conversation)) — The conversation.
+- **cursor**: `String!` — Cursor for this edge.
+
+### ConversationsConnection
+
+**object**
+
+Paginated list of conversations.
+
+- **edges**: `[ConversationEdge!]!` ([ConversationEdge](/builders/api-schema/support/#conversationedge)) — List of conversations.
+- **pageInfo**: `PageInfo!` ([PageInfo](/builders/api-schema/shared/#pageinfo)) — Pagination information.
+- **totalCount**: `Int!` — Total count of conversations.
+
+### CreateConversationInput
+
+**input_object**
+
+Input for creating a new conversation.
+
+- **subject**: `String` — Optional subject line.
+- **message**: `String!` — Initial message content (required).
+- **pageUrl**: `String` — Optional page URL where conversation was initiated.
+
+### CreateConversationResult
+
+**union**
+
+- Member: [Conversation](/builders/api-schema/shared/#conversation)
+- Member: [ValidationError](/builders/api-schema/shared/#validationerror)
+- Member: [AuthError](/builders/api-schema/shared/#autherror)
+
+### MessageEdge
+
+**object**
+
+A message edge in a connection.
+
+- **node**: `Message!` ([Message](/builders/api-schema/shared/#message)) — The message.
+- **cursor**: `String!` — Cursor for this edge.
+
+### MessagesConnection
+
+**object**
+
+Paginated list of messages.
+
+- **edges**: `[MessageEdge!]!` ([MessageEdge](/builders/api-schema/support/#messageedge)) — List of messages.
+- **pageInfo**: `PageInfo!` ([PageInfo](/builders/api-schema/shared/#pageinfo)) — Pagination information.
+- **totalCount**: `Int!` — Total count of messages.
+
+### SendMessageInput
+
+**input_object**
+
+Input for sending a message.
+
+- **conversationId**: `ID!` — The conversation ID to send the message to.
+- **content**: `String!` — The message content.
+
+### SendMessageResult
+
+**union**
+
+- Member: [Message](/builders/api-schema/shared/#message)
+- Member: [ValidationError](/builders/api-schema/shared/#validationerror)
+- Member: [NotFoundError](/builders/api-schema/shared/#notfounderror)
+- Member: [AuthError](/builders/api-schema/shared/#autherror)

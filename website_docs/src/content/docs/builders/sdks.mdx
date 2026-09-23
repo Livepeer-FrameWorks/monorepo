@@ -9,6 +9,7 @@ import tsUpload from "../../../../../npm_api/examples/upload.ts?raw";
 import tsPlayback from "../../../../../npm_api/examples/playbackToken.ts?raw";
 import tsWebhooks from "../../../../../npm_api/examples/webhooks.ts?raw";
 import tsSubscription from "../../../../../npm_api/examples/subscription.ts?raw";
+import tsSelect from "../../../../../npm_api/examples/select.ts?raw";
 import goQuickstart from "../../../../../sdk_go/examples/quickstart/main.go?raw";
 import goUpload from "../../../../../sdk_go/examples/upload/main.go?raw";
 import goPlayback from "../../../../../sdk_go/examples/playbacktoken/main.go?raw";
@@ -20,15 +21,14 @@ import pyPlayback from "../../../../../sdk_python/examples/playback_token.py?raw
 import pyWebhooks from "../../../../../sdk_python/examples/webhook_receiver.py?raw";
 import pySubscription from "../../../../../sdk_python/examples/subscription.py?raw";
 
-FrameWorks publishes SDKs for TypeScript, Go, and Python. All three are generated from the same
-curated set of GraphQL operations, share one version, and pass the same conformance fixtures, so
-they behave the same way. Every example on this page is a file in the repository that CI compiles
-or type-checks (`tsc`, `go vet`, `mypy`).
+FrameWorks publishes SDKs for TypeScript, Go, and Python. All three are generated from the public
+GraphQL schema and the same operation documents, share one version, and pass the same conformance
+fixtures, so they behave the same way. Every example on this page is a file in the repository that
+CI compiles or type-checks (`tsc`, `go vet`, `mypy`).
 
-The typed operation set does not yet cover every tenant-facing GraphQL field. Use the
-[generated schema reference](/builders/api-schema/) to find the full public surface and see which
-fields have a typed SDK document. Every SDK can also send a custom GraphQL document through its
-raw client. `make sdk-audit` reports the coverage gap against the current schema.
+Every public root query, mutation, and subscription that is not deprecated, and every field that
+takes arguments below `Query`, has a generated typed method in each SDK. The
+[GraphQL schema reference](/builders/api-schema/) lists the method names under each root field.
 
 | Language   | Install                                                                      | Needs                 | Registry and source                                                                                                                           |
 | ---------- | ---------------------------------------------------------------------------- | --------------------- | --------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -39,13 +39,48 @@ raw client. `make sdk-audit` reports the coverage gap against the current schema
 Other languages use the [GraphQL API](/builders/api-reference) directly and a
 [Standard Webhooks](https://www.standardwebhooks.com/) library for [webhooks](/builders/webhooks).
 
-## What the SDKs cover
+## Generated operations
 
-The operations cover streams and stream keys, clips, DVR recordings and chapters, VOD assets and
-uploads, storage artifact listing, viewer and ingest endpoint resolution, usage, playback access
-control (signing keys, playback policies, access tests), multistream push targets, developer
-tokens, the server version, and the `tenantEvents` subscription. Each operation is a typed
-document (TypeScript), a typed function (Go), or a typed method on the client (Python).
+Each operation is a typed document in TypeScript (`GetStreamDocument`, passed to
+`client.request`), a function in Go (`frameworks.GetStream(ctx, client, id)`), and a method on the
+client in Python (`client.get_stream(id=...)`). The operations come from two sources:
+
+- **Default operations.** One per public root field and one per field that takes arguments on a
+  type reached from `Query` through single (non-list) objects. A nested operation selects the
+  path from the root down to its field and takes every argument on that path as a variable: the
+  `streamAnalyticsSummary(streamId:)` field under `analytics.usage.streaming` is
+  `GetStreamAnalyticsSummary(streamId, timeRange)`. Argument fields reached only through lists,
+  unions, or interfaces have no default operation.
+- **Hand-written operations.** 44 documents with a curated selection (for example `CreateStream`,
+  `ListStreams`, `ListPushTargets`). A hand-written operation replaces the default operation of
+  the field it selects.
+
+**Names.** A default query is `Get<Field>` and a default mutation or subscription is `<Field>`,
+in PascalCase; Python uses the snake_case form (`get_stream_analytics_summary`). A nested query
+is `Get` plus its field, or `Get` plus every field on its path when another query ends in a field
+of the same name (`GetAnalyticsInfraServiceInstancesHealth`). A name equal to a schema type gets
+the operation kind as suffix (`CryptoTopupStatusMutation`). Go subscriptions are
+`Subscribe<Operation>`.
+
+**Default selection.** A default operation selects the returned type's scalar and enum fields
+and its argument-free object, union, and interface fields to depth 2. Connections select
+`edges { cursor node }`, `pageInfo`, and `totalCount`. Unions and interfaces select `__typename`
+and each member's fields. Fields that take arguments are never part of a selection; they have
+operations of their own. For anything deeper, see [Custom selections](#custom-selections).
+
+Each domain page of the schema reference lists the operations of its root fields, with the
+TypeScript, Go, and Python names: [Streams](/builders/api-schema/streams/),
+[Media and storage](/builders/api-schema/media/),
+[Access and playback](/builders/api-schema/access/),
+[Live subscriptions](/builders/api-schema/live/), [Analytics](/builders/api-schema/analytics/),
+[Webhooks](/builders/api-schema/webhooks/), [Incidents](/builders/api-schema/incidents/),
+[Account and tenant](/builders/api-schema/account/),
+[Billing and usage](/builders/api-schema/billing/),
+[Clusters and infrastructure](/builders/api-schema/clusters/),
+[Platform](/builders/api-schema/platform/), [Skipper](/builders/api-schema/skipper/), and
+[Support conversations](/builders/api-schema/support/).
+
+## Runtime
 
 Around the operations, each SDK has the same small runtime:
 
@@ -151,6 +186,13 @@ connection before acknowledging it, the token is invalid or expired: the SDK rai
 `AuthenticationError` and does not reconnect. After any other drop it reconnects, reading the
 token again.
 
+Every public subscription is generated the same way, with the same connection handling: in
+TypeScript, pass its document (`LiveStreamEventsDocument`) to the subscription client's
+`subscribe`, which yields the document's result type; in Go, call `Subscribe<Operation>`
+(`SubscribeLiveStreamEvents`), which returns an `iter.Seq2` of the operation's response type; in
+Python, iterate the async client's method (`live_stream_events`). The sync Python client has no
+subscriptions, because ariadne-codegen generates them only for an async client.
+
 <Tabs syncKey="sdk-language">
   <TabItem label="TypeScript">
     <Code code={tsSubscription} lang="ts" title="subscription.ts" />
@@ -163,19 +205,49 @@ token again.
   </TabItem>
 </Tabs>
 
+## Custom selections
+
+Every generated operation has a default selection. For fields beyond it:
+
+- **TypeScript** has typed selections over the whole public schema in
+  `@livepeer-frameworks/api/select`, generated with [Genql](https://genql.dev). `createSelectClient`
+  wraps a client (and optionally a subscription client), so a selection runs with the same
+  authentication, retries, typed errors, and server check as a generated document. `__args` passes
+  arguments, `on_<Type>` selects a union member or interface implementation, and a selected field
+  the schema does not have throws before anything is sent. The entry holds the schema's type map
+  (about 20 kB gzipped); the main entry does not load it. `client.request` also accepts a document
+  string, with an untyped result.
+- **Go** takes your own genqlient documents written against
+  [`schema.public.graphql`](https://github.com/Livepeer-FrameWorks/monorepo/blob/master/pkg/graphql/public/schema.public.graphql):
+  `*frameworks.Client` implements genqlient's `graphql.Client`, and `MakeRequest` sends any query or
+  mutation through the SDK runtime.
+- **Python** has no typed builder. ariadne-codegen's custom operation builder covers only queries
+  and mutations and returns untyped dictionaries with undecoded scalars, so send your own document
+  through `execute` (or `execute_ws` on the async client for subscriptions).
+
+Give a custom operation a name of your own: the server check looks up an SDK operation's release by
+its name.
+
+<Code code={tsSelect} lang="ts" title="select.ts" />
+
 ## Versions
 
 The SDKs are 0.x until the platform reaches 1.0, and the three languages always share a version.
 Under 0.x each minor version is a line: 0.1, 0.2, and so on. A line names the oldest FrameWorks
 release it supports and supports every stable release from there on.
 
-| SDK line | Oldest supported FrameWorks release |
-| -------- | ----------------------------------- |
-| 0.2      | v0.3.11                             |
-| 0.1      | v0.3.11                             |
+| SDK line | Oldest supported FrameWorks release | Operations                                       |
+| -------- | ----------------------------------- | ------------------------------------------------ |
+| 0.3      | v0.3.11                             | every public root field and argument field (224) |
+| 0.2      | v0.3.11                             | the 44 hand-written operations                   |
+| 0.1      | v0.3.11                             | the 44 hand-written operations                   |
 
-Within a line, operations are only added; a breaking change starts a new minor line. Before the
-first operation, the client reads the server's `serverInfo`:
+Within a line, operations are only added; a breaking change starts a new minor line. The public
+schema follows the same rule from FrameWorks v0.3.11 on: a field, argument, enum value, or union
+member a client can use is deprecated before it is removed, and removed only after every supported
+line's oldest release has it deprecated. A field marked **Experimental** in the schema reference is
+exempt until the release its badge names. Before the first operation, the client reads the
+server's `serverInfo`:
 
 - A stable release older than the line's minimum raises `ServerTooOldError`.
 - An operation added after the server's release raises `UnsupportedOperationError` and is not
