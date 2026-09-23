@@ -5,13 +5,15 @@
 // entry sends operations through the SDK client, so Genql's own client,
 // fetcher, and batcher are left out. Genql writes extensionless relative
 // imports; the package is native ESM, so each gets its .js extension.
-// Trailing whitespace is stripped from every kept file.
+// Trailing whitespace is stripped from every kept file. selectionTypes.ts is
+// written alongside them (see selectionTypes below).
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { generate } from "@genql/cli";
+import { buildSchema, isAbstractType } from "graphql";
 
 const packageRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const schemaPath = resolve(packageRoot, "../pkg/graphql/public/schema.public.graphql");
@@ -52,10 +54,63 @@ function typedTypeMap(source) {
   );
 }
 
+// selectionTypes.ts holds what src/select-types.ts needs to type a result the
+// way the runtime builds its document, which Genql's schema.ts does not say:
+//
+//   scalarFields: the fields `__scalar: true` selects on each type. It applies
+//   linkTypeMap's rule to the same compressed type map (a field whose type is
+//   in `scalars`, with no argument whose type string ends in "!"), and a test
+//   compares it with linkTypeMap's output.
+//   PossibleTypes: the concrete types each union and interface resolves to,
+//   so an on_<Interface> branch applies to the members that implement it.
+function selectionTypes(compressed, schema) {
+  const scalarIndexes = new Set(compressed.scalars);
+  const scalarFields = {};
+  for (const [typeName, fields] of Object.entries(compressed.types)) {
+    if (!fields || Object.keys(fields).length === 0) {
+      continue;
+    }
+    scalarFields[typeName] = Object.entries(fields)
+      .filter(([, field]) => {
+        if (!field || !scalarIndexes.has(field[0])) {
+          return false;
+        }
+        return !Object.values(field[1] ?? {}).some((arg) => arg?.[1]?.endsWith("!"));
+      })
+      .map(([fieldName]) => fieldName);
+  }
+  const possibleTypes = Object.values(schema.getTypeMap())
+    .filter((type) => isAbstractType(type) && !type.name.startsWith("__"))
+    .sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0))
+    .map((type) => {
+      const members = schema
+        .getPossibleTypes(type)
+        .map((member) => `'${member.name}'`)
+        .sort();
+      return `    ${type.name}: ${members.join(" | ")}\n`;
+    });
+  return (
+    "/** The fields a `__scalar: true` selection returns on each type. */\n" +
+    `export const scalarFields = ${JSON.stringify(scalarFields, null, 4)} as const\n\n` +
+    "/** The concrete types each union and interface resolves to. */\n" +
+    `export interface PossibleTypes {\n${possibleTypes.join("")}}\n`
+  );
+}
+
 const workDir = mkdtempSync(join(tmpdir(), "frameworks-genql-"));
 try {
   await generate({ schema: schemaPath, output: workDir, scalarTypes });
   rmSync(outputDir, { recursive: true, force: true });
+  const rawTypeMap = readFileSync(join(workDir, "types.ts"), "utf8");
+  if (!rawTypeMap.startsWith("export default {")) {
+    throw new Error("select codegen: types.ts no longer starts with an exported object literal");
+  }
+  const compressed = JSON.parse(rawTypeMap.replace(/^export default /, ""));
+  mkdirSync(outputDir, { recursive: true });
+  writeFileSync(
+    join(outputDir, "selectionTypes.ts"),
+    header + selectionTypes(compressed, buildSchema(readFileSync(schemaPath, "utf8")))
+  );
   for (const file of keptFiles) {
     const source = readFileSync(join(workDir, file), "utf8");
     let output = source.replace(

@@ -8,7 +8,17 @@ import { WebSocketServer } from "ws";
 
 import { createClientWith } from "../src/client.js";
 import { AuthenticationError, NetworkError } from "../src/errors.js";
-import { buildOperation, createSelectClient } from "../src/select.js";
+import { linkTypeMap } from "../src/generated/select/runtime/linkTypeMap.js";
+import { scalarFields } from "../src/generated/select/selectionTypes.js";
+import types from "../src/generated/select/types.js";
+import {
+  buildOperation,
+  createSelectClient,
+  type FieldsSelection,
+  type Mutation,
+  type Query,
+  type StreamStatus,
+} from "../src/select.js";
 import { createSubscriptionClient } from "../src/subscriptions.js";
 import { type FixtureResponse, scriptedFetch } from "./fixtures.js";
 
@@ -93,10 +103,162 @@ describe("select: building operations", () => {
     );
   });
 
+  it("refuses __scalar at the Mutation and Subscription roots", () => {
+    // @ts-expect-error a mutation names each root field it runs
+    expect(() => buildOperation("mutation", { __scalar: true })).toThrow(
+      "Mutation: __scalar is not allowed at the Mutation root; select each mutation field by name"
+    );
+    expect(() =>
+      // @ts-expect-error a subscription names each root field it opens
+      buildOperation("subscription", { __scalar: true, liveSystemHealth: { __typename: true } })
+    ).toThrow("Subscription: __scalar is not allowed at the Subscription root");
+    // Below the root, __scalar selects fields of the payload, not operations.
+    const op = buildOperation("mutation", {
+      createStream: { __args: { input: { name: "Launch" } }, on_Stream: { __scalar: true } },
+    });
+    expect(op.query).toMatch(/fragment f\d+ on Stream\{id,streamId,name,/);
+  });
+
+  it("allows __scalar at the Query root and leaves out fields that need arguments", () => {
+    const op = buildOperation("query", { __scalar: true });
+    expect(op.query).toContain("{webhookEventTypes,skipperUnreadReportCount,__typename}");
+  });
+
+  it("selects __typename at every union and interface level", () => {
+    const op = buildOperation("query", {
+      node: { __args: { id: "n1" }, id: true, on_Stream: { name: true } },
+    });
+    expect(op.query).toMatch(/node\(id:\$v1\)\{id,\.\.\.f1,__typename\}/);
+    // The caller's selection is not modified.
+    const selection = {
+      deleteStream: { __args: { id: "s1" }, on_DeleteSuccess: { deletedId: true } },
+    };
+    buildOperation("mutation", selection);
+    expect(selection.deleteStream).not.toHaveProperty("__typename");
+  });
+
+  it("types __scalar as the fields linkTypeMap selects", () => {
+    const linked = linkTypeMap(types);
+    for (const [name, fields] of Object.entries(scalarFields)) {
+      expect([...fields], name).toEqual(linked[name]?.scalar);
+    }
+  });
+
   it("refuses an SDK operation name, whose release the version check would borrow", () => {
     expect(() => buildOperation("query", { __name: "GetStream", tenant: { id: true } })).toThrow(
       /SDK operation name/
     );
+  });
+});
+
+// Compile-time checks: type-check compiles this file, so a result type that
+// claims an unselected field fails the gate before the tests run.
+describe("select: result types follow the selection", () => {
+  it("projects each union member from its own branch", async () => {
+    const { select } = selectClient({
+      "*": [{ body: { data: { createStream: { __typename: "Stream", id: "s1" } } } }],
+    });
+    const data = await select.mutation({
+      createStream: {
+        __args: { input: { name: "Launch" } },
+        on_Stream: { id: true },
+        on_ValidationError: { message: true, field: true },
+      },
+    });
+    const result = data.createStream;
+    expectTypeOf(result).toEqualTypeOf<
+      | { __typename: "Stream"; id: string }
+      | { __typename: "ValidationError"; message: string; field: string | null }
+      | { __typename: "AuthError" }
+    >();
+    if (result.__typename !== "Stream") {
+      expect.unreachable(`unexpected ${result.__typename}`);
+      return;
+    }
+    // @ts-expect-error name was not selected on Stream
+    void result.name;
+    expect(result.id).toBe("s1");
+  });
+
+  it("applies an interface branch to the members that implement it", () => {
+    type Created = FieldsSelection<
+      Mutation,
+      {
+        createStream: {
+          __args: { input: { name: string } };
+          on_Stream: { name: true };
+          on_Error: { message: true };
+          on_ValidationError: { field: true };
+        };
+      }
+    >["createStream"];
+    expectTypeOf<Created>().toEqualTypeOf<
+      | { __typename: "Stream"; name: string }
+      | { __typename: "ValidationError"; message: string; field: string | null }
+      | { __typename: "AuthError"; message: string }
+    >();
+  });
+
+  it("types an interface field's own fields on every member", () => {
+    type Found = NonNullable<
+      FieldsSelection<
+        Query,
+        { node: { __args: { id: string }; id: true; on_Stream: { name: true } } }
+      >["node"]
+    >;
+    expectTypeOf<Extract<Found, { __typename: "Stream" }>>().toEqualTypeOf<{
+      __typename: "Stream";
+      id: string;
+      name: string;
+    }>();
+    expectTypeOf<Extract<Found, { __typename: "Clip" }>>().toEqualTypeOf<{
+      __typename: "Clip";
+      id: string;
+    }>();
+    // An interface's __scalar is the interface's scalar fields, not a member's.
+    type Scalars = NonNullable<
+      FieldsSelection<Query, { node: { __args: { id: string }; __scalar: true } }>["node"]
+    >;
+    expectTypeOf<Extract<Scalars, { __typename: "Clip" }>>().toEqualTypeOf<{
+      __typename: "Clip";
+      id: string;
+    }>();
+  });
+
+  it("types __scalar as the scalar fields that need no argument", () => {
+    type Roots = FieldsSelection<Mutation, { __scalar: true }>;
+    expectTypeOf<keyof Roots>().toEqualTypeOf<"markSkipperReportsRead" | "__typename">();
+    // @ts-expect-error deleteSkipperConversation needs an id, so __scalar leaves it out
+    expectTypeOf<Roots["deleteSkipperConversation"]>().toBeBoolean();
+    expectTypeOf<FieldsSelection<Query, { __scalar: true }>>().toEqualTypeOf<{
+      webhookEventTypes: string[];
+      skipperUnreadReportCount: number;
+      __typename: "Query";
+    }>();
+    // A field set to false is left out of __scalar and of the result.
+    expectTypeOf<
+      FieldsSelection<Query, { __scalar: true; webhookEventTypes: false }>
+    >().toEqualTypeOf<{ skipperUnreadReportCount: number; __typename: "Query" }>();
+  });
+
+  it("rejects __scalar at a mutation root at compile time", async () => {
+    const { select, requests } = selectClient({});
+    // @ts-expect-error a mutation names each root field it runs
+    await expect(select.mutation({ __scalar: true })).rejects.toThrow(/__scalar is not allowed/);
+    expect(requests).toHaveLength(0);
+  });
+
+  it("types nested object selections field by field", () => {
+    type Found = FieldsSelection<
+      Query,
+      { stream: { __args: { id: string }; name: true; metrics: { status: true; nodeId: true } } }
+    >;
+    expectTypeOf<Found>().toEqualTypeOf<{
+      stream: {
+        name: string;
+        metrics: { status: StreamStatus; nodeId: string | null } | null;
+      } | null;
+    }>();
   });
 });
 

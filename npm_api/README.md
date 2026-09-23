@@ -66,9 +66,11 @@ const { createStream } = await select.mutation({
 ```
 
 `__args` passes arguments, `on_<Type>` selects a union member or interface implementation, and `__scalar: true`
-selects every scalar field of a level. A selected field the schema does not have throws `TypeError` before anything is
-sent. A union result is typed as the union of its members; select `__typename` to narrow it. `__name` names the
-operation, and may not reuse an SDK operation name. The entry carries the schema's type map (about 20 kB gzipped), which
+selects every scalar field of a level that needs no argument. `__scalar` is refused at the mutation and subscription
+roots: name each root field the operation runs. A selected field the schema does not have throws `TypeError` before
+anything is sent. Results are typed from the selection: a union or interface result is the union of its members, each
+with `__typename` (always selected there, so the result can be narrowed) and only the fields its branches select.
+`__name` names the operation, and may not reuse an SDK operation name. The entry carries the schema's type map (about 20 kB gzipped), which
 the main entry does not include.
 
 ## Versions
