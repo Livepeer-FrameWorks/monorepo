@@ -1,5 +1,12 @@
 # @livepeer-frameworks/player-core
 
+## 0.6.2
+
+### Patch Changes
+
+- Updated dependencies
+  - @livepeer-frameworks/api@0.3.0
+
 ## 0.6.1
 
 ### Patch Changes

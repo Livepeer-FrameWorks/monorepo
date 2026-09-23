@@ -1,5 +1,11 @@
 # @livepeer-frameworks/player-svelte
 
+## 0.6.2
+
+### Patch Changes
+
+- @livepeer-frameworks/player-core@0.6.2
+
 ## 0.6.1
 
 ### Patch Changes

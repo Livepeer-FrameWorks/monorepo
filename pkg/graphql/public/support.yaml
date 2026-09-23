@@ -7,8 +7,14 @@
 # make verify-api-compat validates them against every such release.
 #
 # docs/standards/graphql-deprecation.md is the policy these lines enforce.
-current: "0.2"
+current: "0.3"
 lines:
+  # 0.3 is the first line generated from the whole public schema (a default
+  # operation per public root and argument field); the schema compatibility
+  # gate enforces from its min_server on.
+  - line: "0.3"
+    status: live
+    min_server: v0.3.11
   - line: "0.2"
     status: live
     # v0.3.11 is the first release that serves serverInfo.
