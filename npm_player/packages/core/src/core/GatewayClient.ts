@@ -12,9 +12,9 @@ import {
   ServerTooOldError,
 } from "@livepeer-frameworks/api";
 import {
-  checkGateway,
+  checkGatewayFor,
   isSchemaMismatchCode,
-  recheckGateway,
+  recheckGatewayFor,
 } from "@livepeer-frameworks/api/gateway-probe";
 import { TypedEventEmitter } from "./EventEmitter";
 import type { ContentEndpoints, ContentType, PlaybackAuth, EndpointInfo } from "../types";
@@ -69,6 +69,9 @@ export interface GatewayClientEvents {
 const DEFAULT_MAX_RETRIES = 3;
 const DEFAULT_INITIAL_DELAY_MS = 500;
 export const DEFAULT_GATEWAY_URL = "https://bridge.frameworks.network/graphql";
+// The operations the player sends to a gateway; a gateway is supported when
+// it serves all of them, whatever the SDK line's minimum server.
+const GATEWAY_OPERATIONS = ["ServerInfo", "ResolveViewerEndpoint"] as const;
 // F2: Cache TTL for resolved endpoints
 const DEFAULT_CACHE_TTL_MS = 10000;
 // F3: Circuit breaker constants
@@ -469,10 +472,11 @@ export class GatewayClient extends TypedEventEmitter<GatewayClientEvents> {
       const graphqlEndpoint = gatewayUrl.replace(/\/$/, "");
 
       // One cached serverInfo probe per gateway both refuses a gateway older
-      // than this player and says whether it ships viewer-protocol-selection.
+      // than the operations this player sends and says whether it ships
+      // viewer-protocol-selection.
       // Without a required format the resolve runs alongside the probe and
       // its answer is held until the probe settles.
-      const gateway = checkGateway(graphqlEndpoint);
+      const gateway = checkGatewayFor(graphqlEndpoint, GATEWAY_OPERATIONS);
       gateway.catch(() => undefined);
       let sendProtocol = false;
       if (protocol !== undefined) {
@@ -546,7 +550,7 @@ export class GatewayClient extends TypedEventEmitter<GatewayClientEvents> {
       // error does.
       if (e instanceof GatewaySchemaMismatch) {
         try {
-          await recheckGateway(gatewayUrl.replace(/\/$/, ""));
+          await recheckGatewayFor(gatewayUrl.replace(/\/$/, ""), GATEWAY_OPERATIONS);
         } catch (verdict) {
           e = verdict;
         }

@@ -141,9 +141,9 @@ type ServerTooOldError struct {
 func (*ServerTooOldError) Kind() string { return "ServerTooOldError" }
 
 func newServerTooOldError(version *string, minimum string) *ServerTooOldError {
-	msg := fmt.Sprintf("FrameWorks server predates serverInfo; this SDK needs %s or later", minimum)
+	msg := fmt.Sprintf("FrameWorks server predates serverInfo; this client needs %s or later", minimum)
 	if version != nil {
-		msg = fmt.Sprintf("FrameWorks server %s is older than %s, the oldest release this SDK supports", *version, minimum)
+		msg = fmt.Sprintf("FrameWorks server %s is older than %s, the oldest release this client can use", *version, minimum)
 	}
 	return &ServerTooOldError{ErrorInfo: ErrorInfo{Message: msg}, ServerVersion: version, MinimumVersion: minimum}
 }

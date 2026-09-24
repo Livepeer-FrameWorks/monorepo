@@ -3,10 +3,12 @@
 exports[`public API > gateway-probe entry exports 1`] = `
 [
   "checkGateway",
+  "checkGatewayFor",
   "clearServerInfoProbes",
   "isSchemaMismatchCode",
   "probeServerInfo",
   "recheckGateway",
+  "recheckGatewayFor",
   "requireSupportedGateway",
 ]
 `;

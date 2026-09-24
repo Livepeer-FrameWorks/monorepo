@@ -7,11 +7,13 @@
 
 import { PaymentRequiredError, ServerTooOldError } from "./errors.js";
 import { ServerInfoDocument, type ServerInfoQuery } from "./generated/graphql.js";
-import { minServerVersion } from "./generated/manifest.js";
+import { minServerVersion, type OperationName, operations } from "./generated/manifest.js";
 import {
   checkMinimum,
+  compareVersions,
   createProbeCache,
   gateOnProbe,
+  parseStableVersion,
   reprobeAndCheck,
   type ServerStatus,
   serverStatus,
@@ -143,6 +145,73 @@ export async function recheckGateway(gatewayUrl: string): Promise<void> {
   const key = normalizeGatewayUrl(gatewayUrl);
   gatewayProbes.forget(key);
   await reprobeAndCheck(gatewayProbes, key, run(key), requireSupportedGateway);
+}
+
+/**
+ * The oldest release that serves every named operation: the newest `since`
+ * among them. Throws TypeError for an empty list or a name this SDK does not
+ * ship, since either is a bug in the caller.
+ */
+function requiredVersion(names: readonly OperationName[]): string {
+  if (names.length === 0) {
+    throw new TypeError("gateway operation gate: name at least one operation");
+  }
+  let required: string | null = null;
+  for (const name of names) {
+    const info = Object.prototype.hasOwnProperty.call(operations, name)
+      ? (operations as Record<string, { since: string }>)[name]
+      : undefined;
+    const since = info ? parseStableVersion(info.since) : null;
+    if (!info || !since) {
+      throw new TypeError(
+        `gateway operation gate: ${String(name)} is not an operation this SDK ships`
+      );
+    }
+    const current = required === null ? null : parseStableVersion(required);
+    if (current === null || compareVersions(since, current) > 0) {
+      required = info.since;
+    }
+  }
+  return required as string;
+}
+
+/**
+ * Like checkGateway, but the gateway only has to serve the named operations:
+ * a stable release below the newest `since` among them, or a gateway without
+ * serverInfo, rejects with ServerTooOldError naming that release. The
+ * player and StreamCrafter send only a few operations, so a newer SDK line
+ * minimum does not refuse a gateway that still serves them. Throws
+ * TypeError at once for an unknown operation name.
+ */
+export function checkGatewayFor(
+  gatewayUrl: string,
+  operationNames: readonly OperationName[]
+): Promise<ServerStatus | null> {
+  const required = requiredVersion(operationNames);
+  const key = normalizeGatewayUrl(gatewayUrl);
+  return gateOnProbe(
+    gatewayProbes,
+    key,
+    run(key),
+    (status) => checkMinimum(status, required),
+    (err) => err instanceof ServerTooOldError
+  );
+}
+
+/**
+ * Like recheckGateway, with the version requirement of checkGatewayFor.
+ * Throws TypeError at once for an unknown operation name.
+ */
+export function recheckGatewayFor(
+  gatewayUrl: string,
+  operationNames: readonly OperationName[]
+): Promise<void> {
+  const required = requiredVersion(operationNames);
+  const key = normalizeGatewayUrl(gatewayUrl);
+  gatewayProbes.forget(key);
+  return reprobeAndCheck(gatewayProbes, key, run(key), (status) =>
+    checkMinimum(status, required)
+  ).then(() => undefined);
 }
 
 /** True for the GraphQL error codes of a gateway rejecting an operation against its schema. */

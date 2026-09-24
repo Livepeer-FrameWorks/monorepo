@@ -3,7 +3,7 @@ import { ServerTooOldError } from "@livepeer-frameworks/api";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { IngestClient } from "../src/core/IngestClient";
-import { checkGateway, clearServerInfoProbes } from "@livepeer-frameworks/api/gateway-probe";
+import { checkGatewayFor, clearServerInfoProbes } from "@livepeer-frameworks/api/gateway-probe";
 
 const GATEWAY_URL = "https://gate.example/graphql";
 
@@ -202,8 +202,9 @@ interface ServerInfoFixture {
 // The SDK's serverInfo gate cases (sdk_conformance/server_info.json) that
 // concern the server itself: StreamCrafter applies the same rules to its
 // gateway. Cases about per-operation `since`, a custom minimum, and the SDK
-// client's operation path do not apply; StreamCrafter has one minimum and
-// resolves one operation. Each call is one checkGateway.
+// client's operation path do not apply; StreamCrafter's minimum is the newest
+// `since` of the operations it sends, which equals the fixture's default
+// minimum. Each call is one checkGatewayFor with those operations.
 const fixture = JSON.parse(
   readFileSync(new URL("../../../../sdk_conformance/server_info.json", import.meta.url), "utf8")
 ) as ServerInfoFixture;
@@ -238,7 +239,10 @@ describe("gateway version gate (sdk_conformance/server_info.json)", () => {
         }
         i++;
         const want = tc.expect.calls[i];
-        const outcome = await checkGateway(GATEWAY_URL).then(
+        const outcome = await checkGatewayFor(GATEWAY_URL, [
+          "ServerInfo",
+          "ResolveIngestEndpoint",
+        ]).then(
           (status) => ({ status }),
           (error: unknown) => ({ error })
         );

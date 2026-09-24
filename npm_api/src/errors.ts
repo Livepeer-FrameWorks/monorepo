@@ -173,8 +173,8 @@ export class ServerTooOldError extends FrameWorksError {
   constructor(serverVersion: string | null, minimumVersion: string) {
     super(
       serverVersion
-        ? `FrameWorks server ${serverVersion} is older than ${minimumVersion}, the oldest release this SDK supports`
-        : `FrameWorks server predates serverInfo; this SDK needs ${minimumVersion} or later`
+        ? `FrameWorks server ${serverVersion} is older than ${minimumVersion}, the oldest release this client can use`
+        : `FrameWorks server predates serverInfo; this client needs ${minimumVersion} or later`
     );
     this.name = "ServerTooOldError";
     this.serverVersion = serverVersion;

@@ -118,10 +118,10 @@ class ServerTooOldError(FrameWorksError):
         if server_version:
             message = (
                 f"FrameWorks server {server_version} is older than {minimum_version}, "
-                "the oldest release this SDK supports"
+                "the oldest release this client can use"
             )
         else:
-            message = f"FrameWorks server predates serverInfo; this SDK needs {minimum_version} or later"
+            message = f"FrameWorks server predates serverInfo; this client needs {minimum_version} or later"
         super().__init__(message)
         self.server_version = server_version
         self.minimum_version = minimum_version

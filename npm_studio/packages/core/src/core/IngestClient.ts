@@ -10,9 +10,9 @@ import {
   ServerTooOldError,
 } from "@livepeer-frameworks/api";
 import {
-  checkGateway,
+  checkGatewayFor,
   isSchemaMismatchCode,
-  recheckGateway,
+  recheckGatewayFor,
 } from "@livepeer-frameworks/api/gateway-probe";
 import { TypedEventEmitter } from "./EventEmitter";
 import type {
@@ -21,6 +21,10 @@ import type {
   IngestEndpoint,
   IngestEndpoints,
 } from "../types";
+
+// The operations StreamCrafter sends to a gateway; a gateway is supported
+// when it serves all of them, whatever the SDK line's minimum server.
+const INGEST_GATEWAY_OPERATIONS = ["ServerInfo", "ResolveIngestEndpoint"] as const;
 
 type ResolvedIngest = NonNullable<ResolveIngestEndpointQuery["resolveIngestEndpoint"]>;
 type ResolvedIngestEndpoint = ResolvedIngest["primary"];
@@ -75,9 +79,9 @@ export class IngestClient extends TypedEventEmitter<IngestClientEvents> {
         ? Math.min(8, Math.max(0, Math.floor(maxRetries)))
         : 3;
     // The cached serverInfo probe runs alongside the resolve and refuses a
-    // gateway older than this package; a resolved destination is held until
-    // it settles, within the same deadline.
-    const gateway = checkGateway(gatewayUrl);
+    // gateway older than the operations this package sends; a resolved
+    // destination is held until it settles, within the same deadline.
+    const gateway = checkGatewayFor(gatewayUrl, INGEST_GATEWAY_OPERATIONS);
     gateway.catch(() => undefined);
     const variables: ResolveIngestEndpointQueryVariables = { streamKey, protocol: "WHIP" };
     try {
@@ -116,7 +120,10 @@ export class IngestClient extends TypedEventEmitter<IngestClientEvents> {
           // once, and a fresh answer that refuses it rejects the resolve with
           // ServerTooOldError.
           if (isSchemaMismatchCode(payload?.errors?.[0]?.extensions?.code)) {
-            await abortable(recheckGateway(gatewayUrl), request.signal);
+            await abortable(
+              recheckGatewayFor(gatewayUrl, INGEST_GATEWAY_OPERATIONS),
+              request.signal
+            );
           }
           if (!response.ok) throw new Error("Ingest gateway unavailable");
           const data = payload?.data?.resolveIngestEndpoint;
