@@ -4522,7 +4522,7 @@ func (s *CommodoreServer) Login(ctx context.Context, req *commodorepb.LoginReque
 		if err != nil {
 			s.logger.WithError(err).Warn("Turnstile verification request failed")
 			if !s.turnstileFailOpen {
-				return nil, status.Error(codes.PermissionDenied, "bot verification failed")
+				return nil, grpcutil.BotCheckFailedError()
 			}
 		} else if !turnstileResp.Success {
 			s.logger.WithFields(logging.Fields{
@@ -4530,13 +4530,13 @@ func (s *CommodoreServer) Login(ctx context.Context, req *commodorepb.LoginReque
 				"client_ip":   clientIP,
 				"error_codes": turnstileResp.ErrorCodes,
 			}).Warn("Login Turnstile verification failed")
-			return nil, status.Error(codes.PermissionDenied, "bot verification failed")
+			return nil, grpcutil.BotCheckFailedError()
 		}
 	} else {
 		// Fallback: behavioral validation when Turnstile not configured
 		if !validateBehavior(req) {
 			s.logger.WithField("email", email).Warn("Login behavioral bot check failed")
-			return nil, status.Error(codes.PermissionDenied, "bot verification failed")
+			return nil, grpcutil.BotCheckFailedError()
 		}
 	}
 
@@ -4577,7 +4577,7 @@ func (s *CommodoreServer) Login(ctx context.Context, req *commodorepb.LoginReque
 		if recordErr := s.recordLoginFailed(ctx, user.ID, user.TenantID, "password", "email_not_verified"); recordErr != nil {
 			return nil, recordErr
 		}
-		return nil, status.Error(codes.Unauthenticated, "email not verified")
+		return nil, grpcutil.EmailNotVerifiedError()
 	}
 
 	// Update last login (best effort)
@@ -4652,7 +4652,7 @@ func (s *CommodoreServer) Register(ctx context.Context, req *commodorepb.Registe
 		if err != nil {
 			s.logger.WithError(err).Warn("Turnstile verification request failed")
 			if !s.turnstileFailOpen {
-				return nil, status.Error(codes.PermissionDenied, "bot verification failed")
+				return nil, grpcutil.BotCheckFailedError()
 			}
 		} else if !turnstileResp.Success {
 			s.logger.WithFields(logging.Fields{
@@ -4660,13 +4660,13 @@ func (s *CommodoreServer) Register(ctx context.Context, req *commodorepb.Registe
 				"client_ip":   clientIP,
 				"error_codes": turnstileResp.ErrorCodes,
 			}).Warn("Turnstile verification failed")
-			return nil, status.Error(codes.PermissionDenied, "bot verification failed")
+			return nil, grpcutil.BotCheckFailedError()
 		}
 	} else {
 		// Fallback: behavioral validation when Turnstile not configured
 		if !validateBehavior(req) {
 			s.logger.WithField("email", email).Warn("Behavioral bot check failed")
-			return nil, status.Error(codes.PermissionDenied, "bot verification failed")
+			return nil, grpcutil.BotCheckFailedError()
 		}
 	}
 
@@ -5867,7 +5867,7 @@ func (s *CommodoreServer) verifyRecoveryTurnstile(ctx context.Context, token str
 		return nil
 	}
 	if strings.TrimSpace(token) == "" {
-		return status.Error(codes.PermissionDenied, "bot verification failed")
+		return grpcutil.BotCheckFailedError()
 	}
 	clientIP := ""
 	if md, ok := metadata.FromIncomingContext(ctx); ok {
@@ -5883,10 +5883,10 @@ func (s *CommodoreServer) verifyRecoveryTurnstile(ctx context.Context, token str
 		if s.turnstileFailOpen {
 			return nil
 		}
-		return status.Error(codes.PermissionDenied, "bot verification failed")
+		return grpcutil.BotCheckFailedError()
 	}
 	if !turnstileResp.Success {
-		return status.Error(codes.PermissionDenied, "bot verification failed")
+		return grpcutil.BotCheckFailedError()
 	}
 	return nil
 }

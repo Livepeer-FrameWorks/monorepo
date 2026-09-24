@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"frameworks/api_gateway/internal/clients/clientstest"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/grpcutil"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	commodorepb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/commodore"
 	commonpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/common"
@@ -122,7 +123,7 @@ func TestRecoveryHandlersForwardTurnstileTokens(t *testing.T) {
 
 func TestRecoveryHandlersSurfaceBotCheckFailure(t *testing.T) {
 	gin.SetMode(gin.TestMode)
-	botError := status.Error(codes.PermissionDenied, "bot verification failed")
+	botError := grpcutil.SanitizeError(grpcutil.BotCheckFailedError())
 	fake := &clientstest.FakeCommodore{
 		ResendVerificationFn: func(context.Context, string, string) (*commodorepb.ResendVerificationResponse, error) {
 			return nil, botError
@@ -142,6 +143,32 @@ func TestRecoveryHandlersSurfaceBotCheckFailure(t *testing.T) {
 		c.Request.Header.Set("Content-Type", "application/json")
 		handler(c)
 		if recorder.Code != http.StatusForbidden || !strings.Contains(recorder.Body.String(), "BOT_CHECK_FAILED") {
+			t.Fatalf("%s response = %d %s", path, recorder.Code, recorder.Body.String())
+		}
+	}
+}
+
+func TestRecoveryHandlersDoNotClaimDeliveryOnServiceFailure(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	fake := &clientstest.FakeCommodore{
+		ResendVerificationFn: func(context.Context, string, string) (*commodorepb.ResendVerificationResponse, error) {
+			return nil, status.Error(codes.Unavailable, "private upstream")
+		},
+		ForgotPasswordFn: func(context.Context, string, string) (*commodorepb.ForgotPasswordResponse, error) {
+			return nil, status.Error(codes.PermissionDenied, "permission denied")
+		},
+	}
+	h := &AuthHandlers{commodore: fake, logger: logging.NewLogger()}
+	for path, handler := range map[string]gin.HandlerFunc{
+		"/auth/resend-verification": h.ResendVerification(),
+		"/auth/forgot-password":     h.ForgotPassword(),
+	} {
+		recorder := httptest.NewRecorder()
+		c, _ := gin.CreateTestContext(recorder)
+		c.Request = httptest.NewRequestWithContext(context.Background(), http.MethodPost, path, strings.NewReader(`{"email":"user@example.com"}`))
+		c.Request.Header.Set("Content-Type", "application/json")
+		handler(c)
+		if recorder.Code != http.StatusServiceUnavailable || strings.Contains(recorder.Body.String(), "will be sent") {
 			t.Fatalf("%s response = %d %s", path, recorder.Code, recorder.Body.String())
 		}
 	}
@@ -195,13 +222,8 @@ func TestWalletChallengeAndLoginSessionCookies(t *testing.T) {
 	}
 }
 
-// TestHandleBotCheckError locks the gRPC-to-HTTP mapping for Turnstile
-// failures. The Commodore turnstile branch returns codes.PermissionDenied
-// with message containing "bot verification"; the gateway must surface this
-// as HTTP 403 + error_code=BOT_CHECK_FAILED so the webapp can render a
-// distinct message instead of the generic "invalid credentials" 401.
-// Any drift here regresses the user-visible bot-check experience and the
-// tray's eventual debug story.
+// TestHandleBotCheckError checks the typed reason after gRPC sanitization,
+// which removes the original PermissionDenied message.
 func TestHandleBotCheckError(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
@@ -214,10 +236,15 @@ func TestHandleBotCheckError(t *testing.T) {
 	}{
 		{
 			name:        "bot check failure produces 403 + BOT_CHECK_FAILED",
-			err:         status.Error(codes.PermissionDenied, "bot verification failed"),
+			err:         grpcutil.SanitizeError(grpcutil.BotCheckFailedError()),
 			wantHandled: true,
 			wantStatus:  http.StatusForbidden,
 			wantCode:    "BOT_CHECK_FAILED",
+		},
+		{
+			name:        "plain bot-check message without typed reason passes through",
+			err:         status.Error(codes.PermissionDenied, "bot verification failed"),
+			wantHandled: false,
 		},
 		{
 			name:        "other PermissionDenied passes through (not bot-check)",
@@ -273,47 +300,26 @@ func TestHandleBotCheckError(t *testing.T) {
 	}
 }
 
-func TestHandleEmailNotVerifiedLoginError(t *testing.T) {
+func TestHandleEmailNotVerifiedLoginStatusError(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
 	tests := []struct {
 		name        string
-		message     string
+		err         error
 		wantHandled bool
 	}{
 		{
-			name:        "verified password but unverified email gets stable code",
-			message:     "email not verified",
+			name:        "sanitized typed verification error gets stable code",
+			err:         grpcutil.SanitizeError(grpcutil.EmailNotVerifiedError()),
 			wantHandled: true,
 		},
 		{
-			name:        "alternate verification wording gets stable code",
-			message:     "please verify your email before signing in",
-			wantHandled: true,
-		},
-		{
-			name:        "not activated wording gets stable code",
-			message:     "account not activated",
-			wantHandled: true,
-		},
-		{
-			name:        "activate account wording gets stable code",
-			message:     "please activate your account before signing in",
-			wantHandled: true,
+			name: "plain message is not a verification signal",
+			err:  grpcutil.SanitizeError(status.Error(codes.Unauthenticated, "email not verified")),
 		},
 		{
 			name:        "invalid credentials remains generic",
-			message:     "invalid credentials",
-			wantHandled: false,
-		},
-		{
-			name:        "deactivated account remains separate",
-			message:     "account deactivated",
-			wantHandled: false,
-		},
-		{
-			name:        "empty message passes through",
-			message:     "",
+			err:         status.Error(codes.Unauthenticated, "invalid credentials"),
 			wantHandled: false,
 		},
 	}
@@ -323,9 +329,9 @@ func TestHandleEmailNotVerifiedLoginError(t *testing.T) {
 			rec := httptest.NewRecorder()
 			c, _ := gin.CreateTestContext(rec)
 
-			got := handleEmailNotVerifiedLoginError(c, tc.message)
+			got := handleEmailNotVerifiedLoginStatusError(c, tc.err)
 			if got != tc.wantHandled {
-				t.Fatalf("handleEmailNotVerifiedLoginError() = %v, want %v", got, tc.wantHandled)
+				t.Fatalf("handleEmailNotVerifiedLoginStatusError() = %v, want %v", got, tc.wantHandled)
 			}
 			if !tc.wantHandled {
 				if rec.Code != http.StatusOK && rec.Code != 0 {
@@ -362,17 +368,16 @@ func TestLoginMapsActivationErrorsToVerificationResponse(t *testing.T) {
 	}{
 		{
 			name:       "email not verified",
-			err:        status.Error(codes.Unauthenticated, "email not verified"),
+			err:        grpcutil.SanitizeError(grpcutil.EmailNotVerifiedError()),
 			wantStatus: http.StatusForbidden,
 			wantError:  "email not verified",
 			wantCode:   emailNotVerifiedErrorCode,
 		},
 		{
-			name:       "not activated",
-			err:        status.Error(codes.Unauthenticated, "account not activated"),
-			wantStatus: http.StatusForbidden,
-			wantError:  "email not verified",
-			wantCode:   emailNotVerifiedErrorCode,
+			name:       "plain verification message is not trusted",
+			err:        grpcutil.SanitizeError(status.Error(codes.Unauthenticated, "email not verified")),
+			wantStatus: http.StatusUnauthorized,
+			wantError:  "invalid credentials",
 		},
 		{
 			name:       "invalid credentials",

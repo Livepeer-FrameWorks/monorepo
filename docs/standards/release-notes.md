@@ -59,6 +59,10 @@ The compact normal sequence is:
 
 `release plan` is the credential-free, static preview. `release apply --dry-run` is the live preflight: it resolves access and authentication, then runs the same migration, transition, and service checks the real rollout will use. `release apply` owns the ordered expand migrations, service upgrades, declared release transitions, and postdeploy migrations. Do not duplicate those steps in the normal-path command block.
 
+#### Public auth contract changes
+
+Chartroom, Bridge, and Commodore roll independently. A release must not change a verification/reset link format, public auth route, or required bot-proof field in the same step that removes the previous contract. First ship the new API and input handling while existing clients still work. Then roll Chartroom to every replica and test verification, resend, password reset, and login against both the previous and new backend. Only a later release may switch email links or require the new input and retire the old route, after confirming no previous Chartroom replica remains. The release apply postflight checks the running versions and image digest of this auth cohort before reporting completion; a healthy HTTP response alone does not prove contract convergence.
+
 Do not put `cluster migrate validate` in routine operator instructions. It validates the migration files embedded in the installed CLI and takes no manifest because it does not inspect a cluster. Release CI and `make release-preflight` own that source/package validation. It remains a maintainer and diagnostic command, not a deployment phase.
 
 `cluster diff` is verification, not a mandatory invitation to run `cluster provision`. If it reports intended infrastructure or rendered-config drift, name the specific reconciliation command separately.

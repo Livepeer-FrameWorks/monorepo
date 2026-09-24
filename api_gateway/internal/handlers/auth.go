@@ -9,6 +9,7 @@ import (
 	"frameworks/api_gateway/internal/attribution"
 	gatewayerrors "frameworks/api_gateway/internal/errors"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/clients/commodore"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/grpcutil"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	commodorepb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/commodore"
 	commonpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/common"
@@ -27,7 +28,7 @@ const (
 )
 
 var (
-	loginAllowedErrors         = []string{"not verified", "verify your email", "not activated", "activate your account", "deactivated"}
+	loginAllowedErrors         = []string{"deactivated"}
 	walletLoginAllowedErrors   = []string{"signature", "expired"}
 	registerAllowedErrors      = []string{"already exists", "user limit", "bot verification"}
 	verifyEmailAllowedErrors   = []string{"invalid or expired", "already verified"}
@@ -49,8 +50,7 @@ type behaviorJSON struct {
 // short-circuit the caller. Returns false for any other error so the caller
 // can continue with its normal error handling.
 func handleBotCheckError(c *gin.Context, err error) bool {
-	st, ok := status.FromError(err)
-	if !ok || st.Code() != codes.PermissionDenied || !strings.Contains(st.Message(), "bot verification") {
+	if !grpcutil.IsBotCheckFailed(err) {
 		return false
 	}
 	c.JSON(http.StatusForbidden, gin.H{
@@ -60,8 +60,8 @@ func handleBotCheckError(c *gin.Context, err error) bool {
 	return true
 }
 
-func handleEmailNotVerifiedLoginError(c *gin.Context, message string) bool {
-	if !isEmailNotVerifiedLoginMessage(message) {
+func handleEmailNotVerifiedLoginStatusError(c *gin.Context, err error) bool {
+	if !grpcutil.IsEmailNotVerified(err) {
 		return false
 	}
 	c.JSON(http.StatusForbidden, gin.H{
@@ -69,23 +69,6 @@ func handleEmailNotVerifiedLoginError(c *gin.Context, message string) bool {
 		"error_code": emailNotVerifiedErrorCode,
 	})
 	return true
-}
-
-func handleEmailNotVerifiedLoginStatusError(c *gin.Context, err error) bool {
-	st, ok := status.FromError(err)
-	if !ok {
-		return false
-	}
-	return handleEmailNotVerifiedLoginError(c, st.Message())
-}
-
-func isEmailNotVerifiedLoginMessage(message string) bool {
-	lowered := strings.ToLower(strings.TrimSpace(message))
-	return strings.Contains(lowered, "not verified") ||
-		strings.Contains(lowered, "verify your email") ||
-		strings.Contains(lowered, "not activated") ||
-		strings.Contains(lowered, "activate your account") ||
-		strings.Contains(lowered, "activate your email")
 }
 
 // parseBehavior converts JSON behavior string to proto BehaviorData
@@ -190,9 +173,6 @@ func (h *AuthHandlers) Login() gin.HandlerFunc {
 				return
 			}
 			errMsg := gatewayerrors.SanitizeGRPCError(err, "invalid credentials", loginAllowedErrors)
-			if handleEmailNotVerifiedLoginError(c, errMsg) {
-				return
-			}
 			c.JSON(http.StatusUnauthorized, gin.H{"error": errMsg})
 			return
 		}
@@ -587,11 +567,7 @@ func (h *AuthHandlers) ResendVerification() gin.HandlerFunc {
 			if handleBotCheckError(c, err) {
 				return
 			}
-			// Still return generic success to not reveal if email exists
-			c.JSON(http.StatusOK, gin.H{
-				"success": true,
-				"message": "if an account exists with that email and is unverified, a new verification link will be sent",
-			})
+			c.JSON(http.StatusServiceUnavailable, gin.H{"error": "verification email is temporarily unavailable"})
 			return
 		}
 
@@ -620,11 +596,7 @@ func (h *AuthHandlers) ForgotPassword() gin.HandlerFunc {
 			if handleBotCheckError(c, err) {
 				return
 			}
-			// Still return success to not reveal if email exists
-			c.JSON(http.StatusOK, gin.H{
-				"success": true,
-				"message": "if an account exists with that email, a reset link will be sent",
-			})
+			c.JSON(http.StatusServiceUnavailable, gin.H{"error": "password reset is temporarily unavailable"})
 			return
 		}
 

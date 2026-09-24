@@ -9,6 +9,7 @@ import (
 
 	"github.com/DATA-DOG/go-sqlmock"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/auth"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/grpcutil"
 	commodorepb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/commodore"
 	"github.com/lib/pq"
 	"github.com/sirupsen/logrus"
@@ -89,6 +90,10 @@ func TestLoginChecksPasswordBeforeUnverifiedState(t *testing.T) {
 			}
 			if !strings.Contains(st.Message(), tt.wantMessage) {
 				t.Fatalf("message = %q, want %q", st.Message(), tt.wantMessage)
+			}
+			sanitized := grpcutil.SanitizeError(err)
+			if got, want := grpcutil.IsEmailNotVerified(sanitized), tt.password == "correct-password"; got != want {
+				t.Fatalf("sanitized email verification reason = %v, want %v", got, want)
 			}
 			if err := mock.ExpectationsWereMet(); err != nil {
 				t.Fatalf("unmet expectations: %v", err)

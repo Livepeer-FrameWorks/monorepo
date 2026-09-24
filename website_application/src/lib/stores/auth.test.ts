@@ -155,6 +155,45 @@ describe("auth store", () => {
     });
   });
 
+  it("sends recovery proof and surfaces a rejected recovery request", async () => {
+    const authAPI = {
+      get: vi.fn(),
+      post: vi.fn().mockRejectedValue({
+        response: {
+          data: { error: "browser verification required", error_code: "BOT_CHECK_FAILED" },
+        },
+      }),
+    };
+
+    vi.doMock("$lib/authAPI.js", () => ({ authAPI }));
+    vi.doMock("$app/environment", () => ({ browser: false }));
+    vi.doMock("./realtime.js", () => ({
+      initializeWebSocket: vi.fn(),
+      disconnectWebSocket: vi.fn(),
+    }));
+
+    const { auth } = await import("./auth");
+    const email = "user@example.com";
+    const proof = "turnstile-proof";
+
+    expect(await auth.resendVerification(email, proof)).toEqual({
+      success: false,
+      error: "browser verification required",
+    });
+    expect(await auth.forgotPassword(email, proof)).toEqual({
+      success: false,
+      error: "browser verification required",
+    });
+    expect(authAPI.post).toHaveBeenNthCalledWith(1, "/resend-verification", {
+      email,
+      turnstile_token: proof,
+    });
+    expect(authAPI.post).toHaveBeenNthCalledWith(2, "/forgot-password", {
+      email,
+      turnstile_token: proof,
+    });
+  });
+
   it("bootstraps a zero-balance wallet session through the free auth endpoints", async () => {
     const walletUser = {
       id: "wallet-user-1",

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"testing"
 
+	"google.golang.org/genproto/googleapis/rpc/errdetails"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )
@@ -88,5 +89,41 @@ func TestSanitizeErrorScrubsSensitiveMessages(t *testing.T) {
 				t.Fatalf("SanitizeError message = %q, want %q", st.Message(), tc.want)
 			}
 		})
+	}
+}
+
+func TestSanitizeErrorPreservesOnlyTypedBotCheckReason(t *testing.T) {
+	sanitized := SanitizeError(BotCheckFailedError())
+	st, ok := status.FromError(sanitized)
+	if !ok || st.Code() != codes.PermissionDenied || st.Message() != "permission denied" || !IsBotCheckFailed(sanitized) {
+		t.Fatalf("sanitized bot check = %v", sanitized)
+	}
+	if IsBotCheckFailed(SanitizeError(status.Error(codes.PermissionDenied, "bot verification failed"))) {
+		t.Fatal("plain permission denial was classified as a bot check")
+	}
+	other, err := status.New(codes.PermissionDenied, "sensitive").WithDetails(&errdetails.ErrorInfo{Domain: "other.frameworks.network", Reason: "BOT_CHECK_FAILED"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if IsBotCheckFailed(SanitizeError(other.Err())) {
+		t.Fatal("foreign error detail was classified as a bot check")
+	}
+}
+
+func TestSanitizeErrorPreservesOnlyTypedEmailNotVerifiedReason(t *testing.T) {
+	sanitized := SanitizeError(EmailNotVerifiedError())
+	st, ok := status.FromError(sanitized)
+	if !ok || st.Code() != codes.Unauthenticated || st.Message() != "authentication required" || !IsEmailNotVerified(sanitized) {
+		t.Fatalf("sanitized email verification error = %v", sanitized)
+	}
+	if IsEmailNotVerified(SanitizeError(status.Error(codes.Unauthenticated, "email not verified"))) {
+		t.Fatal("plain unauthenticated error was classified as email not verified")
+	}
+	other, err := status.New(codes.Unauthenticated, "sensitive").WithDetails(&errdetails.ErrorInfo{Domain: "other.frameworks.network", Reason: "EMAIL_NOT_VERIFIED"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if IsEmailNotVerified(SanitizeError(other.Err())) {
+		t.Fatal("foreign error detail was classified as email not verified")
 	}
 }
