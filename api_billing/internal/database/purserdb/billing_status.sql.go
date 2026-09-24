@@ -8,6 +8,7 @@ package purserdb
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 
 	"github.com/google/uuid"
 	"github.com/lib/pq"
@@ -111,7 +112,8 @@ SELECT
     COALESCE(tpr.included_quantity, 0)::double precision AS included_quantity,
     COALESCE(tpr.unit_price, 0)::double precision AS unit_price,
     COALESCE(tpr.model, '') AS model,
-    COALESCE(bt.currency, '') AS currency
+    COALESCE(bt.currency, '') AS currency,
+    COALESCE(tpr.config, '{}'::jsonb) AS config
 FROM purser.tier_pricing_rules tpr
 JOIN purser.billing_tiers bt ON bt.id = tpr.tier_id
 WHERE tpr.tier_id = $1::text::uuid AND tpr.meter = $2
@@ -123,10 +125,11 @@ type GetStoragePricingParams struct {
 }
 
 type GetStoragePricingRow struct {
-	IncludedQuantity float64 `db:"included_quantity" json:"included_quantity"`
-	UnitPrice        float64 `db:"unit_price" json:"unit_price"`
-	Model            string  `db:"model" json:"model"`
-	Currency         string  `db:"currency" json:"currency"`
+	IncludedQuantity float64         `db:"included_quantity" json:"included_quantity"`
+	UnitPrice        float64         `db:"unit_price" json:"unit_price"`
+	Model            string          `db:"model" json:"model"`
+	Currency         string          `db:"currency" json:"currency"`
+	Config           json.RawMessage `db:"config" json:"config"`
 }
 
 func (q *Queries) GetStoragePricing(ctx context.Context, arg GetStoragePricingParams) (GetStoragePricingRow, error) {
@@ -137,6 +140,7 @@ func (q *Queries) GetStoragePricing(ctx context.Context, arg GetStoragePricingPa
 		&i.UnitPrice,
 		&i.Model,
 		&i.Currency,
+		&i.Config,
 	)
 	return i, err
 }

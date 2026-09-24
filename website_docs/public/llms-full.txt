@@ -9738,7 +9738,7 @@ A page of DVR chapter refs. Paginated for unbounded artifact lifetime: default p
 - **expiresAt**: `Time` ([Time](/builders/api-schema/shared/#time))
 - **isExpired**: `Boolean!` — Whether the DVR has passed its retention date (expiresAt &lt; now).
 - **effectiveRetention**: `EffectiveRetention` ([EffectiveRetention](/builders/api-schema/shared/#effectiveretention)) — Resolved retention horizon for this recording with the source of the decision (per-asset override → tenant default → tier entitlement). Available on finalized recordings; null while the recording is active (retention applies post-finalize).
-- **storageCost**: `StorageCostProjection` ([StorageCostProjection](/builders/api-schema/shared/#storagecostprojection)) — Marginal storage cost for this recording on the tenant&#39;s tier. Null for tenants without a storage meter (self-hosted, fully tenant-private clusters). Computed from sizeBytes in GiB × unit_price_per_gb_hour × hours_held.
+- **storageCost**: `StorageCostProjection` ([StorageCostProjection](/builders/api-schema/shared/#storagecostprojection)) — Marginal storage cost for this recording on the tenant&#39;s tier. Null for tenants without a storage meter (self-hosted, fully tenant-private clusters). Computed from sizeBytes in GiB × the tier&#39;s price per GiB-month.
 - **storageNodeId**: `String`
 - **status**: `String`
 - **startedAt**: `Time` ([Time](/builders/api-schema/shared/#time))
@@ -11572,7 +11572,7 @@ Implements [Node](/builders/api-schema/shared/#node).
 - **playbackPolicy**: `PlaybackPolicy` ([PlaybackPolicy](/builders/api-schema/shared/#playbackpolicy)) — Playback access policy snapshotted at clip creation. null/PUBLIC means anyone with the playbackId can watch. Independent from the source stream&#39;s policy after creation — flipping the source stream&#39;s policy does not affect already-shared clip URLs.
 - **thumbnailAssets**: `ThumbnailAssets` ([ThumbnailAssets](/builders/api-schema/shared/#thumbnailassets)) — Server-resolved Chandler URLs for the clip&#39;s poster and sprite thumbnails. Null until Foghorn confirms the thumbnail upload.
 - **effectiveRetention**: `EffectiveRetention` ([EffectiveRetention](/builders/api-schema/shared/#effectiveretention)) — Resolved retention horizon with the source of the decision (per-asset override → per-stream override → tenant default → tier entitlement). Null when retention_until is unset (infinite).
-- **storageCost**: `StorageCostProjection` ([StorageCostProjection](/builders/api-schema/shared/#storagecostprojection)) — Marginal storage cost for this clip on the tenant&#39;s tier. Null when the tenant has no storage meter (self-hosted, fully tenant-private cluster). Computed from sizeBytes in GiB × unit_price_per_gb_hour × hours_held.
+- **storageCost**: `StorageCostProjection` ([StorageCostProjection](/builders/api-schema/shared/#storagecostprojection)) — Marginal storage cost for this clip on the tenant&#39;s tier. Null when the tenant has no storage meter (self-hosted, fully tenant-private cluster). Computed from sizeBytes in GiB × the tier&#39;s price per GiB-month.
 
 ### ConnectionEvent
 
@@ -12218,7 +12218,7 @@ Where a stream&#39;s source may be ingested. It is a summary of the stream&#39;s
 
 **object**
 
-Marginal per-asset storage cost projection. Used by the customer-facing storage browser to show &#34;this clip costs you ~$0.01/day&#34;. The unit is the tier&#39;s currency (typically EUR). Rating prices storage at $/GiB-hour internally; perDay = unit_price_per_gb_hour × 24, perMonth = perDay × 30.
+Marginal per-asset storage cost projection. Used by the customer-facing storage browser to show &#34;this clip costs you ~$0.01/day&#34;. The unit is the tier&#39;s currency (typically EUR). Rating prices storage per GiB-month (a fixed 730-hour month); perMonth = GiB × price, perDay = perMonth × 24 / 730.
 
 - **perDay**: `Float!`
 - **perMonth**: `Float!`
@@ -12485,7 +12485,7 @@ Implements [Node](/builders/api-schema/shared/#node).
 - **playbackPolicy**: `PlaybackPolicy` ([PlaybackPolicy](/builders/api-schema/shared/#playbackpolicy)) — Playback access policy. null/PUBLIC = anyone with the playbackId can watch.
 - **thumbnailAssets**: `ThumbnailAssets` ([ThumbnailAssets](/builders/api-schema/shared/#thumbnailassets)) — Server-resolved Chandler URLs for the VOD&#39;s poster and sprite thumbnails. Null until Foghorn confirms the thumbnail upload.
 - **effectiveRetention**: `EffectiveRetention` ([EffectiveRetention](/builders/api-schema/shared/#effectiveretention)) — Resolved retention horizon with the source of the decision (per-asset override → per-stream override → tenant default → tier entitlement). Null while the asset&#39;s retention_until column is unset (infinite).
-- **storageCost**: `StorageCostProjection` ([StorageCostProjection](/builders/api-schema/shared/#storagecostprojection)) — Marginal storage cost for this asset on the tenant&#39;s tier. Null when the tenant has no storage meter (self-hosted, fully tenant-private cluster). Computed from sizeBytes in GiB × unit_price_per_gb_hour × hours_held.
+- **storageCost**: `StorageCostProjection` ([StorageCostProjection](/builders/api-schema/shared/#storagecostprojection)) — Marginal storage cost for this asset on the tenant&#39;s tier. Null when the tenant has no storage meter (self-hosted, fully tenant-private cluster). Computed from sizeBytes in GiB × the tier&#39;s price per GiB-month.
 
 ### VodAssetStatus
 
@@ -14214,10 +14214,10 @@ Free closes on the normal monthly accounting cadence and produces an itemized �
 
 Add funds to a prepaid balance and pay as usage accrues. Usage is deducted at the rates below.
 
-| Resource          | Rate         |
-| ----------------- | ------------ |
-| Delivered Minutes | €0.00055/min |
-| Cold storage      | €0.035/GB-h  |
+| Resource          | Rate             |
+| ----------------- | ---------------- |
+| Delivered Minutes | €0.00055/min     |
+| Cold storage      | €0.035/GiB-month |
 
 Standard live transcoding is included in delivered-minute pricing. Browser-side StreamCrafter
 composition does not create a server-processing charge. Advanced processing (AI workloads such as
@@ -14245,12 +14245,12 @@ clips.
 
 **Overages (metered tiers):**
 
-| Tier       | Delivered Minutes | Cold storage |
-| ---------- | ----------------- | ------------ |
-| Supporter  | €0.00055/min      | €0.035/GB-h  |
-| Developer  | €0.00052/min      | €0.030/GB-h  |
-| Production | €0.00050/min      | €0.025/GB-h  |
-| Enterprise | Custom            | Custom       |
+| Tier       | Delivered Minutes | Cold storage     |
+| ---------- | ----------------- | ---------------- |
+| Supporter  | €0.00055/min      | €0.035/GiB-month |
+| Developer  | €0.00052/min      | €0.030/GiB-month |
+| Production | €0.00050/min      | €0.025/GiB-month |
+| Enterprise | Custom            | Custom           |
 
 ## Advanced processing
 
@@ -14278,7 +14278,7 @@ Load credits first, use resources as you go. Balance decreases as usage accrues.
 
 ### Postpaid
 
-Monthly subscription with included delivered-minute allocations. Cold storage is rated from GiB-second usage and displayed as GiB-hours on invoice lines. Overages are drafted during the billing period and invoiced at period end. Before activation, complete the billing email and address, choose an eligible tier, and finish either Stripe Checkout or Mollie's first-payment mandate flow. The provider webhook is authoritative; returning to the browser alone does not activate postpaid billing.
+Monthly subscription with included delivered-minute allocations. Cold storage is metered to the second and rated per GiB-month (a fixed 730-hour month), so 10 GiB kept for three days bills 10 × 72/730 GiB-months. Invoice lines show the quantity in GiB-months. Overages are drafted during the billing period and invoiced at period end. Before activation, complete the billing email and address, choose an eligible tier, and finish either Stripe Checkout or Mollie's first-payment mandate flow. The provider webhook is authoritative; returning to the browser alone does not activate postpaid billing.
 
 ## Currency
 

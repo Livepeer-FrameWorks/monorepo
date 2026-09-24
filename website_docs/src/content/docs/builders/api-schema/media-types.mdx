@@ -208,7 +208,7 @@ A page of DVR chapter refs. Paginated for unbounded artifact lifetime: default p
 - **expiresAt**: `Time` ([Time](/builders/api-schema/shared/#time))
 - **isExpired**: `Boolean!` — Whether the DVR has passed its retention date (expiresAt &lt; now).
 - **effectiveRetention**: `EffectiveRetention` ([EffectiveRetention](/builders/api-schema/shared/#effectiveretention)) — Resolved retention horizon for this recording with the source of the decision (per-asset override → tenant default → tier entitlement). Available on finalized recordings; null while the recording is active (retention applies post-finalize).
-- **storageCost**: `StorageCostProjection` ([StorageCostProjection](/builders/api-schema/shared/#storagecostprojection)) — Marginal storage cost for this recording on the tenant&#39;s tier. Null for tenants without a storage meter (self-hosted, fully tenant-private clusters). Computed from sizeBytes in GiB × unit_price_per_gb_hour × hours_held.
+- **storageCost**: `StorageCostProjection` ([StorageCostProjection](/builders/api-schema/shared/#storagecostprojection)) — Marginal storage cost for this recording on the tenant&#39;s tier. Null for tenants without a storage meter (self-hosted, fully tenant-private clusters). Computed from sizeBytes in GiB × the tier&#39;s price per GiB-month.
 - **storageNodeId**: `String`
 - **status**: `String`
 - **startedAt**: `Time` ([Time](/builders/api-schema/shared/#time))

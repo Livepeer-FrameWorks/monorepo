@@ -1975,7 +1975,7 @@ secretMasked: string } | null } | null, /** Server-resolved Chandler URLs for th
 thumbnailAssets: { posterUrl: string, spriteVttUrl: string, spriteJpgUrl: string, assetKey: string } | null, /** Resolved retention horizon with the source of the decision (per-asset override → per-stream override → tenant default → tier entitlement). Null when retention_until is unset (infinite). */
 effectiveRetention: { /** Days from now until the artifact is scheduled for deletion. 0 = no auto-expire (retentionUntil is null). */
 retentionDays: number, /** Scheduled deletion timestamp. Null when the artifact has no horizon (kept forever). */
-retentionUntil: string | null, source: RetentionSource } | null, /** Marginal storage cost for this clip on the tenant's tier. Null when the tenant has no storage meter (self-hosted, fully tenant-private cluster). Computed from sizeBytes in GiB × unit_price_per_gb_hour × hours_held. */
+retentionUntil: string | null, source: RetentionSource } | null, /** Marginal storage cost for this clip on the tenant's tier. Null when the tenant has no storage meter (self-hosted, fully tenant-private cluster). Computed from sizeBytes in GiB × the tier's price per GiB-month. */
 storageCost: { perDay: number, perMonth: number, currency: string } | null };
 
 export type ClusterAccessDefaultFieldsFragment = { clusterId: string, clusterName: string, accessLevel: string, resourceLimits: unknown, /** Whether the cluster may pull from private (RFC 1918) and multicast sources. */
@@ -4233,7 +4233,7 @@ secretMasked: string } | null } | null, /** Server-resolved Chandler URLs for th
 thumbnailAssets: { posterUrl: string, spriteVttUrl: string, spriteJpgUrl: string, assetKey: string } | null, /** Resolved retention horizon with the source of the decision (per-asset override → per-stream override → tenant default → tier entitlement). Null while the asset's retention_until column is unset (infinite). */
 effectiveRetention: { /** Days from now until the artifact is scheduled for deletion. 0 = no auto-expire (retentionUntil is null). */
 retentionDays: number, /** Scheduled deletion timestamp. Null when the artifact has no horizon (kept forever). */
-retentionUntil: string | null, source: RetentionSource } | null, /** Marginal storage cost for this asset on the tenant's tier. Null when the tenant has no storage meter (self-hosted, fully tenant-private cluster). Computed from sizeBytes in GiB × unit_price_per_gb_hour × hours_held. */
+retentionUntil: string | null, source: RetentionSource } | null, /** Marginal storage cost for this asset on the tenant's tier. Null when the tenant has no storage meter (self-hosted, fully tenant-private cluster). Computed from sizeBytes in GiB × the tier's price per GiB-month. */
 storageCost: { perDay: number, perMonth: number, currency: string } | null };
 
 /** A VOD asset with retention data in the window. Eligibility + stats (sessions, duration, lastSeen) come from analytics; title/playbackId are composed from the catalog by artifactHash — both may be null when the asset is uncatalogued (e.g. deleted but retention still within TTL). */
@@ -6475,7 +6475,7 @@ secretMasked: string } | null } | null, /** Server-resolved Chandler URLs for th
 thumbnailAssets: { posterUrl: string, spriteVttUrl: string, spriteJpgUrl: string, assetKey: string } | null, /** Resolved retention horizon with the source of the decision (per-asset override → per-stream override → tenant default → tier entitlement). Null when retention_until is unset (infinite). */
 effectiveRetention: { /** Days from now until the artifact is scheduled for deletion. 0 = no auto-expire (retentionUntil is null). */
 retentionDays: number, /** Scheduled deletion timestamp. Null when the artifact has no horizon (kept forever). */
-retentionUntil: string | null, source: RetentionSource } | null, /** Marginal storage cost for this clip on the tenant's tier. Null when the tenant has no storage meter (self-hosted, fully tenant-private cluster). Computed from sizeBytes in GiB × unit_price_per_gb_hour × hours_held. */
+retentionUntil: string | null, source: RetentionSource } | null, /** Marginal storage cost for this clip on the tenant's tier. Null when the tenant has no storage meter (self-hosted, fully tenant-private cluster). Computed from sizeBytes in GiB × the tier's price per GiB-month. */
 storageCost: { perDay: number, perMonth: number, currency: string } | null }
     | { __typename: 'Cluster', /** Global unique identifier for Relay compatibility. */
 id: string, /** Human-readable cluster name. */
@@ -7254,7 +7254,7 @@ secretMasked: string } | null } | null, /** Server-resolved Chandler URLs for th
 thumbnailAssets: { posterUrl: string, spriteVttUrl: string, spriteJpgUrl: string, assetKey: string } | null, /** Resolved retention horizon with the source of the decision (per-asset override → per-stream override → tenant default → tier entitlement). Null while the asset's retention_until column is unset (infinite). */
 effectiveRetention: { /** Days from now until the artifact is scheduled for deletion. 0 = no auto-expire (retentionUntil is null). */
 retentionDays: number, /** Scheduled deletion timestamp. Null when the artifact has no horizon (kept forever). */
-retentionUntil: string | null, source: RetentionSource } | null, /** Marginal storage cost for this asset on the tenant's tier. Null when the tenant has no storage meter (self-hosted, fully tenant-private cluster). Computed from sizeBytes in GiB × unit_price_per_gb_hour × hours_held. */
+retentionUntil: string | null, source: RetentionSource } | null, /** Marginal storage cost for this asset on the tenant's tier. Null when the tenant has no storage meter (self-hosted, fully tenant-private cluster). Computed from sizeBytes in GiB × the tier's price per GiB-month. */
 storageCost: { perDay: number, perMonth: number, currency: string } | null }
    | null };
 

@@ -357,7 +357,7 @@ func GenerateInvoices() []*purserpb.Invoice {
 	processSeconds1 := map[string]interface{}{"Livepeer": 3245.7, "AV": 1820.5}
 	usageDetails1, _ := structpb.NewStruct(map[string]interface{}{
 		"delivered_minutes":       42500.0,
-		"storage_gb_seconds_cold": 54720.0,
+		"storage_gb_seconds_cold": 39945600.0,
 		"stream_runtime_seconds":  153000.0,
 		"media_seconds":           5066.2,
 		"codec_seconds":           codecSeconds1,
@@ -375,7 +375,7 @@ func GenerateInvoices() []*purserpb.Invoice {
 	processSeconds2 := map[string]interface{}{"Livepeer": 2405.0, "AV": 1345.0}
 	usageDetails2, _ := structpb.NewStruct(map[string]interface{}{
 		"delivered_minutes":       35000.0,
-		"storage_gb_seconds_cold": 68400.0,
+		"storage_gb_seconds_cold": 49932000.0,
 		"stream_runtime_seconds":  126000.0,
 		"media_seconds":           3750.0,
 		"codec_seconds":           codecSeconds2,
@@ -408,7 +408,7 @@ func GenerateInvoices() []*purserpb.Invoice {
 			LineItems: demoLineItems(
 				demoLineSpec{LineKey: "base_subscription", Quantity: "1", IncludedQuantity: "0", BillableQuantity: "1", UnitPrice: "249.00", Total: "249.00"},
 				demoLineSpec{LineKey: "meter:delivered_minutes:demo-media:current", Meter: "delivered_minutes", Quantity: "42500", IncludedQuantity: "500000", BillableQuantity: "0", UnitPrice: "0.00052", Total: "0.00", ClusterID: DemoMediaClusterID, ClusterName: "Demo Media Cluster", ClusterKind: "platform_official", PricingSource: "tier", PricingLabel: "Subscription tier"},
-				demoLineSpec{LineKey: "meter:storage_gb_seconds_cold:demo-media:current", Meter: "storage_gb_seconds_cold", Quantity: "15.2", IncludedQuantity: "0", BillableQuantity: "15.2", UnitPrice: "0.030", Total: "0.46", ClusterID: DemoMediaClusterID, ClusterName: "Demo Media Cluster", ClusterKind: "platform_official", PricingSource: "tier", PricingLabel: "Subscription tier"},
+				demoLineSpec{LineKey: "meter:storage_gb_seconds_cold:demo-media:current", Meter: "storage_gb_seconds_cold", Quantity: "15.2", IncludedQuantity: "0", BillableQuantity: "15.2", UnitPrice: "0.030", Total: "0.46", ClusterID: DemoMediaClusterID, ClusterName: "Demo Media Cluster", ClusterKind: "platform_official", PricingSource: "tier", PricingLabel: "Subscription tier", Unit: "gibibyte_month"},
 				demoLineSpec{LineKey: "meter:transcode_rendition_seconds:demo-media:current:h264", Meter: "transcode_rendition_seconds", Description: "Transcode renditions", Quantity: "3245.7", IncludedQuantity: "0", BillableQuantity: "3245.7", UnitPrice: "0", Total: "0.00", ClusterID: DemoMediaClusterID, ClusterName: "Demo Media Cluster", ClusterKind: "platform_official", PricingSource: "free_unmetered", PricingLabel: "Usage charges waived", Unit: "second", Dimensions: map[string]any{"execution_backend": "livepeer_network", "output_codec": "h264", "track_type": "video", "rendition_profile": "720p"}},
 				demoLineSpec{LineKey: "meter:delivered_minutes:demo-selfhosted:current", Meter: "delivered_minutes", Quantity: "8300", IncludedQuantity: "0", BillableQuantity: "8300", UnitPrice: "0.00", Total: "0.00", ClusterID: DemoSelfHostedCluster, ClusterName: "Demo Self-hosted Cluster", ClusterKind: "tenant_private", PricingSource: "self_hosted", PricingLabel: "Self-hosted (no charge)"},
 			),
@@ -433,7 +433,7 @@ func GenerateInvoices() []*purserpb.Invoice {
 			LineItems: demoLineItems(
 				demoLineSpec{LineKey: "base_subscription", Quantity: "1", IncludedQuantity: "0", BillableQuantity: "1", UnitPrice: "249.00", Total: "249.00"},
 				demoLineSpec{LineKey: "meter:delivered_minutes:demo-media:previous", Meter: "delivered_minutes", Quantity: "35000", IncludedQuantity: "500000", BillableQuantity: "0", UnitPrice: "0.00052", Total: "0.00", ClusterID: DemoMediaClusterID, ClusterName: "Demo Media Cluster", ClusterKind: "platform_official", PricingSource: "tier", PricingLabel: "Subscription tier"},
-				demoLineSpec{LineKey: "meter:storage_gb_seconds_cold:demo-media:previous", Meter: "storage_gb_seconds_cold", Quantity: "19", IncludedQuantity: "0", BillableQuantity: "19", UnitPrice: "0.030", Total: "0.57", ClusterID: DemoMediaClusterID, ClusterName: "Demo Media Cluster", ClusterKind: "platform_official", PricingSource: "tier", PricingLabel: "Subscription tier"},
+				demoLineSpec{LineKey: "meter:storage_gb_seconds_cold:demo-media:previous", Meter: "storage_gb_seconds_cold", Quantity: "19", IncludedQuantity: "0", BillableQuantity: "19", UnitPrice: "0.030", Total: "0.57", ClusterID: DemoMediaClusterID, ClusterName: "Demo Media Cluster", ClusterKind: "platform_official", PricingSource: "tier", PricingLabel: "Subscription tier", Unit: "gibibyte_month"},
 				demoLineSpec{LineKey: "meter:transcode_rendition_seconds:demo-media:previous:h264", Meter: "transcode_rendition_seconds", Description: "Transcode renditions", Quantity: "2405", IncludedQuantity: "0", BillableQuantity: "2405", UnitPrice: "0", Total: "0.00", ClusterID: DemoMediaClusterID, ClusterName: "Demo Media Cluster", ClusterKind: "platform_official", PricingSource: "free_unmetered", PricingLabel: "Usage charges waived", Unit: "second", Dimensions: map[string]any{"execution_backend": "livepeer_network", "output_codec": "h264", "track_type": "video", "rendition_profile": "720p"}},
 				demoLineSpec{LineKey: "meter:delivered_minutes:demo-selfhosted:previous", Meter: "delivered_minutes", Quantity: "6100", IncludedQuantity: "0", BillableQuantity: "6100", UnitPrice: "0.00", Total: "0.00", ClusterID: DemoSelfHostedCluster, ClusterName: "Demo Self-hosted Cluster", ClusterKind: "tenant_private", PricingSource: "self_hosted", PricingLabel: "Self-hosted (no charge)"},
 			),
@@ -481,7 +481,7 @@ func GenerateInvoicePreview() *purserpb.Invoice {
 
 	usageDetails, _ := structpb.NewStruct(map[string]interface{}{
 		"delivered_minutes":       250000.2,
-		"storage_gb_seconds_cold": 84600.0,
+		"storage_gb_seconds_cold": 61758000.0,
 		"stream_runtime_seconds":  459000.0,
 		"ingress_gb":              82.0,
 		"egress_gb":               456.78,
@@ -512,7 +512,7 @@ func GenerateInvoicePreview() *purserpb.Invoice {
 		LineItems: demoLineItems(
 			demoLineSpec{LineKey: "base_subscription", Quantity: "1", IncludedQuantity: "0", BillableQuantity: "1", UnitPrice: "249.00", Total: "249.00"},
 			demoLineSpec{LineKey: "meter:delivered_minutes:demo-media:draft", Meter: "delivered_minutes", Quantity: "250000", IncludedQuantity: "500000", BillableQuantity: "0", UnitPrice: "0.00052", Total: "0.00", ClusterID: DemoMediaClusterID, ClusterName: "Demo Media Cluster", ClusterKind: "platform_official", PricingSource: "tier", PricingLabel: "Subscription tier"},
-			demoLineSpec{LineKey: "meter:storage_gb_seconds_cold:demo-media:draft", Meter: "storage_gb_seconds_cold", Quantity: "23.5", IncludedQuantity: "0", BillableQuantity: "23.5", UnitPrice: "0.030", Total: "0.71", ClusterID: DemoMediaClusterID, ClusterName: "Demo Media Cluster", ClusterKind: "platform_official", PricingSource: "tier", PricingLabel: "Subscription tier"},
+			demoLineSpec{LineKey: "meter:storage_gb_seconds_cold:demo-media:draft", Meter: "storage_gb_seconds_cold", Quantity: "23.5", IncludedQuantity: "0", BillableQuantity: "23.5", UnitPrice: "0.030", Total: "0.71", ClusterID: DemoMediaClusterID, ClusterName: "Demo Media Cluster", ClusterKind: "platform_official", PricingSource: "tier", PricingLabel: "Subscription tier", Unit: "gibibyte_month"},
 			demoLineSpec{LineKey: "meter:transcode_rendition_seconds:demo-media:draft:h264", Meter: "transcode_rendition_seconds", Description: "Transcode renditions", Quantity: "3245.7", IncludedQuantity: "0", BillableQuantity: "3245.7", UnitPrice: "0", Total: "0.00", ClusterID: DemoMediaClusterID, ClusterName: "Demo Media Cluster", ClusterKind: "platform_official", PricingSource: "free_unmetered", PricingLabel: "Usage charges waived", Unit: "second", Dimensions: map[string]any{"execution_backend": "livepeer_network", "output_codec": "h264", "track_type": "video", "rendition_profile": "720p"}},
 			demoLineSpec{LineKey: "meter:delivered_minutes:demo-selfhosted:draft", Meter: "delivered_minutes", Quantity: "4200", IncludedQuantity: "0", BillableQuantity: "4200", UnitPrice: "0.00", Total: "0.00", ClusterID: DemoSelfHostedCluster, ClusterName: "Demo Self-hosted Cluster", ClusterKind: "tenant_private", PricingSource: "self_hosted", PricingLabel: "Self-hosted (no charge)"},
 		),

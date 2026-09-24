@@ -117,7 +117,8 @@ SELECT
     COALESCE(tpr.included_quantity, 0)::double precision AS included_quantity,
     COALESCE(tpr.unit_price, 0)::double precision AS unit_price,
     COALESCE(tpr.model, '') AS model,
-    COALESCE(bt.currency, '') AS currency
+    COALESCE(bt.currency, '') AS currency,
+    COALESCE(tpr.config, '{}'::jsonb) AS config
 FROM purser.tier_pricing_rules tpr
 JOIN purser.billing_tiers bt ON bt.id = tpr.tier_id
 WHERE tpr.tier_id = sqlc.arg(tier_id)::text::uuid AND tpr.meter = sqlc.arg(meter);

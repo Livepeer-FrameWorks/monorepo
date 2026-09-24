@@ -3030,9 +3030,9 @@ class ClipInNodeDefault(BaseModel):
     "Resolved retention horizon with the source of the decision (per-asset\noverride → per-stream override → tenant default → tier entitlement).\nNull when retention_until is unset (infinite)."
     storage_cost: Optional["ClipInNodeDefaultStorageCost"] = Field(
         alias="storageCost",
-        description="Marginal storage cost for this clip on the tenant's tier. Null when\nthe tenant has no storage meter (self-hosted, fully tenant-private\ncluster). Computed from sizeBytes in GiB × unit_price_per_gb_hour × hours_held.",
+        description="Marginal storage cost for this clip on the tenant's tier. Null when\nthe tenant has no storage meter (self-hosted, fully tenant-private\ncluster). Computed from sizeBytes in GiB × the tier's price per GiB-month.",
     )
-    "Marginal storage cost for this clip on the tenant's tier. Null when\nthe tenant has no storage meter (self-hosted, fully tenant-private\ncluster). Computed from sizeBytes in GiB × unit_price_per_gb_hour × hours_held."
+    "Marginal storage cost for this clip on the tenant's tier. Null when\nthe tenant has no storage meter (self-hosted, fully tenant-private\ncluster). Computed from sizeBytes in GiB × the tier's price per GiB-month."
 
 
 class ClipInNodeDefaultStream(BaseModel):
@@ -3441,8 +3441,8 @@ class ClipInNodeDefaultEffectiveRetention(BaseModel):
 class ClipInNodeDefaultStorageCost(BaseModel):
     """Marginal per-asset storage cost projection. Used by the customer-facing
     storage browser to show "this clip costs you ~$0.01/day". The unit is
-    the tier's currency (typically EUR). Rating prices storage at $/GiB-hour
-    internally; perDay = unit_price_per_gb_hour × 24, perMonth = perDay × 30."""
+    the tier's currency (typically EUR). Rating prices storage per GiB-month
+    (a fixed 730-hour month); perMonth = GiB × price, perDay = perMonth × 24 / 730."""
 
     per_day: float = Field(alias="perDay")
     per_month: float = Field(alias="perMonth")
@@ -18091,9 +18091,9 @@ class VodAssetInNodeDefault(BaseModel):
     "Resolved retention horizon with the source of the decision (per-asset\noverride → per-stream override → tenant default → tier entitlement).\nNull while the asset's retention_until column is unset (infinite)."
     storage_cost: Optional["VodAssetInNodeDefaultStorageCost"] = Field(
         alias="storageCost",
-        description="Marginal storage cost for this asset on the tenant's tier. Null when\nthe tenant has no storage meter (self-hosted, fully tenant-private\ncluster). Computed from sizeBytes in GiB × unit_price_per_gb_hour × hours_held.",
+        description="Marginal storage cost for this asset on the tenant's tier. Null when\nthe tenant has no storage meter (self-hosted, fully tenant-private\ncluster). Computed from sizeBytes in GiB × the tier's price per GiB-month.",
     )
-    "Marginal storage cost for this asset on the tenant's tier. Null when\nthe tenant has no storage meter (self-hosted, fully tenant-private\ncluster). Computed from sizeBytes in GiB × unit_price_per_gb_hour × hours_held."
+    "Marginal storage cost for this asset on the tenant's tier. Null when\nthe tenant has no storage meter (self-hosted, fully tenant-private\ncluster). Computed from sizeBytes in GiB × the tier's price per GiB-month."
 
 
 class VodAssetInNodeDefaultPlaybackPolicy(BaseModel):
@@ -18180,8 +18180,8 @@ class VodAssetInNodeDefaultEffectiveRetention(BaseModel):
 class VodAssetInNodeDefaultStorageCost(BaseModel):
     """Marginal per-asset storage cost projection. Used by the customer-facing
     storage browser to show "this clip costs you ~$0.01/day". The unit is
-    the tier's currency (typically EUR). Rating prices storage at $/GiB-hour
-    internally; perDay = unit_price_per_gb_hour × 24, perMonth = perDay × 30."""
+    the tier's currency (typically EUR). Rating prices storage per GiB-month
+    (a fixed 730-hour month); perMonth = GiB × price, perDay = perMonth × 24 / 730."""
 
     per_day: float = Field(alias="perDay")
     per_month: float = Field(alias="perMonth")

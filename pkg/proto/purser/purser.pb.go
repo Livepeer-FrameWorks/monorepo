@@ -715,23 +715,23 @@ func (x *GetTenantBillingStatusResponse) GetTierName() string {
 // if the tier has no rule, all three fields are zero.
 type StoragePricing struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
-	// Free allotment per billing period, in GiB-hours (the same unit the
-	// rating engine subtracts from after the GiB-seconds → GiB-hour
-	// conversion). E.g. 7200 ≈ "10 GB held for 30 days." Usage at or
-	// below this level is rated at zero; the UI may surface "first N
-	// GiB-hours free".
-	IncludedGbHours float64 `protobuf:"fixed64,1,opt,name=included_gb_hours,json=includedGbHours,proto3" json:"included_gb_hours,omitempty"`
-	// Marginal price per GiB-hour above included_gb_hours, in the tier's
-	// currency. The UI projects per-asset day/month cost from this hourly rate.
-	UnitPricePerGbHour float64 `protobuf:"fixed64,2,opt,name=unit_price_per_gb_hour,json=unitPricePerGbHour,proto3" json:"unit_price_per_gb_hour,omitempty"`
-	// Currency for unit_price_per_gb_hour (e.g. "EUR", "USD").
+	// Currency for unit_price_per_gib_month (e.g. "EUR", "USD").
 	Currency string `protobuf:"bytes,3,opt,name=currency,proto3" json:"currency,omitempty"`
 	// Pricing model identifier from tier_pricing_rules.model
 	// ("tiered_graduated", "all_usage"). UI may display "first N GB free"
 	// only when model == "tiered_graduated".
-	Model         string `protobuf:"bytes,4,opt,name=model,proto3" json:"model,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	Model string `protobuf:"bytes,4,opt,name=model,proto3" json:"model,omitempty"`
+	// Free allotment per billing period, in GiB-months (the unit the rating
+	// engine subtracts from after converting GiB-seconds; one GiB-month is
+	// 730 GiB-hours). E.g. 10 = "10 GiB held all month". Usage at or below
+	// this level is rated at zero.
+	IncludedGibMonths float64 `protobuf:"fixed64,5,opt,name=included_gib_months,json=includedGibMonths,proto3" json:"included_gib_months,omitempty"`
+	// Marginal price per GiB-month above included_gib_months, in the tier's
+	// currency. Usage is prorated to the second, so the UI projects per-asset
+	// day/month cost from this rate.
+	UnitPricePerGibMonth float64 `protobuf:"fixed64,6,opt,name=unit_price_per_gib_month,json=unitPricePerGibMonth,proto3" json:"unit_price_per_gib_month,omitempty"`
+	unknownFields        protoimpl.UnknownFields
+	sizeCache            protoimpl.SizeCache
 }
 
 func (x *StoragePricing) Reset() {
@@ -764,20 +764,6 @@ func (*StoragePricing) Descriptor() ([]byte, []int) {
 	return file_purser_proto_rawDescGZIP(), []int{7}
 }
 
-func (x *StoragePricing) GetIncludedGbHours() float64 {
-	if x != nil {
-		return x.IncludedGbHours
-	}
-	return 0
-}
-
-func (x *StoragePricing) GetUnitPricePerGbHour() float64 {
-	if x != nil {
-		return x.UnitPricePerGbHour
-	}
-	return 0
-}
-
 func (x *StoragePricing) GetCurrency() string {
 	if x != nil {
 		return x.Currency
@@ -790,6 +776,20 @@ func (x *StoragePricing) GetModel() string {
 		return x.Model
 	}
 	return ""
+}
+
+func (x *StoragePricing) GetIncludedGibMonths() float64 {
+	if x != nil {
+		return x.IncludedGibMonths
+	}
+	return 0
+}
+
+func (x *StoragePricing) GetUnitPricePerGibMonth() float64 {
+	if x != nil {
+		return x.UnitPricePerGibMonth
+	}
+	return 0
 }
 
 type GetBillingTiersRequest struct {
@@ -12332,12 +12332,12 @@ const file_purser_proto_rawDesc = "" +
 	"\x17available_balance_cents\x18\f \x01(\x03R\x15availableBalanceCents\x12)\n" +
 	"\x10collection_ready\x18\r \x01(\bR\x0fcollectionReady\x12/\n" +
 	"\x13collection_provider\x18\x0e \x01(\tR\x12collectionProvider\x12\x1b\n" +
-	"\ttier_name\x18\x0f \x01(\tR\btierName\"\xa2\x01\n" +
-	"\x0eStoragePricing\x12*\n" +
-	"\x11included_gb_hours\x18\x01 \x01(\x01R\x0fincludedGbHours\x122\n" +
-	"\x16unit_price_per_gb_hour\x18\x02 \x01(\x01R\x12unitPricePerGbHour\x12\x1a\n" +
+	"\ttier_name\x18\x0f \x01(\tR\btierName\"\xe1\x01\n" +
+	"\x0eStoragePricing\x12\x1a\n" +
 	"\bcurrency\x18\x03 \x01(\tR\bcurrency\x12\x14\n" +
-	"\x05model\x18\x04 \x01(\tR\x05model\"\x84\x01\n" +
+	"\x05model\x18\x04 \x01(\tR\x05model\x12.\n" +
+	"\x13included_gib_months\x18\x05 \x01(\x01R\x11includedGibMonths\x126\n" +
+	"\x18unit_price_per_gib_month\x18\x06 \x01(\x01R\x14unitPricePerGibMonthJ\x04\b\x01\x10\x02J\x04\b\x02\x10\x03R\x11included_gb_hoursR\x16unit_price_per_gb_hour\"\x84\x01\n" +
 	"\x16GetBillingTiersRequest\x12)\n" +
 	"\x10include_inactive\x18\x01 \x01(\bR\x0fincludeInactive\x12?\n" +
 	"\n" +

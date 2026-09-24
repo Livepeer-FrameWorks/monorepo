@@ -56,7 +56,7 @@ Implements [Node](/builders/api-schema/shared/#node).
 - **playbackPolicy**: `PlaybackPolicy` ([PlaybackPolicy](/builders/api-schema/shared/#playbackpolicy)) — Playback access policy snapshotted at clip creation. null/PUBLIC means anyone with the playbackId can watch. Independent from the source stream&#39;s policy after creation — flipping the source stream&#39;s policy does not affect already-shared clip URLs.
 - **thumbnailAssets**: `ThumbnailAssets` ([ThumbnailAssets](/builders/api-schema/shared/#thumbnailassets)) — Server-resolved Chandler URLs for the clip&#39;s poster and sprite thumbnails. Null until Foghorn confirms the thumbnail upload.
 - **effectiveRetention**: `EffectiveRetention` ([EffectiveRetention](/builders/api-schema/shared/#effectiveretention)) — Resolved retention horizon with the source of the decision (per-asset override → per-stream override → tenant default → tier entitlement). Null when retention_until is unset (infinite).
-- **storageCost**: `StorageCostProjection` ([StorageCostProjection](/builders/api-schema/shared/#storagecostprojection)) — Marginal storage cost for this clip on the tenant&#39;s tier. Null when the tenant has no storage meter (self-hosted, fully tenant-private cluster). Computed from sizeBytes in GiB × unit_price_per_gb_hour × hours_held.
+- **storageCost**: `StorageCostProjection` ([StorageCostProjection](/builders/api-schema/shared/#storagecostprojection)) — Marginal storage cost for this clip on the tenant&#39;s tier. Null when the tenant has no storage meter (self-hosted, fully tenant-private cluster). Computed from sizeBytes in GiB × the tier&#39;s price per GiB-month.
 
 ### ConnectionEvent
 
@@ -702,7 +702,7 @@ Where a stream&#39;s source may be ingested. It is a summary of the stream&#39;s
 
 **object**
 
-Marginal per-asset storage cost projection. Used by the customer-facing storage browser to show &#34;this clip costs you ~$0.01/day&#34;. The unit is the tier&#39;s currency (typically EUR). Rating prices storage at $/GiB-hour internally; perDay = unit_price_per_gb_hour × 24, perMonth = perDay × 30.
+Marginal per-asset storage cost projection. Used by the customer-facing storage browser to show &#34;this clip costs you ~$0.01/day&#34;. The unit is the tier&#39;s currency (typically EUR). Rating prices storage per GiB-month (a fixed 730-hour month); perMonth = GiB × price, perDay = perMonth × 24 / 730.
 
 - **perDay**: `Float!`
 - **perMonth**: `Float!`
@@ -969,7 +969,7 @@ Implements [Node](/builders/api-schema/shared/#node).
 - **playbackPolicy**: `PlaybackPolicy` ([PlaybackPolicy](/builders/api-schema/shared/#playbackpolicy)) — Playback access policy. null/PUBLIC = anyone with the playbackId can watch.
 - **thumbnailAssets**: `ThumbnailAssets` ([ThumbnailAssets](/builders/api-schema/shared/#thumbnailassets)) — Server-resolved Chandler URLs for the VOD&#39;s poster and sprite thumbnails. Null until Foghorn confirms the thumbnail upload.
 - **effectiveRetention**: `EffectiveRetention` ([EffectiveRetention](/builders/api-schema/shared/#effectiveretention)) — Resolved retention horizon with the source of the decision (per-asset override → per-stream override → tenant default → tier entitlement). Null while the asset&#39;s retention_until column is unset (infinite).
-- **storageCost**: `StorageCostProjection` ([StorageCostProjection](/builders/api-schema/shared/#storagecostprojection)) — Marginal storage cost for this asset on the tenant&#39;s tier. Null when the tenant has no storage meter (self-hosted, fully tenant-private cluster). Computed from sizeBytes in GiB × unit_price_per_gb_hour × hours_held.
+- **storageCost**: `StorageCostProjection` ([StorageCostProjection](/builders/api-schema/shared/#storagecostprojection)) — Marginal storage cost for this asset on the tenant&#39;s tier. Null when the tenant has no storage meter (self-hosted, fully tenant-private cluster). Computed from sizeBytes in GiB × the tier&#39;s price per GiB-month.
 
 ### VodAssetStatus
 

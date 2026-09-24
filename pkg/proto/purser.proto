@@ -255,21 +255,25 @@ message GetTenantBillingStatusResponse {
 // storage_gb_seconds_cold meter (the customer-facing S3 storage product);
 // if the tier has no rule, all three fields are zero.
 message StoragePricing {
-  // Free allotment per billing period, in GiB-hours (the same unit the
-  // rating engine subtracts from after the GiB-seconds → GiB-hour
-  // conversion). E.g. 7200 ≈ "10 GB held for 30 days." Usage at or
-  // below this level is rated at zero; the UI may surface "first N
-  // GiB-hours free".
-  double included_gb_hours = 1;
-  // Marginal price per GiB-hour above included_gb_hours, in the tier's
-  // currency. The UI projects per-asset day/month cost from this hourly rate.
-  double unit_price_per_gb_hour = 2;
-  // Currency for unit_price_per_gb_hour (e.g. "EUR", "USD").
+  // Fields 1 and 2 carried GiB-hour values; the new field numbers keep an
+  // older reader from interpreting a per-month price as per-hour.
+  reserved 1, 2;
+  reserved "included_gb_hours", "unit_price_per_gb_hour";
+  // Currency for unit_price_per_gib_month (e.g. "EUR", "USD").
   string currency = 3;
   // Pricing model identifier from tier_pricing_rules.model
   // ("tiered_graduated", "all_usage"). UI may display "first N GB free"
   // only when model == "tiered_graduated".
   string model = 4;
+  // Free allotment per billing period, in GiB-months (the unit the rating
+  // engine subtracts from after converting GiB-seconds; one GiB-month is
+  // 730 GiB-hours). E.g. 10 = "10 GiB held all month". Usage at or below
+  // this level is rated at zero.
+  double included_gib_months = 5;
+  // Marginal price per GiB-month above included_gib_months, in the tier's
+  // currency. Usage is prorated to the second, so the UI projects per-asset
+  // day/month cost from this rate.
+  double unit_price_per_gib_month = 6;
 }
 
 // ============================================================================

@@ -18,15 +18,31 @@ func TestLoadStoragePricingMapsRow(t *testing.T) {
 	s, mock := newReadServer(t, true)
 	mock.ExpectQuery(`FROM purser\.tier_pricing_rules`).
 		WithArgs("tier-1", "storage_gb_seconds_cold").
-		WillReturnRows(sqlmock.NewRows([]string{"included", "unit_price", "model", "currency"}).
-			AddRow(100.0, 0.02, "tiered", "USD"))
+		WillReturnRows(sqlmock.NewRows([]string{"included", "unit_price", "model", "currency", "config"}).
+			AddRow(100.0, 0.02, "tiered", "USD", []byte(`{"rated_quantity_divisor":2628000,"rated_unit":"gibibyte_month"}`)))
 
 	got := s.loadStoragePricing(context.Background(), "tier-1")
 	if got == nil {
 		t.Fatal("expected pricing, got nil")
 	}
-	if got.IncludedGbHours != 100.0 || got.UnitPricePerGbHour != 0.02 || got.Model != "tiered" || got.Currency != "USD" {
+	if got.IncludedGibMonths != 100.0 || got.UnitPricePerGibMonth != 0.02 || got.Model != "tiered" || got.Currency != "USD" {
 		t.Fatalf("storage pricing mapped wrong: %+v", got)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("unmet expectations: %v", err)
+	}
+}
+
+func TestLoadStoragePricingNormalizesExistingHourlyRule(t *testing.T) {
+	s, mock := newReadServer(t, true)
+	mock.ExpectQuery(`FROM purser\.tier_pricing_rules`).
+		WithArgs("tier-1", "storage_gb_seconds_cold").
+		WillReturnRows(sqlmock.NewRows([]string{"included", "unit_price", "model", "currency", "config"}).
+			AddRow(730.0, 0.001, "tiered", "EUR", []byte(`{}`)))
+
+	got := s.loadStoragePricing(context.Background(), "tier-1")
+	if got == nil || got.IncludedGibMonths != 1 || got.UnitPricePerGibMonth != 0.73 {
+		t.Fatalf("hourly rule projected as %+v, want 1 GiB-month included at EUR 0.73/GiB-month", got)
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatalf("unmet expectations: %v", err)

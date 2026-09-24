@@ -72,10 +72,10 @@ Free closes on the normal monthly accounting cadence and produces an itemized �
 
 Add funds to a prepaid balance and pay as usage accrues. Usage is deducted at the rates below.
 
-| Resource          | Rate         |
-| ----------------- | ------------ |
-| Delivered Minutes | €0.00055/min |
-| Cold storage      | €0.035/GB-h  |
+| Resource          | Rate             |
+| ----------------- | ---------------- |
+| Delivered Minutes | €0.00055/min     |
+| Cold storage      | €0.035/GiB-month |
 
 Standard live transcoding is included in delivered-minute pricing. Browser-side StreamCrafter
 composition does not create a server-processing charge. Advanced processing (AI workloads such as
@@ -103,12 +103,12 @@ clips.
 
 **Overages (metered tiers):**
 
-| Tier       | Delivered Minutes | Cold storage |
-| ---------- | ----------------- | ------------ |
-| Supporter  | €0.00055/min      | €0.035/GB-h  |
-| Developer  | €0.00052/min      | €0.030/GB-h  |
-| Production | €0.00050/min      | €0.025/GB-h  |
-| Enterprise | Custom            | Custom       |
+| Tier       | Delivered Minutes | Cold storage     |
+| ---------- | ----------------- | ---------------- |
+| Supporter  | €0.00055/min      | €0.035/GiB-month |
+| Developer  | €0.00052/min      | €0.030/GiB-month |
+| Production | €0.00050/min      | €0.025/GiB-month |
+| Enterprise | Custom            | Custom           |
 
 ## Advanced processing
 
@@ -136,7 +136,7 @@ Load credits first, use resources as you go. Balance decreases as usage accrues.
 
 ### Postpaid
 
-Monthly subscription with included delivered-minute allocations. Cold storage is rated from GiB-second usage and displayed as GiB-hours on invoice lines. Overages are drafted during the billing period and invoiced at period end. Before activation, complete the billing email and address, choose an eligible tier, and finish either Stripe Checkout or Mollie's first-payment mandate flow. The provider webhook is authoritative; returning to the browser alone does not activate postpaid billing.
+Monthly subscription with included delivered-minute allocations. Cold storage is metered to the second and rated per GiB-month (a fixed 730-hour month), so 10 GiB kept for three days bills 10 × 72/730 GiB-months. Invoice lines show the quantity in GiB-months. Overages are drafted during the billing period and invoiced at period end. Before activation, complete the billing email and address, choose an eligible tier, and finish either Stripe Checkout or Mollie's first-payment mandate flow. The provider webhook is authoritative; returning to the browser alone does not activate postpaid billing.
 
 ## Currency
 

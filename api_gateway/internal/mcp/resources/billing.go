@@ -474,7 +474,7 @@ func pricingRuleUnit(meter, sourceUnit string, config any) string {
 		}
 	}
 	if meter == "storage_gb_seconds_hot" || meter == "storage_gb_seconds_cold" {
-		return "gibibyte_hour"
+		return "gibibyte_month"
 	}
 	return sourceUnit
 }

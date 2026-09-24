@@ -11018,7 +11018,7 @@ type ClipInNodeDefaultFields struct {
 	EffectiveRetention *ClipInNodeDefaultFieldsEffectiveRetention `json:"effectiveRetention"`
 	// Marginal storage cost for this clip on the tenant's tier. Null when
 	// the tenant has no storage meter (self-hosted, fully tenant-private
-	// cluster). Computed from sizeBytes in GiB × unit_price_per_gb_hour × hours_held.
+	// cluster). Computed from sizeBytes in GiB × the tier's price per GiB-month.
 	StorageCost *ClipInNodeDefaultFieldsStorageCostStorageCostProjection `json:"storageCost"`
 }
 
@@ -11226,8 +11226,8 @@ func (v *ClipInNodeDefaultFieldsPlaybackPolicyWebhookPlaybackWebhookPolicy) GetS
 //
 // Marginal per-asset storage cost projection. Used by the customer-facing
 // storage browser to show "this clip costs you ~$0.01/day". The unit is
-// the tier's currency (typically EUR). Rating prices storage at $/GiB-hour
-// internally; perDay = unit_price_per_gb_hour × 24, perMonth = perDay × 30.
+// the tier's currency (typically EUR). Rating prices storage per GiB-month
+// (a fixed 730-hour month); perMonth = GiB × price, perDay = perMonth × 24 / 730.
 type ClipInNodeDefaultFieldsStorageCostStorageCostProjection struct {
 	PerDay   float64 `json:"perDay"`
 	PerMonth float64 `json:"perMonth"`
@@ -118688,7 +118688,7 @@ type VodAssetInNodeDefaultFields struct {
 	EffectiveRetention *VodAssetInNodeDefaultFieldsEffectiveRetention `json:"effectiveRetention"`
 	// Marginal storage cost for this asset on the tenant's tier. Null when
 	// the tenant has no storage meter (self-hosted, fully tenant-private
-	// cluster). Computed from sizeBytes in GiB × unit_price_per_gb_hour × hours_held.
+	// cluster). Computed from sizeBytes in GiB × the tier's price per GiB-month.
 	StorageCost *VodAssetInNodeDefaultFieldsStorageCostStorageCostProjection `json:"storageCost"`
 }
 
@@ -118900,8 +118900,8 @@ func (v *VodAssetInNodeDefaultFieldsPlaybackPolicyWebhookPlaybackWebhookPolicy) 
 //
 // Marginal per-asset storage cost projection. Used by the customer-facing
 // storage browser to show "this clip costs you ~$0.01/day". The unit is
-// the tier's currency (typically EUR). Rating prices storage at $/GiB-hour
-// internally; perDay = unit_price_per_gb_hour × 24, perMonth = perDay × 30.
+// the tier's currency (typically EUR). Rating prices storage per GiB-month
+// (a fixed 730-hour month); perMonth = GiB × price, perDay = perMonth × 24 / 730.
 type VodAssetInNodeDefaultFieldsStorageCostStorageCostProjection struct {
 	PerDay   float64 `json:"perDay"`
 	PerMonth float64 `json:"perMonth"`

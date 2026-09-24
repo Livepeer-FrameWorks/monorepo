@@ -711,9 +711,7 @@ func (s *PurserServer) GetTenantBillingStatus(ctx context.Context, req *purserpb
 // loadStoragePricing returns the tenant's marginal storage pricing for the
 // customer-facing cold (S3) storage product. Returns nil when the tier has
 // no rule. Drives the per-asset cost projection on the storage browser.
-// Both unit_price and included_quantity are in GiB-hours — the rating engine
-// converts GiB-seconds → GiB-hours via toRatedUnits before subtracting the
-// included allowance, so the catalog and the wire are in the same unit.
+// The wire uses GiB-months even when a persisted rule rates GiB-hours.
 func (s *PurserServer) loadStoragePricing(ctx context.Context, tierID string) *purserpb.StoragePricing {
 	const meter = "storage_gb_seconds_cold"
 	row, err := purserdb.New(s.db).GetStoragePricing(ctx, purserdb.GetStoragePricingParams{TierID: tierID, Meter: meter})
@@ -727,11 +725,24 @@ func (s *PurserServer) loadStoragePricing(ctx context.Context, tierID string) *p
 		}).Warn("Failed to load storage pricing rule")
 		return nil
 	}
+	var config map[string]any
+	if err := json.Unmarshal(row.Config, &config); err != nil {
+		s.logger.WithError(err).WithField("tier_id", tierID).Warn("Invalid storage pricing rule config")
+		return nil
+	}
+	included, price := rating.StoragePricingGiBMonths(rating.Rule{
+		Meter:            rating.MeterStorageGBSecondsCld,
+		IncludedQuantity: decimal.NewFromFloat(row.IncludedQuantity),
+		UnitPrice:        decimal.NewFromFloat(row.UnitPrice),
+		Config:           config,
+	})
+	includedFloat, _ := included.Float64()
+	priceFloat, _ := price.Float64()
 	return &purserpb.StoragePricing{
-		IncludedGbHours:    row.IncludedQuantity,
-		UnitPricePerGbHour: row.UnitPrice,
-		Currency:           row.Currency,
-		Model:              row.Model,
+		IncludedGibMonths:    includedFloat,
+		UnitPricePerGibMonth: priceFloat,
+		Currency:             row.Currency,
+		Model:                row.Model,
 	}
 }
 

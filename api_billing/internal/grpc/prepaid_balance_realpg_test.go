@@ -59,10 +59,10 @@ func TestPrepaidBalanceRepository_RealPG(t *testing.T) { //nolint:funlen // One 
 	}
 	if _, err := db.ExecContext(ctx, `
 		INSERT INTO purser.tier_pricing_rules (
-			id, tier_id, meter, model, currency, included_quantity, unit_price
+			id, tier_id, meter, model, currency, included_quantity, unit_price, config
 		) VALUES
-			($2, $1, 'delivered_minutes', 'tiered_graduated', 'EUR', 100, 0.01),
-			($3, $1, 'storage_gb_seconds_cold', 'tiered_graduated', 'EUR', 50, 0.001)
+			($2, $1, 'delivered_minutes', 'tiered_graduated', 'EUR', 100, 0.01, '{}'),
+			($3, $1, 'storage_gb_seconds_cold', 'tiered_graduated', 'EUR', 50, 0.001, '{"rated_quantity_divisor":2628000,"rated_unit":"gibibyte_month"}')
 	`, tierID, uuid.NewString(), uuid.NewString()); err != nil {
 		t.Fatal(err)
 	}
@@ -183,7 +183,7 @@ func TestPrepaidBalanceRepository_RealPG(t *testing.T) { //nolint:funlen // One 
 	if len(statusResponse.GetAllowances()) != 1 || statusResponse.GetAllowances()[0].GetUsed() != 10 || statusResponse.GetAllowances()[0].GetRemaining() != 90 {
 		t.Fatalf("allowances = %+v", statusResponse.GetAllowances())
 	}
-	if statusResponse.GetStoragePricing().GetIncludedGbHours() != 50 || statusResponse.GetStoragePricing().GetUnitPricePerGbHour() != 0.001 {
+	if statusResponse.GetStoragePricing().GetIncludedGibMonths() != 50 || statusResponse.GetStoragePricing().GetUnitPricePerGibMonth() != 0.001 {
 		t.Fatalf("storage pricing = %+v", statusResponse.GetStoragePricing())
 	}
 	prepaidResponse, err := server.GetPrepaidBalance(ctx, &purserpb.GetPrepaidBalanceRequest{TenantId: tenantID})

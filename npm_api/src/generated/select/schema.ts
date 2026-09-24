@@ -847,7 +847,7 @@ export interface Clip {
     /**
      * Marginal storage cost for this clip on the tenant's tier. Null when
      * the tenant has no storage meter (self-hosted, fully tenant-private
-     * cluster). Computed from sizeBytes in GiB × unit_price_per_gb_hour × hours_held.
+     * cluster). Computed from sizeBytes in GiB × the tier's price per GiB-month.
      */
     storageCost: (StorageCostProjection | null)
     __typename: 'Clip'
@@ -1575,7 +1575,7 @@ export interface DVRRequest {
     /**
      * Marginal storage cost for this recording on the tenant's tier. Null
      * for tenants without a storage meter (self-hosted, fully tenant-private
-     * clusters). Computed from sizeBytes in GiB × unit_price_per_gb_hour × hours_held.
+     * clusters). Computed from sizeBytes in GiB × the tier's price per GiB-month.
      */
     storageCost: (StorageCostProjection | null)
     storageNodeId: (Scalars['String'] | null)
@@ -4932,8 +4932,8 @@ export interface StorageArtifactsConnection {
 /**
  * Marginal per-asset storage cost projection. Used by the customer-facing
  * storage browser to show "this clip costs you ~$0.01/day". The unit is
- * the tier's currency (typically EUR). Rating prices storage at $/GiB-hour
- * internally; perDay = unit_price_per_gb_hour × 24, perMonth = perDay × 30.
+ * the tier's currency (typically EUR). Rating prices storage per GiB-month
+ * (a fixed 730-hour month); perMonth = GiB × price, perDay = perMonth × 24 / 730.
  */
 export interface StorageCostProjection {
     perDay: Scalars['Float']
@@ -6348,7 +6348,7 @@ export interface VodAsset {
     /**
      * Marginal storage cost for this asset on the tenant's tier. Null when
      * the tenant has no storage meter (self-hosted, fully tenant-private
-     * cluster). Computed from sizeBytes in GiB × unit_price_per_gb_hour × hours_held.
+     * cluster). Computed from sizeBytes in GiB × the tier's price per GiB-month.
      */
     storageCost: (StorageCostProjection | null)
     __typename: 'VodAsset'
@@ -7616,7 +7616,7 @@ export interface ClipGenqlSelection{
     /**
      * Marginal storage cost for this clip on the tenant's tier. Null when
      * the tenant has no storage meter (self-hosted, fully tenant-private
-     * cluster). Computed from sizeBytes in GiB × unit_price_per_gb_hour × hours_held.
+     * cluster). Computed from sizeBytes in GiB × the tier's price per GiB-month.
      */
     storageCost?: StorageCostProjectionGenqlSelection
     __typename?: boolean | number
@@ -8647,7 +8647,7 @@ export interface DVRRequestGenqlSelection{
     /**
      * Marginal storage cost for this recording on the tenant's tier. Null
      * for tenants without a storage meter (self-hosted, fully tenant-private
-     * clusters). Computed from sizeBytes in GiB × unit_price_per_gb_hour × hours_held.
+     * clusters). Computed from sizeBytes in GiB × the tier's price per GiB-month.
      */
     storageCost?: StorageCostProjectionGenqlSelection
     storageNodeId?: boolean | number
@@ -12811,8 +12811,8 @@ artifactHash?: (Scalars['String'] | null),sort?: (StorageArtifactSortField | nul
 /**
  * Marginal per-asset storage cost projection. Used by the customer-facing
  * storage browser to show "this clip costs you ~$0.01/day". The unit is
- * the tier's currency (typically EUR). Rating prices storage at $/GiB-hour
- * internally; perDay = unit_price_per_gb_hour × 24, perMonth = perDay × 30.
+ * the tier's currency (typically EUR). Rating prices storage per GiB-month
+ * (a fixed 730-hour month); perMonth = GiB × price, perDay = perMonth × 24 / 730.
  */
 export interface StorageCostProjectionGenqlSelection{
     perDay?: boolean | number
@@ -14524,7 +14524,7 @@ export interface VodAssetGenqlSelection{
     /**
      * Marginal storage cost for this asset on the tenant's tier. Null when
      * the tenant has no storage meter (self-hosted, fully tenant-private
-     * cluster). Computed from sizeBytes in GiB × unit_price_per_gb_hour × hours_held.
+     * cluster). Computed from sizeBytes in GiB × the tier's price per GiB-month.
      */
     storageCost?: StorageCostProjectionGenqlSelection
     __typename?: boolean | number

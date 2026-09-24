@@ -2743,7 +2743,7 @@ type DVRRequest {
   """
   Marginal storage cost for this recording on the tenant's tier. Null
   for tenants without a storage meter (self-hosted, fully tenant-private
-  clusters). Computed from sizeBytes in GiB × unit_price_per_gb_hour × hours_held.
+  clusters). Computed from sizeBytes in GiB × the tier's price per GiB-month.
   """
   storageCost: StorageCostProjection
   # Lifecycle data (from Periscope via artifactStatesConnection)
@@ -3093,7 +3093,7 @@ type VodAsset implements Node {
   """
   Marginal storage cost for this asset on the tenant's tier. Null when
   the tenant has no storage meter (self-hosted, fully tenant-private
-  cluster). Computed from sizeBytes in GiB × unit_price_per_gb_hour × hours_held.
+  cluster). Computed from sizeBytes in GiB × the tier's price per GiB-month.
   """
   storageCost: StorageCostProjection
 }
@@ -6197,7 +6197,7 @@ type Clip implements Node {
   """
   Marginal storage cost for this clip on the tenant's tier. Null when
   the tenant has no storage meter (self-hosted, fully tenant-private
-  cluster). Computed from sizeBytes in GiB × unit_price_per_gb_hour × hours_held.
+  cluster). Computed from sizeBytes in GiB × the tier's price per GiB-month.
   """
   storageCost: StorageCostProjection
 }
@@ -8232,8 +8232,8 @@ input SetStreamRetentionOverridesInput {
 """
 Marginal per-asset storage cost projection. Used by the customer-facing
 storage browser to show "this clip costs you ~$0.01/day". The unit is
-the tier's currency (typically EUR). Rating prices storage at $/GiB-hour
-internally; perDay = unit_price_per_gb_hour × 24, perMonth = perDay × 30.
+the tier's currency (typically EUR). Rating prices storage per GiB-month
+(a fixed 730-hour month); perMonth = GiB × price, perDay = perMonth × 24 / 730.
 """
 type StorageCostProjection {
   perDay: Float!

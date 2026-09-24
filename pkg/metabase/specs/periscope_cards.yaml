@@ -162,16 +162,17 @@ cards:
       ORDER BY day, storage_scope
       LIMIT 500
 
-  # Informational only: unit price is the payg list rate (€0.035 / GiB-hour,
-  # storage_gb_seconds_cold in billing_tiers.yaml). Not authoritative billing.
+  # Informational only: unit price is the payg list rate (€0.035 / GiB-month
+  # of 730 hours, storage_gb_seconds_cold in billing_tiers.yaml). Not
+  # authoritative billing.
   - slug: periscope.cold-storage-cost-by-tenant
     name: Cold-storage cost by tenant (informational)
     display: table
     database: FrameWorks ClickHouse
     query: |
       SELECT tenant_id,
-             round(sum(gb_hours), 2)          AS cold_gib_hours,
-             round(sum(gb_hours) * 0.035, 2)  AS est_cost_eur
+             round(sum(gb_hours) / 730, 4)          AS cold_gib_months,
+             round(sum(gb_hours) / 730 * 0.035, 2)  AS est_cost_eur
       FROM periscope.storage_usage_daily
       WHERE storage_scope = 'cold'
         AND day >= today() - 30
