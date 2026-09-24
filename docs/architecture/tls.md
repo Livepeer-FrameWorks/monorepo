@@ -29,6 +29,12 @@ issuance token (including an operator-provided token whose expiry is unknown),
 Privateer mints a replacement and retries that issuance once immediately. A
 failed proactive refresh does not discard a token that is still valid.
 
+Each leaf directory `/etc/frameworks/pki/services/<service>/` has two writers:
+Privateer at runtime and the `go_service` Ansible role when it installs a
+bootstrap pair. Both take an exclusive `flock` on the directory itself before
+swapping `tls.crt` and `tls.key`, so a reader never sees a cert from one writer
+with a key from the other, and no lock file is left in the PKI tree.
+
 Three consecutive certificate-sync failures make Privateer's `internal_pki`
 health check unhealthy and return HTTP 503 from its health endpoint. The
 `privateer_internal_cert_sync_operations_total{status}` and

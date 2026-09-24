@@ -1697,9 +1697,12 @@ func (a *Agent) writeServiceCertificate(serviceType, certPEM, keyPEM string) err
 	return nil
 }
 
+// lockServiceCertificateDir takes an exclusive flock on the certificate
+// directory itself, so the Privateer runtime and the go_service bootstrap
+// install (`flock -x 9 ... 9<"$cert_dir"`) serialize the cert/key pair swap
+// without leaving a lock file in the service PKI tree.
 func lockServiceCertificateDir(dir string) (func(), error) {
-	lockPath := filepath.Join(dir, ".tls.write.lock")
-	lockFile, err := os.OpenFile(lockPath, os.O_CREATE|os.O_RDWR, 0600)
+	lockFile, err := os.Open(dir)
 	if err != nil {
 		return nil, err
 	}

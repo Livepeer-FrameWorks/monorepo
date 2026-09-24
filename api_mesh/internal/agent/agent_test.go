@@ -629,6 +629,62 @@ func TestWriteServiceCertificateUsesConfiguredReaderGroup(t *testing.T) {
 	}
 }
 
+func TestWriteServiceCertificateLocksDirectoryWithoutLeavingLockFile(t *testing.T) {
+	previousGroup := servicePKIReaderGroup
+	servicePKIReaderGroup = ""
+	t.Cleanup(func() { servicePKIReaderGroup = previousGroup })
+
+	dir := t.TempDir()
+	serviceDir := filepath.Join(dir, "services", "decklog")
+	if err := os.MkdirAll(serviceDir, 0o750); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+
+	// Hold the directory flock the way the go_service bootstrap writer does
+	// (`flock -x 9 ... 9<"$cert_dir"`); the runtime writer must wait for it.
+	held, openErr := os.Open(serviceDir)
+	if openErr != nil {
+		t.Fatalf("open dir: %v", openErr)
+	}
+	defer held.Close()
+	if lockErr := syscall.Flock(int(held.Fd()), syscall.LOCK_EX); lockErr != nil {
+		t.Fatalf("flock dir: %v", lockErr)
+	}
+
+	agent := &Agent{pkiBasePath: dir}
+	done := make(chan error, 1)
+	go func() { done <- agent.writeServiceCertificate("decklog", "cert", "key") }()
+
+	select {
+	case writeErr := <-done:
+		t.Fatalf("writeServiceCertificate finished while the cert dir was locked (err=%v)", writeErr)
+	case <-time.After(200 * time.Millisecond):
+	}
+	if unlockErr := syscall.Flock(int(held.Fd()), syscall.LOCK_UN); unlockErr != nil {
+		t.Fatalf("unlock dir: %v", unlockErr)
+	}
+	select {
+	case writeErr := <-done:
+		if writeErr != nil {
+			t.Fatalf("writeServiceCertificate: %v", writeErr)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("writeServiceCertificate did not finish after the dir lock was released")
+	}
+
+	entries, err := os.ReadDir(serviceDir)
+	if err != nil {
+		t.Fatalf("read dir: %v", err)
+	}
+	var names []string
+	for _, entry := range entries {
+		names = append(names, entry.Name())
+	}
+	if !reflect.DeepEqual(names, []string{"tls.crt", "tls.key"}) {
+		t.Fatalf("service cert dir entries = %v, want only tls.crt and tls.key", names)
+	}
+}
+
 func TestSyncInternalCertificatesUsesExpectedServicesWithoutRegistryLookup(t *testing.T) {
 	dir := t.TempDir()
 	navigator := &fakeCertificateClient{
