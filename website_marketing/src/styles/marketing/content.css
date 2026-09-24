@@ -1218,22 +1218,6 @@
     padding-bottom: 0.55rem;
   }
 
-  .pricing-calculator--compact {
-    padding: clamp(1rem, 1.6vw, 1.4rem);
-    border-radius: 0;
-    border: none;
-    background: transparent;
-    box-shadow: none;
-  }
-
-  .pricing-calculator--compact .pricing-calculator__grid {
-    gap: clamp(1.05rem, 1.5vw, 1.35rem);
-  }
-
-  .pricing-calculator--compact .pricing-calculator__panels {
-    gap: clamp(0.75rem, 1.1vw, 1rem);
-  }
-
   .pricing-calculator {
     display: flex;
     flex-direction: column;
@@ -1331,6 +1315,7 @@
   .pricing-calculator__panel {
     border: 1px solid rgba(var(--accent-rgb) / 0.16);
     border-radius: 10px;
+    padding: clamp(0.9rem, 1.3vw, 1.15rem);
     display: flex;
     flex-direction: column;
     gap: 0.65rem;
@@ -1339,17 +1324,6 @@
       hsl(var(--brand-surface)) 92%,
       rgba(var(--fx-rgb-12-16-30) / 0.6)
     );
-  }
-
-  .pricing-calculator--compact .pricing-calculator__panel {
-    border: none;
-    border-radius: 0;
-    background: transparent;
-    border-bottom: 1px solid rgba(var(--accent-rgb) / 0.14);
-  }
-
-  .pricing-calculator--compact .pricing-calculator__panel:last-child {
-    border-bottom: none;
   }
 
   .pricing-calculator__panel-label {
@@ -1405,6 +1379,8 @@
   .pricing-calculator__metric-value {
     font-size: 0.95rem;
     font-weight: 600;
+    white-space: nowrap;
+    font-variant-numeric: tabular-nums;
     color: hsl(var(--foreground));
   }
 
@@ -1429,13 +1405,223 @@
     gap: 0.6rem;
   }
 
-  .pricing-calculator__panel-total {
+  .pricing-calculator__presets {
     display: flex;
-    justify-content: space-between;
-    align-items: center;
+    flex-wrap: wrap;
+    gap: 0.5rem;
+  }
+
+  .pricing-calculator__preset,
+  .pricing-calculator__month {
+    border: 1px solid rgba(var(--accent-rgb) / 0.24);
+    border-radius: 999px;
+    padding: 0.35rem 0.85rem;
+    font-size: 0.82rem;
+    color: hsl(var(--muted-foreground));
+    background: transparent;
+    transition:
+      color 150ms ease,
+      background-color 150ms ease,
+      border-color 150ms ease;
+  }
+
+  .pricing-calculator__month {
+    padding: 0.2rem 0.6rem;
+    font-size: 0.74rem;
+  }
+
+  .pricing-calculator__preset:hover,
+  .pricing-calculator__month:hover {
+    color: hsl(var(--foreground));
+    border-color: rgba(var(--accent-rgb) / 0.5);
+  }
+
+  .pricing-calculator__preset[aria-pressed="true"],
+  .pricing-calculator__month[aria-pressed="true"] {
+    color: hsl(var(--foreground));
+    background: rgba(var(--accent-rgb) / 0.18);
+    border-color: rgba(var(--accent-rgb) / 0.6);
+  }
+
+  .pricing-calculator__preset:focus-visible,
+  .pricing-calculator__month:focus-visible {
+    outline: 2px solid hsl(var(--accent));
+    outline-offset: 2px;
+  }
+
+  .pricing-calculator__preset--static {
+    border-style: dashed;
+    color: hsl(var(--foreground));
+  }
+
+  .pricing-calculator__group {
+    display: flex;
+    flex-direction: column;
+    gap: clamp(0.95rem, 1.4vw, 1.15rem);
+    margin: 0;
+    padding: 0;
+    border: none;
+    min-width: 0;
+  }
+
+  .pricing-calculator__group + .pricing-calculator__group {
+    padding-top: clamp(1rem, 1.4vw, 1.3rem);
+    border-top: 1px solid rgba(var(--accent-rgb) / 0.12);
+  }
+
+  .pricing-calculator__group-title {
+    margin-bottom: 0.2rem;
     font-size: 0.95rem;
     font-weight: 600;
     color: hsl(var(--foreground));
+  }
+
+  .pricing-calculator__check {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.55rem;
+    font-size: 0.9rem;
+    color: hsl(var(--foreground));
+  }
+
+  .pricing-calculator__check input {
+    width: 1rem;
+    height: 1rem;
+    accent-color: hsl(var(--accent));
+  }
+
+  .pricing-calculator__select {
+    width: 100%;
+    height: 2.25rem;
+    padding: 0 0.6rem;
+    border-radius: 6px;
+    border: 1px solid hsl(var(--border));
+    background: hsl(var(--background));
+    color: hsl(var(--foreground));
+    font-size: 0.875rem;
+  }
+
+  .pricing-calculator__select:focus-visible {
+    outline: 2px solid hsl(var(--accent));
+    outline-offset: 1px;
+  }
+
+  .pricing-calculator__panel-heading {
+    justify-content: space-between;
+    flex-wrap: wrap;
+  }
+
+  .pricing-calculator__months {
+    display: flex;
+    gap: 0.35rem;
+  }
+
+  .pricing-calculator__plans {
+    margin: 0;
+    padding: 0;
+    list-style: none;
+    display: flex;
+    flex-direction: column;
+    gap: 0.4rem;
+  }
+
+  .pricing-calculator__plan {
+    padding: 0.6rem 0.75rem;
+    border-radius: 8px;
+    border: 1px solid transparent;
+    display: flex;
+    flex-direction: column;
+    gap: 0.25rem;
+  }
+
+  .pricing-calculator__plan--recommended {
+    border-color: rgba(var(--brand-green-rgb) / 0.55);
+    background: rgba(var(--brand-green-rgb) / 0.08);
+  }
+
+  .pricing-calculator__plan--ineligible {
+    opacity: 0.6;
+  }
+
+  .pricing-calculator__plan-head {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    gap: 0.6rem;
+  }
+
+  .pricing-calculator__plan-name {
+    display: inline-flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.4rem;
+    font-weight: 600;
+    color: hsl(var(--foreground));
+  }
+
+  .pricing-calculator__plan-tag {
+    font-size: 0.66rem;
+    font-weight: 500;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    padding: 0.1rem 0.45rem;
+    border-radius: 999px;
+    color: hsl(var(--brand-green));
+    border: 1px solid rgba(var(--brand-green-rgb) / 0.5);
+  }
+
+  .pricing-calculator__plan-tag--muted {
+    color: hsl(var(--muted-foreground));
+    border-color: hsl(var(--border));
+  }
+
+  .pricing-calculator__plan-total {
+    font-weight: 600;
+    font-variant-numeric: tabular-nums;
+    color: hsl(var(--foreground));
+    white-space: nowrap;
+  }
+
+  .pricing-calculator__plan-lines {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.2rem 0.9rem;
+    font-size: 0.76rem;
+    font-variant-numeric: tabular-nums;
+    color: hsl(var(--muted-foreground));
+  }
+
+  .pricing-calculator__included {
+    margin: 0;
+    padding-left: 1.1rem;
+    display: grid;
+    gap: 0.3rem;
+    font-size: 0.86rem;
+    color: hsl(var(--muted-foreground));
+  }
+
+  .pricing-calculator__enterprise-hint a,
+  .pricing-calculator__math a {
+    text-decoration: underline;
+  }
+
+  .pricing-calculator__math {
+    font-size: 0.82rem;
+    color: hsl(var(--muted-foreground));
+  }
+
+  .pricing-calculator__math summary {
+    cursor: pointer;
+    color: hsl(var(--foreground));
+    font-weight: 500;
+  }
+
+  .pricing-calculator__math ul {
+    margin: 0.6rem 0 0;
+    padding-left: 1.1rem;
+    display: grid;
+    gap: 0.45rem;
+    line-height: 1.55;
   }
 
   @media (max-width: 600px) {

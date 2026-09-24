@@ -39,6 +39,12 @@ import {
 } from "@/components/ui/accordion";
 import { useState, useEffect, useMemo, useRef } from "react";
 import config from "../../config";
+import pricingCatalog from "@/data/pricing-catalog.json";
+
+const paygCatalog = pricingCatalog.tiers.find((t) => t.id === "payg");
+const lowestPaidBase = Math.min(
+  ...pricingCatalog.tiers.filter((t) => t.basePrice > 0).map((t) => t.basePrice)
+);
 
 const createSeededRandom = (seed) => {
   let state = seed;
@@ -407,7 +413,7 @@ const LandingPage = () => {
       tone: "cyan",
       badge: "Agent-Ready",
       name: "Pay As You Go",
-      price: "€0.00055",
+      price: `€${paygCatalog.deliveredMinutes.unitPrice}`,
       period: "/delivered min",
       description:
         "Pay only when you use it. Wallet-friendly, with account controls for operators.",
@@ -415,7 +421,7 @@ const LandingPage = () => {
         "No subscription, no commitment",
         "Wallet auth with no email or signup form",
         "Top up via card, crypto, or gasless USDC",
-        "Same rates as subscription tiers",
+        `Storage at €${paygCatalog.storage.unitPrice}/GB-month`,
       ],
       ctaType: "internal",
       ctaLabel: "How wallet pay works",
@@ -427,7 +433,7 @@ const LandingPage = () => {
       tone: "cyan",
       badge: "Paid plans",
       name: "Hybrid & Hosted",
-      price: "€50+",
+      price: `€${lowestPaidBase}+`,
       period: "/month",
       description:
         "Run on FrameWorks infrastructure, connect your own edges, or combine both. Add reserved capacity, advanced analytics, and hands-on support as you scale.",

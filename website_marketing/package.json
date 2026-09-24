@@ -10,6 +10,8 @@
     "prebuild": "../scripts/copy-agent-files.sh public",
     "build": "react-router build && node scripts/check-prerender-output.mjs",
     "lint": "eslint . --report-unused-disable-directives --max-warnings 0",
+    "test": "node --test src/lib/*.test.js",
+    "test:coverage": "node --test --experimental-test-coverage src/lib/*.test.js",
     "preview": "vite preview --outDir build/client"
   },
   "dependencies": {

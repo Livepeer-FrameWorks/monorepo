@@ -163,7 +163,7 @@ const Contact = () => {
     {
       question: "What is pay-as-you-go billing?",
       answer:
-        "Add funds to your account via card or crypto. Usage for storage, transcoding, and delivered minutes is deducted automatically. No invoices or monthly commitment. Top up again when your balance runs low.",
+        "Add funds to your account via card or crypto. Delivered minutes and storage are deducted automatically; ingest, transcoding, and bandwidth are included. No invoices or monthly commitment. Top up again when your balance runs low.",
     },
     {
       question: "Can I use FrameWorks without an email account?",

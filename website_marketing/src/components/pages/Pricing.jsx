@@ -31,6 +31,35 @@ import {
   AccordionTrigger,
 } from "@/components/ui/accordion";
 import { HomeIcon, BanknotesIcon, CpuChipIcon } from "@heroicons/react/24/outline";
+import pricingCatalog from "@/data/pricing-catalog.json";
+
+const catalogTier = Object.fromEntries(pricingCatalog.tiers.map((t) => [t.id, t]));
+const formatEuro = (n, digits = 2) =>
+  `€${n.toLocaleString("en-US", { minimumFractionDigits: digits, maximumFractionDigits: digits })}`;
+const minutePrice = (tier) => formatEuro(tier.deliveredMinutes.unitPrice, 5);
+const storagePrice = (tier) => `${formatEuro(tier.storage.unitPrice, 3)}/GB-month`;
+const includedMinutes = (tier) => tier.deliveredMinutes.included.toLocaleString("en-US");
+const basePrice = (tier) => `€${tier.basePrice.toLocaleString("en-US")}`;
+const dailyCost = (tier) => `~${formatEuro(tier.basePrice / 30)}/day`;
+const compactMinutes = (tier) =>
+  new Intl.NumberFormat("en-US", { notation: "compact" }).format(tier.deliveredMinutes.included);
+
+const paidTierPricing = (tier) => ({
+  price: basePrice(tier),
+  dailyCost: dailyCost(tier),
+  delivery: (
+    <span key="delivery">
+      {includedMinutes(tier)} delivered minutes included{" "}
+      <InfoTooltip>Overage {minutePrice(tier)}/min</InfoTooltip>
+    </span>
+  ),
+  storage: `Recordings and uploads stored at ${storagePrice(tier)}`,
+});
+
+const supporterPricing = paidTierPricing(catalogTier.supporter);
+const developerPricing = paidTierPricing(catalogTier.developer);
+const productionPricing = paidTierPricing(catalogTier.production);
+const freeCatalog = catalogTier.free;
 
 const freeTier = {
   id: "free",
@@ -40,7 +69,7 @@ const freeTier = {
   description:
     "Run the video and control-plane stack yourself. Free transcoding via the Livepeer network, free delivery from the shared bandwidth pool.",
   features: [
-    "Self-hosted video stack, 10K delivered min/mo, 10 GB storage, 3 streams / 200 viewers, 7-day DVR",
+    `Self-hosted video stack, ${compactMinutes(freeCatalog)} delivered min/mo, ${freeCatalog.limits.storageGiB} GB storage, ${freeCatalog.limits.maxConcurrentStreams} streams / ${freeCatalog.limits.maxConcurrentViewers} viewers, ${freeCatalog.limits.retentionDays}-day retention`,
   ],
   limitations: [
     "No SLA during beta, no advanced processing (AI workloads), fair-use admission caps burst above quota",
@@ -55,14 +84,13 @@ const paidTiers = [
     id: "supporter",
     tone: "accent",
     name: "Supporter",
-    price: "€79",
+    price: supporterPricing.price,
     period: "/month",
-    dailyCost: "~€2.63/day",
-    description: "120K delivered minutes, hosted load balancer, and a custom subdomain.",
+    dailyCost: supporterPricing.dailyCost,
+    description: `${compactMinutes(catalogTier.supporter)} delivered minutes, hosted load balancer, and a custom subdomain.`,
     features: [
-      <span key="delivery">
-        120,000 delivered minutes included <InfoTooltip>Overage €0.00055/min</InfoTooltip>
-      </span>,
+      supporterPricing.delivery,
+      supporterPricing.storage,
       "Hosted load balancer",
       "Custom subdomain (*.frameworks.network)",
       "Transparent usage reporting",
@@ -79,14 +107,13 @@ const paidTiers = [
     id: "developer",
     tone: "cyan",
     name: "Developer",
-    price: "€249",
+    price: developerPricing.price,
     period: "/month",
-    dailyCost: "~€8.30/day",
-    description: "500K delivered minutes, team features, and advanced analytics.",
+    dailyCost: developerPricing.dailyCost,
+    description: `${compactMinutes(catalogTier.developer)} delivered minutes, team features, and advanced analytics.`,
     features: [
-      <span key="delivery">
-        500,000 delivered minutes included <InfoTooltip>Overage €0.00052/min</InfoTooltip>
-      </span>,
+      developerPricing.delivery,
+      developerPricing.storage,
       "Team collaboration features",
       "Advanced analytics",
       "Priority support",
@@ -100,14 +127,13 @@ const paidTiers = [
     id: "production",
     tone: "yellow",
     name: "Production",
-    price: "€999",
+    price: productionPricing.price,
     period: "/month",
-    dailyCost: "~€33.30/day",
-    description: "2M delivered minutes, SLA-backed 24/7 support, and dedicated capacity options.",
+    dailyCost: productionPricing.dailyCost,
+    description: `${compactMinutes(catalogTier.production)} delivered minutes, SLA-backed 24/7 support, and dedicated capacity options.`,
     features: [
-      <span key="delivery">
-        2,000,000 delivered minutes included <InfoTooltip>Overage €0.00050/min</InfoTooltip>
-      </span>,
+      productionPricing.delivery,
+      productionPricing.storage,
       "SLA & 24/7 support",
       "Dedicated capacity options",
       "Live dashboard",
@@ -135,7 +161,7 @@ const enterpriseTier = {
 
 const payAsYouGo = {
   name: "Account Balance",
-  price: "€0.00055",
+  price: minutePrice(catalogTier.payg),
   period: "/delivered min",
   badge: "Agent-Ready",
   description: "Pay only when you use it. Wallet-friendly, with account controls for operators.",
@@ -143,7 +169,7 @@ const payAsYouGo = {
     "No subscription, no commitment",
     "Wallet auth with no email or signup form",
     "Top up via card, crypto, or gasless USDC",
-    "Same rates as subscription tiers, full API access",
+    `Storage at ${storagePrice(catalogTier.payg)}, full API access`,
   ],
 };
 
@@ -259,7 +285,7 @@ export const PRICING_FAQS = [
   {
     question: "What is pay-as-you-go billing?",
     answer:
-      "Add funds to your account via card or crypto. Usage for storage, transcoding, and delivered minutes is deducted automatically. No invoices or monthly commitment. Top up again when your balance runs low.",
+      "Add funds to your account via card or crypto. Delivered minutes and storage are deducted automatically; ingest, transcoding, and bandwidth are included. No invoices or monthly commitment. Top up again when your balance runs low.",
   },
   {
     question: "Can I use FrameWorks without an email account?",
@@ -649,6 +675,30 @@ const Pricing = () => {
 
       <SectionDivider />
 
+      <Section className="bg-brand-surface" id="calculator">
+        <SectionContainer>
+          <motion.div
+            initial={{ opacity: 0, y: 30 }}
+            whileInView={{ opacity: 1, y: 0 }}
+            viewport={{ once: true }}
+            transition={{ duration: 0.6 }}
+          >
+            <MarketingBand surface="none">
+              <HeadlineStack
+                eyebrow="Cost calculator"
+                title="What will it cost?"
+                subtitle="Pick a workload close to yours and adjust it. Every plan is priced side by side, including storage for recordings and uploads."
+                align="left"
+                underlineAlign="start"
+              />
+              <SavingsCalculator className="mt-8" />
+            </MarketingBand>
+          </motion.div>
+        </SectionContainer>
+      </Section>
+
+      <SectionDivider />
+
       <Section className="bg-brand-surface-strong">
         <SectionContainer>
           <motion.div
@@ -729,7 +779,6 @@ const Pricing = () => {
                   </div>
                 </div>
               </MarketingGridSplit>
-              <SavingsCalculator variant="compact" />
             </MarketingBand>
           </motion.div>
         </SectionContainer>
