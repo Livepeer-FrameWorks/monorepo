@@ -82,10 +82,9 @@ func newStatusServer(t *testing.T, s3 *fakeVodS3Client) (*FoghornGRPCServer, sql
 		t.Fatal(err)
 	}
 	srv := NewFoghornGRPCServer(db, logging.NewLogger(), nil, nil, nil, nil, s3, nil)
-	// The VOD upload path resolves the tenant's official durable cluster (I1). Wire a Quartermaster that resolves
-	// it to this cell plus a local-mint resolver so CreateVodUpload reaches the S3/DB flow the tests exercise.
+	// A VOD is stored on the cluster that accepted it; this cell stores central-primary, so CreateVodUpload for
+	// that cluster reaches the S3/DB flow the tests exercise.
 	srv.SetClusterID("central-primary")
-	srv.SetQuartermasterClient(&mockQMRouting{clusterID: "central-primary"})
 	srv.SetStorageResolverFactory(func(_ context.Context, _ string) *storage.ClusterResolver {
 		return &storage.ClusterResolver{LocalClusterID: "central-primary", LocalS3ClientPresent: true}
 	})
@@ -147,6 +146,7 @@ func TestCreateVodUpload_MetadataFailureAbortsMultipartUpload(t *testing.T) {
 		SizeBytes:    1024,
 		VodHash:      &vodHash,
 		InternalName: &internalName,
+		ClusterId:    "central-primary",
 	})
 	if got := status.Code(err); got != codes.Internal {
 		t.Fatalf("expected Internal for metadata failure, got %s", got)
@@ -194,6 +194,7 @@ func TestCreateVodUpload_AcceptedBeforePrecheckFailureRecordsRejected(t *testing
 		SizeBytes:    1024,
 		VodHash:      &vodHash,
 		InternalName: &internalName,
+		ClusterId:    "central-primary",
 		RequestId:    &requestID,
 	})
 	if got := status.Code(err); got != codes.Internal {

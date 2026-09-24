@@ -6,55 +6,26 @@ import (
 
 	"github.com/DATA-DOG/go-sqlmock"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
-	clusterpeerpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/cluster_peer"
 )
 
-func storagePeerSet(ids ...string) []*clusterpeerpb.TenantClusterPeer {
-	peers := make([]*clusterpeerpb.TenantClusterPeer, 0, len(ids))
-	for _, id := range ids {
-		peers = append(peers, &clusterpeerpb.TenantClusterPeer{ClusterId: id})
-	}
-	return peers
-}
-
-// Storage authority: the ONLY authorized durable destination is the tenant's platform-OFFICIAL cluster with
-// active/unexpired access (peer membership). Subscribed/generic peers are NOT storage destinations, and
-// possession (checked elsewhere) is self-attested so the SOURCE must also be tenant-owned / origin / official.
+// Storage authority: the durable destination is the artifact's origin cluster, and only that cluster's nodes may
+// upload into it. The node's cluster is its authenticated binding; a node elsewhere never obtains a PUT.
 func TestAuthorizeStorageReplication(t *testing.T) {
-	// Tenant-A's entitlement: official cluster "official-a" (active, unexpired). "subscribed-remote" is an
-	// active peer but NOT the official cluster, so it is not a storage destination. An EXPIRED grant to the
-	// official cluster is modeled by that cluster being absent from the peer set (the QM query filters it).
-	rA := tenantStorageRouting{officialCluster: "official-a", peers: storagePeerSet("official-a", "subscribed-remote")}
-	// rExpired: official cluster is set in routing but the tenant no longer holds active/unexpired access to
-	// it (not in the filtered peer set).
-	rExpired := tenantStorageRouting{officialCluster: "official-a", peers: storagePeerSet("subscribed-remote")}
 	cases := []struct {
-		name                                                 string
-		nodeTenant, nodeCluster, artifactTenant, destCluster string
-		routing                                              tenantStorageRouting
-		want                                                 bool
+		name                       string
+		nodeCluster, originCluster string
+		want                       bool
 	}{
-		{"byoc stores own media to platform official (billable)", "tenant-a", "byoc-a", "tenant-a", "official-a", rA, true},
-		{"platform node on the tenant's official cluster", "", "official-a", "tenant-a", "official-a", rA, true},
-		// Origin-cluster equality is NOT source authority: a tenant-B node in tenant-A's origin cluster
-		// self-reporting A's hash must be denied.
-		{"same-origin cross-tenant node denied", "tenant-b", "byoc-a", "tenant-a", "official-a", rA, false},
-		// Cross-tenant: a tenant-B node self-reports possession of tenant-A's hash → denied.
-		{"cross-tenant source denied", "tenant-b", "byoc-b", "tenant-a", "official-a", rA, false},
-		// A subscribed remote (active peer) is NOT a valid storage destination.
-		{"subscribed-remote destination denied", "tenant-a", "byoc-a", "tenant-a", "subscribed-remote", rA, false},
-		// Destination is the official cluster but the tenant's access to it is expired (absent from peers).
-		{"expired official access denied", "tenant-a", "byoc-a", "tenant-a", "official-a", rExpired, false},
-		{"unresolved node fails closed", "", "", "tenant-a", "official-a", rA, false},
-		{"empty destination fails closed", "tenant-a", "byoc-a", "tenant-a", "", rA, false},
-		{"unknown artifact tenant fails closed", "tenant-a", "byoc-a", "", "official-a", rA, false},
-		{"unresolved official cluster fails closed", "tenant-a", "byoc-a", "tenant-a", "official-a", tenantStorageRouting{}, false},
+		{"origin-cluster node stores into its origin", "platform-eu", "platform-eu", true},
+		{"node in another cell denied", "platform-us", "platform-eu", false},
+		{"unresolved node fails closed", "", "platform-eu", false},
+		{"unknown origin fails closed", "platform-eu", "", false},
+		{"both empty fails closed", "", "", false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := authorizeStorageReplication(tc.nodeTenant, tc.nodeCluster, tc.artifactTenant, tc.destCluster, tc.routing); got != tc.want {
-				t.Fatalf("authorizeStorageReplication(nodeT=%q,nodeC=%q,artT=%q,dest=%q) = %v, want %v",
-					tc.nodeTenant, tc.nodeCluster, tc.artifactTenant, tc.destCluster, got, tc.want)
+			if got := authorizeStorageReplication(tc.nodeCluster, tc.originCluster); got != tc.want {
+				t.Fatalf("authorizeStorageReplication(node=%q, origin=%q) = %v, want %v", tc.nodeCluster, tc.originCluster, got, tc.want)
 			}
 		})
 	}

@@ -12,7 +12,6 @@ import (
 	"frameworks/api_balancing/internal/artifactoutbox"
 	"frameworks/api_balancing/internal/database/foghorndb"
 	"frameworks/api_balancing/internal/jobs"
-	"frameworks/api_balancing/internal/storage"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	publicv1 "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/events/public/v1"
 	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
@@ -83,20 +82,13 @@ func (s *FoghornGRPCServer) importVodAssetImpl(ctx context.Context, req *sharedp
 	if capErr := s.checkStorageEntitlement(ctx, tenantID, 0); capErr != nil {
 		return nil, capErr
 	}
-	// The processed output syncs to this cell's storage, as an upload's does.
-	storageCluster, mintMode := s.resolveVodStorageCluster(ctx, tenantID, req.GetClusterId())
-	switch mintMode {
-	case storage.StorageMintViaFederation:
-		return nil, status.Error(codes.Unimplemented, "storage_delegation_unsupported_for_vod")
-	case storage.StorageUnavailable:
-		return nil, status.Error(codes.FailedPrecondition, "storage service unavailable")
+	// The processed output is stored on the cluster that accepted the import (req.ClusterId, persisted as
+	// origin_cluster_id); the processing job only runs on that cluster's nodes.
+	if err := s.vodOriginStorage(ctx, tenantID, req.GetClusterId()); err != nil {
+		return nil, err
 	}
 	if s.s3Client == nil {
 		return nil, status.Error(codes.FailedPrecondition, "S3 storage not configured")
-	}
-	storageClusterArg := sql.NullString{}
-	if storageCluster != "" && storageCluster != req.GetClusterId() {
-		storageClusterArg = sql.NullString{String: storageCluster, Valid: true}
 	}
 	retentionUntil := resolveArtifactInitialRetention(ctx, s.purserClient, tenantID, req.RetentionDays, 0 /* infinite VOD default */, s.logger)
 	contentType := importContentType(format)
@@ -131,8 +123,8 @@ func (s *FoghornGRPCServer) importVodAssetImpl(ctx context.Context, req *sharedp
 		if execErr := queries.InsertImportedVodArtifact(ctx, foghorndb.InsertImportedVodArtifactParams{
 			ArtifactHash: artifactHash, InternalName: sql.NullString{String: req.GetInternalName(), Valid: true},
 			TenantID: tenantID, UserID: req.GetUserId(), Format: sql.NullString{String: format, Valid: true},
-			OriginClusterID: sql.NullString{String: req.GetClusterId(), Valid: true}, StorageClusterID: storageClusterArg,
-			RetentionUntil: retentionUntil,
+			OriginClusterID: sql.NullString{String: req.GetClusterId(), Valid: true},
+			RetentionUntil:  retentionUntil,
 		}); execErr != nil {
 			return execErr
 		}

@@ -111,7 +111,6 @@ func TestRequestedUploadEventsCarryTheCaller_RealPG(t *testing.T) { //nolint:fun
 	s3 := &fakeVodS3Client{}
 	srv := NewFoghornGRPCServer(conn, logging.NewLogger(), nil, nil, nil, nil, s3, nil)
 	srv.SetClusterID("central-primary")
-	srv.SetQuartermasterClient(&mockQMRouting{clusterID: "central-primary"})
 	srv.SetStorageResolverFactory(func(_ context.Context, _ string) *storage.ClusterResolver {
 		return &storage.ClusterResolver{LocalClusterID: "central-primary", LocalS3ClientPresent: true}
 	})

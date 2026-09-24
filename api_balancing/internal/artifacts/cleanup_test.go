@@ -438,11 +438,11 @@ func TestCleaner_RemoteWithoutDelegateReturnsErr(t *testing.T) {
 	}
 }
 
-// I2 acceptance: a locally-backed OFFICIAL ALIAS — storage_cluster_id names a cluster other than this cell, but
+// I2 acceptance: a locally-backed ALIAS — storage_cluster_id names a cluster other than this cell, but
 // the STABLE write-time fact durable_backend_local=true records that the bytes landed on THIS cell's S3 — must be
 // deleted LOCALLY. Delete routing reads the recorded evidence, so the cluster-id mismatch does NOT misroute the
 // delete to a federation peer (which would leave the local bytes leaked and delegate a delete of nothing).
-func TestCleaner_LocallyBackedOfficialAliasDeletesLocally(t *testing.T) {
+func TestCleaner_LocallyBackedAliasDeletesLocally(t *testing.T) {
 	s3 := &fakeS3{}
 	delegateCalls := 0
 	delegate := func(_ context.Context, _ string, _ *foghornfederationpb.DeleteStorageObjectsRequest) (*foghornfederationpb.DeleteStorageObjectsResponse, error) {
@@ -456,9 +456,9 @@ func TestCleaner_LocallyBackedOfficialAliasDeletesLocally(t *testing.T) {
 		Type:                "vod",
 		TenantID:            "tenant-a",
 		VODS3Key:            "vod/tenant-a/vod-alias/movie.mp4",
-		StorageClusterID:    "official-alias", // attribution cluster id != this cell...
-		DurableBackendLocal: true,             // ...but the bytes are on THIS cell's backend.
-		BackendID:           "local-backend",  // recorded on this cell's store
+		StorageClusterID:    "alias-cluster", // attribution cluster id != this cell...
+		DurableBackendLocal: true,            // ...but the bytes are on THIS cell's backend.
+		BackendID:           "local-backend", // recorded on this cell's store
 	})
 	if err != nil {
 		t.Fatalf("Delete err = %v", err)
@@ -495,7 +495,7 @@ func TestCleaner_RemoteAliasWithoutLocalBackingDelegates(t *testing.T) {
 		Type:                "vod",
 		TenantID:            "tenant-a",
 		VODS3Key:            "vod/tenant-a/vod-remote/movie.mp4",
-		StorageClusterID:    "official-alias",
+		StorageClusterID:    "alias-cluster",
 		DurableBackendLocal: false, // no recorded local backing → route by cluster id → remote.
 	})
 	if err != nil {

@@ -25,7 +25,7 @@ only upload path. Hardening of that path is tracked separately in
 
 1. GraphQL `createVodUpload` → Commodore → the origin cell's Foghorn `createVodUploadImpl`
    (`api_balancing/internal/grpc/server.go`). It checks storage entitlement against the declared
-   size, refuses remote storage clusters (`storage_delegation_unsupported_for_vod`), fences on the
+   size, requires the accepting (origin) cluster's storage to be this cell's backend, fences on the
    local backend fingerprint, creates an S3 multipart upload at `vod/<tenant>/<hash>/<hash>.<ext>`
    (`BuildVodS3Key`, `api_balancing/internal/storage/s3_client.go`), and presigns every part for
    2 hours. Parts default to 20 MiB (minimum 5 MiB, at most 10,000 parts; `CalculatePartSize`). The

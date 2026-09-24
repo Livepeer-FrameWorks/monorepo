@@ -11,7 +11,7 @@ underneath it.
 
 Storage backend: **one immutable S3 backend per cell**. Backend repointing is not a supported operation, and
 multi-provider, non-S3, and RAID-local backends are out of scope. Placement policy for WHERE durable media lives —
-official rated-storage tiers, storage-less/self-hosted private clusters, and the federated thumbnail mint that serves
+rated-storage tiers, storage-less/self-hosted private clusters, and the federated thumbnail mint that serves
 them — is designed in [placement-policy-engine.md](../rfcs/placement-policy-engine.md), which also records the seams
 (serving/storage-cell decoupling) already present in the schema that keep that direction open.
 
@@ -23,10 +23,15 @@ run by `make verify-schema`. The exact coverage boundary — which surfaces are 
 or unit-only, and the external object-store end-to-end tier that sits outside it — is stated in
 [Testing posture](#testing-posture).
 
-- **I1 — Durable writes require a positively-resolved official cluster.** A durable-write placement/mint fails closed
-  (`StorageUnavailable`) when the tenant's official cluster is unresolved — no fallback to the caller's cluster,
-  `LocalClusterID`, or a dev default. VOD, DVR, freeze, and thumbnail durable mints route through a strict
-  official-only resolver; the generic read resolver (with its local candidate) is retained only for read paths.
+- **I1 — Durable writes land on the artifact's origin cell.** Every artifact (clip, DVR segments and chapters, VOD
+  upload or import output, thumbnails, freeze) is stored by the cluster that produced it, recorded as
+  `origin_cluster_id`; there is no tenant-level storage destination. `ClusterResolver.ResolveOriginDurable` mints
+  locally when this cell serves the origin and its backing is this cell's store, returns federation when the origin's
+  storage belongs to another cell, and fails closed (`StorageUnavailable`) on an unknown origin — never falling back to
+  the caller's or this cell's cluster. Freeze accepts uploads only from nodes of the origin cluster; a VOD create or
+  import is stored on the cluster that accepted it and its processing job runs only on that cluster's nodes; a DVR's
+  segments and parent row live in the recording cell's store. The tenant's official cluster remains a routing,
+  viewer and billing concept only.
 
 - **I2 — Backend ownership is recorded at write time, never reconstructed from current routing.** The physical
   backend identity — a deterministic `backend_id` fingerprint over `(kind, bucket, endpoint, region, prefix)`, plus the

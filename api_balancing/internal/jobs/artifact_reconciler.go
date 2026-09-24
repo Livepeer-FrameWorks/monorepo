@@ -208,7 +208,7 @@ func (r *ArtifactReconciler) reconcile() {
 	}
 
 	// Billing attribution runs FIRST and on its OWN advisory lock + timeout, decoupled from the projection
-	// critical section below. It makes external per-tenant resolver calls (canMintOfficialLocally), so holding
+	// critical section below. It makes external per-tenant resolver calls, so holding
 	// the projection lock across it would let one slow resolver stall catalog projection / orphan reconciliation
 	// for every replica's catch-up. It is idempotent (only flips false→true) and per-(tenant,cluster)-scoped, so
 	// a distinct single-flight lock (not the projection lock) is all it needs to keep replicas from double-scanning.
@@ -699,7 +699,7 @@ func (r *ArtifactReconciler) projectCommodoreArtifactStateForCluster(ctx context
 			StorageLocation:  nullStringPtr(storageLocation),
 			StorageClusterId: nullStringPtr(storageCluster),
 			HasThumbnails:    boolPtr(hasThumbnails.Valid && hasThumbnails.Bool),
-			// Authoritative thumbnail serving cluster (the official-durable cluster the thumbnail was projected to);
+			// Authoritative thumbnail serving cluster (the origin cluster the thumbnail was stored on);
 			// Commodore prefers it over storage/origin when building the Chandler URL. Absent → NULL, readers fall back.
 			ThumbnailServingClusterId: nullStringPtr(thumbServingCluster),
 			LifecycleStatus:           nullStringPtr(lifecycleStatus),
@@ -838,7 +838,7 @@ func (r *ArtifactReconciler) retryFailed(ctx context.Context) int {
 	}
 	count := 0
 	for _, row := range rows {
-		dispatched, err := r.sendFreezeForArtifact(ctx, row.ArtifactHash, row.ArtifactType, row.StreamInternalName, row.TenantID, row.Format.String, row.NodeID, row.FilePath.String)
+		dispatched, err := r.sendFreezeForArtifact(ctx, row.ArtifactHash, row.ArtifactType, row.StreamInternalName, row.TenantID, row.Format.String, row.OriginClusterID, row.NodeID, row.FilePath.String)
 		if err != nil {
 			r.logger.WithError(err).WithField("artifact_hash", row.ArtifactHash).Warn("Failed to send freeze retry")
 			continue
@@ -859,7 +859,7 @@ func (r *ArtifactReconciler) advancePending(ctx context.Context) int {
 	}
 	count := 0
 	for _, row := range rows {
-		dispatched, err := r.sendFreezeForArtifact(ctx, row.ArtifactHash, row.ArtifactType, row.StreamInternalName, row.TenantID, row.Format.String, row.NodeID, row.FilePath.String)
+		dispatched, err := r.sendFreezeForArtifact(ctx, row.ArtifactHash, row.ArtifactType, row.StreamInternalName, row.TenantID, row.Format.String, row.OriginClusterID, row.NodeID, row.FilePath.String)
 		if err != nil {
 			r.logger.WithError(err).WithField("artifact_hash", row.ArtifactHash).Warn("Failed to send freeze for pending artifact")
 			continue
@@ -1008,11 +1008,10 @@ func artifactTypeFromProto(t ipcpb.ArtifactEvent_ArtifactType) string {
 }
 
 // sendFreezeForArtifact assigns and sends a proactive FreezeRequest to the node through the ONE shared
-// freeze contract the interactive permission path uses — so a background dispatch applies the SAME tenant
-// routing, source+destination authorization, local-backing ownership check, server-minted attempt, staging
-// key, and claim. It can no longer store to the wrong backend, skip authorization, or attribute bytes to the
-// origin cluster.
-func (r *ArtifactReconciler) sendFreezeForArtifact(ctx context.Context, hash, assetType, streamName, tenantID, format, nodeID, filePath string) (dispatched bool, err error) {
+// freeze contract the interactive permission path uses — so a background dispatch applies the SAME origin
+// destination, source authorization, local-backing ownership check, server-minted attempt, staging key, and
+// claim.
+func (r *ArtifactReconciler) sendFreezeForArtifact(ctx context.Context, hash, assetType, streamName, tenantID, format, originClusterID, nodeID, filePath string) (dispatched bool, err error) {
 	if format == "" {
 		format = "mp4"
 	}
@@ -1033,9 +1032,9 @@ func (r *ArtifactReconciler) sendFreezeForArtifact(ctx context.Context, hash, as
 	}
 	expiry := 30 * time.Minute
 
-	assignment, reason, ok := r.prepareFreeze(ctx, assetType, hash, tenantID, streamName, format, "", nodeID, expiry)
+	assignment, reason, ok := r.prepareFreeze(ctx, assetType, hash, tenantID, streamName, format, originClusterID, nodeID, expiry)
 	if !ok {
-		// Not assigned (unauthorized / official storage remote / not eligible / etc.): NOTHING was dispatched,
+		// Not assigned (unknown origin / node outside the origin cluster / origin storage remote / not eligible / etc.): NOTHING was dispatched,
 		// so the caller must not count this as retried/advanced. Left for a later pass; not a loop error.
 		r.logger.WithFields(map[string]interface{}{"artifact_hash": hash, "reason": reason}).Debug("Proactive freeze not assigned")
 		return false, nil

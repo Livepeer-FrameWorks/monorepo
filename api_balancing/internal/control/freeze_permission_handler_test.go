@@ -11,12 +11,14 @@ import (
 
 	"frameworks/api_balancing/internal/identity"
 	"frameworks/api_balancing/internal/state"
+	"frameworks/api_balancing/internal/storage"
 )
 
 // freezePermHarness wires the handler dependencies for a clip freeze-permission request: an injected
-// identity (tenant/origin), the tenant storage-routing entitlement (official cluster + peers) via the
-// tenantStorageRoutingFn seam, a server-owned node identity, the local cluster, and a sqlmock DB. The
-// destination is the routing's official cluster; local mint requires it to equal the local cluster.
+// identity (tenant/origin), a server-owned node identity, the local cluster, and a sqlmock DB. The durable
+// destination is the artifact's origin cluster; without a resolver, local mint requires the origin to be this
+// Foghorn's configured cluster. The tenant cluster-routing seam FAILS, proving freeze never consults a
+// tenant-level cluster.
 type freezePermHarness struct {
 	mock            sqlmock.Sqlmock
 	stream          *mockStream
@@ -24,7 +26,7 @@ type freezePermHarness struct {
 	connFence       int64 // captured session fence; defaults to 0 (matches the registered test conn)
 }
 
-func setupFreezePermTest(t *testing.T, artifactTenant, origin, nodeTenant, nodeCluster, localCluster string, routing tenantStorageRouting) *freezePermHarness {
+func setupFreezePermTest(t *testing.T, artifactTenant, origin, nodeCluster, localCluster string) *freezePermHarness {
 	t.Helper()
 	mock, _, _ := setupArtifactTestDeps(t)
 
@@ -39,7 +41,7 @@ func setupFreezePermTest(t *testing.T, artifactTenant, origin, nodeTenant, nodeC
 	t.Cleanup(func() { identity.SetDefault(nil) })
 
 	prevRouting := tenantStorageRoutingFn
-	tenantStorageRoutingFn = func(context.Context, string) (tenantStorageRouting, bool) { return routing, true }
+	tenantStorageRoutingFn = func(context.Context, string) (tenantStorageRouting, bool) { return tenantStorageRouting{}, false }
 	t.Cleanup(func() { tenantStorageRoutingFn = prevRouting })
 
 	prevFactory := storageResolverFactory
@@ -53,7 +55,7 @@ func setupFreezePermTest(t *testing.T, artifactTenant, origin, nodeTenant, nodeC
 	sm := state.ResetDefaultManagerForTests()
 	t.Cleanup(func() { state.ResetDefaultManagerForTests() })
 	sm.SetNodeInfo("node-1", "node-1.local", true, nil, nil, "", "", nil)
-	sm.SetNodeConnectionInfo(context.Background(), "node-1", "node-1.local", nodeTenant, nodeCluster, nil)
+	sm.SetNodeConnectionInfo(context.Background(), "node-1", "node-1.local", "", nodeCluster, nil)
 
 	// Register a control connection so the handler's current-session (fence) binding sees node-1 as owned.
 	// SetupTestRegistry installs a conn with fence 0; run() passes connFence 0 to match.
@@ -90,17 +92,15 @@ func (h *freezePermHarness) lastResponse(t *testing.T) *ipcpb.FreezePermissionRe
 	return resp
 }
 
-// BYOC→platform-official succeeds even when the artifact's ORIGIN is the BYOC cluster (which may advertise
-// its own storage): the freeze routes to the tenant's OFFICIAL durable backend, not origin-first to itself.
-// A presigned PUT is minted, the attempt is claimed, and a SERVER-MINTED attempt id is returned.
-func TestFreezePermission_BYOCToOfficialApproved(t *testing.T) {
-	routing := tenantStorageRouting{officialCluster: "official-a", peers: storagePeerSet("official-a")}
-	// Origin is the BYOC cluster "byoc-a"; official/local is "official-a". storage_cluster_id is NULL (not
-	// yet stored), so there is no remote-skip and the destination resolves to official-a.
-	h := setupFreezePermTest(t, "tenant-a", "byoc-a", "tenant-a", "byoc-a", "official-a", routing)
-	h.expectMetadataAndPossession("byoc-a", "", "pending", true)
+// A clip produced in the EU cluster freezes into EU storage: the EU cell's node uploads, the EU Foghorn mints
+// against its own backend, and storage_cluster_id stays NULL (= origin). The tenant-level routing seam fails in
+// this harness, so approval proves no tenant "official" cluster is consulted.
+func TestFreezePermission_OriginClusterClipApproved(t *testing.T) {
+	h := setupFreezePermTest(t, "tenant-a", "platform-eu", "platform-eu", "platform-eu")
+	h.expectMetadataAndPossession("platform-eu", "", "pending", true)
 	h.mock.ExpectBegin()
 	h.mock.ExpectExec(`UPDATE foghorn.artifacts\s+SET storage_location = 'freezing'`).
+		WithArgs(sqlmock.AnyArg(), "node-1", "", sqlmock.AnyArg(), sqlmock.AnyArg(), "hash-1", "tenant-a").
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	h.mock.ExpectExec("INSERT INTO foghorn.freeze_publication_ledger").WillReturnResult(sqlmock.NewResult(0, 4))
 	h.mock.ExpectCommit()
@@ -122,8 +122,7 @@ func TestFreezePermission_BYOCToOfficialApproved(t *testing.T) {
 // A session that declared a pre-staged-freeze protocol version is DENIED before any DB work — admission is
 // bound to the version CAPTURED for this connection, not re-looked-up (a reconnect cannot change the verdict).
 func TestFreezePermission_OldProtocolDenied(t *testing.T) {
-	routing := tenantStorageRouting{officialCluster: "official-a", peers: storagePeerSet("official-a")}
-	h := setupFreezePermTest(t, "tenant-a", "byoc-a", "tenant-a", "byoc-a", "official-a", routing)
+	h := setupFreezePermTest(t, "tenant-a", "platform-eu", "platform-eu", "platform-eu")
 	h.protocolVersion = FreezeStagedProtocolMin - 1 // pre-staged-freeze sidecar
 	// No metadata/possession/claim expectations: denial precedes all DB work.
 
@@ -142,8 +141,7 @@ func TestFreezePermission_OldProtocolDenied(t *testing.T) {
 }
 
 func TestFreezePermission_UnknownAssetHasStructuredReason(t *testing.T) {
-	routing := tenantStorageRouting{officialCluster: "official-a", peers: storagePeerSet("official-a")}
-	h := setupFreezePermTest(t, "tenant-a", "byoc-a", "tenant-a", "byoc-a", "official-a", routing)
+	h := setupFreezePermTest(t, "tenant-a", "platform-eu", "platform-eu", "platform-eu")
 	identity.SetDefault(identity.NewResolver(identity.Config{
 		RegistryArtifact: func(context.Context, string) (identity.ArtifactIdentity, error) {
 			return identity.ArtifactIdentity{}, identity.ErrNotFound
@@ -162,8 +160,7 @@ func TestFreezePermission_UnknownAssetHasStructuredReason(t *testing.T) {
 }
 
 func TestFreezePermission_IdentityOutageFailsClosed(t *testing.T) {
-	routing := tenantStorageRouting{officialCluster: "official-a", peers: storagePeerSet("official-a")}
-	h := setupFreezePermTest(t, "tenant-a", "byoc-a", "tenant-a", "byoc-a", "official-a", routing)
+	h := setupFreezePermTest(t, "tenant-a", "platform-eu", "platform-eu", "platform-eu")
 	identity.SetDefault(identity.NewResolver(identity.Config{
 		RegistryArtifact: func(context.Context, string) (identity.ArtifactIdentity, error) {
 			return identity.ArtifactIdentity{}, errors.New("registry unavailable")
@@ -205,10 +202,9 @@ func TestSendLocalFreezeRequest_OldProtocolRejected(t *testing.T) {
 // A request dispatched from a SUPERSEDED connection (its captured fence no longer matches the node's current
 // registered connection) is ignored before any claim/presign — the newer connection re-drives its freezes.
 func TestFreezePermission_SupersededConnectionIgnored(t *testing.T) {
-	routing := tenantStorageRouting{officialCluster: "official-a", peers: storagePeerSet("official-a")}
-	h := setupFreezePermTest(t, "tenant-a", "byoc-a", "tenant-a", "byoc-a", "official-a", routing)
+	h := setupFreezePermTest(t, "tenant-a", "platform-eu", "platform-eu", "platform-eu")
 	h.connFence = 999 // the registered test conn has fence 0, so this session was superseded
-	h.expectMetadataAndPossession("byoc-a", "", "pending", true)
+	h.expectMetadataAndPossession("platform-eu", "", "pending", true)
 	// No claim UPDATE expected: the fence check aborts before PrepareLocalFreezeAssignment.
 
 	h.run()
@@ -223,95 +219,153 @@ func TestFreezePermission_SupersededConnectionIgnored(t *testing.T) {
 
 // PrepareLocalFreezeAssignment is the ONE shared contract both the interactive and reconciler paths use.
 func TestPrepareLocalFreezeAssignment(t *testing.T) {
-	setupSeams := func(t *testing.T, routing tenantStorageRouting, canMint bool) sqlmock.Sqlmock {
+	setupSeams := func(t *testing.T, nodeCluster string, canMint bool) sqlmock.Sqlmock {
 		mock, _, _ := setupArtifactTestDeps(t)
 		prevRouting := tenantStorageRoutingFn
-		tenantStorageRoutingFn = func(context.Context, string) (tenantStorageRouting, bool) { return routing, true }
-		prevMint := canMintOfficialLocallyFn
-		canMintOfficialLocallyFn = func(context.Context, string, string) bool { return canMint }
+		tenantStorageRoutingFn = func(context.Context, string) (tenantStorageRouting, bool) { return tenantStorageRouting{}, false }
+		prevMint := canMintOriginLocallyFn
+		canMintOriginLocallyFn = func(context.Context, string, string) bool { return canMint }
 		prevLocal := localClusterID
-		SetLocalClusterID("official-a")
+		SetLocalClusterID("platform-eu")
 		t.Cleanup(func() {
 			tenantStorageRoutingFn = prevRouting
-			canMintOfficialLocallyFn = prevMint
+			canMintOriginLocallyFn = prevMint
 			SetLocalClusterID(prevLocal)
 		})
 		sm := state.ResetDefaultManagerForTests()
 		t.Cleanup(func() { state.ResetDefaultManagerForTests() })
 		sm.SetNodeInfo("node-1", "n", true, nil, nil, "", "", nil)
-		sm.SetNodeConnectionInfo(context.Background(), "node-1", "n", "tenant-a", "byoc-a", nil)
+		sm.SetNodeConnectionInfo(context.Background(), "node-1", "n", "", nodeCluster, nil)
 		return mock
 	}
-	routingA := tenantStorageRouting{officialCluster: "official-a", peers: storagePeerSet("official-a")}
 
-	t.Run("authorized clip → assignment", func(t *testing.T) {
-		mock := setupSeams(t, routingA, true)
+	t.Run("origin-cluster node → assignment into origin", func(t *testing.T) {
+		mock := setupSeams(t, "platform-eu", true)
 		mock.ExpectBegin()
 		mock.ExpectExec(`UPDATE foghorn.artifacts\s+SET storage_location = 'freezing'`).WillReturnResult(sqlmock.NewResult(0, 1))
 		mock.ExpectExec("INSERT INTO foghorn.freeze_publication_ledger").WillReturnResult(sqlmock.NewResult(0, 4))
 		mock.ExpectCommit()
-		a, reason, ok := PrepareLocalFreezeAssignment(context.Background(), "clip", "hash-1", "tenant-a", "s", "mp4", "byoc-a", "node-1", 30_000_000_000)
+		a, reason, ok := PrepareLocalFreezeAssignment(context.Background(), "clip", "hash-1", "tenant-a", "s", "mp4", "platform-eu", "node-1", 30_000_000_000)
 		if !ok || reason != "" || a.AttemptID == "" || a.StagingURL == "" {
 			t.Fatalf("expected assignment, got ok=%v reason=%q a=%+v", ok, reason, a)
+		}
+		if a.DestCluster != "platform-eu" {
+			t.Fatalf("DestCluster = %q, want the origin platform-eu", a.DestCluster)
 		}
 		if err := mock.ExpectationsWereMet(); err != nil {
 			t.Fatal(err)
 		}
 	})
 
-	t.Run("unauthorized source → cluster_not_authorized", func(t *testing.T) {
-		setupSeams(t, tenantStorageRouting{officialCluster: "official-a", peers: storagePeerSet("official-a")}, true)
-		// Artifact tenant is tenant-b but the node is tenant-a on byoc-a → not authorized; no claim.
-		_, reason, ok := PrepareLocalFreezeAssignment(context.Background(), "clip", "hash-1", "tenant-b", "s", "mp4", "byoc-a", "node-1", 30_000_000_000)
+	t.Run("node outside the origin cluster → cluster_not_authorized", func(t *testing.T) {
+		setupSeams(t, "platform-us", true)
+		_, reason, ok := PrepareLocalFreezeAssignment(context.Background(), "clip", "hash-1", "tenant-a", "s", "mp4", "platform-eu", "node-1", 30_000_000_000)
 		if ok || reason != "cluster_not_authorized" {
 			t.Fatalf("expected cluster_not_authorized, got ok=%v reason=%q", ok, reason)
 		}
 	})
 
+	t.Run("unknown origin → origin_cluster_unknown", func(t *testing.T) {
+		setupSeams(t, "platform-eu", true)
+		_, reason, ok := PrepareLocalFreezeAssignment(context.Background(), "clip", "hash-1", "tenant-a", "s", "mp4", "", "node-1", 30_000_000_000)
+		if ok || reason != "origin_cluster_unknown" {
+			t.Fatalf("expected origin_cluster_unknown, got ok=%v reason=%q", ok, reason)
+		}
+	})
+
 	t.Run("unsupported type → unsupported_asset_type", func(t *testing.T) {
-		setupSeams(t, routingA, true)
-		_, reason, ok := PrepareLocalFreezeAssignment(context.Background(), "dvr", "hash-1", "tenant-a", "s", "mp4", "byoc-a", "node-1", 30_000_000_000)
+		setupSeams(t, "platform-eu", true)
+		_, reason, ok := PrepareLocalFreezeAssignment(context.Background(), "dvr", "hash-1", "tenant-a", "s", "mp4", "platform-eu", "node-1", 30_000_000_000)
 		if ok || reason != "unsupported_asset_type" {
 			t.Fatalf("expected unsupported_asset_type, got ok=%v reason=%q", ok, reason)
 		}
 	})
 
-	t.Run("official backing not local → official_storage_remote", func(t *testing.T) {
-		setupSeams(t, routingA, false)
-		_, reason, ok := PrepareLocalFreezeAssignment(context.Background(), "clip", "hash-1", "tenant-a", "s", "mp4", "byoc-a", "node-1", 30_000_000_000)
-		if ok || reason != "official_storage_remote" {
-			t.Fatalf("expected official_storage_remote, got ok=%v reason=%q", ok, reason)
+	t.Run("origin backing not local → origin_storage_remote", func(t *testing.T) {
+		setupSeams(t, "platform-eu", false)
+		_, reason, ok := PrepareLocalFreezeAssignment(context.Background(), "clip", "hash-1", "tenant-a", "s", "mp4", "platform-eu", "node-1", 30_000_000_000)
+		if ok || reason != "origin_storage_remote" {
+			t.Fatalf("expected origin_storage_remote, got ok=%v reason=%q", ok, reason)
 		}
 	})
 }
 
-// The tenant's official cluster is entitled, but its durable-storage backing is NOT this cell's local
-// backend (the resolver-less fallback requires official == local cluster), so the freeze is rejected —
-// serving/entitlement is not storage ownership. No claim fires.
-func TestFreezePermission_OfficialBackingNotLocalRejected(t *testing.T) {
-	routing := tenantStorageRouting{officialCluster: "official-a", peers: storagePeerSet("official-a")}
-	// local cluster is "other-cell" (≠ official-a), and no resolver is wired, so canMintOfficialLocally is false.
-	h := setupFreezePermTest(t, "tenant-a", "byoc-a", "tenant-a", "byoc-a", "other-cell", routing)
-	h.expectMetadataAndPossession("byoc-a", "", "pending", true)
+// With the production resolver wired, an EU-origin clip resolves to the EU cell's own backend and is minted
+// locally, while a clip whose origin is the US cell resolves to federation and is refused here.
+func TestPrepareLocalFreezeAssignment_ResolverUsesOrigin(t *testing.T) {
+	mock, _, _ := setupArtifactTestDeps(t)
+	euBacking := storage.S3Backing{Bucket: "frameworks-eu", Endpoint: "https://eu.example", Region: "eu-central-1"}
+	prevFactory := storageResolverFactory
+	SetStorageResolverFactory(func(context.Context, string) *storage.ClusterResolver {
+		return &storage.ClusterResolver{
+			LocalClusterID:       "platform-eu",
+			LocalClusterServed:   func(id string) bool { return id == "platform-eu" },
+			LocalS3Backing:       euBacking,
+			LocalS3ClientPresent: true,
+			AdvertisedBacking: func(id string) (storage.S3Backing, bool) {
+				switch id {
+				case "platform-eu":
+					return euBacking, true
+				case "platform-us":
+					return storage.S3Backing{Bucket: "frameworks-us", Endpoint: "https://us.example", Region: "us-east-1"}, true
+				}
+				return storage.S3Backing{}, false
+			},
+		}
+	})
+	prevLocal := localClusterID
+	SetLocalClusterID("platform-eu")
+	t.Cleanup(func() {
+		SetStorageResolverFactory(prevFactory)
+		SetLocalClusterID(prevLocal)
+	})
+	sm := state.ResetDefaultManagerForTests()
+	t.Cleanup(func() { state.ResetDefaultManagerForTests() })
+	sm.SetNodeInfo("node-eu", "n", true, nil, nil, "", "", nil)
+	sm.SetNodeConnectionInfo(context.Background(), "node-eu", "n", "", "platform-eu", nil)
+	sm.SetNodeInfo("node-us", "n", true, nil, nil, "", "", nil)
+	sm.SetNodeConnectionInfo(context.Background(), "node-us", "n", "", "platform-us", nil)
+
+	mock.ExpectBegin()
+	mock.ExpectExec(`UPDATE foghorn.artifacts\s+SET storage_location = 'freezing'`).WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectExec("INSERT INTO foghorn.freeze_publication_ledger").WillReturnResult(sqlmock.NewResult(0, 4))
+	mock.ExpectCommit()
+	a, reason, ok := PrepareLocalFreezeAssignment(context.Background(), "clip", "hash-eu", "tenant-a", "s", "mp4", "platform-eu", "node-eu", 30_000_000_000)
+	if !ok || a.DestCluster != "platform-eu" {
+		t.Fatalf("EU clip: ok=%v reason=%q dest=%q, want approved into platform-eu", ok, reason, a.DestCluster)
+	}
+
+	_, reason, ok = PrepareLocalFreezeAssignment(context.Background(), "clip", "hash-us", "tenant-a", "s", "mp4", "platform-us", "node-us", 30_000_000_000)
+	if ok || reason != "origin_storage_remote" {
+		t.Fatalf("US clip on the EU Foghorn: ok=%v reason=%q, want origin_storage_remote", ok, reason)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// The origin's durable-storage backing is NOT this cell's local backend (the resolver-less fallback requires the
+// origin to be this Foghorn's cluster), so the freeze is rejected. No claim fires.
+func TestFreezePermission_OriginBackingNotLocalRejected(t *testing.T) {
+	h := setupFreezePermTest(t, "tenant-a", "platform-eu", "platform-eu", "other-cell")
+	h.expectMetadataAndPossession("platform-eu", "", "pending", true)
 
 	h.run()
 
 	resp := h.lastResponse(t)
-	if resp.GetApproved() || resp.GetReason() != "official_storage_remote" {
-		t.Fatalf("expected official_storage_remote rejection, got approved=%v reason=%q", resp.GetApproved(), resp.GetReason())
+	if resp.GetApproved() || resp.GetReason() != "origin_storage_remote" {
+		t.Fatalf("expected origin_storage_remote rejection, got approved=%v reason=%q", resp.GetApproved(), resp.GetReason())
 	}
 	if err := h.mock.ExpectationsWereMet(); err != nil {
 		t.Fatal(err)
 	}
 }
 
-// A node whose SERVER-OWNED tenant is NOT the artifact's tenant (and whose cluster is neither the origin
-// nor the official) is denied even though it self-reports possession — and NO attempt is claimed.
-func TestFreezePermission_CrossTenantSourceDenied(t *testing.T) {
-	routing := tenantStorageRouting{officialCluster: "official-a", peers: storagePeerSet("official-a")}
-	h := setupFreezePermTest(t, "tenant-a", "official-a", "tenant-b", "byoc-b", "official-a", routing)
-	h.expectMetadataAndPossession("official-a", "", "pending", true) // possession passes; authority must still deny
-	// No claim UPDATE expected.
+// A node on another cluster that holds a copy of an EU-origin clip (a warm copy elsewhere) may not upload it: only
+// the origin cluster's nodes write into its storage. No attempt is claimed.
+func TestFreezePermission_NodeOutsideOriginDenied(t *testing.T) {
+	h := setupFreezePermTest(t, "tenant-a", "platform-eu", "platform-us", "platform-eu")
+	h.expectMetadataAndPossession("platform-eu", "", "pending", true) // possession passes; authority must still deny
 
 	h.run()
 
@@ -324,33 +378,11 @@ func TestFreezePermission_CrossTenantSourceDenied(t *testing.T) {
 	}
 }
 
-// Expired access to the official cluster (absent from the active/unexpired peer set) denies storage — no
-// claim fires.
-func TestFreezePermission_ExpiredAccessDenied(t *testing.T) {
-	// official-a is the routing official, but the tenant no longer holds active/unexpired access to it.
-	routing := tenantStorageRouting{officialCluster: "official-a", peers: storagePeerSet("some-other")}
-	h := setupFreezePermTest(t, "tenant-a", "official-a", "tenant-a", "byoc-a", "official-a", routing)
-	h.expectMetadataAndPossession("official-a", "", "pending", true)
-
-	h.run()
-
-	resp := h.lastResponse(t)
-	if resp.GetApproved() || resp.GetReason() != "cluster_not_authorized" {
-		t.Fatalf("expected cluster_not_authorized denial, got approved=%v reason=%q", resp.GetApproved(), resp.GetReason())
-	}
-	if err := h.mock.ExpectationsWereMet(); err != nil {
-		t.Fatal(err)
-	}
-}
-
-// A remote official cluster whose artifact is NOT yet durably synced is rejected: this cell cannot mint or
-// verify a remote object, and remote attribution alone is not proof of durability. No claim fires.
+// An artifact already attributed to a remote storage cluster that is NOT yet durably synced is rejected: this
+// cell cannot mint or verify a remote object, and remote attribution alone is not proof of durability.
 func TestFreezePermission_RemoteNotDurableRejected(t *testing.T) {
-	// Authorization passes (official-a is entitled), but the artifact is ALREADY attributed to a remote
-	// durable cluster ("remote-x") and is NOT yet synced — this cell cannot verify remote durability.
-	routing := tenantStorageRouting{officialCluster: "official-a", peers: storagePeerSet("official-a")}
-	h := setupFreezePermTest(t, "tenant-a", "byoc-a", "tenant-a", "byoc-a", "official-a", routing)
-	h.expectMetadataAndPossession("byoc-a", "remote-x", "pending", true) // remote storage_cluster_id, not synced
+	h := setupFreezePermTest(t, "tenant-a", "platform-eu", "platform-eu", "platform-eu")
+	h.expectMetadataAndPossession("platform-eu", "remote-x", "pending", true) // remote storage_cluster_id, not synced
 
 	h.run()
 

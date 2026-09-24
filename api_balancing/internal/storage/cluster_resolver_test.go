@@ -133,8 +133,8 @@ func counterValue(t *testing.T, c prometheus.Counter) float64 {
 	return m.GetCounter().GetValue()
 }
 
-func TestClusterResolver_OriginAdvertisedAndLocallyMintable_PicksOriginLocal(t *testing.T) {
-	backing := S3Backing{Bucket: "frameworks", Region: "us-east-1"}
+func TestResolveOriginDurable_OriginAdvertisedAndLocallyMintable_MintsLocal(t *testing.T) {
+	backing := S3Backing{Bucket: "frameworks", Region: "eu-central-1"}
 	f := &resolverFixture{
 		localCluster:   "platform-eu",
 		servedClusters: map[string]bool{"platform-eu": true},
@@ -142,194 +142,141 @@ func TestClusterResolver_OriginAdvertisedAndLocallyMintable_PicksOriginLocal(t *
 		localS3Present: true,
 		advertised:     map[string]S3Backing{"platform-eu": backing},
 	}
-	r := f.build()
-
-	cluster, mode := r.Resolve(ResolverInput{
-		OriginClusterID:   "platform-eu",
-		OfficialClusterID: "platform-eu",
-	})
+	cluster, mode := f.build().ResolveOriginDurable("platform-eu")
 	if cluster != "platform-eu" || mode != StorageMintLocal {
 		t.Fatalf("got (%q, %s); want (platform-eu, local)", cluster, mode)
 	}
 }
 
-func TestClusterResolver_OriginAdvertisedButBucketDiffers_DelegatesNotLocalMint(t *testing.T) {
-	// Both clusters declare a bucket called "frameworks" but on different
-	// endpoints. Resolver MUST NOT confuse these — minting against the wrong
-	// endpoint produces opaque 403s.
-	originBacking := S3Backing{Bucket: "frameworks", Endpoint: "https://nbg1.your-objectstorage.com", Region: "nbg1"}
-	localBacking := S3Backing{Bucket: "frameworks", Endpoint: "https://s3.us-east-1.amazonaws.com", Region: "us-east-1"}
-	f := &resolverFixture{
-		localCluster:   "platform-us",
-		servedClusters: map[string]bool{"platform-us": true, "selfhost-eu": true},
-		localS3Backing: localBacking,
-		localS3Present: true,
-		advertised:     map[string]S3Backing{"selfhost-eu": originBacking},
-	}
-	r := f.build()
-
-	cluster, mode := r.Resolve(ResolverInput{
-		OriginClusterID: "selfhost-eu",
-	})
-	if cluster != "selfhost-eu" || mode != StorageMintViaFederation {
-		t.Fatalf("got (%q, %s); want (selfhost-eu, federation) — same bucket name across endpoints must NOT pass local-mint", cluster, mode)
-	}
-}
-
-func TestClusterResolver_OriginAdvertisedButPrefixDiffers_DelegatesNotLocalMint(t *testing.T) {
-	// Both clusters share the SAME provider tuple (bucket/endpoint/region) but write under DIFFERENT prefixes. This
-	// cell is configured for `prod`; the origin cluster addresses `staging`. Minting locally would write through THIS
-	// cell's `prod` prefix at a key the origin's `staging` keyspace can never address — wrong placement + broken URLs.
-	// The resolver MUST delegate (federated), not local-mint.
-	originBacking := S3Backing{Bucket: "frameworks", Endpoint: "https://nbg1.your-objectstorage.com", Region: "nbg1", Prefix: "staging"}
-	localBacking := S3Backing{Bucket: "frameworks", Endpoint: "https://nbg1.your-objectstorage.com", Region: "nbg1", Prefix: "prod"}
-	f := &resolverFixture{
-		localCluster:   "platform-eu",
-		servedClusters: map[string]bool{"platform-eu": true, "selfhost-eu": true},
-		localS3Backing: localBacking,
-		localS3Present: true,
-		advertised:     map[string]S3Backing{"selfhost-eu": originBacking},
-	}
-	r := f.build()
-
-	cluster, mode := r.Resolve(ResolverInput{OriginClusterID: "selfhost-eu"})
-	if cluster != "selfhost-eu" || mode != StorageMintViaFederation {
-		t.Fatalf("got (%q, %s); want (selfhost-eu, federation) — a shared bucket under a different prefix must NOT pass local-mint", cluster, mode)
-	}
-}
-
-func TestClusterResolver_OriginAdvertisedButNotServedHere_Delegates(t *testing.T) {
-	originBacking := S3Backing{Bucket: "selfhost-bucket", Region: "eu-central-1"}
-	f := &resolverFixture{
-		localCluster:   "platform-us",
-		servedClusters: map[string]bool{"platform-us": true}, // selfhost-eu NOT served by this pool
-		localS3Backing: S3Backing{Bucket: "frameworks", Region: "us-east-1"},
-		localS3Present: true,
-		advertised:     map[string]S3Backing{"selfhost-eu": originBacking},
-	}
-	r := f.build()
-
-	cluster, mode := r.Resolve(ResolverInput{
-		OriginClusterID: "selfhost-eu",
-	})
-	if cluster != "selfhost-eu" || mode != StorageMintViaFederation {
-		t.Fatalf("got (%q, %s); want (selfhost-eu, federation) — not-served clusters must delegate", cluster, mode)
-	}
-}
-
-func TestClusterResolver_OriginNotAdvertised_FallsBackToOfficialAdvertised(t *testing.T) {
-	officialBacking := S3Backing{Bucket: "frameworks", Region: "us-east-1"}
-	f := &resolverFixture{
-		localCluster:   "platform-eu",
-		servedClusters: map[string]bool{"platform-eu": true},
-		localS3Backing: officialBacking,
-		localS3Present: true,
-		// Origin "selfhost-tenant" advertises NO storage backing.
-		advertised: map[string]S3Backing{"platform-eu": officialBacking},
-	}
-	r := f.build()
-
-	cluster, mode := r.Resolve(ResolverInput{
-		OriginClusterID:   "selfhost-tenant",
-		OfficialClusterID: "platform-eu",
-	})
-	if cluster != "platform-eu" || mode != StorageMintLocal {
-		t.Fatalf("got (%q, %s); want (platform-eu, local) — origin lacks backing, official wins", cluster, mode)
-	}
-}
-
-func TestClusterResolver_NeitherOriginNorOfficialAdvertised_UsesConfiguredLocalCluster(t *testing.T) {
-	f := &resolverFixture{
-		localCluster:   "central-primary",
-		servedClusters: map[string]bool{"central-primary": true},
-		localS3Backing: S3Backing{Bucket: "frameworks", Region: "us-east-1"},
-		localS3Present: true,
-		advertised:     map[string]S3Backing{}, // nothing advertises
-	}
-	r := f.build()
-
-	cluster, mode := r.Resolve(ResolverInput{
-		OriginClusterID:   "central-primary",
-		OfficialClusterID: "central-primary",
-	})
-	if cluster != "central-primary" || mode != StorageMintLocal {
-		t.Fatalf("got (%q, %s); want (central-primary, local)", cluster, mode)
-	}
-}
-
-func TestClusterResolver_UnadvertisedOriginUsesConfiguredLocalCluster(t *testing.T) {
+func TestResolveOriginDurable_OriginInAnotherCell_DelegatesToOriginNeverLocal(t *testing.T) {
+	// A US cell asked to durably store an artifact produced in EU must target EU, even though this cell has its own
+	// working S3 client. Storing into the local (US) bucket would move the artifact out of its origin cell.
 	f := &resolverFixture{
 		localCluster:   "platform-us",
 		servedClusters: map[string]bool{"platform-us": true},
-		localS3Backing: S3Backing{Bucket: "frameworks", Region: "us-east-1"},
+		localS3Backing: S3Backing{Bucket: "frameworks-us", Region: "us-east-1"},
 		localS3Present: true,
-		advertised:     map[string]S3Backing{},
-	}
-	r := f.build()
-
-	cluster, mode := r.Resolve(ResolverInput{
-		OriginClusterID: "stale-cluster",
-	})
-	if cluster != "platform-us" || mode != StorageMintLocal {
-		t.Fatalf("got (%q, %s); want (platform-us, local)", cluster, mode)
-	}
-}
-
-func TestClusterResolver_NoCandidates_Unavailable(t *testing.T) {
-	counter := newRejectedCounter(t)
-	f := &resolverFixture{rejectedCounter: counter}
-	r := f.build()
-
-	cluster, mode := r.Resolve(ResolverInput{})
-	if cluster != "" || mode != StorageUnavailable {
-		t.Fatalf("got (%q, %s); want (\"\", unavailable) for empty input", cluster, mode)
-	}
-	if got := counterValue(t, counter.WithLabelValues("service_unavailable", "storage")); got != 1 {
-		t.Fatalf("expected service_unavailable counter to increment once on empty input, got %v", got)
-	}
-}
-
-func TestClusterResolver_DedupesRepeatedCandidate(t *testing.T) {
-	// origin == official == local == "central-primary"; advertised lookup
-	// must be invoked at most once per distinct cluster id.
-	calls := map[string]int{}
-	r := &ClusterResolver{
-		LocalClusterID:       "central-primary",
-		LocalClusterServed:   func(id string) bool { return id == "central-primary" },
-		LocalS3Backing:       S3Backing{Bucket: "frameworks", Region: "us-east-1"},
-		LocalS3ClientPresent: true,
-		AdvertisedBacking: func(id string) (S3Backing, bool) {
-			calls[id]++
-			return S3Backing{Bucket: "frameworks", Region: "us-east-1"}, true
+		advertised: map[string]S3Backing{
+			"platform-eu": {Bucket: "frameworks-eu", Region: "eu-central-1"},
+			"platform-us": {Bucket: "frameworks-us", Region: "us-east-1"},
 		},
 	}
-
-	cluster, mode := r.Resolve(ResolverInput{
-		OriginClusterID:   "central-primary",
-		OfficialClusterID: "central-primary",
-	})
-	if cluster != "central-primary" || mode != StorageMintLocal {
-		t.Fatalf("got (%q, %s); want (central-primary, local)", cluster, mode)
-	}
-	if calls["central-primary"] != 1 {
-		t.Fatalf("AdvertisedBacking should have been called exactly once for the deduped cluster, got %d", calls["central-primary"])
+	cluster, mode := f.build().ResolveOriginDurable("platform-eu")
+	if cluster != "platform-eu" || mode != StorageMintViaFederation {
+		t.Fatalf("got (%q, %s); want (platform-eu, federation)", cluster, mode)
 	}
 }
 
-func TestClusterResolver_SkipsEmptyCandidates(t *testing.T) {
-	backing := S3Backing{Bucket: "frameworks", Region: "us-east-1"}
+func TestResolveOriginDurable_SameBucketDifferentEndpoint_Delegates(t *testing.T) {
+	// Both clusters declare a bucket called "frameworks" but on different endpoints; minting against the wrong
+	// endpoint produces opaque 403s.
+	f := &resolverFixture{
+		localCluster:   "platform-us",
+		servedClusters: map[string]bool{"platform-us": true, "selfhost-eu": true},
+		localS3Backing: S3Backing{Bucket: "frameworks", Endpoint: "https://s3.us-east-1.amazonaws.com", Region: "us-east-1"},
+		localS3Present: true,
+		advertised: map[string]S3Backing{
+			"selfhost-eu": {Bucket: "frameworks", Endpoint: "https://nbg1.your-objectstorage.com", Region: "nbg1"},
+		},
+	}
+	cluster, mode := f.build().ResolveOriginDurable("selfhost-eu")
+	if cluster != "selfhost-eu" || mode != StorageMintViaFederation {
+		t.Fatalf("got (%q, %s); want (selfhost-eu, federation)", cluster, mode)
+	}
+}
+
+func TestResolveOriginDurable_SameProviderDifferentPrefix_Delegates(t *testing.T) {
+	// Same bucket/endpoint/region but a different prefix is a different keyspace: minting locally would write under
+	// this cell's prefix at a key the origin can never address.
+	f := &resolverFixture{
+		localCluster:   "platform-eu",
+		servedClusters: map[string]bool{"platform-eu": true, "selfhost-eu": true},
+		localS3Backing: S3Backing{Bucket: "frameworks", Endpoint: "https://nbg1.your-objectstorage.com", Region: "nbg1", Prefix: "prod"},
+		localS3Present: true,
+		advertised: map[string]S3Backing{
+			"selfhost-eu": {Bucket: "frameworks", Endpoint: "https://nbg1.your-objectstorage.com", Region: "nbg1", Prefix: "staging"},
+		},
+	}
+	cluster, mode := f.build().ResolveOriginDurable("selfhost-eu")
+	if cluster != "selfhost-eu" || mode != StorageMintViaFederation {
+		t.Fatalf("got (%q, %s); want (selfhost-eu, federation)", cluster, mode)
+	}
+}
+
+func TestResolveOriginDurable_UnadvertisedOriginIsLocalCluster_MintsLocal(t *testing.T) {
 	f := &resolverFixture{
 		localCluster:   "central-primary",
 		servedClusters: map[string]bool{"central-primary": true},
-		localS3Backing: backing,
+		localS3Backing: S3Backing{Bucket: "frameworks", Region: "us-east-1"},
 		localS3Present: true,
-		advertised:     map[string]S3Backing{"central-primary": backing},
 	}
-	r := f.build()
-
-	cluster, mode := r.Resolve(ResolverInput{})
+	cluster, mode := f.build().ResolveOriginDurable("central-primary")
 	if cluster != "central-primary" || mode != StorageMintLocal {
 		t.Fatalf("got (%q, %s); want (central-primary, local)", cluster, mode)
+	}
+}
+
+func TestResolveOriginDurable_UnadvertisedOriginServedByThisPool_MintsLocal(t *testing.T) {
+	// A cell serving several clusters stores for each of them in its own backend when the origin advertises no
+	// dedicated backing.
+	f := &resolverFixture{
+		localCluster:   "platform-eu",
+		servedClusters: map[string]bool{"platform-eu": true, "platform-eu-2": true},
+		localS3Backing: S3Backing{Bucket: "frameworks-eu", Region: "eu-central-1"},
+		localS3Present: true,
+	}
+	cluster, mode := f.build().ResolveOriginDurable("platform-eu-2")
+	if cluster != "platform-eu-2" || mode != StorageMintLocal {
+		t.Fatalf("got (%q, %s); want (platform-eu-2, local)", cluster, mode)
+	}
+}
+
+func TestResolveOriginDurable_UnadvertisedForeignOrigin_UnavailableNoLocalFallback(t *testing.T) {
+	counter := newRejectedCounter(t)
+	f := &resolverFixture{
+		localCluster:    "platform-us",
+		servedClusters:  map[string]bool{"platform-us": true},
+		localS3Backing:  S3Backing{Bucket: "frameworks", Region: "us-east-1"},
+		localS3Present:  true,
+		rejectedCounter: counter,
+	}
+	cluster, mode := f.build().ResolveOriginDurable("platform-eu")
+	if cluster != "" || mode != StorageUnavailable {
+		t.Fatalf("got (%q, %s); want (\"\", unavailable): an origin without storage must not fall back to this cell", cluster, mode)
+	}
+	if got := counterValue(t, counter.WithLabelValues("service_unavailable", "storage")); got != 1 {
+		t.Fatalf("service_unavailable counter = %v, want 1", got)
+	}
+}
+
+func TestResolveOriginDurable_EmptyOrigin_Unavailable(t *testing.T) {
+	counter := newRejectedCounter(t)
+	backing := S3Backing{Bucket: "frameworks", Region: "us-east-1"}
+	f := &resolverFixture{
+		localCluster:    "central-primary",
+		servedClusters:  map[string]bool{"central-primary": true},
+		localS3Backing:  backing,
+		localS3Present:  true,
+		advertised:      map[string]S3Backing{"central-primary": backing},
+		rejectedCounter: counter,
+	}
+	cluster, mode := f.build().ResolveOriginDurable("  ")
+	if cluster != "" || mode != StorageUnavailable {
+		t.Fatalf("got (%q, %s); want (\"\", unavailable) for an unknown origin", cluster, mode)
+	}
+	if got := counterValue(t, counter.WithLabelValues("service_unavailable", "storage")); got != 1 {
+		t.Fatalf("service_unavailable counter = %v, want 1", got)
+	}
+}
+
+func TestResolveOriginDurable_LocalOriginWithoutS3Client_Unavailable(t *testing.T) {
+	f := &resolverFixture{
+		localCluster:   "central-primary",
+		servedClusters: map[string]bool{"central-primary": true},
+	}
+	cluster, mode := f.build().ResolveOriginDurable("central-primary")
+	if cluster != "" || mode != StorageUnavailable {
+		t.Fatalf("got (%q, %s); want (\"\", unavailable) without an S3 client", cluster, mode)
 	}
 }
 

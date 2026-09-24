@@ -391,6 +391,7 @@ func TestCreateVodUpload_IdempotentRetry(t *testing.T) {
 		SizeBytes:    1024,
 		VodHash:      &vodHash,
 		InternalName: &internalName,
+		ClusterId:    "central-primary",
 	})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)

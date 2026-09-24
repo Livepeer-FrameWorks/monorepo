@@ -28,7 +28,7 @@ func newTestReconciler(t *testing.T, db *sql.DB, s3 ReconcilerS3Client, commodor
 		// Default: a successful assignment (server-minted attempt + staging URL). Tests that exercise
 		// denial / not-eligible override this.
 		prepareFreeze: func(_ context.Context, _, hash, _, _, _, _, _ string, _ time.Duration) (control.FreezeAssignment, string, bool) {
-			return control.FreezeAssignment{AttemptID: "att-" + hash, StagingURL: "https://s3/staging/" + hash, CanonicalKey: "k/" + hash, DestCluster: "official"}, "", true
+			return control.FreezeAssignment{AttemptID: "att-" + hash, StagingURL: "https://s3/staging/" + hash, CanonicalKey: "k/" + hash, DestCluster: "platform-eu"}, "", true
 		},
 		logger:    logging.NewLogger(),
 		interval:  time.Minute,
@@ -108,8 +108,8 @@ func TestRetryFailed_QueriesFailedArtifacts(t *testing.T) {
 	fc := &freezeCapture{}
 	r := newTestReconciler(t, mockDB, s3, nil, fc.send)
 
-	rows := sqlmock.NewRows([]string{"artifact_hash", "artifact_type", "stream_internal_name", "tenant_id", "format", "node_id", "file_path"}).
-		AddRow("hash1", "clip", "stream1", "tenant1", "mp4", "node-1", "/data/hash1.mp4")
+	rows := sqlmock.NewRows([]string{"artifact_hash", "artifact_type", "stream_internal_name", "tenant_id", "format", "node_id", "file_path", "origin_cluster_id"}).
+		AddRow("hash1", "clip", "stream1", "tenant1", "mp4", "node-1", "/data/hash1.mp4", "platform-eu")
 
 	mock.ExpectQuery("SELECT.*FROM foghorn.artifacts.*sync_status = 'failed'").
 		WithArgs(50).
@@ -145,8 +145,8 @@ func TestRetryFailed_RetriesSchemaVersionMismatch(t *testing.T) {
 	fc := &freezeCapture{}
 	r := newTestReconciler(t, mockDB, s3, nil, fc.send)
 
-	rows := sqlmock.NewRows([]string{"artifact_hash", "artifact_type", "stream_internal_name", "tenant_id", "format", "node_id", "file_path"}).
-		AddRow("hash1", "clip", "stream1", "tenant1", "mp4", "node-1", "/data/hash1.mp4")
+	rows := sqlmock.NewRows([]string{"artifact_hash", "artifact_type", "stream_internal_name", "tenant_id", "format", "node_id", "file_path", "origin_cluster_id"}).
+		AddRow("hash1", "clip", "stream1", "tenant1", "mp4", "node-1", "/data/hash1.mp4", "platform-eu")
 
 	mock.ExpectQuery("SELECT.*FROM foghorn.artifacts.*sync_status = 'failed'").
 		WithArgs(50).
@@ -195,7 +195,7 @@ func TestRetryFailed_RespectsBatchLimit(t *testing.T) {
 
 	mock.ExpectQuery("SELECT.*FROM foghorn.artifacts.*sync_status = 'failed'").
 		WithArgs(3).
-		WillReturnRows(sqlmock.NewRows([]string{"artifact_hash", "artifact_type", "stream_internal_name", "tenant_id", "format", "node_id", "file_path"}))
+		WillReturnRows(sqlmock.NewRows([]string{"artifact_hash", "artifact_type", "stream_internal_name", "tenant_id", "format", "node_id", "file_path", "origin_cluster_id"}))
 
 	r.retryFailed(context.Background())
 	if err := mock.ExpectationsWereMet(); err != nil {
@@ -215,8 +215,8 @@ func TestAdvancePending_QueriesPendingLocal(t *testing.T) {
 	fc := &freezeCapture{}
 	r := newTestReconciler(t, mockDB, &mockReconcilerS3Client{}, nil, fc.send)
 
-	rows := sqlmock.NewRows([]string{"artifact_hash", "artifact_type", "stream_internal_name", "tenant_id", "format", "node_id", "file_path"}).
-		AddRow("hash2", "vod", "stream2", "tenant2", "mp4", "node-2", "/data/hash2.mp4")
+	rows := sqlmock.NewRows([]string{"artifact_hash", "artifact_type", "stream_internal_name", "tenant_id", "format", "node_id", "file_path", "origin_cluster_id"}).
+		AddRow("hash2", "vod", "stream2", "tenant2", "mp4", "node-2", "/data/hash2.mp4", "platform-eu")
 
 	mock.ExpectQuery("SELECT.*FROM foghorn.artifacts.*sync_status = 'pending'.*storage_location = 'local'").
 		WithArgs(50).
@@ -261,7 +261,7 @@ func TestSendFreezeForArtifact_Clip(t *testing.T) {
 	fc := &freezeCapture{}
 	r := newTestReconciler(t, mockDB, &mockReconcilerS3Client{}, nil, fc.send)
 
-	dispatched, err := r.sendFreezeForArtifact(context.Background(), "clip-hash", "clip", "stream1", "tenant1", "mp4", "node-1", "/data/clip.mp4")
+	dispatched, err := r.sendFreezeForArtifact(context.Background(), "clip-hash", "clip", "stream1", "tenant1", "mp4", "platform-eu", "node-1", "/data/clip.mp4")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -309,7 +309,7 @@ func TestSendFreezeForArtifact_SendFailureRevertsToFailed(t *testing.T) {
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectCommit()
 
-	dispatched, err := r.sendFreezeForArtifact(context.Background(), "clip-hash", "clip", "stream1", "tenant1", "mp4", "node-1", "/data/clip.mp4")
+	dispatched, err := r.sendFreezeForArtifact(context.Background(), "clip-hash", "clip", "stream1", "tenant1", "mp4", "platform-eu", "node-1", "/data/clip.mp4")
 	if err == nil {
 		t.Fatal("expected error from failing send")
 	}
@@ -336,7 +336,7 @@ func TestSendFreezeForArtifact_NotAssignedIsNoOp(t *testing.T) {
 		return control.FreezeAssignment{}, "cluster_not_authorized", false
 	}
 
-	dispatched, err := r.sendFreezeForArtifact(context.Background(), "clip-hash", "clip", "stream1", "tenant1", "mp4", "node-1", "/data/clip.mp4")
+	dispatched, err := r.sendFreezeForArtifact(context.Background(), "clip-hash", "clip", "stream1", "tenant1", "mp4", "platform-eu", "node-1", "/data/clip.mp4")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -364,11 +364,39 @@ func TestSendFreezeForArtifact_ClipDefaultFormat(t *testing.T) {
 		return control.FreezeAssignment{AttemptID: "att-" + hash, StagingURL: "https://s3/staging/" + hash}, "", true
 	}
 
-	if _, err := r.sendFreezeForArtifact(context.Background(), "clip-hash", "clip", "stream1", "tenant1", "", "node-1", "/data/clip"); err != nil {
+	if _, err := r.sendFreezeForArtifact(context.Background(), "clip-hash", "clip", "stream1", "tenant1", "", "platform-eu", "node-1", "/data/clip"); err != nil {
 		t.Fatal(err)
 	}
 	if gotFormat != "mp4" {
 		t.Fatalf("expected default format mp4, got %s", gotFormat)
+	}
+}
+
+// The proactive freeze hands the artifact's origin cluster (from the pending/failed row) to the shared
+// assignment, which stores into that cluster; it never passes an empty origin.
+func TestAdvancePending_PassesArtifactOriginToAssignment(t *testing.T) {
+	mockDB, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer mockDB.Close()
+
+	mock.ExpectQuery("SELECT a.artifact_hash").
+		WillReturnRows(sqlmock.NewRows([]string{"artifact_hash", "artifact_type", "stream_internal_name", "tenant_id", "format", "node_id", "file_path", "origin_cluster_id"}).
+			AddRow("hash-eu", "clip", "stream1", "tenant1", "mp4", "node-eu", "/data/hash-eu.mp4", "platform-eu"))
+	var gotOrigin, gotNode string
+	fc := &freezeCapture{}
+	r := newTestReconciler(t, mockDB, &mockReconcilerS3Client{}, nil, fc.send)
+	r.prepareFreeze = func(_ context.Context, _, hash, _, _, _, origin, nodeID string, _ time.Duration) (control.FreezeAssignment, string, bool) {
+		gotOrigin, gotNode = origin, nodeID
+		return control.FreezeAssignment{AttemptID: "att-" + hash, StagingURL: "https://s3/staging/" + hash, DestCluster: origin}, "", true
+	}
+
+	if n := r.advancePending(context.Background()); n != 1 {
+		t.Fatalf("advanced = %d, want 1", n)
+	}
+	if gotOrigin != "platform-eu" || gotNode != "node-eu" {
+		t.Fatalf("assignment got (origin=%q, node=%q), want (platform-eu, node-eu)", gotOrigin, gotNode)
 	}
 }
 
@@ -387,7 +415,7 @@ func TestSendFreezeForArtifact_Vod(t *testing.T) {
 		return control.FreezeAssignment{AttemptID: "att-" + hash, StagingURL: "https://s3/staging/" + hash}, "", true
 	}
 
-	if _, err := r.sendFreezeForArtifact(context.Background(), "vod-hash", "vod", "stream1", "tenant1", "mkv", "node-1", "/data/vod.mkv"); err != nil {
+	if _, err := r.sendFreezeForArtifact(context.Background(), "vod-hash", "vod", "stream1", "tenant1", "mkv", "platform-eu", "node-1", "/data/vod.mkv"); err != nil {
 		t.Fatal(err)
 	}
 	if gotType != "vod" || gotFormat != "mkv" {
@@ -413,7 +441,7 @@ func TestSendFreezeForArtifact_VodDefaultFormat(t *testing.T) {
 		return control.FreezeAssignment{AttemptID: "att-" + hash, StagingURL: "u"}, "", true
 	}
 
-	if _, err := r.sendFreezeForArtifact(context.Background(), "vod-hash", "vod", "stream1", "tenant1", "", "node-1", "/data/vod"); err != nil {
+	if _, err := r.sendFreezeForArtifact(context.Background(), "vod-hash", "vod", "stream1", "tenant1", "", "platform-eu", "node-1", "/data/vod"); err != nil {
 		t.Fatal(err)
 	}
 	if gotFormat != "mp4" {
@@ -573,7 +601,7 @@ func TestRetryFailed_SQLExcludesDVR(t *testing.T) {
 	// Match SQL containing the DVR filter clause; sqlmock uses regex.
 	mock.ExpectQuery(`artifact_type != 'dvr'`).
 		WithArgs(50).
-		WillReturnRows(sqlmock.NewRows([]string{"artifact_hash", "artifact_type", "stream_internal_name", "tenant_id", "format", "node_id", "file_path"}))
+		WillReturnRows(sqlmock.NewRows([]string{"artifact_hash", "artifact_type", "stream_internal_name", "tenant_id", "format", "node_id", "file_path", "origin_cluster_id"}))
 
 	r.retryFailed(context.Background())
 	if err := mock.ExpectationsWereMet(); err != nil {
@@ -592,7 +620,7 @@ func TestAdvancePending_SQLExcludesDVR(t *testing.T) {
 
 	mock.ExpectQuery(`artifact_type != 'dvr'`).
 		WithArgs(50).
-		WillReturnRows(sqlmock.NewRows([]string{"artifact_hash", "artifact_type", "stream_internal_name", "tenant_id", "format", "node_id", "file_path"}))
+		WillReturnRows(sqlmock.NewRows([]string{"artifact_hash", "artifact_type", "stream_internal_name", "tenant_id", "format", "node_id", "file_path", "origin_cluster_id"}))
 
 	r.advancePending(context.Background())
 	if err := mock.ExpectationsWereMet(); err != nil {

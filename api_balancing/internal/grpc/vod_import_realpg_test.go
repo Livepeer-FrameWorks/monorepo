@@ -26,7 +26,6 @@ func TestVodImportRecordsSourceAndQueuesProcessing_RealPG(t *testing.T) { //noli
 	t.Cleanup(control.SetupTestRegistry("", nil))
 	srv := NewFoghornGRPCServer(conn, logging.NewLogger(), nil, nil, nil, nil, &fakeVodS3Client{}, nil)
 	srv.SetClusterID("central-primary")
-	srv.SetQuartermasterClient(&mockQMRouting{clusterID: "central-primary"})
 	srv.SetStorageResolverFactory(func(_ context.Context, _ string) *storage.ClusterResolver {
 		return &storage.ClusterResolver{LocalClusterID: "central-primary", LocalS3ClientPresent: true}
 	})
@@ -60,6 +59,15 @@ func TestVodImportRecordsSourceAndQueuesProcessing_RealPG(t *testing.T) { //noli
 	}
 	if status != "processing" || format != "mp4" || s3URL.Valid {
 		t.Fatalf("artifact = %s/%s/%v, want processing/mp4 with no stored object", status, format, s3URL)
+	}
+	// The accepting cluster is the origin and owns the stored output; no other storage cluster is recorded.
+	var origin, storageCluster sql.NullString
+	if err := conn.QueryRow(`SELECT origin_cluster_id, storage_cluster_id FROM foghorn.artifacts WHERE artifact_hash = $1`, hash).
+		Scan(&origin, &storageCluster); err != nil {
+		t.Fatal(err)
+	}
+	if origin.String != "central-primary" || storageCluster.Valid {
+		t.Fatalf("origin/storage cluster = %v/%v, want central-primary/NULL", origin, storageCluster)
 	}
 
 	var jobType string
@@ -109,5 +117,11 @@ func TestVodImportRecordsSourceAndQueuesProcessing_RealPG(t *testing.T) { //noli
 	}
 	if jobs != 1 || created != 1 {
 		t.Fatalf("after a retry: %d jobs, %d upload.created; want 1 and 1", jobs, created)
+	}
+
+	// The dispatcher's claim carries the origin cluster, which scopes node selection to that cluster.
+	claimed, err := queries.ClaimQueuedProcessingJobs(ctx)
+	if err != nil || len(claimed) != 1 || claimed[0].OriginClusterID != "central-primary" {
+		t.Fatalf("claimed jobs = %+v, %v; want one job for origin central-primary", claimed, err)
 	}
 }

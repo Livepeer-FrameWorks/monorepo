@@ -55,7 +55,6 @@ import (
 	foghorncontrolpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/foghorn_control"
 	foghornfederationpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/foghorn_federation"
 	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
-	quartermasterpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/quartermaster"
 	sharedpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/shared"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/x402"
 
@@ -136,7 +135,6 @@ type FoghornGRPCServer struct {
 	remoteEdgeCache         *federation.RemoteEdgeCache
 	federationClient        federationRPC
 	peerManager             peerAddrResolver
-	quartermasterClient     quartermasterRoutingResolver
 	storageResolver         storageResolverFactory
 	clusterID               string
 	instanceID              string
@@ -157,13 +155,6 @@ type FoghornGRPCServer struct {
 	localPlaybackPolicy          localPlaybackPolicyEvaluator
 	capacityObserver             *balancer.PlacementCapacityObserver
 	pushSourceObserver           *federation.PlacementPushSourceObserver
-}
-
-// quartermasterRoutingResolver is the narrow Quartermaster surface this
-// server uses to resolve a tenant's official cluster + cluster_peers
-// metadata (for S3 backing lookup).
-type quartermasterRoutingResolver interface {
-	GetClusterRouting(ctx context.Context, req *quartermasterpb.GetClusterRoutingRequest) (*quartermasterpb.ClusterRoutingResponse, error)
 }
 
 // storageResolverFactory builds a per-request storage.ClusterResolver. The
@@ -344,14 +335,6 @@ func (s *FoghornGRPCServer) SetFederationClient(fc *federation.FederationClient)
 	s.federationClient = fc
 }
 
-// SetPeerManager enables peer address lookups for federation calls.
-// SetQuartermasterClient wires the Quartermaster client used to resolve a
-// tenant's official cluster (CreateVodUpload, freeze flow). Wired from
-// cmd/foghorn/main.go after qmClient is constructed.
-func (s *FoghornGRPCServer) SetQuartermasterClient(qm quartermasterRoutingResolver) {
-	s.quartermasterClient = qm
-}
-
 // SetStorageResolverFactory wires the per-request storage cluster resolver
 // factory. Production wires this from cmd/foghorn/main.go with the local S3
 // config + Quartermaster cluster_peers lookup; tests inject focused stubs.
@@ -359,39 +342,36 @@ func (s *FoghornGRPCServer) SetStorageResolverFactory(f storageResolverFactory) 
 	s.storageResolver = f
 }
 
-// resolveVodStorageCluster runs the STRICT durable resolver for a VOD upload (invariant I1). The only durable
-// destination is the tenant's OFFICIAL cluster, drawn from Quartermaster's GetClusterRouting; the caller-supplied
-// ingest cluster is never a candidate. Returns (cluster, mode); a nil resolver factory or an unresolved official
-// cluster FAILS CLOSED with StorageUnavailable — it never falls back to the caller's or this cell's cluster.
-func (s *FoghornGRPCServer) resolveVodStorageCluster(ctx context.Context, tenantID, _ string) (string, storage.StorageMintMode) {
-	// I1: a durable write requires a positively-resolved official cluster. A missing/nil resolver cannot resolve
-	// one, so it FAILS CLOSED (StorageUnavailable) — it must NOT fall back to the caller's ingest cluster (that
-	// would place/bill bytes on a non-official backend). Tests/dev that need a mint must wire a resolver.
+// vodOriginStorage verifies that this Foghorn can store a VOD accepted for originClusterID. A VOD's durable
+// storage belongs to the cluster that accepted it (Commodore routes the create to that cluster's Foghorn and
+// records it as origin_cluster_id), so the origin must resolve to this cell's local backing. The multipart
+// lifecycle is not federated, so an origin backed elsewhere is refused as a misroute rather than stored here.
+func (s *FoghornGRPCServer) vodOriginStorage(ctx context.Context, tenantID, originClusterID string) error {
+	origin := strings.TrimSpace(originClusterID)
+	if origin == "" {
+		return status.Error(codes.InvalidArgument, "cluster_id is required: a VOD is stored on the cluster that accepts it")
+	}
 	if s.storageResolver == nil {
-		return "", storage.StorageUnavailable
+		return status.Error(codes.FailedPrecondition, "storage service unavailable")
 	}
 	resolver := s.storageResolver(ctx, tenantID)
 	if resolver == nil {
-		return "", storage.StorageUnavailable
+		return status.Error(codes.FailedPrecondition, "storage service unavailable")
 	}
-	officialCluster := ""
-	if s.quartermasterClient != nil {
-		routingCtx, cancel := context.WithTimeout(ctx, 1*time.Second)
-		defer cancel()
-		if routing, err := s.quartermasterClient.GetClusterRouting(routingCtx, &quartermasterpb.GetClusterRoutingRequest{TenantId: tenantID}); err == nil && routing != nil {
-			officialCluster = strings.TrimSpace(routing.GetOfficialClusterId())
-			if officialCluster == "" {
-				// Quartermaster omits official_cluster_id when it equals the tenant's primary cluster;
-				// normalize to the primary so single-cluster tenants still resolve a durable destination.
-				officialCluster = strings.TrimSpace(routing.GetClusterId())
-			}
-		}
+	cluster, mode := resolver.ResolveOriginDurable(origin)
+	switch mode {
+	case storage.StorageMintLocal:
+		return nil
+	case storage.StorageMintViaFederation:
+		s.logger.WithFields(logging.Fields{"tenant_id": tenantID, "origin_cluster": origin, "storage_cluster": cluster}).
+			Warn("Refusing VOD create: its origin cluster's storage is not this Foghorn's backend")
+		return status.Errorf(codes.FailedPrecondition, "vod_origin_cluster_not_local: cluster %s is not stored by this Foghorn", origin)
+	default:
+		return status.Error(codes.FailedPrecondition, "storage service unavailable")
 	}
-	// Durable destination is the tenant's OFFICIAL cluster only, via the STRICT resolver: the ingest/origin
-	// cluster is never a candidate, and an unresolved official is StorageUnavailable (no local/caller fallback).
-	return resolver.ResolveOfficialDurable(officialCluster)
 }
 
+// SetPeerManager enables peer address lookups for federation calls.
 func (s *FoghornGRPCServer) SetPeerManager(pm *federation.PeerManager) {
 	s.peerManager = pm
 }
@@ -1916,12 +1896,10 @@ func (s *FoghornGRPCServer) startDVR(ctx context.Context, req *sharedpb.StartDVR
 	// months later applies the same policy even if the tenant's tier has changed
 	// during the recording. retention_until is left NULL here — FinalizeDVR
 	// computes it as ended_at + dvr_retention_days*24h (post-end semantics).
-	// Stream config is authoritative: empty/NULL mode means chapters
-	// are off, regardless of cluster defaults. The sweeper already
-	// filters on dvr_chapter_mode IS NOT NULL AND != '', so leaving
-	// this empty fully disables chapter rotation for the recording.
-	chapterMode := req.GetDvrChapterMode()
-	chapterInterval := req.GetDvrChapterIntervalSeconds()
+	// Stream config is authoritative: an explicit "none" stores an empty
+	// mode, which the sweeper and finalizer skip, so the recording keeps live
+	// rewind only. A request without a mode records window-sized chapters.
+	chapterMode, chapterInterval := control.ResolveRecordingChapterPolicy(req.GetDvrChapterMode(), req.GetDvrChapterIntervalSeconds())
 	retentionDays := dvrRetentionDays(req.GetDvrPolicy())
 	// Persist Commodore's resolved DVR process snapshot so the
 	// rolling-DVR surface (dvr+<internal>) keeps serving lifecycle-specific
@@ -3241,17 +3219,9 @@ func (s *FoghornGRPCServer) createVodUploadImpl(ctx context.Context, req *shared
 		return nil, err
 	}
 
-	// VOD multipart upload is local-mint only: when the resolver picks a
-	// remote storage cluster, callers receive
-	// storage_delegation_unsupported_for_vod. The Create/Complete/Abort
-	// multipart lifecycle is not exposed via the federation MintStorageURLs
-	// RPC, so we cannot delegate the create here.
-	storageCluster, mintMode := s.resolveVodStorageCluster(ctx, req.GetTenantId(), req.GetClusterId())
-	switch mintMode {
-	case storage.StorageMintViaFederation:
-		return nil, status.Error(codes.Unimplemented, "storage_delegation_unsupported_for_vod")
-	case storage.StorageUnavailable:
-		return nil, status.Error(codes.FailedPrecondition, "storage service unavailable")
+	// The upload is stored on the cluster that accepted it (req.ClusterId, persisted as origin_cluster_id).
+	if err := s.vodOriginStorage(ctx, req.GetTenantId(), req.GetClusterId()); err != nil {
+		return nil, err
 	}
 	if s.s3Client == nil {
 		return nil, status.Error(codes.FailedPrecondition, "S3 storage not configured")
@@ -3340,13 +3310,7 @@ func (s *FoghornGRPCServer) createVodUploadImpl(ctx context.Context, req *shared
 	// transaction (durable outbox). The S3 multipart upload was created above as an external side
 	// effect; if this transaction fails we ABORT that upload so no orphaned multipart lingers, then
 	// return an error — we never return success with half-written rows or a missing lifecycle event.
-	// storage_cluster_id is set to the resolver-chosen cluster when it differs from the request's
-	// cluster_id (origin); when they match the column stays NULL to preserve the prior
-	// origin-as-storage semantic.
-	storageClusterArg := sql.NullString{}
-	if storageCluster != "" && storageCluster != req.GetClusterId() {
-		storageClusterArg = sql.NullString{String: storageCluster, Valid: true}
-	}
+	// storage_cluster_id stays NULL: the bytes live on the origin cluster (req.ClusterId).
 	// VOD system default is infinite (Mux / Cloudflare Stream baseline).
 	// Commodore-supplied retention_days takes precedence; the tier cap
 	// (0=uncapped on paid, finite on Free) clamps the result.
@@ -3379,8 +3343,8 @@ func (s *FoghornGRPCServer) createVodUploadImpl(ctx context.Context, req *shared
 			ArtifactHash: artifactHash, InternalName: sql.NullString{String: req.GetInternalName(), Valid: true},
 			TenantID: req.TenantId, UserID: req.UserId, SizeBytes: sql.NullInt64{Int64: req.SizeBytes, Valid: true},
 			S3Url: sql.NullString{String: s.s3Client.BuildS3URL(s3Key), Valid: true}, Format: sql.NullString{String: vodFormat, Valid: true},
-			OriginClusterID: sql.NullString{String: req.GetClusterId(), Valid: true}, StorageClusterID: storageClusterArg,
-			RetentionUntil: vodRetentionUntil, BackendID: sql.NullString{String: backendID, Valid: true},
+			OriginClusterID: sql.NullString{String: req.GetClusterId(), Valid: true},
+			RetentionUntil:  vodRetentionUntil, BackendID: sql.NullString{String: backendID, Valid: true},
 		}); execErr != nil {
 			return execErr
 		}

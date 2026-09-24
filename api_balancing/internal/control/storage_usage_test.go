@@ -91,7 +91,7 @@ func TestReconcileBillingAttribution_FullPageAdvancesCursor(t *testing.T) {
 }
 
 // I2 regression: changing a cluster's CURRENT advertised backing must NOT alter historical attribution. Here the
-// live resolver is forced to report the row's remote cluster as locally-mintable NOW (canMintOfficialLocallyFn →
+// live resolver is forced to report the row's remote cluster as locally-mintable NOW (canMintOriginLocallyFn →
 // true) — simulating a cluster that re-pointed its backing to this cell after the bytes were written elsewhere.
 // The reconciler must IGNORE that (topology-now ≠ evidence-of-where-bytes-live): the remote-cluster row stays
 // unmarked, no UPDATE fires. If the resolver clause is ever re-introduced this test fails.
@@ -99,12 +99,12 @@ func TestReconcileBillingAttribution_IgnoresCurrentBackingForHistoricalRows(t *t
 	mock, _, _ := setupArtifactTestDeps(t)
 	prevLocal := localClusterID
 	SetLocalClusterID("official-a")
-	prevMint := canMintOfficialLocallyFn
+	prevMint := canMintOriginLocallyFn
 	// The live resolver now says "yes, that cluster mints locally" — the exact drift I2 forbids from re-attributing.
-	canMintOfficialLocallyFn = func(context.Context, string, string) bool { return true }
+	canMintOriginLocallyFn = func(context.Context, string, string) bool { return true }
 	t.Cleanup(func() {
 		SetLocalClusterID(prevLocal)
-		canMintOfficialLocallyFn = prevMint
+		canMintOriginLocallyFn = prevMint
 	})
 
 	mock.ExpectQuery(`SELECT last_tenant, last_cluster FROM foghorn.billing_attribution_cursor WHERE id = true`).

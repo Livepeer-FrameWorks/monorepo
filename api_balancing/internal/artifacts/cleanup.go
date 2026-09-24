@@ -54,7 +54,7 @@ type ArtifactRef struct {
 	StorageClusterID string
 	OriginClusterID  string
 	// DurableBackendLocal is foghorn.artifacts.durable_backend_local: the STABLE write-time fact that these
-	// bytes live on THIS cell's local S3 backend (e.g. an official-alias cluster whose advertised backing is
+	// bytes live on THIS cell's local S3 backend (e.g. a served alias cluster whose advertised backing is
 	// local). It OVERRIDES cluster-id comparison for delete routing — cluster id is attribution, not backend
 	// ownership, so a locally-backed alias must be deleted locally, never delegated to a peer.
 	DurableBackendLocal bool
@@ -211,13 +211,12 @@ func (c *Cleaner) Delete(ctx context.Context, ref ArtifactRef) error {
 }
 
 // DeleteThumbnailsOnCluster frees an asset's thumbnail objects (all versions, staging, and legacy) by removing
-// the thumbnails/{hash}/ prefix from the cluster that actually STORES them — the thumbnail publication's
-// official-durable destination cluster, which is INDEPENDENT of where the parent artifact's own bytes live.
-// Routing by the parent artifact would delegate to the wrong cluster for a BYOC-origin artifact whose thumbnails
-// were stored on platform-official storage, leaking the locally-billed objects.
+// the thumbnails/{hash}/ prefix from the cluster that actually STORES them — the thumbnail publication's recorded
+// destination cluster. New thumbnails land on the artifact's origin cluster, but rows written before that rule may
+// name a different cluster than the parent artifact's bytes, so routing follows the recorded destination.
 //
 // backendLocal is the recorded write-time evidence (I2): true means the bytes are on THIS cell's local S3 even
-// though the destination cluster id differs (a locally-backed official alias), so we delete LOCALLY and do NOT
+// though the destination cluster id differs (a locally-backed alias), so we delete LOCALLY and do NOT
 // misroute to (disabled) federation. Otherwise an empty destination or one equal to this cluster deletes locally;
 // a differing cluster delegates to its owner. DeletePrefix on an empty prefix is an idempotent no-op.
 //
@@ -322,7 +321,7 @@ func (c *Cleaner) resolveVODKey(ref ArtifactRef) (string, error) {
 // authoritative-cluster lookup at api_balancing/internal/control/playback.go:177).
 // Empty / unset / matches local → false (local).
 func (c *Cleaner) isRemote(ref ArtifactRef) bool {
-	// Persisted backend ownership WINS over cluster-id comparison: a locally-backed official alias has a
+	// Persisted backend ownership WINS over cluster-id comparison: a locally-backed alias has a
 	// storage_cluster_id that differs from LocalCluster but its bytes are on THIS cell's S3, so it must be
 	// deleted locally, not delegated.
 	if ref.DurableBackendLocal {

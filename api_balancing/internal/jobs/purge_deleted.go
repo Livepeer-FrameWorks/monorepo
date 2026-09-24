@@ -289,9 +289,9 @@ func (j *PurgeDeletedJob) purgeArtifactBytesAndRows(ctx context.Context) {
 		}
 
 		// Reclaim the asset's thumbnails, ORDERED to fence against a racing completion: (0) capture the thumbnail
-		// destination cluster(s) BEFORE deleting the rows — thumbnails live on the tenant's official-durable
-		// destination, NOT the parent artifact's backend, so routing S3 deletion by the parent (ref) would
-		// delegate a BYOC-origin artifact's platform-stored thumbnails to the wrong cluster and leak them; (1)
+		// destination cluster(s) BEFORE deleting the rows — thumbnails live on their recorded
+		// destination, which for older rows may differ from the parent artifact's backend, so routing S3 deletion by
+		// the parent (ref) could delegate them to the wrong cluster and leak them; (1)
 		// drop the control rows (tenant-ownership-proved) so no new publication can proceed — PublishThumbnailAttempt
 		// finds no assignment and completion drops on the parent tombstone; (2) THEN sweep the S3 prefix on each
 		// destination cluster, freeing any objects a completion promoted before step 1. Sweeping S3 first would
