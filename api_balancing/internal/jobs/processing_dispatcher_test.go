@@ -144,11 +144,11 @@ func TestProcessingDispatcherDispatchScansNullOutputProfiles(t *testing.T) {
 	rows := sqlmock.NewRows([]string{
 		"job_id", "tenant_id", "artifact_hash", "artifact_type", "job_type", "input_codec",
 		"output_profiles", "status", "retry_count", "s3_url", "source_url", "source_params", "preferred_node_id", "processes_json", "internal_name", "stream_id", "stream_internal_name",
-		"durable_backend_local",
+		"durable_backend_local", "origin_cluster_id",
 	}).AddRow(
 		"job-1", "tenant-1", "artifact-1", "vod", "process", nil,
 		nil, "dispatched", 0, nil, nil, nil, nil, "", "vod_internal", "", nil,
-		false,
+		false, "platform-eu",
 	)
 	mock.ExpectQuery("WITH claimed AS").
 		WillReturnRows(rows)

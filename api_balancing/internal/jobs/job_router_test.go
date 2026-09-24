@@ -40,16 +40,62 @@ func TestRouteProcessingJob_ExcludesCrossTenantDedicatedNode(t *testing.T) {
 	sm.TouchNode("shared", true)
 	setNodeProcessing(sm, "shared", true, 0, 5)
 
-	if id, _ := routeProcessingJob(&processingJob{TenantID: "tenant-a"}); id != "shared" {
-		t.Fatalf("tenant-a job must skip tenant-b's non-entitled cluster (even at 0 load) and use the platform-shared node; got %q", id)
+	if id, _ := routeProcessingJob(&processingJob{TenantID: "tenant-a", OriginCluster: "cluster-shared"}); id != "shared" {
+		t.Fatalf("tenant-a job originating on the platform-shared cluster must use the shared node; got %q", id)
 	}
-	if id, _ := routeProcessingJob(&processingJob{TenantID: "tenant-b"}); id != "byoc-b" {
+	if id, reason := routeProcessingJob(&processingJob{TenantID: "tenant-a", OriginCluster: "cluster-b"}); id != "" {
+		t.Fatalf("tenant-a job must never land on tenant-b's non-entitled cluster (even at 0 load); got %q (%s)", id, reason)
+	}
+	if id, _ := routeProcessingJob(&processingJob{TenantID: "tenant-b", OriginCluster: "cluster-b"}); id != "byoc-b" {
 		t.Fatalf("tenant-b job may use tenant-b's own entitled cluster; got %q", id)
 	}
 }
 
+// A processing job runs only on nodes of its artifact's origin cluster, whose storage receives the output. An
+// import accepted by the EU cluster must not be handed to an idle US edge, and a preferred node outside the
+// origin is refused rather than used.
+func TestRouteProcessingJob_OnlyOriginClusterNodes(t *testing.T) {
+	sm := state.ResetDefaultManagerForTests()
+	t.Cleanup(func() { state.ResetDefaultManagerForTests() })
+	t.Cleanup(sm.Shutdown)
+	origAccess := clusterAccessibleForTenant
+	clusterAccessibleForTenant = func(string, string) bool { return true }
+	t.Cleanup(func() { clusterAccessibleForTenant = origAccess })
+
+	touchInCluster(sm, "us-edge", "platform-us")
+	setNodeProcessing(sm, "us-edge", true, 8, 0) // idle
+	touchInCluster(sm, "eu-edge", "platform-eu")
+	setNodeProcessing(sm, "eu-edge", true, 8, 6) // busy, but in the origin cluster
+
+	if id, reason := routeProcessingJob(&processingJob{TenantID: "tenant-a", OriginCluster: "platform-eu"}); id != "eu-edge" {
+		t.Fatalf("EU import must run on the EU node; got %q (%s)", id, reason)
+	}
+	usPreferred := &processingJob{TenantID: "tenant-a", OriginCluster: "platform-eu", PreferredNode: sql.NullString{String: "us-edge", Valid: true}}
+	if id, reason := routeProcessingJob(usPreferred); id != "" || reason != "preferred source node unavailable" {
+		t.Fatalf("preferred node outside the origin cluster: got (%q, %q), want refusal", id, reason)
+	}
+	if id, reason := routeProcessingJob(&processingJob{TenantID: "tenant-a"}); id != "" || reason != "artifact origin cluster unknown" {
+		t.Fatalf("unknown origin: got (%q, %q), want (\"\", artifact origin cluster unknown)", id, reason)
+	}
+	touchInCluster(sm, "eu-full", "platform-eu")
+	if id, reason := routeProcessingJob(&processingJob{TenantID: "tenant-a", OriginCluster: "platform-apac"}); id != "" || reason != "no nodes in origin cluster platform-apac with capacity for class video_transcode" {
+		t.Fatalf("origin without nodes: got (%q, %q)", id, reason)
+	}
+}
+
+const routeTestCluster = "cluster-eu"
+
+func touchInCluster(sm *state.StreamStateManager, nodeID, clusterID string) {
+	sm.SetNodeConnectionInfo(context.Background(), nodeID, "h", "", clusterID, nil)
+	sm.TouchNode(nodeID, true)
+}
+
+func originJob() *processingJob {
+	return &processingJob{OriginCluster: routeTestCluster}
+}
+
 func preferred(nodeID string) *processingJob {
-	return &processingJob{PreferredNode: sql.NullString{String: nodeID, Valid: nodeID != ""}}
+	return &processingJob{OriginCluster: routeTestCluster, PreferredNode: sql.NullString{String: nodeID, Valid: nodeID != ""}}
 }
 
 // routeProcessingJob picks the edge node for a transcode. The invariants:
@@ -73,7 +119,7 @@ func TestRouteProcessingJob(t *testing.T) {
 	t.Run("no alive nodes", func(t *testing.T) {
 		sm := state.ResetDefaultManagerForTests()
 		t.Cleanup(sm.Shutdown)
-		if id, reason := routeProcessingJob(nil); id != "" || reason != "no alive nodes" {
+		if id, reason := routeProcessingJob(originJob()); id != "" || reason != "no alive nodes" {
 			t.Errorf("got (%q,%q), want (\"\",\"no alive nodes\")", id, reason)
 		}
 	})
@@ -81,9 +127,9 @@ func TestRouteProcessingJob(t *testing.T) {
 	t.Run("viable preferred node wins", func(t *testing.T) {
 		sm := state.ResetDefaultManagerForTests()
 		t.Cleanup(sm.Shutdown)
-		sm.TouchNode("source", true)
+		touchInCluster(sm, "source", routeTestCluster)
 		setNodeProcessing(sm, "source", true, 4, 1)
-		sm.TouchNode("other", true)
+		touchInCluster(sm, "other", routeTestCluster)
 		setNodeProcessing(sm, "other", true, 4, 0) // emptier, but not preferred
 		if id, reason := routeProcessingJob(preferred("source")); id != "source" || reason != "preferred_source_node" {
 			t.Errorf("got (%q,%q), want (\"source\",\"preferred_source_node\")", id, reason)
@@ -93,7 +139,7 @@ func TestRouteProcessingJob(t *testing.T) {
 	t.Run("preferred missing fails closed", func(t *testing.T) {
 		sm := state.ResetDefaultManagerForTests()
 		t.Cleanup(sm.Shutdown)
-		sm.TouchNode("other", true) // keeps aliveIDs non-empty
+		touchInCluster(sm, "other", routeTestCluster) // keeps aliveIDs non-empty
 		setNodeProcessing(sm, "other", true, 4, 0)
 		if id, reason := routeProcessingJob(preferred("ghost")); id != "" || reason != "preferred source node unavailable" {
 			t.Errorf("got (%q,%q), want (\"\",\"preferred source node unavailable\")", id, reason)
@@ -103,7 +149,7 @@ func TestRouteProcessingJob(t *testing.T) {
 	t.Run("preferred present but not processing-capable fails closed", func(t *testing.T) {
 		sm := state.ResetDefaultManagerForTests()
 		t.Cleanup(sm.Shutdown)
-		sm.TouchNode("source", true)
+		touchInCluster(sm, "source", routeTestCluster)
 		setNodeProcessing(sm, "source", false, 4, 0) // alive but cannot process
 		if id, reason := routeProcessingJob(preferred("source")); id != "" || reason != "preferred source node unavailable" {
 			t.Errorf("got (%q,%q), want (\"\",\"preferred source node unavailable\")", id, reason)
@@ -113,13 +159,13 @@ func TestRouteProcessingJob(t *testing.T) {
 	t.Run("no preference picks lowest transcode load", func(t *testing.T) {
 		sm := state.ResetDefaultManagerForTests()
 		t.Cleanup(sm.Shutdown)
-		sm.TouchNode("busy", true)
+		touchInCluster(sm, "busy", routeTestCluster)
 		setNodeProcessing(sm, "busy", true, 8, 5)
-		sm.TouchNode("idle", true)
+		touchInCluster(sm, "idle", routeTestCluster)
 		setNodeProcessing(sm, "idle", true, 8, 1) // fewest in-flight
-		sm.TouchNode("mid", true)
+		touchInCluster(sm, "mid", routeTestCluster)
 		setNodeProcessing(sm, "mid", true, 8, 3)
-		if id, reason := routeProcessingJob(nil); id != "idle" || reason != "lowest_load:video_transcode" {
+		if id, reason := routeProcessingJob(originJob()); id != "idle" || reason != "lowest_load:video_transcode" {
 			t.Errorf("got (%q,%q), want (\"idle\",\"lowest_load:video_transcode\")", id, reason)
 		}
 	})
@@ -127,9 +173,9 @@ func TestRouteProcessingJob(t *testing.T) {
 	t.Run("slots_total 0 is unbounded and eligible", func(t *testing.T) {
 		sm := state.ResetDefaultManagerForTests()
 		t.Cleanup(sm.Shutdown)
-		sm.TouchNode("unbounded", true)
+		touchInCluster(sm, "unbounded", routeTestCluster)
 		setNodeProcessing(sm, "unbounded", true, 0, 99) // 99 in-flight but no cap
-		if id, reason := routeProcessingJob(nil); id != "unbounded" || reason != "lowest_load:video_transcode" {
+		if id, reason := routeProcessingJob(originJob()); id != "unbounded" || reason != "lowest_load:video_transcode" {
 			t.Errorf("got (%q,%q), want (\"unbounded\",\"lowest_load:video_transcode\")", id, reason)
 		}
 	})
@@ -137,10 +183,10 @@ func TestRouteProcessingJob(t *testing.T) {
 	t.Run("all capable nodes full yields none available", func(t *testing.T) {
 		sm := state.ResetDefaultManagerForTests()
 		t.Cleanup(sm.Shutdown)
-		sm.TouchNode("full", true)
+		touchInCluster(sm, "full", routeTestCluster)
 		setNodeProcessing(sm, "full", true, 2, 2) // at capacity
-		if id, reason := routeProcessingJob(nil); id != "" || reason != "no nodes with capacity for class video_transcode" {
-			t.Errorf("got (%q,%q), want (\"\",\"no nodes with capacity for class video_transcode\")", id, reason)
+		if id, reason := routeProcessingJob(originJob()); id != "" || reason != "no nodes in origin cluster cluster-eu with capacity for class video_transcode" {
+			t.Errorf("got (%q,%q), want (\"\",\"no nodes in origin cluster cluster-eu with capacity for class video_transcode\")", id, reason)
 		}
 	})
 
@@ -149,12 +195,12 @@ func TestRouteProcessingJob(t *testing.T) {
 		t.Cleanup(sm.Shutdown)
 		// Processing-capable, but only advertises ai_inference capacity — a
 		// video_transcode job must not land here.
-		sm.TouchNode("infer", true)
+		touchInCluster(sm, "infer", routeTestCluster)
 		setNodeClassCapacity(sm, "infer", map[string]state.ClassCapacity{
 			mist.ProcessingClassAIInference: {Total: 4, Used: 0},
 		})
-		if id, reason := routeProcessingJob(nil); id != "" || reason != "no nodes with capacity for class video_transcode" {
-			t.Errorf("got (%q,%q), want (\"\",\"no nodes with capacity for class video_transcode\")", id, reason)
+		if id, reason := routeProcessingJob(originJob()); id != "" || reason != "no nodes in origin cluster cluster-eu with capacity for class video_transcode" {
+			t.Errorf("got (%q,%q), want (\"\",\"no nodes in origin cluster cluster-eu with capacity for class video_transcode\")", id, reason)
 		}
 	})
 }

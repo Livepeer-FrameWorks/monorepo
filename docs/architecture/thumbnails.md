@@ -292,7 +292,7 @@ Chandler treats the asset_key as an opaque path component — no format validati
 
 When an artifact is hard-purged (`PurgeDeletedJob`, after its main bytes are freed), the same sweep deletes the
 `thumbnails/{artifact_hash}/` prefix (every version + staging + legacy object) — routed by the thumbnail's own
-recorded `destination_cluster`, and by the persisted `durable_backend_local` fact when set, so an official alias
+recorded `destination_cluster`, and by the persisted `durable_backend_local` fact when set, so an alias cluster
 backed by THIS cell but with a different cluster id deletes locally instead of misrouting to a peer — and drops
 the asset's thumbnail control rows (`thumbnail_active_pointer` + `thumbnail_task_assignment`, whose object rows
 cascade). Publication and projection are fenced against a terminal parent (`status IN
@@ -344,18 +344,16 @@ Chandler never sees tenants, attempts, versions, or federation. Serving-cluster 
 evidence at publication (`thumbnail_serving_cluster_id` for artifacts; the ingest cell for live), never re-resolved per
 request. (This section is the canonical record of the accepted static-asset-boundary design.)
 
-**Beta limitation — cross-cell artifacts are unsupported (bytes AND thumbnails), uniformly.** A durable artifact's
-bytes can only be written to a cell that owns the storage locally: VOD upload to a remote official cluster returns
-`storage_delegation_unsupported_for_vod`, and a freeze authorizes ONLY a local official cluster. So in a supported
-deployment an artifact is stored on its origin cell, and its thumbnail is minted there too — no remote destination
-ever arises. The thumbnail publication path mirrors the byte paths: if it resolves a REMOTE official cluster (an
-unsupported cross-cell topology), it drops the produced bytes fail-closed before minting, so the asset gets no
-`has_thumbnails` / `thumbnail_serving_cluster_id` and no URL. This is defensive and CONSISTENT with byte storage — not
-a thumbnail-specific gap, and nothing to "suppress upstream." (Live thumbnails are the exception that DOES work
-cross-cell: they are minted locally on the ingest cell, `thumbnail_serving_cluster_id` = the ingest cell.) Genuine
-cross-cell durable storage — and the federated thumbnail mint a storage-less self-hosted cluster will need — is
-deferred to the storage-placement / cross-cluster work; the `StorageMintViaFederation` drop here is that extension
-point, not dead code (see [placement-policy-engine.md](../rfcs/placement-policy-engine.md), "Seams already in place for storage-less / self-hosted clusters").
+**Artifact thumbnails live on the artifact's origin cell.** Durable bytes belong to the cluster that produced the
+artifact (see [durable-media-storage.md](durable-media-storage.md), I1), and its thumbnails follow: the destination
+is the artifact's `origin_cluster_id`, which the producing node's own cell serves, so the thumbnail mints into that
+cell's store and becomes its `thumbnail_serving_cluster_id`. An unknown origin fails closed. If the origin's storage
+is not this cell's backend (a node producing a thumbnail for an artifact that originated elsewhere), the upload is
+dropped before minting, because completion verifies and promotes only through the local S3 client; that
+`StorageMintViaFederation` branch is the extension point for a federated thumbnail mint for storage-less self-hosted
+clusters (see [placement-policy-engine.md](../rfcs/placement-policy-engine.md), "Seams already in place for
+storage-less / self-hosted clusters"). Live thumbnails are minted locally on the ingest cell,
+`thumbnail_serving_cluster_id` = the ingest cell.
 
 **Exactly three files, nothing else.** The public surface is
 `GET|HEAD|OPTIONS /assets/{assetKey}/{file}` where `{file}` must be one of

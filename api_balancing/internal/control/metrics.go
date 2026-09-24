@@ -45,6 +45,14 @@ type ControlMetrics struct {
 	// correlated acknowledgements that revive them. Labels: outcome
 	// (retained|revived).
 	OfflineEffectDeadLetters *prometheus.CounterVec
+	// StreamTranscodeDegraded counts transcode processes Mist replaced after a
+	// hard failure (PROCESS_REPLACE). Labels: failed_process_type, stream_kind
+	// (live|pull|processing|other), replaced ("true"|"false").
+	StreamTranscodeDegraded *prometheus.CounterVec
+	// ProcessingResultsIgnored counts Helmsman processing results Foghorn
+	// refused to apply. Labels: status (reported status), reason (unknown_job|
+	// inactive_job|unassigned_job|node_mismatch).
+	ProcessingResultsIgnored *prometheus.CounterVec
 }
 
 // MediaRequestContext tags a bounded request-path name. The shared service
@@ -95,6 +103,24 @@ func ObserveArtifactDeletionOutcome(outcome string) {
 		return
 	}
 	controlMetrics.ArtifactDeletionOutcomes.WithLabelValues(outcome).Inc()
+}
+
+func incStreamTranscodeDegraded(failedProcessType, streamKind string, replaced bool) {
+	if controlMetrics == nil || controlMetrics.StreamTranscodeDegraded == nil {
+		return
+	}
+	r := "false"
+	if replaced {
+		r = "true"
+	}
+	controlMetrics.StreamTranscodeDegraded.WithLabelValues(failedProcessType, streamKind, r).Inc()
+}
+
+func incProcessingResultIgnored(status, reason string) {
+	if controlMetrics == nil || controlMetrics.ProcessingResultsIgnored == nil {
+		return
+	}
+	controlMetrics.ProcessingResultsIgnored.WithLabelValues(status, reason).Inc()
 }
 
 func incAdmissionPayloadCrypto(format, result string) {

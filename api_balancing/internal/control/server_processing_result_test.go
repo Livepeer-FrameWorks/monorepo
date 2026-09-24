@@ -70,7 +70,7 @@ func TestProcessProcessingJobProgress_ConsumesPersistedMonotonicProgress(t *test
 	t.Cleanup(func() { artifactoutbox.Init(nil, nil, nil) })
 	mock.ExpectBegin()
 	mock.ExpectQuery("UPDATE foghorn.processing_jobs SET progress = GREATEST").
-		WithArgs("11111111-1111-1111-1111-111111111111", sql.NullInt32{Int32: 15, Valid: true}, sql.NullString{String: "node-1", Valid: true}).
+		WithArgs(int32(15), int64(0), "11111111-1111-1111-1111-111111111111", sql.NullString{String: "node-1", Valid: true}).
 		WillReturnRows(sqlmock.NewRows([]string{"artifact_hash", "tenant_id", "progress"}).
 			AddRow("artifact-hash", "5eed517e-ba5e-da7a-517e-ba5eda7a0001", 80))
 	mock.ExpectQuery("SELECT COALESCE\\(artifact_type").

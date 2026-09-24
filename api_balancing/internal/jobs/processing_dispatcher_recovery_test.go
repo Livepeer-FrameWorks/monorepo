@@ -36,7 +36,7 @@ func TestRecoverStaleFailsExhaustedArtifacts(t *testing.T) {
 	// 3. job-clip: atomic fail tx.
 	mock.ExpectBegin()
 	mock.ExpectQuery(`WITH failed AS`).
-		WithArgs("job-clip", sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg()).
+		WithArgs("job-clip", sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg()).
 		WillReturnRows(sqlmock.NewRows([]string{"artifact_hash", "artifact_type", "tenant_id", "stream_id", "stream_internal_name", "error_message"}).
 			AddRow("hash-clip", "clip", mockTenantUUID, "stream-1", "live+demo", "max retries exceeded"))
 	mock.ExpectExec("UPDATE foghorn.artifacts").
@@ -48,7 +48,7 @@ func TestRecoverStaleFailsExhaustedArtifacts(t *testing.T) {
 	// 4. job-vod: atomic fail tx.
 	mock.ExpectBegin()
 	mock.ExpectQuery(`WITH failed AS`).
-		WithArgs("job-vod", sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg()).
+		WithArgs("job-vod", sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg()).
 		WillReturnRows(sqlmock.NewRows([]string{"artifact_hash", "artifact_type", "tenant_id", "stream_id", "stream_internal_name", "error_message"}).
 			AddRow("hash-vod", "vod", "22222222-2222-4222-8222-222222222222", "", "", "max retries exceeded"))
 	mock.ExpectExec("UPDATE foghorn.artifacts").

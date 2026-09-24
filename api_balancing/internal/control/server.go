@@ -2468,6 +2468,8 @@ receiveLoop:
 			}
 		case *ipcpb.ControlMessage_ProcessingJobProgress:
 			go processProcessingJobProgress(x.ProcessingJobProgress, connSession.NodeID(), registry.log)
+		case *ipcpb.ControlMessage_StreamTranscodeDegraded:
+			go processStreamTranscodeDegraded(x.StreamTranscodeDegraded, connSession.NodeID(), registry.log)
 		case *ipcpb.ControlMessage_ThumbnailUploadRequest:
 			go processThumbnailUploadRequest(msg.GetRequestId(), x.ThumbnailUploadRequest, connSession.NodeID(), connProtocolVersion, stream, registry.log)
 		case *ipcpb.ControlMessage_ThumbnailUploaded:
@@ -4985,7 +4987,8 @@ func classifyTriggerError(err error) (ipcpb.TriggerAckErrorCode, bool) {
 			ipcpb.IngestErrorCode_INGEST_ERROR_PAYMENT_REQUIRED,
 			ipcpb.IngestErrorCode_INGEST_ERROR_DUPLICATE_INGEST,
 			ipcpb.IngestErrorCode_INGEST_ERROR_FREE_TIER_EXHAUSTED,
-			ipcpb.IngestErrorCode_INGEST_ERROR_TENANT_STREAM_CAP:
+			ipcpb.IngestErrorCode_INGEST_ERROR_TENANT_STREAM_CAP,
+			ipcpb.IngestErrorCode_INGEST_ERROR_PLACEMENT_DENIED:
 			return ipcpb.TriggerAckErrorCode_TRIGGER_ACK_ERROR_SCHEMA, false
 		case ipcpb.IngestErrorCode_INGEST_ERROR_TIMEOUT:
 			return ipcpb.TriggerAckErrorCode_TRIGGER_ACK_ERROR_DOWNSTREAM_UNAVAILABLE, true
@@ -6641,20 +6644,6 @@ func GetStorageDeleteDelegate() StorageDeleteDelegate {
 	return storageDeleteDelegate
 }
 
-// resolveOfficialClusterID returns the tenant's official cluster per
-// Quartermaster.GetClusterRouting. Cached for officialClusterCacheTTL.
-// Returns "" on RPC failure or when the tenant has no official cluster —
-// the storage resolver treats an empty slot as missing-candidate, not a
-// fatal error.
-const officialClusterCacheTTL = 60 * time.Second
-
-var officialClusterCache = cache.New(cache.Options{
-	TTL:                  officialClusterCacheTTL,
-	StaleWhileRevalidate: 0,
-	NegativeTTL:          5 * time.Second,
-	MaxEntries:           10000,
-}, cache.MetricsHooks{})
-
 // mintAttemptID mints a server-owned freeze attempt id (128 bits of entropy, hex). The node ECHOES it at
 // completion, so the DB claim binds a Foghorn-ASSIGNED operation rather than a node-chosen request id.
 // Returns "" on a crypto/rand failure so the caller FAILS CLOSED (never reusing a predictable id across
@@ -6700,34 +6689,33 @@ type FreezeAssignment struct {
 	AttemptID    string // server-minted; the node echoes it at completion
 	CanonicalKey string // base descriptor key (persisted as sync_object_key); completion derives the staging + versioned candidate keys from it, never handing it to the node
 	StagingURL   string // presigned PUT to the attempt-scoped staging key
-	DestCluster  string // the official durable cluster this cell mints into
+	DestCluster  string // the artifact's origin cluster, whose storage this cell mints into
 }
 
 // PrepareLocalFreezeAssignment is the SINGLE shared freeze contract used by BOTH the interactive permission
 // path and the proactive reconciler push path, so neither can store to the wrong backend or skip
-// authorization: it resolves the tenant's OFFICIAL durable destination, authorizes source+destination,
-// requires the official backing to be THIS cell's local backend, server-mints the attempt, presigns the
-// attempt-scoped STAGING PUT, and CLAIMS the attempt (persisting the destination storage cluster + canonical
-// key). Returns a structured denial reason when ok=false; the artifact is left untouched on any denial.
+// authorization. The durable destination is the artifact's ORIGIN cluster: the uploading node must belong to
+// that cluster, and the origin's backing must be THIS cell's local backend. It then server-mints the attempt,
+// presigns the attempt-scoped STAGING PUT, and CLAIMS the attempt (persisting the canonical key). Returns a
+// structured denial reason when ok=false; the artifact is left untouched on any denial.
 func PrepareLocalFreezeAssignment(ctx context.Context, assetType, assetHash, tenantID, streamName, serverFormat, originClusterID, nodeID string, expiry time.Duration) (FreezeAssignment, string, bool) {
-	routing, ok := tenantStorageRoutingFn(ctx, tenantID)
-	if !ok {
-		return FreezeAssignment{}, "authorization_check_failed", false
+	destCluster := strings.TrimSpace(originClusterID)
+	if destCluster == "" {
+		return FreezeAssignment{}, "origin_cluster_unknown", false
 	}
-	destCluster := strings.TrimSpace(routing.officialCluster)
 
-	nodeTenant, nodeCluster := "", ""
+	nodeCluster := ""
 	if ns := state.DefaultManager().GetNodeState(nodeID); ns != nil {
-		nodeTenant, nodeCluster = ns.TenantID, ns.ClusterID
+		nodeCluster = ns.ClusterID
 	}
-	if !authorizeStorageReplication(nodeTenant, nodeCluster, tenantID, destCluster, routing) {
+	if !authorizeStorageReplication(nodeCluster, destCluster) {
 		return FreezeAssignment{}, "cluster_not_authorized", false
 	}
 	if s3Client == nil {
 		return FreezeAssignment{}, "s3_not_configured", false
 	}
-	if !canMintOfficialLocallyFn(ctx, tenantID, destCluster) {
-		return FreezeAssignment{}, "official_storage_remote", false
+	if !canMintOriginLocallyFn(ctx, tenantID, destCluster) {
+		return FreezeAssignment{}, "origin_storage_remote", false
 	}
 
 	attemptID := mintAttemptID()
@@ -6750,25 +6738,18 @@ func PrepareLocalFreezeAssignment(ctx context.Context, assetType, assetHash, ten
 		return FreezeAssignment{}, "presign_failed", false
 	}
 
-	scAttr := ""
-	if destCluster != "" && destCluster != originClusterID {
-		scAttr = destCluster
-	}
-	if claimed, cErr := claimFreezeAttempt(ctx, assetHash, attemptID, nodeID, tenantID, scAttr, canonicalKey); cErr != nil || !claimed {
+	// storage_cluster_id stays NULL: NULL means "same as origin_cluster_id", which is always the case here.
+	if claimed, cErr := claimFreezeAttempt(ctx, assetHash, attemptID, nodeID, tenantID, "", canonicalKey); cErr != nil || !claimed {
 		return FreezeAssignment{}, "not_claimable", false
 	}
 	return FreezeAssignment{AttemptID: attemptID, CanonicalKey: canonicalKey, StagingURL: stagingURL, DestCluster: destCluster}, "", true
 }
 
-// resolveThumbnailStorageCluster runs the STRICT official-durable resolver for the thumbnail upload flow. The only
-// durable destination is the tenant's OFFICIAL cluster (from the cached Quartermaster lookup); the origin/ingest
-// cluster is never a candidate. A missing resolver or an unresolved official FAILS CLOSED (StorageUnavailable) —
-// there is no local/caller fallback, so a routing failure never silently mints a tenant's thumbnails locally or
-// onto a BYOC origin. A remote official resolves to federation (which the mint then drops, see the caller).
-func resolveThumbnailStorageCluster(ctx context.Context, tenantID, _ string) (string, storage.StorageMintMode) {
-	// FAIL CLOSED when no storage resolver is wired: without it there is no proof of the tenant's official
-	// durable destination, and assuming the origin cluster is locally mintable would contradict official-durable
-	// selection (and could mint a tenant's thumbnails onto a BYOC origin). A missing resolver is unavailable.
+// resolveThumbnailStorageCluster resolves the durable destination for an artifact thumbnail: the artifact's
+// ORIGIN cluster. A missing resolver or an unknown origin FAILS CLOSED (StorageUnavailable); there is no
+// fallback to this cell or to any tenant-level cluster. An origin served by another Foghorn resolves to
+// federation, which the upload flow mints through that Foghorn.
+func resolveThumbnailStorageCluster(ctx context.Context, tenantID, originClusterID string) (string, storage.StorageMintMode) {
 	if storageResolverFactory == nil {
 		return "", storage.StorageUnavailable
 	}
@@ -6776,44 +6757,7 @@ func resolveThumbnailStorageCluster(ctx context.Context, tenantID, _ string) (st
 	if resolver == nil {
 		return "", storage.StorageUnavailable
 	}
-	// Durable destination is the tenant's OFFICIAL cluster only, via the STRICT resolver: the origin cluster is
-	// never a candidate, and an unresolved official is StorageUnavailable (no local/caller fallback) — an
-	// advertised BYOC origin can never win the durable thumbnail write, and a routing/config failure never
-	// silently mints locally. A remote official → federation.
-	return resolver.ResolveOfficialDurable(resolveOfficialClusterID(ctx, tenantID))
-}
-
-func resolveOfficialClusterID(ctx context.Context, tenantID string) string {
-	tenantID = strings.TrimSpace(tenantID)
-	if tenantID == "" || quartermasterClient == nil {
-		return ""
-	}
-	v, ok, err := officialClusterCache.Get(ctx, "official:"+tenantID, func(loadCtx context.Context, _ string) (interface{}, bool, error) {
-		rctx, cancel := context.WithTimeout(loadCtx, 1*time.Second)
-		defer cancel()
-		routing, qErr := quartermasterClient.GetClusterRouting(rctx, &quartermasterpb.GetClusterRoutingRequest{TenantId: tenantID})
-		if qErr != nil {
-			return "", false, qErr
-		}
-		if routing == nil {
-			return "", true, nil
-		}
-		official := strings.TrimSpace(routing.GetOfficialClusterId())
-		if official == "" {
-			// Quartermaster omits official_cluster_id when it equals the tenant's primary cluster; normalize
-			// to the primary so single-cluster tenants still resolve a durable destination (mirrors freeze).
-			official = strings.TrimSpace(routing.GetClusterId())
-		}
-		return official, true, nil
-	})
-	if err != nil || !ok {
-		return ""
-	}
-	s, ok := v.(string)
-	if !ok {
-		return ""
-	}
-	return s
+	return resolver.ResolveOriginDurable(originClusterID)
 }
 
 // processFreezePermissionRequest handles freeze permission requests from Helmsman
@@ -7004,7 +6948,7 @@ func processFreezePermissionRequest(req *ipcpb.FreezePermissionRequest, nodeID s
 	// Already durably stored on a REMOTE cluster → skip upload, just evict the local warm copy. Checked
 	// BEFORE authorizing a new mint (possession authorizes eviction of an already-durable copy). Requires
 	// VERIFIED durability (sync_status='synced'); the DURABLE location is storage_cluster_id ONLY — a
-	// not-yet-synced artifact has a NULL storage_cluster_id and proceeds to a local mint into official storage.
+	// not-yet-synced artifact has a NULL storage_cluster_id and proceeds to a local mint into its origin's storage.
 	artifactStorageCluster := strings.TrimSpace(storageClusterCol.String)
 	if artifactStorageCluster != "" && artifactStorageCluster != localClusterID && !isServedCluster(artifactStorageCluster) {
 		if !syncStatus.Valid || syncStatus.String != "synced" {
@@ -7036,9 +6980,9 @@ func processFreezePermissionRequest(req *ipcpb.FreezePermissionRequest, nodeID s
 	}
 
 	// STORAGE ASSIGNMENT (gate 2 + mint + claim), through the ONE shared contract the reconciler also uses:
-	// resolve the OFFICIAL destination, authorize source+destination against the tenant's server-owned
-	// entitlement, require the official backing to be THIS cell's local backend, server-mint the attempt,
-	// presign the attempt-scoped STAGING PUT, and claim. Any denial leaves the artifact untouched.
+	// the destination is the artifact's origin cluster, the node must belong to it, and the origin's backing must
+	// be THIS cell's local backend; then server-mint the attempt, presign the attempt-scoped STAGING PUT, and
+	// claim. Any denial leaves the artifact untouched.
 	expiry := 30 * time.Minute
 	assignment, reason, ok := PrepareLocalFreezeAssignment(ctx, assetType, assetHash, tenantID, streamName, serverFormat, originClusterID, nodeID, expiry)
 	if !ok {
@@ -8014,6 +7958,55 @@ func processProcessingJobResult(result *ipcpb.ProcessingJobResult, nodeID string
 // commits or nothing does, so a failed job is never left with an artifact still "processing"
 // (the split-write hazard the pre-transaction path carried). A transient error rolls back and
 // leaves the job active for stale recovery to retry.
+const (
+	processingFailureIgnoredUnknownJob    = "unknown_job"
+	processingFailureIgnoredInactiveJob   = "inactive_job"
+	processingFailureIgnoredUnassignedJob = "unassigned_job"
+	processingFailureIgnoredNodeMismatch  = "node_mismatch"
+)
+
+// processingFailureIgnoreReason returns why a failure report cannot terminalize the job, or "".
+// Only an active job's assigned node may fail it: a terminal job must not be resurrected into a
+// second failure, and an empty assignment is an unbound wildcard, rejected fail-closed.
+func processingFailureIgnoreReason(jobStatus, assignedNode, reportingNode string) string {
+	switch {
+	case jobStatus != "dispatched" && jobStatus != "processing":
+		return processingFailureIgnoredInactiveJob
+	case assignedNode == "":
+		return processingFailureIgnoredUnassignedJob
+	case reportingNode == "" || assignedNode != reportingNode:
+		return processingFailureIgnoredNodeMismatch
+	}
+	return ""
+}
+
+// ProcessingFailureReason classifies a processing job's error for the public
+// upload.failed / clip.failed events. Helmsman reports an unreachable source as
+// "source unavailable: <status>"; the stale-recovery and Helmsman timeouts name
+// a stall, a timeout, or exhausted retries.
+func ProcessingFailureReason(errMsg string) publicv1.MediaFailureReason {
+	msg := strings.ToLower(strings.TrimSpace(errMsg))
+	switch {
+	case strings.HasPrefix(msg, "source unavailable"):
+		return publicv1.MediaFailureReason_MEDIA_FAILURE_REASON_SOURCE_UNAVAILABLE
+	case strings.Contains(msg, "timeout"), strings.Contains(msg, "stalled"),
+		strings.Contains(msg, "no processing progress"), strings.Contains(msg, "max retries exceeded"):
+		return publicv1.MediaFailureReason_MEDIA_FAILURE_REASON_TIMED_OUT
+	}
+	return publicv1.MediaFailureReason_MEDIA_FAILURE_REASON_PROCESSING_FAILED
+}
+
+func logProcessingFailureIgnored(logger logging.Logger, fields logging.Fields, reason, errMsg, reportingNode, assignedNode, jobStatus string) {
+	incProcessingResultIgnored("failed", reason)
+	logger.WithFields(fields).WithFields(logging.Fields{
+		"ignore_reason":  reason,
+		"reported_error": errMsg,
+		"reporting_node": reportingNode,
+		"assigned_node":  assignedNode,
+		"job_status":     jobStatus,
+	}).Warn("Ignoring processing job failure report")
+}
+
 func failProcessingJobAtomic(ctx context.Context, jobID, errMsg, reportingNode string, logger logging.Logger, fields logging.Fields) {
 	// The stream-id lookup is a network call; resolve it at most once across transaction replays.
 	var resolvedStreamID string
@@ -8025,24 +8018,19 @@ func failProcessingJobAtomic(ctx context.Context, jobID, errMsg, reportingNode s
 		job, lookupErr := q.LockProcessingJobForFailure(ctx, jobID)
 		if lookupErr != nil {
 			if errors.Is(lookupErr, sql.ErrNoRows) {
-				logger.WithFields(fields).Warn("Failure for unknown processing job; ignoring")
+				logProcessingFailureIgnored(logger, fields, processingFailureIgnoredUnknownJob, errMsg, reportingNode, "", "")
 				return errTxRollbackNoop
 			}
 			return fmt.Errorf("lock processing job for failure: %w", lookupErr)
 		}
 		jobStatusNow, assignedNode, artHash, artType := job.Status.String, job.ProcessingNodeID, job.ArtifactHash, job.ArtifactType
 		tenantID, streamID, streamInternalName := job.TenantID, job.StreamID, job.StreamInternalName
-		if jobStatusNow != "dispatched" && jobStatusNow != "processing" {
-			logger.WithFields(fields).Warn("Ignoring failure for a non-active processing job (cancelled, deleted, or duplicate)")
-			return errTxRollbackNoop
-		}
 		// Bind the failure to the assigned node so a foreign node cannot fail another node's job. Both callers
-		// (the "failed" report and the internal empty-output→fail) pass the reporting connection's node id, and
-		// dispatch persists processing_node_id for every node-dispatched job, so require a non-empty assignment
-		// that equals the reporting node. An empty assignment is an unbound wildcard — reject it (fail closed).
-		if reportingNode == "" || assignedNode == "" || assignedNode != reportingNode {
-			logger.WithFields(fields).WithField("assigned_node", assignedNode).
-				Warn("Ignoring failure whose reporting node does not match the assigned processing node")
+		// (the "failed" report and the internal empty-output→fail) pass the reporting connection's canonical node
+		// id — the same id whichever Foghorn replica holds that node's control stream — and dispatch persists it
+		// as processing_node_id, so the node holding the job is always accepted.
+		if reason := processingFailureIgnoreReason(jobStatusNow, assignedNode, reportingNode); reason != "" {
+			logProcessingFailureIgnored(logger, fields, reason, errMsg, reportingNode, assignedNode, jobStatusNow)
 			return errTxRollbackNoop
 		}
 
@@ -8093,7 +8081,7 @@ func failProcessingJobAtomic(ctx context.Context, jobID, errMsg, reportingNode s
 				}
 				failed := &publicv1.ClipFailed{
 					Artifact: artifactoutbox.ClipArtifact(artHash, streamID),
-					Reason:   publicv1.MediaFailureReason_MEDIA_FAILURE_REASON_PROCESSING_FAILED,
+					Reason:   ProcessingFailureReason(errMsg),
 				}
 				if err := artifactoutbox.EnqueueClipTransitionTx(ctx, tx, clipData, failed); err != nil {
 					return fmt.Errorf("enqueue clip failure lifecycle for %s: %w", artHash, err)
@@ -8109,7 +8097,7 @@ func failProcessingJobAtomic(ctx context.Context, jobID, errMsg, reportingNode s
 				}
 				failed := &publicv1.UploadFailed{
 					Artifact: artifactoutbox.UploadArtifact(artHash),
-					Reason:   publicv1.MediaFailureReason_MEDIA_FAILURE_REASON_PROCESSING_FAILED,
+					Reason:   ProcessingFailureReason(errMsg),
 				}
 				if err := artifactoutbox.EnqueueVodTransitionTx(ctx, tx, vodData, failed); err != nil {
 					return fmt.Errorf("enqueue vod failure lifecycle for %s: %w", artHash, err)
@@ -8157,7 +8145,7 @@ func processProcessingJobProgress(progress *ipcpb.ProcessingJobProgress, nodeID 
 		q := foghorndb.New(tx)
 		var artifactType, streamID, streamInternalName string
 		updated, err := q.UpdateProcessingJobProgress(ctx, foghorndb.UpdateProcessingJobProgressParams{
-			JobID: progress.GetJobId(), Progress: sql.NullInt32{Int32: progressPct, Valid: true}, ProcessingNodeID: sql.NullString{String: nodeID, Valid: true},
+			JobID: progress.GetJobId(), Progress: progressPct, LastMs: progress.GetLastMs(), ProcessingNodeID: sql.NullString{String: nodeID, Valid: true},
 		})
 		if errors.Is(err, sql.ErrNoRows) {
 			return errTxRollbackNoop
@@ -10369,10 +10357,9 @@ func processThumbnailUploadRequest(requestID string, req *ipcpb.ThumbnailUploadR
 			logger.Warn("DB not available for artifact hash resolution")
 			return
 		}
-		// VOD+: also pull tenant_id and the authoritative storage cluster
-		// (storage_cluster_id with origin_cluster_id fallback) so the
-		// resolver can pick the right pool. Caller's stream state has no
-		// VOD context so the artifact row is the only source.
+		// VOD+: also pull tenant_id and the artifact's origin cluster, which owns
+		// its durable storage. Caller's stream state has no VOD context so the
+		// artifact row is the only source.
 		row, err := foghorndb.New(conn).ResolveThumbnailVODArtifact(context.Background(), sql.NullString{String: bareName, Valid: true})
 		if err != nil {
 			logger.WithFields(logging.Fields{
@@ -10488,11 +10475,9 @@ func processThumbnailUploadRequest(requestID string, req *ipcpb.ThumbnailUploadR
 	}
 
 	// Resolve the storage destination. LIVE thumbnails are EPHEMERAL derivatives served from the INGEST cell while the
-	// stream is live — Commodore builds their URL from active_ingest_cluster_id, so they must be stored on THIS (ingest)
-	// cell, not the tenant's official durable cluster. Resolving official for a cross-cell live stream would return a
-	// remote destination that federated publication then DROPS, leaving a URL to an object never published. Local mint
-	// keeps live publication and its URL on the same cell (active_ingest is authoritative). ARTIFACT thumbnails are
-	// durable and still resolve the official cluster (recorded as thumbnail_serving_cluster_id).
+	// stream is live — Commodore builds their URL from active_ingest_cluster_id, so they are stored on THIS (ingest)
+	// cell. ARTIFACT thumbnails are durable and land on the artifact's ORIGIN cluster, like the artifact's bytes
+	// (recorded as thumbnail_serving_cluster_id).
 	var storageCluster string
 	var mintMode storage.StorageMintMode
 	if isLive {
@@ -10508,20 +10493,17 @@ func processThumbnailUploadRequest(requestID string, req *ipcpb.ThumbnailUploadR
 		}).Warn("Storage resolver returned unavailable for thumbnail upload — dropping")
 		return
 	}
-	// Fail closed on a remote (federated) ARTIFACT-thumbnail destination — CONSISTENT with byte storage, not a
-	// thumbnail-specific gap: a durable artifact's bytes are themselves fail-closed cross-cell (VOD upload to a remote
-	// official returns storage_delegation_unsupported_for_vod; freeze authorizes only a local official), so in a
-	// supported single-backend-per-cell deployment an artifact lives on its origin cell and its thumbnail mints there
-	// too — this branch is only reached by an unsupported cross-cell topology. Completion verifies + promotes only
-	// through the LOCAL S3 client, so a federated attempt would strand on a remote staging key it can never
-	// HEAD/promote; this cell never mints one. (Live thumbnails differ — minted locally on the ingest cell by the
-	// isLive branch above, so they DO serve cross-cell.) See docs/architecture/durable-media-storage.md.
+	// The producing node sits in the origin cell, so the origin resolves to this cell's local backing. A federated
+	// verdict means the origin's storage is not this cell's backend; completion verifies + promotes only through the
+	// LOCAL S3 client, so this cell cannot publish into it and does not mint.
 	if mintMode == storage.StorageMintViaFederation {
 		logger.WithFields(logging.Fields{
 			"internal_name":   internalName,
 			"tenant_id":       thumbTenantID,
+			"origin_cluster":  thumbOriginCluster,
 			"storage_cluster": storageCluster,
-		}).Warn("Artifact thumbnail durable destination is a remote cell; cross-cell artifact thumbnail publication is unsupported — dropping produced bytes (fail closed)")
+			"node_id":         nodeID,
+		}).Warn("Artifact thumbnail origin storage is not this cell's backend — dropping produced bytes")
 		return
 	}
 
@@ -10578,7 +10560,7 @@ func processThumbnailUploadRequest(requestID string, req *ipcpb.ThumbnailUploadR
 	claimCtx, claimCancel := context.WithTimeout(context.Background(), 5*time.Second)
 	// backend evidence (I2): the mint only reaches here for a StorageMintLocal destination (Unavailable + remote
 	// federation are dropped above), so ClaimThumbnailAttempt records durable_backend_local from that invariant —
-	// cleanup then routes the sweep local even when the official destination is a locally-backed ALIAS.
+	// cleanup then routes the sweep local even when the origin cluster is a locally-backed ALIAS.
 	claimed, claimErr := ClaimThumbnailAttempt(claimCtx, GetDB(), attemptID, thumbTenantID, thumbnailKey, nodeID, storageCluster, fileNames, time.Now().Add(expiry))
 	claimCancel()
 	if claimErr != nil || !claimed {
@@ -10869,7 +10851,7 @@ func finishThumbnailPublication(ctx context.Context, dbh *sql.DB, a ThumbnailAss
 		} else if marked {
 			// Node-authorized convergence: has_thumbnails is already flipped by the settle; this backfills a MISSING
 			// (both-NULL) artifact origin cluster from the reporting node's own cluster — legitimate provenance for a
-			// live upload. It does NOT stamp the thumbnail's official STORAGE destination onto origin (that would corrupt
+			// live upload. It does NOT stamp the thumbnail's STORAGE destination onto origin (that would corrupt
 			// provenance); recovery, which has no reporting node, simply skips this.
 			markArtifactHasThumbnails(a.AssetKey, nodeID, logger)
 		}
@@ -10978,7 +10960,7 @@ func ReprojectPublishedThumbnailAttempt(ctx context.Context, attemptID string) (
 	}
 	logger := logging.NewLoggerWithService("foghorn-thumbnail-recovery")
 	// Recovery records the same AUTHORITATIVE thumbnail_serving_cluster_id as the immediate path — the winning
-	// assignment's persisted destination_cluster (the official-durable cluster the thumbnail was projected to). It never
+	// assignment's persisted destination_cluster (the origin cluster the thumbnail was stored on). It never
 	// touches origin/storage cluster (provenance / byte placement), which a dedicated serving-cluster field replaces.
 	return projectAndMarkThumbnail(ctx, dbh, s3Client, attemptID, a.AssetKey, a.TenantID, a.DestinationCluster, objs, logger)
 }

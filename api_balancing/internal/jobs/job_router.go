@@ -1,6 +1,7 @@
 package jobs
 
 import (
+	"strings"
 	"time"
 
 	"frameworks/api_balancing/internal/control"
@@ -43,14 +44,23 @@ func routeProcessingJob(job *processingJob) (string, string) {
 	if job != nil {
 		jobTenant = job.TenantID
 	}
+	// Processing output is durable media owned by the artifact's origin cluster, so only that cluster's nodes may
+	// run the job. An artifact without a recorded origin is not placed anywhere.
+	originCluster := ""
+	if job != nil {
+		originCluster = strings.TrimSpace(job.OriginCluster)
+	}
+	if originCluster == "" {
+		return "", "artifact origin cluster unknown"
+	}
 	aliveIDs := sm.AliveNodeIDs(60 * time.Second)
 	if len(aliveIDs) == 0 {
 		return "", "no alive nodes"
 	}
 
-	if job != nil && job.PreferredNode.Valid && job.PreferredNode.String != "" {
+	if job.PreferredNode.Valid && job.PreferredNode.String != "" {
 		node := sm.GetNodeState(job.PreferredNode.String)
-		if node != nil && node.CapProcessing && node.IsHealthy && node.CanRunClass(class) && nodeEligibleForJobTenant(node, jobTenant) {
+		if node != nil && node.ClusterID == originCluster && node.CapProcessing && node.IsHealthy && node.CanRunClass(class) && nodeEligibleForJobTenant(node, jobTenant) {
 			return job.PreferredNode.String, "preferred_source_node"
 		}
 		return "", "preferred source node unavailable"
@@ -60,7 +70,7 @@ func routeProcessingJob(job *processingJob) (string, string) {
 	bestLoad := -1
 	for _, id := range aliveIDs {
 		node := sm.GetNodeState(id)
-		if node == nil || !node.CapProcessing || !node.IsHealthy {
+		if node == nil || node.ClusterID != originCluster || !node.CapProcessing || !node.IsHealthy {
 			continue
 		}
 		if !node.CanRunClass(class) {
@@ -79,7 +89,7 @@ func routeProcessingJob(job *processingJob) (string, string) {
 	}
 
 	if bestID == "" {
-		return "", "no nodes with capacity for class " + class
+		return "", "no nodes in origin cluster " + originCluster + " with capacity for class " + class
 	}
 	return bestID, "lowest_load:" + class
 }

@@ -77,7 +77,7 @@ type ThumbnailAssignment struct {
 // current single-S3-backend-per-cell scope, not an assumption: the mint (processThumbnailUploadRequest) drops
 // StorageUnavailable AND StorageMintViaFederation BEFORE it ever claims, so an attempt only reaches this function
 // for a StorageMintLocal destination — the bytes are on THIS cell's local S3. Persisting it atomically in the
-// INSERT lets cleanup route the sweep local even when the destination cluster id differs (a locally-backed official
+// INSERT lets cleanup route the sweep local even when the destination cluster id differs (a locally-backed
 // alias), without reconstructing from current routing.
 func ClaimThumbnailAttempt(ctx context.Context, dbh *sql.DB, attemptID, tenantID, assetKey, nodeID, destinationCluster string, files []string, expiry time.Time) (claimed bool, err error) {
 	if dbh == nil || attemptID == "" || tenantID == "" || assetKey == "" || nodeID == "" || destinationCluster == "" || len(files) == 0 {
@@ -592,8 +592,8 @@ func gateThumbnailProjection(ctx context.Context, dbh *sql.DB, attemptID, assetK
 // settleThumbnailProjection is step 3 of projection: after the copy landed, re-verify (under the per-asset lock) that
 // this attempt is STILL the active, published, unprojected winner and not tombstoned/terminal, then stamp
 // deterministic_projected_at, arm the one-shot reassert clock (deterministic_reassert_at = NOW()+window), and expose
-// has_thumbnails + the AUTHORITATIVE thumbnail_serving_cluster_id (the winning assignment's official-durable destination
-// cluster, so the catalog links the correct Chandler even for a BYOC/cross-cell artifact). A superseded loser fails the
+// has_thumbnails + the AUTHORITATIVE thumbnail_serving_cluster_id (the winning assignment's destination cluster,
+// so the catalog links the Chandler that holds the thumbnail). A superseded loser fails the
 // CAS here (marked=false) so it never advertises stale bytes; its straggler overwrite is corrected by the current
 // winner's reassert when it lands within the copy window (a later straggler is the accepted residual risk on
 // projectionProviderAmbiguityWindow). Idempotent. servingCluster is write-once and rides the has_thumbnails catalog-revision bump so it
@@ -786,7 +786,7 @@ func reconstructAttemptObjectKeys(ctx context.Context, tx *sql.Tx, attemptID str
 
 // ThumbnailDestination is one distinct (destination cluster, backend_id) an asset's thumbnails were published to,
 // plus the write-time backend evidence for it: BackendLocal true means those bytes are on THIS cell's local S3 (a
-// locally-backed official alias), so cleanup deletes locally regardless of the cluster id. BackendID is the recorded
+// locally-backed alias), so cleanup deletes locally regardless of the cluster id. BackendID is the recorded
 // physical store the bytes were written to; under the immutable-backend model cleanup deletes from that store when it
 // is the cell's current one and fails closed on a mismatch, rather than resolving an arbitrary backend's adapter.
 type ThumbnailDestination struct {
@@ -795,10 +795,10 @@ type ThumbnailDestination struct {
 	BackendID    string
 }
 
-// ThumbnailDestinationClusters returns the DISTINCT (official-durable destination cluster, recorded backend_id) an
-// asset's thumbnail attempts were published to, each with its recorded backend-local fact (bool_or over the group).
-// Thumbnails live on the tenant's official durable backend (destination_cluster), which is INDEPENDENT of where
-// the parent artifact's own bytes live — so cleanup must route S3 deletion by this + the recorded backend fact,
+// ThumbnailDestinationClusters returns the DISTINCT (destination cluster, recorded backend_id) an asset's thumbnail
+// attempts were published to, each with its recorded backend-local fact (bool_or over the group). Thumbnails live on
+// their recorded destination_cluster; rows written before thumbnails followed the artifact's origin may name a
+// different cluster than the parent artifact's own bytes — so cleanup must route S3 deletion by this + the recorded backend fact,
 // never by the parent artifact's storage attribution or a bare cluster-id compare. Grouping by backend_id too means
 // thumbnails that span a repoint (attempts on two physical stores) each get swept from the store they live on. Read
 // BEFORE control rows go.

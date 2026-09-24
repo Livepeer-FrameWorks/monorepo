@@ -116,6 +116,9 @@ type processingJob struct {
 	StreamID       sql.NullString
 	StreamInternal sql.NullString
 	DurableLocal   bool
+	// OriginCluster is the job artifact's origin_cluster_id. Processing runs, and its output is stored, only on
+	// nodes of this cluster.
+	OriginCluster string
 }
 
 func prepareProcessingDispatchConfig(processesJSON string, job *processingJob, nodeID, clusterID string, now time.Time) (string, error) {
@@ -255,7 +258,7 @@ func (d *ProcessingDispatcher) dispatch() {
 			SourceURL: row.SourceUrl, SourceParams: row.SourceParams,
 			PreferredNode: row.PreferredNodeID, ProcessesJSON: row.ProcessesJson, InternalName: row.InternalName,
 			StreamID: sql.NullString{String: row.StreamID, Valid: row.StreamID != ""}, StreamInternal: row.StreamInternalName,
-			DurableLocal: row.DurableBackendLocal,
+			DurableLocal: row.DurableBackendLocal, OriginCluster: row.OriginClusterID,
 		}
 		d.dispatchJob(ctx, &job)
 	}
@@ -272,9 +275,10 @@ func (d *ProcessingDispatcher) dispatchJob(ctx context.Context, job *processingJ
 	nodeID, reason := routeProcessingJob(job)
 	if nodeID == "" {
 		d.logger.WithFields(logging.Fields{
-			"job_id":   job.JobID,
-			"job_type": job.JobType,
-			"reason":   reason,
+			"job_id":         job.JobID,
+			"job_type":       job.JobType,
+			"origin_cluster": job.OriginCluster,
+			"reason":         reason,
 		}).Debug("No processing node available for job")
 		d.revertToQueued(ctx, job.JobID)
 		d.markArtifactQueued(ctx, job, "no processing node available")
@@ -373,8 +377,8 @@ func (d *ProcessingDispatcher) dispatchJob(ctx context.Context, job *processingJ
 		// (restart churn blocks the buffer's output-drain signal).
 		resolved = mist.DisableProcessRestarts(resolved)
 		if d.gatewayResolver != nil {
-			// Queue jobs do not carry origin/official cluster IDs; nil candidates
-			// resolves against the resolver's local cluster.
+			// nil candidates resolve against the resolver's local cluster, the cell
+			// whose Foghorn dispatches jobs for the artifact's origin cluster.
 			resolved = d.gatewayResolver.ApplyLivepeerBroadcasters(resolved, nil)
 			resolved = d.gatewayResolver.ApplyLivepeerWorkload(resolved, mist.WorkloadVOD)
 		}
@@ -724,7 +728,11 @@ func (d *ProcessingDispatcher) recoverStale() {
 	// own transaction so the job-failed, artifact-failed, and lifecycle-outbox writes commit
 	// together (or not at all). The old batch CTE terminalized the job first and updated the
 	// artifact + telemetry separately, which could leave a failed job with a live artifact.
-	jobIDs, err := queries.ListExhaustedProcessingJobIDs(ctx, foghorndb.ListExhaustedProcessingJobIDsParams{UpdatedAt: sql.NullTime{Time: ttlCutoff, Valid: true}, RetryCount: sql.NullInt32{Int32: int32(d.maxRetries), Valid: true}, CreatedAt: sql.NullTime{Time: queuedCutoff, Valid: true}})
+	//
+	// The progress watchdog adds active jobs whose media position has not advanced for
+	// processingProgressStallTimeout. Helmsman's lease heartbeat keeps updated_at fresh for
+	// as long as its job goroutine lives, so without it a wedged job never goes stale.
+	jobIDs, err := queries.ListExhaustedProcessingJobIDs(ctx, foghorndb.ListExhaustedProcessingJobIDsParams{UpdatedAt: sql.NullTime{Time: ttlCutoff, Valid: true}, RetryCount: sql.NullInt32{Int32: int32(d.maxRetries), Valid: true}, CreatedAt: sql.NullTime{Time: queuedCutoff, Valid: true}, ProgressAdvancedAt: sql.NullTime{Time: processingProgressCutoff(time.Now()), Valid: true}})
 	if err != nil {
 		d.logger.WithError(err).Warn("Failed to list exhausted processing jobs")
 		return
@@ -732,6 +740,16 @@ func (d *ProcessingDispatcher) recoverStale() {
 	for _, jobID := range jobIDs {
 		d.failExhaustedJobAtomic(ctx, jobID, ttlCutoff, queuedCutoff)
 	}
+}
+
+// processingProgressStallTimeout is how long an active processing job may report no
+// increase in progress percentage or media position before stale recovery fails it.
+// Helmsman fails its own job after 3 minutes without media progress; this backstop
+// covers a Helmsman whose job goroutine is wedged but still renewing the lease.
+const processingProgressStallTimeout = 20 * time.Minute
+
+func processingProgressCutoff(now time.Time) time.Time {
+	return now.Add(-processingProgressStallTimeout)
 }
 
 // failExhaustedJobAtomic drives one exhausted/stuck job to its terminal failed state as a single
@@ -754,7 +772,7 @@ func (d *ProcessingDispatcher) failExhaustedJobAtomic(ctx context.Context, jobID
 		// Terminalize the job ONLY if it still matches the exhausted/stuck predicate, and resolve its
 		// artifact in the same tx. ErrNoRows ⇒ the job recovered/completed since enumeration ⇒ no-op.
 		queries := foghorndb.New(tx)
-		failed, scanErr := queries.FailExhaustedProcessingJob(ctx, foghorndb.FailExhaustedProcessingJobParams{JobID: jobID, UpdatedAt: sql.NullTime{Time: ttlCutoff, Valid: true}, RetryCount: sql.NullInt32{Int32: int32(d.maxRetries), Valid: true}, CreatedAt: sql.NullTime{Time: queuedCutoff, Valid: true}})
+		failed, scanErr := queries.FailExhaustedProcessingJob(ctx, foghorndb.FailExhaustedProcessingJobParams{JobID: jobID, UpdatedAt: sql.NullTime{Time: ttlCutoff, Valid: true}, RetryCount: sql.NullInt32{Int32: int32(d.maxRetries), Valid: true}, CreatedAt: sql.NullTime{Time: queuedCutoff, Valid: true}, ProgressAdvancedAt: sql.NullTime{Time: processingProgressCutoff(time.Now()), Valid: true}})
 		if errors.Is(scanErr, sql.ErrNoRows) {
 			abortLog = func() {} // recovered/completed since enumeration
 			return errExhaustionAborted
@@ -794,7 +812,7 @@ func (d *ProcessingDispatcher) failExhaustedJobAtomic(ctx context.Context, jobID
 				}
 				failed := &publicv1.ClipFailed{
 					Artifact: artifactoutbox.ClipArtifact(artifactHash.String, streamID),
-					Reason:   publicv1.MediaFailureReason_MEDIA_FAILURE_REASON_PROCESSING_FAILED,
+					Reason:   control.ProcessingFailureReason(errorMsg),
 				}
 				if enqErr := artifactoutbox.EnqueueClipTransitionTx(ctx, tx, clipData, failed); enqErr != nil {
 					abortLog = func() {
@@ -810,7 +828,7 @@ func (d *ProcessingDispatcher) failExhaustedJobAtomic(ctx context.Context, jobID
 				}
 				failed := &publicv1.UploadFailed{
 					Artifact: artifactoutbox.UploadArtifact(artifactHash.String),
-					Reason:   publicv1.MediaFailureReason_MEDIA_FAILURE_REASON_PROCESSING_FAILED,
+					Reason:   control.ProcessingFailureReason(errorMsg),
 				}
 				if enqErr := artifactoutbox.EnqueueVodTransitionTx(ctx, tx, vodData, failed); enqErr != nil {
 					abortLog = func() {

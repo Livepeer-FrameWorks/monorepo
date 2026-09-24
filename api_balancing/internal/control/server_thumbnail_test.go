@@ -6,6 +6,8 @@ import (
 	"testing"
 	"time"
 
+	"frameworks/api_balancing/internal/storage"
+
 	"github.com/DATA-DOG/go-sqlmock"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
@@ -199,5 +201,51 @@ func TestProjectThumbnail_SkipsUnreadableSourceAndReportsIncomplete(t *testing.T
 	}
 	if ok {
 		t.Fatal("an unreadable source must report the copy INCOMPLETE (leave for recovery)")
+	}
+}
+
+// Artifact thumbnails land on the artifact's origin cluster: on the EU cell, an EU-produced clip's thumbnails
+// resolve to the EU backend (minted locally), a US-origin artifact resolves to the US cell (federation, which
+// the upload flow does not mint here), and an unknown origin or missing resolver fails closed.
+func TestResolveThumbnailStorageCluster_UsesOrigin(t *testing.T) {
+	euBacking := storage.S3Backing{Bucket: "frameworks-eu", Endpoint: "https://eu.example", Region: "eu-central-1"}
+	prevFactory := storageResolverFactory
+	t.Cleanup(func() { SetStorageResolverFactory(prevFactory) })
+
+	SetStorageResolverFactory(nil)
+	if cluster, mode := resolveThumbnailStorageCluster(context.Background(), "tenant-a", "platform-eu"); cluster != "" || mode != storage.StorageUnavailable {
+		t.Fatalf("nil resolver: got (%q, %s), want unavailable", cluster, mode)
+	}
+
+	SetStorageResolverFactory(func(context.Context, string) *storage.ClusterResolver {
+		return &storage.ClusterResolver{
+			LocalClusterID:       "platform-eu",
+			LocalClusterServed:   func(id string) bool { return id == "platform-eu" },
+			LocalS3Backing:       euBacking,
+			LocalS3ClientPresent: true,
+			AdvertisedBacking: func(id string) (storage.S3Backing, bool) {
+				switch id {
+				case "platform-eu":
+					return euBacking, true
+				case "platform-us":
+					return storage.S3Backing{Bucket: "frameworks-us", Endpoint: "https://us.example", Region: "us-east-1"}, true
+				}
+				return storage.S3Backing{}, false
+			},
+		}
+	})
+	cases := []struct {
+		origin, wantCluster string
+		wantMode            storage.StorageMintMode
+	}{
+		{"platform-eu", "platform-eu", storage.StorageMintLocal},
+		{"platform-us", "platform-us", storage.StorageMintViaFederation},
+		{"", "", storage.StorageUnavailable},
+	}
+	for _, tc := range cases {
+		cluster, mode := resolveThumbnailStorageCluster(context.Background(), "tenant-a", tc.origin)
+		if cluster != tc.wantCluster || mode != tc.wantMode {
+			t.Fatalf("origin %q: got (%q, %s), want (%q, %s)", tc.origin, cluster, mode, tc.wantCluster, tc.wantMode)
+		}
 	}
 }
