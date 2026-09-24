@@ -55,7 +55,7 @@
 
     - name: Wait for Kafka MirrorMaker REST port
       ansible.builtin.wait_for:
-        host: 127.0.0.1
+        host: "{{ kafka_mm_rest_address }}"
         port: "{{ kafka_mm_rest_port }}"
         state: started
         timeout: 60

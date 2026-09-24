@@ -6,3 +6,8 @@
     enabled: true
     daemon_reload: true
   when: not ansible_check_mode
+
+- name: Clear Kafka MirrorMaker restart marker
+  ansible.builtin.file:
+    path: "{{ kafka_mm_restart_pending_path }}"
+    state: absent

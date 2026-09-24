@@ -1,9 +1,33 @@
 ---
+# With kafka_mm_defer_restart the handler only records that the running worker
+# is stale; the CLI then restarts every pending worker of the release together
+# and restart.yml clears the marker.
 - name: Restart Kafka MirrorMaker
   ansible.builtin.systemd:
     name: frameworks-kafka-mirrormaker
     state: restarted
     enabled: true
     daemon_reload: true
-  when: not ansible_check_mode
+  when:
+    - not ansible_check_mode
+    - not (kafka_mm_defer_restart | bool)
+  listen: kafka_mirrormaker restart
+
+- name: Clear Kafka MirrorMaker restart marker
+  ansible.builtin.file:
+    path: "{{ kafka_mm_restart_pending_path }}"
+    state: absent
+  when: not (kafka_mm_defer_restart | bool)
+  listen: kafka_mirrormaker restart
+
+- name: Mark Kafka MirrorMaker restart pending
+  ansible.builtin.file:
+    path: "{{ kafka_mm_restart_pending_path }}"
+    state: touch
+    owner: root
+    group: root
+    mode: "0644"
+    access_time: preserve
+    modification_time: preserve
+  when: kafka_mm_defer_restart | bool
   listen: kafka_mirrormaker restart

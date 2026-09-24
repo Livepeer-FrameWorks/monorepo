@@ -12,9 +12,20 @@ kafka_mm_tarball_path: /tmp/kafka-mirrormaker.tar.gz
 
 kafka_mm_heap_opts: "-Xmx1G -Xms1G"
 kafka_mm_rest_port: 8083
+# Internode REST (KIP-710) binds and advertises this address. Workers of one
+# target forward connector task configs to the leader over it, so it must be
+# the mesh IP when a target has several workers; loopback keeps it private.
+kafka_mm_rest_address: "127.0.0.1"
 kafka_mm_validate_rest: false
 kafka_mm_task_count: 2
 kafka_mm_local_cluster_alias: ""
+
+# When true, a config or binary change leaves the running worker alone and
+# touches kafka_mm_restart_pending_path; `cluster release apply` restarts all
+# pending workers together once every worker's config has converged, so the
+# workers of one target never run mixed configs across a rolling restart.
+kafka_mm_defer_restart: false
+kafka_mm_restart_pending_path: /var/lib/kafka-mirrormaker/restart-pending
 
 # Prometheus JMX exporter javaagent. The worker serves MirrorMaker2 connector
 # metrics on 127.0.0.1:kafka_mm_jmx_port for the host-local vmagent; 9404

@@ -16,6 +16,7 @@
     - /etc/systemd/system/frameworks-kafka-mirrormaker.service
     - "{{ kafka_mm_properties_path }}"
     - "{{ kafka_mm_jmx_exporter_dir }}"
+    - "{{ kafka_mm_restart_pending_path }}"
 
 - name: Reload systemd after MirrorMaker2 worker removal
   ansible.builtin.systemd:

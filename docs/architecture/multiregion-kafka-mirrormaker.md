@@ -63,6 +63,10 @@ The planner rejects a manifest that is missing a link for any ordered pair of Ka
 
 The CLI provisions MM2 as `kafka-mirrormaker` infrastructure tasks through the `frameworks.infra.kafka_mirrormaker` Ansible role, which runs `connect-mirror-maker.sh` under systemd as `frameworks-kafka-mirrormaker`. There is one worker process per host, started with `--clusters <host region>`, so it drives every link into its own region and nothing else. Workers serving the same target coordinate task ownership through MM2's Connect internals, and replicated writes stay local to the cluster they land in. Consumer-group checkpoints are emitted only on links into the aggregator, where durable consumer groups live.
 
+Workers run with `dedicated.mode.enable.internode.rest` (KIP-710, Kafka 3.5+). When a follower worker recomputes a connector's tasks, for example after a new source topic appears, it forwards the task configs to the leader over this REST server; without it the forward fails and the new topic never gets a replication task while its remote `<source>.<topic>` copy stays empty. The listener binds and advertises the host's WireGuard mesh IP on the worker port (8083), so it is reachable only from other mesh hosts. Source topics and consumer groups are rescanned every 60 seconds. `frameworks cluster diagnose kafka` compares each mirrored topic's source end offset with its remote copy and warns on a topic that has records on the source but none on the target.
+
+`cluster release apply` converges every worker's config and binaries first, with the role only recording a pending restart (`/var/lib/kafka-mirrormaker/restart-pending`), and then restarts all pending workers together. Workers of one target therefore never run mixed configs across a sequence of rebalances. The marker lives on the host, so a rerun after an interrupted release still restarts a worker whose config changed earlier. `cluster provision` restarts each worker as its config changes.
+
 ## Consumers
 
 The CLI renders `MIRROR_REGION_PREFIXES` for Periscope-Ingest and Signalman from the links whose target is the Kafka cluster the service binds.

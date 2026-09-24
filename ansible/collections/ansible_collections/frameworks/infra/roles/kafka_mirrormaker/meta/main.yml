@@ -47,6 +47,20 @@ argument_specs:
         type: bool
         required: false
         default: false
+      kafka_mm_defer_restart:
+        type: bool
+        required: false
+        default: false
+        description: >-
+          Record a pending restart instead of restarting the worker when its
+          config or binaries change.
+      kafka_mm_rest_address:
+        type: str
+        required: false
+        default: "127.0.0.1"
+        description: >-
+          Address the worker's internode REST server binds and advertises;
+          the CLI passes the host's WireGuard mesh IP.
       kafka_mm_target:
         type: dict
         required: true

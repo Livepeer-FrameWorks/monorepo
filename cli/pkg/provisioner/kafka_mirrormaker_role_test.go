@@ -187,3 +187,88 @@ func TestKafkaMirrorMakerCleanupKeepsSharedKafkaInstall(t *testing.T) {
 		t.Error("role main.yml must import cleanup.yml under the cleanup tag only")
 	}
 }
+
+func mirrorMakerTestHelpers(t *testing.T) RoleBuildHelpers {
+	t.Helper()
+	return RoleBuildHelpers{
+		DetectRemoteOS: func(context.Context, inventory.Host) (string, string, error) {
+			return "linux", "amd64", nil
+		},
+		ResolveArtifact: func(name, _, _ string, _ map[string]any) (ResolvedArtifact, error) {
+			return ResolvedArtifact{URL: "https://example.test/" + name, Checksum: "sha256:aa", Version: "4.2.0"}, nil
+		},
+	}
+}
+
+// Dedicated-mode followers forward task configs to the leader over internode
+// REST; that endpoint is unauthenticated, so it binds and advertises the mesh
+// IP and never a public interface.
+func TestKafkaMirrorMakerRESTBindsMeshAddress(t *testing.T) {
+	config := ServiceConfig{Metadata: map[string]any{"platform_channel": "stable"}}
+	vars, err := kafkaMirrorMakerRoleVars(context.Background(), inventory.Host{Name: "regional-eu-1", ExternalIP: "203.0.113.7", WireguardIP: "10.88.1.11"}, config, mirrorMakerTestHelpers(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := vars["kafka_mm_rest_address"]; got != "10.88.1.11" {
+		t.Fatalf("kafka_mm_rest_address = %v, want the mesh IP", got)
+	}
+	if _, ok := vars["kafka_mm_defer_restart"]; ok {
+		t.Fatal("kafka_mm_defer_restart set without the metadata flag")
+	}
+
+	vars, err = kafkaMirrorMakerRoleVars(context.Background(), inventory.Host{Name: "solo", ExternalIP: "203.0.113.8"}, config, mirrorMakerTestHelpers(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := vars["kafka_mm_rest_address"]; got != "127.0.0.1" {
+		t.Fatalf("kafka_mm_rest_address without a mesh IP = %v, want loopback", got)
+	}
+}
+
+func TestKafkaMirrorMakerDeferRestartFlagReachesRole(t *testing.T) {
+	config := ServiceConfig{Metadata: map[string]any{"platform_channel": "stable", KafkaMirrorMakerDeferRestartKey: true}}
+	vars, err := kafkaMirrorMakerRoleVars(context.Background(), inventory.Host{WireguardIP: "10.88.1.11"}, config, mirrorMakerTestHelpers(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if vars["kafka_mm_defer_restart"] != true {
+		t.Fatalf("kafka_mm_defer_restart = %v, want true", vars["kafka_mm_defer_restart"])
+	}
+	defaults := readRepoFile(t, "ansible/collections/ansible_collections/frameworks/infra/roles/kafka_mirrormaker/defaults/main.yml")
+	if !strings.Contains(defaults, "kafka_mm_restart_pending_path: "+KafkaMirrorMakerRestartPendingPath+"\n") {
+		t.Fatalf("role default kafka_mm_restart_pending_path must equal KafkaMirrorMakerRestartPendingPath %q", KafkaMirrorMakerRestartPendingPath)
+	}
+	handlers := readRepoFile(t, "ansible/collections/ansible_collections/frameworks/infra/roles/kafka_mirrormaker/handlers/main.yml")
+	for _, want := range []string{
+		"- not (kafka_mm_defer_restart | bool)",
+		"path: \"{{ kafka_mm_restart_pending_path }}\"\n    state: touch",
+		"when: kafka_mm_defer_restart | bool",
+	} {
+		if !strings.Contains(handlers, want) {
+			t.Errorf("handlers missing %q:\n%s", want, handlers)
+		}
+	}
+	restart := readRepoFile(t, "ansible/collections/ansible_collections/frameworks/infra/roles/kafka_mirrormaker/tasks/restart.yml")
+	if !strings.Contains(restart, "state: restarted") || !strings.Contains(restart, "path: \"{{ kafka_mm_restart_pending_path }}\"\n    state: absent") {
+		t.Fatalf("restart tag must restart the worker and clear the pending marker:\n%s", restart)
+	}
+}
+
+func TestKafkaMirrorMakerPropertiesEnableInternodeREST(t *testing.T) {
+	props := readRepoFile(t, "ansible/collections/ansible_collections/frameworks/infra/roles/kafka_mirrormaker/templates/mm2.properties.j2")
+	for _, want := range []string{
+		"dedicated.mode.enable.internode.rest = true\n",
+		"listeners = http://{{ kafka_mm_rest_address }}:{{ kafka_mm_rest_port }}\n",
+		"rest.advertised.host.name = {{ kafka_mm_rest_address }}\n",
+		"rest.advertised.port = {{ kafka_mm_rest_port }}\n",
+		"refresh.topics.interval.seconds = 60\n",
+		"refresh.groups.interval.seconds = 60\n",
+	} {
+		if !strings.Contains(props, want) {
+			t.Errorf("mm2.properties.j2 missing %q", want)
+		}
+	}
+	if strings.Contains(props, "rest.port =") {
+		t.Error("mm2.properties.j2 still sets rest.port, which listeners supersedes")
+	}
+}

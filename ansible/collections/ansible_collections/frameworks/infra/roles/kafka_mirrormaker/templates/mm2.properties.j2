@@ -4,7 +4,19 @@
 {% set target_rf = kafka_mm_target.replicas | default(1) %}
 clusters = {{ kafka_mm_target.alias }}{% for src in kafka_mm_sources %},{{ src.alias }}{% endfor %}
 
-rest.port = {{ kafka_mm_rest_port }}
+{# Dedicated-mode workers that are not the leader forward reconfigured task
+   configs to the leader over internode REST (KIP-710). Without it a topic
+   that appears after the leader last computed tasks never gets a
+   replication task. The listener binds only the mesh address. #}
+dedicated.mode.enable.internode.rest = true
+listeners = http://{{ kafka_mm_rest_address }}:{{ kafka_mm_rest_port }}
+rest.advertised.host.name = {{ kafka_mm_rest_address }}
+rest.advertised.port = {{ kafka_mm_rest_port }}
+
+{# Pick up newly created source topics and consumer groups within a minute
+   instead of the 10-minute default. #}
+refresh.topics.interval.seconds = 60
+refresh.groups.interval.seconds = 60
 
 {{ kafka_mm_target.alias }}.bootstrap.servers = {{ kafka_mm_target.bootstrap_servers }}
 {% for src in kafka_mm_sources %}
