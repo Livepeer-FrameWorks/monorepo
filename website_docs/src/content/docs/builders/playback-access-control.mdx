@@ -19,7 +19,10 @@ FrameWorks ships two policy types in v1:
   signing key you control. FrameWorks verifies the signature against the
   matching public key.
 - **Webhook** — FrameWorks POSTs to a URL you specify on every viewer
-  connect. Your endpoint returns 200 to allow or anything else to deny.
+  connect. Your endpoint returns any 2xx to allow or anything else to deny.
+
+Either type can also restrict **which websites may embed** the content with
+[allowed origins](#allowed-origins).
 
 ```mermaid
 sequenceDiagram
@@ -219,7 +222,7 @@ is also accepted on HTTP playback requests where headers are available.
 
 For more dynamic gating (per-viewer NFT checks, account-state lookups,
 geographic decisions, A/B tests), use the webhook policy type. FrameWorks
-POSTs to your URL on every viewer connect; you return 200 to allow or
+POSTs to your URL on every viewer connect; you return any 2xx to allow or
 anything else to deny.
 
 ```graphql
@@ -233,6 +236,7 @@ mutation {
           url: "https://your-app.example/playback-access"
           secret: "any-strong-random-secret"
           timeoutMs: 3000
+          context: { courseId: "algebra-101", tier: "premium" }
         }
       }
     }
@@ -247,6 +251,10 @@ mutation {
 When updating an existing webhook policy, omit `secret` to keep the currently
 configured HMAC secret. Send a new non-empty `secret` only when rotating it.
 
+`context` is optional: a JSON object of at most 4 KiB, stored with the policy and sent back to
+you in every access request. Put whatever your endpoint needs to decide there (a course, a
+product, a tier) so it doesn't have to map playback IDs to your own records.
+
 Your endpoint receives:
 
 ```json
@@ -257,9 +265,15 @@ Your endpoint receives:
   "requestUrl": "/abc123.m3u8?jwt=...",
   "viewerToken": "<whatever the viewer attached, may be empty>",
   "connector": "HLS",
+  "origin": "https://your-site.example",
+  "referer": "https://your-site.example/watch/42",
+  "context": { "courseId": "algebra-101", "tier": "premium" },
   "timestamp": "2026-05-07T08:30:00Z"
 }
 ```
+
+`origin` and `referer` are the viewer request's headers, empty when the request carried none
+(RTMP and SRT players, server-side calls). `context` is present only when the policy sets one.
 
 Headers include `X-Frameworks-Signature: sha256=<hex>`, an HMAC-SHA256 of
 the raw request body using the secret you supplied. **Verify this before
@@ -284,7 +298,7 @@ app.post("/playback-access", express.raw({ type: "application/json" }), (req, re
 
   const payload = JSON.parse(req.body);
   // ... your access logic ...
-  if (allowed) return res.sendStatus(200);
+  if (allowed) return res.sendStatus(204);
   return res.sendStatus(403);
 });
 ```
@@ -295,8 +309,46 @@ dial to defeat DNS rebinding. Customer URLs must be public HTTPS endpoints.
 
 **Timeouts and limits:** server caps `timeoutMs` at 10000ms (10s).
 Response body is read up to 4 KiB only — return a status code, not a long
-explanation. Any non-200 response (including 5xx, timeouts, network
-errors, redirects) denies the viewer; only an explicit 200 allows.
+explanation. Any 2xx (200, 201, 204, ...) allows the viewer; anything else
+(403, other 4xx, 5xx, redirects, timeouts, network errors) denies.
+
+## Allowed origins
+
+A playback policy can list the websites allowed to embed its content. A browser tells the
+server which page a request comes from (the `Origin` header, or `Referer`), so a player copied
+onto another site is refused:
+
+```graphql
+mutation {
+  setPlaybackPolicy(
+    input: {
+      streamId: "stream_abc123"
+      policy: {
+        type: JWT
+        jwt: {}
+        allowedOrigins: ["https://your-site.example", "https://app.your-site.example:8443"]
+      }
+    }
+  ) {
+    __typename
+  }
+}
+```
+
+- Entries are `scheme://host[:port]` with no path, or `*` for any site. Up to 50 entries. A
+  default port (`:443` for https, `:80` for http) is dropped, so `https://a.example:443` and
+  `https://a.example` are the same entry.
+- It applies to `JWT` and `WEBHOOK` policies and runs before them: a disallowed site is refused
+  without checking the token or calling your webhook. `PUBLIC` content cannot set it.
+- **Where it is checked.** Every browser request is checked: endpoint resolution
+  (`resolveViewerEndpoint`) and the media session on the edge (HLS, DASH, MP4, WHEP). A
+  `resolveViewerEndpoint` call made from your own backend carries no `Origin`, so it is not
+  checked; the viewer's media session that follows is.
+- **Viewers without a browser.** RTMP, SRT, and other players that send no `Origin` or `Referer`
+  are denied (`origin-missing`) unless the list contains `*`.
+- **Not DRM.** A client that is not a browser can send any `Origin`. Allowed origins stop other
+  websites from embedding your player; combine them with a JWT or webhook policy for real access
+  control.
 
 ## Rotation
 
@@ -348,7 +400,8 @@ play without a token (subject to a brief reconnect blip).
 - **Distinct deny reasons.** Logs distinguish `missing-token`,
   `jwt-unknown-kid`, `jwt-wrong-alg`, `jwt-sig-fail`, `jwt-expired`,
   `jwt-claim-mismatch`, `webhook-deny-403`, `webhook-error-status`,
-  `webhook-timeout`, `webhook-network`, and `webhook-blocked-ssrf`, among
+  `webhook-timeout`, `webhook-network`, `webhook-blocked-ssrf`,
+  `origin-not-allowed`, `origin-missing`, and `origin-unobservable`, among
   others, so you can tell customer misconfiguration from attack attempts
   from infrastructure errors. The full list is under
   [Testing a policy](#testing-a-policy).
@@ -362,7 +415,7 @@ play without a token (subject to a brief reconnect blip).
 
 - **ES256 only.** Asymmetric is strictly better than HMAC for this use
   case (we never need your secret). HS256 is not supported.
-- **Webhook responses are 200/non-200.** No fine-grained error code
+- **Webhook responses are 2xx/non-2xx.** No fine-grained error code
   passthrough today — use the structured deny logs for diagnostics.
 - **Geo-block / IP allow-deny lists** belong in your webhook callback when
   you need region or network-specific authorization.
@@ -419,26 +472,34 @@ mutation TestJWT {
 
 Common deny reasons map 1:1 with what's logged on real denies:
 
-| Reason                   | Meaning                                                                             |
-| ------------------------ | ----------------------------------------------------------------------------------- |
-| `missing-token`          | Policy is JWT but no token was provided                                             |
-| `jwt-not-a-jws`          | String isn't a valid JOSE compact serialization                                     |
-| `jwt-missing-kid`        | Header has no `kid` claim                                                           |
-| `jwt-unknown-kid`        | `kid` doesn't match any active signing key                                          |
-| `jwt-wrong-alg`          | Algorithm header isn't ES256                                                        |
-| `jwt-sig-fail`           | Signature didn't verify against the matching public key                             |
-| `jwt-missing-exp`        | The token has no `exp` claim                                                        |
-| `jwt-expired`            | `exp` is in the past (60s skew tolerance)                                           |
-| `jwt-not-yet-valid`      | `nbf` is in the future                                                              |
-| `jwt-aud-mismatch`       | `aud` claim doesn't match `requiredAudience`                                        |
-| `jwt-claim-mismatch`     | A `requiredClaimsJson` entry didn't match the token's claim value                   |
-| `jwt-bad-public-key`     | The stored signing key for the `kid` is not a parseable ES256 public key            |
-| `jwt-verify-error`       | Verification failed for a reason not listed above                                   |
-| `no-active-keys`         | Policy is JWT but no active signing keys are configured for the tenant              |
-| `webhook-no-url`         | Policy is webhook but has no URL configured                                         |
-| `policy-fetch-failed`    | The stream requires auth but its policy could not be loaded                         |
-| `policy-marker-unknown`  | Whether the stream requires auth is unknown and its policy could not be loaded      |
-| `local-authority-denied` | The edge's local signed media authority denies playback, or has passed its validity |
+| Reason                   | Meaning                                                                                                                              |
+| ------------------------ | ------------------------------------------------------------------------------------------------------------------------------------ |
+| `missing-token`          | Policy is JWT but no token was provided                                                                                              |
+| `jwt-not-a-jws`          | String isn't a valid JOSE compact serialization                                                                                      |
+| `jwt-missing-kid`        | Header has no `kid` claim                                                                                                            |
+| `jwt-unknown-kid`        | `kid` doesn't match any active signing key                                                                                           |
+| `jwt-wrong-alg`          | Algorithm header isn't ES256                                                                                                         |
+| `jwt-sig-fail`           | Signature didn't verify against the matching public key                                                                              |
+| `jwt-missing-exp`        | The token has no `exp` claim                                                                                                         |
+| `jwt-expired`            | `exp` is in the past (60s skew tolerance)                                                                                            |
+| `jwt-not-yet-valid`      | `nbf` is in the future                                                                                                               |
+| `jwt-aud-mismatch`       | `aud` claim doesn't match `requiredAudience`                                                                                         |
+| `jwt-claim-mismatch`     | A `requiredClaimsJson` entry didn't match the token's claim value                                                                    |
+| `jwt-bad-public-key`     | The stored signing key for the `kid` is not a parseable ES256 public key                                                             |
+| `jwt-verify-error`       | Verification failed for a reason not listed above                                                                                    |
+| `no-active-keys`         | Policy is JWT but no active signing keys are configured for the tenant                                                               |
+| `webhook-no-url`         | Policy is webhook but has no URL configured                                                                                          |
+| `policy-fetch-failed`    | The stream requires auth but its policy could not be loaded                                                                          |
+| `policy-marker-unknown`  | Whether the stream requires auth is unknown and its policy could not be loaded                                                       |
+| `local-authority-denied` | The edge's local signed media authority denies playback, or has passed its validity                                                  |
+| `origin-not-allowed`     | The viewer's Origin (or Referer) is not in the policy's `allowedOrigins`                                                             |
+| `origin-missing`         | The policy restricts origins and the request carried no Origin or Referer                                                            |
+| `origin-unobservable`    | The policy restricts origins and the edge cannot report the viewer's headers (an edge running a MistServer build older than v0.3.11) |
+
+To test [allowed origins](#allowed-origins), pass `origin` (and optionally `referer`) in the
+`testPlaybackAccess` input. Without either, a policy that restricts origins reports
+`origin-missing`, as a request without those headers would. The origin check runs first, so a
+disallowed origin is reported without calling your webhook.
 
 ### Test a webhook
 

@@ -106,7 +106,8 @@ Clip, recording, and upload events share one `artifact` object:
 | `streamId`   | The source stream; empty for uploads.                                           |
 | `playbackId` | Always empty on clip, recording, and upload events.                             |
 
-The event does not carry the artifact's playback ID. Look it up by `artifactId`: query
+The event does not carry the artifact's playback ID. A playback ID can be rotated, so key your
+records on `artifactId` and look the current playback ID up when you need it: query
 `storageArtifactsConnection` with `artifactHash` set to the `artifactId`, or `clip(id:)` for a clip.
 
 Media failure reasons: `MEDIA_FAILURE_REASON_SOURCE_UNAVAILABLE`, `_PROCESSING_FAILED`,
@@ -117,42 +118,54 @@ Media failure reasons: `MEDIA_FAILURE_REASON_SOURCE_UNAVAILABLE`, `_PROCESSING_F
 
 Subject: `streams/<stream id>`.
 
-| Type                 | Fires when                                                        | Payload                                                                   |
-| -------------------- | ----------------------------------------------------------------- | ------------------------------------------------------------------------- |
-| `stream.created`     | A stream is created.                                              | `streamId`, `name`, `playbackId`                                          |
-| `stream.updated`     | Stream settings, stream keys, or multistream targets change.      | `streamId`, `changedFields` (snake_case field identifiers)                |
-| `stream.deleted`     | A stream is deleted.                                              | `streamId`                                                                |
-| `stream.key_rotated` | The stream key is replaced. The key itself is never in the event. | `streamId`                                                                |
-| `stream.connected`   | An encoder or pull source starts a new ingest session.            | `streamId`, `protocol` (`INGEST_PROTOCOL_RTMP`, `_SRT`, `_WHIP`, `_PULL`) |
-| `stream.live`        | The stream becomes playable.                                      | `streamId`                                                                |
-| `stream.idle`        | The ingest session ends.                                          | `streamId`                                                                |
+| Type                 | Fires when                                                        | Payload                                                                                 |
+| -------------------- | ----------------------------------------------------------------- | --------------------------------------------------------------------------------------- |
+| `stream.created`     | A stream is created.                                              | `streamId`, `name`, `playbackId`                                                        |
+| `stream.updated`     | Stream settings, stream keys, or multistream targets change.      | `streamId`, `changedFields` (snake_case field identifiers)                              |
+| `stream.deleted`     | A stream is deleted.                                              | `streamId`                                                                              |
+| `stream.key_rotated` | The stream key is replaced. The key itself is never in the event. | `streamId`                                                                              |
+| `stream.connected`   | An encoder or pull source starts a new ingest session.            | `streamId`, `playbackId`, `protocol` (`INGEST_PROTOCOL_RTMP`, `_SRT`, `_WHIP`, `_PULL`) |
+| `stream.live`        | The stream becomes playable.                                      | `streamId`, `playbackId`                                                                |
+| `stream.idle`        | The ingest session ends.                                          | `streamId`, `playbackId`                                                                |
 
 `changedFields` values are snake_case identifiers, not GraphQL field names: `title`,
 `description`, `is_recording_enabled`, `pull_source`, `source_location`,
 `dvr_chapter_mode`, `dvr_chapter_interval_seconds`, `monitoring_enabled`, `playback_policy`,
 `stream_keys`, and `push_targets`.
 
-`stream.connected`, `stream.live`, and `stream.idle` fire once per ingest session.
+`stream.connected`, `stream.live`, and `stream.idle` fire once per ingest session. Their
+`playbackId` is the stream's playback ID when the event was emitted; on `stream.live` and
+`stream.idle` it is empty in the rare case the platform could not resolve the stream while its
+control plane was unreachable. A playback ID can be rotated, so key your records on `streamId`.
 
 ## Clips, recordings, and uploads
 
 Subject: `artifacts/<artifact id>`.
 
-| Type               | Fires when                                                   | Payload                                     |
-| ------------------ | ------------------------------------------------------------ | ------------------------------------------- |
-| `clip.requested`   | A clip is requested.                                         | `artifact`, `durationMs` (requested length) |
-| `clip.ready`       | The clip is stored and playable.                             | `artifact`, `durationMs`, `sizeBytes`       |
-| `clip.failed`      | The clip could not be produced.                              | `artifact`, `reason`                        |
-| `recording.ready`  | A DVR recording is finalized and playable.                   | `artifact`, `durationMs`, `sizeBytes`       |
-| `recording.failed` | A DVR recording could not be finalized.                      | `artifact`, `reason`                        |
-| `upload.created`   | A VOD upload session is created.                             | `artifact`, `filename`, `expectedSizeBytes` |
-| `upload.completed` | Every part is uploaded and the file is handed to processing. | `artifact`, `sizeBytes`                     |
-| `upload.aborted`   | The upload is aborted before completion.                     | `artifact`                                  |
-| `upload.ready`     | Processing finished and the asset is playable.               | `artifact`, `durationMs`, `sizeBytes`       |
-| `upload.failed`    | Processing rejected or could not process the file.           | `artifact`, `reason`                        |
+| Type                | Fires when                                                   | Payload                                     |
+| ------------------- | ------------------------------------------------------------ | ------------------------------------------- |
+| `clip.requested`    | A clip is requested.                                         | `artifact`, `durationMs` (requested length) |
+| `clip.ready`        | The clip is stored and playable.                             | `artifact`, `durationMs`, `sizeBytes`       |
+| `clip.failed`       | The clip could not be produced.                              | `artifact`, `reason`                        |
+| `recording.started` | The recording node confirmed it is capturing the stream.     | `artifact`                                  |
+| `recording.stopped` | Capture ended and the recording is being finalized.          | `artifact`                                  |
+| `recording.ready`   | A DVR recording is finalized and playable.                   | `artifact`, `durationMs`, `sizeBytes`       |
+| `recording.failed`  | A DVR recording could not be finalized.                      | `artifact`, `reason`                        |
+| `upload.created`    | A VOD upload session is created.                             | `artifact`, `filename`, `expectedSizeBytes` |
+| `upload.completed`  | Every part is uploaded and the file is handed to processing. | `artifact`, `sizeBytes`                     |
+| `upload.aborted`    | The upload is aborted before completion.                     | `artifact`                                  |
+| `upload.ready`      | Processing finished and the asset is playable.               | `artifact`, `durationMs`, `sizeBytes`       |
+| `upload.failed`     | Processing rejected or could not process the file.           | `artifact`, `reason`                        |
+
+A recording that captured media emits `recording.started`, then `recording.stopped` once,
+then `recording.ready` or `recording.failed`. A recording that never captured anything emits
+only `recording.failed`.
 
 Upload events carry no transfer progress. Your client knows its own transfer progress; for the
-server-side state of an upload, query `vodUploadStatus`.
+server-side state of an upload, query `vodUploadStatus`. An [import from a URL](/builders/recordings#import-a-video-from-a-url)
+emits the same upload events, both `upload.created` and `upload.completed` when it is accepted.
+Their sizes are `"0"`: the file's size is known only after processing, and `upload.ready` carries
+it.
 
 ## Multistreaming
 

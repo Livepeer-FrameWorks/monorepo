@@ -1,0 +1,74 @@
+---
+title: "Moving From Livepeer Studio: Webhooks, Playback Gates, and URL Import"
+date: 2026-09-24
+authors:
+  - frameworks
+excerpt: "Stream lifecycle events now carry the stream's playback ID, recordings report when capture starts and stops, the playback webhook gate takes Studio-style context and allowed origins, and VOD assets can be imported from a URL."
+description: "Stream lifecycle events now carry the stream's playback ID, recordings report when capture starts and stops, the playback webhook gate takes Studio-style context and allowed origins, and VOD assets can be imported from a URL."
+tags:
+  - announcements
+  - engineering
+---
+
+Teams moving from Livepeer Studio told us two things take the longest to port: VOD and webhooks. We read
+Studio's source (it is open) and went through every webhook event, payload field, and playback-policy
+option it offers, then compared each one against FrameWorks. This release closes the gaps that would have
+forced a Studio integration to change its logic, and the [migration guide](/migrate/livepeer-studio) now
+maps each Studio event and field to its FrameWorks equivalent.
+
+## Playback IDs in events
+
+A Studio `stream.started` webhook carries the stream's playback ID. `stream.connected`, `stream.live`,
+and `stream.idle` now carry the stream's `playbackId` as well, taken from the stream when the event is
+emitted.
+
+Clip, recording, and upload events do not carry a playback ID. A playback ID can be rotated, so a copy
+inside an event, possibly retried or replayed hours later, can already be out of date. Key your records
+on `artifactId` and look up the current playback ID when you publish the video.
+
+## Recordings report start and stop
+
+Studio sends `recording.started` when a recording session begins and `recording.waiting` when it ends
+and is being processed. FrameWorks now sends `recording.started` when the recording node confirms it is
+capturing, and `recording.stopped` once capture ends and the recording is being finalized. `recording.ready`
+or `recording.failed` follows. A recording that never captured anything sends only `recording.failed`.
+
+## The playback webhook gate
+
+A webhook playback policy asks your server whether a viewer may watch. Three changes bring it in line
+with Studio:
+
+- **Any 2xx allows.** Previously only `200` did, so an endpoint answering `204` denied every viewer.
+- **`context`.** A policy can store a JSON object (up to 4 KiB), and it is sent back in every access
+  request. Studio calls this `webhookContext`; it lets your endpoint know which course or product a
+  video belongs to without its own lookup table.
+- **Allowed origins.** A JWT or webhook policy can list the websites allowed to embed the content. A
+  player copied onto another site is refused. The check runs when the player resolves the stream and
+  again when the media session opens on the edge. For the edge check, our MistServer build now passes
+  each viewer's `Origin` and `Referer` to the access decision, and requests from a different site get a
+  separate session.
+
+Allowed origins stop other websites from embedding your player. They are not DRM: a client that is not a
+browser can send any `Origin`. RTMP and SRT players send no origin, so they are refused unless the list
+contains `*`. Edges running a MistServer build from before this release cannot report the origin, so
+origin-restricted content does not play from them until they update.
+
+One Studio habit does not carry over directly: Studio players send a webhook gate's key as `accessKey`.
+On FrameWorks, pass it as `?jwt=<key>`, and your webhook receives it as `viewerToken`.
+
+## Import a video from a URL
+
+`importVodAsset` takes a public `https` or `http` URL and returns the asset with its playback ID right
+away. There is no upload step: the processing node reads the file from the URL through the same relay
+it uses for uploaded files, and processes it like an upload, with the same `upload.*` events. That
+relay connects only to public addresses, on every connection and redirect, and the source server must
+support range requests. For IPFS or Arweave content, pass a public gateway's https link. Details are in
+[Recordings, Clips & VOD](/builders/recordings#import-a-video-from-a-url).
+
+## What stays different
+
+Webhook signing uses [Standard Webhooks](/builders/webhooks) rather than Studio's `Livepeer-Signature`
+header. Retries run for about three days instead of one, and an endpoint that fails for five days is
+disabled. There is no Task API, no per-stream transcode profiles, and no `creatorId` or `userTags` on
+streams yet. The [gap list](/migrate/livepeer-studio#whats-not-yet-at-parity-and-whats-coming) in the
+migration guide tracks what is still missing.

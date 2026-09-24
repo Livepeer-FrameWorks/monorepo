@@ -286,7 +286,7 @@ features:
 
       - slug: playback-access-control
         name: Playback access control
-        description: Public / JWT / webhook playback authorization policy on streams, clips, and VOD assets, with a dry-run tester and full agent management surface.
+        description: Public / JWT / webhook playback authorization policy on streams, clips, and VOD assets, with allowed embedding origins, a per-policy webhook context object, a dry-run tester, and full agent management surface.
         status: shipped
         depends_on: [signing-keys]
         required_surfaces:
@@ -459,7 +459,7 @@ features:
   - slug: vod
     name: VOD assets
     area: media-library
-    description: Multipart VOD upload and lifecycle.
+    description: Multipart VOD upload, import from a public http(s) URL, and lifecycle.
     status: shipped
     required_surfaces:
       graphql: { required: true }
@@ -468,7 +468,8 @@ features:
       docs: { required: true }
     surfaces:
       graphql:
-        mutations: [createVodUpload, completeVodUpload, abortVodUpload, deleteVodAsset]
+        mutations:
+          [createVodUpload, completeVodUpload, abortVodUpload, importVodAsset, deleteVodAsset]
         queries: [vodAsset, storageArtifactsConnection, vodUploadStatus]
         subscriptions: [tenantEvents]
       mcp:
@@ -477,6 +478,7 @@ features:
             create_vod_upload,
             complete_vod_upload,
             abort_vod_upload,
+            import_vod_asset,
             get_vod_upload_status,
             delete_vod_asset,
           ]

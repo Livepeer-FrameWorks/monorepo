@@ -123,6 +123,32 @@ An S3 multipart lifecycle, both RPCs on Foghorn's gRPC server:
    `VodPipeline.StartPipeline` in `api_balancing/internal/grpc/vod_pipeline.go`. This job **is**
    a transcode (the sidecar's default branch).
 
+### VOD import from a URL
+
+An import is a VOD upload whose processing input is a tenant http(s) URL instead of an S3 object.
+Foghorn never fetches it.
+
+1. Commodore `ImportVodAsset` (`api_control/internal/grpc/vod_import.go`) validates the URL
+   (http/https, no credentials, public destination via `validatePublicDestinationHost`) and the
+   filename extension (mp4, mov, mkv, webm, ts: the relay-safe formats; avi/flv/m4v need a local
+   file and are refused), registers the asset and its creation intent like an upload, and calls
+   Foghorn.
+2. Foghorn `ImportVodAsset` (`api_balancing/internal/grpc/vod_import.go`) writes, in one
+   transaction, the `vod` artifact in **`status='processing'`** with no `s3_url`, the
+   `vod_metadata` row with `source_url`, a normal **`process`** job with no job `source_url`,
+   `upload.created` and `upload.completed`, and the ledger commit.
+3. Mist's `STREAM_SOURCE` for `processing+<hash>` gets the node's relay URL
+   `/internal/artifact/upload/<hash>.<ext>` (`resolveProcessSource`; `UploadedArtifactFormat`
+   accepts an import's `source_url`). The job carries no source because a job source is handed to
+   Mist directly and would bypass the relay.
+4. On a relay miss, `RelayResolve` for the upload answers with `tenant_source_url`
+   (`fillImportSourceResolve`) instead of a presign. The relay fetches it in block-aligned `Range`
+   requests with its tenant-source client, which dials only public addresses on every connection
+   and redirect (`api_sidecar/internal/relay/server.go`, `newTenantSourceClient`). The source must
+   therefore support range requests.
+5. Processing and finalization are the upload path's: the processed output is the artifact's
+   first stored copy.
+
 ### DVR (rolling) and chapter finalization
 
 DVR has a _live_ phase and a _finalization_ phase; only the second enters the processing pipeline.

@@ -388,6 +388,45 @@ mutation {
   promptly after creating the session.
 </Aside>
 
+### Import a video from a URL
+
+When the file already sits on a web server, a CDN, or an S3 bucket behind a presigned link, let
+FrameWorks read it from there instead of uploading it yourself:
+
+```graphql
+mutation {
+  importVodAsset(input: { url: "https://media.example.com/talks/keynote.mp4", title: "Keynote" }) {
+    __typename
+    ... on VodAsset {
+      id
+      playbackId
+      status
+    }
+    ... on ValidationError {
+      message
+    }
+  }
+}
+```
+
+The asset comes back at once with its `playbackId` and status `PROCESSING`. The processing node
+reads the file straight from the URL, with no separate upload step, and processes it like an
+upload: `upload.created` and `upload.completed` fire on acceptance, then `upload.ready` or
+`upload.failed` (see [Events](/builders/events)).
+
+- **Sources**: `https://` and `http://` URLs. For content on IPFS or Arweave, pass a public
+  gateway's https link.
+- **Range requests**: the server must support HTTP range requests, as S3, CDNs, and IPFS
+  gateways do. The file is read in blocks, not in one download.
+- **Filename**: the extension tells FrameWorks how to read the file: `mp4`, `mov`, `mkv`, `webm`,
+  or `ts`. When the URL path does not end in one, pass `filename`. Formats that must be read from
+  a local file (`avi`, `flv`, `m4v`) are not importable; upload them instead.
+- **Reachability**: the URL must be publicly reachable. Private, loopback, and cloud-metadata
+  addresses are refused on every connection, including after a redirect. Up to 5 http(s)
+  redirects are followed.
+- **Failures**: a source that cannot be read or processed fails the asset with `upload.failed`;
+  the asset's `errorMessage` has the detail.
+
 ### VOD Processing
 
 After upload completion, the asset goes through validation:

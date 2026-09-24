@@ -276,6 +276,7 @@ Actions the agent can perform.
 | `update_asset_retention`              | Override retention for DVR, clip, or VOD                   | Owner/Admin + billing:write + Balance                                                 |
 | `reset_asset_retention`               | Reset asset retention to the cascade default               | Owner/Admin + billing:write + Confirm; API tokens also need mcp:high-risk             |
 | `create_vod_upload`                   | Start a VOD upload                                         | Auth + Balance                                                                        |
+| `import_vod_asset`                    | Import a video from a URL as a VOD asset                   | Auth + Balance                                                                        |
 | `get_vod_upload_status`               | Inspect uploaded and missing VOD parts                     | Auth                                                                                  |
 | `complete_vod_upload`                 | Finalize a VOD upload                                      | Auth + Balance                                                                        |
 | `abort_vod_upload`                    | Cancel an upload                                           | Auth; API tokens also need mcp:high-risk                                              |
@@ -464,6 +465,13 @@ fetches and validates the tenant's mandate before creating the subscription.
 - `filename` (required): Original filename
 - `size_bytes` (required): File size in bytes
 - `content_type`, `title`, `description`: Optional
+
+**import_vod_asset**
+
+- `url` (required): `https` or `http`; must be publicly reachable and support range requests
+- `filename`: Filename with a video extension; required when the URL path has none
+- `title`, `description`: Optional
+- Returns the asset in `UPLOADING`; the fetch and processing continue in the background
 
 **complete_vod_upload**
 

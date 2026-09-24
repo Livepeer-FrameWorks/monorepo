@@ -14,7 +14,7 @@ Livepeer Studio is a hosted Livepeer gateway; FrameWorks is another gateway on t
 ## TL;DR
 
 - **What stays:** RTMP and WHIP ingest, HLS and WebRTC playback, multistream targets, clips, recordings.
-- **What changes:** REST → GraphQL · API key → JWT or developer token · Studio webhooks → FrameWorks webhooks with Standard Webhooks signatures (or the `tenantEvents` subscription) · playback access policies are recreated with FrameWorks signing keys or webhooks · `@livepeer/react` → `@livepeer-frameworks/player-*`.
+- **What changes:** REST → GraphQL · API key → JWT or developer token · Studio webhooks → FrameWorks webhooks with Standard Webhooks signatures and [mapped event names](#real-time-events) (or the `tenantEvents` subscription) · playback access policies are recreated with FrameWorks signing keys or webhooks · `@livepeer/react` → `@livepeer-frameworks/player-*`.
 - **Capabilities to evaluate:** E-RTMP ingest (HEVC/AV1 contribution over RTMP) · SRT ingest · LL-HLS/DASH delivery · sprite-sheet seek previews · AV1 in the codec list · self-hosting / hybrid options · MCP, wallet auth, and x402 for agents · Skipper · experimental device-discovery productization.
 - **What's not yet at parity:** AI Pipelines and C2PA signing. TypeScript, Go, and Python
   [SDKs](/builders/sdks) ship. See
@@ -43,15 +43,15 @@ The shapes you know in Studio, mapped to FrameWorks:
 
 ### Recordings, clips, and VOD
 
-| Studio                                           | FrameWorks                                                                                          |
-| ------------------------------------------------ | --------------------------------------------------------------------------------------------------- |
-| `POST /clip`                                     | `createClip(input)` mutation                                                                        |
-| `GET /session/{id}/clips`                        | `storageArtifactsConnection(input: { kinds: [CLIP] })` or `clip(id)`                                |
-| `POST /asset/request-upload` (direct/TUS upload) | `createVodUpload(input)` → S3 multipart upload                                                      |
-| `POST /asset/upload/url`                         | No direct equivalent today                                                                          |
-| Tasks API for upload/transcode progress          | `vodUploadStatus`, `tenantEvents` (`upload.*`), or `liveProcessingEvents` depending on the workflow |
-| `GET /asset/{id}`                                | `vodAsset(id)` query                                                                                |
-| `DELETE /asset/{id}`                             | `deleteVodAsset(id)` mutation                                                                       |
+| Studio                                           | FrameWorks                                                                                                                          |
+| ------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------- |
+| `POST /clip`                                     | `createClip(input)` mutation                                                                                                        |
+| `GET /session/{id}/clips`                        | `storageArtifactsConnection(input: { kinds: [CLIP] })` or `clip(id)`                                                                |
+| `POST /asset/request-upload` (direct/TUS upload) | `createVodUpload(input)` → S3 multipart upload                                                                                      |
+| `POST /asset/upload/url`                         | `importVodAsset(input: { url, filename, title })` — see [Import a video from a URL](/builders/recordings#import-a-video-from-a-url) |
+| Tasks API for upload/transcode progress          | `vodUploadStatus`, `tenantEvents` (`upload.*`), or `liveProcessingEvents` depending on the workflow                                 |
+| `GET /asset/{id}`                                | `vodAsset(id)` query                                                                                                                |
+| `DELETE /asset/{id}`                             | `deleteVodAsset(id)` mutation                                                                                                       |
 
 ### Multistream
 
@@ -85,7 +85,11 @@ Studio uses the term "access control" for two separate concerns: authenticating 
 | `playbackPolicy: { type: "webhook" }` | `setPlaybackPolicy({ ..., policy: { type: WEBHOOK, webhook: { url, secret, timeoutMs } } })`           |
 | `Livepeer-Jwt` header                 | `?jwt=<token>` universally; `Authorization: Bearer` where playback requests can carry headers          |
 | `?jwt=` query (MP4 only on Studio)    | `?jwt=<token>` works for HLS, LL-HLS, DASH, WebRTC/WHEP, and MP4 — single transport                    |
-| `playback.accessControl` webhook      | Webhook policy: HMAC-signed POST to your URL; return 200 to allow, anything else denies                |
+| `accessKey` for a webhook policy      | Pass the key as `?jwt=<key>`; your webhook receives it as `viewerToken`                                |
+| `playback.accessControl` webhook      | Webhook policy: HMAC-signed POST to your URL; any 2xx allows, anything else denies                     |
+| `playbackPolicy.webhookContext`       | `webhook.context`: a JSON object sent as `context` in every access request                             |
+| `playbackPolicy.allowedOrigins`       | `policy.allowedOrigins`: same `scheme://host[:port]` / `*` entries                                     |
+| `playbackPolicy.refreshInterval`      | Not configurable; the decision holds for the viewer session (about 10 minutes)                         |
 
 <Aside type="note">
   Stream keys are ingest secrets, not viewer authorization keys. Signing keys are tenant-scoped and
@@ -99,16 +103,48 @@ Studio uses the term "access control" for two separate concerns: authenticating 
 FrameWorks events in the right column are delivered as [webhooks](/builders/webhooks) and over
 the `tenantEvents` subscription, with the same payloads.
 
-| Studio webhook                                                                       | FrameWorks path                                                                     |
-| ------------------------------------------------------------------------------------ | ----------------------------------------------------------------------------------- |
-| `stream.started` / `stream.idle`                                                     | `stream.live` / `stream.idle`; `liveStreamEvents(streamId)` for detailed state      |
-| `recording.ready` / `recording.started` / `recording.waiting`                        | `recording.ready` / `recording.failed`, plus `liveStorageEvents(streamId)`          |
-| `asset.ready` / `asset.created` / `asset.updated` / `asset.failed` / `asset.deleted` | `upload.*` for VOD uploads; `liveStorageEvents` for artifacts                       |
-| `multistream.connected` / `multistream.error` / `multistream.disconnected`           | `multistream.status_changed`                                                        |
-| `task.spawned` / `task.updated` / `task.completed` / `task.failed`                   | No one-for-one Task API; use the clip, recording, and upload events                 |
-| `playback.user.new`                                                                  | `liveConnectionEvents(streamId)` subscription; not a webhook event                  |
-| `playback.accessControl`                                                             | Webhook playback policy (`setPlaybackPolicy` with `type: WEBHOOK`), a blocking call |
-| `stream.detection` (object detection)                                                | Planned                                                                             |
+| Studio webhook                                       | FrameWorks event                                                                    |
+| ---------------------------------------------------- | ----------------------------------------------------------------------------------- |
+| `stream.started`                                     | `stream.live` (and `stream.connected` when the encoder connects)                    |
+| `stream.idle`                                        | `stream.idle`                                                                       |
+| `recording.started`                                  | `recording.started`                                                                 |
+| `recording.waiting`                                  | `recording.stopped` (capture ended, recording being finalized)                      |
+| `recording.ready`                                    | `recording.ready` (or `recording.failed`)                                           |
+| `asset.created`                                      | `upload.created`                                                                    |
+| `asset.updated`                                      | `upload.completed` when processing starts; no per-step progress event               |
+| `asset.ready`                                        | `upload.ready`                                                                      |
+| `asset.failed`                                       | `upload.failed` (with a `reason`)                                                   |
+| `asset.deleted`                                      | No event; the deletion is in your audit log                                         |
+| `multistream.connected` / `.error` / `.disconnected` | `multistream.status_changed` (`status`, `previousStatus`)                           |
+| `task.*`                                             | No Task API; clips have `clip.requested`/`ready`/`failed`, imports use `upload.*`   |
+| `playback.accessControl`                             | Webhook playback policy (`setPlaybackPolicy` with `type: WEBHOOK`), a blocking call |
+| `playback.user.new`                                  | `liveConnectionEvents(streamId)` subscription (Studio never sends this webhook)     |
+| `stream.detection`                                   | Not available (Studio has it switched off)                                          |
+
+Payload fields:
+
+| Studio                                         | FrameWorks                                                                                |
+| ---------------------------------------------- | ----------------------------------------------------------------------------------------- |
+| `event`                                        | `type`                                                                                    |
+| `id` (event ID, stable across retries)         | `id` and the `webhook-id` header (stable across retries and replays)                      |
+| `stream.id`                                    | `data.streamId`                                                                           |
+| `stream.playbackId`                            | `data.playbackId` on `stream.connected`, `stream.live`, `stream.idle`                     |
+| `stream.name`, `userTags`, other stream fields | Not in the event; query `stream(id)`                                                      |
+| `payload.asset.id`                             | `data.artifact.artifactId`                                                                |
+| `payload.asset.snapshot.playbackId`            | Not in the event; look it up by `data.artifact.artifactId` (playback IDs can be rotated)  |
+| `payload.recordingUrl` / `payload.mp4Url`      | Not in the event; pass the looked-up playback ID to the player or `resolveViewerEndpoint` |
+| `payload.session`                              | `data.artifact` (a recording is its own artifact)                                         |
+
+Delivery differences:
+
+| Behaviour          | Studio                                                                    | FrameWorks                                                                                                                                    |
+| ------------------ | ------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------- |
+| Signature          | `Livepeer-Signature: t=<ts>,v1=<hex HMAC-SHA256 of body>`                 | [Standard Webhooks](/builders/webhooks#verify-the-signature): `webhook-id`, `webhook-timestamp`, `webhook-signature` over `id.timestamp.body` |
+| Timeout            | 30 s                                                                      | 10 s                                                                                                                                          |
+| Retries            | Up to 33, doubling from 5 s to a 1 h cap (about a day); 4xx never retried | 12 attempts over about 3 days; any non-2xx retried                                                                                            |
+| Failing endpoint   | Email, never disabled                                                     | Email, and disabled after 20 failures in a row spanning 5 days; re-enable to resume                                                           |
+| History            | Per-webhook request log, resend one request                               | 30-day delivery log with attempt details, replay one delivery or a time range, test send                                                      |
+| Per-stream webhook | `streamId` field (not applied when delivering)                            | Filter in your receiver on `data.streamId`                                                                                                    |
 
 ## Step-by-step
 
@@ -187,7 +223,10 @@ Before (Studio):
 // Express endpoint receiving webhooks
 app.post("/livepeer-webhook", verifyStudioSignature, (req, res) => {
   if (req.body.event === "stream.started") {
-    notifyDashboard(req.body.payload.streamId);
+    notifyDashboard(req.body.stream.id, req.body.stream.playbackId);
+  }
+  if (req.body.event === "asset.ready") {
+    publishVideo(req.body.payload.asset.snapshot.playbackId);
   }
   res.sendStatus(200);
 });
@@ -200,7 +239,7 @@ import { Webhook } from "standardwebhooks";
 
 const wh = new Webhook(process.env.FRAMEWORKS_WEBHOOK_SECRET);
 
-app.post("/frameworks-webhook", express.raw({ type: "application/json" }), (req, res) => {
+app.post("/frameworks-webhook", express.raw({ type: "application/json" }), async (req, res) => {
   let event;
   try {
     event = wh.verify(req.body.toString("utf8"), {
@@ -212,11 +251,18 @@ app.post("/frameworks-webhook", express.raw({ type: "application/json" }), (req,
     return res.sendStatus(401);
   }
   if (event.type === "stream.live") {
-    notifyDashboard(event.data.streamId);
+    notifyDashboard(event.data.streamId, event.data.playbackId);
+  }
+  if (event.type === "upload.ready") {
+    // Look up the current playback ID: storageArtifactsConnection with artifactHash = artifactId.
+    publishVideo(await playbackIdFor(event.data.artifact.artifactId));
   }
   res.sendStatus(204);
 });
 ```
+
+The SDKs verify and parse in one call: `createWebhookReceiver` (TypeScript), `NewWebhookReceiver`
+(Go), and `WebhookReceiver` (Python). See [Webhooks](/builders/webhooks).
 
 The body is `{ id, type, api_version, created_at, data }`; deduplicate on `id`. The
 [webhooks guide](/builders/webhooks) covers retries, auto-disable, and replay. If a server-side
@@ -233,7 +279,18 @@ If you use Studio signing keys, `playbackPolicy: { type: "jwt" }`, `Livepeer-Jwt
 - `playbackPolicy: { type: "jwt" }` → `setPlaybackPolicy` with `type: JWT`.
 - `Livepeer-Jwt` header → `?jwt=<token>` query string (universal across HLS, LL-HLS, DASH,
   WebRTC/WHEP, MP4). `Authorization: Bearer` works on playback request paths where headers are available.
-- `playback.accessControl` webhook → `setPlaybackPolicy` with `type: WEBHOOK`. FrameWorks POSTs an HMAC-signed body; your endpoint returns 200 to allow, 403 to deny.
+- `playback.accessControl` webhook → `setPlaybackPolicy` with `type: WEBHOOK`. FrameWorks POSTs an
+  HMAC-signed body; any 2xx allows, anything else denies, as on Studio.
+- Your gate endpoint needs three changes:
+  - **Signature:** verify `X-Frameworks-Signature: sha256=<hex HMAC-SHA256 of the body>` instead of
+    `Livepeer-Signature`.
+  - **Viewer key:** read `viewerToken` instead of `accessKey`. Viewers send the key as `?jwt=<key>`.
+  - **Context:** `webhookContext` becomes the policy's `webhook.context` and arrives as `context`,
+    as on Studio.
+- A `{"ret": 403}` body does not override the status code: return the status you mean.
+- `allowedOrigins` carries over as `policy.allowedOrigins` with the same entries. It is checked on
+  every browser request. Players without a browser (RTMP, SRT) send no origin and are denied unless
+  the list includes `*`.
 
 Note that signing keys do not transfer between platforms — reissue on FrameWorks. Migration concierge available via [in-app ticket](%APP_URL%/support) if you have a large library of pre-signed JWTs to roll over.
 
@@ -295,7 +352,14 @@ Current gaps to account for:
 - **Derived thumbnail asset enforcement** — playback access control protects endpoint resolution
   and media sessions. Chandler thumbnail URLs are preview assets and are not a separate auth
   boundary yet.
-- **VOD URL import and Studio library importer** — no direct `upload via URL` equivalent or one-shot Studio-asset importer today. If you have a sizeable library, [open an in-app ticket](%APP_URL%/support) or message us in [Discord](%DISCORD_URL%) so we can scope the migration.
+- **Studio library importer** — `importVodAsset` imports one video per call from a public
+  http(s) URL, such as a Studio asset's download URL, but there is no one-shot import of a whole
+  Studio library. `ipfs://` and `ar://` URLs are not accepted; pass a public gateway's https link. If you have a sizeable library, [open an in-app ticket](%APP_URL%/support) or
+  message us in [Discord](%DISCORD_URL%) so we can scope the migration.
+- **Creator metadata** — Studio's `creatorId` and `userTags` have no FrameWorks field yet; keep that
+  mapping in your own records, keyed by stream ID or artifact ID.
+- **Per-stream transcode profiles** — FrameWorks uses a fixed rendition ladder per billing tier;
+  Studio's `profiles[]` on a stream or asset has no equivalent yet.
 - **Per-target rendition selection on multistream** — Studio lets you pick which rendition goes to each push target. We push the default output today.
 - **RTMP and FLV-over-HTTP pull sources** — our MistServer fork has no RTMP/FLV pull module, so a `pull: { source: "rtmp://…" }` or a Studio-style `https://.../*.flv` upstream won't work. Everything else Mist documents (RTSP, SRT, RIST, HLS, DTSC, MPEG-TS over UDP including multicast) does. If RTMP pull is a critical requirement, [contact support](%APP_URL%/support) before planning your migration — there is no committed timeline yet.
 
