@@ -67,6 +67,25 @@ for every service it deploys, so `cluster upgrade` keeps the same refusal.
 The mutating release sequence is host convergence, service database creation and
 expand migrations, platform-artifact upgrades
 with declared transitions at their ordering points, then postdeploy migrations.
+
+Host convergence and every service upgrade roll hosts in criticality waves
+(`cli/cmd/release_rollout_waves.go`). A host is CONTROL when it runs
+Quartermaster, Navigator, Commodore, Purser, Bridge, or a data store (Postgres or
+YugabyteDB, Kafka brokers or controllers, ClickHouse); MEDIA when it runs
+Foghorn, Chandler, the Livepeer gateway or signer, Helmsman or Mist, Redis, or is
+an edge; otherwise OTHER. It takes the most critical tier of anything it runs,
+and an unclassified service is CONTROL. Privateer convergence runs a CONTROL
+canary alone, the other CONTROL hosts one at a time, MEDIA hosts one per cell
+(`hosts.<name>.cluster`) with cells in parallel, then OTHER hosts eight at a
+time, and gates each wave on mesh health for its hosts. A service upgrade keeps
+the dependency order across services and rolls one service's replicas by the
+deploy's tier: CONTROL one at a time with the first as canary, MEDIA one per
+cell with cells in parallel, OTHER together. The effective `MaxUnavailable`
+(`DefaultStrategyFor` plus the manifest `update_strategy` override) caps the
+parallel lanes, and every built-in default is 1. Yugabyte keeps its master
+roll. A failure starts no further host, leaves every later wave untouched, and
+names the untouched hosts; parallel hosts write line-prefixed output, with
+Ansible output routed through `ansiblerun.WithOutputWriter`.
 Contract migrations are universally deferred. `release apply` prints the exact
 `cluster migrate --phase contract` command, which the operator runs only after
 the release's rollback or observation window closes.

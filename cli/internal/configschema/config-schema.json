@@ -951,6 +951,13 @@
           "description": "Comma-separated CIDRs never allowed as multistream destinations. Denials win over allowances."
         },
         {
+          "key": "PLAYBACK_WEBHOOK_ALLOW_PRIVATE_DESTINATIONS",
+          "type": "boolean",
+          "default": "false",
+          "introduced": "v0.3.11",
+          "description": "Lets playback-auth webhook URLs use private (RFC 1918 / ULA) addresses, plain http, and .local or .internal host names, so an isolated staging or development cluster can authorize playback against a receiver on its own network. Loopback, link-local, and cloud metadata addresses stay blocked. Must match Foghorn's setting. Never set it on a cluster that serves untrusted tenants."
+        },
+        {
           "key": "MEDIA_AUTHORITY_SIGNING_KEY_ID",
           "type": "string",
           "introduced": "v0.3.0",
@@ -4072,6 +4079,13 @@
           "type": "string",
           "introduced": "v0.3.0",
           "description": "Contact email sent to edge nodes in their site configuration for ACME certificate issuance."
+        },
+        {
+          "key": "PLAYBACK_WEBHOOK_ALLOW_PRIVATE_DESTINATIONS",
+          "type": "boolean",
+          "default": "false",
+          "introduced": "v0.3.11",
+          "description": "Lets playback-auth webhook calls connect to private (RFC 1918 / ULA) addresses, so an isolated staging or development cluster can authorize playback against a receiver on its own network. Loopback, link-local, and cloud metadata addresses stay blocked. Must match Commodore's setting. Never set it on a cluster that serves untrusted tenants."
         },
         {
           "key": "FEDERATION_ENABLED",

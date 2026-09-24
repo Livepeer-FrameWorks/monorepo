@@ -69,6 +69,7 @@ func TestUpgradeTaskConfigEnforcesLivepeerProductionValidation(t *testing.T) {
 				Enabled: true, Host: "media-1", Cluster: "media-eu", Mode: "native",
 				Config: map[string]string{"http_addr": "0.0.0.0:8935"},
 			},
+			"foghorn": {Enabled: true, Host: "media-1", Cluster: "media-eu"},
 		},
 	}
 	task := &orchestrator.Task{

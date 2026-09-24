@@ -37,6 +37,7 @@ observability: {}
 geoip: {}
 tls_bundles: {}
 ingress_sites: {}
+webhooks: {} # optional: destination policy for tenant webhooks
 ```
 
 ## Top-Level Fields
@@ -342,6 +343,29 @@ wireguard:
 - `listen_port` (required when enabled) - Default UDP listen port used by `mesh wg generate`
 
 > Edge nodes do not join the mesh.
+
+### webhooks
+
+Destination policy for every tenant-supplied webhook the platform dials:
+outbound event webhooks (Bosun) and playback-auth webhooks (Commodore validates
+the URL, Foghorn calls it).
+
+**Format:**
+
+```yaml
+webhooks:
+  allow_private_destinations: true
+```
+
+**Fields:**
+
+- `allow_private_destinations` (default `false`) - lets webhook receivers use private
+  (RFC 1918 / ULA) addresses, plain `http`, and `.local` or `.internal` host names, for an
+  isolated staging or development cluster whose receivers live on its own network. Loopback,
+  link-local, and cloud metadata addresses stay blocked. The CLI renders it as
+  `BOSUN_ALLOW_PRIVATE_DESTINATIONS` on Bosun and `PLAYBACK_WEBHOOK_ALLOW_PRIVATE_DESTINATIONS`
+  on Commodore and Foghorn; an env file or a service's `config` map still overrides it.
+  Never enable it on a cluster that serves untrusted tenants.
 
 ---
 

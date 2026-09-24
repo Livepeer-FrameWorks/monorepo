@@ -119,7 +119,7 @@ func runReleasePlan(cmd *cobra.Command, rc *resolvedCluster, opts releasePlanOpt
 
 	out := cmd.OutOrStdout()
 	ux.Heading(out, fmt.Sprintf("Static release plan for %s (platform %s)", selector, platformVersion))
-	writeReleaseHostConvergencePlan(out, "1. pre-upgrade host convergence", planReleaseHostConvergence(execution, manifest))
+	writeReleaseHostConvergencePlan(out, "1. pre-upgrade host convergence", manifest, planReleaseHostConvergence(execution, manifest))
 	writeReleasePlanGroup(out, "2. service databases (created with roles and current baseline when missing on the cluster)", releasePlanServiceDatabases(manifest))
 	fmt.Fprintln(out, "  3. schema expand migrations")
 	writeReleasePlanGroup(out, "4. platform artifact upgrades", classes.Platform)
@@ -274,7 +274,7 @@ func runReleaseApply(cmd *cobra.Command, rc *resolvedCluster, opts releaseApplyO
 
 	hostSteps := planReleaseHostConvergence(plan, manifest)
 	ux.Heading(out, fmt.Sprintf("Release plan for %s (platform %s)", version, platformVersion))
-	writeReleaseHostConvergencePlan(out, "1. pre-upgrade host convergence", hostSteps)
+	writeReleaseHostConvergencePlan(out, "1. pre-upgrade host convergence", manifest, hostSteps)
 	fmt.Fprintln(out, "  2. service databases missing on the cluster (created with roles and current baseline), then expand migrations")
 	fmt.Fprintln(out, "     · read-only Quartermaster report: nodes without an identity key, DNS grants the entitlement migration clears")
 	if len(services) == 0 {
@@ -333,6 +333,7 @@ func runReleaseApply(cmd *cobra.Command, rc *resolvedCluster, opts releaseApplyO
 		fmt.Fprintln(out, "  no mesh, Kafka topic, or MirrorMaker2 hosts in this manifest")
 	} else {
 		if convergeErr := hostConvergence.run(cmd.Context(), hostSteps, opts.dryRun); convergeErr != nil {
+			writeReleaseHostConvergenceResumeHint(cmd.ErrOrStderr(), platformVersion, opts.dryRun)
 			return fmt.Errorf("pre-upgrade host convergence: %w", convergeErr)
 		}
 	}
@@ -349,13 +350,16 @@ func runReleaseApply(cmd *cobra.Command, rc *resolvedCluster, opts releaseApplyO
 	ux.Subheading(out, "[3/4] Service upgrades + reconciliations")
 	installed, err := releaseRunUpgradesFn(cmd, rc, env, transitions, services, platformVersion, opts)
 	if err != nil {
+		writeReleaseResumeHint(cmd.ErrOrStderr(), platformVersion, opts.dryRun)
 		return err
 	}
 	if err := reconcileReleasePlacements(cmd.Context(), cmd, rc, installed, opts.dryRun); err != nil {
+		writeReleaseResumeHint(cmd.ErrOrStderr(), platformVersion, opts.dryRun)
 		return fmt.Errorf("service placement reconciliation: %w", err)
 	}
 	// Remove mirror workers only after all consumers have rolled.
 	if mmErr := reconcileStaleKafkaMirrorMakerWorkersOverSSH(cmd.Context(), out, rc.Manifest, sshPool, opts.dryRun); mmErr != nil {
+		writeReleaseResumeHint(cmd.ErrOrStderr(), platformVersion, opts.dryRun)
 		return fmt.Errorf("kafka-mirrormaker worker cleanup: %w", mmErr)
 	}
 
@@ -394,6 +398,30 @@ func runReleaseApply(cmd *cobra.Command, rc *resolvedCluster, opts releaseApplyO
 	}
 	ux.Success(out, fmt.Sprintf("Release %s applied", version))
 	return nil
+}
+
+// writeReleaseResumeHint tells the operator how a release that stopped in
+// stage 3 continues. Rerunning is safe because every earlier stage is
+// idempotent: converged hosts and applied expand migrations are skipped, and a
+// service already on the target version reports "already at version" without
+// redeploying.
+func writeReleaseResumeHint(w io.Writer, platformVersion string, dryRun bool) {
+	if dryRun {
+		return
+	}
+	fmt.Fprintf(w, "\nRelease apply stopped before postdeploy migrations; they have not run.\n")
+	fmt.Fprintf(w, "After fixing the cause, rerun `frameworks cluster release apply --version %s` to resume: services already on %s report up to date and are skipped.\n", platformVersion, platformVersion)
+}
+
+// writeReleaseHostConvergenceResumeHint tells the operator how a release that
+// stopped in host convergence continues: nothing past that stage ran, and a
+// rerun skips every host the role precheck finds converged.
+func writeReleaseHostConvergenceResumeHint(w io.Writer, platformVersion string, dryRun bool) {
+	if dryRun {
+		return
+	}
+	fmt.Fprintf(w, "\nRelease apply stopped in pre-upgrade host convergence; no migration or service upgrade has run.\n")
+	fmt.Fprintf(w, "After fixing the cause, rerun `frameworks cluster release apply --version %s` to resume: hosts already converged are skipped.\n", platformVersion)
 }
 
 // resolveReleasePlatformVersion resolves a version SELECTOR (channel or concrete) to a concrete vX.Y.Z platform

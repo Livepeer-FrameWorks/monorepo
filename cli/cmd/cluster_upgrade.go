@@ -4,12 +4,14 @@ import (
 	"bufio"
 	"context"
 	"fmt"
+	"io"
 	"maps"
 	"os"
 	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"frameworks/cli/internal/ux"
@@ -21,6 +23,7 @@ import (
 	"frameworks/cli/pkg/ssh"
 
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/servicedefs"
+	fwversion "github.com/Livepeer-FrameWorks/monorepo/pkg/version"
 	"github.com/spf13/cobra"
 )
 
@@ -93,6 +96,7 @@ and required data migrations must follow the target release notes.`,
 			if all {
 				return runUpgradeAll(cmd, rc, version, dryRun, skipValidation, yes, noRollback, skipMigrationCheck, skipDataMigrationCheck)
 			}
+			version = resolveUpgradeVersion(cmd, rc.Manifest, version)
 			_, err = runUpgrade(cmd, rc, args[0], version, dryRun, skipValidation, yes, noRollback, skipMigrationCheck, skipDataMigrationCheck, false)
 			return err
 		},
@@ -143,18 +147,35 @@ rollout.`,
 }
 
 // resolveUpgradeVersion defaults to the cluster's channel when no explicit --version is given.
-// Warns if the requested version implies a different channel than the manifest's.
+// Warns if the requested version is outside what the manifest's channel follows.
+// Call it once per operator-supplied selector; internal callers that pass an
+// already-pinned tag use defaultUpgradeVersion so the check is not repeated per service.
 func resolveUpgradeVersion(cmd *cobra.Command, manifest *inventory.Manifest, version string) string {
-	if version == "" {
-		version = manifest.ResolvedChannel()
-	}
-
+	version = defaultUpgradeVersion(manifest, version)
 	clusterChannel := manifest.ResolvedChannel()
 	requestedChannel, _ := gitops.ResolveVersion(version)
-	if requestedChannel != clusterChannel {
+	if !releaseChannelAccepts(clusterChannel, requestedChannel) {
 		fmt.Fprintf(cmd.OutOrStderr(), "Warning: cluster channel is %q but upgrading from %q channel\n", clusterChannel, requestedChannel)
 	}
 	return version
+}
+
+func defaultUpgradeVersion(manifest *inventory.Manifest, version string) string {
+	if version == "" {
+		return manifest.ResolvedChannel()
+	}
+	return version
+}
+
+// releaseChannelAccepts reports whether a cluster following clusterChannel
+// takes releases from requestedChannel. Concrete tags classify as stable or rc;
+// candidate follows the newest release of either kind.
+func releaseChannelAccepts(clusterChannel, requestedChannel string) bool {
+	if clusterChannel == requestedChannel {
+		return true
+	}
+	return clusterChannel == string(fwversion.ChannelCandidate) &&
+		(requestedChannel == string(fwversion.ChannelStable) || requestedChannel == string(fwversion.ChannelRC))
 }
 
 func resolveUpgradePlanTarget(rc *resolvedCluster, version string) (string, error) {
@@ -330,6 +351,29 @@ type upgradeResult struct {
 	installed bool
 }
 
+// upgradeInitializeNeeded reports whether the upgrade must run the role's init
+// tag after deploying. It trusts the init check-mode precheck only where
+// `cluster provision` does: roles whose init is not deferred to a cluster-wide
+// step and whose check mode can prove initialized state (not PostgreSQL). A
+// precheck that cannot run falls back to initializing.
+func upgradeInitializeNeeded(ctx context.Context, out io.Writer, prov provisioner.Provisioner, deployName string, host inventory.Host, config provisioner.ServiceConfig) bool {
+	if deferInfrastructureInitialize(deployName) || !infrastructureInitializePrecheckReliable(deployName) {
+		return true
+	}
+	if _, ok := prov.(provisioner.ChangePlanner); !ok {
+		return true
+	}
+	wouldChange, err := provisionWouldChange(ctx, prov, host, config, []string{"init"})
+	if err != nil {
+		fmt.Fprintf(out, "    initialize precheck failed (%v); running initialize\n", err)
+		return true
+	}
+	if !wouldChange {
+		fmt.Fprintf(out, "    %s init state already matches; skipping initialize\n", deployName)
+	}
+	return wouldChange
+}
+
 func classifyUpgradeFirstInstall(state *detect.ServiceState, withinRelease bool, serviceName, host string) (bool, error) {
 	if state == nil {
 		return false, fmt.Errorf("service %s detection returned no state for %s", serviceName, host)
@@ -348,7 +392,7 @@ func runUpgrade(cmd *cobra.Command, rc *resolvedCluster, serviceName, version st
 	manifest := rc.Manifest
 	manifestPath := rc.ManifestPath
 	var err error
-	version = resolveUpgradeVersion(cmd, manifest, version)
+	version = defaultUpgradeVersion(manifest, version)
 
 	// Resolve deploy name (services/interfaces) or use serviceName for infrastructure
 	deployName := serviceName
@@ -506,9 +550,10 @@ func runUpgrade(cmd *cobra.Command, rc *resolvedCluster, serviceName, version st
 		}
 	}
 
-	// Upgrade every replica in turn. A per-host failure aborts the sequence and
-	// returns immediately — the manifest version is NOT advanced, so a partial
-	// rollout never advertises a version the pool is not fully running.
+	// Upgrade the replicas in criticality waves (upgradeReplicaWaves). A per-host
+	// failure starts no further replica — the manifest version is NOT advanced,
+	// so a partial rollout never advertises a version the pool is not fully
+	// running.
 	fmt.Fprintf(cmd.OutOrStdout(), "\n[3/4] Deploying to %d host(s)...\n", len(hosts))
 	// Yugabyte nodes change one at a time through the roll: each serving node only once the masters confirm the
 	// universe survives losing it, and the next only after it has recovered.
@@ -533,15 +578,35 @@ func runUpgrade(cmd *cobra.Command, rc *resolvedCluster, serviceName, version st
 			hosts = ordered
 		}
 	}
-	anyUpgraded := false
+	hostNames := make([]string, 0, len(hosts))
+	hostByName := make(map[string]inventory.Host, len(hosts))
+	replicaIndex := make(map[string]int, len(hosts))
 	for i, host := range hosts {
+		hostNames = append(hostNames, host.Name)
+		hostByName[host.Name] = host
+		replicaIndex[host.Name] = i + 1
+	}
+	waves := []rolloutWave{{Name: "yugabyte roll", Lanes: [][]string{hostNames}, Limit: 1}}
+	if serviceName != "yugabyte" {
+		waves = upgradeReplicaWaves(manifest, serviceName, deployName, hostNames)
+	}
+	var (
+		resultMu    sync.Mutex
+		anyUpgraded bool
+	)
+	upgradeHost := func(ctx context.Context, name string, out io.Writer) error {
+		host := hostByName[name]
 		if len(hosts) > 1 {
-			fmt.Fprintf(cmd.OutOrStdout(), "\n--- Replica %d/%d: %s ---\n", i+1, len(hosts), host.ExternalIP)
+			fmt.Fprintf(out, "\n--- Replica %d/%d: %s ---\n", replicaIndex[name], len(hosts), host.ExternalIP)
+		}
+		hostCmd := cmd
+		if out != cmd.OutOrStdout() {
+			hostCmd = hostOutputCommand(cmd, out)
 		}
 		var hostResult upgradeResult
 		upgrade := func() error {
 			var upgradeErr error
-			hostResult, upgradeErr = upgradeServiceOnHost(ctx, cmd, rc, sshPool, manifest, host, serviceName, deployName, svcInfo, upgradeRuntimeData, dryRun, skipValidation, noRollback, withinRelease)
+			hostResult, upgradeErr = upgradeServiceOnHost(ctx, hostCmd, rc, sshPool, manifest, host, serviceName, deployName, svcInfo, maps.Clone(upgradeRuntimeData), dryRun, skipValidation, noRollback, withinRelease)
 			return upgradeErr
 		}
 		var hostErr error
@@ -556,12 +621,16 @@ func runUpgrade(cmd *cobra.Command, rc *resolvedCluster, serviceName, version st
 			hostErr = upgrade()
 		}
 		if hostErr != nil {
-			return result, hostErr
+			return hostErr
 		}
-		if hostResult.changed {
-			anyUpgraded = true
-		}
+		resultMu.Lock()
+		defer resultMu.Unlock()
+		anyUpgraded = anyUpgraded || hostResult.changed
 		result.installed = result.installed || hostResult.installed
+		return nil
+	}
+	if err := runRolloutWaves(ctx, cmd.OutOrStdout(), waves, upgradeHost, nil); err != nil {
+		return result, err
 	}
 
 	if dryRun {
@@ -896,9 +965,10 @@ func upgradeServiceOnHost(ctx context.Context, cmd *cobra.Command, rc *resolvedC
 		fmt.Fprintf(cmd.OutOrStdout(), "    Installed %s; master recovery and the tserver phase are checked by the upgrade coordinator\n", svcInfo.Version)
 		return upgradeResult{changed: true, installed: firstInstall}, nil
 	}
-	initialize := func() error { return prov.Initialize(ctx, host, config) }
-	if err := initialize(); err != nil {
-		return result, fmt.Errorf("failed to initialize %s on %s: %w", serviceName, host.ExternalIP, err)
+	if upgradeInitializeNeeded(ctx, cmd.OutOrStdout(), prov, deployName, host, config) {
+		if err := prov.Initialize(ctx, host, config); err != nil {
+			return result, fmt.Errorf("failed to initialize %s on %s: %w", serviceName, host.ExternalIP, err)
+		}
 	}
 	fmt.Fprintf(cmd.OutOrStdout(), "    ✓ Deployed %s\n", svcInfo.Version)
 

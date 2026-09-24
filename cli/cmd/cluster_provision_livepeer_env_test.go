@@ -4,6 +4,7 @@ import (
 	"maps"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"frameworks/cli/pkg/inventory"
@@ -358,7 +359,8 @@ func TestBuildServiceEnvVarsSelectsLivepeerRPCPoolByGatewayHostOrder(t *testing.
 	envFile := writeTestEnvFile(t, ""+
 		"LIVEPEER_ETH_URLS=https://rpc-one.example,https://rpc-two.example\n"+
 		"LIVEPEER_ETH_ACCT_ADDR=0xabc123\n"+
-		"LIVEPEER_ETH_KEYSTORE_B64=e30=\n")
+		"LIVEPEER_ETH_KEYSTORE_B64=e30=\n"+
+		"LIVEPEER_AUTH_WEBHOOK_URL=http://foghorn-cell.internal:18008/webhooks/livepeer/auth\n")
 
 	manifest := &inventory.Manifest{
 		Profile:    "production",
@@ -398,7 +400,8 @@ func TestBuildServiceEnvVarsLivepeerGatewayRuntimeDefaults(t *testing.T) {
 	envFile := writeTestEnvFile(t, ""+
 		"LIVEPEER_ETH_URLS=https://rpc-one.example\n"+
 		"LIVEPEER_ETH_ACCT_ADDR=0xabc123\n"+
-		"LIVEPEER_ETH_KEYSTORE_B64=e30=\n")
+		"LIVEPEER_ETH_KEYSTORE_B64=e30=\n"+
+		"LIVEPEER_AUTH_WEBHOOK_URL=http://foghorn-cell.internal:18008/webhooks/livepeer/auth\n")
 
 	manifest := &inventory.Manifest{
 		Profile:    "production",
@@ -578,4 +581,44 @@ func testLoadSharedEnv(t *testing.T, m *inventory.Manifest) map[string]string {
 		t.Fatalf("LoadSharedEnv: %v", err)
 	}
 	return env
+}
+
+// Job tokens are bound to the gateway's cell, so the auth webhook must reach
+// that cell's Foghorn: never another cell's, and never the global alias.
+func TestLivepeerGatewayAuthWebhookURLResolvesOwnCellFoghorn(t *testing.T) {
+	manifest := &inventory.Manifest{
+		Hosts: map[string]inventory.Host{
+			"fw-eu-1": {Cluster: "regional-eu"},
+			"fw-us-1": {Cluster: "regional-us"},
+		},
+		Services: map[string]inventory.ServiceConfig{
+			"foghorn-eu": {Enabled: true, Deploy: "foghorn", Hosts: []string{"fw-eu-1"}, Cluster: "media-eu"},
+			"foghorn-us": {Enabled: true, Deploy: "foghorn", Hosts: []string{"fw-us-1"}, Cluster: "media-us"},
+		},
+	}
+	got, err := livepeerGatewayAuthWebhookURL(manifest, "media-us")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != "http://fw-us-1.internal:18008/webhooks/livepeer/auth" {
+		t.Fatalf("auth URL = %q, want the US cell Foghorn", got)
+	}
+	if _, err := livepeerGatewayAuthWebhookURL(manifest, "media-ap"); err == nil {
+		t.Fatal("a gateway cluster without a Foghorn must not resolve an auth URL")
+	}
+}
+
+func TestBuildServiceEnvVarsFailsProductionGatewayWithoutCellFoghorn(t *testing.T) {
+	manifest := &inventory.Manifest{
+		Hosts: map[string]inventory.Host{"fw-ap-1": {Cluster: "media-ap"}},
+		Services: map[string]inventory.ServiceConfig{
+			"livepeer-gateway-ap": {Enabled: true, Deploy: "livepeer-gateway", Hosts: []string{"fw-ap-1"}, Cluster: "media-ap"},
+		},
+	}
+	_, err := buildServiceEnvVars(&orchestrator.Task{
+		Name: "livepeer-gateway-ap@fw-ap-1", Type: "livepeer-gateway", ServiceID: "livepeer-gateway-ap", Host: "fw-ap-1", ClusterID: "media-ap",
+	}, manifest, map[string]interface{}{}, "", "", map[string]string{}, nil, "native")
+	if err == nil || !strings.Contains(err.Error(), "auth webhook") {
+		t.Fatalf("err = %v, want the unresolved auth webhook refusal", err)
+	}
 }

@@ -2,11 +2,14 @@ package cmd
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 
 	"frameworks/cli/internal/ux"
 	"frameworks/cli/pkg/inventory"
@@ -33,9 +36,14 @@ import (
 // Every release runs the stage. Each host step renders the desired role state
 // and runs the role's check-mode precheck first, so an unchanged host is
 // skipped without a restart and a rerun after a failure resumes where the
-// cluster diverges. Hosts converge one at a time: a Privateer restart briefly
-// interrupts that host's mesh DNS, and a MirrorMaker2 restart rebalances its
-// connector tasks onto the remaining workers.
+// cluster diverges. Privateer hosts converge in criticality waves
+// (release_rollout_waves.go): a CONTROL canary alone, the other CONTROL hosts
+// one at a time, MEDIA hosts one per cell with cells in parallel, then OTHER
+// hosts together; mesh health is verified on each wave's hosts before the next
+// wave starts, and a failed wave leaves every later host untouched. MirrorMaker2 workers converge their config
+// one at a time without restarting; every worker left with a pending restart
+// then restarts together, so the workers of a target never run mixed configs
+// through a sequence of rebalances.
 const (
 	releaseHostStepPrivateer   = "privateer"
 	releaseHostStepKafkaTopics = "kafka-topics"
@@ -92,19 +100,49 @@ func planReleaseHostConvergence(plan *orchestrator.ExecutionPlan, manifest *inve
 	return steps
 }
 
-// writeReleaseHostConvergencePlan prints the stage as one line per step kind.
-func writeReleaseHostConvergencePlan(out io.Writer, heading string, steps []releaseHostConvergenceStep) {
+// releasePrivateerWaves orders the Privateer steps' hosts by the risk of the
+// component being converged, not by what else runs on each host: Privateer's
+// DNS socket is systemd-activated and wg0 survives its restart, so restarting
+// it barely affects co-located services. The most critical host goes first as
+// a canary, then the rest in batches with a mesh-health check after each batch.
+// Pure over the manifest.
+func releasePrivateerWaves(manifest *inventory.Manifest, steps []releaseHostConvergenceStep) []rolloutWave {
+	var hosts []string
+	for _, step := range steps {
+		if step.Kind == releaseHostStepPrivateer && step.Task != nil {
+			hosts = append(hosts, step.Task.Host)
+		}
+	}
+	if len(hosts) == 0 {
+		return nil
+	}
+	tiers := rolloutHostTiers(manifest)
+	return buildComponentBatchWaves(hosts, func(host string) rolloutTier { return tiers[host] }, privateerConvergenceBatch)
+}
+
+// privateerConvergenceBatch bounds how many mesh hosts restart Privateer at
+// once after the canary.
+const privateerConvergenceBatch = 4
+
+// writeReleaseHostConvergencePlan prints the stage: the Privateer waves, then
+// one line per remaining step kind.
+func writeReleaseHostConvergencePlan(out io.Writer, heading string, manifest *inventory.Manifest, steps []releaseHostConvergenceStep) {
 	if len(steps) == 0 {
 		fmt.Fprintf(out, "  %s: none\n", heading)
 		return
 	}
 	fmt.Fprintf(out, "  %s (hosts already converged are skipped):\n", heading)
+	if waves := releasePrivateerWaves(manifest, steps); len(waves) > 0 {
+		fmt.Fprintln(out, "     · Privateer binary, seed peers, and seed DNS, in waves (mesh health gates each wave):")
+		for i, wave := range waves {
+			fmt.Fprintf(out, "         %d. %s\n", i+1, wave.describe())
+		}
+	}
 	groups := map[string][]string{}
 	for _, step := range steps {
 		groups[step.Kind] = append(groups[step.Kind], step.Label)
 	}
 	for _, group := range []struct{ kind, label, sep string }{
-		{releaseHostStepPrivateer, "Privateer binary, seed peers, and seed DNS", " -> "},
 		{releaseHostStepKafkaTopics, "Kafka topics created when missing, topic config applied (no broker restart)", ", "},
 		{releaseHostStepMirrorMaker, "MirrorMaker2 workers and JMX exporter", " -> "},
 	} {
@@ -125,6 +163,112 @@ type releaseHostConvergence struct {
 	sharedEnv    map[string]string
 	clusterEnvs  map[string]map[string]string
 	releaseRepos []string
+
+	// mirrorMakerRestartPendingFn and mirrorMakerRestartFn replace the SSH
+	// probe and the role restart in tests.
+	mirrorMakerRestartPendingFn func(context.Context, *orchestrator.Task) (bool, error)
+	mirrorMakerRestartFn        func(context.Context, *orchestrator.Task) error
+	// verifyMeshFn replaces the SSH mesh health gate in tests.
+	verifyMeshFn func(context.Context, []string) error
+}
+
+func (c *releaseHostConvergence) verifyMesh(ctx context.Context, hosts []string) error {
+	if c.verifyMeshFn != nil {
+		return c.verifyMeshFn(ctx, hosts)
+	}
+	return verifyMeshHealth(ctx, c.cmd, c.manifest, c.pool, hosts)
+}
+
+// restartPendingMirrorMakers restarts, concurrently, every MirrorMaker2 worker
+// among tasks whose role recorded a deferred restart. The marker lives on the
+// host, so a worker converged by an interrupted earlier run is restarted too.
+func (c *releaseHostConvergence) restartPendingMirrorMakers(ctx context.Context, tasks []*orchestrator.Task, dryRun bool) error {
+	if len(tasks) == 0 {
+		return nil
+	}
+	out := c.cmd.OutOrStdout()
+	if dryRun {
+		fmt.Fprintln(out, "\n[DRY-RUN] MirrorMaker2 workers with changed config or binaries would restart together after every worker converged")
+		return nil
+	}
+	pendingFn := c.mirrorMakerRestartPendingFn
+	if pendingFn == nil {
+		pendingFn = c.mirrorMakerRestartPending
+	}
+	restartFn := c.mirrorMakerRestartFn
+	if restartFn == nil {
+		restartFn = c.restartMirrorMaker
+	}
+	var pending []*orchestrator.Task
+	var hosts []string
+	for _, task := range tasks {
+		isPending, err := pendingFn(ctx, task)
+		if err != nil {
+			return fmt.Errorf("kafka-mirrormaker on %s: probe pending restart: %w", task.Host, err)
+		}
+		if isPending {
+			pending = append(pending, task)
+			hosts = append(hosts, task.Host)
+		}
+	}
+	if len(pending) == 0 {
+		fmt.Fprintln(out, "\nMirrorMaker2 workers: no restart pending")
+		return nil
+	}
+	fmt.Fprintf(out, "\nRestarting MirrorMaker2 workers together: %s\n", strings.Join(hosts, ", "))
+	errs := make([]error, len(pending))
+	var wg sync.WaitGroup
+	for i, task := range pending {
+		wg.Go(func() {
+			if err := restartFn(ctx, task); err != nil {
+				errs[i] = fmt.Errorf("kafka-mirrormaker on %s: restart: %w", task.Host, err)
+			}
+		})
+	}
+	wg.Wait()
+	if err := errors.Join(errs...); err != nil {
+		return err
+	}
+	ux.Success(out, fmt.Sprintf("Restarted MirrorMaker2 workers: %s", strings.Join(hosts, ", ")))
+	return nil
+}
+
+func (c *releaseHostConvergence) mirrorMakerRestartPending(ctx context.Context, task *orchestrator.Task) (bool, error) {
+	host, ok := c.manifest.GetHost(task.Host)
+	if !ok {
+		return false, fmt.Errorf("host %s not found in manifest", task.Host)
+	}
+	result, err := c.pool.Run(ctx, sshConfigFor(host), provisioner.KafkaMirrorMakerRestartPendingProbe)
+	if err != nil {
+		return false, err
+	}
+	if result.ExitCode != 0 {
+		return false, fmt.Errorf("probe exited %d: %s", result.ExitCode, strings.TrimSpace(result.Stderr))
+	}
+	return strings.TrimSpace(result.Stdout) == "PENDING", nil
+}
+
+// restartMirrorMaker runs the role's restart tag, which clears the marker,
+// and validates the restarted worker.
+func (c *releaseHostConvergence) restartMirrorMaker(ctx context.Context, task *orchestrator.Task) error {
+	host, ok := c.manifest.GetHost(task.Host)
+	if !ok {
+		return fmt.Errorf("host %s not found in manifest", task.Host)
+	}
+	prov, config, err := renderProvisionTask(task, c.pool, c.manifest, false, c.runtimeData, c.manifestDir, c.sharedEnv, c.clusterEnvs, c.releaseRepos)
+	if err != nil {
+		return err
+	}
+	restarter, ok := prov.(provisioner.Restarter)
+	if !ok {
+		return fmt.Errorf("%s provisioner cannot restart", prov.GetName())
+	}
+	if err := restarter.Restart(ctx, host, config); err != nil {
+		return err
+	}
+	return runProvisionPhase(ctx, provisionValidateTimeout, "validate", func(phaseCtx context.Context) error {
+		return prov.Validate(phaseCtx, host, config)
+	})
 }
 
 func newReleaseHostConvergence(cmd *cobra.Command, rc *resolvedCluster, platformVersion string, pool *ssh.Pool) (*releaseHostConvergence, error) {
@@ -176,27 +320,31 @@ func (c *releaseHostConvergence) preflightEnvContract(steps []releaseHostConverg
 	return failures.err()
 }
 
-// run executes (or, with dryRun, previews) every step in order. The mesh is
-// verified once every Privateer host has converged and before Kafka work
-// starts.
+// run executes (or, with dryRun, previews) the stage: the Privateer waves,
+// each gated on the mesh health of its hosts, then the remaining steps in
+// order.
 func (c *releaseHostConvergence) run(ctx context.Context, steps []releaseHostConvergenceStep, dryRun bool) error {
 	out := c.cmd.OutOrStdout()
-	var meshHosts []string
+	if err := c.runPrivateerWaves(ctx, steps, dryRun); err != nil {
+		return err
+	}
+	var mirrorMakers []*orchestrator.Task
 	for i, step := range steps {
-		if step.Kind != releaseHostStepPrivateer && len(meshHosts) > 0 && !dryRun {
-			if err := verifyMeshHealth(ctx, c.cmd, c.manifest, c.pool, meshHosts); err != nil {
-				return fmt.Errorf("mesh health after Privateer convergence: %w", err)
-			}
-			meshHosts = nil
-		}
 		switch step.Kind {
-		case releaseHostStepPrivateer, releaseHostStepMirrorMaker:
+		case releaseHostStepPrivateer:
+			continue
+		case releaseHostStepMirrorMaker:
 			fmt.Fprintf(out, "\n[host %d/%d] %s on %s\n", i+1, len(steps), step.Kind, step.Label)
-			if err := c.convergeTask(ctx, step.Task, dryRun); err != nil {
-				return fmt.Errorf("%s on %s: %w", step.Kind, step.Label, err)
-			}
-			if step.Kind == releaseHostStepPrivateer {
-				meshHosts = append(meshHosts, step.Task.Host)
+			mirrorMakers = append(mirrorMakers, step.Task)
+			if err := c.convergeTask(ctx, step.Task, dryRun, out); err != nil {
+				err = fmt.Errorf("%s on %s: %w", step.Kind, step.Label, err)
+				// Workers converged so far carry a deferred restart; leaving
+				// them on their old config until a rerun would keep the
+				// mixed state the deferral exists to avoid.
+				if restartErr := c.restartPendingMirrorMakers(ctx, mirrorMakers, dryRun); restartErr != nil {
+					return errors.Join(err, restartErr)
+				}
+				return err
 			}
 		case releaseHostStepKafkaTopics:
 			fmt.Fprintf(out, "\n[host %d/%d] Kafka topics for %s\n", i+1, len(steps), step.Label)
@@ -211,34 +359,73 @@ func (c *releaseHostConvergence) run(ctx context.Context, steps []releaseHostCon
 			return fmt.Errorf("unknown host convergence step %q", step.Kind)
 		}
 	}
-	if len(meshHosts) > 0 && !dryRun {
-		if err := verifyMeshHealth(ctx, c.cmd, c.manifest, c.pool, meshHosts); err != nil {
-			return fmt.Errorf("mesh health after Privateer convergence: %w", err)
+	return c.restartPendingMirrorMakers(ctx, mirrorMakers, dryRun)
+}
+
+// runPrivateerWaves converges the Privateer hosts wave by wave. Before the
+// next wave starts, the hosts of the wave just converged must pass the mesh
+// health gate, so a canary that breaks the mesh stops the rollout on one host.
+func (c *releaseHostConvergence) runPrivateerWaves(ctx context.Context, steps []releaseHostConvergenceStep, dryRun bool) error {
+	waves := releasePrivateerWaves(c.manifest, steps)
+	if len(waves) == 0 {
+		return nil
+	}
+	tasks := map[string]*orchestrator.Task{}
+	for _, step := range steps {
+		if step.Kind == releaseHostStepPrivateer && step.Task != nil {
+			tasks[step.Task.Host] = step.Task
 		}
+	}
+	out := c.cmd.OutOrStdout()
+	fmt.Fprintf(out, "\nPrivateer on %d host(s) in %d wave(s)\n", len(tasks), len(waves))
+	err := runRolloutWaves(ctx, out, waves,
+		func(ctx context.Context, host string, hostOut io.Writer) error {
+			fmt.Fprintf(hostOut, "privateer on %s\n", host)
+			return c.convergeTask(ctx, tasks[host], dryRun, hostOut)
+		},
+		func(wave rolloutWave) error {
+			if dryRun {
+				return nil
+			}
+			if err := c.verifyMesh(ctx, wave.hosts()); err != nil {
+				return fmt.Errorf("mesh health after Privateer convergence: %w", err)
+			}
+			return nil
+		})
+	if err != nil {
+		return fmt.Errorf("privateer: %w", err)
 	}
 	return nil
 }
 
 // convergeTask runs one host step through provisionTask, which detects the
 // installed state, skips an unchanged host via the role precheck, and validates
-// what it changed. With dryRun it reports what provisionTask would do.
-func (c *releaseHostConvergence) convergeTask(ctx context.Context, task *orchestrator.Task, dryRun bool) error {
+// what it changed. With dryRun it reports to out what provisionTask would do.
+// Each call renders from its own copy of the runtime data, since Privateer
+// hosts in one wave converge concurrently.
+func (c *releaseHostConvergence) convergeTask(ctx context.Context, task *orchestrator.Task, dryRun bool, out io.Writer) error {
 	host, ok := c.manifest.GetHost(task.Host)
 	if !ok {
 		return fmt.Errorf("host %s not found in manifest", task.Host)
 	}
+	runtimeData := maps.Clone(c.runtimeData)
+	if runtimeData == nil {
+		runtimeData = map[string]any{}
+	}
+	if task.Type == releaseHostStepMirrorMaker {
+		runtimeData[provisioner.KafkaMirrorMakerDeferRestartKey] = true
+	}
 	if !dryRun {
-		_, err := provisionTask(ctx, task, host, c.pool, c.manifest, false, false, c.runtimeData, c.manifestDir, c.sharedEnv, c.clusterEnvs, c.releaseRepos, nil)
+		_, err := provisionTask(ctx, task, host, c.pool, c.manifest, false, false, runtimeData, c.manifestDir, c.sharedEnv, c.clusterEnvs, c.releaseRepos, nil)
 		return err
 	}
-	prov, config, err := renderProvisionTask(task, c.pool, c.manifest, false, c.runtimeData, c.manifestDir, c.sharedEnv, c.clusterEnvs, c.releaseRepos)
+	prov, config, err := renderProvisionTask(task, c.pool, c.manifest, false, runtimeData, c.manifestDir, c.sharedEnv, c.clusterEnvs, c.releaseRepos)
 	if err != nil {
 		return err
 	}
 	if missing := missingRequiredExternalEnv(task.Type, config.EnvVars); len(missing) > 0 {
 		return requiredEnvPreflightError([]requiredEnvGap{{Target: fmt.Sprintf("%s on %s", task.Name, task.Host), Missing: missing}})
 	}
-	out := c.cmd.OutOrStdout()
 	state := detectProvisionTaskState(ctx, prov, host, config)
 	switch {
 	case !serviceExists(state):
@@ -246,12 +433,13 @@ func (c *releaseHostConvergence) convergeTask(ctx context.Context, task *orchest
 	case provisionNeededWithoutPrecheck(state, config.DeferStart):
 		fmt.Fprintln(out, "    [DRY-RUN] installed but not running; would provision to restore it")
 	default:
-		wouldChange, checkErr := provisionWouldChange(ctx, prov, host, config, nil)
+		inspection, checkErr := provisionInspectChanges(ctx, prov, host, config, nil)
 		if checkErr != nil {
 			return fmt.Errorf("precheck: %w", checkErr)
 		}
-		if wouldChange {
+		if inspection.Changed {
 			fmt.Fprintln(out, "    [DRY-RUN] would converge (role check reports changes; the service restarts)")
+			writeProvisionChangeTasks(out, "      ", inspection.Tasks)
 		} else {
 			ux.Success(out, "    already converged; would skip")
 		}

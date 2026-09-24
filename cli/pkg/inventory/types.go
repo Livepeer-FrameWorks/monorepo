@@ -32,6 +32,25 @@ type Manifest struct {
 	GeoIP          *GeoIPConfig                 `yaml:"geoip,omitempty"`
 	TLSBundles     map[string]TLSBundleConfig   `yaml:"tls_bundles,omitempty"`
 	IngressSites   map[string]IngressSiteConfig `yaml:"ingress_sites,omitempty"`
+	Webhooks       *WebhooksConfig              `yaml:"webhooks,omitempty"`
+}
+
+// WebhooksConfig is the destination policy for every tenant-supplied webhook
+// the platform dials: Bosun's outbound webhooks and Commodore/Foghorn
+// playback-auth webhooks.
+type WebhooksConfig struct {
+	// AllowPrivateDestinations lets an isolated cluster deliver to receivers
+	// on its own network (private addresses, plain http, .local/.internal
+	// names). Rendered as BOSUN_ALLOW_PRIVATE_DESTINATIONS on bosun and
+	// PLAYBACK_WEBHOOK_ALLOW_PRIVATE_DESTINATIONS on commodore and foghorn;
+	// env files and a service's config map still override it.
+	AllowPrivateDestinations bool `yaml:"allow_private_destinations,omitempty"`
+}
+
+// WebhooksAllowPrivateDestinations reports the manifest-level webhook
+// private-destination setting.
+func (m *Manifest) WebhooksAllowPrivateDestinations() bool {
+	return m != nil && m.Webhooks != nil && m.Webhooks.AllowPrivateDestinations
 }
 
 func (m *Manifest) SharedEnvFiles() []string {

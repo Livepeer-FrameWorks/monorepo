@@ -1410,10 +1410,15 @@ frameworks cluster diagnose kafka [flags]
 - List consumer groups
 - Broker API version check
 - Cluster responsiveness
+- MirrorMaker2 topic coverage
 
 The report covers topic listing, consumer groups, a committed-offset lag
 snapshot, broker API reachability, and cluster responsiveness for one broker in
-every configured Kafka region. Native
+every configured Kafka region. For every enabled MirrorMaker2 link it compares
+each mirrored topic's end offset on the source cluster with its
+`<source>.<topic>` copy on the target cluster and warns when the source has
+records but the copy has none, which is how a topic without a replication task
+shows up. The coverage check only reads offsets. Native
 deployments use the tools under `/opt/kafka/bin`; an explicitly configured
 Docker deployment uses its Compose toolchain. Any failed probe makes the command
 exit non-zero and includes the remote command error.

@@ -109,6 +109,9 @@ type ProvisionOptions struct {
 // Zero-values mean "default to safest": MaxUnavailable=0 is treated as
 // "one host at a time" inside BuildWaves so a missing strategy can't
 // accidentally roll a whole tier at once.
+// MaxUnavailableAll lets every replica of a service roll in the same wave.
+const MaxUnavailableAll = 1 << 30
+
 type UpdateStrategy struct {
 	// MaxUnavailable is the upper bound on hosts being rolled at once
 	// within a single wave. 0 means "one host at a time" — the safe

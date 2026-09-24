@@ -33,6 +33,10 @@ package orchestrator
 //
 //   - Unknown services: max_unavailable=1, no stagger. Safe default —
 //     better to take the slow path than the unsafe one.
+//
+// Services whose replicas tolerate a brief pause together (analytics, event
+// fan-out, background workers, webapps, telemetry agents) default to
+// MaxUnavailableAll; front-door ingress and quorum/stateful tiers stay at one.
 func DefaultStrategyFor(serviceID string) UpdateStrategy {
 	if strat, ok := serviceStrategyDefaults[serviceID]; ok {
 		return strat
@@ -70,34 +74,34 @@ var serviceStrategyDefaults = map[string]UpdateStrategy{
 	"livepeer-gateway": {MaxUnavailable: 1, Canary: 1, RegionStagger: true},
 	"chandler":         {MaxUnavailable: 1, Canary: 1, RegionStagger: true},
 	"bridge":           {MaxUnavailable: 1, Canary: 1, RegionStagger: true},
-	"signalman":        {MaxUnavailable: 1, Canary: 1, RegionStagger: true},
-	"decklog":          {MaxUnavailable: 1, Canary: 1, RegionStagger: true},
-	"periscope-ingest": {MaxUnavailable: 1, Canary: 1, RegionStagger: true},
+	"signalman":        {MaxUnavailable: MaxUnavailableAll, Canary: 1, RegionStagger: true},
+	"decklog":          {MaxUnavailable: MaxUnavailableAll, Canary: 1, RegionStagger: true},
+	"periscope-ingest": {MaxUnavailable: MaxUnavailableAll, Canary: 1, RegionStagger: true},
 
 	// Interface / per-host. Per-host waves keep reloads and restarts easy to
 	// reason about even when N is large.
 	"nginx":     {MaxUnavailable: 1},
 	"caddy":     {MaxUnavailable: 1},
-	"vmagent":   {MaxUnavailable: 1},
-	"vmauth":    {MaxUnavailable: 1},
-	"chartroom": {MaxUnavailable: 1},
-	"foredeck":  {MaxUnavailable: 1},
-	"logbook":   {MaxUnavailable: 1},
+	"vmagent":   {MaxUnavailable: MaxUnavailableAll},
+	"vmauth":    {MaxUnavailable: MaxUnavailableAll},
+	"chartroom": {MaxUnavailable: MaxUnavailableAll},
+	"foredeck":  {MaxUnavailable: MaxUnavailableAll},
+	"logbook":   {MaxUnavailable: MaxUnavailableAll},
 
 	// Singletons.
 	"commodore":          {MaxUnavailable: 1},
 	"quartermaster":      {MaxUnavailable: 1},
 	"purser":             {MaxUnavailable: 1},
 	"navigator":          {MaxUnavailable: 1},
-	"lookout":            {MaxUnavailable: 1},
-	"bosun":              {MaxUnavailable: 1},
-	"skipper":            {MaxUnavailable: 1},
-	"periscope-query":    {MaxUnavailable: 1},
-	"periscope-metering": {MaxUnavailable: 1},
-	"deckhand":           {MaxUnavailable: 1},
+	"lookout":            {MaxUnavailable: MaxUnavailableAll},
+	"bosun":              {MaxUnavailable: MaxUnavailableAll},
+	"skipper":            {MaxUnavailable: MaxUnavailableAll},
+	"periscope-query":    {MaxUnavailable: MaxUnavailableAll},
+	"periscope-metering": {MaxUnavailable: MaxUnavailableAll},
+	"deckhand":           {MaxUnavailable: MaxUnavailableAll},
 	"helmsman":           {MaxUnavailable: 1},
 	"livepeer-signer":    {MaxUnavailable: 1},
-	"steward":            {MaxUnavailable: 1},
+	"steward":            {MaxUnavailable: MaxUnavailableAll},
 	"grafana":            {MaxUnavailable: 1},
 	"metabase":           {MaxUnavailable: 1},
 	"prometheus":         {MaxUnavailable: 1},

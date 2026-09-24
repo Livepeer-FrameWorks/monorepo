@@ -98,6 +98,26 @@ type tailWriter struct {
 	data  []byte
 }
 
+type outputWriterKey struct{}
+
+// WithOutputWriter routes the streamed ansible-playbook output of every
+// Execute call made with the returned context (and no explicit Outputer) to w
+// instead of the process stdout and stderr. Hosts converged in parallel use it
+// to keep each host's output attributable. w must be safe for concurrent use.
+func WithOutputWriter(ctx context.Context, w io.Writer) context.Context {
+	return context.WithValue(ctx, outputWriterKey{}, w)
+}
+
+func outputWriterFrom(ctx context.Context) io.Writer {
+	if ctx == nil {
+		return nil
+	}
+	if w, ok := ctx.Value(outputWriterKey{}).(io.Writer); ok {
+		return w
+	}
+	return nil
+}
+
 type tailCapturingOutputer struct {
 	delegate goansible_result.ResultsOutputer
 	tail     io.Writer
@@ -200,9 +220,13 @@ func (e *Executor) Execute(ctx context.Context, opts ExecuteOptions) error {
 			tail:     failureTail,
 		}))
 	} else {
+		stdout, stderr := io.Writer(os.Stdout), io.Writer(os.Stderr)
+		if w := outputWriterFrom(ctx); w != nil {
+			stdout, stderr = w, w
+		}
 		execOpts = append(execOpts,
-			goansible_execute.WithWrite(io.MultiWriter(os.Stdout, failureTail)),
-			goansible_execute.WithWriteError(io.MultiWriter(os.Stderr, failureTail)),
+			goansible_execute.WithWrite(io.MultiWriter(stdout, failureTail)),
+			goansible_execute.WithWriteError(io.MultiWriter(stderr, failureTail)),
 		)
 	}
 	runner := goansible_execute.NewDefaultExecute(execOpts...)

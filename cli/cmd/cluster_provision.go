@@ -1366,19 +1366,78 @@ func serviceEndpointFor(ctx context.Context, manifest *inventory.Manifest, sess 
 }
 
 func provisionWouldChange(ctx context.Context, prov provisioner.Provisioner, host inventory.Host, config provisioner.ServiceConfig, tags []string) (bool, error) {
-	planner, ok := prov.(provisioner.ChangePlanner)
-	if !ok {
-		return true, fmt.Errorf("%s provisioner does not implement change precheck", prov.GetName())
+	inspection, err := provisionInspectChanges(ctx, prov, host, config, tags)
+	return inspection.Changed, err
+}
+
+// provisionInspectChanges runs the role check-mode precheck and keeps the names
+// of the tasks that would change when the provisioner can report them.
+func provisionInspectChanges(ctx context.Context, prov provisioner.Provisioner, host inventory.Host, config provisioner.ServiceConfig, tags []string) (provisioner.ChangeInspection, error) {
+	inspector, canInspect := prov.(provisioner.ChangeInspector)
+	planner, canPlan := prov.(provisioner.ChangePlanner)
+	if !canInspect && !canPlan {
+		return provisioner.ChangeInspection{Changed: true}, fmt.Errorf("%s provisioner does not implement change precheck", prov.GetName())
 	}
-	var wouldChange bool
+	var inspection provisioner.ChangeInspection
 	if err := runProvisionPhase(ctx, provisionApplyTimeout, "provision precheck", func(phaseCtx context.Context) error {
 		var err error
-		wouldChange, err = planner.WouldChange(phaseCtx, host, config, tags)
+		if canInspect {
+			inspection, err = inspector.InspectChanges(phaseCtx, host, config, tags)
+		} else {
+			inspection.Changed, err = planner.WouldChange(phaseCtx, host, config, tags)
+		}
 		return err
 	}); err != nil {
+		return provisioner.ChangeInspection{Changed: true}, err
+	}
+	return inspection, nil
+}
+
+// maxReportedChangeTasks bounds the per-host list of changing role tasks.
+const maxReportedChangeTasks = 15
+
+// writeProvisionChangeTasks names the role tasks a precheck reported as
+// changing, so an operator can see why a host converges instead of being
+// skipped as already converged.
+func writeProvisionChangeTasks(w io.Writer, indent string, tasks []string) {
+	if len(tasks) == 0 {
+		return
+	}
+	seen := map[string]bool{}
+	var unique []string
+	for _, task := range tasks {
+		if task = strings.TrimSpace(task); task != "" && !seen[task] {
+			seen[task] = true
+			unique = append(unique, task)
+		}
+	}
+	if len(unique) == 0 {
+		return
+	}
+	fmt.Fprintf(w, "%srole check reports changes in:\n", indent)
+	for i, task := range unique {
+		if i == maxReportedChangeTasks {
+			fmt.Fprintf(w, "%s  … and %d more\n", indent, len(unique)-i)
+			break
+		}
+		fmt.Fprintf(w, "%s  - %s\n", indent, task)
+	}
+}
+
+// provisionTaskPrecheck decides whether an existing, running task must be
+// provisioned and, when it must, lists the role tasks that would change.
+func provisionTaskPrecheck(ctx context.Context, w io.Writer, prov provisioner.Provisioner, task *orchestrator.Task, host inventory.Host, config provisioner.ServiceConfig) (bool, error) {
+	inspection, err := provisionInspectChanges(ctx, prov, host, config, nil)
+	if err != nil {
 		return true, err
 	}
-	return wouldChange, nil
+	if !inspection.Changed {
+		fmt.Fprintf(w, "  %s on %s already matches desired install/config/service state; skipping provision\n", task.Name, task.Host)
+		return false, nil
+	}
+	fmt.Fprintf(w, "  %s on %s differs from desired state; converging\n", task.Name, task.Host)
+	writeProvisionChangeTasks(w, "    ", inspection.Tasks)
+	return true, nil
 }
 
 // resolveServiceGRPCAddr resolves a service's gRPC address from the manifest.
@@ -6272,14 +6331,11 @@ func provisionTask(ctx context.Context, task *orchestrator.Task, host inventory.
 		if provisionNeededWithoutPrecheck(beforeState, config.DeferStart) {
 			fmt.Printf("  %s on %s is not running; skipping no-op precheck and provisioning to restore service state\n", task.Name, task.Host)
 		} else {
-			wouldChange, checkErr := provisionWouldChange(ctx, prov, host, config, nil)
+			wouldChange, checkErr := provisionTaskPrecheck(ctx, os.Stdout, prov, task, host, config)
 			if checkErr != nil {
 				return nil, fmt.Errorf("%s precheck failed: %w (use --force to bypass the no-op precheck)", task.Name, checkErr)
 			}
-			if !wouldChange {
-				provisionSkipped = true
-				fmt.Printf("  %s on %s already matches desired install/config/service state; skipping provision\n", task.Name, task.Host)
-			}
+			provisionSkipped = !wouldChange
 		}
 	}
 
@@ -6974,6 +7030,18 @@ func buildServiceEnvVars(task *orchestrator.Task, manifest *inventory.Manifest, 
 		}
 	}
 
+	// One manifest switch opens every webhook dialer to private receivers, so
+	// Bosun and both halves of playback-auth webhooks agree. Later layers
+	// (env files, service config) still override it.
+	if manifest.WebhooksAllowPrivateDestinations() {
+		switch task.Type {
+		case "bosun":
+			env["BOSUN_ALLOW_PRIVATE_DESTINATIONS"] = "true"
+		case "commodore", "foghorn":
+			env["PLAYBACK_WEBHOOK_ALLOW_PRIVATE_DESTINATIONS"] = "true"
+		}
+	}
+
 	// 2. Shared env (preloaded once per provision run from manifest env_files)
 	for k, v := range sharedEnv {
 		env[k] = v
@@ -7160,20 +7228,19 @@ func buildServiceEnvVars(task *orchestrator.Task, manifest *inventory.Manifest, 
 				env["FRAMEWORKS_DECKLOG_TLS_MODE"] = "disabled"
 			}
 		}
-		// Per-cluster Foghorn for the auth webhook. Without this, every
-		// regional gateway resolves `foghorn.internal` to whichever Foghorn
-		// Privateer happens to return, including the wrong-cell one.
-		if env["auth_webhook_url"] == "" {
-			if foghornSvc, ok := foghornForCluster(manifest, task.ClusterID); ok {
-				if hostName, ok := firstServiceHostName(foghornSvc); ok {
-					port := foghornSvc.Port
-					if port == 0 {
-						port = defaultPort("foghorn")
-					}
-					if meshHost := manifestMeshHostname(manifest, hostName); meshHost != "" {
-						env["auth_webhook_url"] = fmt.Sprintf("http://%s:%d/webhooks/livepeer/auth", meshHost, port)
-					}
-				}
+		// Per-cluster Foghorn for the auth webhook. Job tokens are bound to the
+		// gateway's cell, so the global `foghorn.internal` alias (whichever
+		// Foghorn Privateer returns, possibly another cell's) would reject them
+		// as invalid_token. An explicit auth_webhook_url / LIVEPEER_AUTH_WEBHOOK_URL
+		// wins; otherwise a production gateway without a resolvable cell Foghorn
+		// fails provisioning.
+		if strings.TrimSpace(env["auth_webhook_url"]) == "" && strings.TrimSpace(env["LIVEPEER_AUTH_WEBHOOK_URL"]) == "" {
+			authURL, authErr := livepeerGatewayAuthWebhookURL(manifest, task.ClusterID)
+			switch {
+			case authErr == nil:
+				env["auth_webhook_url"] = authURL
+			case !isDevProfile(manifest):
+				return nil, authErr
 			}
 		}
 	}
@@ -8101,6 +8168,8 @@ func normalizeServiceEnvVars(serviceID string, env map[string]string) {
 		normalizeLivepeerEnvVars(env)
 		applyLivepeerGatewayRuntimeDefaults(env)
 		setEnvIfEmpty(env, "auth_webhook_url", "LIVEPEER_AUTH_WEBHOOK_URL")
+		// Reached empty only on a development profile: production resolves the
+		// gateway's cell Foghorn in buildServiceEnvVars or fails.
 		if strings.TrimSpace(env["auth_webhook_url"]) == "" {
 			env["auth_webhook_url"] = defaultLivepeerGatewayAuthWebhookURL
 		}
@@ -8420,6 +8489,28 @@ func foghornForCluster(manifest *inventory.Manifest, clusterID string) (inventor
 		return inventory.ServiceConfig{}, false
 	}
 	return svc, true
+}
+
+// livepeerGatewayAuthWebhookURL returns the auth webhook of the Foghorn serving
+// the gateway's own cluster, addressed by that Foghorn host's mesh name.
+func livepeerGatewayAuthWebhookURL(manifest *inventory.Manifest, clusterID string) (string, error) {
+	foghornSvc, ok := foghornForCluster(manifest, clusterID)
+	if !ok {
+		return "", fmt.Errorf("service livepeer-gateway: no enabled Foghorn serves cluster %q, so its auth webhook cannot be resolved; set auth_webhook_url explicitly", clusterID)
+	}
+	hostName, ok := firstServiceHostName(foghornSvc)
+	if !ok {
+		return "", fmt.Errorf("service livepeer-gateway: the Foghorn serving cluster %q has no host", clusterID)
+	}
+	meshHost := manifestMeshHostname(manifest, hostName)
+	if meshHost == "" {
+		return "", fmt.Errorf("service livepeer-gateway: Foghorn host %q for cluster %q is not a manifest host with a mesh name", hostName, clusterID)
+	}
+	port := foghornSvc.Port
+	if port == 0 {
+		port = defaultPort("foghorn")
+	}
+	return fmt.Sprintf("http://%s:%d/webhooks/livepeer/auth", meshHost, port), nil
 }
 
 func firstServiceHostName(svc inventory.ServiceConfig) (string, bool) {

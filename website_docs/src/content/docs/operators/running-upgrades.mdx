@@ -521,14 +521,50 @@ pre-upgrade host convergence: Privateer on every mesh host, declared Kafka
 The pre-upgrade stage runs on every release, before the first migration. It uses the same roles as
 `cluster provision`: each host renders its desired Privateer or MirrorMaker2 state and runs the
 role's check-mode precheck, so a host that already matches is skipped without a restart, and a
-rerun after a failure resumes where the cluster still differs. Hosts converge one at a time. A
-Privateer restart briefly interrupts that host's mesh DNS, and the stage verifies mesh health
-before it moves on to Kafka. The Kafka step only creates declared topics that do not exist yet;
+rerun after a failure resumes where the cluster still differs. A host that converges lists the role
+tasks its precheck reported as changing. Privateer hosts converge in waves by what they run:
+
+1. **Canary**: one control host alone. Control hosts run Quartermaster, Navigator, Commodore,
+   Purser, Bridge, or a data store (Postgres/YugabyteDB, Kafka brokers or controllers,
+   ClickHouse).
+2. **Control**: the remaining control hosts, one at a time.
+3. **Media**: hosts running Foghorn, Chandler, the Livepeer gateway or signer, Redis, or edge
+   nodes. One host per cell at a time, with cells in parallel.
+4. **Other**: analytics, Decklog, Signalman, Bosun, Lookout, Skipper, Steward, Deckhand, the web
+   apps, and observability. Up to eight hosts at a time.
+
+A host belongs to the most critical wave of anything it runs, and a service the CLI does not
+classify counts as control. Mesh health is verified on each wave's hosts before the next wave
+starts. If a host or its mesh check fails, no further host starts. The error lists the hosts left
+untouched, and the CLI prints the `release apply` command to rerun, which skips hosts that
+already converged. In a parallel wave every output line is prefixed with its host. Privateer's
+DNS socket is held by a systemd socket unit that stays open across Privateer restarts, so a
+restart delays `.internal` lookups instead of failing them. MirrorMaker2 workers converge their config without restarting, and
+every worker with a changed config or binary then restarts together. The Kafka step only creates declared topics that do not exist yet;
 it never reconfigures or restarts a broker or controller. Privateer seeds carry the service names
 both the previous and the target release resolve, so converging them before the service upgrades
 leaves every running binary reachable. `release plan` lists the stage, and
 `release apply --dry-run` runs each host's precheck and reports whether it would install,
 converge, or skip.
+
+Service upgrades keep their dependency order: one service finishes on every replica before the
+next service starts. Within one service, replicas roll by the same classes. A control service
+upgrades one replica at a time, and the first replica is the canary. A media service upgrades one
+replica per cell at a time, with cells in parallel. Any other service upgrades its replicas
+together. The service's `max_unavailable` caps how many replicas are down at once. Every built-in
+default is `1`, so media and other services roll one replica at a time unless the manifest raises
+`update_strategy.max_unavailable` for that service:
+
+```yaml
+services:
+  decklog:
+    hosts: [regional-eu-1, regional-eu-2, regional-eu-3]
+    update_strategy:
+      max_unavailable: 3
+```
+
+Yugabyte keeps its own one-node-at-a-time roll. A failed replica stops the service's rollout
+before any further replica starts, and the release stops there.
 
 Before the first mutation, `release apply` checks that every earlier release is finished: the
 postdeploy migrations of earlier releases must be in every service database and ClickHouse ledger,
@@ -696,7 +732,7 @@ topics the new Signalman reads already exist.
    frameworks cluster release apply --version v0.3.8 --yes
    ```
 
-   The pre-upgrade stage restarts Privateer one host at a time, verifies mesh health, creates
+   The pre-upgrade stage restarts Privateer in waves, verifies mesh health after each, creates
    `lookout.incidents`, and converges MirrorMaker2 one worker at a time. The release then creates
    the `lookout` database, runs expand migrations, upgrades every platform service with Signalman
    ahead of Bridge, installs Lookout, removes Periscope-Ingest from hosts outside the aggregator

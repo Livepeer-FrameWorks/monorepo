@@ -100,9 +100,11 @@ func TestReleaseHostConvergenceOrdersMeshTopicsThenMirrorMaker(t *testing.T) {
 	}
 
 	var out bytes.Buffer
-	writeReleaseHostConvergencePlan(&out, "1. pre-upgrade host convergence", steps)
+	writeReleaseHostConvergencePlan(&out, "1. pre-upgrade host convergence", manifest, steps)
 	for _, line := range []string{
-		"Privateer binary, seed peers, and seed DNS: central-eu-1 -> regional-eu-1 -> regional-us-1",
+		"Privateer binary, seed peers, and seed DNS, in waves (mesh health gates each wave):",
+		"1. canary: regional-eu-1",
+		"2. batch 1 (2 at a time): regional-us-1, central-eu-1",
 		"Kafka topics created when missing, topic config applied (no broker restart): eu-west, us-east",
 		"MirrorMaker2 workers and JMX exporter: regional-eu-1 -> regional-us-1",
 	} {
@@ -126,7 +128,7 @@ func TestReleaseHostConvergenceEmptyWithoutMeshOrKafka(t *testing.T) {
 		t.Fatalf("steps = %+v, want none", steps)
 	}
 	var out bytes.Buffer
-	writeReleaseHostConvergencePlan(&out, "1. pre-upgrade host convergence", nil)
+	writeReleaseHostConvergencePlan(&out, "1. pre-upgrade host convergence", manifest, nil)
 	if !strings.Contains(out.String(), "1. pre-upgrade host convergence: none") {
 		t.Fatalf("plan output = %q", out.String())
 	}

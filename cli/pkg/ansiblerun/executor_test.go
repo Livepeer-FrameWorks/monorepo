@@ -90,6 +90,45 @@ func TestExecutorIncludesOutputTailOnFailure(t *testing.T) {
 	}
 }
 
+type lockedBuffer struct {
+	mu  sync.Mutex
+	buf strings.Builder
+}
+
+func (b *lockedBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Write(p)
+}
+
+func (b *lockedBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.String()
+}
+
+func TestExecutorStreamsToContextOutputWriter(t *testing.T) {
+	dir := t.TempDir()
+	binary := filepath.Join(dir, "ansible-playbook")
+	if err := os.WriteFile(binary, []byte("#!/bin/sh\necho play-output\necho play-error >&2\n"), 0o755); err != nil {
+		t.Fatalf("write fake ansible-playbook: %v", err)
+	}
+
+	var out lockedBuffer
+	ctx := WithOutputWriter(context.Background(), &out)
+	if err := (&Executor{Binary: binary}).Execute(ctx, ExecuteOptions{
+		Playbook:  filepath.Join(dir, "playbook.yml"),
+		Inventory: filepath.Join(dir, "inventory.yml"),
+	}); err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	for _, want := range []string{"play-output", "play-error"} {
+		if !strings.Contains(out.String(), want) {
+			t.Fatalf("context writer missing %q: %q", want, out.String())
+		}
+	}
+}
+
 func TestExecutorIncludesOutputTailWithCustomOutputer(t *testing.T) {
 	dir := t.TempDir()
 	binary := filepath.Join(dir, "ansible-playbook")

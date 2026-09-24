@@ -174,6 +174,7 @@ Read by `api_control/cmd/commodore`.
 | `RESTREAM_ALLOW_PRIVATE_DESTINATIONS` | string |  |  | v0.3.0 | Allows multistream destinations that resolve to private addresses when set to true or 1. |
 | `RESTREAM_ALLOWED_PRIVATE_CIDRS` | string |  |  | v0.3.0 | Comma-separated CIDRs exempted from the private, loopback, and link-local multistream destination block. |
 | `RESTREAM_DENIED_CIDRS` | string |  |  | v0.3.0 | Comma-separated CIDRs never allowed as multistream destinations. Denials win over allowances. |
+| `PLAYBACK_WEBHOOK_ALLOW_PRIVATE_DESTINATIONS` | boolean | `false` |  | v0.3.11 | Lets playback-auth webhook URLs use private (RFC 1918 / ULA) addresses, plain http, and .local or .internal host names, so an isolated staging or development cluster can authorize playback against a receiver on its own network. Loopback, link-local, and cloud metadata addresses stay blocked. Must match Foghorn's setting. Never set it on a cluster that serves untrusted tenants. |
 | `MEDIA_AUTHORITY_SIGNING_KEY_ID` | string |  |  | v0.3.0 | Key ID of the Ed25519 signer for media authority envelopes. Required outside development, together with MEDIA_AUTHORITY_SIGNING_PRIVATE_KEY_PEM_B64. |
 | `MEDIA_AUTHORITY_SIGNING_PRIVATE_KEY_PEM_B64` | string |  | secret | v0.3.0 | Base64-wrapped PKCS#8 Ed25519 private key PEM that signs media authority envelopes. |
 | `MEDIA_AUTHORITY_SEAL_RECIPIENTS` | string |  |  | v0.3.0 | Rendered by the CLI. Maps control-cell IDs to X25519 recipient keys and enables sealed-secret delivery in media authority. |
@@ -733,6 +734,7 @@ Read by `api_balancing/cmd/foghorn`.
 | `FOGHORN_PLATFORM_SHARED_CLUSTERS` | list |  |  | v0.3.0 | Comma-separated cluster IDs whose tenantless nodes may serve any tenant's durable media, in addition to Quartermaster platform-official clusters. |
 | `BRAND_DOMAIN` | string | `frameworks.network` |  | v0.3.0 | Platform root domain for cluster-scoped Foghorn, edge, telemetry, and certificate host names. |
 | `ACME_EMAIL` | string |  |  | v0.3.0 | Contact email sent to edge nodes in their site configuration for ACME certificate issuance. |
+| `PLAYBACK_WEBHOOK_ALLOW_PRIVATE_DESTINATIONS` | boolean | `false` |  | v0.3.11 | Lets playback-auth webhook calls connect to private (RFC 1918 / ULA) addresses, so an isolated staging or development cluster can authorize playback against a receiver on its own network. Loopback, link-local, and cloud metadata addresses stay blocked. Must match Commodore's setting. Never set it on a cluster that serves untrusted tenants. |
 | `FEDERATION_ENABLED` | string | `false` |  | v0.3.0 | Enables cross-cluster federation when exactly true; any other value leaves it off. Requires Quartermaster, an active platform-official cluster, Redis, and authenticated TLS. |
 | `FEDERATION_ALLOW_INSECURE_DEV` | boolean | `false` |  | v0.3.0 | Allows federation together with GRPC_ALLOW_INSECURE. Isolated development only. |
 | `CPU_WEIGHT` | integer | `500` |  | v0.3.0 | Load balancer CPU score weight. The five balancer weights apply only when all are greater than 0. |
