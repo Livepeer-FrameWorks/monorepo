@@ -535,6 +535,23 @@ func runReplayKeepsID(t *testing.T, db *sql.DB) {
 	if err != nil || done.Status != ledger.DeliverySucceeded || len(attempts) != 2 || attempts[1].AttemptNumber != 2 {
 		t.Fatalf("after replay: %+v attempts %+v, %v", done, attempts, err)
 	}
+	srv := &grpcserver.Server{Store: store}
+	asTenant := context.WithValue(ctx, ctxkeys.KeyTenantID, tenant)
+	batch, err := srv.ListAttemptsForDeliveries(asTenant, &bosunpb.ListAttemptsForDeliveriesRequest{
+		DeliveryIds: []string{deliveryID, "not-a-uuid", uuid.NewString(), deliveryID},
+	})
+	if err != nil || len(batch.GetDeliveries()) != 1 || batch.GetDeliveries()[0].GetDeliveryId() != deliveryID {
+		t.Fatalf("batched attempts = %+v, %v; want only the one delivery with attempts", batch.GetDeliveries(), err)
+	}
+	got := batch.GetDeliveries()[0].GetAttempts()
+	if len(got) != 2 || int(got[0].GetAttemptNumber()) != attempts[0].AttemptNumber || got[1].GetId() != attempts[1].ID {
+		t.Fatalf("batched attempts = %+v, want %+v oldest first", got, attempts)
+	}
+	asOther := context.WithValue(ctx, ctxkeys.KeyTenantID, newTenant())
+	other, err := srv.ListAttemptsForDeliveries(asOther, &bosunpb.ListAttemptsForDeliveriesRequest{DeliveryIds: []string{deliveryID}})
+	if err != nil || len(other.GetDeliveries()) != 0 {
+		t.Fatalf("another tenant reads %+v, %v; want no attempts", other.GetDeliveries(), err)
+	}
 
 	// Range replay: 1001 failed deliveries in the range, one outside it.
 	if _, err := db.Exec(`

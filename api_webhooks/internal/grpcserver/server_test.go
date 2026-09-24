@@ -123,6 +123,7 @@ func TestEveryCallRequiresATenant(t *testing.T) {
 			"Test":        errOf(s.TestWebhookEndpoint(ctx, &bosunpb.TestWebhookEndpointRequest{})),
 			"Deliveries":  errOf(s.ListWebhookDeliveries(ctx, &bosunpb.ListWebhookDeliveriesRequest{})),
 			"Delivery":    errOf(s.GetWebhookDelivery(ctx, &bosunpb.GetWebhookDeliveryRequest{})),
+			"Attempts":    errOf(s.ListAttemptsForDeliveries(ctx, &bosunpb.ListAttemptsForDeliveriesRequest{})),
 			"Replay":      errOf(s.ReplayWebhookDelivery(ctx, &bosunpb.ReplayWebhookDeliveryRequest{})),
 			"ReplayRange": errOf(s.ReplayWebhookDeliveries(ctx, &bosunpb.ReplayWebhookDeliveriesRequest{})),
 		}
@@ -131,5 +132,18 @@ func TestEveryCallRequiresATenant(t *testing.T) {
 				t.Errorf("%s without a tenant = %v, want PermissionDenied", name, err)
 			}
 		}
+	}
+}
+
+// An oversized batch is refused before the store, which is nil here.
+func TestListAttemptsForDeliveriesBoundsTheBatch(t *testing.T) {
+	ctx := context.WithValue(context.Background(), ctxkeys.KeyTenantID, "9dd90a31-eef1-4a0c-919c-606142491c92")
+	ids := make([]string, 501)
+	for i := range ids {
+		ids[i] = "9dd90a31-eef1-4a0c-919c-606142491c92"
+	}
+	_, err := (&Server{}).ListAttemptsForDeliveries(ctx, &bosunpb.ListAttemptsForDeliveriesRequest{DeliveryIds: ids})
+	if status.Code(err) != codes.InvalidArgument {
+		t.Fatalf("501 delivery IDs = %v, want InvalidArgument", err)
 	}
 }

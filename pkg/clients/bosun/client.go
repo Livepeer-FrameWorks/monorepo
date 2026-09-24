@@ -183,6 +183,12 @@ func (c *GRPCClient) GetWebhookDelivery(ctx context.Context, deliveryID string) 
 	return call(c, ctx, c.timeout, c.client.GetWebhookDelivery, &bosunpb.GetWebhookDeliveryRequest{DeliveryId: deliveryID})
 }
 
+// ListAttemptsForDeliveries returns the attempts of up to 500 deliveries,
+// oldest first per delivery.
+func (c *GRPCClient) ListAttemptsForDeliveries(ctx context.Context, deliveryIDs []string) (*bosunpb.ListAttemptsForDeliveriesResponse, error) {
+	return call(c, ctx, c.timeout, c.client.ListAttemptsForDeliveries, &bosunpb.ListAttemptsForDeliveriesRequest{DeliveryIds: deliveryIDs})
+}
+
 // ReplayWebhookDelivery sends a finished delivery again under the same ID.
 func (c *GRPCClient) ReplayWebhookDelivery(ctx context.Context, deliveryID string) (*bosunpb.WebhookDelivery, error) {
 	return call(c, ctx, c.timeout, c.client.ReplayWebhookDelivery, &bosunpb.ReplayWebhookDeliveryRequest{DeliveryId: deliveryID})

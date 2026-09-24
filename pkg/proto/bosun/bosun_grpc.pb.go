@@ -30,6 +30,7 @@ const (
 	BosunService_TestWebhookEndpoint_FullMethodName         = "/bosun.BosunService/TestWebhookEndpoint"
 	BosunService_ListWebhookDeliveries_FullMethodName       = "/bosun.BosunService/ListWebhookDeliveries"
 	BosunService_GetWebhookDelivery_FullMethodName          = "/bosun.BosunService/GetWebhookDelivery"
+	BosunService_ListAttemptsForDeliveries_FullMethodName   = "/bosun.BosunService/ListAttemptsForDeliveries"
 	BosunService_ReplayWebhookDelivery_FullMethodName       = "/bosun.BosunService/ReplayWebhookDelivery"
 	BosunService_ReplayWebhookDeliveries_FullMethodName     = "/bosun.BosunService/ReplayWebhookDeliveries"
 )
@@ -68,6 +69,9 @@ type BosunServiceClient interface {
 	TestWebhookEndpoint(ctx context.Context, in *TestWebhookEndpointRequest, opts ...grpc.CallOption) (*TestWebhookEndpointResponse, error)
 	ListWebhookDeliveries(ctx context.Context, in *ListWebhookDeliveriesRequest, opts ...grpc.CallOption) (*ListWebhookDeliveriesResponse, error)
 	GetWebhookDelivery(ctx context.Context, in *GetWebhookDeliveryRequest, opts ...grpc.CallOption) (*GetWebhookDeliveryResponse, error)
+	// Returns the attempts of up to 500 deliveries in one call, for listings
+	// that show each delivery's attempt history.
+	ListAttemptsForDeliveries(ctx context.Context, in *ListAttemptsForDeliveriesRequest, opts ...grpc.CallOption) (*ListAttemptsForDeliveriesResponse, error)
 	// Sends a finished event delivery again under the same ID. The endpoint
 	// must be enabled; a pending delivery or a test delivery is
 	// FAILED_PRECONDITION.
@@ -196,6 +200,16 @@ func (c *bosunServiceClient) GetWebhookDelivery(ctx context.Context, in *GetWebh
 	return out, nil
 }
 
+func (c *bosunServiceClient) ListAttemptsForDeliveries(ctx context.Context, in *ListAttemptsForDeliveriesRequest, opts ...grpc.CallOption) (*ListAttemptsForDeliveriesResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ListAttemptsForDeliveriesResponse)
+	err := c.cc.Invoke(ctx, BosunService_ListAttemptsForDeliveries_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (c *bosunServiceClient) ReplayWebhookDelivery(ctx context.Context, in *ReplayWebhookDeliveryRequest, opts ...grpc.CallOption) (*WebhookDelivery, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(WebhookDelivery)
@@ -250,6 +264,9 @@ type BosunServiceServer interface {
 	TestWebhookEndpoint(context.Context, *TestWebhookEndpointRequest) (*TestWebhookEndpointResponse, error)
 	ListWebhookDeliveries(context.Context, *ListWebhookDeliveriesRequest) (*ListWebhookDeliveriesResponse, error)
 	GetWebhookDelivery(context.Context, *GetWebhookDeliveryRequest) (*GetWebhookDeliveryResponse, error)
+	// Returns the attempts of up to 500 deliveries in one call, for listings
+	// that show each delivery's attempt history.
+	ListAttemptsForDeliveries(context.Context, *ListAttemptsForDeliveriesRequest) (*ListAttemptsForDeliveriesResponse, error)
 	// Sends a finished event delivery again under the same ID. The endpoint
 	// must be enabled; a pending delivery or a test delivery is
 	// FAILED_PRECONDITION.
@@ -300,6 +317,9 @@ func (UnimplementedBosunServiceServer) ListWebhookDeliveries(context.Context, *L
 }
 func (UnimplementedBosunServiceServer) GetWebhookDelivery(context.Context, *GetWebhookDeliveryRequest) (*GetWebhookDeliveryResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method GetWebhookDelivery not implemented")
+}
+func (UnimplementedBosunServiceServer) ListAttemptsForDeliveries(context.Context, *ListAttemptsForDeliveriesRequest) (*ListAttemptsForDeliveriesResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ListAttemptsForDeliveries not implemented")
 }
 func (UnimplementedBosunServiceServer) ReplayWebhookDelivery(context.Context, *ReplayWebhookDeliveryRequest) (*WebhookDelivery, error) {
 	return nil, status.Error(codes.Unimplemented, "method ReplayWebhookDelivery not implemented")
@@ -526,6 +546,24 @@ func _BosunService_GetWebhookDelivery_Handler(srv interface{}, ctx context.Conte
 	return interceptor(ctx, in, info, handler)
 }
 
+func _BosunService_ListAttemptsForDeliveries_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ListAttemptsForDeliveriesRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(BosunServiceServer).ListAttemptsForDeliveries(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: BosunService_ListAttemptsForDeliveries_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(BosunServiceServer).ListAttemptsForDeliveries(ctx, req.(*ListAttemptsForDeliveriesRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _BosunService_ReplayWebhookDelivery_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(ReplayWebhookDeliveryRequest)
 	if err := dec(in); err != nil {
@@ -612,6 +650,10 @@ var BosunService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "GetWebhookDelivery",
 			Handler:    _BosunService_GetWebhookDelivery_Handler,
+		},
+		{
+			MethodName: "ListAttemptsForDeliveries",
+			Handler:    _BosunService_ListAttemptsForDeliveries_Handler,
 		},
 		{
 			MethodName: "ReplayWebhookDelivery",

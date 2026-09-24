@@ -37,6 +37,9 @@ service BosunService {
   rpc TestWebhookEndpoint(TestWebhookEndpointRequest) returns (TestWebhookEndpointResponse);
   rpc ListWebhookDeliveries(ListWebhookDeliveriesRequest) returns (ListWebhookDeliveriesResponse);
   rpc GetWebhookDelivery(GetWebhookDeliveryRequest) returns (GetWebhookDeliveryResponse);
+  // Returns the attempts of up to 500 deliveries in one call, for listings
+  // that show each delivery's attempt history.
+  rpc ListAttemptsForDeliveries(ListAttemptsForDeliveriesRequest) returns (ListAttemptsForDeliveriesResponse);
   // Sends a finished event delivery again under the same ID. The endpoint
   // must be enabled; a pending delivery or a test delivery is
   // FAILED_PRECONDITION.
@@ -234,6 +237,22 @@ message GetWebhookDeliveryResponse {
   WebhookDelivery delivery = 1;
   // Oldest first.
   repeated WebhookDeliveryAttempt attempts = 2;
+}
+
+message ListAttemptsForDeliveriesRequest {
+  // At most 500. IDs of another tenant's deliveries return no attempts.
+  repeated string delivery_ids = 1;
+}
+
+message DeliveryAttempts {
+  string delivery_id = 1;
+  // Oldest first.
+  repeated WebhookDeliveryAttempt attempts = 2;
+}
+
+message ListAttemptsForDeliveriesResponse {
+  // One entry per requested delivery that has attempts.
+  repeated DeliveryAttempts deliveries = 1;
 }
 
 message ReplayWebhookDeliveryRequest {

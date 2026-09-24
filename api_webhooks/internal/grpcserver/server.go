@@ -378,6 +378,36 @@ func (s *Server) GetWebhookDelivery(ctx context.Context, req *bosunpb.GetWebhook
 	return resp, nil
 }
 
+// ListAttemptsForDeliveries returns the attempts of several deliveries of
+// the calling tenant.
+func (s *Server) ListAttemptsForDeliveries(ctx context.Context, req *bosunpb.ListAttemptsForDeliveriesRequest) (*bosunpb.ListAttemptsForDeliveriesResponse, error) {
+	tenantID, err := tenantFromContext(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if len(req.GetDeliveryIds()) > pagination.MaxLimit {
+		return nil, status.Errorf(codes.InvalidArgument, "at most %d delivery IDs per call", pagination.MaxLimit)
+	}
+	byDelivery, err := s.Store.ListAttemptsForDeliveries(ctx, tenantID, req.GetDeliveryIds())
+	if err != nil {
+		return nil, s.toStatus(err)
+	}
+	resp := &bosunpb.ListAttemptsForDeliveriesResponse{}
+	for _, id := range req.GetDeliveryIds() {
+		attempts, ok := byDelivery[id]
+		if !ok {
+			continue
+		}
+		delete(byDelivery, id)
+		entry := &bosunpb.DeliveryAttempts{DeliveryId: id}
+		for _, a := range attempts {
+			entry.Attempts = append(entry.Attempts, attemptProto(a))
+		}
+		resp.Deliveries = append(resp.Deliveries, entry)
+	}
+	return resp, nil
+}
+
 // ReplayWebhookDelivery replays one delivery.
 func (s *Server) ReplayWebhookDelivery(ctx context.Context, req *bosunpb.ReplayWebhookDeliveryRequest) (*bosunpb.WebhookDelivery, error) {
 	tenantID, err := tenantForWrite(ctx)

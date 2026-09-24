@@ -21,6 +21,7 @@ type Interface interface {
 	TestWebhookEndpoint(ctx context.Context, endpointID string) (*bosunpb.TestWebhookEndpointResponse, error)
 	ListWebhookDeliveries(ctx context.Context, req *bosunpb.ListWebhookDeliveriesRequest) (*bosunpb.ListWebhookDeliveriesResponse, error)
 	GetWebhookDelivery(ctx context.Context, deliveryID string) (*bosunpb.GetWebhookDeliveryResponse, error)
+	ListAttemptsForDeliveries(ctx context.Context, deliveryIDs []string) (*bosunpb.ListAttemptsForDeliveriesResponse, error)
 	ReplayWebhookDelivery(ctx context.Context, deliveryID string) (*bosunpb.WebhookDelivery, error)
 	ReplayWebhookDeliveries(ctx context.Context, req *bosunpb.ReplayWebhookDeliveriesRequest) (*bosunpb.ReplayWebhookDeliveriesResponse, error)
 }

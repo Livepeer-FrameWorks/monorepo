@@ -583,6 +583,49 @@ func (s *Store) GetDelivery(ctx context.Context, tenantID, deliveryID string) (D
 	return d, attempts, err
 }
 
+// ListAttemptsForDeliveries returns the attempts of the tenant's deliveries,
+// keyed by delivery ID and oldest first. IDs that are not UUIDs, belong to
+// another tenant or have no attempts are absent from the map.
+func (s *Store) ListAttemptsForDeliveries(ctx context.Context, tenantID string, deliveryIDs []string) (map[string][]Attempt, error) {
+	ids := make([]string, 0, len(deliveryIDs))
+	seen := make(map[string]struct{}, len(deliveryIDs))
+	for _, id := range deliveryIDs {
+		if _, err := uuid.Parse(id); err != nil {
+			continue
+		}
+		if _, dup := seen[id]; dup {
+			continue
+		}
+		seen[id] = struct{}{}
+		ids = append(ids, id)
+	}
+	out := make(map[string][]Attempt, len(ids))
+	if len(ids) == 0 {
+		return out, nil
+	}
+	rows, err := s.DB.QueryContext(ctx, `
+		SELECT delivery_id::text, id, attempt_number, status_code, error_class, latency_ms, response_excerpt, attempted_at
+		FROM bosun.webhook_delivery_attempts
+		WHERE tenant_id = $1 AND delivery_id = ANY((($2)::text)::uuid[])
+		ORDER BY delivery_id, attempted_at, attempt_number`, tenantID, arrayLiteral(ids))
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+	for rows.Next() {
+		var (
+			deliveryID string
+			a          Attempt
+		)
+		if err := rows.Scan(&deliveryID, &a.ID, &a.AttemptNumber, &a.StatusCode, &a.ErrorClass, &a.LatencyMS, &a.ResponseExcerpt, &a.AttemptedAt); err != nil {
+			return nil, err
+		}
+		a.AttemptedAt = a.AttemptedAt.UTC()
+		out[deliveryID] = append(out[deliveryID], a)
+	}
+	return out, rows.Err()
+}
+
 // DeliveryFilter selects deliveries for ListDeliveries.
 type DeliveryFilter struct {
 	EndpointID    string
