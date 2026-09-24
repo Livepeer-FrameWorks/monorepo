@@ -294,10 +294,6 @@ export type CreateStreamKeyInput = {
   name: string;
 };
 
-/**
- * Input for initiating a multipart VOD upload.
- * Returns presigned S3 URLs for uploading file parts.
- */
 export type CreateVodUploadInput = {
   /** MIME type (video/mp4, video/webm, etc.). Auto-detected if omitted. */
   contentType?: string | null | undefined;
@@ -434,6 +430,27 @@ export type EventSuspensionReason =
   | 'SUSPENSION_REASON_POLICY'
   | 'SUSPENSION_REASON_UNSPECIFIED'
   | '%future added value';
+
+/**
+ * Input for initiating a multipart VOD upload.
+ * Returns presigned S3 URLs for uploading file parts.
+ */
+export type ImportVodAssetInput = {
+  /** Optional description for the asset. */
+  description?: string | null | undefined;
+  /**
+   * Filename to store the video under. Required when the URL path does not end
+   * in a supported video extension (mp4, mov, mkv, webm, ts).
+   */
+  filename?: string | null | undefined;
+  /** Optional display title for the asset. */
+  title?: string | null | undefined;
+  /**
+   * Source URL, https or http. It must be publicly reachable and support HTTP
+   * range requests; private and internal addresses are refused.
+   */
+  url: string;
+};
 
 export type IncidentEventKind =
   | 'ACKNOWLEDGED'
@@ -801,6 +818,11 @@ export type PlaybackJwtPolicyInput = {
 };
 
 export type PlaybackPolicyInput = {
+  /**
+   * JWT and WEBHOOK only: sites allowed to embed the content, each `*` or
+   * `scheme://host[:port]` (at most 50). Omit or empty for no restriction.
+   */
+  allowedOrigins?: Array<string> | null | undefined;
   /** Required when type == JWT. */
   jwt?: PlaybackJwtPolicyInput | null | undefined;
   type: PlaybackPolicyType;
@@ -815,6 +837,12 @@ export type PlaybackPolicyType =
   | '%future added value';
 
 export type PlaybackWebhookPolicyInput = {
+  /**
+   * A JSON object (at most 4 KiB) sent as `context` in every access request,
+   * e.g. `{"courseId": "algebra-101"}`, so the endpoint can decide without its
+   * own lookup.
+   */
+  context?: unknown;
   /**
    * HMAC-SHA256 secret used to sign outbound webhook bodies. Write-only:
    * persisted via field-level encryption and never returned in queries.
@@ -1099,7 +1127,11 @@ export type TestPlaybackAccessInput = {
    */
   fireWebhook?: boolean | null | undefined;
   internalName?: string | null | undefined;
+  /** Origin header to test the policy's allowed origins against. */
+  origin?: string | null | undefined;
   playbackId?: string | null | undefined;
+  /** Referer header, used when origin is empty. */
+  referer?: string | null | undefined;
   requestUrl?: string | null | undefined;
   sessionId?: string | null | undefined;
   viewerIp?: string | null | undefined;
@@ -1315,14 +1347,16 @@ export type EventArtifactFieldsFragment = { artifactId: string, kind: EventArtif
 export type EventMoneyFieldsFragment = { amountMinor: number, currency: string };
 
 /** Per-playback-object access policy. Foghorn reads this in the USER_NEW trigger handler; the requiresAuth marker (on the playback object itself) gates whether the full policy is fetched at all. */
-export type PlaybackPolicyFieldsFragment = { type: PlaybackPolicyType, /** JWT-policy details, populated when type == JWT. */
+export type PlaybackPolicyFieldsFragment = { type: PlaybackPolicyType, /** Sites allowed to embed the content, as normalized `scheme://host[:port]` origins; `*` allows any. Empty = no restriction. A browser viewer whose Origin (or Referer) is not listed is denied. */
+allowedOrigins: Array<string>, /** JWT-policy details, populated when type == JWT. */
 jwt: { /** Allowed signing key IDs. Empty = any active tenant key. */
 allowedKids: Array<string>, /** If set, the viewer JWT's `aud` claim must contain at least one of these. */
 requiredAudience: Array<string>, /** Required claim constraints. Each value is the JSON-encoded representation of the expected claim value (so callers can require strings, numbers, booleans, or arrays consistently). Empty = no claim check. */
 requiredClaimsJson: Array<{ name: string, jsonValue: string }> } | null, /** Webhook-policy details, populated when type == WEBHOOK. Secret is masked. */
 webhook: { url: string, /** Outbound POST timeout in milliseconds. Capped server-side at 10000. */
 timeoutMs: number, /** Always 'redacted' on read; the actual secret is fieldcrypt-encrypted at rest. */
-secretMasked: string } | null };
+secretMasked: string, /** Your JSON object, sent as `context` in every access request to the URL. Null when unset. */
+context: unknown } | null };
 
 /** A live stream configuration with real-time operational metrics. Streams are the core entity for broadcasting and viewing live content. */
 export type StreamFieldsFragment = { __typename: 'Stream', /** Global unique identifier for Relay compatibility. */
@@ -1343,14 +1377,16 @@ pullSource: { /** Redacted upstream URI with credentials removed. */
 sourceUriRedacted: string, /** Whether the media plane may pull from the source. */
 enabled: boolean, /** Eligibility class: public or private. */
 class: string } | null, /** Playback access policy. null/PUBLIC = anyone with the playbackId can watch. */
-playbackPolicy: { type: PlaybackPolicyType, /** JWT-policy details, populated when type == JWT. */
+playbackPolicy: { type: PlaybackPolicyType, /** Sites allowed to embed the content, as normalized `scheme://host[:port]` origins; `*` allows any. Empty = no restriction. A browser viewer whose Origin (or Referer) is not listed is denied. */
+allowedOrigins: Array<string>, /** JWT-policy details, populated when type == JWT. */
 jwt: { /** Allowed signing key IDs. Empty = any active tenant key. */
 allowedKids: Array<string>, /** If set, the viewer JWT's `aud` claim must contain at least one of these. */
 requiredAudience: Array<string>, /** Required claim constraints. Each value is the JSON-encoded representation of the expected claim value (so callers can require strings, numbers, booleans, or arrays consistently). Empty = no claim check. */
 requiredClaimsJson: Array<{ name: string, jsonValue: string }> } | null, /** Webhook-policy details, populated when type == WEBHOOK. Secret is masked. */
 webhook: { url: string, /** Outbound POST timeout in milliseconds. Capped server-side at 10000. */
 timeoutMs: number, /** Always 'redacted' on read; the actual secret is fieldcrypt-encrypted at rest. */
-secretMasked: string } | null } | null, /** Real-time operational metrics from the data plane. Includes viewer counts, quality metrics, and throughput data. Lazily loaded from ClickHouse analytics. */
+secretMasked: string, /** Your JSON object, sent as `context` in every access request to the URL. Null when unset. */
+context: unknown } | null } | null, /** Real-time operational metrics from the data plane. Includes viewer counts, quality metrics, and throughput data. Lazily loaded from ClickHouse analytics. */
 metrics: { /** Current lifecycle status of the stream (OFFLINE, CONNECTING, LIVE, etc.). */
 status: StreamStatus, /** Whether the stream is currently broadcasting. */
 isLive: boolean, /** Number of viewers currently watching. */
@@ -1387,14 +1423,16 @@ createdAt: string | null, /** When the clip was last updated. */
 updatedAt: string | null, /** When the clip will be auto-deleted. */
 expiresAt: string | null, /** Whether the clip has passed its retention date (expiresAt < now). */
 isExpired: boolean, /** Playback access policy snapshotted at clip creation. null/PUBLIC means anyone with the playbackId can watch. Independent from the source stream's policy after creation — flipping the source stream's policy does not affect already-shared clip URLs. */
-playbackPolicy: { type: PlaybackPolicyType, /** JWT-policy details, populated when type == JWT. */
+playbackPolicy: { type: PlaybackPolicyType, /** Sites allowed to embed the content, as normalized `scheme://host[:port]` origins; `*` allows any. Empty = no restriction. A browser viewer whose Origin (or Referer) is not listed is denied. */
+allowedOrigins: Array<string>, /** JWT-policy details, populated when type == JWT. */
 jwt: { /** Allowed signing key IDs. Empty = any active tenant key. */
 allowedKids: Array<string>, /** If set, the viewer JWT's `aud` claim must contain at least one of these. */
 requiredAudience: Array<string>, /** Required claim constraints. Each value is the JSON-encoded representation of the expected claim value (so callers can require strings, numbers, booleans, or arrays consistently). Empty = no claim check. */
 requiredClaimsJson: Array<{ name: string, jsonValue: string }> } | null, /** Webhook-policy details, populated when type == WEBHOOK. Secret is masked. */
 webhook: { url: string, /** Outbound POST timeout in milliseconds. Capped server-side at 10000. */
 timeoutMs: number, /** Always 'redacted' on read; the actual secret is fieldcrypt-encrypted at rest. */
-secretMasked: string } | null } | null, /** Server-resolved Chandler URLs for the clip's poster and sprite thumbnails. Null until Foghorn confirms the thumbnail upload. */
+secretMasked: string, /** Your JSON object, sent as `context` in every access request to the URL. Null when unset. */
+context: unknown } | null } | null, /** Server-resolved Chandler URLs for the clip's poster and sprite thumbnails. Null until Foghorn confirms the thumbnail upload. */
 thumbnailAssets: { posterUrl: string, spriteVttUrl: string, spriteJpgUrl: string, assetKey: string } | null, /** Resolved retention horizon with the source of the decision (per-asset override → per-stream override → tenant default → tier entitlement). Null when retention_until is unset (infinite). */
 effectiveRetention: { /** Days from now until the artifact is scheduled for deletion. 0 = no auto-expire (retentionUntil is null). */
 retentionDays: number, /** Scheduled deletion timestamp. Null when the artifact has no horizon (kept forever). */
@@ -1427,14 +1465,16 @@ createdAt: string, /** When the asset was last modified. */
 updatedAt: string, /** Optional expiration time for auto-deletion. */
 expiresAt: string | null, /** Error message if processing failed. */
 errorMessage: string | null, /** Playback access policy. null/PUBLIC = anyone with the playbackId can watch. */
-playbackPolicy: { type: PlaybackPolicyType, /** JWT-policy details, populated when type == JWT. */
+playbackPolicy: { type: PlaybackPolicyType, /** Sites allowed to embed the content, as normalized `scheme://host[:port]` origins; `*` allows any. Empty = no restriction. A browser viewer whose Origin (or Referer) is not listed is denied. */
+allowedOrigins: Array<string>, /** JWT-policy details, populated when type == JWT. */
 jwt: { /** Allowed signing key IDs. Empty = any active tenant key. */
 allowedKids: Array<string>, /** If set, the viewer JWT's `aud` claim must contain at least one of these. */
 requiredAudience: Array<string>, /** Required claim constraints. Each value is the JSON-encoded representation of the expected claim value (so callers can require strings, numbers, booleans, or arrays consistently). Empty = no claim check. */
 requiredClaimsJson: Array<{ name: string, jsonValue: string }> } | null, /** Webhook-policy details, populated when type == WEBHOOK. Secret is masked. */
 webhook: { url: string, /** Outbound POST timeout in milliseconds. Capped server-side at 10000. */
 timeoutMs: number, /** Always 'redacted' on read; the actual secret is fieldcrypt-encrypted at rest. */
-secretMasked: string } | null } | null, /** Server-resolved Chandler URLs for the VOD's poster and sprite thumbnails. Null until Foghorn confirms the thumbnail upload. */
+secretMasked: string, /** Your JSON object, sent as `context` in every access request to the URL. Null when unset. */
+context: unknown } | null } | null, /** Server-resolved Chandler URLs for the VOD's poster and sprite thumbnails. Null until Foghorn confirms the thumbnail upload. */
 thumbnailAssets: { posterUrl: string, spriteVttUrl: string, spriteJpgUrl: string, assetKey: string } | null, /** Resolved retention horizon with the source of the decision (per-asset override → per-stream override → tenant default → tier entitlement). Null while the asset's retention_until column is unset (infinite). */
 effectiveRetention: { /** Days from now until the artifact is scheduled for deletion. 0 = no auto-expire (retentionUntil is null). */
 retentionDays: number, /** Scheduled deletion timestamp. Null when the artifact has no horizon (kept forever). */
@@ -1522,7 +1562,8 @@ primaryBitrate: number | null, /** Whether the stream has active quality issues.
 hasIssues: boolean | null, /** Human-readable description of current issues. */
 issuesDescription: string | null } | null, /** Configured multistream push targets for this stream. */
 pushTargets: Array<{ id: string, streamId: string, platform: string | null, name: string, targetUri: string, isEnabled: boolean, status: string, lastError: string | null, reasonCode: string | null, lastPushedAt: string | null, createdAt: string }>, /** Playback access policy. null/PUBLIC = anyone with the playbackId can watch. */
-playbackPolicy: { type: PlaybackPolicyType } | null, /** Server-resolved Chandler URLs for the stream's poster and sprite thumbnails. Derived from active_ingest_cluster_id + stream_id at SELECT time. Null when the stream has never been live; the poster.jpg 404s until Helmsman uploads its first frame, which the player's fallback chain handles. */
+playbackPolicy: { type: PlaybackPolicyType, /** Sites allowed to embed the content, as normalized `scheme://host[:port]` origins; `*` allows any. Empty = no restriction. A browser viewer whose Origin (or Referer) is not listed is denied. */
+allowedOrigins: Array<string> } | null, /** Server-resolved Chandler URLs for the stream's poster and sprite thumbnails. Derived from active_ingest_cluster_id + stream_id at SELECT time. Null when the stream has never been live; the poster.jpg 404s until Helmsman uploads its first frame, which the player's fallback chain handles. */
 thumbnailAssets: { posterUrl: string, spriteVttUrl: string, spriteJpgUrl: string, assetKey: string } | null, /** Per-stream retention overrides for DVR and clips. Null when the stream has no overrides set (inherits the tenant default). VOD uploads aren't stream-bound, so they don't appear here. */
 retentionOverrides: { streamId: string, /** Null = no override (inherit tenant default). 0 = no auto-expire. */
 dvrRetentionDaysOverride: number | null, clipRetentionDaysOverride: number | null } | null } | null };
@@ -1576,7 +1617,8 @@ primaryBitrate: number | null, /** Whether the stream has active quality issues.
 hasIssues: boolean | null, /** Human-readable description of current issues. */
 issuesDescription: string | null } | null, /** Configured multistream push targets for this stream. */
 pushTargets: Array<{ id: string, streamId: string, platform: string | null, name: string, targetUri: string, isEnabled: boolean, status: string, lastError: string | null, reasonCode: string | null, lastPushedAt: string | null, createdAt: string }>, /** Playback access policy. null/PUBLIC = anyone with the playbackId can watch. */
-playbackPolicy: { type: PlaybackPolicyType } | null, /** Server-resolved Chandler URLs for the stream's poster and sprite thumbnails. Derived from active_ingest_cluster_id + stream_id at SELECT time. Null when the stream has never been live; the poster.jpg 404s until Helmsman uploads its first frame, which the player's fallback chain handles. */
+playbackPolicy: { type: PlaybackPolicyType, /** Sites allowed to embed the content, as normalized `scheme://host[:port]` origins; `*` allows any. Empty = no restriction. A browser viewer whose Origin (or Referer) is not listed is denied. */
+allowedOrigins: Array<string> } | null, /** Server-resolved Chandler URLs for the stream's poster and sprite thumbnails. Derived from active_ingest_cluster_id + stream_id at SELECT time. Null when the stream has never been live; the poster.jpg 404s until Helmsman uploads its first frame, which the player's fallback chain handles. */
 thumbnailAssets: { posterUrl: string, spriteVttUrl: string, spriteJpgUrl: string, assetKey: string } | null, /** Per-stream retention overrides for DVR and clips. Null when the stream has no overrides set (inherits the tenant default). VOD uploads aren't stream-bound, so they don't appear here. */
 retentionOverrides: { streamId: string, /** Null = no override (inherit tenant default). 0 = no auto-expire. */
 dvrRetentionDaysOverride: number | null, clipRetentionDaysOverride: number | null } | null } | null };
@@ -1630,7 +1672,8 @@ primaryBitrate: number | null, /** Whether the stream has active quality issues.
 hasIssues: boolean | null, /** Human-readable description of current issues. */
 issuesDescription: string | null } | null, /** Configured multistream push targets for this stream. */
 pushTargets: Array<{ id: string, streamId: string, platform: string | null, name: string, targetUri: string, isEnabled: boolean, status: string, lastError: string | null, reasonCode: string | null, lastPushedAt: string | null, createdAt: string }>, /** Playback access policy. null/PUBLIC = anyone with the playbackId can watch. */
-playbackPolicy: { type: PlaybackPolicyType } | null, /** Server-resolved Chandler URLs for the stream's poster and sprite thumbnails. Derived from active_ingest_cluster_id + stream_id at SELECT time. Null when the stream has never been live; the poster.jpg 404s until Helmsman uploads its first frame, which the player's fallback chain handles. */
+playbackPolicy: { type: PlaybackPolicyType, /** Sites allowed to embed the content, as normalized `scheme://host[:port]` origins; `*` allows any. Empty = no restriction. A browser viewer whose Origin (or Referer) is not listed is denied. */
+allowedOrigins: Array<string> } | null, /** Server-resolved Chandler URLs for the stream's poster and sprite thumbnails. Derived from active_ingest_cluster_id + stream_id at SELECT time. Null when the stream has never been live; the poster.jpg 404s until Helmsman uploads its first frame, which the player's fallback chain handles. */
 thumbnailAssets: { posterUrl: string, spriteVttUrl: string, spriteJpgUrl: string, assetKey: string } | null, /** Per-stream retention overrides for DVR and clips. Null when the stream has no overrides set (inherits the tenant default). VOD uploads aren't stream-bound, so they don't appear here. */
 retentionOverrides: { streamId: string, /** Null = no override (inherit tenant default). 0 = no auto-expire. */
 dvrRetentionDaysOverride: number | null, clipRetentionDaysOverride: number | null } | null } | null };
@@ -1879,7 +1922,8 @@ primaryBitrate: number | null, /** Whether the stream has active quality issues.
 hasIssues: boolean | null, /** Human-readable description of current issues. */
 issuesDescription: string | null } | null, /** Configured multistream push targets for this stream. */
 pushTargets: Array<{ id: string, streamId: string, platform: string | null, name: string, targetUri: string, isEnabled: boolean, status: string, lastError: string | null, reasonCode: string | null, lastPushedAt: string | null, createdAt: string }>, /** Playback access policy. null/PUBLIC = anyone with the playbackId can watch. */
-playbackPolicy: { type: PlaybackPolicyType } | null, /** Server-resolved Chandler URLs for the stream's poster and sprite thumbnails. Derived from active_ingest_cluster_id + stream_id at SELECT time. Null when the stream has never been live; the poster.jpg 404s until Helmsman uploads its first frame, which the player's fallback chain handles. */
+playbackPolicy: { type: PlaybackPolicyType, /** Sites allowed to embed the content, as normalized `scheme://host[:port]` origins; `*` allows any. Empty = no restriction. A browser viewer whose Origin (or Referer) is not listed is denied. */
+allowedOrigins: Array<string> } | null, /** Server-resolved Chandler URLs for the stream's poster and sprite thumbnails. Derived from active_ingest_cluster_id + stream_id at SELECT time. Null when the stream has never been live; the poster.jpg 404s until Helmsman uploads its first frame, which the player's fallback chain handles. */
 thumbnailAssets: { posterUrl: string, spriteVttUrl: string, spriteJpgUrl: string, assetKey: string } | null, /** Per-stream retention overrides for DVR and clips. Null when the stream has no overrides set (inherits the tenant default). VOD uploads aren't stream-bound, so they don't appear here. */
 retentionOverrides: { streamId: string, /** Null = no override (inherit tenant default). 0 = no auto-expire. */
 dvrRetentionDaysOverride: number | null, clipRetentionDaysOverride: number | null } | null } | null };
@@ -1961,17 +2005,20 @@ primaryBitrate: number | null, /** Whether the stream has active quality issues.
 hasIssues: boolean | null, /** Human-readable description of current issues. */
 issuesDescription: string | null } | null, /** Configured multistream push targets for this stream. */
 pushTargets: Array<{ id: string, streamId: string, platform: string | null, name: string, targetUri: string, isEnabled: boolean, status: string, lastError: string | null, reasonCode: string | null, lastPushedAt: string | null, createdAt: string }>, /** Playback access policy. null/PUBLIC = anyone with the playbackId can watch. */
-playbackPolicy: { type: PlaybackPolicyType } | null, /** Server-resolved Chandler URLs for the stream's poster and sprite thumbnails. Derived from active_ingest_cluster_id + stream_id at SELECT time. Null when the stream has never been live; the poster.jpg 404s until Helmsman uploads its first frame, which the player's fallback chain handles. */
+playbackPolicy: { type: PlaybackPolicyType, /** Sites allowed to embed the content, as normalized `scheme://host[:port]` origins; `*` allows any. Empty = no restriction. A browser viewer whose Origin (or Referer) is not listed is denied. */
+allowedOrigins: Array<string> } | null, /** Server-resolved Chandler URLs for the stream's poster and sprite thumbnails. Derived from active_ingest_cluster_id + stream_id at SELECT time. Null when the stream has never been live; the poster.jpg 404s until Helmsman uploads its first frame, which the player's fallback chain handles. */
 thumbnailAssets: { posterUrl: string, spriteVttUrl: string, spriteJpgUrl: string, assetKey: string } | null, /** Per-stream retention overrides for DVR and clips. Null when the stream has no overrides set (inherits the tenant default). VOD uploads aren't stream-bound, so they don't appear here. */
 retentionOverrides: { streamId: string, /** Null = no override (inherit tenant default). 0 = no auto-expire. */
 dvrRetentionDaysOverride: number | null, clipRetentionDaysOverride: number | null } | null } | null, /** Playback access policy snapshotted at clip creation. null/PUBLIC means anyone with the playbackId can watch. Independent from the source stream's policy after creation — flipping the source stream's policy does not affect already-shared clip URLs. */
-playbackPolicy: { type: PlaybackPolicyType, /** JWT-policy details, populated when type == JWT. */
+playbackPolicy: { type: PlaybackPolicyType, /** Sites allowed to embed the content, as normalized `scheme://host[:port]` origins; `*` allows any. Empty = no restriction. A browser viewer whose Origin (or Referer) is not listed is denied. */
+allowedOrigins: Array<string>, /** JWT-policy details, populated when type == JWT. */
 jwt: { /** Allowed signing key IDs. Empty = any active tenant key. */
 allowedKids: Array<string>, /** If set, the viewer JWT's `aud` claim must contain at least one of these. */
 requiredAudience: Array<string> } | null, /** Webhook-policy details, populated when type == WEBHOOK. Secret is masked. */
 webhook: { url: string, /** Outbound POST timeout in milliseconds. Capped server-side at 10000. */
 timeoutMs: number, /** Always 'redacted' on read; the actual secret is fieldcrypt-encrypted at rest. */
-secretMasked: string } | null } | null, /** Server-resolved Chandler URLs for the clip's poster and sprite thumbnails. Null until Foghorn confirms the thumbnail upload. */
+secretMasked: string, /** Your JSON object, sent as `context` in every access request to the URL. Null when unset. */
+context: unknown } | null } | null, /** Server-resolved Chandler URLs for the clip's poster and sprite thumbnails. Null until Foghorn confirms the thumbnail upload. */
 thumbnailAssets: { posterUrl: string, spriteVttUrl: string, spriteJpgUrl: string, assetKey: string } | null, /** Resolved retention horizon with the source of the decision (per-asset override → per-stream override → tenant default → tier entitlement). Null when retention_until is unset (infinite). */
 effectiveRetention: { /** Days from now until the artifact is scheduled for deletion. 0 = no auto-expire (retentionUntil is null). */
 retentionDays: number, /** Scheduled deletion timestamp. Null when the artifact has no horizon (kept forever). */
@@ -2105,7 +2152,8 @@ primaryBitrate: number | null, /** Whether the stream has active quality issues.
 hasIssues: boolean | null, /** Human-readable description of current issues. */
 issuesDescription: string | null } | null, /** Configured multistream push targets for this stream. */
 pushTargets: Array<{ id: string, streamId: string, platform: string | null, name: string, targetUri: string, isEnabled: boolean, status: string, lastError: string | null, reasonCode: string | null, lastPushedAt: string | null, createdAt: string }>, /** Playback access policy. null/PUBLIC = anyone with the playbackId can watch. */
-playbackPolicy: { type: PlaybackPolicyType } | null, /** Server-resolved Chandler URLs for the stream's poster and sprite thumbnails. Derived from active_ingest_cluster_id + stream_id at SELECT time. Null when the stream has never been live; the poster.jpg 404s until Helmsman uploads its first frame, which the player's fallback chain handles. */
+playbackPolicy: { type: PlaybackPolicyType, /** Sites allowed to embed the content, as normalized `scheme://host[:port]` origins; `*` allows any. Empty = no restriction. A browser viewer whose Origin (or Referer) is not listed is denied. */
+allowedOrigins: Array<string> } | null, /** Server-resolved Chandler URLs for the stream's poster and sprite thumbnails. Derived from active_ingest_cluster_id + stream_id at SELECT time. Null when the stream has never been live; the poster.jpg 404s until Helmsman uploads its first frame, which the player's fallback chain handles. */
 thumbnailAssets: { posterUrl: string, spriteVttUrl: string, spriteJpgUrl: string, assetKey: string } | null, /** Per-stream retention overrides for DVR and clips. Null when the stream has no overrides set (inherits the tenant default). VOD uploads aren't stream-bound, so they don't appear here. */
 retentionOverrides: { streamId: string, /** Null = no override (inherit tenant default). 0 = no auto-expire. */
 dvrRetentionDaysOverride: number | null, clipRetentionDaysOverride: number | null } | null } | null, clientBucket: { h3Index: string, resolution: number } | null, nodeBucket: { h3Index: string, resolution: number } | null };
@@ -2159,7 +2207,8 @@ primaryBitrate: number | null, /** Whether the stream has active quality issues.
 hasIssues: boolean | null, /** Human-readable description of current issues. */
 issuesDescription: string | null } | null, /** Configured multistream push targets for this stream. */
 pushTargets: Array<{ id: string, streamId: string, platform: string | null, name: string, targetUri: string, isEnabled: boolean, status: string, lastError: string | null, reasonCode: string | null, lastPushedAt: string | null, createdAt: string }>, /** Playback access policy. null/PUBLIC = anyone with the playbackId can watch. */
-playbackPolicy: { type: PlaybackPolicyType } | null, /** Server-resolved Chandler URLs for the stream's poster and sprite thumbnails. Derived from active_ingest_cluster_id + stream_id at SELECT time. Null when the stream has never been live; the poster.jpg 404s until Helmsman uploads its first frame, which the player's fallback chain handles. */
+playbackPolicy: { type: PlaybackPolicyType, /** Sites allowed to embed the content, as normalized `scheme://host[:port]` origins; `*` allows any. Empty = no restriction. A browser viewer whose Origin (or Referer) is not listed is denied. */
+allowedOrigins: Array<string> } | null, /** Server-resolved Chandler URLs for the stream's poster and sprite thumbnails. Derived from active_ingest_cluster_id + stream_id at SELECT time. Null when the stream has never been live; the poster.jpg 404s until Helmsman uploads its first frame, which the player's fallback chain handles. */
 thumbnailAssets: { posterUrl: string, spriteVttUrl: string, spriteJpgUrl: string, assetKey: string } | null, /** Per-stream retention overrides for DVR and clips. Null when the stream has no overrides set (inherits the tenant default). VOD uploads aren't stream-bound, so they don't appear here. */
 retentionOverrides: { streamId: string, /** Null = no override (inherit tenant default). 0 = no auto-expire. */
 dvrRetentionDaysOverride: number | null, clipRetentionDaysOverride: number | null } | null } | null, clientBucket: { h3Index: string, resolution: number } | null, nodeBucket: { h3Index: string, resolution: number } | null };
@@ -2360,7 +2409,8 @@ primaryBitrate: number | null, /** Whether the stream has active quality issues.
 hasIssues: boolean | null, /** Human-readable description of current issues. */
 issuesDescription: string | null } | null, /** Configured multistream push targets for this stream. */
 pushTargets: Array<{ id: string, streamId: string, platform: string | null, name: string, targetUri: string, isEnabled: boolean, status: string, lastError: string | null, reasonCode: string | null, lastPushedAt: string | null, createdAt: string }>, /** Playback access policy. null/PUBLIC = anyone with the playbackId can watch. */
-playbackPolicy: { type: PlaybackPolicyType } | null, /** Server-resolved Chandler URLs for the stream's poster and sprite thumbnails. Derived from active_ingest_cluster_id + stream_id at SELECT time. Null when the stream has never been live; the poster.jpg 404s until Helmsman uploads its first frame, which the player's fallback chain handles. */
+playbackPolicy: { type: PlaybackPolicyType, /** Sites allowed to embed the content, as normalized `scheme://host[:port]` origins; `*` allows any. Empty = no restriction. A browser viewer whose Origin (or Referer) is not listed is denied. */
+allowedOrigins: Array<string> } | null, /** Server-resolved Chandler URLs for the stream's poster and sprite thumbnails. Derived from active_ingest_cluster_id + stream_id at SELECT time. Null when the stream has never been live; the poster.jpg 404s until Helmsman uploads its first frame, which the player's fallback chain handles. */
 thumbnailAssets: { posterUrl: string, spriteVttUrl: string, spriteJpgUrl: string, assetKey: string } | null, /** Per-stream retention overrides for DVR and clips. Null when the stream has no overrides set (inherits the tenant default). VOD uploads aren't stream-bound, so they don't appear here. */
 retentionOverrides: { streamId: string, /** Null = no override (inherit tenant default). 0 = no auto-expire. */
 dvrRetentionDaysOverride: number | null, clipRetentionDaysOverride: number | null } | null } | null, topCountries: Array<{ countryCode: string, viewerCount: number, percentage: number }>, topCities: Array<{ city: string, countryCode: string | null, viewerCount: number, percentage: number, latitude: number | null, longitude: number | null }>, viewersByCountry: Array<{ timestamp: string, countryCode: string, viewerCount: number }> };
@@ -2678,7 +2728,8 @@ primaryBitrate: number | null, /** Whether the stream has active quality issues.
 hasIssues: boolean | null, /** Human-readable description of current issues. */
 issuesDescription: string | null } | null, /** Configured multistream push targets for this stream. */
 pushTargets: Array<{ id: string, streamId: string, platform: string | null, name: string, targetUri: string, isEnabled: boolean, status: string, lastError: string | null, reasonCode: string | null, lastPushedAt: string | null, createdAt: string }>, /** Playback access policy. null/PUBLIC = anyone with the playbackId can watch. */
-playbackPolicy: { type: PlaybackPolicyType } | null, /** Server-resolved Chandler URLs for the stream's poster and sprite thumbnails. Derived from active_ingest_cluster_id + stream_id at SELECT time. Null when the stream has never been live; the poster.jpg 404s until Helmsman uploads its first frame, which the player's fallback chain handles. */
+playbackPolicy: { type: PlaybackPolicyType, /** Sites allowed to embed the content, as normalized `scheme://host[:port]` origins; `*` allows any. Empty = no restriction. A browser viewer whose Origin (or Referer) is not listed is denied. */
+allowedOrigins: Array<string> } | null, /** Server-resolved Chandler URLs for the stream's poster and sprite thumbnails. Derived from active_ingest_cluster_id + stream_id at SELECT time. Null when the stream has never been live; the poster.jpg 404s until Helmsman uploads its first frame, which the player's fallback chain handles. */
 thumbnailAssets: { posterUrl: string, spriteVttUrl: string, spriteJpgUrl: string, assetKey: string } | null, /** Per-stream retention overrides for DVR and clips. Null when the stream has no overrides set (inherits the tenant default). VOD uploads aren't stream-bound, so they don't appear here. */
 retentionOverrides: { streamId: string, /** Null = no override (inherit tenant default). 0 = no auto-expire. */
 dvrRetentionDaysOverride: number | null, clipRetentionDaysOverride: number | null } | null } | null };
@@ -2732,7 +2783,8 @@ primaryBitrate: number | null, /** Whether the stream has active quality issues.
 hasIssues: boolean | null, /** Human-readable description of current issues. */
 issuesDescription: string | null } | null, /** Configured multistream push targets for this stream. */
 pushTargets: Array<{ id: string, streamId: string, platform: string | null, name: string, targetUri: string, isEnabled: boolean, status: string, lastError: string | null, reasonCode: string | null, lastPushedAt: string | null, createdAt: string }>, /** Playback access policy. null/PUBLIC = anyone with the playbackId can watch. */
-playbackPolicy: { type: PlaybackPolicyType } | null, /** Server-resolved Chandler URLs for the stream's poster and sprite thumbnails. Derived from active_ingest_cluster_id + stream_id at SELECT time. Null when the stream has never been live; the poster.jpg 404s until Helmsman uploads its first frame, which the player's fallback chain handles. */
+playbackPolicy: { type: PlaybackPolicyType, /** Sites allowed to embed the content, as normalized `scheme://host[:port]` origins; `*` allows any. Empty = no restriction. A browser viewer whose Origin (or Referer) is not listed is denied. */
+allowedOrigins: Array<string> } | null, /** Server-resolved Chandler URLs for the stream's poster and sprite thumbnails. Derived from active_ingest_cluster_id + stream_id at SELECT time. Null when the stream has never been live; the poster.jpg 404s until Helmsman uploads its first frame, which the player's fallback chain handles. */
 thumbnailAssets: { posterUrl: string, spriteVttUrl: string, spriteJpgUrl: string, assetKey: string } | null, /** Per-stream retention overrides for DVR and clips. Null when the stream has no overrides set (inherits the tenant default). VOD uploads aren't stream-bound, so they don't appear here. */
 retentionOverrides: { streamId: string, /** Null = no override (inherit tenant default). 0 = no auto-expire. */
 dvrRetentionDaysOverride: number | null, clipRetentionDaysOverride: number | null } | null } | null };
@@ -2798,7 +2850,8 @@ primaryBitrate: number | null, /** Whether the stream has active quality issues.
 hasIssues: boolean | null, /** Human-readable description of current issues. */
 issuesDescription: string | null } | null, /** Configured multistream push targets for this stream. */
 pushTargets: Array<{ id: string, streamId: string, platform: string | null, name: string, targetUri: string, isEnabled: boolean, status: string, lastError: string | null, reasonCode: string | null, lastPushedAt: string | null, createdAt: string }>, /** Playback access policy. null/PUBLIC = anyone with the playbackId can watch. */
-playbackPolicy: { type: PlaybackPolicyType } | null, /** Server-resolved Chandler URLs for the stream's poster and sprite thumbnails. Derived from active_ingest_cluster_id + stream_id at SELECT time. Null when the stream has never been live; the poster.jpg 404s until Helmsman uploads its first frame, which the player's fallback chain handles. */
+playbackPolicy: { type: PlaybackPolicyType, /** Sites allowed to embed the content, as normalized `scheme://host[:port]` origins; `*` allows any. Empty = no restriction. A browser viewer whose Origin (or Referer) is not listed is denied. */
+allowedOrigins: Array<string> } | null, /** Server-resolved Chandler URLs for the stream's poster and sprite thumbnails. Derived from active_ingest_cluster_id + stream_id at SELECT time. Null when the stream has never been live; the poster.jpg 404s until Helmsman uploads its first frame, which the player's fallback chain handles. */
 thumbnailAssets: { posterUrl: string, spriteVttUrl: string, spriteJpgUrl: string, assetKey: string } | null, /** Per-stream retention overrides for DVR and clips. Null when the stream has no overrides set (inherits the tenant default). VOD uploads aren't stream-bound, so they don't appear here. */
 retentionOverrides: { streamId: string, /** Null = no override (inherit tenant default). 0 = no auto-expire. */
 dvrRetentionDaysOverride: number | null, clipRetentionDaysOverride: number | null } | null } | null };
@@ -2854,7 +2907,8 @@ primaryBitrate: number | null, /** Whether the stream has active quality issues.
 hasIssues: boolean | null, /** Human-readable description of current issues. */
 issuesDescription: string | null } | null, /** Configured multistream push targets for this stream. */
 pushTargets: Array<{ id: string, streamId: string, platform: string | null, name: string, targetUri: string, isEnabled: boolean, status: string, lastError: string | null, reasonCode: string | null, lastPushedAt: string | null, createdAt: string }>, /** Playback access policy. null/PUBLIC = anyone with the playbackId can watch. */
-playbackPolicy: { type: PlaybackPolicyType } | null, /** Server-resolved Chandler URLs for the stream's poster and sprite thumbnails. Derived from active_ingest_cluster_id + stream_id at SELECT time. Null when the stream has never been live; the poster.jpg 404s until Helmsman uploads its first frame, which the player's fallback chain handles. */
+playbackPolicy: { type: PlaybackPolicyType, /** Sites allowed to embed the content, as normalized `scheme://host[:port]` origins; `*` allows any. Empty = no restriction. A browser viewer whose Origin (or Referer) is not listed is denied. */
+allowedOrigins: Array<string> } | null, /** Server-resolved Chandler URLs for the stream's poster and sprite thumbnails. Derived from active_ingest_cluster_id + stream_id at SELECT time. Null when the stream has never been live; the poster.jpg 404s until Helmsman uploads its first frame, which the player's fallback chain handles. */
 thumbnailAssets: { posterUrl: string, spriteVttUrl: string, spriteJpgUrl: string, assetKey: string } | null, /** Per-stream retention overrides for DVR and clips. Null when the stream has no overrides set (inherits the tenant default). VOD uploads aren't stream-bound, so they don't appear here. */
 retentionOverrides: { streamId: string, /** Null = no override (inherit tenant default). 0 = no auto-expire. */
 dvrRetentionDaysOverride: number | null, clipRetentionDaysOverride: number | null } | null } | null };
@@ -2911,7 +2965,8 @@ primaryBitrate: number | null, /** Whether the stream has active quality issues.
 hasIssues: boolean | null, /** Human-readable description of current issues. */
 issuesDescription: string | null } | null, /** Configured multistream push targets for this stream. */
 pushTargets: Array<{ id: string, streamId: string, platform: string | null, name: string, targetUri: string, isEnabled: boolean, status: string, lastError: string | null, reasonCode: string | null, lastPushedAt: string | null, createdAt: string }>, /** Playback access policy. null/PUBLIC = anyone with the playbackId can watch. */
-playbackPolicy: { type: PlaybackPolicyType } | null, /** Server-resolved Chandler URLs for the stream's poster and sprite thumbnails. Derived from active_ingest_cluster_id + stream_id at SELECT time. Null when the stream has never been live; the poster.jpg 404s until Helmsman uploads its first frame, which the player's fallback chain handles. */
+playbackPolicy: { type: PlaybackPolicyType, /** Sites allowed to embed the content, as normalized `scheme://host[:port]` origins; `*` allows any. Empty = no restriction. A browser viewer whose Origin (or Referer) is not listed is denied. */
+allowedOrigins: Array<string> } | null, /** Server-resolved Chandler URLs for the stream's poster and sprite thumbnails. Derived from active_ingest_cluster_id + stream_id at SELECT time. Null when the stream has never been live; the poster.jpg 404s until Helmsman uploads its first frame, which the player's fallback chain handles. */
 thumbnailAssets: { posterUrl: string, spriteVttUrl: string, spriteJpgUrl: string, assetKey: string } | null, /** Per-stream retention overrides for DVR and clips. Null when the stream has no overrides set (inherits the tenant default). VOD uploads aren't stream-bound, so they don't appear here. */
 retentionOverrides: { streamId: string, /** Null = no override (inherit tenant default). 0 = no auto-expire. */
 dvrRetentionDaysOverride: number | null, clipRetentionDaysOverride: number | null } | null } | null, clientBucket: { h3Index: string, resolution: number } | null, nodeBucket: { h3Index: string, resolution: number } | null };
@@ -3003,7 +3058,8 @@ primaryBitrate: number | null, /** Whether the stream has active quality issues.
 hasIssues: boolean | null, /** Human-readable description of current issues. */
 issuesDescription: string | null } | null, /** Configured multistream push targets for this stream. */
 pushTargets: Array<{ id: string, streamId: string, platform: string | null, name: string, targetUri: string, isEnabled: boolean, status: string, lastError: string | null, reasonCode: string | null, lastPushedAt: string | null, createdAt: string }>, /** Playback access policy. null/PUBLIC = anyone with the playbackId can watch. */
-playbackPolicy: { type: PlaybackPolicyType } | null, /** Server-resolved Chandler URLs for the stream's poster and sprite thumbnails. Derived from active_ingest_cluster_id + stream_id at SELECT time. Null when the stream has never been live; the poster.jpg 404s until Helmsman uploads its first frame, which the player's fallback chain handles. */
+playbackPolicy: { type: PlaybackPolicyType, /** Sites allowed to embed the content, as normalized `scheme://host[:port]` origins; `*` allows any. Empty = no restriction. A browser viewer whose Origin (or Referer) is not listed is denied. */
+allowedOrigins: Array<string> } | null, /** Server-resolved Chandler URLs for the stream's poster and sprite thumbnails. Derived from active_ingest_cluster_id + stream_id at SELECT time. Null when the stream has never been live; the poster.jpg 404s until Helmsman uploads its first frame, which the player's fallback chain handles. */
 thumbnailAssets: { posterUrl: string, spriteVttUrl: string, spriteJpgUrl: string, assetKey: string } | null, /** Per-stream retention overrides for DVR and clips. Null when the stream has no overrides set (inherits the tenant default). VOD uploads aren't stream-bound, so they don't appear here. */
 retentionOverrides: { streamId: string, /** Null = no override (inherit tenant default). 0 = no auto-expire. */
 dvrRetentionDaysOverride: number | null, clipRetentionDaysOverride: number | null } | null } | null };
@@ -3057,7 +3113,8 @@ primaryBitrate: number | null, /** Whether the stream has active quality issues.
 hasIssues: boolean | null, /** Human-readable description of current issues. */
 issuesDescription: string | null } | null, /** Configured multistream push targets for this stream. */
 pushTargets: Array<{ id: string, streamId: string, platform: string | null, name: string, targetUri: string, isEnabled: boolean, status: string, lastError: string | null, reasonCode: string | null, lastPushedAt: string | null, createdAt: string }>, /** Playback access policy. null/PUBLIC = anyone with the playbackId can watch. */
-playbackPolicy: { type: PlaybackPolicyType } | null, /** Server-resolved Chandler URLs for the stream's poster and sprite thumbnails. Derived from active_ingest_cluster_id + stream_id at SELECT time. Null when the stream has never been live; the poster.jpg 404s until Helmsman uploads its first frame, which the player's fallback chain handles. */
+playbackPolicy: { type: PlaybackPolicyType, /** Sites allowed to embed the content, as normalized `scheme://host[:port]` origins; `*` allows any. Empty = no restriction. A browser viewer whose Origin (or Referer) is not listed is denied. */
+allowedOrigins: Array<string> } | null, /** Server-resolved Chandler URLs for the stream's poster and sprite thumbnails. Derived from active_ingest_cluster_id + stream_id at SELECT time. Null when the stream has never been live; the poster.jpg 404s until Helmsman uploads its first frame, which the player's fallback chain handles. */
 thumbnailAssets: { posterUrl: string, spriteVttUrl: string, spriteJpgUrl: string, assetKey: string } | null, /** Per-stream retention overrides for DVR and clips. Null when the stream has no overrides set (inherits the tenant default). VOD uploads aren't stream-bound, so they don't appear here. */
 retentionOverrides: { streamId: string, /** Null = no override (inherit tenant default). 0 = no auto-expire. */
 dvrRetentionDaysOverride: number | null, clipRetentionDaysOverride: number | null } | null } | null };
@@ -3113,7 +3170,8 @@ primaryBitrate: number | null, /** Whether the stream has active quality issues.
 hasIssues: boolean | null, /** Human-readable description of current issues. */
 issuesDescription: string | null } | null, /** Configured multistream push targets for this stream. */
 pushTargets: Array<{ id: string, streamId: string, platform: string | null, name: string, targetUri: string, isEnabled: boolean, status: string, lastError: string | null, reasonCode: string | null, lastPushedAt: string | null, createdAt: string }>, /** Playback access policy. null/PUBLIC = anyone with the playbackId can watch. */
-playbackPolicy: { type: PlaybackPolicyType } | null, /** Server-resolved Chandler URLs for the stream's poster and sprite thumbnails. Derived from active_ingest_cluster_id + stream_id at SELECT time. Null when the stream has never been live; the poster.jpg 404s until Helmsman uploads its first frame, which the player's fallback chain handles. */
+playbackPolicy: { type: PlaybackPolicyType, /** Sites allowed to embed the content, as normalized `scheme://host[:port]` origins; `*` allows any. Empty = no restriction. A browser viewer whose Origin (or Referer) is not listed is denied. */
+allowedOrigins: Array<string> } | null, /** Server-resolved Chandler URLs for the stream's poster and sprite thumbnails. Derived from active_ingest_cluster_id + stream_id at SELECT time. Null when the stream has never been live; the poster.jpg 404s until Helmsman uploads its first frame, which the player's fallback chain handles. */
 thumbnailAssets: { posterUrl: string, spriteVttUrl: string, spriteJpgUrl: string, assetKey: string } | null, /** Per-stream retention overrides for DVR and clips. Null when the stream has no overrides set (inherits the tenant default). VOD uploads aren't stream-bound, so they don't appear here. */
 retentionOverrides: { streamId: string, /** Null = no override (inherit tenant default). 0 = no auto-expire. */
 dvrRetentionDaysOverride: number | null, clipRetentionDaysOverride: number | null } | null } | null };
@@ -3170,7 +3228,8 @@ primaryBitrate: number | null, /** Whether the stream has active quality issues.
 hasIssues: boolean | null, /** Human-readable description of current issues. */
 issuesDescription: string | null } | null, /** Configured multistream push targets for this stream. */
 pushTargets: Array<{ id: string, streamId: string, platform: string | null, name: string, targetUri: string, isEnabled: boolean, status: string, lastError: string | null, reasonCode: string | null, lastPushedAt: string | null, createdAt: string }>, /** Playback access policy. null/PUBLIC = anyone with the playbackId can watch. */
-playbackPolicy: { type: PlaybackPolicyType } | null, /** Server-resolved Chandler URLs for the stream's poster and sprite thumbnails. Derived from active_ingest_cluster_id + stream_id at SELECT time. Null when the stream has never been live; the poster.jpg 404s until Helmsman uploads its first frame, which the player's fallback chain handles. */
+playbackPolicy: { type: PlaybackPolicyType, /** Sites allowed to embed the content, as normalized `scheme://host[:port]` origins; `*` allows any. Empty = no restriction. A browser viewer whose Origin (or Referer) is not listed is denied. */
+allowedOrigins: Array<string> } | null, /** Server-resolved Chandler URLs for the stream's poster and sprite thumbnails. Derived from active_ingest_cluster_id + stream_id at SELECT time. Null when the stream has never been live; the poster.jpg 404s until Helmsman uploads its first frame, which the player's fallback chain handles. */
 thumbnailAssets: { posterUrl: string, spriteVttUrl: string, spriteJpgUrl: string, assetKey: string } | null, /** Per-stream retention overrides for DVR and clips. Null when the stream has no overrides set (inherits the tenant default). VOD uploads aren't stream-bound, so they don't appear here. */
 retentionOverrides: { streamId: string, /** Null = no override (inherit tenant default). 0 = no auto-expire. */
 dvrRetentionDaysOverride: number | null, clipRetentionDaysOverride: number | null } | null } | null, timeRange: { /** Start of the time range. */
@@ -3226,7 +3285,8 @@ primaryBitrate: number | null, /** Whether the stream has active quality issues.
 hasIssues: boolean | null, /** Human-readable description of current issues. */
 issuesDescription: string | null } | null, /** Configured multistream push targets for this stream. */
 pushTargets: Array<{ id: string, streamId: string, platform: string | null, name: string, targetUri: string, isEnabled: boolean, status: string, lastError: string | null, reasonCode: string | null, lastPushedAt: string | null, createdAt: string }>, /** Playback access policy. null/PUBLIC = anyone with the playbackId can watch. */
-playbackPolicy: { type: PlaybackPolicyType } | null, /** Server-resolved Chandler URLs for the stream's poster and sprite thumbnails. Derived from active_ingest_cluster_id + stream_id at SELECT time. Null when the stream has never been live; the poster.jpg 404s until Helmsman uploads its first frame, which the player's fallback chain handles. */
+playbackPolicy: { type: PlaybackPolicyType, /** Sites allowed to embed the content, as normalized `scheme://host[:port]` origins; `*` allows any. Empty = no restriction. A browser viewer whose Origin (or Referer) is not listed is denied. */
+allowedOrigins: Array<string> } | null, /** Server-resolved Chandler URLs for the stream's poster and sprite thumbnails. Derived from active_ingest_cluster_id + stream_id at SELECT time. Null when the stream has never been live; the poster.jpg 404s until Helmsman uploads its first frame, which the player's fallback chain handles. */
 thumbnailAssets: { posterUrl: string, spriteVttUrl: string, spriteJpgUrl: string, assetKey: string } | null, /** Per-stream retention overrides for DVR and clips. Null when the stream has no overrides set (inherits the tenant default). VOD uploads aren't stream-bound, so they don't appear here. */
 retentionOverrides: { streamId: string, /** Null = no override (inherit tenant default). 0 = no auto-expire. */
 dvrRetentionDaysOverride: number | null, clipRetentionDaysOverride: number | null } | null } | null };
@@ -3280,7 +3340,8 @@ primaryBitrate: number | null, /** Whether the stream has active quality issues.
 hasIssues: boolean | null, /** Human-readable description of current issues. */
 issuesDescription: string | null } | null, /** Configured multistream push targets for this stream. */
 pushTargets: Array<{ id: string, streamId: string, platform: string | null, name: string, targetUri: string, isEnabled: boolean, status: string, lastError: string | null, reasonCode: string | null, lastPushedAt: string | null, createdAt: string }>, /** Playback access policy. null/PUBLIC = anyone with the playbackId can watch. */
-playbackPolicy: { type: PlaybackPolicyType } | null, /** Server-resolved Chandler URLs for the stream's poster and sprite thumbnails. Derived from active_ingest_cluster_id + stream_id at SELECT time. Null when the stream has never been live; the poster.jpg 404s until Helmsman uploads its first frame, which the player's fallback chain handles. */
+playbackPolicy: { type: PlaybackPolicyType, /** Sites allowed to embed the content, as normalized `scheme://host[:port]` origins; `*` allows any. Empty = no restriction. A browser viewer whose Origin (or Referer) is not listed is denied. */
+allowedOrigins: Array<string> } | null, /** Server-resolved Chandler URLs for the stream's poster and sprite thumbnails. Derived from active_ingest_cluster_id + stream_id at SELECT time. Null when the stream has never been live; the poster.jpg 404s until Helmsman uploads its first frame, which the player's fallback chain handles. */
 thumbnailAssets: { posterUrl: string, spriteVttUrl: string, spriteJpgUrl: string, assetKey: string } | null, /** Per-stream retention overrides for DVR and clips. Null when the stream has no overrides set (inherits the tenant default). VOD uploads aren't stream-bound, so they don't appear here. */
 retentionOverrides: { streamId: string, /** Null = no override (inherit tenant default). 0 = no auto-expire. */
 dvrRetentionDaysOverride: number | null, clipRetentionDaysOverride: number | null } | null } | null };
@@ -3334,7 +3395,8 @@ primaryBitrate: number | null, /** Whether the stream has active quality issues.
 hasIssues: boolean | null, /** Human-readable description of current issues. */
 issuesDescription: string | null } | null, /** Configured multistream push targets for this stream. */
 pushTargets: Array<{ id: string, streamId: string, platform: string | null, name: string, targetUri: string, isEnabled: boolean, status: string, lastError: string | null, reasonCode: string | null, lastPushedAt: string | null, createdAt: string }>, /** Playback access policy. null/PUBLIC = anyone with the playbackId can watch. */
-playbackPolicy: { type: PlaybackPolicyType } | null, /** Server-resolved Chandler URLs for the stream's poster and sprite thumbnails. Derived from active_ingest_cluster_id + stream_id at SELECT time. Null when the stream has never been live; the poster.jpg 404s until Helmsman uploads its first frame, which the player's fallback chain handles. */
+playbackPolicy: { type: PlaybackPolicyType, /** Sites allowed to embed the content, as normalized `scheme://host[:port]` origins; `*` allows any. Empty = no restriction. A browser viewer whose Origin (or Referer) is not listed is denied. */
+allowedOrigins: Array<string> } | null, /** Server-resolved Chandler URLs for the stream's poster and sprite thumbnails. Derived from active_ingest_cluster_id + stream_id at SELECT time. Null when the stream has never been live; the poster.jpg 404s until Helmsman uploads its first frame, which the player's fallback chain handles. */
 thumbnailAssets: { posterUrl: string, spriteVttUrl: string, spriteJpgUrl: string, assetKey: string } | null, /** Per-stream retention overrides for DVR and clips. Null when the stream has no overrides set (inherits the tenant default). VOD uploads aren't stream-bound, so they don't appear here. */
 retentionOverrides: { streamId: string, /** Null = no override (inherit tenant default). 0 = no auto-expire. */
 dvrRetentionDaysOverride: number | null, clipRetentionDaysOverride: number | null } | null } | null };
@@ -3392,7 +3454,8 @@ primaryBitrate: number | null, /** Whether the stream has active quality issues.
 hasIssues: boolean | null, /** Human-readable description of current issues. */
 issuesDescription: string | null } | null, /** Configured multistream push targets for this stream. */
 pushTargets: Array<{ id: string, streamId: string, platform: string | null, name: string, targetUri: string, isEnabled: boolean, status: string, lastError: string | null, reasonCode: string | null, lastPushedAt: string | null, createdAt: string }>, /** Playback access policy. null/PUBLIC = anyone with the playbackId can watch. */
-playbackPolicy: { type: PlaybackPolicyType } | null, /** Server-resolved Chandler URLs for the stream's poster and sprite thumbnails. Derived from active_ingest_cluster_id + stream_id at SELECT time. Null when the stream has never been live; the poster.jpg 404s until Helmsman uploads its first frame, which the player's fallback chain handles. */
+playbackPolicy: { type: PlaybackPolicyType, /** Sites allowed to embed the content, as normalized `scheme://host[:port]` origins; `*` allows any. Empty = no restriction. A browser viewer whose Origin (or Referer) is not listed is denied. */
+allowedOrigins: Array<string> } | null, /** Server-resolved Chandler URLs for the stream's poster and sprite thumbnails. Derived from active_ingest_cluster_id + stream_id at SELECT time. Null when the stream has never been live; the poster.jpg 404s until Helmsman uploads its first frame, which the player's fallback chain handles. */
 thumbnailAssets: { posterUrl: string, spriteVttUrl: string, spriteJpgUrl: string, assetKey: string } | null, /** Per-stream retention overrides for DVR and clips. Null when the stream has no overrides set (inherits the tenant default). VOD uploads aren't stream-bound, so they don't appear here. */
 retentionOverrides: { streamId: string, /** Null = no override (inherit tenant default). 0 = no auto-expire. */
 dvrRetentionDaysOverride: number | null, clipRetentionDaysOverride: number | null } | null } | null };
@@ -3446,7 +3509,8 @@ primaryBitrate: number | null, /** Whether the stream has active quality issues.
 hasIssues: boolean | null, /** Human-readable description of current issues. */
 issuesDescription: string | null } | null, /** Configured multistream push targets for this stream. */
 pushTargets: Array<{ id: string, streamId: string, platform: string | null, name: string, targetUri: string, isEnabled: boolean, status: string, lastError: string | null, reasonCode: string | null, lastPushedAt: string | null, createdAt: string }>, /** Playback access policy. null/PUBLIC = anyone with the playbackId can watch. */
-playbackPolicy: { type: PlaybackPolicyType } | null, /** Server-resolved Chandler URLs for the stream's poster and sprite thumbnails. Derived from active_ingest_cluster_id + stream_id at SELECT time. Null when the stream has never been live; the poster.jpg 404s until Helmsman uploads its first frame, which the player's fallback chain handles. */
+playbackPolicy: { type: PlaybackPolicyType, /** Sites allowed to embed the content, as normalized `scheme://host[:port]` origins; `*` allows any. Empty = no restriction. A browser viewer whose Origin (or Referer) is not listed is denied. */
+allowedOrigins: Array<string> } | null, /** Server-resolved Chandler URLs for the stream's poster and sprite thumbnails. Derived from active_ingest_cluster_id + stream_id at SELECT time. Null when the stream has never been live; the poster.jpg 404s until Helmsman uploads its first frame, which the player's fallback chain handles. */
 thumbnailAssets: { posterUrl: string, spriteVttUrl: string, spriteJpgUrl: string, assetKey: string } | null, /** Per-stream retention overrides for DVR and clips. Null when the stream has no overrides set (inherits the tenant default). VOD uploads aren't stream-bound, so they don't appear here. */
 retentionOverrides: { streamId: string, /** Null = no override (inherit tenant default). 0 = no auto-expire. */
 dvrRetentionDaysOverride: number | null, clipRetentionDaysOverride: number | null } | null } | null };
@@ -3505,13 +3569,15 @@ primaryBitrate: number | null, /** Whether the stream has active quality issues.
 hasIssues: boolean | null, /** Human-readable description of current issues. */
 issuesDescription: string | null } | null, /** Configured multistream push targets for this stream. */
 pushTargets: Array<{ id: string, streamId: string, platform: string | null, name: string, targetUri: string, isEnabled: boolean, status: string, lastError: string | null, reasonCode: string | null, lastPushedAt: string | null, createdAt: string }>, /** Playback access policy. null/PUBLIC = anyone with the playbackId can watch. */
-playbackPolicy: { type: PlaybackPolicyType, /** JWT-policy details, populated when type == JWT. */
+playbackPolicy: { type: PlaybackPolicyType, /** Sites allowed to embed the content, as normalized `scheme://host[:port]` origins; `*` allows any. Empty = no restriction. A browser viewer whose Origin (or Referer) is not listed is denied. */
+allowedOrigins: Array<string>, /** JWT-policy details, populated when type == JWT. */
 jwt: { /** Allowed signing key IDs. Empty = any active tenant key. */
 allowedKids: Array<string>, /** If set, the viewer JWT's `aud` claim must contain at least one of these. */
 requiredAudience: Array<string> } | null, /** Webhook-policy details, populated when type == WEBHOOK. Secret is masked. */
 webhook: { url: string, /** Outbound POST timeout in milliseconds. Capped server-side at 10000. */
 timeoutMs: number, /** Always 'redacted' on read; the actual secret is fieldcrypt-encrypted at rest. */
-secretMasked: string } | null } | null, /** Server-resolved Chandler URLs for the stream's poster and sprite thumbnails. Derived from active_ingest_cluster_id + stream_id at SELECT time. Null when the stream has never been live; the poster.jpg 404s until Helmsman uploads its first frame, which the player's fallback chain handles. */
+secretMasked: string, /** Your JSON object, sent as `context` in every access request to the URL. Null when unset. */
+context: unknown } | null } | null, /** Server-resolved Chandler URLs for the stream's poster and sprite thumbnails. Derived from active_ingest_cluster_id + stream_id at SELECT time. Null when the stream has never been live; the poster.jpg 404s until Helmsman uploads its first frame, which the player's fallback chain handles. */
 thumbnailAssets: { posterUrl: string, spriteVttUrl: string, spriteJpgUrl: string, assetKey: string } | null, /** Per-stream retention overrides for DVR and clips. Null when the stream has no overrides set (inherits the tenant default). VOD uploads aren't stream-bound, so they don't appear here. */
 retentionOverrides: { streamId: string, /** Null = no override (inherit tenant default). 0 = no auto-expire. */
 dvrRetentionDaysOverride: number | null, clipRetentionDaysOverride: number | null } | null };
@@ -3699,7 +3765,8 @@ primaryBitrate: number | null, /** Whether the stream has active quality issues.
 hasIssues: boolean | null, /** Human-readable description of current issues. */
 issuesDescription: string | null } | null, /** Configured multistream push targets for this stream. */
 pushTargets: Array<{ id: string, streamId: string, platform: string | null, name: string, targetUri: string, isEnabled: boolean, status: string, lastError: string | null, reasonCode: string | null, lastPushedAt: string | null, createdAt: string }>, /** Playback access policy. null/PUBLIC = anyone with the playbackId can watch. */
-playbackPolicy: { type: PlaybackPolicyType } | null, /** Server-resolved Chandler URLs for the stream's poster and sprite thumbnails. Derived from active_ingest_cluster_id + stream_id at SELECT time. Null when the stream has never been live; the poster.jpg 404s until Helmsman uploads its first frame, which the player's fallback chain handles. */
+playbackPolicy: { type: PlaybackPolicyType, /** Sites allowed to embed the content, as normalized `scheme://host[:port]` origins; `*` allows any. Empty = no restriction. A browser viewer whose Origin (or Referer) is not listed is denied. */
+allowedOrigins: Array<string> } | null, /** Server-resolved Chandler URLs for the stream's poster and sprite thumbnails. Derived from active_ingest_cluster_id + stream_id at SELECT time. Null when the stream has never been live; the poster.jpg 404s until Helmsman uploads its first frame, which the player's fallback chain handles. */
 thumbnailAssets: { posterUrl: string, spriteVttUrl: string, spriteJpgUrl: string, assetKey: string } | null, /** Per-stream retention overrides for DVR and clips. Null when the stream has no overrides set (inherits the tenant default). VOD uploads aren't stream-bound, so they don't appear here. */
 retentionOverrides: { streamId: string, /** Null = no override (inherit tenant default). 0 = no auto-expire. */
 dvrRetentionDaysOverride: number | null, clipRetentionDaysOverride: number | null } | null } | null, tracks: Array<{ trackName: string, trackType: string, codec: string | null, bitrateKbps: number | null, bitrateBps: number | null, buffer: number | null, jitter: number | null, width: number | null, height: number | null, fps: number | null, resolution: string | null, hasBFrames: boolean | null, channels: number | null, sampleRate: number | null }> | null };
@@ -3753,7 +3820,8 @@ primaryBitrate: number | null, /** Whether the stream has active quality issues.
 hasIssues: boolean | null, /** Human-readable description of current issues. */
 issuesDescription: string | null } | null, /** Configured multistream push targets for this stream. */
 pushTargets: Array<{ id: string, streamId: string, platform: string | null, name: string, targetUri: string, isEnabled: boolean, status: string, lastError: string | null, reasonCode: string | null, lastPushedAt: string | null, createdAt: string }>, /** Playback access policy. null/PUBLIC = anyone with the playbackId can watch. */
-playbackPolicy: { type: PlaybackPolicyType } | null, /** Server-resolved Chandler URLs for the stream's poster and sprite thumbnails. Derived from active_ingest_cluster_id + stream_id at SELECT time. Null when the stream has never been live; the poster.jpg 404s until Helmsman uploads its first frame, which the player's fallback chain handles. */
+playbackPolicy: { type: PlaybackPolicyType, /** Sites allowed to embed the content, as normalized `scheme://host[:port]` origins; `*` allows any. Empty = no restriction. A browser viewer whose Origin (or Referer) is not listed is denied. */
+allowedOrigins: Array<string> } | null, /** Server-resolved Chandler URLs for the stream's poster and sprite thumbnails. Derived from active_ingest_cluster_id + stream_id at SELECT time. Null when the stream has never been live; the poster.jpg 404s until Helmsman uploads its first frame, which the player's fallback chain handles. */
 thumbnailAssets: { posterUrl: string, spriteVttUrl: string, spriteJpgUrl: string, assetKey: string } | null, /** Per-stream retention overrides for DVR and clips. Null when the stream has no overrides set (inherits the tenant default). VOD uploads aren't stream-bound, so they don't appear here. */
 retentionOverrides: { streamId: string, /** Null = no override (inherit tenant default). 0 = no auto-expire. */
 dvrRetentionDaysOverride: number | null, clipRetentionDaysOverride: number | null } | null } | null, tracks: Array<{ trackName: string, trackType: string, codec: string | null, bitrateKbps: number | null, bitrateBps: number | null, buffer: number | null, jitter: number | null, width: number | null, height: number | null, fps: number | null, resolution: string | null, hasBFrames: boolean | null, channels: number | null, sampleRate: number | null }> | null };
@@ -3807,7 +3875,8 @@ primaryBitrate: number | null, /** Whether the stream has active quality issues.
 hasIssues: boolean | null, /** Human-readable description of current issues. */
 issuesDescription: string | null } | null, /** Configured multistream push targets for this stream. */
 pushTargets: Array<{ id: string, streamId: string, platform: string | null, name: string, targetUri: string, isEnabled: boolean, status: string, lastError: string | null, reasonCode: string | null, lastPushedAt: string | null, createdAt: string }>, /** Playback access policy. null/PUBLIC = anyone with the playbackId can watch. */
-playbackPolicy: { type: PlaybackPolicyType } | null, /** Server-resolved Chandler URLs for the stream's poster and sprite thumbnails. Derived from active_ingest_cluster_id + stream_id at SELECT time. Null when the stream has never been live; the poster.jpg 404s until Helmsman uploads its first frame, which the player's fallback chain handles. */
+playbackPolicy: { type: PlaybackPolicyType, /** Sites allowed to embed the content, as normalized `scheme://host[:port]` origins; `*` allows any. Empty = no restriction. A browser viewer whose Origin (or Referer) is not listed is denied. */
+allowedOrigins: Array<string> } | null, /** Server-resolved Chandler URLs for the stream's poster and sprite thumbnails. Derived from active_ingest_cluster_id + stream_id at SELECT time. Null when the stream has never been live; the poster.jpg 404s until Helmsman uploads its first frame, which the player's fallback chain handles. */
 thumbnailAssets: { posterUrl: string, spriteVttUrl: string, spriteJpgUrl: string, assetKey: string } | null, /** Per-stream retention overrides for DVR and clips. Null when the stream has no overrides set (inherits the tenant default). VOD uploads aren't stream-bound, so they don't appear here. */
 retentionOverrides: { streamId: string, /** Null = no override (inherit tenant default). 0 = no auto-expire. */
 dvrRetentionDaysOverride: number | null, clipRetentionDaysOverride: number | null } | null } | null, tracks: Array<{ trackName: string, trackType: string, codec: string | null, bitrateKbps: number | null, bitrateBps: number | null, buffer: number | null, jitter: number | null, width: number | null, height: number | null, fps: number | null, resolution: string | null, hasBFrames: boolean | null, channels: number | null, sampleRate: number | null }> | null };
@@ -3863,7 +3932,8 @@ primaryBitrate: number | null, /** Whether the stream has active quality issues.
 hasIssues: boolean | null, /** Human-readable description of current issues. */
 issuesDescription: string | null } | null, /** Configured multistream push targets for this stream. */
 pushTargets: Array<{ id: string, streamId: string, platform: string | null, name: string, targetUri: string, isEnabled: boolean, status: string, lastError: string | null, reasonCode: string | null, lastPushedAt: string | null, createdAt: string }>, /** Playback access policy. null/PUBLIC = anyone with the playbackId can watch. */
-playbackPolicy: { type: PlaybackPolicyType } | null, /** Server-resolved Chandler URLs for the stream's poster and sprite thumbnails. Derived from active_ingest_cluster_id + stream_id at SELECT time. Null when the stream has never been live; the poster.jpg 404s until Helmsman uploads its first frame, which the player's fallback chain handles. */
+playbackPolicy: { type: PlaybackPolicyType, /** Sites allowed to embed the content, as normalized `scheme://host[:port]` origins; `*` allows any. Empty = no restriction. A browser viewer whose Origin (or Referer) is not listed is denied. */
+allowedOrigins: Array<string> } | null, /** Server-resolved Chandler URLs for the stream's poster and sprite thumbnails. Derived from active_ingest_cluster_id + stream_id at SELECT time. Null when the stream has never been live; the poster.jpg 404s until Helmsman uploads its first frame, which the player's fallback chain handles. */
 thumbnailAssets: { posterUrl: string, spriteVttUrl: string, spriteJpgUrl: string, assetKey: string } | null, /** Per-stream retention overrides for DVR and clips. Null when the stream has no overrides set (inherits the tenant default). VOD uploads aren't stream-bound, so they don't appear here. */
 retentionOverrides: { streamId: string, /** Null = no override (inherit tenant default). 0 = no auto-expire. */
 dvrRetentionDaysOverride: number | null, clipRetentionDaysOverride: number | null } | null } | null };
@@ -3921,7 +3991,8 @@ primaryBitrate: number | null, /** Whether the stream has active quality issues.
 hasIssues: boolean | null, /** Human-readable description of current issues. */
 issuesDescription: string | null } | null, /** Configured multistream push targets for this stream. */
 pushTargets: Array<{ id: string, streamId: string, platform: string | null, name: string, targetUri: string, isEnabled: boolean, status: string, lastError: string | null, reasonCode: string | null, lastPushedAt: string | null, createdAt: string }>, /** Playback access policy. null/PUBLIC = anyone with the playbackId can watch. */
-playbackPolicy: { type: PlaybackPolicyType } | null, /** Server-resolved Chandler URLs for the stream's poster and sprite thumbnails. Derived from active_ingest_cluster_id + stream_id at SELECT time. Null when the stream has never been live; the poster.jpg 404s until Helmsman uploads its first frame, which the player's fallback chain handles. */
+playbackPolicy: { type: PlaybackPolicyType, /** Sites allowed to embed the content, as normalized `scheme://host[:port]` origins; `*` allows any. Empty = no restriction. A browser viewer whose Origin (or Referer) is not listed is denied. */
+allowedOrigins: Array<string> } | null, /** Server-resolved Chandler URLs for the stream's poster and sprite thumbnails. Derived from active_ingest_cluster_id + stream_id at SELECT time. Null when the stream has never been live; the poster.jpg 404s until Helmsman uploads its first frame, which the player's fallback chain handles. */
 thumbnailAssets: { posterUrl: string, spriteVttUrl: string, spriteJpgUrl: string, assetKey: string } | null, /** Per-stream retention overrides for DVR and clips. Null when the stream has no overrides set (inherits the tenant default). VOD uploads aren't stream-bound, so they don't appear here. */
 retentionOverrides: { streamId: string, /** Null = no override (inherit tenant default). 0 = no auto-expire. */
 dvrRetentionDaysOverride: number | null, clipRetentionDaysOverride: number | null } | null } | null };
@@ -3975,7 +4046,8 @@ primaryBitrate: number | null, /** Whether the stream has active quality issues.
 hasIssues: boolean | null, /** Human-readable description of current issues. */
 issuesDescription: string | null } | null, /** Configured multistream push targets for this stream. */
 pushTargets: Array<{ id: string, streamId: string, platform: string | null, name: string, targetUri: string, isEnabled: boolean, status: string, lastError: string | null, reasonCode: string | null, lastPushedAt: string | null, createdAt: string }>, /** Playback access policy. null/PUBLIC = anyone with the playbackId can watch. */
-playbackPolicy: { type: PlaybackPolicyType } | null, /** Server-resolved Chandler URLs for the stream's poster and sprite thumbnails. Derived from active_ingest_cluster_id + stream_id at SELECT time. Null when the stream has never been live; the poster.jpg 404s until Helmsman uploads its first frame, which the player's fallback chain handles. */
+playbackPolicy: { type: PlaybackPolicyType, /** Sites allowed to embed the content, as normalized `scheme://host[:port]` origins; `*` allows any. Empty = no restriction. A browser viewer whose Origin (or Referer) is not listed is denied. */
+allowedOrigins: Array<string> } | null, /** Server-resolved Chandler URLs for the stream's poster and sprite thumbnails. Derived from active_ingest_cluster_id + stream_id at SELECT time. Null when the stream has never been live; the poster.jpg 404s until Helmsman uploads its first frame, which the player's fallback chain handles. */
 thumbnailAssets: { posterUrl: string, spriteVttUrl: string, spriteJpgUrl: string, assetKey: string } | null, /** Per-stream retention overrides for DVR and clips. Null when the stream has no overrides set (inherits the tenant default). VOD uploads aren't stream-bound, so they don't appear here. */
 retentionOverrides: { streamId: string, /** Null = no override (inherit tenant default). 0 = no auto-expire. */
 dvrRetentionDaysOverride: number | null, clipRetentionDaysOverride: number | null } | null } | null };
@@ -4029,7 +4101,8 @@ primaryBitrate: number | null, /** Whether the stream has active quality issues.
 hasIssues: boolean | null, /** Human-readable description of current issues. */
 issuesDescription: string | null } | null, /** Configured multistream push targets for this stream. */
 pushTargets: Array<{ id: string, streamId: string, platform: string | null, name: string, targetUri: string, isEnabled: boolean, status: string, lastError: string | null, reasonCode: string | null, lastPushedAt: string | null, createdAt: string }>, /** Playback access policy. null/PUBLIC = anyone with the playbackId can watch. */
-playbackPolicy: { type: PlaybackPolicyType } | null, /** Server-resolved Chandler URLs for the stream's poster and sprite thumbnails. Derived from active_ingest_cluster_id + stream_id at SELECT time. Null when the stream has never been live; the poster.jpg 404s until Helmsman uploads its first frame, which the player's fallback chain handles. */
+playbackPolicy: { type: PlaybackPolicyType, /** Sites allowed to embed the content, as normalized `scheme://host[:port]` origins; `*` allows any. Empty = no restriction. A browser viewer whose Origin (or Referer) is not listed is denied. */
+allowedOrigins: Array<string> } | null, /** Server-resolved Chandler URLs for the stream's poster and sprite thumbnails. Derived from active_ingest_cluster_id + stream_id at SELECT time. Null when the stream has never been live; the poster.jpg 404s until Helmsman uploads its first frame, which the player's fallback chain handles. */
 thumbnailAssets: { posterUrl: string, spriteVttUrl: string, spriteJpgUrl: string, assetKey: string } | null, /** Per-stream retention overrides for DVR and clips. Null when the stream has no overrides set (inherits the tenant default). VOD uploads aren't stream-bound, so they don't appear here. */
 retentionOverrides: { streamId: string, /** Null = no override (inherit tenant default). 0 = no auto-expire. */
 dvrRetentionDaysOverride: number | null, clipRetentionDaysOverride: number | null } | null } | null };
@@ -4083,7 +4156,8 @@ primaryBitrate: number | null, /** Whether the stream has active quality issues.
 hasIssues: boolean | null, /** Human-readable description of current issues. */
 issuesDescription: string | null } | null, /** Configured multistream push targets for this stream. */
 pushTargets: Array<{ id: string, streamId: string, platform: string | null, name: string, targetUri: string, isEnabled: boolean, status: string, lastError: string | null, reasonCode: string | null, lastPushedAt: string | null, createdAt: string }>, /** Playback access policy. null/PUBLIC = anyone with the playbackId can watch. */
-playbackPolicy: { type: PlaybackPolicyType } | null, /** Server-resolved Chandler URLs for the stream's poster and sprite thumbnails. Derived from active_ingest_cluster_id + stream_id at SELECT time. Null when the stream has never been live; the poster.jpg 404s until Helmsman uploads its first frame, which the player's fallback chain handles. */
+playbackPolicy: { type: PlaybackPolicyType, /** Sites allowed to embed the content, as normalized `scheme://host[:port]` origins; `*` allows any. Empty = no restriction. A browser viewer whose Origin (or Referer) is not listed is denied. */
+allowedOrigins: Array<string> } | null, /** Server-resolved Chandler URLs for the stream's poster and sprite thumbnails. Derived from active_ingest_cluster_id + stream_id at SELECT time. Null when the stream has never been live; the poster.jpg 404s until Helmsman uploads its first frame, which the player's fallback chain handles. */
 thumbnailAssets: { posterUrl: string, spriteVttUrl: string, spriteJpgUrl: string, assetKey: string } | null, /** Per-stream retention overrides for DVR and clips. Null when the stream has no overrides set (inherits the tenant default). VOD uploads aren't stream-bound, so they don't appear here. */
 retentionOverrides: { streamId: string, /** Null = no override (inherit tenant default). 0 = no auto-expire. */
 dvrRetentionDaysOverride: number | null, clipRetentionDaysOverride: number | null } | null } | null };
@@ -4137,7 +4211,8 @@ primaryBitrate: number | null, /** Whether the stream has active quality issues.
 hasIssues: boolean | null, /** Human-readable description of current issues. */
 issuesDescription: string | null } | null, /** Configured multistream push targets for this stream. */
 pushTargets: Array<{ id: string, streamId: string, platform: string | null, name: string, targetUri: string, isEnabled: boolean, status: string, lastError: string | null, reasonCode: string | null, lastPushedAt: string | null, createdAt: string }>, /** Playback access policy. null/PUBLIC = anyone with the playbackId can watch. */
-playbackPolicy: { type: PlaybackPolicyType } | null, /** Server-resolved Chandler URLs for the stream's poster and sprite thumbnails. Derived from active_ingest_cluster_id + stream_id at SELECT time. Null when the stream has never been live; the poster.jpg 404s until Helmsman uploads its first frame, which the player's fallback chain handles. */
+playbackPolicy: { type: PlaybackPolicyType, /** Sites allowed to embed the content, as normalized `scheme://host[:port]` origins; `*` allows any. Empty = no restriction. A browser viewer whose Origin (or Referer) is not listed is denied. */
+allowedOrigins: Array<string> } | null, /** Server-resolved Chandler URLs for the stream's poster and sprite thumbnails. Derived from active_ingest_cluster_id + stream_id at SELECT time. Null when the stream has never been live; the poster.jpg 404s until Helmsman uploads its first frame, which the player's fallback chain handles. */
 thumbnailAssets: { posterUrl: string, spriteVttUrl: string, spriteJpgUrl: string, assetKey: string } | null, /** Per-stream retention overrides for DVR and clips. Null when the stream has no overrides set (inherits the tenant default). VOD uploads aren't stream-bound, so they don't appear here. */
 retentionOverrides: { streamId: string, /** Null = no override (inherit tenant default). 0 = no auto-expire. */
 dvrRetentionDaysOverride: number | null, clipRetentionDaysOverride: number | null } | null } | null, clientBucket: { h3Index: string, resolution: number } | null };
@@ -4191,7 +4266,8 @@ primaryBitrate: number | null, /** Whether the stream has active quality issues.
 hasIssues: boolean | null, /** Human-readable description of current issues. */
 issuesDescription: string | null } | null, /** Configured multistream push targets for this stream. */
 pushTargets: Array<{ id: string, streamId: string, platform: string | null, name: string, targetUri: string, isEnabled: boolean, status: string, lastError: string | null, reasonCode: string | null, lastPushedAt: string | null, createdAt: string }>, /** Playback access policy. null/PUBLIC = anyone with the playbackId can watch. */
-playbackPolicy: { type: PlaybackPolicyType } | null, /** Server-resolved Chandler URLs for the stream's poster and sprite thumbnails. Derived from active_ingest_cluster_id + stream_id at SELECT time. Null when the stream has never been live; the poster.jpg 404s until Helmsman uploads its first frame, which the player's fallback chain handles. */
+playbackPolicy: { type: PlaybackPolicyType, /** Sites allowed to embed the content, as normalized `scheme://host[:port]` origins; `*` allows any. Empty = no restriction. A browser viewer whose Origin (or Referer) is not listed is denied. */
+allowedOrigins: Array<string> } | null, /** Server-resolved Chandler URLs for the stream's poster and sprite thumbnails. Derived from active_ingest_cluster_id + stream_id at SELECT time. Null when the stream has never been live; the poster.jpg 404s until Helmsman uploads its first frame, which the player's fallback chain handles. */
 thumbnailAssets: { posterUrl: string, spriteVttUrl: string, spriteJpgUrl: string, assetKey: string } | null, /** Per-stream retention overrides for DVR and clips. Null when the stream has no overrides set (inherits the tenant default). VOD uploads aren't stream-bound, so they don't appear here. */
 retentionOverrides: { streamId: string, /** Null = no override (inherit tenant default). 0 = no auto-expire. */
 dvrRetentionDaysOverride: number | null, clipRetentionDaysOverride: number | null } | null } | null, clientBucket: { h3Index: string, resolution: number } | null };
@@ -4223,13 +4299,15 @@ vodAssetStorageLocation: string, /** True when S3 has an authoritative copy. */
 vodAssetIsSynced: boolean, /** True when the S3 copy includes the Mist .dtsh index. */
 vodAssetIsFinalized: boolean, /** When the asset was last modified. */
 vodAssetUpdatedAt: string, /** Playback access policy. null/PUBLIC = anyone with the playbackId can watch. */
-playbackPolicy: { type: PlaybackPolicyType, /** JWT-policy details, populated when type == JWT. */
+playbackPolicy: { type: PlaybackPolicyType, /** Sites allowed to embed the content, as normalized `scheme://host[:port]` origins; `*` allows any. Empty = no restriction. A browser viewer whose Origin (or Referer) is not listed is denied. */
+allowedOrigins: Array<string>, /** JWT-policy details, populated when type == JWT. */
 jwt: { /** Allowed signing key IDs. Empty = any active tenant key. */
 allowedKids: Array<string>, /** If set, the viewer JWT's `aud` claim must contain at least one of these. */
 requiredAudience: Array<string> } | null, /** Webhook-policy details, populated when type == WEBHOOK. Secret is masked. */
 webhook: { url: string, /** Outbound POST timeout in milliseconds. Capped server-side at 10000. */
 timeoutMs: number, /** Always 'redacted' on read; the actual secret is fieldcrypt-encrypted at rest. */
-secretMasked: string } | null } | null, /** Server-resolved Chandler URLs for the VOD's poster and sprite thumbnails. Null until Foghorn confirms the thumbnail upload. */
+secretMasked: string, /** Your JSON object, sent as `context` in every access request to the URL. Null when unset. */
+context: unknown } | null } | null, /** Server-resolved Chandler URLs for the VOD's poster and sprite thumbnails. Null until Foghorn confirms the thumbnail upload. */
 thumbnailAssets: { posterUrl: string, spriteVttUrl: string, spriteJpgUrl: string, assetKey: string } | null, /** Resolved retention horizon with the source of the decision (per-asset override → per-stream override → tenant default → tier entitlement). Null while the asset's retention_until column is unset (infinite). */
 effectiveRetention: { /** Days from now until the artifact is scheduled for deletion. 0 = no auto-expire (retentionUntil is null). */
 retentionDays: number, /** Scheduled deletion timestamp. Null when the artifact has no horizon (kept forever). */
@@ -5502,7 +5580,7 @@ export type GetArtifactEventsConnectionQueryVariables = Exact<{
 
 export type GetArtifactEventsConnectionQuery = { /** Unified analytics surface providing access to all platform metrics. Combines data from Periscope (historical) and Signalman (real-time). */
 analytics: { /** Lifecycle analytics: stream events, artifacts, connections. */
-lifecycle: { artifactEventsConnection: { totalCount: number, edges: Array<{ cursor: string, node: { id: string, timestamp: string, streamId: string, playbackId: string | null, stage: string, contentType: string | null, startUnix: number | null, stopUnix: number | null, ingestNodeId: string | null, percent: number | null, message: string | null, filePath: string | null, s3Url: string | null, sizeBytes: number | null, expiresAt: number | null, stream: { id: string, streamId: string, name: string, description: string | null, streamKey: string | null, playbackId: string, record: boolean, ingestMode: IngestMode, createdAt: string, updatedAt: string, dvrChapterMode: DVRChapterMode | null, dvrChapterIntervalSeconds: number | null, monitoring: MonitoringToggle, pullSource: { sourceUriRedacted: string, enabled: boolean, class: string } | null, managedSource: { sourceKind: string, alwaysOn: boolean, placementCount: number } | null, sourceLocation: { mode: SourceLocationMode, avoidNodeIds: Array<string> }, metrics: { status: StreamStatus, isLive: boolean, currentViewers: number, startedAt: string | null, updatedAt: string, nodeId: string | null, trackCount: number | null, totalInputs: number | null, uploadedBytes: number, downloadedBytes: number, viewerSeconds: number, packetsSent: number | null, packetsLost: number | null, packetsRetransmitted: number | null, bufferState: string | null, qualityTier: string | null, primaryWidth: number | null, primaryHeight: number | null, primaryFps: number | null, primaryCodec: string | null, primaryBitrate: number | null, hasIssues: boolean | null, issuesDescription: string | null } | null, pushTargets: Array<{ id: string, streamId: string, platform: string | null, name: string, targetUri: string, isEnabled: boolean, status: string, lastError: string | null, reasonCode: string | null, lastPushedAt: string | null, createdAt: string }>, playbackPolicy: { type: PlaybackPolicyType } | null, thumbnailAssets: { posterUrl: string, spriteVttUrl: string, spriteJpgUrl: string, assetKey: string } | null, retentionOverrides: { streamId: string, dvrRetentionDaysOverride: number | null, clipRetentionDaysOverride: number | null } | null } | null } }>, pageInfo: { startCursor: string | null, endCursor: string | null, hasNextPage: boolean, hasPreviousPage: boolean } } } } };
+lifecycle: { artifactEventsConnection: { totalCount: number, edges: Array<{ cursor: string, node: { id: string, timestamp: string, streamId: string, playbackId: string | null, stage: string, contentType: string | null, startUnix: number | null, stopUnix: number | null, ingestNodeId: string | null, percent: number | null, message: string | null, filePath: string | null, s3Url: string | null, sizeBytes: number | null, expiresAt: number | null, stream: { id: string, streamId: string, name: string, description: string | null, streamKey: string | null, playbackId: string, record: boolean, ingestMode: IngestMode, createdAt: string, updatedAt: string, dvrChapterMode: DVRChapterMode | null, dvrChapterIntervalSeconds: number | null, monitoring: MonitoringToggle, pullSource: { sourceUriRedacted: string, enabled: boolean, class: string } | null, managedSource: { sourceKind: string, alwaysOn: boolean, placementCount: number } | null, sourceLocation: { mode: SourceLocationMode, avoidNodeIds: Array<string> }, metrics: { status: StreamStatus, isLive: boolean, currentViewers: number, startedAt: string | null, updatedAt: string, nodeId: string | null, trackCount: number | null, totalInputs: number | null, uploadedBytes: number, downloadedBytes: number, viewerSeconds: number, packetsSent: number | null, packetsLost: number | null, packetsRetransmitted: number | null, bufferState: string | null, qualityTier: string | null, primaryWidth: number | null, primaryHeight: number | null, primaryFps: number | null, primaryCodec: string | null, primaryBitrate: number | null, hasIssues: boolean | null, issuesDescription: string | null } | null, pushTargets: Array<{ id: string, streamId: string, platform: string | null, name: string, targetUri: string, isEnabled: boolean, status: string, lastError: string | null, reasonCode: string | null, lastPushedAt: string | null, createdAt: string }>, playbackPolicy: { type: PlaybackPolicyType, allowedOrigins: Array<string> } | null, thumbnailAssets: { posterUrl: string, spriteVttUrl: string, spriteJpgUrl: string, assetKey: string } | null, retentionOverrides: { streamId: string, dvrRetentionDaysOverride: number | null, clipRetentionDaysOverride: number | null } | null } | null } }>, pageInfo: { startCursor: string | null, endCursor: string | null, hasNextPage: boolean, hasPreviousPage: boolean } } } } };
 
 export type GetArtifactNodeCopiesQueryVariables = Exact<{
   artifactHash: string;
@@ -5525,7 +5603,7 @@ export type GetArtifactStatesConnectionQueryVariables = Exact<{
 
 export type GetArtifactStatesConnectionQuery = { /** Unified analytics surface providing access to all platform metrics. Combines data from Periscope (historical) and Signalman (real-time). */
 analytics: { /** Lifecycle analytics: stream events, artifacts, connections. */
-lifecycle: { artifactStatesConnection: { totalCount: number, edges: Array<{ cursor: string, node: { streamId: string, playbackId: string | null, contentType: string, stage: string, progressPercent: number, errorMessage: string | null, requestedAt: string, startedAt: string | null, completedAt: string | null, clipStartUnix: number | null, clipStopUnix: number | null, segmentCount: number | null, manifestPath: string | null, filePath: string | null, s3Url: string | null, sizeBytes: number | null, processingNodeId: string | null, expiresAt: string | null, stream: { id: string, streamId: string, name: string, description: string | null, streamKey: string | null, playbackId: string, record: boolean, ingestMode: IngestMode, createdAt: string, updatedAt: string, dvrChapterMode: DVRChapterMode | null, dvrChapterIntervalSeconds: number | null, monitoring: MonitoringToggle, pullSource: { sourceUriRedacted: string, enabled: boolean, class: string } | null, managedSource: { sourceKind: string, alwaysOn: boolean, placementCount: number } | null, sourceLocation: { mode: SourceLocationMode, avoidNodeIds: Array<string> }, metrics: { status: StreamStatus, isLive: boolean, currentViewers: number, startedAt: string | null, updatedAt: string, nodeId: string | null, trackCount: number | null, totalInputs: number | null, uploadedBytes: number, downloadedBytes: number, viewerSeconds: number, packetsSent: number | null, packetsLost: number | null, packetsRetransmitted: number | null, bufferState: string | null, qualityTier: string | null, primaryWidth: number | null, primaryHeight: number | null, primaryFps: number | null, primaryCodec: string | null, primaryBitrate: number | null, hasIssues: boolean | null, issuesDescription: string | null } | null, pushTargets: Array<{ id: string, streamId: string, platform: string | null, name: string, targetUri: string, isEnabled: boolean, status: string, lastError: string | null, reasonCode: string | null, lastPushedAt: string | null, createdAt: string }>, playbackPolicy: { type: PlaybackPolicyType } | null, thumbnailAssets: { posterUrl: string, spriteVttUrl: string, spriteJpgUrl: string, assetKey: string } | null, retentionOverrides: { streamId: string, dvrRetentionDaysOverride: number | null, clipRetentionDaysOverride: number | null } | null } | null } }>, pageInfo: { startCursor: string | null, endCursor: string | null, hasNextPage: boolean, hasPreviousPage: boolean } } } } };
+lifecycle: { artifactStatesConnection: { totalCount: number, edges: Array<{ cursor: string, node: { streamId: string, playbackId: string | null, contentType: string, stage: string, progressPercent: number, errorMessage: string | null, requestedAt: string, startedAt: string | null, completedAt: string | null, clipStartUnix: number | null, clipStopUnix: number | null, segmentCount: number | null, manifestPath: string | null, filePath: string | null, s3Url: string | null, sizeBytes: number | null, processingNodeId: string | null, expiresAt: string | null, stream: { id: string, streamId: string, name: string, description: string | null, streamKey: string | null, playbackId: string, record: boolean, ingestMode: IngestMode, createdAt: string, updatedAt: string, dvrChapterMode: DVRChapterMode | null, dvrChapterIntervalSeconds: number | null, monitoring: MonitoringToggle, pullSource: { sourceUriRedacted: string, enabled: boolean, class: string } | null, managedSource: { sourceKind: string, alwaysOn: boolean, placementCount: number } | null, sourceLocation: { mode: SourceLocationMode, avoidNodeIds: Array<string> }, metrics: { status: StreamStatus, isLive: boolean, currentViewers: number, startedAt: string | null, updatedAt: string, nodeId: string | null, trackCount: number | null, totalInputs: number | null, uploadedBytes: number, downloadedBytes: number, viewerSeconds: number, packetsSent: number | null, packetsLost: number | null, packetsRetransmitted: number | null, bufferState: string | null, qualityTier: string | null, primaryWidth: number | null, primaryHeight: number | null, primaryFps: number | null, primaryCodec: string | null, primaryBitrate: number | null, hasIssues: boolean | null, issuesDescription: string | null } | null, pushTargets: Array<{ id: string, streamId: string, platform: string | null, name: string, targetUri: string, isEnabled: boolean, status: string, lastError: string | null, reasonCode: string | null, lastPushedAt: string | null, createdAt: string }>, playbackPolicy: { type: PlaybackPolicyType, allowedOrigins: Array<string> } | null, thumbnailAssets: { posterUrl: string, spriteVttUrl: string, spriteJpgUrl: string, assetKey: string } | null, retentionOverrides: { streamId: string, dvrRetentionDaysOverride: number | null, clipRetentionDaysOverride: number | null } | null } | null } }>, pageInfo: { startCursor: string | null, endCursor: string | null, hasNextPage: boolean, hasPreviousPage: boolean } } } } };
 
 export type GetBalanceTransactionsConnectionQueryVariables = Exact<{
   page?: ConnectionInput | null | undefined;
@@ -5670,7 +5748,7 @@ export type GetClientQoeConnectionQueryVariables = Exact<{
 
 export type GetClientQoeConnectionQuery = { /** Unified analytics surface providing access to all platform metrics. Combines data from Periscope (historical) and Signalman (real-time). */
 analytics: { /** Health analytics: stream quality, rebuffering, client QoE. */
-health: { clientQoeConnection: { totalCount: number, edges: Array<{ cursor: string, node: { id: string, timestamp: string, streamId: string, nodeId: string, activeSessions: number, avgBandwidthIn: number, avgBandwidthOut: number, avgConnectionTime: number, packetLossRate: number | null, stream: { id: string, streamId: string, name: string, description: string | null, streamKey: string | null, playbackId: string, record: boolean, ingestMode: IngestMode, createdAt: string, updatedAt: string, dvrChapterMode: DVRChapterMode | null, dvrChapterIntervalSeconds: number | null, monitoring: MonitoringToggle, pullSource: { sourceUriRedacted: string, enabled: boolean, class: string } | null, managedSource: { sourceKind: string, alwaysOn: boolean, placementCount: number } | null, sourceLocation: { mode: SourceLocationMode, avoidNodeIds: Array<string> }, metrics: { status: StreamStatus, isLive: boolean, currentViewers: number, startedAt: string | null, updatedAt: string, nodeId: string | null, trackCount: number | null, totalInputs: number | null, uploadedBytes: number, downloadedBytes: number, viewerSeconds: number, packetsSent: number | null, packetsLost: number | null, packetsRetransmitted: number | null, bufferState: string | null, qualityTier: string | null, primaryWidth: number | null, primaryHeight: number | null, primaryFps: number | null, primaryCodec: string | null, primaryBitrate: number | null, hasIssues: boolean | null, issuesDescription: string | null } | null, pushTargets: Array<{ id: string, streamId: string, platform: string | null, name: string, targetUri: string, isEnabled: boolean, status: string, lastError: string | null, reasonCode: string | null, lastPushedAt: string | null, createdAt: string }>, playbackPolicy: { type: PlaybackPolicyType } | null, thumbnailAssets: { posterUrl: string, spriteVttUrl: string, spriteJpgUrl: string, assetKey: string } | null, retentionOverrides: { streamId: string, dvrRetentionDaysOverride: number | null, clipRetentionDaysOverride: number | null } | null } | null } }>, pageInfo: { startCursor: string | null, endCursor: string | null, hasNextPage: boolean, hasPreviousPage: boolean } } } } };
+health: { clientQoeConnection: { totalCount: number, edges: Array<{ cursor: string, node: { id: string, timestamp: string, streamId: string, nodeId: string, activeSessions: number, avgBandwidthIn: number, avgBandwidthOut: number, avgConnectionTime: number, packetLossRate: number | null, stream: { id: string, streamId: string, name: string, description: string | null, streamKey: string | null, playbackId: string, record: boolean, ingestMode: IngestMode, createdAt: string, updatedAt: string, dvrChapterMode: DVRChapterMode | null, dvrChapterIntervalSeconds: number | null, monitoring: MonitoringToggle, pullSource: { sourceUriRedacted: string, enabled: boolean, class: string } | null, managedSource: { sourceKind: string, alwaysOn: boolean, placementCount: number } | null, sourceLocation: { mode: SourceLocationMode, avoidNodeIds: Array<string> }, metrics: { status: StreamStatus, isLive: boolean, currentViewers: number, startedAt: string | null, updatedAt: string, nodeId: string | null, trackCount: number | null, totalInputs: number | null, uploadedBytes: number, downloadedBytes: number, viewerSeconds: number, packetsSent: number | null, packetsLost: number | null, packetsRetransmitted: number | null, bufferState: string | null, qualityTier: string | null, primaryWidth: number | null, primaryHeight: number | null, primaryFps: number | null, primaryCodec: string | null, primaryBitrate: number | null, hasIssues: boolean | null, issuesDescription: string | null } | null, pushTargets: Array<{ id: string, streamId: string, platform: string | null, name: string, targetUri: string, isEnabled: boolean, status: string, lastError: string | null, reasonCode: string | null, lastPushedAt: string | null, createdAt: string }>, playbackPolicy: { type: PlaybackPolicyType, allowedOrigins: Array<string> } | null, thumbnailAssets: { posterUrl: string, spriteVttUrl: string, spriteJpgUrl: string, assetKey: string } | null, retentionOverrides: { streamId: string, dvrRetentionDaysOverride: number | null, clipRetentionDaysOverride: number | null } | null } | null } }>, pageInfo: { startCursor: string | null, endCursor: string | null, hasNextPage: boolean, hasPreviousPage: boolean } } } } };
 
 export type GetClientQoeSummaryQueryVariables = Exact<{
   streamId?: string | null | undefined;
@@ -5854,7 +5932,7 @@ export type GetConnectionEventsConnectionQueryVariables = Exact<{
 
 export type GetConnectionEventsConnectionQuery = { /** Unified analytics surface providing access to all platform metrics. Combines data from Periscope (historical) and Signalman (real-time). */
 analytics: { /** Lifecycle analytics: stream events, artifacts, connections. */
-lifecycle: { connectionEventsConnection: { totalCount: number, edges: Array<{ cursor: string, node: { id: string, eventId: string, timestamp: string, streamId: string, sessionId: string, connectionAddr: string | null, connector: string, nodeId: string, countryCode: string | null, city: string | null, latitude: number | null, longitude: number | null, eventType: string, requestUrl: string | null, clusterId: string, originClusterId: string | null, controlCellId: string | null, sessionDurationSeconds: number | null, bytesTransferred: number | null, stream: { id: string, streamId: string, name: string, description: string | null, streamKey: string | null, playbackId: string, record: boolean, ingestMode: IngestMode, createdAt: string, updatedAt: string, dvrChapterMode: DVRChapterMode | null, dvrChapterIntervalSeconds: number | null, monitoring: MonitoringToggle, pullSource: { sourceUriRedacted: string, enabled: boolean, class: string } | null, managedSource: { sourceKind: string, alwaysOn: boolean, placementCount: number } | null, sourceLocation: { mode: SourceLocationMode, avoidNodeIds: Array<string> }, metrics: { status: StreamStatus, isLive: boolean, currentViewers: number, startedAt: string | null, updatedAt: string, nodeId: string | null, trackCount: number | null, totalInputs: number | null, uploadedBytes: number, downloadedBytes: number, viewerSeconds: number, packetsSent: number | null, packetsLost: number | null, packetsRetransmitted: number | null, bufferState: string | null, qualityTier: string | null, primaryWidth: number | null, primaryHeight: number | null, primaryFps: number | null, primaryCodec: string | null, primaryBitrate: number | null, hasIssues: boolean | null, issuesDescription: string | null } | null, pushTargets: Array<{ id: string, streamId: string, platform: string | null, name: string, targetUri: string, isEnabled: boolean, status: string, lastError: string | null, reasonCode: string | null, lastPushedAt: string | null, createdAt: string }>, playbackPolicy: { type: PlaybackPolicyType } | null, thumbnailAssets: { posterUrl: string, spriteVttUrl: string, spriteJpgUrl: string, assetKey: string } | null, retentionOverrides: { streamId: string, dvrRetentionDaysOverride: number | null, clipRetentionDaysOverride: number | null } | null } | null, clientBucket: { h3Index: string, resolution: number } | null, nodeBucket: { h3Index: string, resolution: number } | null } }>, pageInfo: { startCursor: string | null, endCursor: string | null, hasNextPage: boolean, hasPreviousPage: boolean } } } } };
+lifecycle: { connectionEventsConnection: { totalCount: number, edges: Array<{ cursor: string, node: { id: string, eventId: string, timestamp: string, streamId: string, sessionId: string, connectionAddr: string | null, connector: string, nodeId: string, countryCode: string | null, city: string | null, latitude: number | null, longitude: number | null, eventType: string, requestUrl: string | null, clusterId: string, originClusterId: string | null, controlCellId: string | null, sessionDurationSeconds: number | null, bytesTransferred: number | null, stream: { id: string, streamId: string, name: string, description: string | null, streamKey: string | null, playbackId: string, record: boolean, ingestMode: IngestMode, createdAt: string, updatedAt: string, dvrChapterMode: DVRChapterMode | null, dvrChapterIntervalSeconds: number | null, monitoring: MonitoringToggle, pullSource: { sourceUriRedacted: string, enabled: boolean, class: string } | null, managedSource: { sourceKind: string, alwaysOn: boolean, placementCount: number } | null, sourceLocation: { mode: SourceLocationMode, avoidNodeIds: Array<string> }, metrics: { status: StreamStatus, isLive: boolean, currentViewers: number, startedAt: string | null, updatedAt: string, nodeId: string | null, trackCount: number | null, totalInputs: number | null, uploadedBytes: number, downloadedBytes: number, viewerSeconds: number, packetsSent: number | null, packetsLost: number | null, packetsRetransmitted: number | null, bufferState: string | null, qualityTier: string | null, primaryWidth: number | null, primaryHeight: number | null, primaryFps: number | null, primaryCodec: string | null, primaryBitrate: number | null, hasIssues: boolean | null, issuesDescription: string | null } | null, pushTargets: Array<{ id: string, streamId: string, platform: string | null, name: string, targetUri: string, isEnabled: boolean, status: string, lastError: string | null, reasonCode: string | null, lastPushedAt: string | null, createdAt: string }>, playbackPolicy: { type: PlaybackPolicyType, allowedOrigins: Array<string> } | null, thumbnailAssets: { posterUrl: string, spriteVttUrl: string, spriteJpgUrl: string, assetKey: string } | null, retentionOverrides: { streamId: string, dvrRetentionDaysOverride: number | null, clipRetentionDaysOverride: number | null } | null } | null, clientBucket: { h3Index: string, resolution: number } | null, nodeBucket: { h3Index: string, resolution: number } | null } }>, pageInfo: { startCursor: string | null, endCursor: string | null, hasNextPage: boolean, hasPreviousPage: boolean } } } } };
 
 export type GetConversationQueryVariables = Exact<{
   id: string;
@@ -5997,7 +6075,8 @@ primaryBitrate: number | null, /** Whether the stream has active quality issues.
 hasIssues: boolean | null, /** Human-readable description of current issues. */
 issuesDescription: string | null } | null, /** Configured multistream push targets for this stream. */
 pushTargets: Array<{ id: string, streamId: string, platform: string | null, name: string, targetUri: string, isEnabled: boolean, status: string, lastError: string | null, reasonCode: string | null, lastPushedAt: string | null, createdAt: string }>, /** Playback access policy. null/PUBLIC = anyone with the playbackId can watch. */
-playbackPolicy: { type: PlaybackPolicyType } | null, /** Server-resolved Chandler URLs for the stream's poster and sprite thumbnails. Derived from active_ingest_cluster_id + stream_id at SELECT time. Null when the stream has never been live; the poster.jpg 404s until Helmsman uploads its first frame, which the player's fallback chain handles. */
+playbackPolicy: { type: PlaybackPolicyType, /** Sites allowed to embed the content, as normalized `scheme://host[:port]` origins; `*` allows any. Empty = no restriction. A browser viewer whose Origin (or Referer) is not listed is denied. */
+allowedOrigins: Array<string> } | null, /** Server-resolved Chandler URLs for the stream's poster and sprite thumbnails. Derived from active_ingest_cluster_id + stream_id at SELECT time. Null when the stream has never been live; the poster.jpg 404s until Helmsman uploads its first frame, which the player's fallback chain handles. */
 thumbnailAssets: { posterUrl: string, spriteVttUrl: string, spriteJpgUrl: string, assetKey: string } | null, /** Per-stream retention overrides for DVR and clips. Null when the stream has no overrides set (inherits the tenant default). VOD uploads aren't stream-bound, so they don't appear here. */
 retentionOverrides: { streamId: string, /** Null = no override (inherit tenant default). 0 = no auto-expire. */
 dvrRetentionDaysOverride: number | null, clipRetentionDaysOverride: number | null } | null } | null, topCountries: Array<{ countryCode: string, viewerCount: number, percentage: number }>, topCities: Array<{ city: string, countryCode: string | null, viewerCount: number, percentage: number, latitude: number | null, longitude: number | null }>, viewersByCountry: Array<{ timestamp: string, countryCode: string, viewerCount: number }> } | null } } } };
@@ -6330,7 +6409,8 @@ primaryBitrate: number | null, /** Whether the stream has active quality issues.
 hasIssues: boolean | null, /** Human-readable description of current issues. */
 issuesDescription: string | null } | null, /** Configured multistream push targets for this stream. */
 pushTargets: Array<{ id: string, streamId: string, platform: string | null, name: string, targetUri: string, isEnabled: boolean, status: string, lastError: string | null, reasonCode: string | null, lastPushedAt: string | null, createdAt: string }>, /** Playback access policy. null/PUBLIC = anyone with the playbackId can watch. */
-playbackPolicy: { type: PlaybackPolicyType } | null, /** Server-resolved Chandler URLs for the stream's poster and sprite thumbnails. Derived from active_ingest_cluster_id + stream_id at SELECT time. Null when the stream has never been live; the poster.jpg 404s until Helmsman uploads its first frame, which the player's fallback chain handles. */
+playbackPolicy: { type: PlaybackPolicyType, /** Sites allowed to embed the content, as normalized `scheme://host[:port]` origins; `*` allows any. Empty = no restriction. A browser viewer whose Origin (or Referer) is not listed is denied. */
+allowedOrigins: Array<string> } | null, /** Server-resolved Chandler URLs for the stream's poster and sprite thumbnails. Derived from active_ingest_cluster_id + stream_id at SELECT time. Null when the stream has never been live; the poster.jpg 404s until Helmsman uploads its first frame, which the player's fallback chain handles. */
 thumbnailAssets: { posterUrl: string, spriteVttUrl: string, spriteJpgUrl: string, assetKey: string } | null, /** Per-stream retention overrides for DVR and clips. Null when the stream has no overrides set (inherits the tenant default). VOD uploads aren't stream-bound, so they don't appear here. */
 retentionOverrides: { streamId: string, /** Null = no override (inherit tenant default). 0 = no auto-expire. */
 dvrRetentionDaysOverride: number | null, clipRetentionDaysOverride: number | null } | null } | null }
@@ -6384,7 +6464,8 @@ primaryBitrate: number | null, /** Whether the stream has active quality issues.
 hasIssues: boolean | null, /** Human-readable description of current issues. */
 issuesDescription: string | null } | null, /** Configured multistream push targets for this stream. */
 pushTargets: Array<{ id: string, streamId: string, platform: string | null, name: string, targetUri: string, isEnabled: boolean, status: string, lastError: string | null, reasonCode: string | null, lastPushedAt: string | null, createdAt: string }>, /** Playback access policy. null/PUBLIC = anyone with the playbackId can watch. */
-playbackPolicy: { type: PlaybackPolicyType } | null, /** Server-resolved Chandler URLs for the stream's poster and sprite thumbnails. Derived from active_ingest_cluster_id + stream_id at SELECT time. Null when the stream has never been live; the poster.jpg 404s until Helmsman uploads its first frame, which the player's fallback chain handles. */
+playbackPolicy: { type: PlaybackPolicyType, /** Sites allowed to embed the content, as normalized `scheme://host[:port]` origins; `*` allows any. Empty = no restriction. A browser viewer whose Origin (or Referer) is not listed is denied. */
+allowedOrigins: Array<string> } | null, /** Server-resolved Chandler URLs for the stream's poster and sprite thumbnails. Derived from active_ingest_cluster_id + stream_id at SELECT time. Null when the stream has never been live; the poster.jpg 404s until Helmsman uploads its first frame, which the player's fallback chain handles. */
 thumbnailAssets: { posterUrl: string, spriteVttUrl: string, spriteJpgUrl: string, assetKey: string } | null, /** Per-stream retention overrides for DVR and clips. Null when the stream has no overrides set (inherits the tenant default). VOD uploads aren't stream-bound, so they don't appear here. */
 retentionOverrides: { streamId: string, /** Null = no override (inherit tenant default). 0 = no auto-expire. */
 dvrRetentionDaysOverride: number | null, clipRetentionDaysOverride: number | null } | null } | null }
@@ -6461,17 +6542,20 @@ primaryBitrate: number | null, /** Whether the stream has active quality issues.
 hasIssues: boolean | null, /** Human-readable description of current issues. */
 issuesDescription: string | null } | null, /** Configured multistream push targets for this stream. */
 pushTargets: Array<{ id: string, streamId: string, platform: string | null, name: string, targetUri: string, isEnabled: boolean, status: string, lastError: string | null, reasonCode: string | null, lastPushedAt: string | null, createdAt: string }>, /** Playback access policy. null/PUBLIC = anyone with the playbackId can watch. */
-playbackPolicy: { type: PlaybackPolicyType } | null, /** Server-resolved Chandler URLs for the stream's poster and sprite thumbnails. Derived from active_ingest_cluster_id + stream_id at SELECT time. Null when the stream has never been live; the poster.jpg 404s until Helmsman uploads its first frame, which the player's fallback chain handles. */
+playbackPolicy: { type: PlaybackPolicyType, /** Sites allowed to embed the content, as normalized `scheme://host[:port]` origins; `*` allows any. Empty = no restriction. A browser viewer whose Origin (or Referer) is not listed is denied. */
+allowedOrigins: Array<string> } | null, /** Server-resolved Chandler URLs for the stream's poster and sprite thumbnails. Derived from active_ingest_cluster_id + stream_id at SELECT time. Null when the stream has never been live; the poster.jpg 404s until Helmsman uploads its first frame, which the player's fallback chain handles. */
 thumbnailAssets: { posterUrl: string, spriteVttUrl: string, spriteJpgUrl: string, assetKey: string } | null, /** Per-stream retention overrides for DVR and clips. Null when the stream has no overrides set (inherits the tenant default). VOD uploads aren't stream-bound, so they don't appear here. */
 retentionOverrides: { streamId: string, /** Null = no override (inherit tenant default). 0 = no auto-expire. */
 dvrRetentionDaysOverride: number | null, clipRetentionDaysOverride: number | null } | null } | null, /** Playback access policy snapshotted at clip creation. null/PUBLIC means anyone with the playbackId can watch. Independent from the source stream's policy after creation — flipping the source stream's policy does not affect already-shared clip URLs. */
-playbackPolicy: { type: PlaybackPolicyType, /** JWT-policy details, populated when type == JWT. */
+playbackPolicy: { type: PlaybackPolicyType, /** Sites allowed to embed the content, as normalized `scheme://host[:port]` origins; `*` allows any. Empty = no restriction. A browser viewer whose Origin (or Referer) is not listed is denied. */
+allowedOrigins: Array<string>, /** JWT-policy details, populated when type == JWT. */
 jwt: { /** Allowed signing key IDs. Empty = any active tenant key. */
 allowedKids: Array<string>, /** If set, the viewer JWT's `aud` claim must contain at least one of these. */
 requiredAudience: Array<string> } | null, /** Webhook-policy details, populated when type == WEBHOOK. Secret is masked. */
 webhook: { url: string, /** Outbound POST timeout in milliseconds. Capped server-side at 10000. */
 timeoutMs: number, /** Always 'redacted' on read; the actual secret is fieldcrypt-encrypted at rest. */
-secretMasked: string } | null } | null, /** Server-resolved Chandler URLs for the clip's poster and sprite thumbnails. Null until Foghorn confirms the thumbnail upload. */
+secretMasked: string, /** Your JSON object, sent as `context` in every access request to the URL. Null when unset. */
+context: unknown } | null } | null, /** Server-resolved Chandler URLs for the clip's poster and sprite thumbnails. Null until Foghorn confirms the thumbnail upload. */
 thumbnailAssets: { posterUrl: string, spriteVttUrl: string, spriteJpgUrl: string, assetKey: string } | null, /** Resolved retention horizon with the source of the decision (per-asset override → per-stream override → tenant default → tier entitlement). Null when retention_until is unset (infinite). */
 effectiveRetention: { /** Days from now until the artifact is scheduled for deletion. 0 = no auto-expire (retentionUntil is null). */
 retentionDays: number, /** Scheduled deletion timestamp. Null when the artifact has no horizon (kept forever). */
@@ -6553,7 +6637,8 @@ primaryBitrate: number | null, /** Whether the stream has active quality issues.
 hasIssues: boolean | null, /** Human-readable description of current issues. */
 issuesDescription: string | null } | null, /** Configured multistream push targets for this stream. */
 pushTargets: Array<{ id: string, streamId: string, platform: string | null, name: string, targetUri: string, isEnabled: boolean, status: string, lastError: string | null, reasonCode: string | null, lastPushedAt: string | null, createdAt: string }>, /** Playback access policy. null/PUBLIC = anyone with the playbackId can watch. */
-playbackPolicy: { type: PlaybackPolicyType } | null, /** Server-resolved Chandler URLs for the stream's poster and sprite thumbnails. Derived from active_ingest_cluster_id + stream_id at SELECT time. Null when the stream has never been live; the poster.jpg 404s until Helmsman uploads its first frame, which the player's fallback chain handles. */
+playbackPolicy: { type: PlaybackPolicyType, /** Sites allowed to embed the content, as normalized `scheme://host[:port]` origins; `*` allows any. Empty = no restriction. A browser viewer whose Origin (or Referer) is not listed is denied. */
+allowedOrigins: Array<string> } | null, /** Server-resolved Chandler URLs for the stream's poster and sprite thumbnails. Derived from active_ingest_cluster_id + stream_id at SELECT time. Null when the stream has never been live; the poster.jpg 404s until Helmsman uploads its first frame, which the player's fallback chain handles. */
 thumbnailAssets: { posterUrl: string, spriteVttUrl: string, spriteJpgUrl: string, assetKey: string } | null, /** Per-stream retention overrides for DVR and clips. Null when the stream has no overrides set (inherits the tenant default). VOD uploads aren't stream-bound, so they don't appear here. */
 retentionOverrides: { streamId: string, /** Null = no override (inherit tenant default). 0 = no auto-expire. */
 dvrRetentionDaysOverride: number | null, clipRetentionDaysOverride: number | null } | null } | null, clientBucket: { h3Index: string, resolution: number } | null, nodeBucket: { h3Index: string, resolution: number } | null }
@@ -6665,7 +6750,8 @@ primaryBitrate: number | null, /** Whether the stream has active quality issues.
 hasIssues: boolean | null, /** Human-readable description of current issues. */
 issuesDescription: string | null } | null, /** Configured multistream push targets for this stream. */
 pushTargets: Array<{ id: string, streamId: string, platform: string | null, name: string, targetUri: string, isEnabled: boolean, status: string, lastError: string | null, reasonCode: string | null, lastPushedAt: string | null, createdAt: string }>, /** Playback access policy. null/PUBLIC = anyone with the playbackId can watch. */
-playbackPolicy: { type: PlaybackPolicyType } | null, /** Server-resolved Chandler URLs for the stream's poster and sprite thumbnails. Derived from active_ingest_cluster_id + stream_id at SELECT time. Null when the stream has never been live; the poster.jpg 404s until Helmsman uploads its first frame, which the player's fallback chain handles. */
+playbackPolicy: { type: PlaybackPolicyType, /** Sites allowed to embed the content, as normalized `scheme://host[:port]` origins; `*` allows any. Empty = no restriction. A browser viewer whose Origin (or Referer) is not listed is denied. */
+allowedOrigins: Array<string> } | null, /** Server-resolved Chandler URLs for the stream's poster and sprite thumbnails. Derived from active_ingest_cluster_id + stream_id at SELECT time. Null when the stream has never been live; the poster.jpg 404s until Helmsman uploads its first frame, which the player's fallback chain handles. */
 thumbnailAssets: { posterUrl: string, spriteVttUrl: string, spriteJpgUrl: string, assetKey: string } | null, /** Per-stream retention overrides for DVR and clips. Null when the stream has no overrides set (inherits the tenant default). VOD uploads aren't stream-bound, so they don't appear here. */
 retentionOverrides: { streamId: string, /** Null = no override (inherit tenant default). 0 = no auto-expire. */
 dvrRetentionDaysOverride: number | null, clipRetentionDaysOverride: number | null } | null } | null }
@@ -6718,7 +6804,8 @@ primaryBitrate: number | null, /** Whether the stream has active quality issues.
 hasIssues: boolean | null, /** Human-readable description of current issues. */
 issuesDescription: string | null } | null, /** Configured multistream push targets for this stream. */
 pushTargets: Array<{ id: string, streamId: string, platform: string | null, name: string, targetUri: string, isEnabled: boolean, status: string, lastError: string | null, reasonCode: string | null, lastPushedAt: string | null, createdAt: string }>, /** Playback access policy. null/PUBLIC = anyone with the playbackId can watch. */
-playbackPolicy: { type: PlaybackPolicyType } | null, /** Server-resolved Chandler URLs for the stream's poster and sprite thumbnails. Derived from active_ingest_cluster_id + stream_id at SELECT time. Null when the stream has never been live; the poster.jpg 404s until Helmsman uploads its first frame, which the player's fallback chain handles. */
+playbackPolicy: { type: PlaybackPolicyType, /** Sites allowed to embed the content, as normalized `scheme://host[:port]` origins; `*` allows any. Empty = no restriction. A browser viewer whose Origin (or Referer) is not listed is denied. */
+allowedOrigins: Array<string> } | null, /** Server-resolved Chandler URLs for the stream's poster and sprite thumbnails. Derived from active_ingest_cluster_id + stream_id at SELECT time. Null when the stream has never been live; the poster.jpg 404s until Helmsman uploads its first frame, which the player's fallback chain handles. */
 thumbnailAssets: { posterUrl: string, spriteVttUrl: string, spriteJpgUrl: string, assetKey: string } | null, /** Per-stream retention overrides for DVR and clips. Null when the stream has no overrides set (inherits the tenant default). VOD uploads aren't stream-bound, so they don't appear here. */
 retentionOverrides: { streamId: string, /** Null = no override (inherit tenant default). 0 = no auto-expire. */
 dvrRetentionDaysOverride: number | null, clipRetentionDaysOverride: number | null } | null } | null }
@@ -6779,7 +6866,8 @@ primaryBitrate: number | null, /** Whether the stream has active quality issues.
 hasIssues: boolean | null, /** Human-readable description of current issues. */
 issuesDescription: string | null } | null, /** Configured multistream push targets for this stream. */
 pushTargets: Array<{ id: string, streamId: string, platform: string | null, name: string, targetUri: string, isEnabled: boolean, status: string, lastError: string | null, reasonCode: string | null, lastPushedAt: string | null, createdAt: string }>, /** Playback access policy. null/PUBLIC = anyone with the playbackId can watch. */
-playbackPolicy: { type: PlaybackPolicyType } | null, /** Server-resolved Chandler URLs for the stream's poster and sprite thumbnails. Derived from active_ingest_cluster_id + stream_id at SELECT time. Null when the stream has never been live; the poster.jpg 404s until Helmsman uploads its first frame, which the player's fallback chain handles. */
+playbackPolicy: { type: PlaybackPolicyType, /** Sites allowed to embed the content, as normalized `scheme://host[:port]` origins; `*` allows any. Empty = no restriction. A browser viewer whose Origin (or Referer) is not listed is denied. */
+allowedOrigins: Array<string> } | null, /** Server-resolved Chandler URLs for the stream's poster and sprite thumbnails. Derived from active_ingest_cluster_id + stream_id at SELECT time. Null when the stream has never been live; the poster.jpg 404s until Helmsman uploads its first frame, which the player's fallback chain handles. */
 thumbnailAssets: { posterUrl: string, spriteVttUrl: string, spriteJpgUrl: string, assetKey: string } | null, /** Per-stream retention overrides for DVR and clips. Null when the stream has no overrides set (inherits the tenant default). VOD uploads aren't stream-bound, so they don't appear here. */
 retentionOverrides: { streamId: string, /** Null = no override (inherit tenant default). 0 = no auto-expire. */
 dvrRetentionDaysOverride: number | null, clipRetentionDaysOverride: number | null } | null } | null }
@@ -6834,13 +6922,15 @@ primaryBitrate: number | null, /** Whether the stream has active quality issues.
 hasIssues: boolean | null, /** Human-readable description of current issues. */
 issuesDescription: string | null } | null, /** Configured multistream push targets for this stream. */
 pushTargets: Array<{ id: string, streamId: string, platform: string | null, name: string, targetUri: string, isEnabled: boolean, status: string, lastError: string | null, reasonCode: string | null, lastPushedAt: string | null, createdAt: string }>, /** Playback access policy. null/PUBLIC = anyone with the playbackId can watch. */
-playbackPolicy: { type: PlaybackPolicyType, /** JWT-policy details, populated when type == JWT. */
+playbackPolicy: { type: PlaybackPolicyType, /** Sites allowed to embed the content, as normalized `scheme://host[:port]` origins; `*` allows any. Empty = no restriction. A browser viewer whose Origin (or Referer) is not listed is denied. */
+allowedOrigins: Array<string>, /** JWT-policy details, populated when type == JWT. */
 jwt: { /** Allowed signing key IDs. Empty = any active tenant key. */
 allowedKids: Array<string>, /** If set, the viewer JWT's `aud` claim must contain at least one of these. */
 requiredAudience: Array<string> } | null, /** Webhook-policy details, populated when type == WEBHOOK. Secret is masked. */
 webhook: { url: string, /** Outbound POST timeout in milliseconds. Capped server-side at 10000. */
 timeoutMs: number, /** Always 'redacted' on read; the actual secret is fieldcrypt-encrypted at rest. */
-secretMasked: string } | null } | null, /** Server-resolved Chandler URLs for the stream's poster and sprite thumbnails. Derived from active_ingest_cluster_id + stream_id at SELECT time. Null when the stream has never been live; the poster.jpg 404s until Helmsman uploads its first frame, which the player's fallback chain handles. */
+secretMasked: string, /** Your JSON object, sent as `context` in every access request to the URL. Null when unset. */
+context: unknown } | null } | null, /** Server-resolved Chandler URLs for the stream's poster and sprite thumbnails. Derived from active_ingest_cluster_id + stream_id at SELECT time. Null when the stream has never been live; the poster.jpg 404s until Helmsman uploads its first frame, which the player's fallback chain handles. */
 thumbnailAssets: { posterUrl: string, spriteVttUrl: string, spriteJpgUrl: string, assetKey: string } | null, /** Per-stream retention overrides for DVR and clips. Null when the stream has no overrides set (inherits the tenant default). VOD uploads aren't stream-bound, so they don't appear here. */
 retentionOverrides: { streamId: string, /** Null = no override (inherit tenant default). 0 = no auto-expire. */
 dvrRetentionDaysOverride: number | null, clipRetentionDaysOverride: number | null } | null }
@@ -6893,7 +6983,8 @@ primaryBitrate: number | null, /** Whether the stream has active quality issues.
 hasIssues: boolean | null, /** Human-readable description of current issues. */
 issuesDescription: string | null } | null, /** Configured multistream push targets for this stream. */
 pushTargets: Array<{ id: string, streamId: string, platform: string | null, name: string, targetUri: string, isEnabled: boolean, status: string, lastError: string | null, reasonCode: string | null, lastPushedAt: string | null, createdAt: string }>, /** Playback access policy. null/PUBLIC = anyone with the playbackId can watch. */
-playbackPolicy: { type: PlaybackPolicyType } | null, /** Server-resolved Chandler URLs for the stream's poster and sprite thumbnails. Derived from active_ingest_cluster_id + stream_id at SELECT time. Null when the stream has never been live; the poster.jpg 404s until Helmsman uploads its first frame, which the player's fallback chain handles. */
+playbackPolicy: { type: PlaybackPolicyType, /** Sites allowed to embed the content, as normalized `scheme://host[:port]` origins; `*` allows any. Empty = no restriction. A browser viewer whose Origin (or Referer) is not listed is denied. */
+allowedOrigins: Array<string> } | null, /** Server-resolved Chandler URLs for the stream's poster and sprite thumbnails. Derived from active_ingest_cluster_id + stream_id at SELECT time. Null when the stream has never been live; the poster.jpg 404s until Helmsman uploads its first frame, which the player's fallback chain handles. */
 thumbnailAssets: { posterUrl: string, spriteVttUrl: string, spriteJpgUrl: string, assetKey: string } | null, /** Per-stream retention overrides for DVR and clips. Null when the stream has no overrides set (inherits the tenant default). VOD uploads aren't stream-bound, so they don't appear here. */
 retentionOverrides: { streamId: string, /** Null = no override (inherit tenant default). 0 = no auto-expire. */
 dvrRetentionDaysOverride: number | null, clipRetentionDaysOverride: number | null } | null } | null }
@@ -6946,7 +7037,8 @@ primaryBitrate: number | null, /** Whether the stream has active quality issues.
 hasIssues: boolean | null, /** Human-readable description of current issues. */
 issuesDescription: string | null } | null, /** Configured multistream push targets for this stream. */
 pushTargets: Array<{ id: string, streamId: string, platform: string | null, name: string, targetUri: string, isEnabled: boolean, status: string, lastError: string | null, reasonCode: string | null, lastPushedAt: string | null, createdAt: string }>, /** Playback access policy. null/PUBLIC = anyone with the playbackId can watch. */
-playbackPolicy: { type: PlaybackPolicyType } | null, /** Server-resolved Chandler URLs for the stream's poster and sprite thumbnails. Derived from active_ingest_cluster_id + stream_id at SELECT time. Null when the stream has never been live; the poster.jpg 404s until Helmsman uploads its first frame, which the player's fallback chain handles. */
+playbackPolicy: { type: PlaybackPolicyType, /** Sites allowed to embed the content, as normalized `scheme://host[:port]` origins; `*` allows any. Empty = no restriction. A browser viewer whose Origin (or Referer) is not listed is denied. */
+allowedOrigins: Array<string> } | null, /** Server-resolved Chandler URLs for the stream's poster and sprite thumbnails. Derived from active_ingest_cluster_id + stream_id at SELECT time. Null when the stream has never been live; the poster.jpg 404s until Helmsman uploads its first frame, which the player's fallback chain handles. */
 thumbnailAssets: { posterUrl: string, spriteVttUrl: string, spriteJpgUrl: string, assetKey: string } | null, /** Per-stream retention overrides for DVR and clips. Null when the stream has no overrides set (inherits the tenant default). VOD uploads aren't stream-bound, so they don't appear here. */
 retentionOverrides: { streamId: string, /** Null = no override (inherit tenant default). 0 = no auto-expire. */
 dvrRetentionDaysOverride: number | null, clipRetentionDaysOverride: number | null } | null } | null }
@@ -6999,7 +7091,8 @@ primaryBitrate: number | null, /** Whether the stream has active quality issues.
 hasIssues: boolean | null, /** Human-readable description of current issues. */
 issuesDescription: string | null } | null, /** Configured multistream push targets for this stream. */
 pushTargets: Array<{ id: string, streamId: string, platform: string | null, name: string, targetUri: string, isEnabled: boolean, status: string, lastError: string | null, reasonCode: string | null, lastPushedAt: string | null, createdAt: string }>, /** Playback access policy. null/PUBLIC = anyone with the playbackId can watch. */
-playbackPolicy: { type: PlaybackPolicyType } | null, /** Server-resolved Chandler URLs for the stream's poster and sprite thumbnails. Derived from active_ingest_cluster_id + stream_id at SELECT time. Null when the stream has never been live; the poster.jpg 404s until Helmsman uploads its first frame, which the player's fallback chain handles. */
+playbackPolicy: { type: PlaybackPolicyType, /** Sites allowed to embed the content, as normalized `scheme://host[:port]` origins; `*` allows any. Empty = no restriction. A browser viewer whose Origin (or Referer) is not listed is denied. */
+allowedOrigins: Array<string> } | null, /** Server-resolved Chandler URLs for the stream's poster and sprite thumbnails. Derived from active_ingest_cluster_id + stream_id at SELECT time. Null when the stream has never been live; the poster.jpg 404s until Helmsman uploads its first frame, which the player's fallback chain handles. */
 thumbnailAssets: { posterUrl: string, spriteVttUrl: string, spriteJpgUrl: string, assetKey: string } | null, /** Per-stream retention overrides for DVR and clips. Null when the stream has no overrides set (inherits the tenant default). VOD uploads aren't stream-bound, so they don't appear here. */
 retentionOverrides: { streamId: string, /** Null = no override (inherit tenant default). 0 = no auto-expire. */
 dvrRetentionDaysOverride: number | null, clipRetentionDaysOverride: number | null } | null } | null }
@@ -7053,7 +7146,8 @@ primaryBitrate: number | null, /** Whether the stream has active quality issues.
 hasIssues: boolean | null, /** Human-readable description of current issues. */
 issuesDescription: string | null } | null, /** Configured multistream push targets for this stream. */
 pushTargets: Array<{ id: string, streamId: string, platform: string | null, name: string, targetUri: string, isEnabled: boolean, status: string, lastError: string | null, reasonCode: string | null, lastPushedAt: string | null, createdAt: string }>, /** Playback access policy. null/PUBLIC = anyone with the playbackId can watch. */
-playbackPolicy: { type: PlaybackPolicyType } | null, /** Server-resolved Chandler URLs for the stream's poster and sprite thumbnails. Derived from active_ingest_cluster_id + stream_id at SELECT time. Null when the stream has never been live; the poster.jpg 404s until Helmsman uploads its first frame, which the player's fallback chain handles. */
+playbackPolicy: { type: PlaybackPolicyType, /** Sites allowed to embed the content, as normalized `scheme://host[:port]` origins; `*` allows any. Empty = no restriction. A browser viewer whose Origin (or Referer) is not listed is denied. */
+allowedOrigins: Array<string> } | null, /** Server-resolved Chandler URLs for the stream's poster and sprite thumbnails. Derived from active_ingest_cluster_id + stream_id at SELECT time. Null when the stream has never been live; the poster.jpg 404s until Helmsman uploads its first frame, which the player's fallback chain handles. */
 thumbnailAssets: { posterUrl: string, spriteVttUrl: string, spriteJpgUrl: string, assetKey: string } | null, /** Per-stream retention overrides for DVR and clips. Null when the stream has no overrides set (inherits the tenant default). VOD uploads aren't stream-bound, so they don't appear here. */
 retentionOverrides: { streamId: string, /** Null = no override (inherit tenant default). 0 = no auto-expire. */
 dvrRetentionDaysOverride: number | null, clipRetentionDaysOverride: number | null } | null } | null }
@@ -7107,7 +7201,8 @@ primaryBitrate: number | null, /** Whether the stream has active quality issues.
 hasIssues: boolean | null, /** Human-readable description of current issues. */
 issuesDescription: string | null } | null, /** Configured multistream push targets for this stream. */
 pushTargets: Array<{ id: string, streamId: string, platform: string | null, name: string, targetUri: string, isEnabled: boolean, status: string, lastError: string | null, reasonCode: string | null, lastPushedAt: string | null, createdAt: string }>, /** Playback access policy. null/PUBLIC = anyone with the playbackId can watch. */
-playbackPolicy: { type: PlaybackPolicyType } | null, /** Server-resolved Chandler URLs for the stream's poster and sprite thumbnails. Derived from active_ingest_cluster_id + stream_id at SELECT time. Null when the stream has never been live; the poster.jpg 404s until Helmsman uploads its first frame, which the player's fallback chain handles. */
+playbackPolicy: { type: PlaybackPolicyType, /** Sites allowed to embed the content, as normalized `scheme://host[:port]` origins; `*` allows any. Empty = no restriction. A browser viewer whose Origin (or Referer) is not listed is denied. */
+allowedOrigins: Array<string> } | null, /** Server-resolved Chandler URLs for the stream's poster and sprite thumbnails. Derived from active_ingest_cluster_id + stream_id at SELECT time. Null when the stream has never been live; the poster.jpg 404s until Helmsman uploads its first frame, which the player's fallback chain handles. */
 thumbnailAssets: { posterUrl: string, spriteVttUrl: string, spriteJpgUrl: string, assetKey: string } | null, /** Per-stream retention overrides for DVR and clips. Null when the stream has no overrides set (inherits the tenant default). VOD uploads aren't stream-bound, so they don't appear here. */
 retentionOverrides: { streamId: string, /** Null = no override (inherit tenant default). 0 = no auto-expire. */
 dvrRetentionDaysOverride: number | null, clipRetentionDaysOverride: number | null } | null } | null, tracks: Array<{ trackName: string, trackType: string, codec: string | null, bitrateKbps: number | null, bitrateBps: number | null, buffer: number | null, jitter: number | null, width: number | null, height: number | null, fps: number | null, resolution: string | null, hasBFrames: boolean | null, channels: number | null, sampleRate: number | null }> | null }
@@ -7161,7 +7256,8 @@ primaryBitrate: number | null, /** Whether the stream has active quality issues.
 hasIssues: boolean | null, /** Human-readable description of current issues. */
 issuesDescription: string | null } | null, /** Configured multistream push targets for this stream. */
 pushTargets: Array<{ id: string, streamId: string, platform: string | null, name: string, targetUri: string, isEnabled: boolean, status: string, lastError: string | null, reasonCode: string | null, lastPushedAt: string | null, createdAt: string }>, /** Playback access policy. null/PUBLIC = anyone with the playbackId can watch. */
-playbackPolicy: { type: PlaybackPolicyType } | null, /** Server-resolved Chandler URLs for the stream's poster and sprite thumbnails. Derived from active_ingest_cluster_id + stream_id at SELECT time. Null when the stream has never been live; the poster.jpg 404s until Helmsman uploads its first frame, which the player's fallback chain handles. */
+playbackPolicy: { type: PlaybackPolicyType, /** Sites allowed to embed the content, as normalized `scheme://host[:port]` origins; `*` allows any. Empty = no restriction. A browser viewer whose Origin (or Referer) is not listed is denied. */
+allowedOrigins: Array<string> } | null, /** Server-resolved Chandler URLs for the stream's poster and sprite thumbnails. Derived from active_ingest_cluster_id + stream_id at SELECT time. Null when the stream has never been live; the poster.jpg 404s until Helmsman uploads its first frame, which the player's fallback chain handles. */
 thumbnailAssets: { posterUrl: string, spriteVttUrl: string, spriteJpgUrl: string, assetKey: string } | null, /** Per-stream retention overrides for DVR and clips. Null when the stream has no overrides set (inherits the tenant default). VOD uploads aren't stream-bound, so they don't appear here. */
 retentionOverrides: { streamId: string, /** Null = no override (inherit tenant default). 0 = no auto-expire. */
 dvrRetentionDaysOverride: number | null, clipRetentionDaysOverride: number | null } | null } | null }
@@ -7214,7 +7310,8 @@ primaryBitrate: number | null, /** Whether the stream has active quality issues.
 hasIssues: boolean | null, /** Human-readable description of current issues. */
 issuesDescription: string | null } | null, /** Configured multistream push targets for this stream. */
 pushTargets: Array<{ id: string, streamId: string, platform: string | null, name: string, targetUri: string, isEnabled: boolean, status: string, lastError: string | null, reasonCode: string | null, lastPushedAt: string | null, createdAt: string }>, /** Playback access policy. null/PUBLIC = anyone with the playbackId can watch. */
-playbackPolicy: { type: PlaybackPolicyType } | null, /** Server-resolved Chandler URLs for the stream's poster and sprite thumbnails. Derived from active_ingest_cluster_id + stream_id at SELECT time. Null when the stream has never been live; the poster.jpg 404s until Helmsman uploads its first frame, which the player's fallback chain handles. */
+playbackPolicy: { type: PlaybackPolicyType, /** Sites allowed to embed the content, as normalized `scheme://host[:port]` origins; `*` allows any. Empty = no restriction. A browser viewer whose Origin (or Referer) is not listed is denied. */
+allowedOrigins: Array<string> } | null, /** Server-resolved Chandler URLs for the stream's poster and sprite thumbnails. Derived from active_ingest_cluster_id + stream_id at SELECT time. Null when the stream has never been live; the poster.jpg 404s until Helmsman uploads its first frame, which the player's fallback chain handles. */
 thumbnailAssets: { posterUrl: string, spriteVttUrl: string, spriteJpgUrl: string, assetKey: string } | null, /** Per-stream retention overrides for DVR and clips. Null when the stream has no overrides set (inherits the tenant default). VOD uploads aren't stream-bound, so they don't appear here. */
 retentionOverrides: { streamId: string, /** Null = no override (inherit tenant default). 0 = no auto-expire. */
 dvrRetentionDaysOverride: number | null, clipRetentionDaysOverride: number | null } | null } | null, clientBucket: { h3Index: string, resolution: number } | null }
@@ -7244,13 +7341,15 @@ vodAssetStorageLocation: string, /** True when S3 has an authoritative copy. */
 vodAssetIsSynced: boolean, /** True when the S3 copy includes the Mist .dtsh index. */
 vodAssetIsFinalized: boolean, /** When the asset was last modified. */
 vodAssetUpdatedAt: string, /** Playback access policy. null/PUBLIC = anyone with the playbackId can watch. */
-playbackPolicy: { type: PlaybackPolicyType, /** JWT-policy details, populated when type == JWT. */
+playbackPolicy: { type: PlaybackPolicyType, /** Sites allowed to embed the content, as normalized `scheme://host[:port]` origins; `*` allows any. Empty = no restriction. A browser viewer whose Origin (or Referer) is not listed is denied. */
+allowedOrigins: Array<string>, /** JWT-policy details, populated when type == JWT. */
 jwt: { /** Allowed signing key IDs. Empty = any active tenant key. */
 allowedKids: Array<string>, /** If set, the viewer JWT's `aud` claim must contain at least one of these. */
 requiredAudience: Array<string> } | null, /** Webhook-policy details, populated when type == WEBHOOK. Secret is masked. */
 webhook: { url: string, /** Outbound POST timeout in milliseconds. Capped server-side at 10000. */
 timeoutMs: number, /** Always 'redacted' on read; the actual secret is fieldcrypt-encrypted at rest. */
-secretMasked: string } | null } | null, /** Server-resolved Chandler URLs for the VOD's poster and sprite thumbnails. Null until Foghorn confirms the thumbnail upload. */
+secretMasked: string, /** Your JSON object, sent as `context` in every access request to the URL. Null when unset. */
+context: unknown } | null } | null, /** Server-resolved Chandler URLs for the VOD's poster and sprite thumbnails. Null until Foghorn confirms the thumbnail upload. */
 thumbnailAssets: { posterUrl: string, spriteVttUrl: string, spriteJpgUrl: string, assetKey: string } | null, /** Resolved retention horizon with the source of the decision (per-asset override → per-stream override → tenant default → tier entitlement). Null while the asset's retention_until column is unset (infinite). */
 effectiveRetention: { /** Days from now until the artifact is scheduled for deletion. 0 = no auto-expire (retentionUntil is null). */
 retentionDays: number, /** Scheduled deletion timestamp. Null when the artifact has no horizon (kept forever). */
@@ -7491,7 +7590,7 @@ export type GetProcessingUsageConnectionQueryVariables = Exact<{
 export type GetProcessingUsageConnectionQuery = { /** Unified analytics surface providing access to all platform metrics. Combines data from Periscope (historical) and Signalman (real-time). */
 analytics: { /** Usage analytics: streaming hours, storage, and processing. */
 usage: { /** Processing usage: transcoding, clipping, DVR operations. */
-processing: { processingUsageConnection: { totalCount: number, edges: Array<{ cursor: string, node: { id: string, timestamp: string, nodeId: string, streamId: string, processType: string, clusterId: string | null, originClusterId: string | null, controlCellId: string | null, trackType: string | null, durationMs: number, inputCodec: string | null, outputCodec: string | null, segmentNumber: number | null, width: number | null, height: number | null, renditionCount: number | null, broadcasterUrl: string | null, uploadTimeUs: number | null, livepeerSessionId: string | null, segmentStartMs: number | null, inputBytes: number | null, outputBytesTotal: number | null, attemptCount: number | null, turnaroundMs: number | null, speedFactor: number | null, renditionsJson: string | null, inputFrames: number | null, outputFrames: number | null, decodeUsPerFrame: number | null, transformUsPerFrame: number | null, encodeUsPerFrame: number | null, isFinal: boolean | null, inputFramesDelta: number | null, outputFramesDelta: number | null, inputBytesDelta: number | null, outputBytesDelta: number | null, inputWidth: number | null, inputHeight: number | null, outputWidth: number | null, outputHeight: number | null, inputFpks: number | null, outputFpsMeasured: number | null, sampleRate: number | null, channels: number | null, sourceTimestampMs: number | null, sinkTimestampMs: number | null, sourceAdvancedMs: number | null, sinkAdvancedMs: number | null, rtfIn: number | null, rtfOut: number | null, pipelineLagMs: number | null, outputBitrateBps: number | null, stream: { id: string, streamId: string, name: string, description: string | null, streamKey: string | null, playbackId: string, record: boolean, ingestMode: IngestMode, createdAt: string, updatedAt: string, dvrChapterMode: DVRChapterMode | null, dvrChapterIntervalSeconds: number | null, monitoring: MonitoringToggle, pullSource: { sourceUriRedacted: string, enabled: boolean, class: string } | null, managedSource: { sourceKind: string, alwaysOn: boolean, placementCount: number } | null, sourceLocation: { mode: SourceLocationMode, avoidNodeIds: Array<string> }, metrics: { status: StreamStatus, isLive: boolean, currentViewers: number, startedAt: string | null, updatedAt: string, nodeId: string | null, trackCount: number | null, totalInputs: number | null, uploadedBytes: number, downloadedBytes: number, viewerSeconds: number, packetsSent: number | null, packetsLost: number | null, packetsRetransmitted: number | null, bufferState: string | null, qualityTier: string | null, primaryWidth: number | null, primaryHeight: number | null, primaryFps: number | null, primaryCodec: string | null, primaryBitrate: number | null, hasIssues: boolean | null, issuesDescription: string | null } | null, pushTargets: Array<{ id: string, streamId: string, platform: string | null, name: string, targetUri: string, isEnabled: boolean, status: string, lastError: string | null, reasonCode: string | null, lastPushedAt: string | null, createdAt: string }>, playbackPolicy: { type: PlaybackPolicyType } | null, thumbnailAssets: { posterUrl: string, spriteVttUrl: string, spriteJpgUrl: string, assetKey: string } | null, retentionOverrides: { streamId: string, dvrRetentionDaysOverride: number | null, clipRetentionDaysOverride: number | null } | null } | null } }>, pageInfo: { startCursor: string | null, endCursor: string | null, hasNextPage: boolean, hasPreviousPage: boolean }, summaries: Array<{ date: string, livepeerSeconds: number, livepeerSegmentCount: number, livepeerUniqueStreams: number, livepeerH264Seconds: number, livepeerVp9Seconds: number, livepeerAv1Seconds: number, livepeerHevcSeconds: number, nativeAvSeconds: number, nativeAvSegmentCount: number, nativeAvUniqueStreams: number, nativeAvH264Seconds: number, nativeAvVp9Seconds: number, nativeAvAv1Seconds: number, nativeAvHevcSeconds: number, nativeAvAacSeconds: number, nativeAvOpusSeconds: number, audioSeconds: number, videoSeconds: number }> } } } } };
+processing: { processingUsageConnection: { totalCount: number, edges: Array<{ cursor: string, node: { id: string, timestamp: string, nodeId: string, streamId: string, processType: string, clusterId: string | null, originClusterId: string | null, controlCellId: string | null, trackType: string | null, durationMs: number, inputCodec: string | null, outputCodec: string | null, segmentNumber: number | null, width: number | null, height: number | null, renditionCount: number | null, broadcasterUrl: string | null, uploadTimeUs: number | null, livepeerSessionId: string | null, segmentStartMs: number | null, inputBytes: number | null, outputBytesTotal: number | null, attemptCount: number | null, turnaroundMs: number | null, speedFactor: number | null, renditionsJson: string | null, inputFrames: number | null, outputFrames: number | null, decodeUsPerFrame: number | null, transformUsPerFrame: number | null, encodeUsPerFrame: number | null, isFinal: boolean | null, inputFramesDelta: number | null, outputFramesDelta: number | null, inputBytesDelta: number | null, outputBytesDelta: number | null, inputWidth: number | null, inputHeight: number | null, outputWidth: number | null, outputHeight: number | null, inputFpks: number | null, outputFpsMeasured: number | null, sampleRate: number | null, channels: number | null, sourceTimestampMs: number | null, sinkTimestampMs: number | null, sourceAdvancedMs: number | null, sinkAdvancedMs: number | null, rtfIn: number | null, rtfOut: number | null, pipelineLagMs: number | null, outputBitrateBps: number | null, stream: { id: string, streamId: string, name: string, description: string | null, streamKey: string | null, playbackId: string, record: boolean, ingestMode: IngestMode, createdAt: string, updatedAt: string, dvrChapterMode: DVRChapterMode | null, dvrChapterIntervalSeconds: number | null, monitoring: MonitoringToggle, pullSource: { sourceUriRedacted: string, enabled: boolean, class: string } | null, managedSource: { sourceKind: string, alwaysOn: boolean, placementCount: number } | null, sourceLocation: { mode: SourceLocationMode, avoidNodeIds: Array<string> }, metrics: { status: StreamStatus, isLive: boolean, currentViewers: number, startedAt: string | null, updatedAt: string, nodeId: string | null, trackCount: number | null, totalInputs: number | null, uploadedBytes: number, downloadedBytes: number, viewerSeconds: number, packetsSent: number | null, packetsLost: number | null, packetsRetransmitted: number | null, bufferState: string | null, qualityTier: string | null, primaryWidth: number | null, primaryHeight: number | null, primaryFps: number | null, primaryCodec: string | null, primaryBitrate: number | null, hasIssues: boolean | null, issuesDescription: string | null } | null, pushTargets: Array<{ id: string, streamId: string, platform: string | null, name: string, targetUri: string, isEnabled: boolean, status: string, lastError: string | null, reasonCode: string | null, lastPushedAt: string | null, createdAt: string }>, playbackPolicy: { type: PlaybackPolicyType, allowedOrigins: Array<string> } | null, thumbnailAssets: { posterUrl: string, spriteVttUrl: string, spriteJpgUrl: string, assetKey: string } | null, retentionOverrides: { streamId: string, dvrRetentionDaysOverride: number | null, clipRetentionDaysOverride: number | null } | null } | null } }>, pageInfo: { startCursor: string | null, endCursor: string | null, hasNextPage: boolean, hasPreviousPage: boolean }, summaries: Array<{ date: string, livepeerSeconds: number, livepeerSegmentCount: number, livepeerUniqueStreams: number, livepeerH264Seconds: number, livepeerVp9Seconds: number, livepeerAv1Seconds: number, livepeerHevcSeconds: number, nativeAvSeconds: number, nativeAvSegmentCount: number, nativeAvUniqueStreams: number, nativeAvH264Seconds: number, nativeAvVp9Seconds: number, nativeAvAv1Seconds: number, nativeAvHevcSeconds: number, nativeAvAacSeconds: number, nativeAvOpusSeconds: number, audioSeconds: number, videoSeconds: number }> } } } } };
 
 export type GetQualityTierDailyConnectionQueryVariables = Exact<{
   page?: ConnectionInput | null | undefined;
@@ -7504,7 +7603,7 @@ export type GetQualityTierDailyConnectionQueryVariables = Exact<{
 export type GetQualityTierDailyConnectionQuery = { /** Unified analytics surface providing access to all platform metrics. Combines data from Periscope (historical) and Signalman (real-time). */
 analytics: { /** Usage analytics: streaming hours, storage, and processing. */
 usage: { /** Streaming usage: viewer hours, geographic distribution, quality tiers. */
-streaming: { qualityTierDailyConnection: { totalCount: number, edges: Array<{ cursor: string, node: { id: string, day: string, streamId: string, tier2160pMinutes: number, tier1440pMinutes: number, tier1080pMinutes: number, tier720pMinutes: number, tier480pMinutes: number, tierSdMinutes: number, primaryTier: string, codecH264Minutes: number, codecH265Minutes: number, codecVp9Minutes: number, codecAv1Minutes: number, avgBitrate: number, avgFps: number, stream: { id: string, streamId: string, name: string, description: string | null, streamKey: string | null, playbackId: string, record: boolean, ingestMode: IngestMode, createdAt: string, updatedAt: string, dvrChapterMode: DVRChapterMode | null, dvrChapterIntervalSeconds: number | null, monitoring: MonitoringToggle, pullSource: { sourceUriRedacted: string, enabled: boolean, class: string } | null, managedSource: { sourceKind: string, alwaysOn: boolean, placementCount: number } | null, sourceLocation: { mode: SourceLocationMode, avoidNodeIds: Array<string> }, metrics: { status: StreamStatus, isLive: boolean, currentViewers: number, startedAt: string | null, updatedAt: string, nodeId: string | null, trackCount: number | null, totalInputs: number | null, uploadedBytes: number, downloadedBytes: number, viewerSeconds: number, packetsSent: number | null, packetsLost: number | null, packetsRetransmitted: number | null, bufferState: string | null, qualityTier: string | null, primaryWidth: number | null, primaryHeight: number | null, primaryFps: number | null, primaryCodec: string | null, primaryBitrate: number | null, hasIssues: boolean | null, issuesDescription: string | null } | null, pushTargets: Array<{ id: string, streamId: string, platform: string | null, name: string, targetUri: string, isEnabled: boolean, status: string, lastError: string | null, reasonCode: string | null, lastPushedAt: string | null, createdAt: string }>, playbackPolicy: { type: PlaybackPolicyType } | null, thumbnailAssets: { posterUrl: string, spriteVttUrl: string, spriteJpgUrl: string, assetKey: string } | null, retentionOverrides: { streamId: string, dvrRetentionDaysOverride: number | null, clipRetentionDaysOverride: number | null } | null } | null } }>, pageInfo: { startCursor: string | null, endCursor: string | null, hasNextPage: boolean, hasPreviousPage: boolean } } } } } };
+streaming: { qualityTierDailyConnection: { totalCount: number, edges: Array<{ cursor: string, node: { id: string, day: string, streamId: string, tier2160pMinutes: number, tier1440pMinutes: number, tier1080pMinutes: number, tier720pMinutes: number, tier480pMinutes: number, tierSdMinutes: number, primaryTier: string, codecH264Minutes: number, codecH265Minutes: number, codecVp9Minutes: number, codecAv1Minutes: number, avgBitrate: number, avgFps: number, stream: { id: string, streamId: string, name: string, description: string | null, streamKey: string | null, playbackId: string, record: boolean, ingestMode: IngestMode, createdAt: string, updatedAt: string, dvrChapterMode: DVRChapterMode | null, dvrChapterIntervalSeconds: number | null, monitoring: MonitoringToggle, pullSource: { sourceUriRedacted: string, enabled: boolean, class: string } | null, managedSource: { sourceKind: string, alwaysOn: boolean, placementCount: number } | null, sourceLocation: { mode: SourceLocationMode, avoidNodeIds: Array<string> }, metrics: { status: StreamStatus, isLive: boolean, currentViewers: number, startedAt: string | null, updatedAt: string, nodeId: string | null, trackCount: number | null, totalInputs: number | null, uploadedBytes: number, downloadedBytes: number, viewerSeconds: number, packetsSent: number | null, packetsLost: number | null, packetsRetransmitted: number | null, bufferState: string | null, qualityTier: string | null, primaryWidth: number | null, primaryHeight: number | null, primaryFps: number | null, primaryCodec: string | null, primaryBitrate: number | null, hasIssues: boolean | null, issuesDescription: string | null } | null, pushTargets: Array<{ id: string, streamId: string, platform: string | null, name: string, targetUri: string, isEnabled: boolean, status: string, lastError: string | null, reasonCode: string | null, lastPushedAt: string | null, createdAt: string }>, playbackPolicy: { type: PlaybackPolicyType, allowedOrigins: Array<string> } | null, thumbnailAssets: { posterUrl: string, spriteVttUrl: string, spriteJpgUrl: string, assetKey: string } | null, retentionOverrides: { streamId: string, dvrRetentionDaysOverride: number | null, clipRetentionDaysOverride: number | null } | null } | null } }>, pageInfo: { startCursor: string | null, endCursor: string | null, hasNextPage: boolean, hasPreviousPage: boolean } } } } } };
 
 export type GetRebufferingEventsConnectionQueryVariables = Exact<{
   page?: ConnectionInput | null | undefined;
@@ -7517,7 +7616,7 @@ export type GetRebufferingEventsConnectionQueryVariables = Exact<{
 
 export type GetRebufferingEventsConnectionQuery = { /** Unified analytics surface providing access to all platform metrics. Combines data from Periscope (historical) and Signalman (real-time). */
 analytics: { /** Health analytics: stream quality, rebuffering, client QoE. */
-health: { rebufferingEventsConnection: { totalCount: number, edges: Array<{ cursor: string, node: { timestamp: string, streamId: string, nodeId: string, bufferState: BufferState, previousState: BufferState, rebufferStart: boolean, rebufferEnd: boolean, stream: { id: string, streamId: string, name: string, description: string | null, streamKey: string | null, playbackId: string, record: boolean, ingestMode: IngestMode, createdAt: string, updatedAt: string, dvrChapterMode: DVRChapterMode | null, dvrChapterIntervalSeconds: number | null, monitoring: MonitoringToggle, pullSource: { sourceUriRedacted: string, enabled: boolean, class: string } | null, managedSource: { sourceKind: string, alwaysOn: boolean, placementCount: number } | null, sourceLocation: { mode: SourceLocationMode, avoidNodeIds: Array<string> }, metrics: { status: StreamStatus, isLive: boolean, currentViewers: number, startedAt: string | null, updatedAt: string, nodeId: string | null, trackCount: number | null, totalInputs: number | null, uploadedBytes: number, downloadedBytes: number, viewerSeconds: number, packetsSent: number | null, packetsLost: number | null, packetsRetransmitted: number | null, bufferState: string | null, qualityTier: string | null, primaryWidth: number | null, primaryHeight: number | null, primaryFps: number | null, primaryCodec: string | null, primaryBitrate: number | null, hasIssues: boolean | null, issuesDescription: string | null } | null, pushTargets: Array<{ id: string, streamId: string, platform: string | null, name: string, targetUri: string, isEnabled: boolean, status: string, lastError: string | null, reasonCode: string | null, lastPushedAt: string | null, createdAt: string }>, playbackPolicy: { type: PlaybackPolicyType } | null, thumbnailAssets: { posterUrl: string, spriteVttUrl: string, spriteJpgUrl: string, assetKey: string } | null, retentionOverrides: { streamId: string, dvrRetentionDaysOverride: number | null, clipRetentionDaysOverride: number | null } | null } | null } }>, pageInfo: { startCursor: string | null, endCursor: string | null, hasNextPage: boolean, hasPreviousPage: boolean } } } } };
+health: { rebufferingEventsConnection: { totalCount: number, edges: Array<{ cursor: string, node: { timestamp: string, streamId: string, nodeId: string, bufferState: BufferState, previousState: BufferState, rebufferStart: boolean, rebufferEnd: boolean, stream: { id: string, streamId: string, name: string, description: string | null, streamKey: string | null, playbackId: string, record: boolean, ingestMode: IngestMode, createdAt: string, updatedAt: string, dvrChapterMode: DVRChapterMode | null, dvrChapterIntervalSeconds: number | null, monitoring: MonitoringToggle, pullSource: { sourceUriRedacted: string, enabled: boolean, class: string } | null, managedSource: { sourceKind: string, alwaysOn: boolean, placementCount: number } | null, sourceLocation: { mode: SourceLocationMode, avoidNodeIds: Array<string> }, metrics: { status: StreamStatus, isLive: boolean, currentViewers: number, startedAt: string | null, updatedAt: string, nodeId: string | null, trackCount: number | null, totalInputs: number | null, uploadedBytes: number, downloadedBytes: number, viewerSeconds: number, packetsSent: number | null, packetsLost: number | null, packetsRetransmitted: number | null, bufferState: string | null, qualityTier: string | null, primaryWidth: number | null, primaryHeight: number | null, primaryFps: number | null, primaryCodec: string | null, primaryBitrate: number | null, hasIssues: boolean | null, issuesDescription: string | null } | null, pushTargets: Array<{ id: string, streamId: string, platform: string | null, name: string, targetUri: string, isEnabled: boolean, status: string, lastError: string | null, reasonCode: string | null, lastPushedAt: string | null, createdAt: string }>, playbackPolicy: { type: PlaybackPolicyType, allowedOrigins: Array<string> } | null, thumbnailAssets: { posterUrl: string, spriteVttUrl: string, spriteJpgUrl: string, assetKey: string } | null, retentionOverrides: { streamId: string, dvrRetentionDaysOverride: number | null, clipRetentionDaysOverride: number | null } | null } | null } }>, pageInfo: { startCursor: string | null, endCursor: string | null, hasNextPage: boolean, hasPreviousPage: boolean } } } } };
 
 export type GetRecentPullSourceEventsQueryVariables = Exact<{
   id: string;
@@ -7579,7 +7678,7 @@ export type GetRoutingEventsConnectionQueryVariables = Exact<{
 
 export type GetRoutingEventsConnectionQuery = { /** Unified analytics surface providing access to all platform metrics. Combines data from Periscope (historical) and Signalman (real-time). */
 analytics: { /** Infrastructure analytics: routing, node metrics, services. */
-infra: { routingEventsConnection: { totalCount: number, edges: Array<{ cursor: string, node: { timestamp: string, streamId: string, selectedNode: string, nodeId: string | null, status: string, details: string | null, score: number | null, clientCountry: string | null, clientLatitude: number | null, clientLongitude: number | null, nodeLatitude: number | null, nodeLongitude: number | null, nodeName: string | null, routingDistance: number | null, candidatesCount: number | null, latencyMs: number | null, eventType: string | null, source: string | null, streamTenantId: string | null, clusterId: string | null, remoteClusterId: string | null, selectedClusterId: string | null, controlCellId: string | null, originClusterId: string | null, stream: { id: string, streamId: string, name: string, description: string | null, streamKey: string | null, playbackId: string, record: boolean, ingestMode: IngestMode, createdAt: string, updatedAt: string, dvrChapterMode: DVRChapterMode | null, dvrChapterIntervalSeconds: number | null, monitoring: MonitoringToggle, pullSource: { sourceUriRedacted: string, enabled: boolean, class: string } | null, managedSource: { sourceKind: string, alwaysOn: boolean, placementCount: number } | null, sourceLocation: { mode: SourceLocationMode, avoidNodeIds: Array<string> }, metrics: { status: StreamStatus, isLive: boolean, currentViewers: number, startedAt: string | null, updatedAt: string, nodeId: string | null, trackCount: number | null, totalInputs: number | null, uploadedBytes: number, downloadedBytes: number, viewerSeconds: number, packetsSent: number | null, packetsLost: number | null, packetsRetransmitted: number | null, bufferState: string | null, qualityTier: string | null, primaryWidth: number | null, primaryHeight: number | null, primaryFps: number | null, primaryCodec: string | null, primaryBitrate: number | null, hasIssues: boolean | null, issuesDescription: string | null } | null, pushTargets: Array<{ id: string, streamId: string, platform: string | null, name: string, targetUri: string, isEnabled: boolean, status: string, lastError: string | null, reasonCode: string | null, lastPushedAt: string | null, createdAt: string }>, playbackPolicy: { type: PlaybackPolicyType } | null, thumbnailAssets: { posterUrl: string, spriteVttUrl: string, spriteJpgUrl: string, assetKey: string } | null, retentionOverrides: { streamId: string, dvrRetentionDaysOverride: number | null, clipRetentionDaysOverride: number | null } | null } | null, clientBucket: { h3Index: string, resolution: number } | null, nodeBucket: { h3Index: string, resolution: number } | null } }>, pageInfo: { startCursor: string | null, endCursor: string | null, hasNextPage: boolean, hasPreviousPage: boolean } } } } };
+infra: { routingEventsConnection: { totalCount: number, edges: Array<{ cursor: string, node: { timestamp: string, streamId: string, selectedNode: string, nodeId: string | null, status: string, details: string | null, score: number | null, clientCountry: string | null, clientLatitude: number | null, clientLongitude: number | null, nodeLatitude: number | null, nodeLongitude: number | null, nodeName: string | null, routingDistance: number | null, candidatesCount: number | null, latencyMs: number | null, eventType: string | null, source: string | null, streamTenantId: string | null, clusterId: string | null, remoteClusterId: string | null, selectedClusterId: string | null, controlCellId: string | null, originClusterId: string | null, stream: { id: string, streamId: string, name: string, description: string | null, streamKey: string | null, playbackId: string, record: boolean, ingestMode: IngestMode, createdAt: string, updatedAt: string, dvrChapterMode: DVRChapterMode | null, dvrChapterIntervalSeconds: number | null, monitoring: MonitoringToggle, pullSource: { sourceUriRedacted: string, enabled: boolean, class: string } | null, managedSource: { sourceKind: string, alwaysOn: boolean, placementCount: number } | null, sourceLocation: { mode: SourceLocationMode, avoidNodeIds: Array<string> }, metrics: { status: StreamStatus, isLive: boolean, currentViewers: number, startedAt: string | null, updatedAt: string, nodeId: string | null, trackCount: number | null, totalInputs: number | null, uploadedBytes: number, downloadedBytes: number, viewerSeconds: number, packetsSent: number | null, packetsLost: number | null, packetsRetransmitted: number | null, bufferState: string | null, qualityTier: string | null, primaryWidth: number | null, primaryHeight: number | null, primaryFps: number | null, primaryCodec: string | null, primaryBitrate: number | null, hasIssues: boolean | null, issuesDescription: string | null } | null, pushTargets: Array<{ id: string, streamId: string, platform: string | null, name: string, targetUri: string, isEnabled: boolean, status: string, lastError: string | null, reasonCode: string | null, lastPushedAt: string | null, createdAt: string }>, playbackPolicy: { type: PlaybackPolicyType, allowedOrigins: Array<string> } | null, thumbnailAssets: { posterUrl: string, spriteVttUrl: string, spriteJpgUrl: string, assetKey: string } | null, retentionOverrides: { streamId: string, dvrRetentionDaysOverride: number | null, clipRetentionDaysOverride: number | null } | null } | null, clientBucket: { h3Index: string, resolution: number } | null, nodeBucket: { h3Index: string, resolution: number } | null } }>, pageInfo: { startCursor: string | null, endCursor: string | null, hasNextPage: boolean, hasPreviousPage: boolean } } } } };
 
 export type GetServiceInstancesConnectionQueryVariables = Exact<{
   page?: ConnectionInput | null | undefined;
@@ -7687,7 +7786,7 @@ export type GetStorageEventsConnectionQueryVariables = Exact<{
 
 export type GetStorageEventsConnectionQuery = { /** Unified analytics surface providing access to all platform metrics. Combines data from Periscope (historical) and Signalman (real-time). */
 analytics: { /** Lifecycle analytics: stream events, artifacts, connections. */
-lifecycle: { storageEventsConnection: { totalCount: number, edges: Array<{ cursor: string, node: { id: string, timestamp: string, streamId: string, assetHash: string, action: string, assetType: string, sizeBytes: number, s3Url: string | null, localPath: string | null, nodeId: string, clusterId: string | null, originClusterId: string | null, controlCellId: string | null, durationMs: number | null, warmDurationMs: number | null, error: string | null, stream: { id: string, streamId: string, name: string, description: string | null, streamKey: string | null, playbackId: string, record: boolean, ingestMode: IngestMode, createdAt: string, updatedAt: string, dvrChapterMode: DVRChapterMode | null, dvrChapterIntervalSeconds: number | null, monitoring: MonitoringToggle, pullSource: { sourceUriRedacted: string, enabled: boolean, class: string } | null, managedSource: { sourceKind: string, alwaysOn: boolean, placementCount: number } | null, sourceLocation: { mode: SourceLocationMode, avoidNodeIds: Array<string> }, metrics: { status: StreamStatus, isLive: boolean, currentViewers: number, startedAt: string | null, updatedAt: string, nodeId: string | null, trackCount: number | null, totalInputs: number | null, uploadedBytes: number, downloadedBytes: number, viewerSeconds: number, packetsSent: number | null, packetsLost: number | null, packetsRetransmitted: number | null, bufferState: string | null, qualityTier: string | null, primaryWidth: number | null, primaryHeight: number | null, primaryFps: number | null, primaryCodec: string | null, primaryBitrate: number | null, hasIssues: boolean | null, issuesDescription: string | null } | null, pushTargets: Array<{ id: string, streamId: string, platform: string | null, name: string, targetUri: string, isEnabled: boolean, status: string, lastError: string | null, reasonCode: string | null, lastPushedAt: string | null, createdAt: string }>, playbackPolicy: { type: PlaybackPolicyType } | null, thumbnailAssets: { posterUrl: string, spriteVttUrl: string, spriteJpgUrl: string, assetKey: string } | null, retentionOverrides: { streamId: string, dvrRetentionDaysOverride: number | null, clipRetentionDaysOverride: number | null } | null } | null } }>, pageInfo: { startCursor: string | null, endCursor: string | null, hasNextPage: boolean, hasPreviousPage: boolean } } } } };
+lifecycle: { storageEventsConnection: { totalCount: number, edges: Array<{ cursor: string, node: { id: string, timestamp: string, streamId: string, assetHash: string, action: string, assetType: string, sizeBytes: number, s3Url: string | null, localPath: string | null, nodeId: string, clusterId: string | null, originClusterId: string | null, controlCellId: string | null, durationMs: number | null, warmDurationMs: number | null, error: string | null, stream: { id: string, streamId: string, name: string, description: string | null, streamKey: string | null, playbackId: string, record: boolean, ingestMode: IngestMode, createdAt: string, updatedAt: string, dvrChapterMode: DVRChapterMode | null, dvrChapterIntervalSeconds: number | null, monitoring: MonitoringToggle, pullSource: { sourceUriRedacted: string, enabled: boolean, class: string } | null, managedSource: { sourceKind: string, alwaysOn: boolean, placementCount: number } | null, sourceLocation: { mode: SourceLocationMode, avoidNodeIds: Array<string> }, metrics: { status: StreamStatus, isLive: boolean, currentViewers: number, startedAt: string | null, updatedAt: string, nodeId: string | null, trackCount: number | null, totalInputs: number | null, uploadedBytes: number, downloadedBytes: number, viewerSeconds: number, packetsSent: number | null, packetsLost: number | null, packetsRetransmitted: number | null, bufferState: string | null, qualityTier: string | null, primaryWidth: number | null, primaryHeight: number | null, primaryFps: number | null, primaryCodec: string | null, primaryBitrate: number | null, hasIssues: boolean | null, issuesDescription: string | null } | null, pushTargets: Array<{ id: string, streamId: string, platform: string | null, name: string, targetUri: string, isEnabled: boolean, status: string, lastError: string | null, reasonCode: string | null, lastPushedAt: string | null, createdAt: string }>, playbackPolicy: { type: PlaybackPolicyType, allowedOrigins: Array<string> } | null, thumbnailAssets: { posterUrl: string, spriteVttUrl: string, spriteJpgUrl: string, assetKey: string } | null, retentionOverrides: { streamId: string, dvrRetentionDaysOverride: number | null, clipRetentionDaysOverride: number | null } | null } | null } }>, pageInfo: { startCursor: string | null, endCursor: string | null, hasNextPage: boolean, hasPreviousPage: boolean } } } } };
 
 export type GetStorageUsageConnectionQueryVariables = Exact<{
   page?: ConnectionInput | null | undefined;
@@ -7714,7 +7813,7 @@ export type GetStreamAnalyticsDailyConnectionQueryVariables = Exact<{
 export type GetStreamAnalyticsDailyConnectionQuery = { /** Unified analytics surface providing access to all platform metrics. Combines data from Periscope (historical) and Signalman (real-time). */
 analytics: { /** Usage analytics: streaming hours, storage, and processing. */
 usage: { /** Streaming usage: viewer hours, geographic distribution, quality tiers. */
-streaming: { streamAnalyticsDailyConnection: { totalCount: number, edges: Array<{ cursor: string, node: { id: string, day: string, streamId: string, totalViews: number, uniqueViewers: number, uniqueCountries: number, uniqueCities: number, egressBytes: number, stream: { id: string, streamId: string, name: string, description: string | null, streamKey: string | null, playbackId: string, record: boolean, ingestMode: IngestMode, createdAt: string, updatedAt: string, dvrChapterMode: DVRChapterMode | null, dvrChapterIntervalSeconds: number | null, monitoring: MonitoringToggle, pullSource: { sourceUriRedacted: string, enabled: boolean, class: string } | null, managedSource: { sourceKind: string, alwaysOn: boolean, placementCount: number } | null, sourceLocation: { mode: SourceLocationMode, avoidNodeIds: Array<string> }, metrics: { status: StreamStatus, isLive: boolean, currentViewers: number, startedAt: string | null, updatedAt: string, nodeId: string | null, trackCount: number | null, totalInputs: number | null, uploadedBytes: number, downloadedBytes: number, viewerSeconds: number, packetsSent: number | null, packetsLost: number | null, packetsRetransmitted: number | null, bufferState: string | null, qualityTier: string | null, primaryWidth: number | null, primaryHeight: number | null, primaryFps: number | null, primaryCodec: string | null, primaryBitrate: number | null, hasIssues: boolean | null, issuesDescription: string | null } | null, pushTargets: Array<{ id: string, streamId: string, platform: string | null, name: string, targetUri: string, isEnabled: boolean, status: string, lastError: string | null, reasonCode: string | null, lastPushedAt: string | null, createdAt: string }>, playbackPolicy: { type: PlaybackPolicyType } | null, thumbnailAssets: { posterUrl: string, spriteVttUrl: string, spriteJpgUrl: string, assetKey: string } | null, retentionOverrides: { streamId: string, dvrRetentionDaysOverride: number | null, clipRetentionDaysOverride: number | null } | null } | null } }>, pageInfo: { startCursor: string | null, endCursor: string | null, hasNextPage: boolean, hasPreviousPage: boolean } } } } } };
+streaming: { streamAnalyticsDailyConnection: { totalCount: number, edges: Array<{ cursor: string, node: { id: string, day: string, streamId: string, totalViews: number, uniqueViewers: number, uniqueCountries: number, uniqueCities: number, egressBytes: number, stream: { id: string, streamId: string, name: string, description: string | null, streamKey: string | null, playbackId: string, record: boolean, ingestMode: IngestMode, createdAt: string, updatedAt: string, dvrChapterMode: DVRChapterMode | null, dvrChapterIntervalSeconds: number | null, monitoring: MonitoringToggle, pullSource: { sourceUriRedacted: string, enabled: boolean, class: string } | null, managedSource: { sourceKind: string, alwaysOn: boolean, placementCount: number } | null, sourceLocation: { mode: SourceLocationMode, avoidNodeIds: Array<string> }, metrics: { status: StreamStatus, isLive: boolean, currentViewers: number, startedAt: string | null, updatedAt: string, nodeId: string | null, trackCount: number | null, totalInputs: number | null, uploadedBytes: number, downloadedBytes: number, viewerSeconds: number, packetsSent: number | null, packetsLost: number | null, packetsRetransmitted: number | null, bufferState: string | null, qualityTier: string | null, primaryWidth: number | null, primaryHeight: number | null, primaryFps: number | null, primaryCodec: string | null, primaryBitrate: number | null, hasIssues: boolean | null, issuesDescription: string | null } | null, pushTargets: Array<{ id: string, streamId: string, platform: string | null, name: string, targetUri: string, isEnabled: boolean, status: string, lastError: string | null, reasonCode: string | null, lastPushedAt: string | null, createdAt: string }>, playbackPolicy: { type: PlaybackPolicyType, allowedOrigins: Array<string> } | null, thumbnailAssets: { posterUrl: string, spriteVttUrl: string, spriteJpgUrl: string, assetKey: string } | null, retentionOverrides: { streamId: string, dvrRetentionDaysOverride: number | null, clipRetentionDaysOverride: number | null } | null } | null } }>, pageInfo: { startCursor: string | null, endCursor: string | null, hasNextPage: boolean, hasPreviousPage: boolean } } } } } };
 
 export type GetStreamAnalyticsSummariesConnectionQueryVariables = Exact<{
   page?: ConnectionInput | null | undefined;
@@ -7729,7 +7828,7 @@ export type GetStreamAnalyticsSummariesConnectionQuery = { /** Unified analytics
 analytics: { /** Usage analytics: streaming hours, storage, and processing. */
 usage: { /** Streaming usage: viewer hours, geographic distribution, quality tiers. */
 streaming: { /** Pre-aggregated analytics summaries for multiple streams. Returns sorted, paginated results with tenant-wide share percentages. */
-streamAnalyticsSummariesConnection: { totalCount: number, edges: Array<{ cursor: string, node: { streamId: string, rangeAvgViewers: number, rangePeakConcurrentViewers: number, rangeTotalViews: number, rangeTotalSessions: number, rangeAvgBufferHealth: number, rangeAvgBitrate: number, rangeAvgFps: number, rangePacketLossRate: number | null, rangeAvgConnectionTime: number | null, rangeViewerHours: number, rangeEgressGb: number, rangeAvgSessionSeconds: number, rangeAvgBytesPerSession: number, rangeUniqueViewers: number, rangeUniqueCountries: number, rangeRebufferCount: number, rangeIssueCount: number, rangeBufferDryCount: number, rangeEgressSharePercent: number | null, rangeViewerSharePercent: number | null, rangeViewerHoursSharePercent: number | null, stream: { id: string, streamId: string, name: string, description: string | null, streamKey: string | null, playbackId: string, record: boolean, ingestMode: IngestMode, createdAt: string, updatedAt: string, dvrChapterMode: DVRChapterMode | null, dvrChapterIntervalSeconds: number | null, monitoring: MonitoringToggle, pullSource: { sourceUriRedacted: string, enabled: boolean, class: string } | null, managedSource: { sourceKind: string, alwaysOn: boolean, placementCount: number } | null, sourceLocation: { mode: SourceLocationMode, avoidNodeIds: Array<string> }, metrics: { status: StreamStatus, isLive: boolean, currentViewers: number, startedAt: string | null, updatedAt: string, nodeId: string | null, trackCount: number | null, totalInputs: number | null, uploadedBytes: number, downloadedBytes: number, viewerSeconds: number, packetsSent: number | null, packetsLost: number | null, packetsRetransmitted: number | null, bufferState: string | null, qualityTier: string | null, primaryWidth: number | null, primaryHeight: number | null, primaryFps: number | null, primaryCodec: string | null, primaryBitrate: number | null, hasIssues: boolean | null, issuesDescription: string | null } | null, pushTargets: Array<{ id: string, streamId: string, platform: string | null, name: string, targetUri: string, isEnabled: boolean, status: string, lastError: string | null, reasonCode: string | null, lastPushedAt: string | null, createdAt: string }>, playbackPolicy: { type: PlaybackPolicyType } | null, thumbnailAssets: { posterUrl: string, spriteVttUrl: string, spriteJpgUrl: string, assetKey: string } | null, retentionOverrides: { streamId: string, dvrRetentionDaysOverride: number | null, clipRetentionDaysOverride: number | null } | null } | null, timeRange: { start: string, end: string }, rangeQuality: { tier2160pMinutes: number, tier1440pMinutes: number, tier1080pMinutes: number, tier720pMinutes: number, tier480pMinutes: number, tierSdMinutes: number, codecH264Minutes: number, codecH265Minutes: number, codecVp9Minutes: number, codecAv1Minutes: number } } }>, pageInfo: { startCursor: string | null, endCursor: string | null, hasNextPage: boolean, hasPreviousPage: boolean } } } } } };
+streamAnalyticsSummariesConnection: { totalCount: number, edges: Array<{ cursor: string, node: { streamId: string, rangeAvgViewers: number, rangePeakConcurrentViewers: number, rangeTotalViews: number, rangeTotalSessions: number, rangeAvgBufferHealth: number, rangeAvgBitrate: number, rangeAvgFps: number, rangePacketLossRate: number | null, rangeAvgConnectionTime: number | null, rangeViewerHours: number, rangeEgressGb: number, rangeAvgSessionSeconds: number, rangeAvgBytesPerSession: number, rangeUniqueViewers: number, rangeUniqueCountries: number, rangeRebufferCount: number, rangeIssueCount: number, rangeBufferDryCount: number, rangeEgressSharePercent: number | null, rangeViewerSharePercent: number | null, rangeViewerHoursSharePercent: number | null, stream: { id: string, streamId: string, name: string, description: string | null, streamKey: string | null, playbackId: string, record: boolean, ingestMode: IngestMode, createdAt: string, updatedAt: string, dvrChapterMode: DVRChapterMode | null, dvrChapterIntervalSeconds: number | null, monitoring: MonitoringToggle, pullSource: { sourceUriRedacted: string, enabled: boolean, class: string } | null, managedSource: { sourceKind: string, alwaysOn: boolean, placementCount: number } | null, sourceLocation: { mode: SourceLocationMode, avoidNodeIds: Array<string> }, metrics: { status: StreamStatus, isLive: boolean, currentViewers: number, startedAt: string | null, updatedAt: string, nodeId: string | null, trackCount: number | null, totalInputs: number | null, uploadedBytes: number, downloadedBytes: number, viewerSeconds: number, packetsSent: number | null, packetsLost: number | null, packetsRetransmitted: number | null, bufferState: string | null, qualityTier: string | null, primaryWidth: number | null, primaryHeight: number | null, primaryFps: number | null, primaryCodec: string | null, primaryBitrate: number | null, hasIssues: boolean | null, issuesDescription: string | null } | null, pushTargets: Array<{ id: string, streamId: string, platform: string | null, name: string, targetUri: string, isEnabled: boolean, status: string, lastError: string | null, reasonCode: string | null, lastPushedAt: string | null, createdAt: string }>, playbackPolicy: { type: PlaybackPolicyType, allowedOrigins: Array<string> } | null, thumbnailAssets: { posterUrl: string, spriteVttUrl: string, spriteJpgUrl: string, assetKey: string } | null, retentionOverrides: { streamId: string, dvrRetentionDaysOverride: number | null, clipRetentionDaysOverride: number | null } | null } | null, timeRange: { start: string, end: string }, rangeQuality: { tier2160pMinutes: number, tier1440pMinutes: number, tier1080pMinutes: number, tier720pMinutes: number, tier480pMinutes: number, tierSdMinutes: number, codecH264Minutes: number, codecH265Minutes: number, codecVp9Minutes: number, codecAv1Minutes: number } } }>, pageInfo: { startCursor: string | null, endCursor: string | null, hasNextPage: boolean, hasPreviousPage: boolean } } } } } };
 
 export type GetStreamAnalyticsSummaryQueryVariables = Exact<{
   streamId: string;
@@ -7792,7 +7891,8 @@ primaryBitrate: number | null, /** Whether the stream has active quality issues.
 hasIssues: boolean | null, /** Human-readable description of current issues. */
 issuesDescription: string | null } | null, /** Configured multistream push targets for this stream. */
 pushTargets: Array<{ id: string, streamId: string, platform: string | null, name: string, targetUri: string, isEnabled: boolean, status: string, lastError: string | null, reasonCode: string | null, lastPushedAt: string | null, createdAt: string }>, /** Playback access policy. null/PUBLIC = anyone with the playbackId can watch. */
-playbackPolicy: { type: PlaybackPolicyType } | null, /** Server-resolved Chandler URLs for the stream's poster and sprite thumbnails. Derived from active_ingest_cluster_id + stream_id at SELECT time. Null when the stream has never been live; the poster.jpg 404s until Helmsman uploads its first frame, which the player's fallback chain handles. */
+playbackPolicy: { type: PlaybackPolicyType, /** Sites allowed to embed the content, as normalized `scheme://host[:port]` origins; `*` allows any. Empty = no restriction. A browser viewer whose Origin (or Referer) is not listed is denied. */
+allowedOrigins: Array<string> } | null, /** Server-resolved Chandler URLs for the stream's poster and sprite thumbnails. Derived from active_ingest_cluster_id + stream_id at SELECT time. Null when the stream has never been live; the poster.jpg 404s until Helmsman uploads its first frame, which the player's fallback chain handles. */
 thumbnailAssets: { posterUrl: string, spriteVttUrl: string, spriteJpgUrl: string, assetKey: string } | null, /** Per-stream retention overrides for DVR and clips. Null when the stream has no overrides set (inherits the tenant default). VOD uploads aren't stream-bound, so they don't appear here. */
 retentionOverrides: { streamId: string, /** Null = no override (inherit tenant default). 0 = no auto-expire. */
 dvrRetentionDaysOverride: number | null, clipRetentionDaysOverride: number | null } | null } | null, timeRange: { /** Start of the time range. */
@@ -7810,7 +7910,7 @@ export type GetStreamConnectionHourlyConnectionQueryVariables = Exact<{
 export type GetStreamConnectionHourlyConnectionQuery = { /** Unified analytics surface providing access to all platform metrics. Combines data from Periscope (historical) and Signalman (real-time). */
 analytics: { /** Usage analytics: streaming hours, storage, and processing. */
 usage: { /** Streaming usage: viewer hours, geographic distribution, quality tiers. */
-streaming: { streamConnectionHourlyConnection: { totalCount: number, edges: Array<{ cursor: string, node: { id: string, hour: string, streamId: string, totalBytes: number, uniqueViewers: number, totalSessions: number, stream: { id: string, streamId: string, name: string, description: string | null, streamKey: string | null, playbackId: string, record: boolean, ingestMode: IngestMode, createdAt: string, updatedAt: string, dvrChapterMode: DVRChapterMode | null, dvrChapterIntervalSeconds: number | null, monitoring: MonitoringToggle, pullSource: { sourceUriRedacted: string, enabled: boolean, class: string } | null, managedSource: { sourceKind: string, alwaysOn: boolean, placementCount: number } | null, sourceLocation: { mode: SourceLocationMode, avoidNodeIds: Array<string> }, metrics: { status: StreamStatus, isLive: boolean, currentViewers: number, startedAt: string | null, updatedAt: string, nodeId: string | null, trackCount: number | null, totalInputs: number | null, uploadedBytes: number, downloadedBytes: number, viewerSeconds: number, packetsSent: number | null, packetsLost: number | null, packetsRetransmitted: number | null, bufferState: string | null, qualityTier: string | null, primaryWidth: number | null, primaryHeight: number | null, primaryFps: number | null, primaryCodec: string | null, primaryBitrate: number | null, hasIssues: boolean | null, issuesDescription: string | null } | null, pushTargets: Array<{ id: string, streamId: string, platform: string | null, name: string, targetUri: string, isEnabled: boolean, status: string, lastError: string | null, reasonCode: string | null, lastPushedAt: string | null, createdAt: string }>, playbackPolicy: { type: PlaybackPolicyType } | null, thumbnailAssets: { posterUrl: string, spriteVttUrl: string, spriteJpgUrl: string, assetKey: string } | null, retentionOverrides: { streamId: string, dvrRetentionDaysOverride: number | null, clipRetentionDaysOverride: number | null } | null } | null } }>, pageInfo: { startCursor: string | null, endCursor: string | null, hasNextPage: boolean, hasPreviousPage: boolean } } } } } };
+streaming: { streamConnectionHourlyConnection: { totalCount: number, edges: Array<{ cursor: string, node: { id: string, hour: string, streamId: string, totalBytes: number, uniqueViewers: number, totalSessions: number, stream: { id: string, streamId: string, name: string, description: string | null, streamKey: string | null, playbackId: string, record: boolean, ingestMode: IngestMode, createdAt: string, updatedAt: string, dvrChapterMode: DVRChapterMode | null, dvrChapterIntervalSeconds: number | null, monitoring: MonitoringToggle, pullSource: { sourceUriRedacted: string, enabled: boolean, class: string } | null, managedSource: { sourceKind: string, alwaysOn: boolean, placementCount: number } | null, sourceLocation: { mode: SourceLocationMode, avoidNodeIds: Array<string> }, metrics: { status: StreamStatus, isLive: boolean, currentViewers: number, startedAt: string | null, updatedAt: string, nodeId: string | null, trackCount: number | null, totalInputs: number | null, uploadedBytes: number, downloadedBytes: number, viewerSeconds: number, packetsSent: number | null, packetsLost: number | null, packetsRetransmitted: number | null, bufferState: string | null, qualityTier: string | null, primaryWidth: number | null, primaryHeight: number | null, primaryFps: number | null, primaryCodec: string | null, primaryBitrate: number | null, hasIssues: boolean | null, issuesDescription: string | null } | null, pushTargets: Array<{ id: string, streamId: string, platform: string | null, name: string, targetUri: string, isEnabled: boolean, status: string, lastError: string | null, reasonCode: string | null, lastPushedAt: string | null, createdAt: string }>, playbackPolicy: { type: PlaybackPolicyType, allowedOrigins: Array<string> } | null, thumbnailAssets: { posterUrl: string, spriteVttUrl: string, spriteJpgUrl: string, assetKey: string } | null, retentionOverrides: { streamId: string, dvrRetentionDaysOverride: number | null, clipRetentionDaysOverride: number | null } | null } | null } }>, pageInfo: { startCursor: string | null, endCursor: string | null, hasNextPage: boolean, hasPreviousPage: boolean } } } } } };
 
 export type GetStreamEventsConnectionQueryVariables = Exact<{
   page?: ConnectionInput | null | undefined;
@@ -7822,7 +7922,7 @@ export type GetStreamEventsConnectionQueryVariables = Exact<{
 
 export type GetStreamEventsConnectionQuery = { /** Unified analytics surface providing access to all platform metrics. Combines data from Periscope (historical) and Signalman (real-time). */
 analytics: { /** Lifecycle analytics: stream events, artifacts, connections. */
-lifecycle: { streamEventsConnection: { totalCount: number, edges: Array<{ cursor: string, node: { id: string, eventId: string, streamId: string | null, nodeId: string | null, type: StreamEventType, status: StreamStatus | null, timestamp: string, details: string | null, payload: unknown, source: StreamEventSource, bufferState: string | null, hasIssues: boolean | null, trackCount: number | null, qualityTier: string | null, primaryWidth: number | null, primaryHeight: number | null, primaryFps: number | null, primaryCodec: string | null, primaryBitrate: number | null, downloadedBytes: number | null, uploadedBytes: number | null, totalViewers: number | null, totalInputs: number | null, totalOutputs: number | null, viewerSeconds: number | null, requestUrl: string | null, protocol: string | null, latitude: number | null, longitude: number | null, location: string | null, countryCode: string | null, city: string | null, sourceRegion: string, sourceClusterId: string, streamOriginRegion: string, streamOriginClusterId: string, schemaVersion: number, stream: { id: string, streamId: string, name: string, description: string | null, streamKey: string | null, playbackId: string, record: boolean, ingestMode: IngestMode, createdAt: string, updatedAt: string, dvrChapterMode: DVRChapterMode | null, dvrChapterIntervalSeconds: number | null, monitoring: MonitoringToggle, pullSource: { sourceUriRedacted: string, enabled: boolean, class: string } | null, managedSource: { sourceKind: string, alwaysOn: boolean, placementCount: number } | null, sourceLocation: { mode: SourceLocationMode, avoidNodeIds: Array<string> }, metrics: { status: StreamStatus, isLive: boolean, currentViewers: number, startedAt: string | null, updatedAt: string, nodeId: string | null, trackCount: number | null, totalInputs: number | null, uploadedBytes: number, downloadedBytes: number, viewerSeconds: number, packetsSent: number | null, packetsLost: number | null, packetsRetransmitted: number | null, bufferState: string | null, qualityTier: string | null, primaryWidth: number | null, primaryHeight: number | null, primaryFps: number | null, primaryCodec: string | null, primaryBitrate: number | null, hasIssues: boolean | null, issuesDescription: string | null } | null, pushTargets: Array<{ id: string, streamId: string, platform: string | null, name: string, targetUri: string, isEnabled: boolean, status: string, lastError: string | null, reasonCode: string | null, lastPushedAt: string | null, createdAt: string }>, playbackPolicy: { type: PlaybackPolicyType } | null, thumbnailAssets: { posterUrl: string, spriteVttUrl: string, spriteJpgUrl: string, assetKey: string } | null, retentionOverrides: { streamId: string, dvrRetentionDaysOverride: number | null, clipRetentionDaysOverride: number | null } | null } | null } }>, pageInfo: { startCursor: string | null, endCursor: string | null, hasNextPage: boolean, hasPreviousPage: boolean } } } } };
+lifecycle: { streamEventsConnection: { totalCount: number, edges: Array<{ cursor: string, node: { id: string, eventId: string, streamId: string | null, nodeId: string | null, type: StreamEventType, status: StreamStatus | null, timestamp: string, details: string | null, payload: unknown, source: StreamEventSource, bufferState: string | null, hasIssues: boolean | null, trackCount: number | null, qualityTier: string | null, primaryWidth: number | null, primaryHeight: number | null, primaryFps: number | null, primaryCodec: string | null, primaryBitrate: number | null, downloadedBytes: number | null, uploadedBytes: number | null, totalViewers: number | null, totalInputs: number | null, totalOutputs: number | null, viewerSeconds: number | null, requestUrl: string | null, protocol: string | null, latitude: number | null, longitude: number | null, location: string | null, countryCode: string | null, city: string | null, sourceRegion: string, sourceClusterId: string, streamOriginRegion: string, streamOriginClusterId: string, schemaVersion: number, stream: { id: string, streamId: string, name: string, description: string | null, streamKey: string | null, playbackId: string, record: boolean, ingestMode: IngestMode, createdAt: string, updatedAt: string, dvrChapterMode: DVRChapterMode | null, dvrChapterIntervalSeconds: number | null, monitoring: MonitoringToggle, pullSource: { sourceUriRedacted: string, enabled: boolean, class: string } | null, managedSource: { sourceKind: string, alwaysOn: boolean, placementCount: number } | null, sourceLocation: { mode: SourceLocationMode, avoidNodeIds: Array<string> }, metrics: { status: StreamStatus, isLive: boolean, currentViewers: number, startedAt: string | null, updatedAt: string, nodeId: string | null, trackCount: number | null, totalInputs: number | null, uploadedBytes: number, downloadedBytes: number, viewerSeconds: number, packetsSent: number | null, packetsLost: number | null, packetsRetransmitted: number | null, bufferState: string | null, qualityTier: string | null, primaryWidth: number | null, primaryHeight: number | null, primaryFps: number | null, primaryCodec: string | null, primaryBitrate: number | null, hasIssues: boolean | null, issuesDescription: string | null } | null, pushTargets: Array<{ id: string, streamId: string, platform: string | null, name: string, targetUri: string, isEnabled: boolean, status: string, lastError: string | null, reasonCode: string | null, lastPushedAt: string | null, createdAt: string }>, playbackPolicy: { type: PlaybackPolicyType, allowedOrigins: Array<string> } | null, thumbnailAssets: { posterUrl: string, spriteVttUrl: string, spriteJpgUrl: string, assetKey: string } | null, retentionOverrides: { streamId: string, dvrRetentionDaysOverride: number | null, clipRetentionDaysOverride: number | null } | null } | null } }>, pageInfo: { startCursor: string | null, endCursor: string | null, hasNextPage: boolean, hasPreviousPage: boolean } } } } };
 
 export type GetStreamHealth5mConnectionQueryVariables = Exact<{
   page?: ConnectionInput | null | undefined;
@@ -7846,7 +7946,7 @@ export type GetStreamHealthConnectionQueryVariables = Exact<{
 
 export type GetStreamHealthConnectionQuery = { /** Unified analytics surface providing access to all platform metrics. Combines data from Periscope (historical) and Signalman (real-time). */
 analytics: { /** Health analytics: stream quality, rebuffering, client QoE. */
-health: { streamHealthConnection: { totalCount: number, edges: Array<{ cursor: string, node: { id: string, timestamp: string, streamId: string, nodeId: string, issuesDescription: string | null, hasIssues: boolean, bitrate: number | null, fps: number | null, width: number | null, height: number | null, codec: string | null, qualityTier: string | null, gopSize: number | null, frameMsMax: number | null, frameMsMin: number | null, framesMax: number | null, framesMin: number | null, keyframeMsMax: number | null, keyframeMsMin: number | null, frameJitterMs: number | null, trackCount: number | null, bufferState: BufferState, bufferHealth: number | null, bufferSize: number | null, audioChannels: number | null, audioSampleRate: number | null, audioCodec: string | null, audioBitrate: number | null, trackMetadata: unknown, stream: { id: string, streamId: string, name: string, description: string | null, streamKey: string | null, playbackId: string, record: boolean, ingestMode: IngestMode, createdAt: string, updatedAt: string, dvrChapterMode: DVRChapterMode | null, dvrChapterIntervalSeconds: number | null, monitoring: MonitoringToggle, pullSource: { sourceUriRedacted: string, enabled: boolean, class: string } | null, managedSource: { sourceKind: string, alwaysOn: boolean, placementCount: number } | null, sourceLocation: { mode: SourceLocationMode, avoidNodeIds: Array<string> }, metrics: { status: StreamStatus, isLive: boolean, currentViewers: number, startedAt: string | null, updatedAt: string, nodeId: string | null, trackCount: number | null, totalInputs: number | null, uploadedBytes: number, downloadedBytes: number, viewerSeconds: number, packetsSent: number | null, packetsLost: number | null, packetsRetransmitted: number | null, bufferState: string | null, qualityTier: string | null, primaryWidth: number | null, primaryHeight: number | null, primaryFps: number | null, primaryCodec: string | null, primaryBitrate: number | null, hasIssues: boolean | null, issuesDescription: string | null } | null, pushTargets: Array<{ id: string, streamId: string, platform: string | null, name: string, targetUri: string, isEnabled: boolean, status: string, lastError: string | null, reasonCode: string | null, lastPushedAt: string | null, createdAt: string }>, playbackPolicy: { type: PlaybackPolicyType } | null, thumbnailAssets: { posterUrl: string, spriteVttUrl: string, spriteJpgUrl: string, assetKey: string } | null, retentionOverrides: { streamId: string, dvrRetentionDaysOverride: number | null, clipRetentionDaysOverride: number | null } | null } | null } }>, pageInfo: { startCursor: string | null, endCursor: string | null, hasNextPage: boolean, hasPreviousPage: boolean } } } } };
+health: { streamHealthConnection: { totalCount: number, edges: Array<{ cursor: string, node: { id: string, timestamp: string, streamId: string, nodeId: string, issuesDescription: string | null, hasIssues: boolean, bitrate: number | null, fps: number | null, width: number | null, height: number | null, codec: string | null, qualityTier: string | null, gopSize: number | null, frameMsMax: number | null, frameMsMin: number | null, framesMax: number | null, framesMin: number | null, keyframeMsMax: number | null, keyframeMsMin: number | null, frameJitterMs: number | null, trackCount: number | null, bufferState: BufferState, bufferHealth: number | null, bufferSize: number | null, audioChannels: number | null, audioSampleRate: number | null, audioCodec: string | null, audioBitrate: number | null, trackMetadata: unknown, stream: { id: string, streamId: string, name: string, description: string | null, streamKey: string | null, playbackId: string, record: boolean, ingestMode: IngestMode, createdAt: string, updatedAt: string, dvrChapterMode: DVRChapterMode | null, dvrChapterIntervalSeconds: number | null, monitoring: MonitoringToggle, pullSource: { sourceUriRedacted: string, enabled: boolean, class: string } | null, managedSource: { sourceKind: string, alwaysOn: boolean, placementCount: number } | null, sourceLocation: { mode: SourceLocationMode, avoidNodeIds: Array<string> }, metrics: { status: StreamStatus, isLive: boolean, currentViewers: number, startedAt: string | null, updatedAt: string, nodeId: string | null, trackCount: number | null, totalInputs: number | null, uploadedBytes: number, downloadedBytes: number, viewerSeconds: number, packetsSent: number | null, packetsLost: number | null, packetsRetransmitted: number | null, bufferState: string | null, qualityTier: string | null, primaryWidth: number | null, primaryHeight: number | null, primaryFps: number | null, primaryCodec: string | null, primaryBitrate: number | null, hasIssues: boolean | null, issuesDescription: string | null } | null, pushTargets: Array<{ id: string, streamId: string, platform: string | null, name: string, targetUri: string, isEnabled: boolean, status: string, lastError: string | null, reasonCode: string | null, lastPushedAt: string | null, createdAt: string }>, playbackPolicy: { type: PlaybackPolicyType, allowedOrigins: Array<string> } | null, thumbnailAssets: { posterUrl: string, spriteVttUrl: string, spriteJpgUrl: string, assetKey: string } | null, retentionOverrides: { streamId: string, dvrRetentionDaysOverride: number | null, clipRetentionDaysOverride: number | null } | null } | null } }>, pageInfo: { startCursor: string | null, endCursor: string | null, hasNextPage: boolean, hasPreviousPage: boolean } } } } };
 
 export type GetStreamHealthSummaryQueryVariables = Exact<{
   streamId?: string | null | undefined;
@@ -7921,7 +8021,7 @@ export type GetTrackListConnectionQueryVariables = Exact<{
 
 export type GetTrackListConnectionQuery = { /** Unified analytics surface providing access to all platform metrics. Combines data from Periscope (historical) and Signalman (real-time). */
 analytics: { /** Lifecycle analytics: stream events, artifacts, connections. */
-lifecycle: { trackListConnection: { totalCount: number, edges: Array<{ cursor: string, node: { id: string, streamId: string, nodeId: string | null, trackList: string, trackCount: number, timestamp: string, stream: { id: string, streamId: string, name: string, description: string | null, streamKey: string | null, playbackId: string, record: boolean, ingestMode: IngestMode, createdAt: string, updatedAt: string, dvrChapterMode: DVRChapterMode | null, dvrChapterIntervalSeconds: number | null, monitoring: MonitoringToggle, pullSource: { sourceUriRedacted: string, enabled: boolean, class: string } | null, managedSource: { sourceKind: string, alwaysOn: boolean, placementCount: number } | null, sourceLocation: { mode: SourceLocationMode, avoidNodeIds: Array<string> }, metrics: { status: StreamStatus, isLive: boolean, currentViewers: number, startedAt: string | null, updatedAt: string, nodeId: string | null, trackCount: number | null, totalInputs: number | null, uploadedBytes: number, downloadedBytes: number, viewerSeconds: number, packetsSent: number | null, packetsLost: number | null, packetsRetransmitted: number | null, bufferState: string | null, qualityTier: string | null, primaryWidth: number | null, primaryHeight: number | null, primaryFps: number | null, primaryCodec: string | null, primaryBitrate: number | null, hasIssues: boolean | null, issuesDescription: string | null } | null, pushTargets: Array<{ id: string, streamId: string, platform: string | null, name: string, targetUri: string, isEnabled: boolean, status: string, lastError: string | null, reasonCode: string | null, lastPushedAt: string | null, createdAt: string }>, playbackPolicy: { type: PlaybackPolicyType } | null, thumbnailAssets: { posterUrl: string, spriteVttUrl: string, spriteJpgUrl: string, assetKey: string } | null, retentionOverrides: { streamId: string, dvrRetentionDaysOverride: number | null, clipRetentionDaysOverride: number | null } | null } | null, tracks: Array<{ trackName: string, trackType: string, codec: string | null, bitrateKbps: number | null, bitrateBps: number | null, buffer: number | null, jitter: number | null, width: number | null, height: number | null, fps: number | null, resolution: string | null, hasBFrames: boolean | null, channels: number | null, sampleRate: number | null }> | null } }>, pageInfo: { startCursor: string | null, endCursor: string | null, hasNextPage: boolean, hasPreviousPage: boolean } } } } };
+lifecycle: { trackListConnection: { totalCount: number, edges: Array<{ cursor: string, node: { id: string, streamId: string, nodeId: string | null, trackList: string, trackCount: number, timestamp: string, stream: { id: string, streamId: string, name: string, description: string | null, streamKey: string | null, playbackId: string, record: boolean, ingestMode: IngestMode, createdAt: string, updatedAt: string, dvrChapterMode: DVRChapterMode | null, dvrChapterIntervalSeconds: number | null, monitoring: MonitoringToggle, pullSource: { sourceUriRedacted: string, enabled: boolean, class: string } | null, managedSource: { sourceKind: string, alwaysOn: boolean, placementCount: number } | null, sourceLocation: { mode: SourceLocationMode, avoidNodeIds: Array<string> }, metrics: { status: StreamStatus, isLive: boolean, currentViewers: number, startedAt: string | null, updatedAt: string, nodeId: string | null, trackCount: number | null, totalInputs: number | null, uploadedBytes: number, downloadedBytes: number, viewerSeconds: number, packetsSent: number | null, packetsLost: number | null, packetsRetransmitted: number | null, bufferState: string | null, qualityTier: string | null, primaryWidth: number | null, primaryHeight: number | null, primaryFps: number | null, primaryCodec: string | null, primaryBitrate: number | null, hasIssues: boolean | null, issuesDescription: string | null } | null, pushTargets: Array<{ id: string, streamId: string, platform: string | null, name: string, targetUri: string, isEnabled: boolean, status: string, lastError: string | null, reasonCode: string | null, lastPushedAt: string | null, createdAt: string }>, playbackPolicy: { type: PlaybackPolicyType, allowedOrigins: Array<string> } | null, thumbnailAssets: { posterUrl: string, spriteVttUrl: string, spriteJpgUrl: string, assetKey: string } | null, retentionOverrides: { streamId: string, dvrRetentionDaysOverride: number | null, clipRetentionDaysOverride: number | null } | null } | null, tracks: Array<{ trackName: string, trackType: string, codec: string | null, bitrateKbps: number | null, bitrateBps: number | null, buffer: number | null, jitter: number | null, width: number | null, height: number | null, fps: number | null, resolution: string | null, hasBFrames: boolean | null, channels: number | null, sampleRate: number | null }> | null } }>, pageInfo: { startCursor: string | null, endCursor: string | null, hasNextPage: boolean, hasPreviousPage: boolean } } } } };
 
 export type GetValidateStreamKeyQueryVariables = Exact<{
   streamKey: string;
@@ -7954,7 +8054,7 @@ export type GetViewerGeographicsConnectionQueryVariables = Exact<{
 export type GetViewerGeographicsConnectionQuery = { /** Unified analytics surface providing access to all platform metrics. Combines data from Periscope (historical) and Signalman (real-time). */
 analytics: { /** Usage analytics: streaming hours, storage, and processing. */
 usage: { /** Streaming usage: viewer hours, geographic distribution, quality tiers. */
-streaming: { viewerGeographicsConnection: { totalCount: number, edges: Array<{ cursor: string, node: { timestamp: string, streamId: string | null, nodeId: string | null, countryCode: string | null, city: string | null, latitude: number | null, longitude: number | null, viewerCount: number | null, connectionAddr: string | null, eventType: string | null, source: string | null, sessionDurationSeconds: number | null, bytesTransferred: number | null, connector: string | null, stream: { id: string, streamId: string, name: string, description: string | null, streamKey: string | null, playbackId: string, record: boolean, ingestMode: IngestMode, createdAt: string, updatedAt: string, dvrChapterMode: DVRChapterMode | null, dvrChapterIntervalSeconds: number | null, monitoring: MonitoringToggle, pullSource: { sourceUriRedacted: string, enabled: boolean, class: string } | null, managedSource: { sourceKind: string, alwaysOn: boolean, placementCount: number } | null, sourceLocation: { mode: SourceLocationMode, avoidNodeIds: Array<string> }, metrics: { status: StreamStatus, isLive: boolean, currentViewers: number, startedAt: string | null, updatedAt: string, nodeId: string | null, trackCount: number | null, totalInputs: number | null, uploadedBytes: number, downloadedBytes: number, viewerSeconds: number, packetsSent: number | null, packetsLost: number | null, packetsRetransmitted: number | null, bufferState: string | null, qualityTier: string | null, primaryWidth: number | null, primaryHeight: number | null, primaryFps: number | null, primaryCodec: string | null, primaryBitrate: number | null, hasIssues: boolean | null, issuesDescription: string | null } | null, pushTargets: Array<{ id: string, streamId: string, platform: string | null, name: string, targetUri: string, isEnabled: boolean, status: string, lastError: string | null, reasonCode: string | null, lastPushedAt: string | null, createdAt: string }>, playbackPolicy: { type: PlaybackPolicyType } | null, thumbnailAssets: { posterUrl: string, spriteVttUrl: string, spriteJpgUrl: string, assetKey: string } | null, retentionOverrides: { streamId: string, dvrRetentionDaysOverride: number | null, clipRetentionDaysOverride: number | null } | null } | null } }>, pageInfo: { startCursor: string | null, endCursor: string | null, hasNextPage: boolean, hasPreviousPage: boolean } } } } } };
+streaming: { viewerGeographicsConnection: { totalCount: number, edges: Array<{ cursor: string, node: { timestamp: string, streamId: string | null, nodeId: string | null, countryCode: string | null, city: string | null, latitude: number | null, longitude: number | null, viewerCount: number | null, connectionAddr: string | null, eventType: string | null, source: string | null, sessionDurationSeconds: number | null, bytesTransferred: number | null, connector: string | null, stream: { id: string, streamId: string, name: string, description: string | null, streamKey: string | null, playbackId: string, record: boolean, ingestMode: IngestMode, createdAt: string, updatedAt: string, dvrChapterMode: DVRChapterMode | null, dvrChapterIntervalSeconds: number | null, monitoring: MonitoringToggle, pullSource: { sourceUriRedacted: string, enabled: boolean, class: string } | null, managedSource: { sourceKind: string, alwaysOn: boolean, placementCount: number } | null, sourceLocation: { mode: SourceLocationMode, avoidNodeIds: Array<string> }, metrics: { status: StreamStatus, isLive: boolean, currentViewers: number, startedAt: string | null, updatedAt: string, nodeId: string | null, trackCount: number | null, totalInputs: number | null, uploadedBytes: number, downloadedBytes: number, viewerSeconds: number, packetsSent: number | null, packetsLost: number | null, packetsRetransmitted: number | null, bufferState: string | null, qualityTier: string | null, primaryWidth: number | null, primaryHeight: number | null, primaryFps: number | null, primaryCodec: string | null, primaryBitrate: number | null, hasIssues: boolean | null, issuesDescription: string | null } | null, pushTargets: Array<{ id: string, streamId: string, platform: string | null, name: string, targetUri: string, isEnabled: boolean, status: string, lastError: string | null, reasonCode: string | null, lastPushedAt: string | null, createdAt: string }>, playbackPolicy: { type: PlaybackPolicyType, allowedOrigins: Array<string> } | null, thumbnailAssets: { posterUrl: string, spriteVttUrl: string, spriteJpgUrl: string, assetKey: string } | null, retentionOverrides: { streamId: string, dvrRetentionDaysOverride: number | null, clipRetentionDaysOverride: number | null } | null } | null } }>, pageInfo: { startCursor: string | null, endCursor: string | null, hasNextPage: boolean, hasPreviousPage: boolean } } } } } };
 
 export type GetViewerHoursHourlyConnectionQueryVariables = Exact<{
   page?: ConnectionInput | null | undefined;
@@ -7967,7 +8067,7 @@ export type GetViewerHoursHourlyConnectionQueryVariables = Exact<{
 export type GetViewerHoursHourlyConnectionQuery = { /** Unified analytics surface providing access to all platform metrics. Combines data from Periscope (historical) and Signalman (real-time). */
 analytics: { /** Usage analytics: streaming hours, storage, and processing. */
 usage: { /** Streaming usage: viewer hours, geographic distribution, quality tiers. */
-streaming: { viewerHoursHourlyConnection: { totalCount: number, edges: Array<{ cursor: string, node: { id: string, hour: string, streamId: string | null, countryCode: string | null, uniqueViewers: number, totalSessionSeconds: number, totalBytes: number, viewerHours: number, egressGb: number, stream: { id: string, streamId: string, name: string, description: string | null, streamKey: string | null, playbackId: string, record: boolean, ingestMode: IngestMode, createdAt: string, updatedAt: string, dvrChapterMode: DVRChapterMode | null, dvrChapterIntervalSeconds: number | null, monitoring: MonitoringToggle, pullSource: { sourceUriRedacted: string, enabled: boolean, class: string } | null, managedSource: { sourceKind: string, alwaysOn: boolean, placementCount: number } | null, sourceLocation: { mode: SourceLocationMode, avoidNodeIds: Array<string> }, metrics: { status: StreamStatus, isLive: boolean, currentViewers: number, startedAt: string | null, updatedAt: string, nodeId: string | null, trackCount: number | null, totalInputs: number | null, uploadedBytes: number, downloadedBytes: number, viewerSeconds: number, packetsSent: number | null, packetsLost: number | null, packetsRetransmitted: number | null, bufferState: string | null, qualityTier: string | null, primaryWidth: number | null, primaryHeight: number | null, primaryFps: number | null, primaryCodec: string | null, primaryBitrate: number | null, hasIssues: boolean | null, issuesDescription: string | null } | null, pushTargets: Array<{ id: string, streamId: string, platform: string | null, name: string, targetUri: string, isEnabled: boolean, status: string, lastError: string | null, reasonCode: string | null, lastPushedAt: string | null, createdAt: string }>, playbackPolicy: { type: PlaybackPolicyType } | null, thumbnailAssets: { posterUrl: string, spriteVttUrl: string, spriteJpgUrl: string, assetKey: string } | null, retentionOverrides: { streamId: string, dvrRetentionDaysOverride: number | null, clipRetentionDaysOverride: number | null } | null } | null } }>, pageInfo: { startCursor: string | null, endCursor: string | null, hasNextPage: boolean, hasPreviousPage: boolean } } } } } };
+streaming: { viewerHoursHourlyConnection: { totalCount: number, edges: Array<{ cursor: string, node: { id: string, hour: string, streamId: string | null, countryCode: string | null, uniqueViewers: number, totalSessionSeconds: number, totalBytes: number, viewerHours: number, egressGb: number, stream: { id: string, streamId: string, name: string, description: string | null, streamKey: string | null, playbackId: string, record: boolean, ingestMode: IngestMode, createdAt: string, updatedAt: string, dvrChapterMode: DVRChapterMode | null, dvrChapterIntervalSeconds: number | null, monitoring: MonitoringToggle, pullSource: { sourceUriRedacted: string, enabled: boolean, class: string } | null, managedSource: { sourceKind: string, alwaysOn: boolean, placementCount: number } | null, sourceLocation: { mode: SourceLocationMode, avoidNodeIds: Array<string> }, metrics: { status: StreamStatus, isLive: boolean, currentViewers: number, startedAt: string | null, updatedAt: string, nodeId: string | null, trackCount: number | null, totalInputs: number | null, uploadedBytes: number, downloadedBytes: number, viewerSeconds: number, packetsSent: number | null, packetsLost: number | null, packetsRetransmitted: number | null, bufferState: string | null, qualityTier: string | null, primaryWidth: number | null, primaryHeight: number | null, primaryFps: number | null, primaryCodec: string | null, primaryBitrate: number | null, hasIssues: boolean | null, issuesDescription: string | null } | null, pushTargets: Array<{ id: string, streamId: string, platform: string | null, name: string, targetUri: string, isEnabled: boolean, status: string, lastError: string | null, reasonCode: string | null, lastPushedAt: string | null, createdAt: string }>, playbackPolicy: { type: PlaybackPolicyType, allowedOrigins: Array<string> } | null, thumbnailAssets: { posterUrl: string, spriteVttUrl: string, spriteJpgUrl: string, assetKey: string } | null, retentionOverrides: { streamId: string, dvrRetentionDaysOverride: number | null, clipRetentionDaysOverride: number | null } | null } | null } }>, pageInfo: { startCursor: string | null, endCursor: string | null, hasNextPage: boolean, hasPreviousPage: boolean } } } } } };
 
 export type GetViewerSessionsConnectionQueryVariables = Exact<{
   page?: ConnectionInput | null | undefined;
@@ -7979,7 +8079,7 @@ export type GetViewerSessionsConnectionQueryVariables = Exact<{
 
 export type GetViewerSessionsConnectionQuery = { /** Unified analytics surface providing access to all platform metrics. Combines data from Periscope (historical) and Signalman (real-time). */
 analytics: { /** Lifecycle analytics: stream events, artifacts, connections. */
-lifecycle: { viewerSessionsConnection: { totalCount: number, edges: Array<{ cursor: string, node: { id: string, timestamp: string, streamId: string, nodeId: string | null, sessionId: string, connectedAt: string | null, disconnectedAt: string | null, connector: string | null, countryCode: string | null, city: string | null, latitude: number | null, longitude: number | null, durationSeconds: number | null, bytesUp: number | null, bytesDown: number | null, connectionQuality: number | null, bufferHealth: number | null, stream: { id: string, streamId: string, name: string, description: string | null, streamKey: string | null, playbackId: string, record: boolean, ingestMode: IngestMode, createdAt: string, updatedAt: string, dvrChapterMode: DVRChapterMode | null, dvrChapterIntervalSeconds: number | null, monitoring: MonitoringToggle, pullSource: { sourceUriRedacted: string, enabled: boolean, class: string } | null, managedSource: { sourceKind: string, alwaysOn: boolean, placementCount: number } | null, sourceLocation: { mode: SourceLocationMode, avoidNodeIds: Array<string> }, metrics: { status: StreamStatus, isLive: boolean, currentViewers: number, startedAt: string | null, updatedAt: string, nodeId: string | null, trackCount: number | null, totalInputs: number | null, uploadedBytes: number, downloadedBytes: number, viewerSeconds: number, packetsSent: number | null, packetsLost: number | null, packetsRetransmitted: number | null, bufferState: string | null, qualityTier: string | null, primaryWidth: number | null, primaryHeight: number | null, primaryFps: number | null, primaryCodec: string | null, primaryBitrate: number | null, hasIssues: boolean | null, issuesDescription: string | null } | null, pushTargets: Array<{ id: string, streamId: string, platform: string | null, name: string, targetUri: string, isEnabled: boolean, status: string, lastError: string | null, reasonCode: string | null, lastPushedAt: string | null, createdAt: string }>, playbackPolicy: { type: PlaybackPolicyType } | null, thumbnailAssets: { posterUrl: string, spriteVttUrl: string, spriteJpgUrl: string, assetKey: string } | null, retentionOverrides: { streamId: string, dvrRetentionDaysOverride: number | null, clipRetentionDaysOverride: number | null } | null } | null, clientBucket: { h3Index: string, resolution: number } | null } }>, pageInfo: { startCursor: string | null, endCursor: string | null, hasNextPage: boolean, hasPreviousPage: boolean } } } } };
+lifecycle: { viewerSessionsConnection: { totalCount: number, edges: Array<{ cursor: string, node: { id: string, timestamp: string, streamId: string, nodeId: string | null, sessionId: string, connectedAt: string | null, disconnectedAt: string | null, connector: string | null, countryCode: string | null, city: string | null, latitude: number | null, longitude: number | null, durationSeconds: number | null, bytesUp: number | null, bytesDown: number | null, connectionQuality: number | null, bufferHealth: number | null, stream: { id: string, streamId: string, name: string, description: string | null, streamKey: string | null, playbackId: string, record: boolean, ingestMode: IngestMode, createdAt: string, updatedAt: string, dvrChapterMode: DVRChapterMode | null, dvrChapterIntervalSeconds: number | null, monitoring: MonitoringToggle, pullSource: { sourceUriRedacted: string, enabled: boolean, class: string } | null, managedSource: { sourceKind: string, alwaysOn: boolean, placementCount: number } | null, sourceLocation: { mode: SourceLocationMode, avoidNodeIds: Array<string> }, metrics: { status: StreamStatus, isLive: boolean, currentViewers: number, startedAt: string | null, updatedAt: string, nodeId: string | null, trackCount: number | null, totalInputs: number | null, uploadedBytes: number, downloadedBytes: number, viewerSeconds: number, packetsSent: number | null, packetsLost: number | null, packetsRetransmitted: number | null, bufferState: string | null, qualityTier: string | null, primaryWidth: number | null, primaryHeight: number | null, primaryFps: number | null, primaryCodec: string | null, primaryBitrate: number | null, hasIssues: boolean | null, issuesDescription: string | null } | null, pushTargets: Array<{ id: string, streamId: string, platform: string | null, name: string, targetUri: string, isEnabled: boolean, status: string, lastError: string | null, reasonCode: string | null, lastPushedAt: string | null, createdAt: string }>, playbackPolicy: { type: PlaybackPolicyType, allowedOrigins: Array<string> } | null, thumbnailAssets: { posterUrl: string, spriteVttUrl: string, spriteJpgUrl: string, assetKey: string } | null, retentionOverrides: { streamId: string, dvrRetentionDaysOverride: number | null, clipRetentionDaysOverride: number | null } | null } | null, clientBucket: { h3Index: string, resolution: number } | null } }>, pageInfo: { startCursor: string | null, endCursor: string | null, hasNextPage: boolean, hasPreviousPage: boolean } } } } };
 
 export type GetViewerTimeSeriesConnectionQueryVariables = Exact<{
   page?: ConnectionInput | null | undefined;
@@ -7992,7 +8092,7 @@ export type GetViewerTimeSeriesConnectionQueryVariables = Exact<{
 export type GetViewerTimeSeriesConnectionQuery = { /** Unified analytics surface providing access to all platform metrics. Combines data from Periscope (historical) and Signalman (real-time). */
 analytics: { /** Usage analytics: streaming hours, storage, and processing. */
 usage: { /** Streaming usage: viewer hours, geographic distribution, quality tiers. */
-streaming: { viewerTimeSeriesConnection: { totalCount: number, edges: Array<{ cursor: string, node: { timestamp: string, viewerCount: number, streamId: string | null, stream: { id: string, streamId: string, name: string, description: string | null, streamKey: string | null, playbackId: string, record: boolean, ingestMode: IngestMode, createdAt: string, updatedAt: string, dvrChapterMode: DVRChapterMode | null, dvrChapterIntervalSeconds: number | null, monitoring: MonitoringToggle, pullSource: { sourceUriRedacted: string, enabled: boolean, class: string } | null, managedSource: { sourceKind: string, alwaysOn: boolean, placementCount: number } | null, sourceLocation: { mode: SourceLocationMode, avoidNodeIds: Array<string> }, metrics: { status: StreamStatus, isLive: boolean, currentViewers: number, startedAt: string | null, updatedAt: string, nodeId: string | null, trackCount: number | null, totalInputs: number | null, uploadedBytes: number, downloadedBytes: number, viewerSeconds: number, packetsSent: number | null, packetsLost: number | null, packetsRetransmitted: number | null, bufferState: string | null, qualityTier: string | null, primaryWidth: number | null, primaryHeight: number | null, primaryFps: number | null, primaryCodec: string | null, primaryBitrate: number | null, hasIssues: boolean | null, issuesDescription: string | null } | null, pushTargets: Array<{ id: string, streamId: string, platform: string | null, name: string, targetUri: string, isEnabled: boolean, status: string, lastError: string | null, reasonCode: string | null, lastPushedAt: string | null, createdAt: string }>, playbackPolicy: { type: PlaybackPolicyType } | null, thumbnailAssets: { posterUrl: string, spriteVttUrl: string, spriteJpgUrl: string, assetKey: string } | null, retentionOverrides: { streamId: string, dvrRetentionDaysOverride: number | null, clipRetentionDaysOverride: number | null } | null } | null } }>, pageInfo: { startCursor: string | null, endCursor: string | null, hasNextPage: boolean, hasPreviousPage: boolean } } } } } };
+streaming: { viewerTimeSeriesConnection: { totalCount: number, edges: Array<{ cursor: string, node: { timestamp: string, viewerCount: number, streamId: string | null, stream: { id: string, streamId: string, name: string, description: string | null, streamKey: string | null, playbackId: string, record: boolean, ingestMode: IngestMode, createdAt: string, updatedAt: string, dvrChapterMode: DVRChapterMode | null, dvrChapterIntervalSeconds: number | null, monitoring: MonitoringToggle, pullSource: { sourceUriRedacted: string, enabled: boolean, class: string } | null, managedSource: { sourceKind: string, alwaysOn: boolean, placementCount: number } | null, sourceLocation: { mode: SourceLocationMode, avoidNodeIds: Array<string> }, metrics: { status: StreamStatus, isLive: boolean, currentViewers: number, startedAt: string | null, updatedAt: string, nodeId: string | null, trackCount: number | null, totalInputs: number | null, uploadedBytes: number, downloadedBytes: number, viewerSeconds: number, packetsSent: number | null, packetsLost: number | null, packetsRetransmitted: number | null, bufferState: string | null, qualityTier: string | null, primaryWidth: number | null, primaryHeight: number | null, primaryFps: number | null, primaryCodec: string | null, primaryBitrate: number | null, hasIssues: boolean | null, issuesDescription: string | null } | null, pushTargets: Array<{ id: string, streamId: string, platform: string | null, name: string, targetUri: string, isEnabled: boolean, status: string, lastError: string | null, reasonCode: string | null, lastPushedAt: string | null, createdAt: string }>, playbackPolicy: { type: PlaybackPolicyType, allowedOrigins: Array<string> } | null, thumbnailAssets: { posterUrl: string, spriteVttUrl: string, spriteJpgUrl: string, assetKey: string } | null, retentionOverrides: { streamId: string, dvrRetentionDaysOverride: number | null, clipRetentionDaysOverride: number | null } | null } | null } }>, pageInfo: { startCursor: string | null, endCursor: string | null, hasNextPage: boolean, hasPreviousPage: boolean } } } } } };
 
 export type GetVodRetentionQueryVariables = Exact<{
   artifactHash: string;
@@ -8142,7 +8242,8 @@ primaryBitrate: number | null, /** Whether the stream has active quality issues.
 hasIssues: boolean | null, /** Human-readable description of current issues. */
 issuesDescription: string | null } | null, /** Configured multistream push targets for this stream. */
 pushTargets: Array<{ id: string, streamId: string, platform: string | null, name: string, targetUri: string, isEnabled: boolean, status: string, lastError: string | null, reasonCode: string | null, lastPushedAt: string | null, createdAt: string }>, /** Playback access policy. null/PUBLIC = anyone with the playbackId can watch. */
-playbackPolicy: { type: PlaybackPolicyType } | null, /** Server-resolved Chandler URLs for the stream's poster and sprite thumbnails. Derived from active_ingest_cluster_id + stream_id at SELECT time. Null when the stream has never been live; the poster.jpg 404s until Helmsman uploads its first frame, which the player's fallback chain handles. */
+playbackPolicy: { type: PlaybackPolicyType, /** Sites allowed to embed the content, as normalized `scheme://host[:port]` origins; `*` allows any. Empty = no restriction. A browser viewer whose Origin (or Referer) is not listed is denied. */
+allowedOrigins: Array<string> } | null, /** Server-resolved Chandler URLs for the stream's poster and sprite thumbnails. Derived from active_ingest_cluster_id + stream_id at SELECT time. Null when the stream has never been live; the poster.jpg 404s until Helmsman uploads its first frame, which the player's fallback chain handles. */
 thumbnailAssets: { posterUrl: string, spriteVttUrl: string, spriteJpgUrl: string, assetKey: string } | null, /** Per-stream retention overrides for DVR and clips. Null when the stream has no overrides set (inherits the tenant default). VOD uploads aren't stream-bound, so they don't appear here. */
 retentionOverrides: { streamId: string, /** Null = no override (inherit tenant default). 0 = no auto-expire. */
 dvrRetentionDaysOverride: number | null, clipRetentionDaysOverride: number | null } | null } | null, clientBucket: { h3Index: string, resolution: number } | null, nodeBucket: { h3Index: string, resolution: number } | null } };
@@ -8345,7 +8446,8 @@ primaryBitrate: number | null, /** Whether the stream has active quality issues.
 hasIssues: boolean | null, /** Human-readable description of current issues. */
 issuesDescription: string | null } | null, /** Configured multistream push targets for this stream. */
 pushTargets: Array<{ id: string, streamId: string, platform: string | null, name: string, targetUri: string, isEnabled: boolean, status: string, lastError: string | null, reasonCode: string | null, lastPushedAt: string | null, createdAt: string }>, /** Playback access policy. null/PUBLIC = anyone with the playbackId can watch. */
-playbackPolicy: { type: PlaybackPolicyType } | null, /** Server-resolved Chandler URLs for the stream's poster and sprite thumbnails. Derived from active_ingest_cluster_id + stream_id at SELECT time. Null when the stream has never been live; the poster.jpg 404s until Helmsman uploads its first frame, which the player's fallback chain handles. */
+playbackPolicy: { type: PlaybackPolicyType, /** Sites allowed to embed the content, as normalized `scheme://host[:port]` origins; `*` allows any. Empty = no restriction. A browser viewer whose Origin (or Referer) is not listed is denied. */
+allowedOrigins: Array<string> } | null, /** Server-resolved Chandler URLs for the stream's poster and sprite thumbnails. Derived from active_ingest_cluster_id + stream_id at SELECT time. Null when the stream has never been live; the poster.jpg 404s until Helmsman uploads its first frame, which the player's fallback chain handles. */
 thumbnailAssets: { posterUrl: string, spriteVttUrl: string, spriteJpgUrl: string, assetKey: string } | null, /** Per-stream retention overrides for DVR and clips. Null when the stream has no overrides set (inherits the tenant default). VOD uploads aren't stream-bound, so they don't appear here. */
 retentionOverrides: { streamId: string, /** Null = no override (inherit tenant default). 0 = no auto-expire. */
 dvrRetentionDaysOverride: number | null, clipRetentionDaysOverride: number | null } | null } | null } };
@@ -8406,7 +8508,8 @@ primaryBitrate: number | null, /** Whether the stream has active quality issues.
 hasIssues: boolean | null, /** Human-readable description of current issues. */
 issuesDescription: string | null } | null, /** Configured multistream push targets for this stream. */
 pushTargets: Array<{ id: string, streamId: string, platform: string | null, name: string, targetUri: string, isEnabled: boolean, status: string, lastError: string | null, reasonCode: string | null, lastPushedAt: string | null, createdAt: string }>, /** Playback access policy. null/PUBLIC = anyone with the playbackId can watch. */
-playbackPolicy: { type: PlaybackPolicyType } | null, /** Server-resolved Chandler URLs for the stream's poster and sprite thumbnails. Derived from active_ingest_cluster_id + stream_id at SELECT time. Null when the stream has never been live; the poster.jpg 404s until Helmsman uploads its first frame, which the player's fallback chain handles. */
+playbackPolicy: { type: PlaybackPolicyType, /** Sites allowed to embed the content, as normalized `scheme://host[:port]` origins; `*` allows any. Empty = no restriction. A browser viewer whose Origin (or Referer) is not listed is denied. */
+allowedOrigins: Array<string> } | null, /** Server-resolved Chandler URLs for the stream's poster and sprite thumbnails. Derived from active_ingest_cluster_id + stream_id at SELECT time. Null when the stream has never been live; the poster.jpg 404s until Helmsman uploads its first frame, which the player's fallback chain handles. */
 thumbnailAssets: { posterUrl: string, spriteVttUrl: string, spriteJpgUrl: string, assetKey: string } | null, /** Per-stream retention overrides for DVR and clips. Null when the stream has no overrides set (inherits the tenant default). VOD uploads aren't stream-bound, so they don't appear here. */
 retentionOverrides: { streamId: string, /** Null = no override (inherit tenant default). 0 = no auto-expire. */
 dvrRetentionDaysOverride: number | null, clipRetentionDaysOverride: number | null } | null } | null } };
@@ -8467,7 +8570,8 @@ primaryBitrate: number | null, /** Whether the stream has active quality issues.
 hasIssues: boolean | null, /** Human-readable description of current issues. */
 issuesDescription: string | null } | null, /** Configured multistream push targets for this stream. */
 pushTargets: Array<{ id: string, streamId: string, platform: string | null, name: string, targetUri: string, isEnabled: boolean, status: string, lastError: string | null, reasonCode: string | null, lastPushedAt: string | null, createdAt: string }>, /** Playback access policy. null/PUBLIC = anyone with the playbackId can watch. */
-playbackPolicy: { type: PlaybackPolicyType } | null, /** Server-resolved Chandler URLs for the stream's poster and sprite thumbnails. Derived from active_ingest_cluster_id + stream_id at SELECT time. Null when the stream has never been live; the poster.jpg 404s until Helmsman uploads its first frame, which the player's fallback chain handles. */
+playbackPolicy: { type: PlaybackPolicyType, /** Sites allowed to embed the content, as normalized `scheme://host[:port]` origins; `*` allows any. Empty = no restriction. A browser viewer whose Origin (or Referer) is not listed is denied. */
+allowedOrigins: Array<string> } | null, /** Server-resolved Chandler URLs for the stream's poster and sprite thumbnails. Derived from active_ingest_cluster_id + stream_id at SELECT time. Null when the stream has never been live; the poster.jpg 404s until Helmsman uploads its first frame, which the player's fallback chain handles. */
 thumbnailAssets: { posterUrl: string, spriteVttUrl: string, spriteJpgUrl: string, assetKey: string } | null, /** Per-stream retention overrides for DVR and clips. Null when the stream has no overrides set (inherits the tenant default). VOD uploads aren't stream-bound, so they don't appear here. */
 retentionOverrides: { streamId: string, /** Null = no override (inherit tenant default). 0 = no auto-expire. */
 dvrRetentionDaysOverride: number | null, clipRetentionDaysOverride: number | null } | null } | null } };
@@ -8535,7 +8639,8 @@ primaryBitrate: number | null, /** Whether the stream has active quality issues.
 hasIssues: boolean | null, /** Human-readable description of current issues. */
 issuesDescription: string | null } | null, /** Configured multistream push targets for this stream. */
 pushTargets: Array<{ id: string, streamId: string, platform: string | null, name: string, targetUri: string, isEnabled: boolean, status: string, lastError: string | null, reasonCode: string | null, lastPushedAt: string | null, createdAt: string }>, /** Playback access policy. null/PUBLIC = anyone with the playbackId can watch. */
-playbackPolicy: { type: PlaybackPolicyType } | null, /** Server-resolved Chandler URLs for the stream's poster and sprite thumbnails. Derived from active_ingest_cluster_id + stream_id at SELECT time. Null when the stream has never been live; the poster.jpg 404s until Helmsman uploads its first frame, which the player's fallback chain handles. */
+playbackPolicy: { type: PlaybackPolicyType, /** Sites allowed to embed the content, as normalized `scheme://host[:port]` origins; `*` allows any. Empty = no restriction. A browser viewer whose Origin (or Referer) is not listed is denied. */
+allowedOrigins: Array<string> } | null, /** Server-resolved Chandler URLs for the stream's poster and sprite thumbnails. Derived from active_ingest_cluster_id + stream_id at SELECT time. Null when the stream has never been live; the poster.jpg 404s until Helmsman uploads its first frame, which the player's fallback chain handles. */
 thumbnailAssets: { posterUrl: string, spriteVttUrl: string, spriteJpgUrl: string, assetKey: string } | null, /** Per-stream retention overrides for DVR and clips. Null when the stream has no overrides set (inherits the tenant default). VOD uploads aren't stream-bound, so they don't appear here. */
 retentionOverrides: { streamId: string, /** Null = no override (inherit tenant default). 0 = no auto-expire. */
 dvrRetentionDaysOverride: number | null, clipRetentionDaysOverride: number | null } | null } | null, tracks: Array<{ trackName: string, trackType: string, codec: string | null, bitrateKbps: number | null, bitrateBps: number | null, buffer: number | null, jitter: number | null, width: number | null, height: number | null, fps: number | null, resolution: string | null, hasBFrames: boolean | null, channels: number | null, sampleRate: number | null }> | null } };
@@ -8596,7 +8701,8 @@ primaryBitrate: number | null, /** Whether the stream has active quality issues.
 hasIssues: boolean | null, /** Human-readable description of current issues. */
 issuesDescription: string | null } | null, /** Configured multistream push targets for this stream. */
 pushTargets: Array<{ id: string, streamId: string, platform: string | null, name: string, targetUri: string, isEnabled: boolean, status: string, lastError: string | null, reasonCode: string | null, lastPushedAt: string | null, createdAt: string }>, /** Playback access policy. null/PUBLIC = anyone with the playbackId can watch. */
-playbackPolicy: { type: PlaybackPolicyType } | null, /** Server-resolved Chandler URLs for the stream's poster and sprite thumbnails. Derived from active_ingest_cluster_id + stream_id at SELECT time. Null when the stream has never been live; the poster.jpg 404s until Helmsman uploads its first frame, which the player's fallback chain handles. */
+playbackPolicy: { type: PlaybackPolicyType, /** Sites allowed to embed the content, as normalized `scheme://host[:port]` origins; `*` allows any. Empty = no restriction. A browser viewer whose Origin (or Referer) is not listed is denied. */
+allowedOrigins: Array<string> } | null, /** Server-resolved Chandler URLs for the stream's poster and sprite thumbnails. Derived from active_ingest_cluster_id + stream_id at SELECT time. Null when the stream has never been live; the poster.jpg 404s until Helmsman uploads its first frame, which the player's fallback chain handles. */
 thumbnailAssets: { posterUrl: string, spriteVttUrl: string, spriteJpgUrl: string, assetKey: string } | null, /** Per-stream retention overrides for DVR and clips. Null when the stream has no overrides set (inherits the tenant default). VOD uploads aren't stream-bound, so they don't appear here. */
 retentionOverrides: { streamId: string, /** Null = no override (inherit tenant default). 0 = no auto-expire. */
 dvrRetentionDaysOverride: number | null, clipRetentionDaysOverride: number | null } | null } | null } };
@@ -8705,36 +8811,42 @@ setPlaybackPolicy:
     | { __typename: 'AuthError', message: string, code: string | null }
     | { __typename: 'Clip', /** Global unique identifier for Relay compatibility. */
 id: string, /** Playback access policy snapshotted at clip creation. null/PUBLIC means anyone with the playbackId can watch. Independent from the source stream's policy after creation — flipping the source stream's policy does not affect already-shared clip URLs. */
-playbackPolicy: { type: PlaybackPolicyType, /** JWT-policy details, populated when type == JWT. */
+playbackPolicy: { type: PlaybackPolicyType, /** Sites allowed to embed the content, as normalized `scheme://host[:port]` origins; `*` allows any. Empty = no restriction. A browser viewer whose Origin (or Referer) is not listed is denied. */
+allowedOrigins: Array<string>, /** JWT-policy details, populated when type == JWT. */
 jwt: { /** Allowed signing key IDs. Empty = any active tenant key. */
 allowedKids: Array<string>, /** If set, the viewer JWT's `aud` claim must contain at least one of these. */
 requiredAudience: Array<string>, /** Required claim constraints. Each value is the JSON-encoded representation of the expected claim value (so callers can require strings, numbers, booleans, or arrays consistently). Empty = no claim check. */
 requiredClaimsJson: Array<{ name: string, jsonValue: string }> } | null, /** Webhook-policy details, populated when type == WEBHOOK. Secret is masked. */
 webhook: { url: string, /** Outbound POST timeout in milliseconds. Capped server-side at 10000. */
 timeoutMs: number, /** Always 'redacted' on read; the actual secret is fieldcrypt-encrypted at rest. */
-secretMasked: string } | null } | null }
+secretMasked: string, /** Your JSON object, sent as `context` in every access request to the URL. Null when unset. */
+context: unknown } | null } | null }
     | { __typename: 'NotFoundError', message: string, code: string | null, resourceType: string, resourceId: string }
     | { __typename: 'Stream', /** Global unique identifier for Relay compatibility. */
 id: string, /** Playback access policy. null/PUBLIC = anyone with the playbackId can watch. */
-playbackPolicy: { type: PlaybackPolicyType, /** JWT-policy details, populated when type == JWT. */
+playbackPolicy: { type: PlaybackPolicyType, /** Sites allowed to embed the content, as normalized `scheme://host[:port]` origins; `*` allows any. Empty = no restriction. A browser viewer whose Origin (or Referer) is not listed is denied. */
+allowedOrigins: Array<string>, /** JWT-policy details, populated when type == JWT. */
 jwt: { /** Allowed signing key IDs. Empty = any active tenant key. */
 allowedKids: Array<string>, /** If set, the viewer JWT's `aud` claim must contain at least one of these. */
 requiredAudience: Array<string>, /** Required claim constraints. Each value is the JSON-encoded representation of the expected claim value (so callers can require strings, numbers, booleans, or arrays consistently). Empty = no claim check. */
 requiredClaimsJson: Array<{ name: string, jsonValue: string }> } | null, /** Webhook-policy details, populated when type == WEBHOOK. Secret is masked. */
 webhook: { url: string, /** Outbound POST timeout in milliseconds. Capped server-side at 10000. */
 timeoutMs: number, /** Always 'redacted' on read; the actual secret is fieldcrypt-encrypted at rest. */
-secretMasked: string } | null } | null }
+secretMasked: string, /** Your JSON object, sent as `context` in every access request to the URL. Null when unset. */
+context: unknown } | null } | null }
     | { __typename: 'ValidationError', message: string, code: string | null, field: string | null, constraint: string | null }
     | { __typename: 'VodAsset', /** Global unique identifier for Relay compatibility. */
 id: string, /** Playback access policy. null/PUBLIC = anyone with the playbackId can watch. */
-playbackPolicy: { type: PlaybackPolicyType, /** JWT-policy details, populated when type == JWT. */
+playbackPolicy: { type: PlaybackPolicyType, /** Sites allowed to embed the content, as normalized `scheme://host[:port]` origins; `*` allows any. Empty = no restriction. A browser viewer whose Origin (or Referer) is not listed is denied. */
+allowedOrigins: Array<string>, /** JWT-policy details, populated when type == JWT. */
 jwt: { /** Allowed signing key IDs. Empty = any active tenant key. */
 allowedKids: Array<string>, /** If set, the viewer JWT's `aud` claim must contain at least one of these. */
 requiredAudience: Array<string>, /** Required claim constraints. Each value is the JSON-encoded representation of the expected claim value (so callers can require strings, numbers, booleans, or arrays consistently). Empty = no claim check. */
 requiredClaimsJson: Array<{ name: string, jsonValue: string }> } | null, /** Webhook-policy details, populated when type == WEBHOOK. Secret is masked. */
 webhook: { url: string, /** Outbound POST timeout in milliseconds. Capped server-side at 10000. */
 timeoutMs: number, /** Always 'redacted' on read; the actual secret is fieldcrypt-encrypted at rest. */
-secretMasked: string } | null } | null }
+secretMasked: string, /** Your JSON object, sent as `context` in every access request to the URL. Null when unset. */
+context: unknown } | null } | null }
    };
 
 export type TestPlaybackAccessMutationVariables = Exact<{
@@ -8784,14 +8896,16 @@ createdAt: string | null, /** When the clip was last updated. */
 updatedAt: string | null, /** When the clip will be auto-deleted. */
 expiresAt: string | null, /** Whether the clip has passed its retention date (expiresAt < now). */
 isExpired: boolean, /** Playback access policy snapshotted at clip creation. null/PUBLIC means anyone with the playbackId can watch. Independent from the source stream's policy after creation — flipping the source stream's policy does not affect already-shared clip URLs. */
-playbackPolicy: { type: PlaybackPolicyType, /** JWT-policy details, populated when type == JWT. */
+playbackPolicy: { type: PlaybackPolicyType, /** Sites allowed to embed the content, as normalized `scheme://host[:port]` origins; `*` allows any. Empty = no restriction. A browser viewer whose Origin (or Referer) is not listed is denied. */
+allowedOrigins: Array<string>, /** JWT-policy details, populated when type == JWT. */
 jwt: { /** Allowed signing key IDs. Empty = any active tenant key. */
 allowedKids: Array<string>, /** If set, the viewer JWT's `aud` claim must contain at least one of these. */
 requiredAudience: Array<string>, /** Required claim constraints. Each value is the JSON-encoded representation of the expected claim value (so callers can require strings, numbers, booleans, or arrays consistently). Empty = no claim check. */
 requiredClaimsJson: Array<{ name: string, jsonValue: string }> } | null, /** Webhook-policy details, populated when type == WEBHOOK. Secret is masked. */
 webhook: { url: string, /** Outbound POST timeout in milliseconds. Capped server-side at 10000. */
 timeoutMs: number, /** Always 'redacted' on read; the actual secret is fieldcrypt-encrypted at rest. */
-secretMasked: string } | null } | null, /** Server-resolved Chandler URLs for the clip's poster and sprite thumbnails. Null until Foghorn confirms the thumbnail upload. */
+secretMasked: string, /** Your JSON object, sent as `context` in every access request to the URL. Null when unset. */
+context: unknown } | null } | null, /** Server-resolved Chandler URLs for the clip's poster and sprite thumbnails. Null until Foghorn confirms the thumbnail upload. */
 thumbnailAssets: { posterUrl: string, spriteVttUrl: string, spriteJpgUrl: string, assetKey: string } | null, /** Resolved retention horizon with the source of the decision (per-asset override → per-stream override → tenant default → tier entitlement). Null when retention_until is unset (infinite). */
 effectiveRetention: { /** Days from now until the artifact is scheduled for deletion. 0 = no auto-expire (retentionUntil is null). */
 retentionDays: number, /** Scheduled deletion timestamp. Null when the artifact has no horizon (kept forever). */
@@ -8877,6 +8991,51 @@ expiresAt: string, /** Presigned URLs for each part. */
 parts: Array<{ partNumber: number, presignedUrl: string }> }
    };
 
+export type ImportVodAssetMutationVariables = Exact<{
+  input: ImportVodAssetInput;
+}>;
+
+
+/** Import a video from a public https or http URL as a VOD asset. The processing node reads the file from the URL and processes it like an upload; the asset reports PROCESSING until it is ready. Progress arrives as upload.created, upload.completed, and upload.ready or upload.failed events. */
+export type ImportVodAssetMutation = { /** Import a video from a public https or http URL as a VOD asset. The processing node reads the file from the URL and processes it like an upload; the asset reports PROCESSING until it is ready. Progress arrives as upload.created, upload.completed, and upload.ready or upload.failed events. */
+importVodAsset:
+    | { __typename: 'AuthError', message: string, code: string | null }
+    | { __typename: 'ValidationError', message: string, code: string | null, field: string | null, constraint: string | null }
+    | { __typename: 'VodAsset', /** Global unique identifier for Relay compatibility. */
+id: string, /** Internal hash used for playback URL resolution. */
+artifactHash: string, /** Public playback identifier for generating playback URLs. */
+playbackId: string, /** Source stream UUID for stream-derived VOD artifacts such as DVR chapters. */
+streamId: string | null, /** Optional display title for the asset. */
+title: string | null, /** Optional description of the asset content. */
+description: string | null, /** Original filename when uploaded. */
+filename: string | null, /** Current processing/storage status of the asset. */
+status: VodAssetStatus, /** File size in bytes (available after validation). */
+sizeBytes: number | null, /** Video duration in milliseconds. */
+durationMs: number | null, /** Video resolution (e.g., '1920x1080'). */
+resolution: string | null, /** Video codec (h264, h265, vp9, av1). */
+videoCodec: string | null, /** Audio codec (aac, opus). */
+audioCodec: string | null, /** Average bitrate in kbps. */
+bitrateKbps: number | null, /** When the asset was created/uploaded. */
+createdAt: string, /** When the asset was last modified. */
+updatedAt: string, /** Optional expiration time for auto-deletion. */
+expiresAt: string | null, /** Error message if processing failed. */
+errorMessage: string | null, /** Playback access policy. null/PUBLIC = anyone with the playbackId can watch. */
+playbackPolicy: { type: PlaybackPolicyType, /** Sites allowed to embed the content, as normalized `scheme://host[:port]` origins; `*` allows any. Empty = no restriction. A browser viewer whose Origin (or Referer) is not listed is denied. */
+allowedOrigins: Array<string>, /** JWT-policy details, populated when type == JWT. */
+jwt: { /** Allowed signing key IDs. Empty = any active tenant key. */
+allowedKids: Array<string>, /** If set, the viewer JWT's `aud` claim must contain at least one of these. */
+requiredAudience: Array<string>, /** Required claim constraints. Each value is the JSON-encoded representation of the expected claim value (so callers can require strings, numbers, booleans, or arrays consistently). Empty = no claim check. */
+requiredClaimsJson: Array<{ name: string, jsonValue: string }> } | null, /** Webhook-policy details, populated when type == WEBHOOK. Secret is masked. */
+webhook: { url: string, /** Outbound POST timeout in milliseconds. Capped server-side at 10000. */
+timeoutMs: number, /** Always 'redacted' on read; the actual secret is fieldcrypt-encrypted at rest. */
+secretMasked: string, /** Your JSON object, sent as `context` in every access request to the URL. Null when unset. */
+context: unknown } | null } | null, /** Server-resolved Chandler URLs for the VOD's poster and sprite thumbnails. Null until Foghorn confirms the thumbnail upload. */
+thumbnailAssets: { posterUrl: string, spriteVttUrl: string, spriteJpgUrl: string, assetKey: string } | null, /** Resolved retention horizon with the source of the decision (per-asset override → per-stream override → tenant default → tier entitlement). Null while the asset's retention_until column is unset (infinite). */
+effectiveRetention: { /** Days from now until the artifact is scheduled for deletion. 0 = no auto-expire (retentionUntil is null). */
+retentionDays: number, /** Scheduled deletion timestamp. Null when the artifact has no horizon (kept forever). */
+retentionUntil: string | null, source: RetentionSource } | null }
+   };
+
 export type CompleteVodUploadMutationVariables = Exact<{
   input: CompleteVodUploadInput;
 }>;
@@ -8907,14 +9066,16 @@ createdAt: string, /** When the asset was last modified. */
 updatedAt: string, /** Optional expiration time for auto-deletion. */
 expiresAt: string | null, /** Error message if processing failed. */
 errorMessage: string | null, /** Playback access policy. null/PUBLIC = anyone with the playbackId can watch. */
-playbackPolicy: { type: PlaybackPolicyType, /** JWT-policy details, populated when type == JWT. */
+playbackPolicy: { type: PlaybackPolicyType, /** Sites allowed to embed the content, as normalized `scheme://host[:port]` origins; `*` allows any. Empty = no restriction. A browser viewer whose Origin (or Referer) is not listed is denied. */
+allowedOrigins: Array<string>, /** JWT-policy details, populated when type == JWT. */
 jwt: { /** Allowed signing key IDs. Empty = any active tenant key. */
 allowedKids: Array<string>, /** If set, the viewer JWT's `aud` claim must contain at least one of these. */
 requiredAudience: Array<string>, /** Required claim constraints. Each value is the JSON-encoded representation of the expected claim value (so callers can require strings, numbers, booleans, or arrays consistently). Empty = no claim check. */
 requiredClaimsJson: Array<{ name: string, jsonValue: string }> } | null, /** Webhook-policy details, populated when type == WEBHOOK. Secret is masked. */
 webhook: { url: string, /** Outbound POST timeout in milliseconds. Capped server-side at 10000. */
 timeoutMs: number, /** Always 'redacted' on read; the actual secret is fieldcrypt-encrypted at rest. */
-secretMasked: string } | null } | null, /** Server-resolved Chandler URLs for the VOD's poster and sprite thumbnails. Null until Foghorn confirms the thumbnail upload. */
+secretMasked: string, /** Your JSON object, sent as `context` in every access request to the URL. Null when unset. */
+context: unknown } | null } | null, /** Server-resolved Chandler URLs for the VOD's poster and sprite thumbnails. Null until Foghorn confirms the thumbnail upload. */
 thumbnailAssets: { posterUrl: string, spriteVttUrl: string, spriteJpgUrl: string, assetKey: string } | null, /** Resolved retention horizon with the source of the decision (per-asset override → per-stream override → tenant default → tier entitlement). Null while the asset's retention_until column is unset (infinite). */
 effectiveRetention: { /** Days from now until the artifact is scheduled for deletion. 0 = no auto-expire (retentionUntil is null). */
 retentionDays: number, /** Scheduled deletion timestamp. Null when the artifact has no horizon (kept forever). */
@@ -8976,14 +9137,16 @@ pullSource: { /** Redacted upstream URI with credentials removed. */
 sourceUriRedacted: string, /** Whether the media plane may pull from the source. */
 enabled: boolean, /** Eligibility class: public or private. */
 class: string } | null, /** Playback access policy. null/PUBLIC = anyone with the playbackId can watch. */
-playbackPolicy: { type: PlaybackPolicyType, /** JWT-policy details, populated when type == JWT. */
+playbackPolicy: { type: PlaybackPolicyType, /** Sites allowed to embed the content, as normalized `scheme://host[:port]` origins; `*` allows any. Empty = no restriction. A browser viewer whose Origin (or Referer) is not listed is denied. */
+allowedOrigins: Array<string>, /** JWT-policy details, populated when type == JWT. */
 jwt: { /** Allowed signing key IDs. Empty = any active tenant key. */
 allowedKids: Array<string>, /** If set, the viewer JWT's `aud` claim must contain at least one of these. */
 requiredAudience: Array<string>, /** Required claim constraints. Each value is the JSON-encoded representation of the expected claim value (so callers can require strings, numbers, booleans, or arrays consistently). Empty = no claim check. */
 requiredClaimsJson: Array<{ name: string, jsonValue: string }> } | null, /** Webhook-policy details, populated when type == WEBHOOK. Secret is masked. */
 webhook: { url: string, /** Outbound POST timeout in milliseconds. Capped server-side at 10000. */
 timeoutMs: number, /** Always 'redacted' on read; the actual secret is fieldcrypt-encrypted at rest. */
-secretMasked: string } | null } | null, /** Real-time operational metrics from the data plane. Includes viewer counts, quality metrics, and throughput data. Lazily loaded from ClickHouse analytics. */
+secretMasked: string, /** Your JSON object, sent as `context` in every access request to the URL. Null when unset. */
+context: unknown } | null } | null, /** Real-time operational metrics from the data plane. Includes viewer counts, quality metrics, and throughput data. Lazily loaded from ClickHouse analytics. */
 metrics: { /** Current lifecycle status of the stream (OFFLINE, CONNECTING, LIVE, etc.). */
 status: StreamStatus, /** Whether the stream is currently broadcasting. */
 isLive: boolean, /** Number of viewers currently watching. */
@@ -9022,14 +9185,16 @@ pullSource: { /** Redacted upstream URI with credentials removed. */
 sourceUriRedacted: string, /** Whether the media plane may pull from the source. */
 enabled: boolean, /** Eligibility class: public or private. */
 class: string } | null, /** Playback access policy. null/PUBLIC = anyone with the playbackId can watch. */
-playbackPolicy: { type: PlaybackPolicyType, /** JWT-policy details, populated when type == JWT. */
+playbackPolicy: { type: PlaybackPolicyType, /** Sites allowed to embed the content, as normalized `scheme://host[:port]` origins; `*` allows any. Empty = no restriction. A browser viewer whose Origin (or Referer) is not listed is denied. */
+allowedOrigins: Array<string>, /** JWT-policy details, populated when type == JWT. */
 jwt: { /** Allowed signing key IDs. Empty = any active tenant key. */
 allowedKids: Array<string>, /** If set, the viewer JWT's `aud` claim must contain at least one of these. */
 requiredAudience: Array<string>, /** Required claim constraints. Each value is the JSON-encoded representation of the expected claim value (so callers can require strings, numbers, booleans, or arrays consistently). Empty = no claim check. */
 requiredClaimsJson: Array<{ name: string, jsonValue: string }> } | null, /** Webhook-policy details, populated when type == WEBHOOK. Secret is masked. */
 webhook: { url: string, /** Outbound POST timeout in milliseconds. Capped server-side at 10000. */
 timeoutMs: number, /** Always 'redacted' on read; the actual secret is fieldcrypt-encrypted at rest. */
-secretMasked: string } | null } | null, /** Real-time operational metrics from the data plane. Includes viewer counts, quality metrics, and throughput data. Lazily loaded from ClickHouse analytics. */
+secretMasked: string, /** Your JSON object, sent as `context` in every access request to the URL. Null when unset. */
+context: unknown } | null } | null, /** Real-time operational metrics from the data plane. Includes viewer counts, quality metrics, and throughput data. Lazily loaded from ClickHouse analytics. */
 metrics: { /** Current lifecycle status of the stream (OFFLINE, CONNECTING, LIVE, etc.). */
 status: StreamStatus, /** Whether the stream is currently broadcasting. */
 isLive: boolean, /** Number of viewers currently watching. */
@@ -9081,14 +9246,16 @@ pullSource: { /** Redacted upstream URI with credentials removed. */
 sourceUriRedacted: string, /** Whether the media plane may pull from the source. */
 enabled: boolean, /** Eligibility class: public or private. */
 class: string } | null, /** Playback access policy. null/PUBLIC = anyone with the playbackId can watch. */
-playbackPolicy: { type: PlaybackPolicyType, /** JWT-policy details, populated when type == JWT. */
+playbackPolicy: { type: PlaybackPolicyType, /** Sites allowed to embed the content, as normalized `scheme://host[:port]` origins; `*` allows any. Empty = no restriction. A browser viewer whose Origin (or Referer) is not listed is denied. */
+allowedOrigins: Array<string>, /** JWT-policy details, populated when type == JWT. */
 jwt: { /** Allowed signing key IDs. Empty = any active tenant key. */
 allowedKids: Array<string>, /** If set, the viewer JWT's `aud` claim must contain at least one of these. */
 requiredAudience: Array<string>, /** Required claim constraints. Each value is the JSON-encoded representation of the expected claim value (so callers can require strings, numbers, booleans, or arrays consistently). Empty = no claim check. */
 requiredClaimsJson: Array<{ name: string, jsonValue: string }> } | null, /** Webhook-policy details, populated when type == WEBHOOK. Secret is masked. */
 webhook: { url: string, /** Outbound POST timeout in milliseconds. Capped server-side at 10000. */
 timeoutMs: number, /** Always 'redacted' on read; the actual secret is fieldcrypt-encrypted at rest. */
-secretMasked: string } | null } | null, /** Real-time operational metrics from the data plane. Includes viewer counts, quality metrics, and throughput data. Lazily loaded from ClickHouse analytics. */
+secretMasked: string, /** Your JSON object, sent as `context` in every access request to the URL. Null when unset. */
+context: unknown } | null } | null, /** Real-time operational metrics from the data plane. Includes viewer counts, quality metrics, and throughput data. Lazily loaded from ClickHouse analytics. */
 metrics: { /** Current lifecycle status of the stream (OFFLINE, CONNECTING, LIVE, etc.). */
 status: StreamStatus, /** Whether the stream is currently broadcasting. */
 isLive: boolean, /** Number of viewers currently watching. */
@@ -9286,14 +9453,16 @@ createdAt: string | null, /** When the clip was last updated. */
 updatedAt: string | null, /** When the clip will be auto-deleted. */
 expiresAt: string | null, /** Whether the clip has passed its retention date (expiresAt < now). */
 isExpired: boolean, /** Playback access policy snapshotted at clip creation. null/PUBLIC means anyone with the playbackId can watch. Independent from the source stream's policy after creation — flipping the source stream's policy does not affect already-shared clip URLs. */
-playbackPolicy: { type: PlaybackPolicyType, /** JWT-policy details, populated when type == JWT. */
+playbackPolicy: { type: PlaybackPolicyType, /** Sites allowed to embed the content, as normalized `scheme://host[:port]` origins; `*` allows any. Empty = no restriction. A browser viewer whose Origin (or Referer) is not listed is denied. */
+allowedOrigins: Array<string>, /** JWT-policy details, populated when type == JWT. */
 jwt: { /** Allowed signing key IDs. Empty = any active tenant key. */
 allowedKids: Array<string>, /** If set, the viewer JWT's `aud` claim must contain at least one of these. */
 requiredAudience: Array<string>, /** Required claim constraints. Each value is the JSON-encoded representation of the expected claim value (so callers can require strings, numbers, booleans, or arrays consistently). Empty = no claim check. */
 requiredClaimsJson: Array<{ name: string, jsonValue: string }> } | null, /** Webhook-policy details, populated when type == WEBHOOK. Secret is masked. */
 webhook: { url: string, /** Outbound POST timeout in milliseconds. Capped server-side at 10000. */
 timeoutMs: number, /** Always 'redacted' on read; the actual secret is fieldcrypt-encrypted at rest. */
-secretMasked: string } | null } | null, /** Server-resolved Chandler URLs for the clip's poster and sprite thumbnails. Null until Foghorn confirms the thumbnail upload. */
+secretMasked: string, /** Your JSON object, sent as `context` in every access request to the URL. Null when unset. */
+context: unknown } | null } | null, /** Server-resolved Chandler URLs for the clip's poster and sprite thumbnails. Null until Foghorn confirms the thumbnail upload. */
 thumbnailAssets: { posterUrl: string, spriteVttUrl: string, spriteJpgUrl: string, assetKey: string } | null, /** Resolved retention horizon with the source of the decision (per-asset override → per-stream override → tenant default → tier entitlement). Null when retention_until is unset (infinite). */
 effectiveRetention: { /** Days from now until the artifact is scheduled for deletion. 0 = no auto-expire (retentionUntil is null). */
 retentionDays: number, /** Scheduled deletion timestamp. Null when the artifact has no horizon (kept forever). */
@@ -9358,14 +9527,16 @@ createdAt: string, /** When the asset was last modified. */
 updatedAt: string, /** Optional expiration time for auto-deletion. */
 expiresAt: string | null, /** Error message if processing failed. */
 errorMessage: string | null, /** Playback access policy. null/PUBLIC = anyone with the playbackId can watch. */
-playbackPolicy: { type: PlaybackPolicyType, /** JWT-policy details, populated when type == JWT. */
+playbackPolicy: { type: PlaybackPolicyType, /** Sites allowed to embed the content, as normalized `scheme://host[:port]` origins; `*` allows any. Empty = no restriction. A browser viewer whose Origin (or Referer) is not listed is denied. */
+allowedOrigins: Array<string>, /** JWT-policy details, populated when type == JWT. */
 jwt: { /** Allowed signing key IDs. Empty = any active tenant key. */
 allowedKids: Array<string>, /** If set, the viewer JWT's `aud` claim must contain at least one of these. */
 requiredAudience: Array<string>, /** Required claim constraints. Each value is the JSON-encoded representation of the expected claim value (so callers can require strings, numbers, booleans, or arrays consistently). Empty = no claim check. */
 requiredClaimsJson: Array<{ name: string, jsonValue: string }> } | null, /** Webhook-policy details, populated when type == WEBHOOK. Secret is masked. */
 webhook: { url: string, /** Outbound POST timeout in milliseconds. Capped server-side at 10000. */
 timeoutMs: number, /** Always 'redacted' on read; the actual secret is fieldcrypt-encrypted at rest. */
-secretMasked: string } | null } | null, /** Server-resolved Chandler URLs for the VOD's poster and sprite thumbnails. Null until Foghorn confirms the thumbnail upload. */
+secretMasked: string, /** Your JSON object, sent as `context` in every access request to the URL. Null when unset. */
+context: unknown } | null } | null, /** Server-resolved Chandler URLs for the VOD's poster and sprite thumbnails. Null until Foghorn confirms the thumbnail upload. */
 thumbnailAssets: { posterUrl: string, spriteVttUrl: string, spriteJpgUrl: string, assetKey: string } | null, /** Resolved retention horizon with the source of the decision (per-asset override → per-stream override → tenant default → tier entitlement). Null while the asset's retention_until column is unset (infinite). */
 effectiveRetention: { /** Days from now until the artifact is scheduled for deletion. 0 = no auto-expire (retentionUntil is null). */
 retentionDays: number, /** Scheduled deletion timestamp. Null when the artifact has no horizon (kept forever). */
@@ -9420,7 +9591,7 @@ export type ListStreamsQueryVariables = Exact<{
 
 /** List all streams for the current tenant with pagination. */
 export type ListStreamsQuery = { /** List all streams for the current tenant with pagination. */
-streamsConnection: { totalCount: number, nodes: Array<{ __typename: 'Stream', id: string, streamId: string, name: string, description: string | null, streamKey: string | null, playbackId: string, record: boolean, ingestMode: IngestMode, createdAt: string, updatedAt: string, dvrChapterMode: DVRChapterMode | null, dvrChapterIntervalSeconds: number | null, monitoring: MonitoringToggle, pullSource: { sourceUriRedacted: string, enabled: boolean, class: string } | null, playbackPolicy: { type: PlaybackPolicyType, jwt: { allowedKids: Array<string>, requiredAudience: Array<string>, requiredClaimsJson: Array<{ name: string, jsonValue: string }> } | null, webhook: { url: string, timeoutMs: number, secretMasked: string } | null } | null, metrics: { status: StreamStatus, isLive: boolean, currentViewers: number, startedAt: string | null, updatedAt: string } | null }>, pageInfo: { startCursor: string | null, endCursor: string | null, hasNextPage: boolean, hasPreviousPage: boolean } } };
+streamsConnection: { totalCount: number, nodes: Array<{ __typename: 'Stream', id: string, streamId: string, name: string, description: string | null, streamKey: string | null, playbackId: string, record: boolean, ingestMode: IngestMode, createdAt: string, updatedAt: string, dvrChapterMode: DVRChapterMode | null, dvrChapterIntervalSeconds: number | null, monitoring: MonitoringToggle, pullSource: { sourceUriRedacted: string, enabled: boolean, class: string } | null, playbackPolicy: { type: PlaybackPolicyType, allowedOrigins: Array<string>, jwt: { allowedKids: Array<string>, requiredAudience: Array<string>, requiredClaimsJson: Array<{ name: string, jsonValue: string }> } | null, webhook: { url: string, timeoutMs: number, secretMasked: string, context: unknown } | null } | null, metrics: { status: StreamStatus, isLive: boolean, currentViewers: number, startedAt: string | null, updatedAt: string } | null }>, pageInfo: { startCursor: string | null, endCursor: string | null, hasNextPage: boolean, hasPreviousPage: boolean } } };
 
 export type GetStreamQueryVariables = Exact<{
   id: string;
@@ -9447,14 +9618,16 @@ pullSource: { /** Redacted upstream URI with credentials removed. */
 sourceUriRedacted: string, /** Whether the media plane may pull from the source. */
 enabled: boolean, /** Eligibility class: public or private. */
 class: string } | null, /** Playback access policy. null/PUBLIC = anyone with the playbackId can watch. */
-playbackPolicy: { type: PlaybackPolicyType, /** JWT-policy details, populated when type == JWT. */
+playbackPolicy: { type: PlaybackPolicyType, /** Sites allowed to embed the content, as normalized `scheme://host[:port]` origins; `*` allows any. Empty = no restriction. A browser viewer whose Origin (or Referer) is not listed is denied. */
+allowedOrigins: Array<string>, /** JWT-policy details, populated when type == JWT. */
 jwt: { /** Allowed signing key IDs. Empty = any active tenant key. */
 allowedKids: Array<string>, /** If set, the viewer JWT's `aud` claim must contain at least one of these. */
 requiredAudience: Array<string>, /** Required claim constraints. Each value is the JSON-encoded representation of the expected claim value (so callers can require strings, numbers, booleans, or arrays consistently). Empty = no claim check. */
 requiredClaimsJson: Array<{ name: string, jsonValue: string }> } | null, /** Webhook-policy details, populated when type == WEBHOOK. Secret is masked. */
 webhook: { url: string, /** Outbound POST timeout in milliseconds. Capped server-side at 10000. */
 timeoutMs: number, /** Always 'redacted' on read; the actual secret is fieldcrypt-encrypted at rest. */
-secretMasked: string } | null } | null, /** Real-time operational metrics from the data plane. Includes viewer counts, quality metrics, and throughput data. Lazily loaded from ClickHouse analytics. */
+secretMasked: string, /** Your JSON object, sent as `context` in every access request to the URL. Null when unset. */
+context: unknown } | null } | null, /** Real-time operational metrics from the data plane. Includes viewer counts, quality metrics, and throughput data. Lazily loaded from ClickHouse analytics. */
 metrics: { /** Current lifecycle status of the stream (OFFLINE, CONNECTING, LIVE, etc.). */
 status: StreamStatus, /** Whether the stream is currently broadcasting. */
 isLive: boolean, /** Number of viewers currently watching. */
@@ -9511,6 +9684,8 @@ subject: string, data:
       | { __typename: 'PaymentFailed', paymentId: string, invoiceId: string, provider: string, providerReferenceId: string, paymentFailureReason: EventPaymentFailureReason, amount: { amountMinor: number, currency: string } | null }
       | { __typename: 'RecordingFailed', mediaFailureReason: EventMediaFailureReason, artifact: { artifactId: string, kind: EventArtifactKind, streamId: string, playbackId: string } | null }
       | { __typename: 'RecordingReady', durationMs: number, sizeBytes: number, artifact: { artifactId: string, kind: EventArtifactKind, streamId: string, playbackId: string } | null }
+      | { __typename: 'RecordingStarted' }
+      | { __typename: 'RecordingStopped' }
       | { __typename: 'StreamConnected', streamId: string, protocol: EventIngestProtocol }
       | { __typename: 'StreamCreated', streamId: string, name: string, playbackId: string }
       | { __typename: 'StreamDeleted', streamId: string }
@@ -9625,7 +9800,9 @@ export const PlaybackPolicyFieldsFragmentDoc = /*#__PURE__*/ new TypedDocumentSt
     url
     timeoutMs
     secretMasked
+    context
   }
+  allowedOrigins
 }
     `, {"fragmentName":"PlaybackPolicyFields"}) as unknown as TypedDocumentString<PlaybackPolicyFieldsFragment, unknown>;
 /** A live stream configuration with real-time operational metrics. Streams are the core entity for broadcasting and viewing live content. */
@@ -9675,7 +9852,9 @@ export const StreamFieldsFragmentDoc = /*#__PURE__*/ new TypedDocumentString(`
     url
     timeoutMs
     secretMasked
+    context
   }
+  allowedOrigins
 }`, {"fragmentName":"StreamFields"}) as unknown as TypedDocumentString<StreamFieldsFragment, unknown>;
 export const StreamKeyFieldsFragmentDoc = /*#__PURE__*/ new TypedDocumentString(`
     fragment StreamKeyFields on StreamKey {
@@ -9775,7 +9954,9 @@ fragment PlaybackPolicyFields on PlaybackPolicy {
     url
     timeoutMs
     secretMasked
+    context
   }
+  allowedOrigins
 }`, {"fragmentName":"ClipFields"}) as unknown as TypedDocumentString<ClipFieldsFragment, unknown>;
 export const DVRRequestFieldsFragmentDoc = /*#__PURE__*/ new TypedDocumentString(`
     fragment DVRRequestFields on DVRRequest {
@@ -9870,7 +10051,9 @@ fragment PlaybackPolicyFields on PlaybackPolicy {
     url
     timeoutMs
     secretMasked
+    context
   }
+  allowedOrigins
 }`, {"fragmentName":"VodAssetFields"}) as unknown as TypedDocumentString<VodAssetFieldsFragment, unknown>;
 export const StorageArtifactFieldsFragmentDoc = /*#__PURE__*/ new TypedDocumentString(`
     fragment StorageArtifactFields on StorageArtifact {
@@ -10039,6 +10222,7 @@ export const ArtifactEventDefaultFieldsFragmentDoc = /*#__PURE__*/ new TypedDocu
     }
     playbackPolicy {
       type
+      allowedOrigins
     }
     dvrChapterMode
     dvrChapterIntervalSeconds
@@ -10139,6 +10323,7 @@ export const ArtifactEventInNodeDefaultFieldsFragmentDoc = /*#__PURE__*/ new Typ
     }
     playbackPolicy {
       type
+      allowedOrigins
     }
     dvrChapterMode
     dvrChapterIntervalSeconds
@@ -10237,6 +10422,7 @@ export const ArtifactStateDefaultFieldsFragmentDoc = /*#__PURE__*/ new TypedDocu
     }
     playbackPolicy {
       type
+      allowedOrigins
     }
     dvrChapterMode
     dvrChapterIntervalSeconds
@@ -10800,6 +10986,7 @@ export const ClientMetrics5mDefaultFieldsFragmentDoc = /*#__PURE__*/ new TypedDo
     }
     playbackPolicy {
       type
+      allowedOrigins
     }
     dvrChapterMode
     dvrChapterIntervalSeconds
@@ -10908,6 +11095,7 @@ export const ClipInNodeDefaultFieldsFragmentDoc = /*#__PURE__*/ new TypedDocumen
     }
     playbackPolicy {
       type
+      allowedOrigins
     }
     dvrChapterMode
     dvrChapterIntervalSeconds
@@ -10953,7 +11141,9 @@ export const ClipInNodeDefaultFieldsFragmentDoc = /*#__PURE__*/ new TypedDocumen
       url
       timeoutMs
       secretMasked
+      context
     }
+    allowedOrigins
   }
   thumbnailAssets {
     posterUrl
@@ -11206,6 +11396,7 @@ export const ConnectionEventDefaultFieldsFragmentDoc = /*#__PURE__*/ new TypedDo
     }
     playbackPolicy {
       type
+      allowedOrigins
     }
     dvrChapterMode
     dvrChapterIntervalSeconds
@@ -11318,6 +11509,7 @@ export const ConnectionEventInNodeDefaultFieldsFragmentDoc = /*#__PURE__*/ new T
     }
     playbackPolicy {
       type
+      allowedOrigins
     }
     dvrChapterMode
     dvrChapterIntervalSeconds
@@ -11641,6 +11833,7 @@ export const GeographicDistributionDefaultFieldsFragmentDoc = /*#__PURE__*/ new 
     }
     playbackPolicy {
       type
+      allowedOrigins
     }
     dvrChapterMode
     dvrChapterIntervalSeconds
@@ -12772,6 +12965,7 @@ export const ProcessingUsageRecordDefaultFieldsFragmentDoc = /*#__PURE__*/ new T
     }
     playbackPolicy {
       type
+      allowedOrigins
     }
     dvrChapterMode
     dvrChapterIntervalSeconds
@@ -12909,6 +13103,7 @@ export const ProcessingUsageRecordInNodeDefaultFieldsFragmentDoc = /*#__PURE__*/
     }
     playbackPolicy {
       type
+      allowedOrigins
     }
     dvrChapterMode
     dvrChapterIntervalSeconds
@@ -13065,6 +13260,7 @@ export const QualityTierDailyDefaultFieldsFragmentDoc = /*#__PURE__*/ new TypedD
     }
     playbackPolicy {
       type
+      allowedOrigins
     }
     dvrChapterMode
     dvrChapterIntervalSeconds
@@ -13172,6 +13368,7 @@ export const RebufferingEventDefaultFieldsFragmentDoc = /*#__PURE__*/ new TypedD
     }
     playbackPolicy {
       type
+      allowedOrigins
     }
     dvrChapterMode
     dvrChapterIntervalSeconds
@@ -13278,6 +13475,7 @@ export const RoutingEventDefaultFieldsFragmentDoc = /*#__PURE__*/ new TypedDocum
     }
     playbackPolicy {
       type
+      allowedOrigins
     }
     dvrChapterMode
     dvrChapterIntervalSeconds
@@ -13578,6 +13776,7 @@ export const StorageEventDefaultFieldsFragmentDoc = /*#__PURE__*/ new TypedDocum
     }
     playbackPolicy {
       type
+      allowedOrigins
     }
     dvrChapterMode
     dvrChapterIntervalSeconds
@@ -13679,6 +13878,7 @@ export const StorageEventInNodeDefaultFieldsFragmentDoc = /*#__PURE__*/ new Type
     }
     playbackPolicy {
       type
+      allowedOrigins
     }
     dvrChapterMode
     dvrChapterIntervalSeconds
@@ -13796,6 +13996,7 @@ export const StreamAnalyticsDailyDefaultFieldsFragmentDoc = /*#__PURE__*/ new Ty
     }
     playbackPolicy {
       type
+      allowedOrigins
     }
     dvrChapterMode
     dvrChapterIntervalSeconds
@@ -13887,6 +14088,7 @@ export const StreamAnalyticsSummaryDefaultFieldsFragmentDoc = /*#__PURE__*/ new 
     }
     playbackPolicy {
       type
+      allowedOrigins
     }
     dvrChapterMode
     dvrChapterIntervalSeconds
@@ -14012,6 +14214,7 @@ export const StreamConnectionHourlyDefaultFieldsFragmentDoc = /*#__PURE__*/ new 
     }
     playbackPolicy {
       type
+      allowedOrigins
     }
     dvrChapterMode
     dvrChapterIntervalSeconds
@@ -14103,6 +14306,7 @@ export const StreamEventDefaultFieldsFragmentDoc = /*#__PURE__*/ new TypedDocume
     }
     playbackPolicy {
       type
+      allowedOrigins
     }
     dvrChapterMode
     dvrChapterIntervalSeconds
@@ -14225,6 +14429,7 @@ export const StreamEventInNodeDefaultFieldsFragmentDoc = /*#__PURE__*/ new Typed
     }
     playbackPolicy {
       type
+      allowedOrigins
     }
     dvrChapterMode
     dvrChapterIntervalSeconds
@@ -14381,6 +14586,7 @@ export const StreamHealthMetricDefaultFieldsFragmentDoc = /*#__PURE__*/ new Type
     }
     playbackPolicy {
       type
+      allowedOrigins
     }
     dvrChapterMode
     dvrChapterIntervalSeconds
@@ -14495,6 +14701,7 @@ export const StreamHealthMetricInNodeDefaultFieldsFragmentDoc = /*#__PURE__*/ ne
     }
     playbackPolicy {
       type
+      allowedOrigins
     }
     dvrChapterMode
     dvrChapterIntervalSeconds
@@ -14631,7 +14838,9 @@ export const StreamInNodeDefaultFieldsFragmentDoc = /*#__PURE__*/ new TypedDocum
       url
       timeoutMs
       secretMasked
+      context
     }
+    allowedOrigins
   }
   dvrChapterMode
   dvrChapterIntervalSeconds
@@ -15225,6 +15434,7 @@ export const TrackListEventDefaultFieldsFragmentDoc = /*#__PURE__*/ new TypedDoc
     }
     playbackPolicy {
       type
+      allowedOrigins
     }
     dvrChapterMode
     dvrChapterIntervalSeconds
@@ -15332,6 +15542,7 @@ export const TrackListEventInNodeDefaultFieldsFragmentDoc = /*#__PURE__*/ new Ty
     }
     playbackPolicy {
       type
+      allowedOrigins
     }
     dvrChapterMode
     dvrChapterIntervalSeconds
@@ -15438,6 +15649,7 @@ export const TrackListUpdateDefaultFieldsFragmentDoc = /*#__PURE__*/ new TypedDo
     }
     playbackPolicy {
       type
+      allowedOrigins
     }
     dvrChapterMode
     dvrChapterIntervalSeconds
@@ -15563,6 +15775,7 @@ export const ViewerCountBucketDefaultFieldsFragmentDoc = /*#__PURE__*/ new Typed
     }
     playbackPolicy {
       type
+      allowedOrigins
     }
     dvrChapterMode
     dvrChapterIntervalSeconds
@@ -15670,6 +15883,7 @@ export const ViewerGeographicDefaultFieldsFragmentDoc = /*#__PURE__*/ new TypedD
     }
     playbackPolicy {
       type
+      allowedOrigins
     }
     dvrChapterMode
     dvrChapterIntervalSeconds
@@ -15770,6 +15984,7 @@ export const ViewerHoursHourlyDefaultFieldsFragmentDoc = /*#__PURE__*/ new Typed
     }
     playbackPolicy {
       type
+      allowedOrigins
     }
     dvrChapterMode
     dvrChapterIntervalSeconds
@@ -15864,6 +16079,7 @@ export const ViewerHoursHourlyInNodeDefaultFieldsFragmentDoc = /*#__PURE__*/ new
     }
     playbackPolicy {
       type
+      allowedOrigins
     }
     dvrChapterMode
     dvrChapterIntervalSeconds
@@ -15957,6 +16173,7 @@ export const ViewerMetricsDefaultFieldsFragmentDoc = /*#__PURE__*/ new TypedDocu
     }
     playbackPolicy {
       type
+      allowedOrigins
     }
     dvrChapterMode
     dvrChapterIntervalSeconds
@@ -16063,6 +16280,7 @@ export const ViewerSessionDefaultFieldsFragmentDoc = /*#__PURE__*/ new TypedDocu
     }
     playbackPolicy {
       type
+      allowedOrigins
     }
     dvrChapterMode
     dvrChapterIntervalSeconds
@@ -16169,6 +16387,7 @@ export const ViewerSessionInNodeDefaultFieldsFragmentDoc = /*#__PURE__*/ new Typ
     }
     playbackPolicy {
       type
+      allowedOrigins
     }
     dvrChapterMode
     dvrChapterIntervalSeconds
@@ -16243,7 +16462,9 @@ export const VodAssetInNodeDefaultFieldsFragmentDoc = /*#__PURE__*/ new TypedDoc
       url
       timeoutMs
       secretMasked
+      context
     }
+    allowedOrigins
   }
   thumbnailAssets {
     posterUrl
@@ -18736,6 +18957,7 @@ export const GetArtifactEventsConnectionDocument = /*#__PURE__*/ new TypedDocume
     }
     playbackPolicy {
       type
+      allowedOrigins
     }
     dvrChapterMode
     dvrChapterIntervalSeconds
@@ -18888,6 +19110,7 @@ export const GetArtifactStatesConnectionDocument = /*#__PURE__*/ new TypedDocume
     }
     playbackPolicy {
       type
+      allowedOrigins
     }
     dvrChapterMode
     dvrChapterIntervalSeconds
@@ -19398,6 +19621,7 @@ export const GetClientQoeConnectionDocument = /*#__PURE__*/ new TypedDocumentStr
     }
     playbackPolicy {
       type
+      allowedOrigins
     }
     dvrChapterMode
     dvrChapterIntervalSeconds
@@ -19988,6 +20212,7 @@ export const GetConnectionEventsConnectionDocument = /*#__PURE__*/ new TypedDocu
     }
     playbackPolicy {
       type
+      allowedOrigins
     }
     dvrChapterMode
     dvrChapterIntervalSeconds
@@ -20314,6 +20539,7 @@ export const GetGeographicDistributionDocument = /*#__PURE__*/ new TypedDocument
     }
     playbackPolicy {
       type
+      allowedOrigins
     }
     dvrChapterMode
     dvrChapterIntervalSeconds
@@ -21237,6 +21463,7 @@ fragment ArtifactEventInNodeDefaultFields on ArtifactEvent {
     }
     playbackPolicy {
       type
+      allowedOrigins
     }
     dvrChapterMode
     dvrChapterIntervalSeconds
@@ -21344,6 +21571,7 @@ fragment ClientMetrics5mDefaultFields on ClientMetrics5m {
     }
     playbackPolicy {
       type
+      allowedOrigins
     }
     dvrChapterMode
     dvrChapterIntervalSeconds
@@ -21438,6 +21666,7 @@ fragment ClipInNodeDefaultFields on Clip {
     }
     playbackPolicy {
       type
+      allowedOrigins
     }
     dvrChapterMode
     dvrChapterIntervalSeconds
@@ -21483,7 +21712,9 @@ fragment ClipInNodeDefaultFields on Clip {
       url
       timeoutMs
       secretMasked
+      context
     }
+    allowedOrigins
   }
   thumbnailAssets {
     posterUrl
@@ -21600,6 +21831,7 @@ fragment ConnectionEventInNodeDefaultFields on ConnectionEvent {
     }
     playbackPolicy {
       type
+      allowedOrigins
     }
     dvrChapterMode
     dvrChapterIntervalSeconds
@@ -21831,6 +22063,7 @@ fragment ProcessingUsageRecordInNodeDefaultFields on ProcessingUsageRecord {
     }
     playbackPolicy {
       type
+      allowedOrigins
     }
     dvrChapterMode
     dvrChapterIntervalSeconds
@@ -21965,6 +22198,7 @@ fragment QualityTierDailyDefaultFields on QualityTierDaily {
     }
     playbackPolicy {
       type
+      allowedOrigins
     }
     dvrChapterMode
     dvrChapterIntervalSeconds
@@ -22075,6 +22309,7 @@ fragment StorageEventInNodeDefaultFields on StorageEvent {
     }
     playbackPolicy {
       type
+      allowedOrigins
     }
     dvrChapterMode
     dvrChapterIntervalSeconds
@@ -22188,6 +22423,7 @@ fragment StreamAnalyticsDailyDefaultFields on StreamAnalyticsDaily {
     }
     playbackPolicy {
       type
+      allowedOrigins
     }
     dvrChapterMode
     dvrChapterIntervalSeconds
@@ -22279,6 +22515,7 @@ fragment StreamConnectionHourlyDefaultFields on StreamConnectionHourly {
     }
     playbackPolicy {
       type
+      allowedOrigins
     }
     dvrChapterMode
     dvrChapterIntervalSeconds
@@ -22368,6 +22605,7 @@ fragment StreamEventInNodeDefaultFields on StreamEvent {
     }
     playbackPolicy {
       type
+      allowedOrigins
     }
     dvrChapterMode
     dvrChapterIntervalSeconds
@@ -22503,6 +22741,7 @@ fragment StreamHealthMetricInNodeDefaultFields on StreamHealthMetric {
     }
     playbackPolicy {
       type
+      allowedOrigins
     }
     dvrChapterMode
     dvrChapterIntervalSeconds
@@ -22623,7 +22862,9 @@ fragment StreamInNodeDefaultFields on Stream {
       url
       timeoutMs
       secretMasked
+      context
     }
+    allowedOrigins
   }
   dvrChapterMode
   dvrChapterIntervalSeconds
@@ -22717,6 +22958,7 @@ fragment TrackListEventInNodeDefaultFields on TrackListEvent {
     }
     playbackPolicy {
       type
+      allowedOrigins
     }
     dvrChapterMode
     dvrChapterIntervalSeconds
@@ -22831,6 +23073,7 @@ fragment ViewerHoursHourlyInNodeDefaultFields on ViewerHoursHourly {
     }
     playbackPolicy {
       type
+      allowedOrigins
     }
     dvrChapterMode
     dvrChapterIntervalSeconds
@@ -22923,6 +23166,7 @@ fragment ViewerSessionInNodeDefaultFields on ViewerSession {
     }
     playbackPolicy {
       type
+      allowedOrigins
     }
     dvrChapterMode
     dvrChapterIntervalSeconds
@@ -22994,7 +23238,9 @@ fragment VodAssetInNodeDefaultFields on VodAsset {
       url
       timeoutMs
       secretMasked
+      context
     }
+    allowedOrigins
   }
   thumbnailAssets {
     posterUrl
@@ -23829,6 +24075,7 @@ fragment ProcessingUsageRecordDefaultFields on ProcessingUsageRecord {
     }
     playbackPolicy {
       type
+      allowedOrigins
     }
     dvrChapterMode
     dvrChapterIntervalSeconds
@@ -23995,6 +24242,7 @@ fragment QualityTierDailyDefaultFields on QualityTierDaily {
     }
     playbackPolicy {
       type
+      allowedOrigins
     }
     dvrChapterMode
     dvrChapterIntervalSeconds
@@ -24124,6 +24372,7 @@ fragment RebufferingEventDefaultFields on RebufferingEvent {
     }
     playbackPolicy {
       type
+      allowedOrigins
     }
     dvrChapterMode
     dvrChapterIntervalSeconds
@@ -24394,6 +24643,7 @@ fragment RoutingEventDefaultFields on RoutingEvent {
     }
     playbackPolicy {
       type
+      allowedOrigins
     }
     dvrChapterMode
     dvrChapterIntervalSeconds
@@ -24747,6 +24997,7 @@ fragment StorageEventDefaultFields on StorageEvent {
     }
     playbackPolicy {
       type
+      allowedOrigins
     }
     dvrChapterMode
     dvrChapterIntervalSeconds
@@ -24925,6 +25176,7 @@ fragment StreamAnalyticsDailyDefaultFields on StreamAnalyticsDaily {
     }
     playbackPolicy {
       type
+      allowedOrigins
     }
     dvrChapterMode
     dvrChapterIntervalSeconds
@@ -25047,6 +25299,7 @@ fragment StreamAnalyticsSummaryDefaultFields on StreamAnalyticsSummary {
     }
     playbackPolicy {
       type
+      allowedOrigins
     }
     dvrChapterMode
     dvrChapterIntervalSeconds
@@ -25180,6 +25433,7 @@ export const GetStreamAnalyticsSummaryDocument = /*#__PURE__*/ new TypedDocument
     }
     playbackPolicy {
       type
+      allowedOrigins
     }
     dvrChapterMode
     dvrChapterIntervalSeconds
@@ -25335,6 +25589,7 @@ fragment StreamConnectionHourlyDefaultFields on StreamConnectionHourly {
     }
     playbackPolicy {
       type
+      allowedOrigins
     }
     dvrChapterMode
     dvrChapterIntervalSeconds
@@ -25454,6 +25709,7 @@ fragment StreamEventDefaultFields on StreamEvent {
     }
     playbackPolicy {
       type
+      allowedOrigins
     }
     dvrChapterMode
     dvrChapterIntervalSeconds
@@ -25649,6 +25905,7 @@ fragment StreamHealthMetricDefaultFields on StreamHealthMetric {
     }
     playbackPolicy {
       type
+      allowedOrigins
     }
     dvrChapterMode
     dvrChapterIntervalSeconds
@@ -25927,6 +26184,7 @@ fragment TrackListEventDefaultFields on TrackListEvent {
     }
     playbackPolicy {
       type
+      allowedOrigins
     }
     dvrChapterMode
     dvrChapterIntervalSeconds
@@ -26110,6 +26368,7 @@ fragment ViewerGeographicDefaultFields on ViewerGeographic {
     }
     playbackPolicy {
       type
+      allowedOrigins
     }
     dvrChapterMode
     dvrChapterIntervalSeconds
@@ -26240,6 +26499,7 @@ fragment ViewerHoursHourlyDefaultFields on ViewerHoursHourly {
     }
     playbackPolicy {
       type
+      allowedOrigins
     }
     dvrChapterMode
     dvrChapterIntervalSeconds
@@ -26362,6 +26622,7 @@ fragment ViewerSessionDefaultFields on ViewerSession {
     }
     playbackPolicy {
       type
+      allowedOrigins
     }
     dvrChapterMode
     dvrChapterIntervalSeconds
@@ -26498,6 +26759,7 @@ fragment ViewerCountBucketDefaultFields on ViewerCountBucket {
     }
     playbackPolicy {
       type
+      allowedOrigins
     }
     dvrChapterMode
     dvrChapterIntervalSeconds
@@ -26809,6 +27071,7 @@ export const LiveConnectionEventsDocument = /*#__PURE__*/ new TypedDocumentStrin
     }
     playbackPolicy {
       type
+      allowedOrigins
     }
     dvrChapterMode
     dvrChapterIntervalSeconds
@@ -27369,6 +27632,7 @@ export const LiveProcessingEventsDocument = /*#__PURE__*/ new TypedDocumentStrin
     }
     playbackPolicy {
       type
+      allowedOrigins
     }
     dvrChapterMode
     dvrChapterIntervalSeconds
@@ -27510,6 +27774,7 @@ export const LiveStorageEventsDocument = /*#__PURE__*/ new TypedDocumentString(`
     }
     playbackPolicy {
       type
+      allowedOrigins
     }
     dvrChapterMode
     dvrChapterIntervalSeconds
@@ -27616,6 +27881,7 @@ export const LiveStreamEventsDocument = /*#__PURE__*/ new TypedDocumentString(`
     }
     playbackPolicy {
       type
+      allowedOrigins
     }
     dvrChapterMode
     dvrChapterIntervalSeconds
@@ -27763,6 +28029,7 @@ export const LiveTrackListUpdatesDocument = /*#__PURE__*/ new TypedDocumentStrin
     }
     playbackPolicy {
       type
+      allowedOrigins
     }
     dvrChapterMode
     dvrChapterIntervalSeconds
@@ -27884,6 +28151,7 @@ export const LiveViewerMetricsDocument = /*#__PURE__*/ new TypedDocumentString(`
     }
     playbackPolicy {
       type
+      allowedOrigins
     }
     dvrChapterMode
     dvrChapterIntervalSeconds
@@ -28178,7 +28446,9 @@ fragment PlaybackPolicyFields on PlaybackPolicy {
     url
     timeoutMs
     secretMasked
+    context
   }
+  allowedOrigins
 }`) as unknown as TypedDocumentString<SetPlaybackPolicyMutation, SetPlaybackPolicyMutationVariables>;
 /** Run the same evaluator the live USER_NEW path uses against a caller- supplied JWT (or webhook test request) without registering a viewer session. Mutation, not query, because webhook mode (fireWebhook=true) fires a real outbound HTTPS request to the customer URL. Tenant ownership of the playback target is validated server-side. */
 export const TestPlaybackAccessDocument = /*#__PURE__*/ new TypedDocumentString(`
@@ -28275,7 +28545,9 @@ fragment PlaybackPolicyFields on PlaybackPolicy {
     url
     timeoutMs
     secretMasked
+    context
   }
+  allowedOrigins
 }
 fragment ClipFields on Clip {
   __typename
@@ -28469,6 +28741,87 @@ fragment AuthErrorFields on AuthError {
   message
   code
 }`) as unknown as TypedDocumentString<CreateVodUploadMutation, CreateVodUploadMutationVariables>;
+/** Import a video from a public https or http URL as a VOD asset. The processing node reads the file from the URL and processes it like an upload; the asset reports PROCESSING until it is ready. Progress arrives as upload.created, upload.completed, and upload.ready or upload.failed events. */
+export const ImportVodAssetDocument = /*#__PURE__*/ new TypedDocumentString(`
+    mutation ImportVodAsset($input: ImportVodAssetInput!) {
+  importVodAsset(input: $input) {
+    __typename
+    ...VodAssetFields
+    ...ValidationErrorFields
+    ...AuthErrorFields
+  }
+}
+    fragment ValidationErrorFields on ValidationError {
+  __typename
+  message
+  code
+  field
+  constraint
+}
+fragment AuthErrorFields on AuthError {
+  __typename
+  message
+  code
+}
+fragment ThumbnailAssetsFields on ThumbnailAssets {
+  posterUrl
+  spriteVttUrl
+  spriteJpgUrl
+  assetKey
+}
+fragment EffectiveRetentionFields on EffectiveRetention {
+  retentionDays
+  retentionUntil
+  source
+}
+fragment PlaybackPolicyFields on PlaybackPolicy {
+  type
+  jwt {
+    allowedKids
+    requiredAudience
+    requiredClaimsJson {
+      name
+      jsonValue
+    }
+  }
+  webhook {
+    url
+    timeoutMs
+    secretMasked
+    context
+  }
+  allowedOrigins
+}
+fragment VodAssetFields on VodAsset {
+  __typename
+  id
+  artifactHash
+  playbackId
+  streamId
+  title
+  description
+  filename
+  status
+  sizeBytes
+  durationMs
+  resolution
+  videoCodec
+  audioCodec
+  bitrateKbps
+  createdAt
+  updatedAt
+  expiresAt
+  errorMessage
+  playbackPolicy {
+    ...PlaybackPolicyFields
+  }
+  thumbnailAssets {
+    ...ThumbnailAssetsFields
+  }
+  effectiveRetention {
+    ...EffectiveRetentionFields
+  }
+}`) as unknown as TypedDocumentString<ImportVodAssetMutation, ImportVodAssetMutationVariables>;
 /** Complete a VOD upload after all parts are uploaded. Triggers processing and thumbnail generation. */
 export const CompleteVodUploadDocument = /*#__PURE__*/ new TypedDocumentString(`
     mutation CompleteVodUpload($input: CompleteVodUploadInput!) {
@@ -28524,7 +28877,9 @@ fragment PlaybackPolicyFields on PlaybackPolicy {
     url
     timeoutMs
     secretMasked
+    context
   }
+  allowedOrigins
 }
 fragment VodAssetFields on VodAsset {
   __typename
@@ -28648,7 +29003,9 @@ fragment PlaybackPolicyFields on PlaybackPolicy {
     url
     timeoutMs
     secretMasked
+    context
   }
+  allowedOrigins
 }
 fragment StreamFields on Stream {
   __typename
@@ -28725,7 +29082,9 @@ fragment PlaybackPolicyFields on PlaybackPolicy {
     url
     timeoutMs
     secretMasked
+    context
   }
+  allowedOrigins
 }
 fragment StreamFields on Stream {
   __typename
@@ -28830,7 +29189,9 @@ fragment PlaybackPolicyFields on PlaybackPolicy {
     url
     timeoutMs
     secretMasked
+    context
   }
+  allowedOrigins
 }
 fragment StreamFields on Stream {
   __typename
@@ -29250,7 +29611,9 @@ fragment PlaybackPolicyFields on PlaybackPolicy {
     url
     timeoutMs
     secretMasked
+    context
   }
+  allowedOrigins
 }
 fragment ClipFields on Clip {
   __typename
@@ -29365,7 +29728,9 @@ fragment PlaybackPolicyFields on PlaybackPolicy {
     url
     timeoutMs
     secretMasked
+    context
   }
+  allowedOrigins
 }
 fragment VodAssetFields on VodAsset {
   __typename
@@ -29524,7 +29889,9 @@ fragment PlaybackPolicyFields on PlaybackPolicy {
     url
     timeoutMs
     secretMasked
+    context
   }
+  allowedOrigins
 }
 fragment StreamFields on Stream {
   __typename
@@ -29578,7 +29945,9 @@ export const GetStreamDocument = /*#__PURE__*/ new TypedDocumentString(`
     url
     timeoutMs
     secretMasked
+    context
   }
+  allowedOrigins
 }
 fragment StreamFields on Stream {
   __typename

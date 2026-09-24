@@ -1723,6 +1723,12 @@ from .get_webhook_endpoints_connection import (
     GetWebhookEndpointsConnectionWebhookEndpointsConnectionPageInfo,
 )
 from .get_webhook_event_types import GetWebhookEventTypes
+from .import_vod_asset import (
+    ImportVodAsset,
+    ImportVodAssetImportVodAssetAuthError,
+    ImportVodAssetImportVodAssetValidationError,
+    ImportVodAssetImportVodAssetVodAsset,
+)
 from .input_types import (
     ApplyMediaCapacityConsentInput,
     ApplyMediaPlacementChangeInput,
@@ -1744,6 +1750,7 @@ from .input_types import (
     CreateStreamKeyInput,
     CreateVodUploadInput,
     CreateWebhookEndpointInput,
+    ImportVodAssetInput,
     IncidentFilterInput,
     LinkEmailInput,
     MediaPlacementAllowInput,
@@ -2077,6 +2084,8 @@ from .tenant_events import (
     TenantEventsTenantEventsDataRecordingFailedArtifact,
     TenantEventsTenantEventsDataRecordingReady,
     TenantEventsTenantEventsDataRecordingReadyArtifact,
+    TenantEventsTenantEventsDataRecordingStarted,
+    TenantEventsTenantEventsDataRecordingStopped,
     TenantEventsTenantEventsDataStreamConnected,
     TenantEventsTenantEventsDataStreamCreated,
     TenantEventsTenantEventsDataStreamDeleted,
@@ -3145,6 +3154,11 @@ __all__ = [
     "GetWebhookEndpointsConnectionWebhookEndpointsConnectionEdgesNode",
     "GetWebhookEndpointsConnectionWebhookEndpointsConnectionPageInfo",
     "GetWebhookEventTypes",
+    "ImportVodAsset",
+    "ImportVodAssetImportVodAssetAuthError",
+    "ImportVodAssetImportVodAssetValidationError",
+    "ImportVodAssetImportVodAssetVodAsset",
+    "ImportVodAssetInput",
     "IncidentDefault",
     "IncidentDetailDefault",
     "IncidentDetailDefaultAlerts",
@@ -3773,6 +3787,8 @@ __all__ = [
     "TenantEventsTenantEventsDataRecordingFailedArtifact",
     "TenantEventsTenantEventsDataRecordingReady",
     "TenantEventsTenantEventsDataRecordingReadyArtifact",
+    "TenantEventsTenantEventsDataRecordingStarted",
+    "TenantEventsTenantEventsDataRecordingStopped",
     "TenantEventsTenantEventsDataStreamConnected",
     "TenantEventsTenantEventsDataStreamCreated",
     "TenantEventsTenantEventsDataStreamDeleted",

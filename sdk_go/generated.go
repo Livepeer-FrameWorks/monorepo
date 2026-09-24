@@ -4563,10 +4563,19 @@ func (v *ArtifactEventDefaultFieldsStreamMetrics) GetIssuesDescription() *string
 // gates whether the full policy is fetched at all.
 type ArtifactEventDefaultFieldsStreamPlaybackPolicy struct {
 	Type PlaybackPolicyType `json:"type"`
+	// Sites allowed to embed the content, as normalized `scheme://host[:port]`
+	// origins; `*` allows any. Empty = no restriction. A browser viewer whose
+	// Origin (or Referer) is not listed is denied.
+	AllowedOrigins []string `json:"allowedOrigins"`
 }
 
 // GetType returns ArtifactEventDefaultFieldsStreamPlaybackPolicy.Type, and is useful for accessing the field via an interface.
 func (v *ArtifactEventDefaultFieldsStreamPlaybackPolicy) GetType() PlaybackPolicyType { return v.Type }
+
+// GetAllowedOrigins returns ArtifactEventDefaultFieldsStreamPlaybackPolicy.AllowedOrigins, and is useful for accessing the field via an interface.
+func (v *ArtifactEventDefaultFieldsStreamPlaybackPolicy) GetAllowedOrigins() []string {
+	return v.AllowedOrigins
+}
 
 // ArtifactEventDefaultFieldsStreamPullSourcePullSourceView includes the requested fields of the GraphQL type PullSourceView.
 // The GraphQL type's documentation follows.
@@ -5142,11 +5151,20 @@ func (v *ArtifactEventInNodeDefaultFieldsStreamMetrics) GetIssuesDescription() *
 // gates whether the full policy is fetched at all.
 type ArtifactEventInNodeDefaultFieldsStreamPlaybackPolicy struct {
 	Type PlaybackPolicyType `json:"type"`
+	// Sites allowed to embed the content, as normalized `scheme://host[:port]`
+	// origins; `*` allows any. Empty = no restriction. A browser viewer whose
+	// Origin (or Referer) is not listed is denied.
+	AllowedOrigins []string `json:"allowedOrigins"`
 }
 
 // GetType returns ArtifactEventInNodeDefaultFieldsStreamPlaybackPolicy.Type, and is useful for accessing the field via an interface.
 func (v *ArtifactEventInNodeDefaultFieldsStreamPlaybackPolicy) GetType() PlaybackPolicyType {
 	return v.Type
+}
+
+// GetAllowedOrigins returns ArtifactEventInNodeDefaultFieldsStreamPlaybackPolicy.AllowedOrigins, and is useful for accessing the field via an interface.
+func (v *ArtifactEventInNodeDefaultFieldsStreamPlaybackPolicy) GetAllowedOrigins() []string {
+	return v.AllowedOrigins
 }
 
 // ArtifactEventInNodeDefaultFieldsStreamPullSourcePullSourceView includes the requested fields of the GraphQL type PullSourceView.
@@ -5719,10 +5737,19 @@ func (v *ArtifactStateDefaultFieldsStreamMetrics) GetIssuesDescription() *string
 // gates whether the full policy is fetched at all.
 type ArtifactStateDefaultFieldsStreamPlaybackPolicy struct {
 	Type PlaybackPolicyType `json:"type"`
+	// Sites allowed to embed the content, as normalized `scheme://host[:port]`
+	// origins; `*` allows any. Empty = no restriction. A browser viewer whose
+	// Origin (or Referer) is not listed is denied.
+	AllowedOrigins []string `json:"allowedOrigins"`
 }
 
 // GetType returns ArtifactStateDefaultFieldsStreamPlaybackPolicy.Type, and is useful for accessing the field via an interface.
 func (v *ArtifactStateDefaultFieldsStreamPlaybackPolicy) GetType() PlaybackPolicyType { return v.Type }
+
+// GetAllowedOrigins returns ArtifactStateDefaultFieldsStreamPlaybackPolicy.AllowedOrigins, and is useful for accessing the field via an interface.
+func (v *ArtifactStateDefaultFieldsStreamPlaybackPolicy) GetAllowedOrigins() []string {
+	return v.AllowedOrigins
+}
 
 // ArtifactStateDefaultFieldsStreamPullSourcePullSourceView includes the requested fields of the GraphQL type PullSourceView.
 // The GraphQL type's documentation follows.
@@ -10377,11 +10404,20 @@ func (v *ClientMetrics5mDefaultFieldsStreamMetrics) GetIssuesDescription() *stri
 // gates whether the full policy is fetched at all.
 type ClientMetrics5mDefaultFieldsStreamPlaybackPolicy struct {
 	Type PlaybackPolicyType `json:"type"`
+	// Sites allowed to embed the content, as normalized `scheme://host[:port]`
+	// origins; `*` allows any. Empty = no restriction. A browser viewer whose
+	// Origin (or Referer) is not listed is denied.
+	AllowedOrigins []string `json:"allowedOrigins"`
 }
 
 // GetType returns ClientMetrics5mDefaultFieldsStreamPlaybackPolicy.Type, and is useful for accessing the field via an interface.
 func (v *ClientMetrics5mDefaultFieldsStreamPlaybackPolicy) GetType() PlaybackPolicyType {
 	return v.Type
+}
+
+// GetAllowedOrigins returns ClientMetrics5mDefaultFieldsStreamPlaybackPolicy.AllowedOrigins, and is useful for accessing the field via an interface.
+func (v *ClientMetrics5mDefaultFieldsStreamPlaybackPolicy) GetAllowedOrigins() []string {
+	return v.AllowedOrigins
 }
 
 // ClientMetrics5mDefaultFieldsStreamPullSourcePullSourceView includes the requested fields of the GraphQL type PullSourceView.
@@ -10818,6 +10854,11 @@ func (v *ClipFieldsPlaybackPolicy) GetWebhook() *PlaybackPolicyFieldsWebhookPlay
 	return v.PlaybackPolicyFields.Webhook
 }
 
+// GetAllowedOrigins returns ClipFieldsPlaybackPolicy.AllowedOrigins, and is useful for accessing the field via an interface.
+func (v *ClipFieldsPlaybackPolicy) GetAllowedOrigins() []string {
+	return v.PlaybackPolicyFields.AllowedOrigins
+}
+
 func (v *ClipFieldsPlaybackPolicy) UnmarshalJSON(b []byte) error {
 
 	if string(b) == "null" {
@@ -10849,6 +10890,8 @@ type __premarshalClipFieldsPlaybackPolicy struct {
 	Jwt *PlaybackPolicyFieldsJwtPlaybackJwtPolicy `json:"jwt"`
 
 	Webhook *PlaybackPolicyFieldsWebhookPlaybackWebhookPolicy `json:"webhook"`
+
+	AllowedOrigins []string `json:"allowedOrigins"`
 }
 
 func (v *ClipFieldsPlaybackPolicy) MarshalJSON() ([]byte, error) {
@@ -10865,6 +10908,7 @@ func (v *ClipFieldsPlaybackPolicy) __premarshalJSON() (*__premarshalClipFieldsPl
 	retval.Type = v.PlaybackPolicyFields.Type
 	retval.Jwt = v.PlaybackPolicyFields.Jwt
 	retval.Webhook = v.PlaybackPolicyFields.Webhook
+	retval.AllowedOrigins = v.PlaybackPolicyFields.AllowedOrigins
 	return &retval, nil
 }
 
@@ -11154,6 +11198,10 @@ type ClipInNodeDefaultFieldsPlaybackPolicy struct {
 	Jwt *ClipInNodeDefaultFieldsPlaybackPolicyJwtPlaybackJwtPolicy `json:"jwt"`
 	// Webhook-policy details, populated when type == WEBHOOK. Secret is masked.
 	Webhook *ClipInNodeDefaultFieldsPlaybackPolicyWebhookPlaybackWebhookPolicy `json:"webhook"`
+	// Sites allowed to embed the content, as normalized `scheme://host[:port]`
+	// origins; `*` allows any. Empty = no restriction. A browser viewer whose
+	// Origin (or Referer) is not listed is denied.
+	AllowedOrigins []string `json:"allowedOrigins"`
 }
 
 // GetType returns ClipInNodeDefaultFieldsPlaybackPolicy.Type, and is useful for accessing the field via an interface.
@@ -11168,6 +11216,9 @@ func (v *ClipInNodeDefaultFieldsPlaybackPolicy) GetJwt() *ClipInNodeDefaultField
 func (v *ClipInNodeDefaultFieldsPlaybackPolicy) GetWebhook() *ClipInNodeDefaultFieldsPlaybackPolicyWebhookPlaybackWebhookPolicy {
 	return v.Webhook
 }
+
+// GetAllowedOrigins returns ClipInNodeDefaultFieldsPlaybackPolicy.AllowedOrigins, and is useful for accessing the field via an interface.
+func (v *ClipInNodeDefaultFieldsPlaybackPolicy) GetAllowedOrigins() []string { return v.AllowedOrigins }
 
 // ClipInNodeDefaultFieldsPlaybackPolicyJwtPlaybackJwtPolicy includes the requested fields of the GraphQL type PlaybackJwtPolicy.
 // The GraphQL type's documentation follows.
@@ -11204,6 +11255,8 @@ type ClipInNodeDefaultFieldsPlaybackPolicyWebhookPlaybackWebhookPolicy struct {
 	TimeoutMs int `json:"timeoutMs"`
 	// Always 'redacted' on read; the actual secret is fieldcrypt-encrypted at rest.
 	SecretMasked string `json:"secretMasked"`
+	// Your JSON object, sent as `context` in every access request to the URL. Null when unset.
+	Context *json.RawMessage `json:"context"`
 }
 
 // GetUrl returns ClipInNodeDefaultFieldsPlaybackPolicyWebhookPlaybackWebhookPolicy.Url, and is useful for accessing the field via an interface.
@@ -11219,6 +11272,11 @@ func (v *ClipInNodeDefaultFieldsPlaybackPolicyWebhookPlaybackWebhookPolicy) GetT
 // GetSecretMasked returns ClipInNodeDefaultFieldsPlaybackPolicyWebhookPlaybackWebhookPolicy.SecretMasked, and is useful for accessing the field via an interface.
 func (v *ClipInNodeDefaultFieldsPlaybackPolicyWebhookPlaybackWebhookPolicy) GetSecretMasked() string {
 	return v.SecretMasked
+}
+
+// GetContext returns ClipInNodeDefaultFieldsPlaybackPolicyWebhookPlaybackWebhookPolicy.Context, and is useful for accessing the field via an interface.
+func (v *ClipInNodeDefaultFieldsPlaybackPolicyWebhookPlaybackWebhookPolicy) GetContext() *json.RawMessage {
+	return v.Context
 }
 
 // ClipInNodeDefaultFieldsStorageCostStorageCostProjection includes the requested fields of the GraphQL type StorageCostProjection.
@@ -11554,10 +11612,19 @@ func (v *ClipInNodeDefaultFieldsStreamMetrics) GetIssuesDescription() *string {
 // gates whether the full policy is fetched at all.
 type ClipInNodeDefaultFieldsStreamPlaybackPolicy struct {
 	Type PlaybackPolicyType `json:"type"`
+	// Sites allowed to embed the content, as normalized `scheme://host[:port]`
+	// origins; `*` allows any. Empty = no restriction. A browser viewer whose
+	// Origin (or Referer) is not listed is denied.
+	AllowedOrigins []string `json:"allowedOrigins"`
 }
 
 // GetType returns ClipInNodeDefaultFieldsStreamPlaybackPolicy.Type, and is useful for accessing the field via an interface.
 func (v *ClipInNodeDefaultFieldsStreamPlaybackPolicy) GetType() PlaybackPolicyType { return v.Type }
+
+// GetAllowedOrigins returns ClipInNodeDefaultFieldsStreamPlaybackPolicy.AllowedOrigins, and is useful for accessing the field via an interface.
+func (v *ClipInNodeDefaultFieldsStreamPlaybackPolicy) GetAllowedOrigins() []string {
+	return v.AllowedOrigins
+}
 
 // ClipInNodeDefaultFieldsStreamPullSourcePullSourceView includes the requested fields of the GraphQL type PullSourceView.
 // The GraphQL type's documentation follows.
@@ -13506,11 +13573,20 @@ func (v *ConnectionEventDefaultFieldsStreamMetrics) GetIssuesDescription() *stri
 // gates whether the full policy is fetched at all.
 type ConnectionEventDefaultFieldsStreamPlaybackPolicy struct {
 	Type PlaybackPolicyType `json:"type"`
+	// Sites allowed to embed the content, as normalized `scheme://host[:port]`
+	// origins; `*` allows any. Empty = no restriction. A browser viewer whose
+	// Origin (or Referer) is not listed is denied.
+	AllowedOrigins []string `json:"allowedOrigins"`
 }
 
 // GetType returns ConnectionEventDefaultFieldsStreamPlaybackPolicy.Type, and is useful for accessing the field via an interface.
 func (v *ConnectionEventDefaultFieldsStreamPlaybackPolicy) GetType() PlaybackPolicyType {
 	return v.Type
+}
+
+// GetAllowedOrigins returns ConnectionEventDefaultFieldsStreamPlaybackPolicy.AllowedOrigins, and is useful for accessing the field via an interface.
+func (v *ConnectionEventDefaultFieldsStreamPlaybackPolicy) GetAllowedOrigins() []string {
+	return v.AllowedOrigins
 }
 
 // ConnectionEventDefaultFieldsStreamPullSourcePullSourceView includes the requested fields of the GraphQL type PullSourceView.
@@ -14163,11 +14239,20 @@ func (v *ConnectionEventInNodeDefaultFieldsStreamMetrics) GetIssuesDescription()
 // gates whether the full policy is fetched at all.
 type ConnectionEventInNodeDefaultFieldsStreamPlaybackPolicy struct {
 	Type PlaybackPolicyType `json:"type"`
+	// Sites allowed to embed the content, as normalized `scheme://host[:port]`
+	// origins; `*` allows any. Empty = no restriction. A browser viewer whose
+	// Origin (or Referer) is not listed is denied.
+	AllowedOrigins []string `json:"allowedOrigins"`
 }
 
 // GetType returns ConnectionEventInNodeDefaultFieldsStreamPlaybackPolicy.Type, and is useful for accessing the field via an interface.
 func (v *ConnectionEventInNodeDefaultFieldsStreamPlaybackPolicy) GetType() PlaybackPolicyType {
 	return v.Type
+}
+
+// GetAllowedOrigins returns ConnectionEventInNodeDefaultFieldsStreamPlaybackPolicy.AllowedOrigins, and is useful for accessing the field via an interface.
+func (v *ConnectionEventInNodeDefaultFieldsStreamPlaybackPolicy) GetAllowedOrigins() []string {
+	return v.AllowedOrigins
 }
 
 // ConnectionEventInNodeDefaultFieldsStreamPullSourcePullSourceView includes the requested fields of the GraphQL type PullSourceView.
@@ -23115,8 +23200,6 @@ func (v *CreateVodUploadCreateVodUploadVodUploadSessionPartsVodUploadPart) GetPr
 	return v.PresignedUrl
 }
 
-// Input for initiating a multipart VOD upload.
-// Returns presigned S3 URLs for uploading file parts.
 type CreateVodUploadInput struct {
 	// Original filename (for metadata and content-type detection).
 	Filename string `json:"filename"`
@@ -28690,11 +28773,20 @@ func (v *GeographicDistributionDefaultFieldsStreamMetrics) GetIssuesDescription(
 // gates whether the full policy is fetched at all.
 type GeographicDistributionDefaultFieldsStreamPlaybackPolicy struct {
 	Type PlaybackPolicyType `json:"type"`
+	// Sites allowed to embed the content, as normalized `scheme://host[:port]`
+	// origins; `*` allows any. Empty = no restriction. A browser viewer whose
+	// Origin (or Referer) is not listed is denied.
+	AllowedOrigins []string `json:"allowedOrigins"`
 }
 
 // GetType returns GeographicDistributionDefaultFieldsStreamPlaybackPolicy.Type, and is useful for accessing the field via an interface.
 func (v *GeographicDistributionDefaultFieldsStreamPlaybackPolicy) GetType() PlaybackPolicyType {
 	return v.Type
+}
+
+// GetAllowedOrigins returns GeographicDistributionDefaultFieldsStreamPlaybackPolicy.AllowedOrigins, and is useful for accessing the field via an interface.
+func (v *GeographicDistributionDefaultFieldsStreamPlaybackPolicy) GetAllowedOrigins() []string {
+	return v.AllowedOrigins
 }
 
 // GeographicDistributionDefaultFieldsStreamPullSourcePullSourceView includes the requested fields of the GraphQL type PullSourceView.
@@ -67319,6 +67411,552 @@ type GetWebhookEventTypesResponse struct {
 // GetWebhookEventTypes returns GetWebhookEventTypesResponse.WebhookEventTypes, and is useful for accessing the field via an interface.
 func (v *GetWebhookEventTypesResponse) GetWebhookEventTypes() []string { return v.WebhookEventTypes }
 
+// ImportVodAssetImportVodAsset includes the requested fields of the GraphQL type VodAsset.
+// The GraphQL type's documentation follows.
+//
+// A Video-on-Demand asset uploaded by the tenant.
+// VOD assets can be played back using the playbackId in playback URLs.
+type ImportVodAssetImportVodAsset struct {
+	Typename       *string `json:"__typename"`
+	VodAssetFields `json:"-"`
+}
+
+// GetTypename returns ImportVodAssetImportVodAsset.Typename, and is useful for accessing the field via an interface.
+func (v *ImportVodAssetImportVodAsset) GetTypename() *string { return v.Typename }
+
+// GetId returns ImportVodAssetImportVodAsset.Id, and is useful for accessing the field via an interface.
+func (v *ImportVodAssetImportVodAsset) GetId() string { return v.VodAssetFields.Id }
+
+// GetArtifactHash returns ImportVodAssetImportVodAsset.ArtifactHash, and is useful for accessing the field via an interface.
+func (v *ImportVodAssetImportVodAsset) GetArtifactHash() string { return v.VodAssetFields.ArtifactHash }
+
+// GetPlaybackId returns ImportVodAssetImportVodAsset.PlaybackId, and is useful for accessing the field via an interface.
+func (v *ImportVodAssetImportVodAsset) GetPlaybackId() string { return v.VodAssetFields.PlaybackId }
+
+// GetStreamId returns ImportVodAssetImportVodAsset.StreamId, and is useful for accessing the field via an interface.
+func (v *ImportVodAssetImportVodAsset) GetStreamId() *string { return v.VodAssetFields.StreamId }
+
+// GetTitle returns ImportVodAssetImportVodAsset.Title, and is useful for accessing the field via an interface.
+func (v *ImportVodAssetImportVodAsset) GetTitle() *string { return v.VodAssetFields.Title }
+
+// GetDescription returns ImportVodAssetImportVodAsset.Description, and is useful for accessing the field via an interface.
+func (v *ImportVodAssetImportVodAsset) GetDescription() *string { return v.VodAssetFields.Description }
+
+// GetFilename returns ImportVodAssetImportVodAsset.Filename, and is useful for accessing the field via an interface.
+func (v *ImportVodAssetImportVodAsset) GetFilename() *string { return v.VodAssetFields.Filename }
+
+// GetStatus returns ImportVodAssetImportVodAsset.Status, and is useful for accessing the field via an interface.
+func (v *ImportVodAssetImportVodAsset) GetStatus() VodAssetStatus { return v.VodAssetFields.Status }
+
+// GetSizeBytes returns ImportVodAssetImportVodAsset.SizeBytes, and is useful for accessing the field via an interface.
+func (v *ImportVodAssetImportVodAsset) GetSizeBytes() *float64 { return v.VodAssetFields.SizeBytes }
+
+// GetDurationMs returns ImportVodAssetImportVodAsset.DurationMs, and is useful for accessing the field via an interface.
+func (v *ImportVodAssetImportVodAsset) GetDurationMs() *int { return v.VodAssetFields.DurationMs }
+
+// GetResolution returns ImportVodAssetImportVodAsset.Resolution, and is useful for accessing the field via an interface.
+func (v *ImportVodAssetImportVodAsset) GetResolution() *string { return v.VodAssetFields.Resolution }
+
+// GetVideoCodec returns ImportVodAssetImportVodAsset.VideoCodec, and is useful for accessing the field via an interface.
+func (v *ImportVodAssetImportVodAsset) GetVideoCodec() *string { return v.VodAssetFields.VideoCodec }
+
+// GetAudioCodec returns ImportVodAssetImportVodAsset.AudioCodec, and is useful for accessing the field via an interface.
+func (v *ImportVodAssetImportVodAsset) GetAudioCodec() *string { return v.VodAssetFields.AudioCodec }
+
+// GetBitrateKbps returns ImportVodAssetImportVodAsset.BitrateKbps, and is useful for accessing the field via an interface.
+func (v *ImportVodAssetImportVodAsset) GetBitrateKbps() *int { return v.VodAssetFields.BitrateKbps }
+
+// GetCreatedAt returns ImportVodAssetImportVodAsset.CreatedAt, and is useful for accessing the field via an interface.
+func (v *ImportVodAssetImportVodAsset) GetCreatedAt() time.Time { return v.VodAssetFields.CreatedAt }
+
+// GetUpdatedAt returns ImportVodAssetImportVodAsset.UpdatedAt, and is useful for accessing the field via an interface.
+func (v *ImportVodAssetImportVodAsset) GetUpdatedAt() time.Time { return v.VodAssetFields.UpdatedAt }
+
+// GetExpiresAt returns ImportVodAssetImportVodAsset.ExpiresAt, and is useful for accessing the field via an interface.
+func (v *ImportVodAssetImportVodAsset) GetExpiresAt() *time.Time { return v.VodAssetFields.ExpiresAt }
+
+// GetErrorMessage returns ImportVodAssetImportVodAsset.ErrorMessage, and is useful for accessing the field via an interface.
+func (v *ImportVodAssetImportVodAsset) GetErrorMessage() *string {
+	return v.VodAssetFields.ErrorMessage
+}
+
+// GetPlaybackPolicy returns ImportVodAssetImportVodAsset.PlaybackPolicy, and is useful for accessing the field via an interface.
+func (v *ImportVodAssetImportVodAsset) GetPlaybackPolicy() *VodAssetFieldsPlaybackPolicy {
+	return v.VodAssetFields.PlaybackPolicy
+}
+
+// GetThumbnailAssets returns ImportVodAssetImportVodAsset.ThumbnailAssets, and is useful for accessing the field via an interface.
+func (v *ImportVodAssetImportVodAsset) GetThumbnailAssets() *VodAssetFieldsThumbnailAssets {
+	return v.VodAssetFields.ThumbnailAssets
+}
+
+// GetEffectiveRetention returns ImportVodAssetImportVodAsset.EffectiveRetention, and is useful for accessing the field via an interface.
+func (v *ImportVodAssetImportVodAsset) GetEffectiveRetention() *VodAssetFieldsEffectiveRetention {
+	return v.VodAssetFields.EffectiveRetention
+}
+
+func (v *ImportVodAssetImportVodAsset) UnmarshalJSON(b []byte) error {
+
+	if string(b) == "null" {
+		return nil
+	}
+
+	var firstPass struct {
+		*ImportVodAssetImportVodAsset
+		graphql.NoUnmarshalJSON
+	}
+	firstPass.ImportVodAssetImportVodAsset = v
+
+	err := json.Unmarshal(b, &firstPass)
+	if err != nil {
+		return err
+	}
+
+	err = json.Unmarshal(
+		b, &v.VodAssetFields)
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
+type __premarshalImportVodAssetImportVodAsset struct {
+	Typename *string `json:"__typename"`
+
+	Id string `json:"id"`
+
+	ArtifactHash string `json:"artifactHash"`
+
+	PlaybackId string `json:"playbackId"`
+
+	StreamId *string `json:"streamId"`
+
+	Title *string `json:"title"`
+
+	Description *string `json:"description"`
+
+	Filename *string `json:"filename"`
+
+	Status VodAssetStatus `json:"status"`
+
+	SizeBytes *float64 `json:"sizeBytes"`
+
+	DurationMs *int `json:"durationMs"`
+
+	Resolution *string `json:"resolution"`
+
+	VideoCodec *string `json:"videoCodec"`
+
+	AudioCodec *string `json:"audioCodec"`
+
+	BitrateKbps *int `json:"bitrateKbps"`
+
+	CreatedAt time.Time `json:"createdAt"`
+
+	UpdatedAt time.Time `json:"updatedAt"`
+
+	ExpiresAt *time.Time `json:"expiresAt"`
+
+	ErrorMessage *string `json:"errorMessage"`
+
+	PlaybackPolicy *VodAssetFieldsPlaybackPolicy `json:"playbackPolicy"`
+
+	ThumbnailAssets *VodAssetFieldsThumbnailAssets `json:"thumbnailAssets"`
+
+	EffectiveRetention *VodAssetFieldsEffectiveRetention `json:"effectiveRetention"`
+}
+
+func (v *ImportVodAssetImportVodAsset) MarshalJSON() ([]byte, error) {
+	premarshaled, err := v.__premarshalJSON()
+	if err != nil {
+		return nil, err
+	}
+	return json.Marshal(premarshaled)
+}
+
+func (v *ImportVodAssetImportVodAsset) __premarshalJSON() (*__premarshalImportVodAssetImportVodAsset, error) {
+	var retval __premarshalImportVodAssetImportVodAsset
+
+	retval.Typename = v.Typename
+	retval.Id = v.VodAssetFields.Id
+	retval.ArtifactHash = v.VodAssetFields.ArtifactHash
+	retval.PlaybackId = v.VodAssetFields.PlaybackId
+	retval.StreamId = v.VodAssetFields.StreamId
+	retval.Title = v.VodAssetFields.Title
+	retval.Description = v.VodAssetFields.Description
+	retval.Filename = v.VodAssetFields.Filename
+	retval.Status = v.VodAssetFields.Status
+	retval.SizeBytes = v.VodAssetFields.SizeBytes
+	retval.DurationMs = v.VodAssetFields.DurationMs
+	retval.Resolution = v.VodAssetFields.Resolution
+	retval.VideoCodec = v.VodAssetFields.VideoCodec
+	retval.AudioCodec = v.VodAssetFields.AudioCodec
+	retval.BitrateKbps = v.VodAssetFields.BitrateKbps
+	retval.CreatedAt = v.VodAssetFields.CreatedAt
+	retval.UpdatedAt = v.VodAssetFields.UpdatedAt
+	retval.ExpiresAt = v.VodAssetFields.ExpiresAt
+	retval.ErrorMessage = v.VodAssetFields.ErrorMessage
+	retval.PlaybackPolicy = v.VodAssetFields.PlaybackPolicy
+	retval.ThumbnailAssets = v.VodAssetFields.ThumbnailAssets
+	retval.EffectiveRetention = v.VodAssetFields.EffectiveRetention
+	return &retval, nil
+}
+
+// ImportVodAssetImportVodAssetAuthError includes the requested fields of the GraphQL type AuthError.
+type ImportVodAssetImportVodAssetAuthError struct {
+	Typename        *string `json:"__typename"`
+	AuthErrorFields `json:"-"`
+}
+
+// GetTypename returns ImportVodAssetImportVodAssetAuthError.Typename, and is useful for accessing the field via an interface.
+func (v *ImportVodAssetImportVodAssetAuthError) GetTypename() *string { return v.Typename }
+
+// GetMessage returns ImportVodAssetImportVodAssetAuthError.Message, and is useful for accessing the field via an interface.
+func (v *ImportVodAssetImportVodAssetAuthError) GetMessage() string { return v.AuthErrorFields.Message }
+
+// GetCode returns ImportVodAssetImportVodAssetAuthError.Code, and is useful for accessing the field via an interface.
+func (v *ImportVodAssetImportVodAssetAuthError) GetCode() *string { return v.AuthErrorFields.Code }
+
+func (v *ImportVodAssetImportVodAssetAuthError) UnmarshalJSON(b []byte) error {
+
+	if string(b) == "null" {
+		return nil
+	}
+
+	var firstPass struct {
+		*ImportVodAssetImportVodAssetAuthError
+		graphql.NoUnmarshalJSON
+	}
+	firstPass.ImportVodAssetImportVodAssetAuthError = v
+
+	err := json.Unmarshal(b, &firstPass)
+	if err != nil {
+		return err
+	}
+
+	err = json.Unmarshal(
+		b, &v.AuthErrorFields)
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
+type __premarshalImportVodAssetImportVodAssetAuthError struct {
+	Typename *string `json:"__typename"`
+
+	Message string `json:"message"`
+
+	Code *string `json:"code"`
+}
+
+func (v *ImportVodAssetImportVodAssetAuthError) MarshalJSON() ([]byte, error) {
+	premarshaled, err := v.__premarshalJSON()
+	if err != nil {
+		return nil, err
+	}
+	return json.Marshal(premarshaled)
+}
+
+func (v *ImportVodAssetImportVodAssetAuthError) __premarshalJSON() (*__premarshalImportVodAssetImportVodAssetAuthError, error) {
+	var retval __premarshalImportVodAssetImportVodAssetAuthError
+
+	retval.Typename = v.Typename
+	retval.Message = v.AuthErrorFields.Message
+	retval.Code = v.AuthErrorFields.Code
+	return &retval, nil
+}
+
+// ImportVodAssetImportVodAssetImportVodAssetResult includes the requested fields of the GraphQL interface ImportVodAssetResult.
+//
+// ImportVodAssetImportVodAssetImportVodAssetResult is implemented by the following types:
+// ImportVodAssetImportVodAssetAuthError
+// ImportVodAssetImportVodAssetValidationError
+// ImportVodAssetImportVodAsset
+type ImportVodAssetImportVodAssetImportVodAssetResult interface {
+	implementsGraphQLInterfaceImportVodAssetImportVodAssetImportVodAssetResult()
+	// GetTypename returns the receiver's concrete GraphQL type-name (see interface doc for possible values).
+	GetTypename() *string
+}
+
+func (v *ImportVodAssetImportVodAssetAuthError) implementsGraphQLInterfaceImportVodAssetImportVodAssetImportVodAssetResult() {
+}
+func (v *ImportVodAssetImportVodAssetValidationError) implementsGraphQLInterfaceImportVodAssetImportVodAssetImportVodAssetResult() {
+}
+func (v *ImportVodAssetImportVodAsset) implementsGraphQLInterfaceImportVodAssetImportVodAssetImportVodAssetResult() {
+}
+
+func __unmarshalImportVodAssetImportVodAssetImportVodAssetResult(b []byte, v *ImportVodAssetImportVodAssetImportVodAssetResult) error {
+	if string(b) == "null" {
+		return nil
+	}
+
+	var tn struct {
+		TypeName string `json:"__typename"`
+	}
+	err := json.Unmarshal(b, &tn)
+	if err != nil {
+		return err
+	}
+
+	switch tn.TypeName {
+	case "AuthError":
+		*v = new(ImportVodAssetImportVodAssetAuthError)
+		return json.Unmarshal(b, *v)
+	case "ValidationError":
+		*v = new(ImportVodAssetImportVodAssetValidationError)
+		return json.Unmarshal(b, *v)
+	case "VodAsset":
+		*v = new(ImportVodAssetImportVodAsset)
+		return json.Unmarshal(b, *v)
+	case "":
+		return fmt.Errorf(
+			"response was missing ImportVodAssetResult.__typename")
+	default:
+		*v = newUnknownMember(tn.TypeName, b)
+		return nil
+	}
+}
+
+func __marshalImportVodAssetImportVodAssetImportVodAssetResult(v *ImportVodAssetImportVodAssetImportVodAssetResult) ([]byte, error) {
+
+	var typename string
+	switch v := (*v).(type) {
+	case *ImportVodAssetImportVodAssetAuthError:
+		typename = "AuthError"
+
+		premarshaled, err := v.__premarshalJSON()
+		if err != nil {
+			return nil, err
+		}
+		result := struct {
+			TypeName string `json:"__typename"`
+			*__premarshalImportVodAssetImportVodAssetAuthError
+		}{typename, premarshaled}
+		return json.Marshal(result)
+	case *ImportVodAssetImportVodAssetValidationError:
+		typename = "ValidationError"
+
+		premarshaled, err := v.__premarshalJSON()
+		if err != nil {
+			return nil, err
+		}
+		result := struct {
+			TypeName string `json:"__typename"`
+			*__premarshalImportVodAssetImportVodAssetValidationError
+		}{typename, premarshaled}
+		return json.Marshal(result)
+	case *ImportVodAssetImportVodAsset:
+		typename = "VodAsset"
+
+		premarshaled, err := v.__premarshalJSON()
+		if err != nil {
+			return nil, err
+		}
+		result := struct {
+			TypeName string `json:"__typename"`
+			*__premarshalImportVodAssetImportVodAsset
+		}{typename, premarshaled}
+		return json.Marshal(result)
+	case nil:
+		return []byte("null"), nil
+	case *UnknownMember:
+		return v.MarshalJSON()
+	default:
+		return nil, fmt.Errorf(
+			`unexpected concrete type for ImportVodAssetImportVodAssetImportVodAssetResult: "%T"`, v)
+	}
+}
+
+// ImportVodAssetImportVodAssetValidationError includes the requested fields of the GraphQL type ValidationError.
+type ImportVodAssetImportVodAssetValidationError struct {
+	Typename              *string `json:"__typename"`
+	ValidationErrorFields `json:"-"`
+}
+
+// GetTypename returns ImportVodAssetImportVodAssetValidationError.Typename, and is useful for accessing the field via an interface.
+func (v *ImportVodAssetImportVodAssetValidationError) GetTypename() *string { return v.Typename }
+
+// GetMessage returns ImportVodAssetImportVodAssetValidationError.Message, and is useful for accessing the field via an interface.
+func (v *ImportVodAssetImportVodAssetValidationError) GetMessage() string {
+	return v.ValidationErrorFields.Message
+}
+
+// GetCode returns ImportVodAssetImportVodAssetValidationError.Code, and is useful for accessing the field via an interface.
+func (v *ImportVodAssetImportVodAssetValidationError) GetCode() *string {
+	return v.ValidationErrorFields.Code
+}
+
+// GetField returns ImportVodAssetImportVodAssetValidationError.Field, and is useful for accessing the field via an interface.
+func (v *ImportVodAssetImportVodAssetValidationError) GetField() *string {
+	return v.ValidationErrorFields.Field
+}
+
+// GetConstraint returns ImportVodAssetImportVodAssetValidationError.Constraint, and is useful for accessing the field via an interface.
+func (v *ImportVodAssetImportVodAssetValidationError) GetConstraint() *string {
+	return v.ValidationErrorFields.Constraint
+}
+
+func (v *ImportVodAssetImportVodAssetValidationError) UnmarshalJSON(b []byte) error {
+
+	if string(b) == "null" {
+		return nil
+	}
+
+	var firstPass struct {
+		*ImportVodAssetImportVodAssetValidationError
+		graphql.NoUnmarshalJSON
+	}
+	firstPass.ImportVodAssetImportVodAssetValidationError = v
+
+	err := json.Unmarshal(b, &firstPass)
+	if err != nil {
+		return err
+	}
+
+	err = json.Unmarshal(
+		b, &v.ValidationErrorFields)
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
+type __premarshalImportVodAssetImportVodAssetValidationError struct {
+	Typename *string `json:"__typename"`
+
+	Message string `json:"message"`
+
+	Code *string `json:"code"`
+
+	Field *string `json:"field"`
+
+	Constraint *string `json:"constraint"`
+}
+
+func (v *ImportVodAssetImportVodAssetValidationError) MarshalJSON() ([]byte, error) {
+	premarshaled, err := v.__premarshalJSON()
+	if err != nil {
+		return nil, err
+	}
+	return json.Marshal(premarshaled)
+}
+
+func (v *ImportVodAssetImportVodAssetValidationError) __premarshalJSON() (*__premarshalImportVodAssetImportVodAssetValidationError, error) {
+	var retval __premarshalImportVodAssetImportVodAssetValidationError
+
+	retval.Typename = v.Typename
+	retval.Message = v.ValidationErrorFields.Message
+	retval.Code = v.ValidationErrorFields.Code
+	retval.Field = v.ValidationErrorFields.Field
+	retval.Constraint = v.ValidationErrorFields.Constraint
+	return &retval, nil
+}
+
+// Input for initiating a multipart VOD upload.
+// Returns presigned S3 URLs for uploading file parts.
+type ImportVodAssetInput struct {
+	// Source URL, https or http. It must be publicly reachable and support HTTP
+	// range requests; private and internal addresses are refused.
+	Url string `json:"url"`
+	// Filename to store the video under. Required when the URL path does not end
+	// in a supported video extension (mp4, mov, mkv, webm, ts).
+	Filename *string `json:"filename"`
+	// Optional display title for the asset.
+	Title *string `json:"title"`
+	// Optional description for the asset.
+	Description *string `json:"description"`
+}
+
+// GetUrl returns ImportVodAssetInput.Url, and is useful for accessing the field via an interface.
+func (v *ImportVodAssetInput) GetUrl() string { return v.Url }
+
+// GetFilename returns ImportVodAssetInput.Filename, and is useful for accessing the field via an interface.
+func (v *ImportVodAssetInput) GetFilename() *string { return v.Filename }
+
+// GetTitle returns ImportVodAssetInput.Title, and is useful for accessing the field via an interface.
+func (v *ImportVodAssetInput) GetTitle() *string { return v.Title }
+
+// GetDescription returns ImportVodAssetInput.Description, and is useful for accessing the field via an interface.
+func (v *ImportVodAssetInput) GetDescription() *string { return v.Description }
+
+// ImportVodAssetResponse is returned by ImportVodAsset on success.
+type ImportVodAssetResponse struct {
+	// Import a video from a public https or http URL as a VOD asset. The processing
+	// node reads the file from the URL and processes it like an upload; the asset
+	// reports PROCESSING until it is ready. Progress arrives as upload.created,
+	// upload.completed, and upload.ready or upload.failed events.
+	ImportVodAsset ImportVodAssetImportVodAssetImportVodAssetResult `json:"-"`
+}
+
+// GetImportVodAsset returns ImportVodAssetResponse.ImportVodAsset, and is useful for accessing the field via an interface.
+func (v *ImportVodAssetResponse) GetImportVodAsset() ImportVodAssetImportVodAssetImportVodAssetResult {
+	return v.ImportVodAsset
+}
+
+func (v *ImportVodAssetResponse) UnmarshalJSON(b []byte) error {
+
+	if string(b) == "null" {
+		return nil
+	}
+
+	var firstPass struct {
+		*ImportVodAssetResponse
+		ImportVodAsset json.RawMessage `json:"importVodAsset"`
+		graphql.NoUnmarshalJSON
+	}
+	firstPass.ImportVodAssetResponse = v
+
+	err := json.Unmarshal(b, &firstPass)
+	if err != nil {
+		return err
+	}
+
+	{
+		dst := &v.ImportVodAsset
+		src := firstPass.ImportVodAsset
+		if len(src) != 0 && string(src) != "null" {
+			err = __unmarshalImportVodAssetImportVodAssetImportVodAssetResult(
+				src, dst)
+			if err != nil {
+				return fmt.Errorf(
+					"unable to unmarshal ImportVodAssetResponse.ImportVodAsset: %w", err)
+			}
+		}
+	}
+	return nil
+}
+
+type __premarshalImportVodAssetResponse struct {
+	ImportVodAsset json.RawMessage `json:"importVodAsset"`
+}
+
+func (v *ImportVodAssetResponse) MarshalJSON() ([]byte, error) {
+	premarshaled, err := v.__premarshalJSON()
+	if err != nil {
+		return nil, err
+	}
+	return json.Marshal(premarshaled)
+}
+
+func (v *ImportVodAssetResponse) __premarshalJSON() (*__premarshalImportVodAssetResponse, error) {
+	var retval __premarshalImportVodAssetResponse
+
+	{
+
+		dst := &retval.ImportVodAsset
+		src := v.ImportVodAsset
+		var err error
+		*dst, err = __marshalImportVodAssetImportVodAssetImportVodAssetResult(
+			&src)
+		if err != nil {
+			return nil, fmt.Errorf(
+				"unable to marshal ImportVodAssetResponse.ImportVodAsset: %w", err)
+		}
+	}
+	return &retval, nil
+}
+
 // IncidentDefaultFields includes the GraphQL fields of Incident requested by the fragment IncidentDefaultFields.
 type IncidentDefaultFields struct {
 	Id    string        `json:"id"`
@@ -77995,6 +78633,10 @@ type PlaybackPolicyFields struct {
 	Jwt *PlaybackPolicyFieldsJwtPlaybackJwtPolicy `json:"jwt"`
 	// Webhook-policy details, populated when type == WEBHOOK. Secret is masked.
 	Webhook *PlaybackPolicyFieldsWebhookPlaybackWebhookPolicy `json:"webhook"`
+	// Sites allowed to embed the content, as normalized `scheme://host[:port]`
+	// origins; `*` allows any. Empty = no restriction. A browser viewer whose
+	// Origin (or Referer) is not listed is denied.
+	AllowedOrigins []string `json:"allowedOrigins"`
 }
 
 // GetType returns PlaybackPolicyFields.Type, and is useful for accessing the field via an interface.
@@ -78007,6 +78649,9 @@ func (v *PlaybackPolicyFields) GetJwt() *PlaybackPolicyFieldsJwtPlaybackJwtPolic
 func (v *PlaybackPolicyFields) GetWebhook() *PlaybackPolicyFieldsWebhookPlaybackWebhookPolicy {
 	return v.Webhook
 }
+
+// GetAllowedOrigins returns PlaybackPolicyFields.AllowedOrigins, and is useful for accessing the field via an interface.
+func (v *PlaybackPolicyFields) GetAllowedOrigins() []string { return v.AllowedOrigins }
 
 // PlaybackPolicyFieldsJwtPlaybackJwtPolicy includes the requested fields of the GraphQL type PlaybackJwtPolicy.
 // The GraphQL type's documentation follows.
@@ -78070,6 +78715,8 @@ type PlaybackPolicyFieldsWebhookPlaybackWebhookPolicy struct {
 	TimeoutMs int `json:"timeoutMs"`
 	// Always 'redacted' on read; the actual secret is fieldcrypt-encrypted at rest.
 	SecretMasked string `json:"secretMasked"`
+	// Your JSON object, sent as `context` in every access request to the URL. Null when unset.
+	Context *json.RawMessage `json:"context"`
 }
 
 // GetUrl returns PlaybackPolicyFieldsWebhookPlaybackWebhookPolicy.Url, and is useful for accessing the field via an interface.
@@ -78083,12 +78730,20 @@ func (v *PlaybackPolicyFieldsWebhookPlaybackWebhookPolicy) GetSecretMasked() str
 	return v.SecretMasked
 }
 
+// GetContext returns PlaybackPolicyFieldsWebhookPlaybackWebhookPolicy.Context, and is useful for accessing the field via an interface.
+func (v *PlaybackPolicyFieldsWebhookPlaybackWebhookPolicy) GetContext() *json.RawMessage {
+	return v.Context
+}
+
 type PlaybackPolicyInput struct {
 	Type PlaybackPolicyType `json:"type"`
 	// Required when type == JWT.
 	Jwt *PlaybackJwtPolicyInput `json:"jwt"`
 	// Required when type == WEBHOOK.
 	Webhook *PlaybackWebhookPolicyInput `json:"webhook"`
+	// JWT and WEBHOOK only: sites allowed to embed the content, each `*` or
+	// `scheme://host[:port]` (at most 50). Omit or empty for no restriction.
+	AllowedOrigins []string `json:"allowedOrigins"`
 }
 
 // GetType returns PlaybackPolicyInput.Type, and is useful for accessing the field via an interface.
@@ -78099,6 +78754,9 @@ func (v *PlaybackPolicyInput) GetJwt() *PlaybackJwtPolicyInput { return v.Jwt }
 
 // GetWebhook returns PlaybackPolicyInput.Webhook, and is useful for accessing the field via an interface.
 func (v *PlaybackPolicyInput) GetWebhook() *PlaybackWebhookPolicyInput { return v.Webhook }
+
+// GetAllowedOrigins returns PlaybackPolicyInput.AllowedOrigins, and is useful for accessing the field via an interface.
+func (v *PlaybackPolicyInput) GetAllowedOrigins() []string { return v.AllowedOrigins }
 
 type PlaybackPolicyType string
 
@@ -78124,6 +78782,10 @@ type PlaybackWebhookPolicyInput struct {
 	Secret *string `json:"secret"`
 	// Outbound POST timeout in milliseconds. Server caps at 10000; default 5000.
 	TimeoutMs *int `json:"timeoutMs"`
+	// A JSON object (at most 4 KiB) sent as `context` in every access request,
+	// e.g. `{"courseId": "algebra-101"}`, so the endpoint can decide without its
+	// own lookup.
+	Context *json.RawMessage `json:"context"`
 }
 
 // GetUrl returns PlaybackWebhookPolicyInput.Url, and is useful for accessing the field via an interface.
@@ -78134,6 +78796,9 @@ func (v *PlaybackWebhookPolicyInput) GetSecret() *string { return v.Secret }
 
 // GetTimeoutMs returns PlaybackWebhookPolicyInput.TimeoutMs, and is useful for accessing the field via an interface.
 func (v *PlaybackWebhookPolicyInput) GetTimeoutMs() *int { return v.TimeoutMs }
+
+// GetContext returns PlaybackWebhookPolicyInput.Context, and is useful for accessing the field via an interface.
+func (v *PlaybackWebhookPolicyInput) GetContext() *json.RawMessage { return v.Context }
 
 // PlayerBootSummaryDefaultFields includes the GraphQL fields of PlayerBootSummary requested by the fragment PlayerBootSummaryDefaultFields.
 // The GraphQL type's documentation follows.
@@ -78892,11 +79557,20 @@ func (v *ProcessingUsageRecordDefaultFieldsStreamMetrics) GetIssuesDescription()
 // gates whether the full policy is fetched at all.
 type ProcessingUsageRecordDefaultFieldsStreamPlaybackPolicy struct {
 	Type PlaybackPolicyType `json:"type"`
+	// Sites allowed to embed the content, as normalized `scheme://host[:port]`
+	// origins; `*` allows any. Empty = no restriction. A browser viewer whose
+	// Origin (or Referer) is not listed is denied.
+	AllowedOrigins []string `json:"allowedOrigins"`
 }
 
 // GetType returns ProcessingUsageRecordDefaultFieldsStreamPlaybackPolicy.Type, and is useful for accessing the field via an interface.
 func (v *ProcessingUsageRecordDefaultFieldsStreamPlaybackPolicy) GetType() PlaybackPolicyType {
 	return v.Type
+}
+
+// GetAllowedOrigins returns ProcessingUsageRecordDefaultFieldsStreamPlaybackPolicy.AllowedOrigins, and is useful for accessing the field via an interface.
+func (v *ProcessingUsageRecordDefaultFieldsStreamPlaybackPolicy) GetAllowedOrigins() []string {
+	return v.AllowedOrigins
 }
 
 // ProcessingUsageRecordDefaultFieldsStreamPullSourcePullSourceView includes the requested fields of the GraphQL type PullSourceView.
@@ -79687,11 +80361,20 @@ func (v *ProcessingUsageRecordInNodeDefaultFieldsStreamMetrics) GetIssuesDescrip
 // gates whether the full policy is fetched at all.
 type ProcessingUsageRecordInNodeDefaultFieldsStreamPlaybackPolicy struct {
 	Type PlaybackPolicyType `json:"type"`
+	// Sites allowed to embed the content, as normalized `scheme://host[:port]`
+	// origins; `*` allows any. Empty = no restriction. A browser viewer whose
+	// Origin (or Referer) is not listed is denied.
+	AllowedOrigins []string `json:"allowedOrigins"`
 }
 
 // GetType returns ProcessingUsageRecordInNodeDefaultFieldsStreamPlaybackPolicy.Type, and is useful for accessing the field via an interface.
 func (v *ProcessingUsageRecordInNodeDefaultFieldsStreamPlaybackPolicy) GetType() PlaybackPolicyType {
 	return v.Type
+}
+
+// GetAllowedOrigins returns ProcessingUsageRecordInNodeDefaultFieldsStreamPlaybackPolicy.AllowedOrigins, and is useful for accessing the field via an interface.
+func (v *ProcessingUsageRecordInNodeDefaultFieldsStreamPlaybackPolicy) GetAllowedOrigins() []string {
+	return v.AllowedOrigins
 }
 
 // ProcessingUsageRecordInNodeDefaultFieldsStreamPullSourcePullSourceView includes the requested fields of the GraphQL type PullSourceView.
@@ -80825,11 +81508,20 @@ func (v *QualityTierDailyDefaultFieldsStreamMetrics) GetIssuesDescription() *str
 // gates whether the full policy is fetched at all.
 type QualityTierDailyDefaultFieldsStreamPlaybackPolicy struct {
 	Type PlaybackPolicyType `json:"type"`
+	// Sites allowed to embed the content, as normalized `scheme://host[:port]`
+	// origins; `*` allows any. Empty = no restriction. A browser viewer whose
+	// Origin (or Referer) is not listed is denied.
+	AllowedOrigins []string `json:"allowedOrigins"`
 }
 
 // GetType returns QualityTierDailyDefaultFieldsStreamPlaybackPolicy.Type, and is useful for accessing the field via an interface.
 func (v *QualityTierDailyDefaultFieldsStreamPlaybackPolicy) GetType() PlaybackPolicyType {
 	return v.Type
+}
+
+// GetAllowedOrigins returns QualityTierDailyDefaultFieldsStreamPlaybackPolicy.AllowedOrigins, and is useful for accessing the field via an interface.
+func (v *QualityTierDailyDefaultFieldsStreamPlaybackPolicy) GetAllowedOrigins() []string {
+	return v.AllowedOrigins
 }
 
 // QualityTierDailyDefaultFieldsStreamPullSourcePullSourceView includes the requested fields of the GraphQL type PullSourceView.
@@ -81400,11 +82092,20 @@ func (v *RebufferingEventDefaultFieldsStreamMetrics) GetIssuesDescription() *str
 // gates whether the full policy is fetched at all.
 type RebufferingEventDefaultFieldsStreamPlaybackPolicy struct {
 	Type PlaybackPolicyType `json:"type"`
+	// Sites allowed to embed the content, as normalized `scheme://host[:port]`
+	// origins; `*` allows any. Empty = no restriction. A browser viewer whose
+	// Origin (or Referer) is not listed is denied.
+	AllowedOrigins []string `json:"allowedOrigins"`
 }
 
 // GetType returns RebufferingEventDefaultFieldsStreamPlaybackPolicy.Type, and is useful for accessing the field via an interface.
 func (v *RebufferingEventDefaultFieldsStreamPlaybackPolicy) GetType() PlaybackPolicyType {
 	return v.Type
+}
+
+// GetAllowedOrigins returns RebufferingEventDefaultFieldsStreamPlaybackPolicy.AllowedOrigins, and is useful for accessing the field via an interface.
+func (v *RebufferingEventDefaultFieldsStreamPlaybackPolicy) GetAllowedOrigins() []string {
+	return v.AllowedOrigins
 }
 
 // RebufferingEventDefaultFieldsStreamPullSourcePullSourceView includes the requested fields of the GraphQL type PullSourceView.
@@ -88686,10 +89387,19 @@ func (v *RoutingEventDefaultFieldsStreamMetrics) GetIssuesDescription() *string 
 // gates whether the full policy is fetched at all.
 type RoutingEventDefaultFieldsStreamPlaybackPolicy struct {
 	Type PlaybackPolicyType `json:"type"`
+	// Sites allowed to embed the content, as normalized `scheme://host[:port]`
+	// origins; `*` allows any. Empty = no restriction. A browser viewer whose
+	// Origin (or Referer) is not listed is denied.
+	AllowedOrigins []string `json:"allowedOrigins"`
 }
 
 // GetType returns RoutingEventDefaultFieldsStreamPlaybackPolicy.Type, and is useful for accessing the field via an interface.
 func (v *RoutingEventDefaultFieldsStreamPlaybackPolicy) GetType() PlaybackPolicyType { return v.Type }
+
+// GetAllowedOrigins returns RoutingEventDefaultFieldsStreamPlaybackPolicy.AllowedOrigins, and is useful for accessing the field via an interface.
+func (v *RoutingEventDefaultFieldsStreamPlaybackPolicy) GetAllowedOrigins() []string {
+	return v.AllowedOrigins
+}
 
 // RoutingEventDefaultFieldsStreamPullSourcePullSourceView includes the requested fields of the GraphQL type PullSourceView.
 // The GraphQL type's documentation follows.
@@ -91021,6 +91731,11 @@ func (v *SetPlaybackPolicySetPlaybackPolicyClipPlaybackPolicy) GetWebhook() *Pla
 	return v.PlaybackPolicyFields.Webhook
 }
 
+// GetAllowedOrigins returns SetPlaybackPolicySetPlaybackPolicyClipPlaybackPolicy.AllowedOrigins, and is useful for accessing the field via an interface.
+func (v *SetPlaybackPolicySetPlaybackPolicyClipPlaybackPolicy) GetAllowedOrigins() []string {
+	return v.PlaybackPolicyFields.AllowedOrigins
+}
+
 func (v *SetPlaybackPolicySetPlaybackPolicyClipPlaybackPolicy) UnmarshalJSON(b []byte) error {
 
 	if string(b) == "null" {
@@ -91052,6 +91767,8 @@ type __premarshalSetPlaybackPolicySetPlaybackPolicyClipPlaybackPolicy struct {
 	Jwt *PlaybackPolicyFieldsJwtPlaybackJwtPolicy `json:"jwt"`
 
 	Webhook *PlaybackPolicyFieldsWebhookPlaybackWebhookPolicy `json:"webhook"`
+
+	AllowedOrigins []string `json:"allowedOrigins"`
 }
 
 func (v *SetPlaybackPolicySetPlaybackPolicyClipPlaybackPolicy) MarshalJSON() ([]byte, error) {
@@ -91068,6 +91785,7 @@ func (v *SetPlaybackPolicySetPlaybackPolicyClipPlaybackPolicy) __premarshalJSON(
 	retval.Type = v.PlaybackPolicyFields.Type
 	retval.Jwt = v.PlaybackPolicyFields.Jwt
 	retval.Webhook = v.PlaybackPolicyFields.Webhook
+	retval.AllowedOrigins = v.PlaybackPolicyFields.AllowedOrigins
 	return &retval, nil
 }
 
@@ -91348,6 +92066,11 @@ func (v *SetPlaybackPolicySetPlaybackPolicyStreamPlaybackPolicy) GetWebhook() *P
 	return v.PlaybackPolicyFields.Webhook
 }
 
+// GetAllowedOrigins returns SetPlaybackPolicySetPlaybackPolicyStreamPlaybackPolicy.AllowedOrigins, and is useful for accessing the field via an interface.
+func (v *SetPlaybackPolicySetPlaybackPolicyStreamPlaybackPolicy) GetAllowedOrigins() []string {
+	return v.PlaybackPolicyFields.AllowedOrigins
+}
+
 func (v *SetPlaybackPolicySetPlaybackPolicyStreamPlaybackPolicy) UnmarshalJSON(b []byte) error {
 
 	if string(b) == "null" {
@@ -91379,6 +92102,8 @@ type __premarshalSetPlaybackPolicySetPlaybackPolicyStreamPlaybackPolicy struct {
 	Jwt *PlaybackPolicyFieldsJwtPlaybackJwtPolicy `json:"jwt"`
 
 	Webhook *PlaybackPolicyFieldsWebhookPlaybackWebhookPolicy `json:"webhook"`
+
+	AllowedOrigins []string `json:"allowedOrigins"`
 }
 
 func (v *SetPlaybackPolicySetPlaybackPolicyStreamPlaybackPolicy) MarshalJSON() ([]byte, error) {
@@ -91395,6 +92120,7 @@ func (v *SetPlaybackPolicySetPlaybackPolicyStreamPlaybackPolicy) __premarshalJSO
 	retval.Type = v.PlaybackPolicyFields.Type
 	retval.Jwt = v.PlaybackPolicyFields.Jwt
 	retval.Webhook = v.PlaybackPolicyFields.Webhook
+	retval.AllowedOrigins = v.PlaybackPolicyFields.AllowedOrigins
 	return &retval, nil
 }
 
@@ -91532,6 +92258,11 @@ func (v *SetPlaybackPolicySetPlaybackPolicyVodAssetPlaybackPolicy) GetWebhook() 
 	return v.PlaybackPolicyFields.Webhook
 }
 
+// GetAllowedOrigins returns SetPlaybackPolicySetPlaybackPolicyVodAssetPlaybackPolicy.AllowedOrigins, and is useful for accessing the field via an interface.
+func (v *SetPlaybackPolicySetPlaybackPolicyVodAssetPlaybackPolicy) GetAllowedOrigins() []string {
+	return v.PlaybackPolicyFields.AllowedOrigins
+}
+
 func (v *SetPlaybackPolicySetPlaybackPolicyVodAssetPlaybackPolicy) UnmarshalJSON(b []byte) error {
 
 	if string(b) == "null" {
@@ -91563,6 +92294,8 @@ type __premarshalSetPlaybackPolicySetPlaybackPolicyVodAssetPlaybackPolicy struct
 	Jwt *PlaybackPolicyFieldsJwtPlaybackJwtPolicy `json:"jwt"`
 
 	Webhook *PlaybackPolicyFieldsWebhookPlaybackWebhookPolicy `json:"webhook"`
+
+	AllowedOrigins []string `json:"allowedOrigins"`
 }
 
 func (v *SetPlaybackPolicySetPlaybackPolicyVodAssetPlaybackPolicy) MarshalJSON() ([]byte, error) {
@@ -91579,6 +92312,7 @@ func (v *SetPlaybackPolicySetPlaybackPolicyVodAssetPlaybackPolicy) __premarshalJ
 	retval.Type = v.PlaybackPolicyFields.Type
 	retval.Jwt = v.PlaybackPolicyFields.Jwt
 	retval.Webhook = v.PlaybackPolicyFields.Webhook
+	retval.AllowedOrigins = v.PlaybackPolicyFields.AllowedOrigins
 	return &retval, nil
 }
 
@@ -95625,10 +96359,19 @@ func (v *StorageEventDefaultFieldsStreamMetrics) GetIssuesDescription() *string 
 // gates whether the full policy is fetched at all.
 type StorageEventDefaultFieldsStreamPlaybackPolicy struct {
 	Type PlaybackPolicyType `json:"type"`
+	// Sites allowed to embed the content, as normalized `scheme://host[:port]`
+	// origins; `*` allows any. Empty = no restriction. A browser viewer whose
+	// Origin (or Referer) is not listed is denied.
+	AllowedOrigins []string `json:"allowedOrigins"`
 }
 
 // GetType returns StorageEventDefaultFieldsStreamPlaybackPolicy.Type, and is useful for accessing the field via an interface.
 func (v *StorageEventDefaultFieldsStreamPlaybackPolicy) GetType() PlaybackPolicyType { return v.Type }
+
+// GetAllowedOrigins returns StorageEventDefaultFieldsStreamPlaybackPolicy.AllowedOrigins, and is useful for accessing the field via an interface.
+func (v *StorageEventDefaultFieldsStreamPlaybackPolicy) GetAllowedOrigins() []string {
+	return v.AllowedOrigins
+}
 
 // StorageEventDefaultFieldsStreamPullSourcePullSourceView includes the requested fields of the GraphQL type PullSourceView.
 // The GraphQL type's documentation follows.
@@ -96198,11 +96941,20 @@ func (v *StorageEventInNodeDefaultFieldsStreamMetrics) GetIssuesDescription() *s
 // gates whether the full policy is fetched at all.
 type StorageEventInNodeDefaultFieldsStreamPlaybackPolicy struct {
 	Type PlaybackPolicyType `json:"type"`
+	// Sites allowed to embed the content, as normalized `scheme://host[:port]`
+	// origins; `*` allows any. Empty = no restriction. A browser viewer whose
+	// Origin (or Referer) is not listed is denied.
+	AllowedOrigins []string `json:"allowedOrigins"`
 }
 
 // GetType returns StorageEventInNodeDefaultFieldsStreamPlaybackPolicy.Type, and is useful for accessing the field via an interface.
 func (v *StorageEventInNodeDefaultFieldsStreamPlaybackPolicy) GetType() PlaybackPolicyType {
 	return v.Type
+}
+
+// GetAllowedOrigins returns StorageEventInNodeDefaultFieldsStreamPlaybackPolicy.AllowedOrigins, and is useful for accessing the field via an interface.
+func (v *StorageEventInNodeDefaultFieldsStreamPlaybackPolicy) GetAllowedOrigins() []string {
+	return v.AllowedOrigins
 }
 
 // StorageEventInNodeDefaultFieldsStreamPullSourcePullSourceView includes the requested fields of the GraphQL type PullSourceView.
@@ -96817,11 +97569,20 @@ func (v *StreamAnalyticsDailyDefaultFieldsStreamMetrics) GetIssuesDescription() 
 // gates whether the full policy is fetched at all.
 type StreamAnalyticsDailyDefaultFieldsStreamPlaybackPolicy struct {
 	Type PlaybackPolicyType `json:"type"`
+	// Sites allowed to embed the content, as normalized `scheme://host[:port]`
+	// origins; `*` allows any. Empty = no restriction. A browser viewer whose
+	// Origin (or Referer) is not listed is denied.
+	AllowedOrigins []string `json:"allowedOrigins"`
 }
 
 // GetType returns StreamAnalyticsDailyDefaultFieldsStreamPlaybackPolicy.Type, and is useful for accessing the field via an interface.
 func (v *StreamAnalyticsDailyDefaultFieldsStreamPlaybackPolicy) GetType() PlaybackPolicyType {
 	return v.Type
+}
+
+// GetAllowedOrigins returns StreamAnalyticsDailyDefaultFieldsStreamPlaybackPolicy.AllowedOrigins, and is useful for accessing the field via an interface.
+func (v *StreamAnalyticsDailyDefaultFieldsStreamPlaybackPolicy) GetAllowedOrigins() []string {
+	return v.AllowedOrigins
 }
 
 // StreamAnalyticsDailyDefaultFieldsStreamPullSourcePullSourceView includes the requested fields of the GraphQL type PullSourceView.
@@ -97555,11 +98316,20 @@ func (v *StreamAnalyticsSummaryDefaultFieldsStreamMetrics) GetIssuesDescription(
 // gates whether the full policy is fetched at all.
 type StreamAnalyticsSummaryDefaultFieldsStreamPlaybackPolicy struct {
 	Type PlaybackPolicyType `json:"type"`
+	// Sites allowed to embed the content, as normalized `scheme://host[:port]`
+	// origins; `*` allows any. Empty = no restriction. A browser viewer whose
+	// Origin (or Referer) is not listed is denied.
+	AllowedOrigins []string `json:"allowedOrigins"`
 }
 
 // GetType returns StreamAnalyticsSummaryDefaultFieldsStreamPlaybackPolicy.Type, and is useful for accessing the field via an interface.
 func (v *StreamAnalyticsSummaryDefaultFieldsStreamPlaybackPolicy) GetType() PlaybackPolicyType {
 	return v.Type
+}
+
+// GetAllowedOrigins returns StreamAnalyticsSummaryDefaultFieldsStreamPlaybackPolicy.AllowedOrigins, and is useful for accessing the field via an interface.
+func (v *StreamAnalyticsSummaryDefaultFieldsStreamPlaybackPolicy) GetAllowedOrigins() []string {
+	return v.AllowedOrigins
 }
 
 // StreamAnalyticsSummaryDefaultFieldsStreamPullSourcePullSourceView includes the requested fields of the GraphQL type PullSourceView.
@@ -98137,11 +98907,20 @@ func (v *StreamConnectionHourlyDefaultFieldsStreamMetrics) GetIssuesDescription(
 // gates whether the full policy is fetched at all.
 type StreamConnectionHourlyDefaultFieldsStreamPlaybackPolicy struct {
 	Type PlaybackPolicyType `json:"type"`
+	// Sites allowed to embed the content, as normalized `scheme://host[:port]`
+	// origins; `*` allows any. Empty = no restriction. A browser viewer whose
+	// Origin (or Referer) is not listed is denied.
+	AllowedOrigins []string `json:"allowedOrigins"`
 }
 
 // GetType returns StreamConnectionHourlyDefaultFieldsStreamPlaybackPolicy.Type, and is useful for accessing the field via an interface.
 func (v *StreamConnectionHourlyDefaultFieldsStreamPlaybackPolicy) GetType() PlaybackPolicyType {
 	return v.Type
+}
+
+// GetAllowedOrigins returns StreamConnectionHourlyDefaultFieldsStreamPlaybackPolicy.AllowedOrigins, and is useful for accessing the field via an interface.
+func (v *StreamConnectionHourlyDefaultFieldsStreamPlaybackPolicy) GetAllowedOrigins() []string {
+	return v.AllowedOrigins
 }
 
 // StreamConnectionHourlyDefaultFieldsStreamPullSourcePullSourceView includes the requested fields of the GraphQL type PullSourceView.
@@ -98790,10 +99569,19 @@ func (v *StreamEventDefaultFieldsStreamMetrics) GetIssuesDescription() *string {
 // gates whether the full policy is fetched at all.
 type StreamEventDefaultFieldsStreamPlaybackPolicy struct {
 	Type PlaybackPolicyType `json:"type"`
+	// Sites allowed to embed the content, as normalized `scheme://host[:port]`
+	// origins; `*` allows any. Empty = no restriction. A browser viewer whose
+	// Origin (or Referer) is not listed is denied.
+	AllowedOrigins []string `json:"allowedOrigins"`
 }
 
 // GetType returns StreamEventDefaultFieldsStreamPlaybackPolicy.Type, and is useful for accessing the field via an interface.
 func (v *StreamEventDefaultFieldsStreamPlaybackPolicy) GetType() PlaybackPolicyType { return v.Type }
+
+// GetAllowedOrigins returns StreamEventDefaultFieldsStreamPlaybackPolicy.AllowedOrigins, and is useful for accessing the field via an interface.
+func (v *StreamEventDefaultFieldsStreamPlaybackPolicy) GetAllowedOrigins() []string {
+	return v.AllowedOrigins
+}
 
 // StreamEventDefaultFieldsStreamPullSourcePullSourceView includes the requested fields of the GraphQL type PullSourceView.
 // The GraphQL type's documentation follows.
@@ -99443,11 +100231,20 @@ func (v *StreamEventInNodeDefaultFieldsStreamMetrics) GetIssuesDescription() *st
 // gates whether the full policy is fetched at all.
 type StreamEventInNodeDefaultFieldsStreamPlaybackPolicy struct {
 	Type PlaybackPolicyType `json:"type"`
+	// Sites allowed to embed the content, as normalized `scheme://host[:port]`
+	// origins; `*` allows any. Empty = no restriction. A browser viewer whose
+	// Origin (or Referer) is not listed is denied.
+	AllowedOrigins []string `json:"allowedOrigins"`
 }
 
 // GetType returns StreamEventInNodeDefaultFieldsStreamPlaybackPolicy.Type, and is useful for accessing the field via an interface.
 func (v *StreamEventInNodeDefaultFieldsStreamPlaybackPolicy) GetType() PlaybackPolicyType {
 	return v.Type
+}
+
+// GetAllowedOrigins returns StreamEventInNodeDefaultFieldsStreamPlaybackPolicy.AllowedOrigins, and is useful for accessing the field via an interface.
+func (v *StreamEventInNodeDefaultFieldsStreamPlaybackPolicy) GetAllowedOrigins() []string {
+	return v.AllowedOrigins
 }
 
 // StreamEventInNodeDefaultFieldsStreamPullSourcePullSourceView includes the requested fields of the GraphQL type PullSourceView.
@@ -99815,6 +100612,11 @@ func (v *StreamFieldsPlaybackPolicy) GetWebhook() *PlaybackPolicyFieldsWebhookPl
 	return v.PlaybackPolicyFields.Webhook
 }
 
+// GetAllowedOrigins returns StreamFieldsPlaybackPolicy.AllowedOrigins, and is useful for accessing the field via an interface.
+func (v *StreamFieldsPlaybackPolicy) GetAllowedOrigins() []string {
+	return v.PlaybackPolicyFields.AllowedOrigins
+}
+
 func (v *StreamFieldsPlaybackPolicy) UnmarshalJSON(b []byte) error {
 
 	if string(b) == "null" {
@@ -99846,6 +100648,8 @@ type __premarshalStreamFieldsPlaybackPolicy struct {
 	Jwt *PlaybackPolicyFieldsJwtPlaybackJwtPolicy `json:"jwt"`
 
 	Webhook *PlaybackPolicyFieldsWebhookPlaybackWebhookPolicy `json:"webhook"`
+
+	AllowedOrigins []string `json:"allowedOrigins"`
 }
 
 func (v *StreamFieldsPlaybackPolicy) MarshalJSON() ([]byte, error) {
@@ -99862,6 +100666,7 @@ func (v *StreamFieldsPlaybackPolicy) __premarshalJSON() (*__premarshalStreamFiel
 	retval.Type = v.PlaybackPolicyFields.Type
 	retval.Jwt = v.PlaybackPolicyFields.Jwt
 	retval.Webhook = v.PlaybackPolicyFields.Webhook
+	retval.AllowedOrigins = v.PlaybackPolicyFields.AllowedOrigins
 	return &retval, nil
 }
 
@@ -100454,11 +101259,20 @@ func (v *StreamHealthMetricDefaultFieldsStreamMetrics) GetIssuesDescription() *s
 // gates whether the full policy is fetched at all.
 type StreamHealthMetricDefaultFieldsStreamPlaybackPolicy struct {
 	Type PlaybackPolicyType `json:"type"`
+	// Sites allowed to embed the content, as normalized `scheme://host[:port]`
+	// origins; `*` allows any. Empty = no restriction. A browser viewer whose
+	// Origin (or Referer) is not listed is denied.
+	AllowedOrigins []string `json:"allowedOrigins"`
 }
 
 // GetType returns StreamHealthMetricDefaultFieldsStreamPlaybackPolicy.Type, and is useful for accessing the field via an interface.
 func (v *StreamHealthMetricDefaultFieldsStreamPlaybackPolicy) GetType() PlaybackPolicyType {
 	return v.Type
+}
+
+// GetAllowedOrigins returns StreamHealthMetricDefaultFieldsStreamPlaybackPolicy.AllowedOrigins, and is useful for accessing the field via an interface.
+func (v *StreamHealthMetricDefaultFieldsStreamPlaybackPolicy) GetAllowedOrigins() []string {
+	return v.AllowedOrigins
 }
 
 // StreamHealthMetricDefaultFieldsStreamPullSourcePullSourceView includes the requested fields of the GraphQL type PullSourceView.
@@ -101119,11 +101933,20 @@ func (v *StreamHealthMetricInNodeDefaultFieldsStreamMetrics) GetIssuesDescriptio
 // gates whether the full policy is fetched at all.
 type StreamHealthMetricInNodeDefaultFieldsStreamPlaybackPolicy struct {
 	Type PlaybackPolicyType `json:"type"`
+	// Sites allowed to embed the content, as normalized `scheme://host[:port]`
+	// origins; `*` allows any. Empty = no restriction. A browser viewer whose
+	// Origin (or Referer) is not listed is denied.
+	AllowedOrigins []string `json:"allowedOrigins"`
 }
 
 // GetType returns StreamHealthMetricInNodeDefaultFieldsStreamPlaybackPolicy.Type, and is useful for accessing the field via an interface.
 func (v *StreamHealthMetricInNodeDefaultFieldsStreamPlaybackPolicy) GetType() PlaybackPolicyType {
 	return v.Type
+}
+
+// GetAllowedOrigins returns StreamHealthMetricInNodeDefaultFieldsStreamPlaybackPolicy.AllowedOrigins, and is useful for accessing the field via an interface.
+func (v *StreamHealthMetricInNodeDefaultFieldsStreamPlaybackPolicy) GetAllowedOrigins() []string {
+	return v.AllowedOrigins
 }
 
 // StreamHealthMetricInNodeDefaultFieldsStreamPullSourcePullSourceView includes the requested fields of the GraphQL type PullSourceView.
@@ -101683,6 +102506,10 @@ type StreamInNodeDefaultFieldsPlaybackPolicy struct {
 	Jwt *StreamInNodeDefaultFieldsPlaybackPolicyJwtPlaybackJwtPolicy `json:"jwt"`
 	// Webhook-policy details, populated when type == WEBHOOK. Secret is masked.
 	Webhook *StreamInNodeDefaultFieldsPlaybackPolicyWebhookPlaybackWebhookPolicy `json:"webhook"`
+	// Sites allowed to embed the content, as normalized `scheme://host[:port]`
+	// origins; `*` allows any. Empty = no restriction. A browser viewer whose
+	// Origin (or Referer) is not listed is denied.
+	AllowedOrigins []string `json:"allowedOrigins"`
 }
 
 // GetType returns StreamInNodeDefaultFieldsPlaybackPolicy.Type, and is useful for accessing the field via an interface.
@@ -101696,6 +102523,11 @@ func (v *StreamInNodeDefaultFieldsPlaybackPolicy) GetJwt() *StreamInNodeDefaultF
 // GetWebhook returns StreamInNodeDefaultFieldsPlaybackPolicy.Webhook, and is useful for accessing the field via an interface.
 func (v *StreamInNodeDefaultFieldsPlaybackPolicy) GetWebhook() *StreamInNodeDefaultFieldsPlaybackPolicyWebhookPlaybackWebhookPolicy {
 	return v.Webhook
+}
+
+// GetAllowedOrigins returns StreamInNodeDefaultFieldsPlaybackPolicy.AllowedOrigins, and is useful for accessing the field via an interface.
+func (v *StreamInNodeDefaultFieldsPlaybackPolicy) GetAllowedOrigins() []string {
+	return v.AllowedOrigins
 }
 
 // StreamInNodeDefaultFieldsPlaybackPolicyJwtPlaybackJwtPolicy includes the requested fields of the GraphQL type PlaybackJwtPolicy.
@@ -101733,6 +102565,8 @@ type StreamInNodeDefaultFieldsPlaybackPolicyWebhookPlaybackWebhookPolicy struct 
 	TimeoutMs int `json:"timeoutMs"`
 	// Always 'redacted' on read; the actual secret is fieldcrypt-encrypted at rest.
 	SecretMasked string `json:"secretMasked"`
+	// Your JSON object, sent as `context` in every access request to the URL. Null when unset.
+	Context *json.RawMessage `json:"context"`
 }
 
 // GetUrl returns StreamInNodeDefaultFieldsPlaybackPolicyWebhookPlaybackWebhookPolicy.Url, and is useful for accessing the field via an interface.
@@ -101748,6 +102582,11 @@ func (v *StreamInNodeDefaultFieldsPlaybackPolicyWebhookPlaybackWebhookPolicy) Ge
 // GetSecretMasked returns StreamInNodeDefaultFieldsPlaybackPolicyWebhookPlaybackWebhookPolicy.SecretMasked, and is useful for accessing the field via an interface.
 func (v *StreamInNodeDefaultFieldsPlaybackPolicyWebhookPlaybackWebhookPolicy) GetSecretMasked() string {
 	return v.SecretMasked
+}
+
+// GetContext returns StreamInNodeDefaultFieldsPlaybackPolicyWebhookPlaybackWebhookPolicy.Context, and is useful for accessing the field via an interface.
+func (v *StreamInNodeDefaultFieldsPlaybackPolicyWebhookPlaybackWebhookPolicy) GetContext() *json.RawMessage {
+	return v.Context
 }
 
 // StreamInNodeDefaultFieldsPullSourcePullSourceView includes the requested fields of the GraphQL type PullSourceView.
@@ -105087,6 +105926,8 @@ func (v *TenantEventsTenantEventsPublicEvent) __premarshalJSON() (*__premarshalT
 // TenantEventsTenantEventsPublicEventDataPaymentFailed
 // TenantEventsTenantEventsPublicEventDataRecordingFailed
 // TenantEventsTenantEventsPublicEventDataRecordingReady
+// TenantEventsTenantEventsPublicEventDataRecordingStarted
+// TenantEventsTenantEventsPublicEventDataRecordingStopped
 // TenantEventsTenantEventsPublicEventDataStreamConnected
 // TenantEventsTenantEventsPublicEventDataStreamCreated
 // TenantEventsTenantEventsPublicEventDataStreamDeleted
@@ -105140,6 +105981,10 @@ func (v *TenantEventsTenantEventsPublicEventDataPaymentFailed) implementsGraphQL
 func (v *TenantEventsTenantEventsPublicEventDataRecordingFailed) implementsGraphQLInterfaceTenantEventsTenantEventsPublicEventData() {
 }
 func (v *TenantEventsTenantEventsPublicEventDataRecordingReady) implementsGraphQLInterfaceTenantEventsTenantEventsPublicEventData() {
+}
+func (v *TenantEventsTenantEventsPublicEventDataRecordingStarted) implementsGraphQLInterfaceTenantEventsTenantEventsPublicEventData() {
+}
+func (v *TenantEventsTenantEventsPublicEventDataRecordingStopped) implementsGraphQLInterfaceTenantEventsTenantEventsPublicEventData() {
 }
 func (v *TenantEventsTenantEventsPublicEventDataStreamConnected) implementsGraphQLInterfaceTenantEventsTenantEventsPublicEventData() {
 }
@@ -105226,6 +106071,12 @@ func __unmarshalTenantEventsTenantEventsPublicEventData(b []byte, v *TenantEvent
 		return json.Unmarshal(b, *v)
 	case "RecordingReady":
 		*v = new(TenantEventsTenantEventsPublicEventDataRecordingReady)
+		return json.Unmarshal(b, *v)
+	case "RecordingStarted":
+		*v = new(TenantEventsTenantEventsPublicEventDataRecordingStarted)
+		return json.Unmarshal(b, *v)
+	case "RecordingStopped":
+		*v = new(TenantEventsTenantEventsPublicEventDataRecordingStopped)
 		return json.Unmarshal(b, *v)
 	case "StreamConnected":
 		*v = new(TenantEventsTenantEventsPublicEventDataStreamConnected)
@@ -105397,6 +106248,22 @@ func __marshalTenantEventsTenantEventsPublicEventData(v *TenantEventsTenantEvent
 		result := struct {
 			TypeName string `json:"__typename"`
 			*TenantEventsTenantEventsPublicEventDataRecordingReady
+		}{typename, v}
+		return json.Marshal(result)
+	case *TenantEventsTenantEventsPublicEventDataRecordingStarted:
+		typename = "RecordingStarted"
+
+		result := struct {
+			TypeName string `json:"__typename"`
+			*TenantEventsTenantEventsPublicEventDataRecordingStarted
+		}{typename, v}
+		return json.Marshal(result)
+	case *TenantEventsTenantEventsPublicEventDataRecordingStopped:
+		typename = "RecordingStopped"
+
+		result := struct {
+			TypeName string `json:"__typename"`
+			*TenantEventsTenantEventsPublicEventDataRecordingStopped
 		}{typename, v}
 		return json.Marshal(result)
 	case *TenantEventsTenantEventsPublicEventDataStreamConnected:
@@ -106534,6 +107401,32 @@ func (v *TenantEventsTenantEventsPublicEventDataRecordingReadyArtifactEventArtif
 	return &retval, nil
 }
 
+// TenantEventsTenantEventsPublicEventDataRecordingStarted includes the requested fields of the GraphQL type RecordingStarted.
+// The GraphQL type's documentation follows.
+//
+// `recording.started` event. Aggregate: `artifacts`.
+type TenantEventsTenantEventsPublicEventDataRecordingStarted struct {
+	Typename *string `json:"__typename"`
+}
+
+// GetTypename returns TenantEventsTenantEventsPublicEventDataRecordingStarted.Typename, and is useful for accessing the field via an interface.
+func (v *TenantEventsTenantEventsPublicEventDataRecordingStarted) GetTypename() *string {
+	return v.Typename
+}
+
+// TenantEventsTenantEventsPublicEventDataRecordingStopped includes the requested fields of the GraphQL type RecordingStopped.
+// The GraphQL type's documentation follows.
+//
+// `recording.stopped` event. Aggregate: `artifacts`.
+type TenantEventsTenantEventsPublicEventDataRecordingStopped struct {
+	Typename *string `json:"__typename"`
+}
+
+// GetTypename returns TenantEventsTenantEventsPublicEventDataRecordingStopped.Typename, and is useful for accessing the field via an interface.
+func (v *TenantEventsTenantEventsPublicEventDataRecordingStopped) GetTypename() *string {
+	return v.Typename
+}
+
 // TenantEventsTenantEventsPublicEventDataStreamConnected includes the requested fields of the GraphQL type StreamConnected.
 // The GraphQL type's documentation follows.
 //
@@ -107323,6 +108216,10 @@ type TestPlaybackAccessInput struct {
 	// without making the call so operators can inspect the resolved policy
 	// without side effects.
 	FireWebhook *bool `json:"fireWebhook"`
+	// Origin header to test the policy's allowed origins against.
+	Origin *string `json:"origin"`
+	// Referer header, used when origin is empty.
+	Referer *string `json:"referer"`
 }
 
 // GetPlaybackId returns TestPlaybackAccessInput.PlaybackId, and is useful for accessing the field via an interface.
@@ -107348,6 +108245,12 @@ func (v *TestPlaybackAccessInput) GetSessionId() *string { return v.SessionId }
 
 // GetFireWebhook returns TestPlaybackAccessInput.FireWebhook, and is useful for accessing the field via an interface.
 func (v *TestPlaybackAccessInput) GetFireWebhook() *bool { return v.FireWebhook }
+
+// GetOrigin returns TestPlaybackAccessInput.Origin, and is useful for accessing the field via an interface.
+func (v *TestPlaybackAccessInput) GetOrigin() *string { return v.Origin }
+
+// GetReferer returns TestPlaybackAccessInput.Referer, and is useful for accessing the field via an interface.
+func (v *TestPlaybackAccessInput) GetReferer() *string { return v.Referer }
 
 // TestPlaybackAccessResponse is returned by TestPlaybackAccess on success.
 type TestPlaybackAccessResponse struct {
@@ -108788,10 +109691,19 @@ func (v *TrackListEventDefaultFieldsStreamMetrics) GetIssuesDescription() *strin
 // gates whether the full policy is fetched at all.
 type TrackListEventDefaultFieldsStreamPlaybackPolicy struct {
 	Type PlaybackPolicyType `json:"type"`
+	// Sites allowed to embed the content, as normalized `scheme://host[:port]`
+	// origins; `*` allows any. Empty = no restriction. A browser viewer whose
+	// Origin (or Referer) is not listed is denied.
+	AllowedOrigins []string `json:"allowedOrigins"`
 }
 
 // GetType returns TrackListEventDefaultFieldsStreamPlaybackPolicy.Type, and is useful for accessing the field via an interface.
 func (v *TrackListEventDefaultFieldsStreamPlaybackPolicy) GetType() PlaybackPolicyType { return v.Type }
+
+// GetAllowedOrigins returns TrackListEventDefaultFieldsStreamPlaybackPolicy.AllowedOrigins, and is useful for accessing the field via an interface.
+func (v *TrackListEventDefaultFieldsStreamPlaybackPolicy) GetAllowedOrigins() []string {
+	return v.AllowedOrigins
+}
 
 // TrackListEventDefaultFieldsStreamPullSourcePullSourceView includes the requested fields of the GraphQL type PullSourceView.
 // The GraphQL type's documentation follows.
@@ -109403,11 +110315,20 @@ func (v *TrackListEventInNodeDefaultFieldsStreamMetrics) GetIssuesDescription() 
 // gates whether the full policy is fetched at all.
 type TrackListEventInNodeDefaultFieldsStreamPlaybackPolicy struct {
 	Type PlaybackPolicyType `json:"type"`
+	// Sites allowed to embed the content, as normalized `scheme://host[:port]`
+	// origins; `*` allows any. Empty = no restriction. A browser viewer whose
+	// Origin (or Referer) is not listed is denied.
+	AllowedOrigins []string `json:"allowedOrigins"`
 }
 
 // GetType returns TrackListEventInNodeDefaultFieldsStreamPlaybackPolicy.Type, and is useful for accessing the field via an interface.
 func (v *TrackListEventInNodeDefaultFieldsStreamPlaybackPolicy) GetType() PlaybackPolicyType {
 	return v.Type
+}
+
+// GetAllowedOrigins returns TrackListEventInNodeDefaultFieldsStreamPlaybackPolicy.AllowedOrigins, and is useful for accessing the field via an interface.
+func (v *TrackListEventInNodeDefaultFieldsStreamPlaybackPolicy) GetAllowedOrigins() []string {
+	return v.AllowedOrigins
 }
 
 // TrackListEventInNodeDefaultFieldsStreamPullSourcePullSourceView includes the requested fields of the GraphQL type PullSourceView.
@@ -110054,11 +110975,20 @@ func (v *TrackListUpdateDefaultFieldsStreamMetrics) GetIssuesDescription() *stri
 // gates whether the full policy is fetched at all.
 type TrackListUpdateDefaultFieldsStreamPlaybackPolicy struct {
 	Type PlaybackPolicyType `json:"type"`
+	// Sites allowed to embed the content, as normalized `scheme://host[:port]`
+	// origins; `*` allows any. Empty = no restriction. A browser viewer whose
+	// Origin (or Referer) is not listed is denied.
+	AllowedOrigins []string `json:"allowedOrigins"`
 }
 
 // GetType returns TrackListUpdateDefaultFieldsStreamPlaybackPolicy.Type, and is useful for accessing the field via an interface.
 func (v *TrackListUpdateDefaultFieldsStreamPlaybackPolicy) GetType() PlaybackPolicyType {
 	return v.Type
+}
+
+// GetAllowedOrigins returns TrackListUpdateDefaultFieldsStreamPlaybackPolicy.AllowedOrigins, and is useful for accessing the field via an interface.
+func (v *TrackListUpdateDefaultFieldsStreamPlaybackPolicy) GetAllowedOrigins() []string {
+	return v.AllowedOrigins
 }
 
 // TrackListUpdateDefaultFieldsStreamPullSourcePullSourceView includes the requested fields of the GraphQL type PullSourceView.
@@ -114517,11 +115447,20 @@ func (v *ViewerCountBucketDefaultFieldsStreamMetrics) GetIssuesDescription() *st
 // gates whether the full policy is fetched at all.
 type ViewerCountBucketDefaultFieldsStreamPlaybackPolicy struct {
 	Type PlaybackPolicyType `json:"type"`
+	// Sites allowed to embed the content, as normalized `scheme://host[:port]`
+	// origins; `*` allows any. Empty = no restriction. A browser viewer whose
+	// Origin (or Referer) is not listed is denied.
+	AllowedOrigins []string `json:"allowedOrigins"`
 }
 
 // GetType returns ViewerCountBucketDefaultFieldsStreamPlaybackPolicy.Type, and is useful for accessing the field via an interface.
 func (v *ViewerCountBucketDefaultFieldsStreamPlaybackPolicy) GetType() PlaybackPolicyType {
 	return v.Type
+}
+
+// GetAllowedOrigins returns ViewerCountBucketDefaultFieldsStreamPlaybackPolicy.AllowedOrigins, and is useful for accessing the field via an interface.
+func (v *ViewerCountBucketDefaultFieldsStreamPlaybackPolicy) GetAllowedOrigins() []string {
+	return v.AllowedOrigins
 }
 
 // ViewerCountBucketDefaultFieldsStreamPullSourcePullSourceView includes the requested fields of the GraphQL type PullSourceView.
@@ -115176,11 +116115,20 @@ func (v *ViewerGeographicDefaultFieldsStreamMetrics) GetIssuesDescription() *str
 // gates whether the full policy is fetched at all.
 type ViewerGeographicDefaultFieldsStreamPlaybackPolicy struct {
 	Type PlaybackPolicyType `json:"type"`
+	// Sites allowed to embed the content, as normalized `scheme://host[:port]`
+	// origins; `*` allows any. Empty = no restriction. A browser viewer whose
+	// Origin (or Referer) is not listed is denied.
+	AllowedOrigins []string `json:"allowedOrigins"`
 }
 
 // GetType returns ViewerGeographicDefaultFieldsStreamPlaybackPolicy.Type, and is useful for accessing the field via an interface.
 func (v *ViewerGeographicDefaultFieldsStreamPlaybackPolicy) GetType() PlaybackPolicyType {
 	return v.Type
+}
+
+// GetAllowedOrigins returns ViewerGeographicDefaultFieldsStreamPlaybackPolicy.AllowedOrigins, and is useful for accessing the field via an interface.
+func (v *ViewerGeographicDefaultFieldsStreamPlaybackPolicy) GetAllowedOrigins() []string {
+	return v.AllowedOrigins
 }
 
 // ViewerGeographicDefaultFieldsStreamPullSourcePullSourceView includes the requested fields of the GraphQL type PullSourceView.
@@ -115727,11 +116675,20 @@ func (v *ViewerHoursHourlyDefaultFieldsStreamMetrics) GetIssuesDescription() *st
 // gates whether the full policy is fetched at all.
 type ViewerHoursHourlyDefaultFieldsStreamPlaybackPolicy struct {
 	Type PlaybackPolicyType `json:"type"`
+	// Sites allowed to embed the content, as normalized `scheme://host[:port]`
+	// origins; `*` allows any. Empty = no restriction. A browser viewer whose
+	// Origin (or Referer) is not listed is denied.
+	AllowedOrigins []string `json:"allowedOrigins"`
 }
 
 // GetType returns ViewerHoursHourlyDefaultFieldsStreamPlaybackPolicy.Type, and is useful for accessing the field via an interface.
 func (v *ViewerHoursHourlyDefaultFieldsStreamPlaybackPolicy) GetType() PlaybackPolicyType {
 	return v.Type
+}
+
+// GetAllowedOrigins returns ViewerHoursHourlyDefaultFieldsStreamPlaybackPolicy.AllowedOrigins, and is useful for accessing the field via an interface.
+func (v *ViewerHoursHourlyDefaultFieldsStreamPlaybackPolicy) GetAllowedOrigins() []string {
+	return v.AllowedOrigins
 }
 
 // ViewerHoursHourlyDefaultFieldsStreamPullSourcePullSourceView includes the requested fields of the GraphQL type PullSourceView.
@@ -116304,11 +117261,20 @@ func (v *ViewerHoursHourlyInNodeDefaultFieldsStreamMetrics) GetIssuesDescription
 // gates whether the full policy is fetched at all.
 type ViewerHoursHourlyInNodeDefaultFieldsStreamPlaybackPolicy struct {
 	Type PlaybackPolicyType `json:"type"`
+	// Sites allowed to embed the content, as normalized `scheme://host[:port]`
+	// origins; `*` allows any. Empty = no restriction. A browser viewer whose
+	// Origin (or Referer) is not listed is denied.
+	AllowedOrigins []string `json:"allowedOrigins"`
 }
 
 // GetType returns ViewerHoursHourlyInNodeDefaultFieldsStreamPlaybackPolicy.Type, and is useful for accessing the field via an interface.
 func (v *ViewerHoursHourlyInNodeDefaultFieldsStreamPlaybackPolicy) GetType() PlaybackPolicyType {
 	return v.Type
+}
+
+// GetAllowedOrigins returns ViewerHoursHourlyInNodeDefaultFieldsStreamPlaybackPolicy.AllowedOrigins, and is useful for accessing the field via an interface.
+func (v *ViewerHoursHourlyInNodeDefaultFieldsStreamPlaybackPolicy) GetAllowedOrigins() []string {
+	return v.AllowedOrigins
 }
 
 // ViewerHoursHourlyInNodeDefaultFieldsStreamPullSourcePullSourceView includes the requested fields of the GraphQL type PullSourceView.
@@ -116891,10 +117857,19 @@ func (v *ViewerMetricsDefaultFieldsStreamMetrics) GetIssuesDescription() *string
 // gates whether the full policy is fetched at all.
 type ViewerMetricsDefaultFieldsStreamPlaybackPolicy struct {
 	Type PlaybackPolicyType `json:"type"`
+	// Sites allowed to embed the content, as normalized `scheme://host[:port]`
+	// origins; `*` allows any. Empty = no restriction. A browser viewer whose
+	// Origin (or Referer) is not listed is denied.
+	AllowedOrigins []string `json:"allowedOrigins"`
 }
 
 // GetType returns ViewerMetricsDefaultFieldsStreamPlaybackPolicy.Type, and is useful for accessing the field via an interface.
 func (v *ViewerMetricsDefaultFieldsStreamPlaybackPolicy) GetType() PlaybackPolicyType { return v.Type }
+
+// GetAllowedOrigins returns ViewerMetricsDefaultFieldsStreamPlaybackPolicy.AllowedOrigins, and is useful for accessing the field via an interface.
+func (v *ViewerMetricsDefaultFieldsStreamPlaybackPolicy) GetAllowedOrigins() []string {
+	return v.AllowedOrigins
+}
 
 // ViewerMetricsDefaultFieldsStreamPullSourcePullSourceView includes the requested fields of the GraphQL type PullSourceView.
 // The GraphQL type's documentation follows.
@@ -117468,10 +118443,19 @@ func (v *ViewerSessionDefaultFieldsStreamMetrics) GetIssuesDescription() *string
 // gates whether the full policy is fetched at all.
 type ViewerSessionDefaultFieldsStreamPlaybackPolicy struct {
 	Type PlaybackPolicyType `json:"type"`
+	// Sites allowed to embed the content, as normalized `scheme://host[:port]`
+	// origins; `*` allows any. Empty = no restriction. A browser viewer whose
+	// Origin (or Referer) is not listed is denied.
+	AllowedOrigins []string `json:"allowedOrigins"`
 }
 
 // GetType returns ViewerSessionDefaultFieldsStreamPlaybackPolicy.Type, and is useful for accessing the field via an interface.
 func (v *ViewerSessionDefaultFieldsStreamPlaybackPolicy) GetType() PlaybackPolicyType { return v.Type }
+
+// GetAllowedOrigins returns ViewerSessionDefaultFieldsStreamPlaybackPolicy.AllowedOrigins, and is useful for accessing the field via an interface.
+func (v *ViewerSessionDefaultFieldsStreamPlaybackPolicy) GetAllowedOrigins() []string {
+	return v.AllowedOrigins
+}
 
 // ViewerSessionDefaultFieldsStreamPullSourcePullSourceView includes the requested fields of the GraphQL type PullSourceView.
 // The GraphQL type's documentation follows.
@@ -118077,11 +119061,20 @@ func (v *ViewerSessionInNodeDefaultFieldsStreamMetrics) GetIssuesDescription() *
 // gates whether the full policy is fetched at all.
 type ViewerSessionInNodeDefaultFieldsStreamPlaybackPolicy struct {
 	Type PlaybackPolicyType `json:"type"`
+	// Sites allowed to embed the content, as normalized `scheme://host[:port]`
+	// origins; `*` allows any. Empty = no restriction. A browser viewer whose
+	// Origin (or Referer) is not listed is denied.
+	AllowedOrigins []string `json:"allowedOrigins"`
 }
 
 // GetType returns ViewerSessionInNodeDefaultFieldsStreamPlaybackPolicy.Type, and is useful for accessing the field via an interface.
 func (v *ViewerSessionInNodeDefaultFieldsStreamPlaybackPolicy) GetType() PlaybackPolicyType {
 	return v.Type
+}
+
+// GetAllowedOrigins returns ViewerSessionInNodeDefaultFieldsStreamPlaybackPolicy.AllowedOrigins, and is useful for accessing the field via an interface.
+func (v *ViewerSessionInNodeDefaultFieldsStreamPlaybackPolicy) GetAllowedOrigins() []string {
+	return v.AllowedOrigins
 }
 
 // ViewerSessionInNodeDefaultFieldsStreamPullSourcePullSourceView includes the requested fields of the GraphQL type PullSourceView.
@@ -118488,6 +119481,11 @@ func (v *VodAssetFieldsPlaybackPolicy) GetWebhook() *PlaybackPolicyFieldsWebhook
 	return v.PlaybackPolicyFields.Webhook
 }
 
+// GetAllowedOrigins returns VodAssetFieldsPlaybackPolicy.AllowedOrigins, and is useful for accessing the field via an interface.
+func (v *VodAssetFieldsPlaybackPolicy) GetAllowedOrigins() []string {
+	return v.PlaybackPolicyFields.AllowedOrigins
+}
+
 func (v *VodAssetFieldsPlaybackPolicy) UnmarshalJSON(b []byte) error {
 
 	if string(b) == "null" {
@@ -118519,6 +119517,8 @@ type __premarshalVodAssetFieldsPlaybackPolicy struct {
 	Jwt *PlaybackPolicyFieldsJwtPlaybackJwtPolicy `json:"jwt"`
 
 	Webhook *PlaybackPolicyFieldsWebhookPlaybackWebhookPolicy `json:"webhook"`
+
+	AllowedOrigins []string `json:"allowedOrigins"`
 }
 
 func (v *VodAssetFieldsPlaybackPolicy) MarshalJSON() ([]byte, error) {
@@ -118535,6 +119535,7 @@ func (v *VodAssetFieldsPlaybackPolicy) __premarshalJSON() (*__premarshalVodAsset
 	retval.Type = v.PlaybackPolicyFields.Type
 	retval.Jwt = v.PlaybackPolicyFields.Jwt
 	retval.Webhook = v.PlaybackPolicyFields.Webhook
+	retval.AllowedOrigins = v.PlaybackPolicyFields.AllowedOrigins
 	return &retval, nil
 }
 
@@ -118828,6 +119829,10 @@ type VodAssetInNodeDefaultFieldsPlaybackPolicy struct {
 	Jwt *VodAssetInNodeDefaultFieldsPlaybackPolicyJwtPlaybackJwtPolicy `json:"jwt"`
 	// Webhook-policy details, populated when type == WEBHOOK. Secret is masked.
 	Webhook *VodAssetInNodeDefaultFieldsPlaybackPolicyWebhookPlaybackWebhookPolicy `json:"webhook"`
+	// Sites allowed to embed the content, as normalized `scheme://host[:port]`
+	// origins; `*` allows any. Empty = no restriction. A browser viewer whose
+	// Origin (or Referer) is not listed is denied.
+	AllowedOrigins []string `json:"allowedOrigins"`
 }
 
 // GetType returns VodAssetInNodeDefaultFieldsPlaybackPolicy.Type, and is useful for accessing the field via an interface.
@@ -118841,6 +119846,11 @@ func (v *VodAssetInNodeDefaultFieldsPlaybackPolicy) GetJwt() *VodAssetInNodeDefa
 // GetWebhook returns VodAssetInNodeDefaultFieldsPlaybackPolicy.Webhook, and is useful for accessing the field via an interface.
 func (v *VodAssetInNodeDefaultFieldsPlaybackPolicy) GetWebhook() *VodAssetInNodeDefaultFieldsPlaybackPolicyWebhookPlaybackWebhookPolicy {
 	return v.Webhook
+}
+
+// GetAllowedOrigins returns VodAssetInNodeDefaultFieldsPlaybackPolicy.AllowedOrigins, and is useful for accessing the field via an interface.
+func (v *VodAssetInNodeDefaultFieldsPlaybackPolicy) GetAllowedOrigins() []string {
+	return v.AllowedOrigins
 }
 
 // VodAssetInNodeDefaultFieldsPlaybackPolicyJwtPlaybackJwtPolicy includes the requested fields of the GraphQL type PlaybackJwtPolicy.
@@ -118878,6 +119888,8 @@ type VodAssetInNodeDefaultFieldsPlaybackPolicyWebhookPlaybackWebhookPolicy struc
 	TimeoutMs int `json:"timeoutMs"`
 	// Always 'redacted' on read; the actual secret is fieldcrypt-encrypted at rest.
 	SecretMasked string `json:"secretMasked"`
+	// Your JSON object, sent as `context` in every access request to the URL. Null when unset.
+	Context *json.RawMessage `json:"context"`
 }
 
 // GetUrl returns VodAssetInNodeDefaultFieldsPlaybackPolicyWebhookPlaybackWebhookPolicy.Url, and is useful for accessing the field via an interface.
@@ -118893,6 +119905,11 @@ func (v *VodAssetInNodeDefaultFieldsPlaybackPolicyWebhookPlaybackWebhookPolicy) 
 // GetSecretMasked returns VodAssetInNodeDefaultFieldsPlaybackPolicyWebhookPlaybackWebhookPolicy.SecretMasked, and is useful for accessing the field via an interface.
 func (v *VodAssetInNodeDefaultFieldsPlaybackPolicyWebhookPlaybackWebhookPolicy) GetSecretMasked() string {
 	return v.SecretMasked
+}
+
+// GetContext returns VodAssetInNodeDefaultFieldsPlaybackPolicyWebhookPlaybackWebhookPolicy.Context, and is useful for accessing the field via an interface.
+func (v *VodAssetInNodeDefaultFieldsPlaybackPolicyWebhookPlaybackWebhookPolicy) GetContext() *json.RawMessage {
+	return v.Context
 }
 
 // VodAssetInNodeDefaultFieldsStorageCostStorageCostProjection includes the requested fields of the GraphQL type StorageCostProjection.
@@ -122240,6 +123257,14 @@ type __GetWebhookEndpointsConnectionInput struct {
 // GetPage returns __GetWebhookEndpointsConnectionInput.Page, and is useful for accessing the field via an interface.
 func (v *__GetWebhookEndpointsConnectionInput) GetPage() *ConnectionInput { return v.Page }
 
+// __ImportVodAssetInput is used internally by genqlient
+type __ImportVodAssetInput struct {
+	Input ImportVodAssetInput `json:"input"`
+}
+
+// GetInput returns __ImportVodAssetInput.Input, and is useful for accessing the field via an interface.
+func (v *__ImportVodAssetInput) GetInput() ImportVodAssetInput { return v.Input }
+
 // __LinkEmailInput is used internally by genqlient
 type __LinkEmailInput struct {
 	Input LinkEmailInput `json:"input"`
@@ -123697,7 +124722,9 @@ fragment PlaybackPolicyFields on PlaybackPolicy {
 		url
 		timeoutMs
 		secretMasked
+		context
 	}
+	allowedOrigins
 }
 fragment ThumbnailAssetsFields on ThumbnailAssets {
 	posterUrl
@@ -123866,7 +124893,9 @@ fragment PlaybackPolicyFields on PlaybackPolicy {
 		url
 		timeoutMs
 		secretMasked
+		context
 	}
+	allowedOrigins
 }
 fragment ThumbnailAssetsFields on ThumbnailAssets {
 	posterUrl
@@ -124760,7 +125789,9 @@ fragment PlaybackPolicyFields on PlaybackPolicy {
 		url
 		timeoutMs
 		secretMasked
+		context
 	}
+	allowedOrigins
 }
 `
 
@@ -125984,6 +127015,7 @@ fragment ArtifactEventDefaultFields on ArtifactEvent {
 		}
 		playbackPolicy {
 			type
+			allowedOrigins
 		}
 		dvrChapterMode
 		dvrChapterIntervalSeconds
@@ -126204,6 +127236,7 @@ fragment ArtifactStateDefaultFields on ArtifactState {
 		}
 		playbackPolicy {
 			type
+			allowedOrigins
 		}
 		dvrChapterMode
 		dvrChapterIntervalSeconds
@@ -126908,6 +127941,7 @@ fragment ClientMetrics5mDefaultFields on ClientMetrics5m {
 		}
 		playbackPolicy {
 			type
+			allowedOrigins
 		}
 		dvrChapterMode
 		dvrChapterIntervalSeconds
@@ -127074,7 +128108,9 @@ fragment PlaybackPolicyFields on PlaybackPolicy {
 		url
 		timeoutMs
 		secretMasked
+		context
 	}
+	allowedOrigins
 }
 fragment ThumbnailAssetsFields on ThumbnailAssets {
 	posterUrl
@@ -128031,6 +129067,7 @@ fragment ConnectionEventDefaultFields on ConnectionEvent {
 		}
 		playbackPolicy {
 			type
+			allowedOrigins
 		}
 		dvrChapterMode
 		dvrChapterIntervalSeconds
@@ -128637,6 +129674,7 @@ fragment GeographicDistributionDefaultFields on GeographicDistribution {
 		}
 		playbackPolicy {
 			type
+			allowedOrigins
 		}
 		dvrChapterMode
 		dvrChapterIntervalSeconds
@@ -130107,6 +131145,7 @@ fragment ArtifactEventInNodeDefaultFields on ArtifactEvent {
 		}
 		playbackPolicy {
 			type
+			allowedOrigins
 		}
 		dvrChapterMode
 		dvrChapterIntervalSeconds
@@ -130214,6 +131253,7 @@ fragment ClientMetrics5mDefaultFields on ClientMetrics5m {
 		}
 		playbackPolicy {
 			type
+			allowedOrigins
 		}
 		dvrChapterMode
 		dvrChapterIntervalSeconds
@@ -130308,6 +131348,7 @@ fragment ClipInNodeDefaultFields on Clip {
 		}
 		playbackPolicy {
 			type
+			allowedOrigins
 		}
 		dvrChapterMode
 		dvrChapterIntervalSeconds
@@ -130353,7 +131394,9 @@ fragment ClipInNodeDefaultFields on Clip {
 			url
 			timeoutMs
 			secretMasked
+			context
 		}
+		allowedOrigins
 	}
 	thumbnailAssets {
 		posterUrl
@@ -130470,6 +131513,7 @@ fragment ConnectionEventInNodeDefaultFields on ConnectionEvent {
 		}
 		playbackPolicy {
 			type
+			allowedOrigins
 		}
 		dvrChapterMode
 		dvrChapterIntervalSeconds
@@ -130701,6 +131745,7 @@ fragment ProcessingUsageRecordInNodeDefaultFields on ProcessingUsageRecord {
 		}
 		playbackPolicy {
 			type
+			allowedOrigins
 		}
 		dvrChapterMode
 		dvrChapterIntervalSeconds
@@ -130835,6 +131880,7 @@ fragment QualityTierDailyDefaultFields on QualityTierDaily {
 		}
 		playbackPolicy {
 			type
+			allowedOrigins
 		}
 		dvrChapterMode
 		dvrChapterIntervalSeconds
@@ -130945,6 +131991,7 @@ fragment StorageEventInNodeDefaultFields on StorageEvent {
 		}
 		playbackPolicy {
 			type
+			allowedOrigins
 		}
 		dvrChapterMode
 		dvrChapterIntervalSeconds
@@ -131066,7 +132113,9 @@ fragment StreamInNodeDefaultFields on Stream {
 			url
 			timeoutMs
 			secretMasked
+			context
 		}
+		allowedOrigins
 	}
 	dvrChapterMode
 	dvrChapterIntervalSeconds
@@ -131152,6 +132201,7 @@ fragment StreamAnalyticsDailyDefaultFields on StreamAnalyticsDaily {
 		}
 		playbackPolicy {
 			type
+			allowedOrigins
 		}
 		dvrChapterMode
 		dvrChapterIntervalSeconds
@@ -131243,6 +132293,7 @@ fragment StreamConnectionHourlyDefaultFields on StreamConnectionHourly {
 		}
 		playbackPolicy {
 			type
+			allowedOrigins
 		}
 		dvrChapterMode
 		dvrChapterIntervalSeconds
@@ -131332,6 +132383,7 @@ fragment StreamEventInNodeDefaultFields on StreamEvent {
 		}
 		playbackPolicy {
 			type
+			allowedOrigins
 		}
 		dvrChapterMode
 		dvrChapterIntervalSeconds
@@ -131467,6 +132519,7 @@ fragment StreamHealthMetricInNodeDefaultFields on StreamHealthMetric {
 		}
 		playbackPolicy {
 			type
+			allowedOrigins
 		}
 		dvrChapterMode
 		dvrChapterIntervalSeconds
@@ -131587,6 +132640,7 @@ fragment TrackListEventInNodeDefaultFields on TrackListEvent {
 		}
 		playbackPolicy {
 			type
+			allowedOrigins
 		}
 		dvrChapterMode
 		dvrChapterIntervalSeconds
@@ -131701,6 +132755,7 @@ fragment ViewerHoursHourlyInNodeDefaultFields on ViewerHoursHourly {
 		}
 		playbackPolicy {
 			type
+			allowedOrigins
 		}
 		dvrChapterMode
 		dvrChapterIntervalSeconds
@@ -131793,6 +132848,7 @@ fragment ViewerSessionInNodeDefaultFields on ViewerSession {
 		}
 		playbackPolicy {
 			type
+			allowedOrigins
 		}
 		dvrChapterMode
 		dvrChapterIntervalSeconds
@@ -131864,7 +132920,9 @@ fragment VodAssetInNodeDefaultFields on VodAsset {
 			url
 			timeoutMs
 			secretMasked
+			context
 		}
+		allowedOrigins
 	}
 	thumbnailAssets {
 		posterUrl
@@ -133276,6 +134334,7 @@ fragment ProcessingUsageRecordDefaultFields on ProcessingUsageRecord {
 		}
 		playbackPolicy {
 			type
+			allowedOrigins
 		}
 		dvrChapterMode
 		dvrChapterIntervalSeconds
@@ -133473,6 +134532,7 @@ fragment QualityTierDailyDefaultFields on QualityTierDaily {
 		}
 		playbackPolicy {
 			type
+			allowedOrigins
 		}
 		dvrChapterMode
 		dvrChapterIntervalSeconds
@@ -133630,6 +134690,7 @@ fragment RebufferingEventDefaultFields on RebufferingEvent {
 		}
 		playbackPolicy {
 			type
+			allowedOrigins
 		}
 		dvrChapterMode
 		dvrChapterIntervalSeconds
@@ -134055,6 +135116,7 @@ fragment RoutingEventDefaultFields on RoutingEvent {
 		}
 		playbackPolicy {
 			type
+			allowedOrigins
 		}
 		dvrChapterMode
 		dvrChapterIntervalSeconds
@@ -134766,6 +135828,7 @@ fragment StorageEventDefaultFields on StorageEvent {
 		}
 		playbackPolicy {
 			type
+			allowedOrigins
 		}
 		dvrChapterMode
 		dvrChapterIntervalSeconds
@@ -134966,7 +136029,9 @@ fragment PlaybackPolicyFields on PlaybackPolicy {
 		url
 		timeoutMs
 		secretMasked
+		context
 	}
+	allowedOrigins
 }
 `
 
@@ -135089,6 +136154,7 @@ fragment StreamAnalyticsDailyDefaultFields on StreamAnalyticsDaily {
 		}
 		playbackPolicy {
 			type
+			allowedOrigins
 		}
 		dvrChapterMode
 		dvrChapterIntervalSeconds
@@ -135239,6 +136305,7 @@ fragment StreamAnalyticsSummaryDefaultFields on StreamAnalyticsSummary {
 		}
 		playbackPolicy {
 			type
+			allowedOrigins
 		}
 		dvrChapterMode
 		dvrChapterIntervalSeconds
@@ -135416,6 +136483,7 @@ fragment StreamAnalyticsSummaryDefaultFields on StreamAnalyticsSummary {
 		}
 		playbackPolicy {
 			type
+			allowedOrigins
 		}
 		dvrChapterMode
 		dvrChapterIntervalSeconds
@@ -135590,6 +136658,7 @@ fragment StreamConnectionHourlyDefaultFields on StreamConnectionHourly {
 		}
 		playbackPolicy {
 			type
+			allowedOrigins
 		}
 		dvrChapterMode
 		dvrChapterIntervalSeconds
@@ -135738,6 +136807,7 @@ fragment StreamEventDefaultFields on StreamEvent {
 		}
 		playbackPolicy {
 			type
+			allowedOrigins
 		}
 		dvrChapterMode
 		dvrChapterIntervalSeconds
@@ -135991,6 +137061,7 @@ fragment StreamHealthMetricDefaultFields on StreamHealthMetric {
 		}
 		playbackPolicy {
 			type
+			allowedOrigins
 		}
 		dvrChapterMode
 		dvrChapterIntervalSeconds
@@ -136510,6 +137581,7 @@ fragment TrackListEventDefaultFields on TrackListEvent {
 		}
 		playbackPolicy {
 			type
+			allowedOrigins
 		}
 		dvrChapterMode
 		dvrChapterIntervalSeconds
@@ -136830,6 +137902,7 @@ fragment ViewerGeographicDefaultFields on ViewerGeographic {
 		}
 		playbackPolicy {
 			type
+			allowedOrigins
 		}
 		dvrChapterMode
 		dvrChapterIntervalSeconds
@@ -136987,6 +138060,7 @@ fragment ViewerHoursHourlyDefaultFields on ViewerHoursHourly {
 		}
 		playbackPolicy {
 			type
+			allowedOrigins
 		}
 		dvrChapterMode
 		dvrChapterIntervalSeconds
@@ -137138,6 +138212,7 @@ fragment ViewerSessionDefaultFields on ViewerSession {
 		}
 		playbackPolicy {
 			type
+			allowedOrigins
 		}
 		dvrChapterMode
 		dvrChapterIntervalSeconds
@@ -137303,6 +138378,7 @@ fragment ViewerCountBucketDefaultFields on ViewerCountBucket {
 		}
 		playbackPolicy {
 			type
+			allowedOrigins
 		}
 		dvrChapterMode
 		dvrChapterIntervalSeconds
@@ -137410,7 +138486,9 @@ fragment PlaybackPolicyFields on PlaybackPolicy {
 		url
 		timeoutMs
 		secretMasked
+		context
 	}
+	allowedOrigins
 }
 fragment ThumbnailAssetsFields on ThumbnailAssets {
 	posterUrl
@@ -137955,6 +139033,120 @@ func GetWebhookEventTypes(
 	}
 
 	data_ = &GetWebhookEventTypesResponse{}
+	resp_ := &graphql.Response{Data: data_}
+
+	err_ = client_.MakeRequest(
+		ctx_,
+		req_,
+		resp_,
+	)
+
+	return data_, err_
+}
+
+// The mutation executed by ImportVodAsset.
+const ImportVodAsset_Operation = `
+mutation ImportVodAsset ($input: ImportVodAssetInput!) {
+	importVodAsset(input: $input) {
+		__typename
+		... VodAssetFields
+		... ValidationErrorFields
+		... AuthErrorFields
+	}
+}
+fragment VodAssetFields on VodAsset {
+	__typename
+	id
+	artifactHash
+	playbackId
+	streamId
+	title
+	description
+	filename
+	status
+	sizeBytes
+	durationMs
+	resolution
+	videoCodec
+	audioCodec
+	bitrateKbps
+	createdAt
+	updatedAt
+	expiresAt
+	errorMessage
+	playbackPolicy {
+		... PlaybackPolicyFields
+	}
+	thumbnailAssets {
+		... ThumbnailAssetsFields
+	}
+	effectiveRetention {
+		... EffectiveRetentionFields
+	}
+}
+fragment ValidationErrorFields on ValidationError {
+	__typename
+	message
+	code
+	field
+	constraint
+}
+fragment AuthErrorFields on AuthError {
+	__typename
+	message
+	code
+}
+fragment PlaybackPolicyFields on PlaybackPolicy {
+	type
+	jwt {
+		allowedKids
+		requiredAudience
+		requiredClaimsJson {
+			name
+			jsonValue
+		}
+	}
+	webhook {
+		url
+		timeoutMs
+		secretMasked
+		context
+	}
+	allowedOrigins
+}
+fragment ThumbnailAssetsFields on ThumbnailAssets {
+	posterUrl
+	spriteVttUrl
+	spriteJpgUrl
+	assetKey
+}
+fragment EffectiveRetentionFields on EffectiveRetention {
+	retentionDays
+	retentionUntil
+	source
+}
+`
+
+// ImportVodAsset executes the corresponding GraphQL operation.
+//
+// Import a video from a public https or http URL as a VOD asset. The processing
+// node reads the file from the URL and processes it like an upload; the asset
+// reports PROCESSING until it is ready. Progress arrives as upload.created,
+// upload.completed, and upload.ready or upload.failed events.
+func ImportVodAsset(
+	ctx_ context.Context,
+	client_ graphql.Client,
+	input ImportVodAssetInput,
+) (data_ *ImportVodAssetResponse, err_ error) {
+	req_ := &graphql.Request{
+		OpName: "ImportVodAsset",
+		Query:  ImportVodAsset_Operation,
+		Variables: &__ImportVodAssetInput{
+			Input: input,
+		},
+	}
+
+	data_ = &ImportVodAssetResponse{}
 	resp_ := &graphql.Response{Data: data_}
 
 	err_ = client_.MakeRequest(
@@ -138521,7 +139713,9 @@ fragment PlaybackPolicyFields on PlaybackPolicy {
 		url
 		timeoutMs
 		secretMasked
+		context
 	}
+	allowedOrigins
 }
 `
 
@@ -138693,6 +139887,7 @@ fragment ConnectionEventDefaultFields on ConnectionEvent {
 		}
 		playbackPolicy {
 			type
+			allowedOrigins
 		}
 		dvrChapterMode
 		dvrChapterIntervalSeconds
@@ -139315,6 +140510,7 @@ fragment ProcessingUsageRecordDefaultFields on ProcessingUsageRecord {
 		}
 		playbackPolicy {
 			type
+			allowedOrigins
 		}
 		dvrChapterMode
 		dvrChapterIntervalSeconds
@@ -139469,6 +140665,7 @@ fragment StorageEventDefaultFields on StorageEvent {
 		}
 		playbackPolicy {
 			type
+			allowedOrigins
 		}
 		dvrChapterMode
 		dvrChapterIntervalSeconds
@@ -139588,6 +140785,7 @@ fragment StreamEventDefaultFields on StreamEvent {
 		}
 		playbackPolicy {
 			type
+			allowedOrigins
 		}
 		dvrChapterMode
 		dvrChapterIntervalSeconds
@@ -139759,6 +140957,7 @@ fragment TrackListUpdateDefaultFields on TrackListUpdate {
 		}
 		playbackPolicy {
 			type
+			allowedOrigins
 		}
 		dvrChapterMode
 		dvrChapterIntervalSeconds
@@ -139893,6 +141092,7 @@ fragment ViewerMetricsDefaultFields on ViewerMetrics {
 		}
 		playbackPolicy {
 			type
+			allowedOrigins
 		}
 		dvrChapterMode
 		dvrChapterIntervalSeconds
@@ -140185,7 +141385,9 @@ fragment PlaybackPolicyFields on PlaybackPolicy {
 		url
 		timeoutMs
 		secretMasked
+		context
 	}
+	allowedOrigins
 }
 `
 
@@ -141375,7 +142577,9 @@ fragment PlaybackPolicyFields on PlaybackPolicy {
 		url
 		timeoutMs
 		secretMasked
+		context
 	}
+	allowedOrigins
 }
 fragment ValidationErrorFields on ValidationError {
 	__typename
@@ -142715,7 +143919,9 @@ fragment PlaybackPolicyFields on PlaybackPolicy {
 		url
 		timeoutMs
 		secretMasked
+		context
 	}
+	allowedOrigins
 }
 `
 
@@ -143052,6 +144258,8 @@ func (v *UnknownMember) implementsGraphQLInterfaceGetReviewClusterMediaConsentCh
 func (v *UnknownMember) implementsGraphQLInterfaceGetReviewMediaPlacementChangeReviewMediaPlacementChangeMediaPlacementReviewResult() {
 }
 func (v *UnknownMember) implementsGraphQLInterfaceGetVodUploadStatusVodUploadStatusVodUploadStatusResult() {
+}
+func (v *UnknownMember) implementsGraphQLInterfaceImportVodAssetImportVodAssetImportVodAssetResult() {
 }
 func (v *UnknownMember) implementsGraphQLInterfaceLinkEmailLinkEmailLinkEmailResult() {
 }

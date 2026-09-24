@@ -380,6 +380,11 @@ class ArtifactEventDefaultStreamPlaybackPolicy(BaseModel):
     gates whether the full policy is fetched at all."""
 
     type_: PlaybackPolicyType = Field(alias="type")
+    allowed_origins: list[str] = Field(
+        alias="allowedOrigins",
+        description="Sites allowed to embed the content, as normalized `scheme://host[:port]`\norigins; `*` allows any. Empty = no restriction. A browser viewer whose\nOrigin (or Referer) is not listed is denied.",
+    )
+    "Sites allowed to embed the content, as normalized `scheme://host[:port]`\norigins; `*` allows any. Empty = no restriction. A browser viewer whose\nOrigin (or Referer) is not listed is denied."
 
 
 class ArtifactEventDefaultStreamThumbnailAssets(BaseModel):
@@ -725,6 +730,11 @@ class ArtifactEventInNodeDefaultStreamPlaybackPolicy(BaseModel):
     gates whether the full policy is fetched at all."""
 
     type_: PlaybackPolicyType = Field(alias="type")
+    allowed_origins: list[str] = Field(
+        alias="allowedOrigins",
+        description="Sites allowed to embed the content, as normalized `scheme://host[:port]`\norigins; `*` allows any. Empty = no restriction. A browser viewer whose\nOrigin (or Referer) is not listed is denied.",
+    )
+    "Sites allowed to embed the content, as normalized `scheme://host[:port]`\norigins; `*` allows any. Empty = no restriction. A browser viewer whose\nOrigin (or Referer) is not listed is denied."
 
 
 class ArtifactEventInNodeDefaultStreamThumbnailAssets(BaseModel):
@@ -1071,6 +1081,11 @@ class ArtifactStateDefaultStreamPlaybackPolicy(BaseModel):
     gates whether the full policy is fetched at all."""
 
     type_: PlaybackPolicyType = Field(alias="type")
+    allowed_origins: list[str] = Field(
+        alias="allowedOrigins",
+        description="Sites allowed to embed the content, as normalized `scheme://host[:port]`\norigins; `*` allows any. Empty = no restriction. A browser viewer whose\nOrigin (or Referer) is not listed is denied.",
+    )
+    "Sites allowed to embed the content, as normalized `scheme://host[:port]`\norigins; `*` allows any. Empty = no restriction. A browser viewer whose\nOrigin (or Referer) is not listed is denied."
 
 
 class ArtifactStateDefaultStreamThumbnailAssets(BaseModel):
@@ -2668,6 +2683,11 @@ class ClientMetrics5mDefaultStreamPlaybackPolicy(BaseModel):
     gates whether the full policy is fetched at all."""
 
     type_: PlaybackPolicyType = Field(alias="type")
+    allowed_origins: list[str] = Field(
+        alias="allowedOrigins",
+        description="Sites allowed to embed the content, as normalized `scheme://host[:port]`\norigins; `*` allows any. Empty = no restriction. A browser viewer whose\nOrigin (or Referer) is not listed is denied.",
+    )
+    "Sites allowed to embed the content, as normalized `scheme://host[:port]`\norigins; `*` allows any. Empty = no restriction. A browser viewer whose\nOrigin (or Referer) is not listed is denied."
 
 
 class ClientMetrics5mDefaultStreamThumbnailAssets(BaseModel):
@@ -2740,6 +2760,11 @@ class PlaybackPolicy(BaseModel):
         description="Webhook-policy details, populated when type == WEBHOOK. Secret is masked."
     )
     "Webhook-policy details, populated when type == WEBHOOK. Secret is masked."
+    allowed_origins: list[str] = Field(
+        alias="allowedOrigins",
+        description="Sites allowed to embed the content, as normalized `scheme://host[:port]`\norigins; `*` allows any. Empty = no restriction. A browser viewer whose\nOrigin (or Referer) is not listed is denied.",
+    )
+    "Sites allowed to embed the content, as normalized `scheme://host[:port]`\norigins; `*` allows any. Empty = no restriction. A browser viewer whose\nOrigin (or Referer) is not listed is denied."
 
 
 class PlaybackPolicyJwt(BaseModel):
@@ -2791,6 +2816,10 @@ class PlaybackPolicyWebhook(BaseModel):
         description="Always 'redacted' on read; the actual secret is fieldcrypt-encrypted at rest.",
     )
     "Always 'redacted' on read; the actual secret is fieldcrypt-encrypted at rest."
+    context: Optional[Any] = Field(
+        description="Your JSON object, sent as `context` in every access request to the URL. Null when unset."
+    )
+    "Your JSON object, sent as `context` in every access request to the URL. Null when unset."
 
 
 class ThumbnailAssets(BaseModel):
@@ -3327,6 +3356,11 @@ class ClipInNodeDefaultStreamPlaybackPolicy(BaseModel):
     gates whether the full policy is fetched at all."""
 
     type_: PlaybackPolicyType = Field(alias="type")
+    allowed_origins: list[str] = Field(
+        alias="allowedOrigins",
+        description="Sites allowed to embed the content, as normalized `scheme://host[:port]`\norigins; `*` allows any. Empty = no restriction. A browser viewer whose\nOrigin (or Referer) is not listed is denied.",
+    )
+    "Sites allowed to embed the content, as normalized `scheme://host[:port]`\norigins; `*` allows any. Empty = no restriction. A browser viewer whose\nOrigin (or Referer) is not listed is denied."
 
 
 class ClipInNodeDefaultStreamThumbnailAssets(BaseModel):
@@ -3371,6 +3405,11 @@ class ClipInNodeDefaultPlaybackPolicy(BaseModel):
         description="Webhook-policy details, populated when type == WEBHOOK. Secret is masked."
     )
     "Webhook-policy details, populated when type == WEBHOOK. Secret is masked."
+    allowed_origins: list[str] = Field(
+        alias="allowedOrigins",
+        description="Sites allowed to embed the content, as normalized `scheme://host[:port]`\norigins; `*` allows any. Empty = no restriction. A browser viewer whose\nOrigin (or Referer) is not listed is denied.",
+    )
+    "Sites allowed to embed the content, as normalized `scheme://host[:port]`\norigins; `*` allows any. Empty = no restriction. A browser viewer whose\nOrigin (or Referer) is not listed is denied."
 
 
 class ClipInNodeDefaultPlaybackPolicyJwt(BaseModel):
@@ -3406,6 +3445,10 @@ class ClipInNodeDefaultPlaybackPolicyWebhook(BaseModel):
         description="Always 'redacted' on read; the actual secret is fieldcrypt-encrypted at rest.",
     )
     "Always 'redacted' on read; the actual secret is fieldcrypt-encrypted at rest."
+    context: Optional[Any] = Field(
+        description="Your JSON object, sent as `context` in every access request to the URL. Null when unset."
+    )
+    "Your JSON object, sent as `context` in every access request to the URL. Null when unset."
 
 
 class ClipInNodeDefaultThumbnailAssets(BaseModel):
@@ -4113,6 +4156,11 @@ class ConnectionEventDefaultStreamPlaybackPolicy(BaseModel):
     gates whether the full policy is fetched at all."""
 
     type_: PlaybackPolicyType = Field(alias="type")
+    allowed_origins: list[str] = Field(
+        alias="allowedOrigins",
+        description="Sites allowed to embed the content, as normalized `scheme://host[:port]`\norigins; `*` allows any. Empty = no restriction. A browser viewer whose\nOrigin (or Referer) is not listed is denied.",
+    )
+    "Sites allowed to embed the content, as normalized `scheme://host[:port]`\norigins; `*` allows any. Empty = no restriction. A browser viewer whose\nOrigin (or Referer) is not listed is denied."
 
 
 class ConnectionEventDefaultStreamThumbnailAssets(BaseModel):
@@ -4480,6 +4528,11 @@ class ConnectionEventInNodeDefaultStreamPlaybackPolicy(BaseModel):
     gates whether the full policy is fetched at all."""
 
     type_: PlaybackPolicyType = Field(alias="type")
+    allowed_origins: list[str] = Field(
+        alias="allowedOrigins",
+        description="Sites allowed to embed the content, as normalized `scheme://host[:port]`\norigins; `*` allows any. Empty = no restriction. A browser viewer whose\nOrigin (or Referer) is not listed is denied.",
+    )
+    "Sites allowed to embed the content, as normalized `scheme://host[:port]`\norigins; `*` allows any. Empty = no restriction. A browser viewer whose\nOrigin (or Referer) is not listed is denied."
 
 
 class ConnectionEventInNodeDefaultStreamThumbnailAssets(BaseModel):
@@ -5553,6 +5606,11 @@ class GeographicDistributionDefaultStreamPlaybackPolicy(BaseModel):
     gates whether the full policy is fetched at all."""
 
     type_: PlaybackPolicyType = Field(alias="type")
+    allowed_origins: list[str] = Field(
+        alias="allowedOrigins",
+        description="Sites allowed to embed the content, as normalized `scheme://host[:port]`\norigins; `*` allows any. Empty = no restriction. A browser viewer whose\nOrigin (or Referer) is not listed is denied.",
+    )
+    "Sites allowed to embed the content, as normalized `scheme://host[:port]`\norigins; `*` allows any. Empty = no restriction. A browser viewer whose\nOrigin (or Referer) is not listed is denied."
 
 
 class GeographicDistributionDefaultStreamThumbnailAssets(BaseModel):
@@ -7726,6 +7784,11 @@ class ProcessingUsageRecordDefaultStreamPlaybackPolicy(BaseModel):
     gates whether the full policy is fetched at all."""
 
     type_: PlaybackPolicyType = Field(alias="type")
+    allowed_origins: list[str] = Field(
+        alias="allowedOrigins",
+        description="Sites allowed to embed the content, as normalized `scheme://host[:port]`\norigins; `*` allows any. Empty = no restriction. A browser viewer whose\nOrigin (or Referer) is not listed is denied.",
+    )
+    "Sites allowed to embed the content, as normalized `scheme://host[:port]`\norigins; `*` allows any. Empty = no restriction. A browser viewer whose\nOrigin (or Referer) is not listed is denied."
 
 
 class ProcessingUsageRecordDefaultStreamThumbnailAssets(BaseModel):
@@ -8114,6 +8177,11 @@ class ProcessingUsageRecordInNodeDefaultStreamPlaybackPolicy(BaseModel):
     gates whether the full policy is fetched at all."""
 
     type_: PlaybackPolicyType = Field(alias="type")
+    allowed_origins: list[str] = Field(
+        alias="allowedOrigins",
+        description="Sites allowed to embed the content, as normalized `scheme://host[:port]`\norigins; `*` allows any. Empty = no restriction. A browser viewer whose\nOrigin (or Referer) is not listed is denied.",
+    )
+    "Sites allowed to embed the content, as normalized `scheme://host[:port]`\norigins; `*` allows any. Empty = no restriction. A browser viewer whose\nOrigin (or Referer) is not listed is denied."
 
 
 class ProcessingUsageRecordInNodeDefaultStreamThumbnailAssets(BaseModel):
@@ -8534,6 +8602,11 @@ class QualityTierDailyDefaultStreamPlaybackPolicy(BaseModel):
     gates whether the full policy is fetched at all."""
 
     type_: PlaybackPolicyType = Field(alias="type")
+    allowed_origins: list[str] = Field(
+        alias="allowedOrigins",
+        description="Sites allowed to embed the content, as normalized `scheme://host[:port]`\norigins; `*` allows any. Empty = no restriction. A browser viewer whose\nOrigin (or Referer) is not listed is denied.",
+    )
+    "Sites allowed to embed the content, as normalized `scheme://host[:port]`\norigins; `*` allows any. Empty = no restriction. A browser viewer whose\nOrigin (or Referer) is not listed is denied."
 
 
 class QualityTierDailyDefaultStreamThumbnailAssets(BaseModel):
@@ -8882,6 +8955,11 @@ class RebufferingEventDefaultStreamPlaybackPolicy(BaseModel):
     gates whether the full policy is fetched at all."""
 
     type_: PlaybackPolicyType = Field(alias="type")
+    allowed_origins: list[str] = Field(
+        alias="allowedOrigins",
+        description="Sites allowed to embed the content, as normalized `scheme://host[:port]`\norigins; `*` allows any. Empty = no restriction. A browser viewer whose\nOrigin (or Referer) is not listed is denied.",
+    )
+    "Sites allowed to embed the content, as normalized `scheme://host[:port]`\norigins; `*` allows any. Empty = no restriction. A browser viewer whose\nOrigin (or Referer) is not listed is denied."
 
 
 class RebufferingEventDefaultStreamThumbnailAssets(BaseModel):
@@ -9256,6 +9334,11 @@ class RoutingEventDefaultStreamPlaybackPolicy(BaseModel):
     gates whether the full policy is fetched at all."""
 
     type_: PlaybackPolicyType = Field(alias="type")
+    allowed_origins: list[str] = Field(
+        alias="allowedOrigins",
+        description="Sites allowed to embed the content, as normalized `scheme://host[:port]`\norigins; `*` allows any. Empty = no restriction. A browser viewer whose\nOrigin (or Referer) is not listed is denied.",
+    )
+    "Sites allowed to embed the content, as normalized `scheme://host[:port]`\norigins; `*` allows any. Empty = no restriction. A browser viewer whose\nOrigin (or Referer) is not listed is denied."
 
 
 class RoutingEventDefaultStreamThumbnailAssets(BaseModel):
@@ -9905,6 +9988,11 @@ class StorageEventDefaultStreamPlaybackPolicy(BaseModel):
     gates whether the full policy is fetched at all."""
 
     type_: PlaybackPolicyType = Field(alias="type")
+    allowed_origins: list[str] = Field(
+        alias="allowedOrigins",
+        description="Sites allowed to embed the content, as normalized `scheme://host[:port]`\norigins; `*` allows any. Empty = no restriction. A browser viewer whose\nOrigin (or Referer) is not listed is denied.",
+    )
+    "Sites allowed to embed the content, as normalized `scheme://host[:port]`\norigins; `*` allows any. Empty = no restriction. A browser viewer whose\nOrigin (or Referer) is not listed is denied."
 
 
 class StorageEventDefaultStreamThumbnailAssets(BaseModel):
@@ -10251,6 +10339,11 @@ class StorageEventInNodeDefaultStreamPlaybackPolicy(BaseModel):
     gates whether the full policy is fetched at all."""
 
     type_: PlaybackPolicyType = Field(alias="type")
+    allowed_origins: list[str] = Field(
+        alias="allowedOrigins",
+        description="Sites allowed to embed the content, as normalized `scheme://host[:port]`\norigins; `*` allows any. Empty = no restriction. A browser viewer whose\nOrigin (or Referer) is not listed is denied.",
+    )
+    "Sites allowed to embed the content, as normalized `scheme://host[:port]`\norigins; `*` allows any. Empty = no restriction. A browser viewer whose\nOrigin (or Referer) is not listed is denied."
 
 
 class StorageEventInNodeDefaultStreamThumbnailAssets(BaseModel):
@@ -10606,6 +10699,11 @@ class StreamAnalyticsDailyDefaultStreamPlaybackPolicy(BaseModel):
     gates whether the full policy is fetched at all."""
 
     type_: PlaybackPolicyType = Field(alias="type")
+    allowed_origins: list[str] = Field(
+        alias="allowedOrigins",
+        description="Sites allowed to embed the content, as normalized `scheme://host[:port]`\norigins; `*` allows any. Empty = no restriction. A browser viewer whose\nOrigin (or Referer) is not listed is denied.",
+    )
+    "Sites allowed to embed the content, as normalized `scheme://host[:port]`\norigins; `*` allows any. Empty = no restriction. A browser viewer whose\nOrigin (or Referer) is not listed is denied."
 
 
 class StreamAnalyticsDailyDefaultStreamThumbnailAssets(BaseModel):
@@ -10978,6 +11076,11 @@ class StreamAnalyticsSummaryDefaultStreamPlaybackPolicy(BaseModel):
     gates whether the full policy is fetched at all."""
 
     type_: PlaybackPolicyType = Field(alias="type")
+    allowed_origins: list[str] = Field(
+        alias="allowedOrigins",
+        description="Sites allowed to embed the content, as normalized `scheme://host[:port]`\norigins; `*` allows any. Empty = no restriction. A browser viewer whose\nOrigin (or Referer) is not listed is denied.",
+    )
+    "Sites allowed to embed the content, as normalized `scheme://host[:port]`\norigins; `*` allows any. Empty = no restriction. A browser viewer whose\nOrigin (or Referer) is not listed is denied."
 
 
 class StreamAnalyticsSummaryDefaultStreamThumbnailAssets(BaseModel):
@@ -11340,6 +11443,11 @@ class StreamConnectionHourlyDefaultStreamPlaybackPolicy(BaseModel):
     gates whether the full policy is fetched at all."""
 
     type_: PlaybackPolicyType = Field(alias="type")
+    allowed_origins: list[str] = Field(
+        alias="allowedOrigins",
+        description="Sites allowed to embed the content, as normalized `scheme://host[:port]`\norigins; `*` allows any. Empty = no restriction. A browser viewer whose\nOrigin (or Referer) is not listed is denied.",
+    )
+    "Sites allowed to embed the content, as normalized `scheme://host[:port]`\norigins; `*` allows any. Empty = no restriction. A browser viewer whose\nOrigin (or Referer) is not listed is denied."
 
 
 class StreamConnectionHourlyDefaultStreamThumbnailAssets(BaseModel):
@@ -11703,6 +11811,11 @@ class StreamEventDefaultStreamPlaybackPolicy(BaseModel):
     gates whether the full policy is fetched at all."""
 
     type_: PlaybackPolicyType = Field(alias="type")
+    allowed_origins: list[str] = Field(
+        alias="allowedOrigins",
+        description="Sites allowed to embed the content, as normalized `scheme://host[:port]`\norigins; `*` allows any. Empty = no restriction. A browser viewer whose\nOrigin (or Referer) is not listed is denied.",
+    )
+    "Sites allowed to embed the content, as normalized `scheme://host[:port]`\norigins; `*` allows any. Empty = no restriction. A browser viewer whose\nOrigin (or Referer) is not listed is denied."
 
 
 class StreamEventDefaultStreamThumbnailAssets(BaseModel):
@@ -12068,6 +12181,11 @@ class StreamEventInNodeDefaultStreamPlaybackPolicy(BaseModel):
     gates whether the full policy is fetched at all."""
 
     type_: PlaybackPolicyType = Field(alias="type")
+    allowed_origins: list[str] = Field(
+        alias="allowedOrigins",
+        description="Sites allowed to embed the content, as normalized `scheme://host[:port]`\norigins; `*` allows any. Empty = no restriction. A browser viewer whose\nOrigin (or Referer) is not listed is denied.",
+    )
+    "Sites allowed to embed the content, as normalized `scheme://host[:port]`\norigins; `*` allows any. Empty = no restriction. A browser viewer whose\nOrigin (or Referer) is not listed is denied."
 
 
 class StreamEventInNodeDefaultStreamThumbnailAssets(BaseModel):
@@ -12585,6 +12703,11 @@ class StreamHealthMetricDefaultStreamPlaybackPolicy(BaseModel):
     gates whether the full policy is fetched at all."""
 
     type_: PlaybackPolicyType = Field(alias="type")
+    allowed_origins: list[str] = Field(
+        alias="allowedOrigins",
+        description="Sites allowed to embed the content, as normalized `scheme://host[:port]`\norigins; `*` allows any. Empty = no restriction. A browser viewer whose\nOrigin (or Referer) is not listed is denied.",
+    )
+    "Sites allowed to embed the content, as normalized `scheme://host[:port]`\norigins; `*` allows any. Empty = no restriction. A browser viewer whose\nOrigin (or Referer) is not listed is denied."
 
 
 class StreamHealthMetricDefaultStreamThumbnailAssets(BaseModel):
@@ -12948,6 +13071,11 @@ class StreamHealthMetricInNodeDefaultStreamPlaybackPolicy(BaseModel):
     gates whether the full policy is fetched at all."""
 
     type_: PlaybackPolicyType = Field(alias="type")
+    allowed_origins: list[str] = Field(
+        alias="allowedOrigins",
+        description="Sites allowed to embed the content, as normalized `scheme://host[:port]`\norigins; `*` allows any. Empty = no restriction. A browser viewer whose\nOrigin (or Referer) is not listed is denied.",
+    )
+    "Sites allowed to embed the content, as normalized `scheme://host[:port]`\norigins; `*` allows any. Empty = no restriction. A browser viewer whose\nOrigin (or Referer) is not listed is denied."
 
 
 class StreamHealthMetricInNodeDefaultStreamThumbnailAssets(BaseModel):
@@ -13303,6 +13431,11 @@ class StreamInNodeDefaultPlaybackPolicy(BaseModel):
         description="Webhook-policy details, populated when type == WEBHOOK. Secret is masked."
     )
     "Webhook-policy details, populated when type == WEBHOOK. Secret is masked."
+    allowed_origins: list[str] = Field(
+        alias="allowedOrigins",
+        description="Sites allowed to embed the content, as normalized `scheme://host[:port]`\norigins; `*` allows any. Empty = no restriction. A browser viewer whose\nOrigin (or Referer) is not listed is denied.",
+    )
+    "Sites allowed to embed the content, as normalized `scheme://host[:port]`\norigins; `*` allows any. Empty = no restriction. A browser viewer whose\nOrigin (or Referer) is not listed is denied."
 
 
 class StreamInNodeDefaultPlaybackPolicyJwt(BaseModel):
@@ -13338,6 +13471,10 @@ class StreamInNodeDefaultPlaybackPolicyWebhook(BaseModel):
         description="Always 'redacted' on read; the actual secret is fieldcrypt-encrypted at rest.",
     )
     "Always 'redacted' on read; the actual secret is fieldcrypt-encrypted at rest."
+    context: Optional[Any] = Field(
+        description="Your JSON object, sent as `context` in every access request to the URL. Null when unset."
+    )
+    "Your JSON object, sent as `context` in every access request to the URL. Null when unset."
 
 
 class StreamInNodeDefaultThumbnailAssets(BaseModel):
@@ -14629,6 +14766,11 @@ class TrackListEventDefaultStreamPlaybackPolicy(BaseModel):
     gates whether the full policy is fetched at all."""
 
     type_: PlaybackPolicyType = Field(alias="type")
+    allowed_origins: list[str] = Field(
+        alias="allowedOrigins",
+        description="Sites allowed to embed the content, as normalized `scheme://host[:port]`\norigins; `*` allows any. Empty = no restriction. A browser viewer whose\nOrigin (or Referer) is not listed is denied.",
+    )
+    "Sites allowed to embed the content, as normalized `scheme://host[:port]`\norigins; `*` allows any. Empty = no restriction. A browser viewer whose\nOrigin (or Referer) is not listed is denied."
 
 
 class TrackListEventDefaultStreamThumbnailAssets(BaseModel):
@@ -14985,6 +15127,11 @@ class TrackListEventInNodeDefaultStreamPlaybackPolicy(BaseModel):
     gates whether the full policy is fetched at all."""
 
     type_: PlaybackPolicyType = Field(alias="type")
+    allowed_origins: list[str] = Field(
+        alias="allowedOrigins",
+        description="Sites allowed to embed the content, as normalized `scheme://host[:port]`\norigins; `*` allows any. Empty = no restriction. A browser viewer whose\nOrigin (or Referer) is not listed is denied.",
+    )
+    "Sites allowed to embed the content, as normalized `scheme://host[:port]`\norigins; `*` allows any. Empty = no restriction. A browser viewer whose\nOrigin (or Referer) is not listed is denied."
 
 
 class TrackListEventInNodeDefaultStreamThumbnailAssets(BaseModel):
@@ -15345,6 +15492,11 @@ class TrackListUpdateDefaultStreamPlaybackPolicy(BaseModel):
     gates whether the full policy is fetched at all."""
 
     type_: PlaybackPolicyType = Field(alias="type")
+    allowed_origins: list[str] = Field(
+        alias="allowedOrigins",
+        description="Sites allowed to embed the content, as normalized `scheme://host[:port]`\norigins; `*` allows any. Empty = no restriction. A browser viewer whose\nOrigin (or Referer) is not listed is denied.",
+    )
+    "Sites allowed to embed the content, as normalized `scheme://host[:port]`\norigins; `*` allows any. Empty = no restriction. A browser viewer whose\nOrigin (or Referer) is not listed is denied."
 
 
 class TrackListUpdateDefaultStreamThumbnailAssets(BaseModel):
@@ -15708,6 +15860,11 @@ class ViewerCountBucketDefaultStreamPlaybackPolicy(BaseModel):
     gates whether the full policy is fetched at all."""
 
     type_: PlaybackPolicyType = Field(alias="type")
+    allowed_origins: list[str] = Field(
+        alias="allowedOrigins",
+        description="Sites allowed to embed the content, as normalized `scheme://host[:port]`\norigins; `*` allows any. Empty = no restriction. A browser viewer whose\nOrigin (or Referer) is not listed is denied.",
+    )
+    "Sites allowed to embed the content, as normalized `scheme://host[:port]`\norigins; `*` allows any. Empty = no restriction. A browser viewer whose\nOrigin (or Referer) is not listed is denied."
 
 
 class ViewerCountBucketDefaultStreamThumbnailAssets(BaseModel):
@@ -16078,6 +16235,11 @@ class ViewerGeographicDefaultStreamPlaybackPolicy(BaseModel):
     gates whether the full policy is fetched at all."""
 
     type_: PlaybackPolicyType = Field(alias="type")
+    allowed_origins: list[str] = Field(
+        alias="allowedOrigins",
+        description="Sites allowed to embed the content, as normalized `scheme://host[:port]`\norigins; `*` allows any. Empty = no restriction. A browser viewer whose\nOrigin (or Referer) is not listed is denied.",
+    )
+    "Sites allowed to embed the content, as normalized `scheme://host[:port]`\norigins; `*` allows any. Empty = no restriction. A browser viewer whose\nOrigin (or Referer) is not listed is denied."
 
 
 class ViewerGeographicDefaultStreamThumbnailAssets(BaseModel):
@@ -16415,6 +16577,11 @@ class ViewerHoursHourlyDefaultStreamPlaybackPolicy(BaseModel):
     gates whether the full policy is fetched at all."""
 
     type_: PlaybackPolicyType = Field(alias="type")
+    allowed_origins: list[str] = Field(
+        alias="allowedOrigins",
+        description="Sites allowed to embed the content, as normalized `scheme://host[:port]`\norigins; `*` allows any. Empty = no restriction. A browser viewer whose\nOrigin (or Referer) is not listed is denied.",
+    )
+    "Sites allowed to embed the content, as normalized `scheme://host[:port]`\norigins; `*` allows any. Empty = no restriction. A browser viewer whose\nOrigin (or Referer) is not listed is denied."
 
 
 class ViewerHoursHourlyDefaultStreamThumbnailAssets(BaseModel):
@@ -16760,6 +16927,11 @@ class ViewerHoursHourlyInNodeDefaultStreamPlaybackPolicy(BaseModel):
     gates whether the full policy is fetched at all."""
 
     type_: PlaybackPolicyType = Field(alias="type")
+    allowed_origins: list[str] = Field(
+        alias="allowedOrigins",
+        description="Sites allowed to embed the content, as normalized `scheme://host[:port]`\norigins; `*` allows any. Empty = no restriction. A browser viewer whose\nOrigin (or Referer) is not listed is denied.",
+    )
+    "Sites allowed to embed the content, as normalized `scheme://host[:port]`\norigins; `*` allows any. Empty = no restriction. A browser viewer whose\nOrigin (or Referer) is not listed is denied."
 
 
 class ViewerHoursHourlyInNodeDefaultStreamThumbnailAssets(BaseModel):
@@ -17108,6 +17280,11 @@ class ViewerMetricsDefaultStreamPlaybackPolicy(BaseModel):
     gates whether the full policy is fetched at all."""
 
     type_: PlaybackPolicyType = Field(alias="type")
+    allowed_origins: list[str] = Field(
+        alias="allowedOrigins",
+        description="Sites allowed to embed the content, as normalized `scheme://host[:port]`\norigins; `*` allows any. Empty = no restriction. A browser viewer whose\nOrigin (or Referer) is not listed is denied.",
+    )
+    "Sites allowed to embed the content, as normalized `scheme://host[:port]`\norigins; `*` allows any. Empty = no restriction. A browser viewer whose\nOrigin (or Referer) is not listed is denied."
 
 
 class ViewerMetricsDefaultStreamThumbnailAssets(BaseModel):
@@ -17456,6 +17633,11 @@ class ViewerSessionDefaultStreamPlaybackPolicy(BaseModel):
     gates whether the full policy is fetched at all."""
 
     type_: PlaybackPolicyType = Field(alias="type")
+    allowed_origins: list[str] = Field(
+        alias="allowedOrigins",
+        description="Sites allowed to embed the content, as normalized `scheme://host[:port]`\norigins; `*` allows any. Empty = no restriction. A browser viewer whose\nOrigin (or Referer) is not listed is denied.",
+    )
+    "Sites allowed to embed the content, as normalized `scheme://host[:port]`\norigins; `*` allows any. Empty = no restriction. A browser viewer whose\nOrigin (or Referer) is not listed is denied."
 
 
 class ViewerSessionDefaultStreamThumbnailAssets(BaseModel):
@@ -17811,6 +17993,11 @@ class ViewerSessionInNodeDefaultStreamPlaybackPolicy(BaseModel):
     gates whether the full policy is fetched at all."""
 
     type_: PlaybackPolicyType = Field(alias="type")
+    allowed_origins: list[str] = Field(
+        alias="allowedOrigins",
+        description="Sites allowed to embed the content, as normalized `scheme://host[:port]`\norigins; `*` allows any. Empty = no restriction. A browser viewer whose\nOrigin (or Referer) is not listed is denied.",
+    )
+    "Sites allowed to embed the content, as normalized `scheme://host[:port]`\norigins; `*` allows any. Empty = no restriction. A browser viewer whose\nOrigin (or Referer) is not listed is denied."
 
 
 class ViewerSessionInNodeDefaultStreamThumbnailAssets(BaseModel):
@@ -18110,6 +18297,11 @@ class VodAssetInNodeDefaultPlaybackPolicy(BaseModel):
         description="Webhook-policy details, populated when type == WEBHOOK. Secret is masked."
     )
     "Webhook-policy details, populated when type == WEBHOOK. Secret is masked."
+    allowed_origins: list[str] = Field(
+        alias="allowedOrigins",
+        description="Sites allowed to embed the content, as normalized `scheme://host[:port]`\norigins; `*` allows any. Empty = no restriction. A browser viewer whose\nOrigin (or Referer) is not listed is denied.",
+    )
+    "Sites allowed to embed the content, as normalized `scheme://host[:port]`\norigins; `*` allows any. Empty = no restriction. A browser viewer whose\nOrigin (or Referer) is not listed is denied."
 
 
 class VodAssetInNodeDefaultPlaybackPolicyJwt(BaseModel):
@@ -18145,6 +18337,10 @@ class VodAssetInNodeDefaultPlaybackPolicyWebhook(BaseModel):
         description="Always 'redacted' on read; the actual secret is fieldcrypt-encrypted at rest.",
     )
     "Always 'redacted' on read; the actual secret is fieldcrypt-encrypted at rest."
+    context: Optional[Any] = Field(
+        description="Your JSON object, sent as `context` in every access request to the URL. Null when unset."
+    )
+    "Your JSON object, sent as `context` in every access request to the URL. Null when unset."
 
 
 class VodAssetInNodeDefaultThumbnailAssets(BaseModel):

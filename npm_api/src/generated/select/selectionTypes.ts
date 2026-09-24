@@ -1095,6 +1095,16 @@ export const scalarFields = {
         "totalViewers",
         "__typename"
     ],
+    "ImportVodAssetInput": [
+        "url",
+        "filename",
+        "title",
+        "description",
+        "__typename"
+    ],
+    "ImportVodAssetResult": [
+        "__typename"
+    ],
     "Incident": [
         "id",
         "scope",
@@ -2142,10 +2152,12 @@ export const scalarFields = {
     ],
     "PlaybackPolicy": [
         "type",
+        "allowedOrigins",
         "__typename"
     ],
     "PlaybackPolicyInput": [
         "type",
+        "allowedOrigins",
         "__typename"
     ],
     "PlaybackTrack": [
@@ -2162,12 +2174,14 @@ export const scalarFields = {
         "url",
         "timeoutMs",
         "secretMasked",
+        "context",
         "__typename"
     ],
     "PlaybackWebhookPolicyInput": [
         "url",
         "secret",
         "timeoutMs",
+        "context",
         "__typename"
     ],
     "PlayerBootSummary": [
@@ -2446,6 +2460,12 @@ export const scalarFields = {
     "RecordingRetentionCap": [
         "capped",
         "maxDays",
+        "__typename"
+    ],
+    "RecordingStarted": [
+        "__typename"
+    ],
+    "RecordingStopped": [
         "__typename"
     ],
     "ReplayWebhookDeliveriesResult": [
@@ -2992,6 +3012,7 @@ export const scalarFields = {
     "StreamConnected": [
         "streamId",
         "protocol",
+        "playbackId",
         "__typename"
     ],
     "StreamConnectionHourly": [
@@ -3150,6 +3171,7 @@ export const scalarFields = {
     ],
     "StreamIdle": [
         "streamId",
+        "playbackId",
         "__typename"
     ],
     "StreamKey": [
@@ -3176,6 +3198,7 @@ export const scalarFields = {
     ],
     "StreamLive": [
         "streamId",
+        "playbackId",
         "__typename"
     ],
     "StreamMetrics": [
@@ -3401,6 +3424,8 @@ export const scalarFields = {
         "connector",
         "sessionId",
         "fireWebhook",
+        "origin",
+        "referer",
         "__typename"
     ],
     "TestPlaybackAccessResult": [
@@ -3988,6 +4013,7 @@ export interface PossibleTypes {
     DeleteVodAssetResult: 'AuthError' | 'DeleteSuccess' | 'NotFoundError'
     DeleteWebhookEndpointResult: 'AuthError' | 'DeleteSuccess' | 'NotFoundError'
     Error: 'AuthError' | 'NotFoundError' | 'RateLimitError' | 'ValidationError'
+    ImportVodAssetResult: 'AuthError' | 'ValidationError' | 'VodAsset'
     IncidentMutationResult: 'AuthError' | 'Incident' | 'NotFoundError' | 'ValidationError'
     LinkEmailResult: 'AuthError' | 'LinkEmailPayload' | 'ValidationError'
     LinkWalletResult: 'AuthError' | 'ValidationError' | 'WalletIdentity'
@@ -4003,7 +4029,7 @@ export interface PossibleTypes {
     Node: 'APIUsageRecord' | 'ArtifactEvent' | 'BufferEvent' | 'ClientMetrics5m' | 'Clip' | 'Cluster' | 'ConnectionEvent' | 'Conversation' | 'InfrastructureNode' | 'Message' | 'NodeMetric' | 'NodeMetricHourly' | 'NodePerformance5m' | 'ProcessingUsageRecord' | 'QualityTierDaily' | 'SigningKey' | 'StorageEvent' | 'StorageUsageRecord' | 'Stream' | 'StreamAnalyticsDaily' | 'StreamConnectionHourly' | 'StreamEvent' | 'StreamHealth5m' | 'StreamHealthMetric' | 'TenantDailyStat' | 'TrackListEvent' | 'ViewerGeoHourly' | 'ViewerHoursHourly' | 'ViewerSession' | 'VodAsset'
     OpenMistAdminSessionResult: 'AuthError' | 'MistAdminSession' | 'NotFoundError' | 'ValidationError'
     PromoteToPaidResult: 'AuthError' | 'PromoteToPaidPayload' | 'ValidationError'
-    PublicEventData: 'AccountSuspended' | 'ApiTokenCreated' | 'ApiTokenRevoked' | 'BillingDetailsUpdated' | 'ClipFailed' | 'ClipReady' | 'ClipRequested' | 'CustomDomainFailed' | 'CustomDomainVerified' | 'InvoiceCreated' | 'InvoicePaid' | 'MultistreamStatusChanged' | 'PaymentFailed' | 'RecordingFailed' | 'RecordingReady' | 'StreamConnected' | 'StreamCreated' | 'StreamDeleted' | 'StreamIdle' | 'StreamKeyRotated' | 'StreamLive' | 'StreamUpdated' | 'TopupCredited' | 'UploadAborted' | 'UploadCompleted' | 'UploadCreated' | 'UploadFailed' | 'UploadReady'
+    PublicEventData: 'AccountSuspended' | 'ApiTokenCreated' | 'ApiTokenRevoked' | 'BillingDetailsUpdated' | 'ClipFailed' | 'ClipReady' | 'ClipRequested' | 'CustomDomainFailed' | 'CustomDomainVerified' | 'InvoiceCreated' | 'InvoicePaid' | 'MultistreamStatusChanged' | 'PaymentFailed' | 'RecordingFailed' | 'RecordingReady' | 'RecordingStarted' | 'RecordingStopped' | 'StreamConnected' | 'StreamCreated' | 'StreamDeleted' | 'StreamIdle' | 'StreamKeyRotated' | 'StreamLive' | 'StreamUpdated' | 'TopupCredited' | 'UploadAborted' | 'UploadCompleted' | 'UploadCreated' | 'UploadFailed' | 'UploadReady'
     ReplayWebhookDeliveriesResult: 'AuthError' | 'NotFoundError' | 'ValidationError' | 'WebhookReplayResult'
     ReplayWebhookDeliveryResult: 'AuthError' | 'NotFoundError' | 'ValidationError' | 'WebhookDelivery'
     RevokeClusterInviteResult: 'AuthError' | 'DeleteSuccess' | 'NotFoundError'

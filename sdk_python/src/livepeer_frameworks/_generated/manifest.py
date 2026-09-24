@@ -176,6 +176,7 @@ OPERATIONS: Final[dict[str, OperationInfo]] = {
     "GetWebhookEndpoint": {"kind": "query", "since": "v0.3.11"},
     "GetWebhookEndpointsConnection": {"kind": "query", "since": "v0.3.11"},
     "GetWebhookEventTypes": {"kind": "query", "since": "v0.3.11"},
+    "ImportVodAsset": {"kind": "mutation", "since": "v0.3.11"},
     "LinkEmail": {"kind": "mutation", "since": "v0.3.11"},
     "LinkWallet": {"kind": "mutation", "since": "v0.3.11"},
     "ListArtifacts": {"kind": "query", "since": "v0.3.11"},

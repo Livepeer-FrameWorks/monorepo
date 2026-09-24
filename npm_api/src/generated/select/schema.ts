@@ -1821,6 +1821,8 @@ export interface GeographicDistribution {
     __typename: 'GeographicDistribution'
 }
 
+export type ImportVodAssetResult = (VodAsset | ValidationError | AuthError) & { __isUnion?: true }
+
 export interface Incident {
     id: Scalars['ID']
     scope: IncidentScope
@@ -2869,6 +2871,13 @@ export interface Mutation {
      */
     createVodUpload: CreateVodUploadResult
     /**
+     * Import a video from a public https or http URL as a VOD asset. The processing
+     * node reads the file from the URL and processes it like an upload; the asset
+     * reports PROCESSING until it is ready. Progress arrives as upload.created,
+     * upload.completed, and upload.ready or upload.failed events.
+     */
+    importVodAsset: ImportVodAssetResult
+    /**
      * Complete a VOD upload after all parts are uploaded.
      * Triggers processing and thumbnail generation.
      */
@@ -3737,6 +3746,12 @@ export interface PlaybackPolicy {
     jwt: (PlaybackJwtPolicy | null)
     /** Webhook-policy details, populated when type == WEBHOOK. Secret is masked. */
     webhook: (PlaybackWebhookPolicy | null)
+    /**
+     * Sites allowed to embed the content, as normalized `scheme://host[:port]`
+     * origins; `*` allows any. Empty = no restriction. A browser viewer whose
+     * Origin (or Referer) is not listed is denied.
+     */
+    allowedOrigins: Scalars['String'][]
     __typename: 'PlaybackPolicy'
 }
 
@@ -3765,6 +3780,8 @@ export interface PlaybackWebhookPolicy {
     timeoutMs: Scalars['Int']
     /** Always 'redacted' on read; the actual secret is fieldcrypt-encrypted at rest. */
     secretMasked: Scalars['String']
+    /** Your JSON object, sent as `context` in every access request to the URL. Null when unset. */
+    context: (Scalars['JSON'] | null)
     __typename: 'PlaybackWebhookPolicy'
 }
 
@@ -3999,7 +4016,7 @@ export interface PublicEvent {
  * name can have different types across members (reason is a different enum per
  * event family); alias them when one selection covers several.
  */
-export type PublicEventData = (AccountSuspended | ApiTokenCreated | ApiTokenRevoked | BillingDetailsUpdated | InvoiceCreated | InvoicePaid | PaymentFailed | TopupCredited | ClipFailed | ClipReady | ClipRequested | CustomDomainFailed | CustomDomainVerified | MultistreamStatusChanged | RecordingFailed | RecordingReady | StreamConnected | StreamCreated | StreamDeleted | StreamIdle | StreamKeyRotated | StreamLive | StreamUpdated | UploadAborted | UploadCompleted | UploadCreated | UploadFailed | UploadReady) & { __isUnion?: true }
+export type PublicEventData = (AccountSuspended | ApiTokenCreated | ApiTokenRevoked | BillingDetailsUpdated | InvoiceCreated | InvoicePaid | PaymentFailed | TopupCredited | ClipFailed | ClipReady | ClipRequested | CustomDomainFailed | CustomDomainVerified | MultistreamStatusChanged | RecordingFailed | RecordingReady | RecordingStarted | RecordingStopped | StreamConnected | StreamCreated | StreamDeleted | StreamIdle | StreamKeyRotated | StreamLive | StreamUpdated | UploadAborted | UploadCompleted | UploadCreated | UploadFailed | UploadReady) & { __isUnion?: true }
 
 
 /**
@@ -4460,6 +4477,20 @@ export interface RecordingRetentionCap {
     /** Maximum retention in days when capped. */
     maxDays: (Scalars['Int'] | null)
     __typename: 'RecordingRetentionCap'
+}
+
+
+/** `recording.started` event. Aggregate: `artifacts`. */
+export interface RecordingStarted {
+    artifact: (EventArtifact | null)
+    __typename: 'RecordingStarted'
+}
+
+
+/** `recording.stopped` event. Aggregate: `artifacts`. */
+export interface RecordingStopped {
+    artifact: (EventArtifact | null)
+    __typename: 'RecordingStopped'
 }
 
 export type ReplayWebhookDeliveriesResult = (WebhookReplayResult | ValidationError | NotFoundError | AuthError) & { __isUnion?: true }
@@ -5185,6 +5216,7 @@ export interface StreamAnalyticsSummaryEdge {
 export interface StreamConnected {
     streamId: Scalars['ID']
     protocol: EventIngestProtocol
+    playbackId: Scalars['ID']
     __typename: 'StreamConnected'
 }
 
@@ -5392,6 +5424,7 @@ export interface StreamHealthSummary {
 /** `stream.idle` event. Aggregate: `streams`. */
 export interface StreamIdle {
     streamId: Scalars['ID']
+    playbackId: Scalars['ID']
     __typename: 'StreamIdle'
 }
 
@@ -5432,6 +5465,7 @@ export interface StreamKeysConnection {
 /** `stream.live` event. Aggregate: `streams`. */
 export interface StreamLive {
     streamId: Scalars['ID']
+    playbackId: Scalars['ID']
     __typename: 'StreamLive'
 }
 
@@ -8362,11 +8396,6 @@ export interface CreateStreamResultGenqlSelection{
     __typename?: boolean | number
 }
 
-
-/**
- * Input for initiating a multipart VOD upload.
- * Returns presigned S3 URLs for uploading file parts.
- */
 export interface CreateVodUploadInput {
 /** Original filename (for metadata and content-type detection). */
 filename: Scalars['String'],
@@ -8925,6 +8954,36 @@ export interface GeographicDistributionGenqlSelection{
     viewersByCountry?: CountryTimeSeriesGenqlSelection
     __typename?: boolean | number
     __scalar?: boolean | number
+}
+
+
+/**
+ * Input for initiating a multipart VOD upload.
+ * Returns presigned S3 URLs for uploading file parts.
+ */
+export interface ImportVodAssetInput {
+/**
+ * Source URL, https or http. It must be publicly reachable and support HTTP
+ * range requests; private and internal addresses are refused.
+ */
+url: Scalars['String'],
+/**
+ * Filename to store the video under. Required when the URL path does not end
+ * in a supported video extension (mp4, mov, mkv, webm, ts).
+ */
+filename?: (Scalars['String'] | null),
+/** Optional display title for the asset. */
+title?: (Scalars['String'] | null),
+/** Optional description for the asset. */
+description?: (Scalars['String'] | null)}
+
+export interface ImportVodAssetResultGenqlSelection{
+    on_VodAsset?:VodAssetGenqlSelection,
+    on_ValidationError?:ValidationErrorGenqlSelection,
+    on_AuthError?:AuthErrorGenqlSelection,
+    on_Node?: NodeGenqlSelection,
+    on_Error?: ErrorGenqlSelection,
+    __typename?: boolean | number
 }
 
 export interface IncidentGenqlSelection{
@@ -10124,6 +10183,15 @@ export interface MutationGenqlSelection{
     /** Upload configuration. */
     input: CreateVodUploadInput} })
     /**
+     * Import a video from a public https or http URL as a VOD asset. The processing
+     * node reads the file from the URL and processes it like an upload; the asset
+     * reports PROCESSING until it is ready. Progress arrives as upload.created,
+     * upload.completed, and upload.ready or upload.failed events.
+     */
+    importVodAsset?: (ImportVodAssetResultGenqlSelection & { __args: {
+    /** Import source and asset details. */
+    input: ImportVodAssetInput} })
+    /**
      * Complete a VOD upload after all parts are uploaded.
      * Triggers processing and thumbnail generation.
      */
@@ -11196,6 +11264,12 @@ export interface PlaybackPolicyGenqlSelection{
     jwt?: PlaybackJwtPolicyGenqlSelection
     /** Webhook-policy details, populated when type == WEBHOOK. Secret is masked. */
     webhook?: PlaybackWebhookPolicyGenqlSelection
+    /**
+     * Sites allowed to embed the content, as normalized `scheme://host[:port]`
+     * origins; `*` allows any. Empty = no restriction. A browser viewer whose
+     * Origin (or Referer) is not listed is denied.
+     */
+    allowedOrigins?: boolean | number
     __typename?: boolean | number
     __scalar?: boolean | number
 }
@@ -11204,7 +11278,12 @@ export interface PlaybackPolicyInput {type: PlaybackPolicyType,
 /** Required when type == JWT. */
 jwt?: (PlaybackJwtPolicyInput | null),
 /** Required when type == WEBHOOK. */
-webhook?: (PlaybackWebhookPolicyInput | null)}
+webhook?: (PlaybackWebhookPolicyInput | null),
+/**
+ * JWT and WEBHOOK only: sites allowed to embed the content, each `*` or
+ * `scheme://host[:port]` (at most 50). Omit or empty for no restriction.
+ */
+allowedOrigins?: (Scalars['String'][] | null)}
 
 export interface PlaybackTrackGenqlSelection{
     type?: boolean | number
@@ -11230,6 +11309,8 @@ export interface PlaybackWebhookPolicyGenqlSelection{
     timeoutMs?: boolean | number
     /** Always 'redacted' on read; the actual secret is fieldcrypt-encrypted at rest. */
     secretMasked?: boolean | number
+    /** Your JSON object, sent as `context` in every access request to the URL. Null when unset. */
+    context?: boolean | number
     __typename?: boolean | number
     __scalar?: boolean | number
 }
@@ -11245,7 +11326,13 @@ url: Scalars['String'],
  */
 secret?: (Scalars['String'] | null),
 /** Outbound POST timeout in milliseconds. Server caps at 10000; default 5000. */
-timeoutMs?: (Scalars['Int'] | null)}
+timeoutMs?: (Scalars['Int'] | null),
+/**
+ * A JSON object (at most 4 KiB) sent as `context` in every access request,
+ * e.g. `{"courseId": "algebra-101"}`, so the endpoint can decide without its
+ * own lookup.
+ */
+context?: (Scalars['JSON'] | null)}
 
 
 /**
@@ -11516,6 +11603,8 @@ export interface PublicEventDataGenqlSelection{
     on_MultistreamStatusChanged?:MultistreamStatusChangedGenqlSelection,
     on_RecordingFailed?:RecordingFailedGenqlSelection,
     on_RecordingReady?:RecordingReadyGenqlSelection,
+    on_RecordingStarted?:RecordingStartedGenqlSelection,
+    on_RecordingStopped?:RecordingStoppedGenqlSelection,
     on_StreamConnected?:StreamConnectedGenqlSelection,
     on_StreamCreated?:StreamCreatedGenqlSelection,
     on_StreamDeleted?:StreamDeletedGenqlSelection,
@@ -12152,6 +12241,22 @@ export interface RecordingRetentionCapGenqlSelection{
     capped?: boolean | number
     /** Maximum retention in days when capped. */
     maxDays?: boolean | number
+    __typename?: boolean | number
+    __scalar?: boolean | number
+}
+
+
+/** `recording.started` event. Aggregate: `artifacts`. */
+export interface RecordingStartedGenqlSelection{
+    artifact?: EventArtifactGenqlSelection
+    __typename?: boolean | number
+    __scalar?: boolean | number
+}
+
+
+/** `recording.stopped` event. Aggregate: `artifacts`. */
+export interface RecordingStoppedGenqlSelection{
+    artifact?: EventArtifactGenqlSelection
     __typename?: boolean | number
     __scalar?: boolean | number
 }
@@ -13080,6 +13185,7 @@ export interface StreamAnalyticsSummaryEdgeGenqlSelection{
 export interface StreamConnectedGenqlSelection{
     streamId?: boolean | number
     protocol?: boolean | number
+    playbackId?: boolean | number
     __typename?: boolean | number
     __scalar?: boolean | number
 }
@@ -13300,6 +13406,7 @@ export interface StreamHealthSummaryGenqlSelection{
 /** `stream.idle` event. Aggregate: `streams`. */
 export interface StreamIdleGenqlSelection{
     streamId?: boolean | number
+    playbackId?: boolean | number
     __typename?: boolean | number
     __scalar?: boolean | number
 }
@@ -13345,6 +13452,7 @@ export interface StreamKeysConnectionGenqlSelection{
 /** `stream.live` event. Aggregate: `streams`. */
 export interface StreamLiveGenqlSelection{
     streamId?: boolean | number
+    playbackId?: boolean | number
     __typename?: boolean | number
     __scalar?: boolean | number
 }
@@ -13845,7 +13953,11 @@ viewerToken?: (Scalars['String'] | null),viewerIp?: (Scalars['String'] | null),r
  * without making the call so operators can inspect the resolved policy
  * without side effects.
  */
-fireWebhook?: (Scalars['Boolean'] | null)}
+fireWebhook?: (Scalars['Boolean'] | null),
+/** Origin header to test the policy's allowed origins against. */
+origin?: (Scalars['String'] | null),
+/** Referer header, used when origin is empty. */
+referer?: (Scalars['String'] | null)}
 
 export interface TestPlaybackAccessResultGenqlSelection{
     on_PlaybackAccessDecision?:PlaybackAccessDecisionGenqlSelection,
@@ -15995,6 +16107,14 @@ export interface X402PaymentResultGenqlSelection{
 
 
 
+    const ImportVodAssetResult_possibleTypes: string[] = ['VodAsset','ValidationError','AuthError']
+    export const isImportVodAssetResult = (obj?: { __typename?: any } | null): obj is ImportVodAssetResult => {
+      if (!obj?.__typename) throw new Error('__typename is missing in "isImportVodAssetResult"')
+      return ImportVodAssetResult_possibleTypes.includes(obj.__typename)
+    }
+
+
+
     const Incident_possibleTypes: string[] = ['Incident']
     export const isIncident = (obj?: { __typename?: any } | null): obj is Incident => {
       if (!obj?.__typename) throw new Error('__typename is missing in "isIncident"')
@@ -17051,7 +17171,7 @@ export interface X402PaymentResultGenqlSelection{
 
 
 
-    const PublicEventData_possibleTypes: string[] = ['AccountSuspended','ApiTokenCreated','ApiTokenRevoked','BillingDetailsUpdated','InvoiceCreated','InvoicePaid','PaymentFailed','TopupCredited','ClipFailed','ClipReady','ClipRequested','CustomDomainFailed','CustomDomainVerified','MultistreamStatusChanged','RecordingFailed','RecordingReady','StreamConnected','StreamCreated','StreamDeleted','StreamIdle','StreamKeyRotated','StreamLive','StreamUpdated','UploadAborted','UploadCompleted','UploadCreated','UploadFailed','UploadReady']
+    const PublicEventData_possibleTypes: string[] = ['AccountSuspended','ApiTokenCreated','ApiTokenRevoked','BillingDetailsUpdated','InvoiceCreated','InvoicePaid','PaymentFailed','TopupCredited','ClipFailed','ClipReady','ClipRequested','CustomDomainFailed','CustomDomainVerified','MultistreamStatusChanged','RecordingFailed','RecordingReady','RecordingStarted','RecordingStopped','StreamConnected','StreamCreated','StreamDeleted','StreamIdle','StreamKeyRotated','StreamLive','StreamUpdated','UploadAborted','UploadCompleted','UploadCreated','UploadFailed','UploadReady']
     export const isPublicEventData = (obj?: { __typename?: any } | null): obj is PublicEventData => {
       if (!obj?.__typename) throw new Error('__typename is missing in "isPublicEventData"')
       return PublicEventData_possibleTypes.includes(obj.__typename)
@@ -17175,6 +17295,22 @@ export interface X402PaymentResultGenqlSelection{
     export const isRecordingRetentionCap = (obj?: { __typename?: any } | null): obj is RecordingRetentionCap => {
       if (!obj?.__typename) throw new Error('__typename is missing in "isRecordingRetentionCap"')
       return RecordingRetentionCap_possibleTypes.includes(obj.__typename)
+    }
+
+
+
+    const RecordingStarted_possibleTypes: string[] = ['RecordingStarted']
+    export const isRecordingStarted = (obj?: { __typename?: any } | null): obj is RecordingStarted => {
+      if (!obj?.__typename) throw new Error('__typename is missing in "isRecordingStarted"')
+      return RecordingStarted_possibleTypes.includes(obj.__typename)
+    }
+
+
+
+    const RecordingStopped_possibleTypes: string[] = ['RecordingStopped']
+    export const isRecordingStopped = (obj?: { __typename?: any } | null): obj is RecordingStopped => {
+      if (!obj?.__typename) throw new Error('__typename is missing in "isRecordingStopped"')
+      return RecordingStopped_possibleTypes.includes(obj.__typename)
     }
 
 

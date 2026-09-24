@@ -413,9 +413,6 @@ class CreateStreamKeyInput(BaseModel):
 
 
 class CreateVodUploadInput(BaseModel):
-    """Input for initiating a multipart VOD upload.
-    Returns presigned S3 URLs for uploading file parts."""
-
     filename: str = Field(
         description="Original filename (for metadata and content-type detection)."
     )
@@ -456,6 +453,29 @@ class CreateWebhookEndpointInput(BaseModel):
         description='Public event package version; defaults to "v1".',
     )
     'Public event package version; defaults to "v1".'
+
+
+class ImportVodAssetInput(BaseModel):
+    """Input for initiating a multipart VOD upload.
+    Returns presigned S3 URLs for uploading file parts."""
+
+    url: str = Field(
+        description="Source URL, https or http. It must be publicly reachable and support HTTP\nrange requests; private and internal addresses are refused."
+    )
+    "Source URL, https or http. It must be publicly reachable and support HTTP\nrange requests; private and internal addresses are refused."
+    filename: Optional[str] = Field(
+        default=None,
+        description="Filename to store the video under. Required when the URL path does not end\nin a supported video extension (mp4, mov, mkv, webm, ts).",
+    )
+    "Filename to store the video under. Required when the URL path does not end\nin a supported video extension (mp4, mov, mkv, webm, ts)."
+    title: Optional[str] = Field(
+        default=None, description="Optional display title for the asset."
+    )
+    "Optional display title for the asset."
+    description: Optional[str] = Field(
+        default=None, description="Optional description for the asset."
+    )
+    "Optional description for the asset."
 
 
 class IncidentFilterInput(BaseModel):
@@ -614,6 +634,12 @@ class PlaybackPolicyInput(BaseModel):
         default=None, description="Required when type == WEBHOOK."
     )
     "Required when type == WEBHOOK."
+    allowed_origins: Optional[list[str]] = Field(
+        alias="allowedOrigins",
+        default=None,
+        description="JWT and WEBHOOK only: sites allowed to embed the content, each `*` or\n`scheme://host[:port]` (at most 50). Omit or empty for no restriction.",
+    )
+    "JWT and WEBHOOK only: sites allowed to embed the content, each `*` or\n`scheme://host[:port]` (at most 50). Omit or empty for no restriction."
 
 
 class PlaybackWebhookPolicyInput(BaseModel):
@@ -632,6 +658,11 @@ class PlaybackWebhookPolicyInput(BaseModel):
         description="Outbound POST timeout in milliseconds. Server caps at 10000; default 5000.",
     )
     "Outbound POST timeout in milliseconds. Server caps at 10000; default 5000."
+    context: Optional[Any] = Field(
+        default=None,
+        description='A JSON object (at most 4 KiB) sent as `context` in every access request,\ne.g. `{"courseId": "algebra-101"}`, so the endpoint can decide without its\nown lookup.',
+    )
+    'A JSON object (at most 4 KiB) sent as `context` in every access request,\ne.g. `{"courseId": "algebra-101"}`, so the endpoint can decide without its\nown lookup.'
 
 
 class PreviewMediaPlacementInput(BaseModel):
@@ -847,6 +878,15 @@ class TestPlaybackAccessInput(BaseModel):
         description='Webhook policies only: when true, Foghorn will POST to the configured\ncustomer URL with an HMAC-signed payload (same path the live evaluator\nuses). When false, the evaluator returns reason="webhook-test-skipped"\nwithout making the call so operators can inspect the resolved policy\nwithout side effects.',
     )
     'Webhook policies only: when true, Foghorn will POST to the configured\ncustomer URL with an HMAC-signed payload (same path the live evaluator\nuses). When false, the evaluator returns reason="webhook-test-skipped"\nwithout making the call so operators can inspect the resolved policy\nwithout side effects.'
+    origin: Optional[str] = Field(
+        default=None,
+        description="Origin header to test the policy's allowed origins against.",
+    )
+    "Origin header to test the policy's allowed origins against."
+    referer: Optional[str] = Field(
+        default=None, description="Referer header, used when origin is empty."
+    )
+    "Referer header, used when origin is empty."
 
 
 class TimeRangeInput(BaseModel):

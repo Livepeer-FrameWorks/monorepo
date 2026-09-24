@@ -500,6 +500,9 @@ var operationCalls = map[string]operationCall{
 	"GetWebhookEventTypes": {GetWebhookEventTypes_Operation, func(ctx context.Context, c *Client, _ vars) (any, error) {
 		return GetWebhookEventTypes(ctx, c)
 	}},
+	"ImportVodAsset": {ImportVodAsset_Operation, func(ctx context.Context, c *Client, v vars) (any, error) {
+		return ImportVodAsset(ctx, c, arg[ImportVodAssetInput](v, "input"))
+	}},
 	"LinkEmail": {LinkEmail_Operation, func(ctx context.Context, c *Client, v vars) (any, error) {
 		return LinkEmail(ctx, c, arg[LinkEmailInput](v, "input"))
 	}},

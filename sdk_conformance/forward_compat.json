@@ -83,13 +83,14 @@
             "name": "text",
             "playbackId": "text",
             "playbackPolicy": {
+              "allowedOrigins": [],
               "jwt": {
                 "allowedKids": ["text"],
                 "requiredAudience": ["text"],
                 "requiredClaimsJson": [{ "jsonValue": "text", "name": "text" }]
               },
               "type": "PUBLIC",
-              "webhook": { "secretMasked": "text", "timeoutMs": 1, "url": "text" }
+              "webhook": { "context": null, "secretMasked": "text", "timeoutMs": 1, "url": "text" }
             },
             "pullSource": { "class": "text", "enabled": true, "sourceUriRedacted": "text" },
             "record": true,

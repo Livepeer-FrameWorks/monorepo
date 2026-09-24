@@ -62,6 +62,8 @@ class TenantEventsTenantEvents(BaseModel):
             "TenantEventsTenantEventsDataMultistreamStatusChanged",
             "TenantEventsTenantEventsDataRecordingFailed",
             "TenantEventsTenantEventsDataRecordingReady",
+            "TenantEventsTenantEventsDataRecordingStarted",
+            "TenantEventsTenantEventsDataRecordingStopped",
             "TenantEventsTenantEventsDataStreamConnected",
             "TenantEventsTenantEventsDataStreamCreated",
             "TenantEventsTenantEventsDataStreamDeleted",
@@ -310,6 +312,22 @@ class TenantEventsTenantEventsDataRecordingReadyArtifact(EventArtifact):
     """Part of a public event payload (frameworks.events.public.v1.Artifact)."""
 
     pass
+
+
+class TenantEventsTenantEventsDataRecordingStarted(BaseModel):
+    """Payload of a PublicEvent: one member per public event type. Fields of the same
+    name can have different types across members (reason is a different enum per
+    event family); alias them when one selection covers several."""
+
+    typename__: Literal["RecordingStarted"] = Field(alias="__typename")
+
+
+class TenantEventsTenantEventsDataRecordingStopped(BaseModel):
+    """Payload of a PublicEvent: one member per public event type. Fields of the same
+    name can have different types across members (reason is a different enum per
+    event family); alias them when one selection covers several."""
+
+    typename__: Literal["RecordingStopped"] = Field(alias="__typename")
 
 
 class TenantEventsTenantEventsDataStreamConnected(BaseModel):

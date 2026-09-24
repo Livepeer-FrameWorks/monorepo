@@ -610,7 +610,9 @@ enum GQL {
       url
       timeoutMs
       secretMasked
+      context
     }
+    allowedOrigins
   }
   """
 
@@ -5856,6 +5858,34 @@ enum GQL {
         unitsPerEur
         source
         referenceDate
+      }
+    }
+  }
+  """
+
+  static let ImportVodAsset = """
+  mutation ImportVodAsset($input: ImportVodAssetInput!) {
+    importVodAsset(input: $input) {
+      ... on VodAsset {
+        id
+        artifactHash
+        playbackId
+        title
+        description
+        filename
+        status
+        createdAt
+        updatedAt
+        errorMessage
+      }
+      ... on ValidationError {
+        message
+        field
+        code
+      }
+      ... on AuthError {
+        message
+        code
       }
     }
   }

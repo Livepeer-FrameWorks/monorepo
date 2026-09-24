@@ -183,6 +183,7 @@ from .get_webhook_delivery import GetWebhookDelivery
 from .get_webhook_endpoint import GetWebhookEndpoint
 from .get_webhook_endpoints_connection import GetWebhookEndpointsConnection
 from .get_webhook_event_types import GetWebhookEventTypes
+from .import_vod_asset import ImportVodAsset
 from .input_types import (
     ApplyMediaCapacityConsentInput,
     ApplyMediaPlacementChangeInput,
@@ -203,6 +204,7 @@ from .input_types import (
     CreateStreamKeyInput,
     CreateVodUploadInput,
     CreateWebhookEndpointInput,
+    ImportVodAssetInput,
     IncidentFilterInput,
     LinkEmailInput,
     MediaPlacementOptionsFilter,
@@ -3635,6 +3637,7 @@ class GraphQLClient(BaseClient):
                 }
                 playbackPolicy {
                   type
+                  allowedOrigins
                 }
                 dvrChapterMode
                 dvrChapterIntervalSeconds
@@ -3835,6 +3838,7 @@ class GraphQLClient(BaseClient):
                 }
                 playbackPolicy {
                   type
+                  allowedOrigins
                 }
                 dvrChapterMode
                 dvrChapterIntervalSeconds
@@ -4471,6 +4475,7 @@ class GraphQLClient(BaseClient):
                 }
                 playbackPolicy {
                   type
+                  allowedOrigins
                 }
                 dvrChapterMode
                 dvrChapterIntervalSeconds
@@ -5337,6 +5342,7 @@ class GraphQLClient(BaseClient):
                 }
                 playbackPolicy {
                   type
+                  allowedOrigins
                 }
                 dvrChapterMode
                 dvrChapterIntervalSeconds
@@ -5798,6 +5804,7 @@ class GraphQLClient(BaseClient):
                 }
                 playbackPolicy {
                   type
+                  allowedOrigins
                 }
                 dvrChapterMode
                 dvrChapterIntervalSeconds
@@ -7029,6 +7036,7 @@ class GraphQLClient(BaseClient):
                 }
                 playbackPolicy {
                   type
+                  allowedOrigins
                 }
                 dvrChapterMode
                 dvrChapterIntervalSeconds
@@ -7138,6 +7146,7 @@ class GraphQLClient(BaseClient):
                 }
                 playbackPolicy {
                   type
+                  allowedOrigins
                 }
                 dvrChapterMode
                 dvrChapterIntervalSeconds
@@ -7233,6 +7242,7 @@ class GraphQLClient(BaseClient):
                 }
                 playbackPolicy {
                   type
+                  allowedOrigins
                 }
                 dvrChapterMode
                 dvrChapterIntervalSeconds
@@ -7278,7 +7288,9 @@ class GraphQLClient(BaseClient):
                   url
                   timeoutMs
                   secretMasked
+                  context
                 }
+                allowedOrigins
               }
               thumbnailAssets {
                 posterUrl
@@ -7397,6 +7409,7 @@ class GraphQLClient(BaseClient):
                 }
                 playbackPolicy {
                   type
+                  allowedOrigins
                 }
                 dvrChapterMode
                 dvrChapterIntervalSeconds
@@ -7635,6 +7648,7 @@ class GraphQLClient(BaseClient):
                 }
                 playbackPolicy {
                   type
+                  allowedOrigins
                 }
                 dvrChapterMode
                 dvrChapterIntervalSeconds
@@ -7770,6 +7784,7 @@ class GraphQLClient(BaseClient):
                 }
                 playbackPolicy {
                   type
+                  allowedOrigins
                 }
                 dvrChapterMode
                 dvrChapterIntervalSeconds
@@ -7882,6 +7897,7 @@ class GraphQLClient(BaseClient):
                 }
                 playbackPolicy {
                   type
+                  allowedOrigins
                 }
                 dvrChapterMode
                 dvrChapterIntervalSeconds
@@ -7997,6 +8013,7 @@ class GraphQLClient(BaseClient):
                 }
                 playbackPolicy {
                   type
+                  allowedOrigins
                 }
                 dvrChapterMode
                 dvrChapterIntervalSeconds
@@ -8089,6 +8106,7 @@ class GraphQLClient(BaseClient):
                 }
                 playbackPolicy {
                   type
+                  allowedOrigins
                 }
                 dvrChapterMode
                 dvrChapterIntervalSeconds
@@ -8179,6 +8197,7 @@ class GraphQLClient(BaseClient):
                 }
                 playbackPolicy {
                   type
+                  allowedOrigins
                 }
                 dvrChapterMode
                 dvrChapterIntervalSeconds
@@ -8316,6 +8335,7 @@ class GraphQLClient(BaseClient):
                 }
                 playbackPolicy {
                   type
+                  allowedOrigins
                 }
                 dvrChapterMode
                 dvrChapterIntervalSeconds
@@ -8437,7 +8457,9 @@ class GraphQLClient(BaseClient):
                   url
                   timeoutMs
                   secretMasked
+                  context
                 }
+                allowedOrigins
               }
               dvrChapterMode
               dvrChapterIntervalSeconds
@@ -8533,6 +8555,7 @@ class GraphQLClient(BaseClient):
                 }
                 playbackPolicy {
                   type
+                  allowedOrigins
                 }
                 dvrChapterMode
                 dvrChapterIntervalSeconds
@@ -8649,6 +8672,7 @@ class GraphQLClient(BaseClient):
                 }
                 playbackPolicy {
                   type
+                  allowedOrigins
                 }
                 dvrChapterMode
                 dvrChapterIntervalSeconds
@@ -8742,6 +8766,7 @@ class GraphQLClient(BaseClient):
                 }
                 playbackPolicy {
                   type
+                  allowedOrigins
                 }
                 dvrChapterMode
                 dvrChapterIntervalSeconds
@@ -8814,7 +8839,9 @@ class GraphQLClient(BaseClient):
                   url
                   timeoutMs
                   secretMasked
+                  context
                 }
+                allowedOrigins
               }
               thumbnailAssets {
                 posterUrl
@@ -10044,6 +10071,7 @@ class GraphQLClient(BaseClient):
                 }
                 playbackPolicy {
                   type
+                  allowedOrigins
                 }
                 dvrChapterMode
                 dvrChapterIntervalSeconds
@@ -10237,6 +10265,7 @@ class GraphQLClient(BaseClient):
                 }
                 playbackPolicy {
                   type
+                  allowedOrigins
                 }
                 dvrChapterMode
                 dvrChapterIntervalSeconds
@@ -10393,6 +10422,7 @@ class GraphQLClient(BaseClient):
                 }
                 playbackPolicy {
                   type
+                  allowedOrigins
                 }
                 dvrChapterMode
                 dvrChapterIntervalSeconds
@@ -10770,6 +10800,7 @@ class GraphQLClient(BaseClient):
                 }
                 playbackPolicy {
                   type
+                  allowedOrigins
                 }
                 dvrChapterMode
                 dvrChapterIntervalSeconds
@@ -11328,6 +11359,7 @@ class GraphQLClient(BaseClient):
                 }
                 playbackPolicy {
                   type
+                  allowedOrigins
                 }
                 dvrChapterMode
                 dvrChapterIntervalSeconds
@@ -11561,6 +11593,7 @@ class GraphQLClient(BaseClient):
                 }
                 playbackPolicy {
                   type
+                  allowedOrigins
                 }
                 dvrChapterMode
                 dvrChapterIntervalSeconds
@@ -11710,6 +11743,7 @@ class GraphQLClient(BaseClient):
                 }
                 playbackPolicy {
                   type
+                  allowedOrigins
                 }
                 dvrChapterMode
                 dvrChapterIntervalSeconds
@@ -11866,6 +11900,7 @@ class GraphQLClient(BaseClient):
                 }
                 playbackPolicy {
                   type
+                  allowedOrigins
                 }
                 dvrChapterMode
                 dvrChapterIntervalSeconds
@@ -12042,6 +12077,7 @@ class GraphQLClient(BaseClient):
                 }
                 playbackPolicy {
                   type
+                  allowedOrigins
                 }
                 dvrChapterMode
                 dvrChapterIntervalSeconds
@@ -12187,6 +12223,7 @@ class GraphQLClient(BaseClient):
                 }
                 playbackPolicy {
                   type
+                  allowedOrigins
                 }
                 dvrChapterMode
                 dvrChapterIntervalSeconds
@@ -12434,6 +12471,7 @@ class GraphQLClient(BaseClient):
                 }
                 playbackPolicy {
                   type
+                  allowedOrigins
                 }
                 dvrChapterMode
                 dvrChapterIntervalSeconds
@@ -12828,6 +12866,7 @@ class GraphQLClient(BaseClient):
                 }
                 playbackPolicy {
                   type
+                  allowedOrigins
                 }
                 dvrChapterMode
                 dvrChapterIntervalSeconds
@@ -13075,6 +13114,7 @@ class GraphQLClient(BaseClient):
                 }
                 playbackPolicy {
                   type
+                  allowedOrigins
                 }
                 dvrChapterMode
                 dvrChapterIntervalSeconds
@@ -13230,6 +13270,7 @@ class GraphQLClient(BaseClient):
                 }
                 playbackPolicy {
                   type
+                  allowedOrigins
                 }
                 dvrChapterMode
                 dvrChapterIntervalSeconds
@@ -13378,6 +13419,7 @@ class GraphQLClient(BaseClient):
                 }
                 playbackPolicy {
                   type
+                  allowedOrigins
                 }
                 dvrChapterMode
                 dvrChapterIntervalSeconds
@@ -13540,6 +13582,7 @@ class GraphQLClient(BaseClient):
                 }
                 playbackPolicy {
                   type
+                  allowedOrigins
                 }
                 dvrChapterMode
                 dvrChapterIntervalSeconds
@@ -14208,7 +14251,9 @@ class GraphQLClient(BaseClient):
                 url
                 timeoutMs
                 secretMasked
+                context
               }
+              allowedOrigins
             }
 
             fragment ValidationErrorFields on ValidationError {
@@ -14366,7 +14411,9 @@ class GraphQLClient(BaseClient):
                 url
                 timeoutMs
                 secretMasked
+                context
               }
+              allowedOrigins
             }
 
             fragment ThumbnailAssetsFields on ThumbnailAssets {
@@ -14621,6 +14668,107 @@ class GraphQLClient(BaseClient):
         data = self.get_data(response)
         return CreateVodUpload.model_validate(data)
 
+    def import_vod_asset(
+        self, input: ImportVodAssetInput, **kwargs: Any
+    ) -> ImportVodAsset:
+        """Import a video from a public https or http URL as a VOD asset. The processing
+        node reads the file from the URL and processes it like an upload; the asset
+        reports PROCESSING until it is ready. Progress arrives as upload.created,
+        upload.completed, and upload.ready or upload.failed events."""
+        query = gql("""
+            mutation ImportVodAsset($input: ImportVodAssetInput!) {
+              importVodAsset(input: $input) {
+                __typename
+                ...VodAssetFields
+                ...ValidationErrorFields
+                ...AuthErrorFields
+              }
+            }
+
+            fragment AuthErrorFields on AuthError {
+              __typename
+              message
+              code
+            }
+
+            fragment EffectiveRetentionFields on EffectiveRetention {
+              retentionDays
+              retentionUntil
+              source
+            }
+
+            fragment PlaybackPolicyFields on PlaybackPolicy {
+              type
+              jwt {
+                allowedKids
+                requiredAudience
+                requiredClaimsJson {
+                  name
+                  jsonValue
+                }
+              }
+              webhook {
+                url
+                timeoutMs
+                secretMasked
+                context
+              }
+              allowedOrigins
+            }
+
+            fragment ThumbnailAssetsFields on ThumbnailAssets {
+              posterUrl
+              spriteVttUrl
+              spriteJpgUrl
+              assetKey
+            }
+
+            fragment ValidationErrorFields on ValidationError {
+              __typename
+              message
+              code
+              field
+              constraint
+            }
+
+            fragment VodAssetFields on VodAsset {
+              __typename
+              id
+              artifactHash
+              playbackId
+              streamId
+              title
+              description
+              filename
+              status
+              sizeBytes
+              durationMs
+              resolution
+              videoCodec
+              audioCodec
+              bitrateKbps
+              createdAt
+              updatedAt
+              expiresAt
+              errorMessage
+              playbackPolicy {
+                ...PlaybackPolicyFields
+              }
+              thumbnailAssets {
+                ...ThumbnailAssetsFields
+              }
+              effectiveRetention {
+                ...EffectiveRetentionFields
+              }
+            }
+            """)
+        variables: dict[str, object] = {"input": input}
+        response = self.execute(
+            query=query, operation_name="ImportVodAsset", variables=variables, **kwargs
+        )
+        data = self.get_data(response)
+        return ImportVodAsset.model_validate(data)
+
     def complete_vod_upload(
         self, input: CompleteVodUploadInput, **kwargs: Any
     ) -> CompleteVodUpload:
@@ -14671,7 +14819,9 @@ class GraphQLClient(BaseClient):
                 url
                 timeoutMs
                 secretMasked
+                context
               }
+              allowedOrigins
             }
 
             fragment ThumbnailAssetsFields on ThumbnailAssets {
@@ -14842,7 +14992,9 @@ class GraphQLClient(BaseClient):
                 url
                 timeoutMs
                 secretMasked
+                context
               }
+              allowedOrigins
             }
 
             fragment StreamFields on Stream {
@@ -14935,7 +15087,9 @@ class GraphQLClient(BaseClient):
                 url
                 timeoutMs
                 secretMasked
+                context
               }
+              allowedOrigins
             }
 
             fragment StreamFields on Stream {
@@ -15066,7 +15220,9 @@ class GraphQLClient(BaseClient):
                 url
                 timeoutMs
                 secretMasked
+                context
               }
+              allowedOrigins
             }
 
             fragment StreamFields on Stream {
@@ -15738,7 +15894,9 @@ class GraphQLClient(BaseClient):
                 url
                 timeoutMs
                 secretMasked
+                context
               }
+              allowedOrigins
             }
 
             fragment ThumbnailAssetsFields on ThumbnailAssets {
@@ -15897,7 +16055,9 @@ class GraphQLClient(BaseClient):
                 url
                 timeoutMs
                 secretMasked
+                context
               }
+              allowedOrigins
             }
 
             fragment ThumbnailAssetsFields on ThumbnailAssets {
@@ -16126,7 +16286,9 @@ class GraphQLClient(BaseClient):
                 url
                 timeoutMs
                 secretMasked
+                context
               }
+              allowedOrigins
             }
 
             fragment StreamFields on Stream {
@@ -16191,7 +16353,9 @@ class GraphQLClient(BaseClient):
                 url
                 timeoutMs
                 secretMasked
+                context
               }
+              allowedOrigins
             }
 
             fragment StreamFields on Stream {

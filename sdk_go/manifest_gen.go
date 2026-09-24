@@ -176,6 +176,7 @@ var operations = map[string]operationInfo{
 	"GetWebhookEndpoint":                       {Kind: "query", Since: "v0.3.11"},
 	"GetWebhookEndpointsConnection":            {Kind: "query", Since: "v0.3.11"},
 	"GetWebhookEventTypes":                     {Kind: "query", Since: "v0.3.11"},
+	"ImportVodAsset":                           {Kind: "mutation", Since: "v0.3.11"},
 	"LinkEmail":                                {Kind: "mutation", Since: "v0.3.11"},
 	"LinkWallet":                               {Kind: "mutation", Since: "v0.3.11"},
 	"ListArtifacts":                            {Kind: "query", Since: "v0.3.11"},
