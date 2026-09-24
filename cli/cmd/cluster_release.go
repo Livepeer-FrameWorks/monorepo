@@ -12,6 +12,7 @@ import (
 
 	"frameworks/cli/internal/releases"
 	"frameworks/cli/internal/ux"
+	"frameworks/cli/pkg/detect"
 	"frameworks/cli/pkg/gitops"
 	"frameworks/cli/pkg/inventory"
 	"frameworks/cli/pkg/orchestrator"
@@ -362,6 +363,20 @@ func runReleaseApply(cmd *cobra.Command, rc *resolvedCluster, opts releaseApplyO
 	ux.Subheading(out, "[4/4] Postdeploy migrations")
 	if err := releaseRunMigrateFn(cmd, rc, opts.dryRun, "postdeploy", true, platformVersion, false, opts.completeInterruptedBaselines); err != nil {
 		return fmt.Errorf("postdeploy migrations: %w", err)
+	}
+	if !opts.dryRun {
+		ux.Subheading(out, "Verifying auth release replicas")
+		baseCtx := cmd.Context()
+		if baseCtx == nil {
+			baseCtx = context.Background()
+		}
+		verifyCtx, cancel := context.WithTimeout(baseCtx, 2*time.Minute)
+		defer cancel()
+		if err := verifyAuthReleaseConvergence(verifyCtx, manifest, gm, func(ctx context.Context, host inventory.Host, service string) (*detect.ServiceState, error) {
+			return detect.NewDetector(sshPool, host).Detect(ctx, service)
+		}); err != nil {
+			return err
+		}
 	}
 	fmt.Fprintf(out, "  Contract migrations remain deferred. After the rollback window closes, take a fresh backup with `frameworks cluster backup create --to <backup-dir> --all`, then run `frameworks cluster migrate --phase contract --to-version %s --backup <completed-backup-path> --dry-run` and repeat with --yes in place of --dry-run.\n", platformVersion)
 
