@@ -21572,8 +21572,8 @@ release it supports and supports every stable release from there on.
 | SDK line | Oldest supported FrameWorks release | Operations                                       |
 | -------- | ----------------------------------- | ------------------------------------------------ |
 | 0.3      | v0.3.11                             | 182 default and 44 hand-written operations (226) |
-| 0.2      | v0.3.11                             | the 44 hand-written operations                   |
-| 0.1      | v0.3.11                             | the 44 hand-written operations                   |
+
+Lines 0.1 and 0.2 (the 44 hand-written operations) are retired; use 0.3.
 
 Within a line, operations are only added; a breaking change starts a new minor line. The public
 schema follows the same rule from FrameWorks v0.3.11 on: a field, argument, enum value, or union
