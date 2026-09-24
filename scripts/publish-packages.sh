@@ -104,7 +104,7 @@ pkg_field() { node -p "require('$ROOT/$1/package.json').$2"; }
 
 npm_has() {
   local out
-  if out=$(npm view "$1@$2" version 2>"$WORK_DIR/npm-view.err"); then
+  if out=$(npm view --prefer-online "$1@$2" version 2>"$WORK_DIR/npm-view.err"); then
     [[ "$out" == "$2" ]] && echo yes || echo no
   elif grep -q E404 "$WORK_DIR/npm-view.err"; then
     echo no
@@ -122,6 +122,24 @@ pypi_has() {
     200) echo yes ;;
     404) echo no ;;
     *) fail "pypi.org answered HTTP $code for $PYPI_PROJECT $1" ;;
+  esac
+}
+
+pypi_latest() {
+  local code
+  code=$(curl -sS -o "$WORK_DIR/pypi-project.json" -w '%{http_code}' "https://pypi.org/pypi/$PYPI_PROJECT/json") ||
+    fail "cannot reach pypi.org"
+  case "$code" in
+    200) python3 - "$WORK_DIR/pypi-project.json" <<'PY'
+import json
+import sys
+
+with open(sys.argv[1], encoding="utf-8") as response:
+    print(json.load(response)["info"]["version"])
+PY
+      ;;
+    404) echo none ;;
+    *) fail "pypi.org answered HTTP $code for $PYPI_PROJECT" ;;
   esac
 }
 
@@ -212,8 +230,8 @@ for dir in "${NPM_PACKAGES[@]}"; do
   if [[ "$has" == yes ]]; then
     echo "    $name@$version  published"
   else
-    latest=$(npm view "$name" version 2>/dev/null || true)
-    echo "  * $name@$version  new (npm latest: ${latest:-none})"
+    latest=$(npm view --prefer-online "$name" version 2>/dev/null || true)
+    echo "  * $name@$version  version not published (npm latest: ${latest:-none})"
     npm_todo+=("$dir")
   fi
 done
@@ -224,7 +242,8 @@ echo "PyPI:"
 if [[ "$PYPI_HAS" == yes ]]; then
   echo "    $PYPI_PROJECT $VERSION  published"
 else
-  echo "  * $PYPI_PROJECT $VERSION  new"
+  PYPI_LATEST=$(pypi_latest)
+  echo "  * $PYPI_PROJECT $VERSION  version not published (PyPI latest: $PYPI_LATEST)"
 fi
 
 GO_HAS=$(sdk_go_has_ref "refs/tags/v$VERSION")
@@ -352,7 +371,7 @@ publish_npm() {
     (cd "$ROOT/$dir" && pnpm run build) || fail "building $dir failed"
   done
 
-  local dir name version publish_log
+  local dir name version
   local api_submitted=false
   [[ "$API_HAS" == yes ]] && api_submitted=true
   for dir in "${npm_todo[@]}"; do
@@ -365,13 +384,13 @@ publish_npm() {
         fail "@livepeer-frameworks/api@$VERSION was not submitted; $name@$version would not install (run without --only, or --only npm)"
     fi
     echo "Publishing $name@$version"
-    publish_log="$WORK_DIR/npm-publish.log"
-    if (cd "$ROOT/$dir" && pnpm publish --access public --no-git-checks 2>&1) | tee "$publish_log"; then
+    # npm's publish challenge needs the terminal; piping output prevents its 2FA prompt.
+    if (cd "$ROOT/$dir" && pnpm publish --access public --no-git-checks); then
       :
-    elif grep -Fq "You cannot publish over the previously published versions" "$publish_log"; then
-      echo "$name@$version was already accepted by npm; continuing while registry visibility catches up."
+    elif [[ "$(npm_has "$name" "$version")" == yes ]]; then
+      echo "$name@$version is already on npm; continuing."
     else
-      fail "publishing $name@$version failed; re-run to continue from here"
+      fail "publishing $name@$version failed; if npm requested 2FA, complete it in an interactive terminal, then re-run to continue from here"
     fi
     [[ "$name" == "@livepeer-frameworks/api" ]] && api_submitted=true
   done
