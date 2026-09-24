@@ -2604,6 +2604,29 @@ func TestValidateClusteredFoghornDatabases(t *testing.T) {
 	}
 }
 
+func TestValidateRequiredServiceDependencies(t *testing.T) {
+	build := func(profile string, withBosun bool) *inventory.Manifest {
+		services := map[string]inventory.ServiceConfig{"bridge": {Enabled: true}}
+		for _, svc := range []string{"commodore", "periscope-query", "purser", "quartermaster", "signalman", "decklog"} {
+			services[svc] = inventory.ServiceConfig{Enabled: true}
+		}
+		if withBosun {
+			services["bosun"] = inventory.ServiceConfig{Enabled: true}
+		}
+		return &inventory.Manifest{Profile: profile, Services: services}
+	}
+	if err := validateRequiredServiceDependencies(build("staging", true)); err != nil {
+		t.Fatalf("a manifest enabling every required dependency must pass: %v", err)
+	}
+	err := validateRequiredServiceDependencies(build("staging", false))
+	if err == nil || !strings.Contains(err.Error(), "bridge requires bosun (BOSUN_GRPC_ADDR") {
+		t.Fatalf("bridge without bosun = %v, want a bridge requires bosun error", err)
+	}
+	if err := validateRequiredServiceDependencies(build("dev", false)); err != nil {
+		t.Fatalf("dev profiles are exempt: %v", err)
+	}
+}
+
 // TestValidateClusteredFoghornEffectiveDB asserts the FINAL rendered DSN/name for a clustered Foghorn must be
 // its own per-cell database. An explicit DATABASE_NAME/DATABASE_URL — or a fallback to the shared deploy database —
 // that points a cell elsewhere is refused, on every env-building path (provision, apply, diff, dry-run).

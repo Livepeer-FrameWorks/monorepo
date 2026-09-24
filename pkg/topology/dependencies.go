@@ -59,7 +59,7 @@ var serviceDependencies = map[string][]ServiceDependency{
 		{TargetServiceID: "skipper", EnvKey: "SKIPPER_SPOKE_URL", Transport: "mcp-http", Optional: true, Purpose: "ask_consultant spoke proxy"},
 		{TargetServiceID: "skipper", EnvKey: "SKIPPER_GRPC_ADDR", Transport: "grpc", Optional: true, Purpose: "AI consultant APIs"},
 		{TargetServiceID: "lookout", EnvKey: "LOOKOUT_GRPC_ADDR", Transport: "grpc", DNSScope: DNSScopeAggregatorRegion, Optional: true, Purpose: "incident APIs"},
-		{TargetServiceID: "bosun", EnvKey: "BOSUN_GRPC_ADDR", Transport: "grpc", DNSScope: DNSScopeAggregatorRegion, Optional: true, Purpose: "outbound webhook APIs"},
+		{TargetServiceID: "bosun", EnvKey: "BOSUN_GRPC_ADDR", Transport: "grpc", DNSScope: DNSScopeAggregatorRegion, Purpose: "outbound webhook APIs"},
 	},
 	"chandler": {
 		{TargetServiceID: "quartermaster", EnvKey: "QUARTERMASTER_GRPC_ADDR", Transport: "grpc", Purpose: "bootstrap and storage cluster lookup"},

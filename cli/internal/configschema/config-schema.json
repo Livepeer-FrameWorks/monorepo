@@ -233,6 +233,13 @@
           "description": "Kafka topic that receives domain event records whose payload does not decode."
         },
         {
+          "key": "BOSUN_ALLOW_PRIVATE_DESTINATIONS",
+          "type": "boolean",
+          "default": "false",
+          "introduced": "v0.3.11",
+          "description": "Lets webhook endpoints use private (RFC 1918 / ULA) addresses, plain http, and .local or .internal host names, so an isolated staging or development cluster can deliver to a receiver on its own network. Loopback, link-local, and cloud metadata addresses stay blocked. Never set it on a cluster that serves untrusted tenants."
+        },
+        {
           "key": "SMTP_HOST",
           "type": "string",
           "introduced": "v0.3.11",

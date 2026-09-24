@@ -50,6 +50,8 @@ type Bosun struct {
 	MirrorRegionPrefixes []string `env:"MIRROR_REGION_PREFIXES" desc:"Comma-separated MirrorMaker2 source cluster aliases whose mirrored domain.events copies are also consumed. Empty consumes only the local topic." introduced:"v0.3.11"`
 	DLQTopic             string   `env:"DECKLOG_DLQ_KAFKA_TOPIC" default:"decklog_events_dlq" desc:"Kafka topic that receives domain event records whose payload does not decode." introduced:"v0.3.11"`
 
+	AllowPrivateDestinations bool `env:"BOSUN_ALLOW_PRIVATE_DESTINATIONS" default:"false" desc:"Lets webhook endpoints use private (RFC 1918 / ULA) addresses, plain http, and .local or .internal host names, so an isolated staging or development cluster can deliver to a receiver on its own network. Loopback, link-local, and cloud metadata addresses stay blocked. Never set it on a cluster that serves untrusted tenants." introduced:"v0.3.11"`
+
 	SMTPHost          string `env:"SMTP_HOST" desc:"SMTP server host for the email sent when an endpoint is disabled automatically. Empty leaves those emails queued and retried." introduced:"v0.3.11"`
 	SMTPPort          string `env:"SMTP_PORT" default:"587" desc:"SMTP server port." introduced:"v0.3.11"`
 	SMTPUser          string `env:"SMTP_USER" desc:"SMTP user." introduced:"v0.3.11"`

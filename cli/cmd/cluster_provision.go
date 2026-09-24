@@ -181,6 +181,10 @@ func runProvision(cmd *cobra.Command, rc *resolvedCluster, only, version string,
 		return fmt.Errorf("invalid manifest: %w", err)
 	}
 
+	if err := validateRequiredServiceDependencies(manifest); err != nil {
+		return fmt.Errorf("invalid manifest: %w", err)
+	}
+
 	if phaseRequiresGatewayMeshValidation(phase) {
 		if err := validateGatewayMeshCoverage(manifest); err != nil {
 			return fmt.Errorf("invalid manifest: %w", err)
@@ -5411,6 +5415,43 @@ func validateClusteredFoghornDatabases(manifest *inventory.Manifest) error {
 		}
 	}
 	return nil
+}
+
+// validateRequiredServiceDependencies refuses a non-dev manifest that enables a service but not a service it requires
+// (a non-optional edge in pkg/topology). Env generation skips a dependency whose target is absent, so without this
+// check such a manifest plans and provisions cleanly and the dependent service runs with that API disabled.
+func validateRequiredServiceDependencies(manifest *inventory.Manifest) error {
+	if manifest == nil || isDevProfile(manifest) {
+		return nil
+	}
+	var problems []string
+	seen := map[string]struct{}{}
+	for _, configs := range []map[string]inventory.ServiceConfig{manifest.Services, manifest.Interfaces, manifest.Observability} {
+		for name, svc := range configs {
+			if !svc.Enabled {
+				continue
+			}
+			deploy, err := resolveDeployName(name, svc)
+			if err != nil {
+				continue
+			}
+			for _, dep := range topology.RequiredServiceEnv(deploy) {
+				if dep.TargetServiceID == "" || manifestServiceEnabledForDeploy(manifest, dep.TargetServiceID) {
+					continue
+				}
+				problem := fmt.Sprintf("%s requires %s (%s: %s)", deploy, dep.TargetServiceID, dep.EnvKey, dep.Purpose)
+				if _, dup := seen[problem]; !dup {
+					seen[problem] = struct{}{}
+					problems = append(problems, problem)
+				}
+			}
+		}
+	}
+	if len(problems) == 0 {
+		return nil
+	}
+	sort.Strings(problems)
+	return fmt.Errorf("required dependency services are not enabled in the manifest: %s", strings.Join(problems, "; "))
 }
 
 func clusterScopedDatabaseAliases(db inventory.DatabaseConfig, manifest *inventory.Manifest) []inventory.DatabaseConfig {

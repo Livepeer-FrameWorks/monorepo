@@ -86,6 +86,9 @@ live-state gates. Use 'release apply --dry-run' when you also want those live ch
 
 func runReleasePlan(cmd *cobra.Command, rc *resolvedCluster, opts releasePlanOptions) error {
 	manifest := rc.Manifest
+	if err := validateRequiredServiceDependencies(manifest); err != nil {
+		return fmt.Errorf("invalid manifest: %w", err)
+	}
 	selector := resolveUpgradeVersion(cmd, manifest, opts.version)
 	platformVersion, err := resolveReleasePlatformVersion(rc, selector)
 	if err != nil {
@@ -197,6 +200,9 @@ func newClusterReleaseApplyCmd() *cobra.Command {
 func runReleaseApply(cmd *cobra.Command, rc *resolvedCluster, opts releaseApplyOptions) error {
 	out := cmd.OutOrStdout()
 	manifest := rc.Manifest
+	if err := validateRequiredServiceDependencies(manifest); err != nil {
+		return fmt.Errorf("invalid manifest: %w", err)
+	}
 	// Resolve once so every release step uses the same concrete version.
 	version := resolveUpgradeVersion(cmd, manifest, opts.version)
 	platformVersion, err := resolveReleasePlatformVersion(rc, version)

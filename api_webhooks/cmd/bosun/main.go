@@ -161,10 +161,14 @@ func main() {
 	logger.WithField("topics", topics).Info("Consuming public domain events")
 	healthChecker.AddCheck("kafka", monitoring.KafkaConsumerHealthCheck(eventConsumer.GetClient()))
 
-	// Webhook destinations get the shared destination policy with no
-	// exceptions: the URL, its DNS answer at validation, and the address of
-	// every connection must be public.
+	// Webhook destinations get the shared destination policy: the URL, its DNS
+	// answer at validation, and the address of every connection must be public,
+	// unless the operator lets an isolated cluster deliver to private addresses.
 	destinationPolicy := restream.PublicDestinationPolicy()
+	destinationPolicy.AllowPrivate = cfg.AllowPrivateDestinations
+	if destinationPolicy.AllowPrivate {
+		logger.Warn("BOSUN_ALLOW_PRIVATE_DESTINATIONS is set: webhook endpoints may target private addresses and plain http")
+	}
 	httpClient := delivery.NewHTTPClient(delivery.ClientOptions{Policy: destinationPolicy})
 	worker := &delivery.Worker{
 		Store:   store,

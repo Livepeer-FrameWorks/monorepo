@@ -37,7 +37,10 @@ func invalid(format string, args ...any) error {
 // a destination the policy allows. A literal forbidden address and a host
 // that resolves to one are both rejected. The same policy is applied again to
 // the address of every connection, so a later change of the DNS answer is
-// refused at send time.
+// refused at send time. A policy that allows private destinations also
+// accepts plain http and local host names, because a receiver on an isolated
+// network rarely has a publicly trusted certificate; the resolved address
+// still decides.
 func URL(ctx context.Context, policy restream.DestinationPolicy, raw string) (string, error) {
 	raw = strings.TrimSpace(raw)
 	if raw == "" {
@@ -50,7 +53,7 @@ func URL(ctx context.Context, policy restream.DestinationPolicy, raw string) (st
 	if err != nil {
 		return "", invalid("url does not parse")
 	}
-	if parsed.Scheme != "https" {
+	if parsed.Scheme != "https" && (parsed.Scheme != "http" || !policy.AllowPrivate) {
 		return "", invalid("url must use https")
 	}
 	if parsed.User != nil {
@@ -71,7 +74,7 @@ func URL(ctx context.Context, policy restream.DestinationPolicy, raw string) (st
 			return "", invalid("url port is not valid")
 		}
 	}
-	if host == "localhost" || strings.HasSuffix(host, ".localhost") || strings.HasSuffix(host, ".local") || strings.HasSuffix(host, ".internal") {
+	if !policy.AllowPrivate && (host == "localhost" || strings.HasSuffix(host, ".localhost") || strings.HasSuffix(host, ".local") || strings.HasSuffix(host, ".internal")) {
 		return "", invalid("url host is not a public destination")
 	}
 	if err := policy.ValidateURI(ctx, parsed); err != nil {

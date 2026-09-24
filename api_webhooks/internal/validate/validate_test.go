@@ -63,6 +63,39 @@ func TestURLRejectsAtCreate(t *testing.T) {
 	}
 }
 
+func TestURLPrivatePolicyAcceptsIsolatedReceivers(t *testing.T) {
+	private := resolverPolicy("192.168.10.40")
+	private.AllowPrivate = true
+	for _, raw := range []string{
+		"http://192.168.10.40:8080/hooks",
+		"https://10.1.2.3/x",
+		"http://receiver.local/x",
+		"http://webhook-receiver.internal:9000/x",
+		"http://webhook-receiver:9000/x",
+	} {
+		if _, err := URL(context.Background(), private, raw); err != nil {
+			t.Errorf("URL(%q) with private destinations allowed = %v, want accepted", raw, err)
+		}
+	}
+	for _, raw := range []string{
+		"ftp://192.168.10.40/x",
+		"http://user:pass@192.168.10.40/x",
+		"http://127.0.0.1/x",
+		"http://169.254.169.254/latest/meta-data",
+		"http://metadata.google.internal/x",
+		"http://bridge.staging.frameworks.network/hooks",
+	} {
+		if _, err := URL(context.Background(), private, raw); !errors.Is(err, ErrInvalid) {
+			t.Errorf("URL(%q) with private destinations allowed = %v, want ErrInvalid", raw, err)
+		}
+	}
+	loopback := resolverPolicy("127.0.0.1")
+	loopback.AllowPrivate = true
+	if _, err := URL(context.Background(), loopback, "http://localhost:9000/x"); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("localhost resolving to loopback = %v, want ErrInvalid", err)
+	}
+}
+
 func TestEventTypes(t *testing.T) {
 	got, err := EventTypes([]string{" stream.live", "clip.ready", "stream.live", "*"})
 	if err != nil || len(got) != 3 || got[0] != "stream.live" || got[1] != "clip.ready" || got[2] != "*" {

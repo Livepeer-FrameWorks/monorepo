@@ -53,6 +53,7 @@ Read by `api_webhooks/cmd/bosun`.
 | `KAFKA_CLUSTER_ID` | string | `local` |  | v0.3.11 | Kafka cluster identifier attached to the domain event consumer and the dead-letter producer. |
 | `MIRROR_REGION_PREFIXES` | list |  |  | v0.3.11 | Comma-separated MirrorMaker2 source cluster aliases whose mirrored domain.events copies are also consumed. Empty consumes only the local topic. |
 | `DECKLOG_DLQ_KAFKA_TOPIC` | string | `decklog_events_dlq` |  | v0.3.11 | Kafka topic that receives domain event records whose payload does not decode. |
+| `BOSUN_ALLOW_PRIVATE_DESTINATIONS` | boolean | `false` |  | v0.3.11 | Lets webhook endpoints use private (RFC 1918 / ULA) addresses, plain http, and .local or .internal host names, so an isolated staging or development cluster can deliver to a receiver on its own network. Loopback, link-local, and cloud metadata addresses stay blocked. Never set it on a cluster that serves untrusted tenants. |
 | `SMTP_HOST` | string |  |  | v0.3.11 | SMTP server host for the email sent when an endpoint is disabled automatically. Empty leaves those emails queued and retried. |
 | `SMTP_PORT` | string | `587` |  | v0.3.11 | SMTP server port. |
 | `SMTP_USER` | string |  |  | v0.3.11 | SMTP user. |

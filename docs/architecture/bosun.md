@@ -107,9 +107,13 @@ migrations of its own yet.
   `<id>.<unix seconds>.<body>`, one signature per live secret.
 - **Send:** a client with no proxy, no redirects, no connection reuse, TLS 1.2 or later, a
   10-second limit for the whole attempt, and at most 4 KiB of the response read. The destination
-  policy (`pkg/restream.DestinationPolicy`, no exceptions) validates the URL at creation and
-  runs again in the dialer's `Control` hook on the resolved address of every connection, which is
-  the DNS-rebinding defense. A 2xx is success; any other status, including 3xx, is a failure.
+  policy (`pkg/restream.DestinationPolicy`) validates the URL at creation and runs again in the
+  dialer's `Control` hook on the resolved address of every connection, which is the DNS-rebinding
+  defense. It allows public destinations only, unless `BOSUN_ALLOW_PRIVATE_DESTINATIONS` is set.
+  That setting is for isolated staging and development clusters: it also admits RFC 1918 / ULA
+  addresses, plain `http`, and `.local`/`.internal` names, while loopback, link-local, metadata,
+  and `*.frameworks.network` stay refused. Dev compose enables it. A 2xx is success; any other
+  status, including 3xx, is a failure.
 - **Retry:** 30 s, 2 min, 10 min, 30 min, 1 h, 2 h, 4 h, 8 h, 12 h, 24 h, 24 h, each ±10 percent;
   12 attempts over about 3.2 days, then `failed`.
 - **Bosun-side failure:** a delivery Bosun cannot send for a reason of its own settles with
