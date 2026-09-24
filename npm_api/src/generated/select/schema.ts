@@ -8396,6 +8396,11 @@ export interface CreateStreamResultGenqlSelection{
     __typename?: boolean | number
 }
 
+
+/**
+ * Input for initiating a multipart VOD upload.
+ * Returns presigned S3 URLs for uploading file parts.
+ */
 export interface CreateVodUploadInput {
 /** Original filename (for metadata and content-type detection). */
 filename: Scalars['String'],
@@ -8957,10 +8962,7 @@ export interface GeographicDistributionGenqlSelection{
 }
 
 
-/**
- * Input for initiating a multipart VOD upload.
- * Returns presigned S3 URLs for uploading file parts.
- */
+/** Import a video from a public URL for VOD processing. */
 export interface ImportVodAssetInput {
 /**
  * Source URL, https or http. It must be publicly reachable and support HTTP

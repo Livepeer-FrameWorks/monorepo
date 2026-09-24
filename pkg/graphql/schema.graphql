@@ -2923,10 +2923,7 @@ enum VodAssetStatus {
   EXPIRED
 }
 
-"""
-Input for initiating a multipart VOD upload.
-Returns presigned S3 URLs for uploading file parts.
-"""
+"Import a video from a public URL for VOD processing."
 input ImportVodAssetInput {
   """
   Source URL, https or http. It must be publicly reachable and support HTTP
@@ -2944,6 +2941,10 @@ input ImportVodAssetInput {
   description: String
 }
 
+"""
+Input for initiating a multipart VOD upload.
+Returns presigned S3 URLs for uploading file parts.
+"""
 input CreateVodUploadInput {
   "Original filename (for metadata and content-type detection)."
   filename: String!

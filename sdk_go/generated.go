@@ -23200,6 +23200,8 @@ func (v *CreateVodUploadCreateVodUploadVodUploadSessionPartsVodUploadPart) GetPr
 	return v.PresignedUrl
 }
 
+// Input for initiating a multipart VOD upload.
+// Returns presigned S3 URLs for uploading file parts.
 type CreateVodUploadInput struct {
 	// Original filename (for metadata and content-type detection).
 	Filename string `json:"filename"`
@@ -67853,8 +67855,7 @@ func (v *ImportVodAssetImportVodAssetValidationError) __premarshalJSON() (*__pre
 	return &retval, nil
 }
 
-// Input for initiating a multipart VOD upload.
-// Returns presigned S3 URLs for uploading file parts.
+// Import a video from a public URL for VOD processing.
 type ImportVodAssetInput struct {
 	// Source URL, https or http. It must be publicly reachable and support HTTP
 	// range requests; private and internal addresses are refused.

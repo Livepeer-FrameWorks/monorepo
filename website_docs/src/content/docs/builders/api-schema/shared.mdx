@@ -445,6 +445,7 @@ Per-playback-object access policy. Foghorn reads this in the USER_NEW trigger ha
 - **type**: `PlaybackPolicyType!` ([PlaybackPolicyType](/builders/api-schema/shared/#playbackpolicytype))
 - **jwt**: `PlaybackJwtPolicy` ([PlaybackJwtPolicy](/builders/api-schema/shared/#playbackjwtpolicy)) — JWT-policy details, populated when type == JWT.
 - **webhook**: `PlaybackWebhookPolicy` ([PlaybackWebhookPolicy](/builders/api-schema/shared/#playbackwebhookpolicy)) — Webhook-policy details, populated when type == WEBHOOK. Secret is masked.
+- **allowedOrigins**: `[String!]!` — Sites allowed to embed the content, as normalized `scheme://host[:port]` origins; `*` allows any. Empty = no restriction. A browser viewer whose Origin (or Referer) is not listed is denied.
 
 ### PlaybackPolicyType
 
@@ -463,6 +464,7 @@ Webhook-callback playback policy. On every viewer connect, FrameWorks POSTs to t
 - **url**: `String!`
 - **timeoutMs**: `Int!` — Outbound POST timeout in milliseconds. Capped server-side at 10000.
 - **secretMasked**: `String!` — Always &#39;redacted&#39; on read; the actual secret is fieldcrypt-encrypted at rest.
+- **context**: `JSON` ([JSON](/builders/api-schema/shared/#json)) — Your JSON object, sent as `context` in every access request to the URL. Null when unset.
 
 ### ProcessingUsageRecord
 

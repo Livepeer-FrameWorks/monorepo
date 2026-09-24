@@ -294,6 +294,10 @@ export type CreateStreamKeyInput = {
   name: string;
 };
 
+/**
+ * Input for initiating a multipart VOD upload.
+ * Returns presigned S3 URLs for uploading file parts.
+ */
 export type CreateVodUploadInput = {
   /** MIME type (video/mp4, video/webm, etc.). Auto-detected if omitted. */
   contentType?: string | null | undefined;
@@ -431,10 +435,7 @@ export type EventSuspensionReason =
   | 'SUSPENSION_REASON_UNSPECIFIED'
   | '%future added value';
 
-/**
- * Input for initiating a multipart VOD upload.
- * Returns presigned S3 URLs for uploading file parts.
- */
+/** Import a video from a public URL for VOD processing. */
 export type ImportVodAssetInput = {
   /** Optional description for the asset. */
   description?: string | null | undefined;

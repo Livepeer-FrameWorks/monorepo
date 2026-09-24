@@ -1994,6 +1994,10 @@ union CreateStreamKeyResult = StreamKey | ValidationError | NotFoundError | Auth
 
 union CreateStreamResult = Stream | ValidationError | AuthError
 
+"""
+Input for initiating a multipart VOD upload.
+Returns presigned S3 URLs for uploading file parts.
+"""
 input CreateVodUploadInput {
   """
   Original filename (for metadata and content-type detection).
@@ -2744,8 +2748,7 @@ type GeographicDistribution {
 }
 
 """
-Input for initiating a multipart VOD upload.
-Returns presigned S3 URLs for uploading file parts.
+Import a video from a public URL for VOD processing.
 """
 input ImportVodAssetInput {
   """

@@ -422,6 +422,7 @@ Structured result of a dry-run policy evaluation. Mirrors Foghorn&#39;s Playback
 - **type**: `PlaybackPolicyType!` ([PlaybackPolicyType](/builders/api-schema/shared/#playbackpolicytype))
 - **jwt**: `PlaybackJwtPolicyInput` ([PlaybackJwtPolicyInput](/builders/api-schema/access/#playbackjwtpolicyinput)) — Required when type == JWT.
 - **webhook**: `PlaybackWebhookPolicyInput` ([PlaybackWebhookPolicyInput](/builders/api-schema/access/#playbackwebhookpolicyinput)) — Required when type == WEBHOOK.
+- **allowedOrigins**: `[String!]` — JWT and WEBHOOK only: sites allowed to embed the content, each `*` or `scheme://host[:port]` (at most 50). Omit or empty for no restriction.
 
 ### PlaybackTrack
 
@@ -442,6 +443,7 @@ Structured result of a dry-run policy evaluation. Mirrors Foghorn&#39;s Playback
 - **url**: `String!` — https URL FrameWorks will POST to on each viewer connect.
 - **secret**: `String` — HMAC-SHA256 secret used to sign outbound webhook bodies. Write-only: persisted via field-level encryption and never returned in queries. Required when creating a webhook policy. Omit when updating an existing webhook policy to keep the currently configured secret.
 - **timeoutMs**: `Int` — Outbound POST timeout in milliseconds. Server caps at 10000; default 5000.
+- **context**: `JSON` ([JSON](/builders/api-schema/shared/#json)) — A JSON object (at most 4 KiB) sent as `context` in every access request, e.g. `&#123;&#34;courseId&#34;: &#34;algebra-101&#34;&#125;`, so the endpoint can decide without its own lookup.
 
 ### RevokeDeveloperTokenResult
 
@@ -544,6 +546,8 @@ Inputs for testPlaybackAccess. Exactly one of playbackId / internalName must be 
 - **connector**: `String`
 - **sessionId**: `String`
 - **fireWebhook**: `Boolean` — Webhook policies only: when true, Foghorn will POST to the configured customer URL with an HMAC-signed payload (same path the live evaluator uses). When false, the evaluator returns reason=&#34;webhook-test-skipped&#34; without making the call so operators can inspect the resolved policy without side effects.
+- **origin**: `String` — Origin header to test the policy&#39;s allowed origins against.
+- **referer**: `String` — Referer header, used when origin is empty.
 
 ### TestPlaybackAccessResult
 

@@ -413,6 +413,9 @@ class CreateStreamKeyInput(BaseModel):
 
 
 class CreateVodUploadInput(BaseModel):
+    """Input for initiating a multipart VOD upload.
+    Returns presigned S3 URLs for uploading file parts."""
+
     filename: str = Field(
         description="Original filename (for metadata and content-type detection)."
     )
@@ -456,8 +459,7 @@ class CreateWebhookEndpointInput(BaseModel):
 
 
 class ImportVodAssetInput(BaseModel):
-    """Input for initiating a multipart VOD upload.
-    Returns presigned S3 URLs for uploading file parts."""
+    """Import a video from a public URL for VOD processing."""
 
     url: str = Field(
         description="Source URL, https or http. It must be publicly reachable and support HTTP\nrange requests; private and internal addresses are refused."

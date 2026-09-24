@@ -250,6 +250,25 @@ A page of DVR chapter refs. Paginated for unbounded artifact lifetime: default p
 - Member: [NotFoundError](/builders/api-schema/shared/#notfounderror)
 - Member: [AuthError](/builders/api-schema/shared/#autherror)
 
+## ImportVodAssetInput
+
+**input_object**
+
+Import a video from a public URL for VOD processing.
+
+- **url**: `String!` — Source URL, https or http. It must be publicly reachable and support HTTP range requests; private and internal addresses are refused.
+- **filename**: `String` — Filename to store the video under. Required when the URL path does not end in a supported video extension (mp4, mov, mkv, webm, ts).
+- **title**: `String` — Optional display title for the asset.
+- **description**: `String` — Optional description for the asset.
+
+## ImportVodAssetResult
+
+**union**
+
+- Member: [VodAsset](/builders/api-schema/shared/#vodasset)
+- Member: [ValidationError](/builders/api-schema/shared/#validationerror)
+- Member: [AuthError](/builders/api-schema/shared/#autherror)
+
 ## MediaCapacityConsent
 
 **object**

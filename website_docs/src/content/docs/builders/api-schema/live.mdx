@@ -564,6 +564,8 @@ Payload of a PublicEvent: one member per public event type. Fields of the same n
 - Member: [MultistreamStatusChanged](/builders/api-schema/live/#multistreamstatuschanged)
 - Member: [RecordingFailed](/builders/api-schema/live/#recordingfailed)
 - Member: [RecordingReady](/builders/api-schema/live/#recordingready)
+- Member: [RecordingStarted](/builders/api-schema/live/#recordingstarted)
+- Member: [RecordingStopped](/builders/api-schema/live/#recordingstopped)
 - Member: [StreamConnected](/builders/api-schema/live/#streamconnected)
 - Member: [StreamCreated](/builders/api-schema/live/#streamcreated)
 - Member: [StreamDeleted](/builders/api-schema/live/#streamdeleted)
@@ -595,6 +597,22 @@ Payload of a PublicEvent: one member per public event type. Fields of the same n
 - **artifact**: `EventArtifact` ([EventArtifact](/builders/api-schema/live/#eventartifact))
 - **durationMs**: `Int!`
 - **sizeBytes**: `Int!`
+
+### RecordingStarted
+
+**object**
+
+`recording.started` event. Aggregate: `artifacts`.
+
+- **artifact**: `EventArtifact` ([EventArtifact](/builders/api-schema/live/#eventartifact))
+
+### RecordingStopped
+
+**object**
+
+`recording.stopped` event. Aggregate: `artifacts`.
+
+- **artifact**: `EventArtifact` ([EventArtifact](/builders/api-schema/live/#eventartifact))
 
 ### SkipperChatEvent
 
@@ -707,6 +725,7 @@ Payload of a PublicEvent: one member per public event type. Fields of the same n
 
 - **streamId**: `ID!`
 - **protocol**: `EventIngestProtocol!` ([EventIngestProtocol](/builders/api-schema/live/#eventingestprotocol))
+- **playbackId**: `ID!`
 
 ### StreamCreated
 
@@ -733,6 +752,7 @@ Payload of a PublicEvent: one member per public event type. Fields of the same n
 `stream.idle` event. Aggregate: `streams`.
 
 - **streamId**: `ID!`
+- **playbackId**: `ID!`
 
 ### StreamKeyRotated
 
@@ -749,6 +769,7 @@ Payload of a PublicEvent: one member per public event type. Fields of the same n
 `stream.live` event. Aggregate: `streams`.
 
 - **streamId**: `ID!`
+- **playbackId**: `ID!`
 
 ### StreamUpdated
 
