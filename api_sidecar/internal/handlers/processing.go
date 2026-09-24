@@ -935,7 +935,9 @@ func (h *ProcessingJobHandler) Handle(req *ipcpb.ProcessingJobRequest, send func
 		setProcessingSourceOverride(streamName, sourceURL)
 		log.WithField("source_url", sourceURL).Info("Registered local processing source override")
 	} else if sourceURL == "" {
-		log.Warn("Processing job has no source URL or local source parameters")
+		// A VOD import carries no job source: Mist's STREAM_SOURCE gets the relay
+		// URL from Foghorn, and the relay fetches the import's source.
+		log.Info("Processing job has no source URL; Mist resolves its source through STREAM_SOURCE")
 	}
 
 	if ext := unsafeWrapperExt(req.GetSourceUrl()); ext != "" {

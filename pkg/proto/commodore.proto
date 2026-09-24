@@ -854,6 +854,9 @@ message PlaybackWebhookPolicy {
   string url = 1;          // https://customer.example/access-control
   int32 timeout_ms = 2;    // capped server-side
   string secret_pt = 3;    // set only for enforcement callers
+  // context_json is the tenant's JSON object forwarded verbatim as "context"
+  // in every gate request; empty when none is set.
+  string context_json = 4;
 }
 
 // type:
@@ -866,6 +869,9 @@ message ResolvePlaybackPolicyResponse {
   string tenant_id = 2;
   PlaybackJwtPolicy jwt_policy = 3;
   PlaybackWebhookPolicy webhook_policy = 4;
+  // allowed_origins restricts a jwt or webhook policy to viewers whose
+  // Origin (or Referer) is listed; "*" admits any. Empty = no restriction.
+  repeated string allowed_origins = 5;
 }
 
 // ============================================================================
@@ -2258,6 +2264,8 @@ service ViewerService {
 service VodService {
   // Initiate multipart upload - returns presigned URLs for direct S3 upload
   rpc CreateVodUpload(shared.CreateVodUploadRequest) returns (shared.CreateVodUploadResponse);
+  // Import a video from a public URL as a VOD asset
+  rpc ImportVodAsset(shared.ImportVodAssetRequest) returns (shared.ImportVodAssetResponse);
   // Finalize upload after all parts uploaded
   rpc CompleteVodUpload(shared.CompleteVodUploadRequest) returns (shared.CompleteVodUploadResponse);
   // Cancel in-progress upload
@@ -2349,6 +2357,7 @@ message SetPlaybackPolicyRequest {
   string type = 4;            // "public" | "jwt" | "webhook"
   PlaybackJwtPolicy jwt = 5;  // populated when type == "jwt" (active_keys ignored on input)
   PlaybackWebhookPolicy webhook = 6; // populated when type == "webhook"; secret_pt is the plaintext secret
+  repeated string allowed_origins = 7; // jwt / webhook only; see ResolvePlaybackPolicyResponse
 }
 
 message SetPlaybackPolicyResponse {

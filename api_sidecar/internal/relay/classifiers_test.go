@@ -82,7 +82,7 @@ func TestProbeTotalSize(t *testing.T) {
 
 	s := newTestServer(t, t.TempDir(), admission.CacheToDisk, &fakeResolver{}, nil)
 
-	total, err := s.probeTotalSize(context.Background(), up.URL, "")
+	total, err := s.probeTotalSize(context.Background(), s.httpc, up.URL, "")
 	if err != nil {
 		t.Fatalf("probeTotalSize: %v", err)
 	}
@@ -91,7 +91,7 @@ func TestProbeTotalSize(t *testing.T) {
 	}
 
 	// A bad URL host yields a transport error, not a size.
-	if _, err := s.probeTotalSize(context.Background(), "http://127.0.0.1:0/nope", ""); err == nil {
+	if _, err := s.probeTotalSize(context.Background(), s.httpc, "http://127.0.0.1:0/nope", ""); err == nil {
 		t.Fatal("expected an error probing an unreachable upstream")
 	}
 }

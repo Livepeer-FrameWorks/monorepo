@@ -37,7 +37,7 @@ import (
 func (s *Server) serveViaBlockCache(c *gin.Context, kind, hash, ext, localPath string, res *ResolveResult, intent admission.StorageIntent) string {
 	totalSize := int64(res.ExpectedSizeBytes)
 	if totalSize <= 0 {
-		probedSize, err := s.probeTotalSize(c.Request.Context(), res.UpstreamURL(), res.PeerRelayGrantID)
+		probedSize, err := s.probeTotalSize(c.Request.Context(), s.upstreamClient(res), res.UpstreamURL(), res.PeerRelayGrantID)
 		if err != nil {
 			s.respondColdFetchError(c, err)
 			return "error"
@@ -100,9 +100,10 @@ func (s *Server) serveViaBlockCache(c *gin.Context, kind, hash, ext, localPath s
 		return "error"
 	}
 	upstreamURL := res.UpstreamURL()
+	upstreamClient := s.upstreamClient(res)
 	recordDefrost := s.defrostRecorderFor(kind, hash)
 	if cacheDecision == admission.CacheToDisk && !hasRange {
-		if err := s.preflightFirstColdSpan(c.Request.Context(), store, spans[0], totalSize, upstreamURL, res.PeerRelayGrantID); err != nil {
+		if err := s.preflightFirstColdSpan(c.Request.Context(), upstreamClient, store, spans[0], totalSize, upstreamURL, res.PeerRelayGrantID); err != nil {
 			s.cache.Delete(kind, hash)
 			s.respondColdFetchError(c, err)
 			return "error"
@@ -143,7 +144,7 @@ func (s *Server) serveViaBlockCache(c *gin.Context, kind, hash, ext, localPath s
 	}
 
 	for _, span := range spans {
-		if err := s.serveBlockSpan(c.Request.Context(), c.Writer, store, span, totalSize, upstreamURL, res.PeerRelayGrantID, cacheDecision, strictCache, recordDefrost); err != nil {
+		if err := s.serveBlockSpan(c.Request.Context(), upstreamClient, c.Writer, store, span, totalSize, upstreamURL, res.PeerRelayGrantID, cacheDecision, strictCache, recordDefrost); err != nil {
 			// A peer-relay grant that 401/403s mid-stream is dead (origin
 			// restarted, grant evicted before the resolve TTL lapsed). Drop the
 			// resolve-cache entry so the next request re-resolves and re-mints
@@ -186,12 +187,12 @@ func (s *Server) serveViaBlockCache(c *gin.Context, kind, hash, ext, localPath s
 // disk. Without coalescing, N viewers on the same cold block would
 // fire N parallel S3 range GETs and N tmpfiles. Memory-only viewers
 // bypass the coalescer (no shared warm file to wait for).
-func (s *Server) serveBlockSpan(ctx context.Context, w io.Writer, store *BlockStore, span blockSpan, totalSize int64, mediaURL, grantID string, decision admission.CacheDecision, strictCache bool, defrost func(int64)) error {
+func (s *Server) serveBlockSpan(ctx context.Context, httpc *http.Client, w io.Writer, store *BlockStore, span blockSpan, totalSize int64, mediaURL, grantID string, decision admission.CacheDecision, strictCache bool, defrost func(int64)) error {
 	if served, err := s.serveWarmBlock(w, store, span); served || err != nil {
 		return err
 	}
 	if decision != admission.CacheToDisk || s.coldFetch == nil {
-		return s.streamBlockFromS3(ctx, w, store, span, totalSize, mediaURL, grantID, decision, strictCache, defrost)
+		return s.streamBlockFromS3(ctx, httpc, w, store, span, totalSize, mediaURL, grantID, decision, strictCache, defrost)
 	}
 
 	key := fmt.Sprintf("%s|%d", store.Dir(), span.Idx)
@@ -211,12 +212,12 @@ func (s *Server) serveBlockSpan(ctx context.Context, w io.Writer, store *BlockSt
 				return err
 			}
 		}
-		return s.streamBlockFromS3(ctx, w, store, span, totalSize, mediaURL, grantID, decision, strictCache, defrost)
+		return s.streamBlockFromS3(ctx, httpc, w, store, span, totalSize, mediaURL, grantID, decision, strictCache, defrost)
 	}
 	coldfetchCoalesced.WithLabelValues("leader").Inc()
 
 	// Leader path: run the fetch, then publish disk-write outcome.
-	err := s.streamBlockFromS3(ctx, w, store, span, totalSize, mediaURL, grantID, decision, strictCache, defrost)
+	err := s.streamBlockFromS3(ctx, httpc, w, store, span, totalSize, mediaURL, grantID, decision, strictCache, defrost)
 	s.coldFetch.finish(key, err == nil && store.HasBlock(span.Idx))
 	return err
 }
@@ -263,7 +264,7 @@ func (s *Server) serveWarmBlock(w io.Writer, store *BlockStore, span blockSpan) 
 // viewers bypass the coalescer and each issue their own S3 range
 // fetch. The first writer to finish wins the rename; later writers
 // see the warm block exists and drop their tmpfile.
-func (s *Server) streamBlockFromS3(ctx context.Context, w io.Writer, store *BlockStore, span blockSpan, totalSize int64, mediaURL, grantID string, decision admission.CacheDecision, strictCache bool, defrost func(int64)) error {
+func (s *Server) streamBlockFromS3(ctx context.Context, httpc *http.Client, w io.Writer, store *BlockStore, span blockSpan, totalSize int64, mediaURL, grantID string, decision admission.CacheDecision, strictCache bool, defrost func(int64)) error {
 	blockStart, blockEnd := store.BlockRange(span.Idx, totalSize)
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, mediaURL, nil)
 	if err != nil {
@@ -278,7 +279,7 @@ func (s *Server) streamBlockFromS3(ctx context.Context, w io.Writer, store *Bloc
 	}
 	source := upstreamSourceLabel(grantID)
 	fetchStart := time.Now()
-	resp, err := s.httpc.Do(req)
+	resp, err := httpc.Do(req)
 	if err != nil {
 		defrostBlocks.WithLabelValues(source, "error").Inc()
 		return fmt.Errorf("upstream block fetch: %w", err)
@@ -410,7 +411,7 @@ func isUpstreamAuthError(err error) bool {
 		(se.StatusCode == http.StatusUnauthorized || se.StatusCode == http.StatusForbidden)
 }
 
-func (s *Server) probeTotalSize(ctx context.Context, mediaURL, grantID string) (int64, error) {
+func (s *Server) probeTotalSize(ctx context.Context, httpc *http.Client, mediaURL, grantID string) (int64, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, mediaURL, nil)
 	if err != nil {
 		return 0, fmt.Errorf("build upstream size probe: %w", err)
@@ -419,7 +420,7 @@ func (s *Server) probeTotalSize(ctx context.Context, mediaURL, grantID string) (
 	if grantID != "" {
 		req.Header.Set("Authorization", "Bearer "+grantID)
 	}
-	resp, err := s.httpc.Do(req)
+	resp, err := httpc.Do(req)
 	if err != nil {
 		return 0, fmt.Errorf("upstream size probe: %w", err)
 	}
@@ -436,7 +437,7 @@ func (s *Server) probeTotalSize(ctx context.Context, mediaURL, grantID string) (
 	return 0, upstreamStatusError{StatusCode: resp.StatusCode}
 }
 
-func (s *Server) preflightFirstColdSpan(ctx context.Context, store *BlockStore, span blockSpan, totalSize int64, mediaURL, grantID string) error {
+func (s *Server) preflightFirstColdSpan(ctx context.Context, httpc *http.Client, store *BlockStore, span blockSpan, totalSize int64, mediaURL, grantID string) error {
 	if store.HasBlock(span.Idx) {
 		return nil
 	}
@@ -449,7 +450,7 @@ func (s *Server) preflightFirstColdSpan(ctx context.Context, store *BlockStore, 
 	if grantID != "" {
 		req.Header.Set("Authorization", "Bearer "+grantID)
 	}
-	resp, err := s.httpc.Do(req)
+	resp, err := httpc.Do(req)
 	if err != nil {
 		return fmt.Errorf("upstream block preflight fetch: %w", err)
 	}

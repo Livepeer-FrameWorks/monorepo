@@ -305,7 +305,7 @@ func (s *Server) streamRangeNoCache(c *gin.Context, res *ResolveResult) string {
 	} else if rng := c.Request.Header.Get("Range"); rng != "" {
 		req.Header.Set("Range", rng)
 	}
-	resp, err := s.httpc.Do(req)
+	resp, err := s.upstreamClient(res).Do(req)
 	if err != nil {
 		s.serverError(c, "upstream fetch", err)
 		return "error"

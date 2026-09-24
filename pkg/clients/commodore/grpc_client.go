@@ -1268,12 +1268,6 @@ func (c *GRPCClient) ResolveViewerEndpoint(ctx context.Context, contentID, viewe
 }
 
 func (c *GRPCClient) ResolveViewerEndpointWithProtocol(ctx context.Context, contentID, viewerIP, viewerToken, protocol string) (*sharedpb.ViewerEndpointResponse, error) {
-	if c == nil {
-		return nil, fmt.Errorf("CRITICAL: Commodore GRPCClient is nil")
-	}
-	if c.viewer == nil {
-		return nil, fmt.Errorf("CRITICAL: Commodore.viewer client is nil - gRPC connection failed or not initialized?")
-	}
 	req := &sharedpb.ViewerEndpointRequest{
 		ContentId: contentID,
 		Protocol:  protocol,
@@ -1283,6 +1277,18 @@ func (c *GRPCClient) ResolveViewerEndpointWithProtocol(ctx context.Context, cont
 	}
 	if viewerToken != "" {
 		req.ViewerToken = &viewerToken
+	}
+	return c.ResolveViewer(ctx, req)
+}
+
+// ResolveViewer sends a complete viewer request, including the viewer's
+// Origin and Referer when the caller received the viewer's HTTP request.
+func (c *GRPCClient) ResolveViewer(ctx context.Context, req *sharedpb.ViewerEndpointRequest) (*sharedpb.ViewerEndpointResponse, error) {
+	if c == nil {
+		return nil, fmt.Errorf("CRITICAL: Commodore GRPCClient is nil")
+	}
+	if c.viewer == nil {
+		return nil, fmt.Errorf("CRITICAL: Commodore.viewer client is nil - gRPC connection failed or not initialized?")
 	}
 	return c.viewer.ResolveViewerEndpoint(ctx, req)
 }
@@ -1313,6 +1319,11 @@ func (c *GRPCClient) ResolveIngestEndpoint(ctx context.Context, streamKey, viewe
 // CreateVodUpload initiates a multipart upload for a VOD asset
 func (c *GRPCClient) CreateVodUpload(ctx context.Context, req *sharedpb.CreateVodUploadRequest) (*sharedpb.CreateVodUploadResponse, error) {
 	return c.vod.CreateVodUpload(ctx, req)
+}
+
+// ImportVodAsset imports a video from a URL as a VOD asset
+func (c *GRPCClient) ImportVodAsset(ctx context.Context, req *sharedpb.ImportVodAssetRequest) (*sharedpb.ImportVodAssetResponse, error) {
+	return c.vod.ImportVodAsset(ctx, req)
 }
 
 // CompleteVodUpload finalizes a multipart upload after all parts are uploaded

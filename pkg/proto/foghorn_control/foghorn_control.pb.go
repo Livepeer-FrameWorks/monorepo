@@ -1249,7 +1249,11 @@ type TestPlaybackAccessRequest struct {
 	// evaluator fires a real outbound request to the customer URL. Caller
 	// is responsible for showing a confirmation in the UI before setting
 	// this; webhooks have side effects.
-	FireWebhook   bool `protobuf:"varint,9,opt,name=fire_webhook,json=fireWebhook,proto3" json:"fire_webhook,omitempty"`
+	FireWebhook bool `protobuf:"varint,9,opt,name=fire_webhook,json=fireWebhook,proto3" json:"fire_webhook,omitempty"`
+	// origin / referer are the browser headers to evaluate allowed_origins
+	// against, as a viewer's playback request would carry them.
+	Origin        string `protobuf:"bytes,10,opt,name=origin,proto3" json:"origin,omitempty"`
+	Referer       string `protobuf:"bytes,11,opt,name=referer,proto3" json:"referer,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1345,6 +1349,20 @@ func (x *TestPlaybackAccessRequest) GetFireWebhook() bool {
 		return x.FireWebhook
 	}
 	return false
+}
+
+func (x *TestPlaybackAccessRequest) GetOrigin() string {
+	if x != nil {
+		return x.Origin
+	}
+	return ""
+}
+
+func (x *TestPlaybackAccessRequest) GetReferer() string {
+	if x != nil {
+		return x.Referer
+	}
+	return ""
 }
 
 type TestPlaybackAccessResponse struct {
@@ -1575,7 +1593,7 @@ const file_foghorn_control_proto_rawDesc = "" +
 	"\x1eTerminateTenantStreamsResponse\x12-\n" +
 	"\x12streams_terminated\x18\x01 \x01(\x05R\x11streamsTerminated\x12/\n" +
 	"\x13sessions_terminated\x18\x02 \x01(\x05R\x12sessionsTerminated\x12!\n" +
-	"\fstream_names\x18\x03 \x03(\tR\vstreamNames\"\xbf\x02\n" +
+	"\fstream_names\x18\x03 \x03(\tR\vstreamNames\"\xf1\x02\n" +
 	"\x19TestPlaybackAccessRequest\x12\x1b\n" +
 	"\ttenant_id\x18\x01 \x01(\tR\btenantId\x12\x1f\n" +
 	"\vplayback_id\x18\x02 \x01(\tR\n" +
@@ -1588,7 +1606,10 @@ const file_foghorn_control_proto_rawDesc = "" +
 	"\tconnector\x18\a \x01(\tR\tconnector\x12\x1d\n" +
 	"\n" +
 	"session_id\x18\b \x01(\tR\tsessionId\x12!\n" +
-	"\ffire_webhook\x18\t \x01(\bR\vfireWebhook\"\xc5\x02\n" +
+	"\ffire_webhook\x18\t \x01(\bR\vfireWebhook\x12\x16\n" +
+	"\x06origin\x18\n" +
+	" \x01(\tR\x06origin\x12\x18\n" +
+	"\areferer\x18\v \x01(\tR\areferer\"\xc5\x02\n" +
 	"\x1aTestPlaybackAccessResponse\x12\x18\n" +
 	"\aallowed\x18\x01 \x01(\bR\aallowed\x12\x1f\n" +
 	"\vpolicy_type\x18\x02 \x01(\tR\n" +

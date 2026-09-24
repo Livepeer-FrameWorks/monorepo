@@ -428,15 +428,20 @@ func (c *GRPCClient) ResolveViewerEndpoint(ctx context.Context, contentID string
 }
 
 func (c *GRPCClient) ResolveViewerEndpointWithProtocol(ctx context.Context, contentID string, viewerIP, viewerToken *string, protocol string) (*sharedpb.ViewerEndpointResponse, metadata.MD, error) {
-	ctx, cancel := context.WithTimeout(ctx, c.timeout)
-	defer cancel()
-
-	req := &sharedpb.ViewerEndpointRequest{
+	return c.ResolveViewer(ctx, &sharedpb.ViewerEndpointRequest{
 		ContentId:   contentID,
 		ViewerIp:    viewerIP,
 		ViewerToken: viewerToken,
 		Protocol:    protocol,
-	}
+	})
+}
+
+// ResolveViewer sends a complete viewer request, including the viewer's
+// Origin and Referer when the caller received them.
+func (c *GRPCClient) ResolveViewer(ctx context.Context, req *sharedpb.ViewerEndpointRequest) (*sharedpb.ViewerEndpointResponse, metadata.MD, error) {
+	ctx, cancel := context.WithTimeout(ctx, c.timeout)
+	defer cancel()
+
 	var trailers metadata.MD
 	resp, err := c.viewer.ResolveViewerEndpoint(ctx, req, grpc.Trailer(&trailers))
 	return resp, trailers, err
@@ -470,6 +475,17 @@ func (c *GRPCClient) CreateVodUpload(ctx context.Context, req *sharedpb.CreateVo
 
 	var trailers metadata.MD
 	resp, err := c.vod.CreateVodUpload(ctx, req, grpc.Trailer(&trailers))
+	return resp, trailers, err
+}
+
+// ImportVodAsset records a VOD import from a URL and queues its processing.
+// Returns any trailers emitted by the downstream service.
+func (c *GRPCClient) ImportVodAsset(ctx context.Context, req *sharedpb.ImportVodAssetRequest) (*sharedpb.ImportVodAssetResponse, metadata.MD, error) {
+	ctx, cancel := context.WithTimeout(ctx, c.timeout)
+	defer cancel()
+
+	var trailers metadata.MD
+	resp, err := c.vod.ImportVodAsset(ctx, req, grpc.Trailer(&trailers))
 	return resp, trailers, err
 }
 

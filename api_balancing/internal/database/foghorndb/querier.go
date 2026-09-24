@@ -263,6 +263,8 @@ type Querier interface {
 	GetFreezeArtifactMetadata(ctx context.Context, arg GetFreezeArtifactMetadataParams) (GetFreezeArtifactMetadataRow, error)
 	GetFreezePublicationLedgerCursor(ctx context.Context) (string, error)
 	GetFreshRelayOriginNode(ctx context.Context, artifactHash string) (GetFreshRelayOriginNodeRow, error)
+	// An existing import of this hash, for an idempotent retry of ImportVodAsset.
+	GetImportedVodForTenant(ctx context.Context, arg GetImportedVodForTenantParams) (GetImportedVodForTenantRow, error)
 	GetIngestSessionAuthoritySnapshot(ctx context.Context, sessionID string) (GetIngestSessionAuthoritySnapshotRow, error)
 	GetLastConfigSeed(ctx context.Context, nodeID string) (GetLastConfigSeedRow, error)
 	GetLatestDVRChapterBefore(ctx context.Context, arg GetLatestDVRChapterBeforeParams) (GetLatestDVRChapterBeforeRow, error)
@@ -318,6 +320,9 @@ type Querier interface {
 	InsertAcceptedArtifactCreationCommand(ctx context.Context, arg InsertAcceptedArtifactCreationCommandParams) error
 	InsertClosedDVRChapter(ctx context.Context, arg InsertClosedDVRChapterParams) error
 	InsertDiscoveredArtifact(ctx context.Context, arg InsertDiscoveredArtifactParams) error
+	// A VOD imported from a URL starts in 'processing' with no stored object, like
+	// a clip awaiting processing: the processed output becomes its first copy.
+	InsertImportedVodArtifact(ctx context.Context, arg InsertImportedVodArtifactParams) error
 	InsertIngestCloseTombstone(ctx context.Context, arg InsertIngestCloseTombstoneParams) error
 	InsertIngestSession(ctx context.Context, arg InsertIngestSessionParams) (string, error)
 	InsertIngestSessionWithAuthority(ctx context.Context, arg InsertIngestSessionWithAuthorityParams) (string, error)
@@ -333,6 +338,7 @@ type Querier interface {
 	InsertThumbnailAssignment(ctx context.Context, arg InsertThumbnailAssignmentParams) error
 	InsertThumbnailTaskObject(ctx context.Context, arg InsertThumbnailTaskObjectParams) error
 	InsertUploadingVodArtifact(ctx context.Context, arg InsertUploadingVodArtifactParams) error
+	InsertVodImportMetadata(ctx context.Context, arg InsertVodImportMetadataParams) error
 	InsertVodMultipartMetadata(ctx context.Context, arg InsertVodMultipartMetadataParams) error
 	IsArtifactSynced(ctx context.Context, artifactHash string) (bool, error)
 	IsDVRRecordingSource(ctx context.Context, arg IsDVRRecordingSourceParams) (bool, error)
@@ -448,6 +454,11 @@ type Querier interface {
 	LockChapterParentRecording(ctx context.Context, chapterID string) error
 	LockDVRChapterMutation(ctx context.Context, arg LockDVRChapterMutationParams) error
 	LockDVRDispatchOwner(ctx context.Context, arg LockDVRDispatchOwnerParams) (string, error)
+	// Locks the recording and reads what the finalization claim replaces. Before
+	// finalization the only lifecycle event that advances a recording's revision
+	// is recording.started, so revision > 0 means capture was confirmed and
+	// published.
+	LockDVRFinalizationPrior(ctx context.Context, artifactHash string) (LockDVRFinalizationPriorRow, error)
 	LockDVRProgressArtifact(ctx context.Context, artifactHash string) (LockDVRProgressArtifactRow, error)
 	LockDVRRecordingOrigin(ctx context.Context, arg LockDVRRecordingOriginParams) (LockDVRRecordingOriginRow, error)
 	LockDVRSegmentParent(ctx context.Context, arg LockDVRSegmentParentParams) (sql.NullString, error)
@@ -639,6 +650,8 @@ type Querier interface {
 	UpdateProcessingJobCache(ctx context.Context, arg UpdateProcessingJobCacheParams) (int64, error)
 	UpdateProcessingJobProgress(ctx context.Context, arg UpdateProcessingJobProgressParams) (UpdateProcessingJobProgressRow, error)
 	UpgradeAdmissionPushTargetsEncryption(ctx context.Context, arg UpgradeAdmissionPushTargetsEncryptionParams) (int64, error)
+	// The format of a processing input the relay can serve: an uploaded object in
+	// S3, or the source URL of an import.
 	UploadedArtifactFormat(ctx context.Context, artifactHash string) (string, error)
 	UpsertCachedArtifactNode(ctx context.Context, arg UpsertCachedArtifactNodeParams) (sql.NullInt64, error)
 	UpsertChapterVodMetadata(ctx context.Context, arg UpsertChapterVodMetadataParams) error

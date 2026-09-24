@@ -9,7 +9,7 @@ WHERE artifact_hash = sqlc.arg(artifact_hash)
 LIMIT 1;
 
 -- name: GetRelayVodMetadata :one
-SELECT vm.s3_key, a.size_bytes, a.tenant_id
+SELECT vm.s3_key, vm.source_url, a.size_bytes, a.tenant_id
 FROM foghorn.vod_metadata vm
 LEFT JOIN foghorn.artifacts a ON a.artifact_hash = vm.artifact_hash
 WHERE vm.artifact_hash = sqlc.arg(artifact_hash)

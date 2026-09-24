@@ -317,6 +317,11 @@ message ViewerEndpointRequest {
   // node with any browser-playable Mist output and returns its full catalog;
   // an explicit requirement must not fall back to a different protocol.
   string protocol = 5;
+  // viewer_origin / viewer_referer are the Origin and Referer headers of the
+  // viewer's resolve request, for the playback policy's allowed origins. Set
+  // only by a caller that received the viewer's request.
+  optional string viewer_origin = 6;
+  optional string viewer_referer = 7;
 }
 
 // OutputCapability - capabilities of an output protocol
@@ -539,6 +544,37 @@ message CreateVodUploadResponse {
 message VodUploadPart {
   int32 part_number = 1;         // 1-indexed part number
   string presigned_url = 2;      // PUT URL for this part
+}
+
+// ImportVodAssetRequest imports a video from a public URL as a VOD asset.
+// Gateway → Commodore sends source_url (https or http) plus the asset fields;
+// Commodore validates the source, mints the identifiers, and forwards the
+// complete request to Foghorn, which records
+// the source and queues processing. The processing node's Helmsman relay reads
+// the source URL; nothing is copied to storage before processing.
+message ImportVodAssetRequest {
+  string tenant_id = 1;
+  string user_id = 2;
+  string source_url = 3;
+  // filename stores the video; empty derives it from the URL path.
+  string filename = 4;
+  optional string title = 5;
+  optional string description = 6;
+  // Minted by Commodore; required at Foghorn.
+  optional string vod_hash = 7;
+  optional string playback_id = 8;
+  optional string internal_name = 9;
+  string cluster_id = 10;
+  optional int32 retention_days = 11;
+  // Commodore creation-intent request_id keying Foghorn's command ledger.
+  optional string request_id = 12;
+  common.RequestActor actor = 13;
+  // Processing spec (JSON) the import's completion dispatches, as a completed upload's.
+  optional string processes_json = 14;
+}
+
+message ImportVodAssetResponse {
+  VodAssetInfo asset = 1;
 }
 
 // CompleteVodUploadRequest - finalize multipart upload

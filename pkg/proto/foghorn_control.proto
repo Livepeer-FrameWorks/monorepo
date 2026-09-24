@@ -170,6 +170,10 @@ message TestPlaybackAccessRequest {
   // is responsible for showing a confirmation in the UI before setting
   // this; webhooks have side effects.
   bool fire_webhook = 9;
+  // origin / referer are the browser headers to evaluate allowed_origins
+  // against, as a viewer's playback request would carry them.
+  string origin = 10;
+  string referer = 11;
 }
 
 message TestPlaybackAccessResponse {

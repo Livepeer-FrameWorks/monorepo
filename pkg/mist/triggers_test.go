@@ -409,6 +409,37 @@ func TestParseTriggerToProtobufParamMappings(t *testing.T) {
 				if got.GetConnector() != "HLS" || got.GetSessionId() != "sess-1" {
 					t.Fatalf("user new connector/session mismatch: %+v", got)
 				}
+				// A payload without the origin lines comes from a Mist build that does not report them.
+				if got.Origin != nil || got.Referer != nil {
+					t.Fatalf("legacy USER_NEW must leave origin/referer unset: %+v", got)
+				}
+			},
+		},
+		{
+			name:        "user new with origin and referer",
+			triggerType: TriggerUserNew,
+			payload: joinPayload("live+stream_id", "203.0.113.9", "tok123", "HLS", "http://edge/view", "sess-1", "false",
+				"https://embed.example", "https://embed.example/watch"),
+			wantBlock: true,
+			validate: func(t *testing.T, trig *ipcpb.MistTrigger) {
+				got := trig.GetViewerConnect()
+				if got.Origin == nil || got.GetOrigin() != "https://embed.example" || got.GetReferer() != "https://embed.example/watch" {
+					t.Fatalf("origin/referer = %v/%v", got.Origin, got.Referer)
+				}
+			},
+		},
+		{
+			// Both header lines empty: the request was observed and carried no
+			// headers, which must not read as a legacy payload.
+			name:        "user new with empty origin and referer",
+			triggerType: TriggerUserNew,
+			payload:     []byte("live+stream_id\n203.0.113.9\ntok123\nRTMP\nrtmp://edge/view\nsess-1\nfalse\n\n\n"),
+			wantBlock:   true,
+			validate: func(t *testing.T, trig *ipcpb.MistTrigger) {
+				got := trig.GetViewerConnect()
+				if got.Origin == nil || got.Referer == nil || got.GetOrigin() != "" || got.GetReferer() != "" {
+					t.Fatalf("empty observed headers must be set and empty: %v/%v", got.Origin, got.Referer)
+				}
 			},
 		},
 		{

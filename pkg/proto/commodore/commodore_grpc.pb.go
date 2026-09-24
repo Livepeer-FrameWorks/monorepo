@@ -5130,6 +5130,7 @@ var ViewerService_ServiceDesc = grpc.ServiceDesc{
 
 const (
 	VodService_CreateVodUpload_FullMethodName    = "/commodore.VodService/CreateVodUpload"
+	VodService_ImportVodAsset_FullMethodName     = "/commodore.VodService/ImportVodAsset"
 	VodService_CompleteVodUpload_FullMethodName  = "/commodore.VodService/CompleteVodUpload"
 	VodService_AbortVodUpload_FullMethodName     = "/commodore.VodService/AbortVodUpload"
 	VodService_GetVodUploadStatus_FullMethodName = "/commodore.VodService/GetVodUploadStatus"
@@ -5147,6 +5148,8 @@ const (
 type VodServiceClient interface {
 	// Initiate multipart upload - returns presigned URLs for direct S3 upload
 	CreateVodUpload(ctx context.Context, in *shared.CreateVodUploadRequest, opts ...grpc.CallOption) (*shared.CreateVodUploadResponse, error)
+	// Import a video from a public URL as a VOD asset
+	ImportVodAsset(ctx context.Context, in *shared.ImportVodAssetRequest, opts ...grpc.CallOption) (*shared.ImportVodAssetResponse, error)
 	// Finalize upload after all parts uploaded
 	CompleteVodUpload(ctx context.Context, in *shared.CompleteVodUploadRequest, opts ...grpc.CallOption) (*shared.CompleteVodUploadResponse, error)
 	// Cancel in-progress upload
@@ -5171,6 +5174,16 @@ func (c *vodServiceClient) CreateVodUpload(ctx context.Context, in *shared.Creat
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(shared.CreateVodUploadResponse)
 	err := c.cc.Invoke(ctx, VodService_CreateVodUpload_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *vodServiceClient) ImportVodAsset(ctx context.Context, in *shared.ImportVodAssetRequest, opts ...grpc.CallOption) (*shared.ImportVodAssetResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(shared.ImportVodAssetResponse)
+	err := c.cc.Invoke(ctx, VodService_ImportVodAsset_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -5228,6 +5241,8 @@ func (c *vodServiceClient) DeleteVodAsset(ctx context.Context, in *shared.Delete
 type VodServiceServer interface {
 	// Initiate multipart upload - returns presigned URLs for direct S3 upload
 	CreateVodUpload(context.Context, *shared.CreateVodUploadRequest) (*shared.CreateVodUploadResponse, error)
+	// Import a video from a public URL as a VOD asset
+	ImportVodAsset(context.Context, *shared.ImportVodAssetRequest) (*shared.ImportVodAssetResponse, error)
 	// Finalize upload after all parts uploaded
 	CompleteVodUpload(context.Context, *shared.CompleteVodUploadRequest) (*shared.CompleteVodUploadResponse, error)
 	// Cancel in-progress upload
@@ -5250,6 +5265,9 @@ type UnimplementedVodServiceServer struct{}
 
 func (UnimplementedVodServiceServer) CreateVodUpload(context.Context, *shared.CreateVodUploadRequest) (*shared.CreateVodUploadResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method CreateVodUpload not implemented")
+}
+func (UnimplementedVodServiceServer) ImportVodAsset(context.Context, *shared.ImportVodAssetRequest) (*shared.ImportVodAssetResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ImportVodAsset not implemented")
 }
 func (UnimplementedVodServiceServer) CompleteVodUpload(context.Context, *shared.CompleteVodUploadRequest) (*shared.CompleteVodUploadResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method CompleteVodUpload not implemented")
@@ -5298,6 +5316,24 @@ func _VodService_CreateVodUpload_Handler(srv interface{}, ctx context.Context, d
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
 		return srv.(VodServiceServer).CreateVodUpload(ctx, req.(*shared.CreateVodUploadRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _VodService_ImportVodAsset_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(shared.ImportVodAssetRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(VodServiceServer).ImportVodAsset(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: VodService_ImportVodAsset_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(VodServiceServer).ImportVodAsset(ctx, req.(*shared.ImportVodAssetRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -5384,6 +5420,10 @@ var VodService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "CreateVodUpload",
 			Handler:    _VodService_CreateVodUpload_Handler,
+		},
+		{
+			MethodName: "ImportVodAsset",
+			Handler:    _VodService_ImportVodAsset_Handler,
 		},
 		{
 			MethodName: "CompleteVodUpload",

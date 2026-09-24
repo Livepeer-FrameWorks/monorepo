@@ -10092,8 +10092,12 @@ type RelayResolveResponse struct {
 	// Foghorn (AuthorizeRelayPull); the edge holds no signing key. Covers
 	// both peer_relay_url and peer_relay_dtsh_url.
 	PeerRelayGrantId string `protobuf:"bytes,18,opt,name=peer_relay_grant_id,json=peerRelayGrantId,proto3" json:"peer_relay_grant_id,omitempty"`
-	unknownFields    protoimpl.UnknownFields
-	sizeCache        protoimpl.SizeCache
+	// tenant_source_url is the tenant-supplied source of a VOD import, set in
+	// place of media_presigned_url. It is not platform storage: the relay
+	// fetches it only through the public-destination policy.
+	TenantSourceUrl string `protobuf:"bytes,19,opt,name=tenant_source_url,json=tenantSourceUrl,proto3" json:"tenant_source_url,omitempty"`
+	unknownFields   protoimpl.UnknownFields
+	sizeCache       protoimpl.SizeCache
 }
 
 func (x *RelayResolveResponse) Reset() {
@@ -10220,6 +10224,13 @@ func (x *RelayResolveResponse) GetPeerRelayDtshUrl() string {
 func (x *RelayResolveResponse) GetPeerRelayGrantId() string {
 	if x != nil {
 		return x.PeerRelayGrantId
+	}
+	return ""
+}
+
+func (x *RelayResolveResponse) GetTenantSourceUrl() string {
+	if x != nil {
+		return x.TenantSourceUrl
 	}
 	return ""
 }
@@ -11604,8 +11615,14 @@ type ViewerConnectTrigger struct {
 	ClusterId       *string    `protobuf:"bytes,16,opt,name=cluster_id,json=clusterId,proto3,oneof" json:"cluster_id,omitempty"`
 	OriginClusterId *string    `protobuf:"bytes,17,opt,name=origin_cluster_id,json=originClusterId,proto3,oneof" json:"origin_cluster_id,omitempty"`
 	ControlCellId   *string    `protobuf:"bytes,18,opt,name=control_cell_id,json=controlCellId,proto3,oneof" json:"control_cell_id,omitempty"`
-	unknownFields   protoimpl.UnknownFields
-	sizeCache       protoimpl.SizeCache
+	// origin / referer are the viewer request's Origin and Referer headers.
+	// Presence means the path observed the request headers (possibly empty);
+	// absence means it could not, as with a MistServer build that does not
+	// report them.
+	Origin        *string `protobuf:"bytes,19,opt,name=origin,proto3,oneof" json:"origin,omitempty"`
+	Referer       *string `protobuf:"bytes,20,opt,name=referer,proto3,oneof" json:"referer,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *ViewerConnectTrigger) Reset() {
@@ -11753,6 +11770,20 @@ func (x *ViewerConnectTrigger) GetOriginClusterId() string {
 func (x *ViewerConnectTrigger) GetControlCellId() string {
 	if x != nil && x.ControlCellId != nil {
 		return *x.ControlCellId
+	}
+	return ""
+}
+
+func (x *ViewerConnectTrigger) GetOrigin() string {
+	if x != nil && x.Origin != nil {
+		return *x.Origin
+	}
+	return ""
+}
+
+func (x *ViewerConnectTrigger) GetReferer() string {
+	if x != nil && x.Referer != nil {
+		return *x.Referer
 	}
 	return ""
 }
@@ -21976,7 +22007,7 @@ const file_ipc_proto_rawDesc = "" +
 	"\x16RELAY_HINT_UNSPECIFIED\x10\x00\x12\x1c\n" +
 	"\x18RELAY_HINT_RANDOM_ACCESS\x10\x01\x12!\n" +
 	"\x1dRELAY_HINT_SEQUENTIAL_ONESHOT\x10\x02J\x04\b\x04\x10\x05R\n" +
-	"chapter_id\"\xdf\x06\n" +
+	"chapter_id\"\x8b\a\n" +
 	"\x14RelayResolveResponse\x12\x1d\n" +
 	"\n" +
 	"request_id\x18\x01 \x01(\tR\trequestId\x12\x1d\n" +
@@ -21994,7 +22025,8 @@ const file_ipc_proto_rawDesc = "" +
 	"\x14stream_internal_name\x18\r \x01(\tR\x12streamInternalName\x12$\n" +
 	"\x0epeer_relay_url\x18\x0e \x01(\tR\fpeerRelayUrl\x12-\n" +
 	"\x13peer_relay_dtsh_url\x18\x10 \x01(\tR\x10peerRelayDtshUrl\x12-\n" +
-	"\x13peer_relay_grant_id\x18\x12 \x01(\tR\x10peerRelayGrantId\"f\n" +
+	"\x13peer_relay_grant_id\x18\x12 \x01(\tR\x10peerRelayGrantId\x12*\n" +
+	"\x11tenant_source_url\x18\x13 \x01(\tR\x0ftenantSourceUrl\"f\n" +
 	"\x11CacheDecisionHint\x12\x1a\n" +
 	"\x16CACHE_HINT_UNSPECIFIED\x10\x00\x12\x1a\n" +
 	"\x16CACHE_HINT_PREFER_DISK\x10\x01\x12\x19\n" +
@@ -22235,7 +22267,7 @@ const file_ipc_proto_rawDesc = "" +
 	"\n" +
 	"\b_node_idB\f\n" +
 	"\n" +
-	"_stream_id\"\x8d\a\n" +
+	"_stream_id\"\xe0\a\n" +
 	"\x14ViewerConnectTrigger\x12\x1f\n" +
 	"\vstream_name\x18\x01 \x01(\tR\n" +
 	"streamName\x12\x12\n" +
@@ -22261,7 +22293,9 @@ const file_ipc_proto_rawDesc = "" +
 	"cluster_id\x18\x10 \x01(\tH\bR\tclusterId\x88\x01\x01\x12/\n" +
 	"\x11origin_cluster_id\x18\x11 \x01(\tH\tR\x0foriginClusterId\x88\x01\x01\x12+\n" +
 	"\x0fcontrol_cell_id\x18\x12 \x01(\tH\n" +
-	"R\rcontrolCellId\x88\x01\x01B\n" +
+	"R\rcontrolCellId\x88\x01\x01\x12\x1b\n" +
+	"\x06origin\x18\x13 \x01(\tH\vR\x06origin\x88\x01\x01\x12\x1d\n" +
+	"\areferer\x18\x14 \x01(\tH\fR\areferer\x88\x01\x01B\n" +
 	"\n" +
 	"\b_node_idB\x11\n" +
 	"\x0f_client_countryB\x0e\n" +
@@ -22274,7 +22308,10 @@ const file_ipc_proto_rawDesc = "" +
 	"_stream_idB\r\n" +
 	"\v_cluster_idB\x14\n" +
 	"\x12_origin_cluster_idB\x12\n" +
-	"\x10_control_cell_idJ\x04\b\b\x10\t\"\xd5\t\n" +
+	"\x10_control_cell_idB\t\n" +
+	"\a_originB\n" +
+	"\n" +
+	"\b_refererJ\x04\b\b\x10\t\"\xd5\t\n" +
 	"\x17ViewerDisconnectTrigger\x12\x1d\n" +
 	"\n" +
 	"session_id\x18\x01 \x01(\tR\tsessionId\x12\x1f\n" +

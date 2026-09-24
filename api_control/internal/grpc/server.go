@@ -9647,7 +9647,10 @@ func (s *CommodoreServer) ResolveViewerEndpoint(ctx context.Context, req *shared
 		}
 	}
 
-	resp, trailers, err := foghornClient.ResolveViewerEndpointWithProtocol(outCtx, contentID, req.ViewerIp, req.ViewerToken, req.GetProtocol())
+	resp, trailers, err := foghornClient.ResolveViewer(outCtx, &sharedpb.ViewerEndpointRequest{
+		ContentId: contentID, ViewerIp: req.ViewerIp, ViewerToken: req.ViewerToken, Protocol: req.GetProtocol(),
+		ViewerOrigin: req.ViewerOrigin, ViewerReferer: req.ViewerReferer,
+	})
 	if err != nil {
 		s.logger.WithError(err).Error("Failed to resolve viewer endpoint from Foghorn")
 		return nil, grpcutil.PropagateError(ctx, err, trailers)

@@ -2047,7 +2047,12 @@ type ViewerEndpointRequest struct {
 	// Optional canonical playback constraint. Empty selects the best serving
 	// node with any browser-playable Mist output and returns its full catalog;
 	// an explicit requirement must not fall back to a different protocol.
-	Protocol      string `protobuf:"bytes,5,opt,name=protocol,proto3" json:"protocol,omitempty"`
+	Protocol string `protobuf:"bytes,5,opt,name=protocol,proto3" json:"protocol,omitempty"`
+	// viewer_origin / viewer_referer are the Origin and Referer headers of the
+	// viewer's resolve request, for the playback policy's allowed origins. Set
+	// only by a caller that received the viewer's request.
+	ViewerOrigin  *string `protobuf:"bytes,6,opt,name=viewer_origin,json=viewerOrigin,proto3,oneof" json:"viewer_origin,omitempty"`
+	ViewerReferer *string `protobuf:"bytes,7,opt,name=viewer_referer,json=viewerReferer,proto3,oneof" json:"viewer_referer,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -2106,6 +2111,20 @@ func (x *ViewerEndpointRequest) GetViewerToken() string {
 func (x *ViewerEndpointRequest) GetProtocol() string {
 	if x != nil {
 		return x.Protocol
+	}
+	return ""
+}
+
+func (x *ViewerEndpointRequest) GetViewerOrigin() string {
+	if x != nil && x.ViewerOrigin != nil {
+		return *x.ViewerOrigin
+	}
+	return ""
+}
+
+func (x *ViewerEndpointRequest) GetViewerReferer() string {
+	if x != nil && x.ViewerReferer != nil {
+		return *x.ViewerReferer
 	}
 	return ""
 }
@@ -3521,6 +3540,208 @@ func (x *VodUploadPart) GetPresignedUrl() string {
 	return ""
 }
 
+// ImportVodAssetRequest imports a video from a public URL as a VOD asset.
+// Gateway → Commodore sends source_url (https or http) plus the asset fields;
+// Commodore validates the source, mints the identifiers, and forwards the
+// complete request to Foghorn, which records
+// the source and queues processing. The processing node's Helmsman relay reads
+// the source URL; nothing is copied to storage before processing.
+type ImportVodAssetRequest struct {
+	state     protoimpl.MessageState `protogen:"open.v1"`
+	TenantId  string                 `protobuf:"bytes,1,opt,name=tenant_id,json=tenantId,proto3" json:"tenant_id,omitempty"`
+	UserId    string                 `protobuf:"bytes,2,opt,name=user_id,json=userId,proto3" json:"user_id,omitempty"`
+	SourceUrl string                 `protobuf:"bytes,3,opt,name=source_url,json=sourceUrl,proto3" json:"source_url,omitempty"`
+	// filename stores the video; empty derives it from the URL path.
+	Filename    string  `protobuf:"bytes,4,opt,name=filename,proto3" json:"filename,omitempty"`
+	Title       *string `protobuf:"bytes,5,opt,name=title,proto3,oneof" json:"title,omitempty"`
+	Description *string `protobuf:"bytes,6,opt,name=description,proto3,oneof" json:"description,omitempty"`
+	// Minted by Commodore; required at Foghorn.
+	VodHash       *string `protobuf:"bytes,7,opt,name=vod_hash,json=vodHash,proto3,oneof" json:"vod_hash,omitempty"`
+	PlaybackId    *string `protobuf:"bytes,8,opt,name=playback_id,json=playbackId,proto3,oneof" json:"playback_id,omitempty"`
+	InternalName  *string `protobuf:"bytes,9,opt,name=internal_name,json=internalName,proto3,oneof" json:"internal_name,omitempty"`
+	ClusterId     string  `protobuf:"bytes,10,opt,name=cluster_id,json=clusterId,proto3" json:"cluster_id,omitempty"`
+	RetentionDays *int32  `protobuf:"varint,11,opt,name=retention_days,json=retentionDays,proto3,oneof" json:"retention_days,omitempty"`
+	// Commodore creation-intent request_id keying Foghorn's command ledger.
+	RequestId *string              `protobuf:"bytes,12,opt,name=request_id,json=requestId,proto3,oneof" json:"request_id,omitempty"`
+	Actor     *common.RequestActor `protobuf:"bytes,13,opt,name=actor,proto3" json:"actor,omitempty"`
+	// Processing spec (JSON) the import's completion dispatches, as a completed upload's.
+	ProcessesJson *string `protobuf:"bytes,14,opt,name=processes_json,json=processesJson,proto3,oneof" json:"processes_json,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ImportVodAssetRequest) Reset() {
+	*x = ImportVodAssetRequest{}
+	mi := &file_shared_proto_msgTypes[32]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ImportVodAssetRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ImportVodAssetRequest) ProtoMessage() {}
+
+func (x *ImportVodAssetRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_shared_proto_msgTypes[32]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ImportVodAssetRequest.ProtoReflect.Descriptor instead.
+func (*ImportVodAssetRequest) Descriptor() ([]byte, []int) {
+	return file_shared_proto_rawDescGZIP(), []int{32}
+}
+
+func (x *ImportVodAssetRequest) GetTenantId() string {
+	if x != nil {
+		return x.TenantId
+	}
+	return ""
+}
+
+func (x *ImportVodAssetRequest) GetUserId() string {
+	if x != nil {
+		return x.UserId
+	}
+	return ""
+}
+
+func (x *ImportVodAssetRequest) GetSourceUrl() string {
+	if x != nil {
+		return x.SourceUrl
+	}
+	return ""
+}
+
+func (x *ImportVodAssetRequest) GetFilename() string {
+	if x != nil {
+		return x.Filename
+	}
+	return ""
+}
+
+func (x *ImportVodAssetRequest) GetTitle() string {
+	if x != nil && x.Title != nil {
+		return *x.Title
+	}
+	return ""
+}
+
+func (x *ImportVodAssetRequest) GetDescription() string {
+	if x != nil && x.Description != nil {
+		return *x.Description
+	}
+	return ""
+}
+
+func (x *ImportVodAssetRequest) GetVodHash() string {
+	if x != nil && x.VodHash != nil {
+		return *x.VodHash
+	}
+	return ""
+}
+
+func (x *ImportVodAssetRequest) GetPlaybackId() string {
+	if x != nil && x.PlaybackId != nil {
+		return *x.PlaybackId
+	}
+	return ""
+}
+
+func (x *ImportVodAssetRequest) GetInternalName() string {
+	if x != nil && x.InternalName != nil {
+		return *x.InternalName
+	}
+	return ""
+}
+
+func (x *ImportVodAssetRequest) GetClusterId() string {
+	if x != nil {
+		return x.ClusterId
+	}
+	return ""
+}
+
+func (x *ImportVodAssetRequest) GetRetentionDays() int32 {
+	if x != nil && x.RetentionDays != nil {
+		return *x.RetentionDays
+	}
+	return 0
+}
+
+func (x *ImportVodAssetRequest) GetRequestId() string {
+	if x != nil && x.RequestId != nil {
+		return *x.RequestId
+	}
+	return ""
+}
+
+func (x *ImportVodAssetRequest) GetActor() *common.RequestActor {
+	if x != nil {
+		return x.Actor
+	}
+	return nil
+}
+
+func (x *ImportVodAssetRequest) GetProcessesJson() string {
+	if x != nil && x.ProcessesJson != nil {
+		return *x.ProcessesJson
+	}
+	return ""
+}
+
+type ImportVodAssetResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Asset         *VodAssetInfo          `protobuf:"bytes,1,opt,name=asset,proto3" json:"asset,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ImportVodAssetResponse) Reset() {
+	*x = ImportVodAssetResponse{}
+	mi := &file_shared_proto_msgTypes[33]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ImportVodAssetResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ImportVodAssetResponse) ProtoMessage() {}
+
+func (x *ImportVodAssetResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_shared_proto_msgTypes[33]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ImportVodAssetResponse.ProtoReflect.Descriptor instead.
+func (*ImportVodAssetResponse) Descriptor() ([]byte, []int) {
+	return file_shared_proto_rawDescGZIP(), []int{33}
+}
+
+func (x *ImportVodAssetResponse) GetAsset() *VodAssetInfo {
+	if x != nil {
+		return x.Asset
+	}
+	return nil
+}
+
 // CompleteVodUploadRequest - finalize multipart upload
 type CompleteVodUploadRequest struct {
 	state    protoimpl.MessageState `protogen:"open.v1"`
@@ -3538,7 +3759,7 @@ type CompleteVodUploadRequest struct {
 
 func (x *CompleteVodUploadRequest) Reset() {
 	*x = CompleteVodUploadRequest{}
-	mi := &file_shared_proto_msgTypes[32]
+	mi := &file_shared_proto_msgTypes[34]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3550,7 +3771,7 @@ func (x *CompleteVodUploadRequest) String() string {
 func (*CompleteVodUploadRequest) ProtoMessage() {}
 
 func (x *CompleteVodUploadRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_shared_proto_msgTypes[32]
+	mi := &file_shared_proto_msgTypes[34]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3563,7 +3784,7 @@ func (x *CompleteVodUploadRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CompleteVodUploadRequest.ProtoReflect.Descriptor instead.
 func (*CompleteVodUploadRequest) Descriptor() ([]byte, []int) {
-	return file_shared_proto_rawDescGZIP(), []int{32}
+	return file_shared_proto_rawDescGZIP(), []int{34}
 }
 
 func (x *CompleteVodUploadRequest) GetTenantId() string {
@@ -3612,7 +3833,7 @@ type VodCompletedPart struct {
 
 func (x *VodCompletedPart) Reset() {
 	*x = VodCompletedPart{}
-	mi := &file_shared_proto_msgTypes[33]
+	mi := &file_shared_proto_msgTypes[35]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3624,7 +3845,7 @@ func (x *VodCompletedPart) String() string {
 func (*VodCompletedPart) ProtoMessage() {}
 
 func (x *VodCompletedPart) ProtoReflect() protoreflect.Message {
-	mi := &file_shared_proto_msgTypes[33]
+	mi := &file_shared_proto_msgTypes[35]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3637,7 +3858,7 @@ func (x *VodCompletedPart) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use VodCompletedPart.ProtoReflect.Descriptor instead.
 func (*VodCompletedPart) Descriptor() ([]byte, []int) {
-	return file_shared_proto_rawDescGZIP(), []int{33}
+	return file_shared_proto_rawDescGZIP(), []int{35}
 }
 
 func (x *VodCompletedPart) GetPartNumber() int32 {
@@ -3664,7 +3885,7 @@ type CompleteVodUploadResponse struct {
 
 func (x *CompleteVodUploadResponse) Reset() {
 	*x = CompleteVodUploadResponse{}
-	mi := &file_shared_proto_msgTypes[34]
+	mi := &file_shared_proto_msgTypes[36]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3676,7 +3897,7 @@ func (x *CompleteVodUploadResponse) String() string {
 func (*CompleteVodUploadResponse) ProtoMessage() {}
 
 func (x *CompleteVodUploadResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_shared_proto_msgTypes[34]
+	mi := &file_shared_proto_msgTypes[36]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3689,7 +3910,7 @@ func (x *CompleteVodUploadResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CompleteVodUploadResponse.ProtoReflect.Descriptor instead.
 func (*CompleteVodUploadResponse) Descriptor() ([]byte, []int) {
-	return file_shared_proto_rawDescGZIP(), []int{34}
+	return file_shared_proto_rawDescGZIP(), []int{36}
 }
 
 func (x *CompleteVodUploadResponse) GetAsset() *VodAssetInfo {
@@ -3710,7 +3931,7 @@ type GetVodUploadStatusRequest struct {
 
 func (x *GetVodUploadStatusRequest) Reset() {
 	*x = GetVodUploadStatusRequest{}
-	mi := &file_shared_proto_msgTypes[35]
+	mi := &file_shared_proto_msgTypes[37]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3722,7 +3943,7 @@ func (x *GetVodUploadStatusRequest) String() string {
 func (*GetVodUploadStatusRequest) ProtoMessage() {}
 
 func (x *GetVodUploadStatusRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_shared_proto_msgTypes[35]
+	mi := &file_shared_proto_msgTypes[37]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3735,7 +3956,7 @@ func (x *GetVodUploadStatusRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetVodUploadStatusRequest.ProtoReflect.Descriptor instead.
 func (*GetVodUploadStatusRequest) Descriptor() ([]byte, []int) {
-	return file_shared_proto_rawDescGZIP(), []int{35}
+	return file_shared_proto_rawDescGZIP(), []int{37}
 }
 
 func (x *GetVodUploadStatusRequest) GetTenantId() string {
@@ -3765,7 +3986,7 @@ type VodUploadedPart struct {
 
 func (x *VodUploadedPart) Reset() {
 	*x = VodUploadedPart{}
-	mi := &file_shared_proto_msgTypes[36]
+	mi := &file_shared_proto_msgTypes[38]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3777,7 +3998,7 @@ func (x *VodUploadedPart) String() string {
 func (*VodUploadedPart) ProtoMessage() {}
 
 func (x *VodUploadedPart) ProtoReflect() protoreflect.Message {
-	mi := &file_shared_proto_msgTypes[36]
+	mi := &file_shared_proto_msgTypes[38]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3790,7 +4011,7 @@ func (x *VodUploadedPart) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use VodUploadedPart.ProtoReflect.Descriptor instead.
 func (*VodUploadedPart) Descriptor() ([]byte, []int) {
-	return file_shared_proto_rawDescGZIP(), []int{36}
+	return file_shared_proto_rawDescGZIP(), []int{38}
 }
 
 func (x *VodUploadedPart) GetPartNumber() int32 {
@@ -3832,7 +4053,7 @@ type GetVodUploadStatusResponse struct {
 
 func (x *GetVodUploadStatusResponse) Reset() {
 	*x = GetVodUploadStatusResponse{}
-	mi := &file_shared_proto_msgTypes[37]
+	mi := &file_shared_proto_msgTypes[39]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3844,7 +4065,7 @@ func (x *GetVodUploadStatusResponse) String() string {
 func (*GetVodUploadStatusResponse) ProtoMessage() {}
 
 func (x *GetVodUploadStatusResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_shared_proto_msgTypes[37]
+	mi := &file_shared_proto_msgTypes[39]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3857,7 +4078,7 @@ func (x *GetVodUploadStatusResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetVodUploadStatusResponse.ProtoReflect.Descriptor instead.
 func (*GetVodUploadStatusResponse) Descriptor() ([]byte, []int) {
-	return file_shared_proto_rawDescGZIP(), []int{37}
+	return file_shared_proto_rawDescGZIP(), []int{39}
 }
 
 func (x *GetVodUploadStatusResponse) GetUploadId() string {
@@ -3937,7 +4158,7 @@ type AbortVodUploadRequest struct {
 
 func (x *AbortVodUploadRequest) Reset() {
 	*x = AbortVodUploadRequest{}
-	mi := &file_shared_proto_msgTypes[38]
+	mi := &file_shared_proto_msgTypes[40]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3949,7 +4170,7 @@ func (x *AbortVodUploadRequest) String() string {
 func (*AbortVodUploadRequest) ProtoMessage() {}
 
 func (x *AbortVodUploadRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_shared_proto_msgTypes[38]
+	mi := &file_shared_proto_msgTypes[40]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3962,7 +4183,7 @@ func (x *AbortVodUploadRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AbortVodUploadRequest.ProtoReflect.Descriptor instead.
 func (*AbortVodUploadRequest) Descriptor() ([]byte, []int) {
-	return file_shared_proto_rawDescGZIP(), []int{38}
+	return file_shared_proto_rawDescGZIP(), []int{40}
 }
 
 func (x *AbortVodUploadRequest) GetTenantId() string {
@@ -3997,7 +4218,7 @@ type AbortVodUploadResponse struct {
 
 func (x *AbortVodUploadResponse) Reset() {
 	*x = AbortVodUploadResponse{}
-	mi := &file_shared_proto_msgTypes[39]
+	mi := &file_shared_proto_msgTypes[41]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4009,7 +4230,7 @@ func (x *AbortVodUploadResponse) String() string {
 func (*AbortVodUploadResponse) ProtoMessage() {}
 
 func (x *AbortVodUploadResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_shared_proto_msgTypes[39]
+	mi := &file_shared_proto_msgTypes[41]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4022,7 +4243,7 @@ func (x *AbortVodUploadResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AbortVodUploadResponse.ProtoReflect.Descriptor instead.
 func (*AbortVodUploadResponse) Descriptor() ([]byte, []int) {
-	return file_shared_proto_rawDescGZIP(), []int{39}
+	return file_shared_proto_rawDescGZIP(), []int{41}
 }
 
 func (x *AbortVodUploadResponse) GetSuccess() bool {
@@ -4053,7 +4274,7 @@ type DeleteVodAssetRequest struct {
 
 func (x *DeleteVodAssetRequest) Reset() {
 	*x = DeleteVodAssetRequest{}
-	mi := &file_shared_proto_msgTypes[40]
+	mi := &file_shared_proto_msgTypes[42]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4065,7 +4286,7 @@ func (x *DeleteVodAssetRequest) String() string {
 func (*DeleteVodAssetRequest) ProtoMessage() {}
 
 func (x *DeleteVodAssetRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_shared_proto_msgTypes[40]
+	mi := &file_shared_proto_msgTypes[42]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4078,7 +4299,7 @@ func (x *DeleteVodAssetRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DeleteVodAssetRequest.ProtoReflect.Descriptor instead.
 func (*DeleteVodAssetRequest) Descriptor() ([]byte, []int) {
-	return file_shared_proto_rawDescGZIP(), []int{40}
+	return file_shared_proto_rawDescGZIP(), []int{42}
 }
 
 func (x *DeleteVodAssetRequest) GetTenantId() string {
@@ -4113,7 +4334,7 @@ type DeleteVodAssetResponse struct {
 
 func (x *DeleteVodAssetResponse) Reset() {
 	*x = DeleteVodAssetResponse{}
-	mi := &file_shared_proto_msgTypes[41]
+	mi := &file_shared_proto_msgTypes[43]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4125,7 +4346,7 @@ func (x *DeleteVodAssetResponse) String() string {
 func (*DeleteVodAssetResponse) ProtoMessage() {}
 
 func (x *DeleteVodAssetResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_shared_proto_msgTypes[41]
+	mi := &file_shared_proto_msgTypes[43]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4138,7 +4359,7 @@ func (x *DeleteVodAssetResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DeleteVodAssetResponse.ProtoReflect.Descriptor instead.
 func (*DeleteVodAssetResponse) Descriptor() ([]byte, []int) {
-	return file_shared_proto_rawDescGZIP(), []int{41}
+	return file_shared_proto_rawDescGZIP(), []int{43}
 }
 
 func (x *DeleteVodAssetResponse) GetSuccess() bool {
@@ -4210,7 +4431,7 @@ type VodAssetInfo struct {
 
 func (x *VodAssetInfo) Reset() {
 	*x = VodAssetInfo{}
-	mi := &file_shared_proto_msgTypes[42]
+	mi := &file_shared_proto_msgTypes[44]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4222,7 +4443,7 @@ func (x *VodAssetInfo) String() string {
 func (*VodAssetInfo) ProtoMessage() {}
 
 func (x *VodAssetInfo) ProtoReflect() protoreflect.Message {
-	mi := &file_shared_proto_msgTypes[42]
+	mi := &file_shared_proto_msgTypes[44]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4235,7 +4456,7 @@ func (x *VodAssetInfo) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use VodAssetInfo.ProtoReflect.Descriptor instead.
 func (*VodAssetInfo) Descriptor() ([]byte, []int) {
-	return file_shared_proto_rawDescGZIP(), []int{42}
+	return file_shared_proto_rawDescGZIP(), []int{44}
 }
 
 func (x *VodAssetInfo) GetId() string {
@@ -4467,7 +4688,7 @@ type VodMetadata struct {
 
 func (x *VodMetadata) Reset() {
 	*x = VodMetadata{}
-	mi := &file_shared_proto_msgTypes[43]
+	mi := &file_shared_proto_msgTypes[45]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4479,7 +4700,7 @@ func (x *VodMetadata) String() string {
 func (*VodMetadata) ProtoMessage() {}
 
 func (x *VodMetadata) ProtoReflect() protoreflect.Message {
-	mi := &file_shared_proto_msgTypes[43]
+	mi := &file_shared_proto_msgTypes[45]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4492,7 +4713,7 @@ func (x *VodMetadata) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use VodMetadata.ProtoReflect.Descriptor instead.
 func (*VodMetadata) Descriptor() ([]byte, []int) {
-	return file_shared_proto_rawDescGZIP(), []int{43}
+	return file_shared_proto_rawDescGZIP(), []int{45}
 }
 
 func (x *VodMetadata) GetDurationMs() int32 {
@@ -4581,7 +4802,7 @@ type WebhookRequest struct {
 
 func (x *WebhookRequest) Reset() {
 	*x = WebhookRequest{}
-	mi := &file_shared_proto_msgTypes[44]
+	mi := &file_shared_proto_msgTypes[46]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4593,7 +4814,7 @@ func (x *WebhookRequest) String() string {
 func (*WebhookRequest) ProtoMessage() {}
 
 func (x *WebhookRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_shared_proto_msgTypes[44]
+	mi := &file_shared_proto_msgTypes[46]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4606,7 +4827,7 @@ func (x *WebhookRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use WebhookRequest.ProtoReflect.Descriptor instead.
 func (*WebhookRequest) Descriptor() ([]byte, []int) {
-	return file_shared_proto_rawDescGZIP(), []int{44}
+	return file_shared_proto_rawDescGZIP(), []int{46}
 }
 
 func (x *WebhookRequest) GetProvider() string {
@@ -4656,7 +4877,7 @@ type WebhookResponse struct {
 
 func (x *WebhookResponse) Reset() {
 	*x = WebhookResponse{}
-	mi := &file_shared_proto_msgTypes[45]
+	mi := &file_shared_proto_msgTypes[47]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4668,7 +4889,7 @@ func (x *WebhookResponse) String() string {
 func (*WebhookResponse) ProtoMessage() {}
 
 func (x *WebhookResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_shared_proto_msgTypes[45]
+	mi := &file_shared_proto_msgTypes[47]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4681,7 +4902,7 @@ func (x *WebhookResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use WebhookResponse.ProtoReflect.Descriptor instead.
 func (*WebhookResponse) Descriptor() ([]byte, []int) {
-	return file_shared_proto_rawDescGZIP(), []int{45}
+	return file_shared_proto_rawDescGZIP(), []int{47}
 }
 
 func (x *WebhookResponse) GetSuccess() bool {
@@ -4723,7 +4944,7 @@ type GetArtifactCreationStatusRequest struct {
 
 func (x *GetArtifactCreationStatusRequest) Reset() {
 	*x = GetArtifactCreationStatusRequest{}
-	mi := &file_shared_proto_msgTypes[46]
+	mi := &file_shared_proto_msgTypes[48]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4735,7 +4956,7 @@ func (x *GetArtifactCreationStatusRequest) String() string {
 func (*GetArtifactCreationStatusRequest) ProtoMessage() {}
 
 func (x *GetArtifactCreationStatusRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_shared_proto_msgTypes[46]
+	mi := &file_shared_proto_msgTypes[48]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4748,7 +4969,7 @@ func (x *GetArtifactCreationStatusRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetArtifactCreationStatusRequest.ProtoReflect.Descriptor instead.
 func (*GetArtifactCreationStatusRequest) Descriptor() ([]byte, []int) {
-	return file_shared_proto_rawDescGZIP(), []int{46}
+	return file_shared_proto_rawDescGZIP(), []int{48}
 }
 
 func (x *GetArtifactCreationStatusRequest) GetTenantId() string {
@@ -4796,7 +5017,7 @@ type GetArtifactCreationStatusResponse struct {
 
 func (x *GetArtifactCreationStatusResponse) Reset() {
 	*x = GetArtifactCreationStatusResponse{}
-	mi := &file_shared_proto_msgTypes[47]
+	mi := &file_shared_proto_msgTypes[49]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4808,7 +5029,7 @@ func (x *GetArtifactCreationStatusResponse) String() string {
 func (*GetArtifactCreationStatusResponse) ProtoMessage() {}
 
 func (x *GetArtifactCreationStatusResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_shared_proto_msgTypes[47]
+	mi := &file_shared_proto_msgTypes[49]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4821,7 +5042,7 @@ func (x *GetArtifactCreationStatusResponse) ProtoReflect() protoreflect.Message 
 
 // Deprecated: Use GetArtifactCreationStatusResponse.ProtoReflect.Descriptor instead.
 func (*GetArtifactCreationStatusResponse) Descriptor() ([]byte, []int) {
-	return file_shared_proto_rawDescGZIP(), []int{47}
+	return file_shared_proto_rawDescGZIP(), []int{49}
 }
 
 func (x *GetArtifactCreationStatusResponse) GetEffectiveStartMs() int64 {
@@ -4866,7 +5087,7 @@ type AckArtifactCreationCommandRequest struct {
 
 func (x *AckArtifactCreationCommandRequest) Reset() {
 	*x = AckArtifactCreationCommandRequest{}
-	mi := &file_shared_proto_msgTypes[48]
+	mi := &file_shared_proto_msgTypes[50]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4878,7 +5099,7 @@ func (x *AckArtifactCreationCommandRequest) String() string {
 func (*AckArtifactCreationCommandRequest) ProtoMessage() {}
 
 func (x *AckArtifactCreationCommandRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_shared_proto_msgTypes[48]
+	mi := &file_shared_proto_msgTypes[50]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4891,7 +5112,7 @@ func (x *AckArtifactCreationCommandRequest) ProtoReflect() protoreflect.Message 
 
 // Deprecated: Use AckArtifactCreationCommandRequest.ProtoReflect.Descriptor instead.
 func (*AckArtifactCreationCommandRequest) Descriptor() ([]byte, []int) {
-	return file_shared_proto_rawDescGZIP(), []int{48}
+	return file_shared_proto_rawDescGZIP(), []int{50}
 }
 
 func (x *AckArtifactCreationCommandRequest) GetTenantId() string {
@@ -4938,7 +5159,7 @@ type AckArtifactCreationCommandResponse struct {
 
 func (x *AckArtifactCreationCommandResponse) Reset() {
 	*x = AckArtifactCreationCommandResponse{}
-	mi := &file_shared_proto_msgTypes[49]
+	mi := &file_shared_proto_msgTypes[51]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4950,7 +5171,7 @@ func (x *AckArtifactCreationCommandResponse) String() string {
 func (*AckArtifactCreationCommandResponse) ProtoMessage() {}
 
 func (x *AckArtifactCreationCommandResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_shared_proto_msgTypes[49]
+	mi := &file_shared_proto_msgTypes[51]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4963,7 +5184,7 @@ func (x *AckArtifactCreationCommandResponse) ProtoReflect() protoreflect.Message
 
 // Deprecated: Use AckArtifactCreationCommandResponse.ProtoReflect.Descriptor instead.
 func (*AckArtifactCreationCommandResponse) Descriptor() ([]byte, []int) {
-	return file_shared_proto_rawDescGZIP(), []int{49}
+	return file_shared_proto_rawDescGZIP(), []int{51}
 }
 
 func (x *AckArtifactCreationCommandResponse) GetOutcome() ArtifactCreationOutcome {
@@ -5222,16 +5443,20 @@ const file_shared_proto_rawDesc = "" +
 	"\x0f_has_local_copyB\f\n" +
 	"\n" +
 	"_is_syncedB\x0f\n" +
-	"\r_is_finalizedJ\x04\b\x1c\x10\x1d\"\xcf\x01\n" +
+	"\r_is_finalizedJ\x04\b\x1c\x10\x1d\"\xca\x02\n" +
 	"\x15ViewerEndpointRequest\x12\x1d\n" +
 	"\n" +
 	"content_id\x18\x02 \x01(\tR\tcontentId\x12 \n" +
 	"\tviewer_ip\x18\x03 \x01(\tH\x00R\bviewerIp\x88\x01\x01\x12&\n" +
 	"\fviewer_token\x18\x04 \x01(\tH\x01R\vviewerToken\x88\x01\x01\x12\x1a\n" +
-	"\bprotocol\x18\x05 \x01(\tR\bprotocolB\f\n" +
+	"\bprotocol\x18\x05 \x01(\tR\bprotocol\x12(\n" +
+	"\rviewer_origin\x18\x06 \x01(\tH\x02R\fviewerOrigin\x88\x01\x01\x12*\n" +
+	"\x0eviewer_referer\x18\a \x01(\tH\x03R\rviewerReferer\x88\x01\x01B\f\n" +
 	"\n" +
 	"_viewer_ipB\x0f\n" +
-	"\r_viewer_tokenJ\x04\b\x01\x10\x02R\fcontent_type\"\xe2\x01\n" +
+	"\r_viewer_tokenB\x10\n" +
+	"\x0e_viewer_originB\x11\n" +
+	"\x0f_viewer_refererJ\x04\b\x01\x10\x02R\fcontent_type\"\xe2\x01\n" +
 	"\x10OutputCapability\x12#\n" +
 	"\rsupports_seek\x18\x01 \x01(\bR\fsupportsSeek\x126\n" +
 	"\x17supports_quality_switch\x18\x02 \x01(\bR\x15supportsQualitySwitch\x12\x1f\n" +
@@ -5410,7 +5635,37 @@ const file_shared_proto_rawDesc = "" +
 	"\rVodUploadPart\x12\x1f\n" +
 	"\vpart_number\x18\x01 \x01(\x05R\n" +
 	"partNumber\x12#\n" +
-	"\rpresigned_url\x18\x02 \x01(\tR\fpresignedUrl\"\xd7\x01\n" +
+	"\rpresigned_url\x18\x02 \x01(\tR\fpresignedUrl\"\xff\x04\n" +
+	"\x15ImportVodAssetRequest\x12\x1b\n" +
+	"\ttenant_id\x18\x01 \x01(\tR\btenantId\x12\x17\n" +
+	"\auser_id\x18\x02 \x01(\tR\x06userId\x12\x1d\n" +
+	"\n" +
+	"source_url\x18\x03 \x01(\tR\tsourceUrl\x12\x1a\n" +
+	"\bfilename\x18\x04 \x01(\tR\bfilename\x12\x19\n" +
+	"\x05title\x18\x05 \x01(\tH\x00R\x05title\x88\x01\x01\x12%\n" +
+	"\vdescription\x18\x06 \x01(\tH\x01R\vdescription\x88\x01\x01\x12\x1e\n" +
+	"\bvod_hash\x18\a \x01(\tH\x02R\avodHash\x88\x01\x01\x12$\n" +
+	"\vplayback_id\x18\b \x01(\tH\x03R\n" +
+	"playbackId\x88\x01\x01\x12(\n" +
+	"\rinternal_name\x18\t \x01(\tH\x04R\finternalName\x88\x01\x01\x12\x1d\n" +
+	"\n" +
+	"cluster_id\x18\n" +
+	" \x01(\tR\tclusterId\x12*\n" +
+	"\x0eretention_days\x18\v \x01(\x05H\x05R\rretentionDays\x88\x01\x01\x12\"\n" +
+	"\n" +
+	"request_id\x18\f \x01(\tH\x06R\trequestId\x88\x01\x01\x12*\n" +
+	"\x05actor\x18\r \x01(\v2\x14.common.RequestActorR\x05actor\x12*\n" +
+	"\x0eprocesses_json\x18\x0e \x01(\tH\aR\rprocessesJson\x88\x01\x01B\b\n" +
+	"\x06_titleB\x0e\n" +
+	"\f_descriptionB\v\n" +
+	"\t_vod_hashB\x0e\n" +
+	"\f_playback_idB\x10\n" +
+	"\x0e_internal_nameB\x11\n" +
+	"\x0f_retention_daysB\r\n" +
+	"\v_request_idB\x11\n" +
+	"\x0f_processes_json\"D\n" +
+	"\x16ImportVodAssetResponse\x12*\n" +
+	"\x05asset\x18\x01 \x01(\v2\x14.shared.VodAssetInfoR\x05asset\"\xd7\x01\n" +
 	"\x18CompleteVodUploadRequest\x12\x1b\n" +
 	"\ttenant_id\x18\x01 \x01(\tR\btenantId\x12\x1b\n" +
 	"\tupload_id\x18\x02 \x01(\tR\buploadId\x12.\n" +
@@ -5627,7 +5882,7 @@ func file_shared_proto_rawDescGZIP() []byte {
 }
 
 var file_shared_proto_enumTypes = make([]protoimpl.EnumInfo, 5)
-var file_shared_proto_msgTypes = make([]protoimpl.MessageInfo, 52)
+var file_shared_proto_msgTypes = make([]protoimpl.MessageInfo, 54)
 var file_shared_proto_goTypes = []any{
 	(ClipMode)(0),                              // 0: shared.ClipMode
 	(IngestProtocol)(0),                        // 1: shared.IngestProtocol
@@ -5666,50 +5921,52 @@ var file_shared_proto_goTypes = []any{
 	(*CreateVodUploadRequest)(nil),             // 34: shared.CreateVodUploadRequest
 	(*CreateVodUploadResponse)(nil),            // 35: shared.CreateVodUploadResponse
 	(*VodUploadPart)(nil),                      // 36: shared.VodUploadPart
-	(*CompleteVodUploadRequest)(nil),           // 37: shared.CompleteVodUploadRequest
-	(*VodCompletedPart)(nil),                   // 38: shared.VodCompletedPart
-	(*CompleteVodUploadResponse)(nil),          // 39: shared.CompleteVodUploadResponse
-	(*GetVodUploadStatusRequest)(nil),          // 40: shared.GetVodUploadStatusRequest
-	(*VodUploadedPart)(nil),                    // 41: shared.VodUploadedPart
-	(*GetVodUploadStatusResponse)(nil),         // 42: shared.GetVodUploadStatusResponse
-	(*AbortVodUploadRequest)(nil),              // 43: shared.AbortVodUploadRequest
-	(*AbortVodUploadResponse)(nil),             // 44: shared.AbortVodUploadResponse
-	(*DeleteVodAssetRequest)(nil),              // 45: shared.DeleteVodAssetRequest
-	(*DeleteVodAssetResponse)(nil),             // 46: shared.DeleteVodAssetResponse
-	(*VodAssetInfo)(nil),                       // 47: shared.VodAssetInfo
-	(*VodMetadata)(nil),                        // 48: shared.VodMetadata
-	(*WebhookRequest)(nil),                     // 49: shared.WebhookRequest
-	(*WebhookResponse)(nil),                    // 50: shared.WebhookResponse
-	(*GetArtifactCreationStatusRequest)(nil),   // 51: shared.GetArtifactCreationStatusRequest
-	(*GetArtifactCreationStatusResponse)(nil),  // 52: shared.GetArtifactCreationStatusResponse
-	(*AckArtifactCreationCommandRequest)(nil),  // 53: shared.AckArtifactCreationCommandRequest
-	(*AckArtifactCreationCommandResponse)(nil), // 54: shared.AckArtifactCreationCommandResponse
-	nil,                           // 55: shared.ViewerEndpoint.OutputsEntry
-	nil,                           // 56: shared.WebhookRequest.HeadersEntry
-	(*common.RequestActor)(nil),   // 57: common.RequestActor
-	(*timestamppb.Timestamp)(nil), // 58: google.protobuf.Timestamp
+	(*ImportVodAssetRequest)(nil),              // 37: shared.ImportVodAssetRequest
+	(*ImportVodAssetResponse)(nil),             // 38: shared.ImportVodAssetResponse
+	(*CompleteVodUploadRequest)(nil),           // 39: shared.CompleteVodUploadRequest
+	(*VodCompletedPart)(nil),                   // 40: shared.VodCompletedPart
+	(*CompleteVodUploadResponse)(nil),          // 41: shared.CompleteVodUploadResponse
+	(*GetVodUploadStatusRequest)(nil),          // 42: shared.GetVodUploadStatusRequest
+	(*VodUploadedPart)(nil),                    // 43: shared.VodUploadedPart
+	(*GetVodUploadStatusResponse)(nil),         // 44: shared.GetVodUploadStatusResponse
+	(*AbortVodUploadRequest)(nil),              // 45: shared.AbortVodUploadRequest
+	(*AbortVodUploadResponse)(nil),             // 46: shared.AbortVodUploadResponse
+	(*DeleteVodAssetRequest)(nil),              // 47: shared.DeleteVodAssetRequest
+	(*DeleteVodAssetResponse)(nil),             // 48: shared.DeleteVodAssetResponse
+	(*VodAssetInfo)(nil),                       // 49: shared.VodAssetInfo
+	(*VodMetadata)(nil),                        // 50: shared.VodMetadata
+	(*WebhookRequest)(nil),                     // 51: shared.WebhookRequest
+	(*WebhookResponse)(nil),                    // 52: shared.WebhookResponse
+	(*GetArtifactCreationStatusRequest)(nil),   // 53: shared.GetArtifactCreationStatusRequest
+	(*GetArtifactCreationStatusResponse)(nil),  // 54: shared.GetArtifactCreationStatusResponse
+	(*AckArtifactCreationCommandRequest)(nil),  // 55: shared.AckArtifactCreationCommandRequest
+	(*AckArtifactCreationCommandResponse)(nil), // 56: shared.AckArtifactCreationCommandResponse
+	nil,                           // 57: shared.ViewerEndpoint.OutputsEntry
+	nil,                           // 58: shared.WebhookRequest.HeadersEntry
+	(*common.RequestActor)(nil),   // 59: common.RequestActor
+	(*timestamppb.Timestamp)(nil), // 60: google.protobuf.Timestamp
 }
 var file_shared_proto_depIdxs = []int32{
 	0,  // 0: shared.CreateClipRequest.mode:type_name -> shared.ClipMode
-	57, // 1: shared.CreateClipRequest.actor:type_name -> common.RequestActor
-	58, // 2: shared.ClipInfo.created_at:type_name -> google.protobuf.Timestamp
-	58, // 3: shared.ClipInfo.updated_at:type_name -> google.protobuf.Timestamp
-	58, // 4: shared.ClipInfo.expires_at:type_name -> google.protobuf.Timestamp
+	59, // 1: shared.CreateClipRequest.actor:type_name -> common.RequestActor
+	60, // 2: shared.ClipInfo.created_at:type_name -> google.protobuf.Timestamp
+	60, // 3: shared.ClipInfo.updated_at:type_name -> google.protobuf.Timestamp
+	60, // 4: shared.ClipInfo.expires_at:type_name -> google.protobuf.Timestamp
 	28, // 5: shared.ClipInfo.thumbnail_assets:type_name -> shared.ThumbnailAssets
 	13, // 6: shared.StartDVRRequest.dvr_policy:type_name -> shared.DVRPolicy
-	58, // 7: shared.DVRInfo.started_at:type_name -> google.protobuf.Timestamp
-	58, // 8: shared.DVRInfo.ended_at:type_name -> google.protobuf.Timestamp
-	58, // 9: shared.DVRInfo.created_at:type_name -> google.protobuf.Timestamp
-	58, // 10: shared.DVRInfo.updated_at:type_name -> google.protobuf.Timestamp
-	58, // 11: shared.DVRInfo.frozen_at:type_name -> google.protobuf.Timestamp
-	58, // 12: shared.DVRInfo.expires_at:type_name -> google.protobuf.Timestamp
+	60, // 7: shared.DVRInfo.started_at:type_name -> google.protobuf.Timestamp
+	60, // 8: shared.DVRInfo.ended_at:type_name -> google.protobuf.Timestamp
+	60, // 9: shared.DVRInfo.created_at:type_name -> google.protobuf.Timestamp
+	60, // 10: shared.DVRInfo.updated_at:type_name -> google.protobuf.Timestamp
+	60, // 11: shared.DVRInfo.frozen_at:type_name -> google.protobuf.Timestamp
+	60, // 12: shared.DVRInfo.expires_at:type_name -> google.protobuf.Timestamp
 	28, // 13: shared.DVRInfo.thumbnail_assets:type_name -> shared.ThumbnailAssets
 	22, // 14: shared.OutputEndpoint.capabilities:type_name -> shared.OutputCapability
-	55, // 15: shared.ViewerEndpoint.outputs:type_name -> shared.ViewerEndpoint.OutputsEntry
-	58, // 16: shared.PlaybackInstance.last_update:type_name -> google.protobuf.Timestamp
+	57, // 15: shared.ViewerEndpoint.outputs:type_name -> shared.ViewerEndpoint.OutputsEntry
+	60, // 16: shared.PlaybackInstance.last_update:type_name -> google.protobuf.Timestamp
 	25, // 17: shared.PlaybackMetadata.tracks:type_name -> shared.PlaybackTrack
 	26, // 18: shared.PlaybackMetadata.instances:type_name -> shared.PlaybackInstance
-	58, // 19: shared.PlaybackMetadata.created_at:type_name -> google.protobuf.Timestamp
+	60, // 19: shared.PlaybackMetadata.created_at:type_name -> google.protobuf.Timestamp
 	28, // 20: shared.PlaybackMetadata.thumbnail_assets:type_name -> shared.ThumbnailAssets
 	24, // 21: shared.ViewerEndpointResponse.primary:type_name -> shared.ViewerEndpoint
 	24, // 22: shared.ViewerEndpointResponse.fallbacks:type_name -> shared.ViewerEndpoint
@@ -5719,35 +5976,37 @@ var file_shared_proto_depIdxs = []int32{
 	31, // 26: shared.IngestEndpointResponse.primary:type_name -> shared.IngestEndpoint
 	31, // 27: shared.IngestEndpointResponse.fallbacks:type_name -> shared.IngestEndpoint
 	32, // 28: shared.IngestEndpointResponse.metadata:type_name -> shared.IngestMetadata
-	57, // 29: shared.CreateVodUploadRequest.actor:type_name -> common.RequestActor
+	59, // 29: shared.CreateVodUploadRequest.actor:type_name -> common.RequestActor
 	36, // 30: shared.CreateVodUploadResponse.parts:type_name -> shared.VodUploadPart
-	58, // 31: shared.CreateVodUploadResponse.expires_at:type_name -> google.protobuf.Timestamp
-	38, // 32: shared.CompleteVodUploadRequest.parts:type_name -> shared.VodCompletedPart
-	57, // 33: shared.CompleteVodUploadRequest.actor:type_name -> common.RequestActor
-	47, // 34: shared.CompleteVodUploadResponse.asset:type_name -> shared.VodAssetInfo
-	3,  // 35: shared.GetVodUploadStatusResponse.state:type_name -> shared.VodStatus
-	58, // 36: shared.GetVodUploadStatusResponse.expires_at:type_name -> google.protobuf.Timestamp
-	58, // 37: shared.GetVodUploadStatusResponse.retention_until:type_name -> google.protobuf.Timestamp
-	41, // 38: shared.GetVodUploadStatusResponse.uploaded_parts:type_name -> shared.VodUploadedPart
-	57, // 39: shared.AbortVodUploadRequest.actor:type_name -> common.RequestActor
-	3,  // 40: shared.VodAssetInfo.status:type_name -> shared.VodStatus
-	58, // 41: shared.VodAssetInfo.created_at:type_name -> google.protobuf.Timestamp
-	58, // 42: shared.VodAssetInfo.updated_at:type_name -> google.protobuf.Timestamp
-	58, // 43: shared.VodAssetInfo.expires_at:type_name -> google.protobuf.Timestamp
-	28, // 44: shared.VodAssetInfo.thumbnail_assets:type_name -> shared.ThumbnailAssets
-	56, // 45: shared.WebhookRequest.headers:type_name -> shared.WebhookRequest.HeadersEntry
-	4,  // 46: shared.GetArtifactCreationStatusResponse.outcome:type_name -> shared.ArtifactCreationOutcome
-	4,  // 47: shared.AckArtifactCreationCommandResponse.outcome:type_name -> shared.ArtifactCreationOutcome
-	23, // 48: shared.ViewerEndpoint.OutputsEntry.value:type_name -> shared.OutputEndpoint
-	51, // 49: shared.ArtifactCreationStatusService.GetArtifactCreationStatus:input_type -> shared.GetArtifactCreationStatusRequest
-	53, // 50: shared.ArtifactCreationStatusService.AckArtifactCreationCommand:input_type -> shared.AckArtifactCreationCommandRequest
-	52, // 51: shared.ArtifactCreationStatusService.GetArtifactCreationStatus:output_type -> shared.GetArtifactCreationStatusResponse
-	54, // 52: shared.ArtifactCreationStatusService.AckArtifactCreationCommand:output_type -> shared.AckArtifactCreationCommandResponse
-	51, // [51:53] is the sub-list for method output_type
-	49, // [49:51] is the sub-list for method input_type
-	49, // [49:49] is the sub-list for extension type_name
-	49, // [49:49] is the sub-list for extension extendee
-	0,  // [0:49] is the sub-list for field type_name
+	60, // 31: shared.CreateVodUploadResponse.expires_at:type_name -> google.protobuf.Timestamp
+	59, // 32: shared.ImportVodAssetRequest.actor:type_name -> common.RequestActor
+	49, // 33: shared.ImportVodAssetResponse.asset:type_name -> shared.VodAssetInfo
+	40, // 34: shared.CompleteVodUploadRequest.parts:type_name -> shared.VodCompletedPart
+	59, // 35: shared.CompleteVodUploadRequest.actor:type_name -> common.RequestActor
+	49, // 36: shared.CompleteVodUploadResponse.asset:type_name -> shared.VodAssetInfo
+	3,  // 37: shared.GetVodUploadStatusResponse.state:type_name -> shared.VodStatus
+	60, // 38: shared.GetVodUploadStatusResponse.expires_at:type_name -> google.protobuf.Timestamp
+	60, // 39: shared.GetVodUploadStatusResponse.retention_until:type_name -> google.protobuf.Timestamp
+	43, // 40: shared.GetVodUploadStatusResponse.uploaded_parts:type_name -> shared.VodUploadedPart
+	59, // 41: shared.AbortVodUploadRequest.actor:type_name -> common.RequestActor
+	3,  // 42: shared.VodAssetInfo.status:type_name -> shared.VodStatus
+	60, // 43: shared.VodAssetInfo.created_at:type_name -> google.protobuf.Timestamp
+	60, // 44: shared.VodAssetInfo.updated_at:type_name -> google.protobuf.Timestamp
+	60, // 45: shared.VodAssetInfo.expires_at:type_name -> google.protobuf.Timestamp
+	28, // 46: shared.VodAssetInfo.thumbnail_assets:type_name -> shared.ThumbnailAssets
+	58, // 47: shared.WebhookRequest.headers:type_name -> shared.WebhookRequest.HeadersEntry
+	4,  // 48: shared.GetArtifactCreationStatusResponse.outcome:type_name -> shared.ArtifactCreationOutcome
+	4,  // 49: shared.AckArtifactCreationCommandResponse.outcome:type_name -> shared.ArtifactCreationOutcome
+	23, // 50: shared.ViewerEndpoint.OutputsEntry.value:type_name -> shared.OutputEndpoint
+	53, // 51: shared.ArtifactCreationStatusService.GetArtifactCreationStatus:input_type -> shared.GetArtifactCreationStatusRequest
+	55, // 52: shared.ArtifactCreationStatusService.AckArtifactCreationCommand:input_type -> shared.AckArtifactCreationCommandRequest
+	54, // 53: shared.ArtifactCreationStatusService.GetArtifactCreationStatus:output_type -> shared.GetArtifactCreationStatusResponse
+	56, // 54: shared.ArtifactCreationStatusService.AckArtifactCreationCommand:output_type -> shared.AckArtifactCreationCommandResponse
+	53, // [53:55] is the sub-list for method output_type
+	51, // [51:53] is the sub-list for method input_type
+	51, // [51:51] is the sub-list for extension type_name
+	51, // [51:51] is the sub-list for extension extendee
+	0,  // [0:51] is the sub-list for field type_name
 }
 
 func init() { file_shared_proto_init() }
@@ -5769,15 +6028,16 @@ func file_shared_proto_init() {
 	file_shared_proto_msgTypes[27].OneofWrappers = []any{}
 	file_shared_proto_msgTypes[28].OneofWrappers = []any{}
 	file_shared_proto_msgTypes[29].OneofWrappers = []any{}
-	file_shared_proto_msgTypes[42].OneofWrappers = []any{}
-	file_shared_proto_msgTypes[43].OneofWrappers = []any{}
+	file_shared_proto_msgTypes[32].OneofWrappers = []any{}
+	file_shared_proto_msgTypes[44].OneofWrappers = []any{}
+	file_shared_proto_msgTypes[45].OneofWrappers = []any{}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_shared_proto_rawDesc), len(file_shared_proto_rawDesc)),
 			NumEnums:      5,
-			NumMessages:   52,
+			NumMessages:   54,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

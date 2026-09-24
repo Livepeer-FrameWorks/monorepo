@@ -12,6 +12,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"slices"
 	"strings"
 	"time"
 
@@ -190,7 +191,13 @@ func (p *Processor) evaluatePlaybackPolicyDetailed(ctx context.Context, internal
 		p.logPlaybackDeny(internalName, userNew, "policy-empty", "")
 		return denyDecision("", "policy-empty", "")
 	}
-	switch strings.ToLower(policy.GetType()) {
+	policyType := strings.ToLower(policy.GetType())
+	if policyType != "public" {
+		if d := p.checkPlaybackOrigin(internalName, userNew, policyType, policy.GetAllowedOrigins()); d != nil {
+			return d
+		}
+	}
+	switch policyType {
 	case "public":
 		return allowDecision("public")
 	case "jwt":
@@ -337,9 +344,74 @@ func jwtDenyReason(err error) string {
 	return "jwt-verify-error"
 }
 
+// CheckPlaybackOrigin applies a policy's allowed origins to a viewer and
+// returns the deny decision, or nil when the origin rule admits the viewer.
+// It runs before the credential check, so a disallowed embed never reaches
+// the tenant's webhook.
+func CheckPlaybackOrigin(logger logging.Logger, internalName string, userNew *ipcpb.ViewerConnectTrigger, policy *commodorepb.ResolvePlaybackPolicyResponse) *PlaybackDecision {
+	policyType := strings.ToLower(policy.GetType())
+	if policyType == "public" {
+		return nil
+	}
+	p := &Processor{logger: logger}
+	return p.checkPlaybackOrigin(internalName, userNew, policyType, policy.GetAllowedOrigins())
+}
+
+// checkPlaybackOrigin fails closed when the policy restricts origins: a viewer
+// whose request headers were observed must present a listed origin (or the
+// list must hold "*"), and a media session whose headers could not be
+// observed, such as one reported by a MistServer build that predates origin
+// reporting, is denied rather than let through unchecked. A resolve request
+// without browser headers is a server-side call; it is not origin-checked,
+// because the media session it leads to carries the viewer's own headers and
+// is checked then.
+func (p *Processor) checkPlaybackOrigin(internalName string, userNew *ipcpb.ViewerConnectTrigger, policyType string, allowed []string) *PlaybackDecision {
+	if len(allowed) == 0 || slices.Contains(allowed, auth.AnyOrigin) {
+		return nil
+	}
+	if userNew.Origin == nil && userNew.Referer == nil {
+		if isResolveConnector(userNew.GetConnector()) {
+			return nil
+		}
+		p.logPlaybackDeny(internalName, userNew, "origin-unobservable", "")
+		return denyDecision(policyType, "origin-unobservable", "")
+	}
+	origin := auth.RequestOrigin(userNew.GetOrigin(), userNew.GetReferer())
+	if origin == "" {
+		p.logPlaybackDeny(internalName, userNew, "origin-missing", "")
+		return denyDecision(policyType, "origin-missing", "")
+	}
+	if !auth.OriginAllowed(allowed, origin) {
+		p.logPlaybackDeny(internalName, userNew, "origin-not-allowed", origin)
+		return denyDecision(policyType, "origin-not-allowed", origin)
+	}
+	return nil
+}
+
+// Connectors of the synthetic viewer a resolve request is evaluated as.
+const (
+	ResolveConnector     = "resolve"
+	ResolveHTTPConnector = "resolve-http"
+)
+
+func isResolveConnector(connector string) bool {
+	return connector == ResolveConnector || connector == ResolveHTTPConnector
+}
+
+// ResolveViewerHeaders returns the Origin and Referer of a resolve request for
+// the synthetic viewer's origin fields: both nil when the request carried
+// neither (a server-side call), else both set.
+func ResolveViewerHeaders(origin, referer string) (*string, *string) {
+	origin, referer = strings.TrimSpace(origin), strings.TrimSpace(referer)
+	if origin == "" && referer == "" {
+		return nil, nil
+	}
+	return &origin, &referer
+}
+
 // enforceWebhookPolicy POSTs to the customer URL with an HMAC-signed body.
-// Allow only on 200; everything else (403, other 4xx, 5xx, timeout, network
-// error, blocked SSRF target) denies.
+// Any 2xx allows; everything else (403, redirects, other 4xx, 5xx, timeout,
+// network error, blocked SSRF target) denies.
 func (p *Processor) enforceWebhookPolicy(ctx context.Context, internalName string, userNew *ipcpb.ViewerConnectTrigger, policy *commodorepb.PlaybackWebhookPolicy) *PlaybackDecision {
 	if policy == nil || policy.GetUrl() == "" {
 		p.logPlaybackDeny(internalName, userNew, "webhook-no-url", "")
@@ -355,7 +427,7 @@ func (p *Processor) enforceWebhookPolicy(ctx context.Context, internalName strin
 	timeout := time.Duration(timeoutMs) * time.Millisecond
 
 	// Build outbound payload. Customer signs against this exact body.
-	body, err := json.Marshal(map[string]any{
+	payload := map[string]any{
 		"streamName": userNew.GetStreamName(),
 		"sessionId":  userNew.GetSessionId(),
 		"viewerIp":   userNew.GetHost(),
@@ -365,8 +437,15 @@ func (p *Processor) enforceWebhookPolicy(ctx context.Context, internalName strin
 		"requestUrl":  control.RedactSourcePullCredential(userNew.GetRequestUrl()),
 		"viewerToken": userNew.GetViewerToken(),
 		"connector":   userNew.GetConnector(),
+		"origin":      userNew.GetOrigin(),
+		"referer":     userNew.GetReferer(),
 		"timestamp":   time.Now().UTC().Format(time.RFC3339),
-	})
+	}
+	// context is the tenant's own JSON object; Commodore validated it as one.
+	if contextJSON := policy.GetContextJson(); contextJSON != "" {
+		payload["context"] = json.RawMessage(contextJSON)
+	}
+	body, err := json.Marshal(payload)
 	if err != nil {
 		p.logPlaybackDeny(internalName, userNew, "webhook-encode-payload", err.Error())
 		return denyDecision("webhook", "webhook-encode-payload", err.Error())
@@ -376,7 +455,7 @@ func (p *Processor) enforceWebhookPolicy(ctx context.Context, internalName strin
 	mac.Write(body)
 	sig := hex.EncodeToString(mac.Sum(nil))
 
-	httpClient := newPlaybackWebhookClient(timeout, restream.PublicDestinationPolicy())
+	httpClient := newPlaybackWebhookClient(timeout, playbackWebhookDestinationPolicy())
 	cctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	req, err := http.NewRequestWithContext(cctx, http.MethodPost, policy.GetUrl(), bytes.NewReader(body))
@@ -426,11 +505,11 @@ func (p *Processor) enforceWebhookPolicy(ctx context.Context, internalName strin
 		WebhookStatus:    resp.StatusCode,
 		WebhookLatencyMs: latencyMs,
 	}
-	switch resp.StatusCode {
-	case http.StatusOK:
+	switch {
+	case resp.StatusCode >= 200 && resp.StatusCode <= 299:
 		d.Allowed = true
 		return d
-	case http.StatusForbidden:
+	case resp.StatusCode == http.StatusForbidden:
 		p.logPlaybackDeny(internalName, userNew, "webhook-deny-403", "")
 		d.Reason = "webhook-deny-403"
 		return d
@@ -473,6 +552,11 @@ func (p *Processor) logPlaybackDeny(internalName string, userNew *ipcpb.ViewerCo
 // ----------------------------------------------------------------------------
 // Webhook HTTP client
 // ----------------------------------------------------------------------------
+
+// playbackWebhookDestinationPolicy returns the addresses a playback-auth
+// webhook may connect to: public ones only. Tests replace it to admit a
+// loopback receiver.
+var playbackWebhookDestinationPolicy = restream.PublicDestinationPolicy
 
 // newPlaybackWebhookClient returns the client for one playback-auth webhook
 // call. The destination policy runs in the dialer's Control hook on the

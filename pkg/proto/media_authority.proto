@@ -167,6 +167,8 @@ message PlaybackPolicy {
   PlaybackJwtPolicy jwt = 2;
   // True only when this authority intentionally requires connected evaluation.
   bool connected_only = 3;
+  // Normalized origins admitted to play; "*" admits any, empty = no restriction.
+  repeated string allowed_origins = 4;
 }
 
 // SealedCellSecret is encrypted independently for one control cell using a
@@ -207,6 +209,8 @@ message PlaybackWebhookSecret {
   string url = 1;
   int32 timeout_ms = 2;
   string secret = 3;
+  // The tenant's JSON object forwarded as "context" in every gate request.
+  string context_json = 4;
 }
 
 message MediaObjectSecret {

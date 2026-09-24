@@ -1493,6 +1493,10 @@ message RelayResolveResponse {
   // Foghorn (AuthorizeRelayPull); the edge holds no signing key. Covers
   // both peer_relay_url and peer_relay_dtsh_url.
   string peer_relay_grant_id = 18;
+  // tenant_source_url is the tenant-supplied source of a VOD import, set in
+  // place of media_presigned_url. It is not platform storage: the relay
+  // fetches it only through the public-destination policy.
+  string tenant_source_url = 19;
   reserved 15, 17;  // retired self-signed peer_relay_auth_token / _dtsh_auth_token
   reserved "peer_relay_auth_token", "peer_relay_dtsh_auth_token";
 }
@@ -1779,6 +1783,12 @@ message ViewerConnectTrigger {
   optional string cluster_id = 16;
   optional string origin_cluster_id = 17;
   optional string control_cell_id = 18;
+  // origin / referer are the viewer request's Origin and Referer headers.
+  // Presence means the path observed the request headers (possibly empty);
+  // absence means it could not, as with a MistServer build that does not
+  // report them.
+  optional string origin = 19;
+  optional string referer = 20;
 }
 
 // ViewerDisconnectTrigger (formerly USER_END) indicates a viewer disconnect.

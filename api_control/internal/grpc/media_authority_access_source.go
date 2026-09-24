@@ -47,7 +47,7 @@ func (source playbackAccessSource) localPolicy(previous *mediapb.PlaybackPolicy)
 		return nil
 	}
 	if doc.Type == "webhook" {
-		return &mediapb.PlaybackPolicy{Kind: mediapb.PlaybackPolicyKind_PLAYBACK_POLICY_KIND_WEBHOOK}
+		return &mediapb.PlaybackPolicy{Kind: mediapb.PlaybackPolicyKind_PLAYBACK_POLICY_KIND_WEBHOOK, AllowedOrigins: doc.AllowedOrigins}
 	}
 	if doc.Type != "jwt" || doc.JWT == nil {
 		return nil
@@ -55,7 +55,7 @@ func (source playbackAccessSource) localPolicy(previous *mediapb.PlaybackPolicy)
 	return &mediapb.PlaybackPolicy{Kind: mediapb.PlaybackPolicyKind_PLAYBACK_POLICY_KIND_JWT, Jwt: &mediapb.PlaybackJwtPolicy{
 		ActiveKeys: previous.GetJwt().GetActiveKeys(), AllowedKeyIds: sortedUnique(doc.JWT.AllowedKids),
 		RequiredAudiences: sortedUnique(doc.JWT.RequiredAudience), RequiredClaimsJson: cloneStringMap(doc.JWT.RequiredClaimsJSON),
-	}}
+	}, AllowedOrigins: doc.AllowedOrigins}
 }
 
 func bindPlaybackAccessSource(ctx context.Context, digest []byte, revisions []*mediapb.AuthoritySourceRevision) ([]byte, []*mediapb.AuthoritySourceRevision) {

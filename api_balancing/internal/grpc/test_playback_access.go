@@ -56,6 +56,31 @@ func (s *FoghornGRPCServer) TestPlaybackAccess(ctx context.Context, req *foghorn
 
 	resolvedInternal := req.GetInternalName()
 
+	// The tester evaluates as a viewer whose headers were observed: the
+	// supplied origin/referer, or none, as a request without them would carry.
+	origin, referer := req.GetOrigin(), req.GetReferer()
+	userNew := &ipcpb.ViewerConnectTrigger{
+		StreamName:  resolvedInternal,
+		SessionId:   req.GetSessionId(),
+		Host:        req.GetViewerIp(),
+		RequestUrl:  req.GetRequestUrl(),
+		ViewerToken: req.GetViewerToken(),
+		Connector:   req.GetConnector(),
+		Origin:      &origin,
+		Referer:     &referer,
+	}
+
+	// The origin rule runs first, as in live evaluation, so a disallowed origin
+	// is reported without firing the webhook.
+	if d := triggers.CheckPlaybackOrigin(s.logger, resolvedInternal, userNew, policy); d != nil {
+		if d.Reason == "origin-missing" {
+			d.Detail = "the policy restricts origins and no origin or referer was supplied"
+		}
+		return &foghorncontrolpb.TestPlaybackAccessResponse{
+			Allowed: false, PolicyType: d.PolicyType, Reason: d.Reason, Detail: d.Detail, ResolvedInternalName: resolvedInternal,
+		}, nil
+	}
+
 	// Webhook policy with fire_webhook=false: short-circuit so the operator
 	// gets the policy shape without paying the outbound HTTP side effect.
 	// Allowed=false here is informational, not a real enforcement deny.
@@ -67,15 +92,6 @@ func (s *FoghornGRPCServer) TestPlaybackAccess(ctx context.Context, req *foghorn
 			Detail:               "set fire_webhook=true to actually call the customer endpoint",
 			ResolvedInternalName: resolvedInternal,
 		}, nil
-	}
-
-	userNew := &ipcpb.ViewerConnectTrigger{
-		StreamName:  resolvedInternal,
-		SessionId:   req.GetSessionId(),
-		Host:        req.GetViewerIp(),
-		RequestUrl:  req.GetRequestUrl(),
-		ViewerToken: req.GetViewerToken(),
-		Connector:   req.GetConnector(),
 	}
 
 	// recorder=nil — dry-run must not record a successful key use against

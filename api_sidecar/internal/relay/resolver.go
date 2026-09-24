@@ -45,11 +45,16 @@ type ResolveResult struct {
 	// Bearer on peer fetches; the origin edge authorizes it online with its
 	// Foghorn (no signing key on this edge). Covers media + .dtsh.
 	PeerRelayGrantID string
-	cachedAt         time.Time
+	// TenantSourceURL is a VOD import's tenant-supplied source, set instead of
+	// MediaPresignedURL. It is fetched only with the relay's public-destination
+	// client (Server.upstreamClient).
+	TenantSourceURL string
+	cachedAt        time.Time
 }
 
-// UpstreamURL returns the URL the block-cache fetcher should GET.
-// Peer-relay takes precedence when set; otherwise the S3 presigned URL.
+// UpstreamURL returns the URL the block-cache fetcher should GET: the
+// peer-relay URL when set, else the S3 presigned URL, else a VOD import's
+// tenant source.
 func (r *ResolveResult) UpstreamURL() string {
 	if r == nil {
 		return ""
@@ -57,7 +62,16 @@ func (r *ResolveResult) UpstreamURL() string {
 	if r.PeerRelayURL != "" {
 		return r.PeerRelayURL
 	}
-	return r.MediaPresignedURL
+	if r.MediaPresignedURL != "" {
+		return r.MediaPresignedURL
+	}
+	return r.TenantSourceURL
+}
+
+// fromTenantSource reports whether the upstream is a tenant-supplied URL
+// rather than platform storage or a peer.
+func (r *ResolveResult) fromTenantSource() bool {
+	return r != nil && r.PeerRelayURL == "" && r.MediaPresignedURL == "" && r.TenantSourceURL != ""
 }
 
 // IntentFromHint maps a Foghorn-provided CacheDecisionHint to the local
@@ -113,6 +127,7 @@ func (r *controlResolver) Resolve(rc ResolveContext) (*ResolveResult, error) {
 		PeerRelayURL:       resp.GetPeerRelayUrl(),
 		PeerRelayDtshURL:   resp.GetPeerRelayDtshUrl(),
 		PeerRelayGrantID:   resp.GetPeerRelayGrantId(),
+		TenantSourceURL:    resp.GetTenantSourceUrl(),
 		cachedAt:           time.Now(),
 	}, nil
 }

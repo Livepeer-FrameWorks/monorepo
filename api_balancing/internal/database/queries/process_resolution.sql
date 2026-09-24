@@ -8,9 +8,14 @@ ORDER BY updated_at DESC
 LIMIT 1;
 
 -- name: UploadedArtifactFormat :one
-SELECT COALESCE(format, '')::text AS format
-FROM foghorn.artifacts
-WHERE artifact_hash = $1 AND s3_url IS NOT NULL;
+-- The format of a processing input the relay can serve: an uploaded object in
+-- S3, or the source URL of an import.
+SELECT COALESCE(a.format, '')::text AS format
+FROM foghorn.artifacts a
+WHERE a.artifact_hash = $1
+  AND (a.s3_url IS NOT NULL
+       OR EXISTS (SELECT 1 FROM foghorn.vod_metadata vm
+                  WHERE vm.artifact_hash = a.artifact_hash AND vm.source_url IS NOT NULL));
 
 -- name: LatestActiveProcessingConfig :one
 SELECT processes_json

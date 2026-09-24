@@ -724,7 +724,9 @@ func (s *CommodoreServer) compilePlaybackWebhookSecret(authorityID, tenantID, en
 	}
 	return &mediaauthoritypb.MediaObjectSecret{
 		AuthorityId: authorityID, TenantId: tenantID,
-		PlaybackWebhook: &mediaauthoritypb.PlaybackWebhookSecret{Url: doc.Webhook.URL, TimeoutMs: int32(doc.Webhook.TimeoutMs), Secret: secret},
+		PlaybackWebhook: &mediaauthoritypb.PlaybackWebhookSecret{
+			Url: doc.Webhook.URL, TimeoutMs: int32(doc.Webhook.TimeoutMs), Secret: secret, ContextJson: string(doc.Webhook.Context),
+		},
 	}, nil
 }
 
@@ -960,9 +962,13 @@ func (s *CommodoreServer) compilePlaybackPolicy(ctx context.Context, tenantID st
 			})
 		}
 		sort.Slice(jwt.ActiveKeys, func(i, j int) bool { return jwt.ActiveKeys[i].GetKeyId() < jwt.ActiveKeys[j].GetKeyId() })
-		return &mediaauthoritypb.PlaybackPolicy{Kind: mediaauthoritypb.PlaybackPolicyKind_PLAYBACK_POLICY_KIND_JWT, Jwt: jwt}, nil
+		return &mediaauthoritypb.PlaybackPolicy{
+			Kind: mediaauthoritypb.PlaybackPolicyKind_PLAYBACK_POLICY_KIND_JWT, Jwt: jwt, AllowedOrigins: doc.AllowedOrigins,
+		}, nil
 	case "webhook":
-		return &mediaauthoritypb.PlaybackPolicy{Kind: mediaauthoritypb.PlaybackPolicyKind_PLAYBACK_POLICY_KIND_WEBHOOK, ConnectedOnly: true}, nil
+		return &mediaauthoritypb.PlaybackPolicy{
+			Kind: mediaauthoritypb.PlaybackPolicyKind_PLAYBACK_POLICY_KIND_WEBHOOK, ConnectedOnly: true, AllowedOrigins: doc.AllowedOrigins,
+		}, nil
 	case "public":
 		return nil, parkAuthorityCompile("invalid_playback_policy", errors.New("protected media object has a public playback policy"))
 	default:

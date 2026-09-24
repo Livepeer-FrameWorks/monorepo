@@ -1108,8 +1108,10 @@ type PlaybackPolicy struct {
 	Jwt   *PlaybackJwtPolicy     `protobuf:"bytes,2,opt,name=jwt,proto3" json:"jwt,omitempty"`
 	// True only when this authority intentionally requires connected evaluation.
 	ConnectedOnly bool `protobuf:"varint,3,opt,name=connected_only,json=connectedOnly,proto3" json:"connected_only,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	// Normalized origins admitted to play; "*" admits any, empty = no restriction.
+	AllowedOrigins []string `protobuf:"bytes,4,rep,name=allowed_origins,json=allowedOrigins,proto3" json:"allowed_origins,omitempty"`
+	unknownFields  protoimpl.UnknownFields
+	sizeCache      protoimpl.SizeCache
 }
 
 func (x *PlaybackPolicy) Reset() {
@@ -1161,6 +1163,13 @@ func (x *PlaybackPolicy) GetConnectedOnly() bool {
 		return x.ConnectedOnly
 	}
 	return false
+}
+
+func (x *PlaybackPolicy) GetAllowedOrigins() []string {
+	if x != nil {
+		return x.AllowedOrigins
+	}
+	return nil
 }
 
 // SealedCellSecret is encrypted independently for one control cell using a
@@ -1437,10 +1446,12 @@ func (x *LiveStreamSecret) GetNativeAlwaysOn() bool {
 }
 
 type PlaybackWebhookSecret struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Url           string                 `protobuf:"bytes,1,opt,name=url,proto3" json:"url,omitempty"`
-	TimeoutMs     int32                  `protobuf:"varint,2,opt,name=timeout_ms,json=timeoutMs,proto3" json:"timeout_ms,omitempty"`
-	Secret        string                 `protobuf:"bytes,3,opt,name=secret,proto3" json:"secret,omitempty"`
+	state     protoimpl.MessageState `protogen:"open.v1"`
+	Url       string                 `protobuf:"bytes,1,opt,name=url,proto3" json:"url,omitempty"`
+	TimeoutMs int32                  `protobuf:"varint,2,opt,name=timeout_ms,json=timeoutMs,proto3" json:"timeout_ms,omitempty"`
+	Secret    string                 `protobuf:"bytes,3,opt,name=secret,proto3" json:"secret,omitempty"`
+	// The tenant's JSON object forwarded as "context" in every gate request.
+	ContextJson   string `protobuf:"bytes,4,opt,name=context_json,json=contextJson,proto3" json:"context_json,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1492,6 +1503,13 @@ func (x *PlaybackWebhookSecret) GetTimeoutMs() int32 {
 func (x *PlaybackWebhookSecret) GetSecret() string {
 	if x != nil {
 		return x.Secret
+	}
+	return ""
+}
+
+func (x *PlaybackWebhookSecret) GetContextJson() string {
+	if x != nil {
+		return x.ContextJson
 	}
 	return ""
 }
@@ -2013,11 +2031,12 @@ const file_media_authority_proto_rawDesc = "" +
 	"activeKeys\x1aE\n" +
 	"\x17RequiredClaimsJsonEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
-	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"\xa6\x01\n" +
+	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"\xcf\x01\n" +
 	"\x0ePlaybackPolicy\x127\n" +
 	"\x04kind\x18\x01 \x01(\x0e2#.media_authority.PlaybackPolicyKindR\x04kind\x124\n" +
 	"\x03jwt\x18\x02 \x01(\v2\".media_authority.PlaybackJwtPolicyR\x03jwt\x12%\n" +
-	"\x0econnected_only\x18\x03 \x01(\bR\rconnectedOnly\"\xce\x01\n" +
+	"\x0econnected_only\x18\x03 \x01(\bR\rconnectedOnly\x12'\n" +
+	"\x0fallowed_origins\x18\x04 \x03(\tR\x0eallowedOrigins\"\xce\x01\n" +
 	"\x10SealedCellSecret\x12(\n" +
 	"\x10audience_cell_id\x18\x01 \x01(\tR\x0eaudienceCellId\x12(\n" +
 	"\x10recipient_key_id\x18\x02 \x01(\tR\x0erecipientKeyId\x120\n" +
@@ -2045,12 +2064,13 @@ const file_media_authority_proto_rawDesc = "" +
 	"\x1anative_allowed_cluster_ids\x18\t \x03(\tR\x17nativeAllowedClusterIds\x124\n" +
 	"\x16native_placement_count\x18\n" +
 	" \x01(\x05R\x14nativePlacementCount\x12(\n" +
-	"\x10native_always_on\x18\v \x01(\bR\x0enativeAlwaysOn\"`\n" +
+	"\x10native_always_on\x18\v \x01(\bR\x0enativeAlwaysOn\"\x83\x01\n" +
 	"\x15PlaybackWebhookSecret\x12\x10\n" +
 	"\x03url\x18\x01 \x01(\tR\x03url\x12\x1d\n" +
 	"\n" +
 	"timeout_ms\x18\x02 \x01(\x05R\ttimeoutMs\x12\x16\n" +
-	"\x06secret\x18\x03 \x01(\tR\x06secret\"\xa6\x01\n" +
+	"\x06secret\x18\x03 \x01(\tR\x06secret\x12!\n" +
+	"\fcontext_json\x18\x04 \x01(\tR\vcontextJson\"\xa6\x01\n" +
 	"\x11MediaObjectSecret\x12!\n" +
 	"\fauthority_id\x18\x01 \x01(\tR\vauthorityId\x12\x1b\n" +
 	"\ttenant_id\x18\x02 \x01(\tR\btenantId\x12Q\n" +

@@ -38,10 +38,37 @@ func TestPlaybackAccessRevocationDirection(t *testing.T) {
 		{"remove required claim", func(p *mediapb.PlaybackPolicy) { p.Jwt.RequiredClaimsJson = nil }, false},
 		{"add required claim", func(p *mediapb.PlaybackPolicy) { p.Jwt.RequiredClaimsJson["org"] = `"one"` }, true},
 		{"disallow old key", func(p *mediapb.PlaybackPolicy) { p.Jwt.AllowedKeyIds = []string{"b"} }, true},
+		{"restrict origins", func(p *mediapb.PlaybackPolicy) { p.AllowedOrigins = []string{"https://a.example"} }, true},
+		{"allow any origin", func(p *mediapb.PlaybackPolicy) { p.AllowedOrigins = []string{"*"} }, false},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			desired := proto.CloneOf(previous)
 			tt.change(desired)
+			if got := playbackAccessRevoked(previous, desired); got != tt.revoked {
+				t.Fatalf("revoked=%v, want %v", got, tt.revoked)
+			}
+		})
+	}
+}
+
+// Removing an allowed origin revokes viewers embedding from it; adding one or
+// widening to "*" revokes nothing.
+func TestPlaybackOriginRevocationDirection(t *testing.T) {
+	previous := &mediapb.PlaybackPolicy{Kind: mediapb.PlaybackPolicyKind_PLAYBACK_POLICY_KIND_WEBHOOK,
+		AllowedOrigins: []string{"https://a.example", "https://b.example"}}
+	for _, tt := range []struct {
+		name    string
+		origins []string
+		revoked bool
+	}{
+		{"add origin", []string{"https://a.example", "https://b.example", "https://c.example"}, false},
+		{"remove origin", []string{"https://a.example"}, true},
+		{"widen to any", []string{"*"}, false},
+		{"clear", nil, false},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			desired := proto.CloneOf(previous)
+			desired.AllowedOrigins = tt.origins
 			if got := playbackAccessRevoked(previous, desired); got != tt.revoked {
 				t.Fatalf("revoked=%v, want %v", got, tt.revoked)
 			}

@@ -2773,8 +2773,9 @@ func (s *FoghornGRPCServer) enforceResolvePlaybackPolicy(ctx context.Context, re
 		Host:        req.GetViewerIp(),
 		RequestUrl:  "viewer://" + req.GetContentId(),
 		ViewerToken: req.GetViewerToken(),
-		Connector:   "resolve",
+		Connector:   triggers.ResolveConnector,
 	}
+	viewer.Origin, viewer.Referer = triggers.ResolveViewerHeaders(req.GetViewerOrigin(), req.GetViewerReferer())
 	if s.localPlaybackPolicy != nil {
 		decision, handled := s.localPlaybackPolicy.EvaluateLocalPlaybackPolicy(ctx, resolution.ContentId, policyInternalName, viewer)
 		if handled {

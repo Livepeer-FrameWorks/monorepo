@@ -1459,6 +1459,9 @@ CREATE TABLE IF NOT EXISTS foghorn.vod_metadata (
     -- before the client's completion call still converges a valid multipart upload to the finished
     -- object instead of failing it. A row is never 'completing' without this descriptor persisted.
     vod_completion_descriptor JSONB,
+    -- Tenant-supplied http(s) source of a VOD imported from a URL; NULL for uploads. The processing
+    -- node's Helmsman relay fetches it in place of an uploaded S3 object.
+    source_url TEXT,
 
     -- ===== FILE METADATA (populated after validation) =====
     duration_ms INTEGER,                    -- Video duration in milliseconds

@@ -28,13 +28,13 @@ const (
 // still top up through submit_payment and retry the operation from balance.
 var graphqlX402MutationStrategies = map[string]X402MutationStrategy{
 	"createClip": X402Unsupported, "startDVR": X402Unsupported,
-	"createVodUpload": X402Unsupported, "completeVodUpload": X402Unsupported,
+	"createVodUpload": X402Unsupported, "completeVodUpload": X402Unsupported, "importVodAsset": X402Unsupported,
 	"sendMessage": X402Unsupported, "updateMediaRetention": X402Unsupported,
 }
 
 var mcpX402MutationStrategies = map[string]X402MutationStrategy{
 	"complete_vod_upload": X402Unsupported, "create_clip": X402Unsupported,
-	"create_vod_upload": X402Unsupported, "start_dvr": X402Unsupported,
+	"create_vod_upload": X402Unsupported, "import_vod_asset": X402Unsupported, "start_dvr": X402Unsupported,
 	"update_asset_retention": X402Unsupported, "ask_consultant": X402Unsupported,
 	"execute_query": X402Unsupported,
 }
@@ -57,6 +57,7 @@ var graphqlMutationClasses = map[string]Class{
 	"deleteDVR":                      Control,
 	"createVodUpload":                Rated,
 	"completeVodUpload":              Rated,
+	"importVodAsset":                 Rated,
 	"abortVodUpload":                 Control,
 	"deleteVodAsset":                 Control,
 	"createPayment":                  PaymentRecovery,
@@ -165,6 +166,7 @@ var mcpToolClasses = map[string]Class{
 	"create_push_target":                  Control,
 	"create_stream":                       Control,
 	"create_vod_upload":                   Rated,
+	"import_vod_asset":                    Rated,
 	"set_retention_policy":                Control,
 	"set_stream_retention_overrides":      Control,
 	"start_dvr":                           Rated,

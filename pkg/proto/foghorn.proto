@@ -204,6 +204,9 @@ service ViewerControlService {
 service VodControlService {
   // CreateVodUpload initiates a multipart upload and returns presigned URLs
   rpc CreateVodUpload(shared.CreateVodUploadRequest) returns (shared.CreateVodUploadResponse);
+  // ImportVodAsset records a VOD import from a URL and queues its processing;
+  // the processing node's Helmsman relay fetches the source
+  rpc ImportVodAsset(shared.ImportVodAssetRequest) returns (shared.ImportVodAssetResponse);
   // CompleteVodUpload finalizes the multipart upload after all parts are uploaded
   rpc CompleteVodUpload(shared.CompleteVodUploadRequest) returns (shared.CompleteVodUploadResponse);
   // AbortVodUpload cancels an in-progress multipart upload

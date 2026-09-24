@@ -1996,8 +1996,9 @@ func viewerPlaybackTokenFromHTTPRequest(req *http.Request) string {
 func enforceHTTPResolvePlaybackPolicy(ctx context.Context, req *sharedpb.ViewerEndpointRequest, internalName string) bool {
 	viewer := &ipcpb.ViewerConnectTrigger{
 		StreamName: internalName, SessionId: "resolve:" + req.GetContentId(), Host: req.GetViewerIp(),
-		RequestUrl: "viewer://" + req.GetContentId(), ViewerToken: req.GetViewerToken(), Connector: "resolve-http",
+		RequestUrl: "viewer://" + req.GetContentId(), ViewerToken: req.GetViewerToken(), Connector: triggers.ResolveHTTPConnector,
 	}
+	viewer.Origin, viewer.Referer = triggers.ResolveViewerHeaders(req.GetViewerOrigin(), req.GetViewerReferer())
 	if triggerProcessor != nil {
 		if decision, handled := triggerProcessor.EvaluateLocalPlaybackPolicy(ctx, req.GetContentId(), internalName, viewer); handled {
 			return decision == "true"
@@ -2418,6 +2419,8 @@ func HandleGenericViewerPlayback(c *gin.Context) {
 	if token := viewerPlaybackTokenFromHTTPRequest(c.Request); token != "" {
 		req.ViewerToken = proto.String(token)
 	}
+	req.ViewerOrigin = proto.String(c.GetHeader("Origin"))
+	req.ViewerReferer = proto.String(c.GetHeader("Referer"))
 	if resolution.RequiresAuth {
 		if !enforceHTTPResolvePlaybackPolicy(c.Request.Context(), req, internalName) {
 			respondPlaybackError(c, http.StatusForbidden, "PLAYBACK_ACCESS_DENIED", "Playback access denied", nil)

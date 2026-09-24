@@ -250,6 +250,10 @@ func fillUploadResolve(ctx context.Context, req *ipcpb.RelayResolveRequest, resp
 	// the same artifact_hash assigned at multipart-upload finalization.
 	row, err := foghorndb.New(db).GetRelayVodMetadata(ctx, req.GetAssetHash())
 	s3Key, sizeBytes, tenantID := row.S3Key, row.SizeBytes, row.TenantID
+	if err == nil && row.SourceUrl.Valid && row.SourceUrl.String != "" {
+		fillImportSourceResolve(req, resp, nodeID, row, logger)
+		return
+	}
 	if errors.Is(err, sql.ErrNoRows) || !s3Key.Valid || s3Key.String == "" {
 		// Direct-dial: no local upload metadata. Source artifact for
 		// the processing input might be on a peer cluster — federate
@@ -285,6 +289,21 @@ func fillUploadResolve(ctx context.Context, req *ipcpb.RelayResolveRequest, resp
 	}
 	// No .dtsh PUT is minted here — see fillFileArtifactResolve: the durable index is published only via the
 	// server-assigned staged TriggerDtshSync attempt, never a direct relay PUT.
+}
+
+// fillImportSourceResolve answers the upload relay for a VOD imported from a
+// URL: the processing input is the tenant's source itself, which the relay
+// fetches through its public-destination client. Nothing is presigned; the
+// size is unknown here, so the relay probes it from the source.
+func fillImportSourceResolve(req *ipcpb.RelayResolveRequest, resp *ipcpb.RelayResolveResponse, nodeID string, row foghorndb.GetRelayVodMetadataRow, logger logging.Logger) {
+	if !nodeMayServeTenant(nodeID, row.TenantID.String) {
+		logger.WithFields(logging.Fields{"asset_hash": req.GetAssetHash(), "node_id": nodeID, "artifact_tenant": row.TenantID.String}).
+			Warn("RelayResolve import denied: requesting node is not entitled to this artifact's tenant")
+		return
+	}
+	resp.State = ipcpb.AssetState_ASSET_STATE_PLAYABLE
+	resp.TenantSourceUrl = row.SourceUrl.String
+	resp.PolicyHint = ipcpb.RelayResolveResponse_CACHE_HINT_PREFER_MEM
 }
 
 // fillPeerRelayFromLocalOrigin attempts to construct a peer-relay URL

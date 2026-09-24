@@ -141,10 +141,10 @@ func TestFillUploadResolveIncludesExpectedSize(t *testing.T) {
 	sm.SetNodeConnectionInfo(context.Background(), "node-1", "n", "", "platform-eu", nil)
 	AddPlatformSharedCluster("platform-eu")
 
-	mock.ExpectQuery("SELECT vm\\.s3_key, a\\.size_bytes").
+	mock.ExpectQuery("SELECT vm\\.s3_key, vm\\.source_url, a\\.size_bytes").
 		WithArgs("upload-hash").
-		WillReturnRows(sqlmock.NewRows([]string{"s3_key", "size_bytes", "tenant_id"}).
-			AddRow("uploads/tenant/upload-hash.mov", int64(21708800), "t1"))
+		WillReturnRows(sqlmock.NewRows([]string{"s3_key", "source_url", "size_bytes", "tenant_id"}).
+			AddRow("uploads/tenant/upload-hash.mov", nil, int64(21708800), "t1"))
 
 	req := &ipcpb.RelayResolveRequest{
 		AssetKind: "upload",
@@ -162,6 +162,46 @@ func TestFillUploadResolveIncludesExpectedSize(t *testing.T) {
 	}
 	if resp.GetMediaPresignedUrl() == "" {
 		t.Fatal("media presigned URL is empty")
+	}
+	if resp.GetTenantSourceUrl() != "" {
+		t.Fatal("an upload must not be answered with a tenant source")
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// An imported VOD's processing input is its tenant source: the relay gets the
+// source URL, not an S3 presign, and only a node entitled to the tenant gets it.
+func TestFillUploadResolveAnswersImportWithTenantSource(t *testing.T) {
+	mock, _, _ := setupArtifactTestDeps(t)
+	sm := state.ResetDefaultManagerForTests()
+	t.Cleanup(func() { state.ResetDefaultManagerForTests() })
+	sm.SetNodeInfo("node-1", "n", true, nil, nil, "", "", nil)
+	sm.SetNodeConnectionInfo(context.Background(), "node-1", "n", "", "platform-eu", nil)
+	AddPlatformSharedCluster("platform-eu")
+	sm.SetNodeInfo("node-other", "n", true, nil, nil, "", "", nil)
+	sm.SetNodeConnectionInfo(context.Background(), "node-other", "n", "tenant-other", "private-x", nil)
+
+	const source = "https://cdn.example/talks/keynote.mp4?sig=abc"
+	importRow := func() *sqlmock.Rows {
+		return sqlmock.NewRows([]string{"s3_key", "source_url", "size_bytes", "tenant_id"}).
+			AddRow(nil, source, nil, "t1")
+	}
+
+	mock.ExpectQuery("SELECT vm\\.s3_key, vm\\.source_url, a\\.size_bytes").WithArgs("import-hash").WillReturnRows(importRow())
+	resp := &ipcpb.RelayResolveResponse{}
+	fillUploadResolve(context.Background(), &ipcpb.RelayResolveRequest{AssetKind: "upload", AssetHash: "import-hash"}, resp, "node-1", logging.NewLogger())
+	if resp.GetState() != ipcpb.AssetState_ASSET_STATE_PLAYABLE || resp.GetTenantSourceUrl() != source || resp.GetMediaPresignedUrl() != "" {
+		t.Fatalf("import resolve = %+v, want playable with the tenant source and no presign", resp)
+	}
+
+	// A node dedicated to another tenant learns nothing about the import.
+	mock.ExpectQuery("SELECT vm\\.s3_key, vm\\.source_url, a\\.size_bytes").WithArgs("import-hash").WillReturnRows(importRow())
+	denied := &ipcpb.RelayResolveResponse{}
+	fillUploadResolve(context.Background(), &ipcpb.RelayResolveRequest{AssetKind: "upload", AssetHash: "import-hash"}, denied, "node-other", logging.NewLogger())
+	if denied.GetState() == ipcpb.AssetState_ASSET_STATE_PLAYABLE || denied.GetTenantSourceUrl() != "" {
+		t.Fatalf("resolve for a foreign-tenant node = %+v, want nothing", denied)
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatal(err)

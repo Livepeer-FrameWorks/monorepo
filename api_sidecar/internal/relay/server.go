@@ -17,6 +17,8 @@
 package relay
 
 import (
+	"errors"
+	"fmt"
 	"net"
 	"net/http"
 	"path"
@@ -28,6 +30,7 @@ import (
 
 	"frameworks/api_sidecar/internal/admission"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/restream"
 )
 
 // Resolver knows how to ask Foghorn for the durable source coordinates of an
@@ -59,18 +62,21 @@ type HeatToucher interface {
 // shared Gin engine via MountRoutes, and pass it into the rest of the
 // sidecar's wiring.
 type Server struct {
-	basePath   string
-	admitter   admission.Admitter
-	resolver   Resolver
-	freeze     FreezeHandoff
-	heat       HeatToucher
-	logger     logging.Logger
-	httpc      *http.Client
-	cache      *resolveCache
-	blockSize  int64
-	coldFetch  *blockFetchCoalescer
-	nodeID     string
-	authorizer RelayPullAuthorizer
+	basePath string
+	admitter admission.Admitter
+	resolver Resolver
+	freeze   FreezeHandoff
+	heat     HeatToucher
+	logger   logging.Logger
+	httpc    *http.Client
+	// tenantHTTPC fetches VOD import sources: tenant-supplied URLs, which may
+	// only reach public addresses.
+	tenantHTTPC *http.Client
+	cache       *resolveCache
+	blockSize   int64
+	coldFetch   *blockFetchCoalescer
+	nodeID      string
+	authorizer  RelayPullAuthorizer
 	// trustedCIDRs are RemoteAddr ranges that bypass the authorize gate like
 	// loopback does (still AND-gated by no proxy-forward markers). Only for
 	// the local Mist→Helmsman hop when Mist dials a non-loopback address.
@@ -99,6 +105,10 @@ type Options struct {
 	// Defaults to http.DefaultClient when nil; tests inject a recording
 	// transport.
 	HTTPClient *http.Client
+	// TenantSourceHTTPClient fetches VOD import sources. Defaults to a client
+	// that dials only public addresses (newTenantSourceClient); tests inject
+	// one that admits a loopback source.
+	TenantSourceHTTPClient *http.Client
 	// BlockSize sets the per-asset block-cache granularity in bytes.
 	// Zero uses DefaultBlockSize (32 MiB). Tests use a smaller value
 	// so fixture bodies span multiple blocks.
@@ -138,6 +148,10 @@ func New(opts Options) *Server {
 	if authorizer == nil {
 		authorizer = NewControlAuthorizer()
 	}
+	tenantClient := opts.TenantSourceHTTPClient
+	if tenantClient == nil {
+		tenantClient = newTenantSourceClient(restream.PublicDestinationPolicy())
+	}
 	return &Server{
 		basePath:     opts.BasePath,
 		admitter:     opts.Admitter,
@@ -146,6 +160,7 @@ func New(opts Options) *Server {
 		heat:         opts.Heat,
 		logger:       opts.Logger,
 		httpc:        c,
+		tenantHTTPC:  tenantClient,
 		cache:        newResolveCache(),
 		blockSize:    blockSize,
 		coldFetch:    newBlockFetchCoalescer(),
@@ -155,6 +170,50 @@ func New(opts Options) *Server {
 		authzCache:   make(map[string]time.Time),
 		defrost:      newDefrostAggregator(),
 	}
+}
+
+// Bounds on fetching a tenant-supplied source.
+const (
+	tenantSourceMaxRedirects   = 5
+	tenantSourceDialTimeout    = 10 * time.Second
+	tenantSourceHeaderTimeout  = 30 * time.Second
+	tenantSourceTLSDialTimeout = 10 * time.Second
+)
+
+// newTenantSourceClient returns the client for VOD import sources. The
+// destination policy runs in the dialer's Control hook on every address
+// actually connected to, so a redirect or a name that now resolves to a
+// private, loopback, or metadata address is refused. It uses no proxy and
+// follows at most tenantSourceMaxRedirects http(s) redirects.
+func newTenantSourceClient(policy restream.DestinationPolicy) *http.Client {
+	dialer := &net.Dialer{Timeout: tenantSourceDialTimeout, Control: policy.DialControl()}
+	return &http.Client{
+		Transport: &http.Transport{
+			Proxy:                 nil,
+			DialContext:           dialer.DialContext,
+			TLSHandshakeTimeout:   tenantSourceTLSDialTimeout,
+			ResponseHeaderTimeout: tenantSourceHeaderTimeout,
+		},
+		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			if len(via) >= tenantSourceMaxRedirects {
+				return errors.New("import source: too many redirects")
+			}
+			if req.URL.Scheme != "http" && req.URL.Scheme != "https" {
+				return fmt.Errorf("import source: redirect to %q scheme refused", req.URL.Scheme)
+			}
+			return nil
+		},
+	}
+}
+
+// upstreamClient returns the client for res's upstream: the public-only
+// client for a tenant-supplied import source, the platform client for S3
+// and peer relays.
+func (s *Server) upstreamClient(res *ResolveResult) *http.Client {
+	if res.fromTenantSource() {
+		return s.tenantHTTPC
+	}
+	return s.httpc
 }
 
 // parseTrustedCIDRs parses a comma-separated CIDR list. Unparseable entries

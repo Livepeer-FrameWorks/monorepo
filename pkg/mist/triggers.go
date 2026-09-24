@@ -178,6 +178,22 @@ func ParseTriggerToProtobuf(triggerType TriggerType, rawPayload []byte, nodeID s
 	return ParseTriggerToProtobufWithHeaders(triggerType, rawPayload, nil, nodeID, logger)
 }
 
+// userNewOriginFields is the USER_NEW line count of a Mist build that reports
+// the viewer's Origin and Referer (lines 8 and 9).
+const userNewOriginFields = 9
+
+// payloadLines splits a trigger payload into its lines, keeping empty ones.
+// Only the line terminator of the last line is dropped.
+func payloadLines(rawPayload []byte) []string {
+	payload := strings.ReplaceAll(string(rawPayload), "\r\n", "\n")
+	payload = strings.ReplaceAll(payload, "\r", "\n")
+	payload = strings.TrimSuffix(payload, "\n")
+	if payload == "" {
+		return nil
+	}
+	return strings.Split(payload, "\n")
+}
+
 // ParseTriggerToProtobufWithHeaders parses a trigger and captures Mist's retry-stable identity headers.
 func ParseTriggerToProtobufWithHeaders(triggerType TriggerType, rawPayload []byte, headers http.Header, nodeID string, logger logging.Logger) (*ipcpb.MistTrigger, error) {
 	// Parse parameters from newline-separated format
@@ -333,16 +349,24 @@ func ParseTriggerToProtobufWithHeaders(triggerType TriggerType, rawPayload []byt
 		if len(params) < 6 {
 			return nil, fmt.Errorf("USER_NEW requires 6 parameters, got %d", len(params))
 		}
-		mistTrigger.TriggerPayload = &ipcpb.MistTrigger_ViewerConnect{
-			ViewerConnect: &ipcpb.ViewerConnectTrigger{
-				StreamName:  params[0],
-				Host:        params[1],
-				ViewerToken: params[2],
-				Connector:   params[3],
-				RequestUrl:  params[4],
-				SessionId:   params[5],
-			},
+		viewer := &ipcpb.ViewerConnectTrigger{
+			StreamName:  params[0],
+			Host:        params[1],
+			ViewerToken: params[2],
+			Connector:   params[3],
+			RequestUrl:  params[4],
+			SessionId:   params[5],
 		}
+		// Lines 8 and 9 are the viewer request's Origin and Referer. Mist always
+		// writes both, often empty, and terminates the payload with a newline,
+		// so they are read from the untrimmed payload: trimming would drop empty
+		// trailing lines and make an observed request without headers look like
+		// a Mist build that does not report them.
+		if lines := payloadLines(rawPayload); len(lines) >= userNewOriginFields {
+			origin, referer := lines[7], lines[8]
+			viewer.Origin, viewer.Referer = &origin, &referer
+		}
+		mistTrigger.TriggerPayload = &ipcpb.MistTrigger_ViewerConnect{ViewerConnect: viewer}
 
 	case TriggerUserEnd:
 		if len(params) < 8 {

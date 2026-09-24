@@ -19,6 +19,9 @@ func playbackAccessRevoked(previous, desired *mediapb.PlaybackPolicy) bool {
 	if previous.GetKind() != desired.GetKind() {
 		return true
 	}
+	if originsNarrowed(previous.GetAllowedOrigins(), desired.GetAllowedOrigins()) {
+		return true
+	}
 	if desired.GetKind() != mediapb.PlaybackPolicyKind_PLAYBACK_POLICY_KIND_JWT {
 		return false
 	}
@@ -43,6 +46,16 @@ func playbackAccessRevoked(previous, desired *mediapb.PlaybackPolicy) bool {
 		}
 	}
 	return false
+}
+
+// originsNarrowed reports whether desired admits fewer viewer origins than
+// previous. An empty list and one containing "*" both admit every origin.
+func originsNarrowed(previous, desired []string) bool {
+	unrestricted := func(origins []string) bool { return len(origins) == 0 || slices.Contains(origins, "*") }
+	if unrestricted(desired) {
+		return false
+	}
+	return unrestricted(previous) || slices.ContainsFunc(previous, func(origin string) bool { return !slices.Contains(desired, origin) })
 }
 
 // Empty alternatives mean unrestricted, not deny-all.

@@ -634,6 +634,40 @@ func (q *Queries) GetExistingVodUpload(ctx context.Context, arg GetExistingVodUp
 	return i, err
 }
 
+const getImportedVodForTenant = `-- name: GetImportedVodForTenant :one
+SELECT a.status, vm.filename, vm.title, vm.description
+FROM foghorn.artifacts a
+JOIN foghorn.vod_metadata vm ON vm.artifact_hash = a.artifact_hash
+WHERE a.artifact_hash = $1
+  AND a.tenant_id = $2::uuid
+  AND vm.source_url IS NOT NULL
+`
+
+type GetImportedVodForTenantParams struct {
+	ArtifactHash string `db:"artifact_hash" json:"artifact_hash"`
+	TenantID     string `db:"tenant_id" json:"tenant_id"`
+}
+
+type GetImportedVodForTenantRow struct {
+	Status      sql.NullString `db:"status" json:"status"`
+	Filename    sql.NullString `db:"filename" json:"filename"`
+	Title       sql.NullString `db:"title" json:"title"`
+	Description sql.NullString `db:"description" json:"description"`
+}
+
+// An existing import of this hash, for an idempotent retry of ImportVodAsset.
+func (q *Queries) GetImportedVodForTenant(ctx context.Context, arg GetImportedVodForTenantParams) (GetImportedVodForTenantRow, error) {
+	row := q.db.QueryRowContext(ctx, getImportedVodForTenant, arg.ArtifactHash, arg.TenantID)
+	var i GetImportedVodForTenantRow
+	err := row.Scan(
+		&i.Status,
+		&i.Filename,
+		&i.Title,
+		&i.Description,
+	)
+	return i, err
+}
+
 const getVodAsset = `-- name: GetVodAsset :one
 SELECT a.artifact_hash AS id, a.artifact_hash, a.status, a.size_bytes,
        COALESCE(a.storage_location, 'pending')::text AS storage_location,
@@ -827,6 +861,48 @@ func (q *Queries) GetVodUploadStatusRow(ctx context.Context, arg GetVodUploadSta
 	return i, err
 }
 
+const insertImportedVodArtifact = `-- name: InsertImportedVodArtifact :exec
+INSERT INTO foghorn.artifacts (
+    artifact_hash, artifact_type, internal_name, tenant_id, user_id, status,
+    format, origin_cluster_id, storage_cluster_id, retention_until,
+    created_at, updated_at
+)
+VALUES (
+    $1, 'vod', $2,
+    NULLIF($3::text, '')::uuid,
+    NULLIF($4::text, '')::uuid,
+    'processing', $5, $6, $7,
+    $8, NOW(), NOW()
+)
+`
+
+type InsertImportedVodArtifactParams struct {
+	ArtifactHash     string         `db:"artifact_hash" json:"artifact_hash"`
+	InternalName     sql.NullString `db:"internal_name" json:"internal_name"`
+	TenantID         string         `db:"tenant_id" json:"tenant_id"`
+	UserID           string         `db:"user_id" json:"user_id"`
+	Format           sql.NullString `db:"format" json:"format"`
+	OriginClusterID  sql.NullString `db:"origin_cluster_id" json:"origin_cluster_id"`
+	StorageClusterID sql.NullString `db:"storage_cluster_id" json:"storage_cluster_id"`
+	RetentionUntil   sql.NullTime   `db:"retention_until" json:"retention_until"`
+}
+
+// A VOD imported from a URL starts in 'processing' with no stored object, like
+// a clip awaiting processing: the processed output becomes its first copy.
+func (q *Queries) InsertImportedVodArtifact(ctx context.Context, arg InsertImportedVodArtifactParams) error {
+	_, err := q.db.ExecContext(ctx, insertImportedVodArtifact,
+		arg.ArtifactHash,
+		arg.InternalName,
+		arg.TenantID,
+		arg.UserID,
+		arg.Format,
+		arg.OriginClusterID,
+		arg.StorageClusterID,
+		arg.RetentionUntil,
+	)
+	return err
+}
+
 const insertQueuedClipArtifact = `-- name: InsertQueuedClipArtifact :exec
 INSERT INTO foghorn.artifacts
     (artifact_hash, artifact_type, stream_internal_name, internal_name, stream_id,
@@ -974,6 +1050,37 @@ func (q *Queries) InsertUploadingVodArtifact(ctx context.Context, arg InsertUplo
 		arg.StorageClusterID,
 		arg.RetentionUntil,
 		arg.BackendID,
+	)
+	return err
+}
+
+const insertVodImportMetadata = `-- name: InsertVodImportMetadata :exec
+INSERT INTO foghorn.vod_metadata (
+    artifact_hash, filename, title, description, content_type, source_url, created_at, updated_at
+)
+VALUES (
+    $1, $2, $3, $4,
+    $5, $6, NOW(), NOW()
+)
+`
+
+type InsertVodImportMetadataParams struct {
+	ArtifactHash string         `db:"artifact_hash" json:"artifact_hash"`
+	Filename     sql.NullString `db:"filename" json:"filename"`
+	Title        sql.NullString `db:"title" json:"title"`
+	Description  sql.NullString `db:"description" json:"description"`
+	ContentType  sql.NullString `db:"content_type" json:"content_type"`
+	SourceUrl    sql.NullString `db:"source_url" json:"source_url"`
+}
+
+func (q *Queries) InsertVodImportMetadata(ctx context.Context, arg InsertVodImportMetadataParams) error {
+	_, err := q.db.ExecContext(ctx, insertVodImportMetadata,
+		arg.ArtifactHash,
+		arg.Filename,
+		arg.Title,
+		arg.Description,
+		arg.ContentType,
+		arg.SourceUrl,
 	)
 	return err
 }

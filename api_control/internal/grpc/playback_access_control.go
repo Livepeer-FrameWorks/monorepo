@@ -1,6 +1,7 @@
 package grpc
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
 	"encoding/json"
@@ -484,6 +485,7 @@ func (s *CommodoreServer) ResolvePlaybackPolicy(ctx context.Context, req *commod
 		return nil, status.Errorf(codes.Internal, "policy decode error")
 	}
 	resp.Type = parsed.Type
+	resp.AllowedOrigins = parsed.AllowedOrigins
 
 	switch parsed.Type {
 	case "jwt":
@@ -520,9 +522,10 @@ func (s *CommodoreServer) ResolvePlaybackPolicy(ctx context.Context, req *commod
 			secret = decrypted
 		}
 		resp.WebhookPolicy = &commodorepb.PlaybackWebhookPolicy{
-			Url:       parsed.Webhook.URL,
-			TimeoutMs: int32(parsed.Webhook.TimeoutMs),
-			SecretPt:  secret,
+			Url:         parsed.Webhook.URL,
+			TimeoutMs:   int32(parsed.Webhook.TimeoutMs),
+			SecretPt:    secret,
+			ContextJson: string(parsed.Webhook.Context),
 		}
 	case "public":
 		// fall through; nothing else to populate
@@ -602,6 +605,9 @@ type policyDoc struct {
 	Type    string              `json:"type"`
 	JWT     *policyJWTSection   `json:"jwt,omitempty"`
 	Webhook *policyWebhookField `json:"webhook,omitempty"`
+	// AllowedOrigins holds normalized origins (auth.NormalizeAllowedOrigins)
+	// admitted to play a jwt or webhook policy's content.
+	AllowedOrigins []string `json:"allowed_origins,omitempty"`
 }
 
 type policyJWTSection struct {
@@ -613,10 +619,48 @@ type policyJWTSection struct {
 type policyWebhookField struct {
 	URL       string `json:"url"`
 	TimeoutMs int    `json:"timeout_ms,omitempty"`
+	// Context is the tenant's JSON object, forwarded verbatim in every gate request.
+	Context json.RawMessage `json:"context,omitempty"`
+}
+
+// maxWebhookContextBytes bounds the compacted webhook context, which rides
+// every gate request and every sealed media authority of the object.
+const maxWebhookContextBytes = 4096
+
+// webhookContextJSON validates a webhook policy's context: empty, or a JSON
+// object of at most maxWebhookContextBytes once compacted.
+func webhookContextJSON(raw string) (json.RawMessage, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return nil, nil
+	}
+	var object map[string]json.RawMessage
+	if err := json.Unmarshal([]byte(raw), &object); err != nil || object == nil {
+		return nil, status.Error(codes.InvalidArgument, "webhook context must be a JSON object")
+	}
+	var compact bytes.Buffer
+	if err := json.Compact(&compact, []byte(raw)); err != nil {
+		return nil, status.Error(codes.InvalidArgument, "webhook context must be a JSON object")
+	}
+	if compact.Len() > maxWebhookContextBytes {
+		return nil, status.Errorf(codes.InvalidArgument, "webhook context must be at most %d bytes", maxWebhookContextBytes)
+	}
+	return json.RawMessage(compact.Bytes()), nil
 }
 
 func buildPolicyJSON(policyType string, req *commodorepb.SetPlaybackPolicyRequest) ([]byte, error) {
 	doc := policyDoc{Type: policyType}
+	if len(req.GetAllowedOrigins()) > 0 {
+		// Public content has no playback check for an origin rule to join.
+		if policyType == "public" {
+			return nil, status.Error(codes.InvalidArgument, "allowed origins require a jwt or webhook policy")
+		}
+		origins, err := auth.NormalizeAllowedOrigins(req.GetAllowedOrigins())
+		if err != nil {
+			return nil, status.Errorf(codes.InvalidArgument, "invalid allowed origins: %v", err)
+		}
+		doc.AllowedOrigins = origins
+	}
 	switch policyType {
 	case "public":
 		// nothing else
@@ -643,9 +687,14 @@ func buildPolicyJSON(policyType string, req *commodorepb.SetPlaybackPolicyReques
 		if timeout > 10000 {
 			timeout = 10000
 		}
+		webhookContext, err := webhookContextJSON(w.GetContextJson())
+		if err != nil {
+			return nil, err
+		}
 		doc.Webhook = &policyWebhookField{
 			URL:       w.GetUrl(),
 			TimeoutMs: timeout,
+			Context:   webhookContext,
 		}
 	}
 	return json.Marshal(doc)
@@ -671,6 +720,15 @@ func validateWebhookURL(ctx context.Context, policy restream.DestinationPolicy, 
 	if u.User != nil {
 		return errors.New("userinfo not allowed; auth via HMAC signature")
 	}
+	return validatePublicDestinationHost(ctx, policy, u)
+}
+
+// validatePublicDestinationHost is the save-time check for a tenant-supplied
+// URL the platform will dial: no platform-internal hostname, and a host whose
+// every resolved address the destination policy accepts. The dialing side
+// applies the same policy to each connection, which covers names that
+// resolve differently later.
+func validatePublicDestinationHost(ctx context.Context, policy restream.DestinationPolicy, u *url.URL) error {
 	host := u.Hostname()
 	if host == "" {
 		return errors.New("host required")

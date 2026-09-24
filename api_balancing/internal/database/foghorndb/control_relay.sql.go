@@ -82,7 +82,7 @@ func (q *Queries) GetRelayArtifact(ctx context.Context, artifactHash string) (Ge
 }
 
 const getRelayVodMetadata = `-- name: GetRelayVodMetadata :one
-SELECT vm.s3_key, a.size_bytes, a.tenant_id
+SELECT vm.s3_key, vm.source_url, a.size_bytes, a.tenant_id
 FROM foghorn.vod_metadata vm
 LEFT JOIN foghorn.artifacts a ON a.artifact_hash = vm.artifact_hash
 WHERE vm.artifact_hash = $1
@@ -91,6 +91,7 @@ LIMIT 1
 
 type GetRelayVodMetadataRow struct {
 	S3Key     sql.NullString `db:"s3_key" json:"s3_key"`
+	SourceUrl sql.NullString `db:"source_url" json:"source_url"`
 	SizeBytes sql.NullInt64  `db:"size_bytes" json:"size_bytes"`
 	TenantID  sql.NullString `db:"tenant_id" json:"tenant_id"`
 }
@@ -98,6 +99,11 @@ type GetRelayVodMetadataRow struct {
 func (q *Queries) GetRelayVodMetadata(ctx context.Context, artifactHash string) (GetRelayVodMetadataRow, error) {
 	row := q.db.QueryRowContext(ctx, getRelayVodMetadata, artifactHash)
 	var i GetRelayVodMetadataRow
-	err := row.Scan(&i.S3Key, &i.SizeBytes, &i.TenantID)
+	err := row.Scan(
+		&i.S3Key,
+		&i.SourceUrl,
+		&i.SizeBytes,
+		&i.TenantID,
+	)
 	return i, err
 }

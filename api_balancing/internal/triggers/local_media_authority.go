@@ -383,10 +383,13 @@ func localPlaybackPolicy(object *mediaauthoritypb.MediaObjectAuthority, webhookS
 		}
 		secret := webhookSecrets[0]
 		response.Type = "webhook"
-		response.WebhookPolicy = &commodorepb.PlaybackWebhookPolicy{Url: secret.GetUrl(), TimeoutMs: secret.GetTimeoutMs(), SecretPt: secret.GetSecret()}
+		response.WebhookPolicy = &commodorepb.PlaybackWebhookPolicy{
+			Url: secret.GetUrl(), TimeoutMs: secret.GetTimeoutMs(), SecretPt: secret.GetSecret(), ContextJson: secret.GetContextJson(),
+		}
 	default:
 		return nil, false
 	}
+	response.AllowedOrigins = policy.GetAllowedOrigins()
 	return response, true
 }
 

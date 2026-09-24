@@ -205,6 +205,40 @@ VALUES (
     sqlc.arg(retention_until), sqlc.arg(backend_id), NOW(), NOW()
 );
 
+-- name: InsertImportedVodArtifact :exec
+-- A VOD imported from a URL starts in 'processing' with no stored object, like
+-- a clip awaiting processing: the processed output becomes its first copy.
+INSERT INTO foghorn.artifacts (
+    artifact_hash, artifact_type, internal_name, tenant_id, user_id, status,
+    format, origin_cluster_id, storage_cluster_id, retention_until,
+    created_at, updated_at
+)
+VALUES (
+    sqlc.arg(artifact_hash), 'vod', sqlc.arg(internal_name),
+    NULLIF(sqlc.arg(tenant_id)::text, '')::uuid,
+    NULLIF(sqlc.arg(user_id)::text, '')::uuid,
+    'processing', sqlc.arg(format), sqlc.arg(origin_cluster_id), sqlc.arg(storage_cluster_id),
+    sqlc.arg(retention_until), NOW(), NOW()
+);
+
+-- name: InsertVodImportMetadata :exec
+INSERT INTO foghorn.vod_metadata (
+    artifact_hash, filename, title, description, content_type, source_url, created_at, updated_at
+)
+VALUES (
+    sqlc.arg(artifact_hash), sqlc.arg(filename), sqlc.arg(title), sqlc.arg(description),
+    sqlc.arg(content_type), sqlc.arg(source_url), NOW(), NOW()
+);
+
+-- name: GetImportedVodForTenant :one
+-- An existing import of this hash, for an idempotent retry of ImportVodAsset.
+SELECT a.status, vm.filename, vm.title, vm.description
+FROM foghorn.artifacts a
+JOIN foghorn.vod_metadata vm ON vm.artifact_hash = a.artifact_hash
+WHERE a.artifact_hash = sqlc.arg(artifact_hash)
+  AND a.tenant_id = sqlc.arg(tenant_id)::uuid
+  AND vm.source_url IS NOT NULL;
+
 -- name: InsertVodMultipartMetadata :exec
 INSERT INTO foghorn.vod_metadata (
     artifact_hash, filename, title, description, content_type,

@@ -929,6 +929,7 @@ var ViewerControlService_ServiceDesc = grpc.ServiceDesc{
 
 const (
 	VodControlService_CreateVodUpload_FullMethodName    = "/foghorn.VodControlService/CreateVodUpload"
+	VodControlService_ImportVodAsset_FullMethodName     = "/foghorn.VodControlService/ImportVodAsset"
 	VodControlService_CompleteVodUpload_FullMethodName  = "/foghorn.VodControlService/CompleteVodUpload"
 	VodControlService_AbortVodUpload_FullMethodName     = "/foghorn.VodControlService/AbortVodUpload"
 	VodControlService_GetVodUploadStatus_FullMethodName = "/foghorn.VodControlService/GetVodUploadStatus"
@@ -943,6 +944,9 @@ const (
 type VodControlServiceClient interface {
 	// CreateVodUpload initiates a multipart upload and returns presigned URLs
 	CreateVodUpload(ctx context.Context, in *shared.CreateVodUploadRequest, opts ...grpc.CallOption) (*shared.CreateVodUploadResponse, error)
+	// ImportVodAsset records a VOD import from a URL and queues its processing;
+	// the processing node's Helmsman relay fetches the source
+	ImportVodAsset(ctx context.Context, in *shared.ImportVodAssetRequest, opts ...grpc.CallOption) (*shared.ImportVodAssetResponse, error)
 	// CompleteVodUpload finalizes the multipart upload after all parts are uploaded
 	CompleteVodUpload(ctx context.Context, in *shared.CompleteVodUploadRequest, opts ...grpc.CallOption) (*shared.CompleteVodUploadResponse, error)
 	// AbortVodUpload cancels an in-progress multipart upload
@@ -966,6 +970,16 @@ func (c *vodControlServiceClient) CreateVodUpload(ctx context.Context, in *share
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(shared.CreateVodUploadResponse)
 	err := c.cc.Invoke(ctx, VodControlService_CreateVodUpload_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *vodControlServiceClient) ImportVodAsset(ctx context.Context, in *shared.ImportVodAssetRequest, opts ...grpc.CallOption) (*shared.ImportVodAssetResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(shared.ImportVodAssetResponse)
+	err := c.cc.Invoke(ctx, VodControlService_ImportVodAsset_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -1020,6 +1034,9 @@ func (c *vodControlServiceClient) DeleteVodAsset(ctx context.Context, in *shared
 type VodControlServiceServer interface {
 	// CreateVodUpload initiates a multipart upload and returns presigned URLs
 	CreateVodUpload(context.Context, *shared.CreateVodUploadRequest) (*shared.CreateVodUploadResponse, error)
+	// ImportVodAsset records a VOD import from a URL and queues its processing;
+	// the processing node's Helmsman relay fetches the source
+	ImportVodAsset(context.Context, *shared.ImportVodAssetRequest) (*shared.ImportVodAssetResponse, error)
 	// CompleteVodUpload finalizes the multipart upload after all parts are uploaded
 	CompleteVodUpload(context.Context, *shared.CompleteVodUploadRequest) (*shared.CompleteVodUploadResponse, error)
 	// AbortVodUpload cancels an in-progress multipart upload
@@ -1041,6 +1058,9 @@ type UnimplementedVodControlServiceServer struct{}
 
 func (UnimplementedVodControlServiceServer) CreateVodUpload(context.Context, *shared.CreateVodUploadRequest) (*shared.CreateVodUploadResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method CreateVodUpload not implemented")
+}
+func (UnimplementedVodControlServiceServer) ImportVodAsset(context.Context, *shared.ImportVodAssetRequest) (*shared.ImportVodAssetResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ImportVodAsset not implemented")
 }
 func (UnimplementedVodControlServiceServer) CompleteVodUpload(context.Context, *shared.CompleteVodUploadRequest) (*shared.CompleteVodUploadResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method CompleteVodUpload not implemented")
@@ -1089,6 +1109,24 @@ func _VodControlService_CreateVodUpload_Handler(srv interface{}, ctx context.Con
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
 		return srv.(VodControlServiceServer).CreateVodUpload(ctx, req.(*shared.CreateVodUploadRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _VodControlService_ImportVodAsset_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(shared.ImportVodAssetRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(VodControlServiceServer).ImportVodAsset(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: VodControlService_ImportVodAsset_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(VodControlServiceServer).ImportVodAsset(ctx, req.(*shared.ImportVodAssetRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -1175,6 +1213,10 @@ var VodControlService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "CreateVodUpload",
 			Handler:    _VodControlService_CreateVodUpload_Handler,
+		},
+		{
+			MethodName: "ImportVodAsset",
+			Handler:    _VodControlService_ImportVodAsset_Handler,
 		},
 		{
 			MethodName: "CompleteVodUpload",
