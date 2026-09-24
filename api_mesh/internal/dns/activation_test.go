@@ -10,28 +10,6 @@ import (
 	"github.com/miekg/dns"
 )
 
-func TestListenFDCountRequiresMatchingPID(t *testing.T) {
-	env := func(vars map[string]string) func(string) string {
-		return func(key string) string { return vars[key] }
-	}
-	cases := []struct {
-		name string
-		vars map[string]string
-		want int
-	}{
-		{"not activated", map[string]string{}, 0},
-		{"matching pid", map[string]string{"LISTEN_PID": "42", "LISTEN_FDS": "2"}, 2},
-		{"other process", map[string]string{"LISTEN_PID": "7", "LISTEN_FDS": "2"}, 0},
-		{"garbage count", map[string]string{"LISTEN_PID": "42", "LISTEN_FDS": "x"}, 0},
-		{"negative count", map[string]string{"LISTEN_PID": "42", "LISTEN_FDS": "-1"}, 0},
-	}
-	for _, tc := range cases {
-		if got := listenFDCount(env(tc.vars), 42); got != tc.want {
-			t.Errorf("%s: listenFDCount = %d, want %d", tc.name, got, tc.want)
-		}
-	}
-}
-
 // passedSockets binds a UDP and TCP socket the way systemd does and returns
 // dup'd descriptors, in the stream-then-datagram order systemd passes them
 // for a unit listing ListenStream before ListenDatagram.

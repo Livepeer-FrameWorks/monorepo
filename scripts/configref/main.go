@@ -73,6 +73,7 @@ var sharedEnvReadAllowlist = []string{
 	"pkg/config/reload.go",               // SIGHUP env-file reload into the process environment
 	"pkg/grpcutil/tls.go",                // BUILD_ENV fail-closed TLS guard
 	"pkg/logging/logger.go",              // LOG_LEVEL bootstrap read before configuration loads
+	"pkg/systemd/listenfds.go",           // sd_listen_fds(3) socket-activation handshake, a process protocol
 	"pkg/testutil/",                      // test harness image and database overrides
 }
 
