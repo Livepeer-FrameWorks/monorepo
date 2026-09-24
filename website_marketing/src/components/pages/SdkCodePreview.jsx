@@ -3,12 +3,15 @@ import { motion, AnimatePresence } from "framer-motion";
 import {
   PlayIcon,
   ArrowUpTrayIcon,
+  ServerStackIcon,
   CodeBracketIcon,
   ClipboardDocumentCheckIcon,
   ClipboardDocumentIcon,
 } from "@heroicons/react/24/outline";
 import { cn } from "@/lib/utils";
 import config from "../../config";
+
+const sdkGuideUrl = `${config.docsUrl.replace(/\/+$/, "")}/builders/sdks`;
 
 const snippetPlayerReact = `import { Player } from '@livepeer-frameworks/player-react'
 
@@ -119,6 +122,75 @@ const snippetIngestWc = `<!-- IIFE via npm CDN, no bundler needed -->
   initial-profile="broadcast"
 ></fw-streamcrafter>`;
 
+const snippetBackendTs = `// npm i @livepeer-frameworks/api
+import { createClient, CreateStreamDocument, expectResult } from "@livepeer-frameworks/api";
+
+const client = createClient({
+  url: "${config.gatewayUrl}",
+  token: process.env.FRAMEWORKS_API_TOKEN,
+});
+
+const created = await client.request(CreateStreamDocument, {
+  input: { name: "launch-event" },
+});
+const stream = expectResult(created.createStream, "Stream");
+
+console.log("stream key:", stream.streamKey);
+console.log("playback ID:", stream.playbackId);`;
+
+const snippetBackendGo = `// go get github.com/Livepeer-FrameWorks/sdk-go
+package main
+
+import (
+	"context"
+	"fmt"
+	"log"
+	"os"
+
+	frameworks "github.com/Livepeer-FrameWorks/sdk-go"
+)
+
+func main() {
+	ctx := context.Background()
+	client, err := frameworks.NewClient(frameworks.ClientOptions{
+		URL:   "${config.gatewayUrl}",
+		Token: os.Getenv("FRAMEWORKS_API_TOKEN"),
+	})
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	resp, err := frameworks.CreateStream(ctx, client, frameworks.CreateStreamInput{Name: "launch-event"})
+	if err != nil {
+		log.Fatal(err)
+	}
+	stream, err := frameworks.ExpectResult[*frameworks.CreateStreamCreateStream](resp.CreateStream)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	if key := stream.GetStreamKey(); key != nil {
+		fmt.Println("stream key:", *key)
+	}
+	fmt.Println("playback ID:", stream.GetPlaybackId())
+}`;
+
+const snippetBackendPython = `# pip install livepeer-frameworks
+import os
+
+from livepeer_frameworks import FrameWorksClient, expect_result
+from livepeer_frameworks.graphql import CreateStreamInput, Stream
+
+with FrameWorksClient(
+    "${config.gatewayUrl}",
+    token=os.environ["FRAMEWORKS_API_TOKEN"],
+) as fw:
+    created = fw.create_stream(input=CreateStreamInput(name="launch-event"))
+    stream = expect_result(created.create_stream, Stream)
+
+    print("stream key:", stream.stream_key)
+    print("playback ID:", stream.playback_id)`;
+
 const snippetGraphql = `query LiveStreams {
   streamsConnection(page: { first: 10 }) {
     edges {
@@ -142,6 +214,7 @@ export default function SdkCodePreview({ variant = "default", className }) {
   const [activeFrameworkByProduct, setActiveFrameworkByProduct] = useState({
     player: "react",
     ingest: "react",
+    backend: "ts",
   });
   const [copied, setCopied] = useState(false);
 
@@ -158,6 +231,11 @@ export default function SdkCodePreview({ variant = "default", className }) {
       wc: snippetIngestWc,
       vanilla: snippetIngestVanilla,
     },
+    backend: {
+      ts: snippetBackendTs,
+      go: snippetBackendGo,
+      python: snippetBackendPython,
+    },
     graphql: snippetGraphql,
   };
 
@@ -166,6 +244,9 @@ export default function SdkCodePreview({ variant = "default", className }) {
     svelte: "Svelte",
     wc: "Web Components",
     vanilla: "Vanilla",
+    ts: "TypeScript",
+    go: "Go",
+    python: "Python",
   };
 
   const frameworkLangLabels = {
@@ -173,9 +254,12 @@ export default function SdkCodePreview({ variant = "default", className }) {
     svelte: "Svelte 5",
     wc: "HTML",
     vanilla: "JavaScript",
+    ts: "TypeScript",
+    go: "Go",
+    python: "Python",
   };
 
-  const hasFrameworkTabs = activeProductTab === "player" || activeProductTab === "ingest";
+  const hasFrameworkTabs = typeof snippets[activeProductTab] === "object";
   const activeFramework = hasFrameworkTabs ? activeFrameworkByProduct[activeProductTab] : null;
   const activeSnippet = hasFrameworkTabs
     ? snippets[activeProductTab][activeFramework]
@@ -191,6 +275,7 @@ export default function SdkCodePreview({ variant = "default", className }) {
   const productTabs = [
     { id: "player", label: "Player SDK", icon: PlayIcon },
     { id: "ingest", label: "StreamCrafter", icon: ArrowUpTrayIcon },
+    { id: "backend", label: "Backend SDK", icon: ServerStackIcon },
     { id: "graphql", label: "GraphQL", icon: CodeBracketIcon },
   ];
 
@@ -252,6 +337,12 @@ export default function SdkCodePreview({ variant = "default", className }) {
           <span className="text-[10px] font-bold tracking-widest uppercase text-muted-foreground/60 hidden sm:inline-block">
             {activeLangLabel}
           </span>
+          <a
+            href={sdkGuideUrl}
+            className="text-[11px] font-medium text-muted-foreground hover:text-foreground transition-colors px-1.5 py-1 rounded-md hover:bg-white/5 whitespace-nowrap"
+          >
+            SDK guide
+          </a>
           <button
             onClick={handleCopy}
             className="text-muted-foreground hover:text-foreground transition-colors p-1 rounded-md hover:bg-white/5"
@@ -277,7 +368,7 @@ export default function SdkCodePreview({ variant = "default", className }) {
             transition={{ duration: 0.15 }}
             className="absolute inset-0 p-6 overflow-auto custom-scrollbar"
           >
-            <pre className="text-blue-100/90 leading-relaxed">
+            <pre className="text-blue-100/90 leading-relaxed [tab-size:4]">
               <code>{activeSnippet}</code>
             </pre>
           </motion.div>
