@@ -1454,14 +1454,23 @@ func getUint64FromMap(data map[string]interface{}, key string) uint64 {
 		}
 		return uint64(v)
 	case json.Number:
-		n, err := v.Int64()
-		if err != nil || n < 0 {
-			return 0
-		}
-		return uint64(n)
+		return parseUint64OrZero(string(v))
+	case string:
+		// protojson renders uint64/int64 fields as JSON strings.
+		return parseUint64OrZero(v)
 	default:
 		return 0
 	}
+}
+
+// parseUint64OrZero parses a decimal unsigned integer, accepting the full
+// uint64 range (hashes exceed MaxInt64); anything else yields 0.
+func parseUint64OrZero(s string) uint64 {
+	n, err := strconv.ParseUint(strings.TrimSpace(s), 10, 64)
+	if err != nil {
+		return 0
+	}
+	return n
 }
 
 var (
@@ -2277,8 +2286,13 @@ func getUint64SliceFromMap(data map[string]interface{}, key string) []uint64 {
 					out = append(out, uint64(n))
 				}
 			case json.Number:
-				if parsed, err := n.Int64(); err == nil && parsed >= 0 {
-					out = append(out, uint64(parsed))
+				if parsed, err := strconv.ParseUint(string(n), 10, 64); err == nil {
+					out = append(out, parsed)
+				}
+			case string:
+				// protojson renders repeated uint64 elements as JSON strings.
+				if parsed, err := strconv.ParseUint(strings.TrimSpace(n), 10, 64); err == nil {
+					out = append(out, parsed)
 				}
 			}
 		}
@@ -3558,7 +3572,7 @@ func (h *AnalyticsHandler) processAPIRequestBatch(ctx context.Context, event kaf
 			LLMProvider: agg.GetProvider(), UserHashes: userHashes, TokenHashes: tokenHashes,
 			SourceRegion: env.sourceRegion, StreamOriginRegion: env.streamOriginRegion,
 			StreamOriginClusterID: env.streamOriginClusterID, SchemaVersion: env.schemaVersion,
-			RootFields: agg.GetRootFields(),
+			RootFields: agg.GetRootFields(), GraphQLErrorCount: agg.GetGraphqlErrorCount(),
 		}); err != nil {
 			h.logger.WithFields(logging.Fields{
 				"tenant_id": agg.GetTenantId(),
@@ -3808,7 +3822,8 @@ func (h *AnalyticsHandler) processServiceAPIRequestBatch(ctx context.Context, ev
 			LLMProvider: getStringFromMap(aggMap, "provider"), UserHashes: userHashes, TokenHashes: tokenHashes,
 			SourceRegion: env.sourceRegion, StreamOriginRegion: env.streamOriginRegion,
 			StreamOriginClusterID: env.streamOriginClusterID, SchemaVersion: env.schemaVersion,
-			RootFields: getStringSliceFromMap(aggMap, "root_fields"),
+			RootFields:        getStringSliceFromMap(aggMap, "root_fields"),
+			GraphQLErrorCount: uint32(getUint64FromMap(aggMap, "graphql_error_count")),
 		}); err != nil {
 			h.logger.WithFields(logging.Fields{
 				"tenant_id": getStringFromMap(aggMap, "tenant_id"),
