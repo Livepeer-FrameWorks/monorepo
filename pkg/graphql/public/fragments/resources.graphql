@@ -12,7 +12,9 @@ fragment PlaybackPolicyFields on PlaybackPolicy {
     url
     timeoutMs
     secretMasked
+    context
   }
+  allowedOrigins
 }
 
 fragment StreamFields on Stream {

@@ -30,6 +30,17 @@ func RegisterVODTools(server *mcp.Server, clients *clients.ServiceClients, resol
 		},
 	)
 
+	// import_vod_asset - Import a video from a URL (requires balance)
+	addTool(server,
+		&mcp.Tool{
+			Name:        "import_vod_asset",
+			Description: "Import a video from a public https or http URL as a VOD asset. The processing node reads the file from the URL (the server must support range requests); the asset starts in PROCESSING and reports upload.ready or upload.failed.",
+		},
+		func(ctx context.Context, req *mcp.CallToolRequest, args ImportVodAssetInput) (*mcp.CallToolResult, any, error) {
+			return handleImportVodAsset(ctx, args, resolver, checker, logger)
+		},
+	)
+
 	// complete_vod_upload - Finalize upload (auth only - upload already authorized)
 	addTool(server,
 		&mcp.Tool{
@@ -168,6 +179,62 @@ func handleCreateVodUpload(ctx context.Context, args CreateVodUploadInput, resol
 		return toolSuccess(output)
 	default:
 		return toolError("Unexpected result type from VOD upload")
+	}
+}
+
+// ImportVodAssetInput represents input for import_vod_asset tool.
+type ImportVodAssetInput struct {
+	URL         string  `json:"url" jsonschema:"Source URL, https or http, publicly reachable"`
+	Filename    *string `json:"filename,omitempty" jsonschema:"Filename with a video extension (mp4, mov, mkv, webm, ts); required when the URL path has none"`
+	Title       *string `json:"title,omitempty" jsonschema:"Display title for the asset"`
+	Description *string `json:"description,omitempty" jsonschema:"Asset description"`
+}
+
+// ImportVodAssetResult represents the accepted import.
+type ImportVodAssetResult struct {
+	ID           string `json:"id"`
+	ArtifactHash string `json:"artifact_hash"`
+	PlaybackID   string `json:"playback_id"`
+	Status       string `json:"status"`
+	Message      string `json:"message"`
+}
+
+func handleImportVodAsset(ctx context.Context, args ImportVodAssetInput, resolver *resolvers.Resolver, checker *preflight.Checker, logger logging.Logger) (*mcp.CallToolResult, any, error) {
+	if ctxkeys.GetTenantID(ctx) == "" {
+		return nil, nil, mcperrors.AuthRequired()
+	}
+	if err := checker.RequireBalance(ctx); err != nil {
+		if pfe, ok := preflight.IsPreflightError(err); ok {
+			return toolErrorWithResolution(pfe.Blocker)
+		}
+		return toolError(fmt.Sprintf("Failed to check balance: %v", err))
+	}
+	if args.URL == "" {
+		return toolError("url is required")
+	}
+
+	result, err := resolver.DoImportVodAsset(ctx, model.ImportVodAssetInput{
+		URL: args.URL, Filename: args.Filename, Title: args.Title, Description: args.Description,
+	})
+	if err != nil {
+		logger.WithError(err).Warn("Failed to import VOD asset")
+		return toolError(fmt.Sprintf("Failed to import VOD asset: %v", err))
+	}
+	switch r := result.(type) {
+	case *model.ValidationError:
+		return toolError(r.Message)
+	case *model.AuthError:
+		return toolError(r.Message)
+	case *model.VodAsset:
+		return toolSuccess(ImportVodAssetResult{
+			ID:           r.ID,
+			ArtifactHash: r.ArtifactHash,
+			PlaybackID:   r.PlaybackID,
+			Status:       string(r.Status),
+			Message:      "Import accepted. The processing node reads and processes the file; poll the asset or subscribe to upload.ready / upload.failed for completion.",
+		})
+	default:
+		return toolError("Unexpected result type from VOD import")
 	}
 }
 

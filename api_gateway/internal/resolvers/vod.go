@@ -104,6 +104,53 @@ func (r *Resolver) DoCreateVodUpload(ctx context.Context, input model.CreateVodU
 	}, nil
 }
 
+// DoImportVodAsset starts a VOD import from a URL. The asset is returned in
+// UPLOADING; Foghorn fetches and processes the file afterwards.
+func (r *Resolver) DoImportVodAsset(ctx context.Context, input model.ImportVodAssetInput) (model.ImportVodAssetResult, error) {
+	if err := middleware.RequirePermission(ctx, "streams:write"); err != nil {
+		return nil, err
+	}
+	if middleware.IsDemoMode(ctx) {
+		r.Logger.Debug("Returning demo VOD import")
+		return demo.GenerateVodAsset(), nil
+	}
+	tenantID := ctxkeys.GetTenantID(ctx)
+	if tenantID == "" {
+		return nil, fmt.Errorf("tenant context required")
+	}
+	req := &sharedpb.ImportVodAssetRequest{
+		TenantId:    tenantID,
+		UserId:      ctxkeys.GetUserID(ctx),
+		SourceUrl:   strings.TrimSpace(input.URL),
+		Filename:    deref(input.Filename),
+		Title:       input.Title,
+		Description: input.Description,
+	}
+	resp, err := r.Clients.Commodore.ImportVodAsset(ctx, req)
+	if err != nil {
+		if st, ok := status.FromError(err); ok {
+			switch st.Code() {
+			case codes.InvalidArgument:
+				return &model.ValidationError{Message: st.Message(), Field: strPtr("url")}, nil
+			case codes.FailedPrecondition:
+				if strings.Contains(st.Message(), "S3 storage not configured") {
+					return &model.ValidationError{
+						Message: "VOD imports are not available - S3 storage not configured",
+						Field:   strPtr("storage"),
+					}, nil
+				}
+			case codes.PermissionDenied:
+				if strings.Contains(st.Message(), "account suspended") {
+					return &model.AuthError{Message: "Account suspended - please top up your balance to import videos"}, nil
+				}
+			}
+		}
+		r.Logger.WithError(err).Error("Failed to import VOD asset")
+		return nil, fmt.Errorf("failed to import VOD asset: %w", err)
+	}
+	return protoToVodAsset(resp.GetAsset()), nil
+}
+
 // DoCompleteVodUpload finalizes a multipart upload after all parts are uploaded
 func (r *Resolver) DoCompleteVodUpload(ctx context.Context, input model.CompleteVodUploadInput) (model.CompleteVodUploadResult, error) {
 	if err := middleware.RequirePermission(ctx, "streams:write"); err != nil {

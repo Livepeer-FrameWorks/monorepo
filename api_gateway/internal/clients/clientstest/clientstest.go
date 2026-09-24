@@ -145,6 +145,7 @@ type FakeCommodore struct {
 	DeleteDVRFn         func(ctx context.Context, dvrHash string) (bool, error)
 
 	CreateVodUploadFn    func(ctx context.Context, req *sharedpb.CreateVodUploadRequest) (*sharedpb.CreateVodUploadResponse, error)
+	ImportVodAssetFn     func(ctx context.Context, req *sharedpb.ImportVodAssetRequest) (*sharedpb.ImportVodAssetResponse, error)
 	CompleteVodUploadFn  func(ctx context.Context, req *sharedpb.CompleteVodUploadRequest) (*sharedpb.CompleteVodUploadResponse, error)
 	AbortVodUploadFn     func(ctx context.Context, tenantID, uploadID string) (*sharedpb.AbortVodUploadResponse, error)
 	GetVodUploadStatusFn func(ctx context.Context, tenantID, uploadID string) (*sharedpb.GetVodUploadStatusResponse, error)
@@ -168,6 +169,7 @@ type FakeCommodore struct {
 	ResolveIngestEndpointFn             func(ctx context.Context, streamKey, viewerIP string, protocol sharedpb.IngestProtocol) (*sharedpb.IngestEndpointResponse, error)
 	ResolveViewerEndpointFn             func(ctx context.Context, contentID, viewerIP, viewerToken string) (*sharedpb.ViewerEndpointResponse, error)
 	ResolveViewerEndpointWithProtocolFn func(ctx context.Context, contentID, viewerIP, viewerToken, protocol string) (*sharedpb.ViewerEndpointResponse, error)
+	ResolveViewerFn                     func(ctx context.Context, req *sharedpb.ViewerEndpointRequest) (*sharedpb.ViewerEndpointResponse, error)
 	ResolveVodIDFn                      func(ctx context.Context, vodID string) (*commodorepb.ResolveVodIDResponse, error)
 	ResolveClipHashFn                   func(ctx context.Context, clipHash string) (*commodorepb.ResolveClipHashResponse, error)
 	ResolveDVRHashFn                    func(ctx context.Context, dvrHash string) (*commodorepb.ResolveDVRHashResponse, error)
@@ -473,6 +475,14 @@ func (f *FakeCommodore) CreateVodUpload(ctx context.Context, req *sharedpb.Creat
 		panic("FakeCommodore.CreateVodUpload not stubbed")
 	}
 	return f.CreateVodUploadFn(ctx, req)
+}
+
+func (f *FakeCommodore) ImportVodAsset(ctx context.Context, req *sharedpb.ImportVodAssetRequest) (*sharedpb.ImportVodAssetResponse, error) {
+	f.Calls++
+	if f.ImportVodAssetFn == nil {
+		panic("FakeCommodore.ImportVodAsset not stubbed")
+	}
+	return f.ImportVodAssetFn(ctx, req)
 }
 
 func (f *FakeCommodore) CompleteVodUpload(ctx context.Context, req *sharedpb.CompleteVodUploadRequest) (*sharedpb.CompleteVodUploadResponse, error) {

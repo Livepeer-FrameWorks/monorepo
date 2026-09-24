@@ -1994,10 +1994,6 @@ union CreateStreamKeyResult = StreamKey | ValidationError | NotFoundError | Auth
 
 union CreateStreamResult = Stream | ValidationError | AuthError
 
-"""
-Input for initiating a multipart VOD upload.
-Returns presigned S3 URLs for uploading file parts.
-"""
 input CreateVodUploadInput {
   """
   Original filename (for metadata and content-type detection).
@@ -2746,6 +2742,33 @@ type GeographicDistribution {
   totalViewers: Int!
   viewersByCountry: [CountryTimeSeries!]!
 }
+
+"""
+Input for initiating a multipart VOD upload.
+Returns presigned S3 URLs for uploading file parts.
+"""
+input ImportVodAssetInput {
+  """
+  Source URL, https or http. It must be publicly reachable and support HTTP
+  range requests; private and internal addresses are refused.
+  """
+  url: String!
+  """
+  Filename to store the video under. Required when the URL path does not end
+  in a supported video extension (mp4, mov, mkv, webm, ts).
+  """
+  filename: String
+  """
+  Optional display title for the asset.
+  """
+  title: String
+  """
+  Optional description for the asset.
+  """
+  description: String
+}
+
+union ImportVodAssetResult = VodAsset | ValidationError | AuthError
 
 type Incident {
   id: ID!
@@ -4370,6 +4393,18 @@ type Mutation {
     input: CreateVodUploadInput!
   ): CreateVodUploadResult!
   """
+  Import a video from a public https or http URL as a VOD asset. The processing
+  node reads the file from the URL and processes it like an upload; the asset
+  reports PROCESSING until it is ready. Progress arrives as upload.created,
+  upload.completed, and upload.ready or upload.failed events.
+  """
+  importVodAsset(
+    """
+    Import source and asset details.
+    """
+    input: ImportVodAssetInput!
+  ): ImportVodAssetResult!
+  """
   Complete a VOD upload after all parts are uploaded.
   Triggers processing and thumbnail generation.
   """
@@ -5682,6 +5717,12 @@ type PlaybackPolicy {
   Webhook-policy details, populated when type == WEBHOOK. Secret is masked.
   """
   webhook: PlaybackWebhookPolicy
+  """
+  Sites allowed to embed the content, as normalized `scheme://host[:port]`
+  origins; `*` allows any. Empty = no restriction. A browser viewer whose
+  Origin (or Referer) is not listed is denied.
+  """
+  allowedOrigins: [String!]!
 }
 
 input PlaybackPolicyInput {
@@ -5694,6 +5735,11 @@ input PlaybackPolicyInput {
   Required when type == WEBHOOK.
   """
   webhook: PlaybackWebhookPolicyInput
+  """
+  JWT and WEBHOOK only: sites allowed to embed the content, each `*` or
+  `scheme://host[:port]` (at most 50). Omit or empty for no restriction.
+  """
+  allowedOrigins: [String!]
 }
 
 enum PlaybackPolicyType {
@@ -5727,6 +5773,10 @@ type PlaybackWebhookPolicy {
   Always 'redacted' on read; the actual secret is fieldcrypt-encrypted at rest.
   """
   secretMasked: String!
+  """
+  Your JSON object, sent as `context` in every access request to the URL. Null when unset.
+  """
+  context: JSON
 }
 
 input PlaybackWebhookPolicyInput {
@@ -5745,6 +5795,12 @@ input PlaybackWebhookPolicyInput {
   Outbound POST timeout in milliseconds. Server caps at 10000; default 5000.
   """
   timeoutMs: Int
+  """
+  A JSON object (at most 4 KiB) sent as `context` in every access request,
+  e.g. `{"courseId": "algebra-101"}`, so the endpoint can decide without its
+  own lookup.
+  """
+  context: JSON
 }
 
 """
@@ -6029,7 +6085,7 @@ Payload of a PublicEvent: one member per public event type. Fields of the same
 name can have different types across members (reason is a different enum per
 event family); alias them when one selection covers several.
 """
-union PublicEventData = AccountSuspended | ApiTokenCreated | ApiTokenRevoked | BillingDetailsUpdated | InvoiceCreated | InvoicePaid | PaymentFailed | TopupCredited | ClipFailed | ClipReady | ClipRequested | CustomDomainFailed | CustomDomainVerified | MultistreamStatusChanged | RecordingFailed | RecordingReady | StreamConnected | StreamCreated | StreamDeleted | StreamIdle | StreamKeyRotated | StreamLive | StreamUpdated | UploadAborted | UploadCompleted | UploadCreated | UploadFailed | UploadReady
+union PublicEventData = AccountSuspended | ApiTokenCreated | ApiTokenRevoked | BillingDetailsUpdated | InvoiceCreated | InvoicePaid | PaymentFailed | TopupCredited | ClipFailed | ClipReady | ClipRequested | CustomDomainFailed | CustomDomainVerified | MultistreamStatusChanged | RecordingFailed | RecordingReady | RecordingStarted | RecordingStopped | StreamConnected | StreamCreated | StreamDeleted | StreamIdle | StreamKeyRotated | StreamLive | StreamUpdated | UploadAborted | UploadCompleted | UploadCreated | UploadFailed | UploadReady
 
 """
 A single pull-source resolution outcome from Foghorn's STREAM_SOURCE
@@ -6944,6 +7000,20 @@ type RecordingRetentionCap {
   Maximum retention in days when capped.
   """
   maxDays: Int
+}
+
+"""
+`recording.started` event. Aggregate: `artifacts`.
+"""
+type RecordingStarted {
+  artifact: EventArtifact
+}
+
+"""
+`recording.stopped` event. Aggregate: `artifacts`.
+"""
+type RecordingStopped {
+  artifact: EventArtifact
 }
 
 union ReplayWebhookDeliveriesResult = WebhookReplayResult | ValidationError | NotFoundError | AuthError
@@ -7889,6 +7959,7 @@ type StreamAnalyticsSummaryEdge {
 type StreamConnected {
   streamId: ID!
   protocol: EventIngestProtocol!
+  playbackId: ID!
 }
 
 type StreamConnectionHourly implements Node {
@@ -8094,6 +8165,7 @@ type StreamHealthSummary {
 """
 type StreamIdle {
   streamId: ID!
+  playbackId: ID!
 }
 
 type StreamKey {
@@ -8131,6 +8203,7 @@ type StreamKeysConnection {
 """
 type StreamLive {
   streamId: ID!
+  playbackId: ID!
 }
 
 """
@@ -8704,6 +8777,14 @@ input TestPlaybackAccessInput {
   without side effects.
   """
   fireWebhook: Boolean
+  """
+  Origin header to test the policy's allowed origins against.
+  """
+  origin: String
+  """
+  Referer header, used when origin is empty.
+  """
+  referer: String
 }
 
 union TestPlaybackAccessResult = PlaybackAccessDecision | ValidationError | NotFoundError | AuthError

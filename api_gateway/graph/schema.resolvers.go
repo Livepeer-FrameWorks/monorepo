@@ -2132,6 +2132,11 @@ func (r *mutationResolver) CreateVodUpload(ctx context.Context, input model.Crea
 	return r.DoCreateVodUpload(ctx, input)
 }
 
+// ImportVodAsset is the resolver for the importVodAsset field.
+func (r *mutationResolver) ImportVodAsset(ctx context.Context, input model.ImportVodAssetInput) (model.ImportVodAssetResult, error) {
+	return r.DoImportVodAsset(ctx, input)
+}
+
 // CompleteVodUpload is the resolver for the completeVodUpload field.
 func (r *mutationResolver) CompleteVodUpload(ctx context.Context, input model.CompleteVodUploadInput) (model.CompleteVodUploadResult, error) {
 	return r.DoCompleteVodUpload(ctx, input)
@@ -3093,6 +3098,11 @@ func (r *playbackMetadataResolver) CreatedAt(ctx context.Context, obj *sharedpb.
 // SecretMasked is the resolver for the secretMasked field.
 func (r *playbackWebhookPolicyResolver) SecretMasked(ctx context.Context, obj *commodorepb.PlaybackWebhookPolicy) (string, error) {
 	return resolvers.WebhookSecretMask(), nil
+}
+
+// Context is the resolver for the context field.
+func (r *playbackWebhookPolicyResolver) Context(ctx context.Context, obj *commodorepb.PlaybackWebhookPolicy) (interface{}, error) {
+	return resolvers.PlaybackWebhookContext(obj)
 }
 
 // Timestamp is the resolver for the timestamp field.

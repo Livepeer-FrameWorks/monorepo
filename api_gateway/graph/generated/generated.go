@@ -1907,6 +1907,7 @@ type ComplexityRoot struct {
 		DeleteWebhookEndpoint          func(childComplexity int, id string) int
 		DisableWebhookEndpoint         func(childComplexity int, id string) int
 		EnableWebhookEndpoint          func(childComplexity int, id string) int
+		ImportVodAsset                 func(childComplexity int, input model.ImportVodAssetInput) int
 		LinkEmail                      func(childComplexity int, input model.LinkEmailInput) int
 		LinkWallet                     func(childComplexity int, input model.WalletLoginInput) int
 		MarkSkipperReportsRead         func(childComplexity int, ids []string) int
@@ -2357,9 +2358,10 @@ type ComplexityRoot struct {
 	}
 
 	PlaybackPolicy struct {
-		Jwt     func(childComplexity int) int
-		Type    func(childComplexity int) int
-		Webhook func(childComplexity int) int
+		AllowedOrigins func(childComplexity int) int
+		Jwt            func(childComplexity int) int
+		Type           func(childComplexity int) int
+		Webhook        func(childComplexity int) int
 	}
 
 	PlaybackTrack struct {
@@ -2373,6 +2375,7 @@ type ComplexityRoot struct {
 	}
 
 	PlaybackWebhookPolicy struct {
+		Context      func(childComplexity int) int
 		SecretMasked func(childComplexity int) int
 		TimeoutMs    func(childComplexity int) int
 		Url          func(childComplexity int) int
@@ -2739,6 +2742,14 @@ type ComplexityRoot struct {
 	RecordingRetentionCap struct {
 		Capped  func(childComplexity int) int
 		MaxDays func(childComplexity int) int
+	}
+
+	RecordingStarted struct {
+		Artifact func(childComplexity int) int
+	}
+
+	RecordingStopped struct {
+		Artifact func(childComplexity int) int
 	}
 
 	RoutingCountryStat struct {
@@ -3223,8 +3234,9 @@ type ComplexityRoot struct {
 	}
 
 	StreamConnected struct {
-		Protocol func(childComplexity int) int
-		StreamId func(childComplexity int) int
+		PlaybackId func(childComplexity int) int
+		Protocol   func(childComplexity int) int
+		StreamId   func(childComplexity int) int
 	}
 
 	StreamConnectionHourly struct {
@@ -3402,7 +3414,8 @@ type ComplexityRoot struct {
 	}
 
 	StreamIdle struct {
-		StreamId func(childComplexity int) int
+		PlaybackId func(childComplexity int) int
+		StreamId   func(childComplexity int) int
 	}
 
 	StreamKey struct {
@@ -3433,7 +3446,8 @@ type ComplexityRoot struct {
 	}
 
 	StreamLive struct {
-		StreamId func(childComplexity int) int
+		PlaybackId func(childComplexity int) int
+		StreamId   func(childComplexity int) int
 	}
 
 	StreamMetrics struct {
@@ -4676,6 +4690,7 @@ type MutationResolver interface {
 	StopDvr(ctx context.Context, dvrHash string) (model.StopDVRResult, error)
 	DeleteDvr(ctx context.Context, dvrHash string) (model.DeleteDVRResult, error)
 	CreateVodUpload(ctx context.Context, input model.CreateVodUploadInput) (model.CreateVodUploadResult, error)
+	ImportVodAsset(ctx context.Context, input model.ImportVodAssetInput) (model.ImportVodAssetResult, error)
 	CompleteVodUpload(ctx context.Context, input model.CompleteVodUploadInput) (model.CompleteVodUploadResult, error)
 	AbortVodUpload(ctx context.Context, uploadID string) (model.AbortVodUploadResult, error)
 	DeleteVodAsset(ctx context.Context, id string) (model.DeleteVodAssetResult, error)
@@ -4884,6 +4899,7 @@ type PlaybackMetadataResolver interface {
 }
 type PlaybackWebhookPolicyResolver interface {
 	SecretMasked(ctx context.Context, obj *commodorepb.PlaybackWebhookPolicy) (string, error)
+	Context(ctx context.Context, obj *commodorepb.PlaybackWebhookPolicy) (interface{}, error)
 }
 type PlayerBootTimeSeriesBucketResolver interface {
 	Timestamp(ctx context.Context, obj *periscopepb.PlayerBootTimeSeriesBucket) (*time.Time, error)
@@ -13277,6 +13293,17 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.ComplexityRoot.Mutation.EnableWebhookEndpoint(childComplexity, args["id"].(string)), true
+	case "Mutation.importVodAsset":
+		if e.ComplexityRoot.Mutation.ImportVodAsset == nil {
+			break
+		}
+
+		args, err := ec.field_Mutation_importVodAsset_args(ctx, rawArgs)
+		if err != nil {
+			return 0, false
+		}
+
+		return e.ComplexityRoot.Mutation.ImportVodAsset(childComplexity, args["input"].(model.ImportVodAssetInput)), true
 	case "Mutation.linkEmail":
 		if e.ComplexityRoot.Mutation.LinkEmail == nil {
 			break
@@ -15522,6 +15549,12 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 
 		return e.ComplexityRoot.PlaybackMetadata.Viewers(childComplexity), true
 
+	case "PlaybackPolicy.allowedOrigins":
+		if e.ComplexityRoot.PlaybackPolicy.AllowedOrigins == nil {
+			break
+		}
+
+		return e.ComplexityRoot.PlaybackPolicy.AllowedOrigins(childComplexity), true
 	case "PlaybackPolicy.jwt":
 		if e.ComplexityRoot.PlaybackPolicy.Jwt == nil {
 			break
@@ -15584,6 +15617,12 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 
 		return e.ComplexityRoot.PlaybackTrack.Width(childComplexity), true
 
+	case "PlaybackWebhookPolicy.context":
+		if e.ComplexityRoot.PlaybackWebhookPolicy.Context == nil {
+			break
+		}
+
+		return e.ComplexityRoot.PlaybackWebhookPolicy.Context(childComplexity), true
 	case "PlaybackWebhookPolicy.secretMasked":
 		if e.ComplexityRoot.PlaybackWebhookPolicy.SecretMasked == nil {
 			break
@@ -17695,6 +17734,20 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 
 		return e.ComplexityRoot.RecordingRetentionCap.MaxDays(childComplexity), true
 
+	case "RecordingStarted.artifact":
+		if e.ComplexityRoot.RecordingStarted.Artifact == nil {
+			break
+		}
+
+		return e.ComplexityRoot.RecordingStarted.Artifact(childComplexity), true
+
+	case "RecordingStopped.artifact":
+		if e.ComplexityRoot.RecordingStopped.Artifact == nil {
+			break
+		}
+
+		return e.ComplexityRoot.RecordingStopped.Artifact(childComplexity), true
+
 	case "RoutingCountryStat.countryCode":
 		if e.ComplexityRoot.RoutingCountryStat.CountryCode == nil {
 			break
@@ -19707,6 +19760,12 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 
 		return e.ComplexityRoot.StreamAnalyticsSummaryEdge.Node(childComplexity), true
 
+	case "StreamConnected.playbackId":
+		if e.ComplexityRoot.StreamConnected.PlaybackId == nil {
+			break
+		}
+
+		return e.ComplexityRoot.StreamConnected.PlaybackId(childComplexity), true
 	case "StreamConnected.protocol":
 		if e.ComplexityRoot.StreamConnected.Protocol == nil {
 			break
@@ -20492,6 +20551,12 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 
 		return e.ComplexityRoot.StreamHealthSummary.TotalRebufferCount(childComplexity), true
 
+	case "StreamIdle.playbackId":
+		if e.ComplexityRoot.StreamIdle.PlaybackId == nil {
+			break
+		}
+
+		return e.ComplexityRoot.StreamIdle.PlaybackId(childComplexity), true
 	case "StreamIdle.streamId":
 		if e.ComplexityRoot.StreamIdle.StreamId == nil {
 			break
@@ -20593,6 +20658,12 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 
 		return e.ComplexityRoot.StreamKeysConnection.TotalCount(childComplexity), true
 
+	case "StreamLive.playbackId":
+		if e.ComplexityRoot.StreamLive.PlaybackId == nil {
+			break
+		}
+
+		return e.ComplexityRoot.StreamLive.PlaybackId(childComplexity), true
 	case "StreamLive.streamId":
 		if e.ComplexityRoot.StreamLive.StreamId == nil {
 			break
@@ -24293,6 +24364,7 @@ func (e *executableSchema) Exec(ctx context.Context) graphql.ResponseHandler {
 		ec.unmarshalInputCreateVodUploadInput,
 		ec.unmarshalInputCreateWebhookEndpointInput,
 		ec.unmarshalInputEntitlementEntryInput,
+		ec.unmarshalInputImportVodAssetInput,
 		ec.unmarshalInputIncidentFilterInput,
 		ec.unmarshalInputLinkEmailInput,
 		ec.unmarshalInputMediaPlacementAllowInput,
@@ -25904,6 +25976,19 @@ type Mutation {
   ): CreateVodUploadResult!
 
   """
+  Import a video from a public https or http URL as a VOD asset. The processing
+  node reads the file from the URL and processes it like an upload; the asset
+  reports PROCESSING until it is ready. Progress arrives as upload.created,
+  upload.completed, and upload.ready or upload.failed events.
+  """
+  importVodAsset(
+    """
+    Import source and asset details.
+    """
+    input: ImportVodAssetInput!
+  ): ImportVodAssetResult!
+
+  """
   Complete a VOD upload after all parts are uploaded.
   Triggers processing and thumbnail generation.
   """
@@ -26695,6 +26780,7 @@ union StopDVRResult = DeleteSuccess | NotFoundError | AuthError
 union DeleteDVRResult = DeleteSuccess | NotFoundError | AuthError
 
 union CreateVodUploadResult = VodUploadSession | ValidationError | AuthError
+union ImportVodAssetResult = VodAsset | ValidationError | AuthError
 union CompleteVodUploadResult = VodAsset | ValidationError | NotFoundError | AuthError
 union AbortVodUploadResult = DeleteSuccess | NotFoundError | AuthError
 union DeleteVodAssetResult = DeleteSuccess | NotFoundError | AuthError
@@ -27345,6 +27431,23 @@ enum VodAssetStatus {
 Input for initiating a multipart VOD upload.
 Returns presigned S3 URLs for uploading file parts.
 """
+input ImportVodAssetInput {
+  """
+  Source URL, https or http. It must be publicly reachable and support HTTP
+  range requests; private and internal addresses are refused.
+  """
+  url: String!
+  """
+  Filename to store the video under. Required when the URL path does not end
+  in a supported video extension (mp4, mov, mkv, webm, ts).
+  """
+  filename: String
+  "Optional display title for the asset."
+  title: String
+  "Optional description for the asset."
+  description: String
+}
+
 input CreateVodUploadInput {
   "Original filename (for metadata and content-type detection)."
   filename: String!
@@ -32427,6 +32530,12 @@ type PlaybackPolicy {
   jwt: PlaybackJwtPolicy
   "Webhook-policy details, populated when type == WEBHOOK. Secret is masked."
   webhook: PlaybackWebhookPolicy
+  """
+  Sites allowed to embed the content, as normalized ` + "`" + `scheme://host[:port]` + "`" + `
+  origins; ` + "`" + `*` + "`" + ` allows any. Empty = no restriction. A browser viewer whose
+  Origin (or Referer) is not listed is denied.
+  """
+  allowedOrigins: [String!]!
 }
 
 enum PlaybackPolicyType {
@@ -32471,6 +32580,8 @@ type PlaybackWebhookPolicy {
   timeoutMs: Int!
   "Always 'redacted' on read; the actual secret is fieldcrypt-encrypted at rest."
   secretMasked: String!
+  "Your JSON object, sent as ` + "`" + `context` + "`" + ` in every access request to the URL. Null when unset."
+  context: JSON
 }
 
 input CreateSigningKeyInput {
@@ -32492,6 +32603,11 @@ input PlaybackPolicyInput {
   jwt: PlaybackJwtPolicyInput
   "Required when type == WEBHOOK."
   webhook: PlaybackWebhookPolicyInput
+  """
+  JWT and WEBHOOK only: sites allowed to embed the content, each ` + "`" + `*` + "`" + ` or
+  ` + "`" + `scheme://host[:port]` + "`" + ` (at most 50). Omit or empty for no restriction.
+  """
+  allowedOrigins: [String!]
 }
 
 input PlaybackJwtPolicyInput {
@@ -32521,6 +32637,12 @@ input PlaybackWebhookPolicyInput {
   secret: String
   "Outbound POST timeout in milliseconds. Server caps at 10000; default 5000."
   timeoutMs: Int
+  """
+  A JSON object (at most 4 KiB) sent as ` + "`" + `context` + "`" + ` in every access request,
+  e.g. ` + "`" + `{"courseId": "algebra-101"}` + "`" + `, so the endpoint can decide without its
+  own lookup.
+  """
+  context: JSON
 }
 
 # Customer-tunable storage retention. Cascade at artifact-create / DVR-start:
@@ -32749,6 +32871,10 @@ input TestPlaybackAccessInput {
   without side effects.
   """
   fireWebhook: Boolean
+  "Origin header to test the policy's allowed origins against."
+  origin: String
+  "Referer header, used when origin is empty."
+  referer: String
 }
 
 """
@@ -33561,6 +33687,8 @@ union PublicEventData =
   | MultistreamStatusChanged
   | RecordingFailed
   | RecordingReady
+  | RecordingStarted
+  | RecordingStopped
   | StreamConnected
   | StreamCreated
   | StreamDeleted
@@ -33713,11 +33841,26 @@ type RecordingReady {
 }
 
 """
+` + "`" + `recording.started` + "`" + ` event. Aggregate: ` + "`" + `artifacts` + "`" + `.
+"""
+type RecordingStarted {
+  artifact: EventArtifact
+}
+
+"""
+` + "`" + `recording.stopped` + "`" + ` event. Aggregate: ` + "`" + `artifacts` + "`" + `.
+"""
+type RecordingStopped {
+  artifact: EventArtifact
+}
+
+"""
 ` + "`" + `stream.connected` + "`" + ` event. Aggregate: ` + "`" + `streams` + "`" + `.
 """
 type StreamConnected {
   streamId: ID!
   protocol: EventIngestProtocol!
+  playbackId: ID!
 }
 
 """
@@ -33741,6 +33884,7 @@ type StreamDeleted {
 """
 type StreamIdle {
   streamId: ID!
+  playbackId: ID!
 }
 
 """
@@ -33755,6 +33899,7 @@ type StreamKeyRotated {
 """
 type StreamLive {
   streamId: ID!
+  playbackId: ID!
 }
 
 """
@@ -35382,6 +35527,17 @@ func (ec *executionContext) field_Mutation_enableWebhookEndpoint_args(ctx contex
 		return nil, err
 	}
 	args["id"] = arg0
+	return args, nil
+}
+
+func (ec *executionContext) field_Mutation_importVodAsset_args(ctx context.Context, rawArgs map[string]any) (map[string]any, error) {
+	var err error
+	args := map[string]any{}
+	arg0, err := graphql.ProcessArgField(ctx, rawArgs, "input", ec.unmarshalNImportVodAssetInput2frameworksᚋapi_gatewayᚋgraphᚋmodelᚐImportVodAssetInput)
+	if err != nil {
+		return nil, err
+	}
+	args["input"] = arg0
 	return args, nil
 }
 
@@ -49555,6 +49711,8 @@ func (ec *executionContext) fieldContext_Clip_playbackPolicy(_ context.Context, 
 				return ec.fieldContext_PlaybackPolicy_jwt(ctx, field)
 			case "webhook":
 				return ec.fieldContext_PlaybackPolicy_webhook(ctx, field)
+			case "allowedOrigins":
+				return ec.fieldContext_PlaybackPolicy_allowedOrigins(ctx, field)
 			}
 			return nil, fmt.Errorf("no field named %q was found under type PlaybackPolicy", field.Name)
 		},
@@ -76128,6 +76286,47 @@ func (ec *executionContext) fieldContext_Mutation_createVodUpload(ctx context.Co
 	return fc, nil
 }
 
+func (ec *executionContext) _Mutation_importVodAsset(ctx context.Context, field graphql.CollectedField) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_Mutation_importVodAsset,
+		func(ctx context.Context) (any, error) {
+			fc := graphql.GetFieldContext(ctx)
+			return ec.Resolvers.Mutation().ImportVodAsset(ctx, fc.Args["input"].(model.ImportVodAssetInput))
+		},
+		nil,
+		ec.marshalNImportVodAssetResult2frameworksᚋapi_gatewayᚋgraphᚋmodelᚐImportVodAssetResult,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_Mutation_importVodAsset(ctx context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "Mutation",
+		Field:      field,
+		IsMethod:   true,
+		IsResolver: true,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type ImportVodAssetResult does not have child fields")
+		},
+	}
+	defer func() {
+		if r := recover(); r != nil {
+			err = ec.Recover(ctx, r)
+			ec.Error(ctx, err)
+		}
+	}()
+	ctx = graphql.WithFieldContext(ctx, fc)
+	if fc.Args, err = ec.field_Mutation_importVodAsset_args(ctx, field.ArgumentMap(ec.Variables)); err != nil {
+		ec.Error(ctx, err)
+		return fc, err
+	}
+	return fc, nil
+}
+
 func (ec *executionContext) _Mutation_completeVodUpload(ctx context.Context, field graphql.CollectedField) (ret graphql.Marshaler) {
 	return graphql.ResolveField(
 		ctx,
@@ -88720,8 +88919,39 @@ func (ec *executionContext) fieldContext_PlaybackPolicy_webhook(_ context.Contex
 				return ec.fieldContext_PlaybackWebhookPolicy_timeoutMs(ctx, field)
 			case "secretMasked":
 				return ec.fieldContext_PlaybackWebhookPolicy_secretMasked(ctx, field)
+			case "context":
+				return ec.fieldContext_PlaybackWebhookPolicy_context(ctx, field)
 			}
 			return nil, fmt.Errorf("no field named %q was found under type PlaybackWebhookPolicy", field.Name)
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _PlaybackPolicy_allowedOrigins(ctx context.Context, field graphql.CollectedField, obj *model.PlaybackPolicy) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_PlaybackPolicy_allowedOrigins,
+		func(ctx context.Context) (any, error) {
+			return obj.AllowedOrigins, nil
+		},
+		nil,
+		ec.marshalNString2ᚕstringᚄ,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_PlaybackPolicy_allowedOrigins(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "PlaybackPolicy",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type String does not have child fields")
 		},
 	}
 	return fc, nil
@@ -89012,6 +89242,35 @@ func (ec *executionContext) fieldContext_PlaybackWebhookPolicy_secretMasked(_ co
 		IsResolver: true,
 		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
 			return nil, errors.New("field of type String does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _PlaybackWebhookPolicy_context(ctx context.Context, field graphql.CollectedField, obj *commodorepb.PlaybackWebhookPolicy) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_PlaybackWebhookPolicy_context,
+		func(ctx context.Context) (any, error) {
+			return ec.Resolvers.PlaybackWebhookPolicy().Context(ctx, obj)
+		},
+		nil,
+		ec.marshalOJSON2interface,
+		true,
+		false,
+	)
+}
+
+func (ec *executionContext) fieldContext_PlaybackWebhookPolicy_context(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "PlaybackWebhookPolicy",
+		Field:      field,
+		IsMethod:   true,
+		IsResolver: true,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type JSON does not have child fields")
 		},
 	}
 	return fc, nil
@@ -100216,6 +100475,84 @@ func (ec *executionContext) fieldContext_RecordingRetentionCap_maxDays(_ context
 	return fc, nil
 }
 
+func (ec *executionContext) _RecordingStarted_artifact(ctx context.Context, field graphql.CollectedField, obj *publicv1.RecordingStarted) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_RecordingStarted_artifact,
+		func(ctx context.Context) (any, error) {
+			return obj.Artifact, nil
+		},
+		nil,
+		ec.marshalOEventArtifact2ᚖgithubᚗcomᚋLivepeerᚑFrameWorksᚋmonorepoᚋpkgᚋprotoᚋeventsᚋpublicᚋv1ᚐArtifact,
+		true,
+		false,
+	)
+}
+
+func (ec *executionContext) fieldContext_RecordingStarted_artifact(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "RecordingStarted",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			switch field.Name {
+			case "artifactId":
+				return ec.fieldContext_EventArtifact_artifactId(ctx, field)
+			case "kind":
+				return ec.fieldContext_EventArtifact_kind(ctx, field)
+			case "streamId":
+				return ec.fieldContext_EventArtifact_streamId(ctx, field)
+			case "playbackId":
+				return ec.fieldContext_EventArtifact_playbackId(ctx, field)
+			}
+			return nil, fmt.Errorf("no field named %q was found under type EventArtifact", field.Name)
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _RecordingStopped_artifact(ctx context.Context, field graphql.CollectedField, obj *publicv1.RecordingStopped) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_RecordingStopped_artifact,
+		func(ctx context.Context) (any, error) {
+			return obj.Artifact, nil
+		},
+		nil,
+		ec.marshalOEventArtifact2ᚖgithubᚗcomᚋLivepeerᚑFrameWorksᚋmonorepoᚋpkgᚋprotoᚋeventsᚋpublicᚋv1ᚐArtifact,
+		true,
+		false,
+	)
+}
+
+func (ec *executionContext) fieldContext_RecordingStopped_artifact(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "RecordingStopped",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			switch field.Name {
+			case "artifactId":
+				return ec.fieldContext_EventArtifact_artifactId(ctx, field)
+			case "kind":
+				return ec.fieldContext_EventArtifact_kind(ctx, field)
+			case "streamId":
+				return ec.fieldContext_EventArtifact_streamId(ctx, field)
+			case "playbackId":
+				return ec.fieldContext_EventArtifact_playbackId(ctx, field)
+			}
+			return nil, fmt.Errorf("no field named %q was found under type EventArtifact", field.Name)
+		},
+	}
+	return fc, nil
+}
+
 func (ec *executionContext) _RoutingCountryStat_countryCode(ctx context.Context, field graphql.CollectedField, obj *model.RoutingCountryStat) (ret graphql.Marshaler) {
 	return graphql.ResolveField(
 		ctx,
@@ -109002,6 +109339,8 @@ func (ec *executionContext) fieldContext_Stream_playbackPolicy(_ context.Context
 				return ec.fieldContext_PlaybackPolicy_jwt(ctx, field)
 			case "webhook":
 				return ec.fieldContext_PlaybackPolicy_webhook(ctx, field)
+			case "allowedOrigins":
+				return ec.fieldContext_PlaybackPolicy_allowedOrigins(ctx, field)
 			}
 			return nil, fmt.Errorf("no field named %q was found under type PlaybackPolicy", field.Name)
 		},
@@ -110908,6 +111247,35 @@ func (ec *executionContext) fieldContext_StreamConnected_protocol(_ context.Cont
 		IsResolver: false,
 		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
 			return nil, errors.New("field of type EventIngestProtocol does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _StreamConnected_playbackId(ctx context.Context, field graphql.CollectedField, obj *publicv1.StreamConnected) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_StreamConnected_playbackId,
+		func(ctx context.Context) (any, error) {
+			return obj.PlaybackId, nil
+		},
+		nil,
+		ec.marshalNID2string,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_StreamConnected_playbackId(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "StreamConnected",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type ID does not have child fields")
 		},
 	}
 	return fc, nil
@@ -115212,6 +115580,35 @@ func (ec *executionContext) fieldContext_StreamIdle_streamId(_ context.Context, 
 	return fc, nil
 }
 
+func (ec *executionContext) _StreamIdle_playbackId(ctx context.Context, field graphql.CollectedField, obj *publicv1.StreamIdle) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_StreamIdle_playbackId,
+		func(ctx context.Context) (any, error) {
+			return obj.PlaybackId, nil
+		},
+		nil,
+		ec.marshalNID2string,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_StreamIdle_playbackId(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "StreamIdle",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type ID does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
 func (ec *executionContext) _StreamKey_id(ctx context.Context, field graphql.CollectedField, obj *commodorepb.StreamKey) (ret graphql.Marshaler) {
 	return graphql.ResolveField(
 		ctx,
@@ -115762,6 +116159,35 @@ func (ec *executionContext) _StreamLive_streamId(ctx context.Context, field grap
 }
 
 func (ec *executionContext) fieldContext_StreamLive_streamId(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "StreamLive",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type ID does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _StreamLive_playbackId(ctx context.Context, field graphql.CollectedField, obj *publicv1.StreamLive) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_StreamLive_playbackId,
+		func(ctx context.Context) (any, error) {
+			return obj.PlaybackId, nil
+		},
+		nil,
+		ec.marshalNID2string,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_StreamLive_playbackId(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
 	fc = &graphql.FieldContext{
 		Object:     "StreamLive",
 		Field:      field,
@@ -131864,6 +132290,8 @@ func (ec *executionContext) fieldContext_VodAsset_playbackPolicy(_ context.Conte
 				return ec.fieldContext_PlaybackPolicy_jwt(ctx, field)
 			case "webhook":
 				return ec.fieldContext_PlaybackPolicy_webhook(ctx, field)
+			case "allowedOrigins":
+				return ec.fieldContext_PlaybackPolicy_allowedOrigins(ctx, field)
 			}
 			return nil, fmt.Errorf("no field named %q was found under type PlaybackPolicy", field.Name)
 		},
@@ -138247,6 +138675,57 @@ func (ec *executionContext) unmarshalInputEntitlementEntryInput(ctx context.Cont
 	return it, nil
 }
 
+func (ec *executionContext) unmarshalInputImportVodAssetInput(ctx context.Context, obj any) (model.ImportVodAssetInput, error) {
+	var it model.ImportVodAssetInput
+	if obj == nil {
+		return it, nil
+	}
+
+	asMap := map[string]any{}
+	for k, v := range obj.(map[string]any) {
+		asMap[k] = v
+	}
+
+	fieldsInOrder := [...]string{"url", "filename", "title", "description"}
+	for _, k := range fieldsInOrder {
+		v, ok := asMap[k]
+		if !ok {
+			continue
+		}
+		switch k {
+		case "url":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("url"))
+			data, err := ec.unmarshalNString2string(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.URL = data
+		case "filename":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("filename"))
+			data, err := ec.unmarshalOString2ᚖstring(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.Filename = data
+		case "title":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("title"))
+			data, err := ec.unmarshalOString2ᚖstring(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.Title = data
+		case "description":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("description"))
+			data, err := ec.unmarshalOString2ᚖstring(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.Description = data
+		}
+	}
+	return it, nil
+}
+
 func (ec *executionContext) unmarshalInputIncidentFilterInput(ctx context.Context, obj any) (model.IncidentFilterInput, error) {
 	var it model.IncidentFilterInput
 	if obj == nil {
@@ -138979,7 +139458,7 @@ func (ec *executionContext) unmarshalInputPlaybackPolicyInput(ctx context.Contex
 		asMap[k] = v
 	}
 
-	fieldsInOrder := [...]string{"type", "jwt", "webhook"}
+	fieldsInOrder := [...]string{"type", "jwt", "webhook", "allowedOrigins"}
 	for _, k := range fieldsInOrder {
 		v, ok := asMap[k]
 		if !ok {
@@ -139007,6 +139486,13 @@ func (ec *executionContext) unmarshalInputPlaybackPolicyInput(ctx context.Contex
 				return it, err
 			}
 			it.Webhook = data
+		case "allowedOrigins":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("allowedOrigins"))
+			data, err := ec.unmarshalOString2ᚕstringᚄ(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.AllowedOrigins = data
 		}
 	}
 	return it, nil
@@ -139023,7 +139509,7 @@ func (ec *executionContext) unmarshalInputPlaybackWebhookPolicyInput(ctx context
 		asMap[k] = v
 	}
 
-	fieldsInOrder := [...]string{"url", "secret", "timeoutMs"}
+	fieldsInOrder := [...]string{"url", "secret", "timeoutMs", "context"}
 	for _, k := range fieldsInOrder {
 		v, ok := asMap[k]
 		if !ok {
@@ -139051,6 +139537,13 @@ func (ec *executionContext) unmarshalInputPlaybackWebhookPolicyInput(ctx context
 				return it, err
 			}
 			it.TimeoutMs = data
+		case "context":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("context"))
+			data, err := ec.unmarshalOJSON2interface(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.Context = data
 		}
 	}
 	return it, nil
@@ -139874,7 +140367,7 @@ func (ec *executionContext) unmarshalInputTestPlaybackAccessInput(ctx context.Co
 		asMap[k] = v
 	}
 
-	fieldsInOrder := [...]string{"playbackId", "internalName", "viewerToken", "viewerIp", "requestUrl", "connector", "sessionId", "fireWebhook"}
+	fieldsInOrder := [...]string{"playbackId", "internalName", "viewerToken", "viewerIp", "requestUrl", "connector", "sessionId", "fireWebhook", "origin", "referer"}
 	for _, k := range fieldsInOrder {
 		v, ok := asMap[k]
 		if !ok {
@@ -139937,6 +140430,20 @@ func (ec *executionContext) unmarshalInputTestPlaybackAccessInput(ctx context.Co
 				return it, err
 			}
 			it.FireWebhook = data
+		case "origin":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("origin"))
+			data, err := ec.unmarshalOString2ᚖstring(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.Origin = data
+		case "referer":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("referer"))
+			data, err := ec.unmarshalOString2ᚖstring(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.Referer = data
 		}
 	}
 	return it, nil
@@ -141390,6 +141897,40 @@ func (ec *executionContext) _Error(ctx context.Context, sel ast.SelectionSet, ob
 	}
 }
 
+func (ec *executionContext) _ImportVodAssetResult(ctx context.Context, sel ast.SelectionSet, obj model.ImportVodAssetResult) graphql.Marshaler {
+	switch obj := (obj).(type) {
+	case nil:
+		return graphql.Null
+	case model.VodAsset:
+		return ec._VodAsset(ctx, sel, &obj)
+	case *model.VodAsset:
+		if obj == nil {
+			return graphql.Null
+		}
+		return ec._VodAsset(ctx, sel, obj)
+	case model.ValidationError:
+		return ec._ValidationError(ctx, sel, &obj)
+	case *model.ValidationError:
+		if obj == nil {
+			return graphql.Null
+		}
+		return ec._ValidationError(ctx, sel, obj)
+	case model.AuthError:
+		return ec._AuthError(ctx, sel, &obj)
+	case *model.AuthError:
+		if obj == nil {
+			return graphql.Null
+		}
+		return ec._AuthError(ctx, sel, obj)
+	default:
+		if typedObj, ok := obj.(graphql.Marshaler); ok {
+			return typedObj
+		} else {
+			panic(fmt.Errorf("unexpected type %T; non-generated variants of ImportVodAssetResult must implement graphql.Marshaler", obj))
+		}
+	}
+}
+
 func (ec *executionContext) _IncidentMutationResult(ctx context.Context, sel ast.SelectionSet, obj model.IncidentMutationResult) graphql.Marshaler {
 	switch obj := (obj).(type) {
 	case nil:
@@ -142235,6 +142776,16 @@ func (ec *executionContext) _PublicEventData(ctx context.Context, sel ast.Select
 			return graphql.Null
 		}
 		return ec._StreamConnected(ctx, sel, obj)
+	case *publicv1.RecordingStopped:
+		if obj == nil {
+			return graphql.Null
+		}
+		return ec._RecordingStopped(ctx, sel, obj)
+	case *publicv1.RecordingStarted:
+		if obj == nil {
+			return graphql.Null
+		}
+		return ec._RecordingStarted(ctx, sel, obj)
 	case *publicv1.RecordingReady:
 		if obj == nil {
 			return graphql.Null
@@ -147587,7 +148138,7 @@ func (ec *executionContext) _AssetNodeCopy(ctx context.Context, sel ast.Selectio
 	return out
 }
 
-var authErrorImplementors = []string{"AuthError", "Error", "CreateStreamResult", "UpdateStreamResult", "DeleteStreamResult", "CreateClipResult", "DeleteClipResult", "CreateStreamKeyResult", "DeleteStreamKeyResult", "StartDVRResult", "StopDVRResult", "DeleteDVRResult", "CreateVodUploadResult", "CompleteVodUploadResult", "AbortVodUploadResult", "DeleteVodAssetResult", "VodUploadStatusResult", "SetMediaRetentionPolicyResult", "UpdateMediaRetentionResult", "SetStreamRetentionOverridesResult", "SetNodeModeResult", "OpenMistAdminSessionResult", "TestPlaybackAccessResult", "CreatePaymentResult", "SubmitX402PaymentResult", "StripeCheckoutResult", "StripeBillingPortalResult", "MollieFirstPaymentResult", "MollieSubscriptionResult", "UpdateTenantResult", "CreateDeveloperTokenResult", "RevokeDeveloperTokenResult", "CreateWebhookEndpointResult", "UpdateWebhookEndpointResult", "DeleteWebhookEndpointResult", "WebhookEndpointResult", "RotateWebhookEndpointSecretResult", "TestWebhookEndpointResult", "ReplayWebhookDeliveryResult", "ReplayWebhookDeliveriesResult", "CreateSigningKeyResult", "RevokeSigningKeyResult", "SetPlaybackPolicyResult", "CreateBootstrapTokenResult", "RevokeBootstrapTokenResult", "CreateEdgeClusterResult", "CreateEnrollmentTokenResult", "BootstrapEdgeResult", "UpdateClusterResult", "CreateClusterInviteResult", "RevokeClusterInviteResult", "ClusterSubscriptionResult", "SetPreferredClusterResult", "LinkWalletResult", "UnlinkWalletResult", "LinkEmailResult", "PromoteToPaidResult", "ChangeBillingTierResult", "CreateConversationResult", "SendMessageResult", "IncidentMutationResult", "MediaPlacementPolicyResult", "MediaPlacementOptionsResult", "MediaPlacementPreviewResult", "MediaPlacementReviewResult", "MediaPlacementChangeResult", "MediaCapacityConsentResult", "MediaCapacityConsentChangeResult"}
+var authErrorImplementors = []string{"AuthError", "Error", "CreateStreamResult", "UpdateStreamResult", "DeleteStreamResult", "CreateClipResult", "DeleteClipResult", "CreateStreamKeyResult", "DeleteStreamKeyResult", "StartDVRResult", "StopDVRResult", "DeleteDVRResult", "CreateVodUploadResult", "ImportVodAssetResult", "CompleteVodUploadResult", "AbortVodUploadResult", "DeleteVodAssetResult", "VodUploadStatusResult", "SetMediaRetentionPolicyResult", "UpdateMediaRetentionResult", "SetStreamRetentionOverridesResult", "SetNodeModeResult", "OpenMistAdminSessionResult", "TestPlaybackAccessResult", "CreatePaymentResult", "SubmitX402PaymentResult", "StripeCheckoutResult", "StripeBillingPortalResult", "MollieFirstPaymentResult", "MollieSubscriptionResult", "UpdateTenantResult", "CreateDeveloperTokenResult", "RevokeDeveloperTokenResult", "CreateWebhookEndpointResult", "UpdateWebhookEndpointResult", "DeleteWebhookEndpointResult", "WebhookEndpointResult", "RotateWebhookEndpointSecretResult", "TestWebhookEndpointResult", "ReplayWebhookDeliveryResult", "ReplayWebhookDeliveriesResult", "CreateSigningKeyResult", "RevokeSigningKeyResult", "SetPlaybackPolicyResult", "CreateBootstrapTokenResult", "RevokeBootstrapTokenResult", "CreateEdgeClusterResult", "CreateEnrollmentTokenResult", "BootstrapEdgeResult", "UpdateClusterResult", "CreateClusterInviteResult", "RevokeClusterInviteResult", "ClusterSubscriptionResult", "SetPreferredClusterResult", "LinkWalletResult", "UnlinkWalletResult", "LinkEmailResult", "PromoteToPaidResult", "ChangeBillingTierResult", "CreateConversationResult", "SendMessageResult", "IncidentMutationResult", "MediaPlacementPolicyResult", "MediaPlacementOptionsResult", "MediaPlacementPreviewResult", "MediaPlacementReviewResult", "MediaPlacementChangeResult", "MediaCapacityConsentResult", "MediaCapacityConsentChangeResult"}
 
 func (ec *executionContext) _AuthError(ctx context.Context, sel ast.SelectionSet, obj *model.AuthError) graphql.Marshaler {
 	fields := graphql.CollectFields(ec.OperationContext, sel, authErrorImplementors)
@@ -162531,6 +163082,13 @@ func (ec *executionContext) _Mutation(ctx context.Context, sel ast.SelectionSet)
 			if out.Values[i] == graphql.Null {
 				out.Invalids++
 			}
+		case "importVodAsset":
+			out.Values[i] = ec.OperationContext.RootResolverMiddleware(innerCtx, func(ctx context.Context) (res graphql.Marshaler) {
+				return ec._Mutation_importVodAsset(ctx, field)
+			})
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
 		case "completeVodUpload":
 			out.Values[i] = ec.OperationContext.RootResolverMiddleware(innerCtx, func(ctx context.Context) (res graphql.Marshaler) {
 				return ec._Mutation_completeVodUpload(ctx, field)
@@ -168417,6 +168975,11 @@ func (ec *executionContext) _PlaybackPolicy(ctx context.Context, sel ast.Selecti
 			out.Values[i] = ec._PlaybackPolicy_jwt(ctx, field, obj)
 		case "webhook":
 			out.Values[i] = ec._PlaybackPolicy_webhook(ctx, field, obj)
+		case "allowedOrigins":
+			out.Values[i] = ec._PlaybackPolicy_allowedOrigins(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
 		default:
 			panic("unknown field " + strconv.Quote(field.Name))
 		}
@@ -168543,6 +169106,39 @@ func (ec *executionContext) _PlaybackWebhookPolicy(ctx context.Context, sel ast.
 				if res == graphql.Null {
 					atomic.AddUint32(&fs.Invalids, 1)
 				}
+				return res
+			}
+
+			if field.Deferrable != nil {
+				dfs, ok := deferred[field.Deferrable.Label]
+				di := 0
+				if ok {
+					dfs.AddField(field)
+					di = len(dfs.Values) - 1
+				} else {
+					dfs = graphql.NewFieldSet([]graphql.CollectedField{field})
+					deferred[field.Deferrable.Label] = dfs
+				}
+				dfs.Concurrently(di, func(ctx context.Context) graphql.Marshaler {
+					return innerFunc(ctx, dfs)
+				})
+
+				// don't run the out.Concurrently() call below
+				out.Values[i] = graphql.Null
+				continue
+			}
+
+			out.Concurrently(i, func(ctx context.Context) graphql.Marshaler { return innerFunc(ctx, out) })
+		case "context":
+			field := field
+
+			innerFunc := func(ctx context.Context, _ *graphql.FieldSet) (res graphql.Marshaler) {
+				defer func() {
+					if r := recover(); r != nil {
+						ec.Error(ctx, ec.Recover(ctx, r))
+					}
+				}()
+				res = ec._PlaybackWebhookPolicy_context(ctx, field, obj)
 				return res
 			}
 
@@ -173788,6 +174384,78 @@ func (ec *executionContext) _RecordingRetentionCap(ctx context.Context, sel ast.
 			}
 		case "maxDays":
 			out.Values[i] = ec._RecordingRetentionCap_maxDays(ctx, field, obj)
+		default:
+			panic("unknown field " + strconv.Quote(field.Name))
+		}
+	}
+	out.Dispatch(ctx)
+	if out.Invalids > 0 {
+		return graphql.Null
+	}
+
+	atomic.AddInt32(&ec.Deferred, int32(len(deferred)))
+
+	for label, dfs := range deferred {
+		ec.ProcessDeferredGroup(graphql.DeferredGroup{
+			Label:    label,
+			Path:     graphql.GetPath(ctx),
+			FieldSet: dfs,
+			Context:  ctx,
+		})
+	}
+
+	return out
+}
+
+var recordingStartedImplementors = []string{"RecordingStarted", "PublicEventData"}
+
+func (ec *executionContext) _RecordingStarted(ctx context.Context, sel ast.SelectionSet, obj *publicv1.RecordingStarted) graphql.Marshaler {
+	fields := graphql.CollectFields(ec.OperationContext, sel, recordingStartedImplementors)
+
+	out := graphql.NewFieldSet(fields)
+	deferred := make(map[string]*graphql.FieldSet)
+	for i, field := range fields {
+		switch field.Name {
+		case "__typename":
+			out.Values[i] = graphql.MarshalString("RecordingStarted")
+		case "artifact":
+			out.Values[i] = ec._RecordingStarted_artifact(ctx, field, obj)
+		default:
+			panic("unknown field " + strconv.Quote(field.Name))
+		}
+	}
+	out.Dispatch(ctx)
+	if out.Invalids > 0 {
+		return graphql.Null
+	}
+
+	atomic.AddInt32(&ec.Deferred, int32(len(deferred)))
+
+	for label, dfs := range deferred {
+		ec.ProcessDeferredGroup(graphql.DeferredGroup{
+			Label:    label,
+			Path:     graphql.GetPath(ctx),
+			FieldSet: dfs,
+			Context:  ctx,
+		})
+	}
+
+	return out
+}
+
+var recordingStoppedImplementors = []string{"RecordingStopped", "PublicEventData"}
+
+func (ec *executionContext) _RecordingStopped(ctx context.Context, sel ast.SelectionSet, obj *publicv1.RecordingStopped) graphql.Marshaler {
+	fields := graphql.CollectFields(ec.OperationContext, sel, recordingStoppedImplementors)
+
+	out := graphql.NewFieldSet(fields)
+	deferred := make(map[string]*graphql.FieldSet)
+	for i, field := range fields {
+		switch field.Name {
+		case "__typename":
+			out.Values[i] = graphql.MarshalString("RecordingStopped")
+		case "artifact":
+			out.Values[i] = ec._RecordingStopped_artifact(ctx, field, obj)
 		default:
 			panic("unknown field " + strconv.Quote(field.Name))
 		}
@@ -179249,6 +179917,11 @@ func (ec *executionContext) _StreamConnected(ctx context.Context, sel ast.Select
 			if out.Values[i] == graphql.Null {
 				out.Invalids++
 			}
+		case "playbackId":
+			out.Values[i] = ec._StreamConnected_playbackId(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
 		default:
 			panic("unknown field " + strconv.Quote(field.Name))
 		}
@@ -181308,6 +181981,11 @@ func (ec *executionContext) _StreamIdle(ctx context.Context, sel ast.SelectionSe
 			if out.Values[i] == graphql.Null {
 				out.Invalids++
 			}
+		case "playbackId":
+			out.Values[i] = ec._StreamIdle_playbackId(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
 		default:
 			panic("unknown field " + strconv.Quote(field.Name))
 		}
@@ -181670,6 +182348,11 @@ func (ec *executionContext) _StreamLive(ctx context.Context, sel ast.SelectionSe
 			out.Values[i] = graphql.MarshalString("StreamLive")
 		case "streamId":
 			out.Values[i] = ec._StreamLive_streamId(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "playbackId":
+			out.Values[i] = ec._StreamLive_playbackId(ctx, field, obj)
 			if out.Values[i] == graphql.Null {
 				out.Invalids++
 			}
@@ -187097,7 +187780,7 @@ func (ec *executionContext) _User(ctx context.Context, sel ast.SelectionSet, obj
 	return out
 }
 
-var validationErrorImplementors = []string{"ValidationError", "Error", "CreateStreamResult", "UpdateStreamResult", "CreateClipResult", "CreateStreamKeyResult", "StartDVRResult", "CreateVodUploadResult", "CompleteVodUploadResult", "VodUploadStatusResult", "SetMediaRetentionPolicyResult", "UpdateMediaRetentionResult", "SetStreamRetentionOverridesResult", "SetNodeModeResult", "OpenMistAdminSessionResult", "TestPlaybackAccessResult", "CreatePaymentResult", "SubmitX402PaymentResult", "StripeCheckoutResult", "StripeBillingPortalResult", "MollieFirstPaymentResult", "MollieSubscriptionResult", "UpdateTenantResult", "CreateDeveloperTokenResult", "CreateWebhookEndpointResult", "UpdateWebhookEndpointResult", "ReplayWebhookDeliveryResult", "ReplayWebhookDeliveriesResult", "CreateSigningKeyResult", "SetPlaybackPolicyResult", "CreateBootstrapTokenResult", "CreateEdgeClusterResult", "CreateEnrollmentTokenResult", "BootstrapEdgeResult", "UpdateClusterResult", "CreateClusterInviteResult", "ClusterSubscriptionResult", "SetPreferredClusterResult", "WalletLoginResult", "LinkWalletResult", "LinkEmailResult", "PromoteToPaidResult", "ChangeBillingTierResult", "CreateConversationResult", "SendMessageResult", "IncidentMutationResult"}
+var validationErrorImplementors = []string{"ValidationError", "Error", "CreateStreamResult", "UpdateStreamResult", "CreateClipResult", "CreateStreamKeyResult", "StartDVRResult", "CreateVodUploadResult", "ImportVodAssetResult", "CompleteVodUploadResult", "VodUploadStatusResult", "SetMediaRetentionPolicyResult", "UpdateMediaRetentionResult", "SetStreamRetentionOverridesResult", "SetNodeModeResult", "OpenMistAdminSessionResult", "TestPlaybackAccessResult", "CreatePaymentResult", "SubmitX402PaymentResult", "StripeCheckoutResult", "StripeBillingPortalResult", "MollieFirstPaymentResult", "MollieSubscriptionResult", "UpdateTenantResult", "CreateDeveloperTokenResult", "CreateWebhookEndpointResult", "UpdateWebhookEndpointResult", "ReplayWebhookDeliveryResult", "ReplayWebhookDeliveriesResult", "CreateSigningKeyResult", "SetPlaybackPolicyResult", "CreateBootstrapTokenResult", "CreateEdgeClusterResult", "CreateEnrollmentTokenResult", "BootstrapEdgeResult", "UpdateClusterResult", "CreateClusterInviteResult", "ClusterSubscriptionResult", "SetPreferredClusterResult", "WalletLoginResult", "LinkWalletResult", "LinkEmailResult", "PromoteToPaidResult", "ChangeBillingTierResult", "CreateConversationResult", "SendMessageResult", "IncidentMutationResult"}
 
 func (ec *executionContext) _ValidationError(ctx context.Context, sel ast.SelectionSet, obj *model.ValidationError) graphql.Marshaler {
 	fields := graphql.CollectFields(ec.OperationContext, sel, validationErrorImplementors)
@@ -189497,7 +190180,7 @@ func (ec *executionContext) _ViewerTimeSeriesConnection(ctx context.Context, sel
 	return out
 }
 
-var vodAssetImplementors = []string{"VodAsset", "CompleteVodUploadResult", "SetPlaybackPolicyResult", "Node"}
+var vodAssetImplementors = []string{"VodAsset", "ImportVodAssetResult", "CompleteVodUploadResult", "SetPlaybackPolicyResult", "Node"}
 
 func (ec *executionContext) _VodAsset(ctx context.Context, sel ast.SelectionSet, obj *model.VodAsset) graphql.Marshaler {
 	fields := graphql.CollectFields(ec.OperationContext, sel, vodAssetImplementors)
@@ -193841,6 +194524,21 @@ func (ec *executionContext) marshalNID2ᚕstringᚄ(ctx context.Context, sel ast
 	}
 
 	return ret
+}
+
+func (ec *executionContext) unmarshalNImportVodAssetInput2frameworksᚋapi_gatewayᚋgraphᚋmodelᚐImportVodAssetInput(ctx context.Context, v any) (model.ImportVodAssetInput, error) {
+	res, err := ec.unmarshalInputImportVodAssetInput(ctx, v)
+	return res, graphql.ErrorOnPath(ctx, err)
+}
+
+func (ec *executionContext) marshalNImportVodAssetResult2frameworksᚋapi_gatewayᚋgraphᚋmodelᚐImportVodAssetResult(ctx context.Context, sel ast.SelectionSet, v model.ImportVodAssetResult) graphql.Marshaler {
+	if v == nil {
+		if !graphql.HasFieldError(ctx, graphql.GetFieldContext(ctx)) {
+			graphql.AddErrorf(ctx, "the requested element is null which the schema does not allow")
+		}
+		return graphql.Null
+	}
+	return ec._ImportVodAssetResult(ctx, sel, v)
 }
 
 func (ec *executionContext) marshalNIncident2ᚕᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐIncidentᚄ(ctx context.Context, sel ast.SelectionSet, v []*model.Incident) graphql.Marshaler {

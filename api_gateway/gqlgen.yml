@@ -592,6 +592,8 @@ models:
     fields:
       secretMasked:
         resolver: true
+      context:
+        resolver: true
   ViewerEndpointResponse:
     model:
       - github.com/Livepeer-FrameWorks/monorepo/pkg/proto/shared.ViewerEndpointResponse
@@ -967,6 +969,12 @@ models:
   RecordingReady:
     model:
       - github.com/Livepeer-FrameWorks/monorepo/pkg/proto/events/public/v1.RecordingReady
+  RecordingStarted:
+    model:
+      - github.com/Livepeer-FrameWorks/monorepo/pkg/proto/events/public/v1.RecordingStarted
+  RecordingStopped:
+    model:
+      - github.com/Livepeer-FrameWorks/monorepo/pkg/proto/events/public/v1.RecordingStopped
   StreamConnected:
     model:
       - github.com/Livepeer-FrameWorks/monorepo/pkg/proto/events/public/v1.StreamConnected

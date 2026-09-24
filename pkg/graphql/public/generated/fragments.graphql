@@ -85,6 +85,7 @@ fragment ArtifactEventDefaultFields on ArtifactEvent {
     }
     playbackPolicy {
       type
+      allowedOrigins
     }
     dvrChapterMode
     dvrChapterIntervalSeconds
@@ -184,6 +185,7 @@ fragment ArtifactEventInNodeDefaultFields on ArtifactEvent {
     }
     playbackPolicy {
       type
+      allowedOrigins
     }
     dvrChapterMode
     dvrChapterIntervalSeconds
@@ -281,6 +283,7 @@ fragment ArtifactStateDefaultFields on ArtifactState {
     }
     playbackPolicy {
       type
+      allowedOrigins
     }
     dvrChapterMode
     dvrChapterIntervalSeconds
@@ -822,6 +825,7 @@ fragment ClientMetrics5mDefaultFields on ClientMetrics5m {
     }
     playbackPolicy {
       type
+      allowedOrigins
     }
     dvrChapterMode
     dvrChapterIntervalSeconds
@@ -926,6 +930,7 @@ fragment ClipInNodeDefaultFields on Clip {
     }
     playbackPolicy {
       type
+      allowedOrigins
     }
     dvrChapterMode
     dvrChapterIntervalSeconds
@@ -971,7 +976,9 @@ fragment ClipInNodeDefaultFields on Clip {
       url
       timeoutMs
       secretMasked
+      context
     }
+    allowedOrigins
   }
   thumbnailAssets {
     posterUrl
@@ -1210,6 +1217,7 @@ fragment ConnectionEventDefaultFields on ConnectionEvent {
     }
     playbackPolicy {
       type
+      allowedOrigins
     }
     dvrChapterMode
     dvrChapterIntervalSeconds
@@ -1321,6 +1329,7 @@ fragment ConnectionEventInNodeDefaultFields on ConnectionEvent {
     }
     playbackPolicy {
       type
+      allowedOrigins
     }
     dvrChapterMode
     dvrChapterIntervalSeconds
@@ -1628,6 +1637,7 @@ fragment GeographicDistributionDefaultFields on GeographicDistribution {
     }
     playbackPolicy {
       type
+      allowedOrigins
     }
     dvrChapterMode
     dvrChapterIntervalSeconds
@@ -2692,6 +2702,7 @@ fragment ProcessingUsageRecordDefaultFields on ProcessingUsageRecord {
     }
     playbackPolicy {
       type
+      allowedOrigins
     }
     dvrChapterMode
     dvrChapterIntervalSeconds
@@ -2828,6 +2839,7 @@ fragment ProcessingUsageRecordInNodeDefaultFields on ProcessingUsageRecord {
     }
     playbackPolicy {
       type
+      allowedOrigins
     }
     dvrChapterMode
     dvrChapterIntervalSeconds
@@ -2979,6 +2991,7 @@ fragment QualityTierDailyDefaultFields on QualityTierDaily {
     }
     playbackPolicy {
       type
+      allowedOrigins
     }
     dvrChapterMode
     dvrChapterIntervalSeconds
@@ -3084,6 +3097,7 @@ fragment RebufferingEventDefaultFields on RebufferingEvent {
     }
     playbackPolicy {
       type
+      allowedOrigins
     }
     dvrChapterMode
     dvrChapterIntervalSeconds
@@ -3187,6 +3201,7 @@ fragment RoutingEventDefaultFields on RoutingEvent {
     }
     playbackPolicy {
       type
+      allowedOrigins
     }
     dvrChapterMode
     dvrChapterIntervalSeconds
@@ -3469,6 +3484,7 @@ fragment StorageEventDefaultFields on StorageEvent {
     }
     playbackPolicy {
       type
+      allowedOrigins
     }
     dvrChapterMode
     dvrChapterIntervalSeconds
@@ -3569,6 +3585,7 @@ fragment StorageEventInNodeDefaultFields on StorageEvent {
     }
     playbackPolicy {
       type
+      allowedOrigins
     }
     dvrChapterMode
     dvrChapterIntervalSeconds
@@ -3684,6 +3701,7 @@ fragment StreamAnalyticsDailyDefaultFields on StreamAnalyticsDaily {
     }
     playbackPolicy {
       type
+      allowedOrigins
     }
     dvrChapterMode
     dvrChapterIntervalSeconds
@@ -3774,6 +3792,7 @@ fragment StreamAnalyticsSummaryDefaultFields on StreamAnalyticsSummary {
     }
     playbackPolicy {
       type
+      allowedOrigins
     }
     dvrChapterMode
     dvrChapterIntervalSeconds
@@ -3898,6 +3917,7 @@ fragment StreamConnectionHourlyDefaultFields on StreamConnectionHourly {
     }
     playbackPolicy {
       type
+      allowedOrigins
     }
     dvrChapterMode
     dvrChapterIntervalSeconds
@@ -3988,6 +4008,7 @@ fragment StreamEventDefaultFields on StreamEvent {
     }
     playbackPolicy {
       type
+      allowedOrigins
     }
     dvrChapterMode
     dvrChapterIntervalSeconds
@@ -4109,6 +4130,7 @@ fragment StreamEventInNodeDefaultFields on StreamEvent {
     }
     playbackPolicy {
       type
+      allowedOrigins
     }
     dvrChapterMode
     dvrChapterIntervalSeconds
@@ -4262,6 +4284,7 @@ fragment StreamHealthMetricDefaultFields on StreamHealthMetric {
     }
     playbackPolicy {
       type
+      allowedOrigins
     }
     dvrChapterMode
     dvrChapterIntervalSeconds
@@ -4375,6 +4398,7 @@ fragment StreamHealthMetricInNodeDefaultFields on StreamHealthMetric {
     }
     playbackPolicy {
       type
+      allowedOrigins
     }
     dvrChapterMode
     dvrChapterIntervalSeconds
@@ -4507,7 +4531,9 @@ fragment StreamInNodeDefaultFields on Stream {
       url
       timeoutMs
       secretMasked
+      context
     }
+    allowedOrigins
   }
   dvrChapterMode
   dvrChapterIntervalSeconds
@@ -5085,6 +5111,7 @@ fragment TrackListEventDefaultFields on TrackListEvent {
     }
     playbackPolicy {
       type
+      allowedOrigins
     }
     dvrChapterMode
     dvrChapterIntervalSeconds
@@ -5191,6 +5218,7 @@ fragment TrackListEventInNodeDefaultFields on TrackListEvent {
     }
     playbackPolicy {
       type
+      allowedOrigins
     }
     dvrChapterMode
     dvrChapterIntervalSeconds
@@ -5296,6 +5324,7 @@ fragment TrackListUpdateDefaultFields on TrackListUpdate {
     }
     playbackPolicy {
       type
+      allowedOrigins
     }
     dvrChapterMode
     dvrChapterIntervalSeconds
@@ -5419,6 +5448,7 @@ fragment ViewerCountBucketDefaultFields on ViewerCountBucket {
     }
     playbackPolicy {
       type
+      allowedOrigins
     }
     dvrChapterMode
     dvrChapterIntervalSeconds
@@ -5523,6 +5553,7 @@ fragment ViewerGeographicDefaultFields on ViewerGeographic {
     }
     playbackPolicy {
       type
+      allowedOrigins
     }
     dvrChapterMode
     dvrChapterIntervalSeconds
@@ -5622,6 +5653,7 @@ fragment ViewerHoursHourlyDefaultFields on ViewerHoursHourly {
     }
     playbackPolicy {
       type
+      allowedOrigins
     }
     dvrChapterMode
     dvrChapterIntervalSeconds
@@ -5715,6 +5747,7 @@ fragment ViewerHoursHourlyInNodeDefaultFields on ViewerHoursHourly {
     }
     playbackPolicy {
       type
+      allowedOrigins
     }
     dvrChapterMode
     dvrChapterIntervalSeconds
@@ -5807,6 +5840,7 @@ fragment ViewerMetricsDefaultFields on ViewerMetrics {
     }
     playbackPolicy {
       type
+      allowedOrigins
     }
     dvrChapterMode
     dvrChapterIntervalSeconds
@@ -5912,6 +5946,7 @@ fragment ViewerSessionDefaultFields on ViewerSession {
     }
     playbackPolicy {
       type
+      allowedOrigins
     }
     dvrChapterMode
     dvrChapterIntervalSeconds
@@ -6017,6 +6052,7 @@ fragment ViewerSessionInNodeDefaultFields on ViewerSession {
     }
     playbackPolicy {
       type
+      allowedOrigins
     }
     dvrChapterMode
     dvrChapterIntervalSeconds
@@ -6089,7 +6125,9 @@ fragment VodAssetInNodeDefaultFields on VodAsset {
       url
       timeoutMs
       secretMasked
+      context
     }
+    allowedOrigins
   }
   thumbnailAssets {
     posterUrl

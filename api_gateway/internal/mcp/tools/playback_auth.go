@@ -2,6 +2,7 @@ package tools
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"strings"
 
@@ -101,10 +102,13 @@ type SetPlaybackPolicyInput struct {
 	RequiredAudience []string          `json:"required_audience,omitempty" jsonschema:"JWT only: required aud claim values (token must contain at least one)."`
 	RequiredClaims   map[string]string `json:"required_claims,omitempty" jsonschema:"JWT only: claim name → JSON-encoded expected value. The token's claim must match exactly."`
 	// Webhook fields
-	WebhookURL       string `json:"webhook_url,omitempty" jsonschema:"Webhook only: HTTPS URL to POST a USER_NEW-style payload to. Public IPs only (SSRF-blocked at create time)."`
-	WebhookSecret    string `json:"webhook_secret,omitempty" jsonschema:"Webhook only: HMAC secret used to sign payloads. Encrypted at rest, never returned in queries."`
-	WebhookTimeoutMs int32  `json:"webhook_timeout_ms,omitempty" jsonschema:"Webhook only: outbound POST timeout. Server caps at 10000; default 5000."`
-	Confirm          string `json:"confirm" jsonschema:"Must be exactly 'SET PLAYBACK POLICY'."`
+	WebhookURL       string         `json:"webhook_url,omitempty" jsonschema:"Webhook only: HTTPS URL to POST a USER_NEW-style payload to. Public IPs only (SSRF-blocked at create time)."`
+	WebhookSecret    string         `json:"webhook_secret,omitempty" jsonschema:"Webhook only: HMAC secret used to sign payloads. Encrypted at rest, never returned in queries."`
+	WebhookTimeoutMs int32          `json:"webhook_timeout_ms,omitempty" jsonschema:"Webhook only: outbound POST timeout. Server caps at 10000; default 5000."`
+	WebhookContext   map[string]any `json:"webhook_context,omitempty" jsonschema:"Webhook only: JSON object (at most 4 KiB) sent as context in every access request."`
+	// Origin restriction (jwt and webhook)
+	AllowedOrigins []string `json:"allowed_origins,omitempty" jsonschema:"JWT or webhook only: sites allowed to embed the content, each '*' or scheme://host[:port]. Empty = no restriction."`
+	Confirm        string   `json:"confirm" jsonschema:"Must be exactly 'SET PLAYBACK POLICY'."`
 }
 
 type ClearPlaybackPolicyInput struct {
@@ -241,12 +245,22 @@ func handleSetPlaybackPolicy(ctx context.Context, args SetPlaybackPolicyInput, c
 		if args.WebhookURL == "" {
 			return toolError("webhook_url is required for type=webhook")
 		}
+		contextJSON := ""
+		if len(args.WebhookContext) > 0 {
+			encoded, encErr := json.Marshal(args.WebhookContext)
+			if encErr != nil {
+				return toolError("webhook_context must be a JSON object")
+			}
+			contextJSON = string(encoded)
+		}
 		req.Webhook = &commodorepb.PlaybackWebhookPolicy{
-			Url:       args.WebhookURL,
-			SecretPt:  args.WebhookSecret,
-			TimeoutMs: args.WebhookTimeoutMs,
+			Url:         args.WebhookURL,
+			SecretPt:    args.WebhookSecret,
+			TimeoutMs:   args.WebhookTimeoutMs,
+			ContextJson: contextJSON,
 		}
 	}
+	req.AllowedOrigins = args.AllowedOrigins
 
 	resp, err := c.Commodore.SetPlaybackPolicy(ctx, req)
 	if err != nil {

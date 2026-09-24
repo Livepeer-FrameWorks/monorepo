@@ -51,8 +51,8 @@ func TestMediaResolversUseTrustedRoutingIdentity(t *testing.T) {
 					check(ip)
 					return &sharedpb.IngestEndpointResponse{}, nil
 				},
-				ResolveViewerEndpointFn: func(_ context.Context, _ string, ip string, _ string) (*sharedpb.ViewerEndpointResponse, error) {
-					check(ip)
+				ResolveViewerFn: func(_ context.Context, req *sharedpb.ViewerEndpointRequest) (*sharedpb.ViewerEndpointResponse, error) {
+					check(req.GetViewerIp())
 					return &sharedpb.ViewerEndpointResponse{}, nil
 				},
 			}

@@ -2,7 +2,11 @@ package resolvers
 
 import (
 	"context"
+	"net/http"
+	"net/http/httptest"
 	"testing"
+
+	"github.com/gin-gonic/gin"
 
 	"frameworks/api_gateway/internal/clients/clientstest"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/ctxkeys"
@@ -12,9 +16,9 @@ import (
 func TestViewerProtocolForwarding(t *testing.T) {
 	for input, canonical := range map[string]string{"WEBRTC": "webrtc", "WHEP": "whep", "HLS": "hls", "HLS_CMAF": "cmaf", "DASH": "dash", "MEWS": "wsmp4", "RAW_WS": "raw_ws", "MIST_HTML": "mist_html", "RTMP": "rtmp"} {
 		t.Run(input, func(t *testing.T) {
-			fake := &clientstest.FakeCommodore{ResolveViewerEndpointWithProtocolFn: func(_ context.Context, contentID, ip, token, protocol string) (*sharedpb.ViewerEndpointResponse, error) {
-				if contentID != "public" || ip != "192.0.2.1" || token != "" || protocol != canonical {
-					t.Fatalf("viewer context or protocol changed: %q %q %q %q", contentID, ip, token, protocol)
+			fake := &clientstest.FakeCommodore{ResolveViewerFn: func(_ context.Context, req *sharedpb.ViewerEndpointRequest) (*sharedpb.ViewerEndpointResponse, error) {
+				if req.GetContentId() != "public" || req.GetViewerIp() != "192.0.2.1" || req.GetViewerToken() != "" || req.GetProtocol() != canonical {
+					t.Fatalf("viewer context or protocol changed: %+v", req)
 				}
 				return &sharedpb.ViewerEndpointResponse{}, nil
 			}}
@@ -24,6 +28,37 @@ func TestViewerProtocolForwarding(t *testing.T) {
 				t.Fatalf("protocol forwarding: calls=%d err=%v", fake.Calls, err)
 			}
 		})
+	}
+}
+
+// A browser's Origin and Referer reach Commodore for the policy's allowed
+// origins; a call with no HTTP request forwards neither.
+func TestViewerResolveForwardsBrowserOrigin(t *testing.T) {
+	var got *sharedpb.ViewerEndpointRequest
+	fake := &clientstest.FakeCommodore{ResolveViewerFn: func(_ context.Context, req *sharedpb.ViewerEndpointRequest) (*sharedpb.ViewerEndpointResponse, error) {
+		got = req
+		return &sharedpb.ViewerEndpointResponse{}, nil
+	}}
+	r := &Resolver{Clients: clientstest.Clients(clientstest.WithCommodore(fake))}
+
+	httpReq := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/graphql", nil)
+	httpReq.Header.Set("Origin", "https://embed.example")
+	httpReq.Header.Set("Referer", "https://embed.example/watch")
+	ginCtx, _ := gin.CreateTestContext(httptest.NewRecorder())
+	ginCtx.Request = httpReq
+	ctx := context.WithValue(t.Context(), ctxkeys.KeyGinContext, ginCtx)
+	if _, err := r.DoResolveViewerEndpoint(ctx, "public", nil); err != nil {
+		t.Fatal(err)
+	}
+	if got.GetViewerOrigin() != "https://embed.example" || got.GetViewerReferer() != "https://embed.example/watch" {
+		t.Fatalf("forwarded origin/referer = %q/%q", got.GetViewerOrigin(), got.GetViewerReferer())
+	}
+
+	if _, err := r.DoResolveViewerEndpoint(t.Context(), "public", nil); err != nil {
+		t.Fatal(err)
+	}
+	if got.ViewerOrigin != nil || got.ViewerReferer != nil {
+		t.Fatalf("a call without an HTTP request forwarded headers: %+v", got)
 	}
 }
 

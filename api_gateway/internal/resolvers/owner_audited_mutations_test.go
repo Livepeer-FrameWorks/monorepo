@@ -34,7 +34,7 @@ func (d *recordingDecklog) SendServiceEventContext(_ context.Context, event *ipc
 	return nil
 }
 
-// Clip creation, the upload lifecycle, the Mollie first payment and
+// Clip creation, the upload lifecycle (including imports), the Mollie first payment and
 // subscription, and cluster subscribe/unsubscribe are recorded by their owning
 // services with the caller as actor (clip.requested, upload.*,
 // billing.payment_created, billing.subscription_created,
@@ -56,6 +56,9 @@ func TestOwnerAuditedMutationsSendNoBridgeEvent(t *testing.T) {
 			},
 			AbortVodUploadFn: func(context.Context, string, string) (*sharedpb.AbortVodUploadResponse, error) {
 				return &sharedpb.AbortVodUploadResponse{Success: true}, nil
+			},
+			ImportVodAssetFn: func(context.Context, *sharedpb.ImportVodAssetRequest) (*sharedpb.ImportVodAssetResponse, error) {
+				return &sharedpb.ImportVodAssetResponse{Asset: &sharedpb.VodAssetInfo{ArtifactHash: "vod-hash"}}, nil
 			},
 		}),
 		clientstest.WithPurser(&clientstest.FakePurser{
@@ -94,6 +97,10 @@ func TestOwnerAuditedMutationsSendNoBridgeEvent(t *testing.T) {
 		},
 		"abortVodUpload": func() error {
 			_, err := r.DoAbortVodUpload(ctx, "upload-1")
+			return err
+		},
+		"importVodAsset": func() error {
+			_, err := r.DoImportVodAsset(ctx, model.ImportVodAssetInput{URL: "https://media.example/video.mp4"})
 			return err
 		},
 		"createMollieFirstPayment": func() error {

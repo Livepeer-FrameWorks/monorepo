@@ -65,6 +65,15 @@ mutation CreateVodUpload($input: CreateVodUploadInput!) {
   }
 }
 
+mutation ImportVodAsset($input: ImportVodAssetInput!) {
+  importVodAsset(input: $input) {
+    __typename
+    ...VodAssetFields
+    ...ValidationErrorFields
+    ...AuthErrorFields
+  }
+}
+
 mutation CompleteVodUpload($input: CompleteVodUploadInput!) {
   completeVodUpload(input: $input) {
     __typename

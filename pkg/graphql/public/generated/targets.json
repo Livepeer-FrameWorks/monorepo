@@ -164,6 +164,7 @@
     "GetWebhookEndpoint": "query.webhookEndpoint",
     "GetWebhookEndpointsConnection": "query.webhookEndpointsConnection",
     "GetWebhookEventTypes": "query.webhookEventTypes",
+    "ImportVodAsset": "mutation.importVodAsset",
     "LinkEmail": "mutation.linkEmail",
     "LinkWallet": "mutation.linkWallet",
     "ListArtifacts": "query.storageArtifactsConnection",

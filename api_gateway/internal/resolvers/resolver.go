@@ -202,18 +202,20 @@ func (r *Resolver) DoResolveViewerEndpointForProtocol(ctx context.Context, conte
 		ctx = metadata.AppendToOutgoingContext(ctx, "x-payment", paymentHeader)
 	}
 	// Call Commodore's viewer endpoint resolution (Commodore will handle tenant resolution internally)
-	// gRPC client expects string (not *string) for viewerIP
-	ip := ""
-	if viewerIP != nil {
-		ip = *viewerIP
+	req := &sharedpb.ViewerEndpointRequest{ContentId: contentID, Protocol: protocol}
+	if viewerIP != nil && *viewerIP != "" {
+		req.ViewerIp = viewerIP
 	}
-	viewerToken := playbackViewerTokenFromRequest(httpReq)
-	var resp *sharedpb.ViewerEndpointResponse
-	if protocol == "" {
-		resp, err = r.Clients.Commodore.ResolveViewerEndpoint(ctx, contentID, ip, viewerToken)
-	} else {
-		resp, err = r.Clients.Commodore.ResolveViewerEndpointWithProtocol(ctx, contentID, ip, viewerToken, protocol)
+	if viewerToken := playbackViewerTokenFromRequest(httpReq); viewerToken != "" {
+		req.ViewerToken = &viewerToken
 	}
+	// The browser's Origin and Referer let Foghorn apply the policy's allowed
+	// origins; a server-side call without them is not origin-checked at resolve.
+	if httpReq != nil {
+		origin, referer := httpReq.Header.Get("Origin"), httpReq.Header.Get("Referer")
+		req.ViewerOrigin, req.ViewerReferer = &origin, &referer
+	}
+	resp, err := r.Clients.Commodore.ResolveViewer(ctx, req)
 	if err != nil {
 		return nil, fmt.Errorf("failed to resolve viewer endpoints: %w", err)
 	}

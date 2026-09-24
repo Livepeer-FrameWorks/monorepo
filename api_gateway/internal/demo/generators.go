@@ -4351,8 +4351,8 @@ func GenerateTenantEvents() []*signalmanpb.TenantEvent {
 		subject   string
 		data      proto.Message
 	}{
-		{"stream.connected", "streams/" + DemoStreamID, &publicv1.StreamConnected{StreamId: DemoStreamID, Protocol: publicv1.IngestProtocol_INGEST_PROTOCOL_RTMP}},
-		{"stream.live", "streams/" + DemoStreamID, &publicv1.StreamLive{StreamId: DemoStreamID}},
+		{"stream.connected", "streams/" + DemoStreamID, &publicv1.StreamConnected{StreamId: DemoStreamID, PlaybackId: DemoPlaybackID, Protocol: publicv1.IngestProtocol_INGEST_PROTOCOL_RTMP}},
+		{"stream.live", "streams/" + DemoStreamID, &publicv1.StreamLive{StreamId: DemoStreamID, PlaybackId: DemoPlaybackID}},
 		{"clip.requested", "artifacts/" + DemoClipHash, &publicv1.ClipRequested{Artifact: clip, DurationMs: 30000}},
 		{"clip.ready", "artifacts/" + DemoClipHash, &publicv1.ClipReady{Artifact: clip, DurationMs: 30000, SizeBytes: 4_812_345}},
 		{"upload.ready", "artifacts/" + DemoVodHash, &publicv1.UploadReady{Artifact: upload, DurationMs: 4000, SizeBytes: 149099}},

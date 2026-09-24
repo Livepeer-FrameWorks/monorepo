@@ -46,6 +46,8 @@ type TestPlaybackAccessInput struct {
 	Connector    string `json:"connector,omitempty" jsonschema:"Mist connector name (e.g. 'hls', 'webrtc'); used in the webhook payload"`
 	SessionID    string `json:"session_id,omitempty" jsonschema:"Optional viewer session identifier presented to a webhook policy."`
 	FireWebhook  bool   `json:"fire_webhook,omitempty" jsonschema:"Webhook policies: when true, fires a real outbound HTTPS request to the customer URL"`
+	Origin       string `json:"origin,omitempty" jsonschema:"Origin header to test the policy's allowed origins against."`
+	Referer      string `json:"referer,omitempty" jsonschema:"Referer header, used when origin is empty."`
 }
 
 type TestPlaybackAccessResult struct {
@@ -85,6 +87,8 @@ func handleTestPlaybackAccess(ctx context.Context, args TestPlaybackAccessInput,
 		Connector:    args.Connector,
 		SessionId:    args.SessionID,
 		FireWebhook:  args.FireWebhook,
+		Origin:       args.Origin,
+		Referer:      args.Referer,
 	})
 	if err != nil {
 		logger.WithError(err).Warn("test_playback_access failed")

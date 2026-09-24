@@ -51,6 +51,8 @@ func (r *Resolver) DoTestPlaybackAccess(ctx context.Context, input model.TestPla
 		Connector:    deref(input.Connector),
 		SessionId:    deref(input.SessionID),
 		FireWebhook:  input.FireWebhook != nil && *input.FireWebhook,
+		Origin:       deref(input.Origin),
+		Referer:      deref(input.Referer),
 	})
 	if err != nil {
 		if vErr := mapInvalidArgument(err); vErr != nil {

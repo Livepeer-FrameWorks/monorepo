@@ -212,7 +212,7 @@ func TestCheckReportsEditedBlock(t *testing.T) {
 		}
 		content := string(raw)
 		if rel == schemaPath {
-			content = strings.Replace(content, "type StreamLive {\n  streamId: ID!\n}", "type StreamLive {\n  streamId: ID!\n  nodeId: String\n}", 1)
+			content = strings.Replace(content, "type StreamLive {\n  streamId: ID!\n  playbackId: ID!\n}", "type StreamLive {\n  streamId: ID!\n  playbackId: ID!\n  nodeId: String\n}", 1)
 		}
 		if mkErr := os.MkdirAll(filepath.Dir(filepath.Join(tmp, rel)), 0o755); mkErr != nil {
 			t.Fatal(mkErr)

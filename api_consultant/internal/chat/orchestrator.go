@@ -555,6 +555,7 @@ var spokeMutationBlocklist = map[string]bool{
 	"start_dvr":              true,
 	"stop_dvr":               true,
 	"create_vod_upload":      true,
+	"import_vod_asset":       true,
 	"complete_vod_upload":    true,
 	"abort_vod_upload":       true,
 	"delete_vod_asset":       true,
@@ -744,7 +745,7 @@ func mcpToolCategory(name string) string {
 		return "Clips"
 	case "start_dvr", "stop_dvr":
 		return "DVR"
-	case "create_vod_upload", "complete_vod_upload", "abort_vod_upload", "delete_vod_asset", "get_vod_upload_status":
+	case "create_vod_upload", "import_vod_asset", "complete_vod_upload", "abort_vod_upload", "delete_vod_asset", "get_vod_upload_status":
 		return "VOD"
 	case "resolve_playback_endpoint":
 		return "Playback"

@@ -148,12 +148,18 @@ func (r *Resolver) DoSetPlaybackPolicy(ctx context.Context, input model.SetPlayb
 		if input.Policy.Webhook.TimeoutMs != nil {
 			timeout = int32(*input.Policy.Webhook.TimeoutMs)
 		}
+		contextJSON, contextErr := playbackWebhookContextInput(input.Policy.Webhook.Context)
+		if contextErr != nil {
+			return contextErr, nil
+		}
 		req.Webhook = &commodorepb.PlaybackWebhookPolicy{
-			Url:       input.Policy.Webhook.URL,
-			TimeoutMs: timeout,
-			SecretPt:  secret,
+			Url:         input.Policy.Webhook.URL,
+			TimeoutMs:   timeout,
+			SecretPt:    secret,
+			ContextJson: contextJSON,
 		}
 	}
+	req.AllowedOrigins = input.Policy.AllowedOrigins
 	if middleware.IsDemoMode(ctx) {
 		switch target.kind {
 		case "stream":
@@ -479,11 +485,48 @@ func policyToModel(resp *commodorepb.ResolvePlaybackPolicyResponse) *model.Playb
 	if !ok {
 		return nil
 	}
-	return &model.PlaybackPolicy{
-		Type:    t,
-		Jwt:     resp.GetJwtPolicy(),
-		Webhook: resp.GetWebhookPolicy(), // secret_pt scrubbed by SecretMasked resolver
+	origins := resp.GetAllowedOrigins()
+	if origins == nil {
+		origins = []string{}
 	}
+	return &model.PlaybackPolicy{
+		Type:           t,
+		Jwt:            resp.GetJwtPolicy(),
+		Webhook:        resp.GetWebhookPolicy(), // secret_pt scrubbed by SecretMasked resolver
+		AllowedOrigins: origins,
+	}
+}
+
+// playbackWebhookContextInput encodes the GraphQL JSON context as the object
+// Commodore stores. It must be a JSON object; Commodore enforces the size cap.
+func playbackWebhookContextInput(value any) (string, *model.ValidationError) {
+	if value == nil {
+		return "", nil
+	}
+	if _, ok := value.(map[string]any); !ok {
+		field := "policy.webhook.context"
+		return "", &model.ValidationError{Message: "webhook context must be a JSON object", Field: &field}
+	}
+	encoded, err := json.Marshal(value)
+	if err != nil {
+		field := "policy.webhook.context"
+		return "", &model.ValidationError{Message: "webhook context is not valid JSON", Field: &field}
+	}
+	return string(encoded), nil
+}
+
+// PlaybackWebhookContext decodes the stored webhook context for the GraphQL
+// context field; nil when the policy has none.
+func PlaybackWebhookContext(policy *commodorepb.PlaybackWebhookPolicy) (any, error) {
+	raw := policy.GetContextJson()
+	if raw == "" {
+		return nil, nil
+	}
+	var value map[string]any
+	if err := json.Unmarshal([]byte(raw), &value); err != nil {
+		return nil, fmt.Errorf("decode webhook context: %w", err)
+	}
+	return value, nil
 }
 
 func modelPolicyType(s string) (model.PlaybackPolicyType, bool) {

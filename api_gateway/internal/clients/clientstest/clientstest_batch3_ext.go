@@ -119,6 +119,14 @@ func (f *FakeCommodore) ResolveViewerEndpointWithProtocol(ctx context.Context, c
 	return f.ResolveViewerEndpointWithProtocolFn(ctx, contentID, viewerIP, viewerToken, protocol)
 }
 
+func (f *FakeCommodore) ResolveViewer(ctx context.Context, req *sharedpb.ViewerEndpointRequest) (*sharedpb.ViewerEndpointResponse, error) {
+	f.Calls++
+	if f.ResolveViewerFn == nil {
+		panic("FakeCommodore.ResolveViewer not stubbed")
+	}
+	return f.ResolveViewerFn(ctx, req)
+}
+
 func (f *FakeCommodore) UnlinkWallet(ctx context.Context, walletID string) (*commodorepb.UnlinkWalletResponse, error) {
 	f.Calls++
 	if f.UnlinkWalletFn == nil {

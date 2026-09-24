@@ -1060,6 +1060,8 @@ func mcpToolGraphQLOp(toolName string) string {
 		return "stopDVR"
 	case "create_vod_upload":
 		return "createVodUpload"
+	case "import_vod_asset":
+		return "importVodAsset"
 	case "complete_vod_upload":
 		return "completeVodUpload"
 	case "abort_vod_upload":

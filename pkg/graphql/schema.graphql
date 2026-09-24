@@ -1472,6 +1472,19 @@ type Mutation {
   ): CreateVodUploadResult!
 
   """
+  Import a video from a public https or http URL as a VOD asset. The processing
+  node reads the file from the URL and processes it like an upload; the asset
+  reports PROCESSING until it is ready. Progress arrives as upload.created,
+  upload.completed, and upload.ready or upload.failed events.
+  """
+  importVodAsset(
+    """
+    Import source and asset details.
+    """
+    input: ImportVodAssetInput!
+  ): ImportVodAssetResult!
+
+  """
   Complete a VOD upload after all parts are uploaded.
   Triggers processing and thumbnail generation.
   """
@@ -2263,6 +2276,7 @@ union StopDVRResult = DeleteSuccess | NotFoundError | AuthError
 union DeleteDVRResult = DeleteSuccess | NotFoundError | AuthError
 
 union CreateVodUploadResult = VodUploadSession | ValidationError | AuthError
+union ImportVodAssetResult = VodAsset | ValidationError | AuthError
 union CompleteVodUploadResult = VodAsset | ValidationError | NotFoundError | AuthError
 union AbortVodUploadResult = DeleteSuccess | NotFoundError | AuthError
 union DeleteVodAssetResult = DeleteSuccess | NotFoundError | AuthError
@@ -2913,6 +2927,23 @@ enum VodAssetStatus {
 Input for initiating a multipart VOD upload.
 Returns presigned S3 URLs for uploading file parts.
 """
+input ImportVodAssetInput {
+  """
+  Source URL, https or http. It must be publicly reachable and support HTTP
+  range requests; private and internal addresses are refused.
+  """
+  url: String!
+  """
+  Filename to store the video under. Required when the URL path does not end
+  in a supported video extension (mp4, mov, mkv, webm, ts).
+  """
+  filename: String
+  "Optional display title for the asset."
+  title: String
+  "Optional description for the asset."
+  description: String
+}
+
 input CreateVodUploadInput {
   "Original filename (for metadata and content-type detection)."
   filename: String!
@@ -7995,6 +8026,12 @@ type PlaybackPolicy {
   jwt: PlaybackJwtPolicy
   "Webhook-policy details, populated when type == WEBHOOK. Secret is masked."
   webhook: PlaybackWebhookPolicy
+  """
+  Sites allowed to embed the content, as normalized `scheme://host[:port]`
+  origins; `*` allows any. Empty = no restriction. A browser viewer whose
+  Origin (or Referer) is not listed is denied.
+  """
+  allowedOrigins: [String!]!
 }
 
 enum PlaybackPolicyType {
@@ -8039,6 +8076,8 @@ type PlaybackWebhookPolicy {
   timeoutMs: Int!
   "Always 'redacted' on read; the actual secret is fieldcrypt-encrypted at rest."
   secretMasked: String!
+  "Your JSON object, sent as `context` in every access request to the URL. Null when unset."
+  context: JSON
 }
 
 input CreateSigningKeyInput {
@@ -8060,6 +8099,11 @@ input PlaybackPolicyInput {
   jwt: PlaybackJwtPolicyInput
   "Required when type == WEBHOOK."
   webhook: PlaybackWebhookPolicyInput
+  """
+  JWT and WEBHOOK only: sites allowed to embed the content, each `*` or
+  `scheme://host[:port]` (at most 50). Omit or empty for no restriction.
+  """
+  allowedOrigins: [String!]
 }
 
 input PlaybackJwtPolicyInput {
@@ -8089,6 +8133,12 @@ input PlaybackWebhookPolicyInput {
   secret: String
   "Outbound POST timeout in milliseconds. Server caps at 10000; default 5000."
   timeoutMs: Int
+  """
+  A JSON object (at most 4 KiB) sent as `context` in every access request,
+  e.g. `{"courseId": "algebra-101"}`, so the endpoint can decide without its
+  own lookup.
+  """
+  context: JSON
 }
 
 # Customer-tunable storage retention. Cascade at artifact-create / DVR-start:
@@ -8317,6 +8367,10 @@ input TestPlaybackAccessInput {
   without side effects.
   """
   fireWebhook: Boolean
+  "Origin header to test the policy's allowed origins against."
+  origin: String
+  "Referer header, used when origin is empty."
+  referer: String
 }
 
 """
@@ -9129,6 +9183,8 @@ union PublicEventData =
   | MultistreamStatusChanged
   | RecordingFailed
   | RecordingReady
+  | RecordingStarted
+  | RecordingStopped
   | StreamConnected
   | StreamCreated
   | StreamDeleted
@@ -9281,11 +9337,26 @@ type RecordingReady {
 }
 
 """
+`recording.started` event. Aggregate: `artifacts`.
+"""
+type RecordingStarted {
+  artifact: EventArtifact
+}
+
+"""
+`recording.stopped` event. Aggregate: `artifacts`.
+"""
+type RecordingStopped {
+  artifact: EventArtifact
+}
+
+"""
 `stream.connected` event. Aggregate: `streams`.
 """
 type StreamConnected {
   streamId: ID!
   protocol: EventIngestProtocol!
+  playbackId: ID!
 }
 
 """
@@ -9309,6 +9380,7 @@ type StreamDeleted {
 """
 type StreamIdle {
   streamId: ID!
+  playbackId: ID!
 }
 
 """
@@ -9323,6 +9395,7 @@ type StreamKeyRotated {
 """
 type StreamLive {
   streamId: ID!
+  playbackId: ID!
 }
 
 """

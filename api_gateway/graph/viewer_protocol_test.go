@@ -17,7 +17,8 @@ import (
 func TestPlacementAPIViewerGraphFieldPreservesEveryProtocol(t *testing.T) {
 	for _, protocol := range model.AllMediaViewerProtocol {
 		t.Run(string(protocol), func(t *testing.T) {
-			fake := &clientstest.FakeCommodore{ResolveViewerEndpointWithProtocolFn: func(_ context.Context, content, _ string, _ string, got string) (*sharedpb.ViewerEndpointResponse, error) {
+			fake := &clientstest.FakeCommodore{ResolveViewerFn: func(_ context.Context, req *sharedpb.ViewerEndpointRequest) (*sharedpb.ViewerEndpointResponse, error) {
+				content, got := req.GetContentId(), req.GetProtocol()
 				if content != "public" || got == "" || got != mist.PlaybackProtocol(string(protocol)) {
 					t.Fatalf("GraphQL dropped requested format %s: %s", protocol, got)
 				}

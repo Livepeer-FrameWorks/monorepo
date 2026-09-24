@@ -120,6 +120,10 @@ type Error interface {
 	GetCode() *string
 }
 
+type ImportVodAssetResult interface {
+	IsImportVodAssetResult()
+}
+
 type IncidentMutationResult interface {
 	IsIncidentMutationResult()
 }
@@ -418,6 +422,8 @@ func (AuthError) IsStopDVRResult() {}
 func (AuthError) IsDeleteDVRResult() {}
 
 func (AuthError) IsCreateVodUploadResult() {}
+
+func (AuthError) IsImportVodAssetResult() {}
 
 func (AuthError) IsCompleteVodUploadResult() {}
 
@@ -1048,8 +1054,6 @@ type CreateStreamKeyInput struct {
 	Name string `json:"name"`
 }
 
-// Input for initiating a multipart VOD upload.
-// Returns presigned S3 URLs for uploading file parts.
 type CreateVodUploadInput struct {
 	// Original filename (for metadata and content-type detection).
 	Filename string `json:"filename"`
@@ -1303,6 +1307,21 @@ type FederationEventsConnection struct {
 	Edges      []*FederationEventEdge `json:"edges"`
 	PageInfo   *PageInfo              `json:"pageInfo"`
 	TotalCount int                    `json:"totalCount"`
+}
+
+// Input for initiating a multipart VOD upload.
+// Returns presigned S3 URLs for uploading file parts.
+type ImportVodAssetInput struct {
+	// Source URL, https or http. It must be publicly reachable and support HTTP
+	// range requests; private and internal addresses are refused.
+	URL string `json:"url"`
+	// Filename to store the video under. Required when the URL path does not end
+	// in a supported video extension (mp4, mov, mkv, webm, ts).
+	Filename *string `json:"filename,omitempty"`
+	// Optional display title for the asset.
+	Title *string `json:"title,omitempty"`
+	// Optional description for the asset.
+	Description *string `json:"description,omitempty"`
 }
 
 type Incident struct {
@@ -2246,6 +2265,10 @@ type PlaybackPolicy struct {
 	Jwt *commodorepb.PlaybackJwtPolicy `json:"jwt,omitempty"`
 	// Webhook-policy details, populated when type == WEBHOOK. Secret is masked.
 	Webhook *commodorepb.PlaybackWebhookPolicy `json:"webhook,omitempty"`
+	// Sites allowed to embed the content, as normalized `scheme://host[:port]`
+	// origins; `*` allows any. Empty = no restriction. A browser viewer whose
+	// Origin (or Referer) is not listed is denied.
+	AllowedOrigins []string `json:"allowedOrigins"`
 }
 
 type PlaybackPolicyInput struct {
@@ -2254,6 +2277,9 @@ type PlaybackPolicyInput struct {
 	Jwt *PlaybackJwtPolicyInput `json:"jwt,omitempty"`
 	// Required when type == WEBHOOK.
 	Webhook *PlaybackWebhookPolicyInput `json:"webhook,omitempty"`
+	// JWT and WEBHOOK only: sites allowed to embed the content, each `*` or
+	// `scheme://host[:port]` (at most 50). Omit or empty for no restriction.
+	AllowedOrigins []string `json:"allowedOrigins,omitempty"`
 }
 
 type PlaybackWebhookPolicyInput struct {
@@ -2266,6 +2292,10 @@ type PlaybackWebhookPolicyInput struct {
 	Secret *string `json:"secret,omitempty"`
 	// Outbound POST timeout in milliseconds. Server caps at 10000; default 5000.
 	TimeoutMs *int `json:"timeoutMs,omitempty"`
+	// A JSON object (at most 4 KiB) sent as `context` in every access request,
+	// e.g. `{"courseId": "algebra-101"}`, so the endpoint can decide without its
+	// own lookup.
+	Context any `json:"context,omitempty"`
 }
 
 type PreviewMediaPlacementInput struct {
@@ -2888,6 +2918,10 @@ type TestPlaybackAccessInput struct {
 	// without making the call so operators can inspect the resolved policy
 	// without side effects.
 	FireWebhook *bool `json:"fireWebhook,omitempty"`
+	// Origin header to test the policy's allowed origins against.
+	Origin *string `json:"origin,omitempty"`
+	// Referer header, used when origin is empty.
+	Referer *string `json:"referer,omitempty"`
 }
 
 // Time range for filtering time-series data.
@@ -3067,6 +3101,8 @@ func (ValidationError) IsCreateStreamKeyResult() {}
 func (ValidationError) IsStartDVRResult() {}
 
 func (ValidationError) IsCreateVodUploadResult() {}
+
+func (ValidationError) IsImportVodAssetResult() {}
 
 func (ValidationError) IsCompleteVodUploadResult() {}
 
@@ -3271,6 +3307,8 @@ type VodAsset struct {
 	// cluster). Computed from sizeBytes in GiB × the tier's price per GiB-month.
 	StorageCost *StorageCostProjection `json:"storageCost,omitempty"`
 }
+
+func (VodAsset) IsImportVodAssetResult() {}
 
 func (VodAsset) IsCompleteVodUploadResult() {}
 

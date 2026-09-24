@@ -71,7 +71,7 @@ func buildToolPolicies() map[string]ToolPolicy {
 		"list_stream_keys", "resolve_playback_endpoint", "test_playback_access", "validate_stream_key")
 	add("streams:write", ToolRiskWrite,
 		"complete_vod_upload", "create_clip", "create_push_target", "create_stream", "create_vod_upload",
-		"start_dvr", "stop_dvr", "update_push_target", "update_stream")
+		"import_vod_asset", "start_dvr", "stop_dvr", "update_push_target", "update_stream")
 	add("streams:write", ToolRiskHigh,
 		"abort_vod_upload", "clear_playback_policy", "create_signing_key", "create_stream_key", "delete_clip",
 		"delete_dvr", "delete_push_target", "delete_stream", "delete_stream_key", "delete_vod_asset",
