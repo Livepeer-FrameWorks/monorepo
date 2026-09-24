@@ -46,6 +46,10 @@
 - Go: Run `make lint` to see all violations, `make lint-fix` for auto-fixes
 - Frontend: Run `pnpm lint` and `pnpm format`
 
+**Before pushing (and before calling work done):**
+
+- Run `make test` and `make verify-prepush`. The latter runs CI's Generated contracts and frontend component jobs (config reference, GraphQL/SDK/event contracts, Houdini codegen, component tests), which unit tests and lint do not cover.
+
 **Key rules:**
 
 - Go uses tabs (enforced by `gofmt`)

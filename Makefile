@@ -1,4 +1,4 @@
-.PHONY: build build-images build-bin-commodore build-bin-quartermaster build-bin-purser build-bin-decklog build-bin-foghorn build-bin-helmsman build-bin-periscope-ingest build-bin-periscope-query build-bin-periscope-metering build-bin-signalman build-bin-bridge build-bin-navigator build-bin-privateer build-bin-deckhand build-bin-steward build-bin-skipper build-bin-chandler build-bin-lookout build-bin-bosun build-bin-cli cli-embed-assets \
+.PHONY: verify-prepush verify-generated-contracts test-frontend-components build build-images build-bin-commodore build-bin-quartermaster build-bin-purser build-bin-decklog build-bin-foghorn build-bin-helmsman build-bin-periscope-ingest build-bin-periscope-query build-bin-periscope-metering build-bin-signalman build-bin-bridge build-bin-navigator build-bin-privateer build-bin-deckhand build-bin-steward build-bin-skipper build-bin-chandler build-bin-lookout build-bin-bosun build-bin-cli cli-embed-assets \
 		build-image-commodore build-image-quartermaster build-image-purser build-image-decklog build-image-foghorn build-image-periscope-ingest build-image-periscope-query build-image-periscope-metering build-image-signalman build-image-bridge build-image-logbook test-logbook-image-health build-image-navigator build-image-deckhand build-image-steward build-image-skipper build-image-chandler build-image-lookout build-image-bosun \
 		proto proto-check sqlc sqlc-check graphql graphql-events verify-graphql-events graphql-frontend graphql-tray graphql-all clean version install-tools verify test test-cli test-pkg test-topology test-crypto-evm test-dashboards test-commodore test-quartermaster test-purser test-decklog test-foghorn test-helmsman test-periscope-ingest test-periscope-query test-media-topology-real-clickhouse test-signalman test-bridge test-navigator test-privateer test-deckhand test-steward test-skipper test-chandler test-lookout test-bosun coverage env frontend-env tidy update outdated fmt format \
 		lint lint-go lint-frontend lint-all lint-fix lint-report lint-analyze ci-local ci-local-go ci-local-frontend \
@@ -367,6 +367,24 @@ test-go-livepeer-pkg-impact:
 		grep -qx 'affected=true' "$$impact_output"; \
 		grep -qx 'scripts/ci/go-livepeer-pkg-impact.sh' "$$impact_output"; \
 	fi
+
+# verify-prepush runs, locally and in the same order, the CI checks that unit
+# tests and lint do not cover: the Generated contracts job and the frontend
+# component job.
+verify-prepush: verify-generated-contracts test-frontend-components
+
+verify-generated-contracts:
+	$(MAKE) --no-print-directory verify-config-annotations
+	$(MAKE) --no-print-directory verify-graphql-reference
+	$(MAKE) --no-print-directory verify-release-channels
+	$(MAKE) --no-print-directory verify-graphql-events
+	$(MAKE) --no-print-directory verify-swift-gql
+	$(MAKE) --no-print-directory graphql-frontend
+	$(MAKE) --no-print-directory verify-sdk-generated
+
+test-frontend-components:
+	pnpm --filter frameworks-frontend exec svelte-kit sync
+	pnpm --filter frameworks-frontend test:components
 
 # Verify (tidy, fmt, vet, test, build) all Go modules and build images when present
 verify:
