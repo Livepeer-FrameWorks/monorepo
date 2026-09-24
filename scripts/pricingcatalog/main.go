@@ -1,0 +1,263 @@
+// Generator for the marketing site's pricing data.
+//
+// Reads Purser's canonical tier catalog
+// (api_billing/internal/bootstrap/catalog/billing_tiers.yaml) and writes
+// website_marketing/src/data/pricing-catalog.json, which the pricing page and
+// cost calculator render from. The generator fails when a tier prices a meter
+// or model the calculator does not model, so a new billable meter cannot ship
+// without the public estimate accounting for it.
+//
+// Write the artifact via `make generate-pricing-catalog`; verify it
+// (non-mutating, CI-safe) via `make verify-pricing-catalog` (runs with -check).
+package main
+
+import (
+	"bytes"
+	"encoding/json"
+	"errors"
+	"flag"
+	"fmt"
+	"os"
+	"path/filepath"
+	"sort"
+	"strconv"
+
+	"gopkg.in/yaml.v3"
+)
+
+const (
+	catalogPath = "api_billing/internal/bootstrap/catalog/billing_tiers.yaml"
+	outputPath  = "website_marketing/src/data/pricing-catalog.json"
+
+	meterDeliveredMinutes = "delivered_minutes"
+	meterColdStorage      = "storage_gb_seconds_cold"
+
+	modelTieredGraduated = "tiered_graduated"
+	modelAllUsage        = "all_usage"
+
+	// storageHoursPerMonth mirrors pkg/billing.HoursPerBillingMonth; storage
+	// prices and allowances in the catalog are per GiB-month of this length.
+	storageHoursPerMonth = 730
+)
+
+type catalogFile struct {
+	Tiers []catalogTier `yaml:"tiers"`
+}
+
+type catalogTier struct {
+	TierName          string         `yaml:"tier_name"`
+	DisplayName       string         `yaml:"display_name"`
+	BasePrice         float64        `yaml:"base_price"`
+	Currency          string         `yaml:"currency"`
+	BillingPeriod     string         `yaml:"billing_period"`
+	Entitlements      map[string]any `yaml:"entitlements"`
+	PricingRules      []catalogRule  `yaml:"pricing_rules"`
+	TierLevel         int            `yaml:"tier_level"`
+	IsEnterprise      bool           `yaml:"is_enterprise"`
+	IsDefaultPrepaid  bool           `yaml:"is_default_prepaid"`
+	IsDefaultPostpaid bool           `yaml:"is_default_postpaid"`
+}
+
+type catalogRule struct {
+	Meter            string         `yaml:"meter"`
+	Model            string         `yaml:"model"`
+	IncludedQuantity float64        `yaml:"included_quantity"`
+	UnitPrice        string         `yaml:"unit_price"`
+	Config           map[string]any `yaml:"config"`
+}
+
+type output struct {
+	Generated            string `json:"_generated"`
+	Currency             string `json:"currency"`
+	StorageHoursPerMonth int    `json:"storageHoursPerMonth"`
+	Tiers                []tier `json:"tiers"`
+}
+
+type tier struct {
+	ID               string       `json:"id"`
+	Name             string       `json:"name"`
+	BasePrice        float64      `json:"basePrice"`
+	Prepaid          bool         `json:"prepaid"`
+	DeliveredMinutes meteredPrice `json:"deliveredMinutes"`
+	Storage          meteredPrice `json:"storage"`
+	Limits           limits       `json:"limits"`
+}
+
+// meteredPrice is an allowance plus the price per unit above it. Delivered
+// minutes are per minute; storage is per GiB-month.
+type meteredPrice struct {
+	Included  float64 `json:"included"`
+	UnitPrice float64 `json:"unitPrice"`
+}
+
+// limits are the plan's hard caps. Zero means uncapped.
+type limits struct {
+	StorageGiB           float64 `json:"storageGiB"`
+	RetentionDays        float64 `json:"retentionDays"`
+	MaxConcurrentStreams float64 `json:"maxConcurrentStreams"`
+	MaxConcurrentViewers float64 `json:"maxConcurrentViewers"`
+}
+
+func main() {
+	check := flag.Bool("check", false, "fail if the generated file is stale instead of writing it")
+	repo := flag.String("repo", "../..", "repository root")
+	flag.Parse()
+
+	if err := run(*repo, *check); err != nil {
+		fmt.Fprintln(os.Stderr, "pricingcatalog:", err)
+		os.Exit(1)
+	}
+}
+
+func run(repo string, check bool) error {
+	raw, err := os.ReadFile(filepath.Join(repo, catalogPath))
+	if err != nil {
+		return err
+	}
+	rendered, err := render(raw)
+	if err != nil {
+		return err
+	}
+	target := filepath.Join(repo, outputPath)
+	if check {
+		current, err := os.ReadFile(target)
+		if err != nil {
+			return fmt.Errorf("%s: %w (run make generate-pricing-catalog)", outputPath, err)
+		}
+		if !bytes.Equal(current, rendered) {
+			return fmt.Errorf("%s is stale; run make generate-pricing-catalog", outputPath)
+		}
+		fmt.Println("pricingcatalog: up to date")
+		return nil
+	}
+	if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
+		return err
+	}
+	if err := os.WriteFile(target, rendered, 0o644); err != nil {
+		return err
+	}
+	fmt.Println("pricingcatalog: wrote", outputPath)
+	return nil
+}
+
+func render(raw []byte) ([]byte, error) {
+	var file catalogFile
+	if err := yaml.Unmarshal(raw, &file); err != nil {
+		return nil, fmt.Errorf("parse %s: %w", catalogPath, err)
+	}
+	if len(file.Tiers) == 0 {
+		return nil, errors.New("catalog has no tiers")
+	}
+
+	sorted := append([]catalogTier(nil), file.Tiers...)
+	sort.SliceStable(sorted, func(i, j int) bool { return sorted[i].TierLevel < sorted[j].TierLevel })
+
+	out := output{
+		Generated:            "Generated by scripts/pricingcatalog from " + catalogPath + ". Do not edit; run make generate-pricing-catalog.",
+		StorageHoursPerMonth: storageHoursPerMonth,
+	}
+	for _, t := range sorted {
+		// Enterprise pricing is contract-defined; the site links to sales instead.
+		if t.IsEnterprise {
+			continue
+		}
+		if t.BillingPeriod != "monthly" {
+			return nil, fmt.Errorf("tier %q: billing_period %q is not modeled (monthly only)", t.TierName, t.BillingPeriod)
+		}
+		if out.Currency == "" {
+			out.Currency = t.Currency
+		} else if t.Currency != out.Currency {
+			return nil, fmt.Errorf("tier %q: currency %q differs from %q", t.TierName, t.Currency, out.Currency)
+		}
+		converted, err := convertTier(t)
+		if err != nil {
+			return nil, err
+		}
+		out.Tiers = append(out.Tiers, converted)
+	}
+
+	var buf bytes.Buffer
+	enc := json.NewEncoder(&buf)
+	enc.SetIndent("", "  ")
+	if err := enc.Encode(out); err != nil {
+		return nil, err
+	}
+	return buf.Bytes(), nil
+}
+
+func convertTier(t catalogTier) (tier, error) {
+	out := tier{
+		ID:        t.TierName,
+		Name:      t.DisplayName,
+		BasePrice: t.BasePrice,
+		Prepaid:   t.IsDefaultPrepaid,
+	}
+	seen := map[string]bool{}
+	for _, rule := range t.PricingRules {
+		if seen[rule.Meter] {
+			return tier{}, fmt.Errorf("tier %q: duplicate rule for %q", t.TierName, rule.Meter)
+		}
+		seen[rule.Meter] = true
+		if rule.Meter == meterColdStorage {
+			divisor, ok := rule.Config["rated_quantity_divisor"].(int)
+			unit, unitOK := rule.Config["rated_unit"].(string)
+			if !ok || divisor != storageHoursPerMonth*3600 || !unitOK || unit != "gibibyte_month" {
+				return tier{}, fmt.Errorf("tier %q storage rule must explicitly rate GiB-months", t.TierName)
+			}
+		}
+		price, err := strconv.ParseFloat(rule.UnitPrice, 64)
+		if err != nil {
+			return tier{}, fmt.Errorf("tier %q meter %q: unit_price %q: %w", t.TierName, rule.Meter, rule.UnitPrice, err)
+		}
+		if rule.Model != modelTieredGraduated && rule.Model != modelAllUsage {
+			return tier{}, fmt.Errorf("tier %q meter %q: model %q is not modeled by the calculator", t.TierName, rule.Meter, rule.Model)
+		}
+		priced := meteredPrice{UnitPrice: price}
+		if rule.Model == modelTieredGraduated {
+			priced.Included = rule.IncludedQuantity
+		}
+		switch rule.Meter {
+		case meterDeliveredMinutes:
+			out.DeliveredMinutes = priced
+		case meterColdStorage:
+			out.Storage = priced
+		default:
+			return tier{}, fmt.Errorf("tier %q prices meter %q, which the marketing calculator does not model; extend scripts/pricingcatalog and SavingsCalculator.jsx", t.TierName, rule.Meter)
+		}
+	}
+	for _, meter := range []string{meterDeliveredMinutes, meterColdStorage} {
+		if !seen[meter] {
+			return tier{}, fmt.Errorf("tier %q has no %q rule", t.TierName, meter)
+		}
+	}
+
+	var err error
+	if out.Limits.StorageGiB, err = numericEntitlement(t, "storage_limit_gb"); err != nil {
+		return tier{}, err
+	}
+	if out.Limits.RetentionDays, err = numericEntitlement(t, "recording_retention_days"); err != nil {
+		return tier{}, err
+	}
+	if out.Limits.MaxConcurrentStreams, err = numericEntitlement(t, "max_concurrent_streams"); err != nil {
+		return tier{}, err
+	}
+	if out.Limits.MaxConcurrentViewers, err = numericEntitlement(t, "max_concurrent_viewers"); err != nil {
+		return tier{}, err
+	}
+	return out, nil
+}
+
+func numericEntitlement(t catalogTier, key string) (float64, error) {
+	value, ok := t.Entitlements[key]
+	if !ok {
+		return 0, nil
+	}
+	switch v := value.(type) {
+	case int:
+		return float64(v), nil
+	case float64:
+		return v, nil
+	default:
+		return 0, fmt.Errorf("tier %q entitlement %q: expected a number, got %T", t.TierName, key, value)
+	}
+}
