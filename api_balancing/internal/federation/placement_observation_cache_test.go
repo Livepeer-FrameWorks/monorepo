@@ -166,3 +166,52 @@ func TestPlacementObservationCacheBoundsRetainedEntriesAndCandidates(t *testing.
 		}
 	}
 }
+
+// A cached observation used past half its reuse window is refreshed in the
+// background: the caller is answered from cache immediately, and the next caller
+// finds the refreshed facts without a cold round trip.
+func TestPlacementObservationCacheRefreshesAheadOfExpiry(t *testing.T) {
+	base := time.Now()
+	var clock atomic.Int64
+	clock.Store(base.UnixNano())
+	now := func() time.Time { return time.Unix(0, clock.Load()) }
+	cache := NewPlacementObservationCache(now)
+	key := placementObservationKey{CellID: "cell", Query: "q", TenantVersion: 1, ObjectVersion: 1}
+	var calls atomic.Int32
+	refreshed := make(chan struct{}, 1)
+	load := func(context.Context) (balancer.PlacementCellObservation, error) {
+		n := calls.Add(1)
+		at := now()
+		if n == 2 {
+			defer func() { refreshed <- struct{}{} }()
+		}
+		return balancer.PlacementCellObservation{Complete: true, ObservedAt: at, ExpiresAt: at.Add(10 * time.Second)}, nil
+	}
+	if _, err := cache.observe(context.Background(), key, load); err != nil || calls.Load() != 1 {
+		t.Fatalf("cold read: %v calls=%d", err, calls.Load())
+	}
+	clock.Store(base.Add(600 * time.Millisecond).UnixNano())
+	got, err := cache.observe(context.Background(), key, load)
+	if err != nil || !got.ObservedAt.Equal(base) {
+		t.Fatalf("warm hit did not answer from cache: %+v %v", got, err)
+	}
+	select {
+	case <-refreshed:
+	case <-time.After(2 * time.Second):
+		t.Fatal("refresh-ahead did not run")
+	}
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		got, err = cache.observe(context.Background(), key, load)
+		if err == nil && got.ObservedAt.Equal(base.Add(600*time.Millisecond)) {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("refreshed observation not served: %+v %v", got, err)
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	if calls.Load() != 2 {
+		t.Fatalf("refresh-ahead issued %d loads, want 2", calls.Load())
+	}
+}

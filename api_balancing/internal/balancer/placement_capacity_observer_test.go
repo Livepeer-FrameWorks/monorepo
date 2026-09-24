@@ -71,7 +71,7 @@ func TestCapacityObserverReadsCompleteAuthorizedInventoryWithoutSource(t *testin
 	if err != nil || !out.GetComplete() || len(out.GetCandidates()) != 2 || owner.entitlementCalls != 1 || owner.inventoryCalls != 1 {
 		t.Fatalf("capacity observation: %+v %v", out, err)
 	}
-	if !reflect.DeepEqual(out.GetClusterIds(), []string{"empty", "private"}) || !proto.Equal(before, owner.entitlement) || !out.GetExpiresAt().AsTime().Equal(observer.now().Add(28*time.Second)) {
+	if !reflect.DeepEqual(out.GetClusterIds(), []string{"empty", "private"}) || !proto.Equal(before, owner.entitlement) || !out.GetExpiresAt().AsTime().Equal(observer.now().Add(30*time.Second)) {
 		t.Fatal("capacity observation changed census, owner facts or membership expiry")
 	}
 	for _, candidate := range out.GetCandidates() {

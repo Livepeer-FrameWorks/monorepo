@@ -120,10 +120,12 @@ func TestPushSourcePreviewExpiryIncludesMembershipAndAccess(t *testing.T) {
 		t.Fatalf("access lifetime extended: %+v %v", out, err)
 	}
 	owner.entitlement.EffectiveAccess[0].AccessExpiresAt = nil
+	// Membership lifetime follows the local read instant, never the skewed
+	// Quartermaster stamp, and still never exceeds the 30s observation bound.
 	owner.inventory.ObservedAt = timestamppb.New(now.Add(-29 * time.Second))
 	out, err = observer.Observe(context.Background(), req)
-	if err != nil || !out.GetExpiresAt().AsTime().Equal(now.Add(time.Second)) {
-		t.Fatalf("membership lifetime extended: %+v %v", out, err)
+	if err != nil || !out.GetExpiresAt().AsTime().Equal(now.Add(30*time.Second)) {
+		t.Fatalf("membership lifetime not anchored locally: %+v %v", out, err)
 	}
 	var absent *PlacementPushSourceObserver
 	if _, err := absent.Observe(context.Background(), req); status.Code(err) != codes.Unavailable {

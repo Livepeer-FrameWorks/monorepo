@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"slices"
+	"sync"
 	"testing"
 	"time"
 
@@ -151,7 +152,9 @@ func TestPlacementRouterEmptyPoolRequiresFreshCompleteness(t *testing.T) {
 				return prepare(ctx, cell, p)
 			}
 			got, err := router.Route(context.Background(), req)
-			if stamp == "fresh" {
+			// A future stamp is peer clock skew on freshly fetched facts: it is
+			// re-anchored to this router's clock and proves the pool empty.
+			if stamp == "fresh" || stamp == "future" {
 				if err != nil || got.Preparation.ClusterID != "eu" || prepares != 1 {
 					t.Fatalf("fresh empty pool did not permit spill: %+v, %v", got, err)
 				}
@@ -362,5 +365,61 @@ func TestPlacementRouterUsesTheFullDiscoveryBudgetForEveryCell(t *testing.T) {
 	result, err := router.Route(context.Background(), req)
 	if err != nil || result.Preparation.ClusterID != "us" || !result.Decision.Complete {
 		t.Fatalf("healthy cells were cut off before the discovery deadline: %+v %v", result, err)
+	}
+}
+
+func TestPlacementRouterReobservesTransientCellFailure(t *testing.T) {
+	req, router, observations := placementRouteFixture()
+	calls := map[string]int{}
+	var mu sync.Mutex
+	router.Observe = func(_ context.Context, cell PlacementCell, _ PlacementRouteRequest) (PlacementCellObservation, error) {
+		mu.Lock()
+		calls[cell.ID]++
+		first := calls[cell.ID] == 1
+		mu.Unlock()
+		if cell.ID == "eu-cell" && first {
+			return PlacementCellObservation{}, errors.New("placement inventory rejected: stamp_skew")
+		}
+		return observations[cell.ID], nil
+	}
+	got, err := router.Route(context.Background(), req)
+	if err != nil || got.Preparation.ClusterID == "" || calls["eu-cell"] != 2 || calls["us-cell"] != 1 {
+		t.Fatalf("transient cell failure refused the route: %+v, %v, calls=%v", got, err, calls)
+	}
+	if !got.Decision.Complete {
+		t.Fatal("recovered cell left the census incomplete")
+	}
+}
+
+func TestPlacementRouterReanchorsSkewedPeerClocks(t *testing.T) {
+	for _, skew := range []time.Duration{5 * time.Second, -10 * time.Second, time.Hour} {
+		req, router, observations := placementRouteFixture()
+		now := router.Now()
+		peer := observations["us-cell"]
+		peer.ObservedAt = now.Add(skew)
+		peer.ExpiresAt = peer.ObservedAt.Add(20 * time.Second)
+		for i := range peer.Candidates {
+			peer.Candidates[i].ObservedAt = peer.ObservedAt.Add(-time.Second)
+			peer.Candidates[i].ExpiresAt = peer.ExpiresAt
+		}
+		observations["us-cell"] = peer
+		evaluation, err := router.Evaluate(context.Background(), req)
+		if err != nil || !evaluation.Decision.Complete {
+			t.Fatalf("peer clock skew %s refused fresh facts: %+v, %v", skew, evaluation.Decision, err)
+		}
+		if !evaluation.ExpiresAt.Equal(now.Add(20*time.Second)) && !evaluation.ExpiresAt.Before(now.Add(20*time.Second)) {
+			t.Fatalf("peer clock skew %s extended the lifetime: %s", skew, evaluation.ExpiresAt)
+		}
+	}
+}
+
+func TestPlacementRouterIncompleteRefusalIsDistinguishable(t *testing.T) {
+	req, router, _ := placementRouteFixture()
+	router.Observe = func(context.Context, PlacementCell, PlacementRouteRequest) (PlacementCellObservation, error) {
+		return PlacementCellObservation{}, errors.New("peer unavailable")
+	}
+	_, err := router.Route(context.Background(), req)
+	if !errors.Is(err, ErrPlacementUnavailable) || !errors.Is(err, ErrPlacementObservationIncomplete) {
+		t.Fatalf("incomplete census refusal not distinguishable: %v", err)
 	}
 }

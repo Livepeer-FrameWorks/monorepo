@@ -22,8 +22,12 @@ const (
 
 var (
 	ErrPlacementUnavailable = errors.New("no permitted placement destination is available")
-	ErrPlacementObservation = errors.New("invalid placement observation")
-	ErrPlacementPreparation = errors.New("invalid placement preparation acknowledgement")
+	// ErrPlacementObservationIncomplete accompanies ErrPlacementUnavailable when
+	// the refusal came from cells that could not be observed, not from a complete
+	// census with no permitted destination. Callers answer it as retryable.
+	ErrPlacementObservationIncomplete = errors.New("placement observation is incomplete")
+	ErrPlacementObservation           = errors.New("invalid placement observation")
+	ErrPlacementPreparation           = errors.New("invalid placement preparation acknowledgement")
 )
 
 // PlacementCell is resolved from current entitlement and topology authority.
@@ -112,6 +116,126 @@ type PlacementRouter struct {
 	Logger logging.Logger
 }
 
+// placementRefusal distinguishes an incomplete census from a complete one that
+// found no permitted destination; both remain ErrPlacementUnavailable.
+func placementRefusal(decision placement.Decision) error {
+	if decision.Reason == placement.ObservationIncomplete {
+		return fmt.Errorf("%w: %w", ErrPlacementUnavailable, ErrPlacementObservationIncomplete)
+	}
+	return ErrPlacementUnavailable
+}
+
+// placementCachedObservationAge is how old an observation may legitimately be
+// when it is answered from a shared observation cache; older or future-dated
+// facts can only come from a peer whose clock disagrees with this one.
+const placementCachedObservationAge = 2 * time.Second
+
+// observeCell observes one cell and maps a peer-clock observation onto this
+// router's clock.
+func (router PlacementRouter) observeCell(ctx context.Context, cell PlacementCell, req PlacementRouteRequest) (PlacementCellObservation, error) {
+	started := router.now()
+	observation, err := router.Observe(ctx, cell, req)
+	if err != nil {
+		return observation, err
+	}
+	return reanchorPlacementObservation(observation, started, router.now()), nil
+}
+
+// reanchorPlacementObservation corrects cross-host clock skew. A peer stamps its
+// observation with its own clock; when that stamp lies after this call finished
+// or well before it started, every timestamp in the observation is shifted by the
+// same offset so the observation begins inside the call window. Lifetimes the
+// peer granted are preserved and never extended past the freshness bound, and an
+// observation whose stamp is plausible is returned unchanged.
+func reanchorPlacementObservation(observation PlacementCellObservation, started, finished time.Time) PlacementCellObservation {
+	if observation.ObservedAt.IsZero() {
+		return observation
+	}
+	var anchor time.Time
+	switch {
+	case observation.ObservedAt.After(finished):
+		anchor = finished
+	case observation.ObservedAt.Before(started.Add(-placementCachedObservationAge)):
+		anchor = started
+	default:
+		return observation
+	}
+	offset := anchor.Sub(observation.ObservedAt)
+	shift := func(t time.Time) time.Time {
+		if t.IsZero() {
+			return t
+		}
+		return t.Add(offset)
+	}
+	observation.ObservedAt = anchor
+	observation.ExpiresAt = shift(observation.ExpiresAt)
+	if limit := anchor.Add(placementObservationLifetime); observation.ExpiresAt.After(limit) {
+		observation.ExpiresAt = limit
+	}
+	candidates := make([]placement.Candidate, len(observation.Candidates))
+	copy(candidates, observation.Candidates)
+	for index := range candidates {
+		candidate := &candidates[index]
+		candidate.ObservedAt = shift(candidate.ObservedAt)
+		candidate.ExpiresAt = shift(candidate.ExpiresAt)
+		candidate.ChargingUntil = shift(candidate.ChargingUntil)
+		if candidate.ExpiresAt.After(observation.ExpiresAt) {
+			candidate.ExpiresAt = observation.ExpiresAt
+		}
+	}
+	observation.Candidates = candidates
+	return observation
+}
+
+// placementReobserveMinBudget is the least discovery budget worth spending on a
+// second observation of a cell whose first answer was unusable.
+const placementReobserveMinBudget = 500 * time.Millisecond
+
+// reobserveUnusableCells asks each cell that errored or answered with stale
+// facts once more, so a transient failure or an observation that aged in flight
+// is refreshed inside the request instead of refusing the viewer.
+func (router PlacementRouter) reobserveUnusableCells(ctx context.Context, req PlacementRouteRequest, observations []PlacementCellObservation, errs []error) {
+	var retry []int
+	for index := range req.Cells {
+		if errs[index] != nil || !observations[index].Fresh(router.now()) {
+			retry = append(retry, index)
+		}
+	}
+	if len(retry) == 0 || ctx.Err() != nil {
+		return
+	}
+	if deadline, ok := ctx.Deadline(); ok && time.Until(deadline) < placementReobserveMinBudget {
+		return
+	}
+	var group sync.WaitGroup
+	for _, index := range retry {
+		group.Go(func() {
+			observation, err := router.observeCell(ctx, req.Cells[index], req)
+			if err == nil && observation.Fresh(router.now()) {
+				if router.Logger != nil {
+					router.Logger.WithFields(logging.Fields{"cell_id": req.Cells[index].ID, "tenant_id": req.TenantID, "internal_name": req.InternalName, "verb": req.Verb, "first_error": errorText(errs[index])}).
+						Info("Placement observation recovered on re-observation")
+				}
+				observations[index], errs[index] = observation, nil
+				return
+			}
+			if err != nil {
+				errs[index] = err
+				return
+			}
+			observations[index] = observation
+		})
+	}
+	group.Wait()
+}
+
+func errorText(err error) string {
+	if err == nil {
+		return ""
+	}
+	return err.Error()
+}
+
 func (router PlacementRouter) logObservationFailures(req PlacementRouteRequest, errs []error, observations []PlacementCellObservation) {
 	if router.Logger == nil {
 		return
@@ -121,9 +245,14 @@ func (router PlacementRouter) logObservationFailures(req PlacementRouteRequest, 
 		fields := logging.Fields{"cell_id": req.Cells[index].ID, "tenant_id": req.TenantID, "internal_name": req.InternalName, "verb": req.Verb}
 		switch {
 		case err != nil:
-			router.Logger.WithError(err).WithFields(fields).Warn("Placement observation failed for cell")
+			router.Logger.WithError(err).WithFields(fields).Warn("Placement observation failed for cell after re-observation")
 		case !observations[index].Fresh(now):
-			router.Logger.WithFields(fields).Warn("Placement observation for cell is not fresh")
+			observation := observations[index]
+			fields["now"] = now.Format(time.RFC3339Nano)
+			fields["observed_at"] = observation.ObservedAt.Format(time.RFC3339Nano)
+			fields["expires_at"] = observation.ExpiresAt.Format(time.RFC3339Nano)
+			fields["remaining_ms"] = observation.ExpiresAt.Sub(now).Milliseconds()
+			router.Logger.WithFields(fields).Warn("Placement observation for cell is not fresh after re-observation")
 		}
 	}
 }
@@ -206,7 +335,7 @@ func (router PlacementRouter) Evaluate(ctx context.Context, req PlacementRouteRe
 	}
 	if len(decision.Choices) == 0 {
 		router.logRefusal(req, decision, census.candidates, router.now())
-		return result, ErrPlacementUnavailable
+		return result, placementRefusal(decision)
 	}
 	choices := make(map[string]bool, len(decision.Choices))
 	for _, choice := range decision.Choices {
@@ -260,7 +389,7 @@ func (router PlacementRouter) observePlacement(ctx context.Context, req Placemen
 				if discoveryCtx.Err() != nil {
 					errs[index] = discoveryCtx.Err()
 				} else {
-					observations[index], errs[index] = router.Observe(discoveryCtx, req.Cells[index], req)
+					observations[index], errs[index] = router.observeCell(discoveryCtx, req.Cells[index], req)
 				}
 			}
 		})
@@ -275,6 +404,7 @@ enqueue:
 	}
 	close(work)
 	group.Wait()
+	router.reobserveUnusableCells(discoveryCtx, req, observations, errs)
 	discoveryCancel()
 	if err := ctx.Err(); err != nil {
 		return nil, err
@@ -359,7 +489,7 @@ func (router PlacementRouter) Route(ctx context.Context, req PlacementRouteReque
 		}
 		if len(decision.Choices) == 0 {
 			router.logRefusal(req, decision, candidates, evaluatedAt)
-			return result, ErrPlacementUnavailable
+			return result, placementRefusal(decision)
 		}
 		choice := decision.Choices[0]
 		for _, candidate := range candidates {

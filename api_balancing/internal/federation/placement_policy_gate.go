@@ -115,7 +115,7 @@ func (gate *PlacementPolicyGate) Assess(ctx context.Context, req *placementpb.Pr
 		case placement.NodeUnavailable:
 			result.Outcome = placementpb.PreparationOutcome_PREPARATION_OUTCOME_NODE_UNAVAILABLE
 		default:
-			return PlacementPolicyValidation{}, status.Error(codes.FailedPrecondition, "selected destination has no current placement permission")
+			return PlacementPolicyValidation{}, status.Errorf(codes.PermissionDenied, "selected destination %s/%s has no current placement permission (%s)", req.ClusterId, req.NodeId, assessment.Reason)
 		}
 		observationExpiry = expiry
 	}

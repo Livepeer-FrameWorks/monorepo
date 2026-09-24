@@ -31,7 +31,7 @@ func TestReconcilePlacementInventoryPreservesMissingAndDisabledMembers(t *testin
 	inventory.Nodes[0].AdmissionEnabled = false
 	original := req.Snapshot.Nodes[0]
 	joined, err := ReconcilePlacementInventory(req.TenantID, cell, inventory, req.Snapshot, req.Now)
-	if err != nil || !joined.Complete || len(joined.Snapshot.Nodes) != 2 || !joined.ExpiresAt.Equal(req.Now.Add(28*time.Second)) {
+	if err != nil || !joined.Complete || len(joined.Snapshot.Nodes) != 2 || !joined.ExpiresAt.Equal(req.Now.Add(30*time.Second)) {
 		t.Fatalf("reconcile: %+v, %v", joined, err)
 	}
 	missing, disabled := joined.Snapshot.Nodes[0], joined.Snapshot.Nodes[1]
@@ -46,14 +46,17 @@ func TestReconcilePlacementInventoryPreservesMissingAndDisabledMembers(t *testin
 	}
 }
 
-func TestReconcilePlacementInventorySkewPreservesHealthyNodesWithoutCompleteness(t *testing.T) {
+func TestReconcilePlacementInventoryUnregisteredRuntimeNodeIsReportedNotBlocking(t *testing.T) {
 	cell, inventory, req := inventoryFixture()
 	extra := req.Snapshot.Nodes[0]
 	extra.NodeID = "unregistered"
 	req.Snapshot.Nodes = append(req.Snapshot.Nodes, extra)
 	joined, err := ReconcilePlacementInventory(req.TenantID, cell, inventory, req.Snapshot, req.Now)
-	if err != nil || joined.Complete || len(joined.Snapshot.Nodes) != 2 || !joined.Snapshot.Nodes[1].IsActive {
-		t.Fatalf("skew discarded authorized healthy capacity: %+v, %v", joined, err)
+	if err != nil || !joined.Complete || len(joined.Snapshot.Nodes) != 2 || !joined.Snapshot.Nodes[1].IsActive {
+		t.Fatalf("unregistered runtime node discarded capacity or disabled spillover: %+v, %v", joined, err)
+	}
+	if !reflect.DeepEqual(joined.UnregisteredNodes, []string{"unregistered"}) {
+		t.Fatalf("unregistered runtime node not reported: %v", joined.UnregisteredNodes)
 	}
 	for _, node := range joined.Snapshot.Nodes {
 		if node.NodeID == extra.NodeID {
@@ -108,11 +111,11 @@ func TestReconcilePlacementInventoryRejectsAmbiguity(t *testing.T) {
 		{"nil_snapshot", func(_ *PlacementCell, _ *quartermasterpb.MediaPlacementInventory, r *PlacementObservationRequest) {
 			r.Snapshot = nil
 		}},
-		{"stale", func(_ *PlacementCell, i *quartermasterpb.MediaPlacementInventory, r *PlacementObservationRequest) {
-			i.ObservedAt = timestamppb.New(r.Now.Add(-30 * time.Second))
+		{"broken_clock_behind", func(_ *PlacementCell, i *quartermasterpb.MediaPlacementInventory, r *PlacementObservationRequest) {
+			i.ObservedAt = timestamppb.New(r.Now.Add(-31 * time.Second))
 		}},
-		{"future", func(_ *PlacementCell, i *quartermasterpb.MediaPlacementInventory, r *PlacementObservationRequest) {
-			i.ObservedAt = timestamppb.New(r.Now.Add(time.Nanosecond))
+		{"broken_clock_ahead", func(_ *PlacementCell, i *quartermasterpb.MediaPlacementInventory, r *PlacementObservationRequest) {
+			i.ObservedAt = timestamppb.New(r.Now.Add(31 * time.Second))
 		}},
 		{"missing_stamp", func(_ *PlacementCell, i *quartermasterpb.MediaPlacementInventory, _ *PlacementObservationRequest) {
 			i.ObservedAt = nil
@@ -134,6 +137,36 @@ func TestReconcilePlacementInventoryRejectsAmbiguity(t *testing.T) {
 				t.Fatalf("ambiguous inventory accepted: %+v, %v", got, err)
 			}
 		})
+	}
+}
+
+// Quartermaster stamps membership with its database clock. Ordinary NTP skew in
+// either direction must not refuse placement; lifetime follows the local clock.
+func TestReconcilePlacementInventoryToleratesClockSkew(t *testing.T) {
+	for _, skew := range []time.Duration{time.Nanosecond, 50 * time.Millisecond, 2 * time.Second, -2 * time.Second, -20 * time.Second} {
+		cell, inventory, req := inventoryFixture()
+		req.Clusters["empty"] = PlacementClusterFacts{AllowedVerbs: []placement.Verb{placement.Serve}}
+		inventory.ObservedAt = timestamppb.New(req.Now.Add(skew))
+		joined, err := ReconcilePlacementInventory(req.TenantID, cell, inventory, req.Snapshot, req.Now)
+		if err != nil {
+			t.Fatalf("skew %s refused: %v", skew, err)
+		}
+		if joined.StampSkew != skew || !joined.ExpiresAt.Equal(req.Now.Add(30*time.Second)) {
+			t.Fatalf("skew %s: reported %s, expires %s", skew, joined.StampSkew, joined.ExpiresAt)
+		}
+		if _, err := joined.Observe(req); err != nil {
+			t.Fatalf("skew %s: observe refused: %v", skew, err)
+		}
+	}
+}
+
+func TestReconcilePlacementInventoryNamesReason(t *testing.T) {
+	cell, inventory, req := inventoryFixture()
+	req.Snapshot.Nodes[0].ClusterID = "empty"
+	_, err := ReconcilePlacementInventory(req.TenantID, cell, inventory, req.Snapshot, req.Now)
+	var typed *PlacementInventoryError
+	if !errors.As(err, &typed) || typed.Reason != InventoryReasonNodeClusterMismatch || !errors.Is(err, ErrPlacementInventory) {
+		t.Fatalf("reason not named: %v", err)
 	}
 }
 
@@ -161,9 +194,6 @@ func TestInventoryObservationBindsExpiryTenantAndCompletePool(t *testing.T) {
 	for _, candidate := range observation.Candidates {
 		if candidate.ExpiresAt.After(joined.ExpiresAt) {
 			t.Fatal("fresh metrics extended membership validity")
-		}
-		if candidate.NodeID == "node" && !candidate.ExpiresAt.Equal(joined.ExpiresAt) {
-			t.Fatal("healthy member did not use the earliest expiry")
 		}
 	}
 	joined.Complete = false

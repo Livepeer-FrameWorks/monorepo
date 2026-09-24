@@ -73,9 +73,10 @@ func (observer *PlacementCapacityObserver) ObserveInventory(ctx context.Context,
 	if contextErr := ctx.Err(); contextErr != nil {
 		return nil, status.FromContextError(contextErr).Err()
 	}
+	readAt := observer.now()
 	membership, err := owner.GetMediaPlacementInventory(ctx, &quartermasterpb.GetMediaPlacementInventoryRequest{TenantId: req.GetTenantId(), ControlCellId: req.GetControlCellId(), ClusterIds: slices.Clone(req.GetClusterIds())})
 	if err != nil {
-		return nil, status.Error(codes.Unavailable, "capacity inventory is unavailable")
+		return nil, status.Errorf(codes.Unavailable, "capacity inventory is unavailable: %v", err)
 	}
 	now := observer.now()
 	if contextErr := ctx.Err(); contextErr != nil {
@@ -84,9 +85,9 @@ func (observer *PlacementCapacityObserver) ObserveInventory(ctx context.Context,
 	if !now.Before(expiry) {
 		return nil, status.Error(codes.Unavailable, "capacity entitlement expired")
 	}
-	joined, err := ReconcilePlacementInventory(req.GetTenantId(), PlacementCell{ID: observer.CellID, ClusterIDs: req.GetClusterIds()}, membership, observer.Snapshot(), now)
+	joined, err := ReconcilePlacementInventory(req.GetTenantId(), PlacementCell{ID: observer.CellID, ClusterIDs: req.GetClusterIds()}, membership, observer.Snapshot(), readAt)
 	if err != nil {
-		return nil, status.Error(codes.Unavailable, "capacity inventory is inconsistent")
+		return nil, status.Errorf(codes.Unavailable, "capacity inventory is inconsistent: %v", err)
 	}
 	if joined.ExpiresAt.Before(expiry) {
 		expiry = joined.ExpiresAt

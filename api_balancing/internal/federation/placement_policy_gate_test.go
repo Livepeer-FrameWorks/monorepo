@@ -76,7 +76,13 @@ func TestPlacementPolicyGateRebuildsGlobalCensusFromAuthority(t *testing.T) {
 			}
 			result, err := gate.Validate(context.Background(), req)
 			slices.Sort(observed)
-			if !slices.Equal(observed, []string{"eu-cell", "us-cell"}) {
+			// An unreachable cell is observed a second time before the census is
+			// accepted as incomplete.
+			want := []string{"eu-cell", "us-cell"}
+			if preferred == "unreachable" {
+				want = []string{"eu-cell", "eu-cell", "us-cell"}
+			}
+			if !slices.Equal(observed, want) {
 				t.Fatalf("caller destination list shrank census: %v", observed)
 			}
 			if preferred == "empty" {

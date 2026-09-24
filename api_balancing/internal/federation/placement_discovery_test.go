@@ -147,11 +147,13 @@ func TestPlacementDiscoveryPreservesAllColdAndUnavailableNodes(t *testing.T) {
 func TestPlacementDiscoveryEmptyPoolHasBoundedCompletenessEnvelope(t *testing.T) {
 	f := newDiscoveryFixture(t)
 	f.inventory.Nodes, f.snapshot.Nodes, f.paths.Paths = nil, nil, nil
+	// A skewed Quartermaster clock does not age membership: its lifetime is
+	// anchored to the local read, so path evidence (15s) bounds the envelope.
 	f.inventory.ObservedAt = timestamppb.New(f.now.Add(-25 * time.Second))
 	response, err := f.discovery.QueryPlacementCandidates(context.Background(), f.query)
 	if err != nil || !response.GetComplete() || len(response.GetCandidates()) != 0 ||
-		!response.GetObservedAt().AsTime().Equal(f.now) || !response.GetExpiresAt().AsTime().Equal(f.now.Add(5*time.Second)) {
-		t.Fatalf("empty pool lost membership expiry: %+v, %v", response, err)
+		!response.GetObservedAt().AsTime().Equal(f.now) || !response.GetExpiresAt().AsTime().Equal(f.now.Add(15*time.Second)) {
+		t.Fatalf("empty pool lost its bounded envelope: %+v, %v", response, err)
 	}
 }
 
@@ -225,8 +227,8 @@ func TestPlacementDiscoverySkewMissingPathsAndCancellation(t *testing.T) {
 	f.snapshot.Nodes = append(f.snapshot.Nodes, extra)
 	delete(f.paths.Paths, "node-00")
 	response, err := f.discovery.QueryPlacementCandidates(context.Background(), f.query)
-	if err != nil || response.GetComplete() || len(response.GetCandidates()) != 12 || response.Candidates[0].Capacity != placementpb.Capacity_CAPACITY_UNKNOWN {
-		t.Fatalf("skew or missing protocol became complete/healthy: %+v, %v", response, err)
+	if err != nil || !response.GetComplete() || len(response.GetCandidates()) != 12 || response.Candidates[0].Capacity != placementpb.Capacity_CAPACITY_UNKNOWN {
+		t.Fatalf("unregistered runtime node blocked completeness or missing protocol became healthy: %+v, %v", response, err)
 	}
 	f.calls = nil
 	ctx, cancel := context.WithCancel(context.Background())
@@ -275,5 +277,25 @@ func TestPlacementDiscoveryCancellationStopsBetweenDependencies(t *testing.T) {
 				t.Fatalf("cancelled dependency chain continued: %v, calls=%v", err, f.calls)
 			}
 		})
+	}
+}
+
+// Quartermaster stamps membership with its database clock, which may run a few
+// milliseconds ahead of Foghorn's. That must never refuse discovery.
+func TestPlacementDiscoveryServesWithQuartermasterClockAhead(t *testing.T) {
+	f := newDiscoveryFixture(t)
+	f.inventory.ObservedAt = timestamppb.New(f.now.Add(50 * time.Millisecond))
+	response, err := f.discovery.QueryPlacementCandidates(context.Background(), f.query)
+	if err != nil || !response.GetComplete() || len(response.GetCandidates()) != 12 {
+		t.Fatalf("clock skew refused discovery: %+v, %v", response, err)
+	}
+}
+
+func TestPlacementDiscoveryRefusalCarriesReasonCode(t *testing.T) {
+	f := newDiscoveryFixture(t)
+	f.snapshot.Nodes[0].ClusterID = "empty"
+	_, err := f.discovery.QueryPlacementCandidates(context.Background(), f.query)
+	if status.Code(err) != codes.Unavailable || !strings.Contains(err.Error(), "node_cluster_mismatch") {
+		t.Fatalf("refusal lost its reason code: %v", err)
 	}
 }

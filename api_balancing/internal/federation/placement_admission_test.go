@@ -56,7 +56,13 @@ func TestPlacementAdmissionRebuildsAuthorityForDirectDestination(t *testing.T) {
 					}},
 				}
 				result, err := gate.Admit(context.Background(), input)
-				if observations.Load() != 2 {
+				// An unreachable cell is observed a second time before the census is
+				// accepted as incomplete.
+				want := int32(2)
+				if preferred == "unreachable" {
+					want = 3
+				}
+				if observations.Load() != want {
 					t.Fatalf("admission omitted a cell: %d", observations.Load())
 				}
 				if preferred != "empty" {

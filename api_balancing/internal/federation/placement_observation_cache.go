@@ -24,9 +24,10 @@ type placementObservationKey struct {
 }
 
 type placementObservationEntry struct {
-	key   placementObservationKey
-	value balancer.PlacementCellObservation
-	until time.Time
+	key    placementObservationKey
+	value  balancer.PlacementCellObservation
+	stored time.Time
+	until  time.Time
 }
 
 type placementObservationFlight struct {
@@ -63,9 +64,16 @@ func (cache *PlacementObservationCache) observe(ctx context.Context, key placeme
 		if !ok {
 			panic("invalid placement observation cache entry")
 		}
-		if cache.now().Before(stored.until) && stored.value.Fresh(cache.now()) {
+		if now := cache.now(); now.Before(stored.until) && stored.value.Fresh(now) {
 			cache.lru.MoveToFront(entry)
 			result := clonePlacementObservation(stored.value)
+			// Refresh ahead: once half the reuse window has passed, fetch the next
+			// observation in the background so the following caller finds a warm
+			// entry instead of paying a cold discovery round trip.
+			if !now.Before(stored.stored.Add(placementObservationReuse/2)) && cache.flights[key] == nil && len(cache.flights) < placementObservationEntries {
+				refreshCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), placementObservationLoadMax)
+				cache.startFlightLocked(key, refreshCtx, cancel, load)
+			}
 			cache.mu.Unlock()
 			return result, ctx.Err()
 		}
@@ -77,8 +85,6 @@ func (cache *PlacementObservationCache) observe(ctx context.Context, key placeme
 			cache.mu.Unlock()
 			return balancer.PlacementCellObservation{}, errors.New("placement observation concurrency limit reached")
 		}
-		flight = &placementObservationFlight{done: make(chan struct{})}
-		cache.flights[key] = flight
 		// A canceled viewer must not cancel the shared read for other viewers.
 		// Preserve the routing deadline when detaching cancellation so the cache
 		// cannot silently truncate the caller's observation budget.
@@ -90,14 +96,7 @@ func (cache *PlacementObservationCache) observe(ctx context.Context, key placeme
 		} else {
 			sharedCtx, cancel = context.WithTimeout(sharedBase, placementObservationLoadMax)
 		}
-		go func() {
-			defer cancel()
-			value, err := load(sharedCtx)
-			if sharedCtx.Err() != nil {
-				value, err = balancer.PlacementCellObservation{}, sharedCtx.Err()
-			}
-			cache.finish(key, flight, value, err)
-		}()
+		flight = cache.startFlightLocked(key, sharedCtx, cancel, load)
 	}
 	cache.mu.Unlock()
 	select {
@@ -109,6 +108,22 @@ func (cache *PlacementObservationCache) observe(ctx context.Context, key placeme
 		}
 		return clonePlacementObservation(flight.value), flight.err
 	}
+}
+
+// startFlightLocked registers and runs one shared load for key. The caller holds
+// cache.mu; the load's result is published to every waiter and to the cache.
+func (cache *PlacementObservationCache) startFlightLocked(key placementObservationKey, ctx context.Context, cancel context.CancelFunc, load func(context.Context) (balancer.PlacementCellObservation, error)) *placementObservationFlight {
+	flight := &placementObservationFlight{done: make(chan struct{})}
+	cache.flights[key] = flight
+	go func() {
+		defer cancel()
+		value, err := load(ctx)
+		if ctx.Err() != nil {
+			value, err = balancer.PlacementCellObservation{}, ctx.Err()
+		}
+		cache.finish(key, flight, value, err)
+	}()
+	return flight
 }
 
 func (cache *PlacementObservationCache) finish(key placementObservationKey, flight *placementObservationFlight, value balancer.PlacementCellObservation, err error) {
@@ -126,7 +141,10 @@ func (cache *PlacementObservationCache) finish(key placementObservationKey, flig
 			for cache.lru.Len() >= placementObservationEntries || cache.candidates+len(value.Candidates) > placementObservationCandidates {
 				cache.remove(cache.lru.Back())
 			}
-			cache.entries[key] = cache.lru.PushFront(placementObservationEntry{key: key, value: flight.value, until: until})
+			if existing := cache.entries[key]; existing != nil {
+				cache.remove(existing)
+			}
+			cache.entries[key] = cache.lru.PushFront(placementObservationEntry{key: key, value: flight.value, stored: now, until: until})
 			cache.candidates += len(value.Candidates)
 		}
 	}

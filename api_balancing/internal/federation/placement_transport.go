@@ -3,6 +3,7 @@ package federation
 import (
 	"context"
 	"errors"
+	"fmt"
 	"slices"
 	"time"
 
@@ -73,30 +74,52 @@ func (transport PlacementTransport) observe(ctx context.Context, cell balancer.P
 	} else {
 		addr := transport.address(cell.ID)
 		if transport.Client == nil || addr == "" {
-			return balancer.PlacementCellObservation{}, errors.New("placement destination cell unavailable")
+			return balancer.PlacementCellObservation{}, fmt.Errorf("placement destination cell %q has no federation address", cell.ID)
 		}
 		response, err = transport.Client.QueryPlacementCandidates(ctx, cell.ID, addr, query)
 	}
 	if err != nil {
 		return balancer.PlacementCellObservation{}, err
 	}
-	if response == nil || response.GetPolicyDigest() != req.PolicyDigest || response.GetPolicyRevision() != req.PolicyRevision ||
-		response.GetParentRevision() != req.ParentRevision || response.GetSourceGeneration() != req.SourceGeneration || len(response.GetCandidates()) > 4096 ||
-		response.GetObservedAt() == nil || !response.GetObservedAt().IsValid() || response.GetExpiresAt() == nil || !response.GetExpiresAt().IsValid() {
-		return balancer.PlacementCellObservation{}, balancer.ErrPlacementObservation
+	if mismatch := placementResponseMismatch(response, req); mismatch != "" {
+		return balancer.PlacementCellObservation{}, fmt.Errorf("%w: cell %q %s", balancer.ErrPlacementObservation, cell.ID, mismatch)
 	}
 	result := balancer.PlacementCellObservation{Complete: response.GetComplete(), ObservedAt: response.GetObservedAt().AsTime(), ExpiresAt: response.GetExpiresAt().AsTime()}
 	for _, observed := range response.GetCandidates() {
 		candidate, decodeErr := placement.CandidateFromProto(observed, req.Verb)
 		if decodeErr != nil {
-			return balancer.PlacementCellObservation{}, decodeErr
+			return balancer.PlacementCellObservation{}, fmt.Errorf("%w: cell %q candidate %s/%s: %w", balancer.ErrPlacementObservation, cell.ID, observed.GetClusterId(), observed.GetNodeId(), decodeErr)
 		}
 		if candidate.TenantID != req.TenantID || !slices.Contains(cell.ClusterIDs, candidate.ClusterID) {
-			return balancer.PlacementCellObservation{}, balancer.ErrPlacementObservation
+			return balancer.PlacementCellObservation{}, fmt.Errorf("%w: cell %q returned candidate %s/%s outside tenant %q or requested clusters", balancer.ErrPlacementObservation, cell.ID, candidate.ClusterID, candidate.NodeID, req.TenantID)
 		}
 		result.Candidates = append(result.Candidates, candidate)
 	}
 	return result, nil
+}
+
+// placementResponseMismatch names the first field of a discovery response that
+// does not match the route it answers, or returns "".
+func placementResponseMismatch(response *placementpb.CandidateObservation, req balancer.PlacementRouteRequest) string {
+	switch {
+	case response == nil:
+		return "returned no observation"
+	case response.GetPolicyDigest() != req.PolicyDigest:
+		return "policy digest differs"
+	case response.GetPolicyRevision() != req.PolicyRevision:
+		return fmt.Sprintf("policy revision %d, route %d", response.GetPolicyRevision(), req.PolicyRevision)
+	case response.GetParentRevision() != req.ParentRevision:
+		return fmt.Sprintf("parent revision %d, route %d", response.GetParentRevision(), req.ParentRevision)
+	case response.GetSourceGeneration() != req.SourceGeneration:
+		return fmt.Sprintf("source generation %q, route %q", response.GetSourceGeneration(), req.SourceGeneration)
+	case len(response.GetCandidates()) > 4096:
+		return fmt.Sprintf("%d candidates exceed the bound", len(response.GetCandidates()))
+	case response.GetObservedAt() == nil || !response.GetObservedAt().IsValid():
+		return "observation time missing or invalid"
+	case response.GetExpiresAt() == nil || !response.GetExpiresAt().IsValid():
+		return "expiry missing or invalid"
+	}
+	return ""
 }
 
 func (transport PlacementTransport) Prepare(ctx context.Context, cell balancer.PlacementCell, req balancer.PlacementPreparationRequest) (balancer.PlacementPreparationResult, error) {

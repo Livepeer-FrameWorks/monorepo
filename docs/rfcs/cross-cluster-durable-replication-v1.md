@@ -4,7 +4,7 @@
 
 Proposed — NOT implemented. Foundation for [`placement-policy-engine.md`](placement-policy-engine.md),
 which depends on this protocol. The current storage-artifact-catalog release ships a truthful
-single-provider foundation (local/official durable storage only); this RFC adds ONE remote durable
+single-provider foundation (durable storage on the artifact's origin cell only); this RFC adds ONE remote durable
 destination: an explicitly subscribed storage-provider cluster.
 
 ## TL;DR
@@ -18,10 +18,9 @@ destination: an explicitly subscribed storage-provider cluster.
 
 ## Current State (single-provider foundation in the current release — do NOT rebuild here)
 
-- `processFreezePermissionRequest`: possession gate + `authorizeStorageReplication`. Storage authority is
-  restricted to the tenant's **official** cluster with **active, unexpired** `tenant_cluster_access` (the
-  Quartermaster peer query filters `expires_at`); generic serving/subscribed access does NOT authorize
-  storage writes; control-cell membership is never authority.
+- `processFreezePermissionRequest`: possession gate + `authorizeStorageReplication`. The durable destination
+  is the artifact's **origin** cluster, and only nodes of that cluster may upload into it; generic
+  serving/subscribed access does NOT authorize storage writes; control-cell membership is never authority.
 - Freeze mints a SERVER-MINTED attempt id (echoed by the node at completion) and a presigned PUT to an
   attempt-scoped STAGING key; completion HEAD-verifies the staging object (refusing a missing / 0-byte
   object, recording the provider-observed size) and PUBLISHES it — a conditional copy to a FRESH, immutable
@@ -39,7 +38,7 @@ destination: an explicitly subscribed storage-provider cluster.
 
 BYOC / self-hosted and marketplace clusters replicating a tenant's media into ANOTHER cluster's durable
 storage — and being billed / settled for it — is a core product path. Today anything remote is rejected
-(`official_storage_remote` / `remote_not_durable`). This RFC defines the bounded protocol that safely adds
+(`origin_storage_remote` / `remote_not_durable`). This RFC defines the bounded protocol that safely adds
 the remote destination.
 
 ## Goals
@@ -74,7 +73,7 @@ the remote destination.
    owner permission today; this RFC narrows the same primitive to per (provider cluster, tenant, scope)
    and adds a `store`/`replicate` verb alongside ingest and serve.
 3. **Destination selection.** explicitly-subscribed durable cluster (store/replicate + consent + writable +
-   healthy) → tenant official cluster (today's path) → fail closed.
+   healthy) → the artifact's origin cluster (today's path) → fail closed.
 4. **Assignment.** Server-minted record: assignment id, customer tenant, artifact id/kind, source
    node/cluster, destination cluster, storage-provider tenant, backend id/kind, exact object keys (main +
    `.dtsh`), expected size/checksum, expiry, status. The node chooses none of these.
@@ -124,7 +123,7 @@ the remote destination.
 
 ## Migration / Rollout
 
-1. Ship the truthful single-provider (local/official) release, then canary.
+1. Ship the truthful single-provider (origin-cell) release, then canary.
 2. Land cluster-bound service identity (dependency).
 3. Build this RFC behind the entitlement/consent gates (no tenant is opted in until a `store`/`replicate`
    grant + provider consent exist), so enabling it is a data change, not a code toggle.

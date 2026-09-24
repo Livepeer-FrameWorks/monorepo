@@ -4,6 +4,9 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"frameworks/api_balancing/internal/ingesterrors"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -154,7 +157,7 @@ func TestPushRewriteDeniedByPlacementReleasesItsClaim(t *testing.T) {
 				calls.Add(1)
 				seen = connection
 				if !allowed {
-					return federation.PlacementAdmissionDecision{}, errors.New("private-only policy has no capacity here")
+					return federation.PlacementAdmissionDecision{}, status.Error(codes.PermissionDenied, "private-only policy has no capacity here")
 				}
 				return federation.PlacementAdmissionDecision{TenantID: connection.TenantID, ObjectID: "live_stream:stream-1", InternalName: connection.InternalName,
 					ClusterID: connection.ClusterID, NodeID: connection.NodeID, Protocol: "rtmp", Verb: placement.Ingest, PolicyDigest: strings.Repeat("cd", 32),
@@ -175,6 +178,9 @@ func TestPushRewriteDeniedByPlacementReleasesItsClaim(t *testing.T) {
 			}
 			if mentions := strings.Contains(err.Error(), "placement policy"); mentions == allowed {
 				t.Fatalf("allowed=%t but error = %v", allowed, err)
+			}
+			if ingestErr, ok := errors.AsType[*ingesterrors.IngestError](err); !allowed && (!ok || ingestErr.Code != ipcpb.IngestErrorCode_INGEST_ERROR_PLACEMENT_DENIED) {
+				t.Fatalf("policy denial not reported as PLACEMENT_DENIED: %v", err)
 			}
 			reqs := fake.requests()
 			if len(reqs) != 1 || len(reqs[0].GetRelease()) != 1 || reqs[0].GetClusterId() != "demo-media" {
