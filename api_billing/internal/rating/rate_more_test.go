@@ -12,15 +12,15 @@ func TestRateCarriesRatedUnitsOnEveryInvoiceLine(t *testing.T) {
 		BasePrice: dec("10"),
 		Rules: []Rule{
 			{Meter: MeterDeliveredMinutes, Model: ModelTieredGraduated, Currency: "EUR", UnitPrice: dec("0.01")},
-			{Meter: MeterStorageGBSecondsCld, Model: ModelAllUsage, Currency: "EUR", UnitPrice: dec("0.03")},
+			{Meter: MeterStorageGBSecondsCld, Model: ModelAllUsage, Currency: "EUR", UnitPrice: dec("0.03"), Config: map[string]any{"rated_quantity_divisor": 2628000, "rated_unit": "gibibyte_month"}},
 		},
 		Usage: map[Meter]decimal.Decimal{
 			MeterDeliveredMinutes:    dec("60"),
-			MeterStorageGBSecondsCld: dec("7200"),
+			MeterStorageGBSecondsCld: dec("5256000"),
 		},
 		Quantities: []DimensionedQuantity{
 			{Meter: MeterDeliveredMinutes, Unit: "minute", Quantity: dec("60")},
-			{Meter: MeterStorageGBSecondsCld, Unit: "gibibyte_second", Dimensions: map[string]string{"storage_scope": "cold"}, Quantity: dec("7200")},
+			{Meter: MeterStorageGBSecondsCld, Unit: "gibibyte_second", Dimensions: map[string]string{"storage_scope": "cold"}, Quantity: dec("5256000")},
 		},
 	})
 	if err != nil {
@@ -38,8 +38,8 @@ func TestRateCarriesRatedUnitsOnEveryInvoiceLine(t *testing.T) {
 	if units[MeterDeliveredMinutes] != "minute" {
 		t.Errorf("delivered unit = %q", units[MeterDeliveredMinutes])
 	}
-	if units[MeterStorageGBSecondsCld] != "gibibyte_hour" || quantities[MeterStorageGBSecondsCld] != "2" {
-		t.Errorf("storage = %s %s, want 2 gibibyte_hour", quantities[MeterStorageGBSecondsCld], units[MeterStorageGBSecondsCld])
+	if units[MeterStorageGBSecondsCld] != "gibibyte_month" || quantities[MeterStorageGBSecondsCld] != "2" {
+		t.Errorf("storage = %s %s, want 2 gibibyte_month", quantities[MeterStorageGBSecondsCld], units[MeterStorageGBSecondsCld])
 	}
 }
 

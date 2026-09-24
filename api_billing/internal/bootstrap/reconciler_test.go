@@ -195,15 +195,17 @@ func TestEmbeddedCatalogShape(t *testing.T) {
 			t.Errorf("free delivered minutes included = %v, want 10000", rule.IncludedQuantity)
 		}
 		if rule.Meter == "storage_gb_seconds_cold" {
+			if rule.Config["rated_quantity_divisor"] != 2628000 || rule.Config["rated_unit"] != "gibibyte_month" {
+				t.Errorf("free storage rated unit config = %+v", rule.Config)
+			}
 			if rule.Model != "tiered_graduated" {
 				t.Errorf("free storage model = %q, want tiered_graduated (visibility line with included quantity)", rule.Model)
 			}
-			// 7200 GiB-hours = 10 GiB held for 30 days. Rating subtracts
-			// included_quantity from GiB-hours (after the GiB-seconds → GiB-hour
-			// conversion in toRatedUnits), so the catalog value is in GiB-hours.
-			// Runtime cap is a separate storage_limit_gb entitlement.
-			if rule.IncludedQuantity != 7200 {
-				t.Errorf("free storage included = %v, want 7200 GiB-hours (10 GiB × 30 days)", rule.IncludedQuantity)
+			// Rating subtracts included_quantity after the GiB-seconds →
+			// GiB-month conversion in toRatedUnits, so the catalog value is in
+			// GiB-months. Runtime cap is a separate storage_limit_gb entitlement.
+			if rule.IncludedQuantity != 10 {
+				t.Errorf("free storage included = %v, want 10 GiB-months", rule.IncludedQuantity)
 			}
 		}
 	}

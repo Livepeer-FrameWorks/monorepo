@@ -8,6 +8,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/billing"
 	"github.com/shopspring/decimal"
 )
 
@@ -131,10 +132,8 @@ func Rate(in Input) (Result, error) {
 	}, nil
 }
 
-// toRatedUnits converts a rule's stored unit to its rated unit. Storage meters
-// are stored as GiB-seconds internally but priced per GiB-hour, so the engine
-// divides by 3600 before multiplying by unit_price. Custom meters can set
-// config.rated_quantity_divisor for the same behavior without code changes.
+// Storage rules without an explicit rated unit retain the GiB-hour contract
+// under which they were persisted. The catalog opts into GiB-months in config.
 func toRatedUnits(rule Rule, quantity decimal.Decimal) decimal.Decimal {
 	if divisor, ok := decimalFromAny(rule.Config["rated_quantity_divisor"]); ok && divisor.IsPositive() {
 		return quantity.Div(divisor)
@@ -145,6 +144,13 @@ func toRatedUnits(rule Rule, quantity decimal.Decimal) decimal.Decimal {
 	default:
 		return quantity
 	}
+}
+
+// StoragePricingGiBMonths expresses a stored rule's allowance and price in
+// GiB-months using the same conversion that Rate applies to usage.
+func StoragePricingGiBMonths(rule Rule) (decimal.Decimal, decimal.Decimal) {
+	ratedPerMonth := toRatedUnits(rule, decimal.NewFromInt(billing.GiBSecondsPerGiBMonth))
+	return rule.IncludedQuantity.Div(ratedPerMonth), rule.UnitPrice.Mul(ratedPerMonth)
 }
 
 func quantityUnit(quantities []DimensionedQuantity, meter Meter) string {
@@ -180,7 +186,7 @@ func ratedUnit(rule Rule, sourceUnit string) string {
 }
 
 // rateTieredGraduated charges (quantity - included) * unit_price after
-// unit conversion for the meter (storage → GiB-hours, others pass through).
+// unit conversion for the meter (storage uses its rule's rated unit).
 // Returns ok=false when the line would be a $0 row with no meaningful info.
 func rateTieredGraduated(rule Rule, quantity decimal.Decimal, unit, currency string) (LineItem, bool) {
 	if quantity.IsZero() {

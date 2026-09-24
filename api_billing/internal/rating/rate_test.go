@@ -29,21 +29,22 @@ func supporterRules() []Rule {
 			// optimization) and has no default rule.
 			Meter: MeterStorageGBSecondsCld, Model: ModelAllUsage, Currency: "EUR",
 			UnitPrice: dec("0.035000"),
+			Config:    map[string]any{"rated_quantity_divisor": 2628000, "rated_unit": "gibibyte_month"},
 		},
 	}
 }
 
 func TestRate_Supporter_StorageNeverUsesRetentionDays(t *testing.T) {
 	// Retention is an entitlement, not an allowance on the storage meter.
-	// Storage is stored as GiB-seconds internally and rated as GiB-hours.
-	// 100 GiB held for one hour = 360_000 GiB-seconds → 100 GiB-hours →
-	// 100 × €0.035 = €3.50 (no retention-days subtraction).
+	// Storage is stored as GiB-seconds internally and rated as GiB-months
+	// (730 hours). 100 GiB held for a full month = 262_800_000 GiB-seconds →
+	// 100 GiB-months → 100 × €0.035 = €3.50 (no retention-days subtraction).
 	res, err := Rate(Input{
 		Currency:  "EUR",
 		BasePrice: dec("79.00"),
 		Rules:     supporterRules(),
 		Usage: map[Meter]decimal.Decimal{
-			MeterStorageGBSecondsCld: dec("360000"), // 100 GB × 3600 s
+			MeterStorageGBSecondsCld: dec("262800000"), // 100 GiB × 730 h × 3600 s
 		},
 	})
 	if err != nil {
@@ -51,12 +52,61 @@ func TestRate_Supporter_StorageNeverUsesRetentionDays(t *testing.T) {
 	}
 
 	storage := findLine(t, res.UsageLines, "meter:storage_gb_seconds_cold")
-	wantAmount := dec("3.50") // 100 GiB-hours × 0.035
+	wantAmount := dec("3.50") // 100 GiB-months × 0.035
 	if !storage.Amount.Equal(wantAmount) {
 		t.Errorf("storage amount = %s, want %s", storage.Amount, wantAmount)
 	}
 	if !storage.BillableQuantity.Equal(dec("100")) {
-		t.Errorf("storage billable = %s GiB-hours, want 100", storage.BillableQuantity)
+		t.Errorf("storage billable = %s GiB-months, want 100", storage.BillableQuantity)
+	}
+	if storage.Unit != "gibibyte_month" {
+		t.Errorf("storage unit = %q, want gibibyte_month", storage.Unit)
+	}
+}
+
+func TestRate_StorageProratesPartialMonth(t *testing.T) {
+	// 10 GiB held for 73 hours is a tenth of a 730-hour month: 1 GiB-month
+	// at €0.035 = €0.035. Guards against rating storage per GiB-hour again,
+	// which would charge 730× this amount.
+	res, err := Rate(Input{
+		Currency:  "EUR",
+		BasePrice: dec("79.00"),
+		Rules:     supporterRules(),
+		Usage: map[Meter]decimal.Decimal{
+			MeterStorageGBSecondsCld: dec("2628000"), // 10 GiB × 73 h × 3600 s
+		},
+	})
+	if err != nil {
+		t.Fatalf("Rate: %v", err)
+	}
+	storage := findLine(t, res.UsageLines, "meter:storage_gb_seconds_cold")
+	if !storage.BillableQuantity.Equal(dec("1")) {
+		t.Errorf("storage billable = %s GiB-months, want 1", storage.BillableQuantity)
+	}
+	if !storage.Amount.Equal(dec("0.035")) {
+		t.Errorf("storage amount = %s, want 0.035", storage.Amount)
+	}
+}
+
+func TestRate_UnmarkedStorageRuleRetainsHourlyPrice(t *testing.T) {
+	rule := Rule{
+		Meter: MeterStorageGBSecondsCld, Model: ModelTieredGraduated, Currency: "EUR",
+		IncludedQuantity: dec("730"), UnitPrice: dec("0.035"),
+	}
+	res, err := Rate(Input{
+		Currency: "EUR", Rules: []Rule{rule},
+		Usage: map[Meter]decimal.Decimal{MeterStorageGBSecondsCld: dec("2631600")},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	storage := findLine(t, res.UsageLines, "meter:storage_gb_seconds_cold")
+	if storage.Unit != "gibibyte_hour" || !storage.BillableQuantity.Equal(dec("1")) || !storage.Amount.Equal(dec("0.035")) {
+		t.Fatalf("unmarked storage rule repriced: %+v", storage)
+	}
+	included, price := StoragePricingGiBMonths(rule)
+	if !included.Equal(dec("1")) || !price.Equal(dec("25.55")) {
+		t.Fatalf("hourly price normalization = %s included, %s per GiB-month", included, price)
 	}
 }
 
@@ -321,15 +371,16 @@ func TestRate_NegativeAllUsageCreatesCreditLine(t *testing.T) {
 			Model:     ModelAllUsage,
 			Currency:  "EUR",
 			UnitPrice: dec("0.035"),
+			Config:    map[string]any{"rated_quantity_divisor": 2628000, "rated_unit": "gibibyte_month"},
 		}},
-		Usage: map[Meter]decimal.Decimal{MeterStorageGBSecondsCld: dec("-3600")},
+		Usage: map[Meter]decimal.Decimal{MeterStorageGBSecondsCld: dec("-2628000")},
 	})
 	if err != nil {
 		t.Fatalf("Rate: %v", err)
 	}
 	line := findLine(t, res.UsageLines, "meter:storage_gb_seconds_cold")
 	if !line.BillableQuantity.Equal(dec("-1")) {
-		t.Errorf("billable = %s GiB-hours, want -1", line.BillableQuantity)
+		t.Errorf("billable = %s GiB-months, want -1", line.BillableQuantity)
 	}
 	if !line.Amount.Equal(dec("-0.035")) {
 		t.Errorf("amount = %s, want -0.035", line.Amount)
@@ -580,8 +631,8 @@ func TestRate_WaiveUsageCharges_ZeroesNetPreservesGross(t *testing.T) {
 		Rules:             supporterRules(),
 		WaiveUsageCharges: true,
 		Usage: map[Meter]decimal.Decimal{
-			MeterDeliveredMinutes:    dec("10000000"), // garbage-huge: 10M minutes
-			MeterStorageGBSecondsCld: dec("360000"),   // 100 GiB-hours
+			MeterDeliveredMinutes:    dec("10000000"),  // garbage-huge: 10M minutes
+			MeterStorageGBSecondsCld: dec("262800000"), // 100 GiB-months
 		},
 	})
 	if err != nil {
@@ -593,7 +644,7 @@ func TestRate_WaiveUsageCharges_ZeroesNetPreservesGross(t *testing.T) {
 		t.Errorf("UsageAmount = %s, want 0 (waived)", res.UsageAmount)
 	}
 	// Gross is the real would-have-cost: (10_000_000 - 120_000) × 0.00055
-	// + 100 GiB-hours × 0.035 = 5434.00 + 3.50 = 5437.50.
+	// + 100 GiB-months × 0.035 = 5434.00 + 3.50 = 5437.50.
 	wantGross := dec("5437.50")
 	if !res.GrossUsageAmount.Equal(wantGross) {
 		t.Errorf("GrossUsageAmount = %s, want %s", res.GrossUsageAmount, wantGross)

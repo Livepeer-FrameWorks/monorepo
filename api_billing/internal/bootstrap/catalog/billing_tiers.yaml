@@ -26,6 +26,8 @@
 #     model: all_usage        -- qty * unit_price
 #     model: dimensioned      -- most-specific config.rates selector wins for codec, model, backend, or provider
 #     unit_price stored as string for decimal precision.
+#     Catalog storage rules explicitly rate GiB-seconds per GiB-month (730
+#     hours); unmarked persisted storage rules retain their GiB-hour unit.
 #
 #   features: models.BillingFeatures keys only: support_level, sla, and
 #     processing_customizable (Commodore allows tenant process overrides).
@@ -63,6 +65,7 @@ tiers:
       - meter: storage_gb_seconds_cold
         model: all_usage
         unit_price: "0.035"
+        config: { rated_quantity_divisor: 2628000, rated_unit: gibibyte_month }
     tier_level: 0
     is_enterprise: false
     is_default_prepaid: true
@@ -99,7 +102,7 @@ tiers:
       dvr_max_entries: 600
       dvr_allow_cluster_extension: false
       # storage_limit_gb is the hard runtime cap on current durable bytes.
-      # The matching pricing rule (storage_gb_seconds_cold included_quantity: 7200)
+      # The matching pricing rule (storage_gb_seconds_cold included_quantity: 10)
       # is for invoice-line visibility only — billing is time-averaged, this
       # entitlement is point-in-time. New durable writes (recordings, VOD
       # uploads, clip exports) are rejected once a tenant's current artifact
@@ -116,11 +119,12 @@ tiers:
         unit_price: "0"
       - meter: storage_gb_seconds_cold
         model: tiered_graduated
-        # 7200 GiB-hours = 10 GiB held continuously for 30 days. The rating
-        # engine subtracts included_quantity from GiB-hours (after the
-        # GiB-seconds → GiB-hour conversion), so this value is in GiB-hours.
-        included_quantity: 7200
+        # 10 GiB-months = 10 GiB held for the whole month. The rating engine
+        # subtracts included_quantity after the GiB-seconds → GiB-month
+        # conversion, so this value is in GiB-months.
+        included_quantity: 10
         unit_price: "0"
+        config: { rated_quantity_divisor: 2628000, rated_unit: gibibyte_month }
     tier_level: 1
     is_enterprise: false
     is_default_prepaid: false
@@ -159,6 +163,7 @@ tiers:
       - meter: storage_gb_seconds_cold
         model: all_usage
         unit_price: "0.035"
+        config: { rated_quantity_divisor: 2628000, rated_unit: gibibyte_month }
     tier_level: 2
     is_enterprise: false
     is_default_prepaid: false
@@ -197,6 +202,7 @@ tiers:
       - meter: storage_gb_seconds_cold
         model: all_usage
         unit_price: "0.030"
+        config: { rated_quantity_divisor: 2628000, rated_unit: gibibyte_month }
     tier_level: 3
     is_enterprise: false
     is_default_prepaid: false
@@ -236,6 +242,7 @@ tiers:
       - meter: storage_gb_seconds_cold
         model: all_usage
         unit_price: "0.025"
+        config: { rated_quantity_divisor: 2628000, rated_unit: gibibyte_month }
     tier_level: 4
     is_enterprise: false
     is_default_prepaid: false

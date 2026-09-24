@@ -106,13 +106,16 @@ ON CONFLICT (tier_id, key) DO UPDATE SET value = EXCLUDED.value;
 
 -- Tier pricing rules (one row per tier x meter).
 INSERT INTO purser.tier_pricing_rules (tier_id, meter, model, currency, included_quantity, unit_price, config)
-SELECT bt.id, r.meter, r.model, 'EUR', r.included_quantity, r.unit_price, '{}'::jsonb
+SELECT bt.id, r.meter, r.model, 'EUR', r.included_quantity, r.unit_price,
+    CASE WHEN r.meter = 'storage_gb_seconds_cold'
+        THEN '{"rated_quantity_divisor":2628000,"rated_unit":"gibibyte_month"}'::jsonb
+        ELSE '{}'::jsonb END
 FROM purser.billing_tiers bt
 JOIN (VALUES
     ('payg', 'delivered_minutes', 'tiered_graduated', 0, 0.00055),
     ('payg', 'storage_gb_seconds_cold', 'all_usage', 0, 0.035),
     ('free', 'delivered_minutes', 'tiered_graduated', 10000, 0),
-    ('free', 'storage_gb_seconds_cold', 'tiered_graduated', 7200, 0),
+    ('free', 'storage_gb_seconds_cold', 'tiered_graduated', 10, 0),
     ('supporter', 'delivered_minutes', 'tiered_graduated', 120000, 0.00055),
     ('supporter', 'storage_gb_seconds_cold', 'all_usage', 0, 0.035),
     ('developer', 'delivered_minutes', 'tiered_graduated', 500000, 0.00052),
@@ -293,9 +296,9 @@ INSERT INTO purser.billing_invoices (
     DATE_TRUNC('month', NOW()) + INTERVAL '1 month' + INTERVAL '14 days',
     NULL,
     249.00,  -- Developer tier base
-    0.71,    -- Storage: 23.5 GiB-hours x EUR 0.030
+    0.71,    -- Storage: 23.5 GiB-months x EUR 0.030
     0.71,    -- gross == metered (no waiver)
-    '{"delivered_minutes": 250000.2, "storage_gb_seconds_cold": 84600.0, "stream_runtime_seconds": 459000.0, "ingress_gb": 82.0, "egress_gb": 456.78, "tier_info": {"tier_name": "developer", "display_name": "Developer", "base_price": 249.0, "metering_enabled": true}}',
+    '{"delivered_minutes": 250000.2, "storage_gb_seconds_cold": 61758000.0, "stream_runtime_seconds": 459000.0, "ingress_gb": 82.0, "egress_gb": 456.78, "tier_info": {"tier_name": "developer", "display_name": "Developer", "base_price": 249.0, "metering_enabled": true}}',
     DATE_TRUNC('month', NOW())
 ),
 -- Previous month (paid invoice)
@@ -312,7 +315,7 @@ INSERT INTO purser.billing_invoices (
     249.00,
     1.36,
     1.36,    -- gross == metered (no waiver)
-    '{"delivered_minutes": 450000.0, "storage_gb_seconds_cold": 162720.0, "stream_runtime_seconds": 1231200.0, "ingress_gb": 214.0, "egress_gb": 1245.6, "tier_info": {"tier_name": "developer", "display_name": "Developer", "base_price": 249.0, "metering_enabled": true}}',
+    '{"delivered_minutes": 450000.0, "storage_gb_seconds_cold": 118785600.0, "stream_runtime_seconds": 1231200.0, "ingress_gb": 214.0, "egress_gb": 1245.6, "tier_info": {"tier_name": "developer", "display_name": "Developer", "base_price": 249.0, "metering_enabled": true}}',
     DATE_TRUNC('month', NOW() - INTERVAL '1 month')
 ),
 -- Two months ago (paid invoice)
@@ -378,7 +381,7 @@ INSERT INTO purser.invoice_line_items (
     '5eed517e-ba5e-da7a-517e-ba5eda7a0001',
     'meter:storage_gb_seconds_cold:demo-media:' || TO_CHAR(DATE_TRUNC('month', NOW()), 'YYYYMM'),
     'storage_gb_seconds_cold',
-    'gibibyte_hour',
+    'gibibyte_month',
     '{"storage_backend":"object","storage_scope":"cold"}',
     'Cold storage',
     23.5, 0, 23.5, 0.030, 0.71, 'EUR',
@@ -411,7 +414,7 @@ INSERT INTO purser.invoice_line_items (
     '5eed517e-ba5e-da7a-517e-ba5eda7a0001',
     'meter:storage_gb_seconds_cold:demo-media:' || TO_CHAR(DATE_TRUNC('month', NOW() - INTERVAL '1 month'), 'YYYYMM'),
     'storage_gb_seconds_cold',
-    'gibibyte_hour',
+    'gibibyte_month',
     '{"storage_backend":"object","storage_scope":"cold"}',
     'Cold storage',
     45.2, 0, 45.2, 0.030, 1.36, 'EUR',

@@ -435,7 +435,7 @@ func TestUpdateInvoiceDraftWritesRatedLineItemsTransactionally(t *testing.T) {
 	mock.ExpectQuery(`FROM purser\.tier_pricing_rules`).
 		WithArgs(tierID).
 		WillReturnRows(sqlmock.NewRows([]string{"meter", "model", "currency", "included_quantity", "unit_price", "config"}).
-			AddRow("storage_gb_seconds_hot", "all_usage", currency, "0", "1.00", "{}"))
+			AddRow("storage_gb_seconds_hot", "all_usage", currency, "0", "1.00", `{"rated_quantity_divisor":2628000,"rated_unit":"gibibyte_month"}`))
 	mock.ExpectQuery(`FROM purser\.subscription_pricing_overrides`).
 		WithArgs(subscriptionID).
 		WillReturnRows(sqlmock.NewRows([]string{"meter", "model", "currency", "included_quantity", "unit_price", "config"}))
@@ -455,14 +455,13 @@ func TestUpdateInvoiceDraftWritesRatedLineItemsTransactionally(t *testing.T) {
 		WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(0))
 		// New per-cluster shape: rows carry cluster_id. Empty cluster_id
 		// resolves through platform-official tier pricing.
-	// 7200 GiB-seconds = 2 GiB-hours under the GiB-seconds→GiB-hour
-	// rating conversion. The tier prices hot at $1/GiB-hour, so the
-	// resulting metered line is $2.00 — same as before, but the
-	// underlying ledger value reflects the canonical unit.
+	// 5,256,000 GiB-seconds = 2 GiB-months under the GiB-seconds→GiB-month
+	// rating conversion. The tier prices hot at $1/GiB-month, so the
+	// resulting metered line is $2.00.
 	mock.ExpectQuery(`FROM purser\.usage_records`).
 		WithArgs(tenantID, periodStart, periodEnd).
 		WillReturnRows(sqlmock.NewRows([]string{"cluster_id", "usage_type", "aggregated_value"}).
-			AddRow("", "storage_gb_seconds_hot", 7200.0))
+			AddRow("", "storage_gb_seconds_hot", 5256000.0))
 	mock.ExpectQuery(`dimensioned_rows AS`).
 		WithArgs(tenantID, periodStart, periodEnd).
 		WillReturnRows(sqlmock.NewRows([]string{"cluster_id", "usage_type", "unit", "dimensions", "quantity"}))
@@ -534,7 +533,7 @@ func TestUpdateInvoiceDraftClampsPriorPrepaidCreditToZeroNet(t *testing.T) {
 	mock.ExpectQuery(`FROM purser\.tier_pricing_rules`).
 		WithArgs(tierID).
 		WillReturnRows(sqlmock.NewRows([]string{"meter", "model", "currency", "included_quantity", "unit_price", "config"}).
-			AddRow("storage_gb_seconds_hot", "all_usage", currency, "0", "1.00", "{}"))
+			AddRow("storage_gb_seconds_hot", "all_usage", currency, "0", "1.00", `{"rated_quantity_divisor":2628000,"rated_unit":"gibibyte_month"}`))
 	mock.ExpectQuery(`FROM purser\.subscription_pricing_overrides`).
 		WithArgs(subscriptionID).
 		WillReturnRows(sqlmock.NewRows([]string{"meter", "model", "currency", "included_quantity", "unit_price", "config"}))
@@ -552,12 +551,12 @@ func TestUpdateInvoiceDraftClampsPriorPrepaidCreditToZeroNet(t *testing.T) {
 	mock.ExpectQuery(`SELECT COUNT\(\*\) FROM purser\.billing_invoices`).
 		WithArgs(tenantID, periodStart).
 		WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(0))
-	// 7200 GiB-seconds = 2 GiB-hours under the GiB-seconds→GiB-hour
-	// rating conversion. Tier prices hot at $1/GiB-hour → $2 metered.
+	// 5,256,000 GiB-seconds = 2 GiB-months under the GiB-seconds→GiB-month
+	// rating conversion. Tier prices hot at $1/GiB-month → $2 metered.
 	mock.ExpectQuery(`FROM purser\.usage_records`).
 		WithArgs(tenantID, periodStart, periodEnd).
 		WillReturnRows(sqlmock.NewRows([]string{"cluster_id", "usage_type", "aggregated_value"}).
-			AddRow("", "storage_gb_seconds_hot", 7200.0))
+			AddRow("", "storage_gb_seconds_hot", 5256000.0))
 	mock.ExpectQuery(`dimensioned_rows AS`).
 		WithArgs(tenantID, periodStart, periodEnd).
 		WillReturnRows(sqlmock.NewRows([]string{"cluster_id", "usage_type", "unit", "dimensions", "quantity"}))

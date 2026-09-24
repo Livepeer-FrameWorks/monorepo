@@ -589,7 +589,7 @@ The dashboard rollup contract is part of the billing safety model: replacement r
 
 Notes:
 
-- Use `docs/standards/metrics.md` for unit conversions (`_bps`, `_gb`, `_bytes`, etc.). Storage is stored as GiB-seconds internally and rated as GiB-hours (rating engine divides by 3600).
+- Use `docs/standards/metrics.md` for unit conversions (`_bps`, `_gb`, `_bytes`, etc.). Storage is stored as GiB-seconds internally and rated as GiB-months (rating engine divides by 2,628,000, a fixed 730-hour month).
 - "Peak bandwidth" is default-unrated and derived from `client_qoe_5m.avg_bw_out`; custom/marketplace pricing can opt in with an explicit meter rule.
 
 ### Cross-cluster billing attribution
