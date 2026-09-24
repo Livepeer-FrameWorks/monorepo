@@ -489,7 +489,7 @@ Skipper ships with curated source files in `config/skipper/sitemaps/`:
 | `hls-spec.txt`   | HLS specification (IETF RFCs)                             |
 | `faq.txt`        | Curated local FAQ and troubleshooting articles            |
 
-Set `SKIPPER_SITEMAPS_DIR` to the directory containing these files. In Docker Compose, this is mounted as a read-only volume at `/etc/skipper/sitemaps`.
+Set `SKIPPER_SITEMAPS_DIR` to the directory containing these files. In Docker Compose, this is mounted as a read-only volume at `/etc/skipper/sitemaps`. The `frameworks` CLI embeds these files and places them at `/etc/skipper` when it deploys Skipper, so no repository checkout is needed on the operator machine.
 
 ### Adding Custom Sources
 
