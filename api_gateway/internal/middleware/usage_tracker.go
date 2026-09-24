@@ -127,6 +127,7 @@ type aggregate struct {
 	mu              sync.Mutex
 	RequestCount    uint32
 	ErrorCount      uint32
+	GraphQLErrors   uint32
 	TotalDurationMs uint64
 	TotalComplexity uint32
 	UserHashes      map[uint64]struct{}
@@ -250,23 +251,25 @@ func (ut *UsageTracker) flush() {
 		}
 
 		protoAgg := &ipcpb.APIRequestAggregate{
-			TenantId:        key.TenantID,
-			AuthType:        key.AuthType,
-			OperationType:   key.OperationType,
-			OperationName:   key.OperationName,
-			RequestCount:    agg.RequestCount,
-			ErrorCount:      agg.ErrorCount,
-			TotalDurationMs: agg.TotalDurationMs,
-			TotalComplexity: agg.TotalComplexity,
-			UserHashes:      userHashes,
-			TokenHashes:     tokenHashes,
-			Timestamp:       agg.FirstSeenAt,
-			RootFields:      rootFieldsFromSignature(key.RootFields),
+			TenantId:          key.TenantID,
+			AuthType:          key.AuthType,
+			OperationType:     key.OperationType,
+			OperationName:     key.OperationName,
+			RequestCount:      agg.RequestCount,
+			ErrorCount:        agg.ErrorCount,
+			GraphqlErrorCount: agg.GraphQLErrors,
+			TotalDurationMs:   agg.TotalDurationMs,
+			TotalComplexity:   agg.TotalComplexity,
+			UserHashes:        userHashes,
+			TokenHashes:       tokenHashes,
+			Timestamp:         agg.FirstSeenAt,
+			RootFields:        rootFieldsFromSignature(key.RootFields),
 		}
 
 		// Reset counters after snapshotting so a failed send can be retried.
 		agg.RequestCount = 0
 		agg.ErrorCount = 0
+		agg.GraphQLErrors = 0
 		agg.TotalDurationMs = 0
 		agg.TotalComplexity = 0
 		agg.UserHashes = nil
@@ -398,8 +401,10 @@ func (ut *UsageTracker) sendServiceEvent(event *ipcpb.ServiceEvent, aggregateCou
 
 // Record records a single API request. rootFields are the GraphQL root field
 // names the request resolved; requests with different signatures aggregate
-// separately.
-func (ut *UsageTracker) Record(startedAt time.Time, tenantID, authType, opType, opName string, rootFields []string, userID string, tokenHash uint64, durationMs uint64, complexity uint32, errorCount uint32) {
+// separately. A request counts once toward the error count when it failed or
+// returned any GraphQL error; graphqlErrors is the number of GraphQL errors
+// in its response.
+func (ut *UsageTracker) Record(startedAt time.Time, tenantID, authType, opType, opName string, rootFields []string, userID string, tokenHash uint64, durationMs uint64, complexity uint32, failed bool, graphqlErrors uint32) {
 	key := aggregateKey{
 		TenantID:      tenantID,
 		AuthType:      authType,
@@ -419,9 +424,10 @@ func (ut *UsageTracker) Record(startedAt time.Time, tenantID, authType, opType, 
 	agg.RequestCount++
 	agg.TotalDurationMs += durationMs
 	agg.TotalComplexity += complexity
-	if errorCount > 0 {
-		agg.ErrorCount += errorCount
+	if failed || graphqlErrors > 0 {
+		agg.ErrorCount++
 	}
+	agg.GraphQLErrors += graphqlErrors
 	if userID != "" {
 		userHash := hashIdentifier(userID)
 		if userHash != 0 {
@@ -560,32 +566,30 @@ func UsageTrackerMiddleware(tracker *UsageTracker) gin.HandlerFunc {
 			}
 		}
 
-		var errorCount uint32
+		var graphqlErrors uint32
 		if v, ok := c.Get(string(ctxkeys.KeyGraphQLErrorCount)); ok {
 			switch t := v.(type) {
 			case int:
 				if t > 0 {
-					errorCount = uint32(t)
+					graphqlErrors = uint32(t)
 				}
 			case int32:
 				if t > 0 {
-					errorCount = uint32(t)
+					graphqlErrors = uint32(t)
 				}
 			case int64:
 				if t > 0 {
-					errorCount = uint32(t)
+					graphqlErrors = uint32(t)
 				}
 			case uint32:
-				errorCount = t
+				graphqlErrors = t
 			case uint64:
 				if t > 0 {
-					errorCount = uint32(t)
+					graphqlErrors = uint32(t)
 				}
 			}
 		}
-		if errorCount == 0 && (len(c.Errors) > 0 || c.Writer.Status() >= 400) {
-			errorCount = 1
-		}
+		failed := len(c.Errors) > 0 || c.Writer.Status() >= 400
 
 		var rootFields []string
 		if v, ok := c.Get(string(ctxkeys.KeyGraphQLRootFields)); ok {
@@ -597,6 +601,6 @@ func UsageTrackerMiddleware(tracker *UsageTracker) gin.HandlerFunc {
 		}
 
 		// Record the request
-		tracker.Record(start, tenantID, authType, opType, opName, rootFields, userID, tokenHash, uint64(duration), complexity, errorCount)
+		tracker.Record(start, tenantID, authType, opType, opName, rootFields, userID, tokenHash, uint64(duration), complexity, failed, graphqlErrors)
 	}
 }

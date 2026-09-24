@@ -7,10 +7,14 @@ import (
 	"github.com/99designs/gqlgen/complexity"
 	"github.com/99designs/gqlgen/graphql"
 	"github.com/99designs/gqlgen/graphql/errcode"
+	"github.com/99designs/gqlgen/graphql/handler/extension"
 	"github.com/vektah/gqlparser/v2/gqlerror"
 )
 
 const complexityExtensionName = "ScalarFreeComplexityLimit"
+
+// stockComplexityStatsKey is the Stats extension key extension.GetComplexityStats reads.
+const stockComplexityStatsKey = "ComplexityLimit"
 
 // errComplexityLimit matches gqlgen's stock code so clients see the same error code.
 const errComplexityLimit = "COMPLEXITY_LIMIT_EXCEEDED"
@@ -52,6 +56,12 @@ func (c ScalarFreeComplexityLimit) MutateOperationContext(
 	cost := complexity.Calculate(ctx, c.es, op, opCtx.Variables, complexity.WithFixedScalarValue(0))
 
 	limit := c.Func(ctx, opCtx)
+	// Recorded under the stock extension's key so extension.GetComplexityStats
+	// (read by usage tracking) sees the scalar-free cost.
+	opCtx.Stats.SetExtension(stockComplexityStatsKey, &extension.ComplexityStats{
+		Complexity:      cost,
+		ComplexityLimit: limit,
+	})
 	if cost > limit {
 		err := gqlerror.Errorf(
 			"operation has complexity %d, which exceeds the limit of %d",

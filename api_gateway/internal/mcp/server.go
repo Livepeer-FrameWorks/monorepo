@@ -514,13 +514,11 @@ func (s *Server) registerAccessMiddleware() {
 				if tenantID == "" {
 					tenantID = tenants.AnonymousTenantID.String()
 				}
-				errorCount := uint32(0)
-				if err != nil {
-					errorCount = 1
-				} else if toolResult, ok := result.(*mcp.CallToolResult); ok && toolResult != nil && toolResult.IsError {
-					errorCount = 1
+				failed := err != nil
+				if toolResult, ok := result.(*mcp.CallToolResult); ok && toolResult != nil && toolResult.IsError {
+					failed = true
 				}
-				s.usageTracker.Record(start, tenantID, authType, "mcp", opName, nil, userID, getContextTokenHash(ctx), durationMs, 0, errorCount)
+				s.usageTracker.Record(start, tenantID, authType, "mcp", opName, nil, userID, getContextTokenHash(ctx), durationMs, 0, failed, 0)
 			}
 
 			return result, err

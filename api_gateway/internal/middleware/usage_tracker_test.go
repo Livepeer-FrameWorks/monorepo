@@ -3,6 +3,8 @@ package middleware
 import (
 	"context"
 	"errors"
+	"net/http"
+	"net/http/httptest"
 	"reflect"
 	"sort"
 	"sync"
@@ -10,9 +12,11 @@ import (
 	"time"
 
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/clients/decklog"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/ctxkeys"
 	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
 
 	"github.com/99designs/gqlgen/graphql"
+	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
 	"github.com/vektah/gqlparser/v2"
 	"github.com/vektah/gqlparser/v2/ast"
@@ -51,7 +55,7 @@ func TestUsageTrackerFlushWithNilDecklogDoesNotResetAggregates(t *testing.T) {
 	defer tracker.Stop()
 
 	startedAt := time.Now()
-	tracker.Record(startedAt, "tenant-1", "jwt", "query", "GetStreams", []string{"streams"}, "user-1", 0, 100, 5, 0)
+	tracker.Record(startedAt, "tenant-1", "jwt", "query", "GetStreams", []string{"streams"}, "user-1", 0, 100, 5, false, 0)
 
 	tracker.flush()
 
@@ -87,9 +91,9 @@ func TestUsageTrackerAggregatesByRootFieldSignature(t *testing.T) {
 	defer tracker.Stop()
 
 	now := time.Now()
-	tracker.Record(now, "tenant-1", "api_token", "query", "", []string{"streams", "clips"}, "user-1", 7, 10, 1, 0)
-	tracker.Record(now, "tenant-1", "api_token", "query", "", []string{"clips", "streams", "clips"}, "user-1", 7, 20, 1, 0)
-	tracker.Record(now, "tenant-1", "api_token", "query", "", []string{"invoices"}, "user-1", 7, 30, 1, 1)
+	tracker.Record(now, "tenant-1", "api_token", "query", "", []string{"streams", "clips"}, "user-1", 7, 10, 1, false, 0)
+	tracker.Record(now, "tenant-1", "api_token", "query", "", []string{"clips", "streams", "clips"}, "user-1", 7, 20, 1, false, 0)
+	tracker.Record(now, "tenant-1", "api_token", "query", "", []string{"invoices"}, "user-1", 7, 30, 1, false, 1)
 	tracker.flush()
 
 	if len(sink.delivered) != 1 {
@@ -113,6 +117,49 @@ func TestUsageTrackerAggregatesByRootFieldSignature(t *testing.T) {
 	}
 }
 
+// error_count counts failed requests, so it never exceeds request_count;
+// graphql_error_count carries the total number of GraphQL errors.
+func TestUsageTrackerMiddlewareCountsFailedRequestsAndGraphQLErrorsSeparately(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	sink := &recordingDecklog{}
+	tracker := NewUsageTracker(UsageTrackerConfig{Decklog: sink, FlushInterval: time.Hour, ServiceTenantID: "owner"})
+	defer tracker.Stop()
+
+	r := gin.New()
+	r.Use(UsageTrackerMiddleware(tracker))
+	r.POST("/graphql", func(c *gin.Context) {
+		switch c.Query("case") {
+		case "three-errors":
+			c.Set(string(ctxkeys.KeyGraphQLErrorCount), 3)
+			c.Status(http.StatusOK)
+		case "http-failure":
+			c.Set(string(ctxkeys.KeyGraphQLErrorCount), 0)
+			c.Status(http.StatusInternalServerError)
+		default:
+			c.Set(string(ctxkeys.KeyGraphQLErrorCount), 0)
+			c.Status(http.StatusOK)
+		}
+	})
+	for _, name := range []string{"three-errors", "ok", "http-failure"} {
+		req := httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/graphql?case="+name, nil)
+		r.ServeHTTP(httptest.NewRecorder(), req)
+	}
+	tracker.flush()
+
+	if len(sink.delivered) != 1 {
+		t.Fatalf("delivered %d batches, want 1", len(sink.delivered))
+	}
+	aggs := sink.delivered[0].GetApiRequestBatch().GetAggregates()
+	if len(aggs) != 1 {
+		t.Fatalf("got %d aggregates, want 1", len(aggs))
+	}
+	agg := aggs[0]
+	if agg.GetRequestCount() != 3 || agg.GetErrorCount() != 2 || agg.GetGraphqlErrorCount() != 3 {
+		t.Fatalf("requests/errors/graphql_errors = %d/%d/%d, want 3/2/3",
+			agg.GetRequestCount(), agg.GetErrorCount(), agg.GetGraphqlErrorCount())
+	}
+}
+
 // A batch whose send fails is retried on the next flush with the event ID it
 // was first sent with, so Periscope's api_requests keys dedupe the copies.
 func TestUsageTrackerRetriesBatchWithStableEventID(t *testing.T) {
@@ -120,7 +167,7 @@ func TestUsageTrackerRetriesBatchWithStableEventID(t *testing.T) {
 	tracker := NewUsageTracker(UsageTrackerConfig{Decklog: sink, FlushInterval: time.Hour, ServiceTenantID: "owner"})
 	defer tracker.Stop()
 
-	tracker.Record(time.Now(), "tenant-1", "jwt", "mutation", "CreateStream", []string{"createStream"}, "user-1", 0, 5, 1, 0)
+	tracker.Record(time.Now(), "tenant-1", "jwt", "mutation", "CreateStream", []string{"createStream"}, "user-1", 0, 5, 1, false, 0)
 	tracker.flush()
 	tracker.flush()
 

@@ -12,7 +12,7 @@ const insertAPIRequest = `INSERT INTO api_requests (
 	request_count, error_count, total_duration_ms, total_complexity,
 	llm_input_tokens, llm_output_tokens, llm_model, llm_provider,
 	user_hashes, token_hashes, source_region, stream_origin_region, stream_origin_cluster_id, schema_version,
-	root_fields
+	root_fields, graphql_error_count
 )`
 
 type APIRequestRow struct {
@@ -34,6 +34,9 @@ type APIRequestRow struct {
 	SchemaVersion                                           uint8
 	// RootFields is the aggregate's sorted root-field signature; never nil.
 	RootFields []string
+	// GraphQLErrorCount is the total number of GraphQL errors; ErrorCount
+	// counts failed requests.
+	GraphQLErrorCount uint32
 }
 
 func PrepareAPIRequest(ctx context.Context, db BatchPreparer) (*Writer[APIRequestRow], error) {
@@ -42,7 +45,7 @@ func PrepareAPIRequest(ctx context.Context, db BatchPreparer) (*Writer[APIReques
 		if rootFields == nil {
 			rootFields = []string{}
 		}
-		return []interface{}{row.Timestamp, row.TenantID, row.SourceNode, row.SourceEventID, row.IngestedAtMS, row.AuthType, row.OperationName, row.OperationType, row.RequestCount, row.ErrorCount, row.TotalDurationMS, row.TotalComplexity, row.LLMInputTokens, row.LLMOutputTokens, row.LLMModel, row.LLMProvider, row.UserHashes, row.TokenHashes, row.SourceRegion, row.StreamOriginRegion, row.StreamOriginClusterID, row.SchemaVersion, rootFields}
+		return []interface{}{row.Timestamp, row.TenantID, row.SourceNode, row.SourceEventID, row.IngestedAtMS, row.AuthType, row.OperationName, row.OperationType, row.RequestCount, row.ErrorCount, row.TotalDurationMS, row.TotalComplexity, row.LLMInputTokens, row.LLMOutputTokens, row.LLMModel, row.LLMProvider, row.UserHashes, row.TokenHashes, row.SourceRegion, row.StreamOriginRegion, row.StreamOriginClusterID, row.SchemaVersion, rootFields, row.GraphQLErrorCount}
 	})
 }
 
