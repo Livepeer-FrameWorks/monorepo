@@ -82,6 +82,8 @@ func RequireJWTAuth(secret []byte) gin.HandlerFunc {
 //     present so the caller's tenant/identity is available downstream (e.g. to
 //     preserve owner-only fields on resolveIngestEndpoint). A missing or invalid
 //     token is ignored, not rejected — the request still proceeds.
+//   - If not allowlisted and only a refresh_token cookie is present → 401
+//     TOKEN_EXPIRED so the browser refreshes its session
 //   - If not allowlisted and no auth is provided → return a 402 x402 challenge
 //   - If not allowlisted and auth is provided → require valid auth
 //
@@ -130,6 +132,14 @@ func PublicOrJWTAuth(secret []byte, serviceClients *clients.ServiceClients) gin.
 		}
 
 		if !hasAuthCredentials(c.Request) {
+			// A browser whose short-lived access_token cookie expired still
+			// sends its refresh_token cookie. That caller is a signed-in user
+			// who must refresh, not an anonymous caller to charge via x402.
+			if hasRefreshTokenCookie(c.Request) {
+				c.JSON(http.StatusUnauthorized, gin.H{"error": "access token expired", "code": "TOKEN_EXPIRED"})
+				c.Abort()
+				return
+			}
 			opName, variables := extractGraphQLRequest(c)
 			resourcePath := c.Request.URL.Path
 			if opName != "" {
@@ -218,6 +228,14 @@ func hasAuthCredentials(r *http.Request) bool {
 		return true
 	}
 	return false
+}
+
+func hasRefreshTokenCookie(r *http.Request) bool {
+	if r == nil {
+		return false
+	}
+	cookie, err := r.Cookie("refresh_token")
+	return err == nil && cookie.Value != ""
 }
 
 func optionalJWTAuthResult(r *http.Request, secret []byte) *AuthResult {

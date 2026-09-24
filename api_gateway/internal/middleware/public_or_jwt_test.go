@@ -3,6 +3,7 @@ package middleware
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
 	"net/http"
@@ -328,5 +329,48 @@ func TestPublicOrJWTAuthAnswers401ForARejectedAPIToken(t *testing.T) {
 
 	if w.Code != http.StatusUnauthorized {
 		t.Fatalf("rejected token: status = %d, want 401", w.Code)
+	}
+}
+
+func TestPublicOrJWTAuthAnswers401TokenExpiredForRefreshCookieOnly(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	r := gin.New()
+	r.Use(PublicOrJWTAuth([]byte("secret"), &clients.ServiceClients{}))
+	r.POST("/graphql", func(c *gin.Context) {
+		t.Fatal("request must not reach the handler")
+	})
+
+	body := []byte(`{"query":"query { streamsConnection { edges { node { id } } } }"}`)
+	w := httptest.NewRecorder()
+	req, _ := http.NewRequestWithContext(context.Background(), http.MethodPost, "/graphql", bytes.NewReader(body))
+	req.AddCookie(&http.Cookie{Name: "refresh_token", Value: "rt"})
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusUnauthorized {
+		t.Fatalf("status = %d, want 401 so the browser refreshes instead of seeing an x402 challenge", w.Code)
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(w.Body.Bytes(), &payload); err != nil {
+		t.Fatal(err)
+	}
+	if payload["code"] != "TOKEN_EXPIRED" {
+		t.Fatalf("code = %v, want TOKEN_EXPIRED", payload["code"])
+	}
+}
+
+func TestPublicOrJWTAuthRefreshCookieDoesNotBlockAllowlistedQuery(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	r := gin.New()
+	r.Use(PublicOrJWTAuth([]byte("secret"), &clients.ServiceClients{}))
+	r.POST("/graphql", func(c *gin.Context) { c.String(http.StatusOK, "ok") })
+
+	body := []byte(`{"query":"query { networkStatus { totalNodes } }"}`)
+	w := httptest.NewRecorder()
+	req, _ := http.NewRequestWithContext(context.Background(), http.MethodPost, "/graphql", bytes.NewReader(body))
+	req.AddCookie(&http.Cookie{Name: "refresh_token", Value: "rt"})
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 for an allowlisted public query", w.Code)
 	}
 }
