@@ -170,6 +170,9 @@ type PrometheusMonitor struct {
 	lastSeen      time.Time
 	isHealthy     bool
 	lastJSONData  map[string]any // Store last fetched JSON data
+	// mistAPI is fed by the authenticated active_streams poll and gates the
+	// node's reported health.
+	mistAPI mistAPIHealth
 	// Artifact index for fast VOD lookups
 	artifactIndex    map[string]*ClipInfo // clipHash -> ClipInfo
 	lastArtifactScan time.Time
@@ -1025,7 +1028,21 @@ func (pm *PrometheusMonitor) emitStreamLifecycleWithClient(
 			"node_id": nodeID,
 			"error":   err,
 		}).Error("Failed to fetch active streams")
+		if pm.mistAPI.recordFailure() {
+			monitorLogger.WithFields(logging.Fields{
+				"api_url":              baseURL + "/api2",
+				"node_id":              nodeID,
+				"consecutive_failures": mistAPIUnreachableThreshold,
+				"error":                err,
+			}).Error("MistServer controller API unreachable; reporting node unhealthy to Foghorn")
+		}
 		return streamLifecyclePollFailed
+	}
+	if pm.mistAPI.recordSuccess() {
+		monitorLogger.WithFields(logging.Fields{
+			"api_url": baseURL + "/api2",
+			"node_id": nodeID,
+		}).Info("MistServer controller API reachable again")
 	}
 	if !current() {
 		return streamLifecyclePollFailed
@@ -3279,16 +3296,19 @@ func (pm *PrometheusMonitor) convertNodeAPIToMistTrigger(nodeID string, jsonData
 	}
 
 	hasMistData := jsonData != nil
-	isHealthy := evaluateNodeHealth(hasMistData, cpuPercent, memPercent, shmPercent)
+	mistAPIReachable := pm.mistAPI.reachable()
+	isHealthy := evaluateNodeHealth(hasMistData, cpuPercent, memPercent, shmPercent) && mistAPIReachable
 	nodeUpdate.IsHealthy = isHealthy
+	nodeUpdate.MistApiReachable = &mistAPIReachable
 
 	logger.WithFields(logging.Fields{
-		"node_id":       nodeID,
-		"has_mist_data": hasMistData,
-		"cpu_percent":   cpuPercent,
-		"mem_percent":   memPercent,
-		"shm_percent":   shmPercent,
-		"is_healthy":    isHealthy,
+		"node_id":            nodeID,
+		"has_mist_data":      hasMistData,
+		"mist_api_reachable": mistAPIReachable,
+		"cpu_percent":        cpuPercent,
+		"mem_percent":        memPercent,
+		"shm_percent":        shmPercent,
+		"is_healthy":         isHealthy,
 	}).Info("Node health determination")
 
 	// Populate full Streams map from MistServer data
@@ -3625,10 +3645,10 @@ func convertStreamAPIToMistTrigger(nodeID, streamName, internalName string, stre
 
 		for _, track := range trackDetails {
 			trackType, _ := track["type"].(string)
-			trackCodec, hasCodec := track["codec"].(string)
+			trackCodec := getString(track["codec"])
 
-			// Extract primary video track info
-			if trackType == "video" && (!hasCodec || normalizeTrackCodec(trackCodec) != "JPEG") && !foundVideo {
+			// Extract primary video track info; thumbnail tracks are not media video.
+			if trackType == "video" && isMediaHealthTrack(trackType, trackCodec) && !foundVideo {
 				foundVideo = true
 				if width, ok := track["width"].(int); ok {
 					primaryWidth = int32(width)
@@ -3746,6 +3766,9 @@ func convertStreamAPIToMistTrigger(nodeID, streamName, internalName string, stre
 	}
 
 	for _, track := range trackDetails {
+		if !isMediaHealthTrack(getString(track["type"]), getString(track["codec"])) {
+			continue
+		}
 		if jitter, ok := track["jitter"].(int); ok && jitter > 100 {
 			hasIssues = true
 			issuesDesc = append(issuesDesc, fmt.Sprintf("High jitter on track %v", track["track_name"]))
@@ -3802,9 +3825,7 @@ func mistAPIHasPlayableBuffer(healthData map[string]any, trackDetails []map[stri
 	buffered := numericValuePositive(healthData["buffer"])
 	mediaTrack := false
 	for _, track := range trackDetails {
-		trackType := getString(track["type"])
-		codec := getString(track["codec"])
-		if trackType != "audio" && (trackType != "video" || normalizeTrackCodec(codec) == "JPEG") {
+		if !isMediaHealthTrack(getString(track["type"]), getString(track["codec"])) {
 			continue
 		}
 		mediaTrack = true

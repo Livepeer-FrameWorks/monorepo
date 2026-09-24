@@ -3997,6 +3997,18 @@ func (sm *StreamStateManager) ApplyDVRStopped(ctx context.Context, dvrHash strin
 	return nil
 }
 
+// NodeLifecycleHealthy is the node health Foghorn records for a lifecycle
+// report. An explicit mist_api_reachable=false overrides is_healthy: a node
+// whose Mist controller API stopped answering cannot start pushes, processes
+// or sessions, so it must leave placement even when its resource metrics look
+// fine. An unset field (older sidecars) defers to is_healthy.
+func NodeLifecycleHealthy(update *ipcpb.NodeLifecycleUpdate) bool {
+	if update == nil || !update.GetIsHealthy() {
+		return false
+	}
+	return update.MistApiReachable == nil || update.GetMistApiReachable()
+}
+
 // ApplyNodeLifecycle updates node info/metrics and persists outputs/base_url if configured
 func (sm *StreamStateManager) ApplyNodeLifecycle(ctx context.Context, update *ipcpb.NodeLifecycleUpdate) error {
 	if update == nil {
@@ -4010,8 +4022,9 @@ func (sm *StreamStateManager) ApplyNodeLifecycle(ctx context.Context, update *ip
 		lon := update.GetLongitude()
 		lonPtr = &lon
 	}
-	sm.TouchNode(update.GetNodeId(), update.GetIsHealthy())
-	sm.SetNodeInfo(update.GetNodeId(), update.GetBaseUrl(), update.GetIsHealthy(), latPtr, lonPtr, update.GetLocation(), update.GetOutputsJson(), nil)
+	healthy := NodeLifecycleHealthy(update)
+	sm.TouchNode(update.GetNodeId(), healthy)
+	sm.SetNodeInfo(update.GetNodeId(), update.GetBaseUrl(), healthy, latPtr, lonPtr, update.GetLocation(), update.GetOutputsJson(), nil)
 	sm.SetNodeRuntimeInfo(update.GetNodeId(), update.GetDeployMode(), update.GetOs(), update.GetArch(), update.GetOnnxProfile())
 	sm.setNodeDiskUsageForLifecycle(update.GetNodeId(), update.GetDiskTotalBytes(), update.GetDiskUsedBytes())
 	sm.UpdateNodeMetrics(update.GetNodeId(), struct {

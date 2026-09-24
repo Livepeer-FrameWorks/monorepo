@@ -41,6 +41,11 @@
         port: "{{ mistserver_controller_port | default(4242) }}"
         timeout: 30
 
+    - name: Assert authenticated MistServer API answers
+      ansible.builtin.include_role:
+        name: frameworks.infra.mistserver
+        tasks_from: verify-api.yml
+
     - name: Rerun role (idempotence)
       ansible.builtin.include_role:
         name: frameworks.infra.mistserver

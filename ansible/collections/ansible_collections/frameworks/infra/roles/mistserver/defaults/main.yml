@@ -41,6 +41,11 @@ mistserver_unit_path: "/etc/systemd/system/{{ mistserver_systemd_name }}.service
 mistserver_legacy_systemd_name: mistserver
 mistserver_controller_port: 4242
 mistserver_controller_interface: 127.0.0.1
+# Bound on the post-reload authenticated api2 check: attempts x (timeout +
+# delay) seconds before validate falls back to a full restart.
+mistserver_api_verify_retries: 6
+mistserver_api_verify_delay: 5
+mistserver_api_verify_timeout: 10
 mistserver_runtime_packages:
   - ffmpeg
 mistserver_runtime_package_manager: ""

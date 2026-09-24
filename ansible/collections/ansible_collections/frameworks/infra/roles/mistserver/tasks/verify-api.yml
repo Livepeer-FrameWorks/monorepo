@@ -1,0 +1,40 @@
+---
+# Authenticated api2 round trip, the same challenge handshake Helmsman uses:
+# request a challenge, answer MD5(hex(MD5(password)) + challenge). A bound
+# listener is not enough: after a USR1 rolling reload the controller can
+# hold 4242 open while never serving a request.
+
+- name: Request MistServer API challenge
+  ansible.builtin.uri:
+    url: >-
+      http://127.0.0.1:{{ mistserver_controller_port }}/api2?command={{
+      {'authorize': {'username': mistserver_api_user, 'password': ''}} | to_json | urlencode }}
+    method: GET
+    timeout: "{{ mistserver_api_verify_timeout }}"
+    return_content: true
+  register: mistserver_api_challenge
+  retries: "{{ mistserver_api_verify_retries }}"
+  delay: "{{ mistserver_api_verify_delay }}"
+  until:
+    - mistserver_api_challenge.status | default(0) == 200
+    - ((mistserver_api_challenge.json | default({})).get('authorize') or {}).get('status', '') in ['CHALL', 'OK']
+  changed_when: false
+
+- name: Answer MistServer API challenge
+  ansible.builtin.uri:
+    url: >-
+      http://127.0.0.1:{{ mistserver_controller_port }}/api2?command={{
+      {'authorize': {'username': mistserver_api_user,
+      'password': ((mistserver_api_password | hash('md5')) ~ mistserver_api_challenge.json.authorize.challenge) | hash('md5')}}
+      | to_json | urlencode }}
+    method: GET
+    timeout: "{{ mistserver_api_verify_timeout }}"
+    return_content: true
+  register: mistserver_api_auth
+  changed_when: false
+  failed_when: >-
+    mistserver_api_auth.status | default(0) != 200
+    or ((mistserver_api_auth.json | default({})).get('authorize') or {}).get('status', '') != 'OK'
+  when: mistserver_api_challenge.json.authorize.status == 'CHALL'
+  # The challenge answer is a password-derived hash.
+  no_log: true

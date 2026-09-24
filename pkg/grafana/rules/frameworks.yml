@@ -467,6 +467,15 @@ groups:
           summary: "STREAM_END is being retried"
           description: "A tenant-unresolved or downstream-failed STREAM_END remains in the Helmsman WAL; inspect WAL depth and Foghorn logs."
 
+      - alert: HelmsmanMistAPIUnreachable
+        expr: helmsman_mist_api_reachable == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "MistServer controller API is not answering Helmsman"
+          description: "Authenticated api2 calls from Helmsman keep failing, so Foghorn has marked the node unhealthy and excluded it from placement and processing. Check the frameworks-mistserver unit and the controller listener on 4242; restart the unit if the controller is wedged."
+
       # Crypto custody and scanner safety alerts
       - alert: CryptoScannerLagging
         expr: max by (region, network) (purser_crypto_scanner_block{head="finalized"}) - on(region, network) max by (region, network) (purser_crypto_scanner_block{head="cursor"}) > 500

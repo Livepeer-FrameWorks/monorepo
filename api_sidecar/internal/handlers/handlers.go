@@ -1110,6 +1110,13 @@ func HandleStreamSource(c *gin.Context) {
 		metrics.InfrastructureEvents.WithLabelValues("source_resolved").Inc()
 	}
 
+	if ss := mistTrigger.GetStreamSource(); ss != nil && result.Response != "" &&
+		failProcessingSourceIfUnavailable(c.Request.Context(), ss.GetStreamName(), result.Response) {
+		incMistWebhook("STREAM_SOURCE", "source_unavailable")
+		respondMistAction(c, http.StatusOK, ipcpb.MistTriggerAction_MIST_TRIGGER_ACTION_OFFLINE, "source_unavailable", config.StreamSourceUnavailable)
+		return
+	}
+
 	// Acquire a primary disk lease for the local file Mist is about to open.
 	// The source lease lives until STREAM_END (or Mist API reconciliation
 	// proves the stream is gone).
@@ -2079,6 +2086,23 @@ func triggerClipSync(filePath string, sizeBytes uint64) {
 	}
 }
 
+// isMediaHealthTrack reports whether a track's buffer and jitter describe
+// playback health. Only audio and video carry playable media; thumbnail
+// (JPEG/PNG), metadata (JSON, thumbvtt) and subtitle tracks are sparse by
+// design, so their low buffer and high jitter are normal.
+func isMediaHealthTrack(trackType, codec string) bool {
+	switch strings.ToLower(strings.TrimSpace(trackType)) {
+	case "video", "audio":
+	default:
+		return false
+	}
+	switch strings.ToLower(strings.TrimSpace(codec)) {
+	case "jpeg", "mjpeg", "png", "json", "thumbvtt", "webvtt", "vtt", "subtitle", "srt", "ttxt", "tx3g":
+		return false
+	}
+	return true
+}
+
 // enrichStreamBufferTrigger computes Helmsman-specific metrics from parsed tracks
 func enrichStreamBufferTrigger(trigger *ipcpb.StreamBufferTrigger) {
 	if trigger == nil {
@@ -2103,6 +2127,9 @@ func enrichStreamBufferTrigger(trigger *ipcpb.StreamBufferTrigger) {
 
 	// Optionally append Helmsman's derived analysis (supplementary diagnostics)
 	for _, track := range tracks {
+		if !isMediaHealthTrack(track.GetTrackType(), track.GetCodec()) {
+			continue
+		}
 		// Check for high jitter (>100ms is concerning)
 		if track.Jitter != nil && *track.Jitter > 100 {
 			hasIssues = true

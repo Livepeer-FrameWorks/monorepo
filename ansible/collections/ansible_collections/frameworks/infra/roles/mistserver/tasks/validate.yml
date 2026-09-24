@@ -1,10 +1,39 @@
 ---
-- name: Wait for MistServer controller port
-  ansible.builtin.wait_for:
-    host: 127.0.0.1
-    port: "{{ mistserver_controller_port }}"
-    timeout: 60
+# A reload (USR1 rolling restart) can leave a controller that holds the port
+# but never answers. A full restart drops live sessions, so it is only the
+# fallback; a controller that still does not answer after it fails the host.
+- name: Verify MistServer controller answers
   when: not ansible_check_mode
+  block:
+    - name: Wait for MistServer controller port
+      ansible.builtin.wait_for:
+        host: 127.0.0.1
+        port: "{{ mistserver_controller_port }}"
+        timeout: 60
+
+    - name: Verify authenticated MistServer API
+      ansible.builtin.include_tasks: verify-api.yml
+  rescue:
+    - name: Report unresponsive MistServer controller
+      ansible.builtin.debug:
+        msg: >-
+          MistServer API on 127.0.0.1:{{ mistserver_controller_port }} did not answer an
+          authenticated api2 call; restarting {{ mistserver_systemd_name
+          if ansible_facts.os_family != 'Darwin' else mistserver_darwin_label }}.
+
+    - name: Restart unresponsive MistServer
+      ansible.builtin.include_tasks: restart.yml
+
+    - name: Re-verify authenticated MistServer API after restart
+      ansible.builtin.include_tasks: verify-api.yml
+
+    - name: Record MistServer restart recovery
+      ansible.builtin.set_fact:
+        mistserver_api_recovered_by_restart: true
+
+    - name: Report MistServer restart recovery
+      ansible.builtin.debug:
+        msg: MistServer API answered only after a full restart; the reload had left the controller unresponsive.
 
 - name: Validate ffmpeg is available for MistServer ts-exec sources
   ansible.builtin.command: ffmpeg -version
