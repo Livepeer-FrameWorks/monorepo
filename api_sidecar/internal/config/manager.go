@@ -469,6 +469,10 @@ func webhookBaseURL() string {
 	return appconfig.Runtime().MistWebhookBaseURL
 }
 
+// processSupervisedStreams are the wildcard stream families whose buffers run
+// FrameWorks-configured processes (live and pull transcodes, VOD processing).
+var processSupervisedStreams = []string{"live+", "pull+", "processing+"}
+
 // desiredTriggers builds the complete Mist trigger config managed by Helmsman.
 func desiredTriggers() map[string]any {
 	webhookBase := webhookBaseURL()
@@ -490,7 +494,8 @@ func desiredTriggers() map[string]any {
 		"PROCESS_AV_VIRTUAL_SEGMENT_COMPLETE": {Handler: join(webhookBase, "/webhooks/mist/process_av_segment_complete")},
 		"THUMBNAIL_UPDATED":                   {Handler: join(webhookBase, "/webhooks/mist/thumbnail_updated")},
 		"STREAM_PROCESS":                      {Handler: join(webhookBase, "/webhooks/mist/stream_process"), Sync: true, OnFail: "keep"},
-		"PROCESS_EXIT":                        {Handler: join(webhookBase, "/webhooks/mist/process_exit"), Streams: []string{"processing+"}},
+		"PROCESS_EXIT":                        {Handler: join(webhookBase, "/webhooks/mist/process_exit"), Streams: processSupervisedStreams},
+		"PROCESS_REPLACE":                     {Handler: join(webhookBase, "/webhooks/mist/process_replace"), Sync: true, Streams: processSupervisedStreams},
 	}
 	result := make(map[string]any, len(definitions))
 	for name, definition := range definitions {

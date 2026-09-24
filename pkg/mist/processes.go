@@ -889,7 +889,10 @@ func shouldInhibitLivepeerSelector(raw string, source SourceMediaInfo) bool {
 	if errW != nil || errH != nil {
 		return false
 	}
-	return source.Width < maxWidth && source.Height < maxHeight
+	// Area comparison matches Mist's "video=<WxH" selector, so Foghorn's
+	// expected ladder and the rendition set Mist actually produces agree for
+	// portrait and ultrawide sources as well as landscape ones.
+	return source.Width*source.Height < maxWidth*maxHeight
 }
 
 // livepeerProfileToCodec maps Livepeer profile names to MistProcAV codec names.

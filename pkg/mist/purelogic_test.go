@@ -143,11 +143,10 @@ func TestAVTrackSelectForCodec(t *testing.T) {
 
 // --- shouldInhibitLivepeerSelector ---
 
-// A "video=<WxH" inhibitor skips a rendition only when the source is strictly
-// smaller than the ceiling on BOTH axes (upscaling is pointless). Equal or
-// larger source, malformed selectors, and unknown source dims must all
-// fail-open (don't inhibit), so a parse slip can never silently drop a needed
-// rendition.
+// A "video=<WxH" inhibitor skips a rendition when the source area is strictly
+// smaller than the ceiling area, the same rule Mist applies. Equal or larger
+// source area, malformed selectors, and unknown source dims must all fail-open
+// (don't inhibit), so a parse slip can never silently drop a needed rendition.
 func TestShouldInhibitLivepeerSelector(t *testing.T) {
 	tests := []struct {
 		name   string
@@ -155,10 +154,13 @@ func TestShouldInhibitLivepeerSelector(t *testing.T) {
 		source SourceMediaInfo
 		want   bool
 	}{
-		{"source strictly smaller -> inhibit", "video=<1920x1080", SourceMediaInfo{Width: 1280, Height: 720}, true},
+		{"landscape smaller -> inhibit", "video=<1920x1080", SourceMediaInfo{Width: 1280, Height: 720}, true},
+		{"portrait smaller area -> inhibit", "video=<1920x1080", SourceMediaInfo{Width: 720, Height: 1280}, true},
+		{"ultrawide smaller area -> inhibit", "video=<1920x1080", SourceMediaInfo{Width: 1920, Height: 800}, true},
+		{"one axis smaller shrinks area -> inhibit", "video=<1920x1080", SourceMediaInfo{Width: 1280, Height: 1080}, true},
 		{"source equal -> keep", "video=<1920x1080", SourceMediaInfo{Width: 1920, Height: 1080}, false},
 		{"source larger -> keep", "video=<1280x720", SourceMediaInfo{Width: 1920, Height: 1080}, false},
-		{"only one axis smaller -> keep", "video=<1920x1080", SourceMediaInfo{Width: 1280, Height: 1080}, false},
+		{"portrait equal area -> keep", "video=<1920x1080", SourceMediaInfo{Width: 1080, Height: 1920}, false},
 		{"not a dimension selector", "audio=all", SourceMediaInfo{Width: 1280, Height: 720}, false},
 		{"missing x separator", "video=<1920", SourceMediaInfo{Width: 1280, Height: 720}, false},
 		{"non-numeric dims", "video=<axb", SourceMediaInfo{Width: 1280, Height: 720}, false},

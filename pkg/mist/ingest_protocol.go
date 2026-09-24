@@ -2,9 +2,14 @@ package mist
 
 import (
 	"errors"
+	"fmt"
 	"strings"
 	"unicode"
 )
+
+// ErrUnsupportedIngestProtocol marks a connector that placement policy cannot
+// evaluate as a publisher protocol.
+var ErrUnsupportedIngestProtocol = errors.New("unsupported publisher connector")
 
 // IngestProtocol maps the connector name Mist reports on PUSH_REWRITE to the
 // canonical placement ingest protocol. Only connectors publishers actually use to
@@ -24,6 +29,6 @@ func IngestProtocol(connector string) (string, error) {
 	case "webrtc":
 		return "whip", nil
 	default:
-		return "", errors.New("unsupported publisher connector: " + connector)
+		return "", fmt.Errorf("%w: %s", ErrUnsupportedIngestProtocol, connector)
 	}
 }

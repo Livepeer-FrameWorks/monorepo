@@ -205,7 +205,8 @@ Jobs live in `foghorn.processing_jobs`. The dispatcher is
   (advisory-lock dedup). Retries reuse the row. Results join back
   `processing_jobs.job_id → artifact_hash`.
 - **Node selection:** `job_router.go` picks the lowest-loaded alive node with `CapProcessing`
-  and per-class capacity.
+  and per-class capacity among the nodes of the artifact's `origin_cluster_id`, whose storage
+  receives the output. A job whose artifact has no recorded origin stays queued.
 - **Request:** `ProcessingJobRequest{job_id, tenant_id, artifact_hash, source_url, job_type,
 internal_name, output_runtime_name, …}`. Crucially,
   **`output_runtime_name = "vod+" + internal_name`** (`processing_dispatcher.go`).

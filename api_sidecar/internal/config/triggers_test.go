@@ -13,8 +13,8 @@ func TestDesiredTriggersTypedFailurePolicy(t *testing.T) {
 	if !ok {
 		t.Fatal("desired trigger definitions must normalize")
 	}
-	if len(got) != 18 {
-		t.Fatalf("managed trigger count = %d, want 18", len(got))
+	if len(got) != 19 {
+		t.Fatalf("managed trigger count = %d, want 19", len(got))
 	}
 	want := map[string]string{
 		"PUSH_REWRITE":   "deny",
@@ -37,6 +37,30 @@ func TestDesiredTriggersTypedFailurePolicy(t *testing.T) {
 		if !entries[0].Sync && entries[0].OnFail != "" {
 			t.Fatalf("async trigger %s has onfail=%q", name, entries[0].OnFail)
 		}
+	}
+}
+
+// PROCESS_REPLACE must be blocking so Mist waits for the replacement, and both
+// process triggers must cover every stream family that runs FrameWorks
+// processes: live and pull transcodes, not only VOD processing.
+func TestDesiredTriggersCoverProcessSupervisedStreams(t *testing.T) {
+	got, ok := normalizeTriggerConfig(desiredTriggers())
+	if !ok {
+		t.Fatal("desired trigger definitions must normalize")
+	}
+	want := []string{"live+", "processing+", "pull+"}
+	for _, name := range []string{"PROCESS_EXIT", "PROCESS_REPLACE"} {
+		entries := got[name]
+		if len(entries) != 1 || !reflect.DeepEqual(entries[0].Streams, want) {
+			t.Fatalf("%s = %+v, want streams %v", name, entries, want)
+		}
+	}
+	replace := got["PROCESS_REPLACE"][0]
+	if !replace.Sync || !strings.HasSuffix(replace.Handler, "/webhooks/mist/process_replace") {
+		t.Fatalf("PROCESS_REPLACE = %+v, want a blocking handler at /webhooks/mist/process_replace", replace)
+	}
+	if got["PROCESS_EXIT"][0].Sync {
+		t.Fatal("PROCESS_EXIT must stay non-blocking")
 	}
 }
 

@@ -276,6 +276,7 @@ func main() {
 
 		// Process exit trigger (from MistServer PROCESS_EXIT)
 		webhooks.POST("/mist/process_exit", handlers.HandleProcessExit)
+		webhooks.POST("/mist/process_replace", handlers.HandleProcessReplace)
 	}
 
 	// server.Run calls this only when SIGINT or SIGTERM stopped it, so the
