@@ -127,32 +127,8 @@ func main() {
 		},
 	)
 
-	// Parse CORS allowed origins for WebSocket CheckOrigin
-	wsDevMode := !cfg.Release()
-	wsAllowedOrigins := make(map[string]bool)
-	var wsWildcardSuffixes []string
-	for _, origin := range cfg.AllowedOrigins {
-		trimmed := strings.TrimRight(origin, "/")
-		if strings.HasPrefix(trimmed, "*.") {
-			wsWildcardSuffixes = append(wsWildcardSuffixes, trimmed[1:])
-		} else {
-			wsAllowedOrigins[trimmed] = true
-		}
-	}
-	originAllowed := func(origin string) bool {
-		if wsDevMode {
-			return true
-		}
-		if wsAllowedOrigins[origin] {
-			return true
-		}
-		for _, suffix := range wsWildcardSuffixes {
-			if idx := strings.Index(origin, "://"); idx >= 0 && strings.HasSuffix(origin[idx+3:], suffix) {
-				return true
-			}
-		}
-		return false
-	}
+	originMatcher := middleware.NewOriginMatcher(cfg.AllowedOrigins, !cfg.Release())
+	originAllowed := originMatcher.Allowed
 
 	// Setup monitoring
 	healthChecker := monitoring.NewHealthChecker("bridge", version.Version)
@@ -308,9 +284,7 @@ func main() {
 	gqlHandler.AddTransport(transport.POST{})
 	gqlHandler.AddTransport(transport.GET{})
 	gqlHandler.AddTransport(middleware.GraphQLWebsocketTransport(serviceClients, []byte(jwtSecret), logger, websocket.Upgrader{
-		CheckOrigin: func(r *http.Request) bool {
-			return originAllowed(r.Header.Get("Origin"))
-		},
+		CheckOrigin: originMatcher.CheckWebsocketOrigin,
 	}, 10*time.Second))
 
 	// Setup router with unified monitoring
