@@ -19,6 +19,7 @@ type countingDVRStarter struct {
 	hintedCalls    atomic.Int32
 	lastProcesses  atomic.Value // string
 	lastSourceNode atomic.Value // string
+	lastReq        atomic.Pointer[sharedpb.StartDVRRequest]
 }
 
 func (c *countingDVRStarter) StartDVR(_ context.Context, req *sharedpb.StartDVRRequest) (*sharedpb.StartDVRResponse, error) {
@@ -30,6 +31,7 @@ func (c *countingDVRStarter) StartDVR(_ context.Context, req *sharedpb.StartDVRR
 func (c *countingDVRStarter) StartDVRWithSourceHint(_ context.Context, req *sharedpb.StartDVRRequest, sourceNodeID string) (*sharedpb.StartDVRResponse, error) {
 	c.hintedCalls.Add(1)
 	c.calls.Add(1)
+	c.lastReq.Store(req)
 	c.lastProcesses.Store(req.GetProcessesJson())
 	c.lastSourceNode.Store(sourceNodeID)
 	return &sharedpb.StartDVRResponse{}, nil
@@ -89,6 +91,48 @@ func TestEnsureManagedStreamDVR_SuppressesRepeatWithinCooldown(t *testing.T) {
 		t.Fatalf("DVR processes_json should be forwarded exactly from Commodore; want %s, got %v", ctx.GetDvrProcessesJson(), got)
 	}
 }
+
+// A managed stream's recording snapshots the stream's chapter policy from
+// Commodore's stream context, including an explicit "none".
+func TestEnsureManagedStreamDVR_CarriesChapterPolicy(t *testing.T) {
+	cases := []struct {
+		name         string
+		mode         string
+		interval     int32
+		wantMode     *string
+		wantInterval *int32
+	}{
+		{"fixed interval", "fixed_interval", 7200, strPtr("fixed_interval"), int32Ptr(7200)},
+		{"window sized", "window_sized_chapters", 0, strPtr("window_sized_chapters"), nil},
+		{"live rewind only", "none", 0, strPtr("none"), nil},
+		{"sender without the field", "", 0, nil, nil},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			resetManagedDVRStarts(t)
+			starter := &countingDVRStarter{}
+			m := newMaterializerForTest(t, starter)
+			m.EnsureManagedStreamDVR(context.Background(), &commodorepb.ResolveStreamContextResponse{
+				Admitted: true, StreamId: "stream-1", InternalName: "internal-1", TenantId: "tenant-1",
+				IsRecordingEnabled: true, DvrChapterMode: tc.mode, DvrChapterIntervalSeconds: tc.interval,
+			}, "edge-a")
+			req := starter.lastReq.Load()
+			if req == nil {
+				t.Fatal("StartDVR not called")
+			}
+			if (req.DvrChapterMode == nil) != (tc.wantMode == nil) || (tc.wantMode != nil && req.GetDvrChapterMode() != *tc.wantMode) {
+				t.Fatalf("dvr_chapter_mode = %v, want %v", req.DvrChapterMode, tc.wantMode)
+			}
+			if (req.DvrChapterIntervalSeconds == nil) != (tc.wantInterval == nil) || (tc.wantInterval != nil && req.GetDvrChapterIntervalSeconds() != *tc.wantInterval) {
+				t.Fatalf("dvr_chapter_interval_seconds = %v, want %v", req.DvrChapterIntervalSeconds, tc.wantInterval)
+			}
+		})
+	}
+}
+
+func int32Ptr(v int32) *int32 { return &v }
+
+func strPtr(v string) *string { return &v }
 
 func TestEnsureManagedStreamDVR_DifferentSourceNodeBypassesCooldown(t *testing.T) {
 	resetManagedDVRStarts(t)

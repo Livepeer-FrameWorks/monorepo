@@ -66,7 +66,7 @@ func ClusterAccessibleForTenant(clusterID, tenantID string) bool {
 	if clusterID == "" || tenantID == "" {
 		return false
 	}
-	// Reuse the freeze path's entitlement envelope (the tenant's official cluster + active, unexpired peer set
+	// Reuse the tenant entitlement envelope (the tenant's official cluster + active, unexpired peer set
 	// from GetClusterRouting) — the "storage" naming is incidental; the peer membership IS the generic
 	// cluster↔tenant entitlement with no per-operation scope. Read it through the short-TTL cache so repeated
 	// checks don't hit Quartermaster per request.

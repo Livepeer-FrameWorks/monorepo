@@ -172,6 +172,7 @@ func (m *ManagedStreamMaterializer) EnsureManagedStreamDVR(ctx context.Context, 
 		DvrPolicy:     streamCtx.GetDvrPolicy(),
 		ProcessesJson: streamCtx.GetDvrProcessesJson(),
 	}
+	applyStreamDVRChapterPolicy(req, streamCtx.GetDvrChapterMode(), streamCtx.GetDvrChapterIntervalSeconds())
 	dvrCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 	var err error

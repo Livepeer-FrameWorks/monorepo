@@ -87,7 +87,7 @@ func HandleLivepeerAuth(c *gin.Context) {
 	var req livepeerAuthRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		logger.WithError(err).Warn("livepeer auth: invalid request body")
-		incLivepeerAuthRejected("invalid_request")
+		incLivepeerAuthRejected(authRejectInvalidRequest)
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request body"})
 		return
 	}
@@ -95,7 +95,7 @@ func HandleLivepeerAuth(c *gin.Context) {
 	manifestID := extractManifestID(req.URL)
 	if manifestID == "" {
 		logger.WithField("url", req.URL).Warn("livepeer auth: could not extract manifestID from URL")
-		incLivepeerAuthRejected("invalid_request")
+		incLivepeerAuthRejected(authRejectInvalidRequest)
 		c.JSON(http.StatusForbidden, gin.H{"error": "invalid stream URL"})
 		return
 	}
@@ -132,9 +132,9 @@ func HandleLivepeerAuth(c *gin.Context) {
 func authorizeSignedLivepeerJob(ctx context.Context, manifestID string, req livepeerAuthRequest) (*LivepeerAuthContext, string) {
 	// Verify the capability before any resolver/database call so the public
 	// webhook cannot be used to probe tenant or stream existence.
-	claims, err := control.VerifyTranscodeJobTokenWithConfiguredSecret(req.JobToken, time.Now())
-	if err != nil || canonicalLivepeerManifestID(manifestID) != claims.ManifestID || !control.TranscodeJobTokenAllowsGatewayCluster(claims, clusterID) {
-		return nil, authRejectInvalidToken
+	claims, reason := verifyLivepeerJobToken(manifestID, req.JobToken, time.Now())
+	if reason != "" {
+		return nil, reason
 	}
 	remoteIP := strings.TrimSpace(req.RemoteIP)
 	nodeID := state.DefaultManager().NodeIDByClientIP(remoteIP)
@@ -195,6 +195,42 @@ func authorizeSignedLivepeerJob(ctx context.Context, manifestID string, req live
 	authCtx.NodeID = claims.NodeID
 	authCtx.SpecDigest = claims.SpecDigest
 	return authCtx, ""
+}
+
+// verifyLivepeerJobToken checks the job token's signature and claims, then binds
+// it to the requested manifest and to this Foghorn's cluster as an allowed
+// gateway cell. A rejection returns an invalid_token_<check> reason and logs the
+// failed check with the identities involved, so a cross-cell or secret-drift
+// rejection names its cause.
+func verifyLivepeerJobToken(manifestID, token string, now time.Time) (control.TranscodeJobClaims, string) {
+	claims, err := control.VerifyTranscodeJobTokenWithConfiguredSecret(token, now)
+	fields := logging.Fields{
+		"manifest_id":      manifestID,
+		"local_cluster_id": clusterID,
+	}
+	if err != nil {
+		check := control.TranscodeJobTokenCheck(err)
+		if check == "" {
+			check = control.TranscodeTokenCheckFormat
+		}
+		logger.WithError(err).WithFields(fields).WithField("check", check).Warn("livepeer auth: job token verification failed")
+		return control.TranscodeJobClaims{}, authRejectInvalidToken + "_" + check
+	}
+	fields["token_manifest_id"] = claims.ManifestID
+	fields["token_cluster_id"] = claims.ClusterID
+	fields["token_node_id"] = claims.NodeID
+	fields["token_job_id"] = claims.JobID
+	fields["allowed_gateway_cluster_ids"] = claims.AllowedGatewayClusterIDs
+	fields["issued_at"] = claims.IssuedAt
+	if canonicalLivepeerManifestID(manifestID) != claims.ManifestID {
+		logger.WithFields(fields).WithField("check", tokenCheckManifestMismatch).Warn("livepeer auth: job token is bound to another manifest")
+		return control.TranscodeJobClaims{}, authRejectInvalidToken + "_" + tokenCheckManifestMismatch
+	}
+	if !control.TranscodeJobTokenAllowsGatewayCluster(claims, clusterID) {
+		logger.WithFields(fields).WithField("check", tokenCheckGatewayCluster).Warn("livepeer auth: job token does not allow this Foghorn's cluster as the gateway cell")
+		return control.TranscodeJobClaims{}, authRejectInvalidToken + "_" + tokenCheckGatewayCluster
+	}
+	return claims, ""
 }
 
 func authorizeProcessingTranscode(ctx context.Context, claims control.TranscodeJobClaims) *LivepeerAuthContext {
@@ -366,6 +402,8 @@ func extractManifestID(rawURL string) string {
 // LivepeerAuthRejection reasons reported via metrics + structured log.
 const (
 	authRejectInvalidRequest = "invalid_request"
+	// authRejectInvalidToken prefixes invalid_token_<check>, where check is a
+	// control.TranscodeTokenCheck* value or one of the binding checks below.
 	authRejectInvalidToken   = "invalid_token"
 	authRejectNodeMismatch   = "node_mismatch"
 	authRejectNodeUnhealthy  = "node_unhealthy"
@@ -374,6 +412,10 @@ const (
 	authRejectInvalidSpec    = "invalid_spec"
 	authRejectSpecMismatch   = "spec_mismatch"
 	authRejectSourceMismatch = "source_mismatch"
+
+	// Token binding checks performed after signature and claim verification.
+	tokenCheckManifestMismatch = "manifest_mismatch"
+	tokenCheckGatewayCluster   = "gateway_cluster"
 )
 
 func incLivepeerAuthRejected(reason string) {

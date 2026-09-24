@@ -44,11 +44,10 @@ it. Authority is node-to-cluster membership plus Quartermaster's cluster-to-tena
 ### Enrolment
 
 - `frameworks edge deploy` and `frameworks edge provision`, including `--local`, run the Ansible edge role. They need
-  `ansible-playbook` on `PATH` (`cli/pkg/ansiblerun/executor.go:138-143`) and an `ansible/` tree found from
-  `$FRAMEWORKS_ANSIBLE_ROOT` or by walking up from the working directory
-  (`cli/pkg/provisioner/role_provisioner.go:153-186`, `cli/pkg/provisioner/edge_role.go:39-52`). The release tarball and
-  the macOS package ship neither. The macOS tray's Provision button shells out to `edge provision --local`
-  (`app_mac/Sources/UI/ProvisionView.swift:86-95`) and inherits the requirement.
+  `ansible-playbook` on `PATH` (`cli/pkg/ansiblerun/executor.go:138-143`), which the release tarball and the macOS
+  package do not ship. The `ansible/` tree itself is embedded in the CLI binary and extracted to the user cache on
+  first use (`cli/internal/runtimeassets`). The macOS tray's Provision button shells out to `edge provision --local`
+  (`app_mac/Sources/UI/ProvisionView.swift:86-95`) and inherits the `ansible-playbook` requirement.
 - The container path (`frameworks edge init` then `edge enroll`, `cli/cmd/edge.go:228-385`) needs Docker and the CLI.
   The image cannot start from a token alone: Helmsman requires `NODE_ID`, `FOGHORN_CONTROL_ADDR`, `EDGE_PUBLIC_URL` and
   `MISTSERVER_URL` at start (`api_sidecar/internal/config/env.go:95-127`), and nothing under `api_sidecar/` or `edge/`

@@ -97,13 +97,69 @@ func StampTranscodeJobConfigWithConfiguredSecret(processesJSON string, claims Tr
 	return StampTranscodeJobConfig(processesJSON, appconfig.Current().BalancerCapabilitySecret, claims, now)
 }
 
+// transcodeJobTokenIssuedAtSkew is how far in the future a token's issued_at may be.
+// Tokens are minted by one Foghorn replica and verified by the gateway's cell
+// Foghorn, possibly on another host; the check only rejects implausible stamps, so
+// it stays tolerant of ordinary clock drift between hosts.
+const transcodeJobTokenIssuedAtSkew = 5 * time.Minute
+
+// Verification failure checks, reported as TranscodeJobTokenError.Check and used as
+// metric/log reason labels.
+const (
+	TranscodeTokenCheckMissing      = "missing"
+	TranscodeTokenCheckFormat       = "format"
+	TranscodeTokenCheckHMAC         = "hmac"
+	TranscodeTokenCheckPayload      = "payload"
+	TranscodeTokenCheckUnknownField = "unknown_field"
+	TranscodeTokenCheckMissingClaim = "missing_claim"
+	TranscodeTokenCheckIssuedAtSkew = "iat_skew"
+)
+
+// TranscodeJobTokenError names the verification check a token failed. It matches
+// ErrTranscodeJobTokenMissing or ErrTranscodeJobTokenInvalid under errors.Is.
+type TranscodeJobTokenError struct {
+	Check  string
+	Detail string
+}
+
+func (e *TranscodeJobTokenError) Error() string {
+	if e.Detail != "" {
+		return fmt.Sprintf("transcode job token %s check failed: %s", e.Check, e.Detail)
+	}
+	return fmt.Sprintf("transcode job token %s check failed", e.Check)
+}
+
+func (e *TranscodeJobTokenError) Is(target error) bool {
+	if e.Check == TranscodeTokenCheckMissing {
+		return target == ErrTranscodeJobTokenMissing
+	}
+	return target == ErrTranscodeJobTokenInvalid
+}
+
+// TranscodeJobTokenCheck returns the failed check of a verification error, or ""
+// when err is not a token verification error.
+func TranscodeJobTokenCheck(err error) string {
+	var tokenErr *TranscodeJobTokenError
+	if errors.As(err, &tokenErr) {
+		return tokenErr.Check
+	}
+	return ""
+}
+
+func tokenCheckFailed(check, detail string) (TranscodeJobClaims, error) {
+	return TranscodeJobClaims{}, &TranscodeJobTokenError{Check: check, Detail: detail}
+}
+
 func VerifyTranscodeJobToken(secret, token string, now time.Time) (TranscodeJobClaims, error) {
-	if strings.TrimSpace(secret) == "" || strings.TrimSpace(token) == "" {
-		return TranscodeJobClaims{}, ErrTranscodeJobTokenMissing
+	if strings.TrimSpace(secret) == "" {
+		return tokenCheckFailed(TranscodeTokenCheckMissing, "verifier has no capability secret")
+	}
+	if strings.TrimSpace(token) == "" {
+		return tokenCheckFailed(TranscodeTokenCheckMissing, "request carries no job token")
 	}
 	parts := strings.Split(token, ".")
 	if len(parts) != 3 || parts[0] != "v1" {
-		return TranscodeJobClaims{}, ErrTranscodeJobTokenInvalid
+		return tokenCheckFailed(TranscodeTokenCheckFormat, fmt.Sprintf("%d dot-separated parts", len(parts)))
 	}
 	mac := hmac.New(sha256.New, []byte(strings.TrimSpace(secret)))
 	_, _ = mac.Write([]byte(transcodeJobTokenDomain))
@@ -111,27 +167,30 @@ func VerifyTranscodeJobToken(secret, token string, now time.Time) (TranscodeJobC
 	_, _ = mac.Write([]byte(parts[1]))
 	want := base64.RawURLEncoding.EncodeToString(mac.Sum(nil))
 	if !hmac.Equal([]byte(want), []byte(parts[2])) {
-		return TranscodeJobClaims{}, ErrTranscodeJobTokenInvalid
+		return tokenCheckFailed(TranscodeTokenCheckHMAC, "signature does not match this verifier's capability secret")
 	}
 	payload, err := base64.RawURLEncoding.DecodeString(parts[1])
 	if err != nil {
-		return TranscodeJobClaims{}, ErrTranscodeJobTokenInvalid
+		return tokenCheckFailed(TranscodeTokenCheckPayload, "claims are not base64url")
 	}
 	var claims TranscodeJobClaims
 	dec := json.NewDecoder(strings.NewReader(string(payload)))
 	dec.DisallowUnknownFields()
 	if err := dec.Decode(&claims); err != nil {
-		return TranscodeJobClaims{}, ErrTranscodeJobTokenInvalid
+		if strings.Contains(err.Error(), "unknown field") {
+			return tokenCheckFailed(TranscodeTokenCheckUnknownField, err.Error())
+		}
+		return tokenCheckFailed(TranscodeTokenCheckPayload, err.Error())
 	}
 	if err := dec.Decode(&struct{}{}); err != io.EOF {
-		return TranscodeJobClaims{}, ErrTranscodeJobTokenInvalid
+		return tokenCheckFailed(TranscodeTokenCheckPayload, "trailing data after claims")
 	}
 	canonical := canonicalTranscodeJobClaims(claims)
-	if err := validateTranscodeJobClaims(canonical); err != nil {
-		return TranscodeJobClaims{}, ErrTranscodeJobTokenInvalid
+	if missing := missingTranscodeJobClaims(canonical); len(missing) > 0 {
+		return tokenCheckFailed(TranscodeTokenCheckMissingClaim, strings.Join(missing, ","))
 	}
-	if claims.IssuedAt > now.UTC().Add(5*time.Minute).Unix() {
-		return TranscodeJobClaims{}, ErrTranscodeJobTokenInvalid
+	if limit := now.UTC().Add(transcodeJobTokenIssuedAtSkew).Unix(); claims.IssuedAt > limit {
+		return tokenCheckFailed(TranscodeTokenCheckIssuedAtSkew, fmt.Sprintf("issued_at %d is %ds ahead of the verifier clock", claims.IssuedAt, claims.IssuedAt-now.UTC().Unix()))
 	}
 	return canonical, nil
 }
@@ -168,12 +227,30 @@ func canonicalTranscodeJobClaims(claims TranscodeJobClaims) TranscodeJobClaims {
 }
 
 func validateTranscodeJobClaims(claims TranscodeJobClaims) error {
-	if claims.ManifestID == "" || claims.AttemptOrGeneration == "" || claims.Session == "" || claims.NodeID == "" ||
-		claims.ClusterID == "" || claims.TenantID == "" || claims.SpecDigest == "" ||
-		claims.IssuedAt <= 0 || len(claims.AllowedGatewayClusterIDs) == 0 {
+	if len(missingTranscodeJobClaims(claims)) > 0 {
 		return ErrTranscodeJobTokenInvalid
 	}
 	return nil
+}
+
+// missingTranscodeJobClaims lists the JSON names of required claims that are empty.
+func missingTranscodeJobClaims(claims TranscodeJobClaims) []string {
+	var missing []string
+	add := func(empty bool, name string) {
+		if empty {
+			missing = append(missing, name)
+		}
+	}
+	add(claims.ManifestID == "", "manifest_id")
+	add(claims.AttemptOrGeneration == "", "attempt_or_generation")
+	add(claims.Session == "", "session")
+	add(claims.NodeID == "", "node_id")
+	add(claims.ClusterID == "", "cluster_id")
+	add(claims.TenantID == "", "tenant_id")
+	add(claims.SpecDigest == "", "spec_digest")
+	add(claims.IssuedAt <= 0, "issued_at")
+	add(len(claims.AllowedGatewayClusterIDs) == 0, "allowed_gateway_cluster_ids")
+	return missing
 }
 
 func TranscodeJobTokenAllowsGatewayCluster(claims TranscodeJobClaims, clusterID string) bool {

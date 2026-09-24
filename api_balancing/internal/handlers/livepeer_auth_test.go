@@ -25,6 +25,9 @@ import (
 func configureLivepeerAuthNode(t *testing.T, healthy, ingest, processing bool) *state.StreamStateManager {
 	t.Helper()
 	useFoghornConfig(t, &appconfig.Foghorn{BalancerCapabilitySecret: "test-job-secret"})
+	oldLogger := logger
+	logger = logging.NewLogger()
+	t.Cleanup(func() { logger = oldLogger })
 	oldCluster := clusterID
 	clusterID = "media-gateway"
 	t.Cleanup(func() { clusterID = oldCluster })
@@ -105,7 +108,7 @@ func TestAuthorizeSignedLivepeerJobRejectsManifestIPClusterAndCapabilityDrift(t 
 	for _, tc := range []struct {
 		name, manifestID, remoteIP, wantReason string
 	}{
-		{name: "manifest swap", manifestID: "processing+other", remoteIP: "203.0.113.4", wantReason: authRejectInvalidToken},
+		{name: "manifest swap", manifestID: "processing+other", remoteIP: "203.0.113.4", wantReason: authRejectInvalidToken + "_" + tokenCheckManifestMismatch},
 		{name: "unrecognized remote IP", manifestID: "processing+artifact", remoteIP: "203.0.113.9", wantReason: authRejectNodeMismatch},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -120,7 +123,7 @@ func TestAuthorizeSignedLivepeerJobRejectsManifestIPClusterAndCapabilityDrift(t 
 	clusterID = "unapproved-gateway"
 	got, reason := authorizeSignedLivepeerJob(context.Background(), "processing+artifact", livepeerAuthRequest{JobToken: token, RemoteIP: "203.0.113.4"})
 	clusterID = oldCluster
-	if got != nil || reason != authRejectInvalidToken {
+	if got != nil || reason != authRejectInvalidToken+"_"+tokenCheckGatewayCluster {
 		t.Fatalf("unapproved gateway cluster: reason=%q context=%+v", reason, got)
 	}
 
@@ -284,6 +287,10 @@ func TestAuthorizeSignedLivepeerProcessingJobReturnsStoredCanonicalContract(t *t
 }
 
 func TestAuthorizeSignedLivepeerJobRejectsInvalidTokenBeforeDatabaseLookup(t *testing.T) {
+	useFoghornConfig(t, &appconfig.Foghorn{BalancerCapabilitySecret: "test-job-secret"})
+	oldLogger := logger
+	logger = logging.NewLogger()
+	t.Cleanup(func() { logger = oldLogger })
 	mockDB, mock, err := sqlmock.New()
 	if err != nil {
 		t.Fatal(err)
@@ -295,7 +302,7 @@ func TestAuthorizeSignedLivepeerJobRejectsInvalidTokenBeforeDatabaseLookup(t *te
 	got, reason := authorizeSignedLivepeerJob(context.Background(), "processing+secret-artifact", livepeerAuthRequest{
 		URL: "http://gateway/live/processing+secret-artifact/0.ts", JobToken: "attacker-controlled", RemoteIP: "203.0.113.4",
 	})
-	if got != nil || reason != authRejectInvalidToken {
+	if got != nil || reason != authRejectInvalidToken+"_"+control.TranscodeTokenCheckFormat {
 		t.Fatalf("invalid token result: reason=%q context=%+v", reason, got)
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {

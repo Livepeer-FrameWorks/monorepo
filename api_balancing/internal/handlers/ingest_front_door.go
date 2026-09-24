@@ -1,12 +1,15 @@
 package handlers
 
 import (
+	"context"
+	"errors"
 	"math"
 	"net/http"
 	"net/url"
 	"strings"
 	"time"
 
+	"frameworks/api_balancing/internal/balancer"
 	"frameworks/api_balancing/internal/control"
 	"frameworks/api_balancing/internal/triggers"
 
@@ -15,6 +18,8 @@ import (
 	commodorepb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/commodore"
 
 	"github.com/gin-gonic/gin"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/encoding/protojson"
 )
 
@@ -191,13 +196,14 @@ func HandleIngestFrontDoor(c *gin.Context) {
 		Placement: ingestPlacementPreparer, PlacementRequired: ingestPlacementRequired,
 	}, streamCtx, streamKey)
 	if err != nil {
-		logger.WithFields(logging.Fields{
-			"error":         err,
+		code, httpStatus, message := ingestFrontDoorFailure(err)
+		logger.WithError(err).WithFields(logging.Fields{
 			"internal_name": streamCtx.GetInternalName(),
-		}).Warn("Ingest front door: no ingest-capable nodes")
+			"code":          code,
+		}).Warn("Ingest front door could not resolve an ingest endpoint")
 		emitIngestRoutingEventFn(&RoutingEvent{
 			Status:          "failed",
-			Details:         "no ingest-capable nodes",
+			Details:         code + ": " + err.Error(),
 			InternalName:    streamCtx.GetInternalName(),
 			StreamID:        streamCtx.GetStreamId(),
 			StreamTenantID:  streamCtx.GetTenantId(),
@@ -207,8 +213,10 @@ func HandleIngestFrontDoor(c *gin.Context) {
 			ClientLon:       lon,
 			LatencyMs:       float32(time.Since(start).Milliseconds()),
 		})
-		respondPlaybackError(c, http.StatusServiceUnavailable, "NO_INGEST_NODES",
-			"No ingest-capable nodes are available", nil)
+		if httpStatus == http.StatusServiceUnavailable {
+			c.Header("Retry-After", "1")
+		}
+		respondPlaybackError(c, httpStatus, code, message, nil)
 		return
 	}
 
@@ -278,4 +286,21 @@ func emitIngestRoutingEvent(e *RoutingEvent) {
 	// an outage would otherwise pile up goroutines behind requests that
 	// themselves succeeded. Workers bound each send with a deadline.
 	enqueueRoutingEvent(nil, e)
+}
+
+// ingestFrontDoorFailure maps an ingest resolution failure to the code a
+// publisher acts on: a transient placement observation failure is retryable and
+// distinct from a complete census that found no ingest-capable node, and a policy
+// refusal is not retryable at all.
+func ingestFrontDoorFailure(err error) (code string, httpStatus int, message string) {
+	switch {
+	case status.Code(err) == codes.PermissionDenied:
+		return "INGEST_PLACEMENT_DENIED", http.StatusForbidden, "This stream's placement policy does not permit ingest on any available node"
+	case errors.Is(err, balancer.ErrPlacementObservationIncomplete), errors.Is(err, context.DeadlineExceeded), status.Code(err) == codes.Unavailable, status.Code(err) == codes.DeadlineExceeded:
+		return "INGEST_PLACEMENT_UNAVAILABLE", http.StatusServiceUnavailable, "Ingest placement is temporarily unavailable; retry"
+	case errors.Is(err, balancer.ErrPlacementUnavailable):
+		return "NO_INGEST_NODES", http.StatusServiceUnavailable, "No ingest-capable nodes are available"
+	default:
+		return "INGEST_RESOLUTION_FAILED", http.StatusServiceUnavailable, "Ingest endpoint resolution failed; retry"
+	}
 }
