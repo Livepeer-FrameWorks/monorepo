@@ -17,6 +17,39 @@
   failed_when: false
   when: not ansible_check_mode
 
+- name: Check Privateer DNS socket state
+  ansible.builtin.command:
+    argv:
+      - systemctl
+      - is-active
+      - frameworks-privateer.socket
+  register: privateer_dns_socket_state
+  changed_when: false
+  failed_when: false
+  when: not ansible_check_mode
+
+# The socket unit can only bind 127.0.0.1:53 once Privateer no longer holds it
+# (first adoption, or a changed socket unit whose old descriptors the running
+# service still has). After that the socket stays open across every Privateer
+# restart, so this stop only happens when the socket itself changes.
+- name: Stop privateer so the DNS socket unit can bind
+  ansible.builtin.systemd:
+    name: frameworks-privateer
+    state: stopped
+  when:
+    - not ansible_check_mode
+    - >-
+      privateer_dns_socket_state.stdout | default('') != 'active'
+      or privateer_dns_socket_unit.changed | default(false)
+
+- name: Ensure Privateer DNS socket is enabled and listening
+  ansible.builtin.systemd:
+    name: frameworks-privateer.socket
+    state: "{{ (privateer_dns_socket_unit.changed | default(false)) | ternary('restarted', 'started') }}"
+    enabled: true
+    daemon_reload: "{{ privateer_dns_socket_unit.changed | default(false) }}"
+  when: not ansible_check_mode
+
 - name: Ensure privateer is enabled and running
   ansible.builtin.systemd:
     name: frameworks-privateer

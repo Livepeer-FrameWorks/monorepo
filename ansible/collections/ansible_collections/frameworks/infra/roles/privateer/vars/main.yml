@@ -1,4 +1,5 @@
 ---
 privateer_bin: "{{ privateer_install_dir }}/privateer"
+privateer_dns_port: "{{ privateer_env.DNS_PORT | default(53) }}"
 privateer_install_identity: "{{ privateer_artifact_checksum ~ ':' ~ privateer_artifact_url }}"
 privateer_install_sentinel: "{{ privateer_install_dir }}/.installed-{{ privateer_install_identity | hash('sha256') }}"

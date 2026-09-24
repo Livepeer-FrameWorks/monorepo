@@ -1,0 +1,12 @@
+# Holds Privateer's .internal DNS sockets outside the service lifecycle, so
+# a Privateer restart queues queries instead of refusing them.
+[Unit]
+Description=FrameWorks Privateer DNS sockets
+
+[Socket]
+ListenStream=127.0.0.1:{{ privateer_dns_port }}
+ListenDatagram=127.0.0.1:{{ privateer_dns_port }}
+Service=frameworks-privateer.service
+
+[Install]
+WantedBy=sockets.target

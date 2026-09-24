@@ -1,4 +1,13 @@
 ---
+# The socket goes first: while it listens, a DNS query would start the
+# service again through socket activation.
+- name: Stop and disable privateer DNS socket
+  ansible.builtin.systemd:
+    name: frameworks-privateer.socket
+    state: stopped
+    enabled: false
+  failed_when: false
+
 - name: Stop and disable privateer
   ansible.builtin.systemd:
     name: frameworks-privateer
@@ -6,10 +15,13 @@
     enabled: false
   failed_when: false
 
-- name: Remove privateer systemd unit
+- name: Remove privateer systemd units
   ansible.builtin.file:
-    path: /etc/systemd/system/frameworks-privateer.service
+    path: "{{ item }}"
     state: absent
+  loop:
+    - /etc/systemd/system/frameworks-privateer.service
+    - /etc/systemd/system/frameworks-privateer.socket
 
 - name: Reload systemd
   ansible.builtin.systemd:

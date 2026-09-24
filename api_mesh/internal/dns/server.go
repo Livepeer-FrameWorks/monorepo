@@ -22,6 +22,9 @@ type Server struct {
 	upstreams []string // upstream resolver addresses for non-.internal queries
 	// queries counts DNS responses by {type=internal|forward, status=ok|nxdomain|servfail|error}.
 	queries *prometheus.CounterVec
+	// inheritSockets returns pre-bound sockets to serve on; nil uses
+	// systemd socket activation.
+	inheritSockets func() (net.PacketConn, net.Listener, error)
 }
 
 // SetQueriesMetric installs the dns_queries_total counter; calling sites
@@ -64,16 +67,45 @@ func (s *Server) Start() {
 	s.udp = &dns.Server{Addr: addr, Net: "udp", Handler: mux}
 	s.tcp = &dns.Server{Addr: addr, Net: "tcp", Handler: mux}
 
+	inherit := s.inheritSockets
+	if inherit == nil {
+		inherit = systemdSockets
+	}
+	packetConn, listener, err := inherit()
+	if err != nil {
+		s.logger.WithError(err).Warn("Ignoring unusable socket-activation descriptors")
+	}
+
+	// Under systemd the sockets belong to frameworks-privateer.socket and stay
+	// bound while this process restarts: queries queue in the kernel instead
+	// of failing, so resolvers never fall through to the host search domain.
+	// Without activation the server binds the address itself.
+	if packetConn != nil {
+		s.udp.PacketConn = packetConn
+		s.logger.WithField("addr", packetConn.LocalAddr().String()).Info("Serving DNS UDP on socket-activated descriptor")
+	}
+	if listener != nil {
+		s.tcp.Listener = listener
+		s.logger.WithField("addr", listener.Addr().String()).Info("Serving DNS TCP on socket-activated descriptor")
+	}
+
 	go func() {
-		if err := s.udp.ListenAndServe(); err != nil {
+		if err := serveDNS(s.udp); err != nil {
 			s.logger.WithError(err).Error("Failed to start DNS UDP server")
 		}
 	}()
 	go func() {
-		if err := s.tcp.ListenAndServe(); err != nil {
+		if err := serveDNS(s.tcp); err != nil {
 			s.logger.WithError(err).Error("Failed to start DNS TCP server")
 		}
 	}()
+}
+
+func serveDNS(srv *dns.Server) error {
+	if srv.PacketConn != nil || srv.Listener != nil {
+		return srv.ActivateAndServe()
+	}
+	return srv.ListenAndServe()
 }
 
 func (s *Server) Stop() {

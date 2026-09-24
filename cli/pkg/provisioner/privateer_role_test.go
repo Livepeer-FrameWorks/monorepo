@@ -2,6 +2,7 @@ package provisioner
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"frameworks/cli/pkg/inventory"
@@ -137,5 +138,86 @@ func TestPrivateerRoleVarsAlwaysIncludesRuntimeIdentityEnv(t *testing.T) {
 	}
 	if env["PRIVATEER_STATIC_PEERS_FILE"] != "/etc/privateer/static-peers.json" {
 		t.Errorf("PRIVATEER_STATIC_PEERS_FILE = %v, want /etc/privateer/static-peers.json", env["PRIVATEER_STATIC_PEERS_FILE"])
+	}
+}
+
+// The .internal route is link-scoped on wg0 and must be re-applied whenever wg0
+// appears or Privateer restarts; a once-at-boot oneshot leaves .internal
+// lookups to the LAN resolver after the link loses its settings. The global
+// resolved scope must not point at Privateer, which answers non-.internal names
+// with SERVFAIL when UPSTREAM_DNS is unset.
+func TestPrivateerDNSSocketOutlivesServiceRestarts(t *testing.T) {
+	const role = "ansible/collections/ansible_collections/frameworks/infra/roles/privateer/"
+	socket := readRepoFile(t, role+"templates/privateer.socket.j2")
+	for _, want := range []string{
+		"ListenStream=127.0.0.1:{{ privateer_dns_port }}\n",
+		"ListenDatagram=127.0.0.1:{{ privateer_dns_port }}\n",
+		"WantedBy=sockets.target\n",
+	} {
+		if !strings.Contains(socket, want) {
+			t.Errorf("privateer socket unit missing %q:\n%s", want, socket)
+		}
+	}
+	// PartOf/BindsTo on the socket would tear it down with every service
+	// restart, which is exactly the DNS gap the socket exists to close.
+	for _, forbidden := range []string{"PartOf=", "BindsTo="} {
+		if strings.Contains(socket, forbidden) {
+			t.Errorf("privateer socket unit must not follow the service lifecycle; found %q", forbidden)
+		}
+	}
+	if vars := readRepoFile(t, role+"vars/main.yml"); !strings.Contains(vars, `privateer_dns_port: "{{ privateer_env.DNS_PORT | default(53) }}"`) {
+		t.Errorf("privateer_dns_port must follow Privateer's DNS_PORT:\n%s", vars)
+	}
+
+	handlers := readRepoFile(t, role+"handlers/main.yml")
+	if strings.Contains(handlers, "frameworks-privateer.socket") {
+		t.Errorf("privateer restart handlers must leave the DNS socket open:\n%s", handlers)
+	}
+
+	service := readRepoFile(t, role+"tasks/service.yml")
+	stop := strings.Index(service, "- name: Stop privateer so the DNS socket unit can bind")
+	socketStart := strings.Index(service, "- name: Ensure Privateer DNS socket is enabled and listening")
+	serviceStart := strings.Index(service, "- name: Ensure privateer is enabled and running")
+	if stop < 0 || socketStart < 0 || serviceStart < 0 || stop >= socketStart || socketStart >= serviceStart {
+		t.Fatalf("service.yml must stop Privateer, bind the socket, then start Privateer (stop=%d socket=%d service=%d):\n%s", stop, socketStart, serviceStart, service)
+	}
+	stopTask := service[stop:socketStart]
+	for _, want := range []string{
+		"privateer_dns_socket_state.stdout | default('') != 'active'",
+		"privateer_dns_socket_unit.changed | default(false)",
+	} {
+		if !strings.Contains(stopTask, want) {
+			t.Errorf("Privateer must only be stopped when the socket needs (re)binding; missing %q:\n%s", want, stopTask)
+		}
+	}
+
+	cleanup := readRepoFile(t, role+"tasks/cleanup.yml")
+	if socketStop, serviceStop := strings.Index(cleanup, "name: frameworks-privateer.socket"), strings.Index(cleanup, "name: frameworks-privateer\n"); socketStop < 0 || serviceStop < 0 || socketStop > serviceStop {
+		t.Errorf("cleanup must stop the DNS socket before the service, or a query re-activates it:\n%s", cleanup)
+	}
+}
+
+func TestPrivateerInternalRouteFollowsWireGuardLink(t *testing.T) {
+	configure := readRepoFile(t, "ansible/collections/ansible_collections/frameworks/infra/roles/privateer/tasks/configure.yml")
+	for _, want := range []string{
+		"BindsTo=sys-subsystem-net-devices-wg0.device\n",
+		"After=sys-subsystem-net-devices-wg0.device systemd-resolved.service frameworks-privateer.service\n",
+		"PartOf=frameworks-privateer.service\n",
+		"WantedBy=sys-subsystem-net-devices-wg0.device\n",
+		" dns wg0 127.0.0.1\n",
+		" domain wg0 ~internal\n",
+		"- reenable\n",
+	} {
+		if !strings.Contains(configure, want) {
+			t.Errorf("privateer configure.yml missing %q", want)
+		}
+	}
+	if strings.Contains(configure, "WantedBy=multi-user.target") {
+		t.Error("route unit still starts once from multi-user.target")
+	}
+	dropIn := configure[strings.Index(configure, "dest: /etc/systemd/resolved.conf.d/frameworks-privateer.conf"):]
+	dropIn = dropIn[:strings.Index(dropIn, "register:")]
+	if strings.Contains(dropIn, "DNS=") || strings.Contains(dropIn, "Domains=") {
+		t.Errorf("global resolved drop-in routes names to Privateer:\n%s", dropIn)
 	}
 }

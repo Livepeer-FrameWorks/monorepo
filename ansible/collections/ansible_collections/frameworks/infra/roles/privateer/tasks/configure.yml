@@ -39,14 +39,22 @@
     - privateer_resolved_dropin.changed
     - not ansible_check_mode
 
+# The .internal route is per-link on wg0 rather than global resolved config:
+# a global DNS=127.0.0.1 would also make Privateer a default route for every
+# other name, and Privateer answers those with SERVFAIL unless UPSTREAM_DNS is
+# set. Link settings made with resolvectl live only as long as the link, so the
+# unit re-applies them whenever wg0 appears (bound to the wg0 device) and
+# whenever Privateer restarts (PartOf), instead of once at boot.
 - name: Privateer | install systemd-resolved route unit
   ansible.builtin.copy:
     dest: /etc/systemd/system/frameworks-privateer-resolved.service
     content: |
       [Unit]
       Description=FrameWorks Privateer .internal DNS route
-      Wants=systemd-resolved.service frameworks-privateer.service
-      After=systemd-resolved.service frameworks-privateer.service network-online.target
+      Wants=systemd-resolved.service
+      BindsTo=sys-subsystem-net-devices-wg0.device
+      After=sys-subsystem-net-devices-wg0.device systemd-resolved.service frameworks-privateer.service
+      PartOf=frameworks-privateer.service
 
       [Service]
       Type=oneshot
@@ -56,11 +64,24 @@
       RemainAfterExit=yes
 
       [Install]
-      WantedBy=multi-user.target
+      WantedBy=sys-subsystem-net-devices-wg0.device
     owner: root
     group: root
     mode: "0644"
   register: privateer_resolved_route_unit
+
+# reenable rewrites the [Install] symlinks, which `enabled: true` leaves alone
+# for a unit that is already enabled under an older WantedBy.
+- name: Privateer | re-enable changed systemd-resolved route unit
+  ansible.builtin.command:
+    argv:
+      - systemctl
+      - reenable
+      - frameworks-privateer-resolved.service
+  changed_when: true
+  when:
+    - privateer_resolved_route_unit.changed
+    - not ansible_check_mode
 
 - name: Privateer | enable systemd-resolved route unit
   ansible.builtin.systemd:
@@ -91,3 +112,12 @@
     mode: "0644"
   notify:
     - privateer restart
+
+- name: Render DNS socket unit
+  ansible.builtin.template:
+    src: privateer.socket.j2
+    dest: /etc/systemd/system/frameworks-privateer.socket
+    owner: root
+    group: root
+    mode: "0644"
+  register: privateer_dns_socket_unit

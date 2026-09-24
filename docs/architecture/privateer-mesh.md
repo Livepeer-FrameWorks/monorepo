@@ -99,6 +99,25 @@ restart. `frameworks mesh wg audit` renders the reported revision
 WireGuard identity diff plus heartbeat liveness — it does not compare reported
 revisions against Quartermaster's current revision.
 
+## `.internal` DNS across restarts
+
+systemd-resolved routes `~internal` on `wg0` to Privateer at `127.0.0.1:53`
+(`frameworks-privateer-resolved.service`). If that address refuses queries, the
+resolver fails the lookup and libc retries it with the host's search domains; a
+DHCP search suffix with a wildcard record then answers `quartermaster.internal`
+with a public IP. So the listener must never disappear while Privateer restarts.
+
+The Ansible role binds the DNS address in `frameworks-privateer.socket`
+(`ListenStream` + `ListenDatagram` on `127.0.0.1:${DNS_PORT}`). systemd passes
+both descriptors to `frameworks-privateer.service` (`LISTEN_FDS`), and the
+socket unit is not restarted with the service: during a restart queries sit in
+the kernel socket buffer and are answered once the new process has loaded
+`last_known_mesh.json`. Without socket activation (dev, compose, macOS) the DNS
+server binds the address itself. The role only stops Privateer to let the
+socket bind when the socket unit is new or changed; `cleanup` stops the socket
+before the service, because a query to a listening socket starts the service
+again.
+
 ## Health
 
 - Mesh substrate: unhealthy after >3 consecutive sync failures or >5 minutes without
