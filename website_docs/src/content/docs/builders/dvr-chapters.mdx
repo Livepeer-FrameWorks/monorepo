@@ -7,7 +7,7 @@ sidebar:
 
 import { Aside } from "@astrojs/starlight/components";
 
-DVR chapters turn one continuous recording into smaller playback windows. Each chapter is finalized as a canonical `.mkv` VOD artifact with a matching `.dtsh` seek index and fresh poster/sprite thumbnails for the chapter timeline. Chapters use the standard VOD playback path, and their processing pass uses the lifecycle-specific `dvr_finalize` process snapshot resolved by Commodore.
+Chapters are how a recording is saved: they turn one continuous recording into smaller playback windows that stay replayable after the broadcast ends, while the live rewind window only serves viewers during the broadcast. Each chapter is finalized as a canonical `.mkv` VOD artifact with a matching `.dtsh` seek index and fresh poster/sprite thumbnails for the chapter timeline. Chapters use the standard VOD playback path, and their processing pass uses the lifecycle-specific `dvr_finalize` process snapshot resolved by Commodore.
 
 <Aside type="tip" title="Why chapters matter">
   Chapters let always-on streams behave like an archive library without splitting the source into
@@ -17,9 +17,9 @@ DVR chapters turn one continuous recording into smaller playback windows. Each c
 
 ## Configuring chapters on a stream
 
-Historical chapter mode is a property of the source **Stream**, snapshotted onto each recording at StartDVR. Changes apply to the next recording, not in-flight ones.
+The chapter mode is a property of the source **Stream**, snapshotted onto each recording when it starts. Changes apply from the next broadcast; a recording in progress keeps its setting.
 
-`NONE` only disables historical chapter artifacts. It does **not** disable DVR recording. The active recording still has its rolling DVR playback surface (`dvr+<dvr_internal_name>`) for live time-shift within the configured DVR window. Without chapters, there is no finalized replay artifact after media rolls out of that window.
+New streams use `WINDOW_SIZED`: each chapter is as long as the recording's own live rewind window, starting at the broadcast's start. `NONE` keeps live rewind only. The recording still serves its rolling playback surface (`dvr+<dvr_internal_name>`) for rewinding while the broadcast is live, but nothing is saved: once media leaves that window it is gone, no chapter exists, and the recording ends with `recording.stopped` but never `recording.ready`.
 
 ```graphql
 mutation EnableChapters {
@@ -36,15 +36,17 @@ mutation EnableChapters {
 }
 ```
 
-| Mode             | Best for                                                                                     |
-| ---------------- | -------------------------------------------------------------------------------------------- |
-| `WINDOW_SIZED`   | Historical replay buckets sized to the stream's DVR window.                                  |
-| `FIXED_INTERVAL` | Regular historical replay buckets such as hourly, 6-hour, or 24-hour chapters.               |
-| `NONE`           | Default. Rolling DVR only: record and serve the live DVR window, but do not create chapters. |
+| Mode             | Best for                                                                                  |
+| ---------------- | ----------------------------------------------------------------------------------------- |
+| `WINDOW_SIZED`   | Default. Parts as long as the recording's live rewind window, from the broadcast's start. |
+| `FIXED_INTERVAL` | Clock-aligned UTC parts such as hourly, 6-hour, or 24-hour chapters.                      |
+| `NONE`           | Live rewind only: viewers can rewind while live, and nothing is kept after the broadcast. |
 
-A new stream has chapters off (`NONE`); set `dvrChapterMode` to create them.
+`FIXED_INTERVAL` requires `dvrChapterIntervalSeconds ≥ 3600` (1 hour). The interval is used only
+by `FIXED_INTERVAL`; send `0` with another mode to clear it.
 
-`FIXED_INTERVAL` requires `dvrChapterIntervalSeconds ≥ 3600` (1 hour).
+A stopped recording's own playback ID plays its most recent finalized chapter. Before any chapter
+has finalized, playback by that ID answers `409 DVR_CHAPTERS_PENDING`.
 
 All chapter boundaries use UTC epoch milliseconds. Civil-time bucketing belongs in your app: convert "yesterday in Europe/Amsterdam" to a UTC range there, then list the chapters in that range with `dvrChapters(rangeStartMs:, rangeEndMs:)`.
 

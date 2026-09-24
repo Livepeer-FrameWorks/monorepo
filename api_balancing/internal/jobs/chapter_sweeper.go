@@ -14,6 +14,7 @@ import (
 
 const (
 	perArtifactSweepTimeout = 30 * time.Second
+	terminalBackfillBatch   = 100
 )
 
 // CHAPTER SWEEPER
@@ -29,6 +30,12 @@ const (
 //   2. Open-state recovery. If an active DVR has no current chapter
 //      (sweeper restart after a missed tick), open the chapter that
 //      contains now() so playback timeline progress doesn't stall.
+//
+//   3. Terminal backfill. A finalized DVR with a chapter mode whose
+//      dvr_chapter_backfill_complete is false gets its terminal chapter
+//      set materialized once (control.BackfillTerminalChapters), so a
+//      recording that finalized without chapters becomes replayable
+//      while its segments remain.
 //
 // Bounded operations: the sweeper queries each artifact's policy and
 // the current chapter row only — never enumerates segments — in
@@ -103,6 +110,12 @@ func (s *ChapterSweeper) sweep() {
 		s.logger.WithField("cleared", cleared).Info("Chapter sweep: cleared inactive current chapters")
 	}
 
+	if settled, backfillErr := control.BackfillTerminalChapters(ctx, terminalBackfillBatch, s.logger); backfillErr != nil {
+		s.logger.WithError(backfillErr).Warn("Chapter sweep: failed to enumerate finalized DVRs for terminal backfill")
+	} else if settled > 0 {
+		s.logger.WithField("settled", settled).Info("Chapter sweep: terminal chapter backfill settled finalized DVRs")
+	}
+
 	rows, err := foghorndb.New(s.db).ListActiveDVRChapterPolicies(ctx)
 	if err != nil {
 		s.logger.WithError(err).Warn("Chapter sweep: failed to enumerate active DVRs")
@@ -145,10 +158,9 @@ func (s *ChapterSweeper) sweep() {
 // processArtifact rotates chapters on one active DVR. Closes the
 // current chapter when its boundary has passed and opens the next.
 //
-// When chapter mode is window_sized_chapters and the artifact's
-// dvr_chapter_interval is 0, fall back to dvr_window_seconds (the
-// live window doubles as the chapter length). For fixed_interval the
-// interval must be set; otherwise the artifact is silently skipped.
+// window_sized_chapters uses dvr_window_seconds as the chapter length
+// (the live window doubles as the chapter length). For fixed_interval
+// the interval must be set; otherwise the artifact is skipped.
 func (s *ChapterSweeper) processArtifact(
 	ctx context.Context,
 	tx *sql.Tx,

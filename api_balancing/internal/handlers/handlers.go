@@ -6,6 +6,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"google.golang.org/grpc/codes"
+	grpcstatus "google.golang.org/grpc/status"
 	"math"
 	"net/http"
 	"net/url"
@@ -2173,13 +2175,33 @@ func resolveDVRViewerEndpoint(ctx context.Context, req *sharedpb.ViewerEndpointR
 		}
 		return resp, nil
 	}
-	// Finalized DVR: the rolling surface is gone. Match the gRPC path
-	// (api_balancing/internal/grpc/server.go::resolveDVRViewerEndpoint)
-	// and require the client to query dvrChapters() then play a chapter
-	// playbackId — falling through to artifact playback would surface
-	// the parent DVR row, which has no playable artifact.
-	return nil, fmt.Errorf("DVR is no longer active; query dvrChapters and play a chapter playbackId")
+	// Stopped DVR: the rolling surface is gone and the parent row has no
+	// playable artifact. Like the gRPC path, the recording's playbackId
+	// plays its most recent finalized chapter; before any chapter has
+	// finalized the caller gets errDVRChaptersPending.
+	if dispatch == nil || dispatch.DVRHash == "" || db == nil {
+		return nil, errDVRChaptersPending
+	}
+	pid, err := foghorndb.New(db).LatestPlayableDVRChapterID(ctx, dispatch.DVRHash)
+	if errors.Is(err, sql.ErrNoRows) || (err == nil && !pid.Valid) {
+		return nil, errDVRChaptersPending
+	}
+	if err != nil {
+		return nil, fmt.Errorf("stopped DVR chapter lookup: %w", err)
+	}
+	chapterResolution, err := control.ResolveContent(ctx, pid.String)
+	if err != nil || chapterResolution == nil {
+		return nil, fmt.Errorf("resolve latest DVR chapter %s: %w", pid.String, err)
+	}
+	chapterReq := proto.CloneOf(req)
+	chapterReq.ContentId = pid.String
+	return resolveArtifactViewerEndpoint(chapterReq, lat, lon, chapterResolution)
 }
+
+// errDVRChaptersPending reports a stopped recording with no finalized chapter
+// yet: nothing is playable until chapter finalization completes, or ever when
+// the recording kept live rewind only.
+var errDVRChaptersPending = errors.New("recording has ended and has no playable chapter yet; query dvrChapters for its chapters")
 
 func resolveArtifactViewerEndpoint(req *sharedpb.ViewerEndpointRequest, lat, lon float64, resolution *control.ContentResolution) (*sharedpb.ViewerEndpointResponse, error) {
 	start := time.Now()
@@ -2453,6 +2475,13 @@ func HandleGenericViewerPlayback(c *gin.Context) {
 	}
 
 	if err != nil {
+		if errors.Is(err, errDVRChaptersPending) {
+			respondPlaybackError(c, http.StatusConflict, "DVR_CHAPTERS_PENDING", "Recording has ended and has no playable chapter yet; query dvrChapters for its chapters", gin.H{
+				"contentType": contentType,
+				"contentId":   contentID,
+			})
+			return
+		}
 		if errors.Is(err, control.ErrCrossClusterArtifactUnavailable) {
 			// Fail-fast — peer origin hasn't pushed the artifact to S3
 			// yet. Surface as 503 (Service Unavailable) so callers retry
@@ -2478,7 +2507,12 @@ func HandleGenericViewerPlayback(c *gin.Context) {
 		// A policy refusal is not a resolution failure: stored media reports it
 		// with the same retryable placement code the live lane uses, so a client
 		// distinguishes "not permitted here" from "this content is broken".
+		if grpcstatus.Code(err) == codes.PermissionDenied {
+			respondPlaybackError(c, http.StatusForbidden, "PLAYBACK_PLACEMENT_DENIED", "Playback of this content is not permitted from any available destination", nil)
+			return
+		}
 		if contentType == "live" || errors.Is(err, control.ErrStoredMediaPlacementUnavailable) {
+			c.Header("Retry-After", "1")
 			respondPlaybackError(c, http.StatusServiceUnavailable, "PLAYBACK_PLACEMENT_UNAVAILABLE", "No permitted playback destination is available; retry safely", nil)
 			return
 		}

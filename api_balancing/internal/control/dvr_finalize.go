@@ -14,6 +14,7 @@ import (
 	commodorepb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/commodore"
 	publicv1 "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/events/public/v1"
 	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
+	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
@@ -312,8 +313,14 @@ func FinalizeDVR(ctx context.Context, dvrHash string, opts FinalizeOptions) (Fin
 		// 'deleted'. Only transition a row STILL 'finalizing' (RowsAffected==0 => we lost the race, e.g. the
 		// artifact was deleted) — never resurrect a terminal row with a stale 'completed'.
 		qfin := foghorndb.New(finTx)
+		s3URL, urlErr := dvrParentS3URL(ctx, qfin, dvrHash, claimTenant)
+		if urlErr != nil {
+			return fmt.Errorf("resolve dvr storage prefix: %w", urlErr)
+		}
 		n, finErr := qfin.CompleteDVRFinalization(ctx, foghorndb.CompleteDVRFinalizationParams{
-			FinalStatus: finalStatus, SizeBytes: int64(opts.SizeBytes), DurationSeconds: opts.DurationSeconds,
+			FinalStatus: finalStatus, UploadedSegments: int32(uploadedCount), S3Url: s3URL,
+			StorageClusterID: localClusterID, BackendID: localBackendFingerprint(),
+			SizeBytes: int64(opts.SizeBytes), DurationSeconds: opts.DurationSeconds,
 			RetentionUntil: retentionNullTime(retentionUntilArg), EndedAt: sql.NullTime{Time: endedAt, Valid: true},
 			RetainStopObligation: opts.RetainStopObligation, ArtifactHash: dvrHash, TenantID: claimTenant,
 		})
@@ -375,10 +382,20 @@ func FinalizeDVR(ctx context.Context, dvrHash string, opts FinalizeOptions) (Fin
 			}
 			et := endedAt.Unix()
 			dvrData.EndedAt = &et
-			ready := &publicv1.RecordingReady{
-				Artifact:   artifactoutbox.RecordingArtifact(dvrHash, rowStreamID),
-				DurationMs: max(opts.DurationSeconds, 0) * 1000,
-				SizeBytes:  int64(opts.SizeBytes),
+			// recording.ready announces a replayable recording, which exists only
+			// when the recording keeps chapters. A live-rewind-only recording
+			// (no chapter policy) ends with recording.stopped and nothing else.
+			_, keepsChapters, policyErr := readDVRChapterPolicy(ctx, finTx, dvrHash)
+			if policyErr != nil {
+				return fmt.Errorf("read dvr chapter policy: %w", policyErr)
+			}
+			var ready proto.Message
+			if keepsChapters {
+				ready = &publicv1.RecordingReady{
+					Artifact:   artifactoutbox.RecordingArtifact(dvrHash, rowStreamID),
+					DurationMs: max(opts.DurationSeconds, 0) * 1000,
+					SizeBytes:  int64(opts.SizeBytes),
+				}
 			}
 			if enqErr := artifactoutbox.EnqueueDVRTransitionTx(ctx, finTx, dvrData, ready); enqErr != nil {
 				logger.WithError(enqErr).WithField("dvr_hash", dvrHash).Error("Failed to enqueue terminal DVR lifecycle event")

@@ -502,8 +502,8 @@ func resolveArtifactPlaybackWithResp(ctx context.Context, deps *PlaybackDependen
 	var syncStatus string
 	var hasThumbnails bool
 	var authoritativeCluster string
-	// The thumbnail SERVING cluster is DISTINCT from the artifact's byte-storage cluster: a thumbnail is projected to
-	// the tenant's official-durable cluster, which may differ from where the bytes live (BYOC/cross-cell). Read it
+	// The thumbnail SERVING cluster is recorded separately from the artifact's byte-storage cluster: new thumbnails
+	// land on the artifact's origin cluster, but older rows may name a different cluster than the bytes. Read it
 	// separately so the thumbnail URL points at the Chandler that actually holds it, while authoritativeCluster stays
 	// the byte-placement / authorization cluster. NULL falls back to storage/origin (legacy rows).
 	var thumbnailServingCluster sql.NullString

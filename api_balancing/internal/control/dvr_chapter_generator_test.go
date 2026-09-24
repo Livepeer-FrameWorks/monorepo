@@ -142,11 +142,11 @@ func TestCurrentChapterBounds(t *testing.T) {
 	}
 }
 
-// TestEffectiveChapterInterval pins the interval-resolution precedence: an
-// explicit positive interval always wins; otherwise only window_sized_chapters
-// falls back to the DVR window length, and every other mode resolves to 0
-// (meaning "no chaptering"). EffectiveIntervalSeconds is the policy-struct
-// delegate and must agree.
+// TestEffectiveChapterInterval pins the interval resolution: window-sized
+// chapters always use the recording's live window, and a stored interval
+// applies only to fixed_interval. A stale interval left over from an earlier
+// fixed_interval policy must not change window-sized chapter length.
+// EffectiveIntervalSeconds is the policy-struct delegate and must agree.
 func TestEffectiveChapterInterval(t *testing.T) {
 	cases := []struct {
 		name         string
@@ -155,11 +155,11 @@ func TestEffectiveChapterInterval(t *testing.T) {
 		windowSecs   int32
 		want         int32
 	}{
-		{"explicit interval wins over window", ChapterModeWindowSized, 30, 600, 30},
-		{"explicit interval wins for fixed", ChapterModeFixedInterval, 30, 600, 30},
-		{"window_sized falls back to window", ChapterModeWindowSized, 0, 600, 600},
+		{"window_sized ignores a stale interval", ChapterModeWindowSized, 7200, 600, 600},
+		{"fixed uses its interval", ChapterModeFixedInterval, 3600, 600, 3600},
+		{"window_sized uses window", ChapterModeWindowSized, 0, 600, 600},
 		{"fixed with no interval is zero", ChapterModeFixedInterval, 0, 600, 0},
-		{"unknown mode with no interval is zero", "rolling", 0, 600, 0},
+		{"unknown mode is zero", "rolling", 3600, 600, 0},
 		{"window_sized with no window is zero", ChapterModeWindowSized, 0, 0, 0},
 	}
 	for _, tc := range cases {
@@ -170,6 +170,36 @@ func TestEffectiveChapterInterval(t *testing.T) {
 			p := DVRChapterPolicy{Mode: tc.mode, IntervalSeconds: tc.intervalSecs, WindowSeconds: tc.windowSecs}
 			if got := p.EffectiveIntervalSeconds(); got != tc.want {
 				t.Fatalf("EffectiveIntervalSeconds = %d, want %d", got, tc.want)
+			}
+		})
+	}
+}
+
+// TestResolveRecordingChapterPolicy pins the StartDVR snapshot: a request
+// without a mode (older Commodore, local-authority admission) still records
+// window-sized chapters, and only an explicit "none" keeps nothing.
+func TestResolveRecordingChapterPolicy(t *testing.T) {
+	cases := []struct {
+		name         string
+		mode         string
+		interval     int32
+		wantMode     string
+		wantInterval int32
+	}{
+		{"empty defaults to window_sized", "", 0, ChapterModeWindowSized, 0},
+		{"none keeps nothing", "none", 0, "", 0},
+		{"NONE is case-insensitive", " NONE ", 7200, "", 0},
+		{"window_sized drops interval", ChapterModeWindowSized, 7200, ChapterModeWindowSized, 0},
+		{"fixed keeps interval", ChapterModeFixedInterval, 7200, ChapterModeFixedInterval, 7200},
+		{"fixed without interval records window_sized", ChapterModeFixedInterval, 0, ChapterModeWindowSized, 0},
+		{"unknown mode records window_sized", "rolling", 0, ChapterModeWindowSized, 0},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			gotMode, gotInterval := ResolveRecordingChapterPolicy(tc.mode, tc.interval)
+			if gotMode != tc.wantMode || gotInterval != tc.wantInterval {
+				t.Fatalf("ResolveRecordingChapterPolicy(%q, %d) = (%q, %d), want (%q, %d)",
+					tc.mode, tc.interval, gotMode, gotInterval, tc.wantMode, tc.wantInterval)
 			}
 		})
 	}

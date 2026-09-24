@@ -56,9 +56,16 @@ DVR segment objects are recovery-only — they're never read for playback. Once 
 A chapter is a `(start_ms, end_ms)` slice of the artifact's ledger, finalized into its own VOD artifact. Mode is configured per-stream and snapshotted at StartDVR:
 
 ```
-window_sized_chapters    sequential fixed-length chapters of size tier.MaxWindowSeconds
+window_sized_chapters    default; chapters as long as the recording's dvr_window_seconds, from started_at
 fixed_interval           UTC-only interval_seconds buckets (≥3600s) anchored at unix epoch 0
+(NULL)                   NONE: live rewind only, no chapters, no recording.ready
 ```
+
+`commodore.streams.dvr_chapter_mode` defaults to `window_sized_chapters`; NULL is NONE. Commodore sends NONE to Foghorn as an explicit `none` on `ValidateStreamKeyResponse`, `ResolveStreamContextResponse` and manual StartDVR, because Foghorn's StartDVR records `window_sized_chapters` for a request without a mode (`control.ResolveRecordingChapterPolicy`). `dvr_chapter_interval` is read only for `fixed_interval` (`control.EffectiveChapterInterval`).
+
+A finalized recording with a chapter mode and `dvr_chapter_backfill_complete = false` gets its terminal chapter set materialized once by the chapter sweeper (`control.BackfillTerminalChapters`), when no chapter reaches `ended_at` yet and an `uploaded`/`deleted_local` segment remains. This recovers a terminal close that failed during FinalizeDVR and the recordings the v0.3.11 backfill moved from NULL to `window_sized_chapters`.
+
+A stopped recording's own playback ID resolves to its most recent finalized chapter (gRPC `ResolveViewerEndpoint` and HTTP `/play`); with none yet, HTTP answers `409 DVR_CHAPTERS_PENDING` and gRPC `FailedPrecondition`.
 
 `explicit_range` is retired. `setDVRChapterPolicy` is retired. Mode changes take effect at the next recording.
 

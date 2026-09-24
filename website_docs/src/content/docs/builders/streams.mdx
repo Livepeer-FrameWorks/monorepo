@@ -86,11 +86,13 @@ mutation {
 }
 ```
 
-`record: true` enables DVR recording from the start. For event channels, this gives late viewers
-seekback while the stream is live. For 24/7 channels, the live stream keeps running while replay
-is served from chapter artifacts that segment the session timeline — no forced stream restart at
-a duration boundary. You can also toggle recording later with `updateStream`. See
-[Live and DVR Streams](#live-and-dvr-streams) for what that creates.
+`record: true` records every broadcast. While live, late viewers can rewind within the **live
+rewind window**; after the broadcast, the **saved recording** is replayable as chapters, which by
+default are as long as the live rewind window. For 24/7 channels the live stream keeps running
+while replay is served from those chapters, with no forced stream restart at a duration boundary.
+You can also toggle recording later with `updateStream`, and choose how the saved recording is
+split with `dvrChapterMode` (see [DVR Chapters](/builders/dvr-chapters)). See
+[Live and DVR Streams](#live-and-dvr-streams) for what recording creates.
 
 ## Live and DVR Streams
 
@@ -101,8 +103,9 @@ live stream:
 - **Live stream** — segments live in a shared-memory ring buffer of about 2 minutes. Right for
   real-time playback and `CLIP_NOW` of recent moments.
 - **DVR stream** — segments are written to disk and archived under one recording artifact. Right
-  for seek-back, longer clips, and post-event playback. The live DVR window is bounded for player
-  performance; historical replay uses finalized chapter artifacts over the same segment archive.
+  for seek-back, longer clips, and post-event playback. The live rewind window is bounded for
+  player performance; the saved recording is replayed through finalized chapters over the same
+  segment archive.
 
 The live ring is configurable — private deployments often want a longer window — but every extra
 second costs cluster RAM, so the default stays tight. [Open an in-app ticket](%APP_URL%/support)
@@ -111,7 +114,8 @@ if your deployment needs a non-default size.
 Practical consequences:
 
 - **Players** use the DVR `playbackId` (with `contentType="dvr"`) to seek back beyond the live
-  ring within the live DVR window.
+  ring within the live rewind window. After the broadcast, the same `playbackId` plays the
+  recording's most recent finalized chapter.
 - **Clip creation** runs against the entity that holds the moment you want — see
   [Clips](/builders/recordings#clips). Use the live stream for the live ring and the DVR
   recording for archived ranges.
@@ -157,7 +161,8 @@ resolution.
 
 - **Offline** - The stream exists, but no encoder or pull input is currently active.
 - **Live** - The media edge is receiving or pulling source media.
-- **Recording** - If recording is enabled, DVR assets are produced while the stream is live.
+- **Recording** - If recording is enabled, each broadcast is recorded: viewers can rewind while it
+  is live, and it is saved as chapters after it ends.
 - **Idle pull input** - Pull streams do not fetch upstream media until a viewer requests playback.
 - **Managed source** - The deployment reconciler owns the source; an always-on source can remain
   active without a viewer.

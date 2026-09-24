@@ -30,11 +30,15 @@ func sampleSegmentRow() *sqlmock.Rows {
 }
 
 // MarkDVRSegmentUploaded flips a pending/failed_upload row to uploaded with its
-// size, gated on the source states so a duplicate ack can't regress a later state.
+// size, gated on the source states so a duplicate ack can't regress a later state,
+// and moves a still-pending parent to this cell's S3 (local cluster + backend).
 func TestMarkDVRSegmentUploaded(t *testing.T) {
 	mock, _, _ := setupArtifactTestDeps(t)
-	mock.ExpectExec(`UPDATE foghorn.dvr_segments\s+SET status = 'uploaded',\s+size_bytes = \$3,\s+uploaded_at = NOW\(\).*WHERE foghorn.dvr_segments.artifact_hash = \$1\s+AND segment_name = \$2\s+AND status IN \('pending', 'failed_upload'\)\s+AND EXISTS`).
-		WithArgs("art-1", "seg-1", int64(2048), "tenant-1").
+	prevLocal := localClusterID
+	SetLocalClusterID("cluster-eu")
+	t.Cleanup(func() { SetLocalClusterID(prevLocal) })
+	mock.ExpectExec(`UPDATE foghorn.dvr_segments\s+SET status = 'uploaded', size_bytes = \$3, uploaded_at = NOW\(\).*WHERE foghorn.dvr_segments.artifact_hash = \$4 AND segment_name = \$5\s+AND status IN \('pending', 'failed_upload'\).*UPDATE foghorn.artifacts AS parent\s+SET storage_location = 's3', sync_status = 'in_progress'`).
+		WithArgs("cluster-eu", localBackendFingerprint(), int64(2048), "art-1", "seg-1", "tenant-1").
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	if err := MarkDVRSegmentUploaded(context.Background(), "tenant-1", "art-1", "seg-1", 2048); err != nil {
 		t.Fatal(err)

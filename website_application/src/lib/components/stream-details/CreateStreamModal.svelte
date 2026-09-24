@@ -119,10 +119,11 @@
         <Checkbox id="create-stream-record" bind:checked={record} disabled={creating} />
         <div>
           <Label for="create-stream-record" class="text-sm font-medium text-foreground">
-            Enable Recording
+            Record broadcasts
           </Label>
           <p class="text-xs text-muted-foreground">
-            Automatically record your stream to create VOD content
+            Saves every broadcast so it can be replayed after it ends. While live, viewers can
+            rewind within the live rewind window.
           </p>
         </div>
       </div>

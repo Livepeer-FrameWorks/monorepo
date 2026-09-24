@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"frameworks/api_balancing/internal/database/foghorndb"
@@ -138,6 +139,72 @@ func CloseTerminalChapterTx(ctx context.Context, tx foghorndb.DBTX, artifactHash
 		}
 	}
 	return true, nil
+}
+
+// BackfillTerminalChapters materializes the terminal chapter set for up to
+// batchSize finalized recordings whose dvr_chapter_backfill_complete is still
+// false, and returns how many it settled. This covers recordings that
+// finalized without a chapter mode and later received one, and recordings
+// whose terminal close failed during FinalizeDVR.
+func BackfillTerminalChapters(ctx context.Context, batchSize int32, logger logging.Logger) (int, error) {
+	if db == nil {
+		return 0, sql.ErrConnDone
+	}
+	rows, err := foghorndb.New(db).ListDVRTerminalChapterBackfill(ctx, batchSize)
+	if err != nil {
+		return 0, err
+	}
+	settled := 0
+	for _, row := range rows {
+		var changed bool
+		if err := WithDVRChapterMutationTx(ctx, row.ArtifactHash, func(tx *sql.Tx) error {
+			var txErr error
+			changed, txErr = BackfillTerminalChaptersTx(ctx, tx, row.ArtifactHash, row.EndedAtMs)
+			return txErr
+		}); err != nil {
+			logger.WithError(err).WithField("artifact_hash", row.ArtifactHash).Warn("Terminal chapter backfill failed")
+			continue
+		}
+		settled++
+		if changed {
+			logger.WithFields(logging.Fields{"artifact_hash": row.ArtifactHash, "terminal_at_ms": row.EndedAtMs}).
+				Info("Terminal DVR chapters backfilled")
+			notifyChapterClosed()
+		}
+	}
+	return settled, nil
+}
+
+// BackfillTerminalChaptersTx materializes one finalized recording's terminal
+// chapter set and marks its backfill complete. It materializes nothing when a
+// chapter already reaches ended_at (FinalizeDVR closed it) or when no stored
+// segment remains to remux. The caller owns the transaction and the DVR
+// chapter advisory lock.
+func BackfillTerminalChaptersTx(ctx context.Context, tx foghorndb.DBTX, artifactHash string, endedAtMs int64) (bool, error) {
+	q := foghorndb.New(tx)
+	changed := false
+	materialized, err := q.DVRTerminalChapterMaterialized(ctx, foghorndb.DVRTerminalChapterMaterializedParams{
+		ArtifactHash: artifactHash, EndedAtMs: endedAtMs,
+	})
+	if err != nil {
+		return false, fmt.Errorf("check terminal chapter: %w", err)
+	}
+	if !materialized && endedAtMs > 0 {
+		stored, err := q.DVRHasStoredSegments(ctx, artifactHash)
+		if err != nil {
+			return false, fmt.Errorf("check stored segments: %w", err)
+		}
+		if stored {
+			changed, err = CloseTerminalChapterTx(ctx, tx, artifactHash, endedAtMs)
+			if err != nil {
+				return false, err
+			}
+		}
+	}
+	if err := q.MarkDVRChapterBackfillComplete(ctx, artifactHash); err != nil {
+		return false, fmt.Errorf("mark chapter backfill complete: %w", err)
+	}
+	return changed, nil
 }
 
 // BackfillChaptersThrough materializes every chapter interval from the
@@ -286,14 +353,41 @@ func DVRChapterMaxRangeMs(ctx context.Context, conn foghorndb.DBTX, artifactHash
 	return int64(time.Hour / time.Millisecond), nil
 }
 
+// EffectiveChapterInterval returns the chapter length for a recording.
+// Window-sized chapters always use the recording's own live window; a stored
+// interval applies only to fixed_interval.
 func EffectiveChapterInterval(mode string, intervalSeconds, windowSeconds int32) int32 {
-	if intervalSeconds > 0 {
-		return intervalSeconds
-	}
-	if mode == ChapterModeWindowSized {
+	switch mode {
+	case ChapterModeWindowSized:
 		return windowSeconds
+	case ChapterModeFixedInterval:
+		return intervalSeconds
+	default:
+		return 0
 	}
-	return 0
+}
+
+// ChapterModeNone is the StartDVR request value for a recording that keeps
+// live rewind only. It is stored as NULL on foghorn.artifacts.
+const ChapterModeNone = "none"
+
+// ResolveRecordingChapterPolicy turns a StartDVR request's chapter fields into
+// the snapshot stored on the recording. An empty or unrecognized mode, or a
+// fixed_interval request without an interval, records window-sized chapters so
+// a caller that does not carry the stream's policy still yields a replayable
+// recording. "none" returns an empty mode: no chapters are kept.
+func ResolveRecordingChapterPolicy(mode string, intervalSeconds int32) (string, int32) {
+	switch strings.ToLower(strings.TrimSpace(mode)) {
+	case ChapterModeNone:
+		return "", 0
+	case ChapterModeFixedInterval:
+		if intervalSeconds > 0 {
+			return ChapterModeFixedInterval, intervalSeconds
+		}
+		return ChapterModeWindowSized, 0
+	default:
+		return ChapterModeWindowSized, 0
+	}
 }
 
 // CurrentChapterBounds computes the [startMs, endMs) of the chapter

@@ -7,12 +7,12 @@ sidebar:
 
 import { Aside } from "@astrojs/starlight/components";
 
-Always-on venues, sports, conferences, classrooms, public meetings, monitoring feeds: anywhere the live moment and the long archive both matter. FrameWorks keeps a single DVR session running per channel for as long as the stream is live, and, when chapters are enabled on the stream, segments that session into chapter artifacts. You find chapters by listing a UTC time range and replay each one by its playback ID. This page covers DVR replay, clips from the buffer, and direct VOD uploads.
+Always-on venues, sports, conferences, classrooms, public meetings, monitoring feeds: anywhere the live moment and the long archive both matter. A stream that records broadcasts keeps one recording running per broadcast for as long as the stream is live, and saves it as chapters you can replay after the broadcast ends. You find chapters by listing a UTC time range and replay each one by its playback ID. This page covers recordings, clips from the buffer, and direct VOD uploads.
 
 ```mermaid
 flowchart LR
-    LIVE[Live stream] --> DVR[Rolling DVR window]
-    DVR --> CH[Finalized archive chapters]
+    LIVE[Live stream] --> DVR[Live rewind window]
+    DVR --> CH[Saved recording chapters]
     DVR --> CLIP[Clip export]
     UPLOAD[Direct upload] --> VOD[VOD asset]
     CH --> PLAY[Playback ID]
@@ -27,25 +27,31 @@ flowchart LR
   as a storage budget decision.
 </Aside>
 
-## DVR Recording
+## Recording broadcasts
 
-DVR records your live stream and preserves the broadcast for later playback. DVR content is playable **while the stream is still live**: viewers can seek back through the live DVR window, pause, and catch up. After that window, the recording is replayable only if chapters are enabled on the stream (they are off by default): it is then split into bounded chapter artifacts for replay.
+A stream with **Record broadcasts** on (`record: true`) records every broadcast. Two things come
+out of one recording:
 
-The recording model separates capture, live seeking, and archive replay:
+- **Live rewind window**: while the broadcast is live, viewers can pause, rewind up to the
+  window's length, and jump back to live. The window's length comes from your tier and cluster, so
+  live playlists stay small.
+- **Saved recording**: the broadcast is kept after it ends, split into chapters. Each chapter is a
+  finalized VOD-shaped artifact with its own playback ID, replayable until retention removes it.
 
-- **24/7 capture** — one stream session can keep recording continuously instead of rolling into arbitrary fixed-length assets.
-- **Fast live playlists** — the live DVR window stays bounded so viewers get seekback without enormous manifests.
-- **Archive replay** — chapters turn a long recording into hidden VOD-shaped artifacts with normal playback IDs.
-- **Cost control** — retention policies decide how long completed DVR, clips, and VOD assets stay in storage.
+By default a saved recording is split into parts as long as the live rewind window, starting at
+the broadcast's start (`WINDOW_SIZED`). You can instead split it into clock-aligned UTC parts every
+N hours (`FIXED_INTERVAL`). A stream set to `NONE` keeps live rewind only: viewers can rewind while
+live, and nothing is kept once media leaves the window.
 
-That split matters:
+| Concept            | What it controls                                                                                                             |
+| ------------------ | ---------------------------------------------------------------------------------------------------------------------------- |
+| Live rewind window | How far back live viewers can seek while the broadcast is live. Tier- and cluster-bounded.                                   |
+| Saved recording    | The broadcast after it ends, as chapters. One recording can span hours, days, or months if the ingest stays live.            |
+| Chapters           | The saved parts. Each is linked to its recording and source stream, and stays out of the tenant-wide VOD library by default. |
+| Retention          | How long a saved recording is kept after the broadcast ends. Retention is not the live rewind window.                        |
 
-| Concept            | What it controls                                                                                                                                                           |
-| ------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Live DVR window    | How far back live viewers can seek while the stream is still recording. This is tier- and cluster-bounded so live playlists stay small.                                    |
-| Continuous archive | The full DVR segment timeline for one stream session. It can span hours, days, or months if the ingest stays live.                                                         |
-| DVR chapters       | Finalized VOD-shaped artifacts for historical replay. Each chapter is linked to its parent DVR and source stream, but stays out of the tenant-wide VOD library by default. |
-| Retention          | How long a completed recording is kept after the stream session ends. Retention is not the live seekback window.                                                           |
+A stream's chapter setting is snapshotted when a recording starts, so a change applies from the
+next broadcast; a recording in progress keeps its setting.
 
 ### Enabling Recording
 
@@ -120,11 +126,16 @@ mutation StopRecording {
 
 ### Playback
 
-DVR recordings get their own `playbackId`, separate from the live stream's. This means the same stream supports three viewing modes:
+Recordings get their own `playbackId`, separate from the live stream's. This means the same stream supports three viewing modes:
 
 - **Live** (`streamPlaybackId`) — real-time playback at the live edge.
-- **Live DVR window** (`dvrPlaybackId`) — seekable playback while the stream is recording, bounded by the tier/cluster DVR window.
-- **Archive chapters** — optional finalized VOD artifacts generated from the recording timeline for historical replay.
+- **Live rewind window** (`dvrPlaybackId`) — seekable playback while the broadcast is live, bounded by the tier/cluster window.
+- **Saved recording** — the recording's chapters, each a finalized VOD artifact with its own `playbackId`, for replay after the broadcast.
+
+After the broadcast ends, the recording's own `dvrPlaybackId` plays its most recent finalized
+chapter. Until the first chapter has finalized (or for a live-rewind-only recording, which has no
+chapters) `/play/{dvrPlaybackId}` answers `409` with code `DVR_CHAPTERS_PENDING`; list the
+recording's chapters with `dvrChapters` to play a specific one.
 
 DVR playback URLs follow the same `/play/{playbackId}` pattern:
 
@@ -134,7 +145,7 @@ DASH:   %PLAY_URL%/play/{dvrPlaybackId}/cmaf/index.mpd
 MP4:    %PLAY_URL%/play/{dvrPlaybackId}.mp4
 ```
 
-With the Player SDK, use `contentType="dvr"` for the live DVR window. The player enables seeking, skip, and speed controls within the active window:
+With the Player SDK, use `contentType="dvr"` for the live rewind window. The player enables seeking, skip, and speed controls within the active window:
 
 ```tsx
 <Player contentType="dvr" contentId="a1b2c3d4e5f6g7h8" />
@@ -142,34 +153,35 @@ With the Player SDK, use `contentType="dvr"` for the live DVR window. The player
 
 ### Live Time-Shift
 
-While a stream is live, the DVR recording grows continuously. Viewers using the DVR playback ID can:
+While a stream is live, the recording grows continuously. Viewers using the recording's playback ID can:
 
-- **Seek back** through the tier-bounded live DVR window
+- **Seek back** through the tier-bounded live rewind window
 - **Pause and resume** without losing their position
 - **Jump to live** to catch up to the real-time edge
 
 The trade-off is latency — DVR playback goes through HLS or DASH segments, so it's higher latency
 than a direct live WebRTC connection. But for live events,
-conferences, and always-on streams this is a feature: viewers can rewind a goal, replay a slide, or start watching late and catch up within the live DVR window.
+conferences, and always-on streams this is a feature: viewers can rewind a goal, replay a slide, or start watching late and catch up within the live rewind window.
 
 <Aside type="tip" title="Always-On Streams">
-  DVR supports 24/7-style streams without forcing a new recording artifact every few hours. The live
-  DVR window stays bounded for player performance, while the archive is replayed through chapter
-  artifacts when historical chapters are enabled.
+  Recording supports 24/7-style streams without forcing a new recording artifact every few hours.
+  The live rewind window stays bounded for player performance, while the saved recording is replayed
+  through its chapters.
 </Aside>
 
 ### Archive Chapters
 
-For historical replay, FrameWorks splits the DVR archive into **chapter VOD artifacts**. Each chapter is its own canonical `.mkv` produced by the chapter finalization pipeline at boundary close and addressed by a Commodore-minted, shareable `playbackId` — pass it to `resolveViewerEndpoint` like any other VOD. The parent DVR's playback policy is snapshotted onto the chapter and still applies.
+For replay after the broadcast, FrameWorks saves the recording as **chapter VOD artifacts**. Each chapter is its own canonical `.mkv` produced by the chapter finalization pipeline at boundary close and addressed by a Commodore-minted, shareable `playbackId` — pass it to `resolveViewerEndpoint` like any other VOD. The parent DVR's playback policy is snapshotted onto the chapter and still applies.
 
 For the full chapter-policy story (modes, defaults, resolution semantics) see [DVR Chapters](/builders/dvr-chapters). Storage cost behavior is covered in [Storage & retention](/builders/storage-and-retention).
 
-Chapters are off by default: a stream's `dvrChapterMode` is `NONE` until you set it. Common chapter shapes:
+A new stream saves window-sized chapters (`WINDOW_SIZED`). Chapter shapes:
 
-| Shape                 | Use                                                                                                           |
-| --------------------- | ------------------------------------------------------------------------------------------------------------- |
-| Window-sized chapters | Sequential chapters sized to the stream's DVR window (`WINDOW_SIZED`).                                        |
-| Fixed UTC intervals   | Regular UTC buckets such as 6-hour or 24-hour spans. Minimum interval is 1 hour (enforced by Commodore + DB). |
+| Shape                 | Use                                                                                                                   |
+| --------------------- | --------------------------------------------------------------------------------------------------------------------- |
+| Window-sized chapters | Default. Sequential parts as long as the recording's live rewind window, from the broadcast's start (`WINDOW_SIZED`). |
+| Fixed UTC intervals   | Regular UTC buckets such as 6-hour or 24-hour spans. Minimum interval is 1 hour (enforced by Commodore + DB).         |
+| Live rewind only      | `NONE`: nothing is saved. Viewers can rewind while live; no chapters are produced and `recording.ready` never fires.  |
 
 All chapter time fields are UTC epoch milliseconds. The API does not store timezone names or offsets; clients that care about civil-day boundaries should convert them to a UTC range and list the chapters in that range with `dvrChapters(rangeStartMs:, rangeEndMs:)`.
 
@@ -246,7 +258,7 @@ query StreamVodArtifacts {
 }
 ```
 
-Historical chapter mode is configured on the Stream and snapshotted onto each recording at StartDVR. Changes apply to the next recording, not in-flight ones. `NONE` is the default. It keeps DVR recording and the active rolling DVR window enabled, but skips finalized chapter artifacts for historical replay:
+The chapter mode is configured on the Stream and snapshotted onto each recording when it starts. Changes apply from the next broadcast, not to a recording in progress. Send `dvrChapterIntervalSeconds: 0` with `WINDOW_SIZED` or `NONE` to clear a stored interval. To split into 6-hour UTC parts:
 
 ```graphql
 mutation {
@@ -309,7 +321,9 @@ two kinds:
 read from, events, the URL parameters, and how far back each playback ID reaches.
 
 The `tenantEvents` subscription with `types: ["recording.ready", "recording.failed"]` reports
-finalized and failed DVR recordings. See [Events](/builders/events) for every event type.
+saved and failed recordings. A live-rewind-only (`NONE`) recording ends with `recording.stopped`
+and no `recording.ready`, because nothing replayable is kept. See [Events](/builders/events) for
+every event type.
 
 ---
 

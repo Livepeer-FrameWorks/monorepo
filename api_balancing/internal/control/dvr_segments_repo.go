@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"frameworks/api_balancing/internal/database/foghorndb"
@@ -215,7 +216,9 @@ func sameSegmentDifferentClockDomain(existingStartMs, existingEndMs, incomingSta
 }
 
 // MarkDVRSegmentUploaded transitions a segment row to 'uploaded' and stamps
-// the confirmed S3 size. No-op (no error) if the row is already uploaded —
+// the confirmed S3 size; the first upload also moves the recording's parent
+// row to 's3'/'in_progress' on this cell's backend. No-op (no error) if the
+// row is already uploaded —
 // the sidecar may resend the mark on retry. lost_local is NOT a permitted
 // source state for this transition: a wrong file with the same name must not
 // heal a gap. Startup recovery uses RecordDVRSegment's strict timing match to
@@ -226,6 +229,7 @@ func MarkDVRSegmentUploaded(ctx context.Context, tenantID, artifactHash, segment
 	}
 	err := foghorndb.New(db).MarkDVRSegmentUploaded(ctx, foghorndb.MarkDVRSegmentUploadedParams{
 		ArtifactHash: artifactHash, SegmentName: segmentName, SizeBytes: sql.NullInt64{Int64: sizeBytes, Valid: true}, TenantID: tenantID,
+		StorageClusterID: localClusterID, BackendID: localBackendFingerprint(),
 	})
 	if err != nil {
 		return fmt.Errorf("mark uploaded: %w", err)
@@ -508,4 +512,17 @@ func mapDVRSegmentRows(rows []foghorndb.FoghornDvrSegment) []DVRSegmentRow {
 		})
 	}
 	return out
+}
+
+// dvrParentS3URL returns the S3 URL of a recording's segment prefix in this cell's store, or "" when no S3 client is
+// configured. The parent row records it at finalization as the location of the recording's durable bytes.
+func dvrParentS3URL(ctx context.Context, q *foghorndb.Queries, dvrHash, tenantID string) (string, error) {
+	if s3Client == nil {
+		return "", nil
+	}
+	row, err := q.GetDVRLifecycleContext(ctx, dvrHash)
+	if err != nil {
+		return "", err
+	}
+	return s3Client.BuildS3URL(s3Client.BuildDVRS3Key(tenantID, strings.TrimSpace(row.StreamInternalName.String), dvrHash)), nil
 }

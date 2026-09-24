@@ -396,7 +396,7 @@ func TestProcessMarkDVRSegmentUploaded_MutatesRow(t *testing.T) {
 		WithArgs("dvr-u", "tenant-1").
 		WillReturnRows(sqlmock.NewRows([]string{"status", "dispatch_node"}).AddRow("recording", "node-1"))
 	mock.ExpectExec("UPDATE foghorn.dvr_segments").
-		WithArgs("dvr-u", "seg-1.ts", int64(4096), "tenant-1").
+		WithArgs(sqlmock.AnyArg(), sqlmock.AnyArg(), int64(4096), "dvr-u", "seg-1.ts", "tenant-1").
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectQuery("SELECT COUNT\\(\\*\\)::bigint AS segment_count, COALESCE\\(SUM\\(size_bytes\\), 0\\)::bigint AS size_bytes").
 		WithArgs("dvr-u", "tenant-1").

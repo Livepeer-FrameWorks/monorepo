@@ -1567,6 +1567,27 @@ func (p *Processor) handleDVRLifecycleData(trigger *ipcpb.MistTrigger) (string, 
 	return "", false, nil
 }
 
+// ingestPlacementErrorCode separates a placement policy refusal, which is
+// terminal for this publisher and node, from an observation, timing or
+// revalidation failure, which the publisher's reconnect resolves.
+func ingestPlacementErrorCode(err error) ipcpb.IngestErrorCode {
+	if errors.Is(err, mist.ErrUnsupportedIngestProtocol) {
+		return ipcpb.IngestErrorCode_INGEST_ERROR_PLACEMENT_DENIED
+	}
+	if errors.Is(err, context.DeadlineExceeded) {
+		return ipcpb.IngestErrorCode_INGEST_ERROR_TIMEOUT
+	}
+	if st, ok := status.FromError(err); ok {
+		switch st.Code() {
+		case codes.PermissionDenied:
+			return ipcpb.IngestErrorCode_INGEST_ERROR_PLACEMENT_DENIED
+		case codes.DeadlineExceeded:
+			return ipcpb.IngestErrorCode_INGEST_ERROR_TIMEOUT
+		}
+	}
+	return ipcpb.IngestErrorCode_INGEST_ERROR_INTERNAL
+}
+
 // handlePushRewrite processes PUSH_REWRITE trigger (blocking)
 func ingestErrorCodeForStreamKeyRejection(reason commodorepb.StreamKeyRejectionReason) ipcpb.IngestErrorCode {
 	switch reason {
@@ -1796,8 +1817,12 @@ func (p *Processor) handlePushRewrite(trigger *ipcpb.MistTrigger) (_ string, _ b
 	// connector, never the publisher-controlled push URL.
 	if _, placementErr := p.checkIngestPlacement(admissionCtx, streamValidation.GetTenantId(), streamValidation.GetInternalName(), ingestClusterID, trigger.GetNodeId(),
 		pushRewrite.GetObservedConnector(), pushRewrite.GetHostname()); placementErr != nil {
-		p.logger.WithError(placementErr).WithFields(logging.Fields{"node_id": trigger.GetNodeId(), "ingest_cluster_id": ingestClusterID}).Warn("PUSH_REWRITE denied by placement policy")
-		return "", true, ingesterrors.New(ipcpb.IngestErrorCode_INGEST_ERROR_INVALID_STREAM_KEY, "publisher is not permitted on this node by placement policy")
+		code := ingestPlacementErrorCode(placementErr)
+		p.logger.WithError(placementErr).WithFields(logging.Fields{"node_id": trigger.GetNodeId(), "ingest_cluster_id": ingestClusterID, "error_code": code.String()}).Warn("PUSH_REWRITE refused by ingest placement")
+		if code == ipcpb.IngestErrorCode_INGEST_ERROR_PLACEMENT_DENIED {
+			return "", true, ingesterrors.New(code, "publisher is not permitted on this node by placement policy")
+		}
+		return "", true, ingesterrors.New(code, "ingest placement is temporarily unavailable; retry")
 	}
 	liveProcessesJSON := streamValidation.GetProcessesJson()
 	if liveProcessesJSON != "" {
@@ -2017,6 +2042,7 @@ func (p *Processor) handlePushRewrite(trigger *ipcpb.MistTrigger) (_ string, _ b
 					DvrPolicy:     streamValidation.GetDvrPolicy(),
 					ProcessesJson: streamValidation.GetDvrProcessesJson(),
 				}
+				applyStreamDVRChapterPolicy(dvrReq, streamValidation.GetDvrChapterMode(), streamValidation.GetDvrChapterIntervalSeconds())
 				b, mErr := protojson.Marshal(dvrReq)
 				if mErr != nil {
 					p.logger.WithError(mErr).WithField("internal_name", streamValidation.InternalName).
@@ -5644,11 +5670,12 @@ func (p *Processor) handleNodeLifecycleUpdate(trigger *ipcpb.MistTrigger) (strin
 	}
 
 	p.logger.WithFields(logging.Fields{
-		"node_id":    nu.GetNodeId(),
-		"is_healthy": nu.GetIsHealthy(),
-		"bw_limit":   nu.GetBwLimit(),
-		"ram_max":    nu.GetRamMax(),
-		"location":   nu.GetLocation(),
+		"node_id":           nu.GetNodeId(),
+		"is_healthy":        nu.GetIsHealthy(),
+		"effective_healthy": state.NodeLifecycleHealthy(nu),
+		"bw_limit":          nu.GetBwLimit(),
+		"ram_max":           nu.GetRamMax(),
+		"location":          nu.GetLocation(),
 	}).Info("Received NodeLifecycleUpdate from Helmsman")
 
 	// Announced restart: return before the snapshot writes below — the

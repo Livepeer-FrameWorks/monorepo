@@ -28,8 +28,12 @@
     type SourceLocationDraft,
     type SourceLocationValue,
   } from "$lib/source-location";
+  import { untrack } from "svelte";
+
+  type ChapterMode = "WINDOW_SIZED" | "FIXED_INTERVAL" | "NONE";
 
   interface EditableStream {
+    id?: string | null;
     name?: string | null;
     description?: string | null;
     record?: boolean | null;
@@ -40,7 +44,7 @@
       class?: string | null;
     } | null;
     sourceLocation?: SourceLocationValue | null;
-    dvrChapterMode?: "WINDOW_SIZED" | "FIXED_INTERVAL" | "NONE" | null;
+    dvrChapterMode?: ChapterMode | null;
     dvrChapterIntervalSeconds?: number | null;
     retentionOverrides?: {
       dvrRetentionDaysOverride?: number | null;
@@ -56,8 +60,9 @@
     pullSourceEnabled: boolean;
     /** Present only when the user changed the source location. */
     sourceLocation?: SourceLocationDraft;
-    dvrChapterMode: "WINDOW_SIZED" | "FIXED_INTERVAL" | null;
-    dvrChapterIntervalSeconds: number | null;
+    dvrChapterMode: ChapterMode;
+    /** Set only for FIXED_INTERVAL; 0 clears a stored interval. */
+    dvrChapterIntervalSeconds: number;
     retentionOverrides?: {
       dvr?: { clear: true } | { value: number };
       clip?: { clear: true } | { value: number };
@@ -92,8 +97,8 @@
     pullSourceUri: string;
     pullSourceEnabled: boolean;
     sourceLocation: SourceLocationDraft;
-    dvrChapterMode: "WINDOW_SIZED" | "FIXED_INTERVAL" | "NONE";
-    dvrChapterIntervalSeconds: string;
+    dvrChapterMode: ChapterMode;
+    dvrChapterIntervalHours: string;
     dvrRetentionOverride: OverrideField;
     clipRetentionOverride: OverrideField;
   }>({
@@ -103,11 +108,14 @@
     pullSourceUri: "",
     pullSourceEnabled: true,
     sourceLocation: anySourceLocation(),
-    dvrChapterMode: "NONE",
-    dvrChapterIntervalSeconds: "3600",
+    dvrChapterMode: "WINDOW_SIZED",
+    dvrChapterIntervalHours: "1",
     dvrRetentionOverride: null,
     clipRetentionOverride: null,
   });
+  // The "live rewind only" choice lives under an advanced disclosure; it
+  // starts open when the stream already keeps nothing.
+  let advancedRecordingOpen = $state(false);
 
   // The tier's upper bound on retention. Null means uncapped or not yet read;
   // the server clamps either way.
@@ -137,33 +145,45 @@
       !!sourceLocationProblem(formData.sourceLocation, pullSourceClass, clusterOptions)
   );
 
+  // The form is seeded when the modal opens (or switches to another stream),
+  // not on every stream emission: the page refreshes the stream on a poll and
+  // on subscriptions, and re-seeding then would discard the user's edits.
+  const streamKey = $derived(stream?.id ?? null);
   $effect(() => {
-    if (stream) {
-      const dvrOverride: OverrideField =
-        stream.retentionOverrides?.dvrRetentionDaysOverride ?? null;
-      const clipOverride: OverrideField =
-        stream.retentionOverrides?.clipRetentionDaysOverride ?? null;
-      formData = {
-        name: stream.name || "",
-        description: stream.description || "",
-        record: stream.record || false,
-        pullSourceUri: "",
-        pullSourceEnabled: stream.pullSource?.enabled ?? true,
-        sourceLocation: draftFromSourceLocation(stream.sourceLocation) ?? anySourceLocation(),
-        dvrChapterMode: (stream.dvrChapterMode ?? "NONE") as
-          | "WINDOW_SIZED"
-          | "FIXED_INTERVAL"
-          | "NONE",
-        dvrChapterIntervalSeconds: stream.dvrChapterIntervalSeconds
-          ? String(stream.dvrChapterIntervalSeconds)
-          : "3600",
-        dvrRetentionOverride: dvrOverride,
-        clipRetentionOverride: clipOverride,
-      };
-      initialDvrOverride = dvrOverride;
-      initialClipOverride = clipOverride;
-    }
+    if (!open) return;
+    void streamKey;
+    untrack(() => {
+      if (stream) seedForm(stream);
+    });
   });
+
+  function seedForm(source: EditableStream) {
+    const dvrOverride: OverrideField = source.retentionOverrides?.dvrRetentionDaysOverride ?? null;
+    const clipOverride: OverrideField =
+      source.retentionOverrides?.clipRetentionDaysOverride ?? null;
+    const mode: ChapterMode = source.dvrChapterMode ?? "NONE";
+    const intervalSeconds = source.dvrChapterIntervalSeconds ?? 0;
+    formData = {
+      name: source.name || "",
+      description: source.description || "",
+      record: source.record || false,
+      pullSourceUri: "",
+      pullSourceEnabled: source.pullSource?.enabled ?? true,
+      sourceLocation: draftFromSourceLocation(source.sourceLocation) ?? anySourceLocation(),
+      dvrChapterMode: mode,
+      dvrChapterIntervalHours:
+        intervalSeconds >= 3600 ? String(Math.round(intervalSeconds / 3600)) : "1",
+      dvrRetentionOverride: dvrOverride,
+      clipRetentionOverride: clipOverride,
+    };
+    advancedRecordingOpen = mode === "NONE";
+    initialDvrOverride = dvrOverride;
+    initialClipOverride = clipOverride;
+  }
+
+  function setLiveRewindOnly(checked: boolean) {
+    formData.dvrChapterMode = checked ? "NONE" : "WINDOW_SIZED";
+  }
 
   function parseOverrideInput(raw: string): OverrideField {
     if (raw === "") return "";
@@ -181,10 +201,11 @@
   }
 
   async function handleSubmit() {
+    const hours = Math.floor(Number(formData.dvrChapterIntervalHours));
     const interval =
-      formData.dvrChapterMode === "FIXED_INTERVAL"
-        ? Number(formData.dvrChapterIntervalSeconds)
-        : null;
+      formData.dvrChapterMode === "FIXED_INTERVAL" && Number.isFinite(hours) && hours >= 1
+        ? hours * 3600
+        : 0;
 
     // Pack the retention-override payload only when something changed; let
     // the page handler decide whether to fire setStreamRetentionOverrides.
@@ -215,8 +236,8 @@
       sourceLocation: sourceLocationChanged
         ? sourceLocationInput(formData.sourceLocation)
         : undefined,
-      dvrChapterMode: formData.dvrChapterMode === "NONE" ? null : formData.dvrChapterMode,
-      dvrChapterIntervalSeconds: Number.isFinite(interval) && interval ? interval : null,
+      dvrChapterMode: formData.dvrChapterMode,
+      dvrChapterIntervalSeconds: interval,
       retentionOverrides: retentionPayload,
     });
   }
@@ -265,41 +286,63 @@
         />
       </div>
 
-      <div class="flex items-start space-x-2">
-        <Checkbox id="editRecord" bind:checked={formData.record} />
-        <Label for="editRecord" class="text-sm text-foreground">Enable Recording</Label>
+      <div class="space-y-1">
+        <div class="flex items-start space-x-2">
+          <Checkbox id="editRecord" bind:checked={formData.record} />
+          <Label for="editRecord" class="text-sm text-foreground">Record broadcasts</Label>
+        </div>
+        <p class="pl-6 text-xs text-muted-foreground">
+          Saves every broadcast so it can be replayed after it ends. While live, viewers can rewind
+          within the live rewind window.
+        </p>
       </div>
 
       {#if formData.record}
         <div class="space-y-2 border-l border-[hsl(var(--tn-fg-gutter)/0.3)] pl-3">
-          <Label for="editChapterMode" class="block text-sm font-medium text-foreground">
-            Historical chapters
-          </Label>
-          <select
-            id="editChapterMode"
-            bind:value={formData.dvrChapterMode}
-            class="w-full rounded-none border border-input bg-background px-3 py-2 text-sm focus:ring-2 focus:ring-primary"
-          >
-            <option value="NONE">Off — rolling DVR only</option>
-            <option value="WINDOW_SIZED">Window-sized archive chapters</option>
-            <option value="FIXED_INTERVAL">Fixed archive interval (≥ 1 hour)</option>
-          </select>
-          {#if formData.dvrChapterMode === "FIXED_INTERVAL"}
-            <Label for="editChapterInterval" class="block text-sm font-medium text-foreground">
-              Interval seconds (≥ 3600)
+          {#if formData.dvrChapterMode !== "NONE"}
+            <Label for="editChapterMode" class="block text-sm font-medium text-foreground">
+              Split saved recordings into
             </Label>
-            <Input
-              id="editChapterInterval"
-              type="number"
-              min="3600"
-              step="3600"
-              bind:value={formData.dvrChapterIntervalSeconds}
-            />
+            <select
+              id="editChapterMode"
+              bind:value={formData.dvrChapterMode}
+              class="w-full rounded-none border border-input bg-background px-3 py-2 text-sm focus:ring-2 focus:ring-primary"
+            >
+              <option value="WINDOW_SIZED">
+                Parts the length of the live rewind window, from broadcast start
+              </option>
+              <option value="FIXED_INTERVAL">Fixed clock-aligned parts every N hours (UTC)</option>
+            </select>
+            {#if formData.dvrChapterMode === "FIXED_INTERVAL"}
+              <Label for="editChapterInterval" class="block text-sm font-medium text-foreground">
+                Hours per part
+              </Label>
+              <Input
+                id="editChapterInterval"
+                type="number"
+                min="1"
+                step="1"
+                required
+                bind:value={formData.dvrChapterIntervalHours}
+              />
+            {/if}
           {/if}
+          <details bind:open={advancedRecordingOpen} class="text-sm">
+            <summary class="cursor-pointer text-xs text-muted-foreground">Advanced</summary>
+            <div class="mt-2 flex items-start space-x-2">
+              <Checkbox
+                id="editLiveRewindOnly"
+                checked={formData.dvrChapterMode === "NONE"}
+                onCheckedChange={(checked) => setLiveRewindOnly(checked === true)}
+              />
+              <Label for="editLiveRewindOnly" class="text-sm text-foreground">
+                Don't save — live rewind only (nothing is kept once it leaves the live rewind
+                window)
+              </Label>
+            </div>
+          </details>
           <p class="text-xs text-muted-foreground">
-            Off still records the rolling DVR window for live time-shift playback. Historical
-            chapters create finalized VOD artifacts for replay after media rolls out of that window.
-            This setting is snapshotted at StartDVR; changes apply to the next recording.
+            Applies from the next broadcast; a recording in progress keeps its setting.
           </p>
         </div>
       {/if}

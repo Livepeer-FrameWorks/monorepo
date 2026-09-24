@@ -270,7 +270,7 @@
           DVR recordings and clips appear here when created from this stream.
         </p>
         <Button onclick={onEnableRecording} variant="ghost" class="gap-2 w-full sm:w-auto mx-auto">
-          Enable Recording
+          Record broadcasts
         </Button>
       </div>
     </div>
@@ -357,9 +357,8 @@
           {#if isExpanded && canPlay}
             <div class="px-4 pb-4 border-t border-[hsl(var(--tn-fg-gutter)/0.2)] bg-muted/5">
               <p class="pt-4 text-sm text-muted-foreground">
-                Chapter rotation is configured on the source stream and applies to the next
-                recording. Edit the stream to change <em>Historical chapters</em> or
-                <em>Chapter interval</em>.
+                How saved recordings are split is set on the source stream and applies from the next
+                broadcast. Edit the stream to change <em>Split saved recordings into</em>.
               </p>
             </div>
           {/if}
