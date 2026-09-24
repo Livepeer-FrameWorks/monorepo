@@ -166,8 +166,10 @@ and reports as breaking:
   default;
 - an argument or input field whose default value changed or was removed, nullable or not: a request that omits it
   would then mean something else (for example `MediaPlacementOptionsFilter.spillover` moving off `NEVER`). Defaults are
-  compared as normalized literals, so respelling one (a block string, reordered input object fields) is not a change.
-  Adding a default, including to a previously required input, is compatible;
+  compared as normalized literals, so respelling one (a block string, reordered input object fields) is not a change;
+- an optional argument or input field gaining a default: an omitted `x: Int` reaches the resolver absent, an omitted
+  `x: Int = 7` reaches it as `7`, so the same request changes meaning. Only a previously required value may gain a
+  default, because every old request already sent it;
 - a new required argument or required input field without a default;
 - an enum value removed in either position: as input a client sending it is rejected, as output the regenerated SDK
   of the same line drops the constant, so consumer code that names it stops compiling;

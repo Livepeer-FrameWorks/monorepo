@@ -369,9 +369,10 @@ func findInput(values []inputValue, name string) *inputValue {
 // input type. A value a client could send to the old schema must still be
 // accepted: nothing it may set is removed or retyped, no nullable position
 // becomes required, and nothing new is required. A request that omits a value
-// must also keep its meaning: a default may not change or go away, since the
-// server would then act on a different value (or on none) for the same
-// request. Adding a default is compatible; it only accepts more requests.
+// must also keep its meaning: a default may not appear on an optional value,
+// change, or go away, since the resolver would then receive a different value
+// (or none) for the same request. Only a previously required value may gain a
+// default: every old request already sent it.
 func (c *schemaComparison) compareInputValues(kind, owner string, oldVals, newVals []inputValue, exempt func(owner, name string) bool) {
 	label := func(name string) string {
 		if kind == "argument" {
@@ -398,6 +399,8 @@ func (c *schemaComparison) compareInputValues(kind, owner string, oldVals, newVa
 			c.addBreaking("%s lost its default %s; a request that omits it no longer gets that value", label(ov.name), ov.defaultValue)
 		case ov.hasDefault() && ov.defaultValue != nv.defaultValue:
 			c.addBreaking("%s changed its default from %s to %s; a request that omits it changes meaning", label(ov.name), ov.defaultValue, nv.defaultValue)
+		case !ov.hasDefault() && !ov.required() && nv.hasDefault():
+			c.addBreaking("%s gained the default %s; a request that omits it now reaches the resolver with that value instead of none", label(ov.name), nv.defaultValue)
 		default:
 			if ov.typ.String() != nv.typ.String() {
 				c.addInfo("%s changed type from %s to %s (compatible)", label(ov.name), ov.typ, nv.typ)
