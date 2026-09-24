@@ -18,6 +18,7 @@ import (
 	"frameworks/cli/pkg/inventory"
 	"frameworks/cli/pkg/provisioner"
 	"frameworks/cli/pkg/ssh"
+	"frameworks/cli/pkg/system"
 
 	"github.com/spf13/cobra"
 	"golang.org/x/sync/errgroup"
@@ -218,14 +219,14 @@ func runLogs(cmd *cobra.Command, manifest *inventory.Manifest, serviceName strin
 func buildLogCommand(deployName, mode string, follow bool, tail int) (string, error) {
 	switch mode {
 	case "docker":
-		logCmd := fmt.Sprintf("cd /opt/frameworks/%s && docker compose logs", deployName)
+		args := "compose logs"
 		if tail > 0 {
-			logCmd += fmt.Sprintf(" --tail=%d", tail)
+			args += fmt.Sprintf(" --tail=%d", tail)
 		}
 		if follow {
-			logCmd += " --follow"
+			args += " --follow"
 		}
-		return logCmd, nil
+		return fmt.Sprintf("cd /opt/frameworks/%s && %s", deployName, system.DockerCommand(args)), nil
 	case "native":
 		logCmd := fmt.Sprintf("journalctl -u frameworks-%s", deployName)
 		if tail > 0 {

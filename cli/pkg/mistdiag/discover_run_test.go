@@ -3,7 +3,11 @@ package mistdiag
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
+
+	fwssh "frameworks/cli/pkg/ssh"
+	"frameworks/cli/pkg/system"
 )
 
 // DiscoverStreams drives the runner and parses the MistServer active_streams
@@ -104,5 +108,41 @@ func TestAnalyzerRunnerValidateDelegatesToRun(t *testing.T) {
 	}
 	if !res.OK {
 		t.Errorf("expected OK validation result")
+	}
+}
+
+type recordingRunner struct {
+	mockRunner
+	commands []string
+}
+
+func (r *recordingRunner) Run(ctx context.Context, command string) (*fwssh.CommandResult, error) {
+	r.commands = append(r.commands, command)
+	return r.mockRunner.Run(ctx, command)
+}
+
+// Container-mode docker exec must carry the sudo fallback: the provisioning
+// SSH user is usually outside the docker group.
+func TestContainerModeDockerExecFallsBackToSudo(t *testing.T) {
+	runner := &recordingRunner{mockRunner: mockRunner{stdout: `{"active_streams":[]}`}}
+	if _, err := DiscoverStreams(context.Background(), runner, "container"); err != nil {
+		t.Fatalf("DiscoverStreams: %v", err)
+	}
+	ar := NewAnalyzerRunner(runner, "container")
+	if _, err := ar.Available(context.Background()); err != nil {
+		t.Fatalf("Available: %v", err)
+	}
+	if len(runner.commands) != 2 {
+		t.Fatalf("commands = %q, want 2", runner.commands)
+	}
+	for _, cmd := range runner.commands {
+		args, ok := strings.CutPrefix(cmd, "if docker version >/dev/null 2>&1; then docker exec ")
+		if !ok {
+			t.Fatalf("command %q does not start with the docker reachability probe", cmd)
+		}
+		args, _, _ = strings.Cut(args, "; else ")
+		if cmd != system.DockerCommand("exec "+args) {
+			t.Fatalf("command %q is not system.DockerCommand(exec ...)", cmd)
+		}
 	}
 }

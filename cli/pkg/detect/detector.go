@@ -9,6 +9,7 @@ import (
 
 	"frameworks/cli/pkg/inventory"
 	fwssh "frameworks/cli/pkg/ssh"
+	"frameworks/cli/pkg/system"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/servicedefs"
 )
 
@@ -159,7 +160,10 @@ func (d *Detector) detectFromDocker(ctx context.Context, serviceName string, sta
 	}
 
 	for _, containerName := range containerNames {
-		cmd := fmt.Sprintf("docker ps -a --filter name=%s --format '{{.Names}}|{{.State}}|{{.Image}}'", containerName)
+		// Without the sudo fallback a running container is invisible to a
+		// provisioning user outside the docker group, and the service is
+		// misdetected by port as mode "unknown".
+		cmd := system.DockerCommand(fmt.Sprintf("ps -a --filter name=%s --format '{{.Names}}|{{.State}}|{{.Image}}'", containerName))
 		exitCode, stdout, _, err := d.runSSH(ctx, cmd)
 		if err != nil {
 			return nil, fmt.Errorf("inspect %s Docker state on %s: %w", serviceName, d.host.Name, err)
@@ -333,7 +337,7 @@ func (d *Detector) detectFromPort(ctx context.Context, serviceName string, state
 }
 
 func (d *Detector) inspectDockerRuntime(ctx context.Context, containerName string, state *ServiceState) error {
-	cmd := fmt.Sprintf("docker inspect -f '{{.State.Running}}|{{.Config.Image}}' %s", shellQuote(containerName))
+	cmd := system.DockerCommand(fmt.Sprintf("inspect -f '{{.State.Running}}|{{.Config.Image}}' %s", shellQuote(containerName)))
 	exitCode, stdout, _, err := d.runSSH(ctx, cmd)
 	if err != nil {
 		return fmt.Errorf("inspect %s Docker runtime on %s: %w", containerName, d.host.Name, err)

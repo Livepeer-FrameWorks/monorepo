@@ -12,6 +12,7 @@ import (
 	"frameworks/cli/internal/ux"
 	"frameworks/cli/pkg/inventory"
 	"frameworks/cli/pkg/orchestrator"
+	"frameworks/cli/pkg/system"
 
 	"github.com/spf13/cobra"
 )
@@ -341,10 +342,8 @@ func TestBuildLogCommand(t *testing.T) {
 	if err != nil {
 		t.Fatalf("docker: %v", err)
 	}
-	for _, want := range []string{"docker compose logs", "--tail=100", "--follow", "/opt/frameworks/commodore"} {
-		if !strings.Contains(got, want) {
-			t.Fatalf("docker cmd %q missing %q", got, want)
-		}
+	if want := "cd /opt/frameworks/commodore && " + system.DockerCommand("compose logs --tail=100 --follow"); got != want {
+		t.Fatalf("docker cmd = %q, want %q", got, want)
 	}
 	got, err = buildLogCommand("commodore", "native", false, 0)
 	if err != nil {

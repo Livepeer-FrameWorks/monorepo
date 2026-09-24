@@ -17,6 +17,7 @@ import (
 	"frameworks/cli/pkg/health"
 	"frameworks/cli/pkg/inventory"
 	"frameworks/cli/pkg/ssh"
+	"frameworks/cli/pkg/system"
 )
 
 // DarwinDomain selects the launchd domain for macOS service management.
@@ -444,11 +445,16 @@ func darwinListenersAllDockerManaged(listenerOutput string) bool {
 // (edge-proxy), which the container install path migrates away. Names are
 // matched exactly — sibling containers (frameworks-edge-vmagent) or
 // similarly-named strangers must never stand in for the edge container.
-// The sudo retry mirrors runEdgeDocker: on Ansible-provisioned hosts the
-// SSH user often has passwordless sudo but no docker group, and a false
-// negative here blocks the container→native migration in preflight.
+// On Ansible-provisioned hosts the SSH user often has passwordless sudo but
+// no docker group, and a false negative here blocks the container→native
+// migration in preflight, hence the sudo fallback.
+var (
+	edgeContainerNamesProbe = system.DockerCommand("ps --format '{{.Names}}'") + " 2>/dev/null"
+	edgeComposeStateProbe   = system.DockerCommand("compose -f /opt/frameworks/edge/docker-compose.yml ps --format json") + " 2>/dev/null"
+)
+
 func (e *EdgeProvisioner) edgeContainerStackRunning(ctx context.Context, host inventory.Host) bool {
-	result, err := e.RunCommand(ctx, host, "docker ps --format '{{.Names}}' 2>/dev/null || sudo -n docker ps --format '{{.Names}}' 2>/dev/null")
+	result, err := e.RunCommand(ctx, host, edgeContainerNamesProbe)
 	if err != nil || result.ExitCode != 0 {
 		return false
 	}
@@ -636,7 +642,7 @@ func tlsVersionName(version uint16) string {
 // Stays Go-side because it's observed-state only and needs to answer quickly
 // without bringing up an Ansible subprocess.
 func (e *EdgeProvisioner) Detect(ctx context.Context, host inventory.Host) (*detect.ServiceState, error) {
-	result, err := e.RunCommand(ctx, host, "docker compose -f /opt/frameworks/edge/docker-compose.yml ps --format json 2>/dev/null")
+	result, err := e.RunCommand(ctx, host, edgeComposeStateProbe)
 	if err == nil && result.ExitCode == 0 && strings.TrimSpace(result.Stdout) != "" {
 		// Detected state uses the canonical mode name; "docker" survives
 		// only as an input alias, never as persisted/reported truth.

@@ -6,9 +6,13 @@ import (
 	"strings"
 
 	"frameworks/cli/pkg/inventory"
+	"frameworks/cli/pkg/system"
 )
 
 const edgeONNXProfileAuto = "auto"
+
+// edgeNVIDIARuntimeProbe exits 0 when the Docker daemon lists an NVIDIA runtime.
+var edgeNVIDIARuntimeProbe = system.DockerCommand("info --format '{{json .Runtimes}}'") + " 2>/dev/null | grep -qi nvidia"
 
 func resolvedEdgeONNXProfile(profile, mode, osName, arch string) string {
 	profile = strings.ToLower(strings.TrimSpace(profile))
@@ -91,7 +95,7 @@ func (e *EdgeProvisioner) resolveONNXProfile(ctx context.Context, host inventory
 		hasNVIDIA = true
 	}
 	if hasNVIDIA && mode == "container" {
-		if result, err := e.RunCommand(ctx, host, "docker info --format '{{json .Runtimes}}' 2>/dev/null | grep -qi nvidia"); err != nil || result.ExitCode != 0 {
+		if result, err := e.RunCommand(ctx, host, edgeNVIDIARuntimeProbe); err != nil || result.ExitCode != 0 {
 			hasNVIDIA = false
 		}
 	}

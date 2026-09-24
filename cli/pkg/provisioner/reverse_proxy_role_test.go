@@ -642,13 +642,17 @@ func TestSharedFrameworksPKIRolesPreservePrivateerAccess(t *testing.T) {
 		"flock -x 9",
 		"install -o privateer -g {{ go_service_group | quote }} -m 0644",
 		"install -o privateer -g {{ go_service_group | quote }} -m 0640",
-		"chown privateer:{{ go_service_group | quote }} \"$lock_path\"",
-		"chmod 0600 \"$lock_path\"",
+		`) 9<"$cert_dir"`,
 		"Fail when internal gRPC certificate and key do not match",
 	} {
 		if !strings.Contains(goServicePKI, want) {
 			t.Fatalf("go_service PKI role must install bootstrap cert/key as a locked pair readable by services; missing %q:\n%s", want, goServicePKI)
 		}
+	}
+	// The pair lock is a flock on the cert directory (shared with Privateer's
+	// runtime writer); a lock file in the PKI tree is left behind forever.
+	if strings.Contains(goServicePKI, ".tls.write.lock") {
+		t.Fatalf("go_service PKI role must lock the cert directory, not create .tls.write.lock:\n%s", goServicePKI)
 	}
 
 	caDirTask := goServicePKI[:strings.Index(goServicePKI, "- name: Render internal CA trust bundle")]

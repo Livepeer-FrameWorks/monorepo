@@ -8,6 +8,7 @@ import (
 
 	"frameworks/cli/pkg/inventory"
 	"frameworks/cli/pkg/ssh"
+	"frameworks/cli/pkg/system"
 )
 
 func TestKafkaDiagnosticCommandsUseNativeRuntimeByDefault(t *testing.T) {
@@ -31,9 +32,22 @@ func TestKafkaDiagnosticCommandsUseNativeRuntimeByDefault(t *testing.T) {
 func TestKafkaDiagnosticCommandsRetainExplicitDockerCompatibility(t *testing.T) {
 	checks := kafkaDiagnosticCommands("docker", 9092)
 	for _, check := range checks {
-		if !strings.HasPrefix(check.Command, "docker compose -f /opt/frameworks/kafka/docker-compose.yml") {
+		args, ok := strings.CutPrefix(check.Command, "if docker version >/dev/null 2>&1; then docker ")
+		if !ok || !strings.HasPrefix(args, "compose -f /opt/frameworks/kafka/docker-compose.yml exec -T kafka ") {
 			t.Fatalf("docker diagnostic command = %q", check.Command)
 		}
+		args, _, _ = strings.Cut(args, "; else ")
+		if check.Command != system.DockerCommand(args) {
+			t.Fatalf("docker diagnostic command %q lacks the sudo fallback", check.Command)
+		}
+	}
+}
+
+func TestGeoIPServiceRestartCommandFallsBackToSudoThenSystemd(t *testing.T) {
+	got := geoIPServiceRestartCommand("foghorn")
+	want := system.DockerCommand("restart frameworks-foghorn") + " || systemctl restart frameworks-foghorn"
+	if got != want {
+		t.Fatalf("restart command = %q, want %q", got, want)
 	}
 }
 

@@ -8,6 +8,7 @@ import (
 	"time"
 
 	fwssh "frameworks/cli/pkg/ssh"
+	"frameworks/cli/pkg/system"
 )
 
 // Known analyzer names that ship with MistServer.
@@ -179,7 +180,7 @@ func (ar *AnalyzerRunner) buildCommand(opts AnalyzerOptions) string {
 func (ar *AnalyzerRunner) wrapCommand(cmd string) string {
 	if ar.mode == "container" {
 		cmd = fmt.Sprintf("LD_LIBRARY_PATH=%s %s", containerLibDir, cmd)
-		return fmt.Sprintf("docker exec %s sh -c %s", fwssh.ShellQuote(ar.container), fwssh.ShellQuote(cmd))
+		return system.DockerCommand(fmt.Sprintf("exec %s sh -c %s", fwssh.ShellQuote(ar.container), fwssh.ShellQuote(cmd)))
 	}
 	return cmd
 }

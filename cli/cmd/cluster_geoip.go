@@ -17,6 +17,7 @@ import (
 	"frameworks/cli/internal/ux"
 	"frameworks/cli/pkg/inventory"
 	"frameworks/cli/pkg/ssh"
+	"frameworks/cli/pkg/system"
 
 	"github.com/spf13/cobra"
 )
@@ -380,8 +381,7 @@ func uploadGeoIPToHosts(ctx context.Context, manifest *inventory.Manifest, pool 
 
 		for _, serviceName := range restartTargets {
 			fmt.Fprintf(out, "Restarting %s on %s...\n", serviceName, hostName)
-			restartCmd := fmt.Sprintf("docker restart frameworks-%s || systemctl restart frameworks-%s", serviceName, serviceName)
-			if _, err := pool.Run(ctx, connCfg, restartCmd); err != nil {
+			if _, err := pool.Run(ctx, connCfg, geoIPServiceRestartCommand(serviceName)); err != nil {
 				fmt.Fprintf(out, "Warning: failed to restart %s on %s: %v\n", serviceName, hostName, err)
 			}
 		}
@@ -389,6 +389,13 @@ func uploadGeoIPToHosts(ctx context.Context, manifest *inventory.Manifest, pool 
 
 	ux.Success(out, fmt.Sprintf("Uploaded GeoIP MMDB to %d host(s)", uploaded))
 	return uploaded, nil
+}
+
+// geoIPServiceRestartCommand restarts the service's container, falling back to
+// its systemd unit when no such container exists.
+func geoIPServiceRestartCommand(serviceName string) string {
+	return fmt.Sprintf("%s || systemctl restart frameworks-%s",
+		system.DockerCommand(fmt.Sprintf("restart frameworks-%s", serviceName)), serviceName)
 }
 
 func geoIPRemoteTempPath(remotePath, hostName string) string {

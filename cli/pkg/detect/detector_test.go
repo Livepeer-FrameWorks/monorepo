@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"frameworks/cli/pkg/inventory"
+	"frameworks/cli/pkg/system"
 )
 
 // fakeRunner records calls and returns scripted responses per command prefix.
@@ -27,11 +28,23 @@ type fakeResponse struct {
 func (f *fakeRunner) runSSH(_ context.Context, cmd string) (int, string, string, error) {
 	f.calls = append(f.calls, cmd)
 	for _, r := range f.responses {
-		if r.matchPrefix == "" || startsWith(cmd, r.matchPrefix) {
+		if r.matchPrefix == "" || startsWith(cmd, r.matchPrefix) || startsWith("docker "+dockerUserBranch(cmd), r.matchPrefix) {
 			return r.exitCode, r.stdout, r.stderr, r.err
 		}
 	}
 	return -1, "", "no response configured", nil
+}
+
+// dockerUserBranch returns the docker arguments of a system.DockerCommand
+// wrapper, or "" when cmd is not one.
+func dockerUserBranch(cmd string) string {
+	const head = "if docker version >/dev/null 2>&1; then docker "
+	rest, ok := strings.CutPrefix(cmd, head)
+	if !ok {
+		return ""
+	}
+	args, _, _ := strings.Cut(rest, "; else sudo -n docker ")
+	return args
 }
 
 func startsWith(s, prefix string) bool {
@@ -174,6 +187,42 @@ func TestDetect_DockerInspectsExactFallbackContainerName(t *testing.T) {
 	}
 	if state.Metadata["container_name"] != "foredeck" || state.Metadata["image"] != "example/foredeck:v0.3.2@sha256:abcdef" {
 		t.Fatalf("fallback container runtime identity = %+v", state.Metadata)
+	}
+}
+
+func TestDetect_DockerProbesFallBackToSudo(t *testing.T) {
+	t.Parallel()
+	r := &fakeRunner{
+		responses: []fakeResponse{
+			{matchPrefix: "cat /etc/frameworks/inventory.json", exitCode: 1},
+			{
+				matchPrefix: "docker ps -a --filter name=frameworks-chartroom ",
+				exitCode:    0,
+				stdout:      "frameworks-chartroom|running|livepeerframeworks/frameworks-chartroom:v0.3.11-rc1",
+			},
+			{matchPrefix: "docker inspect", exitCode: 0, stdout: "true|livepeerframeworks/frameworks-chartroom:v0.3.11-rc1"},
+		},
+	}
+	d := newDetectorWithRunner(inventory.Host{ExternalIP: "1.2.3.4", User: "deploy"}, r)
+
+	state, err := d.Detect(context.Background(), "chartroom")
+	if err != nil {
+		t.Fatalf("Detect: %v", err)
+	}
+	if state.Mode != "docker" || state.Version != "v0.3.11-rc1" {
+		t.Fatalf("mode=%q version=%q, want docker v0.3.11-rc1", state.Mode, state.Version)
+	}
+	var dockerCalls int
+	for _, call := range r.calls {
+		if strings.Contains(call, "docker ") {
+			dockerCalls++
+			if call != system.DockerCommand(dockerUserBranch(call)) {
+				t.Fatalf("docker probe %q is not wrapped with the sudo fallback", call)
+			}
+		}
+	}
+	if dockerCalls != 2 {
+		t.Fatalf("docker probes = %d, want ps and inspect", dockerCalls)
 	}
 }
 

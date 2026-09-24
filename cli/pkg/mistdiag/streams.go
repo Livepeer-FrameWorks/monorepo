@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	fwssh "frameworks/cli/pkg/ssh"
+	"frameworks/cli/pkg/system"
 )
 
 const mistAPIBase = "http://localhost:8080"
@@ -26,7 +27,7 @@ func DiscoverStreams(ctx context.Context, runner fwssh.Runner, mode string) ([]A
 	)
 
 	if mode == "container" || mode == "docker" {
-		apiCmd = fmt.Sprintf("docker exec frameworks-edge sh -c %s", fwssh.ShellQuote(apiCmd))
+		apiCmd = system.DockerCommand(fmt.Sprintf("exec frameworks-edge sh -c %s", fwssh.ShellQuote(apiCmd)))
 	}
 
 	result, err := runner.Run(ctx, apiCmd)

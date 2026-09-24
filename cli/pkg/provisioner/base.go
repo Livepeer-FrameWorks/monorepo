@@ -12,6 +12,7 @@ import (
 	"frameworks/cli/pkg/detect"
 	"frameworks/cli/pkg/inventory"
 	"frameworks/cli/pkg/ssh"
+	"frameworks/cli/pkg/system"
 )
 
 // BaseProvisioner provides common functionality for all provisioners
@@ -228,32 +229,31 @@ func parseDistroFamily(osRelease string) string {
 	return "unknown"
 }
 
+// cleanupAttempts lists the stop commands Cleanup tries in order until one
+// succeeds.
+func cleanupAttempts(mode, serviceName string) []string {
+	dockerAttempts := []string{
+		system.DockerCommand(fmt.Sprintf("compose stop %s", serviceName)),
+		system.DockerCommand(fmt.Sprintf("stop frameworks-%s", serviceName)),
+		system.DockerCommand(fmt.Sprintf("rm -f frameworks-%s", serviceName)),
+	}
+	systemdAttempts := []string{
+		fmt.Sprintf("systemctl stop frameworks-%s", serviceName),
+		fmt.Sprintf("systemctl kill frameworks-%s", serviceName),
+	}
+	switch mode {
+	case "docker":
+		return dockerAttempts
+	case "native":
+		return systemdAttempts
+	default:
+		return append(dockerAttempts, systemdAttempts...)
+	}
+}
+
 // Cleanup stops a service for rollback. Default implementation tries docker/systemd stop.
 func (b *BaseProvisioner) Cleanup(ctx context.Context, host inventory.Host, config ServiceConfig) error {
-	serviceName := b.name
-
-	var attempts []string
-	switch config.Mode {
-	case "docker":
-		attempts = []string{
-			fmt.Sprintf("docker compose stop %s", serviceName),
-			fmt.Sprintf("docker stop frameworks-%s", serviceName),
-			fmt.Sprintf("docker rm -f frameworks-%s", serviceName),
-		}
-	case "native":
-		attempts = []string{
-			fmt.Sprintf("systemctl stop frameworks-%s", serviceName),
-			fmt.Sprintf("systemctl kill frameworks-%s", serviceName),
-		}
-	default:
-		attempts = []string{
-			fmt.Sprintf("docker compose stop %s", serviceName),
-			fmt.Sprintf("docker stop frameworks-%s", serviceName),
-			fmt.Sprintf("docker rm -f frameworks-%s", serviceName),
-			fmt.Sprintf("systemctl stop frameworks-%s", serviceName),
-			fmt.Sprintf("systemctl kill frameworks-%s", serviceName),
-		}
-	}
+	attempts := cleanupAttempts(config.Mode, b.name)
 
 	var errMessages []string
 	for _, cmd := range attempts {
@@ -268,5 +268,5 @@ func (b *BaseProvisioner) Cleanup(ctx context.Context, host inventory.Host, conf
 		}
 	}
 
-	return fmt.Errorf("cleanup failed for %s: %s", serviceName, strings.Join(errMessages, "; "))
+	return fmt.Errorf("cleanup failed for %s: %s", b.name, strings.Join(errMessages, "; "))
 }
