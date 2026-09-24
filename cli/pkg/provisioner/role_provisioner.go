@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 
+	"frameworks/cli/internal/runtimeassets"
 	"frameworks/cli/pkg/ansiblerun"
 	"frameworks/cli/pkg/detect"
 	"frameworks/cli/pkg/inventory"
@@ -152,38 +153,12 @@ func NewRolePlaybookProvisioner(name string, pool *ssh.Pool, roleName, playbookR
 	}, nil
 }
 
-// FindAnsibleRoot walks up from the current working directory looking for an
-// `ansible/` sibling that contains our collection. Called once at provisioner
-// construction. Precedence:
-//  1. $FRAMEWORKS_ANSIBLE_ROOT (absolute path) — CI and tests override here.
-//  2. $PWD/ansible then ancestors.
+// FindAnsibleRoot returns the ansible/ root the provisioners run playbooks
+// from. Resolution lives in runtimeassets.AnsibleRoot: $FRAMEWORKS_ANSIBLE_ROOT,
+// then (development builds only) an ansible/ checkout above the working
+// directory, then the tree embedded in the CLI binary.
 func FindAnsibleRoot() (string, error) {
-	if override := os.Getenv("FRAMEWORKS_ANSIBLE_ROOT"); override != "" {
-		abs, err := filepath.Abs(override)
-		if err != nil {
-			return "", fmt.Errorf("resolve FRAMEWORKS_ANSIBLE_ROOT: %w", err)
-		}
-		if _, err := os.Stat(filepath.Join(abs, "ansible.cfg")); err != nil {
-			return "", fmt.Errorf("FRAMEWORKS_ANSIBLE_ROOT=%s: %w", abs, err)
-		}
-		return abs, nil
-	}
-	cwd, err := os.Getwd()
-	if err != nil {
-		return "", err
-	}
-	dir := cwd
-	for {
-		candidate := filepath.Join(dir, "ansible")
-		if _, err := os.Stat(filepath.Join(candidate, "ansible.cfg")); err == nil {
-			return candidate, nil
-		}
-		parent := filepath.Dir(dir)
-		if parent == dir {
-			return "", fmt.Errorf("no ansible/ directory with ansible.cfg found above %s", cwd)
-		}
-		dir = parent
-	}
+	return runtimeassets.AnsibleRoot()
 }
 
 // Detect delegates to the per-service detector or reports unknown.

@@ -1312,6 +1312,9 @@ jobs:
           cache-dependency-path: cli/go.sum
         env:
           GOTOOLCHAIN: local
+      - name: Stage CLI embedded assets
+        # The binary embeds ansible/ and config/skipper so it runs without a checkout.
+        run: ./scripts/cli-embed-assets.sh
       - name: Build CLI linux binaries
         run: |
           set -euo pipefail
@@ -1349,6 +1352,10 @@ jobs:
           cache-dependency-path: cli/go.sum
         env:
           GOTOOLCHAIN: local
+
+      - name: Stage CLI embedded assets
+        # The binary embeds ansible/ and config/skipper so it runs without a checkout.
+        run: ./scripts/cli-embed-assets.sh
 
       - name: Build CLI darwin/arm64
         run: |

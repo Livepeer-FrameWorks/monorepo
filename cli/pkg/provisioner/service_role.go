@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"frameworks/cli/internal/runtimeassets"
 	"frameworks/cli/pkg/ansiblerun"
 	"frameworks/cli/pkg/detect"
 	"frameworks/cli/pkg/gitops"
@@ -484,59 +485,15 @@ func skipperComposeSourceFiles(env map[string]string) (map[string]string, []stri
 }
 
 func readSkipperSourceFiles(mapFile func(rel, content string) map[string]string) ([]map[string]string, error) {
-	root, err := findRepoRoot()
+	sources, err := runtimeassets.ReadSkipperFiles()
 	if err != nil {
 		return nil, fmt.Errorf("skipper source files: %w", err)
 	}
-	base := filepath.Join(root, "config", "skipper")
-	var files []map[string]string
-	for _, dir := range []string{"sitemaps", "faq"} {
-		absDir := filepath.Join(base, dir)
-		if _, err := os.Stat(absDir); err != nil {
-			if os.IsNotExist(err) {
-				continue
-			}
-			return nil, fmt.Errorf("stat %s: %w", absDir, err)
-		}
-		if err := filepath.WalkDir(absDir, func(path string, entry os.DirEntry, walkErr error) error {
-			if walkErr != nil {
-				return walkErr
-			}
-			if entry.IsDir() {
-				return nil
-			}
-			content, err := os.ReadFile(path)
-			if err != nil {
-				return err
-			}
-			rel, err := filepath.Rel(base, path)
-			if err != nil {
-				return err
-			}
-			files = append(files, mapFile(filepath.ToSlash(rel), string(content)))
-			return nil
-		}); err != nil {
-			return nil, fmt.Errorf("read %s: %w", absDir, err)
-		}
+	files := make([]map[string]string, 0, len(sources))
+	for _, src := range sources {
+		files = append(files, mapFile(src.Path, string(src.Content)))
 	}
 	return files, nil
-}
-
-func findRepoRoot() (string, error) {
-	wd, err := os.Getwd()
-	if err != nil {
-		return "", err
-	}
-	for {
-		if _, err := os.Stat(filepath.Join(wd, "config", "skipper")); err == nil {
-			return wd, nil
-		}
-		parent := filepath.Dir(wd)
-		if parent == wd {
-			return "", fmt.Errorf("could not find config/skipper from %s", wd)
-		}
-		wd = parent
-	}
 }
 
 func dataMigrationsMarker(cfg ServiceRoleConfig, config ServiceConfig) string {
