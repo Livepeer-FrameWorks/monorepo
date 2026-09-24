@@ -274,7 +274,8 @@ test-sdk-go:
 # reads a copy of the operations without subscriptions and the async run then
 # writes the same models plus the subscription module into the same package.
 # The async run reads a copy too, because pkg/graphql/public also holds the
-# public schema, which is not an operation document.
+# public schema, which is not an operation document. codegen/public_exports.py
+# then writes the export list of livepeer_frameworks.graphql from the result.
 SDK_PY_VENV = sdk_python/.venv
 SDK_PY_GEN = sdk_python/src/livepeer_frameworks/_generated
 
@@ -303,6 +304,7 @@ graphql-sdk-py: sdk-manifest sdk-py-venv
 		pkg/graphql/public/generated sdk_python/build/async-operations/
 	@cd sdk_python && PYTHONPATH=codegen .venv/bin/ariadne-codegen client --config codegen/sync.toml >/dev/null
 	@cd sdk_python && PYTHONPATH=codegen .venv/bin/ariadne-codegen client --config codegen/async.toml >/dev/null
+	@cd sdk_python && .venv/bin/python codegen/public_exports.py
 	@rm -rf sdk_python/build/sync-operations sdk_python/build/async-operations
 
 test-sdk-py: sdk-py-venv
