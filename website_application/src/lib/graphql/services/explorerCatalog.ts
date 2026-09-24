@@ -798,12 +798,14 @@ export const EXPLORER_CATALOG: ExplorerSection[] = [
         operationType: "subscription",
         templatePath: "operations/subscriptions/TenantEvents.gql",
         expectedPayload:
-          "clip.requested/ready/failed and recording.ready/failed with the artifact.",
+          "clip.requested/ready/failed and recording.started/stopped/ready/failed with the artifact.",
         variables: {
           types: [
             "clip.requested",
             "clip.ready",
             "clip.failed",
+            "recording.started",
+            "recording.stopped",
             "recording.ready",
             "recording.failed",
           ],

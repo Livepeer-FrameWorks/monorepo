@@ -17,6 +17,7 @@
     DeleteClipStore,
     DeleteDVRStore,
     CreateVodUploadStore,
+    ImportVodAssetStore,
     CompleteVodUploadStore,
     AbortVodUploadStore,
     DeleteVodAssetStore,
@@ -128,6 +129,7 @@
   const deleteClipMutation = new DeleteClipStore();
   const deleteDvrMutation = new DeleteDVRStore();
   const createVodUploadMutation = new CreateVodUploadStore();
+  const importVodAssetMutation = new ImportVodAssetStore();
   const completeVodUploadMutation = new CompleteVodUploadStore();
   const abortVodUploadMutation = new AbortVodUploadStore();
   const deleteVodMutation = new DeleteVodAssetStore();
@@ -597,6 +599,11 @@
 
   // Upload VOD modal
   let showUploadModal = $state(false);
+  // "url" imports the video from a link instead of uploading a local file.
+  let uploadSource = $state<"file" | "url">("file");
+  let importUrl = $state("");
+  let importFilename = $state("");
+  let importing = $state(false);
   let uploadFile = $state<File | null>(null);
   let uploadTitle = $state("");
   let uploadDescription = $state("");
@@ -1326,7 +1333,48 @@
     resumeRequested = false;
   }
 
+  async function importFromUrl() {
+    const url = importUrl.trim();
+    if (!url) {
+      toast.warning("Enter the URL of the video to import");
+      return;
+    }
+    importing = true;
+    try {
+      const result = await importVodAssetMutation.mutate({
+        input: {
+          url,
+          filename: importFilename.trim() || undefined,
+          title: uploadTitle.trim() || undefined,
+          description: uploadDescription.trim() || undefined,
+        },
+      });
+      const data = result.data?.importVodAsset;
+      if (!data) {
+        toast.error("Failed to start the import");
+        return;
+      }
+      if (data.__typename !== "VodAsset") {
+        const err = data as { message?: string };
+        toast.error(err.message || "Failed to start the import");
+        return;
+      }
+      toast.success("Import started. The video appears in your library when it is ready.");
+      resetUploadForm();
+      showUploadModal = false;
+      await reloadArtifacts({ policy: "NetworkOnly" });
+    } catch (err) {
+      console.error("Failed to import VOD asset:", err);
+      toast.error("Failed to start the import. Please try again.");
+    } finally {
+      importing = false;
+    }
+  }
+
   function resetUploadForm() {
+    uploadSource = "file";
+    importUrl = "";
+    importFilename = "";
     uploadFile = null;
     uploadTitle = "";
     uploadDescription = "";
@@ -2706,69 +2754,130 @@
       class="slab-body--padded space-y-4"
       onsubmit={(e) => {
         e.preventDefault();
-        startUpload();
+        if (uploadSource === "url") {
+          importFromUrl();
+        } else {
+          startUpload();
+        }
       }}
     >
-      <div class="space-y-2">
-        <label for="file-input" class="block text-sm font-medium text-muted-foreground mb-2"
-          >Video File</label
-        >
-        <div
-          use:dropZoneAction
-          class="relative border-2 border-dashed rounded-lg p-6 text-center transition-colors {dragActive
-            ? 'border-primary bg-primary/5'
-            : 'border-border hover:border-primary/50'}"
-        >
-          {#if uploadFile}
-            <div class="flex items-center justify-center gap-3">
-              <FileVideoIcon class="w-8 h-8 text-primary" />
-              <div class="text-left">
-                <p class="text-sm font-medium text-foreground">{uploadFile.name}</p>
-                <p class="text-xs text-muted-foreground">{formatBytes(uploadFile.size)}</p>
+      {#if !uploading}
+        <div class="flex gap-2 text-xs" role="tablist" aria-label="Video source">
+          <button
+            type="button"
+            role="tab"
+            aria-selected={uploadSource === "file"}
+            class="px-3 py-1 border {uploadSource === 'file'
+              ? 'border-primary text-primary'
+              : 'border-border text-muted-foreground'}"
+            onclick={() => (uploadSource = "file")}>File</button
+          >
+          <button
+            type="button"
+            role="tab"
+            aria-selected={uploadSource === "url"}
+            class="px-3 py-1 border {uploadSource === 'url'
+              ? 'border-primary text-primary'
+              : 'border-border text-muted-foreground'}"
+            onclick={() => (uploadSource = "url")}>Import from URL</button
+          >
+        </div>
+      {/if}
+
+      {#if uploadSource === "url"}
+        <div class="space-y-2">
+          <label for="import-url" class="block text-sm font-medium text-muted-foreground mb-2"
+            >Video URL</label
+          >
+          <Input
+            id="import-url"
+            type="text"
+            bind:value={importUrl}
+            placeholder="https://…"
+            disabled={importing}
+          />
+          <p class="text-xs text-muted-foreground/70">
+            A public https or http link to the video file. The server must support range requests,
+            as S3, CDNs, and IPFS gateways do.
+          </p>
+        </div>
+        <div class="space-y-2">
+          <label for="import-filename" class="block text-sm font-medium text-muted-foreground mb-2"
+            >Filename (optional)</label
+          >
+          <Input
+            id="import-filename"
+            type="text"
+            bind:value={importFilename}
+            placeholder="video.mp4"
+            disabled={importing}
+          />
+          <p class="text-xs text-muted-foreground/70">
+            Needed when the URL does not end in mp4, mov, mkv, webm, or ts.
+          </p>
+        </div>
+      {:else}
+        <div class="space-y-2">
+          <label for="file-input" class="block text-sm font-medium text-muted-foreground mb-2"
+            >Video File</label
+          >
+          <div
+            use:dropZoneAction
+            class="relative border-2 border-dashed rounded-lg p-6 text-center transition-colors {dragActive
+              ? 'border-primary bg-primary/5'
+              : 'border-border hover:border-primary/50'}"
+          >
+            {#if uploadFile}
+              <div class="flex items-center justify-center gap-3">
+                <FileVideoIcon class="w-8 h-8 text-primary" />
+                <div class="text-left">
+                  <p class="text-sm font-medium text-foreground">{uploadFile.name}</p>
+                  <p class="text-xs text-muted-foreground">{formatBytes(uploadFile.size)}</p>
+                </div>
+              </div>
+            {:else}
+              <CloudUploadIcon class="w-12 h-12 text-muted-foreground mx-auto mb-2" />
+              <p class="text-sm text-muted-foreground mb-2">Click to select or drag and drop</p>
+              <p class="text-xs text-muted-foreground/70">MP4, WebM, MOV up to 2GB</p>
+            {/if}
+            <input
+              id="file-input"
+              type="file"
+              accept="video/*"
+              class="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
+              onchange={handleFileSelect}
+              disabled={uploading}
+            />
+          </div>
+          {#if recoveryOffer && !uploading}
+            <div
+              class="rounded-md border border-warning/30 bg-warning/5 px-3 py-2 text-xs text-foreground flex items-center justify-between gap-2"
+            >
+              <span>
+                {#if resumeRequested}
+                  Will resume previous upload ({recoveryOffer.completedParts}/{recoveryOffer.totalParts}
+                  parts already uploaded). Server will reconcile remaining parts.
+                {:else}
+                  Resume previous upload? {recoveryOffer.completedParts}/{recoveryOffer.totalParts} parts
+                  already uploaded.
+                {/if}
+              </span>
+              <div class="flex gap-2">
+                {#if !resumeRequested}
+                  <button type="button" class="underline text-primary" onclick={acceptRecovery}
+                    >Resume</button
+                  >
+                {/if}
+                <button
+                  type="button"
+                  class="underline text-muted-foreground"
+                  onclick={dismissRecovery}>Discard</button
+                >
               </div>
             </div>
-          {:else}
-            <CloudUploadIcon class="w-12 h-12 text-muted-foreground mx-auto mb-2" />
-            <p class="text-sm text-muted-foreground mb-2">Click to select or drag and drop</p>
-            <p class="text-xs text-muted-foreground/70">MP4, WebM, MOV up to 2GB</p>
           {/if}
-          <input
-            id="file-input"
-            type="file"
-            accept="video/*"
-            class="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
-            onchange={handleFileSelect}
-            disabled={uploading}
-          />
         </div>
-        {#if recoveryOffer && !uploading}
-          <div
-            class="rounded-md border border-warning/30 bg-warning/5 px-3 py-2 text-xs text-foreground flex items-center justify-between gap-2"
-          >
-            <span>
-              {#if resumeRequested}
-                Will resume previous upload ({recoveryOffer.completedParts}/{recoveryOffer.totalParts}
-                parts already uploaded). Server will reconcile remaining parts.
-              {:else}
-                Resume previous upload? {recoveryOffer.completedParts}/{recoveryOffer.totalParts} parts
-                already uploaded.
-              {/if}
-            </span>
-            <div class="flex gap-2">
-              {#if !resumeRequested}
-                <button type="button" class="underline text-primary" onclick={acceptRecovery}
-                  >Resume</button
-                >
-              {/if}
-              <button
-                type="button"
-                class="underline text-muted-foreground"
-                onclick={dismissRecovery}>Discard</button
-              >
-            </div>
-          </div>
-        {/if}
-      </div>
+      {/if}
 
       <div class="space-y-2">
         <label for="upload-title" class="block text-sm font-medium text-muted-foreground mb-2"
@@ -2867,12 +2976,13 @@
         type="submit"
         variant="ghost"
         class="rounded-none h-12 flex-1 text-primary"
-        disabled={uploading ||
-          !uploadFile ||
-          uploadStage === "processing" ||
-          uploadStage === "done"}
+        disabled={uploadSource === "url"
+          ? importing || !importUrl.trim()
+          : uploading || !uploadFile || uploadStage === "processing" || uploadStage === "done"}
         form="upload-form"
-        >{#if uploadStage === "uploading"}Uploading…{:else if uploadStage === "paused"}Paused{:else if uploadStage === "completing"}Finalizing…{:else if uploadStage === "processing"}Processing…{:else if uploadStage === "done"}Done{:else}Upload{/if}</Button
+        >{#if uploadSource === "url"}{importing
+            ? "Starting import…"
+            : "Import"}{:else if uploadStage === "uploading"}Uploading…{:else if uploadStage === "paused"}Paused{:else if uploadStage === "completing"}Finalizing…{:else if uploadStage === "processing"}Processing…{:else if uploadStage === "done"}Done{:else}Upload{/if}</Button
       >
     </DialogFooter>
   </DialogContent>

@@ -116,7 +116,7 @@ describe("realtime artifact events", () => {
     realtime.subscribeToRecordingEvents("stream-1");
     const store = FakeTenantEventsStore.instances[0];
     expect(store.listened[0]).toEqual({
-      types: ["recording.ready", "recording.failed"],
+      types: ["recording.started", "recording.stopped", "recording.ready", "recording.failed"],
       streamId: "stream-1",
     });
 

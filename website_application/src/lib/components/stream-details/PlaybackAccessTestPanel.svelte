@@ -29,6 +29,7 @@
   let token = $state("");
   let viewerIp = $state("");
   let connector = $state("hls");
+  let origin = $state("");
   let pending = $state(false);
 
   type Decision = {
@@ -60,6 +61,7 @@
           viewerToken: token.trim() || undefined,
           viewerIp: viewerIp.trim() || undefined,
           connector: connector.trim() || undefined,
+          origin: origin.trim() || undefined,
           fireWebhook,
         },
       });
@@ -151,6 +153,15 @@
         <div>
           <Label for="test-connector" class="text-xs">Connector (optional)</Label>
           <Input id="test-connector" placeholder="hls" bind:value={connector} disabled={pending} />
+        </div>
+        <div class="sm:col-span-2">
+          <Label for="test-origin" class="text-xs">Origin (optional)</Label>
+          <Input
+            id="test-origin"
+            placeholder="https://your-site.example"
+            bind:value={origin}
+            disabled={pending}
+          />
         </div>
       </div>
     </div>

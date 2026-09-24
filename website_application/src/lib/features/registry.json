@@ -562,7 +562,7 @@
           "area": "",
           "kind": "product",
           "audience": "product",
-          "description": "Public / JWT / webhook playback authorization policy on streams, clips, and VOD assets, with a dry-run tester and full agent management surface.",
+          "description": "Public / JWT / webhook playback authorization policy on streams, clips, and VOD assets, with allowed embedding origins, a per-policy webhook context object, a dry-run tester, and full agent management surface.",
           "status": "shipped",
           "required_surfaces": {
             "docs": {
@@ -960,7 +960,7 @@
       "area": "media-library",
       "kind": "product",
       "audience": "product",
-      "description": "Multipart VOD upload and lifecycle.",
+      "description": "Multipart VOD upload, import from a public http(s) URL, and lifecycle.",
       "status": "shipped",
       "required_surfaces": {
         "docs": {
@@ -982,6 +982,7 @@
             "createVodUpload",
             "completeVodUpload",
             "abortVodUpload",
+            "importVodAsset",
             "deleteVodAsset"
           ],
           "queries": [
@@ -998,6 +999,7 @@
             "create_vod_upload",
             "complete_vod_upload",
             "abort_vod_upload",
+            "import_vod_asset",
             "get_vod_upload_status",
             "delete_vod_asset"
           ]

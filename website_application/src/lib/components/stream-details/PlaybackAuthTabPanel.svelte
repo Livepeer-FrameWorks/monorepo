@@ -46,6 +46,8 @@
   let webhookUrl = $state("");
   let webhookSecret = $state("");
   let webhookTimeoutMs = $state("5000");
+  let webhookContext = $state("");
+  let allowedOrigins = $state<string[]>([]);
   let webhookHasExistingSecret = $derived(
     policyType === "WEBHOOK" && playbackPolicy?.type === "WEBHOOK"
   );
@@ -65,6 +67,8 @@
       webhookUrl = "";
       webhookSecret = "";
       webhookTimeoutMs = "5000";
+      webhookContext = "";
+      allowedOrigins = [];
       return;
     }
     policyType = p.type as PolicyType;
@@ -77,6 +81,31 @@
     webhookUrl = p.webhook?.url ?? "";
     webhookSecret = "";
     webhookTimeoutMs = String(p.webhook?.timeoutMs ?? 5000);
+    webhookContext = p.webhook?.context ? JSON.stringify(p.webhook.context, null, 2) : "";
+    allowedOrigins = p.allowedOrigins ? [...p.allowedOrigins] : [];
+  }
+
+  function addOrigin() {
+    allowedOrigins = [...allowedOrigins, ""];
+  }
+
+  function removeOrigin(i: number) {
+    allowedOrigins = allowedOrigins.filter((_, idx) => idx !== i);
+  }
+
+  // The webhook context must be a JSON object; an empty field clears it.
+  function parseWebhookContext():
+    | { ok: true; value: Record<string, unknown> | null }
+    | { ok: false } {
+    const raw = webhookContext.trim();
+    if (!raw) return { ok: true, value: null };
+    try {
+      const value = JSON.parse(raw);
+      if (value === null || typeof value !== "object" || Array.isArray(value)) return { ok: false };
+      return { ok: true, value };
+    } catch {
+      return { ok: false };
+    }
   }
 
   $effect(() => {
@@ -128,6 +157,12 @@
         return;
       }
     }
+    const parsedContext = parseWebhookContext();
+    if (policyType === "WEBHOOK" && !parsedContext.ok) {
+      toast.warning("Webhook context must be a JSON object");
+      return;
+    }
+    const cleanOrigins = allowedOrigins.map((o) => o.trim()).filter(Boolean);
 
     const cleanAudience = requiredAudience.map((a) => a.trim()).filter(Boolean);
     const cleanClaims = requiredClaims
@@ -141,8 +176,17 @@
         requiredAudience: string[];
         requiredClaimsJson: ClaimReq[];
       };
-      webhook?: { url: string; secret?: string; timeoutMs: number };
+      webhook?: {
+        url: string;
+        secret?: string;
+        timeoutMs: number;
+        context?: Record<string, unknown> | null;
+      };
+      allowedOrigins?: string[];
     } = { type: policyType };
+    if (policyType !== "PUBLIC") {
+      policy.allowedOrigins = cleanOrigins;
+    }
 
     if (policyType === "JWT") {
       policy.jwt = {
@@ -155,6 +199,7 @@
       policy.webhook = {
         url: webhookUrl.trim(),
         timeoutMs: Number(webhookTimeoutMs),
+        context: parsedContext.ok ? parsedContext.value : null,
       };
       if (trimmedSecret) {
         policy.webhook.secret = trimmedSecret;
@@ -453,6 +498,23 @@
           </SelectContent>
         </Select>
       </div>
+
+      <div>
+        <label for="webhook-context" class="block text-sm font-medium text-foreground mb-2">
+          Context (JSON object)
+        </label>
+        <textarea
+          id="webhook-context"
+          bind:value={webhookContext}
+          rows="4"
+          placeholder={'{ "courseId": "algebra-101" }'}
+          class="w-full rounded-md border border-input bg-background px-3 py-2 font-mono text-xs"
+        ></textarea>
+        <p class="text-xs text-muted-foreground mt-1">
+          Optional, up to 4 KiB. Sent as <code>context</code> in every access request so your endpoint
+          knows what this stream is without its own lookup.
+        </p>
+      </div>
     </div>
   {:else}
     <Alert variant="info">
@@ -461,6 +523,48 @@
         JWT or Webhook to gate viewer connections.
       </AlertDescription>
     </Alert>
+  {/if}
+
+  {#if policyType !== "PUBLIC"}
+    <div>
+      <div class="flex items-center justify-between mb-2">
+        <span class="block text-sm font-medium text-foreground">Allowed origins</span>
+        <Button variant="outline" size="sm" class="h-7 gap-1" onclick={addOrigin}>
+          <Plus class="w-3 h-3" />
+          Add
+        </Button>
+      </div>
+      {#if allowedOrigins.length === 0}
+        <p class="text-xs text-muted-foreground">
+          Any site may embed this stream. Add origins to restrict embedding.
+        </p>
+      {:else}
+        <div class="space-y-2">
+          {#each allowedOrigins as _, i (i)}
+            <div class="flex items-center gap-2">
+              <Input
+                type="text"
+                bind:value={allowedOrigins[i]}
+                placeholder="https://your-site.example or *"
+                class="flex-1 font-mono text-xs"
+              />
+              <Button
+                variant="outline"
+                size="sm"
+                class="h-9 w-9 p-0"
+                onclick={() => removeOrigin(i)}
+              >
+                <Trash2 class="w-3.5 h-3.5" />
+              </Button>
+            </div>
+          {/each}
+        </div>
+        <p class="text-xs text-muted-foreground mt-1">
+          Browser viewers on other sites are refused. Players without a browser (RTMP, SRT) send no
+          origin and are refused unless the list contains <code>*</code>.
+        </p>
+      {/if}
+    </div>
   {/if}
 
   <div class="flex justify-end gap-2 pt-4 border-t border-border/50">
