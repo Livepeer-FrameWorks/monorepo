@@ -499,28 +499,48 @@ func (q *Queries) MarkDVRSegmentDropped(ctx context.Context, arg MarkDVRSegmentD
 }
 
 const markDVRSegmentUploaded = `-- name: MarkDVRSegmentUploaded :exec
-UPDATE foghorn.dvr_segments
-SET status = 'uploaded', size_bytes = $3, uploaded_at = NOW()
-WHERE foghorn.dvr_segments.artifact_hash = $1 AND segment_name = $2 AND status IN ('pending', 'failed_upload')
-  AND EXISTS (
-      SELECT 1 FROM foghorn.artifacts a
-      WHERE a.artifact_hash = foghorn.dvr_segments.artifact_hash
-        AND a.artifact_type = 'dvr' AND a.tenant_id = $4
-  )
+WITH marked AS (
+    UPDATE foghorn.dvr_segments
+    SET status = 'uploaded', size_bytes = $3, uploaded_at = NOW()
+    WHERE foghorn.dvr_segments.artifact_hash = $4 AND segment_name = $5
+      AND status IN ('pending', 'failed_upload')
+      AND EXISTS (
+          SELECT 1 FROM foghorn.artifacts a
+          WHERE a.artifact_hash = foghorn.dvr_segments.artifact_hash
+            AND a.artifact_type = 'dvr' AND a.tenant_id = $6
+      )
+    RETURNING foghorn.dvr_segments.artifact_hash
+)
+UPDATE foghorn.artifacts AS parent
+SET storage_location = 's3', sync_status = 'in_progress',
+    storage_cluster_id = COALESCE(parent.storage_cluster_id, NULLIF($1::text, '')),
+    backend_id = COALESCE(parent.backend_id, NULLIF($2::text, '')),
+    durable_backend_local = true, updated_at = NOW()
+WHERE parent.artifact_hash IN (SELECT marked.artifact_hash FROM marked)
+  AND parent.artifact_type = 'dvr'
+  AND COALESCE(parent.sync_status, 'pending') = 'pending'
 `
 
 type MarkDVRSegmentUploadedParams struct {
-	ArtifactHash string        `db:"artifact_hash" json:"artifact_hash"`
-	SegmentName  string        `db:"segment_name" json:"segment_name"`
-	SizeBytes    sql.NullInt64 `db:"size_bytes" json:"size_bytes"`
-	TenantID     string        `db:"tenant_id" json:"tenant_id"`
+	StorageClusterID string        `db:"storage_cluster_id" json:"storage_cluster_id"`
+	BackendID        string        `db:"backend_id" json:"backend_id"`
+	SizeBytes        sql.NullInt64 `db:"size_bytes" json:"size_bytes"`
+	ArtifactHash     string        `db:"artifact_hash" json:"artifact_hash"`
+	SegmentName      string        `db:"segment_name" json:"segment_name"`
+	TenantID         string        `db:"tenant_id" json:"tenant_id"`
 }
 
+// The first uploaded segment moves the recording's parent row from pending to
+// 's3'/'in_progress' and records where its bytes live: the local cluster and
+// this cell's backend, since segments upload through this cell's S3 client.
+// Finalization later settles sync_status to 'synced' or 'lost_local'.
 func (q *Queries) MarkDVRSegmentUploaded(ctx context.Context, arg MarkDVRSegmentUploadedParams) error {
 	_, err := q.db.ExecContext(ctx, markDVRSegmentUploaded,
+		arg.StorageClusterID,
+		arg.BackendID,
+		arg.SizeBytes,
 		arg.ArtifactHash,
 		arg.SegmentName,
-		arg.SizeBytes,
 		arg.TenantID,
 	)
 	return err

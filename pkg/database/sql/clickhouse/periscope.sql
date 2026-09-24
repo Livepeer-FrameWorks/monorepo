@@ -1571,8 +1571,8 @@ CREATE TABLE IF NOT EXISTS api_requests (
     token_hashes Array(UInt64) DEFAULT [],
 
     -- ===== AGGREGATE COUNTS (for batch writes) =====
-    -- For per-request writes: request_count=1, error_count=0 or 1
-    -- For aggregate writes: request_count=N, error_count=M
+    -- error_count counts failed requests (never above request_count);
+    -- graphql_error_count is the total number of GraphQL errors they returned.
     request_count UInt32 DEFAULT 1,
     error_count UInt32 DEFAULT 0,
     total_duration_ms UInt64 DEFAULT 0,              -- Sum of all request durations in aggregate
@@ -1587,7 +1587,8 @@ CREATE TABLE IF NOT EXISTS api_requests (
     schema_version UInt8 DEFAULT 0,
     -- Sorted GraphQL root fields the aggregate's requests resolved. operation_name is chosen by the
     -- client and empty for anonymous operations; root fields name what was actually used.
-    root_fields Array(LowCardinality(String)) DEFAULT []
+    root_fields Array(LowCardinality(String)) DEFAULT [],
+    graphql_error_count UInt32 DEFAULT 0
 ) ENGINE = ReplicatedMergeTree()
 PARTITION BY (toYYYYMM(timestamp), tenant_id)
 ORDER BY (tenant_id, timestamp)

@@ -10,6 +10,41 @@ import (
 	"database/sql"
 )
 
+const dVRHasStoredSegments = `-- name: DVRHasStoredSegments :one
+SELECT EXISTS (
+    SELECT 1 FROM foghorn.dvr_segments
+    WHERE artifact_hash = $1
+      AND status IN ('uploaded', 'deleted_local')
+)::boolean AS stored
+`
+
+func (q *Queries) DVRHasStoredSegments(ctx context.Context, artifactHash string) (bool, error) {
+	row := q.db.QueryRowContext(ctx, dVRHasStoredSegments, artifactHash)
+	var stored bool
+	err := row.Scan(&stored)
+	return stored, err
+}
+
+const dVRTerminalChapterMaterialized = `-- name: DVRTerminalChapterMaterialized :one
+SELECT EXISTS (
+    SELECT 1 FROM foghorn.dvr_chapters
+    WHERE artifact_hash = $1
+      AND end_ms >= $2::bigint
+)::boolean AS materialized
+`
+
+type DVRTerminalChapterMaterializedParams struct {
+	ArtifactHash string `db:"artifact_hash" json:"artifact_hash"`
+	EndedAtMs    int64  `db:"ended_at_ms" json:"ended_at_ms"`
+}
+
+func (q *Queries) DVRTerminalChapterMaterialized(ctx context.Context, arg DVRTerminalChapterMaterializedParams) (bool, error) {
+	row := q.db.QueryRowContext(ctx, dVRTerminalChapterMaterialized, arg.ArtifactHash, arg.EndedAtMs)
+	var materialized bool
+	err := row.Scan(&materialized)
+	return materialized, err
+}
+
 const listActiveDVRChapterPolicies = `-- name: ListActiveDVRChapterPolicies :many
 SELECT artifact_hash,
        dvr_chapter_mode,
@@ -58,4 +93,58 @@ func (q *Queries) ListActiveDVRChapterPolicies(ctx context.Context) ([]ListActiv
 		return nil, err
 	}
 	return items, nil
+}
+
+const listDVRTerminalChapterBackfill = `-- name: ListDVRTerminalChapterBackfill :many
+SELECT artifact_hash,
+       COALESCE(FLOOR(EXTRACT(EPOCH FROM ended_at) * 1000), 0)::bigint AS ended_at_ms
+FROM foghorn.artifacts
+WHERE artifact_type = 'dvr'
+  AND status IN ('completed', 'completed_partial', 'failed', 'ready')
+  AND ended_at IS NOT NULL
+  AND dvr_chapter_mode IS NOT NULL
+  AND dvr_chapter_mode != ''
+  AND dvr_chapter_backfill_complete = false
+ORDER BY ended_at, artifact_hash
+LIMIT $1
+`
+
+type ListDVRTerminalChapterBackfillRow struct {
+	ArtifactHash string `db:"artifact_hash" json:"artifact_hash"`
+	EndedAtMs    int64  `db:"ended_at_ms" json:"ended_at_ms"`
+}
+
+func (q *Queries) ListDVRTerminalChapterBackfill(ctx context.Context, batchSize int32) ([]ListDVRTerminalChapterBackfillRow, error) {
+	rows, err := q.db.QueryContext(ctx, listDVRTerminalChapterBackfill, batchSize)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListDVRTerminalChapterBackfillRow{}
+	for rows.Next() {
+		var i ListDVRTerminalChapterBackfillRow
+		if err := rows.Scan(&i.ArtifactHash, &i.EndedAtMs); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const markDVRChapterBackfillComplete = `-- name: MarkDVRChapterBackfillComplete :exec
+UPDATE foghorn.artifacts
+SET dvr_chapter_backfill_complete = true
+WHERE artifact_hash = $1
+  AND artifact_type = 'dvr'
+`
+
+func (q *Queries) MarkDVRChapterBackfillComplete(ctx context.Context, artifactHash string) error {
+	_, err := q.db.ExecContext(ctx, markDVRChapterBackfillComplete, artifactHash)
+	return err
 }

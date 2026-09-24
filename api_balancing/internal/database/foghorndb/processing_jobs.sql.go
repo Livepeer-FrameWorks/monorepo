@@ -12,7 +12,8 @@ import (
 
 const assignProcessingJobNode = `-- name: AssignProcessingJobNode :execrows
 UPDATE foghorn.processing_jobs
-SET processing_node_id = $2, updated_at = NOW()
+SET processing_node_id = $2, updated_at = NOW(),
+    progress_last_ms = 0, progress_advanced_at = NOW()
 WHERE job_id = $1 AND status = 'dispatched'
 `
 
@@ -55,7 +56,8 @@ SELECT c.job_id, c.tenant_id, c.artifact_hash,
        a.s3_url, c.source_url, c.source_params, c.preferred_node_id,
        c.processes_json, a.internal_name, COALESCE(a.stream_id::text, '')::text AS stream_id,
        a.stream_internal_name,
-       COALESCE(a.durable_backend_local, false) AS durable_backend_local
+       COALESCE(a.durable_backend_local, false) AS durable_backend_local,
+       COALESCE(a.origin_cluster_id, '')::text AS origin_cluster_id
 FROM claimed AS c
 LEFT JOIN foghorn.artifacts AS a ON c.artifact_hash = a.artifact_hash
 `
@@ -79,6 +81,7 @@ type ClaimQueuedProcessingJobsRow struct {
 	StreamID            string         `db:"stream_id" json:"stream_id"`
 	StreamInternalName  sql.NullString `db:"stream_internal_name" json:"stream_internal_name"`
 	DurableBackendLocal bool           `db:"durable_backend_local" json:"durable_backend_local"`
+	OriginClusterID     string         `db:"origin_cluster_id" json:"origin_cluster_id"`
 }
 
 func (q *Queries) ClaimQueuedProcessingJobs(ctx context.Context) ([]ClaimQueuedProcessingJobsRow, error) {
@@ -109,6 +112,7 @@ func (q *Queries) ClaimQueuedProcessingJobs(ctx context.Context) ([]ClaimQueuedP
 			&i.StreamID,
 			&i.StreamInternalName,
 			&i.DurableBackendLocal,
+			&i.OriginClusterID,
 		); err != nil {
 			return nil, err
 		}
@@ -126,7 +130,8 @@ func (q *Queries) ClaimQueuedProcessingJobs(ctx context.Context) ([]ClaimQueuedP
 const commitDispatchedProcessingJob = `-- name: CommitDispatchedProcessingJob :execrows
 UPDATE foghorn.processing_jobs
 SET status = 'processing', processing_node_id = $2, routing_reason = $3,
-    started_at = NOW(), updated_at = NOW()
+    started_at = NOW(), updated_at = NOW(),
+    progress_advanced_at = COALESCE(progress_advanced_at, NOW())
 WHERE job_id = $1 AND status = 'dispatched'
 `
 
@@ -148,15 +153,17 @@ const failExhaustedProcessingJob = `-- name: FailExhaustedProcessingJob :one
 WITH failed AS (
     UPDATE foghorn.processing_jobs AS job
     SET status = 'failed',
-        error_message = CASE WHEN job.status = 'queued'
-            THEN 'stuck queued: node-pinned source unavailable'
-            ELSE 'max retries exceeded' END,
+        error_message = CASE
+            WHEN job.status = 'queued' THEN 'stuck queued: node-pinned source unavailable'
+            WHEN job.updated_at < $2 AND job.retry_count >= $3 THEN 'max retries exceeded'
+            ELSE 'no processing progress within the watchdog window' END,
         updated_at = NOW()
     WHERE job.job_id = $1
       AND ((job.status IN ('dispatched', 'processing') AND job.updated_at < $2 AND job.retry_count >= $3)
            OR (job.status = 'queued' AND job.created_at < $4
                AND job.preferred_node_id IS NOT NULL
-               AND job.source_params->>'source_kind' IN ('live', 'dvr_rolling')))
+               AND job.source_params->>'source_kind' IN ('live', 'dvr_rolling'))
+           OR (job.status IN ('dispatched', 'processing') AND job.progress_advanced_at < $5))
     RETURNING artifact_hash, tenant_id, error_message
 )
 SELECT f.artifact_hash, COALESCE(a.artifact_type, '')::text AS artifact_type,
@@ -169,10 +176,11 @@ LEFT JOIN foghorn.artifacts AS a ON f.artifact_hash = a.artifact_hash
 `
 
 type FailExhaustedProcessingJobParams struct {
-	JobID      string        `db:"job_id" json:"job_id"`
-	UpdatedAt  sql.NullTime  `db:"updated_at" json:"updated_at"`
-	RetryCount sql.NullInt32 `db:"retry_count" json:"retry_count"`
-	CreatedAt  sql.NullTime  `db:"created_at" json:"created_at"`
+	JobID              string        `db:"job_id" json:"job_id"`
+	UpdatedAt          sql.NullTime  `db:"updated_at" json:"updated_at"`
+	RetryCount         sql.NullInt32 `db:"retry_count" json:"retry_count"`
+	CreatedAt          sql.NullTime  `db:"created_at" json:"created_at"`
+	ProgressAdvancedAt sql.NullTime  `db:"progress_advanced_at" json:"progress_advanced_at"`
 }
 
 type FailExhaustedProcessingJobRow struct {
@@ -184,12 +192,15 @@ type FailExhaustedProcessingJobRow struct {
 	ErrorMessage       sql.NullString `db:"error_message" json:"error_message"`
 }
 
+// The last arm is the progress watchdog: an active job whose media position has
+// not advanced since $5, however recently its lease heartbeat refreshed updated_at.
 func (q *Queries) FailExhaustedProcessingJob(ctx context.Context, arg FailExhaustedProcessingJobParams) (FailExhaustedProcessingJobRow, error) {
 	row := q.db.QueryRowContext(ctx, failExhaustedProcessingJob,
 		arg.JobID,
 		arg.UpdatedAt,
 		arg.RetryCount,
 		arg.CreatedAt,
+		arg.ProgressAdvancedAt,
 	)
 	var i FailExhaustedProcessingJobRow
 	err := row.Scan(
@@ -269,16 +280,23 @@ WHERE (status IN ('dispatched', 'processing') AND updated_at < $1 AND retry_coun
    OR (status = 'queued' AND created_at < $3
        AND preferred_node_id IS NOT NULL
        AND source_params->>'source_kind' IN ('live', 'dvr_rolling'))
+   OR (status IN ('dispatched', 'processing') AND progress_advanced_at < $4)
 `
 
 type ListExhaustedProcessingJobIDsParams struct {
-	UpdatedAt  sql.NullTime  `db:"updated_at" json:"updated_at"`
-	RetryCount sql.NullInt32 `db:"retry_count" json:"retry_count"`
-	CreatedAt  sql.NullTime  `db:"created_at" json:"created_at"`
+	UpdatedAt          sql.NullTime  `db:"updated_at" json:"updated_at"`
+	RetryCount         sql.NullInt32 `db:"retry_count" json:"retry_count"`
+	CreatedAt          sql.NullTime  `db:"created_at" json:"created_at"`
+	ProgressAdvancedAt sql.NullTime  `db:"progress_advanced_at" json:"progress_advanced_at"`
 }
 
 func (q *Queries) ListExhaustedProcessingJobIDs(ctx context.Context, arg ListExhaustedProcessingJobIDsParams) ([]string, error) {
-	rows, err := q.db.QueryContext(ctx, listExhaustedProcessingJobIDs, arg.UpdatedAt, arg.RetryCount, arg.CreatedAt)
+	rows, err := q.db.QueryContext(ctx, listExhaustedProcessingJobIDs,
+		arg.UpdatedAt,
+		arg.RetryCount,
+		arg.CreatedAt,
+		arg.ProgressAdvancedAt,
+	)
 	if err != nil {
 		return nil, err
 	}
@@ -403,7 +421,8 @@ const requeueStaleProcessingJobs = `-- name: RequeueStaleProcessingJobs :execrow
 WITH requeued AS (
     UPDATE foghorn.processing_jobs AS job
     SET status = 'queued', processing_node_id = NULL,
-        retry_count = retry_count + 1, updated_at = NOW()
+        retry_count = retry_count + 1, updated_at = NOW(),
+        progress_last_ms = 0, progress_advanced_at = NULL
     WHERE job.status IN ('dispatched', 'processing')
       AND job.updated_at < $1
       AND job.retry_count < $2

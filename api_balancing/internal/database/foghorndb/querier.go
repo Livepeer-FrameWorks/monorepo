@@ -88,6 +88,9 @@ type Querier interface {
 	ClosePreviousCurrentDVRChapters(ctx context.Context, arg ClosePreviousCurrentDVRChaptersParams) (int64, error)
 	CommitArtifactCreationCommand(ctx context.Context, arg CommitArtifactCreationCommandParams) (int64, error)
 	CommitDispatchedProcessingJob(ctx context.Context, arg CommitDispatchedProcessingJobParams) (int64, error)
+	// Settles the parent's durable state from the segment counts: any uploaded
+	// segment makes the recording 'synced' in this cell's S3 under the DVR prefix
+	// (s3_url); none leaves it 'lost_local'.
 	CompleteDVRFinalization(ctx context.Context, arg CompleteDVRFinalizationParams) (int64, error)
 	CompleteIncrementalDtshSync(ctx context.Context, arg CompleteIncrementalDtshSyncParams) (int64, error)
 	CompleteMainArtifactSync(ctx context.Context, arg CompleteMainArtifactSyncParams) (int64, error)
@@ -106,9 +109,11 @@ type Querier interface {
 	CountStaleUnconsumedCreationCommands(ctx context.Context, retentionSeconds int64) (int64, error)
 	CountUnreclaimedDVRSegments(ctx context.Context, arg CountUnreclaimedDVRSegmentsParams) (int64, error)
 	CountUnverifiedThumbnailObjects(ctx context.Context, attemptID string) (int64, error)
+	DVRHasStoredSegments(ctx context.Context, artifactHash string) (bool, error)
 	DVRNeedsDtshSync(ctx context.Context, artifactHash string) (bool, error)
 	DVRRecordingState(ctx context.Context, arg DVRRecordingStateParams) (DVRRecordingStateRow, error)
 	DVRRecordingTenant(ctx context.Context, internalName sql.NullString) (string, error)
+	DVRTerminalChapterMaterialized(ctx context.Context, arg DVRTerminalChapterMaterializedParams) (bool, error)
 	// Deterministic evidence gaps need operator/data repair rather than immediate
 	// retry churn. Retain token ownership and move only its retry timestamp.
 	DeferFederatedArtifactPointerPurgeClaim(ctx context.Context, arg DeferFederatedArtifactPointerPurgeClaimParams) (int64, error)
@@ -174,6 +179,8 @@ type Querier interface {
 	FailDVRIntent(ctx context.Context, arg FailDVRIntentParams) error
 	FailDtshAttempt(ctx context.Context, arg FailDtshAttemptParams) (string, error)
 	FailExhaustedOfflineEffects(ctx context.Context) ([]FailExhaustedOfflineEffectsRow, error)
+	// The last arm is the progress watchdog: an active job whose media position has
+	// not advanced since $5, however recently its lease heartbeat refreshed updated_at.
 	FailExhaustedProcessingJob(ctx context.Context, arg FailExhaustedProcessingJobParams) (FailExhaustedProcessingJobRow, error)
 	FailExpiredThumbnailAttempt(ctx context.Context, attemptID string) (int64, error)
 	FailMainArtifactSync(ctx context.Context, arg FailMainArtifactSyncParams) error
@@ -381,6 +388,7 @@ type Querier interface {
 	ListDVRDispatchNodes(ctx context.Context, artifactHash string) ([]ListDVRDispatchNodesRow, error)
 	ListDVRSegmentsForRange(ctx context.Context, arg ListDVRSegmentsForRangeParams) ([]FoghornDvrSegment, error)
 	ListDVRSegmentsOwnedByChapter(ctx context.Context, arg ListDVRSegmentsOwnedByChapterParams) ([]FoghornDvrSegment, error)
+	ListDVRTerminalChapterBackfill(ctx context.Context, batchSize int32) ([]ListDVRTerminalChapterBackfillRow, error)
 	ListDeletedClipNodes(ctx context.Context, maxAge string) ([]ListDeletedClipNodesRow, error)
 	ListDeletedDVRNodes(ctx context.Context, maxAge string) ([]ListDeletedDVRNodesRow, error)
 	ListDeletedDVRParentsWithChapters(ctx context.Context, limit int32) ([]ListDeletedDVRParentsWithChaptersRow, error)
@@ -490,6 +498,7 @@ type Querier interface {
 	MarkArtifactThumbnailPresent(ctx context.Context, artifactHash string) error
 	MarkCompletingVODFailed(ctx context.Context, arg MarkCompletingVODFailedParams) (int64, error)
 	MarkCompletingVODProcessing(ctx context.Context, arg MarkCompletingVODProcessingParams) (int64, error)
+	MarkDVRChapterBackfillComplete(ctx context.Context, artifactHash string) error
 	MarkDVRChapterFinalized(ctx context.Context, arg MarkDVRChapterFinalizedParams) (int64, error)
 	MarkDVRChapterFrozen(ctx context.Context, chapterID string) error
 	MarkDVRChapterReclaimStarted(ctx context.Context, arg MarkDVRChapterReclaimStartedParams) (int64, error)
@@ -497,6 +506,10 @@ type Querier interface {
 	MarkDVRSegmentDropped(ctx context.Context, arg MarkDVRSegmentDroppedParams) (int64, error)
 	MarkDVRSegmentOrphanUnreachable(ctx context.Context, arg MarkDVRSegmentOrphanUnreachableParams) error
 	MarkDVRSegmentReclaimed(ctx context.Context, arg MarkDVRSegmentReclaimedParams) error
+	// The first uploaded segment moves the recording's parent row from pending to
+	// 's3'/'in_progress' and records where its bytes live: the local cluster and
+	// this cell's backend, since segments upload through this cell's S3 client.
+	// Finalization later settles sync_status to 'synced' or 'lost_local'.
 	MarkDVRSegmentUploaded(ctx context.Context, arg MarkDVRSegmentUploadedParams) error
 	MarkDVRStarting(ctx context.Context, arg MarkDVRStartingParams) (int64, error)
 	MarkDVRStopPending(ctx context.Context, arg MarkDVRStopPendingParams) error
@@ -507,6 +520,9 @@ type Querier interface {
 	// nothing; the start fence keeps a delayed trigger of an earlier session on the
 	// same node from marking a newer one.
 	MarkIngestSessionPlayable(ctx context.Context, arg MarkIngestSessionPlayableParams) (MarkIngestSessionPlayableRow, error)
+	// Records the first transcode degradation of the reporting node's active session;
+	// later reports for the same session keep the first time and reason.
+	MarkIngestSessionTranscodeDegraded(ctx context.Context, arg MarkIngestSessionTranscodeDegradedParams) (int64, error)
 	MarkMediaObjectAuthorityLocalIngestReady(ctx context.Context, arg MarkMediaObjectAuthorityLocalIngestReadyParams) (int64, error)
 	MarkMediaObjectAuthorityLocalReadReady(ctx context.Context, arg MarkMediaObjectAuthorityLocalReadReadyParams) (int64, error)
 	MarkMediaObjectAuthorityLocalSourceReady(ctx context.Context, arg MarkMediaObjectAuthorityLocalSourceReadyParams) (int64, error)
@@ -648,6 +664,8 @@ type Querier interface {
 	UpdateChapterFinalizeProgress(ctx context.Context, arg UpdateChapterFinalizeProgressParams) (UpdateChapterFinalizeProgressRow, error)
 	UpdateCompletedVODMetadata(ctx context.Context, arg UpdateCompletedVODMetadataParams) error
 	UpdateProcessingJobCache(ctx context.Context, arg UpdateProcessingJobCacheParams) (int64, error)
+	// updated_at is the lease; progress_advanced_at moves only when the reported percentage or
+	// media position increases, which is what the stale-recovery watchdog reads.
 	UpdateProcessingJobProgress(ctx context.Context, arg UpdateProcessingJobProgressParams) (UpdateProcessingJobProgressRow, error)
 	UpgradeAdmissionPushTargetsEncryption(ctx context.Context, arg UpgradeAdmissionPushTargetsEncryptionParams) (int64, error)
 	// The format of a processing input the relay can serve: an uploaded object in

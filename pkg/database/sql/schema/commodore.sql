@@ -253,9 +253,10 @@ CREATE TABLE IF NOT EXISTS commodore.streams (
     monitoring_enabled BOOLEAN,
 
     -- ===== DVR CHAPTER POLICY =====
-    -- Snapshotted onto foghorn.artifacts at StartDVR. NULL = chapters
-    -- disabled. Changes take effect on the next recording, not in-flight.
-    dvr_chapter_mode             VARCHAR(32)
+    -- Snapshotted onto foghorn.artifacts at StartDVR. NULL = NONE: live
+    -- rewind only, nothing is kept after the broadcast. The interval is set
+    -- only for fixed_interval. Changes take effect on the next recording.
+    dvr_chapter_mode             VARCHAR(32) DEFAULT 'window_sized_chapters'
         CONSTRAINT chk_streams_chapter_mode CHECK (
             dvr_chapter_mode IS NULL
             OR dvr_chapter_mode IN ('window_sized_chapters', 'fixed_interval')

@@ -733,6 +733,38 @@ func (q *Queries) MarkIngestSessionPlayable(ctx context.Context, arg MarkIngestS
 	return i, err
 }
 
+const markIngestSessionTranscodeDegraded = `-- name: MarkIngestSessionTranscodeDegraded :execrows
+UPDATE foghorn.ingest_sessions
+SET transcode_degraded_at = COALESCE(transcode_degraded_at, NOW()),
+    transcode_degraded_reason = COALESCE(transcode_degraded_reason, $1::text)
+WHERE tenant_id = $2::uuid
+  AND stream_internal_name = $3
+  AND node_id = $4
+  AND ended_at IS NULL
+`
+
+type MarkIngestSessionTranscodeDegradedParams struct {
+	Reason             string `db:"reason" json:"reason"`
+	TenantID           string `db:"tenant_id" json:"tenant_id"`
+	StreamInternalName string `db:"stream_internal_name" json:"stream_internal_name"`
+	NodeID             string `db:"node_id" json:"node_id"`
+}
+
+// Records the first transcode degradation of the reporting node's active session;
+// later reports for the same session keep the first time and reason.
+func (q *Queries) MarkIngestSessionTranscodeDegraded(ctx context.Context, arg MarkIngestSessionTranscodeDegradedParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, markIngestSessionTranscodeDegraded,
+		arg.Reason,
+		arg.TenantID,
+		arg.StreamInternalName,
+		arg.NodeID,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
 const nextSourceProjectionRevision = `-- name: NextSourceProjectionRevision :one
 INSERT INTO foghorn.source_projection_revision_counter (tenant_id, stream_internal_name, value)
 VALUES ($1::uuid, $2, 4503599627370497)

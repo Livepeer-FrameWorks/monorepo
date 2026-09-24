@@ -87,21 +87,24 @@ func (q *Queries) GetActiveIngestClaim(ctx context.Context, streamKey string) (G
 
 const getStreamAdmissionByKey = `-- name: GetStreamAdmissionByKey :one
 SELECT s.id, s.user_id, s.tenant_id, s.internal_name,
-       u.is_active, s.is_recording_enabled, s.playback_id, s.ingest_mode
+       u.is_active, s.is_recording_enabled, s.playback_id, s.ingest_mode,
+       s.dvr_chapter_mode, s.dvr_chapter_interval_seconds
 FROM commodore.streams s
 JOIN commodore.users u ON s.user_id = u.id
 WHERE s.stream_key = $1 AND s.deleted_at IS NULL
 `
 
 type GetStreamAdmissionByKeyRow struct {
-	ID                 string       `db:"id" json:"id"`
-	UserID             string       `db:"user_id" json:"user_id"`
-	TenantID           string       `db:"tenant_id" json:"tenant_id"`
-	InternalName       string       `db:"internal_name" json:"internal_name"`
-	IsActive           sql.NullBool `db:"is_active" json:"is_active"`
-	IsRecordingEnabled sql.NullBool `db:"is_recording_enabled" json:"is_recording_enabled"`
-	PlaybackID         string       `db:"playback_id" json:"playback_id"`
-	IngestMode         string       `db:"ingest_mode" json:"ingest_mode"`
+	ID                        string         `db:"id" json:"id"`
+	UserID                    string         `db:"user_id" json:"user_id"`
+	TenantID                  string         `db:"tenant_id" json:"tenant_id"`
+	InternalName              string         `db:"internal_name" json:"internal_name"`
+	IsActive                  sql.NullBool   `db:"is_active" json:"is_active"`
+	IsRecordingEnabled        sql.NullBool   `db:"is_recording_enabled" json:"is_recording_enabled"`
+	PlaybackID                string         `db:"playback_id" json:"playback_id"`
+	IngestMode                string         `db:"ingest_mode" json:"ingest_mode"`
+	DvrChapterMode            sql.NullString `db:"dvr_chapter_mode" json:"dvr_chapter_mode"`
+	DvrChapterIntervalSeconds sql.NullInt32  `db:"dvr_chapter_interval_seconds" json:"dvr_chapter_interval_seconds"`
 }
 
 func (q *Queries) GetStreamAdmissionByKey(ctx context.Context, streamKey string) (GetStreamAdmissionByKeyRow, error) {
@@ -116,6 +119,8 @@ func (q *Queries) GetStreamAdmissionByKey(ctx context.Context, streamKey string)
 		&i.IsRecordingEnabled,
 		&i.PlaybackID,
 		&i.IngestMode,
+		&i.DvrChapterMode,
+		&i.DvrChapterIntervalSeconds,
 	)
 	return i, err
 }
@@ -127,7 +132,8 @@ SELECT s.id, s.user_id, s.tenant_id, s.internal_name,
        COALESCE(
            s.active_ingest_cluster_updated_at > NOW() - ($1::bigint * INTERVAL '1 second'),
            false
-       )::boolean AS lease_fresh
+       )::boolean AS lease_fresh,
+       s.dvr_chapter_mode, s.dvr_chapter_interval_seconds
 FROM commodore.streams s
 JOIN commodore.users u ON s.user_id = u.id
 WHERE CASE $2::text
@@ -147,17 +153,19 @@ type ResolveStreamContextByIdentifierParams struct {
 }
 
 type ResolveStreamContextByIdentifierRow struct {
-	ID                    string         `db:"id" json:"id"`
-	UserID                string         `db:"user_id" json:"user_id"`
-	TenantID              string         `db:"tenant_id" json:"tenant_id"`
-	InternalName          string         `db:"internal_name" json:"internal_name"`
-	IsActive              sql.NullBool   `db:"is_active" json:"is_active"`
-	IsRecordingEnabled    sql.NullBool   `db:"is_recording_enabled" json:"is_recording_enabled"`
-	PlaybackID            string         `db:"playback_id" json:"playback_id"`
-	IngestMode            string         `db:"ingest_mode" json:"ingest_mode"`
-	RequiresAuth          bool           `db:"requires_auth" json:"requires_auth"`
-	ActiveIngestClusterID sql.NullString `db:"active_ingest_cluster_id" json:"active_ingest_cluster_id"`
-	LeaseFresh            bool           `db:"lease_fresh" json:"lease_fresh"`
+	ID                        string         `db:"id" json:"id"`
+	UserID                    string         `db:"user_id" json:"user_id"`
+	TenantID                  string         `db:"tenant_id" json:"tenant_id"`
+	InternalName              string         `db:"internal_name" json:"internal_name"`
+	IsActive                  sql.NullBool   `db:"is_active" json:"is_active"`
+	IsRecordingEnabled        sql.NullBool   `db:"is_recording_enabled" json:"is_recording_enabled"`
+	PlaybackID                string         `db:"playback_id" json:"playback_id"`
+	IngestMode                string         `db:"ingest_mode" json:"ingest_mode"`
+	RequiresAuth              bool           `db:"requires_auth" json:"requires_auth"`
+	ActiveIngestClusterID     sql.NullString `db:"active_ingest_cluster_id" json:"active_ingest_cluster_id"`
+	LeaseFresh                bool           `db:"lease_fresh" json:"lease_fresh"`
+	DvrChapterMode            sql.NullString `db:"dvr_chapter_mode" json:"dvr_chapter_mode"`
+	DvrChapterIntervalSeconds sql.NullInt32  `db:"dvr_chapter_interval_seconds" json:"dvr_chapter_interval_seconds"`
 }
 
 func (q *Queries) ResolveStreamContextByIdentifier(ctx context.Context, arg ResolveStreamContextByIdentifierParams) (ResolveStreamContextByIdentifierRow, error) {
@@ -175,6 +183,8 @@ func (q *Queries) ResolveStreamContextByIdentifier(ctx context.Context, arg Reso
 		&i.RequiresAuth,
 		&i.ActiveIngestClusterID,
 		&i.LeaseFresh,
+		&i.DvrChapterMode,
+		&i.DvrChapterIntervalSeconds,
 	)
 	return i, err
 }

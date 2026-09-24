@@ -138,7 +138,8 @@ WHERE artifact_hash = $2 AND catalog_quarantined_rev < $1;
 -- name: ListFailedArtifactsForFreezeRetry :many
 SELECT a.artifact_hash, a.artifact_type,
        COALESCE(a.stream_internal_name, '')::text AS stream_internal_name,
-       a.tenant_id::text AS tenant_id, a.format, an.node_id, an.file_path
+       a.tenant_id::text AS tenant_id, a.format, an.node_id, an.file_path,
+       COALESCE(a.origin_cluster_id, '')::text AS origin_cluster_id
 FROM foghorn.artifacts AS a
 JOIN LATERAL (
     SELECT node_id, file_path
@@ -162,7 +163,8 @@ LIMIT $1;
 -- name: ListPendingArtifactsForFreeze :many
 SELECT a.artifact_hash, a.artifact_type,
        COALESCE(a.stream_internal_name, '')::text AS stream_internal_name,
-       a.tenant_id::text AS tenant_id, a.format, an.node_id, an.file_path
+       a.tenant_id::text AS tenant_id, a.format, an.node_id, an.file_path,
+       COALESCE(a.origin_cluster_id, '')::text AS origin_cluster_id
 FROM foghorn.artifacts AS a
 JOIN LATERAL (
     SELECT node_id, file_path

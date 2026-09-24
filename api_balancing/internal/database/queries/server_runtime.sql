@@ -57,7 +57,12 @@ UPDATE foghorn.processing_jobs SET status = 'failed', error_message = $2, comple
 -- name: MarkProcessingArtifactFailed :execrows
 UPDATE foghorn.artifacts SET status = 'failed', error_message = $2, updated_at = NOW() WHERE artifact_hash = $1 AND tenant_id::text = $3 AND status NOT IN ('ready', 'failed', 'deleted', 'expired', 'aborted');
 -- name: UpdateProcessingJobProgress :one
-UPDATE foghorn.processing_jobs SET progress = GREATEST(progress, $2), updated_at = NOW() WHERE job_id = $1 AND status IN ('dispatched', 'processing') AND processing_node_id = $3 RETURNING artifact_hash, tenant_id::text, progress;
+-- updated_at is the lease; progress_advanced_at moves only when the reported percentage or
+-- media position increases, which is what the stale-recovery watchdog reads.
+UPDATE foghorn.processing_jobs SET progress = GREATEST(progress, sqlc.arg(progress)::int), progress_last_ms = GREATEST(progress_last_ms, sqlc.arg(last_ms)::bigint),
+  progress_advanced_at = CASE WHEN sqlc.arg(progress)::int > COALESCE(progress, 0) OR sqlc.arg(last_ms)::bigint > progress_last_ms THEN NOW() ELSE progress_advanced_at END,
+  updated_at = NOW()
+WHERE job_id = sqlc.arg(job_id) AND status IN ('dispatched', 'processing') AND processing_node_id = sqlc.arg(processing_node_id) RETURNING artifact_hash, tenant_id::text, progress;
 -- name: GetProcessingArtifactLifecycle :one
 SELECT COALESCE(artifact_type, '')::text AS artifact_type, COALESCE(stream_id::text, '')::text AS stream_id, COALESCE(stream_internal_name, '')::text AS stream_internal_name FROM foghorn.artifacts WHERE artifact_hash = $1;
 -- name: UpdateChapterFinalizeProgress :one
@@ -76,9 +81,9 @@ SELECT COALESCE(dtsh_synced, false) FROM foghorn.artifacts WHERE artifact_hash =
 SELECT EXISTS (SELECT 1 FROM foghorn.artifact_nodes an JOIN foghorn.artifacts a ON a.artifact_hash = an.artifact_hash WHERE an.artifact_hash = $1 AND an.node_id = $2 AND an.is_complete = true AND an.is_orphaned = false AND a.tenant_id::text = $3)
 OR EXISTS (SELECT 1 FROM foghorn.processing_jobs WHERE artifact_hash = $1 AND processing_node_id = $2 AND tenant_id::text = $3 AND status IN ('dispatched', 'processing'));
 -- name: ResolveThumbnailVODArtifact :one
-SELECT artifact_hash, tenant_id::text, COALESCE(storage_cluster_id, origin_cluster_id) AS cluster_id FROM foghorn.artifacts WHERE internal_name = $1;
+SELECT artifact_hash, tenant_id::text, origin_cluster_id AS cluster_id FROM foghorn.artifacts WHERE internal_name = $1;
 -- name: ResolveThumbnailProcessingArtifact :one
-SELECT tenant_id::text, COALESCE(NULLIF(storage_cluster_id, ''), NULLIF(origin_cluster_id, ''))::text AS cluster_id, artifact_type FROM foghorn.artifacts WHERE artifact_hash = $1 AND artifact_type IN ('clip', 'vod', 'dvr');
+SELECT tenant_id::text, COALESCE(origin_cluster_id, '')::text AS cluster_id, artifact_type FROM foghorn.artifacts WHERE artifact_hash = $1 AND artifact_type IN ('clip', 'vod', 'dvr');
 -- name: GetArtifactThumbnailMarkContext :one
 SELECT tenant_id::text, artifact_type, storage_cluster_id, origin_cluster_id, COALESCE(has_thumbnails, false) FROM foghorn.artifacts WHERE artifact_hash = $1;
 -- name: MarkArtifactThumbnailPresent :exec

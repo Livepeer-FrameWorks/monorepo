@@ -176,7 +176,7 @@ CREATE TABLE IF NOT EXISTS foghorn.artifacts (
     -- Captured at DVR start so finalize months later applies the same policy
     -- even if the tenant's tier changed during a long-running stream.
     dvr_window_seconds   INTEGER,           -- resolved live DVR window (Mist targetAge); also passed in DVRConfig
-    dvr_chapter_mode     VARCHAR(32),       -- default mode for the chapter sweeper to materialize
+    dvr_chapter_mode     VARCHAR(32),       -- chapter mode the sweeper materializes; NULL = live rewind only, nothing kept
     dvr_chapter_interval INTEGER,           -- interval_seconds for fixed_interval mode
     dvr_retention_days   INTEGER,           -- per-class cascade snapshot (Commodore-resolved); NULL = keep forever
     dvr_chapter_backfill_complete BOOLEAN NOT NULL DEFAULT false, -- terminal chapter index materialized through ended_at
@@ -751,6 +751,11 @@ CREATE TABLE IF NOT EXISTS foghorn.ingest_sessions (
     -- First playable STREAM_BUFFER from the session's own node. Set once by a compare-and-set
     -- that also enqueues stream.live, so replicas and repeated buffer triggers emit nothing.
     playable_at            TIMESTAMPTZ,
+    -- First time Mist replaced this session's failed transcode process with local renditions
+    -- (PROCESS_REPLACE), and the failed process's exit reason. NULL while the configured
+    -- transcode is intact.
+    transcode_degraded_at     TIMESTAMPTZ,
+    transcode_degraded_reason TEXT,
     UNIQUE (id, tenant_id, stream_internal_name),
     CONSTRAINT ck_foghorn_ingest_sessions_projection_state
         CHECK (projection_state IN ('pending', 'active')),
@@ -1539,7 +1544,13 @@ ALTER TABLE foghorn.processing_jobs
   ADD COLUMN IF NOT EXISTS processes_json TEXT,
   ADD COLUMN IF NOT EXISTS source_url TEXT,
   ADD COLUMN IF NOT EXISTS source_params JSONB,
-  ADD COLUMN IF NOT EXISTS preferred_node_id VARCHAR(100);
+  ADD COLUMN IF NOT EXISTS preferred_node_id VARCHAR(100),
+  -- Media progress watchdog. progress_last_ms is the furthest output position reported for the
+  -- current attempt; progress_advanced_at is when progress or progress_last_ms last increased,
+  -- or when the attempt was dispatched. Lease heartbeats refresh updated_at but not these, so
+  -- stale recovery can fail a job that heartbeats without producing output.
+  ADD COLUMN IF NOT EXISTS progress_last_ms BIGINT NOT NULL DEFAULT 0,
+  ADD COLUMN IF NOT EXISTS progress_advanced_at TIMESTAMP;
 
 CREATE INDEX IF NOT EXISTS idx_foghorn_processing_jobs_tenant ON foghorn.processing_jobs(tenant_id);
 CREATE INDEX IF NOT EXISTS idx_foghorn_processing_jobs_status ON foghorn.processing_jobs(status);

@@ -19,8 +19,19 @@ RETURNING status, tenant_id::text AS tenant_id,
           COALESCE(FLOOR(EXTRACT(EPOCH FROM ended_at) * 1000), 0)::bigint AS ended_at_ms;
 
 -- name: CompleteDVRFinalization :execrows
+-- Settles the parent's durable state from the segment counts: any uploaded
+-- segment makes the recording 'synced' in this cell's S3 under the DVR prefix
+-- (s3_url); none leaves it 'lost_local'.
 UPDATE foghorn.artifacts
 SET status = sqlc.arg(final_status)::text,
+    sync_status = CASE WHEN sqlc.arg(uploaded_segments)::int > 0 THEN 'synced' ELSE 'lost_local' END,
+    storage_location = CASE WHEN sqlc.arg(uploaded_segments)::int > 0 THEN 's3' ELSE storage_location END,
+    s3_url = CASE WHEN sqlc.arg(uploaded_segments)::int > 0 THEN COALESCE(NULLIF(sqlc.arg(s3_url)::text, ''), s3_url) ELSE s3_url END,
+    storage_cluster_id = CASE WHEN sqlc.arg(uploaded_segments)::int > 0
+        THEN COALESCE(storage_cluster_id, NULLIF(sqlc.arg(storage_cluster_id)::text, '')) ELSE storage_cluster_id END,
+    backend_id = CASE WHEN sqlc.arg(uploaded_segments)::int > 0
+        THEN COALESCE(backend_id, NULLIF(sqlc.arg(backend_id)::text, '')) ELSE backend_id END,
+    durable_backend_local = durable_backend_local OR sqlc.arg(uploaded_segments)::int > 0,
     size_bytes = COALESCE(NULLIF(sqlc.arg(size_bytes)::bigint, 0), size_bytes),
     duration_seconds = COALESCE(NULLIF(sqlc.arg(duration_seconds)::bigint, 0)::int, duration_seconds),
     retention_until = sqlc.narg(retention_until), updated_at = NOW(),

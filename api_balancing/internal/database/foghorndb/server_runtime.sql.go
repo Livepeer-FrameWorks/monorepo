@@ -671,7 +671,7 @@ func (q *Queries) RefreshDVRArtifactNodeProgress(ctx context.Context, arg Refres
 }
 
 const resolveThumbnailProcessingArtifact = `-- name: ResolveThumbnailProcessingArtifact :one
-SELECT tenant_id::text, COALESCE(NULLIF(storage_cluster_id, ''), NULLIF(origin_cluster_id, ''))::text AS cluster_id, artifact_type FROM foghorn.artifacts WHERE artifact_hash = $1 AND artifact_type IN ('clip', 'vod', 'dvr')
+SELECT tenant_id::text, COALESCE(origin_cluster_id, '')::text AS cluster_id, artifact_type FROM foghorn.artifacts WHERE artifact_hash = $1 AND artifact_type IN ('clip', 'vod', 'dvr')
 `
 
 type ResolveThumbnailProcessingArtifactRow struct {
@@ -688,7 +688,7 @@ func (q *Queries) ResolveThumbnailProcessingArtifact(ctx context.Context, artifa
 }
 
 const resolveThumbnailVODArtifact = `-- name: ResolveThumbnailVODArtifact :one
-SELECT artifact_hash, tenant_id::text, COALESCE(storage_cluster_id, origin_cluster_id) AS cluster_id FROM foghorn.artifacts WHERE internal_name = $1
+SELECT artifact_hash, tenant_id::text, origin_cluster_id AS cluster_id FROM foghorn.artifacts WHERE internal_name = $1
 `
 
 type ResolveThumbnailVODArtifactRow struct {
@@ -813,12 +813,16 @@ func (q *Queries) UpdateProcessingJobCache(ctx context.Context, arg UpdateProces
 }
 
 const updateProcessingJobProgress = `-- name: UpdateProcessingJobProgress :one
-UPDATE foghorn.processing_jobs SET progress = GREATEST(progress, $2), updated_at = NOW() WHERE job_id = $1 AND status IN ('dispatched', 'processing') AND processing_node_id = $3 RETURNING artifact_hash, tenant_id::text, progress
+UPDATE foghorn.processing_jobs SET progress = GREATEST(progress, $1::int), progress_last_ms = GREATEST(progress_last_ms, $2::bigint),
+  progress_advanced_at = CASE WHEN $1::int > COALESCE(progress, 0) OR $2::bigint > progress_last_ms THEN NOW() ELSE progress_advanced_at END,
+  updated_at = NOW()
+WHERE job_id = $3 AND status IN ('dispatched', 'processing') AND processing_node_id = $4 RETURNING artifact_hash, tenant_id::text, progress
 `
 
 type UpdateProcessingJobProgressParams struct {
+	Progress         int32          `db:"progress" json:"progress"`
+	LastMs           int64          `db:"last_ms" json:"last_ms"`
 	JobID            string         `db:"job_id" json:"job_id"`
-	Progress         sql.NullInt32  `db:"progress" json:"progress"`
 	ProcessingNodeID sql.NullString `db:"processing_node_id" json:"processing_node_id"`
 }
 
@@ -828,8 +832,15 @@ type UpdateProcessingJobProgressRow struct {
 	Progress     sql.NullInt32  `db:"progress" json:"progress"`
 }
 
+// updated_at is the lease; progress_advanced_at moves only when the reported percentage or
+// media position increases, which is what the stale-recovery watchdog reads.
 func (q *Queries) UpdateProcessingJobProgress(ctx context.Context, arg UpdateProcessingJobProgressParams) (UpdateProcessingJobProgressRow, error) {
-	row := q.db.QueryRowContext(ctx, updateProcessingJobProgress, arg.JobID, arg.Progress, arg.ProcessingNodeID)
+	row := q.db.QueryRowContext(ctx, updateProcessingJobProgress,
+		arg.Progress,
+		arg.LastMs,
+		arg.JobID,
+		arg.ProcessingNodeID,
+	)
 	var i UpdateProcessingJobProgressRow
 	err := row.Scan(&i.ArtifactHash, &i.TenantID, &i.Progress)
 	return i, err

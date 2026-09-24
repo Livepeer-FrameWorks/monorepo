@@ -369,7 +369,8 @@ func (q *Queries) ListArtifactsForCatalogProjection(ctx context.Context, arg Lis
 const listFailedArtifactsForFreezeRetry = `-- name: ListFailedArtifactsForFreezeRetry :many
 SELECT a.artifact_hash, a.artifact_type,
        COALESCE(a.stream_internal_name, '')::text AS stream_internal_name,
-       a.tenant_id::text AS tenant_id, a.format, an.node_id, an.file_path
+       a.tenant_id::text AS tenant_id, a.format, an.node_id, an.file_path,
+       COALESCE(a.origin_cluster_id, '')::text AS origin_cluster_id
 FROM foghorn.artifacts AS a
 JOIN LATERAL (
     SELECT node_id, file_path
@@ -399,6 +400,7 @@ type ListFailedArtifactsForFreezeRetryRow struct {
 	Format             sql.NullString `db:"format" json:"format"`
 	NodeID             string         `db:"node_id" json:"node_id"`
 	FilePath           sql.NullString `db:"file_path" json:"file_path"`
+	OriginClusterID    string         `db:"origin_cluster_id" json:"origin_cluster_id"`
 }
 
 func (q *Queries) ListFailedArtifactsForFreezeRetry(ctx context.Context, limit int32) ([]ListFailedArtifactsForFreezeRetryRow, error) {
@@ -418,6 +420,7 @@ func (q *Queries) ListFailedArtifactsForFreezeRetry(ctx context.Context, limit i
 			&i.Format,
 			&i.NodeID,
 			&i.FilePath,
+			&i.OriginClusterID,
 		); err != nil {
 			return nil, err
 		}
@@ -435,7 +438,8 @@ func (q *Queries) ListFailedArtifactsForFreezeRetry(ctx context.Context, limit i
 const listPendingArtifactsForFreeze = `-- name: ListPendingArtifactsForFreeze :many
 SELECT a.artifact_hash, a.artifact_type,
        COALESCE(a.stream_internal_name, '')::text AS stream_internal_name,
-       a.tenant_id::text AS tenant_id, a.format, an.node_id, an.file_path
+       a.tenant_id::text AS tenant_id, a.format, an.node_id, an.file_path,
+       COALESCE(a.origin_cluster_id, '')::text AS origin_cluster_id
 FROM foghorn.artifacts AS a
 JOIN LATERAL (
     SELECT node_id, file_path
@@ -462,6 +466,7 @@ type ListPendingArtifactsForFreezeRow struct {
 	Format             sql.NullString `db:"format" json:"format"`
 	NodeID             string         `db:"node_id" json:"node_id"`
 	FilePath           sql.NullString `db:"file_path" json:"file_path"`
+	OriginClusterID    string         `db:"origin_cluster_id" json:"origin_cluster_id"`
 }
 
 func (q *Queries) ListPendingArtifactsForFreeze(ctx context.Context, limit int32) ([]ListPendingArtifactsForFreezeRow, error) {
@@ -481,6 +486,7 @@ func (q *Queries) ListPendingArtifactsForFreeze(ctx context.Context, limit int32
 			&i.Format,
 			&i.NodeID,
 			&i.FilePath,
+			&i.OriginClusterID,
 		); err != nil {
 			return nil, err
 		}

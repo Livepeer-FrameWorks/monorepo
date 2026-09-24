@@ -85,21 +85,33 @@ func (q *Queries) ClearDVRStopObligation(ctx context.Context, arg ClearDVRStopOb
 const completeDVRFinalization = `-- name: CompleteDVRFinalization :execrows
 UPDATE foghorn.artifacts
 SET status = $1::text,
-    size_bytes = COALESCE(NULLIF($2::bigint, 0), size_bytes),
-    duration_seconds = COALESCE(NULLIF($3::bigint, 0)::int, duration_seconds),
-    retention_until = $4, updated_at = NOW(),
-    ended_at = COALESCE(ended_at, $5),
+    sync_status = CASE WHEN $2::int > 0 THEN 'synced' ELSE 'lost_local' END,
+    storage_location = CASE WHEN $2::int > 0 THEN 's3' ELSE storage_location END,
+    s3_url = CASE WHEN $2::int > 0 THEN COALESCE(NULLIF($3::text, ''), s3_url) ELSE s3_url END,
+    storage_cluster_id = CASE WHEN $2::int > 0
+        THEN COALESCE(storage_cluster_id, NULLIF($4::text, '')) ELSE storage_cluster_id END,
+    backend_id = CASE WHEN $2::int > 0
+        THEN COALESCE(backend_id, NULLIF($5::text, '')) ELSE backend_id END,
+    durable_backend_local = durable_backend_local OR $2::int > 0,
+    size_bytes = COALESCE(NULLIF($6::bigint, 0), size_bytes),
+    duration_seconds = COALESCE(NULLIF($7::bigint, 0)::int, duration_seconds),
+    retention_until = $8, updated_at = NOW(),
+    ended_at = COALESCE(ended_at, $9),
     dvr_start_dispatch = CASE
-        WHEN $6::boolean THEN dvr_start_dispatch
+        WHEN $10::boolean THEN dvr_start_dispatch
         WHEN COALESCE(dvr_start_dispatch->>'node_id', '') <> ''
             THEN jsonb_build_object('node_id', dvr_start_dispatch->>'node_id')
         ELSE NULL END
-WHERE artifact_hash = $7 AND artifact_type = 'dvr'
-  AND status = 'finalizing' AND tenant_id::text = $8
+WHERE artifact_hash = $11 AND artifact_type = 'dvr'
+  AND status = 'finalizing' AND tenant_id::text = $12
 `
 
 type CompleteDVRFinalizationParams struct {
 	FinalStatus          string       `db:"final_status" json:"final_status"`
+	UploadedSegments     int32        `db:"uploaded_segments" json:"uploaded_segments"`
+	S3Url                string       `db:"s3_url" json:"s3_url"`
+	StorageClusterID     string       `db:"storage_cluster_id" json:"storage_cluster_id"`
+	BackendID            string       `db:"backend_id" json:"backend_id"`
 	SizeBytes            int64        `db:"size_bytes" json:"size_bytes"`
 	DurationSeconds      int64        `db:"duration_seconds" json:"duration_seconds"`
 	RetentionUntil       sql.NullTime `db:"retention_until" json:"retention_until"`
@@ -109,9 +121,16 @@ type CompleteDVRFinalizationParams struct {
 	TenantID             string       `db:"tenant_id" json:"tenant_id"`
 }
 
+// Settles the parent's durable state from the segment counts: any uploaded
+// segment makes the recording 'synced' in this cell's S3 under the DVR prefix
+// (s3_url); none leaves it 'lost_local'.
 func (q *Queries) CompleteDVRFinalization(ctx context.Context, arg CompleteDVRFinalizationParams) (int64, error) {
 	result, err := q.db.ExecContext(ctx, completeDVRFinalization,
 		arg.FinalStatus,
+		arg.UploadedSegments,
+		arg.S3Url,
+		arg.StorageClusterID,
+		arg.BackendID,
 		arg.SizeBytes,
 		arg.DurationSeconds,
 		arg.RetentionUntil,

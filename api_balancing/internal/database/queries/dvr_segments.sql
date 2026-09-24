@@ -22,14 +22,30 @@ INSERT INTO foghorn.dvr_segments (
 ) VALUES ($1, $2, $3, $4, $5, $6, $7, 'pending', NOW());
 
 -- name: MarkDVRSegmentUploaded :exec
-UPDATE foghorn.dvr_segments
-SET status = 'uploaded', size_bytes = $3, uploaded_at = NOW()
-WHERE foghorn.dvr_segments.artifact_hash = $1 AND segment_name = $2 AND status IN ('pending', 'failed_upload')
-  AND EXISTS (
-      SELECT 1 FROM foghorn.artifacts a
-      WHERE a.artifact_hash = foghorn.dvr_segments.artifact_hash
-        AND a.artifact_type = 'dvr' AND a.tenant_id = $4
-  );
+-- The first uploaded segment moves the recording's parent row from pending to
+-- 's3'/'in_progress' and records where its bytes live: the local cluster and
+-- this cell's backend, since segments upload through this cell's S3 client.
+-- Finalization later settles sync_status to 'synced' or 'lost_local'.
+WITH marked AS (
+    UPDATE foghorn.dvr_segments
+    SET status = 'uploaded', size_bytes = sqlc.narg(size_bytes), uploaded_at = NOW()
+    WHERE foghorn.dvr_segments.artifact_hash = sqlc.arg(artifact_hash) AND segment_name = sqlc.arg(segment_name)
+      AND status IN ('pending', 'failed_upload')
+      AND EXISTS (
+          SELECT 1 FROM foghorn.artifacts a
+          WHERE a.artifact_hash = foghorn.dvr_segments.artifact_hash
+            AND a.artifact_type = 'dvr' AND a.tenant_id = sqlc.arg(tenant_id)
+      )
+    RETURNING foghorn.dvr_segments.artifact_hash
+)
+UPDATE foghorn.artifacts AS parent
+SET storage_location = 's3', sync_status = 'in_progress',
+    storage_cluster_id = COALESCE(parent.storage_cluster_id, NULLIF(sqlc.arg(storage_cluster_id)::text, '')),
+    backend_id = COALESCE(parent.backend_id, NULLIF(sqlc.arg(backend_id)::text, '')),
+    durable_backend_local = true, updated_at = NOW()
+WHERE parent.artifact_hash IN (SELECT marked.artifact_hash FROM marked)
+  AND parent.artifact_type = 'dvr'
+  AND COALESCE(parent.sync_status, 'pending') = 'pending';
 
 -- name: GetDVRSegmentProgress :one
 SELECT COUNT(*)::bigint AS segment_count, COALESCE(SUM(size_bytes), 0)::bigint AS size_bytes
