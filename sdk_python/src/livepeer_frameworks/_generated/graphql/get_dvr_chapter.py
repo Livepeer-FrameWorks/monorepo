@@ -15,9 +15,9 @@ class GetDVRChapter(BaseModel):
 
     dvr_chapter: Optional["GetDVRChapterDvrChapter"] = Field(
         alias="dvrChapter",
-        description="Retrieve a single DVR chapter, including its finalized playbackId.\n\nChapters are produced by the finalization queue as canonical .mkv\nVOD artifacts. Historical chapter mode is configured at the Stream level\n(Stream.dvrChapterMode) and snapshotted at StartDVR. Modes:\n  - WINDOW_SIZED: sequential fixed-length chapters of size\n    tier.MaxWindowSeconds since the recording's start.\n  - FIXED_INTERVAL: UTC-only buckets of intervalSeconds, anchored at\n    unix epoch 0.",
+        description="Retrieve a single DVR chapter, including its finalized playbackId.\n\nChapters are the saved parts of a recording, produced by the\nfinalization queue as canonical .mkv VOD artifacts. The chapter mode is\nconfigured at the Stream level (Stream.dvrChapterMode) and snapshotted\nwhen the recording starts. Modes:\n  - WINDOW_SIZED (default): sequential parts as long as the recording's\n    own live rewind window, from the recording's start.\n  - FIXED_INTERVAL: UTC-only buckets of intervalSeconds, anchored at\n    unix epoch 0.\nA NONE recording keeps live rewind only and has no chapters.",
     )
-    "Retrieve a single DVR chapter, including its finalized playbackId.\n\nChapters are produced by the finalization queue as canonical .mkv\nVOD artifacts. Historical chapter mode is configured at the Stream level\n(Stream.dvrChapterMode) and snapshotted at StartDVR. Modes:\n  - WINDOW_SIZED: sequential fixed-length chapters of size\n    tier.MaxWindowSeconds since the recording's start.\n  - FIXED_INTERVAL: UTC-only buckets of intervalSeconds, anchored at\n    unix epoch 0."
+    "Retrieve a single DVR chapter, including its finalized playbackId.\n\nChapters are the saved parts of a recording, produced by the\nfinalization queue as canonical .mkv VOD artifacts. The chapter mode is\nconfigured at the Stream level (Stream.dvrChapterMode) and snapshotted\nwhen the recording starts. Modes:\n  - WINDOW_SIZED (default): sequential parts as long as the recording's\n    own live rewind window, from the recording's start.\n  - FIXED_INTERVAL: UTC-only buckets of intervalSeconds, anchored at\n    unix epoch 0.\nA NONE recording keeps live rewind only and has no chapters."
 
 
 class GetDVRChapterDvrChapter(BaseModel):

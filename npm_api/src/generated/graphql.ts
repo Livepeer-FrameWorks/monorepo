@@ -332,19 +332,19 @@ export type CryptoAsset =
   | '%future added value';
 
 /**
- * DVR historical chapter mode. Determines how chapter (startMs, endMs)
- * ranges are produced for finalized replay artifacts. Configured at the
- * Stream level via updateStream and snapshotted onto the DVR artifact at
- * StartDVR.
+ * How a recording is saved as chapters. Determines how chapter (startMs,
+ * endMs) ranges are produced for replay after the broadcast. Configured at
+ * the Stream level via updateStream and snapshotted onto the recording when
+ * it starts. New streams default to WINDOW_SIZED.
  *
  * UTC-only — civil-time chapters resolve at the edge.
  */
 export type DVRChapterMode =
   /** UTC-only intervalSeconds buckets, anchored at unix epoch 0. */
   | 'FIXED_INTERVAL'
-  /** Rolling DVR only: recording still runs, but no historical chapter artifacts are produced. */
+  /** Live rewind only: viewers can rewind while live, but nothing is kept after the broadcast and no recording.ready fires. */
   | 'NONE'
-  /** Sequential fixed-length chapters of size tier.MaxWindowSeconds since the recording's start. */
+  /** Default. Sequential parts as long as the recording's own live rewind window, from the recording's start. */
   | 'WINDOW_SIZED'
   | '%future added value';
 
@@ -1203,14 +1203,15 @@ export type UpdateStreamInput = {
   description?: string | null | undefined;
   /**
    * Chapter interval in seconds. Required when dvrChapterMode =
-   * FIXED_INTERVAL. Minimum 3600 (1 hour).
+   * FIXED_INTERVAL. Minimum 3600 (1 hour). Send 0 with any other mode to
+   * clear a stored interval.
    */
   dvrChapterIntervalSeconds?: number | null | undefined;
   /**
-   * Historical chapter rotation mode. Snapshotted onto the DVR artifact
-   * at StartDVR; changes take effect on the next recording, not in-flight.
-   * NONE means rolling DVR playback only: recording still runs, but no
-   * finalized chapter artifacts are produced for historical replay.
+   * How saved recordings are split into chapters. Snapshotted when a
+   * recording starts; changes apply from the next broadcast, not to a
+   * recording in progress. NONE keeps live rewind only: viewers can rewind
+   * while live, but nothing is kept after the broadcast.
    */
   dvrChapterMode?: DVRChapterMode | null | undefined;
   /** Ingest model cannot be changed after create; sending a different value returns a validation error. */
@@ -1370,7 +1371,7 @@ playbackId: string, /** Whether DVR recording is enabled for this stream. */
 record: boolean, /** How source media enters the stream. */
 ingestMode: IngestMode, /** When this stream was created. */
 createdAt: string, /** When this stream was last modified. */
-updatedAt: string, /** DVR chapter rotation mode. Snapshotted onto the DVR artifact at StartDVR; changes take effect on the next recording. null/NONE = chapters disabled. */
+updatedAt: string, /** How saved recordings are split into chapters. Snapshotted when a recording starts; changes apply from the next broadcast. NONE = live rewind only, nothing kept after the broadcast. */
 dvrChapterMode: DVRChapterMode | null, /** Chapter interval in seconds. Required when dvrChapterMode = FIXED_INTERVAL, ignored otherwise. Minimum 3600 (1 hour). */
 dvrChapterIntervalSeconds: number | null, /** Per-stream Skipper monitoring override (INHERIT follows tier). */
 monitoring: MonitoringToggle, /** Pull-source config for pull streams; null for push streams. */
@@ -1524,7 +1525,7 @@ playbackId: string, /** Whether DVR recording is enabled for this stream. */
 record: boolean, /** How source media enters the stream. */
 ingestMode: IngestMode, /** When this stream was created. */
 createdAt: string, /** When this stream was last modified. */
-updatedAt: string, /** DVR chapter rotation mode. Snapshotted onto the DVR artifact at StartDVR; changes take effect on the next recording. null/NONE = chapters disabled. */
+updatedAt: string, /** How saved recordings are split into chapters. Snapshotted when a recording starts; changes apply from the next broadcast. NONE = live rewind only, nothing kept after the broadcast. */
 dvrChapterMode: DVRChapterMode | null, /** Chapter interval in seconds. Required when dvrChapterMode = FIXED_INTERVAL, ignored otherwise. Minimum 3600 (1 hour). */
 dvrChapterIntervalSeconds: number | null, /** Per-stream Skipper monitoring override (INHERIT follows tier). */
 monitoring: MonitoringToggle, /** Pull-source config for pull streams; null for push streams. */
@@ -1579,7 +1580,7 @@ playbackId: string, /** Whether DVR recording is enabled for this stream. */
 record: boolean, /** How source media enters the stream. */
 ingestMode: IngestMode, /** When this stream was created. */
 createdAt: string, /** When this stream was last modified. */
-updatedAt: string, /** DVR chapter rotation mode. Snapshotted onto the DVR artifact at StartDVR; changes take effect on the next recording. null/NONE = chapters disabled. */
+updatedAt: string, /** How saved recordings are split into chapters. Snapshotted when a recording starts; changes apply from the next broadcast. NONE = live rewind only, nothing kept after the broadcast. */
 dvrChapterMode: DVRChapterMode | null, /** Chapter interval in seconds. Required when dvrChapterMode = FIXED_INTERVAL, ignored otherwise. Minimum 3600 (1 hour). */
 dvrChapterIntervalSeconds: number | null, /** Per-stream Skipper monitoring override (INHERIT follows tier). */
 monitoring: MonitoringToggle, /** Pull-source config for pull streams; null for push streams. */
@@ -1634,7 +1635,7 @@ playbackId: string, /** Whether DVR recording is enabled for this stream. */
 record: boolean, /** How source media enters the stream. */
 ingestMode: IngestMode, /** When this stream was created. */
 createdAt: string, /** When this stream was last modified. */
-updatedAt: string, /** DVR chapter rotation mode. Snapshotted onto the DVR artifact at StartDVR; changes take effect on the next recording. null/NONE = chapters disabled. */
+updatedAt: string, /** How saved recordings are split into chapters. Snapshotted when a recording starts; changes apply from the next broadcast. NONE = live rewind only, nothing kept after the broadcast. */
 dvrChapterMode: DVRChapterMode | null, /** Chapter interval in seconds. Required when dvrChapterMode = FIXED_INTERVAL, ignored otherwise. Minimum 3600 (1 hour). */
 dvrChapterIntervalSeconds: number | null, /** Per-stream Skipper monitoring override (INHERIT follows tier). */
 monitoring: MonitoringToggle, /** Pull-source config for pull streams; null for push streams. */
@@ -1884,7 +1885,7 @@ playbackId: string, /** Whether DVR recording is enabled for this stream. */
 record: boolean, /** How source media enters the stream. */
 ingestMode: IngestMode, /** When this stream was created. */
 createdAt: string, /** When this stream was last modified. */
-updatedAt: string, /** DVR chapter rotation mode. Snapshotted onto the DVR artifact at StartDVR; changes take effect on the next recording. null/NONE = chapters disabled. */
+updatedAt: string, /** How saved recordings are split into chapters. Snapshotted when a recording starts; changes apply from the next broadcast. NONE = live rewind only, nothing kept after the broadcast. */
 dvrChapterMode: DVRChapterMode | null, /** Chapter interval in seconds. Required when dvrChapterMode = FIXED_INTERVAL, ignored otherwise. Minimum 3600 (1 hour). */
 dvrChapterIntervalSeconds: number | null, /** Per-stream Skipper monitoring override (INHERIT follows tier). */
 monitoring: MonitoringToggle, /** Pull-source config for pull streams; null for push streams. */
@@ -1967,7 +1968,7 @@ playbackId: string, /** Whether DVR recording is enabled for this stream. */
 record: boolean, /** How source media enters the stream. */
 ingestMode: IngestMode, /** When this stream was created. */
 createdAt: string, /** When this stream was last modified. */
-updatedAt: string, /** DVR chapter rotation mode. Snapshotted onto the DVR artifact at StartDVR; changes take effect on the next recording. null/NONE = chapters disabled. */
+updatedAt: string, /** How saved recordings are split into chapters. Snapshotted when a recording starts; changes apply from the next broadcast. NONE = live rewind only, nothing kept after the broadcast. */
 dvrChapterMode: DVRChapterMode | null, /** Chapter interval in seconds. Required when dvrChapterMode = FIXED_INTERVAL, ignored otherwise. Minimum 3600 (1 hour). */
 dvrChapterIntervalSeconds: number | null, /** Per-stream Skipper monitoring override (INHERIT follows tier). */
 monitoring: MonitoringToggle, /** Pull-source config for pull streams; null for push streams. */
@@ -2114,7 +2115,7 @@ playbackId: string, /** Whether DVR recording is enabled for this stream. */
 record: boolean, /** How source media enters the stream. */
 ingestMode: IngestMode, /** When this stream was created. */
 createdAt: string, /** When this stream was last modified. */
-updatedAt: string, /** DVR chapter rotation mode. Snapshotted onto the DVR artifact at StartDVR; changes take effect on the next recording. null/NONE = chapters disabled. */
+updatedAt: string, /** How saved recordings are split into chapters. Snapshotted when a recording starts; changes apply from the next broadcast. NONE = live rewind only, nothing kept after the broadcast. */
 dvrChapterMode: DVRChapterMode | null, /** Chapter interval in seconds. Required when dvrChapterMode = FIXED_INTERVAL, ignored otherwise. Minimum 3600 (1 hour). */
 dvrChapterIntervalSeconds: number | null, /** Per-stream Skipper monitoring override (INHERIT follows tier). */
 monitoring: MonitoringToggle, /** Pull-source config for pull streams; null for push streams. */
@@ -2169,7 +2170,7 @@ playbackId: string, /** Whether DVR recording is enabled for this stream. */
 record: boolean, /** How source media enters the stream. */
 ingestMode: IngestMode, /** When this stream was created. */
 createdAt: string, /** When this stream was last modified. */
-updatedAt: string, /** DVR chapter rotation mode. Snapshotted onto the DVR artifact at StartDVR; changes take effect on the next recording. null/NONE = chapters disabled. */
+updatedAt: string, /** How saved recordings are split into chapters. Snapshotted when a recording starts; changes apply from the next broadcast. NONE = live rewind only, nothing kept after the broadcast. */
 dvrChapterMode: DVRChapterMode | null, /** Chapter interval in seconds. Required when dvrChapterMode = FIXED_INTERVAL, ignored otherwise. Minimum 3600 (1 hour). */
 dvrChapterIntervalSeconds: number | null, /** Per-stream Skipper monitoring override (INHERIT follows tier). */
 monitoring: MonitoringToggle, /** Pull-source config for pull streams; null for push streams. */
@@ -2371,7 +2372,7 @@ playbackId: string, /** Whether DVR recording is enabled for this stream. */
 record: boolean, /** How source media enters the stream. */
 ingestMode: IngestMode, /** When this stream was created. */
 createdAt: string, /** When this stream was last modified. */
-updatedAt: string, /** DVR chapter rotation mode. Snapshotted onto the DVR artifact at StartDVR; changes take effect on the next recording. null/NONE = chapters disabled. */
+updatedAt: string, /** How saved recordings are split into chapters. Snapshotted when a recording starts; changes apply from the next broadcast. NONE = live rewind only, nothing kept after the broadcast. */
 dvrChapterMode: DVRChapterMode | null, /** Chapter interval in seconds. Required when dvrChapterMode = FIXED_INTERVAL, ignored otherwise. Minimum 3600 (1 hour). */
 dvrChapterIntervalSeconds: number | null, /** Per-stream Skipper monitoring override (INHERIT follows tier). */
 monitoring: MonitoringToggle, /** Pull-source config for pull streams; null for push streams. */
@@ -2690,7 +2691,7 @@ playbackId: string, /** Whether DVR recording is enabled for this stream. */
 record: boolean, /** How source media enters the stream. */
 ingestMode: IngestMode, /** When this stream was created. */
 createdAt: string, /** When this stream was last modified. */
-updatedAt: string, /** DVR chapter rotation mode. Snapshotted onto the DVR artifact at StartDVR; changes take effect on the next recording. null/NONE = chapters disabled. */
+updatedAt: string, /** How saved recordings are split into chapters. Snapshotted when a recording starts; changes apply from the next broadcast. NONE = live rewind only, nothing kept after the broadcast. */
 dvrChapterMode: DVRChapterMode | null, /** Chapter interval in seconds. Required when dvrChapterMode = FIXED_INTERVAL, ignored otherwise. Minimum 3600 (1 hour). */
 dvrChapterIntervalSeconds: number | null, /** Per-stream Skipper monitoring override (INHERIT follows tier). */
 monitoring: MonitoringToggle, /** Pull-source config for pull streams; null for push streams. */
@@ -2745,7 +2746,7 @@ playbackId: string, /** Whether DVR recording is enabled for this stream. */
 record: boolean, /** How source media enters the stream. */
 ingestMode: IngestMode, /** When this stream was created. */
 createdAt: string, /** When this stream was last modified. */
-updatedAt: string, /** DVR chapter rotation mode. Snapshotted onto the DVR artifact at StartDVR; changes take effect on the next recording. null/NONE = chapters disabled. */
+updatedAt: string, /** How saved recordings are split into chapters. Snapshotted when a recording starts; changes apply from the next broadcast. NONE = live rewind only, nothing kept after the broadcast. */
 dvrChapterMode: DVRChapterMode | null, /** Chapter interval in seconds. Required when dvrChapterMode = FIXED_INTERVAL, ignored otherwise. Minimum 3600 (1 hour). */
 dvrChapterIntervalSeconds: number | null, /** Per-stream Skipper monitoring override (INHERIT follows tier). */
 monitoring: MonitoringToggle, /** Pull-source config for pull streams; null for push streams. */
@@ -2812,7 +2813,7 @@ playbackId: string, /** Whether DVR recording is enabled for this stream. */
 record: boolean, /** How source media enters the stream. */
 ingestMode: IngestMode, /** When this stream was created. */
 createdAt: string, /** When this stream was last modified. */
-updatedAt: string, /** DVR chapter rotation mode. Snapshotted onto the DVR artifact at StartDVR; changes take effect on the next recording. null/NONE = chapters disabled. */
+updatedAt: string, /** How saved recordings are split into chapters. Snapshotted when a recording starts; changes apply from the next broadcast. NONE = live rewind only, nothing kept after the broadcast. */
 dvrChapterMode: DVRChapterMode | null, /** Chapter interval in seconds. Required when dvrChapterMode = FIXED_INTERVAL, ignored otherwise. Minimum 3600 (1 hour). */
 dvrChapterIntervalSeconds: number | null, /** Per-stream Skipper monitoring override (INHERIT follows tier). */
 monitoring: MonitoringToggle, /** Pull-source config for pull streams; null for push streams. */
@@ -2869,7 +2870,7 @@ playbackId: string, /** Whether DVR recording is enabled for this stream. */
 record: boolean, /** How source media enters the stream. */
 ingestMode: IngestMode, /** When this stream was created. */
 createdAt: string, /** When this stream was last modified. */
-updatedAt: string, /** DVR chapter rotation mode. Snapshotted onto the DVR artifact at StartDVR; changes take effect on the next recording. null/NONE = chapters disabled. */
+updatedAt: string, /** How saved recordings are split into chapters. Snapshotted when a recording starts; changes apply from the next broadcast. NONE = live rewind only, nothing kept after the broadcast. */
 dvrChapterMode: DVRChapterMode | null, /** Chapter interval in seconds. Required when dvrChapterMode = FIXED_INTERVAL, ignored otherwise. Minimum 3600 (1 hour). */
 dvrChapterIntervalSeconds: number | null, /** Per-stream Skipper monitoring override (INHERIT follows tier). */
 monitoring: MonitoringToggle, /** Pull-source config for pull streams; null for push streams. */
@@ -2927,7 +2928,7 @@ playbackId: string, /** Whether DVR recording is enabled for this stream. */
 record: boolean, /** How source media enters the stream. */
 ingestMode: IngestMode, /** When this stream was created. */
 createdAt: string, /** When this stream was last modified. */
-updatedAt: string, /** DVR chapter rotation mode. Snapshotted onto the DVR artifact at StartDVR; changes take effect on the next recording. null/NONE = chapters disabled. */
+updatedAt: string, /** How saved recordings are split into chapters. Snapshotted when a recording starts; changes apply from the next broadcast. NONE = live rewind only, nothing kept after the broadcast. */
 dvrChapterMode: DVRChapterMode | null, /** Chapter interval in seconds. Required when dvrChapterMode = FIXED_INTERVAL, ignored otherwise. Minimum 3600 (1 hour). */
 dvrChapterIntervalSeconds: number | null, /** Per-stream Skipper monitoring override (INHERIT follows tier). */
 monitoring: MonitoringToggle, /** Pull-source config for pull streams; null for push streams. */
@@ -3020,7 +3021,7 @@ playbackId: string, /** Whether DVR recording is enabled for this stream. */
 record: boolean, /** How source media enters the stream. */
 ingestMode: IngestMode, /** When this stream was created. */
 createdAt: string, /** When this stream was last modified. */
-updatedAt: string, /** DVR chapter rotation mode. Snapshotted onto the DVR artifact at StartDVR; changes take effect on the next recording. null/NONE = chapters disabled. */
+updatedAt: string, /** How saved recordings are split into chapters. Snapshotted when a recording starts; changes apply from the next broadcast. NONE = live rewind only, nothing kept after the broadcast. */
 dvrChapterMode: DVRChapterMode | null, /** Chapter interval in seconds. Required when dvrChapterMode = FIXED_INTERVAL, ignored otherwise. Minimum 3600 (1 hour). */
 dvrChapterIntervalSeconds: number | null, /** Per-stream Skipper monitoring override (INHERIT follows tier). */
 monitoring: MonitoringToggle, /** Pull-source config for pull streams; null for push streams. */
@@ -3075,7 +3076,7 @@ playbackId: string, /** Whether DVR recording is enabled for this stream. */
 record: boolean, /** How source media enters the stream. */
 ingestMode: IngestMode, /** When this stream was created. */
 createdAt: string, /** When this stream was last modified. */
-updatedAt: string, /** DVR chapter rotation mode. Snapshotted onto the DVR artifact at StartDVR; changes take effect on the next recording. null/NONE = chapters disabled. */
+updatedAt: string, /** How saved recordings are split into chapters. Snapshotted when a recording starts; changes apply from the next broadcast. NONE = live rewind only, nothing kept after the broadcast. */
 dvrChapterMode: DVRChapterMode | null, /** Chapter interval in seconds. Required when dvrChapterMode = FIXED_INTERVAL, ignored otherwise. Minimum 3600 (1 hour). */
 dvrChapterIntervalSeconds: number | null, /** Per-stream Skipper monitoring override (INHERIT follows tier). */
 monitoring: MonitoringToggle, /** Pull-source config for pull streams; null for push streams. */
@@ -3132,7 +3133,7 @@ playbackId: string, /** Whether DVR recording is enabled for this stream. */
 record: boolean, /** How source media enters the stream. */
 ingestMode: IngestMode, /** When this stream was created. */
 createdAt: string, /** When this stream was last modified. */
-updatedAt: string, /** DVR chapter rotation mode. Snapshotted onto the DVR artifact at StartDVR; changes take effect on the next recording. null/NONE = chapters disabled. */
+updatedAt: string, /** How saved recordings are split into chapters. Snapshotted when a recording starts; changes apply from the next broadcast. NONE = live rewind only, nothing kept after the broadcast. */
 dvrChapterMode: DVRChapterMode | null, /** Chapter interval in seconds. Required when dvrChapterMode = FIXED_INTERVAL, ignored otherwise. Minimum 3600 (1 hour). */
 dvrChapterIntervalSeconds: number | null, /** Per-stream Skipper monitoring override (INHERIT follows tier). */
 monitoring: MonitoringToggle, /** Pull-source config for pull streams; null for push streams. */
@@ -3190,7 +3191,7 @@ playbackId: string, /** Whether DVR recording is enabled for this stream. */
 record: boolean, /** How source media enters the stream. */
 ingestMode: IngestMode, /** When this stream was created. */
 createdAt: string, /** When this stream was last modified. */
-updatedAt: string, /** DVR chapter rotation mode. Snapshotted onto the DVR artifact at StartDVR; changes take effect on the next recording. null/NONE = chapters disabled. */
+updatedAt: string, /** How saved recordings are split into chapters. Snapshotted when a recording starts; changes apply from the next broadcast. NONE = live rewind only, nothing kept after the broadcast. */
 dvrChapterMode: DVRChapterMode | null, /** Chapter interval in seconds. Required when dvrChapterMode = FIXED_INTERVAL, ignored otherwise. Minimum 3600 (1 hour). */
 dvrChapterIntervalSeconds: number | null, /** Per-stream Skipper monitoring override (INHERIT follows tier). */
 monitoring: MonitoringToggle, /** Pull-source config for pull streams; null for push streams. */
@@ -3247,7 +3248,7 @@ playbackId: string, /** Whether DVR recording is enabled for this stream. */
 record: boolean, /** How source media enters the stream. */
 ingestMode: IngestMode, /** When this stream was created. */
 createdAt: string, /** When this stream was last modified. */
-updatedAt: string, /** DVR chapter rotation mode. Snapshotted onto the DVR artifact at StartDVR; changes take effect on the next recording. null/NONE = chapters disabled. */
+updatedAt: string, /** How saved recordings are split into chapters. Snapshotted when a recording starts; changes apply from the next broadcast. NONE = live rewind only, nothing kept after the broadcast. */
 dvrChapterMode: DVRChapterMode | null, /** Chapter interval in seconds. Required when dvrChapterMode = FIXED_INTERVAL, ignored otherwise. Minimum 3600 (1 hour). */
 dvrChapterIntervalSeconds: number | null, /** Per-stream Skipper monitoring override (INHERIT follows tier). */
 monitoring: MonitoringToggle, /** Pull-source config for pull streams; null for push streams. */
@@ -3302,7 +3303,7 @@ playbackId: string, /** Whether DVR recording is enabled for this stream. */
 record: boolean, /** How source media enters the stream. */
 ingestMode: IngestMode, /** When this stream was created. */
 createdAt: string, /** When this stream was last modified. */
-updatedAt: string, /** DVR chapter rotation mode. Snapshotted onto the DVR artifact at StartDVR; changes take effect on the next recording. null/NONE = chapters disabled. */
+updatedAt: string, /** How saved recordings are split into chapters. Snapshotted when a recording starts; changes apply from the next broadcast. NONE = live rewind only, nothing kept after the broadcast. */
 dvrChapterMode: DVRChapterMode | null, /** Chapter interval in seconds. Required when dvrChapterMode = FIXED_INTERVAL, ignored otherwise. Minimum 3600 (1 hour). */
 dvrChapterIntervalSeconds: number | null, /** Per-stream Skipper monitoring override (INHERIT follows tier). */
 monitoring: MonitoringToggle, /** Pull-source config for pull streams; null for push streams. */
@@ -3357,7 +3358,7 @@ playbackId: string, /** Whether DVR recording is enabled for this stream. */
 record: boolean, /** How source media enters the stream. */
 ingestMode: IngestMode, /** When this stream was created. */
 createdAt: string, /** When this stream was last modified. */
-updatedAt: string, /** DVR chapter rotation mode. Snapshotted onto the DVR artifact at StartDVR; changes take effect on the next recording. null/NONE = chapters disabled. */
+updatedAt: string, /** How saved recordings are split into chapters. Snapshotted when a recording starts; changes apply from the next broadcast. NONE = live rewind only, nothing kept after the broadcast. */
 dvrChapterMode: DVRChapterMode | null, /** Chapter interval in seconds. Required when dvrChapterMode = FIXED_INTERVAL, ignored otherwise. Minimum 3600 (1 hour). */
 dvrChapterIntervalSeconds: number | null, /** Per-stream Skipper monitoring override (INHERIT follows tier). */
 monitoring: MonitoringToggle, /** Pull-source config for pull streams; null for push streams. */
@@ -3416,7 +3417,7 @@ playbackId: string, /** Whether DVR recording is enabled for this stream. */
 record: boolean, /** How source media enters the stream. */
 ingestMode: IngestMode, /** When this stream was created. */
 createdAt: string, /** When this stream was last modified. */
-updatedAt: string, /** DVR chapter rotation mode. Snapshotted onto the DVR artifact at StartDVR; changes take effect on the next recording. null/NONE = chapters disabled. */
+updatedAt: string, /** How saved recordings are split into chapters. Snapshotted when a recording starts; changes apply from the next broadcast. NONE = live rewind only, nothing kept after the broadcast. */
 dvrChapterMode: DVRChapterMode | null, /** Chapter interval in seconds. Required when dvrChapterMode = FIXED_INTERVAL, ignored otherwise. Minimum 3600 (1 hour). */
 dvrChapterIntervalSeconds: number | null, /** Per-stream Skipper monitoring override (INHERIT follows tier). */
 monitoring: MonitoringToggle, /** Pull-source config for pull streams; null for push streams. */
@@ -3471,7 +3472,7 @@ playbackId: string, /** Whether DVR recording is enabled for this stream. */
 record: boolean, /** How source media enters the stream. */
 ingestMode: IngestMode, /** When this stream was created. */
 createdAt: string, /** When this stream was last modified. */
-updatedAt: string, /** DVR chapter rotation mode. Snapshotted onto the DVR artifact at StartDVR; changes take effect on the next recording. null/NONE = chapters disabled. */
+updatedAt: string, /** How saved recordings are split into chapters. Snapshotted when a recording starts; changes apply from the next broadcast. NONE = live rewind only, nothing kept after the broadcast. */
 dvrChapterMode: DVRChapterMode | null, /** Chapter interval in seconds. Required when dvrChapterMode = FIXED_INTERVAL, ignored otherwise. Minimum 3600 (1 hour). */
 dvrChapterIntervalSeconds: number | null, /** Per-stream Skipper monitoring override (INHERIT follows tier). */
 monitoring: MonitoringToggle, /** Pull-source config for pull streams; null for push streams. */
@@ -3528,7 +3529,7 @@ streamKey: string | null, /** Public identifier for playback URLs. */
 playbackId: string, /** Whether DVR recording is enabled for this stream. */
 record: boolean, /** How source media enters the stream. */
 ingestMode: IngestMode, /** When this stream was created. */
-createdAt: string, /** DVR chapter rotation mode. Snapshotted onto the DVR artifact at StartDVR; changes take effect on the next recording. null/NONE = chapters disabled. */
+createdAt: string, /** How saved recordings are split into chapters. Snapshotted when a recording starts; changes apply from the next broadcast. NONE = live rewind only, nothing kept after the broadcast. */
 dvrChapterMode: DVRChapterMode | null, /** Chapter interval in seconds. Required when dvrChapterMode = FIXED_INTERVAL, ignored otherwise. Minimum 3600 (1 hour). */
 dvrChapterIntervalSeconds: number | null, /** Per-stream Skipper monitoring override (INHERIT follows tier). */
 monitoring: MonitoringToggle, /** Public stream UUID used for analytics and service APIs (not the Relay ID). */
@@ -3630,7 +3631,7 @@ playbackId: string, /** Whether DVR recording is enabled for this stream. */
 record: boolean, /** How source media enters the stream. */
 ingestMode: IngestMode, /** When this stream was created. */
 createdAt: string, /** When this stream was last modified. */
-updatedAt: string, /** DVR chapter rotation mode. Snapshotted onto the DVR artifact at StartDVR; changes take effect on the next recording. null/NONE = chapters disabled. */
+updatedAt: string, /** How saved recordings are split into chapters. Snapshotted when a recording starts; changes apply from the next broadcast. NONE = live rewind only, nothing kept after the broadcast. */
 dvrChapterMode: DVRChapterMode | null, /** Chapter interval in seconds. Required when dvrChapterMode = FIXED_INTERVAL, ignored otherwise. Minimum 3600 (1 hour). */
 dvrChapterIntervalSeconds: number | null, /** Per-stream Skipper monitoring override (INHERIT follows tier). */
 monitoring: MonitoringToggle } | null } | null, viewerMetrics: { nodeId: string, streamId: string, action: string, protocol: string, host: string | null, sessionId: string | null, connectionTime: number | null, position: number | null, bandwidthInBps: number | null, bandwidthOutBps: number | null, bytesDownloaded: number | null, bytesUploaded: number | null, packetsSent: number | null, packetsLost: number | null, packetsRetransmitted: number | null, timestamp: number, clientCountry: string | null, clientCity: string | null, clientLatitude: number | null, clientLongitude: number | null, stream: { /** Global unique identifier for Relay compatibility. */
@@ -3643,7 +3644,7 @@ playbackId: string, /** Whether DVR recording is enabled for this stream. */
 record: boolean, /** How source media enters the stream. */
 ingestMode: IngestMode, /** When this stream was created. */
 createdAt: string, /** When this stream was last modified. */
-updatedAt: string, /** DVR chapter rotation mode. Snapshotted onto the DVR artifact at StartDVR; changes take effect on the next recording. null/NONE = chapters disabled. */
+updatedAt: string, /** How saved recordings are split into chapters. Snapshotted when a recording starts; changes apply from the next broadcast. NONE = live rewind only, nothing kept after the broadcast. */
 dvrChapterMode: DVRChapterMode | null, /** Chapter interval in seconds. Required when dvrChapterMode = FIXED_INTERVAL, ignored otherwise. Minimum 3600 (1 hour). */
 dvrChapterIntervalSeconds: number | null, /** Per-stream Skipper monitoring override (INHERIT follows tier). */
 monitoring: MonitoringToggle } | null } | null, connectionEvent: { id: string, eventId: string, timestamp: string, streamId: string, sessionId: string, connectionAddr: string | null, connector: string, nodeId: string, countryCode: string | null, city: string | null, latitude: number | null, longitude: number | null, eventType: string, requestUrl: string | null, clusterId: string, originClusterId: string | null, controlCellId: string | null, sessionDurationSeconds: number | null, bytesTransferred: number | null, stream: { /** Global unique identifier for Relay compatibility. */
@@ -3656,7 +3657,7 @@ playbackId: string, /** Whether DVR recording is enabled for this stream. */
 record: boolean, /** How source media enters the stream. */
 ingestMode: IngestMode, /** When this stream was created. */
 createdAt: string, /** When this stream was last modified. */
-updatedAt: string, /** DVR chapter rotation mode. Snapshotted onto the DVR artifact at StartDVR; changes take effect on the next recording. null/NONE = chapters disabled. */
+updatedAt: string, /** How saved recordings are split into chapters. Snapshotted when a recording starts; changes apply from the next broadcast. NONE = live rewind only, nothing kept after the broadcast. */
 dvrChapterMode: DVRChapterMode | null, /** Chapter interval in seconds. Required when dvrChapterMode = FIXED_INTERVAL, ignored otherwise. Minimum 3600 (1 hour). */
 dvrChapterIntervalSeconds: number | null, /** Per-stream Skipper monitoring override (INHERIT follows tier). */
 monitoring: MonitoringToggle } | null, clientBucket: { h3Index: string, resolution: number } | null, nodeBucket: { h3Index: string, resolution: number } | null } | null, trackListUpdate: { streamId: string, totalTracks: number | null, videoTrackCount: number | null, audioTrackCount: number | null, qualityTier: string | null, primaryWidth: number | null, primaryHeight: number | null, primaryFps: number | null, primaryVideoBitrate: number | null, primaryVideoCodec: string | null, primaryAudioBitrate: number | null, primaryAudioCodec: string | null, primaryAudioChannels: number | null, primaryAudioSampleRate: number | null, stream: { /** Global unique identifier for Relay compatibility. */
@@ -3669,7 +3670,7 @@ playbackId: string, /** Whether DVR recording is enabled for this stream. */
 record: boolean, /** How source media enters the stream. */
 ingestMode: IngestMode, /** When this stream was created. */
 createdAt: string, /** When this stream was last modified. */
-updatedAt: string, /** DVR chapter rotation mode. Snapshotted onto the DVR artifact at StartDVR; changes take effect on the next recording. null/NONE = chapters disabled. */
+updatedAt: string, /** How saved recordings are split into chapters. Snapshotted when a recording starts; changes apply from the next broadcast. NONE = live rewind only, nothing kept after the broadcast. */
 dvrChapterMode: DVRChapterMode | null, /** Chapter interval in seconds. Required when dvrChapterMode = FIXED_INTERVAL, ignored otherwise. Minimum 3600 (1 hour). */
 dvrChapterIntervalSeconds: number | null, /** Per-stream Skipper monitoring override (INHERIT follows tier). */
 monitoring: MonitoringToggle } | null, tracks: Array<{ trackName: string, trackType: string, codec: string | null, bitrateKbps: number | null, bitrateBps: number | null, buffer: number | null, jitter: number | null, width: number | null, height: number | null, fps: number | null, resolution: string | null, hasBFrames: boolean | null, channels: number | null, sampleRate: number | null }> | null } | null, storageEvent: { id: string, timestamp: string, streamId: string, assetHash: string, action: string, assetType: string, sizeBytes: number, s3Url: string | null, localPath: string | null, nodeId: string, clusterId: string | null, originClusterId: string | null, controlCellId: string | null, durationMs: number | null, warmDurationMs: number | null, error: string | null, stream: { /** Global unique identifier for Relay compatibility. */
@@ -3682,7 +3683,7 @@ playbackId: string, /** Whether DVR recording is enabled for this stream. */
 record: boolean, /** How source media enters the stream. */
 ingestMode: IngestMode, /** When this stream was created. */
 createdAt: string, /** When this stream was last modified. */
-updatedAt: string, /** DVR chapter rotation mode. Snapshotted onto the DVR artifact at StartDVR; changes take effect on the next recording. null/NONE = chapters disabled. */
+updatedAt: string, /** How saved recordings are split into chapters. Snapshotted when a recording starts; changes apply from the next broadcast. NONE = live rewind only, nothing kept after the broadcast. */
 dvrChapterMode: DVRChapterMode | null, /** Chapter interval in seconds. Required when dvrChapterMode = FIXED_INTERVAL, ignored otherwise. Minimum 3600 (1 hour). */
 dvrChapterIntervalSeconds: number | null, /** Per-stream Skipper monitoring override (INHERIT follows tier). */
 monitoring: MonitoringToggle } | null } | null, storageSnapshot: { nodeId: string, timestamp: number, tenantId: string | null, location: string | null, storageScope: string | null, usage: Array<{ tenantId: string, totalBytes: number, fileCount: number, dvrBytes: number, clipBytes: number, vodBytes: number, frozenDvrBytes: number, frozenClipBytes: number, frozenVodBytes: number }> } | null, processingEvent: { id: string, timestamp: string, nodeId: string, streamId: string, processType: string, clusterId: string | null, originClusterId: string | null, controlCellId: string | null, trackType: string | null, durationMs: number, inputCodec: string | null, outputCodec: string | null, segmentNumber: number | null, width: number | null, height: number | null, renditionCount: number | null, broadcasterUrl: string | null, uploadTimeUs: number | null, livepeerSessionId: string | null, segmentStartMs: number | null, inputBytes: number | null, outputBytesTotal: number | null, attemptCount: number | null, turnaroundMs: number | null, speedFactor: number | null, renditionsJson: string | null, inputFrames: number | null, outputFrames: number | null, decodeUsPerFrame: number | null, transformUsPerFrame: number | null, encodeUsPerFrame: number | null, isFinal: boolean | null, inputFramesDelta: number | null, outputFramesDelta: number | null, inputBytesDelta: number | null, outputBytesDelta: number | null, inputWidth: number | null, inputHeight: number | null, outputWidth: number | null, outputHeight: number | null, inputFpks: number | null, outputFpsMeasured: number | null, sampleRate: number | null, channels: number | null, sourceTimestampMs: number | null, sinkTimestampMs: number | null, sourceAdvancedMs: number | null, sinkAdvancedMs: number | null, rtfIn: number | null, rtfOut: number | null, pipelineLagMs: number | null, outputBitrateBps: number | null, stream: { /** Global unique identifier for Relay compatibility. */
@@ -3695,7 +3696,7 @@ playbackId: string, /** Whether DVR recording is enabled for this stream. */
 record: boolean, /** How source media enters the stream. */
 ingestMode: IngestMode, /** When this stream was created. */
 createdAt: string, /** When this stream was last modified. */
-updatedAt: string, /** DVR chapter rotation mode. Snapshotted onto the DVR artifact at StartDVR; changes take effect on the next recording. null/NONE = chapters disabled. */
+updatedAt: string, /** How saved recordings are split into chapters. Snapshotted when a recording starts; changes apply from the next broadcast. NONE = live rewind only, nothing kept after the broadcast. */
 dvrChapterMode: DVRChapterMode | null, /** Chapter interval in seconds. Required when dvrChapterMode = FIXED_INTERVAL, ignored otherwise. Minimum 3600 (1 hour). */
 dvrChapterIntervalSeconds: number | null, /** Per-stream Skipper monitoring override (INHERIT follows tier). */
 monitoring: MonitoringToggle } | null } | null, routingEvent: { timestamp: string, streamId: string, selectedNode: string, nodeId: string | null, status: string, details: string | null, score: number | null, clientCountry: string | null, clientLatitude: number | null, clientLongitude: number | null, nodeLatitude: number | null, nodeLongitude: number | null, nodeName: string | null, routingDistance: number | null, candidatesCount: number | null, latencyMs: number | null, eventType: string | null, source: string | null, streamTenantId: string | null, clusterId: string | null, remoteClusterId: string | null, selectedClusterId: string | null, controlCellId: string | null, originClusterId: string | null, stream: { /** Global unique identifier for Relay compatibility. */
@@ -3708,7 +3709,7 @@ playbackId: string, /** Whether DVR recording is enabled for this stream. */
 record: boolean, /** How source media enters the stream. */
 ingestMode: IngestMode, /** When this stream was created. */
 createdAt: string, /** When this stream was last modified. */
-updatedAt: string, /** DVR chapter rotation mode. Snapshotted onto the DVR artifact at StartDVR; changes take effect on the next recording. null/NONE = chapters disabled. */
+updatedAt: string, /** How saved recordings are split into chapters. Snapshotted when a recording starts; changes apply from the next broadcast. NONE = live rewind only, nothing kept after the broadcast. */
 dvrChapterMode: DVRChapterMode | null, /** Chapter interval in seconds. Required when dvrChapterMode = FIXED_INTERVAL, ignored otherwise. Minimum 3600 (1 hour). */
 dvrChapterIntervalSeconds: number | null, /** Per-stream Skipper monitoring override (INHERIT follows tier). */
 monitoring: MonitoringToggle } | null, clientBucket: { h3Index: string, resolution: number } | null, nodeBucket: { h3Index: string, resolution: number } | null } | null, systemHealthEvent: { nodeId: string | null, node: string, location: string, status: NodeStatus, cpuTenths: number, isHealthy: boolean, ramMax: number | null, ramCurrent: number | null, diskTotalBytes: number | null, diskUsedBytes: number | null, shmTotalBytes: number | null, shmUsedBytes: number | null, timestamp: string } | null, skipperInvestigation: { reportId: string, resourceType: string } | null, incidentUpdated: { incidentId: string, clusterId: string | null, status: IncidentStatus, severity: string, title: string, /** Timeline change that produced the update, e.g. opened, alert_firing, acknowledged, resolved. */
@@ -3727,7 +3728,7 @@ playbackId: string, /** Whether DVR recording is enabled for this stream. */
 record: boolean, /** How source media enters the stream. */
 ingestMode: IngestMode, /** When this stream was created. */
 createdAt: string, /** When this stream was last modified. */
-updatedAt: string, /** DVR chapter rotation mode. Snapshotted onto the DVR artifact at StartDVR; changes take effect on the next recording. null/NONE = chapters disabled. */
+updatedAt: string, /** How saved recordings are split into chapters. Snapshotted when a recording starts; changes apply from the next broadcast. NONE = live rewind only, nothing kept after the broadcast. */
 dvrChapterMode: DVRChapterMode | null, /** Chapter interval in seconds. Required when dvrChapterMode = FIXED_INTERVAL, ignored otherwise. Minimum 3600 (1 hour). */
 dvrChapterIntervalSeconds: number | null, /** Per-stream Skipper monitoring override (INHERIT follows tier). */
 monitoring: MonitoringToggle, /** Pull-source config for pull streams; null for push streams. */
@@ -3782,7 +3783,7 @@ playbackId: string, /** Whether DVR recording is enabled for this stream. */
 record: boolean, /** How source media enters the stream. */
 ingestMode: IngestMode, /** When this stream was created. */
 createdAt: string, /** When this stream was last modified. */
-updatedAt: string, /** DVR chapter rotation mode. Snapshotted onto the DVR artifact at StartDVR; changes take effect on the next recording. null/NONE = chapters disabled. */
+updatedAt: string, /** How saved recordings are split into chapters. Snapshotted when a recording starts; changes apply from the next broadcast. NONE = live rewind only, nothing kept after the broadcast. */
 dvrChapterMode: DVRChapterMode | null, /** Chapter interval in seconds. Required when dvrChapterMode = FIXED_INTERVAL, ignored otherwise. Minimum 3600 (1 hour). */
 dvrChapterIntervalSeconds: number | null, /** Per-stream Skipper monitoring override (INHERIT follows tier). */
 monitoring: MonitoringToggle, /** Pull-source config for pull streams; null for push streams. */
@@ -3837,7 +3838,7 @@ playbackId: string, /** Whether DVR recording is enabled for this stream. */
 record: boolean, /** How source media enters the stream. */
 ingestMode: IngestMode, /** When this stream was created. */
 createdAt: string, /** When this stream was last modified. */
-updatedAt: string, /** DVR chapter rotation mode. Snapshotted onto the DVR artifact at StartDVR; changes take effect on the next recording. null/NONE = chapters disabled. */
+updatedAt: string, /** How saved recordings are split into chapters. Snapshotted when a recording starts; changes apply from the next broadcast. NONE = live rewind only, nothing kept after the broadcast. */
 dvrChapterMode: DVRChapterMode | null, /** Chapter interval in seconds. Required when dvrChapterMode = FIXED_INTERVAL, ignored otherwise. Minimum 3600 (1 hour). */
 dvrChapterIntervalSeconds: number | null, /** Per-stream Skipper monitoring override (INHERIT follows tier). */
 monitoring: MonitoringToggle, /** Pull-source config for pull streams; null for push streams. */
@@ -3894,7 +3895,7 @@ playbackId: string, /** Whether DVR recording is enabled for this stream. */
 record: boolean, /** How source media enters the stream. */
 ingestMode: IngestMode, /** When this stream was created. */
 createdAt: string, /** When this stream was last modified. */
-updatedAt: string, /** DVR chapter rotation mode. Snapshotted onto the DVR artifact at StartDVR; changes take effect on the next recording. null/NONE = chapters disabled. */
+updatedAt: string, /** How saved recordings are split into chapters. Snapshotted when a recording starts; changes apply from the next broadcast. NONE = live rewind only, nothing kept after the broadcast. */
 dvrChapterMode: DVRChapterMode | null, /** Chapter interval in seconds. Required when dvrChapterMode = FIXED_INTERVAL, ignored otherwise. Minimum 3600 (1 hour). */
 dvrChapterIntervalSeconds: number | null, /** Per-stream Skipper monitoring override (INHERIT follows tier). */
 monitoring: MonitoringToggle, /** Pull-source config for pull streams; null for push streams. */
@@ -3953,7 +3954,7 @@ playbackId: string, /** Whether DVR recording is enabled for this stream. */
 record: boolean, /** How source media enters the stream. */
 ingestMode: IngestMode, /** When this stream was created. */
 createdAt: string, /** When this stream was last modified. */
-updatedAt: string, /** DVR chapter rotation mode. Snapshotted onto the DVR artifact at StartDVR; changes take effect on the next recording. null/NONE = chapters disabled. */
+updatedAt: string, /** How saved recordings are split into chapters. Snapshotted when a recording starts; changes apply from the next broadcast. NONE = live rewind only, nothing kept after the broadcast. */
 dvrChapterMode: DVRChapterMode | null, /** Chapter interval in seconds. Required when dvrChapterMode = FIXED_INTERVAL, ignored otherwise. Minimum 3600 (1 hour). */
 dvrChapterIntervalSeconds: number | null, /** Per-stream Skipper monitoring override (INHERIT follows tier). */
 monitoring: MonitoringToggle, /** Pull-source config for pull streams; null for push streams. */
@@ -4008,7 +4009,7 @@ playbackId: string, /** Whether DVR recording is enabled for this stream. */
 record: boolean, /** How source media enters the stream. */
 ingestMode: IngestMode, /** When this stream was created. */
 createdAt: string, /** When this stream was last modified. */
-updatedAt: string, /** DVR chapter rotation mode. Snapshotted onto the DVR artifact at StartDVR; changes take effect on the next recording. null/NONE = chapters disabled. */
+updatedAt: string, /** How saved recordings are split into chapters. Snapshotted when a recording starts; changes apply from the next broadcast. NONE = live rewind only, nothing kept after the broadcast. */
 dvrChapterMode: DVRChapterMode | null, /** Chapter interval in seconds. Required when dvrChapterMode = FIXED_INTERVAL, ignored otherwise. Minimum 3600 (1 hour). */
 dvrChapterIntervalSeconds: number | null, /** Per-stream Skipper monitoring override (INHERIT follows tier). */
 monitoring: MonitoringToggle, /** Pull-source config for pull streams; null for push streams. */
@@ -4063,7 +4064,7 @@ playbackId: string, /** Whether DVR recording is enabled for this stream. */
 record: boolean, /** How source media enters the stream. */
 ingestMode: IngestMode, /** When this stream was created. */
 createdAt: string, /** When this stream was last modified. */
-updatedAt: string, /** DVR chapter rotation mode. Snapshotted onto the DVR artifact at StartDVR; changes take effect on the next recording. null/NONE = chapters disabled. */
+updatedAt: string, /** How saved recordings are split into chapters. Snapshotted when a recording starts; changes apply from the next broadcast. NONE = live rewind only, nothing kept after the broadcast. */
 dvrChapterMode: DVRChapterMode | null, /** Chapter interval in seconds. Required when dvrChapterMode = FIXED_INTERVAL, ignored otherwise. Minimum 3600 (1 hour). */
 dvrChapterIntervalSeconds: number | null, /** Per-stream Skipper monitoring override (INHERIT follows tier). */
 monitoring: MonitoringToggle, /** Pull-source config for pull streams; null for push streams. */
@@ -4118,7 +4119,7 @@ playbackId: string, /** Whether DVR recording is enabled for this stream. */
 record: boolean, /** How source media enters the stream. */
 ingestMode: IngestMode, /** When this stream was created. */
 createdAt: string, /** When this stream was last modified. */
-updatedAt: string, /** DVR chapter rotation mode. Snapshotted onto the DVR artifact at StartDVR; changes take effect on the next recording. null/NONE = chapters disabled. */
+updatedAt: string, /** How saved recordings are split into chapters. Snapshotted when a recording starts; changes apply from the next broadcast. NONE = live rewind only, nothing kept after the broadcast. */
 dvrChapterMode: DVRChapterMode | null, /** Chapter interval in seconds. Required when dvrChapterMode = FIXED_INTERVAL, ignored otherwise. Minimum 3600 (1 hour). */
 dvrChapterIntervalSeconds: number | null, /** Per-stream Skipper monitoring override (INHERIT follows tier). */
 monitoring: MonitoringToggle, /** Pull-source config for pull streams; null for push streams. */
@@ -4173,7 +4174,7 @@ playbackId: string, /** Whether DVR recording is enabled for this stream. */
 record: boolean, /** How source media enters the stream. */
 ingestMode: IngestMode, /** When this stream was created. */
 createdAt: string, /** When this stream was last modified. */
-updatedAt: string, /** DVR chapter rotation mode. Snapshotted onto the DVR artifact at StartDVR; changes take effect on the next recording. null/NONE = chapters disabled. */
+updatedAt: string, /** How saved recordings are split into chapters. Snapshotted when a recording starts; changes apply from the next broadcast. NONE = live rewind only, nothing kept after the broadcast. */
 dvrChapterMode: DVRChapterMode | null, /** Chapter interval in seconds. Required when dvrChapterMode = FIXED_INTERVAL, ignored otherwise. Minimum 3600 (1 hour). */
 dvrChapterIntervalSeconds: number | null, /** Per-stream Skipper monitoring override (INHERIT follows tier). */
 monitoring: MonitoringToggle, /** Pull-source config for pull streams; null for push streams. */
@@ -4228,7 +4229,7 @@ playbackId: string, /** Whether DVR recording is enabled for this stream. */
 record: boolean, /** How source media enters the stream. */
 ingestMode: IngestMode, /** When this stream was created. */
 createdAt: string, /** When this stream was last modified. */
-updatedAt: string, /** DVR chapter rotation mode. Snapshotted onto the DVR artifact at StartDVR; changes take effect on the next recording. null/NONE = chapters disabled. */
+updatedAt: string, /** How saved recordings are split into chapters. Snapshotted when a recording starts; changes apply from the next broadcast. NONE = live rewind only, nothing kept after the broadcast. */
 dvrChapterMode: DVRChapterMode | null, /** Chapter interval in seconds. Required when dvrChapterMode = FIXED_INTERVAL, ignored otherwise. Minimum 3600 (1 hour). */
 dvrChapterIntervalSeconds: number | null, /** Per-stream Skipper monitoring override (INHERIT follows tier). */
 monitoring: MonitoringToggle, /** Pull-source config for pull streams; null for push streams. */
@@ -4344,7 +4345,7 @@ eventId: string | null, eventType: string, kind: WebhookDeliveryKind, status: We
 attempts: number, /** When the next attempt is due; null unless pending. */
 nextAttemptAt: string | null, /** HTTP status of the last attempt; 0 when no response arrived. */
 lastStatusCode: number, /** Failure class of the last attempt: http_status, redirect, timeout, connection, tls, dns, or blocked_destination; internal when FrameWorks could not sign or render the delivery; empty after a success. */
-lastErrorClass: string, deliveredAt: string | null, replayCount: number, lastReplayedAt: string | null, createdAt: string, updatedAt: string, /** Every HTTP attempt, oldest first. Loaded by the webhookDelivery query; empty in connections. */
+lastErrorClass: string, deliveredAt: string | null, replayCount: number, lastReplayedAt: string | null, createdAt: string, updatedAt: string, /** Every HTTP attempt, oldest first, including attempts before the last replay. */
 attemptHistory: Array<{ id: string, attemptNumber: number, statusCode: number, errorClass: string, latencyMs: number, responseExcerpt: string, attemptedAt: string }> };
 
 /** An outbound webhook endpoint. FrameWorks POSTs the tenant's public events of the subscribed types to its URL, signed with the Standard Webhooks scheme (webhook-id, webhook-timestamp, webhook-signature headers). */
@@ -4385,7 +4386,7 @@ eventId: string | null, eventType: string, kind: WebhookDeliveryKind, status: We
 attempts: number, /** When the next attempt is due; null unless pending. */
 nextAttemptAt: string | null, /** HTTP status of the last attempt; 0 when no response arrived. */
 lastStatusCode: number, /** Failure class of the last attempt: http_status, redirect, timeout, connection, tls, dns, or blocked_destination; internal when FrameWorks could not sign or render the delivery; empty after a success. */
-lastErrorClass: string, deliveredAt: string | null, replayCount: number, lastReplayedAt: string | null, createdAt: string, updatedAt: string, /** Every HTTP attempt, oldest first. Loaded by the webhookDelivery query; empty in connections. */
+lastErrorClass: string, deliveredAt: string | null, replayCount: number, lastReplayedAt: string | null, createdAt: string, updatedAt: string, /** Every HTTP attempt, oldest first, including attempts before the last replay. */
 attemptHistory: Array<{ id: string, attemptNumber: number, statusCode: number, errorClass: string, latencyMs: number, responseExcerpt: string, attemptedAt: string }> }, attempt: { id: string, attemptNumber: number, /** HTTP status; 0 when no response arrived. */
 statusCode: number, errorClass: string, latencyMs: number, /** At most 1 KiB of the response body. */
 responseExcerpt: string, attemptedAt: string } };
@@ -5085,7 +5086,7 @@ eventId: string | null, eventType: string, kind: WebhookDeliveryKind, status: We
 attempts: number, /** When the next attempt is due; null unless pending. */
 nextAttemptAt: string | null, /** HTTP status of the last attempt; 0 when no response arrived. */
 lastStatusCode: number, /** Failure class of the last attempt: http_status, redirect, timeout, connection, tls, dns, or blocked_destination; internal when FrameWorks could not sign or render the delivery; empty after a success. */
-lastErrorClass: string, deliveredAt: string | null, replayCount: number, lastReplayedAt: string | null, createdAt: string, updatedAt: string, /** Every HTTP attempt, oldest first. Loaded by the webhookDelivery query; empty in connections. */
+lastErrorClass: string, deliveredAt: string | null, replayCount: number, lastReplayedAt: string | null, createdAt: string, updatedAt: string, /** Every HTTP attempt, oldest first, including attempts before the last replay. */
 attemptHistory: Array<{ id: string, attemptNumber: number, statusCode: number, errorClass: string, latencyMs: number, responseExcerpt: string, attemptedAt: string }> }
    };
 
@@ -5360,7 +5361,7 @@ eventId: string | null, eventType: string, kind: WebhookDeliveryKind, status: We
 attempts: number, /** When the next attempt is due; null unless pending. */
 nextAttemptAt: string | null, /** HTTP status of the last attempt; 0 when no response arrived. */
 lastStatusCode: number, /** Failure class of the last attempt: http_status, redirect, timeout, connection, tls, dns, or blocked_destination; internal when FrameWorks could not sign or render the delivery; empty after a success. */
-lastErrorClass: string, deliveredAt: string | null, replayCount: number, lastReplayedAt: string | null, createdAt: string, updatedAt: string, /** Every HTTP attempt, oldest first. Loaded by the webhookDelivery query; empty in connections. */
+lastErrorClass: string, deliveredAt: string | null, replayCount: number, lastReplayedAt: string | null, createdAt: string, updatedAt: string, /** Every HTTP attempt, oldest first, including attempts before the last replay. */
 attemptHistory: Array<{ id: string, attemptNumber: number, statusCode: number, errorClass: string, latencyMs: number, responseExcerpt: string, attemptedAt: string }> }, attempt: { id: string, attemptNumber: number, /** HTTP status; 0 when no response arrived. */
 statusCode: number, errorClass: string, latencyMs: number, /** At most 1 KiB of the response body. */
 responseExcerpt: string, attemptedAt: string } }
@@ -6037,7 +6038,7 @@ playbackId: string, /** Whether DVR recording is enabled for this stream. */
 record: boolean, /** How source media enters the stream. */
 ingestMode: IngestMode, /** When this stream was created. */
 createdAt: string, /** When this stream was last modified. */
-updatedAt: string, /** DVR chapter rotation mode. Snapshotted onto the DVR artifact at StartDVR; changes take effect on the next recording. null/NONE = chapters disabled. */
+updatedAt: string, /** How saved recordings are split into chapters. Snapshotted when a recording starts; changes apply from the next broadcast. NONE = live rewind only, nothing kept after the broadcast. */
 dvrChapterMode: DVRChapterMode | null, /** Chapter interval in seconds. Required when dvrChapterMode = FIXED_INTERVAL, ignored otherwise. Minimum 3600 (1 hour). */
 dvrChapterIntervalSeconds: number | null, /** Per-stream Skipper monitoring override (INHERIT follows tier). */
 monitoring: MonitoringToggle, /** Pull-source config for pull streams; null for push streams. */
@@ -6371,7 +6372,7 @@ playbackId: string, /** Whether DVR recording is enabled for this stream. */
 record: boolean, /** How source media enters the stream. */
 ingestMode: IngestMode, /** When this stream was created. */
 createdAt: string, /** When this stream was last modified. */
-updatedAt: string, /** DVR chapter rotation mode. Snapshotted onto the DVR artifact at StartDVR; changes take effect on the next recording. null/NONE = chapters disabled. */
+updatedAt: string, /** How saved recordings are split into chapters. Snapshotted when a recording starts; changes apply from the next broadcast. NONE = live rewind only, nothing kept after the broadcast. */
 dvrChapterMode: DVRChapterMode | null, /** Chapter interval in seconds. Required when dvrChapterMode = FIXED_INTERVAL, ignored otherwise. Minimum 3600 (1 hour). */
 dvrChapterIntervalSeconds: number | null, /** Per-stream Skipper monitoring override (INHERIT follows tier). */
 monitoring: MonitoringToggle, /** Pull-source config for pull streams; null for push streams. */
@@ -6426,7 +6427,7 @@ playbackId: string, /** Whether DVR recording is enabled for this stream. */
 record: boolean, /** How source media enters the stream. */
 ingestMode: IngestMode, /** When this stream was created. */
 createdAt: string, /** When this stream was last modified. */
-updatedAt: string, /** DVR chapter rotation mode. Snapshotted onto the DVR artifact at StartDVR; changes take effect on the next recording. null/NONE = chapters disabled. */
+updatedAt: string, /** How saved recordings are split into chapters. Snapshotted when a recording starts; changes apply from the next broadcast. NONE = live rewind only, nothing kept after the broadcast. */
 dvrChapterMode: DVRChapterMode | null, /** Chapter interval in seconds. Required when dvrChapterMode = FIXED_INTERVAL, ignored otherwise. Minimum 3600 (1 hour). */
 dvrChapterIntervalSeconds: number | null, /** Per-stream Skipper monitoring override (INHERIT follows tier). */
 monitoring: MonitoringToggle, /** Pull-source config for pull streams; null for push streams. */
@@ -6504,7 +6505,7 @@ playbackId: string, /** Whether DVR recording is enabled for this stream. */
 record: boolean, /** How source media enters the stream. */
 ingestMode: IngestMode, /** When this stream was created. */
 createdAt: string, /** When this stream was last modified. */
-updatedAt: string, /** DVR chapter rotation mode. Snapshotted onto the DVR artifact at StartDVR; changes take effect on the next recording. null/NONE = chapters disabled. */
+updatedAt: string, /** How saved recordings are split into chapters. Snapshotted when a recording starts; changes apply from the next broadcast. NONE = live rewind only, nothing kept after the broadcast. */
 dvrChapterMode: DVRChapterMode | null, /** Chapter interval in seconds. Required when dvrChapterMode = FIXED_INTERVAL, ignored otherwise. Minimum 3600 (1 hour). */
 dvrChapterIntervalSeconds: number | null, /** Per-stream Skipper monitoring override (INHERIT follows tier). */
 monitoring: MonitoringToggle, /** Pull-source config for pull streams; null for push streams. */
@@ -6599,7 +6600,7 @@ playbackId: string, /** Whether DVR recording is enabled for this stream. */
 record: boolean, /** How source media enters the stream. */
 ingestMode: IngestMode, /** When this stream was created. */
 createdAt: string, /** When this stream was last modified. */
-updatedAt: string, /** DVR chapter rotation mode. Snapshotted onto the DVR artifact at StartDVR; changes take effect on the next recording. null/NONE = chapters disabled. */
+updatedAt: string, /** How saved recordings are split into chapters. Snapshotted when a recording starts; changes apply from the next broadcast. NONE = live rewind only, nothing kept after the broadcast. */
 dvrChapterMode: DVRChapterMode | null, /** Chapter interval in seconds. Required when dvrChapterMode = FIXED_INTERVAL, ignored otherwise. Minimum 3600 (1 hour). */
 dvrChapterIntervalSeconds: number | null, /** Per-stream Skipper monitoring override (INHERIT follows tier). */
 monitoring: MonitoringToggle, /** Pull-source config for pull streams; null for push streams. */
@@ -6712,7 +6713,7 @@ playbackId: string, /** Whether DVR recording is enabled for this stream. */
 record: boolean, /** How source media enters the stream. */
 ingestMode: IngestMode, /** When this stream was created. */
 createdAt: string, /** When this stream was last modified. */
-updatedAt: string, /** DVR chapter rotation mode. Snapshotted onto the DVR artifact at StartDVR; changes take effect on the next recording. null/NONE = chapters disabled. */
+updatedAt: string, /** How saved recordings are split into chapters. Snapshotted when a recording starts; changes apply from the next broadcast. NONE = live rewind only, nothing kept after the broadcast. */
 dvrChapterMode: DVRChapterMode | null, /** Chapter interval in seconds. Required when dvrChapterMode = FIXED_INTERVAL, ignored otherwise. Minimum 3600 (1 hour). */
 dvrChapterIntervalSeconds: number | null, /** Per-stream Skipper monitoring override (INHERIT follows tier). */
 monitoring: MonitoringToggle, /** Pull-source config for pull streams; null for push streams. */
@@ -6766,7 +6767,7 @@ playbackId: string, /** Whether DVR recording is enabled for this stream. */
 record: boolean, /** How source media enters the stream. */
 ingestMode: IngestMode, /** When this stream was created. */
 createdAt: string, /** When this stream was last modified. */
-updatedAt: string, /** DVR chapter rotation mode. Snapshotted onto the DVR artifact at StartDVR; changes take effect on the next recording. null/NONE = chapters disabled. */
+updatedAt: string, /** How saved recordings are split into chapters. Snapshotted when a recording starts; changes apply from the next broadcast. NONE = live rewind only, nothing kept after the broadcast. */
 dvrChapterMode: DVRChapterMode | null, /** Chapter interval in seconds. Required when dvrChapterMode = FIXED_INTERVAL, ignored otherwise. Minimum 3600 (1 hour). */
 dvrChapterIntervalSeconds: number | null, /** Per-stream Skipper monitoring override (INHERIT follows tier). */
 monitoring: MonitoringToggle, /** Pull-source config for pull streams; null for push streams. */
@@ -6828,7 +6829,7 @@ playbackId: string, /** Whether DVR recording is enabled for this stream. */
 record: boolean, /** How source media enters the stream. */
 ingestMode: IngestMode, /** When this stream was created. */
 createdAt: string, /** When this stream was last modified. */
-updatedAt: string, /** DVR chapter rotation mode. Snapshotted onto the DVR artifact at StartDVR; changes take effect on the next recording. null/NONE = chapters disabled. */
+updatedAt: string, /** How saved recordings are split into chapters. Snapshotted when a recording starts; changes apply from the next broadcast. NONE = live rewind only, nothing kept after the broadcast. */
 dvrChapterMode: DVRChapterMode | null, /** Chapter interval in seconds. Required when dvrChapterMode = FIXED_INTERVAL, ignored otherwise. Minimum 3600 (1 hour). */
 dvrChapterIntervalSeconds: number | null, /** Per-stream Skipper monitoring override (INHERIT follows tier). */
 monitoring: MonitoringToggle, /** Pull-source config for pull streams; null for push streams. */
@@ -6881,7 +6882,7 @@ streamKey: string | null, /** Public identifier for playback URLs. */
 playbackId: string, /** Whether DVR recording is enabled for this stream. */
 record: boolean, /** How source media enters the stream. */
 ingestMode: IngestMode, /** When this stream was created. */
-createdAt: string, /** DVR chapter rotation mode. Snapshotted onto the DVR artifact at StartDVR; changes take effect on the next recording. null/NONE = chapters disabled. */
+createdAt: string, /** How saved recordings are split into chapters. Snapshotted when a recording starts; changes apply from the next broadcast. NONE = live rewind only, nothing kept after the broadcast. */
 dvrChapterMode: DVRChapterMode | null, /** Chapter interval in seconds. Required when dvrChapterMode = FIXED_INTERVAL, ignored otherwise. Minimum 3600 (1 hour). */
 dvrChapterIntervalSeconds: number | null, /** Per-stream Skipper monitoring override (INHERIT follows tier). */
 monitoring: MonitoringToggle, /** Public stream UUID used for analytics and service APIs (not the Relay ID). */
@@ -6945,7 +6946,7 @@ playbackId: string, /** Whether DVR recording is enabled for this stream. */
 record: boolean, /** How source media enters the stream. */
 ingestMode: IngestMode, /** When this stream was created. */
 createdAt: string, /** When this stream was last modified. */
-updatedAt: string, /** DVR chapter rotation mode. Snapshotted onto the DVR artifact at StartDVR; changes take effect on the next recording. null/NONE = chapters disabled. */
+updatedAt: string, /** How saved recordings are split into chapters. Snapshotted when a recording starts; changes apply from the next broadcast. NONE = live rewind only, nothing kept after the broadcast. */
 dvrChapterMode: DVRChapterMode | null, /** Chapter interval in seconds. Required when dvrChapterMode = FIXED_INTERVAL, ignored otherwise. Minimum 3600 (1 hour). */
 dvrChapterIntervalSeconds: number | null, /** Per-stream Skipper monitoring override (INHERIT follows tier). */
 monitoring: MonitoringToggle, /** Pull-source config for pull streams; null for push streams. */
@@ -6999,7 +7000,7 @@ playbackId: string, /** Whether DVR recording is enabled for this stream. */
 record: boolean, /** How source media enters the stream. */
 ingestMode: IngestMode, /** When this stream was created. */
 createdAt: string, /** When this stream was last modified. */
-updatedAt: string, /** DVR chapter rotation mode. Snapshotted onto the DVR artifact at StartDVR; changes take effect on the next recording. null/NONE = chapters disabled. */
+updatedAt: string, /** How saved recordings are split into chapters. Snapshotted when a recording starts; changes apply from the next broadcast. NONE = live rewind only, nothing kept after the broadcast. */
 dvrChapterMode: DVRChapterMode | null, /** Chapter interval in seconds. Required when dvrChapterMode = FIXED_INTERVAL, ignored otherwise. Minimum 3600 (1 hour). */
 dvrChapterIntervalSeconds: number | null, /** Per-stream Skipper monitoring override (INHERIT follows tier). */
 monitoring: MonitoringToggle, /** Pull-source config for pull streams; null for push streams. */
@@ -7053,7 +7054,7 @@ playbackId: string, /** Whether DVR recording is enabled for this stream. */
 record: boolean, /** How source media enters the stream. */
 ingestMode: IngestMode, /** When this stream was created. */
 createdAt: string, /** When this stream was last modified. */
-updatedAt: string, /** DVR chapter rotation mode. Snapshotted onto the DVR artifact at StartDVR; changes take effect on the next recording. null/NONE = chapters disabled. */
+updatedAt: string, /** How saved recordings are split into chapters. Snapshotted when a recording starts; changes apply from the next broadcast. NONE = live rewind only, nothing kept after the broadcast. */
 dvrChapterMode: DVRChapterMode | null, /** Chapter interval in seconds. Required when dvrChapterMode = FIXED_INTERVAL, ignored otherwise. Minimum 3600 (1 hour). */
 dvrChapterIntervalSeconds: number | null, /** Per-stream Skipper monitoring override (INHERIT follows tier). */
 monitoring: MonitoringToggle, /** Pull-source config for pull streams; null for push streams. */
@@ -7108,7 +7109,7 @@ playbackId: string, /** Whether DVR recording is enabled for this stream. */
 record: boolean, /** How source media enters the stream. */
 ingestMode: IngestMode, /** When this stream was created. */
 createdAt: string, /** When this stream was last modified. */
-updatedAt: string, /** DVR chapter rotation mode. Snapshotted onto the DVR artifact at StartDVR; changes take effect on the next recording. null/NONE = chapters disabled. */
+updatedAt: string, /** How saved recordings are split into chapters. Snapshotted when a recording starts; changes apply from the next broadcast. NONE = live rewind only, nothing kept after the broadcast. */
 dvrChapterMode: DVRChapterMode | null, /** Chapter interval in seconds. Required when dvrChapterMode = FIXED_INTERVAL, ignored otherwise. Minimum 3600 (1 hour). */
 dvrChapterIntervalSeconds: number | null, /** Per-stream Skipper monitoring override (INHERIT follows tier). */
 monitoring: MonitoringToggle, /** Pull-source config for pull streams; null for push streams. */
@@ -7163,7 +7164,7 @@ playbackId: string, /** Whether DVR recording is enabled for this stream. */
 record: boolean, /** How source media enters the stream. */
 ingestMode: IngestMode, /** When this stream was created. */
 createdAt: string, /** When this stream was last modified. */
-updatedAt: string, /** DVR chapter rotation mode. Snapshotted onto the DVR artifact at StartDVR; changes take effect on the next recording. null/NONE = chapters disabled. */
+updatedAt: string, /** How saved recordings are split into chapters. Snapshotted when a recording starts; changes apply from the next broadcast. NONE = live rewind only, nothing kept after the broadcast. */
 dvrChapterMode: DVRChapterMode | null, /** Chapter interval in seconds. Required when dvrChapterMode = FIXED_INTERVAL, ignored otherwise. Minimum 3600 (1 hour). */
 dvrChapterIntervalSeconds: number | null, /** Per-stream Skipper monitoring override (INHERIT follows tier). */
 monitoring: MonitoringToggle, /** Pull-source config for pull streams; null for push streams. */
@@ -7218,7 +7219,7 @@ playbackId: string, /** Whether DVR recording is enabled for this stream. */
 record: boolean, /** How source media enters the stream. */
 ingestMode: IngestMode, /** When this stream was created. */
 createdAt: string, /** When this stream was last modified. */
-updatedAt: string, /** DVR chapter rotation mode. Snapshotted onto the DVR artifact at StartDVR; changes take effect on the next recording. null/NONE = chapters disabled. */
+updatedAt: string, /** How saved recordings are split into chapters. Snapshotted when a recording starts; changes apply from the next broadcast. NONE = live rewind only, nothing kept after the broadcast. */
 dvrChapterMode: DVRChapterMode | null, /** Chapter interval in seconds. Required when dvrChapterMode = FIXED_INTERVAL, ignored otherwise. Minimum 3600 (1 hour). */
 dvrChapterIntervalSeconds: number | null, /** Per-stream Skipper monitoring override (INHERIT follows tier). */
 monitoring: MonitoringToggle, /** Pull-source config for pull streams; null for push streams. */
@@ -7272,7 +7273,7 @@ playbackId: string, /** Whether DVR recording is enabled for this stream. */
 record: boolean, /** How source media enters the stream. */
 ingestMode: IngestMode, /** When this stream was created. */
 createdAt: string, /** When this stream was last modified. */
-updatedAt: string, /** DVR chapter rotation mode. Snapshotted onto the DVR artifact at StartDVR; changes take effect on the next recording. null/NONE = chapters disabled. */
+updatedAt: string, /** How saved recordings are split into chapters. Snapshotted when a recording starts; changes apply from the next broadcast. NONE = live rewind only, nothing kept after the broadcast. */
 dvrChapterMode: DVRChapterMode | null, /** Chapter interval in seconds. Required when dvrChapterMode = FIXED_INTERVAL, ignored otherwise. Minimum 3600 (1 hour). */
 dvrChapterIntervalSeconds: number | null, /** Per-stream Skipper monitoring override (INHERIT follows tier). */
 monitoring: MonitoringToggle, /** Pull-source config for pull streams; null for push streams. */
@@ -7853,7 +7854,7 @@ playbackId: string, /** Whether DVR recording is enabled for this stream. */
 record: boolean, /** How source media enters the stream. */
 ingestMode: IngestMode, /** When this stream was created. */
 createdAt: string, /** When this stream was last modified. */
-updatedAt: string, /** DVR chapter rotation mode. Snapshotted onto the DVR artifact at StartDVR; changes take effect on the next recording. null/NONE = chapters disabled. */
+updatedAt: string, /** How saved recordings are split into chapters. Snapshotted when a recording starts; changes apply from the next broadcast. NONE = live rewind only, nothing kept after the broadcast. */
 dvrChapterMode: DVRChapterMode | null, /** Chapter interval in seconds. Required when dvrChapterMode = FIXED_INTERVAL, ignored otherwise. Minimum 3600 (1 hour). */
 dvrChapterIntervalSeconds: number | null, /** Per-stream Skipper monitoring override (INHERIT follows tier). */
 monitoring: MonitoringToggle, /** Pull-source config for pull streams; null for push streams. */
@@ -8149,7 +8150,7 @@ eventId: string | null, eventType: string, kind: WebhookDeliveryKind, status: We
 attempts: number, /** When the next attempt is due; null unless pending. */
 nextAttemptAt: string | null, /** HTTP status of the last attempt; 0 when no response arrived. */
 lastStatusCode: number, /** Failure class of the last attempt: http_status, redirect, timeout, connection, tls, dns, or blocked_destination; internal when FrameWorks could not sign or render the delivery; empty after a success. */
-lastErrorClass: string, deliveredAt: string | null, replayCount: number, lastReplayedAt: string | null, createdAt: string, updatedAt: string, /** Every HTTP attempt, oldest first. Loaded by the webhookDelivery query; empty in connections. */
+lastErrorClass: string, deliveredAt: string | null, replayCount: number, lastReplayedAt: string | null, createdAt: string, updatedAt: string, /** Every HTTP attempt, oldest first, including attempts before the last replay. */
 attemptHistory: Array<{ id: string, attemptNumber: number, statusCode: number, errorClass: string, latencyMs: number, responseExcerpt: string, attemptedAt: string }> } | null };
 
 export type GetWebhookEndpointQueryVariables = Exact<{
@@ -8204,7 +8205,7 @@ playbackId: string, /** Whether DVR recording is enabled for this stream. */
 record: boolean, /** How source media enters the stream. */
 ingestMode: IngestMode, /** When this stream was created. */
 createdAt: string, /** When this stream was last modified. */
-updatedAt: string, /** DVR chapter rotation mode. Snapshotted onto the DVR artifact at StartDVR; changes take effect on the next recording. null/NONE = chapters disabled. */
+updatedAt: string, /** How saved recordings are split into chapters. Snapshotted when a recording starts; changes apply from the next broadcast. NONE = live rewind only, nothing kept after the broadcast. */
 dvrChapterMode: DVRChapterMode | null, /** Chapter interval in seconds. Required when dvrChapterMode = FIXED_INTERVAL, ignored otherwise. Minimum 3600 (1 hour). */
 dvrChapterIntervalSeconds: number | null, /** Per-stream Skipper monitoring override (INHERIT follows tier). */
 monitoring: MonitoringToggle, /** Pull-source config for pull streams; null for push streams. */
@@ -8285,7 +8286,7 @@ playbackId: string, /** Whether DVR recording is enabled for this stream. */
 record: boolean, /** How source media enters the stream. */
 ingestMode: IngestMode, /** When this stream was created. */
 createdAt: string, /** When this stream was last modified. */
-updatedAt: string, /** DVR chapter rotation mode. Snapshotted onto the DVR artifact at StartDVR; changes take effect on the next recording. null/NONE = chapters disabled. */
+updatedAt: string, /** How saved recordings are split into chapters. Snapshotted when a recording starts; changes apply from the next broadcast. NONE = live rewind only, nothing kept after the broadcast. */
 dvrChapterMode: DVRChapterMode | null, /** Chapter interval in seconds. Required when dvrChapterMode = FIXED_INTERVAL, ignored otherwise. Minimum 3600 (1 hour). */
 dvrChapterIntervalSeconds: number | null, /** Per-stream Skipper monitoring override (INHERIT follows tier). */
 monitoring: MonitoringToggle } | null } | null, viewerMetrics: { nodeId: string, streamId: string, action: string, protocol: string, host: string | null, sessionId: string | null, connectionTime: number | null, position: number | null, bandwidthInBps: number | null, bandwidthOutBps: number | null, bytesDownloaded: number | null, bytesUploaded: number | null, packetsSent: number | null, packetsLost: number | null, packetsRetransmitted: number | null, timestamp: number, clientCountry: string | null, clientCity: string | null, clientLatitude: number | null, clientLongitude: number | null, stream: { /** Global unique identifier for Relay compatibility. */
@@ -8298,7 +8299,7 @@ playbackId: string, /** Whether DVR recording is enabled for this stream. */
 record: boolean, /** How source media enters the stream. */
 ingestMode: IngestMode, /** When this stream was created. */
 createdAt: string, /** When this stream was last modified. */
-updatedAt: string, /** DVR chapter rotation mode. Snapshotted onto the DVR artifact at StartDVR; changes take effect on the next recording. null/NONE = chapters disabled. */
+updatedAt: string, /** How saved recordings are split into chapters. Snapshotted when a recording starts; changes apply from the next broadcast. NONE = live rewind only, nothing kept after the broadcast. */
 dvrChapterMode: DVRChapterMode | null, /** Chapter interval in seconds. Required when dvrChapterMode = FIXED_INTERVAL, ignored otherwise. Minimum 3600 (1 hour). */
 dvrChapterIntervalSeconds: number | null, /** Per-stream Skipper monitoring override (INHERIT follows tier). */
 monitoring: MonitoringToggle } | null } | null, connectionEvent: { id: string, eventId: string, timestamp: string, streamId: string, sessionId: string, connectionAddr: string | null, connector: string, nodeId: string, countryCode: string | null, city: string | null, latitude: number | null, longitude: number | null, eventType: string, requestUrl: string | null, clusterId: string, originClusterId: string | null, controlCellId: string | null, sessionDurationSeconds: number | null, bytesTransferred: number | null, stream: { /** Global unique identifier for Relay compatibility. */
@@ -8311,7 +8312,7 @@ playbackId: string, /** Whether DVR recording is enabled for this stream. */
 record: boolean, /** How source media enters the stream. */
 ingestMode: IngestMode, /** When this stream was created. */
 createdAt: string, /** When this stream was last modified. */
-updatedAt: string, /** DVR chapter rotation mode. Snapshotted onto the DVR artifact at StartDVR; changes take effect on the next recording. null/NONE = chapters disabled. */
+updatedAt: string, /** How saved recordings are split into chapters. Snapshotted when a recording starts; changes apply from the next broadcast. NONE = live rewind only, nothing kept after the broadcast. */
 dvrChapterMode: DVRChapterMode | null, /** Chapter interval in seconds. Required when dvrChapterMode = FIXED_INTERVAL, ignored otherwise. Minimum 3600 (1 hour). */
 dvrChapterIntervalSeconds: number | null, /** Per-stream Skipper monitoring override (INHERIT follows tier). */
 monitoring: MonitoringToggle } | null, clientBucket: { h3Index: string, resolution: number } | null, nodeBucket: { h3Index: string, resolution: number } | null } | null, trackListUpdate: { streamId: string, totalTracks: number | null, videoTrackCount: number | null, audioTrackCount: number | null, qualityTier: string | null, primaryWidth: number | null, primaryHeight: number | null, primaryFps: number | null, primaryVideoBitrate: number | null, primaryVideoCodec: string | null, primaryAudioBitrate: number | null, primaryAudioCodec: string | null, primaryAudioChannels: number | null, primaryAudioSampleRate: number | null, stream: { /** Global unique identifier for Relay compatibility. */
@@ -8324,7 +8325,7 @@ playbackId: string, /** Whether DVR recording is enabled for this stream. */
 record: boolean, /** How source media enters the stream. */
 ingestMode: IngestMode, /** When this stream was created. */
 createdAt: string, /** When this stream was last modified. */
-updatedAt: string, /** DVR chapter rotation mode. Snapshotted onto the DVR artifact at StartDVR; changes take effect on the next recording. null/NONE = chapters disabled. */
+updatedAt: string, /** How saved recordings are split into chapters. Snapshotted when a recording starts; changes apply from the next broadcast. NONE = live rewind only, nothing kept after the broadcast. */
 dvrChapterMode: DVRChapterMode | null, /** Chapter interval in seconds. Required when dvrChapterMode = FIXED_INTERVAL, ignored otherwise. Minimum 3600 (1 hour). */
 dvrChapterIntervalSeconds: number | null, /** Per-stream Skipper monitoring override (INHERIT follows tier). */
 monitoring: MonitoringToggle } | null, tracks: Array<{ trackName: string, trackType: string, codec: string | null, bitrateKbps: number | null, bitrateBps: number | null, buffer: number | null, jitter: number | null, width: number | null, height: number | null, fps: number | null, resolution: string | null, hasBFrames: boolean | null, channels: number | null, sampleRate: number | null }> | null } | null, storageEvent: { id: string, timestamp: string, streamId: string, assetHash: string, action: string, assetType: string, sizeBytes: number, s3Url: string | null, localPath: string | null, nodeId: string, clusterId: string | null, originClusterId: string | null, controlCellId: string | null, durationMs: number | null, warmDurationMs: number | null, error: string | null, stream: { /** Global unique identifier for Relay compatibility. */
@@ -8337,7 +8338,7 @@ playbackId: string, /** Whether DVR recording is enabled for this stream. */
 record: boolean, /** How source media enters the stream. */
 ingestMode: IngestMode, /** When this stream was created. */
 createdAt: string, /** When this stream was last modified. */
-updatedAt: string, /** DVR chapter rotation mode. Snapshotted onto the DVR artifact at StartDVR; changes take effect on the next recording. null/NONE = chapters disabled. */
+updatedAt: string, /** How saved recordings are split into chapters. Snapshotted when a recording starts; changes apply from the next broadcast. NONE = live rewind only, nothing kept after the broadcast. */
 dvrChapterMode: DVRChapterMode | null, /** Chapter interval in seconds. Required when dvrChapterMode = FIXED_INTERVAL, ignored otherwise. Minimum 3600 (1 hour). */
 dvrChapterIntervalSeconds: number | null, /** Per-stream Skipper monitoring override (INHERIT follows tier). */
 monitoring: MonitoringToggle } | null } | null, storageSnapshot: { nodeId: string, timestamp: number, tenantId: string | null, location: string | null, storageScope: string | null, usage: Array<{ tenantId: string, totalBytes: number, fileCount: number, dvrBytes: number, clipBytes: number, vodBytes: number, frozenDvrBytes: number, frozenClipBytes: number, frozenVodBytes: number }> } | null, processingEvent: { id: string, timestamp: string, nodeId: string, streamId: string, processType: string, clusterId: string | null, originClusterId: string | null, controlCellId: string | null, trackType: string | null, durationMs: number, inputCodec: string | null, outputCodec: string | null, segmentNumber: number | null, width: number | null, height: number | null, renditionCount: number | null, broadcasterUrl: string | null, uploadTimeUs: number | null, livepeerSessionId: string | null, segmentStartMs: number | null, inputBytes: number | null, outputBytesTotal: number | null, attemptCount: number | null, turnaroundMs: number | null, speedFactor: number | null, renditionsJson: string | null, inputFrames: number | null, outputFrames: number | null, decodeUsPerFrame: number | null, transformUsPerFrame: number | null, encodeUsPerFrame: number | null, isFinal: boolean | null, inputFramesDelta: number | null, outputFramesDelta: number | null, inputBytesDelta: number | null, outputBytesDelta: number | null, inputWidth: number | null, inputHeight: number | null, outputWidth: number | null, outputHeight: number | null, inputFpks: number | null, outputFpsMeasured: number | null, sampleRate: number | null, channels: number | null, sourceTimestampMs: number | null, sinkTimestampMs: number | null, sourceAdvancedMs: number | null, sinkAdvancedMs: number | null, rtfIn: number | null, rtfOut: number | null, pipelineLagMs: number | null, outputBitrateBps: number | null, stream: { /** Global unique identifier for Relay compatibility. */
@@ -8350,7 +8351,7 @@ playbackId: string, /** Whether DVR recording is enabled for this stream. */
 record: boolean, /** How source media enters the stream. */
 ingestMode: IngestMode, /** When this stream was created. */
 createdAt: string, /** When this stream was last modified. */
-updatedAt: string, /** DVR chapter rotation mode. Snapshotted onto the DVR artifact at StartDVR; changes take effect on the next recording. null/NONE = chapters disabled. */
+updatedAt: string, /** How saved recordings are split into chapters. Snapshotted when a recording starts; changes apply from the next broadcast. NONE = live rewind only, nothing kept after the broadcast. */
 dvrChapterMode: DVRChapterMode | null, /** Chapter interval in seconds. Required when dvrChapterMode = FIXED_INTERVAL, ignored otherwise. Minimum 3600 (1 hour). */
 dvrChapterIntervalSeconds: number | null, /** Per-stream Skipper monitoring override (INHERIT follows tier). */
 monitoring: MonitoringToggle } | null } | null, routingEvent: { timestamp: string, streamId: string, selectedNode: string, nodeId: string | null, status: string, details: string | null, score: number | null, clientCountry: string | null, clientLatitude: number | null, clientLongitude: number | null, nodeLatitude: number | null, nodeLongitude: number | null, nodeName: string | null, routingDistance: number | null, candidatesCount: number | null, latencyMs: number | null, eventType: string | null, source: string | null, streamTenantId: string | null, clusterId: string | null, remoteClusterId: string | null, selectedClusterId: string | null, controlCellId: string | null, originClusterId: string | null, stream: { /** Global unique identifier for Relay compatibility. */
@@ -8363,7 +8364,7 @@ playbackId: string, /** Whether DVR recording is enabled for this stream. */
 record: boolean, /** How source media enters the stream. */
 ingestMode: IngestMode, /** When this stream was created. */
 createdAt: string, /** When this stream was last modified. */
-updatedAt: string, /** DVR chapter rotation mode. Snapshotted onto the DVR artifact at StartDVR; changes take effect on the next recording. null/NONE = chapters disabled. */
+updatedAt: string, /** How saved recordings are split into chapters. Snapshotted when a recording starts; changes apply from the next broadcast. NONE = live rewind only, nothing kept after the broadcast. */
 dvrChapterMode: DVRChapterMode | null, /** Chapter interval in seconds. Required when dvrChapterMode = FIXED_INTERVAL, ignored otherwise. Minimum 3600 (1 hour). */
 dvrChapterIntervalSeconds: number | null, /** Per-stream Skipper monitoring override (INHERIT follows tier). */
 monitoring: MonitoringToggle } | null, clientBucket: { h3Index: string, resolution: number } | null, nodeBucket: { h3Index: string, resolution: number } | null } | null, systemHealthEvent: { nodeId: string | null, node: string, location: string, status: NodeStatus, cpuTenths: number, isHealthy: boolean, ramMax: number | null, ramCurrent: number | null, diskTotalBytes: number | null, diskUsedBytes: number | null, shmTotalBytes: number | null, shmUsedBytes: number | null, timestamp: string } | null, skipperInvestigation: { reportId: string, resourceType: string } | null, incidentUpdated: { incidentId: string, clusterId: string | null, status: IncidentStatus, severity: string, title: string, /** Timeline change that produced the update, e.g. opened, alert_firing, acknowledged, resolved. */
@@ -8408,7 +8409,7 @@ playbackId: string, /** Whether DVR recording is enabled for this stream. */
 record: boolean, /** How source media enters the stream. */
 ingestMode: IngestMode, /** When this stream was created. */
 createdAt: string, /** When this stream was last modified. */
-updatedAt: string, /** DVR chapter rotation mode. Snapshotted onto the DVR artifact at StartDVR; changes take effect on the next recording. null/NONE = chapters disabled. */
+updatedAt: string, /** How saved recordings are split into chapters. Snapshotted when a recording starts; changes apply from the next broadcast. NONE = live rewind only, nothing kept after the broadcast. */
 dvrChapterMode: DVRChapterMode | null, /** Chapter interval in seconds. Required when dvrChapterMode = FIXED_INTERVAL, ignored otherwise. Minimum 3600 (1 hour). */
 dvrChapterIntervalSeconds: number | null, /** Per-stream Skipper monitoring override (INHERIT follows tier). */
 monitoring: MonitoringToggle, /** Pull-source config for pull streams; null for push streams. */
@@ -8470,7 +8471,7 @@ playbackId: string, /** Whether DVR recording is enabled for this stream. */
 record: boolean, /** How source media enters the stream. */
 ingestMode: IngestMode, /** When this stream was created. */
 createdAt: string, /** When this stream was last modified. */
-updatedAt: string, /** DVR chapter rotation mode. Snapshotted onto the DVR artifact at StartDVR; changes take effect on the next recording. null/NONE = chapters disabled. */
+updatedAt: string, /** How saved recordings are split into chapters. Snapshotted when a recording starts; changes apply from the next broadcast. NONE = live rewind only, nothing kept after the broadcast. */
 dvrChapterMode: DVRChapterMode | null, /** Chapter interval in seconds. Required when dvrChapterMode = FIXED_INTERVAL, ignored otherwise. Minimum 3600 (1 hour). */
 dvrChapterIntervalSeconds: number | null, /** Per-stream Skipper monitoring override (INHERIT follows tier). */
 monitoring: MonitoringToggle, /** Pull-source config for pull streams; null for push streams. */
@@ -8532,7 +8533,7 @@ playbackId: string, /** Whether DVR recording is enabled for this stream. */
 record: boolean, /** How source media enters the stream. */
 ingestMode: IngestMode, /** When this stream was created. */
 createdAt: string, /** When this stream was last modified. */
-updatedAt: string, /** DVR chapter rotation mode. Snapshotted onto the DVR artifact at StartDVR; changes take effect on the next recording. null/NONE = chapters disabled. */
+updatedAt: string, /** How saved recordings are split into chapters. Snapshotted when a recording starts; changes apply from the next broadcast. NONE = live rewind only, nothing kept after the broadcast. */
 dvrChapterMode: DVRChapterMode | null, /** Chapter interval in seconds. Required when dvrChapterMode = FIXED_INTERVAL, ignored otherwise. Minimum 3600 (1 hour). */
 dvrChapterIntervalSeconds: number | null, /** Per-stream Skipper monitoring override (INHERIT follows tier). */
 monitoring: MonitoringToggle, /** Pull-source config for pull streams; null for push streams. */
@@ -8601,7 +8602,7 @@ playbackId: string, /** Whether DVR recording is enabled for this stream. */
 record: boolean, /** How source media enters the stream. */
 ingestMode: IngestMode, /** When this stream was created. */
 createdAt: string, /** When this stream was last modified. */
-updatedAt: string, /** DVR chapter rotation mode. Snapshotted onto the DVR artifact at StartDVR; changes take effect on the next recording. null/NONE = chapters disabled. */
+updatedAt: string, /** How saved recordings are split into chapters. Snapshotted when a recording starts; changes apply from the next broadcast. NONE = live rewind only, nothing kept after the broadcast. */
 dvrChapterMode: DVRChapterMode | null, /** Chapter interval in seconds. Required when dvrChapterMode = FIXED_INTERVAL, ignored otherwise. Minimum 3600 (1 hour). */
 dvrChapterIntervalSeconds: number | null, /** Per-stream Skipper monitoring override (INHERIT follows tier). */
 monitoring: MonitoringToggle, /** Pull-source config for pull streams; null for push streams. */
@@ -8663,7 +8664,7 @@ playbackId: string, /** Whether DVR recording is enabled for this stream. */
 record: boolean, /** How source media enters the stream. */
 ingestMode: IngestMode, /** When this stream was created. */
 createdAt: string, /** When this stream was last modified. */
-updatedAt: string, /** DVR chapter rotation mode. Snapshotted onto the DVR artifact at StartDVR; changes take effect on the next recording. null/NONE = chapters disabled. */
+updatedAt: string, /** How saved recordings are split into chapters. Snapshotted when a recording starts; changes apply from the next broadcast. NONE = live rewind only, nothing kept after the broadcast. */
 dvrChapterMode: DVRChapterMode | null, /** Chapter interval in seconds. Required when dvrChapterMode = FIXED_INTERVAL, ignored otherwise. Minimum 3600 (1 hour). */
 dvrChapterIntervalSeconds: number | null, /** Per-stream Skipper monitoring override (INHERIT follows tier). */
 monitoring: MonitoringToggle, /** Pull-source config for pull streams; null for push streams. */
@@ -9130,7 +9131,7 @@ playbackId: string, /** Whether DVR recording is enabled for this stream. */
 record: boolean, /** How source media enters the stream. */
 ingestMode: IngestMode, /** When this stream was created. */
 createdAt: string, /** When this stream was last modified. */
-updatedAt: string, /** DVR chapter rotation mode. Snapshotted onto the DVR artifact at StartDVR; changes take effect on the next recording. null/NONE = chapters disabled. */
+updatedAt: string, /** How saved recordings are split into chapters. Snapshotted when a recording starts; changes apply from the next broadcast. NONE = live rewind only, nothing kept after the broadcast. */
 dvrChapterMode: DVRChapterMode | null, /** Chapter interval in seconds. Required when dvrChapterMode = FIXED_INTERVAL, ignored otherwise. Minimum 3600 (1 hour). */
 dvrChapterIntervalSeconds: number | null, /** Per-stream Skipper monitoring override (INHERIT follows tier). */
 monitoring: MonitoringToggle, /** Pull-source config for pull streams; null for push streams. */
@@ -9178,7 +9179,7 @@ playbackId: string, /** Whether DVR recording is enabled for this stream. */
 record: boolean, /** How source media enters the stream. */
 ingestMode: IngestMode, /** When this stream was created. */
 createdAt: string, /** When this stream was last modified. */
-updatedAt: string, /** DVR chapter rotation mode. Snapshotted onto the DVR artifact at StartDVR; changes take effect on the next recording. null/NONE = chapters disabled. */
+updatedAt: string, /** How saved recordings are split into chapters. Snapshotted when a recording starts; changes apply from the next broadcast. NONE = live rewind only, nothing kept after the broadcast. */
 dvrChapterMode: DVRChapterMode | null, /** Chapter interval in seconds. Required when dvrChapterMode = FIXED_INTERVAL, ignored otherwise. Minimum 3600 (1 hour). */
 dvrChapterIntervalSeconds: number | null, /** Per-stream Skipper monitoring override (INHERIT follows tier). */
 monitoring: MonitoringToggle, /** Pull-source config for pull streams; null for push streams. */
@@ -9239,7 +9240,7 @@ playbackId: string, /** Whether DVR recording is enabled for this stream. */
 record: boolean, /** How source media enters the stream. */
 ingestMode: IngestMode, /** When this stream was created. */
 createdAt: string, /** When this stream was last modified. */
-updatedAt: string, /** DVR chapter rotation mode. Snapshotted onto the DVR artifact at StartDVR; changes take effect on the next recording. null/NONE = chapters disabled. */
+updatedAt: string, /** How saved recordings are split into chapters. Snapshotted when a recording starts; changes apply from the next broadcast. NONE = live rewind only, nothing kept after the broadcast. */
 dvrChapterMode: DVRChapterMode | null, /** Chapter interval in seconds. Required when dvrChapterMode = FIXED_INTERVAL, ignored otherwise. Minimum 3600 (1 hour). */
 dvrChapterIntervalSeconds: number | null, /** Per-stream Skipper monitoring override (INHERIT follows tier). */
 monitoring: MonitoringToggle, /** Pull-source config for pull streams; null for push streams. */
@@ -9478,8 +9479,8 @@ export type GetDVRChapterQueryVariables = Exact<{
 }>;
 
 
-/** Retrieve a single DVR chapter, including its finalized playbackId. Chapters are produced by the finalization queue as canonical .mkv VOD artifacts. Historical chapter mode is configured at the Stream level (Stream.dvrChapterMode) and snapshotted at StartDVR. Modes: - WINDOW_SIZED: sequential fixed-length chapters of size tier.MaxWindowSeconds since the recording's start. - FIXED_INTERVAL: UTC-only buckets of intervalSeconds, anchored at unix epoch 0. */
-export type GetDVRChapterQuery = { /** Retrieve a single DVR chapter, including its finalized playbackId. Chapters are produced by the finalization queue as canonical .mkv VOD artifacts. Historical chapter mode is configured at the Stream level (Stream.dvrChapterMode) and snapshotted at StartDVR. Modes: - WINDOW_SIZED: sequential fixed-length chapters of size tier.MaxWindowSeconds since the recording's start. - FIXED_INTERVAL: UTC-only buckets of intervalSeconds, anchored at unix epoch 0. */
+/** Retrieve a single DVR chapter, including its finalized playbackId. Chapters are the saved parts of a recording, produced by the finalization queue as canonical .mkv VOD artifacts. The chapter mode is configured at the Stream level (Stream.dvrChapterMode) and snapshotted when the recording starts. Modes: - WINDOW_SIZED (default): sequential parts as long as the recording's own live rewind window, from the recording's start. - FIXED_INTERVAL: UTC-only buckets of intervalSeconds, anchored at unix epoch 0. A NONE recording keeps live rewind only and has no chapters. */
+export type GetDVRChapterQuery = { /** Retrieve a single DVR chapter, including its finalized playbackId. Chapters are the saved parts of a recording, produced by the finalization queue as canonical .mkv VOD artifacts. The chapter mode is configured at the Stream level (Stream.dvrChapterMode) and snapshotted when the recording starts. Modes: - WINDOW_SIZED (default): sequential parts as long as the recording's own live rewind window, from the recording's start. - FIXED_INTERVAL: UTC-only buckets of intervalSeconds, anchored at unix epoch 0. A NONE recording keeps live rewind only and has no chapters. */
 dvrChapter: { chapterId: string, state: DVRChapterState, /** Public playback key minted by Commodore; null until finalization dispatches. */
 playbackId: string | null, isCurrent: boolean, hasGaps: boolean, segmentCount: number, /** Absolute Unix epoch ms of the playable MKV span start; falls back to the scheduled chapter start before finalization. */
 wallClockStartUnixMs: number, /** Absolute Unix epoch ms of the playable MKV span end; falls back to the scheduled chapter end before finalization. */
@@ -9611,7 +9612,7 @@ playbackId: string, /** Whether DVR recording is enabled for this stream. */
 record: boolean, /** How source media enters the stream. */
 ingestMode: IngestMode, /** When this stream was created. */
 createdAt: string, /** When this stream was last modified. */
-updatedAt: string, /** DVR chapter rotation mode. Snapshotted onto the DVR artifact at StartDVR; changes take effect on the next recording. null/NONE = chapters disabled. */
+updatedAt: string, /** How saved recordings are split into chapters. Snapshotted when a recording starts; changes apply from the next broadcast. NONE = live rewind only, nothing kept after the broadcast. */
 dvrChapterMode: DVRChapterMode | null, /** Chapter interval in seconds. Required when dvrChapterMode = FIXED_INTERVAL, ignored otherwise. Minimum 3600 (1 hour). */
 dvrChapterIntervalSeconds: number | null, /** Per-stream Skipper monitoring override (INHERIT follows tier). */
 monitoring: MonitoringToggle, /** Pull-source config for pull streams; null for push streams. */
@@ -29643,7 +29644,7 @@ fragment ClipFields on Clip {
     ...EffectiveRetentionFields
   }
 }`) as unknown as TypedDocumentString<GetClipQuery, GetClipQueryVariables>;
-/** Retrieve a single DVR chapter, including its finalized playbackId. Chapters are produced by the finalization queue as canonical .mkv VOD artifacts. Historical chapter mode is configured at the Stream level (Stream.dvrChapterMode) and snapshotted at StartDVR. Modes: - WINDOW_SIZED: sequential fixed-length chapters of size tier.MaxWindowSeconds since the recording's start. - FIXED_INTERVAL: UTC-only buckets of intervalSeconds, anchored at unix epoch 0. */
+/** Retrieve a single DVR chapter, including its finalized playbackId. Chapters are the saved parts of a recording, produced by the finalization queue as canonical .mkv VOD artifacts. The chapter mode is configured at the Stream level (Stream.dvrChapterMode) and snapshotted when the recording starts. Modes: - WINDOW_SIZED (default): sequential parts as long as the recording's own live rewind window, from the recording's start. - FIXED_INTERVAL: UTC-only buckets of intervalSeconds, anchored at unix epoch 0. A NONE recording keeps live rewind only and has no chapters. */
 export const GetDVRChapterDocument = /*#__PURE__*/ new TypedDocumentString(`
     query GetDVRChapter($dvrId: ID!, $startMs: Float!, $endMs: Float!, $mode: DVRChapterMode, $intervalSeconds: Int) {
   dvrChapter(

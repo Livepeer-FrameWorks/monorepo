@@ -5,12 +5,14 @@ import (
 	"encoding/json"
 	"errors"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	"frameworks/api_gateway/graph/model"
 	"frameworks/api_gateway/internal/clients/clientstest"
 	"frameworks/api_gateway/internal/demo"
+	"frameworks/api_gateway/internal/loaders"
 
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/ctxkeys"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/events"
@@ -298,6 +300,70 @@ func TestWebhookDeliveryLoadsAttemptHistory(t *testing.T) {
 	}
 	if missing, err := r.DoWebhookDelivery(webhookCtx("viewer"), "other"); err != nil || missing != nil {
 		t.Fatalf("unknown delivery = (%v, %v), want (nil, nil)", missing, err)
+	}
+}
+
+// The attemptHistory fields of a deliveries page load in one Bosun call for
+// the caller's tenant; mapped deliveries keep the attempts they carry.
+func TestWebhookDeliveriesConnectionBatchesAttemptHistory(t *testing.T) {
+	ids := []string{webhookTestDelivery, "d0000000-0000-4000-8000-000000000002", "d0000000-0000-4000-8000-000000000003"}
+	var (
+		mu    sync.Mutex
+		calls [][]string
+	)
+	fake := &clientstest.FakeBosun{
+		ListWebhookDeliveriesFn: func(context.Context, *bosunpb.ListWebhookDeliveriesRequest) (*bosunpb.ListWebhookDeliveriesResponse, error) {
+			resp := &bosunpb.ListWebhookDeliveriesResponse{Pagination: &commonpb.CursorPaginationResponse{TotalCount: 3}}
+			for _, id := range ids {
+				d := testWebhookDeliveryProto()
+				d.Id = id
+				resp.Deliveries = append(resp.Deliveries, d)
+			}
+			return resp, nil
+		},
+		ListAttemptsForDeliveriesFn: func(ctx context.Context, deliveryIDs []string) (*bosunpb.ListAttemptsForDeliveriesResponse, error) {
+			if got := ctxkeys.GetTenantID(ctx); got != webhookTestTenant {
+				t.Errorf("attempts call tenant = %q, want %q", got, webhookTestTenant)
+			}
+			mu.Lock()
+			calls = append(calls, append([]string(nil), deliveryIDs...))
+			mu.Unlock()
+			return &bosunpb.ListAttemptsForDeliveriesResponse{Deliveries: []*bosunpb.DeliveryAttempts{
+				{DeliveryId: ids[0], Attempts: []*bosunpb.WebhookDeliveryAttempt{{Id: "a1", AttemptNumber: 1}, {Id: "a2", AttemptNumber: 2}}},
+				{DeliveryId: ids[2], Attempts: []*bosunpb.WebhookDeliveryAttempt{{Id: "c1", AttemptNumber: 1}}},
+			}}, nil
+		},
+	}
+	r := platformResolverWith(clientstest.WithBosun(fake))
+	ctx := loaders.ContextWithLoaders(webhookCtx("viewer"), loaders.New(r.Clients))
+	conn, err := r.DoWebhookDeliveriesConnection(ctx, WebhookDeliveryFilter{}, nil)
+	if err != nil || len(conn.Nodes) != 3 {
+		t.Fatalf("connection = (%+v, %v)", conn, err)
+	}
+	histories := make([][]*model.WebhookDeliveryAttempt, len(conn.Nodes))
+	var wg sync.WaitGroup
+	for i, node := range conn.Nodes {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			h, err := r.DoWebhookDeliveryAttemptHistory(ctx, node)
+			if err != nil {
+				t.Errorf("attemptHistory(%s) = %v", node.ID, err)
+			}
+			histories[i] = h
+		}()
+	}
+	wg.Wait()
+	if len(calls) != 1 || strings.Join(calls[0], ",") != strings.Join(ids, ",") {
+		t.Fatalf("Bosun attempt calls = %v, want one call with the page's IDs", calls)
+	}
+	if len(histories[0]) != 2 || histories[0][1].ID != "a2" || histories[1] == nil || len(histories[1]) != 0 || len(histories[2]) != 1 {
+		t.Fatalf("histories = %+v", histories)
+	}
+
+	carried := &model.WebhookDelivery{ID: "carried", AttemptHistory: []*model.WebhookDeliveryAttempt{{ID: "x"}}}
+	if h, err := r.DoWebhookDeliveryAttemptHistory(ctx, carried); err != nil || len(h) != 1 || len(calls) != 1 {
+		t.Fatalf("carried history = (%+v, %v) after %d calls", h, err, len(calls))
 	}
 }
 

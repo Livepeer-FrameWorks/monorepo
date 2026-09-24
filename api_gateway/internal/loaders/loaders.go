@@ -23,6 +23,7 @@ type Loaders struct {
 	StreamMetrics             *StreamMetricsLoader
 	ArtifactLifecycle         *ArtifactLifecycleLoader
 	Stream                    *StreamLoader
+	WebhookAttempts           *WebhookAttemptsLoader
 	Memo                      *Memoizer
 }
 
@@ -37,6 +38,7 @@ func New(serviceClients *clients.ServiceClients) *Loaders {
 		StreamMetrics:             NewStreamMetricsLoader(serviceClients.Periscope),
 		ArtifactLifecycle:         NewArtifactLifecycleLoader(serviceClients.Periscope),
 		Stream:                    NewStreamLoader(serviceClients.Commodore),
+		WebhookAttempts:           NewWebhookAttemptsLoader(serviceClients.Bosun),
 		Memo:                      NewMemoizer(),
 	}
 }

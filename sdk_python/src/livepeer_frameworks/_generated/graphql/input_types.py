@@ -1023,15 +1023,15 @@ class UpdateStreamInput(BaseModel):
     dvr_chapter_mode: Optional[DVRChapterMode] = Field(
         alias="dvrChapterMode",
         default=None,
-        description="Historical chapter rotation mode. Snapshotted onto the DVR artifact\nat StartDVR; changes take effect on the next recording, not in-flight.\nNONE means rolling DVR playback only: recording still runs, but no\nfinalized chapter artifacts are produced for historical replay.",
+        description="How saved recordings are split into chapters. Snapshotted when a\nrecording starts; changes apply from the next broadcast, not to a\nrecording in progress. NONE keeps live rewind only: viewers can rewind\nwhile live, but nothing is kept after the broadcast.",
     )
-    "Historical chapter rotation mode. Snapshotted onto the DVR artifact\nat StartDVR; changes take effect on the next recording, not in-flight.\nNONE means rolling DVR playback only: recording still runs, but no\nfinalized chapter artifacts are produced for historical replay."
+    "How saved recordings are split into chapters. Snapshotted when a\nrecording starts; changes apply from the next broadcast, not to a\nrecording in progress. NONE keeps live rewind only: viewers can rewind\nwhile live, but nothing is kept after the broadcast."
     dvr_chapter_interval_seconds: Optional[int] = Field(
         alias="dvrChapterIntervalSeconds",
         default=None,
-        description="Chapter interval in seconds. Required when dvrChapterMode =\nFIXED_INTERVAL. Minimum 3600 (1 hour).",
+        description="Chapter interval in seconds. Required when dvrChapterMode =\nFIXED_INTERVAL. Minimum 3600 (1 hour). Send 0 with any other mode to\nclear a stored interval.",
     )
-    "Chapter interval in seconds. Required when dvrChapterMode =\nFIXED_INTERVAL. Minimum 3600 (1 hour)."
+    "Chapter interval in seconds. Required when dvrChapterMode =\nFIXED_INTERVAL. Minimum 3600 (1 hour). Send 0 with any other mode to\nclear a stored interval."
     monitoring: Optional[MonitoringToggle] = Field(
         default=None,
         description="Per-stream Skipper monitoring override. INHERIT follows the tenant tier.",

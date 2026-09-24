@@ -6600,6 +6600,11 @@ func (r *vodUploadedPartResolver) SizeBytes(ctx context.Context, obj *sharedpb.V
 	return float64(obj.SizeBytes), nil
 }
 
+// AttemptHistory is the resolver for the attemptHistory field.
+func (r *webhookDeliveryResolver) AttemptHistory(ctx context.Context, obj *model.WebhookDelivery) ([]*model.WebhookDeliveryAttempt, error) {
+	return r.DoWebhookDeliveryAttemptHistory(ctx, obj)
+}
+
 // APIUsage returns generated.APIUsageResolver implementation.
 func (r *Resolver) APIUsage() generated.APIUsageResolver { return &aPIUsageResolver{r} }
 
@@ -7097,6 +7102,11 @@ func (r *Resolver) VodUploadedPart() generated.VodUploadedPartResolver {
 	return &vodUploadedPartResolver{r}
 }
 
+// WebhookDelivery returns generated.WebhookDeliveryResolver implementation.
+func (r *Resolver) WebhookDelivery() generated.WebhookDeliveryResolver {
+	return &webhookDeliveryResolver{r}
+}
+
 type aPIUsageResolver struct{ *Resolver }
 type aPIUsageOperationSummaryResolver struct{ *Resolver }
 type aPIUsageRecordResolver struct{ *Resolver }
@@ -7214,3 +7224,4 @@ type viewerMetricsResolver struct{ *Resolver }
 type viewerSessionResolver struct{ *Resolver }
 type vodAssetResolver struct{ *Resolver }
 type vodUploadedPartResolver struct{ *Resolver }
+type webhookDeliveryResolver struct{ *Resolver }

@@ -4294,8 +4294,9 @@ type ArtifactEventDefaultFieldsStream struct {
 	PushTargets []ArtifactEventDefaultFieldsStreamPushTargetsPushTarget `json:"pushTargets"`
 	// Playback access policy. null/PUBLIC = anyone with the playbackId can watch.
 	PlaybackPolicy *ArtifactEventDefaultFieldsStreamPlaybackPolicy `json:"playbackPolicy"`
-	// DVR chapter rotation mode. Snapshotted onto the DVR artifact at StartDVR;
-	// changes take effect on the next recording. null/NONE = chapters disabled.
+	// How saved recordings are split into chapters. Snapshotted when a recording
+	// starts; changes apply from the next broadcast. NONE = live rewind only,
+	// nothing kept after the broadcast.
 	DvrChapterMode *DVRChapterMode `json:"dvrChapterMode"`
 	// Chapter interval in seconds. Required when dvrChapterMode = FIXED_INTERVAL,
 	// ignored otherwise. Minimum 3600 (1 hour).
@@ -4860,8 +4861,9 @@ type ArtifactEventInNodeDefaultFieldsStream struct {
 	PushTargets []ArtifactEventInNodeDefaultFieldsStreamPushTargetsPushTarget `json:"pushTargets"`
 	// Playback access policy. null/PUBLIC = anyone with the playbackId can watch.
 	PlaybackPolicy *ArtifactEventInNodeDefaultFieldsStreamPlaybackPolicy `json:"playbackPolicy"`
-	// DVR chapter rotation mode. Snapshotted onto the DVR artifact at StartDVR;
-	// changes take effect on the next recording. null/NONE = chapters disabled.
+	// How saved recordings are split into chapters. Snapshotted when a recording
+	// starts; changes apply from the next broadcast. NONE = live rewind only,
+	// nothing kept after the broadcast.
 	DvrChapterMode *DVRChapterMode `json:"dvrChapterMode"`
 	// Chapter interval in seconds. Required when dvrChapterMode = FIXED_INTERVAL,
 	// ignored otherwise. Minimum 3600 (1 hour).
@@ -5468,8 +5470,9 @@ type ArtifactStateDefaultFieldsStream struct {
 	PushTargets []ArtifactStateDefaultFieldsStreamPushTargetsPushTarget `json:"pushTargets"`
 	// Playback access policy. null/PUBLIC = anyone with the playbackId can watch.
 	PlaybackPolicy *ArtifactStateDefaultFieldsStreamPlaybackPolicy `json:"playbackPolicy"`
-	// DVR chapter rotation mode. Snapshotted onto the DVR artifact at StartDVR;
-	// changes take effect on the next recording. null/NONE = chapters disabled.
+	// How saved recordings are split into chapters. Snapshotted when a recording
+	// starts; changes apply from the next broadcast. NONE = live rewind only,
+	// nothing kept after the broadcast.
 	DvrChapterMode *DVRChapterMode `json:"dvrChapterMode"`
 	// Chapter interval in seconds. Required when dvrChapterMode = FIXED_INTERVAL,
 	// ignored otherwise. Minimum 3600 (1 hour).
@@ -10131,8 +10134,9 @@ type ClientMetrics5mDefaultFieldsStream struct {
 	PushTargets []ClientMetrics5mDefaultFieldsStreamPushTargetsPushTarget `json:"pushTargets"`
 	// Playback access policy. null/PUBLIC = anyone with the playbackId can watch.
 	PlaybackPolicy *ClientMetrics5mDefaultFieldsStreamPlaybackPolicy `json:"playbackPolicy"`
-	// DVR chapter rotation mode. Snapshotted onto the DVR artifact at StartDVR;
-	// changes take effect on the next recording. null/NONE = chapters disabled.
+	// How saved recordings are split into chapters. Snapshotted when a recording
+	// starts; changes apply from the next broadcast. NONE = live rewind only,
+	// nothing kept after the broadcast.
 	DvrChapterMode *DVRChapterMode `json:"dvrChapterMode"`
 	// Chapter interval in seconds. Required when dvrChapterMode = FIXED_INTERVAL,
 	// ignored otherwise. Minimum 3600 (1 hour).
@@ -11347,8 +11351,9 @@ type ClipInNodeDefaultFieldsStream struct {
 	PushTargets []ClipInNodeDefaultFieldsStreamPushTargetsPushTarget `json:"pushTargets"`
 	// Playback access policy. null/PUBLIC = anyone with the playbackId can watch.
 	PlaybackPolicy *ClipInNodeDefaultFieldsStreamPlaybackPolicy `json:"playbackPolicy"`
-	// DVR chapter rotation mode. Snapshotted onto the DVR artifact at StartDVR;
-	// changes take effect on the next recording. null/NONE = chapters disabled.
+	// How saved recordings are split into chapters. Snapshotted when a recording
+	// starts; changes apply from the next broadcast. NONE = live rewind only,
+	// nothing kept after the broadcast.
 	DvrChapterMode *DVRChapterMode `json:"dvrChapterMode"`
 	// Chapter interval in seconds. Required when dvrChapterMode = FIXED_INTERVAL,
 	// ignored otherwise. Minimum 3600 (1 hour).
@@ -13300,8 +13305,9 @@ type ConnectionEventDefaultFieldsStream struct {
 	PushTargets []ConnectionEventDefaultFieldsStreamPushTargetsPushTarget `json:"pushTargets"`
 	// Playback access policy. null/PUBLIC = anyone with the playbackId can watch.
 	PlaybackPolicy *ConnectionEventDefaultFieldsStreamPlaybackPolicy `json:"playbackPolicy"`
-	// DVR chapter rotation mode. Snapshotted onto the DVR artifact at StartDVR;
-	// changes take effect on the next recording. null/NONE = chapters disabled.
+	// How saved recordings are split into chapters. Snapshotted when a recording
+	// starts; changes apply from the next broadcast. NONE = live rewind only,
+	// nothing kept after the broadcast.
 	DvrChapterMode *DVRChapterMode `json:"dvrChapterMode"`
 	// Chapter interval in seconds. Required when dvrChapterMode = FIXED_INTERVAL,
 	// ignored otherwise. Minimum 3600 (1 hour).
@@ -13940,8 +13946,9 @@ type ConnectionEventInNodeDefaultFieldsStream struct {
 	PushTargets []ConnectionEventInNodeDefaultFieldsStreamPushTargetsPushTarget `json:"pushTargets"`
 	// Playback access policy. null/PUBLIC = anyone with the playbackId can watch.
 	PlaybackPolicy *ConnectionEventInNodeDefaultFieldsStreamPlaybackPolicy `json:"playbackPolicy"`
-	// DVR chapter rotation mode. Snapshotted onto the DVR artifact at StartDVR;
-	// changes take effect on the next recording. null/NONE = chapters disabled.
+	// How saved recordings are split into chapters. Snapshotted when a recording
+	// starts; changes apply from the next broadcast. NONE = live rewind only,
+	// nothing kept after the broadcast.
 	DvrChapterMode *DVRChapterMode `json:"dvrChapterMode"`
 	// Chapter interval in seconds. Required when dvrChapterMode = FIXED_INTERVAL,
 	// ignored otherwise. Minimum 3600 (1 hour).
@@ -24224,20 +24231,20 @@ func (v *CryptoTopupStatusMutationResponse) GetCryptoTopupStatus() CryptoTopupSt
 	return v.CryptoTopupStatus
 }
 
-// DVR historical chapter mode. Determines how chapter (startMs, endMs)
-// ranges are produced for finalized replay artifacts. Configured at the
-// Stream level via updateStream and snapshotted onto the DVR artifact at
-// StartDVR.
+// How a recording is saved as chapters. Determines how chapter (startMs,
+// endMs) ranges are produced for replay after the broadcast. Configured at
+// the Stream level via updateStream and snapshotted onto the recording when
+// it starts. New streams default to WINDOW_SIZED.
 //
 // UTC-only — civil-time chapters resolve at the edge.
 type DVRChapterMode string
 
 const (
-	// Sequential fixed-length chapters of size tier.MaxWindowSeconds since the recording's start.
+	// Default. Sequential parts as long as the recording's own live rewind window, from the recording's start.
 	DVRChapterModeWindowSized DVRChapterMode = "WINDOW_SIZED"
 	// UTC-only intervalSeconds buckets, anchored at unix epoch 0.
 	DVRChapterModeFixedInterval DVRChapterMode = "FIXED_INTERVAL"
-	// Rolling DVR only: recording still runs, but no historical chapter artifacts are produced.
+	// Live rewind only: viewers can rewind while live, but nothing is kept after the broadcast and no recording.ready fires.
 	DVRChapterModeNone DVRChapterMode = "NONE"
 )
 
@@ -28474,8 +28481,9 @@ type GeographicDistributionDefaultFieldsStream struct {
 	PushTargets []GeographicDistributionDefaultFieldsStreamPushTargetsPushTarget `json:"pushTargets"`
 	// Playback access policy. null/PUBLIC = anyone with the playbackId can watch.
 	PlaybackPolicy *GeographicDistributionDefaultFieldsStreamPlaybackPolicy `json:"playbackPolicy"`
-	// DVR chapter rotation mode. Snapshotted onto the DVR artifact at StartDVR;
-	// changes take effect on the next recording. null/NONE = chapters disabled.
+	// How saved recordings are split into chapters. Snapshotted when a recording
+	// starts; changes apply from the next broadcast. NONE = live rewind only,
+	// nothing kept after the broadcast.
 	DvrChapterMode *DVRChapterMode `json:"dvrChapterMode"`
 	// Chapter interval in seconds. Required when dvrChapterMode = FIXED_INTERVAL,
 	// ignored otherwise. Minimum 3600 (1 hour).
@@ -36375,13 +36383,15 @@ func (v *GetDVRChapterDvrChapterDVRChapter) GetLastFailureReason() *string {
 type GetDVRChapterResponse struct {
 	// Retrieve a single DVR chapter, including its finalized playbackId.
 	//
-	// Chapters are produced by the finalization queue as canonical .mkv
-	// VOD artifacts. Historical chapter mode is configured at the Stream level
-	// (Stream.dvrChapterMode) and snapshotted at StartDVR. Modes:
-	// - WINDOW_SIZED: sequential fixed-length chapters of size
-	// tier.MaxWindowSeconds since the recording's start.
+	// Chapters are the saved parts of a recording, produced by the
+	// finalization queue as canonical .mkv VOD artifacts. The chapter mode is
+	// configured at the Stream level (Stream.dvrChapterMode) and snapshotted
+	// when the recording starts. Modes:
+	// - WINDOW_SIZED (default): sequential parts as long as the recording's
+	// own live rewind window, from the recording's start.
 	// - FIXED_INTERVAL: UTC-only buckets of intervalSeconds, anchored at
 	// unix epoch 0.
+	// A NONE recording keeps live rewind only and has no chapters.
 	DvrChapter *GetDVRChapterDvrChapterDVRChapter `json:"dvrChapter"`
 }
 
@@ -79259,8 +79269,9 @@ type ProcessingUsageRecordDefaultFieldsStream struct {
 	PushTargets []ProcessingUsageRecordDefaultFieldsStreamPushTargetsPushTarget `json:"pushTargets"`
 	// Playback access policy. null/PUBLIC = anyone with the playbackId can watch.
 	PlaybackPolicy *ProcessingUsageRecordDefaultFieldsStreamPlaybackPolicy `json:"playbackPolicy"`
-	// DVR chapter rotation mode. Snapshotted onto the DVR artifact at StartDVR;
-	// changes take effect on the next recording. null/NONE = chapters disabled.
+	// How saved recordings are split into chapters. Snapshotted when a recording
+	// starts; changes apply from the next broadcast. NONE = live rewind only,
+	// nothing kept after the broadcast.
 	DvrChapterMode *DVRChapterMode `json:"dvrChapterMode"`
 	// Chapter interval in seconds. Required when dvrChapterMode = FIXED_INTERVAL,
 	// ignored otherwise. Minimum 3600 (1 hour).
@@ -80051,8 +80062,9 @@ type ProcessingUsageRecordInNodeDefaultFieldsStream struct {
 	PushTargets []ProcessingUsageRecordInNodeDefaultFieldsStreamPushTargetsPushTarget `json:"pushTargets"`
 	// Playback access policy. null/PUBLIC = anyone with the playbackId can watch.
 	PlaybackPolicy *ProcessingUsageRecordInNodeDefaultFieldsStreamPlaybackPolicy `json:"playbackPolicy"`
-	// DVR chapter rotation mode. Snapshotted onto the DVR artifact at StartDVR;
-	// changes take effect on the next recording. null/NONE = chapters disabled.
+	// How saved recordings are split into chapters. Snapshotted when a recording
+	// starts; changes apply from the next broadcast. NONE = live rewind only,
+	// nothing kept after the broadcast.
 	DvrChapterMode *DVRChapterMode `json:"dvrChapterMode"`
 	// Chapter interval in seconds. Required when dvrChapterMode = FIXED_INTERVAL,
 	// ignored otherwise. Minimum 3600 (1 hour).
@@ -81234,8 +81246,9 @@ type QualityTierDailyDefaultFieldsStream struct {
 	PushTargets []QualityTierDailyDefaultFieldsStreamPushTargetsPushTarget `json:"pushTargets"`
 	// Playback access policy. null/PUBLIC = anyone with the playbackId can watch.
 	PlaybackPolicy *QualityTierDailyDefaultFieldsStreamPlaybackPolicy `json:"playbackPolicy"`
-	// DVR chapter rotation mode. Snapshotted onto the DVR artifact at StartDVR;
-	// changes take effect on the next recording. null/NONE = chapters disabled.
+	// How saved recordings are split into chapters. Snapshotted when a recording
+	// starts; changes apply from the next broadcast. NONE = live rewind only,
+	// nothing kept after the broadcast.
 	DvrChapterMode *DVRChapterMode `json:"dvrChapterMode"`
 	// Chapter interval in seconds. Required when dvrChapterMode = FIXED_INTERVAL,
 	// ignored otherwise. Minimum 3600 (1 hour).
@@ -81818,8 +81831,9 @@ type RebufferingEventDefaultFieldsStream struct {
 	PushTargets []RebufferingEventDefaultFieldsStreamPushTargetsPushTarget `json:"pushTargets"`
 	// Playback access policy. null/PUBLIC = anyone with the playbackId can watch.
 	PlaybackPolicy *RebufferingEventDefaultFieldsStreamPlaybackPolicy `json:"playbackPolicy"`
-	// DVR chapter rotation mode. Snapshotted onto the DVR artifact at StartDVR;
-	// changes take effect on the next recording. null/NONE = chapters disabled.
+	// How saved recordings are split into chapters. Snapshotted when a recording
+	// starts; changes apply from the next broadcast. NONE = live rewind only,
+	// nothing kept after the broadcast.
 	DvrChapterMode *DVRChapterMode `json:"dvrChapterMode"`
 	// Chapter interval in seconds. Required when dvrChapterMode = FIXED_INTERVAL,
 	// ignored otherwise. Minimum 3600 (1 hour).
@@ -89119,8 +89133,9 @@ type RoutingEventDefaultFieldsStream struct {
 	PushTargets []RoutingEventDefaultFieldsStreamPushTargetsPushTarget `json:"pushTargets"`
 	// Playback access policy. null/PUBLIC = anyone with the playbackId can watch.
 	PlaybackPolicy *RoutingEventDefaultFieldsStreamPlaybackPolicy `json:"playbackPolicy"`
-	// DVR chapter rotation mode. Snapshotted onto the DVR artifact at StartDVR;
-	// changes take effect on the next recording. null/NONE = chapters disabled.
+	// How saved recordings are split into chapters. Snapshotted when a recording
+	// starts; changes apply from the next broadcast. NONE = live rewind only,
+	// nothing kept after the broadcast.
 	DvrChapterMode *DVRChapterMode `json:"dvrChapterMode"`
 	// Chapter interval in seconds. Required when dvrChapterMode = FIXED_INTERVAL,
 	// ignored otherwise. Minimum 3600 (1 hour).
@@ -96091,8 +96106,9 @@ type StorageEventDefaultFieldsStream struct {
 	PushTargets []StorageEventDefaultFieldsStreamPushTargetsPushTarget `json:"pushTargets"`
 	// Playback access policy. null/PUBLIC = anyone with the playbackId can watch.
 	PlaybackPolicy *StorageEventDefaultFieldsStreamPlaybackPolicy `json:"playbackPolicy"`
-	// DVR chapter rotation mode. Snapshotted onto the DVR artifact at StartDVR;
-	// changes take effect on the next recording. null/NONE = chapters disabled.
+	// How saved recordings are split into chapters. Snapshotted when a recording
+	// starts; changes apply from the next broadcast. NONE = live rewind only,
+	// nothing kept after the broadcast.
 	DvrChapterMode *DVRChapterMode `json:"dvrChapterMode"`
 	// Chapter interval in seconds. Required when dvrChapterMode = FIXED_INTERVAL,
 	// ignored otherwise. Minimum 3600 (1 hour).
@@ -96657,8 +96673,9 @@ type StorageEventInNodeDefaultFieldsStream struct {
 	PushTargets []StorageEventInNodeDefaultFieldsStreamPushTargetsPushTarget `json:"pushTargets"`
 	// Playback access policy. null/PUBLIC = anyone with the playbackId can watch.
 	PlaybackPolicy *StorageEventInNodeDefaultFieldsStreamPlaybackPolicy `json:"playbackPolicy"`
-	// DVR chapter rotation mode. Snapshotted onto the DVR artifact at StartDVR;
-	// changes take effect on the next recording. null/NONE = chapters disabled.
+	// How saved recordings are split into chapters. Snapshotted when a recording
+	// starts; changes apply from the next broadcast. NONE = live rewind only,
+	// nothing kept after the broadcast.
 	DvrChapterMode *DVRChapterMode `json:"dvrChapterMode"`
 	// Chapter interval in seconds. Required when dvrChapterMode = FIXED_INTERVAL,
 	// ignored otherwise. Minimum 3600 (1 hour).
@@ -97273,8 +97290,9 @@ type StreamAnalyticsDailyDefaultFieldsStream struct {
 	PushTargets []StreamAnalyticsDailyDefaultFieldsStreamPushTargetsPushTarget `json:"pushTargets"`
 	// Playback access policy. null/PUBLIC = anyone with the playbackId can watch.
 	PlaybackPolicy *StreamAnalyticsDailyDefaultFieldsStreamPlaybackPolicy `json:"playbackPolicy"`
-	// DVR chapter rotation mode. Snapshotted onto the DVR artifact at StartDVR;
-	// changes take effect on the next recording. null/NONE = chapters disabled.
+	// How saved recordings are split into chapters. Snapshotted when a recording
+	// starts; changes apply from the next broadcast. NONE = live rewind only,
+	// nothing kept after the broadcast.
 	DvrChapterMode *DVRChapterMode `json:"dvrChapterMode"`
 	// Chapter interval in seconds. Required when dvrChapterMode = FIXED_INTERVAL,
 	// ignored otherwise. Minimum 3600 (1 hour).
@@ -98016,8 +98034,9 @@ type StreamAnalyticsSummaryDefaultFieldsStream struct {
 	PushTargets []StreamAnalyticsSummaryDefaultFieldsStreamPushTargetsPushTarget `json:"pushTargets"`
 	// Playback access policy. null/PUBLIC = anyone with the playbackId can watch.
 	PlaybackPolicy *StreamAnalyticsSummaryDefaultFieldsStreamPlaybackPolicy `json:"playbackPolicy"`
-	// DVR chapter rotation mode. Snapshotted onto the DVR artifact at StartDVR;
-	// changes take effect on the next recording. null/NONE = chapters disabled.
+	// How saved recordings are split into chapters. Snapshotted when a recording
+	// starts; changes apply from the next broadcast. NONE = live rewind only,
+	// nothing kept after the broadcast.
 	DvrChapterMode *DVRChapterMode `json:"dvrChapterMode"`
 	// Chapter interval in seconds. Required when dvrChapterMode = FIXED_INTERVAL,
 	// ignored otherwise. Minimum 3600 (1 hour).
@@ -98607,8 +98626,9 @@ type StreamConnectionHourlyDefaultFieldsStream struct {
 	PushTargets []StreamConnectionHourlyDefaultFieldsStreamPushTargetsPushTarget `json:"pushTargets"`
 	// Playback access policy. null/PUBLIC = anyone with the playbackId can watch.
 	PlaybackPolicy *StreamConnectionHourlyDefaultFieldsStreamPlaybackPolicy `json:"playbackPolicy"`
-	// DVR chapter rotation mode. Snapshotted onto the DVR artifact at StartDVR;
-	// changes take effect on the next recording. null/NONE = chapters disabled.
+	// How saved recordings are split into chapters. Snapshotted when a recording
+	// starts; changes apply from the next broadcast. NONE = live rewind only,
+	// nothing kept after the broadcast.
 	DvrChapterMode *DVRChapterMode `json:"dvrChapterMode"`
 	// Chapter interval in seconds. Required when dvrChapterMode = FIXED_INTERVAL,
 	// ignored otherwise. Minimum 3600 (1 hour).
@@ -99303,8 +99323,9 @@ type StreamEventDefaultFieldsStream struct {
 	PushTargets []StreamEventDefaultFieldsStreamPushTargetsPushTarget `json:"pushTargets"`
 	// Playback access policy. null/PUBLIC = anyone with the playbackId can watch.
 	PlaybackPolicy *StreamEventDefaultFieldsStreamPlaybackPolicy `json:"playbackPolicy"`
-	// DVR chapter rotation mode. Snapshotted onto the DVR artifact at StartDVR;
-	// changes take effect on the next recording. null/NONE = chapters disabled.
+	// How saved recordings are split into chapters. Snapshotted when a recording
+	// starts; changes apply from the next broadcast. NONE = live rewind only,
+	// nothing kept after the broadcast.
 	DvrChapterMode *DVRChapterMode `json:"dvrChapterMode"`
 	// Chapter interval in seconds. Required when dvrChapterMode = FIXED_INTERVAL,
 	// ignored otherwise. Minimum 3600 (1 hour).
@@ -99953,8 +99974,9 @@ type StreamEventInNodeDefaultFieldsStream struct {
 	PushTargets []StreamEventInNodeDefaultFieldsStreamPushTargetsPushTarget `json:"pushTargets"`
 	// Playback access policy. null/PUBLIC = anyone with the playbackId can watch.
 	PlaybackPolicy *StreamEventInNodeDefaultFieldsStreamPlaybackPolicy `json:"playbackPolicy"`
-	// DVR chapter rotation mode. Snapshotted onto the DVR artifact at StartDVR;
-	// changes take effect on the next recording. null/NONE = chapters disabled.
+	// How saved recordings are split into chapters. Snapshotted when a recording
+	// starts; changes apply from the next broadcast. NONE = live rewind only,
+	// nothing kept after the broadcast.
 	DvrChapterMode *DVRChapterMode `json:"dvrChapterMode"`
 	// Chapter interval in seconds. Required when dvrChapterMode = FIXED_INTERVAL,
 	// ignored otherwise. Minimum 3600 (1 hour).
@@ -100490,8 +100512,9 @@ type StreamFields struct {
 	CreatedAt time.Time `json:"createdAt"`
 	// When this stream was last modified.
 	UpdatedAt time.Time `json:"updatedAt"`
-	// DVR chapter rotation mode. Snapshotted onto the DVR artifact at StartDVR;
-	// changes take effect on the next recording. null/NONE = chapters disabled.
+	// How saved recordings are split into chapters. Snapshotted when a recording
+	// starts; changes apply from the next broadcast. NONE = live rewind only,
+	// nothing kept after the broadcast.
 	DvrChapterMode *DVRChapterMode `json:"dvrChapterMode"`
 	// Chapter interval in seconds. Required when dvrChapterMode = FIXED_INTERVAL,
 	// ignored otherwise. Minimum 3600 (1 hour).
@@ -100975,8 +100998,9 @@ type StreamHealthMetricDefaultFieldsStream struct {
 	PushTargets []StreamHealthMetricDefaultFieldsStreamPushTargetsPushTarget `json:"pushTargets"`
 	// Playback access policy. null/PUBLIC = anyone with the playbackId can watch.
 	PlaybackPolicy *StreamHealthMetricDefaultFieldsStreamPlaybackPolicy `json:"playbackPolicy"`
-	// DVR chapter rotation mode. Snapshotted onto the DVR artifact at StartDVR;
-	// changes take effect on the next recording. null/NONE = chapters disabled.
+	// How saved recordings are split into chapters. Snapshotted when a recording
+	// starts; changes apply from the next broadcast. NONE = live rewind only,
+	// nothing kept after the broadcast.
 	DvrChapterMode *DVRChapterMode `json:"dvrChapterMode"`
 	// Chapter interval in seconds. Required when dvrChapterMode = FIXED_INTERVAL,
 	// ignored otherwise. Minimum 3600 (1 hour).
@@ -101629,8 +101653,9 @@ type StreamHealthMetricInNodeDefaultFieldsStream struct {
 	PushTargets []StreamHealthMetricInNodeDefaultFieldsStreamPushTargetsPushTarget `json:"pushTargets"`
 	// Playback access policy. null/PUBLIC = anyone with the playbackId can watch.
 	PlaybackPolicy *StreamHealthMetricInNodeDefaultFieldsStreamPlaybackPolicy `json:"playbackPolicy"`
-	// DVR chapter rotation mode. Snapshotted onto the DVR artifact at StartDVR;
-	// changes take effect on the next recording. null/NONE = chapters disabled.
+	// How saved recordings are split into chapters. Snapshotted when a recording
+	// starts; changes apply from the next broadcast. NONE = live rewind only,
+	// nothing kept after the broadcast.
 	DvrChapterMode *DVRChapterMode `json:"dvrChapterMode"`
 	// Chapter interval in seconds. Required when dvrChapterMode = FIXED_INTERVAL,
 	// ignored otherwise. Minimum 3600 (1 hour).
@@ -102216,8 +102241,9 @@ type StreamInNodeDefaultFields struct {
 	PushTargets []StreamInNodeDefaultFieldsPushTargetsPushTarget `json:"pushTargets"`
 	// Playback access policy. null/PUBLIC = anyone with the playbackId can watch.
 	PlaybackPolicy *StreamInNodeDefaultFieldsPlaybackPolicy `json:"playbackPolicy"`
-	// DVR chapter rotation mode. Snapshotted onto the DVR artifact at StartDVR;
-	// changes take effect on the next recording. null/NONE = chapters disabled.
+	// How saved recordings are split into chapters. Snapshotted when a recording
+	// starts; changes apply from the next broadcast. NONE = live rewind only,
+	// nothing kept after the broadcast.
 	DvrChapterMode *DVRChapterMode `json:"dvrChapterMode"`
 	// Chapter interval in seconds. Required when dvrChapterMode = FIXED_INTERVAL,
 	// ignored otherwise. Minimum 3600 (1 hour).
@@ -104031,8 +104057,9 @@ type TenantEventDefaultFieldsConnectionEventStream struct {
 	CreatedAt time.Time `json:"createdAt"`
 	// When this stream was last modified.
 	UpdatedAt time.Time `json:"updatedAt"`
-	// DVR chapter rotation mode. Snapshotted onto the DVR artifact at StartDVR;
-	// changes take effect on the next recording. null/NONE = chapters disabled.
+	// How saved recordings are split into chapters. Snapshotted when a recording
+	// starts; changes apply from the next broadcast. NONE = live rewind only,
+	// nothing kept after the broadcast.
 	DvrChapterMode *DVRChapterMode `json:"dvrChapterMode"`
 	// Chapter interval in seconds. Required when dvrChapterMode = FIXED_INTERVAL,
 	// ignored otherwise. Minimum 3600 (1 hour).
@@ -104486,8 +104513,9 @@ type TenantEventDefaultFieldsProcessingEventProcessingUsageRecordStream struct {
 	CreatedAt time.Time `json:"createdAt"`
 	// When this stream was last modified.
 	UpdatedAt time.Time `json:"updatedAt"`
-	// DVR chapter rotation mode. Snapshotted onto the DVR artifact at StartDVR;
-	// changes take effect on the next recording. null/NONE = chapters disabled.
+	// How saved recordings are split into chapters. Snapshotted when a recording
+	// starts; changes apply from the next broadcast. NONE = live rewind only,
+	// nothing kept after the broadcast.
 	DvrChapterMode *DVRChapterMode `json:"dvrChapterMode"`
 	// Chapter interval in seconds. Required when dvrChapterMode = FIXED_INTERVAL,
 	// ignored otherwise. Minimum 3600 (1 hour).
@@ -104743,8 +104771,9 @@ type TenantEventDefaultFieldsRoutingEventStream struct {
 	CreatedAt time.Time `json:"createdAt"`
 	// When this stream was last modified.
 	UpdatedAt time.Time `json:"updatedAt"`
-	// DVR chapter rotation mode. Snapshotted onto the DVR artifact at StartDVR;
-	// changes take effect on the next recording. null/NONE = chapters disabled.
+	// How saved recordings are split into chapters. Snapshotted when a recording
+	// starts; changes apply from the next broadcast. NONE = live rewind only,
+	// nothing kept after the broadcast.
 	DvrChapterMode *DVRChapterMode `json:"dvrChapterMode"`
 	// Chapter interval in seconds. Required when dvrChapterMode = FIXED_INTERVAL,
 	// ignored otherwise. Minimum 3600 (1 hour).
@@ -104914,8 +104943,9 @@ type TenantEventDefaultFieldsStorageEventStream struct {
 	CreatedAt time.Time `json:"createdAt"`
 	// When this stream was last modified.
 	UpdatedAt time.Time `json:"updatedAt"`
-	// DVR chapter rotation mode. Snapshotted onto the DVR artifact at StartDVR;
-	// changes take effect on the next recording. null/NONE = chapters disabled.
+	// How saved recordings are split into chapters. Snapshotted when a recording
+	// starts; changes apply from the next broadcast. NONE = live rewind only,
+	// nothing kept after the broadcast.
 	DvrChapterMode *DVRChapterMode `json:"dvrChapterMode"`
 	// Chapter interval in seconds. Required when dvrChapterMode = FIXED_INTERVAL,
 	// ignored otherwise. Minimum 3600 (1 hour).
@@ -105245,8 +105275,9 @@ type TenantEventDefaultFieldsStreamEventStream struct {
 	CreatedAt time.Time `json:"createdAt"`
 	// When this stream was last modified.
 	UpdatedAt time.Time `json:"updatedAt"`
-	// DVR chapter rotation mode. Snapshotted onto the DVR artifact at StartDVR;
-	// changes take effect on the next recording. null/NONE = chapters disabled.
+	// How saved recordings are split into chapters. Snapshotted when a recording
+	// starts; changes apply from the next broadcast. NONE = live rewind only,
+	// nothing kept after the broadcast.
 	DvrChapterMode *DVRChapterMode `json:"dvrChapterMode"`
 	// Chapter interval in seconds. Required when dvrChapterMode = FIXED_INTERVAL,
 	// ignored otherwise. Minimum 3600 (1 hour).
@@ -105472,8 +105503,9 @@ type TenantEventDefaultFieldsTrackListUpdateStream struct {
 	CreatedAt time.Time `json:"createdAt"`
 	// When this stream was last modified.
 	UpdatedAt time.Time `json:"updatedAt"`
-	// DVR chapter rotation mode. Snapshotted onto the DVR artifact at StartDVR;
-	// changes take effect on the next recording. null/NONE = chapters disabled.
+	// How saved recordings are split into chapters. Snapshotted when a recording
+	// starts; changes apply from the next broadcast. NONE = live rewind only,
+	// nothing kept after the broadcast.
 	DvrChapterMode *DVRChapterMode `json:"dvrChapterMode"`
 	// Chapter interval in seconds. Required when dvrChapterMode = FIXED_INTERVAL,
 	// ignored otherwise. Minimum 3600 (1 hour).
@@ -105729,8 +105761,9 @@ type TenantEventDefaultFieldsViewerMetricsStream struct {
 	CreatedAt time.Time `json:"createdAt"`
 	// When this stream was last modified.
 	UpdatedAt time.Time `json:"updatedAt"`
-	// DVR chapter rotation mode. Snapshotted onto the DVR artifact at StartDVR;
-	// changes take effect on the next recording. null/NONE = chapters disabled.
+	// How saved recordings are split into chapters. Snapshotted when a recording
+	// starts; changes apply from the next broadcast. NONE = live rewind only,
+	// nothing kept after the broadcast.
 	DvrChapterMode *DVRChapterMode `json:"dvrChapterMode"`
 	// Chapter interval in seconds. Required when dvrChapterMode = FIXED_INTERVAL,
 	// ignored otherwise. Minimum 3600 (1 hour).
@@ -109423,8 +109456,9 @@ type TrackListEventDefaultFieldsStream struct {
 	PushTargets []TrackListEventDefaultFieldsStreamPushTargetsPushTarget `json:"pushTargets"`
 	// Playback access policy. null/PUBLIC = anyone with the playbackId can watch.
 	PlaybackPolicy *TrackListEventDefaultFieldsStreamPlaybackPolicy `json:"playbackPolicy"`
-	// DVR chapter rotation mode. Snapshotted onto the DVR artifact at StartDVR;
-	// changes take effect on the next recording. null/NONE = chapters disabled.
+	// How saved recordings are split into chapters. Snapshotted when a recording
+	// starts; changes apply from the next broadcast. NONE = live rewind only,
+	// nothing kept after the broadcast.
 	DvrChapterMode *DVRChapterMode `json:"dvrChapterMode"`
 	// Chapter interval in seconds. Required when dvrChapterMode = FIXED_INTERVAL,
 	// ignored otherwise. Minimum 3600 (1 hour).
@@ -110019,8 +110053,9 @@ type TrackListEventInNodeDefaultFieldsStream struct {
 	PushTargets []TrackListEventInNodeDefaultFieldsStreamPushTargetsPushTarget `json:"pushTargets"`
 	// Playback access policy. null/PUBLIC = anyone with the playbackId can watch.
 	PlaybackPolicy *TrackListEventInNodeDefaultFieldsStreamPlaybackPolicy `json:"playbackPolicy"`
-	// DVR chapter rotation mode. Snapshotted onto the DVR artifact at StartDVR;
-	// changes take effect on the next recording. null/NONE = chapters disabled.
+	// How saved recordings are split into chapters. Snapshotted when a recording
+	// starts; changes apply from the next broadcast. NONE = live rewind only,
+	// nothing kept after the broadcast.
 	DvrChapterMode *DVRChapterMode `json:"dvrChapterMode"`
 	// Chapter interval in seconds. Required when dvrChapterMode = FIXED_INTERVAL,
 	// ignored otherwise. Minimum 3600 (1 hour).
@@ -110703,8 +110738,9 @@ type TrackListUpdateDefaultFieldsStream struct {
 	PushTargets []TrackListUpdateDefaultFieldsStreamPushTargetsPushTarget `json:"pushTargets"`
 	// Playback access policy. null/PUBLIC = anyone with the playbackId can watch.
 	PlaybackPolicy *TrackListUpdateDefaultFieldsStreamPlaybackPolicy `json:"playbackPolicy"`
-	// DVR chapter rotation mode. Snapshotted onto the DVR artifact at StartDVR;
-	// changes take effect on the next recording. null/NONE = chapters disabled.
+	// How saved recordings are split into chapters. Snapshotted when a recording
+	// starts; changes apply from the next broadcast. NONE = live rewind only,
+	// nothing kept after the broadcast.
 	DvrChapterMode *DVRChapterMode `json:"dvrChapterMode"`
 	// Chapter interval in seconds. Required when dvrChapterMode = FIXED_INTERVAL,
 	// ignored otherwise. Minimum 3600 (1 hour).
@@ -113328,13 +113364,14 @@ type UpdateStreamInput struct {
 	PullSource *PullSourceInput `json:"pullSource"`
 	// Replace where the source may be ingested. Omitted keeps the current location. Rejected for managed streams.
 	SourceLocation *SourceLocationInput `json:"sourceLocation"`
-	// Historical chapter rotation mode. Snapshotted onto the DVR artifact
-	// at StartDVR; changes take effect on the next recording, not in-flight.
-	// NONE means rolling DVR playback only: recording still runs, but no
-	// finalized chapter artifacts are produced for historical replay.
+	// How saved recordings are split into chapters. Snapshotted when a
+	// recording starts; changes apply from the next broadcast, not to a
+	// recording in progress. NONE keeps live rewind only: viewers can rewind
+	// while live, but nothing is kept after the broadcast.
 	DvrChapterMode *DVRChapterMode `json:"dvrChapterMode"`
 	// Chapter interval in seconds. Required when dvrChapterMode =
-	// FIXED_INTERVAL. Minimum 3600 (1 hour).
+	// FIXED_INTERVAL. Minimum 3600 (1 hour). Send 0 with any other mode to
+	// clear a stored interval.
 	DvrChapterIntervalSeconds *int `json:"dvrChapterIntervalSeconds"`
 	// Per-stream Skipper monitoring override. INHERIT follows the tenant tier.
 	Monitoring *MonitoringToggle `json:"monitoring"`
@@ -115169,8 +115206,9 @@ type ViewerCountBucketDefaultFieldsStream struct {
 	PushTargets []ViewerCountBucketDefaultFieldsStreamPushTargetsPushTarget `json:"pushTargets"`
 	// Playback access policy. null/PUBLIC = anyone with the playbackId can watch.
 	PlaybackPolicy *ViewerCountBucketDefaultFieldsStreamPlaybackPolicy `json:"playbackPolicy"`
-	// DVR chapter rotation mode. Snapshotted onto the DVR artifact at StartDVR;
-	// changes take effect on the next recording. null/NONE = chapters disabled.
+	// How saved recordings are split into chapters. Snapshotted when a recording
+	// starts; changes apply from the next broadcast. NONE = live rewind only,
+	// nothing kept after the broadcast.
 	DvrChapterMode *DVRChapterMode `json:"dvrChapterMode"`
 	// Chapter interval in seconds. Required when dvrChapterMode = FIXED_INTERVAL,
 	// ignored otherwise. Minimum 3600 (1 hour).
@@ -115841,8 +115879,9 @@ type ViewerGeographicDefaultFieldsStream struct {
 	PushTargets []ViewerGeographicDefaultFieldsStreamPushTargetsPushTarget `json:"pushTargets"`
 	// Playback access policy. null/PUBLIC = anyone with the playbackId can watch.
 	PlaybackPolicy *ViewerGeographicDefaultFieldsStreamPlaybackPolicy `json:"playbackPolicy"`
-	// DVR chapter rotation mode. Snapshotted onto the DVR artifact at StartDVR;
-	// changes take effect on the next recording. null/NONE = chapters disabled.
+	// How saved recordings are split into chapters. Snapshotted when a recording
+	// starts; changes apply from the next broadcast. NONE = live rewind only,
+	// nothing kept after the broadcast.
 	DvrChapterMode *DVRChapterMode `json:"dvrChapterMode"`
 	// Chapter interval in seconds. Required when dvrChapterMode = FIXED_INTERVAL,
 	// ignored otherwise. Minimum 3600 (1 hour).
@@ -116397,8 +116436,9 @@ type ViewerHoursHourlyDefaultFieldsStream struct {
 	PushTargets []ViewerHoursHourlyDefaultFieldsStreamPushTargetsPushTarget `json:"pushTargets"`
 	// Playback access policy. null/PUBLIC = anyone with the playbackId can watch.
 	PlaybackPolicy *ViewerHoursHourlyDefaultFieldsStreamPlaybackPolicy `json:"playbackPolicy"`
-	// DVR chapter rotation mode. Snapshotted onto the DVR artifact at StartDVR;
-	// changes take effect on the next recording. null/NONE = chapters disabled.
+	// How saved recordings are split into chapters. Snapshotted when a recording
+	// starts; changes apply from the next broadcast. NONE = live rewind only,
+	// nothing kept after the broadcast.
 	DvrChapterMode *DVRChapterMode `json:"dvrChapterMode"`
 	// Chapter interval in seconds. Required when dvrChapterMode = FIXED_INTERVAL,
 	// ignored otherwise. Minimum 3600 (1 hour).
@@ -116961,8 +117001,9 @@ type ViewerHoursHourlyInNodeDefaultFieldsStream struct {
 	PushTargets []ViewerHoursHourlyInNodeDefaultFieldsStreamPushTargetsPushTarget `json:"pushTargets"`
 	// Playback access policy. null/PUBLIC = anyone with the playbackId can watch.
 	PlaybackPolicy *ViewerHoursHourlyInNodeDefaultFieldsStreamPlaybackPolicy `json:"playbackPolicy"`
-	// DVR chapter rotation mode. Snapshotted onto the DVR artifact at StartDVR;
-	// changes take effect on the next recording. null/NONE = chapters disabled.
+	// How saved recordings are split into chapters. Snapshotted when a recording
+	// starts; changes apply from the next broadcast. NONE = live rewind only,
+	// nothing kept after the broadcast.
 	DvrChapterMode *DVRChapterMode `json:"dvrChapterMode"`
 	// Chapter interval in seconds. Required when dvrChapterMode = FIXED_INTERVAL,
 	// ignored otherwise. Minimum 3600 (1 hour).
@@ -117589,8 +117630,9 @@ type ViewerMetricsDefaultFieldsStream struct {
 	PushTargets []ViewerMetricsDefaultFieldsStreamPushTargetsPushTarget `json:"pushTargets"`
 	// Playback access policy. null/PUBLIC = anyone with the playbackId can watch.
 	PlaybackPolicy *ViewerMetricsDefaultFieldsStreamPlaybackPolicy `json:"playbackPolicy"`
-	// DVR chapter rotation mode. Snapshotted onto the DVR artifact at StartDVR;
-	// changes take effect on the next recording. null/NONE = chapters disabled.
+	// How saved recordings are split into chapters. Snapshotted when a recording
+	// starts; changes apply from the next broadcast. NONE = live rewind only,
+	// nothing kept after the broadcast.
 	DvrChapterMode *DVRChapterMode `json:"dvrChapterMode"`
 	// Chapter interval in seconds. Required when dvrChapterMode = FIXED_INTERVAL,
 	// ignored otherwise. Minimum 3600 (1 hour).
@@ -118175,8 +118217,9 @@ type ViewerSessionDefaultFieldsStream struct {
 	PushTargets []ViewerSessionDefaultFieldsStreamPushTargetsPushTarget `json:"pushTargets"`
 	// Playback access policy. null/PUBLIC = anyone with the playbackId can watch.
 	PlaybackPolicy *ViewerSessionDefaultFieldsStreamPlaybackPolicy `json:"playbackPolicy"`
-	// DVR chapter rotation mode. Snapshotted onto the DVR artifact at StartDVR;
-	// changes take effect on the next recording. null/NONE = chapters disabled.
+	// How saved recordings are split into chapters. Snapshotted when a recording
+	// starts; changes apply from the next broadcast. NONE = live rewind only,
+	// nothing kept after the broadcast.
 	DvrChapterMode *DVRChapterMode `json:"dvrChapterMode"`
 	// Chapter interval in seconds. Required when dvrChapterMode = FIXED_INTERVAL,
 	// ignored otherwise. Minimum 3600 (1 hour).
@@ -118771,8 +118814,9 @@ type ViewerSessionInNodeDefaultFieldsStream struct {
 	PushTargets []ViewerSessionInNodeDefaultFieldsStreamPushTargetsPushTarget `json:"pushTargets"`
 	// Playback access policy. null/PUBLIC = anyone with the playbackId can watch.
 	PlaybackPolicy *ViewerSessionInNodeDefaultFieldsStreamPlaybackPolicy `json:"playbackPolicy"`
-	// DVR chapter rotation mode. Snapshotted onto the DVR artifact at StartDVR;
-	// changes take effect on the next recording. null/NONE = chapters disabled.
+	// How saved recordings are split into chapters. Snapshotted when a recording
+	// starts; changes apply from the next broadcast. NONE = live rewind only,
+	// nothing kept after the broadcast.
 	DvrChapterMode *DVRChapterMode `json:"dvrChapterMode"`
 	// Chapter interval in seconds. Required when dvrChapterMode = FIXED_INTERVAL,
 	// ignored otherwise. Minimum 3600 (1 hour).
@@ -120595,7 +120639,7 @@ type WebhookDeliveryDefaultFields struct {
 	LastReplayedAt *time.Time `json:"lastReplayedAt"`
 	CreatedAt      time.Time  `json:"createdAt"`
 	UpdatedAt      time.Time  `json:"updatedAt"`
-	// Every HTTP attempt, oldest first. Loaded by the webhookDelivery query; empty in connections.
+	// Every HTTP attempt, oldest first, including attempts before the last replay.
 	AttemptHistory []WebhookDeliveryDefaultFieldsAttemptHistoryWebhookDeliveryAttempt `json:"attemptHistory"`
 }
 
@@ -121074,7 +121118,7 @@ type WebhookTestResultDefaultFieldsDeliveryWebhookDelivery struct {
 	LastReplayedAt *time.Time `json:"lastReplayedAt"`
 	CreatedAt      time.Time  `json:"createdAt"`
 	UpdatedAt      time.Time  `json:"updatedAt"`
-	// Every HTTP attempt, oldest first. Loaded by the webhookDelivery query; empty in connections.
+	// Every HTTP attempt, oldest first, including attempts before the last replay.
 	AttemptHistory []WebhookTestResultDefaultFieldsDeliveryWebhookDeliveryAttemptHistoryWebhookDeliveryAttempt `json:"attemptHistory"`
 }
 
@@ -129290,13 +129334,16 @@ query GetDVRChapter ($dvrId: ID!, $startMs: Float!, $endMs: Float!, $mode: DVRCh
 //
 // Retrieve a single DVR chapter, including its finalized playbackId.
 //
-// Chapters are produced by the finalization queue as canonical .mkv
-// VOD artifacts. Historical chapter mode is configured at the Stream level
-// (Stream.dvrChapterMode) and snapshotted at StartDVR. Modes:
-//   - WINDOW_SIZED: sequential fixed-length chapters of size
-//     tier.MaxWindowSeconds since the recording's start.
+// Chapters are the saved parts of a recording, produced by the
+// finalization queue as canonical .mkv VOD artifacts. The chapter mode is
+// configured at the Stream level (Stream.dvrChapterMode) and snapshotted
+// when the recording starts. Modes:
+//   - WINDOW_SIZED (default): sequential parts as long as the recording's
+//     own live rewind window, from the recording's start.
 //   - FIXED_INTERVAL: UTC-only buckets of intervalSeconds, anchored at
 //     unix epoch 0.
+//
+// A NONE recording keeps live rewind only and has no chapters.
 func GetDVRChapter(
 	ctx_ context.Context,
 	client_ graphql.Client,

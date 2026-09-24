@@ -15924,13 +15924,15 @@ class GraphQLClient(BaseClient):
     ) -> GetDVRChapter:
         """Retrieve a single DVR chapter, including its finalized playbackId.
 
-        Chapters are produced by the finalization queue as canonical .mkv
-        VOD artifacts. Historical chapter mode is configured at the Stream level
-        (Stream.dvrChapterMode) and snapshotted at StartDVR. Modes:
-          - WINDOW_SIZED: sequential fixed-length chapters of size
-            tier.MaxWindowSeconds since the recording's start.
+        Chapters are the saved parts of a recording, produced by the
+        finalization queue as canonical .mkv VOD artifacts. The chapter mode is
+        configured at the Stream level (Stream.dvrChapterMode) and snapshotted
+        when the recording starts. Modes:
+          - WINDOW_SIZED (default): sequential parts as long as the recording's
+            own live rewind window, from the recording's start.
           - FIXED_INTERVAL: UTC-only buckets of intervalSeconds, anchored at
-            unix epoch 0."""
+            unix epoch 0.
+        A NONE recording keeps live rewind only and has no chapters."""
         query = gql("""
             query GetDVRChapter($dvrId: ID!, $startMs: Float!, $endMs: Float!, $mode: DVRChapterMode, $intervalSeconds: Int) {
               dvrChapter(

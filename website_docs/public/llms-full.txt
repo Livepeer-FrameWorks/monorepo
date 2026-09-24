@@ -276,6 +276,7 @@ Actions the agent can perform.
 | `update_asset_retention`              | Override retention for DVR, clip, or VOD                   | Owner/Admin + billing:write + Balance                                                 |
 | `reset_asset_retention`               | Reset asset retention to the cascade default               | Owner/Admin + billing:write + Confirm; API tokens also need mcp:high-risk             |
 | `create_vod_upload`                   | Start a VOD upload                                         | Auth + Balance                                                                        |
+| `import_vod_asset`                    | Import a video from a URL as a VOD asset                   | Auth + Balance                                                                        |
 | `get_vod_upload_status`               | Inspect uploaded and missing VOD parts                     | Auth                                                                                  |
 | `complete_vod_upload`                 | Finalize a VOD upload                                      | Auth + Balance                                                                        |
 | `abort_vod_upload`                    | Cancel an upload                                           | Auth; API tokens also need mcp:high-risk                                              |
@@ -464,6 +465,13 @@ fetches and validates the tenant's mandate before creating the subscription.
 - `filename` (required): Original filename
 - `size_bytes` (required): File size in bytes
 - `content_type`, `title`, `description`: Optional
+
+**import_vod_asset**
+
+- `url` (required): `https` or `http`; must be publicly reachable and support range requests
+- `filename`: Filename with a video extension; required when the URL path has none
+- `title`, `description`: Optional
+- Returns the asset in `UPLOADING`; the fetch and processing continue in the background
 
 **complete_vod_upload**
 
@@ -1947,6 +1955,74 @@ The operator-facing details live in [mesh networking](/operators/mesh-bootstrap)
 
 
 ---
+# Moving From Livepeer Studio: Webhooks, Playback Gates, and URL Import
+https://logbook.frameworks.network/blog/studio-parity
+
+Teams moving from Livepeer Studio told us two things take the longest to port: VOD and webhooks. We read
+Studio's source (it is open) and went through every webhook event, payload field, and playback-policy
+option it offers, then compared each one against FrameWorks. This release closes the gaps that would have
+forced a Studio integration to change its logic, and the [migration guide](/migrate/livepeer-studio) now
+maps each Studio event and field to its FrameWorks equivalent.
+
+## Playback IDs in events
+
+A Studio `stream.started` webhook carries the stream's playback ID. `stream.connected`, `stream.live`,
+and `stream.idle` now carry the stream's `playbackId` as well, taken from the stream when the event is
+emitted.
+
+Clip, recording, and upload events do not carry a playback ID. A playback ID can be rotated, so a copy
+inside an event, possibly retried or replayed hours later, can already be out of date. Key your records
+on `artifactId` and look up the current playback ID when you publish the video.
+
+## Recordings report start and stop
+
+Studio sends `recording.started` when a recording session begins and `recording.waiting` when it ends
+and is being processed. FrameWorks now sends `recording.started` when the recording node confirms it is
+capturing, and `recording.stopped` once capture ends and the recording is being finalized. `recording.ready`
+or `recording.failed` follows. A recording that never captured anything sends only `recording.failed`.
+
+## The playback webhook gate
+
+A webhook playback policy asks your server whether a viewer may watch. Three changes bring it in line
+with Studio:
+
+- **Any 2xx allows.** Previously only `200` did, so an endpoint answering `204` denied every viewer.
+- **`context`.** A policy can store a JSON object (up to 4 KiB), and it is sent back in every access
+  request. Studio calls this `webhookContext`; it lets your endpoint know which course or product a
+  video belongs to without its own lookup table.
+- **Allowed origins.** A JWT or webhook policy can list the websites allowed to embed the content. A
+  player copied onto another site is refused. The check runs when the player resolves the stream and
+  again when the media session opens on the edge. For the edge check, our MistServer build now passes
+  each viewer's `Origin` and `Referer` to the access decision, and requests from a different site get a
+  separate session.
+
+Allowed origins stop other websites from embedding your player. They are not DRM: a client that is not a
+browser can send any `Origin`. RTMP and SRT players send no origin, so they are refused unless the list
+contains `*`. Edges running a MistServer build from before this release cannot report the origin, so
+origin-restricted content does not play from them until they update.
+
+One Studio habit does not carry over directly: Studio players send a webhook gate's key as `accessKey`.
+On FrameWorks, pass it as `?jwt=<key>`, and your webhook receives it as `viewerToken`.
+
+## Import a video from a URL
+
+`importVodAsset` takes a public `https` or `http` URL and returns the asset with its playback ID right
+away. There is no upload step: the processing node reads the file from the URL through the same relay
+it uses for uploaded files, and processes it like an upload, with the same `upload.*` events. That
+relay connects only to public addresses, on every connection and redirect, and the source server must
+support range requests. For IPFS or Arweave content, pass a public gateway's https link. Details are in
+[Recordings, Clips & VOD](/builders/recordings#import-a-video-from-a-url).
+
+## What stays different
+
+Webhook signing uses [Standard Webhooks](/builders/webhooks) rather than Studio's `Livepeer-Signature`
+header. Retries run for about three days instead of one, and an endpoint that fails for five days is
+disabled. There is no Task API, no per-stream transcode profiles, and no `creatorId` or `userTags` on
+streams yet. The [gap list](/migrate/livepeer-studio#whats-not-yet-at-parity-and-whats-coming) in the
+migration guide tracks what is still missing.
+
+
+---
 # Webhooks and a Public Event Catalog
 https://logbook.frameworks.network/blog/webhooks-and-public-events
 
@@ -3238,6 +3314,7 @@ Structured result of a dry-run policy evaluation. Mirrors Foghorn&#39;s Playback
 - **type**: `PlaybackPolicyType!` ([PlaybackPolicyType](/builders/api-schema/shared/#playbackpolicytype))
 - **jwt**: `PlaybackJwtPolicyInput` ([PlaybackJwtPolicyInput](/builders/api-schema/access/#playbackjwtpolicyinput)) — Required when type == JWT.
 - **webhook**: `PlaybackWebhookPolicyInput` ([PlaybackWebhookPolicyInput](/builders/api-schema/access/#playbackwebhookpolicyinput)) — Required when type == WEBHOOK.
+- **allowedOrigins**: `[String!]` — JWT and WEBHOOK only: sites allowed to embed the content, each `*` or `scheme://host[:port]` (at most 50). Omit or empty for no restriction.
 
 ### PlaybackTrack
 
@@ -3258,6 +3335,7 @@ Structured result of a dry-run policy evaluation. Mirrors Foghorn&#39;s Playback
 - **url**: `String!` — https URL FrameWorks will POST to on each viewer connect.
 - **secret**: `String` — HMAC-SHA256 secret used to sign outbound webhook bodies. Write-only: persisted via field-level encryption and never returned in queries. Required when creating a webhook policy. Omit when updating an existing webhook policy to keep the currently configured secret.
 - **timeoutMs**: `Int` — Outbound POST timeout in milliseconds. Server caps at 10000; default 5000.
+- **context**: `JSON` ([JSON](/builders/api-schema/shared/#json)) — A JSON object (at most 4 KiB) sent as `context` in every access request, e.g. `&#123;&#34;courseId&#34;: &#34;algebra-101&#34;&#125;`, so the endpoint can decide without its own lookup.
 
 ### RevokeDeveloperTokenResult
 
@@ -3360,6 +3438,8 @@ Inputs for testPlaybackAccess. Exactly one of playbackId / internalName must be 
 - **connector**: `String`
 - **sessionId**: `String`
 - **fireWebhook**: `Boolean` — Webhook policies only: when true, Foghorn will POST to the configured customer URL with an HMAC-signed payload (same path the live evaluator uses). When false, the evaluator returns reason=&#34;webhook-test-skipped&#34; without making the call so operators can inspect the resolved policy without side effects.
+- **origin**: `String` — Origin header to test the policy&#39;s allowed origins against.
+- **referer**: `String` — Referer header, used when origin is empty.
 
 ### TestPlaybackAccessResult
 
@@ -8596,9 +8676,9 @@ Generated from the public schema [`pkg/graphql/public/schema.public.graphql`](ht
 | Domain | Queries | Mutations | Subscriptions | Types |
 | --- | --- | --- | --- | --- |
 | [Streams](/builders/api-schema/streams/) | 6 | 9 | 0 | 26 |
-| [Media and storage](/builders/api-schema/media/) | 15 | 15 | 0 | 103 |
+| [Media and storage](/builders/api-schema/media/) | 15 | 16 | 0 | 105 |
 | [Access and playback](/builders/api-schema/access/) | 4 | 6 | 0 | 30 |
-| [Live subscriptions](/builders/api-schema/live/) | 0 | 0 | 13 | 58 |
+| [Live subscriptions](/builders/api-schema/live/) | 0 | 0 | 13 | 60 |
 | [Analytics](/builders/api-schema/analytics/) | 1 | 0 | 0 | 122 |
 | [Webhooks](/builders/api-schema/webhooks/) | 5 | 9 | 0 | 24 |
 | [Incidents](/builders/api-schema/incidents/) | 2 | 3 | 0 | 7 |
@@ -9182,6 +9262,8 @@ Payload of a PublicEvent: one member per public event type. Fields of the same n
 - Member: [MultistreamStatusChanged](/builders/api-schema/live/#multistreamstatuschanged)
 - Member: [RecordingFailed](/builders/api-schema/live/#recordingfailed)
 - Member: [RecordingReady](/builders/api-schema/live/#recordingready)
+- Member: [RecordingStarted](/builders/api-schema/live/#recordingstarted)
+- Member: [RecordingStopped](/builders/api-schema/live/#recordingstopped)
 - Member: [StreamConnected](/builders/api-schema/live/#streamconnected)
 - Member: [StreamCreated](/builders/api-schema/live/#streamcreated)
 - Member: [StreamDeleted](/builders/api-schema/live/#streamdeleted)
@@ -9213,6 +9295,22 @@ Payload of a PublicEvent: one member per public event type. Fields of the same n
 - **artifact**: `EventArtifact` ([EventArtifact](/builders/api-schema/live/#eventartifact))
 - **durationMs**: `Int!`
 - **sizeBytes**: `Int!`
+
+### RecordingStarted
+
+**object**
+
+`recording.started` event. Aggregate: `artifacts`.
+
+- **artifact**: `EventArtifact` ([EventArtifact](/builders/api-schema/live/#eventartifact))
+
+### RecordingStopped
+
+**object**
+
+`recording.stopped` event. Aggregate: `artifacts`.
+
+- **artifact**: `EventArtifact` ([EventArtifact](/builders/api-schema/live/#eventartifact))
 
 ### SkipperChatEvent
 
@@ -9325,6 +9423,7 @@ Payload of a PublicEvent: one member per public event type. Fields of the same n
 
 - **streamId**: `ID!`
 - **protocol**: `EventIngestProtocol!` ([EventIngestProtocol](/builders/api-schema/live/#eventingestprotocol))
+- **playbackId**: `ID!`
 
 ### StreamCreated
 
@@ -9351,6 +9450,7 @@ Payload of a PublicEvent: one member per public event type. Fields of the same n
 `stream.idle` event. Aggregate: `streams`.
 
 - **streamId**: `ID!`
+- **playbackId**: `ID!`
 
 ### StreamKeyRotated
 
@@ -9367,6 +9467,7 @@ Payload of a PublicEvent: one member per public event type. Fields of the same n
 `stream.live` event. Aggregate: `streams`.
 
 - **streamId**: `ID!`
+- **playbackId**: `ID!`
 
 ### StreamUpdated
 
@@ -9778,6 +9879,25 @@ A page of DVR chapter refs. Paginated for unbounded artifact lifetime: default p
 
 - Member: [DeleteSuccess](/builders/api-schema/shared/#deletesuccess)
 - Member: [NotFoundError](/builders/api-schema/shared/#notfounderror)
+- Member: [AuthError](/builders/api-schema/shared/#autherror)
+
+## ImportVodAssetInput
+
+**input_object**
+
+Import a video from a public URL for VOD processing.
+
+- **url**: `String!` — Source URL, https or http. It must be publicly reachable and support HTTP range requests; private and internal addresses are refused.
+- **filename**: `String` — Filename to store the video under. Required when the URL path does not end in a supported video extension (mp4, mov, mkv, webm, ts).
+- **title**: `String` — Optional display title for the asset.
+- **description**: `String` — Optional description for the asset.
+
+## ImportVodAssetResult
+
+**union**
+
+- Member: [VodAsset](/builders/api-schema/shared/#vodasset)
+- Member: [ValidationError](/builders/api-schema/shared/#validationerror)
 - Member: [AuthError](/builders/api-schema/shared/#autherror)
 
 ## MediaCapacityConsent
@@ -11164,6 +11284,28 @@ deleteVodAsset(
 | --- | --- | --- | --- |
 | DeleteVodAsset | `DeleteVodAssetDocument` | `DeleteVodAsset` | `delete_vod_asset` |
 
+### Mutation.importVodAsset
+
+Import a video from a public https or http URL as a VOD asset. The processing node reads the file from the URL and processes it like an upload; the asset reports PROCESSING until it is ready. Progress arrives as upload.created, upload.completed, and upload.ready or upload.failed events.
+
+```graphql
+importVodAsset(
+  input: ImportVodAssetInput!
+): ImportVodAssetResult!
+```
+
+**Returns:** `ImportVodAssetResult!` ([ImportVodAssetResult](/builders/api-schema/media-types/#importvodassetresult))
+
+**Arguments**
+
+- `input`: `ImportVodAssetInput!` ([ImportVodAssetInput](/builders/api-schema/media-types/#importvodassetinput)) — Import source and asset details.
+
+**SDK**
+
+| Operation | TypeScript | Go | Python |
+| --- | --- | --- | --- |
+| ImportVodAsset | `ImportVodAssetDocument` | `ImportVodAsset` | `import_vod_asset` |
+
 ### Mutation.resetMediaRetentionOverride
 
 Clear a per-asset retention override and recompute the horizon from the tenant default (or tier entitlement when no tenant default is set).
@@ -11298,7 +11440,7 @@ updateMediaRetention(
 
 ## Types
 
-- [Media and storage types](/builders/api-schema/media-types/): [AbortVodUploadResult](/builders/api-schema/media-types/#abortvoduploadresult), [ApplyMediaCapacityConsentInput](/builders/api-schema/media-types/#applymediacapacityconsentinput), [ApplyMediaPlacementChangeInput](/builders/api-schema/media-types/#applymediaplacementchangeinput), [ArtifactTrack](/builders/api-schema/media-types/#artifacttrack), [ClipCreationMode](/builders/api-schema/media-types/#clipcreationmode), [CompleteVodUploadInput](/builders/api-schema/media-types/#completevoduploadinput), [CompleteVodUploadResult](/builders/api-schema/media-types/#completevoduploadresult), [CreateClipInput](/builders/api-schema/media-types/#createclipinput), [CreateClipResult](/builders/api-schema/media-types/#createclipresult), [CreateVodUploadInput](/builders/api-schema/media-types/#createvoduploadinput), [CreateVodUploadResult](/builders/api-schema/media-types/#createvoduploadresult), [DVRChapter](/builders/api-schema/media-types/#dvrchapter), [DVRChapterRef](/builders/api-schema/media-types/#dvrchapterref), [DVRChapterState](/builders/api-schema/media-types/#dvrchapterstate), [DVRChaptersPage](/builders/api-schema/media-types/#dvrchapterspage), [DVRRequest](/builders/api-schema/media-types/#dvrrequest), [DeleteClipResult](/builders/api-schema/media-types/#deleteclipresult), [DeleteDVRResult](/builders/api-schema/media-types/#deletedvrresult), [DeleteVodAssetResult](/builders/api-schema/media-types/#deletevodassetresult), [MediaCapacityConsent](/builders/api-schema/media-types/#mediacapacityconsent), [MediaCapacityConsentChange](/builders/api-schema/media-types/#mediacapacityconsentchange), [MediaCapacityConsentChangeResult](/builders/api-schema/media-types/#mediacapacityconsentchangeresult), [MediaCapacityConsentResult](/builders/api-schema/media-types/#mediacapacityconsentresult), [MediaPlacementActions](/builders/api-schema/media-types/#mediaplacementactions), [MediaPlacementAllow](/builders/api-schema/media-types/#mediaplacementallow), [MediaPlacementAllowInput](/builders/api-schema/media-types/#mediaplacementallowinput), [MediaPlacementCandidateExplanation](/builders/api-schema/media-types/#mediaplacementcandidateexplanation), [MediaPlacementChange](/builders/api-schema/media-types/#mediaplacementchange), [MediaPlacementChangeResult](/builders/api-schema/media-types/#mediaplacementchangeresult), [MediaPlacementCharging](/builders/api-schema/media-types/#mediaplacementcharging), [MediaPlacementClass](/builders/api-schema/media-types/#mediaplacementclass), [MediaPlacementConstraints](/builders/api-schema/media-types/#mediaplacementconstraints), [MediaPlacementConstraintsInput](/builders/api-schema/media-types/#mediaplacementconstraintsinput), [MediaPlacementCoordinatesInput](/builders/api-schema/media-types/#mediaplacementcoordinatesinput), [MediaPlacementDifference](/builders/api-schema/media-types/#mediaplacementdifference), [MediaPlacementEffectivePolicy](/builders/api-schema/media-types/#mediaplacementeffectivepolicy), [MediaPlacementError](/builders/api-schema/media-types/#mediaplacementerror), [MediaPlacementErrorCode](/builders/api-schema/media-types/#mediaplacementerrorcode), [MediaPlacementFeatures](/builders/api-schema/media-types/#mediaplacementfeatures), [MediaPlacementFieldError](/builders/api-schema/media-types/#mediaplacementfielderror), [MediaPlacementGroup](/builders/api-schema/media-types/#mediaplacementgroup), [MediaPlacementGroupInput](/builders/api-schema/media-types/#mediaplacementgroupinput), [MediaPlacementImpact](/builders/api-schema/media-types/#mediaplacementimpact), [MediaPlacementOption](/builders/api-schema/media-types/#mediaplacementoption), [MediaPlacementOptionKind](/builders/api-schema/media-types/#mediaplacementoptionkind), [MediaPlacementOptionsConnection](/builders/api-schema/media-types/#mediaplacementoptionsconnection), [MediaPlacementOptionsFilter](/builders/api-schema/media-types/#mediaplacementoptionsfilter), [MediaPlacementOptionsResult](/builders/api-schema/media-types/#mediaplacementoptionsresult), [MediaPlacementOrder](/builders/api-schema/media-types/#mediaplacementorder), [MediaPlacementPolicyResult](/builders/api-schema/media-types/#mediaplacementpolicyresult), [MediaPlacementPolicyState](/builders/api-schema/media-types/#mediaplacementpolicystate), [MediaPlacementPreferences](/builders/api-schema/media-types/#mediaplacementpreferences), [MediaPlacementPreferencesInput](/builders/api-schema/media-types/#mediaplacementpreferencesinput), [MediaPlacementPreview](/builders/api-schema/media-types/#mediaplacementpreview), [MediaPlacementPreviewResult](/builders/api-schema/media-types/#mediaplacementpreviewresult), [MediaPlacementPrice](/builders/api-schema/media-types/#mediaplacementprice), [MediaPlacementRecipient](/builders/api-schema/media-types/#mediaplacementrecipient), [MediaPlacementReview](/builders/api-schema/media-types/#mediaplacementreview), [MediaPlacementReviewResult](/builders/api-schema/media-types/#mediaplacementreviewresult), [MediaPlacementRollout](/builders/api-schema/media-types/#mediaplacementrollout), [MediaPlacementRolloutStatus](/builders/api-schema/media-types/#mediaplacementrolloutstatus), [MediaPlacementRules](/builders/api-schema/media-types/#mediaplacementrules), [MediaPlacementRulesInput](/builders/api-schema/media-types/#mediaplacementrulesinput), [MediaPlacementScope](/builders/api-schema/media-types/#mediaplacementscope), [MediaPlacementScopeInput](/builders/api-schema/media-types/#mediaplacementscopeinput), [MediaPlacementScopeKind](/builders/api-schema/media-types/#mediaplacementscopekind), [MediaPlacementSelector](/builders/api-schema/media-types/#mediaplacementselector), [MediaPlacementSelectorInput](/builders/api-schema/media-types/#mediaplacementselectorinput), [MediaPlacementSpillover](/builders/api-schema/media-types/#mediaplacementspillover), [MediaPlacementTransition](/builders/api-schema/media-types/#mediaplacementtransition), [MediaPlacementUpdateKind](/builders/api-schema/media-types/#mediaplacementupdatekind), [MediaPlacementVerb](/builders/api-schema/media-types/#mediaplacementverb), [MediaPlacementVerbPolicy](/builders/api-schema/media-types/#mediaplacementverbpolicy), [MediaPlacementVerbUpdateInput](/builders/api-schema/media-types/#mediaplacementverbupdateinput), [MediaPlacementWarning](/builders/api-schema/media-types/#mediaplacementwarning), [MediaPlacementWarningSeverity](/builders/api-schema/media-types/#mediaplacementwarningseverity), [MediaRetentionBounds](/builders/api-schema/media-types/#mediaretentionbounds), [MediaRetentionPolicy](/builders/api-schema/media-types/#mediaretentionpolicy), [MediaRetentionTarget](/builders/api-schema/media-types/#mediaretentiontarget), [PreviewMediaPlacementInput](/builders/api-schema/media-types/#previewmediaplacementinput), [ResetMediaRetentionOverrideInput](/builders/api-schema/media-types/#resetmediaretentionoverrideinput), [ReviewMediaCapacityConsentInput](/builders/api-schema/media-types/#reviewmediacapacityconsentinput), [ReviewMediaPlacementChangeInput](/builders/api-schema/media-types/#reviewmediaplacementchangeinput), [SetMediaRetentionPolicyInput](/builders/api-schema/media-types/#setmediaretentionpolicyinput), [SetMediaRetentionPolicyResult](/builders/api-schema/media-types/#setmediaretentionpolicyresult), [SetStreamRetentionOverridesInput](/builders/api-schema/media-types/#setstreamretentionoverridesinput), [SetStreamRetentionOverridesResult](/builders/api-schema/media-types/#setstreamretentionoverridesresult), [SortDirection](/builders/api-schema/media-types/#sortdirection), [StartDVRResult](/builders/api-schema/media-types/#startdvrresult), [StopDVRResult](/builders/api-schema/media-types/#stopdvrresult), [StorageArtifact](/builders/api-schema/media-types/#storageartifact), [StorageArtifactKindCounts](/builders/api-schema/media-types/#storageartifactkindcounts), [StorageArtifactSortField](/builders/api-schema/media-types/#storageartifactsortfield), [StorageArtifactsConnection](/builders/api-schema/media-types/#storageartifactsconnection), [StorageArtifactsInput](/builders/api-schema/media-types/#storageartifactsinput), [UpdateMediaRetentionInput](/builders/api-schema/media-types/#updatemediaretentioninput), [UpdateMediaRetentionResult](/builders/api-schema/media-types/#updatemediaretentionresult), [VodUploadCompletedPart](/builders/api-schema/media-types/#voduploadcompletedpart), [VodUploadPart](/builders/api-schema/media-types/#voduploadpart), [VodUploadSession](/builders/api-schema/media-types/#voduploadsession), [VodUploadStatus](/builders/api-schema/media-types/#voduploadstatus), [VodUploadStatusResult](/builders/api-schema/media-types/#voduploadstatusresult), [VodUploadedPart](/builders/api-schema/media-types/#voduploadedpart)
+- [Media and storage types](/builders/api-schema/media-types/): [AbortVodUploadResult](/builders/api-schema/media-types/#abortvoduploadresult), [ApplyMediaCapacityConsentInput](/builders/api-schema/media-types/#applymediacapacityconsentinput), [ApplyMediaPlacementChangeInput](/builders/api-schema/media-types/#applymediaplacementchangeinput), [ArtifactTrack](/builders/api-schema/media-types/#artifacttrack), [ClipCreationMode](/builders/api-schema/media-types/#clipcreationmode), [CompleteVodUploadInput](/builders/api-schema/media-types/#completevoduploadinput), [CompleteVodUploadResult](/builders/api-schema/media-types/#completevoduploadresult), [CreateClipInput](/builders/api-schema/media-types/#createclipinput), [CreateClipResult](/builders/api-schema/media-types/#createclipresult), [CreateVodUploadInput](/builders/api-schema/media-types/#createvoduploadinput), [CreateVodUploadResult](/builders/api-schema/media-types/#createvoduploadresult), [DVRChapter](/builders/api-schema/media-types/#dvrchapter), [DVRChapterRef](/builders/api-schema/media-types/#dvrchapterref), [DVRChapterState](/builders/api-schema/media-types/#dvrchapterstate), [DVRChaptersPage](/builders/api-schema/media-types/#dvrchapterspage), [DVRRequest](/builders/api-schema/media-types/#dvrrequest), [DeleteClipResult](/builders/api-schema/media-types/#deleteclipresult), [DeleteDVRResult](/builders/api-schema/media-types/#deletedvrresult), [DeleteVodAssetResult](/builders/api-schema/media-types/#deletevodassetresult), [ImportVodAssetInput](/builders/api-schema/media-types/#importvodassetinput), [ImportVodAssetResult](/builders/api-schema/media-types/#importvodassetresult), [MediaCapacityConsent](/builders/api-schema/media-types/#mediacapacityconsent), [MediaCapacityConsentChange](/builders/api-schema/media-types/#mediacapacityconsentchange), [MediaCapacityConsentChangeResult](/builders/api-schema/media-types/#mediacapacityconsentchangeresult), [MediaCapacityConsentResult](/builders/api-schema/media-types/#mediacapacityconsentresult), [MediaPlacementActions](/builders/api-schema/media-types/#mediaplacementactions), [MediaPlacementAllow](/builders/api-schema/media-types/#mediaplacementallow), [MediaPlacementAllowInput](/builders/api-schema/media-types/#mediaplacementallowinput), [MediaPlacementCandidateExplanation](/builders/api-schema/media-types/#mediaplacementcandidateexplanation), [MediaPlacementChange](/builders/api-schema/media-types/#mediaplacementchange), [MediaPlacementChangeResult](/builders/api-schema/media-types/#mediaplacementchangeresult), [MediaPlacementCharging](/builders/api-schema/media-types/#mediaplacementcharging), [MediaPlacementClass](/builders/api-schema/media-types/#mediaplacementclass), [MediaPlacementConstraints](/builders/api-schema/media-types/#mediaplacementconstraints), [MediaPlacementConstraintsInput](/builders/api-schema/media-types/#mediaplacementconstraintsinput), [MediaPlacementCoordinatesInput](/builders/api-schema/media-types/#mediaplacementcoordinatesinput), [MediaPlacementDifference](/builders/api-schema/media-types/#mediaplacementdifference), [MediaPlacementEffectivePolicy](/builders/api-schema/media-types/#mediaplacementeffectivepolicy), [MediaPlacementError](/builders/api-schema/media-types/#mediaplacementerror), [MediaPlacementErrorCode](/builders/api-schema/media-types/#mediaplacementerrorcode), [MediaPlacementFeatures](/builders/api-schema/media-types/#mediaplacementfeatures), [MediaPlacementFieldError](/builders/api-schema/media-types/#mediaplacementfielderror), [MediaPlacementGroup](/builders/api-schema/media-types/#mediaplacementgroup), [MediaPlacementGroupInput](/builders/api-schema/media-types/#mediaplacementgroupinput), [MediaPlacementImpact](/builders/api-schema/media-types/#mediaplacementimpact), [MediaPlacementOption](/builders/api-schema/media-types/#mediaplacementoption), [MediaPlacementOptionKind](/builders/api-schema/media-types/#mediaplacementoptionkind), [MediaPlacementOptionsConnection](/builders/api-schema/media-types/#mediaplacementoptionsconnection), [MediaPlacementOptionsFilter](/builders/api-schema/media-types/#mediaplacementoptionsfilter), [MediaPlacementOptionsResult](/builders/api-schema/media-types/#mediaplacementoptionsresult), [MediaPlacementOrder](/builders/api-schema/media-types/#mediaplacementorder), [MediaPlacementPolicyResult](/builders/api-schema/media-types/#mediaplacementpolicyresult), [MediaPlacementPolicyState](/builders/api-schema/media-types/#mediaplacementpolicystate), [MediaPlacementPreferences](/builders/api-schema/media-types/#mediaplacementpreferences), [MediaPlacementPreferencesInput](/builders/api-schema/media-types/#mediaplacementpreferencesinput), [MediaPlacementPreview](/builders/api-schema/media-types/#mediaplacementpreview), [MediaPlacementPreviewResult](/builders/api-schema/media-types/#mediaplacementpreviewresult), [MediaPlacementPrice](/builders/api-schema/media-types/#mediaplacementprice), [MediaPlacementRecipient](/builders/api-schema/media-types/#mediaplacementrecipient), [MediaPlacementReview](/builders/api-schema/media-types/#mediaplacementreview), [MediaPlacementReviewResult](/builders/api-schema/media-types/#mediaplacementreviewresult), [MediaPlacementRollout](/builders/api-schema/media-types/#mediaplacementrollout), [MediaPlacementRolloutStatus](/builders/api-schema/media-types/#mediaplacementrolloutstatus), [MediaPlacementRules](/builders/api-schema/media-types/#mediaplacementrules), [MediaPlacementRulesInput](/builders/api-schema/media-types/#mediaplacementrulesinput), [MediaPlacementScope](/builders/api-schema/media-types/#mediaplacementscope), [MediaPlacementScopeInput](/builders/api-schema/media-types/#mediaplacementscopeinput), [MediaPlacementScopeKind](/builders/api-schema/media-types/#mediaplacementscopekind), [MediaPlacementSelector](/builders/api-schema/media-types/#mediaplacementselector), [MediaPlacementSelectorInput](/builders/api-schema/media-types/#mediaplacementselectorinput), [MediaPlacementSpillover](/builders/api-schema/media-types/#mediaplacementspillover), [MediaPlacementTransition](/builders/api-schema/media-types/#mediaplacementtransition), [MediaPlacementUpdateKind](/builders/api-schema/media-types/#mediaplacementupdatekind), [MediaPlacementVerb](/builders/api-schema/media-types/#mediaplacementverb), [MediaPlacementVerbPolicy](/builders/api-schema/media-types/#mediaplacementverbpolicy), [MediaPlacementVerbUpdateInput](/builders/api-schema/media-types/#mediaplacementverbupdateinput), [MediaPlacementWarning](/builders/api-schema/media-types/#mediaplacementwarning), [MediaPlacementWarningSeverity](/builders/api-schema/media-types/#mediaplacementwarningseverity), [MediaRetentionBounds](/builders/api-schema/media-types/#mediaretentionbounds), [MediaRetentionPolicy](/builders/api-schema/media-types/#mediaretentionpolicy), [MediaRetentionTarget](/builders/api-schema/media-types/#mediaretentiontarget), [PreviewMediaPlacementInput](/builders/api-schema/media-types/#previewmediaplacementinput), [ResetMediaRetentionOverrideInput](/builders/api-schema/media-types/#resetmediaretentionoverrideinput), [ReviewMediaCapacityConsentInput](/builders/api-schema/media-types/#reviewmediacapacityconsentinput), [ReviewMediaPlacementChangeInput](/builders/api-schema/media-types/#reviewmediaplacementchangeinput), [SetMediaRetentionPolicyInput](/builders/api-schema/media-types/#setmediaretentionpolicyinput), [SetMediaRetentionPolicyResult](/builders/api-schema/media-types/#setmediaretentionpolicyresult), [SetStreamRetentionOverridesInput](/builders/api-schema/media-types/#setstreamretentionoverridesinput), [SetStreamRetentionOverridesResult](/builders/api-schema/media-types/#setstreamretentionoverridesresult), [SortDirection](/builders/api-schema/media-types/#sortdirection), [StartDVRResult](/builders/api-schema/media-types/#startdvrresult), [StopDVRResult](/builders/api-schema/media-types/#stopdvrresult), [StorageArtifact](/builders/api-schema/media-types/#storageartifact), [StorageArtifactKindCounts](/builders/api-schema/media-types/#storageartifactkindcounts), [StorageArtifactSortField](/builders/api-schema/media-types/#storageartifactsortfield), [StorageArtifactsConnection](/builders/api-schema/media-types/#storageartifactsconnection), [StorageArtifactsInput](/builders/api-schema/media-types/#storageartifactsinput), [UpdateMediaRetentionInput](/builders/api-schema/media-types/#updatemediaretentioninput), [UpdateMediaRetentionResult](/builders/api-schema/media-types/#updatemediaretentionresult), [VodUploadCompletedPart](/builders/api-schema/media-types/#voduploadcompletedpart), [VodUploadPart](/builders/api-schema/media-types/#voduploadpart), [VodUploadSession](/builders/api-schema/media-types/#voduploadsession), [VodUploadStatus](/builders/api-schema/media-types/#voduploadstatus), [VodUploadStatusResult](/builders/api-schema/media-types/#voduploadstatusresult), [VodUploadedPart](/builders/api-schema/media-types/#voduploadedpart)
 
 
 ---
@@ -11961,6 +12103,7 @@ Per-playback-object access policy. Foghorn reads this in the USER_NEW trigger ha
 - **type**: `PlaybackPolicyType!` ([PlaybackPolicyType](/builders/api-schema/shared/#playbackpolicytype))
 - **jwt**: `PlaybackJwtPolicy` ([PlaybackJwtPolicy](/builders/api-schema/shared/#playbackjwtpolicy)) — JWT-policy details, populated when type == JWT.
 - **webhook**: `PlaybackWebhookPolicy` ([PlaybackWebhookPolicy](/builders/api-schema/shared/#playbackwebhookpolicy)) — Webhook-policy details, populated when type == WEBHOOK. Secret is masked.
+- **allowedOrigins**: `[String!]!` — Sites allowed to embed the content, as normalized `scheme://host[:port]` origins; `*` allows any. Empty = no restriction. A browser viewer whose Origin (or Referer) is not listed is denied.
 
 ### PlaybackPolicyType
 
@@ -11979,6 +12122,7 @@ Webhook-callback playback policy. On every viewer connect, FrameWorks POSTs to t
 - **url**: `String!`
 - **timeoutMs**: `Int!` — Outbound POST timeout in milliseconds. Capped server-side at 10000.
 - **secretMasked**: `String!` — Always &#39;redacted&#39; on read; the actual secret is fieldcrypt-encrypted at rest.
+- **context**: `JSON` ([JSON](/builders/api-schema/shared/#json)) — Your JSON object, sent as `context` in every access request to the URL. Null when unset.
 
 ### ProcessingUsageRecord
 
@@ -14747,7 +14891,7 @@ How far back you can reach depends on the playback ID:
 # DVR Chapters
 https://logbook.frameworks.network/builders/dvr-chapters
 
-DVR chapters turn one continuous recording into smaller playback windows. Each chapter is finalized as a canonical `.mkv` VOD artifact with a matching `.dtsh` seek index and fresh poster/sprite thumbnails for the chapter timeline. Chapters use the standard VOD playback path, and their processing pass uses the lifecycle-specific `dvr_finalize` process snapshot resolved by Commodore.
+Chapters are how a recording is saved: they turn one continuous recording into smaller playback windows that stay replayable after the broadcast ends, while the live rewind window only serves viewers during the broadcast. Each chapter is finalized as a canonical `.mkv` VOD artifact with a matching `.dtsh` seek index and fresh poster/sprite thumbnails for the chapter timeline. Chapters use the standard VOD playback path, and their processing pass uses the lifecycle-specific `dvr_finalize` process snapshot resolved by Commodore.
 
 <Aside type="tip" title="Why chapters matter">
   Chapters let always-on streams behave like an archive library without splitting the source into
@@ -14757,9 +14901,9 @@ DVR chapters turn one continuous recording into smaller playback windows. Each c
 
 ## Configuring chapters on a stream
 
-Historical chapter mode is a property of the source **Stream**, snapshotted onto each recording at StartDVR. Changes apply to the next recording, not in-flight ones.
+The chapter mode is a property of the source **Stream**, snapshotted onto each recording when it starts. Changes apply from the next broadcast; a recording in progress keeps its setting.
 
-`NONE` only disables historical chapter artifacts. It does **not** disable DVR recording. The active recording still has its rolling DVR playback surface (`dvr+<dvr_internal_name>`) for live time-shift within the configured DVR window. Without chapters, there is no finalized replay artifact after media rolls out of that window.
+New streams use `WINDOW_SIZED`: each chapter is as long as the recording's own live rewind window, starting at the broadcast's start. `NONE` keeps live rewind only. The recording still serves its rolling playback surface (`dvr+<dvr_internal_name>`) for rewinding while the broadcast is live, but nothing is saved: once media leaves that window it is gone, no chapter exists, and the recording ends with `recording.stopped` but never `recording.ready`.
 
 ```graphql
 mutation EnableChapters {
@@ -14776,15 +14920,17 @@ mutation EnableChapters {
 }
 ```
 
-| Mode             | Best for                                                                                     |
-| ---------------- | -------------------------------------------------------------------------------------------- |
-| `WINDOW_SIZED`   | Historical replay buckets sized to the stream's DVR window.                                  |
-| `FIXED_INTERVAL` | Regular historical replay buckets such as hourly, 6-hour, or 24-hour chapters.               |
-| `NONE`           | Default. Rolling DVR only: record and serve the live DVR window, but do not create chapters. |
+| Mode             | Best for                                                                                  |
+| ---------------- | ----------------------------------------------------------------------------------------- |
+| `WINDOW_SIZED`   | Default. Parts as long as the recording's live rewind window, from the broadcast's start. |
+| `FIXED_INTERVAL` | Clock-aligned UTC parts such as hourly, 6-hour, or 24-hour chapters.                      |
+| `NONE`           | Live rewind only: viewers can rewind while live, and nothing is kept after the broadcast. |
 
-A new stream has chapters off (`NONE`); set `dvrChapterMode` to create them.
+`FIXED_INTERVAL` requires `dvrChapterIntervalSeconds ≥ 3600` (1 hour). The interval is used only
+by `FIXED_INTERVAL`; send `0` with another mode to clear it.
 
-`FIXED_INTERVAL` requires `dvrChapterIntervalSeconds ≥ 3600` (1 hour).
+A stopped recording's own playback ID plays its most recent finalized chapter. Before any chapter
+has finalized, playback by that ID answers `409 DVR_CHAPTERS_PENDING`.
 
 All chapter boundaries use UTC epoch milliseconds. Civil-time bucketing belongs in your app: convert "yesterday in Europe/Amsterdam" to a UTC range there, then list the chapters in that range with `dvrChapters(rangeStartMs:, rangeEndMs:)`.
 
@@ -15197,7 +15343,8 @@ Clip, recording, and upload events share one `artifact` object:
 | `streamId`   | The source stream; empty for uploads.                                           |
 | `playbackId` | Always empty on clip, recording, and upload events.                             |
 
-The event does not carry the artifact's playback ID. Look it up by `artifactId`: query
+The event does not carry the artifact's playback ID. A playback ID can be rotated, so key your
+records on `artifactId` and look the current playback ID up when you need it: query
 `storageArtifactsConnection` with `artifactHash` set to the `artifactId`, or `clip(id:)` for a clip.
 
 Media failure reasons: `MEDIA_FAILURE_REASON_SOURCE_UNAVAILABLE`, `_PROCESSING_FAILED`,
@@ -15208,42 +15355,55 @@ Media failure reasons: `MEDIA_FAILURE_REASON_SOURCE_UNAVAILABLE`, `_PROCESSING_F
 
 Subject: `streams/<stream id>`.
 
-| Type                 | Fires when                                                        | Payload                                                                   |
-| -------------------- | ----------------------------------------------------------------- | ------------------------------------------------------------------------- |
-| `stream.created`     | A stream is created.                                              | `streamId`, `name`, `playbackId`                                          |
-| `stream.updated`     | Stream settings, stream keys, or multistream targets change.      | `streamId`, `changedFields` (snake_case field identifiers)                |
-| `stream.deleted`     | A stream is deleted.                                              | `streamId`                                                                |
-| `stream.key_rotated` | The stream key is replaced. The key itself is never in the event. | `streamId`                                                                |
-| `stream.connected`   | An encoder or pull source starts a new ingest session.            | `streamId`, `protocol` (`INGEST_PROTOCOL_RTMP`, `_SRT`, `_WHIP`, `_PULL`) |
-| `stream.live`        | The stream becomes playable.                                      | `streamId`                                                                |
-| `stream.idle`        | The ingest session ends.                                          | `streamId`                                                                |
+| Type                 | Fires when                                                        | Payload                                                                                 |
+| -------------------- | ----------------------------------------------------------------- | --------------------------------------------------------------------------------------- |
+| `stream.created`     | A stream is created.                                              | `streamId`, `name`, `playbackId`                                                        |
+| `stream.updated`     | Stream settings, stream keys, or multistream targets change.      | `streamId`, `changedFields` (snake_case field identifiers)                              |
+| `stream.deleted`     | A stream is deleted.                                              | `streamId`                                                                              |
+| `stream.key_rotated` | The stream key is replaced. The key itself is never in the event. | `streamId`                                                                              |
+| `stream.connected`   | An encoder or pull source starts a new ingest session.            | `streamId`, `playbackId`, `protocol` (`INGEST_PROTOCOL_RTMP`, `_SRT`, `_WHIP`, `_PULL`) |
+| `stream.live`        | The stream becomes playable.                                      | `streamId`, `playbackId`                                                                |
+| `stream.idle`        | The ingest session ends.                                          | `streamId`, `playbackId`                                                                |
 
 `changedFields` values are snake_case identifiers, not GraphQL field names: `title`,
 `description`, `is_recording_enabled`, `pull_source`, `source_location`,
 `dvr_chapter_mode`, `dvr_chapter_interval_seconds`, `monitoring_enabled`, `playback_policy`,
 `stream_keys`, and `push_targets`.
 
-`stream.connected`, `stream.live`, and `stream.idle` fire once per ingest session.
+`stream.connected`, `stream.live`, and `stream.idle` fire once per ingest session. Their
+`playbackId` is the stream's playback ID when the event was emitted; on `stream.live` and
+`stream.idle` it is empty in the rare case the platform could not resolve the stream while its
+control plane was unreachable. A playback ID can be rotated, so key your records on `streamId`.
 
 ## Clips, recordings, and uploads
 
 Subject: `artifacts/<artifact id>`.
 
-| Type               | Fires when                                                   | Payload                                     |
-| ------------------ | ------------------------------------------------------------ | ------------------------------------------- |
-| `clip.requested`   | A clip is requested.                                         | `artifact`, `durationMs` (requested length) |
-| `clip.ready`       | The clip is stored and playable.                             | `artifact`, `durationMs`, `sizeBytes`       |
-| `clip.failed`      | The clip could not be produced.                              | `artifact`, `reason`                        |
-| `recording.ready`  | A DVR recording is finalized and playable.                   | `artifact`, `durationMs`, `sizeBytes`       |
-| `recording.failed` | A DVR recording could not be finalized.                      | `artifact`, `reason`                        |
-| `upload.created`   | A VOD upload session is created.                             | `artifact`, `filename`, `expectedSizeBytes` |
-| `upload.completed` | Every part is uploaded and the file is handed to processing. | `artifact`, `sizeBytes`                     |
-| `upload.aborted`   | The upload is aborted before completion.                     | `artifact`                                  |
-| `upload.ready`     | Processing finished and the asset is playable.               | `artifact`, `durationMs`, `sizeBytes`       |
-| `upload.failed`    | Processing rejected or could not process the file.           | `artifact`, `reason`                        |
+| Type                | Fires when                                                   | Payload                                     |
+| ------------------- | ------------------------------------------------------------ | ------------------------------------------- |
+| `clip.requested`    | A clip is requested.                                         | `artifact`, `durationMs` (requested length) |
+| `clip.ready`        | The clip is stored and playable.                             | `artifact`, `durationMs`, `sizeBytes`       |
+| `clip.failed`       | The clip could not be produced.                              | `artifact`, `reason`                        |
+| `recording.started` | The recording node confirmed it is capturing the stream.     | `artifact`                                  |
+| `recording.stopped` | Capture ended and the recording is being finalized.          | `artifact`                                  |
+| `recording.ready`   | A recording is finalized and saved as replayable chapters.   | `artifact`, `durationMs`, `sizeBytes`       |
+| `recording.failed`  | A DVR recording could not be finalized.                      | `artifact`, `reason`                        |
+| `upload.created`    | A VOD upload session is created.                             | `artifact`, `filename`, `expectedSizeBytes` |
+| `upload.completed`  | Every part is uploaded and the file is handed to processing. | `artifact`, `sizeBytes`                     |
+| `upload.aborted`    | The upload is aborted before completion.                     | `artifact`                                  |
+| `upload.ready`      | Processing finished and the asset is playable.               | `artifact`, `durationMs`, `sizeBytes`       |
+| `upload.failed`     | Processing rejected or could not process the file.           | `artifact`, `reason`                        |
+
+A recording that captured media emits `recording.started`, then `recording.stopped` once,
+then `recording.ready` or `recording.failed`. A live-rewind-only recording (stream
+`dvrChapterMode: NONE`) keeps nothing replayable, so it ends with `recording.stopped` and no
+`recording.ready`. A recording that never captured anything emits only `recording.failed`.
 
 Upload events carry no transfer progress. Your client knows its own transfer progress; for the
-server-side state of an upload, query `vodUploadStatus`.
+server-side state of an upload, query `vodUploadStatus`. An [import from a URL](/builders/recordings#import-a-video-from-a-url)
+emits the same upload events, both `upload.created` and `upload.completed` when it is accepted.
+Their sizes are `"0"`: the file's size is known only after processing, and `upload.ready` carries
+it.
 
 ## Multistreaming
 
@@ -17882,7 +18042,10 @@ FrameWorks ships two policy types in v1:
   signing key you control. FrameWorks verifies the signature against the
   matching public key.
 - **Webhook** — FrameWorks POSTs to a URL you specify on every viewer
-  connect. Your endpoint returns 200 to allow or anything else to deny.
+  connect. Your endpoint returns any 2xx to allow or anything else to deny.
+
+Either type can also restrict **which websites may embed** the content with
+[allowed origins](#allowed-origins).
 
 ```mermaid
 sequenceDiagram
@@ -18082,7 +18245,7 @@ is also accepted on HTTP playback requests where headers are available.
 
 For more dynamic gating (per-viewer NFT checks, account-state lookups,
 geographic decisions, A/B tests), use the webhook policy type. FrameWorks
-POSTs to your URL on every viewer connect; you return 200 to allow or
+POSTs to your URL on every viewer connect; you return any 2xx to allow or
 anything else to deny.
 
 ```graphql
@@ -18096,6 +18259,7 @@ mutation {
           url: "https://your-app.example/playback-access"
           secret: "any-strong-random-secret"
           timeoutMs: 3000
+          context: { courseId: "algebra-101", tier: "premium" }
         }
       }
     }
@@ -18110,6 +18274,10 @@ mutation {
 When updating an existing webhook policy, omit `secret` to keep the currently
 configured HMAC secret. Send a new non-empty `secret` only when rotating it.
 
+`context` is optional: a JSON object of at most 4 KiB, stored with the policy and sent back to
+you in every access request. Put whatever your endpoint needs to decide there (a course, a
+product, a tier) so it doesn't have to map playback IDs to your own records.
+
 Your endpoint receives:
 
 ```json
@@ -18120,9 +18288,15 @@ Your endpoint receives:
   "requestUrl": "/abc123.m3u8?jwt=...",
   "viewerToken": "<whatever the viewer attached, may be empty>",
   "connector": "HLS",
+  "origin": "https://your-site.example",
+  "referer": "https://your-site.example/watch/42",
+  "context": { "courseId": "algebra-101", "tier": "premium" },
   "timestamp": "2026-05-07T08:30:00Z"
 }
 ```
+
+`origin` and `referer` are the viewer request's headers, empty when the request carried none
+(RTMP and SRT players, server-side calls). `context` is present only when the policy sets one.
 
 Headers include `X-Frameworks-Signature: sha256=<hex>`, an HMAC-SHA256 of
 the raw request body using the secret you supplied. **Verify this before
@@ -18147,7 +18321,7 @@ app.post("/playback-access", express.raw({ type: "application/json" }), (req, re
 
   const payload = JSON.parse(req.body);
   // ... your access logic ...
-  if (allowed) return res.sendStatus(200);
+  if (allowed) return res.sendStatus(204);
   return res.sendStatus(403);
 });
 ```
@@ -18158,8 +18332,46 @@ dial to defeat DNS rebinding. Customer URLs must be public HTTPS endpoints.
 
 **Timeouts and limits:** server caps `timeoutMs` at 10000ms (10s).
 Response body is read up to 4 KiB only — return a status code, not a long
-explanation. Any non-200 response (including 5xx, timeouts, network
-errors, redirects) denies the viewer; only an explicit 200 allows.
+explanation. Any 2xx (200, 201, 204, ...) allows the viewer; anything else
+(403, other 4xx, 5xx, redirects, timeouts, network errors) denies.
+
+## Allowed origins
+
+A playback policy can list the websites allowed to embed its content. A browser tells the
+server which page a request comes from (the `Origin` header, or `Referer`), so a player copied
+onto another site is refused:
+
+```graphql
+mutation {
+  setPlaybackPolicy(
+    input: {
+      streamId: "stream_abc123"
+      policy: {
+        type: JWT
+        jwt: {}
+        allowedOrigins: ["https://your-site.example", "https://app.your-site.example:8443"]
+      }
+    }
+  ) {
+    __typename
+  }
+}
+```
+
+- Entries are `scheme://host[:port]` with no path, or `*` for any site. Up to 50 entries. A
+  default port (`:443` for https, `:80` for http) is dropped, so `https://a.example:443` and
+  `https://a.example` are the same entry.
+- It applies to `JWT` and `WEBHOOK` policies and runs before them: a disallowed site is refused
+  without checking the token or calling your webhook. `PUBLIC` content cannot set it.
+- **Where it is checked.** Every browser request is checked: endpoint resolution
+  (`resolveViewerEndpoint`) and the media session on the edge (HLS, DASH, MP4, WHEP). A
+  `resolveViewerEndpoint` call made from your own backend carries no `Origin`, so it is not
+  checked; the viewer's media session that follows is.
+- **Viewers without a browser.** RTMP, SRT, and other players that send no `Origin` or `Referer`
+  are denied (`origin-missing`) unless the list contains `*`.
+- **Not DRM.** A client that is not a browser can send any `Origin`. Allowed origins stop other
+  websites from embedding your player; combine them with a JWT or webhook policy for real access
+  control.
 
 ## Rotation
 
@@ -18211,7 +18423,8 @@ play without a token (subject to a brief reconnect blip).
 - **Distinct deny reasons.** Logs distinguish `missing-token`,
   `jwt-unknown-kid`, `jwt-wrong-alg`, `jwt-sig-fail`, `jwt-expired`,
   `jwt-claim-mismatch`, `webhook-deny-403`, `webhook-error-status`,
-  `webhook-timeout`, `webhook-network`, and `webhook-blocked-ssrf`, among
+  `webhook-timeout`, `webhook-network`, `webhook-blocked-ssrf`,
+  `origin-not-allowed`, `origin-missing`, and `origin-unobservable`, among
   others, so you can tell customer misconfiguration from attack attempts
   from infrastructure errors. The full list is under
   [Testing a policy](#testing-a-policy).
@@ -18225,7 +18438,7 @@ play without a token (subject to a brief reconnect blip).
 
 - **ES256 only.** Asymmetric is strictly better than HMAC for this use
   case (we never need your secret). HS256 is not supported.
-- **Webhook responses are 200/non-200.** No fine-grained error code
+- **Webhook responses are 2xx/non-2xx.** No fine-grained error code
   passthrough today — use the structured deny logs for diagnostics.
 - **Geo-block / IP allow-deny lists** belong in your webhook callback when
   you need region or network-specific authorization.
@@ -18282,26 +18495,34 @@ mutation TestJWT {
 
 Common deny reasons map 1:1 with what's logged on real denies:
 
-| Reason                   | Meaning                                                                             |
-| ------------------------ | ----------------------------------------------------------------------------------- |
-| `missing-token`          | Policy is JWT but no token was provided                                             |
-| `jwt-not-a-jws`          | String isn't a valid JOSE compact serialization                                     |
-| `jwt-missing-kid`        | Header has no `kid` claim                                                           |
-| `jwt-unknown-kid`        | `kid` doesn't match any active signing key                                          |
-| `jwt-wrong-alg`          | Algorithm header isn't ES256                                                        |
-| `jwt-sig-fail`           | Signature didn't verify against the matching public key                             |
-| `jwt-missing-exp`        | The token has no `exp` claim                                                        |
-| `jwt-expired`            | `exp` is in the past (60s skew tolerance)                                           |
-| `jwt-not-yet-valid`      | `nbf` is in the future                                                              |
-| `jwt-aud-mismatch`       | `aud` claim doesn't match `requiredAudience`                                        |
-| `jwt-claim-mismatch`     | A `requiredClaimsJson` entry didn't match the token's claim value                   |
-| `jwt-bad-public-key`     | The stored signing key for the `kid` is not a parseable ES256 public key            |
-| `jwt-verify-error`       | Verification failed for a reason not listed above                                   |
-| `no-active-keys`         | Policy is JWT but no active signing keys are configured for the tenant              |
-| `webhook-no-url`         | Policy is webhook but has no URL configured                                         |
-| `policy-fetch-failed`    | The stream requires auth but its policy could not be loaded                         |
-| `policy-marker-unknown`  | Whether the stream requires auth is unknown and its policy could not be loaded      |
-| `local-authority-denied` | The edge's local signed media authority denies playback, or has passed its validity |
+| Reason                   | Meaning                                                                                                                              |
+| ------------------------ | ------------------------------------------------------------------------------------------------------------------------------------ |
+| `missing-token`          | Policy is JWT but no token was provided                                                                                              |
+| `jwt-not-a-jws`          | String isn't a valid JOSE compact serialization                                                                                      |
+| `jwt-missing-kid`        | Header has no `kid` claim                                                                                                            |
+| `jwt-unknown-kid`        | `kid` doesn't match any active signing key                                                                                           |
+| `jwt-wrong-alg`          | Algorithm header isn't ES256                                                                                                         |
+| `jwt-sig-fail`           | Signature didn't verify against the matching public key                                                                              |
+| `jwt-missing-exp`        | The token has no `exp` claim                                                                                                         |
+| `jwt-expired`            | `exp` is in the past (60s skew tolerance)                                                                                            |
+| `jwt-not-yet-valid`      | `nbf` is in the future                                                                                                               |
+| `jwt-aud-mismatch`       | `aud` claim doesn't match `requiredAudience`                                                                                         |
+| `jwt-claim-mismatch`     | A `requiredClaimsJson` entry didn't match the token's claim value                                                                    |
+| `jwt-bad-public-key`     | The stored signing key for the `kid` is not a parseable ES256 public key                                                             |
+| `jwt-verify-error`       | Verification failed for a reason not listed above                                                                                    |
+| `no-active-keys`         | Policy is JWT but no active signing keys are configured for the tenant                                                               |
+| `webhook-no-url`         | Policy is webhook but has no URL configured                                                                                          |
+| `policy-fetch-failed`    | The stream requires auth but its policy could not be loaded                                                                          |
+| `policy-marker-unknown`  | Whether the stream requires auth is unknown and its policy could not be loaded                                                       |
+| `local-authority-denied` | The edge's local signed media authority denies playback, or has passed its validity                                                  |
+| `origin-not-allowed`     | The viewer's Origin (or Referer) is not in the policy's `allowedOrigins`                                                             |
+| `origin-missing`         | The policy restricts origins and the request carried no Origin or Referer                                                            |
+| `origin-unobservable`    | The policy restricts origins and the edge cannot report the viewer's headers (an edge running a MistServer build older than v0.3.11) |
+
+To test [allowed origins](#allowed-origins), pass `origin` (and optionally `referer`) in the
+`testPlaybackAccess` input. Without either, a policy that restricts origins reports
+`origin-missing`, as a request without those headers would. The origin check runs first, so a
+disallowed origin is reported without calling your webhook.
 
 ### Test a webhook
 
@@ -20881,12 +21102,12 @@ The **Playback Info** card shows your Playback ID. For protocol URLs and embed c
 # Recordings, Clips & VOD
 https://logbook.frameworks.network/builders/recordings
 
-Always-on venues, sports, conferences, classrooms, public meetings, monitoring feeds: anywhere the live moment and the long archive both matter. FrameWorks keeps a single DVR session running per channel for as long as the stream is live, and, when chapters are enabled on the stream, segments that session into chapter artifacts. You find chapters by listing a UTC time range and replay each one by its playback ID. This page covers DVR replay, clips from the buffer, and direct VOD uploads.
+Always-on venues, sports, conferences, classrooms, public meetings, monitoring feeds: anywhere the live moment and the long archive both matter. A stream that records broadcasts keeps one recording running per broadcast for as long as the stream is live, and saves it as chapters you can replay after the broadcast ends. You find chapters by listing a UTC time range and replay each one by its playback ID. This page covers recordings, clips from the buffer, and direct VOD uploads.
 
 ```mermaid
 flowchart LR
-    LIVE[Live stream] --> DVR[Rolling DVR window]
-    DVR --> CH[Finalized archive chapters]
+    LIVE[Live stream] --> DVR[Live rewind window]
+    DVR --> CH[Saved recording chapters]
     DVR --> CLIP[Clip export]
     UPLOAD[Direct upload] --> VOD[VOD asset]
     CH --> PLAY[Playback ID]
@@ -20901,25 +21122,31 @@ flowchart LR
   as a storage budget decision.
 </Aside>
 
-## DVR Recording
+## Recording broadcasts
 
-DVR records your live stream and preserves the broadcast for later playback. DVR content is playable **while the stream is still live**: viewers can seek back through the live DVR window, pause, and catch up. After that window, the recording is replayable only if chapters are enabled on the stream (they are off by default): it is then split into bounded chapter artifacts for replay.
+A stream with **Record broadcasts** on (`record: true`) records every broadcast. Two things come
+out of one recording:
 
-The recording model separates capture, live seeking, and archive replay:
+- **Live rewind window**: while the broadcast is live, viewers can pause, rewind up to the
+  window's length, and jump back to live. The window's length comes from your tier and cluster, so
+  live playlists stay small.
+- **Saved recording**: the broadcast is kept after it ends, split into chapters. Each chapter is a
+  finalized VOD-shaped artifact with its own playback ID, replayable until retention removes it.
 
-- **24/7 capture** — one stream session can keep recording continuously instead of rolling into arbitrary fixed-length assets.
-- **Fast live playlists** — the live DVR window stays bounded so viewers get seekback without enormous manifests.
-- **Archive replay** — chapters turn a long recording into hidden VOD-shaped artifacts with normal playback IDs.
-- **Cost control** — retention policies decide how long completed DVR, clips, and VOD assets stay in storage.
+By default a saved recording is split into parts as long as the live rewind window, starting at
+the broadcast's start (`WINDOW_SIZED`). You can instead split it into clock-aligned UTC parts every
+N hours (`FIXED_INTERVAL`). A stream set to `NONE` keeps live rewind only: viewers can rewind while
+live, and nothing is kept once media leaves the window.
 
-That split matters:
+| Concept            | What it controls                                                                                                             |
+| ------------------ | ---------------------------------------------------------------------------------------------------------------------------- |
+| Live rewind window | How far back live viewers can seek while the broadcast is live. Tier- and cluster-bounded.                                   |
+| Saved recording    | The broadcast after it ends, as chapters. One recording can span hours, days, or months if the ingest stays live.            |
+| Chapters           | The saved parts. Each is linked to its recording and source stream, and stays out of the tenant-wide VOD library by default. |
+| Retention          | How long a saved recording is kept after the broadcast ends. Retention is not the live rewind window.                        |
 
-| Concept            | What it controls                                                                                                                                                           |
-| ------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Live DVR window    | How far back live viewers can seek while the stream is still recording. This is tier- and cluster-bounded so live playlists stay small.                                    |
-| Continuous archive | The full DVR segment timeline for one stream session. It can span hours, days, or months if the ingest stays live.                                                         |
-| DVR chapters       | Finalized VOD-shaped artifacts for historical replay. Each chapter is linked to its parent DVR and source stream, but stays out of the tenant-wide VOD library by default. |
-| Retention          | How long a completed recording is kept after the stream session ends. Retention is not the live seekback window.                                                           |
+A stream's chapter setting is snapshotted when a recording starts, so a change applies from the
+next broadcast; a recording in progress keeps its setting.
 
 ### Enabling Recording
 
@@ -20994,11 +21221,16 @@ mutation StopRecording {
 
 ### Playback
 
-DVR recordings get their own `playbackId`, separate from the live stream's. This means the same stream supports three viewing modes:
+Recordings get their own `playbackId`, separate from the live stream's. This means the same stream supports three viewing modes:
 
 - **Live** (`streamPlaybackId`) — real-time playback at the live edge.
-- **Live DVR window** (`dvrPlaybackId`) — seekable playback while the stream is recording, bounded by the tier/cluster DVR window.
-- **Archive chapters** — optional finalized VOD artifacts generated from the recording timeline for historical replay.
+- **Live rewind window** (`dvrPlaybackId`) — seekable playback while the broadcast is live, bounded by the tier/cluster window.
+- **Saved recording** — the recording's chapters, each a finalized VOD artifact with its own `playbackId`, for replay after the broadcast.
+
+After the broadcast ends, the recording's own `dvrPlaybackId` plays its most recent finalized
+chapter. Until the first chapter has finalized (or for a live-rewind-only recording, which has no
+chapters) `/play/{dvrPlaybackId}` answers `409` with code `DVR_CHAPTERS_PENDING`; list the
+recording's chapters with `dvrChapters` to play a specific one.
 
 DVR playback URLs follow the same `/play/{playbackId}` pattern:
 
@@ -21008,7 +21240,7 @@ DASH:   %PLAY_URL%/play/{dvrPlaybackId}/cmaf/index.mpd
 MP4:    %PLAY_URL%/play/{dvrPlaybackId}.mp4
 ```
 
-With the Player SDK, use `contentType="dvr"` for the live DVR window. The player enables seeking, skip, and speed controls within the active window:
+With the Player SDK, use `contentType="dvr"` for the live rewind window. The player enables seeking, skip, and speed controls within the active window:
 
 ```tsx
 <Player contentType="dvr" contentId="a1b2c3d4e5f6g7h8" />
@@ -21016,34 +21248,35 @@ With the Player SDK, use `contentType="dvr"` for the live DVR window. The player
 
 ### Live Time-Shift
 
-While a stream is live, the DVR recording grows continuously. Viewers using the DVR playback ID can:
+While a stream is live, the recording grows continuously. Viewers using the recording's playback ID can:
 
-- **Seek back** through the tier-bounded live DVR window
+- **Seek back** through the tier-bounded live rewind window
 - **Pause and resume** without losing their position
 - **Jump to live** to catch up to the real-time edge
 
 The trade-off is latency — DVR playback goes through HLS or DASH segments, so it's higher latency
 than a direct live WebRTC connection. But for live events,
-conferences, and always-on streams this is a feature: viewers can rewind a goal, replay a slide, or start watching late and catch up within the live DVR window.
+conferences, and always-on streams this is a feature: viewers can rewind a goal, replay a slide, or start watching late and catch up within the live rewind window.
 
 <Aside type="tip" title="Always-On Streams">
-  DVR supports 24/7-style streams without forcing a new recording artifact every few hours. The live
-  DVR window stays bounded for player performance, while the archive is replayed through chapter
-  artifacts when historical chapters are enabled.
+  Recording supports 24/7-style streams without forcing a new recording artifact every few hours.
+  The live rewind window stays bounded for player performance, while the saved recording is replayed
+  through its chapters.
 </Aside>
 
 ### Archive Chapters
 
-For historical replay, FrameWorks splits the DVR archive into **chapter VOD artifacts**. Each chapter is its own canonical `.mkv` produced by the chapter finalization pipeline at boundary close and addressed by a Commodore-minted, shareable `playbackId` — pass it to `resolveViewerEndpoint` like any other VOD. The parent DVR's playback policy is snapshotted onto the chapter and still applies.
+For replay after the broadcast, FrameWorks saves the recording as **chapter VOD artifacts**. Each chapter is its own canonical `.mkv` produced by the chapter finalization pipeline at boundary close and addressed by a Commodore-minted, shareable `playbackId` — pass it to `resolveViewerEndpoint` like any other VOD. The parent DVR's playback policy is snapshotted onto the chapter and still applies.
 
 For the full chapter-policy story (modes, defaults, resolution semantics) see [DVR Chapters](/builders/dvr-chapters). Storage cost behavior is covered in [Storage & retention](/builders/storage-and-retention).
 
-Chapters are off by default: a stream's `dvrChapterMode` is `NONE` until you set it. Common chapter shapes:
+A new stream saves window-sized chapters (`WINDOW_SIZED`). Chapter shapes:
 
-| Shape                 | Use                                                                                                           |
-| --------------------- | ------------------------------------------------------------------------------------------------------------- |
-| Window-sized chapters | Sequential chapters sized to the stream's DVR window (`WINDOW_SIZED`).                                        |
-| Fixed UTC intervals   | Regular UTC buckets such as 6-hour or 24-hour spans. Minimum interval is 1 hour (enforced by Commodore + DB). |
+| Shape                 | Use                                                                                                                   |
+| --------------------- | --------------------------------------------------------------------------------------------------------------------- |
+| Window-sized chapters | Default. Sequential parts as long as the recording's live rewind window, from the broadcast's start (`WINDOW_SIZED`). |
+| Fixed UTC intervals   | Regular UTC buckets such as 6-hour or 24-hour spans. Minimum interval is 1 hour (enforced by Commodore + DB).         |
+| Live rewind only      | `NONE`: nothing is saved. Viewers can rewind while live; no chapters are produced and `recording.ready` never fires.  |
 
 All chapter time fields are UTC epoch milliseconds. The API does not store timezone names or offsets; clients that care about civil-day boundaries should convert them to a UTC range and list the chapters in that range with `dvrChapters(rangeStartMs:, rangeEndMs:)`.
 
@@ -21120,7 +21353,7 @@ query StreamVodArtifacts {
 }
 ```
 
-Historical chapter mode is configured on the Stream and snapshotted onto each recording at StartDVR. Changes apply to the next recording, not in-flight ones. `NONE` is the default. It keeps DVR recording and the active rolling DVR window enabled, but skips finalized chapter artifacts for historical replay:
+The chapter mode is configured on the Stream and snapshotted onto each recording when it starts. Changes apply from the next broadcast, not to a recording in progress. Send `dvrChapterIntervalSeconds: 0` with `WINDOW_SIZED` or `NONE` to clear a stored interval. To split into 6-hour UTC parts:
 
 ```graphql
 mutation {
@@ -21183,7 +21416,9 @@ two kinds:
 read from, events, the URL parameters, and how far back each playback ID reaches.
 
 The `tenantEvents` subscription with `types: ["recording.ready", "recording.failed"]` reports
-finalized and failed DVR recordings. See [Events](/builders/events) for every event type.
+saved and failed recordings. A live-rewind-only (`NONE`) recording ends with `recording.stopped`
+and no `recording.ready`, because nothing replayable is kept. See [Events](/builders/events) for
+every event type.
 
 ---
 
@@ -21261,6 +21496,45 @@ mutation {
   Presigned URLs expire after approximately 2 hours. For very large uploads, start uploading
   promptly after creating the session.
 </Aside>
+
+### Import a video from a URL
+
+When the file already sits on a web server, a CDN, or an S3 bucket behind a presigned link, let
+FrameWorks read it from there instead of uploading it yourself:
+
+```graphql
+mutation {
+  importVodAsset(input: { url: "https://media.example.com/talks/keynote.mp4", title: "Keynote" }) {
+    __typename
+    ... on VodAsset {
+      id
+      playbackId
+      status
+    }
+    ... on ValidationError {
+      message
+    }
+  }
+}
+```
+
+The asset comes back at once with its `playbackId` and status `PROCESSING`. The processing node
+reads the file straight from the URL, with no separate upload step, and processes it like an
+upload: `upload.created` and `upload.completed` fire on acceptance, then `upload.ready` or
+`upload.failed` (see [Events](/builders/events)).
+
+- **Sources**: `https://` and `http://` URLs. For content on IPFS or Arweave, pass a public
+  gateway's https link.
+- **Range requests**: the server must support HTTP range requests, as S3, CDNs, and IPFS
+  gateways do. The file is read in blocks, not in one download.
+- **Filename**: the extension tells FrameWorks how to read the file: `mp4`, `mov`, `mkv`, `webm`,
+  or `ts`. When the URL path does not end in one, pass `filename`. Formats that must be read from
+  a local file (`avi`, `flv`, `m4v`) are not importable; upload them instead.
+- **Reachability**: the URL must be publicly reachable. Private, loopback, and cloud-metadata
+  addresses are refused on every connection, including after a redirect. Up to 5 http(s)
+  redirects are followed.
+- **Failures**: a source that cannot be read or processed fails the asset with `upload.failed`;
+  the asset's `errorMessage` has the detail.
 
 ### VOD Processing
 
@@ -21948,11 +22222,13 @@ mutation {
 }
 ```
 
-`record: true` enables DVR recording from the start. For event channels, this gives late viewers
-seekback while the stream is live. For 24/7 channels, the live stream keeps running while replay
-is served from chapter artifacts that segment the session timeline — no forced stream restart at
-a duration boundary. You can also toggle recording later with `updateStream`. See
-[Live and DVR Streams](#live-and-dvr-streams) for what that creates.
+`record: true` records every broadcast. While live, late viewers can rewind within the **live
+rewind window**; after the broadcast, the **saved recording** is replayable as chapters, which by
+default are as long as the live rewind window. For 24/7 channels the live stream keeps running
+while replay is served from those chapters, with no forced stream restart at a duration boundary.
+You can also toggle recording later with `updateStream`, and choose how the saved recording is
+split with `dvrChapterMode` (see [DVR Chapters](/builders/dvr-chapters)). See
+[Live and DVR Streams](#live-and-dvr-streams) for what recording creates.
 
 ## Live and DVR Streams
 
@@ -21963,8 +22239,9 @@ live stream:
 - **Live stream** — segments live in a shared-memory ring buffer of about 2 minutes. Right for
   real-time playback and `CLIP_NOW` of recent moments.
 - **DVR stream** — segments are written to disk and archived under one recording artifact. Right
-  for seek-back, longer clips, and post-event playback. The live DVR window is bounded for player
-  performance; historical replay uses finalized chapter artifacts over the same segment archive.
+  for seek-back, longer clips, and post-event playback. The live rewind window is bounded for
+  player performance; the saved recording is replayed through finalized chapters over the same
+  segment archive.
 
 The live ring is configurable — private deployments often want a longer window — but every extra
 second costs cluster RAM, so the default stays tight. [Open an in-app ticket](%APP_URL%/support)
@@ -21973,7 +22250,8 @@ if your deployment needs a non-default size.
 Practical consequences:
 
 - **Players** use the DVR `playbackId` (with `contentType="dvr"`) to seek back beyond the live
-  ring within the live DVR window.
+  ring within the live rewind window. After the broadcast, the same `playbackId` plays the
+  recording's most recent finalized chapter.
 - **Clip creation** runs against the entity that holds the moment you want — see
   [Clips](/builders/recordings#clips). Use the live stream for the live ring and the DVR
   recording for archived ranges.
@@ -22019,7 +22297,8 @@ resolution.
 
 - **Offline** - The stream exists, but no encoder or pull input is currently active.
 - **Live** - The media edge is receiving or pulling source media.
-- **Recording** - If recording is enabled, DVR assets are produced while the stream is live.
+- **Recording** - If recording is enabled, each broadcast is recorded: viewers can rewind while it
+  is live, and it is saved as chapters after it ends.
 - **Idle pull input** - Pull streams do not fetch upstream media until a viewer requests playback.
 - **Managed source** - The deployment reconciler owns the source; an always-on source can remain
   active without a viewer.
@@ -25393,7 +25672,7 @@ Livepeer Studio is a hosted Livepeer gateway; FrameWorks is another gateway on t
 ## TL;DR
 
 - **What stays:** RTMP and WHIP ingest, HLS and WebRTC playback, multistream targets, clips, recordings.
-- **What changes:** REST → GraphQL · API key → JWT or developer token · Studio webhooks → FrameWorks webhooks with Standard Webhooks signatures (or the `tenantEvents` subscription) · playback access policies are recreated with FrameWorks signing keys or webhooks · `@livepeer/react` → `@livepeer-frameworks/player-*`.
+- **What changes:** REST → GraphQL · API key → JWT or developer token · Studio webhooks → FrameWorks webhooks with Standard Webhooks signatures and [mapped event names](#real-time-events) (or the `tenantEvents` subscription) · playback access policies are recreated with FrameWorks signing keys or webhooks · `@livepeer/react` → `@livepeer-frameworks/player-*`.
 - **Capabilities to evaluate:** E-RTMP ingest (HEVC/AV1 contribution over RTMP) · SRT ingest · LL-HLS/DASH delivery · sprite-sheet seek previews · AV1 in the codec list · self-hosting / hybrid options · MCP, wallet auth, and x402 for agents · Skipper · experimental device-discovery productization.
 - **What's not yet at parity:** AI Pipelines and C2PA signing. TypeScript, Go, and Python
   [SDKs](/builders/sdks) ship. See
@@ -25422,15 +25701,15 @@ The shapes you know in Studio, mapped to FrameWorks:
 
 ### Recordings, clips, and VOD
 
-| Studio                                           | FrameWorks                                                                                          |
-| ------------------------------------------------ | --------------------------------------------------------------------------------------------------- |
-| `POST /clip`                                     | `createClip(input)` mutation                                                                        |
-| `GET /session/{id}/clips`                        | `storageArtifactsConnection(input: { kinds: [CLIP] })` or `clip(id)`                                |
-| `POST /asset/request-upload` (direct/TUS upload) | `createVodUpload(input)` → S3 multipart upload                                                      |
-| `POST /asset/upload/url`                         | No direct equivalent today                                                                          |
-| Tasks API for upload/transcode progress          | `vodUploadStatus`, `tenantEvents` (`upload.*`), or `liveProcessingEvents` depending on the workflow |
-| `GET /asset/{id}`                                | `vodAsset(id)` query                                                                                |
-| `DELETE /asset/{id}`                             | `deleteVodAsset(id)` mutation                                                                       |
+| Studio                                           | FrameWorks                                                                                                                          |
+| ------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------- |
+| `POST /clip`                                     | `createClip(input)` mutation                                                                                                        |
+| `GET /session/{id}/clips`                        | `storageArtifactsConnection(input: { kinds: [CLIP] })` or `clip(id)`                                                                |
+| `POST /asset/request-upload` (direct/TUS upload) | `createVodUpload(input)` → S3 multipart upload                                                                                      |
+| `POST /asset/upload/url`                         | `importVodAsset(input: { url, filename, title })` — see [Import a video from a URL](/builders/recordings#import-a-video-from-a-url) |
+| Tasks API for upload/transcode progress          | `vodUploadStatus`, `tenantEvents` (`upload.*`), or `liveProcessingEvents` depending on the workflow                                 |
+| `GET /asset/{id}`                                | `vodAsset(id)` query                                                                                                                |
+| `DELETE /asset/{id}`                             | `deleteVodAsset(id)` mutation                                                                                                       |
 
 ### Multistream
 
@@ -25464,7 +25743,11 @@ Studio uses the term "access control" for two separate concerns: authenticating 
 | `playbackPolicy: { type: "webhook" }` | `setPlaybackPolicy({ ..., policy: { type: WEBHOOK, webhook: { url, secret, timeoutMs } } })`           |
 | `Livepeer-Jwt` header                 | `?jwt=<token>` universally; `Authorization: Bearer` where playback requests can carry headers          |
 | `?jwt=` query (MP4 only on Studio)    | `?jwt=<token>` works for HLS, LL-HLS, DASH, WebRTC/WHEP, and MP4 — single transport                    |
-| `playback.accessControl` webhook      | Webhook policy: HMAC-signed POST to your URL; return 200 to allow, anything else denies                |
+| `accessKey` for a webhook policy      | Pass the key as `?jwt=<key>`; your webhook receives it as `viewerToken`                                |
+| `playback.accessControl` webhook      | Webhook policy: HMAC-signed POST to your URL; any 2xx allows, anything else denies                     |
+| `playbackPolicy.webhookContext`       | `webhook.context`: a JSON object sent as `context` in every access request                             |
+| `playbackPolicy.allowedOrigins`       | `policy.allowedOrigins`: same `scheme://host[:port]` / `*` entries                                     |
+| `playbackPolicy.refreshInterval`      | Not configurable; the decision holds for the viewer session (about 10 minutes)                         |
 
 <Aside type="note">
   Stream keys are ingest secrets, not viewer authorization keys. Signing keys are tenant-scoped and
@@ -25478,16 +25761,48 @@ Studio uses the term "access control" for two separate concerns: authenticating 
 FrameWorks events in the right column are delivered as [webhooks](/builders/webhooks) and over
 the `tenantEvents` subscription, with the same payloads.
 
-| Studio webhook                                                                       | FrameWorks path                                                                     |
-| ------------------------------------------------------------------------------------ | ----------------------------------------------------------------------------------- |
-| `stream.started` / `stream.idle`                                                     | `stream.live` / `stream.idle`; `liveStreamEvents(streamId)` for detailed state      |
-| `recording.ready` / `recording.started` / `recording.waiting`                        | `recording.ready` / `recording.failed`, plus `liveStorageEvents(streamId)`          |
-| `asset.ready` / `asset.created` / `asset.updated` / `asset.failed` / `asset.deleted` | `upload.*` for VOD uploads; `liveStorageEvents` for artifacts                       |
-| `multistream.connected` / `multistream.error` / `multistream.disconnected`           | `multistream.status_changed`                                                        |
-| `task.spawned` / `task.updated` / `task.completed` / `task.failed`                   | No one-for-one Task API; use the clip, recording, and upload events                 |
-| `playback.user.new`                                                                  | `liveConnectionEvents(streamId)` subscription; not a webhook event                  |
-| `playback.accessControl`                                                             | Webhook playback policy (`setPlaybackPolicy` with `type: WEBHOOK`), a blocking call |
-| `stream.detection` (object detection)                                                | Planned                                                                             |
+| Studio webhook                                       | FrameWorks event                                                                    |
+| ---------------------------------------------------- | ----------------------------------------------------------------------------------- |
+| `stream.started`                                     | `stream.live` (and `stream.connected` when the encoder connects)                    |
+| `stream.idle`                                        | `stream.idle`                                                                       |
+| `recording.started`                                  | `recording.started`                                                                 |
+| `recording.waiting`                                  | `recording.stopped` (capture ended, recording being finalized)                      |
+| `recording.ready`                                    | `recording.ready` (or `recording.failed`)                                           |
+| `asset.created`                                      | `upload.created`                                                                    |
+| `asset.updated`                                      | `upload.completed` when processing starts; no per-step progress event               |
+| `asset.ready`                                        | `upload.ready`                                                                      |
+| `asset.failed`                                       | `upload.failed` (with a `reason`)                                                   |
+| `asset.deleted`                                      | No event; the deletion is in your audit log                                         |
+| `multistream.connected` / `.error` / `.disconnected` | `multistream.status_changed` (`status`, `previousStatus`)                           |
+| `task.*`                                             | No Task API; clips have `clip.requested`/`ready`/`failed`, imports use `upload.*`   |
+| `playback.accessControl`                             | Webhook playback policy (`setPlaybackPolicy` with `type: WEBHOOK`), a blocking call |
+| `playback.user.new`                                  | `liveConnectionEvents(streamId)` subscription (Studio never sends this webhook)     |
+| `stream.detection`                                   | Not available (Studio has it switched off)                                          |
+
+Payload fields:
+
+| Studio                                         | FrameWorks                                                                                |
+| ---------------------------------------------- | ----------------------------------------------------------------------------------------- |
+| `event`                                        | `type`                                                                                    |
+| `id` (event ID, stable across retries)         | `id` and the `webhook-id` header (stable across retries and replays)                      |
+| `stream.id`                                    | `data.streamId`                                                                           |
+| `stream.playbackId`                            | `data.playbackId` on `stream.connected`, `stream.live`, `stream.idle`                     |
+| `stream.name`, `userTags`, other stream fields | Not in the event; query `stream(id)`                                                      |
+| `payload.asset.id`                             | `data.artifact.artifactId`                                                                |
+| `payload.asset.snapshot.playbackId`            | Not in the event; look it up by `data.artifact.artifactId` (playback IDs can be rotated)  |
+| `payload.recordingUrl` / `payload.mp4Url`      | Not in the event; pass the looked-up playback ID to the player or `resolveViewerEndpoint` |
+| `payload.session`                              | `data.artifact` (a recording is its own artifact)                                         |
+
+Delivery differences:
+
+| Behaviour          | Studio                                                                    | FrameWorks                                                                                                                                    |
+| ------------------ | ------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------- |
+| Signature          | `Livepeer-Signature: t=<ts>,v1=<hex HMAC-SHA256 of body>`                 | [Standard Webhooks](/builders/webhooks#verify-the-signature): `webhook-id`, `webhook-timestamp`, `webhook-signature` over `id.timestamp.body` |
+| Timeout            | 30 s                                                                      | 10 s                                                                                                                                          |
+| Retries            | Up to 33, doubling from 5 s to a 1 h cap (about a day); 4xx never retried | 12 attempts over about 3 days; any non-2xx retried                                                                                            |
+| Failing endpoint   | Email, never disabled                                                     | Email, and disabled after 20 failures in a row spanning 5 days; re-enable to resume                                                           |
+| History            | Per-webhook request log, resend one request                               | 30-day delivery log with attempt details, replay one delivery or a time range, test send                                                      |
+| Per-stream webhook | `streamId` field (not applied when delivering)                            | Filter in your receiver on `data.streamId`                                                                                                    |
 
 ## Step-by-step
 
@@ -25566,7 +25881,10 @@ Before (Studio):
 // Express endpoint receiving webhooks
 app.post("/livepeer-webhook", verifyStudioSignature, (req, res) => {
   if (req.body.event === "stream.started") {
-    notifyDashboard(req.body.payload.streamId);
+    notifyDashboard(req.body.stream.id, req.body.stream.playbackId);
+  }
+  if (req.body.event === "asset.ready") {
+    publishVideo(req.body.payload.asset.snapshot.playbackId);
   }
   res.sendStatus(200);
 });
@@ -25579,7 +25897,7 @@ import { Webhook } from "standardwebhooks";
 
 const wh = new Webhook(process.env.FRAMEWORKS_WEBHOOK_SECRET);
 
-app.post("/frameworks-webhook", express.raw({ type: "application/json" }), (req, res) => {
+app.post("/frameworks-webhook", express.raw({ type: "application/json" }), async (req, res) => {
   let event;
   try {
     event = wh.verify(req.body.toString("utf8"), {
@@ -25591,11 +25909,18 @@ app.post("/frameworks-webhook", express.raw({ type: "application/json" }), (req,
     return res.sendStatus(401);
   }
   if (event.type === "stream.live") {
-    notifyDashboard(event.data.streamId);
+    notifyDashboard(event.data.streamId, event.data.playbackId);
+  }
+  if (event.type === "upload.ready") {
+    // Look up the current playback ID: storageArtifactsConnection with artifactHash = artifactId.
+    publishVideo(await playbackIdFor(event.data.artifact.artifactId));
   }
   res.sendStatus(204);
 });
 ```
+
+The SDKs verify and parse in one call: `createWebhookReceiver` (TypeScript), `NewWebhookReceiver`
+(Go), and `WebhookReceiver` (Python). See [Webhooks](/builders/webhooks).
 
 The body is `{ id, type, api_version, created_at, data }`; deduplicate on `id`. The
 [webhooks guide](/builders/webhooks) covers retries, auto-disable, and replay. If a server-side
@@ -25612,7 +25937,18 @@ If you use Studio signing keys, `playbackPolicy: { type: "jwt" }`, `Livepeer-Jwt
 - `playbackPolicy: { type: "jwt" }` → `setPlaybackPolicy` with `type: JWT`.
 - `Livepeer-Jwt` header → `?jwt=<token>` query string (universal across HLS, LL-HLS, DASH,
   WebRTC/WHEP, MP4). `Authorization: Bearer` works on playback request paths where headers are available.
-- `playback.accessControl` webhook → `setPlaybackPolicy` with `type: WEBHOOK`. FrameWorks POSTs an HMAC-signed body; your endpoint returns 200 to allow, 403 to deny.
+- `playback.accessControl` webhook → `setPlaybackPolicy` with `type: WEBHOOK`. FrameWorks POSTs an
+  HMAC-signed body; any 2xx allows, anything else denies, as on Studio.
+- Your gate endpoint needs three changes:
+  - **Signature:** verify `X-Frameworks-Signature: sha256=<hex HMAC-SHA256 of the body>` instead of
+    `Livepeer-Signature`.
+  - **Viewer key:** read `viewerToken` instead of `accessKey`. Viewers send the key as `?jwt=<key>`.
+  - **Context:** `webhookContext` becomes the policy's `webhook.context` and arrives as `context`,
+    as on Studio.
+- A `{"ret": 403}` body does not override the status code: return the status you mean.
+- `allowedOrigins` carries over as `policy.allowedOrigins` with the same entries. It is checked on
+  every browser request. Players without a browser (RTMP, SRT) send no origin and are denied unless
+  the list includes `*`.
 
 Note that signing keys do not transfer between platforms — reissue on FrameWorks. Migration concierge available via [in-app ticket](%APP_URL%/support) if you have a large library of pre-signed JWTs to roll over.
 
@@ -25674,7 +26010,14 @@ Current gaps to account for:
 - **Derived thumbnail asset enforcement** — playback access control protects endpoint resolution
   and media sessions. Chandler thumbnail URLs are preview assets and are not a separate auth
   boundary yet.
-- **VOD URL import and Studio library importer** — no direct `upload via URL` equivalent or one-shot Studio-asset importer today. If you have a sizeable library, [open an in-app ticket](%APP_URL%/support) or message us in [Discord](%DISCORD_URL%) so we can scope the migration.
+- **Studio library importer** — `importVodAsset` imports one video per call from a public
+  http(s) URL, such as a Studio asset's download URL, but there is no one-shot import of a whole
+  Studio library. `ipfs://` and `ar://` URLs are not accepted; pass a public gateway's https link. If you have a sizeable library, [open an in-app ticket](%APP_URL%/support) or
+  message us in [Discord](%DISCORD_URL%) so we can scope the migration.
+- **Creator metadata** — Studio's `creatorId` and `userTags` have no FrameWorks field yet; keep that
+  mapping in your own records, keyed by stream ID or artifact ID.
+- **Per-stream transcode profiles** — FrameWorks uses a fixed rendition ladder per billing tier;
+  Studio's `profiles[]` on a stream or asset has no equivalent yet.
 - **Per-target rendition selection on multistream** — Studio lets you pick which rendition goes to each push target. We push the default output today.
 - **RTMP and FLV-over-HTTP pull sources** — our MistServer fork has no RTMP/FLV pull module, so a `pull: { source: "rtmp://…" }` or a Studio-style `https://.../*.flv` upstream won't work. Everything else Mist documents (RTSP, SRT, RIST, HLS, DTSC, MPEG-TS over UDP including multicast) does. If RTMP pull is a critical requirement, [contact support](%APP_URL%/support) before planning your migration — there is no committed timeline yet.
 
@@ -28901,10 +29244,15 @@ frameworks cluster diagnose kafka [flags]
 - List consumer groups
 - Broker API version check
 - Cluster responsiveness
+- MirrorMaker2 topic coverage
 
 The report covers topic listing, consumer groups, a committed-offset lag
 snapshot, broker API reachability, and cluster responsiveness for one broker in
-every configured Kafka region. Native
+every configured Kafka region. For every enabled MirrorMaker2 link it compares
+each mirrored topic's end offset on the source cluster with its
+`<source>.<topic>` copy on the target cluster and warns when the source has
+records but the copy has none, which is how a topic without a replication task
+shows up. The coverage check only reads offsets. Native
 deployments use the tools under `/opt/kafka/bin`; an explicitly configured
 Docker deployment uses its Compose toolchain. Any failed probe makes the command
 exit non-zero and includes the remote command error.
@@ -31064,6 +31412,7 @@ observability: {}
 geoip: {}
 tls_bundles: {}
 ingress_sites: {}
+webhooks: {} # optional: destination policy for tenant webhooks
 ```
 
 ## Top-Level Fields
@@ -31369,6 +31718,29 @@ wireguard:
 - `listen_port` (required when enabled) - Default UDP listen port used by `mesh wg generate`
 
 > Edge nodes do not join the mesh.
+
+### webhooks
+
+Destination policy for every tenant-supplied webhook the platform dials:
+outbound event webhooks (Bosun) and playback-auth webhooks (Commodore validates
+the URL, Foghorn calls it).
+
+**Format:**
+
+```yaml
+webhooks:
+  allow_private_destinations: true
+```
+
+**Fields:**
+
+- `allow_private_destinations` (default `false`) - lets webhook receivers use private
+  (RFC 1918 / ULA) addresses, plain `http`, and `.local` or `.internal` host names, for an
+  isolated staging or development cluster whose receivers live on its own network. Loopback,
+  link-local, and cloud metadata addresses stay blocked. The CLI renders it as
+  `BOSUN_ALLOW_PRIVATE_DESTINATIONS` on Bosun and `PLAYBACK_WEBHOOK_ALLOW_PRIVATE_DESTINATIONS`
+  on Commodore and Foghorn; an env file or a service's `config` map still overrides it.
+  Never enable it on a cluster that serves untrusted tenants.
 
 ---
 
@@ -31874,6 +32246,7 @@ Read by `api_webhooks/cmd/bosun`.
 | `KAFKA_CLUSTER_ID` | string | `local` |  | v0.3.11 | Kafka cluster identifier attached to the domain event consumer and the dead-letter producer. |
 | `MIRROR_REGION_PREFIXES` | list |  |  | v0.3.11 | Comma-separated MirrorMaker2 source cluster aliases whose mirrored domain.events copies are also consumed. Empty consumes only the local topic. |
 | `DECKLOG_DLQ_KAFKA_TOPIC` | string | `decklog_events_dlq` |  | v0.3.11 | Kafka topic that receives domain event records whose payload does not decode. |
+| `BOSUN_ALLOW_PRIVATE_DESTINATIONS` | boolean | `false` |  | v0.3.11 | Lets webhook endpoints use private (RFC 1918 / ULA) addresses, plain http, and .local or .internal host names, so an isolated staging or development cluster can deliver to a receiver on its own network. Loopback, link-local, and cloud metadata addresses stay blocked. Never set it on a cluster that serves untrusted tenants. |
 | `SMTP_HOST` | string |  |  | v0.3.11 | SMTP server host for the email sent when an endpoint is disabled automatically. Empty leaves those emails queued and retried. |
 | `SMTP_PORT` | string | `587` |  | v0.3.11 | SMTP server port. |
 | `SMTP_USER` | string |  |  | v0.3.11 | SMTP user. |
@@ -31994,6 +32367,7 @@ Read by `api_control/cmd/commodore`.
 | `RESTREAM_ALLOW_PRIVATE_DESTINATIONS` | string |  |  | v0.3.0 | Allows multistream destinations that resolve to private addresses when set to true or 1. |
 | `RESTREAM_ALLOWED_PRIVATE_CIDRS` | string |  |  | v0.3.0 | Comma-separated CIDRs exempted from the private, loopback, and link-local multistream destination block. |
 | `RESTREAM_DENIED_CIDRS` | string |  |  | v0.3.0 | Comma-separated CIDRs never allowed as multistream destinations. Denials win over allowances. |
+| `PLAYBACK_WEBHOOK_ALLOW_PRIVATE_DESTINATIONS` | boolean | `false` |  | v0.3.11 | Lets playback-auth webhook URLs use private (RFC 1918 / ULA) addresses, plain http, and .local or .internal host names, so an isolated staging or development cluster can authorize playback against a receiver on its own network. Loopback, link-local, and cloud metadata addresses stay blocked. Must match Foghorn's setting. Never set it on a cluster that serves untrusted tenants. |
 | `MEDIA_AUTHORITY_SIGNING_KEY_ID` | string |  |  | v0.3.0 | Key ID of the Ed25519 signer for media authority envelopes. Required outside development, together with MEDIA_AUTHORITY_SIGNING_PRIVATE_KEY_PEM_B64. |
 | `MEDIA_AUTHORITY_SIGNING_PRIVATE_KEY_PEM_B64` | string |  | secret | v0.3.0 | Base64-wrapped PKCS#8 Ed25519 private key PEM that signs media authority envelopes. |
 | `MEDIA_AUTHORITY_SEAL_RECIPIENTS` | string |  |  | v0.3.0 | Rendered by the CLI. Maps control-cell IDs to X25519 recipient keys and enables sealed-secret delivery in media authority. |
@@ -32553,6 +32927,7 @@ Read by `api_balancing/cmd/foghorn`.
 | `FOGHORN_PLATFORM_SHARED_CLUSTERS` | list |  |  | v0.3.0 | Comma-separated cluster IDs whose tenantless nodes may serve any tenant's durable media, in addition to Quartermaster platform-official clusters. |
 | `BRAND_DOMAIN` | string | `frameworks.network` |  | v0.3.0 | Platform root domain for cluster-scoped Foghorn, edge, telemetry, and certificate host names. |
 | `ACME_EMAIL` | string |  |  | v0.3.0 | Contact email sent to edge nodes in their site configuration for ACME certificate issuance. |
+| `PLAYBACK_WEBHOOK_ALLOW_PRIVATE_DESTINATIONS` | boolean | `false` |  | v0.3.11 | Lets playback-auth webhook calls connect to private (RFC 1918 / ULA) addresses, so an isolated staging or development cluster can authorize playback against a receiver on its own network. Loopback, link-local, and cloud metadata addresses stay blocked. Must match Commodore's setting. Never set it on a cluster that serves untrusted tenants. |
 | `FEDERATION_ENABLED` | string | `false` |  | v0.3.0 | Enables cross-cluster federation when exactly true; any other value leaves it off. Requires Quartermaster, an active platform-official cluster, Redis, and authenticated TLS. |
 | `FEDERATION_ALLOW_INSECURE_DEV` | boolean | `false` |  | v0.3.0 | Allows federation together with GRPC_ALLOW_INSECURE. Isolated development only. |
 | `CPU_WEIGHT` | integer | `500` |  | v0.3.0 | Load balancer CPU score weight. The five balancer weights apply only when all are greater than 0. |
@@ -37341,14 +37716,50 @@ pre-upgrade host convergence: Privateer on every mesh host, declared Kafka
 The pre-upgrade stage runs on every release, before the first migration. It uses the same roles as
 `cluster provision`: each host renders its desired Privateer or MirrorMaker2 state and runs the
 role's check-mode precheck, so a host that already matches is skipped without a restart, and a
-rerun after a failure resumes where the cluster still differs. Hosts converge one at a time. A
-Privateer restart briefly interrupts that host's mesh DNS, and the stage verifies mesh health
-before it moves on to Kafka. The Kafka step only creates declared topics that do not exist yet;
+rerun after a failure resumes where the cluster still differs. A host that converges lists the role
+tasks its precheck reported as changing. Privateer hosts converge in waves by what they run:
+
+1. **Canary**: one control host alone. Control hosts run Quartermaster, Navigator, Commodore,
+   Purser, Bridge, or a data store (Postgres/YugabyteDB, Kafka brokers or controllers,
+   ClickHouse).
+2. **Control**: the remaining control hosts, one at a time.
+3. **Media**: hosts running Foghorn, Chandler, the Livepeer gateway or signer, Redis, or edge
+   nodes. One host per cell at a time, with cells in parallel.
+4. **Other**: analytics, Decklog, Signalman, Bosun, Lookout, Skipper, Steward, Deckhand, the web
+   apps, and observability. Up to eight hosts at a time.
+
+A host belongs to the most critical wave of anything it runs, and a service the CLI does not
+classify counts as control. Mesh health is verified on each wave's hosts before the next wave
+starts. If a host or its mesh check fails, no further host starts. The error lists the hosts left
+untouched, and the CLI prints the `release apply` command to rerun, which skips hosts that
+already converged. In a parallel wave every output line is prefixed with its host. Privateer's
+DNS socket is held by a systemd socket unit that stays open across Privateer restarts, so a
+restart delays `.internal` lookups instead of failing them. MirrorMaker2 workers converge their config without restarting, and
+every worker with a changed config or binary then restarts together. The Kafka step only creates declared topics that do not exist yet;
 it never reconfigures or restarts a broker or controller. Privateer seeds carry the service names
 both the previous and the target release resolve, so converging them before the service upgrades
 leaves every running binary reachable. `release plan` lists the stage, and
 `release apply --dry-run` runs each host's precheck and reports whether it would install,
 converge, or skip.
+
+Service upgrades keep their dependency order: one service finishes on every replica before the
+next service starts. Within one service, replicas roll by the same classes. A control service
+upgrades one replica at a time, and the first replica is the canary. A media service upgrades one
+replica per cell at a time, with cells in parallel. Any other service upgrades its replicas
+together. The service's `max_unavailable` caps how many replicas are down at once. Every built-in
+default is `1`, so media and other services roll one replica at a time unless the manifest raises
+`update_strategy.max_unavailable` for that service:
+
+```yaml
+services:
+  decklog:
+    hosts: [regional-eu-1, regional-eu-2, regional-eu-3]
+    update_strategy:
+      max_unavailable: 3
+```
+
+Yugabyte keeps its own one-node-at-a-time roll. A failed replica stops the service's rollout
+before any further replica starts, and the release stops there.
 
 Before the first mutation, `release apply` checks that every earlier release is finished: the
 postdeploy migrations of earlier releases must be in every service database and ClickHouse ledger,
@@ -37516,7 +37927,7 @@ topics the new Signalman reads already exist.
    frameworks cluster release apply --version v0.3.8 --yes
    ```
 
-   The pre-upgrade stage restarts Privateer one host at a time, verifies mesh health, creates
+   The pre-upgrade stage restarts Privateer in waves, verifies mesh health after each, creates
    `lookout.incidents`, and converges MirrorMaker2 one worker at a time. The release then creates
    the `lookout` database, runs expand migrations, upgrades every platform service with Signalman
    ahead of Bridge, installs Lookout, removes Periscope-Ingest from hosts outside the aggregator
@@ -38444,7 +38855,7 @@ Skipper ships with curated source files in `config/skipper/sitemaps/`:
 | `hls-spec.txt`   | HLS specification (IETF RFCs)                             |
 | `faq.txt`        | Curated local FAQ and troubleshooting articles            |
 
-Set `SKIPPER_SITEMAPS_DIR` to the directory containing these files. In Docker Compose, this is mounted as a read-only volume at `/etc/skipper/sitemaps`.
+Set `SKIPPER_SITEMAPS_DIR` to the directory containing these files. In Docker Compose, this is mounted as a read-only volume at `/etc/skipper/sitemaps`. The `frameworks` CLI embeds these files and places them at `/etc/skipper` when it deploys Skipper, so no repository checkout is needed on the operator machine.
 
 ### Adding Custom Sources
 
@@ -39096,7 +39507,7 @@ Planned items in this area are detailed on the [Roadmap](/roadmap#playback).
 | **Playback** | Available | API, Agents (MCP), Dashboard, Docs | Resolve a viewer or ingest endpoint for a stream / VOD / clip. Delivery over HLS, LL-HLS (CMAF), DASH, WebRTC (WHEP), and progressive MP4. |
 | ↳ Player SDKs | Available | API, Dashboard, Docs | Embeddable player packages — @livepeer-frameworks/player-&#123;core,react,svelte,wc&#125; — with theming, adaptive playback, and built-in boot/QoE telemetry. |
 | ↳ Viewer protocol selection | Available | API, Docs | resolveViewerEndpoint accepts a required playback protocol and never substitutes another format. Players check serverInfo for this slug before sending the argument. |
-| ↳ Playback access control | Available | API, Agents (MCP), Dashboard, Docs | Public / JWT / webhook playback authorization policy on streams, clips, and VOD assets, with a dry-run tester and full agent management surface. |
+| ↳ Playback access control | Available | API, Agents (MCP), Dashboard, Docs | Public / JWT / webhook playback authorization policy on streams, clips, and VOD assets, with allowed embedding origins, a per-policy webhook context object, a dry-run tester, and full agent management surface. |
 | ↳ Signing keys *(foundation)* | Available | API, Agents (MCP), Dashboard, Docs | ES256 keypairs for signing playback JWTs. Private material returned once on creation. |
 | ↳ DRM | Planned | — | FairPlay, Widevine, and PlayReady protection for premium playback workflows. |
 
@@ -39109,7 +39520,7 @@ Planned items in this area are detailed on the [Roadmap](/roadmap#media-library)
 | **DVR recordings** | Available | API, Agents (MCP), Dashboard, Docs | 24/7-capable DVR recording with bounded live seekback, continuous archive storage, chapter replay, and VOD-style playback. |
 | ↳ DVR chapters | Expanding | API, Agents (MCP), Dashboard, Docs | Chapter artifacts that segment a long-running DVR session into replayable windows, so a 24/7 recording can be replayed by window, civil-time range, or explicit range without restarting the live stream. |
 | ↳ Scheduled recordings | Planned | — | Calendar-driven DVR captures that start and stop on schedule, so streams record themselves on a fixed cadence. |
-| **VOD assets** | Available | API, Agents (MCP), Dashboard, Docs | Multipart VOD upload and lifecycle. |
+| **VOD assets** | Available | API, Agents (MCP), Dashboard, Docs | Multipart VOD upload, import from a public http(s) URL, and lifecycle. |
 | ↳ Scheduled VOD streams | Planned | — | Linear live channels assembled from existing VOD assets, with schedules that make archived media play as a rolling live stream. |
 | ↳ Upload validation and presign hardening | Expanding | — | Enforce declared size, content type, and container validity on presigned VOD uploads. |
 | **Clips** | Available | API, Agents (MCP), Dashboard, Docs | Time-range clips from live streams, DVR windows, and finalized chapters — stored as their own playable assets via createClip, or cut on the fly as a single MP4/MKV/WebM/TS download by adding time-range parameters to a playback URL. |
@@ -39242,7 +39653,7 @@ This broader inventory includes the [product capability matrix](/platform/featur
 | **Playback** | Available | API, Agents (MCP), Dashboard, Docs | Resolve a viewer or ingest endpoint for a stream / VOD / clip. Delivery over HLS, LL-HLS (CMAF), DASH, WebRTC (WHEP), and progressive MP4. |
 | ↳ Player SDKs | Available | API, Dashboard, Docs | Embeddable player packages — @livepeer-frameworks/player-&#123;core,react,svelte,wc&#125; — with theming, adaptive playback, and built-in boot/QoE telemetry. |
 | ↳ Viewer protocol selection | Available | API, Docs | resolveViewerEndpoint accepts a required playback protocol and never substitutes another format. Players check serverInfo for this slug before sending the argument. |
-| ↳ Playback access control | Available | API, Agents (MCP), Dashboard, Docs | Public / JWT / webhook playback authorization policy on streams, clips, and VOD assets, with a dry-run tester and full agent management surface. |
+| ↳ Playback access control | Available | API, Agents (MCP), Dashboard, Docs | Public / JWT / webhook playback authorization policy on streams, clips, and VOD assets, with allowed embedding origins, a per-policy webhook context object, a dry-run tester, and full agent management surface. |
 | ↳ Signing keys *(foundation)* | Available | API, Agents (MCP), Dashboard, Docs | ES256 keypairs for signing playback JWTs. Private material returned once on creation. |
 | ↳ DRM | Planned | — | FairPlay, Widevine, and PlayReady protection for premium playback workflows. |
 
@@ -39253,7 +39664,7 @@ This broader inventory includes the [product capability matrix](/platform/featur
 | **DVR recordings** | Available | API, Agents (MCP), Dashboard, Docs | 24/7-capable DVR recording with bounded live seekback, continuous archive storage, chapter replay, and VOD-style playback. |
 | ↳ DVR chapters | Expanding | API, Agents (MCP), Dashboard, Docs | Chapter artifacts that segment a long-running DVR session into replayable windows, so a 24/7 recording can be replayed by window, civil-time range, or explicit range without restarting the live stream. |
 | ↳ Scheduled recordings | Planned | — | Calendar-driven DVR captures that start and stop on schedule, so streams record themselves on a fixed cadence. |
-| **VOD assets** | Available | API, Agents (MCP), Dashboard, Docs | Multipart VOD upload and lifecycle. |
+| **VOD assets** | Available | API, Agents (MCP), Dashboard, Docs | Multipart VOD upload, import from a public http(s) URL, and lifecycle. |
 | ↳ Scheduled VOD streams | Planned | — | Linear live channels assembled from existing VOD assets, with schedules that make archived media play as a rolling live stream. |
 | ↳ Upload validation and presign hardening | Expanding | — | Enforce declared size, content type, and container validity on presigned VOD uploads. |
 | **Clips** | Available | API, Agents (MCP), Dashboard, Docs | Time-range clips from live streams, DVR windows, and finalized chapters — stored as their own playable assets via createClip, or cut on the fly as a single MP4/MKV/WebM/TS download by adding time-range parameters to a playback URL. |

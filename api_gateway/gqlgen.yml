@@ -578,6 +578,12 @@ models:
         resolver: true
       storageCost:
         resolver: true
+  # attemptHistory is loaded per delivery page through one batched Bosun call;
+  # the single-delivery query and test results already carry it.
+  WebhookDelivery:
+    fields:
+      attemptHistory:
+        resolver: true
   # PlaybackJwtPolicy and PlaybackWebhookPolicy autobind to proto types, but
   # two fields don't line up:
   #   - jwt.requiredClaimsJson is a list-of-pairs in GraphQL vs map in proto

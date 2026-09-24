@@ -158,6 +158,7 @@ type ResolverRoot interface {
 	ViewerSession() ViewerSessionResolver
 	VodAsset() VodAssetResolver
 	VodUploadedPart() VodUploadedPartResolver
+	WebhookDelivery() WebhookDeliveryResolver
 }
 
 type DirectiveRoot struct {
@@ -5470,6 +5471,9 @@ type VodAssetResolver interface {
 }
 type VodUploadedPartResolver interface {
 	SizeBytes(ctx context.Context, obj *sharedpb.VodUploadedPart) (float64, error)
+}
+type WebhookDeliveryResolver interface {
+	AttemptHistory(ctx context.Context, obj *model.WebhookDelivery) ([]*model.WebhookDeliveryAttempt, error)
 }
 
 type executableSchema graphql.ExecutableSchemaState[ResolverRoot, DirectiveRoot, ComplexityRoot]
@@ -25179,13 +25183,15 @@ type Query {
   """
   Retrieve a single DVR chapter, including its finalized playbackId.
 
-  Chapters are produced by the finalization queue as canonical .mkv
-  VOD artifacts. Historical chapter mode is configured at the Stream level
-  (Stream.dvrChapterMode) and snapshotted at StartDVR. Modes:
-    - WINDOW_SIZED: sequential fixed-length chapters of size
-      tier.MaxWindowSeconds since the recording's start.
+  Chapters are the saved parts of a recording, produced by the
+  finalization queue as canonical .mkv VOD artifacts. The chapter mode is
+  configured at the Stream level (Stream.dvrChapterMode) and snapshotted
+  when the recording starts. Modes:
+    - WINDOW_SIZED (default): sequential parts as long as the recording's
+      own live rewind window, from the recording's start.
     - FIXED_INTERVAL: UTC-only buckets of intervalSeconds, anchored at
       unix epoch 0.
+  A NONE recording keeps live rewind only and has no chapters.
   """
   dvrChapter(
     "DVR recording identifier — accepts either DVRRequest.id (UUID) or DVRRequest.dvrHash."
@@ -27170,15 +27176,16 @@ input UpdateStreamInput {
   "Replace where the source may be ingested. Omitted keeps the current location. Rejected for managed streams."
   sourceLocation: SourceLocationInput
   """
-  Historical chapter rotation mode. Snapshotted onto the DVR artifact
-  at StartDVR; changes take effect on the next recording, not in-flight.
-  NONE means rolling DVR playback only: recording still runs, but no
-  finalized chapter artifacts are produced for historical replay.
+  How saved recordings are split into chapters. Snapshotted when a
+  recording starts; changes apply from the next broadcast, not to a
+  recording in progress. NONE keeps live rewind only: viewers can rewind
+  while live, but nothing is kept after the broadcast.
   """
   dvrChapterMode: DVRChapterMode
   """
   Chapter interval in seconds. Required when dvrChapterMode =
-  FIXED_INTERVAL. Minimum 3600 (1 hour).
+  FIXED_INTERVAL. Minimum 3600 (1 hour). Send 0 with any other mode to
+  clear a stored interval.
   """
   dvrChapterIntervalSeconds: Int
   "Per-stream Skipper monitoring override. INHERIT follows the tenant tier."
@@ -27302,19 +27309,19 @@ type DVRRequest {
 # ============================================================================
 
 """
-DVR historical chapter mode. Determines how chapter (startMs, endMs)
-ranges are produced for finalized replay artifacts. Configured at the
-Stream level via updateStream and snapshotted onto the DVR artifact at
-StartDVR.
+How a recording is saved as chapters. Determines how chapter (startMs,
+endMs) ranges are produced for replay after the broadcast. Configured at
+the Stream level via updateStream and snapshotted onto the recording when
+it starts. New streams default to WINDOW_SIZED.
 
 UTC-only — civil-time chapters resolve at the edge.
 """
 enum DVRChapterMode {
-  "Sequential fixed-length chapters of size tier.MaxWindowSeconds since the recording's start."
+  "Default. Sequential parts as long as the recording's own live rewind window, from the recording's start."
   WINDOW_SIZED
   "UTC-only intervalSeconds buckets, anchored at unix epoch 0."
   FIXED_INTERVAL
-  "Rolling DVR only: recording still runs, but no historical chapter artifacts are produced."
+  "Live rewind only: viewers can rewind while live, but nothing is kept after the broadcast and no recording.ready fires."
   NONE
 }
 
@@ -27427,10 +27434,7 @@ enum VodAssetStatus {
   EXPIRED
 }
 
-"""
-Input for initiating a multipart VOD upload.
-Returns presigned S3 URLs for uploading file parts.
-"""
+"Import a video from a public URL for VOD processing."
 input ImportVodAssetInput {
   """
   Source URL, https or http. It must be publicly reachable and support HTTP
@@ -27448,6 +27452,10 @@ input ImportVodAssetInput {
   description: String
 }
 
+"""
+Input for initiating a multipart VOD upload.
+Returns presigned S3 URLs for uploading file parts.
+"""
 input CreateVodUploadInput {
   "Original filename (for metadata and content-type detection)."
   filename: String!
@@ -28614,8 +28622,9 @@ type Stream implements Node {
   "Playback access policy. null/PUBLIC = anyone with the playbackId can watch."
   playbackPolicy: PlaybackPolicy
   """
-  DVR chapter rotation mode. Snapshotted onto the DVR artifact at StartDVR;
-  changes take effect on the next recording. null/NONE = chapters disabled.
+  How saved recordings are split into chapters. Snapshotted when a recording
+  starts; changes apply from the next broadcast. NONE = live rewind only,
+  nothing kept after the broadcast.
   """
   dvrChapterMode: DVRChapterMode
   """
@@ -30855,7 +30864,7 @@ type WebhookDelivery {
   lastReplayedAt: Time
   createdAt: Time!
   updatedAt: Time!
-  "Every HTTP attempt, oldest first. Loaded by the webhookDelivery query; empty in connections."
+  "Every HTTP attempt, oldest first, including attempts before the last replay."
   attemptHistory: [WebhookDeliveryAttempt!]!
 }
 
@@ -134492,7 +134501,7 @@ func (ec *executionContext) _WebhookDelivery_attemptHistory(ctx context.Context,
 		field,
 		ec.fieldContext_WebhookDelivery_attemptHistory,
 		func(ctx context.Context) (any, error) {
-			return obj.AttemptHistory, nil
+			return ec.Resolvers.WebhookDelivery().AttemptHistory(ctx, obj)
 		},
 		nil,
 		ec.marshalNWebhookDeliveryAttempt2ᚕᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐWebhookDeliveryAttemptᚄ,
@@ -134505,8 +134514,8 @@ func (ec *executionContext) fieldContext_WebhookDelivery_attemptHistory(_ contex
 	fc = &graphql.FieldContext{
 		Object:     "WebhookDelivery",
 		Field:      field,
-		IsMethod:   false,
-		IsResolver: false,
+		IsMethod:   true,
+		IsResolver: true,
 		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
 			switch field.Name {
 			case "id":
@@ -191081,71 +191090,102 @@ func (ec *executionContext) _WebhookDelivery(ctx context.Context, sel ast.Select
 		case "id":
 			out.Values[i] = ec._WebhookDelivery_id(ctx, field, obj)
 			if out.Values[i] == graphql.Null {
-				out.Invalids++
+				atomic.AddUint32(&out.Invalids, 1)
 			}
 		case "endpointId":
 			out.Values[i] = ec._WebhookDelivery_endpointId(ctx, field, obj)
 			if out.Values[i] == graphql.Null {
-				out.Invalids++
+				atomic.AddUint32(&out.Invalids, 1)
 			}
 		case "eventId":
 			out.Values[i] = ec._WebhookDelivery_eventId(ctx, field, obj)
 		case "eventType":
 			out.Values[i] = ec._WebhookDelivery_eventType(ctx, field, obj)
 			if out.Values[i] == graphql.Null {
-				out.Invalids++
+				atomic.AddUint32(&out.Invalids, 1)
 			}
 		case "kind":
 			out.Values[i] = ec._WebhookDelivery_kind(ctx, field, obj)
 			if out.Values[i] == graphql.Null {
-				out.Invalids++
+				atomic.AddUint32(&out.Invalids, 1)
 			}
 		case "status":
 			out.Values[i] = ec._WebhookDelivery_status(ctx, field, obj)
 			if out.Values[i] == graphql.Null {
-				out.Invalids++
+				atomic.AddUint32(&out.Invalids, 1)
 			}
 		case "attempts":
 			out.Values[i] = ec._WebhookDelivery_attempts(ctx, field, obj)
 			if out.Values[i] == graphql.Null {
-				out.Invalids++
+				atomic.AddUint32(&out.Invalids, 1)
 			}
 		case "nextAttemptAt":
 			out.Values[i] = ec._WebhookDelivery_nextAttemptAt(ctx, field, obj)
 		case "lastStatusCode":
 			out.Values[i] = ec._WebhookDelivery_lastStatusCode(ctx, field, obj)
 			if out.Values[i] == graphql.Null {
-				out.Invalids++
+				atomic.AddUint32(&out.Invalids, 1)
 			}
 		case "lastErrorClass":
 			out.Values[i] = ec._WebhookDelivery_lastErrorClass(ctx, field, obj)
 			if out.Values[i] == graphql.Null {
-				out.Invalids++
+				atomic.AddUint32(&out.Invalids, 1)
 			}
 		case "deliveredAt":
 			out.Values[i] = ec._WebhookDelivery_deliveredAt(ctx, field, obj)
 		case "replayCount":
 			out.Values[i] = ec._WebhookDelivery_replayCount(ctx, field, obj)
 			if out.Values[i] == graphql.Null {
-				out.Invalids++
+				atomic.AddUint32(&out.Invalids, 1)
 			}
 		case "lastReplayedAt":
 			out.Values[i] = ec._WebhookDelivery_lastReplayedAt(ctx, field, obj)
 		case "createdAt":
 			out.Values[i] = ec._WebhookDelivery_createdAt(ctx, field, obj)
 			if out.Values[i] == graphql.Null {
-				out.Invalids++
+				atomic.AddUint32(&out.Invalids, 1)
 			}
 		case "updatedAt":
 			out.Values[i] = ec._WebhookDelivery_updatedAt(ctx, field, obj)
 			if out.Values[i] == graphql.Null {
-				out.Invalids++
+				atomic.AddUint32(&out.Invalids, 1)
 			}
 		case "attemptHistory":
-			out.Values[i] = ec._WebhookDelivery_attemptHistory(ctx, field, obj)
-			if out.Values[i] == graphql.Null {
-				out.Invalids++
+			field := field
+
+			innerFunc := func(ctx context.Context, fs *graphql.FieldSet) (res graphql.Marshaler) {
+				defer func() {
+					if r := recover(); r != nil {
+						ec.Error(ctx, ec.Recover(ctx, r))
+					}
+				}()
+				res = ec._WebhookDelivery_attemptHistory(ctx, field, obj)
+				if res == graphql.Null {
+					atomic.AddUint32(&fs.Invalids, 1)
+				}
+				return res
 			}
+
+			if field.Deferrable != nil {
+				dfs, ok := deferred[field.Deferrable.Label]
+				di := 0
+				if ok {
+					dfs.AddField(field)
+					di = len(dfs.Values) - 1
+				} else {
+					dfs = graphql.NewFieldSet([]graphql.CollectedField{field})
+					deferred[field.Deferrable.Label] = dfs
+				}
+				dfs.Concurrently(di, func(ctx context.Context) graphql.Marshaler {
+					return innerFunc(ctx, dfs)
+				})
+
+				// don't run the out.Concurrently() call below
+				out.Values[i] = graphql.Null
+				continue
+			}
+
+			out.Concurrently(i, func(ctx context.Context) graphql.Marshaler { return innerFunc(ctx, out) })
 		default:
 			panic("unknown field " + strconv.Quote(field.Name))
 		}

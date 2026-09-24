@@ -1504,10 +1504,10 @@ export interface DVRChapter {
 
 
 /**
- * DVR historical chapter mode. Determines how chapter (startMs, endMs)
- * ranges are produced for finalized replay artifacts. Configured at the
- * Stream level via updateStream and snapshotted onto the DVR artifact at
- * StartDVR.
+ * How a recording is saved as chapters. Determines how chapter (startMs,
+ * endMs) ranges are produced for replay after the broadcast. Configured at
+ * the Stream level via updateStream and snapshotted onto the recording when
+ * it starts. New streams default to WINDOW_SIZED.
  *
  * UTC-only — civil-time chapters resolve at the edge.
  */
@@ -4332,13 +4332,15 @@ export interface Query {
     /**
      * Retrieve a single DVR chapter, including its finalized playbackId.
      *
-     * Chapters are produced by the finalization queue as canonical .mkv
-     * VOD artifacts. Historical chapter mode is configured at the Stream level
-     * (Stream.dvrChapterMode) and snapshotted at StartDVR. Modes:
-     *   - WINDOW_SIZED: sequential fixed-length chapters of size
-     *     tier.MaxWindowSeconds since the recording's start.
+     * Chapters are the saved parts of a recording, produced by the
+     * finalization queue as canonical .mkv VOD artifacts. The chapter mode is
+     * configured at the Stream level (Stream.dvrChapterMode) and snapshotted
+     * when the recording starts. Modes:
+     *   - WINDOW_SIZED (default): sequential parts as long as the recording's
+     *     own live rewind window, from the recording's start.
      *   - FIXED_INTERVAL: UTC-only buckets of intervalSeconds, anchored at
      *     unix epoch 0.
+     * A NONE recording keeps live rewind only and has no chapters.
      */
     dvrChapter: (DVRChapter | null)
     /**
@@ -5096,8 +5098,9 @@ export interface Stream {
     /** Playback access policy. null/PUBLIC = anyone with the playbackId can watch. */
     playbackPolicy: (PlaybackPolicy | null)
     /**
-     * DVR chapter rotation mode. Snapshotted onto the DVR artifact at StartDVR;
-     * changes take effect on the next recording. null/NONE = chapters disabled.
+     * How saved recordings are split into chapters. Snapshotted when a recording
+     * starts; changes apply from the next broadcast. NONE = live rewind only,
+     * nothing kept after the broadcast.
      */
     dvrChapterMode: (DVRChapterMode | null)
     /**
@@ -6594,7 +6597,7 @@ export interface WebhookDelivery {
     lastReplayedAt: (Scalars['Time'] | null)
     createdAt: Scalars['Time']
     updatedAt: Scalars['Time']
-    /** Every HTTP attempt, oldest first. Loaded by the webhookDelivery query; empty in connections. */
+    /** Every HTTP attempt, oldest first, including attempts before the last replay. */
     attemptHistory: WebhookDeliveryAttempt[]
     __typename: 'WebhookDelivery'
 }
@@ -12050,13 +12053,15 @@ export interface QueryGenqlSelection{
     /**
      * Retrieve a single DVR chapter, including its finalized playbackId.
      *
-     * Chapters are produced by the finalization queue as canonical .mkv
-     * VOD artifacts. Historical chapter mode is configured at the Stream level
-     * (Stream.dvrChapterMode) and snapshotted at StartDVR. Modes:
-     *   - WINDOW_SIZED: sequential fixed-length chapters of size
-     *     tier.MaxWindowSeconds since the recording's start.
+     * Chapters are the saved parts of a recording, produced by the
+     * finalization queue as canonical .mkv VOD artifacts. The chapter mode is
+     * configured at the Stream level (Stream.dvrChapterMode) and snapshotted
+     * when the recording starts. Modes:
+     *   - WINDOW_SIZED (default): sequential parts as long as the recording's
+     *     own live rewind window, from the recording's start.
      *   - FIXED_INTERVAL: UTC-only buckets of intervalSeconds, anchored at
      *     unix epoch 0.
+     * A NONE recording keeps live rewind only and has no chapters.
      */
     dvrChapter?: (DVRChapterGenqlSelection & { __args: {
     /** DVR recording identifier — accepts either DVRRequest.id (UUID) or DVRRequest.dvrHash. */
@@ -13060,8 +13065,9 @@ export interface StreamGenqlSelection{
     /** Playback access policy. null/PUBLIC = anyone with the playbackId can watch. */
     playbackPolicy?: PlaybackPolicyGenqlSelection
     /**
-     * DVR chapter rotation mode. Snapshotted onto the DVR artifact at StartDVR;
-     * changes take effect on the next recording. null/NONE = chapters disabled.
+     * How saved recordings are split into chapters. Snapshotted when a recording
+     * starts; changes apply from the next broadcast. NONE = live rewind only,
+     * nothing kept after the broadcast.
      */
     dvrChapterMode?: boolean | number
     /**
@@ -14181,15 +14187,16 @@ pullSource?: (PullSourceInput | null),
 /** Replace where the source may be ingested. Omitted keeps the current location. Rejected for managed streams. */
 sourceLocation?: (SourceLocationInput | null),
 /**
- * Historical chapter rotation mode. Snapshotted onto the DVR artifact
- * at StartDVR; changes take effect on the next recording, not in-flight.
- * NONE means rolling DVR playback only: recording still runs, but no
- * finalized chapter artifacts are produced for historical replay.
+ * How saved recordings are split into chapters. Snapshotted when a
+ * recording starts; changes apply from the next broadcast, not to a
+ * recording in progress. NONE keeps live rewind only: viewers can rewind
+ * while live, but nothing is kept after the broadcast.
  */
 dvrChapterMode?: (DVRChapterMode | null),
 /**
  * Chapter interval in seconds. Required when dvrChapterMode =
- * FIXED_INTERVAL. Minimum 3600 (1 hour).
+ * FIXED_INTERVAL. Minimum 3600 (1 hour). Send 0 with any other mode to
+ * clear a stored interval.
  */
 dvrChapterIntervalSeconds?: (Scalars['Int'] | null),
 /** Per-stream Skipper monitoring override. INHERIT follows the tenant tier. */
@@ -14892,7 +14899,7 @@ export interface WebhookDeliveryGenqlSelection{
     lastReplayedAt?: boolean | number
     createdAt?: boolean | number
     updatedAt?: boolean | number
-    /** Every HTTP attempt, oldest first. Loaded by the webhookDelivery query; empty in connections. */
+    /** Every HTTP attempt, oldest first, including attempts before the last replay. */
     attemptHistory?: WebhookDeliveryAttemptGenqlSelection
     __typename?: boolean | number
     __scalar?: boolean | number

@@ -78,8 +78,8 @@ func TestWebhookSecretReachableOnlyFromCreateAndRotate(t *testing.T) {
 	}
 }
 
-// webhookDelivery runs through the generated schema in demo mode and returns
-// the attempt history; the deliveries connection returns none.
+// webhookDelivery and the deliveries connection run through the generated
+// schema in demo mode and both return the delivery's attempt history.
 func TestWebhookDeliveryExecutesInDemoMode(t *testing.T) {
 	srv := newPlaygroundTestServer()
 	resp := executeGraphQL(t, srv, `query($id: ID!, $endpointId: ID!) {
@@ -116,7 +116,7 @@ func TestWebhookDeliveryExecutesInDemoMode(t *testing.T) {
 		t.Fatalf("webhookDelivery = %+v", data.WebhookDelivery)
 	}
 	conn := data.WebhookDeliveriesConnection
-	if conn.TotalCount != 1 || len(conn.Nodes) != 1 || conn.Nodes[0].ID != "demo_webhook_delivery_003" || len(conn.Nodes[0].AttemptHistory) != 0 {
+	if conn.TotalCount != 1 || len(conn.Nodes) != 1 || conn.Nodes[0].ID != "demo_webhook_delivery_003" || len(conn.Nodes[0].AttemptHistory) != data.WebhookDelivery.Attempts {
 		t.Fatalf("webhookDeliveriesConnection = %+v", conn)
 	}
 	if data.WebhookEndpoint.ID != demo.DemoWebhookEndpointID {

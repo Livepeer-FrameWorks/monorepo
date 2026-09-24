@@ -9,6 +9,7 @@ import (
 
 	"frameworks/api_gateway/graph/model"
 	"frameworks/api_gateway/internal/demo"
+	"frameworks/api_gateway/internal/loaders"
 	"frameworks/api_gateway/internal/middleware"
 
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/authz"
@@ -152,8 +153,9 @@ type WebhookDeliveryFilter struct {
 	CreatedBefore *time.Time
 }
 
-// DoWebhookDeliveriesConnection lists deliveries newest first. Connection
-// nodes carry no attempt history; webhookDelivery loads it.
+// DoWebhookDeliveriesConnection lists deliveries newest first. The page's
+// delivery IDs are registered with the request's attempt loader, so the
+// attemptHistory fields of all nodes load in one Bosun call.
 func (r *Resolver) DoWebhookDeliveriesConnection(ctx context.Context, filter WebhookDeliveryFilter, page *model.ConnectionInput) (*model.WebhookDeliveriesConnection, error) {
 	pageReq, err := webhookDeliveryPagination(page)
 	if err != nil {
@@ -175,7 +177,12 @@ func (r *Resolver) DoWebhookDeliveriesConnection(ctx context.Context, filter Web
 		req.CreatedBefore = timestamppb.New(*filter.CreatedBefore)
 	}
 	if middleware.IsDemoMode(ctx) {
-		return webhookDeliveriesConnection(demoWebhookDeliveries(req)), nil
+		resp := demoWebhookDeliveries(req)
+		conn := webhookDeliveriesConnection(resp)
+		for i, d := range resp.GetDeliveries() {
+			conn.Nodes[i].AttemptHistory = webhookDeliveryWithAttempts(d, demo.GenerateWebhookDeliveryAttempts(d)).AttemptHistory
+		}
+		return conn, nil
 	}
 	callCtx, err := r.webhookReadCtx(ctx)
 	if err != nil {
@@ -185,7 +192,57 @@ func (r *Resolver) DoWebhookDeliveriesConnection(ctx context.Context, filter Web
 	if err != nil {
 		return nil, fmt.Errorf("list webhook deliveries: %w", err)
 	}
-	return webhookDeliveriesConnection(resp), nil
+	conn := webhookDeliveriesConnection(resp)
+	if l := loaders.FromContext(ctx); l != nil && l.WebhookAttempts != nil {
+		for _, node := range conn.Nodes {
+			l.WebhookAttempts.Register(node.ID)
+		}
+	}
+	return conn, nil
+}
+
+// DoWebhookDeliveryAttemptHistory resolves WebhookDelivery.attemptHistory.
+// Deliveries mapped with their attempts return them as they are; the others
+// load through the request's batching loader, or one call without it.
+func (r *Resolver) DoWebhookDeliveryAttemptHistory(ctx context.Context, obj *model.WebhookDelivery) ([]*model.WebhookDeliveryAttempt, error) {
+	if obj == nil {
+		return []*model.WebhookDeliveryAttempt{}, nil
+	}
+	if obj.AttemptHistory != nil {
+		return obj.AttemptHistory, nil
+	}
+	if middleware.IsDemoMode(ctx) {
+		for _, d := range demo.GenerateWebhookDeliveries() {
+			if d.GetId() == obj.ID {
+				return webhookDeliveryWithAttempts(d, demo.GenerateWebhookDeliveryAttempts(d)).AttemptHistory, nil
+			}
+		}
+		return []*model.WebhookDeliveryAttempt{}, nil
+	}
+	callCtx, err := r.webhookReadCtx(ctx)
+	if err != nil {
+		return nil, err
+	}
+	var attempts []*bosunpb.WebhookDeliveryAttempt
+	if l := loaders.FromContext(ctx); l != nil && l.WebhookAttempts != nil {
+		attempts, err = l.WebhookAttempts.Load(callCtx, obj.ID)
+	} else {
+		var resp *bosunpb.ListAttemptsForDeliveriesResponse
+		resp, err = r.Clients.Bosun.ListAttemptsForDeliveries(callCtx, []string{obj.ID})
+		for _, d := range resp.GetDeliveries() {
+			attempts = d.GetAttempts()
+		}
+	}
+	if err != nil {
+		return nil, fmt.Errorf("list webhook delivery attempts: %w", err)
+	}
+	out := make([]*model.WebhookDeliveryAttempt, 0, len(attempts))
+	for _, a := range attempts {
+		if converted := webhookAttemptFromProto(a); converted != nil {
+			out = append(out, converted)
+		}
+	}
+	return out, nil
 }
 
 // DoWebhookDelivery returns one delivery with its attempt history, or nil when
@@ -347,7 +404,7 @@ func (r *Resolver) DoTestWebhookEndpoint(ctx context.Context, id string) (model.
 		return webhookMutationError[model.TestWebhookEndpointResult](err, "WebhookEndpoint", id, "test webhook endpoint")
 	}
 	return &model.WebhookTestResult{
-		Delivery: webhookDeliveryFromProto(resp.GetDelivery()),
+		Delivery: webhookDeliveryWithAttempts(resp.GetDelivery(), []*bosunpb.WebhookDeliveryAttempt{resp.GetAttempt()}),
 		Attempt:  webhookAttemptFromProto(resp.GetAttempt()),
 	}, nil
 }
@@ -606,8 +663,8 @@ func webhookDeliveryStatusFromProto(st bosunpb.WebhookDeliveryStatus) model.Webh
 	}
 }
 
-// webhookDeliveryFromProto maps a delivery without attempt history, which
-// only webhookDelivery loads.
+// webhookDeliveryFromProto maps a delivery without attempt history. A nil
+// AttemptHistory means not loaded; the attemptHistory field resolver loads it.
 func webhookDeliveryFromProto(d *bosunpb.WebhookDelivery) *model.WebhookDelivery {
 	if d == nil {
 		return nil
@@ -628,7 +685,6 @@ func webhookDeliveryFromProto(d *bosunpb.WebhookDelivery) *model.WebhookDelivery
 		LastReplayedAt: webhookTime(d.GetLastReplayedAt()),
 		CreatedAt:      webhookRequiredTime(d.GetCreatedAt()),
 		UpdatedAt:      webhookRequiredTime(d.GetUpdatedAt()),
-		AttemptHistory: []*model.WebhookDeliveryAttempt{},
 	}
 	if d.GetKind() == bosunpb.WebhookDeliveryKind_WEBHOOK_DELIVERY_KIND_TEST {
 		out.Kind = model.WebhookDeliveryKindTest
@@ -641,6 +697,7 @@ func webhookDeliveryWithAttempts(d *bosunpb.WebhookDelivery, attempts []*bosunpb
 	if out == nil {
 		return nil
 	}
+	out.AttemptHistory = make([]*model.WebhookDeliveryAttempt, 0, len(attempts))
 	for _, a := range attempts {
 		if converted := webhookAttemptFromProto(a); converted != nil {
 			out.AttemptHistory = append(out.AttemptHistory, converted)

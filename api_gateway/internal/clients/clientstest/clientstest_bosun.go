@@ -24,6 +24,7 @@ type FakeBosun struct {
 	TestWebhookEndpointFn         func(ctx context.Context, endpointID string) (*bosunpb.TestWebhookEndpointResponse, error)
 	ListWebhookDeliveriesFn       func(ctx context.Context, req *bosunpb.ListWebhookDeliveriesRequest) (*bosunpb.ListWebhookDeliveriesResponse, error)
 	GetWebhookDeliveryFn          func(ctx context.Context, deliveryID string) (*bosunpb.GetWebhookDeliveryResponse, error)
+	ListAttemptsForDeliveriesFn   func(ctx context.Context, deliveryIDs []string) (*bosunpb.ListAttemptsForDeliveriesResponse, error)
 	ReplayWebhookDeliveryFn       func(ctx context.Context, deliveryID string) (*bosunpb.WebhookDelivery, error)
 	ReplayWebhookDeliveriesFn     func(ctx context.Context, req *bosunpb.ReplayWebhookDeliveriesRequest) (*bosunpb.ReplayWebhookDeliveriesResponse, error)
 }
@@ -110,6 +111,13 @@ func (f *FakeBosun) GetWebhookDelivery(ctx context.Context, deliveryID string) (
 		panic("clientstest: FakeBosun.GetWebhookDelivery not stubbed")
 	}
 	return f.GetWebhookDeliveryFn(ctx, deliveryID)
+}
+
+func (f *FakeBosun) ListAttemptsForDeliveries(ctx context.Context, deliveryIDs []string) (*bosunpb.ListAttemptsForDeliveriesResponse, error) {
+	if f.ListAttemptsForDeliveriesFn == nil {
+		panic("clientstest: FakeBosun.ListAttemptsForDeliveries not stubbed")
+	}
+	return f.ListAttemptsForDeliveriesFn(ctx, deliveryIDs)
 }
 
 func (f *FakeBosun) ReplayWebhookDelivery(ctx context.Context, deliveryID string) (*bosunpb.WebhookDelivery, error) {

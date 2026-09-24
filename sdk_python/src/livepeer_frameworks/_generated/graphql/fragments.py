@@ -159,9 +159,9 @@ class ArtifactEventDefaultStream(BaseModel):
     "Playback access policy. null/PUBLIC = anyone with the playbackId can watch."
     dvr_chapter_mode: Optional[DVRChapterMode] = Field(
         alias="dvrChapterMode",
-        description="DVR chapter rotation mode. Snapshotted onto the DVR artifact at StartDVR;\nchanges take effect on the next recording. null/NONE = chapters disabled.",
+        description="How saved recordings are split into chapters. Snapshotted when a recording\nstarts; changes apply from the next broadcast. NONE = live rewind only,\nnothing kept after the broadcast.",
     )
-    "DVR chapter rotation mode. Snapshotted onto the DVR artifact at StartDVR;\nchanges take effect on the next recording. null/NONE = chapters disabled."
+    "How saved recordings are split into chapters. Snapshotted when a recording\nstarts; changes apply from the next broadcast. NONE = live rewind only,\nnothing kept after the broadcast."
     dvr_chapter_interval_seconds: Optional[int] = Field(
         alias="dvrChapterIntervalSeconds",
         description="Chapter interval in seconds. Required when dvrChapterMode = FIXED_INTERVAL,\nignored otherwise. Minimum 3600 (1 hour).",
@@ -507,9 +507,9 @@ class ArtifactEventInNodeDefaultStream(BaseModel):
     "Playback access policy. null/PUBLIC = anyone with the playbackId can watch."
     dvr_chapter_mode: Optional[DVRChapterMode] = Field(
         alias="dvrChapterMode",
-        description="DVR chapter rotation mode. Snapshotted onto the DVR artifact at StartDVR;\nchanges take effect on the next recording. null/NONE = chapters disabled.",
+        description="How saved recordings are split into chapters. Snapshotted when a recording\nstarts; changes apply from the next broadcast. NONE = live rewind only,\nnothing kept after the broadcast.",
     )
-    "DVR chapter rotation mode. Snapshotted onto the DVR artifact at StartDVR;\nchanges take effect on the next recording. null/NONE = chapters disabled."
+    "How saved recordings are split into chapters. Snapshotted when a recording\nstarts; changes apply from the next broadcast. NONE = live rewind only,\nnothing kept after the broadcast."
     dvr_chapter_interval_seconds: Optional[int] = Field(
         alias="dvrChapterIntervalSeconds",
         description="Chapter interval in seconds. Required when dvrChapterMode = FIXED_INTERVAL,\nignored otherwise. Minimum 3600 (1 hour).",
@@ -860,9 +860,9 @@ class ArtifactStateDefaultStream(BaseModel):
     "Playback access policy. null/PUBLIC = anyone with the playbackId can watch."
     dvr_chapter_mode: Optional[DVRChapterMode] = Field(
         alias="dvrChapterMode",
-        description="DVR chapter rotation mode. Snapshotted onto the DVR artifact at StartDVR;\nchanges take effect on the next recording. null/NONE = chapters disabled.",
+        description="How saved recordings are split into chapters. Snapshotted when a recording\nstarts; changes apply from the next broadcast. NONE = live rewind only,\nnothing kept after the broadcast.",
     )
-    "DVR chapter rotation mode. Snapshotted onto the DVR artifact at StartDVR;\nchanges take effect on the next recording. null/NONE = chapters disabled."
+    "How saved recordings are split into chapters. Snapshotted when a recording\nstarts; changes apply from the next broadcast. NONE = live rewind only,\nnothing kept after the broadcast."
     dvr_chapter_interval_seconds: Optional[int] = Field(
         alias="dvrChapterIntervalSeconds",
         description="Chapter interval in seconds. Required when dvrChapterMode = FIXED_INTERVAL,\nignored otherwise. Minimum 3600 (1 hour).",
@@ -2462,9 +2462,9 @@ class ClientMetrics5mDefaultStream(BaseModel):
     "Playback access policy. null/PUBLIC = anyone with the playbackId can watch."
     dvr_chapter_mode: Optional[DVRChapterMode] = Field(
         alias="dvrChapterMode",
-        description="DVR chapter rotation mode. Snapshotted onto the DVR artifact at StartDVR;\nchanges take effect on the next recording. null/NONE = chapters disabled.",
+        description="How saved recordings are split into chapters. Snapshotted when a recording\nstarts; changes apply from the next broadcast. NONE = live rewind only,\nnothing kept after the broadcast.",
     )
-    "DVR chapter rotation mode. Snapshotted onto the DVR artifact at StartDVR;\nchanges take effect on the next recording. null/NONE = chapters disabled."
+    "How saved recordings are split into chapters. Snapshotted when a recording\nstarts; changes apply from the next broadcast. NONE = live rewind only,\nnothing kept after the broadcast."
     dvr_chapter_interval_seconds: Optional[int] = Field(
         alias="dvrChapterIntervalSeconds",
         description="Chapter interval in seconds. Required when dvrChapterMode = FIXED_INTERVAL,\nignored otherwise. Minimum 3600 (1 hour).",
@@ -3137,9 +3137,9 @@ class ClipInNodeDefaultStream(BaseModel):
     "Playback access policy. null/PUBLIC = anyone with the playbackId can watch."
     dvr_chapter_mode: Optional[DVRChapterMode] = Field(
         alias="dvrChapterMode",
-        description="DVR chapter rotation mode. Snapshotted onto the DVR artifact at StartDVR;\nchanges take effect on the next recording. null/NONE = chapters disabled.",
+        description="How saved recordings are split into chapters. Snapshotted when a recording\nstarts; changes apply from the next broadcast. NONE = live rewind only,\nnothing kept after the broadcast.",
     )
-    "DVR chapter rotation mode. Snapshotted onto the DVR artifact at StartDVR;\nchanges take effect on the next recording. null/NONE = chapters disabled."
+    "How saved recordings are split into chapters. Snapshotted when a recording\nstarts; changes apply from the next broadcast. NONE = live rewind only,\nnothing kept after the broadcast."
     dvr_chapter_interval_seconds: Optional[int] = Field(
         alias="dvrChapterIntervalSeconds",
         description="Chapter interval in seconds. Required when dvrChapterMode = FIXED_INTERVAL,\nignored otherwise. Minimum 3600 (1 hour).",
@@ -3935,9 +3935,9 @@ class ConnectionEventDefaultStream(BaseModel):
     "Playback access policy. null/PUBLIC = anyone with the playbackId can watch."
     dvr_chapter_mode: Optional[DVRChapterMode] = Field(
         alias="dvrChapterMode",
-        description="DVR chapter rotation mode. Snapshotted onto the DVR artifact at StartDVR;\nchanges take effect on the next recording. null/NONE = chapters disabled.",
+        description="How saved recordings are split into chapters. Snapshotted when a recording\nstarts; changes apply from the next broadcast. NONE = live rewind only,\nnothing kept after the broadcast.",
     )
-    "DVR chapter rotation mode. Snapshotted onto the DVR artifact at StartDVR;\nchanges take effect on the next recording. null/NONE = chapters disabled."
+    "How saved recordings are split into chapters. Snapshotted when a recording\nstarts; changes apply from the next broadcast. NONE = live rewind only,\nnothing kept after the broadcast."
     dvr_chapter_interval_seconds: Optional[int] = Field(
         alias="dvrChapterIntervalSeconds",
         description="Chapter interval in seconds. Required when dvrChapterMode = FIXED_INTERVAL,\nignored otherwise. Minimum 3600 (1 hour).",
@@ -4305,9 +4305,9 @@ class ConnectionEventInNodeDefaultStream(BaseModel):
     "Playback access policy. null/PUBLIC = anyone with the playbackId can watch."
     dvr_chapter_mode: Optional[DVRChapterMode] = Field(
         alias="dvrChapterMode",
-        description="DVR chapter rotation mode. Snapshotted onto the DVR artifact at StartDVR;\nchanges take effect on the next recording. null/NONE = chapters disabled.",
+        description="How saved recordings are split into chapters. Snapshotted when a recording\nstarts; changes apply from the next broadcast. NONE = live rewind only,\nnothing kept after the broadcast.",
     )
-    "DVR chapter rotation mode. Snapshotted onto the DVR artifact at StartDVR;\nchanges take effect on the next recording. null/NONE = chapters disabled."
+    "How saved recordings are split into chapters. Snapshotted when a recording\nstarts; changes apply from the next broadcast. NONE = live rewind only,\nnothing kept after the broadcast."
     dvr_chapter_interval_seconds: Optional[int] = Field(
         alias="dvrChapterIntervalSeconds",
         description="Chapter interval in seconds. Required when dvrChapterMode = FIXED_INTERVAL,\nignored otherwise. Minimum 3600 (1 hour).",
@@ -5383,9 +5383,9 @@ class GeographicDistributionDefaultStream(BaseModel):
     "Playback access policy. null/PUBLIC = anyone with the playbackId can watch."
     dvr_chapter_mode: Optional[DVRChapterMode] = Field(
         alias="dvrChapterMode",
-        description="DVR chapter rotation mode. Snapshotted onto the DVR artifact at StartDVR;\nchanges take effect on the next recording. null/NONE = chapters disabled.",
+        description="How saved recordings are split into chapters. Snapshotted when a recording\nstarts; changes apply from the next broadcast. NONE = live rewind only,\nnothing kept after the broadcast.",
     )
-    "DVR chapter rotation mode. Snapshotted onto the DVR artifact at StartDVR;\nchanges take effect on the next recording. null/NONE = chapters disabled."
+    "How saved recordings are split into chapters. Snapshotted when a recording\nstarts; changes apply from the next broadcast. NONE = live rewind only,\nnothing kept after the broadcast."
     dvr_chapter_interval_seconds: Optional[int] = Field(
         alias="dvrChapterIntervalSeconds",
         description="Chapter interval in seconds. Required when dvrChapterMode = FIXED_INTERVAL,\nignored otherwise. Minimum 3600 (1 hour).",
@@ -7561,9 +7561,9 @@ class ProcessingUsageRecordDefaultStream(BaseModel):
     "Playback access policy. null/PUBLIC = anyone with the playbackId can watch."
     dvr_chapter_mode: Optional[DVRChapterMode] = Field(
         alias="dvrChapterMode",
-        description="DVR chapter rotation mode. Snapshotted onto the DVR artifact at StartDVR;\nchanges take effect on the next recording. null/NONE = chapters disabled.",
+        description="How saved recordings are split into chapters. Snapshotted when a recording\nstarts; changes apply from the next broadcast. NONE = live rewind only,\nnothing kept after the broadcast.",
     )
-    "DVR chapter rotation mode. Snapshotted onto the DVR artifact at StartDVR;\nchanges take effect on the next recording. null/NONE = chapters disabled."
+    "How saved recordings are split into chapters. Snapshotted when a recording\nstarts; changes apply from the next broadcast. NONE = live rewind only,\nnothing kept after the broadcast."
     dvr_chapter_interval_seconds: Optional[int] = Field(
         alias="dvrChapterIntervalSeconds",
         description="Chapter interval in seconds. Required when dvrChapterMode = FIXED_INTERVAL,\nignored otherwise. Minimum 3600 (1 hour).",
@@ -7954,9 +7954,9 @@ class ProcessingUsageRecordInNodeDefaultStream(BaseModel):
     "Playback access policy. null/PUBLIC = anyone with the playbackId can watch."
     dvr_chapter_mode: Optional[DVRChapterMode] = Field(
         alias="dvrChapterMode",
-        description="DVR chapter rotation mode. Snapshotted onto the DVR artifact at StartDVR;\nchanges take effect on the next recording. null/NONE = chapters disabled.",
+        description="How saved recordings are split into chapters. Snapshotted when a recording\nstarts; changes apply from the next broadcast. NONE = live rewind only,\nnothing kept after the broadcast.",
     )
-    "DVR chapter rotation mode. Snapshotted onto the DVR artifact at StartDVR;\nchanges take effect on the next recording. null/NONE = chapters disabled."
+    "How saved recordings are split into chapters. Snapshotted when a recording\nstarts; changes apply from the next broadcast. NONE = live rewind only,\nnothing kept after the broadcast."
     dvr_chapter_interval_seconds: Optional[int] = Field(
         alias="dvrChapterIntervalSeconds",
         description="Chapter interval in seconds. Required when dvrChapterMode = FIXED_INTERVAL,\nignored otherwise. Minimum 3600 (1 hour).",
@@ -8381,9 +8381,9 @@ class QualityTierDailyDefaultStream(BaseModel):
     "Playback access policy. null/PUBLIC = anyone with the playbackId can watch."
     dvr_chapter_mode: Optional[DVRChapterMode] = Field(
         alias="dvrChapterMode",
-        description="DVR chapter rotation mode. Snapshotted onto the DVR artifact at StartDVR;\nchanges take effect on the next recording. null/NONE = chapters disabled.",
+        description="How saved recordings are split into chapters. Snapshotted when a recording\nstarts; changes apply from the next broadcast. NONE = live rewind only,\nnothing kept after the broadcast.",
     )
-    "DVR chapter rotation mode. Snapshotted onto the DVR artifact at StartDVR;\nchanges take effect on the next recording. null/NONE = chapters disabled."
+    "How saved recordings are split into chapters. Snapshotted when a recording\nstarts; changes apply from the next broadcast. NONE = live rewind only,\nnothing kept after the broadcast."
     dvr_chapter_interval_seconds: Optional[int] = Field(
         alias="dvrChapterIntervalSeconds",
         description="Chapter interval in seconds. Required when dvrChapterMode = FIXED_INTERVAL,\nignored otherwise. Minimum 3600 (1 hour).",
@@ -8734,9 +8734,9 @@ class RebufferingEventDefaultStream(BaseModel):
     "Playback access policy. null/PUBLIC = anyone with the playbackId can watch."
     dvr_chapter_mode: Optional[DVRChapterMode] = Field(
         alias="dvrChapterMode",
-        description="DVR chapter rotation mode. Snapshotted onto the DVR artifact at StartDVR;\nchanges take effect on the next recording. null/NONE = chapters disabled.",
+        description="How saved recordings are split into chapters. Snapshotted when a recording\nstarts; changes apply from the next broadcast. NONE = live rewind only,\nnothing kept after the broadcast.",
     )
-    "DVR chapter rotation mode. Snapshotted onto the DVR artifact at StartDVR;\nchanges take effect on the next recording. null/NONE = chapters disabled."
+    "How saved recordings are split into chapters. Snapshotted when a recording\nstarts; changes apply from the next broadcast. NONE = live rewind only,\nnothing kept after the broadcast."
     dvr_chapter_interval_seconds: Optional[int] = Field(
         alias="dvrChapterIntervalSeconds",
         description="Chapter interval in seconds. Required when dvrChapterMode = FIXED_INTERVAL,\nignored otherwise. Minimum 3600 (1 hour).",
@@ -9113,9 +9113,9 @@ class RoutingEventDefaultStream(BaseModel):
     "Playback access policy. null/PUBLIC = anyone with the playbackId can watch."
     dvr_chapter_mode: Optional[DVRChapterMode] = Field(
         alias="dvrChapterMode",
-        description="DVR chapter rotation mode. Snapshotted onto the DVR artifact at StartDVR;\nchanges take effect on the next recording. null/NONE = chapters disabled.",
+        description="How saved recordings are split into chapters. Snapshotted when a recording\nstarts; changes apply from the next broadcast. NONE = live rewind only,\nnothing kept after the broadcast.",
     )
-    "DVR chapter rotation mode. Snapshotted onto the DVR artifact at StartDVR;\nchanges take effect on the next recording. null/NONE = chapters disabled."
+    "How saved recordings are split into chapters. Snapshotted when a recording\nstarts; changes apply from the next broadcast. NONE = live rewind only,\nnothing kept after the broadcast."
     dvr_chapter_interval_seconds: Optional[int] = Field(
         alias="dvrChapterIntervalSeconds",
         description="Chapter interval in seconds. Required when dvrChapterMode = FIXED_INTERVAL,\nignored otherwise. Minimum 3600 (1 hour).",
@@ -9767,9 +9767,9 @@ class StorageEventDefaultStream(BaseModel):
     "Playback access policy. null/PUBLIC = anyone with the playbackId can watch."
     dvr_chapter_mode: Optional[DVRChapterMode] = Field(
         alias="dvrChapterMode",
-        description="DVR chapter rotation mode. Snapshotted onto the DVR artifact at StartDVR;\nchanges take effect on the next recording. null/NONE = chapters disabled.",
+        description="How saved recordings are split into chapters. Snapshotted when a recording\nstarts; changes apply from the next broadcast. NONE = live rewind only,\nnothing kept after the broadcast.",
     )
-    "DVR chapter rotation mode. Snapshotted onto the DVR artifact at StartDVR;\nchanges take effect on the next recording. null/NONE = chapters disabled."
+    "How saved recordings are split into chapters. Snapshotted when a recording\nstarts; changes apply from the next broadcast. NONE = live rewind only,\nnothing kept after the broadcast."
     dvr_chapter_interval_seconds: Optional[int] = Field(
         alias="dvrChapterIntervalSeconds",
         description="Chapter interval in seconds. Required when dvrChapterMode = FIXED_INTERVAL,\nignored otherwise. Minimum 3600 (1 hour).",
@@ -10116,9 +10116,9 @@ class StorageEventInNodeDefaultStream(BaseModel):
     "Playback access policy. null/PUBLIC = anyone with the playbackId can watch."
     dvr_chapter_mode: Optional[DVRChapterMode] = Field(
         alias="dvrChapterMode",
-        description="DVR chapter rotation mode. Snapshotted onto the DVR artifact at StartDVR;\nchanges take effect on the next recording. null/NONE = chapters disabled.",
+        description="How saved recordings are split into chapters. Snapshotted when a recording\nstarts; changes apply from the next broadcast. NONE = live rewind only,\nnothing kept after the broadcast.",
     )
-    "DVR chapter rotation mode. Snapshotted onto the DVR artifact at StartDVR;\nchanges take effect on the next recording. null/NONE = chapters disabled."
+    "How saved recordings are split into chapters. Snapshotted when a recording\nstarts; changes apply from the next broadcast. NONE = live rewind only,\nnothing kept after the broadcast."
     dvr_chapter_interval_seconds: Optional[int] = Field(
         alias="dvrChapterIntervalSeconds",
         description="Chapter interval in seconds. Required when dvrChapterMode = FIXED_INTERVAL,\nignored otherwise. Minimum 3600 (1 hour).",
@@ -10476,9 +10476,9 @@ class StreamAnalyticsDailyDefaultStream(BaseModel):
     "Playback access policy. null/PUBLIC = anyone with the playbackId can watch."
     dvr_chapter_mode: Optional[DVRChapterMode] = Field(
         alias="dvrChapterMode",
-        description="DVR chapter rotation mode. Snapshotted onto the DVR artifact at StartDVR;\nchanges take effect on the next recording. null/NONE = chapters disabled.",
+        description="How saved recordings are split into chapters. Snapshotted when a recording\nstarts; changes apply from the next broadcast. NONE = live rewind only,\nnothing kept after the broadcast.",
     )
-    "DVR chapter rotation mode. Snapshotted onto the DVR artifact at StartDVR;\nchanges take effect on the next recording. null/NONE = chapters disabled."
+    "How saved recordings are split into chapters. Snapshotted when a recording\nstarts; changes apply from the next broadcast. NONE = live rewind only,\nnothing kept after the broadcast."
     dvr_chapter_interval_seconds: Optional[int] = Field(
         alias="dvrChapterIntervalSeconds",
         description="Chapter interval in seconds. Required when dvrChapterMode = FIXED_INTERVAL,\nignored otherwise. Minimum 3600 (1 hour).",
@@ -10853,9 +10853,9 @@ class StreamAnalyticsSummaryDefaultStream(BaseModel):
     "Playback access policy. null/PUBLIC = anyone with the playbackId can watch."
     dvr_chapter_mode: Optional[DVRChapterMode] = Field(
         alias="dvrChapterMode",
-        description="DVR chapter rotation mode. Snapshotted onto the DVR artifact at StartDVR;\nchanges take effect on the next recording. null/NONE = chapters disabled.",
+        description="How saved recordings are split into chapters. Snapshotted when a recording\nstarts; changes apply from the next broadcast. NONE = live rewind only,\nnothing kept after the broadcast.",
     )
-    "DVR chapter rotation mode. Snapshotted onto the DVR artifact at StartDVR;\nchanges take effect on the next recording. null/NONE = chapters disabled."
+    "How saved recordings are split into chapters. Snapshotted when a recording\nstarts; changes apply from the next broadcast. NONE = live rewind only,\nnothing kept after the broadcast."
     dvr_chapter_interval_seconds: Optional[int] = Field(
         alias="dvrChapterIntervalSeconds",
         description="Chapter interval in seconds. Required when dvrChapterMode = FIXED_INTERVAL,\nignored otherwise. Minimum 3600 (1 hour).",
@@ -11220,9 +11220,9 @@ class StreamConnectionHourlyDefaultStream(BaseModel):
     "Playback access policy. null/PUBLIC = anyone with the playbackId can watch."
     dvr_chapter_mode: Optional[DVRChapterMode] = Field(
         alias="dvrChapterMode",
-        description="DVR chapter rotation mode. Snapshotted onto the DVR artifact at StartDVR;\nchanges take effect on the next recording. null/NONE = chapters disabled.",
+        description="How saved recordings are split into chapters. Snapshotted when a recording\nstarts; changes apply from the next broadcast. NONE = live rewind only,\nnothing kept after the broadcast.",
     )
-    "DVR chapter rotation mode. Snapshotted onto the DVR artifact at StartDVR;\nchanges take effect on the next recording. null/NONE = chapters disabled."
+    "How saved recordings are split into chapters. Snapshotted when a recording\nstarts; changes apply from the next broadcast. NONE = live rewind only,\nnothing kept after the broadcast."
     dvr_chapter_interval_seconds: Optional[int] = Field(
         alias="dvrChapterIntervalSeconds",
         description="Chapter interval in seconds. Required when dvrChapterMode = FIXED_INTERVAL,\nignored otherwise. Minimum 3600 (1 hour).",
@@ -11592,9 +11592,9 @@ class StreamEventDefaultStream(BaseModel):
     "Playback access policy. null/PUBLIC = anyone with the playbackId can watch."
     dvr_chapter_mode: Optional[DVRChapterMode] = Field(
         alias="dvrChapterMode",
-        description="DVR chapter rotation mode. Snapshotted onto the DVR artifact at StartDVR;\nchanges take effect on the next recording. null/NONE = chapters disabled.",
+        description="How saved recordings are split into chapters. Snapshotted when a recording\nstarts; changes apply from the next broadcast. NONE = live rewind only,\nnothing kept after the broadcast.",
     )
-    "DVR chapter rotation mode. Snapshotted onto the DVR artifact at StartDVR;\nchanges take effect on the next recording. null/NONE = chapters disabled."
+    "How saved recordings are split into chapters. Snapshotted when a recording\nstarts; changes apply from the next broadcast. NONE = live rewind only,\nnothing kept after the broadcast."
     dvr_chapter_interval_seconds: Optional[int] = Field(
         alias="dvrChapterIntervalSeconds",
         description="Chapter interval in seconds. Required when dvrChapterMode = FIXED_INTERVAL,\nignored otherwise. Minimum 3600 (1 hour).",
@@ -11960,9 +11960,9 @@ class StreamEventInNodeDefaultStream(BaseModel):
     "Playback access policy. null/PUBLIC = anyone with the playbackId can watch."
     dvr_chapter_mode: Optional[DVRChapterMode] = Field(
         alias="dvrChapterMode",
-        description="DVR chapter rotation mode. Snapshotted onto the DVR artifact at StartDVR;\nchanges take effect on the next recording. null/NONE = chapters disabled.",
+        description="How saved recordings are split into chapters. Snapshotted when a recording\nstarts; changes apply from the next broadcast. NONE = live rewind only,\nnothing kept after the broadcast.",
     )
-    "DVR chapter rotation mode. Snapshotted onto the DVR artifact at StartDVR;\nchanges take effect on the next recording. null/NONE = chapters disabled."
+    "How saved recordings are split into chapters. Snapshotted when a recording\nstarts; changes apply from the next broadcast. NONE = live rewind only,\nnothing kept after the broadcast."
     dvr_chapter_interval_seconds: Optional[int] = Field(
         alias="dvrChapterIntervalSeconds",
         description="Chapter interval in seconds. Required when dvrChapterMode = FIXED_INTERVAL,\nignored otherwise. Minimum 3600 (1 hour).",
@@ -12266,9 +12266,9 @@ class Stream(BaseModel):
     "When this stream was last modified."
     dvr_chapter_mode: Optional[DVRChapterMode] = Field(
         alias="dvrChapterMode",
-        description="DVR chapter rotation mode. Snapshotted onto the DVR artifact at StartDVR;\nchanges take effect on the next recording. null/NONE = chapters disabled.",
+        description="How saved recordings are split into chapters. Snapshotted when a recording\nstarts; changes apply from the next broadcast. NONE = live rewind only,\nnothing kept after the broadcast.",
     )
-    "DVR chapter rotation mode. Snapshotted onto the DVR artifact at StartDVR;\nchanges take effect on the next recording. null/NONE = chapters disabled."
+    "How saved recordings are split into chapters. Snapshotted when a recording\nstarts; changes apply from the next broadcast. NONE = live rewind only,\nnothing kept after the broadcast."
     dvr_chapter_interval_seconds: Optional[int] = Field(
         alias="dvrChapterIntervalSeconds",
         description="Chapter interval in seconds. Required when dvrChapterMode = FIXED_INTERVAL,\nignored otherwise. Minimum 3600 (1 hour).",
@@ -12480,9 +12480,9 @@ class StreamHealthMetricDefaultStream(BaseModel):
     "Playback access policy. null/PUBLIC = anyone with the playbackId can watch."
     dvr_chapter_mode: Optional[DVRChapterMode] = Field(
         alias="dvrChapterMode",
-        description="DVR chapter rotation mode. Snapshotted onto the DVR artifact at StartDVR;\nchanges take effect on the next recording. null/NONE = chapters disabled.",
+        description="How saved recordings are split into chapters. Snapshotted when a recording\nstarts; changes apply from the next broadcast. NONE = live rewind only,\nnothing kept after the broadcast.",
     )
-    "DVR chapter rotation mode. Snapshotted onto the DVR artifact at StartDVR;\nchanges take effect on the next recording. null/NONE = chapters disabled."
+    "How saved recordings are split into chapters. Snapshotted when a recording\nstarts; changes apply from the next broadcast. NONE = live rewind only,\nnothing kept after the broadcast."
     dvr_chapter_interval_seconds: Optional[int] = Field(
         alias="dvrChapterIntervalSeconds",
         description="Chapter interval in seconds. Required when dvrChapterMode = FIXED_INTERVAL,\nignored otherwise. Minimum 3600 (1 hour).",
@@ -12848,9 +12848,9 @@ class StreamHealthMetricInNodeDefaultStream(BaseModel):
     "Playback access policy. null/PUBLIC = anyone with the playbackId can watch."
     dvr_chapter_mode: Optional[DVRChapterMode] = Field(
         alias="dvrChapterMode",
-        description="DVR chapter rotation mode. Snapshotted onto the DVR artifact at StartDVR;\nchanges take effect on the next recording. null/NONE = chapters disabled.",
+        description="How saved recordings are split into chapters. Snapshotted when a recording\nstarts; changes apply from the next broadcast. NONE = live rewind only,\nnothing kept after the broadcast.",
     )
-    "DVR chapter rotation mode. Snapshotted onto the DVR artifact at StartDVR;\nchanges take effect on the next recording. null/NONE = chapters disabled."
+    "How saved recordings are split into chapters. Snapshotted when a recording\nstarts; changes apply from the next broadcast. NONE = live rewind only,\nnothing kept after the broadcast."
     dvr_chapter_interval_seconds: Optional[int] = Field(
         alias="dvrChapterIntervalSeconds",
         description="Chapter interval in seconds. Required when dvrChapterMode = FIXED_INTERVAL,\nignored otherwise. Minimum 3600 (1 hour).",
@@ -13192,9 +13192,9 @@ class StreamInNodeDefault(BaseModel):
     "Playback access policy. null/PUBLIC = anyone with the playbackId can watch."
     dvr_chapter_mode: Optional[DVRChapterMode] = Field(
         alias="dvrChapterMode",
-        description="DVR chapter rotation mode. Snapshotted onto the DVR artifact at StartDVR;\nchanges take effect on the next recording. null/NONE = chapters disabled.",
+        description="How saved recordings are split into chapters. Snapshotted when a recording\nstarts; changes apply from the next broadcast. NONE = live rewind only,\nnothing kept after the broadcast.",
     )
-    "DVR chapter rotation mode. Snapshotted onto the DVR artifact at StartDVR;\nchanges take effect on the next recording. null/NONE = chapters disabled."
+    "How saved recordings are split into chapters. Snapshotted when a recording\nstarts; changes apply from the next broadcast. NONE = live rewind only,\nnothing kept after the broadcast."
     dvr_chapter_interval_seconds: Optional[int] = Field(
         alias="dvrChapterIntervalSeconds",
         description="Chapter interval in seconds. Required when dvrChapterMode = FIXED_INTERVAL,\nignored otherwise. Minimum 3600 (1 hour).",
@@ -13808,9 +13808,9 @@ class TenantEventDefaultStreamEventStream(BaseModel):
     "When this stream was last modified."
     dvr_chapter_mode: Optional[DVRChapterMode] = Field(
         alias="dvrChapterMode",
-        description="DVR chapter rotation mode. Snapshotted onto the DVR artifact at StartDVR;\nchanges take effect on the next recording. null/NONE = chapters disabled.",
+        description="How saved recordings are split into chapters. Snapshotted when a recording\nstarts; changes apply from the next broadcast. NONE = live rewind only,\nnothing kept after the broadcast.",
     )
-    "DVR chapter rotation mode. Snapshotted onto the DVR artifact at StartDVR;\nchanges take effect on the next recording. null/NONE = chapters disabled."
+    "How saved recordings are split into chapters. Snapshotted when a recording\nstarts; changes apply from the next broadcast. NONE = live rewind only,\nnothing kept after the broadcast."
     dvr_chapter_interval_seconds: Optional[int] = Field(
         alias="dvrChapterIntervalSeconds",
         description="Chapter interval in seconds. Required when dvrChapterMode = FIXED_INTERVAL,\nignored otherwise. Minimum 3600 (1 hour).",
@@ -13890,9 +13890,9 @@ class TenantEventDefaultViewerMetricsStream(BaseModel):
     "When this stream was last modified."
     dvr_chapter_mode: Optional[DVRChapterMode] = Field(
         alias="dvrChapterMode",
-        description="DVR chapter rotation mode. Snapshotted onto the DVR artifact at StartDVR;\nchanges take effect on the next recording. null/NONE = chapters disabled.",
+        description="How saved recordings are split into chapters. Snapshotted when a recording\nstarts; changes apply from the next broadcast. NONE = live rewind only,\nnothing kept after the broadcast.",
     )
-    "DVR chapter rotation mode. Snapshotted onto the DVR artifact at StartDVR;\nchanges take effect on the next recording. null/NONE = chapters disabled."
+    "How saved recordings are split into chapters. Snapshotted when a recording\nstarts; changes apply from the next broadcast. NONE = live rewind only,\nnothing kept after the broadcast."
     dvr_chapter_interval_seconds: Optional[int] = Field(
         alias="dvrChapterIntervalSeconds",
         description="Chapter interval in seconds. Required when dvrChapterMode = FIXED_INTERVAL,\nignored otherwise. Minimum 3600 (1 hour).",
@@ -13977,9 +13977,9 @@ class TenantEventDefaultConnectionEventStream(BaseModel):
     "When this stream was last modified."
     dvr_chapter_mode: Optional[DVRChapterMode] = Field(
         alias="dvrChapterMode",
-        description="DVR chapter rotation mode. Snapshotted onto the DVR artifact at StartDVR;\nchanges take effect on the next recording. null/NONE = chapters disabled.",
+        description="How saved recordings are split into chapters. Snapshotted when a recording\nstarts; changes apply from the next broadcast. NONE = live rewind only,\nnothing kept after the broadcast.",
     )
-    "DVR chapter rotation mode. Snapshotted onto the DVR artifact at StartDVR;\nchanges take effect on the next recording. null/NONE = chapters disabled."
+    "How saved recordings are split into chapters. Snapshotted when a recording\nstarts; changes apply from the next broadcast. NONE = live rewind only,\nnothing kept after the broadcast."
     dvr_chapter_interval_seconds: Optional[int] = Field(
         alias="dvrChapterIntervalSeconds",
         description="Chapter interval in seconds. Required when dvrChapterMode = FIXED_INTERVAL,\nignored otherwise. Minimum 3600 (1 hour).",
@@ -14064,9 +14064,9 @@ class TenantEventDefaultTrackListUpdateStream(BaseModel):
     "When this stream was last modified."
     dvr_chapter_mode: Optional[DVRChapterMode] = Field(
         alias="dvrChapterMode",
-        description="DVR chapter rotation mode. Snapshotted onto the DVR artifact at StartDVR;\nchanges take effect on the next recording. null/NONE = chapters disabled.",
+        description="How saved recordings are split into chapters. Snapshotted when a recording\nstarts; changes apply from the next broadcast. NONE = live rewind only,\nnothing kept after the broadcast.",
     )
-    "DVR chapter rotation mode. Snapshotted onto the DVR artifact at StartDVR;\nchanges take effect on the next recording. null/NONE = chapters disabled."
+    "How saved recordings are split into chapters. Snapshotted when a recording\nstarts; changes apply from the next broadcast. NONE = live rewind only,\nnothing kept after the broadcast."
     dvr_chapter_interval_seconds: Optional[int] = Field(
         alias="dvrChapterIntervalSeconds",
         description="Chapter interval in seconds. Required when dvrChapterMode = FIXED_INTERVAL,\nignored otherwise. Minimum 3600 (1 hour).",
@@ -14159,9 +14159,9 @@ class TenantEventDefaultStorageEventStream(BaseModel):
     "When this stream was last modified."
     dvr_chapter_mode: Optional[DVRChapterMode] = Field(
         alias="dvrChapterMode",
-        description="DVR chapter rotation mode. Snapshotted onto the DVR artifact at StartDVR;\nchanges take effect on the next recording. null/NONE = chapters disabled.",
+        description="How saved recordings are split into chapters. Snapshotted when a recording\nstarts; changes apply from the next broadcast. NONE = live rewind only,\nnothing kept after the broadcast.",
     )
-    "DVR chapter rotation mode. Snapshotted onto the DVR artifact at StartDVR;\nchanges take effect on the next recording. null/NONE = chapters disabled."
+    "How saved recordings are split into chapters. Snapshotted when a recording\nstarts; changes apply from the next broadcast. NONE = live rewind only,\nnothing kept after the broadcast."
     dvr_chapter_interval_seconds: Optional[int] = Field(
         alias="dvrChapterIntervalSeconds",
         description="Chapter interval in seconds. Required when dvrChapterMode = FIXED_INTERVAL,\nignored otherwise. Minimum 3600 (1 hour).",
@@ -14294,9 +14294,9 @@ class TenantEventDefaultProcessingEventStream(BaseModel):
     "When this stream was last modified."
     dvr_chapter_mode: Optional[DVRChapterMode] = Field(
         alias="dvrChapterMode",
-        description="DVR chapter rotation mode. Snapshotted onto the DVR artifact at StartDVR;\nchanges take effect on the next recording. null/NONE = chapters disabled.",
+        description="How saved recordings are split into chapters. Snapshotted when a recording\nstarts; changes apply from the next broadcast. NONE = live rewind only,\nnothing kept after the broadcast.",
     )
-    "DVR chapter rotation mode. Snapshotted onto the DVR artifact at StartDVR;\nchanges take effect on the next recording. null/NONE = chapters disabled."
+    "How saved recordings are split into chapters. Snapshotted when a recording\nstarts; changes apply from the next broadcast. NONE = live rewind only,\nnothing kept after the broadcast."
     dvr_chapter_interval_seconds: Optional[int] = Field(
         alias="dvrChapterIntervalSeconds",
         description="Chapter interval in seconds. Required when dvrChapterMode = FIXED_INTERVAL,\nignored otherwise. Minimum 3600 (1 hour).",
@@ -14386,9 +14386,9 @@ class TenantEventDefaultRoutingEventStream(BaseModel):
     "When this stream was last modified."
     dvr_chapter_mode: Optional[DVRChapterMode] = Field(
         alias="dvrChapterMode",
-        description="DVR chapter rotation mode. Snapshotted onto the DVR artifact at StartDVR;\nchanges take effect on the next recording. null/NONE = chapters disabled.",
+        description="How saved recordings are split into chapters. Snapshotted when a recording\nstarts; changes apply from the next broadcast. NONE = live rewind only,\nnothing kept after the broadcast.",
     )
-    "DVR chapter rotation mode. Snapshotted onto the DVR artifact at StartDVR;\nchanges take effect on the next recording. null/NONE = chapters disabled."
+    "How saved recordings are split into chapters. Snapshotted when a recording\nstarts; changes apply from the next broadcast. NONE = live rewind only,\nnothing kept after the broadcast."
     dvr_chapter_interval_seconds: Optional[int] = Field(
         alias="dvrChapterIntervalSeconds",
         description="Chapter interval in seconds. Required when dvrChapterMode = FIXED_INTERVAL,\nignored otherwise. Minimum 3600 (1 hour).",
@@ -14545,9 +14545,9 @@ class TrackListEventDefaultStream(BaseModel):
     "Playback access policy. null/PUBLIC = anyone with the playbackId can watch."
     dvr_chapter_mode: Optional[DVRChapterMode] = Field(
         alias="dvrChapterMode",
-        description="DVR chapter rotation mode. Snapshotted onto the DVR artifact at StartDVR;\nchanges take effect on the next recording. null/NONE = chapters disabled.",
+        description="How saved recordings are split into chapters. Snapshotted when a recording\nstarts; changes apply from the next broadcast. NONE = live rewind only,\nnothing kept after the broadcast.",
     )
-    "DVR chapter rotation mode. Snapshotted onto the DVR artifact at StartDVR;\nchanges take effect on the next recording. null/NONE = chapters disabled."
+    "How saved recordings are split into chapters. Snapshotted when a recording\nstarts; changes apply from the next broadcast. NONE = live rewind only,\nnothing kept after the broadcast."
     dvr_chapter_interval_seconds: Optional[int] = Field(
         alias="dvrChapterIntervalSeconds",
         description="Chapter interval in seconds. Required when dvrChapterMode = FIXED_INTERVAL,\nignored otherwise. Minimum 3600 (1 hour).",
@@ -14904,9 +14904,9 @@ class TrackListEventInNodeDefaultStream(BaseModel):
     "Playback access policy. null/PUBLIC = anyone with the playbackId can watch."
     dvr_chapter_mode: Optional[DVRChapterMode] = Field(
         alias="dvrChapterMode",
-        description="DVR chapter rotation mode. Snapshotted onto the DVR artifact at StartDVR;\nchanges take effect on the next recording. null/NONE = chapters disabled.",
+        description="How saved recordings are split into chapters. Snapshotted when a recording\nstarts; changes apply from the next broadcast. NONE = live rewind only,\nnothing kept after the broadcast.",
     )
-    "DVR chapter rotation mode. Snapshotted onto the DVR artifact at StartDVR;\nchanges take effect on the next recording. null/NONE = chapters disabled."
+    "How saved recordings are split into chapters. Snapshotted when a recording\nstarts; changes apply from the next broadcast. NONE = live rewind only,\nnothing kept after the broadcast."
     dvr_chapter_interval_seconds: Optional[int] = Field(
         alias="dvrChapterIntervalSeconds",
         description="Chapter interval in seconds. Required when dvrChapterMode = FIXED_INTERVAL,\nignored otherwise. Minimum 3600 (1 hour).",
@@ -15271,9 +15271,9 @@ class TrackListUpdateDefaultStream(BaseModel):
     "Playback access policy. null/PUBLIC = anyone with the playbackId can watch."
     dvr_chapter_mode: Optional[DVRChapterMode] = Field(
         alias="dvrChapterMode",
-        description="DVR chapter rotation mode. Snapshotted onto the DVR artifact at StartDVR;\nchanges take effect on the next recording. null/NONE = chapters disabled.",
+        description="How saved recordings are split into chapters. Snapshotted when a recording\nstarts; changes apply from the next broadcast. NONE = live rewind only,\nnothing kept after the broadcast.",
     )
-    "DVR chapter rotation mode. Snapshotted onto the DVR artifact at StartDVR;\nchanges take effect on the next recording. null/NONE = chapters disabled."
+    "How saved recordings are split into chapters. Snapshotted when a recording\nstarts; changes apply from the next broadcast. NONE = live rewind only,\nnothing kept after the broadcast."
     dvr_chapter_interval_seconds: Optional[int] = Field(
         alias="dvrChapterIntervalSeconds",
         description="Chapter interval in seconds. Required when dvrChapterMode = FIXED_INTERVAL,\nignored otherwise. Minimum 3600 (1 hour).",
@@ -15639,9 +15639,9 @@ class ViewerCountBucketDefaultStream(BaseModel):
     "Playback access policy. null/PUBLIC = anyone with the playbackId can watch."
     dvr_chapter_mode: Optional[DVRChapterMode] = Field(
         alias="dvrChapterMode",
-        description="DVR chapter rotation mode. Snapshotted onto the DVR artifact at StartDVR;\nchanges take effect on the next recording. null/NONE = chapters disabled.",
+        description="How saved recordings are split into chapters. Snapshotted when a recording\nstarts; changes apply from the next broadcast. NONE = live rewind only,\nnothing kept after the broadcast.",
     )
-    "DVR chapter rotation mode. Snapshotted onto the DVR artifact at StartDVR;\nchanges take effect on the next recording. null/NONE = chapters disabled."
+    "How saved recordings are split into chapters. Snapshotted when a recording\nstarts; changes apply from the next broadcast. NONE = live rewind only,\nnothing kept after the broadcast."
     dvr_chapter_interval_seconds: Optional[int] = Field(
         alias="dvrChapterIntervalSeconds",
         description="Chapter interval in seconds. Required when dvrChapterMode = FIXED_INTERVAL,\nignored otherwise. Minimum 3600 (1 hour).",
@@ -16014,9 +16014,9 @@ class ViewerGeographicDefaultStream(BaseModel):
     "Playback access policy. null/PUBLIC = anyone with the playbackId can watch."
     dvr_chapter_mode: Optional[DVRChapterMode] = Field(
         alias="dvrChapterMode",
-        description="DVR chapter rotation mode. Snapshotted onto the DVR artifact at StartDVR;\nchanges take effect on the next recording. null/NONE = chapters disabled.",
+        description="How saved recordings are split into chapters. Snapshotted when a recording\nstarts; changes apply from the next broadcast. NONE = live rewind only,\nnothing kept after the broadcast.",
     )
-    "DVR chapter rotation mode. Snapshotted onto the DVR artifact at StartDVR;\nchanges take effect on the next recording. null/NONE = chapters disabled."
+    "How saved recordings are split into chapters. Snapshotted when a recording\nstarts; changes apply from the next broadcast. NONE = live rewind only,\nnothing kept after the broadcast."
     dvr_chapter_interval_seconds: Optional[int] = Field(
         alias="dvrChapterIntervalSeconds",
         description="Chapter interval in seconds. Required when dvrChapterMode = FIXED_INTERVAL,\nignored otherwise. Minimum 3600 (1 hour).",
@@ -16356,9 +16356,9 @@ class ViewerHoursHourlyDefaultStream(BaseModel):
     "Playback access policy. null/PUBLIC = anyone with the playbackId can watch."
     dvr_chapter_mode: Optional[DVRChapterMode] = Field(
         alias="dvrChapterMode",
-        description="DVR chapter rotation mode. Snapshotted onto the DVR artifact at StartDVR;\nchanges take effect on the next recording. null/NONE = chapters disabled.",
+        description="How saved recordings are split into chapters. Snapshotted when a recording\nstarts; changes apply from the next broadcast. NONE = live rewind only,\nnothing kept after the broadcast.",
     )
-    "DVR chapter rotation mode. Snapshotted onto the DVR artifact at StartDVR;\nchanges take effect on the next recording. null/NONE = chapters disabled."
+    "How saved recordings are split into chapters. Snapshotted when a recording\nstarts; changes apply from the next broadcast. NONE = live rewind only,\nnothing kept after the broadcast."
     dvr_chapter_interval_seconds: Optional[int] = Field(
         alias="dvrChapterIntervalSeconds",
         description="Chapter interval in seconds. Required when dvrChapterMode = FIXED_INTERVAL,\nignored otherwise. Minimum 3600 (1 hour).",
@@ -16704,9 +16704,9 @@ class ViewerHoursHourlyInNodeDefaultStream(BaseModel):
     "Playback access policy. null/PUBLIC = anyone with the playbackId can watch."
     dvr_chapter_mode: Optional[DVRChapterMode] = Field(
         alias="dvrChapterMode",
-        description="DVR chapter rotation mode. Snapshotted onto the DVR artifact at StartDVR;\nchanges take effect on the next recording. null/NONE = chapters disabled.",
+        description="How saved recordings are split into chapters. Snapshotted when a recording\nstarts; changes apply from the next broadcast. NONE = live rewind only,\nnothing kept after the broadcast.",
     )
-    "DVR chapter rotation mode. Snapshotted onto the DVR artifact at StartDVR;\nchanges take effect on the next recording. null/NONE = chapters disabled."
+    "How saved recordings are split into chapters. Snapshotted when a recording\nstarts; changes apply from the next broadcast. NONE = live rewind only,\nnothing kept after the broadcast."
     dvr_chapter_interval_seconds: Optional[int] = Field(
         alias="dvrChapterIntervalSeconds",
         description="Chapter interval in seconds. Required when dvrChapterMode = FIXED_INTERVAL,\nignored otherwise. Minimum 3600 (1 hour).",
@@ -17059,9 +17059,9 @@ class ViewerMetricsDefaultStream(BaseModel):
     "Playback access policy. null/PUBLIC = anyone with the playbackId can watch."
     dvr_chapter_mode: Optional[DVRChapterMode] = Field(
         alias="dvrChapterMode",
-        description="DVR chapter rotation mode. Snapshotted onto the DVR artifact at StartDVR;\nchanges take effect on the next recording. null/NONE = chapters disabled.",
+        description="How saved recordings are split into chapters. Snapshotted when a recording\nstarts; changes apply from the next broadcast. NONE = live rewind only,\nnothing kept after the broadcast.",
     )
-    "DVR chapter rotation mode. Snapshotted onto the DVR artifact at StartDVR;\nchanges take effect on the next recording. null/NONE = chapters disabled."
+    "How saved recordings are split into chapters. Snapshotted when a recording\nstarts; changes apply from the next broadcast. NONE = live rewind only,\nnothing kept after the broadcast."
     dvr_chapter_interval_seconds: Optional[int] = Field(
         alias="dvrChapterIntervalSeconds",
         description="Chapter interval in seconds. Required when dvrChapterMode = FIXED_INTERVAL,\nignored otherwise. Minimum 3600 (1 hour).",
@@ -17412,9 +17412,9 @@ class ViewerSessionDefaultStream(BaseModel):
     "Playback access policy. null/PUBLIC = anyone with the playbackId can watch."
     dvr_chapter_mode: Optional[DVRChapterMode] = Field(
         alias="dvrChapterMode",
-        description="DVR chapter rotation mode. Snapshotted onto the DVR artifact at StartDVR;\nchanges take effect on the next recording. null/NONE = chapters disabled.",
+        description="How saved recordings are split into chapters. Snapshotted when a recording\nstarts; changes apply from the next broadcast. NONE = live rewind only,\nnothing kept after the broadcast.",
     )
-    "DVR chapter rotation mode. Snapshotted onto the DVR artifact at StartDVR;\nchanges take effect on the next recording. null/NONE = chapters disabled."
+    "How saved recordings are split into chapters. Snapshotted when a recording\nstarts; changes apply from the next broadcast. NONE = live rewind only,\nnothing kept after the broadcast."
     dvr_chapter_interval_seconds: Optional[int] = Field(
         alias="dvrChapterIntervalSeconds",
         description="Chapter interval in seconds. Required when dvrChapterMode = FIXED_INTERVAL,\nignored otherwise. Minimum 3600 (1 hour).",
@@ -17770,9 +17770,9 @@ class ViewerSessionInNodeDefaultStream(BaseModel):
     "Playback access policy. null/PUBLIC = anyone with the playbackId can watch."
     dvr_chapter_mode: Optional[DVRChapterMode] = Field(
         alias="dvrChapterMode",
-        description="DVR chapter rotation mode. Snapshotted onto the DVR artifact at StartDVR;\nchanges take effect on the next recording. null/NONE = chapters disabled.",
+        description="How saved recordings are split into chapters. Snapshotted when a recording\nstarts; changes apply from the next broadcast. NONE = live rewind only,\nnothing kept after the broadcast.",
     )
-    "DVR chapter rotation mode. Snapshotted onto the DVR artifact at StartDVR;\nchanges take effect on the next recording. null/NONE = chapters disabled."
+    "How saved recordings are split into chapters. Snapshotted when a recording\nstarts; changes apply from the next broadcast. NONE = live rewind only,\nnothing kept after the broadcast."
     dvr_chapter_interval_seconds: Optional[int] = Field(
         alias="dvrChapterIntervalSeconds",
         description="Chapter interval in seconds. Required when dvrChapterMode = FIXED_INTERVAL,\nignored otherwise. Minimum 3600 (1 hour).",
@@ -18537,9 +18537,9 @@ class WebhookDeliveryDefault(BaseModel):
     updated_at: datetime = Field(alias="updatedAt")
     attempt_history: list["WebhookDeliveryDefaultAttemptHistory"] = Field(
         alias="attemptHistory",
-        description="Every HTTP attempt, oldest first. Loaded by the webhookDelivery query; empty in connections.",
+        description="Every HTTP attempt, oldest first, including attempts before the last replay.",
     )
-    "Every HTTP attempt, oldest first. Loaded by the webhookDelivery query; empty in connections."
+    "Every HTTP attempt, oldest first, including attempts before the last replay."
 
 
 class WebhookDeliveryDefaultAttemptHistory(BaseModel):
@@ -18735,9 +18735,9 @@ class WebhookTestResultDefaultDelivery(BaseModel):
     updated_at: datetime = Field(alias="updatedAt")
     attempt_history: list["WebhookTestResultDefaultDeliveryAttemptHistory"] = Field(
         alias="attemptHistory",
-        description="Every HTTP attempt, oldest first. Loaded by the webhookDelivery query; empty in connections.",
+        description="Every HTTP attempt, oldest first, including attempts before the last replay.",
     )
-    "Every HTTP attempt, oldest first. Loaded by the webhookDelivery query; empty in connections."
+    "Every HTTP attempt, oldest first, including attempts before the last replay."
 
 
 class WebhookTestResultDefaultDeliveryAttemptHistory(BaseModel):

@@ -1054,6 +1054,8 @@ type CreateStreamKeyInput struct {
 	Name string `json:"name"`
 }
 
+// Input for initiating a multipart VOD upload.
+// Returns presigned S3 URLs for uploading file parts.
 type CreateVodUploadInput struct {
 	// Original filename (for metadata and content-type detection).
 	Filename string `json:"filename"`
@@ -1309,8 +1311,7 @@ type FederationEventsConnection struct {
 	TotalCount int                    `json:"totalCount"`
 }
 
-// Input for initiating a multipart VOD upload.
-// Returns presigned S3 URLs for uploading file parts.
+// Import a video from a public URL for VOD processing.
 type ImportVodAssetInput struct {
 	// Source URL, https or http. It must be publicly reachable and support HTTP
 	// range requests; private and internal addresses are refused.
@@ -3019,13 +3020,14 @@ type UpdateStreamInput struct {
 	PullSource *commodorepb.PullSourceInput `json:"pullSource,omitempty"`
 	// Replace where the source may be ingested. Omitted keeps the current location. Rejected for managed streams.
 	SourceLocation *SourceLocationInput `json:"sourceLocation,omitempty"`
-	// Historical chapter rotation mode. Snapshotted onto the DVR artifact
-	// at StartDVR; changes take effect on the next recording, not in-flight.
-	// NONE means rolling DVR playback only: recording still runs, but no
-	// finalized chapter artifacts are produced for historical replay.
+	// How saved recordings are split into chapters. Snapshotted when a
+	// recording starts; changes apply from the next broadcast, not to a
+	// recording in progress. NONE keeps live rewind only: viewers can rewind
+	// while live, but nothing is kept after the broadcast.
 	DvrChapterMode *DVRChapterMode `json:"dvrChapterMode,omitempty"`
 	// Chapter interval in seconds. Required when dvrChapterMode =
-	// FIXED_INTERVAL. Minimum 3600 (1 hour).
+	// FIXED_INTERVAL. Minimum 3600 (1 hour). Send 0 with any other mode to
+	// clear a stored interval.
 	DvrChapterIntervalSeconds *int `json:"dvrChapterIntervalSeconds,omitempty"`
 	// Per-stream Skipper monitoring override. INHERIT follows the tenant tier.
 	Monitoring *MonitoringToggle `json:"monitoring,omitempty"`
@@ -3424,7 +3426,7 @@ type WebhookDelivery struct {
 	LastReplayedAt *time.Time `json:"lastReplayedAt,omitempty"`
 	CreatedAt      time.Time  `json:"createdAt"`
 	UpdatedAt      time.Time  `json:"updatedAt"`
-	// Every HTTP attempt, oldest first. Loaded by the webhookDelivery query; empty in connections.
+	// Every HTTP attempt, oldest first, including attempts before the last replay.
 	AttemptHistory []*WebhookDeliveryAttempt `json:"attemptHistory"`
 }
 
@@ -3782,20 +3784,20 @@ func (e ClipCreationMode) MarshalJSON() ([]byte, error) {
 	return buf.Bytes(), nil
 }
 
-// DVR historical chapter mode. Determines how chapter (startMs, endMs)
-// ranges are produced for finalized replay artifacts. Configured at the
-// Stream level via updateStream and snapshotted onto the DVR artifact at
-// StartDVR.
+// How a recording is saved as chapters. Determines how chapter (startMs,
+// endMs) ranges are produced for replay after the broadcast. Configured at
+// the Stream level via updateStream and snapshotted onto the recording when
+// it starts. New streams default to WINDOW_SIZED.
 //
 // UTC-only — civil-time chapters resolve at the edge.
 type DVRChapterMode string
 
 const (
-	// Sequential fixed-length chapters of size tier.MaxWindowSeconds since the recording's start.
+	// Default. Sequential parts as long as the recording's own live rewind window, from the recording's start.
 	DVRChapterModeWindowSized DVRChapterMode = "WINDOW_SIZED"
 	// UTC-only intervalSeconds buckets, anchored at unix epoch 0.
 	DVRChapterModeFixedInterval DVRChapterMode = "FIXED_INTERVAL"
-	// Rolling DVR only: recording still runs, but no historical chapter artifacts are produced.
+	// Live rewind only: viewers can rewind while live, but nothing is kept after the broadcast and no recording.ready fires.
 	DVRChapterModeNone DVRChapterMode = "NONE"
 )
 
