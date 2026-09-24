@@ -672,7 +672,7 @@ func (s *CommodoreServer) compileArtifactAuthority(ctx context.Context, artifact
 			policy.ConnectedOnly = len(sealedPlayback) == 0
 		}
 	}
-	payload, err := buildArtifactAuthorityPayload(source, tenant, policy, lifecycle)
+	payload, err := buildArtifactAuthorityPayload(source, policy, lifecycle)
 	if err != nil {
 		return err
 	}
@@ -730,14 +730,18 @@ func (s *CommodoreServer) compilePlaybackWebhookSecret(authorityID, tenantID, en
 	}, nil
 }
 
-func buildArtifactAuthorityPayload(source commodoredb.GetArtifactMediaAuthoritySourceRow, tenant *mediaauthoritypb.TenantAuthority, policy *mediaauthoritypb.PlaybackPolicy, lifecycle mediaauthoritypb.AuthorityLifecycle) (*mediaauthoritypb.MediaObjectAuthority, error) {
+func buildArtifactAuthorityPayload(source commodoredb.GetArtifactMediaAuthoritySourceRow, policy *mediaauthoritypb.PlaybackPolicy, lifecycle mediaauthoritypb.AuthorityLifecycle) (*mediaauthoritypb.MediaObjectAuthority, error) {
 	kind, err := artifactAuthorityKind(source.ArtifactKind)
 	if err != nil {
 		return nil, err
 	}
+	// The origin cluster produced the artifact and owns its durable storage; it is never derived from a
+	// tenant-level cluster. An active artifact whose origin is still unknown is parked until the origin
+	// Foghorn's catalog projection records it (the origin_cluster_id update re-enqueues this compile).
 	originClusterID := strings.TrimSpace(source.OriginClusterID)
-	if originClusterID == "" && tenant != nil {
-		originClusterID = strings.TrimSpace(tenant.GetOfficialClusterId())
+	if originClusterID == "" && lifecycle == mediaauthoritypb.AuthorityLifecycle_AUTHORITY_LIFECYCLE_ACTIVE {
+		return nil, parkAuthorityCompile("origin_cluster_unknown",
+			fmt.Errorf("artifact %s (%s) has no recorded origin cluster", source.AuthorityID, source.ArtifactKind))
 	}
 	return &mediaauthoritypb.MediaObjectAuthority{
 		SchemaVersion:   sharedauthority.SchemaVersion,
@@ -951,8 +955,16 @@ func (s *CommodoreServer) compilePlaybackPolicy(ctx context.Context, tenantID st
 		if err != nil {
 			return nil, fmt.Errorf("load active playback signing keys: %w", err)
 		}
+		allowedKids, usable := usableAllowedKids(doc.JWT.AllowedKids, keys)
+		if !usable {
+			// No active key can verify a token for this policy (none exist, or
+			// every allowed kid was revoked). The object stays protected and
+			// publishable: it denies playback until a key is created or the
+			// policy is updated, instead of parking the whole authority.
+			return denyPlaybackPolicy(), nil
+		}
 		jwt := &mediaauthoritypb.PlaybackJwtPolicy{
-			AllowedKeyIds:      sortedUnique(doc.JWT.AllowedKids),
+			AllowedKeyIds:      allowedKids,
 			RequiredAudiences:  sortedUnique(doc.JWT.RequiredAudience),
 			RequiredClaimsJson: cloneStringMap(doc.JWT.RequiredClaimsJSON),
 		}
@@ -974,6 +986,31 @@ func (s *CommodoreServer) compilePlaybackPolicy(ctx context.Context, tenantID st
 	default:
 		return nil, parkAuthorityCompile("invalid_playback_policy", fmt.Errorf("unsupported playback policy type %q", doc.Type))
 	}
+}
+
+// usableAllowedKids restricts a JWT policy's allowed kids to the tenant's
+// active keys. An empty allow-list means any active key. A non-empty list whose
+// kids have all been revoked is unusable rather than empty: dropping it would
+// widen the policy to every other active key.
+func usableAllowedKids(allowed []string, active []*commodorepb.PlaybackSigningKey) ([]string, bool) {
+	if len(active) == 0 {
+		return nil, false
+	}
+	requested := sortedUnique(allowed)
+	if len(requested) == 0 {
+		return requested, true
+	}
+	activeKids := make(map[string]struct{}, len(active))
+	for _, key := range active {
+		activeKids[key.GetKid()] = struct{}{}
+	}
+	kept := make([]string, 0, len(requested))
+	for _, kid := range requested {
+		if _, ok := activeKids[kid]; ok {
+			kept = append(kept, kid)
+		}
+	}
+	return kept, len(kept) > 0
 }
 
 func denyPlaybackPolicy() *mediaauthoritypb.PlaybackPolicy {

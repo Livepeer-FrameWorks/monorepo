@@ -289,6 +289,11 @@ func (s *CommodoreServer) SetPlaybackPolicy(ctx context.Context, req *commodorep
 	if err != nil {
 		return nil, err
 	}
+	if policyType == "jwt" {
+		if keyErr := s.validateJWTPolicyKeys(ctx, tenantID, req.GetJwt().GetAllowedKids()); keyErr != nil {
+			return nil, keyErr
+		}
+	}
 	// The URL check resolves DNS, so it runs before a transaction is open.
 	if policyType == "webhook" {
 		if vErr := validateWebhookURL(ctx, s.webhookDestinationPolicy, req.GetWebhook().GetUrl()); vErr != nil {
@@ -700,27 +705,20 @@ func buildPolicyJSON(policyType string, req *commodorepb.SetPlaybackPolicyReques
 	return json.Marshal(doc)
 }
 
-// validateWebhookURL is the save-time check for a playback-auth webhook URL:
-// https only, no userinfo (requests are authenticated by the HMAC signature),
-// no platform-internal hostnames, and a host that the shared webhook
-// destination policy accepts together with every address it resolves to.
+// validateWebhookURL is the save-time check for a playback-auth webhook URL.
+// It applies the webhook URL rules Bosun uses for outbound webhooks
+// (restream.ValidateWebhookURL) with the server's playback webhook policy.
 // Foghorn applies the same policy to the address of each connection, which is
 // what refuses a name that later resolves elsewhere.
 func validateWebhookURL(ctx context.Context, policy restream.DestinationPolicy, raw string) error {
-	if raw == "" {
-		return errors.New("url required")
+	if _, err := restream.ValidateWebhookURL(ctx, policy, raw); err != nil {
+		if errors.Is(err, restream.ErrDestinationResolution) {
+			return fmt.Errorf("dns lookup failed: %w", err)
+		}
+		// The caller already labels the error as an invalid webhook URL.
+		return errors.New(strings.TrimPrefix(err.Error(), restream.ErrInvalidWebhookURL.Error()+": "))
 	}
-	u, err := url.Parse(raw)
-	if err != nil {
-		return err
-	}
-	if u.Scheme != "https" {
-		return errors.New("scheme must be https")
-	}
-	if u.User != nil {
-		return errors.New("userinfo not allowed; auth via HMAC signature")
-	}
-	return validatePublicDestinationHost(ctx, policy, u)
+	return nil
 }
 
 // validatePublicDestinationHost is the save-time check for a tenant-supplied
@@ -911,6 +909,35 @@ func (s *CommodoreServer) lookupPolicyByInternalName(ctx context.Context, intern
 		}
 	}
 	return nil, sql.NullString{}, "", status.Errorf(codes.NotFound, "internal name not found")
+}
+
+// validateJWTPolicyKeys refuses a JWT policy that no active key could satisfy:
+// the tenant needs at least one active signing key, and every allowed kid must
+// name one. A key revoked after this check is handled by the authority
+// compiler, which prunes it or compiles the object to deny.
+func (s *CommodoreServer) validateJWTPolicyKeys(ctx context.Context, tenantID string, allowedKids []string) error {
+	keys, err := s.fetchActiveSigningKeys(ctx, tenantID)
+	if err != nil {
+		s.logger.WithError(err).Error("load active signing keys for jwt policy failed")
+		return status.Errorf(codes.Internal, "database error")
+	}
+	if len(keys) == 0 {
+		return status.Error(codes.FailedPrecondition, "jwt playback policy requires an active signing key; create a playback signing key first")
+	}
+	active := make(map[string]struct{}, len(keys))
+	for _, key := range keys {
+		active[key.GetKid()] = struct{}{}
+	}
+	var unknown []string
+	for _, kid := range sortedUnique(allowedKids) {
+		if _, ok := active[kid]; !ok {
+			unknown = append(unknown, kid)
+		}
+	}
+	if len(unknown) > 0 {
+		return status.Errorf(codes.FailedPrecondition, "allowed kids are not active signing keys: %s", strings.Join(unknown, ", "))
+	}
+	return nil
 }
 
 func (s *CommodoreServer) fetchActiveSigningKeys(ctx context.Context, tenantID string) ([]*commodorepb.PlaybackSigningKey, error) {

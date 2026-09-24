@@ -109,6 +109,9 @@ func main() {
 	if err != nil {
 		logger.WithError(err).Fatal("Invalid restream destination policy")
 	}
+	if cfg.PlaybackWebhookAllowPrivateDestinations {
+		logger.Warn("PLAYBACK_WEBHOOK_ALLOW_PRIVATE_DESTINATIONS is set: playback-auth webhook URLs may target private addresses and plain http")
+	}
 	// Config validation already enforced that the signer key ID and private
 	// key are set together, and that both are set outside development.
 	var mediaAuthorityPrivateKey ed25519.PrivateKey
@@ -396,6 +399,7 @@ func main() {
 			FieldEncryptionPrevious:         fieldEncryptionPrevious,
 			FieldEncryptionLegacy:           fieldEncryptionLegacy,
 			DestinationPolicy:               destinationPolicy,
+			PlaybackWebhookAllowPrivate:     cfg.PlaybackWebhookAllowPrivateDestinations,
 			TurnstileSecretKey:              cfg.TurnstileAuthSecretKey,
 			TurnstileFailOpen:               cfg.TurnstileFailOpen,
 			PasswordResetSecret:             []byte(cfg.PasswordResetSecret),

@@ -91,22 +91,22 @@ func TestValidateWebhookURL(t *testing.T) {
 		{
 			name:    "http rejected",
 			url:     "http://customer.example.com/access",
-			wantErr: "scheme must be https",
+			wantErr: "url must use https",
 		},
 		{
 			name:    "file scheme rejected",
 			url:     "file:///etc/passwd",
-			wantErr: "scheme must be https",
+			wantErr: "url must use https",
 		},
 		{
 			name:    "gopher rejected",
 			url:     "gopher://example.com/",
-			wantErr: "scheme must be https",
+			wantErr: "url must use https",
 		},
 		{
 			name:    "userinfo rejected",
 			url:     "https://user:pass@customer.example/",
-			wantErr: "userinfo not allowed",
+			wantErr: "must not contain credentials",
 		},
 		{
 			name:    "operator-internal hostname rejected",
@@ -116,12 +116,12 @@ func TestValidateWebhookURL(t *testing.T) {
 		{
 			name:    "internal TLD rejected",
 			url:     "https://something.internal/foo",
-			wantErr: "operator-internal",
+			wantErr: "not a public destination",
 		},
 		{
 			name:    "empty url",
 			url:     "",
-			wantErr: "url required",
+			wantErr: "url is required",
 		},
 	}
 

@@ -368,8 +368,8 @@ func TestValidateStreamKey_ReportsClaimAcquisition(t *testing.T) {
 	}
 	defer db.Close()
 
-	rows := sqlmock.NewRows([]string{"id", "user_id", "tenant_id", "internal_name", "is_active", "is_recording_enabled", "playback_id", "ingest_mode"}).
-		AddRow("stream-id", "user-id", "tenant-id", "internal", true, true, "pk", "push")
+	rows := sqlmock.NewRows([]string{"id", "user_id", "tenant_id", "internal_name", "is_active", "is_recording_enabled", "playback_id", "ingest_mode", "dvr_chapter_mode", "dvr_chapter_interval_seconds"}).
+		AddRow("stream-id", "user-id", "tenant-id", "internal", true, true, "pk", "push", nil, nil)
 	mock.ExpectQuery("FROM commodore.streams").WithArgs("good-key").WillReturnRows(rows)
 	expectNoEnabledPushTargets(mock, "stream-id", "tenant-id")
 	mock.ExpectQuery("UPDATE commodore.streams").
@@ -455,8 +455,8 @@ func TestValidateStreamKey_ContendedClaimIsNotAcquired(t *testing.T) {
 	}
 	defer db.Close()
 
-	rows := sqlmock.NewRows([]string{"id", "user_id", "tenant_id", "internal_name", "is_active", "is_recording_enabled", "playback_id", "ingest_mode"}).
-		AddRow("stream-id", "user-id", "tenant-id", "internal", true, true, "pk", "push")
+	rows := sqlmock.NewRows([]string{"id", "user_id", "tenant_id", "internal_name", "is_active", "is_recording_enabled", "playback_id", "ingest_mode", "dvr_chapter_mode", "dvr_chapter_interval_seconds"}).
+		AddRow("stream-id", "user-id", "tenant-id", "internal", true, true, "pk", "push", nil, nil)
 	mock.ExpectQuery("FROM commodore.streams").WithArgs("good-key").WillReturnRows(rows)
 	expectNoEnabledPushTargets(mock, "stream-id", "tenant-id")
 	// The guard matched nothing: someone else owns the live claim.
@@ -494,8 +494,8 @@ func TestValidateStreamKey_ContendedClaimReadFailureDenies(t *testing.T) {
 	}
 	defer db.Close()
 
-	rows := sqlmock.NewRows([]string{"id", "user_id", "tenant_id", "internal_name", "is_active", "is_recording_enabled", "playback_id", "ingest_mode"}).
-		AddRow("stream-id", "user-id", "tenant-id", "internal", true, true, "pk", "push")
+	rows := sqlmock.NewRows([]string{"id", "user_id", "tenant_id", "internal_name", "is_active", "is_recording_enabled", "playback_id", "ingest_mode", "dvr_chapter_mode", "dvr_chapter_interval_seconds"}).
+		AddRow("stream-id", "user-id", "tenant-id", "internal", true, true, "pk", "push", nil, nil)
 	mock.ExpectQuery("FROM commodore.streams").WithArgs("good-key").WillReturnRows(rows)
 	expectNoEnabledPushTargets(mock, "stream-id", "tenant-id")
 	mock.ExpectQuery("UPDATE commodore.streams").WillReturnError(sql.ErrNoRows)

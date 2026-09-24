@@ -210,12 +210,16 @@ type CommodoreServer struct {
 	// never re-read operator configuration or receive its parsing details.
 	destinationPolicy restream.DestinationPolicy
 	// webhookDestinationPolicy checks playback-auth webhook URLs. Operator
-	// restream exceptions never apply to it.
+	// restream exceptions never apply to it; an isolated cluster may admit
+	// private receivers with PLAYBACK_WEBHOOK_ALLOW_PRIVATE_DESTINATIONS.
 	webhookDestinationPolicy restream.DestinationPolicy
-	runtimeSettings          func() RuntimeSettings
-	routeCache               map[string]*clusterRoute
-	routeCacheMu             sync.RWMutex
-	routeCacheTTL            time.Duration
+	// importDestinationPolicy checks URL-import sources: public destinations
+	// only, independent of the playback webhook setting.
+	importDestinationPolicy restream.DestinationPolicy
+	runtimeSettings         func() RuntimeSettings
+	routeCache              map[string]*clusterRoute
+	routeCacheMu            sync.RWMutex
+	routeCacheTTL           time.Duration
 	// admissionRefresh collapses concurrent admission-state refreshes for the
 	// same tenant into one Quartermaster/Purser round trip.
 	admissionRefresh singleflight.Group
@@ -775,6 +779,9 @@ type CommodoreServerConfig struct {
 	FieldEncryptionPrevious map[string][]byte
 	FieldEncryptionLegacy   [][]byte
 	DestinationPolicy       restream.DestinationPolicy
+	// PlaybackWebhookAllowPrivate admits private playback-auth webhook
+	// receivers; Foghorn must be configured the same way.
+	PlaybackWebhookAllowPrivate bool
 	// Bot protection
 	TurnstileSecretKey string
 	TurnstileFailOpen  bool
@@ -885,7 +892,8 @@ func NewCommodoreServer(cfg CommodoreServerConfig) *CommodoreServer {
 		playbackWebhookEncryptor: pwe,
 		pullSourceEncryptor:      pse,
 		destinationPolicy:        cfg.DestinationPolicy,
-		webhookDestinationPolicy: restream.PublicDestinationPolicy(),
+		webhookDestinationPolicy: restream.WebhookDestinationPolicy(cfg.PlaybackWebhookAllowPrivate),
+		importDestinationPolicy:  restream.PublicDestinationPolicy(),
 		runtimeSettings:          cfg.Settings,
 		routeCache:               make(map[string]*clusterRoute),
 		routeCacheTTL:            5 * time.Minute,
@@ -2127,6 +2135,7 @@ func (s *CommodoreServer) validateStreamKey(ctx context.Context, req *commodorep
 	}
 	resp.ProcessesJson = s.resolveProcessesJSON(ctx, admission.TenantID, admission.ID, processClusterID, "live")
 	resp.DvrProcessesJson = s.resolveProcessesJSON(ctx, admission.TenantID, admission.ID, processClusterID, "dvr")
+	resp.DvrChapterMode, resp.DvrChapterIntervalSeconds = streamDVRChapterPolicy(admission.DvrChapterMode, admission.DvrChapterIntervalSeconds)
 
 	// Track the media cluster this stream ingests on.
 	//
@@ -2499,6 +2508,7 @@ func (s *CommodoreServer) ResolveStreamContext(ctx context.Context, req *commodo
 	}
 	resp.ProcessesJson = s.resolveProcessesJSON(ctx, resolved.TenantID, resolved.ID, processClusterID, "live")
 	resp.DvrProcessesJson = s.resolveProcessesJSON(ctx, resolved.TenantID, resolved.ID, processClusterID, "dvr")
+	resp.DvrChapterMode, resp.DvrChapterIntervalSeconds = streamDVRChapterPolicy(resolved.DvrChapterMode, resolved.DvrChapterIntervalSeconds)
 
 	// Final admission decision: facts above were collected; now collapse the
 	// billing gates that PUSH_REWRITE applies (lines 1092-1110 in
@@ -3465,16 +3475,13 @@ func (s *CommodoreServer) StartDVR(ctx context.Context, req *sharedpb.StartDVRRe
 		StreamID: streamID, TenantID: tenantID,
 	})
 	if scanErr == nil {
-		if chapterConfig.DvrChapterMode.Valid && chapterConfig.DvrChapterMode.String != "" {
-			mode := chapterConfig.DvrChapterMode.String
-			foghornReq.DvrChapterMode = &mode
-		}
-		if chapterConfig.DvrChapterIntervalSeconds.Valid && chapterConfig.DvrChapterIntervalSeconds.Int32 > 0 {
-			iv := chapterConfig.DvrChapterIntervalSeconds.Int32
+		mode, iv := streamDVRChapterPolicy(chapterConfig.DvrChapterMode, chapterConfig.DvrChapterIntervalSeconds)
+		foghornReq.DvrChapterMode = &mode
+		if iv > 0 {
 			foghornReq.DvrChapterIntervalSeconds = &iv
 		}
 	} else if !errors.Is(scanErr, sql.ErrNoRows) {
-		s.logger.WithError(scanErr).WithField("stream_id", streamID).Warn("Failed to read Stream chapter config; recording starts without chapters")
+		s.logger.WithError(scanErr).WithField("stream_id", streamID).Warn("Failed to read Stream chapter config; recording starts with window-sized chapters")
 	}
 
 	s.logger.WithFields(logging.Fields{
@@ -7118,8 +7125,15 @@ func (s *CommodoreServer) UpdateStream(ctx context.Context, req *commodorepb.Upd
 		// streams. Validated values land verbatim; the CHECK enforces the
 		// allowed set on write.
 		updateParams.ApplyChapterMode = true
-		if mode := strings.TrimSpace(req.GetDvrChapterMode()); mode != "" && strings.ToLower(mode) != "none" {
+		mode := strings.TrimSpace(req.GetDvrChapterMode())
+		if mode != "" && strings.ToLower(mode) != "none" {
 			updateParams.ChapterMode = sql.NullString{String: mode, Valid: true}
+		}
+		// Only fixed_interval uses the interval column; any other mode clears
+		// it so a previous fixed interval cannot reappear on a later switch.
+		if !strings.EqualFold(mode, "fixed_interval") {
+			updateParams.ApplyChapterInterval = true
+			updateParams.ChapterInterval = sql.NullInt32{}
 		}
 		applyStreamUpdate = true
 		changedFields = append(changedFields, "dvr_chapter_mode")

@@ -6,8 +6,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"net/url"
-	"strconv"
 	"strings"
 	"unicode/utf8"
 
@@ -17,10 +15,7 @@ import (
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/restream"
 )
 
-const (
-	maxURLLength         = 2048
-	maxDescriptionLength = 500
-)
+const maxDescriptionLength = 500
 
 // ErrInvalid wraps every rejection of tenant input.
 var ErrInvalid = errors.New("invalid webhook endpoint")
@@ -33,57 +28,19 @@ func invalid(format string, args ...any) error {
 	return fmt.Errorf("%w: %s", ErrInvalid, fmt.Sprintf(format, args...))
 }
 
-// URL checks an endpoint URL: https, a host, no credentials or fragment, and
-// a destination the policy allows. A literal forbidden address and a host
-// that resolves to one are both rejected. The same policy is applied again to
-// the address of every connection, so a later change of the DNS answer is
-// refused at send time. A policy that allows private destinations also
-// accepts plain http and local host names, because a receiver on an isolated
-// network rarely has a publicly trusted certificate; the resolved address
-// still decides.
+// URL checks an endpoint URL with the shared webhook URL rules
+// (restream.ValidateWebhookURL) and maps their outcome onto this package's
+// sentinels.
 func URL(ctx context.Context, policy restream.DestinationPolicy, raw string) (string, error) {
-	raw = strings.TrimSpace(raw)
-	if raw == "" {
-		return "", invalid("url is required")
+	normalized, err := restream.ValidateWebhookURL(ctx, policy, raw)
+	switch {
+	case err == nil:
+		return normalized, nil
+	case errors.Is(err, restream.ErrDestinationResolution):
+		return "", fmt.Errorf("%w: %s", ErrResolution, strings.TrimPrefix(err.Error(), restream.ErrDestinationResolution.Error()+": "))
+	default:
+		return "", fmt.Errorf("%w: %s", ErrInvalid, strings.TrimPrefix(err.Error(), restream.ErrInvalidWebhookURL.Error()+": "))
 	}
-	if len(raw) > maxURLLength {
-		return "", invalid("url is longer than %d characters", maxURLLength)
-	}
-	parsed, err := url.Parse(raw)
-	if err != nil {
-		return "", invalid("url does not parse")
-	}
-	if parsed.Scheme != "https" && (parsed.Scheme != "http" || !policy.AllowPrivate) {
-		return "", invalid("url must use https")
-	}
-	if parsed.User != nil {
-		return "", invalid("url must not contain credentials")
-	}
-	if parsed.Fragment != "" || strings.Contains(raw, "#") {
-		return "", invalid("url must not contain a fragment")
-	}
-	host := strings.ToLower(strings.TrimSuffix(parsed.Hostname(), "."))
-	if host == "" {
-		return "", invalid("url must name a host")
-	}
-	if host == "frameworks.network" || strings.HasSuffix(host, ".frameworks.network") {
-		return "", invalid("url host is operator-internal")
-	}
-	if port := parsed.Port(); port != "" {
-		if n, convErr := strconv.Atoi(port); convErr != nil || n <= 0 || n > 65535 {
-			return "", invalid("url port is not valid")
-		}
-	}
-	if !policy.AllowPrivate && (host == "localhost" || strings.HasSuffix(host, ".localhost") || strings.HasSuffix(host, ".local") || strings.HasSuffix(host, ".internal")) {
-		return "", invalid("url host is not a public destination")
-	}
-	if err := policy.ValidateURI(ctx, parsed); err != nil {
-		if errors.Is(err, restream.ErrDestinationResolution) {
-			return "", fmt.Errorf("%w: %s", ErrResolution, host)
-		}
-		return "", invalid("url is not a public destination: %v", err)
-	}
-	return parsed.String(), nil
 }
 
 // Description checks the free-text description.

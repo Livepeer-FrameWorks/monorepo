@@ -45,7 +45,7 @@ func (s *CommodoreServer) ImportVodAsset(ctx context.Context, req *sharedpb.Impo
 	if err != nil {
 		return nil, status.Error(codes.InvalidArgument, err.Error())
 	}
-	if validationErr := validatePublicDestinationHost(ctx, s.webhookDestinationPolicy, source); validationErr != nil {
+	if validationErr := validatePublicDestinationHost(ctx, s.importDestinationPolicy, source); validationErr != nil {
 		return nil, status.Errorf(codes.InvalidArgument, "invalid import URL: %v", validationErr)
 	}
 

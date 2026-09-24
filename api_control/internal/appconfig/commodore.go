@@ -53,6 +53,8 @@ type Commodore struct {
 	RestreamAllowedPrivateCIDRs      string `env:"RESTREAM_ALLOWED_PRIVATE_CIDRS" desc:"Comma-separated CIDRs exempted from the private, loopback, and link-local multistream destination block." introduced:"v0.3.0"`
 	RestreamDeniedCIDRs              string `env:"RESTREAM_DENIED_CIDRS" desc:"Comma-separated CIDRs never allowed as multistream destinations. Denials win over allowances." introduced:"v0.3.0"`
 
+	PlaybackWebhookAllowPrivateDestinations bool `env:"PLAYBACK_WEBHOOK_ALLOW_PRIVATE_DESTINATIONS" default:"false" desc:"Lets playback-auth webhook URLs use private (RFC 1918 / ULA) addresses, plain http, and .local or .internal host names, so an isolated staging or development cluster can authorize playback against a receiver on its own network. Loopback, link-local, and cloud metadata addresses stay blocked. Must match Foghorn's setting. Never set it on a cluster that serves untrusted tenants." introduced:"v0.3.11"`
+
 	MediaAuthoritySigningKeyID            string `env:"MEDIA_AUTHORITY_SIGNING_KEY_ID" desc:"Key ID of the Ed25519 signer for media authority envelopes. Required outside development, together with MEDIA_AUTHORITY_SIGNING_PRIVATE_KEY_PEM_B64." introduced:"v0.3.0"`
 	MediaAuthoritySigningPrivateKeyPEMB64 string `env:"MEDIA_AUTHORITY_SIGNING_PRIVATE_KEY_PEM_B64" secret:"true" desc:"Base64-wrapped PKCS#8 Ed25519 private key PEM that signs media authority envelopes." introduced:"v0.3.0"`
 	MediaAuthoritySealRecipients          string `env:"MEDIA_AUTHORITY_SEAL_RECIPIENTS" desc:"Rendered by the CLI. Maps control-cell IDs to X25519 recipient keys and enables sealed-secret delivery in media authority." introduced:"v0.3.0"`

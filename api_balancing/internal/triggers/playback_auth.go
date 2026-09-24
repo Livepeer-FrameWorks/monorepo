@@ -14,6 +14,7 @@ import (
 	"net/http"
 	"slices"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"frameworks/api_balancing/internal/control"
@@ -553,10 +554,25 @@ func (p *Processor) logPlaybackDeny(internalName string, userNew *ipcpb.ViewerCo
 // Webhook HTTP client
 // ----------------------------------------------------------------------------
 
+// playbackWebhookAllowPrivate is the process-wide
+// PLAYBACK_WEBHOOK_ALLOW_PRIVATE_DESTINATIONS setting. It is package state
+// because every evaluator, including the stateless EvaluatePlaybackPolicy*
+// entry points, must dial with the same policy Commodore validated against.
+var playbackWebhookAllowPrivate atomic.Bool
+
+// SetPlaybackWebhookAllowPrivateDestinations applies the operator setting
+// that lets playback-auth webhooks reach private receivers on an isolated
+// cluster. Foghorn calls it once at startup.
+func SetPlaybackWebhookAllowPrivateDestinations(allow bool) {
+	playbackWebhookAllowPrivate.Store(allow)
+}
+
 // playbackWebhookDestinationPolicy returns the addresses a playback-auth
-// webhook may connect to: public ones only. Tests replace it to admit a
-// loopback receiver.
-var playbackWebhookDestinationPolicy = restream.PublicDestinationPolicy
+// webhook may connect to: public ones, plus private ones when the operator
+// allows them. Loopback, link-local, and cloud metadata stay blocked.
+func playbackWebhookDestinationPolicy() restream.DestinationPolicy {
+	return restream.WebhookDestinationPolicy(playbackWebhookAllowPrivate.Load())
+}
 
 // newPlaybackWebhookClient returns the client for one playback-auth webhook
 // call. The destination policy runs in the dialer's Control hook on the

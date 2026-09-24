@@ -1012,7 +1012,6 @@ func TestAuthorityCompileErrorClassification(t *testing.T) {
 
 func TestBuildArtifactAuthorityPayloadPreservesKindParentAndOrigin(t *testing.T) {
 	policy := &mediaauthoritypb.PlaybackPolicy{Kind: mediaauthoritypb.PlaybackPolicyKind_PLAYBACK_POLICY_KIND_PUBLIC}
-	tenant := &mediaauthoritypb.TenantAuthority{OfficialClusterId: "media-official"}
 	for input, want := range map[string]mediaauthoritypb.ArtifactKind{
 		"clip":    mediaauthoritypb.ArtifactKind_ARTIFACT_KIND_CLIP,
 		"dvr":     mediaauthoritypb.ArtifactKind_ARTIFACT_KIND_DVR,
@@ -1023,21 +1022,40 @@ func TestBuildArtifactAuthorityPayloadPreservesKindParentAndOrigin(t *testing.T)
 			payload, err := buildArtifactAuthorityPayload(commodoredb.GetArtifactMediaAuthoritySourceRow{
 				AuthorityID: "artifact-1", ArtifactKind: input, ArtifactHash: "hash-1", TenantID: "tenant-1",
 				UserID: "user-1", StreamID: "parent-stream-1", ParentStreamInternalName: "parent-routing-name",
-				InternalName: "artifact-name", PlaybackID: "playback-1",
-			}, tenant, policy, mediaauthoritypb.AuthorityLifecycle_AUTHORITY_LIFECYCLE_ACTIVE)
+				InternalName: "artifact-name", PlaybackID: "playback-1", OriginClusterID: "media-eu",
+			}, policy, mediaauthoritypb.AuthorityLifecycle_AUTHORITY_LIFECYCLE_ACTIVE)
 			if err != nil {
 				t.Fatal(err)
 			}
 			artifact := payload.GetArtifact()
 			if artifact.GetArtifactKind() != want || artifact.GetParentStreamId() != "parent-stream-1" ||
-				artifact.GetParentStreamInternalName() != "parent-routing-name" || payload.GetOriginClusterId() != "media-official" {
+				artifact.GetParentStreamInternalName() != "parent-routing-name" || payload.GetOriginClusterId() != "media-eu" {
 				t.Fatalf("artifact payload = %+v", payload)
 			}
 		})
 	}
 
-	if _, err := buildArtifactAuthorityPayload(commodoredb.GetArtifactMediaAuthoritySourceRow{ArtifactKind: "unknown"}, tenant, policy, mediaauthoritypb.AuthorityLifecycle_AUTHORITY_LIFECYCLE_ACTIVE); err == nil {
+	if _, err := buildArtifactAuthorityPayload(commodoredb.GetArtifactMediaAuthoritySourceRow{ArtifactKind: "unknown", OriginClusterID: "media-eu"}, policy, mediaauthoritypb.AuthorityLifecycle_AUTHORITY_LIFECYCLE_ACTIVE); err == nil {
 		t.Fatal("unknown artifact kind was accepted")
+	}
+}
+
+// The origin is where the artifact was produced and where its bytes live; it is never invented from a tenant-level
+// cluster. An ACTIVE artifact with no recorded origin parks (retrying cannot help until the origin is projected),
+// while a non-active authority, which serves nothing, still compiles so revocations are not held back.
+func TestBuildArtifactAuthorityPayloadMissingOrigin(t *testing.T) {
+	policy := &mediaauthoritypb.PlaybackPolicy{Kind: mediaauthoritypb.PlaybackPolicyKind_PLAYBACK_POLICY_KIND_PUBLIC}
+	source := commodoredb.GetArtifactMediaAuthoritySourceRow{AuthorityID: "artifact-1", ArtifactKind: "clip", ArtifactHash: "hash-1", TenantID: "tenant-1"}
+
+	_, err := buildArtifactAuthorityPayload(source, policy, mediaauthoritypb.AuthorityLifecycle_AUTHORITY_LIFECYCLE_ACTIVE)
+	class, code := classifyAuthorityCompileError(err)
+	if err == nil || class != authorityCompilePark || code != "origin_cluster_unknown" {
+		t.Fatalf("active artifact without origin: err=%v class=%v code=%q, want park origin_cluster_unknown", err, class, code)
+	}
+
+	payload, err := buildArtifactAuthorityPayload(source, denyPlaybackPolicy(), mediaauthoritypb.AuthorityLifecycle_AUTHORITY_LIFECYCLE_INACTIVE)
+	if err != nil || payload.GetOriginClusterId() != "" {
+		t.Fatalf("inactive artifact without origin: payload=%+v err=%v, want compiled with empty origin", payload, err)
 	}
 }
 

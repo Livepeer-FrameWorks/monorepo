@@ -77,8 +77,9 @@ Generic workload access and playback sharing are intentionally distinct.
 ingest, processing, storage placement, and other new work. The serve-only
 `ClusterServeAccessibleForTenant` may additionally admit a resolved tenant on a
 platform-official shared edge; callers must not reuse it to write or process.
-Durable writes remain restricted to the tenant's official storage cluster and
-the cell's immutable, Quartermaster-adopted backend.
+Durable writes land on the artifact's origin cluster (the cluster that produced
+it), in that cell's immutable, Quartermaster-adopted backend; processing runs
+only on nodes of that origin cluster.
 
 ## Node and request identity
 

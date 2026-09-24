@@ -164,8 +164,7 @@ func main() {
 	// Webhook destinations get the shared destination policy: the URL, its DNS
 	// answer at validation, and the address of every connection must be public,
 	// unless the operator lets an isolated cluster deliver to private addresses.
-	destinationPolicy := restream.PublicDestinationPolicy()
-	destinationPolicy.AllowPrivate = cfg.AllowPrivateDestinations
+	destinationPolicy := restream.WebhookDestinationPolicy(cfg.AllowPrivateDestinations)
 	if destinationPolicy.AllowPrivate {
 		logger.Warn("BOSUN_ALLOW_PRIVATE_DESTINATIONS is set: webhook endpoints may target private addresses and plain http")
 	}

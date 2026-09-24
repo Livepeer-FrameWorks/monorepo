@@ -172,6 +172,8 @@ type Foghorn struct {
 	PlatformRootDomain     string   `env:"BRAND_DOMAIN" default:"frameworks.network" desc:"Platform root domain for cluster-scoped Foghorn, edge, telemetry, and certificate host names." introduced:"v0.3.0"`
 	ACMEEmail              string   `env:"ACME_EMAIL" desc:"Contact email sent to edge nodes in their site configuration for ACME certificate issuance." introduced:"v0.3.0"`
 
+	PlaybackWebhookAllowPrivateDestinations bool `env:"PLAYBACK_WEBHOOK_ALLOW_PRIVATE_DESTINATIONS" default:"false" desc:"Lets playback-auth webhook calls connect to private (RFC 1918 / ULA) addresses, so an isolated staging or development cluster can authorize playback against a receiver on its own network. Loopback, link-local, and cloud metadata addresses stay blocked. Must match Commodore's setting. Never set it on a cluster that serves untrusted tenants." introduced:"v0.3.11"`
+
 	FederationEnabled          string `env:"FEDERATION_ENABLED" default:"false" desc:"Enables cross-cluster federation when exactly true; any other value leaves it off. Requires Quartermaster, an active platform-official cluster, Redis, and authenticated TLS." introduced:"v0.3.0"`
 	FederationAllowInsecureDev bool   `env:"FEDERATION_ALLOW_INSECURE_DEV" default:"false" desc:"Allows federation together with GRPC_ALLOW_INSECURE. Isolated development only." introduced:"v0.3.0"`
 

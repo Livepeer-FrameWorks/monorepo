@@ -588,6 +588,16 @@ func main() {
 			"Durable ingest-offline obligations retained after exhaustion or revived by a late acknowledgement",
 			[]string{"outcome"},
 		),
+		StreamTranscodeDegraded: metricsCollector.NewCounter(
+			"stream_transcode_degraded_total",
+			"Transcode processes Mist replaced after a hard failure, by failed process type and stream kind",
+			[]string{"failed_process_type", "stream_kind", "replaced"},
+		),
+		ProcessingResultsIgnored: metricsCollector.NewCounter(
+			"processing_results_ignored_total",
+			"Helmsman processing results Foghorn refused to apply, by reported status and reason",
+			[]string{"status", "reason"},
+		),
 	})
 	go control.RunAdmissionEffectEncryptionMigration(context.Background(), logger)
 
@@ -1171,6 +1181,10 @@ func main() {
 	signingKeyUseRecorder := signingkeyuseoutbox.NewAsyncRecorder(signingKeyUseWriter, logger)
 	go signingKeyUseRecorder.Run(context.Background())
 	triggerProcessor.SetSigningKeyUseRecorder(signingKeyUseRecorder)
+	triggers.SetPlaybackWebhookAllowPrivateDestinations(cfg.PlaybackWebhookAllowPrivateDestinations)
+	if cfg.PlaybackWebhookAllowPrivateDestinations {
+		logger.Warn("PLAYBACK_WEBHOOK_ALLOW_PRIVATE_DESTINATIONS is set: playback-auth webhooks may connect to private addresses")
+	}
 	mediaAuthorityLocalReads := metricsCollector.NewCounter(
 		"media_authority_local_reads_total",
 		"Durable signed media-authority lookup outcomes",
@@ -1594,7 +1608,7 @@ func main() {
 		// kind requires its own reader, so a kind this cell cannot resolve is
 		// refused rather than served outside the policy.
 		placementDestination.Discovery = &federation.PlacementDiscovery{
-			CellID: controlCellID, Authority: authorityStore, Inventory: livePlacementInventory{}, Snapshot: placementSnapshot,
+			CellID: controlCellID, Authority: authorityStore, Inventory: livePlacementInventory{}, Snapshot: placementSnapshot, Logger: logger,
 			Paths: &federation.MediaPlacementPaths{
 				Push: &federation.LivePushPlacementPaths{
 					CellID: controlCellID, RegistryCellID: foghornCfg.ClusterID,
@@ -1684,9 +1698,6 @@ func main() {
 	onCommodoreConnected(commodoreClient)
 	if authorityStore != nil {
 		go runMediaAuthorityRestoreFence(authorityStore, placementCommodore.Load, mediaAuthorityCellID, logger)
-	}
-	if qmClient != nil {
-		foghornServer.SetQuartermasterClient(qmClient)
 	}
 
 	// Storage resolver factory: builds a per-request storage.ClusterResolver
@@ -2015,7 +2026,7 @@ func main() {
 		startEdgeQuartermasterPublisher(qmClient, redisStore, instanceID, cfg.ClusterID, logger)
 	}
 
-	// Start the hourly storage snapshot scheduler
+	// Start the storage snapshot scheduler (once shortly after startup, then hourly)
 	go startStorageSnapshotScheduler(triggerProcessor, logger)
 
 	// Start retention job (marks expired assets as deleted)
@@ -2821,13 +2832,42 @@ func relayHealthResult(relayReady, haRequired bool) monitoring.CheckResult {
 	}
 }
 
-func startStorageSnapshotScheduler(p *triggers.Processor, logger logging.Logger) {
-	ticker := time.NewTicker(1 * time.Hour)
-	defer ticker.Stop()
+// The first storage snapshot runs shortly after startup instead of an hour
+// later, so storage usage has a fresh sample after every restart. The delay
+// gives connected nodes time to report their artifact inventories.
+const (
+	storageSnapshotInitialDelay = 2 * time.Minute
+	storageSnapshotInterval     = time.Hour
+)
 
-	for range ticker.C {
-		if err := p.GenerateAndSendStorageSnapshots(); err != nil {
+func startStorageSnapshotScheduler(p *triggers.Processor, logger logging.Logger) {
+	runStorageSnapshotSchedule(context.Background(), storageSnapshotInitialDelay, storageSnapshotInterval, p.GenerateAndSendStorageSnapshots, logger)
+}
+
+func runStorageSnapshotSchedule(ctx context.Context, initialDelay, interval time.Duration, generate func() error, logger logging.Logger) {
+	run := func() {
+		if err := generate(); err != nil {
 			logger.WithError(err).Error("Failed to generate and enqueue storage snapshots")
+		}
+	}
+
+	initial := time.NewTimer(initialDelay)
+	defer initial.Stop()
+	select {
+	case <-ctx.Done():
+		return
+	case <-initial.C:
+		run()
+	}
+
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			run()
 		}
 	}
 }
