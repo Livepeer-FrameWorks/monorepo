@@ -1320,9 +1320,11 @@ type StartDVRRequest struct {
 	// pkg/dvrpolicy.Resolve uses zero-value defaults and a safe 1h fallback.
 	DvrPolicy *DVRPolicy `protobuf:"bytes,8,opt,name=dvr_policy,json=dvrPolicy,proto3" json:"dvr_policy,omitempty"`
 	// Chapter mode for the chapter sweeper to materialize.
-	// Values: 'window_sized_chapters' | 'fixed_interval' | '' (chapters off)
-	// Empty/unset disables chapter rotation entirely — Stream config is the
-	// authority. For 'fixed_interval', dvr_chapter_interval_seconds is required.
+	// Values: 'window_sized_chapters' | 'fixed_interval' | 'none'.
+	// 'none' records live rewind only and keeps no chapters. Empty/unset is
+	// treated as 'window_sized_chapters' so a caller that does not carry the
+	// stream's policy still produces a replayable recording. For
+	// 'fixed_interval', dvr_chapter_interval_seconds is required.
 	DvrChapterMode            *string `protobuf:"bytes,9,opt,name=dvr_chapter_mode,json=dvrChapterMode,proto3,oneof" json:"dvr_chapter_mode,omitempty"`
 	DvrChapterIntervalSeconds *int32  `protobuf:"varint,10,opt,name=dvr_chapter_interval_seconds,json=dvrChapterIntervalSeconds,proto3,oneof" json:"dvr_chapter_interval_seconds,omitempty"`
 	ProcessesJson             string  `protobuf:"bytes,11,opt,name=processes_json,json=processesJson,proto3" json:"processes_json,omitempty"` // Resolved Commodore process config snapshot for DVR thumbnails

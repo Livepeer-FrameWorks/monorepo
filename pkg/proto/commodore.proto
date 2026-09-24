@@ -527,6 +527,13 @@ message ValidateStreamKeyResponse {
   // applies it on auto-record (record:true) without an extra Commodore
   // round-trip. Manual startDVR resolves the same policy in Commodore.
   shared.DVRPolicy dvr_policy = 17;
+  // Stream chapter policy that an auto-started recording snapshots:
+  // 'window_sized_chapters' | 'fixed_interval' | 'none' (live rewind only,
+  // nothing kept). Empty means the sender predates this field; Foghorn then
+  // records window-sized chapters.
+  string dvr_chapter_mode = 35;
+  // Interval for 'fixed_interval'; 0 otherwise.
+  int32 dvr_chapter_interval_seconds = 36;
 
   // ===== BILLING ALLOWANCES =====
   // Per-meter current-period allowance snapshots forwarded from Purser
@@ -616,6 +623,10 @@ message ResolveStreamContextResponse {
   string processes_json = 17;
   shared.DVRPolicy dvr_policy = 18;
   string dvr_processes_json = 21;
+  // Stream chapter policy for auto-started recordings; same values as
+  // ValidateStreamKeyResponse.dvr_chapter_mode.
+  string dvr_chapter_mode = 25;
+  int32 dvr_chapter_interval_seconds = 26;
 
   // ===== BILLING ALLOWANCES =====
   repeated metering.MeterAllowance allowances = 19;

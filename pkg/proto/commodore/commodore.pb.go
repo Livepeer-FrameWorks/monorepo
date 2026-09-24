@@ -1203,6 +1203,13 @@ type ValidateStreamKeyResponse struct {
 	// applies it on auto-record (record:true) without an extra Commodore
 	// round-trip. Manual startDVR resolves the same policy in Commodore.
 	DvrPolicy *shared.DVRPolicy `protobuf:"bytes,17,opt,name=dvr_policy,json=dvrPolicy,proto3" json:"dvr_policy,omitempty"`
+	// Stream chapter policy that an auto-started recording snapshots:
+	// 'window_sized_chapters' | 'fixed_interval' | 'none' (live rewind only,
+	// nothing kept). Empty means the sender predates this field; Foghorn then
+	// records window-sized chapters.
+	DvrChapterMode string `protobuf:"bytes,35,opt,name=dvr_chapter_mode,json=dvrChapterMode,proto3" json:"dvr_chapter_mode,omitempty"`
+	// Interval for 'fixed_interval'; 0 otherwise.
+	DvrChapterIntervalSeconds int32 `protobuf:"varint,36,opt,name=dvr_chapter_interval_seconds,json=dvrChapterIntervalSeconds,proto3" json:"dvr_chapter_interval_seconds,omitempty"`
 	// ===== BILLING ALLOWANCES =====
 	// Per-meter current-period allowance snapshots forwarded from Purser
 	// GetTenantBillingStatus. Foghorn uses these for load-aware admission
@@ -1398,6 +1405,20 @@ func (x *ValidateStreamKeyResponse) GetDvrPolicy() *shared.DVRPolicy {
 	return nil
 }
 
+func (x *ValidateStreamKeyResponse) GetDvrChapterMode() string {
+	if x != nil {
+		return x.DvrChapterMode
+	}
+	return ""
+}
+
+func (x *ValidateStreamKeyResponse) GetDvrChapterIntervalSeconds() int32 {
+	if x != nil {
+		return x.DvrChapterIntervalSeconds
+	}
+	return 0
+}
+
 func (x *ValidateStreamKeyResponse) GetAllowances() []*metering_contract.MeterAllowance {
 	if x != nil {
 		return x.Allowances
@@ -1590,6 +1611,10 @@ type ResolveStreamContextResponse struct {
 	ProcessesJson    string            `protobuf:"bytes,17,opt,name=processes_json,json=processesJson,proto3" json:"processes_json,omitempty"`
 	DvrPolicy        *shared.DVRPolicy `protobuf:"bytes,18,opt,name=dvr_policy,json=dvrPolicy,proto3" json:"dvr_policy,omitempty"`
 	DvrProcessesJson string            `protobuf:"bytes,21,opt,name=dvr_processes_json,json=dvrProcessesJson,proto3" json:"dvr_processes_json,omitempty"`
+	// Stream chapter policy for auto-started recordings; same values as
+	// ValidateStreamKeyResponse.dvr_chapter_mode.
+	DvrChapterMode            string `protobuf:"bytes,25,opt,name=dvr_chapter_mode,json=dvrChapterMode,proto3" json:"dvr_chapter_mode,omitempty"`
+	DvrChapterIntervalSeconds int32  `protobuf:"varint,26,opt,name=dvr_chapter_interval_seconds,json=dvrChapterIntervalSeconds,proto3" json:"dvr_chapter_interval_seconds,omitempty"`
 	// ===== BILLING ALLOWANCES =====
 	Allowances []*metering_contract.MeterAllowance `protobuf:"bytes,19,rep,name=allowances,proto3" json:"allowances,omitempty"`
 	// ===== RUNTIME RESOURCE CAPS =====
@@ -1774,6 +1799,20 @@ func (x *ResolveStreamContextResponse) GetDvrProcessesJson() string {
 		return x.DvrProcessesJson
 	}
 	return ""
+}
+
+func (x *ResolveStreamContextResponse) GetDvrChapterMode() string {
+	if x != nil {
+		return x.DvrChapterMode
+	}
+	return ""
+}
+
+func (x *ResolveStreamContextResponse) GetDvrChapterIntervalSeconds() int32 {
+	if x != nil {
+		return x.DvrChapterIntervalSeconds
+	}
+	return 0
 }
 
 func (x *ResolveStreamContextResponse) GetAllowances() []*metering_contract.MeterAllowance {
@@ -14812,7 +14851,7 @@ const file_commodore_proto_rawDesc = "" +
 	"\n" +
 	"cluster_id\x18\x02 \x01(\tR\tclusterId\x12\x1f\n" +
 	"\vclaim_token\x18\x03 \x01(\tR\n" +
-	"claimToken\"\x85\n" +
+	"claimToken\"\xf0\n" +
 	"\n" +
 	"\x19ValidateStreamKeyResponse\x12\x14\n" +
 	"\x05valid\x18\x01 \x01(\bR\x05valid\x12%\n" +
@@ -14838,7 +14877,9 @@ const file_commodore_proto_rawDesc = "" +
 	"\x0eprocesses_json\x18\x10 \x01(\tR\rprocessesJson\x12,\n" +
 	"\x12dvr_processes_json\x18\x1f \x01(\tR\x10dvrProcessesJson\x120\n" +
 	"\n" +
-	"dvr_policy\x18\x11 \x01(\v2\x11.shared.DVRPolicyR\tdvrPolicy\x128\n" +
+	"dvr_policy\x18\x11 \x01(\v2\x11.shared.DVRPolicyR\tdvrPolicy\x12(\n" +
+	"\x10dvr_chapter_mode\x18# \x01(\tR\x0edvrChapterMode\x12?\n" +
+	"\x1cdvr_chapter_interval_seconds\x18$ \x01(\x05R\x19dvrChapterIntervalSeconds\x128\n" +
 	"\n" +
 	"allowances\x18\x12 \x03(\v2\x18.metering.MeterAllowanceR\n" +
 	"allowances\x12^\n" +
@@ -14858,7 +14899,7 @@ const file_commodore_proto_rawDesc = "" +
 	"\n" +
 	"cluster_id\x18\x04 \x01(\tR\tclusterIdB\f\n" +
 	"\n" +
-	"identifier\"\x88\n" +
+	"identifier\"\xf3\n" +
 	"\n" +
 	"\x1cResolveStreamContextResponse\x12\x1a\n" +
 	"\badmitted\x18\x01 \x01(\bR\badmitted\x12)\n" +
@@ -14885,7 +14926,9 @@ const file_commodore_proto_rawDesc = "" +
 	"\x0eprocesses_json\x18\x11 \x01(\tR\rprocessesJson\x120\n" +
 	"\n" +
 	"dvr_policy\x18\x12 \x01(\v2\x11.shared.DVRPolicyR\tdvrPolicy\x12,\n" +
-	"\x12dvr_processes_json\x18\x15 \x01(\tR\x10dvrProcessesJson\x128\n" +
+	"\x12dvr_processes_json\x18\x15 \x01(\tR\x10dvrProcessesJson\x12(\n" +
+	"\x10dvr_chapter_mode\x18\x19 \x01(\tR\x0edvrChapterMode\x12?\n" +
+	"\x1cdvr_chapter_interval_seconds\x18\x1a \x01(\x05R\x19dvrChapterIntervalSeconds\x128\n" +
 	"\n" +
 	"allowances\x18\x13 \x03(\v2\x18.metering.MeterAllowanceR\n" +
 	"allowances\x12^\n" +

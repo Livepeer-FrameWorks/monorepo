@@ -610,6 +610,11 @@ default_message_pool.register_message(
 
 @dataclass(eq=False, repr=False)
 class RecordingReady(betterproto2.Message):
+    """
+    RecordingReady reports that a finalized recording is saved as replayable
+    chapters. A recording whose stream keeps live rewind only never emits it.
+    """
+
     artifact: "Artifact | None" = betterproto2.field(
         1, betterproto2.TYPE_MESSAGE, optional=True
     )
@@ -646,7 +651,8 @@ class RecordingStopped(betterproto2.Message):
     """
     RecordingStopped reports that capture ended and the recording is being
     finalized. It follows recording.started once; recording.ready or
-    recording.failed follows it.
+    recording.failed follows it. A live-rewind-only recording keeps nothing
+    replayable, so recording.ready never follows it.
     """
 
     artifact: "Artifact | None" = betterproto2.field(

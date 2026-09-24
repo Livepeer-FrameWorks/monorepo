@@ -206,9 +206,11 @@ message StartDVRRequest {
   // pkg/dvrpolicy.Resolve uses zero-value defaults and a safe 1h fallback.
   DVRPolicy dvr_policy = 8;
   // Chapter mode for the chapter sweeper to materialize.
-  // Values: 'window_sized_chapters' | 'fixed_interval' | '' (chapters off)
-  // Empty/unset disables chapter rotation entirely — Stream config is the
-  // authority. For 'fixed_interval', dvr_chapter_interval_seconds is required.
+  // Values: 'window_sized_chapters' | 'fixed_interval' | 'none'.
+  // 'none' records live rewind only and keeps no chapters. Empty/unset is
+  // treated as 'window_sized_chapters' so a caller that does not carry the
+  // stream's policy still produces a replayable recording. For
+  // 'fixed_interval', dvr_chapter_interval_seconds is required.
   optional string dvr_chapter_mode = 9;
   optional int32 dvr_chapter_interval_seconds = 10;
   string processes_json = 11;     // Resolved Commodore process config snapshot for DVR thumbnails
