@@ -25,6 +25,7 @@ import {
 } from "./schemaUtils";
 
 import { extractOperationType, stripClientDirectives } from "./gqlParser";
+import { generateSdkSnippets, loadSdkCatalog, type SdkCatalog } from "./sdkSnippets";
 import {
   EXPLORER_CATALOG,
   type ResolvedExplorerSection,
@@ -41,6 +42,7 @@ import {
 // Re-export template types for consumers
 export type { Template, TemplateGroups };
 export type { ResolvedExplorerSection, ResolvedExplorerExample } from "./explorerCatalog";
+export type { SdkCatalog } from "./sdkSnippets";
 
 // Also export the search function
 export { searchTemplatesFromLoader as searchTemplates };
@@ -49,6 +51,7 @@ export { searchTemplatesFromLoader as searchTemplates };
 let cachedSchema: IntrospectedSchema | null = null;
 
 const GRAPHQL_HTTP_URL = import.meta.env.VITE_GRAPHQL_HTTP_URL ?? "";
+const GRAPHQL_WS_URL = import.meta.env.VITE_GRAPHQL_WS_URL ?? "";
 
 // Cached templates for field-to-template matching
 let cachedTemplatesMap: Map<string, Template> | null = null;
@@ -182,11 +185,29 @@ interface QueryTemplates {
 }
 
 interface CodeExamples {
+  tsSdk?: string;
+  goSdk?: string;
+  pythonSdk?: string;
   javascript: string;
   fetch: string;
   curl: string;
   python: string;
   go: string;
+}
+
+/** Resolves a configured endpoint, which may be same-origin relative, to an absolute URL. */
+function absoluteEndpoint(url: string, websocket: boolean): string {
+  const origin = typeof window !== "undefined" ? window.location.origin : "";
+  let resolved = url;
+  if (url && !/^[a-z]+:\/\//i.test(url) && origin) {
+    resolved = new URL(url, origin).toString();
+  }
+  if (!resolved || !/^[a-z]+:\/\//i.test(resolved)) {
+    resolved = websocket
+      ? "wss://bridge.frameworks.network/graphql/ws"
+      : "https://bridge.frameworks.network/graphql";
+  }
+  return websocket ? resolved.replace(/^http(s?):\/\//, "ws$1://") : resolved;
 }
 
 interface ValidationResult {
@@ -542,18 +563,42 @@ export const explorerService = {
     };
   },
 
+  /** Loads the SDK operation catalog the SDK code examples match against. */
+  loadSdkCatalog(): Promise<SdkCatalog> {
+    return loadSdkCatalog();
+  },
+
   /**
    * Generate code examples for different languages
    */
   generateCodeExamples(
     query: string,
     variables: Record<string, unknown> = {},
-    token: string | null = null
+    token: string | null = null,
+    sdk: {
+      catalog: SdkCatalog | null;
+      schema?: IntrospectedSchema | null;
+      docsUrl: string;
+    } | null = null
   ): CodeExamples {
     const tokenValue = token || "your_token_here";
     const hasVariables = Object.keys(variables).length > 0;
 
+    const sdkSnippets = sdk?.catalog
+      ? generateSdkSnippets({
+          query,
+          variables,
+          token: tokenValue,
+          catalog: sdk.catalog,
+          schema: sdk.schema,
+          httpUrl: absoluteEndpoint(GRAPHQL_HTTP_URL, false),
+          wsUrl: absoluteEndpoint(GRAPHQL_WS_URL, true),
+          docsUrl: (sdk.docsUrl || "https://logbook.frameworks.network").replace(/\/$/, ""),
+        })
+      : null;
+
     const examples: CodeExamples = {
+      ...sdkSnippets,
       javascript: `// JavaScript (Apollo Client)
 import { ApolloClient, InMemoryCache, gql } from '@apollo/client';
 

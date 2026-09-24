@@ -15,6 +15,9 @@
   import { Badge } from "$lib/components/ui/badge";
   import { Alert, AlertDescription } from "$lib/components/ui/alert";
   import DeveloperCredentialsTabs from "$lib/components/developer/DeveloperCredentialsTabs.svelte";
+  import { getDocsSiteUrl } from "$lib/config";
+
+  const signTokensDocsUrl = `${getDocsSiteUrl().replace(/\/$/, "")}/builders/sdks#sign-playback-tokens`;
 
   const keysStore = new GetSigningKeysConnectionStore();
   const createKeyMutation = new CreateSigningKeyStore();
@@ -227,6 +230,19 @@
           Customer-managed ES256 keys for minting viewer playback JWTs. The private key is shown
           once at creation; FrameWorks stores only the public key. Up to 10 active keys per tenant.
           Apply a JWT policy on a stream's <strong>Playback Auth</strong> tab.
+        </p>
+        <p class="mt-1 text-xs text-muted-foreground">
+          The TypeScript, Go, and Python SDKs include a playback-token signer for these keys.
+          <!-- eslint-disable svelte/no-navigation-without-resolve -->
+          <a
+            href={signTokensDocsUrl}
+            target="_blank"
+            rel="noopener noreferrer"
+            class="text-primary hover:underline">Sign playback tokens</a
+          >
+          <!-- eslint-enable svelte/no-navigation-without-resolve -->
+          ·
+          <a href={resolve("/developer/sdks")} class="text-primary hover:underline">SDKs</a>
         </p>
       </div>
 

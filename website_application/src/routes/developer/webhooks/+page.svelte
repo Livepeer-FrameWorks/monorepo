@@ -20,6 +20,7 @@
   import WebhookEndpointDialog from "$lib/components/webhooks/WebhookEndpointDialog.svelte";
   import WebhookSecretDialog from "$lib/components/webhooks/WebhookSecretDialog.svelte";
   import { getIconComponent } from "$lib/iconUtils";
+  import { getDocsSiteUrl } from "$lib/config";
   import { toast } from "$lib/stores/toast";
   import {
     MAX_WEBHOOK_ENDPOINTS,
@@ -34,6 +35,8 @@
     type RevealedSecret,
     type WebhookEndpointRow,
   } from "$lib/webhooks";
+
+  const receiveWebhooksDocsUrl = `${getDocsSiteUrl().replace(/\/$/, "")}/builders/sdks#receive-webhooks`;
 
   const WebhookIcon = getIconComponent("Webhook");
   const PlusIcon = getIconComponent("Plus");
@@ -121,6 +124,19 @@
           <p class="text-sm text-muted-foreground">
             Signed HTTPS deliveries of your account's public events, with retries, a 30-day log, and
             replay
+          </p>
+          <p class="text-xs text-muted-foreground">
+            The SDKs verify delivery signatures and parse typed events.
+            <!-- eslint-disable svelte/no-navigation-without-resolve -->
+            <a
+              href={receiveWebhooksDocsUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+              class="text-primary hover:underline">Receive webhooks</a
+            >
+            <!-- eslint-enable svelte/no-navigation-without-resolve -->
+            ·
+            <a href={resolve("/developer/sdks")} class="text-primary hover:underline">SDKs</a>
           </p>
         </div>
       </div>

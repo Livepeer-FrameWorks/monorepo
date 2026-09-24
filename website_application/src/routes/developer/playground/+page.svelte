@@ -5,9 +5,11 @@
   import { auth } from "$lib/stores/auth";
   import SkeletonLoader from "$lib/components/SkeletonLoader.svelte";
   import GraphQLExplorer from "$lib/components/GraphQLExplorer.svelte";
-  import { Code2, LogIn, Bot } from "lucide-svelte";
-  import { getMcpEndpoint } from "$lib/config";
+  import { Code2, LogIn, Bot, Package } from "lucide-svelte";
+  import { getDocsSiteUrl, getMcpEndpoint } from "$lib/config";
   import { Button } from "$lib/components/ui/button";
+
+  const mcpDocsUrl = `${getDocsSiteUrl().replace(/\/$/, "")}/agents/mcp`;
 
   let isAuthenticated = $state(false);
   const authToken = "YOUR_API_TOKEN";
@@ -59,16 +61,28 @@
                 .VITE_GRAPHQL_WS_URL}</code
             >
           </div>
+          <!-- eslint-disable svelte/no-navigation-without-resolve -->
           <a
-            href={resolve("/developer/sdks")}
+            href={mcpDocsUrl}
+            target="_blank"
+            rel="noopener noreferrer"
             class="flex items-center gap-1.5 hover:text-primary transition-colors"
-            title="MCP endpoint for AI agents"
+            title="MCP endpoint for AI agents: open the MCP docs"
           >
             <Bot class="w-3.5 h-3.5 text-success" />
             <span class="text-muted-foreground hover:text-primary">MCP</span>
             <code class="font-mono text-foreground bg-muted px-1.5 py-0.5">{getMcpEndpoint()}</code>
           </a>
+          <!-- eslint-enable svelte/no-navigation-without-resolve -->
         </div>
+        <a
+          href={resolve("/developer/sdks")}
+          class="flex items-center gap-1.5 text-muted-foreground hover:text-primary transition-colors"
+          title="TypeScript, Go, and Python SDKs"
+        >
+          <Package class="w-3.5 h-3.5" />
+          <span>SDKs</span>
+        </a>
         {#if !isAuthenticated}
           <Button href={resolve("/login")} size="sm" class="gap-2">
             <LogIn class="w-4 h-4" />

@@ -6,6 +6,7 @@
     type TemplateGroups,
     type ResolvedExplorerSection,
     type ResolvedExplorerExample,
+    type SdkCatalog,
   } from "$lib/graphql/services/explorer.js";
   import {
     extractOperationType,
@@ -14,6 +15,7 @@
     extractFragmentSpreads,
   } from "$lib/graphql/services/gqlParser.js";
   import { toast } from "$lib/stores/toast.js";
+  import { getDocsSiteUrl } from "$lib/config";
   import ExplorerHeader from "$lib/components/explorer/ExplorerHeader.svelte";
   import QueryEditor from "$lib/components/explorer/QueryEditor.svelte";
   import CodeExamplesPanel from "$lib/components/explorer/CodeExamplesPanel.svelte";
@@ -96,7 +98,11 @@
   let _selectedTemplate: QueryTemplate | null = $state(null);
   let showCodeExamples = $state(false);
   let showQueryEditor = $state(true);
-  let selectedLanguage = $state("javascript");
+  // The SDK tab leads: it is the supported integration path, and it still
+  // produces a runnable custom-document call when no SDK operation matches.
+  let selectedLanguage = $state("tsSdk");
+  let sdkCatalog = $state<SdkCatalog | null>(null);
+  let sdkCatalogRequested = false;
   let queryHistory = $state<QueryHistoryItem[]>([]);
   let demoMode = $state(false);
 
@@ -137,12 +143,29 @@
   }
 
   const languages = [
-    { key: "javascript", name: "JavaScript (Apollo)" },
-    { key: "fetch", name: "JavaScript (Fetch)" },
-    { key: "curl", name: "cURL" },
-    { key: "python", name: "Python" },
-    { key: "go", name: "Go" },
+    { key: "tsSdk", name: "TypeScript SDK", group: "SDKs" },
+    { key: "goSdk", name: "Go SDK", group: "SDKs" },
+    { key: "pythonSdk", name: "Python SDK", group: "SDKs" },
+    { key: "javascript", name: "JavaScript (Apollo)", group: "Raw HTTP" },
+    { key: "fetch", name: "JavaScript (Fetch)", group: "Raw HTTP" },
+    { key: "curl", name: "cURL", group: "Raw HTTP" },
+    { key: "python", name: "Python (requests)", group: "Raw HTTP" },
+    { key: "go", name: "Go (net/http)", group: "Raw HTTP" },
   ];
+
+  $effect(() => {
+    if (!showCodeExamples || sdkCatalogRequested) return;
+    sdkCatalogRequested = true;
+    explorerService
+      .loadSdkCatalog()
+      .then((catalog) => {
+        sdkCatalog = catalog;
+      })
+      .catch((err) => {
+        sdkCatalogRequested = false;
+        console.error("Failed to load the SDK operation catalog:", err);
+      });
+  });
 
   // Initialize on mount - use a flag to ensure we only run once
   let hasInitialized = false;
@@ -305,7 +328,11 @@
     if (!query.trim()) return {};
 
     const vars = variables.trim() ? JSON.parse(variables) : {};
-    return explorerService.generateCodeExamples(query, vars, authToken);
+    return explorerService.generateCodeExamples(query, vars, authToken, {
+      catalog: sdkCatalog,
+      schema,
+      docsUrl: getDocsSiteUrl(),
+    });
   }
 
   function handleKeyPress(event: KeyboardEvent) {

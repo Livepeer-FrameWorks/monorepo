@@ -246,6 +246,14 @@
     </div>
   {:else}
     <div class="flex-1 overflow-y-auto">
+      <div class="px-4 sm:px-6 lg:px-8 py-3">
+        <p class="text-xs text-muted-foreground">
+          Pass a token to an SDK client: <code class="font-mono">{"createClient({ token })"}</code>
+          (TypeScript), <code class="font-mono">{"ClientOptions{Token: ...}"}</code> (Go), or
+          <code class="font-mono">FrameWorksClient(token=...)</code> (Python).
+          <a href={resolve("/developer/sdks")} class="text-primary hover:underline">SDKs</a>
+        </p>
+      </div>
       {#if apiTokens.length === 0}
         <div class="px-4 py-12 text-center">
           <Key class="w-10 h-10 text-muted-foreground mx-auto mb-3" />
