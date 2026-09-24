@@ -82,6 +82,35 @@ type FinalizeResult struct {
 	NoOp           bool // true when another caller already finalized this DVR
 }
 
+// claimDVRFinalization moves the recording to 'finalizing' and, when it
+// replaces a recording whose capture was published as recording.started,
+// enqueues recording.stopped in the same transaction. A stale 'finalizing'
+// reclaim and a recording that never captured emit nothing, so stopped follows
+// started exactly once. sql.ErrNoRows means nothing was claimable.
+func claimDVRFinalization(ctx context.Context, dvrHash string) (foghorndb.ClaimDVRFinalizationRow, error) {
+	var claimed foghorndb.ClaimDVRFinalizationRow
+	err := database.WithRetryablePostgresTx(ctx, db, nil, func(tx *sql.Tx) error {
+		q := foghorndb.New(tx)
+		prior, err := q.LockDVRFinalizationPrior(ctx, dvrHash)
+		if err != nil {
+			return err
+		}
+		claimed, err = q.ClaimDVRFinalization(ctx, foghorndb.ClaimDVRFinalizationParams{
+			ArtifactHash: dvrHash, StaleSeconds: staleDVRFinalizingAfter.Seconds(),
+		})
+		if err != nil {
+			return err
+		}
+		captured := prior.Revision > 0 && (prior.Status == "recording" || prior.Status == "stopping")
+		if !captured {
+			return nil
+		}
+		return artifactoutbox.EnqueueArtifactFactTx(ctx, tx, claimed.TenantID,
+			&publicv1.RecordingStopped{Artifact: artifactoutbox.RecordingArtifact(dvrHash, prior.StreamID)})
+	})
+	return claimed, err
+}
+
 // FinalizeDVR is the single entry point for DVR finalization. Idempotent:
 // the first caller wins the recording->finalizing transition and does the
 // work; subsequent callers return the existing terminal state with NoOp=true.
@@ -128,9 +157,7 @@ func FinalizeDVR(ctx context.Context, dvrHash string, opts FinalizeOptions) (Fin
 	// Atomic claim of the active/stopping->finalizing transition. A stale
 	// finalizing row is also reclaimable: a previous finalizer may have crashed
 	// or failed after the claim but before writing the terminal status.
-	claimed, err := foghorndb.New(db).ClaimDVRFinalization(ctx, foghorndb.ClaimDVRFinalizationParams{
-		ArtifactHash: dvrHash, StaleSeconds: staleDVRFinalizingAfter.Seconds(),
-	})
+	claimed, err := claimDVRFinalization(ctx, dvrHash)
 	if errors.Is(err, sql.ErrNoRows) {
 		// Already terminal or in flight. Read current status and return NoOp.
 		current, readErr := readArtifactStatus(ctx, dvrHash)

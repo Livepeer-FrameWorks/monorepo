@@ -3,7 +3,12 @@ import type { TenantEvents$result } from "$houdini";
 // Public tenant event types of clips, recordings, and uploads. They carry only
 // public identifiers and sizes: no progress, storage paths, or node IDs.
 export const CLIP_EVENT_TYPES = ["clip.requested", "clip.ready", "clip.failed"];
-export const RECORDING_EVENT_TYPES = ["recording.ready", "recording.failed"];
+export const RECORDING_EVENT_TYPES = [
+  "recording.started",
+  "recording.stopped",
+  "recording.ready",
+  "recording.failed",
+];
 export const UPLOAD_EVENT_TYPES = [
   "upload.created",
   "upload.completed",

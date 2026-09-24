@@ -13,6 +13,7 @@ import (
 	"frameworks/api_balancing/internal/database/foghorndb"
 	"frameworks/api_balancing/internal/state"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/database"
+	publicv1 "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/events/public/v1"
 	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
 )
 
@@ -206,7 +207,9 @@ func (r *dvrRepositoryDB) UpdateDVRProgressByHash(ctx context.Context, dvrHash s
 				sz := uint64(sizeBytes)
 				data.SizeBytes = &sz
 			}
-			if enqErr := artifactoutbox.EnqueueDVRLifecycleTx(ctx, tx, data); enqErr != nil {
+			// The first confirmed capture is recording.started; its legacy row shares the event ID.
+			started := &publicv1.RecordingStarted{Artifact: artifactoutbox.RecordingArtifact(dvrHash, streamID)}
+			if enqErr := artifactoutbox.EnqueueDVRTransitionTx(ctx, tx, data, started); enqErr != nil {
 				return enqErr
 			}
 		}

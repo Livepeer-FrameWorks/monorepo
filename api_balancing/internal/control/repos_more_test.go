@@ -111,14 +111,19 @@ const progressSelectRe = `SELECT status,\s+tenant_id::text AS tenant_id,.*dvr_st
 // requested/starting -> recording (CASE), never to a node-supplied value.
 const progressUpdateRe = `UPDATE foghorn.artifacts\s+SET status = CASE WHEN status IN \('requested', 'starting'\) THEN 'recording' ELSE status END,\s+size_bytes = GREATEST`
 
+// progressTenant is the recording's tenant; recording.started is tenant-scoped
+// and needs a UUID.
+const progressTenant = "5c3e0000-0000-4000-8000-000000000001"
+
 func progressRows(status, dispatchNode string) *sqlmock.Rows {
 	return sqlmock.NewRows([]string{"status", "tenant_id", "stream_id", "internal_name", "dispatch_node"}).
-		AddRow(status, "tenant-1", "stream-1", "live+x", dispatchNode)
+		AddRow(status, progressTenant, "stream-1", "live+x", dispatchNode)
 }
 
 // UpdateDVRProgressByHash promotes a pre-terminal DVR and grows its size monotonically (GREATEST). The
-// FIRST transition into 'recording' (prior status 'starting') enqueues the STATUS_RECORDING lifecycle
-// event on the SAME transaction as the flip; the node-supplied status is never persisted.
+// FIRST transition into 'recording' (prior status 'starting') enqueues recording.started and its
+// STATUS_RECORDING lifecycle row on the SAME transaction as the flip; the node-supplied status is
+// never persisted.
 func TestUpdateDVRProgressByHash_FirstRecordingEnqueuesLifecycle(t *testing.T) {
 	_, mock := setupRepoTest(t)
 	repo := &dvrRepositoryDB{}
@@ -129,10 +134,8 @@ func TestUpdateDVRProgressByHash_FirstRecordingEnqueuesLifecycle(t *testing.T) {
 	mock.ExpectExec(progressUpdateRe).
 		WithArgs("dvr-1", int64(4096)).
 		WillReturnResult(sqlmock.NewResult(0, 1))
-	// STATUS_RECORDING lifecycle enqueued on the same tx (dvr_lifecycle kind, tenant/stream/hash).
-	mock.ExpectExec(`INSERT INTO foghorn.artifact_event_outbox`).
-		WithArgs("dvr_lifecycle", "tenant-1", "stream-1", "dvr-1", sqlmock.AnyArg()).
-		WillReturnResult(sqlmock.NewResult(0, 1))
+	// recording.started plus its dvr_lifecycle row under one event ID, on the same tx.
+	expectTransitionInsert(mock, "recording.started", "dvr-1", "dvr_lifecycle", progressTenant, "stream-1", "dvr-1")
 	mock.ExpectCommit()
 	// The node-supplied status is 'finalizing' — it must be ignored; only the canonical recording flip
 	// is written.

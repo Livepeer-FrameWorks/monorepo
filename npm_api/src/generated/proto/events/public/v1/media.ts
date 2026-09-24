@@ -26,6 +26,23 @@ export interface ClipFailed {
   reason: MediaFailureReason;
 }
 
+/**
+ * RecordingStarted reports that the recording node confirmed capture of the
+ * stream: the first accepted progress report or media segment.
+ */
+export interface RecordingStarted {
+  artifact: Artifact | undefined;
+}
+
+/**
+ * RecordingStopped reports that capture ended and the recording is being
+ * finalized. It follows recording.started once; recording.ready or
+ * recording.failed follows it.
+ */
+export interface RecordingStopped {
+  artifact: Artifact | undefined;
+}
+
 export interface RecordingReady {
   artifact: Artifact | undefined;
   durationMs: bigint;
@@ -105,6 +122,18 @@ export const ClipFailed: MessageFns<ClipFailed> = {
         ? mediaFailureReasonFromJSON(object.reason)
         : MediaFailureReason.MEDIA_FAILURE_REASON_UNSPECIFIED,
     };
+  },
+};
+
+export const RecordingStarted: MessageFns<RecordingStarted> = {
+  fromJSON(object: any): RecordingStarted {
+    return { artifact: isSet(object.artifact) ? Artifact.fromJSON(object.artifact) : undefined };
+  },
+};
+
+export const RecordingStopped: MessageFns<RecordingStopped> = {
+  fromJSON(object: any): RecordingStopped {
+    return { artifact: isSet(object.artifact) ? Artifact.fromJSON(object.artifact) : undefined };
   },
 };
 

@@ -294,27 +294,7 @@ func enqueueTransition(ctx context.Context, tx execContext, kind, tenantID, stre
 	if fact == nil {
 		return enqueue(ctx, tx, kind, tenantID, streamID, artifactID, payload)
 	}
-	if tx == nil {
-		return ErrDomainEventNeedsTx
-	}
-	aggregateID, err := factArtifact(fact)
-	if err != nil {
-		return err
-	}
-	opts := append([]events.Option(nil), factOpts...)
-	if lifecycleFact(fact) {
-		revision, revErr := foghorndb.New(tx).BumpArtifactRevision(ctx, foghorndb.BumpArtifactRevisionParams{
-			ArtifactHash: aggregateID, TenantID: tenantID,
-		})
-		if errors.Is(revErr, sql.ErrNoRows) {
-			return fmt.Errorf("artifactoutbox: %T: %w", fact, ErrArtifactNotVersioned)
-		}
-		if revErr != nil {
-			return fmt.Errorf("advance artifact revision: %w", revErr)
-		}
-		opts = append(opts, events.WithAggregateVersion(revision))
-	}
-	ev, err := domainevents.Enqueue(ctx, tx, tenantID, aggregateID, fact, opts...)
+	ev, err := enqueueArtifactFact(ctx, tx, tenantID, fact, factOpts...)
 	if err != nil {
 		return err
 	}
@@ -333,6 +313,46 @@ func enqueueTransition(ctx context.Context, tx execContext, kind, tenantID, stre
 		return fmt.Errorf("insert artifact event outbox row: %w", err)
 	}
 	return nil
+}
+
+// EnqueueArtifactFactTx writes the domain event of an artifact transition that
+// has no legacy lifecycle row (recording.stopped), in tx.
+func EnqueueArtifactFactTx(ctx context.Context, tx execContext, tenantID string, fact proto.Message) error {
+	if fact == nil {
+		return ErrNilLifecyclePayload
+	}
+	if tenantID == "" {
+		return fmt.Errorf("%T: %w", fact, ErrLifecycleMissingTenant)
+	}
+	_, err := enqueueArtifactFact(ctx, tx, tenantID, fact)
+	return err
+}
+
+// enqueueArtifactFact writes fact into foghorn.domain_event_outbox, keyed by
+// the artifact it names. A lifecycle fact first advances that artifact's
+// revision and carries it as the aggregate version.
+func enqueueArtifactFact(ctx context.Context, tx execContext, tenantID string, fact proto.Message, factOpts ...events.Option) (events.Event, error) {
+	if tx == nil {
+		return events.Event{}, ErrDomainEventNeedsTx
+	}
+	aggregateID, err := factArtifact(fact)
+	if err != nil {
+		return events.Event{}, err
+	}
+	opts := append([]events.Option(nil), factOpts...)
+	if lifecycleFact(fact) {
+		revision, revErr := foghorndb.New(tx).BumpArtifactRevision(ctx, foghorndb.BumpArtifactRevisionParams{
+			ArtifactHash: aggregateID, TenantID: tenantID,
+		})
+		if errors.Is(revErr, sql.ErrNoRows) {
+			return events.Event{}, fmt.Errorf("artifactoutbox: %T: %w", fact, ErrArtifactNotVersioned)
+		}
+		if revErr != nil {
+			return events.Event{}, fmt.Errorf("advance artifact revision: %w", revErr)
+		}
+		opts = append(opts, events.WithAggregateVersion(revision))
+	}
+	return domainevents.Enqueue(ctx, tx, tenantID, aggregateID, fact, opts...)
 }
 
 // ErrArtifactNotVersioned is returned when a lifecycle event names an artifact

@@ -42,25 +42,25 @@ func Enqueue(ctx context.Context, exec outbox.Execer, tenantID, aggregateID stri
 }
 
 // StreamConnected records a new ingest session for the stream.
-func StreamConnected(ctx context.Context, exec outbox.Execer, tenantID, streamID string, protocol publicv1.IngestProtocol) error {
-	_, err := Enqueue(ctx, exec, tenantID, streamID, &publicv1.StreamConnected{StreamId: streamID, Protocol: protocol})
+func StreamConnected(ctx context.Context, exec outbox.Execer, tenantID, streamID, playbackID string, protocol publicv1.IngestProtocol) error {
+	_, err := Enqueue(ctx, exec, tenantID, streamID, &publicv1.StreamConnected{StreamId: streamID, PlaybackId: playbackID, Protocol: protocol})
 	return err
 }
 
 // StreamLive records that the stream's active session became playable.
-func StreamLive(ctx context.Context, exec outbox.Execer, tenantID, streamID string) error {
-	_, err := Enqueue(ctx, exec, tenantID, streamID, &publicv1.StreamLive{StreamId: streamID})
+func StreamLive(ctx context.Context, exec outbox.Execer, tenantID, streamID, playbackID string) error {
+	_, err := Enqueue(ctx, exec, tenantID, streamID, &publicv1.StreamLive{StreamId: streamID, PlaybackId: playbackID})
 	return err
 }
 
 // StreamIdle records that an ingest session of the stream ended. A session
 // admitted without a public stream ID emits nothing, matching its absent
 // stream.connected.
-func StreamIdle(ctx context.Context, exec outbox.Execer, tenantID, streamID string) error {
+func StreamIdle(ctx context.Context, exec outbox.Execer, tenantID, streamID, playbackID string) error {
 	if streamID == "" {
 		return nil
 	}
-	_, err := Enqueue(ctx, exec, tenantID, streamID, &publicv1.StreamIdle{StreamId: streamID})
+	_, err := Enqueue(ctx, exec, tenantID, streamID, &publicv1.StreamIdle{StreamId: streamID, PlaybackId: playbackID})
 	return err
 }
 

@@ -2054,7 +2054,7 @@ func (p *Processor) handlePushRewrite(trigger *ipcpb.MistTrigger) (_ string, _ b
 			mintCtx, mintCancel := context.WithTimeout(admissionCtx, 3*time.Second)
 			mintReq := control.IngestSessionRequest{
 				TenantID: streamValidation.TenantId, NodeID: trigger.GetNodeId(), InternalName: streamValidation.InternalName,
-				StreamID: streamValidation.StreamId, Protocol: domainevents.IngestProtocol(protocol),
+				StreamID: streamValidation.StreamId, PlaybackID: streamValidation.GetPlaybackId(), Protocol: domainevents.IngestProtocol(protocol),
 				ConnectorPID: connectorPID, TriggerUUID: pushRewrite.GetTriggerUuid(), StartedAtMillis: pushRewrite.GetTriggerUnixMillis(),
 				DVRIntent: dvrIntent, IngestClusterID: ingestClusterID,
 			}

@@ -29,6 +29,8 @@ var catalog = map[string]struct {
 	"clip.requested":                 {public: true},
 	"clip.ready":                     {public: true},
 	"clip.failed":                    {public: true},
+	"recording.started":              {public: true},
+	"recording.stopped":              {public: true},
 	"recording.ready":                {public: true},
 	"recording.failed":               {public: true},
 	"upload.created":                 {public: true},

@@ -3056,7 +3056,10 @@ type IngestSessionRequest struct {
 	// StreamID is the public stream UUID. A new generation with one emits
 	// stream.connected in the mint transaction and records it for the session's
 	// stream.live and stream.idle; without one the session emits none of them.
-	StreamID        string
+	StreamID string
+	// PlaybackID is the stream's public playback ID from the admission that
+	// minted the session; stream.connected carries it.
+	PlaybackID      string
 	Protocol        publicv1.IngestProtocol
 	ConnectorPID    int64
 	TriggerUUID     string
@@ -3247,7 +3250,7 @@ func MintIngestSession(ctx context.Context, req IngestSessionRequest, logger log
 				if endErr := q.EndSupersededPIDIngestSession(ctx, foghorndb.EndSupersededPIDIngestSessionParams{SessionID: incID, EndedAtUnixMillis: sql.NullInt64{Int64: startedAtMillis, Valid: true}}); endErr != nil {
 					return fmt.Errorf("end stale ingest session on PID reuse: %w", endErr)
 				}
-				if idleErr := domainevents.StreamIdle(ctx, tx, tenantID, streamID); idleErr != nil {
+				if idleErr := domainevents.StreamIdle(ctx, tx, tenantID, streamID, req.PlaybackID); idleErr != nil {
 					return idleErr
 				}
 				claims, claimErr := ClaimDVRStops(ctx, tx, `ingest_generation = $1::uuid AND tenant_id::text = $2`, incID, tenantID)
@@ -3354,7 +3357,7 @@ func MintIngestSession(ctx context.Context, req IngestSessionRequest, logger log
 			return fmt.Errorf("insert ingest session: %w", insErr)
 		}
 		if streamID != "" {
-			if connErr := domainevents.StreamConnected(ctx, tx, tenantID, streamID, req.Protocol); connErr != nil {
+			if connErr := domainevents.StreamConnected(ctx, tx, tenantID, streamID, req.PlaybackID, req.Protocol); connErr != nil {
 				return connErr
 			}
 		}
@@ -3608,6 +3611,7 @@ func EndIngestSessionsForStreamEnd(ctx context.Context, tenantID, nodeID, intern
 	if tenantID == "" || nodeID == "" || internalName == "" {
 		return 0, fmt.Errorf("stream-end reaper missing scope: tenant=%q node=%q stream=%q", tenantID, nodeID, internalName)
 	}
+	playbackID := streamEventPlaybackID(ctx, internalName)
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 	var allClaims []DVRStopClaim
@@ -3630,7 +3634,7 @@ func EndIngestSessionsForStreamEnd(ctx context.Context, tenantID, nodeID, intern
 				return fmt.Errorf("claim DVR stop for reaped session %s: %w", ended.SessionID, claimErr)
 			}
 			allClaims = append(allClaims, claims...)
-			if idleErr := domainevents.StreamIdle(ctx, tx, tenantID, ended.StreamID); idleErr != nil {
+			if idleErr := domainevents.StreamIdle(ctx, tx, tenantID, ended.StreamID, playbackID); idleErr != nil {
 				return idleErr
 			}
 		}
@@ -3655,6 +3659,7 @@ func EndExactMissingIngestSession(ctx context.Context, tenantID, nodeID, interna
 	if tenantID == "" || nodeID == "" || internalName == "" || generation == "" || connectorPID <= 0 || eventMillis <= 0 {
 		return false, fmt.Errorf("runtime-absence reaper missing identity: tenant=%q node=%q stream=%q generation=%q pid=%d event_millis=%d", tenantID, nodeID, internalName, generation, connectorPID, eventMillis)
 	}
+	playbackID := streamEventPlaybackID(ctx, internalName)
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 	var claims []DVRStopClaim
@@ -3679,7 +3684,7 @@ func EndExactMissingIngestSession(ctx context.Context, tenantID, nodeID, interna
 		if err != nil {
 			return fmt.Errorf("claim DVR stop for missing runtime %s: %w", ended.SessionID, err)
 		}
-		if idleErr := domainevents.StreamIdle(ctx, tx, tenantID, ended.StreamID); idleErr != nil {
+		if idleErr := domainevents.StreamIdle(ctx, tx, tenantID, ended.StreamID, playbackID); idleErr != nil {
 			return idleErr
 		}
 		reaped = true
@@ -4027,6 +4032,7 @@ func abortPendingSourceProjection(ctx context.Context, tenantID, internalName, g
 	if db == nil {
 		return errors.New("abort pending source projection: no database configured")
 	}
+	playbackID := streamEventPlaybackID(ctx, internalName)
 	return database.WithRetryablePostgresTx(ctx, db, nil, func(tx *sql.Tx) error {
 		q := foghorndb.New(tx)
 		if lockErr := q.LockIngestStream(ctx, ingestStreamAdvisoryLockKey(tenantID, internalName)); lockErr != nil {
@@ -4039,7 +4045,7 @@ func abortPendingSourceProjection(ctx context.Context, tenantID, internalName, g
 		if err != nil {
 			return fmt.Errorf("end pending source projection: %w", err)
 		}
-		if idleErr := domainevents.StreamIdle(ctx, tx, tenantID, aborted.StreamID); idleErr != nil {
+		if idleErr := domainevents.StreamIdle(ctx, tx, tenantID, aborted.StreamID, playbackID); idleErr != nil {
 			return idleErr
 		}
 		revision, err := nextSourceRevision(ctx, tx, tenantID, internalName)
@@ -4113,6 +4119,7 @@ func FinalizeIngestSessionClose(ctx context.Context, tenantID, nodeID string, co
 	defer cancel()
 
 	var claims []DVRStopClaim
+	playbackID := streamEventPlaybackID(ctx, internalName)
 	err := database.WithRetryablePostgresTx(ctx, db, nil, func(tx *sql.Tx) error {
 		res, claims = CloseFinalization{}, nil
 		// Serialize against CreateIngestSession on the SAME (tenant, stream) lock so a close-before-insert
@@ -4156,7 +4163,7 @@ func FinalizeIngestSessionClose(ctx context.Context, tenantID, nodeID string, co
 		if claimErr != nil {
 			return fmt.Errorf("claim DVR stop obligation for ingest generation: %w", claimErr)
 		}
-		if idleErr := domainevents.StreamIdle(ctx, tx, tenantID, ended.StreamID); idleErr != nil {
+		if idleErr := domainevents.StreamIdle(ctx, tx, tenantID, ended.StreamID, playbackID); idleErr != nil {
 			return idleErr
 		}
 		revision, revisionErr := nextSourceRevision(ctx, tx, tenantID, internalName)

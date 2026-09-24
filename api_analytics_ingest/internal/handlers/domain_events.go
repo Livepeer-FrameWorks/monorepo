@@ -27,16 +27,20 @@ type artifactProjection struct {
 }
 
 var artifactProjections = map[string]artifactProjection{
-	"clip.requested":   {contentType: "clip", stage: "requested"},
-	"clip.ready":       {contentType: "clip", stage: "done"},
-	"clip.failed":      {contentType: "clip", stage: "failed"},
-	"recording.ready":  {contentType: "dvr", stage: "stopped"},
-	"recording.failed": {contentType: "dvr", stage: "failed"},
-	"upload.created":   {contentType: "vod", stage: "requested"},
-	"upload.completed": {contentType: "vod", stage: "processing"},
-	"upload.aborted":   {contentType: "vod", stage: "deleted"},
-	"upload.ready":     {contentType: "vod", stage: "completed"},
-	"upload.failed":    {contentType: "vod", stage: "failed"},
+	"clip.requested": {contentType: "clip", stage: "requested"},
+	"clip.ready":     {contentType: "clip", stage: "done"},
+	"clip.failed":    {contentType: "clip", stage: "failed"},
+	// recording.stopped is not projected: the recording's artifact state moves
+	// on at recording.ready or recording.failed, and no lifecycle row carries a
+	// finalizing stage. It still reaches api_events.
+	"recording.started": {contentType: "dvr", stage: "recording"},
+	"recording.ready":   {contentType: "dvr", stage: "stopped"},
+	"recording.failed":  {contentType: "dvr", stage: "failed"},
+	"upload.created":    {contentType: "vod", stage: "requested"},
+	"upload.completed":  {contentType: "vod", stage: "processing"},
+	"upload.aborted":    {contentType: "vod", stage: "deleted"},
+	"upload.ready":      {contentType: "vod", stage: "completed"},
+	"upload.failed":     {contentType: "vod", stage: "failed"},
 }
 
 // Domain event outcomes counted in PeriscopeMetrics.DomainEvents.

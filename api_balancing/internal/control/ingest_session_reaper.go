@@ -80,6 +80,7 @@ func RetireIngestSession(ctx context.Context, sessionID, tenantID, internalName,
 		return false, fmt.Errorf("retire ingest session missing scope: session=%q tenant=%q stream=%q", sessionID, tenantID, internalName)
 	}
 	var claims []DVRStopClaim
+	playbackID := streamEventPlaybackID(ctx, internalName)
 	err = database.WithRetryablePostgresTx(ctx, db, nil, func(tx *sql.Tx) error {
 		claims, retired = nil, false
 		qtx := foghorndb.New(tx)
@@ -100,7 +101,7 @@ func RetireIngestSession(ctx context.Context, sessionID, tenantID, internalName,
 		if claimErr != nil {
 			return fmt.Errorf("claim DVR stop on retire: %w", claimErr)
 		}
-		if idleErr := domainevents.StreamIdle(ctx, tx, tenantID, retiredRow.StreamID); idleErr != nil {
+		if idleErr := domainevents.StreamIdle(ctx, tx, tenantID, retiredRow.StreamID, playbackID); idleErr != nil {
 			return idleErr
 		}
 		revision, revErr := nextSourceRevision(ctx, tx, tenantID, internalName)
@@ -137,6 +138,7 @@ func RetireIngestSessionByClaim(ctx context.Context, tenantID, internalName, cla
 		nodeID  string
 		retired bool
 	)
+	playbackID := streamEventPlaybackID(ctx, internalName)
 	err := database.WithRetryablePostgresTx(ctx, db, nil, func(tx *sql.Tx) error {
 		claims, nodeID, retired = nil, "", false
 		qtx := foghorndb.New(tx)
@@ -157,7 +159,7 @@ func RetireIngestSessionByClaim(ctx context.Context, tenantID, internalName, cla
 		if err != nil {
 			return err
 		}
-		if idleErr := domainevents.StreamIdle(ctx, tx, tenantID, retiredRow.StreamID); idleErr != nil {
+		if idleErr := domainevents.StreamIdle(ctx, tx, tenantID, retiredRow.StreamID, playbackID); idleErr != nil {
 			return idleErr
 		}
 		revision, err := nextSourceRevision(ctx, tx, tenantID, internalName)
@@ -311,6 +313,7 @@ func ReapNeverProjectedIngestSessions(ctx context.Context, olderThan time.Durati
 	retired := 0
 	for _, candidate := range candidates {
 		retiredCandidate, began := false, false
+		playbackID := streamEventPlaybackID(ctx, candidate.stream)
 		err := database.WithRetryablePostgresTx(ctx, db, nil, func(tx *sql.Tx) error {
 			retiredCandidate, began = false, true
 			qtx := foghorndb.New(tx)
@@ -326,7 +329,7 @@ func ReapNeverProjectedIngestSessions(ctx context.Context, olderThan time.Durati
 			if err != nil {
 				return err
 			}
-			if idleErr := domainevents.StreamIdle(ctx, tx, candidate.tenant, ended.StreamID); idleErr != nil {
+			if idleErr := domainevents.StreamIdle(ctx, tx, candidate.tenant, ended.StreamID, playbackID); idleErr != nil {
 				return idleErr
 			}
 			revision, err := nextSourceRevision(ctx, tx, candidate.tenant, candidate.stream)

@@ -282,9 +282,11 @@ func (x *StreamKeyRotated) GetStreamId() string {
 
 // StreamConnected reports a new ingest session for the stream.
 type StreamConnected struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	StreamId      string                 `protobuf:"bytes,1,opt,name=stream_id,json=streamId,proto3" json:"stream_id,omitempty"`
-	Protocol      IngestProtocol         `protobuf:"varint,2,opt,name=protocol,proto3,enum=frameworks.events.public.v1.IngestProtocol" json:"protocol,omitempty"`
+	state    protoimpl.MessageState `protogen:"open.v1"`
+	StreamId string                 `protobuf:"bytes,1,opt,name=stream_id,json=streamId,proto3" json:"stream_id,omitempty"`
+	Protocol IngestProtocol         `protobuf:"varint,2,opt,name=protocol,proto3,enum=frameworks.events.public.v1.IngestProtocol" json:"protocol,omitempty"`
+	// playback_id is the stream's public playback ID.
+	PlaybackId    string `protobuf:"bytes,3,opt,name=playback_id,json=playbackId,proto3" json:"playback_id,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -333,10 +335,20 @@ func (x *StreamConnected) GetProtocol() IngestProtocol {
 	return IngestProtocol_INGEST_PROTOCOL_UNSPECIFIED
 }
 
+func (x *StreamConnected) GetPlaybackId() string {
+	if x != nil {
+		return x.PlaybackId
+	}
+	return ""
+}
+
 // StreamLive reports that the stream became playable.
 type StreamLive struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	StreamId      string                 `protobuf:"bytes,1,opt,name=stream_id,json=streamId,proto3" json:"stream_id,omitempty"`
+	state    protoimpl.MessageState `protogen:"open.v1"`
+	StreamId string                 `protobuf:"bytes,1,opt,name=stream_id,json=streamId,proto3" json:"stream_id,omitempty"`
+	// playback_id is the stream's public playback ID; empty when Foghorn could
+	// not resolve the stream while the control plane was unreachable.
+	PlaybackId    string `protobuf:"bytes,2,opt,name=playback_id,json=playbackId,proto3" json:"playback_id,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -378,10 +390,20 @@ func (x *StreamLive) GetStreamId() string {
 	return ""
 }
 
+func (x *StreamLive) GetPlaybackId() string {
+	if x != nil {
+		return x.PlaybackId
+	}
+	return ""
+}
+
 // StreamIdle reports that the stream's ingest session ended.
 type StreamIdle struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	StreamId      string                 `protobuf:"bytes,1,opt,name=stream_id,json=streamId,proto3" json:"stream_id,omitempty"`
+	state    protoimpl.MessageState `protogen:"open.v1"`
+	StreamId string                 `protobuf:"bytes,1,opt,name=stream_id,json=streamId,proto3" json:"stream_id,omitempty"`
+	// playback_id is the stream's public playback ID; empty when Foghorn could
+	// not resolve the stream while the control plane was unreachable.
+	PlaybackId    string `protobuf:"bytes,2,opt,name=playback_id,json=playbackId,proto3" json:"playback_id,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -423,6 +445,13 @@ func (x *StreamIdle) GetStreamId() string {
 	return ""
 }
 
+func (x *StreamIdle) GetPlaybackId() string {
+	if x != nil {
+		return x.PlaybackId
+	}
+	return ""
+}
+
 var File_events_public_v1_streams_proto protoreflect.FileDescriptor
 
 const file_events_public_v1_streams_proto_rawDesc = "" +
@@ -443,18 +472,24 @@ const file_events_public_v1_streams_proto_rawDesc = "" +
 	"\x0estream.deleted\x10\x01\x18\x01\"\astreams\"V\n" +
 	"\x10StreamKeyRotated\x12\x1b\n" +
 	"\tstream_id\x18\x01 \x01(\tR\bstreamId:%\xc2\xf3\x18!\n" +
-	"\x12stream.key_rotated\x10\x01\x18\x01\"\astreams\"\x9c\x01\n" +
+	"\x12stream.key_rotated\x10\x01\x18\x01\"\astreams\"\xbd\x01\n" +
 	"\x0fStreamConnected\x12\x1b\n" +
 	"\tstream_id\x18\x01 \x01(\tR\bstreamId\x12G\n" +
-	"\bprotocol\x18\x02 \x01(\x0e2+.frameworks.events.public.v1.IngestProtocolR\bprotocol:#\xc2\xf3\x18\x1f\n" +
-	"\x10stream.connected\x10\x01\x18\x01\"\astreams\"I\n" +
+	"\bprotocol\x18\x02 \x01(\x0e2+.frameworks.events.public.v1.IngestProtocolR\bprotocol\x12\x1f\n" +
+	"\vplayback_id\x18\x03 \x01(\tR\n" +
+	"playbackId:#\xc2\xf3\x18\x1f\n" +
+	"\x10stream.connected\x10\x01\x18\x01\"\astreams\"j\n" +
 	"\n" +
 	"StreamLive\x12\x1b\n" +
-	"\tstream_id\x18\x01 \x01(\tR\bstreamId:\x1e\xc2\xf3\x18\x1a\n" +
-	"\vstream.live\x10\x01\x18\x01\"\astreams\"I\n" +
+	"\tstream_id\x18\x01 \x01(\tR\bstreamId\x12\x1f\n" +
+	"\vplayback_id\x18\x02 \x01(\tR\n" +
+	"playbackId:\x1e\xc2\xf3\x18\x1a\n" +
+	"\vstream.live\x10\x01\x18\x01\"\astreams\"j\n" +
 	"\n" +
 	"StreamIdle\x12\x1b\n" +
-	"\tstream_id\x18\x01 \x01(\tR\bstreamId:\x1e\xc2\xf3\x18\x1a\n" +
+	"\tstream_id\x18\x01 \x01(\tR\bstreamId\x12\x1f\n" +
+	"\vplayback_id\x18\x02 \x01(\tR\n" +
+	"playbackId:\x1e\xc2\xf3\x18\x1a\n" +
 	"\vstream.idle\x10\x01\x18\x01\"\astreams*\x98\x01\n" +
 	"\x0eIngestProtocol\x12\x1f\n" +
 	"\x1bINGEST_PROTOCOL_UNSPECIFIED\x10\x00\x12\x18\n" +

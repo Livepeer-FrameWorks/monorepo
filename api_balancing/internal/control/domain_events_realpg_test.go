@@ -21,6 +21,9 @@ import (
 const (
 	domainTenant = "7a1e0000-0000-4000-8000-000000000001"
 	domainStream = "7a1e0000-0000-4000-8000-0000000000aa"
+	// domainStreamPlayback is the stream's playback ID: admission hands it to the
+	// mint, and the stream registry holds it for the later stream events.
+	domainStreamPlayback = "pbdomainlive001"
 )
 
 type domainRow struct {
@@ -63,7 +66,7 @@ func countDomainRows(t *testing.T, conn *sql.DB) int {
 func mintStreamSession(t *testing.T, node, stream string, pid int64, trigger string, startedMillis int64) (string, IngestSessionOutcome) {
 	t.Helper()
 	id, outcome, err := MintIngestSession(context.Background(), IngestSessionRequest{
-		TenantID: domainTenant, NodeID: node, InternalName: stream, StreamID: domainStream,
+		TenantID: domainTenant, NodeID: node, InternalName: stream, StreamID: domainStream, PlaybackID: domainStreamPlayback,
 		Protocol: publicv1.IngestProtocol_INGEST_PROTOCOL_RTMP, ConnectorPID: pid, TriggerUUID: trigger,
 		StartedAtMillis: startedMillis, IngestClusterID: "cell-a",
 	}, logging.NewLogger())
@@ -83,6 +86,25 @@ func TestStreamLifecycleDomainEvents_RealPG(t *testing.T) {
 	t.Cleanup(func() { SetDB(prev) })
 	ctx := context.Background()
 	const stream = "live+domain"
+	// Admission records the stream in the shared registry; stream.live and
+	// stream.idle read the playback ID from there, not from the session row.
+	prevRegistry := StreamRegistryInstance
+	StreamRegistryInstance = NewStreamRegistry(nil, "cell-a", time.Minute)
+	t.Cleanup(func() { StreamRegistryInstance = prevRegistry })
+	StreamRegistryInstance.UpsertLocalSource(StreamEntry{
+		StreamID: domainStream, TenantID: domainTenant, PlaybackID: domainStreamPlayback, InternalName: stream,
+	})
+	assertStreamPlayback := func(eventType string, row domainRow, want string) {
+		t.Helper()
+		_, msg, err := events.Decode(eventType, row.payload)
+		if err != nil {
+			t.Fatal(err)
+		}
+		got := msg.(interface{ GetPlaybackId() string }).GetPlaybackId()
+		if got != want {
+			t.Fatalf("%s playback ID = %q, want %q", eventType, got, want)
+		}
+	}
 
 	first, outcome := mintStreamSession(t, "node-owner", stream, 101, "trig-1", 1000)
 	if outcome != IngestSessionActive {
@@ -100,7 +122,8 @@ func TestStreamLifecycleDomainEvents_RealPG(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := msg.(*publicv1.StreamConnected); got.GetStreamId() != domainStream || got.GetProtocol() != publicv1.IngestProtocol_INGEST_PROTOCOL_RTMP {
+	if got := msg.(*publicv1.StreamConnected); got.GetStreamId() != domainStream || got.GetProtocol() != publicv1.IngestProtocol_INGEST_PROTOCOL_RTMP ||
+		got.GetPlaybackId() != domainStreamPlayback {
 		t.Fatalf("stream.connected payload = %+v", got)
 	}
 
@@ -135,18 +158,22 @@ func TestStreamLifecycleDomainEvents_RealPG(t *testing.T) {
 	if err != nil || marked {
 		t.Fatalf("duplicate FULL marked=%v err=%v", marked, err)
 	}
-	if n := len(domainRows(t, conn, "stream.live")); n != 1 {
-		t.Fatalf("a duplicate FULL emits stream.live once, got %d", n)
+	live := domainRows(t, conn, "stream.live")
+	if len(live) != 1 {
+		t.Fatalf("a duplicate FULL emits stream.live once, got %d", len(live))
 	}
+	assertStreamPlayback("stream.live", live[0], domainStreamPlayback)
 
 	// The session-end transaction emits idle.
 	closed, err := FinalizeIngestSessionClose(ctx, domainTenant, "node-owner", 101, 3000, stream, logging.NewLogger())
 	if err != nil || closed.EndedSessionID != first {
 		t.Fatalf("close ended %q err=%v", closed.EndedSessionID, err)
 	}
-	if n := len(domainRows(t, conn, "stream.idle")); n != 1 {
-		t.Fatalf("session close emits one stream.idle, got %d", n)
+	idle := domainRows(t, conn, "stream.idle")
+	if len(idle) != 1 {
+		t.Fatalf("session close emits one stream.idle, got %d", len(idle))
 	}
+	assertStreamPlayback("stream.idle", idle[0], domainStreamPlayback)
 
 	// A new generation connects again, and the STREAM_END reaper ending it emits idle.
 	second, outcome := mintStreamSession(t, "node-owner", stream, 102, "trig-2", 4000)
@@ -160,9 +187,11 @@ func TestStreamLifecycleDomainEvents_RealPG(t *testing.T) {
 	if err != nil || reaped != 1 {
 		t.Fatalf("reaper ended %d err=%v", reaped, err)
 	}
-	if n := len(domainRows(t, conn, "stream.idle")); n != 2 {
-		t.Fatalf("the reaper end emits stream.idle, got %d total", n)
+	idle = domainRows(t, conn, "stream.idle")
+	if len(idle) != 2 {
+		t.Fatalf("the reaper end emits stream.idle, got %d total", len(idle))
 	}
+	assertStreamPlayback("stream.idle", idle[1], domainStreamPlayback)
 
 	// PID reuse on the same node supersedes the open generation: idle, then connected.
 	third, _ := mintStreamSession(t, "node-owner", stream, 103, "trig-3", 6000)
@@ -206,6 +235,165 @@ func TestStreamLifecycleDomainEvents_RealPG(t *testing.T) {
 	}
 	if after := countDomainRows(t, conn); after != before {
 		t.Fatalf("a session without a stream ID emitted %d events", after-before)
+	}
+
+	// A stream the registry cannot resolve (no Commodore to hydrate from) still
+	// ends: stream.idle commits with an empty playback ID.
+	const unresolved = "live+unresolved"
+	if _, outcome := mintStreamSession(t, "node-u", unresolved, 301, "trig-u", 1000); outcome != IngestSessionActive {
+		t.Fatalf("unresolved mint outcome %v", outcome)
+	}
+	idleBefore := len(domainRows(t, conn, "stream.idle"))
+	if reaped, err := EndIngestSessionsForStreamEnd(ctx, domainTenant, "node-u", unresolved, 2000, logging.NewLogger()); err != nil || reaped != 1 {
+		t.Fatalf("unresolved reaper ended %d err=%v", reaped, err)
+	}
+	idle = domainRows(t, conn, "stream.idle")
+	if len(idle) != idleBefore+1 {
+		t.Fatalf("an unresolvable stream must still emit stream.idle, got %d new", len(idle)-idleBefore)
+	}
+	assertStreamPlayback("stream.idle", idle[len(idle)-1], "")
+}
+
+// recording.started marks the first confirmed capture and recording.stopped the
+// finalization claim that ends it. Each fires once per recording, stopped only
+// after started, and a recording that never captured emits neither.
+func TestRecordingLifecycleDomainEvents_RealPG(t *testing.T) { //nolint:funlen // One database follows every recording path.
+	conn := startRealPG(t)
+	prev := db
+	SetDB(conn)
+	t.Cleanup(func() { SetDB(prev) })
+	prevRetry := FinalizeRetrySeconds
+	FinalizeRetrySeconds = 0
+	t.Cleanup(func() { FinalizeRetrySeconds = prevRetry })
+	ctx := t.Context()
+	repo := &dvrRepositoryDB{}
+
+	insertStarting := func(hash string) {
+		t.Helper()
+		if _, err := conn.Exec(`
+			INSERT INTO foghorn.artifacts (artifact_hash, artifact_type, tenant_id, stream_id, status, dvr_start_dispatch)
+			VALUES ($1, 'dvr', $2::uuid, $3::uuid, 'starting', '{"node_id":"owner"}')`, hash, domainTenant, domainStream); err != nil {
+			t.Fatalf("insert recording: %v", err)
+		}
+	}
+	rowsFor := func(eventType, hash string) []domainRow {
+		t.Helper()
+		var out []domainRow
+		for _, row := range domainRows(t, conn, eventType) {
+			if row.aggregateID == hash {
+				out = append(out, row)
+			}
+		}
+		return out
+	}
+	assertArtifact := func(eventType string, row domainRow, hash string) {
+		t.Helper()
+		_, msg, err := events.Decode(eventType, row.payload)
+		if err != nil {
+			t.Fatal(err)
+		}
+		art := msg.(interface{ GetArtifact() *publicv1.Artifact }).GetArtifact()
+		if art.GetArtifactId() != hash || art.GetKind() != publicv1.ArtifactKind_ARTIFACT_KIND_RECORDING ||
+			art.GetStreamId() != domainStream {
+			t.Fatalf("%s artifact = %+v", eventType, art)
+		}
+	}
+
+	const captured = "dvrreclifecycle00000000000000001"
+	insertStarting(captured)
+	// A startup heartbeat is not proof of capture: nothing is published.
+	if _, _, err := repo.UpdateDVRProgressByHash(ctx, captured, "starting", 0, 0, "owner"); err != nil {
+		t.Fatal(err)
+	}
+	if n := len(rowsFor("recording.started", captured)); n != 0 {
+		t.Fatalf("a startup heartbeat emitted %d recording.started", n)
+	}
+	// The first confirmed segment publishes recording.started; later progress does not.
+	if applied, _, err := repo.UpdateDVRProgressByHash(ctx, captured, "recording", 1024, 1, "owner"); err != nil || !applied {
+		t.Fatalf("first capture applied=%v err=%v", applied, err)
+	}
+	if _, _, err := repo.UpdateDVRProgressByHash(ctx, captured, "recording", 2048, 2, "owner"); err != nil {
+		t.Fatal(err)
+	}
+	started := rowsFor("recording.started", captured)
+	if len(started) != 1 {
+		t.Fatalf("recording.started rows = %d, want 1", len(started))
+	}
+	assertArtifact("recording.started", started[0], captured)
+	var legacyID string
+	if err := conn.QueryRow(`SELECT id::text FROM foghorn.artifact_event_outbox WHERE artifact_id = $1 AND payload->>'status' = 'STATUS_RECORDING'`, captured).Scan(&legacyID); err != nil {
+		t.Fatalf("STATUS_RECORDING legacy row: %v", err)
+	}
+	if legacyID != started[0].eventID {
+		t.Fatalf("legacy STATUS_RECORDING row %s must carry the recording.started id %s", legacyID, started[0].eventID)
+	}
+
+	// Finalization publishes recording.stopped once, then the terminal event (no segments: failed).
+	if _, err := FinalizeDVR(ctx, captured, FinalizeOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	stopped := rowsFor("recording.stopped", captured)
+	if len(stopped) != 1 {
+		t.Fatalf("recording.stopped rows = %d, want 1", len(stopped))
+	}
+	assertArtifact("recording.stopped", stopped[0], captured)
+	if n := len(rowsFor("recording.failed", captured)); n != 1 {
+		t.Fatalf("recording.failed rows = %d, want 1", n)
+	}
+	var order []string
+	rows, err := conn.Query(`SELECT event_type FROM foghorn.domain_event_outbox WHERE aggregate_id = $1 ORDER BY aggregate_version`, captured)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for rows.Next() {
+		var ty string
+		if err := rows.Scan(&ty); err != nil {
+			t.Fatal(err)
+		}
+		order = append(order, ty)
+	}
+	_ = rows.Close()
+	if len(order) != 3 || order[0] != "recording.started" || order[1] != "recording.stopped" || order[2] != "recording.failed" {
+		t.Fatalf("recording event order = %v, want started, stopped, failed", order)
+	}
+	// A repeated finalize finds the recording terminal and publishes nothing.
+	if _, err := FinalizeDVR(ctx, captured, FinalizeOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	if n := len(rowsFor("recording.stopped", captured)); n != 1 {
+		t.Fatalf("a repeated finalize emitted recording.stopped again: %d rows", n)
+	}
+
+	// Reclaiming a stale 'finalizing' row resumes a finalization whose stop was already published.
+	const stale = "dvrreclifecycle00000000000000002"
+	insertStarting(stale)
+	if _, _, err := repo.UpdateDVRProgressByHash(ctx, stale, "recording", 1024, 1, "owner"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := conn.Exec(`UPDATE foghorn.artifacts SET status = 'finalizing', updated_at = NOW() - INTERVAL '1 day' WHERE artifact_hash = $1`, stale); err != nil {
+		t.Fatal(err)
+	}
+	if res, err := FinalizeDVR(ctx, stale, FinalizeOptions{}); err != nil || res.NoOp {
+		t.Fatalf("stale reclaim result=%+v err=%v", res, err)
+	}
+	if n := len(rowsFor("recording.stopped", stale)); n != 0 {
+		t.Fatalf("a stale reclaim emitted %d recording.stopped", n)
+	}
+
+	// A recording stopped before any capture publishes neither started nor stopped.
+	const never = "dvrreclifecycle00000000000000003"
+	insertStarting(never)
+	if _, err := conn.Exec(`UPDATE foghorn.artifacts SET status = 'stopping' WHERE artifact_hash = $1`, never); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := FinalizeDVR(ctx, never, FinalizeOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	if s, st := len(rowsFor("recording.started", never)), len(rowsFor("recording.stopped", never)); s != 0 || st != 0 {
+		t.Fatalf("a never-captured recording emitted started=%d stopped=%d", s, st)
+	}
+	if n := len(rowsFor("recording.failed", never)); n != 1 {
+		t.Fatalf("a never-captured recording must still fail once, got %d", n)
 	}
 }
 

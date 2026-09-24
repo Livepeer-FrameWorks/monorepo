@@ -5,8 +5,9 @@ import (
 )
 
 // The public Artifact carries only identifiers a tenant sees through the API.
-// Foghorn holds no playback IDs for clips, recordings, or uploads (Commodore
-// owns them), so playback_id stays empty on every Foghorn artifact event.
+// artifact_id is the stable key. playback_id stays empty: a playback ID can be
+// rotated, and Foghorn has no current value at most emit sites, so receivers
+// look it up by artifact_id.
 
 // ClipArtifact identifies a clip by its hash and source stream.
 func ClipArtifact(hash, streamID string) *publicv1.Artifact {

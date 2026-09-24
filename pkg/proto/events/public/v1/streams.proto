@@ -45,16 +45,24 @@ message StreamConnected {
   option (frameworks.events.event) = {type: "stream.connected", visibility: VISIBILITY_PUBLIC, scope: SCOPE_TENANT, aggregate: "streams"};
   string stream_id = 1;
   IngestProtocol protocol = 2;
+  // playback_id is the stream's public playback ID.
+  string playback_id = 3;
 }
 
 // StreamLive reports that the stream became playable.
 message StreamLive {
   option (frameworks.events.event) = {type: "stream.live", visibility: VISIBILITY_PUBLIC, scope: SCOPE_TENANT, aggregate: "streams"};
   string stream_id = 1;
+  // playback_id is the stream's public playback ID; empty when Foghorn could
+  // not resolve the stream while the control plane was unreachable.
+  string playback_id = 2;
 }
 
 // StreamIdle reports that the stream's ingest session ended.
 message StreamIdle {
   option (frameworks.events.event) = {type: "stream.idle", visibility: VISIBILITY_PUBLIC, scope: SCOPE_TENANT, aggregate: "streams"};
   string stream_id = 1;
+  // playback_id is the stream's public playback ID; empty when Foghorn could
+  // not resolve the stream while the control plane was unreachable.
+  string playback_id = 2;
 }

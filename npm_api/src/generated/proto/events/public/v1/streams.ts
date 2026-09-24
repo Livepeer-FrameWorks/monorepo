@@ -67,16 +67,28 @@ export interface StreamKeyRotated {
 export interface StreamConnected {
   streamId: string;
   protocol: IngestProtocol;
+  /** playback_id is the stream's public playback ID. */
+  playbackId: string;
 }
 
 /** StreamLive reports that the stream became playable. */
 export interface StreamLive {
   streamId: string;
+  /**
+   * playback_id is the stream's public playback ID; empty when Foghorn could
+   * not resolve the stream while the control plane was unreachable.
+   */
+  playbackId: string;
 }
 
 /** StreamIdle reports that the stream's ingest session ended. */
 export interface StreamIdle {
   streamId: string;
+  /**
+   * playback_id is the stream's public playback ID; empty when Foghorn could
+   * not resolve the stream while the control plane was unreachable.
+   */
+  playbackId: string;
 }
 
 export const StreamCreated: MessageFns<StreamCreated> = {
@@ -149,6 +161,11 @@ export const StreamConnected: MessageFns<StreamConnected> = {
       protocol: isSet(object.protocol)
         ? ingestProtocolFromJSON(object.protocol)
         : IngestProtocol.INGEST_PROTOCOL_UNSPECIFIED,
+      playbackId: isSet(object.playbackId)
+        ? globalThis.String(object.playbackId)
+        : isSet(object.playback_id)
+        ? globalThis.String(object.playback_id)
+        : "",
     };
   },
 };
@@ -161,6 +178,11 @@ export const StreamLive: MessageFns<StreamLive> = {
         : isSet(object.stream_id)
         ? globalThis.String(object.stream_id)
         : "",
+      playbackId: isSet(object.playbackId)
+        ? globalThis.String(object.playbackId)
+        : isSet(object.playback_id)
+        ? globalThis.String(object.playback_id)
+        : "",
     };
   },
 };
@@ -172,6 +194,11 @@ export const StreamIdle: MessageFns<StreamIdle> = {
         ? globalThis.String(object.streamId)
         : isSet(object.stream_id)
         ? globalThis.String(object.stream_id)
+        : "",
+      playbackId: isSet(object.playbackId)
+        ? globalThis.String(object.playbackId)
+        : isSet(object.playback_id)
+        ? globalThis.String(object.playback_id)
         : "",
     };
   },

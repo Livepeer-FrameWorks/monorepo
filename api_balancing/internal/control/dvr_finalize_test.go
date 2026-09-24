@@ -263,6 +263,20 @@ func TestFinalizeDVR_NonOwningNodeRejectedBeforeClaim(t *testing.T) {
 	}
 }
 
+// expectFinalizeClaimNoRows expects the finalization claim transaction on a row
+// in a terminal status: the prior-status lock reads it, the claim matches
+// nothing, and the transaction rolls back.
+func expectFinalizeClaimNoRows(mock sqlmock.Sqlmock, hash, priorStatus string) {
+	mock.ExpectBegin()
+	mock.ExpectQuery(`SELECT COALESCE\(status, ''\)::text AS status, revision`).
+		WithArgs(hash).
+		WillReturnRows(sqlmock.NewRows([]string{"status", "revision", "stream_id"}).AddRow(priorStatus, int64(3), ""))
+	mock.ExpectQuery(`UPDATE foghorn.artifacts\s+SET status = 'finalizing'.*RETURNING status, tenant_id::text`).
+		WithArgs(hash, sqlmock.AnyArg()).
+		WillReturnError(sql.ErrNoRows)
+	mock.ExpectRollback()
+}
+
 // The owning node passes the node-auth guard and proceeds to claim the row. Here the claim finds the
 // row already terminal (idempotent NoOp path), proving the guard let the owner through to the mutation.
 func TestFinalizeDVR_OwningNodeProceedsToClaim(t *testing.T) {
@@ -274,9 +288,7 @@ func TestFinalizeDVR_OwningNodeProceedsToClaim(t *testing.T) {
 		WithArgs("dvr-1", "tenant-1").
 		WillReturnRows(sqlmock.NewRows([]string{"status", "dispatch_node"}).AddRow("recording", "owner-node"))
 	// Guard passed → claim attempted. Row already terminal → ErrNoRows → idempotent NoOp path.
-	mock.ExpectQuery(`UPDATE foghorn.artifacts\s+SET status = 'finalizing'.*RETURNING status, tenant_id::text`).
-		WithArgs("dvr-1", sqlmock.AnyArg()).
-		WillReturnError(sql.ErrNoRows)
+	expectFinalizeClaimNoRows(mock, "dvr-1", "completed")
 	mock.ExpectQuery(`SELECT status FROM foghorn.artifacts WHERE artifact_hash = \$1 AND artifact_type = 'dvr'`).
 		WithArgs("dvr-1").
 		WillReturnRows(sqlmock.NewRows([]string{"status"}).AddRow("completed"))
@@ -341,9 +353,7 @@ func TestFinalizeDVR_HardGraceRetainedObligation(t *testing.T) {
 			WithArgs("dvr-hg", "tenant-1").
 			WillReturnRows(sqlmock.NewRows([]string{"status", "dispatch_node"}).AddRow("failed", "owner-node"))
 		// Owner matches → proceeds to claim. Row already terminal → ErrNoRows → NoOp terminal path.
-		mock.ExpectQuery(`UPDATE foghorn.artifacts\s+SET status = 'finalizing'.*RETURNING status, tenant_id::text`).
-			WithArgs("dvr-hg", sqlmock.AnyArg()).
-			WillReturnError(sql.ErrNoRows)
+		expectFinalizeClaimNoRows(mock, "dvr-hg", "failed")
 		mock.ExpectQuery(`SELECT status FROM foghorn.artifacts WHERE artifact_hash = \$1 AND artifact_type = 'dvr'`).
 			WithArgs("dvr-hg").
 			WillReturnRows(sqlmock.NewRows([]string{"status"}).AddRow("failed"))

@@ -25,6 +25,8 @@ var publicEventMessages = map[string]func() proto.Message{
 	"multistream.status_changed": func() proto.Message { return &publicv1.MultistreamStatusChanged{} },
 	"recording.failed":           func() proto.Message { return &publicv1.RecordingFailed{} },
 	"recording.ready":            func() proto.Message { return &publicv1.RecordingReady{} },
+	"recording.started":          func() proto.Message { return &publicv1.RecordingStarted{} },
+	"recording.stopped":          func() proto.Message { return &publicv1.RecordingStopped{} },
 	"stream.connected":           func() proto.Message { return &publicv1.StreamConnected{} },
 	"stream.created":             func() proto.Message { return &publicv1.StreamCreated{} },
 	"stream.deleted":             func() proto.Message { return &publicv1.StreamDeleted{} },

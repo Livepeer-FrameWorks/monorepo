@@ -27,6 +27,8 @@ __all__ = (
     "PaymentFailureReason",
     "RecordingFailed",
     "RecordingReady",
+    "RecordingStarted",
+    "RecordingStopped",
     "StreamConnected",
     "StreamCreated",
     "StreamDeleted",
@@ -623,6 +625,41 @@ default_message_pool.register_message(
 
 
 @dataclass(eq=False, repr=False)
+class RecordingStarted(betterproto2.Message):
+    """
+    RecordingStarted reports that the recording node confirmed capture of the
+    stream: the first accepted progress report or media segment.
+    """
+
+    artifact: "Artifact | None" = betterproto2.field(
+        1, betterproto2.TYPE_MESSAGE, optional=True
+    )
+
+
+default_message_pool.register_message(
+    "frameworks.events.public.v1", "RecordingStarted", RecordingStarted
+)
+
+
+@dataclass(eq=False, repr=False)
+class RecordingStopped(betterproto2.Message):
+    """
+    RecordingStopped reports that capture ended and the recording is being
+    finalized. It follows recording.started once; recording.ready or
+    recording.failed follows it.
+    """
+
+    artifact: "Artifact | None" = betterproto2.field(
+        1, betterproto2.TYPE_MESSAGE, optional=True
+    )
+
+
+default_message_pool.register_message(
+    "frameworks.events.public.v1", "RecordingStopped", RecordingStopped
+)
+
+
+@dataclass(eq=False, repr=False)
 class StreamConnected(betterproto2.Message):
     """
     StreamConnected reports a new ingest session for the stream.
@@ -633,6 +670,11 @@ class StreamConnected(betterproto2.Message):
     protocol: "IngestProtocol" = betterproto2.field(
         2, betterproto2.TYPE_ENUM, default_factory=lambda: IngestProtocol(0)
     )
+
+    playback_id: "str" = betterproto2.field(3, betterproto2.TYPE_STRING)
+    """
+    playback_id is the stream's public playback ID.
+    """
 
 
 default_message_pool.register_message(
@@ -672,6 +714,12 @@ class StreamIdle(betterproto2.Message):
 
     stream_id: "str" = betterproto2.field(1, betterproto2.TYPE_STRING)
 
+    playback_id: "str" = betterproto2.field(2, betterproto2.TYPE_STRING)
+    """
+    playback_id is the stream's public playback ID; empty when Foghorn could
+    not resolve the stream while the control plane was unreachable.
+    """
+
 
 default_message_pool.register_message(
     "frameworks.events.public.v1", "StreamIdle", StreamIdle
@@ -700,6 +748,12 @@ class StreamLive(betterproto2.Message):
     """
 
     stream_id: "str" = betterproto2.field(1, betterproto2.TYPE_STRING)
+
+    playback_id: "str" = betterproto2.field(2, betterproto2.TYPE_STRING)
+    """
+    playback_id is the stream's public playback ID; empty when Foghorn could
+    not resolve the stream while the control plane was unreachable.
+    """
 
 
 default_message_pool.register_message(

@@ -1,3 +1,14 @@
+-- name: LockDVRFinalizationPrior :one
+-- Locks the recording and reads what the finalization claim replaces. Before
+-- finalization the only lifecycle event that advances a recording's revision
+-- is recording.started, so revision > 0 means capture was confirmed and
+-- published.
+SELECT COALESCE(status, '')::text AS status, revision,
+       COALESCE(stream_id::text, '')::text AS stream_id
+FROM foghorn.artifacts
+WHERE artifact_hash = sqlc.arg(artifact_hash) AND artifact_type = 'dvr'
+FOR UPDATE;
+
 -- name: ClaimDVRFinalization :one
 UPDATE foghorn.artifacts
 SET status = 'finalizing', updated_at = NOW(), ended_at = COALESCE(ended_at, NOW())

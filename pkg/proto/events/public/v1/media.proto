@@ -27,6 +27,21 @@ message ClipFailed {
   MediaFailureReason reason = 2;
 }
 
+// RecordingStarted reports that the recording node confirmed capture of the
+// stream: the first accepted progress report or media segment.
+message RecordingStarted {
+  option (frameworks.events.event) = {type: "recording.started", visibility: VISIBILITY_PUBLIC, scope: SCOPE_TENANT, aggregate: "artifacts"};
+  Artifact artifact = 1;
+}
+
+// RecordingStopped reports that capture ended and the recording is being
+// finalized. It follows recording.started once; recording.ready or
+// recording.failed follows it.
+message RecordingStopped {
+  option (frameworks.events.event) = {type: "recording.stopped", visibility: VISIBILITY_PUBLIC, scope: SCOPE_TENANT, aggregate: "artifacts"};
+  Artifact artifact = 1;
+}
+
 message RecordingReady {
   option (frameworks.events.event) = {type: "recording.ready", visibility: VISIBILITY_PUBLIC, scope: SCOPE_TENANT, aggregate: "artifacts"};
   Artifact artifact = 1;

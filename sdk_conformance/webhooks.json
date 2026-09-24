@@ -130,14 +130,32 @@
     },
     {
       "name": "stream.live decodes to the typed payload",
-      "body": "{\"id\":\"0199a3c3-0000-7000-8000-000000000001\",\"type\":\"stream.live\",\"api_version\":\"v1\",\"created_at\":\"2026-09-19T14:05:00Z\",\"data\":{\"streamId\":\"5b0e6a2c-3f1d-4c8e-9a7b-2d4f6e8a0c13\"}}",
+      "body": "{\"id\":\"0199a3c3-0000-7000-8000-000000000001\",\"type\":\"stream.live\",\"api_version\":\"v1\",\"created_at\":\"2026-09-19T14:05:00Z\",\"data\":{\"streamId\":\"5b0e6a2c-3f1d-4c8e-9a7b-2d4f6e8a0c13\",\"playbackId\":\"p8d2k6r4t1y9\"}}",
       "expect": {
         "known": true,
         "id": "0199a3c3-0000-7000-8000-000000000001",
         "type": "stream.live",
         "apiVersion": "v1",
         "createdAt": "2026-09-19T14:05:00Z",
-        "expectFields": { "streamId": "5b0e6a2c-3f1d-4c8e-9a7b-2d4f6e8a0c13" }
+        "expectFields": {
+          "streamId": "5b0e6a2c-3f1d-4c8e-9a7b-2d4f6e8a0c13",
+          "playbackId": "p8d2k6r4t1y9"
+        }
+      }
+    },
+    {
+      "name": "recording.stopped decodes to the typed payload",
+      "body": "{\"id\":\"0199a3c3-0000-7000-8000-00000000000a\",\"type\":\"recording.stopped\",\"api_version\":\"v1\",\"created_at\":\"2026-09-19T14:35:00Z\",\"data\":{\"artifact\":{\"artifactId\":\"d4e8b1f6a3c24e9b8f1a6c3d7e2b9f05\",\"kind\":\"ARTIFACT_KIND_RECORDING\",\"streamId\":\"5b0e6a2c-3f1d-4c8e-9a7b-2d4f6e8a0c13\"}}}",
+      "expect": {
+        "known": true,
+        "id": "0199a3c3-0000-7000-8000-00000000000a",
+        "type": "recording.stopped",
+        "apiVersion": "v1",
+        "createdAt": "2026-09-19T14:35:00Z",
+        "expectFields": {
+          "artifact.artifactId": "d4e8b1f6a3c24e9b8f1a6c3d7e2b9f05",
+          "artifact.kind": "ARTIFACT_KIND_RECORDING"
+        }
       }
     },
     {

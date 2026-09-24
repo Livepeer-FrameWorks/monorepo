@@ -354,3 +354,28 @@ func (q *Queries) LockDVRDispatchOwner(ctx context.Context, arg LockDVRDispatchO
 	err := row.Scan(&dispatch_node)
 	return dispatch_node, err
 }
+
+const lockDVRFinalizationPrior = `-- name: LockDVRFinalizationPrior :one
+SELECT COALESCE(status, '')::text AS status, revision,
+       COALESCE(stream_id::text, '')::text AS stream_id
+FROM foghorn.artifacts
+WHERE artifact_hash = $1 AND artifact_type = 'dvr'
+FOR UPDATE
+`
+
+type LockDVRFinalizationPriorRow struct {
+	Status   string `db:"status" json:"status"`
+	Revision int64  `db:"revision" json:"revision"`
+	StreamID string `db:"stream_id" json:"stream_id"`
+}
+
+// Locks the recording and reads what the finalization claim replaces. Before
+// finalization the only lifecycle event that advances a recording's revision
+// is recording.started, so revision > 0 means capture was confirmed and
+// published.
+func (q *Queries) LockDVRFinalizationPrior(ctx context.Context, artifactHash string) (LockDVRFinalizationPriorRow, error) {
+	row := q.db.QueryRowContext(ctx, lockDVRFinalizationPrior, artifactHash)
+	var i LockDVRFinalizationPriorRow
+	err := row.Scan(&i.Status, &i.Revision, &i.StreamID)
+	return i, err
+}
