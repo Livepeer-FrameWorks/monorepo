@@ -593,8 +593,8 @@ Input for updating an existing stream. All fields are optional - only provided f
 - **ingestMode**: `IngestMode` ([IngestMode](/builders/api-schema/shared/#ingestmode)) — Ingest model cannot be changed after create; sending a different value returns a validation error.
 - **pullSource**: `PullSourceInput` ([PullSourceInput](/builders/api-schema/streams/#pullsourceinput)) — Update the pull-source configuration for an existing pull stream.
 - **sourceLocation**: `SourceLocationInput` ([SourceLocationInput](/builders/api-schema/streams/#sourcelocationinput)) — Replace where the source may be ingested. Omitted keeps the current location. Rejected for managed streams.
-- **dvrChapterMode**: `DVRChapterMode` ([DVRChapterMode](/builders/api-schema/shared/#dvrchaptermode)) — Historical chapter rotation mode. Snapshotted onto the DVR artifact at StartDVR; changes take effect on the next recording, not in-flight. NONE means rolling DVR playback only: recording still runs, but no finalized chapter artifacts are produced for historical replay.
-- **dvrChapterIntervalSeconds**: `Int` — Chapter interval in seconds. Required when dvrChapterMode = FIXED_INTERVAL. Minimum 3600 (1 hour).
+- **dvrChapterMode**: `DVRChapterMode` ([DVRChapterMode](/builders/api-schema/shared/#dvrchaptermode)) — How saved recordings are split into chapters. Snapshotted when a recording starts; changes apply from the next broadcast, not to a recording in progress. NONE keeps live rewind only: viewers can rewind while live, but nothing is kept after the broadcast.
+- **dvrChapterIntervalSeconds**: `Int` — Chapter interval in seconds. Required when dvrChapterMode = FIXED_INTERVAL. Minimum 3600 (1 hour). Send 0 with any other mode to clear a stored interval.
 - **monitoring**: `MonitoringToggle` ([MonitoringToggle](/builders/api-schema/shared/#monitoringtoggle)) — Per-stream Skipper monitoring override. INHERIT follows the tenant tier.
 
 ### UpdateStreamResult

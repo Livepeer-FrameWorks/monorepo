@@ -128,11 +128,11 @@ Status of a support conversation.
 
 **enum**
 
-DVR historical chapter mode. Determines how chapter (startMs, endMs) ranges are produced for finalized replay artifacts. Configured at the Stream level via updateStream and snapshotted onto the DVR artifact at StartDVR. UTC-only — civil-time chapters resolve at the edge.
+How a recording is saved as chapters. Determines how chapter (startMs, endMs) ranges are produced for replay after the broadcast. Configured at the Stream level via updateStream and snapshotted onto the recording when it starts. New streams default to WINDOW_SIZED. UTC-only — civil-time chapters resolve at the edge.
 
-- `WINDOW_SIZED` — Sequential fixed-length chapters of size tier.MaxWindowSeconds since the recording&#39;s start.
+- `WINDOW_SIZED` — Default. Sequential parts as long as the recording&#39;s own live rewind window, from the recording&#39;s start.
 - `FIXED_INTERVAL` — UTC-only intervalSeconds buckets, anchored at unix epoch 0.
-- `NONE` — Rolling DVR only: recording still runs, but no historical chapter artifacts are produced.
+- `NONE` — Live rewind only: viewers can rewind while live, but nothing is kept after the broadcast and no recording.ready fires.
 
 ### DeleteSuccess
 
@@ -758,7 +758,7 @@ Implements [Node](/builders/api-schema/shared/#node).
 - **metrics**: `StreamMetrics` ([StreamMetrics](/builders/api-schema/shared/#streammetrics)) — Real-time operational metrics from the data plane. Includes viewer counts, quality metrics, and throughput data. Lazily loaded from ClickHouse analytics.
 - **pushTargets**: `[PushTarget!]!` ([PushTarget](/builders/api-schema/shared/#pushtarget)) — Configured multistream push targets for this stream.
 - **playbackPolicy**: `PlaybackPolicy` ([PlaybackPolicy](/builders/api-schema/shared/#playbackpolicy)) — Playback access policy. null/PUBLIC = anyone with the playbackId can watch.
-- **dvrChapterMode**: `DVRChapterMode` ([DVRChapterMode](/builders/api-schema/shared/#dvrchaptermode)) — DVR chapter rotation mode. Snapshotted onto the DVR artifact at StartDVR; changes take effect on the next recording. null/NONE = chapters disabled.
+- **dvrChapterMode**: `DVRChapterMode` ([DVRChapterMode](/builders/api-schema/shared/#dvrchaptermode)) — How saved recordings are split into chapters. Snapshotted when a recording starts; changes apply from the next broadcast. NONE = live rewind only, nothing kept after the broadcast.
 - **dvrChapterIntervalSeconds**: `Int` — Chapter interval in seconds. Required when dvrChapterMode = FIXED_INTERVAL, ignored otherwise. Minimum 3600 (1 hour).
 - **monitoring**: `MonitoringToggle!` ([MonitoringToggle](/builders/api-schema/shared/#monitoringtoggle)) — Per-stream Skipper monitoring override (INHERIT follows tier).
 - **recentPullSourceEvents**: `[PullSourceEvent!]` ([PullSourceEvent](/builders/api-schema/shared/#pullsourceevent)) — Recent pull-source resolution events for pull streams. Captures the customer-facing resolution outcome (resolved, not_found, disabled, blocked_uri, cluster_not_allowed_delegate, commodore_error, foghorn_base_unresolved). Null for push streams.

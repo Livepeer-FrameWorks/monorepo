@@ -446,7 +446,7 @@ One delivery of one event to one endpoint, or a test delivery.
 - **lastReplayedAt**: `Time` ([Time](/builders/api-schema/shared/#time))
 - **createdAt**: `Time!` ([Time](/builders/api-schema/shared/#time))
 - **updatedAt**: `Time!` ([Time](/builders/api-schema/shared/#time))
-- **attemptHistory**: `[WebhookDeliveryAttempt!]!` ([WebhookDeliveryAttempt](/builders/api-schema/webhooks/#webhookdeliveryattempt)) — Every HTTP attempt, oldest first. Loaded by the webhookDelivery query; empty in connections.
+- **attemptHistory**: `[WebhookDeliveryAttempt!]!` ([WebhookDeliveryAttempt](/builders/api-schema/webhooks/#webhookdeliveryattempt)) — Every HTTP attempt, oldest first, including attempts before the last replay.
 
 ### WebhookDeliveryAttempt
 
