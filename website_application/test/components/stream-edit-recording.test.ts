@@ -2,7 +2,12 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/svelte";
 import StreamEditModal from "$lib/components/stream-details/StreamEditModal.svelte";
 
-afterEach(cleanup);
+// Unmounting the dialog schedules bits-ui's body scroll-lock restore 24ms
+// later; it must run before the file's jsdom environment is torn down.
+afterEach(async () => {
+  cleanup();
+  await new Promise((resolve) => setTimeout(resolve, 50));
+});
 
 function streamWith(mode: "WINDOW_SIZED" | "FIXED_INTERVAL" | "NONE" | null, interval?: number) {
   return {
