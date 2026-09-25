@@ -16,9 +16,9 @@ set -euo pipefail
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 # MistServer release pinned for the dev edge (Livepeer-FrameWorks/mistserver).
-mist_version=v0.3.5
-mist_sha256_amd64=0891d86d4a50ff620d9d0dcd2b0afbb488e37c22bf7b8a11c9bc5a57f7215b54
-mist_sha256_arm64=cb2dc012cb7267d8080d7d8d3199baf020aaf1b5fcfe8f51fad32084a95813d1
+mist_version=v0.3.10
+mist_sha256_amd64=95a71d797d31e87ac9b2e1061cbade9cb059667b1029e4b42e61a127c7097d0a
+mist_sha256_arm64=2ff1a7f5ae6aa04831d7a7e6416ae1009a19cff1f8695b6cb73df9c94a27adb4
 
 # The image targets the Docker engine's architecture, which can differ from the host shell's.
 arch="$(docker version --format '{{.Server.Arch}}' 2>/dev/null || uname -m)"
