@@ -4967,10 +4967,12 @@ func (r *streamResolver) Metrics(ctx context.Context, obj *commodorepb.Stream) (
 	loaders := loaders.FromContext(ctx)
 	if loaders == nil || loaders.StreamMetrics == nil {
 		// Fallback: direct call
-		return r.Clients.Periscope.GetStreamStatus(ctx, tenantID, obj.StreamId)
+		resp, err := r.Clients.Periscope.GetStreamStatus(ctx, tenantID, obj.StreamId)
+		return resolvers.ObservedStreamMetrics(resp), err
 	}
 
-	return loaders.StreamMetrics.Load(ctx, tenantID, obj.StreamId)
+	resp, err := loaders.StreamMetrics.Load(ctx, tenantID, obj.StreamId)
+	return resolvers.ObservedStreamMetrics(resp), err
 }
 
 // PushTargets is the resolver for the pushTargets field.
