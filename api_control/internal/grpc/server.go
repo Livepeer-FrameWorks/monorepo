@@ -265,6 +265,16 @@ type turnstileVerifier interface {
 	Verify(ctx context.Context, token, remoteIP string) (*turnstile.VerifyResponse, error)
 }
 
+// newTurnstileVerifier returns a nil interface, not a typed nil pointer, when no
+// secret is configured: callers test the interface against nil to fall back to
+// the behavioral bot check.
+func newTurnstileVerifier(secretKey string) turnstileVerifier {
+	if secretKey == "" {
+		return nil
+	}
+	return turnstile.NewValidator(secretKey)
+}
+
 func (s *CommodoreServer) observeFieldDecryptFailure(purpose, stored string) {
 	if s == nil || s.metrics == nil || s.metrics.FieldDecryptFailures == nil {
 		return
@@ -850,10 +860,7 @@ func (s *CommodoreServer) settings() RuntimeSettings {
 
 // NewCommodoreServer creates a new Commodore gRPC server
 func NewCommodoreServer(cfg CommodoreServerConfig) *CommodoreServer {
-	var tv *turnstile.Validator
-	if cfg.TurnstileSecretKey != "" {
-		tv = turnstile.NewValidator(cfg.TurnstileSecretKey)
-	}
+	tv := newTurnstileVerifier(cfg.TurnstileSecretKey)
 
 	legacyFieldKeys := legacyFieldEncryptionSecrets(cfg.JWTSecret, cfg.FieldEncryptionPrevious, cfg.FieldEncryptionLegacy)
 	fe, err := fieldcrypt.NewFieldKeyring(cfg.FieldEncryptionKeyID, cfg.FieldEncryptionKey, cfg.FieldEncryptionPrevious, legacyFieldKeys, "push-target-uri")
