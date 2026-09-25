@@ -240,12 +240,9 @@ ON CONFLICT (artifact_hash, segment_name) DO NOTHING;
 -- finalization rather than the retired chapter-manifest path.
 
 -- Demo chapter row: a single fixed-interval chapter covering the
--- recorded DVR window. chapter_id is the canonical
--- BuildChapterID(artifact_hash, mode, intervalSeconds, start_ms, end_ms)
--- so chapter-sweeper / direct lookups find this row instead of
--- regenerating a sibling:
---   sha256("fedcba98765432109876543210fedcba|fixed_interval|3600|1779105600000|1779105618000")[:32]
---   = 34d74b7acd7ec8cf78f6cc8c9f031a8a
+-- recorded DVR window. Chapter lookups match rows by
+-- (artifact_hash, mode, interval_seconds, start_ms), so the sweeper and
+-- direct lookups find this row whatever its id; the id is opaque.
 --
 INSERT INTO foghorn.dvr_chapters (
     chapter_id, artifact_hash, mode, interval_seconds,
