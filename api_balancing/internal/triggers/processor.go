@@ -318,7 +318,10 @@ const streamCacheHoldDuration = 2 * time.Second
 // healthy instance, for broadcaster failover) with their resolution time. An
 // empty slice is a valid cached negative result.
 type gatewayCacheEntry struct {
-	urls       []string
+	urls []string
+	// cells are the physical clusters the resolved gateway instances run in,
+	// which is where their auth webhook lands.
+	cells      []string
 	resolvedAt time.Time
 }
 
@@ -428,15 +431,18 @@ const (
 
 // getLivepeerGatewayURLsForCluster returns the cached Livepeer gateway URLs for
 // the given cluster — one per healthy assigned instance, in discovery order, so
-// they can form the MistProcLivepeer broadcaster failover set. Refreshes from
+// they can form the MistProcLivepeer broadcaster failover set — and the
+// physical cells those instances run in. A media cluster (including a virtual
+// one served by another cell's Foghorn) can be assigned gateways that live in a
+// different cell, so the cells are not the requested cluster. Refreshes from
 // Quartermaster once per TTL per cluster. Returns an empty slice when no
 // gateway is registered for that cluster; negative results are cached only
 // briefly (gatewayEmptyCacheTTL) so a (re)appearing gateway converges in seconds
 // while still avoiding a per-trigger hot-loop.
-func (p *Processor) getLivepeerGatewayURLsForCluster(clusterID string) []string {
+func (p *Processor) getLivepeerGatewayURLsForCluster(clusterID string) ([]string, []string) {
 	clusterID = strings.TrimSpace(clusterID)
 	if clusterID == "" {
-		return nil
+		return nil, nil
 	}
 
 	p.gatewayMu.RLock()
@@ -447,7 +453,7 @@ func (p *Processor) getLivepeerGatewayURLsForCluster(clusterID string) []string 
 		}
 		if time.Since(entry.resolvedAt) < ttl {
 			p.gatewayMu.RUnlock()
-			return entry.urls
+			return entry.urls, entry.cells
 		}
 	}
 	p.gatewayMu.RUnlock()
@@ -457,7 +463,7 @@ func (p *Processor) getLivepeerGatewayURLsForCluster(clusterID string) []string 
 		disc = p.quartermasterClient
 	}
 	if disc == nil {
-		return nil
+		return nil, nil
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
@@ -468,11 +474,12 @@ func (p *Processor) getLivepeerGatewayURLsForCluster(clusterID string) []string 
 		// Caching nil here would force local-AV fallback for the whole TTL; let
 		// the next stream re-resolve instead.
 		p.logger.WithError(err).WithField("cluster_id", clusterID).Debug("Livepeer gateway discovery failed; not caching result")
-		return nil
+		return nil, nil
 	}
 
 	seen := map[string]struct{}{}
-	var resolved []string
+	seenCells := map[string]struct{}{}
+	var resolved, cells []string
 	for _, inst := range resp.GetInstances() {
 		// DiscoverServices scopes to the gateways assigned to this media cluster
 		// but returns starting/unhealthy instances too; only a healthy gateway
@@ -493,16 +500,24 @@ func (p *Processor) getLivepeerGatewayURLsForCluster(clusterID string) []string 
 		}
 		seen[url] = struct{}{}
 		resolved = append(resolved, url)
+		cell := strings.TrimSpace(inst.GetClusterId())
+		if cell == "" {
+			cell = clusterID
+		}
+		if _, dup := seenCells[cell]; !dup {
+			seenCells[cell] = struct{}{}
+			cells = append(cells, cell)
+		}
 	}
 
 	p.gatewayMu.Lock()
 	if p.gatewayURLs == nil {
 		p.gatewayURLs = map[string]gatewayCacheEntry{}
 	}
-	p.gatewayURLs[clusterID] = gatewayCacheEntry{urls: resolved, resolvedAt: time.Now()}
+	p.gatewayURLs[clusterID] = gatewayCacheEntry{urls: resolved, cells: cells, resolvedAt: time.Now()}
 	p.gatewayMu.Unlock()
 
-	return resolved
+	return resolved, cells
 }
 
 // livepeerGatewayURLFromInstance returns the broadcaster URL for a gateway
@@ -557,9 +572,11 @@ func (p *Processor) ApplyLivepeerBroadcasters(processesJSON string, candidates [
 		seen[candidate] = struct{}{}
 		tried = append(tried, candidate)
 
-		if urls := p.getLivepeerGatewayURLsForCluster(candidate); len(urls) > 0 {
+		if urls, cells := p.getLivepeerGatewayURLsForCluster(candidate); len(urls) > 0 {
 			withBroadcasters := mist.SetLivepeerBroadcasters(processesJSON, urls)
-			return mist.SetLivepeerGatewayClusters(withBroadcasters, []string{candidate})
+			// The job capability names the cells whose Foghorn receives each
+			// selected gateway's auth webhook, not the media cluster asked for.
+			return mist.SetLivepeerGatewayClusters(withBroadcasters, cells)
 		}
 	}
 

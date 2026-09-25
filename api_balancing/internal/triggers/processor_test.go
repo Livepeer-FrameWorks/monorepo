@@ -2407,6 +2407,7 @@ type fakeGatewayDiscoverer struct {
 	hosts   map[string][]string // cluster_id -> instance hosts (empty/absent => not registered)
 	calls   map[string]int      // cluster_id -> DiscoverServices call count
 	errOnce map[string]error    // cluster_id -> error to return ONCE then clear
+	cells   map[string]string   // instance host -> physical cluster it runs in (absent => none reported)
 }
 
 func newFakeGatewayDiscoverer(hosts map[string][]string) *fakeGatewayDiscoverer {
@@ -2440,6 +2441,7 @@ func (f *fakeGatewayDiscoverer) DiscoverServices(_ context.Context, serviceType,
 		// public_instance_host carries the physical per-instance endpoint that
 		// the broadcaster fanout prefers; mirror Quartermaster's metadata.
 		resp.Instances = append(resp.Instances, &quartermasterpb.ServiceInstance{
+			ClusterId:    f.cells[host],
 			Host:         &host,
 			Port:         &port,
 			Protocol:     "https",
@@ -2795,5 +2797,38 @@ func TestSafeRollingDVRProcessConfigRejectsUnsignedLivepeer(t *testing.T) {
 	want := `[{"process":"Thumbs","track_select":"video=maxbps"}]`
 	if got, err := safeRollingDVRProcessConfig(want); err != nil || got != want {
 		t.Fatalf("safe DVR config got=%q err=%v", got, err)
+	}
+}
+
+// A media cluster can be served by gateways that run in another cell: a
+// tenant's virtual cluster served by a platform cell's Foghorn is assigned that
+// cell's gateway. The job capability must name the gateway's own cell, since
+// that cell's Foghorn answers the gateway's auth webhook; naming the requested
+// media cluster made every such job fail invalid_token_gateway_cluster.
+func TestApplyLivepeerBroadcasters_StampsGatewayCellNotMediaCluster(t *testing.T) {
+	disc := newFakeGatewayDiscoverer(map[string][]string{
+		"tenant-virtual": {"gw.cell-a.example.com"},
+	})
+	disc.cells = map[string]string{"gw.cell-a.example.com": "cell-a"}
+	p := newGatewayProcessor(t, disc, "cell-a")
+
+	got := p.ApplyLivepeerBroadcasters(gatewayTemplate, []string{"tenant-virtual"})
+
+	cells := mist.LivepeerGatewayClusters(got)
+	if len(cells) != 1 || cells[0] != "cell-a" {
+		t.Fatalf("job capability must name the gateway cell [cell-a], got %v in %q", cells, got)
+	}
+}
+
+func TestApplyLivepeerBroadcasters_GatewayWithoutCellFallsBackToRequestedCluster(t *testing.T) {
+	disc := newFakeGatewayDiscoverer(map[string][]string{
+		"platform-cluster": {"gw.platform.example.com"},
+	})
+	p := newGatewayProcessor(t, disc, "platform-cluster")
+
+	got := p.ApplyLivepeerBroadcasters(gatewayTemplate, []string{"platform-cluster"})
+
+	if cells := mist.LivepeerGatewayClusters(got); len(cells) != 1 || cells[0] != "platform-cluster" {
+		t.Fatalf("an instance without a reported cell keeps the requested cluster, got %v", cells)
 	}
 }
