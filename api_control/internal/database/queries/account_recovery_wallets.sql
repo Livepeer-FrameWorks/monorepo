@@ -18,7 +18,7 @@ WHERE id = sqlc.arg(id)
   AND token_expires_at > NOW();
 
 -- name: GetVerificationResendUser :one
-SELECT id, COALESCE(verified, false)::boolean AS verified, token_expires_at
+SELECT id, tenant_id::text AS tenant_id, COALESCE(verified, false)::boolean AS verified, token_expires_at
 FROM commodore.users
 WHERE email = $1;
 

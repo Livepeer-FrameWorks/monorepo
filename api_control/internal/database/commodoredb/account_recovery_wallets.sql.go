@@ -144,13 +144,14 @@ func (q *Queries) GetUserEmail(ctx context.Context, arg GetUserEmailParams) (sql
 }
 
 const getVerificationResendUser = `-- name: GetVerificationResendUser :one
-SELECT id, COALESCE(verified, false)::boolean AS verified, token_expires_at
+SELECT id, tenant_id::text AS tenant_id, COALESCE(verified, false)::boolean AS verified, token_expires_at
 FROM commodore.users
 WHERE email = $1
 `
 
 type GetVerificationResendUserRow struct {
 	ID             string       `db:"id" json:"id"`
+	TenantID       string       `db:"tenant_id" json:"tenant_id"`
 	Verified       bool         `db:"verified" json:"verified"`
 	TokenExpiresAt sql.NullTime `db:"token_expires_at" json:"token_expires_at"`
 }
@@ -158,7 +159,12 @@ type GetVerificationResendUserRow struct {
 func (q *Queries) GetVerificationResendUser(ctx context.Context, email sql.NullString) (GetVerificationResendUserRow, error) {
 	row := q.db.QueryRowContext(ctx, getVerificationResendUser, email)
 	var i GetVerificationResendUserRow
-	err := row.Scan(&i.ID, &i.Verified, &i.TokenExpiresAt)
+	err := row.Scan(
+		&i.ID,
+		&i.TenantID,
+		&i.Verified,
+		&i.TokenExpiresAt,
+	)
 	return i, err
 }
 

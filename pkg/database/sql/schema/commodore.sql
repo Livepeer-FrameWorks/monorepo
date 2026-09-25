@@ -1337,6 +1337,30 @@ CREATE INDEX IF NOT EXISTS idx_commodore_stream_cleanup_outbox_pending
     ON commodore.stream_cleanup_outbox(next_attempt_at)
     WHERE status = 'pending';
 
+-- Durable delivery of account emails (email verification). Register and resend write one row in the same
+-- transaction as the user/token change; a worker mints the link token at send time (the raw token is never stored)
+-- and retries with backoff, so an SMTP outage no longer strands an account without its verification email. Rows
+-- still pending when the 24h verification window closes are abandoned; the user can request a new link.
+CREATE TABLE IF NOT EXISTS commodore.account_email_outbox (
+    user_id         UUID NOT NULL,
+    tenant_id       UUID NOT NULL,
+    purpose         TEXT NOT NULL,                          -- 'verification'
+    status          TEXT NOT NULL DEFAULT 'pending',        -- 'pending' | 'completed' | 'abandoned'
+    attempts        INT NOT NULL DEFAULT 0,
+    next_attempt_at TIMESTAMP NOT NULL DEFAULT NOW(),
+    last_error      TEXT,
+    lease_token     TEXT,                                   -- fences settlement against a peer that re-claimed the row
+    created_at      TIMESTAMP NOT NULL DEFAULT NOW(),       -- start of the delivery window; reset by resend
+    updated_at      TIMESTAMP NOT NULL DEFAULT NOW(),
+    completed_at    TIMESTAMP,
+    PRIMARY KEY (user_id, purpose),
+    CONSTRAINT chk_commodore_account_email_outbox_purpose CHECK (purpose IN ('verification')),
+    CONSTRAINT chk_commodore_account_email_outbox_status CHECK (status IN ('pending', 'completed', 'abandoned'))
+);
+CREATE INDEX IF NOT EXISTS idx_commodore_account_email_outbox_pending
+    ON commodore.account_email_outbox(next_attempt_at)
+    WHERE status = 'pending';
+
 -- ============================================================================
 -- SIGNING-KEY AUDIT LOG
 -- ============================================================================

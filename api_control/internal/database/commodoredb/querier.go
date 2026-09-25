@@ -11,6 +11,7 @@ import (
 )
 
 type Querier interface {
+	AbandonExpiredAccountEmails(ctx context.Context, windowMs int64) (int64, error)
 	AcquireIngestClaim(ctx context.Context, arg AcquireIngestClaimParams) (AcquireIngestClaimRow, error)
 	ActivateMediaPlacementPolicy(ctx context.Context, arg ActivateMediaPlacementPolicyParams) (int64, error)
 	// Settles unfinished rows of the pre-obligation inbox so their targets can be
@@ -28,6 +29,7 @@ type Querier interface {
 	ArtifactIdentifierExists(ctx context.Context, internalName string) (bool, error)
 	BackoffArtifactCreationCommandAck(ctx context.Context, arg BackoffArtifactCreationCommandAckParams) error
 	BeginMediaAuthorityCompile(ctx context.Context, scopeKey string) (int64, error)
+	ClaimAccountEmailBatch(ctx context.Context, batchSize int32) ([]ClaimAccountEmailBatchRow, error)
 	ClaimArtifactCreationCommandAcks(ctx context.Context, arg ClaimArtifactCreationCommandAcksParams) ([]ClaimArtifactCreationCommandAcksRow, error)
 	ClaimArtifactCreationIntents(ctx context.Context, arg ClaimArtifactCreationIntentsParams) ([]ClaimArtifactCreationIntentsRow, error)
 	ClaimInvalidationBatch(ctx context.Context, batchSize int32) ([]ClaimInvalidationBatchRow, error)
@@ -65,6 +67,7 @@ type Querier interface {
 	ClearArtifactCatalogTombstone(ctx context.Context, arg ClearArtifactCatalogTombstoneParams) error
 	ClearArtifactCreationCommandAck(ctx context.Context, arg ClearArtifactCreationCommandAckParams) error
 	ClearManagedStreamActiveCluster(ctx context.Context, arg ClearManagedStreamActiveClusterParams) (int64, error)
+	CompleteAccountEmail(ctx context.Context, arg CompleteAccountEmailParams) error
 	CompleteInvalidation(ctx context.Context, id string) error
 	CompleteMediaAuthorityObligation(ctx context.Context, arg CompleteMediaAuthorityObligationParams) (int64, error)
 	CompleteServiceEventOutbox(ctx context.Context, arg CompleteServiceEventOutboxParams) error
@@ -100,6 +103,9 @@ type Querier interface {
 	DeleteStreamKeysForDeletion(ctx context.Context, arg DeleteStreamKeysForDeletionParams) error
 	DeleteUserWallet(ctx context.Context, arg DeleteUserWalletParams) (string, error)
 	EnableCreatedStreamRecording(ctx context.Context, id string) error
+	// A new request restarts delivery: attempts and the 24h window reset, so a
+	// resend after an abandoned row is retried again.
+	EnqueueAccountEmail(ctx context.Context, arg EnqueueAccountEmailParams) error
 	EnqueueInvalidation(ctx context.Context, arg EnqueueInvalidationParams) (string, error)
 	// For a cell that does not hold what it acknowledged: every authority whose
 	// current version has run out while the cell may still hold a valid older one.
@@ -131,6 +137,7 @@ type Querier interface {
 	EnsureMediaAuthorityRenewal(ctx context.Context, arg EnsureMediaAuthorityRenewalParams) error
 	EnsureMediaPlacementPolicy(ctx context.Context, arg EnsureMediaPlacementPolicyParams) error
 	ExpireDeviceAuthorization(ctx context.Context, id string) error
+	FailAccountEmail(ctx context.Context, arg FailAccountEmailParams) error
 	FailInvalidation(ctx context.Context, arg FailInvalidationParams) error
 	FailMediaAuthorityObligation(ctx context.Context, arg FailMediaAuthorityObligationParams) (int64, error)
 	FailServiceEventOutbox(ctx context.Context, arg FailServiceEventOutboxParams) error
@@ -140,6 +147,7 @@ type Querier interface {
 	FindUserByResetToken(ctx context.Context, resetToken sql.NullString) (string, error)
 	FindUserIDByEmail(ctx context.Context, email sql.NullString) (string, error)
 	GetAPITokenUserContext(ctx context.Context, arg GetAPITokenUserContextParams) (GetAPITokenUserContextRow, error)
+	GetAccountEmailRecipient(ctx context.Context, arg GetAccountEmailRecipientParams) (GetAccountEmailRecipientRow, error)
 	GetActiveIngestClaim(ctx context.Context, streamKey string) (GetActiveIngestClaimRow, error)
 	GetArtifactCatalogTombstoneForUpdate(ctx context.Context, arg GetArtifactCatalogTombstoneForUpdateParams) (GetArtifactCatalogTombstoneForUpdateRow, error)
 	GetArtifactCatalogTombstoneOrigin(ctx context.Context, arg GetArtifactCatalogTombstoneOriginParams) (string, error)
@@ -262,6 +270,7 @@ type Querier interface {
 	InsertWalletIdentity(ctx context.Context, arg InsertWalletIdentityParams) error
 	InsertWalletUser(ctx context.Context, arg InsertWalletUserParams) error
 	IsDVRChapterPlaybackTarget(ctx context.Context, arg IsDVRChapterPlaybackTargetParams) (bool, error)
+	LeaseAccountEmail(ctx context.Context, arg LeaseAccountEmailParams) (sql.NullString, error)
 	LeaseInvalidation(ctx context.Context, arg LeaseInvalidationParams) error
 	LeaseStreamCleanup(ctx context.Context, arg LeaseStreamCleanupParams) (sql.NullString, error)
 	LinkUserEmail(ctx context.Context, arg LinkUserEmailParams) error
@@ -499,6 +508,9 @@ type Querier interface {
 	SetPasswordResetToken(ctx context.Context, arg SetPasswordResetTokenParams) error
 	SetPasswordResetTokenIfAllowed(ctx context.Context, arg SetPasswordResetTokenIfAllowedParams) (int64, error)
 	SetStreamPlaybackPolicy(ctx context.Context, arg SetStreamPlaybackPolicyParams) (string, error)
+	// Only the link in the most recent send is valid: each attempt rotates the
+	// stored hash before handing the raw token to SMTP.
+	SetUnverifiedUserVerificationToken(ctx context.Context, arg SetUnverifiedUserVerificationTokenParams) (int64, error)
 	SetVODPlaybackPolicy(ctx context.Context, arg SetVODPlaybackPolicyParams) (string, error)
 	// The renewal of an object nobody uses. Dormant is not claimable, is not
 	// re-armed by reconciliation, and still counts as the authority's renewal, so

@@ -120,6 +120,10 @@ func TestRegister(t *testing.T) {
 			WithArgs(sqlmock.AnyArg(), sqlmock.AnyArg(), "new@example.com", sqlmock.AnyArg(),
 				"", "", "owner", sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg()).
 			WillReturnResult(sqlmock.NewResult(0, 1))
+		// The verification email obligation commits with the user row.
+		mock.ExpectExec("INSERT INTO commodore.account_email_outbox").
+			WithArgs(sqlmock.AnyArg(), sqlmock.AnyArg(), accountEmailPurposeVerification).
+			WillReturnResult(sqlmock.NewResult(0, 1))
 		expectLegacyEventInsert(mock, eventAuthRegistered)
 		mock.ExpectCommit()
 
@@ -160,15 +164,15 @@ func TestResendVerificationDoesNotRevealAccountState(t *testing.T) {
 		err  error
 	}{
 		{name: "unknown", err: sql.ErrNoRows},
-		{name: "verified", rows: sqlmock.NewRows([]string{"id", "verified", "token_expires_at"}).AddRow("user-1", true, nil)},
-		{name: "cooldown", rows: sqlmock.NewRows([]string{"id", "verified", "token_expires_at"}).AddRow("user-1", false, time.Now().Add(24*time.Hour))},
+		{name: "verified", rows: sqlmock.NewRows([]string{"id", "tenant_id", "verified", "token_expires_at"}).AddRow("user-1", "tenant-1", true, nil)},
+		{name: "cooldown", rows: sqlmock.NewRows([]string{"id", "tenant_id", "verified", "token_expires_at"}).AddRow("user-1", "tenant-1", false, time.Now().Add(24*time.Hour))},
 	}
 	var wantMessage string
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			s, mock, done := newMockServer(t)
 			defer done()
-			expectation := mock.ExpectQuery("SELECT id, COALESCE\\(verified").WithArgs("user@example.com")
+			expectation := mock.ExpectQuery("SELECT id, tenant_id").WithArgs("user@example.com")
 			if test.err != nil {
 				expectation.WillReturnError(test.err)
 			} else {
@@ -193,12 +197,15 @@ func TestResendVerificationDoesNotRevealAccountState(t *testing.T) {
 func TestResendVerificationCooldownIsAtomic(t *testing.T) {
 	s, mock, done := newMockServer(t)
 	defer done()
-	mock.ExpectQuery("SELECT id, COALESCE\\(verified").
+	mock.ExpectQuery("SELECT id, tenant_id").
 		WithArgs("user@example.com").
-		WillReturnRows(sqlmock.NewRows([]string{"id", "verified", "token_expires_at"}).AddRow("user-1", false, time.Now()))
+		WillReturnRows(sqlmock.NewRows([]string{"id", "tenant_id", "verified", "token_expires_at"}).AddRow("user-1", "tenant-1", false, time.Now()))
+	// A concurrent resend already stamped the cooldown: nothing is queued.
+	mock.ExpectBegin()
 	mock.ExpectExec("UPDATE commodore.users.*token_expires_at <=").
 		WithArgs(sqlmock.AnyArg(), sqlmock.AnyArg(), "user-1", sqlmock.AnyArg()).
 		WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectCommit()
 
 	resp, err := s.ResendVerification(context.Background(), &commodorepb.ResendVerificationRequest{Email: "user@example.com"})
 	if err != nil {
@@ -206,6 +213,40 @@ func TestResendVerificationCooldownIsAtomic(t *testing.T) {
 	}
 	if !resp.GetSuccess() || !strings.Contains(resp.GetMessage(), "if an account exists") {
 		t.Fatalf("response = %#v, want generic success", resp)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// A resend that wins the cooldown queues delivery in the same transaction, so
+// an SMTP failure leaves a retried obligation instead of a lost email.
+func TestResendVerificationQueuesDeliveryWithCooldown(t *testing.T) {
+	s, mock, done := newMockServer(t)
+	defer done()
+	kicked := false
+	s.accountEmailKickFn = func() { kicked = true }
+	mock.ExpectQuery("SELECT id, tenant_id").
+		WithArgs("user@example.com").
+		WillReturnRows(sqlmock.NewRows([]string{"id", "tenant_id", "verified", "token_expires_at"}).AddRow("user-1", "tenant-1", false, time.Now().Add(-time.Hour)))
+	mock.ExpectBegin()
+	mock.ExpectExec("UPDATE commodore.users.*token_expires_at <=").
+		WithArgs(sqlmock.AnyArg(), sqlmock.AnyArg(), "user-1", sqlmock.AnyArg()).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectExec("INSERT INTO commodore.account_email_outbox").
+		WithArgs("user-1", "tenant-1", accountEmailPurposeVerification).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectCommit()
+
+	resp, err := s.ResendVerification(context.Background(), &commodorepb.ResendVerificationRequest{Email: "user@example.com"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !resp.GetSuccess() {
+		t.Fatalf("response = %#v, want generic success", resp)
+	}
+	if !kicked {
+		t.Fatal("queued verification email was not handed to the outbox for immediate delivery")
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatal(err)

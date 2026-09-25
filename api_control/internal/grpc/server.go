@@ -253,6 +253,12 @@ type CommodoreServer struct {
 	// each cell via Quartermaster service discovery (resolveFoghornForClusterDirect); wired tests inject a deterministic
 	// fake so the full claim→dispatch→retry→finalize loop can run over real Postgres without a live Foghorn.
 	streamThumbnailDeleteFn func(ctx context.Context, streamID, tenantID, clusterID string) error
+	// verificationEmailSendFn is a test seam for SMTP delivery of a verification link. Production leaves it nil
+	// and the account email outbox sends through sendVerificationEmail.
+	verificationEmailSendFn func(email, token string) error
+	// accountEmailKickFn replaces the immediate post-commit outbox drain in handler tests that run on a scripted
+	// sqlmock, where a background claim would race the script. Production leaves it nil.
+	accountEmailKickFn func()
 }
 
 type turnstileVerifier interface {
@@ -4734,7 +4740,9 @@ func (s *CommodoreServer) Register(ctx context.Context, req *commodorepb.Registe
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "failed to generate verification token: %v", err)
 	}
-	tokenHash := hashToken(verificationToken) // Store hash, send raw in email
+	// The stored hash only opens the 24h verification window; the account email outbox replaces it with the token
+	// it actually emails.
+	tokenHash := hashToken(verificationToken)
 	tokenExpiry := time.Now().Add(24 * time.Hour)
 
 	// Check if this is the first user for the tenant (becomes owner)
@@ -4761,6 +4769,9 @@ func (s *CommodoreServer) Register(ctx context.Context, req *commodorepb.Registe
 		}); insertErr != nil {
 			return insertErr
 		}
+		if enqueueErr := enqueueAccountEmailTx(ctx, tx, userID, tenantID, accountEmailPurposeVerification); enqueueErr != nil {
+			return enqueueErr
+		}
 		return s.enqueueAuthEventTx(ctx, tx, eventAuthRegistered, userID, tenantID, "password", "")
 	})
 
@@ -4777,15 +4788,8 @@ func (s *CommodoreServer) Register(ctx context.Context, req *commodorepb.Registe
 		return nil, status.Errorf(codes.Internal, "failed to create user: %v", err)
 	}
 
-	// Send verification email (best effort, don't fail registration)
-	if err := s.sendVerificationEmail(email, verificationToken); err != nil {
-		s.logger.WithFields(logging.Fields{
-			"user_id":   userID,
-			"tenant_id": tenantID,
-			"email":     email,
-			"error":     err,
-		}).Error("Failed to send verification email")
-	}
+	// The verification email committed with the user; deliver it now, retried by the outbox worker on failure.
+	s.kickAccountEmailOutbox()
 
 	// Sync to Listmonk (async, best effort)
 	if s.listmonkClient != nil {
@@ -5768,44 +5772,35 @@ func (s *CommodoreServer) ResendVerification(ctx context.Context, req *commodore
 		}
 	}
 
-	// Generate new verification token
-	verificationToken, err := generateSecureToken(32)
+	// Stamp the cooldown and queue delivery atomically. The stamped hash only
+	// marks the new window; the outbox mints the token that is emailed.
+	placeholderToken, err := generateSecureToken(32)
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "failed to generate verification token: %v", err)
 	}
-	tokenHash := hashToken(verificationToken)
-	tokenExpiry := time.Now().Add(24 * time.Hour)
-
-	// Update user with new token
-	rowsAffected, err := queries.UpdateVerificationTokenIfAllowed(ctx, commodoredb.UpdateVerificationTokenIfAllowedParams{
-		VerificationToken: sql.NullString{String: tokenHash, Valid: true},
-		TokenExpiresAt:    sql.NullTime{Time: tokenExpiry, Valid: true},
-		ID:                resendUser.ID,
-		CooldownCutoff:    sql.NullTime{Time: time.Now().Add(23*time.Hour + 55*time.Minute), Valid: true},
+	var rowsAffected int64
+	err = s.withEventTx(ctx, func(tx *sql.Tx) error {
+		var updateErr error
+		rowsAffected, updateErr = commodoredb.New(tx).UpdateVerificationTokenIfAllowed(ctx, commodoredb.UpdateVerificationTokenIfAllowedParams{
+			VerificationToken: sql.NullString{String: hashToken(placeholderToken), Valid: true},
+			TokenExpiresAt:    sql.NullTime{Time: time.Now().Add(24 * time.Hour), Valid: true},
+			ID:                resendUser.ID,
+			CooldownCutoff:    sql.NullTime{Time: time.Now().Add(23*time.Hour + 55*time.Minute), Valid: true},
+		})
+		if updateErr != nil || rowsAffected == 0 {
+			return updateErr
+		}
+		return enqueueAccountEmailTx(ctx, tx, resendUser.ID, resendUser.TenantID, accountEmailPurposeVerification)
 	})
 	if err != nil {
-		return nil, status.Errorf(codes.Internal, "failed to generate verification token: %v", err)
+		return nil, status.Errorf(codes.Internal, "failed to queue verification email: %v", err)
 	}
 	if rowsAffected == 0 {
 		return genericResendVerificationResponse(), nil
 	}
 
-	// Send verification email
-	if err := s.sendVerificationEmail(email, verificationToken); err != nil {
-		s.logger.WithFields(logging.Fields{
-			"user_id": resendUser.ID,
-			"email":   email,
-			"error":   err,
-		}).Error("Failed to send verification email")
-		//nolint:nilerr // the public response must not reveal delivery or account state
-		return genericResendVerificationResponse(), nil
-	}
-
-	s.logger.WithFields(logging.Fields{
-		"user_id": resendUser.ID,
-		"email":   email,
-	}).Info("Verification email resent")
-
+	s.logger.WithField("user_id", resendUser.ID).Info("Verification email queued for resend")
+	s.kickAccountEmailOutbox()
 	return genericResendVerificationResponse(), nil
 }
 
@@ -10026,6 +10021,10 @@ func NewGRPCServer(ctx context.Context, cfg CommodoreServerConfig) (*grpc.Server
 	// Drain commodore.stream_cleanup_outbox: durably deliver a deleted stream's thumbnail-cleanup obligation to
 	// Foghorn, retried until acked, so a live stream's thumbnails never leak on a best-effort delivery failure.
 	go commodoreServer.runStreamCleanupOutboxWorker(context.Background())
+
+	// Drain commodore.account_email_outbox: verification emails retry through SMTP outages instead of being
+	// attempted once and lost.
+	go commodoreServer.runAccountEmailOutboxWorker(context.Background())
 
 	// Drain commodore.service_event_outbox to Decklog: a Decklog outage degrades to
 	// outbox-backlog growth rather than dropped events.

@@ -1144,6 +1144,8 @@ verify-schema: verify-foghorn-test-selection
 	@cd api_control && go test -tags schema_verify -run 'TestStreamCleanupOutboxLoop_DeliveryOutageConverges_RealPG|TestUpdateArtifactCatalogSnapshot_ServingClusterEqualRevisionRepair_RealPG|TestStreamThumbnailCleanup_DispatchesEveryOwningCell_RealPG|TestRecordStreamActiveCluster_ServiceOnly_DoesNotTouchServingSet_RealPG|TestClearStreamActiveCluster_ReleasesManagedClaimAfterSoftDelete_RealPG|TestDeleteStream_RoutesToEveryServingCell_RealPG|TestRegisterStreamThumbnailServingCell_FencesOnDeletion_RealPG|TestStreamThumbnailCleanup_HangingCellDoesNotStarveSiblings_RealPG|TestRegisterVsDeleteStream_Linearizes_RealPG|TestStreamCleanupOutbox_ThumbnailPhaseMarkedThenSkipped_RealPG' -count=1 -timeout 600s ./internal/grpc/
 	@echo "Running real-engine ingest placement-claim ownership tests (Docker: same-cluster theft, reserve-vs-refresh, lapse, owner-fenced renew/release, cross-writer isolation)..."
 	@cd api_control && go test -tags schema_verify -run '$(COMMODORE_INGEST_CLAIM_REALPG_TESTS)' -count=1 -timeout 600s ./internal/grpc/
+	@echo "Running real-engine account email outbox test (Docker: failed SMTP send retries to delivery, only the delivered link verifies, expired requests abandon)..."
+	@cd api_control && go test -tags schema_verify -run 'TestAccountEmailOutbox_RetriesUntilDelivered_RealPG' -count=1 -timeout 600s ./internal/grpc/
 
 verify-schema-migrations: verify-foghorn-test-selection verify-schema-migrations-core verify-schema-yugabyte
 

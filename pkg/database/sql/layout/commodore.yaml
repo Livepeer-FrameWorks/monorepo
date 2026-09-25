@@ -44,6 +44,7 @@ distributed_tables:
   - commodore.service_event_outbox
   - commodore.domain_event_outbox
   - commodore.stream_cleanup_outbox
+  - commodore.account_email_outbox
   - commodore.signing_key_audit
   - commodore.policy_bundle_versions
   - commodore.media_placement_changes
