@@ -4,6 +4,8 @@ import (
 	"net/url"
 	"path"
 	"strings"
+
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/mist"
 )
 
 // RelayArtifactPath is the URL prefix Helmsman uses for its internal
@@ -123,11 +125,15 @@ func StreamInternalFromRelayURL(s string) string {
 	if !strings.HasPrefix(u.Path, RelayArtifactPath) {
 		return ""
 	}
-	rest := strings.TrimPrefix(u.Path, RelayArtifactPath)
+	rest := strings.TrimPrefix(u.EscapedPath(), RelayArtifactPath)
 	parts := strings.Split(rest, "/")
 	// Stream-scoped clip: /clip/<stream>/<hash>.<ext>[.dtsh]
 	if len(parts) >= 3 && parts[0] == "clip" {
-		return parts[1]
+		stream, err := mist.DecodeStreamNamePath(parts[1])
+		if err != nil {
+			return ""
+		}
+		return stream
 	}
 	return ""
 }

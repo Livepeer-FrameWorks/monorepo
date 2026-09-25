@@ -385,6 +385,9 @@ func canonicalLivepeerManifestID(manifestID string) string {
 
 // extractManifestID parses the manifestID from a go-livepeer push URL.
 // Expected path: /live/<manifestID>/<segNum>.ts (or just /live/<manifestID>/...)
+// The segment is decoded with the shared stream-name codec: the gateway
+// forwards the push target with one of MistServer's encoding layers still in
+// place, so a single url.Parse decode leaves "live%2b..." instead of "live+...".
 func extractManifestID(rawURL string) string {
 	parsed, err := url.Parse(rawURL)
 	if err != nil {
@@ -392,11 +395,15 @@ func extractManifestID(rawURL string) string {
 	}
 
 	// Path: /live/<manifestID>/0.ts
-	parts := strings.Split(strings.Trim(parsed.Path, "/"), "/")
+	parts := strings.Split(strings.Trim(parsed.EscapedPath(), "/"), "/")
 	if len(parts) < 2 || parts[0] != "live" {
 		return ""
 	}
-	return parts[1]
+	manifestID, err := mist.DecodeStreamNamePath(parts[1])
+	if err != nil {
+		return ""
+	}
+	return manifestID
 }
 
 // LivepeerAuthRejection reasons reported via metrics + structured log.

@@ -7,6 +7,7 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/mist"
 	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
 	"github.com/gin-gonic/gin"
 
@@ -367,5 +368,24 @@ func TestBlockServeNoAuthHeaderForS3URL(t *testing.T) {
 	}
 	if gotAuth != "" {
 		t.Fatalf("upstream Authorization=%q want empty for S3 URL", gotAuth)
+	}
+}
+
+// Foghorn mints clip grant paths with the shared stream-name codec; a pulling
+// MistServer percent-encodes '+' (twice up to v0.3.8). The authorizer must see
+// the path the grant was minted with, whichever form arrived.
+func TestPeerAuthMiddleware_ClipStreamSegmentComparesInCodecForm(t *testing.T) {
+	minted := "/internal/artifact/clip/" + mist.EncodeStreamNamePath("live+stream") + "/" + testPeerHash + ".mp4"
+	for _, requested := range []string{
+		"/internal/artifact/clip/live+stream/" + testPeerHash + ".mp4",
+		"/internal/artifact/clip/live%2Bstream/" + testPeerHash + ".mp4",
+		"/internal/artifact/clip/live%252Bstream/" + testPeerHash + ".mp4",
+	} {
+		authz := &fakeAuthorizer{allow: true}
+		r := newAuthRouter(newAuthTestServer(t, authz))
+		doSynthGet(r, "10.0.0.5:54321", requested, "Bearer GRANT-XYZ")
+		if authz.lastPath != minted {
+			t.Errorf("request %q authorized as %q, want minted path %q", requested, authz.lastPath, minted)
+		}
 	}
 }

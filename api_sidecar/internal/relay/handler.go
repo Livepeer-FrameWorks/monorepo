@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"frameworks/api_sidecar/internal/admission"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/mist"
 	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
 	"github.com/gin-gonic/gin"
 )
@@ -107,7 +108,32 @@ func parseClipWildcardPath(p string) (string, string) {
 	if len(parts) != 2 || !safeRelayPathSegment(parts[0]) || !safeRelayPathSegment(parts[1]) {
 		return "", ""
 	}
-	return parts[0], parts[1]
+	stream, err := mist.DecodeStreamNamePath(parts[0])
+	if err != nil {
+		return "", ""
+	}
+	return stream, parts[1]
+}
+
+// canonicalRelayRequestPath re-encodes the clip stream segment of an escaped
+// relay request path through the shared stream-name codec, so a client that
+// encoded the name differently still compares equal to Foghorn's grant path.
+// Other paths are unchanged; undecodable clip segments fail the grant comparison.
+func canonicalRelayRequestPath(escaped string) string {
+	const clipPrefix = "/internal/artifact/clip/"
+	rest, ok := strings.CutPrefix(escaped, clipPrefix)
+	if !ok {
+		return escaped
+	}
+	stream, file, ok := strings.Cut(rest, "/")
+	if !ok {
+		return escaped
+	}
+	name, err := mist.DecodeStreamNamePath(stream)
+	if err != nil {
+		return escaped
+	}
+	return clipPrefix + mist.EncodeStreamNamePath(name) + "/" + file
 }
 
 func (s *Server) serveFileWithStream(c *gin.Context, kind, streamInternal string) {

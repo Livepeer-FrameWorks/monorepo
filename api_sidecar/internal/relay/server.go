@@ -340,13 +340,14 @@ func (s *Server) peerAuthMiddleware() gin.HandlerFunc {
 			c.AbortWithStatus(http.StatusUnauthorized)
 			return
 		}
-		// Authorize against the escaped path: producers mint the grant's allowed
-		// paths with url.PathEscape on the stream segment, so the comparison must
-		// use the same encoding. c.Request.URL.Path is percent-decoded by
-		// net/http and would not match a grant path whose stream name contains an
-		// escapable character (the hash/ext segments are escape-free, so hash
-		// extraction below is unaffected).
-		reqPath := c.Request.URL.EscapedPath()
+		// Authorize against the escaped path re-encoded through the shared
+		// stream-name codec: producers mint the grant's allowed paths with the
+		// codec, and the client may have encoded the stream segment differently.
+		// c.Request.URL.Path is percent-decoded by net/http and would not match a
+		// grant path whose stream name contains an escapable character (the
+		// hash/ext segments are escape-free, so hash extraction below is
+		// unaffected).
+		reqPath := canonicalRelayRequestPath(c.Request.URL.EscapedPath())
 		if s.authzCached(grantID, reqPath) {
 			c.Next()
 			return

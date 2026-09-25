@@ -5,7 +5,6 @@ import (
 	"database/sql"
 	"errors"
 	"io"
-	"net/url"
 	"strings"
 	"sync"
 	"time"
@@ -18,6 +17,7 @@ import (
 	"frameworks/api_balancing/internal/state"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/ctxkeys"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/mist"
 	foghornfederationpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/foghorn_federation"
 	sharedpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/shared"
 
@@ -909,11 +909,10 @@ func peerRelayArtifactPath(artifactType, artifactHash, format, streamInternalNam
 		if stream == "" {
 			return ""
 		}
-		// Escape the stream segment to match the local relay-URL builder
-		// (triggers/relay_url.go) so the minted grant path and the path the
-		// peer actually requests are byte-identical, and an unusual stream
-		// name can't produce a malformed/misrouted URL.
-		return "/internal/artifact/clip/" + url.PathEscape(stream) + "/" + artifactHash + "." + ext
+		// Encode the stream segment with the shared stream-name codec, as the
+		// local relay-URL builder (triggers/relay_url.go) does, so the minted
+		// grant path and the path the peer actually requests are byte-identical.
+		return "/internal/artifact/clip/" + mist.EncodeStreamNamePath(stream) + "/" + artifactHash + "." + ext
 	case "vod", "chapter", "":
 		return "/internal/artifact/vod/" + artifactHash + "." + ext
 	default:

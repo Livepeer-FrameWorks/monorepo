@@ -397,6 +397,69 @@ func assertJSONEqual(t *testing.T, want, got interface{}) {
 	}
 }
 
+// The gateway forwards Mist's push target with one of Mist's two encoding
+// layers left: the webhook URL carries live%252b<name>-<suffix>. Every form a
+// hop can deliver must authorize against a token minted for live+<name>.
+func TestHandleLivepeerAuthAcceptsGatewayWireEncodedManifest(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	sm := configureLivepeerAuthNode(t, true, true, false)
+	processesJSON := `[{"process":"Livepeer","target_profiles":[{"name":"360p","bitrate":900000,"height":360,"profile":"H264ConstrainedHigh"}],"workload":"live","deadline_ms":1000,"min_speed":1,"frameworks_gateway_cluster_ids":["media-gateway"]}]`
+	digest, err := mist.LivepeerJobSpecDigest(processesJSON)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := sm.UpdateStreamFromBuffer("live+stream", "stream", "edge-1", "tenant-1", "FULL", ""); err != nil {
+		t.Fatal(err)
+	}
+	sm.SetStreamStreamID("stream", "stream-id")
+	if _, err := sm.BindStreamLivepeerAuth("stream", processesJSON, digest, "state:generation-1"); err != nil {
+		t.Fatal(err)
+	}
+	token := mintLivepeerAuthToken(t, control.TranscodeJobClaims{
+		ManifestID: "live+stream", AttemptOrGeneration: "state:generation-1", Session: "state:generation-1", SpecDigest: digest,
+	})
+	post := func(url string) *httptest.ResponseRecorder {
+		body, err := json.Marshal(livepeerAuthRequest{
+			URL: url, JobToken: token, RemoteIP: "203.0.113.4",
+			Source:   livepeerSource{Width: 1280, Height: 720, FPS: 30, Codec: "h264"},
+			Profiles: []livepeerJSONProfile{{"name": "360p", "bitrate": 900000, "height": 360, "profile": "H264ConstrainedHigh"}},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		w := httptest.NewRecorder()
+		c, _ := gin.CreateTestContext(w)
+		c.Request = httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/webhooks/livepeer/auth", bytes.NewReader(body))
+		c.Request.Header.Set("Content-Type", "application/json")
+		HandleLivepeerAuth(c)
+		return w
+	}
+	for _, url := range []string{
+		"http://gw:8935/live/live%252bstream-ABCDEFGH/0.ts",
+		"http://gw:8935/live/live%2Bstream-ABCDEFGH/0.ts",
+		"http://gw:8935/live/live%2bstream-ABCDEFGH/0.ts",
+		"http://gw:8935/live/live+stream-ABCDEFGH/0.ts",
+	} {
+		if w := post(url); w.Code != http.StatusOK {
+			t.Errorf("%s: status=%d body=%s", url, w.Code, w.Body.String())
+		}
+	}
+	if w := post("http://gw:8935/live/live%2zstream-ABCDEFGH/0.ts"); w.Code != http.StatusForbidden {
+		t.Errorf("malformed escape: status=%d, want 403", w.Code)
+	}
+}
+
+func TestVerifyLivepeerJobTokenBindsProcessingManifestFromWireURL(t *testing.T) {
+	configureLivepeerAuthNode(t, true, false, true)
+	token := mintLivepeerAuthToken(t, control.TranscodeJobClaims{
+		ManifestID: "processing+abc123", JobID: "job-1", AttemptOrGeneration: "2", Session: "job-1", SpecDigest: strings.Repeat("a", 64),
+	})
+	manifestID := extractManifestID("http://gw:8935/live/processing%252babc123-ABCDEFGH/0.ts")
+	if _, reason := verifyLivepeerJobToken(manifestID, token, time.Now()); reason != "" {
+		t.Fatalf("processing manifest %q rejected: %s", manifestID, reason)
+	}
+}
+
 func TestExtractManifestID(t *testing.T) {
 	cases := []struct {
 		raw  string
@@ -405,6 +468,9 @@ func TestExtractManifestID(t *testing.T) {
 		{"http://gw:8935/live/abc123/0.ts", "abc123"},
 		{"http://gw:8935/live/abc123/segment-12.ts", "abc123"},
 		{"/live/foo/bar.ts", "foo"},
+		{"http://gw:8935/live/live%252bname-ABCDEFGH/0.ts", "live+name-ABCDEFGH"},
+		{"http://gw:8935/live/live%2Bname-ABCDEFGH/0.ts", "live+name-ABCDEFGH"},
+		{"http://gw:8935/live/live%zzname/0.ts", ""},
 		{"http://gw:8935/notlive/abc/0.ts", ""},
 		{"", ""},
 		{"://broken", ""},

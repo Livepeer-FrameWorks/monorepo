@@ -3,12 +3,12 @@ package triggers
 import (
 	"context"
 	"fmt"
-	"net/url"
 	"strings"
 
 	"frameworks/api_balancing/internal/artifacts"
 	"frameworks/api_balancing/internal/control"
 	"frameworks/api_balancing/internal/database/foghorndb"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/mist"
 )
 
 // buildVODRelayURL constructs the Mist source URL for a VOD/clip artifact
@@ -56,15 +56,16 @@ func buildVODRelayURL(nodeID, kind, artifactHash, format, streamInternal string)
 // no valid path exists. Clips REQUIRE the stream segment — Helmsman only serves
 // them on the nested /clip/<stream>/<file> route and 404s a flat clip path — so
 // an empty stream yields "" (caller aborts), never a flat fallback. VOD/upload
-// are flat. The stream segment is PathEscaped to match the federation and
-// same-cluster peer-relay builders so the minted grant path and the requested
-// path are byte-identical. ext must already be normalized (e.g. ".mp4").
+// are flat. The stream segment goes through the shared stream-name codec, as in
+// the federation and same-cluster peer-relay builders, so the minted grant path
+// and the requested path are byte-identical. ext must already be normalized
+// (e.g. ".mp4").
 func relayArtifactPath(kind, artifactHash, ext, streamInternal string) string {
 	if kind == "clip" {
 		if streamInternal == "" {
 			return ""
 		}
-		return fmt.Sprintf("/internal/artifact/clip/%s/%s%s", url.PathEscape(streamInternal), artifactHash, ext)
+		return fmt.Sprintf("/internal/artifact/clip/%s/%s%s", mist.EncodeStreamNamePath(streamInternal), artifactHash, ext)
 	}
 	return fmt.Sprintf("/internal/artifact/%s/%s%s", kind, artifactHash, ext)
 }

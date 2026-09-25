@@ -172,7 +172,7 @@ func bindIngestKey(u *url.URL, protocol, streamKey string) string {
 		u.RawQuery = query.Encode()
 		return u.String()
 	}
-	return strings.ReplaceAll(u.String(), "$", url.PathEscape(streamKey))
+	return strings.ReplaceAll(u.String(), "$", EncodeStreamNamePath(streamKey))
 }
 
 // SupportsIngestProtocol validates the actual listener without a publishing

@@ -114,7 +114,7 @@ func ResolvePlaybackURL(outputs map[string]any, publicBase, protocol, streamName
 	if protocol == "dtsc" && u.Port() == "" {
 		u.Host = net.JoinHostPort(u.Hostname(), "4200")
 	}
-	return strings.ReplaceAll(u.String(), "$", url.PathEscape(streamName))
+	return strings.ReplaceAll(u.String(), "$", EncodeStreamNamePath(streamName))
 }
 
 func playbackTemplate(outputs map[string]any, protocol string) string {

@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"frameworks/api_balancing/internal/control"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/mist"
 	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
 	"google.golang.org/protobuf/proto"
 )
@@ -47,8 +48,10 @@ func (p *Processor) handleConnPlay(trigger *ipcpb.MistTrigger) (string, bool, er
 		return "", true, errors.New("source connection address is invalid")
 	}
 	u, err := url.Parse(connection.GetRequestUrl())
-	if err != nil || (u.Scheme != "dtsc" && u.Scheme != "dtscs") || u.Host == "" ||
-		u.Fragment != "" || u.User != nil || strings.TrimPrefix(u.Path, "/") != connection.GetStreamName() {
+	if err != nil || (u.Scheme != "dtsc" && u.Scheme != "dtscs") || u.Host == "" || u.Fragment != "" || u.User != nil {
+		return "", true, errors.New("source connection URL is invalid")
+	}
+	if requested, decodeErr := mist.DecodeStreamNamePath(strings.TrimPrefix(u.EscapedPath(), "/")); decodeErr != nil || requested != connection.GetStreamName() {
 		return "", true, errors.New("source connection URL is invalid")
 	}
 	ctx := control.MediaRequestContext(context.Background(), "mist_conn_play")

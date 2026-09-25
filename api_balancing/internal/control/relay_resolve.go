@@ -19,6 +19,7 @@ import (
 	"frameworks/api_balancing/internal/database/foghorndb"
 	"frameworks/api_balancing/internal/state"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/mist"
 	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
@@ -378,10 +379,11 @@ func fillPeerRelayFromLocalOrigin(
 		if stream == "" {
 			return false
 		}
-		// Escape the stream segment, matching the federation peer builder and
-		// the local STREAM_SOURCE builder, so the minted grant path and the
-		// path Helmsman actually receives are byte-identical.
-		path = "/internal/artifact/clip/" + url.PathEscape(stream) + "/" + req.GetAssetHash() + "." + ext
+		// Encode the stream segment with the shared stream-name codec, as the
+		// federation peer builder and the local STREAM_SOURCE builder do, so the
+		// minted grant path and the path Helmsman actually receives are
+		// byte-identical.
+		path = "/internal/artifact/clip/" + mist.EncodeStreamNamePath(stream) + "/" + req.GetAssetHash() + "." + ext
 	case "vod", "upload":
 		path = "/internal/artifact/" + req.GetAssetKind() + "/" + req.GetAssetHash() + "." + ext
 	default:
