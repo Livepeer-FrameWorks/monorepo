@@ -1500,6 +1500,11 @@ func (s *PeriscopeServer) GetTrackListEvents(ctx context.Context, req *periscope
 	if streamID == "" {
 		return nil, status.Error(codes.InvalidArgument, "stream_id required")
 	}
+	// stream_id is a UUID column; any other value is a caller error, not a
+	// database failure.
+	if _, parseErr := uuid.Parse(streamID); parseErr != nil {
+		return nil, status.Error(codes.InvalidArgument, "stream_id must be a UUID")
+	}
 
 	startTime, endTime, err := validateTimeRangeProto(req.GetTimeRange())
 	if err != nil {

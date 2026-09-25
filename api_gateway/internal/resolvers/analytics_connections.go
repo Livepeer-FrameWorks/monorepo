@@ -702,6 +702,10 @@ func (r *Resolver) DoGetTrackListEventsConnection(ctx context.Context, stream st
 	if stream == "" {
 		return nil, fmt.Errorf("stream_id required")
 	}
+	stream, err := normalizeStreamID(stream)
+	if err != nil {
+		return nil, err
+	}
 
 	if tenantIDFromContext(ctx) == "" {
 		return nil, fmt.Errorf("tenant context required")
@@ -3197,6 +3201,11 @@ func (r *Resolver) DoGetRoutingEfficiency(ctx context.Context, streamID *string,
 	if middleware.IsDemoMode(ctx) {
 		return demo.GenerateRoutingEfficiency(), nil
 	}
+	normalized, err := normalizeStreamIDPtr(streamID)
+	if err != nil {
+		return nil, err
+	}
+	streamID = normalized
 
 	tenantID := tenantIDFromContext(ctx)
 	if tenantID == "" {
@@ -3253,6 +3262,11 @@ func (r *Resolver) DoGetStreamHealthSummary(ctx context.Context, streamID *strin
 	if middleware.IsDemoMode(ctx) {
 		return demo.GenerateStreamHealthSummary(), nil
 	}
+	normalized, err := normalizeStreamIDPtr(streamID)
+	if err != nil {
+		return nil, err
+	}
+	streamID = normalized
 
 	tenantID := tenantIDFromContext(ctx)
 	if tenantID == "" {
@@ -3310,6 +3324,11 @@ func (r *Resolver) DoGetClientQoeSummary(ctx context.Context, streamID *string, 
 	if middleware.IsDemoMode(ctx) {
 		return demo.GenerateClientQoeSummary(), nil
 	}
+	normalized, err := normalizeStreamIDPtr(streamID)
+	if err != nil {
+		return nil, err
+	}
+	streamID = normalized
 
 	tenantID := tenantIDFromContext(ctx)
 	if tenantID == "" {
