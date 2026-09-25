@@ -145,6 +145,13 @@ type DVRManager struct {
 	startupTimeout      time.Duration
 	pushMonitorInterval time.Duration
 
+	// writerEnds holds Mist's recent RECORDING_END/PUSH_END reports by push
+	// identity. They arrive through Mist triggers, independent of the job map:
+	// a push can end milliseconds after PushStart, while the job is still being
+	// registered, so they are kept by identity and matched when the monitor
+	// reconciles an unconfirmed push. Guarded by mutex; pruned by age.
+	writerEnds []dvrWriterEnd
+
 	// stopTombstones records, per dvr_hash, the highest DVRStop command generation
 	// seen. A DVRStart whose generation is <= a hash's stop tombstone is superseded by
 	// a newer stop and MUST be rejected idempotently — otherwise a stop that overtook a
@@ -1919,6 +1926,9 @@ func (dm *DVRManager) startDVRPush(job *DVRJob) error {
 	// The job is still private (not yet in dm.jobs and no monitor running),
 	// so reading its identity here races with no other writer.
 	snap := pushIdentity{streamName: job.StreamName, targetURI: job.TargetURI, dvrHash: job.DVRHash}
+	// Taken before PushStart is sent: an end Mist reports for this push can
+	// arrive before ensureInitialPush returns.
+	job.LastPushAttempt = time.Now()
 	pushID, outcome, err := dm.ensureInitialPush(snap, job.Logger)
 	switch outcome {
 	case dvrPushConfirmed:
@@ -2232,6 +2242,11 @@ func (dm *DVRManager) maintainPushStatus(job *DVRJob) {
 	// STREAM_END drives StopDVRForEndedSource on Foghorn, which finalizes it. Stop
 	// remains safe regardless — StopRecordingWithSender stops by identity when the
 	// push id is unknown.
+	//
+	// The one exception is Mist's own report that this identity's writer ended
+	// (RECORDING_END/PUSH_END) after the push was issued, while the push list no
+	// longer shows it and the job produced no segments: then no writer exists,
+	// and the recreate path below cannot create a second one.
 	if snap.pushID == 0 {
 		if push, ok := findExactDVRPush(pushes, snap.streamName, snap.targetURI, snap.dvrHash); ok {
 			dm.withFreshGeneration(snap, func(j *DVRJob) {
@@ -2242,8 +2257,15 @@ func (dm *DVRManager) maintainPushStatus(job *DVRJob) {
 				"dvr_hash": snap.dvrHash,
 				"push_id":  push.ID,
 			}).Info("Reconciled accepted-but-unconfirmed DVR push by identity")
+			return
 		}
-		return
+		if segmentCount > 0 || !dm.writerEndedSince(snap, lastAttempt) {
+			return
+		}
+		job.Logger.WithFields(logging.Fields{
+			"dvr_hash": snap.dvrHash,
+			"target":   snap.targetURI,
+		}).Warn("DVR push ended before producing a segment; recreating")
 	}
 
 	// Look for our push
@@ -2316,12 +2338,15 @@ func (dm *DVRManager) maintainPushStatus(job *DVRJob) {
 			}
 		}
 
-		// Attempt to recreate push without the lock held.
+		// Attempt to recreate push without the lock held. The attempt time is
+		// taken before PushStart so an end Mist reports for this push while it
+		// is still being confirmed counts as ending this attempt.
+		issuedAt := time.Now()
 		newPushID, issued, err := dm.createOrRecreatePush(snap)
 		if err != nil {
 			dm.withFreshGeneration(snap, func(j *DVRJob) {
 				j.RetryCount++
-				j.LastPushAttempt = time.Now()
+				j.LastPushAttempt = issuedAt
 				if issued {
 					// A push may be live but unconfirmed — the next pass must NOT
 					// re-issue PushStart (double writer). PushID 0 routes it to the
@@ -2338,7 +2363,10 @@ func (dm *DVRManager) maintainPushStatus(job *DVRJob) {
 			j.PushID = newPushID
 			j.pushGeneration++
 			j.RetryCount++
-			j.LastPushAttempt = time.Now()
+			j.LastPushAttempt = issuedAt
+			if j.Status == "starting" {
+				j.Status = "recording"
+			}
 		})
 		if !committed {
 			// A stop or a concurrent recreate won; the push we just started is
@@ -2544,13 +2572,72 @@ func (dm *DVRManager) ensureInitialPush(snap pushIdentity, logger logging.Logger
 			}
 			return 0, dvrPushNotStarted, lastErr
 		}
-		logger.WithFields(logging.Fields{
-			"attempt":  attempt + 1,
-			"accepted": pushStartAccepted,
-			"stream":   snap.streamName,
-		}).Warn("DVR initial push not confirmed yet; retrying")
+		fields := logging.Fields{"attempt": attempt + 1, "stream": snap.streamName, "error": errString(lastErr)}
+		if pushStartAccepted {
+			logger.WithFields(fields).Info("DVR push accepted; waiting for it to appear in the push list")
+		} else {
+			logger.WithFields(fields).Warn("DVR push start rejected; retrying PushStart")
+		}
 		time.Sleep(initialPushRetryEvery)
 	}
+}
+
+// dvrWriterEndTTL bounds how long a reported writer end is kept; it only has to
+// outlive the monitor pass that reconciles the job's unconfirmed push.
+const dvrWriterEndTTL = 10 * time.Minute
+
+type dvrWriterEnd struct {
+	streamName string
+	target     string
+	at         time.Time
+}
+
+// NoteDVRWriterEnded records that Mist ended the writer pushing streamName to
+// one of targets (RECORDING_END's file path, PUSH_END's target). Mist is the
+// authority on its own writers: once it reports the end, the push is gone.
+func NoteDVRWriterEnded(streamName string, targets ...string) {
+	if dvrManager == nil {
+		return
+	}
+	dvrManager.noteWriterEnded(streamName, time.Now(), targets...)
+}
+
+func (dm *DVRManager) noteWriterEnded(streamName string, at time.Time, targets ...string) {
+	streamName = strings.TrimSpace(streamName)
+	if streamName == "" {
+		return
+	}
+	dm.mutex.Lock()
+	defer dm.mutex.Unlock()
+	kept := dm.writerEnds[:0]
+	for _, end := range dm.writerEnds {
+		if at.Sub(end.at) < dvrWriterEndTTL {
+			kept = append(kept, end)
+		}
+	}
+	dm.writerEnds = kept
+	for _, target := range targets {
+		if target = strings.TrimSpace(target); target != "" {
+			dm.writerEnds = append(dm.writerEnds, dvrWriterEnd{streamName: streamName, target: target, at: at})
+		}
+	}
+}
+
+// writerEndedSince reports whether Mist reported the end of this identity's
+// writer at or after since (the moment its PushStart was issued), so an end of
+// an earlier push against the same target never counts.
+func (dm *DVRManager) writerEndedSince(snap pushIdentity, since time.Time) bool {
+	dm.mutex.RLock()
+	defer dm.mutex.RUnlock()
+	for _, end := range dm.writerEnds {
+		if end.at.Before(since) {
+			continue
+		}
+		if dvrPushMatches(mist.PushInfo{StreamName: end.streamName, TargetURI: end.target}, snap.streamName, snap.targetURI, snap.dvrHash) {
+			return true
+		}
+	}
+	return false
 }
 
 func dvrPushMatches(push mist.PushInfo, streamName, targetURI, dvrHash string) bool {

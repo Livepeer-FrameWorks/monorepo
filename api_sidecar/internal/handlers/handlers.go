@@ -1379,6 +1379,9 @@ func HandlePushEnd(c *gin.Context) {
 
 	// Signal local processing handler if this is a processing+ push
 	if pushEnd := mistTrigger.GetPushEnd(); pushEnd != nil {
+		if !strings.HasPrefix(pushEnd.GetStreamName(), "processing+") {
+			control.NoteDVRWriterEnded(pushEnd.GetStreamName(), pushEnd.GetTargetUriBefore(), pushEnd.GetTargetUriAfter())
+		}
 		if strings.HasPrefix(pushEnd.GetStreamName(), "processing+") {
 			SignalProcessingPushEnd(ProcessingPushEndEvent{
 				StreamName:   pushEnd.GetStreamName(),
@@ -1944,8 +1947,12 @@ func HandleRecordingEnd(c *gin.Context) {
 		return
 	}
 
-	if rec := mistTrigger.GetRecordingComplete(); rec != nil && strings.HasPrefix(rec.GetStreamName(), "processing+") {
-		SignalProcessingRecordingEnd(processingRecordingEndEvent(rec))
+	if rec := mistTrigger.GetRecordingComplete(); rec != nil {
+		if strings.HasPrefix(rec.GetStreamName(), "processing+") {
+			SignalProcessingRecordingEnd(processingRecordingEndEvent(rec))
+		} else {
+			control.NoteDVRWriterEnded(rec.GetStreamName(), rec.GetFilePath())
+		}
 	}
 
 	// Durably persist before responding to Mist; forwarder drains the WAL
