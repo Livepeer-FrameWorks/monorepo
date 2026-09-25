@@ -1233,16 +1233,17 @@ func TestNodeMetricsForwardingIsCoalescedAndDoesNotBlockUpdates(t *testing.T) {
 	go func() { pm.processUpdates(); close(updatesDone) }()
 	go func() { pm.forwardNodeMetricsLoop(); close(forwardDone) }()
 
-	pm.updateChannel <- models.NodeUpdate{NodeID: "node-a", BaseURL: runtime.baseURL, JSONData: map[string]any{"cpu": float64(1)}}
+	// Mist cpu is per-mille, forwarded unchanged as tenths of a percent.
+	pm.updateChannel <- models.NodeUpdate{NodeID: "node-a", BaseURL: runtime.baseURL, JSONData: map[string]any{"cpu": float64(10)}}
 	<-firstStarted
-	pm.updateChannel <- models.NodeUpdate{NodeID: "node-a", BaseURL: runtime.baseURL, JSONData: map[string]any{"cpu": float64(2)}}
-	pm.updateChannel <- models.NodeUpdate{NodeID: "node-a", BaseURL: runtime.baseURL, JSONData: map[string]any{"cpu": float64(3)}}
+	pm.updateChannel <- models.NodeUpdate{NodeID: "node-a", BaseURL: runtime.baseURL, JSONData: map[string]any{"cpu": float64(20)}}
+	pm.updateChannel <- models.NodeUpdate{NodeID: "node-a", BaseURL: runtime.baseURL, JSONData: map[string]any{"cpu": float64(30)}}
 	deadline := time.Now().Add(500 * time.Millisecond)
 	for {
 		pm.mutex.RLock()
 		cpu := pm.lastJSONData["cpu"]
 		pm.mutex.RUnlock()
-		if cpu == float64(3) {
+		if cpu == float64(30) {
 			break
 		}
 		if time.Now().After(deadline) {

@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"math"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -3131,9 +3132,8 @@ func (pm *PrometheusMonitor) convertNodeAPIToMistTrigger(nodeID string, jsonData
 		// An absent outputs member in a successful metrics response means no
 		// listener was advertised. Send an empty snapshot to withdraw old URLs.
 		nodeUpdate.OutputsJson = "{}"
-		// Extract CPU usage (Mist provides integer percentage 0-100 or more)
 		if cpu, ok := jsonData["cpu"].(float64); ok {
-			nodeUpdate.CpuTenths = uint32(normalizeMistCPUPercent(cpu) * 10) // Convert % to tenths (e.g. 14% -> 140)
+			nodeUpdate.CpuTenths = mistCPUTenths(cpu)
 		}
 
 		// Extract RAM info (Mist provides bytes)
@@ -3411,20 +3411,16 @@ func validLocalDtsh(path string) bool {
 	return true
 }
 
-func normalizeMistCPUPercent(rawCPU float64) float64 {
-	if rawCPU <= 0 {
+// mistCPUTenths converts Mist's `cpu` stat, whole-system usage in per-mille
+// (controller cpuK, 0-1000), to tenths of a percent, which is the same scale.
+func mistCPUTenths(rawCPU float64) uint32 {
+	if !(rawCPU > 0) {
 		return 0
 	}
-	if rawCPU > 100 {
-		cores := runtime.NumCPU()
-		if cores > 1 {
-			rawCPU = rawCPU / float64(cores)
-		}
+	if rawCPU > 1000 {
+		return 1000
 	}
-	if rawCPU > 100 {
-		return 100
-	}
-	return rawCPU
+	return uint32(math.Round(rawCPU))
 }
 
 func evaluateNodeHealth(hasMistData bool, cpuPercent, memPercent, shmPercent float64) bool {

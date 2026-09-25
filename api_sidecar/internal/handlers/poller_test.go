@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
-	"runtime"
 	"strings"
 	"testing"
 
@@ -86,18 +85,25 @@ func TestEvaluateNodeHealth(t *testing.T) {
 	}
 }
 
-func TestNormalizeMistCPUPercent(t *testing.T) {
-	if got := normalizeMistCPUPercent(45); got != 45 {
-		t.Fatalf("expected already-normalized CPU to remain 45, got %v", got)
+// Mist reports whole-system CPU in per-mille regardless of core count;
+// the forwarded tenths-of-a-percent value uses the same scale.
+func TestMistCPUTenthsIsPerMille(t *testing.T) {
+	cases := []struct {
+		raw  float64
+		want uint32
+	}{
+		{0, 0},
+		{-3, 0},
+		{45, 45},
+		{450, 450},
+		{999.6, 1000},
+		{1000, 1000},
+		{4000, 1000},
 	}
-
-	cores := runtime.NumCPU()
-	got := normalizeMistCPUPercent(float64(cores) * 90)
-	if cores > 1 && got != 90 {
-		t.Fatalf("expected multicore CPU to normalize to 90, got %v", got)
-	}
-	if got := normalizeMistCPUPercent(float64(cores) * 150); got != 100 {
-		t.Fatalf("expected normalized CPU to cap at 100, got %v", got)
+	for _, tc := range cases {
+		if got := mistCPUTenths(tc.raw); got != tc.want {
+			t.Errorf("mistCPUTenths(%v) = %d, want %d", tc.raw, got, tc.want)
+		}
 	}
 }
 

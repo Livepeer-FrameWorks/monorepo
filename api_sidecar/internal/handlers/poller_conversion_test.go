@@ -875,8 +875,9 @@ func TestConvertNodeAPI_FullPayload(t *testing.T) {
 	if nlu.BaseUrl != "https://edge.example.com" {
 		t.Fatalf("expected public edge URL, got %q", nlu.BaseUrl)
 	}
-	if nlu.CpuTenths != 450 {
-		t.Fatalf("expected CPU tenths 450, got %d", nlu.CpuTenths)
+	// Mist's cpu is per-mille: 45 means 4.5 %, i.e. 45 tenths.
+	if nlu.CpuTenths != 45 {
+		t.Fatalf("expected CPU tenths 45, got %d", nlu.CpuTenths)
 	}
 	if nlu.RamMax != 8589934592 {
 		t.Fatalf("expected RAM max 8GB, got %d", nlu.RamMax)
@@ -972,8 +973,8 @@ func TestConvertNodeAPI_MissingFields(t *testing.T) {
 	if nlu.BaseUrl != "http://mist:4242" {
 		t.Fatalf("expected fallback to baseURL, got %q", nlu.BaseUrl)
 	}
-	if nlu.CpuTenths != 100 {
-		t.Fatalf("expected 100 cpu tenths, got %d", nlu.CpuTenths)
+	if nlu.CpuTenths != 10 {
+		t.Fatalf("expected 10 cpu tenths, got %d", nlu.CpuTenths)
 	}
 	if nlu.RamMax != 0 {
 		t.Fatalf("expected 0 RAM max, got %d", nlu.RamMax)
