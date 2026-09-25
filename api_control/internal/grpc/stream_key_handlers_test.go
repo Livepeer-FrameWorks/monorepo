@@ -35,7 +35,7 @@ func newMockServer(t *testing.T) (*CommodoreServer, sqlmock.Sqlmock, func()) {
 	if err != nil {
 		t.Fatalf("sqlmock: %v", err)
 	}
-	server := &CommodoreServer{db: db, logger: logrus.New(), tokenHasher: testTokenHasher(t)}
+	server := &CommodoreServer{db: db, logger: logrus.New(), tokenHasher: testTokenHasher(t), accountEmailKickFn: func() {}}
 	return server, mock, func() { _ = db.Close() }
 }
 
