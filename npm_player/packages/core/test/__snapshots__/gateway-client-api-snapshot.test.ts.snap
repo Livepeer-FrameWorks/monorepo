@@ -11,6 +11,7 @@ export interface GatewayClientConfig {
     protocol?: ViewerProtocol;
     maxRetries?: number;
     initialDelayMs?: number;
+    startingWindowMs?: number;
 }
 export interface GatewayClientEvents {
     statusChange: {
@@ -20,6 +21,12 @@ export interface GatewayClientEvents {
     endpointsResolved: {
         endpoints: ContentEndpoints;
     };
+    streamStarting: {
+        retryAfterMs: number;
+    };
+}
+export declare class StreamStartingError extends Error {
+    readonly code = "STREAM_STARTING";
 }
 export declare const DEFAULT_GATEWAY_URL = "https://bridge.frameworks.network/graphql";
 type CircuitBreakerState = "closed" | "open" | "half-open";
@@ -51,6 +58,7 @@ exports[`GatewayClient public API > keeps its module exports 1`] = `
   "exports": [
     "DEFAULT_GATEWAY_URL",
     "GatewayClient",
+    "StreamStartingError",
     "default",
   ],
 }

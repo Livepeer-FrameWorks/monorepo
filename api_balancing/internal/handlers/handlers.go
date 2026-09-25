@@ -2511,6 +2511,17 @@ func HandleGenericViewerPlayback(c *gin.Context) {
 			return
 		}
 
+		if errors.Is(err, control.ErrLiveSourceStarting) {
+			c.Header("Retry-After", strconv.Itoa(int(control.LiveSourceStartingRetryAfter/time.Second)))
+			respondPlaybackError(c, http.StatusServiceUnavailable, "STREAM_STARTING", "The stream is starting; retry after the advised delay", nil)
+			return
+		}
+		// Offline is a state to wait on, so it carries no Retry-After.
+		if errors.Is(err, control.ErrLiveSourceOffline) {
+			c.Header("Cache-Control", "no-store")
+			respondPlaybackError(c, http.StatusNotFound, "STREAM_OFFLINE", "The stream is offline", nil)
+			return
+		}
 		logger.WithError(err).WithFields(logging.Fields{
 			"view_key":      viewKey,
 			"internal_name": contentID,

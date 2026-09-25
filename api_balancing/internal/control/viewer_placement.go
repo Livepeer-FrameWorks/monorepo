@@ -68,6 +68,19 @@ type ViewerPlacementPermitter interface {
 
 var ErrInvalidViewerProtocol = errors.New("invalid viewer placement protocol")
 
+// Live source states a viewer resolve reports instead of a generic placement
+// failure. Starting means a current publisher is registered but not yet
+// playable; offline means no current publisher exists. Capacity and policy
+// refusals keep their own errors.
+var (
+	ErrLiveSourceStarting = errors.New("live source is starting")
+	ErrLiveSourceOffline  = errors.New("live source is offline")
+)
+
+// LiveSourceStartingRetryAfter is the resolve cadence advised to a viewer
+// while its stream's source is starting.
+const LiveSourceStartingRetryAfter = time.Second
+
 // ViewerPlacementLiveObjectID maps a live viewer request to its signed authority
 // id. A request that also names stored media is refused rather than defaulted, so
 // a live stream can never be evaluated under an artifact's policy.

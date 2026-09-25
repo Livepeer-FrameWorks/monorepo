@@ -53,6 +53,11 @@ export interface GatewayClientConfig {
   maxRetries?: number;
   /** Initial retry delay in ms (default: 500) */
   initialDelayMs?: number;
+  /**
+   * How long to keep resolving a stream the gateway reports as starting
+   * (default: 30000). Past it the resolve fails like any other.
+   */
+  startingWindowMs?: number;
 }
 
 export interface GatewayClientEvents {
@@ -60,6 +65,13 @@ export interface GatewayClientEvents {
   statusChange: { status: GatewayStatus; error?: string };
   /** Emitted when endpoints are successfully resolved */
   endpointsResolved: { endpoints: ContentEndpoints };
+  /** Emitted before each re-resolve of a stream the gateway reports as starting */
+  streamStarting: { retryAfterMs: number };
+}
+
+/** The gateway reported the stream as starting for longer than the starting window. */
+export class StreamStartingError extends Error {
+  readonly code = "STREAM_STARTING";
 }
 
 // ============================================================================
@@ -78,12 +90,18 @@ const DEFAULT_CACHE_TTL_MS = 10000;
 const CIRCUIT_BREAKER_THRESHOLD = 5; // Open after 5 consecutive failures
 const CIRCUIT_BREAKER_TIMEOUT_MS = 30000; // Half-open after 30 seconds
 const RETRYABLE_HTTP_STATUSES = new Set([408, 429, 500, 502, 503, 504]);
+const DEFAULT_STARTING_WINDOW_MS = 30000;
+const DEFAULT_STARTING_RETRY_MS = 1000;
+// A server-advised delay is clamped so a bad hint neither hot-loops nor stalls.
+const MIN_ADVISED_RETRY_MS = 250;
+const MAX_ADVISED_RETRY_MS = 5000;
 
 type CircuitBreakerState = "closed" | "open" | "half-open";
 type GraphQLErrorPayload = {
   message?: string;
   extensions?: {
     code?: string;
+    retry_after_ms?: number;
   };
 };
 
@@ -99,16 +117,28 @@ function getRetryDelay(initialDelay: number, attempt: number): number {
   return initialDelay * Math.pow(2, attempt);
 }
 
-async function waitBeforeRetry(
-  logPrefix: string,
-  attempt: number,
-  maxRetries: number,
-  initialDelay: number,
-  signal?: AbortSignal | null
-): Promise<void> {
-  const delay = getRetryDelay(initialDelay, attempt);
-  console.warn(`[${logPrefix}] Retry ${attempt + 1}/${maxRetries - 1} after ${delay}ms`);
-  await new Promise<void>((resolve, reject) => {
+function clampAdvisedDelay(ms: number): number {
+  return Math.min(MAX_ADVISED_RETRY_MS, Math.max(MIN_ADVISED_RETRY_MS, ms));
+}
+
+// The Retry-After header carries seconds or an HTTP date.
+function retryAfterHeaderMs(response: Response): number | undefined {
+  const value = response.headers?.get?.("Retry-After")?.trim();
+  if (!value) return undefined;
+  if (/^\d+$/.test(value)) return clampAdvisedDelay(Number(value) * 1000);
+  const date = Date.parse(value);
+  return Number.isNaN(date) ? undefined : clampAdvisedDelay(date - Date.now());
+}
+
+function retryAfterExtensionMs(error: GraphQLErrorPayload): number | undefined {
+  const advised = error.extensions?.retry_after_ms;
+  return typeof advised === "number" && Number.isFinite(advised)
+    ? clampAdvisedDelay(advised)
+    : undefined;
+}
+
+function sleep(delay: number, signal?: AbortSignal | null): Promise<void> {
+  return new Promise<void>((resolve, reject) => {
     if (signal?.aborted) {
       reject(new Error("Request aborted"));
       return;
@@ -125,6 +155,19 @@ async function waitBeforeRetry(
     };
     signal?.addEventListener("abort", abort, { once: true });
   });
+}
+
+async function waitBeforeRetry(
+  logPrefix: string,
+  attempt: number,
+  maxRetries: number,
+  initialDelay: number,
+  signal?: AbortSignal | null,
+  advisedDelay?: number
+): Promise<void> {
+  const delay = advisedDelay ?? getRetryDelay(initialDelay, attempt);
+  console.warn(`[${logPrefix}] Retry ${attempt + 1}/${maxRetries - 1} after ${delay}ms`);
+  await sleep(delay, signal);
 }
 
 /** The gateway rejected the resolve as invalid against its schema. */
@@ -179,13 +222,24 @@ function isRetryableGraphQLError(error: GraphQLErrorPayload): boolean {
   );
 }
 
+interface ResolveRetryPolicy {
+  maxRetries: number;
+  initialDelay: number;
+  startingWindowMs: number;
+  onStarting: (retryAfterMs: number) => void;
+}
+
+// Transient failures get maxRetries attempts. A stream reported as starting
+// is re-resolved at the advised cadence until the starting window closes,
+// without spending those attempts.
 async function fetchResolvePayloadWithRetry(
   url: string,
   options: RequestInit,
-  maxRetries: number,
-  initialDelay: number
+  policy: ResolveRetryPolicy
 ): Promise<unknown> {
+  const { maxRetries, initialDelay, startingWindowMs, onStarting } = policy;
   let lastError: Error | null = null;
+  let startingDeadline: number | null = null;
 
   for (let attempt = 0; attempt < maxRetries; attempt++) {
     let response: Response | null = null;
@@ -216,7 +270,14 @@ async function fetchResolvePayloadWithRetry(
       lastError = new Error(`Gateway GQL error ${response.status}`);
 
       if (RETRYABLE_HTTP_STATUSES.has(response.status) && attempt < maxRetries - 1) {
-        await waitBeforeRetry("GatewayClient", attempt, maxRetries, initialDelay, options.signal);
+        await waitBeforeRetry(
+          "GatewayClient",
+          attempt,
+          maxRetries,
+          initialDelay,
+          options.signal,
+          retryAfterHeaderMs(response)
+        );
         continue;
       }
 
@@ -230,10 +291,30 @@ async function fetchResolvePayloadWithRetry(
       if (isSchemaMismatchCode(gqlError.extensions?.code)) {
         throw new GatewaySchemaMismatch(gqlError.message || "GraphQL validation error");
       }
+
+      if (gqlError.extensions?.code?.toUpperCase() === "STREAM_STARTING") {
+        const delay = retryAfterExtensionMs(gqlError) ?? DEFAULT_STARTING_RETRY_MS;
+        startingDeadline ??= Date.now() + startingWindowMs;
+        if (Date.now() + delay > startingDeadline) {
+          throw new StreamStartingError("Stream is starting but did not become playable in time");
+        }
+        onStarting(delay);
+        await sleep(delay, options.signal);
+        attempt--;
+        continue;
+      }
+
       lastError = new Error(gqlError.message || "GraphQL error");
 
       if (isRetryableGraphQLError(gqlError) && attempt < maxRetries - 1) {
-        await waitBeforeRetry("GatewayClient", attempt, maxRetries, initialDelay, options.signal);
+        await waitBeforeRetry(
+          "GatewayClient",
+          attempt,
+          maxRetries,
+          initialDelay,
+          options.signal,
+          retryAfterExtensionMs(gqlError) ?? retryAfterHeaderMs(response)
+        );
         continue;
       }
 
@@ -446,6 +527,7 @@ export class GatewayClient extends TypedEventEmitter<GatewayClientEvents> {
       protocol,
       maxRetries = DEFAULT_MAX_RETRIES,
       initialDelayMs = DEFAULT_INITIAL_DELAY_MS,
+      startingWindowMs = DEFAULT_STARTING_WINDOW_MS,
     } = this.config;
 
     const gatewayUrl = configuredGatewayUrl?.trim() || DEFAULT_GATEWAY_URL;
@@ -506,8 +588,14 @@ export class GatewayClient extends TypedEventEmitter<GatewayClientEvents> {
           }),
           signal: ac.signal,
         },
-        maxRetries,
-        initialDelayMs
+        {
+          maxRetries,
+          initialDelay: initialDelayMs,
+          startingWindowMs,
+          onStarting: (retryAfterMs) => {
+            if (!ac.signal.aborted) this.emit("streamStarting", { retryAfterMs });
+          },
+        }
       );
       if (ac.signal.aborted) throw new Error("Request aborted");
       await gateway;
@@ -559,9 +647,10 @@ export class GatewayClient extends TypedEventEmitter<GatewayClientEvents> {
       const message = e instanceof Error ? e.message : "Unknown gateway error";
       console.error("[GatewayClient] Gateway resolution failed:", message);
       this.setStatus("error", message);
-      // ServerTooOldError keeps its type so callers can tell an unsupported
-      // gateway from a failed resolve.
-      if (e instanceof ServerTooOldError) throw e;
+      // ServerTooOldError and StreamStartingError keep their types so callers
+      // can tell an unsupported gateway or a stream that never started from a
+      // failed resolve.
+      if (e instanceof ServerTooOldError || e instanceof StreamStartingError) throw e;
       throw new Error(message);
     }
   }

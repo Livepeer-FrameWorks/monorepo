@@ -5,9 +5,11 @@ import (
 	"errors"
 	"fmt"
 	"testing"
+	"time"
 
 	"frameworks/api_gateway/internal/middleware"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/auth"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/grpcutil"
 
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	"google.golang.org/genproto/googleapis/rpc/errdetails"
@@ -345,5 +347,30 @@ func TestFallbackMessage(t *testing.T) {
 				t.Fatalf("fallbackMessage() = %q, want %q", got, tc.want)
 			}
 		})
+	}
+}
+
+func TestErrorPresenterMapsPlaybackStreamStateAfterPropagation(t *testing.T) {
+	// Foghorn and Commodore both sanitize outbound errors and Commodore
+	// propagates Foghorn's status; the typed state must survive every hop.
+	across := func(err error) error {
+		foghorn := grpcutil.SanitizeError(err)
+		commodore := grpcutil.SanitizeError(grpcutil.PropagateError(context.Background(), foghorn, nil))
+		return fmt.Errorf("failed to resolve viewer endpoints: %w", commodore)
+	}
+
+	starting := ErrorPresenter(logging.NewLogger())(context.Background(), across(grpcutil.StreamStartingError(time.Second)))
+	if starting.Extensions["code"] != "STREAM_STARTING" || starting.Extensions["retry_after_ms"] != int64(1000) || starting.Message != "stream is starting" {
+		t.Fatalf("starting presented as %q %#v", starting.Message, starting.Extensions)
+	}
+
+	offline := ErrorPresenter(logging.NewLogger())(context.Background(), across(grpcutil.StreamOfflineError()))
+	if offline.Extensions["code"] != "STREAM_OFFLINE" || offline.Extensions["retry_after_ms"] != nil || offline.Message != "stream is offline" {
+		t.Fatalf("offline presented as %q %#v", offline.Message, offline.Extensions)
+	}
+
+	generic := ErrorPresenter(logging.NewLogger())(context.Background(), across(status.Error(codes.Unavailable, "viewer placement unavailable: capacity")))
+	if generic.Extensions["code"] != "UNAVAILABLE" {
+		t.Fatalf("capacity refusal presented as %#v", generic.Extensions)
 	}
 }

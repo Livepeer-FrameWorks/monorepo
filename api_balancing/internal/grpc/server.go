@@ -45,6 +45,7 @@ import (
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/dvrpolicy"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/events"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/geoip"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/grpcutil"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/mist"
 	clusterpeerpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/cluster_peer"
@@ -2810,6 +2811,12 @@ func (s *FoghornGRPCServer) resolveLiveViewerEndpoint(ctx context.Context, req *
 	if prepareErr != nil {
 		if errors.Is(prepareErr, control.ErrInvalidViewerProtocol) {
 			return nil, status.Error(codes.InvalidArgument, prepareErr.Error())
+		}
+		if errors.Is(prepareErr, control.ErrLiveSourceStarting) {
+			return nil, grpcutil.StreamStartingError(control.LiveSourceStartingRetryAfter)
+		}
+		if errors.Is(prepareErr, control.ErrLiveSourceOffline) {
+			return nil, grpcutil.StreamOfflineError()
 		}
 		return nil, status.Errorf(codes.Unavailable, "viewer placement unavailable: %v", prepareErr)
 	}

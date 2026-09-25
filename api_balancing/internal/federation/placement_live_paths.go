@@ -32,14 +32,21 @@ type LivePushPlacementPaths struct {
 	Registry       PlacementSourceRegistry
 	Snapshot       func() *state.BalancerSnapshot
 	Now            func() time.Time
+	// PeerLive reports the cluster a peer cell's lifecycle broadcast names as
+	// currently live for the stream. It only classifies a viewer refusal as
+	// starting; it never supplies a source generation.
+	PeerLive func(ctx context.Context, tenantID, internalName string) (clusterID string, live bool)
 }
 
 type placementPublisher struct {
 	cellID, clusterID, nodeID, generation string
 	revision                              int64
 	present                               bool
-	dtscURL                               string
-	expiresAt                             time.Time
+	// starting marks a claim whose owner says it is live while the playable
+	// evidence has not arrived yet.
+	starting  bool
+	dtscURL   string
+	expiresAt time.Time
 }
 
 type placementSourceContext struct {
@@ -128,52 +135,78 @@ func (reader *LivePushPlacementPaths) ResolveSourceGeneration(ctx context.Contex
 	if now.IsZero() || !now.Before(authority.ExpiresAt) {
 		return "", time.Time{}, errors.New("push source authority is expired")
 	}
-	source, err := reader.publisher(ctx, placementSourceContextFor(authority))
+	sourceContext := placementSourceContextFor(authority)
+	source, starting, err := reader.publisherState(ctx, sourceContext)
 	if err != nil {
 		return "", time.Time{}, err
 	}
 	if source == nil {
-		return "", time.Time{}, errors.New("current push source generation is unavailable")
+		if starting || reader.peerStarting(ctx, sourceContext) {
+			return "", time.Time{}, control.ErrLiveSourceStarting
+		}
+		return "", time.Time{}, control.ErrLiveSourceOffline
 	}
 	return source.generation, minPlacementExpiry(authority.ExpiresAt, source.expiresAt), nil
 }
 
-// publisher reads its own clock rather than accepting the caller's. Freshness is
+// peerStarting covers the window in which another cell has announced the
+// stream live but its first advertisement has not reached this cell yet. The
+// announcing cluster must be an ingest grant of another cell.
+func (reader *LivePushPlacementPaths) peerStarting(ctx context.Context, sourceContext placementSourceContext) bool {
+	if reader.PeerLive == nil || ctx.Err() != nil {
+		return false
+	}
+	clusterID, live := reader.PeerLive(ctx, sourceContext.tenantID, sourceContext.internalName)
+	grant, granted := sourceContext.grants[clusterID]
+	return live && clusterID != "" && granted && grant.AllowIngest && grant.CellID != "" && grant.CellID != reader.CellID
+}
+
+// publisher returns the current playable publisher, or nil.
+func (reader *LivePushPlacementPaths) publisher(ctx context.Context, sourceContext placementSourceContext) (*placementPublisher, error) {
+	source, _, err := reader.publisherState(ctx, sourceContext)
+	return source, err
+}
+
+// publisherState also reports whether the current owner claim is starting:
+// the owner says the publisher is live and nothing withdrew it, but the
+// playable evidence that makes it a source is not there yet.
+//
+// It reads its own clock rather than accepting the caller's. Freshness is
 // judged against a reading taken after the registry and inventory reads, because
 // a heartbeat that lands during those reads carries a timestamp later than any
 // reading taken before them, and freshPlacementEvidence refuses evidence stamped
 // after its reference instant. An earlier reading would therefore report a
 // maximally live publisher as absent whenever a heartbeat interleaves.
-func (reader *LivePushPlacementPaths) publisher(ctx context.Context, sourceContext placementSourceContext) (*placementPublisher, error) {
+func (reader *LivePushPlacementPaths) publisherState(ctx context.Context, sourceContext placementSourceContext) (*placementPublisher, bool, error) {
 	if err := ctx.Err(); err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	entry, found, err := reader.Registry.SourceSnapshot(ctx, sourceContext.tenantID, sourceContext.internalName)
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	if err := ctx.Err(); err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	if !found {
-		return nil, nil
+		return nil, false, nil
 	}
 	if entry.TenantID != sourceContext.tenantID || entry.InternalName != sourceContext.internalName ||
 		(entry.IngestMode != 0 && entry.IngestMode != control.IngestPush) {
-		return nil, errors.New("push source identity is inconsistent")
+		return nil, false, errors.New("push source identity is inconsistent")
 	}
 	snapshot := reader.Snapshot()
 	if err := ctx.Err(); err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	if snapshot == nil || len(snapshot.Nodes) > 4096 {
-		return nil, errors.New("push source inventory is unavailable")
+		return nil, false, errors.New("push source inventory is unavailable")
 	}
 	now := reader.now()
 	localNodes := make(map[string]state.EnhancedBalancerNodeSnapshot, len(snapshot.Nodes))
 	for _, node := range snapshot.Nodes {
 		if _, duplicate := localNodes[node.NodeID]; duplicate || node.NodeID == "" {
-			return nil, errors.New("push source inventory is ambiguous")
+			return nil, false, errors.New("push source inventory is ambiguous")
 		}
 		localNodes[node.NodeID] = node
 	}
@@ -196,7 +229,7 @@ func (reader *LivePushPlacementPaths) publisher(ctx context.Context, sourceConte
 			node, known := localNodes[loc.OwnerNodeID]
 			grant := sourceContext.grants[node.ClusterID]
 			claim := placementPublisher{cellID: reader.CellID, clusterID: node.ClusterID, nodeID: loc.OwnerNodeID,
-				generation: loc.SourceGeneration, revision: loc.SourceRevision}
+				generation: loc.SourceGeneration, revision: loc.SourceRevision, starting: true}
 			if known && grant.CellID == reader.CellID && grant.AllowIngest && entry.IngestMode == control.IngestPush {
 				stream := node.Streams[sourceContext.internalName]
 				if node.IsActive && stream.TenantID == sourceContext.tenantID && stream.Status == "live" && stream.Playable && stream.Inputs > 0 && !stream.Replicated &&
@@ -215,7 +248,7 @@ func (reader *LivePushPlacementPaths) publisher(ctx context.Context, sourceConte
 		}
 	}
 	if len(entry.Locations) > 64 {
-		return nil, errors.New("push source census exceeds bound")
+		return nil, false, errors.New("push source census exceeds bound")
 	}
 	totalEdges := 0
 	for cellID, loc := range entry.Locations {
@@ -224,7 +257,7 @@ func (reader *LivePushPlacementPaths) publisher(ctx context.Context, sourceConte
 		}
 		totalEdges += len(loc.EdgeCandidates)
 		if totalEdges > 4096 {
-			return nil, errors.New("push source advertisements exceed bound")
+			return nil, false, errors.New("push source advertisements exceed bound")
 		}
 		for _, edge := range loc.EdgeCandidates {
 			grant := sourceContext.grants[edge.ClusterID]
@@ -234,6 +267,7 @@ func (reader *LivePushPlacementPaths) publisher(ctx context.Context, sourceConte
 			claim := placementPublisher{cellID: cellID, clusterID: edge.ClusterID, nodeID: edge.NodeID,
 				generation: edge.SourceGeneration, revision: edge.SourceRevision, expiresAt: time.Unix(loc.AdTimestamp, 0).Add(30 * time.Second)}
 			claim.present = loc.IsLiveNow && edge.Playable
+			claim.starting = loc.IsLiveNow
 			claim.present = claim.present && freshPlacementEvidence(time.Unix(edge.SourceObservedAt, 0), now)
 			claim.expiresAt = minPlacementExpiry(claim.expiresAt, time.Unix(edge.SourceObservedAt, 0).Add(30*time.Second))
 			if claim.present && freshPlacementEvidence(time.Unix(edge.DTSCObservedAt, 0), now) && validPlacementDTSC(edge.DTSCURL, runtimeName) {
@@ -244,7 +278,7 @@ func (reader *LivePushPlacementPaths) publisher(ctx context.Context, sourceConte
 		}
 	}
 	if err := ctx.Err(); err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	for _, claim := range claims {
 		if claim.revision > fence {
@@ -258,14 +292,17 @@ func (reader *LivePushPlacementPaths) publisher(ctx context.Context, sourceConte
 			continue
 		}
 		if source != nil {
-			return nil, errors.New("push source ownership is ambiguous")
+			return nil, false, errors.New("push source ownership is ambiguous")
 		}
 		source = claim
 	}
-	if source == nil || source.revision <= withdrawnRevision || !source.present || !now.Before(source.expiresAt) {
-		return nil, nil
+	if source == nil || source.revision <= withdrawnRevision {
+		return nil, false, nil
 	}
-	return source, nil
+	if !source.present || !now.Before(source.expiresAt) {
+		return nil, source.starting, nil
+	}
+	return source, false, nil
 }
 
 func freshPlacementEvidence(observed, now time.Time) bool {

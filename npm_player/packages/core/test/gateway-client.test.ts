@@ -3,6 +3,7 @@ import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
 import {
   DEFAULT_GATEWAY_URL,
   GatewayClient,
+  StreamStartingError,
   type GatewayClientConfig,
 } from "../src/core/GatewayClient";
 import { clearServerInfoProbes } from "@livepeer-frameworks/api/gateway-probe";
@@ -473,6 +474,117 @@ describe("GatewayClient", () => {
       const result = await client.resolve();
       expect(result.primary).toEqual({ nodeId: "n1" });
       expect(callCount).toBe(2);
+      client.destroy();
+    });
+  });
+
+  // ===========================================================================
+  // Server-advised retry
+  // ===========================================================================
+  describe("server-advised retry", () => {
+    const starting = {
+      errors: [
+        {
+          message: "stream is starting",
+          extensions: { code: "STREAM_STARTING", retry_after_ms: 1000 },
+        },
+      ],
+    };
+
+    // Answers the probe as a supported gateway and each resolve from the queue;
+    // the last entry repeats.
+    function mockSequence(...answers: Array<Record<string, unknown>>) {
+      let index = 0;
+      return vi.fn(async (_url: RequestInfo | URL, init?: RequestInit) => {
+        if (isProbe(init)) return { ok: true, json: async () => SUPPORTED_GATEWAY };
+        const answer = answers[Math.min(index++, answers.length - 1)];
+        return { ok: true, json: async () => answer, ...answer.__response };
+      }) as unknown as typeof globalThis.fetch;
+    }
+
+    beforeEach(() => {
+      vi.restoreAllMocks();
+      vi.useFakeTimers();
+    });
+
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    it("keeps resolving a starting stream at the advised cadence beyond the retry budget", async () => {
+      const ok = makeGqlResponse({ nodeId: "n1" });
+      globalThis.fetch = mockSequence(starting, starting, starting, starting, starting, ok);
+      const client = new GatewayClient({
+        gatewayUrl: "https://gw.example.com/graphql",
+        contentId: "pk",
+      });
+      const advised: number[] = [];
+      client.on("streamStarting", ({ retryAfterMs }) => advised.push(retryAfterMs));
+
+      const result = client.resolve();
+      await vi.advanceTimersByTimeAsync(4999);
+      expect(resolveCalls(globalThis.fetch)).toHaveLength(5);
+      await vi.advanceTimersByTimeAsync(1);
+
+      await expect(result).resolves.toMatchObject({ primary: { nodeId: "n1" } });
+      expect(resolveCalls(globalThis.fetch)).toHaveLength(6);
+      expect(advised).toEqual([1000, 1000, 1000, 1000, 1000]);
+      expect(client.getStatus()).toBe("ready");
+      client.destroy();
+    });
+
+    it("fails a stream still starting after the starting window", async () => {
+      globalThis.fetch = mockSequence(starting);
+      const client = new GatewayClient({
+        gatewayUrl: "https://gw.example.com/graphql",
+        contentId: "pk",
+      });
+
+      const result = client.resolve();
+      const outcome = expect(result).rejects.toBeInstanceOf(StreamStartingError);
+      await vi.advanceTimersByTimeAsync(30000);
+      await outcome;
+      // The first resolve plus one per advised second of the window.
+      expect(resolveCalls(globalThis.fetch)).toHaveLength(31);
+      expect(client.getStatus()).toBe("error");
+      client.destroy();
+    });
+
+    it("waits the advised delay for a generic UNAVAILABLE", async () => {
+      const unavailable = {
+        errors: [
+          { message: "unavailable", extensions: { code: "UNAVAILABLE", retry_after_ms: 2000 } },
+        ],
+      };
+      globalThis.fetch = mockSequence(unavailable, makeGqlResponse({ nodeId: "n1" }));
+      const client = new GatewayClient({
+        gatewayUrl: "https://gw.example.com/graphql",
+        contentId: "pk",
+      });
+
+      const result = client.resolve();
+      await vi.advanceTimersByTimeAsync(1999);
+      expect(resolveCalls(globalThis.fetch)).toHaveLength(1);
+      await vi.advanceTimersByTimeAsync(1);
+      await expect(result).resolves.toMatchObject({ primary: { nodeId: "n1" } });
+      client.destroy();
+    });
+
+    it("waits the Retry-After header of a 503", async () => {
+      const busy = {
+        __response: { ok: false, status: 503, headers: new Headers({ "Retry-After": "3" }) },
+      };
+      globalThis.fetch = mockSequence(busy, makeGqlResponse({ nodeId: "n1" }));
+      const client = new GatewayClient({
+        gatewayUrl: "https://gw.example.com/graphql",
+        contentId: "pk",
+      });
+
+      const result = client.resolve();
+      await vi.advanceTimersByTimeAsync(2999);
+      expect(resolveCalls(globalThis.fetch)).toHaveLength(1);
+      await vi.advanceTimersByTimeAsync(1);
+      await expect(result).resolves.toMatchObject({ primary: { nodeId: "n1" } });
       client.destroy();
     });
   });

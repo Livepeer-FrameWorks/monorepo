@@ -252,3 +252,115 @@ func TestLivePushPathsNewIngestNeedsNoSourceAndCannotHandleOtherObjectKinds(t *t
 		t.Fatal("artifact acquired publisher semantics")
 	}
 }
+
+// liveSourceStateFixture runs on the wall clock because the viewer resolver
+// compiles authority against time.Now, and starts from an empty registry entry.
+func liveSourceStateFixture(t *testing.T) (*discoveryFixture, *LivePushPlacementPaths, *livePathRegistry, balancer.PlacementAuthority) {
+	t.Helper()
+	f, reader, r := livePathFixture(t)
+	f.now = time.Now()
+	f.pair.Tenant.ValidUntil = f.now.Add(time.Minute)
+	f.pair.Object.ValidUntil = f.now.Add(20 * time.Second)
+	f.pair.Object.Authority.PlaybackId = "public"
+	r.entry.IngestMode = control.IngestPush
+	r.entry.Locations = map[string]control.Location{}
+	for i := range f.snapshot.Nodes {
+		f.snapshot.Nodes[i].LastHeartbeat, f.snapshot.Nodes[i].OutputsObservedAt = f.now, f.now
+	}
+	authority, err := balancer.CompilePlacementAuthority(f.pair, placement.Serve, f.now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return f, reader, r, authority
+}
+
+func TestLivePushSourceStateClassifiesStartingAndOffline(t *testing.T) {
+	localPublisher := func(f *discoveryFixture, r *livePathRegistry, playable bool) {
+		r.entry.Locations["us-cell"] = control.Location{SourceActive: true, OwnerNodeID: "node-00", SourceGeneration: "source-generation", SourceRevision: 9}
+		f.snapshot.Nodes[0].Streams = map[string]state.BalancerStreamSummary{"internal": {
+			TenantID: "tenant", Status: "live", Playable: playable, Inputs: 1, ObservedAt: f.now,
+		}}
+	}
+	remoteAd := func(f *discoveryFixture, r *livePathRegistry, live, playable bool) {
+		r.entry.Locations["eu-cell"] = control.Location{ClusterID: "eu-cell", IsLiveNow: live, AdTimestamp: f.now.Unix(), EdgeCandidates: []control.EdgeCandidate{{
+			NodeID: "eu-publisher", ClusterID: "eu-ingest", IsOrigin: true, Playable: playable, DTSCURL: "dtsc://eu.example:14200/live+internal",
+			SourceGeneration: "source-generation", SourceRevision: 9, SourceObservedAt: f.now.Unix(), DTSCObservedAt: f.now.Unix(),
+		}}}
+	}
+	for name, tc := range map[string]struct {
+		arrange func(*discoveryFixture, *LivePushPlacementPaths, *livePathRegistry)
+		want    error
+	}{
+		"local_playable": {func(f *discoveryFixture, _ *LivePushPlacementPaths, r *livePathRegistry) { localPublisher(f, r, true) }, nil},
+		"local_active_not_playable": {func(f *discoveryFixture, _ *LivePushPlacementPaths, r *livePathRegistry) {
+			localPublisher(f, r, false)
+		}, control.ErrLiveSourceStarting},
+		"local_active_no_buffer_yet": {func(f *discoveryFixture, _ *LivePushPlacementPaths, r *livePathRegistry) {
+			localPublisher(f, r, false)
+			f.snapshot.Nodes[0].Streams = nil
+		}, control.ErrLiveSourceStarting},
+		"local_withdrawn": {func(f *discoveryFixture, _ *LivePushPlacementPaths, r *livePathRegistry) {
+			localPublisher(f, r, false)
+			loc := r.entry.Locations["us-cell"]
+			loc.SourceActive = false
+			r.entry.Locations["us-cell"] = loc
+		}, control.ErrLiveSourceOffline},
+		"nothing_registered": {func(_ *discoveryFixture, _ *LivePushPlacementPaths, r *livePathRegistry) {
+			r.entry.TenantID = "someone-else"
+		}, control.ErrLiveSourceOffline},
+		"remote_live_ad_not_playable": {func(f *discoveryFixture, _ *LivePushPlacementPaths, r *livePathRegistry) {
+			remoteAd(f, r, true, false)
+		}, control.ErrLiveSourceStarting},
+		"remote_ad_not_live": {func(f *discoveryFixture, _ *LivePushPlacementPaths, r *livePathRegistry) {
+			remoteAd(f, r, false, false)
+		}, control.ErrLiveSourceOffline},
+		"remote_lifecycle_before_ad": {func(_ *discoveryFixture, reader *LivePushPlacementPaths, _ *livePathRegistry) {
+			reader.PeerLive = func(_ context.Context, tenant, internal string) (string, bool) {
+				return "eu-ingest", tenant == "tenant" && internal == "internal"
+			}
+		}, control.ErrLiveSourceStarting},
+		"remote_lifecycle_from_ungranted_cluster": {func(_ *discoveryFixture, reader *LivePushPlacementPaths, _ *livePathRegistry) {
+			reader.PeerLive = func(context.Context, string, string) (string, bool) { return "foreign", true }
+		}, control.ErrLiveSourceOffline},
+		"remote_lifecycle_naming_this_cell": {func(_ *discoveryFixture, reader *LivePushPlacementPaths, _ *livePathRegistry) {
+			reader.PeerLive = func(context.Context, string, string) (string, bool) { return "us", true }
+		}, control.ErrLiveSourceOffline},
+	} {
+		t.Run(name, func(t *testing.T) {
+			f, reader, r, authority := liveSourceStateFixture(t)
+			tc.arrange(f, reader, r)
+			generation, _, err := reader.ResolveSourceGeneration(context.Background(), authority)
+			if tc.want == nil {
+				if err != nil || generation != "source-generation" {
+					t.Fatalf("playable publisher: %q, %v", generation, err)
+				}
+				return
+			}
+			if !errors.Is(err, tc.want) || generation != "" {
+				t.Fatalf("got %q, %v; want %v", generation, err, tc.want)
+			}
+		})
+	}
+}
+
+func TestViewerPlacementResolverReportsStartingSourceBeforeRouting(t *testing.T) {
+	f, reader, r, _ := liveSourceStateFixture(t)
+	r.entry.Locations["us-cell"] = control.Location{SourceActive: true, OwnerNodeID: "node-00", SourceGeneration: "source-generation", SourceRevision: 9}
+	routed := 0
+	resolver := ViewerPlacementResolver{Authority: f.discovery.Authority, Source: &MediaPlacementPaths{Push: reader},
+		Router: balancer.PlacementRouter{Observe: func(context.Context, balancer.PlacementCell, balancer.PlacementRouteRequest) (balancer.PlacementCellObservation, error) {
+			routed++
+			return balancer.PlacementCellObservation{}, errors.New("unexpected routing")
+		}}}
+	request := control.ViewerPlacementRequest{TenantID: "tenant", StreamID: "stream", InternalName: "internal", PlaybackID: "public", Protocol: "hls"}
+	if _, err := resolver.PrepareViewer(context.Background(), request); !errors.Is(err, control.ErrLiveSourceStarting) || errors.Is(err, balancer.ErrPlacementUnavailable) {
+		t.Fatalf("starting publisher resolved as %v", err)
+	}
+	delete(r.entry.Locations, "us-cell")
+	if _, err := resolver.PrepareViewer(context.Background(), request); !errors.Is(err, control.ErrLiveSourceOffline) {
+		t.Fatalf("absent publisher resolved as %v", err)
+	}
+	if routed != 0 {
+		t.Fatal("a source-less viewer reached destination routing")
+	}
+}

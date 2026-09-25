@@ -9,7 +9,7 @@
  */
 
 import { TypedEventEmitter } from "./EventEmitter";
-import { DEFAULT_GATEWAY_URL, GatewayClient } from "./GatewayClient";
+import { DEFAULT_GATEWAY_URL, GatewayClient, StreamStartingError } from "./GatewayClient";
 import { canonicalViewerProtocol, type ViewerProtocol } from "./ViewerProtocol";
 import { StreamStateClient } from "./StreamStateClient";
 import type { PlayerManager, PlayerManagerEvents } from "./PlayerManager";
@@ -736,6 +736,11 @@ export class PlayerController extends TypedEventEmitter<PlayerControllerEvents> 
   private _reloadRequestCount: number = 0;
   private _reloadRequestWindowStartedAt: number = 0;
   private _retrySuppressUntil: number = 0;
+  // A gateway-mode attach whose resolve failed has no Mist edge to poll, so
+  // it re-resolves quietly on this timer until the stream becomes playable.
+  private gatewayRecoveryTimer: ReturnType<typeof setTimeout> | null = null;
+  private static readonly GATEWAY_RECOVERY_INTERVAL_MS = 5000;
+  private static readonly GATEWAY_RECOVERY_WINDOW_MS = 5 * 60_000;
   private _playbackResumedSinceError: boolean = false;
 
   // ============================================================================
@@ -989,6 +994,54 @@ export class PlayerController extends TypedEventEmitter<PlayerControllerEvents> 
         this.log("[attach] Starting stream polling despite resolution failure");
         this.startStreamStatePolling();
       }
+      if (
+        this.endpointMode === "gateway" &&
+        !this.config.mistUrl &&
+        (error instanceof StreamStartingError ||
+          isOffline ||
+          /unavailable|timed out|unreachable|circuit breaker|Gateway GQL error 5\d\d/i.test(
+            message
+          ))
+      ) {
+        this.scheduleGatewayRecovery(Date.now() + PlayerController.GATEWAY_RECOVERY_WINDOW_MS);
+      }
+    }
+  }
+
+  /**
+   * Re-resolve through the failed attach's gateway client without changing the
+   * visible state, and re-attach once a resolve succeeds. Bounded by deadline.
+   */
+  private scheduleGatewayRecovery(deadline: number): void {
+    if (this.gatewayRecoveryTimer || this.isDestroyed || !this.container) return;
+    if (Date.now() + PlayerController.GATEWAY_RECOVERY_INTERVAL_MS > deadline) return;
+    const container = this.container;
+    const client = this.gatewayClient;
+    const epoch = this.endpointResolutionEpoch;
+    const isCurrent = () =>
+      !this.isDestroyed &&
+      this.container === container &&
+      this.endpointResolutionEpoch === epoch &&
+      this.gatewayClient === client;
+    this.gatewayRecoveryTimer = setTimeout(async () => {
+      this.gatewayRecoveryTimer = null;
+      if (!client || !isCurrent()) return;
+      try {
+        await client.resolve(true);
+      } catch {
+        if (isCurrent()) this.scheduleGatewayRecovery(deadline);
+        return;
+      }
+      if (!isCurrent()) return;
+      this.log("[attach] Gateway resolve recovered, re-attaching");
+      await this.attach(container);
+    }, PlayerController.GATEWAY_RECOVERY_INTERVAL_MS);
+  }
+
+  private clearGatewayRecovery(): void {
+    if (this.gatewayRecoveryTimer) {
+      clearTimeout(this.gatewayRecoveryTimer);
+      this.gatewayRecoveryTimer = null;
     }
   }
 
@@ -3448,6 +3501,14 @@ export class PlayerController extends TypedEventEmitter<PlayerControllerEvents> 
       }
     });
     this.cleanupFns.push(unsub);
+    // The resolve stays pending, and the state stays gateway_loading, while
+    // the gateway reports the stream as starting.
+    this.cleanupFns.push(
+      gatewayClient.on("streamStarting", ({ retryAfterMs }) => {
+        if (isCurrent())
+          this.log(`[resolveFromGateway] Stream is starting, re-resolving in ${retryAfterMs}ms`);
+      })
+    );
     this.cleanupFns.push(() => {
       gatewayClient.destroy();
       if (this.gatewayClient === gatewayClient) this.gatewayClient = null;
@@ -5170,6 +5231,7 @@ export class PlayerController extends TypedEventEmitter<PlayerControllerEvents> 
   }
 
   private cleanup(): void {
+    this.clearGatewayRecovery();
     this.clearDeferredAutoplayRetry();
     this.clearAutoplayActivationRecovery();
     this.cleanupMediaAttach();

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/url"
 	"testing"
@@ -150,4 +151,36 @@ func preparedHTTPViewer(t *testing.T, req control.ViewerPlacementRequest, endpoi
 		t.Fatal(err)
 	}
 	return balancer.PlacementPreparationResult{Outcome: balancer.PlacementAccepted, TenantID: req.TenantID, ObjectID: sharedauthority.LiveStreamAuthorityID(req.StreamID), SourceGeneration: "source", NodeID: "us-edge", ClusterID: "us", Protocol: req.Protocol, Endpoint: endpoint, PublicBaseURL: "https://us.example", OutputsJSON: viewerOutputsJSON, AttemptID: attempt, ExpiresAt: now.Add(10 * time.Second)}
+}
+
+func TestPreparedViewerHTTPReportsLiveSourceState(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		cause      error
+		status     int
+		code       string
+		retryAfter string
+	}{
+		{"starting", control.ErrLiveSourceStarting, http.StatusServiceUnavailable, "STREAM_STARTING", "1"},
+		{"offline", control.ErrLiveSourceOffline, http.StatusNotFound, "STREAM_OFFLINE", ""},
+		{"capacity", balancer.ErrPlacementUnavailable, http.StatusServiceUnavailable, "PLAYBACK_PLACEMENT_UNAVAILABLE", "1"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			setupPreparedViewerHTTP(t, false)
+			SetViewerPlacementPreparer(viewerPlacementFunc(func(context.Context, control.ViewerPlacementRequest) (balancer.PlacementPreparationResult, error) {
+				return balancer.PlacementPreparationResult{}, fmt.Errorf("resolve source: %w", tc.cause)
+			}))
+			c, w := playbackCtxArms(t, "public/hls/index.m3u8")
+			HandleGenericViewerPlayback(c)
+			var body struct {
+				Code string `json:"code"`
+			}
+			if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
+				t.Fatal(err)
+			}
+			if w.Code != tc.status || body.Code != tc.code || w.Header().Get("Retry-After") != tc.retryAfter || w.Header().Get("Location") != "" {
+				t.Fatalf("status=%d retry-after=%q body=%s", w.Code, w.Header().Get("Retry-After"), w.Body.String())
+			}
+		})
+	}
 }

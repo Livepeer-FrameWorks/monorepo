@@ -7,6 +7,7 @@ import (
 
 	"frameworks/api_gateway/internal/middleware"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/auth"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/grpcutil"
 
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 
@@ -105,6 +106,18 @@ func publicGRPCError(err error) (string, map[string]any, bool) {
 	st, ok := status.FromError(err)
 	if !ok {
 		return "", nil, false
+	}
+	if reason, retryAfter, isStreamState := grpcutil.PlaybackStreamState(err); isStreamState {
+		switch {
+		case reason == grpcutil.StreamStartingReason && st.Code() == codes.Unavailable:
+			extensions := map[string]any{"code": reason}
+			if retryAfter > 0 {
+				extensions["retry_after_ms"] = retryAfter.Milliseconds()
+			}
+			return "stream is starting", extensions, true
+		case reason == grpcutil.StreamOfflineReason && st.Code() == codes.FailedPrecondition:
+			return "stream is offline", map[string]any{"code": reason}, true
+		}
 	}
 	for _, detail := range st.Details() {
 		info, isErrorInfo := detail.(*errdetails.ErrorInfo)

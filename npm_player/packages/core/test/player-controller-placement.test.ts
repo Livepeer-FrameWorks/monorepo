@@ -375,3 +375,120 @@ describe("PlayerController selected Mist source discovery", () => {
     }
   );
 });
+
+describe("PlayerController gateway stream start", () => {
+  const starting = {
+    errors: [
+      {
+        message: "stream is starting",
+        extensions: { code: "STREAM_STARTING", retry_after_ms: 1000 },
+      },
+    ],
+  };
+  const unavailable = {
+    errors: [{ message: "service temporarily unavailable", extensions: { code: "UNAVAILABLE" } }],
+  };
+  const resolved = {
+    data: {
+      resolveViewerEndpoint: {
+        primary: {
+          nodeId: "us-edge",
+          protocol: "hls",
+          url: selectedURL,
+          baseUrl: "https://us.example",
+          outputs: { HLS: { url: selectedURL } },
+        },
+        fallbacks: [],
+        metadata: { contentType: "live", contentId: "live+internal" },
+      },
+    },
+  };
+
+  // Answers the serverInfo probe and each resolve from the queue; the last
+  // answer repeats.
+  function stubGateway(answers: unknown[]) {
+    let index = 0;
+    const resolves = vi.fn();
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (_url, options) => {
+        if (JSON.parse(options.body).query.includes("serverInfo")) {
+          return {
+            ok: true,
+            json: async () => ({ data: { serverInfo: { version: "v0.3.11", features: [] } } }),
+          };
+        }
+        resolves();
+        const answer = answers[Math.min(index++, answers.length - 1)];
+        return { ok: true, json: async () => answer };
+      })
+    );
+    return resolves;
+  }
+
+  function gatewayController() {
+    const manager = { on: vi.fn(() => () => {}), destroy: vi.fn().mockResolvedValue(undefined) };
+    const controller = new PlayerController({
+      contentId: "playback-id",
+      contentType: "live",
+      gatewayUrl: "https://gw.example/graphql",
+      playerManager: manager as any,
+    });
+    const state = controller as any;
+    state.hydrateFromSelectedMistEdge = vi.fn().mockResolvedValue(undefined);
+    return { controller, state };
+  }
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("stays loading while the stream starts and becomes ready once it is playable", async () => {
+    vi.useFakeTimers();
+    const resolves = stubGateway([starting, starting, starting, starting, starting, resolved]);
+    const { controller, state } = gatewayController();
+    const states: string[] = [];
+    controller.on("stateChange", ({ state: next }) => states.push(next));
+
+    const resolution = state.resolveFromGateway("https://gw.example/graphql", "playback-id");
+    await vi.advanceTimersByTimeAsync(5000);
+    await resolution;
+
+    expect(resolves).toHaveBeenCalledTimes(6);
+    expect(state.getState()).toBe("gateway_ready");
+    expect(states).not.toContain("gateway_error");
+    expect(state.endpoints.primary.nodeId).toBe("us-edge");
+    controller.destroy();
+  });
+
+  it("reports a gateway error once the stream stays starting past the window", async () => {
+    vi.useFakeTimers();
+    stubGateway([starting]);
+    const { controller, state } = gatewayController();
+
+    const resolution = state.resolveFromGateway("https://gw.example/graphql", "playback-id");
+    const outcome = expect(resolution).rejects.toThrow(/did not become playable/);
+    await vi.advanceTimersByTimeAsync(31000);
+    await outcome;
+    expect(state.getState()).toBe("gateway_error");
+    controller.destroy();
+  });
+
+  it("re-attaches a gateway-mode player once a failed resolve recovers", async () => {
+    vi.useFakeTimers();
+    stubGateway([unavailable]);
+    const { controller, state } = gatewayController();
+    const container = document.createElement("div");
+
+    const attached = controller.attach(container);
+    await vi.advanceTimersByTimeAsync(1500);
+    await attached;
+    expect(state.getState()).toBe("error");
+
+    stubGateway([resolved]);
+    const reattach = vi.spyOn(state, "attach").mockResolvedValue(undefined);
+    await vi.advanceTimersByTimeAsync(5000);
+    expect(reattach).toHaveBeenCalledWith(container);
+    controller.destroy();
+  });
+});

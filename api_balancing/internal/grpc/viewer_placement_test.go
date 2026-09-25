@@ -2,6 +2,7 @@ package grpc
 
 import (
 	"context"
+	"fmt"
 	"math"
 	"testing"
 	"time"
@@ -9,6 +10,7 @@ import (
 	"frameworks/api_balancing/internal/balancer"
 	"frameworks/api_balancing/internal/control"
 	"frameworks/api_balancing/internal/triggers"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/grpcutil"
 	sharedauthority "github.com/Livepeer-FrameWorks/monorepo/pkg/mediaauthority"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/placement"
 	commodorepb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/commodore"
@@ -75,5 +77,33 @@ func TestGRPCViewerUsesPreparedDestinationWithoutLegacyBalancer(t *testing.T) {
 	s.SetViewerPlacementPreparer(nil)
 	if response, err = s.resolveLiveViewerEndpoint(t.Context(), request, 0, 0, "internal", "tenant", "stream", "eu", nil, "eu", "", false); status.Code(err) != codes.Unavailable || response != nil {
 		t.Fatal("cleared viewer adapter restored legacy routing")
+	}
+}
+
+func TestGRPCViewerReportsTypedLiveSourceState(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		cause      error
+		code       codes.Code
+		reason     string
+		retryAfter time.Duration
+	}{
+		{"starting", control.ErrLiveSourceStarting, codes.Unavailable, grpcutil.StreamStartingReason, time.Second},
+		{"offline", control.ErrLiveSourceOffline, codes.FailedPrecondition, grpcutil.StreamOfflineReason, 0},
+		{"capacity", balancer.ErrPlacementUnavailable, codes.Unavailable, "", 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s := &FoghornGRPCServer{}
+			s.SetViewerPlacementPreparer(viewerPlacementFunc(func(context.Context, control.ViewerPlacementRequest) (balancer.PlacementPreparationResult, error) {
+				return balancer.PlacementPreparationResult{}, fmt.Errorf("resolve source: %w", tc.cause)
+			}))
+			_, err := s.resolveLiveViewerEndpoint(t.Context(), &sharedpb.ViewerEndpointRequest{ContentId: "public", Protocol: "hls"}, math.NaN(), math.NaN(), "live+internal", "tenant", "stream", "eu", nil, "eu", "", false)
+			// The server's sanitizing interceptor runs on every outbound error.
+			err = grpcutil.SanitizeError(err)
+			reason, retryAfter, _ := grpcutil.PlaybackStreamState(err)
+			if status.Code(err) != tc.code || reason != tc.reason || retryAfter != tc.retryAfter {
+				t.Fatalf("got %v (reason %q, retry %v)", err, reason, retryAfter)
+			}
+		})
 	}
 }
