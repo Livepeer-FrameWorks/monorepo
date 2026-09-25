@@ -140,7 +140,7 @@ case "$action" in
     shift || true
     [[ $# -gt 0 ]] || die "run requires a command"
     printf -v quoted_command '%q ' "$@"
-    remote_script="set -e; umask 0002; cd $(printf '%q' "$remote_repo"); $(remote_environment); for lock in /srv/frameworks-dev/cache/.heavy-1.lock /srv/frameworks-dev/cache/.heavy-2.lock; do exec {lock_fd}>\"\$lock\"; if flock -n \"\$lock_fd\"; then exec $quoted_command; fi; exec {lock_fd}>&-; done; printf '%s\\n' 'remote-dev: both heavy-job slots are occupied; retry after one finishes' >&2; exit 75"
+    remote_script="set -e; umask 0002; cd $(printf '%q' "$remote_repo"); $(remote_environment); for lock in /srv/frameworks-dev/cache/.heavy-1.lock /srv/frameworks-dev/cache/.heavy-2.lock /srv/frameworks-dev/cache/.heavy-3.lock; do exec {lock_fd}>\"\$lock\"; if flock -n \"\$lock_fd\"; then exec $quoted_command; fi; exec {lock_fd}>&-; done; printf '%s\\n' 'remote-dev: all heavy-job slots are occupied; retry after one finishes' >&2; exit 75"
     # shellcheck disable=SC2029
     ssh "${ssh_args[@]}" "$remote_target" "bash -lc $(printf '%q' "$remote_script")"
     ;;
