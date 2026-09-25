@@ -186,9 +186,10 @@ upgrade notes name, then rerun the migration (`cluster release apply` or
 `cluster migrate`). Prechecks do not run under `--dry-run`, so a dry-run does
 not show a refusal in advance.
 
-The v0.3.0 prechecks guard the Quartermaster node-fingerprint unique indexes;
-their remediation is described in
-[Running Cluster Upgrades](/operators/running-upgrades#control-plane-first-then-edges).
+The v0.3.0 prechecks guard the Quartermaster node-fingerprint unique indexes.
+Once Quartermaster runs a release with the operator fingerprint RPCs, list and
+remove duplicate bindings with
+[`frameworks admin nodes fingerprints`](/operators/cli-reference#frameworks-admin-nodes-fingerprints).
 
 ## Writing migrations
 

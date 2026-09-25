@@ -10810,7 +10810,7 @@ clusterMediaConsentChange(
 
 ### Query.dvrChapter
 
-Retrieve a single DVR chapter, including its finalized playbackId. Chapters are produced by the finalization queue as canonical .mkv VOD artifacts. Historical chapter mode is configured at the Stream level (Stream.dvrChapterMode) and snapshotted at StartDVR. Modes: - WINDOW_SIZED: sequential fixed-length chapters of size tier.MaxWindowSeconds since the recording&#39;s start. - FIXED_INTERVAL: UTC-only buckets of intervalSeconds, anchored at unix epoch 0.
+Retrieve a single DVR chapter, including its finalized playbackId. Chapters are the saved parts of a recording, produced by the finalization queue as canonical .mkv VOD artifacts. The chapter mode is configured at the Stream level (Stream.dvrChapterMode) and snapshotted when the recording starts. Modes: - WINDOW_SIZED (default): sequential parts as long as the recording&#39;s own live rewind window, from the recording&#39;s start. - FIXED_INTERVAL: UTC-only buckets of intervalSeconds, anchored at unix epoch 0. A NONE recording keeps live rewind only and has no chapters.
 
 ```graphql
 dvrChapter(
@@ -11786,11 +11786,11 @@ Status of a support conversation.
 
 **enum**
 
-DVR historical chapter mode. Determines how chapter (startMs, endMs) ranges are produced for finalized replay artifacts. Configured at the Stream level via updateStream and snapshotted onto the DVR artifact at StartDVR. UTC-only — civil-time chapters resolve at the edge.
+How a recording is saved as chapters. Determines how chapter (startMs, endMs) ranges are produced for replay after the broadcast. Configured at the Stream level via updateStream and snapshotted onto the recording when it starts. New streams default to WINDOW_SIZED. UTC-only — civil-time chapters resolve at the edge.
 
-- `WINDOW_SIZED` — Sequential fixed-length chapters of size tier.MaxWindowSeconds since the recording&#39;s start.
+- `WINDOW_SIZED` — Default. Sequential parts as long as the recording&#39;s own live rewind window, from the recording&#39;s start.
 - `FIXED_INTERVAL` — UTC-only intervalSeconds buckets, anchored at unix epoch 0.
-- `NONE` — Rolling DVR only: recording still runs, but no historical chapter artifacts are produced.
+- `NONE` — Live rewind only: viewers can rewind while live, but nothing is kept after the broadcast and no recording.ready fires.
 
 ### DeleteSuccess
 
@@ -12416,7 +12416,7 @@ Implements [Node](/builders/api-schema/shared/#node).
 - **metrics**: `StreamMetrics` ([StreamMetrics](/builders/api-schema/shared/#streammetrics)) — Real-time operational metrics from the data plane. Includes viewer counts, quality metrics, and throughput data. Lazily loaded from ClickHouse analytics.
 - **pushTargets**: `[PushTarget!]!` ([PushTarget](/builders/api-schema/shared/#pushtarget)) — Configured multistream push targets for this stream.
 - **playbackPolicy**: `PlaybackPolicy` ([PlaybackPolicy](/builders/api-schema/shared/#playbackpolicy)) — Playback access policy. null/PUBLIC = anyone with the playbackId can watch.
-- **dvrChapterMode**: `DVRChapterMode` ([DVRChapterMode](/builders/api-schema/shared/#dvrchaptermode)) — DVR chapter rotation mode. Snapshotted onto the DVR artifact at StartDVR; changes take effect on the next recording. null/NONE = chapters disabled.
+- **dvrChapterMode**: `DVRChapterMode` ([DVRChapterMode](/builders/api-schema/shared/#dvrchaptermode)) — How saved recordings are split into chapters. Snapshotted when a recording starts; changes apply from the next broadcast. NONE = live rewind only, nothing kept after the broadcast.
 - **dvrChapterIntervalSeconds**: `Int` — Chapter interval in seconds. Required when dvrChapterMode = FIXED_INTERVAL, ignored otherwise. Minimum 3600 (1 hour).
 - **monitoring**: `MonitoringToggle!` ([MonitoringToggle](/builders/api-schema/shared/#monitoringtoggle)) — Per-stream Skipper monitoring override (INHERIT follows tier).
 - **recentPullSourceEvents**: `[PullSourceEvent!]` ([PullSourceEvent](/builders/api-schema/shared/#pullsourceevent)) — Recent pull-source resolution events for pull streams. Captures the customer-facing resolution outcome (resolved, not_found, disabled, blocked_uri, cluster_not_allowed_delegate, commodore_error, foghorn_base_unresolved). Null for push streams.
@@ -13492,8 +13492,8 @@ Input for updating an existing stream. All fields are optional - only provided f
 - **ingestMode**: `IngestMode` ([IngestMode](/builders/api-schema/shared/#ingestmode)) — Ingest model cannot be changed after create; sending a different value returns a validation error.
 - **pullSource**: `PullSourceInput` ([PullSourceInput](/builders/api-schema/streams/#pullsourceinput)) — Update the pull-source configuration for an existing pull stream.
 - **sourceLocation**: `SourceLocationInput` ([SourceLocationInput](/builders/api-schema/streams/#sourcelocationinput)) — Replace where the source may be ingested. Omitted keeps the current location. Rejected for managed streams.
-- **dvrChapterMode**: `DVRChapterMode` ([DVRChapterMode](/builders/api-schema/shared/#dvrchaptermode)) — Historical chapter rotation mode. Snapshotted onto the DVR artifact at StartDVR; changes take effect on the next recording, not in-flight. NONE means rolling DVR playback only: recording still runs, but no finalized chapter artifacts are produced for historical replay.
-- **dvrChapterIntervalSeconds**: `Int` — Chapter interval in seconds. Required when dvrChapterMode = FIXED_INTERVAL. Minimum 3600 (1 hour).
+- **dvrChapterMode**: `DVRChapterMode` ([DVRChapterMode](/builders/api-schema/shared/#dvrchaptermode)) — How saved recordings are split into chapters. Snapshotted when a recording starts; changes apply from the next broadcast, not to a recording in progress. NONE keeps live rewind only: viewers can rewind while live, but nothing is kept after the broadcast.
+- **dvrChapterIntervalSeconds**: `Int` — Chapter interval in seconds. Required when dvrChapterMode = FIXED_INTERVAL. Minimum 3600 (1 hour). Send 0 with any other mode to clear a stored interval.
 - **monitoring**: `MonitoringToggle` ([MonitoringToggle](/builders/api-schema/shared/#monitoringtoggle)) — Per-stream Skipper monitoring override. INHERIT follows the tenant tier.
 
 ### UpdateStreamResult
@@ -14162,7 +14162,7 @@ One delivery of one event to one endpoint, or a test delivery.
 - **lastReplayedAt**: `Time` ([Time](/builders/api-schema/shared/#time))
 - **createdAt**: `Time!` ([Time](/builders/api-schema/shared/#time))
 - **updatedAt**: `Time!` ([Time](/builders/api-schema/shared/#time))
-- **attemptHistory**: `[WebhookDeliveryAttempt!]!` ([WebhookDeliveryAttempt](/builders/api-schema/webhooks/#webhookdeliveryattempt)) — Every HTTP attempt, oldest first. Loaded by the webhookDelivery query; empty in connections.
+- **attemptHistory**: `[WebhookDeliveryAttempt!]!` ([WebhookDeliveryAttempt](/builders/api-schema/webhooks/#webhookdeliveryattempt)) — Every HTTP attempt, oldest first, including attempts before the last replay.
 
 ### WebhookDeliveryAttempt
 
@@ -15386,7 +15386,7 @@ Subject: `artifacts/<artifact id>`.
 | `clip.failed`       | The clip could not be produced.                              | `artifact`, `reason`                        |
 | `recording.started` | The recording node confirmed it is capturing the stream.     | `artifact`                                  |
 | `recording.stopped` | Capture ended and the recording is being finalized.          | `artifact`                                  |
-| `recording.ready`   | A recording is finalized and saved as replayable chapters.   | `artifact`, `durationMs`, `sizeBytes`       |
+| `recording.ready`   | The recording's first saved chapter is replayable.           | `artifact`, `durationMs`, `sizeBytes`       |
 | `recording.failed`  | A DVR recording could not be finalized.                      | `artifact`, `reason`                        |
 | `upload.created`    | A VOD upload session is created.                             | `artifact`, `filename`, `expectedSizeBytes` |
 | `upload.completed`  | Every part is uploaded and the file is handed to processing. | `artifact`, `sizeBytes`                     |
@@ -15394,10 +15394,14 @@ Subject: `artifacts/<artifact id>`.
 | `upload.ready`      | Processing finished and the asset is playable.               | `artifact`, `durationMs`, `sizeBytes`       |
 | `upload.failed`     | Processing rejected or could not process the file.           | `artifact`, `reason`                        |
 
-A recording that captured media emits `recording.started`, then `recording.stopped` once,
-then `recording.ready` or `recording.failed`. A live-rewind-only recording (stream
-`dvrChapterMode: NONE`) keeps nothing replayable, so it ends with `recording.stopped` and no
-`recording.ready`. A recording that never captured anything emits only `recording.failed`.
+A recording that captured media emits `recording.started`, then `recording.stopped` once.
+`recording.ready` fires once, when the recording's first saved chapter becomes replayable: its
+`artifact.playbackId` plays that chapter, and `durationMs` and `sizeBytes` describe it. A short
+broadcast gets it after `recording.stopped`; a broadcast longer than one chapter gets it while
+still live. `recording.failed` reports a recording that could not be finalized. A
+live-rewind-only recording (stream `dvrChapterMode: NONE`) keeps nothing replayable, so it ends
+with `recording.stopped` and no `recording.ready`. A recording that never captured anything
+emits only `recording.failed`.
 
 Upload events carry no transfer progress. Your client knows its own transfer progress; for the
 server-side state of an upload, query `vodUploadStatus`. An [import from a URL](/builders/recordings#import-a-video-from-a-url)
@@ -36795,9 +36799,10 @@ upgrade notes name, then rerun the migration (`cluster release apply` or
 `cluster migrate`). Prechecks do not run under `--dry-run`, so a dry-run does
 not show a refusal in advance.
 
-The v0.3.0 prechecks guard the Quartermaster node-fingerprint unique indexes;
-their remediation is described in
-[Running Cluster Upgrades](/operators/running-upgrades#control-plane-first-then-edges).
+The v0.3.0 prechecks guard the Quartermaster node-fingerprint unique indexes.
+Once Quartermaster runs a release with the operator fingerprint RPCs, list and
+remove duplicate bindings with
+[`frameworks admin nodes fingerprints`](/operators/cli-reference#frameworks-admin-nodes-fingerprints).
 
 ## Writing migrations
 
@@ -37181,7 +37186,7 @@ The release catalog embedded in the CLI is the authority for which upgrades are 
 - **Minimum source version.** A release can declare `min_source_version`, the oldest release a cluster may run while moving to it, and the floor stays in force for later releases until one raises it. Before changing anything, `cluster upgrade` and `cluster release apply` read the version every platform service replica runs and refuse when a replica is below the floor (apply the named release first), when you ask to roll back below the floor of the release a replica runs, or when a replica's version is not a release version. There is no override. `cluster upgrade plan` prints the floor for the target.
 - **Readiness.** Rollouts wait up to 150 seconds for each service to report ready on `/ready` (v0.3.11 and later) or `/health` (earlier releases). See [Health and readiness](/operators/running-upgrades/#health-and-readiness).
 - **Automatic rollback.** A release can disable automatic rollback for specific services when a restored previous binary could not pass the new health contract. The release plan lists these services.
-- **Required data migrations.** A release can require data migrations to finish before a later schema phase. The release apply runs and verifies them.
+- **Required data migrations.** A release can require data migrations to finish before a later schema phase. `cluster release apply` checks them and stops at the postdeploy phase until they are complete. Run and verify them with `cluster data-migrate`, then rerun the release apply. See [Data migrations](/operators/running-upgrades/#data-migrations).
 - **Backups before destructive steps.** `cluster release apply` never requires a backup. Contract migrations (`cluster migrate --phase contract`) and irreversible data migrations (`cluster data-migrate run`) do: pass `--backup` with a [backup](/operators/backup-restore/) that started less than an hour earlier and whose migration ledgers still match. A data migration counts as irreversible when the release that declares it lists its service under `rollback_disabled`, or when the service binary marks it irreversible or does not say.
 - **Unfinished earlier releases.** Before changing anything, and under `--dry-run` too, `cluster release apply` reads the migration ledgers and data-migration state. It refuses when an earlier release's postdeploy migrations or required data migrations are not complete, and names the release to apply first. A release with no migrations leaves nothing unfinished, so it can be skipped.
 
@@ -37202,94 +37207,110 @@ The release catalog embedded in the CLI is the authority for which upgrades are 
 # Running Cluster Upgrades
 https://logbook.frameworks.network/operators/running-upgrades
 
+Use `frameworks cluster release apply` to move a running cluster to a new platform release. It runs
+the schema phases, platform service upgrades, and gates of a release as one ordered, resumable
+operation. `cluster migrate` and `cluster upgrade` remain available as lower-level tools for
+recovery and diagnosis.
+
 <Aside type="caution" title="Do not use provision as the normal upgrade path">
   `frameworks cluster provision` converges the full manifest and may run install, configure,
   service, validation, and initialization tasks. Use it for initial deployment or intentional
-  reconciliation, not as the routine way to roll a running cluster forward.
+  reconciliation, not as the routine way to roll a running cluster forward. See [When to use
+  provision](#when-to-use-provision).
 </Aside>
 
-Use `frameworks cluster release apply` for a normal platform release. It composes
-schema phases, platform artifact upgrades, live gates, and any declared one-off
-reconciliation into one resumable operation. `cluster migrate` and `cluster upgrade`
-remain explicit recovery/debugging primitives.
+This page describes the procedure every release shares. Each release's GitHub Release note has an
+`Upgrade` section with what is specific to that release: the supported source version, the minimum
+CLI version, operator-managed inputs to add or change, required data migrations, and any extra
+steps. Read it before you start. See [Release Lifecycle](/operators/release-lifecycle/) for
+channels and supported upgrade sources.
 
-Production manifests should use `channel: stable`. Staging and release-like development
-manifests should use `channel: candidate`, which follows the newest tag whether it is GA
-or RC. The explicit selector `latest` is an alias for `candidate`; legacy `rc` remains
-available when an RC-only track is specifically required.
+## Before you start
 
-The first release step creates any service database the manifest declares but the cluster does not
-have yet (a database introduced by this release), with its owner and runtime roles and current
-baseline, before expand migrations and before any service that owns it deploys. The static plan
-lists the manifest's service databases; `release apply --dry-run` probes the cluster and names the
-ones it would create without creating them. See
-[New service databases](/operators/postgres-migrations#new-service-databases).
-
-Managed dependencies such as Chatwoot, Listmonk, Grafana, and VictoriaMetrics have
-independent manifest pins; host infrastructure has its own OS/data lifecycle. The static
-release plan lists both groups explicitly rather than implying that a platform release
-changed them. Inspect their desired/observed state with `cluster diff`, and use an
-intentional provision or component-specific operation when their pins change.
-
-<Aside type="caution" title="Migrations are not magic data migrations">
-  `cluster migrate` applies PostgreSQL/YugabyteDB and ClickHouse schema migrations. It does not
-  prove that existing rows have been transformed into a new semantic model, and it does not make
-  destructive migrations safe for rollback. Release notes must call out any required data migration,
-  read/write flip, or contract step.
-</Aside>
+- **Upgrade the CLI first.** Run `frameworks update` and check `frameworks version` against the
+  release's minimum CLI version. `release plan` and `release apply` refuse a CLI below that floor.
+  A development build without a release version is refused unless you pass
+  `--unsafe-ignore-cli-version-floor`.
+- **Set the operator inputs the release note names** in GitOps, using the repository's SOPS helper
+  for secrets. `release apply` renders every service it will install or upgrade before changing
+  anything and refuses, listing each key, when a required input is missing.
+- **Pick the channel.** Production manifests use `channel: stable`. Staging manifests use
+  `channel: candidate`, which follows the newest tag, GA or RC. See
+  [Version selection](#version-selection).
 
 ## Recommended flow
 
 <Steps>
-1. Print the complete static plan. This needs the manifest and release metadata, but no
-   decrypted cluster secrets, SSH session, or control-plane login:
+1. Print the static plan. It needs the manifest and the release metadata, but no SSH session,
+   service connection, or control-plane login. An age key is needed only when the manifest's host
+   inventory is SOPS-encrypted.
 
     ```bash
     frameworks cluster release plan --version stable
     ```
 
-2. Verify the active context when you intend to use one, then run the live dry-run:
+2. Check the active context, then run the live dry-run. The dry-run connects to the cluster and runs
+   every preflight gate and host precheck without changing anything:
 
    ```bash
    frameworks context check
    frameworks cluster release apply --version stable --dry-run
    ```
 
-3. Apply the same release plan:
+3. Apply the release:
 
    ```bash
    frameworks cluster release apply --version stable --yes
    ```
 
-   Between `[2/4]` expand and `[3/4]` service upgrades, `release apply` prints a read-only
-   [post-expand report](#post-expand-report) from the Quartermaster database. It does not stop
-   the release.
+   If a step fails, fix the cause and rerun the same command. Work that already completed is
+   skipped.
 
-4. Reconcile service-owned control-plane state only when the desired bootstrap model
-   changed (tenant metadata, billing catalog, managed accounts, assignments, and similar
-   platform state):
+4. If the release declares required data migrations, `release apply` stops at the postdeploy
+   phase until they are complete. Run and verify each one, then rerun `release apply`:
+
+   ```bash
+   frameworks cluster data-migrate list --to-version vX.Y.Z
+   frameworks cluster data-migrate run <service>.<id>
+   frameworks cluster data-migrate verify <service>.<id>
+   frameworks cluster release apply --version vX.Y.Z --yes
+   ```
+
+   See [Data migrations](#data-migrations).
+
+5. If the release note says the rendered ingress or observability configuration changed, apply
+   the interface layer. `release apply` does not own it:
+
+   ```bash
+   frameworks cluster provision --version vX.Y.Z --only interfaces --dry-run
+   frameworks cluster provision --version vX.Y.Z --only interfaces
+   ```
+
+   `--version` pins the provision to the release you applied, whatever the manifest channel
+   currently resolves to.
+
+6. Reconcile service-owned control-plane state only when the desired bootstrap model changed
+   (tenant metadata, billing catalog, managed accounts, assignments, and similar platform state):
 
    ```bash
    frameworks cluster control-plane plan
    frameworks cluster control-plane reconcile
    ```
 
-   The `frameworks` system-tenant alias is a stable identity. Reconciliation updates its
-   mutable metadata but does not replace its UUID. Replacing that identity would be a
-   separate, explicitly designed data migration—not an incidental `provision` or
-   `control-plane reconcile` side effect.
+   The `frameworks` system-tenant alias is a stable identity. Reconciliation updates its mutable
+   metadata but never replaces its UUID.
 
-5. Verify health and state:
+7. Verify health and state:
 
    ```bash
    frameworks cluster status
-   frameworks cluster doctor
+   frameworks cluster doctor --deep
+   frameworks cluster diff
    ```
 
-6. After the rollback window closes, apply any deferred contract migrations. They
-   are printed by the release plan but never run implicitly by `release apply`.
-   Contract migrations need a backup that started less than an hour earlier and still
-   matches the migration ledgers, so take one right before:
+8. After the rollback window closes, apply any deferred contract migrations. `release apply` prints
+   the command but never runs it. Contract migrations need a backup that started less than an hour
+   earlier and still matches the migration ledgers:
 
    ```bash
    frameworks cluster backup create --to /var/backups/frameworks --all
@@ -37301,765 +37322,154 @@ intentional provision or component-specific operation when their pins change.
 
 </Steps>
 
-## Post-expand report
+## What `release apply` does
 
-After expand migrations and before any service upgrade, `release apply` reads the Quartermaster
-database over SSH in a read-only transaction and prints:
+### Preflight
 
-- **Operator-managed nodes without an identity key**: active `gitops_seed` and `adopted_local`
-  nodes in active clusters whose fingerprint has no 32-byte Ed25519 key. This is the same query
-  the `quartermaster_node_identity_keys_v0_3_0` verification counts, so postdeploy stays blocked
-  until this list is empty.
-- **Customer-enrolled nodes without an identity key**: active `runtime_enrolled` nodes in the same
-  state. They do not block the release; the new Quartermaster refuses each one at its next connect
-  until it is re-enrolled.
-- **DNS grants the tenant-DNS migration will clear**: tenants whose billing entitlements are still
-  unobserved (the expand-time `epoch` stamp) and that have a custom subdomain or custom domain
-  enabled, and whether Purser's `purser_dns_entitlements_v0_3_0` handoff receipt exists yet.
+Before the first change, and under `--dry-run` too, `release apply` refuses to start when:
 
-Each list shows node or tenant IDs, cluster, tenant, enrollment origin, and last seen (DNS grants:
-tenant name, subdomain, and custom domain), up to 50 rows with the total. For keyless nodes the
-report prints the re-enrollment instruction: a fresh `edge_node` bootstrap token for the node's
-tenant and cluster, set as `EDGE_ENROLLMENT_TOKEN` together with
-`HELMSMAN_ROTATE_NODE_IDENTITY=true`, and one restart of the edge stack.
+- the CLI is below the release's minimum CLI version;
+- a platform service replica runs a version below a declared minimum source version, or a version
+  that is not a release version;
+- an earlier release is unfinished: its postdeploy migrations are missing from a PostgreSQL,
+  YugabyteDB, or ClickHouse ledger, or its required data migrations are incomplete. The error
+  names the release to apply first. Databases this release creates are exempt;
+- a planned artifact does not resolve for its host's deploy mode and architecture;
+- a required operator input is missing from a service's rendered environment.
 
-The report never fails the release; the data-migration verifications remain the gate. When
-nothing is pending it prints `post-expand report: nothing pending`. On a cluster where the v0.3.0
-Quartermaster expand columns do not exist yet, including a `--dry-run` before expand has been
-applied, it prints `post-expand report: not run (expand not applied)`, which is not an all-clear.
-A connection or query failure prints `post-expand report: not run` with the reason.
+### Stages
 
-To review the report before any service is replaced, apply expand on its own, then run the
-release dry-run; the dry-run prints the full report once the expand columns exist:
+`release apply` prints four numbered stages:
 
-```bash
-frameworks cluster migrate --phase expand --to-version vX.Y.Z
-frameworks cluster release apply --version vX.Y.Z --dry-run
-```
+1. **Pre-upgrade host convergence.** Privateer on every mesh host, the declared Kafka topics, and
+   MirrorMaker2 workers. Each host runs the same role as `cluster provision` in check mode first,
+   and a host that already matches is skipped without a restart. Privateer restarts in waves that
+   start with a single canary host, and mesh health is verified after each wave before the next
+   starts. Privateer's DNS socket stays open across its restart, so `.internal` lookups are
+   delayed rather than failed. The Kafka step creates declared topics and applies declared topic
+   configuration; it never reconfigures or restarts a broker or controller. MirrorMaker2 workers
+   converge their configuration first, then every changed worker restarts together.
+2. **Expand migrations.** Service databases the manifest declares but the cluster does not have
+   yet are created first, with owner and runtime roles and the current baseline. Then expand
+   migrations run on PostgreSQL/YugabyteDB and ClickHouse. The
+   [post-expand report](#post-expand-report) follows.
+3. **Service upgrades and reconciliations.** Platform services upgrade in dependency order, with
+   any reconciliation transitions the release declares run at their declared points. A platform
+   service the manifest adds or moves to a new host is installed there. Replicas and MirrorMaker2
+   workers the manifest no longer places are removed only after every desired replica is healthy.
+4. **Postdeploy migrations.** These refuse to run until the release's required data migrations
+   are complete.
 
-## Context or explicit manifest
+After postdeploy, `release apply` checks that every replica of the auth services and the web app
+runs the release's version, since a readiness check cannot detect an older web app bundle. It
+then sets the edge release target, from which Foghorn rolls edge nodes (see [Edge nodes](#edge-nodes)). Contract migrations
+are printed, never run.
 
-`frameworks setup` is convenience, not a hidden provisioning step. It creates a named
-operator context (persona, access mode, GitOps source, age key path, and remembered system
-tenant). Commands with no manifest-source flags use that context. You can instead pass
-`--manifest`, or `--gitops-dir --cluster`, on every invocation; release reconciliation
-then uses that already-resolved manifest and its `SERVICE_TOKEN`, while an operator JWT is
-needed only if a future transition actually declares an operator-authorized mutation.
+A reconciliation transition is a Check, Apply, Verify step that converges a declared invariant
+against the authoritative state. On a rerun it is checked again and skipped when complete. A
+blocked transition, for example when authoritative replicas disagree, stops the release with its
+reason. `release plan` lists the transitions a release declares, or `none`.
 
-For SSH/mesh contexts, `context check` resolves gRPC endpoints through the same transport
-resolver used by lifecycle commands. Saved localhost HTTP URLs are shown as unprobed rather
-than dialed directly. A failed attempted probe exits nonzero.
+### Rollout order within a service
 
-### Control plane first, then edges
+One service finishes on every replica before the next service starts. Replicas roll by the
+service's tier:
 
-An in-place 0.3.0 upgrade is supported only from the corrected, fully migrated **v0.2.96**
-stepping-stone. Upgrade older installations to v0.2.96, complete and verify its migrations, and
-only then start the v0.3.0 expand phase. The release planner refuses an unproven source version.
+| Tier    | Services                                                                     | Replica order                                     |
+| ------- | ---------------------------------------------------------------------------- | ------------------------------------------------- |
+| Control | Quartermaster, Navigator, Commodore, Purser, Bridge, and unclassified ones   | First replica alone as canary, then one at a time |
+| Media   | Foghorn, Chandler                                                            | One replica per cell at a time, cells in parallel |
+| Other   | Periscope, Decklog, Signalman, Bosun, Lookout, Skipper, Steward, and similar | Together, up to the service's `max_unavailable`   |
 
-Deploy and migrate the **control plane first**; a new Foghorn comes up without requiring
-any edge to be ready. Foghorn enforces a **minimum control-protocol version** at sidecar
-registration: a sidecar declaring a version below the deployed minimum is **rejected**
-(`FailedPrecondition`, logged with the observed and required versions) and cannot connect
-until it is upgraded. Because rejection happens before the control stream is established,
-that sidecar cannot receive an in-band updater command. When a release advances the
-minimum with no mixed-version window, operators must redeploy affected edges out of band;
-the specific minimum and interruption window belong in that release's notes.
-
-<Aside type="caution" title="0.3.0 makes a one-time protocol-v4 hard cut">
-  Foghorn 0.3.0 requires protocol v4 and rejects older Helmsmans. The provider control plane is
-  upgraded before the edge release target is synchronized, so existing v2/v3 edges temporarily
-  disappear from platform routing and cannot auto-update over their rejected control stream. After
-  the control-plane rollout, manually redeploy every self-hosted edge to the 0.3.0 edge image. An
-  offline v2 or v3 edge returning later must also be manually updated before it can reconnect. The
-  interruption lasts from the Foghorn rollout until each edge is redeployed; there is no
-  mixed-version grace period. A single-cell installation therefore has no platform-routed media
-  service during that interval. Schedule and rehearse the edge redeploy as part of the same
-  maintenance window. Attempt-less chapter-finalization results from the retired protocol are
-  deliberately rejected by Foghorn's attempt fence. After the edge is updated, a v2 replacement job
-  cancels and waits out any legacy local owner before reusing the processing stream, so an
-  interrupted chapter may remux again but two attempts never write it concurrently. In the inverse
-  delivery order, an upgraded Helmsman permits an attempt-less legacy dispatch only while that
-  processing stream is idle; without an attempt identity it cannot supersede an active owner.
-  Attempt-zero progress and results are rejected by the upgraded Foghorn fence, so this direction is
-  safe during the cut but is not a completion guarantee. The upgraded control plane reclaims and
-  redispatches the work with an attempt-fenced v2 identity after the edge upgrade.
-</Aside>
-
-Before rendering 0.3.0 services, make the media-authority roots stable in the
-production shared secret source: the Ed25519 signing tuple,
-`MEDIA_AUTHORITY_SEAL_ROOT_SECRET`, and the 32-byte hex
-`FOGHORN_STATE_ENCRYPTION_KEY` deployment root. The CLI derives distinct seal
-and state-encryption material for every declared Foghorn control cell and
-refuses a recipient cell that has no enabled Foghorn deployment. Do not copy a
-rendered cell key back into the shared secret file. v0.3.0 accepts one seal
-recipient per cell, so changing the seal root is a coordinated maintenance and
-full authority-recompilation operation, not an overlap rotation.
-
-Generate the five new production values with the CLI; it writes a new mode-0600 file and refuses
-to overwrite anything:
-
-```bash
-frameworks cluster secrets generate-media-authority --out /secure/path/media-authority.env
-```
-
-The fragment contains exactly `MEDIA_AUTHORITY_SIGNING_KEY_ID`,
-`MEDIA_AUTHORITY_SIGNING_PRIVATE_KEY_PEM_B64`, `MEDIA_AUTHORITY_TRUST_SET`,
-`MEDIA_AUTHORITY_SEAL_ROOT_SECRET`, and `FOGHORN_STATE_ENCRYPTION_KEY`. This is the upgrade command;
-do not use `generate-shared` on an existing deployment because that fresh-bootstrap command also
-generates unrelated shared credentials.
-
-Import every value from that fragment into the SOPS-managed shared secret file using the GitOps
-repository's supported secret-editing command, verify `frameworks cluster doctor --deep`, then
-securely remove the fragment. Do not paste the private key or roots into the manifest or command
-arguments.
-
-Deploy and health-check the keyed Commodore before replacing Bridge or any Foghorn. The upgraded
-Bridge uses Commodore's service-authenticated playback-policy resolver and must not lead that
-server change. An upgraded Foghorn
-understands both the legacy response from an older Commodore (the policy-presence field is absent)
-and the explicit signed-policy result from the upgraded service; an upgraded Commodore always sends
-the presence field, including explicit false when authority is unavailable. After Quartermaster's
-DNS expand, start upgraded Purser and let its startup entitlement sweep finish before running the
-closing Quartermaster DNS-entitlement data migration. This ordering is mandatory: the closing job
-fails unowned rows closed and never guesses entitlement from a legacy tier name.
-
-Cloned or re-provisioned nodes that share a machine ID or MAC set block the Quartermaster expand
-phase. The v0.3.0 unique indexes `uq_qm_fingerprints_machine` and `uq_qm_fingerprints_macs` cannot
-be built while duplicate fingerprints remain, so each of the two migrations
-(`005_node_identity_unique_indexes.notx.sql` and `006_node_identity_macs_unique_index.notx.sql`)
-has a read-only [precheck](/operators/postgres-migrations#migration-prechecks) that runs
-immediately before it. When the precheck finds duplicates, expand refuses that item before
-running any of its SQL and prints the total number of offending fingerprint rows and up to 50 of
-them as JSON, each with `node_id`, `cluster_id`, `last_seen`, `fingerprint_id`, and the shared
-hash. Earlier items stay applied; the refused item and everything after it are not.
-
-The precheck output identifies the conflicting bindings before any index DDL runs. Resolve the
-stale binding and correct the cloned host's machine ID or MACs before retrying expand. Do not
-choose a binding to remove solely from `last_seen`.
-
-Once Quartermaster has been upgraded to a version with the operator fingerprint RPCs, the CLI
-can list duplicate bindings across tenants:
-
-```bash
-frameworks admin nodes fingerprints list --duplicates
-```
-
-For each group, identify which physical host is which. Fix a cloned VM's machine ID or MACs so
-every physical node has a distinct identity, then remove the binding that no longer belongs to
-its node:
-
-```bash
-frameworks admin nodes fingerprints unbind <node-id> <fingerprint-id> --reason "cloned VM, machine ID regenerated"
-```
-
-Unbinding deletes that binding, including its hashes and identity key, and records a
-`node.fingerprint_unbound` service event with your user and the reason; the node must enroll
-again to rebind. Both commands need a platform-operator login (`frameworks login`). They cannot
-repair an initial v0.3.0 expand that is blocked before the new Quartermaster binary is installed.
-That case needs a reviewed repair of the named bindings in Quartermaster's database before the
-upgrade can continue; this release has no pre-upgrade unbind command.
-
-Then rerun expand (`frameworks cluster release apply`, or `frameworks cluster migrate --phase
-expand` in the lower-level flow). The migrate roles drop an invalid index left by an interrupted
-concurrent build before they retry that migration, so no manual index cleanup is needed. The
-postdeploy phase verifies that both indexes exist and are valid, so a partial build cannot be
-recorded as a healthy rollout.
-
-Foghorn admission-output encryption is rolling-safe without a manual pause or
-configuration edit. A 0.3.0 writer stores credential-bearing obligations in the
-`pending_v2`/`applied_v2` state family, which pre-0.3 workers do not claim. A
-0.3.0 worker continues draining legacy rows and migrates plaintext/v1 payloads
-to row-bound v2 ciphertext under the row lock. During and after the rollout,
-watch `foghorn_admission_payload_crypto_total{format,result}`; plaintext/v1 opens
-should fall to zero while `result="migrated"` accounts for the backlog.
-
-The shipped Prometheus rules alert on `commodore_media_authority_oldest_pending_seconds`,
-`commodore_media_authority_max_version_lag`, Purser authority-refresh worker readiness,
-queue age and delivery failures, Foghorn authority apply/verification rejection,
-hard-expired local reads, durable node-admission failures/saturation, and admission-payload decrypt
-errors, plus Helmsman's trigger-WAL depth and retryable `STREAM_END` acknowledgements. A
-tenantless acknowledged `STREAM_END` is deliberately retried without a fixed attempt cap because
-discarding it could strand live authority; until identity becomes resolvable its WAL entry remains
-pending. Treat a growing `helmsman_trigger_wal_pending` value as an operational incident, not an
-eventual dead-letter condition.
-
-Before the 0.3.0 `postdeploy` phase, run and verify the release-catalogued data
-migrations with `frameworks cluster data-migrate`. In addition to the tenant
-cluster-access and DVR policy jobs, this release requires
-`commodore_chapter_playback_authority_v0_3_0`. Each Foghorn cell separately runs
-the bounded `foghorn_federated_artifact_lifecycle_v0_3_0` and
-`foghorn_federated_pointer_purge_eligibility_v0_3_0` repairs against its own
-physical database in the background, so clustered aliases are not collapsed
-onto one logical service host. The latter restores the age of pointers that
-predate the dedicated purge clock. The expand phase does not hide either
-rewrite inside a DDL transaction.
-
-Those Foghorn-local jobs are intentionally absent from the global release catalog, so the
-postdeploy and contract gates do not check them. Before contract, check both jobs for every
-Foghorn cell, using each cell's Foghorn service name from the manifest (for example `foghorn-eu`):
-
-```bash
-frameworks cluster data-migrate status foghorn-eu.foghorn_federated_artifact_lifecycle_v0_3_0
-frameworks cluster data-migrate status foghorn-eu.foghorn_federated_pointer_purge_eligibility_v0_3_0
-```
-
-Both jobs must report complete in every cell. Missing, running, or failed is not complete. The
-result for one cell is not evidence for another cell's database.
-
-The required order is:
-
-Before the tenant-DNS command below, upgraded Purser must have completed one
-error-free full subscription sweep, which writes a durable handoff receipt.
-
-First run the subscriptionless DNS preflight in [Self-hosted edge hardening
-rollout](/operators/selfhosted-edge-rollout#rollout-order-and-gates). Do not
-start upgraded Purser until every printed tenant is either approved for DNS
-teardown or has a subscription created through the supported billing workflow.
-
-The tenant-DNS data migration checks the receipt itself. Until the receipt exists,
-`frameworks cluster data-migrate run quartermaster.quartermaster_tenant_dns_entitlements_v0_3_0`
-fails with `purser DNS entitlement handoff incomplete: durable sweep receipt "purser_dns_entitlements_v0_3_0" is missing`.
-That failure means the migration is intentionally blocked; inspect
-`purser_tier_access_reconciliation_failures_total{operation="sweep"}` and the
-Purser error. A failed tenant apply reports
-`materialize DNS entitlements for N tenants (first failure: ...)`. A surplus
-Purser subscription reports
-`DNS entitlement handoff census mismatch: subscriptions=N matched_subscriptions=N tenants=N`;
-repair the missing tenant or subscription through its owning service. An
-unobserved Quartermaster census reports
-`DNS entitlement handoff census incomplete: observed_by_sweep=N tenants=N unobserved=N`;
-let the entitlement sweep stamp those rows. Restore Purser-to-Quartermaster
-reconciliation and wait for a complete sweep. Until that sweep writes the
-receipt, the postdeploy tenant-DNS migration remains blocked. The historical
-`subscription_count` column records the Quartermaster tenant census validated
-by that sweep, including fail-closed tenants without a subscription. It is an
-audit value, not a permanent equality constraint: a tenant created after the
-immutable receipt starts with observed, disabled DNS entitlements and does not
-invalidate the handoff. Do not insert or rewrite the receipt manually.
-
-```bash
-frameworks cluster data-migrate run quartermaster.quartermaster_cluster_access_provenance_v0_3_0
-frameworks cluster data-migrate verify quartermaster.quartermaster_cluster_access_provenance_v0_3_0
-frameworks cluster data-migrate run quartermaster.quartermaster_node_identity_keys_v0_3_0
-frameworks cluster data-migrate verify quartermaster.quartermaster_node_identity_keys_v0_3_0
-frameworks cluster data-migrate run quartermaster.quartermaster_tenant_dns_entitlements_v0_3_0
-frameworks cluster data-migrate verify quartermaster.quartermaster_tenant_dns_entitlements_v0_3_0
-frameworks cluster data-migrate run commodore.commodore_dvr_playback_authority_v0_3_0
-frameworks cluster data-migrate verify commodore.commodore_dvr_playback_authority_v0_3_0
-frameworks cluster data-migrate run commodore.commodore_chapter_playback_authority_v0_3_0
-frameworks cluster data-migrate verify commodore.commodore_chapter_playback_authority_v0_3_0
-frameworks cluster data-migrate run commodore.commodore_field_encryption_v0_3_0 --backup <path taken within the last hour>
-frameworks cluster data-migrate verify commodore.commodore_field_encryption_v0_3_0
-```
-
-The field-encryption job keyset-pages every encrypted column and reports cumulative
-`scanned`, `changed`, `skipped`, and `errors` counts across batches and retries. A row it cannot
-decrypt with the configured keyring is moved to Commodore's field-encryption quarantine, and any
-quarantined row blocks the release by default. Preview which rows would be quarantined before the
-real run:
-
-```bash
-frameworks cluster data-migrate run commodore.commodore_field_encryption_v0_3_0 --dry-run
-```
-
-The dry-run reads every candidate row of every encrypted column from the start, decrypts without
-writing, and prints one `scanned table=<table> column=<column> rows=<n> undecryptable=<n>` line per
-column, then `findings: showing N of TOTAL` followed by up to 100 lines of the form
-`undecryptable table=<table> column=<column> row_id=<id> error=<kind>`. The error kind comes from
-the stored envelope header only, never from its contents: `unknown_key_id key_id=<id>` (a v3 value
-under a key that is not configured), `authentication_failed key_id=<id>` (the key is configured but
-does not open the value), `legacy_key_mismatch` (a v1/v2 value that neither `JWT_SECRET` nor the
-configured legacy and previous keys open), `malformed_envelope`, or `decrypt_failed`. Rows already
-in quarantine are not candidates and are not listed. No findings lines means every unquarantined
-row decrypts.
-
-`data-migrate verify` prints the current quarantine before its result, newest observation first:
-`field-encryption quarantine: showing N of TOTAL`, then up to 100 lines with `table`, `column`,
-`row_id`, `error_code`, `attempts`, and `last_observed_at`. A real run whose final verification
-fails prints the same listing. If `JWT_SECRET` must rotate before this job completes, first add
-the exact outgoing secret to the JSON `FIELD_ENCRYPTION_LEGACY_SECRETS` key set. This is
-the read-only legacy JWT-secret channel; `FIELD_ENCRYPTION_PREVIOUS_KEYS` is only for
-previous modern field-encryption keys. The migration persists the active key identity
-before scanning, and the checkpoint rejects an unpreserved mid-run JWT rotation. If
-repaired keys should be tried against quarantined rows, set
-`FIELD_ENCRYPTION_REQUEUE_QUARANTINE` to a new operator-chosen token such as
-`repair-2026-09-06-a` for one retry run and then remove it. Reusing the same token does
-not requeue rows; choose a new token for each later repair attempt. The checkpointed
-token and retry epoch make each pre-existing quarantine entry eligible once per explicit
-attempt. A migration already marked complete ignores a later requeue token, so repair and
-requeue before the final successful verification. Rows that still fail remain quarantined
-and continue to block verification. Only after repair/requeue is exhausted may
-`FIELD_ENCRYPTION_ALLOW_QUARANTINE=true` be used as a break-glass acknowledgement of
-known unreadable customer data; it is not a repair, and the affected rows must be documented.
-The initial legacy-key probe samples up to 32 rows per encrypted column. If every sampled
-legacy row is known to be corrupt, the break-glass value
-`FIELD_ENCRYPTION_ACK_UNVERIFIED_LEGACY_KEY=I_ACCEPT_UNVERIFIED_LEGACY_KEY` arms the
-migration without a successful sample; use it only after recording the affected rows.
-
-Periscope expand seeds the v2 cursor table from the established v1 watermarks. Only the new
-delivery ledger starts a 90-day bootstrap; existing ledgers resume at their migrated
-watermarks. Each rebuild chunk takes a session-scoped PostgreSQL advisory lock, so failover
-overlap is bounded to one idempotent chunk while connection or process loss hands
-ownership to another replica. The worker catches up in one-hour chunks and checkpoints
-every successful chunk. The leader gauge reports the replica's latest lease-election result, and
-the delivery cursor-lag gauge must stay below the alert threshold before contract rollout.
-Postdeploy refuses to proceed until the delivery cursor is within fifteen minutes of the
-settled frontier. When contract is eventually applied, its refresh file first seeds the
-upgrade-only discovery keys for retained playback and delivery identities in separate,
-spillable per-scope statements. Each completed scope writes a receipt, and the same file
-refuses the destructive refresh unless all six receipts were written by that attempt. It
-keeps keys and receipts available for two days so an overlapping scheduled refresh cannot
-lose discovery state, after which table TTL removes them. A delayed run or an unledgered
-retry after a partial failure therefore starts by reseeding; no manual
-receipt insertion or postdeploy reapplication is supported or required. Source ledger
-projection versions and TTLs are never rewritten. If the gate fails, leave the contract
-phase unapplied and retry the contract command; dashboards keep their pre-cutover
-definitions instead of exposing partial delivery history.
-Direct ledger-backed rollups discover keys from raw tombstone rows,
-compute values from canonical views, and stop one day inside source retention so a late
-partial source set cannot erase retained historical aggregates.
-The contract seed supplies the initial retained key set used to rewrite per-stream daily analytics from
-deduplicated playback and restream facts. Both audience and egress then use session-end
-day semantics. The bounded tenant-daily API request re-aggregates current finalized facts for
-at most 90 calendar days; stored tenant and stream daily projections retain the same
-730-day session-end-day horizon. The hourly refresh resolves affected historical keys
-against retained finalized facts and carries explicit external group/sort spill limits.
-
-The chapter migration depends on the DVR migration and intentionally refuses to run first. During
-the DVR backfill, rows not yet snapshotted use their parent stream only as a rollout-compatibility
-read; completed rows and all newly-created DVRs use their immutable local snapshot.
-
-Because a connected sidecar is always on the current protocol, its artifact inventory
-is always a **versioned whole-node snapshot** (a monotonic per-connection sequence),
-which Foghorn treats as authoritative — it can add _and remove_ copies immediately.
-There is no unversioned/legacy inventory handling.
-
-Foghorn still applies an **artifact-only readiness cordon**: on every (re)connect an
-edge node is excluded from **stored-artifact routing** until its active connection
-delivers its first complete versioned snapshot. **Live ingest and stream routing are
-unaffected** — only stored-clip/VOD/DVR playback from that edge is withheld while it
-has not yet reported.
-
-Therefore:
-
-- Upgrade/migrate the **control plane first**; it does not wait on the edge.
-- **Redeploy every edge afterward.** A sidecar below the minimum is absent from platform
-  routing until it reconnects on a supported protocol. Existing local media processes may
-  continue running, but that does not make the rejected node available for new platform
-  assignments. A supported sidecar is cordoned only for stored artifacts until it sends
-  its first versioned snapshot.
-- A supported N−1 / third-party edge protocol range applies only where a release
-  declares one; absent that, treat the deployed minimum as a hard floor.
-- Re-render the edge deployment before recreating its container. The 0.3.0 compose render adds the
-  persistent `/data/state` volume used by `HELMSMAN_STATE_DIR`; pulling the new image against an old
-  compose file leaves that state anonymous. Recreating it then loses node identity, the Mist-trigger
-  WAL, ingest-generation fences, processing overrides, and any undelivered media-control completions.
-  Treat the state volume as durable media-plane authority, not as a disposable cache.
-
-### Thumbnails: deterministic serving, install-time ordering
-
-Chandler is a **dumb static-object server**: a request path maps DETERMINISTICALLY to an
-S3 key (`thumbnails/{asset}/{file}`), which it streams and caches. It makes **no
-per-request call to Foghorn** and needs no `FOGHORN_INTERNAL_URL`. `SERVICE_TOKEN` gates
-only its internal cache-invalidation endpoint; serving does not need it.
-
-`has_thumbnails` (and the API URL) is exposed **only after** Foghorn has projected a thumbnail
-to that deterministic served key, so the API never advertises a thumbnail Chandler cannot serve.
-The publish/projection internals (how Foghorn picks and projects the winning attempt, and how it
-recovers a published-but-unprojected one) are in
-[the thumbnails architecture doc](https://github.com/Livepeer-FrameWorks/monorepo/blob/master/docs/architecture/thumbnails.md).
-
-At **serving** time there is no per-request resolver call and no publish-time handshake, so
-Chandler has no runtime dependency on Foghorn's version. Installation carries one ordering
-edge: Chandler's readiness check reads a sentinel the in-cell Foghorn establishes at boot,
-so the planner deploys **Chandler after that Foghorn**. The **topology** rule also stands: a
-Foghorn is rejected if its cluster has no Chandler (a publisher with nothing to serve its
-thumbnails).
-
-The served URL is `{chandlerBase}/assets/{asset}/{file}` — a stable, deterministic shape
-that is Chandler's only public route — so a URL producer that upgrades before the media-cell
-Chandler never emits a path an already-running Chandler cannot serve.
-
-The projection to the deterministic key is **eventually consistent, not strictly serial**
-(a database lock cannot fence a non-atomic S3 copy): a straggler overwrite that lands within
-the max-copy window is corrected by the winner's automatic re-copy, and a straggler that
-resurrects a deleted object within the window is reclaimed by a delayed second cleanup sweep.
-Deletion tombstones the asset (the API stops returning its URL immediately) and sweeps the
-`thumbnails/{asset}/` prefix; the tombstone stops any new projection, and the delayed sweep
-reclaims a copy that lands within the window. A copy whose provider tail exceeds the assumed
-window is **not** reclaimed — the accepted, rare residual risk (a re-exposed cosmetic
-thumbnail), since thumbnails are regenerable derivatives, not primary media.
-
-Live-stream thumbnails are minted on the **ingest cell** (its own per-cell Foghorn database).
-The owning cell is recorded durably before any thumbnail is minted, and deletion fans the cleanup
-out to every recorded owning cell — so per-cell databases converge without a shared DB. An empty
-owner set means "no thumbnails": there is no cross-cell guess.
-
-### The release command: reconciliations run automatically
-
-Cross-service reconciliations are **not** a manual intermission. `frameworks cluster release apply`
-runs the whole release as one ordered, resumable plan and interleaves reconciliation transitions at
-their declared points:
-
-```text
-pre-upgrade host convergence: Privateer on every mesh host, declared Kafka
-  topics, MirrorMaker2 workers (hosts already converged are skipped)
-→ service databases and expand migrations
-→ service upgrades in dependency order, with reconciliation transitions
-  interleaved at their declared points
-→ stale placement cleanup: service replicas and MirrorMaker2 workers the
-  manifest no longer places
-→ postdeploy migrations
-→ contract migrations explicitly deferred until the rollback window closes
-```
-
-The pre-upgrade stage runs on every release, before the first migration. It uses the same roles as
-`cluster provision`: each host renders its desired Privateer or MirrorMaker2 state and runs the
-role's check-mode precheck, so a host that already matches is skipped without a restart, and a
-rerun after a failure resumes where the cluster still differs. A host that converges lists the role
-tasks its precheck reported as changing. Privateer hosts converge in waves by what they run:
-
-1. **Canary**: one control host alone. Control hosts run Quartermaster, Navigator, Commodore,
-   Purser, Bridge, or a data store (Postgres/YugabyteDB, Kafka brokers or controllers,
-   ClickHouse).
-2. **Control**: the remaining control hosts, one at a time.
-3. **Media**: hosts running Foghorn, Chandler, the Livepeer gateway or signer, Redis, or edge
-   nodes. One host per cell at a time, with cells in parallel.
-4. **Other**: analytics, Decklog, Signalman, Bosun, Lookout, Skipper, Steward, Deckhand, the web
-   apps, and observability. Up to eight hosts at a time.
-
-A host belongs to the most critical wave of anything it runs, and a service the CLI does not
-classify counts as control. Mesh health is verified on each wave's hosts before the next wave
-starts. If a host or its mesh check fails, no further host starts. The error lists the hosts left
-untouched, and the CLI prints the `release apply` command to rerun, which skips hosts that
-already converged. In a parallel wave every output line is prefixed with its host. Privateer's
-DNS socket is held by a systemd socket unit that stays open across Privateer restarts, so a
-restart delays `.internal` lookups instead of failing them. MirrorMaker2 workers converge their config without restarting, and
-every worker with a changed config or binary then restarts together. The Kafka step only creates declared topics that do not exist yet;
-it never reconfigures or restarts a broker or controller. Privateer seeds carry the service names
-both the previous and the target release resolve, so converging them before the service upgrades
-leaves every running binary reachable. `release plan` lists the stage, and
-`release apply --dry-run` runs each host's precheck and reports whether it would install,
-converge, or skip.
-
-Service upgrades keep their dependency order: one service finishes on every replica before the
-next service starts. Within one service, replicas roll by the same classes. A control service
-upgrades one replica at a time, and the first replica is the canary. A media service upgrades one
-replica per cell at a time, with cells in parallel. Any other service upgrades its replicas
-together. The service's `max_unavailable` caps how many replicas are down at once. Every built-in
-default is `1`, so media and other services roll one replica at a time unless the manifest raises
-`update_strategy.max_unavailable` for that service:
+`max_unavailable` caps how many replicas of a media or other service are down at once. The
+built-in default is `1` for Foghorn, Chandler, and the control services. Stateless workers such as
+Signalman, Decklog, the Periscope services, Lookout, Bosun, Skipper, Deckhand, and Steward default
+to all replicas at once. Override it per service in the manifest:
 
 ```yaml
 services:
   decklog:
     hosts: [regional-eu-1, regional-eu-2, regional-eu-3]
     update_strategy:
-      max_unavailable: 3
+      max_unavailable: 1
 ```
 
-Yugabyte keeps its own one-node-at-a-time roll. A failed replica stops the service's rollout
-before any further replica starts, and the release stops there.
+A failed replica stops the service's rollout before any further replica starts, and the release
+stops there.
 
-Before the first mutation, `release apply` checks that every earlier release is finished: the
-postdeploy migrations of earlier releases must be in every service database and ClickHouse ledger,
-and their required data migrations must be complete. Otherwise it stops, changes nothing, and names
-the release to apply first (`frameworks cluster release apply --version <that release>`). Databases
-the release creates are exempt, because they start from the current baseline.
+### Post-expand report
 
-Before the first mutation, `release apply` also renders every service it will install or upgrade
-and fails if a declared operator input (for example `LOOKOUT_ALERTMANAGER_TOKEN` for Lookout) is
-missing, in `--dry-run` too. `cluster provision` runs the same check over its whole plan.
+Between expand and the service upgrades, `release apply` reads the Quartermaster database in a
+read-only transaction and prints:
+
+- operator-managed nodes without an identity key, which block postdeploy until they re-enroll;
+- customer-enrolled nodes without an identity key, which the new Quartermaster refuses at their
+  next connect until they re-enroll;
+- tenants with a custom subdomain or domain whose DNS entitlements are still unobserved, and
+  whether Purser's entitlement handoff receipt exists.
+
+Each list shows up to 50 rows with the total, and keyless nodes come with the re-enrollment
+instruction. The report never fails the release. `post-expand report: nothing pending` is the
+all-clear. `post-expand report: not run (expand not applied)` appears on a dry-run before expand
+has been applied and is not an all-clear. To see the full report before any service is replaced,
+apply expand on its own and then run the dry-run:
 
 ```bash
-frameworks cluster release apply --dry-run   # show the plan + every gate/Check, mutate nothing
-frameworks cluster release apply --yes        # run it
+frameworks cluster migrate --phase expand --to-version vX.Y.Z
+frameworks cluster release apply --version vX.Y.Z --dry-run
 ```
 
-A reconciliation transition is a constrained **Check → Apply → Verify** node registered
-by a compiled handler id. It converges a declared invariant against natural authoritative
-state, so the release is **resumable**: if a later step fails, rerun `release apply` — each
-transition re-Checks reality and skips whatever is already `Complete`. A `Blocked` transition
-(e.g. authoritative replicas that disagree, or an authority that is unreachable) halts the release
-with a clear reason instead of guessing, and a transition whose precondition does not apply reports
-`Not applicable` rather than mutating.
+### What `release apply` does not change
 
-`cluster migrate` and `cluster upgrade` remain as
-**recovery/debugging tools**; `release apply` is the normal path **for a cluster that is already
-installed** — it upgrades existing services and runs the reconciliation transitions. A platform
-service the manifest adds or moves to a new host is installed there during the release, and the
-stale placement it left behind is removed only after every desired replica is healthy. A direct
-`cluster upgrade <service>` refuses a host where the service is not installed. Managed
-dependencies (VictoriaMetrics, vmagent, vmalert, Alertmanager, and similar) and data
-infrastructure (Kafka brokers and controllers, PostgreSQL/YugabyteDB, Redis, ClickHouse) are
-never installed or changed by `release apply`; its only host-infrastructure work is the
-pre-upgrade stage above. A **from-scratch** cluster is brought
-up with `cluster provision` (see [When to use provision](#when-to-use-provision)), which is where
-install ordering and initial descriptor establishment happen. After the initial provision, use
-`release apply` for subsequent rollouts. At **serving** time Chandler has no runtime dependency on Foghorn's version (it serves a
-deterministic key with no per-request Foghorn call); the Foghorn-before-Chandler ordering is an
-**install-time** property of the planner, shared by both `provision` and `release apply`. **Upgrade the
-`frameworks` CLI to at least the release's `min_cli_version` before applying** — the CLI
-validates that from the fetched release metadata, but a CLI predating that check cannot be
-stopped by it, so treat the CLI upgrade as the first step.
+- **Managed dependencies** have their own manifest pins: nginx, Caddy, VictoriaMetrics, vmagent,
+  vmauth, vmalert, Alertmanager, Grafana, Metabase, Prometheus, Listmonk, Chatwoot, MistServer,
+  and the Livepeer gateway and signer. Use `cluster diff` to see desired and observed state, and
+  `cluster provision` when their pins change.
+- **Data infrastructure**: PostgreSQL/YugabyteDB, Kafka brokers and controllers, Redis, and
+  ClickHouse. Its only host-infrastructure work is the pre-upgrade stage above.
+- **Rendered ingress and observability configuration**, which `cluster provision --only
+interfaces` applies.
 
-### Cold-storage freeze: the control-protocol contract
+A direct `cluster upgrade <service>` refuses a host where the service is not installed; only
+`release apply` installs a newly placed platform service.
 
-Cold-storage freeze (uploading a stored clip/VOD to durable S3) uses a **staged,
-server-minted** protocol: Foghorn mints the attempt id, presigns an **attempt-scoped
-staging** PUT, and publishes the verified staging object itself — copying it to a fresh
-immutable attempt-versioned key and atomically flipping the object pointer. The sidecar
-must upload to the staging key it is handed and echo the server-minted attempt id at
-completion.
+## Edge nodes
 
-Foghorn gates freeze dispatch on the sidecar's **observed** control-protocol version
-(never a per-request self-asserted flag): a sidecar below the staged-freeze minimum is
-**refused freeze assignments** — both the interactive permission request (denied with
-`sidecar_protocol_unsupported`) and proactive reconciler dispatch fail closed, and the
-artifact simply **stays local and retryable**.
+Deploy and migrate the control plane before the edges. A new Foghorn does not wait for any edge.
 
-The **registration minimum** (see "Control plane first, then edges" above) is at or above
-every staged-operation minimum — so any sidecar that connects at all already satisfies the
-freeze gate, and a below-minimum sidecar is **rejected at registration** rather than run in
-a degraded mode. There is no
-"upgrade edges first" or "run old sidecars against a new Foghorn" step: deploy the
-control plane, then redeploy every edge.
+After the release sets the edge release target, Foghorn updates Helmsman, MistServer, and Caddy
+over the Helmsman control stream on native and single-image container nodes. A component whose
+version did not change is not rolled.
 
-### Multi-region event mesh, alerting, and incidents (v0.3.8)
-
-v0.3.8 changes production topology as well as binaries. `release apply` carries the topology
-change in a safe order; only the managed alerting dependencies and the pull-source pin conversion
-run separately:
-
-| Change                                                                                                                                                                | Command                                                |
-| --------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------ |
-| Privateer seed DNS, the `lookout.incidents` topic, MirrorMaker2 links in both directions with the JMX exporter, platform services, Lookout and its `lookout` database | `cluster release apply`                                |
-| vmagent `region` and `cluster` labels, the MirrorMaker2 scrape, vmalert, Alertmanager                                                                                 | `cluster provision --version v0.3.8 --only interfaces` |
-| Pull-source pins                                                                                                                                                      | `cluster data-migrate`                                 |
-
-`release apply` converges the mesh and Kafka in its pre-upgrade stage (see
-[The release command](#the-release-command-reconciliations-run-automatically)) before any service
-rolls:
-
-- Privateer seeds gain `decklog.<aggregator-region>` and keep the names v0.3.7 binaries dial:
-  `signalman.<region>` on Bridge hosts, and a plain `decklog` on central writer hosts resolving
-  to the aggregator-region replicas. Each mesh host also receives the v0.3.8 Privateer binary.
-- `lookout.incidents` is created on the aggregator Kafka cluster. No broker or controller is
-  reconfigured or restarted.
-- The existing MirrorMaker2 workers restart with the JMX exporter, which pauses replication into
-  the aggregator briefly, and the workers for the link out of the aggregator start.
-
-The service upgrades then render the new wiring: Signalman consumes the other regions' mirrored
-`analytics_events` and `service_events` (`MIRROR_REGION_PREFIXES`), Bridge subscribes only to its
-local Signalman, central writers dial `decklog.<aggregator-region>.internal`, and Periscope-Ingest
-runs only in the aggregator region. Every Signalman upgrades before any Bridge, and the mirrored
-topics the new Signalman reads already exist.
-
-#### Before you start
-
-1. **Upgrade the CLI and the manifest together.** Run `frameworks update`, then confirm
-   `frameworks version` reports v0.3.8 or later. The v0.3.8 CLI rejects the old
-   `infrastructure.kafka.mirrormaker.host`, `mirrormaker.hosts`, and `regional[].mirror_topics`
-   fields. An older CLI rejects `mirrormaker.links`, `services.lookout`, `observability.vmalert`, and
-   `observability.alertmanager`. Merge the new manifest only when every operator has the new CLI;
-   an old CLI binary is usable only with the previous manifest revision.
-2. **Update the manifest.**
-   - Replace `mirrormaker.hosts` and each `mirror_topics` list with `mirrormaker.links`: one link for
-     every ordered pair of Kafka regions, with worker `hosts` in that link's target region. The
-     planner refuses a missing direction or a worker outside the target region. Omit `topics` to
-     use the default set for each direction.
-   - Place every `periscope-ingest` host in the aggregator Kafka region. Rendering refuses a
-     Periscope-Ingest host in another region.
-   - Add `services.lookout`, `lookout` under `infrastructure.postgres.databases`, and a
-     `lookout.incidents` topic on the aggregator Kafka cluster.
-   - Add `observability.vmalert` and `observability.alertmanager`. Alertmanager runs on one host.
-   - Replace `allowed_cluster_ids` in the bootstrap overlay, as described in
-     [Pull-source pins become stream placement rules](#pull-source-pins-become-stream-placement-rules-v038).
-3. **Set the alerting inputs** in the shared secrets file with the GitOps helper
-   `gitops/scripts/sops-env.sh`. From the GitOps repository root, omitting the value makes the
-   helper prompt for it without echoing:
-
-   ```bash
-   openssl rand -hex 32   # generate the token, then paste it at the prompt
-   ./scripts/sops-env.sh set secrets/production.env LOOKOUT_ALERTMANAGER_TOKEN
-   ./scripts/sops-env.sh set secrets/production.env ALERTMANAGER_HEARTBEAT_URL
-   ./scripts/sops-env.sh set secrets/production.env ALERTMANAGER_EMAIL_TO
-   ```
-
-   The optional Lookout channels use the same command: `LOOKOUT_NOTIFY_EMAIL_TO`,
-   `LOOKOUT_SLACK_WEBHOOK_URL`, and `LOOKOUT_DISCORD_WEBHOOK_URL`. Alertmanager's email fallback
-   reuses the platform `SMTP_HOST`, `SMTP_PORT`, and `FROM_EMAIL`, plus `SMTP_USER` and
-   `SMTP_PASSWORD` when set. Confirm that the keys have values without printing them:
-
-   ```bash
-   sops -d secrets/production.env | grep -oE '^(LOOKOUT_ALERTMANAGER_TOKEN|ALERTMANAGER_HEARTBEAT_URL|ALERTMANAGER_EMAIL_TO)=.' | cut -d= -f1
-   grep -hoE '^(SMTP_HOST|SMTP_PORT|FROM_EMAIL)=.' config/production.env secrets/production.env | cut -d= -f1
-   ```
-
-   Lookout exits at startup without `LOOKOUT_ALERTMANAGER_TOKEN`. `release apply` (including
-   `--dry-run`) refuses to start while Lookout's token is missing, and
-   `provision --only interfaces` refuses while any Alertmanager input above is missing. Both list
-   every missing key. See [Alerting and Incidents](/operators/alerting).
-
-4. **Check Redis Sentinel.** A v0.3.8 Foghorn configured with a Sentinel topology waits for it and
-   exits if it stays unreachable. The previous Foghorn logged a warning and ran without Redis, so
-   look for `Failed to initialize redis` in `frameworks cluster logs foghorn-eu --tail 500` (and
-   for every other Foghorn alias) and fix Sentinel first.
-
-#### Upgrade sequence
-
-<Steps>
-1. Preview the release. The static plan lists Privateer on every mesh host, Kafka topics for each
-   region, and `kafka-mirrormaker` on every link worker host, with `signalman` ordered before
-   `bridge`. The dry-run must pass the required-input preflight, show the existing MM2 workers as
-   `would converge` and the new reverse-link workers as `would install`, list the `lookout`
-   database, and list non-aggregator Periscope-Ingest replicas for removal without removing any
-   declared MM2 worker.
-
-    ```bash
-    frameworks cluster release plan --version v0.3.8
-    frameworks cluster release apply --version v0.3.8 --dry-run
-    ```
-
-2. Apply the release:
-
-   ```bash
-   frameworks cluster release apply --version v0.3.8 --yes
-   ```
-
-   The pre-upgrade stage restarts Privateer in waves, verifies mesh health after each, creates
-   `lookout.incidents`, and converges MirrorMaker2 one worker at a time. The release then creates
-   the `lookout` database, runs expand migrations, upgrades every platform service with Signalman
-   ahead of Bridge, installs Lookout, removes Periscope-Ingest from hosts outside the aggregator
-   region after the remaining replicas are healthy, and runs postdeploy migrations.
-
-   While it runs, services on v0.3.7 and v0.3.8 resolve every name they dial. An upgraded
-   Quartermaster may emit platform-scoped service events that the older Decklog rejects; its
-   outbox retries them once Decklog is upgraded.
-
-   If any step fails, fix the cause and rerun the same command. Hosts already converged and
-   services already at v0.3.8 are skipped.
-
-3. Convert pull-source pins with the data migration in
-   [Pull-source pins become stream placement rules](#pull-source-pins-become-stream-placement-rules-v038):
-
-   ```bash
-   frameworks cluster data-migrate run commodore.commodore_pull_source_pins_to_stream_rules_v0_3_8
-   frameworks cluster data-migrate verify commodore.commodore_pull_source_pins_to_stream_rules_v0_3_8
-   ```
-
-4. Install alerting once Lookout is healthy, because Alertmanager delivers every alert group to it:
-
-   ```bash
-   frameworks cluster provision --version v0.3.8 --only interfaces --dry-run
-   frameworks cluster provision --version v0.3.8 --only interfaces
-   frameworks cluster grafana sync
-   ```
-
-   `--version v0.3.8` pins the provision to the release you just applied, whatever the manifest
-   channel currently resolves to. The run adds `region` and `cluster` labels to every vmagent
-   (restarting each), scrapes the MirrorMaker2 exporter on its worker hosts, and installs vmalert
-   and Alertmanager. Tasks that already match their rendered state, such as Privateer after the
-   release, are skipped without a restart.
-
-5. Verify:
-
-   ```bash
-   frameworks cluster status
-   frameworks cluster doctor --deep
-   frameworks cluster diff
-   ```
-
-</Steps>
-
-#### What to watch
-
-| After step | Check                                                                                                                                                                                                                                                                      |
-| ---------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| 2          | `signalman_kafka_consumer_lag` gains series for the other regions' mirrored topics (`us-east.analytics_events` on aggregator-region Signalmans, `<aggregator-region>.service_events` elsewhere); `signalman_kafka_duplicate_events_total` rises only while copies overlap. |
-| 2          | `periscope_ingest_kafka_consumer_lag{topic="us-east.analytics.raw_mist_triggers"}` rises and drains as retained regional usage is replayed; `foghorn_redis_connected` is `1` on every Foghorn; `frameworks cluster logs commodore` shows no Decklog dial errors.           |
-| 4          | `kafka_connect_mirror_source_connector_replication_latency_ms_max` for every `source`/`target` pair; the heartbeat provider receives Alertmanager pings; the `MM2ReplicationLagHigh` and `RegionalTelemetryStale` rules stay inactive.                                     |
-
-#### Rollback
-
-- v0.3.8 declares no rollback restrictions and no reconciliation transitions, so a service whose
-  health check fails during step 2 is rolled back automatically, as described in
-  [Rollback behavior](#rollback-behavior). Rerun `release apply`; converged hosts and services
-  already at v0.3.8 are skipped.
-- A failure in the pre-upgrade stage stops the release before any migration or service upgrade.
-  Hosts that converged stay converged, which is safe for the v0.3.7 services still running.
-- Lookout is a new installation and has no automatic rollback. A Lookout that fails its health
-  check stops `release apply` after the services before it have upgraded; fix the cause and rerun.
-  To continue without it, disable `services.lookout`, `observability.alertmanager`, and
-  `observability.vmalert` together; Alertmanager refuses to provision without a Lookout service in
-  the manifest.
-- To return an individual service to v0.3.7, keep the v0.3.8 CLI and manifest and run
-  `frameworks cluster upgrade <service> --version v0.3.7`. The seeds keep the names v0.3.7
-  binaries dial, so a rolled-back Bridge or central writer still resolves Signalman and Decklog.
-  Lookout has no earlier artifact. Expand migrations stay in place for the older binaries. The
-  Navigator postdeploy migration deletes exact per-domain certificates for tenant custom domains,
-  and a rolled-back Navigator does not get them back.
-- Do not roll back the CLI or the manifest to recover. The older CLI cannot parse the v0.3.8
-  manifest, and the v0.3.8 CLI cannot parse the older one.
-- MirrorMaker2 links and Privateer are not rolled back. The added link only creates
-  source-prefixed topic copies, which older consumers ignore. A failed link is repaired forward:
-  fix the cause and rerun `release apply`. While a link is down, Signalmans in its target region
-  miss realtime events from its source region, and a link into the aggregator delays regional
-  analytics and billing. Moving a link to other worker hosts starts the new workers in the
-  pre-upgrade stage and removes the old ones during stale placement cleanup.
-- Alerting is outside the serving path. If `provision --only interfaces` fails, fix the reported
-  input and rerun it.
-
-### Pull-source pins become stream placement rules (v0.3.8)
-
-v0.3.8 stores where a pull or managed stream's source may run as the stream's own ingest placement
-rules (its source location) and lets placement rules name nodes. The per-source
-`allowed_cluster_ids` pins remain in the schema and are still enforced by Foghorn during this
-release; Commodore mirrors every written location's clusters into them.
-
-Before rendering, replace every `allowed_cluster_ids` key under `commodore.pull_streams` and
-`commodore.mist_native_streams` in the bootstrap overlay with
-`source_location: { clusters: [...] }` (see [Cluster manifest](/operators/cluster-manifest#stream-source-location)).
-The v0.3.8 CLI rejects the old key.
-
-After the control plane is deployed, convert existing pins with the release-catalogued data
-migration:
+Foghorn rejects a Helmsman whose control-protocol version is below its minimum at registration.
+Such an edge is absent from platform routing and cannot receive an update over the rejected
+stream, so it has to be redeployed out of band:
 
 ```bash
-frameworks cluster data-migrate run commodore.commodore_pull_source_pins_to_stream_rules_v0_3_8 --dry-run
-frameworks cluster data-migrate run commodore.commodore_pull_source_pins_to_stream_rules_v0_3_8
-frameworks cluster data-migrate verify commodore.commodore_pull_source_pins_to_stream_rules_v0_3_8
+frameworks edge provision --manifest <edge-manifest>
 ```
 
-The dry run counts streams whose rules would change without writing. The run converts each pinned
-stream in its own transaction, recording a placement change with actor `system:data-migration`,
-and is safe to rerun. A stream with no own ingest allow gets one allowed alternative per pinned
-cluster; a stream that already has one keeps it, narrowed to the pinned clusters. If that rule
-and the pins share no cluster, the pins replace the rule's allowed clusters. Verify fails
-while any pinned stream lacks an equivalent rule. The migration is required before the contract
-phase.
-
-Node placement activates per cell: once every live Foghorn replica in a cell runs v0.3.8 and
-enforces placement, the cell attests `node_placement_ready`, and tenants whose cells all attest are issued node-capable
-authority. Rules that name nodes are refused until then. The pin columns,
-`commodore.stream_cluster_pins` and the Foghorn pin readers are removed in the release after
-v0.3.8, which requires this migration to be verified and every media cell to attest node
-placement.
+A release that raises the minimum says so in its release note, with the interruption window.
+Always redeploy an edge through `edge provision` rather than pulling a new image against an old
+rendered deployment: the render carries the persistent Helmsman state volume, which holds node
+identity and undelivered control acknowledgements.
 
 ## Version selection
 
 `--version` accepts:
 
-| Value        | Meaning                                      |
-| ------------ | -------------------------------------------- |
-| `stable`     | Latest stable release manifest               |
-| `candidate`  | Newest release, including release candidates |
-| `latest`     | Alias of `candidate`                         |
-| `rc`         | Legacy RC-only track                         |
-| `v0.0.0-rc1` | Specific release manifest                    |
-| omitted      | The cluster's configured channel, or stable  |
+| Value          | Meaning                                                |
+| -------------- | ------------------------------------------------------ |
+| `stable`       | Latest stable release                                  |
+| `candidate`    | Newest release, including release candidates           |
+| `latest`       | Alias of `candidate`                                   |
+| `rc`           | Newest release candidate only                          |
+| `vX.Y.Z[-rcN]` | That release                                           |
+| omitted        | The manifest's `channel`, or `stable` when it has none |
 
-Set the default channel with:
+`cluster release plan`, `cluster release apply`, `cluster upgrade`, and `cluster provision` all
+accept it. Set the manifest channel with `set-channel`, which accepts `stable`, `candidate`, or
+`rc`:
 
 ```bash
 frameworks cluster set-channel stable
@@ -38068,61 +37478,66 @@ frameworks cluster set-channel candidate
 
 ## Schema and data migration phases
 
-PostgreSQL and YugabyteDB migrations are managed by `frameworks cluster
-migrate`. Run them before deploying service versions that require new tables,
-columns, or indexes.
+| Phase      | What changes                                                            | Rollback expectation                                           |
+| ---------- | ----------------------------------------------------------------------- | -------------------------------------------------------------- |
+| Expand     | Add nullable/defaulted columns, tables, indexes, or broader constraints | Old and new binaries both run against the expanded schema      |
+| Deploy     | Roll out binaries that can read and write both shapes                   | Roll back by redeploying the old binary                        |
+| Data       | Populate new rows or columns from old data in batches                   | Resumable and idempotent                                       |
+| Postdeploy | Prefer or require the new shape once verified                           | Roll back only while fallback or dual-write remains            |
+| Contract   | Drop old columns, tables, values, and fallback code                     | Not a normal rollback point; requires a forward fix or restore |
 
-Normal rolling upgrades must follow an expand/data/postdeploy/contract model:
+`cluster migrate` applies the PostgreSQL/YugabyteDB and ClickHouse phases, records each migration
+with its checksum, rejects edited applied migrations, and refuses a database below the release's
+baseline floor. It does not run data migrations. `cluster doctor` compares the embedded migrations
+with each database's ledger and reports pending migrations and checksum drift. See
+[PostgreSQL Migrations](/operators/postgres-migrations) and
+[ClickHouse Migrations](/operators/clickhouse-migrations).
 
-| Phase      | What changes                                                            | Rollback expectation                                               |
-| ---------- | ----------------------------------------------------------------------- | ------------------------------------------------------------------ |
-| Expand     | Add nullable/defaulted columns, tables, indexes, or broader constraints | Old and new binaries both run against the expanded schema          |
-| Deploy     | Roll out binaries that can read/write both shapes                       | Roll back by redeploying the old binary                            |
-| Data       | Populate new rows/columns from old data in batches                      | Background data migration is idempotent and safe to pause/resume   |
-| Postdeploy | Prefer or require the new shape once verified                           | Roll back only while fallback/dual-write remains                   |
-| Contract   | Drop old columns/tables/values and fallback code                        | Not a normal rollback point; requires a new forward fix or restore |
+### Data migrations
 
-Do not put destructive contract work in the same normal upgrade step as the
-expand work. Column drops, table drops, enum/check narrowing, required fields
-without a complete background data migration, and semantic rewrites that old
-binaries cannot handle require a later contract release or an explicit downtime
-runbook.
+A release can require data migrations to complete before a later phase. `release apply`,
+`cluster upgrade`, `cluster migrate --phase postdeploy|contract`, and `cluster provision` check
+them and refuse to continue; none of them runs one. Run them with `cluster data-migrate`:
 
-For billing and other audit-sensitive domains:
+| Command                           | Purpose                                         |
+| --------------------------------- | ----------------------------------------------- |
+| `list --to-version vX.Y.Z`        | Data migrations the release catalog requires    |
+| `run <service>.<id> [--dry-run]`  | Run one to completion; `--dry-run` is read-only |
+| `status <service>.<id>`           | Persisted state on the owning service host      |
+| `verify <service>.<id>`           | Read-only verification                          |
+| `pause` / `resume <service>.<id>` | Pause or resume a running migration             |
 
-- finalized invoices should remain immutable unless the release explicitly
-  documents a correction,
-- pricing and rating changes should be effective-dated,
-- draft/open records may be recalculated only by a documented background data
-  migration or rating command,
-- release verification should include counts and totals, not just service
-  health.
+A service binary that cannot report a required migration's state counts as incomplete. Running an
+irreversible data migration needs `--backup` with a backup that started less than an hour earlier
+and whose ledgers match; `--dry-run` does not. A migration is irreversible when the release lists
+its service under automatic-rollback exclusions, or when the service binary marks it irreversible
+or does not say.
 
-`cluster migrate` applies ClickHouse schema migrations (expand/postdeploy/contract
-phases) for the configured ClickHouse databases alongside Postgres, and refuses to
-proceed if the cluster is below the required baseline floor. Follow the
-[ClickHouse Migrations](/operators/clickhouse-migrations) runbook for phase ordering
-and replicated-cluster specifics, and apply the expand phase before upgrading the
-analytics services that depend on it.
+Foghorn also runs cell-local data migrations against each cell's own database in the background.
+They are not in the release catalog, so no gate checks them. When a release note names one, check
+it in every cell, using each cell's Foghorn service name from the manifest:
+
+```bash
+frameworks cluster data-migrate status foghorn-eu.<id>
+```
 
 ## Rollback behavior
 
-If health validation fails, `cluster upgrade` attempts to roll the service back
-to the previously detected version. Keep rollback enabled for normal production
-rollouts.
+When a service fails its readiness check after an upgrade, `cluster upgrade` and `release apply`
+redeploy the previous version and check it again. Rollback is skipped when:
 
-This rollback only swaps the service artifact back. It does not undo schema or
-data migrations. That is intentional for expand-compatible changes: the old
-binary should keep working while extra tables/columns remain in place. If a
-release includes a migration that makes the old binary invalid, treat it as a
-downtime upgrade with a tested database restore or forward-fix plan.
+- the release lists the service under automatic-rollback exclusions, because the previous binary
+  could not pass the new health contract (`release plan` lists these);
+- the service was newly installed or its previous version could not be detected;
+- you pass `--no-rollback`, to inspect a failed service in place:
 
-Use `--no-rollback` only when you want to inspect a failed upgraded service in
-place:
+  ```bash
+  frameworks cluster upgrade bridge --version rc --no-rollback
+  ```
 
-```bash
-frameworks cluster upgrade bridge --version rc --no-rollback
-```
+Rollback swaps the service artifact only. It does not undo schema or data migrations. Expand
+migrations stay in place for the older binary, which is why a release keeps destructive changes
+in the contract phase.
 
 ## Health and readiness
 
@@ -38133,151 +37548,52 @@ Every FrameWorks Go service answers two endpoints on its HTTP port:
 | `/health` | Live: the process is running. Container health checks and ingress probes use it.                                                                                                                                           |
 | `/ready`  | Able to serve: 200 only after the service's own database, ClickHouse, Kafka, or object-store checks pass and its gRPC listeners serve. It returns 503 while a check fails and from the moment the service starts draining. |
 
-Services serve `/ready` from v0.3.11 on; Chandler has always served it. Earlier
-releases answer 404 on `/ready`.
+Services serve `/ready` from v0.3.11 on; Chandler has always served it. Earlier releases answer
+404 on `/ready`.
 
-**Rollout waits.** After deploying a service, `cluster upgrade` and
-`cluster release apply` wait up to 150 seconds for it to report ready before the
-upgrade counts as failed and the automatic rollback starts. A v0.3.11 or later
-binary is checked on `/ready`. A rollback to v0.3.10 or earlier is checked on
-`/health`, because that binary has no `/ready`. `cluster apply` waits up to 150
-seconds per host as well. A service that cannot reach its own database within the
-wait fails its rollout, which is the intended outcome: fix the dependency and
-rerun the command.
+`cluster upgrade` and `release apply` wait up to 150 seconds for each deployed service to report
+ready before the upgrade counts as failed. A v0.3.11 or later binary is checked on `/ready`, and a
+rollback to an earlier binary on `/health`. A service that cannot reach its own database within
+the wait fails its rollout: fix the dependency and rerun the command.
 
-**Quartermaster, Navigator, and `cluster doctor`.** These cannot tell which
-release a given instance runs, so for now they keep checking `/health` for every
-Go service except Chandler. They move to `/ready` in the release that requires
-v0.3.11 as the minimum source (see
-[Supported upgrade sources](/operators/release-lifecycle/#supported-upgrade-sources)).
-
-## CLI support status
-
-Today, `frameworks cluster migrate --phase expand` applies pending embedded
-PostgreSQL/YugabyteDB migrations from the database/version/phase directory
-layout. The command records phase and checksum in `_migrations`, rejects edited
-applied migrations, and does not run service-specific data migrations.
-Non-transactional `.notx.sql` files may contain multiple validated concurrent
-index statements; PostgreSQL/YugabyteDB receives each statement as a separate
-autocommit query while the file remains one immutable migration ledger entry.
-Each such index has a same-release postdeploy check for the exact index name in
-the same SQL statement through `pg_index.indisready` and `indisvalid`; upgrades
-stop instead of accepting an invalid relation left behind by an interrupted
-concurrent build.
-
-`frameworks cluster doctor` also checks the migration ledger: embedded
-PostgreSQL/YugabyteDB migrations are compared with `_migrations` in each
-configured database so pending required migrations and checksum drift show up
-during normal diagnostics.
-
-Pre-release v0.3.0 builds briefly exposed the Commodore restream postdeploy files
-under the opposite sequence numbers. A development database that applied those
-unreleased files will correctly report checksum drift against the final ordering.
-Do not edit `_migrations` to silence it: recreate that pre-release database from the
-current baseline, or restore its pre-v0.3.0 snapshot and rerun the upgrade. Released
-environments are unaffected because v0.3.0 had not shipped under the earlier layout.
-
-`frameworks cluster upgrade plan` shows the target rollout order and embedded
-SQL migrations by phase. The CLI embeds a release catalog for service database
-ownership, data-migration requirements, and the per-release `min_cli_version`
-tooling floor. `cluster upgrade` uses that catalog together with live
-`_migrations` and `_data_migrations` state to refuse unsafe rollouts before
-changing binaries. Engine schema checks (expand + prior postdeploy) apply to a
-service that owns a PostgreSQL/YugabyteDB or ClickHouse schema; the required
-data-migration check applies to **every** service, because a data migration can
-gate a binary that only reads the migrated data without owning its schema.
-Ordering is enforced against the actual migration ledger, not a version label. A
-non-concrete (dev/unversioned) CLI is refused against a release's
-`min_cli_version` unless you pass `--unsafe-ignore-cli-version-floor`. `cluster
-provision` runs the same required-data-migration gate before it deploys
-applications, so a clean-compute redeploy cannot start newer binaries ahead of a
-required migration on a preserved database. The gate runs after database
-initialization and reads durable `_schema_baseline` provenance: a data migration
-introduced strictly below the floor a database was born at is folded into that
-baseline, so a fresh (baseline-born) database is exempt without special-casing
-database existence.
-
-`frameworks cluster data-migrate` is the operator command for resumable
-service-owned data migrations. `list` shows catalog-declared work and adoption
-state; `run --dry-run` is read-only; `run`, `status`, `verify`, `pause`, and
-`resume` operate through the service binary on the target host. If a
-release declares a required data migration but the service binary cannot report
-state, upgrade and postdeploy/contract gates fail closed instead of treating
-the unknown as safe. `run` of an irreversible data migration (for example
-`purser_eur_ledger_conversion_v0_3_11` or `commodore_field_encryption_v0_3_0`)
-requires `--backup` with a backup under an hour old whose ledgers match the
-service's databases; `run --dry-run` does not.
-
-Contract migrations are intentionally separate. `release plan` prints the deferred
-command, and `cluster migrate --phase contract` runs it only after the matching
-data-migration gate succeeds and a fresh matching backup is passed with `--backup`,
-so destructive cleanup cannot be mixed into the routine expand/deploy step or
-silently eliminate the rollback path.
-
-## Local compose exception
-
-The root `docker-compose.yml` is a seeded development stack, not an
-operator-managed cluster. For local development, incompatible schema changes can
-be handled by recreating volumes and reseeding:
-
-```bash
-docker compose down -v
-docker compose up -d
-```
-
-That shortcut is acceptable for local compose because demo data is disposable.
-It is not an operator upgrade path.
+`cluster apply`, `cluster doctor`, Quartermaster, and Navigator cannot tell which release an
+instance runs, so they check `/health` for every Go service except Chandler. They move to `/ready`
+in the release that requires v0.3.11 as the minimum source.
 
 ## When to use provision
 
 Use `frameworks cluster provision` for:
 
-- first deployment of a cluster,
-- adding a host, an infrastructure component, or a managed dependency to the manifest (a new
-  platform service is installed by `release apply`),
-- repairing drift where you intentionally want a full converge,
-- re-rendering infrastructure after changing role inputs.
+- first deployment of a cluster;
+- adding a host, an infrastructure component, or a managed dependency (a new platform service is
+  installed by `release apply`);
+- applying changed managed-dependency pins or the interface layer;
+- repairing drift where you intentionally want a full converge.
 
-For routine release rollouts, use `cluster release plan` followed by `cluster release
-apply`. Use `cluster upgrade` and `cluster migrate` independently only for recovery,
-diagnosis, or the explicitly deferred contract phase.
+`cluster provision` runs the same required-data-migration gate before it deploys applications, so
+redeploying compute against a preserved database cannot start newer binaries ahead of a required
+migration. A database created from a baseline is exempt from migrations that baseline already
+includes.
 
 ## Why some services keep their older version label
 
-A FrameWorks release manifest pins every service by content identity (Docker
-image digest, native tarball SHA-256), not by version label. When a service's
-source code did not change since an earlier release, the new manifest carries
-that service's previous `service_version` label forward verbatim — for
-example, a `v1.2.3` release can legitimately list `helmsman` with
-`service_version: v1.2.1` because that is the release that actually produced
-the bytes you are running.
+A release manifest pins every service by content identity (Docker image digest, native tarball
+SHA-256), not by version label. When a service's code did not change, the new manifest carries its
+previous `service_version` forward. A `v1.2.3` release can list `helmsman` at `v1.2.1` because
+that release produced the bytes you run. `platform_version` names the release a manifest belongs
+to; `service_version` names the release that built each component.
 
-This is the **artefact provenance** model: `platform_version` says "what
-release this manifest belongs to," and `service_version` per component says
-"which release actually produced this component's bytes."
+- `cluster upgrade plan` shows each service's target image digest and tarball checksum. When the
+  installed identity matches the target, nothing is pulled again.
+- Foghorn compares edge component versions with the ones each node reports, so a release that
+  carries Helmsman, MistServer, and Caddy forward does not roll any edge.
+- A carried service is the same artifact that shipped earlier, not a downgrade.
 
-Practical consequences:
+## Local compose
 
-- `cluster upgrade plan` shows each service's target image digest and native
-  tarball checksum, not just version labels. If your installed identity equals
-  the target identity, nothing is re-pulled regardless of the umbrella
-  version.
-- For edge nodes, Foghorn's release reconciler compares per-component versions
-  against `foghorn.node_components`. Carried-forward components keep their old
-  label, so a release that doesn't touch helmsman/mist/caddy does not roll any
-  edge node.
-- A "carried" service is not a downgrade. It is the same artefact that
-  shipped earlier, content-pinned forward into the new release.
-
-<Aside type="note" title="Edge nodes auto-update in both modes">
-  Foghorn auto-updates Helmsman, MistServer, and Caddy components over the Helmsman control stream
-  for native nodes and single-image container nodes alike; MistServer binary updates use an in-place
-  controller reload in both. Container nodes keep binaries on persistent volumes, so in-place
-  updates survive container restarts. Only the retired multi-container docker mode was excluded from
-  reconciliation.
-</Aside>
-
-Release notes call out carried components when relevant.
+The root `docker-compose.yml` is a seeded development stack, not an operator-managed cluster.
+Incompatible schema changes are handled there by recreating volumes and reseeding
+(`docker compose down -v`, then `docker compose up -d`). That is not an operator upgrade path.
 
 
 ---
