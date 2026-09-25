@@ -3,12 +3,10 @@ package handlers
 import (
 	"context"
 	"database/sql"
-	"encoding/json"
 	"errors"
 	"math"
 	"net/http"
 	"net/url"
-	"reflect"
 	"strconv"
 	"strings"
 	"time"
@@ -166,6 +164,13 @@ func authorizeSignedLivepeerJob(ctx context.Context, manifestID string, req live
 	}
 
 	if authCtx.ExpectedSource != nil && !livepeerSourceMatches(req.Source, *authCtx.ExpectedSource) {
+		if logger != nil {
+			logger.WithFields(logging.Fields{
+				"manifest_id":     manifestID,
+				"observed_source": req.Source,
+				"expected_source": *authCtx.ExpectedSource,
+			}).Warn("livepeer auth: gateway source differs from the authorised job source")
+		}
 		return nil, authRejectSourceMismatch
 	}
 	source := mist.SourceMediaInfo{Width: req.Source.Width, Height: req.Source.Height, FPS: req.Source.FPS}
@@ -179,10 +184,19 @@ func authorizeSignedLivepeerJob(ctx context.Context, manifestID string, req live
 	}
 	if len(req.Profiles) > 0 {
 		observed := mist.NormalizeLivepeerProfiles(req.Profiles, source)
-		if !livepeerProfilesSemanticallyEqual(observed, profiles) {
+		if diff := mist.LivepeerProfileMismatch(observed, profiles, source); diff != "" {
+			if logger != nil {
+				logger.WithFields(logging.Fields{
+					"manifest_id":       manifestID,
+					"difference":        diff,
+					"observed_profiles": observed,
+					"expected_profiles": profiles,
+					"source":            req.Source,
+				}).Warn("livepeer auth: gateway profiles differ from the authorised job spec")
+			}
 			return nil, authRejectSpecMismatch
 		}
-		if !livepeerProfilesSemanticallyEqual(req.Profiles, profiles) && metrics != nil && metrics.LivepeerAuthProfileNormalized != nil {
+		if mist.LivepeerProfileMismatch(req.Profiles, profiles, source) != "" && metrics != nil && metrics.LivepeerAuthProfileNormalized != nil {
 			metrics.LivepeerAuthProfileNormalized.WithLabelValues().Inc()
 		}
 	}
@@ -323,29 +337,6 @@ func authorizeLiveTranscode(ctx context.Context, claims control.TranscodeJobClai
 		return nil
 	}
 	return &LivepeerAuthContext{TenantID: row.TenantID, StreamID: streamID, ProcessesJSON: row.ProcessesJson}
-}
-
-func livepeerProfilesSemanticallyEqual(a, b []livepeerJSONProfile) bool {
-	if len(a) != len(b) {
-		return false
-	}
-	canonical := func(in []livepeerJSONProfile) (interface{}, error) {
-		encoded, err := json.Marshal(in)
-		if err != nil {
-			return nil, err
-		}
-		var out interface{}
-		if err := json.Unmarshal(encoded, &out); err != nil {
-			return nil, err
-		}
-		return out, nil
-	}
-	canonicalA, err := canonical(a)
-	if err != nil {
-		return false
-	}
-	canonicalB, err := canonical(b)
-	return err == nil && reflect.DeepEqual(canonicalA, canonicalB)
 }
 
 func livepeerSourceMatches(observed, expected livepeerSource) bool {

@@ -244,9 +244,8 @@ func TestAuthorizeSignedLivepeerProcessingJobReturnsStoredCanonicalContract(t *t
 
 	got, reason := authorizeSignedLivepeerJob(context.Background(), "processing+artifact-Ab12Cd34", livepeerAuthRequest{
 		URL: "http://gateway/live/processing+artifact-Ab12Cd34/0.ts", JobToken: token, RemoteIP: "203.0.113.4",
-		Source: livepeerSource{Width: 1920, Height: 1080, FPS: 30, Codec: "h264", PixelFormat: "yuv420p"},
-		Profiles: []livepeerJSONProfile{{"name": "360p", "bitrate": 900000, "height": 360, "width": 640,
-			"fps": 30000, "fpsDen": 1000, "profile": "H264ConstrainedHigh", "gop": "0.0"}},
+		Source:   livepeerSource{Width: 1920, Height: 1080, FPS: 30, Codec: "h264", PixelFormat: "yuv420p"},
+		Profiles: []livepeerJSONProfile{gatewayWireProfile("360p", 640, 360, 900000, 30000, 1000)},
 	})
 	if got == nil || reason != "" {
 		t.Fatalf("authorization failed: reason=%q context=%+v", reason, got)
@@ -400,6 +399,16 @@ func assertJSONEqual(t *testing.T, want, got interface{}) {
 // The gateway forwards Mist's push target with one of Mist's two encoding
 // layers left: the webhook URL carries live%252b<name>-<suffix>. Every form a
 // hop can deliver must authorize against a token minted for live+<name>.
+// gatewayWireProfile is one profile as go-livepeer's auth webhook sends it: Mist's
+// profile decoded into lpms' ffmpeg.JsonProfile and re-encoded, so every
+// JsonProfile field is present, zero-valued where Mist set nothing.
+func gatewayWireProfile(name string, width, height, bitrate, fps, fpsDen int) livepeerJSONProfile {
+	return livepeerJSONProfile{
+		"name": name, "width": width, "height": height, "bitrate": bitrate, "fps": fps, "fpsDen": fpsDen,
+		"profile": "H264ConstrainedHigh", "gop": "0.0", "encoder": "", "colorDepth": 0, "chromaFormat": 0, "quality": 0,
+	}
+}
+
 func TestHandleLivepeerAuthAcceptsGatewayWireEncodedManifest(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	sm := configureLivepeerAuthNode(t, true, true, false)
@@ -422,7 +431,7 @@ func TestHandleLivepeerAuthAcceptsGatewayWireEncodedManifest(t *testing.T) {
 		body, err := json.Marshal(livepeerAuthRequest{
 			URL: url, JobToken: token, RemoteIP: "203.0.113.4",
 			Source:   livepeerSource{Width: 1280, Height: 720, FPS: 30, Codec: "h264"},
-			Profiles: []livepeerJSONProfile{{"name": "360p", "bitrate": 900000, "height": 360, "profile": "H264ConstrainedHigh"}},
+			Profiles: []livepeerJSONProfile{gatewayWireProfile("360p", 640, 360, 900000, 30000, 1000)},
 		})
 		if err != nil {
 			t.Fatal(err)
