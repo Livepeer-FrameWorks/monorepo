@@ -1,0 +1,72 @@
+# Livepeer gateway front for the stack: the media_ingest site that
+# cli/pkg/provisioner/reverse_proxy_role.go renders in production (writeNginxServer
+# with profile media_ingest). Keep the two in step: the staging manifest-id bug
+# crossed exactly this proxy, so the stack must pass requests the same way.
+# Port 80 carries only /healthz for Quartermaster's HTTP health poller.
+
+server {
+    listen 80;
+    server_name ${GATEWAY_FQDN};
+
+    location = /healthz {
+        limit_except GET HEAD { deny all; }
+        proxy_pass http://${GATEWAY_UPSTREAM};
+        proxy_http_version 1.1;
+        proxy_connect_timeout 5s;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $remote_addr;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+}
+
+server {
+    listen 443 ssl;
+    server_name ${GATEWAY_FQDN};
+    http2 on;
+    ssl_certificate /etc/frameworks/certs/gateway.crt;
+    ssl_certificate_key /etc/frameworks/certs/gateway.key;
+    add_header Strict-Transport-Security "max-age=31536000" always;
+
+    location = /healthz {
+        limit_except GET HEAD { deny all; }
+        proxy_pass http://${GATEWAY_UPSTREAM};
+        proxy_http_version 1.1;
+        client_max_body_size 512m;
+        client_body_timeout 900s;
+        send_timeout 900s;
+        proxy_request_buffering off;
+        proxy_buffering off;
+        proxy_buffer_size 32k;
+        proxy_buffers 8 32k;
+        proxy_busy_buffers_size 64k;
+        proxy_connect_timeout 5s;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $remote_addr;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_read_timeout 900s;
+        proxy_send_timeout 900s;
+    }
+
+    location ^~ /live/ {
+        limit_except POST PUT { deny all; }
+        proxy_pass http://${GATEWAY_UPSTREAM};
+        proxy_http_version 1.1;
+        client_max_body_size 512m;
+        client_body_timeout 900s;
+        send_timeout 900s;
+        proxy_request_buffering off;
+        proxy_buffering off;
+        proxy_buffer_size 32k;
+        proxy_buffers 8 32k;
+        proxy_busy_buffers_size 64k;
+        proxy_connect_timeout 5s;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $remote_addr;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_read_timeout 900s;
+        proxy_send_timeout 900s;
+    }
+}

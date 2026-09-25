@@ -187,3 +187,6 @@ __pycache__/
 .mypy_cache/
 .pytest_cache/
 *.egg-info/
+
+# Production-shaped stack slots (scripts/stack): generated overlays, certs, Mist builds, logs
+.stack/

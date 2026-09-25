@@ -191,7 +191,10 @@ ON CONFLICT (tenant_id, cluster_id) DO UPDATE SET
     status = EXCLUDED.status,
     updated_at = NOW();
 
--- Cluster pricing for demo clusters
+-- Cluster pricing for demo clusters. Every platform-official cluster needs a
+-- row: tier access reconciliation suspends a tenant's access to an official
+-- cluster that no row makes eligible for its tier. The media clusters use the
+-- production media-cluster pricing; us-primary exists in the two-cell stack.
 INSERT INTO purser.cluster_pricing (
     cluster_id, pricing_model,
     allow_free_tier, required_tier_level,
@@ -203,13 +206,24 @@ INSERT INTO purser.cluster_pricing (
         '{"retention_days": 7}'
     ),
     (
+        'demo-media', 'tier_inherit',
+        TRUE, 0,
+        '{}'
+    ),
+    (
+        'us-primary', 'tier_inherit',
+        TRUE, 0,
+        '{}'
+    ),
+    (
         'demo-selfhosted', 'free_unmetered',
         TRUE, 0,
         '{"retention_days": 30}'
     )
 ON CONFLICT (cluster_id) DO UPDATE SET
-    pricing_model = 'free_unmetered',
-    allow_free_tier = TRUE;
+    pricing_model = EXCLUDED.pricing_model,
+    allow_free_tier = EXCLUDED.allow_free_tier,
+    required_tier_level = EXCLUDED.required_tier_level;
 
 INSERT INTO purser.platform_fee_policy (
     cluster_kind, cluster_owner_tenant_id, pricing_source, fee_basis_points, notes

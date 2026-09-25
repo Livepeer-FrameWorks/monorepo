@@ -1,0 +1,52 @@
+name: Stack
+
+# Production-shaped end-to-end stack (make verify-stack): two cells with two
+# Foghorn replicas each, offchain Livepeer, webhook receiver and Mailpit, running
+# the scenarios in scripts/stack/scenarios. Nightly and on demand only; it is
+# never a push or pull-request gate.
+on:
+  schedule:
+    - cron: "30 2 * * *" # 02:30 UTC daily
+  workflow_dispatch:
+    inputs:
+      scenarios:
+        description: "STACK_SCENARIOS: default | manual | all | 01,04,..."
+        required: false
+        default: "default"
+        type: string
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  stack:
+    name: verify-stack
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: .go-version
+
+      - uses: ./.github/actions/setup-node-pnpm
+
+      # up.sh generates each slot's environment with fresh dev secrets; S3 is
+      # the stack's own Ceph RGW, so no repository secrets are needed.
+      - name: make verify-stack
+        env:
+          STACK_SCENARIOS: ${{ inputs.scenarios || 'default' }}
+        run: make verify-stack
+
+      # verify.sh writes every container's log here before tearing down a failed run.
+      - uses: actions/upload-artifact@v7
+        if: failure()
+        with:
+          name: stack-logs
+          path: .stack/slot-1/compose.log
+          retention-days: 7

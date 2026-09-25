@@ -678,6 +678,24 @@ verify-two-cell-media:
 verify-media-lifecycle:
 	@bash $(CURDIR)/scripts/verify-media-lifecycle.sh
 
+# Production-shaped stack (docker-compose.stack.yml over the two-cell stack): two
+# Foghorn replicas per cell, offchain Livepeer per cell behind the production
+# media_ingest proxy, webhook receiver, Mailpit. verify-stack brings a slot up,
+# runs scripts/stack/scenarios, checks every container log for defect
+# signatures and tears it down. STACK_SLOT=N runs independent slots side by side;
+# MIST_SOURCE_DIR=<checkout> builds Mist from a local fork; STACK_SCENARIOS
+# selects (default | manual | all | 01,04,...); STACK_KEEP=1 keeps the slot.
+# Nightly and manual in .github/workflows/stack.yml; never a push or PR gate.
+.PHONY: verify-stack stack-up stack-down
+verify-stack:
+	@bash $(CURDIR)/scripts/stack/verify.sh
+
+stack-up:
+	@bash $(CURDIR)/scripts/stack/up.sh
+
+stack-down:
+	@bash $(CURDIR)/scripts/stack/down.sh
+
 test-topology:
 	@echo "Running infrastructure topology contract tests..."
 	@(cd $(SERVICE_DIR_pkg) && go test $(GO_TAG_FLAGS) ./topology -race -count=1)
@@ -1051,7 +1069,7 @@ DOMAIN_EVENT_OUTBOX_REALPG_TESTS := TestDomainEventOutbox_RealPG
 BOSUN_REALPG_TESTS := TestBosunMirroredDuplicatesCollapse_RealPG|TestBosunTenantIsolation_RealPG|TestBosunLeaseReclaimNoDoubleDelivery_RealPG|TestBosunBackoffAndAutoDisable_RealPG|TestBosunReplayKeepsID_RealPG|TestBosunPruning_RealPG|TestBosunEndpointLimitAndSecrets_RealPG|TestBosunOffsetsCommitAfterTransaction_RealPG|TestBosunDeliveryAgainstTLSReceiver_RealPG|TestBosunInternalFailureSettles_RealPG|TestBosunPruneKeepsReplayedDelivery_RealPG
 BOSUN_REALYB_TESTS := TestBosunLeaseReclaimNoDoubleDelivery_RealYugabyte|TestBosunBackoffAndAutoDisable_RealYugabyte|TestBosunInternalFailureSettles_RealYugabyte|TestBosunReplayKeepsID_RealYugabyte|TestBosunPruning_RealYugabyte
 PERISCOPE_DOMAIN_EVENTS_REALCH_TESTS := TestDomainEventProjection_RealClickHouse|TestAPIUsageRootFieldSignatures_RealClickHouse
-COMMODORE_QUERY_CATALOG_REALPG_TESTS :=TestGeneratedQueryCatalogPrepares_RealPG|TestDVRRegistrationSnapshotsReadyWebhookAuthority_RealPG|TestResolveVODByHashIdentifiesChapterParent_RealPG|TestChapterPlaybackAuthorityDataMigration_RealPG|TestChapterPlaybackAuthorityBackfillDoesNotOverwriteConcurrentPolicyCascade_RealPG|TestUpsertChapterPlaybackIDRejectsCrossTenantCollision_RealPG|TestArtifactCreationCommandAckLease_RealPG|TestManualQueryAdapters_RealPG|TestAccountSessionRepository_RealPG|TestAccountRecoveryWalletRepository_RealPG|TestFieldEncryptionSuppressesEveryMediaAuthorityTrigger_RealPG|TestPushTargetOwnershipQueriesEnforceOwnerOrTenantManager_RealPG|TestAdminAPITokenListing_RealPG|TestArtifactOriginBackfillMigration_RealPG
+COMMODORE_QUERY_CATALOG_REALPG_TESTS :=TestGeneratedQueryCatalogPrepares_RealPG|TestDVRRegistrationSnapshotsReadyWebhookAuthority_RealPG|TestResolveVODByHashIdentifiesChapterParent_RealPG|TestChapterPlaybackAuthorityDataMigration_RealPG|TestChapterPlaybackAuthorityBackfillDoesNotOverwriteConcurrentPolicyCascade_RealPG|TestUpsertChapterPlaybackIDRejectsCrossTenantCollision_RealPG|TestArtifactCreationCommandAckLease_RealPG|TestManualQueryAdapters_RealPG|TestStorageArtifactStatusFollowsInProgressLifecycleOverSync_RealPG|TestAccountSessionRepository_RealPG|TestAccountRecoveryWalletRepository_RealPG|TestFieldEncryptionSuppressesEveryMediaAuthorityTrigger_RealPG|TestPushTargetOwnershipQueriesEnforceOwnerOrTenantManager_RealPG|TestAdminAPITokenListing_RealPG|TestArtifactOriginBackfillMigration_RealPG
 FOGHORN_CONTROL_REALPG_TESTS := $(FOGHORN_CONTROL_REALPG_TESTS_BASE)|TestDelayedSyncCannotMovePlacementClockBackward_RealPG|TestCapacityPendingRestreamRearmUsesBoundedStableRunCycle_RealPG|TestOfflineAckWaitHasIndependentBackoffAndDeadLetters_RealPG|TestAdmissionMistIDBindRequiresCurrentActivationAttempt_RealPG
 FOGHORN_CONTROL_REALPG_TESTS := $(FOGHORN_CONTROL_REALPG_TESTS)|TestDVRRecordingSource_RealPG|TestDVRStartTimeAnchorsChapters_RealPG|TestRecordingReadyRequiresChapters_RealPG|TestTerminalChapterBackfill_RealPG|TestDVRParentStorageSettles_RealPG|TestChapterIDStableAcrossStop_RealPG|TestProcessConfigCacheUpdatePersistsForOwningJobOnly_RealPG
 FOGHORN_DOMAIN_EVENTS_REALPG_TESTS := TestStreamLifecycleDomainEvents_RealPG|TestArtifactTransitionDomainEvents_RealPG|TestRecordingLifecycleDomainEvents_RealPG|TestFoghornDomainEventRelay_RealPG|TestArtifactDeletedRecordedOncePerDeletion_RealPG|TestArtifactAggregateVersions_RealPG|TestArtifactAggregateVersionReplicaRace_RealPG
@@ -1222,7 +1240,7 @@ verify-schema-migrations-core: verify-foghorn-test-selection
 	@$(CONTRACT_GO_TEST) api_control postgres/commodore-api-tokens -tags schema_verify -run 'TestAPITokenRepository_RealPG' -count=1 -timeout 600s ./internal/grpc/
 	@$(CONTRACT_GO_TEST) api_control postgres/commodore-native-auth -tags schema_verify -run 'TestNativeAuthorizationRepository_RealPG' -count=1 -timeout 600s ./internal/grpc/
 	@$(CONTRACT_GO_TEST) api_tenants postgres/quartermaster-bootstrap -tags schema_verify -run 'TestBootstrapRepositoryReplay_RealPG' -count=1 -timeout 600s ./internal/bootstrap/
-	@$(CONTRACT_GO_TEST) api_tenants postgres/quartermaster-query-catalog -tags schema_verify -run 'TestGeneratedQueryCatalogPrepares_RealPG|TestPeerDiscoveryCanonicalControlCells_RealPG|TestManualQueryAdapters_RealPG|TestConvertedRuntimeAdapters_RealPG|TestDNSEntitlementExpandPreservesPaidAliasesUntilObservation_RealPG|TestListTenantEffectiveAccessUsesCanonicalActiveGrantPredicate_RealPG|TestMediaPlacementInventory_RealPG|TestMediaCapacityConsent_RealPG|TestMediaAuthorityRefreshCoalescing_RealPG|TestPrivateClusterControlCellFoghorns_RealPG|TestClusterControlCellReassignment_RealPG|TestServiceEventOutboxScopeAndLeaseToken_RealPG' -count=1 -timeout 600s ./internal/database/quartermasterdb/
+	@$(CONTRACT_GO_TEST) api_tenants postgres/quartermaster-query-catalog -tags schema_verify -run 'TestGeneratedQueryCatalogPrepares_RealPG|TestPeerDiscoveryCanonicalControlCells_RealPG|TestPeerDiscoveryAddressIsStableAcrossReplicaHeartbeats_RealPG|TestManualQueryAdapters_RealPG|TestConvertedRuntimeAdapters_RealPG|TestDNSEntitlementExpandPreservesPaidAliasesUntilObservation_RealPG|TestListTenantEffectiveAccessUsesCanonicalActiveGrantPredicate_RealPG|TestMediaPlacementInventory_RealPG|TestMediaCapacityConsent_RealPG|TestMediaAuthorityRefreshCoalescing_RealPG|TestPrivateClusterControlCellFoghorns_RealPG|TestClusterControlCellReassignment_RealPG|TestServiceEventOutboxScopeAndLeaseToken_RealPG' -count=1 -timeout 600s ./internal/database/quartermasterdb/
 	@$(CONTRACT_GO_TEST) api_tenants postgres/quartermaster-data-migrations -tags schema_verify -run 'TestTenantDNSEntitlementsRunAndVerifyRealPG|TestNodeIdentityKeyGateUsesRemediationOwnershipRealPG' -count=1 -timeout 600s ./internal/datamigrations/
 	@$(CONTRACT_GO_TEST) api_tenants postgres/quartermaster-dns-entitlement-handoff -tags schema_verify -run 'TestCompleteTenantDNSEntitlementHandoffRealPG|TestCapacityConsentManagement_RealPG|TestPrivateClusterOwnershipLimitSerializes_RealPG' -count=1 -timeout 600s ./internal/grpc/
 	@$(CONTRACT_GO_TEST) api_tenants postgres/quartermaster-capabilities -tags schema_verify -run '$(QUARTERMASTER_CAPABILITIES_REALPG_TESTS)' -count=1 -timeout 600s ./internal/grpc/
@@ -1320,7 +1338,7 @@ verify-quartermaster-db:
 	@docker info >/dev/null 2>&1 || { echo "ERROR: verify-quartermaster-db requires a running Docker daemon"; exit 1; }
 	@echo "Verifying Quartermaster's converted repositories on PostgreSQL (Docker)..."
 	@$(CONTRACT_GO_TEST) api_tenants postgres/quartermaster-bootstrap -tags schema_verify -run 'TestBootstrapRepositoryReplay_RealPG' -count=1 -timeout 600s ./internal/bootstrap/
-	@$(CONTRACT_GO_TEST) api_tenants postgres/quartermaster-query-catalog -tags schema_verify -run 'TestGeneratedQueryCatalogPrepares_RealPG|TestPeerDiscoveryCanonicalControlCells_RealPG|TestManualQueryAdapters_RealPG|TestConvertedRuntimeAdapters_RealPG|TestDNSEntitlementExpandPreservesPaidAliasesUntilObservation_RealPG|TestListTenantEffectiveAccessUsesCanonicalActiveGrantPredicate_RealPG|TestMediaPlacementInventory_RealPG|TestMediaCapacityConsent_RealPG|TestMediaAuthorityRefreshCoalescing_RealPG|TestPrivateClusterControlCellFoghorns_RealPG|TestClusterControlCellReassignment_RealPG|TestServiceEventOutboxScopeAndLeaseToken_RealPG' -count=1 -timeout 600s ./internal/database/quartermasterdb/
+	@$(CONTRACT_GO_TEST) api_tenants postgres/quartermaster-query-catalog -tags schema_verify -run 'TestGeneratedQueryCatalogPrepares_RealPG|TestPeerDiscoveryCanonicalControlCells_RealPG|TestPeerDiscoveryAddressIsStableAcrossReplicaHeartbeats_RealPG|TestManualQueryAdapters_RealPG|TestConvertedRuntimeAdapters_RealPG|TestDNSEntitlementExpandPreservesPaidAliasesUntilObservation_RealPG|TestListTenantEffectiveAccessUsesCanonicalActiveGrantPredicate_RealPG|TestMediaPlacementInventory_RealPG|TestMediaCapacityConsent_RealPG|TestMediaAuthorityRefreshCoalescing_RealPG|TestPrivateClusterControlCellFoghorns_RealPG|TestClusterControlCellReassignment_RealPG|TestServiceEventOutboxScopeAndLeaseToken_RealPG' -count=1 -timeout 600s ./internal/database/quartermasterdb/
 	@$(CONTRACT_GO_TEST) api_tenants postgres/quartermaster-data-migrations -tags schema_verify -run 'TestTenantDNSEntitlementsRunAndVerifyRealPG|TestNodeIdentityKeyGateUsesRemediationOwnershipRealPG' -count=1 -timeout 600s ./internal/datamigrations/
 	@$(CONTRACT_GO_TEST) api_tenants postgres/quartermaster-dns-entitlement-handoff -tags schema_verify -run 'TestCompleteTenantDNSEntitlementHandoffRealPG|TestCapacityConsentManagement_RealPG|TestPrivateClusterOwnershipLimitSerializes_RealPG' -count=1 -timeout 600s ./internal/grpc/
 	@$(CONTRACT_GO_TEST) api_tenants postgres/quartermaster-capabilities -tags schema_verify -run '$(QUARTERMASTER_CAPABILITIES_REALPG_TESTS)' -count=1 -timeout 600s ./internal/grpc/
