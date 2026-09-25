@@ -1024,7 +1024,10 @@ SCHEMA_VERIFY_POSTGRES_TESTS := $(SCHEMA_VERIFY_POSTGRES_TESTS)|$(MIGRATION_PREC
 CLI_CMD_REALPG_TESTS := TestPostExpandReportAgainstQuartermasterRealPG
 YUGABYTE_SCHEMA_DATABASES := bosun commodore foghorn lookout navigator periscope purser quartermaster skipper
 SCHEMA_VERIFY_YUGABYTE_STATIC_TESTS := $(SCHEMA_VERIFY_COMMON_TESTS)|TestYugabyteDatabaseSelection
-SCHEMA_VERIFY_YUGABYTE_DATABASE_TESTS := TestYugabyteTaggedMigrationPaths|TestYugabyteCurrentBaselinesAndCapabilities|TestYugabyteServiceBaselineReapplyAndCompletion|TestYugabyteRelayoutPreflightRehearsesDatabase
+SCHEMA_VERIFY_YUGABYTE_COMPAT_TESTS := TestYugabyteTaggedMigrationPaths|TestYugabyteCurrentBaselinesAndCapabilities
+SCHEMA_VERIFY_YUGABYTE_COMPLETION_TESTS := TestYugabyteServiceBaselineReapplyAndCompletion
+SCHEMA_VERIFY_YUGABYTE_PREFLIGHT_TESTS := TestYugabyteRelayoutPreflightRehearsesDatabase
+SCHEMA_VERIFY_YUGABYTE_DATABASE_TESTS := $(SCHEMA_VERIFY_YUGABYTE_COMPAT_TESTS)|$(SCHEMA_VERIFY_YUGABYTE_COMPLETION_TESTS)|$(SCHEMA_VERIFY_YUGABYTE_PREFLIGHT_TESTS)
 SCHEMA_VERIFY_YUGABYTE_ENGINE_TESTS := TestYugabyteColocatedDDLAbortsAreRetryable|TestYugabyteDistributedOptOutSplits|TestYugabyteRelayoutMovesDatabaseIntoDeclaredLayout|TestYugabyteRelayoutCutoverRunsTheWindowFromPrepare|TestYugabyteRelayoutRefusesASchemaChangedAfterPrepare|TestYugabyteRelayoutRollbackRestoresOriginalDatabase|TestYugabyteRelayoutLeaseExcludesSecondOwner|TestYugabyteRelayoutTakeoverEndsTheStaleOwnersRemoteWork|TestYugabyteRelayoutWorkerAdmissionFailsClosed|TestYugabyteRelayoutRestoresADefaultACL|TestYugabyteRelayoutVerifyRejectsAChangedShadow|TestYugabyteRelayoutRollbackResumesAfterAnInterruptedRollback
 SCHEMA_VERIFY_YUGABYTE_ENGINE_TESTS := $(SCHEMA_VERIFY_YUGABYTE_ENGINE_TESTS)|$(MIGRATION_PRECHECK_REALYB_TESTS)
 SCHEMA_VERIFY_YUGABYTE_TESTS := TestYugabyteDatabaseSelection|$(SCHEMA_VERIFY_YUGABYTE_DATABASE_TESTS)|$(SCHEMA_VERIFY_YUGABYTE_ENGINE_TESTS)
@@ -1412,9 +1415,14 @@ verify-schema-yugabyte-schema-isolated:
 	@$(CURDIR)/scripts/run-yugabyte-contract-fixture.sh $(MAKE) --no-print-directory verify-schema-yugabyte-engine-contracts
 	@failed=0; \
 	for database in $(YUGABYTE_SCHEMA_DATABASES); do \
-		echo "Verifying $$database Yugabyte schema in a fresh engine..."; \
-		FRAMEWORKS_YUGABYTE_DATABASES="$$database" $(CURDIR)/scripts/run-yugabyte-contract-fixture.sh \
-			$(MAKE) --no-print-directory verify-schema-yugabyte-schema-contracts YUGABYTE_SCHEMA_COVERAGE_NAME="schema-$$database" || failed=1; \
+		for group in compat completion preflight; do \
+			echo "Verifying $$database Yugabyte $$group contract in a fresh engine..."; \
+			coverage_name="schema-$$database"; \
+			if [ "$$group" != compat ]; then coverage_name="$$coverage_name-$$group"; fi; \
+			FRAMEWORKS_YUGABYTE_DATABASES="$$database" YUGABYTE_SCHEMA_TEST_GROUP="$$group" \
+				$(CURDIR)/scripts/run-yugabyte-contract-fixture.sh $(MAKE) --no-print-directory \
+				verify-schema-yugabyte-schema-contracts YUGABYTE_SCHEMA_COVERAGE_NAME="$$coverage_name" || failed=1; \
+		done; \
 	done; \
 	exit $$failed
 
@@ -1456,8 +1464,14 @@ verify-yugabyte-services-isolated:
 verify-schema-yugabyte-schema-contracts:
 	@test -n "$$FRAMEWORKS_YUGABYTE_TEST_DSN" -a -n "$$FRAMEWORKS_YUGABYTE_TEST_CONTAINER" || { echo "ERROR: use make verify-schema-yugabyte so the contracts share one isolated engine"; exit 1; }
 	@case "$$FRAMEWORKS_YUGABYTE_DATABASES" in bosun|commodore|foghorn|lookout|navigator|periscope|purser|quartermaster|skipper) ;; *) echo "ERROR: Yugabyte schema contracts require exactly one supported FRAMEWORKS_YUGABYTE_DATABASES value"; exit 2;; esac
-	@echo "Verifying $$FRAMEWORKS_YUGABYTE_DATABASES Yugabyte baseline and runtime SQL capabilities (Docker)..."
-	@FRAMEWORKS_SCHEMA_VERIFY_FROM_TAG='$(SCHEMA_VERIFY_FROM_TAG)' $(CONTRACT_GO_TEST) cli yugabyte/$${YUGABYTE_SCHEMA_COVERAGE_NAME:-schema-$$FRAMEWORKS_YUGABYTE_DATABASES} -tags schema_verify -run '$(SCHEMA_VERIFY_YUGABYTE_DATABASE_TESTS)' -count=1 -timeout 1200s ./pkg/provisioner/
+	@case "$$YUGABYTE_SCHEMA_TEST_GROUP" in \
+		compat) tests='$(SCHEMA_VERIFY_YUGABYTE_COMPAT_TESTS)' ;; \
+		completion) tests='$(SCHEMA_VERIFY_YUGABYTE_COMPLETION_TESTS)' ;; \
+		preflight) tests='$(SCHEMA_VERIFY_YUGABYTE_PREFLIGHT_TESTS)' ;; \
+		*) echo "ERROR: unknown Yugabyte schema contract group $$YUGABYTE_SCHEMA_TEST_GROUP"; exit 2 ;; \
+	esac; \
+	echo "Verifying $$FRAMEWORKS_YUGABYTE_DATABASES Yugabyte $$YUGABYTE_SCHEMA_TEST_GROUP contract (Docker)..."; \
+	FRAMEWORKS_SCHEMA_VERIFY_FROM_TAG='$(SCHEMA_VERIFY_FROM_TAG)' $(CONTRACT_GO_TEST) cli yugabyte/$${YUGABYTE_SCHEMA_COVERAGE_NAME:-schema-$$FRAMEWORKS_YUGABYTE_DATABASES-$$YUGABYTE_SCHEMA_TEST_GROUP} -tags schema_verify -run "$$tests" -count=1 -timeout 1200s ./pkg/provisioner/
 
 verify-yugabyte-shared-fixture:
 	@test -n "$$FRAMEWORKS_YUGABYTE_TEST_DSN" -a -n "$$FRAMEWORKS_YUGABYTE_TEST_CONTAINER" || { echo "ERROR: invoke Yugabyte contracts through their public Make target"; exit 1; }

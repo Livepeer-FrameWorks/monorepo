@@ -60,8 +60,11 @@ func TestYugabyteVerificationCoversEveryServiceQueryCatalog(t *testing.T) {
 	if !strings.Contains(string(makefile), "YUGABYTE_SCHEMA_DATABASES := bosun commodore foghorn lookout navigator periscope purser quartermaster skipper") {
 		t.Fatal("Yugabyte schema shard inventory must cover every service database")
 	}
-	if !strings.Contains(target, "YUGABYTE_SCHEMA_COVERAGE_NAME=\"schema-$$database\"") {
-		t.Fatal("each Yugabyte schema shard must emit a distinct coverage profile")
+	if !strings.Contains(target, "for group in compat completion preflight; do") ||
+		!strings.Contains(target, `coverage_name="schema-$$database"`) ||
+		!strings.Contains(target, `coverage_name="$$coverage_name-$$group"`) ||
+		!strings.Contains(target, `YUGABYTE_SCHEMA_COVERAGE_NAME="$$coverage_name"`) {
+		t.Fatal("each Yugabyte schema shard and contract group must emit a distinct coverage profile")
 	}
 }
 
@@ -109,43 +112,8 @@ func TestYugabyteCIJobChecksOutTagHistory(t *testing.T) {
 			t.Errorf("database-yugabyte CI job lacks scoped command %q", command)
 		}
 	}
-	for _, profile := range []string{
-		"schema-selection.out",
-		"schema-bosun.out",
-		"schema-commodore.out",
-		"schema-foghorn.out",
-		"schema-lookout.out",
-		"schema-navigator.out",
-		"schema-periscope.out",
-		"schema-purser.out",
-		"schema-quartermaster.out",
-		"schema-skipper.out",
-		"commodore-query-catalog.out",
-		"commodore-placement-a.out",
-		"commodore-placement-b.out",
-		"commodore-media-authority-c.out",
-		"commodore-media-authority-d.out",
-		"purser-query-catalog.out",
-		"navigator-query-catalog.out",
-		"navigator-store.out",
-		"skipper-query-catalog.out",
-		"quartermaster-query-catalog.out",
-		"quartermaster-consent-management.out",
-		"quartermaster-capabilities.out",
-		"periscope-metering.out",
-		"foghorn-query-catalog-a.out",
-		"foghorn-query-catalog-b.out",
-		"lookout-query-catalog.out",
-		"lookout-incidents.out",
-		"lookout-delivery.out",
-		"lookout-ownership.out",
-		"bosun-ledger.out",
-		"cli-backup-restore.out",
-		"ha.out",
-	} {
-		if !strings.Contains(job, "coverage/contracts/yugabyte/"+profile) {
-			t.Errorf("database-yugabyte CI job does not upload coverage profile %q", profile)
-		}
+	if !strings.Contains(job, "path: coverage/contracts/yugabyte/") || !strings.Contains(job, "directory: coverage/contracts/yugabyte") {
+		t.Fatal("database-yugabyte CI job must archive and upload every Yugabyte coverage profile")
 	}
 	makefile, err := os.ReadFile(filepath.Join(repoRoot, "Makefile"))
 	if err != nil {
@@ -184,12 +152,6 @@ func TestYugabyteCIJobChecksOutTagHistory(t *testing.T) {
 			t.Errorf("Makefile coverage target %q emits no Yugabyte profile", targetName)
 			continue
 		}
-		for _, match := range matches {
-			profile := match[1] + ".out"
-			if !strings.Contains(job, "coverage/contracts/yugabyte/"+profile) {
-				t.Errorf("database-yugabyte CI job omits %q profile %q", targetName, profile)
-			}
-		}
 	}
 }
 
@@ -218,8 +180,7 @@ func TestYugabyteDatabaseFoghornScopesBothFixtureLegs(t *testing.T) {
 	}
 }
 
-// Derived from the Makefile rather than a fixed list: a new verify-yugabyte-<service>-contracts target or a new
-// Yugabyte coverage profile fails this test until CI runs and uploads it.
+// Derived from the Makefile: scoped contracts must be reachable from CI and write profiles inside its upload directory.
 func TestYugabyteContractInventoryIsComplete(t *testing.T) {
 	makefile := readRepoFile(t, "Makefile")
 	targets := parseMakeTargets(makefile)
@@ -275,18 +236,25 @@ func TestYugabyteContractInventoryIsComplete(t *testing.T) {
 	}
 
 	profiles := ciContractProfiles(t, makefile, job)
+	if !strings.Contains(job, "path: coverage/contracts/yugabyte/") || !strings.Contains(job, "directory: coverage/contracts/yugabyte") {
+		t.Fatal("database-yugabyte CI job must archive and upload its Yugabyte coverage directory")
+	}
 	for _, profile := range sortedKeys(profiles) {
 		if !strings.HasPrefix(profile, "yugabyte/") {
 			t.Errorf("database-yugabyte CI job writes non-Yugabyte profile %q", profile)
-			continue
-		}
-		if !strings.Contains(job, "coverage/contracts/"+profile+".out") {
-			t.Errorf("database-yugabyte CI job writes %q but does not upload it to Codecov", profile)
 		}
 	}
-	for _, profile := range []string{"yugabyte/bosun-ledger", "yugabyte/quartermaster-capabilities", "yugabyte/cli-backup-restore", "yugabyte/schema-bosun"} {
+	for _, profile := range []string{"yugabyte/bosun-ledger", "yugabyte/quartermaster-capabilities", "yugabyte/cli-backup-restore", "yugabyte/schema-bosun", "yugabyte/schema-purser-completion", "yugabyte/schema-purser-preflight"} {
 		if !profiles[profile] {
 			t.Errorf("database-yugabyte CI job no longer runs the %q contract", profile)
+		}
+	}
+	for _, database := range makeVariableWords(makefile, "YUGABYTE_SCHEMA_DATABASES") {
+		for _, suffix := range []string{"", "-completion", "-preflight"} {
+			profile := "yugabyte/schema-" + database + suffix
+			if !profiles[profile] {
+				t.Errorf("database-yugabyte CI job no longer runs the %q contract", profile)
+			}
 		}
 	}
 }

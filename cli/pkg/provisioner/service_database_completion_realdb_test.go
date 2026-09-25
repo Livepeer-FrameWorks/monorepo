@@ -378,7 +378,11 @@ func TestYugabyteServiceBaselineReapplyAndCompletion(t *testing.T) {
 				probe.t = t
 				layout := ybDatabaseLayout(t, source)
 				// Short suffixes keep <database>__baseline_check_<hex> within the 63-byte identifier limit.
-				databaseName := source + "_cmp_" + shape[:1]
+				suffix := "d"
+				if shape == "declared" {
+					suffix = "c"
+				}
+				databaseName := source + "_cmp_" + suffix
 				database := serviceDatabaseForTest(databaseName, source)
 				if shape == "declared" {
 					ybCreateDatabase(t, name, databaseName, layout)

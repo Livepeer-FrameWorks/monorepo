@@ -165,6 +165,7 @@ func reachableMakeTargets(t *testing.T, targets map[string]*makeTarget, root str
 func emittedContractProfiles(makefile string, targets map[string]*makeTarget, reached map[string]bool) map[string]bool {
 	profiles := map[string]bool{}
 	for name := range reached {
+		var schemaShards, groupedSchemaShards bool
 		for _, recipeLine := range targets[name].recipe {
 			line := recipeLine.text
 			for _, match := range contractProfileEmit.FindAllStringSubmatch(line, -1) {
@@ -173,9 +174,16 @@ func emittedContractProfiles(makefile string, targets map[string]*makeTarget, re
 			for _, match := range schemaCoverageLiteral.FindAllStringSubmatch(line, -1) {
 				profiles["yugabyte/"+match[1]] = true
 			}
-			if strings.Contains(line, `YUGABYTE_SCHEMA_COVERAGE_NAME="schema-$$database"`) {
-				for _, database := range makeVariableWords(makefile, "YUGABYTE_SCHEMA_DATABASES") {
-					profiles["yugabyte/schema-"+database] = true
+			schemaShards = schemaShards || strings.Contains(line, `coverage_name="schema-$$database"`)
+			groupedSchemaShards = groupedSchemaShards || strings.Contains(line, "for group in compat completion preflight; do")
+		}
+		if schemaShards {
+			for _, database := range makeVariableWords(makefile, "YUGABYTE_SCHEMA_DATABASES") {
+				profile := "yugabyte/schema-" + database
+				profiles[profile] = true
+				if groupedSchemaShards {
+					profiles[profile+"-completion"] = true
+					profiles[profile+"-preflight"] = true
 				}
 			}
 		}

@@ -298,8 +298,17 @@ func TestYugabyteDistributedOptOutSplits(t *testing.T) {
 
 func ybDropDatabase(t *testing.T, name, databaseName string) {
 	t.Helper()
-	if out, err := docker(t, "", "exec", name, "ysqlsh", "-h", ybSQLHost(name), "-U", "yugabyte", "-d", "yugabyte", "-v", "ON_ERROR_STOP=1", "-c", "DROP DATABASE "+databaseName); err != nil {
-		t.Errorf("drop Yugabyte database %s: %v\n%s", databaseName, err, out)
+	deadline := time.Now().Add(30 * time.Second)
+	for {
+		out, err := docker(t, "", "exec", name, "ysqlsh", "-h", ybSQLHost(name), "-U", "yugabyte", "-d", "yugabyte", "-v", "ON_ERROR_STOP=1", "-c", "DROP DATABASE "+databaseName)
+		if err == nil {
+			return
+		}
+		if !strings.Contains(err.Error()+out, "is being accessed by other users") || time.Now().After(deadline) {
+			t.Errorf("drop Yugabyte database %s: %v\n%s", databaseName, err, out)
+			return
+		}
+		time.Sleep(time.Second)
 	}
 }
 
