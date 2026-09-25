@@ -52,7 +52,8 @@ file. The complete input contains `DATABASE_RUNTIME_PASSWORD`, `SERVICE_TOKEN`,
 `CAPACITY_CONSENT_REVIEW_KEY_ID`, `CAPACITY_CONSENT_REVIEW_PRIVATE_KEY_PEM_B64`, and the
 edge-telemetry ES256 signer (`EDGE_TELEMETRY_JWT_PRIVATE_KEY_PEM_B64`). The renderer derives
 the per-cell variables; operators do not add derived recipients or private cell keys to the shared
-input.
+input. Bosun's `BOSUN_FIELD_ENCRYPTION_KEY` is not part of the generated set: add a value of at
+least 16 bytes yourself, for example from `openssl rand -base64 32`.
 
 Non-development clusters also need a managed internal service CA. Generate it once with
 `frameworks cluster secrets generate-internal-ca --out /secure/path/internal-ca.env`, import all

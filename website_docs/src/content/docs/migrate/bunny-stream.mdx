@@ -18,7 +18,7 @@ FrameWorks centers on **live streaming** — RTMP, E-RTMP, SRT, WHIP, and pull-i
 - **What stays:** HLS and MPEG-DASH delivery · MP4 progressive download · resumable / direct-to-S3 uploads · token-style playback access control · custom player branding · webhook-style callbacks for access decisions.
 - **What changes:** REST → GraphQL · API key → developer token (or wallet/x402 for agents) · iframe embed → `<fw-player>` Web Component or framework packages · processing-status webhooks → named-event webhooks with Standard Webhooks signatures (or the `tenantEvents` subscription) · Bunny signed URL tokens → ES256 JWT signing keys delivered via `?jwt=` · per-region replication knob → cluster placement.
 - **What you gain:** RTMP, E-RTMP, SRT, WHIP push ingest · pull-input from RTSP, SRT, RIST, HLS, DTSC, MPEG-TS · DVR with time-shift · clip API · multistream to Twitch, YouTube, Facebook, Kick, X, custom RTMP/SRT · LL-HLS, DASH, WHEP/WebRTC, MP4, WebSocket playback · sprite-sheet seek previews · provider-operated cross-cluster federation · managed hybrid edges · agent-first surface (MCP, wallet auth, x402) · Skipper.
-- **What's not yet at parity:** DRM (FairPlay/Widevine/PlayReady in development) · automatic chapter generation and transcription/caption auto-generation · view-level QoE across third-party players (per-asset retention/heatmaps ship for the FrameWorks player) · per-region replication knob · iframe-embed-as-a-product · official PHP/C#/Java SDKs (TypeScript, Go, and Python ship) · VOD URL-pull import · watermarking as a managed feature.
+- **What's not yet at parity:** DRM (FairPlay/Widevine/PlayReady in development) · automatic chapter generation and transcription/caption auto-generation · view-level QoE across third-party players (per-asset retention/heatmaps ship for the FrameWorks player) · per-region replication knob · iframe-embed-as-a-product · official PHP/C#/Java SDKs (TypeScript, Go, and Python ship) · one-shot bulk library import · watermarking as a managed feature.
 - **What FrameWorks does not replace:** Bunny CDN (general HTTP CDN), Bunny Edge Storage (general object / block storage), Bunny DNS, Bunny Optimizer (image), Magic Containers (edge compute), Bunny Shield (DDoS / WAF). Those are Bunny's broader edge platform — keep them. FrameWorks has adjacent infrastructure work on the [roadmap](/roadmap), but this migration guide is about moving the video workload.
 
 <Aside type="caution" title="Read before cutting over production traffic">
@@ -50,7 +50,7 @@ Schema-verified mutations and queries: `createVodUpload`, `completeVodUpload`, `
 | `DELETE /library/{libraryId}/videos/{id}`           | `deleteVodAsset(id)` mutation                                            |
 | TUS resumable upload                                | S3 multipart presigned URLs (~2 h expiry)                                |
 | Pre-signed direct-upload URL                        | `createVodUpload` returns a session of presigned PUT URLs                |
-| `POST /library/{libraryId}/videos/fetch` (URL pull) | No URL-pull importer today — open a ticket for bulk migration            |
+| `POST /library/{libraryId}/videos/fetch` (URL pull) | `importVodAsset(input: { url, filename, title })`, one video per call    |
 | Library / collections                               | Tenant-scoped; no nested-library construct                               |
 
 ### Live ingest and pull sources
@@ -176,7 +176,7 @@ mutation {
 
 PUT each part to its presigned URL, then call `completeVodUpload` with the returned ETags. Poll `vodUploadStatus` for the upload's state, or subscribe to `tenantEvents` with `types: ["upload.ready", "upload.failed"]` to learn when processing finishes.
 
-For a sizeable Bunny library, FrameWorks doesn't ship a one-shot URL-pull importer today — [open an in-app ticket](%APP_URL%/support) or message us in [Discord](%DISCORD_URL%) so we can scope the migration.
+If the video is still reachable on Bunny, skip the upload and let FrameWorks pull it with `importVodAsset`, passing the video's public MP4 URL. The server must support HTTP range requests, and a URL without a `.mp4`, `.mov`, `.mkv`, `.webm`, or `.ts` extension needs `filename`. See [Import a video from a URL](/builders/recordings#import-a-video-from-a-url). The mutation imports one video per call; there is no one-shot import of a whole Bunny library. For a sizeable library, [open an in-app ticket](%APP_URL%/support) or message us in [Discord](%DISCORD_URL%) so we can scope the migration.
 
 ### 4. (Live customers) Repoint your encoder
 
@@ -322,7 +322,7 @@ Bunny is the better choice for:
 - **Per-region replication knob** — FrameWorks uses cluster placement instead of a 1-of-N replication slider; if you used Bunny's 1–9 region replication, plan which cluster (or set of hybrid edges) to anchor your assets to.
 - **Managed iframe-embed-as-a-product** — `<fw-player>` is the closest replacement.
 - **Official PHP, C#, and Java SDKs** — the TypeScript, Go, and Python [SDKs](/builders/sdks) ship; for other languages, use GraphQL codegen against the public schema and a Standard Webhooks library.
-- **VOD URL-pull import** — no `POST /fetch` equivalent or one-shot bulk Bunny → FrameWorks importer today. [Open an in-app ticket](%APP_URL%/support) for sizeable libraries.
+- **Bulk library import** — `importVodAsset` covers `POST /fetch` one video at a time, but there is no one-shot Bunny → FrameWorks library importer. [Open an in-app ticket](%APP_URL%/support) for sizeable libraries.
 - **Watermarking as a managed feature** — possible via custom transcode profiles on dedicated / self-hosted clusters, not as a tenant-level toggle.
 - **VOD asset metadata-edit mutation** — title and description are set on `createVodUpload`; there's no `updateVodAsset` today.
 

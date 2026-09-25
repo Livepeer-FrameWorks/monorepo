@@ -29,8 +29,7 @@ worth keeping during the cut-over.
   sprite-sheet seek previews (≈ Mux storyboard) · self-hosting and hybrid hosting · MCP, wallet
   auth, and x402 for agents · Skipper · experimental device-discovery productization.
 - **What's not yet at parity:** Mux Data-class QoE breadth — FrameWorks now has first-party view-level QoE (rebuffering, frame drops, startup, VOD retention) for its own player, but cross-player coverage and ad observability are still maturing · DRM · live auto-captions · productized custom-domain SKU · number of official server-side SDKs (Mux ships Node/Python/Ruby/Go/PHP/Elixir/
-  Java/.NET; FrameWorks ships TypeScript, Go, and Python) · built-in referrer/UA playback restrictions as a no-code policy · VOD URL ingest ·
-  Master Access download. See [the gap list](#whats-not-yet-at-parity-and-whats-coming) before
+  Java/.NET; FrameWorks ships TypeScript, Go, and Python) · built-in referrer/UA playback restrictions as a no-code policy · Master Access download. See [the gap list](#whats-not-yet-at-parity-and-whats-coming) before
   cutting over production traffic.
 
 <Aside type="caution" title="Read before cutting over production traffic">
@@ -59,17 +58,17 @@ The Mux shapes you know, mapped to FrameWorks:
 
 ### Recordings, clips, and VOD
 
-| Mux                                                                                            | FrameWorks                                                                     |
-| ---------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------ |
-| `POST /video/v1/assets` with `input: { url: "mux://assets/{asset_id}", start_time, end_time }` | `createClip(input)` mutation                                                   |
-| Instant clipping (segment-level) vs asset clips (frame-accurate)                               | FrameWorks clips are GOP-aligned today; frame-accurate trimming is not exposed |
-| `POST /video/v1/uploads` (one-shot HTTP PUT URL)                                               | `createVodUpload(input)` → S3 multipart upload                                 |
-| `POST /video/v1/assets` with `input.url: "https://..."` (URL ingest)                           | No direct equivalent today                                                     |
-| `GET /video/v1/assets/{id}`                                                                    | `vodAsset(id)` query                                                           |
-| `DELETE /video/v1/assets/{id}`                                                                 | `deleteVodAsset(id)` mutation                                                  |
-| Storyboard `.vtt` + JPG sprite                                                                 | Sprite-sheet (10×10) + WebVTT cue file, generated on every recording           |
-| `mp4_support: "standard" \| "high"` for static MP4 renditions                                  | `/play/{id}.mp4` progressive — always available, no gated tier                 |
-| Master Access (downloadable original)                                                          | Not exposed today                                                              |
+| Mux                                                                                            | FrameWorks                                                                                                                          |
+| ---------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------- |
+| `POST /video/v1/assets` with `input: { url: "mux://assets/{asset_id}", start_time, end_time }` | `createClip(input)` mutation                                                                                                        |
+| Instant clipping (segment-level) vs asset clips (frame-accurate)                               | FrameWorks clips are GOP-aligned today; frame-accurate trimming is not exposed                                                      |
+| `POST /video/v1/uploads` (one-shot HTTP PUT URL)                                               | `createVodUpload(input)` → S3 multipart upload                                                                                      |
+| `POST /video/v1/assets` with `input.url: "https://..."` (URL ingest)                           | `importVodAsset(input: { url, filename, title })` — see [Import a video from a URL](/builders/recordings#import-a-video-from-a-url) |
+| `GET /video/v1/assets/{id}`                                                                    | `vodAsset(id)` query                                                                                                                |
+| `DELETE /video/v1/assets/{id}`                                                                 | `deleteVodAsset(id)` mutation                                                                                                       |
+| Storyboard `.vtt` + JPG sprite                                                                 | Sprite-sheet (10×10) + WebVTT cue file, generated on every recording                                                                |
+| `mp4_support: "standard" \| "high"` for static MP4 renditions                                  | `/play/{id}.mp4` progressive — always available, no gated tier                                                                      |
+| Master Access (downloadable original)                                                          | Not exposed today                                                                                                                   |
 
 FrameWorks DVR is not just live-to-VOD asset creation. A long-running stream can keep one DVR
 archive for the full stream session: live viewers use the bounded DVR window, and replay viewers
@@ -392,8 +391,6 @@ these you depend on before cutting over.
   GraphQL codegen against the public schema.
 - **Built-in referrer / user-agent playback restrictions.** Mux exposes them as a no-code
   policy. The webhook playback policy can express the same rules, but it's not a toggle.
-- **VOD URL ingest.** `POST /assets` with `input.url: "https://..."` (Mux pulling a VOD file
-  from your origin) has no direct equivalent today.
 - **Master Access** — the downloadable original of an asset.
 - **Frame-accurate clip trimming.** FrameWorks clips today are GOP-aligned; Mux offers both
   asset-clips (frame-accurate) and instant clips (segment-level).

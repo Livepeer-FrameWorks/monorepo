@@ -21849,7 +21849,7 @@ release it supports and supports every stable release from there on.
 
 | SDK line | Oldest supported FrameWorks release | Operations                                       |
 | -------- | ----------------------------------- | ------------------------------------------------ |
-| 0.3      | v0.3.11                             | 182 default and 44 hand-written operations (226) |
+| 0.3      | v0.3.11                             | 182 default and 45 hand-written operations (227) |
 
 Lines 0.1 and 0.2 (the 44 hand-written operations) are retired; use 0.3.
 
@@ -25045,7 +25045,7 @@ FrameWorks centers on **live streaming** — RTMP, E-RTMP, SRT, WHIP, and pull-i
 - **What stays:** HLS and MPEG-DASH delivery · MP4 progressive download · resumable / direct-to-S3 uploads · token-style playback access control · custom player branding · webhook-style callbacks for access decisions.
 - **What changes:** REST → GraphQL · API key → developer token (or wallet/x402 for agents) · iframe embed → `<fw-player>` Web Component or framework packages · processing-status webhooks → named-event webhooks with Standard Webhooks signatures (or the `tenantEvents` subscription) · Bunny signed URL tokens → ES256 JWT signing keys delivered via `?jwt=` · per-region replication knob → cluster placement.
 - **What you gain:** RTMP, E-RTMP, SRT, WHIP push ingest · pull-input from RTSP, SRT, RIST, HLS, DTSC, MPEG-TS · DVR with time-shift · clip API · multistream to Twitch, YouTube, Facebook, Kick, X, custom RTMP/SRT · LL-HLS, DASH, WHEP/WebRTC, MP4, WebSocket playback · sprite-sheet seek previews · provider-operated cross-cluster federation · managed hybrid edges · agent-first surface (MCP, wallet auth, x402) · Skipper.
-- **What's not yet at parity:** DRM (FairPlay/Widevine/PlayReady in development) · automatic chapter generation and transcription/caption auto-generation · view-level QoE across third-party players (per-asset retention/heatmaps ship for the FrameWorks player) · per-region replication knob · iframe-embed-as-a-product · official PHP/C#/Java SDKs (TypeScript, Go, and Python ship) · VOD URL-pull import · watermarking as a managed feature.
+- **What's not yet at parity:** DRM (FairPlay/Widevine/PlayReady in development) · automatic chapter generation and transcription/caption auto-generation · view-level QoE across third-party players (per-asset retention/heatmaps ship for the FrameWorks player) · per-region replication knob · iframe-embed-as-a-product · official PHP/C#/Java SDKs (TypeScript, Go, and Python ship) · one-shot bulk library import · watermarking as a managed feature.
 - **What FrameWorks does not replace:** Bunny CDN (general HTTP CDN), Bunny Edge Storage (general object / block storage), Bunny DNS, Bunny Optimizer (image), Magic Containers (edge compute), Bunny Shield (DDoS / WAF). Those are Bunny's broader edge platform — keep them. FrameWorks has adjacent infrastructure work on the [roadmap](/roadmap), but this migration guide is about moving the video workload.
 
 <Aside type="caution" title="Read before cutting over production traffic">
@@ -25077,7 +25077,7 @@ Schema-verified mutations and queries: `createVodUpload`, `completeVodUpload`, `
 | `DELETE /library/{libraryId}/videos/{id}`           | `deleteVodAsset(id)` mutation                                            |
 | TUS resumable upload                                | S3 multipart presigned URLs (~2 h expiry)                                |
 | Pre-signed direct-upload URL                        | `createVodUpload` returns a session of presigned PUT URLs                |
-| `POST /library/{libraryId}/videos/fetch` (URL pull) | No URL-pull importer today — open a ticket for bulk migration            |
+| `POST /library/{libraryId}/videos/fetch` (URL pull) | `importVodAsset(input: { url, filename, title })`, one video per call    |
 | Library / collections                               | Tenant-scoped; no nested-library construct                               |
 
 ### Live ingest and pull sources
@@ -25203,7 +25203,7 @@ mutation {
 
 PUT each part to its presigned URL, then call `completeVodUpload` with the returned ETags. Poll `vodUploadStatus` for the upload's state, or subscribe to `tenantEvents` with `types: ["upload.ready", "upload.failed"]` to learn when processing finishes.
 
-For a sizeable Bunny library, FrameWorks doesn't ship a one-shot URL-pull importer today — [open an in-app ticket](%APP_URL%/support) or message us in [Discord](%DISCORD_URL%) so we can scope the migration.
+If the video is still reachable on Bunny, skip the upload and let FrameWorks pull it with `importVodAsset`, passing the video's public MP4 URL. The server must support HTTP range requests, and a URL without a `.mp4`, `.mov`, `.mkv`, `.webm`, or `.ts` extension needs `filename`. See [Import a video from a URL](/builders/recordings#import-a-video-from-a-url). The mutation imports one video per call; there is no one-shot import of a whole Bunny library. For a sizeable library, [open an in-app ticket](%APP_URL%/support) or message us in [Discord](%DISCORD_URL%) so we can scope the migration.
 
 ### 4. (Live customers) Repoint your encoder
 
@@ -25349,7 +25349,7 @@ Bunny is the better choice for:
 - **Per-region replication knob** — FrameWorks uses cluster placement instead of a 1-of-N replication slider; if you used Bunny's 1–9 region replication, plan which cluster (or set of hybrid edges) to anchor your assets to.
 - **Managed iframe-embed-as-a-product** — `<fw-player>` is the closest replacement.
 - **Official PHP, C#, and Java SDKs** — the TypeScript, Go, and Python [SDKs](/builders/sdks) ship; for other languages, use GraphQL codegen against the public schema and a Standard Webhooks library.
-- **VOD URL-pull import** — no `POST /fetch` equivalent or one-shot bulk Bunny → FrameWorks importer today. [Open an in-app ticket](%APP_URL%/support) for sizeable libraries.
+- **Bulk library import** — `importVodAsset` covers `POST /fetch` one video at a time, but there is no one-shot Bunny → FrameWorks library importer. [Open an in-app ticket](%APP_URL%/support) for sizeable libraries.
 - **Watermarking as a managed feature** — possible via custom transcode profiles on dedicated / self-hosted clusters, not as a tenant-level toggle.
 - **VOD asset metadata-edit mutation** — title and description are set on `createVodUpload`; there's no `updateVodAsset` today.
 
@@ -26422,8 +26422,7 @@ worth keeping during the cut-over.
   sprite-sheet seek previews (≈ Mux storyboard) · self-hosting and hybrid hosting · MCP, wallet
   auth, and x402 for agents · Skipper · experimental device-discovery productization.
 - **What's not yet at parity:** Mux Data-class QoE breadth — FrameWorks now has first-party view-level QoE (rebuffering, frame drops, startup, VOD retention) for its own player, but cross-player coverage and ad observability are still maturing · DRM · live auto-captions · productized custom-domain SKU · number of official server-side SDKs (Mux ships Node/Python/Ruby/Go/PHP/Elixir/
-  Java/.NET; FrameWorks ships TypeScript, Go, and Python) · built-in referrer/UA playback restrictions as a no-code policy · VOD URL ingest ·
-  Master Access download. See [the gap list](#whats-not-yet-at-parity-and-whats-coming) before
+  Java/.NET; FrameWorks ships TypeScript, Go, and Python) · built-in referrer/UA playback restrictions as a no-code policy · Master Access download. See [the gap list](#whats-not-yet-at-parity-and-whats-coming) before
   cutting over production traffic.
 
 <Aside type="caution" title="Read before cutting over production traffic">
@@ -26452,17 +26451,17 @@ The Mux shapes you know, mapped to FrameWorks:
 
 ### Recordings, clips, and VOD
 
-| Mux                                                                                            | FrameWorks                                                                     |
-| ---------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------ |
-| `POST /video/v1/assets` with `input: { url: "mux://assets/{asset_id}", start_time, end_time }` | `createClip(input)` mutation                                                   |
-| Instant clipping (segment-level) vs asset clips (frame-accurate)                               | FrameWorks clips are GOP-aligned today; frame-accurate trimming is not exposed |
-| `POST /video/v1/uploads` (one-shot HTTP PUT URL)                                               | `createVodUpload(input)` → S3 multipart upload                                 |
-| `POST /video/v1/assets` with `input.url: "https://..."` (URL ingest)                           | No direct equivalent today                                                     |
-| `GET /video/v1/assets/{id}`                                                                    | `vodAsset(id)` query                                                           |
-| `DELETE /video/v1/assets/{id}`                                                                 | `deleteVodAsset(id)` mutation                                                  |
-| Storyboard `.vtt` + JPG sprite                                                                 | Sprite-sheet (10×10) + WebVTT cue file, generated on every recording           |
-| `mp4_support: "standard" \| "high"` for static MP4 renditions                                  | `/play/{id}.mp4` progressive — always available, no gated tier                 |
-| Master Access (downloadable original)                                                          | Not exposed today                                                              |
+| Mux                                                                                            | FrameWorks                                                                                                                          |
+| ---------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------- |
+| `POST /video/v1/assets` with `input: { url: "mux://assets/{asset_id}", start_time, end_time }` | `createClip(input)` mutation                                                                                                        |
+| Instant clipping (segment-level) vs asset clips (frame-accurate)                               | FrameWorks clips are GOP-aligned today; frame-accurate trimming is not exposed                                                      |
+| `POST /video/v1/uploads` (one-shot HTTP PUT URL)                                               | `createVodUpload(input)` → S3 multipart upload                                                                                      |
+| `POST /video/v1/assets` with `input.url: "https://..."` (URL ingest)                           | `importVodAsset(input: { url, filename, title })` — see [Import a video from a URL](/builders/recordings#import-a-video-from-a-url) |
+| `GET /video/v1/assets/{id}`                                                                    | `vodAsset(id)` query                                                                                                                |
+| `DELETE /video/v1/assets/{id}`                                                                 | `deleteVodAsset(id)` mutation                                                                                                       |
+| Storyboard `.vtt` + JPG sprite                                                                 | Sprite-sheet (10×10) + WebVTT cue file, generated on every recording                                                                |
+| `mp4_support: "standard" \| "high"` for static MP4 renditions                                  | `/play/{id}.mp4` progressive — always available, no gated tier                                                                      |
+| Master Access (downloadable original)                                                          | Not exposed today                                                                                                                   |
 
 FrameWorks DVR is not just live-to-VOD asset creation. A long-running stream can keep one DVR
 archive for the full stream session: live viewers use the bounded DVR window, and replay viewers
@@ -26785,8 +26784,6 @@ these you depend on before cutting over.
   GraphQL codegen against the public schema.
 - **Built-in referrer / user-agent playback restrictions.** Mux exposes them as a no-code
   policy. The webhook playback policy can express the same rules, but it's not a toggle.
-- **VOD URL ingest.** `POST /assets` with `input.url: "https://..."` (Mux pulling a VOD file
-  from your origin) has no direct equivalent today.
 - **Master Access** — the downloadable original of an asset.
 - **Frame-accurate clip trimming.** FrameWorks clips today are GOP-aligned; Mux offers both
   asset-clips (frame-accurate) and instant clips (segment-level).
@@ -33174,7 +33171,7 @@ Read by `api_mesh/cmd/privateer`.
 | `PRIVATEER_SYNC_INTERVAL` | duration | `30s` |  | v0.3.0 | Interval between mesh sync calls to Quartermaster. |
 | `PRIVATEER_SYNC_TIMEOUT` | duration | `10s` |  | v0.3.0 | Timeout for one mesh sync call to Quartermaster. |
 | `DNS_PORT` | integer | `53` |  | v0.3.0 | Port of the internal DNS server, which listens on 127.0.0.1 over UDP and TCP. |
-| `UPSTREAM_DNS` | list |  |  | v0.3.0 | Comma-separated resolvers for names outside .internal. Entries without a port use 53. Empty answers those queries with SERVFAIL. |
+| `UPSTREAM_DNS` | list |  |  | v0.3.0 | Comma-separated resolvers for names outside .internal. Entries without a port use 53. Empty answers those queries with REFUSED. |
 | `CERT_ISSUANCE_TOKEN` | string |  | secret | v0.3.0 | Initial token for requesting internal service certificates from Navigator. Privateer mints replacements when it expires or is rejected. |
 | `GRPC_TLS_PKI_DIR` | string | `/etc/frameworks/pki` |  | v0.3.0 | Directory where synced internal service certificates and keys are written. |
 | `EXPECTED_INTERNAL_GRPC_SERVICES` | list |  |  | v0.3.0 | Comma-separated service types that need internal certificates on this node, in addition to those registered in Quartermaster. |
@@ -33857,7 +33854,8 @@ file. The complete input contains `DATABASE_RUNTIME_PASSWORD`, `SERVICE_TOKEN`,
 `CAPACITY_CONSENT_REVIEW_KEY_ID`, `CAPACITY_CONSENT_REVIEW_PRIVATE_KEY_PEM_B64`, and the
 edge-telemetry ES256 signer (`EDGE_TELEMETRY_JWT_PRIVATE_KEY_PEM_B64`). The renderer derives
 the per-cell variables; operators do not add derived recipients or private cell keys to the shared
-input.
+input. Bosun's `BOSUN_FIELD_ENCRYPTION_KEY` is not part of the generated set: add a value of at
+least 16 bytes yourself, for example from `openssl rand -base64 32`.
 
 Non-development clusters also need a managed internal service CA. Generate it once with
 `frameworks cluster secrets generate-internal-ca --out /secure/path/internal-ca.env`, import all
@@ -34754,7 +34752,7 @@ This ensures runtime services can connect with the same credentials the CLI prov
 
 1. Create `gitops/config/production.env` for non-secret operator config
 2. Copy the secret template: `cp config/env/secrets.env.example gitops/secrets/production.env`
-3. Generate the complete shared-secret set with `frameworks cluster secrets generate-shared --out <new-file>` and import every value into `gitops/secrets/production.env`. The generated set covers `SERVICE_TOKEN`, `DATABASE_RUNTIME_PASSWORD`, `JWT_SECRET`, `PASSWORD_RESET_SECRET`, `FIELD_ENCRYPTION_KEY`, `USAGE_HASH_SECRET`, `TELEMETRY_TOKEN_SECRET`, `CLUSTER_ACCESS_MATERIALIZATION_SECRET`, `FOGHORN_BALANCER_CAPABILITY_SECRET`, `FOGHORN_STATE_ENCRYPTION_KEY`, the four `MEDIA_AUTHORITY_*` keys (seal root secret, signing key ID, signing private key, trust set), `EDGE_TELEMETRY_JWT_PRIVATE_KEY_PEM_B64`, and the `CAPACITY_CONSENT_REVIEW_*` signer. Then set the operator-chosen values: `DATABASE_PASSWORD` (distinct from `DATABASE_RUNTIME_PASSWORD`) and `CLICKHOUSE_PASSWORD`. Remove the plaintext fragment after import.
+3. Generate the complete shared-secret set with `frameworks cluster secrets generate-shared --out <new-file>` and import every value into `gitops/secrets/production.env`. The generated set covers `SERVICE_TOKEN`, `DATABASE_RUNTIME_PASSWORD`, `JWT_SECRET`, `PASSWORD_RESET_SECRET`, `FIELD_ENCRYPTION_KEY`, `USAGE_HASH_SECRET`, `TELEMETRY_TOKEN_SECRET`, `CLUSTER_ACCESS_MATERIALIZATION_SECRET`, `FOGHORN_BALANCER_CAPABILITY_SECRET`, `FOGHORN_STATE_ENCRYPTION_KEY`, the four `MEDIA_AUTHORITY_*` keys (seal root secret, signing key ID, signing private key, trust set), `EDGE_TELEMETRY_JWT_PRIVATE_KEY_PEM_B64`, and the `CAPACITY_CONSENT_REVIEW_*` signer. Then set the operator-chosen values: `DATABASE_PASSWORD` (distinct from `DATABASE_RUNTIME_PASSWORD`), `CLICKHOUSE_PASSWORD`, and `BOSUN_FIELD_ENCRYPTION_KEY` (at least 16 bytes, for example `openssl rand -base64 32`), which the generated set does not include. Remove the plaintext fragment after import.
 
    When rotating `JWT_SECRET` before the v0.3.0 field migration has completed,
    first add the outgoing value to the JSON array
@@ -37234,6 +37232,12 @@ channels and supported upgrade sources.
 - **Set the operator inputs the release note names** in GitOps, using the repository's SOPS helper
   for secrets. `release apply` renders every service it will install or upgrade before changing
   anything and refuses, listing each key, when a required input is missing.
+- **Declare services the release introduces.** `release apply` installs a new platform service
+  only when the manifest names it: add the service under `services:` and, when it owns a database,
+  an entry under `infrastructure.postgres.databases`. `release apply` then creates and migrates
+  that database before the service starts. A service another service requires, such as Bosun
+  (added in v0.3.11, required by Bridge), fails `release plan` until it is declared. Bosun also
+  needs `BOSUN_FIELD_ENCRYPTION_KEY`, which `cluster secrets generate-shared` does not produce.
 - **Pick the channel.** Production manifests use `channel: stable`. Staging manifests use
   `channel: candidate`, which follows the newest tag, GA or RC. See
   [Version selection](#version-selection).

@@ -34,6 +34,12 @@ channels and supported upgrade sources.
 - **Set the operator inputs the release note names** in GitOps, using the repository's SOPS helper
   for secrets. `release apply` renders every service it will install or upgrade before changing
   anything and refuses, listing each key, when a required input is missing.
+- **Declare services the release introduces.** `release apply` installs a new platform service
+  only when the manifest names it: add the service under `services:` and, when it owns a database,
+  an entry under `infrastructure.postgres.databases`. `release apply` then creates and migrates
+  that database before the service starts. A service another service requires, such as Bosun
+  (added in v0.3.11, required by Bridge), fails `release plan` until it is declared. Bosun also
+  needs `BOSUN_FIELD_ENCRYPTION_KEY`, which `cluster secrets generate-shared` does not produce.
 - **Pick the channel.** Production manifests use `channel: stable`. Staging manifests use
   `channel: candidate`, which follows the newest tag, GA or RC. See
   [Version selection](#version-selection).
