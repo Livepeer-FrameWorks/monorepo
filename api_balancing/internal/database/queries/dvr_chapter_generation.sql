@@ -2,6 +2,13 @@
 DELETE FROM foghorn.dvr_chapters
 WHERE artifact_hash = $1 AND state = 'open';
 
+-- Truncates an open chapter at the recording's stop and closes it, keeping
+-- its id.
+-- name: CloseOpenDVRChapterAt :execrows
+UPDATE foghorn.dvr_chapters
+SET end_ms = sqlc.arg(end_ms), is_current = false, state = 'closed'
+WHERE chapter_id = sqlc.arg(chapter_id) AND state = 'open' AND sqlc.arg(end_ms)::bigint > start_ms;
+
 -- name: InsertClosedDVRChapter :exec
 INSERT INTO foghorn.dvr_chapters (
     chapter_id, artifact_hash, mode, interval_seconds,

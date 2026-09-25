@@ -106,6 +106,9 @@ func TestOpenChapter_TxClearsPreviousAndInserts(t *testing.T) {
 	mock.ExpectExec("pg_advisory_xact_lock").
 		WithArgs(dvrChapterMutationLockNamespace, "art-1").
 		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectQuery(`c\.start_ms = ANY`).
+		WithArgs("art-1", "window_sized_chapters", int32(0), sqlmock.AnyArg()).
+		WillReturnRows(sqlmock.NewRows([]string{"chapter_id"})) // no row stored for this range yet
 	mock.ExpectExec(`UPDATE foghorn.dvr_chapters\s+SET is_current = false`).
 		WithArgs("art-1", "chap-1").
 		WillReturnResult(sqlmock.NewResult(0, 0)) // no previous current

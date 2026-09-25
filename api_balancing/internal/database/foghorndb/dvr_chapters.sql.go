@@ -134,6 +134,29 @@ func (q *Queries) DeleteDVRChapterRowsForTenant(ctx context.Context, arg DeleteD
 	return err
 }
 
+const expireDVRChapterFinalizeAttempt = `-- name: ExpireDVRChapterFinalizeAttempt :execrows
+UPDATE foghorn.dvr_chapters
+SET finalize_started_at = 'epoch'::timestamptz
+WHERE chapter_id = $1 AND state = 'finalizing'
+  AND finalize_node_id = $2 AND finalize_attempts = $3
+`
+
+type ExpireDVRChapterFinalizeAttemptParams struct {
+	ChapterID        string         `db:"chapter_id" json:"chapter_id"`
+	NodeID           sql.NullString `db:"node_id" json:"node_id"`
+	FinalizeAttempts int32          `db:"finalize_attempts" json:"finalize_attempts"`
+}
+
+// Makes a finalizing attempt immediately re-claimable. The attempt counter
+// guard keeps a concurrent re-claim from being undone.
+func (q *Queries) ExpireDVRChapterFinalizeAttempt(ctx context.Context, arg ExpireDVRChapterFinalizeAttemptParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, expireDVRChapterFinalizeAttempt, arg.ChapterID, arg.NodeID, arg.FinalizeAttempts)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
 const failDVRChapter = `-- name: FailDVRChapter :one
 UPDATE foghorn.dvr_chapters
 SET state = $1, last_failure_reason = $2, finalize_node_id = NULL
@@ -284,6 +307,80 @@ func (q *Queries) GetDVRChaptersByID(ctx context.Context, dollar_1 []string) ([]
 	items := []GetDVRChaptersByIDRow{}
 	for rows.Next() {
 		var i GetDVRChaptersByIDRow
+		if err := rows.Scan(
+			&i.FoghornDvrChapter.ChapterID,
+			&i.FoghornDvrChapter.ArtifactHash,
+			&i.FoghornDvrChapter.Mode,
+			&i.FoghornDvrChapter.IntervalSeconds,
+			&i.FoghornDvrChapter.StartMs,
+			&i.FoghornDvrChapter.EndMs,
+			&i.FoghornDvrChapter.IsCurrent,
+			&i.FoghornDvrChapter.State,
+			&i.FoghornDvrChapter.PlaybackArtifactHash,
+			&i.FoghornDvrChapter.PlaybackID,
+			&i.FoghornDvrChapter.FinalizeAttempts,
+			&i.FoghornDvrChapter.FrozenAt,
+			&i.FoghornDvrChapter.FinalizeStartedAt,
+			&i.FoghornDvrChapter.FinalizeNodeID,
+			&i.FoghornDvrChapter.FinalizeProcessesJson,
+			&i.FoghornDvrChapter.LastFailureReason,
+			&i.FoghornDvrChapter.ReclaimStartedAt,
+			&i.FoghornDvrChapter.SegmentCount,
+			&i.FoghornDvrChapter.HasGaps,
+			&i.FoghornDvrChapter.ActualMediaStartMs,
+			&i.FoghornDvrChapter.ActualMediaEndMs,
+			&i.FoghornDvrChapter.CreatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const getDVRChaptersByStart = `-- name: GetDVRChaptersByStart :many
+SELECT c.chapter_id, c.artifact_hash, c.mode, c.interval_seconds, c.start_ms, c.end_ms, c.is_current, c.state, c.playback_artifact_hash, c.playback_id, c.finalize_attempts, c.frozen_at, c.finalize_started_at, c.finalize_node_id, c.finalize_processes_json, c.last_failure_reason, c.reclaim_started_at, c.segment_count, c.has_gaps, c.actual_media_start_ms, c.actual_media_end_ms, c.created_at
+FROM foghorn.dvr_chapters c
+WHERE c.artifact_hash = $1
+  AND c.mode = $2
+  AND COALESCE(c.interval_seconds, 0) = $3::integer
+  AND c.start_ms = ANY($4::bigint[])
+`
+
+type GetDVRChaptersByStartParams struct {
+	ArtifactHash    string  `db:"artifact_hash" json:"artifact_hash"`
+	Mode            string  `db:"mode" json:"mode"`
+	IntervalSeconds int32   `db:"interval_seconds" json:"interval_seconds"`
+	StartMs         []int64 `db:"start_ms" json:"start_ms"`
+}
+
+type GetDVRChaptersByStartRow struct {
+	FoghornDvrChapter FoghornDvrChapter `db:"foghorn_dvr_chapter" json:"foghorn_dvr_chapter"`
+}
+
+// Chapters are addressed by their range start within one recording's policy.
+// Stored ids are opaque: rows written before ids were start-derived keep
+// theirs and are still found here.
+func (q *Queries) GetDVRChaptersByStart(ctx context.Context, arg GetDVRChaptersByStartParams) ([]GetDVRChaptersByStartRow, error) {
+	rows, err := q.db.QueryContext(ctx, getDVRChaptersByStart,
+		arg.ArtifactHash,
+		arg.Mode,
+		arg.IntervalSeconds,
+		pq.Array(arg.StartMs),
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []GetDVRChaptersByStartRow{}
+	for rows.Next() {
+		var i GetDVRChaptersByStartRow
 		if err := rows.Scan(
 			&i.FoghornDvrChapter.ChapterID,
 			&i.FoghornDvrChapter.ArtifactHash,
@@ -624,6 +721,46 @@ func (q *Queries) ListDeletedDVRParentsWithChapters(ctx context.Context, limit i
 	for rows.Next() {
 		var i ListDeletedDVRParentsWithChaptersRow
 		if err := rows.Scan(&i.ArtifactHash, &i.TenantID); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listNodeFinalizingDVRChapters = `-- name: ListNodeFinalizingDVRChapters :many
+SELECT chapter_id, finalize_attempts
+FROM foghorn.dvr_chapters
+WHERE finalize_node_id = $1 AND state = 'finalizing'
+  AND finalize_started_at < $2
+`
+
+type ListNodeFinalizingDVRChaptersParams struct {
+	NodeID        sql.NullString `db:"node_id" json:"node_id"`
+	StartedBefore sql.NullTime   `db:"started_before" json:"started_before"`
+}
+
+type ListNodeFinalizingDVRChaptersRow struct {
+	ChapterID        string `db:"chapter_id" json:"chapter_id"`
+	FinalizeAttempts int32  `db:"finalize_attempts" json:"finalize_attempts"`
+}
+
+func (q *Queries) ListNodeFinalizingDVRChapters(ctx context.Context, arg ListNodeFinalizingDVRChaptersParams) ([]ListNodeFinalizingDVRChaptersRow, error) {
+	rows, err := q.db.QueryContext(ctx, listNodeFinalizingDVRChapters, arg.NodeID, arg.StartedBefore)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListNodeFinalizingDVRChaptersRow{}
+	for rows.Next() {
+		var i ListNodeFinalizingDVRChaptersRow
+		if err := rows.Scan(&i.ChapterID, &i.FinalizeAttempts); err != nil {
 			return nil, err
 		}
 		items = append(items, i)

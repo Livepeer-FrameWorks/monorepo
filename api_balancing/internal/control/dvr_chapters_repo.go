@@ -129,16 +129,18 @@ func SetChapterPlaybackID(ctx context.Context, chapterID, playbackID string) err
 	})
 }
 
-// BuildChapterID is the canonical chapter identity. Stable: same inputs
-// always produce the same ID. Mode/policy changes that yield different
-// (start_ms, end_ms) boundaries produce different IDs.
+// BuildChapterID is the identity of a newly written chapter. It is derived
+// from the range start, not the end, so an open chapter keeps its id when a
+// stop truncates its end. Lookups match stored rows by range start
+// (GetDVRChaptersByStart) and never re-derive ids, so rows written with an
+// older derivation are still found.
 //
 // stream_id is intentionally NOT in the hash — dvr_artifact_id already
 // namespaces uniquely, and including stream_id would destabilize the ID
 // across the artifact's stream_internal_name rename edge case.
-func BuildChapterID(dvrArtifactID, mode string, intervalSeconds int32, startMs, endMs int64) string {
+func BuildChapterID(dvrArtifactID, mode string, intervalSeconds int32, startMs int64) string {
 	h := sha256.New()
-	fmt.Fprintf(h, "%s|%s|%d|%d|%d", dvrArtifactID, mode, intervalSeconds, startMs, endMs)
+	fmt.Fprintf(h, "%s|%s|%d|%d", dvrArtifactID, mode, intervalSeconds, startMs)
 	sum := h.Sum(nil)
 	return hex.EncodeToString(sum)[:32]
 }
@@ -167,6 +169,16 @@ func OpenChapter(ctx context.Context, c DVRChapterRow) error {
 }
 
 func openChapterTx(ctx context.Context, tx foghorndb.DBTX, c DVRChapterRow) (bool, error) {
+	// A row already stored for this range keeps its id, whatever derivation
+	// wrote it; otherwise it would be closed below as a "previous" chapter
+	// while it is still the one recording.
+	existing, err := chaptersByStart(ctx, tx, c.ArtifactHash, c.Mode, c.IntervalSeconds.Int32, []int64{c.StartMs})
+	if err != nil {
+		return false, err
+	}
+	if row, ok := existing[c.StartMs]; ok {
+		c.ChapterID = row.ChapterID
+	}
 	q := foghorndb.New(tx)
 	closedPrevious, err := q.ClosePreviousCurrentDVRChapters(ctx, foghorndb.ClosePreviousCurrentDVRChaptersParams{
 		ArtifactHash: c.ArtifactHash, ChapterID: c.ChapterID,
@@ -543,23 +555,42 @@ func GetChapter(ctx context.Context, chapterID string) (*DVRChapterRow, error) {
 	return &mapped, nil
 }
 
-func getChaptersByID(ctx context.Context, chapterIDs []string) (map[string]DVRChapterRow, error) {
-	out := make(map[string]DVRChapterRow, len(chapterIDs))
-	if len(chapterIDs) == 0 {
+// chaptersByStart returns one recording's stored chapters keyed by range
+// start. Stored ids are opaque, so every lookup of a chapter by its range
+// matches on start instead of re-deriving an id.
+func chaptersByStart(ctx context.Context, tx foghorndb.DBTX, artifactHash, mode string, intervalSeconds int32, starts []int64) (map[int64]DVRChapterRow, error) {
+	out := make(map[int64]DVRChapterRow, len(starts))
+	if len(starts) == 0 {
 		return out, nil
 	}
-	if db == nil {
-		return nil, sql.ErrConnDone
-	}
-	rows, err := foghorndb.New(db).GetDVRChaptersByID(ctx, chapterIDs)
+	rows, err := foghorndb.New(tx).GetDVRChaptersByStart(ctx, foghorndb.GetDVRChaptersByStartParams{
+		ArtifactHash: artifactHash, Mode: mode, IntervalSeconds: intervalSeconds, StartMs: starts,
+	})
 	if err != nil {
-		return nil, fmt.Errorf("get chapters by id: %w", err)
+		return nil, fmt.Errorf("get chapters by start: %w", err)
 	}
 	for _, row := range rows {
 		c := mapDVRChapter(row.FoghornDvrChapter)
-		out[c.ChapterID] = c
+		out[c.StartMs] = c
 	}
 	return out, nil
+}
+
+// GetChapterAtStart returns the stored chapter that begins at startMs under
+// the given policy, or sql.ErrNoRows.
+func GetChapterAtStart(ctx context.Context, artifactHash, mode string, intervalSeconds int32, startMs int64) (*DVRChapterRow, error) {
+	if db == nil {
+		return nil, sql.ErrConnDone
+	}
+	found, err := chaptersByStart(ctx, db, artifactHash, mode, intervalSeconds, []int64{startMs})
+	if err != nil {
+		return nil, err
+	}
+	row, ok := found[startMs]
+	if !ok {
+		return nil, sql.ErrNoRows
+	}
+	return &row, nil
 }
 
 // CurrentChapter returns the in-flight chapter for an artifact, if any.
@@ -967,7 +998,7 @@ func ListVirtualChaptersForArtifact(
 			if policy.EndedAtMs > 0 && chapterEndMs > policy.EndedAtMs {
 				chapterEndMs = policy.EndedAtMs
 			}
-			chapterID := BuildChapterID(artifactHash, mode, intervalSeconds, startMs, chapterEndMs)
+			chapterID := BuildChapterID(artifactHash, mode, intervalSeconds, startMs)
 			row := DVRChapterRow{
 				ChapterID:       chapterID,
 				ArtifactHash:    artifactHash,
@@ -1015,7 +1046,7 @@ func ListVirtualChaptersForArtifact(
 			chapterEndMs = policy.EndedAtMs
 		}
 		if scheduledEndMs > startBound && startMs < endBound {
-			chapterID := BuildChapterID(artifactHash, mode, intervalSeconds, startMs, chapterEndMs)
+			chapterID := BuildChapterID(artifactHash, mode, intervalSeconds, startMs)
 			row := DVRChapterRow{
 				ChapterID:       chapterID,
 				ArtifactHash:    artifactHash,
@@ -1047,16 +1078,21 @@ func overlayMaterializedChapters(ctx context.Context, rows []DVRChapterRow) ([]D
 	if len(rows) == 0 {
 		return rows, nil
 	}
-	ids := make([]string, 0, len(rows))
-	for _, row := range rows {
-		ids = append(ids, row.ChapterID)
+	if db == nil {
+		return nil, sql.ErrConnDone
 	}
-	existing, err := getChaptersByID(ctx, ids)
+	// Every virtual row of one listing shares the recording's policy.
+	first := rows[0]
+	starts := make([]int64, 0, len(rows))
+	for _, row := range rows {
+		starts = append(starts, row.StartMs)
+	}
+	existing, err := chaptersByStart(ctx, db, first.ArtifactHash, first.Mode, first.IntervalSeconds.Int32, starts)
 	if err != nil {
 		return nil, err
 	}
 	for i := range rows {
-		if row, ok := existing[rows[i].ChapterID]; ok {
+		if row, ok := existing[rows[i].StartMs]; ok {
 			rows[i] = row
 		}
 	}

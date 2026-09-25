@@ -161,7 +161,8 @@ func withControlDBRpcMore(t *testing.T) (*FoghornGRPCServer, sqlmock.Sqlmock) {
 // concrete fixed_interval mode at/above the floor, an empty tenant_id (the
 // internal-caller bypass) and a materialized chapter row, the RPC returns the
 // row mapped field-for-field including the nullable playback_id and the actual
-// media span. The chapter_id queried must be the canonical BuildChapterID hash.
+// media span. The chapter is found by its range start, and the stored id is
+// returned as-is.
 func TestRetrieveDVRChapter_HappyPathReturnsRow(t *testing.T) {
 	srv, mock := withControlDBRpcMore(t)
 
@@ -171,10 +172,11 @@ func TestRetrieveDVRChapter_HappyPathReturnsRow(t *testing.T) {
 		endMs      = int64(3600000)
 		interval   = int32(3600)
 	)
-	wantChapterID := control.BuildChapterID(artifactID, control.ChapterModeFixedInterval, interval, startMs, endMs)
+	// An id written by an older derivation is still the chapter's id.
+	const wantChapterID = "0123456789abcdef0123456789abcdef"
 
 	mock.ExpectQuery(`FROM foghorn\.dvr_chapters`).
-		WithArgs(wantChapterID).
+		WithArgs(artifactID, control.ChapterModeFixedInterval, interval, sqlmock.AnyArg()).
 		WillReturnRows(sqlmock.NewRows(chapterRowColsRpcMore()).AddRow(
 			wantChapterID, artifactID, control.ChapterModeFixedInterval, sql.NullInt32{Int32: interval, Valid: true},
 			startMs, endMs, false,
@@ -225,8 +227,9 @@ func TestRetrieveDVRChapter_DefaultPolicyUsesConfiguredInterval(t *testing.T) {
 	mock.ExpectQuery(`FROM foghorn\.artifacts`).WithArgs(artifactID).
 		WillReturnRows(sqlmock.NewRows([]string{"mode", "interval_seconds", "started_at_ms", "ended_at_ms", "window_seconds"}).
 			AddRow(control.ChapterModeFixedInterval, 3600, startMs, endMs, 0))
-	wantID := control.BuildChapterID(artifactID, control.ChapterModeFixedInterval, 3600, startMs, endMs)
-	mock.ExpectQuery(`FROM foghorn\.dvr_chapters`).WithArgs(wantID).WillReturnError(sql.ErrNoRows)
+	mock.ExpectQuery(`FROM foghorn\.dvr_chapters`).
+		WithArgs(artifactID, control.ChapterModeFixedInterval, int32(3600), sqlmock.AnyArg()).
+		WillReturnRows(sqlmock.NewRows(chapterRowColsRpcMore()))
 	_, err := srv.RetrieveDVRChapter(context.Background(), &foghorncontrolpb.RetrieveDVRChapterRequest{
 		DvrArtifactId: artifactID, TenantId: tenantID, StartMs: startMs, EndMs: endMs,
 	})
@@ -245,11 +248,10 @@ func TestRetrieveDVRChapter_NotFound(t *testing.T) {
 	srv, mock := withControlDBRpcMore(t)
 
 	const interval = int32(3600)
-	wantChapterID := control.BuildChapterID("dvr-x", control.ChapterModeFixedInterval, interval, 0, 3600000)
 
 	mock.ExpectQuery(`FROM foghorn\.dvr_chapters`).
-		WithArgs(wantChapterID).
-		WillReturnError(sql.ErrNoRows)
+		WithArgs("dvr-x", control.ChapterModeFixedInterval, interval, sqlmock.AnyArg()).
+		WillReturnRows(sqlmock.NewRows(chapterRowColsRpcMore()))
 
 	_, err := srv.RetrieveDVRChapter(context.Background(), &foghorncontrolpb.RetrieveDVRChapterRequest{
 		DvrArtifactId:   "dvr-x",
@@ -274,7 +276,7 @@ func TestRetrieveDVRChapter_NotFound(t *testing.T) {
 // canonical IDs. Empty tenant_id is the internal bypass (no tenant query).
 //
 // Query order on this path: ReadDVRChapterPolicy, DVRArtifactStillRecording,
-// then getChaptersByID(ANY) for the overlay.
+// then chaptersByStart(ANY) for the overlay.
 func TestListDVRChapters_VirtualWindowPagination(t *testing.T) {
 	srv, mock := withControlDBRpcMore(t)
 
@@ -303,10 +305,10 @@ func TestListDVRChapters_VirtualWindowPagination(t *testing.T) {
 		WithArgs(artifactID).
 		WillReturnRows(sqlmock.NewRows([]string{"status"}).AddRow("completed"))
 
-	// overlayMaterializedChapters -> getChaptersByID(ANY): no materialized rows,
+	// overlayMaterializedChapters -> chaptersByStart(ANY): no materialized rows,
 	// so the virtual chapters pass through unchanged.
-	mock.ExpectQuery(`WHERE c\.chapter_id = ANY\(\$1::text\[\]\)`).
-		WithArgs(sqlmock.AnyArg()).
+	mock.ExpectQuery(`c\.start_ms = ANY\(\$4::bigint\[\]\)`).
+		WithArgs(artifactID, control.ChapterModeWindowSized, intervalSecs, sqlmock.AnyArg()).
 		WillReturnRows(sqlmock.NewRows(chapterRowColsRpcMore()))
 
 	resp, err := srv.ListDVRChapters(context.Background(), &foghorncontrolpb.ListDVRChaptersRequest{
@@ -330,7 +332,7 @@ func TestListDVRChapters_VirtualWindowPagination(t *testing.T) {
 	if second.StartMs != startedAtMs+intervalMs || second.EndMs != endedAtMs {
 		t.Fatalf("second chapter bounds = [%d,%d], want [%d,%d]", second.StartMs, second.EndMs, startedAtMs+intervalMs, endedAtMs)
 	}
-	wantFirstID := control.BuildChapterID(artifactID, control.ChapterModeWindowSized, intervalSecs, startedAtMs, startedAtMs+intervalMs)
+	wantFirstID := control.BuildChapterID(artifactID, control.ChapterModeWindowSized, intervalSecs, startedAtMs)
 	if first.ChapterId != wantFirstID {
 		t.Fatalf("first ChapterId = %q, want canonical %q", first.ChapterId, wantFirstID)
 	}

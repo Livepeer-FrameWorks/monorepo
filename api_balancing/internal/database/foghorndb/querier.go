@@ -85,6 +85,9 @@ type Querier interface {
 	CloseCurrentDVRChapterForArtifact(ctx context.Context, artifactHash string) (int64, error)
 	CloseDVRChapter(ctx context.Context, chapterID string) (int64, error)
 	CloseIngestSession(ctx context.Context, arg CloseIngestSessionParams) (CloseIngestSessionRow, error)
+	// Truncates an open chapter at the recording's stop and closes it, keeping
+	// its id.
+	CloseOpenDVRChapterAt(ctx context.Context, arg CloseOpenDVRChapterAtParams) (int64, error)
 	ClosePreviousCurrentDVRChapters(ctx context.Context, arg ClosePreviousCurrentDVRChaptersParams) (int64, error)
 	CommitArtifactCreationCommand(ctx context.Context, arg CommitArtifactCreationCommandParams) (int64, error)
 	CommitDispatchedProcessingJob(ctx context.Context, arg CommitDispatchedProcessingJobParams) (int64, error)
@@ -230,6 +233,8 @@ type Querier interface {
 	GetChapterArtifactResolution(ctx context.Context, artifactHash string) (GetChapterArtifactResolutionRow, error)
 	GetChapterArtifactRouting(ctx context.Context, artifactHash string) (GetChapterArtifactRoutingRow, error)
 	GetChapterParentDVR(ctx context.Context, artifactHash string) (GetChapterParentDVRRow, error)
+	// replayable_chapters counts the recording's chapters that have been
+	// finalized, including this one once it is marked.
 	GetChapterRecordingContext(ctx context.Context, chapterID string) (GetChapterRecordingContextRow, error)
 	GetClipForDeletion(ctx context.Context, arg GetClipForDeletionParams) (GetClipForDeletionRow, error)
 	GetClipFulfilledSourceParams(ctx context.Context, arg GetClipFulfilledSourceParamsParams) (sql.NullString, error)
@@ -243,6 +248,10 @@ type Querier interface {
 	GetDVRChapterMaxRange(ctx context.Context, artifactHash string) (sql.NullInt32, error)
 	GetDVRChapterPolicy(ctx context.Context, artifactHash string) (GetDVRChapterPolicyRow, error)
 	GetDVRChaptersByID(ctx context.Context, dollar_1 []string) ([]GetDVRChaptersByIDRow, error)
+	// Chapters are addressed by their range start within one recording's policy.
+	// Stored ids are opaque: rows written before ids were start-derived keep
+	// theirs and are still found here.
+	GetDVRChaptersByStart(ctx context.Context, arg GetDVRChaptersByStartParams) ([]GetDVRChaptersByStartRow, error)
 	GetDVRDispatchOwner(ctx context.Context, arg GetDVRDispatchOwnerParams) (string, error)
 	GetDVRDispatchStatus(ctx context.Context, artifactHash string) (sql.NullString, error)
 	GetDVREffectiveWindowSeconds(ctx context.Context, artifactHash string) (sql.NullInt32, error)

@@ -149,7 +149,7 @@ Subject: `artifacts/<artifact id>`.
 | `clip.failed`       | The clip could not be produced.                              | `artifact`, `reason`                        |
 | `recording.started` | The recording node confirmed it is capturing the stream.     | `artifact`                                  |
 | `recording.stopped` | Capture ended and the recording is being finalized.          | `artifact`                                  |
-| `recording.ready`   | A recording is finalized and saved as replayable chapters.   | `artifact`, `durationMs`, `sizeBytes`       |
+| `recording.ready`   | The recording's first saved chapter is replayable.           | `artifact`, `durationMs`, `sizeBytes`       |
 | `recording.failed`  | A DVR recording could not be finalized.                      | `artifact`, `reason`                        |
 | `upload.created`    | A VOD upload session is created.                             | `artifact`, `filename`, `expectedSizeBytes` |
 | `upload.completed`  | Every part is uploaded and the file is handed to processing. | `artifact`, `sizeBytes`                     |
@@ -157,10 +157,14 @@ Subject: `artifacts/<artifact id>`.
 | `upload.ready`      | Processing finished and the asset is playable.               | `artifact`, `durationMs`, `sizeBytes`       |
 | `upload.failed`     | Processing rejected or could not process the file.           | `artifact`, `reason`                        |
 
-A recording that captured media emits `recording.started`, then `recording.stopped` once,
-then `recording.ready` or `recording.failed`. A live-rewind-only recording (stream
-`dvrChapterMode: NONE`) keeps nothing replayable, so it ends with `recording.stopped` and no
-`recording.ready`. A recording that never captured anything emits only `recording.failed`.
+A recording that captured media emits `recording.started`, then `recording.stopped` once.
+`recording.ready` fires once, when the recording's first saved chapter becomes replayable: its
+`artifact.playbackId` plays that chapter, and `durationMs` and `sizeBytes` describe it. A short
+broadcast gets it after `recording.stopped`; a broadcast longer than one chapter gets it while
+still live. `recording.failed` reports a recording that could not be finalized. A
+live-rewind-only recording (stream `dvrChapterMode: NONE`) keeps nothing replayable, so it ends
+with `recording.stopped` and no `recording.ready`. A recording that never captured anything
+emits only `recording.failed`.
 
 Upload events carry no transfer progress. Your client knows its own transfer progress; for the
 server-side state of an upload, query `vodUploadStatus`. An [import from a URL](/builders/recordings#import-a-video-from-a-url)

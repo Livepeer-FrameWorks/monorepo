@@ -61,14 +61,18 @@ func (s *FoghornGRPCServer) RetrieveDVRChapter(ctx context.Context, req *foghorn
 			intervalSeconds = policy.EffectiveIntervalSeconds()
 		}
 	}
-	chapterID := control.BuildChapterID(req.GetDvrArtifactId(), mode, intervalSeconds, req.GetStartMs(), req.GetEndMs())
-	row, err := control.GetChapter(ctx, chapterID)
+	row, err := control.GetChapterAtStart(ctx, req.GetDvrArtifactId(), mode, intervalSeconds, req.GetStartMs())
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, status.Error(codes.NotFound, "chapter not found")
 		}
-		s.logger.WithError(err).WithField("chapter_id", chapterID).Error("Failed to read chapter row")
+		s.logger.WithError(err).WithField("dvr_artifact_id", req.GetDvrArtifactId()).Error("Failed to read chapter row")
 		return nil, status.Error(codes.Internal, "failed to read chapter")
+	}
+	// The request names an exact range; a chapter whose end differs is a
+	// different range.
+	if row.EndMs != req.GetEndMs() {
+		return nil, status.Error(codes.NotFound, "chapter not found")
 	}
 	resp := &foghorncontrolpb.RetrieveDVRChapterResponse{
 		ChapterId:    row.ChapterID,

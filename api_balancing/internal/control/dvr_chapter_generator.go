@@ -32,7 +32,7 @@ func OpenChapterAtBoundary(ctx context.Context, artifactHash, mode string, inter
 	if artifactHash == "" || mode == "" || endMs <= startMs {
 		return "", fmt.Errorf("invalid chapter range: artifact=%q mode=%q [%d,%d)", artifactHash, mode, startMs, endMs)
 	}
-	chapterID := BuildChapterID(artifactHash, mode, intervalSeconds, startMs, endMs)
+	chapterID := BuildChapterID(artifactHash, mode, intervalSeconds, startMs)
 	row := DVRChapterRow{
 		ChapterID:       chapterID,
 		ArtifactHash:    artifactHash,
@@ -50,17 +50,14 @@ func OpenChapterAtBoundary(ctx context.Context, artifactHash, mode string, inter
 }
 
 // CloseTerminalChapter materializes every chapter row up to the
-// recording's terminal stop time. The final (possibly partial) chapter
-// is inserted with end_ms = terminalAtMs and a chapter_id derived from
-// that truncated range, so it matches what ListVirtualChaptersForArtifact
-// rebuilds. Any in-flight 'open' row created by the sweeper with the
-// scheduled bounds is dropped before insertion — its chapter_id is
-// derived from the un-truncated scheduled end and would not overlay
-// correctly with the listing's derived ID.
+// recording's terminal stop time. The in-flight open chapter is truncated
+// to end_ms = terminalAtMs and closed in place, keeping its id; missing
+// ranges are inserted closed. Open rows that begin after the stop are
+// dropped.
 //
-// Idempotent: every INSERT is ON CONFLICT (chapter_id) DO NOTHING; the
-// open-chapter DELETE is also a no-op on retry once the open row is
-// gone. No-op when chapters are disabled.
+// Idempotent: existing ranges are matched by start and skipped, and the
+// in-place close only applies to a row still open. No-op when chapters
+// are disabled.
 func CloseTerminalChapter(ctx context.Context, artifactHash string, terminalAtMs int64, logger logging.Logger) error {
 	if db == nil {
 		return sql.ErrConnDone
@@ -110,33 +107,45 @@ func CloseTerminalChapterTx(ctx context.Context, tx foghorndb.DBTX, artifactHash
 	default:
 		return false, nil
 	}
-	// Drop any in-flight open chapter: its bounds are scheduled bounds
-	// which won't match the truncated terminal chapter_id we're about to
-	// materialize. 'open' implies no finalization has started, so the
-	// row is purely metadata and safe to delete.
 	q := foghorndb.New(tx)
-	if err := q.DeleteOpenDVRChapters(ctx, artifactHash); err != nil {
-		return false, fmt.Errorf("drop open chapter at terminal close: %w", err)
-	}
 	var intervalArg interface{}
 	if intervalSeconds > 0 {
 		intervalArg = intervalSeconds
 	}
+	var starts []int64
 	for s := firstStart; s < terminalAtMs; s += intervalMs {
-		e := s + intervalMs
-		if e > terminalAtMs {
-			e = terminalAtMs
-		}
+		starts = append(starts, s)
+	}
+	existing, err := chaptersByStart(ctx, tx, artifactHash, policy.Mode, intervalSeconds, starts)
+	if err != nil {
+		return false, err
+	}
+	for _, s := range starts {
+		e := min(s+intervalMs, terminalAtMs)
 		if e <= s {
 			continue
 		}
-		chapterID := BuildChapterID(artifactHash, policy.Mode, intervalSeconds, s, e)
+		// The in-flight chapter is truncated at the stop and closed in place,
+		// so the id clients already hold for it stays valid.
+		if row, ok := existing[s]; ok {
+			if row.State == ChapterStateOpen {
+				if _, err := q.CloseOpenDVRChapterAt(ctx, foghorndb.CloseOpenDVRChapterAtParams{ChapterID: row.ChapterID, EndMs: e}); err != nil {
+					return false, fmt.Errorf("close terminal chapter [%d,%d): %w", s, e, err)
+				}
+			}
+			continue
+		}
+		chapterID := BuildChapterID(artifactHash, policy.Mode, intervalSeconds, s)
 		if err := q.InsertClosedDVRChapter(ctx, foghorndb.InsertClosedDVRChapterParams{
 			ChapterID: chapterID, ArtifactHash: artifactHash, Mode: policy.Mode,
 			IntervalSeconds: sql.NullInt32{Int32: intervalSeconds, Valid: intervalArg != nil}, StartMs: s, EndMs: e,
 		}); err != nil {
 			return false, fmt.Errorf("materialize terminal chapter [%d,%d): %w", s, e, err)
 		}
+	}
+	// Anything still open lies beyond the stop and never recorded media.
+	if err := q.DeleteOpenDVRChapters(ctx, artifactHash); err != nil {
+		return false, fmt.Errorf("drop open chapters beyond terminal close: %w", err)
 	}
 	return true, nil
 }
@@ -274,19 +283,30 @@ func BackfillChaptersThroughTx(
 		intervalArg = intervalSeconds
 	}
 	q := foghorndb.New(tx)
-	notify := false
+	var starts []int64
 	for s := firstStart; s < targetStart; s += intervalMs {
+		starts = append(starts, s)
+	}
+	existing, err := chaptersByStart(ctx, tx, artifactHash, mode, intervalSeconds, starts)
+	if err != nil {
+		return false, err
+	}
+	notify := false
+	for _, s := range starts {
+		if _, ok := existing[s]; ok {
+			continue
+		}
 		e := s + intervalMs
-		chapterID := BuildChapterID(artifactHash, mode, intervalSeconds, s, e)
-		if err := q.InsertClosedDVRChapter(ctx, foghorndb.InsertClosedDVRChapterParams{
+		chapterID := BuildChapterID(artifactHash, mode, intervalSeconds, s)
+		if insertErr := q.InsertClosedDVRChapter(ctx, foghorndb.InsertClosedDVRChapterParams{
 			ChapterID: chapterID, ArtifactHash: artifactHash, Mode: mode,
 			IntervalSeconds: sql.NullInt32{Int32: intervalSeconds, Valid: intervalArg != nil}, StartMs: s, EndMs: e,
-		}); err != nil {
-			return false, fmt.Errorf("backfill closed chapter [%d,%d): %w", s, e, err)
+		}); insertErr != nil {
+			return false, fmt.Errorf("backfill closed chapter [%d,%d): %w", s, e, insertErr)
 		}
 		notify = true
 	}
-	chapterID := BuildChapterID(artifactHash, mode, intervalSeconds, targetStart, targetEnd)
+	chapterID := BuildChapterID(artifactHash, mode, intervalSeconds, targetStart)
 	openedNotify, err := openChapterTx(ctx, tx, DVRChapterRow{
 		ChapterID: chapterID, ArtifactHash: artifactHash, Mode: mode,
 		IntervalSeconds: sql.NullInt32{Int32: intervalSeconds, Valid: intervalSeconds > 0},

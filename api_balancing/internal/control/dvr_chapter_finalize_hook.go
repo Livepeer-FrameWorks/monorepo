@@ -16,6 +16,7 @@ import (
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	commodorepb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/commodore"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/proto/events/internalv1"
+	publicv1 "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/events/public/v1"
 	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
 )
 
@@ -28,6 +29,12 @@ import (
 
 const chapterFinalizeJobIDPrefix = "chapter-finalize-"
 const chapterFinalizeAttemptPrefix = "v2-"
+
+// ChapterFinalizeIdentityFromJobID parses a chapter finalization job id into
+// its chapter and attempt.
+func ChapterFinalizeIdentityFromJobID(jobID string) (chapterID string, attempt int32, ok bool) {
+	return chapterFinalizeIdentityFromJobID(jobID)
+}
 
 func chapterFinalizeIdentityFromJobID(jobID string) (chapterID string, attempt int32, ok bool) {
 	if !strings.HasPrefix(jobID, chapterFinalizeJobIDPrefix) {
@@ -380,6 +387,22 @@ func finalizeChapterArtifactTx(
 		}
 		if enqErr := artifactoutbox.EnqueueVodTransitionTx(ctx, tx, vodData, chapterReady); enqErr != nil {
 			return enqErr
+		}
+		// recording.ready announces that the recording can be replayed, which
+		// is true once its first chapter is finalized. The parent lock taken
+		// above serializes chapter finalizes of one recording, so exactly one
+		// of them counts itself as the first.
+		if recording.ReplayableChapters == 1 {
+			artifact := artifactoutbox.RecordingArtifact(recording.RecordingHash, recording.StreamID)
+			artifact.PlaybackId = recording.PlaybackID
+			ready := &publicv1.RecordingReady{
+				Artifact:   artifact,
+				DurationMs: max(chapterDurationMs, 0),
+				SizeBytes:  max(sizeBytes, 0),
+			}
+			if enqErr := artifactoutbox.EnqueueArtifactFactTx(ctx, tx, tenantID, ready); enqErr != nil {
+				return fmt.Errorf("enqueue recording.ready: %w", enqErr)
+			}
 		}
 		return nil
 	})

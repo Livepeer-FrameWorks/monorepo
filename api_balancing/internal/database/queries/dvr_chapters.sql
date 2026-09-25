@@ -112,6 +112,17 @@ FROM foghorn.dvr_chapters c WHERE c.chapter_id = $1;
 SELECT sqlc.embed(c)
 FROM foghorn.dvr_chapters c WHERE c.chapter_id = ANY($1::text[]);
 
+-- Chapters are addressed by their range start within one recording's policy.
+-- Stored ids are opaque: rows written before ids were start-derived keep
+-- theirs and are still found here.
+-- name: GetDVRChaptersByStart :many
+SELECT sqlc.embed(c)
+FROM foghorn.dvr_chapters c
+WHERE c.artifact_hash = sqlc.arg(artifact_hash)
+  AND c.mode = sqlc.arg(mode)
+  AND COALESCE(c.interval_seconds, 0) = sqlc.arg(interval_seconds)::integer
+  AND c.start_ms = ANY(sqlc.arg(start_ms)::bigint[]);
+
 -- name: GetCurrentDVRChapter :one
 SELECT sqlc.embed(c)
 FROM foghorn.dvr_chapters c
@@ -193,3 +204,17 @@ WHERE c.artifact_hash = sqlc.arg(artifact_hash) AND c.start_ms >= sqlc.arg(start
   AND (sqlc.narg(interval_seconds)::int IS NULL OR COALESCE(c.interval_seconds, 0) = sqlc.narg(interval_seconds)::int)
   AND (sqlc.arg(cursor_start_ms)::bigint = 0 OR c.start_ms > sqlc.arg(cursor_start_ms)::bigint OR (c.start_ms = sqlc.arg(cursor_start_ms)::bigint AND c.chapter_id > sqlc.arg(cursor_chapter_id)))
 ORDER BY c.start_ms, c.chapter_id LIMIT sqlc.arg(page_limit);
+
+-- name: ListNodeFinalizingDVRChapters :many
+SELECT chapter_id, finalize_attempts
+FROM foghorn.dvr_chapters
+WHERE finalize_node_id = sqlc.arg(node_id) AND state = 'finalizing'
+  AND finalize_started_at < sqlc.arg(started_before);
+
+-- Makes a finalizing attempt immediately re-claimable. The attempt counter
+-- guard keeps a concurrent re-claim from being undone.
+-- name: ExpireDVRChapterFinalizeAttempt :execrows
+UPDATE foghorn.dvr_chapters
+SET finalize_started_at = 'epoch'::timestamptz
+WHERE chapter_id = sqlc.arg(chapter_id) AND state = 'finalizing'
+  AND finalize_node_id = sqlc.arg(node_id) AND finalize_attempts = sqlc.arg(finalize_attempts);

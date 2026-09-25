@@ -4,10 +4,13 @@ package control
 
 import (
 	"database/sql"
+	"fmt"
 	"testing"
 	"time"
 
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
+	publicv1 "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/events/public/v1"
+	"google.golang.org/protobuf/proto"
 
 	dbsql "github.com/Livepeer-FrameWorks/monorepo/pkg/database/sql"
 )
@@ -49,9 +52,11 @@ func chapterCount(t *testing.T, conn *sql.DB, hash string) int {
 	return n
 }
 
-// recording.ready announces a replayable recording. A recording that keeps
-// chapters finalizes with chapters and recording.ready; a live-rewind-only
-// recording (no chapter mode) finalizes completed without either.
+// recording.ready announces that a recording can be replayed. Stopping a
+// chaptered recording closes its chapters but emits no ready; the first
+// finalized chapter emits exactly one, carrying that chapter's playback id,
+// and later chapters emit none. A live-rewind-only recording (no chapter
+// mode) finalizes without chapters or ready.
 func TestRecordingReadyRequiresChapters_RealPG(t *testing.T) {
 	conn := startRealPG(t)
 	prev := db
@@ -86,14 +91,60 @@ func TestRecordingReadyRequiresChapters_RealPG(t *testing.T) {
 	if got := chapterCount(t, conn, chaptered); got != 3 {
 		t.Fatalf("window-sized recording chapters = %d, want 3", got)
 	}
-	if got := readyFor(chaptered); got != 1 {
-		t.Fatalf("window-sized recording recording.ready = %d, want 1", got)
+	if got := readyFor(chaptered); got != 0 {
+		t.Fatalf("recording.ready emitted %d times at stop, before any chapter was replayable", got)
 	}
 	if got := chapterCount(t, conn, rewindOnly); got != 0 {
 		t.Fatalf("live-rewind-only recording chapters = %d, want 0", got)
 	}
 	if got := readyFor(rewindOnly); got != 0 {
 		t.Fatalf("live-rewind-only recording emitted recording.ready %d times", got)
+	}
+
+	rows, err := conn.QueryContext(t.Context(), `SELECT chapter_id FROM foghorn.dvr_chapters WHERE artifact_hash = $1 ORDER BY start_ms`, chaptered)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var chapters []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			t.Fatal(err)
+		}
+		chapters = append(chapters, id)
+	}
+	_ = rows.Close()
+
+	for i, chapterID := range chapters[:2] {
+		playbackHash := fmt.Sprintf("dvrreadychapterpb00000000000000%d", i)
+		playbackID := fmt.Sprintf("pbchapter%d", i)
+		if _, err := conn.ExecContext(t.Context(), `INSERT INTO foghorn.artifacts (artifact_hash, artifact_type, tenant_id, status, origin_type, origin_id, library_visible)
+			VALUES ($1, 'vod', $2::uuid, 'finalizing', 'dvr_chapter', $3, false)`, playbackHash, domainTenant, chapterID); err != nil {
+			t.Fatalf("allocate chapter artifact: %v", err)
+		}
+		if _, err := conn.ExecContext(t.Context(), `UPDATE foghorn.dvr_chapters
+			SET state = 'finalizing', finalize_node_id = 'owner', finalize_attempts = 1, playback_artifact_hash = $2, playback_id = $3
+			WHERE chapter_id = $1`, chapterID, playbackHash, playbackID); err != nil {
+			t.Fatalf("mark chapter finalizing: %v", err)
+		}
+		if _, err := finalizeChapterArtifactTx(t.Context(), chapterID, playbackHash, "", "owner", 1,
+			1000, 10, false, 0, 60000, 60000, false, "", nil, logging.NewLogger(), logging.Fields{}); err != nil {
+			t.Fatalf("finalize chapter %d: %v", i, err)
+		}
+		if got := readyFor(chaptered); got != 1 {
+			t.Fatalf("after %d finalized chapter(s) recording.ready = %d, want exactly 1", i+1, got)
+		}
+	}
+	var ready publicv1.RecordingReady
+	for _, row := range domainRows(t, conn, "recording.ready") {
+		if row.aggregateID == chaptered {
+			if err := proto.Unmarshal(row.payload, &ready); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	if ready.GetArtifact().GetPlaybackId() != "pbchapter0" || ready.GetArtifact().GetArtifactId() != chaptered {
+		t.Fatalf("recording.ready artifact = %+v, want the recording with its first chapter's playback id", ready.GetArtifact())
 	}
 }
 
@@ -163,5 +214,80 @@ func TestTerminalChapterBackfill_RealPG(t *testing.T) {
 	}
 	if pending != 0 {
 		t.Fatalf("%d finalized recordings still pending terminal backfill", pending)
+	}
+}
+
+// A chapter keeps its id from the moment it opens until it is finalized: the
+// stop truncates its end in place. A chapter row written before ids were
+// start-derived is matched by its range start, so the sweeper neither
+// duplicates it nor closes it early, and the stop keeps its id too.
+func TestChapterIDStableAcrossStop_RealPG(t *testing.T) {
+	conn := startRealPG(t)
+	prev := db
+	SetDB(conn)
+	t.Cleanup(func() { SetDB(prev) })
+
+	start := time.Now().UTC().Add(-90 * time.Second).Truncate(time.Second)
+	stop := start.Add(90 * time.Second)
+	window := sql.NullString{String: ChapterModeWindowSized, Valid: true}
+	const fresh, upgraded = "dvrchapterid00000000000000000001", "dvrchapterid00000000000000000002"
+	insertReplayRecording(t, conn, replayRecording{hash: fresh, status: "recording", mode: window, start: start, end: stop})
+	insertReplayRecording(t, conn, replayRecording{hash: upgraded, status: "recording", mode: window, start: start, end: stop})
+
+	// The upgraded recording's in-flight chapter was opened by the previous
+	// derivation, which hashed the scheduled end as well.
+	const legacyID = "legacyopenchapter000000000000001"
+	if _, err := conn.ExecContext(t.Context(), `INSERT INTO foghorn.dvr_chapters
+		(chapter_id, artifact_hash, mode, interval_seconds, start_ms, end_ms, is_current, state)
+		VALUES ($1, $2, $3, 60, $4, $5, true, 'open')`,
+		legacyID, upgraded, ChapterModeWindowSized, start.Add(60*time.Second).UnixMilli(), start.Add(120*time.Second).UnixMilli()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := conn.ExecContext(t.Context(), `INSERT INTO foghorn.dvr_chapters
+		(chapter_id, artifact_hash, mode, interval_seconds, start_ms, end_ms, is_current, state)
+		VALUES ('legacyclosedchapter0000000000001', $1, $2, 60, $3, $4, false, 'closed')`,
+		upgraded, ChapterModeWindowSized, start.UnixMilli(), start.Add(60*time.Second).UnixMilli()); err != nil {
+		t.Fatal(err)
+	}
+
+	openID := func(hash string) string {
+		t.Helper()
+		var id string
+		if err := conn.QueryRowContext(t.Context(), `SELECT chapter_id FROM foghorn.dvr_chapters
+			WHERE artifact_hash = $1 AND is_current AND state = 'open'`, hash).Scan(&id); err != nil {
+			t.Fatalf("current open chapter of %s: %v", hash, err)
+		}
+		return id
+	}
+	for _, hash := range []string{fresh, upgraded} {
+		if err := BackfillChaptersThrough(t.Context(), hash, ChapterModeWindowSized, 60, start.UnixMilli(), start.Add(80*time.Second).UnixMilli()); err != nil {
+			t.Fatalf("sweep %s: %v", hash, err)
+		}
+	}
+	freshOpen := openID(fresh)
+	if got := openID(upgraded); got != legacyID {
+		t.Fatalf("sweeper replaced the upgraded recording's open chapter %s with %s", legacyID, got)
+	}
+	if got := chapterCount(t, conn, upgraded); got != 2 {
+		t.Fatalf("upgraded recording has %d chapter rows, want its 2 existing ranges without duplicates", got)
+	}
+
+	for _, hash := range []string{fresh, upgraded} {
+		if err := CloseTerminalChapter(t.Context(), hash, stop.UnixMilli(), logging.NewLogger()); err != nil {
+			t.Fatalf("terminal close %s: %v", hash, err)
+		}
+	}
+	for hash, wantID := range map[string]string{fresh: freshOpen, upgraded: legacyID} {
+		var state string
+		var endMs int64
+		if err := conn.QueryRowContext(t.Context(), `SELECT state, end_ms FROM foghorn.dvr_chapters WHERE chapter_id = $1`, wantID).Scan(&state, &endMs); err != nil {
+			t.Fatalf("chapter %s of %s after stop: %v", wantID, hash, err)
+		}
+		if state != ChapterStateClosed || endMs != stop.UnixMilli() {
+			t.Fatalf("chapter %s after stop: state=%s end=%d, want closed at the stop %d", wantID, state, endMs, stop.UnixMilli())
+		}
+		if got := chapterCount(t, conn, hash); got != 2 {
+			t.Fatalf("%s has %d chapters after stop, want 2", hash, got)
+		}
 	}
 }

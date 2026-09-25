@@ -120,19 +120,26 @@ func (q *Queries) GetChapterArtifactRouting(ctx context.Context, artifactHash st
 
 const getChapterRecordingContext = `-- name: GetChapterRecordingContext :one
 SELECT c.artifact_hash AS recording_hash, COALESCE(p.stream_id::text, '')::text AS stream_id,
-       c.start_ms, c.end_ms
+       c.start_ms, c.end_ms, COALESCE(c.playback_id, '')::text AS playback_id,
+       (SELECT count(*) FROM foghorn.dvr_chapters o
+         WHERE o.artifact_hash = c.artifact_hash
+           AND o.state IN ('finalized', 'frozen', 'reclaimed'))::bigint AS replayable_chapters
 FROM foghorn.dvr_chapters c
 JOIN foghorn.artifacts p ON p.artifact_hash = c.artifact_hash
 WHERE c.chapter_id = $1
 `
 
 type GetChapterRecordingContextRow struct {
-	RecordingHash string `db:"recording_hash" json:"recording_hash"`
-	StreamID      string `db:"stream_id" json:"stream_id"`
-	StartMs       int64  `db:"start_ms" json:"start_ms"`
-	EndMs         int64  `db:"end_ms" json:"end_ms"`
+	RecordingHash      string `db:"recording_hash" json:"recording_hash"`
+	StreamID           string `db:"stream_id" json:"stream_id"`
+	StartMs            int64  `db:"start_ms" json:"start_ms"`
+	EndMs              int64  `db:"end_ms" json:"end_ms"`
+	PlaybackID         string `db:"playback_id" json:"playback_id"`
+	ReplayableChapters int64  `db:"replayable_chapters" json:"replayable_chapters"`
 }
 
+// replayable_chapters counts the recording's chapters that have been
+// finalized, including this one once it is marked.
 func (q *Queries) GetChapterRecordingContext(ctx context.Context, chapterID string) (GetChapterRecordingContextRow, error) {
 	row := q.db.QueryRowContext(ctx, getChapterRecordingContext, chapterID)
 	var i GetChapterRecordingContextRow
@@ -141,6 +148,8 @@ func (q *Queries) GetChapterRecordingContext(ctx context.Context, chapterID stri
 		&i.StreamID,
 		&i.StartMs,
 		&i.EndMs,
+		&i.PlaybackID,
+		&i.ReplayableChapters,
 	)
 	return i, err
 }

@@ -10,6 +10,27 @@ import (
 	"database/sql"
 )
 
+const closeOpenDVRChapterAt = `-- name: CloseOpenDVRChapterAt :execrows
+UPDATE foghorn.dvr_chapters
+SET end_ms = $1, is_current = false, state = 'closed'
+WHERE chapter_id = $2 AND state = 'open' AND $1::bigint > start_ms
+`
+
+type CloseOpenDVRChapterAtParams struct {
+	EndMs     int64  `db:"end_ms" json:"end_ms"`
+	ChapterID string `db:"chapter_id" json:"chapter_id"`
+}
+
+// Truncates an open chapter at the recording's stop and closes it, keeping
+// its id.
+func (q *Queries) CloseOpenDVRChapterAt(ctx context.Context, arg CloseOpenDVRChapterAtParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, closeOpenDVRChapterAt, arg.EndMs, arg.ChapterID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
 const deleteOpenDVRChapters = `-- name: DeleteOpenDVRChapters :exec
 DELETE FROM foghorn.dvr_chapters
 WHERE artifact_hash = $1 AND state = 'open'

@@ -14,7 +14,6 @@ import (
 	commodorepb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/commodore"
 	publicv1 "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/events/public/v1"
 	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
-	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
@@ -382,22 +381,10 @@ func FinalizeDVR(ctx context.Context, dvrHash string, opts FinalizeOptions) (Fin
 			}
 			et := endedAt.Unix()
 			dvrData.EndedAt = &et
-			// recording.ready announces a replayable recording, which exists only
-			// when the recording keeps chapters. A live-rewind-only recording
-			// (no chapter policy) ends with recording.stopped and nothing else.
-			_, keepsChapters, policyErr := readDVRChapterPolicy(ctx, finTx, dvrHash)
-			if policyErr != nil {
-				return fmt.Errorf("read dvr chapter policy: %w", policyErr)
-			}
-			var ready proto.Message
-			if keepsChapters {
-				ready = &publicv1.RecordingReady{
-					Artifact:   artifactoutbox.RecordingArtifact(dvrHash, rowStreamID),
-					DurationMs: max(opts.DurationSeconds, 0) * 1000,
-					SizeBytes:  int64(opts.SizeBytes),
-				}
-			}
-			if enqErr := artifactoutbox.EnqueueDVRTransitionTx(ctx, finTx, dvrData, ready); enqErr != nil {
+			// recording.ready is emitted when the first chapter finalizes
+			// (finalizeChapterArtifactTx), since only a finalized chapter can
+			// be replayed. The terminal lifecycle row carries no domain fact.
+			if enqErr := artifactoutbox.EnqueueDVRTransitionTx(ctx, finTx, dvrData, nil); enqErr != nil {
 				logger.WithError(enqErr).WithField("dvr_hash", dvrHash).Error("Failed to enqueue terminal DVR lifecycle event")
 				return fmt.Errorf("enqueue dvr terminal lifecycle: %w", enqErr)
 			}

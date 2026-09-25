@@ -177,8 +177,10 @@ func TestArtifactAggregateVersions_RealPG(t *testing.T) {
 		false, "", nil, logging.NewLogger(), logging.Fields{}); err != nil {
 		t.Fatalf("finalize chapter: %v", err)
 	}
-	if got := aggregateVersions(t, conn, parent); len(got) != 1 || got[0] != 5 {
-		t.Fatalf("recording.chapter_ready versions = %v, want [5] (the parent's next revision)", got)
+	// The recording's first finalized chapter also announces recording.ready,
+	// which takes the revision after recording.chapter_ready.
+	if got := aggregateVersions(t, conn, parent); len(got) != 2 || got[0] != 5 || got[1] != 6 {
+		t.Fatalf("recording.chapter_ready + recording.ready versions = %v, want [5 6] (the parent's next revisions)", got)
 	}
 	if r := artifactRevision(t, conn, chapter); r != 0 {
 		t.Fatalf("the chapter's own playback artifact carries no event revision, got %d", r)

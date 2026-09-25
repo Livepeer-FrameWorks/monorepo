@@ -234,9 +234,8 @@ func (x *RecordingStarted) GetArtifact() *Artifact {
 }
 
 // RecordingStopped reports that capture ended and the recording is being
-// finalized. It follows recording.started once; recording.ready or
-// recording.failed follows it. A live-rewind-only recording keeps nothing
-// replayable, so recording.ready never follows it.
+// finalized. It follows recording.started once; recording.failed may follow
+// it.
 type RecordingStopped struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Artifact      *Artifact              `protobuf:"bytes,1,opt,name=artifact,proto3" json:"artifact,omitempty"`
@@ -281,8 +280,11 @@ func (x *RecordingStopped) GetArtifact() *Artifact {
 	return nil
 }
 
-// RecordingReady reports that a finalized recording is saved as replayable
-// chapters. A recording whose stream keeps live rewind only never emits it.
+// RecordingReady reports that the recording can be replayed: its first saved
+// chapter is finalized. artifact.playback_id plays that chapter, and
+// duration_ms and size_bytes describe it. It is emitted once per recording,
+// before recording.stopped when a broadcast outlasts one chapter. A recording
+// whose stream keeps live rewind only never emits it.
 type RecordingReady struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Artifact      *Artifact              `protobuf:"bytes,1,opt,name=artifact,proto3" json:"artifact,omitempty"`
