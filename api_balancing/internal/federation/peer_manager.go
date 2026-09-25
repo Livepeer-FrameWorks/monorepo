@@ -27,6 +27,8 @@ import (
 	foghornfederationpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/foghorn_federation"
 	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
 	quartermasterpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/quartermaster"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 // PeerManager manages PeerChannel lifecycles and periodic peer discovery.
@@ -1480,6 +1482,13 @@ func (pm *PeerManager) reservePeerRunnerLocked(clusterID string, ps *peerState) 
 	if ps.connected || ps.runnerToken != 0 {
 		return peerConnectRequest{}, false
 	}
+	// A virtual cluster this cell controls is served by this Foghorn: its
+	// federation address is our own and the server refuses a PeerChannel to its
+	// own cluster, so a runner would only churn. The peer entry stays for
+	// address and control-cell lookups.
+	if strings.TrimSpace(ps.controlCellID) == pm.clusterID {
+		return peerConnectRequest{}, false
+	}
 	pm.nextPeerRunnerToken++
 	if pm.nextPeerRunnerToken == 0 {
 		pm.nextPeerRunnerToken++
@@ -1717,8 +1726,10 @@ func (pm *PeerManager) peerWriteLoop(ctx context.Context, peerID string, sendCh 
 func (pm *PeerManager) recvLoop(peerClusterID string, stream foghornfederationpb.FoghornFederation_PeerChannelClient) {
 	for {
 		if _, err := stream.Recv(); err != nil {
-			if !errors.Is(err, io.EOF) {
-				pm.logger.WithError(err).WithField("peer_cluster", peerClusterID).Debug("PeerChannel recv error")
+			// The reconnect log that follows carries no cause; this is the only
+			// record of why a channel ended.
+			if !errors.Is(err, io.EOF) && status.Code(err) != codes.Canceled {
+				pm.logger.WithError(err).WithField("peer_cluster", peerClusterID).Warn("PeerChannel ended")
 			}
 			return
 		}
