@@ -1379,7 +1379,9 @@ func (p *Processor) handleProcessBilling(trigger *ipcpb.MistTrigger) (string, bo
 		return "", false, fmt.Errorf("unexpected payload type for ProcessBilling: %T", trigger.GetTriggerPayload())
 	}
 	pbill := payload.ProcessBilling
-	internalName := mist.ExtractInternalName(pbill.GetStreamName())
+	// Helmsman builds before this release forward the Mist process label
+	// "<source>→<sink>" as the stream name.
+	internalName := mist.ExtractInternalName(mist.ProcessSourceStream(pbill.GetStreamName()))
 
 	// The billing tenant is resource-bound: resolve it from the stream, ALWAYS (even when the sidecar asserted
 	// one in the payload), and verify the assertion against the resolved owner. Seed the asserted value so

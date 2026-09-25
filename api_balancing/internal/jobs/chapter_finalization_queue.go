@@ -183,6 +183,26 @@ func (q *ChapterFinalizationQueue) tick() {
 	}
 }
 
+// finalizeProcessesJSON turns Commodore's dvr_finalize process policy into the
+// config the edge runs. A chapter finalize is one pass over a drained source,
+// like a processing job: a process that finished its pass (Thumbs ends with
+// "VOD sprite sheet complete") must not be supervisor-restarted. A restarted
+// producer re-adds its output tracks after the recording header is written,
+// or raises the buffer's output expectation to tracks that never arrive, and
+// either one fails the finalize. The Livepeer broadcaster list is filled here
+// because Commodore returns the policy without broadcasters by design.
+func (q *ChapterFinalizationQueue) finalizeProcessesJSON(processesJSON string) string {
+	if processesJSON == "" {
+		return ""
+	}
+	processesJSON = mist.DisableProcessRestarts(processesJSON)
+	if q.gatewayResolver != nil {
+		processesJSON = q.gatewayResolver.ApplyLivepeerBroadcasters(processesJSON, nil)
+		processesJSON = q.gatewayResolver.ApplyLivepeerWorkload(processesJSON, mist.WorkloadVOD)
+	}
+	return processesJSON
+}
+
 // dispatchChapter runs one finalize attempt for a single chapter row.
 // Allocates the playback artifact (idempotent on retry via the
 // origin_type/origin_id unique partial index), assembles the source
@@ -347,14 +367,7 @@ func (q *ChapterFinalizationQueue) dispatchChapter(ctx context.Context, c contro
 			}).Warn("Chapter finalization queue: tenant processes_json lookup failed; chapter stays closed for retry")
 			return fmt.Errorf("resolve tenant processes_json: %w", perr)
 		}
-		processesJSON = resp.GetProcessesJson()
-	}
-	// Fill the Livepeer broadcaster list so Helmsman sees concrete gateway
-	// addresses. Commodore returns the config without broadcasters by design
-	// (the resolver runs in the local cluster's context).
-	if q.gatewayResolver != nil && processesJSON != "" {
-		processesJSON = q.gatewayResolver.ApplyLivepeerBroadcasters(processesJSON, nil)
-		processesJSON = q.gatewayResolver.ApplyLivepeerWorkload(processesJSON, mist.WorkloadVOD)
+		processesJSON = q.finalizeProcessesJSON(resp.GetProcessesJson())
 	}
 	// Cache the resolved config for the STREAM_PROCESS trigger that
 	// fires when Mist boots the processing+<hash> stream. Mirrors the

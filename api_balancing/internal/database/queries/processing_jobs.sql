@@ -178,3 +178,30 @@ WHERE a.artifact_hash = r.artifact_hash
   AND a.tenant_id = r.tenant_id
   AND a.artifact_type IN ('clip', 'vod')
   AND a.status NOT IN ('ready', 'failed', 'deleted', 'expired', 'aborted');
+
+-- Requeues a job its node reported as failed in a retryable way, while the
+-- retry budget lasts. Bound to the reporting node like every result. The job
+-- keeps processes_json, so the next attempt runs the persisted ladder.
+-- name: RequeueRetryableProcessingJob :one
+WITH requeued AS (
+    UPDATE foghorn.processing_jobs AS job
+    SET status = 'queued', processing_node_id = NULL,
+        retry_count = retry_count + 1, updated_at = NOW(),
+        error_message = sqlc.arg(error_message),
+        progress_last_ms = 0, progress_advanced_at = NULL
+    WHERE job.job_id = sqlc.arg(job_id)
+      AND job.processing_node_id = sqlc.arg(node_id)
+      AND job.status IN ('dispatched', 'processing')
+      AND job.retry_count < sqlc.arg(max_retries)
+    RETURNING artifact_hash, tenant_id
+), artifact AS (
+    UPDATE foghorn.artifacts AS a
+    SET status = 'queued', updated_at = NOW()
+    FROM requeued AS r
+    WHERE a.artifact_hash = r.artifact_hash
+      AND a.tenant_id = r.tenant_id
+      AND a.artifact_type IN ('clip', 'vod')
+      AND a.status NOT IN ('ready', 'failed', 'deleted', 'expired', 'aborted')
+    RETURNING a.artifact_hash
+)
+SELECT COUNT(*)::int AS requeued FROM requeued;

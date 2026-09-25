@@ -148,8 +148,9 @@ func observePlacementNodes(req PlacementObservationRequest, capacityOnly bool) (
 			protocolAvailable = mist.ResolvePlaybackURL(node.Outputs, node.Host, req.Protocol, name) != ""
 		}
 		unknownStream := capacityOnly && req.InternalName == "" && len(node.ConfigStreams) != 0
-		if !node.IsActive || mode != state.NodeModeNormal || !validAddress || !capable || !protocolAvailable || (!unknownStream && !placementStreamAllowed(node.ConfigStreams, req.InternalName)) {
+		if detail := placementUnavailableDetail(node.IsActive, mode, validAddress, capable, protocolAvailable, unknownStream || placementStreamAllowed(node.ConfigStreams, req.InternalName)); detail != "" {
 			candidate.Capacity = placement.CapacityUnavailable
+			candidate.CapacityDetail = detail
 		} else if !pathKnown || unknownStream {
 			// Missing source or stream-allowlist evidence is not a known node refusal.
 			candidate.Capacity = placement.CapacityUnknown
@@ -157,6 +158,26 @@ func observePlacementNodes(req PlacementObservationRequest, capacityOnly bool) (
 		result = append(result, candidate)
 	}
 	return result, nil
+}
+
+// placementUnavailableDetail names the first condition that makes a node
+// unable to take the request, or "" when none applies.
+func placementUnavailableDetail(active bool, mode state.NodeOperationalMode, validAddress, capable, protocolAvailable, streamAllowed bool) string {
+	switch {
+	case !active:
+		return "inactive"
+	case mode != state.NodeModeNormal:
+		return "mode_" + string(mode)
+	case !validAddress:
+		return "invalid_address"
+	case !capable:
+		return "capability_missing"
+	case !protocolAvailable:
+		return "protocol_unavailable"
+	case !streamAllowed:
+		return "stream_not_allowed"
+	}
+	return ""
 }
 
 func finiteMetric(value float64) bool { return !math.IsNaN(value) && !math.IsInf(value, 0) }

@@ -20,6 +20,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/testutil"
+	logrustest "github.com/sirupsen/logrus/hooks/test"
 )
 
 func configureLivepeerAuthNode(t *testing.T, healthy, ingest, processing bool) *state.StreamStateManager {
@@ -182,6 +183,55 @@ func TestAuthorizeSignedLivepeerLiveJobBindsGenerationAndCanonicalSpec(t *testin
 	got, reason = authorizeSignedLivepeerJob(context.Background(), "live+stream", request)
 	if got != nil || reason != authRejectStaleJob {
 		t.Fatalf("tampered live spec digest accepted: reason=%q context=%+v", reason, got)
+	}
+}
+
+// A buffer that outlives its publisher keeps the process config Foghorn signed
+// for the previous ingest session. After a republish that session has ended, so
+// a restarted Livepeer process presenting its token is refused, and the log
+// names the ended session rather than only stale_job.
+func TestAuthorizeSignedLivepeerLiveJobLogsEndedSessionOnRepublish(t *testing.T) {
+	sm := configureLivepeerAuthNode(t, true, true, false)
+	logs := logrustest.NewLocal(logger)
+	if err := sm.UpdateStreamFromBuffer("live+stream", "stream", "edge-1", "tenant-1", "FULL", ""); err != nil {
+		t.Fatal(err)
+	}
+	sm.SetStreamStreamID("stream", "stream-id")
+	processesJSON := `[{"process":"Livepeer","target_profiles":[{"name":"360p","bitrate":900000,"height":360,"profile":"H264ConstrainedHigh"}],"workload":"live","deadline_ms":1000,"min_speed":1,"frameworks_gateway_cluster_ids":["media-gateway"]}]`
+	digest, err := mist.LivepeerJobSpecDigest(processesJSON)
+	if err != nil {
+		t.Fatal(err)
+	}
+	const endedSession = "11111111-1111-4111-8111-111111111111"
+	token := mintLivepeerAuthToken(t, control.TranscodeJobClaims{
+		ManifestID: "live+stream", AttemptOrGeneration: endedSession, Session: endedSession, SpecDigest: digest,
+	})
+
+	mockDB, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	oldDB := db
+	db = mockDB
+	t.Cleanup(func() { db = oldDB; _ = mockDB.Close() })
+	mock.ExpectQuery(`FROM foghorn\.ingest_sessions s[\s\S]*s\.ended_at IS NULL`).
+		WithArgs(endedSession, "stream").
+		WillReturnRows(sqlmock.NewRows([]string{"session_id", "tenant_id", "node_id", "ingest_cluster_id", "stream_internal_name", "processes_json"}))
+
+	request := livepeerAuthRequest{
+		JobToken: token, RemoteIP: "203.0.113.4", Source: livepeerSource{Width: 1280, Height: 720, FPS: 30, Codec: "h264"},
+	}
+	got, reason := authorizeSignedLivepeerJob(context.Background(), "live+stream-Ab12Cd34", request)
+	if got != nil || reason != authRejectStaleJob {
+		t.Fatalf("ended-session live token: reason=%q context=%+v, want stale_job", reason, got)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+	entry := logs.LastEntry()
+	if entry == nil || entry.Data["check"] != liveCheckSessionNotActive || entry.Data["token_session"] != endedSession ||
+		entry.Data["token_node_id"] != "edge-1" {
+		t.Fatalf("rejection log does not name the ended session: %+v", entry)
 	}
 }
 

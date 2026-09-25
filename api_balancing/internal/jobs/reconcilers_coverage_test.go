@@ -223,11 +223,17 @@ func TestFailExhaustedJobAtomic_CommitsAllOrNothing(t *testing.T) {
 	expectTransitionInsert(mock, "upload.failed", "vod-fail-hash-recon", "vod_lifecycle", mockTenantUUID, "", "vod-fail-hash-recon")
 	mock.ExpectCommit()
 
-	d := NewProcessingDispatcher(ProcessingDispatcherConfig{DB: db, Logger: logging.NewLogger()})
+	dirty := 0
+	d := NewProcessingDispatcher(ProcessingDispatcherConfig{DB: db, Logger: logging.NewLogger(), OnCatalogDirty: func() { dirty++ }})
 	d.failExhaustedJobAtomic(context.Background(), "job-vodfail", time.Now(), time.Now())
 
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatal(err)
+	}
+	// The API reads status from the catalog projection; a committed failure must
+	// wake it instead of leaving the asset PROCESSING until the fallback pass.
+	if dirty != 1 {
+		t.Fatalf("catalog dirty notifications = %d, want 1 after a committed exhaustion", dirty)
 	}
 }
 
@@ -250,11 +256,15 @@ func TestFailExhaustedJobAtomic_RollsBackOnArtifactError(t *testing.T) {
 		WillReturnError(errors.New("fail-vod boom"))
 	mock.ExpectRollback()
 
-	d := NewProcessingDispatcher(ProcessingDispatcherConfig{DB: db, Logger: logging.NewLogger()})
+	dirty := 0
+	d := NewProcessingDispatcher(ProcessingDispatcherConfig{DB: db, Logger: logging.NewLogger(), OnCatalogDirty: func() { dirty++ }})
 	d.failExhaustedJobAtomic(context.Background(), "job-vodfail2", time.Now(), time.Now())
 
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatal(err)
+	}
+	if dirty != 0 {
+		t.Fatalf("catalog dirty notifications = %d, want 0 when nothing committed", dirty)
 	}
 }
 
@@ -273,11 +283,15 @@ func TestFailExhaustedJobAtomic_NoOpWhenRecovered(t *testing.T) {
 		WillReturnError(sql.ErrNoRows)
 	mock.ExpectRollback()
 
-	d := NewProcessingDispatcher(ProcessingDispatcherConfig{DB: db, Logger: logging.NewLogger()})
+	dirty := 0
+	d := NewProcessingDispatcher(ProcessingDispatcherConfig{DB: db, Logger: logging.NewLogger(), OnCatalogDirty: func() { dirty++ }})
 	d.failExhaustedJobAtomic(context.Background(), "job-recovered", time.Now(), time.Now())
 
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatal(err)
+	}
+	if dirty != 0 {
+		t.Fatalf("catalog dirty notifications = %d, want 0 when nothing committed", dirty)
 	}
 }
 

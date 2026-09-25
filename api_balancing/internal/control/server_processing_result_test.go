@@ -458,6 +458,7 @@ func TestProcessProcessingJobResult_Failed_MarksVodArtifactFailed(t *testing.T) 
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	expectTransitionInsert(mock, "upload.failed", "art-vod", "vod_lifecycle", "5eed517e-ba5e-da7a-517e-ba5eda7a0001", "", "art-vod")
 	mock.ExpectCommit()
+	dirty := countCatalogDirty(t)
 
 	processProcessingJobResult(&ipcpb.ProcessingJobResult{
 		JobId:  "job-vod-fail",
@@ -468,6 +469,21 @@ func TestProcessProcessingJobResult_Failed_MarksVodArtifactFailed(t *testing.T) 
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatal(err)
 	}
+	// The API reads VOD status from the catalog projection; a committed failure
+	// must wake the reconciler instead of leaving the asset PROCESSING.
+	if *dirty != 1 {
+		t.Fatalf("catalog dirty notifications = %d, want 1 after a committed failure", *dirty)
+	}
+}
+
+// countCatalogDirty installs a counting catalog-dirty handler for one test.
+func countCatalogDirty(t *testing.T) *int {
+	t.Helper()
+	previous := catalogDirtyHandler
+	count := new(int)
+	SetOnCatalogDirty(func() { *count++ })
+	t.Cleanup(func() { catalogDirtyHandler = previous })
+	return count
 }
 
 // A failure for a non-active job (already completed/cancelled/duplicate) is a no-op: the
@@ -482,6 +498,7 @@ func TestProcessProcessingJobResult_Failed_NonActiveJobIsNoop(t *testing.T) {
 		WillReturnRows(sqlmock.NewRows([]string{"status", "processing_node_id", "artifact_hash", "artifact_type", "tenant_id", "stream_id", "stream_internal_name"}).
 			AddRow("completed", "", "art-x", "vod", "5eed517e-ba5e-da7a-517e-ba5eda7a0001", "", ""))
 	mock.ExpectRollback()
+	dirty := countCatalogDirty(t)
 
 	processProcessingJobResult(&ipcpb.ProcessingJobResult{
 		JobId:  "job-done",
@@ -491,6 +508,9 @@ func TestProcessProcessingJobResult_Failed_NonActiveJobIsNoop(t *testing.T) {
 
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatal(err)
+	}
+	if *dirty != 0 {
+		t.Fatalf("catalog dirty notifications = %d, want 0 when nothing committed", *dirty)
 	}
 }
 
@@ -578,4 +598,57 @@ func TestProcessProcessingJobResult_UnknownStatus(t *testing.T) {
 		Status: "unknown_status",
 	}, "node-1", logger)
 	// should not panic, should just log and return
+}
+
+// A retryable failure (a producer swapped after the recording header, or
+// renditions that miss source coverage) requeues the job on the reporting
+// node's assignment within the retry budget; processes_json is untouched, so
+// the next attempt runs the persisted local ladder.
+func TestProcessProcessingJobResult_RetryableRequeuesWithinBudget(t *testing.T) {
+	mock, _, _ := setupArtifactTestDeps(t)
+	logger := logging.NewLogger()
+
+	mock.ExpectQuery(`WITH requeued AS \(\s+UPDATE foghorn.processing_jobs AS job\s+SET status = 'queued'`).
+		WithArgs(sql.NullString{String: "recording validation failed: PROCESS_TRACKS_CHANGED", Valid: true}, "job-1",
+			sql.NullString{String: "node-1", Valid: true}, sql.NullInt32{Int32: ProcessingMaxRetries, Valid: true}).
+		WillReturnRows(sqlmock.NewRows([]string{"requeued"}).AddRow(1))
+
+	processProcessingJobResult(&ipcpb.ProcessingJobResult{
+		JobId:  "job-1",
+		Status: "retryable",
+		Error:  "recording validation failed: PROCESS_TRACKS_CHANGED",
+	}, "node-1", logger)
+
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// Once the retry budget is spent (or the report is not from the assigned
+// node) nothing is requeued and the job takes the ordinary failure path.
+func TestProcessProcessingJobResult_RetryableFailsWhenBudgetSpent(t *testing.T) {
+	mock, _, _ := setupArtifactTestDeps(t)
+	logger := logging.NewLogger()
+
+	mock.ExpectQuery(`WITH requeued AS`).
+		WillReturnRows(sqlmock.NewRows([]string{"requeued"}).AddRow(0))
+	mock.ExpectBegin()
+	mock.ExpectQuery(`SELECT pj.status.*FROM foghorn.processing_jobs pj\s+LEFT JOIN foghorn.artifacts a`).
+		WithArgs("job-1").
+		WillReturnRows(sqlmock.NewRows([]string{"status", "processing_node_id", "artifact_hash", "artifact_type", "tenant_id", "stream_id", "stream_internal_name"}).
+			AddRow("processing", "node-1", "", "", "", "", ""))
+	mock.ExpectExec(`UPDATE foghorn.processing_jobs\s+SET status = 'failed'`).
+		WithArgs("job-1", "rendition coverage: short").
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectCommit()
+
+	processProcessingJobResult(&ipcpb.ProcessingJobResult{
+		JobId:  "job-1",
+		Status: "retryable",
+		Error:  "rendition coverage: short",
+	}, "node-1", logger)
+
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
 }

@@ -274,6 +274,9 @@ func (router PlacementRouter) logRefusal(req PlacementRouteRequest, decision pla
 		if candidate, ok := evidence[placementDestinationKey(assessment.ClusterID, assessment.NodeID)]; ok {
 			// Freshness inputs explain stale_telemetry and unknown_capacity without a debugger.
 			line += fmt.Sprintf(" observed=%s expires=%s capacity=%s presence=%s", candidate.ObservedAt.Format(time.RFC3339Nano), candidate.ExpiresAt.Format(time.RFC3339Nano), candidate.Capacity, candidate.Presence)
+			if candidate.CapacityDetail != "" {
+				line += " detail=" + candidate.CapacityDetail
+			}
 		}
 		assessments = append(assessments, line)
 	}
@@ -546,10 +549,12 @@ func (router PlacementRouter) Route(ctx context.Context, req PlacementRouteReque
 				candidate.Capacity = placement.CapacityExhausted
 			case PlacementNodeUnavailable:
 				candidate.Capacity = placement.CapacityUnavailable
+				candidate.CapacityDetail = "preparation_node_unavailable"
 			case PlacementSourceUnavailable:
 				candidate.Presence, candidate.SourceFeasible = placement.Absent, false
 				if req.Verb == placement.Ingest {
 					candidate.Capacity = placement.CapacityUnavailable
+					candidate.CapacityDetail = "preparation_source_unavailable"
 				}
 			default:
 				return result, ErrPlacementPreparation

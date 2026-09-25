@@ -8051,10 +8051,42 @@ func processProcessingJobResult(result *ipcpb.ProcessingJobResult, nodeID string
 	case "failed":
 		failProcessingJobAtomic(ctx, result.GetJobId(), result.GetError(), nodeID, logger, fields)
 
+	case "retryable":
+		retryProcessingJob(ctx, result.GetJobId(), result.GetError(), nodeID, logger, fields)
+
 	default:
 		logger.WithFields(fields).Warn("Unknown processing job result status")
 		return
 	}
+}
+
+// ProcessingMaxRetries is the retry budget of a processing job: stale-lease
+// recovery, lost-job recovery and retryable node failures all draw from it.
+const ProcessingMaxRetries = 3
+
+// retryProcessingJob requeues a job its node reported as failed in a way a new
+// attempt avoids (a producer replaced after the recording header, renditions
+// that do not cover the source). The job keeps its persisted processes_json,
+// so a job that fell back to the local ladder runs that ladder again. Once the
+// budget is spent, or when the report does not match the job's assignment,
+// the job fails like any other failure.
+func retryProcessingJob(ctx context.Context, jobID, errMsg, reportingNode string, logger logging.Logger, fields logging.Fields) {
+	n, err := foghorndb.New(db).RequeueRetryableProcessingJob(ctx, foghorndb.RequeueRetryableProcessingJobParams{
+		ErrorMessage: sql.NullString{String: errMsg, Valid: errMsg != ""},
+		JobID:        jobID,
+		NodeID:       sql.NullString{String: reportingNode, Valid: true},
+		MaxRetries:   sql.NullInt32{Int32: ProcessingMaxRetries, Valid: true},
+	})
+	if err != nil {
+		logger.WithError(err).WithFields(fields).Error("Retryable processing failure could not be requeued")
+		return
+	}
+	if n == 0 {
+		failProcessingJobAtomic(ctx, jobID, errMsg, reportingNode, logger, fields)
+		return
+	}
+	NotifyCatalogDirty()
+	logger.WithFields(fields).WithField("error", errMsg).Warn("Processing job requeued after a retryable failure")
 }
 
 // failProcessingJobAtomic drives a processing job to its terminal failed state as ONE
@@ -8218,6 +8250,10 @@ func failProcessingJobAtomic(ctx context.Context, jobID, errMsg, reportingNode s
 		}
 		return
 	}
+	// The API reads artifact status from the Commodore catalog, which only the
+	// reconciler writes; without this kick a failed import reads PROCESSING
+	// until an unrelated trigger or the slow fallback pass.
+	NotifyCatalogDirty()
 	logger.WithFields(fields).WithField("error", errMsg).Warn("Processing job failed")
 }
 

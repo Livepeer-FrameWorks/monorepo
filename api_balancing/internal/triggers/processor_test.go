@@ -1802,6 +1802,35 @@ func TestHandleProcessBilling_EnrichesFromCache(t *testing.T) {
 	}
 }
 
+// Mist's Livepeer process reports its stream as "<source>→<sink>"; the owner
+// must still resolve from the source stream instead of the event being dropped.
+func TestHandleProcessBilling_ResolvesProcessLabel(t *testing.T) {
+	processor := newTestProcessor(t)
+	tenantID := "tenant-1"
+	internalName := "stream-abc"
+	processor.streamCache.Set(tenantID+":"+internalName, streamContext{
+		TenantID: tenantID,
+		UserID:   "user-1",
+		StreamID: "stream-id",
+		Source:   "test",
+	}, time.Minute)
+
+	trigger := &ipcpb.MistTrigger{
+		TenantId: &tenantID,
+		TriggerPayload: &ipcpb.MistTrigger_ProcessBilling{
+			ProcessBilling: &ipcpb.ProcessBillingEvent{
+				StreamName: "live+" + internalName + "→live+" + internalName,
+			},
+		},
+	}
+	if _, _, err := processor.handleProcessBilling(trigger); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got := trigger.GetProcessBilling().GetStreamId(); got != "stream-id" {
+		t.Fatalf("process label did not resolve its stream owner: stream id %q", got)
+	}
+}
+
 func TestHandleStorageLifecycleData_UsesCacheAndStreamIDFallback(t *testing.T) {
 	processor := newTestProcessor(t)
 	tenantID := "tenant-2"

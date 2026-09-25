@@ -240,7 +240,7 @@ func verifyLivepeerJobToken(manifestID, token string, now time.Time) (control.Tr
 		logger.WithFields(fields).WithField("check", tokenCheckManifestMismatch).Warn("livepeer auth: job token is bound to another manifest")
 		return control.TranscodeJobClaims{}, authRejectInvalidToken + "_" + tokenCheckManifestMismatch
 	}
-	if !control.TranscodeJobTokenAllowsGatewayCluster(claims, clusterID) {
+	if !livepeerGatewayCellAllowed(claims, clusterID) {
 		logger.WithFields(fields).WithField("check", tokenCheckGatewayCluster).Warn("livepeer auth: job token does not allow this Foghorn's cluster as the gateway cell")
 		return control.TranscodeJobClaims{}, authRejectInvalidToken + "_" + tokenCheckGatewayCluster
 	}
@@ -304,39 +304,82 @@ func authorizeChapterTranscode(ctx context.Context, artifactHash string, claims 
 
 func authorizeLiveTranscode(ctx context.Context, claims control.TranscodeJobClaims) *LivepeerAuthContext {
 	if claims.Session == "" || claims.Session != claims.AttemptOrGeneration {
-		return nil
+		return rejectLiveTranscode(claims, liveCheckGeneration, nil)
 	}
 	internalName := mist.ExtractInternalName(claims.ManifestID)
 	if strings.HasPrefix(claims.Session, "state:") {
 		stream := state.DefaultManager().GetStreamState(internalName)
-		if stream == nil || stream.Status != "live" || stream.NodeID != claims.NodeID || stream.TenantID != claims.TenantID ||
+		if stream == nil {
+			return rejectLiveTranscode(claims, liveCheckStreamState, logging.Fields{"stream_status": "absent"})
+		}
+		if stream.Status != "live" || stream.NodeID != claims.NodeID || stream.TenantID != claims.TenantID ||
 			stream.LivepeerGeneration != claims.Session || stream.LivepeerSpecDigest != claims.SpecDigest || stream.LivepeerProcessesJSON == "" || stream.StreamID == "" {
-			return nil
+			return rejectLiveTranscode(claims, liveCheckStreamState, logging.Fields{
+				"stream_status":      stream.Status,
+				"stream_node_id":     stream.NodeID,
+				"stream_generation":  stream.LivepeerGeneration,
+				"stream_spec_digest": stream.LivepeerSpecDigest,
+			})
 		}
 		return &LivepeerAuthContext{TenantID: stream.TenantID, StreamID: stream.StreamID, ProcessesJSON: stream.LivepeerProcessesJSON}
 	}
 	if db == nil {
-		return nil
+		return rejectLiveTranscode(claims, liveCheckSessionLookup, logging.Fields{"error": "no database"})
 	}
 	row, err := foghorndb.New(db).GetLiveTranscodeAuthContext(ctx, foghorndb.GetLiveTranscodeAuthContextParams{
 		SessionID: claims.Session, StreamInternalName: internalName,
 	})
-	if err != nil || row.SessionID != claims.Session || row.TenantID != claims.TenantID ||
+	if errors.Is(err, sql.ErrNoRows) {
+		// The token's ingest session has ended or is not active for this stream,
+		// e.g. a buffer that outlived its publisher still holds the previous
+		// session's signed process config.
+		return rejectLiveTranscode(claims, liveCheckSessionNotActive, nil)
+	}
+	if err != nil {
+		return rejectLiveTranscode(claims, liveCheckSessionLookup, logging.Fields{"error": err.Error()})
+	}
+	if row.SessionID != claims.Session || row.TenantID != claims.TenantID ||
 		row.NodeID != claims.NodeID || row.IngestClusterID != claims.ClusterID {
-		return nil
+		return rejectLiveTranscode(claims, liveCheckSessionBinding, logging.Fields{
+			"session_node_id":    row.NodeID,
+			"session_cluster_id": row.IngestClusterID,
+		})
 	}
 	digest, err := mist.LivepeerJobSpecDigest(row.ProcessesJson)
 	if err != nil || digest != claims.SpecDigest {
-		return nil
+		return rejectLiveTranscode(claims, liveCheckSpecDigest, logging.Fields{"session_spec_digest": digest})
 	}
 	streamID := ""
 	if stream := state.DefaultManager().GetStreamState(internalName); stream != nil {
 		streamID = strings.TrimSpace(stream.StreamID)
 	}
 	if streamID == "" {
-		return nil
+		return rejectLiveTranscode(claims, liveCheckStreamState, logging.Fields{"stream_status": "no stream id"})
 	}
 	return &LivepeerAuthContext{TenantID: row.TenantID, StreamID: streamID, ProcessesJSON: row.ProcessesJson}
+}
+
+// rejectLiveTranscode logs which live binding a stale_job rejection failed, with
+// the token's identities and the observed values, and returns nil.
+func rejectLiveTranscode(claims control.TranscodeJobClaims, check string, observed logging.Fields) *LivepeerAuthContext {
+	if logger == nil {
+		return nil
+	}
+	fields := logging.Fields{
+		"check":             check,
+		"token_manifest_id": claims.ManifestID,
+		"token_session":     claims.Session,
+		"token_generation":  claims.AttemptOrGeneration,
+		"token_node_id":     claims.NodeID,
+		"token_cluster_id":  claims.ClusterID,
+		"token_spec_digest": claims.SpecDigest,
+		"issued_at":         claims.IssuedAt,
+	}
+	for k, v := range observed {
+		fields[k] = v
+	}
+	logger.WithFields(fields).Warn("livepeer auth: live job token is not bound to the stream's current session")
+	return nil
 }
 
 func livepeerSourceMatches(observed, expected livepeerSource) bool {
@@ -355,6 +398,26 @@ func livepeerSourceMatches(observed, expected livepeerSource) bool {
 	}
 	return expected.Codec == "" || canonicalCodec(observed.Codec) == canonicalCodec(expected.Codec)
 }
+
+// livepeerGatewayCellAllowed reports whether this Foghorn may answer the job's
+// auth webhook. The token names the media cluster whose gateway was selected;
+// Quartermaster discovery reports a pool-assigned gateway under that assigned
+// cluster, which for a virtual cluster is served by this cell's Foghorn rather
+// than being its own CLUSTER_ID.
+func livepeerGatewayCellAllowed(claims control.TranscodeJobClaims, localClusterID string) bool {
+	if control.TranscodeJobTokenAllowsGatewayCluster(claims, localClusterID) {
+		return true
+	}
+	for _, id := range claims.AllowedGatewayClusterIDs {
+		if servesLivepeerGatewayCluster(id) {
+			return true
+		}
+	}
+	return false
+}
+
+// servesLivepeerGatewayCluster is control.IsServedCluster; tests replace it.
+var servesLivepeerGatewayCluster = control.IsServedCluster
 
 func canonicalLivepeerManifestID(manifestID string) string {
 	manifestID = strings.TrimSpace(manifestID)
@@ -414,6 +477,14 @@ const (
 	// Token binding checks performed after signature and claim verification.
 	tokenCheckManifestMismatch = "manifest_mismatch"
 	tokenCheckGatewayCluster   = "gateway_cluster"
+
+	// Live stale_job checks, logged by rejectLiveTranscode.
+	liveCheckGeneration       = "generation"
+	liveCheckStreamState      = "stream_state"
+	liveCheckSessionNotActive = "session_not_active"
+	liveCheckSessionLookup    = "session_lookup"
+	liveCheckSessionBinding   = "session_binding"
+	liveCheckSpecDigest       = "spec_digest"
 )
 
 func incLivepeerAuthRejected(reason string) {

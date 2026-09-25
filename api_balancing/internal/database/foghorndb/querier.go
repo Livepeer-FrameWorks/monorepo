@@ -611,6 +611,10 @@ type Querier interface {
 	ReleaseSigningKeyUseLease(ctx context.Context, arg ReleaseSigningKeyUseLeaseParams) (int64, error)
 	RepairAdmissionPushTargetRevision(ctx context.Context, arg RepairAdmissionPushTargetRevisionParams) (int64, error)
 	RequeueActivePushTargetActivationByID(ctx context.Context, arg RequeueActivePushTargetActivationByIDParams) (int64, error)
+	// Requeues a job its node reported as failed in a retryable way, while the
+	// retry budget lasts. Bound to the reporting node like every result. The job
+	// keeps processes_json, so the next attempt runs the persisted ladder.
+	RequeueRetryableProcessingJob(ctx context.Context, arg RequeueRetryableProcessingJobParams) (int32, error)
 	RequeueStaleProcessingJobs(ctx context.Context, arg RequeueStaleProcessingJobsParams) (int64, error)
 	// Requeues the jobs assigned to a node before its registration that the node
 	// did not report as running: a restarted sidecar lost them.

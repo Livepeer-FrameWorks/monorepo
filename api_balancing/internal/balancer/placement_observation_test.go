@@ -135,6 +135,33 @@ func TestObservePlacementNodesNeverTurnsUnknownIntoExhaustion(t *testing.T) {
 	}
 }
 
+func TestObservePlacementNodesNamesUnavailableCondition(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		mutate func(*state.EnhancedBalancerNodeSnapshot)
+		want   string
+	}{
+		{"no_hls_output", func(n *state.EnhancedBalancerNodeSnapshot) { n.Outputs = map[string]any{"RTMP": "rtmp://HOST/$"} }, "protocol_unavailable"},
+		{"down", func(n *state.EnhancedBalancerNodeSnapshot) { n.IsActive = false }, "inactive"},
+		{"draining", func(n *state.EnhancedBalancerNodeSnapshot) { n.OperationalMode = state.NodeModeDraining }, "mode_draining"},
+		{"not_edge", func(n *state.EnhancedBalancerNodeSnapshot) { n.CapEdge = false }, "capability_missing"},
+		{"invalid_address", func(n *state.EnhancedBalancerNodeSnapshot) { n.Host = "file:///edge" }, "invalid_address"},
+		{"stream_restricted", func(n *state.EnhancedBalancerNodeSnapshot) { n.ConfigStreams = []string{"other"} }, "stream_not_allowed"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			req := placementObservationFixture()
+			tc.mutate(&req.Snapshot.Nodes[0])
+			got := observeOne(t, req)
+			if got.Capacity != placement.CapacityUnavailable || got.CapacityDetail != tc.want {
+				t.Fatalf("got capacity %s detail %q, want unavailable %q", got.Capacity, got.CapacityDetail, tc.want)
+			}
+		})
+	}
+	if got := observeOne(t, placementObservationFixture()); got.CapacityDetail != "" {
+		t.Fatalf("available node carries unavailable detail %q", got.CapacityDetail)
+	}
+}
+
 func TestObservePlacementNodesListenerExpiryIsPerNode(t *testing.T) {
 	req := placementObservationFixture()
 	neighbor := req.Snapshot.Nodes[0]

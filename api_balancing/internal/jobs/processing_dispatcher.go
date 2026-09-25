@@ -33,6 +33,9 @@ type ProcessingDispatcherConfig struct {
 	Interval   time.Duration // Poll interval (default: 5s)
 	MaxRetries int           // Max retry attempts per job (default: 3)
 	JobTTL     time.Duration // Max time before dispatched job is stale (default: 5m)
+	// OnCatalogDirty is called after an exhaustion commits an artifact's failed
+	// state, so the catalog projection the API reads catches up promptly.
+	OnCatalogDirty func()
 }
 
 // processingSourceCredentialTTL bounds how long a dispatched job's node-local
@@ -75,6 +78,7 @@ type ProcessingDispatcher struct {
 	wg              sync.WaitGroup
 	configCacher    ProcessConfigCacher
 	gatewayResolver GatewayResolver
+	onCatalogDirty  func()
 }
 
 var (
@@ -150,7 +154,7 @@ func NewProcessingDispatcher(cfg ProcessingDispatcherConfig) *ProcessingDispatch
 	}
 	maxRetries := cfg.MaxRetries
 	if maxRetries == 0 {
-		maxRetries = 3
+		maxRetries = control.ProcessingMaxRetries
 	}
 	jobTTL := cfg.JobTTL
 	if jobTTL == 0 {
@@ -159,13 +163,14 @@ func NewProcessingDispatcher(cfg ProcessingDispatcherConfig) *ProcessingDispatch
 		jobTTL = 5 * time.Minute
 	}
 	return &ProcessingDispatcher{
-		db:         cfg.DB,
-		logger:     cfg.Logger,
-		interval:   interval,
-		maxRetries: maxRetries,
-		jobTTL:     jobTTL,
-		stopCh:     make(chan struct{}),
-		wakeCh:     make(chan struct{}, 1),
+		db:             cfg.DB,
+		logger:         cfg.Logger,
+		interval:       interval,
+		maxRetries:     maxRetries,
+		jobTTL:         jobTTL,
+		stopCh:         make(chan struct{}),
+		wakeCh:         make(chan struct{}, 1),
+		onCatalogDirty: cfg.OnCatalogDirty,
 	}
 }
 
@@ -854,6 +859,9 @@ func (d *ProcessingDispatcher) failExhaustedJobAtomic(ctx context.Context, jobID
 	}
 	switch {
 	case err == nil:
+		if exhausted && d.onCatalogDirty != nil {
+			d.onCatalogDirty()
+		}
 	case errors.Is(err, errExhaustionAborted) && abortLog != nil:
 		abortLog()
 	case stage == "begin":

@@ -419,6 +419,53 @@ func (q *Queries) ProjectProcessingArtifactStatus(ctx context.Context, arg Proje
 	return err
 }
 
+const requeueRetryableProcessingJob = `-- name: RequeueRetryableProcessingJob :one
+WITH requeued AS (
+    UPDATE foghorn.processing_jobs AS job
+    SET status = 'queued', processing_node_id = NULL,
+        retry_count = retry_count + 1, updated_at = NOW(),
+        error_message = $1,
+        progress_last_ms = 0, progress_advanced_at = NULL
+    WHERE job.job_id = $2
+      AND job.processing_node_id = $3
+      AND job.status IN ('dispatched', 'processing')
+      AND job.retry_count < $4
+    RETURNING artifact_hash, tenant_id
+), artifact AS (
+    UPDATE foghorn.artifacts AS a
+    SET status = 'queued', updated_at = NOW()
+    FROM requeued AS r
+    WHERE a.artifact_hash = r.artifact_hash
+      AND a.tenant_id = r.tenant_id
+      AND a.artifact_type IN ('clip', 'vod')
+      AND a.status NOT IN ('ready', 'failed', 'deleted', 'expired', 'aborted')
+    RETURNING a.artifact_hash
+)
+SELECT COUNT(*)::int AS requeued FROM requeued
+`
+
+type RequeueRetryableProcessingJobParams struct {
+	ErrorMessage sql.NullString `db:"error_message" json:"error_message"`
+	JobID        string         `db:"job_id" json:"job_id"`
+	NodeID       sql.NullString `db:"node_id" json:"node_id"`
+	MaxRetries   sql.NullInt32  `db:"max_retries" json:"max_retries"`
+}
+
+// Requeues a job its node reported as failed in a retryable way, while the
+// retry budget lasts. Bound to the reporting node like every result. The job
+// keeps processes_json, so the next attempt runs the persisted ladder.
+func (q *Queries) RequeueRetryableProcessingJob(ctx context.Context, arg RequeueRetryableProcessingJobParams) (int32, error) {
+	row := q.db.QueryRowContext(ctx, requeueRetryableProcessingJob,
+		arg.ErrorMessage,
+		arg.JobID,
+		arg.NodeID,
+		arg.MaxRetries,
+	)
+	var requeued int32
+	err := row.Scan(&requeued)
+	return requeued, err
+}
+
 const requeueStaleProcessingJobs = `-- name: RequeueStaleProcessingJobs :execrows
 WITH requeued AS (
     UPDATE foghorn.processing_jobs AS job

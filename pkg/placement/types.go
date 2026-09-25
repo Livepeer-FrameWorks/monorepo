@@ -140,15 +140,18 @@ type Candidate struct {
 	ObservedAt       time.Time
 	ExpiresAt        time.Time
 	Capacity         Capacity
-	BWAvailable      uint64 // bytes/second after admission headroom
-	BWLimit          uint64 // bytes/second
-	CPUPercent       float64
-	RAMUsed          uint64
-	RAMMax           uint64
-	Presence         Presence
-	SourceFeasible   bool
-	Price            *Price
-	Prices           []Price
+	// CapacityDetail names the condition behind CapacityUnavailable. It is
+	// diagnostic only and never read by the decision.
+	CapacityDetail string
+	BWAvailable    uint64 // bytes/second after admission headroom
+	BWLimit        uint64 // bytes/second
+	CPUPercent     float64
+	RAMUsed        uint64
+	RAMMax         uint64
+	Presence       Presence
+	SourceFeasible bool
+	Price          *Price
+	Prices         []Price
 }
 
 type Request struct {
