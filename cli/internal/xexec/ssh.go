@@ -11,6 +11,10 @@ import (
 	fwssh "frameworks/cli/pkg/ssh"
 )
 
+// sshBinary is the ssh client executable; tests point it at a fake that
+// behaves like sshd (joins argv and runs it through a shell).
+var sshBinary = "ssh"
+
 // RunSSH executes the equivalent of: ssh <target> 'cd <workdir> && <cmd> <args...>'
 func RunSSH(ctx context.Context, target string, cmd string, args []string, workdir string) (int, string, string, error) {
 	return RunSSHWithKey(ctx, target, "", cmd, args, workdir)
@@ -35,9 +39,12 @@ func RunSSHWithKey(ctx context.Context, target, keyPath string, cmd string, args
 	cfg := &fwssh.ConnectionConfig{KeyPath: keyPath}
 	res := fwssh.Resolution{Target: target}
 	sshArgs := fwssh.BuildSSHArgs(cfg, res)
-	sshArgs = append(sshArgs, target, "sh", "-lc", remoteCmd.String())
+	// OpenSSH joins argv after the target with spaces and hands that single
+	// string to the remote shell, so the script must travel as one quoted
+	// token; otherwise `sh -lc` runs only its first word.
+	sshArgs = append(sshArgs, target, "sh", "-lc", fwssh.ShellQuote(remoteCmd.String()))
 
-	c := exec.CommandContext(ctx, "ssh", sshArgs...)
+	c := exec.CommandContext(ctx, sshBinary, sshArgs...)
 	var outBuf, errBuf bytes.Buffer
 	c.Stdout = &outBuf
 	c.Stderr = &errBuf
