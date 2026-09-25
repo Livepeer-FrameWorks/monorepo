@@ -265,6 +265,33 @@ func TestParseTriggerToProtobufRecordingEnd(t *testing.T) {
 	}
 }
 
+// An output that aborts before selecting any track (staging rc5: a DVR push
+// attached to a buffer whose meta was not live yet) still reports its end; the
+// empty summary must reach consumers instead of being dropped as a parse error.
+func TestParseTriggerToProtobufRecordingEndWithoutTracks(t *testing.T) {
+	logger := logging.NewLogger()
+	for name, summary := range map[string]string{
+		"empty track list": `{"tracks":[]}`,
+		"no track key":     `{}`,
+	} {
+		payload := []byte("live+abc\n/var/lib/frameworks/edge-storage/dvr/s/h/segments/12_$segmentCounter.ts?m3u8=../h.m3u8\nMistOutHTTPTS\n0\n0\n1790334754\n1790334754\n0\n0\n0\nSTREAM_UNAVAILABLE\nStream not available - aborting\n" + summary + "\n")
+		trig, err := ParseTriggerToProtobuf(TriggerRecordingEnd, payload, "node-1", logger)
+		if err != nil {
+			t.Fatalf("%s: parse failed: %v", name, err)
+		}
+		got := trig.GetRecordingComplete()
+		if got == nil {
+			t.Fatalf("%s: RecordingComplete payload missing", name)
+		}
+		if len(got.GetTracks()) != 0 || got.GetBytesWritten() != 0 || got.GetMediaDurationMs() != 0 {
+			t.Fatalf("%s: want an empty recording, got tracks=%d bytes=%d duration=%d", name, len(got.GetTracks()), got.GetBytesWritten(), got.GetMediaDurationMs())
+		}
+		if got.GetExitReason() != "STREAM_UNAVAILABLE" || got.GetHumanExitReason() != "Stream not available - aborting" {
+			t.Fatalf("%s: exit reason = %q / %q", name, got.GetExitReason(), got.GetHumanExitReason())
+		}
+	}
+}
+
 func TestParseTriggerToProtobufRecordingEndSpeedStats(t *testing.T) {
 	logger := logging.NewLogger()
 	// Track summary enriched with the rate-controller speed object + drain_ms,

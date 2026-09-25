@@ -437,6 +437,9 @@ func validateProcessingRecordingEnd(evt ProcessingRecordingEndEvent, outputPath 
 		}
 		return fmt.Errorf("recording did not finish cleanly: %s", reason)
 	}
+	if len(evt.FullTracks) == 0 && len(evt.Tracks) == 0 {
+		return fmt.Errorf("recording selected no tracks")
+	}
 	if evt.BytesWritten <= 0 {
 		return fmt.Errorf("recording wrote no bytes")
 	}

@@ -1200,13 +1200,23 @@ func TestSignalProcessingRecordingEnd(t *testing.T) {
 
 func TestValidateProcessingRecordingEnd(t *testing.T) {
 	outputPath := filepath.Join(t.TempDir(), "artifact.mkv")
+	videoTrack := []*ipcpb.StreamTrack{{TrackType: "video", Codec: "H264"}}
 	if err := validateProcessingRecordingEnd(ProcessingRecordingEndEvent{
 		FilePath:        outputPath,
 		BytesWritten:    1024,
 		MediaDurationMs: 1000,
 		ExitReason:      "CLEAN_EOF",
+		FullTracks:      videoTrack,
 	}, outputPath); err != nil {
 		t.Fatalf("expected valid recording end: %v", err)
+	}
+	if err := validateProcessingRecordingEnd(ProcessingRecordingEndEvent{
+		FilePath:        outputPath,
+		BytesWritten:    1024,
+		MediaDurationMs: 1000,
+		ExitReason:      "CLEAN_EOF",
+	}, outputPath); err == nil {
+		t.Fatal("expected a recording that selected no tracks to fail")
 	}
 	if err := validateProcessingRecordingEnd(ProcessingRecordingEndEvent{
 		FilePath:        outputPath,

@@ -573,10 +573,11 @@ func ParseTriggerToProtobufWithHeaders(triggerType TriggerType, rawPayload []byt
 		if err := json.Unmarshal([]byte(summaryJSON), &summary); err != nil {
 			return nil, fmt.Errorf("RECORDING_END track summary JSON: %w", err)
 		}
+		// An output that ends before it selected any track (e.g. it attached to
+		// a buffer whose meta was not live yet) reports an empty summary. That
+		// is still the authoritative signal that the writer is gone; consumers
+		// judge success from the exit reason, bytes and duration.
 		trigger.Tracks = parseRecordingTrackSummary(summary)
-		if len(trigger.Tracks) == 0 {
-			return nil, fmt.Errorf("RECORDING_END track summary contains no tracks")
-		}
 		trigger.ProcessingSpeed = parseRecordingSpeedStats(summary)
 		humanParts = humanParts[:len(humanParts)-1]
 		humanExitReason := strings.TrimSpace(strings.Join(humanParts, "\n"))
