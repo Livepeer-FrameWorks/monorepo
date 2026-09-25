@@ -550,7 +550,10 @@ func (s *PeriscopeServer) queryOrchestratorVantages(ctx context.Context, tenantI
 			continue
 		}
 		v.DialedRecently = dialedRecently == 1
-		v.GeoResolvedAt = timestamppb.New(geoResolvedAt)
+		// An unresolved vantage reads back ClickHouse's zero DateTime, the Unix epoch.
+		if geoResolvedAt.Unix() > 0 {
+			v.GeoResolvedAt = timestamppb.New(geoResolvedAt)
+		}
 		v.LastSeen = timestamppb.New(lastSeen)
 		out = append(out, &v)
 	}

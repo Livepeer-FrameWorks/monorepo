@@ -3320,7 +3320,7 @@ Input for creating a developer API token.
 input CreateDeveloperTokenInput {
   "Human-readable name for the token."
   name: String!
-  "Comma-separated permission scopes (read:streams, write:streams, etc.)."
+  "Comma-separated permission scopes in resource:action form (streams:read, streams:write, analytics:read, etc.)."
   permissions: String
   "Days until expiration (null = non-expiring)."
   expiresIn: Int
@@ -6249,7 +6249,7 @@ type DeveloperToken {
   tokenName: String!
   "The secret token value (only returned on creation, null thereafter)."
   tokenValue: String
-  "List of granted permissions (read:streams, write:streams, etc.)."
+  "List of granted permission scopes (streams:read, streams:write, etc.)."
   permissions: [String!]!
   "Token status (active, revoked, expired)."
   status: String!
@@ -7908,7 +7908,10 @@ type OrchestratorVantage {
   city: String!
   countryCode: String!
   geoSource: String!
-  geoResolvedAt: Time!
+  """
+  When the vantage's location was resolved; null while it has not been.
+  """
+  geoResolvedAt: Time
   latestLatencyMs: Int!
   score: Float!
   dialedRecently: Boolean!

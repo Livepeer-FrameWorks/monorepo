@@ -290,6 +290,16 @@ Some errors carry a more specific code, for example `BILLING_PROFILE_REQUIRED` w
 fields in `extensions.required_fields`. Errors without a code are resolver messages, such as a
 missing required input.
 
+`resolveViewerEndpoint` reports the state of a live stream that cannot be played yet:
+
+| `extensions.code` | Meaning                                                                                                                                                           |
+| ----------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `STREAM_STARTING` | The publisher is connected but the stream is not playable yet. Resolve again after `extensions.retry_after_ms`; the player keeps doing this for about 30 seconds. |
+| `STREAM_OFFLINE`  | No publisher is live. Wait for the stream to go live instead of retrying immediately.                                                                             |
+
+The `/play` endpoint reports the same states as HTTP `503` with code `STREAM_STARTING` and a
+`Retry-After` header, and HTTP `404` with code `STREAM_OFFLINE`.
+
 **As a result value**, most mutations return a union of the result and typed errors. Select
 `__typename` and each error member; a `ValidationError` names the `field`, a `NotFoundError` the
 `resourceType` and `resourceId`, and a `RateLimitError` the seconds in `retryAfter`:

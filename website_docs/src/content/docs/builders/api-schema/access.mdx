@@ -248,7 +248,7 @@ testPlaybackAccess(
 Input for creating a developer API token.
 
 - **name**: `String!` — Human-readable name for the token.
-- **permissions**: `String` — Comma-separated permission scopes (read:streams, write:streams, etc.).
+- **permissions**: `String` — Comma-separated permission scopes in resource:action form (streams:read, streams:write, analytics:read, etc.).
 - **expiresIn**: `Int` — Days until expiration (null = non-expiring).
 
 ### CreateDeveloperTokenResult
@@ -293,7 +293,7 @@ An API token for programmatic access to the GraphQL API. Tokens have scoped perm
 - **id**: `ID!` — Unique token identifier.
 - **tokenName**: `String!` — Human-readable name for the token.
 - **tokenValue**: `String` — The secret token value (only returned on creation, null thereafter).
-- **permissions**: `[String!]!` — List of granted permissions (read:streams, write:streams, etc.).
+- **permissions**: `[String!]!` — List of granted permission scopes (streams:read, streams:write, etc.).
 - **status**: `String!` — Token status (active, revoked, expired).
 - **lastUsedAt**: `Time` ([Time](/builders/api-schema/shared/#time)) — When the token was last used for API access.
 - **expiresAt**: `Time` ([Time](/builders/api-schema/shared/#time)) — When the token expires (null for non-expiring).

@@ -172,3 +172,37 @@ func TestListOrchestratorVantages(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+// A vantage whose location was never resolved reads back ClickHouse's zero
+// DateTime; it must surface as no resolution time, not the Unix epoch.
+func TestListOrchestratorVantagesUnresolvedGeoHasNoResolvedAt(t *testing.T) {
+	s, mock, done := newOrchServer(t)
+	defer done()
+
+	const tenant = "tenant-1"
+	now := time.Unix(1_700_000_000, 0).UTC()
+	mock.ExpectQuery(`(?s)orchestrator_vantage_current FINAL.*orchestrator_discovery_samples`).
+		WithArgs(tenant, tenant).
+		WillReturnRows(sqlmock.NewRows([]string{
+			"tenant_id", "gateway_id", "gateway_region", "orch_addr", "resolved_ip",
+			"latitude", "longitude", "city", "country_code", "geo_source", "geo_resolved_at",
+			"latest_latency_ms", "score", "dialed_recently", "last_seen",
+		}).AddRow(
+			tenant, "gw-1", "eu-west", "0xorch", "10.0.0.1",
+			0.0, 0.0, "", "", "unknown", time.Unix(0, 0).UTC(),
+			uint32(45), 0.95, uint8(0), now))
+
+	resp, err := s.ListOrchestratorVantages(context.Background(), &periscopepb.ListOrchestratorVantagesRequest{TenantId: tenant})
+	if err != nil {
+		t.Fatalf("ListOrchestratorVantages: %v", err)
+	}
+	if len(resp.GetVantages()) != 1 {
+		t.Fatalf("got %d vantages, want 1", len(resp.GetVantages()))
+	}
+	if got := resp.GetVantages()[0].GetGeoResolvedAt(); got != nil {
+		t.Fatalf("unresolved vantage reports geoResolvedAt %v, want none", got.AsTime())
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}

@@ -1640,7 +1640,7 @@ export interface DeveloperToken {
     tokenName: Scalars['String']
     /** The secret token value (only returned on creation, null thereafter). */
     tokenValue: (Scalars['String'] | null)
-    /** List of granted permissions (read:streams, write:streams, etc.). */
+    /** List of granted permission scopes (streams:read, streams:write, etc.). */
     permissions: Scalars['String'][]
     /** Token status (active, revoked, expired). */
     status: Scalars['String']
@@ -3532,7 +3532,8 @@ export interface OrchestratorVantage {
     city: Scalars['String']
     countryCode: Scalars['String']
     geoSource: Scalars['String']
-    geoResolvedAt: Scalars['Time']
+    /** When the vantage's location was resolved; null while it has not been. */
+    geoResolvedAt: (Scalars['Time'] | null)
     latestLatencyMs: Scalars['Int']
     score: Scalars['Float']
     dialedRecently: Scalars['Boolean']
@@ -8262,7 +8263,7 @@ asset: CryptoAsset}
 export interface CreateDeveloperTokenInput {
 /** Human-readable name for the token. */
 name: Scalars['String'],
-/** Comma-separated permission scopes (read:streams, write:streams, etc.). */
+/** Comma-separated permission scopes in resource:action form (streams:read, streams:write, analytics:read, etc.). */
 permissions?: (Scalars['String'] | null),
 /** Days until expiration (null = non-expiring). */
 expiresIn?: (Scalars['Int'] | null)}
@@ -8787,7 +8788,7 @@ export interface DeveloperTokenGenqlSelection{
     tokenName?: boolean | number
     /** The secret token value (only returned on creation, null thereafter). */
     tokenValue?: boolean | number
-    /** List of granted permissions (read:streams, write:streams, etc.). */
+    /** List of granted permission scopes (streams:read, streams:write, etc.). */
     permissions?: boolean | number
     /** Token status (active, revoked, expired). */
     status?: boolean | number
@@ -11039,6 +11040,7 @@ export interface OrchestratorVantageGenqlSelection{
     city?: boolean | number
     countryCode?: boolean | number
     geoSource?: boolean | number
+    /** When the vantage's location was resolved; null while it has not been. */
     geoResolvedAt?: boolean | number
     latestLatencyMs?: boolean | number
     score?: boolean | number

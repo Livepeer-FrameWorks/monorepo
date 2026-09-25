@@ -5186,9 +5186,9 @@ class DeveloperToken(BaseModel):
     )
     "The secret token value (only returned on creation, null thereafter)."
     permissions: list[str] = Field(
-        description="List of granted permissions (read:streams, write:streams, etc.)."
+        description="List of granted permission scopes (streams:read, streams:write, etc.)."
     )
-    "List of granted permissions (read:streams, write:streams, etc.)."
+    "List of granted permission scopes (streams:read, streams:write, etc.)."
     status: str = Field(description="Token status (active, revoked, expired).")
     "Token status (active, revoked, expired)."
     last_used_at: Optional[datetime] = Field(
@@ -7147,7 +7147,11 @@ class OrchestratorVantageDefault(BaseModel):
     city: str
     country_code: str = Field(alias="countryCode")
     geo_source: str = Field(alias="geoSource")
-    geo_resolved_at: datetime = Field(alias="geoResolvedAt")
+    geo_resolved_at: Optional[datetime] = Field(
+        alias="geoResolvedAt",
+        description="When the vantage's location was resolved; null while it has not been.",
+    )
+    "When the vantage's location was resolved; null while it has not been."
     latest_latency_ms: int = Field(alias="latestLatencyMs")
     score: float
     dialed_recently: bool = Field(alias="dialedRecently")
@@ -7225,7 +7229,11 @@ class OrchestratorWithDetailsDefaultVantages(BaseModel):
     city: str
     country_code: str = Field(alias="countryCode")
     geo_source: str = Field(alias="geoSource")
-    geo_resolved_at: datetime = Field(alias="geoResolvedAt")
+    geo_resolved_at: Optional[datetime] = Field(
+        alias="geoResolvedAt",
+        description="When the vantage's location was resolved; null while it has not been.",
+    )
+    "When the vantage's location was resolved; null while it has not been."
     latest_latency_ms: int = Field(alias="latestLatencyMs")
     score: float
     dialed_recently: bool = Field(alias="dialedRecently")

@@ -1865,7 +1865,7 @@ input CreateDeveloperTokenInput {
   """
   name: String!
   """
-  Comma-separated permission scopes (read:streams, write:streams, etc.).
+  Comma-separated permission scopes in resource:action form (streams:read, streams:write, analytics:read, etc.).
   """
   permissions: String
   """
@@ -2515,7 +2515,7 @@ type DeveloperToken {
   """
   tokenValue: String
   """
-  List of granted permissions (read:streams, write:streams, etc.).
+  List of granted permission scopes (streams:read, streams:write, etc.).
   """
   permissions: [String!]!
   """
@@ -5442,7 +5442,10 @@ type OrchestratorVantage {
   city: String!
   countryCode: String!
   geoSource: String!
-  geoResolvedAt: Time!
+  """
+  When the vantage's location was resolved; null while it has not been.
+  """
+  geoResolvedAt: Time
   latestLatencyMs: Int!
   score: Float!
   dialedRecently: Boolean!

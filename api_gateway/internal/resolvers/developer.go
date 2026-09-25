@@ -49,7 +49,7 @@ func (r *Resolver) DoCreateDeveloperToken(ctx context.Context, input model.Creat
 
 	// Handle optional permissions
 	if input.Permissions != nil {
-		// Split permissions string by comma or semicolon if provided as a single string
+		// The input carries scopes as one comma-separated string.
 		perms := strings.Split(*input.Permissions, ",")
 		for i, perm := range perms {
 			perms[i] = strings.TrimSpace(perm)

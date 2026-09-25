@@ -27828,7 +27828,7 @@ Input for creating a developer API token.
 input CreateDeveloperTokenInput {
   "Human-readable name for the token."
   name: String!
-  "Comma-separated permission scopes (read:streams, write:streams, etc.)."
+  "Comma-separated permission scopes in resource:action form (streams:read, streams:write, analytics:read, etc.)."
   permissions: String
   "Days until expiration (null = non-expiring)."
   expiresIn: Int
@@ -30757,7 +30757,7 @@ type DeveloperToken {
   tokenName: String!
   "The secret token value (only returned on creation, null thereafter)."
   tokenValue: String
-  "List of granted permissions (read:streams, write:streams, etc.)."
+  "List of granted permission scopes (streams:read, streams:write, etc.)."
   permissions: [String!]!
   "Token status (active, revoked, expired)."
   status: String!
@@ -32416,7 +32416,10 @@ type OrchestratorVantage {
   city: String!
   countryCode: String!
   geoSource: String!
-  geoResolvedAt: Time!
+  """
+  When the vantage's location was resolved; null while it has not been.
+  """
+  geoResolvedAt: Time
   latestLatencyMs: Int!
   score: Float!
   dialedRecently: Boolean!
@@ -85374,9 +85377,9 @@ func (ec *executionContext) _OrchestratorVantage_geoResolvedAt(ctx context.Conte
 			return ec.Resolvers.OrchestratorVantage().GeoResolvedAt(ctx, obj)
 		},
 		nil,
-		ec.marshalNTime2ᚖtimeᚐTime,
+		ec.marshalOTime2ᚖtimeᚐTime,
 		true,
-		true,
+		false,
 	)
 }
 
@@ -167350,16 +167353,13 @@ func (ec *executionContext) _OrchestratorVantage(ctx context.Context, sel ast.Se
 		case "geoResolvedAt":
 			field := field
 
-			innerFunc := func(ctx context.Context, fs *graphql.FieldSet) (res graphql.Marshaler) {
+			innerFunc := func(ctx context.Context, _ *graphql.FieldSet) (res graphql.Marshaler) {
 				defer func() {
 					if r := recover(); r != nil {
 						ec.Error(ctx, ec.Recover(ctx, r))
 					}
 				}()
 				res = ec._OrchestratorVantage_geoResolvedAt(ctx, field, obj)
-				if res == graphql.Null {
-					atomic.AddUint32(&fs.Invalids, 1)
-				}
 				return res
 			}
 

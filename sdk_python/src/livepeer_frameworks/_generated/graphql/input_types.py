@@ -316,9 +316,9 @@ class CreateDeveloperTokenInput(BaseModel):
     "Human-readable name for the token."
     permissions: Optional[str] = Field(
         default=None,
-        description="Comma-separated permission scopes (read:streams, write:streams, etc.).",
+        description="Comma-separated permission scopes in resource:action form (streams:read, streams:write, analytics:read, etc.).",
     )
-    "Comma-separated permission scopes (read:streams, write:streams, etc.)."
+    "Comma-separated permission scopes in resource:action form (streams:read, streams:write, analytics:read, etc.)."
     expires_in: Optional[int] = Field(
         alias="expiresIn",
         default=None,

@@ -45,7 +45,6 @@ var nonNullSourceGuards = map[string]string{
 	"OrchestratorInstance.lastSeen":          periscopeRowTime,
 	"OrchestratorInstance.updatedAt":         periscopeRowTime,
 	"OrchestratorPerformancePoint.timestamp": periscopeRowTime,
-	"OrchestratorVantage.geoResolvedAt":      periscopeRowTime,
 	"OrchestratorVantage.lastSeen":           periscopeRowTime,
 	"PlayerBootTimeSeriesBucket.timestamp":   periscopeRowTime,
 	"ProcessingUsageRecord.timestamp":        periscopeRowTime,

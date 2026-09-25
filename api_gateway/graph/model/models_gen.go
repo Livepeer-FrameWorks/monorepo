@@ -972,7 +972,7 @@ type CreateCryptoTopupInput struct {
 type CreateDeveloperTokenInput struct {
 	// Human-readable name for the token.
 	Name string `json:"name"`
-	// Comma-separated permission scopes (read:streams, write:streams, etc.).
+	// Comma-separated permission scopes in resource:action form (streams:read, streams:write, analytics:read, etc.).
 	Permissions *string `json:"permissions,omitempty"`
 	// Days until expiration (null = non-expiring).
 	ExpiresIn *int `json:"expiresIn,omitempty"`

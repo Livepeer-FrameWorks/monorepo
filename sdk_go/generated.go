@@ -17217,7 +17217,7 @@ func (v *CreateDeveloperTokenCreateDeveloperTokenValidationError) __premarshalJS
 type CreateDeveloperTokenInput struct {
 	// Human-readable name for the token.
 	Name string `json:"name"`
-	// Comma-separated permission scopes (read:streams, write:streams, etc.).
+	// Comma-separated permission scopes in resource:action form (streams:read, streams:write, analytics:read, etc.).
 	Permissions *string `json:"permissions"`
 	// Days until expiration (null = non-expiring).
 	ExpiresIn *int `json:"expiresIn"`
@@ -26966,7 +26966,7 @@ type DeveloperTokenFields struct {
 	TokenName string `json:"tokenName"`
 	// The secret token value (only returned on creation, null thereafter).
 	TokenValue *string `json:"tokenValue"`
-	// List of granted permissions (read:streams, write:streams, etc.).
+	// List of granted permission scopes (streams:read, streams:write, etc.).
 	Permissions []string `json:"permissions"`
 	// Token status (active, revoked, expired).
 	Status string `json:"status"`
@@ -52400,7 +52400,7 @@ func (v *GetOrchestratorVantagesOrchestratorVantagesOrchestratorVantage) GetGeoS
 }
 
 // GetGeoResolvedAt returns GetOrchestratorVantagesOrchestratorVantagesOrchestratorVantage.GeoResolvedAt, and is useful for accessing the field via an interface.
-func (v *GetOrchestratorVantagesOrchestratorVantagesOrchestratorVantage) GetGeoResolvedAt() time.Time {
+func (v *GetOrchestratorVantagesOrchestratorVantagesOrchestratorVantage) GetGeoResolvedAt() *time.Time {
 	return v.OrchestratorVantageDefaultFields.GeoResolvedAt
 }
 
@@ -52470,7 +52470,7 @@ type __premarshalGetOrchestratorVantagesOrchestratorVantagesOrchestratorVantage 
 
 	GeoSource string `json:"geoSource"`
 
-	GeoResolvedAt time.Time `json:"geoResolvedAt"`
+	GeoResolvedAt *time.Time `json:"geoResolvedAt"`
 
 	LatestLatencyMs int `json:"latestLatencyMs"`
 
@@ -77917,21 +77917,22 @@ func (v *OrchestratorPerformancePointDefaultFields) GetAiMaxLatencyMs() int { re
 // address, resolved IP). DNS round-robin / geo-anycast surfaces as multiple
 // vantages with different `resolvedIp`.
 type OrchestratorVantageDefaultFields struct {
-	TenantId        string    `json:"tenantId"`
-	GatewayId       string    `json:"gatewayId"`
-	GatewayRegion   string    `json:"gatewayRegion"`
-	OrchAddr        string    `json:"orchAddr"`
-	ResolvedIp      string    `json:"resolvedIp"`
-	Latitude        float64   `json:"latitude"`
-	Longitude       float64   `json:"longitude"`
-	City            string    `json:"city"`
-	CountryCode     string    `json:"countryCode"`
-	GeoSource       string    `json:"geoSource"`
-	GeoResolvedAt   time.Time `json:"geoResolvedAt"`
-	LatestLatencyMs int       `json:"latestLatencyMs"`
-	Score           float64   `json:"score"`
-	DialedRecently  bool      `json:"dialedRecently"`
-	LastSeen        time.Time `json:"lastSeen"`
+	TenantId      string  `json:"tenantId"`
+	GatewayId     string  `json:"gatewayId"`
+	GatewayRegion string  `json:"gatewayRegion"`
+	OrchAddr      string  `json:"orchAddr"`
+	ResolvedIp    string  `json:"resolvedIp"`
+	Latitude      float64 `json:"latitude"`
+	Longitude     float64 `json:"longitude"`
+	City          string  `json:"city"`
+	CountryCode   string  `json:"countryCode"`
+	GeoSource     string  `json:"geoSource"`
+	// When the vantage's location was resolved; null while it has not been.
+	GeoResolvedAt   *time.Time `json:"geoResolvedAt"`
+	LatestLatencyMs int        `json:"latestLatencyMs"`
+	Score           float64    `json:"score"`
+	DialedRecently  bool       `json:"dialedRecently"`
+	LastSeen        time.Time  `json:"lastSeen"`
 }
 
 // GetTenantId returns OrchestratorVantageDefaultFields.TenantId, and is useful for accessing the field via an interface.
@@ -77965,7 +77966,7 @@ func (v *OrchestratorVantageDefaultFields) GetCountryCode() string { return v.Co
 func (v *OrchestratorVantageDefaultFields) GetGeoSource() string { return v.GeoSource }
 
 // GetGeoResolvedAt returns OrchestratorVantageDefaultFields.GeoResolvedAt, and is useful for accessing the field via an interface.
-func (v *OrchestratorVantageDefaultFields) GetGeoResolvedAt() time.Time { return v.GeoResolvedAt }
+func (v *OrchestratorVantageDefaultFields) GetGeoResolvedAt() *time.Time { return v.GeoResolvedAt }
 
 // GetLatestLatencyMs returns OrchestratorVantageDefaultFields.LatestLatencyMs, and is useful for accessing the field via an interface.
 func (v *OrchestratorVantageDefaultFields) GetLatestLatencyMs() int { return v.LatestLatencyMs }
@@ -78157,21 +78158,22 @@ func (v *OrchestratorWithDetailsDefaultFieldsOrchestrator) GetUpdatedAt() time.T
 // address, resolved IP). DNS round-robin / geo-anycast surfaces as multiple
 // vantages with different `resolvedIp`.
 type OrchestratorWithDetailsDefaultFieldsVantagesOrchestratorVantage struct {
-	TenantId        string    `json:"tenantId"`
-	GatewayId       string    `json:"gatewayId"`
-	GatewayRegion   string    `json:"gatewayRegion"`
-	OrchAddr        string    `json:"orchAddr"`
-	ResolvedIp      string    `json:"resolvedIp"`
-	Latitude        float64   `json:"latitude"`
-	Longitude       float64   `json:"longitude"`
-	City            string    `json:"city"`
-	CountryCode     string    `json:"countryCode"`
-	GeoSource       string    `json:"geoSource"`
-	GeoResolvedAt   time.Time `json:"geoResolvedAt"`
-	LatestLatencyMs int       `json:"latestLatencyMs"`
-	Score           float64   `json:"score"`
-	DialedRecently  bool      `json:"dialedRecently"`
-	LastSeen        time.Time `json:"lastSeen"`
+	TenantId      string  `json:"tenantId"`
+	GatewayId     string  `json:"gatewayId"`
+	GatewayRegion string  `json:"gatewayRegion"`
+	OrchAddr      string  `json:"orchAddr"`
+	ResolvedIp    string  `json:"resolvedIp"`
+	Latitude      float64 `json:"latitude"`
+	Longitude     float64 `json:"longitude"`
+	City          string  `json:"city"`
+	CountryCode   string  `json:"countryCode"`
+	GeoSource     string  `json:"geoSource"`
+	// When the vantage's location was resolved; null while it has not been.
+	GeoResolvedAt   *time.Time `json:"geoResolvedAt"`
+	LatestLatencyMs int        `json:"latestLatencyMs"`
+	Score           float64    `json:"score"`
+	DialedRecently  bool       `json:"dialedRecently"`
+	LastSeen        time.Time  `json:"lastSeen"`
 }
 
 // GetTenantId returns OrchestratorWithDetailsDefaultFieldsVantagesOrchestratorVantage.TenantId, and is useful for accessing the field via an interface.
@@ -78225,7 +78227,7 @@ func (v *OrchestratorWithDetailsDefaultFieldsVantagesOrchestratorVantage) GetGeo
 }
 
 // GetGeoResolvedAt returns OrchestratorWithDetailsDefaultFieldsVantagesOrchestratorVantage.GeoResolvedAt, and is useful for accessing the field via an interface.
-func (v *OrchestratorWithDetailsDefaultFieldsVantagesOrchestratorVantage) GetGeoResolvedAt() time.Time {
+func (v *OrchestratorWithDetailsDefaultFieldsVantagesOrchestratorVantage) GetGeoResolvedAt() *time.Time {
 	return v.GeoResolvedAt
 }
 

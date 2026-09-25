@@ -239,7 +239,7 @@ export type CreateDeveloperTokenInput = {
   expiresIn?: number | null | undefined;
   /** Human-readable name for the token. */
   name: string;
-  /** Comma-separated permission scopes (read:streams, write:streams, etc.). */
+  /** Comma-separated permission scopes in resource:action form (streams:read, streams:write, analytics:read, etc.). */
   permissions?: string | null | undefined;
 };
 
@@ -1496,7 +1496,7 @@ export type IngestEndpointFieldsFragment = { nodeId: string, baseUrl: string, wh
 export type DeveloperTokenFieldsFragment = { __typename: 'DeveloperToken', /** Unique token identifier. */
 id: string, /** Human-readable name for the token. */
 tokenName: string, /** The secret token value (only returned on creation, null thereafter). */
-tokenValue: string | null, /** List of granted permissions (read:streams, write:streams, etc.). */
+tokenValue: string | null, /** List of granted permission scopes (streams:read, streams:write, etc.). */
 permissions: Array<string>, /** Token status (active, revoked, expired). */
 status: string, /** When the token was last used for API access. */
 lastUsedAt: string | null, /** When the token expires (null for non-expiring). */
@@ -2638,10 +2638,11 @@ export type OrchestratorInstanceDefaultFieldsFragment = { tenantId: string, orch
 export type OrchestratorPerformancePointDefaultFieldsFragment = { timestamp: string, gatewayId: string, gatewayRegion: string, resolvedIp: string, attempts: number, successes: number, failures: number, meanLatencyMs: number, maxLatencyMs: number, transcodeAttempts: number, transcodeSuccesses: number, transcodeFailures: number, transcodeMeanOverallMs: number, transcodeMaxOverallMs: number, transcodePixels: number, aiAttempts: number, aiSuccesses: number, aiFailures: number, aiMeanLatencyMs: number, aiMaxLatencyMs: number };
 
 /** Per-vantage observation: one row per (cluster owner tenant, gateway, orch address, resolved IP). DNS round-robin / geo-anycast surfaces as multiple vantages with different `resolvedIp`. */
-export type OrchestratorVantageDefaultFieldsFragment = { tenantId: string, gatewayId: string, gatewayRegion: string, orchAddr: string, resolvedIp: string, latitude: number, longitude: number, city: string, countryCode: string, geoSource: string, geoResolvedAt: string, latestLatencyMs: number, score: number, dialedRecently: boolean, lastSeen: string };
+export type OrchestratorVantageDefaultFieldsFragment = { tenantId: string, gatewayId: string, gatewayRegion: string, orchAddr: string, resolvedIp: string, latitude: number, longitude: number, city: string, countryCode: string, geoSource: string, /** When the vantage's location was resolved; null while it has not been. */
+geoResolvedAt: string | null, latestLatencyMs: number, score: number, dialedRecently: boolean, lastSeen: string };
 
 /** Detail response: orchestrator identity + every known instance (with their own price/capabilities/hardware) + every per-(gateway, instance) vantage. Used by the federation map's side panel. */
-export type OrchestratorWithDetailsDefaultFieldsFragment = { orchestrator: { tenantId: string, orchAddr: string, lastSeen: string, updatedAt: string }, instances: Array<{ tenantId: string, orchAddr: string, resolvedIp: string, canonicalUrl: string, advertisedNodeUrls: Array<string>, capabilities: Array<string>, pricePerUnitEth: string, pixelsPerUnit: string, hardware: string, source: string, lastSeen: string, updatedAt: string, capabilityPrices: Array<{ capability: string, pricePerUnitEth: string, pixelsPerUnit: string }> }>, vantages: Array<{ tenantId: string, gatewayId: string, gatewayRegion: string, orchAddr: string, resolvedIp: string, latitude: number, longitude: number, city: string, countryCode: string, geoSource: string, geoResolvedAt: string, latestLatencyMs: number, score: number, dialedRecently: boolean, lastSeen: string }> };
+export type OrchestratorWithDetailsDefaultFieldsFragment = { orchestrator: { tenantId: string, orchAddr: string, lastSeen: string, updatedAt: string }, instances: Array<{ tenantId: string, orchAddr: string, resolvedIp: string, canonicalUrl: string, advertisedNodeUrls: Array<string>, capabilities: Array<string>, pricePerUnitEth: string, pixelsPerUnit: string, hardware: string, source: string, lastSeen: string, updatedAt: string, capabilityPrices: Array<{ capability: string, pricePerUnitEth: string, pixelsPerUnit: string }> }>, vantages: Array<{ tenantId: string, gatewayId: string, gatewayRegion: string, orchAddr: string, resolvedIp: string, latitude: number, longitude: number, city: string, countryCode: string, geoSource: string, geoResolvedAt: string | null, latestLatencyMs: number, score: number, dialedRecently: boolean, lastSeen: string }> };
 
 /** Pagination wrapper for orchestrator listing. */
 export type OrchestratorsConnectionDefaultFieldsFragment = { totalCount: number, nodes: Array<{ tenantId: string, orchAddr: string, lastSeen: string, updatedAt: string }> };
@@ -7425,7 +7426,7 @@ export type GetOrchestratorQueryVariables = Exact<{
 
 /** Fetch a public orchestrator with every known instance and per-(gateway, instance) vantage. Side-panel data source for the federation map. */
 export type GetOrchestratorQuery = { /** Fetch a public orchestrator with every known instance and per-(gateway, instance) vantage. Side-panel data source for the federation map. */
-orchestrator: { orchestrator: { tenantId: string, orchAddr: string, lastSeen: string, updatedAt: string }, instances: Array<{ tenantId: string, orchAddr: string, resolvedIp: string, canonicalUrl: string, advertisedNodeUrls: Array<string>, capabilities: Array<string>, pricePerUnitEth: string, pixelsPerUnit: string, hardware: string, source: string, lastSeen: string, updatedAt: string, capabilityPrices: Array<{ capability: string, pricePerUnitEth: string, pixelsPerUnit: string }> }>, vantages: Array<{ tenantId: string, gatewayId: string, gatewayRegion: string, orchAddr: string, resolvedIp: string, latitude: number, longitude: number, city: string, countryCode: string, geoSource: string, geoResolvedAt: string, latestLatencyMs: number, score: number, dialedRecently: boolean, lastSeen: string }> } | null };
+orchestrator: { orchestrator: { tenantId: string, orchAddr: string, lastSeen: string, updatedAt: string }, instances: Array<{ tenantId: string, orchAddr: string, resolvedIp: string, canonicalUrl: string, advertisedNodeUrls: Array<string>, capabilities: Array<string>, pricePerUnitEth: string, pixelsPerUnit: string, hardware: string, source: string, lastSeen: string, updatedAt: string, capabilityPrices: Array<{ capability: string, pricePerUnitEth: string, pixelsPerUnit: string }> }>, vantages: Array<{ tenantId: string, gatewayId: string, gatewayRegion: string, orchAddr: string, resolvedIp: string, latitude: number, longitude: number, city: string, countryCode: string, geoSource: string, geoResolvedAt: string | null, latestLatencyMs: number, score: number, dialedRecently: boolean, lastSeen: string }> } | null };
 
 export type GetOrchestratorInstancesQueryVariables = Exact<{
   orchAddr?: string | null | undefined;
@@ -7456,7 +7457,7 @@ export type GetOrchestratorVantagesQueryVariables = Exact<{
 
 /** List per-(gateway, instance) vantage observations. Multi-region observation surfaces here as multiple rows. Use the optional `orchAddr` filter to scope to one orchestrator. */
 export type GetOrchestratorVantagesQuery = { /** List per-(gateway, instance) vantage observations. Multi-region observation surfaces here as multiple rows. Use the optional `orchAddr` filter to scope to one orchestrator. */
-orchestratorVantages: Array<{ tenantId: string, gatewayId: string, gatewayRegion: string, orchAddr: string, resolvedIp: string, latitude: number, longitude: number, city: string, countryCode: string, geoSource: string, geoResolvedAt: string, latestLatencyMs: number, score: number, dialedRecently: boolean, lastSeen: string }> };
+orchestratorVantages: Array<{ tenantId: string, gatewayId: string, gatewayRegion: string, orchAddr: string, resolvedIp: string, latitude: number, longitude: number, city: string, countryCode: string, geoSource: string, geoResolvedAt: string | null, latestLatencyMs: number, score: number, dialedRecently: boolean, lastSeen: string }> };
 
 export type GetOrchestratorsConnectionQueryVariables = Exact<{
   page?: ConnectionInput | null | undefined;
@@ -8736,7 +8737,7 @@ createDeveloperToken:
     | { __typename: 'DeveloperToken', /** Unique token identifier. */
 id: string, /** Human-readable name for the token. */
 tokenName: string, /** The secret token value (only returned on creation, null thereafter). */
-tokenValue: string | null, /** List of granted permissions (read:streams, write:streams, etc.). */
+tokenValue: string | null, /** List of granted permission scopes (streams:read, streams:write, etc.). */
 permissions: Array<string>, /** Token status (active, revoked, expired). */
 status: string, /** When the token was last used for API access. */
 lastUsedAt: string | null, /** When the token expires (null for non-expiring). */
