@@ -23,9 +23,10 @@ func startPlacementDeliveryYugabyte(t *testing.T, prefix string) *sql.DB {
 	if err != nil {
 		t.Fatal(err)
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
-	defer cancel()
-	if _, err := db.ExecContext(ctx, string(baseline)); err != nil {
+	// Setup, not the contract under test: distributed DDL cost grows with the
+	// schema and with engine load, so the package -timeout bounds it instead of
+	// a per-test deadline.
+	if _, err := db.Exec(string(baseline)); err != nil {
 		t.Fatal(err)
 	}
 	return db

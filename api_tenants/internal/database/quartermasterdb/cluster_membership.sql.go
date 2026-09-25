@@ -412,7 +412,10 @@ SELECT pc.cluster_id, pc.shared_tenant_ids, ic.cluster_name, ic.cluster_type,
            WHERE sca.cluster_id = pc.cluster_id AND sca.is_active = TRUE
              AND svc.type = 'foghorn' AND si.status = 'running'
              AND si.health_status = 'healthy' AND si.protocol = 'grpc'
-           ORDER BY si.updated_at DESC, si.id ASC LIMIT 1
+           -- Any healthy replica serves the cluster; the choice must be stable, because a
+           -- peer leader re-dials whenever the address changes. Heartbeats move updated_at,
+           -- so ordering by it alternated between replicas and tore down live channels.
+           ORDER BY si.advertise_host ASC, si.port ASC, si.id ASC LIMIT 1
        ), '')::text AS foghorn_addr,
        COALESCE(NULLIF(ic.control_cell_id, ''), NULLIF(ic.cell_id, ''), ic.cluster_id)::text AS control_cell_id
 FROM peer_clusters pc

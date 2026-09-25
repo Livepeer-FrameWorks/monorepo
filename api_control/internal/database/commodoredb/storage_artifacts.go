@@ -40,6 +40,11 @@ type StorageArtifactCatalog struct {
 	KindCounts map[string]int32
 }
 
+// storageArtifactBaseSQL derives each row's status from the projected Foghorn
+// lifecycle. An in-progress lifecycle stays 'processing' even when is_synced is
+// true: an upload's source object is synced before its processing job finishes,
+// and reporting it ready then would publish a VOD whose renditions may still fail.
+// is_synced alone marks ready only rows whose lifecycle is terminal or unknown.
 const storageArtifactBaseSQL = `
 SELECT kind, id, artifact_hash, playback_id, stream_id, stream_title, title, secondary_label,
        size_bytes, status, storage_location, created_at, updated_at, expires_at,
@@ -55,6 +60,7 @@ FROM (
         v.size_bytes,
         CASE WHEN v.retention_until IS NOT NULL AND v.retention_until <= NOW() THEN 'expired'
              WHEN v.lifecycle_status IN ('failed', 'aborted') OR v.sync_status IN ('failed', 'lost_local') THEN 'failed'
+             WHEN v.lifecycle_status IN ('requested', 'queued', 'starting', 'recording', 'stopping', 'finalizing', 'uploading', 'processing') THEN 'processing'
              WHEN v.lifecycle_status IN ('ready', 'completed', 'completed_partial') OR COALESCE(v.is_synced, false) THEN 'ready'
              ELSE 'processing' END AS status,
         v.storage_location, v.created_at, v.updated_at, v.retention_until AS expires_at,
@@ -74,6 +80,7 @@ FROM (
         d.size_bytes,
         CASE WHEN d.retention_until IS NOT NULL AND d.retention_until <= NOW() THEN 'expired'
              WHEN d.lifecycle_status IN ('failed', 'aborted') OR d.sync_status IN ('failed', 'lost_local') THEN 'failed'
+             WHEN d.lifecycle_status IN ('requested', 'queued', 'starting', 'recording', 'stopping', 'finalizing', 'uploading', 'processing') THEN 'processing'
              WHEN d.lifecycle_status IN ('ready', 'completed', 'completed_partial') OR COALESCE(d.is_synced, false) THEN 'ready'
              ELSE 'processing' END,
         d.storage_location, d.created_at, d.updated_at, d.retention_until,
@@ -91,6 +98,7 @@ FROM (
         c.size_bytes,
         CASE WHEN c.retention_until IS NOT NULL AND c.retention_until <= NOW() THEN 'expired'
              WHEN c.lifecycle_status IN ('failed', 'aborted') OR c.sync_status IN ('failed', 'lost_local') THEN 'failed'
+             WHEN c.lifecycle_status IN ('requested', 'queued', 'starting', 'recording', 'stopping', 'finalizing', 'uploading', 'processing') THEN 'processing'
              WHEN c.lifecycle_status IN ('ready', 'completed', 'completed_partial') OR COALESCE(c.is_synced, false) THEN 'ready'
              ELSE 'processing' END,
         c.storage_location, c.created_at, c.updated_at, c.retention_until,

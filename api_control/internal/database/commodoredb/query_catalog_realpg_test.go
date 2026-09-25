@@ -778,6 +778,71 @@ func TestManualQueryAdapters_RealPG(t *testing.T) {
 	}
 }
 
+// An uploaded VOD's source object syncs before its processing job ends; the
+// catalog must keep reporting it processing until the lifecycle is terminal.
+func TestStorageArtifactStatusFollowsInProgressLifecycleOverSync_RealPG(t *testing.T) {
+	db := startCommodoreQueryCatalogRealPG(t)
+	ctx := context.Background()
+	const (
+		tenantID = "11111111-1111-1111-1111-111111111111"
+		userID   = "22222222-2222-2222-2222-222222222222"
+		vodID    = "44444444-4444-4444-4444-444444444444"
+	)
+	if _, err := db.ExecContext(ctx, `
+		INSERT INTO commodore.users (id, tenant_id, email, password_hash, is_active)
+		VALUES ($1::uuid, $2::uuid, 'status@example.com', 'x', TRUE)
+	`, userID, tenantID); err != nil {
+		t.Fatalf("seed user: %v", err)
+	}
+	queries := New(db)
+	if err := queries.InsertVODUploadRegistration(ctx, InsertVODUploadRegistrationParams{
+		ID: vodID, TenantID: tenantID, UserID: userID, VodHash: "status-vod",
+		InternalName: "vod+status", PlaybackID: "status-vod-playback", Filename: "status.mp4",
+		OriginClusterID: sql.NullString{String: "media-eu", Valid: true},
+	}); err != nil {
+		t.Fatalf("insert VOD registration: %v", err)
+	}
+
+	cases := []struct {
+		lifecycle sql.NullString
+		synced    bool
+		want      string
+	}{
+		{sql.NullString{String: "processing", Valid: true}, true, "processing"},
+		{sql.NullString{String: "uploading", Valid: true}, true, "processing"},
+		{sql.NullString{String: "ready", Valid: true}, true, "ready"},
+		{sql.NullString{String: "ready", Valid: true}, false, "ready"},
+		{sql.NullString{String: "failed", Valid: true}, true, "failed"},
+		{sql.NullString{}, true, "ready"},
+		{sql.NullString{}, false, "processing"},
+	}
+	for _, tc := range cases {
+		syncStatus := "pending"
+		if tc.synced {
+			syncStatus = "synced"
+		}
+		if _, err := db.ExecContext(ctx, `
+			UPDATE commodore.vod_assets SET lifecycle_status = $2, is_synced = $3, sync_status = $4
+			WHERE id = $1::uuid
+		`, vodID, tc.lifecycle, tc.synced, syncStatus); err != nil {
+			t.Fatalf("set lifecycle %v synced=%v: %v", tc.lifecycle, tc.synced, err)
+		}
+		catalog, err := queries.ListStorageArtifactCatalog(ctx, StorageArtifactFilter{
+			TenantID: tenantID, ArtifactHashes: []string{"status-vod"},
+			SortField: "created_at", SortDirection: "DESC", Limit: 1,
+		})
+		if err != nil {
+			t.Fatalf("list storage catalog: %v", err)
+		}
+		if len(catalog.Rows) != 1 {
+			t.Fatalf("lifecycle %v synced=%v: rows=%+v", tc.lifecycle, tc.synced, catalog.Rows)
+		}
+		if got := catalog.Rows[0].Status.String; got != tc.want {
+			t.Fatalf("lifecycle %v synced=%v: status %q, want %q", tc.lifecycle, tc.synced, got, tc.want)
+		}
+	}
+}
+
 type commodoreGeneratedQuery struct {
 	file string
 	name string
