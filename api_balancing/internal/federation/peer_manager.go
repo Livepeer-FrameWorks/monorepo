@@ -65,6 +65,10 @@ type PeerManager struct {
 	leaderReady                   bool
 	reconnectBackoff              time.Duration
 	tombstoneScanCursor           uint64
+	// sharedConnected is the leader's published PeerChannel snapshot
+	// (cluster -> address) as last loaded by a non-leader replica.
+	sharedConnected         map[string]string
+	sharedConnectedLoadedAt time.Time
 
 	unresolvedAdMu     sync.Mutex
 	unresolvedAdLogged map[string]time.Time // artifact_hash -> last skip log, throttles the 30s ad loop
@@ -346,14 +350,96 @@ func (pm *PeerManager) PeerControlCell(clusterID string) (string, bool) {
 	return "", false
 }
 
-// IsPeerConnected returns whether the PeerChannel to a given cluster is active.
+// IsPeerConnected returns whether the cell's PeerChannel to a given cluster is
+// active. Only the leader holds PeerChannels; every other replica answers from
+// the leader's published snapshot, so request-path routing gives the same
+// answer on whichever replica a viewer lands on.
 func (pm *PeerManager) IsPeerConnected(clusterID string) bool {
 	pm.mu.RLock()
 	defer pm.mu.RUnlock()
-	if ps, ok := pm.peers[clusterID]; ok {
+	ps, ok := pm.peers[clusterID]
+	if !ok {
+		return false
+	}
+	if pm.isLeader || pm.cache == nil {
 		return ps.connected
 	}
-	return false
+	if pm.sharedConnectedLoadedAt.IsZero() || time.Since(pm.sharedConnectedLoadedAt) >= peerConnectivityTTL {
+		return false
+	}
+	addr, connected := pm.sharedConnected[clusterID]
+	// A leader connected to a different endpoint than this replica would dial
+	// is not evidence that this replica's address works.
+	return connected && addr != "" && addr == ps.addr
+}
+
+// connectedPeerAddrsLocked is the leader's current PeerChannel view.
+func (pm *PeerManager) connectedPeerAddrsLocked() map[string]string {
+	connected := make(map[string]string, len(pm.peers))
+	for clusterID, ps := range pm.peers {
+		if ps.connected && ps.addr != "" {
+			connected[clusterID] = ps.addr
+		}
+	}
+	return connected
+}
+
+// publishPeerConnectivity shares the leader's PeerChannel view with the other
+// replicas of this cell.
+func (pm *PeerManager) publishPeerConnectivity() {
+	if pm.cache == nil {
+		return
+	}
+	pm.mu.RLock()
+	if !pm.isLeader {
+		pm.mu.RUnlock()
+		return
+	}
+	snapshot := PeerConnectivity{
+		LeaderInstanceID: pm.instanceID,
+		PublishedAtMilli: time.Now().UnixMilli(),
+		Connected:        pm.connectedPeerAddrsLocked(),
+	}
+	pm.mu.RUnlock()
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	if err := pm.cache.PublishPeerConnectivity(ctx, snapshot); err != nil {
+		pm.logger.WithError(err).Warn("Failed to publish federation peer connectivity")
+	}
+}
+
+// loadPeerConnectivity refreshes a non-leader's copy of the leader's
+// PeerChannel view.
+func (pm *PeerManager) loadPeerConnectivity() error {
+	if pm.cache == nil {
+		return nil
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	snapshot, ok, err := pm.cache.GetPeerConnectivity(ctx)
+	if err != nil {
+		return err
+	}
+	connected := map[string]string{}
+	if ok && snapshot.Connected != nil {
+		connected = snapshot.Connected
+	}
+	pm.mu.Lock()
+	previous := pm.sharedConnected
+	pm.sharedConnected = connected
+	pm.sharedConnectedLoadedAt = time.Now()
+	pm.mu.Unlock()
+	for clusterID, addr := range connected {
+		if previous[clusterID] != addr {
+			pm.logger.WithFields(logging.Fields{"peer_cluster": clusterID, "peer_addr": addr, "leader_instance_id": snapshot.LeaderInstanceID}).Info("Federation peer reachable via cell leader")
+		}
+	}
+	for clusterID := range previous {
+		if _, still := connected[clusterID]; !still {
+			pm.logger.WithFields(logging.Fields{"peer_cluster": clusterID, "leader_snapshot": ok}).Info("Federation peer no longer reachable via cell leader")
+		}
+	}
+	return nil
 }
 
 // LeaderInstanceID returns the instance currently holding PeerManager leadership ("" when unknown):
@@ -828,6 +914,9 @@ func (pm *PeerManager) run() {
 		if err := pm.loadPeerAddressesFromRedis(); err != nil {
 			pm.logger.WithError(err).Debug("Failed to load federation peer authority")
 		}
+		if err := pm.loadPeerConnectivity(); err != nil {
+			pm.logger.WithError(err).Warn("Failed to load federation peer connectivity from the cell leader")
+		}
 
 		select {
 		case <-pm.done:
@@ -951,6 +1040,7 @@ func (pm *PeerManager) runAsLeader() {
 				pm.logger.Warn("Lost PeerManager leader lease, stepping down")
 				return
 			}
+			pm.publishPeerConnectivity()
 			pm.pushStreamAds()
 			pm.checkReplicationCompletion()
 		case <-artifactTicker.C:
@@ -1465,6 +1555,7 @@ func (pm *PeerManager) connectPeer(request peerConnectRequest) {
 		ps.connected = true
 		sendCh := ps.sendCh
 		pm.mu.Unlock()
+		pm.publishPeerConnectivity()
 
 		// One writer goroutine per connection. Every producer — the leader push
 		// loops and the trigger-path BroadcastStreamLifecycle — enqueues onto
@@ -1491,6 +1582,9 @@ func (pm *PeerManager) connectPeer(request peerConnectRequest) {
 			ps.sendCh = nil
 		}
 		pm.mu.Unlock()
+		if owned {
+			pm.publishPeerConnectivity()
+		}
 
 		cancel() // also unblocks peerWriteLoop via ctx
 		if !owned {

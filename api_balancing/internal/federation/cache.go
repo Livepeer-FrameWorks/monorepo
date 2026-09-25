@@ -123,6 +123,49 @@ func (c *RemoteEdgeCache) keyPeerHintContributionPattern() string {
 	return fmt.Sprintf("{%s}:peer_hints:v2:*", c.clusterID)
 }
 
+func (c *RemoteEdgeCache) keyPeerConnectivity() string {
+	return fmt.Sprintf("{%s}:peer_connectivity:v1", c.clusterID)
+}
+
+// peerConnectivityTTL spans three leader advertisement ticks, so one missed
+// publish does not flip every peer to unreachable on the other replicas.
+const peerConnectivityTTL = 15 * time.Second
+
+// PeerConnectivity is the leader's view of which PeerChannels are up, keyed
+// by peer cluster and carrying the address each channel was opened to.
+type PeerConnectivity struct {
+	LeaderInstanceID string            `json:"leader_instance_id"`
+	PublishedAtMilli int64             `json:"published_at_ms"`
+	Connected        map[string]string `json:"connected"`
+}
+
+// PublishPeerConnectivity replaces the cell's connectivity snapshot. Only the
+// PeerManager leader holds PeerChannels, so it is the only writer.
+func (c *RemoteEdgeCache) PublishPeerConnectivity(ctx context.Context, snapshot PeerConnectivity) error {
+	raw, err := json.Marshal(snapshot)
+	if err != nil {
+		return fmt.Errorf("marshal peer connectivity: %w", err)
+	}
+	return c.client.Set(ctx, c.keyPeerConnectivity(), raw, peerConnectivityTTL).Err()
+}
+
+// GetPeerConnectivity returns the leader's latest snapshot; ok is false when
+// none is live.
+func (c *RemoteEdgeCache) GetPeerConnectivity(ctx context.Context) (PeerConnectivity, bool, error) {
+	raw, err := c.client.Get(ctx, c.keyPeerConnectivity()).Bytes()
+	if errors.Is(err, goredis.Nil) {
+		return PeerConnectivity{}, false, nil
+	}
+	if err != nil {
+		return PeerConnectivity{}, false, err
+	}
+	var snapshot PeerConnectivity
+	if err := json.Unmarshal(raw, &snapshot); err != nil {
+		return PeerConnectivity{}, false, fmt.Errorf("decode peer connectivity: %w", err)
+	}
+	return snapshot, true, nil
+}
+
 func (c *RemoteEdgeCache) keyRemoteLiveStream(tenantID, internalName, originClusterID string) string {
 	return fmt.Sprintf("{%s}:remote_live_streams:v3:records:%s:%s:%s", c.clusterID, tenantID, internalName, originClusterID)
 }
