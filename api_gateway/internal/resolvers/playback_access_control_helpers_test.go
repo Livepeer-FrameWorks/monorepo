@@ -302,6 +302,7 @@ func TestMapCommodoreErr(t *testing.T) {
 		{codes.PermissionDenied, &model.AuthError{}},
 		{codes.Unauthenticated, &model.AuthError{}},
 		{codes.InvalidArgument, &model.ValidationError{}},
+		{codes.FailedPrecondition, &model.ValidationError{}},
 		{codes.ResourceExhausted, &model.RateLimitError{}},
 	}
 	for _, tc := range cases {

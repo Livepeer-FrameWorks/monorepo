@@ -169,6 +169,24 @@ func TestDoSetPlaybackPolicy(t *testing.T) {
 		t.Fatalf("expected ValidationError for missing jwt block, got %T", res)
 	}
 
+	// Commodore's precondition refusal reaches the tenant verbatim.
+	const reason = "allowed kids are not active signing keys: no-such-kid"
+	refused := &clientstest.FakeCommodore{
+		SetPlaybackPolicyFn: func(context.Context, *commodorepb.SetPlaybackPolicyRequest) (*commodorepb.SetPlaybackPolicyResponse, error) {
+			return nil, status.Error(codes.FailedPrecondition, reason)
+		},
+	}
+	res, err = commoW2(refused).DoSetPlaybackPolicy(clientstest.AuthedCtx("t1"), model.SetPlaybackPolicyInput{
+		StreamID: &streamID,
+		Policy:   &model.PlaybackPolicyInput{Type: model.PlaybackPolicyTypeJwt, Jwt: &model.PlaybackJwtPolicyInput{AllowedKids: []string{"no-such-kid"}}},
+	})
+	if err != nil {
+		t.Fatalf("precondition refusal must be a union result, got err %v", err)
+	}
+	if v, ok := res.(*model.ValidationError); !ok || v.Message != reason {
+		t.Fatalf("expected ValidationError %q, got %T %+v", reason, res, res)
+	}
+
 	denied := &clientstest.FakeCommodore{}
 	if _, err := commoW2(denied).DoSetPlaybackPolicy(context.Background(), model.SetPlaybackPolicyInput{StreamID: &streamID, Policy: &model.PlaybackPolicyInput{Type: model.PlaybackPolicyTypePublic}}); err == nil {
 		t.Fatal("expected permission error")

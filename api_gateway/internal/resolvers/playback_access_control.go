@@ -607,7 +607,10 @@ func mapCommodoreErr(err error) any {
 		return &model.NotFoundError{Message: st.Message()}
 	case codes.PermissionDenied, codes.Unauthenticated:
 		return &model.AuthError{Message: st.Message()}
-	case codes.InvalidArgument:
+	case codes.InvalidArgument, codes.FailedPrecondition:
+		// Commodore authors these messages for the tenant ("create a playback
+		// signing key first", "allowed kids are not active signing keys: …");
+		// the generic gateway sanitizer would hide what to fix.
 		return &model.ValidationError{Message: st.Message()}
 	case codes.ResourceExhausted:
 		return &model.RateLimitError{Message: st.Message()}
