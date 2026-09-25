@@ -436,11 +436,12 @@ loop:
 }
 
 // retryChapterDTSH retries DTSH generation for a finalized chapter
-// artifact whose inline attempt failed. Without this the chapter stays
-// in state='finalized' until first playback regenerates the sidecar,
-// which can be never on cold archives. Bounded retries with backoff
-// (1m → 5m → 15m → 30m → 60m) cover the realistic transient cases;
-// a chapter that fails all attempts ends up needing operator triage.
+// artifact whose inline attempt failed. Bounded retries with backoff
+// (1m → 5m → 15m → 30m → 60m) cover the realistic transient cases in
+// this process. After they run out, Foghorn's chapter reclaim sweep keeps
+// re-requesting the sidecar for finalized chapters without one
+// (ListFinalizedChaptersMissingDTSH → TriggerDtshSync), and the vod
+// incremental .dtsh sync regenerates it on demand.
 func (h *ProcessingJobHandler) retryChapterDTSH(vodStreamName, dtshPath string, log *logrus.Entry) {
 	backoffs := []time.Duration{time.Minute, 5 * time.Minute, 15 * time.Minute, 30 * time.Minute, 60 * time.Minute}
 	for i, wait := range backoffs {
@@ -451,7 +452,7 @@ func (h *ProcessingJobHandler) retryChapterDTSH(vodStreamName, dtshPath string, 
 			return
 		}
 	}
-	log.Warn("Chapter finalize: DTSH generation exhausted retries; chapter remains finalized pending operator triage")
+	log.Warn("Chapter finalize: local DTSH generation retries exhausted; Foghorn's reclaim sweep will re-request the sidecar")
 }
 
 // buildChapterHLS writes a VOD HLS manifest covering the chapter's
