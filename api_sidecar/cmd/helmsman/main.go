@@ -4,8 +4,10 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"os/signal"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"frameworks/api_sidecar/internal/appconfig"
@@ -342,7 +344,11 @@ func scrubEdgeCredentials() error {
 	if err != nil {
 		return err
 	}
-	return control.RunCredentialCleanupWorker(context.Background(), scrub.StateDir, scrub.NodeID, scrub.EnrollmentTokenFile, scrub.RuntimeEnvFile)
+	// The worker is a supervised long-running service: a disabled worker idles
+	// until the supervisor stops it, so the context must end on its signal.
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGTERM, os.Interrupt)
+	defer stop()
+	return control.RunCredentialCleanupWorker(ctx, scrub.StateDir, scrub.NodeID, scrub.EnrollmentTokenFile, scrub.RuntimeEnvFile)
 }
 
 // listenHost strips IPv6 brackets from a configured bind address, because
