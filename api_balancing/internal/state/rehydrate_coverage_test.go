@@ -255,6 +255,40 @@ func TestRehydrateNodeRepositoryDoesNotRefreshLivenessOrEraseIdentity(t *testing
 	}
 }
 
+// The periodic reconciler rehydrates node rows every few minutes. A connected
+// node's listener observation must survive it; clearing it made placement
+// refuse every node as stale_telemetry until the node's next report.
+func TestRehydrateKeepsLiveNodeListenerObservation(t *testing.T) {
+	sm := NewStreamStateManager()
+	t.Cleanup(sm.Shutdown)
+	sm.SetNodeInfo("live", "https://edge.example", true, nil, nil, "", "", map[string]any{"HLS": "live"})
+	sm.TouchNode("live", true)
+	sm.SetNodeInfo("gone", "https://gone.example", true, nil, nil, "", "", map[string]any{"HLS": "old"})
+	sm.TouchNode("gone", true)
+	sm.MarkNodeDisconnected("gone")
+	observed := sm.GetNodeState("live").OutputsObservedAt
+	if observed.IsZero() {
+		t.Fatal("live report has no observation time")
+	}
+
+	sm.ConfigurePolicies(PoliciesConfig{NodeRepo: &rehydrateNodeRepo{nodes: []NodeRecord{
+		{NodeID: "live", BaseURL: "https://edge.example", OutputsJSON: `{"HLS":"durable"}`, LastUpdated: time.Now()},
+		{NodeID: "gone", BaseURL: "https://gone.example", OutputsJSON: `{"HLS":"durable"}`, LastUpdated: time.Now()},
+	}}})
+	if err := sm.Rehydrate(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+
+	live := sm.GetNodeState("live")
+	if !live.OutputsObservedAt.Equal(observed) || live.Outputs["HLS"] != "live" {
+		t.Fatalf("rehydrate replaced a live node's observation: observed=%v outputs=%v", live.OutputsObservedAt, live.Outputs)
+	}
+	gone := sm.GetNodeState("gone")
+	if !gone.OutputsObservedAt.IsZero() || gone.Outputs["HLS"] != "durable" {
+		t.Fatalf("disconnected node did not take the repository listeners without an observation time: %+v", gone)
+	}
+}
+
 func TestRehydrateNewNodeIsUnhealthyDNSHiddenAndEvictionIsProcessTerminal(t *testing.T) {
 	sm := NewStreamStateManager()
 	t.Cleanup(sm.Shutdown)

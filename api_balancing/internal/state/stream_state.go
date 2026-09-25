@@ -1850,7 +1850,12 @@ func (sm *StreamStateManager) mergeRehydratedNode(record NodeRecord) {
 	if baseURLChanged {
 		n.OutputsObservedAt = time.Time{}
 	}
-	if record.OutputsJSON != "" {
+	// A live node's listeners are owned by its lifecycle reports (local or
+	// replicated with their observation time). Importing the repository row
+	// would erase that time and make placement treat a connected node as
+	// stale until its next report.
+	liveObservation := !n.IsStale && !n.OutputsObservedAt.IsZero()
+	if record.OutputsJSON != "" && !liveObservation {
 		var outputs map[string]any
 		if err := json.Unmarshal([]byte(record.OutputsJSON), &outputs); err == nil {
 			n.Outputs = outputs
