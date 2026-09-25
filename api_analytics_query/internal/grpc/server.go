@@ -8265,16 +8265,40 @@ func NewGRPCServer(ctx context.Context, cfg GRPCServerConfig) (*grpc.Server, err
 	return server, nil
 }
 
+// isServerSideError reports whether err is a failure of this service rather
+// than a refusal of the caller's request.
+func isServerSideError(err error) bool {
+	if err == nil {
+		return false
+	}
+	st, ok := status.FromError(err)
+	if !ok {
+		return true
+	}
+	switch st.Code() {
+	case codes.Internal, codes.Unknown, codes.DataLoss, codes.Unavailable, codes.DeadlineExceeded, codes.Unimplemented:
+		return true
+	}
+	return false
+}
+
 // unaryInterceptor logs gRPC requests
 func unaryInterceptor(logger logging.Logger) grpc.UnaryServerInterceptor {
 	return func(ctx context.Context, req any, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (any, error) {
 		start := time.Now()
 		resp, err := handler(ctx, req)
-		logger.WithFields(logging.Fields{
+		fields := logging.Fields{
 			"method":   info.FullMethod,
 			"duration": time.Since(start),
 			"error":    err,
-		}).Debug("gRPC request processed")
+		}
+		// SanitizeError replaces server-side failures with an opaque message,
+		// so this is the only place their cause is recorded.
+		if isServerSideError(err) {
+			logger.WithFields(fields).Warn("gRPC request failed")
+		} else {
+			logger.WithFields(fields).Debug("gRPC request processed")
+		}
 		return resp, grpcutil.SanitizeError(err)
 	}
 }
