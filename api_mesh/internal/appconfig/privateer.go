@@ -47,7 +47,7 @@ type Privateer struct {
 	SyncTimeout         time.Duration `env:"PRIVATEER_SYNC_TIMEOUT" default:"10s" desc:"Timeout for one mesh sync call to Quartermaster." introduced:"v0.3.0"`
 
 	DNSPort     int      `env:"DNS_PORT" default:"53" desc:"Port of the internal DNS server, which listens on 127.0.0.1 over UDP and TCP." introduced:"v0.3.0"`
-	UpstreamDNS []string `env:"UPSTREAM_DNS" desc:"Comma-separated resolvers for names outside .internal. Entries without a port use 53. Empty answers those queries with SERVFAIL." introduced:"v0.3.0"`
+	UpstreamDNS []string `env:"UPSTREAM_DNS" desc:"Comma-separated resolvers for names outside .internal. Entries without a port use 53. Empty answers those queries with REFUSED." introduced:"v0.3.0"`
 
 	CertIssuanceToken            string        `env:"CERT_ISSUANCE_TOKEN" secret:"true" desc:"Initial token for requesting internal service certificates from Navigator. Privateer mints replacements when it expires or is rejected." introduced:"v0.3.0"`
 	PKIDir                       string        `env:"GRPC_TLS_PKI_DIR" default:"/etc/frameworks/pki" desc:"Directory where synced internal service certificates and keys are written." introduced:"v0.3.0"`

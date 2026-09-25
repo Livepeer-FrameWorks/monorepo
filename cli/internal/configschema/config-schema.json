@@ -5445,7 +5445,7 @@
           "key": "UPSTREAM_DNS",
           "type": "list",
           "introduced": "v0.3.0",
-          "description": "Comma-separated resolvers for names outside .internal. Entries without a port use 53. Empty answers those queries with SERVFAIL."
+          "description": "Comma-separated resolvers for names outside .internal. Entries without a port use 53. Empty answers those queries with REFUSED."
         },
         {
           "key": "CERT_ISSUANCE_TOKEN",

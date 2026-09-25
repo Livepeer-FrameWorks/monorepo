@@ -977,7 +977,7 @@ Read by `api_mesh/cmd/privateer`.
 | `PRIVATEER_SYNC_INTERVAL` | duration | `30s` |  | v0.3.0 | Interval between mesh sync calls to Quartermaster. |
 | `PRIVATEER_SYNC_TIMEOUT` | duration | `10s` |  | v0.3.0 | Timeout for one mesh sync call to Quartermaster. |
 | `DNS_PORT` | integer | `53` |  | v0.3.0 | Port of the internal DNS server, which listens on 127.0.0.1 over UDP and TCP. |
-| `UPSTREAM_DNS` | list |  |  | v0.3.0 | Comma-separated resolvers for names outside .internal. Entries without a port use 53. Empty answers those queries with SERVFAIL. |
+| `UPSTREAM_DNS` | list |  |  | v0.3.0 | Comma-separated resolvers for names outside .internal. Entries without a port use 53. Empty answers those queries with REFUSED. |
 | `CERT_ISSUANCE_TOKEN` | string |  | secret | v0.3.0 | Initial token for requesting internal service certificates from Navigator. Privateer mints replacements when it expires or is rejected. |
 | `GRPC_TLS_PKI_DIR` | string | `/etc/frameworks/pki` |  | v0.3.0 | Directory where synced internal service certificates and keys are written. |
 | `EXPECTED_INTERNAL_GRPC_SERVICES` | list |  |  | v0.3.0 | Comma-separated service types that need internal certificates on this node, in addition to those registered in Quartermaster. |

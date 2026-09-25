@@ -45,7 +45,7 @@ func NewServer(logger logging.Logger, port int, upstreams ...string) *Server {
 		port = 53
 	}
 	// No default upstreams. If the provisioner didn't capture the host's
-	// nameservers into UPSTREAM_DNS, non-.internal queries return SERVFAIL
+	// nameservers into UPSTREAM_DNS, non-.internal queries are REFUSED
 	// rather than silently overriding the host's resolver policy with
 	// public DNS.
 	return &Server{
@@ -204,6 +204,22 @@ func (s *Server) handleInternal(w dns.ResponseWriter, r *dns.Msg) {
 
 func (s *Server) handleForward(w dns.ResponseWriter, r *dns.Msg) {
 	if len(r.Question) == 0 {
+		return
+	}
+
+	// Without upstreams this server is authoritative for .internal only.
+	// REFUSED says "not my zone"; SERVFAIL would tell a stub resolver the
+	// server is failing and make it retry and stall.
+	if len(s.upstreams) == 0 {
+		m := new(dns.Msg)
+		m.SetReply(r)
+		m.Rcode = dns.RcodeRefused
+		status := "refused"
+		if err := w.WriteMsg(m); err != nil {
+			s.logger.WithError(err).Warn("Failed to write REFUSED DNS response")
+			status = "error"
+		}
+		s.recordQuery("forward", status)
 		return
 	}
 

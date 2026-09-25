@@ -30,6 +30,7 @@ Supported diagnostics:
   resources  - Check CPU, memory, disk usage on all hosts
   ports      - Check for port conflicts
   kafka      - Check Kafka cluster health, topic lag, broker status
+  dns        - Check Privateer serves only .internal (wg0 routing, forwarded public queries)
   media      - Capture media/DNS/federation service state without provisioning
   media-authority - Trace media-authority refresh, versioning, delivery, and apply state
   dvr <dvr-hash>  - Show a DVR recording's segments, chapters, and finalize queue on its cell
@@ -39,6 +40,7 @@ cause outages.`,
 		Example: `  frameworks cluster diagnose network
   frameworks cluster diagnose resources
   frameworks cluster diagnose kafka
+  frameworks cluster diagnose dns
   frameworks cluster diagnose media
   frameworks cluster diagnose media-authority --window-hours 6`,
 		Args: cobra.ExactArgs(1),
@@ -97,12 +99,20 @@ func runDiagnose(cmd *cobra.Command, rc *resolvedCluster, component string, opts
 		return diagnosePorts(ctx, cmd, manifest, sshPool)
 	case "kafka":
 		return diagnoseKafka(ctx, cmd, manifest, sshPool)
+	case "dns":
+		failures := checkPrivateerDNSScope(ctx, cmd.OutOrStdout(), cmd.ErrOrStderr(), manifest, func(host inventory.Host) (ssh.Runner, error) {
+			return getRunner(host, sshPool)
+		})
+		if failures > 0 {
+			return fmt.Errorf("privateer dns diagnostics found %d host(s) with a problem", failures)
+		}
+		return nil
 	case "media":
 		return diagnoseMedia(ctx, cmd, manifest, sshPool, opts)
 	case "media-authority":
 		return diagnoseMediaAuthority(ctx, cmd, rc, sshPool, opts)
 	default:
-		return fmt.Errorf("unknown component: %s (must be network, resources, ports, kafka, media, or media-authority)", component)
+		return fmt.Errorf("unknown component: %s (must be network, resources, ports, kafka, dns, media, or media-authority)", component)
 	}
 }
 

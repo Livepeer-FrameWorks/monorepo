@@ -68,7 +68,27 @@ func TestUpdateRecordsNormalizesToLowerCase(t *testing.T) {
 func TestNewServerNoDefaultUpstreams(t *testing.T) {
 	s := NewServer(logging.NewLogger(), 0)
 	if len(s.upstreams) != 0 {
-		t.Fatalf("expected no default upstreams (SERVFAIL for non-.internal), got %d: %v", len(s.upstreams), s.upstreams)
+		t.Fatalf("expected no default upstreams (REFUSED for non-.internal), got %d: %v", len(s.upstreams), s.upstreams)
+	}
+}
+
+func TestHandleForwardWithoutUpstreamsRefuses(t *testing.T) {
+	s := NewServer(logging.NewLogger(), 0)
+
+	addr, cleanup := startTestServer(t, s)
+	defer cleanup()
+
+	c := new(dns.Client)
+	c.Timeout = 5 * time.Second
+	m := new(dns.Msg)
+	m.SetQuestion("production.cloudfront.docker.com.", dns.TypeA)
+
+	resp, _, err := c.Exchange(m, addr)
+	if err != nil {
+		t.Fatalf("exchange error: %v", err)
+	}
+	if resp.Rcode != dns.RcodeRefused {
+		t.Fatalf("rcode = %s, want REFUSED for a name outside .internal with no upstream", dns.RcodeToString[resp.Rcode])
 	}
 }
 
