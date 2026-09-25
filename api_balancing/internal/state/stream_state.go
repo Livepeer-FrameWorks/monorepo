@@ -596,6 +596,10 @@ type StreamStateManager struct {
 	// DNS-relevant delta tracker: records last-published per-node snapshot
 	// and a dirty set drained by the coalescer that pushes ReportAliveNodes.
 	dnsDelta dnsDeltaTracker
+
+	// streamObservers are told the internal name of every stream whose state
+	// or per-node instance changed, locally or from a peer replica's changelog.
+	streamObservers streamChangeObservers
 }
 
 // NewStreamStateManager creates a new stream state manager
@@ -1159,6 +1163,7 @@ func (sm *StreamStateManager) persistStreamWriteThrough(internalName string, pay
 }
 
 func (sm *StreamStateManager) persistStreamWriteThroughContext(ctx context.Context, internalName string, payload json.RawMessage) error {
+	defer sm.notifyStreamChanged(internalName)
 	if sm.redisStore == nil {
 		return nil
 	}
@@ -1172,6 +1177,7 @@ func (sm *StreamStateManager) persistStreamWriteThroughContext(ctx context.Conte
 }
 
 func (sm *StreamStateManager) persistStreamDeleteWriteThrough(internalName string) {
+	defer sm.notifyStreamChanged(internalName)
 	if sm.redisStore == nil {
 		return
 	}
@@ -1186,6 +1192,7 @@ func (sm *StreamStateManager) persistStreamDeleteWriteThrough(internalName strin
 }
 
 func (sm *StreamStateManager) persistStreamInstanceDeleteWriteThrough(internalName, nodeID string) {
+	defer sm.notifyStreamChanged(internalName)
 	if sm.redisStore == nil {
 		return
 	}
@@ -1204,6 +1211,7 @@ func (sm *StreamStateManager) persistStreamInstanceWriteThrough(internalName, no
 }
 
 func (sm *StreamStateManager) persistStreamInstanceWriteThroughContext(ctx context.Context, internalName, nodeID string, payload json.RawMessage) error {
+	defer sm.notifyStreamChanged(internalName)
 	if sm.redisStore == nil {
 		return nil
 	}

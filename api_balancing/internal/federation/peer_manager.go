@@ -1478,15 +1478,19 @@ func (pm *PeerManager) importAdmissionPeerHintsLocked(hints map[string]PeerHint)
 	return toConnect
 }
 
+// servedLocally reports whether a peer entry is a virtual cluster this cell
+// controls. This Foghorn serves it: its federation address is our own and the
+// server refuses a PeerChannel to its own cluster, so it never gets a runner or
+// a connection. The entry stays for address and control-cell lookups.
+func (pm *PeerManager) servedLocally(ps *peerState) bool {
+	return ps != nil && strings.TrimSpace(ps.controlCellID) == pm.clusterID
+}
+
 func (pm *PeerManager) reservePeerRunnerLocked(clusterID string, ps *peerState) (peerConnectRequest, bool) {
 	if ps.connected || ps.runnerToken != 0 {
 		return peerConnectRequest{}, false
 	}
-	// A virtual cluster this cell controls is served by this Foghorn: its
-	// federation address is our own and the server refuses a PeerChannel to its
-	// own cluster, so a runner would only churn. The peer entry stays for
-	// address and control-cell lookups.
-	if strings.TrimSpace(ps.controlCellID) == pm.clusterID {
+	if pm.servedLocally(ps) {
 		return peerConnectRequest{}, false
 	}
 	pm.nextPeerRunnerToken++
@@ -1985,13 +1989,6 @@ func (pm *PeerManager) pushStreamAds() {
 		return
 	}
 
-	type streamInfo struct {
-		ss              *state.StreamState
-		edges           []*foghornfederationpb.PeerStreamEdge
-		originClusterID string
-		instances       map[string]state.StreamInstanceState
-	}
-	streams := make(map[string]*streamInfo)
 	sources := make(map[string]control.StreamEntry)
 	if registry := control.StreamRegistryInstance; registry != nil {
 		for _, entry := range registry.Snapshot() {
@@ -1999,81 +1996,24 @@ func (pm *PeerManager) pushStreamAds() {
 		}
 	}
 
+	var streamNames []string
+	seen := make(map[string]bool)
 	for _, snap := range snapshot.Nodes {
-		if !snap.IsActive || len(snap.Streams) == 0 {
-			continue
-		}
-		ns := sm.GetNodeState(snap.NodeID)
-		if ns == nil {
+		if !snap.IsActive || len(snap.Streams) == 0 || sm.GetNodeState(snap.NodeID) == nil {
 			continue
 		}
 		for streamName := range snap.Streams {
-			si, ok := streams[streamName]
-			if !ok {
-				ss := sm.GetStreamState(streamName)
-				if ss == nil || ss.Status != "live" {
-					continue
-				}
-				si = &streamInfo{ss: ss, originClusterID: pm.clusterID, instances: sm.GetStreamInstances(streamName)}
-				streams[streamName] = si
-			}
-			instance, known := si.instances[snap.NodeID]
-			if !known || instance.TenantID != si.ss.TenantID || instance.Status != "live" {
+			if seen[streamName] {
 				continue
 			}
-			isOrigin := instance.Inputs > 0 && !instance.Replicated
-			sourceStreamName := streamName
-			entry := sources[streamName]
-			if entry.TenantID == si.ss.TenantID && entry.IngestMode != 0 {
-				sourceStreamName = control.RuntimeNameFor(entry.IngestMode, entry.InternalName)
-			} else if strings.Contains(si.ss.StreamName, "+") {
-				sourceStreamName = control.MistSourceNameFromObservedStream(si.ss.StreamName)
+			seen[streamName] = true
+			if ss := sm.GetStreamState(streamName); ss != nil && ss.Status == "live" {
+				streamNames = append(streamNames, streamName)
 			}
-			if entry.TenantID == si.ss.TenantID && entry.OriginClusterID != "" {
-				si.originClusterID = entry.OriginClusterID
-			}
-			var generation string
-			var revision int64
-			if isOrigin {
-				generation, revision = confirmedPublisherBinding(entry, snap.NodeID, si.ss.TenantID, pm.clusterID)
-			}
-			var dtscURL string
-			var dtscObservedAt int64
-			if freshPlacementEvidence(snap.OutputsObservedAt, time.Now()) {
-				dtscURL = mist.ResolvePlaybackURL(snap.Outputs, snap.Host, "dtsc", sourceStreamName)
-				if dtscURL != "" {
-					dtscObservedAt = snap.OutputsObservedAt.Unix()
-				}
-			}
-			sourceObservedAt := minPlacementExpiry(snap.LastHeartbeat, instance.LastUpdate)
-			var sourceObservedSeconds int64
-			if !sourceObservedAt.IsZero() {
-				sourceObservedSeconds = sourceObservedAt.Unix()
-			}
-			si.edges = append(si.edges, &foghornfederationpb.PeerStreamEdge{
-				NodeId:           snap.NodeID,
-				BaseUrl:          ns.BaseURL,
-				DtscUrl:          dtscURL,
-				DtscObservedAt:   dtscObservedAt,
-				SourceObservedAt: sourceObservedSeconds,
-				IsOrigin:         isOrigin,
-				BwAvailable:      snap.BWAvailable,
-				CpuPercent:       snap.CPU,
-				ViewerCount:      uint32(sm.GetNodeActiveViewers(snap.NodeID)),
-				GeoLat:           snap.GeoLatitude,
-				GeoLon:           snap.GeoLongitude,
-				BufferState:      instance.BufferState,
-				Playable:         instance.Playable,
-				RamUsed:          uint64(ns.RAMCurrent),
-				RamMax:           uint64(ns.RAMMax),
-				SourceGeneration: generation,
-				SourceRevision:   revision,
-				ClusterId:        snap.ClusterID,
-			})
 		}
 	}
 
-	if len(streams) == 0 {
+	if len(streamNames) == 0 {
 		// Two things still have to happen on a tick that advertises nothing.
 		// The live-lifecycle refresh reads stream state, not the balancer
 		// snapshot, so a stream whose node has dropped out of the snapshot is
@@ -2086,61 +2026,148 @@ func (pm *PeerManager) pushStreamAds() {
 	}
 
 	// Look up the recording node for any stream that has an active
-	// DVR. One query per ad batch — cheaper than per-stream and
-	// avoids touching the per-stream loop above. Receiver clusters
-	// stash this on the federated Location so cross-cluster
+	// DVR. One query per ad batch — cheaper than per-stream. Receiver
+	// clusters stash this on the federated Location so cross-cluster
 	// STREAM_SOURCE dvr+<hash> can arrange a DTSC pull from the
 	// recording origin.
-	streamNames := make([]string, 0, len(streams))
-	for name := range streams {
-		streamNames = append(streamNames, name)
-	}
 	dvrRecordingNodes := pm.lookupDVRRecordingNodes(streamNames)
 
-	now := time.Now().Unix()
-	var messages []*foghornfederationpb.PeerMessage
-	for _, si := range streams {
-		if len(si.edges) == 0 {
+	now := time.Now()
+	messages := make([]*foghornfederationpb.PeerMessage, 0, len(streamNames))
+	for _, name := range streamNames {
+		ad := pm.buildStreamAd(sm, snapshot, name, sources[name], now)
+		if ad == nil {
 			continue
 		}
-		messages = append(messages, &foghornfederationpb.PeerMessage{
-			ClusterId: pm.clusterID,
-			Payload: &foghornfederationpb.PeerMessage_StreamAd{
-				StreamAd: &foghornfederationpb.StreamAdvertisement{
-					InternalName:       si.ss.InternalName,
-					TenantId:           si.ss.TenantID,
-					PlaybackId:         si.ss.PlaybackID,
-					OriginClusterId:    si.originClusterID,
-					ControlCellId:      pm.controlCellID,
-					IsLive:             true,
-					Edges:              si.edges,
-					Timestamp:          now,
-					DvrRecordingNodeId: dvrRecordingNodes[si.ss.InternalName],
-				},
-			},
-		})
+		ad.DvrRecordingNodeId = dvrRecordingNodes[name]
+		messages = append(messages, pm.streamAdMessage(ad))
 	}
 
 	pm.mu.RLock()
 	defer pm.mu.RUnlock()
+	pm.sendStreamAdsLocked(messages)
+	pm.refreshRemoteLiveStreams(sm)
+}
 
+// buildStreamAd builds the advertisement for one live stream from the balancer
+// snapshot: one edge per active node holding a live instance for the stream's
+// tenant. entry is the stream's registry source entry, zero when unknown. It
+// returns nil when the stream is not live or no node contributes an edge. The
+// periodic push and the immediate origin-presence push both build through here,
+// so an advertisement's content never depends on which path sent it.
+func (pm *PeerManager) buildStreamAd(sm *state.StreamStateManager, snapshot *state.BalancerSnapshot, internalName string, entry control.StreamEntry, now time.Time) *foghornfederationpb.StreamAdvertisement {
+	ss := sm.GetStreamState(internalName)
+	if ss == nil || ss.Status != "live" {
+		return nil
+	}
+	instances := sm.GetStreamInstances(internalName)
+	originClusterID := pm.clusterID
+	var edges []*foghornfederationpb.PeerStreamEdge
+	for _, snap := range snapshot.Nodes {
+		if !snap.IsActive {
+			continue
+		}
+		if _, carries := snap.Streams[internalName]; !carries {
+			continue
+		}
+		ns := sm.GetNodeState(snap.NodeID)
+		if ns == nil {
+			continue
+		}
+		instance, known := instances[snap.NodeID]
+		if !known || instance.TenantID != ss.TenantID || instance.Status != "live" {
+			continue
+		}
+		isOrigin := instance.Inputs > 0 && !instance.Replicated
+		sourceStreamName := internalName
+		if entry.TenantID == ss.TenantID && entry.IngestMode != 0 {
+			sourceStreamName = control.RuntimeNameFor(entry.IngestMode, entry.InternalName)
+		} else if strings.Contains(ss.StreamName, "+") {
+			sourceStreamName = control.MistSourceNameFromObservedStream(ss.StreamName)
+		}
+		if entry.TenantID == ss.TenantID && entry.OriginClusterID != "" {
+			originClusterID = entry.OriginClusterID
+		}
+		var generation string
+		var revision int64
+		if isOrigin {
+			generation, revision = confirmedPublisherBinding(entry, snap.NodeID, ss.TenantID, pm.clusterID)
+		}
+		var dtscURL string
+		var dtscObservedAt int64
+		if freshPlacementEvidence(snap.OutputsObservedAt, now) {
+			dtscURL = mist.ResolvePlaybackURL(snap.Outputs, snap.Host, "dtsc", sourceStreamName)
+			if dtscURL != "" {
+				dtscObservedAt = snap.OutputsObservedAt.Unix()
+			}
+		}
+		sourceObservedAt := minPlacementExpiry(snap.LastHeartbeat, instance.LastUpdate)
+		var sourceObservedSeconds int64
+		if !sourceObservedAt.IsZero() {
+			sourceObservedSeconds = sourceObservedAt.Unix()
+		}
+		edges = append(edges, &foghornfederationpb.PeerStreamEdge{
+			NodeId:           snap.NodeID,
+			BaseUrl:          ns.BaseURL,
+			DtscUrl:          dtscURL,
+			DtscObservedAt:   dtscObservedAt,
+			SourceObservedAt: sourceObservedSeconds,
+			IsOrigin:         isOrigin,
+			BwAvailable:      snap.BWAvailable,
+			CpuPercent:       snap.CPU,
+			ViewerCount:      uint32(sm.GetNodeActiveViewers(snap.NodeID)),
+			GeoLat:           snap.GeoLatitude,
+			GeoLon:           snap.GeoLongitude,
+			BufferState:      instance.BufferState,
+			Playable:         instance.Playable,
+			RamUsed:          uint64(ns.RAMCurrent),
+			RamMax:           uint64(ns.RAMMax),
+			SourceGeneration: generation,
+			SourceRevision:   revision,
+			ClusterId:        snap.ClusterID,
+		})
+	}
+	if len(edges) == 0 {
+		return nil
+	}
+	return &foghornfederationpb.StreamAdvertisement{
+		InternalName:    ss.InternalName,
+		TenantId:        ss.TenantID,
+		PlaybackId:      ss.PlaybackID,
+		OriginClusterId: originClusterID,
+		ControlCellId:   pm.controlCellID,
+		IsLive:          true,
+		Edges:           edges,
+		Timestamp:       now.Unix(),
+	}
+}
+
+func (pm *PeerManager) streamAdMessage(ad *foghornfederationpb.StreamAdvertisement) *foghornfederationpb.PeerMessage {
+	return &foghornfederationpb.PeerMessage{
+		ClusterId: pm.clusterID,
+		Payload:   &foghornfederationpb.PeerMessage_StreamAd{StreamAd: ad},
+	}
+}
+
+// sendStreamAdsLocked offers each stream advertisement to every connected peer
+// authorized for the stream's tenant and scope. Caller holds pm.mu (R or W).
+func (pm *PeerManager) sendStreamAdsLocked(messages []*foghornfederationpb.PeerMessage) {
 	for peerID, ps := range pm.peers {
 		if !ps.connected || ps.stream == nil {
 			continue
 		}
 		pm.touchPool(peerID)
 		for _, msg := range messages {
-			ad, ok := msg.GetPayload().(*foghornfederationpb.PeerMessage_StreamAd)
-			if !ok {
+			ad := msg.GetStreamAd()
+			if ad == nil {
 				continue
 			}
-			if !pm.shouldSendStreamToPeer(peerID, ps, ad.StreamAd.InternalName, ad.StreamAd.TenantId) {
+			if !pm.shouldSendStreamToPeer(peerID, ps, ad.InternalName, ad.TenantId) {
 				continue
 			}
 			pm.enqueue(peerID, ps, msg)
 		}
 	}
-	pm.refreshRemoteLiveStreams(sm)
 }
 
 // refreshRemoteLiveStreams re-broadcasts a live lifecycle event for every
@@ -2345,14 +2372,16 @@ func (pm *PeerManager) BroadcastStreamLifecycle(ctx context.Context, internalNam
 	// after removing the live marker so a delayed frame from an older channel cannot resurrect it.
 	pm.mu.RLock()
 	defer pm.mu.RUnlock()
+	// Locally served virtual clusters already see this cell's lifecycle; they
+	// are never connected, so requiring them would fail every broadcast.
 	required := make(map[string]*peerState)
 	for peerID, streams := range pm.streamPeers {
-		if streams[internalName] {
+		if streams[internalName] && !pm.servedLocally(pm.peers[peerID]) {
 			required[peerID] = pm.peers[peerID]
 		}
 	}
 	for peerID, ps := range pm.peers {
-		if ps.lifecycle == peerAlwaysOn && pm.shouldSendStreamToPeer(peerID, ps, internalName, tenantID) {
+		if ps.lifecycle == peerAlwaysOn && !pm.servedLocally(ps) && pm.shouldSendStreamToPeer(peerID, ps, internalName, tenantID) {
 			required[peerID] = ps
 		}
 	}

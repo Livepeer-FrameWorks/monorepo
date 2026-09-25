@@ -287,6 +287,7 @@ func mergeLocationRevisioned(cur, incoming Location) Location {
 func (r *StreamRegistry) applyRedisChange(change RegistryChange) {
 	switch change.Entity {
 	case RegistryEntitySource:
+		defer r.notifySourceChanged(change.Key)
 		if change.Operation == RegistryOpDelete {
 			r.mu.Lock()
 			if ce, ok := r.byInt[change.Key]; !ok || sourceRevisionForCluster(ce.entry, r.clusterID) <= change.SourceRevision {
@@ -395,6 +396,7 @@ func (r *StreamRegistry) publishUpsertSourceFencedContext(ctx context.Context, e
 	store, instance := r.redisStore, r.instanceID
 	r.mu.RUnlock()
 	if store == nil {
+		r.notifySourceChanged(e.InternalName)
 		return true, nil
 	}
 	payload, err := json.Marshal(e)
@@ -409,7 +411,13 @@ func (r *StreamRegistry) publishUpsertSourceFencedContext(ctx context.Context, e
 		Payload:        payload,
 		SourceRevision: sourceRevisionForCluster(e, r.clusterID),
 	}
-	return store.SetSourceRevisioned(ctx, e, change, change.SourceRevision)
+	applied, err := store.SetSourceRevisioned(ctx, e, change, change.SourceRevision)
+	if err == nil && applied {
+		// Observers run only once the shared CAS has settled: a lost CAS is undone
+		// locally by the caller and must never be advertised.
+		r.notifySourceChanged(e.InternalName)
+	}
+	return applied, err
 }
 
 func (r *StreamRegistry) publishUpsertSource(e StreamEntry) {

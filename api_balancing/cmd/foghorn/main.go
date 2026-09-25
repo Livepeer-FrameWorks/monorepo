@@ -1314,6 +1314,13 @@ func main() {
 	}
 	control.SetStreamRegistry(streamRegistry)
 	streamRegistry.StartSweeper(context.Background(), 30*time.Second, 5*time.Minute)
+	if peerManager != nil {
+		// Peers can place viewers on a pushed stream only once they hold the
+		// origin's publisher generation; send it as soon as the origin is
+		// present rather than on the next periodic advertisement.
+		stopPresenceAds := peerManager.WatchStreamPresence(state.DefaultManager(), streamRegistry)
+		defer stopPresenceAds()
+	}
 
 	// Stale-on-transient-error window: expired registry entries may serve as
 	// fallback while Commodore/SQL re-hydration fails transiently (never on
@@ -1603,6 +1610,12 @@ func main() {
 	}
 	if authorityStore != nil {
 		placementSnapshot := placementPreviewInventory.Snapshot
+		var peerLive func(context.Context, string, string) (string, bool)
+		if peerManager != nil {
+			peerLive = func(ctx context.Context, tenantID, internalName string) (string, bool) {
+				return peerManager.IsStreamLiveOnPeer(ctx, internalName, tenantID)
+			}
+		}
 		// One reader per signed media kind: an encoder's push session, a
 		// configured pull/Mist-native input, and stored artifacts. Serving any
 		// kind requires its own reader, so a kind this cell cannot resolve is
@@ -1612,7 +1625,7 @@ func main() {
 			Paths: &federation.MediaPlacementPaths{
 				Push: &federation.LivePushPlacementPaths{
 					CellID: controlCellID, RegistryCellID: foghornCfg.ClusterID,
-					Registry: streamRegistry, Snapshot: placementSnapshot,
+					Registry: streamRegistry, Snapshot: placementSnapshot, PeerLive: peerLive,
 				},
 				Configured: &federation.ConfiguredSourcePlacementPaths{
 					CellID: controlCellID, RegistryCellID: foghornCfg.ClusterID,
@@ -2367,8 +2380,9 @@ func main() {
 
 	// Start processing job dispatcher (routes VOD processing jobs to edge nodes)
 	processingDispatcher := jobs.NewProcessingDispatcher(jobs.ProcessingDispatcherConfig{
-		DB:     db,
-		Logger: logger,
+		DB:             db,
+		Logger:         logger,
+		OnCatalogDirty: control.NotifyCatalogDirty,
 	})
 	processingDispatcher.SetProcessConfigCacher(triggerProcessor)
 	processingDispatcher.SetGatewayResolver(triggerProcessor)

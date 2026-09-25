@@ -411,6 +411,11 @@ type StreamRegistry struct {
 	// peer entries never roll back a later local write. See
 	// pkgredis.Watermarks.
 	watermarks *pkgredis.Watermarks
+
+	// sourceObservers are told the internal name of every source entry that
+	// changed, through this replica's own settled write or a peer replica's
+	// changelog entry.
+	sourceObservers sourceChangeObservers
 }
 
 type cachedEntry struct {
