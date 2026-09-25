@@ -673,14 +673,14 @@ RETURNING database_name`, int(r.leaseTTL().Seconds()), relayoutLiteral(r.Databas
 // may be missing, renamed, or held by a copy under construction, and a superuser connection (migrations, provisioning)
 // is not fenced. Anything that creates or migrates service databases must wait for it.
 func RelayoutsInProgress(ctx context.Context, node YugabyteNode) ([]string, error) {
-	exists, err := node.Query(ctx, relayoutAdminDatabase, "SELECT to_regclass('public.frameworks_relayout_journal') IS NOT NULL")
+	exists, err := queryIdempotent(ctx, node, relayoutAdminDatabase, "SELECT to_regclass('public.frameworks_relayout_journal') IS NOT NULL")
 	if err != nil {
 		return nil, fmt.Errorf("read relayout journal: %w", err)
 	}
 	if strings.TrimSpace(exists) != "t" {
 		return nil, nil
 	}
-	out, err := node.Query(ctx, relayoutAdminDatabase, fmt.Sprintf(`SELECT database_name || ' (' || state || ')' FROM public.frameworks_relayout_journal
+	out, err := queryIdempotent(ctx, node, relayoutAdminDatabase, fmt.Sprintf(`SELECT database_name || ' (' || state || ')' FROM public.frameworks_relayout_journal
  WHERE state NOT IN (%s, %s, %s) OR source_oid IS NOT NULL ORDER BY 1`,
 		relayoutLiteral(string(RelayoutPlanned)), relayoutLiteral(string(RelayoutRolledBack)), relayoutLiteral(string(RelayoutFinished))))
 	if err != nil {
@@ -920,7 +920,7 @@ func (r *YugabyteRelayout) requireNoSessionsWhere(ctx context.Context, subject, 
 		}
 		var busy []string
 		outputs, err := r.onNodes(func(node YugabyteNode) (string, error) {
-			out, err := node.Query(ctx, relayoutAdminDatabase, fmt.Sprintf(relayoutSessionQuery, predicate))
+			out, err := queryIdempotent(ctx, node, relayoutAdminDatabase, fmt.Sprintf(relayoutSessionQuery, predicate))
 			if err != nil {
 				return "", fmt.Errorf("list sessions of %s on %s: %w", subject, node.Name(), err)
 			}
@@ -1070,7 +1070,7 @@ func (r *YugabyteRelayout) requireLiveTopology(ctx context.Context) error {
 // yb_is_client_ysqlconnmgr as on.
 func (r *YugabyteRelayout) requireNoConnectionManager(ctx context.Context) error {
 	outputs, err := r.onNodes(func(node YugabyteNode) (string, error) {
-		out, err := node.Query(ctx, relayoutAdminDatabase, "SELECT coalesce(current_setting('yb_is_client_ysqlconnmgr', true), '')")
+		out, err := queryIdempotent(ctx, node, relayoutAdminDatabase, "SELECT coalesce(current_setting('yb_is_client_ysqlconnmgr', true), '')")
 		if err != nil {
 			return "", fmt.Errorf("read connection manager setting on %s: %w", node.Name(), err)
 		}
@@ -1099,7 +1099,7 @@ func relayoutNodeIdentities(ctx context.Context, node YugabyteNode) (map[string]
 	if err != nil {
 		return nil, fmt.Errorf("read identities of %s: %w", node.Name(), err)
 	}
-	server, err := node.Query(ctx, relayoutAdminDatabase, "SELECT host(inet_server_addr())")
+	server, err := queryIdempotent(ctx, node, relayoutAdminDatabase, "SELECT host(inet_server_addr())")
 	if err != nil {
 		return nil, fmt.Errorf("read YSQL server address of %s: %w", node.Name(), err)
 	}
@@ -1142,7 +1142,7 @@ func (r *YugabyteRelayout) requireReplaceableCopy(ctx context.Context, name, kin
 			return recordErr
 		}
 		if record != nil && record.PendingCopy == name {
-			relations, countErr := r.Primary.Query(ctx, name, `SELECT count(*) FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+			relations, countErr := queryIdempotent(ctx, r.Primary, name, `SELECT count(*) FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
  WHERE n.nspname NOT IN ('pg_catalog', 'information_schema') AND n.nspname NOT LIKE 'pg_toast%' AND n.nspname NOT LIKE 'pg_temp%'`)
 			if countErr != nil {
 				return fmt.Errorf("inspect interrupted copy %s: %w", name, countErr)
@@ -1362,7 +1362,7 @@ func (r *YugabyteRelayout) UnmanagedTables(ctx context.Context, layout *Database
 }
 
 func (r *YugabyteRelayout) tableOwners(ctx context.Context, database string) (map[string]string, error) {
-	out, err := r.Primary.Query(ctx, database, "SELECT schemaname || '.' || tablename, tableowner FROM pg_tables WHERE schemaname NOT IN ('pg_catalog', 'information_schema') ORDER BY 1")
+	out, err := queryIdempotent(ctx, r.Primary, database, "SELECT schemaname || '.' || tablename, tableowner FROM pg_tables WHERE schemaname NOT IN ('pg_catalog', 'information_schema') ORDER BY 1")
 	if err != nil {
 		return nil, fmt.Errorf("list %s tables: %w", database, err)
 	}
@@ -1666,7 +1666,8 @@ func (r *YugabyteRelayout) emptyCopy(ctx context.Context, target string) error {
 	if err := r.requireLease(ctx); err != nil {
 		return err
 	}
-	if _, err := r.Primary.Query(ctx, target, `SELECT 'TRUNCATE ' || string_agg(format('%I.%I', schemaname, tablename), ', ')
+	// Truncating every table is idempotent, so a transient YugabyteDB abort (read restart) is retried.
+	if _, err := queryIdempotent(ctx, r.Primary, target, `SELECT 'TRUNCATE ' || string_agg(format('%I.%I', schemaname, tablename), ', ')
   FROM pg_tables
  WHERE schemaname NOT IN ('pg_catalog', 'information_schema')
 HAVING count(*) > 0
@@ -1796,7 +1797,7 @@ func (r *YugabyteRelayout) sourceBlockers(ctx context.Context, layout *DatabaseL
 		}
 	}
 	// Shared system catalogs live in pg_global, so only user relations are counted.
-	tablespaces, err := r.Primary.Query(ctx, r.Database, `SELECT count(*) FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+	tablespaces, err := queryIdempotent(ctx, r.Primary, r.Database, `SELECT count(*) FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
  WHERE c.reltablespace <> 0 AND n.nspname NOT IN ('pg_catalog', 'information_schema') AND n.nspname NOT LIKE 'pg\_toast%'`)
 	if err != nil {
 		return nil, fmt.Errorf("list %s tablespace placement: %w", r.Database, err)
@@ -1964,7 +1965,7 @@ func (r *YugabyteRelayout) Preflight(ctx context.Context, layout *DatabaseLayout
 		return report, err
 	}
 	started = time.Now()
-	placement, err := r.Primary.Query(ctx, scratch, YugabyteRelationPlacementQuery)
+	placement, err := queryIdempotent(ctx, r.Primary, scratch, YugabyteRelationPlacementQuery)
 	if err != nil {
 		return report, fmt.Errorf("read %s placement: %w", scratch, err)
 	}
@@ -1972,7 +1973,7 @@ func (r *YugabyteRelayout) Preflight(ctx context.Context, layout *DatabaseLayout
 	if err != nil {
 		return report, err
 	}
-	colocated, err := r.Primary.Query(ctx, scratch, "SELECT yb_is_database_colocated()")
+	colocated, err := queryIdempotent(ctx, r.Primary, scratch, "SELECT yb_is_database_colocated()")
 	if err != nil {
 		return report, err
 	}
@@ -2050,11 +2051,11 @@ func (r *YugabyteRelayout) dropDatabaseIfExists(ctx context.Context, name string
 }
 
 func (r *YugabyteRelayout) introspect(ctx context.Context, database string) ([]string, error) {
-	out, err := r.Primary.Query(ctx, database, relayoutIntrospectionQuery)
+	out, err := queryIdempotent(ctx, r.Primary, database, relayoutIntrospectionQuery)
 	if err != nil {
 		return nil, fmt.Errorf("introspect %s: %w", database, err)
 	}
-	privileges, err := r.Primary.Query(ctx, database, relayoutPrivilegeQuery)
+	privileges, err := queryIdempotent(ctx, r.Primary, database, relayoutPrivilegeQuery)
 	if err != nil {
 		return nil, fmt.Errorf("read %s privileges: %w", database, err)
 	}
@@ -2256,7 +2257,7 @@ func (r *YugabyteRelayout) CollectEvidence(ctx context.Context, database string)
 	if err != nil {
 		return nil, err
 	}
-	out, err := r.Primary.Query(ctx, database, relayoutEvidenceSQL)
+	out, err := queryIdempotent(ctx, r.Primary, database, relayoutEvidenceSQL)
 	if err != nil {
 		return nil, fmt.Errorf("collect %s evidence: %w", database, err)
 	}
@@ -2378,7 +2379,7 @@ func (r *YugabyteRelayout) collectReceipt(ctx context.Context, layout *DatabaseL
 	if err != nil {
 		return nil, err
 	}
-	placement, err := r.Primary.Query(ctx, shadow, YugabyteRelationPlacementQuery)
+	placement, err := queryIdempotent(ctx, r.Primary, shadow, YugabyteRelationPlacementQuery)
 	if err != nil {
 		return nil, fmt.Errorf("read %s placement: %w", shadow, err)
 	}
