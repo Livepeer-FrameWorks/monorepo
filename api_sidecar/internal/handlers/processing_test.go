@@ -15,6 +15,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/mist"
 	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
 	"github.com/sirupsen/logrus"
@@ -737,6 +738,36 @@ func TestProcessingTracksFromProtoCarriesRecordingEndSpan(t *testing.T) {
 	}
 }
 
+// The track summary of a 30 s 480p Livepeer VOD job as Mist sends it: the
+// source passthrough left the recording at 10.9 s once renditions existed, the
+// same-height 480p rendition ran to the end. The source name Mist puts on each
+// derived track must survive parsing, or the full rendition is taken for the
+// source and the passthrough is judged a truncated rendition.
+func TestRecordingEndSourceNamesSurviveIntoRenditionCheck(t *testing.T) {
+	summary := `{"tracks":[` +
+		`{"idx":0,"id":1,"selected":true,"type":"video","codec":"H264","width":854,"height":480,"firstms":0,"lastms":10933},` +
+		`{"idx":1,"id":2,"selected":true,"type":"audio","codec":"AAC","firstms":0,"lastms":30016},` +
+		`{"idx":2,"id":3,"selected":true,"type":"video","codec":"H264","width":854,"height":480,"firstms":0,"lastms":29933,"source":"video_H264_854x480_15fps_0"},` +
+		`{"idx":3,"id":4,"selected":true,"type":"video","codec":"H264","width":640,"height":360,"firstms":0,"lastms":29933,"source":"video_H264_854x480_15fps_0"}]}`
+	payload := []byte("processing+job1\n/tmp/out.mkv\nMistOutEBML\n10261530\n19\n1700000000\n1700000019\n30033\n0\n30033\nCLEAN_EOF\nend of stream\n" + summary + "\n")
+	trig, err := mist.ParseTriggerToProtobuf(mist.TriggerRecordingEnd, payload, "node-1", logging.NewLogger())
+	if err != nil {
+		t.Fatalf("parse failed: %v", err)
+	}
+	tracks := processingTracksFromProto(trig.GetRecordingComplete().GetTracks())
+
+	processes := `[{"process":"Livepeer","target_profiles":[{"name":"480p","height":480,"bitrate":1600000},{"name":"360p","height":360,"bitrate":900000}]}]`
+	source := mist.SourceMediaInfo{Width: 854, Height: 480}
+	if heights, err := mist.RequestedRenditionHeights(processes, source); err != nil || len(heights) != 2 || heights[0] != 480 {
+		t.Fatalf("the ladder must request the same-height 480p rendition, got %v (%v)", heights, err)
+	}
+	log := logrus.New()
+	log.SetLevel(logrus.FatalLevel)
+	if !livepeerRenditionsCompleteFromTracks(logrus.NewEntry(log), processes, tracks, source, 29933) {
+		t.Fatal("a complete ladder was refused: the early-ending source passthrough was taken for the 480p rendition")
+	}
+}
+
 func TestAuthoritativeSourceSpanFromRecordingEndTracks(t *testing.T) {
 	tracks := []processingMetaVideoTrack{
 		{codec: "H264", width: 1280, height: 720, firstms: 0, lastms: 30000},
@@ -847,6 +878,24 @@ func TestRenditionsCompleteFromTracks(t *testing.T) {
 	shortSameHeightFirst := []processingMetaVideoTrack{track(1280, 720, 1700), track(1280, 720, srcSpan), track(640, 360, srcSpan)}
 	if renditionsCompleteFromTracks(entry, expected, shortSameHeightFirst, source, srcSpan) {
 		t.Fatal("expected a truncated same-height rendition listed before the source passthrough to fail")
+	}
+
+	// The recording deselects the source passthrough once renditions exist, so it
+	// can end far short of a complete same-height rendition. RECORDING_END names
+	// each derived track's source; the passthrough is the one without, whatever
+	// its span. Without that field the two are indistinguishable and the check
+	// fails closed on the short one.
+	derived := func(tr processingMetaVideoTrack) processingMetaVideoTrack {
+		tr.source = "video_H264_1280x720_30fps_0"
+		return tr
+	}
+	shortPassthrough := []processingMetaVideoTrack{track(1280, 720, 3000), derived(track(1280, 720, srcSpan)), derived(track(640, 360, srcSpan))}
+	if !renditionsCompleteFromTracks(entry, expected, shortPassthrough, source, srcSpan) {
+		t.Fatal("expected complete renditions to pass when the named source passthrough left the recording early")
+	}
+	unnamed := []processingMetaVideoTrack{track(1280, 720, 3000), track(1280, 720, srcSpan), track(640, 360, srcSpan)}
+	if renditionsCompleteFromTracks(entry, expected, unnamed, source, srcSpan) {
+		t.Fatal("expected a short same-height track without source names to fail closed")
 	}
 }
 
@@ -1578,9 +1627,9 @@ func TestWaitForProcessingOutput_FailsForEmptyFile(t *testing.T) {
 }
 
 // recordingEndPredatesPush must reject only events from a push that started
-// before the current attempt. The current push's recording starts at or after
-// the captured push-start on the same host clock, so the boundary is strict:
-// TimeStarted == pushStartedAt is the live event, not a stale one.
+// before the current attempt. Mist derives time_started from two truncated
+// clocks, so the live push can report one second before the captured push-start
+// (seen on the stack: 1790346823 against 1790346824, which stalled a clip at 0%).
 func TestRecordingEndPredatesPush(t *testing.T) {
 	const pushStartedAt int64 = 1000
 	cases := []struct {
@@ -1589,7 +1638,8 @@ func TestRecordingEndPredatesPush(t *testing.T) {
 		pushStarted int64
 		wantStale   bool
 	}{
-		{"one second earlier is stale", pushStartedAt - 1, pushStartedAt, true},
+		{"two seconds earlier is stale", pushStartedAt - 2, pushStartedAt, true},
+		{"one second earlier is live (Mist rounding)", pushStartedAt - 1, pushStartedAt, false},
 		{"same second is live", pushStartedAt, pushStartedAt, false},
 		{"later is live", pushStartedAt + 1, pushStartedAt, false},
 		{"zero timestamp is never stale", 0, pushStartedAt, false},
@@ -1618,7 +1668,7 @@ func TestProcessingRecordingEnd_StaleThenCurrentDelivery(t *testing.T) {
 	// Retired push (started before the current attempt) lands first.
 	SignalProcessingRecordingEnd(ProcessingRecordingEndEvent{
 		StreamName:   streamName,
-		TimeStarted:  pushStartedAt - 1,
+		TimeStarted:  pushStartedAt - 5,
 		BytesWritten: 1,
 	})
 	// The restarted push's authoritative completion event.

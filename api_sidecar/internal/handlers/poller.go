@@ -3300,16 +3300,23 @@ func (pm *PrometheusMonitor) convertNodeAPIToMistTrigger(nodeID string, jsonData
 	isHealthy := evaluateNodeHealth(hasMistData, cpuPercent, memPercent, shmPercent) && mistAPIReachable
 	nodeUpdate.IsHealthy = isHealthy
 	nodeUpdate.MistApiReachable = &mistAPIReachable
+	httpPlayback := hasMistData && httpPlaybackOutputOnline(jsonData)
 
 	logger.WithFields(logging.Fields{
 		"node_id":            nodeID,
 		"has_mist_data":      hasMistData,
 		"mist_api_reachable": mistAPIReachable,
+		"http_playback":      httpPlayback,
 		"cpu_percent":        cpuPercent,
 		"mem_percent":        memPercent,
 		"shm_percent":        shmPercent,
 		"is_healthy":         isHealthy,
 	}).Info("Node health determination")
+	if hasMistData && !httpPlayback {
+		// Ingest still works, so the node stays healthy; Foghorn refuses it
+		// for HTTP playback with detail protocol_unavailable.
+		logger.WithField("node_id", nodeID).Warn("MistServer reports no HLS output: the HTTP connector is offline, so this node cannot serve HTTP playback")
+	}
 
 	// Populate full Streams map from MistServer data
 	// This is CRITICAL for load balancing - balancer checks stream.Inputs > 0
@@ -3421,6 +3428,17 @@ func mistCPUTenths(rawCPU float64) uint32 {
 		return 1000
 	}
 	return uint32(math.Round(rawCPU))
+}
+
+// httpPlaybackOutputOnline reports whether MistServer lists an HLS output.
+// Mist lists only connectors whose process is running, and HLS goes through
+// the HTTP connector, so a missing HLS entry means HTTP is offline.
+func httpPlaybackOutputOnline(jsonData map[string]any) bool {
+	outputs, ok := jsonData["outputs"].(map[string]any)
+	if !ok {
+		return false
+	}
+	return mist.ResolvePlaybackURL(outputs, "http://localhost", "hls", "probe") != ""
 }
 
 func evaluateNodeHealth(hasMistData bool, cpuPercent, memPercent, shmPercent float64) bool {

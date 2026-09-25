@@ -78,6 +78,12 @@ func IsDurableTriggerType(triggerType string) bool {
 // own allowlist contract, so a future CLEAN_* reason is clean by construction.
 const CleanExitReasonPrefix = "CLEAN_"
 
+// ExitReasonProcessTracksChanged is the exit reason a processing recording
+// ends with when a process output track appears after its header was written
+// (a producer replaced mid-job). The recording is unfinishable; a new attempt
+// is not.
+const ExitReasonProcessTracksChanged = "PROCESS_TRACKS_CHANGED"
+
 // IsCleanExitReason reports whether a Mist machine exit reason indicates the
 // output finished cleanly. It is the authority for output success; byte and
 // duration counts are only sanity checks.
@@ -686,6 +692,15 @@ func ExtractInternalName(streamName string) string {
 	return streamName
 }
 
+// ProcessSourceStream returns the source stream of a Mist process stream label.
+// Processes name themselves "<source>→<sink>" (for example
+// "live+abc→live+abc"), and their triggers carry that label as the stream
+// name; any other name is returned unchanged.
+func ProcessSourceStream(streamName string) string {
+	source, _, _ := strings.Cut(streamName, "→")
+	return source
+}
+
 // wildcardPrefixes contains the internal namespaces accepted by Mist and the
 // artifact resolvers.
 var wildcardPrefixes = []string{"live+", "pull+", "vod+", "dvr+", "processing+"}
@@ -758,8 +773,17 @@ func parseTracksFromJSON(tracksData map[string]any) []*ipcpb.StreamTrack {
 		if lastMs, ok := int64FromAny(trackMap["lastms"]); ok {
 			track.LastMs = &lastMs
 		}
+		if v, ok := int64FromAny(trackMap["written_firstms"]); ok {
+			track.WrittenFirstMs = &v
+		}
+		if v, ok := int64FromAny(trackMap["written_lastms"]); ok {
+			track.WrittenLastMs = &v
+		}
 		if selected, ok := trackMap["selected"].(bool); ok {
 			track.Selected = &selected
+		}
+		if source, ok := trackMap["source"].(string); ok && source != "" {
+			track.SourceTrack = &source
 		}
 
 		// Extract bitrate

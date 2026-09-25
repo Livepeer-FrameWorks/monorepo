@@ -149,8 +149,12 @@ type DVRManager struct {
 	// identity. They arrive through Mist triggers, independent of the job map:
 	// a push can end milliseconds after PushStart, while the job is still being
 	// registered, so they are kept by identity and matched when the monitor
-	// reconciles an unconfirmed push. Guarded by mutex; pruned by age.
-	writerEnds []dvrWriterEnd
+	// reconciles an unconfirmed push. Pruned by age. Guarded by writerEndsMu,
+	// not mutex: StartRecording holds mutex while ensureInitialPush confirms
+	// the push, and an end reported during that window must be recorded and
+	// read without waiting for it.
+	writerEndsMu sync.Mutex
+	writerEnds   []dvrWriterEnd
 
 	// stopTombstones records, per dvr_hash, the highest DVRStop command generation
 	// seen. A DVRStart whose generation is <= a hash's stop tombstone is superseded by
@@ -2533,16 +2537,22 @@ func findDVRPushByHash(pushes []mist.PushInfo, dvrHash string) (mist.PushInfo, b
 }
 
 // ensureInitialPush drives the initial DVR push as an idempotent state machine.
-// It issues at most ONE PushStart for the whole call: each iteration first tries
-// to CONFIRM an exact-identity push (adopting a prior iteration's accepted push
-// or any pre-existing identical one); only if none is found and no start has yet
+// It issues at most ONE PushStart per writer: each iteration first tries to
+// CONFIRM an exact-identity push (adopting a prior iteration's accepted push or
+// any pre-existing identical one); only if none is found and no start has yet
 // been accepted does it PushStart. This never creates a second writer. It returns
 // dvrPushConfirmed with the live PushID, dvrPushAcceptedUnconfirmed when a start
 // was accepted but never confirmed within the window (caller keeps the job +
 // metadata; the monitor reconciles by identity), or dvrPushNotStarted when
 // PushStart never succeeded (caller may roll back).
+//
+// The one case that re-issues PushStart after an accepted start is Mist's own
+// report (RECORDING_END/PUSH_END) that the accepted push's writer ended while
+// the push list does not show it: no writer exists, so a new start cannot be a
+// second one.
 func (dm *DVRManager) ensureInitialPush(snap pushIdentity, logger logging.Logger) (int, dvrPushOutcome, error) {
 	pushStartAccepted := false
+	var acceptedAt time.Time
 	var lastErr error
 	deadline := time.Now().Add(initialPushRetryFor)
 	for attempt := 0; ; attempt++ {
@@ -2550,17 +2560,26 @@ func (dm *DVRManager) ensureInitialPush(snap pushIdentity, logger logging.Logger
 			if push, ok := findExactDVRPush(pushes, snap.streamName, snap.targetURI, snap.dvrHash); ok {
 				return push.ID, dvrPushConfirmed, nil
 			}
+			if pushStartAccepted && dm.writerEndedSince(snap, acceptedAt) {
+				logger.WithFields(logging.Fields{"attempt": attempt + 1, "stream": snap.streamName}).
+					Warn("DVR push ended before it was confirmed; re-issuing PushStart")
+				pushStartAccepted = false
+			}
 		} else {
 			lastErr = listErr
 		}
-		// Issue PushStart at most once across the whole call — it is non-idempotent.
+		// Issue PushStart at most once per writer — it is non-idempotent.
 		// A CLEAN rejection (Mist answered non-200) leaves us free to retry; an
 		// AMBIGUOUS error (transport/decode after send) may have been accepted, so
 		// we must treat it as issued and confirm via PushList, never re-issue.
 		if !pushStartAccepted {
+			// Taken before PushStart so an end Mist reports while the push is
+			// still being confirmed counts as ending this attempt.
+			issuedAt := time.Now()
 			startErr := dm.mistClient.PushStart(snap.streamName, snap.targetURI)
 			if startErr == nil || errors.Is(startErr, mist.ErrMistAmbiguous) {
 				pushStartAccepted = true
+				acceptedAt = issuedAt
 			}
 			if startErr != nil {
 				lastErr = startErr
@@ -2607,8 +2626,8 @@ func (dm *DVRManager) noteWriterEnded(streamName string, at time.Time, targets .
 	if streamName == "" {
 		return
 	}
-	dm.mutex.Lock()
-	defer dm.mutex.Unlock()
+	dm.writerEndsMu.Lock()
+	defer dm.writerEndsMu.Unlock()
 	kept := dm.writerEnds[:0]
 	for _, end := range dm.writerEnds {
 		if at.Sub(end.at) < dvrWriterEndTTL {
@@ -2627,8 +2646,8 @@ func (dm *DVRManager) noteWriterEnded(streamName string, at time.Time, targets .
 // writer at or after since (the moment its PushStart was issued), so an end of
 // an earlier push against the same target never counts.
 func (dm *DVRManager) writerEndedSince(snap pushIdentity, since time.Time) bool {
-	dm.mutex.RLock()
-	defer dm.mutex.RUnlock()
+	dm.writerEndsMu.Lock()
+	defer dm.writerEndsMu.Unlock()
 	for _, end := range dm.writerEnds {
 		if end.at.Before(since) {
 			continue

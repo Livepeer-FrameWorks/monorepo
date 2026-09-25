@@ -2864,6 +2864,11 @@ message StreamTrack {
   optional int64 last_ms = 23;
   optional int64 track_id = 24;
   optional bool selected = 25;
+  optional string source_track = 26; // identifier of the track a process output was derived from; unset on original tracks
+  // First and last timestamp a recording wrote on this track (RECORDING_END only).
+  // first_ms/last_ms are the buffer's window at exit, which eviction moves on.
+  optional int64 written_first_ms = 27;
+  optional int64 written_last_ms = 28;
 }
 
 message StoredArtifact {

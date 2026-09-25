@@ -2408,7 +2408,7 @@ func HandleLivepeerSegmentComplete(c *gin.Context) {
 		return
 	}
 
-	streamName := params[0]
+	streamName := mist.ProcessSourceStream(params[0])
 	livepeerSessionId := params[1]
 	segmentNum := params[2]
 	segmentStartMs := params[3]

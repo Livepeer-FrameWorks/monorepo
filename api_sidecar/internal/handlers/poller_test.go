@@ -24,6 +24,23 @@ func newPollerContext(method, path, body string) (*gin.Context, *httptest.Respon
 	return ctx, rec
 }
 
+func TestHTTPPlaybackOutputOnline(t *testing.T) {
+	online := map[string]any{"outputs": map[string]any{
+		"HLS":  "http://HOST:8080/hls/$/index.m3u8",
+		"RTMP": "rtmp://HOST/$",
+	}}
+	if !httpPlaybackOutputOnline(online) {
+		t.Fatal("an HLS output must count as HTTP playback online")
+	}
+	httpOffline := map[string]any{"outputs": map[string]any{"RTMP": "rtmp://HOST/$"}}
+	if httpPlaybackOutputOnline(httpOffline) {
+		t.Fatal("outputs without HLS mean the HTTP connector is offline")
+	}
+	if httpPlaybackOutputOnline(map[string]any{}) {
+		t.Fatal("missing outputs cannot count as HTTP playback online")
+	}
+}
+
 func TestEvaluateNodeHealth(t *testing.T) {
 	tests := []struct {
 		name        string

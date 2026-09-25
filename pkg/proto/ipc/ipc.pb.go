@@ -17654,8 +17654,13 @@ type StreamTrack struct {
 	LastMs        *int64   `protobuf:"varint,23,opt,name=last_ms,json=lastMs,proto3,oneof" json:"last_ms,omitempty"`
 	TrackId       *int64   `protobuf:"varint,24,opt,name=track_id,json=trackId,proto3,oneof" json:"track_id,omitempty"`
 	Selected      *bool    `protobuf:"varint,25,opt,name=selected,proto3,oneof" json:"selected,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	SourceTrack   *string  `protobuf:"bytes,26,opt,name=source_track,json=sourceTrack,proto3,oneof" json:"source_track,omitempty"` // identifier of the track a process output was derived from; unset on original tracks
+	// First and last timestamp a recording wrote on this track (RECORDING_END only).
+	// first_ms/last_ms are the buffer's window at exit, which eviction moves on.
+	WrittenFirstMs *int64 `protobuf:"varint,27,opt,name=written_first_ms,json=writtenFirstMs,proto3,oneof" json:"written_first_ms,omitempty"`
+	WrittenLastMs  *int64 `protobuf:"varint,28,opt,name=written_last_ms,json=writtenLastMs,proto3,oneof" json:"written_last_ms,omitempty"`
+	unknownFields  protoimpl.UnknownFields
+	sizeCache      protoimpl.SizeCache
 }
 
 func (x *StreamTrack) Reset() {
@@ -17861,6 +17866,27 @@ func (x *StreamTrack) GetSelected() bool {
 		return *x.Selected
 	}
 	return false
+}
+
+func (x *StreamTrack) GetSourceTrack() string {
+	if x != nil && x.SourceTrack != nil {
+		return *x.SourceTrack
+	}
+	return ""
+}
+
+func (x *StreamTrack) GetWrittenFirstMs() int64 {
+	if x != nil && x.WrittenFirstMs != nil {
+		return *x.WrittenFirstMs
+	}
+	return 0
+}
+
+func (x *StreamTrack) GetWrittenLastMs() int64 {
+	if x != nil && x.WrittenLastMs != nil {
+		return *x.WrittenLastMs
+	}
+	return 0
 }
 
 type StoredArtifact struct {
@@ -23564,7 +23590,8 @@ const file_ipc_proto_rawDesc = "" +
 	"replicated\x18\x06 \x01(\bR\n" +
 	"replicated\x12#\n" +
 	"\rpacket_counts\x18\a \x03(\x03R\fpacketCounts\x12+\n" +
-	"\x11total_connections\x18\b \x03(\x03R\x10totalConnections\"\x9a\t\n" +
+	"\x11total_connections\x18\b \x03(\x03R\x10totalConnections\"\xd8\n" +
+	"\n" +
 	"\vStreamTrack\x12\x1d\n" +
 	"\n" +
 	"track_name\x18\x01 \x01(\tR\ttrackName\x12\x1d\n" +
@@ -23604,7 +23631,10 @@ const file_ipc_proto_rawDesc = "" +
 	"\bfirst_ms\x18\x16 \x01(\x03H\x12R\afirstMs\x88\x01\x01\x12\x1c\n" +
 	"\alast_ms\x18\x17 \x01(\x03H\x13R\x06lastMs\x88\x01\x01\x12\x1e\n" +
 	"\btrack_id\x18\x18 \x01(\x03H\x14R\atrackId\x88\x01\x01\x12\x1f\n" +
-	"\bselected\x18\x19 \x01(\bH\x15R\bselected\x88\x01\x01B\x0f\n" +
+	"\bselected\x18\x19 \x01(\bH\x15R\bselected\x88\x01\x01\x12&\n" +
+	"\fsource_track\x18\x1a \x01(\tH\x16R\vsourceTrack\x88\x01\x01\x12-\n" +
+	"\x10written_first_ms\x18\x1b \x01(\x03H\x17R\x0ewrittenFirstMs\x88\x01\x01\x12+\n" +
+	"\x0fwritten_last_ms\x18\x1c \x01(\x03H\x18R\rwrittenLastMs\x88\x01\x01B\x0f\n" +
 	"\r_bitrate_kbpsB\x0e\n" +
 	"\f_bitrate_bpsB\t\n" +
 	"\a_bufferB\t\n" +
@@ -23627,7 +23657,10 @@ const file_ipc_proto_rawDesc = "" +
 	"\n" +
 	"\b_last_msB\v\n" +
 	"\t_track_idB\v\n" +
-	"\t_selected\"\xa7\x04\n" +
+	"\t_selectedB\x0f\n" +
+	"\r_source_trackB\x13\n" +
+	"\x11_written_first_msB\x12\n" +
+	"\x10_written_last_ms\"\xa7\x04\n" +
 	"\x0eStoredArtifact\x12\x1b\n" +
 	"\tclip_hash\x18\x01 \x01(\tR\bclipHash\x12\x1f\n" +
 	"\vstream_name\x18\x02 \x01(\tR\n" +

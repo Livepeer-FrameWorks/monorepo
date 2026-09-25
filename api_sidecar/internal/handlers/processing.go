@@ -377,18 +377,20 @@ func registerProcessingRecordingEndListener(streamName string) chan ProcessingRe
 // a push that started before the current attempt. After a Livepeer→local fallback
 // the retired push has usually run for seconds (rendition shortfall is detected at
 // its PUSH_END; stalls hit a minute timeout), so its Mist recording-start is
-// clearly older than pushStartedAt and this rejects it. Helmsman is a sidecar on
-// the Mist node, so both values use one host clock and the current push's recording
-// can only start at or after pushStartedAt, so strict `<` never rejects the live
-// event. This is a best-effort discriminator, not a generation identity: both are
-// Unix seconds, so a retired push starting in the same second (or reporting
+// clearly older than pushStartedAt and this rejects it. Mist does not report the
+// recording start directly: it derives time_started as the truncated epoch at exit
+// minus the connection age in truncated boot seconds, so the live push can report
+// one second before the pushStartedAt captured ahead of push_start. That second is
+// accepted as live; rejecting it would discard the only completion event and stall
+// the job at 0%. This is a best-effort discriminator, not a generation identity: a
+// retired push starting within a second of the current one (or reporting
 // time_started=0) is not caught here. Correctness does not depend on it: the
 // published bytes come from the on-disk file (waitForProcessingOutput), and after a
 // fallback the completeness gate validates the produced rendition tracks of the
 // finished stream (livepeerRenditionsComplete), not the accepted event's reported
 // duration — so a stale event cannot bless a truncated retry.
 func recordingEndPredatesPush(timeStarted, pushStartedAt int64) bool {
-	return timeStarted > 0 && pushStartedAt > 0 && timeStarted < pushStartedAt
+	return timeStarted > 0 && pushStartedAt > 0 && timeStarted < pushStartedAt-1
 }
 
 func unregisterProcessingRecordingEndListener(streamName string) {
@@ -1448,7 +1450,31 @@ loop:
 				"human_reason":      recordingEnd.HumanExitReason,
 			}).Error("Processing recording validation failed")
 			h.cleanupFailedProcessing(log, mistClient, streamName, outputPath)
-			h.sendResult(send, req.GetJobId(), "failed", fmt.Sprintf("recording validation failed: %v", err), nil, "", 0)
+			status := "failed"
+			if recordingEndRetryable(*recordingEnd) {
+				status = processingResultRetryable
+				if !waitProcessingStreamStopped(mistClient, streamName, processingStreamStopTimeout) {
+					log.Warn("Processing stream still active after cleanup; the retry may attach to it")
+				}
+			}
+			h.sendResult(send, req.GetJobId(), status, fmt.Sprintf("recording validation failed: %v", err), nil, "", 0)
+			return
+		}
+		// Every recorded rendition must cover the source it was made from,
+		// whichever path (Livepeer, fallback, local AV) produced it, and the
+		// recording must cover the source as the readiness probe measured it.
+		err := renditionCoverageError(recordingEnd.FullTracks)
+		if err == nil {
+			err = recordingDurationError(recordingEnd.MediaDurationMs, sourceDurationMs)
+		}
+		if err != nil {
+			h.logProcessingTrackDivergence(log, mistClient, streamName, recordingEnd.Tracks)
+			log.WithError(err).Error("Processed renditions do not cover the source; refusing to publish")
+			h.cleanupFailedProcessing(log, mistClient, streamName, outputPath)
+			if !waitProcessingStreamStopped(mistClient, streamName, processingStreamStopTimeout) {
+				log.Warn("Processing stream still active after cleanup; the retry may attach to it")
+			}
+			h.sendResult(send, req.GetJobId(), processingResultRetryable, fmt.Sprintf("rendition coverage: %v", err), nil, "", 0)
 			return
 		}
 	}
@@ -2382,6 +2408,7 @@ func processingTracksFromProto(tracks []*ipcpb.StreamTrack) []processingMetaVide
 			height:        int(track.GetHeight()),
 			firstms:       float64(track.GetFirstMs()),
 			lastms:        float64(track.GetLastMs()),
+			source:        track.GetSourceTrack(),
 			trackID:       track.GetTrackId(),
 			hasTrackID:    track.TrackId != nil,
 			trackIndex:    int(track.GetTrackIndex()),

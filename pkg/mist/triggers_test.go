@@ -37,6 +37,22 @@ func joinPayload(lines ...string) []byte {
 	return []byte(strings.Join(lines, "\n"))
 }
 
+func TestProcessSourceStream(t *testing.T) {
+	for input, want := range map[string]string{
+		"live+abc→live+abc":         "live+abc",
+		"processing+h→processing+h": "processing+h",
+		"live+abc":                  "live+abc",
+		"":                          "",
+	} {
+		if got := ProcessSourceStream(input); got != want {
+			t.Fatalf("ProcessSourceStream(%q) = %q, want %q", input, got, want)
+		}
+	}
+	if got := ExtractInternalName(ProcessSourceStream("live+abc→live+abc")); got != "abc" {
+		t.Fatalf("a Livepeer process label must resolve to its stream's internal name, got %q", got)
+	}
+}
+
 func TestExtractInternalName(t *testing.T) {
 	cases := []struct {
 		name     string
@@ -889,5 +905,23 @@ func TestParseTracksFromJSONTypeFromName(t *testing.T) {
 	}
 	if got["meta_x"] != "meta" {
 		t.Fatalf("meta_x type=%q, want meta", got["meta_x"])
+	}
+}
+
+// RECORDING_END carries the span a recording wrote per track next to the
+// buffer window; the written span is what completion checks judge coverage by.
+func TestParseTracksFromJSONWrittenSpan(t *testing.T) {
+	tracks := parseTracksFromJSON(map[string]any{
+		"video_H264_642x360": map[string]any{
+			"codec": "H264", "type": "video", "firstms": float64(99666), "lastms": float64(150000),
+			"written_firstms": float64(0), "written_lastms": float64(149960), "source": "video_H264_854x480",
+		},
+	})
+	if len(tracks) != 1 {
+		t.Fatalf("parsed %d tracks, want 1", len(tracks))
+	}
+	tr := tracks[0]
+	if tr.GetFirstMs() != 99666 || tr.GetWrittenFirstMs() != 0 || tr.GetWrittenLastMs() != 149960 || tr.WrittenFirstMs == nil {
+		t.Fatalf("written span not parsed apart from the buffer window: %+v", tr)
 	}
 }
