@@ -37,6 +37,11 @@ func TestControlFeaturesForProtocol_Thresholds(t *testing.T) {
 				c.v, got, c.freeze, c.thumbnail, c.authInventory, c.restreamRevision, c.restreamAttempt)
 		}
 	}
+	// Only a sidecar that lists its running jobs can prove an assigned job is
+	// gone; an older one reports an empty list for every registration.
+	if ControlFeaturesForProtocol(6).ProcessingJobInventory || !ControlFeaturesForProtocol(7).ProcessingJobInventory {
+		t.Fatal("processing-job inventory must start exactly at protocol 7")
+	}
 }
 
 // Registration rejects anything below MinControlProtocolVersion, so every ADMITTED session is inventory-authoritative

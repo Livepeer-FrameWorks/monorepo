@@ -155,3 +155,26 @@ WHERE artifact_hash = $1
   AND tenant_id::text = $2
   AND artifact_type = 'clip'
   AND status NOT IN ('ready', 'failed', 'deleted', 'expired', 'aborted');
+
+-- Requeues the jobs assigned to a node before its registration that the node
+-- did not report as running: a restarted sidecar lost them.
+-- name: RequeueUnreportedNodeProcessingJobs :execrows
+WITH requeued AS (
+    UPDATE foghorn.processing_jobs AS job
+    SET status = 'queued', processing_node_id = NULL,
+        retry_count = retry_count + 1, updated_at = NOW(),
+        progress_last_ms = 0, progress_advanced_at = NULL
+    WHERE job.processing_node_id = sqlc.arg(node_id)
+      AND job.status IN ('dispatched', 'processing')
+      AND job.updated_at < sqlc.arg(assigned_before)
+      AND job.retry_count < sqlc.arg(max_retries)
+      AND NOT (job.job_id::text = ANY(sqlc.arg(reported_job_ids)::text[]))
+    RETURNING artifact_hash, tenant_id
+)
+UPDATE foghorn.artifacts AS a
+SET status = 'queued', updated_at = NOW()
+FROM requeued AS r
+WHERE a.artifact_hash = r.artifact_hash
+  AND a.tenant_id = r.tenant_id
+  AND a.artifact_type IN ('clip', 'vod')
+  AND a.status NOT IN ('ready', 'failed', 'deleted', 'expired', 'aborted');

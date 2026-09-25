@@ -776,6 +776,10 @@ message Register {
   // Explicit operator recovery intent. Honored only together with a valid
   // enrollment token and an exact stable-fingerprint/tenant/cluster match.
   bool node_identity_rotation_requested = 24;
+  // Processing job ids this sidecar is running at registration, from control
+  // protocol version 7. Foghorn re-dispatches jobs it assigned to this node
+  // before the registration that are absent here: a restarted sidecar lost them.
+  repeated string active_processing_job_ids = 25;
 }
 
 // AppliedManagedStream is a sidecar→Foghorn snapshot at (re)connect of one

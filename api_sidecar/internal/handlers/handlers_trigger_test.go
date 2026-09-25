@@ -485,14 +485,22 @@ func TestHandleStreamProcessUsesLocalOverride(t *testing.T) {
 		return &control.MistTriggerResult{Response: "should-not-be-used"}, nil
 	})
 
-	ctx, recorder := newWebhookContext(streamName)
-	HandleStreamProcess(ctx)
+	// A node with an NVIDIA runtime gets the override verbatim; a CPU-only node
+	// gets its AV processes pinned to the software encoder.
+	for profile, want := range map[string]string{
+		"cuda": override,
+		"cpu":  `[{"accel":"sw","codec":"H264","process":"AV","track_select":"video=maxbps"}]`,
+	} {
+		appconfigtest.Setenv(t, "MIST_ONNX_PROFILE", profile)
+		ctx, recorder := newWebhookContext(streamName)
+		HandleStreamProcess(ctx)
 
-	if recorder.Code != http.StatusOK {
-		t.Fatalf("expected status 200, got %d", recorder.Code)
-	}
-	if recorder.Body.String() != override {
-		t.Fatalf("expected override response %q, got %q", override, recorder.Body.String())
+		if recorder.Code != http.StatusOK {
+			t.Fatalf("%s: expected status 200, got %d", profile, recorder.Code)
+		}
+		if recorder.Body.String() != want {
+			t.Fatalf("%s: expected override response %q, got %q", profile, want, recorder.Body.String())
+		}
 	}
 	if forwarded {
 		t.Fatal("expected local override to bypass Foghorn forwarding")

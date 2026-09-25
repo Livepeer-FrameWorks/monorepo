@@ -3,6 +3,7 @@ package handlers
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -10,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"frameworks/api_sidecar/internal/appconfig/appconfigtest"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	"github.com/gin-gonic/gin"
 	"github.com/sirupsen/logrus"
@@ -72,9 +74,8 @@ func TestParseProcessReplaceTrigger(t *testing.T) {
 }
 
 // A hard-failed Livepeer transcode is answered with the equivalent local AV
-// ladder: one AV process per profile, no Livepeer entry, and no per-profile
-// track_inhibit (split into separate processes, the inhibits would match the
-// sibling renditions and stop the ladder). Foghorn is told about it.
+// ladder: one AV process per profile, no Livepeer entry, and each rendition
+// keeping its upscale inhibit. Foghorn is told about it.
 func TestProcessReplaceAnswersFailedLivepeerWithLocalLadder(t *testing.T) {
 	reports, wg := stubDegradedReports(t)
 	wg.Add(1)
@@ -95,8 +96,9 @@ func TestProcessReplaceAnswersFailedLivepeerWithLocalLadder(t *testing.T) {
 		if r["process"] != "AV" || r["codec"] != "H264" {
 			t.Fatalf("replacement %v is not a local H264 AV process", r)
 		}
-		if _, ok := r["track_inhibit"]; ok {
-			t.Fatalf("replacement %v carries a per-profile track_inhibit", r)
+		wantInhibit := map[string]string{"1280x720": "video=<1280x720", "x720": "video=<1280x720", "x360": "video=<640x360"}[fmt.Sprint(r["resolution"])]
+		if r["track_inhibit"] != wantInhibit {
+			t.Fatalf("replacement %v track_inhibit = %v, want %q: the local ladder would upscale", r, r["track_inhibit"], wantInhibit)
 		}
 		if _, ok := r["job_token"]; ok {
 			t.Fatalf("replacement %v carries the Livepeer job token", r)
@@ -211,6 +213,25 @@ func TestInPlaceReplacementFailsOnEmptyAnswerOrCriticalExit(t *testing.T) {
 	err := awaitInPlaceLivepeerReplacement(context.Background(), logrus.NewEntry(logrus.New()), exitCh, nil, nil, map[string]int{}, time.Second, time.Second)
 	if err == nil || !strings.Contains(err.Error(), "encoder died") {
 		t.Fatalf("err = %v, want the replacement's failure", err)
+	}
+}
+
+// A node whose MistServer runtime has no NVIDIA encoder answers with
+// software-only renditions, so MistProcAV does not probe NVENC first; a CUDA
+// node leaves the choice to MistProcAV.
+func TestProcessReplaceEncoderAccelerationFollowsNodeRuntime(t *testing.T) {
+	for profile, wantAccel := range map[string]any{"cpu": "sw", "openvino": "sw", "cuda": nil} {
+		appconfigtest.Setenv(t, "MIST_ONNX_PROFILE", profile)
+		replacement, _ := processReplacementFor(ProcessReplaceEvent{StreamName: "live+abc", ProcessType: "Livepeer", Config: failedLivepeerConfig})
+		var procs []map[string]any
+		if err := json.Unmarshal([]byte(replacement), &procs); err != nil || len(procs) == 0 {
+			t.Fatalf("%s: replacement %q: %v", profile, replacement, err)
+		}
+		for _, p := range procs {
+			if p["accel"] != wantAccel {
+				t.Errorf("%s: rendition %v accel = %v, want %v", profile, p["resolution"], p["accel"], wantAccel)
+			}
+		}
 	}
 }
 

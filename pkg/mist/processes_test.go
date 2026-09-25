@@ -8,6 +8,30 @@ import (
 	"testing"
 )
 
+func TestSoftwareEncodingOnlyMarksAVProcessesWithoutAnExplicitChoice(t *testing.T) {
+	input := `[{"process":"AV","codec":"H264"},{"process":"AV","codec":"H264","accel":"hw"},{"process":"Thumbs"},{"process":"Livepeer"}]`
+	var got []map[string]any
+	if err := json.Unmarshal([]byte(SoftwareEncodingOnly(input)), &got); err != nil {
+		t.Fatal(err)
+	}
+	for i, want := range []any{"sw", "hw", nil, nil} {
+		if got[i]["accel"] != want {
+			t.Errorf("process %d accel = %v, want %v", i, got[i]["accel"], want)
+		}
+	}
+	if out := SoftwareEncodingOnly("not json"); out != "not json" {
+		t.Errorf("malformed input changed: %q", out)
+	}
+}
+
+func TestSoftwareEncoderProfile(t *testing.T) {
+	for profile, want := range map[string]bool{"cpu": true, "CoreML": true, "openvino": true, "cuda": false, "tensorrt": false, "auto": false, "": false} {
+		if got := SoftwareEncoderProfile(profile); got != want {
+			t.Errorf("SoftwareEncoderProfile(%q) = %v, want %v", profile, got, want)
+		}
+	}
+}
+
 func TestDisableProcessRestartsMarksEveryEntry(t *testing.T) {
 	input := `[{"process":"Livepeer","target_profiles":[{"name":"360p","height":360}]},{"process":"AV","codec":"opus"},{"process":"Thumbs","restart_type":"backoff"}]`
 	var got []map[string]any
@@ -328,10 +352,52 @@ func TestReplaceLivepeerWithLocalInheritsProcessSourceMask(t *testing.T) {
 			t.Errorf("%s = %#v, want %#v", key, got, want)
 		}
 	}
-	// Profile/parent track_inhibit must not survive the split into per-profile
-	// AV processes: one rendition would inhibit the next rung's process.
-	if inhibit, ok := proc["track_inhibit"]; ok {
-		t.Errorf("track_inhibit = %#v, want absent", inhibit)
+	// The profile has no inhibit of its own, so its 360p size bounds the source.
+	if inhibit := proc["track_inhibit"]; inhibit != "video=<640x360" {
+		t.Errorf("track_inhibit = %#v, want video=<640x360", inhibit)
+	}
+}
+
+// A local fallback ladder must never upscale: every AV rendition keeps the
+// profile inhibit the catalog authored, and a profile without one gets an
+// inhibit derived from its own size.
+func TestReplaceLivepeerWithLocalNeverUpscales(t *testing.T) {
+	input := `[{"process":"Livepeer","track_inhibit":"video=<640x360","target_profiles":[` +
+		`{"name":"720p","profile":"H264ConstrainedHigh","height":720,"bitrate":3200000,"track_inhibit":"video=<1280x720"},` +
+		`{"name":"1080p","profile":"H264ConstrainedHigh","height":1080,"bitrate":6500000,"track_inhibit":"video=<1920x1080"},` +
+		`{"name":"custom","profile":"H264Main","width":1024,"height":576,"bitrate":1500000},` +
+		`{"name":"tall","profile":"H264Main","height":1440,"bitrate":9000000}]}]`
+	var got []map[string]any
+	if err := json.Unmarshal([]byte(ReplaceLivepeerWithLocal(input)), &got); err != nil {
+		t.Fatal(err)
+	}
+	// The process-level video=<640x360 must not stand in for a larger
+	// rendition's bound: "tall" would otherwise upscale any source above 360p.
+	want := []string{"video=<1280x720", "video=<1920x1080", "video=<1024x576", "video=<2560x1440"}
+	if len(got) != len(want) {
+		t.Fatalf("got %d processes, want %d", len(got), len(want))
+	}
+	for i, proc := range got {
+		if proc["track_inhibit"] != want[i] {
+			t.Errorf("rendition %d (%v) track_inhibit = %v, want %s", i, proc["x-LSP-name"], proc["track_inhibit"], want[i])
+		}
+	}
+
+	// Without any authored inhibit the rendition size bounds the source.
+	derived := `[{"process":"Livepeer","target_profiles":[` +
+		`{"name":"1080p","profile":"H264Main","height":1080,"bitrate":6500000},` +
+		`{"name":"sized","profile":"H264Main","width":1024,"height":576,"bitrate":1500000}]}]`
+	got = nil
+	if err := json.Unmarshal([]byte(ReplaceLivepeerWithLocal(derived)), &got); err != nil {
+		t.Fatal(err)
+	}
+	for i, want := range []string{"video=<1920x1080", "video=<1024x576"} {
+		if got[i]["track_inhibit"] != want {
+			t.Errorf("derived rendition %d track_inhibit = %v, want %s", i, got[i]["track_inhibit"], want)
+		}
+		if !shouldInhibitLivepeerSelector(want, SourceMediaInfo{Width: 640, Height: 360}) {
+			t.Errorf("%s does not inhibit a 360p source", want)
+		}
 	}
 }
 

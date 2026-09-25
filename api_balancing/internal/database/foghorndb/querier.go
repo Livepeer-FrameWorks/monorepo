@@ -174,6 +174,9 @@ type Querier interface {
 	EstablishCellStorageIdentity(ctx context.Context, arg EstablishCellStorageIdentityParams) error
 	ExistingArtifactHashes(ctx context.Context, dollar_1 []string) ([]string, error)
 	ExpireArtifactIfStillEligible(ctx context.Context, arg ExpireArtifactIfStillEligibleParams) (string, error)
+	// Makes a finalizing attempt immediately re-claimable. The attempt counter
+	// guard keeps a concurrent re-claim from being undone.
+	ExpireDVRChapterFinalizeAttempt(ctx context.Context, arg ExpireDVRChapterFinalizeAttemptParams) (int64, error)
 	ExpireStrandedCreationCommands(ctx context.Context, arg ExpireStrandedCreationCommandsParams) (int64, error)
 	FailAdmissionEffect(ctx context.Context, arg FailAdmissionEffectParams) error
 	FailDVRChapter(ctx context.Context, arg FailDVRChapterParams) (sql.NullString, error)
@@ -418,6 +421,7 @@ type Querier interface {
 	ListNeverProjectedIngestSessions(ctx context.Context, olderThanMs int64) ([]ListNeverProjectedIngestSessionsRow, error)
 	ListNodeComponentVersions(ctx context.Context, nodeID string) ([]ListNodeComponentVersionsRow, error)
 	ListNodeComponents(ctx context.Context, nodeID string) ([]ListNodeComponentsRow, error)
+	ListNodeFinalizingDVRChapters(ctx context.Context, arg ListNodeFinalizingDVRChaptersParams) ([]ListNodeFinalizingDVRChaptersRow, error)
 	ListNodeMaintenance(ctx context.Context) ([]ListNodeMaintenanceRow, error)
 	ListOpenIngestSessions(ctx context.Context) ([]ListOpenIngestSessionsRow, error)
 	ListOriginNodes(ctx context.Context, artifactHash string) ([]string, error)
@@ -608,6 +612,9 @@ type Querier interface {
 	RepairAdmissionPushTargetRevision(ctx context.Context, arg RepairAdmissionPushTargetRevisionParams) (int64, error)
 	RequeueActivePushTargetActivationByID(ctx context.Context, arg RequeueActivePushTargetActivationByIDParams) (int64, error)
 	RequeueStaleProcessingJobs(ctx context.Context, arg RequeueStaleProcessingJobsParams) (int64, error)
+	// Requeues the jobs assigned to a node before its registration that the node
+	// did not report as running: a restarted sidecar lost them.
+	RequeueUnreportedNodeProcessingJobs(ctx context.Context, arg RequeueUnreportedNodeProcessingJobsParams) (int64, error)
 	ResetStaleFreezeAttempts(ctx context.Context, staleSeconds int64) ([]ResetStaleFreezeAttemptsRow, error)
 	ResolveActiveDVRNodes(ctx context.Context, dollar_1 []string) ([]ResolveActiveDVRNodesRow, error)
 	ResolveArtifactTenants(ctx context.Context, dollar_1 []string) ([]ResolveArtifactTenantsRow, error)

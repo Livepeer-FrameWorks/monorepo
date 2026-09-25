@@ -2001,6 +2001,9 @@ receiveLoop:
 					Info("Node registered under its canonical id; the divergent asserted raw id is not aliased (unverified)")
 			}
 
+			// Work dispatched to this node from here on went over this connection,
+			// so the registration's job inventory only speaks for earlier work.
+			registeredAt := time.Now()
 			registry.mu.Lock()
 			// BeginShutdown raises shuttingDown and then snapshots the registry
 			// under this lock. A registration that started before shutdown and
@@ -2036,6 +2039,9 @@ receiveLoop:
 			state.DefaultManager().TouchNode(canonicalNodeID, true)
 			if newConn.features().RestreamAttemptFence {
 				scheduleReconnectPushTargetRearmFn(canonicalNodeID, connFence, GetInstanceID(), registry.log)
+			}
+			if handler := currentNodeJobInventoryHandler(); handler != nil && newConn.features().ProcessingJobInventory {
+				go handler(canonicalNodeID, x.Register.GetActiveProcessingJobIds(), registeredAt)
 			}
 
 			// Hydrate the managed-stream lastSent map from the sidecar's
@@ -4553,6 +4559,34 @@ const RestreamRevisionFenceProtocolMin int32 = 5
 // closes.
 const RestreamAttemptFenceProtocolMin int32 = 6
 
+// ProcessingJobInventoryProtocolMin is the first sidecar protocol that lists
+// its running processing jobs in Register. Only such a registration proves
+// that a job assigned to the node is no longer running there.
+const ProcessingJobInventoryProtocolMin int32 = 7
+
+// NodeJobInventoryHandler re-dispatches work assigned to nodeID before
+// registeredAt that the node's registration did not report as running.
+type NodeJobInventoryHandler func(nodeID string, reported []string, registeredAt time.Time)
+
+var (
+	nodeJobInventoryHandlerMu sync.Mutex
+	nodeJobInventoryHandler   NodeJobInventoryHandler
+)
+
+// SetNodeJobInventoryHandler registers the handler run after a registration
+// that carries a processing-job inventory.
+func SetNodeJobInventoryHandler(h NodeJobInventoryHandler) {
+	nodeJobInventoryHandlerMu.Lock()
+	nodeJobInventoryHandler = h
+	nodeJobInventoryHandlerMu.Unlock()
+}
+
+func currentNodeJobInventoryHandler() NodeJobInventoryHandler {
+	nodeJobInventoryHandlerMu.Lock()
+	defer nodeJobInventoryHandlerMu.Unlock()
+	return nodeJobInventoryHandler
+}
+
 // MinControlProtocolVersion is the HARD minimum a sidecar must declare in Register to connect at all. A registration
 // below this is REJECTED (FailedPrecondition), not admitted under a compatibility path. This is what makes inventory
 // authority session-owned rather than payload-selected: a sub-min sidecar cannot connect, so every report the
@@ -4572,6 +4606,7 @@ type ControlFeatures struct {
 	AuthoritativeInventory bool // versioned whole-node artifact inventory (>= AuthoritativeInventoryProtocolMin)
 	RestreamRevisionFence  bool // exact desired-set revision acknowledgements (>= RestreamRevisionFenceProtocolMin)
 	RestreamAttemptFence   bool // per-dispatch activation attempt echoes (>= RestreamAttemptFenceProtocolMin)
+	ProcessingJobInventory bool // running processing jobs listed in Register (>= ProcessingJobInventoryProtocolMin)
 }
 
 // ControlFeaturesForProtocol derives the capability set a declared control-protocol version supports.
@@ -4582,6 +4617,7 @@ func ControlFeaturesForProtocol(v int32) ControlFeatures {
 		AuthoritativeInventory: v >= AuthoritativeInventoryProtocolMin,
 		RestreamRevisionFence:  v >= RestreamRevisionFenceProtocolMin,
 		RestreamAttemptFence:   v >= RestreamAttemptFenceProtocolMin,
+		ProcessingJobInventory: v >= ProcessingJobInventoryProtocolMin,
 	}
 }
 
@@ -6268,10 +6304,11 @@ func processUpdateApplyResult(result *ipcpb.UpdateApplyResult, fallbackNodeID st
 		if updatePhaseRestoresRouting(updateState.Phase) {
 			phase = "warming_restore"
 		}
-		if err := persistNodeUpdateStateWithDeadlineAndExpected(nodeID, targetRelease, phase, "", time.Now().Add(90*time.Second), expectedVersions); err != nil && log != nil {
+		if err := persistNodeUpdateStateWithDeadlineAndExpected(nodeID, targetRelease, phase, "", time.Now().Add(updateWarmupTimeout), expectedVersions); err != nil && log != nil {
 			log.WithError(err).WithField("node_id", nodeID).Warn("Failed to persist node update warmup phase")
 		}
-		go completeUpdateWarmup(nodeID, targetRelease, expectedVersions, time.Now(), log)
+		attempt := updateWarmups.begin(nodeID)
+		go completeUpdateWarmup(nodeID, targetRelease, expectedVersions, time.Now(), attempt, log)
 		if log != nil {
 			log.WithFields(logging.Fields{
 				"node_id":        nodeID,
@@ -6311,12 +6348,82 @@ func updateResultIncludesMist(result *ipcpb.UpdateApplyResult) bool {
 	return false
 }
 
-func completeUpdateWarmup(nodeID, targetRelease string, expectedVersions map[string]string, notBefore time.Time, log logging.Logger) {
-	deadline := time.Now().Add(90 * time.Second)
-	ticker := time.NewTicker(5 * time.Second)
+// UpdateOrchestratorModeSetter marks operational modes set by the edge update
+// flow. Only modes it set may be lifted by that flow; operator modes are kept.
+const UpdateOrchestratorModeSetter = "update-orchestrator"
+
+var (
+	updateWarmupTimeout = 90 * time.Second
+	updateWarmupTick    = 5 * time.Second
+	updateWarmups       = &updateWarmupAttempts{current: make(map[string]uint64)}
+
+	// applyUpdateNodeMode records a node mode chosen by the update flow and
+	// pushes it to the node's Helmsman.
+	applyUpdateNodeMode = func(ctx context.Context, nodeID string, mode state.NodeOperationalMode) error {
+		if err := state.DefaultManager().SetNodeOperationalMode(ctx, nodeID, mode, UpdateOrchestratorModeSetter); err != nil {
+			return err
+		}
+		return PushOperationalMode(nodeID, protoNodeOperationalMode(mode))
+	}
+)
+
+// updateWarmupAttempts serializes warmup watchers per node. Every apply result
+// starts a new watcher; only the newest may fence or complete, so a watcher
+// whose deadline was set by an earlier result cannot fence a node whose later
+// result has already warmed up.
+type updateWarmupAttempts struct {
+	mu      sync.Mutex
+	next    uint64
+	current map[string]uint64
+}
+
+func (a *updateWarmupAttempts) begin(nodeID string) uint64 {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.next++
+	a.current[nodeID] = a.next
+	return a.next
+}
+
+func (a *updateWarmupAttempts) isCurrent(nodeID string, attempt uint64) bool {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.current[nodeID] == attempt
+}
+
+func protoNodeOperationalMode(mode state.NodeOperationalMode) ipcpb.NodeOperationalMode {
+	switch mode {
+	case state.NodeModeDraining:
+		return ipcpb.NodeOperationalMode_NODE_OPERATIONAL_MODE_DRAINING
+	case state.NodeModeMaintenance:
+		return ipcpb.NodeOperationalMode_NODE_OPERATIONAL_MODE_MAINTENANCE
+	default:
+		return ipcpb.NodeOperationalMode_NODE_OPERATIONAL_MODE_NORMAL
+	}
+}
+
+// NodeFencedByUpdateOrchestrator reports whether the node's maintenance mode
+// was set by the update flow (a failed warmup) rather than by an operator.
+func NodeFencedByUpdateOrchestrator(nodeID string) bool {
+	node := state.DefaultManager().GetNodeState(nodeID)
+	return node != nil && node.OperationalMode == state.NodeModeMaintenance && node.OperationalModeSetBy == UpdateOrchestratorModeSetter
+}
+
+func completeUpdateWarmup(nodeID, targetRelease string, expectedVersions map[string]string, notBefore time.Time, attempt uint64, log logging.Logger) {
+	deadline := time.Now().Add(updateWarmupTimeout)
+	ticker := time.NewTicker(updateWarmupTick)
 	defer ticker.Stop()
 
 	for {
+		if !updateWarmups.isCurrent(nodeID, attempt) {
+			if log != nil {
+				log.WithFields(logging.Fields{
+					"node_id":        nodeID,
+					"target_release": targetRelease,
+				}).Info("Stopped node update warmup superseded by a newer apply result")
+			}
+			return
+		}
 		current, found, err := currentNodeUpdateState(nodeID)
 		if err != nil {
 			persistNodeUpdateStateWithLog(nodeID, targetRelease, "failed", err.Error(), log, "Failed to persist node update warmup state lookup failure")
@@ -6357,6 +6464,9 @@ func completeUpdateWarmup(nodeID, targetRelease string, expectedVersions map[str
 			}).Debug("Node update warmup probe not ready")
 		}
 		if time.Now().After(deadline) {
+			if !updateWarmups.isCurrent(nodeID, attempt) {
+				continue
+			}
 			fenceNodeAfterUpdateWarmupFailure(nodeID, log)
 			persistNodeUpdateStateWithLog(nodeID, targetRelease, "failed", "warmup probe timed out", log, "Failed to persist node update warmup timeout")
 			if log != nil {
@@ -6371,11 +6481,8 @@ func completeUpdateWarmup(nodeID, targetRelease string, expectedVersions map[str
 func fenceNodeAfterUpdateWarmupFailure(nodeID string, log logging.Logger) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	if err := state.DefaultManager().SetNodeOperationalMode(ctx, nodeID, state.NodeModeMaintenance, "update-orchestrator"); err != nil && log != nil {
+	if err := applyUpdateNodeMode(ctx, nodeID, state.NodeModeMaintenance); err != nil && log != nil {
 		log.WithError(err).WithField("node_id", nodeID).Warn("Failed to fence node after update warmup failure")
-	}
-	if err := PushOperationalMode(nodeID, ipcpb.NodeOperationalMode_NODE_OPERATIONAL_MODE_MAINTENANCE); err != nil && log != nil {
-		log.WithError(err).WithField("node_id", nodeID).Warn("Failed to push maintenance mode after update warmup failure")
 	}
 }
 
@@ -6395,13 +6502,12 @@ func CompleteUpdateWarmupIfReady(ctx context.Context, nodeID, targetRelease stri
 	if ok, reason := nodeWarmupReady(nodeID, expectedVersions, notBefore); !ok {
 		return false, reason, nil
 	}
-	if updatePhaseRestoresRouting(current.Phase) {
+	// A node warmed up on the target release no longer needs a fence the
+	// update flow placed after an earlier failed attempt.
+	if updatePhaseRestoresRouting(current.Phase) || NodeFencedByUpdateOrchestrator(nodeID) {
 		setCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 		defer cancel()
-		if err := state.DefaultManager().SetNodeOperationalMode(setCtx, nodeID, state.NodeModeNormal, "update-orchestrator"); err != nil {
-			return false, "", err
-		}
-		if err := PushOperationalMode(nodeID, ipcpb.NodeOperationalMode_NODE_OPERATIONAL_MODE_NORMAL); err != nil {
+		if err := applyUpdateNodeMode(setCtx, nodeID, state.NodeModeNormal); err != nil {
 			return false, "", err
 		}
 	}

@@ -257,6 +257,7 @@ func Init(log logging.Logger, m *HandlerMetrics, nodeID string) {
 	control.SetDeleteVodHandler(func(vodHash string) (uint64, error) {
 		return Current().DeleteVOD(vodHash)
 	})
+	control.SetActiveProcessingJobsProvider(ActiveProcessingJobIDs)
 
 	logger.WithField("node_name", nodeName).Info("Handlers initialized")
 }
@@ -943,7 +944,7 @@ func HandleStreamProcess(c *gin.Context) {
 	if streamProcess := mistTrigger.GetStreamProcess(); streamProcess != nil {
 		if override, ok := getProcessingProcessOverride(streamProcess.GetStreamName()); ok {
 			incMistWebhook("STREAM_PROCESS", "success")
-			c.String(http.StatusOK, override)
+			c.String(http.StatusOK, localEncoderConfig(override))
 			return
 		}
 	}
@@ -959,11 +960,24 @@ func HandleStreamProcess(c *gin.Context) {
 
 	if result.Response != "" {
 		incMistWebhook("STREAM_PROCESS", "success")
+		if !result.Abort {
+			result.Response = localEncoderConfig(result.Response)
+		}
 	} else {
 		incMistWebhook("STREAM_PROCESS", "default")
 	}
 
 	respondMistResult(c, result, ipcpb.MistTriggerAction_MIST_TRIGGER_ACTION_USE_CONFIGURED)
+}
+
+// localEncoderConfig fits a process list to this node's encoders before Mist
+// sees it: a node whose MistServer runtime has no hardware video encoder runs
+// its AV processes software-only.
+func localEncoderConfig(processesJSON string) string {
+	if !mist.SoftwareEncoderProfile(appconfig.Runtime().MistONNXProfile) {
+		return processesJSON
+	}
+	return mist.SoftwareEncodingOnly(processesJSON)
 }
 
 // HandleStreamSource handles the STREAM_SOURCE trigger from MistServer.

@@ -18,6 +18,7 @@ import (
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/mist"
 	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
 	"github.com/sirupsen/logrus"
+	logrustest "github.com/sirupsen/logrus/hooks/test"
 )
 
 func TestIsHLSSource_M3U8Extension(t *testing.T) {
@@ -902,12 +903,26 @@ func TestGenerateDTSHForPathRequiresSidecarFile(t *testing.T) {
 	t.Cleanup(server.Close)
 
 	dtshPath := filepath.Join(t.TempDir(), "artifact.mkv.dtsh")
-	err := GenerateDTSHForPath(server.URL, "vod+artifact123", dtshPath, logrus.NewEntry(logrus.New()))
+	nullLogger, hook := logrustest.NewNullLogger()
+	err := GenerateDTSHForPath(server.URL, "vod+artifact123", dtshPath, logrus.NewEntry(nullLogger))
 	if err == nil {
 		t.Fatal("expected missing sidecar to fail")
 	}
 	if !strings.Contains(err.Error(), "dtsh file not ready") {
 		t.Fatalf("error = %v, want dtsh readiness error", err)
+	}
+	// The json endpoint answering must not be reported as a generated sidecar.
+	var warned bool
+	for _, entry := range hook.AllEntries() {
+		if entry.Level <= logrus.InfoLevel && strings.Contains(entry.Message, "completed") {
+			t.Fatalf("success logged although no sidecar landed: %q", entry.Message)
+		}
+		if entry.Level == logrus.WarnLevel && strings.Contains(entry.Message, "no valid sidecar landed") {
+			warned = true
+		}
+	}
+	if !warned {
+		t.Fatal("expected a warning that the sidecar never landed")
 	}
 }
 

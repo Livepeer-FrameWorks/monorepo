@@ -5923,8 +5923,12 @@ type Register struct {
 	// Explicit operator recovery intent. Honored only together with a valid
 	// enrollment token and an exact stable-fingerprint/tenant/cluster match.
 	NodeIdentityRotationRequested bool `protobuf:"varint,24,opt,name=node_identity_rotation_requested,json=nodeIdentityRotationRequested,proto3" json:"node_identity_rotation_requested,omitempty"`
-	unknownFields                 protoimpl.UnknownFields
-	sizeCache                     protoimpl.SizeCache
+	// Processing job ids this sidecar is running at registration, from control
+	// protocol version 7. Foghorn re-dispatches jobs it assigned to this node
+	// before the registration that are absent here: a restarted sidecar lost them.
+	ActiveProcessingJobIds []string `protobuf:"bytes,25,rep,name=active_processing_job_ids,json=activeProcessingJobIds,proto3" json:"active_processing_job_ids,omitempty"`
+	unknownFields          protoimpl.UnknownFields
+	sizeCache              protoimpl.SizeCache
 }
 
 func (x *Register) Reset() {
@@ -6123,6 +6127,13 @@ func (x *Register) GetNodeIdentityRotationRequested() bool {
 		return x.NodeIdentityRotationRequested
 	}
 	return false
+}
+
+func (x *Register) GetActiveProcessingJobIds() []string {
+	if x != nil {
+		return x.ActiveProcessingJobIds
+	}
+	return nil
 }
 
 // AppliedManagedStream is a sidecar→Foghorn snapshot at (re)connect of one
@@ -21671,7 +21682,8 @@ const file_ipc_proto_rawDesc = "" +
 	"size_bytes\x18\x05 \x01(\x04R\tsizeBytes\x12#\n" +
 	"\rartifact_hash\x18\x06 \x01(\tR\fartifactHash\x12#\n" +
 	"\rartifact_type\x18\a \x01(\tR\fartifactType\x12\"\n" +
-	"\rdeleted_at_ms\x18\b \x01(\x03R\vdeletedAtMsJ\x04\b\x01\x10\x02R\tclip_hash\"\xdb\t\n" +
+	"\rdeleted_at_ms\x18\b \x01(\x03R\vdeletedAtMsJ\x04\b\x01\x10\x02R\tclip_hash\"\x96\n" +
+	"\n" +
 	"\bRegister\x12\x17\n" +
 	"\anode_id\x18\x01 \x01(\tR\x06nodeId\x12\x14\n" +
 	"\x05roles\x18\x02 \x03(\tR\x05roles\x12\x1d\n" +
@@ -21699,7 +21711,8 @@ const file_ipc_proto_rawDesc = "" +
 	"\x1dnode_identity_proof_issued_at\x18\x15 \x01(\v2\x1a.google.protobuf.TimestampR\x19nodeIdentityProofIssuedAt\x12=\n" +
 	"\x1bnode_identity_proof_ed25519\x18\x16 \x01(\fR\x18nodeIdentityProofEd25519\x12=\n" +
 	"\x1bapplied_config_seed_version\x18\x17 \x01(\x04R\x18appliedConfigSeedVersion\x12G\n" +
-	" node_identity_rotation_requested\x18\x18 \x01(\bR\x1dnodeIdentityRotationRequestedB\f\n" +
+	" node_identity_rotation_requested\x18\x18 \x01(\bR\x1dnodeIdentityRotationRequested\x129\n" +
+	"\x19active_processing_job_ids\x18\x19 \x03(\tR\x16activeProcessingJobIdsB\f\n" +
 	"\n" +
 	"_cpu_coresB\f\n" +
 	"\n" +

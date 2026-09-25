@@ -189,6 +189,22 @@ func HasPendingJob(streamName string) bool {
 	return ok
 }
 
+// ActiveProcessingJobIDs returns the ids of the processing jobs this process
+// is running, sorted. Foghorn compares them at registration with the jobs it
+// assigned to this node.
+func ActiveProcessingJobIDs() []string {
+	pendingJobsMu.Lock()
+	ids := make([]string, 0, len(pendingJobIDs))
+	for _, id := range pendingJobIDs {
+		if id != "" {
+			ids = append(ids, id)
+		}
+	}
+	pendingJobsMu.Unlock()
+	sort.Strings(ids)
+	return ids
+}
+
 // claimPendingJob atomically checks and reserves a processing stream. Keeping
 // the check and insert under one lock prevents concurrent dispatches from
 // booting the same Mist stream and writing the same output.
@@ -633,6 +649,52 @@ func reconcileProcessingOverridePersistence(mistServerURL string, logger logging
 	reconcileExpiredProcessingOverrides(activeStreams, now)
 }
 
+// nukeOrphanProcessingStreams stops processing+ streams that no job in this
+// process owns. Processing streams are driven only by Helmsman jobs, and a new
+// process starts with none, so any such stream at start belongs to a job the
+// previous process lost; Foghorn re-dispatches that job after registration.
+// It returns the streams it stopped.
+func nukeOrphanProcessingStreams(client *mist.Client, logger logging.Logger) []string {
+	response, err := client.GetActiveStreams()
+	if err != nil {
+		logger.WithError(err).Warn("Could not list Mist streams to stop orphaned processing streams")
+		return nil
+	}
+	activeStreams, ok := response["active_streams"].(map[string]interface{})
+	if !ok {
+		if response["active_streams"] != nil {
+			logger.WithField("active_streams", response["active_streams"]).Warn("Mist active stream list has an unexpected shape; not stopping orphaned processing streams")
+		}
+		return nil
+	}
+	var stopped []string
+	for name := range activeStreams {
+		if !strings.HasPrefix(name, "processing+") || HasPendingJob(name) {
+			continue
+		}
+		if err := client.NukeStream(name); err != nil {
+			logger.WithError(err).WithField("stream", name).Warn("Failed to stop orphaned processing stream")
+			continue
+		}
+		stopped = append(stopped, name)
+	}
+	if len(stopped) > 0 {
+		sort.Strings(stopped)
+		logger.WithField("streams", stopped).Info("Stopped processing streams left by a previous Helmsman process")
+	}
+	return stopped
+}
+
+func startOrphanProcessingStreamCleanup(mistServerURL string, logger logging.Logger) {
+	if strings.TrimSpace(mistServerURL) == "" {
+		return
+	}
+	clientConfig := appconfig.MistClient()
+	clientConfig.BaseURL = mistServerURL
+	client := mist.NewClient(logger, clientConfig)
+	go nukeOrphanProcessingStreams(client, logger)
+}
+
 func startProcessingOverridePersistenceReconciler(mistServerURL string, logger logging.Logger) {
 	if strings.TrimSpace(mistServerURL) == "" {
 		return
@@ -859,6 +921,7 @@ func NewProcessingJobHandler(logger logging.Logger, mistServerURL, storagePath, 
 	// not make Helmsman startup depend on a Mist API round trip (which has a
 	// bounded but comparatively long transport timeout).
 	startProcessingOverridePersistenceReconciler(mistServerURL, logger)
+	startOrphanProcessingStreamCleanup(mistServerURL, logger)
 	return &ProcessingJobHandler{
 		logger:        logger,
 		mistServerURL: mistServerURL,
@@ -1027,7 +1090,7 @@ func (h *ProcessingJobHandler) Handle(req *ipcpb.ProcessingJobRequest, send func
 			return false
 		}
 		effectiveProcessesJSON = localConfig
-		h.updateProcessConfigCache(send, req.GetArtifactHash(), localConfig)
+		h.updateProcessConfigCache(send, req.GetJobId(), req.GetArtifactHash(), localConfig)
 		return true
 	}
 
@@ -1573,6 +1636,7 @@ func (h *ProcessingJobHandler) waitForProcessingStreamReady(ctx context.Context,
 	// streams, so it must only fire while the stream is actually down;
 	// readiness polling itself is controller-API-only.
 	streamActive := false
+	var lastBoot time.Time
 
 	for {
 		if failure, ok := takeProcessingSourceFailure(streamName); ok {
@@ -1637,7 +1701,12 @@ func (h *ProcessingJobHandler) waitForProcessingStreamReady(ctx context.Context,
 			}
 		}
 
-		if !streamActive {
+		// The stream is absent from active_streams while its input builds a
+		// missing header, which can outlast the boot request's own timeout.
+		// Booting again inside that window starts a second input for the
+		// same stream, so a boot is repeated only after the retry interval.
+		if !streamActive && (lastBoot.IsZero() || time.Since(lastBoot) >= processingBootRetryInterval) {
+			lastBoot = time.Now()
 			if err := h.bootMistStream(streamName); err != nil {
 				lastErr = err
 			}
@@ -1707,7 +1776,7 @@ func (h *ProcessingJobHandler) bootMistStream(streamName string) error {
 		return fmt.Errorf("MISTSERVER_URL not configured")
 	}
 	url := mistJSONURL(h.mistServerURL, streamName, "metaeverywhere=1&inclzero=1")
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), processingBootRequestTimeout)
 	defer cancel()
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
@@ -2712,6 +2781,17 @@ const (
 	processReplaceConfirmWindow = 10 * time.Second
 )
 
+var (
+	// processingBootRequestTimeout bounds one /json_ boot request. Mist holds
+	// the request while the input boots, so a timeout does not mean the boot
+	// failed.
+	processingBootRequestTimeout = 5 * time.Second
+	// processingBootRetryInterval is the minimum gap between boot requests for
+	// a stream that is not yet listed as active. It exceeds the time Mist
+	// needs to build a missing header before the stream appears.
+	processingBootRetryInterval = 30 * time.Second
+)
+
 // livepeerExitFallbackDecision falls back to local MistProcAV on every
 // non-success Livepeer exit (gateway 4xx/5xx, upload failures, no broadcasters).
 // An unrecoverable exit is followed by Mist's PROCESS_REPLACE, which Helmsman
@@ -3180,14 +3260,16 @@ func (h *ProcessingJobHandler) sendProgress(send func(*ipcpb.ControlMessage), jo
 
 // updateProcessConfigCache tells Foghorn to update the STREAM_PROCESS cache
 // for this artifact with the given processes_json (used for Livepeer fallback).
-func (h *ProcessingJobHandler) updateProcessConfigCache(send func(*ipcpb.ControlMessage), artifactHash, processesJSON string) {
+// Foghorn applies it only to the exact dispatched job owned by this node, so
+// jobID must be the job's own id.
+func (h *ProcessingJobHandler) updateProcessConfigCache(send func(*ipcpb.ControlMessage), jobID, artifactHash, processesJSON string) {
 	if send == nil {
 		return
 	}
 	send(&ipcpb.ControlMessage{
 		Payload: &ipcpb.ControlMessage_ProcessingJobResult{
 			ProcessingJobResult: &ipcpb.ProcessingJobResult{
-				JobId:  "cache_update:" + artifactHash,
+				JobId:  jobID,
 				Status: "cache_update",
 				Outputs: map[string]string{
 					"artifact_hash":  artifactHash,
@@ -3335,12 +3417,17 @@ func GenerateDTSH(mistServerURL, streamName string, log *logrus.Entry) error {
 			log.WithField("error", data["error"]).Debug("DTSH generation: stream not ready")
 			continue
 		}
-		log.Info("DTSH generation completed via json endpoint")
+		// The input answered, which only means the boot happened; the sidecar
+		// itself may still be rejected on its way to disk.
+		log.Debug("DTSH generation: json endpoint answered")
 		return nil
 	}
 	return fmt.Errorf("timed out waiting for DTSH generation")
 }
 
+// GenerateDTSHForPath boots the stream and reports success only once a valid
+// sidecar exists at dtshPath. Mist uploads the sidecar through the relay,
+// which refuses a malformed one; that refusal is logged by the relay.
 func GenerateDTSHForPath(mistServerURL, streamName, dtshPath string, log *logrus.Entry) error {
 	if err := GenerateDTSH(mistServerURL, streamName, log); err != nil {
 		return err
@@ -3348,7 +3435,12 @@ func GenerateDTSHForPath(mistServerURL, streamName, dtshPath string, log *logrus
 	if dtshPath == "" {
 		return nil
 	}
-	return waitForDTSHFile(dtshPath, 10*time.Second)
+	if err := waitForDTSHFile(dtshPath, 10*time.Second); err != nil {
+		log.WithError(err).WithField("dtsh_path", dtshPath).Warn("DTSH generation: stream booted but no valid sidecar landed; see the relay sidecar PUT log for the rejection")
+		return err
+	}
+	log.WithField("dtsh_path", dtshPath).Info("DTSH generation completed and sidecar validated")
+	return nil
 }
 
 func waitForDTSHFile(dtshPath string, timeout time.Duration) error {

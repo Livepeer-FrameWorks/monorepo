@@ -179,12 +179,20 @@ func (d *ProcessingDispatcher) SetGatewayResolver(r GatewayResolver) {
 
 func (d *ProcessingDispatcher) Start() {
 	registerProcessingDispatcherWake(d.wakeCh)
+	control.SetNodeJobInventoryHandler(func(nodeID string, reported []string, registeredAt time.Time) {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		if err := ReconcileNodeJobInventory(ctx, d.db, nodeID, reported, registeredAt, d.maxRetries, d.logger); err != nil {
+			d.logger.WithError(err).WithField("node_id", nodeID).Warn("Failed to re-dispatch work a registering node did not report")
+		}
+	})
 	d.wg.Add(1)
 	go d.run()
 	d.logger.Info("Processing dispatcher started")
 }
 
 func (d *ProcessingDispatcher) Stop() {
+	control.SetNodeJobInventoryHandler(nil)
 	unregisterProcessingDispatcherWake(d.wakeCh)
 	close(d.stopCh)
 	d.wg.Wait()

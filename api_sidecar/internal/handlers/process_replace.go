@@ -81,7 +81,7 @@ func processReplacementFor(evt ProcessReplaceEvent) (string, int) {
 	if err != nil {
 		return noProcessReplacement, 0
 	}
-	local := mist.ReplaceLivepeerWithLocal(string(wrapped))
+	local := localEncoderConfig(mist.ReplaceLivepeerWithLocal(string(wrapped)))
 	// ReplaceLivepeerWithLocal returns its input unchanged when it cannot parse
 	// it; answering with the failed Livepeer config would restart the failure.
 	if mist.HasLivepeerProcesses(local) {

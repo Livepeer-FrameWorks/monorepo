@@ -55,7 +55,9 @@ const foghornInternalServerName = "foghorn.internal"
 //   - Version 4 = signs every registration with the node's persisted Ed25519 identity.
 //   - Version 5 = echoes the exact desired push-target revision in activation
 //     and deactivation results.
-const controlProtocolVersion int32 = 6
+//   - Version 7 = reports the processing jobs it is running in Register, so Foghorn can re-dispatch the
+//     jobs a restarted sidecar lost (ProcessingJobInventoryProtocolMin on Foghorn).
+const controlProtocolVersion int32 = 7
 
 // DeleteClipFunc is the function type for clip deletion
 type DeleteClipFunc func(clipHash string) (uint64, error)
@@ -564,6 +566,29 @@ func SetDeleteDVRHandler(fn DeleteDVRFunc) {
 // SetDeleteVodHandler sets the callback for VOD deletion
 func SetDeleteVodHandler(fn DeleteVodFunc) {
 	deleteVodFn = fn
+}
+
+var (
+	activeProcessingJobsMu sync.Mutex
+	activeProcessingJobs   func() []string
+)
+
+// SetActiveProcessingJobsProvider sets the source of the processing job ids
+// reported in Register.
+func SetActiveProcessingJobsProvider(fn func() []string) {
+	activeProcessingJobsMu.Lock()
+	activeProcessingJobs = fn
+	activeProcessingJobsMu.Unlock()
+}
+
+func activeProcessingJobIDsForRegister() []string {
+	activeProcessingJobsMu.Lock()
+	fn := activeProcessingJobs
+	activeProcessingJobsMu.Unlock()
+	if fn == nil {
+		return nil
+	}
+	return fn()
 }
 
 // SetOnControlConnected sets a callback that runs after each successful
@@ -1826,6 +1851,7 @@ func runClient(addr string, logger logging.Logger) error {
 		AppliedManagedStreams:    snapshotAppliedManagedStreamsForRegister(),
 		ControlProtocolVersion:   controlProtocolVersion,
 		AppliedConfigSeedVersion: sidecarcfg.CurrentSeedVersion(),
+		ActiveProcessingJobIds:   activeProcessingJobIDsForRegister(),
 	}
 	identityKey, identityStatus, err := nodeidentity.LoadOrCreatePrivateKey(
 		cfg.StateDir, cfg.NodeID, cfg.StorageLocalPath, cfg.RotateNodeIdentity, cfg.EnrollmentToken,

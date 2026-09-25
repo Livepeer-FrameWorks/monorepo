@@ -8,6 +8,8 @@ package foghorndb
 import (
 	"context"
 	"database/sql"
+
+	"github.com/lib/pq"
 )
 
 const assignProcessingJobNode = `-- name: AssignProcessingJobNode :execrows
@@ -444,6 +446,50 @@ type RequeueStaleProcessingJobsParams struct {
 
 func (q *Queries) RequeueStaleProcessingJobs(ctx context.Context, arg RequeueStaleProcessingJobsParams) (int64, error) {
 	result, err := q.db.ExecContext(ctx, requeueStaleProcessingJobs, arg.UpdatedAt, arg.RetryCount)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+const requeueUnreportedNodeProcessingJobs = `-- name: RequeueUnreportedNodeProcessingJobs :execrows
+WITH requeued AS (
+    UPDATE foghorn.processing_jobs AS job
+    SET status = 'queued', processing_node_id = NULL,
+        retry_count = retry_count + 1, updated_at = NOW(),
+        progress_last_ms = 0, progress_advanced_at = NULL
+    WHERE job.processing_node_id = $1
+      AND job.status IN ('dispatched', 'processing')
+      AND job.updated_at < $2
+      AND job.retry_count < $3
+      AND NOT (job.job_id::text = ANY($4::text[]))
+    RETURNING artifact_hash, tenant_id
+)
+UPDATE foghorn.artifacts AS a
+SET status = 'queued', updated_at = NOW()
+FROM requeued AS r
+WHERE a.artifact_hash = r.artifact_hash
+  AND a.tenant_id = r.tenant_id
+  AND a.artifact_type IN ('clip', 'vod')
+  AND a.status NOT IN ('ready', 'failed', 'deleted', 'expired', 'aborted')
+`
+
+type RequeueUnreportedNodeProcessingJobsParams struct {
+	NodeID         sql.NullString `db:"node_id" json:"node_id"`
+	AssignedBefore sql.NullTime   `db:"assigned_before" json:"assigned_before"`
+	MaxRetries     sql.NullInt32  `db:"max_retries" json:"max_retries"`
+	ReportedJobIds []string       `db:"reported_job_ids" json:"reported_job_ids"`
+}
+
+// Requeues the jobs assigned to a node before its registration that the node
+// did not report as running: a restarted sidecar lost them.
+func (q *Queries) RequeueUnreportedNodeProcessingJobs(ctx context.Context, arg RequeueUnreportedNodeProcessingJobsParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, requeueUnreportedNodeProcessingJobs,
+		arg.NodeID,
+		arg.AssignedBefore,
+		arg.MaxRetries,
+		pq.Array(arg.ReportedJobIds),
+	)
 	if err != nil {
 		return 0, err
 	}

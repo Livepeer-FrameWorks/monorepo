@@ -220,7 +220,8 @@ func reconcileTarget(ctx context.Context, qm *qmclient.GRPCClient, target *quart
 			}
 			continue
 		}
-		if budget <= 0 {
+		fenced := control.NodeFencedByUpdateOrchestrator(node.NodeID)
+		if budget <= 0 && !fenced {
 			continue
 		}
 		current, err := currentNodeComponents(ctx, node.NodeID)
@@ -236,6 +237,19 @@ func reconcileTarget(ctx context.Context, qm *qmclient.GRPCClient, target *quart
 			return err
 		}
 		if !hasComponents {
+			if fenced {
+				if err := restoreNodeRouting(ctx, node.NodeID); err != nil {
+					return err
+				}
+			}
+			continue
+		}
+		// An attempt at this target already failed and fenced the node; do not
+		// restart its media stack every reconcile tick.
+		if fenced && progress.Phase == "failed" && progress.TargetRelease == targetRelease {
+			continue
+		}
+		if budget <= 0 {
 			continue
 		}
 		if err := applyReleaseUpdate(ctx, node.NodeID, target.GetClusterId(), targetRelease, direct, plan); err != nil {
@@ -417,10 +431,16 @@ func reconcileEligibleNodes(ctx context.Context, nodes []*state.NodeState, clust
 			out = append(out, node)
 			continue
 		}
-		if mode != state.NodeModeDraining {
+		if node.OperationalModeSetBy != control.UpdateOrchestratorModeSetter {
 			continue
 		}
-		if node.OperationalModeSetBy != "update-orchestrator" {
+		// A failed warmup fences the node; the rollout owns that fence and must
+		// either update the node again or lift it once the node runs the target.
+		if mode == state.NodeModeMaintenance {
+			out = append(out, node)
+			continue
+		}
+		if mode != state.NodeModeDraining {
 			continue
 		}
 		progress, err := loadProgress(ctx, node.NodeID)

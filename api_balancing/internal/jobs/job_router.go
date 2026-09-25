@@ -33,6 +33,20 @@ func nodeEligibleForJobTenant(node *state.NodeState, jobTenantID string) bool {
 	return clusterAccessibleForTenant(node.ClusterID, jobTenantID)
 }
 
+// nodeAcceptsProcessing applies the operational mode to new processing work:
+// maintenance isolates a node from all work, and draining refuses new work
+// except on the preferred source node, whose source bytes are already local.
+func nodeAcceptsProcessing(node *state.NodeState, preferredSource bool) bool {
+	switch node.OperationalMode {
+	case "", state.NodeModeNormal:
+		return true
+	case state.NodeModeDraining:
+		return preferredSource
+	default:
+		return false
+	}
+}
+
 // routeProcessingJob selects the best node for a processing job by matching the
 // job's processing class against each node's advertised class capacity, then
 // picking the lowest in-flight load within that class. Returns (nodeID,
@@ -60,7 +74,7 @@ func routeProcessingJob(job *processingJob) (string, string) {
 
 	if job.PreferredNode.Valid && job.PreferredNode.String != "" {
 		node := sm.GetNodeState(job.PreferredNode.String)
-		if node != nil && node.ClusterID == originCluster && node.CapProcessing && node.IsHealthy && node.CanRunClass(class) && nodeEligibleForJobTenant(node, jobTenant) {
+		if node != nil && node.ClusterID == originCluster && node.CapProcessing && node.IsHealthy && nodeAcceptsProcessing(node, true) && node.CanRunClass(class) && nodeEligibleForJobTenant(node, jobTenant) {
 			return job.PreferredNode.String, "preferred_source_node"
 		}
 		return "", "preferred source node unavailable"
@@ -70,7 +84,7 @@ func routeProcessingJob(job *processingJob) (string, string) {
 	bestLoad := -1
 	for _, id := range aliveIDs {
 		node := sm.GetNodeState(id)
-		if node == nil || node.ClusterID != originCluster || !node.CapProcessing || !node.IsHealthy {
+		if node == nil || node.ClusterID != originCluster || !node.CapProcessing || !node.IsHealthy || !nodeAcceptsProcessing(node, false) {
 			continue
 		}
 		if !node.CanRunClass(class) {

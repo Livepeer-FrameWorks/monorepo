@@ -83,6 +83,46 @@ func TestRouteProcessingJob_OnlyOriginClusterNodes(t *testing.T) {
 	}
 }
 
+// Staging dispatched a URL import to a node fenced in maintenance. Maintenance
+// takes a node out of all work; draining only keeps a preferred source node.
+func TestRouteProcessingJob_HonorsOperationalMode(t *testing.T) {
+	sm := state.ResetDefaultManagerForTests()
+	t.Cleanup(func() { state.ResetDefaultManagerForTests() })
+	t.Cleanup(sm.Shutdown)
+	origAccess := clusterAccessibleForTenant
+	clusterAccessibleForTenant = func(string, string) bool { return true }
+	t.Cleanup(func() { clusterAccessibleForTenant = origAccess })
+	ctx := context.Background()
+
+	touchInCluster(sm, "fenced", routeTestCluster)
+	setNodeProcessing(sm, "fenced", true, 8, 0) // idle, would win on load
+	if err := sm.SetNodeOperationalMode(ctx, "fenced", state.NodeModeMaintenance, "update-orchestrator"); err != nil {
+		t.Fatal(err)
+	}
+	if id, reason := routeProcessingJob(originJob()); id != "" {
+		t.Fatalf("maintenance node received new work: (%q, %q)", id, reason)
+	}
+	if id, _ := routeProcessingJob(preferred("fenced")); id != "" {
+		t.Fatalf("maintenance node accepted preferred-source work: %q", id)
+	}
+
+	touchInCluster(sm, "open", routeTestCluster)
+	setNodeProcessing(sm, "open", true, 8, 5)
+	if id, _ := routeProcessingJob(originJob()); id != "open" {
+		t.Fatalf("got %q, want the only node in normal mode", id)
+	}
+
+	if err := sm.SetNodeOperationalMode(ctx, "fenced", state.NodeModeDraining, "operator"); err != nil {
+		t.Fatal(err)
+	}
+	if id, _ := routeProcessingJob(originJob()); id != "open" {
+		t.Fatalf("draining node received unpinned work: %q", id)
+	}
+	if id, reason := routeProcessingJob(preferred("fenced")); id != "fenced" || reason != "preferred_source_node" {
+		t.Fatalf("draining source node refused its own source: (%q, %q)", id, reason)
+	}
+}
+
 const routeTestCluster = "cluster-eu"
 
 func touchInCluster(sm *state.StreamStateManager, nodeID, clusterID string) {

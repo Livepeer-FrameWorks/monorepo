@@ -143,13 +143,13 @@ func ReplaceLivepeerWithLocal(processesJSON string) string {
 			} else {
 				av["track_select"] = "video=maxbps&audio=none&subtitle=none"
 			}
-			// track_inhibit is intentionally NOT carried over. Profile inhibits
-			// (e.g. "video=<1280x720") are authored for the single Livepeer
-			// process, where every rendition is that process's own track and so
-			// never inhibits it. Split into one AV process per profile, each
-			// rendition belongs to a different process: the 360p AV's output
-			// would match the 720p AV's inhibit and Mist's supervisor would
-			// stop the rest of the ladder.
+			// The local ladder must never render above the source, so every AV
+			// rendition keeps an inhibit. MistServer evaluates process inhibitors
+			// against source tracks only, so a sibling rendition's output cannot
+			// stop this process.
+			if inhibit := localRenditionInhibit(prof, p); inhibit != "" {
+				av["track_inhibit"] = inhibit
+			}
 			copyProcessOption(av, prof, "inconsequential")
 			copyProcessOption(av, prof, "exit_unmask")
 			copyProcessOptionWithFallback(av, prof, p, "source_mask")
@@ -165,6 +165,48 @@ func ReplaceLivepeerWithLocal(processesJSON string) string {
 	}
 
 	out, err := json.Marshal(result)
+	if err != nil {
+		return processesJSON
+	}
+	return string(out)
+}
+
+// SoftwareEncoderProfile reports whether a MistServer runtime profile has no
+// hardware video encoder MistProcAV can use: MistProcAV only tries NVIDIA
+// encoders, which ship with the cuda and tensorrt profiles.
+func SoftwareEncoderProfile(onnxProfile string) bool {
+	switch strings.ToLower(strings.TrimSpace(onnxProfile)) {
+	case "cpu", "coreml", "openvino":
+		return true
+	default:
+		return false
+	}
+}
+
+// SoftwareEncodingOnly sets "accel":"sw" on every AV process without an
+// explicit accel choice. Without it MistProcAV probes NVENC first and logs each
+// failed probe as FAIL before falling back to the software encoder it was
+// always going to use on a node without an NVIDIA runtime.
+func SoftwareEncodingOnly(processesJSON string) string {
+	var processes []map[string]interface{}
+	if err := json.Unmarshal([]byte(processesJSON), &processes); err != nil {
+		return processesJSON
+	}
+	changed := false
+	for _, proc := range processes {
+		if procType, isString := proc["process"].(string); !isString || procType != "AV" {
+			continue
+		}
+		if _, set := proc["accel"]; set {
+			continue
+		}
+		proc["accel"] = "sw"
+		changed = true
+	}
+	if !changed {
+		return processesJSON
+	}
+	out, err := json.Marshal(processes)
 	if err != nil {
 		return processesJSON
 	}
@@ -744,6 +786,32 @@ func ValidateProcessConfigShape(processesJSON string) error {
 		}
 	}
 	return nil
+}
+
+// localRenditionInhibit returns the track_inhibit for one local AV rendition:
+// the profile's own, else one derived from the rendition size, so a source
+// smaller than the rendition never gets upscaled. The Livepeer process's
+// inhibit only applies to a rendition without any size. A height-only
+// rendition is sized 16:9, the shape the catalog ladder uses.
+func localRenditionInhibit(profile, process map[string]interface{}) string {
+	if inhibit, ok := profile["track_inhibit"].(string); ok && strings.TrimSpace(inhibit) != "" {
+		return inhibit
+	}
+	width, _ := numberAsInt(profile["width"])
+	height, _ := numberAsInt(profile["height"])
+	switch {
+	case width > 0 && height > 0:
+	case height > 0:
+		width = height * 16 / 9
+	case width > 0:
+		height = width * 9 / 16
+	default:
+		if inhibit, ok := process["track_inhibit"].(string); ok {
+			return inhibit
+		}
+		return ""
+	}
+	return fmt.Sprintf("video=<%dx%d", width, height)
 }
 
 func livepeerProfileResolution(profile map[string]interface{}) string {
