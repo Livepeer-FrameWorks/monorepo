@@ -19,6 +19,7 @@ import (
 	"frameworks/api_balancing/internal/state"
 
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/ctxkeys"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/mist"
 	clusterpeerpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/cluster_peer"
 	commodorepb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/commodore"
@@ -26,8 +27,24 @@ import (
 	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
 	sharedpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/shared"
 
+	"google.golang.org/grpc/codes"
+	grpcstatus "google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
+
+// ErrOriginClusterUnreachable marks a cross-cell artifact whose origin the
+// tenant is entitled to, but which this cell cannot currently reach.
+var ErrOriginClusterUnreachable = errors.New("origin cluster unreachable")
+
+func peerClusterIDs(peers []*clusterpeerpb.TenantClusterPeer) []string {
+	ids := make([]string, 0, len(peers))
+	for _, peer := range peers {
+		if id := peer.GetClusterId(); id != "" {
+			ids = append(ids, id)
+		}
+	}
+	return ids
+}
 
 // ContentResolution contains the result of resolving a playback request input
 type ContentResolution struct {
@@ -1629,14 +1646,25 @@ func resolveRemoteArtifactWithMetadata(ctx context.Context, deps *PlaybackDepend
 	if deps.PeerResolver == nil {
 		return nil, fmt.Errorf("peer resolver not available for cross-cluster artifact")
 	}
+	// clusterPeers is the reachability-filtered routing set; the authority set
+	// is the tenant's stable grants. An origin missing only from the former is
+	// an outage to retry, not a permission refusal.
 	if !isAuthorizedPeerCluster(originClusterID, clusterPeers) {
-		return nil, fmt.Errorf("origin cluster %s is not authorized for tenant", originClusterID)
+		if isAuthorizedPeerCluster(originClusterID, artifactResp.GetAuthorityClusterPeers()) {
+			return nil, fmt.Errorf("%w: origin cluster %s is entitled but not reachable from %s (routing peers %v)",
+				ErrOriginClusterUnreachable, originClusterID, deps.LocalClusterID, peerClusterIDs(clusterPeers))
+		}
+		return nil, grpcstatus.Errorf(codes.PermissionDenied, "origin cluster %s is not authorized for tenant", originClusterID)
 	}
 	addr := deps.PeerResolver.GetPeerAddr(originClusterID)
 	if addr == "" {
-		return nil, fmt.Errorf("origin cluster %s address unknown", originClusterID)
+		return nil, fmt.Errorf("%w: origin cluster %s has no known federation address", ErrOriginClusterUnreachable, originClusterID)
 	}
 
+	fedLog := controlLogger().WithFields(logging.Fields{
+		"playback_id": playbackID, "artifact_hash": artifactHash, "tenant_id": tenantID, "content_type": contentType,
+		"origin_cluster_id": originClusterID, "origin_addr": addr, "local_cluster_id": deps.LocalClusterID,
+	})
 	resp, err := deps.FedClient.PrepareArtifact(ctx, originClusterID, addr, &foghornfederationpb.PrepareArtifactRequest{
 		ArtifactId:        artifactHash,
 		RequestingCluster: deps.LocalClusterID,
@@ -1644,8 +1672,13 @@ func resolveRemoteArtifactWithMetadata(ctx context.Context, deps *PlaybackDepend
 		TenantId:          tenantID,
 	})
 	if err != nil {
+		fedLog.WithError(err).Warn("Cross-cell PrepareArtifact call failed")
 		return nil, fmt.Errorf("failed to prepare artifact from origin cluster: %w", err)
 	}
+	fedLog.WithFields(logging.Fields{
+		"ready": resp.GetReady(), "refusal": resp.GetError(), "redirect_cluster_id": resp.GetRedirectClusterId(),
+		"presigned": resp.GetUrl() != "", "peer_relay": resp.GetPeerRelayUrl() != "",
+	}).Info("Cross-cell PrepareArtifact answered")
 
 	// Single-hop redirect: when the origin cluster reports the bytes live on
 	// a different storage cluster, re-issue PrepareArtifact against that

@@ -216,14 +216,14 @@ func ResolveCrossClusterArtifactURL(ctx context.Context, artifactHash, contentTy
 // row; the URL it returns is the read-through target, no bytes are copied.
 func (d *CrossClusterArtifactDeps) Resolve(ctx context.Context, artifactHash, contentType, tenantID, originClusterID string, authorizeRedirect func(string) bool) (*CrossClusterArtifactURL, error) {
 	if d.FedClient == nil || d.PeerResolver == nil {
-		return nil, ErrCrossClusterArtifactUnavailable
+		return nil, fmt.Errorf("%w: federation client not wired", ErrCrossClusterArtifactUnavailable)
 	}
 	if originClusterID == "" || originClusterID == d.LocalClusterID {
-		return nil, ErrCrossClusterArtifactUnavailable
+		return nil, fmt.Errorf("%w: origin %q is not a remote cluster", ErrCrossClusterArtifactUnavailable, originClusterID)
 	}
 	addr := d.PeerResolver.GetPeerAddr(originClusterID)
 	if addr == "" {
-		return nil, ErrCrossClusterArtifactUnavailable
+		return nil, fmt.Errorf("%w: no federation address for origin cluster %s", ErrCrossClusterArtifactUnavailable, originClusterID)
 	}
 	resp, err := d.FedClient.PrepareArtifact(ctx, originClusterID, addr, &foghornfederationpb.PrepareArtifactRequest{
 		ArtifactId:        artifactHash,
@@ -247,7 +247,7 @@ func (d *CrossClusterArtifactDeps) Resolve(ctx context.Context, artifactHash, co
 		}
 		redirectAddr := d.PeerResolver.GetPeerAddr(redirect)
 		if redirectAddr == "" {
-			return nil, ErrCrossClusterArtifactUnavailable
+			return nil, fmt.Errorf("%w: no federation address for storage cluster %s", ErrCrossClusterArtifactUnavailable, redirect)
 		}
 		resp, err = d.FedClient.PrepareArtifact(ctx, redirect, redirectAddr, &foghornfederationpb.PrepareArtifactRequest{
 			ArtifactId:        artifactHash,
@@ -267,12 +267,12 @@ func (d *CrossClusterArtifactDeps) Resolve(ctx context.Context, artifactHash, co
 		return nil, fmt.Errorf("origin error: %s", resp.GetError())
 	}
 	if !resp.GetReady() {
-		return nil, ErrCrossClusterArtifactUnavailable
+		return nil, fmt.Errorf("%w: origin cluster %s reports the artifact not ready", ErrCrossClusterArtifactUnavailable, originClusterID)
 	}
 	hasS3URL := resp.GetUrl() != ""
 	hasPeerRelay := resp.GetPeerRelayUrl() != ""
 	if !hasS3URL && !hasPeerRelay {
-		return nil, ErrCrossClusterArtifactUnavailable
+		return nil, fmt.Errorf("%w: origin cluster %s returned neither a presigned URL nor a peer relay", ErrCrossClusterArtifactUnavailable, originClusterID)
 	}
 	return &CrossClusterArtifactURL{
 		URL:                resp.GetUrl(),

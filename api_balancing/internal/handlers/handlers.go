@@ -2499,6 +2499,18 @@ func HandleGenericViewerPlayback(c *gin.Context) {
 			return
 		}
 
+		if errors.Is(err, control.ErrOriginClusterUnreachable) {
+			logger.WithError(err).WithFields(logging.Fields{
+				"view_key": viewKey, "internal_name": contentID, "content_type": contentType, "origin_cluster_id": resolution.OriginClusterID,
+			}).Warn("Cross-cell origin is not reachable from this cell")
+			c.Header("Retry-After", "2")
+			respondPlaybackError(c, http.StatusServiceUnavailable, "ORIGIN_CLUSTER_UNREACHABLE", "The cluster that stores this content is not reachable right now; retry", gin.H{
+				"contentType": contentType,
+				"contentId":   contentID,
+			})
+			return
+		}
+
 		logger.WithError(err).WithFields(logging.Fields{
 			"view_key":      viewKey,
 			"internal_name": contentID,

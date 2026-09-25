@@ -3,13 +3,17 @@ package control
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"math"
 	"strings"
 	"testing"
 
 	"github.com/DATA-DOG/go-sqlmock"
+	"google.golang.org/grpc/codes"
+	grpcstatus "google.golang.org/grpc/status"
 
 	clusterpeerpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/cluster_peer"
+	commodorepb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/commodore"
 	foghornfederationpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/foghorn_federation"
 	sharedpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/shared"
 )
@@ -616,6 +620,33 @@ func TestResolveRemoteArtifact_RejectsUnauthorizedOriginCluster(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "not authorized") {
 		t.Fatalf("expected not authorized error, got %v", err)
+	}
+}
+
+// An origin the tenant is entitled to, but that this cell cannot reach right
+// now, is a retryable outage; only an origin outside the grants is a refusal.
+func TestResolveRemoteArtifact_EntitledButUnreachableOriginIsRetryable(t *testing.T) {
+	deps := &PlaybackDependencies{
+		FedClient:      stubFedClient{},
+		PeerResolver:   stubPeerResolver{},
+		LocalClusterID: "staging-media-eu",
+	}
+	resp := &commodorepb.ResolveArtifactPlaybackIDResponse{
+		AuthorityClusterPeers: []*clusterpeerpb.TenantClusterPeer{{ClusterId: "staging-media-eu"}, {ClusterId: "staging-media-us"}},
+	}
+	routing := []*clusterpeerpb.TenantClusterPeer{{ClusterId: "staging-media-eu"}}
+
+	_, err := resolveRemoteArtifact(context.Background(), deps, "playback-1", "artifact-1", "staging-media-us", "vod", "tenant-1", routing, resp)
+	if !errors.Is(err, ErrOriginClusterUnreachable) {
+		t.Fatalf("err = %v, want ErrOriginClusterUnreachable", err)
+	}
+	if grpcstatus.Code(err) == codes.PermissionDenied {
+		t.Fatal("a reachability gap must not be reported as a permission refusal")
+	}
+
+	_, err = resolveRemoteArtifact(context.Background(), deps, "playback-1", "artifact-1", "cluster-foreign", "vod", "tenant-1", routing, resp)
+	if grpcstatus.Code(err) != codes.PermissionDenied {
+		t.Fatalf("origin outside the grants: code = %v (%v), want PermissionDenied", grpcstatus.Code(err), err)
 	}
 }
 

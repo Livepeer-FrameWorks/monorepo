@@ -4133,22 +4133,31 @@ func (s *CommodoreServer) ResolveArtifactPlaybackID(ctx context.Context, req *co
 	return &commodorepb.ResolveArtifactPlaybackIDResponse{Found: false}, nil
 }
 
+// populateArtifactClusterContext leaves the peer list empty when the route
+// cannot be built; Foghorn then refuses every cross-cell origin, so the
+// failure is logged here where its cause is known.
 func (s *CommodoreServer) populateArtifactClusterContext(ctx context.Context, tenantID string, peers *[]*clusterpeerpb.TenantClusterPeer) {
 	if tenantID == "" || peers == nil {
 		return
 	}
-	if route, err := s.resolveClusterRouteForTenant(ctx, tenantID); err == nil {
-		*peers = route.clusterPeers
+	route, err := s.resolveClusterRouteForTenant(ctx, tenantID)
+	if err != nil {
+		s.logger.WithError(err).WithField("tenant_id", tenantID).Warn("Artifact resolve returned without cluster peers: tenant route unavailable")
+		return
 	}
+	*peers = route.clusterPeers
 }
 
 func (s *CommodoreServer) populateArtifactAuthorityClusterContext(ctx context.Context, tenantID string, peers *[]*clusterpeerpb.TenantClusterPeer) {
 	if tenantID == "" || peers == nil {
 		return
 	}
-	if route, err := s.resolveClusterRouteForTenant(ctx, tenantID); err == nil {
-		*peers = route.admissionPeers
+	route, err := s.resolveClusterRouteForTenant(ctx, tenantID)
+	if err != nil {
+		s.logger.WithError(err).WithField("tenant_id", tenantID).Warn("Artifact resolve returned without authority cluster peers: tenant route unavailable")
+		return
 	}
+	*peers = route.admissionPeers
 }
 
 // ResolveArtifactInternalName resolves an artifact internal routing name to artifact identity

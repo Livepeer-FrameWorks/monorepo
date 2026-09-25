@@ -533,9 +533,13 @@ func fillCrossClusterArtifactFromCommodore(ctx context.Context, req *ipcpb.Relay
 func fillCrossClusterArtifact(ctx context.Context, req *ipcpb.RelayResolveRequest, resp *ipcpb.RelayResolveResponse, logger logging.Logger, peerClusterID, tenantID, artifactType string, authorizeRedirect func(string) bool) {
 	result, err := ResolveCrossClusterArtifactURL(ctx, req.GetAssetHash(), artifactType, tenantID, peerClusterID, authorizeRedirect)
 	if err != nil || result == nil {
-		// Includes ErrCrossClusterArtifactUnavailable (deps unwired,
-		// peer unreachable, peer doesn't know the artifact). Silent —
-		// relay falls through to 404, same as today's miss.
+		// The relay answers 404 to its caller; the federation cause (deps
+		// unwired, peer unreachable, origin refusal) is only visible here.
+		if logger != nil {
+			logger.WithError(err).WithFields(logging.Fields{
+				"asset_hash": req.GetAssetHash(), "artifact_type": artifactType, "tenant_id": tenantID, "origin_cluster": peerClusterID,
+			}).Warn("RelayResolve: cross-cluster artifact not retrievable from origin")
+		}
 		return
 	}
 	resp.State = ipcpb.AssetState_ASSET_STATE_PLAYABLE

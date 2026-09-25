@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
 	"github.com/gin-gonic/gin"
 
@@ -287,7 +288,11 @@ func (s *Server) putSidecarWithStream(c *gin.Context, kind, streamInternal strin
 	if err := dtsh.ValidateFile(tmp); err != nil {
 		_ = os.Remove(tmp)
 		if s.logger != nil {
-			s.logger.WithError(err).WithField("local_path", localPath).Warn("relay sidecar PUT contained invalid dtsh")
+			s.logger.WithError(err).WithFields(logging.Fields{
+				"local_path":     localPath,
+				"bytes_received": written,
+				"content_length": c.Request.ContentLength,
+			}).Warn("relay sidecar PUT contained invalid dtsh")
 		}
 		c.String(http.StatusBadRequest, "invalid sidecar body")
 		return

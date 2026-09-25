@@ -643,7 +643,7 @@ func (s *FederationServer) prepareOriginPull(ctx context.Context, req *foghornfe
 // (c) Ready=false when neither applies, so the requesting cluster
 // surfaces 503 (no polling).
 // S3 credentials never leave the origin cluster in either case.
-func (s *FederationServer) PrepareArtifact(ctx context.Context, req *foghornfederationpb.PrepareArtifactRequest) (*foghornfederationpb.PrepareArtifactResponse, error) {
+func (s *FederationServer) PrepareArtifact(ctx context.Context, req *foghornfederationpb.PrepareArtifactRequest) (resp *foghornfederationpb.PrepareArtifactResponse, err error) {
 	if err := requireFederationServiceAuth(ctx); err != nil {
 		return nil, err
 	}
@@ -674,6 +674,21 @@ func (s *FederationServer) PrepareArtifact(ctx context.Context, req *foghornfede
 		"requesting_cluster": req.GetRequestingCluster(),
 		"artifact_type":      req.GetArtifactType(),
 	})
+	// The requesting cell only sees the refusal text or status; this is the
+	// one record of why a cross-cell playback could not be prepared here.
+	defer func() {
+		switch {
+		case err != nil:
+			log.WithError(err).Warn("PrepareArtifact failed")
+		case resp != nil && resp.GetError() != "":
+			log.WithField("refusal", resp.GetError()).Info("PrepareArtifact refused")
+		case resp != nil:
+			log.WithFields(logging.Fields{
+				"ready": resp.GetReady(), "redirect_cluster_id": resp.GetRedirectClusterId(),
+				"presigned": resp.GetUrl() != "", "peer_relay": resp.GetPeerRelayUrl() != "",
+			}).Info("PrepareArtifact served")
+		}
+	}()
 
 	descriptor, err := foghorndb.New(s.db).GetFederatedArtifactDescriptor(ctx, foghorndb.GetFederatedArtifactDescriptorParams{ArtifactHash: hash, TenantID: tenantID})
 	if err != nil {
