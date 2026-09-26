@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"frameworks/api_billing/internal/database/purserdb"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	commodorepb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/commodore"
 	"github.com/google/uuid"
 )
@@ -170,6 +171,9 @@ func (s *PurserServer) observeMediaAuthorityRefreshQueue(ctx context.Context, qu
 	stats, err := queries.GetMediaAuthorityRefreshOutboxStats(ctx)
 	if err != nil {
 		s.incMediaAuthorityRefreshFailure("observe")
+		if s.logger != nil && ctx.Err() == nil {
+			s.logger.WithError(err).Warn("Media authority refresh queue stats read failed")
+		}
 		return
 	}
 	if s.metrics.MediaAuthorityRefreshPending != nil {
@@ -181,8 +185,20 @@ func (s *PurserServer) observeMediaAuthorityRefreshQueue(ctx context.Context, qu
 }
 
 func (s *PurserServer) failMediaAuthorityRefresh(ctx context.Context, queries *purserdb.Queries, id uuid.UUID, row purserdb.ClaimMediaAuthorityRefreshBatchRow, cause error) error {
+	retryIn := mediaAuthorityRefreshBackoff(row.Attempts)
+	// The row keeps last_error, but the delivery is retried in the background:
+	// without this line a failure is visible only as a metric.
+	if s.logger != nil {
+		s.logger.WithError(cause).WithFields(logging.Fields{
+			"tenant_id":       row.TenantID,
+			"source_event_id": row.SourceEventID,
+			"reason":          row.Reason,
+			"attempts":        row.Attempts,
+			"retry_in":        retryIn.String(),
+		}).Warn("Media authority refresh delivery failed; retrying")
+	}
 	_, failErr := queries.FailMediaAuthorityRefresh(ctx, purserdb.FailMediaAuthorityRefreshParams{
-		NextAttemptAt: time.Now().UTC().Add(mediaAuthorityRefreshBackoff(row.Attempts)),
+		NextAttemptAt: time.Now().UTC().Add(retryIn),
 		LastError:     sql.NullString{String: cause.Error(), Valid: true},
 		ID:            id,
 		Revision:      row.Revision,

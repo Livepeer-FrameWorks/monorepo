@@ -157,12 +157,15 @@ groups:
           description: "The oldest billing-owned authority refresh was first enqueued more than five minutes ago and still has not completed."
 
       - alert: PurserMediaAuthorityRefreshFailures
-        expr: increase(purser_media_authority_refresh_failures_total[5m]) > 0
+        # A single failure is retried and usually recovers; the Stuck alert
+        # covers a queue that does not converge. This one flags repeated
+        # failures at one stage.
+        expr: sum by (stage) (increase(purser_media_authority_refresh_failures_total[15m])) >= 3
         labels:
           severity: warning
         annotations:
-          summary: "Purser media-authority refresh delivery failed"
-          description: "Purser failed during authority refresh stage {{ $labels.stage }}."
+          summary: "Purser media-authority refresh keeps failing"
+          description: 'Purser failed at authority refresh stage {{ $labels.stage }} {{ printf "%.0f" $value }} times in 15 minutes. Purser logs name the tenant and the error.'
 
       - alert: QuartermasterMediaAuthorityRefreshStuck
         expr: quartermaster_media_authority_refresh_oldest_pending_seconds > 300
@@ -174,12 +177,15 @@ groups:
           description: "The oldest tenant- or cluster-owned authority refresh was first enqueued more than five minutes ago and still has not reached Commodore. Tenant, cluster-access, and consent changes are not becoming signed authority."
 
       - alert: QuartermasterMediaAuthorityRefreshFailures
-        expr: increase(quartermaster_media_authority_refresh_failures_total[5m]) > 0
+        # A single failure is retried and usually recovers; the Stuck alert
+        # covers a queue that does not converge. This one flags repeated
+        # failures at one stage.
+        expr: sum by (stage) (increase(quartermaster_media_authority_refresh_failures_total[15m])) >= 3
         labels:
           severity: warning
         annotations:
-          summary: "Quartermaster media-authority refresh delivery failed"
-          description: "Quartermaster failed during authority refresh stage {{ $labels.stage }}."
+          summary: "Quartermaster media-authority refresh keeps failing"
+          description: 'Quartermaster failed at authority refresh stage {{ $labels.stage }} {{ printf "%.0f" $value }} times in 15 minutes. Quartermaster logs name the tenant and the error.'
 
       # One such read is ordinary: an object nobody used for a while runs out, and
       # the read that finds it asks the control plane for it and carries on. A
