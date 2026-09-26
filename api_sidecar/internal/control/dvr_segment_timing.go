@@ -14,6 +14,13 @@ func dvrSegmentWallClock(manifest, segmentName string) (startMs, endMs, duration
 		if start <= 0 {
 			start = nextClockMs
 		}
+		// One recording's segments cannot overlap. Mist can stamp a segment
+		// earlier than the previous one ended when its clock offset shifts
+		// (a publisher flushing its encoder at end of stream); the media is
+		// continuous, so the segment starts where the previous one ended.
+		if nextClockMs > 0 && start > 0 && start < nextClockMs {
+			start = nextClockMs
+		}
 		if start > 0 && duration > 0 {
 			nextClockMs = start + duration
 		} else {

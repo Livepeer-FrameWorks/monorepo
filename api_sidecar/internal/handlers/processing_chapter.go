@@ -502,8 +502,22 @@ func (h *ProcessingJobHandler) buildChapterHLS(
 		}
 	}
 	segs = ordered
+	// The remux re-times every segment to its manifest start, so an overlap
+	// between ledger rows drops the overlapped media. Segments of one
+	// recording are continuous: a row that starts before the previous one
+	// ended (Mist re-stamped it after a clock-offset shift) starts at that end.
+	pdtStarts := make([]int64, len(ordered))
+	var contiguousEnd int64
+	for i, seg := range ordered {
+		start := seg.GetMediaStartMs()
+		if i > 0 && start < contiguousEnd {
+			start = contiguousEnd
+		}
+		pdtStarts[i] = start
+		contiguousEnd = start + seg.GetDurationMs()
+	}
 	actualMediaStartMs := ordered[0].GetMediaStartMs()
-	actualMediaEndMs := covered
+	actualMediaEndMs := max(covered, contiguousEnd)
 
 	var maxDuration int64
 	for _, s := range segs {
@@ -561,7 +575,7 @@ func (h *ProcessingJobHandler) buildChapterHLS(
 
 	hasGaps := false
 	var count int32
-	for _, s := range segs {
+	for i, s := range segs {
 		path := localResolver(s.GetSegmentName())
 		if path != "" {
 			if _, err := os.Stat(path); err != nil {
@@ -595,7 +609,7 @@ func (h *ProcessingJobHandler) buildChapterHLS(
 		// wall-clock start. Mist's input_hls forwards this to
 		// UTCOffset → output_ebml writes DateUTC into the .mkv,
 		// preserving the wall-clock through the remux.
-		pdt := time.UnixMilli(s.GetMediaStartMs()).UTC().Format(time.RFC3339Nano)
+		pdt := time.UnixMilli(pdtStarts[i]).UTC().Format(time.RFC3339Nano)
 		fmt.Fprintf(&b, "#EXT-X-PROGRAM-DATE-TIME:%s\n", pdt)
 		fmt.Fprintf(&b, "#EXTINF:%.3f,\n", float64(s.GetDurationMs())/1000.0)
 		fmt.Fprintf(&b, "%s\n", path)
