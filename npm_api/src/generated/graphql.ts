@@ -1389,6 +1389,36 @@ timeoutMs: number, /** Always 'redacted' on read; the actual secret is fieldcryp
 secretMasked: string, /** Your JSON object, sent as `context` in every access request to the URL. Null when unset. */
 context: unknown } | null } | null };
 
+/** A live stream configuration with real-time operational metrics. Streams are the core entity for broadcasting and viewing live content. */
+export type StreamWithKeyFieldsFragment = { __typename: 'Stream', /** Secret key for publisher-authenticated ingest; null for pull and managed sources. The key lets its holder publish to the stream, so an API token needs the streams:write scope: without it this field is null and the response carries a FORBIDDEN error at its path. */
+streamKey: string | null, /** Global unique identifier for Relay compatibility. */
+id: string, /** Public stream UUID used for analytics and service APIs (not the Relay ID). */
+streamId: string, /** Human-readable display name for the stream. */
+name: string, /** Optional description for the stream. */
+description: string | null, /** Public identifier for playback URLs. */
+playbackId: string, /** Whether DVR recording is enabled for this stream. */
+record: boolean, /** How source media enters the stream. */
+ingestMode: IngestMode, /** When this stream was created. */
+createdAt: string, /** When this stream was last modified. */
+updatedAt: string, /** How saved recordings are split into chapters. Snapshotted when a recording starts; changes apply from the next broadcast. NONE = live rewind only, nothing kept after the broadcast. */
+dvrChapterMode: DVRChapterMode | null, /** Chapter interval in seconds. Required when dvrChapterMode = FIXED_INTERVAL, ignored otherwise. Minimum 3600 (1 hour). */
+dvrChapterIntervalSeconds: number | null, /** Per-stream Skipper monitoring override (INHERIT follows tier). */
+monitoring: MonitoringToggle, /** Pull-source config for pull streams; null for push streams. */
+pullSource: { /** Redacted upstream URI with credentials removed. */
+sourceUriRedacted: string, /** Whether the media plane may pull from the source. */
+enabled: boolean, /** Eligibility class: public or private. */
+class: string } | null, /** Playback access policy. null/PUBLIC = anyone with the playbackId can watch. */
+playbackPolicy: { type: PlaybackPolicyType, /** Sites allowed to embed the content, as normalized `scheme://host[:port]` origins; `*` allows any. Empty = no restriction. A browser viewer whose Origin (or Referer) is not listed is denied. */
+allowedOrigins: Array<string>, /** JWT-policy details, populated when type == JWT. */
+jwt: { /** Allowed signing key IDs. Empty = any active tenant key. */
+allowedKids: Array<string>, /** If set, the viewer JWT's `aud` claim must contain at least one of these. */
+requiredAudience: Array<string>, /** Required claim constraints. Each value is the JSON-encoded representation of the expected claim value (so callers can require strings, numbers, booleans, or arrays consistently). Empty = no claim check. */
+requiredClaimsJson: Array<{ name: string, jsonValue: string }> } | null, /** Webhook-policy details, populated when type == WEBHOOK. Secret is masked. */
+webhook: { url: string, /** Outbound POST timeout in milliseconds. Capped server-side at 10000. */
+timeoutMs: number, /** Always 'redacted' on read; the actual secret is fieldcrypt-encrypted at rest. */
+secretMasked: string, /** Your JSON object, sent as `context` in every access request to the URL. Null when unset. */
+context: unknown } | null } | null };
+
 /** Real-time operational metrics for a stream from the analytics data plane. Updated frequently while stream is live, represents latest known state. */
 export type StreamMetricsFieldsFragment = { /** Current lifecycle status of the stream (OFFLINE, CONNECTING, LIVE, etc.). */
 status: StreamStatus, /** Whether the stream is currently broadcasting. */
@@ -9873,6 +9903,53 @@ export const StreamFieldsFragmentDoc = /*#__PURE__*/ new TypedDocumentString(`
   }
   allowedOrigins
 }`, {"fragmentName":"StreamFields"}) as unknown as TypedDocumentString<StreamFieldsFragment, unknown>;
+/** A live stream configuration with real-time operational metrics. Streams are the core entity for broadcasting and viewing live content. */
+export const StreamWithKeyFieldsFragmentDoc = /*#__PURE__*/ new TypedDocumentString(`
+    fragment StreamWithKeyFields on Stream {
+  ...StreamFields
+  streamKey
+}
+    fragment PlaybackPolicyFields on PlaybackPolicy {
+  type
+  jwt {
+    allowedKids
+    requiredAudience
+    requiredClaimsJson {
+      name
+      jsonValue
+    }
+  }
+  webhook {
+    url
+    timeoutMs
+    secretMasked
+    context
+  }
+  allowedOrigins
+}
+fragment StreamFields on Stream {
+  __typename
+  id
+  streamId
+  name
+  description
+  playbackId
+  record
+  ingestMode
+  pullSource {
+    sourceUriRedacted
+    enabled
+    class
+  }
+  createdAt
+  updatedAt
+  dvrChapterMode
+  dvrChapterIntervalSeconds
+  monitoring
+  playbackPolicy {
+    ...PlaybackPolicyFields
+  }
+}`, {"fragmentName":"StreamWithKeyFields"}) as unknown as TypedDocumentString<StreamWithKeyFieldsFragment, unknown>;
 /** Real-time operational metrics for a stream from the analytics data plane. Updated frequently while stream is live, represents latest known state. */
 export const StreamMetricsFieldsFragmentDoc = /*#__PURE__*/ new TypedDocumentString(`
     fragment StreamMetricsFields on StreamMetrics {
@@ -29003,10 +29080,7 @@ export const CreateStreamDocument = /*#__PURE__*/ new TypedDocumentString(`
     mutation CreateStream($input: CreateStreamInput!) {
   createStream(input: $input) {
     __typename
-    ...StreamFields
-    ... on Stream {
-      streamKey
-    }
+    ...StreamWithKeyFields
     ...ValidationErrorFields
     ...AuthErrorFields
   }
@@ -29063,6 +29137,10 @@ fragment StreamFields on Stream {
   playbackPolicy {
     ...PlaybackPolicyFields
   }
+}
+fragment StreamWithKeyFields on Stream {
+  ...StreamFields
+  streamKey
 }`) as unknown as TypedDocumentString<CreateStreamMutation, CreateStreamMutationVariables>;
 /** Update an existing stream's configuration. */
 export const UpdateStreamDocument = /*#__PURE__*/ new TypedDocumentString(`
@@ -29168,10 +29246,7 @@ export const RefreshStreamKeyDocument = /*#__PURE__*/ new TypedDocumentString(`
     mutation RefreshStreamKey($id: ID!) {
   refreshStreamKey(id: $id) {
     __typename
-    ...StreamFields
-    ... on Stream {
-      streamKey
-    }
+    ...StreamWithKeyFields
     ...ValidationErrorFields
     ...NotFoundErrorFields
     ...AuthErrorFields
@@ -29236,6 +29311,10 @@ fragment StreamFields on Stream {
   playbackPolicy {
     ...PlaybackPolicyFields
   }
+}
+fragment StreamWithKeyFields on Stream {
+  ...StreamFields
+  streamKey
 }`) as unknown as TypedDocumentString<RefreshStreamKeyMutation, RefreshStreamKeyMutationVariables>;
 /** Create an additional stream key for a stream. */
 export const CreateStreamKeyDocument = /*#__PURE__*/ new TypedDocumentString(`

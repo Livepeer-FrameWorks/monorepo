@@ -139,7 +139,7 @@ exports[`public API > operation manifest 1`] = `
       "since": "v0.3.11",
     },
     "CreateStream": {
-      "hash": "sha256:cd8978b6d236f178189cfdfa1d974f5d45846990174f302875799d14c6ea9369",
+      "hash": "sha256:6e873bcc04f30bddd18ba70a45912ad7ce975e3df8750fa5e65270dc4a4b0d3e",
       "kind": "mutation",
       "since": "v0.3.11",
     },
@@ -974,7 +974,7 @@ exports[`public API > operation manifest 1`] = `
       "since": "v0.3.11",
     },
     "RefreshStreamKey": {
-      "hash": "sha256:c8b7e86782b66998734665b420e484cd75649cf2fe4cfab36ab09606d507ac08",
+      "hash": "sha256:379abc73915c0de3c69aa5c1dcd16e20121cca9ca6006fba2fe3c69cbf7d9938",
       "kind": "mutation",
       "since": "v0.3.11",
     },
@@ -1547,6 +1547,7 @@ exports[`public API > root entry exports 1`] = `
   "StreamMetricsFieldsFragmentDoc",
   "StreamRetentionOverridesDefaultFieldsFragmentDoc",
   "StreamValidationDefaultFieldsFragmentDoc",
+  "StreamWithKeyFieldsFragmentDoc",
   "StreamingConfigDefaultFieldsFragmentDoc",
   "StripeBillingPortalSessionDefaultFieldsFragmentDoc",
   "StripeCheckoutSessionDefaultFieldsFragmentDoc",

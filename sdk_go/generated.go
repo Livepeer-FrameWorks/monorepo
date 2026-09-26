@@ -20852,69 +20852,78 @@ func (v *CreateSigningKeyResponse) __premarshalJSON() (*__premarshalCreateSignin
 // A live stream configuration with real-time operational metrics.
 // Streams are the core entity for broadcasting and viewing live content.
 type CreateStreamCreateStream struct {
-	Typename     *string `json:"__typename"`
-	StreamFields `json:"-"`
-	// Secret key for publisher-authenticated ingest; null for pull and managed sources.
-	// The key lets its holder publish to the stream, so an API token needs the
-	// streams:write scope: without it this field is null and the response carries
-	// a FORBIDDEN error at its path.
-	StreamKey *string `json:"streamKey"`
+	Typename            *string `json:"__typename"`
+	StreamWithKeyFields `json:"-"`
 }
 
 // GetTypename returns CreateStreamCreateStream.Typename, and is useful for accessing the field via an interface.
 func (v *CreateStreamCreateStream) GetTypename() *string { return v.Typename }
 
 // GetStreamKey returns CreateStreamCreateStream.StreamKey, and is useful for accessing the field via an interface.
-func (v *CreateStreamCreateStream) GetStreamKey() *string { return v.StreamKey }
+func (v *CreateStreamCreateStream) GetStreamKey() *string { return v.StreamWithKeyFields.StreamKey }
 
 // GetId returns CreateStreamCreateStream.Id, and is useful for accessing the field via an interface.
-func (v *CreateStreamCreateStream) GetId() string { return v.StreamFields.Id }
+func (v *CreateStreamCreateStream) GetId() string { return v.StreamWithKeyFields.StreamFields.Id }
 
 // GetStreamId returns CreateStreamCreateStream.StreamId, and is useful for accessing the field via an interface.
-func (v *CreateStreamCreateStream) GetStreamId() string { return v.StreamFields.StreamId }
+func (v *CreateStreamCreateStream) GetStreamId() string {
+	return v.StreamWithKeyFields.StreamFields.StreamId
+}
 
 // GetName returns CreateStreamCreateStream.Name, and is useful for accessing the field via an interface.
-func (v *CreateStreamCreateStream) GetName() string { return v.StreamFields.Name }
+func (v *CreateStreamCreateStream) GetName() string { return v.StreamWithKeyFields.StreamFields.Name }
 
 // GetDescription returns CreateStreamCreateStream.Description, and is useful for accessing the field via an interface.
-func (v *CreateStreamCreateStream) GetDescription() *string { return v.StreamFields.Description }
+func (v *CreateStreamCreateStream) GetDescription() *string {
+	return v.StreamWithKeyFields.StreamFields.Description
+}
 
 // GetPlaybackId returns CreateStreamCreateStream.PlaybackId, and is useful for accessing the field via an interface.
-func (v *CreateStreamCreateStream) GetPlaybackId() string { return v.StreamFields.PlaybackId }
+func (v *CreateStreamCreateStream) GetPlaybackId() string {
+	return v.StreamWithKeyFields.StreamFields.PlaybackId
+}
 
 // GetRecord returns CreateStreamCreateStream.Record, and is useful for accessing the field via an interface.
-func (v *CreateStreamCreateStream) GetRecord() bool { return v.StreamFields.Record }
+func (v *CreateStreamCreateStream) GetRecord() bool { return v.StreamWithKeyFields.StreamFields.Record }
 
 // GetIngestMode returns CreateStreamCreateStream.IngestMode, and is useful for accessing the field via an interface.
-func (v *CreateStreamCreateStream) GetIngestMode() IngestMode { return v.StreamFields.IngestMode }
+func (v *CreateStreamCreateStream) GetIngestMode() IngestMode {
+	return v.StreamWithKeyFields.StreamFields.IngestMode
+}
 
 // GetPullSource returns CreateStreamCreateStream.PullSource, and is useful for accessing the field via an interface.
 func (v *CreateStreamCreateStream) GetPullSource() *StreamFieldsPullSourcePullSourceView {
-	return v.StreamFields.PullSource
+	return v.StreamWithKeyFields.StreamFields.PullSource
 }
 
 // GetCreatedAt returns CreateStreamCreateStream.CreatedAt, and is useful for accessing the field via an interface.
-func (v *CreateStreamCreateStream) GetCreatedAt() time.Time { return v.StreamFields.CreatedAt }
+func (v *CreateStreamCreateStream) GetCreatedAt() time.Time {
+	return v.StreamWithKeyFields.StreamFields.CreatedAt
+}
 
 // GetUpdatedAt returns CreateStreamCreateStream.UpdatedAt, and is useful for accessing the field via an interface.
-func (v *CreateStreamCreateStream) GetUpdatedAt() time.Time { return v.StreamFields.UpdatedAt }
+func (v *CreateStreamCreateStream) GetUpdatedAt() time.Time {
+	return v.StreamWithKeyFields.StreamFields.UpdatedAt
+}
 
 // GetDvrChapterMode returns CreateStreamCreateStream.DvrChapterMode, and is useful for accessing the field via an interface.
 func (v *CreateStreamCreateStream) GetDvrChapterMode() *DVRChapterMode {
-	return v.StreamFields.DvrChapterMode
+	return v.StreamWithKeyFields.StreamFields.DvrChapterMode
 }
 
 // GetDvrChapterIntervalSeconds returns CreateStreamCreateStream.DvrChapterIntervalSeconds, and is useful for accessing the field via an interface.
 func (v *CreateStreamCreateStream) GetDvrChapterIntervalSeconds() *int {
-	return v.StreamFields.DvrChapterIntervalSeconds
+	return v.StreamWithKeyFields.StreamFields.DvrChapterIntervalSeconds
 }
 
 // GetMonitoring returns CreateStreamCreateStream.Monitoring, and is useful for accessing the field via an interface.
-func (v *CreateStreamCreateStream) GetMonitoring() MonitoringToggle { return v.StreamFields.Monitoring }
+func (v *CreateStreamCreateStream) GetMonitoring() MonitoringToggle {
+	return v.StreamWithKeyFields.StreamFields.Monitoring
+}
 
 // GetPlaybackPolicy returns CreateStreamCreateStream.PlaybackPolicy, and is useful for accessing the field via an interface.
 func (v *CreateStreamCreateStream) GetPlaybackPolicy() *StreamFieldsPlaybackPolicy {
-	return v.StreamFields.PlaybackPolicy
+	return v.StreamWithKeyFields.StreamFields.PlaybackPolicy
 }
 
 func (v *CreateStreamCreateStream) UnmarshalJSON(b []byte) error {
@@ -20935,7 +20944,7 @@ func (v *CreateStreamCreateStream) UnmarshalJSON(b []byte) error {
 	}
 
 	err = json.Unmarshal(
-		b, &v.StreamFields)
+		b, &v.StreamWithKeyFields)
 	if err != nil {
 		return err
 	}
@@ -20988,21 +20997,21 @@ func (v *CreateStreamCreateStream) __premarshalJSON() (*__premarshalCreateStream
 	var retval __premarshalCreateStreamCreateStream
 
 	retval.Typename = v.Typename
-	retval.StreamKey = v.StreamKey
-	retval.Id = v.StreamFields.Id
-	retval.StreamId = v.StreamFields.StreamId
-	retval.Name = v.StreamFields.Name
-	retval.Description = v.StreamFields.Description
-	retval.PlaybackId = v.StreamFields.PlaybackId
-	retval.Record = v.StreamFields.Record
-	retval.IngestMode = v.StreamFields.IngestMode
-	retval.PullSource = v.StreamFields.PullSource
-	retval.CreatedAt = v.StreamFields.CreatedAt
-	retval.UpdatedAt = v.StreamFields.UpdatedAt
-	retval.DvrChapterMode = v.StreamFields.DvrChapterMode
-	retval.DvrChapterIntervalSeconds = v.StreamFields.DvrChapterIntervalSeconds
-	retval.Monitoring = v.StreamFields.Monitoring
-	retval.PlaybackPolicy = v.StreamFields.PlaybackPolicy
+	retval.StreamKey = v.StreamWithKeyFields.StreamKey
+	retval.Id = v.StreamWithKeyFields.StreamFields.Id
+	retval.StreamId = v.StreamWithKeyFields.StreamFields.StreamId
+	retval.Name = v.StreamWithKeyFields.StreamFields.Name
+	retval.Description = v.StreamWithKeyFields.StreamFields.Description
+	retval.PlaybackId = v.StreamWithKeyFields.StreamFields.PlaybackId
+	retval.Record = v.StreamWithKeyFields.StreamFields.Record
+	retval.IngestMode = v.StreamWithKeyFields.StreamFields.IngestMode
+	retval.PullSource = v.StreamWithKeyFields.StreamFields.PullSource
+	retval.CreatedAt = v.StreamWithKeyFields.StreamFields.CreatedAt
+	retval.UpdatedAt = v.StreamWithKeyFields.StreamFields.UpdatedAt
+	retval.DvrChapterMode = v.StreamWithKeyFields.StreamFields.DvrChapterMode
+	retval.DvrChapterIntervalSeconds = v.StreamWithKeyFields.StreamFields.DvrChapterIntervalSeconds
+	retval.Monitoring = v.StreamWithKeyFields.StreamFields.Monitoring
+	retval.PlaybackPolicy = v.StreamWithKeyFields.StreamFields.PlaybackPolicy
 	return &retval, nil
 }
 
@@ -82942,81 +82951,86 @@ func (v *RefreshStreamKeyRefreshStreamKeyNotFoundError) __premarshalJSON() (*__p
 // A live stream configuration with real-time operational metrics.
 // Streams are the core entity for broadcasting and viewing live content.
 type RefreshStreamKeyRefreshStreamKeyStream struct {
-	Typename     *string `json:"__typename"`
-	StreamFields `json:"-"`
-	// Secret key for publisher-authenticated ingest; null for pull and managed sources.
-	// The key lets its holder publish to the stream, so an API token needs the
-	// streams:write scope: without it this field is null and the response carries
-	// a FORBIDDEN error at its path.
-	StreamKey *string `json:"streamKey"`
+	Typename            *string `json:"__typename"`
+	StreamWithKeyFields `json:"-"`
 }
 
 // GetTypename returns RefreshStreamKeyRefreshStreamKeyStream.Typename, and is useful for accessing the field via an interface.
 func (v *RefreshStreamKeyRefreshStreamKeyStream) GetTypename() *string { return v.Typename }
 
 // GetStreamKey returns RefreshStreamKeyRefreshStreamKeyStream.StreamKey, and is useful for accessing the field via an interface.
-func (v *RefreshStreamKeyRefreshStreamKeyStream) GetStreamKey() *string { return v.StreamKey }
+func (v *RefreshStreamKeyRefreshStreamKeyStream) GetStreamKey() *string {
+	return v.StreamWithKeyFields.StreamKey
+}
 
 // GetId returns RefreshStreamKeyRefreshStreamKeyStream.Id, and is useful for accessing the field via an interface.
-func (v *RefreshStreamKeyRefreshStreamKeyStream) GetId() string { return v.StreamFields.Id }
+func (v *RefreshStreamKeyRefreshStreamKeyStream) GetId() string {
+	return v.StreamWithKeyFields.StreamFields.Id
+}
 
 // GetStreamId returns RefreshStreamKeyRefreshStreamKeyStream.StreamId, and is useful for accessing the field via an interface.
-func (v *RefreshStreamKeyRefreshStreamKeyStream) GetStreamId() string { return v.StreamFields.StreamId }
+func (v *RefreshStreamKeyRefreshStreamKeyStream) GetStreamId() string {
+	return v.StreamWithKeyFields.StreamFields.StreamId
+}
 
 // GetName returns RefreshStreamKeyRefreshStreamKeyStream.Name, and is useful for accessing the field via an interface.
-func (v *RefreshStreamKeyRefreshStreamKeyStream) GetName() string { return v.StreamFields.Name }
+func (v *RefreshStreamKeyRefreshStreamKeyStream) GetName() string {
+	return v.StreamWithKeyFields.StreamFields.Name
+}
 
 // GetDescription returns RefreshStreamKeyRefreshStreamKeyStream.Description, and is useful for accessing the field via an interface.
 func (v *RefreshStreamKeyRefreshStreamKeyStream) GetDescription() *string {
-	return v.StreamFields.Description
+	return v.StreamWithKeyFields.StreamFields.Description
 }
 
 // GetPlaybackId returns RefreshStreamKeyRefreshStreamKeyStream.PlaybackId, and is useful for accessing the field via an interface.
 func (v *RefreshStreamKeyRefreshStreamKeyStream) GetPlaybackId() string {
-	return v.StreamFields.PlaybackId
+	return v.StreamWithKeyFields.StreamFields.PlaybackId
 }
 
 // GetRecord returns RefreshStreamKeyRefreshStreamKeyStream.Record, and is useful for accessing the field via an interface.
-func (v *RefreshStreamKeyRefreshStreamKeyStream) GetRecord() bool { return v.StreamFields.Record }
+func (v *RefreshStreamKeyRefreshStreamKeyStream) GetRecord() bool {
+	return v.StreamWithKeyFields.StreamFields.Record
+}
 
 // GetIngestMode returns RefreshStreamKeyRefreshStreamKeyStream.IngestMode, and is useful for accessing the field via an interface.
 func (v *RefreshStreamKeyRefreshStreamKeyStream) GetIngestMode() IngestMode {
-	return v.StreamFields.IngestMode
+	return v.StreamWithKeyFields.StreamFields.IngestMode
 }
 
 // GetPullSource returns RefreshStreamKeyRefreshStreamKeyStream.PullSource, and is useful for accessing the field via an interface.
 func (v *RefreshStreamKeyRefreshStreamKeyStream) GetPullSource() *StreamFieldsPullSourcePullSourceView {
-	return v.StreamFields.PullSource
+	return v.StreamWithKeyFields.StreamFields.PullSource
 }
 
 // GetCreatedAt returns RefreshStreamKeyRefreshStreamKeyStream.CreatedAt, and is useful for accessing the field via an interface.
 func (v *RefreshStreamKeyRefreshStreamKeyStream) GetCreatedAt() time.Time {
-	return v.StreamFields.CreatedAt
+	return v.StreamWithKeyFields.StreamFields.CreatedAt
 }
 
 // GetUpdatedAt returns RefreshStreamKeyRefreshStreamKeyStream.UpdatedAt, and is useful for accessing the field via an interface.
 func (v *RefreshStreamKeyRefreshStreamKeyStream) GetUpdatedAt() time.Time {
-	return v.StreamFields.UpdatedAt
+	return v.StreamWithKeyFields.StreamFields.UpdatedAt
 }
 
 // GetDvrChapterMode returns RefreshStreamKeyRefreshStreamKeyStream.DvrChapterMode, and is useful for accessing the field via an interface.
 func (v *RefreshStreamKeyRefreshStreamKeyStream) GetDvrChapterMode() *DVRChapterMode {
-	return v.StreamFields.DvrChapterMode
+	return v.StreamWithKeyFields.StreamFields.DvrChapterMode
 }
 
 // GetDvrChapterIntervalSeconds returns RefreshStreamKeyRefreshStreamKeyStream.DvrChapterIntervalSeconds, and is useful for accessing the field via an interface.
 func (v *RefreshStreamKeyRefreshStreamKeyStream) GetDvrChapterIntervalSeconds() *int {
-	return v.StreamFields.DvrChapterIntervalSeconds
+	return v.StreamWithKeyFields.StreamFields.DvrChapterIntervalSeconds
 }
 
 // GetMonitoring returns RefreshStreamKeyRefreshStreamKeyStream.Monitoring, and is useful for accessing the field via an interface.
 func (v *RefreshStreamKeyRefreshStreamKeyStream) GetMonitoring() MonitoringToggle {
-	return v.StreamFields.Monitoring
+	return v.StreamWithKeyFields.StreamFields.Monitoring
 }
 
 // GetPlaybackPolicy returns RefreshStreamKeyRefreshStreamKeyStream.PlaybackPolicy, and is useful for accessing the field via an interface.
 func (v *RefreshStreamKeyRefreshStreamKeyStream) GetPlaybackPolicy() *StreamFieldsPlaybackPolicy {
-	return v.StreamFields.PlaybackPolicy
+	return v.StreamWithKeyFields.StreamFields.PlaybackPolicy
 }
 
 func (v *RefreshStreamKeyRefreshStreamKeyStream) UnmarshalJSON(b []byte) error {
@@ -83037,7 +83051,7 @@ func (v *RefreshStreamKeyRefreshStreamKeyStream) UnmarshalJSON(b []byte) error {
 	}
 
 	err = json.Unmarshal(
-		b, &v.StreamFields)
+		b, &v.StreamWithKeyFields)
 	if err != nil {
 		return err
 	}
@@ -83090,21 +83104,21 @@ func (v *RefreshStreamKeyRefreshStreamKeyStream) __premarshalJSON() (*__premarsh
 	var retval __premarshalRefreshStreamKeyRefreshStreamKeyStream
 
 	retval.Typename = v.Typename
-	retval.StreamKey = v.StreamKey
-	retval.Id = v.StreamFields.Id
-	retval.StreamId = v.StreamFields.StreamId
-	retval.Name = v.StreamFields.Name
-	retval.Description = v.StreamFields.Description
-	retval.PlaybackId = v.StreamFields.PlaybackId
-	retval.Record = v.StreamFields.Record
-	retval.IngestMode = v.StreamFields.IngestMode
-	retval.PullSource = v.StreamFields.PullSource
-	retval.CreatedAt = v.StreamFields.CreatedAt
-	retval.UpdatedAt = v.StreamFields.UpdatedAt
-	retval.DvrChapterMode = v.StreamFields.DvrChapterMode
-	retval.DvrChapterIntervalSeconds = v.StreamFields.DvrChapterIntervalSeconds
-	retval.Monitoring = v.StreamFields.Monitoring
-	retval.PlaybackPolicy = v.StreamFields.PlaybackPolicy
+	retval.StreamKey = v.StreamWithKeyFields.StreamKey
+	retval.Id = v.StreamWithKeyFields.StreamFields.Id
+	retval.StreamId = v.StreamWithKeyFields.StreamFields.StreamId
+	retval.Name = v.StreamWithKeyFields.StreamFields.Name
+	retval.Description = v.StreamWithKeyFields.StreamFields.Description
+	retval.PlaybackId = v.StreamWithKeyFields.StreamFields.PlaybackId
+	retval.Record = v.StreamWithKeyFields.StreamFields.Record
+	retval.IngestMode = v.StreamWithKeyFields.StreamFields.IngestMode
+	retval.PullSource = v.StreamWithKeyFields.StreamFields.PullSource
+	retval.CreatedAt = v.StreamWithKeyFields.StreamFields.CreatedAt
+	retval.UpdatedAt = v.StreamWithKeyFields.StreamFields.UpdatedAt
+	retval.DvrChapterMode = v.StreamWithKeyFields.StreamFields.DvrChapterMode
+	retval.DvrChapterIntervalSeconds = v.StreamWithKeyFields.StreamFields.DvrChapterIntervalSeconds
+	retval.Monitoring = v.StreamWithKeyFields.StreamFields.Monitoring
+	retval.PlaybackPolicy = v.StreamWithKeyFields.StreamFields.PlaybackPolicy
 	return &retval, nil
 }
 
@@ -103448,6 +103462,162 @@ func (v *StreamValidationDefaultFields) GetStreamKey() string { return v.StreamK
 
 // GetError returns StreamValidationDefaultFields.Error, and is useful for accessing the field via an interface.
 func (v *StreamValidationDefaultFields) GetError() *string { return v.Error }
+
+// A stream with its publishing key: what creating or rotating a key returns.
+// Reading the key needs streams:write on an API token.
+type StreamWithKeyFields struct {
+	StreamFields `json:"-"`
+	// Secret key for publisher-authenticated ingest; null for pull and managed sources.
+	// The key lets its holder publish to the stream, so an API token needs the
+	// streams:write scope: without it this field is null and the response carries
+	// a FORBIDDEN error at its path.
+	StreamKey *string `json:"streamKey"`
+}
+
+// GetStreamKey returns StreamWithKeyFields.StreamKey, and is useful for accessing the field via an interface.
+func (v *StreamWithKeyFields) GetStreamKey() *string { return v.StreamKey }
+
+// GetTypename returns StreamWithKeyFields.Typename, and is useful for accessing the field via an interface.
+func (v *StreamWithKeyFields) GetTypename() *string { return v.StreamFields.Typename }
+
+// GetId returns StreamWithKeyFields.Id, and is useful for accessing the field via an interface.
+func (v *StreamWithKeyFields) GetId() string { return v.StreamFields.Id }
+
+// GetStreamId returns StreamWithKeyFields.StreamId, and is useful for accessing the field via an interface.
+func (v *StreamWithKeyFields) GetStreamId() string { return v.StreamFields.StreamId }
+
+// GetName returns StreamWithKeyFields.Name, and is useful for accessing the field via an interface.
+func (v *StreamWithKeyFields) GetName() string { return v.StreamFields.Name }
+
+// GetDescription returns StreamWithKeyFields.Description, and is useful for accessing the field via an interface.
+func (v *StreamWithKeyFields) GetDescription() *string { return v.StreamFields.Description }
+
+// GetPlaybackId returns StreamWithKeyFields.PlaybackId, and is useful for accessing the field via an interface.
+func (v *StreamWithKeyFields) GetPlaybackId() string { return v.StreamFields.PlaybackId }
+
+// GetRecord returns StreamWithKeyFields.Record, and is useful for accessing the field via an interface.
+func (v *StreamWithKeyFields) GetRecord() bool { return v.StreamFields.Record }
+
+// GetIngestMode returns StreamWithKeyFields.IngestMode, and is useful for accessing the field via an interface.
+func (v *StreamWithKeyFields) GetIngestMode() IngestMode { return v.StreamFields.IngestMode }
+
+// GetPullSource returns StreamWithKeyFields.PullSource, and is useful for accessing the field via an interface.
+func (v *StreamWithKeyFields) GetPullSource() *StreamFieldsPullSourcePullSourceView {
+	return v.StreamFields.PullSource
+}
+
+// GetCreatedAt returns StreamWithKeyFields.CreatedAt, and is useful for accessing the field via an interface.
+func (v *StreamWithKeyFields) GetCreatedAt() time.Time { return v.StreamFields.CreatedAt }
+
+// GetUpdatedAt returns StreamWithKeyFields.UpdatedAt, and is useful for accessing the field via an interface.
+func (v *StreamWithKeyFields) GetUpdatedAt() time.Time { return v.StreamFields.UpdatedAt }
+
+// GetDvrChapterMode returns StreamWithKeyFields.DvrChapterMode, and is useful for accessing the field via an interface.
+func (v *StreamWithKeyFields) GetDvrChapterMode() *DVRChapterMode {
+	return v.StreamFields.DvrChapterMode
+}
+
+// GetDvrChapterIntervalSeconds returns StreamWithKeyFields.DvrChapterIntervalSeconds, and is useful for accessing the field via an interface.
+func (v *StreamWithKeyFields) GetDvrChapterIntervalSeconds() *int {
+	return v.StreamFields.DvrChapterIntervalSeconds
+}
+
+// GetMonitoring returns StreamWithKeyFields.Monitoring, and is useful for accessing the field via an interface.
+func (v *StreamWithKeyFields) GetMonitoring() MonitoringToggle { return v.StreamFields.Monitoring }
+
+// GetPlaybackPolicy returns StreamWithKeyFields.PlaybackPolicy, and is useful for accessing the field via an interface.
+func (v *StreamWithKeyFields) GetPlaybackPolicy() *StreamFieldsPlaybackPolicy {
+	return v.StreamFields.PlaybackPolicy
+}
+
+func (v *StreamWithKeyFields) UnmarshalJSON(b []byte) error {
+
+	if string(b) == "null" {
+		return nil
+	}
+
+	var firstPass struct {
+		*StreamWithKeyFields
+		graphql.NoUnmarshalJSON
+	}
+	firstPass.StreamWithKeyFields = v
+
+	err := json.Unmarshal(b, &firstPass)
+	if err != nil {
+		return err
+	}
+
+	err = json.Unmarshal(
+		b, &v.StreamFields)
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
+type __premarshalStreamWithKeyFields struct {
+	StreamKey *string `json:"streamKey"`
+
+	Typename *string `json:"__typename"`
+
+	Id string `json:"id"`
+
+	StreamId string `json:"streamId"`
+
+	Name string `json:"name"`
+
+	Description *string `json:"description"`
+
+	PlaybackId string `json:"playbackId"`
+
+	Record bool `json:"record"`
+
+	IngestMode IngestMode `json:"ingestMode"`
+
+	PullSource *StreamFieldsPullSourcePullSourceView `json:"pullSource"`
+
+	CreatedAt time.Time `json:"createdAt"`
+
+	UpdatedAt time.Time `json:"updatedAt"`
+
+	DvrChapterMode *DVRChapterMode `json:"dvrChapterMode"`
+
+	DvrChapterIntervalSeconds *int `json:"dvrChapterIntervalSeconds"`
+
+	Monitoring MonitoringToggle `json:"monitoring"`
+
+	PlaybackPolicy *StreamFieldsPlaybackPolicy `json:"playbackPolicy"`
+}
+
+func (v *StreamWithKeyFields) MarshalJSON() ([]byte, error) {
+	premarshaled, err := v.__premarshalJSON()
+	if err != nil {
+		return nil, err
+	}
+	return json.Marshal(premarshaled)
+}
+
+func (v *StreamWithKeyFields) __premarshalJSON() (*__premarshalStreamWithKeyFields, error) {
+	var retval __premarshalStreamWithKeyFields
+
+	retval.StreamKey = v.StreamKey
+	retval.Typename = v.StreamFields.Typename
+	retval.Id = v.StreamFields.Id
+	retval.StreamId = v.StreamFields.StreamId
+	retval.Name = v.StreamFields.Name
+	retval.Description = v.StreamFields.Description
+	retval.PlaybackId = v.StreamFields.PlaybackId
+	retval.Record = v.StreamFields.Record
+	retval.IngestMode = v.StreamFields.IngestMode
+	retval.PullSource = v.StreamFields.PullSource
+	retval.CreatedAt = v.StreamFields.CreatedAt
+	retval.UpdatedAt = v.StreamFields.UpdatedAt
+	retval.DvrChapterMode = v.StreamFields.DvrChapterMode
+	retval.DvrChapterIntervalSeconds = v.StreamFields.DvrChapterIntervalSeconds
+	retval.Monitoring = v.StreamFields.Monitoring
+	retval.PlaybackPolicy = v.StreamFields.PlaybackPolicy
+	return &retval, nil
+}
 
 // StreamingConfigDefaultFields includes the GraphQL fields of StreamingConfig requested by the fragment StreamingConfigDefaultFields.
 type StreamingConfigDefaultFields struct {
@@ -126398,13 +126568,26 @@ const CreateStream_Operation = `
 mutation CreateStream ($input: CreateStreamInput!) {
 	createStream(input: $input) {
 		__typename
-		... StreamFields
-		... on Stream {
-			streamKey
-		}
+		... StreamWithKeyFields
 		... ValidationErrorFields
 		... AuthErrorFields
 	}
+}
+fragment StreamWithKeyFields on Stream {
+	... StreamFields
+	streamKey
+}
+fragment ValidationErrorFields on ValidationError {
+	__typename
+	message
+	code
+	field
+	constraint
+}
+fragment AuthErrorFields on AuthError {
+	__typename
+	message
+	code
 }
 fragment StreamFields on Stream {
 	__typename
@@ -126428,18 +126611,6 @@ fragment StreamFields on Stream {
 	playbackPolicy {
 		... PlaybackPolicyFields
 	}
-}
-fragment ValidationErrorFields on ValidationError {
-	__typename
-	message
-	code
-	field
-	constraint
-}
-fragment AuthErrorFields on AuthError {
-	__typename
-	message
-	code
 }
 fragment PlaybackPolicyFields on PlaybackPolicy {
 	type
@@ -142146,14 +142317,34 @@ const RefreshStreamKey_Operation = `
 mutation RefreshStreamKey ($id: ID!) {
 	refreshStreamKey(id: $id) {
 		__typename
-		... StreamFields
-		... on Stream {
-			streamKey
-		}
+		... StreamWithKeyFields
 		... ValidationErrorFields
 		... NotFoundErrorFields
 		... AuthErrorFields
 	}
+}
+fragment StreamWithKeyFields on Stream {
+	... StreamFields
+	streamKey
+}
+fragment ValidationErrorFields on ValidationError {
+	__typename
+	message
+	code
+	field
+	constraint
+}
+fragment NotFoundErrorFields on NotFoundError {
+	__typename
+	message
+	code
+	resourceType
+	resourceId
+}
+fragment AuthErrorFields on AuthError {
+	__typename
+	message
+	code
 }
 fragment StreamFields on Stream {
 	__typename
@@ -142177,25 +142368,6 @@ fragment StreamFields on Stream {
 	playbackPolicy {
 		... PlaybackPolicyFields
 	}
-}
-fragment ValidationErrorFields on ValidationError {
-	__typename
-	message
-	code
-	field
-	constraint
-}
-fragment NotFoundErrorFields on NotFoundError {
-	__typename
-	message
-	code
-	resourceType
-	resourceId
-}
-fragment AuthErrorFields on AuthError {
-	__typename
-	message
-	code
 }
 fragment PlaybackPolicyFields on PlaybackPolicy {
 	type

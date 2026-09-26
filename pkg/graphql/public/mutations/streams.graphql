@@ -2,10 +2,7 @@
 mutation CreateStream($input: CreateStreamInput!) {
   createStream(input: $input) {
     __typename
-    ...StreamFields
-    ... on Stream {
-      streamKey
-    }
+    ...StreamWithKeyFields
     ...ValidationErrorFields
     ...AuthErrorFields
   }
@@ -33,10 +30,7 @@ mutation DeleteStream($id: ID!) {
 mutation RefreshStreamKey($id: ID!) {
   refreshStreamKey(id: $id) {
     __typename
-    ...StreamFields
-    ... on Stream {
-      streamKey
-    }
+    ...StreamWithKeyFields
     ...ValidationErrorFields
     ...NotFoundErrorFields
     ...AuthErrorFields

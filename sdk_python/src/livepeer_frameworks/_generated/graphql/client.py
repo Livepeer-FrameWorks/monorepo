@@ -14969,10 +14969,7 @@ class GraphQLClient(BaseClient):
             mutation CreateStream($input: CreateStreamInput!) {
               createStream(input: $input) {
                 __typename
-                ...StreamFields
-                ... on Stream {
-                  streamKey
-                }
+                ...StreamWithKeyFields
                 ...ValidationErrorFields
                 ...AuthErrorFields
               }
@@ -15025,6 +15022,11 @@ class GraphQLClient(BaseClient):
               playbackPolicy {
                 ...PlaybackPolicyFields
               }
+            }
+
+            fragment StreamWithKeyFields on Stream {
+              ...StreamFields
+              streamKey
             }
 
             fragment ValidationErrorFields on ValidationError {
@@ -15175,10 +15177,7 @@ class GraphQLClient(BaseClient):
             mutation RefreshStreamKey($id: ID!) {
               refreshStreamKey(id: $id) {
                 __typename
-                ...StreamFields
-                ... on Stream {
-                  streamKey
-                }
+                ...StreamWithKeyFields
                 ...ValidationErrorFields
                 ...NotFoundErrorFields
                 ...AuthErrorFields
@@ -15240,6 +15239,11 @@ class GraphQLClient(BaseClient):
               playbackPolicy {
                 ...PlaybackPolicyFields
               }
+            }
+
+            fragment StreamWithKeyFields on Stream {
+              ...StreamFields
+              streamKey
             }
 
             fragment ValidationErrorFields on ValidationError {

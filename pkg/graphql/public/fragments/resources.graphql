@@ -41,6 +41,13 @@ fragment StreamFields on Stream {
   }
 }
 
+# A stream with its publishing key: what creating or rotating a key returns.
+# Reading the key needs streams:write on an API token.
+fragment StreamWithKeyFields on Stream {
+  ...StreamFields
+  streamKey
+}
+
 fragment StreamMetricsFields on StreamMetrics {
   status
   isLive

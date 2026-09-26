@@ -4,14 +4,14 @@ import os
 from typing import Any
 
 from livepeer_frameworks import FrameWorksClient, ResultError, expect_result, paginate_relay
-from livepeer_frameworks.graphql import ConnectionInput, CreateStreamInput, Stream
+from livepeer_frameworks.graphql import ConnectionInput, CreateStreamInput, StreamWithKey
 
 
 def main() -> None:
     with FrameWorksClient(token=os.environ["FRAMEWORKS_API_TOKEN"]) as fw:
         created = fw.create_stream(input=CreateStreamInput(name="Studio A", record=True))
         try:
-            stream = expect_result(created.create_stream, Stream)
+            stream = expect_result(created.create_stream, StreamWithKey)
         except ResultError as err:
             print(f"not created: {err.typename} {err.message} (field {err.field})")
             return
