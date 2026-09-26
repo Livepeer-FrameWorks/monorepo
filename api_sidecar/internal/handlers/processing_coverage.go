@@ -121,3 +121,28 @@ func waitProcessingStreamStopped(mistClient *mist.Client, streamName string, tim
 		time.Sleep(500 * time.Millisecond)
 	}
 }
+
+// writtenRecordingTracks drops tracks the recorder selected but never wrote.
+// RECORDING_END lists the selection, so a rendition that never arrived would
+// otherwise count as present in the completeness check and be published in
+// the catalog. A Mist that reports no written spans at all is taken as is.
+func writtenRecordingTracks(tracks []*ipcpb.StreamTrack) []*ipcpb.StreamTrack {
+	written := func(t *ipcpb.StreamTrack) bool { return t.WrittenFirstMs != nil && t.WrittenLastMs != nil }
+	reportsSpans := false
+	for _, t := range tracks {
+		if t != nil && written(t) {
+			reportsSpans = true
+			break
+		}
+	}
+	if !reportsSpans {
+		return tracks
+	}
+	out := make([]*ipcpb.StreamTrack, 0, len(tracks))
+	for _, t := range tracks {
+		if t != nil && written(t) {
+			out = append(out, t)
+		}
+	}
+	return out
+}

@@ -6,6 +6,7 @@ import (
 
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/mist"
 	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
+	"github.com/sirupsen/logrus"
 )
 
 // coverageTrack builds a recorded track whose written span is first..last.
@@ -113,5 +114,41 @@ func TestRecordingDurationError(t *testing.T) {
 	}
 	if err := recordingDurationError(133, 0); err != nil {
 		t.Fatalf("an unknown source duration is not judged: %v", err)
+	}
+}
+
+// Staging (video-only import): RECORDING_END listed the 360/480/720
+// renditions the recorder selected, but only the source was written. The
+// unwritten ones must not count as present or reach the catalog.
+func TestProcessingRecordingEndDropsSelectedButUnwrittenTracks(t *testing.T) {
+	i32 := func(v int32) *int32 { return &v }
+	i64 := func(v int64) *int64 { return &v }
+	sourceName := "video_src"
+	source := &ipcpb.StreamTrack{TrackName: "video_src", TrackType: "video", Codec: "H264", Width: i32(1280), Height: i32(720),
+		FirstMs: i64(0), LastMs: i64(9966), WrittenFirstMs: i64(0), WrittenLastMs: i64(9966)}
+	unwritten := func(name string, w, h int32) *ipcpb.StreamTrack {
+		return &ipcpb.StreamTrack{TrackName: name, TrackType: "video", Codec: "H264", Width: i32(w), Height: i32(h),
+			FirstMs: i64(0), LastMs: i64(9966), SourceTrack: &sourceName}
+	}
+	rec := &ipcpb.RecordingCompleteTrigger{Tracks: []*ipcpb.StreamTrack{
+		source, unwritten("r360", 640, 360), unwritten("r480", 854, 480), unwritten("r720", 1280, 720),
+	}}
+	evt := processingRecordingEndEvent(rec)
+	if len(evt.FullTracks) != 1 || evt.FullTracks[0].GetTrackName() != "video_src" {
+		t.Fatalf("full tracks = %v, want only the written source", evt.FullTracks)
+	}
+	processes := `[{"process":"Livepeer","target_profiles":[{"name":"720p","height":720},{"name":"480p","height":480},{"name":"360p","height":360}]}]`
+	log := logrus.New()
+	log.SetLevel(logrus.FatalLevel)
+	if livepeerRenditionsCompleteFromTracks(logrus.NewEntry(log), processes, evt.Tracks, mist.SourceMediaInfo{Width: 1280, Height: 720}, 9966) {
+		t.Fatal("unwritten renditions were counted as present")
+	}
+
+	// A Mist that reports no written spans keeps every selected track.
+	for _, tr := range rec.Tracks {
+		tr.WrittenFirstMs, tr.WrittenLastMs = nil, nil
+	}
+	if got := len(processingRecordingEndEvent(rec).FullTracks); got != 4 {
+		t.Fatalf("tracks without span reporting = %d, want 4", got)
 	}
 }
