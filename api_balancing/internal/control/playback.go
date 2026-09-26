@@ -530,7 +530,7 @@ func resolveArtifactPlaybackWithResp(ctx context.Context, deps *PlaybackDependen
 	})
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
-			if originClusterID != "" && originClusterID != deps.LocalClusterID && deps.FedClient != nil {
+			if isRemoteOriginCluster(originClusterID, deps) && deps.FedClient != nil {
 				return resolveRemoteArtifactWithMetadata(ctx, deps, playbackID, artifactResp.ArtifactHash, originClusterID, artifactType, tenantID, allowedClusters, artifactResp, allowConnectedMetadata)
 			}
 			return nil, fmt.Errorf("%s not found", contentType)
@@ -595,7 +595,7 @@ func resolveArtifactPlaybackWithResp(ctx context.Context, deps *PlaybackDependen
 		// request.
 		location := strings.ToLower(strings.TrimSpace(storageLocation))
 		sync := strings.ToLower(strings.TrimSpace(syncStatus))
-		if sync == "synced" || location == "s3" {
+		if sync == "synced" || location == "s3" || localOriginRelayable(ctx, deps, artifactResp.ArtifactHash, originClusterID) {
 			lbctx := context.WithValue(ctx, ctxkeys.KeyCapability, "edge,storage")
 			if tenantID != "" {
 				lbctx = context.WithValue(lbctx, ctxkeys.KeyClusterServeScope, NewClusterServeScope(tenantID, deps.OfficialClusterID, allowedClusters, allowPlatformShared))
@@ -606,7 +606,7 @@ func resolveArtifactPlaybackWithResp(ctx context.Context, deps *PlaybackDependen
 			}
 			coldRanked := rankNodeScoresForArtifact(nodes, deps.GeoLat, deps.GeoLon)
 			artifactNodes = coldRanked
-		} else if originClusterID != "" && originClusterID != deps.LocalClusterID && deps.FedClient != nil {
+		} else if isRemoteOriginCluster(originClusterID, deps) && deps.FedClient != nil {
 			// Federation fallback: artifact exists locally but not on any node and not in S3
 			return resolveRemoteArtifactWithMetadata(ctx, deps, playbackID, artifactResp.ArtifactHash, originClusterID, artifactType, tenantID, allowedClusters, artifactResp, allowConnectedMetadata)
 		} else {
@@ -1741,4 +1741,26 @@ func resolveRemoteArtifactWithMetadata(ctx context.Context, deps *PlaybackDepend
 	// a local storage edge whose Helmsman relay reads peer S3 on demand
 	// via RelayResolve federation. No local byte copy is created.
 	return resolveArtifactPlaybackWithResp(ctx, deps, playbackID, artifactResp, allowConnectedMetadata)
+}
+
+// isRemoteOriginCluster reports whether an artifact's origin cluster belongs to
+// another cell. A Foghorn serves several media clusters of its cell, so an
+// origin other than its own CLUSTER_ID can still be local; such an artifact is
+// never prepared or adopted through federation.
+func isRemoteOriginCluster(originClusterID string, deps *PlaybackDependencies) bool {
+	return originClusterID != "" && originClusterID != deps.LocalClusterID && !isServedCluster(originClusterID)
+}
+
+// localOriginRelayable reports whether a local, not yet synced artifact can be
+// served through the relay: its origin is this cell and a complete origin copy
+// was seen recently. The in-memory inventory of this replica can lag the node's
+// holder replica by up to one artifact report, so the relay, which reads the
+// durable origin row with its own completeness and freshness gates, carries the
+// viewer instead of failing.
+func localOriginRelayable(ctx context.Context, deps *PlaybackDependencies, artifactHash, originClusterID string) bool {
+	if deps.DB == nil || isRemoteOriginCluster(originClusterID, deps) {
+		return false
+	}
+	_, err := foghorndb.New(deps.DB).GetFreshRelayOriginNode(ctx, artifactHash)
+	return err == nil
 }
