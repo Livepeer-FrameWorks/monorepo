@@ -31,3 +31,10 @@ func (launchdController) RestartCaddy(ctx context.Context) error {
 		"launchctl", "kickstart", "-k", fmt.Sprintf("gui/%d/com.livepeer.frameworks.caddy", os.Getuid()),
 	)
 }
+
+func (launchdController) RestartMist(ctx context.Context) error {
+	return firstCommand(ctx,
+		"launchctl", "kickstart", "-k", "system/com.livepeer.frameworks.mistserver",
+		"launchctl", "kickstart", "-k", fmt.Sprintf("gui/%d/com.livepeer.frameworks.mistserver", os.Getuid()),
+	)
+}

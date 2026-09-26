@@ -1,6 +1,7 @@
 package updater
 
 import (
+	"context"
 	"errors"
 	"os"
 	"path/filepath"
@@ -305,5 +306,65 @@ func TestLinuxMistControllerSignalTargetsMainProcess(t *testing.T) {
 	}
 	if !slices.Contains(args, "--kill-whom=main") {
 		t.Fatalf("args = %#v, want --kill-whom=main", args)
+	}
+}
+
+type restartCountingController struct {
+	fakeServiceController
+	restarts   *int
+	restartErr error
+}
+
+func (c restartCountingController) RestartMist(context.Context) error {
+	*c.restarts++
+	return c.restartErr
+}
+
+func TestCompleteMistReloadRestartsWhenReloadDoesNotServe(t *testing.T) {
+	reloadStuck := errors.New("MistController PID 9 still runs the previous executable")
+	cases := []struct {
+		name         string
+		verify       []error
+		restartErr   error
+		wantRestarts int
+		wantErr      bool
+		wantDetail   string
+	}{
+		{name: "reload serves", verify: []error{nil}, wantRestarts: 0},
+		{name: "restart recovers", verify: []error{reloadStuck, nil}, wantRestarts: 1, wantDetail: "MistServer restarted because the rolling reload failed: " + reloadStuck.Error()},
+		{name: "restart fails", verify: []error{reloadStuck}, restartErr: errors.New("no MistController process found"), wantRestarts: 1, wantErr: true},
+		{name: "still down after restart", verify: []error{reloadStuck, errors.New("MistServer API did not answer")}, wantRestarts: 1, wantErr: true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			restarts := 0
+			restore := SetServiceControllerForTest(restartCountingController{restarts: &restarts, restartErr: tc.restartErr})
+			defer restore()
+			calls := 0
+			originalVerify := verifyMistReload
+			verifyMistReload = func(context.Context, string) error {
+				if calls >= len(tc.verify) {
+					t.Fatalf("unexpected verification call %d", calls+1)
+				}
+				err := tc.verify[calls]
+				calls++
+				return err
+			}
+			defer func() { verifyMistReload = originalVerify }()
+
+			detail, err := completeMistReload(context.Background(), "/opt/frameworks/mistserver/bin/MistController")
+			if (err != nil) != tc.wantErr {
+				t.Fatalf("err = %v, wantErr %v", err, tc.wantErr)
+			}
+			if tc.wantErr && !strings.Contains(err.Error(), reloadStuck.Error()) {
+				t.Fatalf("error %q must name the reload failure", err)
+			}
+			if restarts != tc.wantRestarts {
+				t.Fatalf("restarts = %d, want %d", restarts, tc.wantRestarts)
+			}
+			if !strings.Contains(detail, tc.wantDetail) || (tc.wantDetail == "" && detail != "") {
+				t.Fatalf("detail = %q, want %q", detail, tc.wantDetail)
+			}
+		})
 	}
 }

@@ -78,11 +78,12 @@ func Apply(ctx context.Context, component *ipcpb.DesiredComponent) Result {
 	defer componentInstallMu.Unlock()
 
 	var restartSelf bool
+	detail := ""
 	switch name {
 	case "helmsman":
 		restartSelf, err = applyHelmsman(artifact, component)
 	case "mist":
-		err = applyMistServer(ctx, artifact, component)
+		detail, err = applyMistServer(ctx, artifact, component)
 	case "caddy":
 		err = applyCaddy(ctx, artifact)
 	default:
@@ -94,7 +95,10 @@ func Apply(ctx context.Context, component *ipcpb.DesiredComponent) Result {
 	if err := WriteComponentVersion(name, version); err != nil {
 		return Result{Detail: err.Error()}
 	}
-	return Result{Success: true, Detail: "artifact installed", RestartSelf: restartSelf}
+	if detail == "" {
+		detail = "artifact installed"
+	}
+	return Result{Success: true, Detail: detail, RestartSelf: restartSelf}
 }
 
 func WriteComponentVersion(component, version string) error {
@@ -307,33 +311,61 @@ func applyHelmsman(artifact string, component *ipcpb.DesiredComponent) (bool, er
 	return true, nil
 }
 
-func applyMistServer(ctx context.Context, artifact string, component *ipcpb.DesiredComponent) error {
+func applyMistServer(ctx context.Context, artifact string, component *ipcpb.DesiredComponent) (string, error) {
 	root := componentInstallDir("mistserver")
 	staging, err := extractArtifactSibling(root, artifact)
 	if err != nil {
-		return err
+		return "", err
 	}
 	defer func() { _ = os.RemoveAll(staging) }()
 	if _, statErr := os.Stat(filepath.Join(staging, "bin", "MistController")); statErr != nil {
-		return fmt.Errorf("MistController missing from artifact")
+		return "", fmt.Errorf("MistController missing from artifact")
 	}
 	replacement, err := mistPayloadReplacement(staging, root)
 	if err != nil {
-		return err
+		return "", err
 	}
 	defer func() { _ = os.RemoveAll(replacement.src) }()
 	if err := writeMistManagedMetadata(replacement.src, component); err != nil {
-		return err
+		return "", err
 	}
 	if err := replaceMistPayloadInPlace(replacement.src, replacement.dst, func() error {
 		return currentServiceController().SignalMistUSR1(ctx)
 	}); err != nil {
-		return err
+		return "", err
 	}
 	// Signal delivery is the commit point: once Mist begins its handoff, the
-	// new payload must remain available for delayed controller/listener execs.
-	// A verification timeout fails the update without rolling files backward.
-	return waitMistControllerReload(ctx, filepath.Join(root, "bin", "MistController"))
+	// new payload must remain available for delayed controller/listener execs,
+	// so a failed reload is recovered forward by a restart, never by rolling
+	// files back.
+	return completeMistReload(ctx, filepath.Join(root, "bin", "MistController"))
+}
+
+// verifyMistReload is replaced in tests; production waits for the controller
+// to run the new executable and for its API to answer an authenticated call.
+var verifyMistReload = func(ctx context.Context, controllerPath string) error {
+	if err := waitMistControllerReload(ctx, controllerPath); err != nil {
+		return err
+	}
+	return waitMistAPIReady(ctx)
+}
+
+// completeMistReload restarts MistServer when the rolling reload did not
+// produce a controller that serves its API. Without this a controller wedged
+// in the handoff keeps the node alive for Foghorn while every Mist API call
+// fails. The restart drops active sessions, so the returned detail says so.
+func completeMistReload(ctx context.Context, controllerPath string) (string, error) {
+	reloadErr := verifyMistReload(ctx, controllerPath)
+	if reloadErr == nil {
+		return "", nil
+	}
+	if err := currentServiceController().RestartMist(ctx); err != nil {
+		return "", fmt.Errorf("MistServer rolling reload failed (%w) and restart failed: %w", reloadErr, err)
+	}
+	if err := verifyMistReload(ctx, controllerPath); err != nil {
+		return "", fmt.Errorf("MistServer rolling reload failed (%w) and it is still unavailable after a restart: %w", reloadErr, err)
+	}
+	return fmt.Sprintf("artifact installed; MistServer restarted because the rolling reload failed: %v", reloadErr), nil
 }
 
 func writeMistManagedMetadata(root string, component *ipcpb.DesiredComponent) error {

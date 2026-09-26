@@ -41,6 +41,11 @@ func (s6Controller) SignalMistUSR1(ctx context.Context) error {
 	return errors.Join(errs...)
 }
 
+// RestartMist stops the MistController processes; s6-supervise starts a new one.
+func (s6Controller) RestartMist(ctx context.Context) error {
+	return restartMistControllerProcesses(ctx)
+}
+
 func (s6Controller) RestartCaddy(ctx context.Context) error {
 	client, baseURL := caddyAdminHTTPClient()
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, baseURL+"/stop", nil)
