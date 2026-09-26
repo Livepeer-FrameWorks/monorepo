@@ -104,9 +104,9 @@ Clip, recording, and upload events share one `artifact` object:
 | `artifactId` | The artifact's public hash, the `hash` of its `storageArtifactsConnection` row. |
 | `kind`       | `ARTIFACT_KIND_CLIP`, `ARTIFACT_KIND_RECORDING`, or `ARTIFACT_KIND_UPLOAD`.     |
 | `streamId`   | The source stream; empty for uploads.                                           |
-| `playbackId` | Always empty on clip, recording, and upload events.                             |
+| `playbackId` | Empty, except on `recording.ready` (see below).                                 |
 
-The event does not carry the artifact's playback ID. A playback ID can be rotated, so key your
+Events do not carry the artifact's playback ID. A playback ID can be rotated, so key your
 records on `artifactId` and look the current playback ID up when you need it: query
 `storageArtifactsConnection` with `artifactHash` set to the `artifactId`, or `clip(id:)` for a clip.
 
