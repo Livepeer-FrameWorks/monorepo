@@ -1,5 +1,11 @@
 # @livepeer-frameworks/player-wc
 
+## 0.6.3
+
+### Patch Changes
+
+- @livepeer-frameworks/player-core@0.6.3
+
 ## 0.6.2
 
 ### Patch Changes

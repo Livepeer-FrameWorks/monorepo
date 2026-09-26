@@ -105,9 +105,9 @@ class ArtifactEventDefaultStream(BaseModel):
     "Optional description for the stream."
     stream_key: Optional[str] = Field(
         alias="streamKey",
-        description="Secret key for publisher-authenticated ingest; null for pull and managed sources.",
+        description="Secret key for publisher-authenticated ingest; null for pull and managed sources.\nThe key lets its holder publish to the stream, so an API token needs the\nstreams:write scope: without it this field is null and the response carries\na FORBIDDEN error at its path.",
     )
-    "Secret key for publisher-authenticated ingest; null for pull and managed sources."
+    "Secret key for publisher-authenticated ingest; null for pull and managed sources.\nThe key lets its holder publish to the stream, so an API token needs the\nstreams:write scope: without it this field is null and the response carries\na FORBIDDEN error at its path."
     playback_id: str = Field(
         alias="playbackId", description="Public identifier for playback URLs."
     )
@@ -144,9 +144,9 @@ class ArtifactEventDefaultStream(BaseModel):
     )
     "When this stream was last modified."
     metrics: Optional["ArtifactEventDefaultStreamMetrics"] = Field(
-        description="Real-time operational metrics from the data plane.\nIncludes viewer counts, quality metrics, and throughput data.\nLazily loaded from ClickHouse analytics."
+        description="Real-time operational metrics from the data plane.\nIncludes viewer counts, quality metrics, and throughput data.\nLazily loaded from ClickHouse analytics, so an API token needs the\nanalytics:read scope: without it this field is null and the response\ncarries a FORBIDDEN error at its path."
     )
-    "Real-time operational metrics from the data plane.\nIncludes viewer counts, quality metrics, and throughput data.\nLazily loaded from ClickHouse analytics."
+    "Real-time operational metrics from the data plane.\nIncludes viewer counts, quality metrics, and throughput data.\nLazily loaded from ClickHouse analytics, so an API token needs the\nanalytics:read scope: without it this field is null and the response\ncarries a FORBIDDEN error at its path."
     push_targets: list["ArtifactEventDefaultStreamPushTargets"] = Field(
         alias="pushTargets",
         description="Configured multistream push targets for this stream.",
@@ -453,9 +453,9 @@ class ArtifactEventInNodeDefaultStream(BaseModel):
     "Optional description for the stream."
     stream_key: Optional[str] = Field(
         alias="streamKey",
-        description="Secret key for publisher-authenticated ingest; null for pull and managed sources.",
+        description="Secret key for publisher-authenticated ingest; null for pull and managed sources.\nThe key lets its holder publish to the stream, so an API token needs the\nstreams:write scope: without it this field is null and the response carries\na FORBIDDEN error at its path.",
     )
-    "Secret key for publisher-authenticated ingest; null for pull and managed sources."
+    "Secret key for publisher-authenticated ingest; null for pull and managed sources.\nThe key lets its holder publish to the stream, so an API token needs the\nstreams:write scope: without it this field is null and the response carries\na FORBIDDEN error at its path."
     playback_id: str = Field(
         alias="playbackId", description="Public identifier for playback URLs."
     )
@@ -492,9 +492,9 @@ class ArtifactEventInNodeDefaultStream(BaseModel):
     )
     "When this stream was last modified."
     metrics: Optional["ArtifactEventInNodeDefaultStreamMetrics"] = Field(
-        description="Real-time operational metrics from the data plane.\nIncludes viewer counts, quality metrics, and throughput data.\nLazily loaded from ClickHouse analytics."
+        description="Real-time operational metrics from the data plane.\nIncludes viewer counts, quality metrics, and throughput data.\nLazily loaded from ClickHouse analytics, so an API token needs the\nanalytics:read scope: without it this field is null and the response\ncarries a FORBIDDEN error at its path."
     )
-    "Real-time operational metrics from the data plane.\nIncludes viewer counts, quality metrics, and throughput data.\nLazily loaded from ClickHouse analytics."
+    "Real-time operational metrics from the data plane.\nIncludes viewer counts, quality metrics, and throughput data.\nLazily loaded from ClickHouse analytics, so an API token needs the\nanalytics:read scope: without it this field is null and the response\ncarries a FORBIDDEN error at its path."
     push_targets: list["ArtifactEventInNodeDefaultStreamPushTargets"] = Field(
         alias="pushTargets",
         description="Configured multistream push targets for this stream.",
@@ -806,9 +806,9 @@ class ArtifactStateDefaultStream(BaseModel):
     "Optional description for the stream."
     stream_key: Optional[str] = Field(
         alias="streamKey",
-        description="Secret key for publisher-authenticated ingest; null for pull and managed sources.",
+        description="Secret key for publisher-authenticated ingest; null for pull and managed sources.\nThe key lets its holder publish to the stream, so an API token needs the\nstreams:write scope: without it this field is null and the response carries\na FORBIDDEN error at its path.",
     )
-    "Secret key for publisher-authenticated ingest; null for pull and managed sources."
+    "Secret key for publisher-authenticated ingest; null for pull and managed sources.\nThe key lets its holder publish to the stream, so an API token needs the\nstreams:write scope: without it this field is null and the response carries\na FORBIDDEN error at its path."
     playback_id: str = Field(
         alias="playbackId", description="Public identifier for playback URLs."
     )
@@ -845,9 +845,9 @@ class ArtifactStateDefaultStream(BaseModel):
     )
     "When this stream was last modified."
     metrics: Optional["ArtifactStateDefaultStreamMetrics"] = Field(
-        description="Real-time operational metrics from the data plane.\nIncludes viewer counts, quality metrics, and throughput data.\nLazily loaded from ClickHouse analytics."
+        description="Real-time operational metrics from the data plane.\nIncludes viewer counts, quality metrics, and throughput data.\nLazily loaded from ClickHouse analytics, so an API token needs the\nanalytics:read scope: without it this field is null and the response\ncarries a FORBIDDEN error at its path."
     )
-    "Real-time operational metrics from the data plane.\nIncludes viewer counts, quality metrics, and throughput data.\nLazily loaded from ClickHouse analytics."
+    "Real-time operational metrics from the data plane.\nIncludes viewer counts, quality metrics, and throughput data.\nLazily loaded from ClickHouse analytics, so an API token needs the\nanalytics:read scope: without it this field is null and the response\ncarries a FORBIDDEN error at its path."
     push_targets: list["ArtifactStateDefaultStreamPushTargets"] = Field(
         alias="pushTargets",
         description="Configured multistream push targets for this stream.",
@@ -2408,9 +2408,9 @@ class ClientMetrics5mDefaultStream(BaseModel):
     "Optional description for the stream."
     stream_key: Optional[str] = Field(
         alias="streamKey",
-        description="Secret key for publisher-authenticated ingest; null for pull and managed sources.",
+        description="Secret key for publisher-authenticated ingest; null for pull and managed sources.\nThe key lets its holder publish to the stream, so an API token needs the\nstreams:write scope: without it this field is null and the response carries\na FORBIDDEN error at its path.",
     )
-    "Secret key for publisher-authenticated ingest; null for pull and managed sources."
+    "Secret key for publisher-authenticated ingest; null for pull and managed sources.\nThe key lets its holder publish to the stream, so an API token needs the\nstreams:write scope: without it this field is null and the response carries\na FORBIDDEN error at its path."
     playback_id: str = Field(
         alias="playbackId", description="Public identifier for playback URLs."
     )
@@ -2447,9 +2447,9 @@ class ClientMetrics5mDefaultStream(BaseModel):
     )
     "When this stream was last modified."
     metrics: Optional["ClientMetrics5mDefaultStreamMetrics"] = Field(
-        description="Real-time operational metrics from the data plane.\nIncludes viewer counts, quality metrics, and throughput data.\nLazily loaded from ClickHouse analytics."
+        description="Real-time operational metrics from the data plane.\nIncludes viewer counts, quality metrics, and throughput data.\nLazily loaded from ClickHouse analytics, so an API token needs the\nanalytics:read scope: without it this field is null and the response\ncarries a FORBIDDEN error at its path."
     )
-    "Real-time operational metrics from the data plane.\nIncludes viewer counts, quality metrics, and throughput data.\nLazily loaded from ClickHouse analytics."
+    "Real-time operational metrics from the data plane.\nIncludes viewer counts, quality metrics, and throughput data.\nLazily loaded from ClickHouse analytics, so an API token needs the\nanalytics:read scope: without it this field is null and the response\ncarries a FORBIDDEN error at its path."
     push_targets: list["ClientMetrics5mDefaultStreamPushTargets"] = Field(
         alias="pushTargets",
         description="Configured multistream push targets for this stream.",
@@ -3083,9 +3083,9 @@ class ClipInNodeDefaultStream(BaseModel):
     "Optional description for the stream."
     stream_key: Optional[str] = Field(
         alias="streamKey",
-        description="Secret key for publisher-authenticated ingest; null for pull and managed sources.",
+        description="Secret key for publisher-authenticated ingest; null for pull and managed sources.\nThe key lets its holder publish to the stream, so an API token needs the\nstreams:write scope: without it this field is null and the response carries\na FORBIDDEN error at its path.",
     )
-    "Secret key for publisher-authenticated ingest; null for pull and managed sources."
+    "Secret key for publisher-authenticated ingest; null for pull and managed sources.\nThe key lets its holder publish to the stream, so an API token needs the\nstreams:write scope: without it this field is null and the response carries\na FORBIDDEN error at its path."
     playback_id: str = Field(
         alias="playbackId", description="Public identifier for playback URLs."
     )
@@ -3122,9 +3122,9 @@ class ClipInNodeDefaultStream(BaseModel):
     )
     "When this stream was last modified."
     metrics: Optional["ClipInNodeDefaultStreamMetrics"] = Field(
-        description="Real-time operational metrics from the data plane.\nIncludes viewer counts, quality metrics, and throughput data.\nLazily loaded from ClickHouse analytics."
+        description="Real-time operational metrics from the data plane.\nIncludes viewer counts, quality metrics, and throughput data.\nLazily loaded from ClickHouse analytics, so an API token needs the\nanalytics:read scope: without it this field is null and the response\ncarries a FORBIDDEN error at its path."
     )
-    "Real-time operational metrics from the data plane.\nIncludes viewer counts, quality metrics, and throughput data.\nLazily loaded from ClickHouse analytics."
+    "Real-time operational metrics from the data plane.\nIncludes viewer counts, quality metrics, and throughput data.\nLazily loaded from ClickHouse analytics, so an API token needs the\nanalytics:read scope: without it this field is null and the response\ncarries a FORBIDDEN error at its path."
     push_targets: list["ClipInNodeDefaultStreamPushTargets"] = Field(
         alias="pushTargets",
         description="Configured multistream push targets for this stream.",
@@ -3881,9 +3881,9 @@ class ConnectionEventDefaultStream(BaseModel):
     "Optional description for the stream."
     stream_key: Optional[str] = Field(
         alias="streamKey",
-        description="Secret key for publisher-authenticated ingest; null for pull and managed sources.",
+        description="Secret key for publisher-authenticated ingest; null for pull and managed sources.\nThe key lets its holder publish to the stream, so an API token needs the\nstreams:write scope: without it this field is null and the response carries\na FORBIDDEN error at its path.",
     )
-    "Secret key for publisher-authenticated ingest; null for pull and managed sources."
+    "Secret key for publisher-authenticated ingest; null for pull and managed sources.\nThe key lets its holder publish to the stream, so an API token needs the\nstreams:write scope: without it this field is null and the response carries\na FORBIDDEN error at its path."
     playback_id: str = Field(
         alias="playbackId", description="Public identifier for playback URLs."
     )
@@ -3920,9 +3920,9 @@ class ConnectionEventDefaultStream(BaseModel):
     )
     "When this stream was last modified."
     metrics: Optional["ConnectionEventDefaultStreamMetrics"] = Field(
-        description="Real-time operational metrics from the data plane.\nIncludes viewer counts, quality metrics, and throughput data.\nLazily loaded from ClickHouse analytics."
+        description="Real-time operational metrics from the data plane.\nIncludes viewer counts, quality metrics, and throughput data.\nLazily loaded from ClickHouse analytics, so an API token needs the\nanalytics:read scope: without it this field is null and the response\ncarries a FORBIDDEN error at its path."
     )
-    "Real-time operational metrics from the data plane.\nIncludes viewer counts, quality metrics, and throughput data.\nLazily loaded from ClickHouse analytics."
+    "Real-time operational metrics from the data plane.\nIncludes viewer counts, quality metrics, and throughput data.\nLazily loaded from ClickHouse analytics, so an API token needs the\nanalytics:read scope: without it this field is null and the response\ncarries a FORBIDDEN error at its path."
     push_targets: list["ConnectionEventDefaultStreamPushTargets"] = Field(
         alias="pushTargets",
         description="Configured multistream push targets for this stream.",
@@ -4249,9 +4249,9 @@ class ConnectionEventInNodeDefaultStream(BaseModel):
     "Optional description for the stream."
     stream_key: Optional[str] = Field(
         alias="streamKey",
-        description="Secret key for publisher-authenticated ingest; null for pull and managed sources.",
+        description="Secret key for publisher-authenticated ingest; null for pull and managed sources.\nThe key lets its holder publish to the stream, so an API token needs the\nstreams:write scope: without it this field is null and the response carries\na FORBIDDEN error at its path.",
     )
-    "Secret key for publisher-authenticated ingest; null for pull and managed sources."
+    "Secret key for publisher-authenticated ingest; null for pull and managed sources.\nThe key lets its holder publish to the stream, so an API token needs the\nstreams:write scope: without it this field is null and the response carries\na FORBIDDEN error at its path."
     playback_id: str = Field(
         alias="playbackId", description="Public identifier for playback URLs."
     )
@@ -4288,9 +4288,9 @@ class ConnectionEventInNodeDefaultStream(BaseModel):
     )
     "When this stream was last modified."
     metrics: Optional["ConnectionEventInNodeDefaultStreamMetrics"] = Field(
-        description="Real-time operational metrics from the data plane.\nIncludes viewer counts, quality metrics, and throughput data.\nLazily loaded from ClickHouse analytics."
+        description="Real-time operational metrics from the data plane.\nIncludes viewer counts, quality metrics, and throughput data.\nLazily loaded from ClickHouse analytics, so an API token needs the\nanalytics:read scope: without it this field is null and the response\ncarries a FORBIDDEN error at its path."
     )
-    "Real-time operational metrics from the data plane.\nIncludes viewer counts, quality metrics, and throughput data.\nLazily loaded from ClickHouse analytics."
+    "Real-time operational metrics from the data plane.\nIncludes viewer counts, quality metrics, and throughput data.\nLazily loaded from ClickHouse analytics, so an API token needs the\nanalytics:read scope: without it this field is null and the response\ncarries a FORBIDDEN error at its path."
     push_targets: list["ConnectionEventInNodeDefaultStreamPushTargets"] = Field(
         alias="pushTargets",
         description="Configured multistream push targets for this stream.",
@@ -5325,9 +5325,9 @@ class GeographicDistributionDefaultStream(BaseModel):
     "Optional description for the stream."
     stream_key: Optional[str] = Field(
         alias="streamKey",
-        description="Secret key for publisher-authenticated ingest; null for pull and managed sources.",
+        description="Secret key for publisher-authenticated ingest; null for pull and managed sources.\nThe key lets its holder publish to the stream, so an API token needs the\nstreams:write scope: without it this field is null and the response carries\na FORBIDDEN error at its path.",
     )
-    "Secret key for publisher-authenticated ingest; null for pull and managed sources."
+    "Secret key for publisher-authenticated ingest; null for pull and managed sources.\nThe key lets its holder publish to the stream, so an API token needs the\nstreams:write scope: without it this field is null and the response carries\na FORBIDDEN error at its path."
     playback_id: str = Field(
         alias="playbackId", description="Public identifier for playback URLs."
     )
@@ -5366,9 +5366,9 @@ class GeographicDistributionDefaultStream(BaseModel):
     )
     "When this stream was last modified."
     metrics: Optional["GeographicDistributionDefaultStreamMetrics"] = Field(
-        description="Real-time operational metrics from the data plane.\nIncludes viewer counts, quality metrics, and throughput data.\nLazily loaded from ClickHouse analytics."
+        description="Real-time operational metrics from the data plane.\nIncludes viewer counts, quality metrics, and throughput data.\nLazily loaded from ClickHouse analytics, so an API token needs the\nanalytics:read scope: without it this field is null and the response\ncarries a FORBIDDEN error at its path."
     )
-    "Real-time operational metrics from the data plane.\nIncludes viewer counts, quality metrics, and throughput data.\nLazily loaded from ClickHouse analytics."
+    "Real-time operational metrics from the data plane.\nIncludes viewer counts, quality metrics, and throughput data.\nLazily loaded from ClickHouse analytics, so an API token needs the\nanalytics:read scope: without it this field is null and the response\ncarries a FORBIDDEN error at its path."
     push_targets: list["GeographicDistributionDefaultStreamPushTargets"] = Field(
         alias="pushTargets",
         description="Configured multistream push targets for this stream.",
@@ -7513,9 +7513,9 @@ class ProcessingUsageRecordDefaultStream(BaseModel):
     "Optional description for the stream."
     stream_key: Optional[str] = Field(
         alias="streamKey",
-        description="Secret key for publisher-authenticated ingest; null for pull and managed sources.",
+        description="Secret key for publisher-authenticated ingest; null for pull and managed sources.\nThe key lets its holder publish to the stream, so an API token needs the\nstreams:write scope: without it this field is null and the response carries\na FORBIDDEN error at its path.",
     )
-    "Secret key for publisher-authenticated ingest; null for pull and managed sources."
+    "Secret key for publisher-authenticated ingest; null for pull and managed sources.\nThe key lets its holder publish to the stream, so an API token needs the\nstreams:write scope: without it this field is null and the response carries\na FORBIDDEN error at its path."
     playback_id: str = Field(
         alias="playbackId", description="Public identifier for playback URLs."
     )
@@ -7552,9 +7552,9 @@ class ProcessingUsageRecordDefaultStream(BaseModel):
     )
     "When this stream was last modified."
     metrics: Optional["ProcessingUsageRecordDefaultStreamMetrics"] = Field(
-        description="Real-time operational metrics from the data plane.\nIncludes viewer counts, quality metrics, and throughput data.\nLazily loaded from ClickHouse analytics."
+        description="Real-time operational metrics from the data plane.\nIncludes viewer counts, quality metrics, and throughput data.\nLazily loaded from ClickHouse analytics, so an API token needs the\nanalytics:read scope: without it this field is null and the response\ncarries a FORBIDDEN error at its path."
     )
-    "Real-time operational metrics from the data plane.\nIncludes viewer counts, quality metrics, and throughput data.\nLazily loaded from ClickHouse analytics."
+    "Real-time operational metrics from the data plane.\nIncludes viewer counts, quality metrics, and throughput data.\nLazily loaded from ClickHouse analytics, so an API token needs the\nanalytics:read scope: without it this field is null and the response\ncarries a FORBIDDEN error at its path."
     push_targets: list["ProcessingUsageRecordDefaultStreamPushTargets"] = Field(
         alias="pushTargets",
         description="Configured multistream push targets for this stream.",
@@ -7904,9 +7904,9 @@ class ProcessingUsageRecordInNodeDefaultStream(BaseModel):
     "Optional description for the stream."
     stream_key: Optional[str] = Field(
         alias="streamKey",
-        description="Secret key for publisher-authenticated ingest; null for pull and managed sources.",
+        description="Secret key for publisher-authenticated ingest; null for pull and managed sources.\nThe key lets its holder publish to the stream, so an API token needs the\nstreams:write scope: without it this field is null and the response carries\na FORBIDDEN error at its path.",
     )
-    "Secret key for publisher-authenticated ingest; null for pull and managed sources."
+    "Secret key for publisher-authenticated ingest; null for pull and managed sources.\nThe key lets its holder publish to the stream, so an API token needs the\nstreams:write scope: without it this field is null and the response carries\na FORBIDDEN error at its path."
     playback_id: str = Field(
         alias="playbackId", description="Public identifier for playback URLs."
     )
@@ -7945,9 +7945,9 @@ class ProcessingUsageRecordInNodeDefaultStream(BaseModel):
     )
     "When this stream was last modified."
     metrics: Optional["ProcessingUsageRecordInNodeDefaultStreamMetrics"] = Field(
-        description="Real-time operational metrics from the data plane.\nIncludes viewer counts, quality metrics, and throughput data.\nLazily loaded from ClickHouse analytics."
+        description="Real-time operational metrics from the data plane.\nIncludes viewer counts, quality metrics, and throughput data.\nLazily loaded from ClickHouse analytics, so an API token needs the\nanalytics:read scope: without it this field is null and the response\ncarries a FORBIDDEN error at its path."
     )
-    "Real-time operational metrics from the data plane.\nIncludes viewer counts, quality metrics, and throughput data.\nLazily loaded from ClickHouse analytics."
+    "Real-time operational metrics from the data plane.\nIncludes viewer counts, quality metrics, and throughput data.\nLazily loaded from ClickHouse analytics, so an API token needs the\nanalytics:read scope: without it this field is null and the response\ncarries a FORBIDDEN error at its path."
     push_targets: list["ProcessingUsageRecordInNodeDefaultStreamPushTargets"] = Field(
         alias="pushTargets",
         description="Configured multistream push targets for this stream.",
@@ -8335,9 +8335,9 @@ class QualityTierDailyDefaultStream(BaseModel):
     "Optional description for the stream."
     stream_key: Optional[str] = Field(
         alias="streamKey",
-        description="Secret key for publisher-authenticated ingest; null for pull and managed sources.",
+        description="Secret key for publisher-authenticated ingest; null for pull and managed sources.\nThe key lets its holder publish to the stream, so an API token needs the\nstreams:write scope: without it this field is null and the response carries\na FORBIDDEN error at its path.",
     )
-    "Secret key for publisher-authenticated ingest; null for pull and managed sources."
+    "Secret key for publisher-authenticated ingest; null for pull and managed sources.\nThe key lets its holder publish to the stream, so an API token needs the\nstreams:write scope: without it this field is null and the response carries\na FORBIDDEN error at its path."
     playback_id: str = Field(
         alias="playbackId", description="Public identifier for playback URLs."
     )
@@ -8374,9 +8374,9 @@ class QualityTierDailyDefaultStream(BaseModel):
     )
     "When this stream was last modified."
     metrics: Optional["QualityTierDailyDefaultStreamMetrics"] = Field(
-        description="Real-time operational metrics from the data plane.\nIncludes viewer counts, quality metrics, and throughput data.\nLazily loaded from ClickHouse analytics."
+        description="Real-time operational metrics from the data plane.\nIncludes viewer counts, quality metrics, and throughput data.\nLazily loaded from ClickHouse analytics, so an API token needs the\nanalytics:read scope: without it this field is null and the response\ncarries a FORBIDDEN error at its path."
     )
-    "Real-time operational metrics from the data plane.\nIncludes viewer counts, quality metrics, and throughput data.\nLazily loaded from ClickHouse analytics."
+    "Real-time operational metrics from the data plane.\nIncludes viewer counts, quality metrics, and throughput data.\nLazily loaded from ClickHouse analytics, so an API token needs the\nanalytics:read scope: without it this field is null and the response\ncarries a FORBIDDEN error at its path."
     push_targets: list["QualityTierDailyDefaultStreamPushTargets"] = Field(
         alias="pushTargets",
         description="Configured multistream push targets for this stream.",
@@ -8688,9 +8688,9 @@ class RebufferingEventDefaultStream(BaseModel):
     "Optional description for the stream."
     stream_key: Optional[str] = Field(
         alias="streamKey",
-        description="Secret key for publisher-authenticated ingest; null for pull and managed sources.",
+        description="Secret key for publisher-authenticated ingest; null for pull and managed sources.\nThe key lets its holder publish to the stream, so an API token needs the\nstreams:write scope: without it this field is null and the response carries\na FORBIDDEN error at its path.",
     )
-    "Secret key for publisher-authenticated ingest; null for pull and managed sources."
+    "Secret key for publisher-authenticated ingest; null for pull and managed sources.\nThe key lets its holder publish to the stream, so an API token needs the\nstreams:write scope: without it this field is null and the response carries\na FORBIDDEN error at its path."
     playback_id: str = Field(
         alias="playbackId", description="Public identifier for playback URLs."
     )
@@ -8727,9 +8727,9 @@ class RebufferingEventDefaultStream(BaseModel):
     )
     "When this stream was last modified."
     metrics: Optional["RebufferingEventDefaultStreamMetrics"] = Field(
-        description="Real-time operational metrics from the data plane.\nIncludes viewer counts, quality metrics, and throughput data.\nLazily loaded from ClickHouse analytics."
+        description="Real-time operational metrics from the data plane.\nIncludes viewer counts, quality metrics, and throughput data.\nLazily loaded from ClickHouse analytics, so an API token needs the\nanalytics:read scope: without it this field is null and the response\ncarries a FORBIDDEN error at its path."
     )
-    "Real-time operational metrics from the data plane.\nIncludes viewer counts, quality metrics, and throughput data.\nLazily loaded from ClickHouse analytics."
+    "Real-time operational metrics from the data plane.\nIncludes viewer counts, quality metrics, and throughput data.\nLazily loaded from ClickHouse analytics, so an API token needs the\nanalytics:read scope: without it this field is null and the response\ncarries a FORBIDDEN error at its path."
     push_targets: list["RebufferingEventDefaultStreamPushTargets"] = Field(
         alias="pushTargets",
         description="Configured multistream push targets for this stream.",
@@ -9067,9 +9067,9 @@ class RoutingEventDefaultStream(BaseModel):
     "Optional description for the stream."
     stream_key: Optional[str] = Field(
         alias="streamKey",
-        description="Secret key for publisher-authenticated ingest; null for pull and managed sources.",
+        description="Secret key for publisher-authenticated ingest; null for pull and managed sources.\nThe key lets its holder publish to the stream, so an API token needs the\nstreams:write scope: without it this field is null and the response carries\na FORBIDDEN error at its path.",
     )
-    "Secret key for publisher-authenticated ingest; null for pull and managed sources."
+    "Secret key for publisher-authenticated ingest; null for pull and managed sources.\nThe key lets its holder publish to the stream, so an API token needs the\nstreams:write scope: without it this field is null and the response carries\na FORBIDDEN error at its path."
     playback_id: str = Field(
         alias="playbackId", description="Public identifier for playback URLs."
     )
@@ -9106,9 +9106,9 @@ class RoutingEventDefaultStream(BaseModel):
     )
     "When this stream was last modified."
     metrics: Optional["RoutingEventDefaultStreamMetrics"] = Field(
-        description="Real-time operational metrics from the data plane.\nIncludes viewer counts, quality metrics, and throughput data.\nLazily loaded from ClickHouse analytics."
+        description="Real-time operational metrics from the data plane.\nIncludes viewer counts, quality metrics, and throughput data.\nLazily loaded from ClickHouse analytics, so an API token needs the\nanalytics:read scope: without it this field is null and the response\ncarries a FORBIDDEN error at its path."
     )
-    "Real-time operational metrics from the data plane.\nIncludes viewer counts, quality metrics, and throughput data.\nLazily loaded from ClickHouse analytics."
+    "Real-time operational metrics from the data plane.\nIncludes viewer counts, quality metrics, and throughput data.\nLazily loaded from ClickHouse analytics, so an API token needs the\nanalytics:read scope: without it this field is null and the response\ncarries a FORBIDDEN error at its path."
     push_targets: list["RoutingEventDefaultStreamPushTargets"] = Field(
         alias="pushTargets",
         description="Configured multistream push targets for this stream.",
@@ -9721,9 +9721,9 @@ class StorageEventDefaultStream(BaseModel):
     "Optional description for the stream."
     stream_key: Optional[str] = Field(
         alias="streamKey",
-        description="Secret key for publisher-authenticated ingest; null for pull and managed sources.",
+        description="Secret key for publisher-authenticated ingest; null for pull and managed sources.\nThe key lets its holder publish to the stream, so an API token needs the\nstreams:write scope: without it this field is null and the response carries\na FORBIDDEN error at its path.",
     )
-    "Secret key for publisher-authenticated ingest; null for pull and managed sources."
+    "Secret key for publisher-authenticated ingest; null for pull and managed sources.\nThe key lets its holder publish to the stream, so an API token needs the\nstreams:write scope: without it this field is null and the response carries\na FORBIDDEN error at its path."
     playback_id: str = Field(
         alias="playbackId", description="Public identifier for playback URLs."
     )
@@ -9760,9 +9760,9 @@ class StorageEventDefaultStream(BaseModel):
     )
     "When this stream was last modified."
     metrics: Optional["StorageEventDefaultStreamMetrics"] = Field(
-        description="Real-time operational metrics from the data plane.\nIncludes viewer counts, quality metrics, and throughput data.\nLazily loaded from ClickHouse analytics."
+        description="Real-time operational metrics from the data plane.\nIncludes viewer counts, quality metrics, and throughput data.\nLazily loaded from ClickHouse analytics, so an API token needs the\nanalytics:read scope: without it this field is null and the response\ncarries a FORBIDDEN error at its path."
     )
-    "Real-time operational metrics from the data plane.\nIncludes viewer counts, quality metrics, and throughput data.\nLazily loaded from ClickHouse analytics."
+    "Real-time operational metrics from the data plane.\nIncludes viewer counts, quality metrics, and throughput data.\nLazily loaded from ClickHouse analytics, so an API token needs the\nanalytics:read scope: without it this field is null and the response\ncarries a FORBIDDEN error at its path."
     push_targets: list["StorageEventDefaultStreamPushTargets"] = Field(
         alias="pushTargets",
         description="Configured multistream push targets for this stream.",
@@ -10070,9 +10070,9 @@ class StorageEventInNodeDefaultStream(BaseModel):
     "Optional description for the stream."
     stream_key: Optional[str] = Field(
         alias="streamKey",
-        description="Secret key for publisher-authenticated ingest; null for pull and managed sources.",
+        description="Secret key for publisher-authenticated ingest; null for pull and managed sources.\nThe key lets its holder publish to the stream, so an API token needs the\nstreams:write scope: without it this field is null and the response carries\na FORBIDDEN error at its path.",
     )
-    "Secret key for publisher-authenticated ingest; null for pull and managed sources."
+    "Secret key for publisher-authenticated ingest; null for pull and managed sources.\nThe key lets its holder publish to the stream, so an API token needs the\nstreams:write scope: without it this field is null and the response carries\na FORBIDDEN error at its path."
     playback_id: str = Field(
         alias="playbackId", description="Public identifier for playback URLs."
     )
@@ -10109,9 +10109,9 @@ class StorageEventInNodeDefaultStream(BaseModel):
     )
     "When this stream was last modified."
     metrics: Optional["StorageEventInNodeDefaultStreamMetrics"] = Field(
-        description="Real-time operational metrics from the data plane.\nIncludes viewer counts, quality metrics, and throughput data.\nLazily loaded from ClickHouse analytics."
+        description="Real-time operational metrics from the data plane.\nIncludes viewer counts, quality metrics, and throughput data.\nLazily loaded from ClickHouse analytics, so an API token needs the\nanalytics:read scope: without it this field is null and the response\ncarries a FORBIDDEN error at its path."
     )
-    "Real-time operational metrics from the data plane.\nIncludes viewer counts, quality metrics, and throughput data.\nLazily loaded from ClickHouse analytics."
+    "Real-time operational metrics from the data plane.\nIncludes viewer counts, quality metrics, and throughput data.\nLazily loaded from ClickHouse analytics, so an API token needs the\nanalytics:read scope: without it this field is null and the response\ncarries a FORBIDDEN error at its path."
     push_targets: list["StorageEventInNodeDefaultStreamPushTargets"] = Field(
         alias="pushTargets",
         description="Configured multistream push targets for this stream.",
@@ -10428,9 +10428,9 @@ class StreamAnalyticsDailyDefaultStream(BaseModel):
     "Optional description for the stream."
     stream_key: Optional[str] = Field(
         alias="streamKey",
-        description="Secret key for publisher-authenticated ingest; null for pull and managed sources.",
+        description="Secret key for publisher-authenticated ingest; null for pull and managed sources.\nThe key lets its holder publish to the stream, so an API token needs the\nstreams:write scope: without it this field is null and the response carries\na FORBIDDEN error at its path.",
     )
-    "Secret key for publisher-authenticated ingest; null for pull and managed sources."
+    "Secret key for publisher-authenticated ingest; null for pull and managed sources.\nThe key lets its holder publish to the stream, so an API token needs the\nstreams:write scope: without it this field is null and the response carries\na FORBIDDEN error at its path."
     playback_id: str = Field(
         alias="playbackId", description="Public identifier for playback URLs."
     )
@@ -10467,9 +10467,9 @@ class StreamAnalyticsDailyDefaultStream(BaseModel):
     )
     "When this stream was last modified."
     metrics: Optional["StreamAnalyticsDailyDefaultStreamMetrics"] = Field(
-        description="Real-time operational metrics from the data plane.\nIncludes viewer counts, quality metrics, and throughput data.\nLazily loaded from ClickHouse analytics."
+        description="Real-time operational metrics from the data plane.\nIncludes viewer counts, quality metrics, and throughput data.\nLazily loaded from ClickHouse analytics, so an API token needs the\nanalytics:read scope: without it this field is null and the response\ncarries a FORBIDDEN error at its path."
     )
-    "Real-time operational metrics from the data plane.\nIncludes viewer counts, quality metrics, and throughput data.\nLazily loaded from ClickHouse analytics."
+    "Real-time operational metrics from the data plane.\nIncludes viewer counts, quality metrics, and throughput data.\nLazily loaded from ClickHouse analytics, so an API token needs the\nanalytics:read scope: without it this field is null and the response\ncarries a FORBIDDEN error at its path."
     push_targets: list["StreamAnalyticsDailyDefaultStreamPushTargets"] = Field(
         alias="pushTargets",
         description="Configured multistream push targets for this stream.",
@@ -10803,9 +10803,9 @@ class StreamAnalyticsSummaryDefaultStream(BaseModel):
     "Optional description for the stream."
     stream_key: Optional[str] = Field(
         alias="streamKey",
-        description="Secret key for publisher-authenticated ingest; null for pull and managed sources.",
+        description="Secret key for publisher-authenticated ingest; null for pull and managed sources.\nThe key lets its holder publish to the stream, so an API token needs the\nstreams:write scope: without it this field is null and the response carries\na FORBIDDEN error at its path.",
     )
-    "Secret key for publisher-authenticated ingest; null for pull and managed sources."
+    "Secret key for publisher-authenticated ingest; null for pull and managed sources.\nThe key lets its holder publish to the stream, so an API token needs the\nstreams:write scope: without it this field is null and the response carries\na FORBIDDEN error at its path."
     playback_id: str = Field(
         alias="playbackId", description="Public identifier for playback URLs."
     )
@@ -10844,9 +10844,9 @@ class StreamAnalyticsSummaryDefaultStream(BaseModel):
     )
     "When this stream was last modified."
     metrics: Optional["StreamAnalyticsSummaryDefaultStreamMetrics"] = Field(
-        description="Real-time operational metrics from the data plane.\nIncludes viewer counts, quality metrics, and throughput data.\nLazily loaded from ClickHouse analytics."
+        description="Real-time operational metrics from the data plane.\nIncludes viewer counts, quality metrics, and throughput data.\nLazily loaded from ClickHouse analytics, so an API token needs the\nanalytics:read scope: without it this field is null and the response\ncarries a FORBIDDEN error at its path."
     )
-    "Real-time operational metrics from the data plane.\nIncludes viewer counts, quality metrics, and throughput data.\nLazily loaded from ClickHouse analytics."
+    "Real-time operational metrics from the data plane.\nIncludes viewer counts, quality metrics, and throughput data.\nLazily loaded from ClickHouse analytics, so an API token needs the\nanalytics:read scope: without it this field is null and the response\ncarries a FORBIDDEN error at its path."
     push_targets: list["StreamAnalyticsSummaryDefaultStreamPushTargets"] = Field(
         alias="pushTargets",
         description="Configured multistream push targets for this stream.",
@@ -11170,9 +11170,9 @@ class StreamConnectionHourlyDefaultStream(BaseModel):
     "Optional description for the stream."
     stream_key: Optional[str] = Field(
         alias="streamKey",
-        description="Secret key for publisher-authenticated ingest; null for pull and managed sources.",
+        description="Secret key for publisher-authenticated ingest; null for pull and managed sources.\nThe key lets its holder publish to the stream, so an API token needs the\nstreams:write scope: without it this field is null and the response carries\na FORBIDDEN error at its path.",
     )
-    "Secret key for publisher-authenticated ingest; null for pull and managed sources."
+    "Secret key for publisher-authenticated ingest; null for pull and managed sources.\nThe key lets its holder publish to the stream, so an API token needs the\nstreams:write scope: without it this field is null and the response carries\na FORBIDDEN error at its path."
     playback_id: str = Field(
         alias="playbackId", description="Public identifier for playback URLs."
     )
@@ -11211,9 +11211,9 @@ class StreamConnectionHourlyDefaultStream(BaseModel):
     )
     "When this stream was last modified."
     metrics: Optional["StreamConnectionHourlyDefaultStreamMetrics"] = Field(
-        description="Real-time operational metrics from the data plane.\nIncludes viewer counts, quality metrics, and throughput data.\nLazily loaded from ClickHouse analytics."
+        description="Real-time operational metrics from the data plane.\nIncludes viewer counts, quality metrics, and throughput data.\nLazily loaded from ClickHouse analytics, so an API token needs the\nanalytics:read scope: without it this field is null and the response\ncarries a FORBIDDEN error at its path."
     )
-    "Real-time operational metrics from the data plane.\nIncludes viewer counts, quality metrics, and throughput data.\nLazily loaded from ClickHouse analytics."
+    "Real-time operational metrics from the data plane.\nIncludes viewer counts, quality metrics, and throughput data.\nLazily loaded from ClickHouse analytics, so an API token needs the\nanalytics:read scope: without it this field is null and the response\ncarries a FORBIDDEN error at its path."
     push_targets: list["StreamConnectionHourlyDefaultStreamPushTargets"] = Field(
         alias="pushTargets",
         description="Configured multistream push targets for this stream.",
@@ -11546,9 +11546,9 @@ class StreamEventDefaultStream(BaseModel):
     "Optional description for the stream."
     stream_key: Optional[str] = Field(
         alias="streamKey",
-        description="Secret key for publisher-authenticated ingest; null for pull and managed sources.",
+        description="Secret key for publisher-authenticated ingest; null for pull and managed sources.\nThe key lets its holder publish to the stream, so an API token needs the\nstreams:write scope: without it this field is null and the response carries\na FORBIDDEN error at its path.",
     )
-    "Secret key for publisher-authenticated ingest; null for pull and managed sources."
+    "Secret key for publisher-authenticated ingest; null for pull and managed sources.\nThe key lets its holder publish to the stream, so an API token needs the\nstreams:write scope: without it this field is null and the response carries\na FORBIDDEN error at its path."
     playback_id: str = Field(
         alias="playbackId", description="Public identifier for playback URLs."
     )
@@ -11585,9 +11585,9 @@ class StreamEventDefaultStream(BaseModel):
     )
     "When this stream was last modified."
     metrics: Optional["StreamEventDefaultStreamMetrics"] = Field(
-        description="Real-time operational metrics from the data plane.\nIncludes viewer counts, quality metrics, and throughput data.\nLazily loaded from ClickHouse analytics."
+        description="Real-time operational metrics from the data plane.\nIncludes viewer counts, quality metrics, and throughput data.\nLazily loaded from ClickHouse analytics, so an API token needs the\nanalytics:read scope: without it this field is null and the response\ncarries a FORBIDDEN error at its path."
     )
-    "Real-time operational metrics from the data plane.\nIncludes viewer counts, quality metrics, and throughput data.\nLazily loaded from ClickHouse analytics."
+    "Real-time operational metrics from the data plane.\nIncludes viewer counts, quality metrics, and throughput data.\nLazily loaded from ClickHouse analytics, so an API token needs the\nanalytics:read scope: without it this field is null and the response\ncarries a FORBIDDEN error at its path."
     push_targets: list["StreamEventDefaultStreamPushTargets"] = Field(
         alias="pushTargets",
         description="Configured multistream push targets for this stream.",
@@ -11914,9 +11914,9 @@ class StreamEventInNodeDefaultStream(BaseModel):
     "Optional description for the stream."
     stream_key: Optional[str] = Field(
         alias="streamKey",
-        description="Secret key for publisher-authenticated ingest; null for pull and managed sources.",
+        description="Secret key for publisher-authenticated ingest; null for pull and managed sources.\nThe key lets its holder publish to the stream, so an API token needs the\nstreams:write scope: without it this field is null and the response carries\na FORBIDDEN error at its path.",
     )
-    "Secret key for publisher-authenticated ingest; null for pull and managed sources."
+    "Secret key for publisher-authenticated ingest; null for pull and managed sources.\nThe key lets its holder publish to the stream, so an API token needs the\nstreams:write scope: without it this field is null and the response carries\na FORBIDDEN error at its path."
     playback_id: str = Field(
         alias="playbackId", description="Public identifier for playback URLs."
     )
@@ -11953,9 +11953,9 @@ class StreamEventInNodeDefaultStream(BaseModel):
     )
     "When this stream was last modified."
     metrics: Optional["StreamEventInNodeDefaultStreamMetrics"] = Field(
-        description="Real-time operational metrics from the data plane.\nIncludes viewer counts, quality metrics, and throughput data.\nLazily loaded from ClickHouse analytics."
+        description="Real-time operational metrics from the data plane.\nIncludes viewer counts, quality metrics, and throughput data.\nLazily loaded from ClickHouse analytics, so an API token needs the\nanalytics:read scope: without it this field is null and the response\ncarries a FORBIDDEN error at its path."
     )
-    "Real-time operational metrics from the data plane.\nIncludes viewer counts, quality metrics, and throughput data.\nLazily loaded from ClickHouse analytics."
+    "Real-time operational metrics from the data plane.\nIncludes viewer counts, quality metrics, and throughput data.\nLazily loaded from ClickHouse analytics, so an API token needs the\nanalytics:read scope: without it this field is null and the response\ncarries a FORBIDDEN error at its path."
     push_targets: list["StreamEventInNodeDefaultStreamPushTargets"] = Field(
         alias="pushTargets",
         description="Configured multistream push targets for this stream.",
@@ -12242,11 +12242,6 @@ class Stream(BaseModel):
         description="Optional description for the stream."
     )
     "Optional description for the stream."
-    stream_key: Optional[str] = Field(
-        alias="streamKey",
-        description="Secret key for publisher-authenticated ingest; null for pull and managed sources.",
-    )
-    "Secret key for publisher-authenticated ingest; null for pull and managed sources."
     playback_id: str = Field(
         alias="playbackId", description="Public identifier for playback URLs."
     )
@@ -12291,10 +12286,6 @@ class Stream(BaseModel):
         description="Playback access policy. null/PUBLIC = anyone with the playbackId can watch.",
     )
     "Playback access policy. null/PUBLIC = anyone with the playbackId can watch."
-    metrics: Optional["StreamMetrics"] = Field(
-        description="Real-time operational metrics from the data plane.\nIncludes viewer counts, quality metrics, and throughput data.\nLazily loaded from ClickHouse analytics."
-    )
-    "Real-time operational metrics from the data plane.\nIncludes viewer counts, quality metrics, and throughput data.\nLazily loaded from ClickHouse analytics."
 
 
 class StreamPullSource(BaseModel):
@@ -12321,33 +12312,6 @@ class StreamPlaybackPolicy(PlaybackPolicy):
     gates whether the full policy is fetched at all."""
 
     pass
-
-
-class StreamMetrics(BaseModel):
-    """Real-time operational metrics for a stream from the analytics data plane.
-    Updated frequently while stream is live, represents latest known state."""
-
-    status: StreamStatus = Field(
-        description="Current lifecycle status of the stream (OFFLINE, CONNECTING, LIVE, etc.)."
-    )
-    "Current lifecycle status of the stream (OFFLINE, CONNECTING, LIVE, etc.)."
-    is_live: bool = Field(
-        alias="isLive", description="Whether the stream is currently broadcasting."
-    )
-    "Whether the stream is currently broadcasting."
-    current_viewers: int = Field(
-        alias="currentViewers", description="Number of viewers currently watching."
-    )
-    "Number of viewers currently watching."
-    started_at: Optional[datetime] = Field(
-        alias="startedAt",
-        description="When the current live session started (null if offline).",
-    )
-    "When the current live session started (null if offline)."
-    updated_at: datetime = Field(
-        alias="updatedAt", description="When these metrics were last updated."
-    )
-    "When these metrics were last updated."
 
 
 class StreamHealth5mDefault(BaseModel):
@@ -12434,9 +12398,9 @@ class StreamHealthMetricDefaultStream(BaseModel):
     "Optional description for the stream."
     stream_key: Optional[str] = Field(
         alias="streamKey",
-        description="Secret key for publisher-authenticated ingest; null for pull and managed sources.",
+        description="Secret key for publisher-authenticated ingest; null for pull and managed sources.\nThe key lets its holder publish to the stream, so an API token needs the\nstreams:write scope: without it this field is null and the response carries\na FORBIDDEN error at its path.",
     )
-    "Secret key for publisher-authenticated ingest; null for pull and managed sources."
+    "Secret key for publisher-authenticated ingest; null for pull and managed sources.\nThe key lets its holder publish to the stream, so an API token needs the\nstreams:write scope: without it this field is null and the response carries\na FORBIDDEN error at its path."
     playback_id: str = Field(
         alias="playbackId", description="Public identifier for playback URLs."
     )
@@ -12473,9 +12437,9 @@ class StreamHealthMetricDefaultStream(BaseModel):
     )
     "When this stream was last modified."
     metrics: Optional["StreamHealthMetricDefaultStreamMetrics"] = Field(
-        description="Real-time operational metrics from the data plane.\nIncludes viewer counts, quality metrics, and throughput data.\nLazily loaded from ClickHouse analytics."
+        description="Real-time operational metrics from the data plane.\nIncludes viewer counts, quality metrics, and throughput data.\nLazily loaded from ClickHouse analytics, so an API token needs the\nanalytics:read scope: without it this field is null and the response\ncarries a FORBIDDEN error at its path."
     )
-    "Real-time operational metrics from the data plane.\nIncludes viewer counts, quality metrics, and throughput data.\nLazily loaded from ClickHouse analytics."
+    "Real-time operational metrics from the data plane.\nIncludes viewer counts, quality metrics, and throughput data.\nLazily loaded from ClickHouse analytics, so an API token needs the\nanalytics:read scope: without it this field is null and the response\ncarries a FORBIDDEN error at its path."
     push_targets: list["StreamHealthMetricDefaultStreamPushTargets"] = Field(
         alias="pushTargets",
         description="Configured multistream push targets for this stream.",
@@ -12798,9 +12762,9 @@ class StreamHealthMetricInNodeDefaultStream(BaseModel):
     "Optional description for the stream."
     stream_key: Optional[str] = Field(
         alias="streamKey",
-        description="Secret key for publisher-authenticated ingest; null for pull and managed sources.",
+        description="Secret key for publisher-authenticated ingest; null for pull and managed sources.\nThe key lets its holder publish to the stream, so an API token needs the\nstreams:write scope: without it this field is null and the response carries\na FORBIDDEN error at its path.",
     )
-    "Secret key for publisher-authenticated ingest; null for pull and managed sources."
+    "Secret key for publisher-authenticated ingest; null for pull and managed sources.\nThe key lets its holder publish to the stream, so an API token needs the\nstreams:write scope: without it this field is null and the response carries\na FORBIDDEN error at its path."
     playback_id: str = Field(
         alias="playbackId", description="Public identifier for playback URLs."
     )
@@ -12839,9 +12803,9 @@ class StreamHealthMetricInNodeDefaultStream(BaseModel):
     )
     "When this stream was last modified."
     metrics: Optional["StreamHealthMetricInNodeDefaultStreamMetrics"] = Field(
-        description="Real-time operational metrics from the data plane.\nIncludes viewer counts, quality metrics, and throughput data.\nLazily loaded from ClickHouse analytics."
+        description="Real-time operational metrics from the data plane.\nIncludes viewer counts, quality metrics, and throughput data.\nLazily loaded from ClickHouse analytics, so an API token needs the\nanalytics:read scope: without it this field is null and the response\ncarries a FORBIDDEN error at its path."
     )
-    "Real-time operational metrics from the data plane.\nIncludes viewer counts, quality metrics, and throughput data.\nLazily loaded from ClickHouse analytics."
+    "Real-time operational metrics from the data plane.\nIncludes viewer counts, quality metrics, and throughput data.\nLazily loaded from ClickHouse analytics, so an API token needs the\nanalytics:read scope: without it this field is null and the response\ncarries a FORBIDDEN error at its path."
     push_targets: list["StreamHealthMetricInNodeDefaultStreamPushTargets"] = Field(
         alias="pushTargets",
         description="Configured multistream push targets for this stream.",
@@ -13146,9 +13110,9 @@ class StreamInNodeDefault(BaseModel):
     "Optional description for the stream."
     stream_key: Optional[str] = Field(
         alias="streamKey",
-        description="Secret key for publisher-authenticated ingest; null for pull and managed sources.",
+        description="Secret key for publisher-authenticated ingest; null for pull and managed sources.\nThe key lets its holder publish to the stream, so an API token needs the\nstreams:write scope: without it this field is null and the response carries\na FORBIDDEN error at its path.",
     )
-    "Secret key for publisher-authenticated ingest; null for pull and managed sources."
+    "Secret key for publisher-authenticated ingest; null for pull and managed sources.\nThe key lets its holder publish to the stream, so an API token needs the\nstreams:write scope: without it this field is null and the response carries\na FORBIDDEN error at its path."
     playback_id: str = Field(
         alias="playbackId", description="Public identifier for playback URLs."
     )
@@ -13185,9 +13149,9 @@ class StreamInNodeDefault(BaseModel):
     )
     "When this stream was last modified."
     metrics: Optional["StreamInNodeDefaultMetrics"] = Field(
-        description="Real-time operational metrics from the data plane.\nIncludes viewer counts, quality metrics, and throughput data.\nLazily loaded from ClickHouse analytics."
+        description="Real-time operational metrics from the data plane.\nIncludes viewer counts, quality metrics, and throughput data.\nLazily loaded from ClickHouse analytics, so an API token needs the\nanalytics:read scope: without it this field is null and the response\ncarries a FORBIDDEN error at its path."
     )
-    "Real-time operational metrics from the data plane.\nIncludes viewer counts, quality metrics, and throughput data.\nLazily loaded from ClickHouse analytics."
+    "Real-time operational metrics from the data plane.\nIncludes viewer counts, quality metrics, and throughput data.\nLazily loaded from ClickHouse analytics, so an API token needs the\nanalytics:read scope: without it this field is null and the response\ncarries a FORBIDDEN error at its path."
     push_targets: list["StreamInNodeDefaultPushTargets"] = Field(
         alias="pushTargets",
         description="Configured multistream push targets for this stream.",
@@ -13517,11 +13481,61 @@ class StreamKey(BaseModel):
     typename__: str = Field(alias="__typename")
     id: str
     stream_id: str = Field(alias="streamId")
-    key_value: str = Field(alias="keyValue")
+    key_value: str = Field(
+        alias="keyValue",
+        description="The publishing secret. Stream keys are read only through operations that need the streams:write scope.",
+    )
+    "The publishing secret. Stream keys are read only through operations that need the streams:write scope."
     key_name: Optional[str] = Field(alias="keyName")
     is_active: bool = Field(alias="isActive")
     last_used_at: Optional[datetime] = Field(alias="lastUsedAt")
     created_at: datetime = Field(alias="createdAt")
+
+
+class StreamMetrics(BaseModel):
+    """Real-time operational metrics for a stream from the analytics data plane.
+    Updated frequently while stream is live, represents latest known state."""
+
+    status: StreamStatus = Field(
+        description="Current lifecycle status of the stream (OFFLINE, CONNECTING, LIVE, etc.)."
+    )
+    "Current lifecycle status of the stream (OFFLINE, CONNECTING, LIVE, etc.)."
+    is_live: bool = Field(
+        alias="isLive", description="Whether the stream is currently broadcasting."
+    )
+    "Whether the stream is currently broadcasting."
+    current_viewers: int = Field(
+        alias="currentViewers", description="Number of viewers currently watching."
+    )
+    "Number of viewers currently watching."
+    started_at: Optional[datetime] = Field(
+        alias="startedAt",
+        description="When the current live session started (null if offline).",
+    )
+    "When the current live session started (null if offline)."
+    updated_at: datetime = Field(
+        alias="updatedAt", description="When these metrics were last updated."
+    )
+    "When these metrics were last updated."
+    buffer_state: Optional[str] = Field(
+        alias="bufferState",
+        description="Buffer health state (HEALTHY, WARNING, CRITICAL).",
+    )
+    "Buffer health state (HEALTHY, WARNING, CRITICAL)."
+    quality_tier: Optional[str] = Field(
+        alias="qualityTier",
+        description="Highest quality tier available (4K, 1080p, 720p, etc.).",
+    )
+    "Highest quality tier available (4K, 1080p, 720p, etc.)."
+    has_issues: Optional[bool] = Field(
+        alias="hasIssues", description="Whether the stream has active quality issues."
+    )
+    "Whether the stream has active quality issues."
+    issues_description: Optional[str] = Field(
+        alias="issuesDescription",
+        description="Human-readable description of current issues.",
+    )
+    "Human-readable description of current issues."
 
 
 class StreamRetentionOverridesDefault(BaseModel):
@@ -13791,9 +13805,9 @@ class TenantEventDefaultStreamEventStream(BaseModel):
     "Optional description for the stream."
     stream_key: Optional[str] = Field(
         alias="streamKey",
-        description="Secret key for publisher-authenticated ingest; null for pull and managed sources.",
+        description="Secret key for publisher-authenticated ingest; null for pull and managed sources.\nThe key lets its holder publish to the stream, so an API token needs the\nstreams:write scope: without it this field is null and the response carries\na FORBIDDEN error at its path.",
     )
-    "Secret key for publisher-authenticated ingest; null for pull and managed sources."
+    "Secret key for publisher-authenticated ingest; null for pull and managed sources.\nThe key lets its holder publish to the stream, so an API token needs the\nstreams:write scope: without it this field is null and the response carries\na FORBIDDEN error at its path."
     playback_id: str = Field(
         alias="playbackId", description="Public identifier for playback URLs."
     )
@@ -13873,9 +13887,9 @@ class TenantEventDefaultViewerMetricsStream(BaseModel):
     "Optional description for the stream."
     stream_key: Optional[str] = Field(
         alias="streamKey",
-        description="Secret key for publisher-authenticated ingest; null for pull and managed sources.",
+        description="Secret key for publisher-authenticated ingest; null for pull and managed sources.\nThe key lets its holder publish to the stream, so an API token needs the\nstreams:write scope: without it this field is null and the response carries\na FORBIDDEN error at its path.",
     )
-    "Secret key for publisher-authenticated ingest; null for pull and managed sources."
+    "Secret key for publisher-authenticated ingest; null for pull and managed sources.\nThe key lets its holder publish to the stream, so an API token needs the\nstreams:write scope: without it this field is null and the response carries\na FORBIDDEN error at its path."
     playback_id: str = Field(
         alias="playbackId", description="Public identifier for playback URLs."
     )
@@ -13960,9 +13974,9 @@ class TenantEventDefaultConnectionEventStream(BaseModel):
     "Optional description for the stream."
     stream_key: Optional[str] = Field(
         alias="streamKey",
-        description="Secret key for publisher-authenticated ingest; null for pull and managed sources.",
+        description="Secret key for publisher-authenticated ingest; null for pull and managed sources.\nThe key lets its holder publish to the stream, so an API token needs the\nstreams:write scope: without it this field is null and the response carries\na FORBIDDEN error at its path.",
     )
-    "Secret key for publisher-authenticated ingest; null for pull and managed sources."
+    "Secret key for publisher-authenticated ingest; null for pull and managed sources.\nThe key lets its holder publish to the stream, so an API token needs the\nstreams:write scope: without it this field is null and the response carries\na FORBIDDEN error at its path."
     playback_id: str = Field(
         alias="playbackId", description="Public identifier for playback URLs."
     )
@@ -14047,9 +14061,9 @@ class TenantEventDefaultTrackListUpdateStream(BaseModel):
     "Optional description for the stream."
     stream_key: Optional[str] = Field(
         alias="streamKey",
-        description="Secret key for publisher-authenticated ingest; null for pull and managed sources.",
+        description="Secret key for publisher-authenticated ingest; null for pull and managed sources.\nThe key lets its holder publish to the stream, so an API token needs the\nstreams:write scope: without it this field is null and the response carries\na FORBIDDEN error at its path.",
     )
-    "Secret key for publisher-authenticated ingest; null for pull and managed sources."
+    "Secret key for publisher-authenticated ingest; null for pull and managed sources.\nThe key lets its holder publish to the stream, so an API token needs the\nstreams:write scope: without it this field is null and the response carries\na FORBIDDEN error at its path."
     playback_id: str = Field(
         alias="playbackId", description="Public identifier for playback URLs."
     )
@@ -14142,9 +14156,9 @@ class TenantEventDefaultStorageEventStream(BaseModel):
     "Optional description for the stream."
     stream_key: Optional[str] = Field(
         alias="streamKey",
-        description="Secret key for publisher-authenticated ingest; null for pull and managed sources.",
+        description="Secret key for publisher-authenticated ingest; null for pull and managed sources.\nThe key lets its holder publish to the stream, so an API token needs the\nstreams:write scope: without it this field is null and the response carries\na FORBIDDEN error at its path.",
     )
-    "Secret key for publisher-authenticated ingest; null for pull and managed sources."
+    "Secret key for publisher-authenticated ingest; null for pull and managed sources.\nThe key lets its holder publish to the stream, so an API token needs the\nstreams:write scope: without it this field is null and the response carries\na FORBIDDEN error at its path."
     playback_id: str = Field(
         alias="playbackId", description="Public identifier for playback URLs."
     )
@@ -14277,9 +14291,9 @@ class TenantEventDefaultProcessingEventStream(BaseModel):
     "Optional description for the stream."
     stream_key: Optional[str] = Field(
         alias="streamKey",
-        description="Secret key for publisher-authenticated ingest; null for pull and managed sources.",
+        description="Secret key for publisher-authenticated ingest; null for pull and managed sources.\nThe key lets its holder publish to the stream, so an API token needs the\nstreams:write scope: without it this field is null and the response carries\na FORBIDDEN error at its path.",
     )
-    "Secret key for publisher-authenticated ingest; null for pull and managed sources."
+    "Secret key for publisher-authenticated ingest; null for pull and managed sources.\nThe key lets its holder publish to the stream, so an API token needs the\nstreams:write scope: without it this field is null and the response carries\na FORBIDDEN error at its path."
     playback_id: str = Field(
         alias="playbackId", description="Public identifier for playback URLs."
     )
@@ -14369,9 +14383,9 @@ class TenantEventDefaultRoutingEventStream(BaseModel):
     "Optional description for the stream."
     stream_key: Optional[str] = Field(
         alias="streamKey",
-        description="Secret key for publisher-authenticated ingest; null for pull and managed sources.",
+        description="Secret key for publisher-authenticated ingest; null for pull and managed sources.\nThe key lets its holder publish to the stream, so an API token needs the\nstreams:write scope: without it this field is null and the response carries\na FORBIDDEN error at its path.",
     )
-    "Secret key for publisher-authenticated ingest; null for pull and managed sources."
+    "Secret key for publisher-authenticated ingest; null for pull and managed sources.\nThe key lets its holder publish to the stream, so an API token needs the\nstreams:write scope: without it this field is null and the response carries\na FORBIDDEN error at its path."
     playback_id: str = Field(
         alias="playbackId", description="Public identifier for playback URLs."
     )
@@ -14499,9 +14513,9 @@ class TrackListEventDefaultStream(BaseModel):
     "Optional description for the stream."
     stream_key: Optional[str] = Field(
         alias="streamKey",
-        description="Secret key for publisher-authenticated ingest; null for pull and managed sources.",
+        description="Secret key for publisher-authenticated ingest; null for pull and managed sources.\nThe key lets its holder publish to the stream, so an API token needs the\nstreams:write scope: without it this field is null and the response carries\na FORBIDDEN error at its path.",
     )
-    "Secret key for publisher-authenticated ingest; null for pull and managed sources."
+    "Secret key for publisher-authenticated ingest; null for pull and managed sources.\nThe key lets its holder publish to the stream, so an API token needs the\nstreams:write scope: without it this field is null and the response carries\na FORBIDDEN error at its path."
     playback_id: str = Field(
         alias="playbackId", description="Public identifier for playback URLs."
     )
@@ -14538,9 +14552,9 @@ class TrackListEventDefaultStream(BaseModel):
     )
     "When this stream was last modified."
     metrics: Optional["TrackListEventDefaultStreamMetrics"] = Field(
-        description="Real-time operational metrics from the data plane.\nIncludes viewer counts, quality metrics, and throughput data.\nLazily loaded from ClickHouse analytics."
+        description="Real-time operational metrics from the data plane.\nIncludes viewer counts, quality metrics, and throughput data.\nLazily loaded from ClickHouse analytics, so an API token needs the\nanalytics:read scope: without it this field is null and the response\ncarries a FORBIDDEN error at its path."
     )
-    "Real-time operational metrics from the data plane.\nIncludes viewer counts, quality metrics, and throughput data.\nLazily loaded from ClickHouse analytics."
+    "Real-time operational metrics from the data plane.\nIncludes viewer counts, quality metrics, and throughput data.\nLazily loaded from ClickHouse analytics, so an API token needs the\nanalytics:read scope: without it this field is null and the response\ncarries a FORBIDDEN error at its path."
     push_targets: list["TrackListEventDefaultStreamPushTargets"] = Field(
         alias="pushTargets",
         description="Configured multistream push targets for this stream.",
@@ -14856,9 +14870,9 @@ class TrackListEventInNodeDefaultStream(BaseModel):
     "Optional description for the stream."
     stream_key: Optional[str] = Field(
         alias="streamKey",
-        description="Secret key for publisher-authenticated ingest; null for pull and managed sources.",
+        description="Secret key for publisher-authenticated ingest; null for pull and managed sources.\nThe key lets its holder publish to the stream, so an API token needs the\nstreams:write scope: without it this field is null and the response carries\na FORBIDDEN error at its path.",
     )
-    "Secret key for publisher-authenticated ingest; null for pull and managed sources."
+    "Secret key for publisher-authenticated ingest; null for pull and managed sources.\nThe key lets its holder publish to the stream, so an API token needs the\nstreams:write scope: without it this field is null and the response carries\na FORBIDDEN error at its path."
     playback_id: str = Field(
         alias="playbackId", description="Public identifier for playback URLs."
     )
@@ -14895,9 +14909,9 @@ class TrackListEventInNodeDefaultStream(BaseModel):
     )
     "When this stream was last modified."
     metrics: Optional["TrackListEventInNodeDefaultStreamMetrics"] = Field(
-        description="Real-time operational metrics from the data plane.\nIncludes viewer counts, quality metrics, and throughput data.\nLazily loaded from ClickHouse analytics."
+        description="Real-time operational metrics from the data plane.\nIncludes viewer counts, quality metrics, and throughput data.\nLazily loaded from ClickHouse analytics, so an API token needs the\nanalytics:read scope: without it this field is null and the response\ncarries a FORBIDDEN error at its path."
     )
-    "Real-time operational metrics from the data plane.\nIncludes viewer counts, quality metrics, and throughput data.\nLazily loaded from ClickHouse analytics."
+    "Real-time operational metrics from the data plane.\nIncludes viewer counts, quality metrics, and throughput data.\nLazily loaded from ClickHouse analytics, so an API token needs the\nanalytics:read scope: without it this field is null and the response\ncarries a FORBIDDEN error at its path."
     push_targets: list["TrackListEventInNodeDefaultStreamPushTargets"] = Field(
         alias="pushTargets",
         description="Configured multistream push targets for this stream.",
@@ -15225,9 +15239,9 @@ class TrackListUpdateDefaultStream(BaseModel):
     "Optional description for the stream."
     stream_key: Optional[str] = Field(
         alias="streamKey",
-        description="Secret key for publisher-authenticated ingest; null for pull and managed sources.",
+        description="Secret key for publisher-authenticated ingest; null for pull and managed sources.\nThe key lets its holder publish to the stream, so an API token needs the\nstreams:write scope: without it this field is null and the response carries\na FORBIDDEN error at its path.",
     )
-    "Secret key for publisher-authenticated ingest; null for pull and managed sources."
+    "Secret key for publisher-authenticated ingest; null for pull and managed sources.\nThe key lets its holder publish to the stream, so an API token needs the\nstreams:write scope: without it this field is null and the response carries\na FORBIDDEN error at its path."
     playback_id: str = Field(
         alias="playbackId", description="Public identifier for playback URLs."
     )
@@ -15264,9 +15278,9 @@ class TrackListUpdateDefaultStream(BaseModel):
     )
     "When this stream was last modified."
     metrics: Optional["TrackListUpdateDefaultStreamMetrics"] = Field(
-        description="Real-time operational metrics from the data plane.\nIncludes viewer counts, quality metrics, and throughput data.\nLazily loaded from ClickHouse analytics."
+        description="Real-time operational metrics from the data plane.\nIncludes viewer counts, quality metrics, and throughput data.\nLazily loaded from ClickHouse analytics, so an API token needs the\nanalytics:read scope: without it this field is null and the response\ncarries a FORBIDDEN error at its path."
     )
-    "Real-time operational metrics from the data plane.\nIncludes viewer counts, quality metrics, and throughput data.\nLazily loaded from ClickHouse analytics."
+    "Real-time operational metrics from the data plane.\nIncludes viewer counts, quality metrics, and throughput data.\nLazily loaded from ClickHouse analytics, so an API token needs the\nanalytics:read scope: without it this field is null and the response\ncarries a FORBIDDEN error at its path."
     push_targets: list["TrackListUpdateDefaultStreamPushTargets"] = Field(
         alias="pushTargets",
         description="Configured multistream push targets for this stream.",
@@ -15593,9 +15607,9 @@ class ViewerCountBucketDefaultStream(BaseModel):
     "Optional description for the stream."
     stream_key: Optional[str] = Field(
         alias="streamKey",
-        description="Secret key for publisher-authenticated ingest; null for pull and managed sources.",
+        description="Secret key for publisher-authenticated ingest; null for pull and managed sources.\nThe key lets its holder publish to the stream, so an API token needs the\nstreams:write scope: without it this field is null and the response carries\na FORBIDDEN error at its path.",
     )
-    "Secret key for publisher-authenticated ingest; null for pull and managed sources."
+    "Secret key for publisher-authenticated ingest; null for pull and managed sources.\nThe key lets its holder publish to the stream, so an API token needs the\nstreams:write scope: without it this field is null and the response carries\na FORBIDDEN error at its path."
     playback_id: str = Field(
         alias="playbackId", description="Public identifier for playback URLs."
     )
@@ -15632,9 +15646,9 @@ class ViewerCountBucketDefaultStream(BaseModel):
     )
     "When this stream was last modified."
     metrics: Optional["ViewerCountBucketDefaultStreamMetrics"] = Field(
-        description="Real-time operational metrics from the data plane.\nIncludes viewer counts, quality metrics, and throughput data.\nLazily loaded from ClickHouse analytics."
+        description="Real-time operational metrics from the data plane.\nIncludes viewer counts, quality metrics, and throughput data.\nLazily loaded from ClickHouse analytics, so an API token needs the\nanalytics:read scope: without it this field is null and the response\ncarries a FORBIDDEN error at its path."
     )
-    "Real-time operational metrics from the data plane.\nIncludes viewer counts, quality metrics, and throughput data.\nLazily loaded from ClickHouse analytics."
+    "Real-time operational metrics from the data plane.\nIncludes viewer counts, quality metrics, and throughput data.\nLazily loaded from ClickHouse analytics, so an API token needs the\nanalytics:read scope: without it this field is null and the response\ncarries a FORBIDDEN error at its path."
     push_targets: list["ViewerCountBucketDefaultStreamPushTargets"] = Field(
         alias="pushTargets",
         description="Configured multistream push targets for this stream.",
@@ -15968,9 +15982,9 @@ class ViewerGeographicDefaultStream(BaseModel):
     "Optional description for the stream."
     stream_key: Optional[str] = Field(
         alias="streamKey",
-        description="Secret key for publisher-authenticated ingest; null for pull and managed sources.",
+        description="Secret key for publisher-authenticated ingest; null for pull and managed sources.\nThe key lets its holder publish to the stream, so an API token needs the\nstreams:write scope: without it this field is null and the response carries\na FORBIDDEN error at its path.",
     )
-    "Secret key for publisher-authenticated ingest; null for pull and managed sources."
+    "Secret key for publisher-authenticated ingest; null for pull and managed sources.\nThe key lets its holder publish to the stream, so an API token needs the\nstreams:write scope: without it this field is null and the response carries\na FORBIDDEN error at its path."
     playback_id: str = Field(
         alias="playbackId", description="Public identifier for playback URLs."
     )
@@ -16007,9 +16021,9 @@ class ViewerGeographicDefaultStream(BaseModel):
     )
     "When this stream was last modified."
     metrics: Optional["ViewerGeographicDefaultStreamMetrics"] = Field(
-        description="Real-time operational metrics from the data plane.\nIncludes viewer counts, quality metrics, and throughput data.\nLazily loaded from ClickHouse analytics."
+        description="Real-time operational metrics from the data plane.\nIncludes viewer counts, quality metrics, and throughput data.\nLazily loaded from ClickHouse analytics, so an API token needs the\nanalytics:read scope: without it this field is null and the response\ncarries a FORBIDDEN error at its path."
     )
-    "Real-time operational metrics from the data plane.\nIncludes viewer counts, quality metrics, and throughput data.\nLazily loaded from ClickHouse analytics."
+    "Real-time operational metrics from the data plane.\nIncludes viewer counts, quality metrics, and throughput data.\nLazily loaded from ClickHouse analytics, so an API token needs the\nanalytics:read scope: without it this field is null and the response\ncarries a FORBIDDEN error at its path."
     push_targets: list["ViewerGeographicDefaultStreamPushTargets"] = Field(
         alias="pushTargets",
         description="Configured multistream push targets for this stream.",
@@ -16310,9 +16324,9 @@ class ViewerHoursHourlyDefaultStream(BaseModel):
     "Optional description for the stream."
     stream_key: Optional[str] = Field(
         alias="streamKey",
-        description="Secret key for publisher-authenticated ingest; null for pull and managed sources.",
+        description="Secret key for publisher-authenticated ingest; null for pull and managed sources.\nThe key lets its holder publish to the stream, so an API token needs the\nstreams:write scope: without it this field is null and the response carries\na FORBIDDEN error at its path.",
     )
-    "Secret key for publisher-authenticated ingest; null for pull and managed sources."
+    "Secret key for publisher-authenticated ingest; null for pull and managed sources.\nThe key lets its holder publish to the stream, so an API token needs the\nstreams:write scope: without it this field is null and the response carries\na FORBIDDEN error at its path."
     playback_id: str = Field(
         alias="playbackId", description="Public identifier for playback URLs."
     )
@@ -16349,9 +16363,9 @@ class ViewerHoursHourlyDefaultStream(BaseModel):
     )
     "When this stream was last modified."
     metrics: Optional["ViewerHoursHourlyDefaultStreamMetrics"] = Field(
-        description="Real-time operational metrics from the data plane.\nIncludes viewer counts, quality metrics, and throughput data.\nLazily loaded from ClickHouse analytics."
+        description="Real-time operational metrics from the data plane.\nIncludes viewer counts, quality metrics, and throughput data.\nLazily loaded from ClickHouse analytics, so an API token needs the\nanalytics:read scope: without it this field is null and the response\ncarries a FORBIDDEN error at its path."
     )
-    "Real-time operational metrics from the data plane.\nIncludes viewer counts, quality metrics, and throughput data.\nLazily loaded from ClickHouse analytics."
+    "Real-time operational metrics from the data plane.\nIncludes viewer counts, quality metrics, and throughput data.\nLazily loaded from ClickHouse analytics, so an API token needs the\nanalytics:read scope: without it this field is null and the response\ncarries a FORBIDDEN error at its path."
     push_targets: list["ViewerHoursHourlyDefaultStreamPushTargets"] = Field(
         alias="pushTargets",
         description="Configured multistream push targets for this stream.",
@@ -16654,9 +16668,9 @@ class ViewerHoursHourlyInNodeDefaultStream(BaseModel):
     "Optional description for the stream."
     stream_key: Optional[str] = Field(
         alias="streamKey",
-        description="Secret key for publisher-authenticated ingest; null for pull and managed sources.",
+        description="Secret key for publisher-authenticated ingest; null for pull and managed sources.\nThe key lets its holder publish to the stream, so an API token needs the\nstreams:write scope: without it this field is null and the response carries\na FORBIDDEN error at its path.",
     )
-    "Secret key for publisher-authenticated ingest; null for pull and managed sources."
+    "Secret key for publisher-authenticated ingest; null for pull and managed sources.\nThe key lets its holder publish to the stream, so an API token needs the\nstreams:write scope: without it this field is null and the response carries\na FORBIDDEN error at its path."
     playback_id: str = Field(
         alias="playbackId", description="Public identifier for playback URLs."
     )
@@ -16695,9 +16709,9 @@ class ViewerHoursHourlyInNodeDefaultStream(BaseModel):
     )
     "When this stream was last modified."
     metrics: Optional["ViewerHoursHourlyInNodeDefaultStreamMetrics"] = Field(
-        description="Real-time operational metrics from the data plane.\nIncludes viewer counts, quality metrics, and throughput data.\nLazily loaded from ClickHouse analytics."
+        description="Real-time operational metrics from the data plane.\nIncludes viewer counts, quality metrics, and throughput data.\nLazily loaded from ClickHouse analytics, so an API token needs the\nanalytics:read scope: without it this field is null and the response\ncarries a FORBIDDEN error at its path."
     )
-    "Real-time operational metrics from the data plane.\nIncludes viewer counts, quality metrics, and throughput data.\nLazily loaded from ClickHouse analytics."
+    "Real-time operational metrics from the data plane.\nIncludes viewer counts, quality metrics, and throughput data.\nLazily loaded from ClickHouse analytics, so an API token needs the\nanalytics:read scope: without it this field is null and the response\ncarries a FORBIDDEN error at its path."
     push_targets: list["ViewerHoursHourlyInNodeDefaultStreamPushTargets"] = Field(
         alias="pushTargets",
         description="Configured multistream push targets for this stream.",
@@ -17013,9 +17027,9 @@ class ViewerMetricsDefaultStream(BaseModel):
     "Optional description for the stream."
     stream_key: Optional[str] = Field(
         alias="streamKey",
-        description="Secret key for publisher-authenticated ingest; null for pull and managed sources.",
+        description="Secret key for publisher-authenticated ingest; null for pull and managed sources.\nThe key lets its holder publish to the stream, so an API token needs the\nstreams:write scope: without it this field is null and the response carries\na FORBIDDEN error at its path.",
     )
-    "Secret key for publisher-authenticated ingest; null for pull and managed sources."
+    "Secret key for publisher-authenticated ingest; null for pull and managed sources.\nThe key lets its holder publish to the stream, so an API token needs the\nstreams:write scope: without it this field is null and the response carries\na FORBIDDEN error at its path."
     playback_id: str = Field(
         alias="playbackId", description="Public identifier for playback URLs."
     )
@@ -17052,9 +17066,9 @@ class ViewerMetricsDefaultStream(BaseModel):
     )
     "When this stream was last modified."
     metrics: Optional["ViewerMetricsDefaultStreamMetrics"] = Field(
-        description="Real-time operational metrics from the data plane.\nIncludes viewer counts, quality metrics, and throughput data.\nLazily loaded from ClickHouse analytics."
+        description="Real-time operational metrics from the data plane.\nIncludes viewer counts, quality metrics, and throughput data.\nLazily loaded from ClickHouse analytics, so an API token needs the\nanalytics:read scope: without it this field is null and the response\ncarries a FORBIDDEN error at its path."
     )
-    "Real-time operational metrics from the data plane.\nIncludes viewer counts, quality metrics, and throughput data.\nLazily loaded from ClickHouse analytics."
+    "Real-time operational metrics from the data plane.\nIncludes viewer counts, quality metrics, and throughput data.\nLazily loaded from ClickHouse analytics, so an API token needs the\nanalytics:read scope: without it this field is null and the response\ncarries a FORBIDDEN error at its path."
     push_targets: list["ViewerMetricsDefaultStreamPushTargets"] = Field(
         alias="pushTargets",
         description="Configured multistream push targets for this stream.",
@@ -17366,9 +17380,9 @@ class ViewerSessionDefaultStream(BaseModel):
     "Optional description for the stream."
     stream_key: Optional[str] = Field(
         alias="streamKey",
-        description="Secret key for publisher-authenticated ingest; null for pull and managed sources.",
+        description="Secret key for publisher-authenticated ingest; null for pull and managed sources.\nThe key lets its holder publish to the stream, so an API token needs the\nstreams:write scope: without it this field is null and the response carries\na FORBIDDEN error at its path.",
     )
-    "Secret key for publisher-authenticated ingest; null for pull and managed sources."
+    "Secret key for publisher-authenticated ingest; null for pull and managed sources.\nThe key lets its holder publish to the stream, so an API token needs the\nstreams:write scope: without it this field is null and the response carries\na FORBIDDEN error at its path."
     playback_id: str = Field(
         alias="playbackId", description="Public identifier for playback URLs."
     )
@@ -17405,9 +17419,9 @@ class ViewerSessionDefaultStream(BaseModel):
     )
     "When this stream was last modified."
     metrics: Optional["ViewerSessionDefaultStreamMetrics"] = Field(
-        description="Real-time operational metrics from the data plane.\nIncludes viewer counts, quality metrics, and throughput data.\nLazily loaded from ClickHouse analytics."
+        description="Real-time operational metrics from the data plane.\nIncludes viewer counts, quality metrics, and throughput data.\nLazily loaded from ClickHouse analytics, so an API token needs the\nanalytics:read scope: without it this field is null and the response\ncarries a FORBIDDEN error at its path."
     )
-    "Real-time operational metrics from the data plane.\nIncludes viewer counts, quality metrics, and throughput data.\nLazily loaded from ClickHouse analytics."
+    "Real-time operational metrics from the data plane.\nIncludes viewer counts, quality metrics, and throughput data.\nLazily loaded from ClickHouse analytics, so an API token needs the\nanalytics:read scope: without it this field is null and the response\ncarries a FORBIDDEN error at its path."
     push_targets: list["ViewerSessionDefaultStreamPushTargets"] = Field(
         alias="pushTargets",
         description="Configured multistream push targets for this stream.",
@@ -17724,9 +17738,9 @@ class ViewerSessionInNodeDefaultStream(BaseModel):
     "Optional description for the stream."
     stream_key: Optional[str] = Field(
         alias="streamKey",
-        description="Secret key for publisher-authenticated ingest; null for pull and managed sources.",
+        description="Secret key for publisher-authenticated ingest; null for pull and managed sources.\nThe key lets its holder publish to the stream, so an API token needs the\nstreams:write scope: without it this field is null and the response carries\na FORBIDDEN error at its path.",
     )
-    "Secret key for publisher-authenticated ingest; null for pull and managed sources."
+    "Secret key for publisher-authenticated ingest; null for pull and managed sources.\nThe key lets its holder publish to the stream, so an API token needs the\nstreams:write scope: without it this field is null and the response carries\na FORBIDDEN error at its path."
     playback_id: str = Field(
         alias="playbackId", description="Public identifier for playback URLs."
     )
@@ -17763,9 +17777,9 @@ class ViewerSessionInNodeDefaultStream(BaseModel):
     )
     "When this stream was last modified."
     metrics: Optional["ViewerSessionInNodeDefaultStreamMetrics"] = Field(
-        description="Real-time operational metrics from the data plane.\nIncludes viewer counts, quality metrics, and throughput data.\nLazily loaded from ClickHouse analytics."
+        description="Real-time operational metrics from the data plane.\nIncludes viewer counts, quality metrics, and throughput data.\nLazily loaded from ClickHouse analytics, so an API token needs the\nanalytics:read scope: without it this field is null and the response\ncarries a FORBIDDEN error at its path."
     )
-    "Real-time operational metrics from the data plane.\nIncludes viewer counts, quality metrics, and throughput data.\nLazily loaded from ClickHouse analytics."
+    "Real-time operational metrics from the data plane.\nIncludes viewer counts, quality metrics, and throughput data.\nLazily loaded from ClickHouse analytics, so an API token needs the\nanalytics:read scope: without it this field is null and the response\ncarries a FORBIDDEN error at its path."
     push_targets: list["ViewerSessionInNodeDefaultStreamPushTargets"] = Field(
         alias="pushTargets",
         description="Configured multistream push targets for this stream.",
@@ -18961,6 +18975,7 @@ StreamHealthMetricInNodeDefault.model_rebuild()
 StreamHealthSummaryDefault.model_rebuild()
 StreamInNodeDefault.model_rebuild()
 StreamKey.model_rebuild()
+StreamMetrics.model_rebuild()
 StreamRetentionOverridesDefault.model_rebuild()
 StreamValidationDefault.model_rebuild()
 StreamingConfigDefault.model_rebuild()

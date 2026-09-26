@@ -8,8 +8,8 @@ class OperationInfo(TypedDict):
     since: str
 
 
-SDK_VERSION: Final = "0.3.0"
-SDK_LINE: Final = "0.3"
+SDK_VERSION: Final = "0.4.0"
+SDK_LINE: Final = "0.4"
 MIN_SERVER_VERSION: Final = "v0.3.11"
 
 OPERATIONS: Final[dict[str, OperationInfo]] = {
@@ -154,6 +154,8 @@ OPERATIONS: Final[dict[str, OperationInfo]] = {
     "GetStreamHealth5mConnection": {"kind": "query", "since": "v0.3.11"},
     "GetStreamHealthConnection": {"kind": "query", "since": "v0.3.11"},
     "GetStreamHealthSummary": {"kind": "query", "since": "v0.3.11"},
+    "GetStreamKey": {"kind": "query", "since": "v0.3.11"},
+    "GetStreamMetrics": {"kind": "query", "since": "v0.3.11"},
     "GetStreamingConfig": {"kind": "query", "since": "v0.3.11"},
     "GetTenant": {"kind": "query", "since": "v0.3.11"},
     "GetTenantAnalyticsDailyConnection": {"kind": "query", "since": "v0.3.11"},
@@ -185,6 +187,7 @@ OPERATIONS: Final[dict[str, OperationInfo]] = {
     "ListPushTargets": {"kind": "query", "since": "v0.3.11"},
     "ListSigningKeys": {"kind": "query", "since": "v0.3.11"},
     "ListStreamKeys": {"kind": "query", "since": "v0.3.11"},
+    "ListStreamMetrics": {"kind": "query", "since": "v0.3.11"},
     "ListStreams": {"kind": "query", "since": "v0.3.11"},
     "ListUsageRecords": {"kind": "query", "since": "v0.3.11"},
     "LiveConnectionEvents": {"kind": "subscription", "since": "v0.3.11"},

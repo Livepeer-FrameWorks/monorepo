@@ -3,35 +3,32 @@ from typing import Optional
 from pydantic import Field
 
 from .base_model import BaseModel
-from .fragments import PushTarget
 
 
-class ListPushTargets(BaseModel):
+class GetStreamKey(BaseModel):
     """Root Query type - the entry point for all read operations.
 
     List and object fields are nullable per GraphQL best practices,
     enabling graceful degradation when individual services are unavailable.
     Most connection fields are non-null, but some may be nullable when upstream data is optional."""
 
-    stream: Optional["ListPushTargetsStream"] = Field(
+    stream: Optional["GetStreamKeyStream"] = Field(
         description="Fetch a single stream by its global ID.\nAn API token needs the streams:read or streams:write scope. Stream.streamKey\nneeds streams:write."
     )
     "Fetch a single stream by its global ID.\nAn API token needs the streams:read or streams:write scope. Stream.streamKey\nneeds streams:write."
 
 
-class ListPushTargetsStream(BaseModel):
+class GetStreamKeyStream(BaseModel):
     """A live stream configuration with real-time operational metrics.
     Streams are the core entity for broadcasting and viewing live content."""
 
     id: str = Field(description="Global unique identifier for Relay compatibility.")
     "Global unique identifier for Relay compatibility."
-    push_targets: list["ListPushTargetsStreamPushTargets"] = Field(
-        alias="pushTargets",
-        description="Configured multistream push targets for this stream.",
+    stream_key: Optional[str] = Field(
+        alias="streamKey",
+        description="Secret key for publisher-authenticated ingest; null for pull and managed sources.\nThe key lets its holder publish to the stream, so an API token needs the\nstreams:write scope: without it this field is null and the response carries\na FORBIDDEN error at its path.",
     )
-    "Configured multistream push targets for this stream."
+    "Secret key for publisher-authenticated ingest; null for pull and managed sources.\nThe key lets its holder publish to the stream, so an API token needs the\nstreams:write scope: without it this field is null and the response carries\na FORBIDDEN error at its path."
 
 
-ListPushTargetsStreamPushTargets = PushTarget
-ListPushTargets.model_rebuild()
-ListPushTargetsStream.model_rebuild()
+GetStreamKey.model_rebuild()

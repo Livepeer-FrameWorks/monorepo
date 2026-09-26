@@ -4154,13 +4154,25 @@ export interface Query {
      * Describes enforcement; it never grants access itself.
      */
     capabilities: Capabilities
-    /** List all streams for the current tenant with pagination. */
+    /**
+     * List all streams for the current tenant with pagination.
+     * An API token needs the streams:read or streams:write scope. Stream.streamKey
+     * needs streams:write.
+     */
     streamsConnection: StreamsConnection
-    /** Fetch a single stream by its global ID. */
+    /**
+     * Fetch a single stream by its global ID.
+     * An API token needs the streams:read or streams:write scope. Stream.streamKey
+     * needs streams:write.
+     */
     stream: (Stream | null)
     /** Validate a stream key and return the associated stream info. */
     validateStreamKey: (StreamValidation | null)
-    /** List all stream keys for a specific stream. */
+    /**
+     * List all stream keys for a specific stream.
+     * Stream keys are publishing credentials, so an API token needs the
+     * streams:write scope.
+     */
     streamKeysConnection: StreamKeysConnection
     /** Fetch a single clip by its global ID. */
     clip: (Clip | null)
@@ -5070,7 +5082,12 @@ export interface Stream {
     name: Scalars['String']
     /** Optional description for the stream. */
     description: (Scalars['String'] | null)
-    /** Secret key for publisher-authenticated ingest; null for pull and managed sources. */
+    /**
+     * Secret key for publisher-authenticated ingest; null for pull and managed sources.
+     * The key lets its holder publish to the stream, so an API token needs the
+     * streams:write scope: without it this field is null and the response carries
+     * a FORBIDDEN error at its path.
+     */
     streamKey: (Scalars['String'] | null)
     /** Public identifier for playback URLs. */
     playbackId: Scalars['String']
@@ -5091,7 +5108,9 @@ export interface Stream {
     /**
      * Real-time operational metrics from the data plane.
      * Includes viewer counts, quality metrics, and throughput data.
-     * Lazily loaded from ClickHouse analytics.
+     * Lazily loaded from ClickHouse analytics, so an API token needs the
+     * analytics:read scope: without it this field is null and the response
+     * carries a FORBIDDEN error at its path.
      */
     metrics: (StreamMetrics | null)
     /** Configured multistream push targets for this stream. */
@@ -5436,6 +5455,7 @@ export interface StreamKey {
     id: Scalars['ID']
     streamId: Scalars['ID']
     stream: (Stream | null)
+    /** The publishing secret. Stream keys are read only through operations that need the streams:write scope. */
     keyValue: Scalars['String']
     keyName: (Scalars['String'] | null)
     isActive: Scalars['Boolean']
@@ -11779,7 +11799,11 @@ export interface QueryGenqlSelection{
      * Describes enforcement; it never grants access itself.
      */
     capabilities?: CapabilitiesGenqlSelection
-    /** List all streams for the current tenant with pagination. */
+    /**
+     * List all streams for the current tenant with pagination.
+     * An API token needs the streams:read or streams:write scope. Stream.streamKey
+     * needs streams:write.
+     */
     streamsConnection?: (StreamsConnectionGenqlSelection & { __args?: {
     /** Pagination options. */
     page?: (ConnectionInput | null),
@@ -11788,7 +11812,11 @@ export interface QueryGenqlSelection{
      * picker instead of only the first page.
      */
     search?: (Scalars['String'] | null)} })
-    /** Fetch a single stream by its global ID. */
+    /**
+     * Fetch a single stream by its global ID.
+     * An API token needs the streams:read or streams:write scope. Stream.streamKey
+     * needs streams:write.
+     */
     stream?: (StreamGenqlSelection & { __args: {
     /** The global ID of the stream. */
     id: Scalars['ID']} })
@@ -11796,7 +11824,11 @@ export interface QueryGenqlSelection{
     validateStreamKey?: (StreamValidationGenqlSelection & { __args: {
     /** The stream key to validate. */
     streamKey: Scalars['String']} })
-    /** List all stream keys for a specific stream. */
+    /**
+     * List all stream keys for a specific stream.
+     * Stream keys are publishing credentials, so an API token needs the
+     * streams:write scope.
+     */
     streamKeysConnection?: (StreamKeysConnectionGenqlSelection & { __args: {
     /** Pagination options. */
     page?: (ConnectionInput | null),
@@ -13038,7 +13070,12 @@ export interface StreamGenqlSelection{
     name?: boolean | number
     /** Optional description for the stream. */
     description?: boolean | number
-    /** Secret key for publisher-authenticated ingest; null for pull and managed sources. */
+    /**
+     * Secret key for publisher-authenticated ingest; null for pull and managed sources.
+     * The key lets its holder publish to the stream, so an API token needs the
+     * streams:write scope: without it this field is null and the response carries
+     * a FORBIDDEN error at its path.
+     */
     streamKey?: boolean | number
     /** Public identifier for playback URLs. */
     playbackId?: boolean | number
@@ -13059,7 +13096,9 @@ export interface StreamGenqlSelection{
     /**
      * Real-time operational metrics from the data plane.
      * Includes viewer counts, quality metrics, and throughput data.
-     * Lazily loaded from ClickHouse analytics.
+     * Lazily loaded from ClickHouse analytics, so an API token needs the
+     * analytics:read scope: without it this field is null and the response
+     * carries a FORBIDDEN error at its path.
      */
     metrics?: StreamMetricsGenqlSelection
     /** Configured multistream push targets for this stream. */
@@ -13425,6 +13464,7 @@ export interface StreamKeyGenqlSelection{
     id?: boolean | number
     streamId?: boolean | number
     stream?: StreamGenqlSelection
+    /** The publishing secret. Stream keys are read only through operations that need the streams:write scope. */
     keyValue?: boolean | number
     keyName?: boolean | number
     isActive?: boolean | number

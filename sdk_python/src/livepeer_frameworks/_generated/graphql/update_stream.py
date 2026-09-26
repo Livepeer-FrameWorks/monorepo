@@ -8,7 +8,6 @@ from .fragments import (  # noqa: F401
     AuthError,
     NotFoundError,
     Stream,
-    StreamMetrics,
     StreamPlaybackPolicy,
     StreamPullSource,
     ValidationError,

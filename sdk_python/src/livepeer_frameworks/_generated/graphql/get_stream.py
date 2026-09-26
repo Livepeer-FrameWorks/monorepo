@@ -3,12 +3,7 @@ from typing import Optional
 from pydantic import Field
 
 from .base_model import BaseModel
-from .fragments import (  # noqa: F401
-    Stream,
-    StreamMetrics,
-    StreamPlaybackPolicy,
-    StreamPullSource,
-)
+from .fragments import Stream, StreamPlaybackPolicy, StreamPullSource  # noqa: F401
 
 
 class GetStream(BaseModel):
@@ -19,9 +14,9 @@ class GetStream(BaseModel):
     Most connection fields are non-null, but some may be nullable when upstream data is optional."""
 
     stream: Optional["GetStreamStream"] = Field(
-        description="Fetch a single stream by its global ID."
+        description="Fetch a single stream by its global ID.\nAn API token needs the streams:read or streams:write scope. Stream.streamKey\nneeds streams:write."
     )
-    "Fetch a single stream by its global ID."
+    "Fetch a single stream by its global ID.\nAn API token needs the streams:read or streams:write scope. Stream.streamKey\nneeds streams:write."
 
 
 class GetStreamStream(Stream):

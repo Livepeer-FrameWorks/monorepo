@@ -3,10 +3,10 @@
 package frameworks
 
 // SDKVersion is the version of this SDK.
-const SDKVersion = "0.3.0"
+const SDKVersion = "0.4.0"
 
 // SDKLine is the compatibility line of this SDK; under 0.x each minor version is its own line.
-const SDKLine = "0.3"
+const SDKLine = "0.4"
 
 // MinServerVersion is the oldest FrameWorks release this SDK line supports.
 const MinServerVersion = "v0.3.11"
@@ -154,6 +154,8 @@ var operations = map[string]operationInfo{
 	"GetStreamHealth5mConnection":              {Kind: "query", Since: "v0.3.11"},
 	"GetStreamHealthConnection":                {Kind: "query", Since: "v0.3.11"},
 	"GetStreamHealthSummary":                   {Kind: "query", Since: "v0.3.11"},
+	"GetStreamKey":                             {Kind: "query", Since: "v0.3.11"},
+	"GetStreamMetrics":                         {Kind: "query", Since: "v0.3.11"},
 	"GetStreamingConfig":                       {Kind: "query", Since: "v0.3.11"},
 	"GetTenant":                                {Kind: "query", Since: "v0.3.11"},
 	"GetTenantAnalyticsDailyConnection":        {Kind: "query", Since: "v0.3.11"},
@@ -185,6 +187,7 @@ var operations = map[string]operationInfo{
 	"ListPushTargets":                          {Kind: "query", Since: "v0.3.11"},
 	"ListSigningKeys":                          {Kind: "query", Since: "v0.3.11"},
 	"ListStreamKeys":                           {Kind: "query", Since: "v0.3.11"},
+	"ListStreamMetrics":                        {Kind: "query", Since: "v0.3.11"},
 	"ListStreams":                              {Kind: "query", Since: "v0.3.11"},
 	"ListUsageRecords":                         {Kind: "query", Since: "v0.3.11"},
 	"LiveConnectionEvents":                     {Kind: "subscription", Since: "v0.3.11"},

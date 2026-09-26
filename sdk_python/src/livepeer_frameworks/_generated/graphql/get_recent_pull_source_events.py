@@ -14,9 +14,9 @@ class GetRecentPullSourceEvents(BaseModel):
     Most connection fields are non-null, but some may be nullable when upstream data is optional."""
 
     stream: Optional["GetRecentPullSourceEventsStream"] = Field(
-        description="Fetch a single stream by its global ID."
+        description="Fetch a single stream by its global ID.\nAn API token needs the streams:read or streams:write scope. Stream.streamKey\nneeds streams:write."
     )
-    "Fetch a single stream by its global ID."
+    "Fetch a single stream by its global ID.\nAn API token needs the streams:read or streams:write scope. Stream.streamKey\nneeds streams:write."
 
 
 class GetRecentPullSourceEventsStream(BaseModel):

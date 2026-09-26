@@ -746,7 +746,7 @@ Implements [Node](/builders/api-schema/shared/#node).
 - **streamId**: `String!` — Public stream UUID used for analytics and service APIs (not the Relay ID).
 - **name**: `String!` — Human-readable display name for the stream.
 - **description**: `String` — Optional description for the stream.
-- **streamKey**: `String` — Secret key for publisher-authenticated ingest; null for pull and managed sources.
+- **streamKey**: `String` — Secret key for publisher-authenticated ingest; null for pull and managed sources. The key lets its holder publish to the stream, so an API token needs the streams:write scope: without it this field is null and the response carries a FORBIDDEN error at its path.
 - **playbackId**: `String!` — Public identifier for playback URLs.
 - **record**: `Boolean!` — Whether DVR recording is enabled for this stream.
 - **ingestMode**: `IngestMode!` ([IngestMode](/builders/api-schema/shared/#ingestmode)) — How source media enters the stream.
@@ -755,7 +755,7 @@ Implements [Node](/builders/api-schema/shared/#node).
 - **sourceLocation**: `SourceLocation!` ([SourceLocation](/builders/api-schema/shared/#sourcelocation)) — Where the stream&#39;s source may be ingested, derived from the stream&#39;s own ingest placement rules.
 - **createdAt**: `Time!` ([Time](/builders/api-schema/shared/#time)) — When this stream was created.
 - **updatedAt**: `Time!` ([Time](/builders/api-schema/shared/#time)) — When this stream was last modified.
-- **metrics**: `StreamMetrics` ([StreamMetrics](/builders/api-schema/shared/#streammetrics)) — Real-time operational metrics from the data plane. Includes viewer counts, quality metrics, and throughput data. Lazily loaded from ClickHouse analytics.
+- **metrics**: `StreamMetrics` ([StreamMetrics](/builders/api-schema/shared/#streammetrics)) — Real-time operational metrics from the data plane. Includes viewer counts, quality metrics, and throughput data. Lazily loaded from ClickHouse analytics, so an API token needs the analytics:read scope: without it this field is null and the response carries a FORBIDDEN error at its path.
 - **pushTargets**: `[PushTarget!]!` ([PushTarget](/builders/api-schema/shared/#pushtarget)) — Configured multistream push targets for this stream.
 - **playbackPolicy**: `PlaybackPolicy` ([PlaybackPolicy](/builders/api-schema/shared/#playbackpolicy)) — Playback access policy. null/PUBLIC = anyone with the playbackId can watch.
 - **dvrChapterMode**: `DVRChapterMode` ([DVRChapterMode](/builders/api-schema/shared/#dvrchaptermode)) — How saved recordings are split into chapters. Snapshotted when a recording starts; changes apply from the next broadcast. NONE = live rewind only, nothing kept after the broadcast.

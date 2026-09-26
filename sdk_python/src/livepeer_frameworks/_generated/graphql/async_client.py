@@ -163,6 +163,8 @@ from .get_stream_events_connection import GetStreamEventsConnection
 from .get_stream_health_5_m_connection import GetStreamHealth5mConnection
 from .get_stream_health_connection import GetStreamHealthConnection
 from .get_stream_health_summary import GetStreamHealthSummary
+from .get_stream_key import GetStreamKey
+from .get_stream_metrics import GetStreamMetrics
 from .get_streaming_config import GetStreamingConfig
 from .get_tenant import GetTenant
 from .get_tenant_analytics_daily_connection import GetTenantAnalyticsDailyConnection
@@ -242,6 +244,7 @@ from .list_dvr_chapters import ListDVRChapters
 from .list_push_targets import ListPushTargets
 from .list_signing_keys import ListSigningKeys
 from .list_stream_keys import ListStreamKeys
+from .list_stream_metrics import ListStreamMetrics
 from .list_streams import ListStreams
 from .list_usage_records import ListUsageRecords
 from .live_connection_events import LiveConnectionEvents
@@ -16429,6 +16432,9 @@ class AsyncGraphQLClient(AsyncBaseClient):
               createStream(input: $input) {
                 __typename
                 ...StreamFields
+                ... on Stream {
+                  streamKey
+                }
                 ...ValidationErrorFields
                 ...AuthErrorFields
               }
@@ -16465,7 +16471,6 @@ class AsyncGraphQLClient(AsyncBaseClient):
               streamId
               name
               description
-              streamKey
               playbackId
               record
               ingestMode
@@ -16481,13 +16486,6 @@ class AsyncGraphQLClient(AsyncBaseClient):
               monitoring
               playbackPolicy {
                 ...PlaybackPolicyFields
-              }
-              metrics {
-                status
-                isLive
-                currentViewers
-                startedAt
-                updatedAt
               }
             }
 
@@ -16560,7 +16558,6 @@ class AsyncGraphQLClient(AsyncBaseClient):
               streamId
               name
               description
-              streamKey
               playbackId
               record
               ingestMode
@@ -16576,13 +16573,6 @@ class AsyncGraphQLClient(AsyncBaseClient):
               monitoring
               playbackPolicy {
                 ...PlaybackPolicyFields
-              }
-              metrics {
-                status
-                isLive
-                currentViewers
-                startedAt
-                updatedAt
               }
             }
 
@@ -16648,6 +16638,9 @@ class AsyncGraphQLClient(AsyncBaseClient):
               refreshStreamKey(id: $id) {
                 __typename
                 ...StreamFields
+                ... on Stream {
+                  streamKey
+                }
                 ...ValidationErrorFields
                 ...NotFoundErrorFields
                 ...AuthErrorFields
@@ -16693,7 +16686,6 @@ class AsyncGraphQLClient(AsyncBaseClient):
               streamId
               name
               description
-              streamKey
               playbackId
               record
               ingestMode
@@ -16709,13 +16701,6 @@ class AsyncGraphQLClient(AsyncBaseClient):
               monitoring
               playbackPolicy {
                 ...PlaybackPolicyFields
-              }
-              metrics {
-                status
-                isLive
-                currentViewers
-                startedAt
-                updatedAt
               }
             }
 
@@ -17715,7 +17700,9 @@ class AsyncGraphQLClient(AsyncBaseClient):
         search: Union[Optional[str], UnsetType] = UNSET,
         **kwargs: Any,
     ) -> ListStreams:
-        """List all streams for the current tenant with pagination."""
+        """List all streams for the current tenant with pagination.
+        An API token needs the streams:read or streams:write scope. Stream.streamKey
+        needs streams:write."""
         query = gql("""
             query ListStreams($page: ConnectionInput, $search: String) {
               streamsConnection(page: $page, search: $search) {
@@ -17761,7 +17748,6 @@ class AsyncGraphQLClient(AsyncBaseClient):
               streamId
               name
               description
-              streamKey
               playbackId
               record
               ingestMode
@@ -17778,13 +17764,6 @@ class AsyncGraphQLClient(AsyncBaseClient):
               playbackPolicy {
                 ...PlaybackPolicyFields
               }
-              metrics {
-                status
-                isLive
-                currentViewers
-                startedAt
-                updatedAt
-              }
             }
             """)
         variables: dict[str, object] = {"page": page, "search": search}
@@ -17795,7 +17774,9 @@ class AsyncGraphQLClient(AsyncBaseClient):
         return ListStreams.model_validate(data)
 
     async def get_stream(self, id: str, **kwargs: Any) -> GetStream:
-        """Fetch a single stream by its global ID."""
+        """Fetch a single stream by its global ID.
+        An API token needs the streams:read or streams:write scope. Stream.streamKey
+        needs streams:write."""
         query = gql("""
             query GetStream($id: ID!) {
               stream(id: $id) {
@@ -17828,7 +17809,6 @@ class AsyncGraphQLClient(AsyncBaseClient):
               streamId
               name
               description
-              streamKey
               playbackId
               record
               ingestMode
@@ -17845,13 +17825,6 @@ class AsyncGraphQLClient(AsyncBaseClient):
               playbackPolicy {
                 ...PlaybackPolicyFields
               }
-              metrics {
-                status
-                isLive
-                currentViewers
-                startedAt
-                updatedAt
-              }
             }
             """)
         variables: dict[str, object] = {"id": id}
@@ -17861,13 +17834,130 @@ class AsyncGraphQLClient(AsyncBaseClient):
         data = self.get_data(response)
         return GetStream.model_validate(data)
 
+    async def get_stream_key(self, id: str, **kwargs: Any) -> GetStreamKey:
+        """Secret key for publisher-authenticated ingest; null for pull and managed sources.
+        The key lets its holder publish to the stream, so an API token needs the
+        streams:write scope: without it this field is null and the response carries
+        a FORBIDDEN error at its path."""
+        query = gql("""
+            query GetStreamKey($id: ID!) {
+              stream(id: $id) {
+                id
+                streamKey
+              }
+            }
+            """)
+        variables: dict[str, object] = {"id": id}
+        response = await self.execute(
+            query=query, operation_name="GetStreamKey", variables=variables, **kwargs
+        )
+        data = self.get_data(response)
+        return GetStreamKey.model_validate(data)
+
+    async def get_stream_metrics(self, id: str, **kwargs: Any) -> GetStreamMetrics:
+        """Real-time operational metrics from the data plane.
+        Includes viewer counts, quality metrics, and throughput data.
+        Lazily loaded from ClickHouse analytics, so an API token needs the
+        analytics:read scope: without it this field is null and the response
+        carries a FORBIDDEN error at its path."""
+        query = gql("""
+            query GetStreamMetrics($id: ID!) {
+              stream(id: $id) {
+                id
+                metrics {
+                  ...StreamMetricsFields
+                }
+              }
+            }
+
+            fragment StreamMetricsFields on StreamMetrics {
+              status
+              isLive
+              currentViewers
+              startedAt
+              updatedAt
+              bufferState
+              qualityTier
+              hasIssues
+              issuesDescription
+            }
+            """)
+        variables: dict[str, object] = {"id": id}
+        response = await self.execute(
+            query=query,
+            operation_name="GetStreamMetrics",
+            variables=variables,
+            **kwargs,
+        )
+        data = self.get_data(response)
+        return GetStreamMetrics.model_validate(data)
+
+    async def list_stream_metrics(
+        self,
+        page: Union[Optional[ConnectionInput], UnsetType] = UNSET,
+        search: Union[Optional[str], UnsetType] = UNSET,
+        **kwargs: Any,
+    ) -> ListStreamMetrics:
+        """Real-time operational metrics from the data plane.
+        Includes viewer counts, quality metrics, and throughput data.
+        Lazily loaded from ClickHouse analytics, so an API token needs the
+        analytics:read scope: without it this field is null and the response
+        carries a FORBIDDEN error at its path."""
+        query = gql("""
+            query ListStreamMetrics($page: ConnectionInput, $search: String) {
+              streamsConnection(page: $page, search: $search) {
+                nodes {
+                  id
+                  streamId
+                  metrics {
+                    ...StreamMetricsFields
+                  }
+                }
+                pageInfo {
+                  ...PageInfoFields
+                }
+                totalCount
+              }
+            }
+
+            fragment PageInfoFields on PageInfo {
+              startCursor
+              endCursor
+              hasNextPage
+              hasPreviousPage
+            }
+
+            fragment StreamMetricsFields on StreamMetrics {
+              status
+              isLive
+              currentViewers
+              startedAt
+              updatedAt
+              bufferState
+              qualityTier
+              hasIssues
+              issuesDescription
+            }
+            """)
+        variables: dict[str, object] = {"page": page, "search": search}
+        response = await self.execute(
+            query=query,
+            operation_name="ListStreamMetrics",
+            variables=variables,
+            **kwargs,
+        )
+        data = self.get_data(response)
+        return ListStreamMetrics.model_validate(data)
+
     async def list_stream_keys(
         self,
         stream_id: str,
         page: Union[Optional[ConnectionInput], UnsetType] = UNSET,
         **kwargs: Any,
     ) -> ListStreamKeys:
-        """List all stream keys for a specific stream."""
+        """List all stream keys for a specific stream.
+        Stream keys are publishing credentials, so an API token needs the
+        streams:write scope."""
         query = gql("""
             query ListStreamKeys($streamId: ID!, $page: ConnectionInput) {
               streamKeysConnection(streamId: $streamId, page: $page) {

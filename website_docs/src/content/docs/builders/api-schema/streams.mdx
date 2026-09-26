@@ -39,7 +39,7 @@ resolveIngestEndpoint(
 
 ### Query.stream
 
-Fetch a single stream by its global ID.
+Fetch a single stream by its global ID. An API token needs the streams:read or streams:write scope. Stream.streamKey needs streams:write.
 
 ```graphql
 stream(
@@ -59,11 +59,13 @@ stream(
 | --- | --- | --- | --- | --- |
 | GetRecentPullSourceEvents | `stream.recentPullSourceEvents` | `GetRecentPullSourceEventsDocument` | `GetRecentPullSourceEvents` | `get_recent_pull_source_events` |
 | GetStream | `stream` | `GetStreamDocument` | `GetStream` | `get_stream` |
+| GetStreamKey | `stream.streamKey` | `GetStreamKeyDocument` | `GetStreamKey` | `get_stream_key` |
+| GetStreamMetrics | `stream.metrics` | `GetStreamMetricsDocument` | `GetStreamMetrics` | `get_stream_metrics` |
 | ListPushTargets | `stream.pushTargets` | `ListPushTargetsDocument` | `ListPushTargets` | `list_push_targets` |
 
 ### Query.streamKeysConnection
 
-List all stream keys for a specific stream.
+List all stream keys for a specific stream. Stream keys are publishing credentials, so an API token needs the streams:write scope.
 
 ```graphql
 streamKeysConnection(
@@ -103,7 +105,7 @@ streamingConfig: StreamingConfig
 
 ### Query.streamsConnection
 
-List all streams for the current tenant with pagination.
+List all streams for the current tenant with pagination. An API token needs the streams:read or streams:write scope. Stream.streamKey needs streams:write.
 
 ```graphql
 streamsConnection(
@@ -121,9 +123,10 @@ streamsConnection(
 
 **SDK**
 
-| Operation | TypeScript | Go | Python |
-| --- | --- | --- | --- |
-| ListStreams | `ListStreamsDocument` | `ListStreams` | `list_streams` |
+| Operation | Selects | TypeScript | Go | Python |
+| --- | --- | --- | --- | --- |
+| ListStreamMetrics | `streamsConnection.nodes.metrics` | `ListStreamMetricsDocument` | `ListStreamMetrics` | `list_stream_metrics` |
+| ListStreams | `streamsConnection` | `ListStreamsDocument` | `ListStreams` | `list_streams` |
 
 ### Query.validateStreamKey
 
@@ -511,7 +514,7 @@ Replaces the stream&#39;s own ingest restriction. Private and multicast pull sou
 - **id**: `ID!`
 - **streamId**: `ID!`
 - **stream**: `Stream` ([Stream](/builders/api-schema/shared/#stream))
-- **keyValue**: `String!`
+- **keyValue**: `String!` — The publishing secret. Stream keys are read only through operations that need the streams:write scope.
 - **keyName**: `String`
 - **isActive**: `Boolean!`
 - **lastUsedAt**: `Time` ([Time](/builders/api-schema/shared/#time))

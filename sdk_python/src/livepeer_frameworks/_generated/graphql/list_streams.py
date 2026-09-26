@@ -4,7 +4,6 @@ from .base_model import BaseModel
 from .fragments import (  # noqa: F401
     PageInfo,
     Stream,
-    StreamMetrics,
     StreamPlaybackPolicy,
     StreamPullSource,
 )
@@ -19,9 +18,9 @@ class ListStreams(BaseModel):
 
     streams_connection: "ListStreamsStreamsConnection" = Field(
         alias="streamsConnection",
-        description="List all streams for the current tenant with pagination.",
+        description="List all streams for the current tenant with pagination.\nAn API token needs the streams:read or streams:write scope. Stream.streamKey\nneeds streams:write.",
     )
-    "List all streams for the current tenant with pagination."
+    "List all streams for the current tenant with pagination.\nAn API token needs the streams:read or streams:write scope. Stream.streamKey\nneeds streams:write."
 
 
 class ListStreamsStreamsConnection(BaseModel):
