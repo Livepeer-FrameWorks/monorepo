@@ -234,7 +234,10 @@ func TestDeadlineExpiredHandlesAbandonedOldTarget(t *testing.T) {
 // stubs that would lose ArtifactUrl/Checksum and break `drained`'s
 // SendDesiredStateUpdate payload.
 func TestBuildComponentsForNodeRedriveIncludesAllArtifacts(t *testing.T) {
-	t.Parallel()
+	// The node already runs the target Helmsman, so every component goes out.
+	mock := installMockDB(t)
+	mock.ExpectQuery(`FROM foghorn\.node_components`).WithArgs("node-1").
+		WillReturnRows(sqlmock.NewRows([]string{"component", "current_version"}).AddRow("helmsman", "v0.4.5"))
 
 	components := map[string]releaseComponent{
 		"mist": {
@@ -295,5 +298,49 @@ func TestBuildComponentsForNodeFreshPathSkipsCurrent(t *testing.T) {
 	}
 	if ok || len(got) != 0 {
 		t.Fatalf("expected no components when current matches desired, got %d", len(got))
+	}
+}
+
+// A node whose Helmsman is behind gets only the Helmsman update: the Mist swap
+// waits for the new Helmsman, which recovers a controller that does not come
+// back from the rolling reload. The old one would record Mist as updated with
+// a wedged controller.
+func TestBuildComponentsForNodeUpdatesHelmsmanBeforeMist(t *testing.T) {
+	mock := installMockDB(t)
+	mock.ExpectQuery(`FROM foghorn\.node_components`).WithArgs("node-1").
+		WillReturnRows(sqlmock.NewRows([]string{"component", "current_version"}).
+			AddRow("helmsman", "v0.4.4").AddRow("mist", "v1.2.2"))
+
+	components := map[string]releaseComponent{
+		"mist": {Version: "v1.2.3", Artifacts: map[string]releaseArtifact{
+			"linux/amd64": {ArtifactURL: "https://example.test/mist.tgz", Checksum: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},
+		}},
+		"helmsman": {Version: "v0.4.5", Artifacts: map[string]releaseArtifact{
+			"linux/amd64": {ArtifactURL: "https://example.test/helmsman.tgz", Checksum: "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"},
+		}},
+	}
+	node := &state.NodeState{NodeID: "node-1", OS: "linux", Arch: "amd64"}
+
+	// Re-drive (no reported versions passed in): reads them itself.
+	got, ok, err := buildComponentsForNode(context.Background(), components, nil, node, "stable:v1.2.3")
+	if err != nil || !ok {
+		t.Fatalf("buildComponentsForNode: ok=%v err=%v", ok, err)
+	}
+	if len(got) != 1 || got[0].GetComponent() != "helmsman" {
+		t.Fatalf("components = %v, want only helmsman", got)
+	}
+
+	// Fresh pass with the reported versions: same rule.
+	current := map[string]string{"helmsman": "v0.4.4", "mist": "v1.2.2"}
+	got, _, err = buildComponentsForNode(context.Background(), components, current, node, "stable:v1.2.3")
+	if err != nil || len(got) != 1 || got[0].GetComponent() != "helmsman" {
+		t.Fatalf("fresh components = %v (%v), want only helmsman", got, err)
+	}
+
+	// Once the node reports the target Helmsman, Mist follows.
+	current["helmsman"] = "v0.4.5"
+	got, _, err = buildComponentsForNode(context.Background(), components, current, node, "stable:v1.2.3")
+	if err != nil || len(got) != 1 || got[0].GetComponent() != "mist" {
+		t.Fatalf("after helmsman components = %v (%v), want mist", got, err)
 	}
 }

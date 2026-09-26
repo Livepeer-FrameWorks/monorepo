@@ -334,7 +334,39 @@ func buildComponentsForNode(ctx context.Context, components map[string]releaseCo
 		}
 		direct = append(direct, msg)
 	}
+	direct, err := helmsmanFirst(ctx, node.NodeID, direct, current)
+	if err != nil {
+		return nil, false, err
+	}
 	return direct, len(direct) > 0, nil
+}
+
+// helmsmanFirst sends only the Helmsman component while the node's Helmsman
+// is not yet at its target: the other components wait for the next pass. The
+// Helmsman that applies a Mist swap is the one that verifies the new controller
+// serves and recovers it if not, so it must be the new one. A node never
+// swaps Mist under a Helmsman that lacks that recovery.
+func helmsmanFirst(ctx context.Context, nodeID string, components []*ipcpb.DesiredComponent, current map[string]string) ([]*ipcpb.DesiredComponent, error) {
+	var helmsman *ipcpb.DesiredComponent
+	for _, component := range components {
+		if component.GetComponent() == "helmsman" {
+			helmsman = component
+		}
+	}
+	if helmsman == nil || len(components) == 1 {
+		return components, nil
+	}
+	if current == nil {
+		reported, err := currentNodeComponents(ctx, nodeID)
+		if err != nil {
+			return nil, err
+		}
+		current = reported
+	}
+	if current["helmsman"] == helmsman.GetVersion() {
+		return components, nil
+	}
+	return []*ipcpb.DesiredComponent{helmsman}, nil
 }
 
 func reconcileWarmups(ctx context.Context, clusterID, targetRelease string, nodes []*state.NodeState, plan rolloutPlan) error {
