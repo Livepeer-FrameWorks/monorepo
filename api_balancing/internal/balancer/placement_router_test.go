@@ -303,16 +303,39 @@ func TestPlacementRouterRejectsMismatchedPreparation(t *testing.T) {
 	}
 }
 
-func TestPlacementRouterAmbiguousPreparationIsNotRetriedElsewhere(t *testing.T) {
+// A destination whose preparation fails is not eligible for the request; the
+// router places the viewer on the next best candidate. Staging: a US replica
+// being down refused EU viewers for 25 s although the local edge was fine.
+func TestPlacementRouterFailedPreparationMovesToNextCandidate(t *testing.T) {
 	req, router, _ := placementRouteFixture()
-	ambiguous := errors.New("lost acknowledgement")
-	calls := 0
-	router.Prepare = func(context.Context, PlacementCell, PlacementPreparationRequest) (PlacementPreparationResult, error) {
-		calls++
-		return PlacementPreparationResult{}, ambiguous
+	unreachable := errors.New("peer unreachable")
+	var tried []string
+	router.Prepare = func(_ context.Context, _ PlacementCell, p PlacementPreparationRequest) (PlacementPreparationResult, error) {
+		tried = append(tried, p.Choice.NodeID)
+		if len(tried) == 1 {
+			return PlacementPreparationResult{}, unreachable
+		}
+		return matchingPreparation(p, router.Now()), nil
 	}
-	if _, err := router.Route(context.Background(), req); !errors.Is(err, ambiguous) || calls != 1 {
-		t.Fatalf("ambiguous preparation rerouted: %v (%d calls)", err, calls)
+	result, err := router.Route(context.Background(), req)
+	if err != nil {
+		t.Fatalf("route: %v (tried %v)", err, tried)
+	}
+	if len(tried) != 2 || tried[0] == tried[1] || result.Preparation.NodeID != tried[1] {
+		t.Fatalf("tried %v, placed on %q; want the second candidate", tried, result.Preparation.NodeID)
+	}
+}
+
+// When every candidate fails to prepare, the caller gets the preparation
+// error, not a generic refusal.
+func TestPlacementRouterReportsPreparationErrorWhenNoCandidatePrepares(t *testing.T) {
+	req, router, _ := placementRouteFixture()
+	unreachable := errors.New("peer unreachable")
+	router.Prepare = func(context.Context, PlacementCell, PlacementPreparationRequest) (PlacementPreparationResult, error) {
+		return PlacementPreparationResult{}, unreachable
+	}
+	if _, err := router.Route(context.Background(), req); !errors.Is(err, unreachable) {
+		t.Fatalf("route error = %v, want the preparation error", err)
 	}
 }
 

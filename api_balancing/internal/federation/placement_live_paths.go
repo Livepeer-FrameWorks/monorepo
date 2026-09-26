@@ -3,6 +3,7 @@ package federation
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/url"
 	"strconv"
 	"strings"
@@ -330,4 +331,33 @@ func validPlacementDTSC(raw, runtimeName string) bool {
 	return u.Scheme == "dtsc" && u.Hostname() != "" && u.Hostname() != "HOST" &&
 		u.User == nil && u.RawQuery == "" && !u.ForceQuery && u.Fragment == "" && u.Opaque == "" &&
 		!strings.ContainsAny(u.Host, "$\\ \t\r\n") && strings.HasSuffix(u.Path, "/"+runtimeName)
+}
+
+// destinationUnavailableReason names the first check a selected destination
+// fails, with the evidence age, so a refusal says why.
+func destinationUnavailableReason(node *state.EnhancedBalancerNodeSnapshot, now time.Time) string {
+	switch {
+	case node == nil:
+		return "not in this cell's telemetry"
+	case !node.IsActive:
+		return "not active"
+	case !node.CapEdge:
+		return "not an edge"
+	case !freshPlacementEvidence(node.LastHeartbeat, now):
+		return "heartbeat " + evidenceAge(node.LastHeartbeat, now)
+	case !freshPlacementEvidence(node.OutputsObservedAt, now):
+		return "listener observation " + evidenceAge(node.OutputsObservedAt, now)
+	}
+	return ""
+}
+
+func evidenceAge(observed, now time.Time) string {
+	switch {
+	case observed.IsZero():
+		return "missing"
+	case observed.After(now):
+		return fmt.Sprintf("%s in the future", observed.Sub(now).Round(time.Millisecond))
+	default:
+		return fmt.Sprintf("%s old", now.Sub(observed).Round(time.Millisecond))
+	}
 }

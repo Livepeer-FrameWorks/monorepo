@@ -184,8 +184,8 @@ func (runtime *LivePushPreparationRuntime) observe(ctx context.Context, req *pla
 			selected = node
 		}
 	}
-	if selected == nil || !selected.IsActive || !selected.CapEdge || !freshPlacementEvidence(selected.LastHeartbeat, now) || !freshPlacementEvidence(selected.OutputsObservedAt, now) {
-		return pushPreparationState{}, status.Error(codes.Unavailable, "selected destination is unavailable")
+	if reason := destinationUnavailableReason(selected, now); reason != "" {
+		return pushPreparationState{}, status.Error(codes.Unavailable, "selected destination is unavailable: "+reason)
 	}
 	endpoint := mist.ResolvePlaybackURL(selected.Outputs, selected.Host, q.Protocol, pair.Object.Authority.GetPlaybackId())
 	if endpoint == "" {

@@ -252,8 +252,8 @@ func (runtime *MediaServePreparationRuntime) observe(ctx context.Context, req *p
 		}
 		selected = node
 	}
-	if selected == nil || !selected.IsActive || !selected.CapEdge || !freshPlacementEvidence(selected.LastHeartbeat, now) || !freshPlacementEvidence(selected.OutputsObservedAt, now) {
-		return mediaPreparationState{}, status.Error(codes.Unavailable, "selected destination is unavailable")
+	if reason := destinationUnavailableReason(selected, now); reason != "" {
+		return mediaPreparationState{}, status.Error(codes.Unavailable, "selected destination is unavailable: "+reason)
 	}
 	if _, allowed := authority.Clusters[req.ClusterId]; !allowed {
 		return mediaPreparationState{}, status.Error(codes.FailedPrecondition, "selected destination is outside authority")

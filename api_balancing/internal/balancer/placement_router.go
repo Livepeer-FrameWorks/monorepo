@@ -257,6 +257,16 @@ func (router PlacementRouter) logObservationFailures(req PlacementRouteRequest, 
 	}
 }
 
+func (router PlacementRouter) logPreparationFailure(req PlacementRouteRequest, choice placement.Choice, err error) {
+	if router.Logger == nil {
+		return
+	}
+	router.Logger.WithError(err).WithFields(logging.Fields{
+		"tenant_id": req.TenantID, "internal_name": req.InternalName, "verb": req.Verb,
+		"cluster_id": choice.ClusterID, "node_id": choice.NodeID,
+	}).Warn("Placement preparation failed; trying the next candidate")
+}
+
 func (router PlacementRouter) logRefusal(req PlacementRouteRequest, decision placement.Decision, candidates []placement.Candidate, now time.Time) {
 	if router.Logger == nil {
 		return
@@ -480,6 +490,7 @@ func (router PlacementRouter) Route(ctx context.Context, req PlacementRouteReque
 	candidates, destinations := census.candidates, census.destinations
 	now := router.now
 	var result PlacementRouteResult
+	var lastPrepareErr error
 	for range placementMaxPrepareAttempts {
 		if err := ctx.Err(); err != nil {
 			return result, err
@@ -492,6 +503,9 @@ func (router PlacementRouter) Route(ctx context.Context, req PlacementRouteReque
 		}
 		if len(decision.Choices) == 0 {
 			router.logRefusal(req, decision, candidates, evaluatedAt)
+			if lastPrepareErr != nil {
+				return result, lastPrepareErr
+			}
 			return result, placementRefusal(decision)
 		}
 		choice := decision.Choices[0]
@@ -516,15 +530,28 @@ func (router PlacementRouter) Route(ctx context.Context, req PlacementRouteReque
 		attempt := PlacementPreparationRequest{Route: req, Choice: choice, AttemptID: attemptID, ExpiresAt: decisionUntil}
 		prepareCtx, prepareCancel := context.WithTimeout(ctx, remaining)
 		prepared, prepareErr := router.Prepare(prepareCtx, cell, attempt)
-		prepareContextErr := prepareCtx.Err()
-		prepareCancel()
-		if prepareErr != nil {
-			// An ambiguous outcome is not proof of exhaustion. The destination
-			// must reconcile the same attempt; the router cannot invent success.
-			return result, prepareErr
+		if prepareErr == nil {
+			// An answer after the attempt's deadline is not a preparation.
+			prepareErr = prepareCtx.Err()
 		}
-		if prepareContextErr != nil {
-			return result, prepareContextErr
+		prepareCancel()
+		if err := ctx.Err(); err != nil {
+			return result, err
+		}
+		if prepareErr != nil {
+			// A destination that cannot be prepared is not eligible for this
+			// request; the next best candidate is. The failed attempt is never
+			// reported as success: whatever the destination reserved for it
+			// expires with the attempt.
+			router.logPreparationFailure(req, choice, prepareErr)
+			lastPrepareErr = prepareErr
+			for index := range candidates {
+				if candidates[index].ClusterID == choice.ClusterID && candidates[index].NodeID == choice.NodeID {
+					candidates[index].Capacity = placement.CapacityUnavailable
+					candidates[index].CapacityDetail = "preparation_failed"
+				}
+			}
+			continue
 		}
 		if err := ctx.Err(); err != nil {
 			return result, err
@@ -560,6 +587,9 @@ func (router PlacementRouter) Route(ctx context.Context, req PlacementRouteReque
 				return result, ErrPlacementPreparation
 			}
 		}
+	}
+	if lastPrepareErr != nil {
+		return result, lastPrepareErr
 	}
 	return result, ErrPlacementUnavailable
 }
