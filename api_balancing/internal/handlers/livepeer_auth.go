@@ -137,6 +137,12 @@ func authorizeSignedLivepeerJob(ctx context.Context, manifestID string, req live
 	remoteIP := strings.TrimSpace(req.RemoteIP)
 	nodeID := state.DefaultManager().NodeIDByClientIP(remoteIP)
 	if nodeID == "" || nodeID != claims.NodeID {
+		logger.WithFields(logging.Fields{
+			"manifest_id":   manifestID,
+			"remote_ip":     remoteIP,
+			"token_node_id": claims.NodeID,
+			"ip_node_id":    nodeID,
+		}).Warn("livepeer auth: segment source is not the node the job token names")
 		return nil, authRejectNodeMismatch
 	}
 	node := state.DefaultManager().GetNodeState(nodeID)

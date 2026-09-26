@@ -1679,28 +1679,28 @@ func (sm *StreamStateManager) NodeIDByClientIP(clientIP string) string {
 			return id
 		}
 	}
-	// Pass 2: DNS resolve. Handles FQDN BaseURLs.
-	// Bounded context: this runs on the gRPC request path; a slow DNS
-	// resolver shouldn't stall stream resolution.
-	resolveCtx, resolveCancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
-	defer resolveCancel()
-	resolver := &net.Resolver{}
+	// Pass 2: FQDN BaseURLs, from addresses already resolved. This runs on
+	// the Livepeer auth and viewer request paths, so a match must not wait on
+	// DNS: an uncached or slow lookup used to exhaust the request's budget
+	// and misreport a known node as unknown.
+	var unresolved []string
 	for id, baseURL := range nodes {
 		host := hostFromBaseURL(baseURL)
-		if host == "" {
+		if host == "" || net.ParseIP(host) != nil {
 			continue
 		}
-		if net.ParseIP(host) != nil {
-			continue // already covered above
+		addrs, fresh := nodeHostAddrs.cached(host)
+		if addrMatches(addrs, parsed) {
+			return id
 		}
-		addrs, err := resolver.LookupHost(resolveCtx, host)
-		if err != nil {
-			continue
+		if !fresh {
+			unresolved = append(unresolved, id)
 		}
-		for _, addr := range addrs {
-			if ip := net.ParseIP(addr); ip != nil && ip.Equal(parsed) {
-				return id
-			}
+	}
+	// Pass 3: resolve the hosts with no fresh answer, each bounded on its own.
+	for _, id := range unresolved {
+		if addrMatches(nodeHostAddrs.resolve(hostFromBaseURL(nodes[id])), parsed) {
+			return id
 		}
 	}
 	return ""
@@ -5091,4 +5091,58 @@ func (sm *StreamStateManager) GetVirtualViewersForNode(nodeID string) []*Virtual
 		}
 	}
 	return viewers
+}
+
+func addrMatches(addrs []string, ip net.IP) bool {
+	for _, addr := range addrs {
+		if parsed := net.ParseIP(addr); parsed != nil && parsed.Equal(ip) {
+			return true
+		}
+	}
+	return false
+}
+
+// nodeHostAddrs caches what node BaseURL hosts resolve to.
+var nodeHostAddrs = &hostAddrCache{
+	ttl:     5 * time.Minute,
+	timeout: time.Second,
+	lookup:  (&net.Resolver{}).LookupHost,
+	entries: map[string]hostAddrEntry{},
+}
+
+type hostAddrCache struct {
+	mu      sync.Mutex
+	ttl     time.Duration
+	timeout time.Duration
+	lookup  func(context.Context, string) ([]string, error)
+	entries map[string]hostAddrEntry
+}
+
+type hostAddrEntry struct {
+	addrs      []string
+	resolvedAt time.Time
+}
+
+// cached returns the last addresses resolved for host and whether they are
+// within the TTL.
+func (c *hostAddrCache) cached(host string) ([]string, bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	entry, ok := c.entries[host]
+	return entry.addrs, ok && time.Since(entry.resolvedAt) < c.ttl
+}
+
+// resolve looks host up and caches the answer. A failed lookup keeps the
+// last known addresses: a DNS hiccup does not make a node unknown.
+func (c *hostAddrCache) resolve(host string) []string {
+	ctx, cancel := context.WithTimeout(context.Background(), c.timeout)
+	defer cancel()
+	addrs, err := c.lookup(ctx, host)
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if err != nil {
+		return c.entries[host].addrs
+	}
+	c.entries[host] = hostAddrEntry{addrs: addrs, resolvedAt: time.Now()}
+	return addrs
 }
