@@ -142,6 +142,12 @@ func (transport PlacementTransport) Prepare(ctx context.Context, cell balancer.P
 			return balancer.PlacementPreparationResult{}, errors.New("placement destination cell unavailable")
 		}
 		response, err = transport.Client.PreparePlacement(ctx, cell.ID, addr, query)
+		if err != nil && transport.Logger != nil {
+			transport.Logger.WithError(err).WithFields(logging.Fields{
+				"cell_id": cell.ID, "peer_addr": addr, "cluster_id": req.Choice.ClusterID, "node_id": req.Choice.NodeID,
+				"internal_name": req.Route.InternalName,
+			}).Warn("Remote placement preparation failed")
+		}
 	}
 	if err != nil {
 		return balancer.PlacementPreparationResult{}, err
