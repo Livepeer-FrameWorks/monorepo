@@ -54,6 +54,7 @@ func mistControllerProcesses(procRoot string) (map[int]int, error) {
 	if err != nil {
 		return nil, err
 	}
+	euid := os.Geteuid()
 	controllers := map[int]int{}
 	for _, entry := range entries {
 		pid, convErr := strconv.Atoi(entry.Name())
@@ -72,16 +73,22 @@ func mistControllerProcesses(procRoot string) (map[int]int, error) {
 			continue
 		}
 		ppid := -1
+		foreign := false
 		for line := range strings.SplitSeq(string(status), "\n") {
 			if value, ok := strings.CutPrefix(line, "PPid:"); ok {
 				parsedPPID, parseErr := strconv.Atoi(strings.TrimSpace(value))
 				if parseErr == nil {
 					ppid = parsedPPID
 				}
-				break
+			}
+			if value, ok := strings.CutPrefix(line, "Uid:"); ok && euid != 0 {
+				// Real UID first; Helmsman runs as Mist's user and can neither
+				// signal nor inspect another user's controller.
+				fields := strings.Fields(value)
+				foreign = len(fields) > 0 && fields[0] != strconv.Itoa(euid)
 			}
 		}
-		if ppid < 0 {
+		if ppid < 0 || foreign {
 			continue
 		}
 		controllers[pid] = ppid
