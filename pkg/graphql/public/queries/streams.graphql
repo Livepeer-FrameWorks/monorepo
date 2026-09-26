@@ -16,6 +16,16 @@ query GetStream($id: ID!) {
   }
 }
 
+# The publishing key of a push stream (null for pull and managed streams).
+# The key lets its holder publish, so an API token needs streams:write.
+# @target query.stream.streamKey
+query GetStreamKey($id: ID!) {
+  stream(id: $id) {
+    id
+    streamKey
+  }
+}
+
 # Live state comes from analytics: an API token needs analytics:read.
 # @target query.stream.metrics
 query GetStreamMetrics($id: ID!) {

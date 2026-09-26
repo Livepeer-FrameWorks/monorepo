@@ -71,6 +71,9 @@ each tool requires its exact published domain permission, such as `streams:read`
 developer, consultant, and wallet-management tools use the corresponding `account:read`,
 `support:read`, `developer:*`, `consultant:use`, `security:*`, and `placement:read`/`placement:write` scopes.
 
+Stream keys are publishing credentials, so the tools that create, rotate, list, or deactivate them,
+including `list_stream_keys`, need `streams:write`.
+
 High-risk tools require API tokens to carry both their domain scope and `mcp:high-risk`. Grant this
 only to autonomous agents that are intentionally allowed to perform destructive,
 credential-changing, financially costly, or arbitrary-query operations. Tool-specific confirmation
@@ -256,7 +259,7 @@ Actions the agent can perform.
 | `create_stream`                       | Create a push or pull stream                               | Auth                                                                                  |
 | `update_stream`                       | Update stream settings or pull-source config               | Auth                                                                                  |
 | `delete_stream`                       | Delete a stream                                            | Auth + Confirm; API tokens also need mcp:high-risk                                    |
-| `list_stream_keys`                    | List push-stream ingest keys                               | Auth                                                                                  |
+| `list_stream_keys`                    | List push-stream ingest keys                               | Auth + streams:write                                                                  |
 | `create_stream_key`                   | Create an additional push-stream ingest key                | Auth + Confirm; API tokens also need mcp:high-risk                                    |
 | `delete_stream_key`                   | Deactivate a push-stream ingest key                        | Auth + Confirm; API tokens also need mcp:high-risk                                    |
 | `refresh_stream_key`                  | Rotate a push stream's primary key                         | Auth + Confirm; API tokens also need mcp:high-risk                                    |

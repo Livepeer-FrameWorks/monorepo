@@ -164,10 +164,8 @@ func RequirePermission(ctx context.Context, permission string) error {
 	case "jwt", "wallet":
 		return nil
 	case "api_token":
-		for _, perm := range ctxkeys.GetPermissions(ctx) {
-			if strings.TrimSpace(perm) == permission {
-				return nil
-			}
+		if auth.PermissionGranted(ctxkeys.GetPermissions(ctx), permission) {
+			return nil
 		}
 		return fmt.Errorf("%w: requires %s scope", ErrForbidden, permission)
 	default:

@@ -23,7 +23,6 @@ fragment StreamFields on Stream {
   streamId
   name
   description
-  streamKey
   playbackId
   record
   ingestMode

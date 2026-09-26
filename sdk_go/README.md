@@ -77,7 +77,10 @@ An API token carries scopes. The stream functions (`ListStreams`, `GetStream`,
 `CreateStream`, `UpdateStream`, `RefreshStreamKey`) select only stream fields,
 so `streams:read` and `streams:write` cover them. Live state
 (`Stream.metrics`) comes from analytics and needs `analytics:read`: read it
-with `GetStreamMetrics` or `ListStreamMetrics`.
+with `GetStreamMetrics` or `ListStreamMetrics`. A stream key lets its holder
+publish, so it needs `streams:write`: `CreateStream` and `RefreshStreamKey`
+return it, `GetStreamKey` reads it, and `ListStreams`, `GetStream`, and
+`UpdateStream` do not select it.
 
 When a field below a returned root field fails (for example `metrics`
 selected with a token that lacks `analytics:read`), the server sets it to

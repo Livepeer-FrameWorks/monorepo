@@ -28,7 +28,7 @@ func TestStreamSourceModeProjection(t *testing.T) {
 			if err != nil || mode != tt.wantMode {
 				t.Fatalf("IngestMode() = (%q, %v), want (%q, nil)", mode, err, tt.wantMode)
 			}
-			key, err := resolver.StreamKey(context.Background(), stream)
+			key, err := resolver.StreamKey(streamKeyScopeCtx("jwt"), stream)
 			if err != nil || (key != nil) != tt.wantKey {
 				t.Fatalf("StreamKey() = (%v, %v), want present=%v", key, err, tt.wantKey)
 			}

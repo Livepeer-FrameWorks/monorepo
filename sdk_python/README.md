@@ -66,7 +66,9 @@ operation name of your own: the server version check looks up an SDK operation's
 An API token carries scopes. The stream methods (`list_streams`, `get_stream`, `create_stream`,
 `update_stream`, `refresh_stream_key`) select only stream fields, so `streams:read` and
 `streams:write` cover them. Live state (`Stream.metrics`) comes from analytics and needs
-`analytics:read`: read it with `get_stream_metrics` or `list_stream_metrics`.
+`analytics:read`: read it with `get_stream_metrics` or `list_stream_metrics`. A stream key lets its
+holder publish, so it needs `streams:write`: `create_stream` and `refresh_stream_key` return it,
+`get_stream_key` reads it, and `list_streams`, `get_stream`, and `update_stream` do not select it.
 
 When a field below a returned root field fails (for example `metrics` selected with a token that
 lacks `analytics:read`), the server sets it to null and reports an error at its path. The call

@@ -4871,6 +4871,13 @@ func (r *streamResolver) StreamKey(ctx context.Context, obj *commodorepb.Stream)
 	if mode != "" && mode != "push" {
 		return nil, nil
 	}
+	// The key lets its holder publish to the stream, so an API token needs
+	// streams:write to read it. Checking at the field covers every path that
+	// reaches a Stream; the field is nullable, so the rest of the stream
+	// still resolves and the response names the missing scope.
+	if err := middleware.RequirePermission(ctx, "streams:write"); err != nil {
+		return nil, err
+	}
 	key := obj.GetStreamKey()
 	return &key, nil
 }

@@ -43,21 +43,32 @@ Get your API token from **Developer → Credentials** in the dashboard.
 ### Token scopes
 
 An API token carries the scopes you grant it when you create it, in `resource:action` form. A
-dashboard session is not scoped. The scope a request needs follows from the fields it selects, not
-only from its root field:
+resource's `write` scope includes its `read` scope: a token with `streams:write` can do everything
+`streams:read` allows. A dashboard session is not scoped. The scope a request needs follows from the
+fields it selects, not only from its root field:
 
-| Fields                                                                                                                    | Scope            |
-| ------------------------------------------------------------------------------------------------------------------------- | ---------------- |
-| Stream reads: `streamsConnection`, `stream`, stream keys, push targets                                                    | `streams:read`   |
-| Stream changes: `createStream`, `updateStream`, `deleteStream`, `refreshStreamKey`, stream keys, push targets, VOD upload | `streams:write`  |
-| Live state and analytics: `Stream.metrics`, everything under `analytics`                                                  | `analytics:read` |
+| Fields                                                                                                                 | Scope            |
+| ---------------------------------------------------------------------------------------------------------------------- | ---------------- |
+| Stream reads: `streamsConnection`, `stream`, and a `Stream` reached through another object (for example `clip.stream`) | `streams:read`   |
+| Push target reads: `Stream.pushTargets`                                                                                | `streams:read`   |
+| Stream changes: `createStream`, `updateStream`, `deleteStream`, push target changes, VOD upload                        | `streams:write`  |
+| Stream keys: `Stream.streamKey`, `streamKeysConnection`, `refreshStreamKey`, `createStreamKey`, `deleteStreamKey`      | `streams:write`  |
+| Live state and analytics: `Stream.metrics`, everything under `analytics`                                               | `analytics:read` |
+
+A stream key lets whoever holds it publish to the stream, so it is a write credential: an API
+token reads, creates, rotates, lists, or deactivates keys only with `streams:write`. With
+`streams:read` alone the rest of a stream resolves, `streamKey` is `null`, and the response carries
+a `FORBIDDEN` error at its path, for example `["stream", "streamKey"]`.
 
 `Stream.metrics` resolves from the analytics pipeline, so selecting it inside a stream query or
 mutation needs `analytics:read` as well. Without it the rest of the stream resolves, `metrics` is
 `null`, and the response carries a `FORBIDDEN` error at `["stream", "metrics"]` (see
-[Partial results](#partial-results)). The SDKs' stream operations (`ListStreams`, `GetStream`,
-`CreateStream`, `UpdateStream`, `RefreshStreamKey`) do not select `metrics`; `GetStreamMetrics` and
-`ListStreamMetrics` read live state and are the operations that need `analytics:read`.
+[Partial results](#partial-results)).
+
+The SDKs' stream operations (`ListStreams`, `GetStream`, `CreateStream`, `UpdateStream`,
+`RefreshStreamKey`) do not select `metrics`. Of them, only `CreateStream` and `RefreshStreamKey`
+select `streamKey`. `GetStreamMetrics` and `ListStreamMetrics` read live state and need
+`analytics:read`; `GetStreamKey` reads one stream's key and needs `streams:write`.
 
 The dashboard may authenticate via httpOnly cookies.  
 Public allowlist (no auth required): the queries `serverInfo`, `resolveViewerEndpoint`, `resolveIngestEndpoint`, `networkStatus`, and the orchestrator queries, plus the mutations `bootstrapEdge` and `walletLogin`, which each carry their own per-call credential in the input.

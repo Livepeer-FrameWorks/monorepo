@@ -9,9 +9,11 @@
 # docs/standards/graphql-deprecation.md is the policy these lines enforce.
 current: "0.4"
 lines:
-  # 0.4 drops Stream.metrics from the shared stream selection, so stream
-  # operations need only the streams:* scopes; live state moves to
-  # GetStreamMetrics and ListStreamMetrics (analytics:read).
+  # 0.4 drops Stream.metrics and Stream.streamKey from the shared stream
+  # selection, so stream operations need only the streams:* scopes; live
+  # state moves to GetStreamMetrics and ListStreamMetrics (analytics:read),
+  # and the key to CreateStream, RefreshStreamKey, and GetStreamKey
+  # (streams:write).
   - line: "0.4"
     status: live
     min_server: v0.3.11
