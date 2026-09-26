@@ -882,9 +882,9 @@ func avTrackSelectForCodec(value interface{}) string {
 	}
 	switch strings.ToLower(codec) {
 	case "aac", "opus", "mp3", "flac", "wav":
-		return "audio=all&video=none&subtitle=none"
+		return "audio=all&video=none&subtitle=none&meta=none"
 	case "h264", "h265", "hevc", "vp8", "vp9", "av1", "mpeg2":
-		return "video=maxbps&audio=none&subtitle=none"
+		return "video=maxbps&audio=none&subtitle=none&meta=none"
 	default:
 		return "audio=all&video=all"
 	}
