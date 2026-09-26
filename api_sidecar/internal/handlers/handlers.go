@@ -2423,10 +2423,10 @@ func HandleLivepeerSegmentComplete(c *gin.Context) {
 	turnaroundMs := params[12]
 	speedFactor := params[13]
 	renditionsJson := params[14]
-	outputCodec := ""
-	if len(params) > 15 {
-		outputCodec = strings.TrimSpace(params[15])
-	}
+	// Mist's Livepeer process only produces H.264 renditions and its payload
+	// carries no codec; the billing dimension must not be empty or Periscope
+	// quarantines the segment.
+	outputCodec := "h264"
 
 	logger.WithFields(logging.Fields{
 		"trigger_type":        "LIVEPEER_SEGMENT_COMPLETE",
@@ -2564,8 +2564,10 @@ func HandleProcessAVSegmentComplete(c *gin.Context) {
 	decodeUs := params[9]
 	transformUs := params[10]
 	encodeUs := params[11]
-	inputCodec := params[12]
-	outputCodec := params[13]
+	// MistProcAV reports FFmpeg encoder names (libx264, h264_nvenc); billing
+	// selectors and analytics key on the codec.
+	inputCodec := mist.CanonicalCodecName(params[12])
+	outputCodec := mist.CanonicalCodecName(params[13])
 	inputWidth := params[14]
 	inputHeight := params[15]
 	outputWidth := params[16]
