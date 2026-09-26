@@ -2216,10 +2216,9 @@ func main() {
 	dvrIntentRecoveryJob.Start()
 	defer dvrIntentRecoveryJob.Stop()
 
-	// Retire ingest sessions whose node hard-disconnected (crash / SIGKILL): it sends neither
-	// PUSH_INPUT_CLOSE nor STREAM_END, so the session would otherwise stay open forever and block a
-	// cross-node republish of the same stream (the (tenant, stream) partial unique rejects it as a
-	// duplicate). Fenced against the node's conn_owner, so a reconnect's newer session is never killed.
+	// Retire ingest sessions whose admission never confirmed its source projection, and purge expired
+	// close-before-insert tombstones. Losing a node's control connection ends no session: a publisher
+	// on another node takes the stream over, and a returning node's registration reconciles its own.
 	ingestSessionReaperJob := jobs.NewIngestSessionReaperJob(jobs.IngestSessionReaperConfig{
 		Logger: logger,
 	})

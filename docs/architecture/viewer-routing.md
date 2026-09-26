@@ -448,8 +448,45 @@ cell can still route an encoder during a control-plane outage.
 Tenant stream capacity is enforced in the same PostgreSQL transaction that
 creates the durable ingest session. All admissions take a tenant advisory lock;
 capped admissions count active sessions and insert only when a slot remains.
-Session close or fenced reap releases the slot by ending that row. Valkey loss therefore
-cannot revoke a valid publisher or admit a second publisher from a torn lease.
+Ending that row releases the slot. Valkey loss therefore cannot revoke a valid
+publisher or admit a second publisher from a torn lease.
+
+An ingest node that loses its control connection keeps its sessions; control
+loss is not evidence that the publisher stopped. The session ends only on
+evidence. One case is a publisher for the same stream admitted on another node
+while the old node has no `conn_owner` on any replica. That admission
+supersedes the old session in the same transaction (`superseded_by_new_node`)
+and replaces it one for one in the tenant count. The other cases are the
+publisher's close, `STREAM_END`, Helmsman's runtime-absence report, or the
+node's re-registration inventory (below). While the old node is connected, or
+its presence cannot be read, a second publisher is `DUPLICATE_INGEST`.
+
+The takeover can be admitted only after Commodore's 30-second placement lease
+lapses. Renewal is sharded by control-connection ownership, so nobody renews an
+unreachable node's claim. Until the lease lapses, Commodore rejects the
+newcomer's claim.
+
+On registration, Helmsman lists the publisher generations in its persisted
+generation store (`Register.live_ingest_generations`). Foghorn then settles
+that node's sessions:
+
+- Listed sessions continue unchanged.
+- Sessions projected before the registration but not listed end through the
+  offline path (`absent_on_reregister`).
+- A listed generation that another node has taken over gets a `DrainStream`
+  fenced on that exact generation, so the node stops the input it no longer
+  owns.
+
+A registration without `live_ingest_generations_reported` (an older sidecar or
+an unreadable store) proves nothing, and no session ends because of it.
+
+Viewers during such a partition: the source projection stays active, so live
+placement classifies the unreachable owner as a starting source, not an offline
+one. The owner node fails the placement-presence checks (healthy node, fresh
+heartbeat, fresh stream observation). HTTP `/play` answers `503 STREAM_STARTING`
+with `Retry-After: 1`, and gRPC answers `Unavailable` with the stream-starting
+reason and a one-second retry. `404 STREAM_OFFLINE` appears only after an offline
+effect withdraws the source.
 
 Viewer capacity remains an atomic member lease in shared Valkey. Its identity
 prefers Mist's stable connection ID; Foghorn durably maps

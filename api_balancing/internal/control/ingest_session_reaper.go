@@ -14,59 +14,22 @@ import (
 	"github.com/google/uuid"
 )
 
-// OpenIngestSession is one active (ended_at IS NULL) ingest session the disconnect reaper evaluates.
-type OpenIngestSession struct {
-	SessionID    string
-	TenantID     string
-	NodeID       string
-	InternalName string
-	ClaimToken   string
-}
-
-// NodePresenceFunc reports whether a node currently has a control connection to ANY Foghorn replica in
-// this cell (its conn_owner key exists). present=false means the node is connected nowhere. A non-nil
-// error is a LOOKUP failure (e.g. Redis unreachable), NOT an absence: the reaper treats it as unknown
-// and leaves the session untouched (fail closed), because a false "disconnected" would tear down a
-// live session whose owner is merely momentarily unreadable. It takes the pass context so a slow Redis
-// cannot outlive the reconcile's timeout.
-//
-// The reaper deliberately keys off PRESENCE, not the ownership fence: an ordinary Helmsman control-
-// stream reconnect (transport blip) re-registers with a HIGHER fence WITHOUT restarting Mist or its
-// publishers, so a fence bump is NOT evidence the ingest session ended. Session end is driven by
-// PUSH_INPUT_CLOSE / STREAM_END / DB-side PID-reuse supersession; this reaper only backstops the case
-// those cannot reach — the node being gone entirely.
-type NodePresenceFunc func(ctx context.Context, nodeID string) (present bool, err error)
-
-// NodeRetireGuardFunc atomically confirms the node is still absent and prevents a new conn_owner
-// acquisition until release. A nil release with nil error means presence changed or another reaper won.
+// NodeRetireGuardFunc atomically confirms the node has no control connection to any replica (its
+// conn_owner key is absent) and blocks a new conn_owner acquisition until release. A nil release
+// with nil error means the node is connected, or another retirement holds the guard. A non-nil error
+// means presence is unknown (e.g. Redis unreachable); callers treat that as "connected" and fail
+// closed.
 type NodeRetireGuardFunc func(ctx context.Context, nodeID string) (release func(), err error)
 
-// IngestReapDwell tracks, per session id, when the reaper FIRST observed its node's conn_owner absent.
-// A session is retired for disconnect only after its node has been continuously absent for the grace,
-// so a brief control-plane blip — the node drops and re-acquires conn_owner within the grace — never
-// tears down a still-live session. It is process-local (each replica dwells independently; the retire
-// is an idempotent guarded UPDATE, so two replicas racing is safe) and conservative across restarts (a
-// restart just re-observes and re-times the grace, never over-retires).
-type IngestReapDwell map[string]time.Time
-
-// ListOpenIngestSessions returns every active (ended_at IS NULL) ingest session in the cell. The set
-// is small (at most one active session per stream), so a full scan per pass is cheap. Cell-scoped
-// administrative scan over Foghorn's own schema (the tenant-filter rule's documented exception): the
-// reaper reconciles the whole cell, and each row's tenant_id scopes the guarded retire it drives.
-func ListOpenIngestSessions(ctx context.Context) ([]OpenIngestSession, error) {
-	if db == nil {
-		return nil, nil
-	}
-	rows, err := foghorndb.New(db).ListOpenIngestSessions(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("list open ingest sessions: %w", err)
-	}
-	out := make([]OpenIngestSession, 0, len(rows))
-	for _, row := range rows {
-		out = append(out, OpenIngestSession{SessionID: row.SessionID, TenantID: row.TenantID, NodeID: row.NodeID, InternalName: row.StreamInternalName, ClaimToken: row.StartTriggerUuid})
-	}
-	return out, nil
-}
+// An ingest session is never ended because its node lost the control connection. A Helmsman
+// reconnect or a Foghorn-side partition leaves Mist and its publishers running, so absence is not
+// evidence the publisher stopped. Sessions end on evidence:
+//   - PUSH_INPUT_CLOSE, STREAM_END, and Helmsman's INGEST_RUNTIME_ABSENT report the publisher gone;
+//   - a publisher for the same stream admitted on another node while this node is absent takes the
+//     stream over (MintIngestSession, reason superseded_by_new_node);
+//   - the node re-registers without listing the generation (ReconcileNodeIngestSessions, reason
+//     absent_on_reregister);
+//   - Commodore refuses the placement renewal (RetireIngestSessionByClaim).
 
 // RetireIngestSession ends one active session with the given reason and, in the SAME transaction,
 // claims the bound DVR stop and queues the source-offline transition in the same stream-locked
@@ -184,113 +147,6 @@ func RetireIngestSessionByClaim(ctx context.Context, tenantID, internalName, cla
 	return nodeID, true, nil
 }
 
-// ReapIngestSessionsOnce runs one disconnect-reaper pass. For each active ingest session it consults
-// nodePresent (does the node have a control connection to ANY replica) and decides:
-//
-//   - lookup error → leave the session (fail closed; a momentarily unreadable owner is not a disconnect);
-//   - node PRESENT → the node is connected somewhere → the session is live here as far as this backstop
-//     is concerned (a control reconnect is not a session end); clear any dwell;
-//   - node ABSENT continuously for `grace` → the node is disconnected from every replica → retire
-//     ('control_disconnect'). A first-seen-absent is only recorded now; the retire waits out the grace.
-//
-// dwell is read and updated in place (first-absent timestamps); entries for sessions no longer open,
-// or whose node came back, are pruned so it cannot grow unbounded. Retiring is HA-safe: RetireIngestSession
-// is an idempotent guarded UPDATE, so two replicas reaping the same row race harmlessly. Returns the
-// number of sessions this pass retired.
-func ReapIngestSessionsOnce(ctx context.Context, nodePresent NodePresenceFunc, nodeGuard NodeRetireGuardFunc, dwell IngestReapDwell, now time.Time, grace time.Duration, logger logging.Logger) (int, error) {
-	if nodePresent == nil || nodeGuard == nil || dwell == nil {
-		return 0, nil
-	}
-	sessions, err := ListOpenIngestSessions(ctx)
-	if err != nil {
-		return 0, err
-	}
-	// Prune dwell entries whose session is no longer open (ended between passes).
-	live := make(map[string]struct{}, len(sessions))
-	for _, s := range sessions {
-		live[s.SessionID] = struct{}{}
-	}
-	for id := range dwell {
-		if _, ok := live[id]; !ok {
-			delete(dwell, id)
-		}
-	}
-
-	// Resolve presence ONCE per DISTINCT node, not once per session: thousands of streams can share a
-	// node (up to ~32k publishers per instance), so a per-session Redis lookup would be O(sessions).
-	// presenceByNode caches this pass's answer; a lookup error is recorded so its sessions are left
-	// untouched (fail closed) without re-querying.
-	type presence struct {
-		present bool
-		err     error
-	}
-	presenceByNode := make(map[string]presence)
-	nodePresence := func(nodeID string) presence {
-		if p, ok := presenceByNode[nodeID]; ok {
-			return p
-		}
-		ok, err := nodePresent(ctx, nodeID)
-		p := presence{present: ok, err: err}
-		presenceByNode[nodeID] = p
-		return p
-	}
-
-	retired := 0
-	for _, s := range sessions {
-		np := nodePresence(s.NodeID)
-		if np.err != nil {
-			// Unknown presence — do NOT reap. Keep any existing dwell so a persistent Redis outage does
-			// not silently reset the grace clock, but never advance a decision on an unreadable owner.
-			continue
-		}
-		if np.present {
-			// The node is connected somewhere; it is not disconnected. Clear any stale dwell.
-			delete(dwell, s.SessionID)
-			continue
-		}
-		// conn_owner absent: the node is disconnected from every replica. Retire only after the grace.
-		first, seen := dwell[s.SessionID]
-		if !seen {
-			dwell[s.SessionID] = now
-			continue
-		}
-		if now.Sub(first) < grace {
-			continue
-		}
-		release, guardErr := nodeGuard(ctx, s.NodeID)
-		if guardErr != nil {
-			logger.WithError(guardErr).WithField("node_id", s.NodeID).Warn("Ingest reaper: node retirement guard unavailable")
-			continue
-		}
-		if release == nil {
-			// The node reconnected after the pass-level presence read, or another reaper owns the guard.
-			delete(dwell, s.SessionID)
-			continue
-		}
-		ok, rErr := RetireIngestSession(ctx, s.SessionID, s.TenantID, s.InternalName, "control_disconnect", logger)
-		release()
-		if rErr != nil {
-			logger.WithError(rErr).WithFields(logging.Fields{
-				"session_id":    s.SessionID,
-				"internal_name": s.InternalName,
-				"node_id":       s.NodeID,
-			}).Warn("Ingest reaper: failed to retire disconnected session")
-			continue
-		}
-		delete(dwell, s.SessionID)
-		if ok {
-			retired++
-			logger.WithFields(logging.Fields{
-				"session_id":    s.SessionID,
-				"internal_name": s.InternalName,
-				"node_id":       s.NodeID,
-				"absent_for":    now.Sub(first).String(),
-			}).Info("Ingest reaper: retired session whose node is disconnected past the grace")
-		}
-	}
-	return retired, nil
-}
-
 // ReapNeverProjectedIngestSessions retires sessions whose admission never crossed the shared source
 // projection CAS. It is independent of node presence: a control connection can remain healthy after
 // the blocking PUSH_REWRITE failed, and such a pending row must not hold stream authority forever.
@@ -358,9 +214,8 @@ func ReapNeverProjectedIngestSessions(ctx context.Context, olderThan time.Durati
 // only has to outlive the window in which a PUSH_REWRITE for the SAME connector can still be
 // redelivered behind its close — bounded by Helmsman's blocking-trigger retry window (seconds), so the
 // default 10-minute TTL is amply conservative. Beyond it the publisher is long gone; a hypothetical
-// even-later rewrite would mint a session on a node that (having no live publisher) eventually
-// disconnects and is caught by the disconnect reaper — but that is a backstop, not the reason the TTL
-// is safe. Returns the number of rows deleted.
+// even-later rewrite would mint a session with no live publisher, which Helmsman's Mist absence
+// reconciliation or the node's next registration ends. Returns the number of rows deleted.
 func PurgeExpiredCloseTombstones(ctx context.Context, olderThan time.Duration) (int64, error) {
 	if db == nil {
 		return 0, nil
@@ -370,23 +225,6 @@ func PurgeExpiredCloseTombstones(ctx context.Context, olderThan time.Duration) (
 		return 0, fmt.Errorf("purge ingest close tombstones: %w", err)
 	}
 	return n, nil
-}
-
-// NodePresenceLookup is the production NodePresenceFunc: it reports whether the node's conn_owner key
-// exists in Redis (connected to some replica). present=false when no owner key exists; a Redis error is
-// surfaced so the reaper fails closed. A zero-value InstanceID with no error is an absent key (see
-// GetConnOwner).
-func NodePresenceLookup(ctx context.Context, nodeID string) (bool, error) {
-	rs := GetRedisStore()
-	if rs == nil {
-		// No Redis configured (tests / unconfigured): report unknown so nothing is reaped.
-		return false, errConnOwnerUnavailable
-	}
-	owner, err := rs.GetConnOwner(ctx, nodeID)
-	if err != nil {
-		return false, err
-	}
-	return owner.InstanceID != "", nil
 }
 
 var errConnOwnerUnavailable = errors.New("conn_owner store unavailable")
@@ -407,7 +245,7 @@ func NodeRetireGuardLookup(ctx context.Context, nodeID string) (func(), error) {
 		releaseCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 		defer cancel()
 		if err := rs.ReleaseNodeReapGuard(releaseCtx, nodeID, token); err != nil {
-			logging.NewLogger().WithError(err).WithField("node_id", nodeID).Warn("Failed to release ingest-session reaper guard")
+			logging.NewLogger().WithError(err).WithField("node_id", nodeID).Warn("Failed to release ingest node retirement guard")
 		}
 	}, nil
 }

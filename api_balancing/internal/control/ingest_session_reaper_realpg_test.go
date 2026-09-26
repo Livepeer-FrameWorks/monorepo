@@ -8,10 +8,11 @@ import (
 	"time"
 
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
+	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
 )
 
 // seedOpenIngestSession inserts one active session (production CreateIngestSession is exercised
-// elsewhere; here we only need rows for the reaper to evaluate).
+// elsewhere; here we only need rows for the lifecycle passes to evaluate).
 func seedOpenIngestSession(t *testing.T, tenant, node, stream, uuid string, pid, millis int64) string {
 	t.Helper()
 	var id string
@@ -24,6 +25,19 @@ func seedOpenIngestSession(t *testing.T, tenant, node, stream, uuid string, pid,
 		t.Fatalf("seed ingest session: %v", err)
 	}
 	return id
+}
+
+// projectAged marks a session's source projection confirmed and ages it, so it is an established
+// publisher from before any registration cutoff taken now.
+func projectAged(t *testing.T, sessionID string, age time.Duration) {
+	t.Helper()
+	if _, err := db.ExecContext(context.Background(), `
+		UPDATE foghorn.ingest_sessions
+		   SET projection_state='active', started_at=NOW() - ($2::bigint * INTERVAL '1 millisecond')
+		 WHERE id=$1::uuid
+	`, sessionID, age.Milliseconds()); err != nil {
+		t.Fatalf("project and age session: %v", err)
+	}
 }
 
 func sessionEnded(t *testing.T, id string) (bool, string) {
@@ -39,159 +53,223 @@ func sessionEnded(t *testing.T, id string) (bool, string) {
 	return ended, reason
 }
 
-// fakeNodePresence is a mutable NodePresenceFunc: per node it reports present/absent, or an error.
-type fakeNodePresence struct {
-	present map[string]bool
-	fail    map[string]bool
-}
-
-func (f *fakeNodePresence) lookup(_ context.Context, node string) (bool, error) {
-	if f.fail[node] {
-		return false, errConnOwnerUnavailable
+func offlineEffectCount(t *testing.T, tenant, stream string) int {
+	t.Helper()
+	var n int
+	if err := db.QueryRowContext(context.Background(), `
+		SELECT COUNT(*) FROM foghorn.ingest_offline_effects
+		 WHERE tenant_id=$1::uuid AND stream_internal_name=$2
+	`, tenant, stream).Scan(&n); err != nil {
+		t.Fatalf("count offline effects: %v", err)
 	}
-	return f.present[node], nil
+	return n
 }
 
-func allowNodeRetire(_ context.Context, _ string) (func(), error) {
-	return func() {}, nil
-}
-
-// TestIngestSessionReaper_RealPG proves the disconnect reaper against the real schema: a session is
-// retired ONLY when its node's conn_owner is absent past the grace, and NEVER when the node is present
-// (a control reconnect is not a session end) or when presence is unreadable (fail closed).
-func TestIngestSessionReaper_RealPG(t *testing.T) {
+func useRealPG(t *testing.T) {
+	t.Helper()
 	conn := startRealPG(t)
 	prev := db
 	SetDB(conn)
 	t.Cleanup(func() { SetDB(prev) })
-	ctx := context.Background()
-	lg := logging.NewLogger()
-	grace := 90 * time.Second
+}
 
-	// A connected node survives because control reconnects do not end publisher sessions.
-	present := seedOpenIngestSession(t, ingA, "node-present", "live+p", "u-p", 100, 1000)
-	// disconnected: conn_owner absent → retired only after the grace.
-	disconnected := seedOpenIngestSession(t, ingA, "node-gone", "live+g", "u-g", 101, 1000)
-	// unreadable: presence lookup errors → never retired (fail closed).
-	unreadable := seedOpenIngestSession(t, ingA, "node-err", "live+e", "u-e", 102, 1000)
-
-	np := &fakeNodePresence{
-		present: map[string]bool{"node-present": true, "node-gone": false, "node-err": false},
-		fail:    map[string]bool{"node-err": true},
-	}
-	dwell := make(IngestReapDwell)
-	t0 := time.Unix(1_700_000_000, 0)
-
-	// Pass 1: nothing retired; the disconnected node only starts dwelling.
-	if _, err := ReapIngestSessionsOnce(ctx, np.lookup, allowNodeRetire, dwell, t0, grace, lg); err != nil {
-		t.Fatalf("pass 1: %v", err)
-	}
-	for _, id := range []string{present, disconnected, unreadable} {
-		if ended, _ := sessionEnded(t, id); ended {
-			t.Fatalf("session %s retired too early on pass 1", id)
+// useConnOwnerStore wires the production conn_owner store (miniredis) so NodeRetireGuardLookup reads
+// real presence. A node is absent until connectNode acquires its conn_owner.
+func useConnOwnerStore(t *testing.T) (connectNode func(nodeID string)) {
+	t.Helper()
+	store, _ := newTestStore(t)
+	setCommandRelay(t, buildRelay(t, store, "inst-self", "10.0.0.1:9090", &mockRelayPool{}))
+	var fence int64
+	return func(nodeID string) {
+		fence++
+		acquired, err := store.AcquireConnOwnerFenced(context.Background(), nodeID, "inst-peer", "10.0.0.2:9090", fence)
+		if err != nil || !acquired {
+			t.Fatalf("connect %s: acquired=%v err=%v", nodeID, acquired, err)
 		}
 	}
+}
 
-	// Pass 2, still within the grace: the disconnected session must survive.
-	if _, err := ReapIngestSessionsOnce(ctx, np.lookup, allowNodeRetire, dwell, t0.Add(grace-time.Second), grace, lg); err != nil {
-		t.Fatalf("pass 2: %v", err)
-	}
-	if ended, _ := sessionEnded(t, disconnected); ended {
-		t.Fatalf("disconnected session retired before the grace elapsed")
-	}
+type recordedDrain struct {
+	nodeID string
+	req    *ipcpb.DrainStreamRequest
+}
 
-	// Pass 3, past the grace: the disconnected session is retired; present and unreadable are not.
-	if _, err := ReapIngestSessionsOnce(ctx, np.lookup, allowNodeRetire, dwell, t0.Add(grace+time.Second), grace, lg); err != nil {
-		t.Fatalf("pass 3: %v", err)
-	}
-	if ended, reason := sessionEnded(t, disconnected); !ended || reason != "control_disconnect" {
-		t.Fatalf("disconnected session not retired past the grace (ended=%v reason=%q)", ended, reason)
-	}
-	var offlineObligations int
-	if err := conn.QueryRowContext(ctx, `
-		SELECT COUNT(*) FROM foghorn.ingest_offline_effects
-		 WHERE tenant_id=$1::uuid AND stream_internal_name='live+g'
-		   AND source_generation=$2::uuid AND state='pending'
-	`, ingA, disconnected).Scan(&offlineObligations); err != nil {
-		t.Fatalf("query disconnect offline obligation: %v", err)
-	}
-	if offlineObligations != 1 {
-		t.Fatalf("disconnect retirement queued %d offline obligations, want 1", offlineObligations)
-	}
-	if ended, _ := sessionEnded(t, present); ended {
-		t.Fatalf("a present node's session was retired (a control reconnect is not a session end)")
-	}
-	if ended, _ := sessionEnded(t, unreadable); ended {
-		t.Fatalf("unreadable-presence session retired despite a fail-closed lookup")
+func recordDrains(out *[]recordedDrain) NodeIngestDrainFunc {
+	return func(_ context.Context, nodeID string, req *ipcpb.DrainStreamRequest) error {
+		*out = append(*out, recordedDrain{nodeID: nodeID, req: req})
+		return nil
 	}
 }
 
-// TestIngestSessionReaper_BlipToleranceRealPG proves a node that reconnects within the grace resets the
-// dwell clock, so a control-plane blip never retires its still-live session.
-func TestIngestSessionReaper_BlipToleranceRealPG(t *testing.T) {
-	conn := startRealPG(t)
-	prev := db
-	SetDB(conn)
-	t.Cleanup(func() { SetDB(prev) })
+// A re-registration listing the generation keeps its session exactly as it was.
+func TestReregisterKeepsReportedLiveSession_RealPG(t *testing.T) {
+	useRealPG(t)
+	ctx := context.Background()
+	const node, stream = "node-returns", "live+returns"
+	sessionID := seedOpenIngestSession(t, ingA, node, stream, "u-returns", 200, 1000)
+	projectAged(t, sessionID, 10*time.Minute)
+
+	cutoff, err := IngestRegistrationCutoff(ctx)
+	if err != nil {
+		t.Fatalf("cutoff: %v", err)
+	}
+	var drains []recordedDrain
+	result, err := ReconcileNodeIngestSessions(ctx, node, []*ipcpb.LiveIngestGeneration{{
+		RuntimeName: stream, Generation: sessionID, ConnectorPid: 200,
+	}}, cutoff, recordDrains(&drains), nil, logging.NewLogger())
+	if err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	if result.Kept != 1 || result.Ended != 0 || result.Stopped != 0 || len(drains) != 0 {
+		t.Fatalf("result=%+v drains=%d, want one kept session and no action", result, len(drains))
+	}
+	if ended, reason := sessionEnded(t, sessionID); ended {
+		t.Fatalf("reported live session ended (reason %q)", reason)
+	}
+	if n := offlineEffectCount(t, ingA, stream); n != 0 {
+		t.Fatalf("offline effects = %d, want 0", n)
+	}
+}
+
+// A re-registration that does not list the generation ends it through the offline path. A session
+// minted after the registration cutoff (an admission over the new connection) is not touched.
+func TestReregisterEndsUnreportedSession_RealPG(t *testing.T) {
+	useRealPG(t)
+	ctx := context.Background()
+	const node = "node-lost-publisher"
+	const gone, fresh = "live+publisher-gone", "live+admitted-after-register"
+	goneID := seedOpenIngestSession(t, ingA, node, gone, "u-gone", 300, 1000)
+	projectAged(t, goneID, 10*time.Minute)
+
+	cutoff, err := IngestRegistrationCutoff(ctx)
+	if err != nil {
+		t.Fatalf("cutoff: %v", err)
+	}
+	freshID := seedOpenIngestSession(t, ingA, node, fresh, "u-fresh", 301, 2000)
+	if _, execErr := db.ExecContext(ctx, `UPDATE foghorn.ingest_sessions SET projection_state='active', started_at=$2::timestamptz + INTERVAL '1 second' WHERE id=$1::uuid`, freshID, cutoff); execErr != nil {
+		t.Fatalf("stamp post-registration admission: %v", execErr)
+	}
+
+	result, err := ReconcileNodeIngestSessions(ctx, node, nil, cutoff, nil, nil, logging.NewLogger())
+	if err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	if result.Ended != 1 || result.Kept != 0 {
+		t.Fatalf("result=%+v, want exactly the pre-registration session ended", result)
+	}
+	if ended, reason := sessionEnded(t, goneID); !ended || reason != IngestEndedAbsentOnReregister {
+		t.Fatalf("unreported session: ended=%v reason=%q, want %q", ended, reason, IngestEndedAbsentOnReregister)
+	}
+	if n := offlineEffectCount(t, ingA, gone); n != 1 {
+		t.Fatalf("offline effects for the ended session = %d, want 1", n)
+	}
+	if ended, _ := sessionEnded(t, freshID); ended {
+		t.Fatal("a session admitted after the registration cutoff was ended")
+	}
+}
+
+// A competing admission on another node supersedes the session only while the incumbent's node is
+// absent; while it is connected the newcomer is a duplicate.
+func TestTakeoverSupersedesAbsentNodeSession_RealPG(t *testing.T) {
+	useRealPG(t)
+	connectNode := useConnOwnerStore(t)
 	ctx := context.Background()
 	lg := logging.NewLogger()
-	grace := 90 * time.Second
 
-	blip := seedOpenIngestSession(t, ingA, "node-blip", "live+blip", "u-blip", 200, 1000)
-	np := &fakeNodePresence{present: map[string]bool{"node-blip": false}} // absent at first
-	dwell := make(IngestReapDwell)
-	t0 := time.Unix(1_700_000_000, 0)
+	const stream = "live+takeover"
+	incumbent, outcome, err := CreateIngestSession(ctx, ingA, "node-old", stream, 400, "u-old", 1000, nil, "cell-a", lg)
+	if err != nil || outcome != IngestSessionActive {
+		t.Fatalf("incumbent: outcome=%v err=%v", outcome, err)
+	}
 
-	// Pass 1: absent → start dwelling.
-	if _, err := ReapIngestSessionsOnce(ctx, np.lookup, allowNodeRetire, dwell, t0, grace, lg); err != nil {
-		t.Fatalf("pass 1: %v", err)
+	// Incumbent node connected: a second publisher elsewhere is refused and the incumbent kept.
+	connectNode("node-old")
+	if _, rivalOutcome, rivalErr := CreateIngestSession(ctx, ingA, "node-rival", stream, 401, "u-rival", 2000, nil, "cell-a", lg); rivalErr != nil || rivalOutcome != IngestSessionRejectedDuplicate {
+		t.Fatalf("rival while incumbent connected: outcome=%v err=%v, want RejectedDuplicate", rivalOutcome, rivalErr)
 	}
-	// Pass 2: the node reconnected (present) → dwell must clear.
-	np.present["node-blip"] = true
-	if _, err := ReapIngestSessionsOnce(ctx, np.lookup, allowNodeRetire, dwell, t0.Add(30*time.Second), grace, lg); err != nil {
-		t.Fatalf("pass 2: %v", err)
+	if ended, _ := sessionEnded(t, incumbent); ended {
+		t.Fatal("a connected incumbent was superseded")
 	}
-	if _, dwelling := dwell[blip]; dwelling {
-		t.Fatal("dwell not cleared after the node reconnected")
+
+	// Incumbent node gone from every replica: the new node takes the stream over.
+	useConnOwnerStore(t)
+	successor, outcome, err := CreateIngestSession(ctx, ingA, "node-new", stream, 402, "u-new", 3000, nil, "cell-a", lg)
+	if err != nil || outcome != IngestSessionActive || successor == "" || successor == incumbent {
+		t.Fatalf("takeover: id=%q outcome=%v err=%v", successor, outcome, err)
 	}
-	// Pass 3: absent again, but the grace restarts from here — well past the original t0+grace, yet
-	// only 1s into the NEW absence, so it must NOT retire.
-	np.present["node-blip"] = false
-	if _, err := ReapIngestSessionsOnce(ctx, np.lookup, allowNodeRetire, dwell, t0.Add(grace+time.Second), grace, lg); err != nil {
-		t.Fatalf("pass 3: %v", err)
+	if ended, reason := sessionEnded(t, incumbent); !ended || reason != IngestEndedSupersededByNewNode {
+		t.Fatalf("incumbent after takeover: ended=%v reason=%q, want %q", ended, reason, IngestEndedSupersededByNewNode)
 	}
-	if ended, _ := sessionEnded(t, blip); ended {
-		t.Fatal("a blipped-then-reconnected session was retired; the dwell clock did not reset")
+	if n := offlineEffectCount(t, ingA, stream); n != 0 {
+		t.Fatalf("takeover queued %d offline effects; the new projection replaces the source", n)
+	}
+	// The guard was released after commit, so the old node can register again.
+	release, err := NodeRetireGuardLookup(ctx, "node-old")
+	if err != nil || release == nil {
+		t.Fatalf("takeover guard still held after commit (guard=%v err=%v)", release != nil, err)
+	}
+	release()
+}
+
+// Unreadable presence is not absence: the incumbent keeps the stream.
+func TestTakeoverRefusedWhenPresenceUnknown_RealPG(t *testing.T) {
+	useRealPG(t)
+	setCommandRelay(t, nil)
+	ctx := context.Background()
+	lg := logging.NewLogger()
+	const stream = "live+presence-unknown"
+	incumbent, _, err := CreateIngestSession(ctx, ingA, "node-unknown", stream, 500, "u-inc", 1000, nil, "cell-a", lg)
+	if err != nil {
+		t.Fatalf("incumbent: %v", err)
+	}
+	if _, outcome, err := CreateIngestSession(ctx, ingA, "node-other", stream, 501, "u-other", 2000, nil, "cell-a", lg); err != nil || outcome != IngestSessionRejectedDuplicate {
+		t.Fatalf("admission with unknown presence: outcome=%v err=%v, want RejectedDuplicate", outcome, err)
+	}
+	if ended, _ := sessionEnded(t, incumbent); ended {
+		t.Fatal("incumbent superseded while its node's presence was unknown")
 	}
 }
 
-func TestIngestSessionReaper_RechecksAbsenceUnderRetireGuardRealPG(t *testing.T) {
-	conn := startRealPG(t)
-	prev := db
-	SetDB(conn)
-	t.Cleanup(func() { SetDB(prev) })
+// The superseded node, on return, still lists its old generation and is told to stop that input,
+// fenced on the exact generation; the successor session is untouched.
+func TestSupersededNodeToldToStopOnReturn_RealPG(t *testing.T) {
+	useRealPG(t)
+	useConnOwnerStore(t)
 	ctx := context.Background()
-	grace := 90 * time.Second
-	sessionID := seedOpenIngestSession(t, ingA, "node-raced-reconnect", "live+raced-reconnect", "u-raced-reconnect", 300, 1000)
-	np := &fakeNodePresence{present: map[string]bool{"node-raced-reconnect": false}}
-	dwell := make(IngestReapDwell)
-	t0 := time.Unix(1_700_000_000, 0)
-	if _, err := ReapIngestSessionsOnce(ctx, np.lookup, allowNodeRetire, dwell, t0, grace, logging.NewLogger()); err != nil {
-		t.Fatalf("initial absence pass: %v", err)
+	lg := logging.NewLogger()
+
+	const stream = "live+returning-loser"
+	oldGen, _, err := CreateIngestSession(ctx, ingA, "node-loser", stream, 600, "u-loser", 1000, nil, "cell-a", lg)
+	if err != nil {
+		t.Fatalf("incumbent: %v", err)
 	}
-	guardObserved := false
-	reconnectedBeforeGuard := func(context.Context, string) (func(), error) {
-		guardObserved = true
-		return nil, nil
+	projectAged(t, oldGen, 10*time.Minute)
+	newGen, outcome, err := CreateIngestSession(ctx, ingA, "node-winner", stream, 601, "u-winner", 2000, nil, "cell-a", lg)
+	if err != nil || outcome != IngestSessionActive {
+		t.Fatalf("takeover: outcome=%v err=%v", outcome, err)
 	}
-	if retired, err := ReapIngestSessionsOnce(ctx, np.lookup, reconnectedBeforeGuard, dwell, t0.Add(grace+time.Second), grace, logging.NewLogger()); err != nil || retired != 0 {
-		t.Fatalf("guarded pass: retired=%d err=%v", retired, err)
+
+	cutoff, err := IngestRegistrationCutoff(ctx)
+	if err != nil {
+		t.Fatalf("cutoff: %v", err)
 	}
-	if !guardObserved {
-		t.Fatal("reaper did not recheck node absence through the retirement guard")
+	var drains []recordedDrain
+	result, err := ReconcileNodeIngestSessions(ctx, "node-loser", []*ipcpb.LiveIngestGeneration{{
+		RuntimeName: stream, Generation: oldGen, ConnectorPid: 600,
+	}}, cutoff, recordDrains(&drains), nil, lg)
+	if err != nil {
+		t.Fatalf("reconcile: %v", err)
 	}
-	if ended, _ := sessionEnded(t, sessionID); ended {
-		t.Fatal("session retired after the node reconnected between the pass snapshot and retirement")
+	if result.Stopped != 1 || len(drains) != 1 {
+		t.Fatalf("result=%+v drains=%d, want one stop command", result, len(drains))
+	}
+	got := drains[0]
+	if got.nodeID != "node-loser" || got.req.GetRuntimeName() != stream ||
+		got.req.GetPriorOwnerSourceGeneration() != oldGen || got.req.GetSourceGeneration() != newGen {
+		t.Fatalf("drain = node %q %+v; want node-loser, runtime %q, prior %q, obligation %q", got.nodeID, got.req, stream, oldGen, newGen)
+	}
+	if ended, _ := sessionEnded(t, newGen); ended {
+		t.Fatal("the successor session was ended by the loser's return")
 	}
 }
 

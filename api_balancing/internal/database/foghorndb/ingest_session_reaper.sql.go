@@ -7,7 +7,43 @@ package foghorndb
 
 import (
 	"context"
+	"time"
+
+	"github.com/lib/pq"
 )
+
+const endSupersededNodeIngestSession = `-- name: EndSupersededNodeIngestSession :one
+UPDATE foghorn.ingest_sessions
+SET ended_at = NOW(), ended_at_unix_millis = (EXTRACT(EPOCH FROM NOW()) * 1000)::bigint,
+    ended_reason = 'superseded_by_new_node'
+WHERE id = $1::text::uuid AND tenant_id = $2::text::uuid
+  AND node_id = $3 AND ended_at IS NULL
+RETURNING id::text AS session_id
+`
+
+type EndSupersededNodeIngestSessionParams struct {
+	SessionID string `db:"session_id" json:"session_id"`
+	TenantID  string `db:"tenant_id" json:"tenant_id"`
+	NodeID    string `db:"node_id" json:"node_id"`
+}
+
+func (q *Queries) EndSupersededNodeIngestSession(ctx context.Context, arg EndSupersededNodeIngestSessionParams) (string, error) {
+	row := q.db.QueryRowContext(ctx, endSupersededNodeIngestSession, arg.SessionID, arg.TenantID, arg.NodeID)
+	var session_id string
+	err := row.Scan(&session_id)
+	return session_id, err
+}
+
+const ingestRegistrationCutoff = `-- name: IngestRegistrationCutoff :one
+SELECT NOW()::timestamptz AS cutoff
+`
+
+func (q *Queries) IngestRegistrationCutoff(ctx context.Context) (time.Time, error) {
+	row := q.db.QueryRowContext(ctx, ingestRegistrationCutoff)
+	var cutoff time.Time
+	err := row.Scan(&cutoff)
+	return cutoff, err
+}
 
 const listNeverProjectedIngestSessions = `-- name: ListNeverProjectedIngestSessions :many
 SELECT id::text AS session_id, tenant_id::text AS tenant_id, stream_internal_name,
@@ -54,37 +90,90 @@ func (q *Queries) ListNeverProjectedIngestSessions(ctx context.Context, olderTha
 	return items, nil
 }
 
-const listOpenIngestSessions = `-- name: ListOpenIngestSessions :many
-SELECT id::text AS session_id, tenant_id::text AS tenant_id, node_id, stream_internal_name,
-       start_trigger_uuid
-FROM foghorn.ingest_sessions
-WHERE ended_at IS NULL
+const listNodeIngestGenerations = `-- name: ListNodeIngestGenerations :many
+SELECT s.id::text AS session_id, s.tenant_id::text AS tenant_id, s.stream_internal_name,
+       (s.ended_at IS NOT NULL)::boolean AS ended, COALESCE(s.ended_reason, '')::text AS ended_reason,
+       COALESCE(a.id::text, '')::text AS active_generation, COALESCE(a.node_id, '')::text AS active_node_id
+FROM foghorn.ingest_sessions s
+LEFT JOIN foghorn.ingest_sessions a
+  ON a.tenant_id = s.tenant_id AND a.stream_internal_name = s.stream_internal_name AND a.ended_at IS NULL
+WHERE s.node_id = $1 AND s.id = ANY($2::uuid[])
 `
 
-type ListOpenIngestSessionsRow struct {
-	SessionID          string `db:"session_id" json:"session_id"`
-	TenantID           string `db:"tenant_id" json:"tenant_id"`
-	NodeID             string `db:"node_id" json:"node_id"`
-	StreamInternalName string `db:"stream_internal_name" json:"stream_internal_name"`
-	StartTriggerUuid   string `db:"start_trigger_uuid" json:"start_trigger_uuid"`
+type ListNodeIngestGenerationsParams struct {
+	NodeID     string   `db:"node_id" json:"node_id"`
+	SessionIds []string `db:"session_ids" json:"session_ids"`
 }
 
-func (q *Queries) ListOpenIngestSessions(ctx context.Context) ([]ListOpenIngestSessionsRow, error) {
-	rows, err := q.db.QueryContext(ctx, listOpenIngestSessions)
+type ListNodeIngestGenerationsRow struct {
+	SessionID          string `db:"session_id" json:"session_id"`
+	TenantID           string `db:"tenant_id" json:"tenant_id"`
+	StreamInternalName string `db:"stream_internal_name" json:"stream_internal_name"`
+	Ended              bool   `db:"ended" json:"ended"`
+	EndedReason        string `db:"ended_reason" json:"ended_reason"`
+	ActiveGeneration   string `db:"active_generation" json:"active_generation"`
+	ActiveNodeID       string `db:"active_node_id" json:"active_node_id"`
+}
+
+func (q *Queries) ListNodeIngestGenerations(ctx context.Context, arg ListNodeIngestGenerationsParams) ([]ListNodeIngestGenerationsRow, error) {
+	rows, err := q.db.QueryContext(ctx, listNodeIngestGenerations, arg.NodeID, pq.Array(arg.SessionIds))
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	items := []ListOpenIngestSessionsRow{}
+	items := []ListNodeIngestGenerationsRow{}
 	for rows.Next() {
-		var i ListOpenIngestSessionsRow
+		var i ListNodeIngestGenerationsRow
 		if err := rows.Scan(
 			&i.SessionID,
 			&i.TenantID,
-			&i.NodeID,
 			&i.StreamInternalName,
-			&i.StartTriggerUuid,
+			&i.Ended,
+			&i.EndedReason,
+			&i.ActiveGeneration,
+			&i.ActiveNodeID,
 		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listNodeProjectedIngestSessionsBefore = `-- name: ListNodeProjectedIngestSessionsBefore :many
+SELECT id::text AS session_id, tenant_id::text AS tenant_id, stream_internal_name
+FROM foghorn.ingest_sessions
+WHERE node_id = $1 AND ended_at IS NULL AND projection_state = 'active'
+  AND started_at < $2::timestamptz
+`
+
+type ListNodeProjectedIngestSessionsBeforeParams struct {
+	NodeID        string    `db:"node_id" json:"node_id"`
+	StartedBefore time.Time `db:"started_before" json:"started_before"`
+}
+
+type ListNodeProjectedIngestSessionsBeforeRow struct {
+	SessionID          string `db:"session_id" json:"session_id"`
+	TenantID           string `db:"tenant_id" json:"tenant_id"`
+	StreamInternalName string `db:"stream_internal_name" json:"stream_internal_name"`
+}
+
+func (q *Queries) ListNodeProjectedIngestSessionsBefore(ctx context.Context, arg ListNodeProjectedIngestSessionsBeforeParams) ([]ListNodeProjectedIngestSessionsBeforeRow, error) {
+	rows, err := q.db.QueryContext(ctx, listNodeProjectedIngestSessionsBefore, arg.NodeID, arg.StartedBefore)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListNodeProjectedIngestSessionsBeforeRow{}
+	for rows.Next() {
+		var i ListNodeProjectedIngestSessionsBeforeRow
+		if err := rows.Scan(&i.SessionID, &i.TenantID, &i.StreamInternalName); err != nil {
 			return nil, err
 		}
 		items = append(items, i)

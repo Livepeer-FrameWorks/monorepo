@@ -2049,6 +2049,7 @@ receiveLoop:
 				}
 				go handler(canonicalNodeID, x.Register.GetActiveProcessingJobIds(), registeredAt, current)
 			}
+			scheduleNodeIngestReconcile(canonicalNodeID, newConn, x.Register, registry.log)
 
 			// Hydrate the managed-stream lastSent map from the sidecar's
 			// post-restart applied set so a Foghorn restart followed by a
@@ -3100,8 +3101,8 @@ const (
 	// IngestSessionRejectedDuplicate: a DIFFERENT active publisher already holds this stream (on
 	// this or another node / replica). The DB, under the stream-scoped advisory lock, is the
 	// authority for single-publisher-per-stream; the caller MUST deny the push. A genuine reconnect
-	// succeeds once the incumbent's session is ended by its close or the STREAM_END reaper. Returned
-	// id is empty.
+	// succeeds once the incumbent's session is ended by its close or STREAM_END, or at once on another
+	// node when the incumbent's node has no control connection (takeover). Returned id is empty.
 	IngestSessionRejectedDuplicate
 	// IngestSessionRejectedCapacity means the tenant already has the maximum
 	// number of active publisher sessions allowed by the authority snapshot.
@@ -3136,7 +3137,10 @@ func ingestTenantCapacityAdvisoryLockKey(tenantID string) string {
 // still-active session (its PUSH_INPUT_CLOSE was lost) AND atomically claims its orphaned
 // DVR's stop, then mints fresh; a DIFFERENT-UUID OLDER trigger is REJECTED (a stale
 // reordered trigger for a superseded connection must not borrow the replacement generation);
-// a same-UUID different-stream is rejected. Fails CLOSED (returns an error) when db is nil —
+// a same-UUID different-stream is rejected. A publisher on a DIFFERENT node supersedes the
+// incumbent (ended_reason superseded_by_new_node) only while the incumbent's node has no control
+// connection to any replica, checked through the node retirement guard; while that node is
+// connected, or its presence is unreadable, the new publisher is a duplicate. Fails CLOSED (returns an error) when db is nil —
 // a push cannot be admitted without a durable generation.
 //
 // The DVR intent is written in the SAME insert as the session so a record:true stream's
@@ -3188,7 +3192,10 @@ func MintIngestSession(ctx context.Context, req IngestSessionRequest, logger log
 	// preceding admission.
 	var sessionID string
 	var outcome IngestSessionOutcome
-	var staleStopClaims []DVRStopClaim // dispatched AFTER commit (PID-reuse orphan stop)
+	var staleStopClaims []DVRStopClaim // dispatched AFTER commit (PID-reuse / takeover orphan stop)
+	var takeoverSessionID, takeoverNodeID string
+	var takeover ingestTakeoverGuard
+	defer takeover.releaseGuard()
 	err := database.WithRetryablePostgresTx(ctx, db, &sql.TxOptions{Isolation: sql.LevelReadCommitted}, func(tx *sql.Tx) error {
 		sessionID, outcome, staleStopClaims = "", 0, nil
 		q := foghorndb.New(tx)
@@ -3250,17 +3257,38 @@ func MintIngestSession(ctx context.Context, req IngestSessionRequest, logger log
 		// (uq_foghorn_ingest_sessions_active_per_stream). Under the stream lock this is the authoritative
 		// single-publisher decision.
 		var staleSessionID, staleNodeID string
+		takeoverSessionID, takeoverNodeID = "", ""
 		inc, incErr := q.LockActiveStreamIngestSession(ctx, foghorndb.LockActiveStreamIngestSessionParams{TenantID: tenantID, StreamInternalName: internalName})
 		switch {
 		case incErr == nil:
 			incID, incNode, incPID, incMillis := inc.ID, inc.NodeID, inc.ConnectorPid, inc.StartedAtUnixMillis
-			// An incumbent holds the stream. The ONLY case that supersedes it is the OS reusing this
-			// exact (node, PID) for a NEWER connector while the incumbent's row still lingers active
-			// (its close was lost) — a genuine same-connection-slot replacement. Anything else (a
-			// different node, a different PID on the same node, or an older/equal trigger time) is a
-			// duplicate publisher and is REJECTED to protect the incumbent; a real reconnect is admitted
-			// once the incumbent is ended by its close or the STREAM_END reaper.
-			if incNode == nodeID && incPID == connectorPID && startedAtMillis > incMillis {
+			// An incumbent holds the stream. Two cases supersede it:
+			//   - the OS reused this exact (node, PID) for a NEWER connector while the incumbent's row
+			//     lingers (its close was lost): a same-connection-slot replacement, ended right here;
+			//   - the publisher reached a DIFFERENT node while the incumbent's node has no control
+			//     connection to any replica: the stream moves to the new node (takeover, applied below
+			//     once the tombstone and capacity checks admit the new publisher).
+			// Anything else is a duplicate publisher and is REJECTED to protect the incumbent: a second
+			// publisher while the incumbent's node is connected, a different PID on the same node, an
+			// older/equal trigger time, or an incumbent node whose presence cannot be read.
+			if incNode != nodeID {
+				if takeover.absent(ctx, incNode) {
+					takeoverSessionID, takeoverNodeID = incID, incNode
+					break
+				}
+				fields := logging.Fields{
+					"internal_name": internalName, "node_id": nodeID,
+					"incumbent_node_id": incNode, "incumbent_generation": incID,
+				}
+				if takeover.err != nil {
+					logger.WithError(takeover.err).WithFields(fields).Warn("Refusing ingest takeover: incumbent node's control presence is unknown")
+				} else {
+					logger.WithFields(fields).Warn("Refusing ingest takeover: incumbent node is connected and still owns the stream")
+				}
+				outcome = IngestSessionRejectedDuplicate
+				return nil
+			}
+			if incPID == connectorPID && startedAtMillis > incMillis {
 				if endErr := q.EndSupersededPIDIngestSession(ctx, foghorndb.EndSupersededPIDIngestSessionParams{SessionID: incID, EndedAtUnixMillis: sql.NullInt64{Int64: startedAtMillis, Valid: true}}); endErr != nil {
 					return fmt.Errorf("end stale ingest session on PID reuse: %w", endErr)
 				}
@@ -3321,6 +3349,10 @@ func MintIngestSession(ctx context.Context, req IngestSessionRequest, logger log
 			if countErr != nil {
 				return fmt.Errorf("count active tenant ingest sessions: %w", countErr)
 			}
+			if takeoverSessionID != "" {
+				// The incumbent is still counted here; the takeover replaces it one for one.
+				activeCount--
+			}
 			if activeCount >= authoritySnapshot.CapacityMaxStreams {
 				// A newer connector on the same (node, PID) proves the old generation is stale even
 				// when the successor cannot be admitted. Retire that generation and its obligations;
@@ -3339,6 +3371,26 @@ func MintIngestSession(ctx context.Context, req IngestSessionRequest, logger log
 				outcome = IngestSessionRejectedCapacity
 				return nil
 			}
+		}
+
+		if takeoverSessionID != "" {
+			// The incumbent node is held off conn_owner by the takeover guard until this commits, so it
+			// cannot re-register between the absence check and the supersession. No offline effect is
+			// queued: the new generation's projection replaces the source, and its admission effect
+			// drains the old node's buffer when that node reconnects.
+			if _, endErr := q.EndSupersededNodeIngestSession(ctx, foghorndb.EndSupersededNodeIngestSessionParams{
+				SessionID: takeoverSessionID, TenantID: tenantID, NodeID: takeoverNodeID,
+			}); endErr != nil {
+				return fmt.Errorf("end ingest session superseded by a new node: %w", endErr)
+			}
+			if idleErr := domainevents.StreamIdle(ctx, tx, tenantID, streamID, req.PlaybackID); idleErr != nil {
+				return idleErr
+			}
+			claims, claimErr := ClaimDVRStops(ctx, tx, `ingest_generation = $1::uuid AND tenant_id::text = $2`, takeoverSessionID, tenantID)
+			if claimErr != nil {
+				return fmt.Errorf("claim superseded DVR stop on takeover: %w", claimErr)
+			}
+			staleStopClaims = claims
 		}
 
 		// 3. Mint. No ON CONFLICT clause: the stream lock has already serialized this decision, and the
@@ -3381,10 +3433,57 @@ func MintIngestSession(ctx context.Context, req IngestSessionRequest, logger log
 	if err != nil {
 		return "", 0, err
 	}
-	// The stale session's orphaned DVR stop (if any) is durable now — dispatch best-effort.
-	// Only the PID-reuse supersession path populates claims.
+	takeover.releaseGuard()
+	if takeoverSessionID != "" && outcome == IngestSessionActive {
+		logger.WithFields(logging.Fields{
+			"internal_name":         internalName,
+			"node_id":               nodeID,
+			"ingest_generation":     sessionID,
+			"superseded_node_id":    takeoverNodeID,
+			"superseded_generation": takeoverSessionID,
+		}).Info("Ingest takeover: publisher admitted on a new node while the previous node has no control connection; previous session superseded")
+	}
+	// The superseded session's orphaned DVR stop (if any) is durable now — dispatch best-effort.
+	// Only the PID-reuse and takeover supersession paths populate claims.
 	DispatchDVRStops(staleStopClaims, logger)
 	return sessionID, outcome, nil
+}
+
+// ingestTakeoverNodeGuard confirms an incumbent publisher's node has no control connection to any
+// replica and holds it off conn_owner while a new node's admission supersedes the session. Real-PG
+// tests replace it to stand in for Redis presence.
+var ingestTakeoverNodeGuard NodeRetireGuardFunc = NodeRetireGuardLookup
+
+// ingestTakeoverGuard holds the retirement guard for one MintIngestSession call. The guard is
+// acquired once per incumbent node and reused across the transaction's retries: a second acquisition
+// by the same caller would find its own barrier and read as "held elsewhere".
+type ingestTakeoverGuard struct {
+	nodeID  string
+	release func()
+	err     error
+}
+
+// absent reports whether nodeID has no control connection, acquiring the guard on first use. Unknown
+// presence (err) reads as present, so a partitioned Redis never lets a second publisher displace a
+// live one.
+func (g *ingestTakeoverGuard) absent(ctx context.Context, nodeID string) bool {
+	if g.nodeID != nodeID {
+		g.releaseGuard()
+		g.nodeID = nodeID
+		if ingestTakeoverNodeGuard == nil {
+			g.err = errConnOwnerUnavailable
+		} else {
+			g.release, g.err = ingestTakeoverNodeGuard(ctx, nodeID)
+		}
+	}
+	return g.err == nil && g.release != nil
+}
+
+func (g *ingestTakeoverGuard) releaseGuard() {
+	if g.release != nil {
+		g.release()
+	}
+	g.nodeID, g.release, g.err = "", nil, nil
 }
 
 // DVR command generations Foghorn stamps on DVRStart/DVRStop. A stop's generation is

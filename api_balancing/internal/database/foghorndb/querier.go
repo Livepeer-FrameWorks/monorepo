@@ -153,6 +153,7 @@ type Querier interface {
 	DeleteVodMetadata(ctx context.Context, artifactHash string) error
 	DequeueThumbnailCleanup(ctx context.Context, objectKey string) error
 	DtshSyncedForArtifact(ctx context.Context, artifactHash string) (bool, error)
+	EndSupersededNodeIngestSession(ctx context.Context, arg EndSupersededNodeIngestSessionParams) (string, error)
 	EndSupersededPIDIngestSession(ctx context.Context, arg EndSupersededPIDIngestSessionParams) error
 	EnqueueAdmissionEffect(ctx context.Context, arg EnqueueAdmissionEffectParams) error
 	EnqueueArtifactEvent(ctx context.Context, arg EnqueueArtifactEventParams) error
@@ -336,6 +337,7 @@ type Querier interface {
 	HealLostDVRSegment(ctx context.Context, arg HealLostDVRSegmentParams) error
 	IngestCloseTombstoneExists(ctx context.Context, arg IngestCloseTombstoneExistsParams) (bool, error)
 	IngestGenerationEnded(ctx context.Context, arg IngestGenerationEndedParams) (bool, error)
+	IngestRegistrationCutoff(ctx context.Context) (time.Time, error)
 	InsertAcceptedArtifactCreationCommand(ctx context.Context, arg InsertAcceptedArtifactCreationCommandParams) error
 	InsertClosedDVRChapter(ctx context.Context, arg InsertClosedDVRChapterParams) error
 	InsertDiscoveredArtifact(ctx context.Context, arg InsertDiscoveredArtifactParams) error
@@ -422,8 +424,9 @@ type Querier interface {
 	ListNodeComponentVersions(ctx context.Context, nodeID string) ([]ListNodeComponentVersionsRow, error)
 	ListNodeComponents(ctx context.Context, nodeID string) ([]ListNodeComponentsRow, error)
 	ListNodeFinalizingDVRChapters(ctx context.Context, arg ListNodeFinalizingDVRChaptersParams) ([]ListNodeFinalizingDVRChaptersRow, error)
+	ListNodeIngestGenerations(ctx context.Context, arg ListNodeIngestGenerationsParams) ([]ListNodeIngestGenerationsRow, error)
 	ListNodeMaintenance(ctx context.Context) ([]ListNodeMaintenanceRow, error)
-	ListOpenIngestSessions(ctx context.Context) ([]ListOpenIngestSessionsRow, error)
+	ListNodeProjectedIngestSessionsBefore(ctx context.Context, arg ListNodeProjectedIngestSessionsBeforeParams) ([]ListNodeProjectedIngestSessionsBeforeRow, error)
 	ListOriginNodes(ctx context.Context, artifactHash string) ([]string, error)
 	ListPendingArtifactsForFreeze(ctx context.Context, limit int32) ([]ListPendingArtifactsForFreezeRow, error)
 	ListPendingDVRSegments(ctx context.Context, arg ListPendingDVRSegmentsParams) ([]FoghornDvrSegment, error)

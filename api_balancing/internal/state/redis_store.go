@@ -483,12 +483,12 @@ func (r *RedisStateStore) AcquireConnOwnerFenced(ctx context.Context, nodeID, in
 	return res == 1, nil
 }
 
-// ErrNodeReaping means the disconnect reaper holds the short guard that serializes confirmed
-// absence with session retirement. A registering node retries after the guard expires/releases.
+// ErrNodeReaping means an ingest takeover holds the short guard that serializes the node's confirmed
+// absence with superseding its session. A registering node retries after the guard expires/releases.
 var ErrNodeReaping = errors.New("node disconnect retirement in progress")
 
 // AcquireNodeReapGuard atomically proves conn_owner is absent and blocks a new owner acquisition for
-// the duration of the guarded database retirement.
+// the duration of the guarded database supersession.
 func (r *RedisStateStore) AcquireNodeReapGuard(ctx context.Context, nodeID, token string, ttl time.Duration) (bool, error) {
 	if nodeID == "" || token == "" {
 		return false, errors.New("node reap guard requires node and token")

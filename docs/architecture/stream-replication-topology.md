@@ -313,8 +313,10 @@ Everything above is the demand-driven half. The proactive half — orchestrated 
   partial unique constraint allow one active generation per tenant stream. Source projection remains
   pending until its ordered Redis CAS succeeds; failed or abandoned projections are durably retired.
 - **Offline teardown is a durable transition**. `PUSH_INPUT_CLOSE` ends the exact generation.
-  `STREAM_END` is an event-time-fenced aggregate backstop, and hard node disconnects use a guarded
-  presence reaper. Stream-wide effects are leased from `ingest_offline_effects`, rechecked and applied
+  `STREAM_END` is an event-time-fenced aggregate backstop. Losing a node's control connection ends
+  nothing. A publisher admitted on another node while the old node is absent supersedes its session
+  under the node retirement guard, and the returning node's registration inventory ends the sessions
+  it no longer holds and drains generations taken over elsewhere. Stream-wide effects are leased from `ingest_offline_effects`, rechecked and applied
   under the same stream lock as admission, so a reconnect either supersedes teardown or projects after
   it completes.
 - **A DVR never changes publisher sessions**. A recording binds to the generation that created it;

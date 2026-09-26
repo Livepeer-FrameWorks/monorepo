@@ -299,6 +299,20 @@ func TestLivePushSourceStateClassifiesStartingAndOffline(t *testing.T) {
 			localPublisher(f, r, false)
 			f.snapshot.Nodes[0].Streams = nil
 		}, control.ErrLiveSourceStarting},
+		// The only ingest node lost its control connection: its heartbeat went stale and the stale
+		// sweep marked it unhealthy, but the ingest session (and so the source projection) is still
+		// open. Viewers get the transient answer, never offline.
+		"local_owner_unreachable_stale_heartbeat": {func(f *discoveryFixture, _ *LivePushPlacementPaths, r *livePathRegistry) {
+			localPublisher(f, r, true)
+			f.snapshot.Nodes[0].IsActive = false
+			f.snapshot.Nodes[0].LastHeartbeat = f.now.Add(-5 * time.Minute)
+		}, control.ErrLiveSourceStarting},
+		"local_owner_evicted_from_snapshot": {func(f *discoveryFixture, _ *LivePushPlacementPaths, r *livePathRegistry) {
+			localPublisher(f, r, true)
+			loc := r.entry.Locations["us-cell"]
+			loc.OwnerNodeID = "node-gone"
+			r.entry.Locations["us-cell"] = loc
+		}, control.ErrLiveSourceStarting},
 		"local_withdrawn": {func(f *discoveryFixture, _ *LivePushPlacementPaths, r *livePathRegistry) {
 			localPublisher(f, r, false)
 			loc := r.entry.Locations["us-cell"]

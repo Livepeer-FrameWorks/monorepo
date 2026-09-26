@@ -780,6 +780,25 @@ message Register {
   // protocol version 7. Foghorn re-dispatches jobs it assigned to this node
   // before the registration that are absent here: a restarted sidecar lost them.
   repeated string active_processing_job_ids = 25;
+  // Publisher generations this sidecar admitted and has not seen end, read from
+  // its persisted ingest-generation store at registration. Foghorn keeps the
+  // node's open ingest sessions listed here, ends the ones that are missing
+  // ("absent_on_reregister"), and tells the node to stop a listed generation
+  // that a publisher on another node has since taken over.
+  repeated LiveIngestGeneration live_ingest_generations = 26;
+  // True only when live_ingest_generations was read from the generation store.
+  // False (an older sidecar, or a store that could not be read) means the list
+  // proves nothing, and Foghorn ends no session because of it.
+  bool live_ingest_generations_reported = 27;
+}
+
+// LiveIngestGeneration is one admitted publisher generation a sidecar still
+// holds as active: the Mist runtime name, the Foghorn ingest session id that
+// admitted it (the generation), and the Mist connector PID.
+message LiveIngestGeneration {
+  string runtime_name = 1;
+  string generation = 2;
+  int64 connector_pid = 3;
 }
 
 // AppliedManagedStream is a sidecar→Foghorn snapshot at (re)connect of one

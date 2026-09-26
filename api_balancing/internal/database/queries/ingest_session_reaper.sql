@@ -1,8 +1,28 @@
--- name: ListOpenIngestSessions :many
-SELECT id::text AS session_id, tenant_id::text AS tenant_id, node_id, stream_internal_name,
-       start_trigger_uuid
+-- name: IngestRegistrationCutoff :one
+SELECT NOW()::timestamptz AS cutoff;
+
+-- name: ListNodeProjectedIngestSessionsBefore :many
+SELECT id::text AS session_id, tenant_id::text AS tenant_id, stream_internal_name
 FROM foghorn.ingest_sessions
-WHERE ended_at IS NULL;
+WHERE node_id = sqlc.arg(node_id) AND ended_at IS NULL AND projection_state = 'active'
+  AND started_at < sqlc.arg(started_before)::timestamptz;
+
+-- name: ListNodeIngestGenerations :many
+SELECT s.id::text AS session_id, s.tenant_id::text AS tenant_id, s.stream_internal_name,
+       (s.ended_at IS NOT NULL)::boolean AS ended, COALESCE(s.ended_reason, '')::text AS ended_reason,
+       COALESCE(a.id::text, '')::text AS active_generation, COALESCE(a.node_id, '')::text AS active_node_id
+FROM foghorn.ingest_sessions s
+LEFT JOIN foghorn.ingest_sessions a
+  ON a.tenant_id = s.tenant_id AND a.stream_internal_name = s.stream_internal_name AND a.ended_at IS NULL
+WHERE s.node_id = sqlc.arg(node_id) AND s.id = ANY(sqlc.arg(session_ids)::uuid[]);
+
+-- name: EndSupersededNodeIngestSession :one
+UPDATE foghorn.ingest_sessions
+SET ended_at = NOW(), ended_at_unix_millis = (EXTRACT(EPOCH FROM NOW()) * 1000)::bigint,
+    ended_reason = 'superseded_by_new_node'
+WHERE id = sqlc.arg(session_id)::text::uuid AND tenant_id = sqlc.arg(tenant_id)::text::uuid
+  AND node_id = sqlc.arg(node_id) AND ended_at IS NULL
+RETURNING id::text AS session_id;
 
 -- name: RetireIngestSession :one
 UPDATE foghorn.ingest_sessions

@@ -398,8 +398,10 @@ func activeIngestSessionClaims(ctx context.Context) (map[string]LocallyPublished
 // node control connections owned by this Foghorn replica. The session row is
 // the renewal authority: registry projection, buffer state, and node-health
 // snapshots may all be transiently absent while the publisher remains open.
-// PUSH_INPUT_CLOSE, STREAM_END, and the disconnect reaper end the session and
-// therefore stop renewal.
+// PUSH_INPUT_CLOSE, STREAM_END, a takeover on another node, and the node's
+// re-registration inventory end the session and therefore stop renewal. An
+// unreachable node's sessions are skipped here, so their claims lapse and a
+// publisher that moved to another node can be admitted.
 //
 // currentNodeSession is used only to shard work across HA replicas. A node's
 // control stream has one owner, so the owning replica renews its durable rows

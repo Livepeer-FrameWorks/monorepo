@@ -622,13 +622,17 @@ prepare`, perform the native restore, then use `cluster restore-fence complete`
   the fallback owner; it is not a cross-partition consensus protocol.
 - **A lost liveness signal eventually releases authority.** The cross-cell
   active-ingest placement claim is a 30-second lease that Foghorn renews every
-  5 seconds for every unended PostgreSQL ingest session, including a pending
-  generation whose blocking admission is still being confirmed. Within a cell,
+  5 seconds for every unended PostgreSQL ingest session whose node's control
+  connection that replica owns, including a pending generation whose blocking
+  admission is still being confirmed. An unreachable node's claims therefore
+  lapse, which is what lets a publisher that moved to another node be
+  admitted; the unreachable node's session itself stays open. Within a cell,
   publisher identity and tenant stream capacity come from PostgreSQL ingest-session rows; Valkey expiry cannot revoke a
   publisher. `PUSH_INPUT_CLOSE` is the exact PID/generation finalizer.
-  Event-time-fenced `STREAM_END`, node-disconnect reaping, projection abort,
-  and placement-claim loss are backstops that end only the matching durable
-  generation. Helmsman's Mist inventory supplies the local runtime backstop:
+  Event-time-fenced `STREAM_END`, takeover by a publisher admitted on another
+  node while this node is absent, the node's re-registration inventory,
+  projection abort, and placement-claim loss are backstops that end only the
+  matching durable generation. Control-connection loss alone ends none. Helmsman's Mist inventory supplies the local runtime backstop:
   it compares the admitted connector PID with Mist's `sourcepids`, so a viewer
   or replacement input retaining the same runtime name cannot mask a dead
   publisher. Mist exposes `sourcepids`; the FrameWorks fork additionally

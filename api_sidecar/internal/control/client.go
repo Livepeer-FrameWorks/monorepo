@@ -581,6 +581,37 @@ func SetActiveProcessingJobsProvider(fn func() []string) {
 	activeProcessingJobsMu.Unlock()
 }
 
+// liveIngestGenerationsForRegister lists the publisher generations this sidecar admitted and has not
+// seen end, for Register. The persisted store is the source (not Mist) because it is the record of
+// which Foghorn session owns each local publisher: a generation whose publisher vanished from Mist
+// while the control connection was down is still listed, and the Mist absence reconciler ends it
+// through INGEST_RUNTIME_ABSENT once the connection is back. reported=false means the store is
+// missing or unreadable; Foghorn must not read an empty list as "no live publishers" then.
+func liveIngestGenerationsForRegister() (generations []*ipcpb.LiveIngestGeneration, reported bool) {
+	ingestGenerationStoreMu.RLock()
+	store := ingestGenerationStore
+	ingestGenerationStoreMu.RUnlock()
+	if store == nil {
+		return nil, false
+	}
+	active, err := ActiveAdmittedIngestGenerations()
+	if err != nil {
+		if pkgLogger != nil {
+			pkgLogger.WithError(err).Warn("Cannot read admitted ingest generations for registration; Foghorn will not reconcile this node's ingest sessions")
+		}
+		return nil, false
+	}
+	generations = make([]*ipcpb.LiveIngestGeneration, 0, len(active))
+	for _, record := range active {
+		generations = append(generations, &ipcpb.LiveIngestGeneration{
+			RuntimeName:  record.RuntimeName,
+			Generation:   record.Generation,
+			ConnectorPid: record.ConnectorPID,
+		})
+	}
+	return generations, true
+}
+
 func activeProcessingJobIDsForRegister() []string {
 	activeProcessingJobsMu.Lock()
 	fn := activeProcessingJobs
@@ -1845,6 +1876,7 @@ func runClient(endpoint controlEndpoint, logger logging.Logger) error {
 		AppliedConfigSeedVersion: sidecarcfg.CurrentSeedVersion(),
 		ActiveProcessingJobIds:   activeProcessingJobIDsForRegister(),
 	}
+	registration.LiveIngestGenerations, registration.LiveIngestGenerationsReported = liveIngestGenerationsForRegister()
 	identityKey, identityStatus, err := nodeidentity.LoadOrCreatePrivateKey(
 		cfg.StateDir, cfg.NodeID, cfg.StorageLocalPath, cfg.RotateNodeIdentity, cfg.EnrollmentToken,
 	)
