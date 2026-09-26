@@ -507,7 +507,9 @@ WITH requeued AS (
         progress_last_ms = 0, progress_advanced_at = NULL
     WHERE job.processing_node_id = $1
       AND job.status IN ('dispatched', 'processing')
-      AND job.updated_at < $2
+      -- Assignment time, not updated_at: a running job's progress moves
+      -- updated_at every second, which would exclude every active job.
+      AND COALESCE(job.started_at, job.updated_at) < $2
       AND job.retry_count < $3
       AND NOT (job.job_id::text = ANY($4::text[]))
     RETURNING artifact_hash, tenant_id

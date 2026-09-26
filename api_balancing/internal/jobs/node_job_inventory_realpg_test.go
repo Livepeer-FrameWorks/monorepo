@@ -104,3 +104,38 @@ func TestReconcileNodeJobInventoryRedispatchesUnreportedWork_RealPG(t *testing.T
 		t.Fatal("a chapter finalization the node reported running was expired")
 	}
 }
+
+// A job still reporting progress when its sidecar restarts has a fresh
+// updated_at; its assignment is what decides whether the registration could
+// have carried it, so it is requeued at once instead of by the stale sweep.
+func TestReconcileNodeJobInventoryRequeuesRunningJob_RealPG(t *testing.T) {
+	conn := startRealPGForCleanup(t)
+
+	const (
+		tenant = "00000000-0000-4000-8000-0000000000ac"
+		node   = "edge-restarted-mid-job"
+		job    = "00000000-0000-4000-8000-00000000b001"
+		hash   = "inventoryvod000000000000000000b1"
+	)
+	registeredAt := time.Now()
+	if _, err := conn.Exec(`INSERT INTO foghorn.artifacts (artifact_hash, artifact_type, tenant_id, status) VALUES ($1, 'vod', $2, 'processing')`, hash, tenant); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := conn.Exec(`INSERT INTO foghorn.processing_jobs (job_id, tenant_id, artifact_hash, job_type, status, processing_node_id, started_at, updated_at)
+		VALUES ($1, $2, $3, 'transcode', 'processing', $4, $5, $6)`,
+		job, tenant, hash, node, registeredAt.Add(-10*time.Minute), registeredAt.Add(-500*time.Millisecond)); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := ReconcileNodeJobInventory(t.Context(), conn, node, nil, registeredAt, 3, logging.NewLogger()); err != nil {
+		t.Fatal(err)
+	}
+	var status string
+	var assigned sql.NullString
+	if err := conn.QueryRow(`SELECT status, processing_node_id FROM foghorn.processing_jobs WHERE job_id = $1`, job).Scan(&status, &assigned); err != nil {
+		t.Fatal(err)
+	}
+	if status != "queued" || assigned.Valid {
+		t.Fatalf("running job the restarted node did not report: status %q node %v, want queued and unassigned", status, assigned)
+	}
+}

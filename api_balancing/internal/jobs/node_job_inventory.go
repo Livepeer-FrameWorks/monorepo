@@ -11,9 +11,9 @@ import (
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 )
 
-// nodeInventoryAssignmentMargin excludes work assigned just before the
-// registration: it may still be on its way to the node. A restarted sidecar
-// is gone for far longer than this, so the work it lost is always older.
+// nodeInventoryAssignmentMargin excludes work assigned to the node just before
+// the registration: it may still be on its way over the new connection. The
+// margin is measured from the job's assignment, never its latest progress.
 const nodeInventoryAssignmentMargin = 2 * time.Second
 
 // ReconcileNodeJobInventory re-dispatches the work Foghorn assigned to nodeID
