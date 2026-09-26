@@ -72,13 +72,6 @@
             "dvrChapterMode": "WINDOW_SIZED",
             "id": "id-1",
             "ingestMode": "RELAYED",
-            "metrics": {
-              "currentViewers": 1,
-              "isLive": true,
-              "startedAt": "2026-09-19T14:03:27Z",
-              "status": "OFFLINE",
-              "updatedAt": "2026-09-19T14:03:27Z"
-            },
             "monitoring": "INHERIT",
             "name": "text",
             "playbackId": "text",
@@ -95,7 +88,6 @@
             "pullSource": { "class": "text", "enabled": true, "sourceUriRedacted": "text" },
             "record": true,
             "streamId": "text",
-            "streamKey": "text",
             "updatedAt": "2026-09-19T14:03:27Z"
           }
         }
