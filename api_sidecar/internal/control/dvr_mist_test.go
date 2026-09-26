@@ -997,3 +997,48 @@ func TestStopRecording_UnconfirmedEmptyListIsNotAuthoritative(t *testing.T) {
 		t.Fatal("job must be kept when an empty list cannot confirm the stop")
 	}
 }
+
+func TestStopRecording_UnconfirmedPushWithReportedWriterEndIsConfirmed(t *testing.T) {
+	dm := newDVRManagerWithMist(t, &startOnceNeverVisibleFakeMist{})
+	issued := time.Now().Add(-time.Minute)
+	job := &DVRJob{
+		DVRHash: "hash-ended", StreamName: "live+x", TargetURI: "/data/dvr/x/hash-ended/segments/$minute_$segmentCounter.ts",
+		PushID: 0, Status: "recording", Config: &ipcpb.DVRConfig{}, LastPushAttempt: issued,
+		Logger: logging.NewLogger(), SyncedSegments: make(map[string]bool), StartTime: issued,
+	}
+	dm.mutex.Lock()
+	dm.jobs["hash-ended"] = job
+	dm.mutex.Unlock()
+	// An end reported before this push was issued belongs to an earlier writer.
+	dm.noteWriterEnded("live+x", issued.Add(-time.Second), job.TargetURI)
+
+	stopped := 0
+	sendFunc := func(m *ipcpb.ControlMessage) {
+		if m.GetDvrStopped() != nil {
+			stopped++
+		}
+	}
+	if err := dm.StopRecordingWithSender("hash-ended", sendFunc); err != nil {
+		t.Fatalf("stop: %v", err)
+	}
+	if stopped != 0 {
+		t.Fatalf("an end from an earlier writer must not confirm the stop, got %d reports", stopped)
+	}
+
+	dm.mutex.Lock()
+	job.Status = "recording"
+	dm.mutex.Unlock()
+	dm.noteWriterEnded("live+x", issued.Add(time.Second), job.TargetURI)
+	if err := dm.StopRecordingWithSender("hash-ended", sendFunc); err != nil {
+		t.Fatalf("stop: %v", err)
+	}
+	if stopped != 1 {
+		t.Fatalf("Mist's writer-end report must confirm the stop, got %d reports", stopped)
+	}
+	dm.mutex.RLock()
+	_, exists := dm.jobs["hash-ended"]
+	dm.mutex.RUnlock()
+	if exists {
+		t.Fatal("a confirmed stop must remove the job")
+	}
+}
