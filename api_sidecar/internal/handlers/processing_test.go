@@ -893,6 +893,13 @@ func TestRenditionsCompleteFromTracks(t *testing.T) {
 	if !renditionsCompleteFromTracks(entry, expected, shortPassthrough, source, srcSpan) {
 		t.Fatal("expected complete renditions to pass when the named source passthrough left the recording early")
 	}
+	// Staging: Livepeer masked the source before the recorder selected, so
+	// every recorded track is a rendition naming its source. None of them may
+	// be taken for the source, or the 720p rendition is judged missing.
+	maskedSource := []processingMetaVideoTrack{derived(track(1280, 720, srcSpan)), derived(track(640, 360, srcSpan))}
+	if !renditionsCompleteFromTracks(entry, expected, maskedSource, source, srcSpan) {
+		t.Fatal("expected a complete ladder without the masked source to pass")
+	}
 	unnamed := []processingMetaVideoTrack{track(1280, 720, 3000), track(1280, 720, srcSpan), track(640, 360, srcSpan)}
 	if renditionsCompleteFromTracks(entry, expected, unnamed, source, srcSpan) {
 		t.Fatal("expected a short same-height track without source names to fail closed")
