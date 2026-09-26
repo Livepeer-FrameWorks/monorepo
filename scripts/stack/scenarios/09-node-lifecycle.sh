@@ -24,8 +24,14 @@ if [ -n "$VID" ]; then
     [ "$(pg "$FOGHORN_A_DB" "SELECT status FROM foghorn.processing_jobs WHERE tenant_id='$STACK_TENANT_ID' AND artifact_hash='$VHASH' ORDER BY created_at DESC LIMIT 1")" = processing ]
   }
   if eventually 120 "processing job running on the edge" processing; then
-    if stack_exec "$EDGE_SERVICE" sh -c 's6-svc -r /run/service/helmsman 2>/dev/null || pkill -f "/helmsman( |$)"'; then
+    # s6 owns Helmsman in the edge bundle; a pkill fallback would also match
+    # its own `sh -c` command line and kill the shell running it.
+    if stack_exec "$EDGE_SERVICE" /command/s6-svc -r /run/service/helmsman; then
       pass "Helmsman restarted mid-job"
+      # Later checks and scenarios publish through this edge, whose ingest
+      # triggers Helmsman answers.
+      helmsman_up() { stack_exec "$EDGE_SERVICE" curl -sf -m 3 -o /dev/null http://localhost:18007/health; }
+      eventually 60 "Helmsman serves again after the restart" helmsman_up
       terminal() {
         local s
         s=$(vod_status "$VID")
@@ -35,6 +41,8 @@ if [ -n "$VID" ]; then
         return 1
       }
       eventually 300 "the job completes after the restart (not after the 30-min lease)" terminal
+    else
+      fail "Helmsman restart command failed"
     fi
   fi
 else
