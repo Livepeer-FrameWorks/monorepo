@@ -116,6 +116,7 @@ func TestCommodoreDomainEventOutbox_RealPG(t *testing.T) {
 	// token's usage hash.
 	tokenCtx := context.WithValue(userCtx, ctxkeys.KeyAuthType, "api_token")
 	tokenCtx = context.WithValue(tokenCtx, ctxkeys.KeyAPITokenID, tokenID)
+	tokenCtx = context.WithValue(tokenCtx, ctxkeys.KeyPermissions, []string{"streams:write"})
 
 	created, err := server.CreateStream(tokenCtx, &commodorepb.CreateStreamRequest{Title: "Domain events"})
 	if err != nil {
