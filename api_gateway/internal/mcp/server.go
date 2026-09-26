@@ -246,6 +246,12 @@ func (s *Server) HTTPHandler() http.Handler {
 			Stateless:      false, // Maintain session state
 			JSONResponse:   false, // Use SSE format
 			SessionTimeout: mcpSessionTimeout,
+			// The SDK's DNS-rebinding guard rejects any Host other than
+			// localhost when the listener is loopback, which is every request
+			// that nginx proxies to 127.0.0.1. It protects unauthenticated local
+			// servers; this endpoint requires credentials and checks Origin
+			// (validMCPOrigin) before the SDK sees the request.
+			DisableLocalhostProtection: true,
 		},
 	)
 
