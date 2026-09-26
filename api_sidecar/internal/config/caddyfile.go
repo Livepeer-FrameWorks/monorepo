@@ -184,7 +184,6 @@ const caddyfileTmpl = `{
 		}
 	}
 }
-
 {{range .Bundles}}
 {{.SiteAddress}} {
 {{- if and .TLSCertPath .TLSKeyPath}}

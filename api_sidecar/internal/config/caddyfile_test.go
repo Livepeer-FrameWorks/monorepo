@@ -265,3 +265,24 @@ func TestRenderCaddyfile_MediaRoutesExposeCorsHeaders(t *testing.T) {
 		}
 	}
 }
+
+// Caddy's /load warns "Caddyfile input is not formatted" when the input
+// differs from caddy fmt output, which collapses runs of blank lines.
+func TestRenderCaddyfileHasNoRepeatedBlankLines(t *testing.T) {
+	p := baseParams()
+	p.EdgeDomain = "edge-us-1.media-us-1.frameworks.network"
+	p.AcmeEmail = "ops@frameworks.network"
+	out, err := RenderCaddyfile(p)
+	if err != nil {
+		t.Fatalf("RenderCaddyfile: %v", err)
+	}
+	if index := strings.Index(out, "\n\n\n"); index >= 0 {
+		line := strings.Count(out[:index], "\n") + 2
+		t.Fatalf("repeated blank lines at line %d:\n%s", line, out)
+	}
+	for _, bundle := range p.Bundles {
+		if !strings.Contains(out, "}\n\n"+bundle.SiteAddress+" {") {
+			t.Fatalf("site block %q is not separated by one blank line:\n%s", bundle.SiteAddress, out)
+		}
+	}
+}
