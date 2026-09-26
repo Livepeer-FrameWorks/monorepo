@@ -4,6 +4,7 @@ package updater
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -160,5 +161,53 @@ func TestReplaceMistPayloadInPlacePreservesExecutableLookupPath(t *testing.T) {
 	wantPrefix := filepath.Join(root, "bin", "MistController")
 	if !strings.HasPrefix(string(observedBytes), wantPrefix) {
 		t.Fatalf("running executable moved away from canonical path: got %q, want prefix %q", observedBytes, wantPrefix)
+	}
+}
+
+// A controller wedged in shutdown ignores SIGTERM; the restart must still
+// clear it so the supervisor can start a new one.
+func TestStopMistControllersKillsControllerThatIgnoresTerm(t *testing.T) {
+	const helperEnv = "FW_MIST_WEDGED_HELPER"
+	if os.Getenv(helperEnv) != "" {
+		signal.Ignore(syscall.SIGTERM)
+		time.Sleep(time.Minute)
+		return
+	}
+
+	helperCtx, cancelHelper := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancelHelper()
+	cmd := exec.CommandContext(helperCtx, os.Args[0], "-test.run=^TestStopMistControllersKillsControllerThatIgnoresTerm$")
+	cmd.Env = append(os.Environ(), helperEnv+"=1")
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	waited := make(chan error, 1)
+	go func() { waited <- cmd.Wait() }()
+	pid := cmd.Process.Pid
+	time.Sleep(200 * time.Millisecond)
+
+	originalGrace := mistStopGrace
+	mistStopGrace = 500 * time.Millisecond
+	defer func() { mistStopGrace = originalGrace }()
+
+	scans := 0
+	err := stopMistControllers(context.Background(), []int{pid}, func() ([]int, error) {
+		scans++
+		return []int{pid}, nil
+	})
+	if err != nil {
+		t.Fatalf("stopMistControllers: %v", err)
+	}
+	if scans != 1 {
+		t.Fatalf("escalation scans = %d, want 1 (SIGTERM alone must not have ended the helper)", scans)
+	}
+	select {
+	case waitErr := <-waited:
+		var exitErr *exec.ExitError
+		if !errors.As(waitErr, &exitErr) || exitErr.Sys().(syscall.WaitStatus).Signal() != syscall.SIGKILL {
+			t.Fatalf("helper exit = %v, want SIGKILL", waitErr)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("helper still running")
 	}
 }

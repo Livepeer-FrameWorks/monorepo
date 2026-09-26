@@ -24,6 +24,9 @@ type ServiceController interface {
 	// SignalMistUSR1 delivers SIGUSR1 to MistController for an in-place
 	// rolling reload after a binary swap.
 	SignalMistUSR1(ctx context.Context) error
+	// RestartMist replaces the running MistServer with a fresh start. It is
+	// the recovery path when a rolling reload leaves no serving controller.
+	RestartMist(ctx context.Context) error
 }
 
 var (

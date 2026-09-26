@@ -27,3 +27,17 @@ func linuxMistControllerSignalCommand() (string, []string) {
 func (systemdController) RestartCaddy(ctx context.Context) error {
 	return runCommand(ctx, "systemctl", "restart", "frameworks-caddy")
 }
+
+// RestartMist prefers the unit restart and falls back to signaling Mist
+// directly, which works without unit-management rights because Helmsman runs
+// as Mist's user and the unit restarts itself (Restart=always).
+func (systemdController) RestartMist(ctx context.Context) error {
+	errService := runCommand(ctx, "systemctl", "restart", "frameworks-mistserver")
+	if errService == nil {
+		return nil
+	}
+	if errProc := restartMistControllerProcesses(ctx); errProc != nil {
+		return errors.Join(errService, errProc)
+	}
+	return nil
+}

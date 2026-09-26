@@ -44,6 +44,7 @@ type fakeServiceController struct{}
 
 func (fakeServiceController) RestartCaddy(context.Context) error   { return nil }
 func (fakeServiceController) SignalMistUSR1(context.Context) error { return nil }
+func (fakeServiceController) RestartMist(context.Context) error    { return nil }
 
 func TestS6RestartCaddyStopsAndWaitsForAdmin(t *testing.T) {
 	var stops, polls atomic.Int32
