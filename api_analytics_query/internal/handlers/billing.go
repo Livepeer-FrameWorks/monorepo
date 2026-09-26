@@ -20,6 +20,7 @@ import (
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/database"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/kafka"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/mist"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/models"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/restream"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/tenants"
@@ -713,13 +714,10 @@ func (c *clusterProcessingMetrics) add(processType, codec, trackType string, sec
 	c.meters = appendMeter(c.meters, "transcode_rendition_seconds", "second", seconds*float64(renditionCount), dimensions)
 }
 
+// normalizedProcessingCodec also canonicalizes encoder names stored before
+// Helmsman reported codecs (libx264, h264_nvenc, ...).
 func normalizedProcessingCodec(codec string) string {
-	switch strings.ToLower(strings.TrimSpace(codec)) {
-	case "h265":
-		return "hevc"
-	default:
-		return strings.ToLower(strings.TrimSpace(codec))
-	}
+	return mist.CanonicalCodecName(codec)
 }
 
 // queryClusterProcessingSeconds returns processing-second totals grouped by

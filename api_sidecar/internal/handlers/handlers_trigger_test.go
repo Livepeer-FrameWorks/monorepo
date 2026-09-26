@@ -506,3 +506,37 @@ func TestHandleStreamProcessUsesLocalOverride(t *testing.T) {
 		t.Fatal("expected local override to bypass Foghorn forwarding")
 	}
 }
+
+// Mist's LIVEPEER_SEGMENT_COMPLETE carries exactly 15 fields and no codec
+// (fork_trigger_capabilities.h). The billing event must still name one:
+// Periscope quarantines segments with an empty output_codec.
+func TestLivepeerSegmentCompleteReportsH264ForMistPayload(t *testing.T) {
+	setupTriggerTest(t, "tenant-lp")
+
+	var sent *ipcpb.MistTrigger
+	stubSendMistTrigger(t, func(trigger *ipcpb.MistTrigger) (*control.MistTriggerResult, error) {
+		sent = trigger
+		return &control.MistTriggerResult{}, nil
+	})
+
+	payload := strings.Join([]string{
+		"live+stream", "session-1", "7", "42000", "2000", "1280", "720", "250000",
+		"600000", "3", "1", "https://gateway.example", "180", "11.1",
+		`[{"name":"360p","width":640,"height":360}]`,
+	}, "\n")
+	ctx, recorder := newWebhookContext(payload)
+	HandleLivepeerSegmentComplete(ctx)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status = %d: %s", recorder.Code, recorder.Body.String())
+	}
+	billing := sent.GetProcessBilling()
+	if billing == nil {
+		t.Fatal("no billing event forwarded")
+	}
+	if got := billing.GetOutputCodec(); got != "h264" {
+		t.Fatalf("output codec = %q, want h264", got)
+	}
+	if got := billing.GetProcessType(); got != "Livepeer" {
+		t.Fatalf("process type = %q, want Livepeer", got)
+	}
+}
