@@ -2521,7 +2521,8 @@ func handleDVRStop(logger logging.Logger, req *ipcpb.DVRStopRequest, send func(*
 		return
 	}
 
-	logger.WithField("dvr_hash", dvrHash).Info("DVR recording stopped successfully")
+	// The manager logs the outcome: stopped, or left open for the stop obligation.
+	logger.WithField("dvr_hash", dvrHash).Debug("DVR stop command handled")
 }
 
 // handleClipDelete handles a clip delete request from Foghorn

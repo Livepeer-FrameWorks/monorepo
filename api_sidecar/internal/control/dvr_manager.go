@@ -1597,6 +1597,8 @@ func (dm *DVRManager) stopRecording(dvrHash string, sendFunc func(*ipcpb.Control
 	job.Status = "finalizing"
 	job.pushGeneration++
 	stopPushID := job.PushID
+	stopIdentity := pushIdentity{streamName: job.StreamName, targetURI: job.TargetURI, dvrHash: job.DVRHash}
+	lastPushAttempt := job.LastPushAttempt
 	dm.mutex.Unlock()
 
 	// Stop the MistServer push (no lock held across the Mist call) and track whether
@@ -1626,6 +1628,11 @@ func (dm *DVRManager) stopRecording(dvrHash string, sendFunc func(*ipcpb.Control
 			} else {
 				stopConfirmed = true // found and stopped the live push — confirmed
 			}
+		} else if !lastPushAttempt.IsZero() && dm.writerEndedSince(stopIdentity, lastPushAttempt) {
+			// Mist reported this identity's writer ended after the start was
+			// issued, and the list no longer shows it: no writer is left to stop.
+			job.Logger.Info("Unconfirmed DVR push already ended per Mist's writer-end report; stop confirmed")
+			stopConfirmed = true
 		} else {
 			job.Logger.Warn("Unconfirmed DVR push not present in a successful list; cannot confirm stop (absence is not authoritative), leaving obligation open")
 		}
