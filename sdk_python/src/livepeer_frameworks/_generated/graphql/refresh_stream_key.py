@@ -1,4 +1,4 @@
-from typing import Annotated, Literal, Optional, Union
+from typing import Annotated, Literal, Union
 
 from pydantic import Field
 
@@ -7,9 +7,9 @@ from .base_model import BaseModel
 from .fragments import (  # noqa: F401
     AuthError,
     NotFoundError,
-    Stream,
     StreamPlaybackPolicy,
     StreamPullSource,
+    StreamWithKey,
     ValidationError,
 )
 
@@ -36,13 +36,8 @@ class RefreshStreamKey(BaseModel):
     "Generate a new stream key, invalidating the old one."
 
 
-class RefreshStreamKeyRefreshStreamKeyStream(Stream):
+class RefreshStreamKeyRefreshStreamKeyStream(StreamWithKey):
     typename__: Literal["Stream"] = Field(alias="__typename")
-    stream_key: Optional[str] = Field(
-        alias="streamKey",
-        description="Secret key for publisher-authenticated ingest; null for pull and managed sources.\nThe key lets its holder publish to the stream, so an API token needs the\nstreams:write scope: without it this field is null and the response carries\na FORBIDDEN error at its path.",
-    )
-    "Secret key for publisher-authenticated ingest; null for pull and managed sources.\nThe key lets its holder publish to the stream, so an API token needs the\nstreams:write scope: without it this field is null and the response carries\na FORBIDDEN error at its path."
 
 
 class RefreshStreamKeyRefreshStreamKeyValidationError(ValidationError):

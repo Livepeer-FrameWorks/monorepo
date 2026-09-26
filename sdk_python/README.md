@@ -11,12 +11,12 @@ pip install livepeer-frameworks
 
 ```python
 from livepeer_frameworks import FrameWorksClient, expect_result, paginate_relay
-from livepeer_frameworks.graphql import ConnectionInput, CreateStreamInput, Stream
+from livepeer_frameworks.graphql import ConnectionInput, CreateStreamInput, StreamWithKey
 
 with FrameWorksClient(token="YOUR_API_TOKEN") as fw:
     created = fw.create_stream(input=CreateStreamInput(name="Studio A"))
-    # Returns the Stream member or raises ResultError for ValidationError/AuthError.
-    stream = expect_result(created.create_stream, Stream)
+    # Returns the stream with its key, or raises ResultError for ValidationError/AuthError.
+    stream = expect_result(created.create_stream, StreamWithKey)
     print(stream.stream_key, stream.playback_id)
 
     for s in paginate_relay(
@@ -67,8 +67,9 @@ An API token carries scopes. The stream methods (`list_streams`, `get_stream`, `
 `update_stream`, `refresh_stream_key`) select only stream fields, so `streams:read` and
 `streams:write` cover them. Live state (`Stream.metrics`) comes from analytics and needs
 `analytics:read`: read it with `get_stream_metrics` or `list_stream_metrics`. A stream key lets its
-holder publish, so it needs `streams:write`: `create_stream` and `refresh_stream_key` return it,
-`get_stream_key` reads it, and `list_streams`, `get_stream`, and `update_stream` do not select it.
+holder publish, so it needs `streams:write`: `create_stream` and `refresh_stream_key` return a
+`StreamWithKey`, `get_stream_key` reads it, and `list_streams`, `get_stream`, and `update_stream`
+return a `Stream` without it.
 
 When a field below a returned root field fails (for example `metrics` selected with a token that
 lacks `analytics:read`), the server sets it to null and reports an error at its path. The call

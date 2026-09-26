@@ -13559,6 +13559,17 @@ class StreamValidationDefault(BaseModel):
     error: Optional[str]
 
 
+class StreamWithKey(Stream):
+    """A live stream configuration with real-time operational metrics.
+    Streams are the core entity for broadcasting and viewing live content."""
+
+    stream_key: Optional[str] = Field(
+        alias="streamKey",
+        description="Secret key for publisher-authenticated ingest; null for pull and managed sources.\nThe key lets its holder publish to the stream, so an API token needs the\nstreams:write scope: without it this field is null and the response carries\na FORBIDDEN error at its path.",
+    )
+    "Secret key for publisher-authenticated ingest; null for pull and managed sources.\nThe key lets its holder publish to the stream, so an API token needs the\nstreams:write scope: without it this field is null and the response carries\na FORBIDDEN error at its path."
+
+
 class StreamingConfigDefault(BaseModel):
     preferred_cluster_label: Optional[str] = Field(alias="preferredClusterLabel")
     ingest_domain: Optional[str] = Field(alias="ingestDomain")
@@ -18978,6 +18989,7 @@ StreamKey.model_rebuild()
 StreamMetrics.model_rebuild()
 StreamRetentionOverridesDefault.model_rebuild()
 StreamValidationDefault.model_rebuild()
+StreamWithKey.model_rebuild()
 StreamingConfigDefault.model_rebuild()
 StripeBillingPortalSessionDefault.model_rebuild()
 StripeCheckoutSessionDefault.model_rebuild()
