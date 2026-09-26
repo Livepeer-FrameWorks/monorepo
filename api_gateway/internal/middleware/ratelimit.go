@@ -1375,12 +1375,8 @@ func (tc *TenantCache) getTenantInfo(tenantID string) (*TenantRateLimits, error)
 	// Check cache first
 	if cached, ok := tc.cache.Load(tenantID); ok {
 		limits := cached.(*TenantRateLimits) //nolint:errcheck // type guaranteed by sync.Map usage
-		// Use shorter TTL for prepaid tenants (faster enforcement)
-		ttl := tc.cacheTTLPostpaid
-		if limits.BillingModel == "prepaid" {
-			ttl = tc.cacheTTLPrepaid
-		}
-		if time.Since(limits.FetchedAt) < ttl {
+		// Prepaid tenants use a shorter TTL (faster enforcement).
+		if time.Since(limits.FetchedAt) < tc.ttlFor(limits) {
 			return limits, nil
 		}
 	}
@@ -1405,6 +1401,7 @@ func (tc *TenantCache) getTenantInfo(tenantID string) (*TenantRateLimits, error)
 	}
 
 	// Cache the result with billing info
+	now := time.Now()
 	limits := &TenantRateLimits{
 		Limit:                    int(resp.RateLimitPerMinute),
 		Burst:                    int(resp.RateLimitBurst),
@@ -1415,11 +1412,46 @@ func (tc *TenantCache) getTenantInfo(tenantID string) (*TenantRateLimits, error)
 		BillingStatusUnavailable: resp.BillingStatusUnavailable,
 		IsSuspended:              resp.IsSuspended,
 		IsBalanceNegative:        resp.IsBalanceNegative,
-		FetchedAt:                time.Now(),
+		FetchedAt:                now,
+	}
+	if limits.BillingStatusUnavailable {
+		// An unavailable billing authority is a transient answer, not the
+		// tenant's billing state: keep the last known state if there is one,
+		// and ask again soon instead of refusing rated work for a full TTL.
+		if cached, ok := tc.cache.Load(tenantID); ok {
+			if previous := cached.(*TenantRateLimits); !previous.BillingStatusUnavailable { //nolint:errcheck // type guaranteed by sync.Map usage
+				limits.BillingModel = previous.BillingModel
+				limits.TierName = previous.TierName
+				limits.CollectionReady = previous.CollectionReady
+				limits.CollectionProvider = previous.CollectionProvider
+				limits.BillingStatusUnavailable = false
+				limits.IsSuspended = previous.IsSuspended
+				limits.IsBalanceNegative = previous.IsBalanceNegative
+			}
+		}
+		limits.FetchedAt = now.Add(billingUnavailableRetryAfter - tc.ttlFor(limits))
+		if tc.logger != nil {
+			tc.logger.WithFields(logging.Fields{
+				"tenant_id":        tenantID,
+				"kept_known_state": !limits.BillingStatusUnavailable,
+				"retry_in":         billingUnavailableRetryAfter.String(),
+			}).Warn("Billing status unavailable from Quartermaster")
+		}
 	}
 	tc.cache.Store(tenantID, limits)
 
 	return limits, nil
+}
+
+// billingUnavailableRetryAfter is how soon a tenant whose billing status
+// could not be read is asked for again.
+const billingUnavailableRetryAfter = 5 * time.Second
+
+func (tc *TenantCache) ttlFor(limits *TenantRateLimits) time.Duration {
+	if limits.BillingModel == "prepaid" {
+		return tc.cacheTTLPrepaid
+	}
+	return tc.cacheTTLPostpaid
 }
 
 // GetBillingAccessStatus returns one coherent snapshot. Lookup failure is
