@@ -2315,10 +2315,14 @@ func sourceVideoTrackIndex(videoTracks []processingMetaVideoTrack, source mist.S
 	}
 	srcIdx := -1
 	for i, t := range videoTracks {
+		// A track that names its source is derived, never the source. When
+		// the recording left the source out (Livepeer masks it for VOD) every
+		// track names one and there is no source to exclude.
+		if t.source != "" {
+			continue
+		}
 		if srcHeight > 0 && renditionHeightsClose(t.height, srcHeight) {
-			if srcIdx < 0 ||
-				(t.source == "" && videoTracks[srcIdx].source != "") ||
-				(t.source == videoTracks[srcIdx].source && t.spanMs() > videoTracks[srcIdx].spanMs()) {
+			if srcIdx < 0 || t.spanMs() > videoTracks[srcIdx].spanMs() {
 				srcIdx = i
 			}
 		}
