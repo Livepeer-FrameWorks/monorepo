@@ -2,6 +2,7 @@ package federation
 
 import (
 	"context"
+	"errors"
 	"time"
 
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/placement"
@@ -9,6 +10,7 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 // PlacementPreparationRuntime owns current admission and physical media state.
@@ -115,7 +117,15 @@ func (destination *PlacementDestination) PreparePlacement(ctx context.Context, r
 		return nil, ErrPlacementReceiptConflict
 	}
 	receipt.Response = response
-	if err = destination.revalidate(ctx, req, receipt); err != nil {
+	var shortened *PlacementEvidenceShortenedError
+	if err = destination.revalidate(ctx, req, receipt); errors.As(err, &shortened) {
+		// Not persisted yet: take the shorter lifetime current evidence supports.
+		response = proto.CloneOf(response)
+		response.ExpiresAt = timestamppb.New(shortened.Until)
+		receipt.Response = response
+		err = destination.checkPreparationWindow(req, receipt)
+	}
+	if err != nil {
 		return nil, err
 	}
 	if err = destination.Receipts.Finish(ctx, req, response, receipt.Pull); err != nil {
@@ -150,6 +160,10 @@ func (destination *PlacementDestination) revalidate(ctx context.Context, req *pl
 	if err := ctx.Err(); err != nil {
 		return status.FromContextError(err).Err()
 	}
+	return destination.checkPreparationWindow(req, receipt)
+}
+
+func (destination *PlacementDestination) checkPreparationWindow(req *placementpb.PreparePlacementRequest, receipt PlacementReceipt) error {
 	if err := placement.ValidatePreparationDeadline(req, destination.now()); err != nil {
 		return ErrPlacementReceiptExpired
 	}

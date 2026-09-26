@@ -237,3 +237,47 @@ func TestPlacementDestinationReplicasReconcileOnePhysicalPull(t *testing.T) {
 		t.Fatalf("physical starts=%d", starts)
 	}
 }
+
+// Each assessment is an independent observation: the post-work check can see
+// evidence that ends before the evidence the preparation was built from. A
+// fresh preparation takes the shorter lifetime; a persisted receipt cannot.
+func TestPlacementDestinationShortensFreshPreparationToCurrentEvidence(t *testing.T) {
+	store, _, req := placementReceiptFixture(t)
+	until := store.Now().Add(time.Second).Truncate(time.Millisecond)
+	shortenedEvidence := true
+	runtime := placementRuntimeFixture{
+		validate: func(_ context.Context, _ *placementpb.PreparePlacementRequest, receipt PlacementReceipt) error {
+			if receipt.Response == nil || !shortenedEvidence {
+				return nil
+			}
+			if prepared := receipt.Response.GetExpiresAt().AsTime(); prepared.After(until) {
+				return &PlacementEvidenceShortenedError{Prepared: prepared, Until: until}
+			}
+			return nil
+		},
+		reconcile: func(_ context.Context, got *placementpb.PreparePlacementRequest, _ PlacementReceipt, bind func(*PlacementPullBinding) error) (*placementpb.Preparation, error) {
+			if err := bind(placementReceiptPull()); err != nil {
+				return nil, err
+			}
+			return preparationWireResponse(got), nil
+		},
+	}
+	destination := &PlacementDestination{Discovery: &PlacementDiscovery{CellID: store.CellID}, Receipts: store, Runtime: runtime, Now: store.Now}
+	response, err := destination.PreparePlacement(context.Background(), req)
+	if err != nil || response == nil {
+		t.Fatalf("shortened evidence refused a fresh preparation: %v, %v", response, err)
+	}
+	if got := response.GetExpiresAt().AsTime(); !got.Equal(until) {
+		t.Fatalf("expiry = %s, want the current evidence's %s", got, until)
+	}
+	// The persisted receipt now carries the shorter expiry, so a replay under
+	// the same evidence is accepted unchanged.
+	if replay, err := destination.PreparePlacement(context.Background(), req); err != nil || !proto.Equal(replay, response) {
+		t.Fatalf("replay = %v, %v", replay, err)
+	}
+	// Evidence that shrinks after persistence refuses the immutable receipt.
+	until = until.Add(-500 * time.Millisecond)
+	if replay, err := destination.PreparePlacement(context.Background(), req); replay != nil || status.Code(err) != codes.FailedPrecondition {
+		t.Fatalf("persisted receipt outlived current evidence: %v, %v", replay, err)
+	}
+}
