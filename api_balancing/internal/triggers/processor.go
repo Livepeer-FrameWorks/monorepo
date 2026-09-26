@@ -2181,23 +2181,7 @@ func (p *Processor) handlePushRewrite(trigger *ipcpb.MistTrigger) (_ string, _ b
 				// so a crash at any point after confirmation cannot lose them and a trigger retry
 				// cannot duplicate them.
 				intent := control.AdmissionEffectIntent{BroadcastLive: true}
-				for _, peer := range streamValidation.GetClusterPeers() {
-					if peer == nil {
-						continue
-					}
-					clusterID := strings.TrimSpace(peer.GetClusterId())
-					addr := strings.TrimSpace(peer.GetFoghornGrpcAddr())
-					if clusterID == p.clusterID || control.IsServedCluster(clusterID) {
-						continue
-					}
-					role := strings.TrimSpace(peer.GetRole())
-					intent.PeerHints = append(intent.PeerHints, control.AdmissionPeerHint{
-						ClusterID:     clusterID,
-						Addr:          addr,
-						AlwaysOn:      role == "official" || role == "preferred",
-						ControlCellID: strings.TrimSpace(peer.GetControlCellId()),
-					})
-				}
+				intent.PeerHints = p.admissionPeerHints(streamValidation.InternalName, streamValidation.GetClusterPeers())
 				// The admission's Decklog ingest event, with its DETERMINISTIC event_id (the
 				// generation): the obligation owns delivery, so a send failure or a crash is
 				// re-driven by the worker, and any duplicate collapses downstream by event_id.
@@ -4985,9 +4969,9 @@ func (p *Processor) ApplyAdmissionEffect(ctx context.Context, effect control.Adm
 			// Per-leg poison: the durable filter input is undecodable; broadcasting anyway would
 			// fail open. Settle the leg with diagnostics.
 			p.logger.WithField("internal_name", effect.InternalName).
-				Error("Admission obligation: peer set undecodable; broadcast leg abandoned (poison)")
+				Error("Admission obligation: peer set invalid; broadcast leg abandoned (poison)")
 			legs.BroadcastPoisoned = true
-			legs.PoisonNote = appendPoisonNote(legs.PoisonNote, "peer_clusters undecodable")
+			legs.PoisonNote = appendPoisonNote(legs.PoisonNote, "peer_clusters invalid")
 		case p.peerNotifier == nil:
 			legs.BroadcastDone = true
 		case !p.peerNotifier.IsLeader():
@@ -7638,4 +7622,38 @@ func (p *Processor) ingestClusterIDForNode(ctx context.Context, nodeID string) s
 		}
 	}
 	return strings.TrimSpace(p.resolveNodeClusterIDWithContext(ctx, nodeID))
+}
+
+// admissionPeerHints is the durable peer set an admission broadcasts its live
+// state to: every peer cluster except this one and the clusters it serves.
+// Quartermaster names a peer's Foghorn only while one is running and healthy
+// for that cluster; a peer without it cannot take the broadcast, and recording
+// it would poison the leg for every other peer.
+func (p *Processor) admissionPeerHints(internalName string, peers []*clusterpeerpb.TenantClusterPeer) []control.AdmissionPeerHint {
+	var hints []control.AdmissionPeerHint
+	for _, peer := range peers {
+		if peer == nil {
+			continue
+		}
+		clusterID := strings.TrimSpace(peer.GetClusterId())
+		addr := strings.TrimSpace(peer.GetFoghornGrpcAddr())
+		if clusterID == p.clusterID || control.IsServedCluster(clusterID) {
+			continue
+		}
+		if clusterID == "" || addr == "" {
+			p.logger.WithFields(logging.Fields{
+				"internal_name": internalName,
+				"peer_cluster":  clusterID,
+			}).Warn("Admission skips a peer cluster with no Foghorn address")
+			continue
+		}
+		role := strings.TrimSpace(peer.GetRole())
+		hints = append(hints, control.AdmissionPeerHint{
+			ClusterID:     clusterID,
+			Addr:          addr,
+			AlwaysOn:      role == "official" || role == "preferred",
+			ControlCellID: strings.TrimSpace(peer.GetControlCellId()),
+		})
+	}
+	return hints
 }
