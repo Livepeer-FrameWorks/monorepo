@@ -39,12 +39,21 @@ func TestMistControllerParentPIDsExcludesAngelChildren(t *testing.T) {
 	writeProc(200, 1, "MistController")
 	writeProc(201, 200, "MistController")
 	writeProc(300, 1, "frameworks")
+	writeProc(400, 1, "MistController")
+	foreignStatus := fmt.Sprintf("Name:\tMistController\nPPid:\t1\nUid:\t%d\t%d\t%d\t%d\n", os.Geteuid()+1, os.Geteuid()+1, os.Geteuid()+1, os.Geteuid()+1)
+	if err := os.WriteFile(filepath.Join(procRoot, "400", "status"), []byte(foreignStatus), 0o644); err != nil {
+		t.Fatal(err)
+	}
 
 	got, err := mistControllerParentPIDs(procRoot)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if want := []int{100, 200}; !slices.Equal(got, want) {
+	want := []int{100, 200}
+	if os.Geteuid() == 0 {
+		want = append(want, 400)
+	}
+	if !slices.Equal(got, want) {
 		t.Fatalf("parent PIDs = %v, want %v", got, want)
 	}
 }
