@@ -767,9 +767,12 @@ type PrepareArtifactResponse struct {
 	// Read URL for the published index matching a synced clip/VOD. The owning
 	// cluster signs its recorded, version-addressed key; consumers never derive
 	// it by appending a suffix to the signed media URL.
-	DtshUrl       string `protobuf:"bytes,19,opt,name=dtsh_url,json=dtshUrl,proto3" json:"dtsh_url,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	DtshUrl string `protobuf:"bytes,19,opt,name=dtsh_url,json=dtshUrl,proto3" json:"dtsh_url,omitempty"`
+	// For a stopped parent DVR: the playback ID of its latest playable chapter,
+	// which lives in the owner's catalog. Empty while none has finalized.
+	DvrLatestChapterPlaybackId string `protobuf:"bytes,20,opt,name=dvr_latest_chapter_playback_id,json=dvrLatestChapterPlaybackId,proto3" json:"dvr_latest_chapter_playback_id,omitempty"`
+	unknownFields              protoimpl.UnknownFields
+	sizeCache                  protoimpl.SizeCache
 }
 
 func (x *PrepareArtifactResponse) Reset() {
@@ -903,6 +906,13 @@ func (x *PrepareArtifactResponse) GetDvrRecordingNodeId() string {
 func (x *PrepareArtifactResponse) GetDtshUrl() string {
 	if x != nil {
 		return x.DtshUrl
+	}
+	return ""
+}
+
+func (x *PrepareArtifactResponse) GetDvrLatestChapterPlaybackId() string {
+	if x != nil {
+		return x.DvrLatestChapterPlaybackId
 	}
 	return ""
 }
@@ -3626,7 +3636,7 @@ const file_foghorn_federation_proto_rawDesc = "" +
 	"\x12requesting_cluster\x18\x03 \x01(\tR\x11requestingCluster\x12#\n" +
 	"\rartifact_type\x18\x04 \x01(\tR\fartifactType\x12\x1b\n" +
 	"\ttenant_id\x18\x05 \x01(\tR\btenantIdJ\x04\b\x06\x10\aJ\x04\b\a\x10\bR\fdvr_start_msR\n" +
-	"dvr_end_ms\"\x89\x06\n" +
+	"dvr_end_ms\"\xcd\x06\n" +
 	"\x17PrepareArtifactResponse\x12\x10\n" +
 	"\x03url\x18\x01 \x01(\tR\x03url\x12\x1d\n" +
 	"\n" +
@@ -3645,7 +3655,8 @@ const file_foghorn_federation_proto_rawDesc = "" +
 	"\n" +
 	"dvr_status\x18\x11 \x01(\tR\tdvrStatus\x121\n" +
 	"\x15dvr_recording_node_id\x18\x12 \x01(\tR\x12dvrRecordingNodeId\x12\x19\n" +
-	"\bdtsh_url\x18\x13 \x01(\tR\adtshUrl\x1a>\n" +
+	"\bdtsh_url\x18\x13 \x01(\tR\adtshUrl\x12B\n" +
+	"\x1edvr_latest_chapter_playback_id\x18\x14 \x01(\tR\x1advrLatestChapterPlaybackId\x1a>\n" +
 	"\x10SegmentUrlsEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
 	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01J\x04\b\x04\x10\x05J\x04\b\v\x10\fJ\x04\b\r\x10\x0eJ\x04\b\x0f\x10\x10R\x11est_ready_secondsR\fdvr_segmentsR\x10peer_relay_tokenR\x15peer_relay_dtsh_token\"\xe4\x03\n" +

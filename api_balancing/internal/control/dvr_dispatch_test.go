@@ -31,7 +31,7 @@ func TestDVRViewerDispatchResolvesOwnerStateWithExactIdentity(t *testing.T) {
 		revoked, wantError bool
 	}{
 		{name: "recording", response: &federationpb.PrepareArtifactResponse{Ready: true, DvrStatus: "recording", DvrRecordingNodeId: "origin-edge"}},
-		{name: "completed", response: &federationpb.PrepareArtifactResponse{DvrStatus: "completed"}},
+		{name: "completed", response: &federationpb.PrepareArtifactResponse{DvrStatus: "completed", DvrLatestChapterPlaybackId: "chapter-pb"}},
 		{name: "unready", response: &federationpb.PrepareArtifactResponse{DvrStatus: "recording"}, wantError: true},
 		{name: "wrong-parent", response: &federationpb.PrepareArtifactResponse{DvrStatus: "completed", StreamInternalName: "another-stream"}, wantError: true},
 		{name: "redirect", response: &federationpb.PrepareArtifactResponse{DvrStatus: "completed", RedirectClusterId: "elsewhere"}, wantError: true},
@@ -66,7 +66,8 @@ func TestDVRViewerDispatchResolvesOwnerStateWithExactIdentity(t *testing.T) {
 			if tc.revoked && calls != 0 {
 				t.Fatal("revoked owner contacted")
 			}
-			if !tc.wantError && (dispatch.Status != tc.response.DvrStatus || dispatch.InternalName != "recording" || dispatch.StreamInternalName != "parent") {
+			if !tc.wantError && (dispatch.Status != tc.response.DvrStatus || dispatch.InternalName != "recording" || dispatch.StreamInternalName != "parent" ||
+				dispatch.RemoteLatestChapterID != tc.response.DvrLatestChapterPlaybackId) {
 				t.Fatalf("owner state lost: %+v", dispatch)
 			}
 		})

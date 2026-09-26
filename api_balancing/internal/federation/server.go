@@ -713,12 +713,23 @@ func (s *FederationServer) PrepareArtifact(ctx context.Context, req *foghornfede
 		}
 		recordingStatus, recordingNode := recording.Status, recording.NodeID
 		active := control.IsActiveDVRStatus(recordingStatus)
+		latestChapter := ""
 		if !active {
 			recordingNode = ""
+			// A stopped recording plays its latest finalized chapter; the
+			// chapters are only in this cell's catalog.
+			chapter, chapterErr := foghorndb.New(s.db).LatestPlayableDVRChapterID(ctx, hash)
+			if chapterErr != nil && !errors.Is(chapterErr, sql.ErrNoRows) {
+				return nil, status.Error(codes.Unavailable, "recording chapters unavailable")
+			}
+			if chapter.Valid {
+				latestChapter = chapter.String
+			}
 		}
 		return &foghornfederationpb.PrepareArtifactResponse{
 			Ready: active && recordingNode != "", DvrStatus: recordingStatus, DvrRecordingNodeId: recordingNode,
 			InternalName: internalName, StreamInternalName: streamInternalName,
+			DvrLatestChapterPlaybackId: latestChapter,
 		}, nil
 	}
 

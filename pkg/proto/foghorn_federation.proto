@@ -221,6 +221,9 @@ message PrepareArtifactResponse {
   // cluster signs its recorded, version-addressed key; consumers never derive
   // it by appending a suffix to the signed media URL.
   string dtsh_url = 19;
+  // For a stopped parent DVR: the playback ID of its latest playable chapter,
+  // which lives in the owner's catalog. Empty while none has finalized.
+  string dvr_latest_chapter_playback_id = 20;
   reserved 13, 15;  // retired self-signed peer_relay_token / peer_relay_dtsh_token
   reserved "peer_relay_token", "peer_relay_dtsh_token";
 }

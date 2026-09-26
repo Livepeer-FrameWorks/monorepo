@@ -23,14 +23,18 @@ import (
 // in-flight recording. After finalize the field stays empty and callers
 // fall back to chapter-based playback against the segment ledger.
 type DVRArtifactDispatch struct {
-	DVRHash                     string
-	InternalName                string
-	StreamID                    string
-	StreamInternalName          string
-	PlaybackID                  string
-	TenantID                    string
-	Status                      string
-	RecordingNode               string
+	DVRHash            string
+	InternalName       string
+	StreamID           string
+	StreamInternalName string
+	PlaybackID         string
+	TenantID           string
+	Status             string
+	RecordingNode      string
+	// RemoteLatestChapterID is the latest playable chapter of a stopped DVR
+	// whose catalog is in another cell, as that cell reported it. Empty for a
+	// local DVR, whose chapters are read from this cell's catalog.
+	RemoteLatestChapterID       string
 	RequiresAuth                bool
 	AllowPlatformSharedPlayback bool
 	// ClusterPeers is the tenant's freshly-resolved cluster-peer envelope from
@@ -85,6 +89,7 @@ func ResolveDVRViewerDispatch(ctx context.Context, resolution *ContentResolution
 		return nil, errors.New("DVR recording state differs from signed identity")
 	}
 	dispatch.Status, dispatch.RecordingNode = resp.GetDvrStatus(), resp.GetDvrRecordingNodeId()
+	dispatch.RemoteLatestChapterID = resp.GetDvrLatestChapterPlaybackId()
 	if IsActiveDVRStatus(dispatch.Status) && (!resp.GetReady() || dispatch.RecordingNode == "") {
 		return nil, errors.New("DVR recording source unavailable")
 	}

@@ -406,6 +406,12 @@ func TestPrepareArtifact_DVRReturnsOwnerStateNotFileURLs(t *testing.T) {
 					AddRow("recording-name", "parent-name", "dvr", "m3u8", "local", "", 0, nil, "", false, ""))
 			mock.ExpectQuery(`(?s)WHERE a.tenant_id = \$1 AND a.artifact_hash = \$2`).WithArgs("tenant-a", "dvr-hash").
 				WillReturnRows(sqlmock.NewRows([]string{"status", "node"}).AddRow(lifecycle, "recording-node"))
+			if lifecycle == "completed" {
+				// A stopped DVR plays its latest chapter, which only this
+				// (owning) cell's catalog knows.
+				mock.ExpectQuery(`dvr_chapters`).WithArgs("dvr-hash").
+					WillReturnRows(sqlmock.NewRows([]string{"playback_id"}).AddRow("chapter-pb"))
+			}
 			srv := NewFederationServer(FederationServerConfig{AllowFederationMutations: true, Logger: logging.NewLogger(), DB: db})
 			resp, err := srv.PrepareArtifact(serviceAuthContext(), &foghornfederationpb.PrepareArtifactRequest{ArtifactId: "dvr-hash", ArtifactType: "dvr", TenantId: "tenant-a"})
 			if err != nil {
@@ -416,6 +422,9 @@ func TestPrepareArtifact_DVRReturnsOwnerStateNotFileURLs(t *testing.T) {
 			}
 			if lifecycle == "completed" && resp.GetDvrRecordingNodeId() != "" {
 				t.Fatal("completed DVR advertised an active source")
+			}
+			if want := map[string]string{"recording": "", "completed": "chapter-pb"}[lifecycle]; resp.GetDvrLatestChapterPlaybackId() != want {
+				t.Fatalf("latest chapter = %q, want %q", resp.GetDvrLatestChapterPlaybackId(), want)
 			}
 			if err := mock.ExpectationsWereMet(); err != nil {
 				t.Fatal(err)

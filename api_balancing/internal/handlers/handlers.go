@@ -2182,12 +2182,18 @@ func resolveDVRViewerEndpoint(ctx context.Context, req *sharedpb.ViewerEndpointR
 	if dispatch == nil || dispatch.DVRHash == "" || db == nil {
 		return nil, errDVRChaptersPending
 	}
-	pid, err := foghorndb.New(db).LatestPlayableDVRChapterID(ctx, dispatch.DVRHash)
-	if errors.Is(err, sql.ErrNoRows) || (err == nil && !pid.Valid) {
-		return nil, errDVRChaptersPending
-	}
-	if err != nil {
-		return nil, fmt.Errorf("stopped DVR chapter lookup: %w", err)
+	// A DVR owned by another cell has its chapters in that cell's catalog;
+	// the owner reported the latest playable one with the dispatch.
+	pid := sql.NullString{String: dispatch.RemoteLatestChapterID, Valid: dispatch.RemoteLatestChapterID != ""}
+	if !pid.Valid {
+		var err error
+		pid, err = foghorndb.New(db).LatestPlayableDVRChapterID(ctx, dispatch.DVRHash)
+		if errors.Is(err, sql.ErrNoRows) || (err == nil && !pid.Valid) {
+			return nil, errDVRChaptersPending
+		}
+		if err != nil {
+			return nil, fmt.Errorf("stopped DVR chapter lookup: %w", err)
+		}
 	}
 	chapterResolution, err := control.ResolveContent(ctx, pid.String)
 	if err != nil || chapterResolution == nil {
