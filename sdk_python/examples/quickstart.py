@@ -21,7 +21,7 @@ def main() -> None:
             return fw.list_streams(page=ConnectionInput.model_validate(request)).streams_connection
 
         for s in paginate_relay(page, page_size=50):
-            print(s.name, s.metrics.is_live if s.metrics else False)
+            print(s.name, s.playback_id)
 
 
 if __name__ == "__main__":

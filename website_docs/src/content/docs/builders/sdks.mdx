@@ -109,6 +109,18 @@ Around the operations, each SDK has the same small runtime:
   language: `NetworkError`, `AuthenticationError`, `PaymentRequiredError`, `RateLimitError`,
   `ServerError`, `HTTPError`, `ProtocolError`, `GraphQLError`, `SchemaMismatchError`,
   `ResultError`, `ServerTooOldError`, `UnsupportedOperationError`, and `UploadError`.
+- **Partial results.** A response whose errors all sit below a root field that came back (a
+  nullable field the server set to `null`, such as `Stream.metrics` for a token without
+  `analytics:read`) returns its data, and the errors go to a handler: `onPartialErrors` on the
+  client or per request in TypeScript, `ClientOptions.OnPartialErrors` or
+  `frameworks.WithPartialErrors(ctx, fn)` in Go, and `on_partial_errors=` on the client or per
+  call in Python. `UNAUTHORIZED`, `RATE_LIMITED`, document errors, errors without a path, and
+  errors that null a root field still fail the call. See
+  [Partial results](/builders/api-reference#partial-results).
+- **Scopes.** The stream operations (`ListStreams`, `GetStream`, `CreateStream`, `UpdateStream`,
+  `RefreshStreamKey`) need only `streams:read` and `streams:write`. Live state is in
+  `GetStreamMetrics` and `ListStreamMetrics`, which need `analytics:read`. See
+  [Token scopes](/builders/api-reference#token-scopes).
 - **Result unions.** Most mutations return a union of the result and typed errors.
   `expectResult` returns the result or raises a `ResultError` naming the error member, its
   message, and the input field or resource it concerns.

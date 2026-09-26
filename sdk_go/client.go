@@ -37,6 +37,10 @@ type ClientOptions struct {
 	// DisableServerCheck skips the serverInfo check. With it set, the client
 	// never returns ServerTooOldError or UnsupportedOperationError.
 	DisableServerCheck bool
+	// OnPartialErrors, when set, receives the field errors of every call that
+	// still returned its data (see PartialErrors). WithPartialErrors sets a
+	// handler for one call.
+	OnPartialErrors func(ctx context.Context, partial PartialErrors)
 }
 
 // Client runs the generated operations: pass it as the graphql.Client of
@@ -49,6 +53,7 @@ type Client struct {
 	headers     map[string]string
 	retry       RetryPolicy
 	checkServer bool
+	onPartial   func(ctx context.Context, partial PartialErrors)
 
 	// Test hooks.
 	sleep          func(ctx context.Context, d time.Duration) error
@@ -71,6 +76,7 @@ func NewClient(opts ClientOptions) (*Client, error) {
 		headers:     opts.Headers,
 		retry:       DefaultRetryPolicy,
 		checkServer: !opts.DisableServerCheck,
+		onPartial:   opts.OnPartialErrors,
 		sleep:       sleepContext,
 		now:         time.Now,
 	}
@@ -94,6 +100,7 @@ type ctxKey int
 const (
 	ctxIdempotencyKey ctxKey = iota
 	ctxHeaders
+	ctxPartialErrors
 )
 
 // WithIdempotencyKey sends key as Idempotency-Key with requests made with
@@ -115,6 +122,27 @@ func WithHeader(ctx context.Context, name, value string) context.Context {
 	}
 	next[name] = value
 	return context.WithValue(ctx, ctxHeaders, next)
+}
+
+// WithPartialErrors calls handle with the field errors of a call made with
+// the returned context when the call still returns its data (see
+// PartialErrors). The call itself returns no error in that case.
+func WithPartialErrors(ctx context.Context, handle func(PartialErrors)) context.Context {
+	return context.WithValue(ctx, ctxPartialErrors, handle)
+}
+
+// reportPartial hands the field errors of a successful call to the handlers.
+func (c *Client) reportPartial(ctx context.Context, name string, entries []GraphQLErrorEntry) {
+	if len(entries) == 0 {
+		return
+	}
+	partial := PartialErrors{Operation: name, Errors: entries}
+	if handle, ok := ctx.Value(ctxPartialErrors).(func(PartialErrors)); ok && handle != nil {
+		handle(partial)
+	}
+	if c.onPartial != nil {
+		c.onPartial(ctx, partial)
+	}
 }
 
 // WithPlaybackToken sends a viewer's playback JWT as
@@ -201,11 +229,12 @@ func (c *Client) send(ctx context.Context, kind, name, query string, variables a
 		return nil, fmt.Errorf("frameworks: encoding %s: %w", name, err)
 	}
 	for attempt := 1; ; attempt++ {
-		data, failure, retryable, unsent, err := c.attempt(ctx, body, idempotencyKey)
+		data, partial, failure, retryable, unsent, err := c.attempt(ctx, body, idempotencyKey)
 		if err != nil {
 			return nil, err
 		}
 		if failure == nil {
+			c.reportPartial(ctx, name, partial)
 			return data, nil
 		}
 		mayRetry := retryable
@@ -285,12 +314,13 @@ func failedBeforeSend(err error) bool {
 }
 
 // attempt sends one HTTP request. err is set only when the caller's context
-// ended; every other failure is returned as failure. retryable says a query
-// may be sent again; unsent says the request never reached the server.
-func (c *Client) attempt(ctx context.Context, body []byte, idempotencyKey string) (data json.RawMessage, failure Error, retryable, unsent bool, err error) {
+// ended; every other failure is returned as failure. partial holds the field
+// errors of a response whose data survived them. retryable says a query may
+// be sent again; unsent says the request never reached the server.
+func (c *Client) attempt(ctx context.Context, body []byte, idempotencyKey string) (data json.RawMessage, partial []GraphQLErrorEntry, failure Error, retryable, unsent bool, err error) {
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, c.url, bytes.NewReader(body))
 	if err != nil {
-		return nil, nil, false, false, fmt.Errorf("frameworks: building request: %w", err)
+		return nil, nil, nil, false, false, fmt.Errorf("frameworks: building request: %w", err)
 	}
 	// Transport treats Idempotency-Key as permission to replay a POST after
 	// connection loss. Only send's operation-aware policy may retry this body.
@@ -307,7 +337,7 @@ func (c *Client) attempt(ctx context.Context, body []byte, idempotencyKey string
 	}
 	token, err := c.resolveToken(ctx)
 	if err != nil {
-		return nil, nil, false, false, fmt.Errorf("frameworks: token: %w", err)
+		return nil, nil, nil, false, false, fmt.Errorf("frameworks: token: %w", err)
 	}
 	if token != "" {
 		httpReq.Header.Set("Authorization", "Bearer "+token)
@@ -318,20 +348,20 @@ func (c *Client) attempt(ctx context.Context, body []byte, idempotencyKey string
 	res, err := c.httpClient.Do(httpReq)
 	if err != nil {
 		if ctx.Err() != nil {
-			return nil, nil, false, false, ctx.Err()
+			return nil, nil, nil, false, false, ctx.Err()
 		}
-		return nil, &NetworkError{ErrorInfo{Message: fmt.Sprintf("request to %s failed: %v", c.url, err), Cause: err}}, true, failedBeforeSend(err), nil
+		return nil, nil, &NetworkError{ErrorInfo{Message: fmt.Sprintf("request to %s failed: %v", c.url, err), Cause: err}}, true, failedBeforeSend(err), nil
 	}
 	defer func() { _ = res.Body.Close() }()
 	text, err := io.ReadAll(res.Body)
 	if err != nil {
 		if ctx.Err() != nil {
-			return nil, nil, false, false, ctx.Err()
+			return nil, nil, nil, false, false, ctx.Err()
 		}
-		return nil, &NetworkError{ErrorInfo{Message: fmt.Sprintf("reading the response from %s failed: %v", c.url, err), Cause: err}}, true, false, nil
+		return nil, nil, &NetworkError{ErrorInfo{Message: fmt.Sprintf("reading the response from %s failed: %v", c.url, err), Cause: err}}, true, false, nil
 	}
-	data, failure, retryable = classify(res.StatusCode, res.Header.Get("Retry-After"), text)
-	return data, failure, retryable, false, nil
+	data, partial, failure, retryable = classify(res.StatusCode, res.Header.Get("Retry-After"), text)
+	return data, partial, failure, retryable, false, nil
 }
 
 type responseBody struct {
@@ -339,13 +369,15 @@ type responseBody struct {
 	Errors []GraphQLErrorEntry `json:"errors"`
 }
 
-// classify turns one HTTP response into data or a typed error.
-func classify(status int, retryAfterHeader string, text []byte) (json.RawMessage, Error, bool) {
+// classify turns one HTTP response into data or a typed error. A 2xx
+// response whose errors are all field errors that left its data usable
+// (fieldErrorsOnly) returns the data with those errors as partial.
+func classify(status int, retryAfterHeader string, text []byte) (data json.RawMessage, partial []GraphQLErrorEntry, failure Error, retryable bool) {
 	var retryAfter *int
 	if n, ok := parseRetryAfter(retryAfterHeader, time.Now()); ok {
 		retryAfter = &n
 	}
-	retryable := retryableStatus(status)
+	retryable = retryableStatus(status)
 	is2xx := status >= 200 && status < 300
 
 	var obj map[string]json.RawMessage
@@ -360,24 +392,67 @@ func classify(status int, retryAfterHeader string, text []byte) (json.RawMessage
 	if isObject {
 		var parsed responseBody
 		if json.Unmarshal(text, &parsed) == nil && len(parsed.Errors) > 0 {
+			if is2xx && fieldErrorsOnly(parsed.Data, parsed.Errors) {
+				return parsed.Data, parsed.Errors, nil, false
+			}
 			var httpStatus *int
 			if !is2xx {
 				httpStatus = intPtr(status)
 			}
-			return nil, graphQLError(parsed.Errors, parsed.Data, httpStatus, retryAfter, body), retryable
+			return nil, nil, graphQLError(parsed.Errors, parsed.Data, httpStatus, retryAfter, body), retryable
 		}
 	}
 	if !is2xx {
-		return nil, httpError(status, obj, text, retryAfter, body), retryable
+		return nil, nil, httpError(status, obj, text, retryAfter, body), retryable
 	}
 	if !isObject {
-		return nil, &ProtocolError{ErrorInfo{Message: fmt.Sprintf("response is not JSON (HTTP %d)", status), Status: intPtr(status), Body: string(text)}}, false
+		return nil, nil, &ProtocolError{ErrorInfo{Message: fmt.Sprintf("response is not JSON (HTTP %d)", status), Status: intPtr(status), Body: string(text)}}, false
 	}
 	data, ok := obj["data"]
 	if !ok || string(data) == "null" {
-		return nil, &ProtocolError{ErrorInfo{Message: fmt.Sprintf("response has no data (HTTP %d)", status), Status: intPtr(status), Body: body}}, false
+		return nil, nil, &ProtocolError{ErrorInfo{Message: fmt.Sprintf("response has no data (HTTP %d)", status), Status: intPtr(status), Body: body}}, false
 	}
-	return data, nil, false
+	return data, nil, nil, false
+}
+
+// fieldErrorsOnly reports whether every GraphQL error is a field error that
+// left the response's data usable: it has a path below a root field whose
+// value is not null, and it is not an authentication, rate-limit, or
+// document error. GraphQL sets a failed field to null and carries the null up
+// to the nearest nullable ancestor, so data that passes still matches the
+// operation's types. An error without a path, or one that nulled a root
+// field, fails the call.
+func fieldErrorsOnly(data json.RawMessage, entries []GraphQLErrorEntry) bool {
+	var roots map[string]json.RawMessage
+	if json.Unmarshal(data, &roots) != nil || roots == nil {
+		return false
+	}
+	for _, e := range entries {
+		if code, isString := e.Extensions["code"].(string); isString && fatalCodes[code] {
+			return false
+		}
+		if len(e.Path) < 2 {
+			return false
+		}
+		root, ok := e.Path[0].(string)
+		if !ok {
+			return false
+		}
+		value, ok := roots[root]
+		if !ok || string(bytes.TrimSpace(value)) == "null" {
+			return false
+		}
+	}
+	return true
+}
+
+// fatalCodes are the extensions.code values that fail a call wherever they
+// appear.
+var fatalCodes = map[string]bool{
+	"UNAUTHORIZED":              true,
+	"RATE_LIMITED":              true,
+	"GRAPHQL_VALIDATION_FAILED": true,
+	"GRAPHQL_PARSE_FAILED":      true,
 }
 
 func jsonString(obj map[string]json.RawMessage, key string) string {

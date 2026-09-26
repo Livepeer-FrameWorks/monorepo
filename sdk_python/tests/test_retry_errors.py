@@ -7,7 +7,7 @@ from typing import Any
 import pytest
 
 from conftest import Scripted, error_mismatches, load_fixture
-from livepeer_frameworks import AsyncFrameWorksClient, FrameWorksClient, RetryPolicy, expect_result
+from livepeer_frameworks import AsyncFrameWorksClient, FrameWorksClient, PartialErrors, RetryPolicy, expect_result
 
 RETRY = load_fixture("retry.json")
 ERRORS = load_fixture("errors.json")
@@ -81,7 +81,13 @@ async def test_retry_async(case: dict[str, Any]) -> None:
     _check_retry(case, outcome, scripted, delays)
 
 
-def _check_error_case(case: dict[str, Any], data: Any, err: BaseException | None) -> None:
+def _check_error_case(
+    case: dict[str, Any],
+    data: Any,
+    err: BaseException | None,
+    call_seen: list[PartialErrors],
+    client_seen: list[PartialErrors],
+) -> None:
     if err is None and "expectResult" in case:
         try:
             data = expect_result(data[case["expectResult"]["field"]], *case["expectResult"]["success"])
@@ -90,42 +96,52 @@ def _check_error_case(case: dict[str, Any], data: Any, err: BaseException | None
     if "error" in case:
         assert err is not None, f"call succeeded with {data!r}"
         assert error_mismatches(err, case["error"]) == []
+        assert call_seen == [] and client_seen == []
     else:
         assert err is None
         assert data == case["result"]
+        expected = [PartialErrors("ErrorProbe", case["partialErrors"])] if "partialErrors" in case else []
+        assert call_seen == expected
+        assert client_seen == expected
 
 
 @pytest.mark.parametrize("case", ERRORS["cases"], ids=lambda c: c["name"])
 def test_error_shapes_sync(case: dict[str, Any]) -> None:
     scripted = Scripted({"*": [case["response"]]})
+    call_seen: list[PartialErrors] = []
+    client_seen: list[PartialErrors] = []
     client = FrameWorksClient(
         "https://errors.test/graphql",
         http_client=scripted.sync_client(),
         retry=RetryPolicy(max_attempts=1),
         check_server=False,
+        on_partial_errors=client_seen.append,
     )
     data: Any = None
     err: BaseException | None = None
     try:
-        data = client.get_data(client.execute("query ErrorProbe { a }"))
+        data = client.get_data(client.execute("query ErrorProbe { a }", on_partial_errors=call_seen.append))
     except Exception as e:  # noqa: BLE001
         err = e
-    _check_error_case(case, data, err)
+    _check_error_case(case, data, err, call_seen, client_seen)
 
 
 @pytest.mark.parametrize("case", ERRORS["cases"], ids=lambda c: c["name"])
 async def test_error_shapes_async(case: dict[str, Any]) -> None:
     scripted = Scripted({"*": [case["response"]]})
+    call_seen: list[PartialErrors] = []
+    client_seen: list[PartialErrors] = []
     client = AsyncFrameWorksClient(
         "https://errors.test/graphql",
         http_client=scripted.async_client(),
         retry=RetryPolicy(max_attempts=1),
         check_server=False,
+        on_partial_errors=client_seen.append,
     )
     data: Any = None
     err: BaseException | None = None
     try:
-        data = client.get_data(await client.execute("query ErrorProbe { a }"))
+        data = client.get_data(await client.execute("query ErrorProbe { a }", on_partial_errors=call_seen.append))
     except Exception as e:  # noqa: BLE001
         err = e
-    _check_error_case(case, data, err)
+    _check_error_case(case, data, err, call_seen, client_seen)

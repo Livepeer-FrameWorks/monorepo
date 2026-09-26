@@ -5,6 +5,7 @@ with the TypeScript and Go SDKs."""
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
 from typing import Any
 
 
@@ -62,6 +63,20 @@ class ServerError(FrameWorksError):
 
 class ProtocolError(FrameWorksError):
     """The response was not a GraphQL response: not JSON, or neither data nor errors."""
+
+
+@dataclass(frozen=True)
+class PartialErrors:
+    """The GraphQL errors of a call that still returned its data: each failed
+    a field below a root field that came back, which the server set to None
+    (for example Stream.metrics for an API token without analytics:read). The
+    call returns its data; these reach the on_partial_errors handler of the
+    call or the client. Errors without a path, errors that null a root field,
+    and UNAUTHORIZED, RATE_LIMITED, and document errors raise instead."""
+
+    #: The operation name, or None for an anonymous document.
+    operation_name: str | None
+    errors: list[Mapping[str, Any]]
 
 
 class GraphQLError(FrameWorksError):

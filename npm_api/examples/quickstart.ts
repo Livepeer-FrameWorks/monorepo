@@ -33,5 +33,5 @@ const streams = paginateRelay(
   { pageSize: 50 }
 );
 for await (const stream of streams) {
-  console.log(stream.name, stream.metrics?.isLive ? "live" : "offline");
+  console.log(stream.name, stream.playbackId);
 }

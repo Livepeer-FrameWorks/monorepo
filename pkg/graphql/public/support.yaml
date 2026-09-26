@@ -7,8 +7,14 @@
 # make verify-api-compat validates them against every such release.
 #
 # docs/standards/graphql-deprecation.md is the policy these lines enforce.
-current: "0.3"
+current: "0.4"
 lines:
+  # 0.4 drops Stream.metrics from the shared stream selection, so stream
+  # operations need only the streams:* scopes; live state moves to
+  # GetStreamMetrics and ListStreamMetrics (analytics:read).
+  - line: "0.4"
+    status: live
+    min_server: v0.3.11
   # 0.3 is the first line generated from the whole public schema (a default
   # operation per public root and argument field); the schema compatibility
   # gate enforces from its min_server on.

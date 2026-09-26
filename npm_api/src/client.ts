@@ -4,7 +4,13 @@ import { getOperationAST, parse } from "graphql";
 import { ServerInfoDocument } from "./generated/graphql.js";
 import { minServerVersion, operations } from "./generated/manifest.js";
 import { defaultRetryPolicy, defaultSleep, type RetryPolicy, type Sleep } from "./retry.js";
-import { SchemaMismatchError, ServerTooOldError, UnsupportedOperationError } from "./errors.js";
+import {
+  type GraphQLErrorEntry,
+  type PartialErrors,
+  SchemaMismatchError,
+  ServerTooOldError,
+  UnsupportedOperationError,
+} from "./errors.js";
 import {
   checkMinimum,
   checkOperation,
@@ -38,6 +44,12 @@ export interface ClientOptions {
    * ServerTooOldError or UnsupportedOperationError.
    */
   checkServer?: boolean;
+  /**
+   * Receives the field errors of every call that still returned its data
+   * (see PartialErrors). RequestOptions.onPartialErrors sets a handler for
+   * one call.
+   */
+  onPartialErrors?: (partial: PartialErrors) => void;
 }
 
 export interface RequestOptions {
@@ -56,6 +68,11 @@ export interface RequestOptions {
   idempotencyKey?: string;
   /** A viewer's playback JWT, sent as X-Frameworks-Playback-JWT (resolveViewerEndpoint). */
   playbackToken?: string;
+  /**
+   * Receives the field errors of this call when it still returns its data
+   * (see PartialErrors); the call resolves with that data.
+   */
+  onPartialErrors?: (partial: PartialErrors) => void;
 }
 
 type VariablesArgs<TVariables> =
@@ -228,6 +245,11 @@ export function createClientWith(
       if (requestOptions.playbackToken) {
         headers["x-frameworks-playback-jwt"] = requestOptions.playbackToken;
       }
+      const onPartialErrors = (errors: ReadonlyArray<GraphQLErrorEntry>) => {
+        const partial: PartialErrors = { operationName: op.name, errors };
+        requestOptions.onPartialErrors?.(partial);
+        options.onPartialErrors?.(partial);
+      };
       const run = () =>
         send(config, {
           kind: op.kind,
@@ -237,6 +259,7 @@ export function createClientWith(
           headers,
           idempotencyKey: requestOptions.idempotencyKey,
           signal: requestOptions.signal,
+          onPartialErrors,
         }) as Promise<TResult>;
 
       if (!checkServer || op.name === "ServerInfo") {

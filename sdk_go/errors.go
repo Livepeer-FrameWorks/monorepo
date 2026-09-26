@@ -103,6 +103,19 @@ type GraphQLError struct {
 
 func (*GraphQLError) Kind() string { return "GraphQLError" }
 
+// PartialErrors are the GraphQL errors of a call that still returned its
+// data: each failed a field below a root field that came back, which the
+// server set to null (for example Stream.metrics for an API token without
+// analytics:read). The call returns its data and no error; these reach the
+// handler set by WithPartialErrors or ClientOptions.OnPartialErrors. Errors
+// without a path, errors that null a root field, and UNAUTHORIZED,
+// RATE_LIMITED, and document errors fail the call instead.
+type PartialErrors struct {
+	// Operation is the operation name.
+	Operation string
+	Errors    []GraphQLErrorEntry
+}
+
 // SchemaMismatchError means the server rejected the document itself
 // (GRAPHQL_VALIDATION_FAILED or GRAPHQL_PARSE_FAILED): it does not know a
 // field or argument this SDK sends. errors.As also matches it as a

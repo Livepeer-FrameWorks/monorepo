@@ -40,13 +40,18 @@ fragment StreamFields on Stream {
   playbackPolicy {
     ...PlaybackPolicyFields
   }
-  metrics {
-    status
-    isLive
-    currentViewers
-    startedAt
-    updatedAt
-  }
+}
+
+fragment StreamMetricsFields on StreamMetrics {
+  status
+  isLive
+  currentViewers
+  startedAt
+  updatedAt
+  bufferState
+  qualityTier
+  hasIssues
+  issuesDescription
 }
 
 fragment StreamKeyFields on StreamKey {
