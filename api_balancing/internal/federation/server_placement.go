@@ -69,17 +69,19 @@ func (s *FederationServer) PreparePlacement(ctx context.Context, req *placementp
 }
 
 // placementRPCError returns a status the calling cell can act on. The
-// federation interceptor reduces any plain error to an anonymous internal
-// error, so a runtime failure is logged here with the request it refused and
-// mapped to a status: a source pull that cannot be arranged is retryable.
+// federation interceptor sanitizes status messages and reduces any plain error
+// to an anonymous internal error, so every refusal is logged here with the
+// request it refused; the calling cell only sees the code. A source pull that
+// cannot be arranged is retryable.
 func (s *FederationServer) placementRPCError(op, tenantID, internalName, clusterID, nodeID string, err error) error {
-	if _, isStatus := status.FromError(err); isStatus {
-		return err
-	}
 	if s.logger != nil {
 		s.logger.WithError(err).WithFields(logging.Fields{
 			"op": op, "tenant_id": tenantID, "internal_name": internalName, "cluster_id": clusterID, "node_id": nodeID,
+			"code": status.Code(err).String(),
 		}).Warn("Federation placement request failed")
+	}
+	if _, isStatus := status.FromError(err); isStatus {
+		return err
 	}
 	if IsArrangeInfraError(err) {
 		return status.Error(codes.Unavailable, "source pull cannot be arranged")
