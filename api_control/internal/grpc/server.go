@@ -6565,6 +6565,9 @@ func (s *CommodoreServer) CreateStream(ctx context.Context, req *commodorepb.Cre
 	if err != nil {
 		return nil, err
 	}
+	if permissionErr := requireTenantStreamPermission(ctx, "streams:write"); permissionErr != nil {
+		return nil, permissionErr
+	}
 
 	// Check if tenant is suspended (prepaid balance < -$10)
 	if suspended, suspendErr := s.isTenantSuspended(ctx, tenantID); suspendErr != nil {
@@ -6793,13 +6796,21 @@ func (s *CommodoreServer) GetStream(ctx context.Context, req *commodorepb.GetStr
 	if err != nil {
 		return nil, err
 	}
+	if permissionErr := requireTenantStreamPermission(ctx, "streams:read"); permissionErr != nil {
+		return nil, permissionErr
+	}
 
 	streamID := req.GetStreamId()
 	if streamID == "" {
 		return nil, status.Error(codes.InvalidArgument, "stream_id required")
 	}
 
-	return s.queryStream(ctx, streamID, userID, tenantID)
+	stream, err := s.queryStream(ctx, streamID, userID, tenantID)
+	if err != nil {
+		return nil, err
+	}
+	redactStreamKeysForCaller(ctx, stream)
+	return stream, nil
 }
 
 // ListStreams returns all streams for the authenticated user with keyset pagination
@@ -6807,6 +6818,9 @@ func (s *CommodoreServer) ListStreams(ctx context.Context, req *commodorepb.List
 	userID, tenantID, err := extractUserContext(ctx)
 	if err != nil {
 		return nil, err
+	}
+	if permissionErr := requireTenantStreamPermission(ctx, "streams:read"); permissionErr != nil {
+		return nil, permissionErr
 	}
 
 	// Parse bidirectional pagination
@@ -6933,6 +6947,7 @@ func (s *CommodoreServer) ListStreams(ctx context.Context, req *commodorepb.List
 	if err := s.attachStreamSourceLocations(ctx, tenantID, streams); err != nil {
 		return nil, err
 	}
+	redactStreamKeysForCaller(ctx, streams...)
 
 	// Build cursors from results
 	var startCursor, endCursor string
@@ -6972,6 +6987,9 @@ func (s *CommodoreServer) UpdateStream(ctx context.Context, req *commodorepb.Upd
 	userID, tenantID, err := extractUserContext(ctx)
 	if err != nil {
 		return nil, err
+	}
+	if permissionErr := requireTenantStreamPermission(ctx, "streams:write"); permissionErr != nil {
+		return nil, permissionErr
 	}
 
 	streamID := req.GetStreamId()
@@ -7276,6 +7294,9 @@ func (s *CommodoreServer) DeleteStream(ctx context.Context, req *commodorepb.Del
 	if err != nil {
 		return nil, err
 	}
+	if permissionErr := requireTenantStreamPermission(ctx, "streams:write"); permissionErr != nil {
+		return nil, permissionErr
+	}
 
 	streamID := req.GetStreamId()
 	if streamID == "" {
@@ -7491,6 +7512,9 @@ func (s *CommodoreServer) RefreshStreamKey(ctx context.Context, req *commodorepb
 	if err != nil {
 		return nil, err
 	}
+	if permissionErr := requireTenantStreamPermission(ctx, "streams:write"); permissionErr != nil {
+		return nil, permissionErr
+	}
 
 	streamID := req.GetStreamId()
 	if streamID == "" {
@@ -7575,6 +7599,9 @@ func (s *CommodoreServer) CreateStreamKey(ctx context.Context, req *commodorepb.
 	if err != nil {
 		return nil, err
 	}
+	if permissionErr := requireTenantStreamPermission(ctx, "streams:write"); permissionErr != nil {
+		return nil, permissionErr
+	}
 
 	streamID := req.GetStreamId()
 	if streamID == "" {
@@ -7631,6 +7658,11 @@ func (s *CommodoreServer) ListStreamKeys(ctx context.Context, req *commodorepb.L
 	userID, tenantID, err := extractUserContext(ctx)
 	if err != nil {
 		return nil, err
+	}
+	// Stream keys are publishing credentials, so listing them is a write-scope
+	// operation even though it changes nothing.
+	if permissionErr := requireTenantStreamPermission(ctx, "streams:write"); permissionErr != nil {
+		return nil, permissionErr
 	}
 
 	streamID := req.GetStreamId()
@@ -7753,6 +7785,9 @@ func (s *CommodoreServer) DeactivateStreamKey(ctx context.Context, req *commodor
 	userID, tenantID, err := extractUserContext(ctx)
 	if err != nil {
 		return nil, err
+	}
+	if permissionErr := requireTenantStreamPermission(ctx, "streams:write"); permissionErr != nil {
+		return nil, permissionErr
 	}
 
 	queries := commodoredb.New(s.db)
@@ -8779,6 +8814,9 @@ func (s *CommodoreServer) GetStreamsBatch(ctx context.Context, req *commodorepb.
 	if err != nil {
 		return nil, err
 	}
+	if permissionErr := requireTenantStreamPermission(ctx, "streams:read"); permissionErr != nil {
+		return nil, permissionErr
+	}
 
 	streamIDs := req.GetStreamIds()
 	if len(streamIDs) == 0 {
@@ -8814,6 +8852,7 @@ func (s *CommodoreServer) GetStreamsBatch(ctx context.Context, req *commodorepb.
 	if err := s.attachStreamSourceLocations(ctx, tenantID, streams); err != nil {
 		return nil, err
 	}
+	redactStreamKeysForCaller(ctx, streams...)
 	return &commodorepb.GetStreamsBatchResponse{Streams: streams}, nil
 }
 
@@ -9001,6 +9040,20 @@ func requireTenantStreamPermission(ctx context.Context, requiredPermission strin
 		return status.Errorf(codes.PermissionDenied, "API token requires %s scope", requiredPermission)
 	}
 	return nil
+}
+
+// redactStreamKeysForCaller clears the publishing key from streams returned to
+// an API token without streams:write. A stream key lets its holder publish to
+// the stream, so it is a write credential, not readable stream metadata.
+func redactStreamKeysForCaller(ctx context.Context, streams ...*commodorepb.Stream) {
+	if requireTenantStreamPermission(ctx, "streams:write") == nil {
+		return
+	}
+	for _, stream := range streams {
+		if stream != nil {
+			stream.StreamKey = ""
+		}
+	}
 }
 
 func extractInteractiveUserContext(ctx context.Context) (userID, tenantID string, err error) {
@@ -9836,12 +9889,7 @@ func stripSensitiveIngestMetadata(md *sharedpb.IngestMetadata) {
 const privateNodeAccessDenied = "private infrastructure access denied"
 
 func hasDelegatedPermission(permissions []string, required string) bool {
-	for _, permission := range permissions {
-		if strings.TrimSpace(permission) == required {
-			return true
-		}
-	}
-	return false
+	return auth.PermissionGranted(permissions, required)
 }
 
 func requireNodeAction(ctx context.Context, tenantID, permission string, action authz.Action) error {

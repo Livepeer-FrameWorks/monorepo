@@ -6,6 +6,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/auth"
 	"net/http"
 	"strings"
 	"sync"
@@ -73,7 +74,9 @@ func TestAuthorizeMCPToolUsesExistingTokenScopes(t *testing.T) {
 		tool     string
 		wantDeny bool
 	}{
-		{name: "matching API scope", ctx: apiToken, tool: "list_stream_keys"},
+		{name: "matching API scope", ctx: apiToken, tool: "list_push_targets"},
+		{name: "stream keys need streams:write", ctx: apiToken, tool: "list_stream_keys", wantDeny: true},
+		{name: "stream keys with streams:write", ctx: context.WithValue(apiToken, ctxkeys.KeyPermissions, []string{"streams:write"}), tool: "list_stream_keys"},
 		{name: "missing API scope", ctx: apiToken, tool: "create_stream", wantDeny: true},
 		{name: "interactive user", ctx: jwt, tool: "create_stream"},
 		{name: "anonymous public tool", ctx: context.Background(), tool: "browse_marketplace"},
@@ -119,7 +122,8 @@ func TestAuthorizeMCPPlacementScopesRolesAndApplyGrant(t *testing.T) {
 					if !strings.HasPrefix(policy.Scope, "placement:") {
 						continue
 					}
-					want := scope == policy.Scope && (scope == "placement:read" || role == "owner" || role == "admin") && (policy.Risk != tools.ToolRiskHigh || highRisk)
+					// A resource's write scope includes its read scope.
+					want := auth.PermissionGranted([]string{scope}, policy.Scope) && (policy.Scope == "placement:read" || role == "owner" || role == "admin") && (policy.Risk != tools.ToolRiskHigh || highRisk)
 					if err := authorizeMCPTool(ctx, name); (err == nil) != want {
 						t.Fatalf("tool=%s role=%s scope=%s grant=%v allowed=%v want=%v: %v", name, role, scope, highRisk, err == nil, want, err)
 					}
@@ -267,6 +271,7 @@ func TestFilterToolsByPolicyOnlyPublishesCallableTools(t *testing.T) {
 	ctx := context.WithValue(context.Background(), ctxkeys.KeyAuthType, "api_token")
 	ctx = context.WithValue(ctx, ctxkeys.KeyPermissions, []string{"streams:read"})
 	result := &mcp.ListToolsResult{Tools: []*mcp.Tool{
+		{Name: "list_push_targets"},
 		{Name: "list_stream_keys"},
 		{Name: "create_stream"},
 		{Name: "browse_marketplace"},
@@ -274,7 +279,7 @@ func TestFilterToolsByPolicyOnlyPublishesCallableTools(t *testing.T) {
 	}}
 
 	filtered := filterToolsByPolicy(ctx, result).(*mcp.ListToolsResult)
-	if len(filtered.Tools) != 1 || filtered.Tools[0].Name != "list_stream_keys" {
+	if len(filtered.Tools) != 1 || filtered.Tools[0].Name != "list_push_targets" {
 		t.Fatalf("filtered tools = %#v", filtered.Tools)
 	}
 }

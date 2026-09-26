@@ -1,7 +1,11 @@
+# Creating a stream needs streams:write, which also reads the new publishing key.
 mutation CreateStream($input: CreateStreamInput!) {
   createStream(input: $input) {
     __typename
     ...StreamFields
+    ... on Stream {
+      streamKey
+    }
     ...ValidationErrorFields
     ...AuthErrorFields
   }
@@ -30,6 +34,9 @@ mutation RefreshStreamKey($id: ID!) {
   refreshStreamKey(id: $id) {
     __typename
     ...StreamFields
+    ... on Stream {
+      streamKey
+    }
     ...ValidationErrorFields
     ...NotFoundErrorFields
     ...AuthErrorFields

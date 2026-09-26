@@ -17,7 +17,8 @@ in most integrations:
 | `playbackId` | Public viewer identifier for `/play` and Player | Yes             |
 
 Use `streamKey` only where media is being uploaded. Use `playbackId` everywhere viewers need to
-watch.
+watch. An API token reads `streamKey` only with the `streams:write` scope; see
+[Token scopes](/builders/api-reference#token-scopes).
 
 ## Stream Types
 

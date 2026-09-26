@@ -68,7 +68,10 @@ func buildToolPolicies() map[string]ToolPolicy {
 	add("billing:write", ToolRiskHigh, "reset_asset_retention")
 	add("streams:read", ToolRiskRead,
 		"get_vod_upload_status", "list_push_targets", "list_signing_keys",
-		"list_stream_keys", "resolve_playback_endpoint", "test_playback_access", "validate_stream_key")
+		"resolve_playback_endpoint", "test_playback_access", "validate_stream_key")
+	// Stream keys are publishing credentials: Commodore lists them only to
+	// streams:write, even though this tool redacts the key values.
+	add("streams:write", ToolRiskRead, "list_stream_keys")
 	add("streams:write", ToolRiskWrite,
 		"complete_vod_upload", "create_clip", "create_push_target", "create_stream", "create_vod_upload",
 		"import_vod_asset", "start_dvr", "stop_dvr", "update_push_target", "update_stream")

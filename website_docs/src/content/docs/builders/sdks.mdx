@@ -119,7 +119,9 @@ Around the operations, each SDK has the same small runtime:
   [Partial results](/builders/api-reference#partial-results).
 - **Scopes.** The stream operations (`ListStreams`, `GetStream`, `CreateStream`, `UpdateStream`,
   `RefreshStreamKey`) need only `streams:read` and `streams:write`. Live state is in
-  `GetStreamMetrics` and `ListStreamMetrics`, which need `analytics:read`. See
+  `GetStreamMetrics` and `ListStreamMetrics`, which need `analytics:read`. The stream key needs
+  `streams:write`: `CreateStream` and `RefreshStreamKey` return it and `GetStreamKey` reads it;
+  `ListStreams`, `GetStream`, and `UpdateStream` do not select it. See
   [Token scopes](/builders/api-reference#token-scopes).
 - **Result unions.** Most mutations return a union of the result and typed errors.
   `expectResult` returns the result or raises a `ResultError` naming the error member, its

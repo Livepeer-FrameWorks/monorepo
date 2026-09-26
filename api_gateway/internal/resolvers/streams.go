@@ -27,6 +27,9 @@ import (
 
 // DoGetStreams retrieves all streams for the authenticated user
 func (r *Resolver) DoGetStreams(ctx context.Context) ([]*commodorepb.Stream, error) {
+	if err := middleware.RequirePermission(ctx, "streams:read"); err != nil {
+		return nil, err
+	}
 	start := time.Now()
 
 	// Record metrics
@@ -69,6 +72,9 @@ func (r *Resolver) DoGetStreams(ctx context.Context) ([]*commodorepb.Stream, err
 
 // DoGetStream retrieves a specific stream by ID
 func (r *Resolver) DoGetStream(ctx context.Context, id string) (*commodorepb.Stream, error) {
+	if err := middleware.RequirePermission(ctx, "streams:read"); err != nil {
+		return nil, err
+	}
 	start := time.Now()
 
 	// Record metrics
@@ -536,6 +542,10 @@ func (r *Resolver) DoCreateClip(ctx context.Context, input model.CreateClipInput
 
 // DoGetStreamKeys retrieves all stream keys for a specific stream
 func (r *Resolver) DoGetStreamKeys(ctx context.Context, streamID string) ([]*commodorepb.StreamKey, error) {
+	// Stream keys are publishing credentials: listing them needs streams:write.
+	if err := middleware.RequirePermission(ctx, "streams:write"); err != nil {
+		return nil, err
+	}
 	normalizedID, err := normalizeStreamID(streamID)
 	if err != nil {
 		return nil, err
@@ -588,6 +598,10 @@ func (r *Resolver) DoGetStreamKeys(ctx context.Context, streamID string) ([]*com
 // DoGetStreamKeysConnection returns a Relay-style connection for stream keys.
 // Stream keys accumulate over time and can grow unbounded.
 func (r *Resolver) DoGetStreamKeysConnection(ctx context.Context, streamID string, first *int, after *string, last *int, before *string) (*model.StreamKeysConnection, error) {
+	// Stream keys are publishing credentials: listing them needs streams:write.
+	if err := middleware.RequirePermission(ctx, "streams:write"); err != nil {
+		return nil, err
+	}
 	normalizedID, err := normalizeStreamID(streamID)
 	if err != nil {
 		return nil, err
@@ -958,6 +972,9 @@ func (r *Resolver) DoDeleteDVR(ctx context.Context, dvrHash string) (model.Delet
 
 // DoGetStreamsConnection retrieves streams with Relay-style cursor pagination
 func (r *Resolver) DoGetStreamsConnection(ctx context.Context, first *int, after *string, last *int, before *string, search *string) (*model.StreamsConnection, error) {
+	if err := middleware.RequirePermission(ctx, "streams:read"); err != nil {
+		return nil, err
+	}
 	start := time.Now()
 
 	defer func() {
