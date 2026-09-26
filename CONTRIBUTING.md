@@ -147,8 +147,11 @@ The Mac Mini runner requires:
 # 1. Edit schema
 vim pkg/graphql/schema.graphql
 
-# 2. Run codegen
-make graphql
+# 2. Run codegen: gateway, webapp, tray app, the three SDKs and the docs API
+#    reference, all from the schema. A change that starts a new SDK line
+#    (docs/standards/graphql-deprecation.md) needs `pnpm version-packages`
+#    first; codegen says so when it does.
+make graphql-all
 
 # 3. Implement resolver stub
 vim api_gateway/graph/schema.resolvers.go

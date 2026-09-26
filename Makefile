@@ -158,7 +158,10 @@ graphql-frontend:
 graphql-tray:
 	./scripts/generate-swift-gql.sh
 
+# Everything generated from the schema, including the docs site's API
+# reference, which verify-prepush checks.
 graphql-all: graphql graphql-frontend graphql-tray graphql-sdk
+	@$(MAKE) --no-print-directory generate-graphql-reference
 
 .PHONY: sdk-audit sdk-manifest generate-graphql-reference verify-graphql-reference verify-api-compat verify-schema-compat test-sdkcontract graphql-sdk graphql-sdk-ts test-sdk-ts \
 	verify-sdk-generated sdk-release-gates sdk-version-sync generate-public-schema verify-public-schema verify-experimental-fields \
@@ -252,6 +255,8 @@ graphql-sdk-ts: sdk-manifest
 	@rm -rf npm_api/src/generated/proto
 	@$(SDK_BUF) generate pkg/proto --template npm_api/buf.gen.yaml --path pkg/proto/events/public/v1
 	@cd npm_api && pnpm run codegen >/dev/null
+	@# The export-list snapshot follows from the generated code; its git diff is the review.
+	@cd npm_api && pnpm vitest run -u test/publicApi.test.ts >/dev/null
 
 test-sdk-ts:
 	@cd npm_api && pnpm run type-check && pnpm run lint && pnpm test

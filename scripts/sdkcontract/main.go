@@ -184,7 +184,7 @@ func runEmit(repo, lang string, check bool) error {
 		return err
 	}
 	if !strings.HasPrefix(version, line.Line+".") {
-		return fmt.Errorf("%s version %s is not on the current line %s in %s", npmPackagePath, version, line.Line, supportPath)
+		return fmt.Errorf("%s version %s is not on the current line %s in %s; a new line needs its version bump first: run `pnpm version-packages`, then make graphql-all", npmPackagePath, version, line.Line, supportPath)
 	}
 	in := emitInput{Version: version, Line: line.Line, MinServer: line.MinServer, Ops: entry.Operations, Events: publicEvents()}
 	files, err := in.render(lang)
