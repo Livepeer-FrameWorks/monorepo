@@ -166,7 +166,9 @@ WITH requeued AS (
         progress_last_ms = 0, progress_advanced_at = NULL
     WHERE job.processing_node_id = sqlc.arg(node_id)
       AND job.status IN ('dispatched', 'processing')
-      AND job.updated_at < sqlc.arg(assigned_before)
+      -- Assignment time, not updated_at: a running job's progress moves
+      -- updated_at every second, which would exclude every active job.
+      AND COALESCE(job.started_at, job.updated_at) < sqlc.arg(assigned_before)
       AND job.retry_count < sqlc.arg(max_retries)
       AND NOT (job.job_id::text = ANY(sqlc.arg(reported_job_ids)::text[]))
     RETURNING artifact_hash, tenant_id
