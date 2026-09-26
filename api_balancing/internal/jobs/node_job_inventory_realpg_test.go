@@ -139,3 +139,62 @@ func TestReconcileNodeJobInventoryRequeuesRunningJob_RealPG(t *testing.T) {
 		t.Fatalf("running job the restarted node did not report: status %q node %v, want queued and unassigned", status, assigned)
 	}
 }
+
+// A job dispatched a moment before the node registered falls inside the
+// registration's assignment margin, so the registration cannot tell whether
+// it went over the new connection. After the silence window it is requeued
+// only if it has not written since the registration: a job that reached the
+// node renews its lease on receipt.
+func TestRequeueSilentNodeJobsRequeuesWorkLostBeforeRegistration_RealPG(t *testing.T) {
+	conn := startRealPGForCleanup(t)
+
+	const (
+		tenant  = "00000000-0000-4000-8000-0000000000ad"
+		node    = "edge-restarted-at-dispatch"
+		lostJob = "00000000-0000-4000-8000-00000000c001"
+		liveJob = "00000000-0000-4000-8000-00000000c002"
+	)
+	registeredAt := time.Now()
+	for _, hash := range []string{"inventoryvod000000000000000000c1", "inventoryvod000000000000000000c2"} {
+		if _, err := conn.Exec(`INSERT INTO foghorn.artifacts (artifact_hash, artifact_type, tenant_id, status) VALUES ($1, 'vod', $2, 'processing')`, hash, tenant); err != nil {
+			t.Fatal(err)
+		}
+	}
+	dispatched := registeredAt.Add(-1800 * time.Millisecond)
+	seed := func(id, hash string, updated time.Time) {
+		t.Helper()
+		if _, err := conn.Exec(`INSERT INTO foghorn.processing_jobs (job_id, tenant_id, artifact_hash, job_type, status, processing_node_id, updated_at)
+			VALUES ($1, $2, $3, 'transcode', 'dispatched', $4, $5)`, id, tenant, hash, node, updated); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// Both were dispatched inside the margin; only the live one renewed its
+	// lease after the registration.
+	seed(lostJob, "inventoryvod000000000000000000c1", dispatched)
+	seed(liveJob, "inventoryvod000000000000000000c2", registeredAt.Add(time.Second))
+
+	if err := ReconcileNodeJobInventory(t.Context(), conn, node, nil, registeredAt, 3, logging.NewLogger()); err != nil {
+		t.Fatal(err)
+	}
+	status := func(id string) string {
+		t.Helper()
+		var s string
+		if err := conn.QueryRow(`SELECT status FROM foghorn.processing_jobs WHERE job_id = $1`, id).Scan(&s); err != nil {
+			t.Fatal(err)
+		}
+		return s
+	}
+	if status(lostJob) != "dispatched" {
+		t.Fatal("the registration pass must leave work inside its assignment margin alone")
+	}
+
+	if err := RequeueSilentNodeJobs(t.Context(), conn, node, registeredAt, 3, logging.NewLogger()); err != nil {
+		t.Fatal(err)
+	}
+	if got := status(lostJob); got != "queued" {
+		t.Fatalf("job lost with the previous connection = %s, want queued", got)
+	}
+	if got := status(liveJob); got != "dispatched" {
+		t.Fatalf("job that reached the new connection = %s, want untouched", got)
+	}
+}

@@ -2041,7 +2041,13 @@ receiveLoop:
 				scheduleReconnectPushTargetRearmFn(canonicalNodeID, connFence, GetInstanceID(), registry.log)
 			}
 			if handler := currentNodeJobInventoryHandler(); handler != nil && newConn.features().ProcessingJobInventory {
-				go handler(canonicalNodeID, x.Register.GetActiveProcessingJobIds(), registeredAt)
+				sessionConn := newConn
+				current := func() bool {
+					registry.mu.RLock()
+					defer registry.mu.RUnlock()
+					return registry.conns[canonicalNodeID] == sessionConn
+				}
+				go handler(canonicalNodeID, x.Register.GetActiveProcessingJobIds(), registeredAt, current)
 			}
 
 			// Hydrate the managed-stream lastSent map from the sidecar's
@@ -4566,7 +4572,9 @@ const ProcessingJobInventoryProtocolMin int32 = 7
 
 // NodeJobInventoryHandler re-dispatches work assigned to nodeID before
 // registeredAt that the node's registration did not report as running.
-type NodeJobInventoryHandler func(nodeID string, reported []string, registeredAt time.Time)
+// current reports whether that registration's connection is still the node's
+// live connection.
+type NodeJobInventoryHandler func(nodeID string, reported []string, registeredAt time.Time, current func() bool)
 
 var (
 	nodeJobInventoryHandlerMu sync.Mutex
