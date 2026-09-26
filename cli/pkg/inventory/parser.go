@@ -3,6 +3,7 @@ package inventory
 import (
 	"bytes"
 	"fmt"
+	"net"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -950,9 +951,38 @@ func (m *EdgeManifest) Validate() error {
 		if err := validateEdgeCapabilities(node.Capabilities); err != nil {
 			return fmt.Errorf("node '%s': %w", node.Name, err)
 		}
+		if strings.TrimSpace(node.FoghornAddr) != "" {
+			if _, err := ParseFoghornAddrs(node.FoghornAddr); err != nil {
+				return fmt.Errorf("node '%s': foghorn_addr: %w", node.Name, err)
+			}
+		}
 	}
 
 	return nil
+}
+
+// ParseFoghornAddrs splits a Foghorn control address, one host:port or a
+// comma-separated list of them, into its entries. Helmsman reads the same
+// format from FOGHORN_CONTROL_ADDR and fails over between the entries.
+func ParseFoghornAddrs(raw string) ([]string, error) {
+	var addrs []string
+	for entry := range strings.SplitSeq(raw, ",") {
+		entry = strings.TrimSpace(entry)
+		if entry == "" {
+			continue
+		}
+		host, port, err := net.SplitHostPort(entry)
+		if err != nil || strings.TrimSpace(host) == "" || port == "" {
+			return nil, fmt.Errorf("%q is not host:port", entry)
+		}
+		if !slices.Contains(addrs, entry) {
+			addrs = append(addrs, entry)
+		}
+	}
+	if len(addrs) == 0 {
+		return nil, fmt.Errorf("no Foghorn address")
+	}
+	return addrs, nil
 }
 
 func validateEdgeCapabilities(caps []string) error {

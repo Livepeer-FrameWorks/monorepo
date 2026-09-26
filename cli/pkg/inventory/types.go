@@ -631,8 +631,8 @@ type EdgeNode struct {
 	Subdomain            string            `yaml:"subdomain,omitempty"`               // Individual subdomain (e.g., edge-us-east-1 -> edge-us-east-1.example.com)
 	Region               string            `yaml:"region,omitempty"`                  // Region for registration
 	Cluster              string            `yaml:"cluster,omitempty"`                 // Per-node cluster override; falls back to EdgeManifest.ClusterID when unset. Needed when one edge manifest registers nodes across multiple clusters (e.g. edge-eu-1 → media-eu-1, edge-us-1 → media-us-1).
-	FoghornAddr          string            `yaml:"foghorn_addr,omitempty"`            // Explicit Foghorn control address for private/non-public edge networks.
-	FoghornTLSServerName string            `yaml:"foghorn_tls_server_name,omitempty"` // TLS certificate name when FoghornAddr is an IP or private alias.
+	FoghornAddr          string            `yaml:"foghorn_addr,omitempty"`            // Explicit Foghorn control address for private/non-public edge networks: one host:port or a comma-separated list of every Foghorn instance of the node's cell.
+	FoghornTLSServerName string            `yaml:"foghorn_tls_server_name,omitempty"` // TLS certificate name when FoghornAddr entries are IPs or private aliases.
 	TelemetryAddress     string            `yaml:"telemetry_address,omitempty"`       // Optional private IP for the telemetry hostname; avoids publishing private staging services in public DNS.
 	Labels               map[string]string `yaml:"labels,omitempty"`                  // Additional labels
 	ApplyTune            bool              `yaml:"apply_tune,omitempty"`              // Apply sysctl tuning

@@ -99,12 +99,12 @@ type Helmsman struct {
 	EdgeRuntime
 
 	NodeID             string `env:"NODE_ID" required:"true" desc:"Node identity registered with Foghorn and stamped on triggers. A persisted config seed that belongs to another node is refused." introduced:"v0.3.0"`
-	FoghornControlAddr string `env:"FOGHORN_CONTROL_ADDR" required:"true" desc:"Foghorn control-stream gRPC address. Helmsman dials it at startup and reconnects with backoff while the node keeps serving." introduced:"v0.3.0"`
+	FoghornControlAddr string `env:"FOGHORN_CONTROL_ADDR" required:"true" desc:"Foghorn control-stream gRPC address of the node's cell: one host:port, or a comma-separated list of the cell's Foghorn instances. Names are resolved before every dial and each address they resolve to is an instance. A refused, lost, or going-away connection moves to the next instance at once; backoff applies only after every instance failed in a row. The node keeps serving throughout." introduced:"v0.3.0"`
 	MistServerURL      string `env:"MISTSERVER_URL" required:"true" desc:"Local MistServer API base URL used for the health check, the Mist admin proxy, stream control, and DTSH generation." introduced:"v0.3.0"`
 	EdgePublicURL      string `env:"EDGE_PUBLIC_URL" required:"true" desc:"Client-facing edge URL reported to Foghorn as the playback base URL and written to the MistServer protocol public addresses." introduced:"v0.3.0"`
 	StateDir           string `env:"HELMSMAN_STATE_DIR" required:"true" desc:"Durable sidecar state directory for node identity, the persisted config seed, the trigger WAL, the control outbox, and ingest generation fences." introduced:"v0.3.0"`
 
-	FoghornGRPCTLSServerName string `env:"FOGHORN_GRPC_TLS_SERVER_NAME" desc:"TLS server name override for the Foghorn control connection. Empty uses the host of a public FOGHORN_CONTROL_ADDR, otherwise the canonical internal name." introduced:"v0.3.0"`
+	FoghornGRPCTLSServerName string `env:"FOGHORN_GRPC_TLS_SERVER_NAME" desc:"TLS server name override for the Foghorn control connection. Empty uses the host of each public FOGHORN_CONTROL_ADDR entry, otherwise the canonical internal name. Set it when the entries are IP addresses of instances that serve a named certificate." introduced:"v0.3.0"`
 	GRPCTLSCertPath          string `env:"GRPC_TLS_CERT_PATH" desc:"Client certificate presented on the Foghorn control connection. Used only together with GRPC_TLS_KEY_PATH." introduced:"v0.3.0"`
 	GRPCTLSKeyPath           string `env:"GRPC_TLS_KEY_PATH" desc:"Private key for GRPC_TLS_CERT_PATH." introduced:"v0.3.0"`
 	GRPCAllowInsecure        string `env:"GRPC_ALLOW_INSECURE" default:"false" desc:"Allows a plaintext Foghorn control connection when no TLS material is configured and the address is not a fully qualified name. A value that is not a boolean counts as false." introduced:"v0.3.0"`

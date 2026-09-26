@@ -627,34 +627,15 @@ func Start(logger logging.Logger, cfg *sidecarcfg.HelmsmanConfig) {
 	// Recover managed-stream ownership from Mist's persisted config so
 	// Foghorn-issued Retract commands work across sidecar restarts.
 	HydrateAppliedManagedStreamsFromMist(logger)
-	go func() {
-		backoff := time.Second
-		const maxBackoff = 30 * time.Second
-		var goingAwayAt time.Time
-		for {
-			connStart := time.Now()
-			err := runClient(cfg.FoghornControlAddr, logger)
-			announced := errors.Is(err, errFoghornGoingAway)
-			switch {
-			case announced:
-				goingAwayAt = time.Now()
-				backoff = time.Second
-				logger.Info("Foghorn is going away; reconnecting to the cell")
-			case err != nil:
-				logger.WithError(err).Warn("Helmsman control client disconnected; retrying")
-			}
-			if time.Since(connStart) > maxBackoff {
-				backoff = time.Second
-			}
-			time.Sleep(nextReconnectDelay(backoff, goingAwayAt, time.Now(), announced))
-			// The backoff grows only while it is what paces the redial, so it starts
-			// from a second again when the redial window after a notice runs out.
-			redialing := !goingAwayAt.IsZero() && time.Since(goingAwayAt) < goingAwayRedialWindow
-			if !redialing && backoff < maxBackoff {
-				backoff *= 2
-			}
-		}
-	}()
+	dialer := &controlDialer{
+		addrs:  parseControlAddrs(cfg.FoghornControlAddr),
+		lookup: net.DefaultResolver.LookupHost,
+		connect: func(endpoint controlEndpoint) error {
+			return runClient(endpoint, logger)
+		},
+		logger: logger,
+	}
+	go dialer.run()
 }
 
 // GetCurrentNodeID returns the current node ID for building triggers
@@ -799,15 +780,16 @@ const (
 	// Mist trigger whose whole budget is four seconds.
 	goingAwayDrain = 2 * time.Second
 	// For this long after the notice the client redials about once a second
-	// instead of backing off. The instance that sent it has closed its listener,
-	// so the address resolves to the rest of the cell; in a cell of one it is the
-	// same instance coming back, which takes seconds, not the doubling backoff.
+	// instead of backing off. The other instances of the cell are dialed at once;
+	// this pace applies once every instance has refused, and in a cell of one it
+	// is the same instance coming back, which takes seconds, not the doubling
+	// backoff.
 	goingAwayRedialWindow   = 20 * time.Second
 	goingAwayRedialInterval = time.Second
 )
 
 // errFoghornGoingAway ends a connection whose Foghorn announced it is shutting
-// down. It is not a failure: the node reconnects at once.
+// down. It is not a failure: the node reconnects at once to another instance.
 var errFoghornGoingAway = errors.New("foghorn announced it is going away")
 
 // awaitInFlightMistTriggers waits until every blocking trigger already sent has
@@ -1749,11 +1731,15 @@ func SendModeChangeRequest(mode ipcpb.NodeOperationalMode, reason string) error 
 	return stream.Send(msg)
 }
 
-func runClient(addr string, logger logging.Logger) error {
+func runClient(endpoint controlEndpoint, logger logging.Logger) error {
 	cfg := currentConfig
 	if cfg == nil {
 		return fmt.Errorf("config not initialized")
 	}
+	// Transport security and the server name follow the configured entry, never
+	// the address it resolved to: the certificate names the Foghorn, not an IP.
+	addr := endpoint.addr
+	endpointFields := logging.Fields{"foghorn_addr": endpoint.addr, "foghorn_dial": endpoint.dial}
 
 	// Use TLS whenever the deployment requires secure transport or trust
 	// material is present. Bare Docker service names still use insecure
@@ -1790,7 +1776,7 @@ func runClient(addr string, logger logging.Logger) error {
 				return err
 			}
 		}
-		logger.Info("Connecting to gRPC server with TLS")
+		logger.WithFields(endpointFields).Info("Connecting to Foghorn with TLS")
 	} else {
 		var err error
 		creds, err = grpcutil.ClientTransportCredentials(grpcutil.ClientTLSConfig{
@@ -1799,18 +1785,24 @@ func runClient(addr string, logger logging.Logger) error {
 		if err != nil {
 			return err
 		}
-		logger.Info("Connecting to gRPC server without TLS")
+		logger.WithFields(endpointFields).Info("Connecting to Foghorn without TLS")
 	}
 
-	conn, err := grpc.NewClient(
-		addr,
+	dialOpts := []grpc.DialOption{
 		grpc.WithTransportCredentials(creds),
-		grpc.WithConnectParams(grpc.ConnectParams{MinConnectTimeout: 10 * time.Second}),
-	)
+		grpc.WithConnectParams(grpc.ConnectParams{MinConnectTimeout: controlConnectTimeout}),
+	}
+	if endpoint.dial != endpoint.addr {
+		dialOpts = append(dialOpts, grpc.WithAuthority(endpoint.addr))
+	}
+	conn, err := grpc.NewClient(endpoint.dial, dialOpts...)
 	if err != nil {
 		return err
 	}
 	defer func() { _ = conn.Close() }()
+	if readyErr := awaitControlChannelReady(conn, controlConnectTimeout); readyErr != nil {
+		return readyErr
+	}
 	client := ipcpb.NewHelmsmanControlClient(conn)
 	streamCtx, cancelStream := context.WithCancel(context.Background())
 	defer cancelStream()

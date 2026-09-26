@@ -805,11 +805,11 @@ Read by `api_sidecar/cmd/helmsman`.
 | `CONFIG_SCHEMA_VERSION` | string |  |  | v0.3.0 | Edge configuration schema version reported to Foghorn when no version has been recorded on disk. |
 | `FRAMEWORKS_CONFIG_SCHEMA_VERSION` | string |  |  | v0.3.0 | Edge configuration schema version reported to Foghorn when CONFIG_SCHEMA_VERSION and the recorded versions are empty. |
 | `NODE_ID` | string |  | required | v0.3.0 | Node identity registered with Foghorn and stamped on triggers. A persisted config seed that belongs to another node is refused. |
-| `FOGHORN_CONTROL_ADDR` | string |  | required | v0.3.0 | Foghorn control-stream gRPC address. Helmsman dials it at startup and reconnects with backoff while the node keeps serving. |
+| `FOGHORN_CONTROL_ADDR` | string |  | required | v0.3.0 | Foghorn control-stream gRPC address of the node's cell: one host:port, or a comma-separated list of the cell's Foghorn instances. Names are resolved before every dial and each address they resolve to is an instance. A refused, lost, or going-away connection moves to the next instance at once; backoff applies only after every instance failed in a row. The node keeps serving throughout. |
 | `MISTSERVER_URL` | string |  | required | v0.3.0 | Local MistServer API base URL used for the health check, the Mist admin proxy, stream control, and DTSH generation. |
 | `EDGE_PUBLIC_URL` | string |  | required | v0.3.0 | Client-facing edge URL reported to Foghorn as the playback base URL and written to the MistServer protocol public addresses. |
 | `HELMSMAN_STATE_DIR` | string |  | required | v0.3.0 | Durable sidecar state directory for node identity, the persisted config seed, the trigger WAL, the control outbox, and ingest generation fences. |
-| `FOGHORN_GRPC_TLS_SERVER_NAME` | string |  |  | v0.3.0 | TLS server name override for the Foghorn control connection. Empty uses the host of a public FOGHORN_CONTROL_ADDR, otherwise the canonical internal name. |
+| `FOGHORN_GRPC_TLS_SERVER_NAME` | string |  |  | v0.3.0 | TLS server name override for the Foghorn control connection. Empty uses the host of each public FOGHORN_CONTROL_ADDR entry, otherwise the canonical internal name. Set it when the entries are IP addresses of instances that serve a named certificate. |
 | `GRPC_TLS_CERT_PATH` | string |  |  | v0.3.0 | Client certificate presented on the Foghorn control connection. Used only together with GRPC_TLS_KEY_PATH. |
 | `GRPC_TLS_KEY_PATH` | string |  |  | v0.3.0 | Private key for GRPC_TLS_CERT_PATH. |
 | `GRPC_ALLOW_INSECURE` | string | `false` |  | v0.3.0 | Allows a plaintext Foghorn control connection when no TLS material is configured and the address is not a fully qualified name. A value that is not a boolean counts as false. |

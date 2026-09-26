@@ -4475,7 +4475,7 @@
           "type": "string",
           "required": true,
           "introduced": "v0.3.0",
-          "description": "Foghorn control-stream gRPC address. Helmsman dials it at startup and reconnects with backoff while the node keeps serving."
+          "description": "Foghorn control-stream gRPC address of the node's cell: one host:port, or a comma-separated list of the cell's Foghorn instances. Names are resolved before every dial and each address they resolve to is an instance. A refused, lost, or going-away connection moves to the next instance at once; backoff applies only after every instance failed in a row. The node keeps serving throughout."
         },
         {
           "key": "MISTSERVER_URL",
@@ -4502,7 +4502,7 @@
           "key": "FOGHORN_GRPC_TLS_SERVER_NAME",
           "type": "string",
           "introduced": "v0.3.0",
-          "description": "TLS server name override for the Foghorn control connection. Empty uses the host of a public FOGHORN_CONTROL_ADDR, otherwise the canonical internal name."
+          "description": "TLS server name override for the Foghorn control connection. Empty uses the host of each public FOGHORN_CONTROL_ADDR entry, otherwise the canonical internal name. Set it when the entries are IP addresses of instances that serve a named certificate."
         },
         {
           "key": "GRPC_TLS_CERT_PATH",

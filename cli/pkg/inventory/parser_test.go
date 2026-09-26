@@ -1053,3 +1053,22 @@ clusters:
 		t.Fatalf("s3_bucket = %q, want frameworks", cc.S3Bucket)
 	}
 }
+
+func TestEdgeManifestValidateFoghornAddrList(t *testing.T) {
+	manifest := func(addr string) *EdgeManifest {
+		return &EdgeManifest{
+			Version:    "v1",
+			RootDomain: "staging.example.com",
+			Nodes:      []EdgeNode{{Name: "edge-eu", SSH: "root@192.168.10.30", FoghornAddr: addr}},
+		}
+	}
+	if err := manifest("192.168.10.17:18029, 192.168.10.18:18029,192.168.10.19:18029").Validate(); err != nil {
+		t.Fatalf("list of every cell instance rejected: %v", err)
+	}
+	for _, bad := range []string{"192.168.10.17", "192.168.10.17:18029,192.168.10.18", " , "} {
+		err := manifest(bad).Validate()
+		if err == nil || !strings.Contains(err.Error(), "foghorn_addr") {
+			t.Errorf("foghorn_addr %q: err = %v, want a foghorn_addr error", bad, err)
+		}
+	}
+}

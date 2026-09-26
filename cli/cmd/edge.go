@@ -6,6 +6,7 @@ import (
 	"crypto/tls"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -41,6 +42,8 @@ import (
 	quartermasterpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/quartermaster"
 	"github.com/sirupsen/logrus"
 	"github.com/spf13/cobra"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 const (
@@ -340,7 +343,7 @@ func newEdgeInitCmd() *cobra.Command {
 	cmd.Flags().StringVar(&domain, "domain", "", "EDGE_DOMAIN to configure (manual DNS)")
 	cmd.Flags().StringVar(&email, "email", "", "ACME email for certificate issuance")
 	cmd.Flags().StringVar(&enrollmentToken, "enrollment-token", "", "enrollment token issued by FrameWorks for node bootstrap")
-	cmd.Flags().StringVar(&foghornAddr, "foghorn-addr", "", "Foghorn gRPC address (host:port) for PreRegisterEdge and the rendered FOGHORN_CONTROL_ADDR")
+	cmd.Flags().StringVar(&foghornAddr, "foghorn-addr", "", "Foghorn gRPC address (host:port, or a comma-separated list of the cell's Foghorn instances) for PreRegisterEdge and the rendered FOGHORN_CONTROL_ADDR")
 	cmd.Flags().BoolVar(&overwrite, "overwrite", false, "overwrite existing files")
 	cmd.Flags().StringVar(&initMode, "mode", "container", "Deployment mode: container (single edge image) or native (systemd/launchd); 'docker' is a deprecated alias for container")
 	cmd.Flags().StringVar(&initRegion, "region", "", "Region of this edge (e.g., eu-west); set as the region label on edge telemetry")
@@ -1102,7 +1105,7 @@ Multi-node manifest example:
 	cmd.Flags().StringVar(&region, "region", "", "Region for node registration (e.g., us-east-1)")
 	cmd.Flags().StringVar(&email, "email", "", "ACME email for certificate issuance")
 	cmd.Flags().StringVar(&enrollmentToken, "enrollment-token", "", "enrollment token issued by FrameWorks for node bootstrap")
-	cmd.Flags().StringVar(&foghornAddr, "foghorn-addr", "", "Foghorn gRPC address for PreRegisterEdge (host:port)")
+	cmd.Flags().StringVar(&foghornAddr, "foghorn-addr", "", "Foghorn gRPC address (host:port, or a comma-separated list of the cell's Foghorn instances) for PreRegisterEdge and the rendered FOGHORN_CONTROL_ADDR")
 	cmd.Flags().DurationVar(&timeout, "timeout", 3*time.Minute, "Timeout for HTTPS readiness")
 	cmd.Flags().BoolVar(&skipPreflight, "skip-preflight", false, "Skip preflight checks")
 	cmd.Flags().BoolVar(&applyTuning, "tune", false, "Apply sysctl/limits tuning")
@@ -1269,7 +1272,7 @@ func runEdgeProvisionFromManifest(cmd *cobra.Command, cliCtx fwcfg.Context, mani
 				nodeVersion = cliVersion
 			}
 			nodeTelemetryURL := edgeManifestTelemetryWriteURL(manifest, clusterManifest, clusterID)
-			foghornAddr := firstNonEmpty(n.FoghornAddr, edgeManifestFoghornGRPCAddr(manifest.RootDomain, clusterID))
+			foghornAddr := edgeManifestNodeFoghornAddr(n, manifest.RootDomain, clusterID)
 			err := provisionSingleEdgeNode(cmd, controlCtx, n.SSH, sshKey, n.Name, nodeDomain, poolDomain, clusterID, n.Region, manifest.Email, token, n.ExternalIP, false, n.ApplyTune, n.RegisterQM, skipPreflight, timeout, nodeMode, nodeVersion, cliONNXProfile, foghornAddr, n.FoghornTLSServerName, controlCABundlePEM, nodeTelemetryURL, "", n.TelemetryAddress, n.ResolvedCapabilities(manifest.Capabilities), n.ResolvedBandwidthMbps(manifest.BandwidthMbps), n.ResolvedMaxTranscodes(manifest.MaxTranscodes), n.ResolvedStorageBytes(manifest.StorageBytes), dryRun, forceReenroll)
 			if err != nil {
 				result.Error = err
@@ -1459,6 +1462,18 @@ func edgeManifestControlPlaneCABundle(ctx context.Context, ctxCfg fwcfg.Context)
 	return pki.CABundlePEM, nil
 }
 
+// edgeManifestNodeFoghornAddr is the FOGHORN_CONTROL_ADDR rendered for a
+// manifest node: its pinned foghorn_addr list, or else the cell's public
+// Foghorn name, which resolves to every Foghorn instance of the cell.
+// Helmsman fails over between the entries and between the addresses a name
+// resolves to.
+func edgeManifestNodeFoghornAddr(node inventory.EdgeNode, rootDomain, clusterID string) string {
+	if addrs, err := inventory.ParseFoghornAddrs(node.FoghornAddr); err == nil {
+		return strings.Join(addrs, ",")
+	}
+	return edgeManifestFoghornGRPCAddr(rootDomain, clusterID)
+}
+
 func edgeManifestFoghornGRPCAddr(rootDomain, clusterID string) string {
 	rootDomain = strings.Trim(strings.TrimSpace(rootDomain), ".")
 	clusterID = pkgdns.SanitizeLabel(strings.TrimSpace(clusterID))
@@ -1502,7 +1517,19 @@ func edgeManifestTelemetryWriteURL(manifest *inventory.EdgeManifest, clusterMani
 	return "https://" + fqdn + "/api/v1/write"
 }
 
+// edgeFoghornUsesInternalCA reports whether any entry of a Foghorn control
+// address is verified against the internal CA, which decides whether the
+// edge gets the CA bundle.
 func edgeFoghornUsesInternalCA(addr string) bool {
+	for entry := range strings.SplitSeq(addr, ",") {
+		if edgeFoghornEntryUsesInternalCA(entry) {
+			return true
+		}
+	}
+	return false
+}
+
+func edgeFoghornEntryUsesInternalCA(addr string) bool {
 	host := strings.TrimSpace(addr)
 	if host == "" {
 		return false
@@ -1863,6 +1890,30 @@ func preRegisterEdgeWithCA(ctx context.Context, foghornAddr, enrollmentToken, ss
 	externalIP := resolveEdgeExternalIP(discoveryCtx, sshTarget, sshKey, knownExternalIP)
 	discoveryCancel()
 
+	req := &foghornpb.PreRegisterEdgeRequest{
+		EnrollmentToken: enrollmentToken,
+		ExternalIp:      externalIP,
+		PreferredNodeId: preferredNodeID,
+	}
+	// A list names every Foghorn instance of the cell; an instance that cannot
+	// be reached hands the request to the next one. An answer, including a
+	// refusal of the token, ends the attempt.
+	addrs, parseErr := inventory.ParseFoghornAddrs(foghornAddr)
+	if parseErr != nil {
+		addrs = []string{foghornAddr}
+	}
+	var errs []error
+	for _, addr := range addrs {
+		resp, err := preRegisterEdgeAt(ctx, addr, caBundlePEM, tlsServerName, req)
+		if err == nil || !edgeFoghornUnreachable(err) {
+			return resp, err
+		}
+		errs = append(errs, err)
+	}
+	return nil, errors.Join(errs...)
+}
+
+func preRegisterEdgeAt(ctx context.Context, foghornAddr, caBundlePEM, tlsServerName string, req *foghornpb.PreRegisterEdgeRequest) (*foghornpb.PreRegisterEdgeResponse, error) {
 	logger := logrus.New()
 	logger.SetLevel(logrus.WarnLevel)
 	grpcConfig := edgePreRegisterGRPCConfig(foghornAddr, logger)
@@ -1883,11 +1934,24 @@ func preRegisterEdgeWithCA(ctx context.Context, foghornAddr, enrollmentToken, ss
 
 	rpcCtx, rpcCancel := context.WithTimeout(ctx, edgePreRegisterClientTimeout)
 	defer rpcCancel()
-	return runEdgePreRegister(rpcCtx, client, &foghornpb.PreRegisterEdgeRequest{
-		EnrollmentToken: enrollmentToken,
-		ExternalIp:      externalIP,
-		PreferredNodeId: preferredNodeID,
-	})
+	resp, err := runEdgePreRegister(rpcCtx, client, req)
+	if err != nil {
+		return nil, fmt.Errorf("pre-register at Foghorn %s: %w", foghornAddr, err)
+	}
+	return resp, nil
+}
+
+// edgeFoghornUnreachable reports whether a pre-registration failed before any
+// Foghorn answered it.
+func edgeFoghornUnreachable(err error) bool {
+	if errors.Is(err, context.DeadlineExceeded) {
+		return true
+	}
+	switch status.Code(err) {
+	case codes.Unavailable, codes.DeadlineExceeded:
+		return true
+	}
+	return false
 }
 
 // runEdgePreRegister performs the Foghorn PreRegisterEdge call against an

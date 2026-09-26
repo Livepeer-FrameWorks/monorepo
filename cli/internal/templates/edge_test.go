@@ -324,3 +324,25 @@ func TestWriteEdgeTemplates_maintenanceSilentlySkippedWhenExists(t *testing.T) {
 		t.Errorf("overwrite=true should have replaced maintenance sentinel")
 	}
 }
+
+// The Go renderer writes every Foghorn instance of the cell into .edge.env.
+func TestRenderEdgeTemplatesRendersEveryFoghornInstance(t *testing.T) {
+	t.Parallel()
+	const addrs = "192.168.10.17:18029,192.168.10.18:18029,192.168.10.19:18029"
+	for _, mode := range []string{"container", "native"} {
+		vars := fixedEdgeVars()
+		vars.Mode = mode
+		vars.FoghornGRPCAddr = addrs
+		files, err := RenderEdgeTemplates(vars)
+		if err != nil {
+			t.Fatalf("%s render: %v", mode, err)
+		}
+		env, ok := fileByPath(files, ".edge.env")
+		if !ok {
+			t.Fatalf("%s render has no .edge.env", mode)
+		}
+		if !strings.Contains(string(env.Content), "\nFOGHORN_CONTROL_ADDR="+addrs+"\n") {
+			t.Fatalf("%s .edge.env does not carry every instance:\n%s", mode, env.Content)
+		}
+	}
+}

@@ -78,6 +78,12 @@ the certificate's SANs, because the address itself carries no identity. This is
 why the tuple belongs to endpoint resolution rather than to a process-level
 default.
 
+Helmsman's control stream follows the same rule when it fails over between the
+Foghorn instances of its cell. `FOGHORN_CONTROL_ADDR` lists the instances (or
+names one host that resolves to all of them); Helmsman resolves each entry before
+every dial and dials the resolved addresses one by one, but the ServerName and
+the `:authority` stay those of the configured entry, never the resolved IP.
+
 `pkg/grpcutil.ClientTLS` enforces the tuple. When a custom CA path or inline CA
 PEM is configured it requires a non-empty ServerName (or `DefaultServerName`) and
 fails closed otherwise; custom CA material is appended to the system pool, so a

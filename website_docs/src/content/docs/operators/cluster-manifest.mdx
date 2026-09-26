@@ -711,7 +711,7 @@ nodes:
     subdomain: edge-us-east-1
     region: us-east
     # Private control/telemetry routing while retaining public certificate names.
-    foghorn_addr: 10.20.0.11:18029
+    foghorn_addr: 10.20.0.11:18029,10.20.0.12:18029,10.20.0.13:18029
     foghorn_tls_server_name: foghorn.media-eu.example.com
     telemetry_address: 10.20.0.11
     apply_tune: true
@@ -747,8 +747,8 @@ Edge telemetry ingress is control-plane managed. Enrolled edge nodes receive rem
 - `subdomain` (optional)
 - `region` (optional)
 - `cluster` (optional) - Per-node cluster override; useful when one edge manifest spans multiple media cells.
-- `foghorn_addr` (optional) - Private or otherwise explicit Foghorn gRPC endpoint.
-- `foghorn_tls_server_name` (optional) - Certificate name to verify when `foghorn_addr` is an IP or private alias.
+- `foghorn_addr` (optional) - Private or otherwise explicit Foghorn gRPC endpoints: one `host:port`, or a comma-separated list. List every Foghorn instance of the node's cell; Helmsman moves to the next one at once when an instance refuses, drops, or announces it is going away. Without it the node gets `foghorn.<cluster>.<root_domain>:18029`, which resolves to every Foghorn instance of the cell; Helmsman resolves it before every dial and tries each address.
+- `foghorn_tls_server_name` (optional) - Certificate name to verify when the `foghorn_addr` entries are IPs or private aliases.
 - `telemetry_address` (optional) - Private IP for the control-plane-derived telemetry hostname. This does not disable TLS verification or change the HTTP hostname.
 - `apply_tune` (optional)
 - `register_qm` (optional)

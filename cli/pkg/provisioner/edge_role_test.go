@@ -104,3 +104,24 @@ func TestEdgeRoleVarsPrivateTelemetryRequiresHTTPSURL(t *testing.T) {
 		t.Fatal("expected private telemetry resolution with an HTTP URL to fail")
 	}
 }
+
+// The Ansible render paths receive every Foghorn instance of the cell. The
+// edge role writes this one variable into edge.env for the container and
+// hands it to the Helmsman role for native installs.
+func TestEdgeRoleVarsRenderEveryFoghornInstance(t *testing.T) {
+	restore := stubEdgeManifest(t)
+	defer restore()
+	const addrs = "192.168.10.17:18029,192.168.10.18:18029,192.168.10.19:18029"
+	vars, err := edgeRoleVars(&EdgeProvisionConfig{
+		Mode:            "container",
+		Version:         "vtest",
+		NodeID:          "edge-eu-1",
+		FoghornGRPCAddr: addrs,
+	}, "linux", "amd64")
+	if err != nil {
+		t.Fatalf("edgeRoleVars returned error: %v", err)
+	}
+	if got := vars["edge_foghorn_grpc_addr"]; got != addrs {
+		t.Fatalf("edge_foghorn_grpc_addr = %#v, want %q", got, addrs)
+	}
+}
