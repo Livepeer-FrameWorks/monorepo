@@ -48,7 +48,8 @@
 
 **Before pushing (and before calling work done):**
 
-- Run `make test` and `make verify-prepush`. The latter runs CI's Generated contracts and frontend component jobs (config reference, GraphQL/SDK/event contracts, Houdini codegen, component tests), which unit tests and lint do not cover.
+- Run `make test` and `make verify-prepush`. The latter runs CI's Generated contracts, frontend component, and Migration release state jobs (config reference, GraphQL/SDK/event contracts, Houdini codegen, component tests, migration/catalog validation, schema convergence, Valkey contracts), which unit tests and lint do not cover. It needs Docker; run it on remotedev when the laptop cannot.
+- Never tell the maintainer to push or tag until `make verify-prepush` passed on that exact commit.
 
 **Key rules:**
 
