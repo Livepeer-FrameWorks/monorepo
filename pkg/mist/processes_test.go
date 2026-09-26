@@ -475,7 +475,7 @@ func TestNormalizeProcessConfigSelectorsMakesSchedulerInputsExplicit(t *testing.
 	if err := json.Unmarshal([]byte(NormalizeProcessConfigSelectors(input)), &got); err != nil {
 		t.Fatalf("unmarshal normalized processes: %v", err)
 	}
-	if got[0]["track_select"] != "audio=all&video=none&subtitle=none" {
+	if got[0]["track_select"] != "audio=all&video=none&subtitle=none&meta=none" {
 		t.Fatalf("AV track_select = %v", got[0]["track_select"])
 	}
 	if got[1]["track_select"] != "video=lowres" {

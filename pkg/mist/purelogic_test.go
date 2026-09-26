@@ -117,8 +117,9 @@ func TestBuildDVRTarget(t *testing.T) {
 // fall back to keeping both, never silently dropping a track.
 func TestAVTrackSelectForCodec(t *testing.T) {
 	const both = "audio=all&video=all"
-	const audioOnly = "audio=all&video=none&subtitle=none"
-	const videoOnly = "video=maxbps&audio=none&subtitle=none"
+	// meta=none: Mist auto-selects every track type a selector leaves out.
+	const audioOnly = "audio=all&video=none&subtitle=none&meta=none"
+	const videoOnly = "video=maxbps&audio=none&subtitle=none&meta=none"
 	tests := []struct {
 		in   any
 		want string

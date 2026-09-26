@@ -47,11 +47,11 @@ const (
 )
 
 const (
-	demoProcessesLive        = `[{"process":"AV","codec":"opus","track_inhibit":"audio=opus","track_select":"audio=all&video=none&subtitle=none","x-LSP-name":"Audio to Opus"},{"process":"AV","codec":"AAC","track_inhibit":"audio=aac","track_select":"audio=all&video=none&subtitle=none","x-LSP-name":"Audio to AAC"},{"process":"Thumbs","track_select":"video=lowres","x-LSP-name":"Thumbnail Sprites"}]`
+	demoProcessesLive        = `[{"process":"AV","codec":"opus","track_inhibit":"audio=opus","track_select":"audio=all&video=none&subtitle=none&meta=none","x-LSP-name":"Audio to Opus"},{"process":"AV","codec":"AAC","track_inhibit":"audio=aac","track_select":"audio=all&video=none&subtitle=none&meta=none","x-LSP-name":"Audio to AAC"},{"process":"Thumbs","track_select":"video=lowres","x-LSP-name":"Thumbnail Sprites"}]`
 	demoProcessesDVR         = `[{"process":"Thumbs","track_select":"video=maxbps","track_inhibit":"subtitle=all","inconsequential":true,"exit_unmask":true,"x-LSP-name":"DVR Thumbnail Sprites"}]`
 	demoProcessesClip        = `[{"process":"Thumbs","track_select":"video=maxbps","track_inhibit":"subtitle=all","inconsequential":true,"exit_unmask":true,"x-LSP-name":"Clip Thumbnail Sprites"}]`
 	demoProcessesDVRFinalize = `[{"process":"Thumbs","track_select":"video=maxbps","track_inhibit":"subtitle=all","inconsequential":true,"exit_unmask":true,"x-LSP-name":"DVR Chapter Thumbnail Sprites"}]`
-	demoProcessesVOD         = `[{"process":"AV","codec":"opus","track_inhibit":"audio=opus","track_select":"audio=all&video=none&subtitle=none"},{"process":"AV","codec":"AAC","track_inhibit":"audio=aac","track_select":"audio=all&video=none&subtitle=none"},{"process":"Thumbs","track_select":"video=maxbps","track_inhibit":"subtitle=all","inconsequential":true,"exit_unmask":true}]`
+	demoProcessesVOD         = `[{"process":"AV","codec":"opus","track_inhibit":"audio=opus","track_select":"audio=all&video=none&subtitle=none&meta=none"},{"process":"AV","codec":"AAC","track_inhibit":"audio=aac","track_select":"audio=all&video=none&subtitle=none&meta=none"},{"process":"Thumbs","track_select":"video=maxbps","track_inhibit":"subtitle=all","inconsequential":true,"exit_unmask":true}]`
 )
 
 // GenerateStreams creates realistic demo stream data
