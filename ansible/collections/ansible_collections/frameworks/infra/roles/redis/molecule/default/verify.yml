@@ -3,6 +3,8 @@
   hosts: all
   become: true
   gather_facts: true
+  vars:
+    ha_cli: [redis-cli, -a, molecule-test, --no-auth-warning, -h, 127.0.0.1]
   tasks:
     - name: Refresh service facts
       ansible.builtin.service_facts:
@@ -27,3 +29,152 @@
       ansible.builtin.assert:
         that: idem is not changed
         fail_msg: "redis role not idempotent"
+
+    # Sentinel-managed HA: a failover must survive process restarts and a
+    # provisioning re-run that still declares the original primary.
+    - name: Install the Sentinel-managed HA set
+      ansible.builtin.include_role:
+        name: frameworks.infra.redis
+      vars:
+        redis_instance: "{{ redis_ha_item.instance }}"
+        redis_role: "{{ redis_ha_item.role }}"
+        redis_port: "{{ redis_ha_item.port | default(6379) }}"
+      loop: "{{ redis_molecule_ha_instances }}"
+      loop_control:
+        loop_var: redis_ha_item
+        label: "{{ redis_ha_item.instance }} ({{ redis_ha_item.role }})"
+
+    - name: Wait for the declared replica to sync
+      ansible.builtin.command:
+        argv: "{{ ha_cli + ['-p', '6391', 'INFO', 'replication'] }}"
+      register: ha_replica_info
+      changed_when: false
+      until: "'master_link_status:up' in ha_replica_info.stdout"
+      retries: 30
+      delay: 1
+
+    - name: Force a Sentinel failover
+      ansible.builtin.command:
+        argv: "{{ ha_cli + ['-p', '26390', 'SENTINEL', 'FAILOVER', 'molecule-ha'] }}"
+      changed_when: true
+
+    - name: Wait for Sentinel to promote the declared replica
+      ansible.builtin.command:
+        argv: "{{ ha_cli + ['-p', '26390', 'SENTINEL', 'get-master-addr-by-name', 'molecule-ha'] }}"
+      register: ha_master_addr
+      changed_when: false
+      until: ha_master_addr.stdout_lines | last == '6391'
+      retries: 60
+      delay: 1
+
+    - name: Wait for the demoted primary to persist its replica role
+      ansible.builtin.command: grep -Ex 'replicaof "?127\.0\.0\.1"? 6391' /var/lib/frameworks/redis/ha-a/runtime.conf
+      register: ha_demoted_runtime
+      changed_when: false
+      failed_when: false
+      until: ha_demoted_runtime.rc == 0
+      retries: 60
+      delay: 1
+
+    - name: Assert CONFIG REWRITE persisted the demotion
+      ansible.builtin.assert:
+        that: ha_demoted_runtime.rc == 0
+        fail_msg: "Sentinel could not persist the demoted primary's role into its runtime config"
+
+    - name: Restart both HA servers
+      ansible.builtin.systemd:
+        name: "{{ item }}"
+        state: restarted
+      loop:
+        - frameworks-redis-ha-a
+        - frameworks-redis-ha-b
+
+    - name: Read HA roles after restart
+      ansible.builtin.command:
+        argv: "{{ ha_cli + ['-p', item, 'ROLE'] }}"
+      register: ha_roles_after_restart
+      changed_when: false
+      loop: ["6390", "6391"]
+      until: ha_roles_after_restart.stdout_lines | length > 0
+      retries: 30
+      delay: 1
+
+    - name: Assert restarts kept the post-failover roles
+      ansible.builtin.assert:
+        that:
+          - ha_roles_after_restart.results[0].stdout_lines[0] == 'slave'
+          - ha_roles_after_restart.results[1].stdout_lines[0] == 'master'
+
+    - name: Record HA server PIDs before re-provisioning
+      ansible.builtin.command: systemctl show -p MainPID --value frameworks-redis-ha-a frameworks-redis-ha-b frameworks-redis-ha-a-sentinel
+      register: ha_pids_before
+      changed_when: false
+
+    - name: Re-provision the HA set with the original declared topology
+      ansible.builtin.include_role:
+        name: frameworks.infra.redis
+      vars:
+        redis_instance: "{{ redis_ha_item.instance }}"
+        redis_role: "{{ redis_ha_item.role }}"
+        redis_port: "{{ redis_ha_item.port | default(6379) }}"
+      loop: "{{ redis_molecule_ha_instances }}"
+      loop_control:
+        loop_var: redis_ha_item
+        label: "{{ redis_ha_item.instance }} ({{ redis_ha_item.role }})"
+
+    - name: Record HA server PIDs after re-provisioning
+      ansible.builtin.command: systemctl show -p MainPID --value frameworks-redis-ha-a frameworks-redis-ha-b frameworks-redis-ha-a-sentinel
+      register: ha_pids_after
+      changed_when: false
+
+    - name: Assert an unchanged re-run left the HA processes alone
+      ansible.builtin.assert:
+        that: ha_pids_before.stdout == ha_pids_after.stdout
+
+    - name: Re-provision the HA set with changed declared settings
+      ansible.builtin.include_role:
+        name: frameworks.infra.redis
+      vars:
+        redis_instance: "{{ redis_ha_item.instance }}"
+        redis_role: "{{ redis_ha_item.role }}"
+        redis_port: "{{ redis_ha_item.port | default(6379) }}"
+        redis_maxmemory: "64mb"
+        redis_sentinel_down_after_ms: 6000
+      loop: "{{ redis_molecule_ha_instances }}"
+      loop_control:
+        loop_var: redis_ha_item
+        label: "{{ redis_ha_item.instance }} ({{ redis_ha_item.role }})"
+
+    - name: Read HA roles after re-provisioning
+      ansible.builtin.command:
+        argv: "{{ ha_cli + ['-p', item, 'ROLE'] }}"
+      register: ha_roles_after_provision
+      changed_when: false
+      loop: ["6390", "6391"]
+      until: ha_roles_after_provision.stdout_lines | length > 0
+      retries: 30
+      delay: 1
+
+    - name: Read the Sentinel-monitored primary after re-provisioning
+      ansible.builtin.command:
+        argv: "{{ ha_cli + ['-p', '26390', 'SENTINEL', 'get-master-addr-by-name', 'molecule-ha'] }}"
+      register: ha_master_after_provision
+      changed_when: false
+      until: ha_master_after_provision.stdout_lines | length == 2
+      retries: 30
+      delay: 1
+
+    - name: Read the applied maxmemory
+      ansible.builtin.command:
+        argv: "{{ ha_cli + ['-p', '6391', 'CONFIG', 'GET', 'maxmemory'] }}"
+      register: ha_maxmemory
+      changed_when: false
+
+    - name: Assert re-provisioning kept the live primary and applied declared settings
+      ansible.builtin.assert:
+        that:
+          - ha_roles_after_provision.results[0].stdout_lines[0] == 'slave'
+          - ha_roles_after_provision.results[1].stdout_lines[0] == 'master'
+          - ha_master_after_provision.stdout_lines[1] == '6391'
+          - ha_maxmemory.stdout_lines[1] == '67108864'
+        fail_msg: "re-provisioning demoted the live primary or dropped declared settings"

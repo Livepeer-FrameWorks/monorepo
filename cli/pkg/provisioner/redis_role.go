@@ -49,7 +49,7 @@ func redisRoleVars(ctx context.Context, host inventory.Host, config ServiceConfi
 	}
 	// Sentinel-mode HA: redis_role gates which template + service args the
 	// Ansible role uses. Primary tasks get the default conf; replica tasks
-	// add replicaof + masterauth; sentinel tasks render sentinel.conf with
+	// seed replicaof on first install; sentinel tasks render sentinel.conf with
 	// the quorum the planner sized from the manifest.
 	if role := metaString(config.Metadata, "redis_role"); role != "" {
 		vars["redis_role"] = role

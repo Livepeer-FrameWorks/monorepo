@@ -26,6 +26,10 @@
     location ^~ {{ cred_prefix }} {
         error_log /dev/null crit;
         proxy_pass {{ site.proxy_pass }};
+{% if site.upstream_group | default('') | length > 0 %}
+        proxy_next_upstream error timeout;
+        proxy_next_upstream_timeout 15s;
+{% endif %}
         proxy_http_version 1.1;
         client_max_body_size {{ site.client_max_body_size | default(profile.client_max_body_size) }};
         client_body_timeout {{ site.client_body_timeout | default(profile.client_body_timeout) }};
@@ -63,6 +67,10 @@
         proxy_hide_header Expires;
         add_header Cache-Control "no-store" always;
         proxy_pass {{ site.proxy_pass }};
+{% if site.upstream_group | default('') | length > 0 %}
+        proxy_next_upstream error timeout;
+        proxy_next_upstream_timeout 15s;
+{% endif %}
         proxy_http_version 1.1;
         client_max_body_size {{ site.client_max_body_size | default(profile.client_max_body_size) }};
         client_body_timeout {{ site.client_body_timeout | default(profile.client_body_timeout) }};
@@ -89,6 +97,10 @@
     location = /healthz {
         limit_except GET HEAD { deny all; }
         proxy_pass {{ site.proxy_pass }};
+{% if site.upstream_group | default('') | length > 0 %}
+        proxy_next_upstream error timeout;
+        proxy_next_upstream_timeout 15s;
+{% endif %}
         proxy_http_version 1.1;
         proxy_request_buffering off;
         proxy_buffering off;
@@ -101,6 +113,23 @@
         proxy_send_timeout {{ site.proxy_send_timeout | default(profile.proxy_send_timeout) }};
     }
 {% endmacro %}
+{# A site with peer replicas proxies to an upstream group: the local replica
+   serves all traffic while it accepts connections; the backups take over
+   only while it is marked failed. Only transport failures (error/timeout)
+   move a request on, and nginx never passes a POST/PATCH/LOCK on once it
+   reached a replica, so a GraphQL mutation is retried only when the local
+   connection was refused. Application 502/503 answers are not failures. #}
+{% for site in nginx_sites %}
+{% if site.upstream_group | default('') | length > 0 %}
+upstream {{ site.upstream_group }} {
+    server {{ site.upstream_server }} max_fails=1 fail_timeout=10s;
+{% for backup in site.upstream_backups | default([]) %}
+    server {{ backup }} backup max_fails=1 fail_timeout=10s;
+{% endfor %}
+}
+
+{% endif %}
+{% endfor %}
 {% if nginx_sites | length == 0 %}
 server {
     listen {{ nginx_http_port }} default_server;
@@ -206,6 +235,10 @@ server {
         error_log /dev/null crit;
 {% endif %}
         proxy_pass {{ site.proxy_pass }};
+{% if site.upstream_group | default('') | length > 0 %}
+        proxy_next_upstream error timeout;
+        proxy_next_upstream_timeout 15s;
+{% endif %}
         proxy_http_version 1.1;
         client_max_body_size {{ site.client_max_body_size | default(profile.client_max_body_size) }};
         client_body_timeout {{ site.client_body_timeout | default(profile.client_body_timeout) }};
@@ -309,6 +342,10 @@ server {
         error_log /dev/null crit;
 {% endif %}
         proxy_pass {{ site.proxy_pass }};
+{% if site.upstream_group | default('') | length > 0 %}
+        proxy_next_upstream error timeout;
+        proxy_next_upstream_timeout 15s;
+{% endif %}
         proxy_http_version 1.1;
         client_max_body_size {{ site.client_max_body_size | default(profile.client_max_body_size) }};
         client_body_timeout {{ site.client_body_timeout | default(profile.client_body_timeout) }};

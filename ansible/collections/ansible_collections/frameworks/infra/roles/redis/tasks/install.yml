@@ -136,16 +136,136 @@
   when:
     - redis_named_instance | bool
 
-- name: Render named Redis config
+- name: Render named Redis declared config
   ansible.builtin.template:
     src: "{{ 'sentinel.conf.j2' if redis_role == 'sentinel' else 'instance.conf.j2' }}"
     dest: "{{ redis_config_path }}"
-    owner: "{{ omit if ansible_check_mode else (redis_runtime_user if redis_role == 'sentinel' else 'root') }}"
+    owner: "{{ omit if ansible_check_mode else 'root' }}"
     group: "{{ omit if ansible_check_mode else redis_runtime_group }}"
     mode: "0640"
+  vars:
+    redis_sentinel_declared_only: true
+    redis_sentinel_monitor_host: "{{ redis_primary_host }}"
+    redis_sentinel_monitor_port: "{{ redis_primary_port }}"
+    redis_sentinel_state_lines: []
   register: redis_named_config
   when:
     - redis_named_instance | bool
+
+- name: Inspect named Redis runtime config
+  ansible.builtin.stat:
+    path: "{{ redis_runtime_config_path }}"
+  register: redis_runtime_config_stat
+  when:
+    - redis_named_instance | bool
+
+# The runtime config is (re)written only on first install or when the declared
+# settings change. Its replication role / monitored primary comes from the live
+# process first, then from what Sentinel last persisted, and from the manifest
+# only when neither exists, so a re-run after a failover never demotes the
+# current primary or re-points Sentinel at a stale one.
+- name: Resolve live Redis replication state
+  ansible.builtin.shell:
+    cmd: |
+      set -euo pipefail
+      cli="$(command -v valkey-cli || command -v redis-cli || true)"
+      runtime='{{ redis_runtime_config_path }}'
+      {% if redis_role == 'sentinel' %}
+      name='{{ redis_master_name }}'
+      if [ -n "$cli" ] && systemctl is-active --quiet '{{ redis_service_name }}'; then
+        addr="$("$cli" -h '{{ redis_local_host }}' -p '{{ redis_sentinel_port }}' \
+          SENTINEL get-master-addr-by-name "$name" 2>/dev/null | tr -d '\r' | paste -sd' ' - || true)"
+        if printf '%s\n' "$addr" | grep -Eq '^[^ ]+ [0-9]+$'; then
+          echo "source=live"
+          echo "monitor=$addr"
+        fi
+      fi
+      if [ -f "$runtime" ]; then
+        awk -v name="$name" '
+          $1 == "sentinel" && $2 == "monitor" && $3 == name { print "persisted=" $4 " " $5 }
+          $1 == "sentinel" && ($2 == "myid" || $2 == "current-epoch") { print "state=" $0 }
+          $1 == "sentinel" && $3 == name && ($2 == "config-epoch" || $2 == "leader-epoch") { print "state=" $0 }
+          $1 == "sentinel" && $3 == name && ($2 == "known-replica" || $2 == "known-sentinel") { print "state=" $0 }
+        ' "$runtime" | tr -d '"'
+      fi
+      {% else %}
+      if [ -n "$cli" ] && systemctl is-active --quiet '{{ redis_service_name }}'; then
+        info="$("$cli" -h '{{ redis_local_host }}' -p '{{ redis_port }}' INFO replication 2>/dev/null | tr -d '\r' || true)"
+        role="$(printf '%s\n' "$info" | awk -F: '$1 == "role" { print $2 }')"
+        if [ "$role" = "master" ]; then
+          echo "source=live"
+          echo "replicaof="
+          exit 0
+        fi
+        if [ "$role" = "slave" ]; then
+          host="$(printf '%s\n' "$info" | awk -F: '$1 == "master_host" { print $2 }')"
+          port="$(printf '%s\n' "$info" | awk -F: '$1 == "master_port" { print $2 }')"
+          echo "source=live"
+          echo "replicaof=$host $port"
+          exit 0
+        fi
+      fi
+      if [ -f "$runtime" ]; then
+        echo "source=persisted"
+        echo "replicaof=$(awk '$1 == "replicaof" || $1 == "slaveof" { line = $2 " " $3 } END { print line }' "$runtime" | tr -d '"')"
+      fi
+      {% endif %}
+    executable: /bin/bash
+  environment: "{{ {'REDISCLI_AUTH': redis_password} if redis_password | length > 0 else {} }}"
+  register: redis_replication_state
+  changed_when: false
+  check_mode: false
+  when:
+    - redis_named_instance | bool
+    - redis_named_config.changed or not redis_runtime_config_stat.stat.exists
+
+- name: Select Redis runtime replication role
+  ansible.builtin.set_fact:
+    redis_runtime_replicaof: >-
+      {{ (redis_observed_replicaof | first | regex_replace('^replicaof=', '') | trim)
+         if redis_observed_replicaof | length > 0 else redis_declared_replicaof }}
+  vars:
+    redis_observed_replicaof: "{{ redis_replication_state.stdout_lines | select('match', '^replicaof=') | list }}"
+    redis_declared_replicaof: >-
+      {{ (redis_primary_host ~ ' ' ~ redis_primary_port)
+         if redis_role == 'replica' and redis_primary_host | length > 0 else '' }}
+  when:
+    - redis_named_instance | bool
+    - redis_role != 'sentinel'
+    - redis_replication_state is not skipped
+
+- name: Select Sentinel runtime monitor and state
+  ansible.builtin.set_fact:
+    redis_sentinel_runtime_monitor: >-
+      {{ (redis_sentinel_observed | first | regex_replace('^(monitor|persisted)=', '') | trim)
+         if redis_sentinel_observed | length > 0 else (redis_primary_host ~ ' ' ~ redis_primary_port) }}
+    redis_sentinel_runtime_state_lines: >-
+      {{ redis_replication_state.stdout_lines | select('match', '^state=') | map('regex_replace', '^state=', '') | list }}
+  vars:
+    # Live answer first, then the monitor line Sentinel last persisted.
+    redis_sentinel_observed: >-
+      {{ (redis_replication_state.stdout_lines | select('match', '^monitor=') | list)
+         + (redis_replication_state.stdout_lines | select('match', '^persisted=') | list) }}
+  when:
+    - redis_named_instance | bool
+    - redis_role == 'sentinel'
+    - redis_replication_state is not skipped
+
+- name: Write named Redis runtime config
+  ansible.builtin.template:
+    src: "{{ 'sentinel.conf.j2' if redis_role == 'sentinel' else 'runtime.conf.j2' }}"
+    dest: "{{ redis_runtime_config_path }}"
+    owner: "{{ omit if ansible_check_mode else redis_runtime_user }}"
+    group: "{{ omit if ansible_check_mode else redis_runtime_group }}"
+    mode: "0640"
+  vars:
+    redis_sentinel_monitor_host: "{{ (redis_sentinel_runtime_monitor | default('')).split() | first | default(redis_primary_host) }}"
+    redis_sentinel_monitor_port: "{{ (redis_sentinel_runtime_monitor | default('')).split() | last | default(redis_primary_port) }}"
+    redis_sentinel_state_lines: "{{ redis_sentinel_runtime_state_lines | default([]) }}"
+  register: redis_runtime_config
+  when:
+    - redis_named_instance | bool
+    - redis_replication_state is not skipped
 
 - name: Render named Redis systemd unit
   ansible.builtin.template:
@@ -197,9 +317,8 @@
   ansible.builtin.shell: |
     set -euo pipefail
     test -r "{{ redis_config_path }}"
-    {% if redis_role == 'sentinel' %}
-    test -w "{{ redis_config_path }}"
-    {% endif %}
+    test -r "{{ redis_runtime_config_path }}"
+    test -w "{{ redis_runtime_config_path }}"
     test -d "{{ redis_data_dir }}"
     test -w "{{ redis_data_dir }}"
     test -d "{{ redis_log_dir }}"
@@ -219,7 +338,8 @@
   ansible.builtin.fail:
     msg: >-
       Redis runtime user {{ redis_runtime_user }} cannot access the named instance paths.
-      config={{ redis_config_path }}, data={{ redis_data_dir }}, log={{ redis_log_dir }}.
+      config={{ redis_config_path }}, runtime={{ redis_runtime_config_path }},
+      data={{ redis_data_dir }}, log={{ redis_log_dir }}.
       Check output: {{ redis_runtime_access_check.stderr | default(redis_runtime_access_check.stdout) | default('permission check failed') }}
   when:
     - not ansible_check_mode
@@ -274,7 +394,9 @@
       ansible.builtin.systemd:
         name: "{{ redis_service_name }}"
         enabled: true
-        state: "{{ 'restarted' if redis_named_config.changed or redis_named_unit.changed else 'started' }}"
+        state: >-
+          {{ 'restarted' if (redis_named_config.changed or redis_named_unit.changed or (redis_runtime_config.changed | default(false)))
+             else 'started' }}
   rescue:
     - name: Capture named Redis systemctl status after failed start
       ansible.builtin.command: "systemctl status {{ redis_service_name }} --no-pager -l"

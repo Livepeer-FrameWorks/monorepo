@@ -4599,6 +4599,71 @@ func TestBuildTaskConfigAllowsNativeNginxProxySites(t *testing.T) {
 	}
 }
 
+func TestBuildTaskConfigBridgeProxySitesCarryCellPeerReplicasAsBackups(t *testing.T) {
+	manifest := &inventory.Manifest{
+		Profile:    "staging",
+		RootDomain: "frameworks.network",
+		Hosts: map[string]inventory.Host{
+			"eu-1":         {ExternalIP: "192.0.2.1", Cluster: "regional-eu", WireguardIP: "10.89.0.1"},
+			"eu-2":         {ExternalIP: "192.0.2.2", Cluster: "regional-eu", WireguardIP: "10.89.0.2"},
+			"eu-3":         {ExternalIP: "192.0.2.3", Cluster: "regional-eu", WireguardIP: "10.89.0.3"},
+			"eu-no-mesh":   {ExternalIP: "192.0.2.4", Cluster: "regional-eu"},
+			"us-1":         {ExternalIP: "192.0.2.5", Cluster: "regional-us", WireguardIP: "10.89.1.1"},
+			"eu-no-bridge": {ExternalIP: "192.0.2.6", Cluster: "regional-eu", WireguardIP: "10.89.0.6"},
+		},
+		Clusters: map[string]inventory.ClusterConfig{
+			"regional-eu": {Type: "central"},
+			"regional-us": {Type: "central"},
+		},
+		Services: map[string]inventory.ServiceConfig{
+			"bridge":    {Enabled: true, Hosts: []string{"eu-1", "eu-2", "eu-3", "eu-no-mesh", "us-1"}, Port: 18000},
+			"chartroom": {Enabled: true, Hosts: []string{"eu-1", "eu-2"}, Port: 18030},
+		},
+		Interfaces: map[string]inventory.ServiceConfig{
+			"nginx": {Enabled: true, Hosts: []string{"eu-1", "eu-2", "eu-3", "us-1"}, Mode: "native"},
+		},
+	}
+	cfg, err := buildTaskConfig(&orchestrator.Task{
+		Name:      "nginx",
+		Type:      "nginx",
+		ServiceID: "nginx",
+		Host:      "eu-2",
+		ClusterID: "regional-eu",
+		Phase:     orchestrator.PhaseInterfaces,
+	}, manifest, map[string]any{}, false, "", map[string]string{}, nil, nil)
+	if err != nil {
+		t.Fatalf("buildTaskConfig returned error: %v", err)
+	}
+	sites, ok := cfg.Metadata["proxy_sites"].([]map[string]any)
+	if !ok || len(sites) == 0 {
+		t.Fatalf("proxy_sites missing or wrong type: %#v", cfg.Metadata["proxy_sites"])
+	}
+	var bridgeSites, chartroomSites int
+	for _, site := range sites {
+		switch site["name"] {
+		case "bridge":
+			bridgeSites++
+			if got := site["upstream"]; got != "127.0.0.1:18000" {
+				t.Fatalf("bridge upstream = %v, want the local replica", got)
+			}
+			// Same-cell peers by mesh address only: not itself, not the other
+			// region's replica, not a peer without a mesh address.
+			want := []string{"10.89.0.1:18000", "10.89.0.3:18000"}
+			if got := stringSliceFromAny(site["backup_upstreams"]); strings.Join(got, ",") != strings.Join(want, ",") {
+				t.Fatalf("bridge backup_upstreams = %v, want %v", got, want)
+			}
+		case "chartroom":
+			chartroomSites++
+			if _, ok := site["backup_upstreams"]; ok {
+				t.Fatalf("chartroom is not a failover service but got backups: %#v", site)
+			}
+		}
+	}
+	if bridgeSites == 0 || chartroomSites == 0 {
+		t.Fatalf("expected bridge and chartroom sites, got %#v", sites)
+	}
+}
+
 func TestBuildTaskConfigProxySitesResolveDeployAliases(t *testing.T) {
 	manifest := &inventory.Manifest{
 		Profile:    "production",

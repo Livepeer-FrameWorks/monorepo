@@ -1,3 +1,9 @@
+{% if redis_sentinel_declared_only | default(false) %}
+# Declared settings for {{ redis_service_name }}, rendered by provisioning.
+# Sentinel runs from {{ redis_runtime_config_path }} and rewrites it with the
+# live primary and epochs; provisioning regenerates it from these settings
+# only when they change, keeping the live primary and Sentinel state.
+{% endif %}
 port {{ redis_sentinel_port }}
 bind {{ redis_bind_interface }}
 {% set sentinel_bind_addresses = redis_bind_interface.split() %}
@@ -10,7 +16,7 @@ dir {{ redis_data_dir }}
 logfile {{ redis_log_file }}
 pidfile /run/{{ redis_service_name }}/sentinel.pid
 
-sentinel monitor {{ redis_master_name }} {{ redis_primary_host }} {{ redis_primary_port }} {{ redis_sentinel_quorum }}
+sentinel monitor {{ redis_master_name }} {{ redis_sentinel_monitor_host }} {{ redis_sentinel_monitor_port }} {{ redis_sentinel_quorum }}
 sentinel down-after-milliseconds {{ redis_master_name }} {{ redis_sentinel_down_after_ms }}
 sentinel failover-timeout {{ redis_master_name }} {{ redis_sentinel_failover_timeout_ms }}
 sentinel parallel-syncs {{ redis_master_name }} 1
@@ -18,3 +24,6 @@ sentinel parallel-syncs {{ redis_master_name }} 1
 sentinel auth-pass {{ redis_master_name }} {{ redis_password }}
 requirepass {{ redis_password }}
 {% endif %}
+{% for line in redis_sentinel_state_lines | default([]) %}
+{{ line }}
+{% endfor %}

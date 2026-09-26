@@ -14,8 +14,11 @@
 
 - name: Remove named Redis config
   ansible.builtin.file:
-    path: "{{ redis_config_path }}"
+    path: "{{ item }}"
     state: absent
+  loop:
+    - "{{ redis_config_path }}"
+    - "{{ redis_runtime_config_path }}"
   when: redis_named_instance | bool
 
 - name: Reload systemd after named Redis cleanup

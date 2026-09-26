@@ -29,6 +29,7 @@
 - name: Set Redis bind addresses
   ansible.builtin.set_fact:
     redis_bind_addresses: "{{ redis_bind_interface.split() }}"
+    redis_listen_port: "{{ redis_sentinel_port if redis_role == 'sentinel' else redis_port }}"
 
 - name: Assert Redis bind addresses are configured
   ansible.builtin.assert:
@@ -48,11 +49,11 @@
 - name: Wait for TCP listener
   ansible.builtin.wait_for:
     host: "{{ item }}"
-    port: "{{ redis_port }}"
+    port: "{{ redis_listen_port }}"
     timeout: 30
   loop: "{{ redis_bind_addresses }}"
   loop_control:
-    label: "{{ item }}:{{ redis_port }}"
+    label: "{{ item }}:{{ redis_listen_port }}"
 
 - name: Discover Redis CLI
   ansible.builtin.shell: |
@@ -66,7 +67,7 @@
 - name: PING via redis-cli (authed when password set)
   ansible.builtin.command:
     argv: >-
-      {{ [redis_cli_binary.stdout, '-h', redis_ping_host, '-p', redis_port | string]
+      {{ [redis_cli_binary.stdout, '-h', redis_ping_host, '-p', redis_listen_port | string]
          + (['-a', redis_password] if redis_password | length > 0 else [])
          + ['PING'] }}
   register: redis_ping

@@ -90,25 +90,31 @@
     }
     respond 404
 {% else %}
-{% if site.path_prefixes | default([]) | length > 0 %}
-{% for path_prefix in site.path_prefixes %}
-{% if (site.upstream | string | lower).startswith('https://') %}
-    reverse_proxy {{ path_prefix }} {{ site.upstream }} {
+{# A site with peer replicas lists them after the local upstream: lb_policy
+   first keeps traffic local while it is healthy. Caddy retries on another
+   upstream only when the dial failed, or for GETs when the round-trip failed,
+   so a POST that reached a replica is never replayed. #}
+{% set https_upstream = (site.upstream | string | lower).startswith('https://') %}
+{% set upstream_scheme = 'https://' if https_upstream else ('http://' if (site.upstream | string | lower).startswith('http://') else '') %}
+{% set backups = site.upstream_backups | default([]) %}
+{% set upstreams = [site.upstream] + (backups | map('regex_replace', '^', upstream_scheme) | list) %}
+{% for path_prefix in (site.path_prefixes | default([]) or ['']) %}
+{% if https_upstream or backups | length > 0 %}
+    reverse_proxy {{ (path_prefix ~ ' ') if path_prefix | length > 0 else '' }}{{ upstreams | join(' ') }} {
+{% if backups | length > 0 %}
+        lb_policy first
+        lb_retries {{ backups | length }}
+        fail_duration 10s
+        max_fails 1
+{% endif %}
+{% if https_upstream %}
         header_up Host {upstream_hostport}
+{% endif %}
     }
 {% else %}
-    reverse_proxy {{ path_prefix }} {{ site.upstream }}
+    reverse_proxy {{ (path_prefix ~ ' ') if path_prefix | length > 0 else '' }}{{ site.upstream }}
 {% endif %}
 {% endfor %}
-{% else %}
-{% if (site.upstream | string | lower).startswith('https://') %}
-    reverse_proxy {{ site.upstream }} {
-        header_up Host {upstream_hostport}
-    }
-{% else %}
-    reverse_proxy {{ site.upstream }}
-{% endif %}
-{% endif %}
 {% endif %}
 {% endif %}
 {% for directive in site.extra_directives | default([]) %}

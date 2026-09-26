@@ -8,9 +8,9 @@ Type=notify
 User={{ redis_runtime_user }}
 Group={{ redis_runtime_group }}
 {% if redis_role == 'sentinel' %}
-ExecStart={{ redis_server_binary.stdout }} {{ redis_config_path }} --sentinel --supervised systemd --daemonize no
+ExecStart={{ redis_server_binary.stdout }} {{ redis_runtime_config_path }} --sentinel --supervised systemd --daemonize no
 {% else %}
-ExecStart={{ redis_server_binary.stdout }} {{ redis_config_path }} --supervised systemd --daemonize no
+ExecStart={{ redis_server_binary.stdout }} {{ redis_runtime_config_path }} --supervised systemd --daemonize no
 {% endif %}
 ExecStop=/bin/kill -s TERM $MAINPID
 Restart=on-failure

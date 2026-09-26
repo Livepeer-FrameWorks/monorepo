@@ -4863,6 +4863,7 @@ func buildProxySitesForHost(manifest *inventory.Manifest, hostName, clusterID st
 		if serviceType, ok := clusterderive.ManifestServiceType(name, svc); ok {
 			profileService = serviceType
 		}
+		backupUpstreams := proxySiteBackupUpstreams(manifest, profileService, svc, hostName, port)
 		for _, ingressClusterID := range proxySiteIngressClusterIDs(name, manifest, svc, clusterID) {
 			domains, bundleID := autoIngressDomainsForService(name, svc, manifest, ingressClusterID)
 			if len(domains) == 0 {
@@ -4873,6 +4874,9 @@ func buildProxySitesForHost(manifest *inventory.Manifest, hostName, clusterID st
 				"domains":  domains,
 				"upstream": fmt.Sprintf("127.0.0.1:%d", port),
 				"profile":  proxyRouteProfileForService(profileService),
+			}
+			if len(backupUpstreams) > 0 {
+				site["backup_upstreams"] = backupUpstreams
 			}
 			if bundleID != "" {
 				site["tls_bundle_id"] = bundleID
@@ -4890,6 +4894,9 @@ func buildProxySitesForHost(manifest *inventory.Manifest, hostName, clusterID st
 				"domains":  globalDomains,
 				"upstream": fmt.Sprintf("127.0.0.1:%d", port),
 				"profile":  proxyRouteProfileForService(profileService),
+			}
+			if len(backupUpstreams) > 0 {
+				globalSite["backup_upstreams"] = backupUpstreams
 			}
 			globalSite["tls_bundle_id"] = globalBundleID
 			applyProxySiteIngressTLSDefaults(globalSite, globalBundleID)
@@ -4980,6 +4987,41 @@ func buildProxySitesForHost(manifest *inventory.Manifest, hostName, clusterID st
 		appendSite(site)
 	}
 	return sites
+}
+
+// proxyFailoverServiceTypes are services whose replicas in a cell answer any
+// request interchangeably (no per-node state behind the pooled hostname), so a
+// host's ingress may hand requests to a peer replica while its local one is
+// down.
+var proxyFailoverServiceTypes = map[string]struct{}{
+	"bridge": {},
+}
+
+// proxySiteBackupUpstreams lists the mesh addresses of the service's other
+// replicas in hostName's cell. The ingress serves from the local replica and
+// uses these only while it fails to connect. Peers without a mesh address
+// are skipped: the ingress must not depend on resolving bare host names.
+func proxySiteBackupUpstreams(manifest *inventory.Manifest, serviceType string, svc inventory.ServiceConfig, hostName string, port int) []string {
+	if _, ok := proxyFailoverServiceTypes[serviceType]; !ok || manifest == nil || port == 0 {
+		return nil
+	}
+	cell := manifest.HostCluster(hostName)
+	if cell == "" {
+		return nil
+	}
+	var backups []string
+	for _, peer := range serviceHosts(svc) {
+		if peer == hostName || manifest.HostCluster(peer) != cell {
+			continue
+		}
+		host, ok := manifest.GetHost(peer)
+		if !ok || strings.TrimSpace(host.WireguardIP) == "" {
+			continue
+		}
+		backups = append(backups, net.JoinHostPort(strings.TrimSpace(host.WireguardIP), strconv.Itoa(port)))
+	}
+	sort.Strings(backups)
+	return backups
 }
 
 func proxyServiceConfig(manifest *inventory.Manifest, name string) inventory.ServiceConfig {

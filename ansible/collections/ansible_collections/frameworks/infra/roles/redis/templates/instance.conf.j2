@@ -1,3 +1,7 @@
+# Declared settings for {{ redis_service_name }}, rendered by provisioning.
+# The server runs from {{ redis_runtime_config_path }}, which includes this
+# file and carries the live replication role (replicaof) written by
+# Sentinel/CONFIG REWRITE. Replication role is never declared here.
 bind {{ redis_bind_interface }}
 port {{ redis_port }}
 {% set redis_bind_addresses = redis_bind_interface.split() %}
@@ -22,10 +26,7 @@ maxmemory-policy noeviction
 
 {% if redis_password | length > 0 %}
 requirepass {{ redis_password }}
-{% if redis_role == 'replica' %}
+{# Every server carries masterauth: Sentinel can demote any of them to a
+   replica, and a demoted primary without it cannot sync (NOAUTH). #}
 masterauth {{ redis_password }}
-{% endif %}
-{% endif %}
-{% if redis_role == 'replica' and redis_primary_host | length > 0 %}
-replicaof {{ redis_primary_host }} {{ redis_primary_port }}
 {% endif %}

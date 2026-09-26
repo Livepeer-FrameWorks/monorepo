@@ -14,10 +14,12 @@ redis_conf_mode: "0644"
 redis_instance: ""
 
 # HA role for this task. "primary" (default) installs a normal Redis server.
-# "replica" stamps replicaof + masterauth so the server follows
+# "replica" first starts the server following
 # {redis_primary_host}:{redis_primary_port}. "sentinel" installs a Sentinel
-# process watching the configured master. The Foghorn HA setup uses one
-# primary + N replicas + an odd-count Sentinel quorum.
+# process watching the configured master. These are the initial topology only:
+# once running, Sentinel owns the live role and provisioning carries it over.
+# The Foghorn HA setup uses one primary + N replicas + an odd-count Sentinel
+# quorum.
 redis_role: "primary"
 redis_primary_host: ""
 redis_primary_port: 6379

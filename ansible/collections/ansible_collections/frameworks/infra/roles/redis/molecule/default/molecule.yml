@@ -35,6 +35,19 @@ provisioner:
         redis_port: 6379
         redis_bind_interface: "127.0.0.1"
         redis_password: "molecule-test"
+        # Named Sentinel HA set on one host: a declared primary, a declared
+        # replica and a single Sentinel. The shared vars below mirror what the
+        # CLI passes for each task of a sentinel-mode manifest instance.
+        redis_engine: redis
+        redis_primary_host: "127.0.0.1"
+        redis_primary_port: 6390
+        redis_master_name: molecule-ha
+        redis_sentinel_port: 26390
+        redis_sentinel_quorum: 1
+        redis_molecule_ha_instances:
+          - { instance: ha-a, role: primary, port: 6390 }
+          - { instance: ha-b, role: replica, port: 6391 }
+          - { instance: ha-a, role: sentinel }
 
 verifier:
   name: ansible

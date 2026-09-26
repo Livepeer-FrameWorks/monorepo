@@ -830,3 +830,111 @@ func TestSiteServesPath(t *testing.T) {
 		}
 	}
 }
+
+func bridgeFailoverMetadata() map[string]any {
+	return map[string]any{"proxy_sites": []map[string]any{{
+		"name":             "bridge",
+		"domains":          []string{"bridge.example.com"},
+		"upstream":         "127.0.0.1:18000",
+		"profile":          "api",
+		"backup_upstreams": []string{"10.89.0.3:18000", "10.89.0.1:18000", "127.0.0.1:18000"},
+		"tls_mode":         "files",
+		"tls_cert_path":    "/etc/frameworks/ingress/tls/bridge/tls.crt",
+		"tls_key_path":     "/etc/frameworks/ingress/tls/bridge/tls.key",
+	}}}
+}
+
+// Every location of a site with peer replicas (catch-all, which carries
+// GraphQL, MCP and the subscription websocket, plus the decorated
+// runtime-config and credential paths) must proxy through the upstream group,
+// and only transport failures may move a request to a peer.
+func TestRenderNginxConfigRoutesBridgeThroughLocalFirstUpstreamGroup(t *testing.T) {
+	sites := normalizeProxySites(bridgeFailoverMetadata(), "docker")
+	conf := renderNginxConfig(80, sites, nil)
+	group := "upstream fw_upstream_0_bridge {\n" +
+		"    server host.docker.internal:18000 max_fails=1 fail_timeout=10s;\n" +
+		"    server 10.89.0.1:18000 backup max_fails=1 fail_timeout=10s;\n" +
+		"    server 10.89.0.3:18000 backup max_fails=1 fail_timeout=10s;\n" +
+		"}\n"
+	if strings.Count(conf, group) != 1 {
+		t.Fatalf("nginx config missing the local-first upstream group:\n%s", conf)
+	}
+	if strings.Contains(conf, "proxy_pass http://host.docker.internal:18000;") {
+		t.Fatalf("a location still proxies only to the local replica:\n%s", conf)
+	}
+	passes := strings.Count(conf, "proxy_pass http://fw_upstream_0_bridge;")
+	if passes == 0 || passes != strings.Count(conf, "proxy_next_upstream error timeout;") {
+		t.Fatalf("every group location needs the transport-only retry policy (%d proxy_pass):\n%s", passes, conf)
+	}
+	for _, forbidden := range []string{"non_idempotent", "http_502", "http_503"} {
+		if strings.Contains(conf, forbidden) {
+			t.Fatalf("retry policy must not include %q:\n%s", forbidden, conf)
+		}
+	}
+	for _, want := range []string{"location / {", "location = /runtime-config.js {", "location ^~ /ingest/ {", "proxy_set_header Upgrade $http_upgrade;"} {
+		if !strings.Contains(conf, want) {
+			t.Fatalf("nginx config missing %q:\n%s", want, conf)
+		}
+	}
+}
+
+func TestRenderNginxConfigKeepsSingleUpstreamWithoutPeers(t *testing.T) {
+	sites := normalizeProxySites(map[string]any{"proxy_sites": []map[string]any{{
+		"domains": []string{"chartroom.example.com"}, "upstream": "127.0.0.1:18030",
+	}}}, "native")
+	conf := renderNginxConfig(80, sites, nil)
+	if strings.Contains(conf, "upstream ") || strings.Contains(conf, "proxy_next_upstream") {
+		t.Fatalf("site without peers gained an upstream group:\n%s", conf)
+	}
+	if !strings.Contains(conf, "proxy_pass http://127.0.0.1:18030;") {
+		t.Fatalf("site without peers lost its direct proxy_pass:\n%s", conf)
+	}
+}
+
+func TestRenderCaddyfileListsBridgePeersAfterLocalReplica(t *testing.T) {
+	content := renderCaddyfile(normalizeProxySites(bridgeFailoverMetadata(), "native"))
+	want := "    reverse_proxy 127.0.0.1:18000 10.89.0.1:18000 10.89.0.3:18000 {\n" +
+		"        lb_policy first\n" +
+		"        lb_retries 2\n" +
+		"        fail_duration 10s\n" +
+		"        max_fails 1\n" +
+		"    }\n"
+	if !strings.Contains(content, want) {
+		t.Fatalf("Caddyfile missing local-first failover handler:\n%s", content)
+	}
+	if strings.Contains(content, "lb_retry_match") {
+		t.Fatalf("Caddy must keep its default GET-only replay of sent requests:\n%s", content)
+	}
+}
+
+func TestProxySiteMapsExposeUpstreamGroupForNativeTemplates(t *testing.T) {
+	sites := proxySiteMapsForMode(bridgeFailoverMetadata(), "native")
+	if len(sites) != 1 {
+		t.Fatalf("sites len = %d, want 1", len(sites))
+	}
+	site := sites[0]
+	if site["proxy_pass"] != "http://fw_upstream_0_bridge" || site["upstream_group"] != "fw_upstream_0_bridge" {
+		t.Fatalf("proxy_pass/upstream_group = %v/%v", site["proxy_pass"], site["upstream_group"])
+	}
+	if site["upstream_server"] != "127.0.0.1:18000" {
+		t.Fatalf("upstream_server = %v", site["upstream_server"])
+	}
+	if got := strings.Join(site["upstream_backups"].([]string), ","); got != "10.89.0.1:18000,10.89.0.3:18000" {
+		t.Fatalf("upstream_backups = %v (primary must be deduplicated)", got)
+	}
+	nginx := readRepoFile(t, "ansible/collections/ansible_collections/frameworks/infra/roles/nginx/templates/frameworks.conf.j2")
+	if got := strings.Count(nginx, "        proxy_pass {{ site.proxy_pass }};\n{% if site.upstream_group | default('') | length > 0 %}\n        proxy_next_upstream error timeout;\n"); got != strings.Count(nginx, "proxy_pass {{ site.proxy_pass }};") {
+		t.Fatalf("every native nginx site location must carry the failover policy (%d)", got)
+	}
+	for _, want := range []string{"upstream {{ site.upstream_group }} {", "server {{ site.upstream_server }} max_fails=1 fail_timeout=10s;", "server {{ backup }} backup max_fails=1 fail_timeout=10s;"} {
+		if !strings.Contains(nginx, want) {
+			t.Fatalf("native nginx template missing %q", want)
+		}
+	}
+	caddy := readRepoFile(t, "ansible/collections/ansible_collections/frameworks/infra/roles/caddy/templates/Caddyfile.j2")
+	for _, want := range []string{"lb_policy first", "lb_retries {{ backups | length }}", "fail_duration 10s", "{{ upstreams | join(' ') }}"} {
+		if !strings.Contains(caddy, want) {
+			t.Fatalf("native Caddy template missing %q", want)
+		}
+	}
+}

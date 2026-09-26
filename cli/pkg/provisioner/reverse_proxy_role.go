@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 
@@ -340,6 +341,9 @@ func renderNginxConfig(port int, sites []proxySite, tap *tenantAliasPlayback) st
 		fmt.Fprintf(&b, "server {\n    listen %d default_server;\n    server_name _;\n    return 404;\n}\n", port)
 	}
 	for _, site := range sites {
+		writeNginxUpstreamGroup(&b, site)
+	}
+	for _, site := range sites {
 		if len(site.Domains) == 0 || site.Upstream == "" {
 			continue
 		}
@@ -448,28 +452,52 @@ func writeCaddyProxyDirectives(b *strings.Builder, site proxySite) {
 	}
 	paths := site.PathPrefixes
 	if len(paths) == 0 {
-		writeCaddyReverseProxy(b, "", site.Upstream)
+		writeCaddyReverseProxy(b, "", site)
 		return
 	}
 	for _, path := range paths {
-		writeCaddyReverseProxy(b, path, site.Upstream)
+		writeCaddyReverseProxy(b, path, site)
 	}
 }
 
-func writeCaddyReverseProxy(b *strings.Builder, matcher, upstream string) {
+func writeCaddyReverseProxy(b *strings.Builder, matcher string, site proxySite) {
 	b.WriteString("    reverse_proxy ")
 	if matcher != "" {
 		b.WriteString(matcher)
 		b.WriteString(" ")
 	}
-	b.WriteString(upstream)
-	if caddyHTTPSUpstreamNeedsHostRewrite(upstream) {
-		b.WriteString(" {\n")
-		b.WriteString("        header_up Host {upstream_hostport}\n")
-		b.WriteString("    }\n")
+	b.WriteString(strings.Join(caddyUpstreams(site), " "))
+	hostRewrite := caddyHTTPSUpstreamNeedsHostRewrite(site.Upstream)
+	if !hostRewrite && len(site.BackupUpstreams) == 0 {
+		b.WriteString("\n")
 		return
 	}
-	b.WriteString("\n")
+	b.WriteString(" {\n")
+	if len(site.BackupUpstreams) > 0 {
+		// Local replica first; peers only while it is failing. Caddy retries a
+		// request on another upstream only when the dial failed, or for GETs
+		// when the round-trip failed, so a POST that reached a replica is never
+		// replayed. Application 5xx responses do not mark a replica down.
+		b.WriteString("        lb_policy first\n")
+		fmt.Fprintf(b, "        lb_retries %d\n", len(site.BackupUpstreams))
+		b.WriteString("        fail_duration 10s\n")
+		b.WriteString("        max_fails 1\n")
+	}
+	if hostRewrite {
+		b.WriteString("        header_up Host {upstream_hostport}\n")
+	}
+	b.WriteString("    }\n")
+}
+
+// caddyUpstreams lists the site's primary upstream followed by its backups,
+// all carrying the primary's scheme (Caddy requires one scheme per handler).
+func caddyUpstreams(site proxySite) []string {
+	scheme, _ := splitUpstreamScheme(site.Upstream)
+	out := []string{site.Upstream}
+	for _, backup := range site.BackupUpstreams {
+		out = append(out, scheme+backup)
+	}
+	return out
 }
 
 func caddyHTTPSUpstreamNeedsHostRewrite(upstream string) bool {
@@ -613,6 +641,39 @@ func isCredentialPath(path string) bool {
 	return false
 }
 
+// nginxUpstreamFailTimeout is how long nginx keeps a replica out of rotation
+// after a failed connection before probing it again with live traffic.
+const nginxUpstreamFailTimeout = "10s"
+
+// writeNginxUpstreamGroup renders the upstream block for a site that has peer
+// replicas: the local upstream serves all traffic while it accepts connections,
+// and the backups take over only while it is marked failed.
+func writeNginxUpstreamGroup(b *strings.Builder, site proxySite) {
+	if site.UpstreamGroup == "" {
+		return
+	}
+	_, primary := splitUpstreamScheme(site.Upstream)
+	fmt.Fprintf(b, "upstream %s {\n", site.UpstreamGroup)
+	fmt.Fprintf(b, "    server %s max_fails=1 fail_timeout=%s;\n", primary, nginxUpstreamFailTimeout)
+	for _, backup := range site.BackupUpstreams {
+		fmt.Fprintf(b, "    server %s backup max_fails=1 fail_timeout=%s;\n", backup, nginxUpstreamFailTimeout)
+	}
+	b.WriteString("}\n\n")
+}
+
+// nginxSiteProxyPass is the proxy_pass target: the site's upstream group when
+// it has peer replicas, otherwise its single upstream.
+func nginxSiteProxyPass(site proxySite) string {
+	if site.UpstreamGroup == "" {
+		return nginxProxyPassTarget(site.Upstream)
+	}
+	scheme, _ := splitUpstreamScheme(site.Upstream)
+	if scheme == "" {
+		scheme = "http://"
+	}
+	return scheme + site.UpstreamGroup
+}
+
 func writeNginxProxyBlock(b *strings.Builder, site proxySite) {
 	profile := nginxProxyProfile(site.Profile)
 	forwardedFor := "$proxy_add_x_forwarded_for"
@@ -635,7 +696,7 @@ func writeNginxProxyBlock(b *strings.Builder, site proxySite) {
         proxy_set_header X-Forwarded-For %s;
         proxy_set_header X-Forwarded-Proto $scheme;
 `,
-		nginxProxyPassTarget(site.Upstream),
+		nginxSiteProxyPass(site),
 		firstNonEmpty(site.ClientMaxBodySize, profile.ClientMaxBodySize),
 		firstNonEmpty(site.ClientBodyTimeout, profile.ClientBodyTimeout),
 		firstNonEmpty(site.SendTimeout, profile.SendTimeout),
@@ -647,6 +708,15 @@ func writeNginxProxyBlock(b *strings.Builder, site proxySite) {
 		firstNonEmpty(site.ProxyConnectTimeout, profile.ProxyConnectTimeout),
 		forwardedFor,
 	)
+	if site.UpstreamGroup != "" {
+		// Only transport failures move a request to the next replica. nginx never
+		// passes a POST/PATCH/LOCK on once it reached a replica (no
+		// non_idempotent), so a GraphQL mutation is retried only when the local
+		// connection was refused. Application 502/503 answers are not failures.
+		b.WriteString(`        proxy_next_upstream error timeout;
+        proxy_next_upstream_timeout 15s;
+`)
+	}
 	if site.Websocket.Or(profile.Websocket) {
 		b.WriteString(`        proxy_set_header Upgrade $http_upgrade;
         proxy_set_header Connection "upgrade";
@@ -829,6 +899,12 @@ type proxySite struct {
 	ProxySendTimeout      string
 	Websocket             optionalBool
 	ExtraDirectives       []string
+	// BackupUpstreams are scheme-less host:port peers of Upstream (the other
+	// replicas of the same service in the cell), used only while Upstream fails.
+	BackupUpstreams []string
+	// UpstreamGroup names the nginx upstream block rendered for a site with
+	// BackupUpstreams; empty otherwise.
+	UpstreamGroup string
 }
 
 func proxySiteMapsForMode(metadata map[string]any, mode string) []map[string]any {
@@ -838,7 +914,13 @@ func proxySiteMapsForMode(metadata map[string]any, mode string) []map[string]any
 		item := map[string]any{
 			"domains":    site.Domains,
 			"upstream":   site.Upstream,
-			"proxy_pass": nginxProxyPassTarget(site.Upstream),
+			"proxy_pass": nginxSiteProxyPass(site),
+		}
+		if site.UpstreamGroup != "" {
+			_, primary := splitUpstreamScheme(site.Upstream)
+			item["upstream_group"] = site.UpstreamGroup
+			item["upstream_server"] = primary
+			item["upstream_backups"] = site.BackupUpstreams
 		}
 		if site.Profile != "" {
 			item["profile"] = site.Profile
@@ -939,9 +1021,52 @@ func normalizeProxySites(metadata map[string]any, mode string) []proxySite {
 		if len(site.Domains) == 0 || site.Upstream == "" {
 			continue
 		}
+		site.BackupUpstreams = normalizeBackupUpstreams(raw["backup_upstreams"], site.Upstream, mode)
+		if len(site.BackupUpstreams) > 0 {
+			site.UpstreamGroup = nginxUpstreamGroupName(len(sites), site.Name)
+		}
 		sites = append(sites, site)
 	}
 	return sites
+}
+
+// normalizeBackupUpstreams returns the scheme-less host:port backups for a
+// site, dropping any that duplicate the primary.
+func normalizeBackupUpstreams(raw any, primary, mode string) []string {
+	_, primaryHostPort := splitUpstreamScheme(primary)
+	var out []string
+	seen := map[string]struct{}{primaryHostPort: {}}
+	for _, backup := range stringSliceValue(raw) {
+		_, hostPort := splitUpstreamScheme(normalizeProxyUpstream(backup, mode))
+		if _, dup := seen[hostPort]; dup || hostPort == "" {
+			continue
+		}
+		seen[hostPort] = struct{}{}
+		out = append(out, hostPort)
+	}
+	return out
+}
+
+// nginxUpstreamGroupName derives a unique nginx upstream identifier for the
+// site at index in the rendered site list.
+func nginxUpstreamGroupName(index int, name string) string {
+	slug := strings.Trim(nginxUpstreamNameInvalid.ReplaceAllString(strings.ToLower(name), "_"), "_")
+	if slug == "" {
+		return fmt.Sprintf("fw_upstream_%d", index)
+	}
+	return fmt.Sprintf("fw_upstream_%d_%s", index, slug)
+}
+
+var nginxUpstreamNameInvalid = regexp.MustCompile(`[^a-z0-9]+`)
+
+func splitUpstreamScheme(upstream string) (scheme, hostPort string) {
+	upstream = strings.TrimSpace(upstream)
+	for _, candidate := range []string{"http://", "https://"} {
+		if strings.HasPrefix(strings.ToLower(upstream), candidate) {
+			return upstream[:len(candidate)], upstream[len(candidate):]
+		}
+	}
+	return "", upstream
 }
 
 func rawProxySitesFromMetadata(metadata map[string]any) []map[string]any {

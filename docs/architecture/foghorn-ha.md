@@ -580,6 +580,19 @@ REDIS_PASSWORD=secret                 # optional
 
 Eliminates Redis as a single point of failure. Automatic failover in ~15-30s.
 
+The manifest's `host` / `replica_hosts` are the initial topology only. Once
+running, Sentinel owns which server is primary. Provisioning (the
+`frameworks.infra.redis` role) renders declared settings to
+`/etc/frameworks/redis/<instance>.conf`, and each process runs from a
+runtime-owned file in its data dir (`runtime.conf` for servers, which
+`include`s the declared file; `sentinel.conf` for Sentinel). Sentinel's
+`CONFIG REWRITE` persists role changes there, so a restarted server comes back
+in its current role. A provisioning re-run rewrites the runtime file only when
+the declared settings change, and then carries over the live role (from the
+running process, else the last persisted state), so it never demotes the
+current primary or points Sentinel back at the original one. Every server
+carries `masterauth`, because any of them can be demoted to a replica.
+
 ```
           sentinel-1    sentinel-2    sentinel-3
               │              │              │

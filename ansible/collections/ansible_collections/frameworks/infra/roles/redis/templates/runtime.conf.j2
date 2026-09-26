@@ -1,0 +1,7 @@
+# Runtime config for {{ redis_service_name }}. Sentinel and CONFIG REWRITE own
+# this file: they persist the live replication role here. Provisioning only
+# rewrites it when the declared settings change, carrying over the live role.
+include {{ redis_config_path }}
+{% if redis_runtime_replicaof | length > 0 %}
+replicaof {{ redis_runtime_replicaof }}
+{% endif %}
