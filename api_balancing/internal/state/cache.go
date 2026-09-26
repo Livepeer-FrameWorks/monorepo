@@ -257,6 +257,9 @@ func (sm *StreamStateManager) applyRedisChange(change StateChange) {
 		if err := json.Unmarshal(change.Payload, &node); err == nil {
 			mergeIncomingNode(&node, sm.nodes[node.NodeID])
 			sm.nodes[node.NodeID] = &node
+			// The replicated node state is the holder's lifecycle update;
+			// reconcile this replica's own redirects to the node with it.
+			sm.reconcilePendingViewersLocked(node.NodeID)
 			sm.recomputeNodeScoresLocked(&node)
 		}
 	case StateEntityNodeMode:

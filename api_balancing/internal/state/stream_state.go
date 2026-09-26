@@ -4833,24 +4833,9 @@ func (sm *StreamStateManager) ReconcileVirtualViewers(nodeID string, realTotalCo
 		node.EstBandwidthPerUser = sm.clampBandwidth(realUpSpeed / uint64(realTotalConnections))
 	}
 
-	// 3. Timeout stale PENDING viewers (>30s old)
-	sm.timeoutStalePendingViewersLocked(nodeID, 30*time.Second)
-
-	// 3.5. Cleanup old ABANDONED/DISCONNECTED viewers
-	sm.cleanupOldViewersLocked(nodeID, 5*time.Minute)
-
-	// 4. Recalculate AddBandwidth based on remaining pending viewers
-	var totalPendingBW uint64
-	pendingCount := 0
-	for _, viewerID := range sm.viewersByNode[nodeID] {
-		viewer := sm.virtualViewers[viewerID]
-		if viewer != nil && viewer.State == VirtualViewerPending {
-			totalPendingBW += viewer.EstBandwidth
-			pendingCount++
-		}
-	}
-	node.PendingRedirects = pendingCount
-	node.AddBandwidth = totalPendingBW
+	// 3. Time out stale pending redirects and recount the bandwidth the
+	// remaining ones reserve.
+	sm.reconcilePendingViewersLocked(nodeID)
 
 	// 5. Recompute scores
 	sm.recomputeNodeScoresLocked(node)
@@ -4861,6 +4846,35 @@ func (sm *StreamStateManager) ReconcileVirtualViewers(nodeID string, realTotalCo
 }
 
 // timeoutStalePendingViewersLocked marks old PENDING viewers as ABANDONED (must hold lock)
+// pendingViewerTimeout is how long a redirect waits for the edge's USER_NEW
+// before its reserved bandwidth is released.
+const pendingViewerTimeout = 30 * time.Second
+
+// reconcilePendingViewersLocked times out stale pending redirects to nodeID
+// and recomputes the bandwidth they reserve. It runs on the node's
+// lifecycle update: directly on the replica holding the node's control
+// stream, and on every other replica when that update's node state is
+// replicated to it (applyRedisChange). Without the second path a replica's
+// own redirects to a node it does not hold would never time out.
+func (sm *StreamStateManager) reconcilePendingViewersLocked(nodeID string) {
+	node := sm.nodes[nodeID]
+	if node == nil {
+		return
+	}
+	sm.timeoutStalePendingViewersLocked(nodeID, pendingViewerTimeout)
+	sm.cleanupOldViewersLocked(nodeID, 5*time.Minute)
+	var pendingBandwidth uint64
+	pending := 0
+	for _, viewerID := range sm.viewersByNode[nodeID] {
+		if viewer := sm.virtualViewers[viewerID]; viewer != nil && viewer.State == VirtualViewerPending {
+			pendingBandwidth += viewer.EstBandwidth
+			pending++
+		}
+	}
+	node.PendingRedirects = pending
+	node.AddBandwidth = pendingBandwidth
+}
+
 func (sm *StreamStateManager) timeoutStalePendingViewersLocked(nodeID string, maxAge time.Duration) {
 	now := time.Now()
 	cutoff := now.Add(-maxAge)

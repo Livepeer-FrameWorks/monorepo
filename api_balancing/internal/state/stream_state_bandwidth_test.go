@@ -1,6 +1,7 @@
 package state
 
 import (
+	"encoding/json"
 	"testing"
 	"time"
 )
@@ -175,5 +176,40 @@ func TestUpdateUserConnection_ClampsBandwidthPenalty(t *testing.T) {
 	node := sm.nodes[nodeID]
 	if node.AddBandwidth != 1024*1024 {
 		t.Fatalf("expected AddBandwidth to be clamped to 1MB/s, got %d", node.AddBandwidth)
+	}
+}
+
+// Staging rc7: four of six Foghorn replicas refused every live /play for 12
+// minutes, scoring idle edges as capacity=exhausted. A replica that does not
+// hold an edge's control stream gets the edge's lifecycle update only as
+// replicated node state, and it never timed out its own pending redirects
+// there, so their reserved bandwidth grew without bound.
+func TestReplicatedNodeUpdateTimesOutLocalPendingRedirects(t *testing.T) {
+	sm := setupStateManager(t)
+	nodeID := "edge-not-held"
+	configureTestNode(sm, nodeID)
+
+	stale := sm.CreateVirtualViewer(nodeID, "stream", "203.0.113.30")
+	fresh := sm.CreateVirtualViewer(nodeID, "stream", "203.0.113.31")
+	sm.mu.Lock()
+	sm.virtualViewers[stale].RedirectTime = time.Now().Add(-time.Minute)
+	freshBandwidth := sm.virtualViewers[fresh].EstBandwidth
+	payload, err := json.Marshal(sm.nodes[nodeID])
+	sm.mu.Unlock()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// The holder's lifecycle update arrives as replicated node state.
+	sm.applyRedisChange(StateChange{Entity: StateEntityNode, NodeID: nodeID, Payload: payload})
+
+	sm.mu.Lock()
+	defer sm.mu.Unlock()
+	if state := sm.virtualViewers[stale].State; state != VirtualViewerAbandoned {
+		t.Fatalf("stale redirect state = %s, want abandoned", state)
+	}
+	node := sm.nodes[nodeID]
+	if node.PendingRedirects != 1 || node.AddBandwidth != freshBandwidth {
+		t.Fatalf("pending=%d addBandwidth=%d, want only the fresh redirect (1, %d)", node.PendingRedirects, node.AddBandwidth, freshBandwidth)
 	}
 }
