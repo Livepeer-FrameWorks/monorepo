@@ -1986,8 +1986,8 @@ func processingRecordingEndEvent(rec *ipcpb.RecordingCompleteTrigger) Processing
 		MediaDurationMs: rec.GetMediaDurationMs(),
 		ExitReason:      rec.GetExitReason(),
 		HumanExitReason: rec.GetHumanExitReason(),
-		Tracks:          processingTracksFromProto(rec.GetTracks()),
-		FullTracks:      rec.GetTracks(),
+		Tracks:          processingTracksFromProto(writtenRecordingTracks(rec.GetTracks())),
+		FullTracks:      writtenRecordingTracks(rec.GetTracks()),
 		ProcessingSpeed: rec.GetProcessingSpeed(),
 	}
 }

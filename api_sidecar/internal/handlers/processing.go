@@ -2401,13 +2401,19 @@ func processingTracksFromProto(tracks []*ipcpb.StreamTrack) []processingMetaVide
 		if track.GetTrackType() != "video" && track.GetWidth() <= 0 && track.GetHeight() <= 0 {
 			continue
 		}
+		// The written span is what the file holds; firstms/lastms describe
+		// the buffer, which can run past what the recorder wrote.
+		firstMs, lastMs := track.GetFirstMs(), track.GetLastMs()
+		if track.WrittenFirstMs != nil && track.WrittenLastMs != nil {
+			firstMs, lastMs = track.GetWrittenFirstMs(), track.GetWrittenLastMs()
+		}
 		out = append(out, processingMetaVideoTrack{
 			codec:         codec,
 			name:          track.GetTrackName(),
 			width:         int(track.GetWidth()),
 			height:        int(track.GetHeight()),
-			firstms:       float64(track.GetFirstMs()),
-			lastms:        float64(track.GetLastMs()),
+			firstms:       float64(firstMs),
+			lastms:        float64(lastMs),
 			source:        track.GetSourceTrack(),
 			trackID:       track.GetTrackId(),
 			hasTrackID:    track.TrackId != nil,
