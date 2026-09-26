@@ -166,9 +166,29 @@ func (r *Reconciler) Reconcile(ctx context.Context, tenantID string, tierLevel i
 		return []string{}, "", nil
 	}
 
-	idSlice := make([]string, 0, len(officialIDs))
+	// The access rows are read before eligibility: a cluster Quartermaster
+	// reports as platform-official in this read is judged by its pricing even
+	// when the cached official list predates it. Suspension below is
+	// destructive, so it must never follow from a stale cache alone.
+	currentActive := make(map[string]struct{})
+	if resp, listErr := r.qm.ListTenantClusterAccess(ctx, tenantID); listErr != nil {
+		return nil, "", fmt.Errorf("list tenant cluster access: %w", listErr)
+	} else {
+		for _, row := range resp.GetRows() {
+			if row.GetIsActive() && row.GetIsPlatformOfficial() {
+				currentActive[row.GetClusterId()] = struct{}{}
+			}
+		}
+	}
+
+	idSlice := make([]string, 0, len(officialIDs)+len(currentActive))
 	for id := range officialIDs {
 		idSlice = append(idSlice, id)
+	}
+	for id := range currentActive {
+		if !officialIDs[id] {
+			idSlice = append(idSlice, id)
+		}
 	}
 
 	rows, err := purserdb.New(r.db).ListEligibleOfficialClusters(ctx, purserdb.ListEligibleOfficialClustersParams{
@@ -199,17 +219,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, tenantID string, tierLevel i
 			topLevelCandidates = append(topLevelCandidates, entry.clusterID)
 		}
 	}
-	currentActive := make(map[string]struct{})
 	currentPrimary := ""
-	if resp, listErr := r.qm.ListTenantClusterAccess(ctx, tenantID); listErr != nil {
-		return nil, "", fmt.Errorf("list tenant cluster access: %w", listErr)
-	} else {
-		for _, row := range resp.GetRows() {
-			if row.GetIsActive() && row.GetIsPlatformOfficial() {
-				currentActive[row.GetClusterId()] = struct{}{}
-			}
-		}
-	}
 	tenantResp, tErr := r.qm.GetTenant(ctx, tenantID)
 	if tErr != nil {
 		return nil, "", fmt.Errorf("get tenant primary cluster: %w", tErr)

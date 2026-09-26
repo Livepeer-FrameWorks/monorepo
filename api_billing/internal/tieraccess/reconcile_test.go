@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql/driver"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -418,5 +419,43 @@ func asInt64(v driver.Value) (int64, bool) {
 		return int64(n), true
 	default:
 		return 0, false
+	}
+}
+
+// clusterIDsInclude matches the eligibility query's cluster-id argument when it
+// names the given cluster.
+type clusterIDsInclude string
+
+func (c clusterIDsInclude) Match(v driver.Value) bool {
+	return strings.Contains(fmt.Sprint(v), string(c))
+}
+
+// A cluster Quartermaster already reports as platform-official must be judged
+// by its pricing even when the cached official list predates it; suspending it
+// from a stale cache revoked access to a new official cluster for up to the
+// cache lifetime.
+func TestReconcile_FreshOfficialClusterMissingFromCacheIsNotSuspended(t *testing.T) {
+	qm := &fakeQM{
+		official:       []string{"c1"},
+		accessRows:     []*quartermasterpb.TenantClusterAccessRow{activeOfficialRow("c1"), activeOfficialRow("c5")},
+		primary:        "c1",
+		deploymentTier: "supporter",
+	}
+	r, mock := newReconcilerWithMock(t, qm)
+	mock.ExpectQuery(`SELECT cluster_id, required_tier_level`).
+		WithArgs(clusterIDsInclude("c5"), sqlmock.AnyArg()).
+		WillReturnRows(pricingRows([2]any{"c1", 0}, [2]any{"c5", 0}))
+	expectDNSEntitlements(mock, "supporter", true, true)
+
+	if _, _, err := r.Reconcile(context.Background(), "tenant-1", 2, "supporter"); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	for _, call := range qm.calls {
+		if strings.HasPrefix(call, "suspend:c5") {
+			t.Fatalf("suspended a priced official cluster the cache had not seen yet: %v", qm.calls)
+		}
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("eligibility query did not include the freshly official cluster: %v", err)
 	}
 }
