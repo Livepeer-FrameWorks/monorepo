@@ -24661,6 +24661,8 @@ type Query {
 
   """
   List all streams for the current tenant with pagination.
+  An API token needs the streams:read or streams:write scope. Stream.streamKey
+  needs streams:write.
   """
   streamsConnection(
     """
@@ -24676,6 +24678,8 @@ type Query {
 
   """
   Fetch a single stream by its global ID.
+  An API token needs the streams:read or streams:write scope. Stream.streamKey
+  needs streams:write.
   """
   stream(
     """
@@ -24696,6 +24700,8 @@ type Query {
 
   """
   List all stream keys for a specific stream.
+  Stream keys are publishing credentials, so an API token needs the
+  streams:write scope.
   """
   streamKeysConnection(
     """
@@ -28591,7 +28597,12 @@ type Stream implements Node {
   name: String!
   "Optional description for the stream."
   description: String
-  "Secret key for publisher-authenticated ingest; null for pull and managed sources."
+  """
+  Secret key for publisher-authenticated ingest; null for pull and managed sources.
+  The key lets its holder publish to the stream, so an API token needs the
+  streams:write scope: without it this field is null and the response carries
+  a FORBIDDEN error at its path.
+  """
   streamKey: String
   "Public identifier for playback URLs."
   playbackId: String!
@@ -28613,7 +28624,9 @@ type Stream implements Node {
   """
   Real-time operational metrics from the data plane.
   Includes viewer counts, quality metrics, and throughput data.
-  Lazily loaded from ClickHouse analytics.
+  Lazily loaded from ClickHouse analytics, so an API token needs the
+  analytics:read scope: without it this field is null and the response
+  carries a FORBIDDEN error at its path.
   """
   metrics: StreamMetrics
 
@@ -31819,6 +31832,7 @@ type StreamKey {
   id: ID!
   streamId: ID!
   stream: Stream
+  "The publishing secret. Stream keys are read only through operations that need the streams:write scope."
   keyValue: String!
   keyName: String
   isActive: Boolean!

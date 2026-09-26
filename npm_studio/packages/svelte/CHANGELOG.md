@@ -1,5 +1,11 @@
 # @livepeer-frameworks/streamcrafter-svelte
 
+## 0.4.3
+
+### Patch Changes
+
+- @livepeer-frameworks/streamcrafter-core@0.4.3
+
 ## 0.4.2
 
 ### Patch Changes

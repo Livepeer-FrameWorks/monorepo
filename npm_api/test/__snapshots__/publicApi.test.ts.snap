@@ -15,7 +15,7 @@ exports[`public API > gateway-probe entry exports 1`] = `
 
 exports[`public API > operation manifest 1`] = `
 {
-  "line": "0.3",
+  "line": "0.4",
   "minServer": "v0.3.11",
   "operations": {
     "AbortVodUpload": {
@@ -139,7 +139,7 @@ exports[`public API > operation manifest 1`] = `
       "since": "v0.3.11",
     },
     "CreateStream": {
-      "hash": "sha256:46b01a9efe965933bcc2e50d7054fe0943469902b73a20c40a41781f95165d0b",
+      "hash": "sha256:cd8978b6d236f178189cfdfa1d974f5d45846990174f302875799d14c6ea9369",
       "kind": "mutation",
       "since": "v0.3.11",
     },
@@ -679,7 +679,7 @@ exports[`public API > operation manifest 1`] = `
       "since": "v0.3.11",
     },
     "GetStream": {
-      "hash": "sha256:4a93e19c65f1120f38dcfeee0a0cbcc723d0dbc0af4da13065f477d7c508dc9c",
+      "hash": "sha256:44212940a4f34dbaeb8c7383297c76f7cc1087a163ca08b9d7a539ec610f3fca",
       "kind": "query",
       "since": "v0.3.11",
     },
@@ -720,6 +720,16 @@ exports[`public API > operation manifest 1`] = `
     },
     "GetStreamHealthSummary": {
       "hash": "sha256:2e279f99ecef59bcafb308a6a136a62baf7f4100ef7c65d04c757b3f2622de22",
+      "kind": "query",
+      "since": "v0.3.11",
+    },
+    "GetStreamKey": {
+      "hash": "sha256:a9dff1ca266f20349f4fd232dde3df65e5670136893fe1cb017ac1dd204781c7",
+      "kind": "query",
+      "since": "v0.3.11",
+    },
+    "GetStreamMetrics": {
+      "hash": "sha256:a8c2bc337ab6da85ccb4acce0080a1e92bf5684b39b97be136f0147a6544cc28",
       "kind": "query",
       "since": "v0.3.11",
     },
@@ -878,8 +888,13 @@ exports[`public API > operation manifest 1`] = `
       "kind": "query",
       "since": "v0.3.11",
     },
+    "ListStreamMetrics": {
+      "hash": "sha256:e678c75ace8ff0634390de03e6e735e230cd9ec13380dd614de4830572fcd7d6",
+      "kind": "query",
+      "since": "v0.3.11",
+    },
     "ListStreams": {
-      "hash": "sha256:e01069d9274536840005012f14dabd3914d2080a00ba2666f60ebf7191c6214d",
+      "hash": "sha256:9220449a6d4caa2540d710db2484fe91e4dab6d6f4f400d871b3bae3d7f2d2a8",
       "kind": "query",
       "since": "v0.3.11",
     },
@@ -959,7 +974,7 @@ exports[`public API > operation manifest 1`] = `
       "since": "v0.3.11",
     },
     "RefreshStreamKey": {
-      "hash": "sha256:78f4a432a52e4d0cfeab228bb04c7e9ac567b5ed5cb2166a242afa126dc4c653",
+      "hash": "sha256:c8b7e86782b66998734665b420e484cd75649cf2fe4cfab36ab09606d507ac08",
       "kind": "mutation",
       "since": "v0.3.11",
     },
@@ -1134,7 +1149,7 @@ exports[`public API > operation manifest 1`] = `
       "since": "v0.3.11",
     },
     "UpdateStream": {
-      "hash": "sha256:a907b73f834a692316b9313764d497d2d95e34f4bfdcf7e495d20dbfb1984143",
+      "hash": "sha256:38eb99bfd4ab65bb0bfdedec939d0171ec4da6d31c3b3bf90c57c28c82ae6cda",
       "kind": "mutation",
       "since": "v0.3.11",
     },
@@ -1353,6 +1368,8 @@ exports[`public API > root entry exports 1`] = `
   "GetStreamHealth5mConnectionDocument",
   "GetStreamHealthConnectionDocument",
   "GetStreamHealthSummaryDocument",
+  "GetStreamKeyDocument",
+  "GetStreamMetricsDocument",
   "GetStreamingConfigDocument",
   "GetTenantAnalyticsDailyConnectionDocument",
   "GetTenantDocument",
@@ -1395,6 +1412,7 @@ exports[`public API > root entry exports 1`] = `
   "ListPushTargetsDocument",
   "ListSigningKeysDocument",
   "ListStreamKeysDocument",
+  "ListStreamMetricsDocument",
   "ListStreamsDocument",
   "ListUsageRecordsDocument",
   "LiveConnectionEventsDocument",
@@ -1526,6 +1544,7 @@ exports[`public API > root entry exports 1`] = `
   "StreamHealthSummaryDefaultFieldsFragmentDoc",
   "StreamInNodeDefaultFieldsFragmentDoc",
   "StreamKeyFieldsFragmentDoc",
+  "StreamMetricsFieldsFragmentDoc",
   "StreamRetentionOverridesDefaultFieldsFragmentDoc",
   "StreamValidationDefaultFieldsFragmentDoc",
   "StreamingConfigDefaultFieldsFragmentDoc",

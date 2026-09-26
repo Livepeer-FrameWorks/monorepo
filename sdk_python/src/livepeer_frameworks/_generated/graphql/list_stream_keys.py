@@ -13,9 +13,9 @@ class ListStreamKeys(BaseModel):
 
     stream_keys_connection: "ListStreamKeysStreamKeysConnection" = Field(
         alias="streamKeysConnection",
-        description="List all stream keys for a specific stream.",
+        description="List all stream keys for a specific stream.\nStream keys are publishing credentials, so an API token needs the\nstreams:write scope.",
     )
-    "List all stream keys for a specific stream."
+    "List all stream keys for a specific stream.\nStream keys are publishing credentials, so an API token needs the\nstreams:write scope."
 
 
 class ListStreamKeysStreamKeysConnection(BaseModel):

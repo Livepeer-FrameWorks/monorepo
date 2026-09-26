@@ -4269,6 +4269,9 @@ type ArtifactEventDefaultFieldsStream struct {
 	// Optional description for the stream.
 	Description *string `json:"description"`
 	// Secret key for publisher-authenticated ingest; null for pull and managed sources.
+	// The key lets its holder publish to the stream, so an API token needs the
+	// streams:write scope: without it this field is null and the response carries
+	// a FORBIDDEN error at its path.
 	StreamKey *string `json:"streamKey"`
 	// Public identifier for playback URLs.
 	PlaybackId string `json:"playbackId"`
@@ -4288,7 +4291,9 @@ type ArtifactEventDefaultFieldsStream struct {
 	UpdatedAt time.Time `json:"updatedAt"`
 	// Real-time operational metrics from the data plane.
 	// Includes viewer counts, quality metrics, and throughput data.
-	// Lazily loaded from ClickHouse analytics.
+	// Lazily loaded from ClickHouse analytics, so an API token needs the
+	// analytics:read scope: without it this field is null and the response
+	// carries a FORBIDDEN error at its path.
 	Metrics *ArtifactEventDefaultFieldsStreamMetrics `json:"metrics"`
 	// Configured multistream push targets for this stream.
 	PushTargets []ArtifactEventDefaultFieldsStreamPushTargetsPushTarget `json:"pushTargets"`
@@ -4836,6 +4841,9 @@ type ArtifactEventInNodeDefaultFieldsStream struct {
 	// Optional description for the stream.
 	Description *string `json:"description"`
 	// Secret key for publisher-authenticated ingest; null for pull and managed sources.
+	// The key lets its holder publish to the stream, so an API token needs the
+	// streams:write scope: without it this field is null and the response carries
+	// a FORBIDDEN error at its path.
 	StreamKey *string `json:"streamKey"`
 	// Public identifier for playback URLs.
 	PlaybackId string `json:"playbackId"`
@@ -4855,7 +4863,9 @@ type ArtifactEventInNodeDefaultFieldsStream struct {
 	UpdatedAt time.Time `json:"updatedAt"`
 	// Real-time operational metrics from the data plane.
 	// Includes viewer counts, quality metrics, and throughput data.
-	// Lazily loaded from ClickHouse analytics.
+	// Lazily loaded from ClickHouse analytics, so an API token needs the
+	// analytics:read scope: without it this field is null and the response
+	// carries a FORBIDDEN error at its path.
 	Metrics *ArtifactEventInNodeDefaultFieldsStreamMetrics `json:"metrics"`
 	// Configured multistream push targets for this stream.
 	PushTargets []ArtifactEventInNodeDefaultFieldsStreamPushTargetsPushTarget `json:"pushTargets"`
@@ -5445,6 +5455,9 @@ type ArtifactStateDefaultFieldsStream struct {
 	// Optional description for the stream.
 	Description *string `json:"description"`
 	// Secret key for publisher-authenticated ingest; null for pull and managed sources.
+	// The key lets its holder publish to the stream, so an API token needs the
+	// streams:write scope: without it this field is null and the response carries
+	// a FORBIDDEN error at its path.
 	StreamKey *string `json:"streamKey"`
 	// Public identifier for playback URLs.
 	PlaybackId string `json:"playbackId"`
@@ -5464,7 +5477,9 @@ type ArtifactStateDefaultFieldsStream struct {
 	UpdatedAt time.Time `json:"updatedAt"`
 	// Real-time operational metrics from the data plane.
 	// Includes viewer counts, quality metrics, and throughput data.
-	// Lazily loaded from ClickHouse analytics.
+	// Lazily loaded from ClickHouse analytics, so an API token needs the
+	// analytics:read scope: without it this field is null and the response
+	// carries a FORBIDDEN error at its path.
 	Metrics *ArtifactStateDefaultFieldsStreamMetrics `json:"metrics"`
 	// Configured multistream push targets for this stream.
 	PushTargets []ArtifactStateDefaultFieldsStreamPushTargetsPushTarget `json:"pushTargets"`
@@ -10109,6 +10124,9 @@ type ClientMetrics5mDefaultFieldsStream struct {
 	// Optional description for the stream.
 	Description *string `json:"description"`
 	// Secret key for publisher-authenticated ingest; null for pull and managed sources.
+	// The key lets its holder publish to the stream, so an API token needs the
+	// streams:write scope: without it this field is null and the response carries
+	// a FORBIDDEN error at its path.
 	StreamKey *string `json:"streamKey"`
 	// Public identifier for playback URLs.
 	PlaybackId string `json:"playbackId"`
@@ -10128,7 +10146,9 @@ type ClientMetrics5mDefaultFieldsStream struct {
 	UpdatedAt time.Time `json:"updatedAt"`
 	// Real-time operational metrics from the data plane.
 	// Includes viewer counts, quality metrics, and throughput data.
-	// Lazily loaded from ClickHouse analytics.
+	// Lazily loaded from ClickHouse analytics, so an API token needs the
+	// analytics:read scope: without it this field is null and the response
+	// carries a FORBIDDEN error at its path.
 	Metrics *ClientMetrics5mDefaultFieldsStreamMetrics `json:"metrics"`
 	// Configured multistream push targets for this stream.
 	PushTargets []ClientMetrics5mDefaultFieldsStreamPushTargetsPushTarget `json:"pushTargets"`
@@ -11326,6 +11346,9 @@ type ClipInNodeDefaultFieldsStream struct {
 	// Optional description for the stream.
 	Description *string `json:"description"`
 	// Secret key for publisher-authenticated ingest; null for pull and managed sources.
+	// The key lets its holder publish to the stream, so an API token needs the
+	// streams:write scope: without it this field is null and the response carries
+	// a FORBIDDEN error at its path.
 	StreamKey *string `json:"streamKey"`
 	// Public identifier for playback URLs.
 	PlaybackId string `json:"playbackId"`
@@ -11345,7 +11368,9 @@ type ClipInNodeDefaultFieldsStream struct {
 	UpdatedAt time.Time `json:"updatedAt"`
 	// Real-time operational metrics from the data plane.
 	// Includes viewer counts, quality metrics, and throughput data.
-	// Lazily loaded from ClickHouse analytics.
+	// Lazily loaded from ClickHouse analytics, so an API token needs the
+	// analytics:read scope: without it this field is null and the response
+	// carries a FORBIDDEN error at its path.
 	Metrics *ClipInNodeDefaultFieldsStreamMetrics `json:"metrics"`
 	// Configured multistream push targets for this stream.
 	PushTargets []ClipInNodeDefaultFieldsStreamPushTargetsPushTarget `json:"pushTargets"`
@@ -13280,6 +13305,9 @@ type ConnectionEventDefaultFieldsStream struct {
 	// Optional description for the stream.
 	Description *string `json:"description"`
 	// Secret key for publisher-authenticated ingest; null for pull and managed sources.
+	// The key lets its holder publish to the stream, so an API token needs the
+	// streams:write scope: without it this field is null and the response carries
+	// a FORBIDDEN error at its path.
 	StreamKey *string `json:"streamKey"`
 	// Public identifier for playback URLs.
 	PlaybackId string `json:"playbackId"`
@@ -13299,7 +13327,9 @@ type ConnectionEventDefaultFieldsStream struct {
 	UpdatedAt time.Time `json:"updatedAt"`
 	// Real-time operational metrics from the data plane.
 	// Includes viewer counts, quality metrics, and throughput data.
-	// Lazily loaded from ClickHouse analytics.
+	// Lazily loaded from ClickHouse analytics, so an API token needs the
+	// analytics:read scope: without it this field is null and the response
+	// carries a FORBIDDEN error at its path.
 	Metrics *ConnectionEventDefaultFieldsStreamMetrics `json:"metrics"`
 	// Configured multistream push targets for this stream.
 	PushTargets []ConnectionEventDefaultFieldsStreamPushTargetsPushTarget `json:"pushTargets"`
@@ -13921,6 +13951,9 @@ type ConnectionEventInNodeDefaultFieldsStream struct {
 	// Optional description for the stream.
 	Description *string `json:"description"`
 	// Secret key for publisher-authenticated ingest; null for pull and managed sources.
+	// The key lets its holder publish to the stream, so an API token needs the
+	// streams:write scope: without it this field is null and the response carries
+	// a FORBIDDEN error at its path.
 	StreamKey *string `json:"streamKey"`
 	// Public identifier for playback URLs.
 	PlaybackId string `json:"playbackId"`
@@ -13940,7 +13973,9 @@ type ConnectionEventInNodeDefaultFieldsStream struct {
 	UpdatedAt time.Time `json:"updatedAt"`
 	// Real-time operational metrics from the data plane.
 	// Includes viewer counts, quality metrics, and throughput data.
-	// Lazily loaded from ClickHouse analytics.
+	// Lazily loaded from ClickHouse analytics, so an API token needs the
+	// analytics:read scope: without it this field is null and the response
+	// carries a FORBIDDEN error at its path.
 	Metrics *ConnectionEventInNodeDefaultFieldsStreamMetrics `json:"metrics"`
 	// Configured multistream push targets for this stream.
 	PushTargets []ConnectionEventInNodeDefaultFieldsStreamPushTargetsPushTarget `json:"pushTargets"`
@@ -20819,10 +20854,18 @@ func (v *CreateSigningKeyResponse) __premarshalJSON() (*__premarshalCreateSignin
 type CreateStreamCreateStream struct {
 	Typename     *string `json:"__typename"`
 	StreamFields `json:"-"`
+	// Secret key for publisher-authenticated ingest; null for pull and managed sources.
+	// The key lets its holder publish to the stream, so an API token needs the
+	// streams:write scope: without it this field is null and the response carries
+	// a FORBIDDEN error at its path.
+	StreamKey *string `json:"streamKey"`
 }
 
 // GetTypename returns CreateStreamCreateStream.Typename, and is useful for accessing the field via an interface.
 func (v *CreateStreamCreateStream) GetTypename() *string { return v.Typename }
+
+// GetStreamKey returns CreateStreamCreateStream.StreamKey, and is useful for accessing the field via an interface.
+func (v *CreateStreamCreateStream) GetStreamKey() *string { return v.StreamKey }
 
 // GetId returns CreateStreamCreateStream.Id, and is useful for accessing the field via an interface.
 func (v *CreateStreamCreateStream) GetId() string { return v.StreamFields.Id }
@@ -20835,9 +20878,6 @@ func (v *CreateStreamCreateStream) GetName() string { return v.StreamFields.Name
 
 // GetDescription returns CreateStreamCreateStream.Description, and is useful for accessing the field via an interface.
 func (v *CreateStreamCreateStream) GetDescription() *string { return v.StreamFields.Description }
-
-// GetStreamKey returns CreateStreamCreateStream.StreamKey, and is useful for accessing the field via an interface.
-func (v *CreateStreamCreateStream) GetStreamKey() *string { return v.StreamFields.StreamKey }
 
 // GetPlaybackId returns CreateStreamCreateStream.PlaybackId, and is useful for accessing the field via an interface.
 func (v *CreateStreamCreateStream) GetPlaybackId() string { return v.StreamFields.PlaybackId }
@@ -20877,11 +20917,6 @@ func (v *CreateStreamCreateStream) GetPlaybackPolicy() *StreamFieldsPlaybackPoli
 	return v.StreamFields.PlaybackPolicy
 }
 
-// GetMetrics returns CreateStreamCreateStream.Metrics, and is useful for accessing the field via an interface.
-func (v *CreateStreamCreateStream) GetMetrics() *StreamFieldsMetricsStreamMetrics {
-	return v.StreamFields.Metrics
-}
-
 func (v *CreateStreamCreateStream) UnmarshalJSON(b []byte) error {
 
 	if string(b) == "null" {
@@ -20910,6 +20945,8 @@ func (v *CreateStreamCreateStream) UnmarshalJSON(b []byte) error {
 type __premarshalCreateStreamCreateStream struct {
 	Typename *string `json:"__typename"`
 
+	StreamKey *string `json:"streamKey"`
+
 	Id string `json:"id"`
 
 	StreamId string `json:"streamId"`
@@ -20917,8 +20954,6 @@ type __premarshalCreateStreamCreateStream struct {
 	Name string `json:"name"`
 
 	Description *string `json:"description"`
-
-	StreamKey *string `json:"streamKey"`
 
 	PlaybackId string `json:"playbackId"`
 
@@ -20939,8 +20974,6 @@ type __premarshalCreateStreamCreateStream struct {
 	Monitoring MonitoringToggle `json:"monitoring"`
 
 	PlaybackPolicy *StreamFieldsPlaybackPolicy `json:"playbackPolicy"`
-
-	Metrics *StreamFieldsMetricsStreamMetrics `json:"metrics"`
 }
 
 func (v *CreateStreamCreateStream) MarshalJSON() ([]byte, error) {
@@ -20955,11 +20988,11 @@ func (v *CreateStreamCreateStream) __premarshalJSON() (*__premarshalCreateStream
 	var retval __premarshalCreateStreamCreateStream
 
 	retval.Typename = v.Typename
+	retval.StreamKey = v.StreamKey
 	retval.Id = v.StreamFields.Id
 	retval.StreamId = v.StreamFields.StreamId
 	retval.Name = v.StreamFields.Name
 	retval.Description = v.StreamFields.Description
-	retval.StreamKey = v.StreamFields.StreamKey
 	retval.PlaybackId = v.StreamFields.PlaybackId
 	retval.Record = v.StreamFields.Record
 	retval.IngestMode = v.StreamFields.IngestMode
@@ -20970,7 +21003,6 @@ func (v *CreateStreamCreateStream) __premarshalJSON() (*__premarshalCreateStream
 	retval.DvrChapterIntervalSeconds = v.StreamFields.DvrChapterIntervalSeconds
 	retval.Monitoring = v.StreamFields.Monitoring
 	retval.PlaybackPolicy = v.StreamFields.PlaybackPolicy
-	retval.Metrics = v.StreamFields.Metrics
 	return &retval, nil
 }
 
@@ -28456,6 +28488,9 @@ type GeographicDistributionDefaultFieldsStream struct {
 	// Optional description for the stream.
 	Description *string `json:"description"`
 	// Secret key for publisher-authenticated ingest; null for pull and managed sources.
+	// The key lets its holder publish to the stream, so an API token needs the
+	// streams:write scope: without it this field is null and the response carries
+	// a FORBIDDEN error at its path.
 	StreamKey *string `json:"streamKey"`
 	// Public identifier for playback URLs.
 	PlaybackId string `json:"playbackId"`
@@ -28475,7 +28510,9 @@ type GeographicDistributionDefaultFieldsStream struct {
 	UpdatedAt time.Time `json:"updatedAt"`
 	// Real-time operational metrics from the data plane.
 	// Includes viewer counts, quality metrics, and throughput data.
-	// Lazily loaded from ClickHouse analytics.
+	// Lazily loaded from ClickHouse analytics, so an API token needs the
+	// analytics:read scope: without it this field is null and the response
+	// carries a FORBIDDEN error at its path.
 	Metrics *GeographicDistributionDefaultFieldsStreamMetrics `json:"metrics"`
 	// Configured multistream push targets for this stream.
 	PushTargets []GeographicDistributionDefaultFieldsStreamPushTargetsPushTarget `json:"pushTargets"`
@@ -55973,6 +56010,8 @@ func (v *GetRebufferingEventsConnectionResponse) GetAnalytics() GetRebufferingEv
 // GetRecentPullSourceEventsResponse is returned by GetRecentPullSourceEvents on success.
 type GetRecentPullSourceEventsResponse struct {
 	// Fetch a single stream by its global ID.
+	// An API token needs the streams:read or streams:write scope. Stream.streamKey
+	// needs streams:write.
 	Stream *GetRecentPullSourceEventsStream `json:"stream"`
 }
 
@@ -62399,9 +62438,192 @@ func (v *GetStreamHealthSummaryResponse) GetAnalytics() GetStreamHealthSummaryAn
 	return v.Analytics
 }
 
+// GetStreamKeyResponse is returned by GetStreamKey on success.
+type GetStreamKeyResponse struct {
+	// Fetch a single stream by its global ID.
+	// An API token needs the streams:read or streams:write scope. Stream.streamKey
+	// needs streams:write.
+	Stream *GetStreamKeyStream `json:"stream"`
+}
+
+// GetStream returns GetStreamKeyResponse.Stream, and is useful for accessing the field via an interface.
+func (v *GetStreamKeyResponse) GetStream() *GetStreamKeyStream { return v.Stream }
+
+// GetStreamKeyStream includes the requested fields of the GraphQL type Stream.
+// The GraphQL type's documentation follows.
+//
+// A live stream configuration with real-time operational metrics.
+// Streams are the core entity for broadcasting and viewing live content.
+type GetStreamKeyStream struct {
+	// Global unique identifier for Relay compatibility.
+	Id string `json:"id"`
+	// Secret key for publisher-authenticated ingest; null for pull and managed sources.
+	// The key lets its holder publish to the stream, so an API token needs the
+	// streams:write scope: without it this field is null and the response carries
+	// a FORBIDDEN error at its path.
+	StreamKey *string `json:"streamKey"`
+}
+
+// GetId returns GetStreamKeyStream.Id, and is useful for accessing the field via an interface.
+func (v *GetStreamKeyStream) GetId() string { return v.Id }
+
+// GetStreamKey returns GetStreamKeyStream.StreamKey, and is useful for accessing the field via an interface.
+func (v *GetStreamKeyStream) GetStreamKey() *string { return v.StreamKey }
+
+// GetStreamMetricsResponse is returned by GetStreamMetrics on success.
+type GetStreamMetricsResponse struct {
+	// Fetch a single stream by its global ID.
+	// An API token needs the streams:read or streams:write scope. Stream.streamKey
+	// needs streams:write.
+	Stream *GetStreamMetricsStream `json:"stream"`
+}
+
+// GetStream returns GetStreamMetricsResponse.Stream, and is useful for accessing the field via an interface.
+func (v *GetStreamMetricsResponse) GetStream() *GetStreamMetricsStream { return v.Stream }
+
+// GetStreamMetricsStream includes the requested fields of the GraphQL type Stream.
+// The GraphQL type's documentation follows.
+//
+// A live stream configuration with real-time operational metrics.
+// Streams are the core entity for broadcasting and viewing live content.
+type GetStreamMetricsStream struct {
+	// Global unique identifier for Relay compatibility.
+	Id string `json:"id"`
+	// Real-time operational metrics from the data plane.
+	// Includes viewer counts, quality metrics, and throughput data.
+	// Lazily loaded from ClickHouse analytics, so an API token needs the
+	// analytics:read scope: without it this field is null and the response
+	// carries a FORBIDDEN error at its path.
+	Metrics *GetStreamMetricsStreamMetrics `json:"metrics"`
+}
+
+// GetId returns GetStreamMetricsStream.Id, and is useful for accessing the field via an interface.
+func (v *GetStreamMetricsStream) GetId() string { return v.Id }
+
+// GetMetrics returns GetStreamMetricsStream.Metrics, and is useful for accessing the field via an interface.
+func (v *GetStreamMetricsStream) GetMetrics() *GetStreamMetricsStreamMetrics { return v.Metrics }
+
+// GetStreamMetricsStreamMetrics includes the requested fields of the GraphQL type StreamMetrics.
+// The GraphQL type's documentation follows.
+//
+// Real-time operational metrics for a stream from the analytics data plane.
+// Updated frequently while stream is live, represents latest known state.
+type GetStreamMetricsStreamMetrics struct {
+	StreamMetricsFields `json:"-"`
+}
+
+// GetStatus returns GetStreamMetricsStreamMetrics.Status, and is useful for accessing the field via an interface.
+func (v *GetStreamMetricsStreamMetrics) GetStatus() StreamStatus { return v.StreamMetricsFields.Status }
+
+// GetIsLive returns GetStreamMetricsStreamMetrics.IsLive, and is useful for accessing the field via an interface.
+func (v *GetStreamMetricsStreamMetrics) GetIsLive() bool { return v.StreamMetricsFields.IsLive }
+
+// GetCurrentViewers returns GetStreamMetricsStreamMetrics.CurrentViewers, and is useful for accessing the field via an interface.
+func (v *GetStreamMetricsStreamMetrics) GetCurrentViewers() int {
+	return v.StreamMetricsFields.CurrentViewers
+}
+
+// GetStartedAt returns GetStreamMetricsStreamMetrics.StartedAt, and is useful for accessing the field via an interface.
+func (v *GetStreamMetricsStreamMetrics) GetStartedAt() *time.Time {
+	return v.StreamMetricsFields.StartedAt
+}
+
+// GetUpdatedAt returns GetStreamMetricsStreamMetrics.UpdatedAt, and is useful for accessing the field via an interface.
+func (v *GetStreamMetricsStreamMetrics) GetUpdatedAt() time.Time {
+	return v.StreamMetricsFields.UpdatedAt
+}
+
+// GetBufferState returns GetStreamMetricsStreamMetrics.BufferState, and is useful for accessing the field via an interface.
+func (v *GetStreamMetricsStreamMetrics) GetBufferState() *string {
+	return v.StreamMetricsFields.BufferState
+}
+
+// GetQualityTier returns GetStreamMetricsStreamMetrics.QualityTier, and is useful for accessing the field via an interface.
+func (v *GetStreamMetricsStreamMetrics) GetQualityTier() *string {
+	return v.StreamMetricsFields.QualityTier
+}
+
+// GetHasIssues returns GetStreamMetricsStreamMetrics.HasIssues, and is useful for accessing the field via an interface.
+func (v *GetStreamMetricsStreamMetrics) GetHasIssues() *bool { return v.StreamMetricsFields.HasIssues }
+
+// GetIssuesDescription returns GetStreamMetricsStreamMetrics.IssuesDescription, and is useful for accessing the field via an interface.
+func (v *GetStreamMetricsStreamMetrics) GetIssuesDescription() *string {
+	return v.StreamMetricsFields.IssuesDescription
+}
+
+func (v *GetStreamMetricsStreamMetrics) UnmarshalJSON(b []byte) error {
+
+	if string(b) == "null" {
+		return nil
+	}
+
+	var firstPass struct {
+		*GetStreamMetricsStreamMetrics
+		graphql.NoUnmarshalJSON
+	}
+	firstPass.GetStreamMetricsStreamMetrics = v
+
+	err := json.Unmarshal(b, &firstPass)
+	if err != nil {
+		return err
+	}
+
+	err = json.Unmarshal(
+		b, &v.StreamMetricsFields)
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
+type __premarshalGetStreamMetricsStreamMetrics struct {
+	Status StreamStatus `json:"status"`
+
+	IsLive bool `json:"isLive"`
+
+	CurrentViewers int `json:"currentViewers"`
+
+	StartedAt *time.Time `json:"startedAt"`
+
+	UpdatedAt time.Time `json:"updatedAt"`
+
+	BufferState *string `json:"bufferState"`
+
+	QualityTier *string `json:"qualityTier"`
+
+	HasIssues *bool `json:"hasIssues"`
+
+	IssuesDescription *string `json:"issuesDescription"`
+}
+
+func (v *GetStreamMetricsStreamMetrics) MarshalJSON() ([]byte, error) {
+	premarshaled, err := v.__premarshalJSON()
+	if err != nil {
+		return nil, err
+	}
+	return json.Marshal(premarshaled)
+}
+
+func (v *GetStreamMetricsStreamMetrics) __premarshalJSON() (*__premarshalGetStreamMetricsStreamMetrics, error) {
+	var retval __premarshalGetStreamMetricsStreamMetrics
+
+	retval.Status = v.StreamMetricsFields.Status
+	retval.IsLive = v.StreamMetricsFields.IsLive
+	retval.CurrentViewers = v.StreamMetricsFields.CurrentViewers
+	retval.StartedAt = v.StreamMetricsFields.StartedAt
+	retval.UpdatedAt = v.StreamMetricsFields.UpdatedAt
+	retval.BufferState = v.StreamMetricsFields.BufferState
+	retval.QualityTier = v.StreamMetricsFields.QualityTier
+	retval.HasIssues = v.StreamMetricsFields.HasIssues
+	retval.IssuesDescription = v.StreamMetricsFields.IssuesDescription
+	return &retval, nil
+}
+
 // GetStreamResponse is returned by GetStream on success.
 type GetStreamResponse struct {
 	// Fetch a single stream by its global ID.
+	// An API token needs the streams:read or streams:write scope. Stream.streamKey
+	// needs streams:write.
 	Stream *GetStreamStream `json:"stream"`
 }
 
@@ -62431,9 +62653,6 @@ func (v *GetStreamStream) GetName() string { return v.StreamFields.Name }
 
 // GetDescription returns GetStreamStream.Description, and is useful for accessing the field via an interface.
 func (v *GetStreamStream) GetDescription() *string { return v.StreamFields.Description }
-
-// GetStreamKey returns GetStreamStream.StreamKey, and is useful for accessing the field via an interface.
-func (v *GetStreamStream) GetStreamKey() *string { return v.StreamFields.StreamKey }
 
 // GetPlaybackId returns GetStreamStream.PlaybackId, and is useful for accessing the field via an interface.
 func (v *GetStreamStream) GetPlaybackId() string { return v.StreamFields.PlaybackId }
@@ -62469,11 +62688,6 @@ func (v *GetStreamStream) GetMonitoring() MonitoringToggle { return v.StreamFiel
 // GetPlaybackPolicy returns GetStreamStream.PlaybackPolicy, and is useful for accessing the field via an interface.
 func (v *GetStreamStream) GetPlaybackPolicy() *StreamFieldsPlaybackPolicy {
 	return v.StreamFields.PlaybackPolicy
-}
-
-// GetMetrics returns GetStreamStream.Metrics, and is useful for accessing the field via an interface.
-func (v *GetStreamStream) GetMetrics() *StreamFieldsMetricsStreamMetrics {
-	return v.StreamFields.Metrics
 }
 
 func (v *GetStreamStream) UnmarshalJSON(b []byte) error {
@@ -62512,8 +62726,6 @@ type __premarshalGetStreamStream struct {
 
 	Description *string `json:"description"`
 
-	StreamKey *string `json:"streamKey"`
-
 	PlaybackId string `json:"playbackId"`
 
 	Record bool `json:"record"`
@@ -62533,8 +62745,6 @@ type __premarshalGetStreamStream struct {
 	Monitoring MonitoringToggle `json:"monitoring"`
 
 	PlaybackPolicy *StreamFieldsPlaybackPolicy `json:"playbackPolicy"`
-
-	Metrics *StreamFieldsMetricsStreamMetrics `json:"metrics"`
 }
 
 func (v *GetStreamStream) MarshalJSON() ([]byte, error) {
@@ -62553,7 +62763,6 @@ func (v *GetStreamStream) __premarshalJSON() (*__premarshalGetStreamStream, erro
 	retval.StreamId = v.StreamFields.StreamId
 	retval.Name = v.StreamFields.Name
 	retval.Description = v.StreamFields.Description
-	retval.StreamKey = v.StreamFields.StreamKey
 	retval.PlaybackId = v.StreamFields.PlaybackId
 	retval.Record = v.StreamFields.Record
 	retval.IngestMode = v.StreamFields.IngestMode
@@ -62564,7 +62773,6 @@ func (v *GetStreamStream) __premarshalJSON() (*__premarshalGetStreamStream, erro
 	retval.DvrChapterIntervalSeconds = v.StreamFields.DvrChapterIntervalSeconds
 	retval.Monitoring = v.StreamFields.Monitoring
 	retval.PlaybackPolicy = v.StreamFields.PlaybackPolicy
-	retval.Metrics = v.StreamFields.Metrics
 	return &retval, nil
 }
 
@@ -70842,6 +71050,8 @@ func (v *ListDeveloperTokensResponse) GetDeveloperTokensConnection() ListDevelop
 // ListPushTargetsResponse is returned by ListPushTargets on success.
 type ListPushTargetsResponse struct {
 	// Fetch a single stream by its global ID.
+	// An API token needs the streams:read or streams:write scope. Stream.streamKey
+	// needs streams:write.
 	Stream *ListPushTargetsStream `json:"stream"`
 }
 
@@ -71241,6 +71451,8 @@ func (v *ListSigningKeysSigningKeysConnectionPageInfo) __premarshalJSON() (*__pr
 // ListStreamKeysResponse is returned by ListStreamKeys on success.
 type ListStreamKeysResponse struct {
 	// List all stream keys for a specific stream.
+	// Stream keys are publishing credentials, so an API token needs the
+	// streams:write scope.
 	StreamKeysConnection ListStreamKeysStreamKeysConnection `json:"streamKeysConnection"`
 }
 
@@ -71457,9 +71669,273 @@ func (v *ListStreamKeysStreamKeysConnectionPageInfo) __premarshalJSON() (*__prem
 	return &retval, nil
 }
 
+// ListStreamMetricsResponse is returned by ListStreamMetrics on success.
+type ListStreamMetricsResponse struct {
+	// List all streams for the current tenant with pagination.
+	// An API token needs the streams:read or streams:write scope. Stream.streamKey
+	// needs streams:write.
+	StreamsConnection ListStreamMetricsStreamsConnection `json:"streamsConnection"`
+}
+
+// GetStreamsConnection returns ListStreamMetricsResponse.StreamsConnection, and is useful for accessing the field via an interface.
+func (v *ListStreamMetricsResponse) GetStreamsConnection() ListStreamMetricsStreamsConnection {
+	return v.StreamsConnection
+}
+
+// ListStreamMetricsStreamsConnection includes the requested fields of the GraphQL type StreamsConnection.
+type ListStreamMetricsStreamsConnection struct {
+	Nodes      []ListStreamMetricsStreamsConnectionNodesStream `json:"nodes"`
+	PageInfo   ListStreamMetricsStreamsConnectionPageInfo      `json:"pageInfo"`
+	TotalCount int                                             `json:"totalCount"`
+}
+
+// GetNodes returns ListStreamMetricsStreamsConnection.Nodes, and is useful for accessing the field via an interface.
+func (v *ListStreamMetricsStreamsConnection) GetNodes() []ListStreamMetricsStreamsConnectionNodesStream {
+	return v.Nodes
+}
+
+// GetPageInfo returns ListStreamMetricsStreamsConnection.PageInfo, and is useful for accessing the field via an interface.
+func (v *ListStreamMetricsStreamsConnection) GetPageInfo() ListStreamMetricsStreamsConnectionPageInfo {
+	return v.PageInfo
+}
+
+// GetTotalCount returns ListStreamMetricsStreamsConnection.TotalCount, and is useful for accessing the field via an interface.
+func (v *ListStreamMetricsStreamsConnection) GetTotalCount() int { return v.TotalCount }
+
+// ListStreamMetricsStreamsConnectionNodesStream includes the requested fields of the GraphQL type Stream.
+// The GraphQL type's documentation follows.
+//
+// A live stream configuration with real-time operational metrics.
+// Streams are the core entity for broadcasting and viewing live content.
+type ListStreamMetricsStreamsConnectionNodesStream struct {
+	// Global unique identifier for Relay compatibility.
+	Id string `json:"id"`
+	// Public stream UUID used for analytics and service APIs (not the Relay ID).
+	StreamId string `json:"streamId"`
+	// Real-time operational metrics from the data plane.
+	// Includes viewer counts, quality metrics, and throughput data.
+	// Lazily loaded from ClickHouse analytics, so an API token needs the
+	// analytics:read scope: without it this field is null and the response
+	// carries a FORBIDDEN error at its path.
+	Metrics *ListStreamMetricsStreamsConnectionNodesStreamMetrics `json:"metrics"`
+}
+
+// GetId returns ListStreamMetricsStreamsConnectionNodesStream.Id, and is useful for accessing the field via an interface.
+func (v *ListStreamMetricsStreamsConnectionNodesStream) GetId() string { return v.Id }
+
+// GetStreamId returns ListStreamMetricsStreamsConnectionNodesStream.StreamId, and is useful for accessing the field via an interface.
+func (v *ListStreamMetricsStreamsConnectionNodesStream) GetStreamId() string { return v.StreamId }
+
+// GetMetrics returns ListStreamMetricsStreamsConnectionNodesStream.Metrics, and is useful for accessing the field via an interface.
+func (v *ListStreamMetricsStreamsConnectionNodesStream) GetMetrics() *ListStreamMetricsStreamsConnectionNodesStreamMetrics {
+	return v.Metrics
+}
+
+// ListStreamMetricsStreamsConnectionNodesStreamMetrics includes the requested fields of the GraphQL type StreamMetrics.
+// The GraphQL type's documentation follows.
+//
+// Real-time operational metrics for a stream from the analytics data plane.
+// Updated frequently while stream is live, represents latest known state.
+type ListStreamMetricsStreamsConnectionNodesStreamMetrics struct {
+	StreamMetricsFields `json:"-"`
+}
+
+// GetStatus returns ListStreamMetricsStreamsConnectionNodesStreamMetrics.Status, and is useful for accessing the field via an interface.
+func (v *ListStreamMetricsStreamsConnectionNodesStreamMetrics) GetStatus() StreamStatus {
+	return v.StreamMetricsFields.Status
+}
+
+// GetIsLive returns ListStreamMetricsStreamsConnectionNodesStreamMetrics.IsLive, and is useful for accessing the field via an interface.
+func (v *ListStreamMetricsStreamsConnectionNodesStreamMetrics) GetIsLive() bool {
+	return v.StreamMetricsFields.IsLive
+}
+
+// GetCurrentViewers returns ListStreamMetricsStreamsConnectionNodesStreamMetrics.CurrentViewers, and is useful for accessing the field via an interface.
+func (v *ListStreamMetricsStreamsConnectionNodesStreamMetrics) GetCurrentViewers() int {
+	return v.StreamMetricsFields.CurrentViewers
+}
+
+// GetStartedAt returns ListStreamMetricsStreamsConnectionNodesStreamMetrics.StartedAt, and is useful for accessing the field via an interface.
+func (v *ListStreamMetricsStreamsConnectionNodesStreamMetrics) GetStartedAt() *time.Time {
+	return v.StreamMetricsFields.StartedAt
+}
+
+// GetUpdatedAt returns ListStreamMetricsStreamsConnectionNodesStreamMetrics.UpdatedAt, and is useful for accessing the field via an interface.
+func (v *ListStreamMetricsStreamsConnectionNodesStreamMetrics) GetUpdatedAt() time.Time {
+	return v.StreamMetricsFields.UpdatedAt
+}
+
+// GetBufferState returns ListStreamMetricsStreamsConnectionNodesStreamMetrics.BufferState, and is useful for accessing the field via an interface.
+func (v *ListStreamMetricsStreamsConnectionNodesStreamMetrics) GetBufferState() *string {
+	return v.StreamMetricsFields.BufferState
+}
+
+// GetQualityTier returns ListStreamMetricsStreamsConnectionNodesStreamMetrics.QualityTier, and is useful for accessing the field via an interface.
+func (v *ListStreamMetricsStreamsConnectionNodesStreamMetrics) GetQualityTier() *string {
+	return v.StreamMetricsFields.QualityTier
+}
+
+// GetHasIssues returns ListStreamMetricsStreamsConnectionNodesStreamMetrics.HasIssues, and is useful for accessing the field via an interface.
+func (v *ListStreamMetricsStreamsConnectionNodesStreamMetrics) GetHasIssues() *bool {
+	return v.StreamMetricsFields.HasIssues
+}
+
+// GetIssuesDescription returns ListStreamMetricsStreamsConnectionNodesStreamMetrics.IssuesDescription, and is useful for accessing the field via an interface.
+func (v *ListStreamMetricsStreamsConnectionNodesStreamMetrics) GetIssuesDescription() *string {
+	return v.StreamMetricsFields.IssuesDescription
+}
+
+func (v *ListStreamMetricsStreamsConnectionNodesStreamMetrics) UnmarshalJSON(b []byte) error {
+
+	if string(b) == "null" {
+		return nil
+	}
+
+	var firstPass struct {
+		*ListStreamMetricsStreamsConnectionNodesStreamMetrics
+		graphql.NoUnmarshalJSON
+	}
+	firstPass.ListStreamMetricsStreamsConnectionNodesStreamMetrics = v
+
+	err := json.Unmarshal(b, &firstPass)
+	if err != nil {
+		return err
+	}
+
+	err = json.Unmarshal(
+		b, &v.StreamMetricsFields)
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
+type __premarshalListStreamMetricsStreamsConnectionNodesStreamMetrics struct {
+	Status StreamStatus `json:"status"`
+
+	IsLive bool `json:"isLive"`
+
+	CurrentViewers int `json:"currentViewers"`
+
+	StartedAt *time.Time `json:"startedAt"`
+
+	UpdatedAt time.Time `json:"updatedAt"`
+
+	BufferState *string `json:"bufferState"`
+
+	QualityTier *string `json:"qualityTier"`
+
+	HasIssues *bool `json:"hasIssues"`
+
+	IssuesDescription *string `json:"issuesDescription"`
+}
+
+func (v *ListStreamMetricsStreamsConnectionNodesStreamMetrics) MarshalJSON() ([]byte, error) {
+	premarshaled, err := v.__premarshalJSON()
+	if err != nil {
+		return nil, err
+	}
+	return json.Marshal(premarshaled)
+}
+
+func (v *ListStreamMetricsStreamsConnectionNodesStreamMetrics) __premarshalJSON() (*__premarshalListStreamMetricsStreamsConnectionNodesStreamMetrics, error) {
+	var retval __premarshalListStreamMetricsStreamsConnectionNodesStreamMetrics
+
+	retval.Status = v.StreamMetricsFields.Status
+	retval.IsLive = v.StreamMetricsFields.IsLive
+	retval.CurrentViewers = v.StreamMetricsFields.CurrentViewers
+	retval.StartedAt = v.StreamMetricsFields.StartedAt
+	retval.UpdatedAt = v.StreamMetricsFields.UpdatedAt
+	retval.BufferState = v.StreamMetricsFields.BufferState
+	retval.QualityTier = v.StreamMetricsFields.QualityTier
+	retval.HasIssues = v.StreamMetricsFields.HasIssues
+	retval.IssuesDescription = v.StreamMetricsFields.IssuesDescription
+	return &retval, nil
+}
+
+// ListStreamMetricsStreamsConnectionPageInfo includes the requested fields of the GraphQL type PageInfo.
+type ListStreamMetricsStreamsConnectionPageInfo struct {
+	PageInfoFields `json:"-"`
+}
+
+// GetStartCursor returns ListStreamMetricsStreamsConnectionPageInfo.StartCursor, and is useful for accessing the field via an interface.
+func (v *ListStreamMetricsStreamsConnectionPageInfo) GetStartCursor() *string {
+	return v.PageInfoFields.StartCursor
+}
+
+// GetEndCursor returns ListStreamMetricsStreamsConnectionPageInfo.EndCursor, and is useful for accessing the field via an interface.
+func (v *ListStreamMetricsStreamsConnectionPageInfo) GetEndCursor() *string {
+	return v.PageInfoFields.EndCursor
+}
+
+// GetHasNextPage returns ListStreamMetricsStreamsConnectionPageInfo.HasNextPage, and is useful for accessing the field via an interface.
+func (v *ListStreamMetricsStreamsConnectionPageInfo) GetHasNextPage() bool {
+	return v.PageInfoFields.HasNextPage
+}
+
+// GetHasPreviousPage returns ListStreamMetricsStreamsConnectionPageInfo.HasPreviousPage, and is useful for accessing the field via an interface.
+func (v *ListStreamMetricsStreamsConnectionPageInfo) GetHasPreviousPage() bool {
+	return v.PageInfoFields.HasPreviousPage
+}
+
+func (v *ListStreamMetricsStreamsConnectionPageInfo) UnmarshalJSON(b []byte) error {
+
+	if string(b) == "null" {
+		return nil
+	}
+
+	var firstPass struct {
+		*ListStreamMetricsStreamsConnectionPageInfo
+		graphql.NoUnmarshalJSON
+	}
+	firstPass.ListStreamMetricsStreamsConnectionPageInfo = v
+
+	err := json.Unmarshal(b, &firstPass)
+	if err != nil {
+		return err
+	}
+
+	err = json.Unmarshal(
+		b, &v.PageInfoFields)
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
+type __premarshalListStreamMetricsStreamsConnectionPageInfo struct {
+	StartCursor *string `json:"startCursor"`
+
+	EndCursor *string `json:"endCursor"`
+
+	HasNextPage bool `json:"hasNextPage"`
+
+	HasPreviousPage bool `json:"hasPreviousPage"`
+}
+
+func (v *ListStreamMetricsStreamsConnectionPageInfo) MarshalJSON() ([]byte, error) {
+	premarshaled, err := v.__premarshalJSON()
+	if err != nil {
+		return nil, err
+	}
+	return json.Marshal(premarshaled)
+}
+
+func (v *ListStreamMetricsStreamsConnectionPageInfo) __premarshalJSON() (*__premarshalListStreamMetricsStreamsConnectionPageInfo, error) {
+	var retval __premarshalListStreamMetricsStreamsConnectionPageInfo
+
+	retval.StartCursor = v.PageInfoFields.StartCursor
+	retval.EndCursor = v.PageInfoFields.EndCursor
+	retval.HasNextPage = v.PageInfoFields.HasNextPage
+	retval.HasPreviousPage = v.PageInfoFields.HasPreviousPage
+	return &retval, nil
+}
+
 // ListStreamsResponse is returned by ListStreams on success.
 type ListStreamsResponse struct {
 	// List all streams for the current tenant with pagination.
+	// An API token needs the streams:read or streams:write scope. Stream.streamKey
+	// needs streams:write.
 	StreamsConnection ListStreamsStreamsConnection `json:"streamsConnection"`
 }
 
@@ -71518,11 +71994,6 @@ func (v *ListStreamsStreamsConnectionNodesStream) GetDescription() *string {
 	return v.StreamFields.Description
 }
 
-// GetStreamKey returns ListStreamsStreamsConnectionNodesStream.StreamKey, and is useful for accessing the field via an interface.
-func (v *ListStreamsStreamsConnectionNodesStream) GetStreamKey() *string {
-	return v.StreamFields.StreamKey
-}
-
 // GetPlaybackId returns ListStreamsStreamsConnectionNodesStream.PlaybackId, and is useful for accessing the field via an interface.
 func (v *ListStreamsStreamsConnectionNodesStream) GetPlaybackId() string {
 	return v.StreamFields.PlaybackId
@@ -71571,11 +72042,6 @@ func (v *ListStreamsStreamsConnectionNodesStream) GetPlaybackPolicy() *StreamFie
 	return v.StreamFields.PlaybackPolicy
 }
 
-// GetMetrics returns ListStreamsStreamsConnectionNodesStream.Metrics, and is useful for accessing the field via an interface.
-func (v *ListStreamsStreamsConnectionNodesStream) GetMetrics() *StreamFieldsMetricsStreamMetrics {
-	return v.StreamFields.Metrics
-}
-
 func (v *ListStreamsStreamsConnectionNodesStream) UnmarshalJSON(b []byte) error {
 
 	if string(b) == "null" {
@@ -71612,8 +72078,6 @@ type __premarshalListStreamsStreamsConnectionNodesStream struct {
 
 	Description *string `json:"description"`
 
-	StreamKey *string `json:"streamKey"`
-
 	PlaybackId string `json:"playbackId"`
 
 	Record bool `json:"record"`
@@ -71633,8 +72097,6 @@ type __premarshalListStreamsStreamsConnectionNodesStream struct {
 	Monitoring MonitoringToggle `json:"monitoring"`
 
 	PlaybackPolicy *StreamFieldsPlaybackPolicy `json:"playbackPolicy"`
-
-	Metrics *StreamFieldsMetricsStreamMetrics `json:"metrics"`
 }
 
 func (v *ListStreamsStreamsConnectionNodesStream) MarshalJSON() ([]byte, error) {
@@ -71653,7 +72115,6 @@ func (v *ListStreamsStreamsConnectionNodesStream) __premarshalJSON() (*__premars
 	retval.StreamId = v.StreamFields.StreamId
 	retval.Name = v.StreamFields.Name
 	retval.Description = v.StreamFields.Description
-	retval.StreamKey = v.StreamFields.StreamKey
 	retval.PlaybackId = v.StreamFields.PlaybackId
 	retval.Record = v.StreamFields.Record
 	retval.IngestMode = v.StreamFields.IngestMode
@@ -71664,7 +72125,6 @@ func (v *ListStreamsStreamsConnectionNodesStream) __premarshalJSON() (*__premars
 	retval.DvrChapterIntervalSeconds = v.StreamFields.DvrChapterIntervalSeconds
 	retval.Monitoring = v.StreamFields.Monitoring
 	retval.PlaybackPolicy = v.StreamFields.PlaybackPolicy
-	retval.Metrics = v.StreamFields.Metrics
 	return &retval, nil
 }
 
@@ -79246,6 +79706,9 @@ type ProcessingUsageRecordDefaultFieldsStream struct {
 	// Optional description for the stream.
 	Description *string `json:"description"`
 	// Secret key for publisher-authenticated ingest; null for pull and managed sources.
+	// The key lets its holder publish to the stream, so an API token needs the
+	// streams:write scope: without it this field is null and the response carries
+	// a FORBIDDEN error at its path.
 	StreamKey *string `json:"streamKey"`
 	// Public identifier for playback URLs.
 	PlaybackId string `json:"playbackId"`
@@ -79265,7 +79728,9 @@ type ProcessingUsageRecordDefaultFieldsStream struct {
 	UpdatedAt time.Time `json:"updatedAt"`
 	// Real-time operational metrics from the data plane.
 	// Includes viewer counts, quality metrics, and throughput data.
-	// Lazily loaded from ClickHouse analytics.
+	// Lazily loaded from ClickHouse analytics, so an API token needs the
+	// analytics:read scope: without it this field is null and the response
+	// carries a FORBIDDEN error at its path.
 	Metrics *ProcessingUsageRecordDefaultFieldsStreamMetrics `json:"metrics"`
 	// Configured multistream push targets for this stream.
 	PushTargets []ProcessingUsageRecordDefaultFieldsStreamPushTargetsPushTarget `json:"pushTargets"`
@@ -80039,6 +80504,9 @@ type ProcessingUsageRecordInNodeDefaultFieldsStream struct {
 	// Optional description for the stream.
 	Description *string `json:"description"`
 	// Secret key for publisher-authenticated ingest; null for pull and managed sources.
+	// The key lets its holder publish to the stream, so an API token needs the
+	// streams:write scope: without it this field is null and the response carries
+	// a FORBIDDEN error at its path.
 	StreamKey *string `json:"streamKey"`
 	// Public identifier for playback URLs.
 	PlaybackId string `json:"playbackId"`
@@ -80058,7 +80526,9 @@ type ProcessingUsageRecordInNodeDefaultFieldsStream struct {
 	UpdatedAt time.Time `json:"updatedAt"`
 	// Real-time operational metrics from the data plane.
 	// Includes viewer counts, quality metrics, and throughput data.
-	// Lazily loaded from ClickHouse analytics.
+	// Lazily loaded from ClickHouse analytics, so an API token needs the
+	// analytics:read scope: without it this field is null and the response
+	// carries a FORBIDDEN error at its path.
 	Metrics *ProcessingUsageRecordInNodeDefaultFieldsStreamMetrics `json:"metrics"`
 	// Configured multistream push targets for this stream.
 	PushTargets []ProcessingUsageRecordInNodeDefaultFieldsStreamPushTargetsPushTarget `json:"pushTargets"`
@@ -81223,6 +81693,9 @@ type QualityTierDailyDefaultFieldsStream struct {
 	// Optional description for the stream.
 	Description *string `json:"description"`
 	// Secret key for publisher-authenticated ingest; null for pull and managed sources.
+	// The key lets its holder publish to the stream, so an API token needs the
+	// streams:write scope: without it this field is null and the response carries
+	// a FORBIDDEN error at its path.
 	StreamKey *string `json:"streamKey"`
 	// Public identifier for playback URLs.
 	PlaybackId string `json:"playbackId"`
@@ -81242,7 +81715,9 @@ type QualityTierDailyDefaultFieldsStream struct {
 	UpdatedAt time.Time `json:"updatedAt"`
 	// Real-time operational metrics from the data plane.
 	// Includes viewer counts, quality metrics, and throughput data.
-	// Lazily loaded from ClickHouse analytics.
+	// Lazily loaded from ClickHouse analytics, so an API token needs the
+	// analytics:read scope: without it this field is null and the response
+	// carries a FORBIDDEN error at its path.
 	Metrics *QualityTierDailyDefaultFieldsStreamMetrics `json:"metrics"`
 	// Configured multistream push targets for this stream.
 	PushTargets []QualityTierDailyDefaultFieldsStreamPushTargetsPushTarget `json:"pushTargets"`
@@ -81808,6 +82283,9 @@ type RebufferingEventDefaultFieldsStream struct {
 	// Optional description for the stream.
 	Description *string `json:"description"`
 	// Secret key for publisher-authenticated ingest; null for pull and managed sources.
+	// The key lets its holder publish to the stream, so an API token needs the
+	// streams:write scope: without it this field is null and the response carries
+	// a FORBIDDEN error at its path.
 	StreamKey *string `json:"streamKey"`
 	// Public identifier for playback URLs.
 	PlaybackId string `json:"playbackId"`
@@ -81827,7 +82305,9 @@ type RebufferingEventDefaultFieldsStream struct {
 	UpdatedAt time.Time `json:"updatedAt"`
 	// Real-time operational metrics from the data plane.
 	// Includes viewer counts, quality metrics, and throughput data.
-	// Lazily loaded from ClickHouse analytics.
+	// Lazily loaded from ClickHouse analytics, so an API token needs the
+	// analytics:read scope: without it this field is null and the response
+	// carries a FORBIDDEN error at its path.
 	Metrics *RebufferingEventDefaultFieldsStreamMetrics `json:"metrics"`
 	// Configured multistream push targets for this stream.
 	PushTargets []RebufferingEventDefaultFieldsStreamPushTargetsPushTarget `json:"pushTargets"`
@@ -82464,10 +82944,18 @@ func (v *RefreshStreamKeyRefreshStreamKeyNotFoundError) __premarshalJSON() (*__p
 type RefreshStreamKeyRefreshStreamKeyStream struct {
 	Typename     *string `json:"__typename"`
 	StreamFields `json:"-"`
+	// Secret key for publisher-authenticated ingest; null for pull and managed sources.
+	// The key lets its holder publish to the stream, so an API token needs the
+	// streams:write scope: without it this field is null and the response carries
+	// a FORBIDDEN error at its path.
+	StreamKey *string `json:"streamKey"`
 }
 
 // GetTypename returns RefreshStreamKeyRefreshStreamKeyStream.Typename, and is useful for accessing the field via an interface.
 func (v *RefreshStreamKeyRefreshStreamKeyStream) GetTypename() *string { return v.Typename }
+
+// GetStreamKey returns RefreshStreamKeyRefreshStreamKeyStream.StreamKey, and is useful for accessing the field via an interface.
+func (v *RefreshStreamKeyRefreshStreamKeyStream) GetStreamKey() *string { return v.StreamKey }
 
 // GetId returns RefreshStreamKeyRefreshStreamKeyStream.Id, and is useful for accessing the field via an interface.
 func (v *RefreshStreamKeyRefreshStreamKeyStream) GetId() string { return v.StreamFields.Id }
@@ -82481,11 +82969,6 @@ func (v *RefreshStreamKeyRefreshStreamKeyStream) GetName() string { return v.Str
 // GetDescription returns RefreshStreamKeyRefreshStreamKeyStream.Description, and is useful for accessing the field via an interface.
 func (v *RefreshStreamKeyRefreshStreamKeyStream) GetDescription() *string {
 	return v.StreamFields.Description
-}
-
-// GetStreamKey returns RefreshStreamKeyRefreshStreamKeyStream.StreamKey, and is useful for accessing the field via an interface.
-func (v *RefreshStreamKeyRefreshStreamKeyStream) GetStreamKey() *string {
-	return v.StreamFields.StreamKey
 }
 
 // GetPlaybackId returns RefreshStreamKeyRefreshStreamKeyStream.PlaybackId, and is useful for accessing the field via an interface.
@@ -82536,11 +83019,6 @@ func (v *RefreshStreamKeyRefreshStreamKeyStream) GetPlaybackPolicy() *StreamFiel
 	return v.StreamFields.PlaybackPolicy
 }
 
-// GetMetrics returns RefreshStreamKeyRefreshStreamKeyStream.Metrics, and is useful for accessing the field via an interface.
-func (v *RefreshStreamKeyRefreshStreamKeyStream) GetMetrics() *StreamFieldsMetricsStreamMetrics {
-	return v.StreamFields.Metrics
-}
-
 func (v *RefreshStreamKeyRefreshStreamKeyStream) UnmarshalJSON(b []byte) error {
 
 	if string(b) == "null" {
@@ -82569,6 +83047,8 @@ func (v *RefreshStreamKeyRefreshStreamKeyStream) UnmarshalJSON(b []byte) error {
 type __premarshalRefreshStreamKeyRefreshStreamKeyStream struct {
 	Typename *string `json:"__typename"`
 
+	StreamKey *string `json:"streamKey"`
+
 	Id string `json:"id"`
 
 	StreamId string `json:"streamId"`
@@ -82576,8 +83056,6 @@ type __premarshalRefreshStreamKeyRefreshStreamKeyStream struct {
 	Name string `json:"name"`
 
 	Description *string `json:"description"`
-
-	StreamKey *string `json:"streamKey"`
 
 	PlaybackId string `json:"playbackId"`
 
@@ -82598,8 +83076,6 @@ type __premarshalRefreshStreamKeyRefreshStreamKeyStream struct {
 	Monitoring MonitoringToggle `json:"monitoring"`
 
 	PlaybackPolicy *StreamFieldsPlaybackPolicy `json:"playbackPolicy"`
-
-	Metrics *StreamFieldsMetricsStreamMetrics `json:"metrics"`
 }
 
 func (v *RefreshStreamKeyRefreshStreamKeyStream) MarshalJSON() ([]byte, error) {
@@ -82614,11 +83090,11 @@ func (v *RefreshStreamKeyRefreshStreamKeyStream) __premarshalJSON() (*__premarsh
 	var retval __premarshalRefreshStreamKeyRefreshStreamKeyStream
 
 	retval.Typename = v.Typename
+	retval.StreamKey = v.StreamKey
 	retval.Id = v.StreamFields.Id
 	retval.StreamId = v.StreamFields.StreamId
 	retval.Name = v.StreamFields.Name
 	retval.Description = v.StreamFields.Description
-	retval.StreamKey = v.StreamFields.StreamKey
 	retval.PlaybackId = v.StreamFields.PlaybackId
 	retval.Record = v.StreamFields.Record
 	retval.IngestMode = v.StreamFields.IngestMode
@@ -82629,7 +83105,6 @@ func (v *RefreshStreamKeyRefreshStreamKeyStream) __premarshalJSON() (*__premarsh
 	retval.DvrChapterIntervalSeconds = v.StreamFields.DvrChapterIntervalSeconds
 	retval.Monitoring = v.StreamFields.Monitoring
 	retval.PlaybackPolicy = v.StreamFields.PlaybackPolicy
-	retval.Metrics = v.StreamFields.Metrics
 	return &retval, nil
 }
 
@@ -89110,6 +89585,9 @@ type RoutingEventDefaultFieldsStream struct {
 	// Optional description for the stream.
 	Description *string `json:"description"`
 	// Secret key for publisher-authenticated ingest; null for pull and managed sources.
+	// The key lets its holder publish to the stream, so an API token needs the
+	// streams:write scope: without it this field is null and the response carries
+	// a FORBIDDEN error at its path.
 	StreamKey *string `json:"streamKey"`
 	// Public identifier for playback URLs.
 	PlaybackId string `json:"playbackId"`
@@ -89129,7 +89607,9 @@ type RoutingEventDefaultFieldsStream struct {
 	UpdatedAt time.Time `json:"updatedAt"`
 	// Real-time operational metrics from the data plane.
 	// Includes viewer counts, quality metrics, and throughput data.
-	// Lazily loaded from ClickHouse analytics.
+	// Lazily loaded from ClickHouse analytics, so an API token needs the
+	// analytics:read scope: without it this field is null and the response
+	// carries a FORBIDDEN error at its path.
 	Metrics *RoutingEventDefaultFieldsStreamMetrics `json:"metrics"`
 	// Configured multistream push targets for this stream.
 	PushTargets []RoutingEventDefaultFieldsStreamPushTargetsPushTarget `json:"pushTargets"`
@@ -96083,6 +96563,9 @@ type StorageEventDefaultFieldsStream struct {
 	// Optional description for the stream.
 	Description *string `json:"description"`
 	// Secret key for publisher-authenticated ingest; null for pull and managed sources.
+	// The key lets its holder publish to the stream, so an API token needs the
+	// streams:write scope: without it this field is null and the response carries
+	// a FORBIDDEN error at its path.
 	StreamKey *string `json:"streamKey"`
 	// Public identifier for playback URLs.
 	PlaybackId string `json:"playbackId"`
@@ -96102,7 +96585,9 @@ type StorageEventDefaultFieldsStream struct {
 	UpdatedAt time.Time `json:"updatedAt"`
 	// Real-time operational metrics from the data plane.
 	// Includes viewer counts, quality metrics, and throughput data.
-	// Lazily loaded from ClickHouse analytics.
+	// Lazily loaded from ClickHouse analytics, so an API token needs the
+	// analytics:read scope: without it this field is null and the response
+	// carries a FORBIDDEN error at its path.
 	Metrics *StorageEventDefaultFieldsStreamMetrics `json:"metrics"`
 	// Configured multistream push targets for this stream.
 	PushTargets []StorageEventDefaultFieldsStreamPushTargetsPushTarget `json:"pushTargets"`
@@ -96650,6 +97135,9 @@ type StorageEventInNodeDefaultFieldsStream struct {
 	// Optional description for the stream.
 	Description *string `json:"description"`
 	// Secret key for publisher-authenticated ingest; null for pull and managed sources.
+	// The key lets its holder publish to the stream, so an API token needs the
+	// streams:write scope: without it this field is null and the response carries
+	// a FORBIDDEN error at its path.
 	StreamKey *string `json:"streamKey"`
 	// Public identifier for playback URLs.
 	PlaybackId string `json:"playbackId"`
@@ -96669,7 +97157,9 @@ type StorageEventInNodeDefaultFieldsStream struct {
 	UpdatedAt time.Time `json:"updatedAt"`
 	// Real-time operational metrics from the data plane.
 	// Includes viewer counts, quality metrics, and throughput data.
-	// Lazily loaded from ClickHouse analytics.
+	// Lazily loaded from ClickHouse analytics, so an API token needs the
+	// analytics:read scope: without it this field is null and the response
+	// carries a FORBIDDEN error at its path.
 	Metrics *StorageEventInNodeDefaultFieldsStreamMetrics `json:"metrics"`
 	// Configured multistream push targets for this stream.
 	PushTargets []StorageEventInNodeDefaultFieldsStreamPushTargetsPushTarget `json:"pushTargets"`
@@ -97267,6 +97757,9 @@ type StreamAnalyticsDailyDefaultFieldsStream struct {
 	// Optional description for the stream.
 	Description *string `json:"description"`
 	// Secret key for publisher-authenticated ingest; null for pull and managed sources.
+	// The key lets its holder publish to the stream, so an API token needs the
+	// streams:write scope: without it this field is null and the response carries
+	// a FORBIDDEN error at its path.
 	StreamKey *string `json:"streamKey"`
 	// Public identifier for playback URLs.
 	PlaybackId string `json:"playbackId"`
@@ -97286,7 +97779,9 @@ type StreamAnalyticsDailyDefaultFieldsStream struct {
 	UpdatedAt time.Time `json:"updatedAt"`
 	// Real-time operational metrics from the data plane.
 	// Includes viewer counts, quality metrics, and throughput data.
-	// Lazily loaded from ClickHouse analytics.
+	// Lazily loaded from ClickHouse analytics, so an API token needs the
+	// analytics:read scope: without it this field is null and the response
+	// carries a FORBIDDEN error at its path.
 	Metrics *StreamAnalyticsDailyDefaultFieldsStreamMetrics `json:"metrics"`
 	// Configured multistream push targets for this stream.
 	PushTargets []StreamAnalyticsDailyDefaultFieldsStreamPushTargetsPushTarget `json:"pushTargets"`
@@ -98011,6 +98506,9 @@ type StreamAnalyticsSummaryDefaultFieldsStream struct {
 	// Optional description for the stream.
 	Description *string `json:"description"`
 	// Secret key for publisher-authenticated ingest; null for pull and managed sources.
+	// The key lets its holder publish to the stream, so an API token needs the
+	// streams:write scope: without it this field is null and the response carries
+	// a FORBIDDEN error at its path.
 	StreamKey *string `json:"streamKey"`
 	// Public identifier for playback URLs.
 	PlaybackId string `json:"playbackId"`
@@ -98030,7 +98528,9 @@ type StreamAnalyticsSummaryDefaultFieldsStream struct {
 	UpdatedAt time.Time `json:"updatedAt"`
 	// Real-time operational metrics from the data plane.
 	// Includes viewer counts, quality metrics, and throughput data.
-	// Lazily loaded from ClickHouse analytics.
+	// Lazily loaded from ClickHouse analytics, so an API token needs the
+	// analytics:read scope: without it this field is null and the response
+	// carries a FORBIDDEN error at its path.
 	Metrics *StreamAnalyticsSummaryDefaultFieldsStreamMetrics `json:"metrics"`
 	// Configured multistream push targets for this stream.
 	PushTargets []StreamAnalyticsSummaryDefaultFieldsStreamPushTargetsPushTarget `json:"pushTargets"`
@@ -98603,6 +99103,9 @@ type StreamConnectionHourlyDefaultFieldsStream struct {
 	// Optional description for the stream.
 	Description *string `json:"description"`
 	// Secret key for publisher-authenticated ingest; null for pull and managed sources.
+	// The key lets its holder publish to the stream, so an API token needs the
+	// streams:write scope: without it this field is null and the response carries
+	// a FORBIDDEN error at its path.
 	StreamKey *string `json:"streamKey"`
 	// Public identifier for playback URLs.
 	PlaybackId string `json:"playbackId"`
@@ -98622,7 +99125,9 @@ type StreamConnectionHourlyDefaultFieldsStream struct {
 	UpdatedAt time.Time `json:"updatedAt"`
 	// Real-time operational metrics from the data plane.
 	// Includes viewer counts, quality metrics, and throughput data.
-	// Lazily loaded from ClickHouse analytics.
+	// Lazily loaded from ClickHouse analytics, so an API token needs the
+	// analytics:read scope: without it this field is null and the response
+	// carries a FORBIDDEN error at its path.
 	Metrics *StreamConnectionHourlyDefaultFieldsStreamMetrics `json:"metrics"`
 	// Configured multistream push targets for this stream.
 	PushTargets []StreamConnectionHourlyDefaultFieldsStreamPushTargetsPushTarget `json:"pushTargets"`
@@ -99300,6 +99805,9 @@ type StreamEventDefaultFieldsStream struct {
 	// Optional description for the stream.
 	Description *string `json:"description"`
 	// Secret key for publisher-authenticated ingest; null for pull and managed sources.
+	// The key lets its holder publish to the stream, so an API token needs the
+	// streams:write scope: without it this field is null and the response carries
+	// a FORBIDDEN error at its path.
 	StreamKey *string `json:"streamKey"`
 	// Public identifier for playback URLs.
 	PlaybackId string `json:"playbackId"`
@@ -99319,7 +99827,9 @@ type StreamEventDefaultFieldsStream struct {
 	UpdatedAt time.Time `json:"updatedAt"`
 	// Real-time operational metrics from the data plane.
 	// Includes viewer counts, quality metrics, and throughput data.
-	// Lazily loaded from ClickHouse analytics.
+	// Lazily loaded from ClickHouse analytics, so an API token needs the
+	// analytics:read scope: without it this field is null and the response
+	// carries a FORBIDDEN error at its path.
 	Metrics *StreamEventDefaultFieldsStreamMetrics `json:"metrics"`
 	// Configured multistream push targets for this stream.
 	PushTargets []StreamEventDefaultFieldsStreamPushTargetsPushTarget `json:"pushTargets"`
@@ -99951,6 +100461,9 @@ type StreamEventInNodeDefaultFieldsStream struct {
 	// Optional description for the stream.
 	Description *string `json:"description"`
 	// Secret key for publisher-authenticated ingest; null for pull and managed sources.
+	// The key lets its holder publish to the stream, so an API token needs the
+	// streams:write scope: without it this field is null and the response carries
+	// a FORBIDDEN error at its path.
 	StreamKey *string `json:"streamKey"`
 	// Public identifier for playback URLs.
 	PlaybackId string `json:"playbackId"`
@@ -99970,7 +100483,9 @@ type StreamEventInNodeDefaultFieldsStream struct {
 	UpdatedAt time.Time `json:"updatedAt"`
 	// Real-time operational metrics from the data plane.
 	// Includes viewer counts, quality metrics, and throughput data.
-	// Lazily loaded from ClickHouse analytics.
+	// Lazily loaded from ClickHouse analytics, so an API token needs the
+	// analytics:read scope: without it this field is null and the response
+	// carries a FORBIDDEN error at its path.
 	Metrics *StreamEventInNodeDefaultFieldsStreamMetrics `json:"metrics"`
 	// Configured multistream push targets for this stream.
 	PushTargets []StreamEventInNodeDefaultFieldsStreamPushTargetsPushTarget `json:"pushTargets"`
@@ -100500,8 +101015,6 @@ type StreamFields struct {
 	Name string `json:"name"`
 	// Optional description for the stream.
 	Description *string `json:"description"`
-	// Secret key for publisher-authenticated ingest; null for pull and managed sources.
-	StreamKey *string `json:"streamKey"`
 	// Public identifier for playback URLs.
 	PlaybackId string `json:"playbackId"`
 	// Whether DVR recording is enabled for this stream.
@@ -100525,10 +101038,6 @@ type StreamFields struct {
 	Monitoring MonitoringToggle `json:"monitoring"`
 	// Playback access policy. null/PUBLIC = anyone with the playbackId can watch.
 	PlaybackPolicy *StreamFieldsPlaybackPolicy `json:"playbackPolicy"`
-	// Real-time operational metrics from the data plane.
-	// Includes viewer counts, quality metrics, and throughput data.
-	// Lazily loaded from ClickHouse analytics.
-	Metrics *StreamFieldsMetricsStreamMetrics `json:"metrics"`
 }
 
 // GetTypename returns StreamFields.Typename, and is useful for accessing the field via an interface.
@@ -100545,9 +101054,6 @@ func (v *StreamFields) GetName() string { return v.Name }
 
 // GetDescription returns StreamFields.Description, and is useful for accessing the field via an interface.
 func (v *StreamFields) GetDescription() *string { return v.Description }
-
-// GetStreamKey returns StreamFields.StreamKey, and is useful for accessing the field via an interface.
-func (v *StreamFields) GetStreamKey() *string { return v.StreamKey }
 
 // GetPlaybackId returns StreamFields.PlaybackId, and is useful for accessing the field via an interface.
 func (v *StreamFields) GetPlaybackId() string { return v.PlaybackId }
@@ -100578,42 +101084,6 @@ func (v *StreamFields) GetMonitoring() MonitoringToggle { return v.Monitoring }
 
 // GetPlaybackPolicy returns StreamFields.PlaybackPolicy, and is useful for accessing the field via an interface.
 func (v *StreamFields) GetPlaybackPolicy() *StreamFieldsPlaybackPolicy { return v.PlaybackPolicy }
-
-// GetMetrics returns StreamFields.Metrics, and is useful for accessing the field via an interface.
-func (v *StreamFields) GetMetrics() *StreamFieldsMetricsStreamMetrics { return v.Metrics }
-
-// StreamFieldsMetricsStreamMetrics includes the requested fields of the GraphQL type StreamMetrics.
-// The GraphQL type's documentation follows.
-//
-// Real-time operational metrics for a stream from the analytics data plane.
-// Updated frequently while stream is live, represents latest known state.
-type StreamFieldsMetricsStreamMetrics struct {
-	// Current lifecycle status of the stream (OFFLINE, CONNECTING, LIVE, etc.).
-	Status StreamStatus `json:"status"`
-	// Whether the stream is currently broadcasting.
-	IsLive bool `json:"isLive"`
-	// Number of viewers currently watching.
-	CurrentViewers int `json:"currentViewers"`
-	// When the current live session started (null if offline).
-	StartedAt *time.Time `json:"startedAt"`
-	// When these metrics were last updated.
-	UpdatedAt time.Time `json:"updatedAt"`
-}
-
-// GetStatus returns StreamFieldsMetricsStreamMetrics.Status, and is useful for accessing the field via an interface.
-func (v *StreamFieldsMetricsStreamMetrics) GetStatus() StreamStatus { return v.Status }
-
-// GetIsLive returns StreamFieldsMetricsStreamMetrics.IsLive, and is useful for accessing the field via an interface.
-func (v *StreamFieldsMetricsStreamMetrics) GetIsLive() bool { return v.IsLive }
-
-// GetCurrentViewers returns StreamFieldsMetricsStreamMetrics.CurrentViewers, and is useful for accessing the field via an interface.
-func (v *StreamFieldsMetricsStreamMetrics) GetCurrentViewers() int { return v.CurrentViewers }
-
-// GetStartedAt returns StreamFieldsMetricsStreamMetrics.StartedAt, and is useful for accessing the field via an interface.
-func (v *StreamFieldsMetricsStreamMetrics) GetStartedAt() *time.Time { return v.StartedAt }
-
-// GetUpdatedAt returns StreamFieldsMetricsStreamMetrics.UpdatedAt, and is useful for accessing the field via an interface.
-func (v *StreamFieldsMetricsStreamMetrics) GetUpdatedAt() time.Time { return v.UpdatedAt }
 
 // StreamFieldsPlaybackPolicy includes the requested fields of the GraphQL type PlaybackPolicy.
 // The GraphQL type's documentation follows.
@@ -100975,6 +101445,9 @@ type StreamHealthMetricDefaultFieldsStream struct {
 	// Optional description for the stream.
 	Description *string `json:"description"`
 	// Secret key for publisher-authenticated ingest; null for pull and managed sources.
+	// The key lets its holder publish to the stream, so an API token needs the
+	// streams:write scope: without it this field is null and the response carries
+	// a FORBIDDEN error at its path.
 	StreamKey *string `json:"streamKey"`
 	// Public identifier for playback URLs.
 	PlaybackId string `json:"playbackId"`
@@ -100994,7 +101467,9 @@ type StreamHealthMetricDefaultFieldsStream struct {
 	UpdatedAt time.Time `json:"updatedAt"`
 	// Real-time operational metrics from the data plane.
 	// Includes viewer counts, quality metrics, and throughput data.
-	// Lazily loaded from ClickHouse analytics.
+	// Lazily loaded from ClickHouse analytics, so an API token needs the
+	// analytics:read scope: without it this field is null and the response
+	// carries a FORBIDDEN error at its path.
 	Metrics *StreamHealthMetricDefaultFieldsStreamMetrics `json:"metrics"`
 	// Configured multistream push targets for this stream.
 	PushTargets []StreamHealthMetricDefaultFieldsStreamPushTargetsPushTarget `json:"pushTargets"`
@@ -101630,6 +102105,9 @@ type StreamHealthMetricInNodeDefaultFieldsStream struct {
 	// Optional description for the stream.
 	Description *string `json:"description"`
 	// Secret key for publisher-authenticated ingest; null for pull and managed sources.
+	// The key lets its holder publish to the stream, so an API token needs the
+	// streams:write scope: without it this field is null and the response carries
+	// a FORBIDDEN error at its path.
 	StreamKey *string `json:"streamKey"`
 	// Public identifier for playback URLs.
 	PlaybackId string `json:"playbackId"`
@@ -101649,7 +102127,9 @@ type StreamHealthMetricInNodeDefaultFieldsStream struct {
 	UpdatedAt time.Time `json:"updatedAt"`
 	// Real-time operational metrics from the data plane.
 	// Includes viewer counts, quality metrics, and throughput data.
-	// Lazily loaded from ClickHouse analytics.
+	// Lazily loaded from ClickHouse analytics, so an API token needs the
+	// analytics:read scope: without it this field is null and the response
+	// carries a FORBIDDEN error at its path.
 	Metrics *StreamHealthMetricInNodeDefaultFieldsStreamMetrics `json:"metrics"`
 	// Configured multistream push targets for this stream.
 	PushTargets []StreamHealthMetricInNodeDefaultFieldsStreamPushTargetsPushTarget `json:"pushTargets"`
@@ -102218,6 +102698,9 @@ type StreamInNodeDefaultFields struct {
 	// Optional description for the stream.
 	Description *string `json:"description"`
 	// Secret key for publisher-authenticated ingest; null for pull and managed sources.
+	// The key lets its holder publish to the stream, so an API token needs the
+	// streams:write scope: without it this field is null and the response carries
+	// a FORBIDDEN error at its path.
 	StreamKey *string `json:"streamKey"`
 	// Public identifier for playback URLs.
 	PlaybackId string `json:"playbackId"`
@@ -102237,7 +102720,9 @@ type StreamInNodeDefaultFields struct {
 	StreamUpdatedAt time.Time `json:"streamUpdatedAt"`
 	// Real-time operational metrics from the data plane.
 	// Includes viewer counts, quality metrics, and throughput data.
-	// Lazily loaded from ClickHouse analytics.
+	// Lazily loaded from ClickHouse analytics, so an API token needs the
+	// analytics:read scope: without it this field is null and the response
+	// carries a FORBIDDEN error at its path.
 	Metrics *StreamInNodeDefaultFieldsMetricsStreamMetrics `json:"metrics"`
 	// Configured multistream push targets for this stream.
 	PushTargets []StreamInNodeDefaultFieldsPushTargetsPushTarget `json:"pushTargets"`
@@ -102793,9 +103278,10 @@ func (v *StreamInNodeDefaultFieldsThumbnailAssets) GetAssetKey() string { return
 
 // StreamKeyFields includes the GraphQL fields of StreamKey requested by the fragment StreamKeyFields.
 type StreamKeyFields struct {
-	Typename   *string    `json:"__typename"`
-	Id         string     `json:"id"`
-	StreamId   string     `json:"streamId"`
+	Typename *string `json:"__typename"`
+	Id       string  `json:"id"`
+	StreamId string  `json:"streamId"`
+	// The publishing secret. Stream keys are read only through operations that need the streams:write scope.
 	KeyValue   string     `json:"keyValue"`
 	KeyName    *string    `json:"keyName"`
 	IsActive   bool       `json:"isActive"`
@@ -102826,6 +103312,59 @@ func (v *StreamKeyFields) GetLastUsedAt() *time.Time { return v.LastUsedAt }
 
 // GetCreatedAt returns StreamKeyFields.CreatedAt, and is useful for accessing the field via an interface.
 func (v *StreamKeyFields) GetCreatedAt() time.Time { return v.CreatedAt }
+
+// StreamMetricsFields includes the GraphQL fields of StreamMetrics requested by the fragment StreamMetricsFields.
+// The GraphQL type's documentation follows.
+//
+// Real-time operational metrics for a stream from the analytics data plane.
+// Updated frequently while stream is live, represents latest known state.
+type StreamMetricsFields struct {
+	// Current lifecycle status of the stream (OFFLINE, CONNECTING, LIVE, etc.).
+	Status StreamStatus `json:"status"`
+	// Whether the stream is currently broadcasting.
+	IsLive bool `json:"isLive"`
+	// Number of viewers currently watching.
+	CurrentViewers int `json:"currentViewers"`
+	// When the current live session started (null if offline).
+	StartedAt *time.Time `json:"startedAt"`
+	// When these metrics were last updated.
+	UpdatedAt time.Time `json:"updatedAt"`
+	// Buffer health state (HEALTHY, WARNING, CRITICAL).
+	BufferState *string `json:"bufferState"`
+	// Highest quality tier available (4K, 1080p, 720p, etc.).
+	QualityTier *string `json:"qualityTier"`
+	// Whether the stream has active quality issues.
+	HasIssues *bool `json:"hasIssues"`
+	// Human-readable description of current issues.
+	IssuesDescription *string `json:"issuesDescription"`
+}
+
+// GetStatus returns StreamMetricsFields.Status, and is useful for accessing the field via an interface.
+func (v *StreamMetricsFields) GetStatus() StreamStatus { return v.Status }
+
+// GetIsLive returns StreamMetricsFields.IsLive, and is useful for accessing the field via an interface.
+func (v *StreamMetricsFields) GetIsLive() bool { return v.IsLive }
+
+// GetCurrentViewers returns StreamMetricsFields.CurrentViewers, and is useful for accessing the field via an interface.
+func (v *StreamMetricsFields) GetCurrentViewers() int { return v.CurrentViewers }
+
+// GetStartedAt returns StreamMetricsFields.StartedAt, and is useful for accessing the field via an interface.
+func (v *StreamMetricsFields) GetStartedAt() *time.Time { return v.StartedAt }
+
+// GetUpdatedAt returns StreamMetricsFields.UpdatedAt, and is useful for accessing the field via an interface.
+func (v *StreamMetricsFields) GetUpdatedAt() time.Time { return v.UpdatedAt }
+
+// GetBufferState returns StreamMetricsFields.BufferState, and is useful for accessing the field via an interface.
+func (v *StreamMetricsFields) GetBufferState() *string { return v.BufferState }
+
+// GetQualityTier returns StreamMetricsFields.QualityTier, and is useful for accessing the field via an interface.
+func (v *StreamMetricsFields) GetQualityTier() *string { return v.QualityTier }
+
+// GetHasIssues returns StreamMetricsFields.HasIssues, and is useful for accessing the field via an interface.
+func (v *StreamMetricsFields) GetHasIssues() *bool { return v.HasIssues }
+
+// GetIssuesDescription returns StreamMetricsFields.IssuesDescription, and is useful for accessing the field via an interface.
+func (v *StreamMetricsFields) GetIssuesDescription() *string { return v.IssuesDescription }
 
 // StreamRetentionOverridesDefaultFields includes the GraphQL fields of StreamRetentionOverrides requested by the fragment StreamRetentionOverridesDefaultFields.
 // The GraphQL type's documentation follows.
@@ -104048,6 +104587,9 @@ type TenantEventDefaultFieldsConnectionEventStream struct {
 	// Optional description for the stream.
 	Description *string `json:"description"`
 	// Secret key for publisher-authenticated ingest; null for pull and managed sources.
+	// The key lets its holder publish to the stream, so an API token needs the
+	// streams:write scope: without it this field is null and the response carries
+	// a FORBIDDEN error at its path.
 	StreamKey *string `json:"streamKey"`
 	// Public identifier for playback URLs.
 	PlaybackId string `json:"playbackId"`
@@ -104504,6 +105046,9 @@ type TenantEventDefaultFieldsProcessingEventProcessingUsageRecordStream struct {
 	// Optional description for the stream.
 	Description *string `json:"description"`
 	// Secret key for publisher-authenticated ingest; null for pull and managed sources.
+	// The key lets its holder publish to the stream, so an API token needs the
+	// streams:write scope: without it this field is null and the response carries
+	// a FORBIDDEN error at its path.
 	StreamKey *string `json:"streamKey"`
 	// Public identifier for playback URLs.
 	PlaybackId string `json:"playbackId"`
@@ -104762,6 +105307,9 @@ type TenantEventDefaultFieldsRoutingEventStream struct {
 	// Optional description for the stream.
 	Description *string `json:"description"`
 	// Secret key for publisher-authenticated ingest; null for pull and managed sources.
+	// The key lets its holder publish to the stream, so an API token needs the
+	// streams:write scope: without it this field is null and the response carries
+	// a FORBIDDEN error at its path.
 	StreamKey *string `json:"streamKey"`
 	// Public identifier for playback URLs.
 	PlaybackId string `json:"playbackId"`
@@ -104934,6 +105482,9 @@ type TenantEventDefaultFieldsStorageEventStream struct {
 	// Optional description for the stream.
 	Description *string `json:"description"`
 	// Secret key for publisher-authenticated ingest; null for pull and managed sources.
+	// The key lets its holder publish to the stream, so an API token needs the
+	// streams:write scope: without it this field is null and the response carries
+	// a FORBIDDEN error at its path.
 	StreamKey *string `json:"streamKey"`
 	// Public identifier for playback URLs.
 	PlaybackId string `json:"playbackId"`
@@ -105266,6 +105817,9 @@ type TenantEventDefaultFieldsStreamEventStream struct {
 	// Optional description for the stream.
 	Description *string `json:"description"`
 	// Secret key for publisher-authenticated ingest; null for pull and managed sources.
+	// The key lets its holder publish to the stream, so an API token needs the
+	// streams:write scope: without it this field is null and the response carries
+	// a FORBIDDEN error at its path.
 	StreamKey *string `json:"streamKey"`
 	// Public identifier for playback URLs.
 	PlaybackId string `json:"playbackId"`
@@ -105494,6 +106048,9 @@ type TenantEventDefaultFieldsTrackListUpdateStream struct {
 	// Optional description for the stream.
 	Description *string `json:"description"`
 	// Secret key for publisher-authenticated ingest; null for pull and managed sources.
+	// The key lets its holder publish to the stream, so an API token needs the
+	// streams:write scope: without it this field is null and the response carries
+	// a FORBIDDEN error at its path.
 	StreamKey *string `json:"streamKey"`
 	// Public identifier for playback URLs.
 	PlaybackId string `json:"playbackId"`
@@ -105752,6 +106309,9 @@ type TenantEventDefaultFieldsViewerMetricsStream struct {
 	// Optional description for the stream.
 	Description *string `json:"description"`
 	// Secret key for publisher-authenticated ingest; null for pull and managed sources.
+	// The key lets its holder publish to the stream, so an API token needs the
+	// streams:write scope: without it this field is null and the response carries
+	// a FORBIDDEN error at its path.
 	StreamKey *string `json:"streamKey"`
 	// Public identifier for playback URLs.
 	PlaybackId string `json:"playbackId"`
@@ -109433,6 +109993,9 @@ type TrackListEventDefaultFieldsStream struct {
 	// Optional description for the stream.
 	Description *string `json:"description"`
 	// Secret key for publisher-authenticated ingest; null for pull and managed sources.
+	// The key lets its holder publish to the stream, so an API token needs the
+	// streams:write scope: without it this field is null and the response carries
+	// a FORBIDDEN error at its path.
 	StreamKey *string `json:"streamKey"`
 	// Public identifier for playback URLs.
 	PlaybackId string `json:"playbackId"`
@@ -109452,7 +110015,9 @@ type TrackListEventDefaultFieldsStream struct {
 	UpdatedAt time.Time `json:"updatedAt"`
 	// Real-time operational metrics from the data plane.
 	// Includes viewer counts, quality metrics, and throughput data.
-	// Lazily loaded from ClickHouse analytics.
+	// Lazily loaded from ClickHouse analytics, so an API token needs the
+	// analytics:read scope: without it this field is null and the response
+	// carries a FORBIDDEN error at its path.
 	Metrics *TrackListEventDefaultFieldsStreamMetrics `json:"metrics"`
 	// Configured multistream push targets for this stream.
 	PushTargets []TrackListEventDefaultFieldsStreamPushTargetsPushTarget `json:"pushTargets"`
@@ -110030,6 +110595,9 @@ type TrackListEventInNodeDefaultFieldsStream struct {
 	// Optional description for the stream.
 	Description *string `json:"description"`
 	// Secret key for publisher-authenticated ingest; null for pull and managed sources.
+	// The key lets its holder publish to the stream, so an API token needs the
+	// streams:write scope: without it this field is null and the response carries
+	// a FORBIDDEN error at its path.
 	StreamKey *string `json:"streamKey"`
 	// Public identifier for playback URLs.
 	PlaybackId string `json:"playbackId"`
@@ -110049,7 +110617,9 @@ type TrackListEventInNodeDefaultFieldsStream struct {
 	UpdatedAt time.Time `json:"updatedAt"`
 	// Real-time operational metrics from the data plane.
 	// Includes viewer counts, quality metrics, and throughput data.
-	// Lazily loaded from ClickHouse analytics.
+	// Lazily loaded from ClickHouse analytics, so an API token needs the
+	// analytics:read scope: without it this field is null and the response
+	// carries a FORBIDDEN error at its path.
 	Metrics *TrackListEventInNodeDefaultFieldsStreamMetrics `json:"metrics"`
 	// Configured multistream push targets for this stream.
 	PushTargets []TrackListEventInNodeDefaultFieldsStreamPushTargetsPushTarget `json:"pushTargets"`
@@ -110715,6 +111285,9 @@ type TrackListUpdateDefaultFieldsStream struct {
 	// Optional description for the stream.
 	Description *string `json:"description"`
 	// Secret key for publisher-authenticated ingest; null for pull and managed sources.
+	// The key lets its holder publish to the stream, so an API token needs the
+	// streams:write scope: without it this field is null and the response carries
+	// a FORBIDDEN error at its path.
 	StreamKey *string `json:"streamKey"`
 	// Public identifier for playback URLs.
 	PlaybackId string `json:"playbackId"`
@@ -110734,7 +111307,9 @@ type TrackListUpdateDefaultFieldsStream struct {
 	UpdatedAt time.Time `json:"updatedAt"`
 	// Real-time operational metrics from the data plane.
 	// Includes viewer counts, quality metrics, and throughput data.
-	// Lazily loaded from ClickHouse analytics.
+	// Lazily loaded from ClickHouse analytics, so an API token needs the
+	// analytics:read scope: without it this field is null and the response
+	// carries a FORBIDDEN error at its path.
 	Metrics *TrackListUpdateDefaultFieldsStreamMetrics `json:"metrics"`
 	// Configured multistream push targets for this stream.
 	PushTargets []TrackListUpdateDefaultFieldsStreamPushTargetsPushTarget `json:"pushTargets"`
@@ -113505,9 +114080,6 @@ func (v *UpdateStreamUpdateStream) GetName() string { return v.StreamFields.Name
 // GetDescription returns UpdateStreamUpdateStream.Description, and is useful for accessing the field via an interface.
 func (v *UpdateStreamUpdateStream) GetDescription() *string { return v.StreamFields.Description }
 
-// GetStreamKey returns UpdateStreamUpdateStream.StreamKey, and is useful for accessing the field via an interface.
-func (v *UpdateStreamUpdateStream) GetStreamKey() *string { return v.StreamFields.StreamKey }
-
 // GetPlaybackId returns UpdateStreamUpdateStream.PlaybackId, and is useful for accessing the field via an interface.
 func (v *UpdateStreamUpdateStream) GetPlaybackId() string { return v.StreamFields.PlaybackId }
 
@@ -113546,11 +114118,6 @@ func (v *UpdateStreamUpdateStream) GetPlaybackPolicy() *StreamFieldsPlaybackPoli
 	return v.StreamFields.PlaybackPolicy
 }
 
-// GetMetrics returns UpdateStreamUpdateStream.Metrics, and is useful for accessing the field via an interface.
-func (v *UpdateStreamUpdateStream) GetMetrics() *StreamFieldsMetricsStreamMetrics {
-	return v.StreamFields.Metrics
-}
-
 func (v *UpdateStreamUpdateStream) UnmarshalJSON(b []byte) error {
 
 	if string(b) == "null" {
@@ -113587,8 +114154,6 @@ type __premarshalUpdateStreamUpdateStream struct {
 
 	Description *string `json:"description"`
 
-	StreamKey *string `json:"streamKey"`
-
 	PlaybackId string `json:"playbackId"`
 
 	Record bool `json:"record"`
@@ -113608,8 +114173,6 @@ type __premarshalUpdateStreamUpdateStream struct {
 	Monitoring MonitoringToggle `json:"monitoring"`
 
 	PlaybackPolicy *StreamFieldsPlaybackPolicy `json:"playbackPolicy"`
-
-	Metrics *StreamFieldsMetricsStreamMetrics `json:"metrics"`
 }
 
 func (v *UpdateStreamUpdateStream) MarshalJSON() ([]byte, error) {
@@ -113628,7 +114191,6 @@ func (v *UpdateStreamUpdateStream) __premarshalJSON() (*__premarshalUpdateStream
 	retval.StreamId = v.StreamFields.StreamId
 	retval.Name = v.StreamFields.Name
 	retval.Description = v.StreamFields.Description
-	retval.StreamKey = v.StreamFields.StreamKey
 	retval.PlaybackId = v.StreamFields.PlaybackId
 	retval.Record = v.StreamFields.Record
 	retval.IngestMode = v.StreamFields.IngestMode
@@ -113639,7 +114201,6 @@ func (v *UpdateStreamUpdateStream) __premarshalJSON() (*__premarshalUpdateStream
 	retval.DvrChapterIntervalSeconds = v.StreamFields.DvrChapterIntervalSeconds
 	retval.Monitoring = v.StreamFields.Monitoring
 	retval.PlaybackPolicy = v.StreamFields.PlaybackPolicy
-	retval.Metrics = v.StreamFields.Metrics
 	return &retval, nil
 }
 
@@ -115183,6 +115744,9 @@ type ViewerCountBucketDefaultFieldsStream struct {
 	// Optional description for the stream.
 	Description *string `json:"description"`
 	// Secret key for publisher-authenticated ingest; null for pull and managed sources.
+	// The key lets its holder publish to the stream, so an API token needs the
+	// streams:write scope: without it this field is null and the response carries
+	// a FORBIDDEN error at its path.
 	StreamKey *string `json:"streamKey"`
 	// Public identifier for playback URLs.
 	PlaybackId string `json:"playbackId"`
@@ -115202,7 +115766,9 @@ type ViewerCountBucketDefaultFieldsStream struct {
 	UpdatedAt time.Time `json:"updatedAt"`
 	// Real-time operational metrics from the data plane.
 	// Includes viewer counts, quality metrics, and throughput data.
-	// Lazily loaded from ClickHouse analytics.
+	// Lazily loaded from ClickHouse analytics, so an API token needs the
+	// analytics:read scope: without it this field is null and the response
+	// carries a FORBIDDEN error at its path.
 	Metrics *ViewerCountBucketDefaultFieldsStreamMetrics `json:"metrics"`
 	// Configured multistream push targets for this stream.
 	PushTargets []ViewerCountBucketDefaultFieldsStreamPushTargetsPushTarget `json:"pushTargets"`
@@ -115856,6 +116422,9 @@ type ViewerGeographicDefaultFieldsStream struct {
 	// Optional description for the stream.
 	Description *string `json:"description"`
 	// Secret key for publisher-authenticated ingest; null for pull and managed sources.
+	// The key lets its holder publish to the stream, so an API token needs the
+	// streams:write scope: without it this field is null and the response carries
+	// a FORBIDDEN error at its path.
 	StreamKey *string `json:"streamKey"`
 	// Public identifier for playback URLs.
 	PlaybackId string `json:"playbackId"`
@@ -115875,7 +116444,9 @@ type ViewerGeographicDefaultFieldsStream struct {
 	UpdatedAt time.Time `json:"updatedAt"`
 	// Real-time operational metrics from the data plane.
 	// Includes viewer counts, quality metrics, and throughput data.
-	// Lazily loaded from ClickHouse analytics.
+	// Lazily loaded from ClickHouse analytics, so an API token needs the
+	// analytics:read scope: without it this field is null and the response
+	// carries a FORBIDDEN error at its path.
 	Metrics *ViewerGeographicDefaultFieldsStreamMetrics `json:"metrics"`
 	// Configured multistream push targets for this stream.
 	PushTargets []ViewerGeographicDefaultFieldsStreamPushTargetsPushTarget `json:"pushTargets"`
@@ -116413,6 +116984,9 @@ type ViewerHoursHourlyDefaultFieldsStream struct {
 	// Optional description for the stream.
 	Description *string `json:"description"`
 	// Secret key for publisher-authenticated ingest; null for pull and managed sources.
+	// The key lets its holder publish to the stream, so an API token needs the
+	// streams:write scope: without it this field is null and the response carries
+	// a FORBIDDEN error at its path.
 	StreamKey *string `json:"streamKey"`
 	// Public identifier for playback URLs.
 	PlaybackId string `json:"playbackId"`
@@ -116432,7 +117006,9 @@ type ViewerHoursHourlyDefaultFieldsStream struct {
 	UpdatedAt time.Time `json:"updatedAt"`
 	// Real-time operational metrics from the data plane.
 	// Includes viewer counts, quality metrics, and throughput data.
-	// Lazily loaded from ClickHouse analytics.
+	// Lazily loaded from ClickHouse analytics, so an API token needs the
+	// analytics:read scope: without it this field is null and the response
+	// carries a FORBIDDEN error at its path.
 	Metrics *ViewerHoursHourlyDefaultFieldsStreamMetrics `json:"metrics"`
 	// Configured multistream push targets for this stream.
 	PushTargets []ViewerHoursHourlyDefaultFieldsStreamPushTargetsPushTarget `json:"pushTargets"`
@@ -116978,6 +117554,9 @@ type ViewerHoursHourlyInNodeDefaultFieldsStream struct {
 	// Optional description for the stream.
 	Description *string `json:"description"`
 	// Secret key for publisher-authenticated ingest; null for pull and managed sources.
+	// The key lets its holder publish to the stream, so an API token needs the
+	// streams:write scope: without it this field is null and the response carries
+	// a FORBIDDEN error at its path.
 	StreamKey *string `json:"streamKey"`
 	// Public identifier for playback URLs.
 	PlaybackId string `json:"playbackId"`
@@ -116997,7 +117576,9 @@ type ViewerHoursHourlyInNodeDefaultFieldsStream struct {
 	UpdatedAt time.Time `json:"updatedAt"`
 	// Real-time operational metrics from the data plane.
 	// Includes viewer counts, quality metrics, and throughput data.
-	// Lazily loaded from ClickHouse analytics.
+	// Lazily loaded from ClickHouse analytics, so an API token needs the
+	// analytics:read scope: without it this field is null and the response
+	// carries a FORBIDDEN error at its path.
 	Metrics *ViewerHoursHourlyInNodeDefaultFieldsStreamMetrics `json:"metrics"`
 	// Configured multistream push targets for this stream.
 	PushTargets []ViewerHoursHourlyInNodeDefaultFieldsStreamPushTargetsPushTarget `json:"pushTargets"`
@@ -117607,6 +118188,9 @@ type ViewerMetricsDefaultFieldsStream struct {
 	// Optional description for the stream.
 	Description *string `json:"description"`
 	// Secret key for publisher-authenticated ingest; null for pull and managed sources.
+	// The key lets its holder publish to the stream, so an API token needs the
+	// streams:write scope: without it this field is null and the response carries
+	// a FORBIDDEN error at its path.
 	StreamKey *string `json:"streamKey"`
 	// Public identifier for playback URLs.
 	PlaybackId string `json:"playbackId"`
@@ -117626,7 +118210,9 @@ type ViewerMetricsDefaultFieldsStream struct {
 	UpdatedAt time.Time `json:"updatedAt"`
 	// Real-time operational metrics from the data plane.
 	// Includes viewer counts, quality metrics, and throughput data.
-	// Lazily loaded from ClickHouse analytics.
+	// Lazily loaded from ClickHouse analytics, so an API token needs the
+	// analytics:read scope: without it this field is null and the response
+	// carries a FORBIDDEN error at its path.
 	Metrics *ViewerMetricsDefaultFieldsStreamMetrics `json:"metrics"`
 	// Configured multistream push targets for this stream.
 	PushTargets []ViewerMetricsDefaultFieldsStreamPushTargetsPushTarget `json:"pushTargets"`
@@ -118194,6 +118780,9 @@ type ViewerSessionDefaultFieldsStream struct {
 	// Optional description for the stream.
 	Description *string `json:"description"`
 	// Secret key for publisher-authenticated ingest; null for pull and managed sources.
+	// The key lets its holder publish to the stream, so an API token needs the
+	// streams:write scope: without it this field is null and the response carries
+	// a FORBIDDEN error at its path.
 	StreamKey *string `json:"streamKey"`
 	// Public identifier for playback URLs.
 	PlaybackId string `json:"playbackId"`
@@ -118213,7 +118802,9 @@ type ViewerSessionDefaultFieldsStream struct {
 	UpdatedAt time.Time `json:"updatedAt"`
 	// Real-time operational metrics from the data plane.
 	// Includes viewer counts, quality metrics, and throughput data.
-	// Lazily loaded from ClickHouse analytics.
+	// Lazily loaded from ClickHouse analytics, so an API token needs the
+	// analytics:read scope: without it this field is null and the response
+	// carries a FORBIDDEN error at its path.
 	Metrics *ViewerSessionDefaultFieldsStreamMetrics `json:"metrics"`
 	// Configured multistream push targets for this stream.
 	PushTargets []ViewerSessionDefaultFieldsStreamPushTargetsPushTarget `json:"pushTargets"`
@@ -118791,6 +119382,9 @@ type ViewerSessionInNodeDefaultFieldsStream struct {
 	// Optional description for the stream.
 	Description *string `json:"description"`
 	// Secret key for publisher-authenticated ingest; null for pull and managed sources.
+	// The key lets its holder publish to the stream, so an API token needs the
+	// streams:write scope: without it this field is null and the response carries
+	// a FORBIDDEN error at its path.
 	StreamKey *string `json:"streamKey"`
 	// Public identifier for playback URLs.
 	PlaybackId string `json:"playbackId"`
@@ -118810,7 +119404,9 @@ type ViewerSessionInNodeDefaultFieldsStream struct {
 	UpdatedAt time.Time `json:"updatedAt"`
 	// Real-time operational metrics from the data plane.
 	// Includes viewer counts, quality metrics, and throughput data.
-	// Lazily loaded from ClickHouse analytics.
+	// Lazily loaded from ClickHouse analytics, so an API token needs the
+	// analytics:read scope: without it this field is null and the response
+	// carries a FORBIDDEN error at its path.
 	Metrics *ViewerSessionInNodeDefaultFieldsStreamMetrics `json:"metrics"`
 	// Configured multistream push targets for this stream.
 	PushTargets []ViewerSessionInNodeDefaultFieldsStreamPushTargetsPushTarget `json:"pushTargets"`
@@ -123026,6 +123622,22 @@ type __GetStreamInput struct {
 // GetId returns __GetStreamInput.Id, and is useful for accessing the field via an interface.
 func (v *__GetStreamInput) GetId() string { return v.Id }
 
+// __GetStreamKeyInput is used internally by genqlient
+type __GetStreamKeyInput struct {
+	Id string `json:"id"`
+}
+
+// GetId returns __GetStreamKeyInput.Id, and is useful for accessing the field via an interface.
+func (v *__GetStreamKeyInput) GetId() string { return v.Id }
+
+// __GetStreamMetricsInput is used internally by genqlient
+type __GetStreamMetricsInput struct {
+	Id string `json:"id"`
+}
+
+// GetId returns __GetStreamMetricsInput.Id, and is useful for accessing the field via an interface.
+func (v *__GetStreamMetricsInput) GetId() string { return v.Id }
+
 // __GetTenantAnalyticsDailyConnectionInput is used internally by genqlient
 type __GetTenantAnalyticsDailyConnectionInput struct {
 	Page      *ConnectionInput `json:"page"`
@@ -123407,6 +124019,18 @@ func (v *__ListStreamKeysInput) GetStreamId() string { return v.StreamId }
 
 // GetPage returns __ListStreamKeysInput.Page, and is useful for accessing the field via an interface.
 func (v *__ListStreamKeysInput) GetPage() *ConnectionInput { return v.Page }
+
+// __ListStreamMetricsInput is used internally by genqlient
+type __ListStreamMetricsInput struct {
+	Page   *ConnectionInput `json:"page"`
+	Search *string          `json:"search"`
+}
+
+// GetPage returns __ListStreamMetricsInput.Page, and is useful for accessing the field via an interface.
+func (v *__ListStreamMetricsInput) GetPage() *ConnectionInput { return v.Page }
+
+// GetSearch returns __ListStreamMetricsInput.Search, and is useful for accessing the field via an interface.
+func (v *__ListStreamMetricsInput) GetSearch() *string { return v.Search }
 
 // __ListStreamsInput is used internally by genqlient
 type __ListStreamsInput struct {
@@ -125775,6 +126399,9 @@ mutation CreateStream ($input: CreateStreamInput!) {
 	createStream(input: $input) {
 		__typename
 		... StreamFields
+		... on Stream {
+			streamKey
+		}
 		... ValidationErrorFields
 		... AuthErrorFields
 	}
@@ -125785,7 +126412,6 @@ fragment StreamFields on Stream {
 	streamId
 	name
 	description
-	streamKey
 	playbackId
 	record
 	ingestMode
@@ -125801,13 +126427,6 @@ fragment StreamFields on Stream {
 	monitoring
 	playbackPolicy {
 		... PlaybackPolicyFields
-	}
-	metrics {
-		status
-		isLive
-		currentViewers
-		startedAt
-		updatedAt
 	}
 }
 fragment ValidationErrorFields on ValidationError {
@@ -125845,6 +126464,7 @@ fragment PlaybackPolicyFields on PlaybackPolicy {
 // CreateStream executes the corresponding GraphQL operation.
 //
 // Create a new stream for live broadcasting.
+// Creating a stream needs streams:write, which also reads the new publishing key.
 func CreateStream(
 	ctx_ context.Context,
 	client_ graphql.Client,
@@ -136040,7 +136660,6 @@ fragment StreamFields on Stream {
 	streamId
 	name
 	description
-	streamKey
 	playbackId
 	record
 	ingestMode
@@ -136056,13 +136675,6 @@ fragment StreamFields on Stream {
 	monitoring
 	playbackPolicy {
 		... PlaybackPolicyFields
-	}
-	metrics {
-		status
-		isLive
-		currentViewers
-		startedAt
-		updatedAt
 	}
 }
 fragment PlaybackPolicyFields on PlaybackPolicy {
@@ -136088,6 +136700,8 @@ fragment PlaybackPolicyFields on PlaybackPolicy {
 // GetStream executes the corresponding GraphQL operation.
 //
 // Fetch a single stream by its global ID.
+// An API token needs the streams:read or streams:write scope. Stream.streamKey
+// needs streams:write.
 func GetStream(
 	ctx_ context.Context,
 	client_ graphql.Client,
@@ -137239,6 +137853,105 @@ func GetStreamHealthSummary(
 	}
 
 	data_ = &GetStreamHealthSummaryResponse{}
+	resp_ := &graphql.Response{Data: data_}
+
+	err_ = client_.MakeRequest(
+		ctx_,
+		req_,
+		resp_,
+	)
+
+	return data_, err_
+}
+
+// The query executed by GetStreamKey.
+const GetStreamKey_Operation = `
+query GetStreamKey ($id: ID!) {
+	stream(id: $id) {
+		id
+		streamKey
+	}
+}
+`
+
+// GetStreamKey executes the corresponding GraphQL operation.
+//
+// Secret key for publisher-authenticated ingest; null for pull and managed sources.
+// The key lets its holder publish to the stream, so an API token needs the
+// streams:write scope: without it this field is null and the response carries
+// a FORBIDDEN error at its path.
+// The publishing key of a push stream (null for pull and managed streams).
+// The key lets its holder publish, so an API token needs streams:write.
+func GetStreamKey(
+	ctx_ context.Context,
+	client_ graphql.Client,
+	id string,
+) (data_ *GetStreamKeyResponse, err_ error) {
+	req_ := &graphql.Request{
+		OpName: "GetStreamKey",
+		Query:  GetStreamKey_Operation,
+		Variables: &__GetStreamKeyInput{
+			Id: id,
+		},
+	}
+
+	data_ = &GetStreamKeyResponse{}
+	resp_ := &graphql.Response{Data: data_}
+
+	err_ = client_.MakeRequest(
+		ctx_,
+		req_,
+		resp_,
+	)
+
+	return data_, err_
+}
+
+// The query executed by GetStreamMetrics.
+const GetStreamMetrics_Operation = `
+query GetStreamMetrics ($id: ID!) {
+	stream(id: $id) {
+		id
+		metrics {
+			... StreamMetricsFields
+		}
+	}
+}
+fragment StreamMetricsFields on StreamMetrics {
+	status
+	isLive
+	currentViewers
+	startedAt
+	updatedAt
+	bufferState
+	qualityTier
+	hasIssues
+	issuesDescription
+}
+`
+
+// GetStreamMetrics executes the corresponding GraphQL operation.
+//
+// Real-time operational metrics from the data plane.
+// Includes viewer counts, quality metrics, and throughput data.
+// Lazily loaded from ClickHouse analytics, so an API token needs the
+// analytics:read scope: without it this field is null and the response
+// carries a FORBIDDEN error at its path.
+// Live state comes from analytics: an API token needs analytics:read.
+func GetStreamMetrics(
+	ctx_ context.Context,
+	client_ graphql.Client,
+	id string,
+) (data_ *GetStreamMetricsResponse, err_ error) {
+	req_ := &graphql.Request{
+		OpName: "GetStreamMetrics",
+		Query:  GetStreamMetrics_Operation,
+		Variables: &__GetStreamMetricsInput{
+			Id: id,
+		},
+	}
+
+	data_ = &GetStreamMetricsResponse{}
 	resp_ := &graphql.Response{Data: data_}
 
 	err_ = client_.MakeRequest(
@@ -139672,6 +140385,8 @@ fragment PageInfoFields on PageInfo {
 // ListStreamKeys executes the corresponding GraphQL operation.
 //
 // List all stream keys for a specific stream.
+// Stream keys are publishing credentials, so an API token needs the
+// streams:write scope.
 func ListStreamKeys(
 	ctx_ context.Context,
 	client_ graphql.Client,
@@ -139688,6 +140403,78 @@ func ListStreamKeys(
 	}
 
 	data_ = &ListStreamKeysResponse{}
+	resp_ := &graphql.Response{Data: data_}
+
+	err_ = client_.MakeRequest(
+		ctx_,
+		req_,
+		resp_,
+	)
+
+	return data_, err_
+}
+
+// The query executed by ListStreamMetrics.
+const ListStreamMetrics_Operation = `
+query ListStreamMetrics ($page: ConnectionInput, $search: String) {
+	streamsConnection(page: $page, search: $search) {
+		nodes {
+			id
+			streamId
+			metrics {
+				... StreamMetricsFields
+			}
+		}
+		pageInfo {
+			... PageInfoFields
+		}
+		totalCount
+	}
+}
+fragment StreamMetricsFields on StreamMetrics {
+	status
+	isLive
+	currentViewers
+	startedAt
+	updatedAt
+	bufferState
+	qualityTier
+	hasIssues
+	issuesDescription
+}
+fragment PageInfoFields on PageInfo {
+	startCursor
+	endCursor
+	hasNextPage
+	hasPreviousPage
+}
+`
+
+// ListStreamMetrics executes the corresponding GraphQL operation.
+//
+// Real-time operational metrics from the data plane.
+// Includes viewer counts, quality metrics, and throughput data.
+// Lazily loaded from ClickHouse analytics, so an API token needs the
+// analytics:read scope: without it this field is null and the response
+// carries a FORBIDDEN error at its path.
+// Live state of a page of streams, for the same page and search as ListStreams.
+// Live state comes from analytics: an API token needs analytics:read.
+func ListStreamMetrics(
+	ctx_ context.Context,
+	client_ graphql.Client,
+	page *ConnectionInput,
+	search *string,
+) (data_ *ListStreamMetricsResponse, err_ error) {
+	req_ := &graphql.Request{
+		OpName: "ListStreamMetrics",
+		Query:  ListStreamMetrics_Operation,
+		Variables: &__ListStreamMetricsInput{
+			Page:   page,
+			Search: search,
+		},
+	}
+
+	data_ = &ListStreamMetricsResponse{}
 	resp_ := &graphql.Response{Data: data_}
 
 	err_ = client_.MakeRequest(
@@ -139718,7 +140505,6 @@ fragment StreamFields on Stream {
 	streamId
 	name
 	description
-	streamKey
 	playbackId
 	record
 	ingestMode
@@ -139734,13 +140520,6 @@ fragment StreamFields on Stream {
 	monitoring
 	playbackPolicy {
 		... PlaybackPolicyFields
-	}
-	metrics {
-		status
-		isLive
-		currentViewers
-		startedAt
-		updatedAt
 	}
 }
 fragment PageInfoFields on PageInfo {
@@ -139772,6 +140551,8 @@ fragment PlaybackPolicyFields on PlaybackPolicy {
 // ListStreams executes the corresponding GraphQL operation.
 //
 // List all streams for the current tenant with pagination.
+// An API token needs the streams:read or streams:write scope. Stream.streamKey
+// needs streams:write.
 func ListStreams(
 	ctx_ context.Context,
 	client_ graphql.Client,
@@ -141366,6 +142147,9 @@ mutation RefreshStreamKey ($id: ID!) {
 	refreshStreamKey(id: $id) {
 		__typename
 		... StreamFields
+		... on Stream {
+			streamKey
+		}
 		... ValidationErrorFields
 		... NotFoundErrorFields
 		... AuthErrorFields
@@ -141377,7 +142161,6 @@ fragment StreamFields on Stream {
 	streamId
 	name
 	description
-	streamKey
 	playbackId
 	record
 	ingestMode
@@ -141393,13 +142176,6 @@ fragment StreamFields on Stream {
 	monitoring
 	playbackPolicy {
 		... PlaybackPolicyFields
-	}
-	metrics {
-		status
-		isLive
-		currentViewers
-		startedAt
-		updatedAt
 	}
 }
 fragment ValidationErrorFields on ValidationError {
@@ -143911,7 +144687,6 @@ fragment StreamFields on Stream {
 	streamId
 	name
 	description
-	streamKey
 	playbackId
 	record
 	ingestMode
@@ -143927,13 +144702,6 @@ fragment StreamFields on Stream {
 	monitoring
 	playbackPolicy {
 		... PlaybackPolicyFields
-	}
-	metrics {
-		status
-		isLive
-		currentViewers
-		startedAt
-		updatedAt
 	}
 }
 fragment ValidationErrorFields on ValidationError {

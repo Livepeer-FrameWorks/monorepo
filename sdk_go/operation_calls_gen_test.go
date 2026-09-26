@@ -434,6 +434,12 @@ var operationCalls = map[string]operationCall{
 	"GetStreamHealthSummary": {GetStreamHealthSummary_Operation, func(ctx context.Context, c *Client, v vars) (any, error) {
 		return GetStreamHealthSummary(ctx, c, arg[*string](v, "streamId"), arg[*TimeRangeInput](v, "timeRange"), arg[*bool](v, "noCache"))
 	}},
+	"GetStreamKey": {GetStreamKey_Operation, func(ctx context.Context, c *Client, v vars) (any, error) {
+		return GetStreamKey(ctx, c, arg[string](v, "id"))
+	}},
+	"GetStreamMetrics": {GetStreamMetrics_Operation, func(ctx context.Context, c *Client, v vars) (any, error) {
+		return GetStreamMetrics(ctx, c, arg[string](v, "id"))
+	}},
 	"GetStreamingConfig": {GetStreamingConfig_Operation, func(ctx context.Context, c *Client, _ vars) (any, error) {
 		return GetStreamingConfig(ctx, c)
 	}},
@@ -526,6 +532,9 @@ var operationCalls = map[string]operationCall{
 	}},
 	"ListStreamKeys": {ListStreamKeys_Operation, func(ctx context.Context, c *Client, v vars) (any, error) {
 		return ListStreamKeys(ctx, c, arg[string](v, "streamId"), arg[*ConnectionInput](v, "page"))
+	}},
+	"ListStreamMetrics": {ListStreamMetrics_Operation, func(ctx context.Context, c *Client, v vars) (any, error) {
+		return ListStreamMetrics(ctx, c, arg[*ConnectionInput](v, "page"), arg[*string](v, "search"))
 	}},
 	"ListStreams": {ListStreams_Operation, func(ctx context.Context, c *Client, v vars) (any, error) {
 		return ListStreams(ctx, c, arg[*ConnectionInput](v, "page"), arg[*string](v, "search"))

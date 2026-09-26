@@ -1365,8 +1365,7 @@ export type StreamFieldsFragment = { __typename: 'Stream', /** Global unique ide
 id: string, /** Public stream UUID used for analytics and service APIs (not the Relay ID). */
 streamId: string, /** Human-readable display name for the stream. */
 name: string, /** Optional description for the stream. */
-description: string | null, /** Secret key for publisher-authenticated ingest; null for pull and managed sources. */
-streamKey: string | null, /** Public identifier for playback URLs. */
+description: string | null, /** Public identifier for playback URLs. */
 playbackId: string, /** Whether DVR recording is enabled for this stream. */
 record: boolean, /** How source media enters the stream. */
 ingestMode: IngestMode, /** When this stream was created. */
@@ -1388,15 +1387,22 @@ requiredClaimsJson: Array<{ name: string, jsonValue: string }> } | null, /** Web
 webhook: { url: string, /** Outbound POST timeout in milliseconds. Capped server-side at 10000. */
 timeoutMs: number, /** Always 'redacted' on read; the actual secret is fieldcrypt-encrypted at rest. */
 secretMasked: string, /** Your JSON object, sent as `context` in every access request to the URL. Null when unset. */
-context: unknown } | null } | null, /** Real-time operational metrics from the data plane. Includes viewer counts, quality metrics, and throughput data. Lazily loaded from ClickHouse analytics. */
-metrics: { /** Current lifecycle status of the stream (OFFLINE, CONNECTING, LIVE, etc.). */
+context: unknown } | null } | null };
+
+/** Real-time operational metrics for a stream from the analytics data plane. Updated frequently while stream is live, represents latest known state. */
+export type StreamMetricsFieldsFragment = { /** Current lifecycle status of the stream (OFFLINE, CONNECTING, LIVE, etc.). */
 status: StreamStatus, /** Whether the stream is currently broadcasting. */
 isLive: boolean, /** Number of viewers currently watching. */
 currentViewers: number, /** When the current live session started (null if offline). */
 startedAt: string | null, /** When these metrics were last updated. */
-updatedAt: string } | null };
+updatedAt: string, /** Buffer health state (HEALTHY, WARNING, CRITICAL). */
+bufferState: string | null, /** Highest quality tier available (4K, 1080p, 720p, etc.). */
+qualityTier: string | null, /** Whether the stream has active quality issues. */
+hasIssues: boolean | null, /** Human-readable description of current issues. */
+issuesDescription: string | null };
 
-export type StreamKeyFieldsFragment = { __typename: 'StreamKey', id: string, streamId: string, keyValue: string, keyName: string | null, isActive: boolean, lastUsedAt: string | null, createdAt: string };
+export type StreamKeyFieldsFragment = { __typename: 'StreamKey', id: string, streamId: string, /** The publishing secret. Stream keys are read only through operations that need the streams:write scope. */
+keyValue: string, keyName: string | null, isActive: boolean, lastUsedAt: string | null, createdAt: string };
 
 export type PushTargetFieldsFragment = { id: string, streamId: string, /** Platform identifier (twitch, youtube, facebook, kick, x, custom). */
 platform: string | null, /** User-friendly label for this target. */
@@ -1519,7 +1525,7 @@ export type ArtifactEventDefaultFieldsFragment = { id: string, timestamp: string
 id: string, /** Public stream UUID used for analytics and service APIs (not the Relay ID). */
 streamId: string, /** Human-readable display name for the stream. */
 name: string, /** Optional description for the stream. */
-description: string | null, /** Secret key for publisher-authenticated ingest; null for pull and managed sources. */
+description: string | null, /** Secret key for publisher-authenticated ingest; null for pull and managed sources. The key lets its holder publish to the stream, so an API token needs the streams:write scope: without it this field is null and the response carries a FORBIDDEN error at its path. */
 streamKey: string | null, /** Public identifier for playback URLs. */
 playbackId: string, /** Whether DVR recording is enabled for this stream. */
 record: boolean, /** How source media enters the stream. */
@@ -1538,7 +1544,7 @@ sourceKind: string, /** Whether the source is kept active without waiting for a 
 alwaysOn: boolean, /** Number of source placements requested by the operator configuration. */
 placementCount: number } | null, /** Where the stream's source may be ingested, derived from the stream's own ingest placement rules. */
 sourceLocation: { mode: SourceLocationMode, /** Empty unless mode is RESTRICTED. */
-avoidNodeIds: Array<string> }, /** Real-time operational metrics from the data plane. Includes viewer counts, quality metrics, and throughput data. Lazily loaded from ClickHouse analytics. */
+avoidNodeIds: Array<string> }, /** Real-time operational metrics from the data plane. Includes viewer counts, quality metrics, and throughput data. Lazily loaded from ClickHouse analytics, so an API token needs the analytics:read scope: without it this field is null and the response carries a FORBIDDEN error at its path. */
 metrics: { /** Current lifecycle status of the stream (OFFLINE, CONNECTING, LIVE, etc.). */
 status: StreamStatus, /** Whether the stream is currently broadcasting. */
 isLive: boolean, /** Number of viewers currently watching. */
@@ -1574,7 +1580,7 @@ export type ArtifactEventInNodeDefaultFieldsFragment = { id: string, timestamp: 
 id: string, /** Public stream UUID used for analytics and service APIs (not the Relay ID). */
 streamId: string, /** Human-readable display name for the stream. */
 name: string, /** Optional description for the stream. */
-description: string | null, /** Secret key for publisher-authenticated ingest; null for pull and managed sources. */
+description: string | null, /** Secret key for publisher-authenticated ingest; null for pull and managed sources. The key lets its holder publish to the stream, so an API token needs the streams:write scope: without it this field is null and the response carries a FORBIDDEN error at its path. */
 streamKey: string | null, /** Public identifier for playback URLs. */
 playbackId: string, /** Whether DVR recording is enabled for this stream. */
 record: boolean, /** How source media enters the stream. */
@@ -1593,7 +1599,7 @@ sourceKind: string, /** Whether the source is kept active without waiting for a 
 alwaysOn: boolean, /** Number of source placements requested by the operator configuration. */
 placementCount: number } | null, /** Where the stream's source may be ingested, derived from the stream's own ingest placement rules. */
 sourceLocation: { mode: SourceLocationMode, /** Empty unless mode is RESTRICTED. */
-avoidNodeIds: Array<string> }, /** Real-time operational metrics from the data plane. Includes viewer counts, quality metrics, and throughput data. Lazily loaded from ClickHouse analytics. */
+avoidNodeIds: Array<string> }, /** Real-time operational metrics from the data plane. Includes viewer counts, quality metrics, and throughput data. Lazily loaded from ClickHouse analytics, so an API token needs the analytics:read scope: without it this field is null and the response carries a FORBIDDEN error at its path. */
 metrics: { /** Current lifecycle status of the stream (OFFLINE, CONNECTING, LIVE, etc.). */
 status: StreamStatus, /** Whether the stream is currently broadcasting. */
 isLive: boolean, /** Number of viewers currently watching. */
@@ -1629,7 +1635,7 @@ export type ArtifactStateDefaultFieldsFragment = { streamId: string, playbackId:
 id: string, /** Public stream UUID used for analytics and service APIs (not the Relay ID). */
 streamId: string, /** Human-readable display name for the stream. */
 name: string, /** Optional description for the stream. */
-description: string | null, /** Secret key for publisher-authenticated ingest; null for pull and managed sources. */
+description: string | null, /** Secret key for publisher-authenticated ingest; null for pull and managed sources. The key lets its holder publish to the stream, so an API token needs the streams:write scope: without it this field is null and the response carries a FORBIDDEN error at its path. */
 streamKey: string | null, /** Public identifier for playback URLs. */
 playbackId: string, /** Whether DVR recording is enabled for this stream. */
 record: boolean, /** How source media enters the stream. */
@@ -1648,7 +1654,7 @@ sourceKind: string, /** Whether the source is kept active without waiting for a 
 alwaysOn: boolean, /** Number of source placements requested by the operator configuration. */
 placementCount: number } | null, /** Where the stream's source may be ingested, derived from the stream's own ingest placement rules. */
 sourceLocation: { mode: SourceLocationMode, /** Empty unless mode is RESTRICTED. */
-avoidNodeIds: Array<string> }, /** Real-time operational metrics from the data plane. Includes viewer counts, quality metrics, and throughput data. Lazily loaded from ClickHouse analytics. */
+avoidNodeIds: Array<string> }, /** Real-time operational metrics from the data plane. Includes viewer counts, quality metrics, and throughput data. Lazily loaded from ClickHouse analytics, so an API token needs the analytics:read scope: without it this field is null and the response carries a FORBIDDEN error at its path. */
 metrics: { /** Current lifecycle status of the stream (OFFLINE, CONNECTING, LIVE, etc.). */
 status: StreamStatus, /** Whether the stream is currently broadcasting. */
 isLive: boolean, /** Number of viewers currently watching. */
@@ -1879,7 +1885,7 @@ export type ClientMetrics5mDefaultFieldsFragment = { id: string, timestamp: stri
 id: string, /** Public stream UUID used for analytics and service APIs (not the Relay ID). */
 streamId: string, /** Human-readable display name for the stream. */
 name: string, /** Optional description for the stream. */
-description: string | null, /** Secret key for publisher-authenticated ingest; null for pull and managed sources. */
+description: string | null, /** Secret key for publisher-authenticated ingest; null for pull and managed sources. The key lets its holder publish to the stream, so an API token needs the streams:write scope: without it this field is null and the response carries a FORBIDDEN error at its path. */
 streamKey: string | null, /** Public identifier for playback URLs. */
 playbackId: string, /** Whether DVR recording is enabled for this stream. */
 record: boolean, /** How source media enters the stream. */
@@ -1898,7 +1904,7 @@ sourceKind: string, /** Whether the source is kept active without waiting for a 
 alwaysOn: boolean, /** Number of source placements requested by the operator configuration. */
 placementCount: number } | null, /** Where the stream's source may be ingested, derived from the stream's own ingest placement rules. */
 sourceLocation: { mode: SourceLocationMode, /** Empty unless mode is RESTRICTED. */
-avoidNodeIds: Array<string> }, /** Real-time operational metrics from the data plane. Includes viewer counts, quality metrics, and throughput data. Lazily loaded from ClickHouse analytics. */
+avoidNodeIds: Array<string> }, /** Real-time operational metrics from the data plane. Includes viewer counts, quality metrics, and throughput data. Lazily loaded from ClickHouse analytics, so an API token needs the analytics:read scope: without it this field is null and the response carries a FORBIDDEN error at its path. */
 metrics: { /** Current lifecycle status of the stream (OFFLINE, CONNECTING, LIVE, etc.). */
 status: StreamStatus, /** Whether the stream is currently broadcasting. */
 isLive: boolean, /** Number of viewers currently watching. */
@@ -1962,7 +1968,7 @@ clipCreatedAt: string | null, stream: { /** Global unique identifier for Relay c
 id: string, /** Public stream UUID used for analytics and service APIs (not the Relay ID). */
 streamId: string, /** Human-readable display name for the stream. */
 name: string, /** Optional description for the stream. */
-description: string | null, /** Secret key for publisher-authenticated ingest; null for pull and managed sources. */
+description: string | null, /** Secret key for publisher-authenticated ingest; null for pull and managed sources. The key lets its holder publish to the stream, so an API token needs the streams:write scope: without it this field is null and the response carries a FORBIDDEN error at its path. */
 streamKey: string | null, /** Public identifier for playback URLs. */
 playbackId: string, /** Whether DVR recording is enabled for this stream. */
 record: boolean, /** How source media enters the stream. */
@@ -1981,7 +1987,7 @@ sourceKind: string, /** Whether the source is kept active without waiting for a 
 alwaysOn: boolean, /** Number of source placements requested by the operator configuration. */
 placementCount: number } | null, /** Where the stream's source may be ingested, derived from the stream's own ingest placement rules. */
 sourceLocation: { mode: SourceLocationMode, /** Empty unless mode is RESTRICTED. */
-avoidNodeIds: Array<string> }, /** Real-time operational metrics from the data plane. Includes viewer counts, quality metrics, and throughput data. Lazily loaded from ClickHouse analytics. */
+avoidNodeIds: Array<string> }, /** Real-time operational metrics from the data plane. Includes viewer counts, quality metrics, and throughput data. Lazily loaded from ClickHouse analytics, so an API token needs the analytics:read scope: without it this field is null and the response carries a FORBIDDEN error at its path. */
 metrics: { /** Current lifecycle status of the stream (OFFLINE, CONNECTING, LIVE, etc.). */
 status: StreamStatus, /** Whether the stream is currently broadcasting. */
 isLive: boolean, /** Number of viewers currently watching. */
@@ -2109,7 +2115,7 @@ export type ConnectionEventDefaultFieldsFragment = { id: string, eventId: string
 id: string, /** Public stream UUID used for analytics and service APIs (not the Relay ID). */
 streamId: string, /** Human-readable display name for the stream. */
 name: string, /** Optional description for the stream. */
-description: string | null, /** Secret key for publisher-authenticated ingest; null for pull and managed sources. */
+description: string | null, /** Secret key for publisher-authenticated ingest; null for pull and managed sources. The key lets its holder publish to the stream, so an API token needs the streams:write scope: without it this field is null and the response carries a FORBIDDEN error at its path. */
 streamKey: string | null, /** Public identifier for playback URLs. */
 playbackId: string, /** Whether DVR recording is enabled for this stream. */
 record: boolean, /** How source media enters the stream. */
@@ -2128,7 +2134,7 @@ sourceKind: string, /** Whether the source is kept active without waiting for a 
 alwaysOn: boolean, /** Number of source placements requested by the operator configuration. */
 placementCount: number } | null, /** Where the stream's source may be ingested, derived from the stream's own ingest placement rules. */
 sourceLocation: { mode: SourceLocationMode, /** Empty unless mode is RESTRICTED. */
-avoidNodeIds: Array<string> }, /** Real-time operational metrics from the data plane. Includes viewer counts, quality metrics, and throughput data. Lazily loaded from ClickHouse analytics. */
+avoidNodeIds: Array<string> }, /** Real-time operational metrics from the data plane. Includes viewer counts, quality metrics, and throughput data. Lazily loaded from ClickHouse analytics, so an API token needs the analytics:read scope: without it this field is null and the response carries a FORBIDDEN error at its path. */
 metrics: { /** Current lifecycle status of the stream (OFFLINE, CONNECTING, LIVE, etc.). */
 status: StreamStatus, /** Whether the stream is currently broadcasting. */
 isLive: boolean, /** Number of viewers currently watching. */
@@ -2164,7 +2170,7 @@ export type ConnectionEventInNodeDefaultFieldsFragment = { id: string, timestamp
 id: string, /** Public stream UUID used for analytics and service APIs (not the Relay ID). */
 streamId: string, /** Human-readable display name for the stream. */
 name: string, /** Optional description for the stream. */
-description: string | null, /** Secret key for publisher-authenticated ingest; null for pull and managed sources. */
+description: string | null, /** Secret key for publisher-authenticated ingest; null for pull and managed sources. The key lets its holder publish to the stream, so an API token needs the streams:write scope: without it this field is null and the response carries a FORBIDDEN error at its path. */
 streamKey: string | null, /** Public identifier for playback URLs. */
 playbackId: string, /** Whether DVR recording is enabled for this stream. */
 record: boolean, /** How source media enters the stream. */
@@ -2183,7 +2189,7 @@ sourceKind: string, /** Whether the source is kept active without waiting for a 
 alwaysOn: boolean, /** Number of source placements requested by the operator configuration. */
 placementCount: number } | null, /** Where the stream's source may be ingested, derived from the stream's own ingest placement rules. */
 sourceLocation: { mode: SourceLocationMode, /** Empty unless mode is RESTRICTED. */
-avoidNodeIds: Array<string> }, /** Real-time operational metrics from the data plane. Includes viewer counts, quality metrics, and throughput data. Lazily loaded from ClickHouse analytics. */
+avoidNodeIds: Array<string> }, /** Real-time operational metrics from the data plane. Includes viewer counts, quality metrics, and throughput data. Lazily loaded from ClickHouse analytics, so an API token needs the analytics:read scope: without it this field is null and the response carries a FORBIDDEN error at its path. */
 metrics: { /** Current lifecycle status of the stream (OFFLINE, CONNECTING, LIVE, etc.). */
 status: StreamStatus, /** Whether the stream is currently broadcasting. */
 isLive: boolean, /** Number of viewers currently watching. */
@@ -2366,7 +2372,7 @@ end: string }, stream: { /** Global unique identifier for Relay compatibility. *
 id: string, /** Public stream UUID used for analytics and service APIs (not the Relay ID). */
 streamId: string, /** Human-readable display name for the stream. */
 name: string, /** Optional description for the stream. */
-description: string | null, /** Secret key for publisher-authenticated ingest; null for pull and managed sources. */
+description: string | null, /** Secret key for publisher-authenticated ingest; null for pull and managed sources. The key lets its holder publish to the stream, so an API token needs the streams:write scope: without it this field is null and the response carries a FORBIDDEN error at its path. */
 streamKey: string | null, /** Public identifier for playback URLs. */
 playbackId: string, /** Whether DVR recording is enabled for this stream. */
 record: boolean, /** How source media enters the stream. */
@@ -2385,7 +2391,7 @@ sourceKind: string, /** Whether the source is kept active without waiting for a 
 alwaysOn: boolean, /** Number of source placements requested by the operator configuration. */
 placementCount: number } | null, /** Where the stream's source may be ingested, derived from the stream's own ingest placement rules. */
 sourceLocation: { mode: SourceLocationMode, /** Empty unless mode is RESTRICTED. */
-avoidNodeIds: Array<string> }, /** Real-time operational metrics from the data plane. Includes viewer counts, quality metrics, and throughput data. Lazily loaded from ClickHouse analytics. */
+avoidNodeIds: Array<string> }, /** Real-time operational metrics from the data plane. Includes viewer counts, quality metrics, and throughput data. Lazily loaded from ClickHouse analytics, so an API token needs the analytics:read scope: without it this field is null and the response carries a FORBIDDEN error at its path. */
 metrics: { /** Current lifecycle status of the stream (OFFLINE, CONNECTING, LIVE, etc.). */
 status: StreamStatus, /** Whether the stream is currently broadcasting. */
 isLive: boolean, /** Number of viewers currently watching. */
@@ -2686,7 +2692,7 @@ export type ProcessingUsageRecordDefaultFieldsFragment = { id: string, timestamp
 id: string, /** Public stream UUID used for analytics and service APIs (not the Relay ID). */
 streamId: string, /** Human-readable display name for the stream. */
 name: string, /** Optional description for the stream. */
-description: string | null, /** Secret key for publisher-authenticated ingest; null for pull and managed sources. */
+description: string | null, /** Secret key for publisher-authenticated ingest; null for pull and managed sources. The key lets its holder publish to the stream, so an API token needs the streams:write scope: without it this field is null and the response carries a FORBIDDEN error at its path. */
 streamKey: string | null, /** Public identifier for playback URLs. */
 playbackId: string, /** Whether DVR recording is enabled for this stream. */
 record: boolean, /** How source media enters the stream. */
@@ -2705,7 +2711,7 @@ sourceKind: string, /** Whether the source is kept active without waiting for a 
 alwaysOn: boolean, /** Number of source placements requested by the operator configuration. */
 placementCount: number } | null, /** Where the stream's source may be ingested, derived from the stream's own ingest placement rules. */
 sourceLocation: { mode: SourceLocationMode, /** Empty unless mode is RESTRICTED. */
-avoidNodeIds: Array<string> }, /** Real-time operational metrics from the data plane. Includes viewer counts, quality metrics, and throughput data. Lazily loaded from ClickHouse analytics. */
+avoidNodeIds: Array<string> }, /** Real-time operational metrics from the data plane. Includes viewer counts, quality metrics, and throughput data. Lazily loaded from ClickHouse analytics, so an API token needs the analytics:read scope: without it this field is null and the response carries a FORBIDDEN error at its path. */
 metrics: { /** Current lifecycle status of the stream (OFFLINE, CONNECTING, LIVE, etc.). */
 status: StreamStatus, /** Whether the stream is currently broadcasting. */
 isLive: boolean, /** Number of viewers currently watching. */
@@ -2741,7 +2747,7 @@ export type ProcessingUsageRecordInNodeDefaultFieldsFragment = { id: string, tim
 id: string, /** Public stream UUID used for analytics and service APIs (not the Relay ID). */
 streamId: string, /** Human-readable display name for the stream. */
 name: string, /** Optional description for the stream. */
-description: string | null, /** Secret key for publisher-authenticated ingest; null for pull and managed sources. */
+description: string | null, /** Secret key for publisher-authenticated ingest; null for pull and managed sources. The key lets its holder publish to the stream, so an API token needs the streams:write scope: without it this field is null and the response carries a FORBIDDEN error at its path. */
 streamKey: string | null, /** Public identifier for playback URLs. */
 playbackId: string, /** Whether DVR recording is enabled for this stream. */
 record: boolean, /** How source media enters the stream. */
@@ -2760,7 +2766,7 @@ sourceKind: string, /** Whether the source is kept active without waiting for a 
 alwaysOn: boolean, /** Number of source placements requested by the operator configuration. */
 placementCount: number } | null, /** Where the stream's source may be ingested, derived from the stream's own ingest placement rules. */
 sourceLocation: { mode: SourceLocationMode, /** Empty unless mode is RESTRICTED. */
-avoidNodeIds: Array<string> }, /** Real-time operational metrics from the data plane. Includes viewer counts, quality metrics, and throughput data. Lazily loaded from ClickHouse analytics. */
+avoidNodeIds: Array<string> }, /** Real-time operational metrics from the data plane. Includes viewer counts, quality metrics, and throughput data. Lazily loaded from ClickHouse analytics, so an API token needs the analytics:read scope: without it this field is null and the response carries a FORBIDDEN error at its path. */
 metrics: { /** Current lifecycle status of the stream (OFFLINE, CONNECTING, LIVE, etc.). */
 status: StreamStatus, /** Whether the stream is currently broadcasting. */
 isLive: boolean, /** Number of viewers currently watching. */
@@ -2808,7 +2814,7 @@ export type QualityTierDailyDefaultFieldsFragment = { id: string, day: string, s
 id: string, /** Public stream UUID used for analytics and service APIs (not the Relay ID). */
 streamId: string, /** Human-readable display name for the stream. */
 name: string, /** Optional description for the stream. */
-description: string | null, /** Secret key for publisher-authenticated ingest; null for pull and managed sources. */
+description: string | null, /** Secret key for publisher-authenticated ingest; null for pull and managed sources. The key lets its holder publish to the stream, so an API token needs the streams:write scope: without it this field is null and the response carries a FORBIDDEN error at its path. */
 streamKey: string | null, /** Public identifier for playback URLs. */
 playbackId: string, /** Whether DVR recording is enabled for this stream. */
 record: boolean, /** How source media enters the stream. */
@@ -2827,7 +2833,7 @@ sourceKind: string, /** Whether the source is kept active without waiting for a 
 alwaysOn: boolean, /** Number of source placements requested by the operator configuration. */
 placementCount: number } | null, /** Where the stream's source may be ingested, derived from the stream's own ingest placement rules. */
 sourceLocation: { mode: SourceLocationMode, /** Empty unless mode is RESTRICTED. */
-avoidNodeIds: Array<string> }, /** Real-time operational metrics from the data plane. Includes viewer counts, quality metrics, and throughput data. Lazily loaded from ClickHouse analytics. */
+avoidNodeIds: Array<string> }, /** Real-time operational metrics from the data plane. Includes viewer counts, quality metrics, and throughput data. Lazily loaded from ClickHouse analytics, so an API token needs the analytics:read scope: without it this field is null and the response carries a FORBIDDEN error at its path. */
 metrics: { /** Current lifecycle status of the stream (OFFLINE, CONNECTING, LIVE, etc.). */
 status: StreamStatus, /** Whether the stream is currently broadcasting. */
 isLive: boolean, /** Number of viewers currently watching. */
@@ -2865,7 +2871,7 @@ export type RebufferingEventDefaultFieldsFragment = { timestamp: string, streamI
 id: string, /** Public stream UUID used for analytics and service APIs (not the Relay ID). */
 streamId: string, /** Human-readable display name for the stream. */
 name: string, /** Optional description for the stream. */
-description: string | null, /** Secret key for publisher-authenticated ingest; null for pull and managed sources. */
+description: string | null, /** Secret key for publisher-authenticated ingest; null for pull and managed sources. The key lets its holder publish to the stream, so an API token needs the streams:write scope: without it this field is null and the response carries a FORBIDDEN error at its path. */
 streamKey: string | null, /** Public identifier for playback URLs. */
 playbackId: string, /** Whether DVR recording is enabled for this stream. */
 record: boolean, /** How source media enters the stream. */
@@ -2884,7 +2890,7 @@ sourceKind: string, /** Whether the source is kept active without waiting for a 
 alwaysOn: boolean, /** Number of source placements requested by the operator configuration. */
 placementCount: number } | null, /** Where the stream's source may be ingested, derived from the stream's own ingest placement rules. */
 sourceLocation: { mode: SourceLocationMode, /** Empty unless mode is RESTRICTED. */
-avoidNodeIds: Array<string> }, /** Real-time operational metrics from the data plane. Includes viewer counts, quality metrics, and throughput data. Lazily loaded from ClickHouse analytics. */
+avoidNodeIds: Array<string> }, /** Real-time operational metrics from the data plane. Includes viewer counts, quality metrics, and throughput data. Lazily loaded from ClickHouse analytics, so an API token needs the analytics:read scope: without it this field is null and the response carries a FORBIDDEN error at its path. */
 metrics: { /** Current lifecycle status of the stream (OFFLINE, CONNECTING, LIVE, etc.). */
 status: StreamStatus, /** Whether the stream is currently broadcasting. */
 isLive: boolean, /** Number of viewers currently watching. */
@@ -2923,7 +2929,7 @@ export type RoutingEventDefaultFieldsFragment = { timestamp: string, streamId: s
 id: string, /** Public stream UUID used for analytics and service APIs (not the Relay ID). */
 streamId: string, /** Human-readable display name for the stream. */
 name: string, /** Optional description for the stream. */
-description: string | null, /** Secret key for publisher-authenticated ingest; null for pull and managed sources. */
+description: string | null, /** Secret key for publisher-authenticated ingest; null for pull and managed sources. The key lets its holder publish to the stream, so an API token needs the streams:write scope: without it this field is null and the response carries a FORBIDDEN error at its path. */
 streamKey: string | null, /** Public identifier for playback URLs. */
 playbackId: string, /** Whether DVR recording is enabled for this stream. */
 record: boolean, /** How source media enters the stream. */
@@ -2942,7 +2948,7 @@ sourceKind: string, /** Whether the source is kept active without waiting for a 
 alwaysOn: boolean, /** Number of source placements requested by the operator configuration. */
 placementCount: number } | null, /** Where the stream's source may be ingested, derived from the stream's own ingest placement rules. */
 sourceLocation: { mode: SourceLocationMode, /** Empty unless mode is RESTRICTED. */
-avoidNodeIds: Array<string> }, /** Real-time operational metrics from the data plane. Includes viewer counts, quality metrics, and throughput data. Lazily loaded from ClickHouse analytics. */
+avoidNodeIds: Array<string> }, /** Real-time operational metrics from the data plane. Includes viewer counts, quality metrics, and throughput data. Lazily loaded from ClickHouse analytics, so an API token needs the analytics:read scope: without it this field is null and the response carries a FORBIDDEN error at its path. */
 metrics: { /** Current lifecycle status of the stream (OFFLINE, CONNECTING, LIVE, etc.). */
 status: StreamStatus, /** Whether the stream is currently broadcasting. */
 isLive: boolean, /** Number of viewers currently watching. */
@@ -3016,7 +3022,7 @@ export type StorageEventDefaultFieldsFragment = { id: string, timestamp: string,
 id: string, /** Public stream UUID used for analytics and service APIs (not the Relay ID). */
 streamId: string, /** Human-readable display name for the stream. */
 name: string, /** Optional description for the stream. */
-description: string | null, /** Secret key for publisher-authenticated ingest; null for pull and managed sources. */
+description: string | null, /** Secret key for publisher-authenticated ingest; null for pull and managed sources. The key lets its holder publish to the stream, so an API token needs the streams:write scope: without it this field is null and the response carries a FORBIDDEN error at its path. */
 streamKey: string | null, /** Public identifier for playback URLs. */
 playbackId: string, /** Whether DVR recording is enabled for this stream. */
 record: boolean, /** How source media enters the stream. */
@@ -3035,7 +3041,7 @@ sourceKind: string, /** Whether the source is kept active without waiting for a 
 alwaysOn: boolean, /** Number of source placements requested by the operator configuration. */
 placementCount: number } | null, /** Where the stream's source may be ingested, derived from the stream's own ingest placement rules. */
 sourceLocation: { mode: SourceLocationMode, /** Empty unless mode is RESTRICTED. */
-avoidNodeIds: Array<string> }, /** Real-time operational metrics from the data plane. Includes viewer counts, quality metrics, and throughput data. Lazily loaded from ClickHouse analytics. */
+avoidNodeIds: Array<string> }, /** Real-time operational metrics from the data plane. Includes viewer counts, quality metrics, and throughput data. Lazily loaded from ClickHouse analytics, so an API token needs the analytics:read scope: without it this field is null and the response carries a FORBIDDEN error at its path. */
 metrics: { /** Current lifecycle status of the stream (OFFLINE, CONNECTING, LIVE, etc.). */
 status: StreamStatus, /** Whether the stream is currently broadcasting. */
 isLive: boolean, /** Number of viewers currently watching. */
@@ -3071,7 +3077,7 @@ export type StorageEventInNodeDefaultFieldsFragment = { id: string, timestamp: s
 id: string, /** Public stream UUID used for analytics and service APIs (not the Relay ID). */
 streamId: string, /** Human-readable display name for the stream. */
 name: string, /** Optional description for the stream. */
-description: string | null, /** Secret key for publisher-authenticated ingest; null for pull and managed sources. */
+description: string | null, /** Secret key for publisher-authenticated ingest; null for pull and managed sources. The key lets its holder publish to the stream, so an API token needs the streams:write scope: without it this field is null and the response carries a FORBIDDEN error at its path. */
 streamKey: string | null, /** Public identifier for playback URLs. */
 playbackId: string, /** Whether DVR recording is enabled for this stream. */
 record: boolean, /** How source media enters the stream. */
@@ -3090,7 +3096,7 @@ sourceKind: string, /** Whether the source is kept active without waiting for a 
 alwaysOn: boolean, /** Number of source placements requested by the operator configuration. */
 placementCount: number } | null, /** Where the stream's source may be ingested, derived from the stream's own ingest placement rules. */
 sourceLocation: { mode: SourceLocationMode, /** Empty unless mode is RESTRICTED. */
-avoidNodeIds: Array<string> }, /** Real-time operational metrics from the data plane. Includes viewer counts, quality metrics, and throughput data. Lazily loaded from ClickHouse analytics. */
+avoidNodeIds: Array<string> }, /** Real-time operational metrics from the data plane. Includes viewer counts, quality metrics, and throughput data. Lazily loaded from ClickHouse analytics, so an API token needs the analytics:read scope: without it this field is null and the response carries a FORBIDDEN error at its path. */
 metrics: { /** Current lifecycle status of the stream (OFFLINE, CONNECTING, LIVE, etc.). */
 status: StreamStatus, /** Whether the stream is currently broadcasting. */
 isLive: boolean, /** Number of viewers currently watching. */
@@ -3128,7 +3134,7 @@ export type StreamAnalyticsDailyDefaultFieldsFragment = { id: string, day: strin
 id: string, /** Public stream UUID used for analytics and service APIs (not the Relay ID). */
 streamId: string, /** Human-readable display name for the stream. */
 name: string, /** Optional description for the stream. */
-description: string | null, /** Secret key for publisher-authenticated ingest; null for pull and managed sources. */
+description: string | null, /** Secret key for publisher-authenticated ingest; null for pull and managed sources. The key lets its holder publish to the stream, so an API token needs the streams:write scope: without it this field is null and the response carries a FORBIDDEN error at its path. */
 streamKey: string | null, /** Public identifier for playback URLs. */
 playbackId: string, /** Whether DVR recording is enabled for this stream. */
 record: boolean, /** How source media enters the stream. */
@@ -3147,7 +3153,7 @@ sourceKind: string, /** Whether the source is kept active without waiting for a 
 alwaysOn: boolean, /** Number of source placements requested by the operator configuration. */
 placementCount: number } | null, /** Where the stream's source may be ingested, derived from the stream's own ingest placement rules. */
 sourceLocation: { mode: SourceLocationMode, /** Empty unless mode is RESTRICTED. */
-avoidNodeIds: Array<string> }, /** Real-time operational metrics from the data plane. Includes viewer counts, quality metrics, and throughput data. Lazily loaded from ClickHouse analytics. */
+avoidNodeIds: Array<string> }, /** Real-time operational metrics from the data plane. Includes viewer counts, quality metrics, and throughput data. Lazily loaded from ClickHouse analytics, so an API token needs the analytics:read scope: without it this field is null and the response carries a FORBIDDEN error at its path. */
 metrics: { /** Current lifecycle status of the stream (OFFLINE, CONNECTING, LIVE, etc.). */
 status: StreamStatus, /** Whether the stream is currently broadcasting. */
 isLive: boolean, /** Number of viewers currently watching. */
@@ -3186,7 +3192,7 @@ rangeViewerHoursSharePercent: number | null, stream: { /** Global unique identif
 id: string, /** Public stream UUID used for analytics and service APIs (not the Relay ID). */
 streamId: string, /** Human-readable display name for the stream. */
 name: string, /** Optional description for the stream. */
-description: string | null, /** Secret key for publisher-authenticated ingest; null for pull and managed sources. */
+description: string | null, /** Secret key for publisher-authenticated ingest; null for pull and managed sources. The key lets its holder publish to the stream, so an API token needs the streams:write scope: without it this field is null and the response carries a FORBIDDEN error at its path. */
 streamKey: string | null, /** Public identifier for playback URLs. */
 playbackId: string, /** Whether DVR recording is enabled for this stream. */
 record: boolean, /** How source media enters the stream. */
@@ -3205,7 +3211,7 @@ sourceKind: string, /** Whether the source is kept active without waiting for a 
 alwaysOn: boolean, /** Number of source placements requested by the operator configuration. */
 placementCount: number } | null, /** Where the stream's source may be ingested, derived from the stream's own ingest placement rules. */
 sourceLocation: { mode: SourceLocationMode, /** Empty unless mode is RESTRICTED. */
-avoidNodeIds: Array<string> }, /** Real-time operational metrics from the data plane. Includes viewer counts, quality metrics, and throughput data. Lazily loaded from ClickHouse analytics. */
+avoidNodeIds: Array<string> }, /** Real-time operational metrics from the data plane. Includes viewer counts, quality metrics, and throughput data. Lazily loaded from ClickHouse analytics, so an API token needs the analytics:read scope: without it this field is null and the response carries a FORBIDDEN error at its path. */
 metrics: { /** Current lifecycle status of the stream (OFFLINE, CONNECTING, LIVE, etc.). */
 status: StreamStatus, /** Whether the stream is currently broadcasting. */
 isLive: boolean, /** Number of viewers currently watching. */
@@ -3243,7 +3249,7 @@ export type StreamConnectionHourlyDefaultFieldsFragment = { id: string, hour: st
 id: string, /** Public stream UUID used for analytics and service APIs (not the Relay ID). */
 streamId: string, /** Human-readable display name for the stream. */
 name: string, /** Optional description for the stream. */
-description: string | null, /** Secret key for publisher-authenticated ingest; null for pull and managed sources. */
+description: string | null, /** Secret key for publisher-authenticated ingest; null for pull and managed sources. The key lets its holder publish to the stream, so an API token needs the streams:write scope: without it this field is null and the response carries a FORBIDDEN error at its path. */
 streamKey: string | null, /** Public identifier for playback URLs. */
 playbackId: string, /** Whether DVR recording is enabled for this stream. */
 record: boolean, /** How source media enters the stream. */
@@ -3262,7 +3268,7 @@ sourceKind: string, /** Whether the source is kept active without waiting for a 
 alwaysOn: boolean, /** Number of source placements requested by the operator configuration. */
 placementCount: number } | null, /** Where the stream's source may be ingested, derived from the stream's own ingest placement rules. */
 sourceLocation: { mode: SourceLocationMode, /** Empty unless mode is RESTRICTED. */
-avoidNodeIds: Array<string> }, /** Real-time operational metrics from the data plane. Includes viewer counts, quality metrics, and throughput data. Lazily loaded from ClickHouse analytics. */
+avoidNodeIds: Array<string> }, /** Real-time operational metrics from the data plane. Includes viewer counts, quality metrics, and throughput data. Lazily loaded from ClickHouse analytics, so an API token needs the analytics:read scope: without it this field is null and the response carries a FORBIDDEN error at its path. */
 metrics: { /** Current lifecycle status of the stream (OFFLINE, CONNECTING, LIVE, etc.). */
 status: StreamStatus, /** Whether the stream is currently broadcasting. */
 isLive: boolean, /** Number of viewers currently watching. */
@@ -3298,7 +3304,7 @@ export type StreamEventDefaultFieldsFragment = { id: string, eventId: string, st
 id: string, /** Public stream UUID used for analytics and service APIs (not the Relay ID). */
 streamId: string, /** Human-readable display name for the stream. */
 name: string, /** Optional description for the stream. */
-description: string | null, /** Secret key for publisher-authenticated ingest; null for pull and managed sources. */
+description: string | null, /** Secret key for publisher-authenticated ingest; null for pull and managed sources. The key lets its holder publish to the stream, so an API token needs the streams:write scope: without it this field is null and the response carries a FORBIDDEN error at its path. */
 streamKey: string | null, /** Public identifier for playback URLs. */
 playbackId: string, /** Whether DVR recording is enabled for this stream. */
 record: boolean, /** How source media enters the stream. */
@@ -3317,7 +3323,7 @@ sourceKind: string, /** Whether the source is kept active without waiting for a 
 alwaysOn: boolean, /** Number of source placements requested by the operator configuration. */
 placementCount: number } | null, /** Where the stream's source may be ingested, derived from the stream's own ingest placement rules. */
 sourceLocation: { mode: SourceLocationMode, /** Empty unless mode is RESTRICTED. */
-avoidNodeIds: Array<string> }, /** Real-time operational metrics from the data plane. Includes viewer counts, quality metrics, and throughput data. Lazily loaded from ClickHouse analytics. */
+avoidNodeIds: Array<string> }, /** Real-time operational metrics from the data plane. Includes viewer counts, quality metrics, and throughput data. Lazily loaded from ClickHouse analytics, so an API token needs the analytics:read scope: without it this field is null and the response carries a FORBIDDEN error at its path. */
 metrics: { /** Current lifecycle status of the stream (OFFLINE, CONNECTING, LIVE, etc.). */
 status: StreamStatus, /** Whether the stream is currently broadcasting. */
 isLive: boolean, /** Number of viewers currently watching. */
@@ -3353,7 +3359,7 @@ export type StreamEventInNodeDefaultFieldsFragment = { id: string, eventId: stri
 id: string, /** Public stream UUID used for analytics and service APIs (not the Relay ID). */
 streamId: string, /** Human-readable display name for the stream. */
 name: string, /** Optional description for the stream. */
-description: string | null, /** Secret key for publisher-authenticated ingest; null for pull and managed sources. */
+description: string | null, /** Secret key for publisher-authenticated ingest; null for pull and managed sources. The key lets its holder publish to the stream, so an API token needs the streams:write scope: without it this field is null and the response carries a FORBIDDEN error at its path. */
 streamKey: string | null, /** Public identifier for playback URLs. */
 playbackId: string, /** Whether DVR recording is enabled for this stream. */
 record: boolean, /** How source media enters the stream. */
@@ -3372,7 +3378,7 @@ sourceKind: string, /** Whether the source is kept active without waiting for a 
 alwaysOn: boolean, /** Number of source placements requested by the operator configuration. */
 placementCount: number } | null, /** Where the stream's source may be ingested, derived from the stream's own ingest placement rules. */
 sourceLocation: { mode: SourceLocationMode, /** Empty unless mode is RESTRICTED. */
-avoidNodeIds: Array<string> }, /** Real-time operational metrics from the data plane. Includes viewer counts, quality metrics, and throughput data. Lazily loaded from ClickHouse analytics. */
+avoidNodeIds: Array<string> }, /** Real-time operational metrics from the data plane. Includes viewer counts, quality metrics, and throughput data. Lazily loaded from ClickHouse analytics, so an API token needs the analytics:read scope: without it this field is null and the response carries a FORBIDDEN error at its path. */
 metrics: { /** Current lifecycle status of the stream (OFFLINE, CONNECTING, LIVE, etc.). */
 status: StreamStatus, /** Whether the stream is currently broadcasting. */
 isLive: boolean, /** Number of viewers currently watching. */
@@ -3412,7 +3418,7 @@ export type StreamHealthMetricDefaultFieldsFragment = { id: string, timestamp: s
 id: string, /** Public stream UUID used for analytics and service APIs (not the Relay ID). */
 streamId: string, /** Human-readable display name for the stream. */
 name: string, /** Optional description for the stream. */
-description: string | null, /** Secret key for publisher-authenticated ingest; null for pull and managed sources. */
+description: string | null, /** Secret key for publisher-authenticated ingest; null for pull and managed sources. The key lets its holder publish to the stream, so an API token needs the streams:write scope: without it this field is null and the response carries a FORBIDDEN error at its path. */
 streamKey: string | null, /** Public identifier for playback URLs. */
 playbackId: string, /** Whether DVR recording is enabled for this stream. */
 record: boolean, /** How source media enters the stream. */
@@ -3431,7 +3437,7 @@ sourceKind: string, /** Whether the source is kept active without waiting for a 
 alwaysOn: boolean, /** Number of source placements requested by the operator configuration. */
 placementCount: number } | null, /** Where the stream's source may be ingested, derived from the stream's own ingest placement rules. */
 sourceLocation: { mode: SourceLocationMode, /** Empty unless mode is RESTRICTED. */
-avoidNodeIds: Array<string> }, /** Real-time operational metrics from the data plane. Includes viewer counts, quality metrics, and throughput data. Lazily loaded from ClickHouse analytics. */
+avoidNodeIds: Array<string> }, /** Real-time operational metrics from the data plane. Includes viewer counts, quality metrics, and throughput data. Lazily loaded from ClickHouse analytics, so an API token needs the analytics:read scope: without it this field is null and the response carries a FORBIDDEN error at its path. */
 metrics: { /** Current lifecycle status of the stream (OFFLINE, CONNECTING, LIVE, etc.). */
 status: StreamStatus, /** Whether the stream is currently broadcasting. */
 isLive: boolean, /** Number of viewers currently watching. */
@@ -3467,7 +3473,7 @@ export type StreamHealthMetricInNodeDefaultFieldsFragment = { id: string, timest
 id: string, /** Public stream UUID used for analytics and service APIs (not the Relay ID). */
 streamId: string, /** Human-readable display name for the stream. */
 name: string, /** Optional description for the stream. */
-description: string | null, /** Secret key for publisher-authenticated ingest; null for pull and managed sources. */
+description: string | null, /** Secret key for publisher-authenticated ingest; null for pull and managed sources. The key lets its holder publish to the stream, so an API token needs the streams:write scope: without it this field is null and the response carries a FORBIDDEN error at its path. */
 streamKey: string | null, /** Public identifier for playback URLs. */
 playbackId: string, /** Whether DVR recording is enabled for this stream. */
 record: boolean, /** How source media enters the stream. */
@@ -3486,7 +3492,7 @@ sourceKind: string, /** Whether the source is kept active without waiting for a 
 alwaysOn: boolean, /** Number of source placements requested by the operator configuration. */
 placementCount: number } | null, /** Where the stream's source may be ingested, derived from the stream's own ingest placement rules. */
 sourceLocation: { mode: SourceLocationMode, /** Empty unless mode is RESTRICTED. */
-avoidNodeIds: Array<string> }, /** Real-time operational metrics from the data plane. Includes viewer counts, quality metrics, and throughput data. Lazily loaded from ClickHouse analytics. */
+avoidNodeIds: Array<string> }, /** Real-time operational metrics from the data plane. Includes viewer counts, quality metrics, and throughput data. Lazily loaded from ClickHouse analytics, so an API token needs the analytics:read scope: without it this field is null and the response carries a FORBIDDEN error at its path. */
 metrics: { /** Current lifecycle status of the stream (OFFLINE, CONNECTING, LIVE, etc.). */
 status: StreamStatus, /** Whether the stream is currently broadcasting. */
 isLive: boolean, /** Number of viewers currently watching. */
@@ -3525,7 +3531,7 @@ export type StreamHealthSummaryDefaultFieldsFragment = { avgBitrate: number, avg
 export type StreamInNodeDefaultFieldsFragment = { /** Global unique identifier for Relay compatibility. */
 id: string, /** Human-readable display name for the stream. */
 name: string, /** Optional description for the stream. */
-description: string | null, /** Secret key for publisher-authenticated ingest; null for pull and managed sources. */
+description: string | null, /** Secret key for publisher-authenticated ingest; null for pull and managed sources. The key lets its holder publish to the stream, so an API token needs the streams:write scope: without it this field is null and the response carries a FORBIDDEN error at its path. */
 streamKey: string | null, /** Public identifier for playback URLs. */
 playbackId: string, /** Whether DVR recording is enabled for this stream. */
 record: boolean, /** How source media enters the stream. */
@@ -3546,7 +3552,7 @@ alwaysOn: boolean, /** Number of source placements requested by the operator con
 placementCount: number } | null, /** Where the stream's source may be ingested, derived from the stream's own ingest placement rules. */
 sourceLocation: { mode: SourceLocationMode, /** Empty unless mode is RESTRICTED. */
 avoidNodeIds: Array<string>, /** Empty unless mode is RESTRICTED. */
-clusters: Array<{ clusterId: string, nodeIds: Array<string> }> }, /** Real-time operational metrics from the data plane. Includes viewer counts, quality metrics, and throughput data. Lazily loaded from ClickHouse analytics. */
+clusters: Array<{ clusterId: string, nodeIds: Array<string> }> }, /** Real-time operational metrics from the data plane. Includes viewer counts, quality metrics, and throughput data. Lazily loaded from ClickHouse analytics, so an API token needs the analytics:read scope: without it this field is null and the response carries a FORBIDDEN error at its path. */
 metrics: { /** Current lifecycle status of the stream (OFFLINE, CONNECTING, LIVE, etc.). */
 status: StreamStatus, /** Whether the stream is currently broadcasting. */
 isLive: boolean, /** Number of viewers currently watching. */
@@ -3626,7 +3632,7 @@ export type TenantEventDefaultFieldsFragment = { type: string, channel: string, 
 id: string, /** Public stream UUID used for analytics and service APIs (not the Relay ID). */
 streamId: string, /** Human-readable display name for the stream. */
 name: string, /** Optional description for the stream. */
-description: string | null, /** Secret key for publisher-authenticated ingest; null for pull and managed sources. */
+description: string | null, /** Secret key for publisher-authenticated ingest; null for pull and managed sources. The key lets its holder publish to the stream, so an API token needs the streams:write scope: without it this field is null and the response carries a FORBIDDEN error at its path. */
 streamKey: string | null, /** Public identifier for playback URLs. */
 playbackId: string, /** Whether DVR recording is enabled for this stream. */
 record: boolean, /** How source media enters the stream. */
@@ -3639,7 +3645,7 @@ monitoring: MonitoringToggle } | null } | null, viewerMetrics: { nodeId: string,
 id: string, /** Public stream UUID used for analytics and service APIs (not the Relay ID). */
 streamId: string, /** Human-readable display name for the stream. */
 name: string, /** Optional description for the stream. */
-description: string | null, /** Secret key for publisher-authenticated ingest; null for pull and managed sources. */
+description: string | null, /** Secret key for publisher-authenticated ingest; null for pull and managed sources. The key lets its holder publish to the stream, so an API token needs the streams:write scope: without it this field is null and the response carries a FORBIDDEN error at its path. */
 streamKey: string | null, /** Public identifier for playback URLs. */
 playbackId: string, /** Whether DVR recording is enabled for this stream. */
 record: boolean, /** How source media enters the stream. */
@@ -3652,7 +3658,7 @@ monitoring: MonitoringToggle } | null } | null, connectionEvent: { id: string, e
 id: string, /** Public stream UUID used for analytics and service APIs (not the Relay ID). */
 streamId: string, /** Human-readable display name for the stream. */
 name: string, /** Optional description for the stream. */
-description: string | null, /** Secret key for publisher-authenticated ingest; null for pull and managed sources. */
+description: string | null, /** Secret key for publisher-authenticated ingest; null for pull and managed sources. The key lets its holder publish to the stream, so an API token needs the streams:write scope: without it this field is null and the response carries a FORBIDDEN error at its path. */
 streamKey: string | null, /** Public identifier for playback URLs. */
 playbackId: string, /** Whether DVR recording is enabled for this stream. */
 record: boolean, /** How source media enters the stream. */
@@ -3665,7 +3671,7 @@ monitoring: MonitoringToggle } | null, clientBucket: { h3Index: string, resoluti
 id: string, /** Public stream UUID used for analytics and service APIs (not the Relay ID). */
 streamId: string, /** Human-readable display name for the stream. */
 name: string, /** Optional description for the stream. */
-description: string | null, /** Secret key for publisher-authenticated ingest; null for pull and managed sources. */
+description: string | null, /** Secret key for publisher-authenticated ingest; null for pull and managed sources. The key lets its holder publish to the stream, so an API token needs the streams:write scope: without it this field is null and the response carries a FORBIDDEN error at its path. */
 streamKey: string | null, /** Public identifier for playback URLs. */
 playbackId: string, /** Whether DVR recording is enabled for this stream. */
 record: boolean, /** How source media enters the stream. */
@@ -3678,7 +3684,7 @@ monitoring: MonitoringToggle } | null, tracks: Array<{ trackName: string, trackT
 id: string, /** Public stream UUID used for analytics and service APIs (not the Relay ID). */
 streamId: string, /** Human-readable display name for the stream. */
 name: string, /** Optional description for the stream. */
-description: string | null, /** Secret key for publisher-authenticated ingest; null for pull and managed sources. */
+description: string | null, /** Secret key for publisher-authenticated ingest; null for pull and managed sources. The key lets its holder publish to the stream, so an API token needs the streams:write scope: without it this field is null and the response carries a FORBIDDEN error at its path. */
 streamKey: string | null, /** Public identifier for playback URLs. */
 playbackId: string, /** Whether DVR recording is enabled for this stream. */
 record: boolean, /** How source media enters the stream. */
@@ -3691,7 +3697,7 @@ monitoring: MonitoringToggle } | null } | null, storageSnapshot: { nodeId: strin
 id: string, /** Public stream UUID used for analytics and service APIs (not the Relay ID). */
 streamId: string, /** Human-readable display name for the stream. */
 name: string, /** Optional description for the stream. */
-description: string | null, /** Secret key for publisher-authenticated ingest; null for pull and managed sources. */
+description: string | null, /** Secret key for publisher-authenticated ingest; null for pull and managed sources. The key lets its holder publish to the stream, so an API token needs the streams:write scope: without it this field is null and the response carries a FORBIDDEN error at its path. */
 streamKey: string | null, /** Public identifier for playback URLs. */
 playbackId: string, /** Whether DVR recording is enabled for this stream. */
 record: boolean, /** How source media enters the stream. */
@@ -3704,7 +3710,7 @@ monitoring: MonitoringToggle } | null } | null, routingEvent: { timestamp: strin
 id: string, /** Public stream UUID used for analytics and service APIs (not the Relay ID). */
 streamId: string, /** Human-readable display name for the stream. */
 name: string, /** Optional description for the stream. */
-description: string | null, /** Secret key for publisher-authenticated ingest; null for pull and managed sources. */
+description: string | null, /** Secret key for publisher-authenticated ingest; null for pull and managed sources. The key lets its holder publish to the stream, so an API token needs the streams:write scope: without it this field is null and the response carries a FORBIDDEN error at its path. */
 streamKey: string | null, /** Public identifier for playback URLs. */
 playbackId: string, /** Whether DVR recording is enabled for this stream. */
 record: boolean, /** How source media enters the stream. */
@@ -3723,7 +3729,7 @@ export type TrackListEventDefaultFieldsFragment = { id: string, streamId: string
 id: string, /** Public stream UUID used for analytics and service APIs (not the Relay ID). */
 streamId: string, /** Human-readable display name for the stream. */
 name: string, /** Optional description for the stream. */
-description: string | null, /** Secret key for publisher-authenticated ingest; null for pull and managed sources. */
+description: string | null, /** Secret key for publisher-authenticated ingest; null for pull and managed sources. The key lets its holder publish to the stream, so an API token needs the streams:write scope: without it this field is null and the response carries a FORBIDDEN error at its path. */
 streamKey: string | null, /** Public identifier for playback URLs. */
 playbackId: string, /** Whether DVR recording is enabled for this stream. */
 record: boolean, /** How source media enters the stream. */
@@ -3742,7 +3748,7 @@ sourceKind: string, /** Whether the source is kept active without waiting for a 
 alwaysOn: boolean, /** Number of source placements requested by the operator configuration. */
 placementCount: number } | null, /** Where the stream's source may be ingested, derived from the stream's own ingest placement rules. */
 sourceLocation: { mode: SourceLocationMode, /** Empty unless mode is RESTRICTED. */
-avoidNodeIds: Array<string> }, /** Real-time operational metrics from the data plane. Includes viewer counts, quality metrics, and throughput data. Lazily loaded from ClickHouse analytics. */
+avoidNodeIds: Array<string> }, /** Real-time operational metrics from the data plane. Includes viewer counts, quality metrics, and throughput data. Lazily loaded from ClickHouse analytics, so an API token needs the analytics:read scope: without it this field is null and the response carries a FORBIDDEN error at its path. */
 metrics: { /** Current lifecycle status of the stream (OFFLINE, CONNECTING, LIVE, etc.). */
 status: StreamStatus, /** Whether the stream is currently broadcasting. */
 isLive: boolean, /** Number of viewers currently watching. */
@@ -3778,7 +3784,7 @@ export type TrackListEventInNodeDefaultFieldsFragment = { id: string, streamId: 
 id: string, /** Public stream UUID used for analytics and service APIs (not the Relay ID). */
 streamId: string, /** Human-readable display name for the stream. */
 name: string, /** Optional description for the stream. */
-description: string | null, /** Secret key for publisher-authenticated ingest; null for pull and managed sources. */
+description: string | null, /** Secret key for publisher-authenticated ingest; null for pull and managed sources. The key lets its holder publish to the stream, so an API token needs the streams:write scope: without it this field is null and the response carries a FORBIDDEN error at its path. */
 streamKey: string | null, /** Public identifier for playback URLs. */
 playbackId: string, /** Whether DVR recording is enabled for this stream. */
 record: boolean, /** How source media enters the stream. */
@@ -3797,7 +3803,7 @@ sourceKind: string, /** Whether the source is kept active without waiting for a 
 alwaysOn: boolean, /** Number of source placements requested by the operator configuration. */
 placementCount: number } | null, /** Where the stream's source may be ingested, derived from the stream's own ingest placement rules. */
 sourceLocation: { mode: SourceLocationMode, /** Empty unless mode is RESTRICTED. */
-avoidNodeIds: Array<string> }, /** Real-time operational metrics from the data plane. Includes viewer counts, quality metrics, and throughput data. Lazily loaded from ClickHouse analytics. */
+avoidNodeIds: Array<string> }, /** Real-time operational metrics from the data plane. Includes viewer counts, quality metrics, and throughput data. Lazily loaded from ClickHouse analytics, so an API token needs the analytics:read scope: without it this field is null and the response carries a FORBIDDEN error at its path. */
 metrics: { /** Current lifecycle status of the stream (OFFLINE, CONNECTING, LIVE, etc.). */
 status: StreamStatus, /** Whether the stream is currently broadcasting. */
 isLive: boolean, /** Number of viewers currently watching. */
@@ -3833,7 +3839,7 @@ export type TrackListUpdateDefaultFieldsFragment = { streamId: string, totalTrac
 id: string, /** Public stream UUID used for analytics and service APIs (not the Relay ID). */
 streamId: string, /** Human-readable display name for the stream. */
 name: string, /** Optional description for the stream. */
-description: string | null, /** Secret key for publisher-authenticated ingest; null for pull and managed sources. */
+description: string | null, /** Secret key for publisher-authenticated ingest; null for pull and managed sources. The key lets its holder publish to the stream, so an API token needs the streams:write scope: without it this field is null and the response carries a FORBIDDEN error at its path. */
 streamKey: string | null, /** Public identifier for playback URLs. */
 playbackId: string, /** Whether DVR recording is enabled for this stream. */
 record: boolean, /** How source media enters the stream. */
@@ -3852,7 +3858,7 @@ sourceKind: string, /** Whether the source is kept active without waiting for a 
 alwaysOn: boolean, /** Number of source placements requested by the operator configuration. */
 placementCount: number } | null, /** Where the stream's source may be ingested, derived from the stream's own ingest placement rules. */
 sourceLocation: { mode: SourceLocationMode, /** Empty unless mode is RESTRICTED. */
-avoidNodeIds: Array<string> }, /** Real-time operational metrics from the data plane. Includes viewer counts, quality metrics, and throughput data. Lazily loaded from ClickHouse analytics. */
+avoidNodeIds: Array<string> }, /** Real-time operational metrics from the data plane. Includes viewer counts, quality metrics, and throughput data. Lazily loaded from ClickHouse analytics, so an API token needs the analytics:read scope: without it this field is null and the response carries a FORBIDDEN error at its path. */
 metrics: { /** Current lifecycle status of the stream (OFFLINE, CONNECTING, LIVE, etc.). */
 status: StreamStatus, /** Whether the stream is currently broadcasting. */
 isLive: boolean, /** Number of viewers currently watching. */
@@ -3890,7 +3896,7 @@ export type ViewerCountBucketDefaultFieldsFragment = { timestamp: string, viewer
 id: string, /** Public stream UUID used for analytics and service APIs (not the Relay ID). */
 streamId: string, /** Human-readable display name for the stream. */
 name: string, /** Optional description for the stream. */
-description: string | null, /** Secret key for publisher-authenticated ingest; null for pull and managed sources. */
+description: string | null, /** Secret key for publisher-authenticated ingest; null for pull and managed sources. The key lets its holder publish to the stream, so an API token needs the streams:write scope: without it this field is null and the response carries a FORBIDDEN error at its path. */
 streamKey: string | null, /** Public identifier for playback URLs. */
 playbackId: string, /** Whether DVR recording is enabled for this stream. */
 record: boolean, /** How source media enters the stream. */
@@ -3909,7 +3915,7 @@ sourceKind: string, /** Whether the source is kept active without waiting for a 
 alwaysOn: boolean, /** Number of source placements requested by the operator configuration. */
 placementCount: number } | null, /** Where the stream's source may be ingested, derived from the stream's own ingest placement rules. */
 sourceLocation: { mode: SourceLocationMode, /** Empty unless mode is RESTRICTED. */
-avoidNodeIds: Array<string> }, /** Real-time operational metrics from the data plane. Includes viewer counts, quality metrics, and throughput data. Lazily loaded from ClickHouse analytics. */
+avoidNodeIds: Array<string> }, /** Real-time operational metrics from the data plane. Includes viewer counts, quality metrics, and throughput data. Lazily loaded from ClickHouse analytics, so an API token needs the analytics:read scope: without it this field is null and the response carries a FORBIDDEN error at its path. */
 metrics: { /** Current lifecycle status of the stream (OFFLINE, CONNECTING, LIVE, etc.). */
 status: StreamStatus, /** Whether the stream is currently broadcasting. */
 isLive: boolean, /** Number of viewers currently watching. */
@@ -3949,7 +3955,7 @@ export type ViewerGeographicDefaultFieldsFragment = { timestamp: string, streamI
 id: string, /** Public stream UUID used for analytics and service APIs (not the Relay ID). */
 streamId: string, /** Human-readable display name for the stream. */
 name: string, /** Optional description for the stream. */
-description: string | null, /** Secret key for publisher-authenticated ingest; null for pull and managed sources. */
+description: string | null, /** Secret key for publisher-authenticated ingest; null for pull and managed sources. The key lets its holder publish to the stream, so an API token needs the streams:write scope: without it this field is null and the response carries a FORBIDDEN error at its path. */
 streamKey: string | null, /** Public identifier for playback URLs. */
 playbackId: string, /** Whether DVR recording is enabled for this stream. */
 record: boolean, /** How source media enters the stream. */
@@ -3968,7 +3974,7 @@ sourceKind: string, /** Whether the source is kept active without waiting for a 
 alwaysOn: boolean, /** Number of source placements requested by the operator configuration. */
 placementCount: number } | null, /** Where the stream's source may be ingested, derived from the stream's own ingest placement rules. */
 sourceLocation: { mode: SourceLocationMode, /** Empty unless mode is RESTRICTED. */
-avoidNodeIds: Array<string> }, /** Real-time operational metrics from the data plane. Includes viewer counts, quality metrics, and throughput data. Lazily loaded from ClickHouse analytics. */
+avoidNodeIds: Array<string> }, /** Real-time operational metrics from the data plane. Includes viewer counts, quality metrics, and throughput data. Lazily loaded from ClickHouse analytics, so an API token needs the analytics:read scope: without it this field is null and the response carries a FORBIDDEN error at its path. */
 metrics: { /** Current lifecycle status of the stream (OFFLINE, CONNECTING, LIVE, etc.). */
 status: StreamStatus, /** Whether the stream is currently broadcasting. */
 isLive: boolean, /** Number of viewers currently watching. */
@@ -4004,7 +4010,7 @@ export type ViewerHoursHourlyDefaultFieldsFragment = { id: string, hour: string,
 id: string, /** Public stream UUID used for analytics and service APIs (not the Relay ID). */
 streamId: string, /** Human-readable display name for the stream. */
 name: string, /** Optional description for the stream. */
-description: string | null, /** Secret key for publisher-authenticated ingest; null for pull and managed sources. */
+description: string | null, /** Secret key for publisher-authenticated ingest; null for pull and managed sources. The key lets its holder publish to the stream, so an API token needs the streams:write scope: without it this field is null and the response carries a FORBIDDEN error at its path. */
 streamKey: string | null, /** Public identifier for playback URLs. */
 playbackId: string, /** Whether DVR recording is enabled for this stream. */
 record: boolean, /** How source media enters the stream. */
@@ -4023,7 +4029,7 @@ sourceKind: string, /** Whether the source is kept active without waiting for a 
 alwaysOn: boolean, /** Number of source placements requested by the operator configuration. */
 placementCount: number } | null, /** Where the stream's source may be ingested, derived from the stream's own ingest placement rules. */
 sourceLocation: { mode: SourceLocationMode, /** Empty unless mode is RESTRICTED. */
-avoidNodeIds: Array<string> }, /** Real-time operational metrics from the data plane. Includes viewer counts, quality metrics, and throughput data. Lazily loaded from ClickHouse analytics. */
+avoidNodeIds: Array<string> }, /** Real-time operational metrics from the data plane. Includes viewer counts, quality metrics, and throughput data. Lazily loaded from ClickHouse analytics, so an API token needs the analytics:read scope: without it this field is null and the response carries a FORBIDDEN error at its path. */
 metrics: { /** Current lifecycle status of the stream (OFFLINE, CONNECTING, LIVE, etc.). */
 status: StreamStatus, /** Whether the stream is currently broadcasting. */
 isLive: boolean, /** Number of viewers currently watching. */
@@ -4059,7 +4065,7 @@ export type ViewerHoursHourlyInNodeDefaultFieldsFragment = { id: string, hour: s
 id: string, /** Public stream UUID used for analytics and service APIs (not the Relay ID). */
 streamId: string, /** Human-readable display name for the stream. */
 name: string, /** Optional description for the stream. */
-description: string | null, /** Secret key for publisher-authenticated ingest; null for pull and managed sources. */
+description: string | null, /** Secret key for publisher-authenticated ingest; null for pull and managed sources. The key lets its holder publish to the stream, so an API token needs the streams:write scope: without it this field is null and the response carries a FORBIDDEN error at its path. */
 streamKey: string | null, /** Public identifier for playback URLs. */
 playbackId: string, /** Whether DVR recording is enabled for this stream. */
 record: boolean, /** How source media enters the stream. */
@@ -4078,7 +4084,7 @@ sourceKind: string, /** Whether the source is kept active without waiting for a 
 alwaysOn: boolean, /** Number of source placements requested by the operator configuration. */
 placementCount: number } | null, /** Where the stream's source may be ingested, derived from the stream's own ingest placement rules. */
 sourceLocation: { mode: SourceLocationMode, /** Empty unless mode is RESTRICTED. */
-avoidNodeIds: Array<string> }, /** Real-time operational metrics from the data plane. Includes viewer counts, quality metrics, and throughput data. Lazily loaded from ClickHouse analytics. */
+avoidNodeIds: Array<string> }, /** Real-time operational metrics from the data plane. Includes viewer counts, quality metrics, and throughput data. Lazily loaded from ClickHouse analytics, so an API token needs the analytics:read scope: without it this field is null and the response carries a FORBIDDEN error at its path. */
 metrics: { /** Current lifecycle status of the stream (OFFLINE, CONNECTING, LIVE, etc.). */
 status: StreamStatus, /** Whether the stream is currently broadcasting. */
 isLive: boolean, /** Number of viewers currently watching. */
@@ -4114,7 +4120,7 @@ export type ViewerMetricsDefaultFieldsFragment = { nodeId: string, streamId: str
 id: string, /** Public stream UUID used for analytics and service APIs (not the Relay ID). */
 streamId: string, /** Human-readable display name for the stream. */
 name: string, /** Optional description for the stream. */
-description: string | null, /** Secret key for publisher-authenticated ingest; null for pull and managed sources. */
+description: string | null, /** Secret key for publisher-authenticated ingest; null for pull and managed sources. The key lets its holder publish to the stream, so an API token needs the streams:write scope: without it this field is null and the response carries a FORBIDDEN error at its path. */
 streamKey: string | null, /** Public identifier for playback URLs. */
 playbackId: string, /** Whether DVR recording is enabled for this stream. */
 record: boolean, /** How source media enters the stream. */
@@ -4133,7 +4139,7 @@ sourceKind: string, /** Whether the source is kept active without waiting for a 
 alwaysOn: boolean, /** Number of source placements requested by the operator configuration. */
 placementCount: number } | null, /** Where the stream's source may be ingested, derived from the stream's own ingest placement rules. */
 sourceLocation: { mode: SourceLocationMode, /** Empty unless mode is RESTRICTED. */
-avoidNodeIds: Array<string> }, /** Real-time operational metrics from the data plane. Includes viewer counts, quality metrics, and throughput data. Lazily loaded from ClickHouse analytics. */
+avoidNodeIds: Array<string> }, /** Real-time operational metrics from the data plane. Includes viewer counts, quality metrics, and throughput data. Lazily loaded from ClickHouse analytics, so an API token needs the analytics:read scope: without it this field is null and the response carries a FORBIDDEN error at its path. */
 metrics: { /** Current lifecycle status of the stream (OFFLINE, CONNECTING, LIVE, etc.). */
 status: StreamStatus, /** Whether the stream is currently broadcasting. */
 isLive: boolean, /** Number of viewers currently watching. */
@@ -4169,7 +4175,7 @@ export type ViewerSessionDefaultFieldsFragment = { id: string, timestamp: string
 id: string, /** Public stream UUID used for analytics and service APIs (not the Relay ID). */
 streamId: string, /** Human-readable display name for the stream. */
 name: string, /** Optional description for the stream. */
-description: string | null, /** Secret key for publisher-authenticated ingest; null for pull and managed sources. */
+description: string | null, /** Secret key for publisher-authenticated ingest; null for pull and managed sources. The key lets its holder publish to the stream, so an API token needs the streams:write scope: without it this field is null and the response carries a FORBIDDEN error at its path. */
 streamKey: string | null, /** Public identifier for playback URLs. */
 playbackId: string, /** Whether DVR recording is enabled for this stream. */
 record: boolean, /** How source media enters the stream. */
@@ -4188,7 +4194,7 @@ sourceKind: string, /** Whether the source is kept active without waiting for a 
 alwaysOn: boolean, /** Number of source placements requested by the operator configuration. */
 placementCount: number } | null, /** Where the stream's source may be ingested, derived from the stream's own ingest placement rules. */
 sourceLocation: { mode: SourceLocationMode, /** Empty unless mode is RESTRICTED. */
-avoidNodeIds: Array<string> }, /** Real-time operational metrics from the data plane. Includes viewer counts, quality metrics, and throughput data. Lazily loaded from ClickHouse analytics. */
+avoidNodeIds: Array<string> }, /** Real-time operational metrics from the data plane. Includes viewer counts, quality metrics, and throughput data. Lazily loaded from ClickHouse analytics, so an API token needs the analytics:read scope: without it this field is null and the response carries a FORBIDDEN error at its path. */
 metrics: { /** Current lifecycle status of the stream (OFFLINE, CONNECTING, LIVE, etc.). */
 status: StreamStatus, /** Whether the stream is currently broadcasting. */
 isLive: boolean, /** Number of viewers currently watching. */
@@ -4224,7 +4230,7 @@ export type ViewerSessionInNodeDefaultFieldsFragment = { id: string, timestamp: 
 id: string, /** Public stream UUID used for analytics and service APIs (not the Relay ID). */
 streamId: string, /** Human-readable display name for the stream. */
 name: string, /** Optional description for the stream. */
-description: string | null, /** Secret key for publisher-authenticated ingest; null for pull and managed sources. */
+description: string | null, /** Secret key for publisher-authenticated ingest; null for pull and managed sources. The key lets its holder publish to the stream, so an API token needs the streams:write scope: without it this field is null and the response carries a FORBIDDEN error at its path. */
 streamKey: string | null, /** Public identifier for playback URLs. */
 playbackId: string, /** Whether DVR recording is enabled for this stream. */
 record: boolean, /** How source media enters the stream. */
@@ -4243,7 +4249,7 @@ sourceKind: string, /** Whether the source is kept active without waiting for a 
 alwaysOn: boolean, /** Number of source placements requested by the operator configuration. */
 placementCount: number } | null, /** Where the stream's source may be ingested, derived from the stream's own ingest placement rules. */
 sourceLocation: { mode: SourceLocationMode, /** Empty unless mode is RESTRICTED. */
-avoidNodeIds: Array<string> }, /** Real-time operational metrics from the data plane. Includes viewer counts, quality metrics, and throughput data. Lazily loaded from ClickHouse analytics. */
+avoidNodeIds: Array<string> }, /** Real-time operational metrics from the data plane. Includes viewer counts, quality metrics, and throughput data. Lazily loaded from ClickHouse analytics, so an API token needs the analytics:read scope: without it this field is null and the response carries a FORBIDDEN error at its path. */
 metrics: { /** Current lifecycle status of the stream (OFFLINE, CONNECTING, LIVE, etc.). */
 status: StreamStatus, /** Whether the stream is currently broadcasting. */
 isLive: boolean, /** Number of viewers currently watching. */
@@ -6033,7 +6039,7 @@ end: string }, stream: { /** Global unique identifier for Relay compatibility. *
 id: string, /** Public stream UUID used for analytics and service APIs (not the Relay ID). */
 streamId: string, /** Human-readable display name for the stream. */
 name: string, /** Optional description for the stream. */
-description: string | null, /** Secret key for publisher-authenticated ingest; null for pull and managed sources. */
+description: string | null, /** Secret key for publisher-authenticated ingest; null for pull and managed sources. The key lets its holder publish to the stream, so an API token needs the streams:write scope: without it this field is null and the response carries a FORBIDDEN error at its path. */
 streamKey: string | null, /** Public identifier for playback URLs. */
 playbackId: string, /** Whether DVR recording is enabled for this stream. */
 record: boolean, /** How source media enters the stream. */
@@ -6052,7 +6058,7 @@ sourceKind: string, /** Whether the source is kept active without waiting for a 
 alwaysOn: boolean, /** Number of source placements requested by the operator configuration. */
 placementCount: number } | null, /** Where the stream's source may be ingested, derived from the stream's own ingest placement rules. */
 sourceLocation: { mode: SourceLocationMode, /** Empty unless mode is RESTRICTED. */
-avoidNodeIds: Array<string> }, /** Real-time operational metrics from the data plane. Includes viewer counts, quality metrics, and throughput data. Lazily loaded from ClickHouse analytics. */
+avoidNodeIds: Array<string> }, /** Real-time operational metrics from the data plane. Includes viewer counts, quality metrics, and throughput data. Lazily loaded from ClickHouse analytics, so an API token needs the analytics:read scope: without it this field is null and the response carries a FORBIDDEN error at its path. */
 metrics: { /** Current lifecycle status of the stream (OFFLINE, CONNECTING, LIVE, etc.). */
 status: StreamStatus, /** Whether the stream is currently broadcasting. */
 isLive: boolean, /** Number of viewers currently watching. */
@@ -6367,7 +6373,7 @@ node:
 id: string, /** Public stream UUID used for analytics and service APIs (not the Relay ID). */
 streamId: string, /** Human-readable display name for the stream. */
 name: string, /** Optional description for the stream. */
-description: string | null, /** Secret key for publisher-authenticated ingest; null for pull and managed sources. */
+description: string | null, /** Secret key for publisher-authenticated ingest; null for pull and managed sources. The key lets its holder publish to the stream, so an API token needs the streams:write scope: without it this field is null and the response carries a FORBIDDEN error at its path. */
 streamKey: string | null, /** Public identifier for playback URLs. */
 playbackId: string, /** Whether DVR recording is enabled for this stream. */
 record: boolean, /** How source media enters the stream. */
@@ -6386,7 +6392,7 @@ sourceKind: string, /** Whether the source is kept active without waiting for a 
 alwaysOn: boolean, /** Number of source placements requested by the operator configuration. */
 placementCount: number } | null, /** Where the stream's source may be ingested, derived from the stream's own ingest placement rules. */
 sourceLocation: { mode: SourceLocationMode, /** Empty unless mode is RESTRICTED. */
-avoidNodeIds: Array<string> }, /** Real-time operational metrics from the data plane. Includes viewer counts, quality metrics, and throughput data. Lazily loaded from ClickHouse analytics. */
+avoidNodeIds: Array<string> }, /** Real-time operational metrics from the data plane. Includes viewer counts, quality metrics, and throughput data. Lazily loaded from ClickHouse analytics, so an API token needs the analytics:read scope: without it this field is null and the response carries a FORBIDDEN error at its path. */
 metrics: { /** Current lifecycle status of the stream (OFFLINE, CONNECTING, LIVE, etc.). */
 status: StreamStatus, /** Whether the stream is currently broadcasting. */
 isLive: boolean, /** Number of viewers currently watching. */
@@ -6422,7 +6428,7 @@ dvrRetentionDaysOverride: number | null, clipRetentionDaysOverride: number | nul
 id: string, /** Public stream UUID used for analytics and service APIs (not the Relay ID). */
 streamId: string, /** Human-readable display name for the stream. */
 name: string, /** Optional description for the stream. */
-description: string | null, /** Secret key for publisher-authenticated ingest; null for pull and managed sources. */
+description: string | null, /** Secret key for publisher-authenticated ingest; null for pull and managed sources. The key lets its holder publish to the stream, so an API token needs the streams:write scope: without it this field is null and the response carries a FORBIDDEN error at its path. */
 streamKey: string | null, /** Public identifier for playback URLs. */
 playbackId: string, /** Whether DVR recording is enabled for this stream. */
 record: boolean, /** How source media enters the stream. */
@@ -6441,7 +6447,7 @@ sourceKind: string, /** Whether the source is kept active without waiting for a 
 alwaysOn: boolean, /** Number of source placements requested by the operator configuration. */
 placementCount: number } | null, /** Where the stream's source may be ingested, derived from the stream's own ingest placement rules. */
 sourceLocation: { mode: SourceLocationMode, /** Empty unless mode is RESTRICTED. */
-avoidNodeIds: Array<string> }, /** Real-time operational metrics from the data plane. Includes viewer counts, quality metrics, and throughput data. Lazily loaded from ClickHouse analytics. */
+avoidNodeIds: Array<string> }, /** Real-time operational metrics from the data plane. Includes viewer counts, quality metrics, and throughput data. Lazily loaded from ClickHouse analytics, so an API token needs the analytics:read scope: without it this field is null and the response carries a FORBIDDEN error at its path. */
 metrics: { /** Current lifecycle status of the stream (OFFLINE, CONNECTING, LIVE, etc.). */
 status: StreamStatus, /** Whether the stream is currently broadcasting. */
 isLive: boolean, /** Number of viewers currently watching. */
@@ -6500,7 +6506,7 @@ clipCreatedAt: string | null, stream: { /** Global unique identifier for Relay c
 id: string, /** Public stream UUID used for analytics and service APIs (not the Relay ID). */
 streamId: string, /** Human-readable display name for the stream. */
 name: string, /** Optional description for the stream. */
-description: string | null, /** Secret key for publisher-authenticated ingest; null for pull and managed sources. */
+description: string | null, /** Secret key for publisher-authenticated ingest; null for pull and managed sources. The key lets its holder publish to the stream, so an API token needs the streams:write scope: without it this field is null and the response carries a FORBIDDEN error at its path. */
 streamKey: string | null, /** Public identifier for playback URLs. */
 playbackId: string, /** Whether DVR recording is enabled for this stream. */
 record: boolean, /** How source media enters the stream. */
@@ -6519,7 +6525,7 @@ sourceKind: string, /** Whether the source is kept active without waiting for a 
 alwaysOn: boolean, /** Number of source placements requested by the operator configuration. */
 placementCount: number } | null, /** Where the stream's source may be ingested, derived from the stream's own ingest placement rules. */
 sourceLocation: { mode: SourceLocationMode, /** Empty unless mode is RESTRICTED. */
-avoidNodeIds: Array<string> }, /** Real-time operational metrics from the data plane. Includes viewer counts, quality metrics, and throughput data. Lazily loaded from ClickHouse analytics. */
+avoidNodeIds: Array<string> }, /** Real-time operational metrics from the data plane. Includes viewer counts, quality metrics, and throughput data. Lazily loaded from ClickHouse analytics, so an API token needs the analytics:read scope: without it this field is null and the response carries a FORBIDDEN error at its path. */
 metrics: { /** Current lifecycle status of the stream (OFFLINE, CONNECTING, LIVE, etc.). */
 status: StreamStatus, /** Whether the stream is currently broadcasting. */
 isLive: boolean, /** Number of viewers currently watching. */
@@ -6595,7 +6601,7 @@ clusterCreatedAt: string | null }
 id: string, /** Public stream UUID used for analytics and service APIs (not the Relay ID). */
 streamId: string, /** Human-readable display name for the stream. */
 name: string, /** Optional description for the stream. */
-description: string | null, /** Secret key for publisher-authenticated ingest; null for pull and managed sources. */
+description: string | null, /** Secret key for publisher-authenticated ingest; null for pull and managed sources. The key lets its holder publish to the stream, so an API token needs the streams:write scope: without it this field is null and the response carries a FORBIDDEN error at its path. */
 streamKey: string | null, /** Public identifier for playback URLs. */
 playbackId: string, /** Whether DVR recording is enabled for this stream. */
 record: boolean, /** How source media enters the stream. */
@@ -6614,7 +6620,7 @@ sourceKind: string, /** Whether the source is kept active without waiting for a 
 alwaysOn: boolean, /** Number of source placements requested by the operator configuration. */
 placementCount: number } | null, /** Where the stream's source may be ingested, derived from the stream's own ingest placement rules. */
 sourceLocation: { mode: SourceLocationMode, /** Empty unless mode is RESTRICTED. */
-avoidNodeIds: Array<string> }, /** Real-time operational metrics from the data plane. Includes viewer counts, quality metrics, and throughput data. Lazily loaded from ClickHouse analytics. */
+avoidNodeIds: Array<string> }, /** Real-time operational metrics from the data plane. Includes viewer counts, quality metrics, and throughput data. Lazily loaded from ClickHouse analytics, so an API token needs the analytics:read scope: without it this field is null and the response carries a FORBIDDEN error at its path. */
 metrics: { /** Current lifecycle status of the stream (OFFLINE, CONNECTING, LIVE, etc.). */
 status: StreamStatus, /** Whether the stream is currently broadcasting. */
 isLive: boolean, /** Number of viewers currently watching. */
@@ -6708,7 +6714,7 @@ downSpeed: number | null, connectionsCurrent: number | null, streamCount: number
 id: string, /** Public stream UUID used for analytics and service APIs (not the Relay ID). */
 streamId: string, /** Human-readable display name for the stream. */
 name: string, /** Optional description for the stream. */
-description: string | null, /** Secret key for publisher-authenticated ingest; null for pull and managed sources. */
+description: string | null, /** Secret key for publisher-authenticated ingest; null for pull and managed sources. The key lets its holder publish to the stream, so an API token needs the streams:write scope: without it this field is null and the response carries a FORBIDDEN error at its path. */
 streamKey: string | null, /** Public identifier for playback URLs. */
 playbackId: string, /** Whether DVR recording is enabled for this stream. */
 record: boolean, /** How source media enters the stream. */
@@ -6727,7 +6733,7 @@ sourceKind: string, /** Whether the source is kept active without waiting for a 
 alwaysOn: boolean, /** Number of source placements requested by the operator configuration. */
 placementCount: number } | null, /** Where the stream's source may be ingested, derived from the stream's own ingest placement rules. */
 sourceLocation: { mode: SourceLocationMode, /** Empty unless mode is RESTRICTED. */
-avoidNodeIds: Array<string> }, /** Real-time operational metrics from the data plane. Includes viewer counts, quality metrics, and throughput data. Lazily loaded from ClickHouse analytics. */
+avoidNodeIds: Array<string> }, /** Real-time operational metrics from the data plane. Includes viewer counts, quality metrics, and throughput data. Lazily loaded from ClickHouse analytics, so an API token needs the analytics:read scope: without it this field is null and the response carries a FORBIDDEN error at its path. */
 metrics: { /** Current lifecycle status of the stream (OFFLINE, CONNECTING, LIVE, etc.). */
 status: StreamStatus, /** Whether the stream is currently broadcasting. */
 isLive: boolean, /** Number of viewers currently watching. */
@@ -6762,7 +6768,7 @@ dvrRetentionDaysOverride: number | null, clipRetentionDaysOverride: number | nul
 id: string, /** Public stream UUID used for analytics and service APIs (not the Relay ID). */
 streamId: string, /** Human-readable display name for the stream. */
 name: string, /** Optional description for the stream. */
-description: string | null, /** Secret key for publisher-authenticated ingest; null for pull and managed sources. */
+description: string | null, /** Secret key for publisher-authenticated ingest; null for pull and managed sources. The key lets its holder publish to the stream, so an API token needs the streams:write scope: without it this field is null and the response carries a FORBIDDEN error at its path. */
 streamKey: string | null, /** Public identifier for playback URLs. */
 playbackId: string, /** Whether DVR recording is enabled for this stream. */
 record: boolean, /** How source media enters the stream. */
@@ -6781,7 +6787,7 @@ sourceKind: string, /** Whether the source is kept active without waiting for a 
 alwaysOn: boolean, /** Number of source placements requested by the operator configuration. */
 placementCount: number } | null, /** Where the stream's source may be ingested, derived from the stream's own ingest placement rules. */
 sourceLocation: { mode: SourceLocationMode, /** Empty unless mode is RESTRICTED. */
-avoidNodeIds: Array<string> }, /** Real-time operational metrics from the data plane. Includes viewer counts, quality metrics, and throughput data. Lazily loaded from ClickHouse analytics. */
+avoidNodeIds: Array<string> }, /** Real-time operational metrics from the data plane. Includes viewer counts, quality metrics, and throughput data. Lazily loaded from ClickHouse analytics, so an API token needs the analytics:read scope: without it this field is null and the response carries a FORBIDDEN error at its path. */
 metrics: { /** Current lifecycle status of the stream (OFFLINE, CONNECTING, LIVE, etc.). */
 status: StreamStatus, /** Whether the stream is currently broadcasting. */
 isLive: boolean, /** Number of viewers currently watching. */
@@ -6824,7 +6830,7 @@ signingKeyStatus: SigningKeyStatus }
 id: string, /** Public stream UUID used for analytics and service APIs (not the Relay ID). */
 streamId: string, /** Human-readable display name for the stream. */
 name: string, /** Optional description for the stream. */
-description: string | null, /** Secret key for publisher-authenticated ingest; null for pull and managed sources. */
+description: string | null, /** Secret key for publisher-authenticated ingest; null for pull and managed sources. The key lets its holder publish to the stream, so an API token needs the streams:write scope: without it this field is null and the response carries a FORBIDDEN error at its path. */
 streamKey: string | null, /** Public identifier for playback URLs. */
 playbackId: string, /** Whether DVR recording is enabled for this stream. */
 record: boolean, /** How source media enters the stream. */
@@ -6843,7 +6849,7 @@ sourceKind: string, /** Whether the source is kept active without waiting for a 
 alwaysOn: boolean, /** Number of source placements requested by the operator configuration. */
 placementCount: number } | null, /** Where the stream's source may be ingested, derived from the stream's own ingest placement rules. */
 sourceLocation: { mode: SourceLocationMode, /** Empty unless mode is RESTRICTED. */
-avoidNodeIds: Array<string> }, /** Real-time operational metrics from the data plane. Includes viewer counts, quality metrics, and throughput data. Lazily loaded from ClickHouse analytics. */
+avoidNodeIds: Array<string> }, /** Real-time operational metrics from the data plane. Includes viewer counts, quality metrics, and throughput data. Lazily loaded from ClickHouse analytics, so an API token needs the analytics:read scope: without it this field is null and the response carries a FORBIDDEN error at its path. */
 metrics: { /** Current lifecycle status of the stream (OFFLINE, CONNECTING, LIVE, etc.). */
 status: StreamStatus, /** Whether the stream is currently broadcasting. */
 isLive: boolean, /** Number of viewers currently watching. */
@@ -6878,7 +6884,7 @@ dvrRetentionDaysOverride: number | null, clipRetentionDaysOverride: number | nul
     | { __typename: 'Stream', /** Global unique identifier for Relay compatibility. */
 id: string, /** Human-readable display name for the stream. */
 name: string, /** Optional description for the stream. */
-description: string | null, /** Secret key for publisher-authenticated ingest; null for pull and managed sources. */
+description: string | null, /** Secret key for publisher-authenticated ingest; null for pull and managed sources. The key lets its holder publish to the stream, so an API token needs the streams:write scope: without it this field is null and the response carries a FORBIDDEN error at its path. */
 streamKey: string | null, /** Public identifier for playback URLs. */
 playbackId: string, /** Whether DVR recording is enabled for this stream. */
 record: boolean, /** How source media enters the stream. */
@@ -6899,7 +6905,7 @@ alwaysOn: boolean, /** Number of source placements requested by the operator con
 placementCount: number } | null, /** Where the stream's source may be ingested, derived from the stream's own ingest placement rules. */
 sourceLocation: { mode: SourceLocationMode, /** Empty unless mode is RESTRICTED. */
 avoidNodeIds: Array<string>, /** Empty unless mode is RESTRICTED. */
-clusters: Array<{ clusterId: string, nodeIds: Array<string> }> }, /** Real-time operational metrics from the data plane. Includes viewer counts, quality metrics, and throughput data. Lazily loaded from ClickHouse analytics. */
+clusters: Array<{ clusterId: string, nodeIds: Array<string> }> }, /** Real-time operational metrics from the data plane. Includes viewer counts, quality metrics, and throughput data. Lazily loaded from ClickHouse analytics, so an API token needs the analytics:read scope: without it this field is null and the response carries a FORBIDDEN error at its path. */
 metrics: { /** Current lifecycle status of the stream (OFFLINE, CONNECTING, LIVE, etc.). */
 status: StreamStatus, /** Whether the stream is currently broadcasting. */
 isLive: boolean, /** Number of viewers currently watching. */
@@ -6941,7 +6947,7 @@ dvrRetentionDaysOverride: number | null, clipRetentionDaysOverride: number | nul
 id: string, /** Public stream UUID used for analytics and service APIs (not the Relay ID). */
 streamId: string, /** Human-readable display name for the stream. */
 name: string, /** Optional description for the stream. */
-description: string | null, /** Secret key for publisher-authenticated ingest; null for pull and managed sources. */
+description: string | null, /** Secret key for publisher-authenticated ingest; null for pull and managed sources. The key lets its holder publish to the stream, so an API token needs the streams:write scope: without it this field is null and the response carries a FORBIDDEN error at its path. */
 streamKey: string | null, /** Public identifier for playback URLs. */
 playbackId: string, /** Whether DVR recording is enabled for this stream. */
 record: boolean, /** How source media enters the stream. */
@@ -6960,7 +6966,7 @@ sourceKind: string, /** Whether the source is kept active without waiting for a 
 alwaysOn: boolean, /** Number of source placements requested by the operator configuration. */
 placementCount: number } | null, /** Where the stream's source may be ingested, derived from the stream's own ingest placement rules. */
 sourceLocation: { mode: SourceLocationMode, /** Empty unless mode is RESTRICTED. */
-avoidNodeIds: Array<string> }, /** Real-time operational metrics from the data plane. Includes viewer counts, quality metrics, and throughput data. Lazily loaded from ClickHouse analytics. */
+avoidNodeIds: Array<string> }, /** Real-time operational metrics from the data plane. Includes viewer counts, quality metrics, and throughput data. Lazily loaded from ClickHouse analytics, so an API token needs the analytics:read scope: without it this field is null and the response carries a FORBIDDEN error at its path. */
 metrics: { /** Current lifecycle status of the stream (OFFLINE, CONNECTING, LIVE, etc.). */
 status: StreamStatus, /** Whether the stream is currently broadcasting. */
 isLive: boolean, /** Number of viewers currently watching. */
@@ -6995,7 +7001,7 @@ dvrRetentionDaysOverride: number | null, clipRetentionDaysOverride: number | nul
 id: string, /** Public stream UUID used for analytics and service APIs (not the Relay ID). */
 streamId: string, /** Human-readable display name for the stream. */
 name: string, /** Optional description for the stream. */
-description: string | null, /** Secret key for publisher-authenticated ingest; null for pull and managed sources. */
+description: string | null, /** Secret key for publisher-authenticated ingest; null for pull and managed sources. The key lets its holder publish to the stream, so an API token needs the streams:write scope: without it this field is null and the response carries a FORBIDDEN error at its path. */
 streamKey: string | null, /** Public identifier for playback URLs. */
 playbackId: string, /** Whether DVR recording is enabled for this stream. */
 record: boolean, /** How source media enters the stream. */
@@ -7014,7 +7020,7 @@ sourceKind: string, /** Whether the source is kept active without waiting for a 
 alwaysOn: boolean, /** Number of source placements requested by the operator configuration. */
 placementCount: number } | null, /** Where the stream's source may be ingested, derived from the stream's own ingest placement rules. */
 sourceLocation: { mode: SourceLocationMode, /** Empty unless mode is RESTRICTED. */
-avoidNodeIds: Array<string> }, /** Real-time operational metrics from the data plane. Includes viewer counts, quality metrics, and throughput data. Lazily loaded from ClickHouse analytics. */
+avoidNodeIds: Array<string> }, /** Real-time operational metrics from the data plane. Includes viewer counts, quality metrics, and throughput data. Lazily loaded from ClickHouse analytics, so an API token needs the analytics:read scope: without it this field is null and the response carries a FORBIDDEN error at its path. */
 metrics: { /** Current lifecycle status of the stream (OFFLINE, CONNECTING, LIVE, etc.). */
 status: StreamStatus, /** Whether the stream is currently broadcasting. */
 isLive: boolean, /** Number of viewers currently watching. */
@@ -7049,7 +7055,7 @@ dvrRetentionDaysOverride: number | null, clipRetentionDaysOverride: number | nul
 id: string, /** Public stream UUID used for analytics and service APIs (not the Relay ID). */
 streamId: string, /** Human-readable display name for the stream. */
 name: string, /** Optional description for the stream. */
-description: string | null, /** Secret key for publisher-authenticated ingest; null for pull and managed sources. */
+description: string | null, /** Secret key for publisher-authenticated ingest; null for pull and managed sources. The key lets its holder publish to the stream, so an API token needs the streams:write scope: without it this field is null and the response carries a FORBIDDEN error at its path. */
 streamKey: string | null, /** Public identifier for playback URLs. */
 playbackId: string, /** Whether DVR recording is enabled for this stream. */
 record: boolean, /** How source media enters the stream. */
@@ -7068,7 +7074,7 @@ sourceKind: string, /** Whether the source is kept active without waiting for a 
 alwaysOn: boolean, /** Number of source placements requested by the operator configuration. */
 placementCount: number } | null, /** Where the stream's source may be ingested, derived from the stream's own ingest placement rules. */
 sourceLocation: { mode: SourceLocationMode, /** Empty unless mode is RESTRICTED. */
-avoidNodeIds: Array<string> }, /** Real-time operational metrics from the data plane. Includes viewer counts, quality metrics, and throughput data. Lazily loaded from ClickHouse analytics. */
+avoidNodeIds: Array<string> }, /** Real-time operational metrics from the data plane. Includes viewer counts, quality metrics, and throughput data. Lazily loaded from ClickHouse analytics, so an API token needs the analytics:read scope: without it this field is null and the response carries a FORBIDDEN error at its path. */
 metrics: { /** Current lifecycle status of the stream (OFFLINE, CONNECTING, LIVE, etc.). */
 status: StreamStatus, /** Whether the stream is currently broadcasting. */
 isLive: boolean, /** Number of viewers currently watching. */
@@ -7104,7 +7110,7 @@ dvrRetentionDaysOverride: number | null, clipRetentionDaysOverride: number | nul
 id: string, /** Public stream UUID used for analytics and service APIs (not the Relay ID). */
 streamId: string, /** Human-readable display name for the stream. */
 name: string, /** Optional description for the stream. */
-description: string | null, /** Secret key for publisher-authenticated ingest; null for pull and managed sources. */
+description: string | null, /** Secret key for publisher-authenticated ingest; null for pull and managed sources. The key lets its holder publish to the stream, so an API token needs the streams:write scope: without it this field is null and the response carries a FORBIDDEN error at its path. */
 streamKey: string | null, /** Public identifier for playback URLs. */
 playbackId: string, /** Whether DVR recording is enabled for this stream. */
 record: boolean, /** How source media enters the stream. */
@@ -7123,7 +7129,7 @@ sourceKind: string, /** Whether the source is kept active without waiting for a 
 alwaysOn: boolean, /** Number of source placements requested by the operator configuration. */
 placementCount: number } | null, /** Where the stream's source may be ingested, derived from the stream's own ingest placement rules. */
 sourceLocation: { mode: SourceLocationMode, /** Empty unless mode is RESTRICTED. */
-avoidNodeIds: Array<string> }, /** Real-time operational metrics from the data plane. Includes viewer counts, quality metrics, and throughput data. Lazily loaded from ClickHouse analytics. */
+avoidNodeIds: Array<string> }, /** Real-time operational metrics from the data plane. Includes viewer counts, quality metrics, and throughput data. Lazily loaded from ClickHouse analytics, so an API token needs the analytics:read scope: without it this field is null and the response carries a FORBIDDEN error at its path. */
 metrics: { /** Current lifecycle status of the stream (OFFLINE, CONNECTING, LIVE, etc.). */
 status: StreamStatus, /** Whether the stream is currently broadcasting. */
 isLive: boolean, /** Number of viewers currently watching. */
@@ -7159,7 +7165,7 @@ dvrRetentionDaysOverride: number | null, clipRetentionDaysOverride: number | nul
 id: string, /** Public stream UUID used for analytics and service APIs (not the Relay ID). */
 streamId: string, /** Human-readable display name for the stream. */
 name: string, /** Optional description for the stream. */
-description: string | null, /** Secret key for publisher-authenticated ingest; null for pull and managed sources. */
+description: string | null, /** Secret key for publisher-authenticated ingest; null for pull and managed sources. The key lets its holder publish to the stream, so an API token needs the streams:write scope: without it this field is null and the response carries a FORBIDDEN error at its path. */
 streamKey: string | null, /** Public identifier for playback URLs. */
 playbackId: string, /** Whether DVR recording is enabled for this stream. */
 record: boolean, /** How source media enters the stream. */
@@ -7178,7 +7184,7 @@ sourceKind: string, /** Whether the source is kept active without waiting for a 
 alwaysOn: boolean, /** Number of source placements requested by the operator configuration. */
 placementCount: number } | null, /** Where the stream's source may be ingested, derived from the stream's own ingest placement rules. */
 sourceLocation: { mode: SourceLocationMode, /** Empty unless mode is RESTRICTED. */
-avoidNodeIds: Array<string> }, /** Real-time operational metrics from the data plane. Includes viewer counts, quality metrics, and throughput data. Lazily loaded from ClickHouse analytics. */
+avoidNodeIds: Array<string> }, /** Real-time operational metrics from the data plane. Includes viewer counts, quality metrics, and throughput data. Lazily loaded from ClickHouse analytics, so an API token needs the analytics:read scope: without it this field is null and the response carries a FORBIDDEN error at its path. */
 metrics: { /** Current lifecycle status of the stream (OFFLINE, CONNECTING, LIVE, etc.). */
 status: StreamStatus, /** Whether the stream is currently broadcasting. */
 isLive: boolean, /** Number of viewers currently watching. */
@@ -7214,7 +7220,7 @@ dvrRetentionDaysOverride: number | null, clipRetentionDaysOverride: number | nul
 id: string, /** Public stream UUID used for analytics and service APIs (not the Relay ID). */
 streamId: string, /** Human-readable display name for the stream. */
 name: string, /** Optional description for the stream. */
-description: string | null, /** Secret key for publisher-authenticated ingest; null for pull and managed sources. */
+description: string | null, /** Secret key for publisher-authenticated ingest; null for pull and managed sources. The key lets its holder publish to the stream, so an API token needs the streams:write scope: without it this field is null and the response carries a FORBIDDEN error at its path. */
 streamKey: string | null, /** Public identifier for playback URLs. */
 playbackId: string, /** Whether DVR recording is enabled for this stream. */
 record: boolean, /** How source media enters the stream. */
@@ -7233,7 +7239,7 @@ sourceKind: string, /** Whether the source is kept active without waiting for a 
 alwaysOn: boolean, /** Number of source placements requested by the operator configuration. */
 placementCount: number } | null, /** Where the stream's source may be ingested, derived from the stream's own ingest placement rules. */
 sourceLocation: { mode: SourceLocationMode, /** Empty unless mode is RESTRICTED. */
-avoidNodeIds: Array<string> }, /** Real-time operational metrics from the data plane. Includes viewer counts, quality metrics, and throughput data. Lazily loaded from ClickHouse analytics. */
+avoidNodeIds: Array<string> }, /** Real-time operational metrics from the data plane. Includes viewer counts, quality metrics, and throughput data. Lazily loaded from ClickHouse analytics, so an API token needs the analytics:read scope: without it this field is null and the response carries a FORBIDDEN error at its path. */
 metrics: { /** Current lifecycle status of the stream (OFFLINE, CONNECTING, LIVE, etc.). */
 status: StreamStatus, /** Whether the stream is currently broadcasting. */
 isLive: boolean, /** Number of viewers currently watching. */
@@ -7268,7 +7274,7 @@ dvrRetentionDaysOverride: number | null, clipRetentionDaysOverride: number | nul
 id: string, /** Public stream UUID used for analytics and service APIs (not the Relay ID). */
 streamId: string, /** Human-readable display name for the stream. */
 name: string, /** Optional description for the stream. */
-description: string | null, /** Secret key for publisher-authenticated ingest; null for pull and managed sources. */
+description: string | null, /** Secret key for publisher-authenticated ingest; null for pull and managed sources. The key lets its holder publish to the stream, so an API token needs the streams:write scope: without it this field is null and the response carries a FORBIDDEN error at its path. */
 streamKey: string | null, /** Public identifier for playback URLs. */
 playbackId: string, /** Whether DVR recording is enabled for this stream. */
 record: boolean, /** How source media enters the stream. */
@@ -7287,7 +7293,7 @@ sourceKind: string, /** Whether the source is kept active without waiting for a 
 alwaysOn: boolean, /** Number of source placements requested by the operator configuration. */
 placementCount: number } | null, /** Where the stream's source may be ingested, derived from the stream's own ingest placement rules. */
 sourceLocation: { mode: SourceLocationMode, /** Empty unless mode is RESTRICTED. */
-avoidNodeIds: Array<string> }, /** Real-time operational metrics from the data plane. Includes viewer counts, quality metrics, and throughput data. Lazily loaded from ClickHouse analytics. */
+avoidNodeIds: Array<string> }, /** Real-time operational metrics from the data plane. Includes viewer counts, quality metrics, and throughput data. Lazily loaded from ClickHouse analytics, so an API token needs the analytics:read scope: without it this field is null and the response carries a FORBIDDEN error at its path. */
 metrics: { /** Current lifecycle status of the stream (OFFLINE, CONNECTING, LIVE, etc.). */
 status: StreamStatus, /** Whether the stream is currently broadcasting. */
 isLive: boolean, /** Number of viewers currently watching. */
@@ -7628,7 +7634,7 @@ export type GetRecentPullSourceEventsQueryVariables = Exact<{
 
 
 /** Recent pull-source resolution events for pull streams. Captures the customer-facing resolution outcome (resolved, not_found, disabled, blocked_uri, cluster_not_allowed_delegate, commodore_error, foghorn_base_unresolved). Null for push streams. */
-export type GetRecentPullSourceEventsQuery = { /** Fetch a single stream by its global ID. */
+export type GetRecentPullSourceEventsQuery = { /** Fetch a single stream by its global ID. An API token needs the streams:read or streams:write scope. Stream.streamKey needs streams:write. */
 stream: { /** Recent pull-source resolution events for pull streams. Captures the customer-facing resolution outcome (resolved, not_found, disabled, blocked_uri, cluster_not_allowed_delegate, commodore_error, foghorn_base_unresolved). Null for push streams. */
 recentPullSourceEvents: Array<{ id: string, internalName: string, eventKind: string, detail: string | null, createdAt: string }> | null } | null };
 
@@ -7849,7 +7855,7 @@ rangeViewerHoursSharePercent: number | null, stream: { /** Global unique identif
 id: string, /** Public stream UUID used for analytics and service APIs (not the Relay ID). */
 streamId: string, /** Human-readable display name for the stream. */
 name: string, /** Optional description for the stream. */
-description: string | null, /** Secret key for publisher-authenticated ingest; null for pull and managed sources. */
+description: string | null, /** Secret key for publisher-authenticated ingest; null for pull and managed sources. The key lets its holder publish to the stream, so an API token needs the streams:write scope: without it this field is null and the response carries a FORBIDDEN error at its path. */
 streamKey: string | null, /** Public identifier for playback URLs. */
 playbackId: string, /** Whether DVR recording is enabled for this stream. */
 record: boolean, /** How source media enters the stream. */
@@ -7868,7 +7874,7 @@ sourceKind: string, /** Whether the source is kept active without waiting for a 
 alwaysOn: boolean, /** Number of source placements requested by the operator configuration. */
 placementCount: number } | null, /** Where the stream's source may be ingested, derived from the stream's own ingest placement rules. */
 sourceLocation: { mode: SourceLocationMode, /** Empty unless mode is RESTRICTED. */
-avoidNodeIds: Array<string> }, /** Real-time operational metrics from the data plane. Includes viewer counts, quality metrics, and throughput data. Lazily loaded from ClickHouse analytics. */
+avoidNodeIds: Array<string> }, /** Real-time operational metrics from the data plane. Includes viewer counts, quality metrics, and throughput data. Lazily loaded from ClickHouse analytics, so an API token needs the analytics:read scope: without it this field is null and the response carries a FORBIDDEN error at its path. */
 metrics: { /** Current lifecycle status of the stream (OFFLINE, CONNECTING, LIVE, etc.). */
 status: StreamStatus, /** Whether the stream is currently broadcasting. */
 isLive: boolean, /** Number of viewers currently watching. */
@@ -8200,7 +8206,7 @@ liveConnectionEvents: { id: string, eventId: string, timestamp: string, streamId
 id: string, /** Public stream UUID used for analytics and service APIs (not the Relay ID). */
 streamId: string, /** Human-readable display name for the stream. */
 name: string, /** Optional description for the stream. */
-description: string | null, /** Secret key for publisher-authenticated ingest; null for pull and managed sources. */
+description: string | null, /** Secret key for publisher-authenticated ingest; null for pull and managed sources. The key lets its holder publish to the stream, so an API token needs the streams:write scope: without it this field is null and the response carries a FORBIDDEN error at its path. */
 streamKey: string | null, /** Public identifier for playback URLs. */
 playbackId: string, /** Whether DVR recording is enabled for this stream. */
 record: boolean, /** How source media enters the stream. */
@@ -8219,7 +8225,7 @@ sourceKind: string, /** Whether the source is kept active without waiting for a 
 alwaysOn: boolean, /** Number of source placements requested by the operator configuration. */
 placementCount: number } | null, /** Where the stream's source may be ingested, derived from the stream's own ingest placement rules. */
 sourceLocation: { mode: SourceLocationMode, /** Empty unless mode is RESTRICTED. */
-avoidNodeIds: Array<string> }, /** Real-time operational metrics from the data plane. Includes viewer counts, quality metrics, and throughput data. Lazily loaded from ClickHouse analytics. */
+avoidNodeIds: Array<string> }, /** Real-time operational metrics from the data plane. Includes viewer counts, quality metrics, and throughput data. Lazily loaded from ClickHouse analytics, so an API token needs the analytics:read scope: without it this field is null and the response carries a FORBIDDEN error at its path. */
 metrics: { /** Current lifecycle status of the stream (OFFLINE, CONNECTING, LIVE, etc.). */
 status: StreamStatus, /** Whether the stream is currently broadcasting. */
 isLive: boolean, /** Number of viewers currently watching. */
@@ -8281,7 +8287,7 @@ liveFirehose: { type: string, channel: string, timestamp: string, streamEvent: {
 id: string, /** Public stream UUID used for analytics and service APIs (not the Relay ID). */
 streamId: string, /** Human-readable display name for the stream. */
 name: string, /** Optional description for the stream. */
-description: string | null, /** Secret key for publisher-authenticated ingest; null for pull and managed sources. */
+description: string | null, /** Secret key for publisher-authenticated ingest; null for pull and managed sources. The key lets its holder publish to the stream, so an API token needs the streams:write scope: without it this field is null and the response carries a FORBIDDEN error at its path. */
 streamKey: string | null, /** Public identifier for playback URLs. */
 playbackId: string, /** Whether DVR recording is enabled for this stream. */
 record: boolean, /** How source media enters the stream. */
@@ -8294,7 +8300,7 @@ monitoring: MonitoringToggle } | null } | null, viewerMetrics: { nodeId: string,
 id: string, /** Public stream UUID used for analytics and service APIs (not the Relay ID). */
 streamId: string, /** Human-readable display name for the stream. */
 name: string, /** Optional description for the stream. */
-description: string | null, /** Secret key for publisher-authenticated ingest; null for pull and managed sources. */
+description: string | null, /** Secret key for publisher-authenticated ingest; null for pull and managed sources. The key lets its holder publish to the stream, so an API token needs the streams:write scope: without it this field is null and the response carries a FORBIDDEN error at its path. */
 streamKey: string | null, /** Public identifier for playback URLs. */
 playbackId: string, /** Whether DVR recording is enabled for this stream. */
 record: boolean, /** How source media enters the stream. */
@@ -8307,7 +8313,7 @@ monitoring: MonitoringToggle } | null } | null, connectionEvent: { id: string, e
 id: string, /** Public stream UUID used for analytics and service APIs (not the Relay ID). */
 streamId: string, /** Human-readable display name for the stream. */
 name: string, /** Optional description for the stream. */
-description: string | null, /** Secret key for publisher-authenticated ingest; null for pull and managed sources. */
+description: string | null, /** Secret key for publisher-authenticated ingest; null for pull and managed sources. The key lets its holder publish to the stream, so an API token needs the streams:write scope: without it this field is null and the response carries a FORBIDDEN error at its path. */
 streamKey: string | null, /** Public identifier for playback URLs. */
 playbackId: string, /** Whether DVR recording is enabled for this stream. */
 record: boolean, /** How source media enters the stream. */
@@ -8320,7 +8326,7 @@ monitoring: MonitoringToggle } | null, clientBucket: { h3Index: string, resoluti
 id: string, /** Public stream UUID used for analytics and service APIs (not the Relay ID). */
 streamId: string, /** Human-readable display name for the stream. */
 name: string, /** Optional description for the stream. */
-description: string | null, /** Secret key for publisher-authenticated ingest; null for pull and managed sources. */
+description: string | null, /** Secret key for publisher-authenticated ingest; null for pull and managed sources. The key lets its holder publish to the stream, so an API token needs the streams:write scope: without it this field is null and the response carries a FORBIDDEN error at its path. */
 streamKey: string | null, /** Public identifier for playback URLs. */
 playbackId: string, /** Whether DVR recording is enabled for this stream. */
 record: boolean, /** How source media enters the stream. */
@@ -8333,7 +8339,7 @@ monitoring: MonitoringToggle } | null, tracks: Array<{ trackName: string, trackT
 id: string, /** Public stream UUID used for analytics and service APIs (not the Relay ID). */
 streamId: string, /** Human-readable display name for the stream. */
 name: string, /** Optional description for the stream. */
-description: string | null, /** Secret key for publisher-authenticated ingest; null for pull and managed sources. */
+description: string | null, /** Secret key for publisher-authenticated ingest; null for pull and managed sources. The key lets its holder publish to the stream, so an API token needs the streams:write scope: without it this field is null and the response carries a FORBIDDEN error at its path. */
 streamKey: string | null, /** Public identifier for playback URLs. */
 playbackId: string, /** Whether DVR recording is enabled for this stream. */
 record: boolean, /** How source media enters the stream. */
@@ -8346,7 +8352,7 @@ monitoring: MonitoringToggle } | null } | null, storageSnapshot: { nodeId: strin
 id: string, /** Public stream UUID used for analytics and service APIs (not the Relay ID). */
 streamId: string, /** Human-readable display name for the stream. */
 name: string, /** Optional description for the stream. */
-description: string | null, /** Secret key for publisher-authenticated ingest; null for pull and managed sources. */
+description: string | null, /** Secret key for publisher-authenticated ingest; null for pull and managed sources. The key lets its holder publish to the stream, so an API token needs the streams:write scope: without it this field is null and the response carries a FORBIDDEN error at its path. */
 streamKey: string | null, /** Public identifier for playback URLs. */
 playbackId: string, /** Whether DVR recording is enabled for this stream. */
 record: boolean, /** How source media enters the stream. */
@@ -8359,7 +8365,7 @@ monitoring: MonitoringToggle } | null } | null, routingEvent: { timestamp: strin
 id: string, /** Public stream UUID used for analytics and service APIs (not the Relay ID). */
 streamId: string, /** Human-readable display name for the stream. */
 name: string, /** Optional description for the stream. */
-description: string | null, /** Secret key for publisher-authenticated ingest; null for pull and managed sources. */
+description: string | null, /** Secret key for publisher-authenticated ingest; null for pull and managed sources. The key lets its holder publish to the stream, so an API token needs the streams:write scope: without it this field is null and the response carries a FORBIDDEN error at its path. */
 streamKey: string | null, /** Public identifier for playback URLs. */
 playbackId: string, /** Whether DVR recording is enabled for this stream. */
 record: boolean, /** How source media enters the stream. */
@@ -8404,7 +8410,7 @@ liveProcessingEvents: { id: string, timestamp: string, nodeId: string, streamId:
 id: string, /** Public stream UUID used for analytics and service APIs (not the Relay ID). */
 streamId: string, /** Human-readable display name for the stream. */
 name: string, /** Optional description for the stream. */
-description: string | null, /** Secret key for publisher-authenticated ingest; null for pull and managed sources. */
+description: string | null, /** Secret key for publisher-authenticated ingest; null for pull and managed sources. The key lets its holder publish to the stream, so an API token needs the streams:write scope: without it this field is null and the response carries a FORBIDDEN error at its path. */
 streamKey: string | null, /** Public identifier for playback URLs. */
 playbackId: string, /** Whether DVR recording is enabled for this stream. */
 record: boolean, /** How source media enters the stream. */
@@ -8423,7 +8429,7 @@ sourceKind: string, /** Whether the source is kept active without waiting for a 
 alwaysOn: boolean, /** Number of source placements requested by the operator configuration. */
 placementCount: number } | null, /** Where the stream's source may be ingested, derived from the stream's own ingest placement rules. */
 sourceLocation: { mode: SourceLocationMode, /** Empty unless mode is RESTRICTED. */
-avoidNodeIds: Array<string> }, /** Real-time operational metrics from the data plane. Includes viewer counts, quality metrics, and throughput data. Lazily loaded from ClickHouse analytics. */
+avoidNodeIds: Array<string> }, /** Real-time operational metrics from the data plane. Includes viewer counts, quality metrics, and throughput data. Lazily loaded from ClickHouse analytics, so an API token needs the analytics:read scope: without it this field is null and the response carries a FORBIDDEN error at its path. */
 metrics: { /** Current lifecycle status of the stream (OFFLINE, CONNECTING, LIVE, etc.). */
 status: StreamStatus, /** Whether the stream is currently broadcasting. */
 isLive: boolean, /** Number of viewers currently watching. */
@@ -8466,7 +8472,7 @@ liveStorageEvents: { id: string, timestamp: string, streamId: string, assetHash:
 id: string, /** Public stream UUID used for analytics and service APIs (not the Relay ID). */
 streamId: string, /** Human-readable display name for the stream. */
 name: string, /** Optional description for the stream. */
-description: string | null, /** Secret key for publisher-authenticated ingest; null for pull and managed sources. */
+description: string | null, /** Secret key for publisher-authenticated ingest; null for pull and managed sources. The key lets its holder publish to the stream, so an API token needs the streams:write scope: without it this field is null and the response carries a FORBIDDEN error at its path. */
 streamKey: string | null, /** Public identifier for playback URLs. */
 playbackId: string, /** Whether DVR recording is enabled for this stream. */
 record: boolean, /** How source media enters the stream. */
@@ -8485,7 +8491,7 @@ sourceKind: string, /** Whether the source is kept active without waiting for a 
 alwaysOn: boolean, /** Number of source placements requested by the operator configuration. */
 placementCount: number } | null, /** Where the stream's source may be ingested, derived from the stream's own ingest placement rules. */
 sourceLocation: { mode: SourceLocationMode, /** Empty unless mode is RESTRICTED. */
-avoidNodeIds: Array<string> }, /** Real-time operational metrics from the data plane. Includes viewer counts, quality metrics, and throughput data. Lazily loaded from ClickHouse analytics. */
+avoidNodeIds: Array<string> }, /** Real-time operational metrics from the data plane. Includes viewer counts, quality metrics, and throughput data. Lazily loaded from ClickHouse analytics, so an API token needs the analytics:read scope: without it this field is null and the response carries a FORBIDDEN error at its path. */
 metrics: { /** Current lifecycle status of the stream (OFFLINE, CONNECTING, LIVE, etc.). */
 status: StreamStatus, /** Whether the stream is currently broadcasting. */
 isLive: boolean, /** Number of viewers currently watching. */
@@ -8528,7 +8534,7 @@ liveStreamEvents: { id: string, eventId: string, streamId: string | null, nodeId
 id: string, /** Public stream UUID used for analytics and service APIs (not the Relay ID). */
 streamId: string, /** Human-readable display name for the stream. */
 name: string, /** Optional description for the stream. */
-description: string | null, /** Secret key for publisher-authenticated ingest; null for pull and managed sources. */
+description: string | null, /** Secret key for publisher-authenticated ingest; null for pull and managed sources. The key lets its holder publish to the stream, so an API token needs the streams:write scope: without it this field is null and the response carries a FORBIDDEN error at its path. */
 streamKey: string | null, /** Public identifier for playback URLs. */
 playbackId: string, /** Whether DVR recording is enabled for this stream. */
 record: boolean, /** How source media enters the stream. */
@@ -8547,7 +8553,7 @@ sourceKind: string, /** Whether the source is kept active without waiting for a 
 alwaysOn: boolean, /** Number of source placements requested by the operator configuration. */
 placementCount: number } | null, /** Where the stream's source may be ingested, derived from the stream's own ingest placement rules. */
 sourceLocation: { mode: SourceLocationMode, /** Empty unless mode is RESTRICTED. */
-avoidNodeIds: Array<string> }, /** Real-time operational metrics from the data plane. Includes viewer counts, quality metrics, and throughput data. Lazily loaded from ClickHouse analytics. */
+avoidNodeIds: Array<string> }, /** Real-time operational metrics from the data plane. Includes viewer counts, quality metrics, and throughput data. Lazily loaded from ClickHouse analytics, so an API token needs the analytics:read scope: without it this field is null and the response carries a FORBIDDEN error at its path. */
 metrics: { /** Current lifecycle status of the stream (OFFLINE, CONNECTING, LIVE, etc.). */
 status: StreamStatus, /** Whether the stream is currently broadcasting. */
 isLive: boolean, /** Number of viewers currently watching. */
@@ -8597,7 +8603,7 @@ liveTrackListUpdates: { streamId: string, totalTracks: number | null, videoTrack
 id: string, /** Public stream UUID used for analytics and service APIs (not the Relay ID). */
 streamId: string, /** Human-readable display name for the stream. */
 name: string, /** Optional description for the stream. */
-description: string | null, /** Secret key for publisher-authenticated ingest; null for pull and managed sources. */
+description: string | null, /** Secret key for publisher-authenticated ingest; null for pull and managed sources. The key lets its holder publish to the stream, so an API token needs the streams:write scope: without it this field is null and the response carries a FORBIDDEN error at its path. */
 streamKey: string | null, /** Public identifier for playback URLs. */
 playbackId: string, /** Whether DVR recording is enabled for this stream. */
 record: boolean, /** How source media enters the stream. */
@@ -8616,7 +8622,7 @@ sourceKind: string, /** Whether the source is kept active without waiting for a 
 alwaysOn: boolean, /** Number of source placements requested by the operator configuration. */
 placementCount: number } | null, /** Where the stream's source may be ingested, derived from the stream's own ingest placement rules. */
 sourceLocation: { mode: SourceLocationMode, /** Empty unless mode is RESTRICTED. */
-avoidNodeIds: Array<string> }, /** Real-time operational metrics from the data plane. Includes viewer counts, quality metrics, and throughput data. Lazily loaded from ClickHouse analytics. */
+avoidNodeIds: Array<string> }, /** Real-time operational metrics from the data plane. Includes viewer counts, quality metrics, and throughput data. Lazily loaded from ClickHouse analytics, so an API token needs the analytics:read scope: without it this field is null and the response carries a FORBIDDEN error at its path. */
 metrics: { /** Current lifecycle status of the stream (OFFLINE, CONNECTING, LIVE, etc.). */
 status: StreamStatus, /** Whether the stream is currently broadcasting. */
 isLive: boolean, /** Number of viewers currently watching. */
@@ -8659,7 +8665,7 @@ liveViewerMetrics: { nodeId: string, streamId: string, action: string, protocol:
 id: string, /** Public stream UUID used for analytics and service APIs (not the Relay ID). */
 streamId: string, /** Human-readable display name for the stream. */
 name: string, /** Optional description for the stream. */
-description: string | null, /** Secret key for publisher-authenticated ingest; null for pull and managed sources. */
+description: string | null, /** Secret key for publisher-authenticated ingest; null for pull and managed sources. The key lets its holder publish to the stream, so an API token needs the streams:write scope: without it this field is null and the response carries a FORBIDDEN error at its path. */
 streamKey: string | null, /** Public identifier for playback URLs. */
 playbackId: string, /** Whether DVR recording is enabled for this stream. */
 record: boolean, /** How source media enters the stream. */
@@ -8678,7 +8684,7 @@ sourceKind: string, /** Whether the source is kept active without waiting for a 
 alwaysOn: boolean, /** Number of source placements requested by the operator configuration. */
 placementCount: number } | null, /** Where the stream's source may be ingested, derived from the stream's own ingest placement rules. */
 sourceLocation: { mode: SourceLocationMode, /** Empty unless mode is RESTRICTED. */
-avoidNodeIds: Array<string> }, /** Real-time operational metrics from the data plane. Includes viewer counts, quality metrics, and throughput data. Lazily loaded from ClickHouse analytics. */
+avoidNodeIds: Array<string> }, /** Real-time operational metrics from the data plane. Includes viewer counts, quality metrics, and throughput data. Lazily loaded from ClickHouse analytics, so an API token needs the analytics:read scope: without it this field is null and the response carries a FORBIDDEN error at its path. */
 metrics: { /** Current lifecycle status of the stream (OFFLINE, CONNECTING, LIVE, etc.). */
 status: StreamStatus, /** Whether the stream is currently broadcasting. */
 isLive: boolean, /** Number of viewers currently watching. */
@@ -9122,12 +9128,12 @@ export type CreateStreamMutationVariables = Exact<{
 export type CreateStreamMutation = { /** Create a new stream for live broadcasting. */
 createStream:
     | { __typename: 'AuthError', message: string, code: string | null }
-    | { __typename: 'Stream', /** Global unique identifier for Relay compatibility. */
+    | { __typename: 'Stream', /** Secret key for publisher-authenticated ingest; null for pull and managed sources. The key lets its holder publish to the stream, so an API token needs the streams:write scope: without it this field is null and the response carries a FORBIDDEN error at its path. */
+streamKey: string | null, /** Global unique identifier for Relay compatibility. */
 id: string, /** Public stream UUID used for analytics and service APIs (not the Relay ID). */
 streamId: string, /** Human-readable display name for the stream. */
 name: string, /** Optional description for the stream. */
-description: string | null, /** Secret key for publisher-authenticated ingest; null for pull and managed sources. */
-streamKey: string | null, /** Public identifier for playback URLs. */
+description: string | null, /** Public identifier for playback URLs. */
 playbackId: string, /** Whether DVR recording is enabled for this stream. */
 record: boolean, /** How source media enters the stream. */
 ingestMode: IngestMode, /** When this stream was created. */
@@ -9149,13 +9155,7 @@ requiredClaimsJson: Array<{ name: string, jsonValue: string }> } | null, /** Web
 webhook: { url: string, /** Outbound POST timeout in milliseconds. Capped server-side at 10000. */
 timeoutMs: number, /** Always 'redacted' on read; the actual secret is fieldcrypt-encrypted at rest. */
 secretMasked: string, /** Your JSON object, sent as `context` in every access request to the URL. Null when unset. */
-context: unknown } | null } | null, /** Real-time operational metrics from the data plane. Includes viewer counts, quality metrics, and throughput data. Lazily loaded from ClickHouse analytics. */
-metrics: { /** Current lifecycle status of the stream (OFFLINE, CONNECTING, LIVE, etc.). */
-status: StreamStatus, /** Whether the stream is currently broadcasting. */
-isLive: boolean, /** Number of viewers currently watching. */
-currentViewers: number, /** When the current live session started (null if offline). */
-startedAt: string | null, /** When these metrics were last updated. */
-updatedAt: string } | null }
+context: unknown } | null } | null }
     | { __typename: 'ValidationError', message: string, code: string | null, field: string | null, constraint: string | null }
    };
 
@@ -9174,8 +9174,7 @@ updateStream:
 id: string, /** Public stream UUID used for analytics and service APIs (not the Relay ID). */
 streamId: string, /** Human-readable display name for the stream. */
 name: string, /** Optional description for the stream. */
-description: string | null, /** Secret key for publisher-authenticated ingest; null for pull and managed sources. */
-streamKey: string | null, /** Public identifier for playback URLs. */
+description: string | null, /** Public identifier for playback URLs. */
 playbackId: string, /** Whether DVR recording is enabled for this stream. */
 record: boolean, /** How source media enters the stream. */
 ingestMode: IngestMode, /** When this stream was created. */
@@ -9197,13 +9196,7 @@ requiredClaimsJson: Array<{ name: string, jsonValue: string }> } | null, /** Web
 webhook: { url: string, /** Outbound POST timeout in milliseconds. Capped server-side at 10000. */
 timeoutMs: number, /** Always 'redacted' on read; the actual secret is fieldcrypt-encrypted at rest. */
 secretMasked: string, /** Your JSON object, sent as `context` in every access request to the URL. Null when unset. */
-context: unknown } | null } | null, /** Real-time operational metrics from the data plane. Includes viewer counts, quality metrics, and throughput data. Lazily loaded from ClickHouse analytics. */
-metrics: { /** Current lifecycle status of the stream (OFFLINE, CONNECTING, LIVE, etc.). */
-status: StreamStatus, /** Whether the stream is currently broadcasting. */
-isLive: boolean, /** Number of viewers currently watching. */
-currentViewers: number, /** When the current live session started (null if offline). */
-startedAt: string | null, /** When these metrics were last updated. */
-updatedAt: string } | null }
+context: unknown } | null } | null }
     | { __typename: 'ValidationError', message: string, code: string | null, field: string | null, constraint: string | null }
    };
 
@@ -9231,12 +9224,12 @@ export type RefreshStreamKeyMutation = { /** Generate a new stream key, invalida
 refreshStreamKey:
     | { __typename: 'AuthError', message: string, code: string | null }
     | { __typename: 'NotFoundError', message: string, code: string | null, resourceType: string, resourceId: string }
-    | { __typename: 'Stream', /** Global unique identifier for Relay compatibility. */
+    | { __typename: 'Stream', /** Secret key for publisher-authenticated ingest; null for pull and managed sources. The key lets its holder publish to the stream, so an API token needs the streams:write scope: without it this field is null and the response carries a FORBIDDEN error at its path. */
+streamKey: string | null, /** Global unique identifier for Relay compatibility. */
 id: string, /** Public stream UUID used for analytics and service APIs (not the Relay ID). */
 streamId: string, /** Human-readable display name for the stream. */
 name: string, /** Optional description for the stream. */
-description: string | null, /** Secret key for publisher-authenticated ingest; null for pull and managed sources. */
-streamKey: string | null, /** Public identifier for playback URLs. */
+description: string | null, /** Public identifier for playback URLs. */
 playbackId: string, /** Whether DVR recording is enabled for this stream. */
 record: boolean, /** How source media enters the stream. */
 ingestMode: IngestMode, /** When this stream was created. */
@@ -9258,13 +9251,7 @@ requiredClaimsJson: Array<{ name: string, jsonValue: string }> } | null, /** Web
 webhook: { url: string, /** Outbound POST timeout in milliseconds. Capped server-side at 10000. */
 timeoutMs: number, /** Always 'redacted' on read; the actual secret is fieldcrypt-encrypted at rest. */
 secretMasked: string, /** Your JSON object, sent as `context` in every access request to the URL. Null when unset. */
-context: unknown } | null } | null, /** Real-time operational metrics from the data plane. Includes viewer counts, quality metrics, and throughput data. Lazily loaded from ClickHouse analytics. */
-metrics: { /** Current lifecycle status of the stream (OFFLINE, CONNECTING, LIVE, etc.). */
-status: StreamStatus, /** Whether the stream is currently broadcasting. */
-isLive: boolean, /** Number of viewers currently watching. */
-currentViewers: number, /** When the current live session started (null if offline). */
-startedAt: string | null, /** When these metrics were last updated. */
-updatedAt: string } | null }
+context: unknown } | null } | null }
     | { __typename: 'ValidationError', message: string, code: string | null, field: string | null, constraint: string | null }
    };
 
@@ -9279,7 +9266,8 @@ export type CreateStreamKeyMutation = { /** Create an additional stream key for 
 createStreamKey:
     | { __typename: 'AuthError', message: string, code: string | null }
     | { __typename: 'NotFoundError', message: string, code: string | null, resourceType: string, resourceId: string }
-    | { __typename: 'StreamKey', id: string, streamId: string, keyValue: string, keyName: string | null, isActive: boolean, lastUsedAt: string | null, createdAt: string }
+    | { __typename: 'StreamKey', id: string, streamId: string, /** The publishing secret. Stream keys are read only through operations that need the streams:write scope. */
+keyValue: string, keyName: string | null, isActive: boolean, lastUsedAt: string | null, createdAt: string }
     | { __typename: 'ValidationError', message: string, code: string | null, field: string | null, constraint: string | null }
    };
 
@@ -9592,23 +9580,22 @@ export type ListStreamsQueryVariables = Exact<{
 }>;
 
 
-/** List all streams for the current tenant with pagination. */
-export type ListStreamsQuery = { /** List all streams for the current tenant with pagination. */
-streamsConnection: { totalCount: number, nodes: Array<{ __typename: 'Stream', id: string, streamId: string, name: string, description: string | null, streamKey: string | null, playbackId: string, record: boolean, ingestMode: IngestMode, createdAt: string, updatedAt: string, dvrChapterMode: DVRChapterMode | null, dvrChapterIntervalSeconds: number | null, monitoring: MonitoringToggle, pullSource: { sourceUriRedacted: string, enabled: boolean, class: string } | null, playbackPolicy: { type: PlaybackPolicyType, allowedOrigins: Array<string>, jwt: { allowedKids: Array<string>, requiredAudience: Array<string>, requiredClaimsJson: Array<{ name: string, jsonValue: string }> } | null, webhook: { url: string, timeoutMs: number, secretMasked: string, context: unknown } | null } | null, metrics: { status: StreamStatus, isLive: boolean, currentViewers: number, startedAt: string | null, updatedAt: string } | null }>, pageInfo: { startCursor: string | null, endCursor: string | null, hasNextPage: boolean, hasPreviousPage: boolean } } };
+/** List all streams for the current tenant with pagination. An API token needs the streams:read or streams:write scope. Stream.streamKey needs streams:write. */
+export type ListStreamsQuery = { /** List all streams for the current tenant with pagination. An API token needs the streams:read or streams:write scope. Stream.streamKey needs streams:write. */
+streamsConnection: { totalCount: number, nodes: Array<{ __typename: 'Stream', id: string, streamId: string, name: string, description: string | null, playbackId: string, record: boolean, ingestMode: IngestMode, createdAt: string, updatedAt: string, dvrChapterMode: DVRChapterMode | null, dvrChapterIntervalSeconds: number | null, monitoring: MonitoringToggle, pullSource: { sourceUriRedacted: string, enabled: boolean, class: string } | null, playbackPolicy: { type: PlaybackPolicyType, allowedOrigins: Array<string>, jwt: { allowedKids: Array<string>, requiredAudience: Array<string>, requiredClaimsJson: Array<{ name: string, jsonValue: string }> } | null, webhook: { url: string, timeoutMs: number, secretMasked: string, context: unknown } | null } | null }>, pageInfo: { startCursor: string | null, endCursor: string | null, hasNextPage: boolean, hasPreviousPage: boolean } } };
 
 export type GetStreamQueryVariables = Exact<{
   id: string;
 }>;
 
 
-/** Fetch a single stream by its global ID. */
-export type GetStreamQuery = { /** Fetch a single stream by its global ID. */
+/** Fetch a single stream by its global ID. An API token needs the streams:read or streams:write scope. Stream.streamKey needs streams:write. */
+export type GetStreamQuery = { /** Fetch a single stream by its global ID. An API token needs the streams:read or streams:write scope. Stream.streamKey needs streams:write. */
 stream: { __typename: 'Stream', /** Global unique identifier for Relay compatibility. */
 id: string, /** Public stream UUID used for analytics and service APIs (not the Relay ID). */
 streamId: string, /** Human-readable display name for the stream. */
 name: string, /** Optional description for the stream. */
-description: string | null, /** Secret key for publisher-authenticated ingest; null for pull and managed sources. */
-streamKey: string | null, /** Public identifier for playback URLs. */
+description: string | null, /** Public identifier for playback URLs. */
 playbackId: string, /** Whether DVR recording is enabled for this stream. */
 record: boolean, /** How source media enters the stream. */
 ingestMode: IngestMode, /** When this stream was created. */
@@ -9630,13 +9617,48 @@ requiredClaimsJson: Array<{ name: string, jsonValue: string }> } | null, /** Web
 webhook: { url: string, /** Outbound POST timeout in milliseconds. Capped server-side at 10000. */
 timeoutMs: number, /** Always 'redacted' on read; the actual secret is fieldcrypt-encrypted at rest. */
 secretMasked: string, /** Your JSON object, sent as `context` in every access request to the URL. Null when unset. */
-context: unknown } | null } | null, /** Real-time operational metrics from the data plane. Includes viewer counts, quality metrics, and throughput data. Lazily loaded from ClickHouse analytics. */
+context: unknown } | null } | null } | null };
+
+export type GetStreamKeyQueryVariables = Exact<{
+  id: string;
+}>;
+
+
+/** Secret key for publisher-authenticated ingest; null for pull and managed sources. The key lets its holder publish to the stream, so an API token needs the streams:write scope: without it this field is null and the response carries a FORBIDDEN error at its path. */
+export type GetStreamKeyQuery = { /** Fetch a single stream by its global ID. An API token needs the streams:read or streams:write scope. Stream.streamKey needs streams:write. */
+stream: { /** Global unique identifier for Relay compatibility. */
+id: string, /** Secret key for publisher-authenticated ingest; null for pull and managed sources. The key lets its holder publish to the stream, so an API token needs the streams:write scope: without it this field is null and the response carries a FORBIDDEN error at its path. */
+streamKey: string | null } | null };
+
+export type GetStreamMetricsQueryVariables = Exact<{
+  id: string;
+}>;
+
+
+/** Real-time operational metrics from the data plane. Includes viewer counts, quality metrics, and throughput data. Lazily loaded from ClickHouse analytics, so an API token needs the analytics:read scope: without it this field is null and the response carries a FORBIDDEN error at its path. */
+export type GetStreamMetricsQuery = { /** Fetch a single stream by its global ID. An API token needs the streams:read or streams:write scope. Stream.streamKey needs streams:write. */
+stream: { /** Global unique identifier for Relay compatibility. */
+id: string, /** Real-time operational metrics from the data plane. Includes viewer counts, quality metrics, and throughput data. Lazily loaded from ClickHouse analytics, so an API token needs the analytics:read scope: without it this field is null and the response carries a FORBIDDEN error at its path. */
 metrics: { /** Current lifecycle status of the stream (OFFLINE, CONNECTING, LIVE, etc.). */
 status: StreamStatus, /** Whether the stream is currently broadcasting. */
 isLive: boolean, /** Number of viewers currently watching. */
 currentViewers: number, /** When the current live session started (null if offline). */
 startedAt: string | null, /** When these metrics were last updated. */
-updatedAt: string } | null } | null };
+updatedAt: string, /** Buffer health state (HEALTHY, WARNING, CRITICAL). */
+bufferState: string | null, /** Highest quality tier available (4K, 1080p, 720p, etc.). */
+qualityTier: string | null, /** Whether the stream has active quality issues. */
+hasIssues: boolean | null, /** Human-readable description of current issues. */
+issuesDescription: string | null } | null } | null };
+
+export type ListStreamMetricsQueryVariables = Exact<{
+  page?: ConnectionInput | null | undefined;
+  search?: string | null | undefined;
+}>;
+
+
+/** Real-time operational metrics from the data plane. Includes viewer counts, quality metrics, and throughput data. Lazily loaded from ClickHouse analytics, so an API token needs the analytics:read scope: without it this field is null and the response carries a FORBIDDEN error at its path. */
+export type ListStreamMetricsQuery = { /** List all streams for the current tenant with pagination. An API token needs the streams:read or streams:write scope. Stream.streamKey needs streams:write. */
+streamsConnection: { totalCount: number, nodes: Array<{ id: string, streamId: string, metrics: { status: StreamStatus, isLive: boolean, currentViewers: number, startedAt: string | null, updatedAt: string, bufferState: string | null, qualityTier: string | null, hasIssues: boolean | null, issuesDescription: string | null } | null }>, pageInfo: { startCursor: string | null, endCursor: string | null, hasNextPage: boolean, hasPreviousPage: boolean } } };
 
 export type ListStreamKeysQueryVariables = Exact<{
   streamId: string;
@@ -9644,8 +9666,8 @@ export type ListStreamKeysQueryVariables = Exact<{
 }>;
 
 
-/** List all stream keys for a specific stream. */
-export type ListStreamKeysQuery = { /** List all stream keys for a specific stream. */
+/** List all stream keys for a specific stream. Stream keys are publishing credentials, so an API token needs the streams:write scope. */
+export type ListStreamKeysQuery = { /** List all stream keys for a specific stream. Stream keys are publishing credentials, so an API token needs the streams:write scope. */
 streamKeysConnection: { totalCount: number, nodes: Array<{ __typename: 'StreamKey', id: string, streamId: string, keyValue: string, keyName: string | null, isActive: boolean, lastUsedAt: string | null, createdAt: string }>, pageInfo: { startCursor: string | null, endCursor: string | null, hasNextPage: boolean, hasPreviousPage: boolean } } };
 
 export type ListPushTargetsQueryVariables = Exact<{
@@ -9654,7 +9676,7 @@ export type ListPushTargetsQueryVariables = Exact<{
 
 
 /** Configured multistream push targets for this stream. */
-export type ListPushTargetsQuery = { /** Fetch a single stream by its global ID. */
+export type ListPushTargetsQuery = { /** Fetch a single stream by its global ID. An API token needs the streams:read or streams:write scope. Stream.streamKey needs streams:write. */
 stream: { /** Global unique identifier for Relay compatibility. */
 id: string, /** Configured multistream push targets for this stream. */
 pushTargets: Array<{ id: string, streamId: string, platform: string | null, name: string, targetUri: string, isEnabled: boolean, status: string, lastError: string | null, reasonCode: string | null, lastPushedAt: string | null, createdAt: string }> } | null };
@@ -9816,7 +9838,6 @@ export const StreamFieldsFragmentDoc = /*#__PURE__*/ new TypedDocumentString(`
   streamId
   name
   description
-  streamKey
   playbackId
   record
   ingestMode
@@ -9832,13 +9853,6 @@ export const StreamFieldsFragmentDoc = /*#__PURE__*/ new TypedDocumentString(`
   monitoring
   playbackPolicy {
     ...PlaybackPolicyFields
-  }
-  metrics {
-    status
-    isLive
-    currentViewers
-    startedAt
-    updatedAt
   }
 }
     fragment PlaybackPolicyFields on PlaybackPolicy {
@@ -9859,6 +9873,20 @@ export const StreamFieldsFragmentDoc = /*#__PURE__*/ new TypedDocumentString(`
   }
   allowedOrigins
 }`, {"fragmentName":"StreamFields"}) as unknown as TypedDocumentString<StreamFieldsFragment, unknown>;
+/** Real-time operational metrics for a stream from the analytics data plane. Updated frequently while stream is live, represents latest known state. */
+export const StreamMetricsFieldsFragmentDoc = /*#__PURE__*/ new TypedDocumentString(`
+    fragment StreamMetricsFields on StreamMetrics {
+  status
+  isLive
+  currentViewers
+  startedAt
+  updatedAt
+  bufferState
+  qualityTier
+  hasIssues
+  issuesDescription
+}
+    `, {"fragmentName":"StreamMetricsFields"}) as unknown as TypedDocumentString<StreamMetricsFieldsFragment, unknown>;
 export const StreamKeyFieldsFragmentDoc = /*#__PURE__*/ new TypedDocumentString(`
     fragment StreamKeyFields on StreamKey {
   __typename
@@ -28976,6 +29004,9 @@ export const CreateStreamDocument = /*#__PURE__*/ new TypedDocumentString(`
   createStream(input: $input) {
     __typename
     ...StreamFields
+    ... on Stream {
+      streamKey
+    }
     ...ValidationErrorFields
     ...AuthErrorFields
   }
@@ -29016,7 +29047,6 @@ fragment StreamFields on Stream {
   streamId
   name
   description
-  streamKey
   playbackId
   record
   ingestMode
@@ -29032,13 +29062,6 @@ fragment StreamFields on Stream {
   monitoring
   playbackPolicy {
     ...PlaybackPolicyFields
-  }
-  metrics {
-    status
-    isLive
-    currentViewers
-    startedAt
-    updatedAt
   }
 }`) as unknown as TypedDocumentString<CreateStreamMutation, CreateStreamMutationVariables>;
 /** Update an existing stream's configuration. */
@@ -29095,7 +29118,6 @@ fragment StreamFields on Stream {
   streamId
   name
   description
-  streamKey
   playbackId
   record
   ingestMode
@@ -29111,13 +29133,6 @@ fragment StreamFields on Stream {
   monitoring
   playbackPolicy {
     ...PlaybackPolicyFields
-  }
-  metrics {
-    status
-    isLive
-    currentViewers
-    startedAt
-    updatedAt
   }
 }`) as unknown as TypedDocumentString<UpdateStreamMutation, UpdateStreamMutationVariables>;
 /** Delete a stream and all associated data. */
@@ -29154,6 +29169,9 @@ export const RefreshStreamKeyDocument = /*#__PURE__*/ new TypedDocumentString(`
   refreshStreamKey(id: $id) {
     __typename
     ...StreamFields
+    ... on Stream {
+      streamKey
+    }
     ...ValidationErrorFields
     ...NotFoundErrorFields
     ...AuthErrorFields
@@ -29202,7 +29220,6 @@ fragment StreamFields on Stream {
   streamId
   name
   description
-  streamKey
   playbackId
   record
   ingestMode
@@ -29218,13 +29235,6 @@ fragment StreamFields on Stream {
   monitoring
   playbackPolicy {
     ...PlaybackPolicyFields
-  }
-  metrics {
-    status
-    isLive
-    currentViewers
-    startedAt
-    updatedAt
   }
 }`) as unknown as TypedDocumentString<RefreshStreamKeyMutation, RefreshStreamKeyMutationVariables>;
 /** Create an additional stream key for a stream. */
@@ -29859,7 +29869,7 @@ export const ServerInfoDocument = /*#__PURE__*/ new TypedDocumentString(`
   }
 }
     `) as unknown as TypedDocumentString<ServerInfoQuery, ServerInfoQueryVariables>;
-/** List all streams for the current tenant with pagination. */
+/** List all streams for the current tenant with pagination. An API token needs the streams:read or streams:write scope. Stream.streamKey needs streams:write. */
 export const ListStreamsDocument = /*#__PURE__*/ new TypedDocumentString(`
     query ListStreams($page: ConnectionInput, $search: String) {
   streamsConnection(page: $page, search: $search) {
@@ -29902,7 +29912,6 @@ fragment StreamFields on Stream {
   streamId
   name
   description
-  streamKey
   playbackId
   record
   ingestMode
@@ -29919,15 +29928,8 @@ fragment StreamFields on Stream {
   playbackPolicy {
     ...PlaybackPolicyFields
   }
-  metrics {
-    status
-    isLive
-    currentViewers
-    startedAt
-    updatedAt
-  }
 }`) as unknown as TypedDocumentString<ListStreamsQuery, ListStreamsQueryVariables>;
-/** Fetch a single stream by its global ID. */
+/** Fetch a single stream by its global ID. An API token needs the streams:read or streams:write scope. Stream.streamKey needs streams:write. */
 export const GetStreamDocument = /*#__PURE__*/ new TypedDocumentString(`
     query GetStream($id: ID!) {
   stream(id: $id) {
@@ -29958,7 +29960,6 @@ fragment StreamFields on Stream {
   streamId
   name
   description
-  streamKey
   playbackId
   record
   ingestMode
@@ -29975,15 +29976,72 @@ fragment StreamFields on Stream {
   playbackPolicy {
     ...PlaybackPolicyFields
   }
-  metrics {
-    status
-    isLive
-    currentViewers
-    startedAt
-    updatedAt
-  }
 }`) as unknown as TypedDocumentString<GetStreamQuery, GetStreamQueryVariables>;
-/** List all stream keys for a specific stream. */
+/** Secret key for publisher-authenticated ingest; null for pull and managed sources. The key lets its holder publish to the stream, so an API token needs the streams:write scope: without it this field is null and the response carries a FORBIDDEN error at its path. */
+export const GetStreamKeyDocument = /*#__PURE__*/ new TypedDocumentString(`
+    query GetStreamKey($id: ID!) {
+  stream(id: $id) {
+    id
+    streamKey
+  }
+}
+    `) as unknown as TypedDocumentString<GetStreamKeyQuery, GetStreamKeyQueryVariables>;
+/** Real-time operational metrics from the data plane. Includes viewer counts, quality metrics, and throughput data. Lazily loaded from ClickHouse analytics, so an API token needs the analytics:read scope: without it this field is null and the response carries a FORBIDDEN error at its path. */
+export const GetStreamMetricsDocument = /*#__PURE__*/ new TypedDocumentString(`
+    query GetStreamMetrics($id: ID!) {
+  stream(id: $id) {
+    id
+    metrics {
+      ...StreamMetricsFields
+    }
+  }
+}
+    fragment StreamMetricsFields on StreamMetrics {
+  status
+  isLive
+  currentViewers
+  startedAt
+  updatedAt
+  bufferState
+  qualityTier
+  hasIssues
+  issuesDescription
+}`) as unknown as TypedDocumentString<GetStreamMetricsQuery, GetStreamMetricsQueryVariables>;
+/** Real-time operational metrics from the data plane. Includes viewer counts, quality metrics, and throughput data. Lazily loaded from ClickHouse analytics, so an API token needs the analytics:read scope: without it this field is null and the response carries a FORBIDDEN error at its path. */
+export const ListStreamMetricsDocument = /*#__PURE__*/ new TypedDocumentString(`
+    query ListStreamMetrics($page: ConnectionInput, $search: String) {
+  streamsConnection(page: $page, search: $search) {
+    nodes {
+      id
+      streamId
+      metrics {
+        ...StreamMetricsFields
+      }
+    }
+    pageInfo {
+      ...PageInfoFields
+    }
+    totalCount
+  }
+}
+    fragment PageInfoFields on PageInfo {
+  startCursor
+  endCursor
+  hasNextPage
+  hasPreviousPage
+}
+fragment StreamMetricsFields on StreamMetrics {
+  status
+  isLive
+  currentViewers
+  startedAt
+  updatedAt
+  bufferState
+  qualityTier
+  hasIssues
+  issuesDescription
+}`) as unknown as TypedDocumentString<ListStreamMetricsQuery, ListStreamMetricsQueryVariables>;
+/** List all stream keys for a specific stream. Stream keys are publishing credentials, so an API token needs the streams:write scope. */
 export const ListStreamKeysDocument = /*#__PURE__*/ new TypedDocumentString(`
     query ListStreamKeys($streamId: ID!, $page: ConnectionInput) {
   streamKeysConnection(streamId: $streamId, page: $page) {

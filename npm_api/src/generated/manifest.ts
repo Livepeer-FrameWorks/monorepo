@@ -9,10 +9,10 @@ export interface OperationInfo {
 }
 
 /** The SDK package version. */
-export const sdkVersion = "0.3.0";
+export const sdkVersion = "0.4.0";
 
 /** The SDK compatibility line; under 0.x each minor version is its own line. */
-export const sdkLine = "0.3";
+export const sdkLine = "0.4";
 
 /** The oldest FrameWorks release this SDK line supports. */
 export const minServerVersion = "v0.3.11";
@@ -43,7 +43,7 @@ export const operations = {
   CreatePayment: { kind: "mutation", since: "v0.3.11", hash: "sha256:4ca77c3e7a63edf104121d2a81b44381eebb6c0a98f666723b03ebfabd490ce1" },
   CreatePushTarget: { kind: "mutation", since: "v0.3.11", hash: "sha256:f87effcffe0cd20adead983989722279e33a09fab785a61919d6b0fd3c80fef7" },
   CreateSigningKey: { kind: "mutation", since: "v0.3.11", hash: "sha256:912a7b0a0c8667ede5852854ee4e2c1789d69e55f18010392ebf0d6a596a4a7d" },
-  CreateStream: { kind: "mutation", since: "v0.3.11", hash: "sha256:46b01a9efe965933bcc2e50d7054fe0943469902b73a20c40a41781f95165d0b" },
+  CreateStream: { kind: "mutation", since: "v0.3.11", hash: "sha256:cd8978b6d236f178189cfdfa1d974f5d45846990174f302875799d14c6ea9369" },
   CreateStreamKey: { kind: "mutation", since: "v0.3.11", hash: "sha256:b62393ffa7ca87d50c4b7eae9a71d562706df63a63056eefa51e9c660e181f10" },
   CreateStripeBillingPortal: { kind: "mutation", since: "v0.3.11", hash: "sha256:551b0a35aee7c60bdc1243fb87014aff79a123400e49eff7bff2a70c37f1a7d9" },
   CreateStripeCheckout: { kind: "mutation", since: "v0.3.11", hash: "sha256:1d853e3f29159c96f85692cb2561705dd54ef1ddf49dad90e1d5c6ece5bf9360" },
@@ -151,7 +151,7 @@ export const operations = {
   GetSkipperUnreadReportCount: { kind: "query", since: "v0.3.11", hash: "sha256:271d73b7871ed2a2c7ff14683fdb421ec51242de7ad0d2b4147e82656a223e5b" },
   GetStorageEventsConnection: { kind: "query", since: "v0.3.11", hash: "sha256:41d4d4bae64fdfd919e551058ed32e20383eb07dd74f0da6b3c579122b9a2dc3" },
   GetStorageUsageConnection: { kind: "query", since: "v0.3.11", hash: "sha256:6f87a6011a20b50638b7bd1070d0a7b01c92694810421e4f653b501aae41640f" },
-  GetStream: { kind: "query", since: "v0.3.11", hash: "sha256:4a93e19c65f1120f38dcfeee0a0cbcc723d0dbc0af4da13065f477d7c508dc9c" },
+  GetStream: { kind: "query", since: "v0.3.11", hash: "sha256:44212940a4f34dbaeb8c7383297c76f7cc1087a163ca08b9d7a539ec610f3fca" },
   GetStreamAnalyticsDailyConnection: { kind: "query", since: "v0.3.11", hash: "sha256:f7752f4f1c9bcea33fc933be1744242d5e53bd2c7caced9eaf30d29c111a81d8" },
   GetStreamAnalyticsSummariesConnection: { kind: "query", since: "v0.3.11", hash: "sha256:e23ed11d7dd374ee8207288e2dc36a7e98acfe9e1baa8b826819da92f7af635a" },
   GetStreamAnalyticsSummary: { kind: "query", since: "v0.3.11", hash: "sha256:7af02f0882a72683670838f13ff9bcc557c2ab79d6ba0d4ccd57d7560c80f4b9" },
@@ -160,6 +160,8 @@ export const operations = {
   GetStreamHealth5mConnection: { kind: "query", since: "v0.3.11", hash: "sha256:6282eb0817c626809cc0be10d967fbcfa3659b2b9a361938c8ab0e1d063c569b" },
   GetStreamHealthConnection: { kind: "query", since: "v0.3.11", hash: "sha256:8d366abb4370ffcce26ae4332036f501a920650ff22ee54bd56d710c62920e7f" },
   GetStreamHealthSummary: { kind: "query", since: "v0.3.11", hash: "sha256:2e279f99ecef59bcafb308a6a136a62baf7f4100ef7c65d04c757b3f2622de22" },
+  GetStreamKey: { kind: "query", since: "v0.3.11", hash: "sha256:a9dff1ca266f20349f4fd232dde3df65e5670136893fe1cb017ac1dd204781c7" },
+  GetStreamMetrics: { kind: "query", since: "v0.3.11", hash: "sha256:a8c2bc337ab6da85ccb4acce0080a1e92bf5684b39b97be136f0147a6544cc28" },
   GetStreamingConfig: { kind: "query", since: "v0.3.11", hash: "sha256:43024e48e99fc2462cfec9c31e811ed217d41690aebed17e4b5a88e1f82b9202" },
   GetTenant: { kind: "query", since: "v0.3.11", hash: "sha256:6ea42c3d8fac4b63c473b4646cf933fa3ab8c6731d8c11f4b704fe7a98673d6d" },
   GetTenantAnalyticsDailyConnection: { kind: "query", since: "v0.3.11", hash: "sha256:982213f4ded42828d7db48806772de0b8b5ecc2f472cd6adbbdb60e130b764ef" },
@@ -191,7 +193,8 @@ export const operations = {
   ListPushTargets: { kind: "query", since: "v0.3.11", hash: "sha256:e25c8d3787946a7f17ae2a5af6e053c65e7e1848933e59957f8fd36538072323" },
   ListSigningKeys: { kind: "query", since: "v0.3.11", hash: "sha256:d6700429c8adaa93d0ddf345092654897166803930790da0b2a55ae9d1b9ac08" },
   ListStreamKeys: { kind: "query", since: "v0.3.11", hash: "sha256:82e33b4037eaca5b717b8f9e206b430204f58259950cd3cbc28f59d7458fc39b" },
-  ListStreams: { kind: "query", since: "v0.3.11", hash: "sha256:e01069d9274536840005012f14dabd3914d2080a00ba2666f60ebf7191c6214d" },
+  ListStreamMetrics: { kind: "query", since: "v0.3.11", hash: "sha256:e678c75ace8ff0634390de03e6e735e230cd9ec13380dd614de4830572fcd7d6" },
+  ListStreams: { kind: "query", since: "v0.3.11", hash: "sha256:9220449a6d4caa2540d710db2484fe91e4dab6d6f4f400d871b3bae3d7f2d2a8" },
   ListUsageRecords: { kind: "query", since: "v0.3.11", hash: "sha256:bdf0f9328fd086914d85345b37dbe9739b253873d06f7bf6fd0c66ed918b8d21" },
   LiveConnectionEvents: { kind: "subscription", since: "v0.3.11", hash: "sha256:d5edd5744d3aa6cd0891963ae6def84dc491e6d5b0fb232737bff977137ad0c7" },
   LiveConversationUpdates: { kind: "subscription", since: "v0.3.11", hash: "sha256:9fb52ca3820e21e804be0079d894fc7c8aecc09e0c606b49457d9e29372153ec" },
@@ -207,7 +210,7 @@ export const operations = {
   MarkSkipperReportsRead: { kind: "mutation", since: "v0.3.11", hash: "sha256:1ab87df4ef1140c6f8931220abf209a7e62a1c7cac82061f11784d0c86a91fd0" },
   OpenMistAdminSession: { kind: "mutation", since: "v0.3.11", hash: "sha256:40e4f41a7ddc28ac94cc267973733d5e80bef1762c4b122da5dfddc515b7334d" },
   PromoteToPaid: { kind: "mutation", since: "v0.3.11", hash: "sha256:803db89d4789bd7ca4f5190f93c7cd47638321c2648cde3e0a56f0eeba8745a9" },
-  RefreshStreamKey: { kind: "mutation", since: "v0.3.11", hash: "sha256:78f4a432a52e4d0cfeab228bb04c7e9ac567b5ed5cb2166a242afa126dc4c653" },
+  RefreshStreamKey: { kind: "mutation", since: "v0.3.11", hash: "sha256:c8b7e86782b66998734665b420e484cd75649cf2fe4cfab36ab09606d507ac08" },
   RejectClusterSubscription: { kind: "mutation", since: "v0.3.11", hash: "sha256:cc8562f4362f80a1cbb03817d795353b5d89e8ea9c2cb1faba11e562f3911dc4" },
   ReplayWebhookDeliveries: { kind: "mutation", since: "v0.3.11", hash: "sha256:9ef80de17b3ef568351f63a9d74c9fc9b3dd1facdcb485ce756e8f765ee0aa91" },
   ReplayWebhookDelivery: { kind: "mutation", since: "v0.3.11", hash: "sha256:eb90cc9db859f987f5423433227dc7e1308aac07c0fe0d91fcb85035a5b8765e" },
@@ -242,7 +245,7 @@ export const operations = {
   UpdateMediaRetention: { kind: "mutation", since: "v0.3.11", hash: "sha256:f6916f705ef5e59e142b6a8b42f07da1de24bac13a47f912717dd5d221842358" },
   UpdatePushTarget: { kind: "mutation", since: "v0.3.11", hash: "sha256:e28b2d4b9e2df7a986ad07225472fc8df4c6a5b4ab6b20ffe7eafef8d220ae2a" },
   UpdateSkipperConversation: { kind: "mutation", since: "v0.3.11", hash: "sha256:e4195baa9846c2e73a3fc3bec4a9d647c39b42a0c6cb2d9c259362ce8280b31b" },
-  UpdateStream: { kind: "mutation", since: "v0.3.11", hash: "sha256:a907b73f834a692316b9313764d497d2d95e34f4bfdcf7e495d20dbfb1984143" },
+  UpdateStream: { kind: "mutation", since: "v0.3.11", hash: "sha256:38eb99bfd4ab65bb0bfdedec939d0171ec4da6d31c3b3bf90c57c28c82ae6cda" },
   UpdateTenant: { kind: "mutation", since: "v0.3.11", hash: "sha256:ec62f2b3aa6db6cd244b60a948196303879e456a2f16618b855ffc5fe9e7e06a" },
   UpdateWebhookEndpoint: { kind: "mutation", since: "v0.3.11", hash: "sha256:f410058ebbac14c70b2561d60bcabb509c633aab361fd14023a1a221b83c257e" },
   WalletLogin: { kind: "mutation", since: "v0.3.11", hash: "sha256:9199e44428062876642483689e73ee05ec54a729ac818ab20326429eced9460c" },

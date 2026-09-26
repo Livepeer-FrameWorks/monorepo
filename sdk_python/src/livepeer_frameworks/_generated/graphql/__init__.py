@@ -1594,6 +1594,12 @@ from .get_stream_health_summary import (
     GetStreamHealthSummaryAnalyticsHealth,
     GetStreamHealthSummaryAnalyticsHealthStreamHealthSummary,
 )
+from .get_stream_key import GetStreamKey, GetStreamKeyStream
+from .get_stream_metrics import (
+    GetStreamMetrics,
+    GetStreamMetricsStream,
+    GetStreamMetricsStreamMetrics,
+)
 from .get_streaming_config import GetStreamingConfig, GetStreamingConfigStreamingConfig
 from .get_tenant import GetTenant, GetTenantTenant
 from .get_tenant_analytics_daily_connection import (
@@ -1838,6 +1844,13 @@ from .list_stream_keys import (
     ListStreamKeysStreamKeysConnection,
     ListStreamKeysStreamKeysConnectionNodes,
     ListStreamKeysStreamKeysConnectionPageInfo,
+)
+from .list_stream_metrics import (
+    ListStreamMetrics,
+    ListStreamMetricsStreamsConnection,
+    ListStreamMetricsStreamsConnectionNodes,
+    ListStreamMetricsStreamsConnectionNodesMetrics,
+    ListStreamMetricsStreamsConnectionPageInfo,
 )
 from .list_streams import (
     ListStreams,
@@ -3048,6 +3061,11 @@ __all__ = [
     "GetStreamHealthSummaryAnalytics",
     "GetStreamHealthSummaryAnalyticsHealth",
     "GetStreamHealthSummaryAnalyticsHealthStreamHealthSummary",
+    "GetStreamKey",
+    "GetStreamKeyStream",
+    "GetStreamMetrics",
+    "GetStreamMetricsStream",
+    "GetStreamMetricsStreamMetrics",
     "GetStreamStream",
     "GetStreamingConfig",
     "GetStreamingConfigStreamingConfig",
@@ -3216,6 +3234,11 @@ __all__ = [
     "ListStreamKeysStreamKeysConnection",
     "ListStreamKeysStreamKeysConnectionNodes",
     "ListStreamKeysStreamKeysConnectionPageInfo",
+    "ListStreamMetrics",
+    "ListStreamMetricsStreamsConnection",
+    "ListStreamMetricsStreamsConnectionNodes",
+    "ListStreamMetricsStreamsConnectionNodesMetrics",
+    "ListStreamMetricsStreamsConnectionPageInfo",
     "ListStreams",
     "ListStreamsStreamsConnection",
     "ListStreamsStreamsConnectionNodes",
@@ -3680,7 +3703,6 @@ __all__ = [
     "StreamEventSource",
     "StreamEventType",
     "Stream",
-    "StreamMetrics",
     "StreamPlaybackPolicy",
     "StreamPullSource",
     "StreamHealth5mDefault",
@@ -3719,6 +3741,7 @@ __all__ = [
     "StreamInNodeDefaultSourceLocationClusters",
     "StreamInNodeDefaultThumbnailAssets",
     "StreamKey",
+    "StreamMetrics",
     "StreamRetentionOverridesDefault",
     "StreamStatus",
     "StreamSummarySortField",
