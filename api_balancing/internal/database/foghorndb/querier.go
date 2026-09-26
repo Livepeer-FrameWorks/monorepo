@@ -615,6 +615,10 @@ type Querier interface {
 	// retry budget lasts. Bound to the reporting node like every result. The job
 	// keeps processes_json, so the next attempt runs the persisted ladder.
 	RequeueRetryableProcessingJob(ctx context.Context, arg RequeueRetryableProcessingJobParams) (int32, error)
+	// A job assigned before the node registered that has not written since:
+	// assignment and every lease renewal move updated_at, so it never reached
+	// the node's current connection.
+	RequeueSilentNodeProcessingJobs(ctx context.Context, arg RequeueSilentNodeProcessingJobsParams) (int64, error)
 	RequeueStaleProcessingJobs(ctx context.Context, arg RequeueStaleProcessingJobsParams) (int64, error)
 	// Requeues the jobs assigned to a node before its registration that the node
 	// did not report as running: a restarted sidecar lost them.

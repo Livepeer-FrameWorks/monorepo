@@ -184,12 +184,22 @@ func (d *ProcessingDispatcher) SetGatewayResolver(r GatewayResolver) {
 
 func (d *ProcessingDispatcher) Start() {
 	registerProcessingDispatcherWake(d.wakeCh)
-	control.SetNodeJobInventoryHandler(func(nodeID string, reported []string, registeredAt time.Time) {
+	control.SetNodeJobInventoryHandler(func(nodeID string, reported []string, registeredAt time.Time, current func() bool) {
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
 		if err := ReconcileNodeJobInventory(ctx, d.db, nodeID, reported, registeredAt, d.maxRetries, d.logger); err != nil {
 			d.logger.WithError(err).WithField("node_id", nodeID).Warn("Failed to re-dispatch work a registering node did not report")
 		}
+		time.AfterFunc(nodeInventorySilenceWindow, func() {
+			if !current() {
+				return
+			}
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+			if err := RequeueSilentNodeJobs(ctx, d.db, nodeID, registeredAt, d.maxRetries, d.logger); err != nil {
+				d.logger.WithError(err).WithField("node_id", nodeID).Warn("Failed to re-dispatch work lost with a node's previous connection")
+			}
+		})
 	})
 	d.wg.Add(1)
 	go d.run()

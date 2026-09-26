@@ -90,3 +90,41 @@ func ReconcileNodeJobInventory(ctx context.Context, db *sql.DB, nodeID string, r
 	}
 	return nil
 }
+
+// nodeInventorySilenceWindow is how long after a registration a job assigned
+// before it may stay silent before it counts as lost. A job the node holds
+// renews its lease the moment it is claimed and at least once a minute after,
+// so any job that reached the new connection has written since registeredAt
+// well within this window.
+const nodeInventorySilenceWindow = 15 * time.Second
+
+// RequeueSilentNodeJobs covers the assignment margin ReconcileNodeJobInventory
+// leaves open: a job assigned just before the registration went out over the
+// previous connection or over the new one, and the registration's report
+// cannot tell which. After the silence window, one that has not written since
+// the registration was lost with the previous connection. The caller runs this
+// only while the registering connection is still live, so a job that cannot
+// report because the node dropped again is not taken for lost.
+func RequeueSilentNodeJobs(ctx context.Context, db *sql.DB, nodeID string, registeredAt time.Time, maxRetries int, logger logging.Logger) error {
+	if db == nil || nodeID == "" {
+		return nil
+	}
+	requeued, err := foghorndb.New(db).RequeueSilentNodeProcessingJobs(ctx, foghorndb.RequeueSilentNodeProcessingJobsParams{
+		NodeID:       sql.NullString{String: nodeID, Valid: true},
+		RegisteredAt: sql.NullTime{Time: registeredAt, Valid: true},
+		MaxRetries:   sql.NullInt32{Int32: int32(maxRetries), Valid: true},
+	})
+	if err != nil {
+		return fmt.Errorf("requeue silent processing jobs: %w", err)
+	}
+	if requeued > 0 {
+		if logger != nil {
+			logger.WithFields(logging.Fields{
+				"node_id":                  nodeID,
+				"requeued_processing_rows": requeued,
+			}).Info("Re-dispatching work assigned before a node's registration that never reached it")
+		}
+		NotifyProcessingJobQueued()
+	}
+	return nil
+}

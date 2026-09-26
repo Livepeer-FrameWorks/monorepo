@@ -466,6 +466,44 @@ func (q *Queries) RequeueRetryableProcessingJob(ctx context.Context, arg Requeue
 	return requeued, err
 }
 
+const requeueSilentNodeProcessingJobs = `-- name: RequeueSilentNodeProcessingJobs :execrows
+WITH requeued AS (
+    UPDATE foghorn.processing_jobs AS job
+    SET status = 'queued', processing_node_id = NULL,
+        retry_count = retry_count + 1, updated_at = NOW(),
+        progress_last_ms = 0, progress_advanced_at = NULL
+    WHERE job.processing_node_id = $1
+      AND job.status IN ('dispatched', 'processing')
+      AND job.updated_at < $2
+      AND job.retry_count < $3
+    RETURNING artifact_hash, tenant_id
+)
+UPDATE foghorn.artifacts AS a
+SET status = 'queued', updated_at = NOW()
+FROM requeued AS r
+WHERE a.artifact_hash = r.artifact_hash
+  AND a.tenant_id = r.tenant_id
+  AND a.artifact_type IN ('clip', 'vod')
+  AND a.status NOT IN ('ready', 'failed', 'deleted', 'expired', 'aborted')
+`
+
+type RequeueSilentNodeProcessingJobsParams struct {
+	NodeID       sql.NullString `db:"node_id" json:"node_id"`
+	RegisteredAt sql.NullTime   `db:"registered_at" json:"registered_at"`
+	MaxRetries   sql.NullInt32  `db:"max_retries" json:"max_retries"`
+}
+
+// A job assigned before the node registered that has not written since:
+// assignment and every lease renewal move updated_at, so it never reached
+// the node's current connection.
+func (q *Queries) RequeueSilentNodeProcessingJobs(ctx context.Context, arg RequeueSilentNodeProcessingJobsParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, requeueSilentNodeProcessingJobs, arg.NodeID, arg.RegisteredAt, arg.MaxRetries)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
 const requeueStaleProcessingJobs = `-- name: RequeueStaleProcessingJobs :execrows
 WITH requeued AS (
     UPDATE foghorn.processing_jobs AS job
