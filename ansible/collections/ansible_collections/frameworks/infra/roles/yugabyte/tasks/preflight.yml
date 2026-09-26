@@ -12,3 +12,27 @@
   ansible.builtin.fail:
     msg: "yugabyte role: unsupported os_family '{{ ansible_facts.os_family }}' — add an entry to yugabyte_timesync_by_family"
   when: yugabyte_timesync == {}
+
+# YugabyteDB's bundled pgvector is built for x86-64-v3: even its generic
+# distance function uses AVX2/FMA. On a CPU without them a vector query
+# kills its backend with SIGILL and the postmaster resets every connection
+# on the tserver. Virtual machines must expose the host CPU (or x86-64-v3).
+- name: Read CPU feature flags
+  ansible.builtin.command: grep -m1 -E '^flags' /proc/cpuinfo
+  register: yugabyte_cpu_flags
+  changed_when: false
+  check_mode: false
+  when: ansible_facts.architecture == "x86_64"
+
+- name: Fail if the CPU lacks the instructions pgvector requires
+  ansible.builtin.fail:
+    msg: >-
+      yugabyte role: {{ inventory_hostname }} CPU lacks {{ yugabyte_cpu_missing | join(', ') }}.
+      YugabyteDB's pgvector requires x86-64-v3 (AVX2, FMA, BMI2, MOVBE); vector search would
+      crash the database backend with SIGILL. Give the VM the host CPU model or x86-64-v3.
+  vars:
+    yugabyte_cpu_have: "{{ (yugabyte_cpu_flags.stdout | default('')).split(':')[-1].split() }}"
+    yugabyte_cpu_missing: "{{ ['avx2', 'fma', 'bmi2', 'movbe'] | difference(yugabyte_cpu_have) }}"
+  when:
+    - ansible_facts.architecture == "x86_64"
+    - yugabyte_cpu_missing | length > 0
