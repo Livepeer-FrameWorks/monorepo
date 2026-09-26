@@ -19,8 +19,9 @@ type errorsFixture struct {
 			Field   string   `json:"field"`
 			Success []string `json:"success"`
 		} `json:"expectResult"`
-		Error  map[string]any  `json:"error"`
-		Result json.RawMessage `json:"result"`
+		Error         map[string]any      `json:"error"`
+		Result        json.RawMessage     `json:"result"`
+		PartialErrors []GraphQLErrorEntry `json:"partialErrors"`
 	} `json:"cases"`
 }
 
@@ -42,8 +43,10 @@ func TestErrorShapes(t *testing.T) {
 				t.Fatal(err)
 			}
 			var data map[string]map[string]any
-			err = c.MakeRequest(context.Background(), &graphql.Request{Query: "query ErrorProbe { a }", OpName: "ErrorProbe"}, &graphql.Response{Data: &data})
-			var result any
+			var partial []PartialErrors
+			ctx := WithPartialErrors(context.Background(), func(p PartialErrors) { partial = append(partial, p) })
+			err = c.MakeRequest(ctx, &graphql.Request{Query: "query ErrorProbe { a }", OpName: "ErrorProbe"}, &graphql.Response{Data: &data})
+			var result any = data
 			if err == nil && tc.ExpectResult != nil {
 				member := data[tc.ExpectResult.Field]
 				var v any = fixtureUnionMember(member)
@@ -59,10 +62,25 @@ func TestErrorShapes(t *testing.T) {
 			}
 			if tc.Error != nil {
 				checkError(t, err, tc.Error)
+				if len(partial) != 0 {
+					t.Errorf("failed call reported partial errors %+v", partial)
+				}
 				return
 			}
 			if err != nil {
 				t.Fatalf("unexpected error: %v", err)
+			}
+			var gotPartial []GraphQLErrorEntry
+			for _, p := range partial {
+				if p.Operation != "ErrorProbe" {
+					t.Errorf("partial errors operation = %q, want ErrorProbe", p.Operation)
+				}
+				gotPartial = append(gotPartial, p.Errors...)
+			}
+			wantPartial, _ := json.Marshal(tc.PartialErrors)
+			gotPartialJSON, _ := json.Marshal(gotPartial)
+			if string(wantPartial) != string(gotPartialJSON) {
+				t.Errorf("partial errors = %s, want %s", gotPartialJSON, wantPartial)
 			}
 			var want any
 			_ = json.Unmarshal(tc.Result, &want)
@@ -77,7 +95,7 @@ func TestErrorShapes(t *testing.T) {
 }
 
 func TestSchemaMismatchIsAlsoAGraphQLError(t *testing.T) {
-	_, err, _ := classify(422, "", []byte(`{"data":null,"errors":[{"message":"x","extensions":{"code":"GRAPHQL_VALIDATION_FAILED"}}]}`))
+	_, _, err, _ := classify(422, "", []byte(`{"data":null,"errors":[{"message":"x","extensions":{"code":"GRAPHQL_VALIDATION_FAILED"}}]}`))
 	var gqlErr *GraphQLError
 	if !errors.As(err, &gqlErr) {
 		t.Fatalf("errors.As(*GraphQLError) failed for %T", err)
@@ -100,5 +118,38 @@ func TestExpectResultOnGeneratedUnion(t *testing.T) {
 	stream, err := ExpectResult[*CreateStreamCreateStream](resp.CreateStream)
 	if err != nil || stream.GetId() != "s1" {
 		t.Fatalf("stream = %v, %v", stream, err)
+	}
+}
+
+// A mutation that committed must not look failed because a nullable field of
+// its result could not be resolved for the caller.
+func TestCommittedMutationWithFieldErrorReturnsItsData(t *testing.T) {
+	body := json.RawMessage(`{"data":{"createStream":{"__typename":"Stream","id":"s1","streamId":"s1","name":"n","playbackId":"p","record":false,"ingestMode":"PUSH","createdAt":"2026-09-19T14:03:27Z","updatedAt":"2026-09-19T14:03:27Z","monitoring":"INHERIT","metrics":null}},` +
+		`"errors":[{"message":"API token requires analytics:read scope","path":["createStream","metrics"],"extensions":{"code":"FORBIDDEN"}}]}`)
+	transport := newScripted(map[string][]fixtureResponse{"*": {{Status: 200, Body: body}}})
+	var clientSeen []PartialErrors
+	c, err := NewClient(ClientOptions{
+		URL:                "https://partial.test/graphql",
+		HTTPClient:         &http.Client{Transport: transport},
+		DisableServerCheck: true,
+		OnPartialErrors:    func(_ context.Context, p PartialErrors) { clientSeen = append(clientSeen, p) },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var callSeen []PartialErrors
+	ctx := WithPartialErrors(context.Background(), func(p PartialErrors) { callSeen = append(callSeen, p) })
+	resp, err := CreateStream(ctx, c, CreateStreamInput{Name: "n"})
+	if err != nil {
+		t.Fatalf("CreateStream returned %v, want its data", err)
+	}
+	stream, err := ExpectResult[*CreateStreamCreateStream](resp.CreateStream)
+	if err != nil || stream.GetId() != "s1" {
+		t.Fatalf("stream = %v, %v", stream, err)
+	}
+	for name, seen := range map[string][]PartialErrors{"WithPartialErrors": callSeen, "OnPartialErrors": clientSeen} {
+		if len(seen) != 1 || seen[0].Operation != "CreateStream" || len(seen[0].Errors) != 1 || seen[0].Errors[0].Extensions["code"] != "FORBIDDEN" {
+			t.Errorf("%s saw %+v, want one FORBIDDEN error of CreateStream", name, seen)
+		}
 	}
 }

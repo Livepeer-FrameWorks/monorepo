@@ -16,6 +16,36 @@ query GetStream($id: ID!) {
   }
 }
 
+# Live state comes from analytics: an API token needs analytics:read.
+# @target query.stream.metrics
+query GetStreamMetrics($id: ID!) {
+  stream(id: $id) {
+    id
+    metrics {
+      ...StreamMetricsFields
+    }
+  }
+}
+
+# Live state of a page of streams, for the same page and search as ListStreams.
+# Live state comes from analytics: an API token needs analytics:read.
+# @target query.streamsConnection.nodes.metrics
+query ListStreamMetrics($page: ConnectionInput, $search: String) {
+  streamsConnection(page: $page, search: $search) {
+    nodes {
+      id
+      streamId
+      metrics {
+        ...StreamMetricsFields
+      }
+    }
+    pageInfo {
+      ...PageInfoFields
+    }
+    totalCount
+  }
+}
+
 query ListStreamKeys($streamId: ID!, $page: ConnectionInput) {
   streamKeysConnection(streamId: $streamId, page: $page) {
     nodes {

@@ -71,6 +71,29 @@ err := client.MakeRequest(ctx, &graphql.Request{
 `SubscriptionClient`. Give custom operations names of your own: the server
 version check looks up an SDK operation's release by its name.
 
+## Scopes and partial errors
+
+An API token carries scopes. The stream functions (`ListStreams`, `GetStream`,
+`CreateStream`, `UpdateStream`, `RefreshStreamKey`) select only stream fields,
+so `streams:read` and `streams:write` cover them. Live state
+(`Stream.metrics`) comes from analytics and needs `analytics:read`: read it
+with `GetStreamMetrics` or `ListStreamMetrics`.
+
+When a field below a returned root field fails (for example `metrics`
+selected with a token that lacks `analytics:read`), the server sets it to
+null and reports an error at its path. The call returns the data and a nil
+error, and hands those errors to `ClientOptions.OnPartialErrors` or to a
+handler set for one call:
+
+```go
+ctx = frameworks.WithPartialErrors(ctx, func(p frameworks.PartialErrors) {
+	log.Printf("%s: %d field errors", p.Operation, len(p.Errors))
+})
+```
+
+Errors without a path, errors that null a root field, and `UNAUTHORIZED`,
+`RATE_LIMITED`, and document errors return a typed error.
+
 ## Versions
 
 The TypeScript, Go, and Python SDKs share one version. Before 1.0 each minor

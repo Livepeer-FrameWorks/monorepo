@@ -4105,7 +4105,9 @@ type Stream implements Node {
   """
   Real-time operational metrics from the data plane.
   Includes viewer counts, quality metrics, and throughput data.
-  Lazily loaded from ClickHouse analytics.
+  Lazily loaded from ClickHouse analytics, so an API token needs the
+  analytics:read scope: without it this field is null and the response
+  carries a FORBIDDEN error at its path.
   """
   metrics: StreamMetrics
 

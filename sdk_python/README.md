@@ -61,6 +61,26 @@ methods return `datetime`). For other selections, send your own document through
 (subscriptions), which use the SDK's authentication, retries, and typed errors. Give it an
 operation name of your own: the server version check looks up an SDK operation's release by name.
 
+## Scopes and partial errors
+
+An API token carries scopes. The stream methods (`list_streams`, `get_stream`, `create_stream`,
+`update_stream`, `refresh_stream_key`) select only stream fields, so `streams:read` and
+`streams:write` cover them. Live state (`Stream.metrics`) comes from analytics and needs
+`analytics:read`: read it with `get_stream_metrics` or `list_stream_metrics`.
+
+When a field below a returned root field fails (for example `metrics` selected with a token that
+lacks `analytics:read`), the server sets it to null and reports an error at its path. The call
+returns the data and hands those errors, as a `PartialErrors`, to `on_partial_errors=`, set on the
+client or per call:
+
+```python
+warnings: list[PartialErrors] = []
+fw.list_streams(on_partial_errors=warnings.append)
+```
+
+Errors without a path, errors that null a root field, and `UNAUTHORIZED`, `RATE_LIMITED`, and
+document errors raise a typed error.
+
 ## Versions
 
 The TypeScript, Go, and Python SDKs share one version. Until FrameWorks 1.0 the SDKs stay at 0.x,

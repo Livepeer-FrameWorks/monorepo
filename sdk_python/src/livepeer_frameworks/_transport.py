@@ -7,6 +7,7 @@ execute, so per-call options travel as keywords on the generated methods:
 
     client.delete_stream(id="...", idempotency_key="delete-7f3a2c")
     client.resolve_viewer_endpoint(content_id="...", playback_token=jwt)
+    client.get_stream(id="...", on_partial_errors=warnings.append)
 """
 
 from __future__ import annotations
@@ -40,6 +41,7 @@ from .errors import (
     GraphQLError,
     HTTPError,
     NetworkError,
+    PartialErrors,
     PaymentRequiredError,
     ProtocolError,
     RateLimitError,
@@ -96,6 +98,8 @@ class _Outcome:
     error: FrameWorksError | None = None
     retryable: bool = False
     unsent: bool = False
+    #: The field errors of a response whose data survived them (_field_errors_only).
+    partial_errors: list[Mapping[str, Any]] | None = None
 
 
 def graphql_error(
@@ -161,10 +165,39 @@ def _http_error(
     return HTTPError(message, **details)
 
 
+#: extensions.code values that fail a call wherever they appear, even below a
+#: root field that came back.
+_FATAL_CODES = frozenset({"UNAUTHORIZED", "RATE_LIMITED", "GRAPHQL_VALIDATION_FAILED", "GRAPHQL_PARSE_FAILED"})
+
+
+def _field_errors_only(data: Any, errors: list[Mapping[str, Any]]) -> bool:
+    """Whether every GraphQL error is a field error that left data usable: it
+    has a path below a root field whose value is not None, and it is not an
+    authentication, rate-limit, or document error. GraphQL sets a failed
+    field to null and carries the null up to the nearest nullable ancestor, so
+    data that passes still matches the operation's types. An error without a
+    path, or one that nulled a root field, fails the call."""
+    if not isinstance(data, dict):
+        return False
+    for entry in errors:
+        extensions = entry.get("extensions")
+        code = extensions.get("code") if isinstance(extensions, Mapping) else None
+        if code in _FATAL_CODES:
+            return False
+        path = entry.get("path")
+        if not isinstance(path, list) or len(path) < 2 or not isinstance(path[0], str):
+            return False
+        if data.get(path[0]) is None:
+            return False
+    return True
+
+
 def classify(status: int, retry_after_header: str | None, text: str) -> _Outcome:
     """Turns one HTTP response into data or a typed error. A JSON body with
     an errors array is a GraphQL response at any status; otherwise a non-2xx
-    status is an HTTP error."""
+    status is an HTTP error. A 2xx response whose errors are all field errors
+    that left its data usable (_field_errors_only) returns the data with those
+    errors as partial_errors."""
     retry_after = parse_retry_after(retry_after_header)
     retryable = status in RETRYABLE_STATUSES
     is_2xx = 200 <= status < 300
@@ -177,6 +210,9 @@ def classify(status: int, retry_after_header: str | None, text: str) -> _Outcome
 
     if obj is not None and isinstance(obj.get("errors"), list) and obj["errors"]:
         errors = [e for e in obj["errors"] if isinstance(e, Mapping)]
+        data = obj.get("data")
+        if is_2xx and len(errors) == len(obj["errors"]) and _field_errors_only(data, errors):
+            return _Outcome(data=data, partial_errors=errors)
         return _Outcome(
             error=graphql_error(errors, obj.get("data"), None if is_2xx else status, retry_after, body),
             retryable=retryable,
@@ -207,6 +243,10 @@ def _json_variables(variables: Mapping[str, Any] | None) -> dict[str, Any]:
     return result
 
 
+#: Receives the field errors of a call that still returned its data.
+PartialErrorsHandler = Callable[[PartialErrors], None]
+
+
 @dataclass(frozen=True)
 class _Call:
     kind: OperationKind
@@ -214,6 +254,7 @@ class _Call:
     body: dict[str, Any]
     headers: dict[str, str]
     idempotency_key: str | None
+    on_partial_errors: PartialErrorsHandler | None = None
 
 
 class _TransportCore:
@@ -226,6 +267,7 @@ class _TransportCore:
         headers: Mapping[str, str] | None,
         retry: RetryPolicy | None,
         check_server: bool,
+        on_partial_errors: PartialErrorsHandler | None,
         _operation_since: Mapping[str, str] | None,
     ) -> None:
         if not url:
@@ -234,6 +276,7 @@ class _TransportCore:
         self.headers = dict(headers or {})
         self.retry = retry or DEFAULT_RETRY_POLICY
         self.check_server = check_server
+        self.on_partial_errors = on_partial_errors
         self._operation_since = dict(_operation_since or {})
         # The clock the serverInfo cache ages its answers against; tests
         # replace it.
@@ -255,6 +298,7 @@ class _TransportCore:
         idempotency_key: str | None,
         playback_token: str | None,
         headers: Mapping[str, str] | None,
+        on_partial_errors: PartialErrorsHandler | None = None,
     ) -> _Call:
         kind, name = parse_operation(query, operation_name)
         body: dict[str, Any] = {"query": query, "variables": _json_variables(variables)}
@@ -270,7 +314,18 @@ class _TransportCore:
             call_headers["x-frameworks-playback-jwt"] = playback_token
         if idempotency_key:
             call_headers["idempotency-key"] = idempotency_key
-        return _Call(kind, name, body, call_headers, idempotency_key)
+        return _Call(kind, name, body, call_headers, idempotency_key, on_partial_errors)
+
+    def _report_partial(self, call: _Call, outcome: _Outcome) -> None:
+        """Hands the field errors of a successful call to the call's handler
+        and the client's."""
+        if not outcome.partial_errors:
+            return
+        partial = PartialErrors(call.name, list(outcome.partial_errors))
+        if call.on_partial_errors is not None:
+            call.on_partial_errors(partial)
+        if self.on_partial_errors is not None:
+            self.on_partial_errors(partial)
 
     def _check(self, status: ServerStatus, name: str | None) -> None:
         check_minimum(status, MIN_SERVER_VERSION)
@@ -349,7 +404,9 @@ class SyncTransport(_TransportCore):
     token is a bearer token or a function returning the current one; it is
     read for every attempt. The client never reads the environment.
     check_server=False skips the serverInfo gate, so the client never raises
-    ServerTooOldError or UnsupportedOperationError.
+    ServerTooOldError or UnsupportedOperationError. on_partial_errors receives
+    the field errors of every call that still returned its data (see
+    PartialErrors).
     """
 
     def __init__(
@@ -361,6 +418,7 @@ class SyncTransport(_TransportCore):
         headers: Mapping[str, str] | None = None,
         retry: RetryPolicy | None = None,
         check_server: bool = True,
+        on_partial_errors: PartialErrorsHandler | None = None,
         _sleep: Callable[[float], None] | None = None,
         _operation_since: Mapping[str, str] | None = None,
     ) -> None:
@@ -369,6 +427,7 @@ class SyncTransport(_TransportCore):
             headers=headers,
             retry=retry,
             check_server=check_server,
+            on_partial_errors=on_partial_errors,
             _operation_since=_operation_since,
         )
         self.token = token
@@ -405,6 +464,7 @@ class SyncTransport(_TransportCore):
         while True:
             outcome = self._attempt(call)
             if outcome.data is not None:
+                self._report_partial(call, outcome)
                 return outcome.data
             delay = self._next_delay(outcome, call, attempt)
             assert outcome.error is not None
@@ -482,13 +542,18 @@ class SyncTransport(_TransportCore):
         idempotency_key: str | None = None,
         playback_token: str | None = None,
         headers: Mapping[str, str] | None = None,
+        on_partial_errors: PartialErrorsHandler | None = None,
         **_: Any,
     ) -> GraphQLResponse:
         """Runs one query or mutation. idempotency_key is sent as
         Idempotency-Key (paid mutations settled with x402 need one); a
         mutation is retried only when the request never reached the server;
-        playback_token is sent as X-Frameworks-Playback-JWT."""
-        call = self._call(query, operation_name, variables, idempotency_key, playback_token, headers)
+        playback_token is sent as X-Frameworks-Playback-JWT. When the call
+        returns its data with field errors (see PartialErrors), they go to
+        on_partial_errors and then to the client's on_partial_errors."""
+        call = self._call(
+            query, operation_name, variables, idempotency_key, playback_token, headers, on_partial_errors
+        )
         if call.kind == "subscription":
             raise TypeError("subscriptions run over WebSocket; use AsyncFrameWorksClient")
         if self.check_server and call.name != "ServerInfo":
@@ -524,6 +589,7 @@ class AsyncTransport(_TransportCore):
         headers: Mapping[str, str] | None = None,
         retry: RetryPolicy | None = None,
         check_server: bool = True,
+        on_partial_errors: PartialErrorsHandler | None = None,
         ws_url: str | None = None,
         max_reconnects: int = 5,
         _sleep: Callable[[float], Awaitable[None]] | None = None,
@@ -534,6 +600,7 @@ class AsyncTransport(_TransportCore):
             headers=headers,
             retry=retry,
             check_server=check_server,
+            on_partial_errors=on_partial_errors,
             _operation_since=_operation_since,
         )
         self.token = token
@@ -574,6 +641,7 @@ class AsyncTransport(_TransportCore):
         while True:
             outcome = await self._attempt(call)
             if outcome.data is not None:
+                self._report_partial(call, outcome)
                 return outcome.data
             delay = self._next_delay(outcome, call, attempt)
             assert outcome.error is not None
@@ -647,10 +715,13 @@ class AsyncTransport(_TransportCore):
         idempotency_key: str | None = None,
         playback_token: str | None = None,
         headers: Mapping[str, str] | None = None,
+        on_partial_errors: PartialErrorsHandler | None = None,
         **_: Any,
     ) -> GraphQLResponse:
         """Runs one query or mutation; see SyncTransport.execute."""
-        call = self._call(query, operation_name, variables, idempotency_key, playback_token, headers)
+        call = self._call(
+            query, operation_name, variables, idempotency_key, playback_token, headers, on_partial_errors
+        )
         if call.kind == "subscription":
             raise TypeError("subscriptions use the generated async subscription methods")
         if self.check_server and call.name != "ServerInfo":

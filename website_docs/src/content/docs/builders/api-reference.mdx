@@ -40,6 +40,25 @@ Authorization: Bearer YOUR_JWT_OR_API_TOKEN
 
 Get your API token from **Developer → Credentials** in the dashboard.
 
+### Token scopes
+
+An API token carries the scopes you grant it when you create it, in `resource:action` form. A
+dashboard session is not scoped. The scope a request needs follows from the fields it selects, not
+only from its root field:
+
+| Fields                                                                                                                    | Scope            |
+| ------------------------------------------------------------------------------------------------------------------------- | ---------------- |
+| Stream reads: `streamsConnection`, `stream`, stream keys, push targets                                                    | `streams:read`   |
+| Stream changes: `createStream`, `updateStream`, `deleteStream`, `refreshStreamKey`, stream keys, push targets, VOD upload | `streams:write`  |
+| Live state and analytics: `Stream.metrics`, everything under `analytics`                                                  | `analytics:read` |
+
+`Stream.metrics` resolves from the analytics pipeline, so selecting it inside a stream query or
+mutation needs `analytics:read` as well. Without it the rest of the stream resolves, `metrics` is
+`null`, and the response carries a `FORBIDDEN` error at `["stream", "metrics"]` (see
+[Partial results](#partial-results)). The SDKs' stream operations (`ListStreams`, `GetStream`,
+`CreateStream`, `UpdateStream`, `RefreshStreamKey`) do not select `metrics`; `GetStreamMetrics` and
+`ListStreamMetrics` read live state and are the operations that need `analytics:read`.
+
 The dashboard may authenticate via httpOnly cookies.  
 Public allowlist (no auth required): the queries `serverInfo`, `resolveViewerEndpoint`, `resolveIngestEndpoint`, `networkStatus`, and the orchestrator queries, plus the mutations `bootstrapEdge` and `walletLogin`, which each carry their own per-call credential in the input.
 
@@ -85,10 +104,6 @@ query {
         name
         playbackId
         createdAt
-        metrics {
-          status
-          currentViewers
-        }
       }
     }
   }
@@ -137,10 +152,24 @@ query {
     streamKey
     playbackId
     record
+  }
+}
+```
+
+### Get a Stream's Live State
+
+Live state comes from analytics, so an API token needs `analytics:read` for it (the SDKs'
+`GetStreamMetrics`; `ListStreamMetrics` reads a page of streams):
+
+```graphql
+query {
+  stream(id: "stream-global-id") {
+    id
     metrics {
       status
-      currentViewers
       isLive
+      currentViewers
+      startedAt
       updatedAt
     }
   }
@@ -299,6 +328,30 @@ missing required input.
 
 The `/play` endpoint reports the same states as HTTP `503` with code `STREAM_STARTING` and a
 `Retry-After` header, and HTTP `404` with code `STREAM_OFFLINE`.
+
+### Partial results
+
+GraphQL resolves each field on its own. When a nullable field fails, the server sets it to `null`,
+adds an error whose `path` names it, and returns the rest of the data. A mutation that returns such
+a response has run:
+
+```json
+{
+  "data": { "createStream": { "__typename": "Stream", "id": "…", "metrics": null } },
+  "errors": [
+    {
+      "message": "insufficient permissions: requires analytics:read scope",
+      "path": ["createStream", "metrics"],
+      "extensions": { "code": "FORBIDDEN" }
+    }
+  ]
+}
+```
+
+The SDKs return such a response as success when every error has a path below a root field that
+came back and none is `UNAUTHORIZED`, `RATE_LIMITED`, or a document error. They hand the errors to
+a partial-errors handler (see [SDKs](/builders/sdks#runtime)). An error without a path, or one
+whose root field is `null`, fails the call.
 
 **As a result value**, most mutations return a union of the result and typed errors. Select
 `__typename` and each error member; a `ValidationError` names the `field`, a `NotFoundError` the

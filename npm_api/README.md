@@ -73,6 +73,30 @@ with `__typename` (always selected there, so the result can be narrowed) and onl
 `__name` names the operation, and may not reuse an SDK operation name. The entry carries the schema's type map (about 20 kB gzipped), which
 the main entry does not include.
 
+## Scopes and partial errors
+
+An API token carries scopes. The stream documents (`ListStreams`, `GetStream`, `CreateStream`, `UpdateStream`,
+`RefreshStreamKey`) select only stream fields, so `streams:read` and `streams:write` cover them. Live state
+(`Stream.metrics`) comes from analytics and needs `analytics:read`: read it with `GetStreamMetricsDocument` or
+`ListStreamMetricsDocument`.
+
+When a field below a returned root field fails (for example `metrics` selected with a token that lacks
+`analytics:read`), the server sets it to null and reports an error at its path. The call resolves with the data and
+hands those errors to `onPartialErrors`, set on the client or per request:
+
+```ts
+const data = await client.request(
+  ListStreamsDocument,
+  {},
+  {
+    onPartialErrors: ({ operationName, errors }) => console.warn(operationName, errors),
+  }
+);
+```
+
+Errors without a path, errors that null a root field, and `UNAUTHORIZED`, `RATE_LIMITED`, and document errors reject
+the call with a typed error.
+
 ## Versions
 
 The SDK is 0.x until the platform reaches 1.0. Each minor line (0.1, 0.2, ...) supports every FrameWorks release from

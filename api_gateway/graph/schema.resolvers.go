@@ -4962,6 +4962,12 @@ func (r *streamResolver) Metrics(ctx context.Context, obj *commodorepb.Stream) (
 	if tenantID == "" {
 		return nil, nil
 	}
+	// Periscope refuses API tokens without analytics:read; checking here names
+	// the missing scope and skips the call. The field is nullable, so the
+	// rest of the stream still resolves.
+	if err := middleware.RequirePermission(ctx, "analytics:read"); err != nil {
+		return nil, err
+	}
 
 	// Use loader for request-scoped caching
 	loaders := loaders.FromContext(ctx)

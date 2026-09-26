@@ -17,7 +17,9 @@ class FrameWorksClient(GraphQLClient):
     token is a bearer token or a function returning the current one.
     Per-call keywords on every method: idempotency_key (sent as
     Idempotency-Key; it does not permit replay of a possibly executed mutation),
-    playback_token (sent as X-Frameworks-Playback-JWT), and headers.
+    playback_token (sent as X-Frameworks-Playback-JWT), headers, and
+    on_partial_errors (receives the field errors of a call that still
+    returned its data, see PartialErrors; the client takes a default one).
     server_status() returns the server's version as the serverInfo gate saw it.
     url defaults to DEFAULT_GRAPHQL_URL; pass it explicitly for a self-hosted
     or staging Bridge.

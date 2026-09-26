@@ -99,6 +99,20 @@ export interface GraphQLErrorEntry {
   extensions?: Record<string, unknown>;
 }
 
+/**
+ * The GraphQL errors of a call that still returned its data: each failed a
+ * field below a root field that came back, which the server set to null (for
+ * example Stream.metrics for an API token without analytics:read). The call
+ * resolves with its data; these reach onPartialErrors of the request or the
+ * client. Errors without a path, errors that null a root field, and
+ * UNAUTHORIZED, RATE_LIMITED, and document errors reject the call instead.
+ */
+export interface PartialErrors {
+  /** The operation name, or null for an anonymous document. */
+  operationName: string | null;
+  errors: ReadonlyArray<GraphQLErrorEntry>;
+}
+
 /** The server answered with GraphQL errors. errors holds every entry; data holds any partial result. */
 export class GraphQLError extends FrameWorksError {
   readonly errors: ReadonlyArray<GraphQLErrorEntry>;

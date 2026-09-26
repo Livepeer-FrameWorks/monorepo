@@ -50,6 +50,8 @@ export interface SendOptions {
   headers?: Readonly<Record<string, string>>;
   idempotencyKey?: string;
   signal?: AbortSignal;
+  /** Receives the field errors of a response whose data survived them (see PartialErrors). */
+  onPartialErrors?: (errors: ReadonlyArray<GraphQLErrorEntry>) => void;
 }
 
 interface GraphQLResponseBody {
@@ -63,7 +65,7 @@ interface GraphQLResponseBody {
  * again too.
  */
 type Outcome =
-  | { ok: true; data: unknown }
+  | { ok: true; data: unknown; partialErrors?: ReadonlyArray<GraphQLErrorEntry> }
   | { ok: false; error: FrameWorksError; retryable: boolean; unsent: boolean };
 
 // Node's fetch reports these codes on the error's cause when the connection
@@ -104,6 +106,9 @@ export async function send(config: TransportConfig, options: SendOptions): Promi
   for (let attempt = 1; ; attempt++) {
     const outcome = await attemptOnce(config, options);
     if (outcome.ok) {
+      if (outcome.partialErrors && outcome.partialErrors.length > 0) {
+        options.onPartialErrors?.(outcome.partialErrors);
+      }
       return outcome.data;
     }
     const mayRetry =
@@ -186,7 +191,49 @@ function describe(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
 }
 
-/** Turns one HTTP response into data or a typed error. */
+/**
+ * extensions.code values that fail a call wherever they appear, even below a
+ * root field that came back.
+ */
+const fatalCodes = new Set([
+  "UNAUTHORIZED",
+  "RATE_LIMITED",
+  "GRAPHQL_VALIDATION_FAILED",
+  "GRAPHQL_PARSE_FAILED",
+]);
+
+/**
+ * Whether every GraphQL error is a field error that left the response's data
+ * usable: it has a path below a root field whose value is not null, and it is
+ * not an authentication, rate-limit, or document error. GraphQL sets a failed
+ * field to null and carries the null up to the nearest nullable ancestor, so
+ * data that passes still matches the operation's types. An error without a
+ * path, or one that nulled a root field, fails the call.
+ */
+function fieldErrorsOnly(data: unknown, errors: ReadonlyArray<GraphQLErrorEntry>): boolean {
+  if (data === null || typeof data !== "object" || Array.isArray(data)) {
+    return false;
+  }
+  const roots = data as Record<string, unknown>;
+  return errors.every((entry) => {
+    const code = entry?.extensions?.code;
+    if (typeof code === "string" && fatalCodes.has(code)) {
+      return false;
+    }
+    const path = entry?.path;
+    if (!Array.isArray(path) || path.length < 2 || typeof path[0] !== "string") {
+      return false;
+    }
+    const root = roots[path[0]];
+    return root !== undefined && root !== null;
+  });
+}
+
+/**
+ * Turns one HTTP response into data or a typed error. A 2xx response whose
+ * errors are all field errors that left its data usable (fieldErrorsOnly)
+ * returns the data with those errors as partialErrors.
+ */
 export function classify(status: number, retryAfterHeader: string | null, text: string): Outcome {
   const retryAfterSeconds = parseRetryAfter(retryAfterHeader);
   const retryable = retryableStatuses.has(status);
@@ -204,6 +251,9 @@ export function classify(status: number, retryAfterHeader: string | null, text: 
 
   if (obj && Array.isArray(obj.errors) && obj.errors.length > 0) {
     const gql = obj as GraphQLResponseBody;
+    if (is2xx && fieldErrorsOnly(gql.data, gql.errors ?? [])) {
+      return { ok: true, data: gql.data, partialErrors: gql.errors ?? [] };
+    }
     return {
       ok: false,
       retryable,
