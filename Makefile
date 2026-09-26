@@ -163,7 +163,7 @@ graphql-tray:
 graphql-all: graphql graphql-frontend graphql-tray graphql-sdk
 	@$(MAKE) --no-print-directory generate-graphql-reference
 
-.PHONY: sdk-audit sdk-manifest generate-graphql-reference verify-graphql-reference verify-api-compat verify-schema-compat test-sdkcontract graphql-sdk graphql-sdk-ts test-sdk-ts \
+.PHONY: verify-migration-release-state sdk-audit sdk-manifest generate-graphql-reference verify-graphql-reference verify-api-compat verify-schema-compat test-sdkcontract graphql-sdk graphql-sdk-ts test-sdk-ts \
 	verify-sdk-generated sdk-release-gates sdk-version-sync generate-public-schema verify-public-schema verify-experimental-fields \
 	generate-ops verify-ops
 
@@ -376,7 +376,17 @@ test-go-livepeer-pkg-impact:
 # verify-prepush runs, locally and in the same order, the CI checks that unit
 # tests and lint do not cover: the Generated contracts job and the frontend
 # component job.
-verify-prepush: verify-generated-contracts test-frontend-components
+verify-prepush: verify-generated-contracts test-frontend-components verify-migration-release-state
+
+# The CI "Migration release state" job, step for step (.github/workflows/ci.yml).
+# Needs Docker for the PostgreSQL, ClickHouse, and Valkey contracts.
+verify-migration-release-state:
+	$(MAKE) --no-print-directory validate-migrations
+	$(MAKE) --no-print-directory test-release-state
+	$(MAKE) --no-print-directory test-release-preflight
+	$(MAKE) --no-print-directory sqlc-check
+	$(MAKE) --no-print-directory verify-schema-migrations-core
+	$(MAKE) --no-print-directory verify-foghorn-valkey
 
 verify-generated-contracts:
 	$(MAKE) --no-print-directory verify-config-annotations
