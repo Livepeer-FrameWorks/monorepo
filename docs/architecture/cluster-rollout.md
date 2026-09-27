@@ -66,7 +66,13 @@ for every service it deploys, so `cluster upgrade` keeps the same refusal.
 
 The mutating release sequence is host convergence, service database creation and
 expand migrations, platform-artifact upgrades
-with declared transitions at their ordering points, then postdeploy migrations.
+with declared transitions at their ordering points, the Quartermaster bootstrap
+reconcile, stale placement cleanup, the service-cluster assignment reconcile,
+then postdeploy migrations and the Purser tier catalog reconcile. The
+Quartermaster and Purser bootstrap desired state is rendered before the first
+mutation (`prepareReleaseQuartermasterBootstrap`, `prepareReleaseTierCatalog`),
+so values the CLI derives, such as a service instance's health endpoint, reach
+Quartermaster on every release rather than only on `cluster provision`.
 
 Host convergence and every service upgrade roll hosts in criticality waves
 (`cli/cmd/release_rollout_waves.go`). A host is CONTROL when it runs

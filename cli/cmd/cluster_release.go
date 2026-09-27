@@ -18,6 +18,7 @@ import (
 	"frameworks/cli/pkg/inventory"
 	"frameworks/cli/pkg/orchestrator"
 	"frameworks/cli/pkg/provisioner"
+	"frameworks/cli/pkg/remoteaccess"
 	"frameworks/cli/pkg/ssh"
 	fwv "github.com/Livepeer-FrameWorks/monorepo/pkg/version"
 
@@ -134,7 +135,13 @@ func runReleasePlan(cmd *cobra.Command, rc *resolvedCluster, opts releasePlanOpt
 			fmt.Fprintf(out, "     · %s after [%s] before [%s]\n", transition.ID(), strings.Join(transition.AfterServices(), ","), strings.Join(transition.BeforeServices(), ","))
 		}
 	}
+	if _, ok := manifest.Services["quartermaster"]; ok {
+		fmt.Fprintln(out, "     · then the Quartermaster bootstrap reconcile (service registry, health endpoints, catalog)")
+	}
 	fmt.Fprintln(out, "  6. stale placement cleanup: platform service replicas and kafka-mirrormaker workers the manifest no longer places")
+	if _, ok := manifest.Services["quartermaster"]; ok {
+		fmt.Fprintln(out, "     · then the service-cluster assignment reconcile")
+	}
 	fmt.Fprintln(out, "  7. schema postdeploy migrations")
 	if _, ok := manifest.Services["purser"]; ok {
 		fmt.Fprintln(out, "     · then the Purser tier catalog reconcile (purser bootstrap + validate)")
@@ -170,7 +177,73 @@ var (
 	releasePrepareTierCatalogFn = prepareReleaseTierCatalog
 	// releaseNewHostConvergenceFn builds the pre-upgrade host convergence.
 	releaseNewHostConvergenceFn = newReleaseHostConvergence
+	// releasePrepareQuartermasterBootstrapFn renders the Quartermaster
+	// bootstrap desired state before the first mutation and returns the step
+	// that applies it.
+	releasePrepareQuartermasterBootstrapFn = prepareReleaseQuartermasterBootstrap
+	// releaseReconcileAssignmentsFn reconciles the service-cluster assignments.
+	releaseReconcileAssignmentsFn = reconcileReleaseServiceAssignments
 )
+
+// prepareReleaseQuartermasterBootstrap renders the bootstrap desired state that
+// provision and finalize hand to `quartermaster bootstrap`, so a release
+// reconciles what the CLI derives for Quartermaster (the service registry and
+// each instance's health endpoint override, the service catalog, clusters)
+// instead of leaving the values the previous release rendered. The returned
+// step is nil when the manifest runs no Quartermaster.
+func prepareReleaseQuartermasterBootstrap(cmd *cobra.Command, rc *resolvedCluster, sshPool *ssh.Pool) (func(ctx context.Context, dryRun bool) error, error) {
+	manifest := rc.Manifest
+	if _, ok := manifest.Services["quartermaster"]; !ok {
+		return nil, nil
+	}
+	sharedEnv, err := rc.PreparedSharedEnv()
+	if err != nil {
+		return nil, fmt.Errorf("load manifest env_files: %w", err)
+	}
+	bootstrapYAML, err := renderBootstrapYAML(cmd, manifest, filepath.Dir(rc.ManifestPath), sharedEnv)
+	if err != nil {
+		return nil, err
+	}
+	return func(ctx context.Context, dryRun bool) error {
+		if dryRun {
+			fmt.Fprintln(cmd.OutOrStdout(), "  dry-run: quartermaster bootstrap would run; the desired state rendered")
+			return nil
+		}
+		if err := runServiceBootstrap(ctx, cmd, manifest, sshPool, "quartermaster", bootstrapYAML, nil); err != nil {
+			return fmt.Errorf("quartermaster bootstrap: %w", err)
+		}
+		return nil
+	}, nil
+}
+
+// reconcileReleaseServiceAssignments assigns the manifest's cluster-scoped
+// service instances to their clusters in Quartermaster, as provision and
+// finalize do, so replicas a release installed or moved are routed.
+func reconcileReleaseServiceAssignments(ctx context.Context, cmd *cobra.Command, rc *resolvedCluster, dryRun bool) error {
+	manifest := rc.Manifest
+	if svc, ok := manifest.Services["quartermaster"]; !ok || !svc.Enabled {
+		return nil
+	}
+	if dryRun {
+		fmt.Fprintln(cmd.OutOrStdout(), "  dry-run: service-cluster assignments would be reconciled")
+		return nil
+	}
+	sshKey := stringFlag(cmd, "ssh-key").Value
+	runtimeData, err := rc.RuntimeData(ctx, sshKey)
+	if err != nil {
+		return err
+	}
+	sess, err := remoteaccess.OpenSession(remoteaccess.Options{
+		Manifest:      manifest,
+		SSHKeyPath:    sshKey,
+		AllowInsecure: isDevProfile(manifest),
+	})
+	if err != nil {
+		return fmt.Errorf("open remote-access session: %w", err)
+	}
+	defer sess.Close()
+	return reconcileServiceClusterAssignments(ctx, cmd, manifest, runtimeData, sess)
+}
 
 // prepareReleaseTierCatalog renders the bootstrap desired state that
 // provision and finalize hand to `purser bootstrap`, so a release reconciles
@@ -320,6 +393,10 @@ func runReleaseApply(cmd *cobra.Command, rc *resolvedCluster, opts releaseApplyO
 	if err != nil {
 		return fmt.Errorf("purser tier catalog: %w", err)
 	}
+	reconcileQuartermaster, err := releasePrepareQuartermasterBootstrapFn(cmd, rc, sshPool)
+	if err != nil {
+		return fmt.Errorf("quartermaster bootstrap: %w", err)
+	}
 
 	hostSteps := planReleaseHostConvergence(plan, manifest)
 	ux.Heading(out, fmt.Sprintf("Release plan for %s (platform %s)", version, platformVersion))
@@ -334,7 +411,13 @@ func runReleaseApply(cmd *cobra.Command, rc *resolvedCluster, opts releaseApplyO
 	for _, t := range transitions {
 		fmt.Fprintf(out, "     · reconcile %q after [%s] before [%s]\n", t.ID(), strings.Join(t.AfterServices(), ","), strings.Join(t.BeforeServices(), ","))
 	}
+	if reconcileQuartermaster != nil {
+		fmt.Fprintln(out, "     · then the Quartermaster bootstrap reconcile (service registry, health endpoints, catalog)")
+	}
 	fmt.Fprintln(out, "  4. stale placement cleanup (platform service replicas, kafka-mirrormaker workers)")
+	if svc, ok := manifest.Services["quartermaster"]; ok && svc.Enabled {
+		fmt.Fprintln(out, "     · then the service-cluster assignment reconcile")
+	}
 	fmt.Fprintln(out, "  5. postdeploy migrations")
 	if reconcileTierCatalog != nil {
 		fmt.Fprintln(out, "     · then the Purser tier catalog reconcile (purser bootstrap + validate)")
@@ -405,6 +488,15 @@ func runReleaseApply(cmd *cobra.Command, rc *resolvedCluster, opts releaseApplyO
 		writeReleaseResumeHint(cmd.ErrOrStderr(), platformVersion, opts.dryRun)
 		return err
 	}
+	// Runs once the upgraded Quartermaster serves, so the registry rows it
+	// writes (such as a changed health endpoint) come from this release's render.
+	if reconcileQuartermaster != nil {
+		ux.Subheading(out, "Reconciling the Quartermaster bootstrap desired state")
+		if err := reconcileQuartermaster(cmd.Context(), opts.dryRun); err != nil {
+			writeReleaseResumeHint(cmd.ErrOrStderr(), platformVersion, opts.dryRun)
+			return err
+		}
+	}
 	if err := releaseReconcilePlacementsFn(cmd.Context(), cmd, rc, installed, opts.dryRun); err != nil {
 		writeReleaseResumeHint(cmd.ErrOrStderr(), platformVersion, opts.dryRun)
 		return fmt.Errorf("service placement reconciliation: %w", err)
@@ -413,6 +505,10 @@ func runReleaseApply(cmd *cobra.Command, rc *resolvedCluster, opts releaseApplyO
 	if mmErr := reconcileStaleKafkaMirrorMakerWorkersOverSSH(cmd.Context(), out, rc.Manifest, sshPool, opts.dryRun); mmErr != nil {
 		writeReleaseResumeHint(cmd.ErrOrStderr(), platformVersion, opts.dryRun)
 		return fmt.Errorf("kafka-mirrormaker worker cleanup: %w", mmErr)
+	}
+	if err := releaseReconcileAssignmentsFn(cmd.Context(), cmd, rc, opts.dryRun); err != nil {
+		writeReleaseResumeHint(cmd.ErrOrStderr(), platformVersion, opts.dryRun)
+		return fmt.Errorf("service-cluster assignments: %w", err)
 	}
 
 	// Postdeploy migrations gate on, but do not execute, required data migrations.

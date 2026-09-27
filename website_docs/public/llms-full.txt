@@ -37519,10 +37519,16 @@ Before the first change, and under `--dry-run` too, `release apply` refuses to s
    [post-expand report](#post-expand-report) follows.
 3. **Service upgrades and reconciliations.** Platform services upgrade in dependency order, with
    any reconciliation transitions the release declares run at their declared points. A platform
-   service the manifest adds or moves to a new host is installed there. Replicas and MirrorMaker2
-   workers the manifest no longer places are removed only after every desired replica is healthy.
+   service the manifest adds or moves to a new host is installed there. Once the services are
+   upgraded, the Quartermaster bootstrap runs with this release's rendered desired state, as
+   `cluster provision` runs it: the service registry, including each instance's health endpoint,
+   the service catalog, and clusters. The desired state renders before the first mutation, so a
+   render failure refuses the release up front. Replicas and MirrorMaker2 workers the manifest no
+   longer places are removed only after every desired replica is healthy, and then the
+   service-cluster assignments are reconciled. A dry run reports these steps without running
+   them.
 4. **Postdeploy migrations.** These refuse to run until the release's required data migrations
-   are complete.
+   are complete. The Purser tier catalog reconcile follows.
 
 After postdeploy, `release apply` checks that every replica of the auth services and the web app
 runs the release's version, since a readiness check cannot detect an older web app bundle. It
