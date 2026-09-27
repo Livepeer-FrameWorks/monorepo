@@ -362,3 +362,25 @@
           compose_stack[{{ compose_stack_name }}] failed to become healthy.
           Recent container logs:
           {{ compose_stack_failure_logs.stdout | default('') }}
+
+# Runs only after a successful apply, so a failed update keeps every image
+# (including the one a rollback redeploys). Per repository the stack uses, the
+# image in use and the previous one stay; older ones are removed.
+- name: Remove superseded compose stack images
+  ansible.builtin.script:
+    cmd: "compose-image-prune.sh {{ compose_stack_project_dir | quote }}"
+  register: compose_stack_image_prune
+  changed_when: "'removed ' in (compose_stack_image_prune.stdout | default(''))"
+  failed_when: false
+  when:
+    - not (compose_stack_render_only | default(false) | bool)
+    - not ansible_check_mode
+
+- name: Report superseded image removal failure
+  ansible.builtin.debug:
+    msg: >-
+      compose_stack[{{ compose_stack_name }}] could not list its images for
+      pruning: {{ compose_stack_image_prune.stderr | default('') | trim }}
+  when:
+    - compose_stack_image_prune is not skipped
+    - compose_stack_image_prune.rc | default(0) != 0
