@@ -75,7 +75,9 @@ func TestSessionLeader_RealPG(t *testing.T) {
 
 	// B's session is terminated server-side, as when its host dies: the lock
 	// goes with it, A takes over, and B stops acting as leader on its next Lead.
-	if _, err := admin.ExecContext(ctx, `SELECT pg_terminate_backend(pid) FROM pg_locks WHERE locktype = 'advisory' AND granted AND pid <> pg_backend_pid()`); err != nil {
+	// The timeout form waits until the backend has exited and released its
+	// locks; without it A's next Lead races the backend's shutdown.
+	if _, err := admin.ExecContext(ctx, `SELECT pg_terminate_backend(pid, 5000) FROM pg_locks WHERE locktype = 'advisory' AND granted AND pid <> pg_backend_pid()`); err != nil {
 		t.Fatal(err)
 	}
 	if !lead(a) {
