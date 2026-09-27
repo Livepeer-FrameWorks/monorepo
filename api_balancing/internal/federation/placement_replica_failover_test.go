@@ -143,3 +143,75 @@ func TestRemotePreparationFailsOverToAnotherCellReplica(t *testing.T) {
 		t.Fatalf("discovery with a dead first replica = %d candidates, %v", len(observed.Candidates), err)
 	}
 }
+
+// A replica whose host is gone accepts nothing and refuses nothing: its
+// connection stays in CONNECTING. The call must move to the next replica
+// within the connect budget instead of spending that replica's whole share
+// of the preparation deadline.
+func TestRemotePreparationSkipsUnresponsiveReplicaWithinConnectBudget(t *testing.T) {
+	f := newDiscoveryFixture(t)
+	destination := placementRPCFixture{
+		query: f.discovery.QueryPlacementCandidates,
+		prepare: func(_ context.Context, req *placementpb.PreparePlacementRequest) (*placementpb.Preparation, error) {
+			return preparationWireResponse(req), nil
+		},
+	}
+	listener, err := (&net.ListenConfig{}).Listen(context.Background(), "tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := grpc.NewServer(grpc.UnaryInterceptor(middleware.GRPCAuthInterceptor(middleware.GRPCAuthConfig{
+		ServiceToken: "placement-test-service", MetadataPolicy: middleware.MetadataPolicyDeny,
+	})))
+	NewFederationServer(FederationServerConfig{ClusterID: "us-registry-cluster", ControlCellID: "us-cell", Placement: destination, AllowFederationMutations: true}).RegisterServices(server)
+	go func() { _ = server.Serve(listener) }()
+	t.Cleanup(func() { server.Stop(); _ = listener.Close() })
+
+	// Accepts TCP and never answers the HTTP/2 handshake.
+	silent, err := (&net.ListenConfig{}).Listen(context.Background(), "tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var held []net.Conn
+	var heldMu sync.Mutex
+	go func() {
+		for {
+			conn, acceptErr := silent.Accept()
+			if acceptErr != nil {
+				return
+			}
+			heldMu.Lock()
+			held = append(held, conn)
+			heldMu.Unlock()
+		}
+	}()
+	t.Cleanup(func() {
+		_ = silent.Close()
+		heldMu.Lock()
+		for _, conn := range held {
+			_ = conn.Close()
+		}
+		heldMu.Unlock()
+	})
+	silentAddr, liveAddr := silent.Addr().String(), listener.Addr().String()
+
+	pool := &replicaPool{t: t, clients: make(map[string]*foghorn.GRPCClient)}
+	transport := PlacementTransport{LocalCellID: "eu-cell", Client: NewFederationClient(FederationClientConfig{Pool: pool}),
+		CellAddresses: func(string) []string { return []string{silentAddr, liveAddr} }}
+	cell := balancer.PlacementCell{ID: "us-cell", ClusterIDs: []string{"empty", "us"}}
+	route := balancer.PlacementRouteRequest{TenantID: f.query.TenantId, ObjectID: f.query.ObjectId, InternalName: f.query.InternalName,
+		Verb: placement.Serve, Protocol: "hls", PolicyDigest: f.query.PolicyDigest, PolicyRevision: f.query.PolicyRevision,
+		ParentRevision: f.query.ParentRevision, SourceGeneration: f.query.SourceGeneration}
+	attempt := balancer.PlacementPreparationRequest{Route: route, Choice: placement.Choice{ClusterID: "us", NodeID: "node-02"},
+		AttemptID: testPreparationAttempt(t), ExpiresAt: time.Now().Add(8 * time.Second)}
+
+	started := time.Now()
+	prepared, err := transport.Prepare(context.Background(), cell, attempt)
+	elapsed := time.Since(started)
+	if err != nil || prepared.Outcome != balancer.PlacementAccepted {
+		t.Fatalf("preparation with an unresponsive first replica = %+v, %v", prepared, err)
+	}
+	if elapsed > replicaConnectBudget+time.Second {
+		t.Fatalf("the unresponsive replica held the preparation for %s; its 4 s share must not be spent waiting for a connection", elapsed)
+	}
+}

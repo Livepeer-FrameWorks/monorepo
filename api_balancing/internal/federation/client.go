@@ -14,6 +14,7 @@ import (
 	placementpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/media_placement"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/connectivity"
 	"google.golang.org/grpc/status"
 )
 
@@ -81,6 +82,9 @@ func (c *FederationClient) QueryPlacementCandidates(ctx context.Context, cellID,
 	if err != nil {
 		return nil, err
 	}
+	if err := awaitReplicaConnection(ctx, client); err != nil {
+		return nil, err
+	}
 	callOptions := replicaCallOptions(ctx)
 	ctx, cancel := context.WithTimeout(federationContext(ctx), c.timeout)
 	defer cancel()
@@ -90,6 +94,9 @@ func (c *FederationClient) QueryPlacementCandidates(ctx context.Context, cellID,
 func (c *FederationClient) PreparePlacement(ctx context.Context, cellID, addr string, req *placementpb.PreparePlacementRequest) (*placementpb.Preparation, error) {
 	client, err := c.pool.GetOrCreate(cellID, addr)
 	if err != nil {
+		return nil, err
+	}
+	if err := awaitReplicaConnection(ctx, client); err != nil {
 		return nil, err
 	}
 	callOptions := replicaCallOptions(ctx)
@@ -102,6 +109,9 @@ func (c *FederationClient) PreparePlacement(ctx context.Context, cellID, addr st
 func (c *FederationClient) NotifyOriginPull(ctx context.Context, clusterID, addr string, req *foghornfederationpb.OriginPullNotification) (*foghornfederationpb.OriginPullAck, error) {
 	client, err := c.pool.GetOrCreate(clusterID, addr)
 	if err != nil {
+		return nil, err
+	}
+	if err := awaitReplicaConnection(ctx, client); err != nil {
 		return nil, err
 	}
 
@@ -123,6 +133,46 @@ func replicaCallOptions(ctx context.Context) []grpc.CallOption {
 		return []grpc.CallOption{grpc.WaitForReady(false)}
 	}
 	return nil
+}
+
+// replicaConnectBudget bounds how long a replica that another replica backs
+// up may take to become connected. A running replica connects well within it;
+// a stopped or unreachable one never does, and waiting out its share of the
+// deadline would leave the next replica too little to answer.
+const replicaConnectBudget = time.Second
+
+// awaitReplicaConnection returns once the replica's connection is ready, or
+// Unavailable when it cannot connect within replicaConnectBudget, so the call
+// moves to the next replica. Only calls that another replica backs up wait
+// here; the last replica is given the whole remaining deadline.
+func awaitReplicaConnection(ctx context.Context, client *foghorn.GRPCClient) error {
+	if failFast, ok := ctx.Value(replicaFailFastKey{}).(bool); !ok || !failFast || client == nil || client.Conn() == nil {
+		return nil
+	}
+	conn := client.Conn()
+	ctx, cancel := context.WithTimeout(ctx, replicaConnectBudget)
+	defer cancel()
+	for {
+		state := conn.GetState()
+		switch state {
+		case connectivity.Ready:
+			return nil
+		case connectivity.Shutdown:
+			return status.Error(codes.Unavailable, "replica connection is shut down")
+		case connectivity.TransientFailure:
+			// The channel reports failure until a reconnect succeeds, so
+			// waiting here learns nothing. The reconnect starts now rather
+			// than after its backoff, so a replica that is back serves the
+			// next call.
+			conn.ResetConnectBackoff()
+			return status.Error(codes.Unavailable, "replica connection failed")
+		case connectivity.Idle:
+			conn.Connect()
+		}
+		if !conn.WaitForStateChange(ctx, state) {
+			return status.Errorf(codes.Unavailable, "replica not connected within %s (%s)", replicaConnectBudget, state)
+		}
+	}
 }
 
 // callCellReplicas asks the replicas of one control cell in order until one
