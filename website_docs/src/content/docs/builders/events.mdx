@@ -168,9 +168,10 @@ emits only `recording.failed`.
 
 Upload events carry no transfer progress. Your client knows its own transfer progress; for the
 server-side state of an upload, query `vodUploadStatus`. An [import from a URL](/builders/recordings#import-a-video-from-a-url)
-emits the same upload events, both `upload.created` and `upload.completed` when it is accepted.
-Their sizes are `"0"`: the file's size is known only after processing, and `upload.ready` carries
-it.
+emits the same upload events. `upload.created` fires when the import is accepted, with
+`expectedSizeBytes` `"0"`. `upload.completed` fires once the processing node has fetched the source
+and recognized it as media, and its `sizeBytes` is the source file's size. An import whose source
+cannot be fetched (for example a 404) emits `upload.failed` and no `upload.completed`.
 
 ## Multistreaming
 

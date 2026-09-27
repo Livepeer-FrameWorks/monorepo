@@ -116,9 +116,19 @@ type QuartermasterServer struct {
 	// attribution with Bridge's usage hash secret. Emitting a domain event
 	// without it fails the mutation's transaction.
 	eventTokenHasher *events.TokenHasher
+
+	// instanceHealthProber checks discovered instances now and persists the
+	// result, returning the new status per instance ID. Nil disables
+	// on-discovery probing.
+	instanceHealthProber InstanceHealthProber
 }
 
+// InstanceHealthProber checks service instances now and persists each result,
+// returning the new health status per instance ID.
+type InstanceHealthProber func(ctx context.Context, rows []quartermasterdb.ServiceDiscoveryRow) map[string]string
+
 const (
+	livepeerGatewayServiceType     = "livepeer-gateway"
 	foghornListenerInternalControl = "internal_control"
 	foghornInternalGRPCPort        = 18019
 	foghornExternalGRPCPort        = 18029
@@ -155,6 +165,12 @@ func (s *QuartermasterServer) SetPhysicalEndpointStaleSeconds(seconds int) {
 	if seconds > 0 {
 		s.physicalEndpointStaleSeconds = seconds
 	}
+}
+
+// SetInstanceHealthProber configures the on-discovery health check for
+// Livepeer gateways (see DiscoverServices).
+func (s *QuartermasterServer) SetInstanceHealthProber(prober InstanceHealthProber) {
+	s.instanceHealthProber = prober
 }
 
 // SetClusterAccessMaterializationSecret configures the key shared with Purser
@@ -1230,6 +1246,34 @@ func (s *QuartermasterServer) GetNodeOwner(ctx context.Context, req *quartermast
 	return &resp, nil
 }
 
+// recoverUnhealthyGateways checks running Livepeer gateways that are marked
+// unhealthy now, instead of leaving them out until the next health poll. A
+// restarted gateway is then offered on the discovery that finds it; callers
+// cache a miss for a few seconds, which bounds how often this probes. It
+// reports whether any instance came back healthy.
+func (s *QuartermasterServer) recoverUnhealthyGateways(ctx context.Context, serviceType string, rows []quartermasterdb.ServiceDiscoveryRow) bool {
+	if serviceType != livepeerGatewayServiceType || s.instanceHealthProber == nil {
+		return false
+	}
+	var suspect []quartermasterdb.ServiceDiscoveryRow
+	for _, row := range rows {
+		if (row.Status == "running" || row.Status == "active") && row.HealthStatus != "healthy" {
+			suspect = append(suspect, row)
+		}
+	}
+	if len(suspect) == 0 {
+		return false
+	}
+	recovered := false
+	for instanceID, health := range s.instanceHealthProber(ctx, suspect) {
+		if health == "healthy" {
+			recovered = true
+			s.logger.WithField("instance_id", instanceID).Info("Livepeer gateway healthy again on discovery probe")
+		}
+	}
+	return recovered
+}
+
 // DiscoverServices finds instances of a service type with cursor pagination
 func (s *QuartermasterServer) DiscoverServices(ctx context.Context, req *quartermasterpb.ServiceDiscoveryRequest) (*quartermasterpb.ServiceDiscoveryResponse, error) {
 	serviceType := req.GetServiceType()
@@ -1293,6 +1337,11 @@ func (s *QuartermasterServer) DiscoverServices(ctx context.Context, req *quarter
 	rows, err := quartermasterdb.New(s.db).DiscoverServicesPage(ctx, filter)
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "database error: %v", err)
+	}
+	if s.recoverUnhealthyGateways(ctx, serviceType, rows) {
+		if rows, err = quartermasterdb.New(s.db).DiscoverServicesPage(ctx, filter); err != nil {
+			return nil, status.Errorf(codes.Internal, "database error: %v", err)
+		}
 	}
 	var instances []*quartermasterpb.ServiceInstance
 	for _, row := range rows {
@@ -10726,6 +10775,9 @@ type GRPCServerConfig struct {
 	ClusterAccessMaterializationSecret string
 	// EventTokenHasher attributes domain events to the calling API token.
 	EventTokenHasher *events.TokenHasher
+	// InstanceHealthProber checks Livepeer gateways that discovery finds
+	// running but unhealthy.
+	InstanceHealthProber InstanceHealthProber
 }
 
 // ServerMetrics holds Prometheus metrics for the gRPC server. Per-method
@@ -10836,6 +10888,7 @@ func NewGRPCServer(ctx context.Context, cfg GRPCServerConfig) (*grpc.Server, err
 	qmServer.SetPhysicalEndpointStaleSeconds(cfg.PhysicalEndpointStaleSeconds)
 	qmServer.SetClusterAccessMaterializationSecret(cfg.ClusterAccessMaterializationSecret)
 	qmServer.SetEventTokenHasher(cfg.EventTokenHasher)
+	qmServer.SetInstanceHealthProber(cfg.InstanceHealthProber)
 	qmServer.mediaAuthorityRefreshClient = cfg.MediaAuthorityRefreshClient
 	qmServer.consentReviewKeyID = cfg.ConsentReviewKeyID
 	qmServer.consentReviewPrivateKey = append(ed25519.PrivateKey(nil), cfg.ConsentReviewPrivateKey...)

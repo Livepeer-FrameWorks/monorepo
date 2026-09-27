@@ -602,6 +602,10 @@ type Querier interface {
 	RecordDVRProgress(ctx context.Context, arg RecordDVRProgressParams) error
 	RecordDVRStartTime(ctx context.Context, arg RecordDVRStartTimeParams) error
 	RecordFreezePublicationLedger(ctx context.Context, arg RecordFreezePublicationLedgerParams) error
+	// A URL import has no size until its processing node stages the source. The
+	// first staged report sizes the artifact; a later one (lease resend, retried
+	// job) matches no row.
+	RecordImportSourceStaged(ctx context.Context, arg RecordImportSourceStagedParams) (int64, error)
 	RecordPublicationPair(ctx context.Context, arg RecordPublicationPairParams) error
 	RefreshDVRArtifactNodeProgress(ctx context.Context, arg RefreshDVRArtifactNodeProgressParams) error
 	RejectArtifactCreationCommand(ctx context.Context, arg RejectArtifactCreationCommandParams) (int64, error)

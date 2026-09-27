@@ -136,7 +136,7 @@ Foghorn never fetches it.
 2. Foghorn `ImportVodAsset` (`api_balancing/internal/grpc/vod_import.go`) writes, in one
    transaction, the `vod` artifact in **`status='processing'`** with no `s3_url`, the
    `vod_metadata` row with `source_url`, a normal **`process`** job with no job `source_url`,
-   `upload.created` and `upload.completed`, and the ledger commit.
+   `upload.created`, and the ledger commit.
 3. Mist's `STREAM_SOURCE` for `processing+<hash>` gets the node's relay URL
    `/internal/artifact/upload/<hash>.<ext>` (`resolveProcessSource`; `UploadedArtifactFormat`
    accepts an import's `source_url`). The job carries no source because a job source is handed to
@@ -145,8 +145,13 @@ Foghorn never fetches it.
    (`fillImportSourceResolve`) instead of a presign. The relay fetches it in block-aligned `Range`
    requests with its tenant-source client, which dials only public addresses on every connection
    and redirect (`api_sidecar/internal/relay/server.go`, `newTenantSourceClient`). The source must
-   therefore support range requests.
-5. Processing and finalization are the upload path's: the processed output is the artifact's
+   therefore support range requests. The relay records the source size it admitted to its block
+   cache (`TakeProcessingInputSize`).
+5. Once Mist has opened the source, Helmsman's first `ProcessingJobProgress` carries
+   `source_size_bytes`. Foghorn sizes the import from it (`RecordImportSourceStaged`, first report
+   only) and emits `upload.completed` with that size in the same transaction. A source that fails
+   before this point (a 404, a non-media file) ends in `upload.failed` alone.
+6. Processing and finalization are the upload path's: the processed output is the artifact's
    first stored copy.
 
 ### DVR (rolling) and chapter finalization

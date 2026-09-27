@@ -19655,6 +19655,7 @@ type ProcessingJobProgress struct {
 	ProgressPct      int32                  `protobuf:"varint,2,opt,name=progress_pct,json=progressPct,proto3" json:"progress_pct,omitempty"`                  // 0-100 based on track position vs source duration
 	LastMs           int64                  `protobuf:"varint,3,opt,name=last_ms,json=lastMs,proto3" json:"last_ms,omitempty"`                                 // Current output track position in milliseconds
 	SourceDurationMs int64                  `protobuf:"varint,4,opt,name=source_duration_ms,json=sourceDurationMs,proto3" json:"source_duration_ms,omitempty"` // Total source duration in milliseconds
+	SourceSizeBytes  int64                  `protobuf:"varint,5,opt,name=source_size_bytes,json=sourceSizeBytes,proto3" json:"source_size_bytes,omitempty"`    // Bytes of the source the node staged for this job; 0 when unknown
 	unknownFields    protoimpl.UnknownFields
 	sizeCache        protoimpl.SizeCache
 }
@@ -19713,6 +19714,13 @@ func (x *ProcessingJobProgress) GetLastMs() int64 {
 func (x *ProcessingJobProgress) GetSourceDurationMs() int64 {
 	if x != nil {
 		return x.SourceDurationMs
+	}
+	return 0
+}
+
+func (x *ProcessingJobProgress) GetSourceSizeBytes() int64 {
+	if x != nil {
+		return x.SourceSizeBytes
 	}
 	return 0
 }
@@ -23943,12 +23951,13 @@ const file_ipc_proto_rawDesc = "" +
 	"\fOutputsEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
 	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01B\x14\n" +
-	"\x12_media_duration_ms\"\x98\x01\n" +
+	"\x12_media_duration_ms\"\xc4\x01\n" +
 	"\x15ProcessingJobProgress\x12\x15\n" +
 	"\x06job_id\x18\x01 \x01(\tR\x05jobId\x12!\n" +
 	"\fprogress_pct\x18\x02 \x01(\x05R\vprogressPct\x12\x17\n" +
 	"\alast_ms\x18\x03 \x01(\x03R\x06lastMs\x12,\n" +
-	"\x12source_duration_ms\x18\x04 \x01(\x03R\x10sourceDurationMs\"\x96\x01\n" +
+	"\x12source_duration_ms\x18\x04 \x01(\x03R\x10sourceDurationMs\x12*\n" +
+	"\x11source_size_bytes\x18\x05 \x01(\x03R\x0fsourceSizeBytes\"\x96\x01\n" +
 	"\x0fAPIRequestBatch\x12\x1c\n" +
 	"\ttimestamp\x18\x01 \x01(\x03R\ttimestamp\x12\x1f\n" +
 	"\vsource_node\x18\x02 \x01(\tR\n" +

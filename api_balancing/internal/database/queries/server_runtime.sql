@@ -63,6 +63,20 @@ UPDATE foghorn.processing_jobs SET progress = GREATEST(progress, sqlc.arg(progre
   progress_advanced_at = CASE WHEN sqlc.arg(progress)::int > COALESCE(progress, 0) OR sqlc.arg(last_ms)::bigint > progress_last_ms THEN NOW() ELSE progress_advanced_at END,
   updated_at = NOW()
 WHERE job_id = sqlc.arg(job_id) AND status IN ('dispatched', 'processing') AND processing_node_id = sqlc.arg(processing_node_id) RETURNING artifact_hash, tenant_id::text, progress;
+-- name: RecordImportSourceStaged :execrows
+-- A URL import has no size until its processing node stages the source. The
+-- first staged report sizes the artifact; a later one (lease resend, retried
+-- job) matches no row.
+UPDATE foghorn.artifacts a
+SET size_bytes = sqlc.arg(size_bytes)::bigint, updated_at = NOW()
+FROM foghorn.vod_metadata m
+WHERE a.artifact_hash = sqlc.arg(artifact_hash)
+  AND a.tenant_id::text = sqlc.arg(tenant_id)::text
+  AND a.artifact_type = 'vod'
+  AND a.status = 'processing'
+  AND a.size_bytes IS NULL
+  AND m.artifact_hash = a.artifact_hash
+  AND COALESCE(m.source_url, '') <> '';
 -- name: GetProcessingArtifactLifecycle :one
 SELECT COALESCE(artifact_type, '')::text AS artifact_type, COALESCE(stream_id::text, '')::text AS stream_id, COALESCE(stream_internal_name, '')::text AS stream_internal_name FROM foghorn.artifacts WHERE artifact_hash = $1;
 -- name: UpdateChapterFinalizeProgress :one

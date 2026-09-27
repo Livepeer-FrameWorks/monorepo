@@ -8413,6 +8413,25 @@ func processProcessingJobProgress(progress *ipcpb.ProcessingJobProgress, nodeID 
 			}
 		}
 
+		// A URL import's upload completes when its processing node has staged the source, which
+		// is also the first point where its size is known.
+		if artifactHash.Valid && artifactType == "vod" && tenantID != "" && progress.GetSourceSizeBytes() > 0 {
+			staged, stageErr := q.RecordImportSourceStaged(ctx, foghorndb.RecordImportSourceStagedParams{
+				ArtifactHash: artifactHash.String, TenantID: tenantID, SizeBytes: progress.GetSourceSizeBytes(),
+			})
+			if stageErr != nil {
+				return fmt.Errorf("record import source staged: %w", stageErr)
+			}
+			if staged == 1 {
+				if enqErr := artifactoutbox.EnqueueArtifactFactTx(ctx, tx, tenantID, &publicv1.UploadCompleted{
+					Artifact:  artifactoutbox.UploadArtifact(artifactHash.String),
+					SizeBytes: progress.GetSourceSizeBytes(),
+				}); enqErr != nil {
+					return fmt.Errorf("enqueue upload.completed: %w", enqErr)
+				}
+			}
+		}
+
 		// A progress sample is analytics only, not a domain fact: the artifact's 'processing'
 		// transition committed at dispatch. A failed write loses this tick; the next report
 		// carries a newer one.

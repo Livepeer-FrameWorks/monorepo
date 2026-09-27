@@ -406,6 +406,7 @@ func main() {
 			PhysicalEndpointStaleSeconds:       cfg.PhysicalEndpointStaleSeconds,
 			ClusterAccessMaterializationSecret: cfg.ClusterAccessMaterializationSecret,
 			EventTokenHasher:                   eventTokenHasher,
+			InstanceHealthProber:               handlers.ProbeDiscoveredInstances,
 		})
 	}
 

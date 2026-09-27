@@ -21,6 +21,7 @@ import (
 	"frameworks/api_sidecar/internal/admission"
 	"frameworks/api_sidecar/internal/appconfig"
 	"frameworks/api_sidecar/internal/dtsh"
+	"frameworks/api_sidecar/internal/relay"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/mist"
 	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
@@ -976,6 +977,7 @@ func (h *ProcessingJobHandler) Handle(req *ipcpb.ProcessingJobRequest, send func
 	defer stopLease()
 	defer releasePendingJob(streamName, req.GetJobId())
 	defer clearProcessingProcessOverride(streamName, req.GetJobId())
+	defer relay.TakeProcessingInputSize(req.GetArtifactHash())
 	processesJSON := strings.TrimSpace(req.GetProcessesJson())
 	if processesJSON == "" {
 		h.sendResult(send, req.GetJobId(), "failed", "processing job is missing processes_json", nil, "", 0)
@@ -1157,7 +1159,7 @@ func (h *ProcessingJobHandler) Handle(req *ipcpb.ProcessingJobRequest, send func
 			return
 		}
 	}
-	h.sendProgress(send, req.GetJobId(), 0, 0, sourceDurationMs)
+	h.sendSourceStaged(send, req.GetJobId(), sourceDurationMs, stagedProcessingSourceSize(req.GetArtifactHash(), stagedSourcePath))
 
 	// Unix-seconds start of the current push attempt. RECORDING_END is keyed only
 	// by stream name and carries no push/generation id, so after a fallback
@@ -3191,6 +3193,7 @@ type processingReporter struct {
 	progressPct      int32
 	lastMs           int64
 	sourceDurationMs int64
+	sourceSizeBytes  int64
 	lastProgressAt   time.Time
 }
 
@@ -3220,9 +3223,13 @@ func (r *processingReporter) Send(msg *ipcpb.ControlMessage) {
 		if progress.GetSourceDurationMs() == 0 && r.sourceDurationMs > 0 {
 			progress.SourceDurationMs = r.sourceDurationMs
 		}
+		if progress.GetSourceSizeBytes() == 0 && r.sourceSizeBytes > 0 {
+			progress.SourceSizeBytes = r.sourceSizeBytes
+		}
 		r.progressPct = progress.GetProgressPct()
 		r.lastMs = progress.GetLastMs()
 		r.sourceDurationMs = progress.GetSourceDurationMs()
+		r.sourceSizeBytes = progress.GetSourceSizeBytes()
 		r.lastProgressAt = time.Now()
 	}
 	if result := msg.GetProcessingJobResult(); result != nil && result.GetStatus() != "cache_update" {
@@ -3243,7 +3250,9 @@ func (r *processingReporter) renewLease(interval time.Duration, force bool) {
 	if !force && !r.lastProgressAt.IsZero() && now.Sub(r.lastProgressAt) < interval {
 		return
 	}
-	r.send(processingProgressMessage(r.jobID, r.progressPct, r.lastMs, r.sourceDurationMs))
+	msg := processingProgressMessage(r.jobID, r.progressPct, r.lastMs, r.sourceDurationMs)
+	msg.GetProcessingJobProgress().SourceSizeBytes = r.sourceSizeBytes
+	r.send(msg)
 	r.lastProgressAt = now
 }
 
@@ -3297,6 +3306,32 @@ func (h *ProcessingJobHandler) sendProgress(send func(*ipcpb.ControlMessage), jo
 	if send != nil {
 		send(processingProgressMessage(jobID, progressPct, lastMs, sourceDurationMs))
 	}
+}
+
+// sendSourceStaged reports the first progress of a job whose source Mist has
+// opened, with the byte size of that source when the node staged it.
+func (h *ProcessingJobHandler) sendSourceStaged(send func(*ipcpb.ControlMessage), jobID string, sourceDurationMs, sourceSizeBytes int64) {
+	if send == nil {
+		return
+	}
+	msg := processingProgressMessage(jobID, 0, 0, sourceDurationMs)
+	msg.GetProcessingJobProgress().SourceSizeBytes = sourceSizeBytes
+	send(msg)
+}
+
+// stagedProcessingSourceSize is the byte size of the source this node staged
+// for artifactHash: the relay's block-cached processing input (a URL import or
+// an uploaded object), else a locally staged file. 0 when neither exists.
+func stagedProcessingSourceSize(artifactHash, stagedSourcePath string) int64 {
+	if size, ok := relay.TakeProcessingInputSize(artifactHash); ok {
+		return size
+	}
+	if stagedSourcePath != "" {
+		if info, err := os.Stat(stagedSourcePath); err == nil && info.Mode().IsRegular() {
+			return info.Size()
+		}
+	}
+	return 0
 }
 
 // updateProcessConfigCache tells Foghorn to update the STREAM_PROCESS cache

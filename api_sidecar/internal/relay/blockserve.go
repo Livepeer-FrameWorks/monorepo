@@ -74,6 +74,9 @@ func (s *Server) serveViaBlockCache(c *gin.Context, kind, hash, ext, localPath s
 		c.String(http.StatusServiceUnavailable, "processing input block cache unavailable")
 		return "error"
 	}
+	if strictCache {
+		recordProcessingInputSize(hash, totalSize)
+	}
 
 	// Distinguish "Range header absent" (full-object 200 OK) from
 	// "Range header present but malformed/unsatisfiable" (must be 416,

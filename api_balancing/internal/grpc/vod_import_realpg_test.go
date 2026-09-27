@@ -19,8 +19,9 @@ import (
 
 // An import is recorded in one transaction as a 'processing' VOD whose source
 // is the tenant URL: a normal process job with no job source (Mist reads the
-// relay), upload.created and upload.completed keyed by the artifact ID, and
-// the relay queries resolving the source. A retry records nothing new.
+// relay), upload.created keyed by the artifact ID (upload.completed waits for
+// the staged source), and the relay queries resolving the source. A retry
+// records nothing new.
 func TestVodImportRecordsSourceAndQueuesProcessing_RealPG(t *testing.T) { //nolint:funlen // One database follows the whole accept.
 	conn := startFoghornGRPCRealPG(t)
 	t.Cleanup(control.SetupTestRegistry("", nil))
@@ -90,18 +91,24 @@ func TestVodImportRecordsSourceAndQueuesProcessing_RealPG(t *testing.T) { //noli
 		t.Fatalf("processing input format = %q, %v; the relay upload URL needs it", uploadFormat, err)
 	}
 
-	for _, eventType := range []string{"upload.created", "upload.completed"} {
-		var payload []byte
-		if err := conn.QueryRow(`SELECT payload FROM foghorn.domain_event_outbox WHERE event_type = $1 AND aggregate_id = $2`, eventType, hash).Scan(&payload); err != nil {
-			t.Fatalf("%s: %v", eventType, err)
-		}
-		_, msg, err := events.Decode(eventType, payload)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if got := msg.(interface{ GetArtifact() *publicv1.Artifact }).GetArtifact().GetArtifactId(); got != hash {
-			t.Fatalf("%s artifact ID = %q, want %q", eventType, got, hash)
-		}
+	var payload []byte
+	if err := conn.QueryRow(`SELECT payload FROM foghorn.domain_event_outbox WHERE event_type = 'upload.created' AND aggregate_id = $1`, hash).Scan(&payload); err != nil {
+		t.Fatalf("upload.created: %v", err)
+	}
+	_, msg, err := events.Decode("upload.created", payload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := msg.(interface{ GetArtifact() *publicv1.Artifact }).GetArtifact().GetArtifactId(); got != hash {
+		t.Fatalf("upload.created artifact ID = %q, want %q", got, hash)
+	}
+	// The source has not been fetched yet: it may not exist, and its size is unknown.
+	var completed int
+	if err := conn.QueryRow(`SELECT count(*) FROM foghorn.domain_event_outbox WHERE event_type = 'upload.completed' AND aggregate_id = $1`, hash).Scan(&completed); err != nil {
+		t.Fatal(err)
+	}
+	if completed != 0 {
+		t.Fatalf("upload.completed emitted %d times at acceptance, before the source was staged", completed)
 	}
 
 	// A retry after a lost response records nothing new.

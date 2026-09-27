@@ -648,6 +648,36 @@ func (q *Queries) NodeHoldsLiveArtifactCopy(ctx context.Context, arg NodeHoldsLi
 	return exists, err
 }
 
+const recordImportSourceStaged = `-- name: RecordImportSourceStaged :execrows
+UPDATE foghorn.artifacts a
+SET size_bytes = $1::bigint, updated_at = NOW()
+FROM foghorn.vod_metadata m
+WHERE a.artifact_hash = $2
+  AND a.tenant_id::text = $3::text
+  AND a.artifact_type = 'vod'
+  AND a.status = 'processing'
+  AND a.size_bytes IS NULL
+  AND m.artifact_hash = a.artifact_hash
+  AND COALESCE(m.source_url, '') <> ''
+`
+
+type RecordImportSourceStagedParams struct {
+	SizeBytes    int64  `db:"size_bytes" json:"size_bytes"`
+	ArtifactHash string `db:"artifact_hash" json:"artifact_hash"`
+	TenantID     string `db:"tenant_id" json:"tenant_id"`
+}
+
+// A URL import has no size until its processing node stages the source. The
+// first staged report sizes the artifact; a later one (lease resend, retried
+// job) matches no row.
+func (q *Queries) RecordImportSourceStaged(ctx context.Context, arg RecordImportSourceStagedParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, recordImportSourceStaged, arg.SizeBytes, arg.ArtifactHash, arg.TenantID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
 const refreshDVRArtifactNodeProgress = `-- name: RefreshDVRArtifactNodeProgress :exec
 UPDATE foghorn.artifact_nodes SET last_seen_at = NOW(), is_orphaned = false, segment_count = GREATEST(COALESCE(segment_count, 0), $3), size_bytes = GREATEST(COALESCE(size_bytes, 0), $4)
 WHERE artifact_hash = $1 AND node_id = $2

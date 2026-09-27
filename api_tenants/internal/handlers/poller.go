@@ -21,6 +21,7 @@ import (
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/grpcutil"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/servicedefs"
 
+	"golang.org/x/sync/singleflight"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	healthpb "google.golang.org/grpc/health/grpc_health_v1"
@@ -91,6 +92,7 @@ func StartHealthPoller(cfg HealthPollerConfig) {
 	if tls == nil {
 		tls = func(string) HealthWatchTLS { return HealthWatchTLS{} }
 	}
+	currentHealthProbe.Store(&healthProbe{client: client, tls: tls})
 
 	if cfg.GRPCWatch {
 		watchRefresh := time.Duration(cfg.WatchRefreshSeconds) * time.Second
@@ -242,174 +244,31 @@ func pollOnce(client *http.Client, sem chan struct{}, batchSize int, minAge time
 	var wg sync.WaitGroup
 	var checked, healthy, unhealthy, skipped int32
 	serviceSummary := newServiceHealthSummary()
+	probe := healthProbe{client: client, tls: tls}
 	for _, it := range list {
 		applyServiceDefinitionFallback(&it)
-		if it.host == "" || it.port == 0 {
-			logger.WithField("instance_id", it.id).WithField("service", it.serviceID).Warn("Skipping health check: missing host or port")
+		proto, skipReason := healthProbeProtocol(it)
+		if skipReason != "" {
+			logger.WithField("instance_id", it.id).WithField("service", it.serviceID).WithField("protocol", proto).Warn("Skipping health check: " + skipReason)
 			atomic.AddInt32(&skipped, 1)
 			serviceSummary.recordSkipped(it.serviceID)
 			recordSkippedHealthCheck(it.id)
 			continue
 		}
-		proto := strings.ToLower(strings.TrimSpace(it.proto))
-		if proto == "" {
-			proto = strings.ToLower(strings.TrimSpace(it.defaultProto))
-		}
-		if proto == "" {
-			proto = "http"
-		}
-		// HTTP health
-		if proto == "http" {
-			// path required for http; skip if not known
-			if it.path == "" {
-				logger.WithField("instance_id", it.id).WithField("service", it.serviceID).Warn("Skipping HTTP health check: no path configured")
-				atomic.AddInt32(&skipped, 1)
-				serviceSummary.recordSkipped(it.serviceID)
-				recordSkippedHealthCheck(it.id)
-				continue
+		wg.Add(1)
+		sem <- struct{}{}
+		go func(ii serviceInstance) {
+			defer wg.Done()
+			defer func() { <-sem }()
+			atomic.AddInt32(&checked, 1)
+			status := probe.checkAndPersist(ii, proto)
+			if status == "healthy" {
+				atomic.AddInt32(&healthy, 1)
+			} else {
+				atomic.AddInt32(&unhealthy, 1)
 			}
-			wg.Add(1)
-			sem <- struct{}{}
-			go func(ii serviceInstance) {
-				defer wg.Done()
-				defer func() { <-sem }()
-				probeURL, urlErr := httpHealthURL(ii)
-				status := "healthy"
-				atomic.AddInt32(&checked, 1)
-				probeCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-				defer cancel()
-				if urlErr != nil {
-					status = "unhealthy"
-					atomic.AddInt32(&unhealthy, 1)
-					serviceSummary.recordResult(ii.serviceID, status)
-					logger.WithError(urlErr).WithField("service", ii.serviceID).WithField("health_endpoint", ii.path).Debug("HTTP health check endpoint invalid")
-					if dbErr := persistHealthStatus(context.Background(), ii.id, status); dbErr != nil {
-						logger.WithError(dbErr).WithField("instance_id", ii.id).Warn("Failed to persist health status")
-					}
-					return
-				}
-				req, err := http.NewRequestWithContext(probeCtx, http.MethodGet, probeURL, nil)
-				if err != nil {
-					status = "unhealthy"
-					atomic.AddInt32(&unhealthy, 1)
-					serviceSummary.recordResult(ii.serviceID, status)
-					logger.WithError(err).WithField("service", ii.serviceID).WithField("url", probeURL).Debug("HTTP health check request failed")
-					if dbErr := persistHealthStatus(context.Background(), ii.id, status); dbErr != nil {
-						logger.WithError(dbErr).WithField("instance_id", ii.id).Warn("Failed to persist health status")
-					}
-					return
-				}
-				resp, err := client.Do(req)
-				if err != nil {
-					status = "unhealthy"
-					atomic.AddInt32(&unhealthy, 1)
-					logger.WithError(err).WithField("service", ii.serviceID).WithField("url", probeURL).Debug("HTTP health check failed")
-				} else if resp.StatusCode != 200 {
-					status = "unhealthy"
-					atomic.AddInt32(&unhealthy, 1)
-					logger.WithField("service", ii.serviceID).WithField("url", probeURL).WithField("status_code", resp.StatusCode).Debug("HTTP health check returned non-200")
-				} else {
-					atomic.AddInt32(&healthy, 1)
-					logger.WithField("service", ii.serviceID).WithField("url", probeURL).Debug("HTTP health check passed")
-				}
-				serviceSummary.recordResult(ii.serviceID, status)
-				if resp != nil {
-					_ = resp.Body.Close()
-				}
-				if persistErr := persistHealthStatus(context.Background(), ii.id, status); persistErr != nil {
-					logger.WithError(persistErr).WithField("service", ii.serviceID).Debug("persist health status failed")
-				}
-			}(it)
-			continue
-		}
-		// gRPC health
-		if proto == "grpc" {
-			wg.Add(1)
-			sem <- struct{}{}
-			go func(ii serviceInstance) {
-				defer wg.Done()
-				defer func() { <-sem }()
-				addr := fmt.Sprintf("%s:%d", ii.host, ii.port)
-				status := "healthy"
-				atomic.AddInt32(&checked, 1)
-				probeCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-				defer cancel()
-				transport, err := grpcHealthDialOption(ii, tls(ii.serviceID))
-				if err != nil {
-					status = "unhealthy"
-					atomic.AddInt32(&unhealthy, 1)
-					serviceSummary.recordResult(ii.serviceID, status)
-					logger.WithError(err).WithField("service", ii.serviceID).WithField("addr", addr).Debug("gRPC health check TLS config failed")
-					if dbErr := persistHealthStatus(context.Background(), ii.id, status); dbErr != nil {
-						logger.WithError(dbErr).WithField("instance_id", ii.id).Warn("Failed to persist health status")
-					}
-					return
-				}
-				conn, err := grpc.NewClient(
-					addr,
-					transport,
-					grpc.WithConnectParams(grpc.ConnectParams{MinConnectTimeout: 2 * time.Second}),
-				)
-				if err != nil {
-					status = "unhealthy"
-					atomic.AddInt32(&unhealthy, 1)
-					serviceSummary.recordResult(ii.serviceID, status)
-					logger.WithError(err).WithField("service", ii.serviceID).WithField("addr", addr).Debug("gRPC health check dial failed")
-					if dbErr := persistHealthStatus(context.Background(), ii.id, status); dbErr != nil {
-						logger.WithError(dbErr).WithField("instance_id", ii.id).Warn("Failed to persist health status")
-					}
-					return
-				}
-				defer func() { _ = conn.Close() }()
-				hc := healthpb.NewHealthClient(conn)
-				if _, err := hc.Check(probeCtx, &healthpb.HealthCheckRequest{}); err != nil {
-					status = "unhealthy"
-					atomic.AddInt32(&unhealthy, 1)
-					logger.WithError(err).WithField("service", ii.serviceID).WithField("addr", addr).Debug("gRPC health check failed")
-				} else {
-					atomic.AddInt32(&healthy, 1)
-					logger.WithField("service", ii.serviceID).WithField("addr", addr).Debug("gRPC health check passed")
-				}
-				serviceSummary.recordResult(ii.serviceID, status)
-				if persistErr := persistHealthStatus(context.Background(), ii.id, status); persistErr != nil {
-					logger.WithError(persistErr).WithField("service", ii.serviceID).Debug("persist health status failed")
-				}
-			}(it)
-			continue
-		}
-		if proto == "tcp" {
-			wg.Add(1)
-			sem <- struct{}{}
-			go func(ii serviceInstance) {
-				defer wg.Done()
-				defer func() { <-sem }()
-				addr := fmt.Sprintf("%s:%d", ii.host, ii.port)
-				status := "healthy"
-				atomic.AddInt32(&checked, 1)
-				probeCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-				defer cancel()
-				var d net.Dialer
-				conn, err := d.DialContext(probeCtx, "tcp", addr)
-				if err != nil {
-					status = "unhealthy"
-					atomic.AddInt32(&unhealthy, 1)
-					logger.WithError(err).WithField("service", ii.serviceID).WithField("addr", addr).Debug("TCP health check failed")
-				} else {
-					atomic.AddInt32(&healthy, 1)
-					_ = conn.Close()
-					logger.WithField("service", ii.serviceID).WithField("addr", addr).Debug("TCP health check passed")
-				}
-				serviceSummary.recordResult(ii.serviceID, status)
-				if persistErr := persistHealthStatus(context.Background(), ii.id, status); persistErr != nil {
-					logger.WithError(persistErr).WithField("service", ii.serviceID).Debug("persist health status failed")
-				}
-			}(it)
-			continue
-		}
-		logger.WithField("instance_id", it.id).WithField("service", it.serviceID).WithField("protocol", proto).Warn("Skipping health check: unsupported protocol")
-		atomic.AddInt32(&skipped, 1)
-		serviceSummary.recordSkipped(it.serviceID)
-		recordSkippedHealthCheck(it.id)
+			serviceSummary.recordResult(ii.serviceID, status)
+		}(it)
 	}
 	wg.Wait()
 	serviceHealth, healthyServices, unhealthyServices, skippedServices := serviceSummary.snapshot()
@@ -429,6 +288,159 @@ func pollOnce(client *http.Client, sem chan struct{}, batchSize int, minAge time
 		summary.Debug("Health poller completed")
 	}
 	return nil
+}
+
+// healthProbeTimeout bounds one health check of one instance.
+const healthProbeTimeout = 2 * time.Second
+
+// healthProbe checks one service instance over its health protocol.
+type healthProbe struct {
+	client *http.Client
+	tls    func(serviceID string) HealthWatchTLS
+}
+
+// healthProbeProtocol resolves the protocol an instance is checked over, or
+// the reason it cannot be checked.
+func healthProbeProtocol(inst serviceInstance) (proto, skipReason string) {
+	proto = strings.ToLower(strings.TrimSpace(inst.proto))
+	if proto == "" {
+		proto = strings.ToLower(strings.TrimSpace(inst.defaultProto))
+	}
+	if proto == "" {
+		proto = "http"
+	}
+	switch {
+	case inst.host == "" || inst.port == 0:
+		return proto, "missing host or port"
+	case proto == "http" && inst.path == "":
+		return proto, "no HTTP health path configured"
+	case proto != "http" && proto != "grpc" && proto != "tcp":
+		return proto, "unsupported protocol"
+	}
+	return proto, ""
+}
+
+// check returns nil when the instance answers healthy, else why it did not.
+func (p healthProbe) check(inst serviceInstance, proto string) error {
+	ctx, cancel := context.WithTimeout(context.Background(), healthProbeTimeout)
+	defer cancel()
+	addr := fmt.Sprintf("%s:%d", inst.host, inst.port)
+	switch proto {
+	case "http":
+		probeURL, err := httpHealthURL(inst)
+		if err != nil {
+			return fmt.Errorf("health endpoint %q: %w", inst.path, err)
+		}
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, probeURL, nil)
+		if err != nil {
+			return fmt.Errorf("build request for %s: %w", probeURL, err)
+		}
+		resp, err := p.client.Do(req)
+		if err != nil {
+			return fmt.Errorf("GET %s: %w", probeURL, err)
+		}
+		_ = resp.Body.Close()
+		if resp.StatusCode != http.StatusOK {
+			return fmt.Errorf("GET %s returned %d", probeURL, resp.StatusCode)
+		}
+		return nil
+	case "grpc":
+		tls := HealthWatchTLS{}
+		if p.tls != nil {
+			tls = p.tls(inst.serviceID)
+		}
+		transport, err := grpcHealthDialOption(inst, tls)
+		if err != nil {
+			return fmt.Errorf("gRPC TLS config for %s: %w", addr, err)
+		}
+		conn, err := grpc.NewClient(addr, transport, grpc.WithConnectParams(grpc.ConnectParams{MinConnectTimeout: healthProbeTimeout}))
+		if err != nil {
+			return fmt.Errorf("gRPC dial %s: %w", addr, err)
+		}
+		defer func() { _ = conn.Close() }()
+		if _, err := healthpb.NewHealthClient(conn).Check(ctx, &healthpb.HealthCheckRequest{}); err != nil {
+			return fmt.Errorf("gRPC health %s: %w", addr, err)
+		}
+		return nil
+	case "tcp":
+		var d net.Dialer
+		conn, err := d.DialContext(ctx, "tcp", addr)
+		if err != nil {
+			return fmt.Errorf("TCP dial %s: %w", addr, err)
+		}
+		_ = conn.Close()
+		return nil
+	}
+	return fmt.Errorf("unsupported protocol %q", proto)
+}
+
+// checkAndPersist checks the instance and records the result.
+func (p healthProbe) checkAndPersist(inst serviceInstance, proto string) string {
+	status := "healthy"
+	if err := p.check(inst, proto); err != nil {
+		status = "unhealthy"
+		logger.WithError(err).WithField("service", inst.serviceID).WithField("instance_id", inst.id).Debug("Health check failed")
+	}
+	if err := persistHealthStatus(context.Background(), inst.id, status); err != nil {
+		logger.WithError(err).WithField("service", inst.serviceID).WithField("instance_id", inst.id).Warn("Failed to persist health status")
+	}
+	return status
+}
+
+var (
+	// currentHealthProbe carries the running poller's HTTP client and TLS
+	// settings to on-demand checks.
+	currentHealthProbe atomic.Pointer[healthProbe]
+	// onDemandProbes lets concurrent on-demand checks of one instance share a
+	// single probe.
+	onDemandProbes singleflight.Group
+)
+
+// ProbeDiscoveredInstances checks the given instances now, the way the poller
+// does, and persists each result. A discovery that finds a running instance
+// marked unhealthy calls it, so an instance that came back is usable without
+// waiting for the next poll. It returns the new status per instance ID;
+// instances that cannot be checked are left out.
+func ProbeDiscoveredInstances(ctx context.Context, rows []quartermasterdb.ServiceDiscoveryRow) map[string]string {
+	probe := healthProbe{client: &http.Client{Timeout: healthProbeTimeout}}
+	if current := currentHealthProbe.Load(); current != nil {
+		probe = *current
+	}
+	var (
+		mu      sync.Mutex
+		wg      sync.WaitGroup
+		results = make(map[string]string, len(rows))
+	)
+	for _, row := range rows {
+		inst := serviceInstance{
+			id: row.InstanceID, serviceID: row.ServiceID, proto: row.Protocol,
+			host: row.AdvertiseHost.String, port: int(row.Port.Int32), path: row.HealthEndpoint.String,
+		}
+		applyServiceDefinitionFallback(&inst)
+		proto, skipReason := healthProbeProtocol(inst)
+		if skipReason != "" {
+			logger.WithField("instance_id", inst.id).WithField("service", inst.serviceID).Debug("On-demand health check skipped: " + skipReason)
+			continue
+		}
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			ch := onDemandProbes.DoChan(inst.id, func() (interface{}, error) {
+				return probe.checkAndPersist(inst, proto), nil
+			})
+			select {
+			case res := <-ch:
+				if status, ok := res.Val.(string); ok {
+					mu.Lock()
+					results[inst.id] = status
+					mu.Unlock()
+				}
+			case <-ctx.Done():
+			}
+		}()
+	}
+	wg.Wait()
+	return results
 }
 
 func httpHealthURL(inst serviceInstance) (string, error) {

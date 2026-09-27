@@ -3178,6 +3178,7 @@ message ProcessingJobProgress {
   int32 progress_pct = 2;         // 0-100 based on track position vs source duration
   int64 last_ms = 3;              // Current output track position in milliseconds
   int64 source_duration_ms = 4;   // Total source duration in milliseconds
+  int64 source_size_bytes = 5;    // Bytes of the source the node staged for this job; 0 when unknown
 }
 
 // Tracks GraphQL API requests for usage analytics (RFC: x402 Agent Access)

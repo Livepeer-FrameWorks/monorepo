@@ -425,8 +425,9 @@ mutation {
 
 The asset comes back at once with its `playbackId` and status `PROCESSING`. The processing node
 reads the file straight from the URL, with no separate upload step, and processes it like an
-upload: `upload.created` and `upload.completed` fire on acceptance, then `upload.ready` or
-`upload.failed` (see [Events](/builders/events)).
+upload: `upload.created` fires on acceptance, `upload.completed` once the node has fetched the
+source (with its size), then `upload.ready` or `upload.failed`. A source that cannot be fetched
+emits `upload.failed` without `upload.completed` (see [Events](/builders/events)).
 
 - **Sources**: `https://` and `http://` URLs. For content on IPFS or Arweave, pass a public
   gateway's https link.

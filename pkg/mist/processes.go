@@ -139,9 +139,9 @@ func ReplaceLivepeerWithLocal(processesJSON string) string {
 				}
 			}
 			if trackSelect, ok := prof["track_select"].(string); ok && trackSelect != "" {
-				av["track_select"] = trackSelect
+				av["track_select"] = canonicalAVTrackSelect(trackSelect, av["codec"])
 			} else {
-				av["track_select"] = "video=maxbps&audio=none&subtitle=none"
+				av["track_select"] = "video=maxbps&audio=none&subtitle=none&meta=none"
 			}
 			// The local ladder must never render above the source, so every AV
 			// rendition keeps an inhibit. MistServer evaluates process inhibitors
@@ -528,7 +528,8 @@ func HasLivepeerProcesses(processesJSON string) bool {
 
 // NormalizeProcessConfigSelectors makes process track selection explicit before
 // returning configs to MistServer. Missing values are filled with the defaults
-// advertised and consumed by the corresponding Mist process binary.
+// advertised and consumed by the corresponding Mist process binary, and every
+// AV selector names each track type (see canonicalAVTrackSelect).
 func NormalizeProcessConfigSelectors(processesJSON string) string {
 	var processes []map[string]interface{}
 	if err := json.Unmarshal([]byte(processesJSON), &processes); err != nil {
@@ -542,8 +543,12 @@ func NormalizeProcessConfigSelectors(processesJSON string) string {
 		}
 		switch processName {
 		case "AV":
-			if _, ok := nonEmptyString(proc["track_select"]); !ok {
-				proc["track_select"] = avTrackSelectForCodec(proc["codec"])
+			current, ok := nonEmptyString(proc["track_select"])
+			if !ok {
+				current = avTrackSelectForCodec(proc["codec"])
+			}
+			if canonical := canonicalAVTrackSelect(current, proc["codec"]); canonical != proc["track_select"] {
+				proc["track_select"] = canonical
 				changed = true
 			}
 		case "Thumbs":
@@ -876,18 +881,73 @@ func nonEmptyString(value interface{}) (string, bool) {
 }
 
 func avTrackSelectForCodec(value interface{}) string {
-	codec, ok := value.(string)
-	if !ok {
-		return "audio=all&video=all"
-	}
-	switch strings.ToLower(codec) {
-	case "aac", "opus", "mp3", "flac", "wav":
+	switch avCodecKind(value) {
+	case "audio":
 		return "audio=all&video=none&subtitle=none&meta=none"
-	case "h264", "h265", "hevc", "vp8", "vp9", "av1", "mpeg2":
+	case "video":
 		return "video=maxbps&audio=none&subtitle=none&meta=none"
 	default:
 		return "audio=all&video=all"
 	}
+}
+
+func avCodecKind(value interface{}) string {
+	codec, ok := value.(string)
+	if !ok {
+		return ""
+	}
+	switch strings.ToLower(codec) {
+	case "aac", "opus", "mp3", "flac", "wav":
+		return "audio"
+	case "h264", "h265", "hevc", "vp8", "vp9", "av1", "mpeg2":
+		return "video"
+	default:
+		return ""
+	}
+}
+
+// canonicalAVTrackSelect appends <type>=none for every track type an AV
+// selector leaves unnamed. Mist adds unnamed types to a selection, so
+// "audio=all" alone also matches meta tracks (a Thumbs output) and, on a
+// video-only source, starts an audio encoder on them. Subtitle and meta are
+// always excluded; the A/V type opposite to the one selected (or to the
+// codec's kind when neither is named) is excluded. Keys already present are
+// kept as written.
+func canonicalAVTrackSelect(selector string, codec interface{}) string {
+	named := map[string]bool{}
+	for _, part := range strings.Split(selector, "&") {
+		key, _, _ := strings.Cut(part, "=")
+		if key = strings.TrimSpace(key); key != "" {
+			named[key] = true
+		}
+	}
+	var missing []string
+	switch {
+	case named["audio"] && !named["video"]:
+		missing = append(missing, "video")
+	case named["video"] && !named["audio"]:
+		missing = append(missing, "audio")
+	case !named["audio"] && !named["video"]:
+		switch avCodecKind(codec) {
+		case "audio":
+			missing = append(missing, "video")
+		case "video":
+			missing = append(missing, "audio")
+		}
+	}
+	for _, key := range []string{"subtitle", "meta"} {
+		if !named[key] {
+			missing = append(missing, key)
+		}
+	}
+	out := selector
+	for _, key := range missing {
+		if out != "" {
+			out += "&"
+		}
+		out += key + "=none"
+	}
+	return out
 }
 
 func copyLivepeerProfile(profile LivepeerJSONProfile) LivepeerJSONProfile {

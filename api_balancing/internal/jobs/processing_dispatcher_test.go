@@ -3,6 +3,7 @@ package jobs
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"os"
 	"strings"
 	"testing"
@@ -164,6 +165,28 @@ func TestProcessingDispatcherDispatchScansNullOutputProfiles(t *testing.T) {
 
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// A VOD spec stored with the pre-canonical selector ("audio=all" alone)
+// reaches the node with every track type named, so Mist cannot add the
+// Thumbs meta track to the audio encoder's selection.
+func TestProcessingDispatcherCanonicalizesStoredSelectors(t *testing.T) {
+	d := NewProcessingDispatcher(ProcessingDispatcherConfig{Logger: logging.NewLogger()})
+	stored := `[{"process":"AV","codec":"opus","track_select":"audio=all"},{"process":"Thumbs","track_select":"video=lowres"}]`
+
+	var got []map[string]any
+	if err := json.Unmarshal([]byte(d.resolveStoredProcesses(stored)), &got); err != nil {
+		t.Fatal(err)
+	}
+	if got[0]["track_select"] != "audio=all&video=none&subtitle=none&meta=none" {
+		t.Fatalf("AV track_select = %v", got[0]["track_select"])
+	}
+	if got[1]["track_select"] != "video=lowres" {
+		t.Fatalf("Thumbs track_select = %v", got[1]["track_select"])
+	}
+	if got[0]["restart_type"] != "disabled" {
+		t.Fatalf("AV restart_type = %v", got[0]["restart_type"])
 	}
 }
 

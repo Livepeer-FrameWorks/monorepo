@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 	"time"
@@ -133,10 +134,13 @@ func runReleasePlan(cmd *cobra.Command, rc *resolvedCluster, opts releasePlanOpt
 	}
 	fmt.Fprintln(out, "  6. stale placement cleanup: platform service replicas and kafka-mirrormaker workers the manifest no longer places")
 	fmt.Fprintln(out, "  7. schema postdeploy migrations")
+	if _, ok := manifest.Services["purser"]; ok {
+		fmt.Fprintln(out, "     · then the Purser tier catalog reconcile (purser bootstrap + validate)")
+	}
 	fmt.Fprintf(out, "  8. schema contract migrations: deferred until the rollback window closes; take a fresh backup first (`cluster migrate --phase contract --to-version %s --backup <completed-backup-path> --yes`)\n", platformVersion)
 	writeReleasePlanGroup(out, "managed dependencies (independent manifest pins)", classes.Dependencies)
 	writeReleasePlanGroup(out, "host infrastructure (independent OS/data lifecycle)", classes.Infrastructure)
-	fmt.Fprintln(out, "  control-plane desired state: inspect with `cluster control-plane plan`; reconcile explicitly when needed")
+	fmt.Fprintln(out, "  other control-plane desired state: inspect with `cluster control-plane plan`; reconcile explicitly when needed")
 	fmt.Fprintln(out, "\nStatic plan complete. No secrets were decrypted and no cluster connections were opened.")
 	return nil
 }
@@ -153,12 +157,48 @@ func writeReleasePlanGroup(out io.Writer, label string, values []string) {
 // substitute a fixture so the apply sequence runs without the release repositories.
 var fetchReleaseManifestFn = gitops.FetchFromRepositories
 
-// releaseRunMigrateFn and releaseRunUpgradesFn run the migration phases and the service upgrades of `release apply`.
-// Tests substitute them to observe step order without a cluster.
+// releaseRunMigrateFn, releaseRunUpgradesFn and releaseReconcilePlacementsFn run the migration phases, the service
+// upgrades and the placement cleanup of `release apply`. Tests substitute them to observe step order without a cluster.
 var (
-	releaseRunMigrateFn  = runMigrate
-	releaseRunUpgradesFn = runReleaseUpgradesInterleaved
+	releaseRunMigrateFn          = runMigrate
+	releaseRunUpgradesFn         = runReleaseUpgradesInterleaved
+	releaseReconcilePlacementsFn = reconcileReleasePlacements
+	// releasePrepareTierCatalogFn renders the Purser bootstrap desired state
+	// before the first mutation and returns the step that applies it.
+	releasePrepareTierCatalogFn = prepareReleaseTierCatalog
 )
+
+// prepareReleaseTierCatalog renders the bootstrap desired state that
+// provision and finalize hand to `purser bootstrap`, so a release reconciles
+// the tier catalog its Purser binary embeds. The returned step is nil when
+// the manifest runs no Purser.
+func prepareReleaseTierCatalog(cmd *cobra.Command, rc *resolvedCluster, sshPool *ssh.Pool) (func(ctx context.Context, dryRun bool) error, error) {
+	manifest := rc.Manifest
+	if _, ok := manifest.Services["purser"]; !ok {
+		return nil, nil
+	}
+	sharedEnv, err := rc.PreparedSharedEnv()
+	if err != nil {
+		return nil, fmt.Errorf("load manifest env_files: %w", err)
+	}
+	bootstrapYAML, err := renderBootstrapYAML(cmd, manifest, filepath.Dir(rc.ManifestPath), sharedEnv)
+	if err != nil {
+		return nil, err
+	}
+	return func(ctx context.Context, dryRun bool) error {
+		if dryRun {
+			fmt.Fprintln(cmd.OutOrStdout(), "  dry-run: purser bootstrap and its validate would run; the desired state rendered")
+			return nil
+		}
+		if err := runServiceBootstrap(ctx, cmd, manifest, sshPool, "purser", bootstrapYAML, nil); err != nil {
+			return fmt.Errorf("purser bootstrap: %w", err)
+		}
+		if err := runServiceBootstrapValidate(ctx, cmd, manifest, sshPool, "purser"); err != nil {
+			return fmt.Errorf("purser bootstrap validate: %w", err)
+		}
+		return nil
+	}, nil
+}
 
 type releaseApplyOptions struct {
 	version                      string
@@ -272,6 +312,11 @@ func runReleaseApply(cmd *cobra.Command, rc *resolvedCluster, opts releaseApplyO
 		}
 	}
 
+	reconcileTierCatalog, err := releasePrepareTierCatalogFn(cmd, rc, sshPool)
+	if err != nil {
+		return fmt.Errorf("purser tier catalog: %w", err)
+	}
+
 	hostSteps := planReleaseHostConvergence(plan, manifest)
 	ux.Heading(out, fmt.Sprintf("Release plan for %s (platform %s)", version, platformVersion))
 	writeReleaseHostConvergencePlan(out, "1. pre-upgrade host convergence", manifest, hostSteps)
@@ -287,6 +332,9 @@ func runReleaseApply(cmd *cobra.Command, rc *resolvedCluster, opts releaseApplyO
 	}
 	fmt.Fprintln(out, "  4. stale placement cleanup (platform service replicas, kafka-mirrormaker workers)")
 	fmt.Fprintln(out, "  5. postdeploy migrations")
+	if reconcileTierCatalog != nil {
+		fmt.Fprintln(out, "     · then the Purser tier catalog reconcile (purser bootstrap + validate)")
+	}
 	fmt.Fprintf(out, "  6. contract migrations: deferred until the rollback window closes; take a fresh backup first (`cluster migrate --phase contract --to-version %s --backup <completed-backup-path> --yes`)\n", platformVersion)
 
 	// Every service env the release deploys must pass the schema contract, and
@@ -353,7 +401,7 @@ func runReleaseApply(cmd *cobra.Command, rc *resolvedCluster, opts releaseApplyO
 		writeReleaseResumeHint(cmd.ErrOrStderr(), platformVersion, opts.dryRun)
 		return err
 	}
-	if err := reconcileReleasePlacements(cmd.Context(), cmd, rc, installed, opts.dryRun); err != nil {
+	if err := releaseReconcilePlacementsFn(cmd.Context(), cmd, rc, installed, opts.dryRun); err != nil {
 		writeReleaseResumeHint(cmd.ErrOrStderr(), platformVersion, opts.dryRun)
 		return fmt.Errorf("service placement reconciliation: %w", err)
 	}
@@ -367,6 +415,14 @@ func runReleaseApply(cmd *cobra.Command, rc *resolvedCluster, opts releaseApplyO
 	ux.Subheading(out, "[4/4] Postdeploy migrations")
 	if err := releaseRunMigrateFn(cmd, rc, opts.dryRun, "postdeploy", true, platformVersion, false, opts.completeInterruptedBaselines); err != nil {
 		return fmt.Errorf("postdeploy migrations: %w", err)
+	}
+	// The upgraded Purser embeds this release's tier catalog; provision and
+	// finalize are not the only paths that must converge it.
+	if reconcileTierCatalog != nil {
+		ux.Subheading(out, "Reconciling the Purser tier catalog")
+		if err := reconcileTierCatalog(cmd.Context(), opts.dryRun); err != nil {
+			return fmt.Errorf("purser tier catalog: %w", err)
+		}
 	}
 	if !opts.dryRun {
 		ux.Subheading(out, "Verifying auth release replicas")

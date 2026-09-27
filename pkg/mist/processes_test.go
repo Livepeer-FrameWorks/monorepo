@@ -306,7 +306,7 @@ func TestReplaceLivepeerWithLocalUsesMistProcAVOptions(t *testing.T) {
 	if firstLocal["framerate"] != float64(30) {
 		t.Errorf("framerate = %v, want 30", firstLocal["framerate"])
 	}
-	if firstLocal["track_select"] != "video=maxbps&audio=none&subtitle=none" {
+	if firstLocal["track_select"] != "video=maxbps&audio=none&subtitle=none&meta=none" {
 		t.Errorf("track_select = %v", firstLocal["track_select"])
 	}
 	if _, ok := firstLocal["height"]; ok {
@@ -345,7 +345,7 @@ func TestReplaceLivepeerWithLocalInheritsProcessSourceMask(t *testing.T) {
 		"resolution":   "x360",
 		"source_mask":  float64(4),
 		"target_mask":  float64(2),
-		"track_select": "video=maxbps&audio=none&subtitle=none",
+		"track_select": "video=maxbps&audio=none&subtitle=none&meta=none",
 	}
 	for key, want := range checks {
 		if got := proc[key]; got != want {
@@ -415,7 +415,7 @@ func TestReplaceLivepeerWithLocalPreservesExplicitMistProcOptions(t *testing.T) 
 	checks := map[string]any{
 		"profile":         "baseline",
 		"resolution":      "960x540",
-		"track_select":    "video=0",
+		"track_select":    "video=0&audio=none&subtitle=none&meta=none",
 		"inconsequential": true,
 		"exit_unmask":     true,
 		"source_mask":     "v",
@@ -486,6 +486,47 @@ func TestNormalizeProcessConfigSelectorsMakesSchedulerInputsExplicit(t *testing.
 	}
 	if got[2]["track_select"] != "video=maxbps" {
 		t.Fatalf("Livepeer track_select = %v", got[2]["track_select"])
+	}
+}
+
+// Mist adds unnamed track types to a selection, so a stored "audio=all" AV
+// matched the Thumbs meta track and started an audio encoder on video-only
+// sources. Every unnamed type is excluded; named keys stay as written.
+func TestNormalizeProcessConfigSelectorsNamesEveryAVTrackType(t *testing.T) {
+	for _, tc := range []struct {
+		name, process, want string
+	}{
+		{"audio selector on stored spec", `{"process":"AV","codec":"opus","track_select":"audio=all"}`, "audio=all&video=none&subtitle=none&meta=none"},
+		{"pre-meta catalog selector", `{"process":"AV","codec":"AAC","track_select":"audio=all&video=none&subtitle=none"}`, "audio=all&video=none&subtitle=none&meta=none"},
+		{"video selector", `{"process":"AV","codec":"H264","track_select":"video=maxbps"}`, "video=maxbps&audio=none&subtitle=none&meta=none"},
+		{"explicit keys kept", `{"process":"AV","codec":"opus","track_select":"audio=1&meta=all"}`, "audio=1&meta=all&video=none&subtitle=none"},
+		{"neither A/V named uses codec kind", `{"process":"AV","codec":"opus","track_select":"subtitle=none"}`, "subtitle=none&video=none&meta=none"},
+		{"unknown codec default", `{"process":"AV","codec":"custom"}`, "audio=all&video=all&subtitle=none&meta=none"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var got []map[string]any
+			if err := json.Unmarshal([]byte(NormalizeProcessConfigSelectors("["+tc.process+"]")), &got); err != nil {
+				t.Fatal(err)
+			}
+			if got[0]["track_select"] != tc.want {
+				t.Fatalf("track_select = %v, want %s", got[0]["track_select"], tc.want)
+			}
+		})
+	}
+	canonical := `[{"process":"AV","codec":"opus","track_select":"audio=all&video=none&subtitle=none&meta=none"}]`
+	if got := NormalizeProcessConfigSelectors(canonical); got != canonical {
+		t.Fatalf("canonical selector rewritten: %s", got)
+	}
+}
+
+func TestReplaceLivepeerWithLocalCanonicalizesProfileSelector(t *testing.T) {
+	input := `[{"process":"Livepeer","target_profiles":[{"name":"360p","profile":"H264ConstrainedHigh","bitrate":900000,"height":360,"track_select":"video=maxbps"}]}]`
+	var got []map[string]any
+	if err := json.Unmarshal([]byte(ReplaceLivepeerWithLocal(input)), &got); err != nil {
+		t.Fatal(err)
+	}
+	if got[0]["track_select"] != "video=maxbps&audio=none&subtitle=none&meta=none" {
+		t.Fatalf("track_select = %v", got[0]["track_select"])
 	}
 }
 

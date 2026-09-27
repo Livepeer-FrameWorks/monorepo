@@ -394,18 +394,7 @@ func (d *ProcessingDispatcher) dispatchJob(ctx context.Context, job *processingJ
 	}
 	authoritativeProcessesJSON := ""
 	if job.ProcessesJSON.Valid {
-		resolved := job.ProcessesJSON.String
-		resolved = mist.MaskLivepeerSourceForVOD(resolved)
-		// One-shot job: finished processes must not be supervisor-restarted
-		// (restart churn blocks the buffer's output-drain signal).
-		resolved = mist.DisableProcessRestarts(resolved)
-		if d.gatewayResolver != nil {
-			// nil candidates resolve against the resolver's local cluster, the cell
-			// whose Foghorn dispatches jobs for the artifact's origin cluster.
-			resolved = d.gatewayResolver.ApplyLivepeerBroadcasters(resolved, nil)
-			resolved = d.gatewayResolver.ApplyLivepeerWorkload(resolved, mist.WorkloadVOD)
-		}
-		authoritativeProcessesJSON = mist.StripLivepeerJobToken(resolved)
+		authoritativeProcessesJSON = d.resolveStoredProcesses(job.ProcessesJSON.String)
 	}
 
 	// Persist the node assignment BEFORE the node can report a result. processing_node_id is what the
@@ -494,6 +483,25 @@ func (d *ProcessingDispatcher) dispatchJob(ctx context.Context, job *processingJ
 		"node_id":  nodeID,
 		"reason":   reason,
 	}).Info("Dispatched processing job")
+}
+
+// resolveStoredProcesses turns a job's stored process spec into the config a
+// node runs.
+func (d *ProcessingDispatcher) resolveStoredProcesses(stored string) string {
+	resolved := mist.MaskLivepeerSourceForVOD(stored)
+	// Specs stored before the canonical selector shape leave track types
+	// unnamed, which Mist would add to the selection.
+	resolved = mist.NormalizeProcessConfigSelectors(resolved)
+	// One-shot job: finished processes must not be supervisor-restarted
+	// (restart churn blocks the buffer's output-drain signal).
+	resolved = mist.DisableProcessRestarts(resolved)
+	if d.gatewayResolver != nil {
+		// nil candidates resolve against the resolver's local cluster, the cell
+		// whose Foghorn dispatches jobs for the artifact's origin cluster.
+		resolved = d.gatewayResolver.ApplyLivepeerBroadcasters(resolved, nil)
+		resolved = d.gatewayResolver.ApplyLivepeerWorkload(resolved, mist.WorkloadVOD)
+	}
+	return mist.StripLivepeerJobToken(resolved)
 }
 
 func (d *ProcessingDispatcher) markArtifactQueued(ctx context.Context, job *processingJob, reason string) {

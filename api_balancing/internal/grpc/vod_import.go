@@ -116,8 +116,8 @@ func (s *FoghornGRPCServer) importVodAssetImpl(ctx context.Context, req *sharedp
 		requested.ServingClusterId = &cid
 	}
 
-	// The artifact, its source, the processing job, and both upload events
-	// commit together: an import is either fully queued or not recorded.
+	// The artifact, its source, the processing job, and upload.created commit
+	// together: an import is either fully queued or not recorded.
 	if txErr := s.withArtifactLifecycleTx(ctx, func(tx *sql.Tx) error {
 		queries := foghorndb.New(tx)
 		if execErr := queries.InsertImportedVodArtifact(ctx, foghorndb.InsertImportedVodArtifactParams{
@@ -148,9 +148,9 @@ func (s *FoghornGRPCServer) importVodAssetImpl(ctx context.Context, req *sharedp
 		}, actor); enqErr != nil {
 			return enqErr
 		}
-		return artifactoutbox.EnqueueVodTransitionTx(ctx, tx, processing, &publicv1.UploadCompleted{
-			Artifact: artifactoutbox.UploadArtifact(artifactHash),
-		}, actor)
+		// upload.completed waits for the processing node to stage the source:
+		// only then is the source known to exist, and its size known.
+		return artifactoutbox.EnqueueVodTransitionTx(ctx, tx, processing, nil)
 	}); txErr != nil {
 		s.logger.WithError(txErr).WithField("artifact_hash", artifactHash).Error("Failed to record VOD import")
 		return nil, status.Error(codes.Internal, "failed to record import")
