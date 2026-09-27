@@ -152,6 +152,7 @@ type Processor struct {
 	preparedSourceRegistry    *control.StreamRegistry
 	preparedSourceAdmission   PreparedSourceAdmission
 	signingKeyUse             SigningKeyUseRecorder
+	playbackGrants            PlaybackGrantDelivery
 
 	streamCache        *cache.Cache // Cache stream context (tenant + user)
 	billingCache       *cache.Cache // Cache tenant billing authority independently of stream identity.
@@ -226,6 +227,7 @@ func (p *Processor) HandleMediaAuthorityApply(ctx context.Context, result locala
 	if p.commodoreClient != nil && strings.TrimSpace(result.TenantID) != "" {
 		p.commodoreClient.InvalidateTenantCacheKeys(result.TenantID)
 	}
+	p.pushPlaybackGrantUpdates(result)
 	if p.mediaAuthorityStore == nil || result.Kind != "media_object" ||
 		strings.TrimSpace(result.InternalName) == "" || result.Version == 0 {
 		return nil
@@ -2657,6 +2659,12 @@ func (p *Processor) handlePlayRewrite(trigger *ipcpb.MistTrigger) (string, bool,
 				}).Error("Failed to send play_rewrite trigger to Decklog")
 			}
 		}(trigger, playbackID)
+	}
+
+	// A viewer admitted on signed authority lets the edge answer the rest of
+	// this session's requests itself; the grant goes out before this answer.
+	if local.target != nil && !acceptedPull && mist.IsPlaybackViewerRequest(playRewrite.GetOutputType(), playRewrite.GetRequestUrl()) {
+		p.offerPlaybackGrant(trigger.GetNodeId(), playbackID, local)
 	}
 
 	// Return the resolved fully-qualified stream name (e.g. "live+uuid") to MistServer.

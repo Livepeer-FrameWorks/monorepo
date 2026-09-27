@@ -442,6 +442,7 @@ func cleanupControlDisconnect(nodeID, canonicalID string, stream ipcpb.HelmsmanC
 			}
 		}
 		ForgetManagedStreamLastSent(id)
+		forgetPlaybackGrantsSent(id)
 	}
 }
 
@@ -1154,6 +1155,8 @@ func RelayCommandType(req *foghornrelaypb.ForwardCommandRequest) string {
 		return "apply_managed_stream"
 	case *foghornrelaypb.ForwardCommandRequest_RetractManagedStream:
 		return "retract_managed_stream"
+	case *foghornrelaypb.ForwardCommandRequest_PlaybackGrant:
+		return "playback_grant"
 	default:
 		return "unknown"
 	}
@@ -2333,6 +2336,8 @@ receiveLoop:
 			// at resolve time, bound to the same authenticated CANONICAL identity as the mint (consistent
 			// mint↔authorize), on top of the opaque grant (exact path + hash + 5-min TTL + origin-cluster-only).
 			go processAuthorizeRelayPullRequest(x.AuthorizeRelayPullRequest, connSession.NodeID(), stream, registry.log)
+		case *ipcpb.ControlMessage_PlaybackGrantRequest:
+			go processPlaybackGrantRequest(x.PlaybackGrantRequest, connSession.NodeID(), stream, registry.log)
 		case *ipcpb.ControlMessage_DrainStreamResponse:
 			// Correlated completion of a prior-owner drain dispatched by the admission-effects
 			// worker. unloaded=false with an empty error means the stream was already absent — an

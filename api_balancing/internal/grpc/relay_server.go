@@ -90,6 +90,8 @@ func (s *RelayServer) ForwardCommand(ctx context.Context, req *foghornrelaypb.Fo
 		err = control.SendLocalRetractManagedStream(req.TargetNodeId, cmd.RetractManagedStream)
 	case *foghornrelaypb.ForwardCommandRequest_DrainStream:
 		err = control.SendLocalDrainStream(ctx, req.TargetNodeId, cmd.DrainStream)
+	case *foghornrelaypb.ForwardCommandRequest_PlaybackGrant:
+		err = control.SendLocalPlaybackGrant(req.TargetNodeId, cmd.PlaybackGrant)
 	default:
 		return nil, status.Error(codes.InvalidArgument, "unknown command type")
 	}

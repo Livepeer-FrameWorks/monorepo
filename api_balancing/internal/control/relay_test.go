@@ -808,6 +808,9 @@ func TestSendRelayCoverageMatchesForwardCommandOneof(t *testing.T) {
 		"drain_stream": func() error {
 			return SendDrainStream(context.Background(), "node-1", &ipcpb.DrainStreamRequest{RuntimeName: "live+demo"})
 		},
+		"playback_grant": func() error {
+			return SendPlaybackGrant("node-1", &ipcpb.PlaybackGrant{InternalName: "live+demo"})
+		},
 	}
 
 	oneofFields := foghornrelaypb.File_foghorn_relay_proto.Messages().ByName("ForwardCommandRequest").Oneofs().ByName("command").Fields()
