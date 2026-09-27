@@ -1,0 +1,52 @@
+# Rendered by frameworks.infra.kafka_mirrormaker. connect.log rolls daily or
+# at {{ kafka_mm_log_file_size }}; a rollover deletes rolled files older than
+# {{ kafka_mm_log_retention_age }} or beyond {{ kafka_mm_log_retention_size }} in total.
+# The console appender feeds the journal.
+Configuration:
+  Properties:
+    Property:
+      - name: "kafka.logs.dir"
+        value: "."
+      - name: "logPattern"
+        value: "[%d] %p %X{connector.context}%m (%c:%L)%n"
+
+  Appenders:
+    Console:
+      name: STDOUT
+      PatternLayout:
+        pattern: "${logPattern}"
+
+    RollingFile:
+      - name: ConnectAppender
+        fileName: "${sys:kafka.logs.dir}/connect.log"
+        filePattern: "${sys:kafka.logs.dir}/connect.log.%d{yyyy-MM-dd}-%i.gz"
+        PatternLayout:
+          pattern: "${logPattern}"
+        Policies:
+          TimeBasedTriggeringPolicy:
+            interval: 1
+            modulate: true
+          SizeBasedTriggeringPolicy:
+            size: "{{ kafka_mm_log_file_size }}"
+        DefaultRolloverStrategy:
+          max: 20
+          Delete:
+            basePath: "${sys:kafka.logs.dir}"
+            maxDepth: 1
+            IfFileName:
+              glob: "*.log.*"
+              IfAny:
+                IfLastModified:
+                  age: "{{ kafka_mm_log_retention_age }}"
+                IfAccumulatedFileSize:
+                  exceeds: "{{ kafka_mm_log_retention_size }}"
+
+  Loggers:
+    Root:
+      level: INFO
+      AppenderRef:
+        - ref: STDOUT
+        - ref: ConnectAppender
+    Logger:
+      - name: org.reflections
+        level: ERROR

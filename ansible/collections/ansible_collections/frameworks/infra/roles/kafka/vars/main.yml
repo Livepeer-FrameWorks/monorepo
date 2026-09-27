@@ -25,6 +25,20 @@ kafka_voters: >-
        kafka_controllers | map(attribute='id') | zip(kafka_controllers | map(attribute='host'))
        | map('join', '@') | map('regex_replace', '$', ':' ~ kafka_controller_port) | join(',')
      ) }}
+# Logging: every log4j2 file rolls daily or at kafka_log_file_size, and the
+# rolled files of all appenders together are kept at most 7 days and 1 GB.
+kafka_log4j_path: "{{ kafka_conf_dir }}/{{ kafka_service_name }}-log4j2.yaml"
+kafka_log_file_size: 100 MB
+kafka_log_retention_age: 7d
+kafka_log_retention_size: 1 GB
+kafka_log_appenders:
+  - { name: KafkaAppender, file: server.log }
+  - { name: StateChangeAppender, file: state-change.log }
+  - { name: RequestAppender, file: kafka-request.log }
+  - { name: CleanerAppender, file: log-cleaner.log }
+  - { name: ControllerAppender, file: controller.log }
+  - { name: AuthorizerAppender, file: kafka-authorizer.log }
+
 kafka_broker_probe_host: "127.0.0.1"
 kafka_controller_probe_host: >-
   {{ kafka_bind_host if (kafka_bind_host | default('0.0.0.0')) != '0.0.0.0' else '127.0.0.1' }}

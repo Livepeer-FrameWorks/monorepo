@@ -30,5 +30,6 @@ offsets.topic.replication.factor={{ kafka_offsets_topic_replication_factor }}
 transaction.state.log.replication.factor={{ kafka_transaction_state_log_replication_factor }}
 transaction.state.log.min.isr={{ kafka_transaction_state_log_min_isr }}
 log.retention.hours=168
-log.segment.bytes=1073741824
+log.retention.bytes={{ kafka_log_retention_bytes }}
+log.segment.bytes={{ kafka_log_segment_bytes }}
 log.retention.check.interval.ms=300000

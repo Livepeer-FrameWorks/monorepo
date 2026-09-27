@@ -32,6 +32,16 @@ argument_specs:
       kafka_node_id:
         type: int
         required: true
+      kafka_log_retention_bytes:
+        type: int
+        required: false
+        default: 2147483648
+        description: log.retention.bytes, the per-partition size cap (pkg/topology.PartitionRetentionBytes).
+      kafka_log_segment_bytes:
+        type: int
+        required: false
+        default: 1073741824
+        description: log.segment.bytes (pkg/topology.BrokerSegmentBytes).
       kafka_cluster_id:
         type: str
         required: true

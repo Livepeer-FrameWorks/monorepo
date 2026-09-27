@@ -18,6 +18,28 @@
         port: 9092
         timeout: 60
 
+    - name: Read the unit, broker config, and log4j2 config
+      ansible.builtin.slurp:
+        src: "{{ item }}"
+      register: kafka_rendered
+      loop:
+        - /etc/systemd/system/frameworks-kafka.service
+        - /opt/kafka/config/frameworks-kafka.properties
+        - /opt/kafka/config/frameworks-kafka-log4j2.yaml
+
+    - name: Assert bounded service logs and a per-partition size cap
+      ansible.builtin.assert:
+        that:
+          - "'KAFKA_LOG4J_OPTS=-Dlog4j2.configurationFile=/opt/kafka/config/frameworks-kafka-log4j2.yaml' in (kafka_rendered.results[0].content | b64decode)"
+          - "'log.retention.bytes=2147483648' in (kafka_rendered.results[1].content | b64decode)"
+          - "'IfAccumulatedFileSize' in (kafka_rendered.results[2].content | b64decode)"
+
+    - name: Assert the broker logs through the rendered config
+      ansible.builtin.stat:
+        path: /var/log/kafka/frameworks-kafka/server.log
+      register: kafka_server_log
+      failed_when: not kafka_server_log.stat.exists
+
     - name: Rerun role (idempotence)
       ansible.builtin.include_role:
         name: frameworks.infra.kafka

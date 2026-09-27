@@ -30,5 +30,10 @@ kafka_offsets_topic_replication_factor: 1
 kafka_transaction_state_log_replication_factor: 1
 kafka_transaction_state_log_min_isr: 1
 
+# Per-partition size cap and segment size; the CLI passes
+# pkg/topology.PartitionRetentionBytes and BrokerSegmentBytes.
+kafka_log_retention_bytes: 2147483648
+kafka_log_segment_bytes: 1073741824
+
 # Resource limits.
 kafka_heap_opts: "-Xmx2G -Xms2G"

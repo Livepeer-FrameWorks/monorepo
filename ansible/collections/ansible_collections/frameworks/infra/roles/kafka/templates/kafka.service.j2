@@ -8,6 +8,7 @@ User={{ kafka_user }}
 Group={{ kafka_group }}
 Environment="KAFKA_HEAP_OPTS={{ kafka_heap_opts }}"
 Environment="LOG_DIR={{ kafka_role_log_dir }}"
+Environment="KAFKA_LOG4J_OPTS=-Dlog4j2.configurationFile={{ kafka_log4j_path }}"
 ExecStart={{ kafka_bin_dir }}/kafka-server-start.sh {{ kafka_properties_path }}
 ExecStop={{ kafka_bin_dir }}/kafka-server-stop.sh
 Restart=always

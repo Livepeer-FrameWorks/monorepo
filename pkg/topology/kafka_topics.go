@@ -28,6 +28,49 @@ const (
 
 const day = 24 * time.Hour
 
+// PartitionRetentionBytes is the broker-wide log.retention.bytes: the most one
+// partition replica keeps on disk before its oldest segment is deleted, even
+// inside its topic's retention.ms. Retention time is the policy; this cap keeps
+// a traffic burst or a stalled consumer from filling a broker's disk first.
+// The aggregator carries the most partitions (AggregatorPartitionReplicas), and
+// each replica can hold the cap plus one active segment (BrokerSegmentBytes),
+// which together stay within BrokerLogBudgetBytes on every broker.
+const PartitionRetentionBytes int64 = 2 << 30
+
+// BrokerSegmentBytes is the broker's log.segment.bytes. Deletion by size or
+// time removes whole closed segments, so a replica can exceed its cap by one
+// segment.
+const BrokerSegmentBytes int64 = 1 << 30
+
+// BrokerLogBudgetBytes is the disk a broker's partition logs may use.
+const BrokerLogBudgetBytes int64 = 256 << 30
+
+// defaultTopicPartitions is the partition count the manifest gets for a
+// canonical topic that leaves the count to it.
+const defaultTopicPartitions = 3
+
+// AggregatorPartitionReplicas is the number of partition replicas each broker
+// of a three-broker aggregator holds at replication factor 3 with the given
+// number of regional clusters mirroring into it: every aggregator topic plus a
+// mirrored copy of each regional-to-aggregator topic per region, at the
+// default partition count unless the topic fixes its own.
+func AggregatorPartitionReplicas(regions int) int {
+	partitions := func(name string) int {
+		if spec, ok := CanonicalTopic(name); ok && spec.Partitions > 0 {
+			return spec.Partitions
+		}
+		return defaultTopicPartitions
+	}
+	total := 0
+	for _, name := range ClusterTopics(true) {
+		total += partitions(name)
+	}
+	for _, name := range RegionalToAggregatorTopics() {
+		total += regions * partitions(name)
+	}
+	return total
+}
+
 // TopicSpec is the canonical definition of a Kafka topic. Config holds the
 // topic-level settings every deployment must apply, always including
 // retention.ms. Partitions is non-zero only where the count is part of the

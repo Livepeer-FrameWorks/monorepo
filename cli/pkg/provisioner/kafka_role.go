@@ -10,6 +10,8 @@ import (
 	"frameworks/cli/pkg/detect"
 	"frameworks/cli/pkg/inventory"
 	"frameworks/cli/pkg/ssh"
+
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/topology"
 )
 
 func kafkaRoleVarsFor(role string) RoleVarsBuilder {
@@ -28,13 +30,15 @@ func kafkaRoleVarsFor(role string) RoleVarsBuilder {
 		clusterID := metaString(config.Metadata, "cluster_id")
 
 		vars := map[string]any{
-			"kafka_artifact_url":      art.URL,
-			"kafka_artifact_checksum": art.Checksum,
-			"kafka_version":           releaseVersion(config.Version, art.Version),
-			"kafka_role":              role,
-			"kafka_node_id":           nodeID,
-			"kafka_cluster_id":        clusterID,
-			"kafka_advertised_host":   meshOrExternal(config.Metadata, host),
+			"kafka_artifact_url":        art.URL,
+			"kafka_artifact_checksum":   art.Checksum,
+			"kafka_version":             releaseVersion(config.Version, art.Version),
+			"kafka_role":                role,
+			"kafka_node_id":             nodeID,
+			"kafka_cluster_id":          clusterID,
+			"kafka_advertised_host":     meshOrExternal(config.Metadata, host),
+			"kafka_log_retention_bytes": topology.PartitionRetentionBytes,
+			"kafka_log_segment_bytes":   topology.BrokerSegmentBytes,
 		}
 		if controllers, ok := config.Metadata["controllers"].([]map[string]any); ok {
 			vars["kafka_controllers"] = controllers

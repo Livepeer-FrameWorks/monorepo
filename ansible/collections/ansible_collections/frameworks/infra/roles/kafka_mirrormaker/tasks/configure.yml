@@ -38,6 +38,17 @@
   when:
     - not ansible_check_mode or (kafka_mm_install_dir_stat.stat.exists | default(false))
 
+- name: Render log4j2 config
+  ansible.builtin.template:
+    src: log4j2.yaml.j2
+    dest: "{{ kafka_mm_log4j_path }}"
+    owner: root
+    group: "{{ kafka_mm_group if (not ansible_check_mode or (kafka_mm_identity_probe.rc | default(1)) == 0) else omit }}"
+    mode: "0644"
+  notify: kafka_mirrormaker restart
+  when:
+    - not ansible_check_mode or (kafka_mm_install_dir_stat.stat.exists | default(false))
+
 - name: Render JMX exporter config
   ansible.builtin.template:
     src: jmx-exporter.yml.j2

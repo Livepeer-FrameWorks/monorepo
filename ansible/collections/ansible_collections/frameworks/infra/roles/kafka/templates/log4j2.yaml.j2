@@ -1,0 +1,91 @@
+# Rendered by frameworks.infra.kafka. Each file rolls daily or at
+# {{ kafka_log_file_size }}; a rollover deletes rolled files older than
+# {{ kafka_log_retention_age }} or beyond {{ kafka_log_retention_size }} in total.
+# The console appender feeds the journal, which `cluster logs kafka` reads.
+Configuration:
+  Properties:
+    Property:
+      - name: "kafka.logs.dir"
+        value: "."
+      - name: "logPattern"
+        value: "[%d] %p %m (%c)%n"
+
+  Appenders:
+    Console:
+      name: STDOUT
+      PatternLayout:
+        pattern: "${logPattern}"
+
+    RollingFile:
+{% for appender in kafka_log_appenders %}
+      - name: {{ appender.name }}
+        fileName: "${sys:kafka.logs.dir}/{{ appender.file }}"
+        filePattern: "${sys:kafka.logs.dir}/{{ appender.file }}.%d{yyyy-MM-dd}-%i.gz"
+        PatternLayout:
+          pattern: "${logPattern}"
+        Policies:
+          TimeBasedTriggeringPolicy:
+            interval: 1
+            modulate: true
+          SizeBasedTriggeringPolicy:
+            size: "{{ kafka_log_file_size }}"
+        DefaultRolloverStrategy:
+          max: 20
+          Delete:
+            basePath: "${sys:kafka.logs.dir}"
+            maxDepth: 1
+            IfFileName:
+              glob: "*.log.*"
+              IfAny:
+                IfLastModified:
+                  age: "{{ kafka_log_retention_age }}"
+                IfAccumulatedFileSize:
+                  exceeds: "{{ kafka_log_retention_size }}"
+{% endfor %}
+
+  Loggers:
+    Root:
+      level: INFO
+      AppenderRef:
+        - ref: STDOUT
+        - ref: KafkaAppender
+    Logger:
+      - name: kafka
+        level: INFO
+      - name: org.apache.kafka
+        level: INFO
+      - name: kafka.request.logger
+        level: WARN
+        additivity: false
+        AppenderRef:
+          ref: RequestAppender
+      - name: kafka.network.RequestChannel$
+        level: WARN
+        additivity: false
+        AppenderRef:
+          ref: RequestAppender
+      - name: org.apache.kafka.controller
+        level: INFO
+        additivity: false
+        AppenderRef:
+          ref: ControllerAppender
+      - name: kafka.log.LogCleaner
+        level: INFO
+        additivity: false
+        AppenderRef:
+          ref: CleanerAppender
+      - name: org.apache.kafka.storage.internals.log.LogCleaner
+        level: INFO
+        additivity: false
+        AppenderRef:
+          ref: CleanerAppender
+      - name: state.change.logger
+        level: INFO
+        additivity: false
+        AppenderRef:
+          ref: StateChangeAppender
+      - name: kafka.authorizer.logger
+        level: INFO
+        additivity: false
+        AppenderRef:
+          ref: AuthorizerAppender

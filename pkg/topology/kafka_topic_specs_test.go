@@ -106,3 +106,19 @@ func TestCanonicalTopicsReturnsFreshConfig(t *testing.T) {
 		t.Fatal("CanonicalTopics returned shared config maps")
 	}
 }
+
+// A three-broker aggregator fed by two regions must fit its broker log budget
+// with every partition replica at its size cap plus one active segment.
+func TestPartitionRetentionBytesFitsTheBrokerBudget(t *testing.T) {
+	replicas := AggregatorPartitionReplicas(2)
+	if replicas != 84 {
+		t.Fatalf("aggregator partition replicas with two regions = %d, want 84 (update the budget derivation)", replicas)
+	}
+	worst := int64(replicas) * (PartitionRetentionBytes + BrokerSegmentBytes)
+	if worst > BrokerLogBudgetBytes {
+		t.Fatalf("worst-case broker log size %d exceeds budget %d", worst, BrokerLogBudgetBytes)
+	}
+	if PartitionRetentionBytes < 2*BrokerSegmentBytes {
+		t.Fatalf("cap %d keeps less than two segments of %d", PartitionRetentionBytes, BrokerSegmentBytes)
+	}
+}

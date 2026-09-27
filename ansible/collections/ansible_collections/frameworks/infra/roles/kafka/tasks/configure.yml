@@ -8,6 +8,15 @@
     mode: "0644"
   notify: kafka restart
 
+- name: Render log4j2 config
+  ansible.builtin.template:
+    src: log4j2.yaml.j2
+    dest: "{{ kafka_log4j_path }}"
+    owner: "{{ kafka_user }}"
+    group: "{{ kafka_group }}"
+    mode: "0644"
+  notify: kafka restart
+
 - name: Render systemd unit
   ansible.builtin.template:
     src: kafka.service.j2
