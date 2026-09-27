@@ -512,6 +512,8 @@ type StreamStateManager struct {
 	// again. Durable output metadata is not liveness evidence.
 	evictedNodes map[string]nodeEvictionTombstone
 	mu           sync.RWMutex
+	// playbackAuthorityHandler receives peers' authority announcements.
+	playbackAuthorityHandler func(PlaybackAuthorityChange)
 
 	// Whole-node artifact report ordering (see SetNodeArtifacts). A report is ordered by (fence,
 	// seq): the connection fence is issued monotonically by Foghorn when the node's control

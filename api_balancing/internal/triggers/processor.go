@@ -153,6 +153,7 @@ type Processor struct {
 	preparedSourceAdmission   PreparedSourceAdmission
 	signingKeyUse             SigningKeyUseRecorder
 	playbackGrants            PlaybackGrantDelivery
+	playbackAuthorityBus      PlaybackAuthorityBus
 
 	streamCache        *cache.Cache // Cache stream context (tenant + user)
 	billingCache       *cache.Cache // Cache tenant billing authority independently of stream identity.
@@ -227,7 +228,7 @@ func (p *Processor) HandleMediaAuthorityApply(ctx context.Context, result locala
 	if p.commodoreClient != nil && strings.TrimSpace(result.TenantID) != "" {
 		p.commodoreClient.InvalidateTenantCacheKeys(result.TenantID)
 	}
-	p.pushPlaybackGrantUpdates(result)
+	p.onPlaybackAuthorityApplied(result)
 	if p.mediaAuthorityStore == nil || result.Kind != "media_object" ||
 		strings.TrimSpace(result.InternalName) == "" || result.Version == 0 {
 		return nil

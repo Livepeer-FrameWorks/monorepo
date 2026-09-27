@@ -43,7 +43,6 @@ type ForwardCommandRequest struct {
 	//	*ForwardCommandRequest_ApplyManagedStream
 	//	*ForwardCommandRequest_RetractManagedStream
 	//	*ForwardCommandRequest_DrainStream
-	//	*ForwardCommandRequest_PlaybackGrant
 	Command       isForwardCommandRequest_Command `protobuf_oneof:"command"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -237,15 +236,6 @@ func (x *ForwardCommandRequest) GetDrainStream() *ipc.DrainStreamRequest {
 	return nil
 }
 
-func (x *ForwardCommandRequest) GetPlaybackGrant() *ipc.PlaybackGrant {
-	if x != nil {
-		if x, ok := x.Command.(*ForwardCommandRequest_PlaybackGrant); ok {
-			return x.PlaybackGrant
-		}
-	}
-	return nil
-}
-
 type isForwardCommandRequest_Command interface {
 	isForwardCommandRequest_Command()
 }
@@ -322,12 +312,6 @@ type ForwardCommandRequest_DrainStream struct {
 	DrainStream *ipc.DrainStreamRequest `protobuf:"bytes,28,opt,name=drain_stream,json=drainStream,proto3,oneof"`
 }
 
-type ForwardCommandRequest_PlaybackGrant struct {
-	// Playback grant updates reach an edge whose control stream is held by a
-	// peer Foghorn.
-	PlaybackGrant *ipc.PlaybackGrant `protobuf:"bytes,30,opt,name=playback_grant,json=playbackGrant,proto3,oneof"`
-}
-
 func (*ForwardCommandRequest_ConfigSeed) isForwardCommandRequest_Command() {}
 
 func (*ForwardCommandRequest_DvrStart) isForwardCommandRequest_Command() {}
@@ -359,8 +343,6 @@ func (*ForwardCommandRequest_ApplyManagedStream) isForwardCommandRequest_Command
 func (*ForwardCommandRequest_RetractManagedStream) isForwardCommandRequest_Command() {}
 
 func (*ForwardCommandRequest_DrainStream) isForwardCommandRequest_Command() {}
-
-func (*ForwardCommandRequest_PlaybackGrant) isForwardCommandRequest_Command() {}
 
 type ForwardCommandResponse struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
@@ -418,7 +400,8 @@ var File_foghorn_relay_proto protoreflect.FileDescriptor
 
 const file_foghorn_relay_proto_rawDesc = "" +
 	"\n" +
-	"\x13foghorn_relay.proto\x12\rfoghorn_relay\x1a\tipc.proto\"\xa9\v\n" +
+	"\x13foghorn_relay.proto\x12\rfoghorn_relay\x1a\tipc.proto\"\xe0\n" +
+	"\n" +
 	"\x15ForwardCommandRequest\x12$\n" +
 	"\x0etarget_node_id\x18\x01 \x01(\tR\ftargetNodeId\x12>\n" +
 	"\vconfig_seed\x18\n" +
@@ -441,8 +424,7 @@ const file_foghorn_relay_proto_rawDesc = "" +
 	"\x13invalidate_sessions\x18\x19 \x01(\v2*.helmsmancontrol.InvalidateSessionsRequestH\x00R\x12invalidateSessions\x12W\n" +
 	"\x14apply_managed_stream\x18\x1a \x01(\v2#.helmsmancontrol.ApplyManagedStreamH\x00R\x12applyManagedStream\x12]\n" +
 	"\x16retract_managed_stream\x18\x1b \x01(\v2%.helmsmancontrol.RetractManagedStreamH\x00R\x14retractManagedStream\x12H\n" +
-	"\fdrain_stream\x18\x1c \x01(\v2#.helmsmancontrol.DrainStreamRequestH\x00R\vdrainStream\x12G\n" +
-	"\x0eplayback_grant\x18\x1e \x01(\v2\x1e.helmsmancontrol.PlaybackGrantH\x00R\rplaybackGrantB\t\n" +
+	"\fdrain_stream\x18\x1c \x01(\v2#.helmsmancontrol.DrainStreamRequestH\x00R\vdrainStreamB\t\n" +
 	"\acommandJ\x04\b\x11\x10\x12J\x04\b\v\x10\fJ\x04\b\x1d\x10\x1eJ\x04\b\x14\x10\x15R\adefrostR\tclip_pullR\x11dvr_update_sourceR\x15activate_push_targets\"L\n" +
 	"\x16ForwardCommandResponse\x12\x1c\n" +
 	"\tdelivered\x18\x01 \x01(\bR\tdelivered\x12\x14\n" +
@@ -482,7 +464,6 @@ var file_foghorn_relay_proto_goTypes = []any{
 	(*ipc.ApplyManagedStream)(nil),        // 15: helmsmancontrol.ApplyManagedStream
 	(*ipc.RetractManagedStream)(nil),      // 16: helmsmancontrol.RetractManagedStream
 	(*ipc.DrainStreamRequest)(nil),        // 17: helmsmancontrol.DrainStreamRequest
-	(*ipc.PlaybackGrant)(nil),             // 18: helmsmancontrol.PlaybackGrant
 }
 var file_foghorn_relay_proto_depIdxs = []int32{
 	2,  // 0: foghorn_relay.ForwardCommandRequest.config_seed:type_name -> helmsmancontrol.ConfigSeed
@@ -501,14 +482,13 @@ var file_foghorn_relay_proto_depIdxs = []int32{
 	15, // 13: foghorn_relay.ForwardCommandRequest.apply_managed_stream:type_name -> helmsmancontrol.ApplyManagedStream
 	16, // 14: foghorn_relay.ForwardCommandRequest.retract_managed_stream:type_name -> helmsmancontrol.RetractManagedStream
 	17, // 15: foghorn_relay.ForwardCommandRequest.drain_stream:type_name -> helmsmancontrol.DrainStreamRequest
-	18, // 16: foghorn_relay.ForwardCommandRequest.playback_grant:type_name -> helmsmancontrol.PlaybackGrant
-	0,  // 17: foghorn_relay.FoghornRelay.ForwardCommand:input_type -> foghorn_relay.ForwardCommandRequest
-	1,  // 18: foghorn_relay.FoghornRelay.ForwardCommand:output_type -> foghorn_relay.ForwardCommandResponse
-	18, // [18:19] is the sub-list for method output_type
-	17, // [17:18] is the sub-list for method input_type
-	17, // [17:17] is the sub-list for extension type_name
-	17, // [17:17] is the sub-list for extension extendee
-	0,  // [0:17] is the sub-list for field type_name
+	0,  // 16: foghorn_relay.FoghornRelay.ForwardCommand:input_type -> foghorn_relay.ForwardCommandRequest
+	1,  // 17: foghorn_relay.FoghornRelay.ForwardCommand:output_type -> foghorn_relay.ForwardCommandResponse
+	17, // [17:18] is the sub-list for method output_type
+	16, // [16:17] is the sub-list for method input_type
+	16, // [16:16] is the sub-list for extension type_name
+	16, // [16:16] is the sub-list for extension extendee
+	0,  // [0:16] is the sub-list for field type_name
 }
 
 func init() { file_foghorn_relay_proto_init() }
@@ -533,7 +513,6 @@ func file_foghorn_relay_proto_init() {
 		(*ForwardCommandRequest_ApplyManagedStream)(nil),
 		(*ForwardCommandRequest_RetractManagedStream)(nil),
 		(*ForwardCommandRequest_DrainStream)(nil),
-		(*ForwardCommandRequest_PlaybackGrant)(nil),
 	}
 	type x struct{}
 	out := protoimpl.TypeBuilder{

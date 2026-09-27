@@ -9,6 +9,7 @@ import (
 
 	"frameworks/api_balancing/internal/control"
 	localauthority "frameworks/api_balancing/internal/mediaauthority"
+	"frameworks/api_balancing/internal/state"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
 	mediaauthoritypb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/media_authority"
@@ -148,25 +149,63 @@ func (p *Processor) PlaybackGrantForStream(ctx context.Context, _ string, intern
 	return playbackGrantFromLocal(local, ""), nil
 }
 
+// PlaybackAuthorityBus carries authority announcements between the cell's
+// Foghorn replicas (the shared state changelog).
+type PlaybackAuthorityBus interface {
+	AnnouncePlaybackAuthorityChange(state.PlaybackAuthorityChange)
+}
+
+// SetPlaybackAuthorityBus replaces the replicas' announcement bus.
+func (p *Processor) SetPlaybackAuthorityBus(bus PlaybackAuthorityBus) {
+	p.playbackAuthorityBus = bus
+}
+
+func (p *Processor) authorityBus() PlaybackAuthorityBus {
+	if p.playbackAuthorityBus != nil {
+		return p.playbackAuthorityBus
+	}
+	return state.DefaultManager()
+}
+
+// onPlaybackAuthorityApplied runs after this replica applied an authority. The
+// replica pushes the changed grant to the edges it holds control streams for,
+// and announces the apply so every other replica does the same for its own
+// edges: an edge's grant must follow a revocation whichever replica applied
+// it and whichever replica granted it.
+func (p *Processor) onPlaybackAuthorityApplied(result localauthority.ApplyResult) {
+	if p.mediaAuthorityStore == nil || (result.Kind != "media_object" && result.Kind != "tenant") {
+		return
+	}
+	change := state.PlaybackAuthorityChange{Kind: result.Kind, InternalName: strings.TrimSpace(result.InternalName), TenantID: result.TenantID}
+	p.pushPlaybackGrantUpdates(change, "local")
+	p.authorityBus().AnnouncePlaybackAuthorityChange(change)
+}
+
+// HandlePeerPlaybackAuthorityChange pushes the changed grant to this
+// replica's edges after another replica applied an authority.
+func (p *Processor) HandlePeerPlaybackAuthorityChange(change state.PlaybackAuthorityChange) {
+	p.pushPlaybackGrantUpdates(change, "peer")
+}
+
 // pushPlaybackGrantUpdates sends the new grant of every stream an applied
-// authority touches to the edges holding one: an object apply for that
-// stream, a tenant apply for all of the tenant's granted streams. One push
-// per stream per edge carries a renewal or a policy change to all of the
-// stream's sessions there.
-func (p *Processor) pushPlaybackGrantUpdates(result localauthority.ApplyResult) {
+// authority touches to the edges this replica holds control streams for that
+// hold one: an object apply for that stream, a tenant apply for all of the
+// tenant's granted streams. One push per stream per edge carries a renewal or
+// a policy change to all of the stream's sessions there.
+func (p *Processor) pushPlaybackGrantUpdates(change state.PlaybackAuthorityChange, origin string) {
 	if p.mediaAuthorityStore == nil {
 		return
 	}
 	delivery := p.playbackGrantDelivery()
 	var streams []string
-	switch result.Kind {
+	switch change.Kind {
 	case "media_object":
-		if name := strings.TrimSpace(result.InternalName); name != "" {
-			streams = delivery.HeldStreams(name, "")
+		if change.InternalName != "" {
+			streams = delivery.HeldStreams(change.InternalName, "")
 		}
 	case "tenant":
-		if result.TenantID != "" {
-			streams = delivery.HeldStreams("", result.TenantID)
+		if change.TenantID != "" {
+			streams = delivery.HeldStreams("", change.TenantID)
 		}
 	}
 	if len(streams) == 0 {
@@ -191,7 +230,12 @@ func (p *Processor) pushPlaybackGrantUpdates(result localauthority.ApplyResult) 
 					p.logger.WithError(err).WithFields(logging.Fields{
 						"node_id": nodeID, "internal_name": grant.GetInternalName(),
 					}).Warn("Playback grant update not delivered; the edge fetches it on its next reconnect")
+					continue
 				}
+				p.logger.WithFields(logging.Fields{
+					"node_id": nodeID, "internal_name": grant.GetInternalName(), "authority_apply": origin,
+					"object_authority_version": grant.GetObjectAuthorityVersion(), "revoked": grant.GetRevoked(),
+				}).Info("Playback grant pushed on an authority change")
 			}
 		}
 	}()

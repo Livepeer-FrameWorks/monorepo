@@ -181,7 +181,7 @@ func TestAuthorityApplyPushesTheNewGrantToHoldingEdges(t *testing.T) {
 			delivery.holders["live+stream-internal"] = []string{"edge-node-1", "edge-node-2"}
 			p.SetPlaybackGrantDelivery(delivery)
 
-			p.pushPlaybackGrantUpdates(localauthority.ApplyResult{Kind: "media_object", InternalName: "stream-internal", Version: 5})
+			p.onPlaybackAuthorityApplied(localauthority.ApplyResult{Kind: "media_object", InternalName: "stream-internal", Version: 5})
 			offers := delivery.waitOffers(t, 2)
 			if offers[0].nodeID != "edge-node-1" || offers[1].nodeID != "edge-node-2" {
 				t.Fatalf("offers went to %s and %s", offers[0].nodeID, offers[1].nodeID)
@@ -203,7 +203,7 @@ func TestTenantApplyPushesEachGrantedStream(t *testing.T) {
 	delivery.held = []string{"live+stream-internal"}
 	delivery.holders["live+stream-internal"] = []string{"edge-node-1"}
 	p.SetPlaybackGrantDelivery(delivery)
-	p.pushPlaybackGrantUpdates(localauthority.ApplyResult{Kind: "tenant", TenantID: "10000000-0000-0000-0000-000000000001"})
+	p.onPlaybackAuthorityApplied(localauthority.ApplyResult{Kind: "tenant", TenantID: "10000000-0000-0000-0000-000000000001"})
 	if offers := delivery.waitOffers(t, 1); offers[0].grant.GetInternalName() != "live+stream-internal" {
 		t.Fatalf("tenant apply pushed %+v", offers[0].grant)
 	}

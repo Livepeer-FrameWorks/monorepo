@@ -72,6 +72,10 @@ const (
 	// old mode at a newer changelog ID, and the node watermark would then
 	// block the (older-ID) mode change.
 	StateEntityNodeMode StateEntity = "node_mode"
+	// StateEntityPlaybackAuthority announces that a replica applied a signed
+	// media or tenant authority. It carries no state: each replica pushes the
+	// changed playback grant to the edges whose control streams it holds.
+	StateEntityPlaybackAuthority StateEntity = "playback_authority"
 
 	StateOpUpsert StateOperation = "upsert"
 	StateOpDelete StateOperation = "delete"

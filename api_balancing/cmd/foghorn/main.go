@@ -1603,6 +1603,7 @@ func main() {
 		authorityStore.SetApplyObserver(triggerProcessor.HandleMediaAuthorityApply)
 		control.SetLocalMediaAuthorityStore(authorityStore)
 		control.SetPlaybackGrantBuilder(triggerProcessor.PlaybackGrantForStream)
+		state.DefaultManager().SetPlaybackAuthorityChangeHandler(triggerProcessor.HandlePeerPlaybackAuthorityChange)
 		go authorityStore.RunAuditRetention(context.Background(), logger)
 		go authorityStore.RunCollection(context.Background(), logger)
 		logger.WithFields(logging.Fields{"trusted_signers": len(trust), "control_cell_id": mediaAuthorityCellID}).Info("Signed media authority apply enabled")

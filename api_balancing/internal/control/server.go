@@ -1155,8 +1155,6 @@ func RelayCommandType(req *foghornrelaypb.ForwardCommandRequest) string {
 		return "apply_managed_stream"
 	case *foghornrelaypb.ForwardCommandRequest_RetractManagedStream:
 		return "retract_managed_stream"
-	case *foghornrelaypb.ForwardCommandRequest_PlaybackGrant:
-		return "playback_grant"
 	default:
 		return "unknown"
 	}

@@ -9,7 +9,6 @@ import (
 
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/mist"
-	foghornrelaypb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/foghorn_relay"
 	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
 
 	"google.golang.org/protobuf/proto"
@@ -36,8 +35,8 @@ func SetPlaybackGrantBuilder(builder PlaybackGrantBuilder) {
 	playbackGrantBuilderMu.Unlock()
 }
 
-// playbackGrantsSent records, per connected node, the last grant this
-// instance delivered for each stream (keyed by bare internal name). It makes
+// playbackGrantsSent records, per node connected to this instance, the last
+// grant this instance delivered for each stream (keyed by bare internal name). It makes
 // the admission push once per stream per connection and names the edges an
 // authority change must reach. It is connection state: a node's entries go
 // when its control stream does, and the node fetches its grants again on the
@@ -47,9 +46,11 @@ var playbackGrantsSent = struct {
 	byNode map[string]map[string]*ipcpb.PlaybackGrant
 }{byNode: map[string]map[string]*ipcpb.PlaybackGrant{}}
 
-// OfferPlaybackGrant delivers grant to nodeID unless the node's current
-// connection already holds the same grant. Requested names delivered earlier
-// for the stream stay in the grant.
+// OfferPlaybackGrant delivers grant to nodeID over this instance's control
+// stream to it, unless that connection already holds the same grant. It never
+// relays: each replica pushes to the edges it holds, and learns of authority
+// applied elsewhere from the replicas' announcements. Requested names
+// delivered earlier for the stream stay in the grant.
 func OfferPlaybackGrant(nodeID string, grant *ipcpb.PlaybackGrant) error {
 	if nodeID == "" || grant == nil || grant.GetInternalName() == "" {
 		return nil
@@ -62,7 +63,7 @@ func OfferPlaybackGrant(nodeID string, grant *ipcpb.PlaybackGrant) error {
 	if unchanged {
 		return nil
 	}
-	if err := SendPlaybackGrant(nodeID, merged); err != nil {
+	if err := SendLocalPlaybackGrant(nodeID, merged); err != nil {
 		return err
 	}
 	recordPlaybackGrantSent(nodeID, merged)
@@ -172,22 +173,6 @@ func SendLocalPlaybackGrant(nodeID string, grant *ipcpb.PlaybackGrant) error {
 		Payload: &ipcpb.ControlMessage_PlaybackGrant{PlaybackGrant: grant},
 		SentAt:  timestamppb.Now(),
 	})
-}
-
-// SendPlaybackGrant sends a grant to the node, relaying through the Foghorn
-// instance that holds its control stream when that is not this one.
-func SendPlaybackGrant(nodeID string, grant *ipcpb.PlaybackGrant) error {
-	err := SendLocalPlaybackGrant(nodeID, grant)
-	if !shouldRelay(nodeID, err) {
-		return err
-	}
-	if commandRelay == nil {
-		return ErrNotConnected
-	}
-	return relayFailure(err, commandRelay.forward(context.Background(), &foghornrelaypb.ForwardCommandRequest{
-		TargetNodeId: nodeID,
-		Command:      &foghornrelaypb.ForwardCommandRequest_PlaybackGrant{PlaybackGrant: grant},
-	}))
 }
 
 // processPlaybackGrantRequest answers an edge's grant fetch. nodeID is the

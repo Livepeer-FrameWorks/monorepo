@@ -81,6 +81,10 @@ func (sm *StreamStateManager) handleStateChangelogEntry(id string, change StateC
 	if !sm.watermarks.ShouldApply(key, id) {
 		return
 	}
+	if change.Entity == StateEntityPlaybackAuthority {
+		sm.notifyPlaybackAuthorityChange(change)
+		return
+	}
 	sm.applyRedisChange(change)
 	if change.Entity == StateEntityStream || change.Entity == StateEntityStreamInstance {
 		sm.notifyStreamChanged(change.StreamName)
