@@ -262,6 +262,7 @@ func mergeLocationRevisioned(cur, incoming Location) Location {
 	}
 	base.SourceActive = src.SourceActive
 	base.SourceInactiveAt = src.SourceInactiveAt
+	base.SourceActiveSince = src.SourceActiveSince
 	base.OwnerNodeID = src.OwnerNodeID
 	base.SourceConnectorPID = src.SourceConnectorPID
 	base.SourceTriggerUUID = src.SourceTriggerUUID

@@ -174,6 +174,10 @@ type Location struct {
 	// false. Zero when SourceActive is true. Used by the admission rule
 	// to bound the resume window for diagnostics.
 	SourceInactiveAt time.Time
+	// SourceActiveSince is when the current (or last) source session was
+	// first projected: the start of the publisher's session, which a
+	// stream's reported start time follows.
+	SourceActiveSince time.Time
 	// OwnerNodeID is the local cluster's node that currently owns (or
 	// last owned) the publisher session for this stream. Retained after
 	// SourceActive flips to false so a same-node PUSH_REWRITE plans as a

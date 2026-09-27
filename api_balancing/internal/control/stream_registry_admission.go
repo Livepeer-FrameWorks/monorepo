@@ -105,6 +105,9 @@ func (r *StreamRegistry) projectSourceWithPriorGeneration(internalName, nodeID s
 		priorOwnerNodeID = prior
 		priorOwnerSourceGeneration = strings.TrimSpace(loc.SourceGeneration)
 	}
+	if loc.SourceGeneration != generation || loc.SourceActiveSince.IsZero() {
+		loc.SourceActiveSince = time.Now()
+	}
 	loc.ClusterID = r.clusterID
 	loc.SourceActive = true
 	loc.SourceInactiveAt = time.Time{}
@@ -225,6 +228,27 @@ func (r *StreamRegistry) SourceOwner(internalName string) (string, bool) {
 		return "", false
 	}
 	return loc.OwnerNodeID, true
+}
+
+// PushSourceSession reports the local cluster's projected push source: whether
+// its publisher session is still active and when that session started. ok is
+// false when no push session was ever projected here (pull and remote streams).
+func (r *StreamRegistry) PushSourceSession(internalName string) (active bool, since time.Time, ok bool) {
+	internalName = sourceInternalKey(internalName)
+	if internalName == "" {
+		return false, time.Time{}, false
+	}
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	ce, found := r.byInt[internalName]
+	if !found {
+		return false, time.Time{}, false
+	}
+	loc, found := ce.entry.Locations[r.clusterID]
+	if !found || loc.SourceRevision <= 0 {
+		return false, time.Time{}, false
+	}
+	return loc.SourceActive, loc.SourceActiveSince, true
 }
 
 // OriginCluster returns the stream's origin cluster ID when known.

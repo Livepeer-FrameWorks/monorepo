@@ -5375,6 +5375,22 @@ func (p *Processor) handleStreamLifecycleUpdate(trigger *ipcpb.MistTrigger) (str
 			slu.TotalViewers = &viewers
 		}
 	}
+	// A pushed stream's status and start follow its publisher's ingest
+	// session, the same session whose end emits stream.idle. Mist keeps
+	// counting the input and keeps serving the buffer after the publisher
+	// left; reporting that as live would keep the stream live until Mist's
+	// STREAM_END and restart its clock on the next report.
+	if registry := control.StreamRegistryInstance; registry != nil {
+		if active, since, ok := registry.PushSourceSession(internal); ok {
+			if !since.IsZero() {
+				startedAt := since.Unix()
+				slu.StartedAt = &startedAt
+			}
+			if !active && slu.GetStatus() == "live" {
+				slu.Status = "waiting"
+			}
+		}
+	}
 
 	if slu.GetStatus() == "offline" {
 		// stream_state_current is keyed per stream, not per node. Only the recorded source owner's
