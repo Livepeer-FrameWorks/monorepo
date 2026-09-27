@@ -76,6 +76,37 @@ func TestReleaseDependencyConvergenceDryRunChangesNothing(t *testing.T) {
 	}
 }
 
+// Compose dependencies converge one host at a time after the agents and proxies.
+func TestReleaseComposeDependencyConvergence(t *testing.T) {
+	manifest := dependencyReleaseManifest()
+	manifest.Hosts["app-1"] = serviceHost("app-1")
+	manifest.Hosts["app-2"] = serviceHost("app-2")
+	manifest.Observability["grafana"] = inventory.ServiceConfig{Enabled: true, Mode: "docker", Hosts: []string{"app-1", "app-2"}}
+	manifest.Observability["metabase"] = inventory.ServiceConfig{Enabled: true, Mode: "docker", Host: "app-2"}
+
+	log := &serviceEventLog{}
+	fake := &serviceReleaseProvisioner{log: log, converged: map[string]bool{"grafana:app-1": true}, failing: map[string]bool{"metabase:app-2": true}}
+	run := runServiceConvergence(t, manifest, fake, &releaseServiceOps{}, false)
+	if run.err == nil || !strings.Contains(run.err.Error(), "compose dependencies: metabase on app-2") {
+		t.Fatalf("err = %v, want the metabase failure", run.err)
+	}
+	got := dependencyEvents(run.events)
+	want := []string{"vmagent:obs-1", "vmagent:obs-2", "vmalert:obs-1", "vmauth:obs-1", "nginx:edge-1", "nginx:edge-2", "metabase:app-2"}
+	if !slices.Equal(got, want) {
+		t.Fatalf("converged %v, want %v", got, want)
+	}
+
+	plan, err := orchestrator.NewPlanner(manifest).Plan(context.Background(), orchestrator.ProvisionOptions{Phase: orchestrator.PhaseAll})
+	if err != nil {
+		t.Fatalf("plan: %v", err)
+	}
+	var out bytes.Buffer
+	writeReleaseHostConvergencePlan(&out, "1. pre-upgrade host convergence", manifest, planReleaseHostConvergence(plan, manifest))
+	if !strings.Contains(out.String(), "· compose dependencies (compose up with the rendered config), one host at a time: metabase@app-2 -> grafana@app-1 -> grafana@app-2") {
+		t.Fatalf("plan output:\n%s", out.String())
+	}
+}
+
 func TestReleaseDependencyConvergencePlanLines(t *testing.T) {
 	manifest := dependencyReleaseManifest()
 	plan, err := orchestrator.NewPlanner(manifest).Plan(context.Background(), orchestrator.ProvisionOptions{Phase: orchestrator.PhaseAll})

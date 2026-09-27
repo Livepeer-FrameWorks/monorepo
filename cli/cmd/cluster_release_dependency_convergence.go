@@ -13,8 +13,10 @@ import (
 // one host at a time, in the order of their task types. Their roles carry the
 // safety of each change: vmagent, vmalert, and vmauth validate a changed
 // config with -dryRun and reload it, restarting only for a new binary or unit;
-// nginx and caddy test a changed config before they reload. The role's
-// validation of a changed host must pass before the next host starts.
+// nginx and caddy test a changed config before they reload; chatwoot,
+// listmonk, metabase, and grafana render their compose project and run
+// compose up, which recreates only the containers whose config changed. The
+// role's validation of a changed host must pass before the next host starts.
 
 func describeObservabilityConvergence(out io.Writer, tasks []*orchestrator.Task) {
 	describeDependencyConvergence(out, "vmagent, vmalert, and vmauth (configs validated, then reloaded)", tasks)
@@ -22,6 +24,10 @@ func describeObservabilityConvergence(out io.Writer, tasks []*orchestrator.Task)
 
 func describeProxyConvergence(out io.Writer, tasks []*orchestrator.Task) {
 	describeDependencyConvergence(out, "control-plane nginx and caddy (config tested, then reloaded)", tasks)
+}
+
+func describeComposeDependencyConvergence(out io.Writer, tasks []*orchestrator.Task) {
+	describeDependencyConvergence(out, "compose dependencies (compose up with the rendered config)", tasks)
 }
 
 func describeDependencyConvergence(out io.Writer, label string, tasks []*orchestrator.Task) {
@@ -38,6 +44,10 @@ func runObservabilityConvergence(ctx context.Context, c *releaseHostConvergence,
 
 func runProxyConvergence(ctx context.Context, c *releaseHostConvergence, tasks []*orchestrator.Task, dryRun bool) error {
 	return c.runDependencyConvergence(ctx, "Control-plane proxies", tasks, dryRun)
+}
+
+func runComposeDependencyConvergence(ctx context.Context, c *releaseHostConvergence, tasks []*orchestrator.Task, dryRun bool) error {
+	return c.runDependencyConvergence(ctx, "Compose dependencies", tasks, dryRun)
 }
 
 // runDependencyConvergence converges each task in turn and stops at the first

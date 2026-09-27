@@ -40,6 +40,7 @@ func releaseServiceStages() []releaseServiceStage {
 		{name: "kafka", taskTypes: []string{"kafka-controller", "kafka"}, describe: describeKafkaConvergence, run: runKafkaConvergence},
 		{name: "observability", taskTypes: []string{"vmagent", "vmalert", "vmauth"}, describe: describeObservabilityConvergence, run: runObservabilityConvergence},
 		{name: "proxies", taskTypes: []string{"nginx", "caddy"}, describe: describeProxyConvergence, run: runProxyConvergence},
+		{name: "compose dependencies", taskTypes: []string{"chatwoot", "listmonk", "metabase", "grafana"}, describe: describeComposeDependencyConvergence, run: runComposeDependencyConvergence},
 	}
 }
 
