@@ -136,8 +136,9 @@ ranking and the candidates this cell returns to a querying peer. Current routing
 
 `LiveIngestPreparationRuntime` confirms the selected push-ingest node's current advertised
 listener, protocol, heartbeat, capability and signed authority. It runs inside
-`PolicyBoundPlacementRuntime`, which reconstructs the complete policy census, checks directional
-capacity and the active-ingest ownership fence, and revalidates after preparation and on replay.
+`PolicyBoundPlacementRuntime`, which checks the node's own verdict under the signed policy, its
+directional capacity and the active-ingest ownership fence before preparation, after it and on
+replay. Those checks read only this cell.
 `PlacementMediaRuntime` selects the ingest or serving implementation without falling through to
 another verb when a handler is unavailable.
 
@@ -912,9 +913,23 @@ No publishing credential is part of these records.
 federated transports. It requires a runtime enforcement adapter; missing enforcement or mismatched
 discovery/receipt cells refuse preparation. Reconciliation checks current admission before media
 work; the destination revalidates afterward, including current generation-bound evidence when an
-outcome claims readiness. The policy-bound runtime performs one global evaluation before media
-checks/work and one after work, without a duplicate preflight evaluation. Physical admission
-refusal, cancellation or expired policy cannot proceed to media work.
+outcome claims readiness. Physical admission refusal, cancellation or expired policy cannot proceed
+to media work.
+
+A destination validates only what it is authoritative for (`PlacementPolicyGate.CheckDestination`):
+
+- its signed authority is not older than the coordinator's. The same policy revisions with the same
+  digest, or newer revisions, are accepted; with newer policy the destination answers under its own,
+  and the acknowledgement still names the coordinator's revisions. Older policy refuses;
+- the selected node is live and has capacity, observed through this cell's own discovery;
+- the node's own verdict under the signed policy: entitlement, owner consent, membership, protocol,
+  source path and the active-ingest fence, evaluated over this cell only.
+
+Preference between cells and spillover are the coordinator's decision from its complete census. The
+destination does not repeat the multi-cell evaluation, so a node the coordinator chose from a
+spillover group is accepted when the node itself is eligible. Signed authority versions that advanced
+without changing these facts do not invalidate a preparation or its replay; a replay under authority
+older than the receipt's refuses.
 Completed receipts are revalidated and reconfirmed against coordination storage before replay;
 expiry, engine change or a lost outcome during revalidation cannot return cached success.
 Pending attempts retain their physical binding after ambiguous work. The runtime must reconcile
@@ -928,8 +943,20 @@ cutover and generation-bound first-media proof remain gates.
 origin-pull arrangement. It checks signed push identity, the current publisher generation,
 exact destination membership in the authority, reported playback listener, source feasibility
 and external-source consent. Its endpoint uses the signed public playback identity, never a
-source URL. The policy-bound wrapper remains responsible for global preference and capacity
-evaluation; the media adapter cannot replace it.
+source URL. The policy-bound wrapper remains responsible for the node's policy verdict and
+capacity; the media adapter cannot replace it.
+
+Discovery and preparation judge the destination with the same predicates. Node freshness is
+`balancer.PlacementNodeEvidence`: the node's heartbeat, listener observation and metrics report are
+each valid for 30 seconds from their own stamp, and a stamp up to the one-second preparation skew
+ahead counts as stamped now, because the replicas of a cell stamp with their own clocks. A refusal
+names the first stale report with its age. Each replica's copy of these facts only moves forward: a
+replicated node snapshot never replaces the heartbeat, listener or metrics facts it holds with an
+older observation of them. Virtual-viewer redirects are routing state local to the replica that
+issued them and never republish the node snapshot. Relay feasibility requires the source cell to be
+reachable for the pull: the source is in this cell, or a federation client and a control address
+of the source cell are known (`ArrangeOriginPullDeps.CanArrangeFromCell`). Discovery therefore
+never offers a relay that preparation must refuse with "origin-pull peer address unknown".
 
 Arrangement binds the physical attempt to the placement receipt before notifying the source.
 A new viewer on the same destination binds the existing physical attempt without notifying the
@@ -1046,15 +1073,20 @@ bounds all returned choices and the evidence supporting group transitions. Missi
 unreachable preferred cells cannot certify capacity spillover. Routing retries continue to
 reevaluate that census after an exact destination refusal.
 
-`PlacementPolicyGate` uses that path to revalidate a selected destination. It reconstructs all
-cells from current signed authority, binds the incoming query to this cell's complete authorized
-cluster set, and checks that the exact node remains in the selected policy group. It rereads
-authority and ingest ownership after observation; changed owner consent, commercial facts,
-policy or active ingest cluster invalidates the result. Unknown ingest ownership fails closed;
-a verified absence of active ownership is distinct. The result expiry is capped by the original
-attempt, authority and observation lifetimes. This implements the policy portion of runtime
-revalidation, not a physical preparation, capacity reservation, atomic publisher claim or
-generation-bound media proof; connecting those enforcement pieces remains required.
+`PlacementPolicyGate.Assess` uses that path for final admission of a connection that did not come
+through a coordinator. It reconstructs all cells from current signed authority, binds the incoming
+query to this cell's complete authorized cluster set, and checks that the exact node remains in the
+selected policy group. It rereads authority and ingest ownership after observation. A decision
+stands only on the snapshot it was made on: when owner consent, commercial facts or the active
+ingest cluster changed, the decision is made again on the newer snapshot, at most three rounds in
+the three-second budget. Only a snapshot that forbids the node refuses it. Version counters that
+advanced with every other fact unchanged, such as the compilation a publisher's own ownership claim
+triggers, keep the decision and carry the newer versions. Authority that changes on every round
+returns `ErrPlacementAuthorityChanged` (gRPC `Aborted`), which ingest reports as the retryable
+`INGEST_ERROR_TIMEOUT`. Unknown ingest ownership fails closed; a verified absence of active
+ownership is distinct. The result expiry is capped by the original attempt, authority and
+observation lifetimes. This implements the policy portion of admission, not a physical
+preparation, capacity reservation, atomic publisher claim or generation-bound media proof.
 
 Its `Admit` entry point accepts trusted connection identity rather than a client-supplied policy
 query: tenant/object/internal name, admitted edge cluster/node, verb/protocol, trusted client
@@ -1069,14 +1101,18 @@ atomic publisher ownership or physical readiness checks.
 
 Direct admission carries signed tenant/object authority versions separately from policy revisions.
 Owner-resolved source evidence may supply its paired expected versions; a mismatch is rejected
-before the global census. The outer identity lookup and the final policy assessment must also use
-the same versions, even when policy revisions and digest did not change. A successful decision
-retains these versions for its consumer; the viewer handler rejects missing or nonpositive versions
-before capacity/enrichment side effects.
+before the global census, and so is a final assessment on other versions. A publisher brings no
+source evidence, so ingest admission is not bound to the versions of its identity lookup. When the
+assessment finds policy other than the snapshot the admission was built from, `Admit` rebuilds
+it on the newer snapshot within the same three rounds. The ingest placement resolver applies the
+same rule to its route. A successful decision retains the versions it was decided on for its
+consumer; the viewer handler rejects missing or nonpositive versions before capacity/enrichment
+side effects.
 
 Tests cover direct-destination admission for ingest and serving across a preferred and fallback
 cell, including verified-empty versus unreachable preferred capacity, identity/schema/readiness
-failures and a policy change between reads. `USER_NEW` has a startup-configurable viewer-placement
+failures, and authority that advances between reads: an advance that still admits the node, one
+that forbids it, and one that never settles. `USER_NEW` has a startup-configurable viewer-placement
 adapter hook after playback authentication and load checks, before viewer capacity and enrichment.
 The executable bootstrap installs the concrete adapter from the public runtime
 (`ConfigureLiveViewerPlacementAdmission`), sharing the destination's gate and source paths.
@@ -1687,9 +1723,32 @@ clients and Commodore proxy. An explicit format is never replaced with another. 
 format performs one protocol-neutral placement: candidate nodes need at least one browser-playable
 Mist output, but Foghorn does not decide which one the viewer will use. Exact-node preparation
 carries the selected node's fresh Mist output advertisement across cell boundaries, and the public
-response exposes the complete sanitized catalog. An ambiguous preparation failure does not
-authorize choosing another node or protocol. Public format aliases are normalized independently of
-trusted Mist connector observations.
+response exposes the complete sanitized catalog. An explicit format is never replaced by another
+when preparation fails. Public format aliases are normalized independently of trusted Mist
+connector observations.
+
+A destination that cannot be prepared is not eligible for that request. The router marks it
+unavailable and prepares the next best candidate from the same evaluation, for at most eight
+attempts, and logs every step with its reason:
+
+- a definite refusal (capacity exhausted, node unavailable, a policy or source refusal) excludes the
+  node;
+- a transport failure first retries another replica of the same cell. Only when no replica answers
+  does the router move to the next candidate.
+
+The failed attempt is never reported as success. Anything the destination reserved for it expires
+with the attempt, and a repeated preparation of the same attempt on another replica returns the same
+receipt. When no candidate prepares, the caller gets the last preparation error.
+
+A remote cell is addressed through all of its control replicas. Quartermaster's `ListPeers` returns
+every healthy, running Foghorn gRPC instance of a peer cluster in stable order (`foghorn_addrs`,
+with `foghorn_addr` its first entry for older readers). `PeerManager` keeps the list per peer. The
+long-lived peer channel stays on the first address, because moving it tears down live state;
+`QueryPlacementCandidates`, `PreparePlacement` and the source notification of a receipt-bound pull
+fail over along the cell's list. A replica that is down fails fast (the call does not wait for
+readiness while another replica remains) and a replica gets an equal share of the remaining
+deadline, so one dead replica cannot consume the whole budget. Only `Unavailable`, or a replica
+running out of its share, moves the call; any answer, including a refusal, is the cell's answer.
 
 GraphQL exposes the optional `protocol: MediaViewerProtocol` argument and the canonical
 `ResolveViewerDestination` operation. The generated field forwards every enum value to the

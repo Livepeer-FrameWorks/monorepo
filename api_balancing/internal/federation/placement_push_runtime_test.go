@@ -15,6 +15,43 @@ import (
 	"google.golang.org/protobuf/proto"
 )
 
+// Discovery and preparation judge relay feasibility with one predicate. A
+// source in a cell whose control address is unknown cannot be pulled, so
+// discovery does not offer relays from it; before, discovery offered every
+// node and preparation then refused with "origin-pull peer address unknown".
+func TestDiscoveryOffersRemoteRelayOnlyWhenSourceCellIsAddressable(t *testing.T) {
+	destination, media, f, _, fed, req := pushRuntimeFixture(t)
+	ctx := context.Background()
+	addresses := media.Arrange.CellAddresses
+	media.Arrange.CellAddresses = func(string) []string { return nil }
+	observed, err := f.discovery.QueryPlacementCandidates(ctx, f.query)
+	if err != nil || len(observed.GetCandidates()) != 12 {
+		t.Fatalf("discovery: %v, %v", observed, err)
+	}
+	for _, candidate := range observed.GetCandidates() {
+		if candidate.GetSourceFeasible() {
+			t.Fatalf("discovery offered %s a relay from a cell with no control address", candidate.GetNodeId())
+		}
+	}
+	if response, prepareErr := destination.PreparePlacement(ctx, req); response != nil || prepareErr == nil || len(fed.calls) != 0 {
+		t.Fatalf("preparation of an unreachable source: %v, %v, notifications=%d", response, prepareErr, len(fed.calls))
+	}
+
+	media.Arrange.CellAddresses = addresses
+	observed, err = f.discovery.QueryPlacementCandidates(ctx, f.query)
+	if err != nil || len(observed.GetCandidates()) != 12 || !observed.GetCandidates()[0].GetSourceFeasible() {
+		t.Fatalf("addressable source cell was not offered: %v, %v", observed, err)
+	}
+	next := proto.CloneOf(req)
+	if next.AttemptId, err = placement.NewPreparationAttemptID(destination.now().Add(time.Millisecond)); err != nil {
+		t.Fatal(err)
+	}
+	response, err := destination.PreparePlacement(ctx, next)
+	if err != nil || response.GetOutcome() != placementpb.PreparationOutcome_PREPARATION_OUTCOME_ACCEPTED || len(fed.calls) != 1 {
+		t.Fatalf("preparation of the offered relay: %v, %v, notifications=%d", response, err, len(fed.calls))
+	}
+}
+
 func TestPushPreparationKeepsItsExplicitRegistry(t *testing.T) {
 	for _, scenario := range []string{"missing-global", "foreign-global", "split-runtime"} {
 		t.Run(scenario, func(t *testing.T) {
@@ -63,6 +100,9 @@ func pushRuntimeFixture(t *testing.T) (*PlacementDestination, *LivePushPreparati
 		Authority:        f.discovery.Authority, Paths: paths, Registry: registry,
 		Arrange: makeDepsAt(t, fed, map[string]string{"eu-cell": "peer:18009"}, store.Now), Now: store.Now,
 	}
+	// As ConfigureLivePlacementDestination wires it: discovery offers a relay
+	// only when the arrangement could reach the source cell.
+	paths.SourceCellReachable = media.Arrange.CanArrangeFromCell
 	destination := &PlacementDestination{Discovery: f.discovery, Receipts: store, Now: store.Now}
 	transport := PlacementTransport{LocalCellID: store.CellID, Local: destination}
 	destination.Runtime = &PolicyBoundPlacementRuntime{Policy: &PlacementPolicyGate{

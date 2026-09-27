@@ -101,8 +101,8 @@ func (runtime *LiveIngestPreparationRuntime) observe(ctx context.Context, req *p
 			selected = node
 		}
 	}
-	if selected == nil || !selected.IsActive || !selected.CapIngest || !freshPlacementEvidence(selected.LastHeartbeat, now) || !freshPlacementEvidence(selected.OutputsObservedAt, now) {
-		return ingestListener{}, status.Error(codes.Unavailable, "selected ingest destination is unavailable")
+	if reason := destinationUnavailableReason(selected, placement.Ingest, now); reason != "" {
+		return ingestListener{}, status.Error(codes.Unavailable, "selected ingest destination is unavailable: "+reason)
 	}
 	endpoint := mist.ResolveIngestEndpointTemplate(selected.Outputs, selected.Host, q.Protocol)
 	publicBase := mist.IngestPublicOrigin(selected.Host)
@@ -113,8 +113,7 @@ func (runtime *LiveIngestPreparationRuntime) observe(ctx context.Context, req *p
 		return ingestListener{}, status.FromContextError(err).Err()
 	}
 	expiresAt := minPlacementExpiry(req.ExpiresAt.AsTime(), authority.ExpiresAt)
-	expiresAt = minPlacementExpiry(expiresAt, selected.LastHeartbeat.Add(30*time.Second))
-	expiresAt = minPlacementExpiry(expiresAt, selected.OutputsObservedAt.Add(30*time.Second))
+	expiresAt = minPlacementExpiry(expiresAt, destinationEvidenceUntil(*selected, now))
 	if !runtime.now().Before(expiresAt) {
 		return ingestListener{}, status.Error(codes.FailedPrecondition, "ingest preparation evidence expired")
 	}

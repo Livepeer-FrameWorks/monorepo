@@ -3,7 +3,6 @@ package federation
 import (
 	"context"
 	"errors"
-	"reflect"
 	"time"
 
 	"frameworks/api_balancing/internal/balancer"
@@ -145,7 +144,9 @@ func (resolver *ViewerPlacementResolver) PrepareViewer(ctx context.Context, requ
 	if err != nil {
 		return balancer.PlacementPreparationResult{}, err
 	}
-	if !reflect.DeepEqual(subject.authority, current) {
+	// A version advance that leaves every decision fact unchanged does not
+	// invalidate the route; the source generation check below still binds it.
+	if !placementDecisionFactsEqual(subject.authority, current) {
 		return balancer.PlacementPreparationResult{}, errors.New("viewer authority changed during routing")
 	}
 	currentGeneration, currentUntil, err := resolver.Source.ResolveSourceGeneration(ctx, current)

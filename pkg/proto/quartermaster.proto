@@ -2267,6 +2267,9 @@ message PeerCluster {
   // Authoritative Foghorn control cell behind foghorn_addr. Distinct from the
   // virtual media cluster; absent on peers that cannot advertise cell identity.
   string control_cell_id = 6;
+  // Every healthy Foghorn gRPC replica of the peer, in stable order; the first
+  // equals foghorn_addr. Request/response RPCs fail over across the list.
+  repeated string foghorn_addrs = 7;
 }
 
 message ListPeersResponse {

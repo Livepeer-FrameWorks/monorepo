@@ -3,6 +3,7 @@ package federation
 import (
 	"context"
 	"errors"
+	"fmt"
 	"slices"
 	"sync"
 	"testing"
@@ -12,6 +13,8 @@ import (
 	localauthority "frameworks/api_balancing/internal/mediaauthority"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/placement"
 	placementpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/media_placement"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
@@ -96,7 +99,11 @@ func TestPlacementPolicyGateRebuildsGlobalCensusFromAuthority(t *testing.T) {
 	}
 }
 
-func TestPlacementPolicyGateRefusesAuthorityChangesDuringObservation(t *testing.T) {
+// A snapshot that changes while other cells are observed is decided again on
+// the newer snapshot. Facts that still admit the node accept it with the newer
+// versions; a policy revision the request does not carry, or expired
+// authority, refuses.
+func TestPlacementPolicyGateRedecidesOnAuthorityChangedDuringObservation(t *testing.T) {
 	for _, change := range []string{"consent", "owner", "charging", "policy", "expired", "tenant-version", "object-version"} {
 		t.Run(change, func(t *testing.T) {
 			f := newDiscoveryFixture(t)
@@ -130,10 +137,47 @@ func TestPlacementPolicyGateRefusesAuthorityChangesDuringObservation(t *testing.
 			})
 			transport := PlacementTransport{LocalCellID: "us-cell", Local: &PlacementDestination{Discovery: f.discovery}}
 			gate := &PlacementPolicyGate{CellID: "us-cell", Authority: reader, Router: transport.Router(), Now: func() time.Time { return f.now }}
-			if result, err := gate.Validate(context.Background(), req); err == nil || result.Choice.NodeID != "" || reads != 2 {
-				t.Fatalf("changed %s escaped revalidation: %v, %v, reads=%d", change, result, err, reads)
+			result, err := gate.Validate(context.Background(), req)
+			switch change {
+			case "policy", "expired":
+				if err == nil || result.Choice.NodeID != "" || reads != 2 {
+					t.Fatalf("changed %s escaped revalidation: %v, %v, reads=%d", change, result, err, reads)
+				}
+			case "tenant-version", "object-version":
+				// Only the counters moved: the decision stands on the newer versions.
+				if err != nil || result.Choice.NodeID != "node-00" || reads != 2 ||
+					result.TenantAuthorityVersion != f.pair.Tenant.Version || result.ObjectAuthorityVersion != f.pair.Object.Version {
+					t.Fatalf("version advance of %s refused an admitted node: %+v, %v, reads=%d", change, result, err, reads)
+				}
+			default:
+				// Changed facts are decided again; the node is still admitted.
+				if err != nil || result.Choice.NodeID != "node-00" || reads != 3 {
+					t.Fatalf("changed %s was not re-decided on the newer snapshot: %+v, %v, reads=%d", change, result, err, reads)
+				}
 			}
 		})
+	}
+}
+
+// Authority whose facts change on every read exhausts the bounded rounds and
+// reports ErrPlacementAuthorityChanged, which callers treat as retryable.
+func TestPlacementPolicyGateReportsPerpetualAuthorityChange(t *testing.T) {
+	f := newDiscoveryFixture(t)
+	req := placementReceiptRequest(t, f.now)
+	req.Query, req.NodeId = f.query, "node-00"
+	reads := 0
+	reader := placementAuthorityReaderFunc(func(context.Context, string, string, string) (localauthority.PlacementPair, error) {
+		reads++
+		grant := f.pair.Tenant.Authority.EffectiveClusterGrants[0]
+		grant.OwnerTenantId = fmt.Sprintf("owner-%d", reads)
+		f.pair.Tenant.Version++
+		return f.pair, nil
+	})
+	transport := PlacementTransport{LocalCellID: "us-cell", Local: &PlacementDestination{Discovery: f.discovery}}
+	gate := &PlacementPolicyGate{CellID: "us-cell", Authority: reader, Router: transport.Router(), Now: func() time.Time { return f.now }}
+	result, err := gate.Validate(context.Background(), req)
+	if !errors.Is(err, ErrPlacementAuthorityChanged) || status.Code(err) != codes.Aborted || result.Choice.NodeID != "" || reads != 1+placementAuthorityRounds {
+		t.Fatalf("perpetual change = %+v, %v (code %s), reads=%d; want ErrPlacementAuthorityChanged after %d rounds", result, err, status.Code(err), reads, placementAuthorityRounds)
 	}
 }
 

@@ -49,14 +49,14 @@ func TestWatchPeersDrainPreservesOrdinaryRPC(t *testing.T) {
 	t.Cleanup(func() { _ = db.Close() })
 	for range 2 {
 		mock.ExpectQuery("peer_clusters").WillReturnRows(sqlmock.NewRows([]string{
-			"cluster_id", "shared_tenant_ids", "cluster_name", "cluster_type", "foghorn_addr", "control_cell_id",
+			"cluster_id", "shared_tenant_ids", "cluster_name", "cluster_type", "foghorn_addr", "foghorn_addrs", "control_cell_id",
 		}))
 	}
 	// This snapshot exceeds the stream's receive window. The client never reads
 	// it, so draining must also release a transport-level flow-control wait.
 	mock.ExpectQuery("peer_clusters").WillReturnRows(sqlmock.NewRows([]string{
-		"cluster_id", "shared_tenant_ids", "cluster_name", "cluster_type", "foghorn_addr", "control_cell_id",
-	}).AddRow("eu", []byte("{tenant}"), "EU", "central", strings.Repeat("x", 2*1024*1024), "eu-cell"))
+		"cluster_id", "shared_tenant_ids", "cluster_name", "cluster_type", "foghorn_addr", "foghorn_addrs", "control_cell_id",
+	}).AddRow("eu", []byte("{tenant}"), "EU", "central", strings.Repeat("x", 2*1024*1024), []byte("{}"), "eu-cell"))
 	peerCtx, drainPeers := context.WithCancel(context.Background())
 	defer drainPeers()
 	hub := newPeerWatchHub()
@@ -218,7 +218,7 @@ func TestWatchPeersDrainReleasesBlockedSend(t *testing.T) {
 		}
 		defer db.Close()
 		mock.ExpectQuery("peer_clusters").WillReturnRows(sqlmock.NewRows([]string{
-			"cluster_id", "shared_tenant_ids", "cluster_name", "cluster_type", "foghorn_addr", "control_cell_id",
+			"cluster_id", "shared_tenant_ids", "cluster_name", "cluster_type", "foghorn_addr", "foghorn_addrs", "control_cell_id",
 		}))
 		peerCtx, drain := context.WithCancel(context.Background())
 		defer drain()
@@ -266,7 +266,7 @@ func TestWatchPeersDrainCancelsPendingQuery(t *testing.T) {
 		}
 		defer db.Close()
 		mock.ExpectQuery("peer_clusters").WillDelayFor(time.Hour).WillReturnRows(sqlmock.NewRows([]string{
-			"cluster_id", "shared_tenant_ids", "cluster_name", "cluster_type", "foghorn_addr", "control_cell_id",
+			"cluster_id", "shared_tenant_ids", "cluster_name", "cluster_type", "foghorn_addr", "foghorn_addrs", "control_cell_id",
 		}))
 		peerCtx, drain := context.WithCancel(context.Background())
 		defer drain()

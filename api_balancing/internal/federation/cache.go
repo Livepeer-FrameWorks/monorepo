@@ -251,7 +251,11 @@ func (c *RemoteEdgeCache) ReleaseOriginPullLock(ctx context.Context, streamName,
 // usable, tenant-authorized peer channel for a peer another replica discovered — address alone is
 // not enough (a Redis-created peer with no lifecycle/tenants filters every scoped broadcast).
 type PeerHint struct {
-	Addr          string   `json:"addr"`
+	// Addr is the stable address the long-lived peer channel dials.
+	Addr string `json:"addr"`
+	// Addrs lists every known replica, Addr first. Request/response RPCs fail
+	// over across it; the peer channel never moves between its entries.
+	Addrs         []string `json:"addrs,omitempty"`
 	ControlCellID string   `json:"control_cell_id,omitempty"`
 	AlwaysOn      bool     `json:"always_on,omitempty"`
 	Tenants       []string `json:"tenants,omitempty"`
@@ -265,6 +269,7 @@ func normalizePeerHint(h PeerHint) (PeerHint, error) {
 	if h.Addr == "" {
 		return PeerHint{}, errors.New("peer hint has empty address")
 	}
+	h.Addrs = peerReplicaAddrs(h.Addr, h.Addrs)
 	seen := make(map[string]struct{}, len(h.Tenants))
 	tenants := make([]string, 0, len(h.Tenants))
 	for _, tenantID := range h.Tenants {
@@ -284,6 +289,20 @@ func normalizePeerHint(h PeerHint) (PeerHint, error) {
 		return PeerHint{}, errors.New("stream-scoped peer hint has no tenant scope")
 	}
 	return h, nil
+}
+
+// peerReplicaAddrs returns primary followed by the other distinct, non-empty
+// replicas in their given order.
+func peerReplicaAddrs(primary string, replicas []string) []string {
+	result := make([]string, 0, len(replicas)+1)
+	result = append(result, primary)
+	for _, addr := range replicas {
+		addr = strings.TrimSpace(addr)
+		if addr != "" && !slices.Contains(result, addr) {
+			result = append(result, addr)
+		}
+	}
+	return result
 }
 
 const peerHintContributionVersion = uint32(2)
@@ -395,6 +414,7 @@ func (c *RemoteEdgeCache) GetPeerAddresses(ctx context.Context) (map[string]Peer
 				(record.PublishedAtUnixMilli == current.publishedAt && record.ContributorID > current.contributorID))
 			if incomingStronger || incomingNewer {
 				current.hint.Addr = incoming.Addr
+				current.hint.Addrs = incoming.Addrs
 				current.hint.ControlCellID = incoming.ControlCellID
 				current.contributorID = record.ContributorID
 				current.publishedAt = record.PublishedAtUnixMilli

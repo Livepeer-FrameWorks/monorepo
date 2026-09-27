@@ -91,7 +91,15 @@ func TestObservePlacementNodesNeverTurnsUnknownIntoExhaustion(t *testing.T) {
 			n.OutputsObservedAt = n.LastHeartbeat.Add(-30 * time.Second)
 		}, placement.StaleTelemetry},
 		{"future_listener", func(n *state.EnhancedBalancerNodeSnapshot) {
-			n.OutputsObservedAt = n.LastHeartbeat.Add(time.Nanosecond)
+			n.OutputsObservedAt = n.LastHeartbeat.Add(placement.PreparationClockSkew + time.Nanosecond)
+		}, placement.StaleTelemetry},
+		// Replicas stamp reports with their own clocks; a stamp within the
+		// preparation skew counts as observed now.
+		{"listener_within_clock_skew", func(n *state.EnhancedBalancerNodeSnapshot) {
+			n.OutputsObservedAt = n.LastHeartbeat.Add(placement.PreparationClockSkew)
+		}, placement.Selected},
+		{"future_heartbeat", func(n *state.EnhancedBalancerNodeSnapshot) {
+			n.LastHeartbeat = n.OutputsObservedAt.Add(placement.PreparationClockSkew + time.Nanosecond)
 		}, placement.StaleTelemetry},
 		{"missing_listener", func(n *state.EnhancedBalancerNodeSnapshot) { n.Outputs = nil }, placement.NodeUnavailable},
 		{"http_is_not_hls", func(n *state.EnhancedBalancerNodeSnapshot) {

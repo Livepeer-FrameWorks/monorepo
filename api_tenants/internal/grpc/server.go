@@ -10579,7 +10579,7 @@ func (s *QuartermasterServer) ListPeers(ctx context.Context, req *quartermasterp
 		peers = append(peers, &quartermasterpb.PeerCluster{
 			ClusterId: row.ClusterID, SharedTenantIds: row.SharedTenantIds,
 			ClusterName: row.ClusterName, ClusterType: row.ClusterType, FoghornAddr: row.FoghornAddr,
-			ControlCellId: row.ControlCellID,
+			ControlCellId: row.ControlCellID, FoghornAddrs: row.FoghornAddrs,
 		})
 	}
 

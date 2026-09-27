@@ -252,7 +252,7 @@ func (runtime *MediaServePreparationRuntime) observe(ctx context.Context, req *p
 		}
 		selected = node
 	}
-	if reason := destinationUnavailableReason(selected, now); reason != "" {
+	if reason := destinationUnavailableReason(selected, placement.Serve, now); reason != "" {
 		return mediaPreparationState{}, status.Error(codes.Unavailable, "selected destination is unavailable: "+reason)
 	}
 	if _, allowed := authority.Clusters[req.ClusterId]; !allowed {
@@ -314,7 +314,7 @@ func (runtime *MediaServePreparationRuntime) observe(ctx context.Context, req *p
 		return mediaPreparationState{}, status.FromContextError(err).Err()
 	}
 	expiresAt := minPlacementExpiry(req.ExpiresAt.AsTime(), authority.ExpiresAt)
-	for _, expiry := range []time.Time{observation.ExpiresAt, selected.LastHeartbeat.Add(30 * time.Second), selected.OutputsObservedAt.Add(30 * time.Second)} {
+	for _, expiry := range []time.Time{observation.ExpiresAt, destinationEvidenceUntil(*selected, now)} {
 		expiresAt = minPlacementExpiry(expiresAt, expiry)
 	}
 	state.expiresAt = expiresAt

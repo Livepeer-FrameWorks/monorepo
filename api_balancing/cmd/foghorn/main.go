@@ -1783,7 +1783,7 @@ func main() {
 		}
 		if peerManager != nil {
 			arrangeDeps.PeerResolver = peerManager
-			arrangeDeps.CellAddress = peerManager.GetControlCellAddr
+			arrangeDeps.CellAddresses = peerManager.GetControlCellAddrs
 		}
 		if fedClient != nil {
 			arrangeDeps.FedClient = fedClient
@@ -1799,7 +1799,7 @@ func main() {
 				}},
 			}
 			if peerManager != nil {
-				deps.CellAddress = peerManager.GetControlCellAddr
+				deps.CellAddresses = peerManager.GetControlCellAddrs
 			}
 			if placementErr := federation.ConfigureLivePlacementDestination(placementDestination, deps); placementErr != nil {
 				logger.WithError(placementErr).Fatal("Invalid live placement destination configuration")

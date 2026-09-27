@@ -9,6 +9,9 @@ import (
 	"frameworks/api_balancing/internal/balancer"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/placement"
 	placementpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/media_placement"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
@@ -240,56 +243,70 @@ func TestPolicyBoundRuntimeRechecksRevocationAfterMediaWork(t *testing.T) {
 	}
 }
 
-func TestPolicyBoundRuntimeBindsAuthorityVersionsAcrossWorkAndReplay(t *testing.T) {
-	for _, stage := range []string{"during-work", "replay"} {
-		for _, scope := range []string{"tenant", "object"} {
-			t.Run(stage+"/"+scope, func(t *testing.T) {
-				destination, runtime, f, req := policyRuntimeFixture(t)
-				// Policy revisions deliberately differ from the signed envelope versions.
-				f.pair.Tenant.Version, f.pair.Object.Version = 103, 105
-				advance := func() {
-					if scope == "tenant" {
-						f.pair.Tenant.Version++
-					} else {
+// The destination validates only its own facts. Signed authority versions
+// that advance without changing what admits the node, during the work or
+// before a replay, keep the preparation; a change that forbids the node
+// refuses it, and so does destination authority older than the coordinator's.
+func TestPolicyBoundRuntimeAcceptsAuthorityAdvanceThatStillAdmitsTheNode(t *testing.T) {
+	for _, scenario := range []string{"advance-during-work", "advance-before-replay", "newer-destination-policy", "advance-to-deny", "older-destination-policy"} {
+		t.Run(scenario, func(t *testing.T) {
+			destination, runtime, f, req := policyRuntimeFixture(t)
+			// Policy revisions deliberately differ from the signed envelope versions.
+			f.pair.Tenant.Version, f.pair.Object.Version = 103, 105
+			req.Query = proto.CloneOf(f.query)
+			starts := 0
+			runtime.Media = placementRuntimeFixture{
+				validate: func(context.Context, *placementpb.PreparePlacementRequest, PlacementReceipt) error { return nil },
+				reconcile: func(_ context.Context, got *placementpb.PreparePlacementRequest, _ PlacementReceipt, bind func(*PlacementPullBinding) error) (*placementpb.Preparation, error) {
+					starts++
+					pull := placementReceiptPull()
+					pull.SourceGeneration = got.Query.SourceGeneration
+					if err := bind(pull); err != nil {
+						return nil, err
+					}
+					if scenario == "advance-during-work" {
 						f.pair.Object.Version++
 					}
+					return preparationWireResponse(got), nil
+				},
+			}
+			switch scenario {
+			case "newer-destination-policy":
+				// The destination already holds the next policy revision; it
+				// answers under it, and the acknowledgement still names the
+				// coordinator's revision.
+				f.pair.Object.Authority.MediaPlacement.Revision++
+				f.query.PolicyRevision++
+			case "older-destination-policy":
+				req.Query.PolicyRevision++
+			case "advance-to-deny":
+				f.pair.Object.Version++
+				f.pair.Tenant.Authority.EffectiveClusterGrants[0].MediaConsent.AllowServe = false
+			}
+			response, err := destination.PreparePlacement(context.Background(), req)
+			switch scenario {
+			case "advance-to-deny", "older-destination-policy":
+				if response != nil || status.Code(err) != codes.FailedPrecondition || starts != 0 {
+					t.Fatalf("%s prepared: %v, %v, starts=%d", scenario, response, err, starts)
 				}
-				starts := 0
-				mediaResponse := preparationWireResponse(req)
-				runtime.Media = placementRuntimeFixture{
-					validate: func(context.Context, *placementpb.PreparePlacementRequest, PlacementReceipt) error { return nil },
-					reconcile: func(_ context.Context, got *placementpb.PreparePlacementRequest, _ PlacementReceipt, bind func(*PlacementPullBinding) error) (*placementpb.Preparation, error) {
-						starts++
-						pull := placementReceiptPull()
-						pull.SourceGeneration = got.Query.SourceGeneration
-						if err := bind(pull); err != nil {
-							return nil, err
-						}
-						if stage == "during-work" {
-							advance()
-						}
-						return mediaResponse, nil
-					},
-				}
-				response, err := destination.PreparePlacement(context.Background(), req)
-				if stage == "replay" {
-					if err != nil || response.GetTenantAuthorityVersion() != 103 || response.GetObjectAuthorityVersion() != 105 || response.GetPolicyRevision() != 5 || response.GetParentRevision() != 3 {
-						t.Fatalf("signed versions lost or conflated with policy revisions: %v, %v", response, err)
-					}
-					advance()
-					response, err = destination.PreparePlacement(context.Background(), req)
-				}
-				if err == nil || response != nil || starts != 1 {
-					t.Fatalf("changed signed authority accepted: %v, %v, starts=%d", response, err, starts)
-				}
-				if mediaResponse.TenantAuthorityVersion != 0 || mediaResponse.ObjectAuthorityVersion != 0 {
-					t.Fatal("policy wrapper mutated media-owned acknowledgement")
-				}
-				receipt, err := destination.Receipts.Begin(context.Background(), req)
-				if err != nil || receipt.Pull == nil || (stage == "during-work" && receipt.Response != nil) {
-					t.Fatalf("lost physical binding or published stale authorization: %+v, %v", receipt, err)
-				}
-			})
-		}
+				return
+			}
+			if err != nil || response.GetOutcome() != placementpb.PreparationOutcome_PREPARATION_OUTCOME_ACCEPTED || starts != 1 ||
+				response.GetTenantAuthorityVersion() != 103 || response.GetObjectAuthorityVersion() != 105 ||
+				response.GetPolicyRevision() != req.Query.PolicyRevision || response.GetParentRevision() != req.Query.ParentRevision {
+				t.Fatalf("%s refused an admitted node: %v, %v, starts=%d", scenario, response, err, starts)
+			}
+			if scenario == "advance-before-replay" {
+				f.pair.Object.Version++
+			}
+			replay, err := destination.PreparePlacement(context.Background(), req)
+			if err != nil || !proto.Equal(replay, response) || starts != 1 {
+				t.Fatalf("replay under advanced authority: %v, %v, starts=%d", replay, err, starts)
+			}
+			f.pair.Tenant.Authority.EffectiveClusterGrants[0].MediaConsent.AllowServe = false
+			if replay, err = destination.PreparePlacement(context.Background(), req); replay != nil || err == nil {
+				t.Fatalf("replay after the destination was withdrawn: %v, %v", replay, err)
+			}
+		})
 	}
 }

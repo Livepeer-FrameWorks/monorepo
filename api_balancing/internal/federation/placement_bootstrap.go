@@ -9,12 +9,12 @@ import (
 )
 
 type LivePlacementDependencies struct {
-	Redis       goredis.UniversalClient
-	Registry    *control.StreamRegistry
-	Arrange     *ArrangeOriginPullDeps
-	IngestFence PlacementIngestFenceReader
-	Client      *FederationClient
-	CellAddress func(string) string
+	Redis         goredis.UniversalClient
+	Registry      *control.StreamRegistry
+	Arrange       *ArrangeOriginPullDeps
+	IngestFence   PlacementIngestFenceReader
+	Client        *FederationClient
+	CellAddresses func(string) []string
 	// Logger receives placement observation failures and refused evaluations.
 	Logger logging.Logger
 }
@@ -44,7 +44,13 @@ func ConfigureLivePlacementDestination(destination *PlacementDestination, deps L
 	if destination.Runtime != nil || destination.Receipts != nil || destination.RetainPrepared != nil {
 		return errors.New("live placement destination is already configured")
 	}
-	transport := PlacementTransport{LocalCellID: discovery.CellID, Local: destination, Client: deps.Client, CellAddress: deps.CellAddress,
+	// Discovery offers a relay from another cell only when preparation could
+	// arrange the pull, which needs that cell's control address.
+	paths.Push.SourceCellReachable = deps.Arrange.CanArrangeFromCell
+	if paths.Configured != nil {
+		paths.Configured.SourceCellReachable = deps.Arrange.CanArrangeFromCell
+	}
+	transport := PlacementTransport{LocalCellID: discovery.CellID, Local: destination, Client: deps.Client, CellAddresses: deps.CellAddresses,
 		Observations: NewPlacementObservationCache(destination.Now), Logger: deps.Logger}
 	gate := &PlacementPolicyGate{CellID: discovery.CellID, Authority: discovery.Authority,
 		IngestFence: deps.IngestFence, Router: transport.Router(), Now: destination.Now}

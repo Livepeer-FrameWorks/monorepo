@@ -119,13 +119,15 @@ type ArrangeOriginPullDeps struct {
 	// use the process registry when no explicit registry is supplied.
 	Registry     *control.StreamRegistry
 	PeerResolver OriginPullPeerResolver
-	// CellAddress is required for receipt-bound placement pulls. Cluster-keyed
-	// addresses cannot establish a canonical source control-cell identity.
-	CellAddress func(string) string
-	FedClient   OriginPullFederationClient
-	LocalSource *FederationServer
-	InstanceID  string
-	Logger      logging.Logger
+	// CellAddresses is required for receipt-bound placement pulls. Cluster-keyed
+	// addresses cannot establish a canonical source control-cell identity. It
+	// lists the cell's control replicas, preferred first; notification fails
+	// over along the list.
+	CellAddresses func(string) []string
+	FedClient     OriginPullFederationClient
+	LocalSource   *FederationServer
+	InstanceID    string
+	Logger        logging.Logger
 	// EventEmitter receives federation lifecycle events. Optional —
 	// nil-safe. HTTP /source supplies it; gRPC /play arrangement runs
 	// without it.
@@ -134,6 +136,21 @@ type ArrangeOriginPullDeps struct {
 	// acceptance window, otherwise every source resolution looks overdue for
 	// renewal and re-notifies the origin.
 	Now func() time.Time
+}
+
+// CanArrangeFromCell reports whether a receipt-bound pull from sourceCellID can
+// be arranged at all: the source is this cell, or a federation client and at
+// least one control address of that cell are known. It is the address
+// condition ArrangeOriginPull enforces, so discovery never offers a relay that
+// preparation must refuse for want of an address.
+func (d *ArrangeOriginPullDeps) CanArrangeFromCell(sourceCellID string) bool {
+	if d == nil || sourceCellID == "" {
+		return false
+	}
+	if d.LocalSource != nil && d.LocalSource.sourceControlCellID() == sourceCellID {
+		return true
+	}
+	return d.FedClient != nil && d.CellAddresses != nil && len(d.CellAddresses(sourceCellID)) > 0
 }
 
 func (d *ArrangeOriginPullDeps) now() time.Time {
@@ -223,8 +240,8 @@ func (d *ArrangeOriginPullDeps) ArrangeOriginPull(ctx context.Context, req Arran
 	// identity is a control cell by construction. Every other caller needs at
 	// least one resolver: which one answers depends on the namespace it names,
 	// and that is decided at the call below rather than here.
-	if !localSource && (d.FedClient == nil || (req.BindPull != nil && d.CellAddress == nil) ||
-		(d.CellAddress == nil && d.PeerResolver == nil)) {
+	if !localSource && (d.FedClient == nil || (req.BindPull != nil && d.CellAddresses == nil) ||
+		(d.CellAddresses == nil && d.PeerResolver == nil)) {
 		return nil, ErrOriginPullDepsMissing
 	}
 	if req.InternalName == "" || req.Remote == nil || req.RemoteCluster == "" {
@@ -384,20 +401,22 @@ func (d *ArrangeOriginPullDeps) ArrangeOriginPull(ctx context.Context, req Arran
 	// rather than choosing one from whether a placement binding is present.
 	// Selecting on BindPull left every cell-named caller without a binding
 	// resolving through the cluster-keyed map, which can only miss.
-	peerAddr := ""
+	var peerAddrs []string
 	if !localSource {
-		if d.CellAddress != nil {
-			peerAddr = d.CellAddress(req.RemoteCluster)
+		if d.CellAddresses != nil {
+			peerAddrs = d.CellAddresses(req.RemoteCluster)
 		}
 		// A receipt-bound pull resolves through the cell and nowhere else: a
 		// cluster-keyed address cannot establish canonical source cell identity,
 		// so falling back would let it bind to an address it cannot vouch for.
 		// Every other caller may fall back, because whether RemoteCluster names
 		// a cell or a media cluster depends on which path built the request.
-		if peerAddr == "" && req.BindPull == nil && d.PeerResolver != nil {
-			peerAddr = d.PeerResolver.GetPeerAddr(req.RemoteCluster)
+		if len(peerAddrs) == 0 && req.BindPull == nil && d.PeerResolver != nil {
+			if addr := d.PeerResolver.GetPeerAddr(req.RemoteCluster); addr != "" {
+				peerAddrs = []string{addr}
+			}
 		}
-		if peerAddr == "" {
+		if len(peerAddrs) == 0 {
 			return nil, ErrOriginPullPeerUnreachable
 		}
 	}
@@ -428,7 +447,11 @@ func (d *ArrangeOriginPullDeps) ArrangeOriginPull(ctx context.Context, req Arran
 	if localSource {
 		ack, err = d.LocalSource.prepareLocalOriginPull(notifyCtx, notification)
 	} else {
-		ack, err = d.FedClient.NotifyOriginPull(notifyCtx, req.RemoteCluster, peerAddr, notification)
+		// The attempt id is bound before notification, so a replica that
+		// timed out and another that answers record the same pull.
+		ack, _, err = callCellReplicas(notifyCtx, peerAddrs, func(attemptCtx context.Context, addr string) (*foghornfederationpb.OriginPullAck, error) {
+			return d.FedClient.NotifyOriginPull(attemptCtx, req.RemoteCluster, addr, notification)
+		})
 	}
 	if contextErr := notifyCtx.Err(); contextErr != nil {
 		return nil, fmt.Errorf("%w: source notification deadline: %w", ErrOriginPullNotifyFailed, contextErr)

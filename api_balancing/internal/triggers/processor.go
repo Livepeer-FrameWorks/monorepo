@@ -1593,7 +1593,9 @@ func ingestPlacementErrorCode(err error) ipcpb.IngestErrorCode {
 	if errors.Is(err, mist.ErrUnsupportedIngestProtocol) {
 		return ipcpb.IngestErrorCode_INGEST_ERROR_PLACEMENT_DENIED
 	}
-	if errors.Is(err, context.DeadlineExceeded) {
+	// Authority that kept changing through every decision round is not a
+	// refusal; the publisher's reconnect decides on the settled snapshot.
+	if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, federation.ErrPlacementAuthorityChanged) {
 		return ipcpb.IngestErrorCode_INGEST_ERROR_TIMEOUT
 	}
 	if st, ok := status.FromError(err); ok {

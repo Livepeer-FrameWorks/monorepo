@@ -36,7 +36,8 @@ func livePathFixture(t *testing.T) (*discoveryFixture, *LivePushPlacementPaths, 
 			SourceGeneration: "source-generation", SourceRevision: 9007199254740993, SourceObservedAt: f.now.Unix(), DTSCObservedAt: f.now.Unix(),
 		}}},
 	}}}
-	reader := &LivePushPlacementPaths{CellID: "us-cell", Registry: r, Snapshot: func() *state.BalancerSnapshot { return f.snapshot }, Now: func() time.Time { return f.now }}
+	reader := &LivePushPlacementPaths{CellID: "us-cell", Registry: r, Snapshot: func() *state.BalancerSnapshot { return f.snapshot }, Now: func() time.Time { return f.now },
+		SourceCellReachable: func(string) bool { return true }}
 	// Discovery dispatches by signed kind; these fixtures exercise the push
 	// reader behind that dispatcher, which is how the destination assembles it.
 	f.discovery.Paths = &MediaPlacementPaths{Push: reader}

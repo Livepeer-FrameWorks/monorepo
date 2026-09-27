@@ -107,6 +107,11 @@ func TestPeerDiscoveryAddressIsStableAcrossReplicaHeartbeats_RealPG(t *testing.T
 		if err != nil || len(rows) != 1 {
 			t.Fatalf("peer discovery: %+v, %v", rows, err)
 		}
+		// Every healthy replica is listed in the same stable order, with the
+		// peer channel address first, so placement RPCs can fail over.
+		if got := rows[0].FoghornAddrs; len(got) != 2 || got[0] != rows[0].FoghornAddr || got[0] != "foghorn-b:18019" || got[1] != "foghorn-b-2:18019" {
+			t.Fatalf("peer replicas = %v with channel address %q; want both healthy replicas, channel address first", got, rows[0].FoghornAddr)
+		}
 		return rows[0].FoghornAddr
 	}
 	first := peerAddr()

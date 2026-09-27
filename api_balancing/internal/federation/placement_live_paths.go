@@ -3,7 +3,6 @@ package federation
 import (
 	"context"
 	"errors"
-	"fmt"
 	"net/url"
 	"strconv"
 	"strings"
@@ -37,6 +36,10 @@ type LivePushPlacementPaths struct {
 	// currently live for the stream. It only classifies a viewer refusal as
 	// starting; it never supplies a source generation.
 	PeerLive func(ctx context.Context, tenantID, internalName string) (clusterID string, live bool)
+	// SourceCellReachable reports whether a pull from the named source cell
+	// can be arranged (ArrangeOriginPullDeps.CanArrangeFromCell). Without it
+	// only a source in this cell is relayable.
+	SourceCellReachable func(cellID string) bool
 }
 
 type placementPublisher struct {
@@ -114,7 +117,7 @@ func (reader *LivePushPlacementPaths) ObservePlacementPaths(ctx context.Context,
 		path := result.Paths[node.NodeID]
 		if source.cellID == reader.CellID && source.nodeID == node.NodeID && source.clusterID == node.ClusterID {
 			path.Presence = placement.Present
-		} else if source.dtscURL != "" && (source.clusterID == node.ClusterID || authority.Clusters[node.ClusterID].AllowExternalSource) {
+		} else if reader.relayRefusal(source, authority, node.ClusterID) == "" {
 			path.SourceFeasible = true
 		}
 		// A replica's live buffer is not evidence of this publisher generation.
@@ -122,6 +125,30 @@ func (reader *LivePushPlacementPaths) ObservePlacementPaths(ctx context.Context,
 		result.Paths[node.NodeID] = path
 	}
 	return result, nil
+}
+
+// relayRefusal names why a destination in clusterID cannot relay source, or
+// returns "". Discovery and preparation both decide relay feasibility here, so
+// discovery never offers a destination that preparation must then refuse.
+func (reader *LivePushPlacementPaths) relayRefusal(source *placementPublisher, authority balancer.PlacementAuthority, clusterID string) string {
+	switch {
+	case source == nil || source.dtscURL == "":
+		return "source has no playable DTSC output"
+	case source.clusterID != clusterID && !authority.Clusters[clusterID].AllowExternalSource:
+		return "destination cluster does not accept an external source"
+	case !sourceCellReachable(reader.SourceCellReachable, reader.CellID, source.cellID):
+		return "source cell " + source.cellID + " has no known control address"
+	}
+	return ""
+}
+
+// sourceCellReachable applies the arrangement precondition for a pull from
+// sourceCellID. A missing resolver can only arrange pulls inside this cell.
+func sourceCellReachable(reachable func(string) bool, localCellID, sourceCellID string) bool {
+	if reachable == nil {
+		return sourceCellID == localCellID
+	}
+	return reachable(sourceCellID)
 }
 
 // ResolveSourceGeneration uses the same owner, withdrawal and freshness checks
@@ -334,30 +361,26 @@ func validPlacementDTSC(raw, runtimeName string) bool {
 }
 
 // destinationUnavailableReason names the first check a selected destination
-// fails, with the evidence age, so a refusal says why.
-func destinationUnavailableReason(node *state.EnhancedBalancerNodeSnapshot, now time.Time) string {
+// fails, with the evidence age, so a refusal says why. Report freshness is
+// balancer.PlacementNodeEvidence, the predicate discovery used to offer it.
+func destinationUnavailableReason(node *state.EnhancedBalancerNodeSnapshot, verb placement.Verb, now time.Time) string {
 	switch {
 	case node == nil:
 		return "not in this cell's telemetry"
 	case !node.IsActive:
 		return "not active"
-	case !node.CapEdge:
+	case verb == placement.Serve && !node.CapEdge:
 		return "not an edge"
-	case !freshPlacementEvidence(node.LastHeartbeat, now):
-		return "heartbeat " + evidenceAge(node.LastHeartbeat, now)
-	case !freshPlacementEvidence(node.OutputsObservedAt, now):
-		return "listener observation " + evidenceAge(node.OutputsObservedAt, now)
+	case verb == placement.Ingest && !node.CapIngest:
+		return "not an ingest node"
 	}
-	return ""
+	_, gap := balancer.PlacementNodeEvidence(*node, now)
+	return gap
 }
 
-func evidenceAge(observed, now time.Time) string {
-	switch {
-	case observed.IsZero():
-		return "missing"
-	case observed.After(now):
-		return fmt.Sprintf("%s in the future", observed.Sub(now).Round(time.Millisecond))
-	default:
-		return fmt.Sprintf("%s old", now.Sub(observed).Round(time.Millisecond))
-	}
+// destinationEvidenceUntil is when the destination's own reports stop
+// supporting a preparation.
+func destinationEvidenceUntil(node state.EnhancedBalancerNodeSnapshot, now time.Time) time.Time {
+	until, _ := balancer.PlacementNodeEvidence(node, now)
+	return until
 }

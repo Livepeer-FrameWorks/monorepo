@@ -45,6 +45,7 @@ func configuredFixture(t *testing.T, mode, sourceURI string, allowed []string) (
 	reader := &ConfiguredSourcePlacementPaths{
 		CellID: "us-cell", Authority: f.discovery.Authority, Secrets: staticLiveSecrets{secret: secret},
 		Registry: reg, Snapshot: func() *state.BalancerSnapshot { return f.snapshot }, Now: func() time.Time { return f.now },
+		SourceCellReachable: func(string) bool { return true },
 	}
 	f.discovery.Paths = &MediaPlacementPaths{Push: &LivePushPlacementPaths{CellID: "us-cell", Registry: reg, Snapshot: reader.Snapshot}, Configured: reader}
 	return f, reader, reg

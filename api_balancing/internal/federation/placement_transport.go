@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"strings"
 	"time"
 
 	"frameworks/api_balancing/internal/balancer"
@@ -25,12 +26,14 @@ type PlacementRPC interface {
 // PlacementTransport resolves cells from authorized topology. The caller must not
 // source addresses or cell membership from public request parameters.
 type PlacementTransport struct {
-	LocalCellID  string
-	Local        PlacementRPC
-	Client       *FederationClient
-	CellAddress  func(string) string
-	Observations *PlacementObservationCache
-	Logger       logging.Logger
+	LocalCellID string
+	Local       PlacementRPC
+	Client      *FederationClient
+	// CellAddresses lists a cell's control replicas, preferred first. Every
+	// placement RPC fails over along the list.
+	CellAddresses func(string) []string
+	Observations  *PlacementObservationCache
+	Logger        logging.Logger
 }
 
 func (transport PlacementTransport) Router() balancer.PlacementRouter {
@@ -45,8 +48,8 @@ func (transport PlacementTransport) Observe(ctx context.Context, cell balancer.P
 	if transport.Observations == nil || cell.ID == transport.LocalCellID || req.Verb != placement.Serve || req.TenantAuthorityVersion <= 0 || req.ObjectAuthorityVersion <= 0 {
 		return transport.observe(ctx, cell, req, query)
 	}
-	address := transport.address(cell.ID)
-	if transport.Client == nil || address == "" {
+	addresses := transport.addresses(cell.ID)
+	if transport.Client == nil || len(addresses) == 0 {
 		return balancer.PlacementCellObservation{}, errors.New("placement destination cell unavailable")
 	}
 	// Discovery is unranked. Client geography belongs to the local evaluation,
@@ -57,11 +60,11 @@ func (transport PlacementTransport) Observe(ctx context.Context, cell balancer.P
 	if err != nil {
 		return balancer.PlacementCellObservation{}, err
 	}
-	key := placementObservationKey{CellID: cell.ID, Address: address, Query: string(encoded), TenantVersion: req.TenantAuthorityVersion, ObjectVersion: req.ObjectAuthorityVersion}
+	key := placementObservationKey{CellID: cell.ID, Address: strings.Join(addresses, ","), Query: string(encoded), TenantVersion: req.TenantAuthorityVersion, ObjectVersion: req.ObjectAuthorityVersion}
 	return transport.Observations.observe(ctx, key, func(sharedCtx context.Context) (balancer.PlacementCellObservation, error) {
-		// Pin the authenticated peer address used in the cache key for this read.
+		// Pin the authenticated peer replicas used in the cache key for this read.
 		pinned := transport
-		pinned.CellAddress = func(string) string { return address }
+		pinned.CellAddresses = func(string) []string { return addresses }
 		return pinned.observe(sharedCtx, cell, req, query)
 	})
 }
@@ -72,11 +75,13 @@ func (transport PlacementTransport) observe(ctx context.Context, cell balancer.P
 	if cell.ID == transport.LocalCellID && transport.Local != nil {
 		response, err = transport.Local.QueryPlacementCandidates(ctx, query)
 	} else {
-		addr := transport.address(cell.ID)
-		if transport.Client == nil || addr == "" {
+		addrs := transport.addresses(cell.ID)
+		if transport.Client == nil || len(addrs) == 0 {
 			return balancer.PlacementCellObservation{}, fmt.Errorf("placement destination cell %q has no federation address", cell.ID)
 		}
-		response, err = transport.Client.QueryPlacementCandidates(ctx, cell.ID, addr, query)
+		response, _, err = callCellReplicas(ctx, addrs, func(attemptCtx context.Context, addr string) (*placementpb.CandidateObservation, error) {
+			return transport.Client.QueryPlacementCandidates(attemptCtx, cell.ID, addr, query)
+		})
 	}
 	if err != nil {
 		return balancer.PlacementCellObservation{}, err
@@ -137,16 +142,26 @@ func (transport PlacementTransport) Prepare(ctx context.Context, cell balancer.P
 	if cell.ID == transport.LocalCellID && transport.Local != nil {
 		response, err = transport.Local.PreparePlacement(ctx, query)
 	} else {
-		addr := transport.address(cell.ID)
-		if transport.Client == nil || addr == "" {
+		addrs := transport.addresses(cell.ID)
+		if transport.Client == nil || len(addrs) == 0 {
 			return balancer.PlacementPreparationResult{}, errors.New("placement destination cell unavailable")
 		}
-		response, err = transport.Client.PreparePlacement(ctx, cell.ID, addr, query)
-		if err != nil && transport.Logger != nil {
-			transport.Logger.WithError(err).WithFields(logging.Fields{
-				"cell_id": cell.ID, "peer_addr": addr, "cluster_id": req.Choice.ClusterID, "node_id": req.Choice.NodeID,
-				"internal_name": req.Route.InternalName,
-			}).Warn("Remote placement preparation failed")
+		// The attempt id makes a repeated preparation on another replica
+		// return the same receipt instead of preparing twice.
+		var answered string
+		response, answered, err = callCellReplicas(ctx, addrs, func(attemptCtx context.Context, addr string) (*placementpb.Preparation, error) {
+			attemptResponse, attemptErr := transport.Client.PreparePlacement(attemptCtx, cell.ID, addr, query)
+			if attemptErr != nil && transport.Logger != nil {
+				transport.Logger.WithError(attemptErr).WithFields(logging.Fields{
+					"cell_id": cell.ID, "peer_addr": addr, "replicas": len(addrs), "cluster_id": req.Choice.ClusterID, "node_id": req.Choice.NodeID,
+					"internal_name": req.Route.InternalName,
+				}).Warn("Remote placement preparation failed on a cell replica")
+			}
+			return attemptResponse, attemptErr
+		})
+		if err == nil && answered != addrs[0] && transport.Logger != nil {
+			transport.Logger.WithFields(logging.Fields{"cell_id": cell.ID, "peer_addr": answered, "internal_name": req.Route.InternalName}).
+				Info("Remote placement preparation answered by another cell replica")
 		}
 	}
 	if err != nil {
@@ -179,11 +194,11 @@ func (transport PlacementTransport) Prepare(ctx context.Context, cell balancer.P
 	}, nil
 }
 
-func (transport PlacementTransport) address(cellID string) string {
-	if transport.CellAddress == nil {
-		return ""
+func (transport PlacementTransport) addresses(cellID string) []string {
+	if transport.CellAddresses == nil {
+		return nil
 	}
-	return transport.CellAddress(cellID)
+	return transport.CellAddresses(cellID)
 }
 
 func placementQuery(cell balancer.PlacementCell, req balancer.PlacementRouteRequest) *placementpb.CandidateQuery {

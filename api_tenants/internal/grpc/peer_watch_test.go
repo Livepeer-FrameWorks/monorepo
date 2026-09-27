@@ -130,8 +130,8 @@ func TestWatchPeersSendsCurrentSetThenOnlyChanges(t *testing.T) {
 	server := &QuartermasterServer{db: db, peerWatch: hub}
 
 	peerRows := func(addr string) *sqlmock.Rows {
-		return sqlmock.NewRows([]string{"cluster_id", "shared_tenant_ids", "cluster_name", "cluster_type", "foghorn_addr", "control_cell_id"}).
-			AddRow("eu", []byte("{tenant}"), "EU", "central", addr, "eu-cell")
+		return sqlmock.NewRows([]string{"cluster_id", "shared_tenant_ids", "cluster_name", "cluster_type", "foghorn_addr", "foghorn_addrs", "control_cell_id"}).
+			AddRow("eu", []byte("{tenant}"), "EU", "central", addr, []byte("{"+addr+"}"), "eu-cell")
 	}
 	// Subscribe, an unchanged re-read, then a changed one.
 	mock.ExpectQuery("peer_clusters").WillReturnRows(peerRows("eu-foghorn:18019"))

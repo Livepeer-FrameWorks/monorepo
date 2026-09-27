@@ -334,7 +334,9 @@ ordinary local scorer over its own nodes, against each node's native bandwidth
 limit, and returns the result. Symmetric discovery, comparable capacity scoring and
 exact-destination preparation are properties of the
 [media placement path](media-placement-policy.md), which live routing uses instead
-of this scorer.
+of this scorer. There a destination that cannot be prepared sends the viewer to
+the next best candidate, and a remote cell is reached through any of its healthy
+Foghorn replicas.
 
 ### Decision: Always Origin-Pull
 

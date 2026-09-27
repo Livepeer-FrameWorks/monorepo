@@ -72,16 +72,16 @@ func TestPlacementPullRequiresCanonicalSourceAddress(t *testing.T) {
 			destination, media, _, _, fed, request := pushRuntimeFixture(t)
 			media.Arrange.LocalSource = &FederationServer{clusterID: "eu-cell", controlCellID: "us-cell"}
 			media.Arrange.PeerResolver = &fakePeerResolver{addrs: map[string]string{"eu-cell": "wrong-cluster-namespace:18019"}}
-			media.Arrange.CellAddress = nil
+			media.Arrange.CellAddresses = nil
 			if mapping != "unconfigured" {
-				media.Arrange.CellAddress = func(cellID string) string {
+				media.Arrange.CellAddresses = func(cellID string) []string {
 					if cellID != "eu-cell" {
 						t.Fatal("source lookup did not use canonical cell")
 					}
 					if mapping == "known" {
-						return "canonical-source:18019"
+						return []string{"canonical-source:18019"}
 					}
-					return ""
+					return nil
 				}
 			}
 			response, err := destination.PreparePlacement(context.Background(), request)

@@ -184,7 +184,7 @@ func (runtime *LivePushPreparationRuntime) observe(ctx context.Context, req *pla
 			selected = node
 		}
 	}
-	if reason := destinationUnavailableReason(selected, now); reason != "" {
+	if reason := destinationUnavailableReason(selected, placement.Serve, now); reason != "" {
 		return pushPreparationState{}, status.Error(codes.Unavailable, "selected destination is unavailable: "+reason)
 	}
 	endpoint := mist.ResolvePlaybackURL(selected.Outputs, selected.Host, q.Protocol, pair.Object.Authority.GetPlaybackId())
@@ -199,15 +199,19 @@ func (runtime *LivePushPreparationRuntime) observe(ctx context.Context, req *pla
 			return pushPreparationState{}, err
 		}
 	}
-	grant, allowed := authority.Clusters[req.ClusterId]
-	if !allowed || (!onPublisher && (source.dtscURL == "" || (source.clusterID != req.ClusterId && !grant.AllowExternalSource))) {
-		return pushPreparationState{}, status.Error(codes.FailedPrecondition, "selected destination cannot use this source")
+	if _, allowed := authority.Clusters[req.ClusterId]; !allowed {
+		return pushPreparationState{}, status.Error(codes.FailedPrecondition, "selected destination is outside authority")
+	}
+	if !onPublisher {
+		if reason := runtime.Paths.relayRefusal(source, authority, req.ClusterId); reason != "" {
+			return pushPreparationState{}, status.Error(codes.FailedPrecondition, "selected destination cannot use this source: "+reason)
+		}
 	}
 	if err := ctx.Err(); err != nil {
 		return pushPreparationState{}, status.FromContextError(err).Err()
 	}
 	expiresAt := minPlacementExpiry(req.ExpiresAt.AsTime(), authority.ExpiresAt)
-	for _, expiry := range []time.Time{source.expiresAt, selected.LastHeartbeat.Add(30 * time.Second), selected.OutputsObservedAt.Add(30 * time.Second)} {
+	for _, expiry := range []time.Time{source.expiresAt, destinationEvidenceUntil(*selected, now)} {
 		expiresAt = minPlacementExpiry(expiresAt, expiry)
 	}
 	return pushPreparationState{node: *selected, source: source, endpoint: endpoint, expiresAt: expiresAt, onPublisher: onPublisher, destinationFence: destinationFence}, nil

@@ -3,6 +3,7 @@ package federation
 import (
 	"context"
 	"errors"
+	"fmt"
 	"math"
 	"sync/atomic"
 	"testing"
@@ -12,6 +13,8 @@ import (
 	localauthority "frameworks/api_balancing/internal/mediaauthority"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/placement"
 	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/media_placement"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 func TestPlacementAdmissionRebuildsAuthorityForDirectDestination(t *testing.T) {
@@ -120,7 +123,7 @@ func TestPlacementAdmissionWaitsOutAnAuthorityFetch(t *testing.T) {
 }
 
 func TestPlacementAdmissionRejectsInvalidAndChangingAuthority(t *testing.T) {
-	for _, scenario := range []string{"foreign tenant", "foreign object", "wrong cell", "wrong node", "unknown verb", "missing generation", "invalid geo", "protocol case", "not ready", "schema one", "policy changed", "tenant version changed", "object version changed", "source authority differs", "partial source authority", "negative source authority", "canceled"} {
+	for _, scenario := range []string{"foreign tenant", "foreign object", "wrong cell", "wrong node", "unknown verb", "missing generation", "invalid geo", "protocol case", "not ready", "schema one", "source authority differs", "partial source authority", "negative source authority", "canceled"} {
 		t.Run(scenario, func(t *testing.T) {
 			f := newDiscoveryFixture(t)
 			input := PlacementAdmissionInput{TenantID: "tenant", ObjectID: "live_stream:stream", InternalName: "internal", ClusterID: "us", NodeID: "node-00", Protocol: "hls", SourceGeneration: "source-generation", Verb: placement.Serve}
@@ -129,15 +132,6 @@ func TestPlacementAdmissionRejectsInvalidAndChangingAuthority(t *testing.T) {
 			gate := &PlacementPolicyGate{CellID: "us-cell", Router: transport.Router(), Now: func() time.Time { return f.now },
 				Authority: placementAuthorityReaderFunc(func(context.Context, string, string, string) (localauthority.PlacementPair, error) {
 					reads++
-					if scenario == "policy changed" && reads == 2 {
-						f.pair.Object.Authority.MediaPlacement.Revision++
-					}
-					if scenario == "tenant version changed" && reads == 2 {
-						f.pair.Tenant.Version++
-					}
-					if scenario == "object version changed" && reads == 2 {
-						f.pair.Object.Version++
-					}
 					return f.pair, nil
 				})}
 			ctx, cancel := context.WithCancel(context.Background())
@@ -178,6 +172,53 @@ func TestPlacementAdmissionRejectsInvalidAndChangingAuthority(t *testing.T) {
 			}
 			if scenario == "canceled" && reads != 0 {
 				t.Fatal("canceled admission performed authority reads")
+			}
+		})
+	}
+}
+
+// A publisher's own ownership claim makes Commodore compile a new authority
+// version while PUSH_REWRITE admission is between its authority reads (rc7:
+// "placement authority facts changed during revalidation"). Admission decides
+// again on the newer snapshot: an advance that still admits the node accepts
+// it, an advance that forbids it refuses it, and authority that keeps changing
+// through every round returns the retryable ErrPlacementAuthorityChanged.
+func TestPlacementAdmissionRedecidesOnAuthorityAdvance(t *testing.T) {
+	for _, scenario := range []string{"advance before assessment", "advance during assessment", "advance to deny", "perpetual advance"} {
+		t.Run(scenario, func(t *testing.T) {
+			f := newDiscoveryFixture(t)
+			input := PlacementAdmissionInput{TenantID: "tenant", ObjectID: "live_stream:stream", InternalName: "internal", ClusterID: "us", NodeID: "node-00", Protocol: "hls", SourceGeneration: "source-generation", Verb: placement.Serve}
+			transport := PlacementTransport{LocalCellID: "us-cell", Local: &PlacementDestination{Discovery: f.discovery}}
+			reads := 0
+			gate := &PlacementPolicyGate{CellID: "us-cell", Router: transport.Router(), Now: func() time.Time { return f.now },
+				Authority: placementAuthorityReaderFunc(func(context.Context, string, string, string) (localauthority.PlacementPair, error) {
+					reads++
+					switch {
+					case scenario == "advance before assessment" && reads == 2, scenario == "advance during assessment" && reads == 3:
+						f.pair.Object.Version++
+					case scenario == "advance to deny" && reads == 2:
+						f.pair.Object.Version++
+						f.pair.Tenant.Authority.EffectiveClusterGrants[0].MediaConsent.AllowServe = false
+					case scenario == "perpetual advance" && reads > 1:
+						f.pair.Object.Version++
+						f.pair.Tenant.Authority.EffectiveClusterGrants[0].OwnerTenantId = fmt.Sprintf("owner-%d", reads)
+					}
+					return f.pair, nil
+				})}
+			result, err := gate.Admit(context.Background(), input)
+			switch scenario {
+			case "advance before assessment", "advance during assessment":
+				if err != nil || result.NodeID != "node-00" || result.ObjectAuthorityVersion != 6 || result.TenantAuthorityVersion != 3 {
+					t.Fatalf("an authority advance that still admits the node refused it: %+v, %v (reads=%d)", result, err, reads)
+				}
+			case "advance to deny":
+				if status.Code(err) != codes.PermissionDenied || errors.Is(err, ErrPlacementAuthorityChanged) || result.NodeID != "" {
+					t.Fatalf("an advance that forbids the node = %+v, %v; want a policy refusal", result, err)
+				}
+			case "perpetual advance":
+				if !errors.Is(err, ErrPlacementAuthorityChanged) || result.NodeID != "" {
+					t.Fatalf("perpetual advance = %+v, %v; want ErrPlacementAuthorityChanged", result, err)
+				}
 			}
 		})
 	}

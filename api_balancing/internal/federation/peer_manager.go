@@ -84,7 +84,10 @@ const (
 )
 
 type peerState struct {
-	addr          string
+	addr string
+	// addrs is every known replica, addr first. Only request/response RPCs
+	// use the others; the peer channel stays on addr.
+	addrs         []string
 	controlCellID string
 	tenantIDs     []string
 	tenantSet     map[string]struct{}
@@ -331,6 +334,31 @@ func (pm *PeerManager) GetControlCellAddr(cellID string) string {
 		}
 	}
 	return address
+}
+
+// GetControlCellAddrs lists every known replica of a control cell: the address
+// GetControlCellAddr returns first, then the other replicas the cell's clusters
+// advertise, in lexical order. Callers fail over along the list.
+func (pm *PeerManager) GetControlCellAddrs(cellID string) []string {
+	primary := pm.GetControlCellAddr(cellID)
+	if primary == "" {
+		return nil
+	}
+	pm.mu.RLock()
+	defer pm.mu.RUnlock()
+	var others []string
+	for _, peer := range pm.peers {
+		if peer.controlCellID != cellID {
+			continue
+		}
+		for _, addr := range peerReplicaAddrs(peer.addr, peer.addrs) {
+			if addr != primary && !slices.Contains(others, addr) {
+				others = append(others, addr)
+			}
+		}
+	}
+	slices.Sort(others)
+	return append([]string{primary}, others...)
 }
 
 // PeerControlCell reports the control cell a peer cluster is known to belong to,
@@ -1093,6 +1121,7 @@ func (pm *PeerManager) applyQuartermasterPeers(resp *quartermasterpb.ListPeersRe
 		}
 		hints[peer.ClusterId] = PeerHint{
 			Addr:          peer.FoghornAddr,
+			Addrs:         peerReplicaAddrs(peer.FoghornAddr, peer.FoghornAddrs),
 			ControlCellID: peer.ControlCellId,
 			AlwaysOn:      true,
 			Tenants:       append([]string(nil), peer.SharedTenantIds...),
@@ -1319,6 +1348,7 @@ func mergePeerHintMaps(target, incoming map[string]PeerHint) {
 		nextUnrestricted := next.AlwaysOn && len(next.Tenants) == 0
 		if !exists || next.AlwaysOn || !current.AlwaysOn {
 			current.Addr = next.Addr
+			current.Addrs = next.Addrs
 			current.ControlCellID = next.ControlCellID
 		}
 		current.AlwaysOn = current.AlwaysOn || next.AlwaysOn
@@ -1360,6 +1390,7 @@ func (pm *PeerManager) reconcilePeerHintsLocked(hints map[string]PeerHint) []pee
 		}
 		if existing := pm.peers[clusterID]; existing != nil {
 			existing.controlCellID = hint.ControlCellID
+			existing.addrs = peerReplicaAddrs(hint.Addr, hint.Addrs)
 			if existing.addr != hint.Addr {
 				existing.addr = hint.Addr
 				if existing.cancel != nil {
@@ -1376,7 +1407,7 @@ func (pm *PeerManager) reconcilePeerHintsLocked(hints map[string]PeerHint) []pee
 			}
 			continue
 		}
-		ps := &peerState{addr: hint.Addr, controlCellID: hint.ControlCellID, lifecycle: lifecycle, lastRefresh: time.Now()}
+		ps := &peerState{addr: hint.Addr, addrs: peerReplicaAddrs(hint.Addr, hint.Addrs), controlCellID: hint.ControlCellID, lifecycle: lifecycle, lastRefresh: time.Now()}
 		replacePeerTenants(ps, hint.Tenants)
 		pm.peers[clusterID] = ps
 		if pm.isLeader {
@@ -1437,6 +1468,7 @@ func (pm *PeerManager) importAdmissionPeerHintsLocked(hints map[string]PeerHint)
 		if existing := pm.peers[clusterID]; existing != nil {
 			if existing.lifecycle != peerAlwaysOn || lifecycle == peerAlwaysOn {
 				existing.controlCellID = hint.ControlCellID
+				existing.addrs = peerReplicaAddrs(hint.Addr, hint.Addrs)
 				if existing.addr != hint.Addr {
 					existing.addr = hint.Addr
 					if existing.cancel != nil {
@@ -1466,7 +1498,7 @@ func (pm *PeerManager) importAdmissionPeerHintsLocked(hints map[string]PeerHint)
 			}
 			continue
 		}
-		state := &peerState{addr: hint.Addr, controlCellID: hint.ControlCellID, lifecycle: lifecycle, lastRefresh: time.Now()}
+		state := &peerState{addr: hint.Addr, addrs: peerReplicaAddrs(hint.Addr, hint.Addrs), controlCellID: hint.ControlCellID, lifecycle: lifecycle, lastRefresh: time.Now()}
 		replacePeerTenants(state, hint.Tenants)
 		pm.peers[clusterID] = state
 		if pm.isLeader {

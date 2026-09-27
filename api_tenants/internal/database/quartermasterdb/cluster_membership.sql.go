@@ -417,6 +417,18 @@ SELECT pc.cluster_id, pc.shared_tenant_ids, ic.cluster_name, ic.cluster_type,
            -- so ordering by it alternated between replicas and tore down live channels.
            ORDER BY si.advertise_host ASC, si.port ASC, si.id ASC LIMIT 1
        ), '')::text AS foghorn_addr,
+       -- Every healthy replica in the same stable order, so request/response RPCs
+       -- can fail over while the peer channel keeps using the first address.
+       ARRAY(
+           SELECT DISTINCT ON (si.advertise_host, si.port) si.advertise_host || ':' || si.port
+           FROM quartermaster.service_cluster_assignments sca
+           JOIN quartermaster.service_instances si ON si.id = sca.service_instance_id
+           JOIN quartermaster.services svc ON svc.service_id = si.service_id
+           WHERE sca.cluster_id = pc.cluster_id AND sca.is_active = TRUE
+             AND svc.type = 'foghorn' AND si.status = 'running'
+             AND si.health_status = 'healthy' AND si.protocol = 'grpc'
+           ORDER BY si.advertise_host ASC, si.port ASC, si.id ASC
+       )::text[] AS foghorn_addrs,
        COALESCE(NULLIF(ic.control_cell_id, ''), NULLIF(ic.cell_id, ''), ic.cluster_id)::text AS control_cell_id
 FROM peer_clusters pc
 JOIN quartermaster.infrastructure_clusters ic ON ic.cluster_id = pc.cluster_id
@@ -429,6 +441,7 @@ type ListPeerClustersRow struct {
 	ClusterName     string   `db:"cluster_name" json:"cluster_name"`
 	ClusterType     string   `db:"cluster_type" json:"cluster_type"`
 	FoghornAddr     string   `db:"foghorn_addr" json:"foghorn_addr"`
+	FoghornAddrs    []string `db:"foghorn_addrs" json:"foghorn_addrs"`
 	ControlCellID   string   `db:"control_cell_id" json:"control_cell_id"`
 }
 
@@ -447,6 +460,7 @@ func (q *Queries) ListPeerClusters(ctx context.Context, requestingClusterID stri
 			&i.ClusterName,
 			&i.ClusterType,
 			&i.FoghornAddr,
+			pq.Array(&i.FoghornAddrs),
 			&i.ControlCellID,
 		); err != nil {
 			return nil, err

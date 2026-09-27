@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"net"
+	"slices"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -25,6 +27,7 @@ import (
 	"github.com/alicebob/miniredis/v2"
 	goredis "github.com/redis/go-redis/v9"
 	"google.golang.org/grpc"
+	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
@@ -221,7 +224,7 @@ func ingestRoutingCells(t *testing.T, scenario, protocol string) (map[string]bal
 	resolvers := make(map[string]*IngestPlacementResolver)
 	for cell, destination := range destinations {
 		transport := PlacementTransport{LocalCellID: cell, Local: destination, Client: NewFederationClient(FederationClientConfig{Pool: pool}),
-			CellAddress: func(id string) string { return addresses[id] }}
+			CellAddresses: func(id string) []string { return []string{addresses[id]} }}
 		routers[cell] = transport.Router()
 		resolvers[cell] = &IngestPlacementResolver{Authority: reader, Fence: fence, Router: routers[cell]}
 		destination.Runtime = &PolicyBoundPlacementRuntime{Policy: &PlacementPolicyGate{CellID: cell, Authority: reader, IngestFence: fence, Router: routers[cell]},
@@ -274,26 +277,61 @@ func TestPreparedIngestFrontDoorUsesAuthenticatedCells(t *testing.T) {
 	}
 }
 
+// Authority is read again after routing. Unavailable authority refuses; a
+// version advance with the same facts keeps the route; changed facts are
+// routed again on the newer snapshot, and facts that change on every read
+// end in ErrPlacementAuthorityChanged after the bounded rounds.
 func TestIngestPlacementResolverRechecksAuthorityAfterPreparation(t *testing.T) {
-	for _, unavailable := range []bool{false, true} {
-		_, route, _, resolvers := ingestRoutingCells(t, "near-us", "rtmp")
-		resolver := resolvers["us-cell"]
-		original := resolver.Authority
-		reads := 0
-		resolver.Authority = placementAuthorityReaderFunc(func(ctx context.Context, tenant, object, internal string) (localauthority.PlacementPair, error) {
-			pair, err := original.Placement(ctx, tenant, object, internal)
-			reads++
-			if reads == 2 {
-				if unavailable {
+	for _, scenario := range []string{"unavailable", "version advance", "facts change once", "perpetual change"} {
+		t.Run(scenario, func(t *testing.T) {
+			_, route, _, resolvers := ingestRoutingCells(t, "near-us", "rtmp")
+			resolver := resolvers["us-cell"]
+			original := resolver.Authority
+			reads := 0
+			resolver.Authority = placementAuthorityReaderFunc(func(ctx context.Context, tenant, object, internal string) (localauthority.PlacementPair, error) {
+				pair, err := original.Placement(ctx, tenant, object, internal)
+				reads++
+				switch {
+				case scenario == "unavailable" && reads == 2:
 					return localauthority.PlacementPair{}, errors.New("authority unavailable after preparation")
+				case scenario == "version advance" && reads == 2:
+					pair.Tenant.Version++
+				case scenario == "facts change once" && reads >= 2, scenario == "perpetual change" && reads >= 2:
+					suffix := "2"
+					if scenario == "perpetual change" {
+						suffix = strconv.Itoa(reads)
+					}
+					grants := slices.Clone(pair.Tenant.Authority.GetEffectiveClusterGrants())
+					for index, grant := range grants {
+						changed := proto.CloneOf(grant)
+						changed.OwnerTenantId = grant.GetOwnerTenantId() + "-" + suffix
+						grants[index] = changed
+					}
+					tenant := proto.CloneOf(pair.Tenant.Authority)
+					tenant.EffectiveClusterGrants = grants
+					pair.Tenant.Authority = tenant
 				}
-				pair.Tenant.Version++
+				return pair, err
+			})
+			response, err := resolver.PrepareIngest(t.Context(), control.IngestPlacementRequest{TenantID: "tenant", StreamID: "stream", InternalName: "internal", Protocol: "rtmp", Location: route.Location})
+			switch scenario {
+			case "unavailable":
+				if err == nil || response.Endpoint != "" || reads != 2 {
+					t.Fatalf("unavailable authority escaped after preparation: %+v, %v, reads=%d", response, err, reads)
+				}
+			case "version advance":
+				if err != nil || response.Endpoint == "" || reads != 2 {
+					t.Fatalf("a version advance refused the route: %+v, %v, reads=%d", response, err, reads)
+				}
+			case "facts change once":
+				if err != nil || response.Endpoint == "" || reads != 3 {
+					t.Fatalf("changed facts were not routed again: %+v, %v, reads=%d", response, err, reads)
+				}
+			case "perpetual change":
+				if !errors.Is(err, ErrPlacementAuthorityChanged) || response.Endpoint != "" || reads != 1+placementAuthorityRounds {
+					t.Fatalf("perpetual change = %+v, %v, reads=%d; want ErrPlacementAuthorityChanged", response, err, reads)
+				}
 			}
-			return pair, err
 		})
-		response, err := resolver.PrepareIngest(t.Context(), control.IngestPlacementRequest{TenantID: "tenant", StreamID: "stream", InternalName: "internal", Protocol: "rtmp", Location: route.Location})
-		if err == nil || response.Endpoint != "" || reads != 2 {
-			t.Fatalf("stale authority escaped after preparation: %+v, %v, reads=%d", response, err, reads)
-		}
 	}
 }

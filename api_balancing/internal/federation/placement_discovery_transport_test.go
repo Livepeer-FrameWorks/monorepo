@@ -76,7 +76,7 @@ func TestPlacementDiscoveryLocalAndAuthenticatedRemoteObservationsMatch(t *testi
 	}
 	transport := PlacementTransport{
 		LocalCellID: "us-cell", Local: destination, Client: NewFederationClient(FederationClientConfig{Pool: pool}),
-		CellAddress: peers.GetControlCellAddr,
+		CellAddresses: peers.GetControlCellAddrs,
 	}
 	cell := balancer.PlacementCell{ID: "us-cell", ClusterIDs: []string{"empty", "us"}}
 	req := balancer.PlacementRouteRequest{TenantID: f.query.TenantId, ObjectID: f.query.ObjectId, InternalName: f.query.InternalName,
@@ -116,14 +116,14 @@ func TestPlacementDiscoveryLocalAndAuthenticatedRemoteObservationsMatch(t *testi
 		case "object authority":
 			req.ObjectAuthorityVersion++
 		case "peer address":
-			transport.CellAddress = func(string) string { return "replacement-peer:18019" }
+			transport.CellAddresses = func(string) []string { return []string{"replacement-peer:18019"} }
 		}
 		beforeQueries = queries.Load()
 		if _, queryErr := transport.Observe(ctx, cell, req); queryErr != nil || queries.Load() != beforeQueries+1 {
 			t.Fatalf("changed %s reused old census: queries=%d err=%v", changed, queries.Load()-beforeQueries, queryErr)
 		}
 	}
-	transport.CellAddress = peers.GetControlCellAddr
+	transport.CellAddresses = peers.GetControlCellAddrs
 	req.Location = nil
 	for _, changed := range []string{"tenant", "object", "internal name", "protocol", "source", "policy digest", "policy revision", "parent revision"} {
 		other := req

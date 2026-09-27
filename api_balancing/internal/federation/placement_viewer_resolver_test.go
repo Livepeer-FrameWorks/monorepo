@@ -21,7 +21,7 @@ func (fn viewerSourceReaderFunc) ResolveSourceGeneration(ctx context.Context, au
 }
 
 func TestViewerPlacementResolverRevalidatesAuthorityAndSource(t *testing.T) {
-	for _, change := range []string{"none", "shorter-source", "first-source-expiry", "playback", "authority", "generation", "expired-source", "source-error", "cancelled"} {
+	for _, change := range []string{"none", "shorter-source", "first-source-expiry", "authority-version", "playback", "authority", "generation", "expired-source", "source-error", "cancelled"} {
 		t.Run(change, func(t *testing.T) {
 			f := newDiscoveryFixture(t)
 			f.now = time.Now()
@@ -48,8 +48,11 @@ func TestViewerPlacementResolverRevalidatesAuthorityAndSource(t *testing.T) {
 			defer cancel()
 			rpc := placementRPCFixture{query: f.discovery.QueryPlacementCandidates, prepare: func(_ context.Context, req *placementpb.PreparePlacementRequest) (*placementpb.Preparation, error) {
 				preparations++
-				if change == "authority" {
+				if change == "authority-version" || change == "authority" {
 					f.pair.Object.Version++
+				}
+				if change == "authority" {
+					f.pair.Tenant.Authority.EffectiveClusterGrants[0].OwnerTenantId = "another-owner"
 				}
 				if change == "cancelled" {
 					cancel()
@@ -84,7 +87,8 @@ func TestViewerPlacementResolverRevalidatesAuthorityAndSource(t *testing.T) {
 			}
 			got, err := resolver.PrepareViewer(ctx, control.ViewerPlacementRequest{TenantID: "tenant", StreamID: "stream", InternalName: "internal", PlaybackID: "public", Protocol: "hls", Location: location})
 			switch change {
-			case "none", "shorter-source", "first-source-expiry":
+			// A version advance that changes no decision fact keeps the route.
+			case "none", "shorter-source", "first-source-expiry", "authority-version":
 				if err != nil || got.ClusterID != "us" || got.NodeID == "" || !got.ExpiresAt.Equal(sourceUntil) || sourceCalls != 2 || preparations != 1 {
 					t.Fatalf("prepared destination: %+v, %v, source=%d prepare=%d", got, err, sourceCalls, preparations)
 				}

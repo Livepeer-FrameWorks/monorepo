@@ -73,8 +73,24 @@ func TestIngestPreparationConfirmsExactListenerWithoutClaimOrCredential(t *testi
 	}
 }
 
+// A signed authority version that advanced without changing what admits the
+// node, such as the compilation a publisher's own ownership claim triggers,
+// replays the prepared listener unchanged.
+func TestIngestPreparationReplayAcceptsAuthorityVersionAdvance(t *testing.T) {
+	destination, _, f, req := ingestRuntimeFixture(t, "rtmp")
+	prepared, err := destination.PreparePlacement(context.Background(), req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.pair.Tenant.Version++
+	f.pair.Object.Version++
+	if replay, err := destination.PreparePlacement(context.Background(), req); err != nil || !proto.Equal(replay, prepared) {
+		t.Fatalf("authority version advance refused the prepared listener: %v, %v", replay, err)
+	}
+}
+
 func TestIngestPreparationReplayRequiresCurrentListenerAndPolicy(t *testing.T) {
-	for _, change := range []string{"listener", "public-address", "public-origin-only", "inactive", "capability", "heartbeat", "metrics", "full", "membership", "authority-version", "consent", "active-owner", "unknown-owner", "cancel"} {
+	for _, change := range []string{"listener", "public-address", "public-origin-only", "inactive", "capability", "heartbeat", "metrics", "full", "membership", "consent", "active-owner", "unknown-owner", "cancel"} {
 		t.Run(change, func(t *testing.T) {
 			destination, _, f, req := ingestRuntimeFixture(t, "rtmp")
 			if change == "public-origin-only" {
@@ -103,8 +119,6 @@ func TestIngestPreparationReplayRequiresCurrentListenerAndPolicy(t *testing.T) {
 				f.snapshot.Nodes[0].DownSpeed = f.snapshot.Nodes[0].BWLimit
 			case "membership":
 				f.inventory.Nodes[0].AdmissionEnabled = false
-			case "authority-version":
-				f.pair.Tenant.Version++
 			case "consent":
 				f.pair.Tenant.Authority.EffectiveClusterGrants[0].MediaConsent.AllowIngest = false
 			case "active-owner":

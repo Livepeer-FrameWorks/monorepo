@@ -13,8 +13,10 @@ import (
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
-// PolicyBoundPlacementRuntime enforces current global policy around physical
-// media reconciliation. The media implementation owns exact source/pull and
+// PolicyBoundPlacementRuntime checks this destination's own policy facts
+// around physical media reconciliation: its authority is not older than the
+// coordinator's, and the selected node is live, has capacity and is admitted
+// by the signed policy. The media implementation owns exact source/pull and
 // readiness evidence; it cannot substitute another destination or extend policy.
 type PolicyBoundPlacementRuntime struct {
 	Policy *PlacementPolicyGate
@@ -27,7 +29,7 @@ func (runtime *PolicyBoundPlacementRuntime) Revalidate(ctx context.Context, req 
 	if runtime == nil || runtime.Policy == nil {
 		return status.Error(codes.Unavailable, "placement policy enforcement is unavailable")
 	}
-	assessment, err := runtime.Policy.Assess(ctx, req)
+	check, err := runtime.Policy.CheckDestination(ctx, req)
 	if err != nil {
 		return err
 	}
@@ -36,17 +38,19 @@ func (runtime *PolicyBoundPlacementRuntime) Revalidate(ctx context.Context, req 
 		if err = placement.ValidatePreparationResponse(req, receipt.Response, runtime.Policy.now()); err != nil {
 			return err
 		}
-		if receipt.Response.TenantAuthorityVersion != assessment.TenantAuthorityVersion || receipt.Response.ObjectAuthorityVersion != assessment.ObjectAuthorityVersion {
-			return status.Error(codes.FailedPrecondition, "placement authority versions changed after preparation")
+		// Authority versions only advance. A replay under newer authority is
+		// valid when the node is still admitted; older authority is not.
+		if check.TenantAuthorityVersion < receipt.Response.TenantAuthorityVersion || check.ObjectAuthorityVersion < receipt.Response.ObjectAuthorityVersion {
+			return status.Error(codes.FailedPrecondition, "destination authority is older than the prepared one")
 		}
-		if assessment.Outcome != placementpb.PreparationOutcome_PREPARATION_OUTCOME_ACCEPTED && receipt.Response.Outcome != assessment.Outcome {
+		if check.Outcome != placementpb.PreparationOutcome_PREPARATION_OUTCOME_ACCEPTED && receipt.Response.Outcome != check.Outcome {
 			return status.Error(codes.FailedPrecondition, "placement outcome no longer matches current policy evidence")
 		}
-		if responseExpiry := receipt.Response.GetExpiresAt().AsTime(); responseExpiry.After(assessment.ExpiresAt) {
-			shortened = &PlacementEvidenceShortenedError{Prepared: responseExpiry, Until: assessment.ExpiresAt}
+		if responseExpiry := receipt.Response.GetExpiresAt().AsTime(); responseExpiry.After(check.ExpiresAt) {
+			shortened = &PlacementEvidenceShortenedError{Prepared: responseExpiry, Until: check.ExpiresAt}
 		}
 	}
-	if assessment.Outcome != placementpb.PreparationOutcome_PREPARATION_OUTCOME_ACCEPTED {
+	if check.Outcome != placementpb.PreparationOutcome_PREPARATION_OUTCOME_ACCEPTED {
 		// A fresh negative decision needs no media operation. Retain any earlier
 		// physical binding for exact cleanup/reconciliation; never erase it here.
 		return shortened
@@ -54,7 +58,7 @@ func (runtime *PolicyBoundPlacementRuntime) Revalidate(ctx context.Context, req 
 	if runtime.Media == nil {
 		return status.Error(codes.Unavailable, "placement media enforcement is unavailable")
 	}
-	if err = runtime.Media.Revalidate(ctx, req, receipt); err != nil {
+	if err = runtime.Media.Revalidate(ctx, clonePreparationRequest(check.Request), receipt); err != nil {
 		return err
 	}
 	return shortened
@@ -62,9 +66,8 @@ func (runtime *PolicyBoundPlacementRuntime) Revalidate(ctx context.Context, req 
 
 // PlacementEvidenceShortenedError reports that the current policy evidence
 // still accepts the preparation but expires before the preparation does. Each
-// assessment is an independent observation, so a later one can legitimately
-// end sooner. An unpersisted preparation takes the shorter lifetime; a
-// persisted receipt is immutable and is refused.
+// check is an independent observation, so a later one can legitimately end
+// sooner. A persisted receipt is immutable and is refused.
 type PlacementEvidenceShortenedError struct {
 	Prepared time.Time
 	Until    time.Time
@@ -83,43 +86,47 @@ func (runtime *PolicyBoundPlacementRuntime) Reconcile(ctx context.Context, req *
 	if runtime == nil || runtime.Policy == nil {
 		return nil, status.Error(codes.Unavailable, "placement policy enforcement is unavailable")
 	}
-	assessment, err := runtime.Policy.Assess(ctx, req)
+	check, err := runtime.Policy.CheckDestination(ctx, req)
 	if err != nil {
 		return nil, err
 	}
-	if assessment.Outcome != placementpb.PreparationOutcome_PREPARATION_OUTCOME_ACCEPTED {
+	if check.Outcome != placementpb.PreparationOutcome_PREPARATION_OUTCOME_ACCEPTED {
 		return &placementpb.Preparation{
-			Outcome: assessment.Outcome, TenantId: req.Query.TenantId, ObjectId: req.Query.ObjectId, SourceGeneration: req.Query.SourceGeneration,
+			Outcome: check.Outcome, TenantId: req.Query.TenantId, ObjectId: req.Query.ObjectId, SourceGeneration: req.Query.SourceGeneration,
 			ClusterId: req.ClusterId, NodeId: req.NodeId, Protocol: req.Query.Protocol, PolicyRevision: req.Query.PolicyRevision,
 			ParentRevision: req.Query.ParentRevision, PolicyDigest: req.Query.PolicyDigest, AttemptId: req.AttemptId,
-			ExpiresAt:              timestamppb.New(assessment.ExpiresAt),
-			TenantAuthorityVersion: assessment.TenantAuthorityVersion, ObjectAuthorityVersion: assessment.ObjectAuthorityVersion,
+			ExpiresAt:              timestamppb.New(check.ExpiresAt),
+			TenantAuthorityVersion: check.TenantAuthorityVersion, ObjectAuthorityVersion: check.ObjectAuthorityVersion,
 		}, nil
 	}
 	if runtime.Media == nil {
 		return nil, status.Error(codes.Unavailable, "placement media enforcement is unavailable")
 	}
-	if err = runtime.Media.Revalidate(ctx, clonePreparationRequest(req), clonePlacementReceipt(receipt)); err != nil {
+	// The media runtime observes under the destination's own authority; the
+	// acknowledgement still answers the coordinator's exact request.
+	local := check.Request
+	if err = runtime.Media.Revalidate(ctx, clonePreparationRequest(local), clonePlacementReceipt(receipt)); err != nil {
 		return nil, err
 	}
 	if err = ctx.Err(); err != nil {
 		return nil, status.FromContextError(err).Err()
 	}
-	if !runtime.Policy.now().Before(assessment.ExpiresAt) {
+	if !runtime.Policy.now().Before(check.ExpiresAt) {
 		return nil, status.Error(codes.FailedPrecondition, "placement policy expired before media preparation")
 	}
-	response, err := runtime.Media.Reconcile(ctx, req, receipt, bind)
+	response, err := runtime.Media.Reconcile(ctx, clonePreparationRequest(local), receipt, bind)
 	if err != nil || response == nil {
 		return response, err
 	}
+	response = proto.CloneOf(response)
+	response.PolicyDigest, response.PolicyRevision, response.ParentRevision = req.Query.PolicyDigest, req.Query.PolicyRevision, req.Query.ParentRevision
 	if err = placement.ValidatePreparationResponse(req, response, runtime.Policy.now()); err != nil {
 		return nil, err
 	}
-	response = proto.CloneOf(response)
-	response.TenantAuthorityVersion = assessment.TenantAuthorityVersion
-	response.ObjectAuthorityVersion = assessment.ObjectAuthorityVersion
-	if response.GetExpiresAt().AsTime().After(assessment.ExpiresAt) {
-		response.ExpiresAt = timestamppb.New(assessment.ExpiresAt)
+	response.TenantAuthorityVersion = check.TenantAuthorityVersion
+	response.ObjectAuthorityVersion = check.ObjectAuthorityVersion
+	if response.GetExpiresAt().AsTime().After(check.ExpiresAt) {
+		response.ExpiresAt = timestamppb.New(check.ExpiresAt)
 	}
 	return response, nil
 }

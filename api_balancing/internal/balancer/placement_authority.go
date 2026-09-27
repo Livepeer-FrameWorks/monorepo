@@ -2,6 +2,7 @@ package balancer
 
 import (
 	"errors"
+	"fmt"
 	"slices"
 	"strings"
 	"time"
@@ -11,6 +12,7 @@ import (
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/placement"
 	mediaauthoritypb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/media_authority"
 	placementpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/media_placement"
+	"google.golang.org/protobuf/proto"
 )
 
 var (
@@ -219,6 +221,42 @@ func placementGrantFacts(grant *mediaauthoritypb.TenantClusterGrant, commercial 
 		facts.Prices = append(facts.Prices, placement.Price{AmountMicros: quote.GetAmountMicros(), Currency: quote.GetCurrency(), Unit: quote.GetUnit(), Revision: commercial.GetRevision(), ExpiresAt: facts.ChargingUntil})
 	}
 	return facts, nil
+}
+
+// PreparationQuery binds a coordinator's preparation request to this
+// destination's own authority. The coordinator decided under the query's
+// policy revisions; the destination may hold that policy or a newer one, and
+// then answers under the newer one. It returns the query restated under this
+// authority, or an error naming why the destination cannot answer: another
+// object or verb, a destination cluster this cell no longer grants, or policy
+// older than the coordinator's.
+func (authority PlacementAuthority) PreparationQuery(query *placementpb.CandidateQuery, clusterID, cellID string) (*placementpb.CandidateQuery, error) {
+	if placement.ValidateCandidateQuery(query) != nil || query.GetTenantId() != authority.TenantID || query.GetObjectId() != authority.ObjectID ||
+		query.GetInternalName() != authority.InternalName ||
+		(authority.Verb == placement.Ingest) != (query.GetVerb() == placementpb.Verb_VERB_INGEST) ||
+		(authority.Verb == placement.Serve) != (query.GetVerb() == placementpb.Verb_VERB_SERVE) {
+		return nil, errors.New("placement authority is for another object or verb")
+	}
+	if authority.PolicyRevision < query.GetPolicyRevision() || authority.ParentRevision < query.GetParentRevision() {
+		return nil, fmt.Errorf("destination policy revision %d/%d is older than the coordinator's %d/%d",
+			authority.ParentRevision, authority.PolicyRevision, query.GetParentRevision(), query.GetPolicyRevision())
+	}
+	if authority.PolicyRevision == query.GetPolicyRevision() && authority.ParentRevision == query.GetParentRevision() && authority.PolicyDigest != query.GetPolicyDigest() {
+		return nil, errors.New("destination policy differs from the coordinator's at the same revision")
+	}
+	for _, cell := range authority.Cells {
+		if cell.ID != cellID {
+			continue
+		}
+		if !slices.Contains(cell.ClusterIDs, clusterID) {
+			return nil, fmt.Errorf("cluster %s is no longer granted in cell %s", clusterID, cellID)
+		}
+		local := proto.CloneOf(query)
+		local.PolicyDigest, local.PolicyRevision, local.ParentRevision = authority.PolicyDigest, authority.PolicyRevision, authority.ParentRevision
+		local.ClusterIds = slices.Clone(cell.ClusterIDs)
+		return local, nil
+	}
+	return nil, fmt.Errorf("cell %s is no longer granted", cellID)
 }
 
 // MatchesQuery binds a peer's requested view to this cell's independent policy

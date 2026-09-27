@@ -106,10 +106,15 @@ func makeDeps(t *testing.T, fed *fakeNotifyFedClient, addrs map[string]string) *
 		Cache:        cache,
 		Registry:     control.StreamRegistryInstance,
 		PeerResolver: &fakePeerResolver{addrs: addrs},
-		CellAddress:  func(cellID string) string { return addrs[cellID] },
-		FedClient:    fed,
-		InstanceID:   "foghorn-test",
-		Logger:       testLogger(),
+		CellAddresses: func(cellID string) []string {
+			if addr := addrs[cellID]; addr != "" {
+				return []string{addr}
+			}
+			return nil
+		},
+		FedClient:  fed,
+		InstanceID: "foghorn-test",
+		Logger:     testLogger(),
 	}
 }
 
@@ -149,10 +154,15 @@ func TestArrangeResolvesACellNamedPeerWithoutAPlacementBinding(t *testing.T) {
 		Registry: control.StreamRegistryInstance,
 		// Keyed by media cluster, as the real peer map is: it does not know the cell.
 		PeerResolver: &fakePeerResolver{addrs: map[string]string{"peer-media-cluster": "peer:443"}},
-		CellAddress:  func(cellID string) string { return map[string]string{"cluster-peer": "peer:443"}[cellID] },
-		FedClient:    fed,
-		InstanceID:   "foghorn-test",
-		Logger:       testLogger(),
+		CellAddresses: func(cellID string) []string {
+			if cellID == "cluster-peer" {
+				return []string{"peer:443"}
+			}
+			return nil
+		},
+		FedClient:  fed,
+		InstanceID: "foghorn-test",
+		Logger:     testLogger(),
 	}
 
 	if _, err := deps.ArrangeOriginPull(context.Background(), makeReq()); err != nil {

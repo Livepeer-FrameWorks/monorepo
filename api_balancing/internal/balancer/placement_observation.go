@@ -15,6 +15,54 @@ import (
 
 const placementObservationLifetime = 30 * time.Second
 
+// PlacementNodeEvidence judges a node's own reports for placement: its
+// heartbeat, its listener observation and its metrics report. Each is valid
+// for 30 s from when it was stamped. A stamp up to the preparation clock skew
+// ahead of now counts as stamped now, because replicas of a cell stamp with
+// their own clocks. until is when the first of them expires; gap names the
+// first one that is missing, expired or too far ahead, or is "" when all
+// three are current. Discovery and preparation both use it, so a node
+// discovery offers is a node preparation accepts on the same reports.
+func PlacementNodeEvidence(node state.EnhancedBalancerNodeSnapshot, now time.Time) (until time.Time, gap string) {
+	stamps := [...]struct {
+		name string
+		at   time.Time
+	}{
+		{"heartbeat", node.LastHeartbeat},
+		{"listener observation", node.OutputsObservedAt},
+		{"metrics", node.MetricsObservedAt},
+	}
+	for index, stamp := range stamps {
+		at := placementStampAt(stamp.at, now)
+		expiry := at.Add(placementObservationLifetime)
+		reason := ""
+		switch {
+		case at.IsZero():
+			reason = stamp.name + " missing"
+		case at.After(now):
+			reason = fmt.Sprintf("%s %s in the future", stamp.name, at.Sub(now).Round(time.Millisecond))
+			expiry = now
+		case !now.Before(expiry):
+			reason = fmt.Sprintf("%s %s old", stamp.name, now.Sub(at).Round(time.Millisecond))
+		}
+		if index == 0 || expiry.Before(until) {
+			until = expiry
+		}
+		if gap == "" {
+			gap = reason
+		}
+	}
+	return until, gap
+}
+
+// placementStampAt is a report stamp as PlacementNodeEvidence reads it.
+func placementStampAt(at, now time.Time) time.Time {
+	if at.After(now) && !at.After(now.Add(placement.PreparationClockSkew)) {
+		return now
+	}
+	return at
+}
+
 // PlacementClusterFacts must come from the consuming tenant's authority, not
 // from node telemetry. A node cannot declare its own owner, entitlement or price.
 type PlacementClusterFacts struct {
@@ -92,8 +140,8 @@ func observePlacementNodes(req PlacementObservationRequest, capacityOnly bool) (
 			AllowedVerbs: slices.Clone(facts.AllowedVerbs), Charging: facts.Charging, ChargingUntil: facts.ChargingUntil,
 			ChargingRevision: facts.ChargingRevision,
 			Prices:           slices.Clone(facts.Prices),
-			ObservedAt:       node.MetricsObservedAt, ExpiresAt: node.MetricsObservedAt.Add(placementObservationLifetime),
-			CPUPercent: node.CPU, Presence: path.Presence, SourceFeasible: path.SourceFeasible,
+			ObservedAt:       placementStampAt(node.MetricsObservedAt, req.Now),
+			CPUPercent:       node.CPU, Presence: path.Presence, SourceFeasible: path.SourceFeasible,
 			Capacity: placement.CapacityUnknown,
 		}
 		// Invalid telemetry remains unknown; non-finite values must not poison
@@ -105,17 +153,9 @@ func observePlacementNodes(req PlacementObservationRequest, capacityOnly bool) (
 			price := *facts.Price
 			candidate.Price = &price
 		}
-		// Liveness and capacity have independent clocks; neither refreshes the other.
-		if expiry := node.LastHeartbeat.Add(placementObservationLifetime); expiry.Before(candidate.ExpiresAt) {
-			candidate.ExpiresAt = expiry
-		}
-		// A fresh metric or config update cannot extend a listener's lifetime.
-		if expiry := node.OutputsObservedAt.Add(placementObservationLifetime); expiry.Before(candidate.ExpiresAt) {
-			candidate.ExpiresAt = expiry
-		}
-		if node.OutputsObservedAt.After(req.Now) {
-			candidate.ExpiresAt = req.Now
-		}
+		// Liveness, listeners and capacity have independent clocks; none
+		// refreshes another, and the candidate lives only as long as all three.
+		candidate.ExpiresAt, _ = PlacementNodeEvidence(node, req.Now)
 		if !facts.AuthorityUntil.IsZero() && facts.AuthorityUntil.Before(candidate.ExpiresAt) {
 			candidate.ExpiresAt = facts.AuthorityUntil
 		}

@@ -13,12 +13,14 @@ import (
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
-// PlacementPreparationRuntime owns current admission and physical media state.
-// Revalidate must check current policy, entitlement, owner consent, membership,
-// protocol, capacity and source identity. A cached Ready response additionally
+// PlacementPreparationRuntime owns this destination's admission and physical
+// media state. It checks only facts the destination is authoritative for: its
+// signed authority is not older than the coordinator's, the selected node is
+// live with capacity, the signed policy admits that node (entitlement, owner
+// consent, membership, protocol) and the source can reach it. Preference
+// between cells and spillover are the coordinator's decision from its complete
+// census and are not re-evaluated here. A cached Ready response additionally
 // requires current generation-bound media evidence; a receipt is not that evidence.
-// Conditional spillover requires the complete policy-relevant census, not a
-// destination-only re-score that treats an unobserved preferred pool as empty.
 type PlacementPreparationRuntime interface {
 	Revalidate(context.Context, *placementpb.PreparePlacementRequest, PlacementReceipt) error
 	// Reconcile must check current admission and inspect physical state even
@@ -117,6 +119,9 @@ func (destination *PlacementDestination) PreparePlacement(ctx context.Context, r
 		return nil, ErrPlacementReceiptConflict
 	}
 	receipt.Response = response
+	// The work can span a node reconnect, a withdrawal or a shorter evidence
+	// lifetime. Recheck this destination's own facts before persisting; the
+	// check is local to this cell and accepts authority that only advanced.
 	var shortened *PlacementEvidenceShortenedError
 	if err = destination.revalidate(ctx, req, receipt); errors.As(err, &shortened) {
 		// Not persisted yet: take the shorter lifetime current evidence supports.

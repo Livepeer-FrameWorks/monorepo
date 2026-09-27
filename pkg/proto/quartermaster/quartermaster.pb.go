@@ -14673,6 +14673,9 @@ type PeerCluster struct {
 	// Authoritative Foghorn control cell behind foghorn_addr. Distinct from the
 	// virtual media cluster; absent on peers that cannot advertise cell identity.
 	ControlCellId string `protobuf:"bytes,6,opt,name=control_cell_id,json=controlCellId,proto3" json:"control_cell_id,omitempty"`
+	// Every healthy Foghorn gRPC replica of the peer, in stable order; the first
+	// equals foghorn_addr. Request/response RPCs fail over across the list.
+	FoghornAddrs  []string `protobuf:"bytes,7,rep,name=foghorn_addrs,json=foghornAddrs,proto3" json:"foghorn_addrs,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -14747,6 +14750,13 @@ func (x *PeerCluster) GetControlCellId() string {
 		return x.ControlCellId
 	}
 	return ""
+}
+
+func (x *PeerCluster) GetFoghornAddrs() []string {
+	if x != nil {
+		return x.FoghornAddrs
+	}
+	return nil
 }
 
 type ListPeersResponse struct {
@@ -16774,7 +16784,7 @@ const file_quartermaster_proto_rawDesc = "" +
 	"\x13previous_cluster_id\x18\x01 \x01(\tR\x11previousClusterId\"1\n" +
 	"\x10ListPeersRequest\x12\x1d\n" +
 	"\n" +
-	"cluster_id\x18\x01 \x01(\tR\tclusterId\"\xe9\x01\n" +
+	"cluster_id\x18\x01 \x01(\tR\tclusterId\"\x8e\x02\n" +
 	"\vPeerCluster\x12\x1d\n" +
 	"\n" +
 	"cluster_id\x18\x01 \x01(\tR\tclusterId\x12!\n" +
@@ -16782,7 +16792,8 @@ const file_quartermaster_proto_rawDesc = "" +
 	"\x11shared_tenant_ids\x18\x03 \x03(\tR\x0fsharedTenantIds\x12!\n" +
 	"\fcluster_name\x18\x04 \x01(\tR\vclusterName\x12!\n" +
 	"\fcluster_type\x18\x05 \x01(\tR\vclusterType\x12&\n" +
-	"\x0fcontrol_cell_id\x18\x06 \x01(\tR\rcontrolCellId\"E\n" +
+	"\x0fcontrol_cell_id\x18\x06 \x01(\tR\rcontrolCellId\x12#\n" +
+	"\rfoghorn_addrs\x18\a \x03(\tR\ffoghornAddrs\"E\n" +
 	"\x11ListPeersResponse\x120\n" +
 	"\x05peers\x18\x01 \x03(\v2\x1a.quartermaster.PeerClusterR\x05peers\"\x9a\x01\n" +
 	"\x1dAssignServiceToClusterRequest\x12\x1d\n" +

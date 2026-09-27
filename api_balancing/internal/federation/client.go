@@ -2,6 +2,8 @@ package federation
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"time"
 
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/clients/foghorn"
@@ -10,6 +12,9 @@ import (
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	foghornfederationpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/foghorn_federation"
 	placementpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/media_placement"
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 // BulkListTimeout is the end-to-end budget for tenant artifact census calls.
@@ -76,9 +81,10 @@ func (c *FederationClient) QueryPlacementCandidates(ctx context.Context, cellID,
 	if err != nil {
 		return nil, err
 	}
+	callOptions := replicaCallOptions(ctx)
 	ctx, cancel := context.WithTimeout(federationContext(ctx), c.timeout)
 	defer cancel()
-	return foghornfed.For(client).Federation().QueryPlacementCandidates(ctx, req)
+	return foghornfed.For(client).Federation().QueryPlacementCandidates(ctx, req, callOptions...)
 }
 
 func (c *FederationClient) PreparePlacement(ctx context.Context, cellID, addr string, req *placementpb.PreparePlacementRequest) (*placementpb.Preparation, error) {
@@ -86,9 +92,10 @@ func (c *FederationClient) PreparePlacement(ctx context.Context, cellID, addr st
 	if err != nil {
 		return nil, err
 	}
+	callOptions := replicaCallOptions(ctx)
 	ctx, cancel := context.WithTimeout(federationContext(ctx), c.timeout)
 	defer cancel()
-	return foghornfed.For(client).Federation().PreparePlacement(ctx, req)
+	return foghornfed.For(client).Federation().PreparePlacement(ctx, req, callOptions...)
 }
 
 // NotifyOriginPull tells the origin cluster that we intend to pull a stream.
@@ -98,10 +105,64 @@ func (c *FederationClient) NotifyOriginPull(ctx context.Context, clusterID, addr
 		return nil, err
 	}
 
+	callOptions := replicaCallOptions(ctx)
 	ctx, cancel := context.WithTimeout(federationContext(ctx), c.timeout)
 	defer cancel()
 
-	return foghornfed.For(client).Federation().NotifyOriginPull(ctx, req)
+	return foghornfed.For(client).Federation().NotifyOriginPull(ctx, req, callOptions...)
+}
+
+type replicaFailFastKey struct{}
+
+// replicaCallOptions makes a call fail fast on a replica whose connection is
+// down when another replica is still available to try. The pooled connection
+// otherwise waits for readiness until the deadline, which would spend the
+// whole budget on a dead replica.
+func replicaCallOptions(ctx context.Context) []grpc.CallOption {
+	if failFast, ok := ctx.Value(replicaFailFastKey{}).(bool); ok && failFast {
+		return []grpc.CallOption{grpc.WaitForReady(false)}
+	}
+	return nil
+}
+
+// callCellReplicas asks the replicas of one control cell in order until one
+// answers. An Unavailable status, or a replica using up its share of the
+// deadline while the caller's deadline still runs, moves to the next replica;
+// any other answer, success or refusal, is the cell's answer. Callers must
+// make the call idempotent, because a replica that timed out may still have
+// acted on it. The address that answered is returned with the result.
+func callCellReplicas[T any](ctx context.Context, addrs []string, call func(context.Context, string) (T, error)) (T, string, error) {
+	var zero T
+	if len(addrs) == 0 {
+		return zero, "", errors.New("control cell has no known replica")
+	}
+	var failures []error
+	for index, addr := range addrs {
+		if err := ctx.Err(); err != nil {
+			failures = append(failures, err)
+			break
+		}
+		remaining := len(addrs) - index
+		attemptCtx, cancel := ctx, context.CancelFunc(func() {})
+		if remaining > 1 {
+			attemptCtx = context.WithValue(ctx, replicaFailFastKey{}, true)
+			if deadline, ok := ctx.Deadline(); ok {
+				attemptCtx, cancel = context.WithTimeout(attemptCtx, time.Until(deadline)/time.Duration(remaining))
+			}
+		}
+		result, err := call(attemptCtx, addr)
+		cancel()
+		if err == nil {
+			return result, addr, nil
+		}
+		failures = append(failures, fmt.Errorf("replica %s: %w", addr, err))
+		code := status.Code(err)
+		ownShareExpired := (code == codes.DeadlineExceeded || errors.Is(err, context.DeadlineExceeded)) && ctx.Err() == nil
+		if code != codes.Unavailable && !ownShareExpired {
+			return zero, addr, err
+		}
+	}
+	return zero, "", errors.Join(failures...)
 }
 
 // PrepareArtifact requests a cross-cluster artifact be made available.

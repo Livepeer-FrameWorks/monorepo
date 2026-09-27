@@ -31,6 +31,9 @@ type ConfiguredSourcePlacementPaths struct {
 	Registry       PlacementSourceRegistry
 	Snapshot       func() *state.BalancerSnapshot
 	Now            func() time.Time
+	// SourceCellReachable reports whether a pull from the named source cell
+	// can be arranged; see LivePushPlacementPaths.SourceCellReachable.
+	SourceCellReachable func(cellID string) bool
 }
 
 // configuredSource is credential-free evidence that one node currently serves the
@@ -313,6 +316,11 @@ func (reader *ConfiguredSourcePlacementPaths) federatedSource(ctx context.Contex
 	totalEdges := 0
 	for cellID, location := range entry.Locations {
 		if cellID == reader.CellID || cellID == registryCell || !location.IsLiveNow || !freshPlacementEvidence(time.Unix(location.AdTimestamp, 0), now) {
+			continue
+		}
+		// A copy in a cell whose control address is unknown cannot be pulled,
+		// so it is not a relay source for discovery or preparation.
+		if !sourceCellReachable(reader.SourceCellReachable, reader.CellID, cellID) {
 			continue
 		}
 		totalEdges += len(location.EdgeCandidates)

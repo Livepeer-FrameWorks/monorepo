@@ -128,9 +128,11 @@ func (adapter *IngestPlacementAdapter) AdmitPublisher(ctx context.Context, conne
 	if authority.TenantID != connection.TenantID || authority.ObjectID == "" || authority.InternalName != connection.InternalName || authority.IngestMode != "push" {
 		return federation.PlacementAdmissionDecision{}, errors.New("ingest placement pair identity differs or is not a push stream")
 	}
+	// A publisher brings no owner-resolved source evidence, so the admission is
+	// not bound to the versions of this lookup: the authority advance that the
+	// publisher's own ownership claim causes must not refuse it.
 	input := federation.PlacementAdmissionInput{TenantID: connection.TenantID, ObjectID: authority.ObjectID, InternalName: connection.InternalName,
-		ClusterID: connection.ClusterID, NodeID: connection.NodeID, Protocol: protocol, Verb: placement.Ingest,
-		TenantAuthorityVersion: authority.TenantAuthorityVersion, ObjectAuthorityVersion: authority.ObjectAuthorityVersion}
+		ClusterID: connection.ClusterID, NodeID: connection.NodeID, Protocol: protocol, Verb: placement.Ingest}
 	if address, parseErr := netip.ParseAddr(connection.PublisherAddress); parseErr == nil && adapter.GeoIP != nil {
 		if found := geoip.LookupCached(ctx, adapter.GeoIP, adapter.GeoCache, address.Unmap().String()); found != nil {
 			input.Location = &placement.Coordinates{Latitude: found.Latitude, Longitude: found.Longitude}
