@@ -132,6 +132,39 @@ func TestReconnectSendsLocallyAdmittedSessionsToFoghorn(t *testing.T) {
 	}
 }
 
+// A live stream nobody watched for longer than the idle limit keeps its
+// grant, so its first viewers during a control outage are still admitted.
+// Only a stream Mist no longer runs, or a stale Mist list, lets it go idle.
+func TestGrantOfLiveStreamOutlivesIdleLimit(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		observe  func(*Store)
+		keepsIt  bool
+		lateList bool
+	}{
+		{"stream live on this edge", func(s *Store) { s.ObserveActiveStreams(map[string]struct{}{"live+s": {}}) }, true, false},
+		{"stream not live on this edge", func(s *Store) { s.ObserveActiveStreams(map[string]struct{}{"live+other": {}}) }, false, false},
+		{"no Mist list", func(*Store) {}, false, false},
+		{"Mist list gone stale", func(s *Store) { s.ObserveActiveStreams(map[string]struct{}{"live+s": {}}) }, false, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			store, clock := newTestStore(t, &recordingMist{}, nil)
+			store.ApplyGrant(playbackgranttest.Grant("live+s", ipcpb.PlaybackGrantPolicyKind_PLAYBACK_GRANT_POLICY_KIND_PUBLIC, nil, "pb"))
+			tc.observe(store)
+			for elapsed := time.Duration(0); elapsed <= grantIdleLimit+time.Minute; elapsed += time.Minute {
+				clock.now = clock.now.Add(time.Minute)
+				if !tc.lateList && elapsed%(2*time.Minute) == 0 {
+					tc.observe(store)
+				}
+				store.Tick()
+			}
+			if got := store.DecideNewRequest("pb"); got.Allow != tc.keepsIt {
+				t.Fatalf("after %s idle: allow=%v (%s), want %v", grantIdleLimit+time.Minute, got.Allow, got.Reason, tc.keepsIt)
+			}
+		})
+	}
+}
+
 func TestExpiredGrantAndEndedSessionStopLocalAnswers(t *testing.T) {
 	store, clock := newTestStore(t, &recordingMist{}, nil)
 	grant := playbackgranttest.Grant("live+s", ipcpb.PlaybackGrantPolicyKind_PLAYBACK_GRANT_POLICY_KIND_PUBLIC, nil, "pb")

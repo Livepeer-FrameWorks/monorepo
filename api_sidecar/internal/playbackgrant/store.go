@@ -40,8 +40,12 @@ const (
 	// A session that made no request for this long is forgotten. Its next
 	// request, if any, is decided by Foghorn again.
 	sessionIdleLimit = 3 * time.Minute
-	// A grant nobody used for this long is dropped.
+	// A grant nobody used for this long is dropped, unless its stream is
+	// active in Mist on this edge: during a control outage that grant is what
+	// admits the stream's new viewers.
 	grantIdleLimit = 10 * time.Minute
+	// Mist's active-stream list older than this no longer keeps grants.
+	activeStreamsValidity = 3 * time.Minute
 	// A grant that still serves sessions is fetched again this long before it
 	// expires, so a renewal the push missed still reaches the edge.
 	grantRefreshMargin = time.Hour
@@ -155,6 +159,9 @@ type Store struct {
 	fetching    map[string]bool
 	lastFetchAt map[string]time.Time
 	rebuiltOnce bool
+	// liveStreams is Mist's latest authoritative active-stream list.
+	liveStreams   map[string]struct{}
+	liveStreamsAt time.Time
 }
 
 // NewStore returns an empty store.
@@ -676,14 +683,32 @@ func (s *Store) FetchIfMissing(internal string) {
 	go func() { _ = s.fetchGrant(internal, false) }() //nolint:errcheck // logged by fetchGrant
 }
 
+// ObserveActiveStreams records the Mist streams active on this edge, from an
+// authoritative Mist stream list.
+func (s *Store) ObserveActiveStreams(streams map[string]struct{}) {
+	now := s.now()
+	live := make(map[string]struct{}, len(streams))
+	for name := range streams {
+		live[name] = struct{}{}
+	}
+	s.mu.Lock()
+	s.liveStreams, s.liveStreamsAt = live, now
+	s.mu.Unlock()
+}
+
 // Tick expires idle sessions and grants, refreshes grants that serve
-// sessions and are close to expiry, and releases due rechecks.
+// sessions or live streams and are close to expiry, and releases due rechecks.
 func (s *Store) Tick() {
 	now := s.now()
 	var refresh []string
 	var due []string
 	s.mu.Lock()
 	active := map[string]bool{}
+	if now.Sub(s.liveStreamsAt) <= activeStreamsValidity {
+		for name := range s.liveStreams {
+			active[name] = true
+		}
+	}
 	for key, sess := range s.sessions {
 		if now.Sub(sess.lastUsed) > sessionIdleLimit {
 			delete(s.sessions, key)

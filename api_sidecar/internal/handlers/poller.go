@@ -1103,6 +1103,9 @@ func (pm *PrometheusMonitor) emitStreamLifecycleWithClient(
 	// one stream. Merge it once, then give every reconciliation path the same
 	// stable view; the next authoritative poll confirms or removes it.
 	reconciledPresent, toReport := pm.reconcileStreamPresenceSnapshot(present, observation)
+	if store := playbackGrants; store != nil {
+		store.ObserveActiveStreams(reconciledPresent)
+	}
 	// Reconcile source leases against Mist's authoritative view. Only fires
 	// after a successful GetActiveStreams response with a well-formed
 	// active_streams member — poll errors and malformed payloads returned
