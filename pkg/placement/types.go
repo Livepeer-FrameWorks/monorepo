@@ -143,6 +143,10 @@ type Candidate struct {
 	// CapacityDetail names the condition behind CapacityUnavailable. It is
 	// diagnostic only and never read by the decision.
 	CapacityDetail string
+	// EvidenceGap names the node's first missing, expired or future-stamped
+	// report, or is empty when all are current. Diagnostic only; never read by
+	// the decision.
+	EvidenceGap    string
 	BWAvailable    uint64 // bytes/second after admission headroom
 	BWLimit        uint64 // bytes/second
 	CPUPercent     float64

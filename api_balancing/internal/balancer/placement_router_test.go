@@ -446,3 +446,33 @@ func TestPlacementRouterIncompleteRefusalIsDistinguishable(t *testing.T) {
 		t.Fatalf("incomplete census refusal not distinguishable: %v", err)
 	}
 }
+
+// A destination with no current assessment is explained by what is missing: a node that has not
+// reported metrics since its connection came up names that report, and a node outside the
+// observation says so.
+func TestUnassessedDestinationNamesTheMissingReport(t *testing.T) {
+	observed := placementObservationFixture()
+	observed.Snapshot.Nodes[0].MetricsObservedAt = time.Time{}
+	if gap := observeOne(t, observed).EvidenceGap; gap != "metrics missing" {
+		t.Fatalf("evidence gap = %q, want metrics missing", gap)
+	}
+
+	req, router, observations := placementRouteFixture()
+	us := observations["us-cell"]
+	us.Candidates[0].ObservedAt, us.Candidates[0].ExpiresAt, us.Candidates[0].EvidenceGap = time.Time{}, time.Time{}.Add(30*time.Second), "metrics missing"
+	observations["us-cell"] = us
+	evaluated, err := router.Evaluate(context.Background(), req)
+	if err != nil && !errors.Is(err, ErrPlacementUnavailable) {
+		t.Fatalf("evaluate: %v", err)
+	}
+	now := router.Now()
+	if _, _, known := evaluated.AssessmentFor("us", "us-cell-node", now); known {
+		t.Fatal("a node with no metrics was assessed")
+	}
+	if got := evaluated.UnassessedReason("us", "us-cell-node", now); got != "the node's metrics missing" {
+		t.Fatalf("reason = %q", got)
+	}
+	if got := evaluated.UnassessedReason("us", "absent-node", now); got != "the node is not in this cell's placement observation" {
+		t.Fatalf("reason for an unobserved node = %q", got)
+	}
+}

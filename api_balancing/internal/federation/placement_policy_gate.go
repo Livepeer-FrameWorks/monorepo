@@ -251,7 +251,8 @@ func (gate *PlacementPolicyGate) decide(ctx context.Context, req *placementpb.Pr
 	}
 	assessment, expiry, known := evaluated.AssessmentFor(req.ClusterId, req.NodeId, gate.now())
 	if !known {
-		return PlacementPolicyValidation{}, time.Time{}, status.Error(codes.Unavailable, "selected destination observation is unavailable")
+		return PlacementPolicyValidation{}, time.Time{}, status.Errorf(codes.Unavailable, "selected destination %s/%s observation is unavailable: %s",
+			req.ClusterId, req.NodeId, evaluated.UnassessedReason(req.ClusterId, req.NodeId, gate.now()))
 	}
 	switch assessment.Reason {
 	case placement.Eligible, placement.Selected:

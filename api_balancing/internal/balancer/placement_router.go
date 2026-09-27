@@ -287,6 +287,9 @@ func (router PlacementRouter) logRefusal(req PlacementRouteRequest, decision pla
 			if candidate.CapacityDetail != "" {
 				line += " detail=" + candidate.CapacityDetail
 			}
+			if candidate.EvidenceGap != "" {
+				line += " evidence=" + candidate.EvidenceGap
+			}
 		}
 		assessments = append(assessments, line)
 	}
@@ -312,6 +315,26 @@ type PlacementEvaluation struct {
 	Decision          placement.Decision
 	ExpiresAt         time.Time
 	candidateExpiries map[[2]string]time.Time
+	// observed holds every observed candidate, including those of an evaluation
+	// that failed, so a missing assessment can be explained.
+	observed map[[2]string]placement.Candidate
+}
+
+// UnassessedReason says why AssessmentFor has no current assessment of a
+// destination: the node was not observed, one of its own reports is missing or
+// stale, or its evidence ran out.
+func (evaluation PlacementEvaluation) UnassessedReason(clusterID, nodeID string, now time.Time) string {
+	candidate, listed := evaluation.observed[[2]string{clusterID, nodeID}]
+	switch {
+	case !listed:
+		return "the node is not in this cell's placement observation"
+	case candidate.EvidenceGap != "":
+		return "the node's " + candidate.EvidenceGap
+	case !now.Before(candidate.ExpiresAt):
+		return "the node's evidence expired at " + candidate.ExpiresAt.Format(time.RFC3339Nano)
+	default:
+		return "the placement decision has no assessment of the node"
+	}
 }
 
 // AssessmentFor returns only an exact candidate with still-current observation
@@ -336,6 +359,10 @@ func (router PlacementRouter) Evaluate(ctx context.Context, req PlacementRouteRe
 	}
 	decision, expiresAt, err := census.evaluate(router.now(), census.candidates)
 	result := PlacementEvaluation{Decision: decision, ExpiresAt: expiresAt}
+	result.observed = make(map[[2]string]placement.Candidate, len(census.candidates))
+	for _, candidate := range census.candidates {
+		result.observed[[2]string{candidate.ClusterID, candidate.NodeID}] = candidate
+	}
 	if err != nil {
 		return result, err
 	}

@@ -155,7 +155,7 @@ func observePlacementNodes(req PlacementObservationRequest, capacityOnly bool) (
 		}
 		// Liveness, listeners and capacity have independent clocks; none
 		// refreshes another, and the candidate lives only as long as all three.
-		candidate.ExpiresAt, _ = PlacementNodeEvidence(node, req.Now)
+		candidate.ExpiresAt, candidate.EvidenceGap = PlacementNodeEvidence(node, req.Now)
 		if !facts.AuthorityUntil.IsZero() && facts.AuthorityUntil.Before(candidate.ExpiresAt) {
 			candidate.ExpiresAt = facts.AuthorityUntil
 		}
