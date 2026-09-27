@@ -39,7 +39,14 @@ func TestDecideReconcileAction(t *testing.T) {
 		{"no row + present + no PDT", "", true, false, false, reconcileSkipNoPDT},
 		{"no row + missing + PDT", "", false, true, true, reconcileInsertDrop},
 		{"no row + missing + no PDT", "", false, false, false, reconcileSkipNoPDT},
-		{"unknown status falls through to no-row branch", "weird_status", true, true, true, reconcileInsertUpload},
+
+		// reclaimed: removed on purpose after its chapters froze; never lost.
+		{"reclaimed + missing + PDT", "reclaimed", false, true, true, reconcileNoop},
+		{"reclaimed + present", "reclaimed", true, true, true, reconcileNoop},
+		// A row in a state this node does not know is still a row: it is
+		// never re-created or reported lost.
+		{"unknown status + missing + PDT", "weird_status", false, true, true, reconcileNoop},
+		{"unknown status + present + PDT", "weird_status", true, true, true, reconcileNoop},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

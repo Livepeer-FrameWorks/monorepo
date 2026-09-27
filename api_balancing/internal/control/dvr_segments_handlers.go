@@ -275,17 +275,31 @@ func processDVRSegmentDropped(req *ipcpb.DVRSegmentDropped, nodeID string, logge
 		}).Warn("Ignoring DVR segment dropped: reporting node is not the dispatched recording owner (or lookup failed)")
 		return
 	}
-	if err := MarkDVRSegmentDropped(
+	changed, err := MarkDVRSegmentDropped(
 		ctx, tenantID, dvrHash, segmentName, reason, req.GetWasUploaded(),
 		req.GetMediaStartMs(), req.GetMediaEndMs(), req.GetDurationMs(),
 		int64(req.GetSizeBytes()),
-	); err != nil {
+	)
+	if err != nil {
 		logger.WithError(err).WithFields(logging.Fields{
 			"dvr_hash":     dvrHash,
 			"segment_name": segmentName,
 			"reason":       reason,
 			"node_id":      nodeID,
 		}).Error("Failed to mark DVR segment dropped")
+		return
+	}
+	if !changed {
+		// The segment is already uploaded, reclaimed or recorded as dropped;
+		// a repeated report is not a new loss.
+		logger.WithFields(logging.Fields{
+			"dvr_hash":     dvrHash,
+			"segment_name": segmentName,
+			"reason":       reason,
+			"was_uploaded": req.GetWasUploaded(),
+			"node_id":      nodeID,
+		}).Debug("DVR segment drop changed nothing: segment already uploaded or terminal")
+		return
 	}
 	if !req.GetWasUploaded() {
 		// lost_local with was_uploaded=false is the data-loss case;

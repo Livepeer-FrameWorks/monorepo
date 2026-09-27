@@ -490,6 +490,7 @@ SET status = $1::text, drop_reason = $2::text,
     dropped_at = NOW()
 WHERE foghorn.dvr_segments.artifact_hash = $4 AND segment_name = $5
   AND status NOT IN ('deleted_local', 'lost_local', 'reclaimed')
+  AND ($3::boolean OR status <> 'uploaded')
   AND EXISTS (
       SELECT 1 FROM foghorn.artifacts a
       WHERE a.artifact_hash = foghorn.dvr_segments.artifact_hash
@@ -588,7 +589,7 @@ func (q *Queries) MarkRemainingDVRSegmentsLost(ctx context.Context, arg MarkRema
 	return result.RowsAffected()
 }
 
-const upsertLostDVRSegment = `-- name: UpsertLostDVRSegment :exec
+const upsertLostDVRSegment = `-- name: UpsertLostDVRSegment :execrows
 INSERT INTO foghorn.dvr_segments (
     artifact_hash, segment_name, sequence, media_start_ms, media_end_ms, duration_ms,
     size_bytes, s3_key, status, drop_reason, created_at, dropped_at
@@ -597,7 +598,7 @@ INSERT INTO foghorn.dvr_segments (
           $7, '', 'lost_local', $8, NOW(), NOW())
 ON CONFLICT (artifact_hash, segment_name) DO UPDATE SET
     status = 'lost_local', drop_reason = EXCLUDED.drop_reason, dropped_at = NOW()
-WHERE foghorn.dvr_segments.status NOT IN ('deleted_local', 'lost_local', 'reclaimed')
+WHERE foghorn.dvr_segments.status NOT IN ('uploaded', 'deleted_local', 'lost_local', 'reclaimed')
 `
 
 type UpsertLostDVRSegmentParams struct {
@@ -611,8 +612,8 @@ type UpsertLostDVRSegmentParams struct {
 	DropReason   sql.NullString `db:"drop_reason" json:"drop_reason"`
 }
 
-func (q *Queries) UpsertLostDVRSegment(ctx context.Context, arg UpsertLostDVRSegmentParams) error {
-	_, err := q.db.ExecContext(ctx, upsertLostDVRSegment,
+func (q *Queries) UpsertLostDVRSegment(ctx context.Context, arg UpsertLostDVRSegmentParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, upsertLostDVRSegment,
 		arg.ArtifactHash,
 		arg.SegmentName,
 		arg.Sequence,
@@ -622,5 +623,8 @@ func (q *Queries) UpsertLostDVRSegment(ctx context.Context, arg UpsertLostDVRSeg
 		arg.SizeBytes,
 		arg.DropReason,
 	)
-	return err
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
 }

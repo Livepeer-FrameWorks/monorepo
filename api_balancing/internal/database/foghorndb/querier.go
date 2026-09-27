@@ -726,7 +726,7 @@ type Querier interface {
 	UpsertControlReplicaHeartbeat(ctx context.Context, arg UpsertControlReplicaHeartbeatParams) error
 	UpsertDVRRecordingOrigin(ctx context.Context, arg UpsertDVRRecordingOriginParams) (bool, error)
 	UpsertDiscoveredArtifactNode(ctx context.Context, arg UpsertDiscoveredArtifactNodeParams) error
-	UpsertLostDVRSegment(ctx context.Context, arg UpsertLostDVRSegmentParams) error
+	UpsertLostDVRSegment(ctx context.Context, arg UpsertLostDVRSegmentParams) (int64, error)
 	UpsertMediaAuthority(ctx context.Context, arg UpsertMediaAuthorityParams) error
 	UpsertMediaObjectAuthorityProjection(ctx context.Context, arg UpsertMediaObjectAuthorityProjectionParams) error
 	UpsertNodeAdmission(ctx context.Context, arg UpsertNodeAdmissionParams) (string, error)

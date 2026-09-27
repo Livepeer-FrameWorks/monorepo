@@ -75,13 +75,14 @@ SET status = sqlc.arg(target_status)::text, drop_reason = sqlc.arg(drop_reason):
     dropped_at = NOW()
 WHERE foghorn.dvr_segments.artifact_hash = sqlc.arg(artifact_hash) AND segment_name = sqlc.arg(segment_name)
   AND status NOT IN ('deleted_local', 'lost_local', 'reclaimed')
+  AND (sqlc.arg(was_uploaded)::boolean OR status <> 'uploaded')
   AND EXISTS (
       SELECT 1 FROM foghorn.artifacts a
       WHERE a.artifact_hash = foghorn.dvr_segments.artifact_hash
         AND a.artifact_type = 'dvr' AND a.tenant_id = sqlc.arg(tenant_id)
   );
 
--- name: UpsertLostDVRSegment :exec
+-- name: UpsertLostDVRSegment :execrows
 INSERT INTO foghorn.dvr_segments (
     artifact_hash, segment_name, sequence, media_start_ms, media_end_ms, duration_ms,
     size_bytes, s3_key, status, drop_reason, created_at, dropped_at
@@ -90,7 +91,7 @@ INSERT INTO foghorn.dvr_segments (
           sqlc.narg(size_bytes), '', 'lost_local', sqlc.arg(drop_reason), NOW(), NOW())
 ON CONFLICT (artifact_hash, segment_name) DO UPDATE SET
     status = 'lost_local', drop_reason = EXCLUDED.drop_reason, dropped_at = NOW()
-WHERE foghorn.dvr_segments.status NOT IN ('deleted_local', 'lost_local', 'reclaimed');
+WHERE foghorn.dvr_segments.status NOT IN ('uploaded', 'deleted_local', 'lost_local', 'reclaimed');
 
 -- name: ListEvictableDVRSegments :many
 SELECT s.segment_name FROM foghorn.dvr_segments s

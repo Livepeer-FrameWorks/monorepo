@@ -272,6 +272,8 @@ func DVRSegmentProgress(ctx context.Context, tenantID, artifactHash string) (seg
 // timing fields the finalization queue couldn't locate the lost
 // segment on the chapter timeline. Pass 0 for unknown/uninteresting
 // timing (e.g. mid-stream eviction of a row that already exists).
+// It reports whether the row changed; a drop of an already terminal or
+// uploaded segment changes nothing.
 func MarkDVRSegmentDropped(
 	ctx context.Context,
 	tenantID string,
@@ -279,9 +281,9 @@ func MarkDVRSegmentDropped(
 	wasUploaded bool,
 	mediaStartMs, mediaEndMs, durationMs int64,
 	sizeBytes int64,
-) error {
+) (bool, error) {
 	if db == nil {
-		return sql.ErrConnDone
+		return false, sql.ErrConnDone
 	}
 	target := "lost_local"
 	if wasUploaded {
@@ -290,17 +292,18 @@ func MarkDVRSegmentDropped(
 	// Only transition from live source states. Excluding the terminal
 	// states (deleted_local, lost_local, reclaimed) keeps a delayed or
 	// duplicate Helmsman ack from regressing a fully reclaimed row back
-	// to deleted_local — reclaim is meant to be idempotent. The EXISTS
-	// predicate scopes the mutation to the tenant-owned parent DVR.
+	// to deleted_local — reclaim is meant to be idempotent. An uploaded
+	// segment is never lost: S3 holds it. The EXISTS predicate scopes the
+	// mutation to the tenant-owned parent DVR.
 	affected, err := foghorndb.New(db).MarkDVRSegmentDropped(ctx, foghorndb.MarkDVRSegmentDroppedParams{
 		TargetStatus: target, DropReason: reason, WasUploaded: wasUploaded,
 		ArtifactHash: artifactHash, SegmentName: segmentName, TenantID: tenantID,
 	})
 	if err != nil {
-		return fmt.Errorf("mark dropped: %w", err)
+		return false, fmt.Errorf("mark dropped: %w", err)
 	}
 	if affected > 0 {
-		return nil
+		return true, nil
 	}
 	// No existing row. Only insert a placeholder for the lost_local case —
 	// "deleted_local with no row" is meaningless (the upload would have
@@ -310,13 +313,14 @@ func MarkDVRSegmentDropped(
 	// finalization queue can detect the missing segment and classify the
 	// overlapping chapter as failed_source_missing.
 	if wasUploaded {
-		return nil
+		return false, nil
 	}
 	if mediaStartMs <= 0 || mediaEndMs <= mediaStartMs {
 		// No usable timing — log via caller; without timing we can't place
 		// the gap on the timeline, so we'd render a no-op row.
-		return fmt.Errorf("lost_local insert refused: missing media timing for %s/%s", artifactHash, segmentName)
+		return false, fmt.Errorf("lost_local insert refused: missing media timing for %s/%s", artifactHash, segmentName)
 	}
+	var recorded bool
 	// Insert under a tx so sequence assignment is monotonic against other
 	// writers (RecordDVRSegment can race here even though the artifact is
 	// terminal — Foghorn's terminal-state guard fires first, but in-flight
@@ -341,19 +345,21 @@ func MarkDVRSegmentDropped(
 		// to win the race only against live source states. A delayed
 		// was_uploaded=false drop must NOT regress a terminal row
 		// (deleted_local / reclaimed / already lost_local) back to lost_local.
-		if insertErr := qtx.UpsertLostDVRSegment(ctx, foghorndb.UpsertLostDVRSegmentParams{
+		written, insertErr := qtx.UpsertLostDVRSegment(ctx, foghorndb.UpsertLostDVRSegmentParams{
 			ArtifactHash: artifactHash, SegmentName: segmentName, Sequence: nextSeq,
 			MediaStartMs: mediaStartMs, MediaEndMs: mediaEndMs, DurationMs: durationMs,
 			SizeBytes: sizeArg, DropReason: sql.NullString{String: reason, Valid: true},
-		}); insertErr != nil {
+		})
+		if insertErr != nil {
 			return fmt.Errorf("insert lost_local row: %w", insertErr)
 		}
+		recorded = written > 0
 		return nil
 	})
 	if err != nil {
-		return fmt.Errorf("record lost_local row: %w", err)
+		return false, fmt.Errorf("record lost_local row: %w", err)
 	}
-	return nil
+	return recorded, nil
 }
 
 // ListEvictableDVRSegments returns segment names that are safe to delete

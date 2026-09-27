@@ -66,11 +66,11 @@ func TestDVRSegmentProgress(t *testing.T) {
 // UPDATE affects a row, without inserting a placeholder.
 func TestMarkDVRSegmentDropped_ExistingUploadedRow(t *testing.T) {
 	mock, _, _ := setupArtifactTestDeps(t)
-	mock.ExpectExec(`UPDATE foghorn.dvr_segments\s+SET status = \$1::text,\s+drop_reason = \$2::text.*WHERE foghorn.dvr_segments.artifact_hash = \$4\s+AND segment_name = \$5\s+AND status NOT IN \('deleted_local', 'lost_local', 'reclaimed'\)\s+AND EXISTS`).
+	mock.ExpectExec(`UPDATE foghorn.dvr_segments\s+SET status = \$1::text,\s+drop_reason = \$2::text.*WHERE foghorn.dvr_segments.artifact_hash = \$4\s+AND segment_name = \$5\s+AND status NOT IN \('deleted_local', 'lost_local', 'reclaimed'\)\s+AND \(\$3::boolean OR status <> 'uploaded'\)\s+AND EXISTS`).
 		WithArgs("deleted_local", "evicted", true, "art-1", "seg-1", "tenant-1").
 		WillReturnResult(sqlmock.NewResult(0, 1))
-	if err := MarkDVRSegmentDropped(context.Background(), "tenant-1", "art-1", "seg-1", "evicted", true, 0, 0, 0, 0); err != nil {
-		t.Fatal(err)
+	if changed, err := MarkDVRSegmentDropped(context.Background(), "tenant-1", "art-1", "seg-1", "evicted", true, 0, 0, 0, 0); err != nil || !changed {
+		t.Fatalf("changed=%v err=%v", changed, err)
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatal(err)
@@ -205,7 +205,7 @@ func TestSegmentRepo_NilDBGuards(t *testing.T) {
 	if _, _, err := DVRSegmentProgress(ctx, "t", "a"); !errors.Is(err, sql.ErrConnDone) {
 		t.Errorf("DVRSegmentProgress nil db = %v", err)
 	}
-	if err := MarkDVRSegmentDropped(ctx, "t", "a", "s", "r", false, 0, 0, 0, 0); !errors.Is(err, sql.ErrConnDone) {
+	if _, err := MarkDVRSegmentDropped(ctx, "t", "a", "s", "r", false, 0, 0, 0, 0); !errors.Is(err, sql.ErrConnDone) {
 		t.Errorf("MarkDVRSegmentDropped nil db = %v", err)
 	}
 	if _, err := ListPendingDVRSegments(ctx, "a", time.Hour, 10); !errors.Is(err, sql.ErrConnDone) {

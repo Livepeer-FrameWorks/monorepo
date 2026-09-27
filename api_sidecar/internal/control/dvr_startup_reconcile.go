@@ -35,6 +35,7 @@ import (
 //	lost_local          present + matching PDT  heal via RecordDVRSegment + upload
 //	lost_local          present + no PDT match  log unreconciliable
 //	lost_local          missing  no-op
+//	reclaimed or other  any      no-op (a known row is never recreated or reported lost)
 //	(no row)            present + PDT           RecordDVRSegment + upload (rebuild ledger)
 //	(no row)        present + no PDT        log unreconciliable
 //	(no row)        missing + PDT           RecordDVRSegment then DVRSegmentDropped (tombstone)
@@ -143,7 +144,7 @@ func decideReconcileAction(status string, present, hasPDT, pdtMatches bool) reco
 			return reconcileSkipUnhealable
 		}
 		return reconcileHeal
-	default: // no ledger row
+	case "":
 		if !hasPDT {
 			return reconcileSkipNoPDT
 		}
@@ -151,6 +152,12 @@ func decideReconcileAction(status string, present, hasPDT, pdtMatches bool) reco
 			return reconcileInsertUpload
 		}
 		return reconcileInsertDrop
+	default:
+		// reclaimed: the chapter reclaim removed the segment after its
+		// chapters froze, so its absence is expected. Any other state is
+		// still a ledger row; recreating or dropping it would report a loss
+		// that did not happen, again on every reconnect.
+		return reconcileNoop
 	}
 }
 
