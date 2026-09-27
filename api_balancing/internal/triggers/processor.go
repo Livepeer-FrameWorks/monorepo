@@ -1782,7 +1782,7 @@ func (p *Processor) handlePushRewrite(trigger *ipcpb.MistTrigger) (_ string, _ b
 	usedLocalAdmission := usedLocalIdentity
 	if !usedLocalIdentity && p.commodoreClient != nil {
 		streamValidation, err = control.ClaimIngestPlacement(admissionCtx, p.commodoreClient, pushRewrite.GetStreamName(),
-			identity.GetTenantId(), identity.GetInternalName(), ingestClusterID, claimToken, p.logger)
+			identity.GetTenantId(), identity.GetInternalName(), trigger.GetNodeId(), ingestClusterID, claimToken, p.logger)
 	}
 	if err != nil || streamValidation == nil {
 		if localValidation == nil || !localValidation.GetValid() {

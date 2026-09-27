@@ -46,13 +46,14 @@ func TestSourceProjectionRepairAllocatorRetriesSerializationFailure(t *testing.T
 	}
 }
 
-func TestPlacementClaimEnumerationIncludesPendingSessions(t *testing.T) {
+func TestPlacementClaimEnumerationBoundsPendingSessionsByAdmissionWindow(t *testing.T) {
 	query := strings.ToLower(listActiveIngestSessionClaims)
-	if strings.Contains(query, "projection_state") {
-		t.Fatal("unended pending sessions must renew placement until promotion or the session reaper resolves them")
-	}
 	if !strings.Contains(query, "ended_at is null") {
 		t.Fatal("placement renewal must remain scoped to unended sessions")
+	}
+	if !strings.Contains(query, "projection_state = 'active'") ||
+		!strings.Contains(query, "started_at >= now() - ($1::bigint * interval '1 millisecond')") {
+		t.Fatal("placement renewal must renew projected sessions, and pending sessions only inside their admission window")
 	}
 }
 

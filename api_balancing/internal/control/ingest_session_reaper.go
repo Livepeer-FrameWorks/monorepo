@@ -152,6 +152,11 @@ func RetireIngestSessionByClaim(ctx context.Context, tenantID, internalName, cla
 // ReapNeverProjectedIngestSessions retires sessions whose admission never crossed the shared source
 // projection CAS. It is independent of node presence: a control connection can remain healthy after
 // the blocking PUSH_REWRITE failed, and such a pending row must not hold stream authority forever.
+//
+// It gives back no placement claim, because none is left to give back: renewal skips a pending
+// session once IngestAdmissionWindow has passed, so its claim lapses one ActiveIngestLease later,
+// well inside the reaper's pending TTL. A publisher that arrives before then ends the lapsed session
+// and releases its claim at admission (ClaimIngestPlacement, MintIngestSession).
 func ReapNeverProjectedIngestSessions(ctx context.Context, olderThan time.Duration, logger logging.Logger) (int, error) {
 	if db == nil {
 		return 0, nil

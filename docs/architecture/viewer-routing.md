@@ -485,6 +485,21 @@ lapses. Renewal is sharded by control-connection ownership, so nobody renews an
 unreachable node's claim. Until the lease lapses, Commodore rejects the
 newcomer's claim.
 
+A session minted by an admission that never confirmed its source projection
+stays `pending`. It can still become active only while Mist may deliver the
+same PUSH_REWRITE again: Mist retries a blocking trigger five times, five
+seconds each, all with one trigger UUID (`mist.BlockingTriggerLifetime`,
+25.5 s, which is Foghorn's `IngestAdmissionWindow`). Past that window Mist
+never received an answer and refused the push, which happens when the mint
+commits after the admission's own deadline. Renewal therefore re-asserts a
+pending session's claim only inside the window, and a connector on the same
+node that meets such a lapsed session, at the Commodore claim or at the mint,
+ends it as `admission_lapsed` under the stream lock, releases its claim by
+token, and is admitted. A pending session still inside the window keeps the
+stream, and a newcomer on another node follows the takeover rules above. The
+never-projected reaper ends whatever is left after two minutes; its claim has
+already lapsed by then.
+
 On registration, Helmsman lists the publisher generations in its persisted
 generation store (`Register.live_ingest_generations`). Foghorn then settles
 that node's sessions:

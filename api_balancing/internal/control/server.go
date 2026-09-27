@@ -3140,7 +3140,10 @@ func ingestTenantCapacityAdvisoryLockKey(tenantID string) string {
 // a same-UUID different-stream is rejected. A publisher on a DIFFERENT node supersedes the
 // incumbent (ended_reason superseded_by_new_node) only while the incumbent's node has no control
 // connection to any replica, checked through the node retirement guard; while that node is
-// connected, or its presence is unreadable, the new publisher is a duplicate. Fails CLOSED (returns an error) when db is nil —
+// connected, or its presence is unreadable, the new publisher is a duplicate. A different connector
+// on the SAME node supersedes an incumbent still pending past IngestAdmissionWindow (ended_reason
+// admission_lapsed): that admission's answer never reached Mist, so Mist refused the push. Fails
+// CLOSED (returns an error) when db is nil —
 // a push cannot be admitted without a durable generation.
 //
 // The DVR intent is written in the SAME insert as the session so a record:true stream's
@@ -3193,7 +3196,7 @@ func MintIngestSession(ctx context.Context, req IngestSessionRequest, logger log
 	var sessionID string
 	var outcome IngestSessionOutcome
 	var staleStopClaims []DVRStopClaim // dispatched AFTER commit (PID-reuse / takeover orphan stop)
-	var takeoverSessionID, takeoverNodeID string
+	var takeoverSessionID, takeoverNodeID, lapsedSessionID string
 	var takeover ingestTakeoverGuard
 	defer takeover.releaseGuard()
 	err := database.WithRetryablePostgresTx(ctx, db, &sql.TxOptions{Isolation: sql.LevelReadCommitted}, func(tx *sql.Tx) error {
@@ -3257,20 +3260,25 @@ func MintIngestSession(ctx context.Context, req IngestSessionRequest, logger log
 		// (uq_foghorn_ingest_sessions_active_per_stream). Under the stream lock this is the authoritative
 		// single-publisher decision.
 		var staleSessionID, staleNodeID string
-		takeoverSessionID, takeoverNodeID = "", ""
+		var staleOffline OfflineEffectIntent
+		takeoverSessionID, takeoverNodeID, lapsedSessionID = "", "", ""
 		inc, incErr := q.LockActiveStreamIngestSession(ctx, foghorndb.LockActiveStreamIngestSessionParams{TenantID: tenantID, StreamInternalName: internalName})
 		switch {
 		case incErr == nil:
 			incID, incNode, incPID, incMillis := inc.ID, inc.NodeID, inc.ConnectorPid, inc.StartedAtUnixMillis
-			// An incumbent holds the stream. Two cases supersede it:
+			// An incumbent holds the stream. Three cases supersede it:
 			//   - the OS reused this exact (node, PID) for a NEWER connector while the incumbent's row
 			//     lingers (its close was lost): a same-connection-slot replacement, ended right here;
+			//   - a different connector on the same node while the incumbent is a pending admission past
+			//     IngestAdmissionWindow: Mist never received that PUSH_REWRITE's answer and refused the
+			//     push, so the incumbent can never become the source (ended here as admission_lapsed);
 			//   - the publisher reached a DIFFERENT node while the incumbent's node has no control
 			//     connection to any replica: the stream moves to the new node (takeover, applied below
 			//     once the tombstone and capacity checks admit the new publisher).
 			// Anything else is a duplicate publisher and is REJECTED to protect the incumbent: a second
-			// publisher while the incumbent's node is connected, a different PID on the same node, an
-			// older/equal trigger time, or an incumbent node whose presence cannot be read.
+			// publisher while the incumbent's node is connected, a different PID on the same node while
+			// the incumbent is projected or inside its admission window, an older/equal trigger time, or
+			// an incumbent node whose presence cannot be read.
 			if incNode != nodeID {
 				if takeover.absent(ctx, incNode) {
 					takeoverSessionID, takeoverNodeID = incID, incNode
@@ -3302,6 +3310,26 @@ func MintIngestSession(ctx context.Context, req IngestSessionRequest, logger log
 				staleStopClaims = claims
 				staleSessionID = incID
 				staleNodeID = incNode
+				staleOffline = OfflineEffectIntent{SetNodeOffline: true, TeardownStream: true, BroadcastOffline: true}
+			} else if incPID != connectorPID {
+				lapsed, lapsedErr := endLapsedPendingIngestSessionTx(ctx, tx, tenantID, internalName, nodeID, inc.StartTriggerUuid, req.PlaybackID)
+				if errors.Is(lapsedErr, sql.ErrNoRows) {
+					outcome = IngestSessionRejectedDuplicate
+					return nil
+				}
+				if lapsedErr != nil {
+					return lapsedErr
+				}
+				claims, claimErr := ClaimDVRStops(ctx, tx, `ingest_generation = $1::uuid AND tenant_id::text = $2`, lapsed.SessionID, tenantID)
+				if claimErr != nil {
+					return fmt.Errorf("claim DVR stop of a lapsed admission: %w", claimErr)
+				}
+				staleStopClaims = claims
+				staleSessionID = incID
+				staleNodeID = incNode
+				// The lapsed session never projected a source, so there is nothing to take offline.
+				staleOffline = OfflineEffectIntent{}
+				lapsedSessionID = incID
 			} else {
 				outcome = IngestSessionRejectedDuplicate
 				return nil
@@ -3331,9 +3359,7 @@ func MintIngestSession(ctx context.Context, req IngestSessionRequest, logger log
 				if revisionErr != nil {
 					return revisionErr
 				}
-				if enqueueErr := enqueueOfflineEffectTx(ctx, tx, tenantID, internalName, staleNodeID, staleSessionID, revision, OfflineEffectIntent{
-					SetNodeOffline: true, TeardownStream: true, BroadcastOffline: true,
-				}); enqueueErr != nil {
+				if enqueueErr := enqueueOfflineEffectTx(ctx, tx, tenantID, internalName, staleNodeID, staleSessionID, revision, staleOffline); enqueueErr != nil {
 					return enqueueErr
 				}
 			}
@@ -3354,17 +3380,16 @@ func MintIngestSession(ctx context.Context, req IngestSessionRequest, logger log
 				activeCount--
 			}
 			if activeCount >= authoritySnapshot.CapacityMaxStreams {
-				// A newer connector on the same (node, PID) proves the old generation is stale even
-				// when the successor cannot be admitted. Retire that generation and its obligations;
-				// rolling this transaction back would resurrect a publisher Mist has already replaced.
+				// A newer connector on the same (node, PID), or a lapsed admission, proves the old
+				// generation is stale even when the successor cannot be admitted. Retire that generation
+				// and its obligations; rolling this transaction back would resurrect a publisher Mist has
+				// already replaced or refused.
 				if staleSessionID != "" {
 					revision, revisionErr := nextSourceRevision(ctx, tx, tenantID, internalName)
 					if revisionErr != nil {
 						return revisionErr
 					}
-					if enqueueErr := enqueueOfflineEffectTx(ctx, tx, tenantID, internalName, staleNodeID, staleSessionID, revision, OfflineEffectIntent{
-						SetNodeOffline: true, TeardownStream: true, BroadcastOffline: true,
-					}); enqueueErr != nil {
+					if enqueueErr := enqueueOfflineEffectTx(ctx, tx, tenantID, internalName, staleNodeID, staleSessionID, revision, staleOffline); enqueueErr != nil {
 						return enqueueErr
 					}
 				}
@@ -3442,6 +3467,16 @@ func MintIngestSession(ctx context.Context, req IngestSessionRequest, logger log
 			"superseded_node_id":    takeoverNodeID,
 			"superseded_generation": takeoverSessionID,
 		}).Info("Ingest takeover: publisher admitted on a new node while the previous node has no control connection; previous session superseded")
+	}
+	if lapsedSessionID != "" {
+		logger.WithFields(logging.Fields{
+			"internal_name":         internalName,
+			"node_id":               nodeID,
+			"ingest_generation":     sessionID,
+			"outcome":               outcome,
+			"superseded_generation": lapsedSessionID,
+			"admission_window":      IngestAdmissionWindow.String(),
+		}).Warn("Ended a pending ingest session whose admission window passed without projection: Mist never received its PUSH_REWRITE answer and refused that push")
 	}
 	// The superseded session's orphaned DVR stop (if any) is durable now — dispatch best-effort.
 	// Only the PID-reuse and takeover supersession paths populate claims.

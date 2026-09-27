@@ -12,6 +12,45 @@ import (
 	"github.com/lib/pq"
 )
 
+const endLapsedPendingIngestSession = `-- name: EndLapsedPendingIngestSession :one
+UPDATE foghorn.ingest_sessions
+SET ended_at = NOW(), ended_at_unix_millis = (EXTRACT(EPOCH FROM NOW()) * 1000)::bigint,
+    ended_reason = 'admission_lapsed'
+WHERE tenant_id = $1::text::uuid
+  AND stream_internal_name = $2
+  AND node_id = $3
+  AND start_trigger_uuid = $4
+  AND ended_at IS NULL AND projection_state = 'pending'
+  AND started_at < NOW() - ($5::bigint * INTERVAL '1 millisecond')
+RETURNING id::text AS session_id, COALESCE(stream_id::text, '')::text AS stream_id
+`
+
+type EndLapsedPendingIngestSessionParams struct {
+	TenantID           string `db:"tenant_id" json:"tenant_id"`
+	StreamInternalName string `db:"stream_internal_name" json:"stream_internal_name"`
+	NodeID             string `db:"node_id" json:"node_id"`
+	ClaimToken         string `db:"claim_token" json:"claim_token"`
+	AdmissionWindowMs  int64  `db:"admission_window_ms" json:"admission_window_ms"`
+}
+
+type EndLapsedPendingIngestSessionRow struct {
+	SessionID string `db:"session_id" json:"session_id"`
+	StreamID  string `db:"stream_id" json:"stream_id"`
+}
+
+func (q *Queries) EndLapsedPendingIngestSession(ctx context.Context, arg EndLapsedPendingIngestSessionParams) (EndLapsedPendingIngestSessionRow, error) {
+	row := q.db.QueryRowContext(ctx, endLapsedPendingIngestSession,
+		arg.TenantID,
+		arg.StreamInternalName,
+		arg.NodeID,
+		arg.ClaimToken,
+		arg.AdmissionWindowMs,
+	)
+	var i EndLapsedPendingIngestSessionRow
+	err := row.Scan(&i.SessionID, &i.StreamID)
+	return i, err
+}
+
 const endSupersededNodeIngestSession = `-- name: EndSupersededNodeIngestSession :one
 UPDATE foghorn.ingest_sessions
 SET ended_at = NOW(), ended_at_unix_millis = (EXTRACT(EPOCH FROM NOW()) * 1000)::bigint,

@@ -15,6 +15,8 @@ SELECT tenant_id::text AS tenant_id, stream_internal_name, node_id,
        start_trigger_uuid, id::text AS generation
 FROM foghorn.ingest_sessions
 WHERE ended_at IS NULL
+  AND (projection_state = 'active'
+       OR started_at >= NOW() - ($1::bigint * INTERVAL '1 millisecond'))
 `
 
 type ListActiveIngestSessionClaimsRow struct {
@@ -26,8 +28,10 @@ type ListActiveIngestSessionClaimsRow struct {
 	Generation         string `db:"generation" json:"generation"`
 }
 
-func (q *Queries) ListActiveIngestSessionClaims(ctx context.Context) ([]ListActiveIngestSessionClaimsRow, error) {
-	rows, err := q.db.QueryContext(ctx, listActiveIngestSessionClaims)
+// A pending session holds its claim only while its admission can still be answered; past the
+// admission window Mist has refused that push, so the claim is left to lapse.
+func (q *Queries) ListActiveIngestSessionClaims(ctx context.Context, admissionWindowMs int64) ([]ListActiveIngestSessionClaimsRow, error) {
+	rows, err := q.db.QueryContext(ctx, listActiveIngestSessionClaims, admissionWindowMs)
 	if err != nil {
 		return nil, err
 	}

@@ -373,7 +373,10 @@ func sessionClaimKey(tenantID, internalName, nodeID, triggerUUID, generation str
 }
 
 // activeIngestSessionClaims maps each open ingest session to the placement claim
-// it holds, keyed by that session's full identity. Cell-scoped administrative scan
+// it holds, keyed by that session's full identity. A pending session counts only
+// inside IngestAdmissionWindow: past it Mist refused that push, and renewing its
+// claim would refuse every later publisher of the stream as a duplicate of a
+// connector that no longer exists. Cell-scoped administrative scan
 // over Foghorn's own schema (the tenant-filter rule's documented exception): the
 // renewal worker reconciles every tenant's placements in one pass, and each row
 // carries its tenant_id, which scopes every downstream renewal RPC.
@@ -381,7 +384,7 @@ func activeIngestSessionClaims(ctx context.Context) (map[string]LocallyPublished
 	if db == nil {
 		return nil, fmt.Errorf("active ingest session claims require the durable session store")
 	}
-	rows, err := foghorndb.New(db).ListActiveIngestSessionClaims(ctx)
+	rows, err := foghorndb.New(db).ListActiveIngestSessionClaims(ctx, IngestAdmissionWindow.Milliseconds())
 	if err != nil {
 		return nil, err
 	}

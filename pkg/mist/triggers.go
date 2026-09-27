@@ -740,6 +740,22 @@ func (t TriggerType) IsBlocking() bool {
 	}
 }
 
+// Mist's HTTP budget for one blocking trigger execution (HTTP::Downloader::post in the FrameWorks
+// Mist fork): each attempt waits BlockingTriggerAttemptTimeout for a response, an attempt that
+// gets none is retried after a 100 ms pause, and every attempt carries the same X-Trigger-UUID.
+// Any HTTP response ends the loop, so a retry follows only silence or a dropped connection. The
+// handler is Helmsman on the same node, so connecting takes no measurable part of the budget.
+const (
+	BlockingTriggerAttempts       = 5
+	BlockingTriggerAttemptTimeout = 5 * time.Second
+	blockingTriggerRetryPause     = 100 * time.Millisecond
+)
+
+// BlockingTriggerLifetime bounds how long after Mist fires a blocking trigger any answer can still
+// reach it. Past it, Mist has applied the trigger's onfail action; for PUSH_REWRITE that is deny,
+// so the connector that asked no longer exists.
+const BlockingTriggerLifetime = BlockingTriggerAttempts * (BlockingTriggerAttemptTimeout + blockingTriggerRetryPause)
+
 // parseTracksFromJSON converts MistServer track JSON data to protobuf StreamTrack messages
 func parseTracksFromJSON(tracksData map[string]any) []*ipcpb.StreamTrack {
 	var tracks []*ipcpb.StreamTrack

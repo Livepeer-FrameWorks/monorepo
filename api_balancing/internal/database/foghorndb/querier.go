@@ -155,6 +155,7 @@ type Querier interface {
 	DeleteVodMetadata(ctx context.Context, artifactHash string) error
 	DequeueThumbnailCleanup(ctx context.Context, objectKey string) error
 	DtshSyncedForArtifact(ctx context.Context, artifactHash string) (bool, error)
+	EndLapsedPendingIngestSession(ctx context.Context, arg EndLapsedPendingIngestSessionParams) (EndLapsedPendingIngestSessionRow, error)
 	EndSupersededNodeIngestSession(ctx context.Context, arg EndSupersededNodeIngestSessionParams) (string, error)
 	EndSupersededPIDIngestSession(ctx context.Context, arg EndSupersededPIDIngestSessionParams) error
 	EnqueueAdmissionEffect(ctx context.Context, arg EnqueueAdmissionEffectParams) error
@@ -378,7 +379,9 @@ type Querier interface {
 	ListActiveClips(ctx context.Context) ([]ListActiveClipsRow, error)
 	ListActiveDVRChapterPolicies(ctx context.Context) ([]ListActiveDVRChapterPoliciesRow, error)
 	ListActiveDVRRecordingNodes(ctx context.Context, artifactHash string) ([]string, error)
-	ListActiveIngestSessionClaims(ctx context.Context) ([]ListActiveIngestSessionClaimsRow, error)
+	// A pending session holds its claim only while its admission can still be answered; past the
+	// admission window Mist has refused that push, so the claim is left to lapse.
+	ListActiveIngestSessionClaims(ctx context.Context, admissionWindowMs int64) ([]ListActiveIngestSessionClaimsRow, error)
 	ListActiveObjectKeyBackfillRows(ctx context.Context, arg ListActiveObjectKeyBackfillRowsParams) ([]ListActiveObjectKeyBackfillRowsRow, error)
 	ListActivePushTargetActivationsForNodeRequeue(ctx context.Context, arg ListActivePushTargetActivationsForNodeRequeueParams) ([]ListActivePushTargetActivationsForNodeRequeueRow, error)
 	ListAdminArtifacts(ctx context.Context, limit int32) ([]ListAdminArtifactsRow, error)

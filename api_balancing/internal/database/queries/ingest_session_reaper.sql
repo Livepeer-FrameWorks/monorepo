@@ -58,6 +58,18 @@ WHERE tenant_id = sqlc.arg(tenant_id)::text::uuid
   AND stream_internal_name = sqlc.arg(stream_internal_name)
   AND start_trigger_uuid = sqlc.arg(claim_token);
 
+-- name: EndLapsedPendingIngestSession :one
+UPDATE foghorn.ingest_sessions
+SET ended_at = NOW(), ended_at_unix_millis = (EXTRACT(EPOCH FROM NOW()) * 1000)::bigint,
+    ended_reason = 'admission_lapsed'
+WHERE tenant_id = sqlc.arg(tenant_id)::text::uuid
+  AND stream_internal_name = sqlc.arg(stream_internal_name)
+  AND node_id = sqlc.arg(node_id)
+  AND start_trigger_uuid = sqlc.arg(claim_token)
+  AND ended_at IS NULL AND projection_state = 'pending'
+  AND started_at < NOW() - (sqlc.arg(admission_window_ms)::bigint * INTERVAL '1 millisecond')
+RETURNING id::text AS session_id, COALESCE(stream_id::text, '')::text AS stream_id;
+
 -- name: ListNeverProjectedIngestSessions :many
 SELECT id::text AS session_id, tenant_id::text AS tenant_id, stream_internal_name,
        start_trigger_uuid
