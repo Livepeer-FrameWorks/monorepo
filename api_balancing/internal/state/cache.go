@@ -89,7 +89,9 @@ func (sm *StreamStateManager) handleStateChangelogEntry(id string, change StateC
 
 // mergeIncomingNode reconciles a peer-published (or rehydrated) node snapshot
 // with local knowledge before it replaces the local entry. Snapshots replace
-// wholesale, with three exceptions:
+// wholesale, with these exceptions:
+//   - heartbeat, listener and metrics facts keep the newer observation per
+//     stamp (keepNewerNodeObservations);
 //   - identity (ClusterID/TenantID) merges ignore-empty; a peer that never
 //     resolved identity must not erase ours;
 //   - OperationalMode is multi-writer with its own changelog entity
@@ -133,6 +135,49 @@ func mergeIncomingNode(incoming, local *NodeState) {
 	// artifact envelope, so an unfenced node heartbeat snapshot must not overwrite them with stale data.
 	incoming.Artifacts = local.Artifacts
 	incoming.ArtifactInventoryReady = local.ArtifactInventoryReady
+	keepNewerNodeObservations(incoming, local)
+}
+
+// keepNewerNodeObservations keeps, per observation stamp, whichever snapshot
+// observed later. A node's heartbeat, listener and metrics reports each stamp
+// their own facts; a replicated snapshot can be older than what this replica
+// already holds (it was serialized before a newer report landed here, or by a
+// replica whose copy was behind), and must not move any of them backwards.
+func keepNewerNodeObservations(incoming, local *NodeState) {
+	// A zero heartbeat is a disconnect, which stands when it happened after
+	// the heartbeat this replica holds.
+	heartbeatOlder := local.LastHeartbeat.After(incoming.LastHeartbeat) &&
+		(!incoming.LastHeartbeat.IsZero() || !incoming.LastUpdate.After(local.LastHeartbeat))
+	if heartbeatOlder {
+		incoming.LastHeartbeat = local.LastHeartbeat
+		incoming.IsHealthy = local.IsHealthy
+		incoming.IsStale = local.IsStale
+	}
+	// Listeners observed for another address are not evidence for this one.
+	if incoming.BaseURL == local.BaseURL && local.OutputsObservedAt.After(incoming.OutputsObservedAt) {
+		incoming.OutputsObservedAt = local.OutputsObservedAt
+		incoming.Outputs = local.Outputs
+		incoming.OutputsRaw = local.OutputsRaw
+	}
+	if local.MetricsObservedAt.After(incoming.MetricsObservedAt) {
+		incoming.MetricsObservedAt = local.MetricsObservedAt
+		incoming.CPU = local.CPU
+		incoming.RAMMax = local.RAMMax
+		incoming.RAMCurrent = local.RAMCurrent
+		incoming.UpSpeed = local.UpSpeed
+		incoming.DownSpeed = local.DownSpeed
+		incoming.BWLimit = local.BWLimit
+		incoming.CapIngest = local.CapIngest
+		incoming.CapEdge = local.CapEdge
+		incoming.CapStorage = local.CapStorage
+		incoming.CapProcessing = local.CapProcessing
+		incoming.Roles = local.Roles
+		incoming.StorageCapacityBytes = local.StorageCapacityBytes
+		incoming.StorageUsedBytes = local.StorageUsedBytes
+		incoming.ProcessingClasses = local.ProcessingClasses
+		incoming.DiskTotalBytes = local.DiskTotalBytes
+		incoming.DiskUsedBytes = local.DiskUsedBytes
+	}
 }
 
 func (sm *StreamStateManager) rehydrateFromRedis(store *RedisStateStore) error {

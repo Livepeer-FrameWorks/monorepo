@@ -153,6 +153,58 @@ func TestNodeMode_WriteThroughAndRehydrate(t *testing.T) {
 	}
 }
 
+// A replicated snapshot serialized before this replica's newer heartbeat,
+// listener and metrics reports landed must not move those facts backwards.
+// The dev-stack refusal "selected destination is unavailable" came from a
+// replica whose node copy regressed this way while the node reported every 10s.
+func TestOlderReplicatedSnapshotCannotRegressNewerObservations(t *testing.T) {
+	sm := ResetDefaultManagerForTests()
+	t.Cleanup(sm.Shutdown)
+	now := time.Now()
+	older := now.Add(-40 * time.Second)
+	sm.mu.Lock()
+	sm.nodes["node-1"] = &NodeState{NodeID: "node-1", BaseURL: "https://edge-1", IsHealthy: true, CapEdge: true,
+		LastHeartbeat: now, OutputsObservedAt: now, MetricsObservedAt: now, CPU: 12, BWLimit: 1000, RAMMax: 1024,
+		Outputs: map[string]any{"HLS": "https://HOST/hls/$/index.m3u8"}, OutputsRaw: `{"HLS":"https://HOST/hls/$/index.m3u8"}`}
+	sm.mu.Unlock()
+
+	stale := NodeState{NodeID: "node-1", BaseURL: "https://edge-1", IsHealthy: false, IsStale: true, CapEdge: false,
+		LastHeartbeat: older, OutputsObservedAt: older, MetricsObservedAt: older, CPU: 99, BWLimit: 1, RAMMax: 1,
+		LastUpdate: older, ProbeVerified: true}
+	payload, _ := json.Marshal(stale)
+	sm.handleStateChangelogEntry("60-0", StateChange{
+		InstanceID: "peer", Entity: StateEntityNode, Operation: StateOpUpsert, NodeID: "node-1", Payload: payload,
+	})
+
+	ns := sm.GetNodeState("node-1")
+	if ns == nil {
+		t.Fatal("node missing after replicated snapshot")
+	}
+	if !ns.LastHeartbeat.Equal(now) || !ns.IsHealthy || ns.IsStale {
+		t.Fatalf("heartbeat regressed: at=%s healthy=%v stale=%v", ns.LastHeartbeat, ns.IsHealthy, ns.IsStale)
+	}
+	if !ns.OutputsObservedAt.Equal(now) || ns.Outputs["HLS"] == nil {
+		t.Fatalf("listener observation regressed: at=%s outputs=%v", ns.OutputsObservedAt, ns.Outputs)
+	}
+	if !ns.MetricsObservedAt.Equal(now) || ns.CPU != 12 || !ns.CapEdge || ns.BWLimit != 1000 {
+		t.Fatalf("metrics regressed: at=%s cpu=%v edge=%v bw=%v", ns.MetricsObservedAt, ns.CPU, ns.CapEdge, ns.BWLimit)
+	}
+	if !ns.ProbeVerified {
+		t.Fatal("a fact outside the stamped groups was not taken from the snapshot")
+	}
+
+	// A disconnect published after the heartbeat this replica holds still wins.
+	disconnect := NodeState{NodeID: "node-1", BaseURL: "https://edge-1", IsStale: true, LastUpdate: now.Add(time.Second),
+		OutputsObservedAt: now, MetricsObservedAt: now}
+	payload, _ = json.Marshal(disconnect)
+	sm.handleStateChangelogEntry("61-0", StateChange{
+		InstanceID: "peer", Entity: StateEntityNode, Operation: StateOpUpsert, NodeID: "node-1", Payload: payload,
+	})
+	if ns = sm.GetNodeState("node-1"); ns == nil || !ns.LastHeartbeat.IsZero() || ns.IsHealthy || !ns.IsStale {
+		t.Fatalf("newer disconnect was not applied: %+v", ns)
+	}
+}
+
 // AddBandwidth/PendingRedirects are local-only soft state: peer snapshots
 // must neither clobber the local penalty nor seed one on a fresh replica.
 func TestAddBandwidth_PeerSnapshotDoesNotClobberLocalPenalty(t *testing.T) {
@@ -176,7 +228,7 @@ func TestAddBandwidth_PeerSnapshotDoesNotClobberLocalPenalty(t *testing.T) {
 
 	// Peer snapshot with zero penalty and changed CPU: CPU applies, the
 	// local penalty (and the json:"-" scoring inputs) survive.
-	snap := NodeState{NodeID: "node-1", BaseURL: "node-1", OperationalMode: NodeModeNormal, CPU: 77, BWLimit: 1024 * 1024, IsHealthy: true, LastUpdate: time.Now()}
+	snap := NodeState{NodeID: "node-1", BaseURL: "node-1", OperationalMode: NodeModeNormal, CPU: 77, BWLimit: 1024 * 1024, IsHealthy: true, LastUpdate: time.Now(), MetricsObservedAt: time.Now()}
 	payload, _ := json.Marshal(snap)
 	sm.handleStateChangelogEntry("50-0", StateChange{
 		InstanceID: "peer", Entity: StateEntityNode, Operation: StateOpUpsert, NodeID: "node-1", Payload: payload,

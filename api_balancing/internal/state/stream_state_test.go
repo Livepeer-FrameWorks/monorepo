@@ -85,7 +85,10 @@ func TestReconcileNodeStreamPresenceClearsMissingStreams(t *testing.T) {
 	}
 }
 
-func TestVirtualViewerAggregatePenaltyPersistsToRedis(t *testing.T) {
+// Virtual viewers are this instance's routing state. Their operations change
+// the local penalty and never publish the node snapshot, which would carry
+// this instance's copy of the owner's heartbeat and listener facts.
+func TestVirtualViewerPenaltyStaysLocal(t *testing.T) {
 	mr := miniredis.RunT(t)
 	client := goredis.NewClient(&goredis.Options{Addr: mr.Addr()})
 	t.Cleanup(func() { _ = client.Close() })
@@ -103,35 +106,28 @@ func TestVirtualViewerAggregatePenaltyPersistsToRedis(t *testing.T) {
 	if viewerID == "" {
 		t.Fatal("expected viewer ID")
 	}
-
-	nodes, err := store.GetAllNodes()
-	if err != nil {
-		t.Fatalf("GetAllNodes after create: %v", err)
+	if node := sm.GetNodeState(nodeID); node == nil || node.PendingRedirects != 1 {
+		t.Fatalf("local pending redirect missing: %+v", node)
 	}
-	node := nodes[nodeID]
-	if node == nil {
-		t.Fatal("expected node state in Redis after virtual viewer create")
+	secondID, created := sm.EnsurePendingVirtualViewer(nodeID, streamName, "203.0.113.11")
+	if !created || secondID == "" {
+		t.Fatal("expected a second pending viewer")
 	}
-	if node.PendingRedirects != 1 {
-		t.Fatalf("expected pending redirects to persist, got %d", node.PendingRedirects)
-	}
-	if node.AddBandwidth == 0 {
-		t.Fatal("expected AddBandwidth penalty to persist")
-	}
-
 	if !sm.ConfirmVirtualViewerByID(viewerID, nodeID, streamName, "203.0.113.10", "mist-session-1") {
 		t.Fatal("expected virtual viewer confirm")
 	}
-	nodes, err = store.GetAllNodes()
+	sm.DisconnectVirtualViewerBySessionID("mist-session-1", nodeID, streamName, "203.0.113.10")
+	sm.ReconcileVirtualViewers(nodeID, 1, 1000)
+
+	nodes, err := store.GetAllNodes()
 	if err != nil {
-		t.Fatalf("GetAllNodes after confirm: %v", err)
+		t.Fatalf("GetAllNodes: %v", err)
 	}
-	node = nodes[nodeID]
-	if node.PendingRedirects != 0 {
-		t.Fatalf("expected pending redirects to clear after confirm, got %d", node.PendingRedirects)
+	if node := nodes[nodeID]; node != nil {
+		t.Fatalf("virtual viewer operations published the node snapshot: %+v", node)
 	}
-	if node.AddBandwidth != 0 {
-		t.Fatalf("expected AddBandwidth penalty to clear after confirm, got %d", node.AddBandwidth)
+	if node := sm.GetNodeState(nodeID); node == nil || node.PendingRedirects != 1 {
+		t.Fatalf("local pending redirect count = %+v, want the unconfirmed viewer", node)
 	}
 }
 

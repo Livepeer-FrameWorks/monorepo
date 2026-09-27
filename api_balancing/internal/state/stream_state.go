@@ -1146,18 +1146,6 @@ func (sm *StreamStateManager) persistNodeModeWriteThrough(nodeID string, payload
 	sm.publishStateChange(StateChange{InstanceID: sm.instanceID, Entity: StateEntityNodeMode, Operation: StateOpUpsert, NodeID: nodeID, Payload: payload})
 }
 
-func (sm *StreamStateManager) nodePayloadLocked(nodeID string) json.RawMessage {
-	n := sm.nodes[nodeID]
-	if n == nil {
-		return nil
-	}
-	payload, err := json.Marshal(n)
-	if err != nil {
-		return nil
-	}
-	return payload
-}
-
 func (sm *StreamStateManager) persistStreamWriteThrough(internalName string, payload json.RawMessage) {
 	_ = sm.persistStreamWriteThroughContext(context.Background(), internalName, payload) //nolint:errcheck // non-effect path logs internally
 }
@@ -1259,19 +1247,12 @@ func (sm *StreamStateManager) UpdateUserConnection(internalName, nodeID, tenantI
 
 	streamPayload, _ := json.Marshal(union)
 	instPayload, _ := json.Marshal(inst)
-	var nodePayload json.RawMessage
-	if delta > 0 {
-		if n := sm.nodes[nodeID]; n != nil {
-			nodePayload, _ = json.Marshal(n)
-		}
-	}
 	sm.mu.Unlock()
 
+	// The bandwidth penalty is local routing state, like virtual viewers; the
+	// node snapshot is not republished for it.
 	sm.persistStreamWriteThrough(internalName, streamPayload)
 	sm.persistStreamInstanceWriteThrough(internalName, nodeID, instPayload)
-	if nodePayload != nil {
-		sm.persistNodeWriteThrough(nodeID, nodePayload)
-	}
 }
 
 // addViewerBandwidthPenalty implements bandwidth penalty tracking when a viewer connects (must hold lock)
@@ -4426,16 +4407,18 @@ type ArtifactSyncInfo struct {
 // Virtual Viewer Lifecycle Methods (Option B: Full Per-Session Tracking)
 // =============================================================================
 
+// Virtual viewers and the AddBandwidth/PendingRedirects they derive are this
+// instance's own routing state. Their operations never publish the node
+// snapshot: receivers drop those fields (mergeIncomingNode), and a snapshot
+// published from here would carry this instance's copy of the facts the node
+// owner reports, which can be older than what peers already hold.
+
 // CreateVirtualViewer creates a new PENDING virtual viewer when a redirect is issued.
 // Returns the viewer ID for correlation.
 func (sm *StreamStateManager) CreateVirtualViewer(nodeID, streamName, clientIP string) string {
 	sm.mu.Lock()
-	viewerID := sm.createVirtualViewerLocked(nodeID, streamName, clientIP)
-	nodePayload := sm.nodePayloadLocked(nodeID)
-	sm.mu.Unlock()
-
-	sm.persistNodeWriteThrough(nodeID, nodePayload)
-	return viewerID
+	defer sm.mu.Unlock()
+	return sm.createVirtualViewerLocked(nodeID, streamName, clientIP)
 }
 
 // EnsurePendingVirtualViewer creates a PENDING virtual viewer unless this client already has one.
@@ -4454,10 +4437,7 @@ func (sm *StreamStateManager) EnsurePendingVirtualViewer(nodeID, streamName, cli
 	}
 
 	viewerID := sm.createVirtualViewerLocked(nodeID, streamName, clientIP)
-	nodePayload := sm.nodePayloadLocked(nodeID)
 	sm.mu.Unlock()
-
-	sm.persistNodeWriteThrough(nodeID, nodePayload)
 	return viewerID, true
 }
 
@@ -4515,11 +4495,7 @@ func (sm *StreamStateManager) StartVirtualViewerByID(viewerID, nodeID, streamNam
 			viewer.NodeID == nodeID &&
 			viewer.StreamName == streamName {
 			started := sm.activateVirtualViewerLocked(node, viewer)
-			nodePayload := sm.nodePayloadLocked(nodeID)
 			sm.mu.Unlock()
-			if started {
-				sm.persistNodeWriteThrough(nodeID, nodePayload)
-			}
 			return viewer.ID, started
 		}
 	}
@@ -4542,11 +4518,7 @@ func (sm *StreamStateManager) StartVirtualViewerByID(viewerID, nodeID, streamNam
 	}
 	if oldestPending != nil {
 		started := sm.activateVirtualViewerLocked(node, oldestPending)
-		nodePayload := sm.nodePayloadLocked(nodeID)
 		sm.mu.Unlock()
-		if started {
-			sm.persistNodeWriteThrough(nodeID, nodePayload)
-		}
 		return oldestPending.ID, started
 	}
 
@@ -4707,11 +4679,7 @@ func (sm *StreamStateManager) ConfirmVirtualViewerByID(viewerID, nodeID, streamN
 	}
 
 	confirmed := sm.activateVirtualViewerLocked(node, matchedViewer)
-	nodePayload := sm.nodePayloadLocked(nodeID)
 	sm.mu.Unlock()
-	if confirmed {
-		sm.persistNodeWriteThrough(nodeID, nodePayload)
-	}
 	return confirmed
 }
 
@@ -4799,9 +4767,7 @@ func (sm *StreamStateManager) DisconnectVirtualViewerBySessionID(mistSessionID, 
 					node.AddBandwidth = 0
 				}
 				sm.recomputeNodeScoresLocked(node)
-				nodePayload := sm.nodePayloadLocked(nodeID)
 				sm.mu.Unlock()
-				sm.persistNodeWriteThrough(nodeID, nodePayload)
 				return false
 			}
 		}
@@ -4839,10 +4805,7 @@ func (sm *StreamStateManager) ReconcileVirtualViewers(nodeID string, realTotalCo
 
 	// 5. Recompute scores
 	sm.recomputeNodeScoresLocked(node)
-	nodePayload := sm.nodePayloadLocked(nodeID)
 	sm.mu.Unlock()
-
-	sm.persistNodeWriteThrough(nodeID, nodePayload)
 }
 
 // timeoutStalePendingViewersLocked marks old PENDING viewers as ABANDONED (must hold lock)
