@@ -60,7 +60,7 @@ func TestHelmsmanDefaultsMatchLegacyReaders(t *testing.T) {
 		"HELMSMAN_MANAGEMENT_PORT":      {cfg.ManagementPort, strconv.Itoa(servicedefs.HelmsmanManagementPort)},
 		"HELMSMAN_MANAGEMENT_BIND_ADDR": {cfg.ManagementBindAddr, "127.0.0.1"},
 		"HELMSMAN_BIND_ADDR":            {cfg.PublicBindAddr, ""},
-		"GIN_MODE":                      {cfg.GinMode, "debug"},
+		"GIN_MODE":                      {cfg.GinMode, "release"},
 		"HELMSMAN_OPERATIONAL_MODE":     {cfg.RequestedOperationalMode, "normal"},
 		"HELMSMAN_WEBHOOK_URL":          {cfg.MistWebhookBaseURL, "http://localhost:18007"},
 		"HELMSMAN_RELAY_BASE_URL":       {cfg.RelayBaseURL, "http://127.0.0.1:18007"},
@@ -80,6 +80,9 @@ func TestHelmsmanDefaultsMatchLegacyReaders(t *testing.T) {
 		if pair[0] != pair[1] {
 			t.Errorf("%s = %q, want %q", key, pair[0], pair[1])
 		}
+	}
+	if !cfg.RouterRuntime().Release() {
+		t.Error("Helmsman's router must run in release mode unless GIN_MODE says otherwise")
 	}
 	if got := cfg.BlockingGrace(); got != 2000 {
 		t.Errorf("BlockingGrace() = %d, want 2000", got)

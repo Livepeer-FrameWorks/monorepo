@@ -182,7 +182,7 @@ func main() {
 		Health:  healthChecker,
 		Ready:   readiness,
 		Metrics: metricsCollector,
-		Runtime: appCfg.HTTPRuntime,
+		Runtime: appCfg.RouterRuntime(),
 	})
 	managementRouter := server.NewServiceRouter(server.RouterSpec{
 		Service: "helmsman-management",
@@ -190,7 +190,7 @@ func main() {
 		Health:  healthChecker,
 		Ready:   readiness,
 		Metrics: metricsCollector,
-		Runtime: appCfg.HTTPRuntime,
+		Runtime: appCfg.RouterRuntime(),
 	})
 
 	// Operator and diagnostic routes stay on the loopback-only management

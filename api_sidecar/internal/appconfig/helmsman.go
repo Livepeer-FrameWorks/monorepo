@@ -94,9 +94,11 @@ type EdgeRuntime struct {
 //configref:service helmsman cmd=cmd/helmsman
 type Helmsman struct {
 	config.HTTPListen
-	config.HTTPRuntime
 	config.TolerantLogging
 	EdgeRuntime
+
+	GinMode        string   `env:"GIN_MODE" default:"release" desc:"Router mode. Helmsman runs on media nodes, so release is the default: Gin release mode, with CORS restricted to ALLOWED_ORIGINS. debug runs the router in development mode." introduced:"v0.3.0"`
+	AllowedOrigins []string `env:"ALLOWED_ORIGINS" desc:"Comma-separated browser origins accepted by CORS when GIN_MODE is release." introduced:"v0.3.0"`
 
 	NodeID             string `env:"NODE_ID" required:"true" desc:"Node identity registered with Foghorn and stamped on triggers. A persisted config seed that belongs to another node is refused." introduced:"v0.3.0"`
 	FoghornControlAddr string `env:"FOGHORN_CONTROL_ADDR" required:"true" desc:"Foghorn control-stream gRPC address of the node's cell: one host:port, or a comma-separated list of the cell's Foghorn instances. Names are resolved before every dial and each address they resolve to is an instance. A refused, lost, or going-away connection moves to the next instance at once; backoff applies only after every instance failed in a row. The node keeps serving throughout." introduced:"v0.3.0"`
@@ -158,6 +160,11 @@ func IsLoopbackBind(bindAddr string) bool {
 }
 
 // BlockingGrace returns HELMSMAN_BLOCKING_GRACE_MS in milliseconds.
+// RouterRuntime is the router configuration Helmsman's HTTP listeners run with.
+func (c *Helmsman) RouterRuntime() config.HTTPRuntime {
+	return config.HTTPRuntime{GinMode: c.GinMode, AllowedOrigins: c.AllowedOrigins}
+}
+
 func (c *Helmsman) BlockingGrace() int {
 	return intOr(c.BlockingGraceMs, fallbackBlockingGraceMs)
 }

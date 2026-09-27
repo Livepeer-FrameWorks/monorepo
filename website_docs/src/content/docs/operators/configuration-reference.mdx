@@ -760,8 +760,6 @@ Read by `api_sidecar/cmd/helmsman`.
 | Variable | Type | Default | Notes | Since | Description |
 | --- | --- | --- | --- | --- | --- |
 | `PORT` | string | `18007` |  | v0.3.0 | TCP port for the HTTP listener that serves health, readiness, metrics, and HTTP APIs. |
-| `GIN_MODE` | string | `debug` |  | v0.3.0 | Router mode. release enables Gin release mode and restricts CORS to ALLOWED_ORIGINS; any other value runs the router in development mode. |
-| `ALLOWED_ORIGINS` | list |  |  | v0.3.0 | Comma-separated browser origins accepted by CORS when GIN_MODE is release. |
 | `LOG_LEVEL` | string | `info` |  | v0.3.0 | Log level: debug, info, warn, or error. Unknown values keep the current log level. |
 | `MIST_API_USERNAME` | string | `test` |  | v0.3.0 | MistServer API user for every Helmsman MistServer API client. |
 | `MIST_API_PASSWORD` | string | `test` | secret | v0.3.0 | Password for MIST_API_USERNAME. |
@@ -804,6 +802,8 @@ Read by `api_sidecar/cmd/helmsman`.
 | `CADDY_VERSION` | string |  |  | v0.3.0 | Caddy version reported to Foghorn when no component version has been recorded on disk. |
 | `CONFIG_SCHEMA_VERSION` | string |  |  | v0.3.0 | Edge configuration schema version reported to Foghorn when no version has been recorded on disk. |
 | `FRAMEWORKS_CONFIG_SCHEMA_VERSION` | string |  |  | v0.3.0 | Edge configuration schema version reported to Foghorn when CONFIG_SCHEMA_VERSION and the recorded versions are empty. |
+| `GIN_MODE` | string | `release` |  | v0.3.0 | Router mode. Helmsman runs on media nodes, so release is the default: Gin release mode, with CORS restricted to ALLOWED_ORIGINS. debug runs the router in development mode. |
+| `ALLOWED_ORIGINS` | list |  |  | v0.3.0 | Comma-separated browser origins accepted by CORS when GIN_MODE is release. |
 | `NODE_ID` | string |  | required | v0.3.0 | Node identity registered with Foghorn and stamped on triggers. A persisted config seed that belongs to another node is refused. |
 | `FOGHORN_CONTROL_ADDR` | string |  | required | v0.3.0 | Foghorn control-stream gRPC address of the node's cell: one host:port, or a comma-separated list of the cell's Foghorn instances. Names are resolved before every dial and each address they resolve to is an instance. A refused, lost, or going-away connection moves to the next instance at once; backoff applies only after every instance failed in a row. The node keeps serving throughout. |
 | `MISTSERVER_URL` | string |  | required | v0.3.0 | Local MistServer API base URL used for the health check, the Mist admin proxy, stream control, and DTSH generation. |
