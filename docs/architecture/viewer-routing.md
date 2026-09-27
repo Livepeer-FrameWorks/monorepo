@@ -11,6 +11,7 @@ For operator-level documentation, see `website_docs/.../operators/architecture.m
 - HTTP handlers: `api_balancing/internal/handlers`
 - gRPC server: `api_balancing/internal/grpc`
 - Playback resolution: `api_balancing/internal/control`
+- Edge playback grants: `api_balancing/internal/triggers/playback_grant.go`, `api_balancing/internal/control/playback_grant.go`, `api_sidecar/internal/playbackgrant`
 - Geo bucketing: `api_balancing/internal/geo`
 - Weight config: `api_balancing/cmd/foghorn/main.go` (`CPU_WEIGHT`, `RAM_WEIGHT`, `BANDWIDTH_WEIGHT`, `GEO_WEIGHT`)
 
@@ -100,6 +101,76 @@ denial, tombstone, hard expiry, or missing required sealed policy material never
 falls back to a central allow. A transient local read failure or inconsistent
 row is not an authority decision; the request may use the connected evaluator
 when it is available and otherwise returns unavailable.
+
+### Edge playback grants
+
+Mist fires `PLAY_REWRITE` for every request of an HTTP viewer: the HLS master
+playlist, each variant playlist, and every segment and part, on fresh and
+keep-alive connections alike. Foghorn decides the first request of a session and
+the session's `USER_NEW`; the edge answers the session's later requests itself.
+
+- **Grant.** When Foghorn admits a viewer on ready signed authority, it sends the
+  serving edge a `PlaybackGrant` for the stream over the control stream, before
+  the `PLAY_REWRITE` answer. The grant maps the requested names (playback ID,
+  runtime name) to the Mist stream, carries the edge-checkable policy (public;
+  JWT allowed kids, active keys, audiences and claims; allowed origins; webhook
+  and connected-only policies as "Foghorn decides every new session"), the object
+  and tenant authority versions, and `valid_until`, the earlier of the two
+  authorities' hard validity. A revoked signing key is absent from the active
+  keys. Foghorn sends it once per stream per control connection
+  (`control.OfferPlaybackGrant`) and again whenever an applied authority changes
+  it (`HandleMediaAuthorityApply` → `pushPlaybackGrantUpdates`, relayed to the
+  replica holding the edge). Helmsman fetches a grant itself
+  (`PlaybackGrantRequest`, one per stream) after a restart, on every control
+  reconnect, when an admission arrives without one, and before one expires.
+  A cell with no ready signed authority for the stream issues no grant, and the
+  edge keeps asking Foghorn per request.
+- **Admitted sessions.** Helmsman's session table (`internal/playbackgrant`,
+  memory only) keys a session by Mist's session token (`tkn`, which Mist puts on
+  every playlist and segment URL), the viewer address, the Mist stream and the
+  protocol. A `PLAY_REWRITE` that carries a known session's token from its
+  address, for its stream and protocol, under a valid grant is answered locally,
+  with Foghorn up or down. Anything else asks Foghorn: the first request (Mist
+  hands out the token in its answer), another address or token, a request with a
+  playback-redirect correlation id (`fwcid`), which confirms the `/play` pending
+  viewer, and a cookie or bearer token, which `PLAY_REWRITE` cannot see. A
+  session ends at `USER_END`, after three idle minutes, or when its grant
+  expires. On the dev stack (scenario 17) one HLS viewer's 21 requests reach
+  Foghorn with one `PLAY_REWRITE`, plus the session's `USER_NEW`, instead of one
+  `PLAY_REWRITE` per request.
+- **New sessions.** While Foghorn can be asked, every new session is its
+  decision: `PLAY_REWRITE` carries placement admission, billing, the virtual
+  viewer that confirms a `/play` redirect, and analytics; `USER_NEW` carries the
+  policy, placement final admission, the free-tier load gate and the tenant
+  viewer cap. Only when Foghorn cannot be reached does the edge check a new
+  session against a held, unexpired grant: public streams are admitted, JWT
+  streams on the token (signature with the grant's keys, allowed kid, `exp`/`nbf`,
+  audience, claims) and origin, webhook streams are refused, and a stream with no
+  grant is refused. Sessions admitted this way are sent back to Foghorn (Mist
+  session invalidation, which re-runs `USER_NEW`) once the control stream
+  returns, spread over 30 seconds, so Foghorn accounts and re-decides them.
+- **Changes without a herd.** A renewal is one grant per stream per edge and
+  extends all its sessions. A policy change or key revocation is a new grant:
+  Helmsman re-checks each held session against the facts it was admitted with
+  (the JWT judged as of admission, so a policy change does not also enforce token
+  expiry mid-session) and invalidates in Mist only the sessions that now fail;
+  their re-run `USER_NEW` is refused on the edge. A webhook policy change, or a
+  playback-auth invalidation of a webhook stream, re-asks Foghorn per session,
+  spread over 30 seconds and coalesced per session; sessions keep playing until
+  answered. Foghorn's `invalidate_sessions` for a stream the edge holds a grant
+  for becomes one grant fetch and a local re-check instead of a `USER_NEW` for
+  every session. A revoked grant (tombstone, tenant or billing denial) sends
+  every session of the stream back to Mist's `USER_NEW`, refused on the edge.
+  Tenant suspension's `stop_sessions` also drops the stream's grant.
+- **Restart.** Helmsman rebuilds the table from Mist's live session list (session
+  id, address, stream, protocol) and fetches one grant per stream. Mist's list
+  has no token, so a rebuilt session binds to the first request from its address
+  on its stream and protocol (a JWT stream checks the token first); two live
+  sessions from one address leave the choice to Foghorn.
+
+Placement is decided when a session is admitted. A later placement revision
+applies to new sessions; an established session keeps its node until it ends or
+its grant is revoked, just as Mist runs `USER_NEW` once per session.
 
 Artifact placement receives the already-resolved signed hash, origin, tenant,
 and grant envelope. It does not call Commodore again for optional analytics or

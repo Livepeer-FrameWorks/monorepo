@@ -57,7 +57,7 @@ Mist supplies `X-Trigger-UUID` and `X-Trigger-UnixMillis`. Helmsman captures the
 
 `PLAY_REWRITE`, `USER_NEW`, `STREAM_SOURCE` and optional `CONN_PLAY` are current admission/source reads, not entries in that mutation replay cache. Every delivery rechecks authority, including a retry with the same UUID. The authenticated node registration must remain current before and after the decision. Existing session/correlation identifiers deduplicate viewer accounting independently of permission.
 
-Helmsman never replays an unsigned `PLAY_REWRITE` mapping during a Foghorn outage. A previous stream-name result carries neither this viewer's geography nor current policy permission. New public rewrites return unavailable when no Foghorn can decide, and Mist applies `onfail: deny`. This does not terminate established sessions. Signed local authority and reconnect/failover belong in Foghorn; node-side stream-name caching is not an outage authorization mechanism.
+Helmsman never replays a stream-name mapping: a previous result for the same name carries neither this viewer's geography nor current policy permission. It answers `PLAY_REWRITE` itself only for a session Foghorn admitted on this edge (the request carries that session's token from its address, for its stream and protocol) and only under the stream's unexpired playback grant, which Foghorn issues from signed authority; see [edge playback grants](viewer-routing.md#edge-playback-grants). A new session goes to Foghorn. When no Foghorn can decide, a new session of a public or JWT stream is checked against the held grant, and any other new session returns unavailable, so Mist applies `onfail: deny`. An edge without a grant has no authority of its own.
 
 ## Asynchronous triggers
 

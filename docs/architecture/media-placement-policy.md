@@ -1833,8 +1833,9 @@ This is a transport contract, not cryptographic policy or two-cell placement pro
 not gate every playlist metadata response: final admission must also address pre-session metadata
 and source-start behavior; a successful `USER_NEW` test alone cannot establish that boundary.
 
-When viewer placement admission is configured, `PLAY_REWRITE` checks the same exact-destination
-adapter before returning the resolved stream name or starting correlated viewer accounting.
+When viewer placement admission is configured, a session's first `PLAY_REWRITE` checks the same
+exact-destination adapter before returning the resolved stream name or starting correlated viewer
+accounting.
 Both pre-source and final admission bind the returned protocol to the trusted Mist connector;
 an HLS connection cannot consume a WebRTC approval. The whole placement-enabled rewrite has a
 three-second budget. Missing identity, unknown metadata-only protocol evidence and unavailable
@@ -1859,8 +1860,12 @@ admission or the fleet attestation that gates issuance. The destination startup 
 installs this reuse for its policy gate; other independently assembled transports must share an
 observation cache explicitly.
 
-Helmsman does not recover public rewrites from an unsigned stream-name cache. Unavailable Foghorn
-means unavailable new admission, not replay of another viewer's mapping. Foghorn likewise excludes
+Helmsman does not recover public rewrites from a stream-name cache. Placement admission runs on a
+session's first `PLAY_REWRITE` and on its `USER_NEW`; the session's later requests are answered on
+the edge from Foghorn's playback grant ([edge playback grants](viewer-routing.md#edge-playback-grants)),
+so a later placement revision applies to new sessions. While Foghorn is unavailable, a new session
+is admitted only on a held grant for a public or JWT stream and is re-decided by Foghorn once the
+edge reconnects; replay of another viewer's mapping never admits anyone. Foghorn likewise excludes
 `PLAY_REWRITE` and `USER_NEW` from generic completed-trigger replay: retries recheck current policy
 and the authenticated registration before and after evaluation. This does not replace signed
 outage authority, HA failover, or session/correlation-based deduplication of accounting effects.
