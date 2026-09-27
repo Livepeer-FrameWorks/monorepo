@@ -172,9 +172,12 @@ type PrometheusMonitor struct {
 	latitude      *float64
 	longitude     *float64
 	location      string
-	lastSeen      time.Time
-	isHealthy     bool
-	lastJSONData  map[string]any // Store last fetched JSON data
+	// locationMissingLogged is set once Mist's missing location was logged,
+	// until a report carries one again.
+	locationMissingLogged bool
+	lastSeen              time.Time
+	isHealthy             bool
+	lastJSONData          map[string]any // Store last fetched JSON data
 	// mistAPI is fed by the authenticated active_streams poll and gates the
 	// node's reported health.
 	mistAPI mistAPIHealth
@@ -1848,43 +1851,7 @@ func (pm *PrometheusMonitor) processUpdates() {
 					"json_keys":     getMapKeys(jsonData),
 				}).Debug("Processing JSON data from Mist metrics JSON endpoint")
 
-				if locData, ok := jsonData["loc"].(map[string]any); ok {
-					monitorLogger.WithFields(logging.Fields{
-						"node_id":  update.NodeID,
-						"loc_data": locData,
-					}).Info("Found location data in Mist metrics JSON")
-
-					oldLat := pm.latitude
-					oldLon := pm.longitude
-					oldLoc := pm.location
-
-					if lat, ok := locData["lat"].(float64); ok {
-						pm.latitude = &lat
-					}
-					if lon, ok := locData["lon"].(float64); ok {
-						pm.longitude = &lon
-					}
-					if name, ok := locData["name"].(string); ok && name != "" {
-						pm.location = name
-					}
-
-					monitorLogger.WithFields(logging.Fields{
-						"node_id":      update.NodeID,
-						"old_lat":      oldLat,
-						"new_lat":      pm.latitude,
-						"old_lon":      oldLon,
-						"new_lon":      pm.longitude,
-						"old_location": oldLoc,
-						"new_location": pm.location,
-					}).Info("Updated PrometheusMonitor location data")
-				} else {
-					// If no location data from MistServer, log it with details
-					monitorLogger.WithFields(logging.Fields{
-						"node_id":     update.NodeID,
-						"json_keys":   getMapKeys(jsonData),
-						"has_loc_key": jsonData["loc"] != nil,
-					}).Warn("No location data from MistServer for node")
-				}
+				pm.applyMistLocationLocked(update.NodeID, jsonData)
 			} else {
 				monitorLogger.WithFields(logging.Fields{
 					"node_id": update.NodeID,
@@ -1899,6 +1866,54 @@ func (pm *PrometheusMonitor) processUpdates() {
 		// outage cannot block this single update consumer and fill updateChannel.
 		pm.requestNodeMetricsForward()
 	}
+}
+
+// applyMistLocationLocked takes the node's coordinates from a Mist metrics
+// report. Every report repeats them, so only a change, or their appearing or
+// disappearing, is logged. The caller holds pm.mutex.
+func (pm *PrometheusMonitor) applyMistLocationLocked(nodeID string, jsonData map[string]any) {
+	locData, ok := jsonData["loc"].(map[string]any)
+	if !ok {
+		if !pm.locationMissingLogged {
+			pm.locationMissingLogged = true
+			monitorLogger.WithFields(logging.Fields{
+				"node_id":     nodeID,
+				"json_keys":   getMapKeys(jsonData),
+				"has_loc_key": jsonData["loc"] != nil,
+			}).Warn("No location data from MistServer for node")
+		}
+		return
+	}
+	pm.locationMissingLogged = false
+	oldLat, oldLon, oldLoc := pm.latitude, pm.longitude, pm.location
+	if lat, ok := locData["lat"].(float64); ok {
+		pm.latitude = &lat
+	}
+	if lon, ok := locData["lon"].(float64); ok {
+		pm.longitude = &lon
+	}
+	if name, ok := locData["name"].(string); ok && name != "" {
+		pm.location = name
+	}
+	if floatPtrEqual(oldLat, pm.latitude) && floatPtrEqual(oldLon, pm.longitude) && oldLoc == pm.location {
+		return
+	}
+	monitorLogger.WithFields(logging.Fields{
+		"node_id":      nodeID,
+		"old_lat":      oldLat,
+		"new_lat":      pm.latitude,
+		"old_lon":      oldLon,
+		"new_lon":      pm.longitude,
+		"old_location": oldLoc,
+		"new_location": pm.location,
+	}).Info("Updated PrometheusMonitor location data")
+}
+
+func floatPtrEqual(a, b *float64) bool {
+	if a == nil || b == nil {
+		return a == b
+	}
+	return *a == *b
 }
 
 func (pm *PrometheusMonitor) requestNodeMetricsForward() {
