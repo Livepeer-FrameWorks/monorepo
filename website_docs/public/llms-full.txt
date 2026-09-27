@@ -28995,8 +28995,9 @@ frameworks cluster upgrade --all --yes
 ### frameworks cluster release
 
 Run a full cluster release as one ordered, resumable plan: pre-upgrade host convergence
-(Privateer seeds, Redis servers and Sentinels, declared Kafka topics, MirrorMaker2 workers) →
-expand migrations → service
+(Privateer seeds, Redis servers and Sentinels, Yugabyte, ClickHouse, Kafka controllers and
+brokers, vmagent/vmalert/vmauth, nginx/Caddy, compose dependencies, declared Kafka topics,
+MirrorMaker2 workers; changed hosts one at a time behind health gates) → expand migrations → service
 upgrades in dependency order → reconciliation transitions interleaved at their declared
 dependency points → stale placement cleanup → postdeploy migrations. Contract migrations are printed as a deferred
 operator step and run only after the rollback window closes. This is the **normal** upgrade path;
@@ -37444,7 +37445,8 @@ Before the first change, and under `--dry-run` too, `release apply` refuses to s
 `release apply` prints four numbered stages:
 
 1. **Pre-upgrade host convergence.** Privateer on every mesh host, every Redis server and
-   Sentinel, the declared Kafka topics, and MirrorMaker2 workers. Each host runs the same role as
+   Sentinel, the data services and managed dependencies described [below](#data-services-and-managed-dependencies),
+   the declared Kafka topics, and MirrorMaker2 workers. Each host runs the same role as
    `cluster provision` in check mode first, and a host that already matches is skipped without a
    restart. Privateer restarts in waves that start with a single canary host, and mesh health is
    verified after each wave before the next starts. Privateer's DNS socket stays open across its
@@ -37457,9 +37459,9 @@ Before the first change, and under `--dry-run` too, `release apply` refuses to s
    handled. The stage refuses to continue when two servers both report the primary role. A
    single-mode instance restarts in place, and only when its configuration changed. Redis and
    Sentinel log to journald (`journalctl -u frameworks-redis-<instance>`); convergence removes
-   the old unrotated files under `/var/log/frameworks/redis`. The Kafka step creates declared topics and applies declared topic
-   configuration; it never reconfigures or restarts a broker or controller. MirrorMaker2 workers
-   converge their configuration first, then every changed worker restarts together.
+   the old unrotated files under `/var/log/frameworks/redis`. The Kafka topic step creates
+   declared topics and applies declared topic configuration. MirrorMaker2 workers converge their
+   configuration first, then every changed worker restarts together.
 2. **Expand migrations.** Service databases the manifest declares but the cluster does not have
    yet are created first, with owner and runtime roles and the current baseline. Then expand
    migrations run on PostgreSQL/YugabyteDB and ClickHouse. The
@@ -37480,6 +37482,28 @@ A reconciliation transition is a Check, Apply, Verify step that converges a decl
 against the authoritative state. On a rerun it is checked again and skipped when complete. A
 blocked transition, for example when authoritative replicas disagree, stops the release with its
 reason. `release plan` lists the transitions a release declares, or `none`.
+
+### Data services and managed dependencies
+
+Stage 1 applies the roles of the data services and managed dependencies after Redis, in this
+order. Only a host whose role check reports a change is touched, one host at a time, and the first
+gate that does not pass stops the release with the resume hint. A rerun skips converged hosts and
+gates every remaining change on a healthy service first. `release plan` and `release apply
+--dry-run` list the hosts; the dry-run shows each host's pending role changes.
+
+| Service                               | Order and gates                                                                                                                                                                                                                                                                                                                                                                                             |
+| ------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| YugabyteDB                            | Masters first: a changed master restarts only after the masters confirm it can go down, and every master must be alive with one leader before the next node. Then every tserver whose applied configuration differs restarts, each only after the masters confirm the node can go down, and the next only once the node serves YSQL, its tserver is alive, and no tablet is under-replicated or leaderless. |
+| ClickHouse                            | Node by node. Before and after each change, every node must reach Keeper and have no replica that is read-only, lost its Keeper session, is more than 30 s behind, or has parts to fetch.                                                                                                                                                                                                                   |
+| Kafka                                 | Per cluster, controllers then brokers. Before and after each change, read through another broker: a quorum leader, every controller within 100 records of it, and no under-replicated or unavailable partition.                                                                                                                                                                                             |
+| vmagent, vmalert, vmauth              | A changed scrape config, rule file, or auth config is validated with `-dryRun` and reloaded; a new binary or unit restarts the process.                                                                                                                                                                                                                                                                     |
+| Control-plane nginx and Caddy         | A changed config is tested (`nginx -t`, `caddy validate`) before the reload; a failed test keeps the running config.                                                                                                                                                                                                                                                                                        |
+| Chatwoot, Listmonk, Metabase, Grafana | The compose project is rendered and brought up, which recreates only the containers whose configuration changed.                                                                                                                                                                                                                                                                                            |
+
+A YugabyteDB engine change is refused here; run `frameworks cluster upgrade yugabyte` first. On
+the first release that carries a new Yugabyte flag or unit, every node's master and tserver
+restart once through these gates. Kafka brokers keep at most `log.retention.bytes` (2 GiB) per
+partition in addition to each topic's `retention.ms`.
 
 ### Rollout order within a service
 
@@ -37532,14 +37556,11 @@ frameworks cluster release apply --version vX.Y.Z --dry-run
 
 ### What `release apply` does not change
 
-- **Managed dependencies** have their own manifest pins: nginx, Caddy, VictoriaMetrics, vmagent,
-  vmauth, vmalert, Alertmanager, Grafana, Metabase, Prometheus, Listmonk, Chatwoot, MistServer,
-  and the Livepeer gateway and signer. Use `cluster diff` to see desired and observed state, and
-  `cluster provision` when their pins change.
-- **Data infrastructure**: PostgreSQL/YugabyteDB, Kafka brokers and controllers, Redis, and
-  ClickHouse. Its only host-infrastructure work is the pre-upgrade stage above.
-- **Rendered ingress and observability configuration**, which `cluster provision --only
-interfaces` applies.
+- **Other managed dependencies** with their own manifest pins: VictoriaMetrics, Alertmanager,
+  Prometheus, MistServer, and the Livepeer gateway and signer. Use `cluster diff` to see desired
+  and observed state, and `cluster provision` when their pins change.
+- **A YugabyteDB engine change**, which needs `cluster upgrade yugabyte`, and a standalone
+  PostgreSQL server, which `cluster provision` converges.
 
 A direct `cluster upgrade <service>` refuses a host where the service is not installed; only
 `release apply` installs a newly placed platform service.

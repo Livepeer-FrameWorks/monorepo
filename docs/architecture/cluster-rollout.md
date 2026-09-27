@@ -82,7 +82,37 @@ time, and gates each wave on mesh health for its hosts. Redis convergence
 Sentinel-mode instance converges one host at a time, with every server except
 the live primary first (each gated on a synced replication link), then each
 Sentinel (gated on `SENTINEL CKQUORUM`), then the live primary, which a
-Sentinel failover demotes first when its role check reports a change. A service upgrade keeps
+Sentinel failover demotes first when its role check reports a change.
+
+The data services and managed dependencies converge next
+(`cli/cmd/cluster_release_service_convergence.go`), in this order: Yugabyte,
+ClickHouse, Kafka, vmagent/vmalert/vmauth, control-plane nginx and caddy, then
+the compose dependencies (Chatwoot, Listmonk, Metabase, Grafana). Every host
+runs its role's check-mode precheck, and only a host whose check reports a
+change is touched, one host at a time; the first gate that fails stops the
+stage and leaves later hosts untouched, and a rerun resumes because converged
+hosts are skipped and each remaining change is gated on a healthy service
+first. Yugabyte converges in two passes through the Yugabyte roll: masters
+first (restart scope `master`; the masters must confirm the master can go
+down, and all masters must be alive with one leader before the next node),
+then every tserver whose running binary, applied-config receipt, or
+tserver-scope role check differs, each admitted by `are_nodes_safe_to_take_down`
+and followed by YSQL, tserver liveness, and no under-replicated or leaderless
+tablet. The role refuses an engine change here; `cluster upgrade yugabyte`
+owns that. ClickHouse converges node by node, gated before and after each
+change on every node reaching Keeper (`system.zookeeper`) with no replica
+read-only, session-expired, more than 30 s behind, or with parts to fetch.
+Kafka converges each cluster's controllers, then its brokers, gated before and
+after each change, through another broker of the same cluster, on a quorum
+leader with every controller within 100 records of it and no under-replicated
+or unavailable partition. vmagent, vmalert, and vmauth validate a changed
+config with `-dryRun` and reload it on SIGHUP; nginx and caddy test their
+config before reloading; compose dependencies run compose up, which recreates
+only containers whose config changed. Probes run over SSH; the ClickHouse
+password reaches `clickhouse-client` on the session's stdin, never on a command
+line.
+
+A service upgrade keeps
 the dependency order across services and rolls one service's replicas by the
 deploy's tier: CONTROL one at a time with the first as canary, MEDIA one per
 cell with cells in parallel, OTHER together. The effective `MaxUnavailable`
