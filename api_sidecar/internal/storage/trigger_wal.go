@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"frameworks/api_sidecar/internal/appconfig"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/mist"
 	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
 	"github.com/google/uuid"
 	"google.golang.org/protobuf/proto"
@@ -32,13 +33,12 @@ type TriggerWAL struct {
 	dir string
 	mu  sync.Mutex
 
-	// pending is an oldest-first index of WAL paths. Payloads stay on disk and
-	// are decoded in bounded batches; a large backlog must not become a second,
-	// in-memory copy of the WAL. Acked paths are removed from active and lazily
-	// compacted from pending so draining the head stays O(1).
-	pending   []string
-	head      int
-	active    map[string]struct{}
+	// lanes are oldest-first indexes of WAL paths, one per TriggerLane. Payloads
+	// stay on disk and are decoded in bounded batches; a large backlog must not
+	// become a second, in-memory copy of the WAL. Acked paths are removed from
+	// active and lazily compacted from their lane so draining the head stays O(1).
+	lanes     [triggerLaneCount]walLane
+	active    map[string]TriggerLane
 	pathsByID map[string][]string
 
 	// runtimeByID and idsByRuntime index the pending entries that end an ingest runtime's publisher
@@ -47,9 +47,36 @@ type TriggerWAL struct {
 	runtimeByID  map[string]string
 	idsByRuntime map[string]map[string]struct{}
 	changed      chan struct{}
+}
 
-	// reorders counts insertions that landed before the newest pending path. A reader walking the
-	// index with a path cursor restarts from the head when it changes, so such an entry is not skipped.
+// TriggerLane separates the entries the forwarder drains independently.
+type TriggerLane int
+
+const (
+	// LaneLifecycle holds session, stream, push and recording end triggers.
+	LaneLifecycle TriggerLane = iota
+	// LaneSample holds the high-rate transcode billing samples, which must never delay a
+	// lifecycle trigger.
+	LaneSample
+	triggerLaneCount
+)
+
+// TriggerLaneOf classifies a trigger by type, so a parse-failure envelope drains in the lane of
+// the trigger it wraps.
+func TriggerLaneOf(trigger *ipcpb.MistTrigger) TriggerLane {
+	switch mist.TriggerType(trigger.GetTriggerType()) {
+	case mist.TriggerProcessAVSegmentComplete, mist.TriggerLivepeerSegmentComplete:
+		return LaneSample
+	default:
+		return LaneLifecycle
+	}
+}
+
+type walLane struct {
+	pending []string
+	head    int
+	// reorders counts insertions that landed before the newest path of the lane. A reader walking
+	// the lane with a path cursor restarts from the head when it changes, so no entry is skipped.
 	reorders uint64
 }
 
@@ -89,23 +116,28 @@ func NewTriggerWAL(dir string) (*TriggerWAL, error) {
 	sort.Strings(files)
 	w := &TriggerWAL{
 		dir:          dir,
-		pending:      files,
-		active:       make(map[string]struct{}, len(files)),
+		active:       make(map[string]TriggerLane, len(files)),
 		pathsByID:    make(map[string][]string, len(files)),
 		runtimeByID:  make(map[string]string),
 		idsByRuntime: make(map[string]map[string]struct{}),
 		changed:      make(chan struct{}),
 	}
 	for _, path := range files {
-		w.active[path] = struct{}{}
+		// Entries that survive a restart keep their lane and ordering role; an unreadable entry
+		// is still forwarded in the lifecycle lane, it just cannot hold back an admission.
+		trigger, readErr := readTriggerFile(path)
+		lane := LaneLifecycle
+		if readErr == nil {
+			lane = TriggerLaneOf(trigger)
+		}
+		w.active[path] = lane
+		w.lanes[lane].pending = append(w.lanes[lane].pending, path)
 		id, ok := sourceEventIDFromPath(path)
 		if !ok {
 			continue
 		}
 		w.pathsByID[id] = append(w.pathsByID[id], path)
-		// Entries that survive a restart keep their ordering role; an unreadable entry is still
-		// forwarded in WAL order, it just cannot hold back an admission.
-		if trigger, err := readTriggerFile(path); err == nil {
+		if readErr == nil {
 			w.indexRuntimeLocked(id, IngestRuntimeOrderKey(trigger))
 		}
 	}
@@ -286,7 +318,7 @@ func (w *TriggerWAL) Append(trigger *ipcpb.MistTrigger) (bool, error) {
 	if err := os.Rename(tmp, path); err != nil {
 		return false, fmt.Errorf("trigger wal rename: %w", err)
 	}
-	w.addPathLocked(id, path)
+	w.addPathLocked(id, path, TriggerLaneOf(trigger))
 	w.indexRuntimeLocked(id, IngestRuntimeOrderKey(trigger))
 	if err := syncDir(w.dir); err != nil {
 		return false, fmt.Errorf("trigger wal sync dir: %w", err)
@@ -310,7 +342,7 @@ func (w *TriggerWAL) Ack(sourceEventID string) error {
 		delete(w.active, f)
 	}
 	delete(w.pathsByID, sourceEventID)
-	w.advanceHeadLocked()
+	w.advanceHeadsLocked()
 	if len(files) > 0 {
 		w.removedLocked(sourceEventID)
 	}
@@ -332,7 +364,7 @@ func (w *TriggerWAL) DeadLetter(sourceEventID string) error {
 		delete(w.active, f)
 	}
 	delete(w.pathsByID, sourceEventID)
-	w.advanceHeadLocked()
+	w.advanceHeadsLocked()
 	if len(files) > 0 {
 		w.removedLocked(sourceEventID)
 		if err := syncDir(w.dir); err != nil {
@@ -349,66 +381,40 @@ func (w *TriggerWAL) Pending() ([]*ipcpb.MistTrigger, error) {
 	return w.PendingBatch(0)
 }
 
-// PendingBatch returns at most limit persisted triggers in oldest-first order.
+// PendingBatch returns at most limit persisted triggers in oldest-first order across lanes.
 // A non-positive limit means all entries. Only the selected protobuf payloads
 // are read; the in-memory index contains paths, not payloads.
 func (w *TriggerWAL) PendingBatch(limit int) ([]*ipcpb.MistTrigger, error) {
 	w.mu.Lock()
 	files := make([]string, 0)
-	for i := w.head; i < len(w.pending); i++ {
-		path := w.pending[i]
-		if _, ok := w.active[path]; !ok {
-			continue
-		}
-		files = append(files, path)
-		if limit > 0 && len(files) >= limit {
-			break
-		}
+	for lane := range w.lanes {
+		files = append(files, w.activePathsLocked(TriggerLane(lane), "", limit)...)
 	}
 	w.mu.Unlock()
+	sort.Strings(files)
+	if limit > 0 && len(files) > limit {
+		files = files[:limit]
+	}
 
 	out := make([]*ipcpb.MistTrigger, 0, len(files))
 	for _, path := range files {
-		data, err := os.ReadFile(path)
+		t, err := readTriggerFile(path)
 		if errors.Is(err, os.ErrNotExist) {
 			continue
 		}
 		if err != nil {
 			return nil, fmt.Errorf("trigger wal read %s: %w", filepath.Base(path), err)
 		}
-		var t ipcpb.MistTrigger
-		if err := proto.Unmarshal(data, &t); err != nil {
-			return nil, fmt.Errorf("trigger wal unmarshal %s: %w", filepath.Base(path), err)
-		}
-		out = append(out, &t)
+		out = append(out, t)
 	}
 	return out, nil
 }
 
-// PendingAfter returns at most limit undelivered entries whose path sorts after the given path,
-// oldest first. An empty after starts at the oldest entry.
-func (w *TriggerWAL) PendingAfter(after string, limit int) ([]PendingEntry, error) {
+// PendingAfter returns at most limit undelivered entries of lane whose path sorts after the given
+// path, oldest first. An empty after starts at the oldest entry.
+func (w *TriggerWAL) PendingAfter(lane TriggerLane, after string, limit int) ([]PendingEntry, error) {
 	w.mu.Lock()
-	start := w.head
-	if after != "" {
-		if index := sort.SearchStrings(w.pending[w.head:], after); index >= 0 {
-			start = w.head + index
-		}
-	}
-	files := make([]string, 0)
-	for i := start; i < len(w.pending); i++ {
-		path := w.pending[i]
-		if path <= after {
-			continue
-		}
-		if _, ok := w.active[path]; !ok {
-			continue
-		}
-		files = append(files, path)
-		if limit > 0 && len(files) >= limit {
-			break
-		}
-	}
+	files := w.activePathsLocked(lane, after, limit)
 	w.mu.Unlock()
 
 	out := make([]PendingEntry, 0, len(files))
@@ -425,11 +431,34 @@ func (w *TriggerWAL) PendingAfter(after string, limit int) ([]PendingEntry, erro
 	return out, nil
 }
 
-// Reorders reports how many entries have been inserted behind the newest pending path.
-func (w *TriggerWAL) Reorders() uint64 {
+func (w *TriggerWAL) activePathsLocked(lane TriggerLane, after string, limit int) []string {
+	l := &w.lanes[lane]
+	start := l.head
+	if after != "" {
+		start = l.head + sort.SearchStrings(l.pending[l.head:], after)
+	}
+	files := make([]string, 0)
+	for i := start; i < len(l.pending); i++ {
+		path := l.pending[i]
+		if path <= after {
+			continue
+		}
+		if _, ok := w.active[path]; !ok {
+			continue
+		}
+		files = append(files, path)
+		if limit > 0 && len(files) >= limit {
+			break
+		}
+	}
+	return files
+}
+
+// Reorders reports how many entries have been inserted behind the newest path of lane.
+func (w *TriggerWAL) Reorders(lane TriggerLane) uint64 {
 	w.mu.Lock()
 	defer w.mu.Unlock()
-	return w.reorders
+	return w.lanes[lane].reorders
 }
 
 // PendingDepth returns the count without unmarshaling — for metrics.
@@ -439,33 +468,37 @@ func (w *TriggerWAL) PendingDepth() (int, error) {
 	return len(w.active), nil
 }
 
-func (w *TriggerWAL) addPathLocked(sourceEventID, path string) {
-	w.active[path] = struct{}{}
+func (w *TriggerWAL) addPathLocked(sourceEventID, path string, lane TriggerLane) {
+	w.active[path] = lane
 	w.pathsByID[sourceEventID] = append(w.pathsByID[sourceEventID], path)
-	if len(w.pending) == 0 || path > w.pending[len(w.pending)-1] {
-		w.pending = append(w.pending, path)
+	l := &w.lanes[lane]
+	if len(l.pending) == 0 || path > l.pending[len(l.pending)-1] {
+		l.pending = append(l.pending, path)
 		return
 	}
-	w.reorders++
-	index := sort.SearchStrings(w.pending, path)
-	w.pending = append(w.pending, "")
-	copy(w.pending[index+1:], w.pending[index:])
-	w.pending[index] = path
-	if index < w.head {
-		w.head = index
+	l.reorders++
+	index := sort.SearchStrings(l.pending, path)
+	l.pending = append(l.pending, "")
+	copy(l.pending[index+1:], l.pending[index:])
+	l.pending[index] = path
+	if index < l.head {
+		l.head = index
 	}
 }
 
-func (w *TriggerWAL) advanceHeadLocked() {
-	for w.head < len(w.pending) {
-		if _, ok := w.active[w.pending[w.head]]; ok {
-			break
+func (w *TriggerWAL) advanceHeadsLocked() {
+	for i := range w.lanes {
+		l := &w.lanes[i]
+		for l.head < len(l.pending) {
+			if _, ok := w.active[l.pending[l.head]]; ok {
+				break
+			}
+			l.head++
 		}
-		w.head++
-	}
-	if w.head > 4096 && w.head*2 > len(w.pending) {
-		w.pending = append([]string(nil), w.pending[w.head:]...)
-		w.head = 0
+		if l.head > 4096 && l.head*2 > len(l.pending) {
+			l.pending = append([]string(nil), l.pending[l.head:]...)
+			l.head = 0
+		}
 	}
 }
 

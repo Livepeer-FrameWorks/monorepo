@@ -20,8 +20,13 @@ const (
 	// entries, and one node never occupies more than 64 Foghorn handlers.
 	triggerForwardWindow = 64
 
-	// triggerForwardLookahead bounds how many decoded entries a pass holds while it looks past
-	// entries whose order key already has one in flight.
+	// triggerForwardSampleWindow caps the slots billing samples may occupy, so a lifecycle
+	// trigger always finds a free slot within one ack of being appended however deep the
+	// sample backlog is.
+	triggerForwardSampleWindow = 48
+
+	// triggerForwardLookahead bounds how many decoded entries a pass holds per lane while it
+	// looks past entries whose order key already has one in flight.
 	triggerForwardLookahead = 1024
 )
 
@@ -94,7 +99,16 @@ func triggerOrderKey(trigger *ipcpb.MistTrigger) string {
 type inflightTrigger struct {
 	trigger  *ipcpb.MistTrigger
 	key      string
+	lane     storage.TriggerLane
 	deadline time.Time
+}
+
+// laneCursor walks one WAL lane in path order.
+type laneCursor struct {
+	after     string
+	buffer    []storage.PendingEntry
+	exhausted bool
+	reorders  uint64
 }
 
 // triggerForwardPass delivers the WAL on one connection with up to triggerForwardWindow entries
@@ -112,10 +126,8 @@ type triggerForwardPass struct {
 	// pass; later entries with the key stay behind it.
 	blockedKeys map[string]struct{}
 
-	after     string
-	buffer    []storage.PendingEntry
-	exhausted bool
-	reorders  uint64
+	lanes        [2]laneCursor
+	laneInflight [2]int
 }
 
 func drainTriggerWAL(logger logging.Logger) {
@@ -131,7 +143,9 @@ func drainTriggerWAL(logger logging.Logger) {
 		inflight:    make(map[string]*inflightTrigger),
 		busyKeys:    make(map[string]int),
 		blockedKeys: make(map[string]struct{}),
-		reorders:    triggerWAL.Reorders(),
+	}
+	for lane := range pass.lanes {
+		pass.lanes[lane].reorders = triggerWAL.Reorders(storage.TriggerLane(lane))
 	}
 	defer pass.release()
 	pass.run()
@@ -165,7 +179,9 @@ func (p *triggerForwardPass) run() {
 		case <-timer.C:
 			p.expire(time.Now())
 		case <-triggerForwarderWakeup:
-			p.exhausted = false
+			for lane := range p.lanes {
+				p.lanes[lane].exhausted = false
+			}
 		}
 		timer.Stop()
 	}
@@ -175,11 +191,11 @@ func (p *triggerForwardPass) run() {
 // when a send failed and the pass must stop.
 func (p *triggerForwardPass) fill() bool {
 	for len(p.inflight) < triggerForwardWindow {
-		trigger := p.next()
+		trigger, lane := p.next()
 		if trigger == nil {
 			return true
 		}
-		if !p.send(trigger) {
+		if !p.send(trigger, lane) {
 			return false
 		}
 	}
@@ -187,34 +203,46 @@ func (p *triggerForwardPass) fill() bool {
 }
 
 // next returns the entry to send now: a waiting admission's runtime end triggers first, then the
-// oldest entry whose order key is free.
-func (p *triggerForwardPass) next() *ipcpb.MistTrigger {
+// oldest lifecycle entry whose order key is free, then the oldest billing sample while samples
+// hold fewer than triggerForwardSampleWindow slots.
+func (p *triggerForwardPass) next() (*ipcpb.MistTrigger, storage.TriggerLane) {
 	now := time.Now()
 	if trigger := p.nextPriority(now); trigger != nil {
-		return trigger
+		return trigger, storage.LaneLifecycle
 	}
-	if reorders := p.wal.Reorders(); reorders != p.reorders {
-		p.reorders = reorders
-		p.after, p.buffer, p.exhausted = "", nil, false
+	if trigger := p.nextInLane(storage.LaneLifecycle, now); trigger != nil {
+		return trigger, storage.LaneLifecycle
+	}
+	if p.laneInflight[storage.LaneSample] >= triggerForwardSampleWindow {
+		return nil, storage.LaneSample
+	}
+	return p.nextInLane(storage.LaneSample, now), storage.LaneSample
+}
+
+func (p *triggerForwardPass) nextInLane(lane storage.TriggerLane, now time.Time) *ipcpb.MistTrigger {
+	cursor := &p.lanes[lane]
+	if reorders := p.wal.Reorders(lane); reorders != cursor.reorders {
+		cursor.reorders = reorders
+		cursor.after, cursor.buffer, cursor.exhausted = "", nil, false
 	}
 	for {
-		if len(p.buffer) < triggerForwardLookahead/2 && !p.exhausted && !p.refill() {
+		if len(cursor.buffer) < triggerForwardLookahead/2 && !cursor.exhausted && !p.refill(lane) {
 			return nil
 		}
-		if trigger := p.takeSendable(now); trigger != nil {
+		if trigger := p.takeSendable(cursor, now); trigger != nil {
 			return trigger
 		}
-		if p.exhausted || len(p.buffer) >= triggerForwardLookahead || !p.refill() {
+		if cursor.exhausted || len(cursor.buffer) >= triggerForwardLookahead || !p.refill(lane) {
 			return nil
 		}
 	}
 }
 
-func (p *triggerForwardPass) takeSendable(now time.Time) *ipcpb.MistTrigger {
+func (p *triggerForwardPass) takeSendable(cursor *laneCursor, now time.Time) *ipcpb.MistTrigger {
 	keysSeen := make(map[string]struct{})
-	kept := p.buffer[:0]
+	kept := cursor.buffer[:0]
 	var picked *ipcpb.MistTrigger
-	for _, entry := range p.buffer {
+	for _, entry := range cursor.buffer {
 		if picked != nil {
 			kept = append(kept, entry)
 			continue
@@ -242,26 +270,27 @@ func (p *triggerForwardPass) takeSendable(now time.Time) *ipcpb.MistTrigger {
 		}
 		picked = trigger
 	}
-	p.buffer = kept
+	cursor.buffer = kept
 	return picked
 }
 
-// refill reads the entries after the pass cursor into the lookahead buffer. A read failure stops
-// reading for this pass; entries already in flight still complete.
-func (p *triggerForwardPass) refill() bool {
-	want := triggerForwardLookahead - len(p.buffer)
-	entries, err := p.wal.PendingAfter(p.after, want)
+// refill reads the entries after the lane cursor into its lookahead buffer. A read failure stops
+// reading the lane for this pass; entries already in flight still complete.
+func (p *triggerForwardPass) refill(lane storage.TriggerLane) bool {
+	cursor := &p.lanes[lane]
+	want := triggerForwardLookahead - len(cursor.buffer)
+	entries, err := p.wal.PendingAfter(lane, cursor.after, want)
 	if err != nil {
-		p.exhausted = true
+		cursor.exhausted = true
 		p.logger.WithError(err).Warn("Failed to read trigger WAL entries; retrying on the next pass")
 		return false
 	}
 	if len(entries) < want {
-		p.exhausted = true
+		cursor.exhausted = true
 	}
 	if len(entries) > 0 {
-		p.after = entries[len(entries)-1].Path
-		p.buffer = append(p.buffer, entries...)
+		cursor.after = entries[len(entries)-1].Path
+		cursor.buffer = append(cursor.buffer, entries...)
 	}
 	return true
 }
@@ -285,7 +314,7 @@ func (p *triggerForwardPass) nextPriority(now time.Time) *ipcpb.MistTrigger {
 	return nil
 }
 
-func (p *triggerForwardPass) send(trigger *ipcpb.MistTrigger) bool {
+func (p *triggerForwardPass) send(trigger *ipcpb.MistTrigger, lane storage.TriggerLane) bool {
 	requestID := trigger.GetRequestId()
 	if requestID == "" {
 		p.logger.WithField("trigger_type", trigger.GetTriggerType()).Warn("Skipping WAL trigger with empty request_id")
@@ -295,7 +324,8 @@ func (p *triggerForwardPass) send(trigger *ipcpb.MistTrigger) bool {
 	pendingTriggerAcksMu.Lock()
 	pendingTriggerAcks[requestID] = p.acks
 	pendingTriggerAcksMu.Unlock()
-	p.inflight[requestID] = &inflightTrigger{trigger: trigger, key: key, deadline: time.Now().Add(triggerAckTimeout)}
+	p.inflight[requestID] = &inflightTrigger{trigger: trigger, key: key, lane: lane, deadline: time.Now().Add(triggerAckTimeout)}
+	p.laneInflight[lane]++
 	if key != "" {
 		p.busyKeys[key]++
 	}
@@ -317,6 +347,7 @@ func (p *triggerForwardPass) finish(requestID string) *inflightTrigger {
 		return nil
 	}
 	delete(p.inflight, requestID)
+	p.laneInflight[entry.lane]--
 	if entry.key != "" {
 		if p.busyKeys[entry.key] <= 1 {
 			delete(p.busyKeys, entry.key)

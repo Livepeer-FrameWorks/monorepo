@@ -116,6 +116,8 @@ func runForwarderLoop(t *testing.T) {
 		}
 	}()
 	t.Cleanup(func() {
+		// Dropping the connection ends a pass that is still draining a backlog.
+		clearConn()
 		close(stop)
 		<-done
 	})
@@ -275,5 +277,38 @@ func TestTriggerForwarderPreservesPerRuntimeOrderUnderWindow(t *testing.T) {
 		if fmt.Sprint(got) != fmt.Sprint(ids) {
 			t.Fatalf("key %s arrived as %v, want WAL order %v", key, got, ids)
 		}
+	}
+}
+
+// A lifecycle trigger appended behind 10,000 undelivered billing samples reaches Foghorn within
+// about one ack, not after the sample backlog.
+func TestTriggerForwarderDeliversLifecycleAheadOfSampleBacklog(t *testing.T) {
+	base := time.Now().Add(-time.Hour).UnixMilli()
+	backlog := make([]*ipcpb.MistTrigger, 0, 10000)
+	for i := range 10000 {
+		backlog = append(backlog, sampleTrigger(fmt.Sprintf("sample-%05d", i), base+int64(i)))
+	}
+	wal := writeWALBacklog(t, backlog)
+	resetPendingAcks(t)
+	stream := connectFakeBuffered(t)
+	foghorn := startLatencyFoghorn(t, stream, fixedLatency(250*time.Millisecond))
+	runForwarderLoop(t)
+	waitFor(t, func() bool { _, ok := foghorn.seenAt("sample-00000"); return ok }, "sample backlog draining")
+
+	appended := time.Now()
+	userEnd := &ipcpb.MistTrigger{
+		RequestId: "lifecycle-user-end", TriggerType: "USER_END", Timestamp: appended.UnixMilli(),
+		TriggerPayload: &ipcpb.MistTrigger_ViewerDisconnect{ViewerDisconnect: &ipcpb.ViewerDisconnectTrigger{StreamName: "live+demo", SessionId: "viewer-1"}},
+	}
+	if err := SendDurableMistTrigger(userEnd); err != nil {
+		t.Fatalf("append USER_END: %v", err)
+	}
+	waitFor(t, func() bool { return !wal.IsPending("lifecycle-user-end") }, "USER_END acknowledged")
+	seen, _ := foghorn.seenAt("lifecycle-user-end")
+	if delay := seen.Sub(appended); delay > 2*time.Second {
+		t.Fatalf("USER_END reached Foghorn %s after append behind the sample backlog; want within about one ack", delay)
+	}
+	if depth, _ := wal.PendingDepth(); depth < 9000 {
+		t.Fatalf("sample backlog drained to %d before the check; the USER_END was not behind it", depth)
 	}
 }

@@ -122,9 +122,15 @@ reported failed.
   The removal is not fsynced: a crash that brings the file back only resends an
   entry Foghorn already committed, under the same `source_event_id`.
 - `DeadLetter(source_event_id)` renames non-retryable rows to `.dead`; they are no longer retried but remain inspectable on disk.
-- Online replay reads at most 1,024 decoded entries ahead of the send cursor,
-  so a six-figure backlog is never read and unmarshaled in full before the
-  first send.
+- The index keeps two lanes. Transcode billing samples
+  (`PROCESS_AV_VIRTUAL_SEGMENT_COMPLETE`, `LIVEPEER_SEGMENT_COMPLETE`) form the
+  sample lane; every other durable trigger forms the lifecycle lane. The
+  forwarder fills free slots from the lifecycle lane first and lets samples hold
+  at most 48 of the 64 slots, so a USER_END, STREAM_END or PUSH_END is sent
+  within one ack of its append however deep the sample backlog is.
+- Online replay reads at most 1,024 decoded entries per lane ahead of the send
+  cursor, so a six-figure backlog is never read and unmarshaled in full before
+  the first send.
 - No TTL — the file stays until it is acked or manually purged. Operators should monitor pending depth.
 - Entries that end an ingest runtime's publisher (`PUSH_INPUT_CLOSE`,
   `STREAM_END`) are also indexed by Mist runtime name, rebuilt from disk at

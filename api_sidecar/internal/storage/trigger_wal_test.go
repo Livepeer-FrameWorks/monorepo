@@ -407,6 +407,55 @@ func TestTriggerWALIndexRecoversAndTracksDepth(t *testing.T) {
 	}
 }
 
+// Billing samples and lifecycle triggers are indexed in separate lanes, before and after a
+// restart, and each lane is read in its own path order.
+func TestTriggerWALSeparatesLanes(t *testing.T) {
+	dir := t.TempDir()
+	wal, err := NewTriggerWAL(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	entries := []*ipcpb.MistTrigger{
+		{RequestId: "sample-1", TriggerType: "PROCESS_AV_VIRTUAL_SEGMENT_COMPLETE", Timestamp: 1700000000001},
+		{RequestId: "user-end-1", TriggerType: "USER_END", Timestamp: 1700000000002},
+		{RequestId: "sample-2", TriggerType: "LIVEPEER_SEGMENT_COMPLETE", Timestamp: 1700000000003},
+		{RequestId: "stream-end-1", TriggerType: "STREAM_END", Timestamp: 1700000000004},
+	}
+	for _, entry := range entries {
+		if _, appendErr := wal.Append(entry); appendErr != nil {
+			t.Fatal(appendErr)
+		}
+	}
+	laneIDs := func(w *TriggerWAL, lane TriggerLane) []string {
+		t.Helper()
+		pending, readErr := w.PendingAfter(lane, "", 0)
+		if readErr != nil {
+			t.Fatal(readErr)
+		}
+		ids := make([]string, 0, len(pending))
+		for _, entry := range pending {
+			ids = append(ids, entry.Trigger.GetRequestId())
+		}
+		return ids
+	}
+	reopened, err := NewTriggerWAL(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, w := range []*TriggerWAL{wal, reopened} {
+		if got := laneIDs(w, LaneLifecycle); len(got) != 2 || got[0] != "user-end-1" || got[1] != "stream-end-1" {
+			t.Fatalf("lifecycle lane = %v", got)
+		}
+		if got := laneIDs(w, LaneSample); len(got) != 2 || got[0] != "sample-1" || got[1] != "sample-2" {
+			t.Fatalf("sample lane = %v", got)
+		}
+	}
+	all, err := reopened.PendingBatch(3)
+	if err != nil || len(all) != 3 || all[0].GetRequestId() != "sample-1" || all[2].GetRequestId() != "sample-2" {
+		t.Fatalf("PendingBatch across lanes = %v, err %v; want oldest-first", all, err)
+	}
+}
+
 func writeFile(t *testing.T, path string, data []byte) error {
 	t.Helper()
 	return os.WriteFile(path, data, 0o600)
