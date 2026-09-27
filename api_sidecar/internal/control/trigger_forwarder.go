@@ -175,9 +175,15 @@ func triggerForwarderLoop(logger logging.Logger) {
 }
 
 func drainTriggerWAL(logger logging.Logger) {
-	stream := getStream()
-	if stream == nil {
+	connection := getConnection()
+	if connection == nil {
 		return // no active stream; pending entries stay on disk
+	}
+	// A pass delivers in WAL order on one connection. Once that connection is gone the pass ends,
+	// and the next one starts again from the oldest entry, priority runtimes first.
+	onPassConnection := func() bool {
+		current := getConnection()
+		return current != nil && current.epoch == connection.epoch
 	}
 	for {
 		if !drainPriorityRuntimes(triggerWAL, logger) {
@@ -193,7 +199,7 @@ func drainTriggerWAL(logger logging.Logger) {
 		}
 		failed := false
 		for _, trigger := range pending {
-			if getStream() == nil {
+			if !onPassConnection() {
 				return // disconnect mid-drain; resume on reconnect
 			}
 			// An admission waiting on a runtime's end triggers is served before the next entry.
@@ -230,8 +236,9 @@ func sendDurableTriggerAndAwaitAck(trigger *ipcpb.MistTrigger, logger logging.Lo
 		pendingTriggerAcksMu.Unlock()
 	}()
 
-	stream := getStream()
-	if stream == nil {
+	// The ack can only arrive on the connection the trigger was sent on, so the wait is bound to it.
+	connection := getConnection()
+	if connection == nil || connection.stream == nil {
 		return false
 	}
 	msg := &ipcpb.ControlMessage{
@@ -239,7 +246,7 @@ func sendDurableTriggerAndAwaitAck(trigger *ipcpb.MistTrigger, logger logging.Lo
 		Payload: &ipcpb.ControlMessage_MistTrigger{MistTrigger: trigger},
 	}
 	logFields := TriggerSummaryFields(trigger, requestID)
-	if err := stream.Send(msg); err != nil {
+	if err := connection.stream.Send(msg); err != nil {
 		logger.WithError(err).WithFields(logFields).Warn("Stream send failed; will retry from WAL")
 		return false
 	}
@@ -271,6 +278,11 @@ func sendDurableTriggerAndAwaitAck(trigger *ipcpb.MistTrigger, logger logging.Lo
 		}
 		updateTriggerWALDepthGauge()
 		return true
+	case <-connection.ended:
+		// The entry stays in the WAL; the next connection resends it under the same
+		// source_event_id, which every downstream consumer deduplicates on.
+		TriggerAckOutcomes.WithLabelValues(triggerType, "connection_ended").Inc()
+		logger.WithFields(logFields).Warn("Control connection ended before the trigger ack; resending on the next connection")
 	case <-time.After(triggerAckTimeout):
 		TriggerAckOutcomes.WithLabelValues(triggerType, "timeout").Inc()
 		logger.WithFields(logFields).Warn("Timed out waiting for trigger ack; will retry")

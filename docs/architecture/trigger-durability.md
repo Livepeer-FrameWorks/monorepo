@@ -158,7 +158,8 @@ api_sidecar/internal/control trigger_forwarder.go
   - drains bounded WAL.PendingBatch() windows in order
   - for each entry: stream.Send(ControlMessage_MistTrigger),
                     register ack channel keyed by source_event_id,
-                    wait up to triggerAckTimeout (30s)
+                    wait up to triggerAckTimeout (30s) or until the
+                    connection it was sent on ends
     ↓
 api_balancing/internal/control/server.go (Foghorn)
   - processMistTrigger dispatches to MistTriggerProcessor
@@ -173,6 +174,8 @@ api_sidecar handleMistTriggerAck
   - on success=false, retryable=false: dead-letter the WAL file,
                                        log + metric; operator must inspect
   - on timeout: leave in WAL, next tick re-sends
+  - on the connection ending: leave in WAL; the next connection's first
+    pass re-sends from the oldest entry, runtimes an admission waits on first
 ```
 
 ## MistTriggerAck contract
@@ -190,7 +193,7 @@ Foghorn maps processor errors via `classifyTriggerError` (`api_balancing/interna
 ## Failure modes and recovery
 
 - **api_sidecar crashes between Mist's 200 OK and the next forwarder tick.** WAL is fsynced before the response, so the trigger survives. On restart, the forwarder drains bounded `PendingBatch()` windows. Same `source_event_id` → idempotent across crashes.
-- **api_balancing crashes during processing.** Helmsman's `awaitAck` times out after 30s, the next forwarder tick re-sends. Foghorn re-enriches and re-publishes; downstream dedup on `EventId`.
+- **api_balancing crashes during processing.** The control connection ends, which ends Helmsman's ack wait at once; the reconnected stream re-sends (a Foghorn that stays connected but never answers is covered by the 30s ack timeout). Foghorn re-enriches and re-publishes; downstream dedup on `EventId`.
 - **Decklog returns Kafka publish error.** Processor returns the error, Foghorn sends a negative retryable ack. WAL entry stays; next tick retries. This includes the raw trigger journal publish. If the underlying Kafka cluster is unavailable for hours, the WAL accumulates — operators see the pending-depth metric and can intervene.
 - **An always-on multi-rendition processing stream creates many rows.**
   `PROCESS_AV_VIRTUAL_SEGMENT_COMPLETE` is one billable rendition completion,

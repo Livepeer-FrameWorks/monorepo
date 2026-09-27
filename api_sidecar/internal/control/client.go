@@ -72,6 +72,9 @@ type streamConn struct {
 	stream ipcpb.HelmsmanControl_ConnectClient
 	nodeID string
 	epoch  string
+	// ended is closed once this connection's stream has ended; a wait for a reply to something
+	// sent on it ends with it.
+	ended chan struct{}
 }
 
 // lockedClientStream serializes Send on the single Helmsman→Foghorn control
@@ -476,7 +479,7 @@ func storeConn(stream ipcpb.HelmsmanControl_ConnectClient, nodeID string) *strea
 }
 
 func newStreamConn(stream ipcpb.HelmsmanControl_ConnectClient, nodeID string) *streamConn {
-	return &streamConn{stream: stream, nodeID: nodeID, epoch: uuid.NewString()}
+	return &streamConn{stream: stream, nodeID: nodeID, epoch: uuid.NewString(), ended: make(chan struct{})}
 }
 
 func publishConn(conn *streamConn) {
@@ -487,7 +490,7 @@ func updateConnNodeID(conn *streamConn, nodeID string) {
 	if conn == nil || strings.TrimSpace(nodeID) == "" {
 		return
 	}
-	updated := &streamConn{stream: conn.stream, nodeID: nodeID, epoch: conn.epoch}
+	updated := &streamConn{stream: conn.stream, nodeID: nodeID, epoch: conn.epoch, ended: conn.ended}
 	activeConn.CompareAndSwap(conn, updated)
 }
 
@@ -734,13 +737,23 @@ func SendMistTriggerContext(ctx context.Context, mistTrigger *ipcpb.MistTrigger,
 		}
 
 		stream := getStream()
-		if stream == nil && blockingGraceMs > 0 {
+		registering := stream == nil && controlRegistrationPending.Load()
+		if stream == nil && (blockingGraceMs > 0 || registering) {
 			remaining := time.Until(deadline)
 			if remaining <= 0 {
 				break
 			}
 			grace := min(time.Duration(blockingGraceMs)*time.Millisecond, remaining)
+			if registering {
+				// A registered connection is published right after its first node lifecycle
+				// report, which Foghorn needs before it can admit anything to this node.
+				grace = remaining
+			}
 			stream = waitForReconnection(grace)
+			if stream == nil && registering {
+				logger.WithFields(logging.Fields{"trigger_type": triggerType, "request_id": mistTrigger.GetRequestId()}).
+					Warn("Blocking trigger not forwarded: the new control connection did not finish its first node lifecycle report within the trigger's budget")
+			}
 		}
 		if time.Now().After(deadline) {
 			break
@@ -1134,6 +1147,11 @@ func waitForReconnection(timeout time.Duration) ipcpb.HelmsmanControl_ConnectCli
 	streamReconnectedM.Lock()
 	reconnectCh := streamReconnected
 	streamReconnectedM.Unlock()
+	// A connection published between the first check and taking the channel
+	// signalled the channel it replaced.
+	if s := getStream(); s != nil {
+		return s
+	}
 
 	select {
 	case <-reconnectCh:
@@ -1921,11 +1939,18 @@ func runClient(endpoint controlEndpoint, logger logging.Logger) error {
 	if err != nil {
 		return err
 	}
+	defer close(connection.ended)
+
+	// The node's telemetry reaches Foghorn before anything published on this
+	// connection can ask Foghorn to place a publisher on the node.
+	controlRegistrationPending.Store(true)
+	sendConnectionNodeLifecycle(connection, logger)
 
 	// Publish the stream only after old in-flight rows are pending again. A
 	// concurrent terminal producer before this point persists a .pb row without
 	// trying to send on a connection whose reconnect drain has not run yet.
 	publishConn(connection)
+	controlRegistrationPending.Store(false)
 	ControlStreamStatus.Set(1)
 	streamReconnectedM.Lock()
 	close(streamReconnected)

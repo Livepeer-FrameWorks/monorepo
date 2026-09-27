@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"math"
 	"net/http"
@@ -477,6 +478,8 @@ func InitPrometheusMonitor(logger logging.Logger) {
 		sendControlTriggerCtx:   control.SendMistTriggerContext,
 		markGenerationEnded:     control.MarkAdmittedIngestGenerationEndedExact,
 	}
+
+	control.SetConnectionNodeLifecycleReporter(prometheusMonitor.connectionNodeLifecycleReport)
 
 	monitorLogger.WithFields(logging.Fields{
 		"mist_api_user": mistUsername,
@@ -1930,19 +1933,7 @@ func (pm *PrometheusMonitor) forwardNodeMetricsContext(ctx context.Context, runt
 	jsonData := pm.lastJSONData
 	version := pm.nodeMetricsVersion.Load()
 	pm.mutex.RUnlock()
-	// Capabilities from environment (fallback defaults: all true in dev)
-	rt := appconfig.Runtime()
-	capIngest := rt.CapIngest
-	capEdge := rt.CapEdge
-	capStorage := rt.CapStorage
-	capProcessing := rt.CapProcessing
-	roles := rolesFromCapabilityFlags(capIngest, capEdge, capStorage, capProcessing)
-
-	// Convert API response to MistTrigger using converter
-	mistTrigger := pm.convertNodeAPIToMistTrigger(runtime.nodeID, jsonData, monitorLogger)
-
-	// Enrich with Helmsman-specific capabilities, storage, limits
-	enrichNodeLifecycleTrigger(mistTrigger, capIngest, capEdge, capStorage, capProcessing, roles)
+	mistTrigger := pm.nodeLifecycleTrigger(runtime.nodeID, jsonData)
 
 	// Send
 	if pm.stopped.Load() || !pm.nodeRuntimeCurrent(runtime) {
@@ -1968,6 +1959,46 @@ func (pm *PrometheusMonitor) forwardNodeMetricsContext(ctx context.Context, runt
 		"bw_limit": mistTrigger.GetNodeLifecycleUpdate().GetBwLimit(),
 		"ram_max":  mistTrigger.GetNodeLifecycleUpdate().GetRamMax(),
 	}).Info("Sent node lifecycle update to Foghorn")
+}
+
+// nodeLifecycleTrigger converts a Mist metrics snapshot into the full node lifecycle report,
+// enriched with this Helmsman's capabilities, storage and limits.
+func (pm *PrometheusMonitor) nodeLifecycleTrigger(nodeID string, jsonData map[string]any) *ipcpb.MistTrigger {
+	rt := appconfig.Runtime()
+	roles := rolesFromCapabilityFlags(rt.CapIngest, rt.CapEdge, rt.CapStorage, rt.CapProcessing)
+	mistTrigger := pm.convertNodeAPIToMistTrigger(nodeID, jsonData, monitorLogger)
+	enrichNodeLifecycleTrigger(mistTrigger, rt.CapIngest, rt.CapEdge, rt.CapStorage, rt.CapProcessing, roles)
+	return mistTrigger
+}
+
+// connectionNodeLifecycleReport is the first report a newly registered control connection
+// carries, sent before anything else on it: Foghorn admits publishers to this node only on its
+// telemetry, so a report must not wait for the next poll tick. It reads Mist now and falls back to
+// the last snapshot when that read fails.
+func (pm *PrometheusMonitor) connectionNodeLifecycleReport(ctx context.Context) (*ipcpb.MistTrigger, error) {
+	runtime := pm.currentNodeRuntime()
+	if runtime == nil {
+		return nil, errors.New("the Mist node is not monitored yet")
+	}
+	runtime.clientMu.Lock()
+	jsonData, fetchErr := runtime.client.FetchJSONContext(ctx, "")
+	runtime.clientMu.Unlock()
+	if fetchErr == nil && len(jsonData) == 0 {
+		fetchErr = errors.New("mist returned no metrics")
+	}
+	if fetchErr != nil {
+		jsonData = nil
+		pm.mutex.RLock()
+		if pm.nodeID == runtime.nodeID {
+			jsonData = pm.lastJSONData
+		}
+		pm.mutex.RUnlock()
+		if len(jsonData) == 0 {
+			return nil, fmt.Errorf("no Mist metrics snapshot: %w", fetchErr)
+		}
+		monitorLogger.WithError(fetchErr).Warn("Reading Mist for the connection's first node lifecycle report failed; reporting the last snapshot")
+	}
+	return pm.nodeLifecycleTrigger(runtime.nodeID, jsonData), nil
 }
 
 func (pm *PrometheusMonitor) sendNodeMetricsAttempt(
