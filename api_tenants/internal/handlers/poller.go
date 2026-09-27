@@ -384,14 +384,47 @@ func (p healthProbe) check(inst serviceInstance, proto string) error {
 // checkAndPersist checks the instance and records the result.
 func (p healthProbe) checkAndPersist(inst serviceInstance, proto string) string {
 	status := "healthy"
-	if err := p.check(inst, proto); err != nil {
+	checkErr := p.check(inst, proto)
+	if checkErr != nil {
 		status = "unhealthy"
-		logger.WithError(err).WithField("service", inst.serviceID).WithField("instance_id", inst.id).Debug("Health check failed")
+		logger.WithError(checkErr).WithField("service", inst.serviceID).WithField("instance_id", inst.id).Debug("Health check failed")
 	}
-	if err := persistHealthStatus(context.Background(), inst.id, status); err != nil {
+	previous, err := persistHealthTransition(context.Background(), inst.id, status)
+	if err != nil {
 		logger.WithError(err).WithField("service", inst.serviceID).WithField("instance_id", inst.id).Warn("Failed to persist health status")
+		return status
 	}
+	logHealthTransition(inst, healthProbeTarget(inst, proto), previous, status, checkErr)
 	return status
+}
+
+// healthProbeTarget is what a probe of the instance dials: the URL for HTTP,
+// host:port otherwise.
+func healthProbeTarget(inst serviceInstance, proto string) string {
+	if proto == "http" {
+		if probeURL, err := httpHealthURL(inst); err == nil {
+			return probeURL
+		}
+		return inst.path
+	}
+	return fmt.Sprintf("%s:%d", inst.host, inst.port)
+}
+
+// logHealthTransition logs a healthy instance turning unhealthy at Warn, with
+// the probed target and why the probe failed, and its recovery at Info. The
+// previous status comes from the row the verdict replaced, so each transition
+// logs once however often the instance is polled.
+func logHealthTransition(inst serviceInstance, target, previous, current string, cause error) {
+	entry := logger.WithField("service", inst.serviceID).WithField("instance_id", inst.id).WithField("probe", target)
+	switch {
+	case previous == "healthy" && current == "unhealthy":
+		if cause != nil {
+			entry = entry.WithError(cause)
+		}
+		entry.Warn("Service instance became unhealthy")
+	case previous == "unhealthy" && current == "healthy":
+		entry.Info("Service instance recovered")
+	}
 }
 
 var (
@@ -506,6 +539,12 @@ func SetPoolDNSWake(fn func(instanceID, serviceType string)) {
 }
 
 func persistHealthStatus(ctx context.Context, instanceID, status string) error {
+	_, err := persistHealthTransition(ctx, instanceID, status)
+	return err
+}
+
+// persistHealthTransition records the status and returns the one it replaced.
+func persistHealthTransition(ctx context.Context, instanceID, status string) (string, error) {
 	var oldStatus, serviceType string
 	var scanErr error
 	err := database.RetryPostgres(ctx, database.DefaultRetryAttempts, 25*time.Millisecond, func() error {
@@ -526,10 +565,10 @@ func persistHealthStatus(ctx context.Context, instanceID, status string) error {
 		return scanErr
 	})
 	if err != nil {
-		return err
+		return "", err
 	}
 	if errors.Is(scanErr, sql.ErrNoRows) {
-		return nil
+		return "", nil
 	}
 	// service_id is the service type (ensureServiceExists sets them equal). Wake only
 	// on an actual transition so an unchanged poll doesn't spam Navigator.
@@ -537,7 +576,7 @@ func persistHealthStatus(ctx context.Context, instanceID, status string) error {
 		(dns.IsPhysicalEndpointServiceType(serviceType) || dns.IsPoolAssignedServiceType(serviceType)) {
 		poolDNSWake(instanceID, serviceType)
 	}
-	return nil
+	return oldStatus, nil
 }
 
 func recordSkippedHealthCheck(instanceID string) {
@@ -745,11 +784,14 @@ func (m *grpcWatchManager) watchGrpcInstance(ctx context.Context, inst serviceIn
 			return
 		}
 		statusStr := mapGrpcHealthStatus(resp.GetStatus())
-		// Route through persistHealthStatus so a gRPC-watch health transition also
-		// wakes physical-endpoint DNS, same as the HTTP poll path.
-		if dbErr := persistHealthStatus(context.Background(), inst.id, statusStr); dbErr != nil {
+		// Route through persistHealthTransition so a gRPC-watch health transition
+		// also wakes physical-endpoint DNS and logs, same as the HTTP poll path.
+		previous, dbErr := persistHealthTransition(context.Background(), inst.id, statusStr)
+		if dbErr != nil {
 			logger.WithError(dbErr).WithField("instance_id", inst.id).Warn("Failed to persist health status")
+			continue
 		}
+		logHealthTransition(inst, addr, previous, statusStr, fmt.Errorf("gRPC health watch reports %s", resp.GetStatus()))
 	}
 }
 

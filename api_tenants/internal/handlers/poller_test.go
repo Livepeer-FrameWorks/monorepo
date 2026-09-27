@@ -3,9 +3,13 @@ package handlers
 import (
 	"context"
 	"fmt"
+	"net"
 	"net/http"
+	"net/http/httptest"
 	"reflect"
+	"strconv"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -13,6 +17,8 @@ import (
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/servicedefs"
 	"github.com/lib/pq"
+	"github.com/sirupsen/logrus"
+	logrustest "github.com/sirupsen/logrus/hooks/test"
 )
 
 func TestServiceHealthSummarySnapshot(t *testing.T) {
@@ -315,6 +321,70 @@ func TestGrpcHealthTLSConfigUsesInternalNameForFoghornInternalPort(t *testing.T)
 	}
 	if caFile != "/etc/frameworks/pki/ca.crt" {
 		t.Fatalf("ca file = %q", caFile)
+	}
+}
+
+// A healthy instance that stops answering is logged once at Warn with the URL
+// probed and the failure, its recovery once at Info, and polls that do not
+// change the status log neither.
+func TestHealthProbeLogsEachTransitionOnce(t *testing.T) {
+	mockDB, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherRegexp))
+	if err != nil {
+		t.Fatalf("sqlmock: %v", err)
+	}
+	defer func() { _ = mockDB.Close() }()
+	log, hook := logrustest.NewNullLogger()
+	Init(mockDB, log)
+
+	var serverStatus atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(int(serverStatus.Load()))
+	}))
+	defer server.Close()
+	host, portText, _ := net.SplitHostPort(strings.TrimPrefix(server.URL, "http://"))
+	port, _ := strconv.Atoi(portText)
+	inst := serviceInstance{id: "inst-br-1", serviceID: "bridge", proto: "http", host: host, port: port, path: "/health"}
+	probeURL := fmt.Sprintf("http://%s:%d/health", host, port)
+	probe := healthProbe{client: &http.Client{Timeout: time.Second}}
+
+	poll := func(previous string, code int) {
+		t.Helper()
+		serverStatus.Store(int32(code))
+		mock.ExpectQuery(`UPDATE quartermaster\.service_instances`).
+			WillReturnRows(sqlmock.NewRows([]string{"old_status", "service_id"}).AddRow(previous, "bridge"))
+		probe.checkAndPersist(inst, "http")
+	}
+	transitions := func() []*logrus.Entry {
+		var out []*logrus.Entry
+		for _, entry := range hook.AllEntries() {
+			if entry.Message == "Service instance became unhealthy" || entry.Message == "Service instance recovered" {
+				out = append(out, entry)
+			}
+		}
+		return out
+	}
+
+	poll("healthy", http.StatusServiceUnavailable)
+	poll("unhealthy", http.StatusServiceUnavailable)
+	poll("unhealthy", http.StatusOK)
+	poll("healthy", http.StatusOK)
+
+	logged := transitions()
+	if len(logged) != 2 {
+		t.Fatalf("transition logs = %d, want 2 (one per transition)", len(logged))
+	}
+	down, up := logged[0], logged[1]
+	if down.Level != logrus.WarnLevel || down.Data["probe"] != probeURL {
+		t.Fatalf("unhealthy transition = %s %v, want Warn with probe %s", down.Level, down.Data, probeURL)
+	}
+	if cause, ok := down.Data[logrus.ErrorKey].(error); !ok || !strings.Contains(cause.Error(), "returned 503") {
+		t.Fatalf("unhealthy transition error = %v, want the 503 status", down.Data[logrus.ErrorKey])
+	}
+	if up.Level != logrus.InfoLevel || up.Message != "Service instance recovered" || up.Data["probe"] != probeURL {
+		t.Fatalf("recovery = %s %q %v, want Info recovery with the probe URL", up.Level, up.Message, up.Data)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("unmet sql expectations: %v", err)
 	}
 }
 
