@@ -2371,7 +2371,16 @@ func newEdgeUpdateCmd() *cobra.Command {
 	var dir string
 	var sshTarget string
 	var sshKey string
-	cmd := &cobra.Command{Use: "update", Short: "Refresh edge services", RunE: func(cmd *cobra.Command, args []string) error {
+	cmd := &cobra.Command{Use: "update", Short: "Refresh edge services", Long: `Refresh the edge services on this node.
+
+Container stacks rendered by 'frameworks edge init' get their compose file and
+.edge.env re-rendered from this CLI's templates first (node identity, pinned
+image, endpoints, telemetry and operator-edited restream settings are kept;
+the write-once enrollment and secrets files are untouched), then the images
+are pulled and the stack is brought up. Stacks provisioned by
+'frameworks edge provision' are re-rendered by re-running provision.
+
+Native stacks reload MistServer (rolling), restart Helmsman and reload Caddy.`, RunE: func(cmd *cobra.Command, args []string) error {
 		if dir == "" {
 			dir = "."
 		}
@@ -2402,6 +2411,22 @@ func newEdgeUpdateCmd() *cobra.Command {
 			ux.Success(out, "Edge services refreshed (native)")
 		} else {
 			composeDir, compose := resolveEdgeComposeContext(cmd.Context(), dir, sshTarget, sshKey)
+			if compose != edgeOperatorComposeFile {
+				// The frameworks.infra.edge role renders docker-compose.yml
+				// from the manifest's inputs; only a role run re-renders it.
+				return fmt.Errorf("%s/%s is rendered by the edge role; re-render it with `frameworks edge provision` using the manifest or flags this node was provisioned with (add --dry-run to see the drift first)", composeDir, compose)
+			}
+			files := edgeStackFiles{ctx: cmd.Context(), sshTarget: sshTarget, sshKey: sshKey, dir: composeDir}
+			changed, err := rerenderEdgeStackFiles(files)
+			if err != nil {
+				ux.ErrorWithOutput(cmd.ErrOrStderr(), fmt.Errorf("re-render: %w", err), "the stack's .edge.env and compose file must come from `frameworks edge init`", "", "")
+				return err
+			}
+			if len(changed) == 0 {
+				fmt.Fprintln(out, "  compose file and .edge.env already match this CLI's templates")
+			} else {
+				fmt.Fprintf(out, "  re-rendered from this CLI's templates: %s\n", strings.Join(changed, ", "))
+			}
 			steps := dockerEdgeUpdateSteps(compose, envFile)
 			if out, errOut, err := runEdgeDocker(cmd.Context(), sshTarget, sshKey, steps[0], composeDir); err != nil {
 				ux.ErrorWithOutput(cmd.ErrOrStderr(), fmt.Errorf("compose pull: %w", err), "confirm the registry is reachable from this host and the image tags in "+compose+" are valid", out, errOut)

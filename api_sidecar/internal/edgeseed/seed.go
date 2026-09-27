@@ -5,6 +5,8 @@
 package edgeseed
 
 import (
+	"bytes"
+	"encoding/json"
 	"fmt"
 	"io"
 	"io/fs"
@@ -153,9 +155,10 @@ func seedBootstrapConfig(fw, caddyIDs ids) error {
 	}
 
 	// RenderCaddyfile's handle_errors block serves this page, so it must
-	// exist before the first activation.
+	// exist before the first activation. The image is its only writer, so
+	// a page from an older image is replaced rather than kept.
 	maintenancePath := filepath.Join(etcCaddy, "maintenance.html")
-	if _, err := os.Stat(maintenancePath); err != nil {
+	if current, err := os.ReadFile(maintenancePath); err != nil || !bytes.Equal(current, maintenance.HTML) {
 		if err := os.WriteFile(maintenancePath, []byte(maintenance.HTML), 0o644); err != nil {
 			return err
 		}
@@ -164,10 +167,21 @@ func seedBootstrapConfig(fw, caddyIDs ids) error {
 		}
 	}
 
+	// Mist owns the rest of its config at runtime (Helmsman writes streams
+	// and protocols through its API), so only the controller listener the
+	// image depends on is reconciled; Mist is not running during the seed.
 	mistConf := filepath.Join(etcFrameworks, "mistserver.conf")
-	if _, err := os.Stat(mistConf); err != nil {
-		seedConf := "{\"config\":{\"controller\":{\"interface\":\"127.0.0.1\",\"port\":4242}}}\n"
-		if err := os.WriteFile(mistConf, []byte(seedConf), 0o644); err != nil {
+	current, err := os.ReadFile(mistConf)
+	if err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("read MistServer config: %w", err)
+	}
+	next, changed, reconcileErr := reconcileMistControllerConfig(current)
+	if reconcileErr != nil {
+		fmt.Printf("seed-edge: WARNING: leaving %s as is: %v\n", mistConf, reconcileErr)
+		return nil
+	}
+	if changed {
+		if err := os.WriteFile(mistConf, next, 0o644); err != nil {
 			return err
 		}
 		if err := os.Chown(mistConf, fw.uid, fw.gid); err != nil {
@@ -175,6 +189,47 @@ func seedBootstrapConfig(fw, caddyIDs ids) error {
 		}
 	}
 	return nil
+}
+
+// Controller listener the edge image's Mist run script and Helmsman
+// (MISTSERVER_URL) use: loopback 4242, matching the native mistserver role.
+const (
+	mistControllerInterface = "127.0.0.1"
+	mistControllerPort      = 4242
+)
+
+// reconcileMistControllerConfig sets config.controller.interface/port in a
+// MistServer config file, keeping every other key. An empty file yields the
+// minimal seed. Unparseable JSON is an error so the caller never replaces a
+// config it cannot read.
+func reconcileMistControllerConfig(raw []byte) ([]byte, bool, error) {
+	data := map[string]any{}
+	if len(strings.TrimSpace(string(raw))) > 0 {
+		if err := json.Unmarshal(raw, &data); err != nil {
+			return nil, false, fmt.Errorf("parse MistServer config: %w", err)
+		}
+	}
+	config, ok := data["config"].(map[string]any)
+	if !ok {
+		config = map[string]any{}
+	}
+	controller, ok := config["controller"].(map[string]any)
+	if !ok {
+		controller = map[string]any{}
+	}
+	port, portOK := controller["port"].(float64)
+	if len(raw) > 0 && controller["interface"] == mistControllerInterface && portOK && port == mistControllerPort {
+		return raw, false, nil
+	}
+	controller["interface"] = mistControllerInterface
+	controller["port"] = mistControllerPort
+	config["controller"] = controller
+	data["config"] = config
+	out, err := json.Marshal(data)
+	if err != nil {
+		return nil, false, err
+	}
+	return append(out, '\n'), true, nil
 }
 
 type ids struct {
