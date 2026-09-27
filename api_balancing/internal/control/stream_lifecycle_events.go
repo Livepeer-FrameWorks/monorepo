@@ -40,8 +40,9 @@ func streamEventPlaybackID(ctx context.Context, internalName string) string {
 // a buffer from the session's own node matches, and only once per session, so
 // replica nodes and repeated or replayed buffer triggers change nothing and
 // emit nothing. eventMillis fences a delayed trigger from an earlier session on
-// the same node; zero disables the fence. It reports whether this call marked
-// the session.
+// the same node; zero disables the fence and records no playable event time,
+// which leaves the session out of the STREAM_END reaper. It reports whether
+// this call marked the session.
 func MarkIngestSessionPlayable(ctx context.Context, tenantID, nodeID, internalName string, eventMillis int64) (bool, error) {
 	if db == nil {
 		return false, errors.New("mark ingest session playable: no database configured")
@@ -61,8 +62,12 @@ func MarkIngestSessionPlayable(ctx context.Context, tenantID, nodeID, internalNa
 		if err != nil {
 			return fmt.Errorf("mark ingest session playable: %w", err)
 		}
-		if err := domainevents.StreamLive(ctx, tx, tenantID, markedRow.StreamID, playbackID); err != nil {
-			return err
+		// A session admitted without a public stream ID records its playable time for the
+		// STREAM_END reaper but emits no stream.live, matching its absent stream.connected.
+		if markedRow.StreamID != "" {
+			if err := domainevents.StreamLive(ctx, tx, tenantID, markedRow.StreamID, playbackID); err != nil {
+				return err
+			}
 		}
 		marked = true
 		return nil

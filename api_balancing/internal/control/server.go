@@ -3743,15 +3743,19 @@ func OpenIngestSessionCluster(ctx context.Context, tenantID, nodeID, triggerUUID
 }
 
 // EndIngestSessionsForStreamEnd is the STREAM_END / vanish REAPER: it durably ends every ACTIVE
-// ingest session for (tenant, node, stream) whose start is AT OR BEFORE the offline edge's event
-// time, and claims each one's bound DVR stop, in ONE transaction. This is what makes STREAM_END a
-// real backstop for a LOST PUSH_INPUT_CLOSE — without it a lost close leaves the session open
-// forever, and (because admission now protects the incumbent) wedges every reconnect. The
-// event-time fence (started_at_unix_millis <= eventMillis) preserves a reconnect that came up AFTER
-// the stream ended (its session started later, so it is left active). eventMillis <= 0 (old Mist /
-// missing X-Trigger-UnixMillis header) is a deliberate NO-OP: with no reliable event time we cannot
-// fence a reconnect, so we end nothing and let the conservative offline fence handle it. Returns the
-// number of sessions ended. Fails closed (error) on a query failure; nil DB is a no-op.
+// ingest session for (tenant, node, stream) whose buffer Mist reported playable strictly BEFORE the
+// offline edge's event time, and claims each one's bound DVR stop, in ONE transaction. This makes
+// STREAM_END the backstop for a LOST PUSH_INPUT_CLOSE of a generation that went live.
+//
+// The fence is the playable time, not the start time. Mist's controller fires STREAM_END when it
+// counts no session for the stream, which trails the buffer's end by the lingering sessions of that
+// lifetime (tens of seconds while live processes wind down). A reconnect admitted in that interval
+// starts before the event but has no Mist session yet, so a start-time fence ends a live publisher.
+// A generation playable before the event had a session, which must have ended for the event to
+// fire. A generation not yet playable at the event, or playable in the same millisecond, stays
+// open: its PUSH_INPUT_CLOSE or Helmsman's runtime-absence report ends it if it is gone.
+// eventMillis <= 0 (missing X-Trigger-UnixMillis) is a NO-OP. Returns the number of sessions
+// ended. Fails closed (error) on a query failure; nil DB is a no-op.
 func EndIngestSessionsForStreamEnd(ctx context.Context, tenantID, nodeID, internalName string, eventMillis int64, logger logging.Logger) (int, error) {
 	if db == nil || eventMillis <= 0 {
 		return 0, nil
@@ -3764,10 +3768,9 @@ func EndIngestSessionsForStreamEnd(ctx context.Context, tenantID, nodeID, intern
 	defer cancel()
 	var allClaims []DVRStopClaim
 	var endedCount int
+	var spared []foghorndb.ListStreamEndSparedIngestSessionsRow
 	err := database.WithRetryablePostgresTx(ctx, db, nil, func(tx *sql.Tx) error {
-		allClaims, endedCount = nil, 0
-		// Scope the rows in a closure so defer rows.Close() runs BEFORE the ClaimDVRStops queries below
-		// reuse the transaction (a tx cannot have open rows while issuing the next query).
+		allClaims, endedCount, spared = nil, 0, nil
 		endedIDs, scanErr := foghorndb.New(tx).ReapStreamEndIngestSessions(ctx, foghorndb.ReapStreamEndIngestSessionsParams{
 			TenantID: tenantID, NodeID: nodeID, StreamInternalName: internalName, EndedAtUnixMillis: sql.NullInt64{Int64: eventMillis, Valid: true},
 		})
@@ -3787,10 +3790,28 @@ func EndIngestSessionsForStreamEnd(ctx context.Context, tenantID, nodeID, intern
 			}
 		}
 		endedCount = len(endedIDs)
+		var listErr error
+		spared, listErr = foghorndb.New(tx).ListStreamEndSparedIngestSessions(ctx, foghorndb.ListStreamEndSparedIngestSessionsParams{
+			TenantID: tenantID, NodeID: nodeID, StreamInternalName: internalName,
+		})
+		if listErr != nil {
+			return fmt.Errorf("list ingest sessions kept open on stream end: %w", listErr)
+		}
 		return nil
 	})
 	if err != nil {
 		return 0, err
+	}
+	for _, kept := range spared {
+		fields := logging.Fields{
+			"internal_name": internalName, "node_id": nodeID, "ingest_generation": kept.SessionID,
+			"connector_pid": kept.ConnectorPid, "started_at_unix_millis": kept.StartedAtUnixMillis,
+			"end_event_unix_millis": eventMillis,
+		}
+		if kept.PlayableAtUnixMillis.Valid {
+			fields["playable_at_unix_millis"] = kept.PlayableAtUnixMillis.Int64
+		}
+		logger.WithFields(fields).Info("Stream end left an ingest generation open: its buffer was not playable before the end event, so the end cannot belong to it")
 	}
 	DispatchDVRStops(allClaims, logger)
 	return endedCount, nil

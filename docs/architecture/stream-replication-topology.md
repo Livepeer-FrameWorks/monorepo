@@ -313,7 +313,8 @@ Everything above is the demand-driven half. The proactive half — orchestrated 
   partial unique constraint allow one active generation per tenant stream. Source projection remains
   pending until its ordered Redis CAS succeeds; failed or abandoned projections are durably retired.
 - **Offline teardown is a durable transition**. `PUSH_INPUT_CLOSE` ends the exact generation.
-  `STREAM_END` is an event-time-fenced aggregate backstop. Losing a node's control connection ends
+  `STREAM_END` is an aggregate backstop that ends only a generation Mist reported playable before
+  the end event (see viewer-routing.md). Losing a node's control connection ends
   nothing by itself. A publisher admitted on another node while the old node is absent supersedes its
   session under the node retirement guard. The returning node's registration inventory ends the
   sessions it no longer holds and drains generations taken over elsewhere or ended as `node_lost`.

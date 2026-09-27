@@ -756,6 +756,10 @@ CREATE TABLE IF NOT EXISTS foghorn.ingest_sessions (
     -- transcode is intact.
     transcode_degraded_at     TIMESTAMPTZ,
     transcode_degraded_reason TEXT,
+    -- Mist event time (X-Trigger-UnixMillis) of the first playable STREAM_BUFFER, set with
+    -- playable_at. The STREAM_END reaper ends only a session whose buffer was playable strictly
+    -- before the end event; NULL means Mist never reported this generation live on that clock.
+    playable_at_unix_millis   BIGINT,
     UNIQUE (id, tenant_id, stream_internal_name),
     CONSTRAINT ck_foghorn_ingest_sessions_projection_state
         CHECK (projection_state IN ('pending', 'active')),

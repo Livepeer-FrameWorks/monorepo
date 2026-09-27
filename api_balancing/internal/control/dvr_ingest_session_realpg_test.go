@@ -787,7 +787,7 @@ func TestIngestSessionAlreadyEndedIdempotency_RealPG(t *testing.T) {
 	}
 }
 
-// STREAM_END reaper, proven against real Postgres: STREAM_END ends a session whose
+// STREAM_END reaper, proven against real Postgres: STREAM_END ends a live session whose
 // close was LOST (event-time fenced), so admission is no longer wedged; but a reconnect that came up
 // AFTER the STREAM_END event is preserved (its session started later).
 func TestEndIngestSessionsForStreamEnd_ReapsLostCloseFencedByEventTime_RealPG(t *testing.T) {
@@ -799,12 +799,15 @@ func TestEndIngestSessionsForStreamEnd_ReapsLostCloseFencedByEventTime_RealPG(t 
 	lg := logging.NewLogger()
 	const node, stream = "node-reap", "live+reap"
 
-	// A session whose PUSH_INPUT_CLOSE was LOST — still active, started at t=100.
+	// A session whose PUSH_INPUT_CLOSE was LOST — still active, started at t=100, playable at t=150.
 	s1, _, err := CreateIngestSession(ctx, ingA, node, stream, 10, "u-s1", 100, nil, "cell-a", lg)
 	if err != nil {
 		t.Fatalf("s1: %v", err)
 	}
-	// STREAM_END fires with event time 200 (>= s1 start) → reaps s1.
+	if marked, markErr := MarkIngestSessionPlayable(ctx, ingA, node, stream, 150); markErr != nil || !marked {
+		t.Fatalf("s1 playable: marked=%v err=%v", marked, markErr)
+	}
+	// STREAM_END fires with event time 200 (after s1 was playable) → reaps s1.
 	reaped, err := EndIngestSessionsForStreamEnd(ctx, ingA, node, stream, 200, lg)
 	if err != nil {
 		t.Fatalf("reap: %v", err)
@@ -840,6 +843,97 @@ func TestEndIngestSessionsForStreamEnd_ReapsLostCloseFencedByEventTime_RealPG(t 
 	// eventMillis <= 0 (old Mist / missing header) is a no-op.
 	if reaped, err := EndIngestSessionsForStreamEnd(ctx, ingA, node, stream, 0, lg); err != nil || reaped != 0 {
 		t.Fatalf("missing event time must be a no-op, reaped=%d err=%v", reaped, err)
+	}
+}
+
+// Mist's controller fires STREAM_END when the last session of the stream's lifetime times out, well
+// after the buffer ended. Replays stack slot 2, scenario 15 cycle 2 (stream gxHFDQvP…): the old
+// generation ended at 221769, the reconnect (connector pid 775) was admitted at 246553, and the old
+// lifetime's STREAM_END carried event time 246691 — after the admission, before the new connector
+// registered a Mist session. The reconnect must stay open; only an end event after it was itself
+// playable ends it.
+func TestEndIngestSessionsForStreamEnd_KeepsReconnectAdmittedBeforeLingeringEnd_RealPG(t *testing.T) {
+	conn := startRealPG(t)
+	prev := db
+	SetDB(conn)
+	t.Cleanup(func() { SetDB(prev) })
+	ctx := context.Background()
+	lg := logging.NewLogger()
+	const node, stream = "edge-node-1", "live+lingering-end"
+	const (
+		oldStart, oldPlayable = int64(1790482183096), int64(1790482186000)
+		newStart, lateEnd     = int64(1790482246553), int64(1790482246691)
+	)
+
+	old, _ := mintStreamSession(t, node, stream, 607, "u-old", oldStart)
+	if marked, markErr := MarkIngestSessionPlayable(ctx, domainTenant, node, stream, oldPlayable); markErr != nil || !marked {
+		t.Fatalf("old generation playable: marked=%v err=%v", marked, markErr)
+	}
+	if ok, retireErr := RetireIngestSession(ctx, old, domainTenant, stream, IngestEndedAbsentOnReregister, lg); retireErr != nil || !ok {
+		t.Fatalf("end old generation: ok=%v err=%v", ok, retireErr)
+	}
+	reconnect, outcome := mintStreamSession(t, node, stream, 775, "u-new", newStart)
+	if outcome != IngestSessionActive || reconnect == old {
+		t.Fatalf("reconnect: id=%q outcome=%v", reconnect, outcome)
+	}
+
+	if n, reapErr := EndIngestSessionsForStreamEnd(ctx, domainTenant, node, stream, lateEnd, lg); reapErr != nil || n != 0 {
+		t.Fatalf("the old lifetime's STREAM_END ended %d session(s) err=%v; the reconnect admitted before it must stay open", n, reapErr)
+	}
+	if c := activeSessionCount(t, domainTenant, node, 775); c != 1 {
+		t.Fatalf("reconnect open sessions = %d, want 1", c)
+	}
+
+	// The reconnect goes live after the event. The same STREAM_END redelivered from the WAL still
+	// precedes that playable time, and an end event in the same millisecond is ambiguous.
+	newPlayable := lateEnd + 3500
+	if marked, markErr := MarkIngestSessionPlayable(ctx, domainTenant, node, stream, newPlayable); markErr != nil || !marked {
+		t.Fatalf("reconnect playable: marked=%v err=%v", marked, markErr)
+	}
+	for _, eventMillis := range []int64{lateEnd, newPlayable} {
+		if n, reapErr := EndIngestSessionsForStreamEnd(ctx, domainTenant, node, stream, eventMillis, lg); reapErr != nil || n != 0 {
+			t.Fatalf("STREAM_END at %d ended %d session(s) err=%v; the reconnect was playable at %d", eventMillis, n, reapErr, newPlayable)
+		}
+	}
+	if c := activeSessionCount(t, domainTenant, node, 775); c != 1 {
+		t.Fatalf("reconnect open sessions = %d, want 1", c)
+	}
+
+	// Its own lifetime ending, with its close lost, is reaped.
+	if n, reapErr := EndIngestSessionsForStreamEnd(ctx, domainTenant, node, stream, newPlayable+60000, lg); reapErr != nil || n != 1 {
+		t.Fatalf("the reconnect's own STREAM_END ended %d err=%v, want 1", n, reapErr)
+	}
+	var reason string
+	if err := conn.QueryRow(`SELECT ended_reason FROM foghorn.ingest_sessions WHERE id = $1`, reconnect).Scan(&reason); err != nil || reason != "stream_end_reaped" {
+		t.Fatalf("reconnect ended_reason = %q err=%v", reason, err)
+	}
+}
+
+// A generation Mist never reported playable, or reported without an event time, is left to its
+// close or to runtime-absence reconciliation; STREAM_END cannot order against it.
+func TestEndIngestSessionsForStreamEnd_KeepsGenerationWithoutPlayableEventTime_RealPG(t *testing.T) {
+	conn := startRealPG(t)
+	prev := db
+	SetDB(conn)
+	t.Cleanup(func() { SetDB(prev) })
+	ctx := context.Background()
+	lg := logging.NewLogger()
+	const node, stream = "node-unplayed", "live+unplayed"
+
+	if _, _, err := CreateIngestSession(ctx, ingA, node, stream, 30, "u-unplayed", 1000, nil, "cell-a", lg); err != nil {
+		t.Fatal(err)
+	}
+	if n, err := EndIngestSessionsForStreamEnd(ctx, ingA, node, stream, 90000, lg); err != nil || n != 0 {
+		t.Fatalf("never-playable generation: ended %d err=%v, want 0", n, err)
+	}
+	if marked, err := MarkIngestSessionPlayable(ctx, ingA, node, stream, 0); err != nil || !marked {
+		t.Fatalf("playable without event time: marked=%v err=%v", marked, err)
+	}
+	if n, err := EndIngestSessionsForStreamEnd(ctx, ingA, node, stream, 90000, lg); err != nil || n != 0 {
+		t.Fatalf("playable without event time: ended %d err=%v, want 0", n, err)
+	}
+	if c := activeSessionCount(t, ingA, node, 30); c != 1 {
+		t.Fatalf("open sessions = %d, want 1", c)
 	}
 }
 

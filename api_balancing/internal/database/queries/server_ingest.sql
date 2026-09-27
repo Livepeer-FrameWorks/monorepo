@@ -38,17 +38,18 @@ RETURNING id::text;
 -- First playable buffer of the active session, from the session's own node only.
 -- The playable_at IS NULL guard makes a repeated or replayed buffer trigger match
 -- nothing; the start fence keeps a delayed trigger of an earlier session on the
--- same node from marking a newer one.
+-- same node from marking a newer one. Sessions without a public stream ID are
+-- marked too: the STREAM_END reaper orders against playable_at_unix_millis.
 UPDATE foghorn.ingest_sessions
-SET playable_at = NOW()
+SET playable_at = NOW(),
+    playable_at_unix_millis = NULLIF(GREATEST(sqlc.arg(event_unix_millis)::bigint, 0), 0)
 WHERE tenant_id = sqlc.arg(tenant_id)::uuid
   AND stream_internal_name = sqlc.arg(stream_internal_name)
   AND node_id = sqlc.arg(node_id)
   AND ended_at IS NULL
   AND playable_at IS NULL
-  AND stream_id IS NOT NULL
   AND (sqlc.arg(event_unix_millis)::bigint <= 0 OR started_at_unix_millis <= sqlc.arg(event_unix_millis)::bigint)
-RETURNING id::text AS session_id, stream_id::text AS stream_id;
+RETURNING id::text AS session_id, COALESCE(stream_id::text, '')::text AS stream_id;
 -- name: GetIngestSessionAuthoritySnapshot :one
 SELECT COALESCE(media_authority_id, '')::text AS media_authority_id,
        COALESCE(media_authority_version, 0)::bigint AS media_authority_version,
@@ -86,9 +87,22 @@ RETURNING artifact_hash, COALESCE(dvr_start_dispatch->>'node_id', '')::text AS s
 -- name: GetOpenIngestSessionCluster :one
 SELECT COALESCE(ingest_cluster_id, '')::text FROM foghorn.ingest_sessions WHERE tenant_id  =  sqlc.arg(tenant_id)::uuid AND node_id  =  sqlc.arg(node_id) AND start_trigger_uuid  =  sqlc.arg(start_trigger_uuid) AND ended_at IS NULL;
 -- name: ReapStreamEndIngestSessions :many
+-- Mist fires STREAM_END once its controller counts no session for the stream, which trails the
+-- buffer's real end by the lingering sessions of that lifetime. A connector admitted in that
+-- interval has not registered a session yet, so it can start before the end event and still be
+-- live. Only a session whose buffer Mist reported playable strictly before the end event is
+-- provably part of the ended lifetime; any other open session is left to its close or to runtime-
+-- absence reconciliation.
 UPDATE foghorn.ingest_sessions SET ended_at  =  NOW(), ended_at_unix_millis  =  sqlc.narg(ended_at_unix_millis), ended_reason  =  'stream_end_reaped'
 WHERE tenant_id  =  sqlc.arg(tenant_id)::uuid AND node_id  =  sqlc.arg(node_id) AND stream_internal_name  =  sqlc.arg(stream_internal_name) AND ended_at IS NULL AND started_at_unix_millis <= sqlc.narg(ended_at_unix_millis)
+  AND playable_at_unix_millis < sqlc.narg(ended_at_unix_millis)
 RETURNING id::text AS session_id, start_trigger_uuid, COALESCE(stream_id::text, '')::text AS stream_id;
+-- name: ListStreamEndSparedIngestSessions :many
+-- Open sessions of (tenant, node, stream) left by the STREAM_END reaper, so the refusal is logged.
+SELECT id::text AS session_id, connector_pid, started_at_unix_millis, playable_at_unix_millis
+FROM foghorn.ingest_sessions
+WHERE tenant_id = sqlc.arg(tenant_id)::uuid AND node_id = sqlc.arg(node_id)
+  AND stream_internal_name = sqlc.arg(stream_internal_name) AND ended_at IS NULL;
 -- name: ReapExactMissingIngestSession :one
 UPDATE foghorn.ingest_sessions
 SET ended_at = NOW(),

@@ -459,6 +459,8 @@ type Querier interface {
 	ListStaleFederatedArtifactPointersForPurge(ctx context.Context, retentionInterval string) ([]ListStaleFederatedArtifactPointersForPurgeRow, error)
 	ListStaleFreezePublicationLedgerRows(ctx context.Context, arg ListStaleFreezePublicationLedgerRowsParams) ([]ListStaleFreezePublicationLedgerRowsRow, error)
 	ListStaleUploadingVODs(ctx context.Context) ([]ListStaleUploadingVODsRow, error)
+	// Open sessions of (tenant, node, stream) left by the STREAM_END reaper, so the refusal is logged.
+	ListStreamEndSparedIngestSessions(ctx context.Context, arg ListStreamEndSparedIngestSessionsParams) ([]ListStreamEndSparedIngestSessionsRow, error)
 	ListStuckIncompleteThumbnailAttemptIDs(ctx context.Context, arg ListStuckIncompleteThumbnailAttemptIDsParams) ([]string, error)
 	ListSupersededThumbnailAttemptIDs(ctx context.Context, arg ListSupersededThumbnailAttemptIDsParams) ([]string, error)
 	ListTenantArtifactNodes(ctx context.Context, arg ListTenantArtifactNodesParams) ([]string, error)
@@ -541,7 +543,8 @@ type Querier interface {
 	// First playable buffer of the active session, from the session's own node only.
 	// The playable_at IS NULL guard makes a repeated or replayed buffer trigger match
 	// nothing; the start fence keeps a delayed trigger of an earlier session on the
-	// same node from marking a newer one.
+	// same node from marking a newer one. Sessions without a public stream ID are
+	// marked too: the STREAM_END reaper orders against playable_at_unix_millis.
 	MarkIngestSessionPlayable(ctx context.Context, arg MarkIngestSessionPlayableParams) (MarkIngestSessionPlayableRow, error)
 	// Records the first transcode degradation of the reporting node's active session;
 	// later reports for the same session keep the first time and reason.
@@ -594,6 +597,12 @@ type Querier interface {
 	ReadControlCellPlacementCapability(ctx context.Context, livenessSeconds int32) (ReadControlCellPlacementCapabilityRow, error)
 	ReadOfflineEffectLegsLocked(ctx context.Context, arg ReadOfflineEffectLegsLockedParams) (ReadOfflineEffectLegsLockedRow, error)
 	ReapExactMissingIngestSession(ctx context.Context, arg ReapExactMissingIngestSessionParams) (ReapExactMissingIngestSessionRow, error)
+	// Mist fires STREAM_END once its controller counts no session for the stream, which trails the
+	// buffer's real end by the lingering sessions of that lifetime. A connector admitted in that
+	// interval has not registered a session yet, so it can start before the end event and still be
+	// live. Only a session whose buffer Mist reported playable strictly before the end event is
+	// provably part of the ended lifetime; any other open session is left to its close or to runtime-
+	// absence reconciliation.
 	ReapStreamEndIngestSessions(ctx context.Context, arg ReapStreamEndIngestSessionsParams) ([]ReapStreamEndIngestSessionsRow, error)
 	RearmAdmissionPushTargetEffect(ctx context.Context, arg RearmAdmissionPushTargetEffectParams) (int64, error)
 	RearmAdmissionPushTargetsAfterRuntimeEnd(ctx context.Context, arg RearmAdmissionPushTargetsAfterRuntimeEndParams) (int64, error)

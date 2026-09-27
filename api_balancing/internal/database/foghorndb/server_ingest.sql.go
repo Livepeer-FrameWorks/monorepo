@@ -622,6 +622,55 @@ func (q *Queries) ListRecentNodeLifecycles(ctx context.Context) ([]ListRecentNod
 	return items, nil
 }
 
+const listStreamEndSparedIngestSessions = `-- name: ListStreamEndSparedIngestSessions :many
+SELECT id::text AS session_id, connector_pid, started_at_unix_millis, playable_at_unix_millis
+FROM foghorn.ingest_sessions
+WHERE tenant_id = $1::uuid AND node_id = $2
+  AND stream_internal_name = $3 AND ended_at IS NULL
+`
+
+type ListStreamEndSparedIngestSessionsParams struct {
+	TenantID           string `db:"tenant_id" json:"tenant_id"`
+	NodeID             string `db:"node_id" json:"node_id"`
+	StreamInternalName string `db:"stream_internal_name" json:"stream_internal_name"`
+}
+
+type ListStreamEndSparedIngestSessionsRow struct {
+	SessionID            string        `db:"session_id" json:"session_id"`
+	ConnectorPid         int64         `db:"connector_pid" json:"connector_pid"`
+	StartedAtUnixMillis  int64         `db:"started_at_unix_millis" json:"started_at_unix_millis"`
+	PlayableAtUnixMillis sql.NullInt64 `db:"playable_at_unix_millis" json:"playable_at_unix_millis"`
+}
+
+// Open sessions of (tenant, node, stream) left by the STREAM_END reaper, so the refusal is logged.
+func (q *Queries) ListStreamEndSparedIngestSessions(ctx context.Context, arg ListStreamEndSparedIngestSessionsParams) ([]ListStreamEndSparedIngestSessionsRow, error) {
+	rows, err := q.db.QueryContext(ctx, listStreamEndSparedIngestSessions, arg.TenantID, arg.NodeID, arg.StreamInternalName)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListStreamEndSparedIngestSessionsRow{}
+	for rows.Next() {
+		var i ListStreamEndSparedIngestSessionsRow
+		if err := rows.Scan(
+			&i.SessionID,
+			&i.ConnectorPid,
+			&i.StartedAtUnixMillis,
+			&i.PlayableAtUnixMillis,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const lockActiveStreamIngestSession = `-- name: LockActiveStreamIngestSession :one
 SELECT id::text AS id, node_id, connector_pid, started_at_unix_millis, start_trigger_uuid FROM foghorn.ingest_sessions
 WHERE tenant_id  =  $1::uuid AND stream_internal_name  =  $2 AND ended_at IS NULL FOR UPDATE
@@ -694,22 +743,22 @@ func (q *Queries) LockIngestStream(ctx context.Context, hashtext string) error {
 
 const markIngestSessionPlayable = `-- name: MarkIngestSessionPlayable :one
 UPDATE foghorn.ingest_sessions
-SET playable_at = NOW()
-WHERE tenant_id = $1::uuid
-  AND stream_internal_name = $2
-  AND node_id = $3
+SET playable_at = NOW(),
+    playable_at_unix_millis = NULLIF(GREATEST($1::bigint, 0), 0)
+WHERE tenant_id = $2::uuid
+  AND stream_internal_name = $3
+  AND node_id = $4
   AND ended_at IS NULL
   AND playable_at IS NULL
-  AND stream_id IS NOT NULL
-  AND ($4::bigint <= 0 OR started_at_unix_millis <= $4::bigint)
-RETURNING id::text AS session_id, stream_id::text AS stream_id
+  AND ($1::bigint <= 0 OR started_at_unix_millis <= $1::bigint)
+RETURNING id::text AS session_id, COALESCE(stream_id::text, '')::text AS stream_id
 `
 
 type MarkIngestSessionPlayableParams struct {
+	EventUnixMillis    int64  `db:"event_unix_millis" json:"event_unix_millis"`
 	TenantID           string `db:"tenant_id" json:"tenant_id"`
 	StreamInternalName string `db:"stream_internal_name" json:"stream_internal_name"`
 	NodeID             string `db:"node_id" json:"node_id"`
-	EventUnixMillis    int64  `db:"event_unix_millis" json:"event_unix_millis"`
 }
 
 type MarkIngestSessionPlayableRow struct {
@@ -720,13 +769,14 @@ type MarkIngestSessionPlayableRow struct {
 // First playable buffer of the active session, from the session's own node only.
 // The playable_at IS NULL guard makes a repeated or replayed buffer trigger match
 // nothing; the start fence keeps a delayed trigger of an earlier session on the
-// same node from marking a newer one.
+// same node from marking a newer one. Sessions without a public stream ID are
+// marked too: the STREAM_END reaper orders against playable_at_unix_millis.
 func (q *Queries) MarkIngestSessionPlayable(ctx context.Context, arg MarkIngestSessionPlayableParams) (MarkIngestSessionPlayableRow, error) {
 	row := q.db.QueryRowContext(ctx, markIngestSessionPlayable,
+		arg.EventUnixMillis,
 		arg.TenantID,
 		arg.StreamInternalName,
 		arg.NodeID,
-		arg.EventUnixMillis,
 	)
 	var i MarkIngestSessionPlayableRow
 	err := row.Scan(&i.SessionID, &i.StreamID)
@@ -873,6 +923,7 @@ func (q *Queries) ReapExactMissingIngestSession(ctx context.Context, arg ReapExa
 const reapStreamEndIngestSessions = `-- name: ReapStreamEndIngestSessions :many
 UPDATE foghorn.ingest_sessions SET ended_at  =  NOW(), ended_at_unix_millis  =  $1, ended_reason  =  'stream_end_reaped'
 WHERE tenant_id  =  $2::uuid AND node_id  =  $3 AND stream_internal_name  =  $4 AND ended_at IS NULL AND started_at_unix_millis <= $1
+  AND playable_at_unix_millis < $1
 RETURNING id::text AS session_id, start_trigger_uuid, COALESCE(stream_id::text, '')::text AS stream_id
 `
 
@@ -889,6 +940,12 @@ type ReapStreamEndIngestSessionsRow struct {
 	StreamID         string `db:"stream_id" json:"stream_id"`
 }
 
+// Mist fires STREAM_END once its controller counts no session for the stream, which trails the
+// buffer's real end by the lingering sessions of that lifetime. A connector admitted in that
+// interval has not registered a session yet, so it can start before the end event and still be
+// live. Only a session whose buffer Mist reported playable strictly before the end event is
+// provably part of the ended lifetime; any other open session is left to its close or to runtime-
+// absence reconciliation.
 func (q *Queries) ReapStreamEndIngestSessions(ctx context.Context, arg ReapStreamEndIngestSessionsParams) ([]ReapStreamEndIngestSessionsRow, error) {
 	rows, err := q.db.QueryContext(ctx, reapStreamEndIngestSessions,
 		arg.EndedAtUnixMillis,

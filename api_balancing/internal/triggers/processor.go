@@ -4602,11 +4602,11 @@ func (p *Processor) handleStreamEnd(trigger *ipcpb.MistTrigger) (string, bool, e
 	// it, only the node-local effects below may run.
 	streamWide := p.offlineIsStreamWide(internalName, nodeID)
 
-	// REAPER (event-time fenced): end this node's ingest session(s) for the stream whose start is at
-	// or before the STREAM_END event, and claim their DVR stops. This is what turns STREAM_END into a
-	// real backstop for a LOST PUSH_INPUT_CLOSE — without it a lost close leaves the session open and
-	// (since admission protects the incumbent) wedges every reconnect. The event-time fence preserves
-	// a reconnect that came up AFTER the stream ended. Node-scoped and idempotent, so it runs
+	// REAPER (event-time fenced): end this node's ingest session(s) for the stream whose buffer was
+	// playable before the STREAM_END event, and claim their DVR stops. This is the backstop for a
+	// LOST PUSH_INPUT_CLOSE. A reconnect admitted while Mist's previous lifetime was still winding
+	// down, or after the event, is not yet playable at the event and stays open (see
+	// EndIngestSessionsForStreamEnd). Node-scoped and idempotent, so it runs
 	// regardless of streamWide; on a query failure it surfaces a retryable error (STREAM_END is
 	// durable) via reapErr below. When Mist supplies no event time it is a no-op.
 	reaped, reapErr := control.EndIngestSessionsForStreamEnd(context.Background(), trigger.GetTenantId(), nodeID, internalName, streamEnd.GetTriggerUnixMillis(), p.logger)

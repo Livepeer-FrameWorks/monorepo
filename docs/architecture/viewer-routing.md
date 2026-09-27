@@ -522,7 +522,14 @@ Late triggers from an ended generation change nothing. The old node's WAL can
 still deliver its `PUSH_INPUT_CLOSE`, `STREAM_END` or runtime-absence report
 after a takeover, a same-node successor, or `node_lost`. The close and the
 runtime-absence report match only the exact connector PID or generation. The
-`STREAM_END` reaper is node-scoped and fenced by event time. The offline backstop
+`STREAM_END` reaper is node-scoped and ends only a generation whose first
+playable `STREAM_BUFFER` carries a Mist event time strictly before the
+`STREAM_END` event. Mist's controller fires `STREAM_END` when the last session
+of the stream's lifetime times out, which can be tens of seconds after the
+buffer ended, so a reconnect admitted in that interval starts before the event
+while its connector has no Mist session yet. A start-time fence would end that
+live publisher; the playable-time fence leaves it, and any generation that was
+never playable, to its close or to runtime-absence reconciliation. The offline backstop
 is suppressed while any session of the stream is open. None of them ends the
 successor or emits a second `stream.idle`.
 

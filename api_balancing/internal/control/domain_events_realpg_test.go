@@ -183,6 +183,9 @@ func TestStreamLifecycleDomainEvents_RealPG(t *testing.T) {
 	if n := len(domainRows(t, conn, "stream.connected")); n != 2 {
 		t.Fatalf("a new generation emits connected, got %d total", n)
 	}
+	if marked, markErr := MarkIngestSessionPlayable(ctx, domainTenant, "node-owner", stream, 4500); markErr != nil || !marked {
+		t.Fatalf("second generation playable: marked=%v err=%v", marked, markErr)
+	}
 	reaped, err := EndIngestSessionsForStreamEnd(ctx, domainTenant, "node-owner", stream, 5000, logging.NewLogger())
 	if err != nil || reaped != 1 {
 		t.Fatalf("reaper ended %d err=%v", reaped, err)
@@ -215,7 +218,7 @@ func TestStreamLifecycleDomainEvents_RealPG(t *testing.T) {
 		order = append(order, ty)
 	}
 	_ = rows.Close()
-	want := []string{"stream.connected", "stream.live", "stream.idle", "stream.connected", "stream.idle", "stream.connected", "stream.idle", "stream.connected"}
+	want := []string{"stream.connected", "stream.live", "stream.idle", "stream.connected", "stream.live", "stream.idle", "stream.connected", "stream.idle", "stream.connected"}
 	if len(order) != len(want) {
 		t.Fatalf("stream event order = %v, want %v", order, want)
 	}
@@ -230,8 +233,11 @@ func TestStreamLifecycleDomainEvents_RealPG(t *testing.T) {
 	if _, _, err := CreateIngestSession(ctx, domainTenant, "node-x", "live+nostream", 201, "trig-ns", 1000, nil, "cell-a", logging.NewLogger()); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := EndIngestSessionsForStreamEnd(ctx, domainTenant, "node-x", "live+nostream", 2000, logging.NewLogger()); err != nil {
-		t.Fatal(err)
+	if marked, err := MarkIngestSessionPlayable(ctx, domainTenant, "node-x", "live+nostream", 1500); err != nil || !marked {
+		t.Fatalf("playable without stream ID: marked=%v err=%v", marked, err)
+	}
+	if reaped, err := EndIngestSessionsForStreamEnd(ctx, domainTenant, "node-x", "live+nostream", 2000, logging.NewLogger()); err != nil || reaped != 1 {
+		t.Fatalf("reaper without stream ID ended %d err=%v", reaped, err)
 	}
 	if after := countDomainRows(t, conn); after != before {
 		t.Fatalf("a session without a stream ID emitted %d events", after-before)
@@ -242,6 +248,9 @@ func TestStreamLifecycleDomainEvents_RealPG(t *testing.T) {
 	const unresolved = "live+unresolved"
 	if _, outcome := mintStreamSession(t, "node-u", unresolved, 301, "trig-u", 1000); outcome != IngestSessionActive {
 		t.Fatalf("unresolved mint outcome %v", outcome)
+	}
+	if marked, err := MarkIngestSessionPlayable(ctx, domainTenant, "node-u", unresolved, 1500); err != nil || !marked {
+		t.Fatalf("unresolved playable: marked=%v err=%v", marked, err)
 	}
 	idleBefore := len(domainRows(t, conn, "stream.idle"))
 	if reaped, err := EndIngestSessionsForStreamEnd(ctx, domainTenant, "node-u", unresolved, 2000, logging.NewLogger()); err != nil || reaped != 1 {
