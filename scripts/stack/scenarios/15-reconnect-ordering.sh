@@ -10,9 +10,15 @@
 # attempt as a new generation and Foghorn never refuses it as a duplicate.
 # The cut rejects TCP to and from Foghorn's control port inside the edge's
 # network namespace (lib.sh netfault_*); RTMP to the edge keeps flowing.
-# Exercised only when Helmsman logs that the PUSH_REWRITE waited for the
-# runtime's undelivered end triggers; a cycle whose WAL drained before the
-# reconnect proves nothing and is repeated, up to STACK_REORDER_CYCLES.
+# Helmsman's forwarder delivers a queued close within milliseconds of the
+# reconnect, so Decklog is paused across the restore: Foghorn receives the
+# queued closes and ends their ingest sessions but cannot acknowledge them, and
+# the target's close is still undelivered when the encoder reconnects. Decklog
+# resumes as soon as Helmsman logs that the PUSH_REWRITE waits for it, and at
+# most 1.5 s after the encoder starts, so the close can still be acknowledged
+# within the 4 s PUSH_REWRITE budget. Exercised only when Helmsman logs that
+# wait; a cycle without it proves nothing and is repeated, up to
+# STACK_REORDER_CYCLES.
 # Catches: A4 (PUSH_REWRITE bypassed the WAL and reached Foghorn before the old
 # connection's close: DUPLICATE_INGEST until the WAL drained).
 . "$(dirname "$0")/../lib.sh"
@@ -24,10 +30,14 @@ CYCLES=${STACK_REORDER_CYCLES:-3}
 FOGHORNS_A=(foghorn foghorn-2)
 need ffmpeg jq curl python3 docker || finish
 netfault_start "$EDGE_SERVICE" || finish
+EDGE_CONTAINER=$(container_of "$EDGE_SERVICE")
+[ -n "$EDGE_CONTAINER" ] || { fail "find the $EDGE_SERVICE container"; finish; }
 
 PUBS=() STREAMS=()
+DECKLOG_PAUSED=0
 cleanup() {
   local p s
+  [ "$DECKLOG_PAUSED" = 1 ] && stack_ctl unpause decklog
   netfault_stop "$EDGE_SERVICE"
   for p in "${PUBS[@]}"; do kill "$p" 2>/dev/null; done
   for s in "${STREAMS[@]}"; do delete_stream "$s"; done
@@ -49,6 +59,12 @@ edge_metric() { # edge_metric <name>: Helmsman's gauge value inside the edge
 }
 control_connected() { [ "$(edge_metric helmsman_control_stream_connected)" = 1 ]; }
 control_down() { ! control_connected; }
+# rewrite_waiting <since>: Helmsman logged that the target's PUSH_REWRITE waits
+# for the runtime's undelivered end triggers. Read from the container directly:
+# the check runs inside the PUSH_REWRITE budget.
+rewrite_waiting() {
+  docker logs --since "$1" "$EDGE_CONTAINER" 2>&1 | grep 'PUSH_REWRITE waits for the runtime' | grep -qF "$T_IN"
+}
 
 new_stream "stack-reorder-$(date +%s)" || { fail "create the target stream"; finish; }
 T_IN=$NS_IN T_PB=$NS_PB T_KEY=$NS_KEY
@@ -99,6 +115,8 @@ for cycle in $(seq 1 "$CYCLES"); do
   sleep 4
   echo "    WAL pending before restore: $(edge_metric helmsman_trigger_wal_pending)"
 
+  stack_ctl pause decklog || { fail "pause decklog to hold Foghorn's acknowledgements"; break; }
+  DECKLOG_PAUSED=1
   RESTORE_TS=$(utc_now)
   netfault_clear "$EDGE_SERVICE" || { fail "clear the control-port rules"; break; }
   deadline=$(($(date +%s) + 90))
@@ -107,6 +125,10 @@ for cycle in $(seq 1 "$CYCLES"); do
   TARGET=$(publish "$EDGE_A_RTMP" "$T_KEY" 640x360 15 3600)
   PUBS+=("$TARGET")
   echo "    reconnected publisher started with ${pending:-?} WAL entries pending"
+  release_at=$(($(date +%s%N) + 1500000000))
+  until rewrite_waiting "$RESTORE_TS" || [ "$(date +%s%N)" -ge "$release_at" ]; do sleep 0.1; done
+  stack_ctl unpause decklog || { fail "resume decklog"; break; }
+  DECKLOG_PAUSED=0
 
   new_generation() {
     G_NEW=$(open_generation "$FOGHORN_A_DB" "$T_IN" | head -1)
@@ -139,14 +161,14 @@ for cycle in $(seq 1 "$CYCLES"); do
     exercised=1
     break
   fi
-  echo "    the WAL had delivered the target's close before the reconnect"
+  echo "    Helmsman never held the target's PUSH_REWRITE for its close"
   # A refused reconnect is the finding; later cycles would only repeat it.
   [ "$FAIL" -gt "$failed_before" ] && break
 done
 if [ "$exercised" = 1 ]; then
   pass "the reconnect raced the queued close (Helmsman held the PUSH_REWRITE for it)"
 elif [ "$FAIL" = 0 ]; then
-  blocked "no cycle reconnected before the WAL delivered the old close; the ordering was not exercised"
+  blocked "no cycle held the reconnect's PUSH_REWRITE for the queued close; the ordering was not exercised"
 fi
 [ "$admitted" = 1 ] && eventually 60 "the reconnected publisher serves media" media_at "$FOGHORN_A_URL" "$T_PB"
 finish
