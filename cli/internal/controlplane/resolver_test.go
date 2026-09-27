@@ -67,6 +67,61 @@ services:
 	}
 }
 
+func TestResolveGRPCMeshListsEveryControlPlaneReplica(t *testing.T) {
+	withEmptyConfig(t)
+	manifestPath := writeManifest(t, `
+version: v1
+type: cluster
+profile: development
+root_domain: example.test
+hosts:
+  core-1:
+    external_ip: 203.0.113.10
+    user: root
+    wireguard_ip: 10.88.0.10
+  core-2:
+    external_ip: 203.0.113.11
+    user: root
+    wireguard_ip: 10.88.0.11
+services:
+  quartermaster:
+    enabled: true
+    mode: native
+    hosts: [core-1, core-2]
+  commodore:
+    enabled: true
+    mode: native
+    hosts: [core-1, core-2]
+  navigator:
+    enabled: true
+    mode: native
+    hosts: [core-1, core-2]
+`)
+	ctx := fwcfg.Context{
+		Name:       "platform",
+		Persona:    fwcfg.PersonaPlatform,
+		AccessMode: fwcfg.AccessModeMesh,
+		Gitops:     &fwcfg.Gitops{Source: fwcfg.GitopsManifest, ManifestPath: manifestPath},
+	}
+	resolver := NewResolver(ctx)
+	t.Cleanup(resolver.Close)
+
+	for service, want := range map[string]string{
+		"quartermaster": "10.88.0.10:19002,10.88.0.11:19002",
+		"commodore":     "10.88.0.10:19001,10.88.0.11:19001",
+		// Navigator's client dials one address, so it gets the first host.
+		"navigator": "10.88.0.10:18011",
+	} {
+		ep, err := resolver.ResolveGRPC(context.Background(), service)
+		if err != nil {
+			t.Fatalf("ResolveGRPC(%s): %v", service, err)
+		}
+		if ep.Address != want {
+			t.Fatalf("ResolveGRPC(%s).Address = %q, want %q", service, ep.Address, want)
+		}
+	}
+}
+
 func TestResolveGRPCEntryMeshDialsNamedCellEntry(t *testing.T) {
 	withEmptyConfig(t)
 	manifestPath := writeManifest(t, `

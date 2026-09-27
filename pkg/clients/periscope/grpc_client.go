@@ -15,7 +15,6 @@ import (
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
-	"google.golang.org/grpc/keepalive"
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/timestamppb"
@@ -42,7 +41,9 @@ type GRPCClient struct {
 
 // GRPCConfig represents the configuration for the gRPC client
 type GRPCConfig struct {
-	// GRPCAddr is the gRPC server address (host:port, no scheme)
+	// GRPCAddr is the gRPC server address (host:port, no scheme), or a
+	// comma-separated list of replica addresses. RPCs are balanced across
+	// every healthy replica (grpcutil.ReplicaTarget).
 	GRPCAddr string
 	// Timeout for gRPC calls
 	Timeout time.Duration
@@ -167,8 +168,8 @@ func NewGRPCClient(config GRPCConfig) (*GRPCClient, error) {
 	}
 
 	// Connect to gRPC server with auth interceptor for user context and service token fallback
-	conn, err := grpc.NewClient(
-		config.GRPCAddr,
+	target, opts := grpcutil.ReplicaTarget(config.GRPCAddr)
+	opts = append(opts,
 		transport,
 		grpc.WithDefaultCallOptions(grpc.WaitForReady(true)),
 		grpc.WithChainUnaryInterceptor(
@@ -176,12 +177,8 @@ func NewGRPCClient(config GRPCConfig) (*GRPCClient, error) {
 			clients.FailsafeUnaryInterceptor("periscope", config.Logger),
 			authInterceptor(config.ServiceToken, config.DelegatedJWTSecret),
 		),
-		grpc.WithKeepaliveParams(keepalive.ClientParameters{
-			Time:                5 * time.Minute,  // Ping interval (must be >= server MinTime, default 5m)
-			Timeout:             10 * time.Second, // Wait for ping ack before closing
-			PermitWithoutStream: false,            // Only keepalive when active RPCs exist
-		}),
 	)
+	conn, err := grpc.NewClient(target, opts...)
 	if err != nil {
 		return nil, fmt.Errorf("failed to connect to Periscope gRPC: %w", err)
 	}

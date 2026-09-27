@@ -94,6 +94,11 @@ func StartHealthPoller(cfg HealthPollerConfig) {
 	}
 	currentHealthProbe.Store(&healthProbe{client: client, tls: tls})
 
+	// Every Quartermaster replica starts the poller; only the elected one
+	// probes and watches. Two probers that see the network differently would
+	// overwrite each other's verdicts, and each flip wakes a Navigator DNS sync.
+	leader := &pollerLeadership{lock: database.NewSessionLeader(db, "quartermaster-health-poller")}
+
 	if cfg.GRPCWatch {
 		watchRefresh := time.Duration(cfg.WatchRefreshSeconds) * time.Second
 		watchBackoff := time.Duration(cfg.WatchBackoffSeconds) * time.Second
@@ -103,7 +108,7 @@ func StartHealthPoller(cfg HealthPollerConfig) {
 			watchMaxConc = maxConc
 		}
 		watchSem := make(chan struct{}, watchMaxConc)
-		go startGrpcHealthWatchers(watchRefresh, watchDialTimeout, watchBackoff, watchSem, tls)
+		go startGrpcHealthWatchers(leader, watchRefresh, watchDialTimeout, watchBackoff, watchSem, tls)
 	}
 
 	go func() {
@@ -114,8 +119,10 @@ func StartHealthPoller(cfg HealthPollerConfig) {
 				time.Sleep(interval)
 				continue
 			}
-			if err := pollOnce(client, sem, batchSize, minAge, tls); err != nil {
-				logger.WithError(err).Warn("health poller iteration failed")
+			if leader.lead() {
+				if err := pollOnce(client, sem, batchSize, minAge, tls); err != nil {
+					logger.WithError(err).Warn("health poller iteration failed")
+				}
 			}
 			atomic.StoreInt32(&pollerInFlight, 0)
 			// Sleep with jitter: interval ± 25%
@@ -549,7 +556,7 @@ type grpcWatchManager struct {
 	tls     func(serviceID string) HealthWatchTLS
 }
 
-func startGrpcHealthWatchers(refreshInterval, dialTimeout, backoff time.Duration, sem chan struct{}, tls func(serviceID string) HealthWatchTLS) {
+func startGrpcHealthWatchers(leader healthLeader, refreshInterval, dialTimeout, backoff time.Duration, sem chan struct{}, tls func(serviceID string) HealthWatchTLS) {
 	manager := &grpcWatchManager{
 		active:  make(map[string]context.CancelFunc),
 		backoff: make(map[string]time.Time),
@@ -560,11 +567,68 @@ func startGrpcHealthWatchers(refreshInterval, dialTimeout, backoff time.Duration
 	defer ticker.Stop()
 
 	for {
-		if err := manager.refreshGrpcWatches(dialTimeout, backoff, sem); err != nil {
+		if err := manager.refreshIfLeader(leader, dialTimeout, backoff, sem); err != nil {
 			logger.WithError(err).Warn("grpc health watcher refresh failed")
 		}
 		<-ticker.C
 	}
+}
+
+// refreshIfLeader keeps one watch per gRPC instance while this replica leads
+// and ends every watch once it does not, so a replica that lost the election
+// stops writing health verdicts.
+func (m *grpcWatchManager) refreshIfLeader(leader healthLeader, dialTimeout, backoff time.Duration, sem chan struct{}) error {
+	if !leader.lead() {
+		m.stopAll()
+		return nil
+	}
+	return m.refreshGrpcWatches(dialTimeout, backoff, sem)
+}
+
+func (m *grpcWatchManager) stopAll() {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for id, cancel := range m.active {
+		cancel()
+		delete(m.active, id)
+	}
+}
+
+// healthLeader reports whether this replica runs the health probes now.
+type healthLeader interface {
+	lead() bool
+}
+
+// pollerLeadership wraps the election with the transition and refusal logs.
+type pollerLeadership struct {
+	lock interface {
+		Lead(ctx context.Context) (bool, error)
+	}
+	mu      sync.Mutex
+	leading bool
+}
+
+func (p *pollerLeadership) lead() bool {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	leading, err := p.lock.Lead(ctx)
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if err != nil {
+		logger.WithError(err).Warn("Health poller skipped: could not check the poller election")
+	}
+	if leading != p.leading {
+		p.leading = leading
+		switch {
+		case leading:
+			logger.Info("Health poller elected on this replica")
+		case err != nil:
+			logger.Warn("Health poller stopped on this replica: the election could not be checked")
+		default:
+			logger.Info("Health poller stopped on this replica: another replica leads")
+		}
+	}
+	return leading
 }
 
 func (m *grpcWatchManager) refreshGrpcWatches(dialTimeout, backoff time.Duration, sem chan struct{}) error {

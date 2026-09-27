@@ -14,6 +14,15 @@ FrameWorks runs one control plane and one set of durable data stores in an aggre
 | Foghorn                                                                          | One cell per region | Each cell has its own Redis (Sentinel in production) and its own Foghorn database. A Foghorn configured for Sentinel connects within a bounded retry or exits.                                      |
 | Edges                                                                            | Any cluster         | An edge is controlled by one Foghorn cell at a time.                                                                                                                                                |
 
+## Control-plane replicas
+
+Quartermaster, Commodore, Purser and Periscope-Query run as replicas on several aggregator hosts (manifest `hosts:`). Every replica serves every RPC; there is no primary.
+
+- Callers dial `<service>.internal`, which Privateer answers with every running instance. Dependencies on these four services have global DNS scope (`pkg/topology`), so a caller resolves the replicas on hosts of every cluster, not only those that share its own cluster. The shared clients (`pkg/clients/{quartermaster,commodore,purser,periscope}`) dial through `grpcutil.ReplicaTarget`: gRPC `round_robin` over all resolved addresses, with client health checking against the standard health service. A replica that shuts down reports `NOT_SERVING` before its listener closes (`pkg/server.DrainGRPCHealth`) and leaves the pick set first. Keepalive pings (30 s, 10 s timeout) tear down a connection to a host that died without closing its sockets; the servers admit them with `grpcutil.ReplicaServerKeepalive`.
+- Privateer starts before `.internal` resolves, so the CLI gives it every Quartermaster mesh address as a comma-separated `QUARTERMASTER_GRPC_ADDR`, and its client fails over between them.
+- Operator commands reach one replica: a mesh-mode context dials the same address list, an SSH-tunnelled one opens its tunnel to the first host that accepts it.
+- Background work tolerates every replica running it. Outbox and obligation workers claim rows with `FOR UPDATE SKIP LOCKED` leases, invoices are unique per tenant and period, and Kafka consumers share one group. Work that must run once at a time takes a session advisory lock (`pkg/database.SessionLeader`, `WithSessionLock`): Quartermaster's health poller and gRPC health watches run only on the elected replica, and Purser's startup Stripe tier sync runs one replica at a time. Purser re-reads a Livepeer gateway's deposit under the funding signer lock before it tops it up, and its invoice email lease outlasts a full batch of sends.
+
 ## Realtime delivery
 
 Gateway routes GraphQL subscriptions to its own region's Signalman replicas. It opens one upstream Signalman stream per `(tenant, channel)`, shares it across every local subscriber of that key, gives each subscriber a bounded queue, and closes a subscriber that falls behind instead of blocking the others. Upstream streams run over a small pool of HTTP/2 connections per Signalman address.

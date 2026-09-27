@@ -171,6 +171,77 @@ func TestPollOnceExcludesFoghornOwnedEdgeServices(t *testing.T) {
 	}
 }
 
+type fixedLeader struct{ leading bool }
+
+func (f *fixedLeader) lead() bool { return f.leading }
+
+type scriptedElection struct {
+	answers []bool
+	err     error
+}
+
+func (s *scriptedElection) Lead(context.Context) (bool, error) {
+	next := s.answers[0]
+	if len(s.answers) > 1 {
+		s.answers = s.answers[1:]
+	}
+	return next, s.err
+}
+
+// A replica that lost the election ends its gRPC health watches and opens
+// none, so only the leader writes health verdicts.
+func TestGrpcWatchesRunOnlyOnTheElectedReplica(t *testing.T) {
+	mockDB, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer mockDB.Close()
+	Init(mockDB, logging.NewLogger())
+
+	watchCancelled := false
+	m := &grpcWatchManager{
+		active:  map[string]context.CancelFunc{"inst-1": func() { watchCancelled = true }},
+		backoff: map[string]time.Time{},
+		tls:     func(string) HealthWatchTLS { return HealthWatchTLS{} },
+	}
+	if err := m.refreshIfLeader(&fixedLeader{leading: false}, time.Second, time.Second, make(chan struct{}, 1)); err != nil {
+		t.Fatal(err)
+	}
+	if !watchCancelled || len(m.active) != 0 {
+		t.Fatalf("follower kept its watches: cancelled=%v active=%d", watchCancelled, len(m.active))
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("follower queried watch candidates: %v", err)
+	}
+
+	mock.ExpectQuery("instance_id").WillReturnRows(sqlmock.NewRows([]string{
+		"instance_id", "service_id", "protocol", "advertise_host", "port", "default_protocol", "assigned_cluster_id", "assigned_base_url",
+	}))
+	if err := m.refreshIfLeader(&fixedLeader{leading: true}, time.Second, time.Second, make(chan struct{}, 1)); err != nil {
+		t.Fatal(err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("leader did not refresh its watches: %v", err)
+	}
+}
+
+func TestPollerLeadershipFollowsTheElection(t *testing.T) {
+	Init(nil, logging.NewLogger())
+	election := &scriptedElection{answers: []bool{false, true, true, false}}
+	p := &pollerLeadership{lock: election}
+	var got []bool
+	for range 4 {
+		got = append(got, p.lead())
+	}
+	if fmt.Sprint(got) != "[false true true false]" {
+		t.Fatalf("lead() = %v, want the election's answers", got)
+	}
+	failing := &pollerLeadership{lock: &scriptedElection{answers: []bool{false}, err: fmt.Errorf("db down")}}
+	if failing.lead() {
+		t.Fatal("an election that could not be checked must not lead")
+	}
+}
+
 func TestApplyServiceDefinitionFallbackDoesNotOverrideInstanceProtocol(t *testing.T) {
 	inst := serviceInstance{serviceID: "foghorn", proto: "grpc", port: 18029}
 

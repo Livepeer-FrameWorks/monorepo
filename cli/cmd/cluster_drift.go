@@ -13,6 +13,7 @@ import (
 	"frameworks/cli/pkg/detect"
 	"frameworks/cli/pkg/gitops"
 	"frameworks/cli/pkg/inventory"
+	"frameworks/cli/pkg/orchestrator"
 	fwssh "frameworks/cli/pkg/ssh"
 
 	"github.com/spf13/cobra"
@@ -171,21 +172,17 @@ func buildClusterDriftTargets(manifest *inventory.Manifest) []clusterDriftTarget
 		if !svc.Enabled {
 			return
 		}
-		hostName := svc.Host
-		if hostName == "" && len(svc.Hosts) > 0 {
-			hostName = svc.Hosts[0]
-		}
-		if hostName == "" {
-			return
-		}
 		deployName, resolveErr := resolveDeployName(name, svc)
 		if resolveErr != nil {
 			return
 		}
-		targets = append(targets, clusterDriftTarget{
-			Host: hostName, Display: name, Deploy: deployName,
-			DesiredMode: svc.Mode, PinnedVersion: svc.Version,
-		})
+		// Every replica host is probed; one host can drift while another is current.
+		for _, hostName := range orchestrator.ServiceHosts(svc) {
+			targets = append(targets, clusterDriftTarget{
+				Host: hostName, Display: name, Deploy: deployName,
+				DesiredMode: svc.Mode, PinnedVersion: svc.Version,
+			})
+		}
 	}
 
 	names := func(m map[string]inventory.ServiceConfig) []string {

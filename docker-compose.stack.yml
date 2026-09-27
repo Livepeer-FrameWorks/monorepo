@@ -40,6 +40,49 @@ x-stack-s3-cell-b: &stack-s3-cell-b
   STORAGE_S3_PREFIX: ""
 
 services:
+  # Second control-plane replicas, on their own node (central-node-2, from
+  # scripts/stack/seed.sql) as production runs them on separate hosts. The
+  # network alias puts each behind the same name as the first replica, so every
+  # client that dials commodore:19001 or quartermaster:19002 resolves both, the
+  # way <service>.internal resolves every instance on the mesh.
+  quartermaster-2:
+    extends:
+      file: docker-compose.yml
+      service: quartermaster
+    profiles: ["stack"]
+    environment:
+      QUARTERMASTER_HOST: quartermaster-2
+      NODE_ID: central-node-2
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      frameworks:
+        aliases: [quartermaster]
+
+  commodore-2:
+    extends:
+      file: docker-compose.yml
+      service: commodore
+    profiles: ["stack"]
+    environment:
+      COMMODORE_HOST: commodore-2
+      NODE_ID: central-node-2
+      SMTP_HOST: mailpit
+      SMTP_PORT: "1025"
+      SMTP_USER: ""
+      SMTP_PASSWORD: ""
+      SMTP_ALLOW_INSECURE: "true"
+      FROM_EMAIL: stack@frameworks.network
+    depends_on:
+      postgres:
+        condition: service_healthy
+      quartermaster:
+        condition: service_healthy
+    networks:
+      frameworks:
+        aliases: [commodore]
+
   # Second cell-B replica. Its Quartermaster instance row and cluster
   # assignments come from scripts/stack/seed.sql before it starts.
   foghorn-b-2:

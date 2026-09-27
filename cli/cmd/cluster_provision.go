@@ -822,6 +822,7 @@ func executeProvision(ctx context.Context, cmd *cobra.Command, rc *resolvedClust
 	}
 
 	dataMigrationGateRan := false
+	var pendingQuartermasterTasks []string
 	for batchNum, batch := range plan.Batches {
 		// Release-level data-migration gate for PhaseAll: run ONCE, immediately before the first application batch. By
 		// this point the in-cell database-init barriers below have run in earlier batches (baseline schema + expand
@@ -951,14 +952,16 @@ func executeProvision(ctx context.Context, cmd *cobra.Command, rc *resolvedClust
 		}
 
 		// Post-batch side effects run sequentially after all tasks complete.
-		// QM bootstrap runs once after the QM batch and reconciles
-		// tenants/clusters/nodes/ingress/service_registry from the rendered
-		// desired-state file. Per-task service-registry / ingress registration
-		// no longer happens here — that work is in the rendered file too.
+		// QM bootstrap runs once, after the batch that finishes the last
+		// Quartermaster replica, and reconciles tenants/clusters/nodes/ingress/
+		// service_registry from the rendered desired-state file. The mesh
+		// reachability check below needs every replica up.
 		for _, r := range results {
-			if r.task.Type != "quartermaster" {
-				continue
+			if r.task.Type == "quartermaster" {
+				pendingQuartermasterTasks = append(pendingQuartermasterTasks, r.task.Name)
 			}
+		}
+		if len(pendingQuartermasterTasks) > 0 && !remainingBatchesContainService(plan.Batches[batchNum+1:], "quartermaster") {
 			fmt.Fprintln(cmd.OutOrStdout(), "  Running Cluster Bootstrap (System Tenant)...")
 			bootstrapCtx, bootstrapCancel := context.WithTimeout(ctx, provisionInitializeTimeout)
 
@@ -1034,7 +1037,10 @@ func executeProvision(ctx context.Context, cmd *cobra.Command, rc *resolvedClust
 			}
 
 			ux.Success(cmd.OutOrStdout(), "System Tenant bootstrapped")
-			ux.Success(cmd.OutOrStdout(), fmt.Sprintf("%s provisioned", r.task.Name))
+			for _, name := range pendingQuartermasterTasks {
+				ux.Success(cmd.OutOrStdout(), fmt.Sprintf("%s provisioned", name))
+			}
+			pendingQuartermasterTasks = nil
 		}
 
 		if err := maybeReconcileBatchServiceClusterAssignments(ctx, cmd, batch, manifest, runtimeData, raSession); err != nil {
@@ -1444,20 +1450,35 @@ func provisionTaskPrecheck(ctx context.Context, w io.Writer, prov provisioner.Pr
 // Prefer the WireGuard address when present because internal gRPC traffic is
 // mesh-scoped during provisioning; fall back to the public address for hosts
 // that are not on the mesh.
+// It returns the first host's address; resolveServiceGRPCAddrs lists every
+// replica for clients that balance across them.
 func resolveServiceGRPCAddr(manifest *inventory.Manifest, serviceName string, defaultGRPCPort int) (string, error) {
+	addrs, err := serviceGRPCAddrs(manifest, serviceName, defaultGRPCPort)
+	if err != nil {
+		return "", err
+	}
+	return addrs[0], nil
+}
+
+// resolveServiceGRPCAddrs returns every host's gRPC address for serviceName,
+// comma-separated in manifest order, in the form the replica-aware
+// control-plane clients dial (grpcutil.ReplicaTarget).
+func resolveServiceGRPCAddrs(manifest *inventory.Manifest, serviceName string, defaultGRPCPort int) (string, error) {
+	addrs, err := serviceGRPCAddrs(manifest, serviceName, defaultGRPCPort)
+	if err != nil {
+		return "", err
+	}
+	return strings.Join(addrs, ","), nil
+}
+
+func serviceGRPCAddrs(manifest *inventory.Manifest, serviceName string, defaultGRPCPort int) ([]string, error) {
 	svc, ok := manifest.Services[serviceName]
 	if !ok {
-		return "", fmt.Errorf("%s service not found in manifest", serviceName)
+		return nil, fmt.Errorf("%s service not found in manifest", serviceName)
 	}
-
-	hostKey := svc.Host
-	if hostKey == "" && len(svc.Hosts) > 0 {
-		hostKey = svc.Hosts[0]
-	}
-
-	host, ok := manifest.GetHost(hostKey)
-	if !ok {
-		return "", fmt.Errorf("%s host %q not found in manifest", serviceName, hostKey)
+	hostKeys := orchestrator.ServiceHosts(svc)
+	if len(hostKeys) == 0 {
+		return nil, fmt.Errorf("%s service has no host in manifest", serviceName)
 	}
 
 	grpcPort := defaultGRPCPort
@@ -1465,11 +1486,19 @@ func resolveServiceGRPCAddr(manifest *inventory.Manifest, serviceName string, de
 		grpcPort = svc.GRPCPort
 	}
 
-	addr := manifest.MeshAddress(hostKey)
-	if addr == "" || addr == hostKey {
-		addr = host.ExternalIP
+	addrs := make([]string, 0, len(hostKeys))
+	for _, hostKey := range hostKeys {
+		host, ok := manifest.GetHost(hostKey)
+		if !ok {
+			return nil, fmt.Errorf("%s host %q not found in manifest", serviceName, hostKey)
+		}
+		addr := manifest.MeshAddress(hostKey)
+		if addr == "" || addr == hostKey {
+			addr = host.ExternalIP
+		}
+		addrs = append(addrs, fmt.Sprintf("%s:%d", addr, grpcPort))
 	}
-	return fmt.Sprintf("%s:%d", addr, grpcPort), nil
+	return addrs, nil
 }
 
 func maybeReconcileBatchServiceClusterAssignments(ctx context.Context, cmd *cobra.Command, batch []*orchestrator.Task, manifest *inventory.Manifest, runtimeData map[string]any, sess *remoteaccess.Session) error {
@@ -3755,10 +3784,11 @@ func plannedProvisionHosts(plan *orchestrator.ExecutionPlan) []string {
 	return out
 }
 
-// quartermasterMeshGRPCAddr returns "<mesh_ip>:<grpc_port>" for the host
-// running the `quartermaster` service, or "" if the service is not defined
-// or its host has no mesh IP. This is the address Privateer agents SyncMesh
-// against; using the mesh IP avoids a DNS dependency at cold boot.
+// quartermasterMeshGRPCAddr returns "<mesh_ip>:<grpc_port>" for every host
+// running the `quartermaster` service, comma-separated in manifest order, or ""
+// when the service is not defined or no host has a mesh IP. Privateer agents
+// SyncMesh against this list and fail over between its entries; mesh IPs avoid
+// a DNS dependency at cold boot.
 func quartermasterMeshGRPCAddr(manifest *inventory.Manifest) string {
 	if manifest == nil {
 		return ""
@@ -3767,22 +3797,17 @@ func quartermasterMeshGRPCAddr(manifest *inventory.Manifest) string {
 	if !ok {
 		return ""
 	}
-	host := svc.Host
-	if host == "" && len(svc.Hosts) > 0 {
-		host = svc.Hosts[0]
-	}
-	if host == "" {
-		return ""
-	}
-	addr := manifest.MeshAddress(host)
-	if addr == "" {
-		return ""
-	}
 	port := svc.GRPCPort
 	if port == 0 {
 		port = defaultGRPCPort("quartermaster")
 	}
-	return fmt.Sprintf("%s:%d", addr, port)
+	var addrs []string
+	for _, host := range orchestrator.ServiceHosts(svc) {
+		if addr := manifest.MeshAddress(host); addr != "" {
+			addrs = append(addrs, fmt.Sprintf("%s:%d", addr, port))
+		}
+	}
+	return strings.Join(addrs, ",")
 }
 
 func containsHost(hosts []string, target string) bool {
@@ -6258,17 +6283,18 @@ func captureQuartermasterDiagnostics(ctx context.Context, out io.Writer, manifes
 	if !ok {
 		return
 	}
-	hostName := svc.Host
-	if hostName == "" && len(svc.Hosts) > 0 {
-		hostName = svc.Hosts[0]
+	for _, hostName := range orchestrator.ServiceHosts(svc) {
+		host, ok := manifest.GetHost(hostName)
+		if !ok {
+			fmt.Fprintf(out, "  Quartermaster diagnostics skipped: host %q not found in manifest\n", hostName)
+			continue
+		}
+		captureQuartermasterHostDiagnostics(ctx, out, host, hostName, pool)
 	}
-	host, ok := manifest.GetHost(hostName)
-	if !ok {
-		fmt.Fprintf(out, "  Quartermaster diagnostics skipped: host %q not found in manifest\n", hostName)
-		return
-	}
+}
 
-	fmt.Fprintln(out, "\n  Quartermaster diagnostics before rollback:")
+func captureQuartermasterHostDiagnostics(ctx context.Context, out io.Writer, host inventory.Host, hostName string, pool *ssh.Pool) {
+	fmt.Fprintf(out, "\n  Quartermaster diagnostics on %s before rollback:\n", hostName)
 	base := provisioner.NewBaseProvisioner("quartermaster-diagnostics", pool)
 	result, err := base.RunCommand(ctx, host, `
 set +e
@@ -9078,23 +9104,29 @@ func verifyQuartermasterMeshReachability(ctx context.Context, cmd *cobra.Command
 	if !ok || !qmSvc.Enabled {
 		return nil
 	}
-	qmHostName := qmSvc.Host
-	if qmHostName == "" && len(qmSvc.Hosts) > 0 {
-		qmHostName = qmSvc.Hosts[0]
-	}
-	qmIP := manifest.MeshAddress(qmHostName)
-	if net.ParseIP(qmIP) == nil {
-		return fmt.Errorf("quartermaster host %q has no mesh IP", qmHostName)
-	}
 	qmPort := defaultGRPCPort("quartermaster")
 	if qmSvc.GRPCPort != 0 {
 		qmPort = qmSvc.GRPCPort
 	}
+	// Privateer fails over across every replica, so each one must be reachable
+	// from every mesh host, or a replica outage strands the hosts that can
+	// only reach it.
+	var qmIPs []string
+	for _, qmHostName := range orchestrator.ServiceHosts(qmSvc) {
+		qmIP := manifest.MeshAddress(qmHostName)
+		if net.ParseIP(qmIP) == nil {
+			return fmt.Errorf("quartermaster host %q has no mesh IP", qmHostName)
+		}
+		qmIPs = append(qmIPs, qmIP)
+	}
+	if len(qmIPs) == 0 {
+		return fmt.Errorf("quartermaster has no host in the manifest")
+	}
 
-	fmt.Fprintf(cmd.OutOrStdout(), "  Verifying Quartermaster mesh reachability on %d privateer host(s)...\n", len(orchestrator.EffectivePrivateerHostsForManifest(privateerSvc, manifest)))
+	hosts := orchestrator.EffectivePrivateerHostsForManifest(privateerSvc, manifest)
+	fmt.Fprintf(cmd.OutOrStdout(), "  Verifying Quartermaster mesh reachability (%d replica(s)) on %d privateer host(s)...\n", len(qmIPs), len(hosts))
 	base := provisioner.NewBaseProvisioner("quartermaster-mesh-verify", pool)
 	var failures []string
-	hosts := orchestrator.EffectivePrivateerHostsForManifest(privateerSvc, manifest)
 	for index, hostName := range hosts {
 		if err := ctx.Err(); err != nil {
 			return fmt.Errorf("quartermaster mesh reachability timed out after checking %d of %d privateer hosts: %w", index, len(hosts), err)
@@ -9104,22 +9136,24 @@ func verifyQuartermasterMeshReachability(ctx context.Context, cmd *cobra.Command
 			failures = append(failures, fmt.Sprintf("%s: not found in manifest", hostName))
 			continue
 		}
-		cmdText := fmt.Sprintf("if command -v nc >/dev/null 2>&1; then nc -vz -w 3 %[1]s %[2]d; elif command -v timeout >/dev/null 2>&1 && command -v bash >/dev/null 2>&1; then timeout 4 bash -c 'cat < /dev/null > /dev/tcp/%[1]s/%[2]d'; else echo 'missing TCP probe tool: install nc or provide bash+timeout'; exit 127; fi", qmIP, qmPort)
-		hostCtx, hostCancel := context.WithTimeout(ctx, 10*time.Second)
-		result, err := base.RunCommand(hostCtx, hostInfo, cmdText)
-		hostCancel()
-		if err != nil {
-			detail := strings.TrimSpace(routeResultOutput(result))
-			if detail == "" {
-				detail = err.Error()
+		for _, qmIP := range qmIPs {
+			cmdText := fmt.Sprintf("if command -v nc >/dev/null 2>&1; then nc -vz -w 3 %[1]s %[2]d; elif command -v timeout >/dev/null 2>&1 && command -v bash >/dev/null 2>&1; then timeout 4 bash -c 'cat < /dev/null > /dev/tcp/%[1]s/%[2]d'; else echo 'missing TCP probe tool: install nc or provide bash+timeout'; exit 127; fi", qmIP, qmPort)
+			hostCtx, hostCancel := context.WithTimeout(ctx, 10*time.Second)
+			result, err := base.RunCommand(hostCtx, hostInfo, cmdText)
+			hostCancel()
+			if err != nil {
+				detail := strings.TrimSpace(routeResultOutput(result))
+				if detail == "" {
+					detail = err.Error()
+				}
+				failures = append(failures, fmt.Sprintf("%s: cannot reach quartermaster %s:%d over mesh: %s", hostName, qmIP, qmPort, detail))
 			}
-			failures = append(failures, fmt.Sprintf("%s: cannot reach quartermaster %s:%d over mesh: %s", hostName, qmIP, qmPort, detail))
 		}
 	}
 	if len(failures) > 0 {
-		return fmt.Errorf("%d host(s) failed:\n  %s", len(failures), strings.Join(failures, "\n  "))
+		return fmt.Errorf("%d check(s) failed:\n  %s", len(failures), strings.Join(failures, "\n  "))
 	}
-	ux.Success(cmd.OutOrStdout(), fmt.Sprintf("Quartermaster reachable at %s:%d from all privateer hosts", qmIP, qmPort))
+	ux.Success(cmd.OutOrStdout(), fmt.Sprintf("Quartermaster reachable at %s (port %d) from all privateer hosts", strings.Join(qmIPs, ", "), qmPort))
 	return nil
 }
 

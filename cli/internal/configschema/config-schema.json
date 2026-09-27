@@ -5327,7 +5327,7 @@
           "key": "QUARTERMASTER_GRPC_ADDR",
           "type": "string",
           "introduced": "v0.3.0",
-          "description": "Quartermaster gRPC address for mesh sync. Empty uses the address from persisted enrollment state; startup fails when neither is set."
+          "description": "Quartermaster gRPC address for mesh sync, or a comma-separated list of every Quartermaster replica; syncs fail over between them. Empty uses the address from persisted enrollment state; startup fails when neither is set."
         },
         {
           "key": "QUARTERMASTER_GRPC_TLS_SERVER_NAME",

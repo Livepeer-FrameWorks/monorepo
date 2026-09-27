@@ -4,13 +4,17 @@
 --     broadcaster fanout requires: running + healthy + fresh (the health poller
 --     probes http://<proxy>/healthz), on an active node with an external IP, and
 --     covered by a desired physical ingress site for its infra FQDN;
---   * the second cell-B Foghorn replica (foghorn-b-2).
+--   * the second cell-B Foghorn replica (foghorn-b-2);
+--   * central-node-2, the node the second Commodore and Quartermaster replicas
+--     (commodore-2, quartermaster-2) register from.
 -- Seeded before those services start: Foghorn loads its served clusters at boot.
 
 INSERT INTO quartermaster.infrastructure_nodes (
     node_id, cluster_id, node_name, node_type, status,
     region, external_ip, internal_ip, latitude, longitude, tags, metadata
 ) VALUES
+    ('central-node-2', 'central-primary', 'central-node-2', 'core', 'active',
+     'Amsterdam', '127.0.0.1', '127.0.0.1', 52.3676, 4.9041, '{}', '{"stack":"control-plane-replica"}'),
     ('stack-lp-a', 'central-primary', 'stack-lp-a', 'core', 'active',
      'Amsterdam', '127.0.0.1', '127.0.0.1', 52.3676, 4.9041, '{}', '{"stack":"livepeer"}'),
     ('stack-lp-b', 'us-primary', 'stack-lp-b', 'core', 'active',

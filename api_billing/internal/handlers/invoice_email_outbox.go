@@ -275,17 +275,33 @@ func (d *invoiceEmailDispatcher) dispatchOverdueReminder(ctx context.Context, pa
 	return nil, nil
 }
 
+// Every Purser replica drains the invoice email outbox. A claimed batch is sent
+// one email at a time, and each send can take up to a minute (SMTP dial plus
+// session deadline, pkg/email) before its settlement: the lease must outlast
+// the whole batch, or another replica re-claims rows still being sent and the
+// customer gets the email twice.
+const (
+	invoiceEmailOutboxBatchSize     = 10
+	invoiceEmailOutboxSendBound     = time.Minute
+	invoiceEmailOutboxSettleTimeout = 30 * time.Second
+	invoiceEmailOutboxLease         = 20 * time.Minute
+)
+
+func invoiceEmailOutboxConfig() outbox.Config {
+	return outbox.Config{
+		BaseBackoff:        time.Minute,
+		MaxBackoff:         6 * time.Hour,
+		BatchSize:          invoiceEmailOutboxBatchSize,
+		PollPeriod:         30 * time.Second,
+		Lease:              invoiceEmailOutboxLease,
+		SettleTimeout:      invoiceEmailOutboxSettleTimeout,
+		AlertAfterAttempts: 5,
+	}
+}
+
 func (jm *JobManager) runInvoiceEmailOutbox(ctx context.Context) {
 	worker := &outbox.Worker[invoiceEmailPayload]{
-		Config: outbox.Config{
-			BaseBackoff:        time.Minute,
-			MaxBackoff:         6 * time.Hour,
-			BatchSize:          50,
-			PollPeriod:         30 * time.Second,
-			Lease:              2 * time.Minute,
-			SettleTimeout:      30 * time.Second,
-			AlertAfterAttempts: 5,
-		},
+		Config:     invoiceEmailOutboxConfig(),
 		Store:      &invoiceEmailOutboxStore{db: jm.db},
 		Dispatcher: &invoiceEmailDispatcher{jobs: jm},
 		Logger:     jm.logger,

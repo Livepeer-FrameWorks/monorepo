@@ -123,7 +123,7 @@ func (s *Session) Endpoint(ctx context.Context, target ServiceTarget) (Endpoint,
 	}
 	s.mu.Unlock()
 
-	hostKey, remotePort, serverName, err := s.resolveTarget(target)
+	hostKeys, remotePort, serverName, err := s.resolveTarget(target)
 	if err != nil {
 		return Endpoint{}, err
 	}
@@ -135,29 +135,21 @@ func (s *Session) Endpoint(ctx context.Context, target ServiceTarget) (Endpoint,
 		return ep, nil
 	}
 
-	tun, ok := s.tunnels[hostKey]
-	if !ok {
-		t, terr := s.dialHost(ctx, hostKey, remotePort)
+	// Every host of a multi-host service runs a full replica, so the first
+	// host whose tunnel opens serves the endpoint.
+	var tun *ssh.Tunnel
+	var tunnelErrs []error
+	for _, hostKey := range hostKeys {
+		t, terr := s.tunnelLocked(ctx, hostKey, remotePort)
 		if terr != nil {
-			return Endpoint{}, terr
+			tunnelErrs = append(tunnelErrs, terr)
+			continue
 		}
-		s.tunnels[hostKey] = t
 		tun = t
-	} else if tun.RemotePort != remotePort {
-		// Two services on the same host but different remote ports require
-		// distinct tunnels. Open a second one keyed by host:port.
-		hostPortKey := fmt.Sprintf("%s:%d", hostKey, remotePort)
-		t2, ok2 := s.tunnels[hostPortKey]
-		if !ok2 {
-			tnew, terr := s.dialHost(ctx, hostKey, remotePort)
-			if terr != nil {
-				return Endpoint{}, terr
-			}
-			s.tunnels[hostPortKey] = tnew
-			tun = tnew
-		} else {
-			tun = t2
-		}
+		break
+	}
+	if tun == nil {
+		return Endpoint{}, errors.Join(tunnelErrs...)
 	}
 
 	if s.allowInsecure {
@@ -170,6 +162,29 @@ func (s *Session) Endpoint(ctx context.Context, target ServiceTarget) (Endpoint,
 	}
 	s.endpoints[target.Name] = ep
 	return ep, nil
+}
+
+// tunnelLocked returns the session's tunnel to hostKey:remotePort, opening it
+// on first use. The caller holds s.mu.
+func (s *Session) tunnelLocked(ctx context.Context, hostKey string, remotePort int) (*ssh.Tunnel, error) {
+	key := hostKey
+	if tun, ok := s.tunnels[hostKey]; ok {
+		if tun.RemotePort == remotePort {
+			return tun, nil
+		}
+		// Two services on the same host but different remote ports require
+		// distinct tunnels, keyed by host:port.
+		key = fmt.Sprintf("%s:%d", hostKey, remotePort)
+		if tun, ok := s.tunnels[key]; ok {
+			return tun, nil
+		}
+	}
+	tun, err := s.dialHost(ctx, hostKey, remotePort)
+	if err != nil {
+		return nil, err
+	}
+	s.tunnels[key] = tun
+	return tun, nil
 }
 
 // Close tears down every tunnel opened by the session. Safe to call multiple
@@ -196,20 +211,22 @@ func (s *Session) Close() error {
 // resolveTarget extracts (host, port, serverName) from the manifest for the
 // requested service. ServerName is the internal service DNS name because
 // privateer/navigator issue service leaf certs for <service>.internal.
-func (s *Session) resolveTarget(t ServiceTarget) (hostKey string, remotePort int, serverName string, err error) {
+func (s *Session) resolveTarget(t ServiceTarget) (hostKeys []string, remotePort int, serverName string, err error) {
 	svc, ok := s.manifest.Services[t.Name]
 	if !ok {
-		return "", 0, "", fmt.Errorf("remoteaccess: service %q not in manifest", t.Name)
+		return nil, 0, "", fmt.Errorf("remoteaccess: service %q not in manifest", t.Name)
 	}
-	hostKey = svc.Host
-	if hostKey == "" && len(svc.Hosts) > 0 {
-		hostKey = svc.Hosts[0]
+	hostKeys = svc.Hosts
+	if len(hostKeys) == 0 && svc.Host != "" {
+		hostKeys = []string{svc.Host}
 	}
-	if hostKey == "" {
-		return "", 0, "", fmt.Errorf("remoteaccess: service %q has no host", t.Name)
+	if len(hostKeys) == 0 {
+		return nil, 0, "", fmt.Errorf("remoteaccess: service %q has no host", t.Name)
 	}
-	if _, ok := s.manifest.GetHost(hostKey); !ok {
-		return "", 0, "", fmt.Errorf("remoteaccess: service %q host %q not in manifest", t.Name, hostKey)
+	for _, hostKey := range hostKeys {
+		if _, ok := s.manifest.GetHost(hostKey); !ok {
+			return nil, 0, "", fmt.Errorf("remoteaccess: service %q host %q not in manifest", t.Name, hostKey)
+		}
 	}
 
 	remotePort = t.DefaultGRPCPort
@@ -217,14 +234,14 @@ func (s *Session) resolveTarget(t ServiceTarget) (hostKey string, remotePort int
 		remotePort = svc.GRPCPort
 	}
 	if remotePort <= 0 {
-		return "", 0, "", fmt.Errorf("remoteaccess: service %q has no gRPC port (default %d)", t.Name, t.DefaultGRPCPort)
+		return nil, 0, "", fmt.Errorf("remoteaccess: service %q has no gRPC port (default %d)", t.Name, t.DefaultGRPCPort)
 	}
 
 	serverName = t.ServerName
 	if serverName == "" {
 		serverName = fmt.Sprintf("%s.internal", t.Name)
 	}
-	return hostKey, remotePort, serverName, nil
+	return hostKeys, remotePort, serverName, nil
 }
 
 // dialHost opens an SSH local-forward to the given host's loopback at remotePort.

@@ -227,6 +227,26 @@ func TestBuildClusterDriftTargets_coversInfrastructure(t *testing.T) {
 	}
 }
 
+func TestBuildClusterDriftTargets_probesEveryServiceReplicaHost(t *testing.T) {
+	t.Parallel()
+	manifest := &inventory.Manifest{
+		Hosts: map[string]inventory.Host{"core-a": {Name: "core-a"}, "core-b": {Name: "core-b"}},
+		Services: map[string]inventory.ServiceConfig{
+			"commodore": {Enabled: true, Hosts: []string{"core-a", "core-b"}},
+		},
+	}
+	var hosts []string
+	for _, target := range buildClusterDriftTargets(manifest) {
+		if target.Deploy == "commodore" {
+			hosts = append(hosts, target.Host)
+		}
+	}
+	sort.Strings(hosts)
+	if strings.Join(hosts, ",") != "core-a,core-b" {
+		t.Fatalf("commodore drift targets = %v, want both replica hosts", hosts)
+	}
+}
+
 func TestCollectClusterDriftEntries_kafkaControllerProbedByControllerDeployName(t *testing.T) {
 	t.Parallel()
 	manifest := &inventory.Manifest{

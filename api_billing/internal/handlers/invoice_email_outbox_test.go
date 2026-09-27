@@ -14,6 +14,16 @@ const (
 	invoiceEmailTenantID  = "95000000-0000-4000-8000-000000000001"
 )
 
+// Another replica may re-claim a row once its lease ends, so the lease must
+// cover sending and settling every email of a full batch.
+func TestInvoiceEmailOutboxLeaseOutlastsAFullBatch(t *testing.T) {
+	cfg := invoiceEmailOutboxConfig()
+	worstBatch := time.Duration(cfg.BatchSize) * (invoiceEmailOutboxSendBound + cfg.SettleTimeout)
+	if cfg.Lease <= worstBatch {
+		t.Fatalf("lease %s does not outlast a full batch of %d sends (%s)", cfg.Lease, cfg.BatchSize, worstBatch)
+	}
+}
+
 func TestEnqueueInvoiceEmailOnlyForPermanentInvoice(t *testing.T) {
 	db, mock, setupErr := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherRegexp))
 	if setupErr != nil {

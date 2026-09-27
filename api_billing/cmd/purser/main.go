@@ -433,7 +433,19 @@ func main() {
 // so SyncTier creates a new price; this function then deactivates the previous
 // one. Existing subscriptions on the old price keep billing at the old rate
 // until they are explicitly migrated.
+//
+// Every Purser replica runs it at startup. The session lock makes replicas that
+// start together sync one after another, so each reads the Stripe IDs the
+// previous one recorded instead of creating its own product and price.
 func syncBillingTiersWithStripe(ctx context.Context, db *sql.DB, stripeClient *stripe.Client, logger logging.Logger) error {
+	lockCtx, cancel := context.WithTimeout(ctx, 5*time.Minute)
+	defer cancel()
+	return database.WithSessionLock(lockCtx, db, "purser-stripe-tier-sync", func() error {
+		return syncBillingTiersWithStripeLocked(ctx, db, stripeClient, logger)
+	})
+}
+
+func syncBillingTiersWithStripeLocked(ctx context.Context, db *sql.DB, stripeClient *stripe.Client, logger logging.Logger) error {
 	queries := purserdb.New(db)
 	tiers, err := queries.ListActivePaidBillingTiersForStripe(ctx)
 	if err != nil {
@@ -446,7 +458,7 @@ func syncBillingTiersWithStripe(ctx context.Context, db *sql.DB, stripeClient *s
 		if parseErr != nil {
 			return fmt.Errorf("parse tier %s base_price %q: %w", t.TierName, t.BasePrice, parseErr)
 		}
-		productID, priceID, err := stripeClient.SyncTier(ctx, t.TierName, t.DisplayName, t.Description, basePrice, t.Currency)
+		productID, priceID, err := stripeClient.SyncTier(ctx, t.StripeProductID.String, t.TierName, t.DisplayName, t.Description, basePrice, t.Currency)
 		if err != nil {
 			logger.WithError(err).WithField("tier", t.TierName).Error("Failed to sync tier with Stripe")
 			continue

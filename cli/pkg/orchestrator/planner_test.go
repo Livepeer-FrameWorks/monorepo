@@ -2,6 +2,7 @@ package orchestrator
 
 import (
 	"context"
+	"maps"
 	"slices"
 	"sort"
 	"strings"
@@ -1020,6 +1021,53 @@ func TestPlan_FoghornWaitsForEveryCommodoreReplica(t *testing.T) {
 	for _, name := range core {
 		if !slices.Contains(cell.DependsOn, name) {
 			t.Fatalf("cell starts before core replica %s: %v", name, cell.DependsOn)
+		}
+	}
+}
+
+func TestPlan_ControlPlaneServicesPlanOneTaskPerHost(t *testing.T) {
+	manifest := &inventory.Manifest{
+		Hosts: map[string]inventory.Host{
+			"core-a": {Roles: []string{"control"}}, "core-b": {Roles: []string{"control"}},
+		},
+		Services: map[string]inventory.ServiceConfig{
+			"quartermaster":   {Enabled: true, Hosts: []string{"core-a", "core-b"}},
+			"commodore":       {Enabled: true, Hosts: []string{"core-a", "core-b"}},
+			"purser":          {Enabled: true, Hosts: []string{"core-a", "core-b"}},
+			"periscope-query": {Enabled: true, Hosts: []string{"core-a", "core-b"}},
+			"privateer":       {Enabled: true},
+		},
+	}
+	plan, err := NewPlanner(manifest).Plan(context.Background(), ProvisionOptions{Phase: PhaseAll})
+	if err != nil {
+		t.Fatal(err)
+	}
+	tasks := map[string]*Task{}
+	for _, task := range plan.AllTasks {
+		tasks[task.Name] = task
+	}
+	for _, service := range []string{"quartermaster", "commodore", "purser", "periscope-query"} {
+		for _, host := range []string{"core-a", "core-b"} {
+			task := tasks[service+"@"+host]
+			if task == nil {
+				t.Fatalf("no %s task on %s; planned: %v", service, host, slices.Sorted(maps.Keys(tasks)))
+			}
+			if task.Host != host || task.Type != service {
+				t.Fatalf("%s: host=%q type=%q, want host %q type %q", task.Name, task.Host, task.Type, host, service)
+			}
+		}
+		if _, singleton := tasks[service]; singleton {
+			t.Fatalf("%s also planned as a host-less singleton task", service)
+		}
+	}
+	for _, service := range []string{"commodore", "purser", "periscope-query"} {
+		for _, host := range []string{"core-a", "core-b"} {
+			deps := tasks[service+"@"+host].DependsOn
+			for _, qm := range []string{"quartermaster@core-a", "quartermaster@core-b"} {
+				if !slices.Contains(deps, qm) {
+					t.Fatalf("%s@%s starts before %s: %v", service, host, qm, deps)
+				}
+			}
 		}
 	}
 }

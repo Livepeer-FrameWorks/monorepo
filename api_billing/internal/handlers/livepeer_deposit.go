@@ -390,16 +390,7 @@ func (m *LivepeerDepositMonitor) queryGatewayState(ctx context.Context, ethAddre
 }
 
 func (m *LivepeerDepositMonitor) fundTicketBroker(ctx context.Context, state *GatewayDepositState, label string) {
-	deposit := new(big.Int)
-	reserve := new(big.Int)
-	if state.DepositLow {
-		deposit.Set(m.topupAmountWei)
-	}
-	if state.ReserveLow {
-		reserve.Set(m.topupAmountWei)
-	}
-	total := new(big.Int).Add(new(big.Int).Set(deposit), reserve)
-	if total.Sign() <= 0 {
+	if fundingAmounts(state, m.topupAmountWei).total.Sign() <= 0 {
 		return
 	}
 	unlockSigner, err := m.lockFundingSigner(ctx)
@@ -409,6 +400,24 @@ func (m *LivepeerDepositMonitor) fundTicketBroker(ctx context.Context, state *Ga
 		return
 	}
 	defer unlockSigner()
+	// Every Purser replica runs this monitor. The low reading was taken before
+	// the lock, so another replica may have funded the gateway while this one
+	// waited; only a reading taken under the lock decides the top-up.
+	fresh, err := m.queryGatewayState(ctx, state.Address)
+	if err != nil {
+		m.logger.WithError(err).WithField("gateway", label).Error("Livepeer TicketBroker funding skipped: gateway state could not be re-read under the signer lock")
+		return
+	}
+	amounts := fundingAmounts(fresh, m.topupAmountWei)
+	if amounts.total.Sign() <= 0 {
+		m.logger.WithFields(logging.Fields{
+			"gateway":     label,
+			"deposit_eth": fresh.DepositETH,
+			"reserve_eth": fresh.ReserveETH,
+		}).Info("Livepeer TicketBroker funding skipped: deposit and reserve are no longer low")
+		return
+	}
+	deposit, reserve, total := amounts.deposit, amounts.reserve, amounts.total
 	attemptID, repeated, err := m.reserveFundingAttempt(ctx, state.Address, deposit, reserve)
 	if err != nil {
 		m.alertCounter.WithLabelValues("daily_cap_or_ledger").Inc()
@@ -442,6 +451,23 @@ func (m *LivepeerDepositMonitor) fundTicketBroker(ctx context.Context, state *Ga
 		"tx_hash": txHash,
 		"amount":  weiToETH(total),
 	}).Info("Livepeer TicketBroker funding transaction sent")
+}
+
+type ticketBrokerFunding struct {
+	deposit, reserve, total *big.Int
+}
+
+// fundingAmounts tops up each of deposit and reserve that reads low by topup.
+func fundingAmounts(state *GatewayDepositState, topup *big.Int) ticketBrokerFunding {
+	f := ticketBrokerFunding{deposit: new(big.Int), reserve: new(big.Int)}
+	if state.DepositLow && topup != nil {
+		f.deposit.Set(topup)
+	}
+	if state.ReserveLow && topup != nil {
+		f.reserve.Set(topup)
+	}
+	f.total = new(big.Int).Add(new(big.Int).Set(f.deposit), f.reserve)
+	return f
 }
 
 // lockFundingSigner serializes nonce allocation and submission across Purser

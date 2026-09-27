@@ -10871,11 +10871,10 @@ func NewGRPCServer(ctx context.Context, cfg GRPCServerConfig) (*grpc.Server, err
 	// A peer subscription is silent while the census is unchanged, so a
 	// connection dropped without a FIN would otherwise hold its hub slot for the
 	// life of the process. Pings bound how long that takes to notice, and the
-	// enforcement floor sits below the client's ping period so a well-behaved
-	// subscriber is never sent a GOAWAY for pinging.
+	// enforcement floor admits the replica-aware clients' pings.
 	opts = append(opts,
 		grpc.KeepaliveParams(keepalive.ServerParameters{Time: 30 * time.Second, Timeout: 10 * time.Second}),
-		grpc.KeepaliveEnforcementPolicy(keepalive.EnforcementPolicy{MinTime: 15 * time.Second}),
+		grpcutil.ReplicaServerKeepalive(),
 	)
 
 	server := grpc.NewServer(opts...)

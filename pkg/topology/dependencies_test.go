@@ -55,17 +55,32 @@ func TestServiceDependentsFindDirectCallers(t *testing.T) {
 }
 
 func TestGlobalDNSDependencies(t *testing.T) {
-	if got, want := GlobalDNSServiceDependencies("skipper"), []string{"bridge"}; !equalStrings(got, want) {
+	if got, want := GlobalDNSServiceDependencies("skipper"), []string{"bridge", "commodore", "periscope-query", "purser", "quartermaster"}; !equalStrings(got, want) {
 		t.Fatalf("GlobalDNSServiceDependencies(skipper) = %v, want %v", got, want)
 	}
-	for _, serviceID := range []string{"commodore", "quartermaster"} {
-		if got := GlobalDNSServiceDependencies(serviceID); len(got) != 0 {
-			t.Fatalf("GlobalDNSServiceDependencies(%s) = %v, want none", serviceID, got)
-		}
+	if got := GlobalDNSServiceDependencies("chandler"); !equalStrings(got, []string{"quartermaster"}) {
+		t.Fatalf("GlobalDNSServiceDependencies(chandler) = %v, want [quartermaster]", got)
 	}
 
 	if got, want := GlobalDNSServiceDependents([]string{"bridge"}), []string{"skipper"}; !equalStrings(got, want) {
 		t.Fatalf("GlobalDNSServiceDependents(bridge) = %v, want %v", got, want)
+	}
+}
+
+// A control-plane replica may sit on a host of any cluster in the aggregator
+// region; every caller resolves all of them, never only the replicas that share
+// its cluster.
+func TestControlPlaneDependenciesResolveEveryReplica(t *testing.T) {
+	controlPlane := map[string]bool{"commodore": true, "quartermaster": true, "purser": true, "periscope-query": true}
+	for serviceID, deps := range serviceDependencies {
+		for _, dep := range deps {
+			if controlPlane[dep.TargetServiceID] && dep.DNSScope != DNSScopeGlobal {
+				t.Errorf("%s -> %s (%s) has DNS scope %q, want %q", serviceID, dep.TargetServiceID, dep.EnvKey, dep.DNSScope, DNSScopeGlobal)
+			}
+		}
+	}
+	if got, want := GlobalDNSServiceDependencies("foghorn"), []string{"commodore", "purser", "quartermaster"}; !equalStrings(got, want) {
+		t.Fatalf("GlobalDNSServiceDependencies(foghorn) = %v, want %v", got, want)
 	}
 }
 

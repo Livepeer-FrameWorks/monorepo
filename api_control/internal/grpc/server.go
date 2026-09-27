@@ -10055,6 +10055,7 @@ func NewGRPCServer(ctx context.Context, cfg CommodoreServerConfig) (*grpc.Server
 			middleware.GRPCStreamAuthInterceptor(grpcAuthCfg),
 			middleware.DelegatedJWTStreamReplayInterceptor(cfg.DB, "commodore"),
 		),
+		grpcutil.ReplicaServerKeepalive(),
 	}
 	tlsCfg := grpcutil.ServerTLSConfig{
 		CertFile:      cfg.CertFile,

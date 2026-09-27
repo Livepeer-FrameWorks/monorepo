@@ -296,6 +296,61 @@ func TestFundingSignerLockIsSessionScoped(t *testing.T) {
 	}
 }
 
+// Another Purser replica funded the gateway while this one waited for the
+// signer lock: the reading taken under the lock is healthy, so nothing is
+// reserved or sent.
+func TestFundTicketBrokerRereadsGatewayUnderSignerLock(t *testing.T) {
+	gateway := "0x" + strings.Repeat("34", 20)
+	oneETH := new(big.Int).Exp(big.NewInt(10), big.NewInt(18), nil)
+	word := func(v *big.Int) string { return fmt.Sprintf("%064x", v) }
+	healthy := "0x" + word(new(big.Int).Mul(oneETH, big.NewInt(5))) + word(big.NewInt(0)) +
+		word(new(big.Int).Mul(oneETH, big.NewInt(5))) + word(big.NewInt(0))
+	var methods []string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req struct {
+			Method string `json:"method"`
+		}
+		if decodeErr := json.NewDecoder(r.Body).Decode(&req); decodeErr != nil {
+			t.Errorf("decode RPC request: %v", decodeErr)
+			return
+		}
+		methods = append(methods, req.Method)
+		w.Header().Set("Content-Type", "application/json")
+		switch req.Method {
+		case "eth_getBalance":
+			_, _ = w.Write([]byte(`{"jsonrpc":"2.0","id":1,"result":"0xde0b6b3a7640000"}`))
+		case "eth_call":
+			_, _ = fmt.Fprintf(w, `{"jsonrpc":"2.0","id":1,"result":%q}`, healthy)
+		default:
+			t.Errorf("unexpected RPC method %q: a stale low reading must not fund", req.Method)
+		}
+	}))
+	defer server.Close()
+
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	mock.ExpectExec("pg_advisory_lock").WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectExec("pg_advisory_unlock").WillReturnResult(sqlmock.NewResult(0, 1))
+
+	monitor := &LivepeerDepositMonitor{
+		db: db, logger: logging.NewLogger(), rpcEndpoint: server.URL,
+		gasWalletPrivKey: testFundingPrivateKey, topupAmountWei: oneETH, dailyCapWei: big.NewInt(1),
+		depositLowThreshold: 1, reserveLowThreshold: 1,
+	}
+	stale := &GatewayDepositState{Address: gateway, DepositLow: true, ReserveLow: true}
+	monitor.fundTicketBroker(context.Background(), stale, gateway)
+
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("funding attempt reserved from a stale reading: %v", err)
+	}
+	if strings.Join(methods, ",") != "eth_getBalance,eth_call" {
+		t.Fatalf("RPC calls = %v, want only the re-read under the lock", methods)
+	}
+}
+
 func TestDiscoverGatewayAddressesSkipsMissingWalletMetadata(t *testing.T) {
 	monitor := &LivepeerDepositMonitor{
 		logger: logging.NewLogger(),

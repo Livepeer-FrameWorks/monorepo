@@ -36,33 +36,41 @@ type serviceSpec struct {
 	manifestID  string
 	defaultPort int
 	localAddr   func(fwcfg.Endpoints) string
+	// replicaAware marks services whose clients accept a comma-separated
+	// replica list, so mesh access resolves every host instead of the first.
+	replicaAware bool
 }
 
 var grpcServices = map[string]serviceSpec{
 	"commodore": {
-		configName: "commodore_grpc_addr",
-		manifestID: "commodore",
-		localAddr:  func(ep fwcfg.Endpoints) string { return ep.CommodoreGRPCAddr },
+		configName:   "commodore_grpc_addr",
+		manifestID:   "commodore",
+		localAddr:    func(ep fwcfg.Endpoints) string { return ep.CommodoreGRPCAddr },
+		replicaAware: true,
 	},
 	"quartermaster": {
-		configName: "quartermaster_grpc_addr",
-		manifestID: "quartermaster",
-		localAddr:  func(ep fwcfg.Endpoints) string { return ep.QuartermasterGRPCAddr },
+		configName:   "quartermaster_grpc_addr",
+		manifestID:   "quartermaster",
+		localAddr:    func(ep fwcfg.Endpoints) string { return ep.QuartermasterGRPCAddr },
+		replicaAware: true,
 	},
 	"purser": {
-		configName: "purser_grpc_addr",
-		manifestID: "purser",
-		localAddr:  func(ep fwcfg.Endpoints) string { return ep.PurserGRPCAddr },
+		configName:   "purser_grpc_addr",
+		manifestID:   "purser",
+		localAddr:    func(ep fwcfg.Endpoints) string { return ep.PurserGRPCAddr },
+		replicaAware: true,
 	},
 	"periscope": {
-		configName: "periscope_grpc_addr",
-		manifestID: "periscope-query",
-		localAddr:  func(ep fwcfg.Endpoints) string { return ep.PeriscopeGRPCAddr },
+		configName:   "periscope_grpc_addr",
+		manifestID:   "periscope-query",
+		localAddr:    func(ep fwcfg.Endpoints) string { return ep.PeriscopeGRPCAddr },
+		replicaAware: true,
 	},
 	"periscope-query": {
-		configName: "periscope_grpc_addr",
-		manifestID: "periscope-query",
-		localAddr:  func(ep fwcfg.Endpoints) string { return ep.PeriscopeGRPCAddr },
+		configName:   "periscope_grpc_addr",
+		manifestID:   "periscope-query",
+		localAddr:    func(ep fwcfg.Endpoints) string { return ep.PeriscopeGRPCAddr },
+		replicaAware: true,
 	},
 	"signalman": {
 		configName: "signalman_grpc_addr",
@@ -267,7 +275,7 @@ func (r *Resolver) resolveGRPC(ctx context.Context, service, entry string) (Endp
 		if err != nil {
 			return Endpoint{}, err
 		}
-		addr, err := manifestMeshGRPCAddr(manifest, manifestID, spec.defaultPort)
+		addr, err := manifestMeshGRPCAddr(manifest, manifestID, spec.defaultPort, spec.replicaAware)
 		if err != nil {
 			return Endpoint{}, err
 		}
@@ -372,20 +380,23 @@ func loadContextManifest(ctx context.Context, ctxCfg fwcfg.Context) (*inventory.
 	return manifest, rm.Path, rm.AgeKey, cleanup, nil
 }
 
-func manifestMeshGRPCAddr(manifest *inventory.Manifest, serviceName string, defaultPort int) (string, error) {
+// manifestMeshGRPCAddr returns the mesh gRPC address of serviceName's first
+// host, or, with allReplicas, of every host comma-separated in manifest order
+// for the clients that balance across replicas (grpcutil.ReplicaTarget).
+func manifestMeshGRPCAddr(manifest *inventory.Manifest, serviceName string, defaultPort int, allReplicas bool) (string, error) {
 	svc, ok := manifest.Services[serviceName]
 	if !ok {
 		return "", fmt.Errorf("%s service not found in manifest", serviceName)
 	}
-	hostKey := svc.Host
-	if hostKey == "" && len(svc.Hosts) > 0 {
-		hostKey = svc.Hosts[0]
+	hostKeys := svc.Hosts
+	if len(hostKeys) == 0 && svc.Host != "" {
+		hostKeys = []string{svc.Host}
 	}
-	if hostKey == "" {
+	if len(hostKeys) == 0 {
 		return "", fmt.Errorf("%s service has no host in manifest", serviceName)
 	}
-	if _, ok := manifest.GetHost(hostKey); !ok {
-		return "", fmt.Errorf("%s host %q not found in manifest", serviceName, hostKey)
+	if !allReplicas {
+		hostKeys = hostKeys[:1]
 	}
 	port := defaultPort
 	if svc.GRPCPort != 0 {
@@ -394,11 +405,18 @@ func manifestMeshGRPCAddr(manifest *inventory.Manifest, serviceName string, defa
 	if port <= 0 {
 		return "", fmt.Errorf("%s has no gRPC port", serviceName)
 	}
-	addr := manifest.MeshAddress(hostKey)
-	if addr == "" || addr == hostKey {
-		return "", fmt.Errorf("%s host %q has no WireGuard mesh address", serviceName, hostKey)
+	addrs := make([]string, 0, len(hostKeys))
+	for _, hostKey := range hostKeys {
+		if _, ok := manifest.GetHost(hostKey); !ok {
+			return "", fmt.Errorf("%s host %q not found in manifest", serviceName, hostKey)
+		}
+		addr := manifest.MeshAddress(hostKey)
+		if addr == "" || addr == hostKey {
+			return "", fmt.Errorf("%s host %q has no WireGuard mesh address", serviceName, hostKey)
+		}
+		addrs = append(addrs, net.JoinHostPort(addr, fmt.Sprintf("%d", port)))
 	}
-	return net.JoinHostPort(addr, fmt.Sprintf("%d", port)), nil
+	return strings.Join(addrs, ","), nil
 }
 
 func nonLocalOverride(addr string) string {

@@ -639,7 +639,7 @@ services:
 - `cluster` (optional) - Explicit cluster assignment. Must reference a key in `clusters`. When omitted, the service's role determines its cluster automatically
 - `clusters` (optional) - List form of `cluster` for cluster-scoped media services that serve several clusters. Cannot be combined with `cluster`. Foghorn and Chandler deployments must declare exactly one cluster; use one service entry per cell
 - `host` (optional) - Single host
-- `hosts` (optional) - Multiple hosts for replicas. The CLI creates one task per host (e.g., `bridge@regional-eu-1`)
+- `hosts` (optional) - Multiple hosts for replicas. The CLI creates one task per host (e.g., `bridge@regional-eu-1`). Commodore, Quartermaster, Purser and Periscope-query keep serving when one replica host is lost: their callers spread requests over every healthy replica that `<service>.internal` resolves to, and Privateer is given every Quartermaster address and fails over between them. Run each of them on at least two `hosts` in the aggregator region for control-plane redundancy; the hosts may belong to different clusters, because every caller resolves every replica
 - `replicas` (optional) - Replica count
 - `port` (optional)
 - `grpc_port` (optional)

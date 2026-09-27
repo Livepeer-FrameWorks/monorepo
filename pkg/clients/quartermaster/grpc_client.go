@@ -19,7 +19,6 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	healthpb "google.golang.org/grpc/health/grpc_health_v1"
-	"google.golang.org/grpc/keepalive"
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/emptypb"
@@ -45,7 +44,9 @@ type GRPCClient struct {
 
 // GRPCConfig represents the configuration for the gRPC client
 type GRPCConfig struct {
-	// GRPCAddr is the gRPC server address (host:port, no scheme)
+	// GRPCAddr is the gRPC server address (host:port, no scheme), or a
+	// comma-separated list of replica addresses. RPCs are balanced across
+	// every healthy replica (grpcutil.ReplicaTarget).
 	GRPCAddr string
 	// Timeout for gRPC calls
 	Timeout time.Duration
@@ -202,9 +203,13 @@ func NewGRPCClient(config GRPCConfig) (*GRPCClient, error) {
 		return nil, fmt.Errorf("configure Quartermaster gRPC TLS: %w", err)
 	}
 
-	// Connect to gRPC server with auth interceptor for user context and service token fallback
-	conn, err := grpc.NewClient(
-		config.GRPCAddr,
+	// Connect to gRPC server with auth interceptor for user context and service token fallback.
+	// WatchPeers is idle for as long as the peer census is unchanged, which is
+	// most of the time. ReplicaTarget's keepalive pings are what notice a
+	// connection black-holed by a NAT or load balancer, so the stream context
+	// cancels and the server-side subscription is released.
+	target, opts := grpcutil.ReplicaTarget(config.GRPCAddr)
+	opts = append(opts,
 		transport,
 		grpc.WithDefaultCallOptions(grpc.WaitForReady(true)),
 		grpc.WithChainUnaryInterceptor(
@@ -214,12 +219,8 @@ func NewGRPCClient(config GRPCConfig) (*GRPCClient, error) {
 			authInterceptor(config.ServiceToken, config.PreferServiceToken, config.DelegatedJWTSecret),
 		),
 		grpc.WithChainStreamInterceptor(streamAuthInterceptor(config.ServiceToken)),
-		// WatchPeers is idle for as long as the peer census is unchanged, which
-		// is most of the time. Without pings a connection black-holed by a NAT
-		// or load balancer is never noticed, the stream context never cancels,
-		// and the server-side subscription is never released.
-		grpc.WithKeepaliveParams(keepalive.ClientParameters{Time: 30 * time.Second, Timeout: 10 * time.Second}),
 	)
+	conn, err := grpc.NewClient(target, opts...)
 	if err != nil {
 		return nil, fmt.Errorf("failed to connect to Quartermaster gRPC: %w", err)
 	}

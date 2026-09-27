@@ -5041,6 +5041,43 @@ func TestQuartermasterMeshGRPCAddrDefaultPort(t *testing.T) {
 	}
 }
 
+func TestQuartermasterMeshGRPCAddrListsEveryReplica(t *testing.T) {
+	manifest := &inventory.Manifest{
+		Hosts: map[string]inventory.Host{
+			"core-1": {ExternalIP: "203.0.113.5", WireguardIP: "10.88.0.2"},
+			"core-2": {ExternalIP: "203.0.113.6", WireguardIP: "10.88.0.3"},
+		},
+		Services: map[string]inventory.ServiceConfig{
+			"quartermaster": {Enabled: true, Hosts: []string{"core-1", "core-2"}},
+		},
+	}
+	if got := quartermasterMeshGRPCAddr(manifest); got != "10.88.0.2:19002,10.88.0.3:19002" {
+		t.Fatalf("quartermasterMeshGRPCAddr = %q, want both replicas", got)
+	}
+}
+
+func TestBuildTaskConfigGivesPrivateerEveryQuartermasterAddress(t *testing.T) {
+	manifest := &inventory.Manifest{
+		Hosts: map[string]inventory.Host{
+			"core-1": {Name: "core-1", ExternalIP: "203.0.113.5", WireguardIP: "10.88.0.2"},
+			"core-2": {Name: "core-2", ExternalIP: "203.0.113.6", WireguardIP: "10.88.0.3"},
+			"edge-1": {Name: "edge-1", ExternalIP: "203.0.113.7", WireguardIP: "10.88.0.4"},
+		},
+		Services: map[string]inventory.ServiceConfig{
+			"quartermaster": {Enabled: true, Hosts: []string{"core-1", "core-2"}},
+			"privateer":     {Enabled: true},
+		},
+	}
+	task := orchestrator.NewServiceTask("privateer", "privateer", "edge-1", "edge-1", orchestrator.PhaseMesh)
+	cfg, err := buildTaskConfig(task, manifest, map[string]any{}, false, "", nil, nil, nil)
+	if err != nil {
+		t.Fatalf("buildTaskConfig(privateer): %v", err)
+	}
+	if got := cfg.EnvVars["QUARTERMASTER_GRPC_ADDR"]; got != "10.88.0.2:19002,10.88.0.3:19002" {
+		t.Fatalf("QUARTERMASTER_GRPC_ADDR = %q, want every Quartermaster replica", got)
+	}
+}
+
 func TestQuartermasterMeshGRPCAddrMissingService(t *testing.T) {
 	manifest := &inventory.Manifest{
 		Hosts: map[string]inventory.Host{"core-1": {ExternalIP: "203.0.113.5", WireguardIP: "10.88.0.2"}},
@@ -5221,6 +5258,49 @@ func TestPrivateerSeedDNSUsesTopologyScopedAliases(t *testing.T) {
 	}
 }
 
+// Control-plane replicas on hosts of two clusters are still one service to
+// every caller: a Foghorn in a third cluster and a Bridge sharing a cluster
+// with one replica both resolve and peer with every replica.
+func TestPrivateerSeedDNSResolvesEveryControlPlaneReplicaAcrossClusters(t *testing.T) {
+	manifest := &inventory.Manifest{
+		Clusters: map[string]inventory.ClusterConfig{
+			"core":     {Region: "eu-west"},
+			"eu":       {Region: "eu-west"},
+			"us":       {Region: "us-east"},
+			"media-us": {Roles: []string{"media"}},
+		},
+		Hosts: map[string]inventory.Host{
+			"central-1":  {Cluster: "core", WireguardIP: "10.88.0.10", WireguardPublicKey: "central-key"},
+			"regional-1": {Cluster: "eu", WireguardIP: "10.88.1.20", WireguardPublicKey: "eu-key"},
+			"us-1":       {Cluster: "us", WireguardIP: "10.88.2.20", WireguardPublicKey: "us-key"},
+		},
+		Services: map[string]inventory.ServiceConfig{
+			"privateer":     {Enabled: true},
+			"quartermaster": {Enabled: true, Hosts: []string{"central-1", "regional-1"}},
+			"commodore":     {Enabled: true, Hosts: []string{"central-1", "regional-1"}},
+			"purser":        {Enabled: true, Hosts: []string{"central-1", "regional-1"}},
+			"bridge":        {Enabled: true, Hosts: []string{"regional-1", "us-1"}},
+			"chandler-us":   {Enabled: true, Deploy: "chandler", Cluster: "media-us", Host: "us-1"},
+			"foghorn-us":    {Enabled: true, Deploy: "foghorn", Cluster: "media-us", Host: "us-1"},
+		},
+	}
+	both := []string{"10.88.0.10", "10.88.1.20"}
+	for _, host := range []string{"us-1", "regional-1"} {
+		dns := buildPrivateerSeedDNS(manifest, host)
+		for _, alias := range []string{"quartermaster", "commodore", "purser"} {
+			if got := dns[alias]; !slices.Equal(got, both) {
+				t.Fatalf("%s: %s DNS = %v, want every replica %v", host, alias, got, both)
+			}
+		}
+	}
+	peers := privateerSeedPeerHosts(manifest, "us-1")
+	for _, want := range []string{"central-1", "regional-1"} {
+		if _, ok := peers[want]; !ok {
+			t.Fatalf("us-1 privateer peers missing replica host %q in %v", want, sortedKeys(peers))
+		}
+	}
+}
+
 func TestPrivateerSeedDNSIncludesGlobalSkipperBridgeAlias(t *testing.T) {
 	manifest := &inventory.Manifest{
 		Clusters: map[string]inventory.ClusterConfig{
@@ -5317,6 +5397,30 @@ func TestResolveServiceDialNoSessionPrefersMeshIP(t *testing.T) {
 	}
 	if serverName != "" {
 		t.Fatalf("serverName = %q, want empty (no-session direct dial relies on dial-address default)", serverName)
+	}
+}
+
+func TestResolveServiceDialNoSessionListsEveryReplica(t *testing.T) {
+	manifest := &inventory.Manifest{
+		Profile: "dev",
+		Hosts: map[string]inventory.Host{
+			"core-1": {ExternalIP: "203.0.113.5", WireguardIP: "10.88.0.2"},
+			"core-2": {ExternalIP: "203.0.113.6"},
+		},
+		Services: map[string]inventory.ServiceConfig{
+			"commodore": {Enabled: true, Hosts: []string{"core-1", "core-2"}},
+		},
+	}
+	addr, _, _, err := resolveServiceDial(context.Background(), manifest, nil, "commodore", 19001)
+	if err != nil {
+		t.Fatalf("resolveServiceDial returned error: %v", err)
+	}
+	if addr != "10.88.0.2:19001,203.0.113.6:19001" {
+		t.Fatalf("addr = %q, want every replica (mesh address, else external IP)", addr)
+	}
+	single, err := resolveServiceGRPCAddr(manifest, "commodore", 19001)
+	if err != nil || single != "10.88.0.2:19001" {
+		t.Fatalf("resolveServiceGRPCAddr = %q, %v; want the first replica", single, err)
 	}
 }
 

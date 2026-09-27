@@ -958,7 +958,7 @@ Read by `api_mesh/cmd/privateer`.
 | `SERVICE_TOKEN` | string |  | required, secret | v0.3.0 | Shared service-to-service bearer token for mesh sync with Quartermaster and certificate calls to Navigator. |
 | `MESH_PRIVATE_KEY_FILE` | string |  | required | v0.3.0 | Path of the WireGuard private key. When the file is missing and MESH_JOIN_TOKEN is set, enrollment generates and writes it. |
 | `PRIVATEER_DATA_DIR` | string |  |  | v0.3.0 | Directory for enrollment state and the last known mesh. Empty uses /var/lib/privateer. |
-| `QUARTERMASTER_GRPC_ADDR` | string |  |  | v0.3.0 | Quartermaster gRPC address for mesh sync. Empty uses the address from persisted enrollment state; startup fails when neither is set. |
+| `QUARTERMASTER_GRPC_ADDR` | string |  |  | v0.3.0 | Quartermaster gRPC address for mesh sync, or a comma-separated list of every Quartermaster replica; syncs fail over between them. Empty uses the address from persisted enrollment state; startup fails when neither is set. |
 | `QUARTERMASTER_GRPC_TLS_SERVER_NAME` | string |  |  | v0.3.0 | TLS server name override for the Quartermaster connection. Empty uses the canonical internal name. |
 | `NAVIGATOR_GRPC_ADDR` | string |  |  | v0.3.0 | Navigator gRPC address for internal and ingress certificate sync. Empty disables certificate sync. |
 | `NAVIGATOR_GRPC_TLS_SERVER_NAME` | string |  |  | v0.3.0 | TLS server name override for the Navigator connection. Empty uses the canonical internal name. |

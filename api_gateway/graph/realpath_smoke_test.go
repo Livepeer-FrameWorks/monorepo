@@ -9,6 +9,8 @@ import (
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/health"
+	"google.golang.org/grpc/health/grpc_health_v1"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/emptypb"
 
@@ -41,6 +43,9 @@ func startStubGRPC(t *testing.T) string {
 		_ = stream.RecvMsg(&emptypb.Empty{})
 		return stream.SendMsg(&emptypb.Empty{})
 	}))
+	// Real services serve the standard health service, which the replica-aware
+	// clients watch; without it the catch-all answers the watch as not serving.
+	grpc_health_v1.RegisterHealthServer(srv, health.NewServer())
 	go func() { _ = srv.Serve(lis) }()
 	t.Cleanup(srv.Stop)
 	return lis.Addr().String()
@@ -58,6 +63,7 @@ func startStubGRPCError(t *testing.T) string {
 		_ = stream.RecvMsg(&emptypb.Empty{})
 		return status.Error(codes.Unavailable, "stub backend error")
 	}))
+	grpc_health_v1.RegisterHealthServer(srv, health.NewServer())
 	go func() { _ = srv.Serve(lis) }()
 	t.Cleanup(srv.Stop)
 	return lis.Addr().String()

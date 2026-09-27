@@ -4556,6 +4556,7 @@ func NewGRPCServer(ctx context.Context, cfg GRPCServerConfig) (*grpc.Server, err
 			middleware.GRPCStreamAuthInterceptor(purserAuthConfig(cfg)),
 			middleware.DelegatedJWTStreamReplayInterceptor(cfg.DB, "purser"),
 		),
+		grpcutil.ReplicaServerKeepalive(),
 	}
 	tlsCfg := grpcutil.ServerTLSConfig{
 		CertFile:      cfg.CertFile,

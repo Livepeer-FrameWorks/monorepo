@@ -180,7 +180,7 @@ func (p *Planner) tasksByClusterForDeploy(deployName string) (map[string][]strin
 		if deploy != deployName {
 			continue
 		}
-		hosts := resolveHosts(svc)
+		hosts := ServiceHosts(svc)
 		for _, host := range hosts {
 			taskName := name
 			if len(hosts) > 1 {
@@ -208,7 +208,7 @@ func (p *Planner) taskNamesForDeploy(deployName string) ([]string, error) {
 		if deploy != deployName {
 			continue
 		}
-		hosts := resolveHosts(svc)
+		hosts := ServiceHosts(svc)
 		for _, host := range hosts {
 			taskName := name
 			if len(hosts) > 1 {
@@ -642,23 +642,32 @@ func (p *Planner) addApplicationTasks(graph *DependencyGraph) error {
 		return deps
 	}
 
-	// 1. Quartermaster (Core Control Plane)
+	// 1. Quartermaster (Core Control Plane), one task per host.
 	// Must run before Privateer and other apps
+	var quartermasterTasks []string
 	if svc, ok := p.manifest.Services["quartermaster"]; ok && svc.Enabled {
 		deploy, ok := servicedefs.DeployName("quartermaster", svc.Deploy)
 		if !ok {
 			return fmt.Errorf("unknown service id: quartermaster")
 		}
-		task := NewServiceTask(deploy, "quartermaster", "", svc.Host, PhaseApplications)
-		task.ClusterID = effectiveServiceCluster(svc, svc.Host, p.manifest)
-		task.DependsOn = p.topologyInfraTaskDeps("quartermaster", svc, task.ClusterID, appendIfInGraph)
-		graph.AddTask(task)
+		hosts := ServiceHosts(svc)
+		for _, hostName := range hosts {
+			instanceID := ""
+			if len(hosts) > 1 {
+				instanceID = hostName
+			}
+			task := NewServiceTask(deploy, "quartermaster", instanceID, hostName, PhaseApplications)
+			task.ClusterID = effectiveServiceCluster(svc, hostName, p.manifest)
+			task.DependsOn = p.topologyInfraTaskDeps("quartermaster", svc, task.ClusterID, appendIfInGraph)
+			graph.AddTask(task)
+			quartermasterTasks = append(quartermasterTasks, task.Name)
+		}
 	}
 
-	// Other Applications depend on Quartermaster AND every privateer-mesh
+	// Other Applications depend on every Quartermaster AND every privateer-mesh
 	// instance (global mesh barrier), but only when those tasks are in the
 	// current graph.
-	coreDeps := appendIfInGraph(nil, "quartermaster")
+	coreDeps := appendIfInGraph(nil, quartermasterTasks...)
 	if svc, ok := p.manifest.Services["privateer"]; ok && svc.Enabled {
 		privateerHosts := EffectivePrivateerHostsForManifest(svc, p.manifest)
 		for _, h := range privateerHosts {
@@ -711,7 +720,7 @@ func (p *Planner) addApplicationTasks(graph *DependencyGraph) error {
 			return fmt.Errorf("unknown service id: %s", name)
 		}
 
-		hosts := resolveHosts(svc)
+		hosts := ServiceHosts(svc)
 		for _, hostName := range hosts {
 			instanceID := ""
 			if len(hosts) > 1 {
@@ -747,7 +756,7 @@ func (p *Planner) addApplicationTasks(graph *DependencyGraph) error {
 			}
 			if name == "skipper" {
 				if bridge, ok := p.manifest.Services["bridge"]; ok && bridge.Enabled {
-					bridgeHosts := resolveHosts(bridge)
+					bridgeHosts := ServiceHosts(bridge)
 					if len(bridgeHosts) > 1 {
 						for _, bridgeHost := range bridgeHosts {
 							task.DependsOn = append(task.DependsOn, "bridge@"+bridgeHost)
@@ -787,9 +796,9 @@ func (p *Planner) addApplicationTasks(graph *DependencyGraph) error {
 	return nil
 }
 
-// resolveHosts returns the host list for a service config.
-// Uses Hosts (plural) if set, otherwise falls back to single Host.
-func resolveHosts(svc inventory.ServiceConfig) []string {
+// ServiceHosts returns every host a service runs on, in manifest order:
+// Hosts when set, otherwise the single Host.
+func ServiceHosts(svc inventory.ServiceConfig) []string {
 	if len(svc.Hosts) > 0 {
 		return svc.Hosts
 	}
@@ -802,7 +811,7 @@ func resolveHosts(svc inventory.ServiceConfig) []string {
 // EffectivePrivateerHosts returns the hosts that should run Privateer.
 // Uses explicit hosts if specified, otherwise all non-edge manifest hosts.
 func EffectivePrivateerHosts(svc inventory.ServiceConfig, hosts map[string]inventory.Host) []string {
-	explicit := resolveHosts(svc)
+	explicit := ServiceHosts(svc)
 	if len(explicit) > 0 {
 		return explicit
 	}
@@ -833,14 +842,14 @@ func EffectivePrivateerHostsForManifest(svc inventory.ServiceConfig, manifest *i
 		}
 	}
 	if vmauth, ok := manifest.Observability["vmauth"]; ok && vmauth.Enabled {
-		for _, hostName := range resolveHosts(vmauth) {
+		for _, hostName := range ServiceHosts(vmauth) {
 			if hostName != "" {
 				seen[hostName] = struct{}{}
 			}
 		}
 	}
 	if vm, ok := manifest.Observability["victoriametrics"]; ok && vm.Enabled {
-		for _, hostName := range resolveHosts(vm) {
+		for _, hostName := range ServiceHosts(vm) {
 			if hostName != "" {
 				seen[hostName] = struct{}{}
 			}
@@ -892,7 +901,7 @@ func EffectiveVMAgentHosts(svc inventory.ServiceConfig, manifest *inventory.Mani
 		return nil
 	}
 	seen := map[string]struct{}{}
-	explicit := resolveHosts(svc)
+	explicit := ServiceHosts(svc)
 	if len(explicit) > 0 {
 		for _, name := range explicit {
 			name = strings.TrimSpace(name)
@@ -938,7 +947,7 @@ func (p *Planner) addInterfaceTasks(graph *DependencyGraph) error {
 		if !svc.Enabled {
 			continue
 		}
-		hosts := resolveHosts(svc)
+		hosts := ServiceHosts(svc)
 		if name == "privateer" && len(hosts) == 0 {
 			hosts = EffectivePrivateerHostsForManifest(svc, p.manifest)
 		}
@@ -964,7 +973,7 @@ func (p *Planner) addInterfaceTasks(graph *DependencyGraph) error {
 			return fmt.Errorf("unknown interface id: %s", name)
 		}
 
-		hosts := resolveHosts(iface)
+		hosts := ServiceHosts(iface)
 		for _, hostName := range hosts {
 			instanceID := ""
 			if len(hosts) > 1 {
@@ -991,7 +1000,7 @@ func (p *Planner) addInterfaceTasks(graph *DependencyGraph) error {
 			return fmt.Errorf("unknown observability id: %s", name)
 		}
 
-		hosts := resolveHosts(obs)
+		hosts := ServiceHosts(obs)
 		if name == "vmagent" {
 			hosts = EffectiveVMAgentHosts(obs, p.manifest)
 		}

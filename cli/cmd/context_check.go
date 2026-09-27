@@ -245,7 +245,8 @@ func runReachabilityChecks(parent context.Context, c fwcfg.Context, timeout time
 			r.Error = err.Error()
 			return r
 		}
-		conn, err := grpc.NewClient(target.Address, transport)
+		dialTarget, dialOpts := grpcutil.ReplicaTarget(target.Address)
+		conn, err := grpc.NewClient(dialTarget, append(dialOpts, transport)...)
 		if err != nil {
 			r.OK = false
 			r.Status = "dial error"

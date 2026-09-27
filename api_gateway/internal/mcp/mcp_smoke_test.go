@@ -10,6 +10,8 @@ import (
 	"time"
 
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/health"
+	"google.golang.org/grpc/health/grpc_health_v1"
 	"google.golang.org/protobuf/types/known/emptypb"
 
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/clients/commodore"
@@ -44,6 +46,9 @@ func stubGRPCAddr(t *testing.T) string {
 		_ = stream.RecvMsg(&emptypb.Empty{})
 		return stream.SendMsg(&emptypb.Empty{})
 	}))
+	// Real services serve the standard health service, which the replica-aware
+	// clients watch; without it the catch-all answers the watch as not serving.
+	grpc_health_v1.RegisterHealthServer(srv, health.NewServer())
 	go func() { _ = srv.Serve(lis) }()
 	t.Cleanup(srv.Stop)
 	return lis.Addr().String()

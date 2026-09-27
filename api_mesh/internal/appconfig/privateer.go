@@ -26,7 +26,7 @@ type Privateer struct {
 	PrivateKeyFile string `env:"MESH_PRIVATE_KEY_FILE" required:"true" desc:"Path of the WireGuard private key. When the file is missing and MESH_JOIN_TOKEN is set, enrollment generates and writes it." introduced:"v0.3.0"`
 	DataDir        string `env:"PRIVATEER_DATA_DIR" desc:"Directory for enrollment state and the last known mesh. Empty uses /var/lib/privateer." introduced:"v0.3.0"`
 
-	QuartermasterGRPCAddr          string `env:"QUARTERMASTER_GRPC_ADDR" desc:"Quartermaster gRPC address for mesh sync. Empty uses the address from persisted enrollment state; startup fails when neither is set." introduced:"v0.3.0"`
+	QuartermasterGRPCAddr          string `env:"QUARTERMASTER_GRPC_ADDR" desc:"Quartermaster gRPC address for mesh sync, or a comma-separated list of every Quartermaster replica; syncs fail over between them. Empty uses the address from persisted enrollment state; startup fails when neither is set." introduced:"v0.3.0"`
 	QuartermasterGRPCTLSServerName string `env:"QUARTERMASTER_GRPC_TLS_SERVER_NAME" desc:"TLS server name override for the Quartermaster connection. Empty uses the canonical internal name." introduced:"v0.3.0"`
 	NavigatorGRPCAddr              string `env:"NAVIGATOR_GRPC_ADDR" desc:"Navigator gRPC address for internal and ingress certificate sync. Empty disables certificate sync." introduced:"v0.3.0"`
 	NavigatorGRPCTLSServerName     string `env:"NAVIGATOR_GRPC_TLS_SERVER_NAME" desc:"TLS server name override for the Navigator connection. Empty uses the canonical internal name." introduced:"v0.3.0"`

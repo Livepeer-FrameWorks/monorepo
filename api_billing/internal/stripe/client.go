@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"maps"
+	"net/http"
 	"strings"
 	"time"
 
@@ -501,8 +502,26 @@ func (c *Client) ExtractSubscriptionInfo(sub *stripe.Subscription) SubscriptionI
 	return info
 }
 
-// FindOrCreateProduct searches for an existing product by tier_name metadata, creates one if not found.
-func (c *Client) FindOrCreateProduct(ctx context.Context, tierName, displayName, description string) (*stripe.Product, error) {
+// FindOrCreateProduct returns the tier's Stripe product, creating one only
+// when none is found. knownProductID is the product the tier row records; it
+// is used when it still exists, is active and names this tier. Otherwise the
+// product is searched by tier_name metadata. Stripe's search is eventually
+// consistent and can miss a product created moments ago, so the recorded ID
+// is what keeps a second sync from creating a duplicate.
+func (c *Client) FindOrCreateProduct(ctx context.Context, knownProductID, tierName, displayName, description string) (*stripe.Product, error) {
+	if knownProductID != "" {
+		prod, err := stripeproduct.Get(knownProductID, nil)
+		var apiErr *stripe.Error
+		switch {
+		case err == nil:
+			if prod.Active && prod.Metadata["tier_name"] == tierName {
+				return prod, nil
+			}
+		case errors.As(err, &apiErr) && apiErr.HTTPStatusCode == http.StatusNotFound:
+		default:
+			return nil, fmt.Errorf("retrieve recorded Stripe product %s: %w", knownProductID, err)
+		}
+	}
 	params := &stripe.ProductSearchParams{}
 	params.Query = fmt.Sprintf("metadata['tier_name']:'%s'", tierName)
 	iter := stripeproduct.Search(params)
@@ -590,8 +609,9 @@ func (c *Client) FindOrCreatePrice(ctx context.Context, productID string, amount
 
 // SyncTier ensures a Stripe product and monthly price exist for the given tier.
 // Returns the Stripe product ID and monthly price ID. Idempotent.
-func (c *Client) SyncTier(ctx context.Context, tierName, displayName, description string, basePrice decimal.Decimal, currency string) (productID, monthlyPriceID string, err error) {
-	prod, err := c.FindOrCreateProduct(ctx, tierName, displayName, description)
+// knownProductID is the product the tier row already records, or empty.
+func (c *Client) SyncTier(ctx context.Context, knownProductID, tierName, displayName, description string, basePrice decimal.Decimal, currency string) (productID, monthlyPriceID string, err error) {
+	prod, err := c.FindOrCreateProduct(ctx, knownProductID, tierName, displayName, description)
 	if err != nil {
 		return "", "", err
 	}

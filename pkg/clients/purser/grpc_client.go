@@ -45,7 +45,9 @@ type GRPCClient struct {
 
 // GRPCConfig represents the configuration for the gRPC client
 type GRPCConfig struct {
-	// GRPCAddr is the gRPC server address (host:port, no scheme)
+	// GRPCAddr is the gRPC server address (host:port, no scheme), or a
+	// comma-separated list of replica addresses. RPCs are balanced across
+	// every healthy replica (grpcutil.ReplicaTarget).
 	GRPCAddr string
 	// Timeout for gRPC calls
 	Timeout time.Duration
@@ -158,8 +160,8 @@ func NewGRPCClient(config GRPCConfig) (*GRPCClient, error) {
 	}
 
 	// Connect to gRPC server with auth interceptor for user context and service token fallback
-	conn, err := grpc.NewClient(
-		config.GRPCAddr,
+	target, opts := grpcutil.ReplicaTarget(config.GRPCAddr)
+	opts = append(opts,
 		transport,
 		grpc.WithDefaultCallOptions(grpc.WaitForReady(true)),
 		grpc.WithChainUnaryInterceptor(
@@ -169,6 +171,7 @@ func NewGRPCClient(config GRPCConfig) (*GRPCClient, error) {
 			authInterceptor(config.ServiceToken, config.PreferServiceToken, config.DelegatedJWTSecret),
 		),
 	)
+	conn, err := grpc.NewClient(target, opts...)
 	if err != nil {
 		return nil, fmt.Errorf("failed to connect to Purser gRPC: %w", err)
 	}

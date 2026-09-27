@@ -26,6 +26,9 @@ type InfraDependency struct {
 
 const (
 	// DNSScopeGlobal resolves the target's replicas in every provider cluster.
+	// Every dependency on Quartermaster, Commodore, Purser and Periscope-Query
+	// has it: they serve the whole platform, so a caller in any cluster reaches
+	// every replica, wherever its host's cluster is.
 	DNSScopeGlobal = "global"
 	// DNSScopeAggregatorRegion resolves the target's replicas in the aggregator
 	// Kafka region only, so central state writers publish into the Kafka
@@ -48,10 +51,10 @@ var serviceDependencies = map[string][]ServiceDependency{
 		{TargetServiceID: "lookout", EnvKey: "ALERTMANAGER_LOOKOUT_URL", Transport: "http", DNSScope: DNSScopeAggregatorRegion, Purpose: "incident webhook delivery"},
 	},
 	"bridge": {
-		{TargetServiceID: "commodore", EnvKey: "COMMODORE_GRPC_ADDR", Transport: "grpc", Purpose: "stream, playback, account, and control APIs"},
-		{TargetServiceID: "periscope-query", EnvKey: "PERISCOPE_GRPC_ADDR", Transport: "grpc", Purpose: "analytics GraphQL, loaders, QoE MCP tools"},
-		{TargetServiceID: "purser", EnvKey: "PURSER_GRPC_ADDR", Transport: "grpc", Purpose: "billing APIs, x402, webhooks"},
-		{TargetServiceID: "quartermaster", EnvKey: "QUARTERMASTER_GRPC_ADDR", Transport: "grpc", Purpose: "tenant, cluster, bootstrap, and registry APIs"},
+		{TargetServiceID: "commodore", EnvKey: "COMMODORE_GRPC_ADDR", Transport: "grpc", DNSScope: DNSScopeGlobal, Purpose: "stream, playback, account, and control APIs"},
+		{TargetServiceID: "periscope-query", EnvKey: "PERISCOPE_GRPC_ADDR", Transport: "grpc", DNSScope: DNSScopeGlobal, Purpose: "analytics GraphQL, loaders, QoE MCP tools"},
+		{TargetServiceID: "purser", EnvKey: "PURSER_GRPC_ADDR", Transport: "grpc", DNSScope: DNSScopeGlobal, Purpose: "billing APIs, x402, webhooks"},
+		{TargetServiceID: "quartermaster", EnvKey: "QUARTERMASTER_GRPC_ADDR", Transport: "grpc", DNSScope: DNSScopeGlobal, Purpose: "tenant, cluster, bootstrap, and registry APIs"},
 		{TargetServiceID: "signalman", EnvKey: "SIGNALMAN_GRPC_ADDR", Transport: "grpc", Purpose: "realtime subscriptions"},
 		{TargetServiceID: "decklog", EnvKey: "DECKLOG_GRPC_ADDR", Transport: "grpc", Purpose: "API/service events"},
 		{TargetServiceID: "deckhand", EnvKey: "DECKHAND_GRPC_ADDR", Transport: "grpc", Optional: true, Purpose: "support messaging"},
@@ -62,83 +65,83 @@ var serviceDependencies = map[string][]ServiceDependency{
 		{TargetServiceID: "bosun", EnvKey: "BOSUN_GRPC_ADDR", Transport: "grpc", DNSScope: DNSScopeAggregatorRegion, Purpose: "outbound webhook APIs"},
 	},
 	"chandler": {
-		{TargetServiceID: "quartermaster", EnvKey: "QUARTERMASTER_GRPC_ADDR", Transport: "grpc", Purpose: "bootstrap and storage cluster lookup"},
+		{TargetServiceID: "quartermaster", EnvKey: "QUARTERMASTER_GRPC_ADDR", Transport: "grpc", DNSScope: DNSScopeGlobal, Purpose: "bootstrap and storage cluster lookup"},
 	},
 	"commodore": {
-		{TargetServiceID: "quartermaster", EnvKey: "QUARTERMASTER_GRPC_ADDR", Transport: "grpc", Purpose: "tenant aliases, cluster capabilities, and cluster URL cache"},
-		{TargetServiceID: "purser", EnvKey: "PURSER_GRPC_ADDR", Transport: "grpc", Purpose: "billing and entitlement checks"},
+		{TargetServiceID: "quartermaster", EnvKey: "QUARTERMASTER_GRPC_ADDR", Transport: "grpc", DNSScope: DNSScopeGlobal, Purpose: "tenant aliases, cluster capabilities, and cluster URL cache"},
+		{TargetServiceID: "purser", EnvKey: "PURSER_GRPC_ADDR", Transport: "grpc", DNSScope: DNSScopeGlobal, Purpose: "billing and entitlement checks"},
 		{TargetServiceID: "decklog", EnvKey: "DECKLOG_GRPC_ADDR", Transport: "grpc", DNSScope: DNSScopeAggregatorRegion, Purpose: "service events"},
 		{TargetServiceID: "navigator", EnvKey: "NAVIGATOR_GRPC_ADDR", Transport: "grpc", Optional: true, Purpose: "DNS/certificate operations"},
 	},
 	"deckhand": {
-		{TargetServiceID: "quartermaster", EnvKey: "QUARTERMASTER_GRPC_ADDR", Transport: "grpc", Purpose: "tenant and bootstrap lookups"},
-		{TargetServiceID: "purser", EnvKey: "PURSER_GRPC_ADDR", Transport: "grpc", Purpose: "support billing context"},
+		{TargetServiceID: "quartermaster", EnvKey: "QUARTERMASTER_GRPC_ADDR", Transport: "grpc", DNSScope: DNSScopeGlobal, Purpose: "tenant and bootstrap lookups"},
+		{TargetServiceID: "purser", EnvKey: "PURSER_GRPC_ADDR", Transport: "grpc", DNSScope: DNSScopeGlobal, Purpose: "support billing context"},
 		{TargetServiceID: "decklog", EnvKey: "DECKLOG_GRPC_ADDR", Transport: "grpc", DNSScope: DNSScopeAggregatorRegion, Purpose: "support service events"},
 	},
 	"decklog": {
-		{TargetServiceID: "quartermaster", EnvKey: "QUARTERMASTER_GRPC_ADDR", Transport: "grpc", Optional: true, Purpose: "service bootstrap"},
+		{TargetServiceID: "quartermaster", EnvKey: "QUARTERMASTER_GRPC_ADDR", Transport: "grpc", DNSScope: DNSScopeGlobal, Optional: true, Purpose: "service bootstrap"},
 	},
 	"foghorn": {
 		{TargetServiceID: "chandler", EnvKey: "CHANDLER_INTERNAL_URL", Transport: "http", Purpose: "cluster-local object storage API"},
-		{TargetServiceID: "commodore", EnvKey: "COMMODORE_GRPC_ADDR", Transport: "grpc", Purpose: "stream and playback control"},
+		{TargetServiceID: "commodore", EnvKey: "COMMODORE_GRPC_ADDR", Transport: "grpc", DNSScope: DNSScopeGlobal, Purpose: "stream and playback control"},
 		{TargetServiceID: "decklog", EnvKey: "DECKLOG_GRPC_ADDR", Transport: "grpc", Purpose: "service and media events"},
 		{TargetServiceID: "navigator", EnvKey: "NAVIGATOR_GRPC_ADDR", Transport: "grpc", Optional: true, Purpose: "certificate refresh"},
-		{TargetServiceID: "purser", EnvKey: "PURSER_GRPC_ADDR", Transport: "grpc", Purpose: "billing and playback policy checks"},
-		{TargetServiceID: "quartermaster", EnvKey: "QUARTERMASTER_GRPC_ADDR", Transport: "grpc", Purpose: "bootstrap, tenant cluster context, and federation peers"},
+		{TargetServiceID: "purser", EnvKey: "PURSER_GRPC_ADDR", Transport: "grpc", DNSScope: DNSScopeGlobal, Purpose: "billing and playback policy checks"},
+		{TargetServiceID: "quartermaster", EnvKey: "QUARTERMASTER_GRPC_ADDR", Transport: "grpc", DNSScope: DNSScopeGlobal, Purpose: "bootstrap, tenant cluster context, and federation peers"},
 	},
 	"livepeer-gateway": {
 		{TargetServiceID: "decklog", EnvKey: "FRAMEWORKS_DECKLOG_GRPC_ADDR", Transport: "grpc", Purpose: "gateway telemetry events"},
 		{TargetServiceID: "foghorn", EnvKey: "auth_webhook_url", Transport: "http", Purpose: "playback auth webhook"},
 	},
 	"bosun": {
-		{TargetServiceID: "quartermaster", EnvKey: "QUARTERMASTER_GRPC_ADDR", Transport: "grpc", Purpose: "service bootstrap"},
-		{TargetServiceID: "purser", EnvKey: "PURSER_GRPC_ADDR", Transport: "grpc", Purpose: "billing contact for endpoint auto-disable emails"},
+		{TargetServiceID: "quartermaster", EnvKey: "QUARTERMASTER_GRPC_ADDR", Transport: "grpc", DNSScope: DNSScopeGlobal, Purpose: "service bootstrap"},
+		{TargetServiceID: "purser", EnvKey: "PURSER_GRPC_ADDR", Transport: "grpc", DNSScope: DNSScopeGlobal, Purpose: "billing contact for endpoint auto-disable emails"},
 		{TargetServiceID: "decklog", EnvKey: "DECKLOG_GRPC_ADDR", Transport: "grpc", DNSScope: DNSScopeAggregatorRegion, Purpose: "webhook audit domain events"},
 	},
 	"lookout": {
-		{TargetServiceID: "quartermaster", EnvKey: "QUARTERMASTER_GRPC_ADDR", Transport: "grpc", Purpose: "cluster owner lookup for incident scope and service bootstrap"},
+		{TargetServiceID: "quartermaster", EnvKey: "QUARTERMASTER_GRPC_ADDR", Transport: "grpc", DNSScope: DNSScopeGlobal, Purpose: "cluster owner lookup for incident scope and service bootstrap"},
 		{TargetServiceID: "decklog", EnvKey: "DECKLOG_GRPC_ADDR", Transport: "grpc", DNSScope: DNSScopeAggregatorRegion, Purpose: "tenant incident realtime service events"},
 	},
 	"navigator": {
-		{TargetServiceID: "quartermaster", EnvKey: "QUARTERMASTER_GRPC_ADDR", Transport: "grpc", Purpose: "edge address and tenant/cluster authorization lookups"},
+		{TargetServiceID: "quartermaster", EnvKey: "QUARTERMASTER_GRPC_ADDR", Transport: "grpc", DNSScope: DNSScopeGlobal, Purpose: "edge address and tenant/cluster authorization lookups"},
 		{TargetServiceID: "decklog", EnvKey: "DECKLOG_GRPC_ADDR", Transport: "grpc", DNSScope: DNSScopeAggregatorRegion, Purpose: "custom domain domain events"},
 	},
 	"periscope-ingest": {
-		{TargetServiceID: "quartermaster", EnvKey: "QUARTERMASTER_GRPC_ADDR", Transport: "grpc", Optional: true, Purpose: "service bootstrap"},
+		{TargetServiceID: "quartermaster", EnvKey: "QUARTERMASTER_GRPC_ADDR", Transport: "grpc", DNSScope: DNSScopeGlobal, Optional: true, Purpose: "service bootstrap"},
 	},
 	"periscope-query": {
-		{TargetServiceID: "quartermaster", EnvKey: "QUARTERMASTER_GRPC_ADDR", Transport: "grpc", Optional: true, Purpose: "service bootstrap and billing helpers"},
+		{TargetServiceID: "quartermaster", EnvKey: "QUARTERMASTER_GRPC_ADDR", Transport: "grpc", DNSScope: DNSScopeGlobal, Optional: true, Purpose: "service bootstrap and billing helpers"},
 	},
 	"periscope-metering": {
-		{TargetServiceID: "quartermaster", EnvKey: "QUARTERMASTER_GRPC_ADDR", Transport: "grpc", Purpose: "tenant primary-cluster attribution"},
+		{TargetServiceID: "quartermaster", EnvKey: "QUARTERMASTER_GRPC_ADDR", Transport: "grpc", DNSScope: DNSScopeGlobal, Purpose: "tenant primary-cluster attribution"},
 	},
 	"privateer": {
-		{TargetServiceID: "quartermaster", EnvKey: "QUARTERMASTER_GRPC_ADDR", Transport: "grpc", Purpose: "mesh sync and certificate distribution"},
+		{TargetServiceID: "quartermaster", EnvKey: "QUARTERMASTER_GRPC_ADDR", Transport: "grpc", DNSScope: DNSScopeGlobal, Purpose: "mesh sync and certificate distribution"},
 		{TargetServiceID: "navigator", EnvKey: "NAVIGATOR_GRPC_ADDR", Transport: "grpc", Optional: true, Purpose: "certificate sync bootstrap"},
 	},
 	"purser": {
-		{TargetServiceID: "commodore", EnvKey: "COMMODORE_GRPC_ADDR", Transport: "grpc", Purpose: "stream termination and account state updates"},
+		{TargetServiceID: "commodore", EnvKey: "COMMODORE_GRPC_ADDR", Transport: "grpc", DNSScope: DNSScopeGlobal, Purpose: "stream termination and account state updates"},
 		{TargetServiceID: "decklog", EnvKey: "DECKLOG_GRPC_ADDR", Transport: "grpc", DNSScope: DNSScopeAggregatorRegion, Purpose: "billing service events"},
-		{TargetServiceID: "periscope-query", EnvKey: "PERISCOPE_GRPC_ADDR", Transport: "grpc", Optional: true, Purpose: "invoice enrichment with unique counts and geo"},
-		{TargetServiceID: "quartermaster", EnvKey: "QUARTERMASTER_GRPC_ADDR", Transport: "grpc", Purpose: "tenant and cluster access lookups"},
+		{TargetServiceID: "periscope-query", EnvKey: "PERISCOPE_GRPC_ADDR", Transport: "grpc", DNSScope: DNSScopeGlobal, Optional: true, Purpose: "invoice enrichment with unique counts and geo"},
+		{TargetServiceID: "quartermaster", EnvKey: "QUARTERMASTER_GRPC_ADDR", Transport: "grpc", DNSScope: DNSScopeGlobal, Purpose: "tenant and cluster access lookups"},
 	},
 	"quartermaster": {
 		{TargetServiceID: "decklog", EnvKey: "DECKLOG_GRPC_ADDR", Transport: "grpc", DNSScope: DNSScopeAggregatorRegion, Purpose: "tenant and infrastructure service events"},
 		{TargetServiceID: "navigator", EnvKey: "NAVIGATOR_GRPC_ADDR", Transport: "grpc", Optional: true, Purpose: "DNS and certificate workflows"},
-		{TargetServiceID: "purser", EnvKey: "PURSER_GRPC_ADDR", Transport: "grpc", Optional: true, Purpose: "billing-tier reconciliation"},
-		{TargetServiceID: "quartermaster", EnvKey: "QUARTERMASTER_GRPC_ADDR", Transport: "grpc", Optional: true, Purpose: "self-bootstrap service registration"},
+		{TargetServiceID: "purser", EnvKey: "PURSER_GRPC_ADDR", Transport: "grpc", DNSScope: DNSScopeGlobal, Optional: true, Purpose: "billing-tier reconciliation"},
+		{TargetServiceID: "quartermaster", EnvKey: "QUARTERMASTER_GRPC_ADDR", Transport: "grpc", DNSScope: DNSScopeGlobal, Optional: true, Purpose: "self-bootstrap service registration"},
 	},
 	"signalman": {
-		{TargetServiceID: "quartermaster", EnvKey: "QUARTERMASTER_GRPC_ADDR", Transport: "grpc", Optional: true, Purpose: "service bootstrap"},
+		{TargetServiceID: "quartermaster", EnvKey: "QUARTERMASTER_GRPC_ADDR", Transport: "grpc", DNSScope: DNSScopeGlobal, Optional: true, Purpose: "service bootstrap"},
 	},
 	"skipper": {
 		{TargetServiceID: "bridge", EnvKey: "GATEWAY_MCP_URL", Transport: "mcp-http", DNSScope: DNSScopeGlobal, Purpose: "platform MCP tools"},
-		{TargetServiceID: "commodore", EnvKey: "COMMODORE_GRPC_ADDR", Transport: "grpc", Optional: true, Purpose: "primary-user notifications"},
+		{TargetServiceID: "commodore", EnvKey: "COMMODORE_GRPC_ADDR", Transport: "grpc", DNSScope: DNSScopeGlobal, Optional: true, Purpose: "primary-user notifications"},
 		{TargetServiceID: "decklog", EnvKey: "DECKLOG_GRPC_ADDR", Transport: "grpc", DNSScope: DNSScopeAggregatorRegion, Optional: true, Purpose: "consultant usage events and notifications"},
 		{TargetServiceID: "lookout", EnvKey: "LOOKOUT_GRPC_ADDR", Transport: "grpc", DNSScope: DNSScopeAggregatorRegion, Optional: true, Purpose: "attach investigation reports to tenant incidents"},
-		{TargetServiceID: "periscope-query", EnvKey: "PERISCOPE_GRPC_ADDR", Transport: "grpc", Optional: true, Purpose: "heartbeat and infrastructure diagnostics"},
-		{TargetServiceID: "purser", EnvKey: "PURSER_GRPC_ADDR", Transport: "grpc", Optional: true, Purpose: "tier gating and billing checks"},
-		{TargetServiceID: "quartermaster", EnvKey: "QUARTERMASTER_GRPC_ADDR", Transport: "grpc", Optional: true, Purpose: "cluster and infrastructure diagnostics"},
+		{TargetServiceID: "periscope-query", EnvKey: "PERISCOPE_GRPC_ADDR", Transport: "grpc", DNSScope: DNSScopeGlobal, Optional: true, Purpose: "heartbeat and infrastructure diagnostics"},
+		{TargetServiceID: "purser", EnvKey: "PURSER_GRPC_ADDR", Transport: "grpc", DNSScope: DNSScopeGlobal, Optional: true, Purpose: "tier gating and billing checks"},
+		{TargetServiceID: "quartermaster", EnvKey: "QUARTERMASTER_GRPC_ADDR", Transport: "grpc", DNSScope: DNSScopeGlobal, Optional: true, Purpose: "cluster and infrastructure diagnostics"},
 	},
 	"steward": {
 		{TargetServiceID: "decklog", EnvKey: "DECKLOG_GRPC_ADDR", Transport: "grpc", DNSScope: DNSScopeAggregatorRegion, Optional: true, Purpose: "marketing operator activity events"},

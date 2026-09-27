@@ -93,6 +93,49 @@ func TestSessionEndpointResolvesViaManifest(t *testing.T) {
 	}
 }
 
+func TestSessionEndpointFallsBackToNextReplicaHost(t *testing.T) {
+	t.Parallel()
+	mf := newTestManifest()
+	mf.Services["quartermaster"] = inventory.ServiceConfig{Hosts: []string{"central", "billing-host"}, GRPCPort: 19002}
+	sess, _ := OpenSession(Options{Manifest: mf})
+	t.Cleanup(func() { _ = sess.Close() })
+
+	var tried []string
+	sess.openTunnel = func(_ context.Context, opts ssh.LocalForwardOptions) (*ssh.Tunnel, error) {
+		tried = append(tried, opts.Config.Address)
+		if opts.Config.Address == "203.0.113.10" {
+			return nil, errors.New("ssh: connect to host 203.0.113.10: no route to host")
+		}
+		return fakeTunnel("127.0.0.1:41000", opts.RemotePort), nil
+	}
+
+	ep, err := sess.Endpoint(context.Background(), ServiceTarget{Name: "quartermaster", DefaultGRPCPort: 19002})
+	if err != nil {
+		t.Fatalf("Endpoint with one unreachable replica host: %v", err)
+	}
+	if ep.DialAddr != "127.0.0.1:41000" {
+		t.Fatalf("DialAddr = %q, want the second host's tunnel", ep.DialAddr)
+	}
+	if strings.Join(tried, ",") != "203.0.113.10,203.0.113.20" {
+		t.Fatalf("tunnel attempts = %v, want first then second replica host", tried)
+	}
+}
+
+func TestSessionEndpointReportsEveryReplicaHostFailure(t *testing.T) {
+	t.Parallel()
+	mf := newTestManifest()
+	mf.Services["quartermaster"] = inventory.ServiceConfig{Hosts: []string{"central", "billing-host"}, GRPCPort: 19002}
+	sess, _ := OpenSession(Options{Manifest: mf})
+	t.Cleanup(func() { _ = sess.Close() })
+	sess.openTunnel = func(_ context.Context, opts ssh.LocalForwardOptions) (*ssh.Tunnel, error) {
+		return nil, errors.New("unreachable " + opts.Config.Address)
+	}
+	_, err := sess.Endpoint(context.Background(), ServiceTarget{Name: "quartermaster", DefaultGRPCPort: 19002})
+	if err == nil || !strings.Contains(err.Error(), "203.0.113.10") || !strings.Contains(err.Error(), "203.0.113.20") {
+		t.Fatalf("error = %v, want both hosts' failures", err)
+	}
+}
+
 func TestSessionReusesTunnelForSameHostSamePort(t *testing.T) {
 	t.Parallel()
 	mf := newTestManifest()

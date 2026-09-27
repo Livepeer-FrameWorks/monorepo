@@ -14,8 +14,10 @@ import (
 // flag a gRPC client should use for serviceName. When sess is non-nil the
 // dial address is a loopback endpoint backed by an SSH local-forward and
 // serverName is the cert-bearing hostname for SNI/verification. When sess
-// is nil the dial address is the mesh address (or external IP fallback) and
-// serverName is empty — gRPC then verifies against the dial address's host.
+// is nil the dial address lists the mesh address (or external IP fallback) of
+// every host running the service, and serverName is empty — gRPC then
+// verifies against the first address's host. Callers are the replica-aware
+// Quartermaster, Commodore and Purser clients.
 func resolveServiceDial(
 	ctx context.Context,
 	manifest *inventory.Manifest,
@@ -34,7 +36,7 @@ func resolveServiceDial(
 		return ep.DialAddr, ep.ServerName, ep.Insecure, nil
 	}
 
-	addr, addrErr := resolveServiceGRPCAddr(manifest, serviceName, defaultGRPCPort)
+	addr, addrErr := resolveServiceGRPCAddrs(manifest, serviceName, defaultGRPCPort)
 	if addrErr != nil {
 		return "", "", false, addrErr
 	}
