@@ -6,6 +6,8 @@ import (
 	"testing"
 
 	"frameworks/cli/pkg/inventory"
+
+	"gopkg.in/yaml.v3"
 )
 
 func TestClickHouseRoleUsesScopedDeb822Repository(t *testing.T) {
@@ -50,6 +52,38 @@ func TestClickHouseRoleUsesScopedDeb822Repository(t *testing.T) {
 			t.Fatalf("ClickHouse Molecule scenario missing %q:\n%s", image, molecule)
 		}
 	}
+}
+
+// idealista.clickhouse defaults to trace level and ten 1000M files, which
+// fills a data host's log disk within days.
+func TestClickHouseRoleBoundsTheServerLog(t *testing.T) {
+	var tasks []struct {
+		Name string         `yaml:"name"`
+		Vars map[string]any `yaml:"vars"`
+	}
+	install := readRepoFile(t, "ansible/collections/ansible_collections/frameworks/infra/roles/clickhouse/tasks/install.yml")
+	if err := yaml.Unmarshal([]byte(install), &tasks); err != nil {
+		t.Fatalf("parse install.yml: %v", err)
+	}
+	for _, task := range tasks {
+		if task.Name != "Configure ClickHouse via idealista.clickhouse" {
+			continue
+		}
+		logger, ok := task.Vars["clickhouse_logger"].(map[string]any)
+		if !ok {
+			t.Fatalf("idealista.clickhouse import does not override clickhouse_logger: %v", task.Vars)
+		}
+		if logger["level"] != "information" || logger["size"] != "200M" || logger["count"] != 10 {
+			t.Fatalf("clickhouse_logger = %v, want information, 200M, 10", logger)
+		}
+		for _, key := range []string{"log", "errorlog", "console"} {
+			if _, ok := logger[key]; !ok {
+				t.Fatalf("clickhouse_logger replaces the upstream map and must set %s: %v", key, logger)
+			}
+		}
+		return
+	}
+	t.Fatal("install.yml no longer imports idealista.clickhouse config")
 }
 
 func TestClickHouseRoleVarsUsesSharedCredentials(t *testing.T) {

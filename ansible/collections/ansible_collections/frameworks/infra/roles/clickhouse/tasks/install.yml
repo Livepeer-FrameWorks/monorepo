@@ -15,6 +15,14 @@
     clickhouse_default_password_sha256: "{{ clickhouse_default_password | hash('sha256') }}"
     clickhouse_default_users: "{{ frameworks_clickhouse_default_users }}"
     clickhouse_default_quotas: "{{ frameworks_clickhouse_default_quotas }}"
+    # idealista defaults to trace level and 10 x 1000M files.
+    clickhouse_logger:
+      level: information
+      log: "{{ clickhouse_log_path }}/clickhouse-server.log"
+      errorlog: "{{ clickhouse_log_path }}/clickhouse-server.err.log"
+      size: 200M
+      count: 10
+      console: autodetection
 
 - name: Remove legacy listen_host overrides before starting ClickHouse
   ansible.builtin.file:

@@ -29,3 +29,16 @@
           - -q
           - SELECT 1
       changed_when: false
+
+    - name: Read the rendered server config
+      ansible.builtin.slurp:
+        src: /etc/clickhouse-server/config.xml
+      register: clickhouse_config_xml
+
+    - name: Assert the server logs at information level with bounded files
+      ansible.builtin.assert:
+        that:
+          - "'<level>information</level>' in (clickhouse_config_xml.content | b64decode)"
+          - "'<size>200M</size>' in (clickhouse_config_xml.content | b64decode)"
+          - "'<count>10</count>' in (clickhouse_config_xml.content | b64decode)"
+        fail_msg: "clickhouse-server logger is not information level with 10 x 200M files"
