@@ -7,6 +7,14 @@
     group: root
     mode: "0644"
 
+# Cores go to systemd-coredump, which caps their size and disk use; Debian
+# ships it as a separate package, RedHat as part of systemd.
+- name: Install systemd-coredump
+  ansible.builtin.package:
+    name: systemd-coredump
+    state: present
+  when: ansible_facts.os_family == "Debian"
+
 - name: Render /etc/sysctl.d/99-yugabyte.conf
   ansible.builtin.template:
     src: sysctl.conf.j2
@@ -44,6 +52,26 @@
   ansible.builtin.shell: echo never > /sys/kernel/mm/transparent_hugepage/defrag
   when: '"[never]" not in yugabyte_thp_defrag.stdout'
   changed_when: '"[never]" not in yugabyte_thp_defrag.stdout'
+
+- name: Render YugabyteDB log prune units
+  ansible.builtin.template:
+    src: "{{ item.src }}"
+    dest: "{{ item.dest }}"
+    owner: root
+    group: root
+    mode: "0644"
+  loop:
+    - { src: yugabyte-log-prune.service.j2, dest: "{{ yugabyte_log_prune_unit_path }}" }
+    - { src: yugabyte-log-prune.timer.j2, dest: "{{ yugabyte_log_prune_timer_path }}" }
+  register: yugabyte_log_prune_units
+
+- name: Enable the daily YugabyteDB log prune
+  ansible.builtin.systemd:
+    name: yugabyte-log-prune.timer
+    state: started
+    enabled: true
+    daemon_reload: "{{ yugabyte_log_prune_units is changed }}"
+  when: not ansible_check_mode
 
 - name: Render yb-master flagfile
   ansible.builtin.template:

@@ -13,7 +13,11 @@ yugabyte_tserver_unit_path: "/etc/systemd/system/{{ yugabyte_tserver_service }}.
 yugabyte_master_tablet_id: "00000000000000000000000000000000"
 yugabyte_bootstrap_sentinel: "{{ yugabyte_data_dir }}/.frameworks-bootstrap-complete"
 yugabyte_master_root_dir: "{{ yugabyte_data_dir }}/yb-data/master"
+yugabyte_master_log_dir: "{{ yugabyte_data_dir }}/yb-data/master/logs"
 yugabyte_tserver_log_dir: "{{ yugabyte_data_dir }}/yb-data/tserver/logs"
+yugabyte_log_retention_days: 7
+yugabyte_log_prune_unit_path: /etc/systemd/system/yugabyte-log-prune.service
+yugabyte_log_prune_timer_path: /etc/systemd/system/yugabyte-log-prune.timer
 yugabyte_master_consensus_meta_path: "{{ yugabyte_master_root_dir }}/consensus-meta/{{ yugabyte_master_tablet_id }}"
 yugabyte_master_tablet_meta_path: "{{ yugabyte_master_root_dir }}/tablet-meta/{{ yugabyte_master_tablet_id }}"
 

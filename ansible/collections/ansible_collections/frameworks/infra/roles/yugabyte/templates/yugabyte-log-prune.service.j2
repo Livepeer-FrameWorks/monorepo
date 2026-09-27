@@ -1,0 +1,11 @@
+[Unit]
+Description=Prune YugabyteDB logs and cores older than {{ yugabyte_log_retention_days }} days
+
+[Service]
+Type=oneshot
+# glog and the YSQL postmaster rotate by size and age but never delete; the
+# files a running process writes are always newer than the cutoff. A log
+# directory that does not exist yet is not a failure.
+ExecStart=-/usr/bin/find {{ yugabyte_master_log_dir }} {{ yugabyte_tserver_log_dir }} {{ yugabyte_cores_dir }} -xdev -type f -mtime +{{ yugabyte_log_retention_days }} -delete
+Nice=19
+IOSchedulingClass=idle
