@@ -339,6 +339,7 @@ func RenderEdgeTemplates(vars EdgeVars) ([]EdgeRenderedFile, error) {
 ` + vmagentNetworkBlock + `    command:
       - -httpListenAddr=127.0.0.1:8429
       - -promscrape.config=/etc/frameworks/vmagent-edge.yml
+      - -remoteWrite.maxDiskUsagePerURL=512MB
       - -remoteWrite.url={{TELEMETRY_URL}}
       - -remoteWrite.bearerTokenFile=/etc/frameworks/telemetry/token
     volumes:

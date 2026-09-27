@@ -136,6 +136,11 @@ func TestRenderEdgeTemplates_dockerVMAgentUsesStandardPort(t *testing.T) {
 	if strings.Contains(content, ":8430") {
 		t.Fatalf("edge vmagent should not use the retired :8430 listener:\n%s", content)
 	}
+	// An unreachable telemetry endpoint otherwise buffers without bound on
+	// the edge's disk.
+	if !strings.Contains(content, "- -remoteWrite.maxDiskUsagePerURL=512MB") {
+		t.Fatalf("edge vmagent must cap its remote-write buffer at 512MB:\n%s", content)
+	}
 }
 
 func TestRenderEdgeTemplatesMistControllerMetrics(t *testing.T) {

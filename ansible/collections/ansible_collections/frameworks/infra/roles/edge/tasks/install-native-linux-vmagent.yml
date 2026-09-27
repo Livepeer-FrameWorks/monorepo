@@ -89,6 +89,7 @@
       ExecStart=/opt/frameworks/vmagent-edge/vmagent \
         -httpListenAddr=127.0.0.1:8429 \
         -promscrape.config=/etc/frameworks/vmagent-edge.yml \
+        -remoteWrite.maxDiskUsagePerURL=512MB \
         -remoteWrite.url={{ edge_telemetry_url }}{{ edge_vmagent_bearer_token_arg }}
       Restart=always
       RestartSec=5

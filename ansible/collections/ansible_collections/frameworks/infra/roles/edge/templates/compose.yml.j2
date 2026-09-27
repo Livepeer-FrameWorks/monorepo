@@ -113,6 +113,7 @@ services:
    vmagent — it scrapes and remote-writes outbound. #}
       - -httpListenAddr=127.0.0.1:8429
       - -promscrape.config=/etc/frameworks/vmagent-edge.yml
+      - -remoteWrite.maxDiskUsagePerURL=512MB
       - -remoteWrite.url={{ edge_telemetry_url }}
       - -remoteWrite.bearerTokenFile=/etc/frameworks/telemetry/token
     volumes:

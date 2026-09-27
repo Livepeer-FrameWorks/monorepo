@@ -254,3 +254,12 @@ func TestPrometheusStackSystemdServiceNameIsComponentScoped(t *testing.T) {
 		})
 	}
 }
+
+// vmagent buffers undelivered samples on disk while its remote-write target is
+// unreachable; without a cap an outage fills the host's disk.
+func TestPrometheusStackVMAgentCapsRemoteWriteBuffer(t *testing.T) {
+	unit := readRepoFile(t, "ansible/collections/ansible_collections/frameworks/infra/roles/prometheus_stack/templates/vmagent.service.j2")
+	if got := strings.Count(unit, "-remoteWrite.maxDiskUsagePerURL=1GB \\\n"); got != 2 {
+		t.Fatalf("both vmagent ExecStart variants must cap the buffer at 1GB, found %d:\n%s", got, unit)
+	}
+}

@@ -315,6 +315,9 @@ func TestEdgeVMAgentRoleFilesUseStandardListenerPort(t *testing.T) {
 			if strings.Contains(content, ":8430") {
 				t.Fatalf("edge vmagent role file should not use retired listener :8430:\n%s", content)
 			}
+			if !strings.Contains(content, "-remoteWrite.maxDiskUsagePerURL=512MB") {
+				t.Fatalf("edge vmagent role file must cap its remote-write buffer at 512MB:\n%s", content)
+			}
 		})
 	}
 }
