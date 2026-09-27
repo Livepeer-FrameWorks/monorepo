@@ -115,6 +115,22 @@ logs_since() {
   docker compose -p "$COMPOSE_PROJECT_NAME" logs --no-color --no-log-prefix --since "$since" "$@" 2>/dev/null
 }
 utc_now() { date -u +%Y-%m-%dT%H:%M:%S.%NZ; }
+# log_has <since> <pattern> <service...>: a service logged a matching line.
+# The log is read whole before matching: under pipefail an early-exiting
+# `grep -q` breaks the pipe of a large log and reads as "no match".
+log_has() {
+  local since=$1 pattern=$2 out
+  shift 2
+  out=$(logs_since "$since" "$@")
+  printf '%s\n' "$out" | grep -E "$pattern" >/dev/null
+}
+# log_json <since> <jq filter> <service...>: the service's JSON log lines through
+# a filter; lines that are not JSON are skipped.
+log_json() {
+  local since=$1 filter=$2
+  shift 2
+  logs_since "$since" "$@" | jq -Rrc "fromjson? | $filter" 2>/dev/null
+}
 
 # Network faults on one service's network namespace. The edge bundle (Caddy,
 # Mist, Helmsman) and its edge proxy share one namespace, so rules there act on
@@ -363,6 +379,40 @@ with urllib.request.urlopen(sys.argv[1], timeout=8) as r:
     body = r.read().decode("utf-8", "replace")
 print(urllib.parse.urljoin(sys.argv[1], next(l.strip() for l in body.splitlines() if l.strip() and not l.startswith("#"))))
 PY
+}
+# hls_poll <media playlist url> [interval]: one ongoing viewer. Every interval
+# (default 2 s) it fetches the playlist and its second-newest segment and
+# prints "<unix time> ok|fail [why]" (a playlist alone is not media: Mist
+# answers playlist requests of a refused session). Run it in the background
+# (exec keeps $! the poller itself, so kill stops it).
+hls_poll() {
+  exec python3 -u - "$1" "${2:-2}" <<'PY' 2>/dev/null
+import sys, time, urllib.request, urllib.parse
+url, interval = sys.argv[1], float(sys.argv[2])
+def get(u):
+    with urllib.request.urlopen(u, timeout=8) as r:
+        return r.read()
+while True:
+    why = ""
+    try:
+        body = get(url).decode("utf-8", "replace")
+        segs = [l.strip() for l in body.splitlines() if l.strip() and not l.startswith("#")]
+        if not segs:
+            why = "empty-playlist"
+        else:
+            data = get(urllib.parse.urljoin(url, segs[-2] if len(segs) > 1 else segs[-1]))
+            if len(data) < 3 * 188 or data[0] != 0x47:
+                why = f"not-ts:{len(data)}"
+    except Exception as e:
+        why = f"{type(e).__name__}:{str(e)[:80]}".replace(" ", "_")
+    print(f"{int(time.time())} {'fail ' + why if why else 'ok'}", flush=True)
+    time.sleep(interval)
+PY
+}
+# hls_poll_state <poll output file> <since unix time>: "ok" when every sample
+# since then succeeded, "fail" when the latest one failed, empty with no sample.
+hls_poll_state() {
+  awk -v since="$2" '$1 >= since { n++; last = $2; if ($2 != "ok") bad++ } END { if (n) print (last == "fail" ? "fail" : (bad ? "mixed" : "ok")) }' "$1" 2>/dev/null
 }
 master_variants() { # master_variants <master url>: "WxH bandwidth" per variant
   curl -s -m 10 "$1" | awk -F'RESOLUTION=' '/^#EXT-X-STREAM-INF/{split($2,a,","); print a[1]}'

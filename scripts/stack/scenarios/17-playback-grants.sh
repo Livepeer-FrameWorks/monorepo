@@ -77,6 +77,6 @@ FORWARDED=$(printf '%s\n' "$EDGE_LOG" | grep 'PLAY_REWRITE resolved by Foghorn' 
 echo "    PLAY_REWRITE forwarded to Foghorn: $FORWARDED for $TOTAL requests"
 at_most_twice() { [ "$FORWARDED" -ge 1 ] && [ "$FORWARDED" -le 2 ]; }
 check "one viewer's $TOTAL HLS requests reached Foghorn at most twice (got $FORWARDED)" at_most_twice
-grant_applied() { logs_since "$START" "$SERVING" | grep 'Playback grant applied' | grep -q "$IN"; }
+grant_applied() { [ -n "$(log_json "$START" "select(.msg == \"Playback grant applied\" and .internal_name == \"live+$IN\") | .time" "$SERVING")" ]; }
 check "the serving edge holds the stream's playback grant" grant_applied
 finish
