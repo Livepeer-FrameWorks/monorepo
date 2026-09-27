@@ -7,11 +7,14 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"runtime"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -3288,6 +3291,7 @@ func (pm *PrometheusMonitor) convertNodeAPIToMistTrigger(nodeID string, jsonData
 
 		// Extract outputs configuration
 		if outputs, ok := jsonData["outputs"]; ok {
+			outputs = withSRTListenerPort(outputs, sidecarcfg.MistListenerPort("TSSRT"))
 			if outputsJSON, err := json.Marshal(outputs); err == nil {
 				nodeUpdate.OutputsJson = string(outputsJSON)
 			}
@@ -3471,6 +3475,41 @@ func httpPlaybackOutputOnline(jsonData map[string]any) bool {
 		return false
 	}
 	return mist.ResolvePlaybackURL(outputs, "http://localhost", "hls", "probe") != ""
+}
+
+// withSRTListenerPort writes the TSSRT connector's configured port into its
+// advertised SRT URL when Mist left it out. Mist omits a port that equals its
+// own scheme default (HTTP::URL::getDefaultPort), but SRT publishers have no
+// default port to fall back on. Without a configured port the URL stays
+// port-less and Foghorn does not treat the node as an SRT ingest point.
+func withSRTListenerPort(outputs any, port int) any {
+	listeners, ok := outputs.(map[string]any)
+	if !ok || port <= 0 {
+		return outputs
+	}
+	completed := make(map[string]any, len(listeners))
+	for name, raw := range listeners {
+		completed[name] = raw
+		if !strings.EqualFold(name, "TSSRT") && !strings.EqualFold(name, "SRT") {
+			continue
+		}
+		template, isString := raw.(string)
+		if !isString {
+			if list, isList := raw.([]any); isList && len(list) == 1 {
+				template, isString = list[0].(string)
+			}
+		}
+		if !isString {
+			continue
+		}
+		u, err := url.Parse(template)
+		if err != nil || u.Scheme != "srt" || u.Hostname() == "" || u.Port() != "" {
+			continue
+		}
+		u.Host = net.JoinHostPort(u.Hostname(), strconv.Itoa(port))
+		completed[name] = u.String()
+	}
+	return completed
 }
 
 func evaluateNodeHealth(hasMistData bool, cpuPercent, memPercent, shmPercent float64) bool {

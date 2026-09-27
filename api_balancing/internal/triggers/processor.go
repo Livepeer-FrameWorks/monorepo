@@ -1593,7 +1593,7 @@ func (p *Processor) handleDVRLifecycleData(trigger *ipcpb.MistTrigger) (string, 
 // terminal for this publisher and node, from an observation, timing or
 // revalidation failure, which the publisher's reconnect resolves.
 func ingestPlacementErrorCode(err error) ipcpb.IngestErrorCode {
-	if errors.Is(err, mist.ErrUnsupportedIngestProtocol) {
+	if errors.Is(err, mist.ErrUnsupportedIngestProtocol) || errors.Is(err, federation.ErrProtocolNotOffered) {
 		return ipcpb.IngestErrorCode_INGEST_ERROR_PLACEMENT_DENIED
 	}
 	// Authority that kept changing through every decision round is not a
@@ -1844,6 +1844,9 @@ func (p *Processor) handlePushRewrite(trigger *ipcpb.MistTrigger) (_ string, _ b
 		pushRewrite.GetObservedConnector(), pushRewrite.GetHostname()); placementErr != nil {
 		code := ingestPlacementErrorCode(placementErr)
 		p.logger.WithError(placementErr).WithFields(logging.Fields{"node_id": trigger.GetNodeId(), "ingest_cluster_id": ingestClusterID, "error_code": code.String()}).Warn("PUSH_REWRITE refused by ingest placement")
+		if errors.Is(placementErr, federation.ErrProtocolNotOffered) {
+			return "", true, ingesterrors.New(code, "publishing protocol not offered by this node")
+		}
 		if code == ipcpb.IngestErrorCode_INGEST_ERROR_PLACEMENT_DENIED {
 			return "", true, ingesterrors.New(code, "publisher is not permitted on this node by placement policy")
 		}

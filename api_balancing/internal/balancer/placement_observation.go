@@ -200,6 +200,10 @@ func observePlacementNodes(req PlacementObservationRequest, capacityOnly bool) (
 	return result, nil
 }
 
+// PlacementDetailProtocolUnavailable marks a node whose reported listeners do
+// not offer the requested protocol.
+const PlacementDetailProtocolUnavailable = "protocol_unavailable"
+
 // placementUnavailableDetail names the first condition that makes a node
 // unable to take the request, or "" when none applies.
 func placementUnavailableDetail(active bool, mode state.NodeOperationalMode, validAddress, capable, protocolAvailable, streamAllowed bool) string {
@@ -213,7 +217,7 @@ func placementUnavailableDetail(active bool, mode state.NodeOperationalMode, val
 	case !capable:
 		return "capability_missing"
 	case !protocolAvailable:
-		return "protocol_unavailable"
+		return PlacementDetailProtocolUnavailable
 	case !streamAllowed:
 		return "stream_not_allowed"
 	}

@@ -337,6 +337,16 @@ func (evaluation PlacementEvaluation) UnassessedReason(clusterID, nodeID string,
 	}
 }
 
+// UnavailableDetail names the observed condition that made a destination
+// unable to take the request, or "" when none was observed.
+func (evaluation PlacementEvaluation) UnavailableDetail(clusterID, nodeID string) string {
+	candidate, listed := evaluation.observed[[2]string{clusterID, nodeID}]
+	if !listed || candidate.Capacity != placement.CapacityUnavailable {
+		return ""
+	}
+	return candidate.CapacityDetail
+}
+
 // AssessmentFor returns only an exact candidate with still-current observation
 // evidence. An omitted node or expired row cannot certify a preparation refusal.
 func (evaluation PlacementEvaluation) AssessmentFor(clusterID, nodeID string, now time.Time) (placement.Assessment, time.Time, bool) {

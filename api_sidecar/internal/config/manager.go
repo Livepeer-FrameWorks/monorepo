@@ -382,7 +382,7 @@ func (m *Manager) reconcile() {
 	if ackSender != nil && seed.GetSeedVersion() > 0 && len(seed.GetTlsBundles()) > 0 {
 		m.sendApplyResultLocked(seed, bundleResults, caddyReloadOK, ackSender)
 	}
-	current, err := m.mistClient.ConfigBackup()
+	current, err := m.configBackup()
 	if err != nil {
 		m.logger.WithError(err).Warn("ConfigBackup failed, retrying Mist config reconcile")
 		m.scheduleRetry()
@@ -586,7 +586,7 @@ func (m *Manager) repairTriggerDefinitions() {
 		m.logger.WithError(err).Error("trigger drift repair refused invalid desired configuration")
 		return
 	}
-	current, err := m.mistClient.ConfigBackup()
+	current, err := m.configBackup()
 	if err != nil {
 		m.logger.WithError(err).Warn("trigger drift check: ConfigBackup failed")
 		return
@@ -1905,7 +1905,7 @@ func (m *Manager) repairMissingManagedStreams(seed *ipcpb.ConfigSeed) error {
 	if len(expected) == 0 {
 		return nil
 	}
-	current, err := m.mistClient.ConfigBackup()
+	current, err := m.configBackup()
 	if err != nil {
 		return fmt.Errorf("config backup: %w", err)
 	}
@@ -1925,7 +1925,7 @@ func (m *Manager) repairMissingManagedStreams(seed *ipcpb.ConfigSeed) error {
 		return fmt.Errorf("save managed stream repair: %w", saveErr)
 	}
 
-	current, err = m.mistClient.ConfigBackup()
+	current, err = m.configBackup()
 	if err != nil {
 		return fmt.Errorf("verify repaired streams: %w", err)
 	}

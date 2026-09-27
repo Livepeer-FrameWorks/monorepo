@@ -245,3 +245,66 @@ func TestIngestPlacementAdapterAdmitsFromObservedConnectorOnly(t *testing.T) {
 		})
 	}
 }
+
+// Mist v0.3.13 advertises TSSRT without its port. A node that reports only
+// that URL does not offer SRT ingest, and a direct SRT publish to it is a
+// terminal refusal, not a retryable internal error.
+func TestIngestPlacementRefusesSRTOnNodeWithoutSRTListener(t *testing.T) {
+	now := time.Now()
+	pair := localauthority.PlacementPair{
+		Tenant: localauthority.TenantSnapshot{Version: 1, Ready: true, IngestReady: true, ValidUntil: now.Add(20 * time.Second), Authority: &mediapb.TenantAuthority{
+			SchemaVersion: 2, TenantId: "tenant", Lifecycle: mediapb.AuthorityLifecycle_AUTHORITY_LIFECYCLE_ACTIVE, BillingDecision: mediapb.TenantBillingDecision_TENANT_BILLING_DECISION_ALLOW,
+			MediaPlacement: &pb.PolicySet{Revision: 1},
+			EffectiveClusterGrants: []*mediapb.TenantClusterGrant{
+				{ClusterId: "eu", ControlCellId: "eu-cell", ClusterClass: "tenant_private", OwnerTenantId: "tenant", SubscriptionStatus: "active", MediaConsent: &pb.CapacityConsent{AllowServe: true, AllowIngest: true}},
+			}}},
+		Object: localauthority.MediaObjectSnapshot{Version: 1, AuthorityID: "live_stream:stream", Ready: true, IngestReady: true, ValidUntil: now.Add(20 * time.Second), Authority: &mediapb.MediaObjectAuthority{
+			SchemaVersion: 2, TenantId: "tenant", InternalName: "stream", Lifecycle: mediapb.AuthorityLifecycle_AUTHORITY_LIFECYCLE_ACTIVE,
+			ObjectKind: mediapb.MediaObjectKind_MEDIA_OBJECT_KIND_LIVE_STREAM, MediaPlacement: &pb.PolicySet{}, PlacementTenantRevision: 1,
+			Object: &mediapb.MediaObjectAuthority_LiveStream{LiveStream: &mediapb.LiveStreamAuthority{StreamId: "stream", IngestMode: "push"}}}},
+	}
+	for _, scenario := range []struct {
+		name, srtListener string
+		wantAllowed       bool
+	}{
+		{"advertised without port", "srt://HOST/?streamid=$", false},
+		{"advertised with configured port", "srt://HOST:8889/?streamid=$", true},
+	} {
+		t.Run(scenario.name, func(t *testing.T) {
+			gate := &federation.PlacementPolicyGate{CellID: "eu-cell", Authority: viewerPlacementPairReader{pair: pair},
+				IngestFence: ingestFenceFunc(func(context.Context, federation.PlacementIngestIdentity) (string, error) { return "", nil }),
+				Router: balancer.PlacementRouter{Observe: func(_ context.Context, _ balancer.PlacementCell, route balancer.PlacementRouteRequest) (balancer.PlacementCellObservation, error) {
+					observed := time.Now()
+					candidates, err := balancer.ObservePlacementNodes(balancer.PlacementObservationRequest{
+						TenantID: route.TenantID, Verb: route.Verb, InternalName: route.InternalName, Protocol: route.Protocol, Now: observed,
+						Clusters: map[string]balancer.PlacementClusterFacts{"eu": {OwnerTenantID: "tenant", AllowedVerbs: []placement.Verb{placement.Ingest, placement.Serve}}},
+						Paths:    map[string]balancer.PlacementNodePath{"node": {Presence: placement.Present, SourceFeasible: true}},
+						Snapshot: &state.BalancerSnapshot{Nodes: []state.EnhancedBalancerNodeSnapshot{{
+							NodeID: "node", ClusterID: "eu", Host: "https://edge.example", IsActive: true, CapIngest: true, CapEdge: true,
+							MetricsObservedAt: observed, LastHeartbeat: observed, OutputsObservedAt: observed,
+							Outputs: map[string]any{"TSSRT": scenario.srtListener, "RTMP": "rtmp://HOST/play/$"},
+							CPU:     10, RAMMax: 10000, RAMCurrent: 1000, BWLimit: 1000, UpSpeed: 100, DownSpeed: 100,
+						}}},
+					})
+					if err != nil {
+						return balancer.PlacementCellObservation{}, err
+					}
+					return balancer.PlacementCellObservation{Complete: true, ObservedAt: observed, ExpiresAt: observed.Add(10 * time.Second), Candidates: candidates}, nil
+				}}}
+			adapter := &IngestPlacementAdapter{Authority: viewerPlacementPairReader{pair: pair}, Gate: gate}
+			_, err := adapter.AdmitPublisher(context.Background(), IngestPlacementConnection{TenantID: "tenant", InternalName: "stream", ClusterID: "eu", NodeID: "node", Connector: "TSSRT", PublisherAddress: "203.0.113.9"})
+			if scenario.wantAllowed {
+				if err != nil {
+					t.Fatalf("SRT publisher refused on a node with an SRT listener: %v", err)
+				}
+				return
+			}
+			if !errors.Is(err, federation.ErrProtocolNotOffered) {
+				t.Fatalf("refusal does not name the missing protocol: %v", err)
+			}
+			if code := ingestPlacementErrorCode(err); code != ipcpb.IngestErrorCode_INGEST_ERROR_PLACEMENT_DENIED {
+				t.Fatalf("missing listener reported as %s, want terminal PLACEMENT_DENIED", code)
+			}
+		})
+	}
+}

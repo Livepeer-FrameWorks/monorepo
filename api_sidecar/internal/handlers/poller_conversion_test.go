@@ -8,8 +8,10 @@ import (
 	"time"
 
 	"frameworks/api_sidecar/internal/appconfig/appconfigtest"
+	sidecarcfg "frameworks/api_sidecar/internal/config"
 	"frameworks/api_sidecar/internal/control"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/mist"
 	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
 )
 
@@ -821,6 +823,47 @@ func TestConvertNodeAPIAbsentListenersWithdrawPreviousReport(t *testing.T) {
 	trigger := pm.convertNodeAPIToMistTrigger("node", map[string]any{"cpu": float64(1)}, logging.NewLogger())
 	if got := trigger.GetNodeLifecycleUpdate().GetOutputsJson(); got != "{}" {
 		t.Fatalf("successful empty listener report did not withdraw previous URLs: %q", got)
+	}
+}
+
+// Mist v0.3.13 advertises TSSRT on its default port without the port.
+func TestConvertNodeAPIReportsSRTListenerWithConfiguredPort(t *testing.T) {
+	sidecarcfg.RecordMistListenerPorts(map[string]any{"config": map[string]any{"protocols": []any{
+		map[string]any{"connector": "TSSRT", "port": float64(8889)},
+	}}})
+	t.Cleanup(func() { sidecarcfg.RecordMistListenerPorts(nil) })
+	pm := &PrometheusMonitor{edgePublicURL: "https://edge.example"}
+	jsonData := map[string]any{"outputs": map[string]any{
+		"TSSRT": "srt://HOST/?streamid=$",
+		"RTMP":  "rtmp://HOST/play/$",
+	}}
+
+	nlu := pm.convertNodeAPIToMistTrigger("node", jsonData, logging.NewLogger()).GetNodeLifecycleUpdate()
+	var outputs map[string]any
+	if err := json.Unmarshal([]byte(nlu.GetOutputsJson()), &outputs); err != nil {
+		t.Fatal(err)
+	}
+	if outputs["TSSRT"] != "srt://HOST:8889/?streamid=$" {
+		t.Fatalf("TSSRT listener = %v, want the configured port filled in", outputs["TSSRT"])
+	}
+	if outputs["RTMP"] != "rtmp://HOST/play/$" {
+		t.Fatalf("RTMP listener changed: %v", outputs["RTMP"])
+	}
+	if !mist.SupportsIngestProtocol(outputs, "https://edge.example", "srt") {
+		t.Fatal("reported SRT listener is not an ingest point for Foghorn")
+	}
+	if jsonData["outputs"].(map[string]any)["TSSRT"] != "srt://HOST/?streamid=$" {
+		t.Fatal("the cached Mist snapshot was modified")
+	}
+
+	sidecarcfg.RecordMistListenerPorts(nil)
+	nlu = pm.convertNodeAPIToMistTrigger("node", jsonData, logging.NewLogger()).GetNodeLifecycleUpdate()
+	outputs = nil
+	if err := json.Unmarshal([]byte(nlu.GetOutputsJson()), &outputs); err != nil {
+		t.Fatal(err)
+	}
+	if mist.SupportsIngestProtocol(outputs, "https://edge.example", "srt") {
+		t.Fatal("an SRT listener without a known port must not be offered for ingest")
 	}
 }
 

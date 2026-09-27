@@ -31,6 +31,11 @@ type PlacementIngestIdentity struct {
 	InternalName string
 }
 
+// ErrProtocolNotOffered reports that the destination node does not advertise
+// a listener for the requested protocol. It is a property of the node, so the
+// same connection retried on that node is refused again.
+var ErrProtocolNotOffered = errors.New("protocol not offered by this node")
+
 // ErrPlacementAuthorityChanged reports that signed authority or ingest
 // ownership changed on every decision round. Each round re-decides on the
 // newer snapshot, so this is not a refusal by policy; the caller retries.
@@ -83,6 +88,9 @@ type PlacementPolicyValidation struct {
 	Choice                 placement.Choice
 	ExpiresAt              time.Time
 	Outcome                placementpb.PreparationOutcome
+	// UnavailableDetail names the observed condition behind a
+	// NODE_UNAVAILABLE outcome.
+	UnavailableDetail string
 	// Request is the preparation restated under the authority that decided
 	// it. It differs from the caller's request only when the destination
 	// holds newer policy than the coordinator.
@@ -94,8 +102,12 @@ func (gate *PlacementPolicyGate) Validate(ctx context.Context, req *placementpb.
 	if err != nil {
 		return PlacementPolicyValidation{}, err
 	}
+	if result.Outcome == placementpb.PreparationOutcome_PREPARATION_OUTCOME_NODE_UNAVAILABLE &&
+		result.UnavailableDetail == balancer.PlacementDetailProtocolUnavailable {
+		return PlacementPolicyValidation{}, fmt.Errorf("%w: %s on %s/%s", ErrProtocolNotOffered, req.GetQuery().GetProtocol(), req.GetClusterId(), req.GetNodeId())
+	}
 	if result.Outcome != placementpb.PreparationOutcome_PREPARATION_OUTCOME_ACCEPTED {
-		return PlacementPolicyValidation{}, status.Error(codes.FailedPrecondition, "selected destination no longer satisfies placement policy")
+		return PlacementPolicyValidation{}, status.Errorf(codes.FailedPrecondition, "selected destination no longer satisfies placement policy (%s)", result.Outcome)
 	}
 	return result, nil
 }
@@ -265,6 +277,7 @@ func (gate *PlacementPolicyGate) decide(ctx context.Context, req *placementpb.Pr
 		result.Outcome = placementpb.PreparationOutcome_PREPARATION_OUTCOME_CAPACITY_EXHAUSTED
 	case placement.NodeUnavailable:
 		result.Outcome = placementpb.PreparationOutcome_PREPARATION_OUTCOME_NODE_UNAVAILABLE
+		result.UnavailableDetail = evaluated.UnavailableDetail(req.ClusterId, req.NodeId)
 	case placement.StaleTelemetry, placement.UnknownCapacity, placement.InvalidMetrics, placement.NoSourcePath,
 		placement.PolicyFactsUnavailable, placement.UnknownOwnership, placement.PriceUnavailable:
 		return PlacementPolicyValidation{}, time.Time{}, status.Errorf(codes.Unavailable, "selected destination %s/%s cannot be assessed (%s)", req.ClusterId, req.NodeId, assessment.Reason)
