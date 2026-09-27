@@ -35,6 +35,7 @@ type releaseServiceStage struct {
 
 func releaseServiceStages() []releaseServiceStage {
 	return []releaseServiceStage{
+		{name: "yugabyte", taskTypes: []string{"yugabyte"}, describe: describeYugabyteConvergence, run: runYugabyteConvergence},
 		{name: "clickhouse", taskTypes: []string{"clickhouse"}, describe: describeClickHouseConvergence, run: runClickHouseConvergence},
 		{name: "kafka", taskTypes: []string{"kafka-controller", "kafka"}, describe: describeKafkaConvergence, run: runKafkaConvergence},
 	}
@@ -203,6 +204,7 @@ func (c *releaseHostConvergence) convergeGated(ctx context.Context, task *orches
 // releaseServiceOps replaces the live service probes, restarts, and gate
 // timeouts of the service stages in tests.
 type releaseServiceOps struct {
+	yugabyte   yugabyteReleaseOps
 	kafka      kafkaReleaseOps
 	clickhouse clickhouseReleaseOps
 	timing     *serviceGateTiming
