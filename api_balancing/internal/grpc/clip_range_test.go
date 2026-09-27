@@ -2,6 +2,7 @@ package grpc
 
 import (
 	"testing"
+	"time"
 
 	"frameworks/api_balancing/internal/state"
 	sharedpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/shared"
@@ -30,6 +31,20 @@ func TestResolveClipAbsoluteRangeMs(t *testing.T) {
 		}, "s")
 		if err != nil || start != 1000_000 || end != 1015_000 {
 			t.Fatalf("got (%d,%d,%v), want (1000000,1015000,nil)", start, end, err)
+		}
+	})
+	t.Run("ABSOLUTE stop after the live point is refused", func(t *testing.T) {
+		now := time.Now().Unix()
+		_, _, err := resolveClipAbsoluteRangeMs(&sharedpb.CreateClipRequest{
+			Mode: sharedpb.ClipMode_CLIP_MODE_ABSOLUTE, StartUnix: i64(now - 5), StopUnix: i64(now + 600),
+		}, "s")
+		if err == nil {
+			t.Fatal("a clip ending ten minutes in the future was accepted; its requested length can never be delivered")
+		}
+		if _, _, err := resolveClipAbsoluteRangeMs(&sharedpb.CreateClipRequest{
+			Mode: sharedpb.ClipMode_CLIP_MODE_ABSOLUTE, StartUnix: i64(now - 30), StopUnix: i64(now),
+		}, "s"); err != nil {
+			t.Fatalf("a clip ending now was refused: %v", err)
 		}
 	})
 	t.Run("ABSOLUTE missing start_unix", func(t *testing.T) {
@@ -170,6 +185,8 @@ func seedLiveStreamStart(t *testing.T, internalName string) int64 {
 	if err := sm.UpdateStreamFromBuffer(internalName, internalName, "node-1", "tenant-1", "FULL", ""); err != nil {
 		t.Fatalf("seed stream: %v", err)
 	}
+	// Live for a minute, so the media offsets the cases clip lie in the past.
+	sm.SetStreamStartedAtForTests(internalName, time.Now().Add(-time.Minute).Truncate(time.Millisecond))
 	ss := sm.GetStreamState(internalName)
 	if ss == nil || ss.StartedAt == nil {
 		t.Fatalf("expected StartedAt to be recorded for %s", internalName)

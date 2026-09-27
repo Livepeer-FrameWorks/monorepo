@@ -127,8 +127,17 @@ func resolveClipAbsoluteRangeMs(req *sharedpb.CreateClipRequest, streamInternalN
 	if endMsAbs <= startMsAbs {
 		return 0, 0, fmt.Errorf("clip range non-positive after normalization [%d, %d)", startMsAbs, endMsAbs)
 	}
+	// Media after the live point does not exist yet. Accepting such a stop
+	// would announce a length in clip.requested that the clip cannot have.
+	if endMsAbs > nowMs+clipStopClockSkew.Milliseconds() {
+		return 0, 0, fmt.Errorf("clip stop is %s after the live point; clips end at or before now", time.Duration(endMsAbs-nowMs)*time.Millisecond)
+	}
 	return startMsAbs, endMsAbs, nil
 }
+
+// clipStopClockSkew is how far past this Foghorn's clock a requested clip
+// stop may lie, for callers whose clocks run ahead.
+const clipStopClockSkew = 5 * time.Second
 
 // pickClipSource decides which source feeds a clip harvest:
 //   - LIVE        — the live shm window (last ~liveSHMWindow), available

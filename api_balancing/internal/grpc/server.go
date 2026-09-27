@@ -1380,7 +1380,17 @@ func (s *FoghornGRPCServer) DeleteStreamThumbnails(ctx context.Context, req *sha
 	return &sharedpb.DeleteStreamThumbnailsResponse{Success: true}, nil
 }
 
-// DeleteClip deletes a clip
+// clipStatusTerminal reports a clip status after which no clip.ready or
+// clip.failed follows.
+func clipStatusTerminal(status string) bool {
+	switch status {
+	case "ready", "failed", "deleted", "expired", "aborted":
+		return true
+	}
+	return false
+}
+
+// DeleteClip deletes a clip. A clip that was already deleted is not found.
 func (s *FoghornGRPCServer) DeleteClip(ctx context.Context, req *sharedpb.DeleteClipRequest) (*sharedpb.DeleteClipResponse, error) {
 	if req.ClipHash == "" {
 		return nil, status.Error(codes.InvalidArgument, "clip_hash is required")
@@ -1406,10 +1416,7 @@ func (s *FoghornGRPCServer) DeleteClip(ctx context.Context, req *sharedpb.Delete
 	}
 
 	if clipRow.Status.String == "deleted" {
-		return &sharedpb.DeleteClipResponse{
-			Success: false,
-			Message: "clip is already deleted",
-		}, nil
+		return nil, status.Error(codes.NotFound, "clip not found")
 	}
 
 	// Get node_id from artifact_nodes
@@ -1442,6 +1449,17 @@ func (s *FoghornGRPCServer) DeleteClip(ctx context.Context, req *sharedpb.Delete
 		if enqErr := artifactoutbox.EnqueueClipLifecycleTx(ctx, tx, clipData); enqErr != nil {
 			return enqErr
 		}
+		// A clip deleted before it finished, directly or with its stream,
+		// never becomes ready; clip.failed ends what clip.requested began.
+		if !clipStatusTerminal(clipRow.Status.String) {
+			failed := &publicv1.ClipFailed{
+				Artifact: artifactoutbox.ClipArtifact(req.ClipHash, clipData.GetStreamId()),
+				Reason:   publicv1.MediaFailureReason_MEDIA_FAILURE_REASON_SOURCE_UNAVAILABLE,
+			}
+			if enqErr := artifactoutbox.EnqueueArtifactFactTx(ctx, tx, clipRow.TenantID, failed); enqErr != nil {
+				return enqErr
+			}
+		}
 		return artifactoutbox.EnqueueArtifactDeletedTx(ctx, tx, clipRow.TenantID, deletionRequester(ctx, req.GetRequestedByUserId()),
 			ipcpb.ArtifactEvent_ARTIFACT_TYPE_CLIP, req.ClipHash, clipData.GetStreamId())
 	}); err != nil {
@@ -1453,10 +1471,7 @@ func (s *FoghornGRPCServer) DeleteClip(ctx context.Context, req *sharedpb.Delete
 	// already-deleted and do NO physical cleanup — the winning delete owns the bytes. Returning here
 	// prevents duplicate DELETED analytics and byte removal for a delete this call did not commit.
 	if !transitioned {
-		return &sharedpb.DeleteClipResponse{
-			Success: false,
-			Message: "clip is already deleted",
-		}, nil
+		return nil, status.Error(codes.NotFound, "clip not found")
 	}
 
 	// Terminate any not-yet-finished processing job so a deleted clip never processes (e.g. delete

@@ -137,6 +137,60 @@ func TestDeleteClip_SoftDeleteIssuesTenantScopedUpdate(t *testing.T) {
 	}
 }
 
+const clipDeletionTenant = "11111111-2222-3333-4444-555555555555"
+
+func clipDeletionRow(status string) *sqlmock.Rows {
+	return sqlmock.NewRows([]string{
+		"status", "size_bytes", "retention_until", "stream_internal_name",
+		"tenant_id", "user_id", "format", "storage_cluster_id", "origin_cluster_id", "active_object_key",
+		"active_dtsh_key", "sync_object_key", "durable_backend_local", "backend_id",
+	}).AddRow(status, nil, nil, "live+stream-1", clipDeletionTenant, "user-1", "mkv", nil, nil, nil, nil, nil, false, nil)
+}
+
+// A clip that was already deleted is not found, as the API documents; a
+// second delete does not report success.
+func TestDeleteClip_AlreadyDeletedIsNotFound(t *testing.T) {
+	srv, mock := newLifecycleServer(t)
+	mock.ExpectQuery(`SELECT status, size_bytes`).WithArgs("clip-h", clipDeletionTenant).WillReturnRows(clipDeletionRow("deleted"))
+
+	_, err := srv.DeleteClip(context.Background(), &sharedpb.DeleteClipRequest{ClipHash: "clip-h", TenantId: clipDeletionTenant})
+	if status.Code(err) != codes.NotFound {
+		t.Fatalf("deleting a deleted clip = %v, want NotFound", err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("unmet SQL expectations: %v", err)
+	}
+}
+
+// A clip deleted while its job runs, as its stream's deletion does, never
+// becomes ready. The deletion ends it with clip.failed in the same
+// transaction, so clip.requested always gets a terminal event.
+func TestDeleteClip_RunningClipEndsWithClipFailed(t *testing.T) {
+	srv, mock := newLifecycleServer(t)
+	mock.ExpectQuery(`SELECT status, size_bytes`).WithArgs("clip-h", clipDeletionTenant).WillReturnRows(clipDeletionRow("processing"))
+	mock.ExpectQuery(`SELECT node_id FROM foghorn.artifact_nodes`).WithArgs("clip-h").WillReturnRows(sqlmock.NewRows([]string{"node_id"}))
+	mock.ExpectBegin()
+	mock.ExpectExec(`UPDATE foghorn.artifacts SET status = 'deleted'`).WithArgs("clip-h", clipDeletionTenant).WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectExec(`INSERT INTO foghorn\.artifact_event_outbox`).WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectQuery(`UPDATE foghorn\.artifacts\s+SET revision = revision \+ 1`).WithArgs("clip-h", clipDeletionTenant).
+		WillReturnRows(sqlmock.NewRows([]string{"revision"}).AddRow(mockArtifactRevision))
+	mock.ExpectExec(`INSERT INTO foghorn\.domain_event_outbox`).
+		WithArgs(sqlmock.AnyArg(), "clip.failed", "foghorn", sqlmock.AnyArg(), "clip-h", mockArtifactRevision,
+			"tenant", sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg()).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectExec(`INSERT INTO foghorn\.artifact_event_outbox`).WithArgs("artifact_deleted", clipDeletionTenant, sqlmock.AnyArg(), "clip-h", sqlmock.AnyArg()).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectCommit()
+	mock.ExpectExec(`UPDATE foghorn.processing_jobs`).WithArgs("clip-h").WillReturnResult(sqlmock.NewResult(0, 1))
+
+	if _, err := srv.DeleteClip(context.Background(), &sharedpb.DeleteClipRequest{ClipHash: "clip-h", TenantId: clipDeletionTenant}); err != nil {
+		t.Fatalf("delete of a running clip: %v", err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("running clip deleted without clip.failed: %v", err)
+	}
+}
+
 // ---- StopDVR: tenant-ownership guard + missing-hash + happy stopping path ----
 
 // Invariant: dvr_hash is a hard precondition; an empty hash never reaches the DB.

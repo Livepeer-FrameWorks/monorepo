@@ -1059,6 +1059,16 @@ func ResetDefaultManagerForTests() *StreamStateManager {
 	return defaultManager
 }
 
+// SetStreamStartedAtForTests moves a known stream's start time. It is intended
+// for unit tests that need a stream which has been live for a while.
+func (sm *StreamStateManager) SetStreamStartedAtForTests(internalName string, at time.Time) {
+	sm.mu.Lock()
+	defer sm.mu.Unlock()
+	if stream := sm.streams[internalName]; stream != nil {
+		stream.StartedAt = &at
+	}
+}
+
 // stateChangeKey identifies the entity a StateChange addresses, for changelog
 // watermark tracking.
 func stateChangeKey(change StateChange) string {
