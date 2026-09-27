@@ -19,7 +19,9 @@ running() { # running <service>: the compose service has a running container
 stopped() { ! running "$1"; }
 serving_again() { running "$1" && two_replicas "$1"; }
 streams_listed() { json_has "$(gql '{streamsConnection(page:{first:1}){totalCount}}')" '.data.streamsConnection.totalCount >= 0'; }
-nodes_listed() { json_has "$(gql '{nodesConnection(page:{first:5}){nodes{nodeName}}}')" '(.errors == null) and (.data.nodesConnection.nodes | length) >= 1'; }
+# Node inventory needs infrastructure:read, which the stream-scoped API token
+# lacks; the demo user's session holds it.
+nodes_listed() { json_has "$(gql_session '{nodesConnection(page:{first:5}){nodes{nodeName}}}')" '(.errors == null) and (.data.nodesConnection.nodes | length) >= 1'; }
 
 # with_replica_down <service> <second replica>: kill the first replica, prove the
 # API, stream creation and a new publish work through the second, restart it.
