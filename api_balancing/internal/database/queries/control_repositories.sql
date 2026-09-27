@@ -74,15 +74,6 @@ WHERE artifact_hash = sqlc.arg(artifact_hash)
   AND artifact_type = 'dvr'
   AND status IN ('requested', 'starting', 'recording', 'finalizing');
 
--- name: DVRNeedsDtshSync :one
-SELECT EXISTS (
-    SELECT 1 FROM foghorn.artifacts
-    WHERE artifact_hash = $1
-      AND artifact_type = 'dvr'
-      AND sync_status = 'synced'
-      AND COALESCE(dtsh_synced, false) = false
-);
-
 -- name: ListAllNodes :many
 SELECT node_id, COALESCE(base_url, '')::text AS base_url,
        COALESCE(outputs, '{}'::jsonb) AS outputs,

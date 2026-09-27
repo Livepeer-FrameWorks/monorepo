@@ -53,6 +53,9 @@ type ChapterReclaimSweepConfig struct {
 	Logger   logging.Logger
 	S3Delete S3SegmentDeleter
 	Interval time.Duration
+	// IsLeader reports whether this replica holds cell leadership. Nil means
+	// this replica runs alone.
+	IsLeader func() bool
 }
 
 // S3SegmentDeleter abstracts the recovery-bridge S3 object deletion.
@@ -66,8 +69,11 @@ type ChapterReclaimSweep struct {
 	logger   logging.Logger
 	s3       S3SegmentDeleter
 	interval time.Duration
+	isLeader func() bool
 	stopCh   chan struct{}
 	wg       sync.WaitGroup
+
+	triggerDtshSync func(nodeID, artifactHash, artifactType, filePath string)
 }
 
 func NewChapterReclaimSweep(cfg ChapterReclaimSweepConfig) *ChapterReclaimSweep {
@@ -76,11 +82,13 @@ func NewChapterReclaimSweep(cfg ChapterReclaimSweepConfig) *ChapterReclaimSweep 
 		interval = chapterReclaimDefaultTick
 	}
 	return &ChapterReclaimSweep{
-		db:       cfg.DB,
-		logger:   cfg.Logger,
-		s3:       cfg.S3Delete,
-		interval: interval,
-		stopCh:   make(chan struct{}),
+		db:              cfg.DB,
+		logger:          cfg.Logger,
+		s3:              cfg.S3Delete,
+		interval:        interval,
+		isLeader:        cfg.IsLeader,
+		stopCh:          make(chan struct{}),
+		triggerDtshSync: control.TriggerDtshSync,
 	}
 }
 
@@ -145,7 +153,13 @@ func (s *ChapterReclaimSweep) tick() {
 	s.retryFinalizedChapterDTSH(ctx)
 }
 
+// retryFinalizedChapterDTSH runs on the cell leader only: every replica
+// would otherwise ask the same node to regenerate the same sidecars.
 func (s *ChapterReclaimSweep) retryFinalizedChapterDTSH(ctx context.Context) {
+	if s.isLeader != nil && !s.isLeader() {
+		s.logger.Debug("Chapter DTSH retry: skipped on a non-leader replica")
+		return
+	}
 	rows, err := foghorndb.New(s.db).ListFinalizedChaptersMissingDTSH(ctx)
 	if err != nil {
 		s.logger.WithError(err).Warn("Chapter DTSH retry: list failed")
@@ -157,7 +171,7 @@ func (s *ChapterReclaimSweep) retryFinalizedChapterDTSH(ctx context.Context) {
 			continue
 		}
 		filePath := fmt.Sprintf("vod/%s.mkv", artifactHash)
-		control.TriggerDtshSync(nodeID, artifactHash, "vod", filePath)
+		s.triggerDtshSync(nodeID, artifactHash, "vod", filePath)
 	}
 }
 

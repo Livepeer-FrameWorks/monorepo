@@ -31,6 +31,18 @@ SET status = 'ready', format = 'mkv',
     sync_status = 'pending', storage_location = 'local', updated_at = NOW()
 WHERE artifact_hash = sqlc.arg(artifact_hash) AND status = 'finalizing';
 
+-- name: SetChapterParentRecordingTracks :exec
+-- A recording has no media file of its own; its catalog tracks are those of
+-- its most recently finalized chapter.
+UPDATE foghorn.artifacts p
+SET tracks = sqlc.arg(tracks_json)::text::jsonb, updated_at = NOW()
+FROM foghorn.dvr_chapters c
+WHERE c.chapter_id = sqlc.arg(chapter_id)
+  AND p.artifact_hash = c.artifact_hash
+  AND p.artifact_type = 'dvr'
+  AND p.tenant_id::text = sqlc.arg(tenant_id)::text
+  AND p.tracks IS DISTINCT FROM sqlc.arg(tracks_json)::text::jsonb;
+
 -- name: GetChapterArtifactLifecycleIdentity :one
 SELECT c.playback_artifact_hash, a.tenant_id::text AS tenant_id
 FROM foghorn.dvr_chapters c

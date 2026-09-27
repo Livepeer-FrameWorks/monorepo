@@ -334,6 +334,14 @@ func finalizeChapterArtifactTx(
 		if affected != 1 {
 			return errChapterNotInFinalizing
 		}
+		// The parent recording row is locked above, so its tracks follow chapter finalizes in order.
+		if tracksPresent {
+			if trackErr := qtx.SetChapterParentRecordingTracks(ctx, foghorndb.SetChapterParentRecordingTracksParams{
+				ChapterID: chapterID, TenantID: tenantID, TracksJson: tracksJSON,
+			}); trackErr != nil {
+				return fmt.Errorf("set recording tracks: %w", trackErr)
+			}
+		}
 
 		// vod_metadata (codecs/resolution/fps) from Helmsman stream info — same tx.
 		if metaErr := updateChapterVodMetadataTx(ctx, tx, resolvedHash, outputs); metaErr != nil {

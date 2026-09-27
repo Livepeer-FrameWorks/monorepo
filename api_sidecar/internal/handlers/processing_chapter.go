@@ -421,7 +421,7 @@ loop:
 	// flips on the chapter artifact and the chapter row stays at
 	// state='finalized' forever — reclaim never runs.
 	//
-	// GenerateDTSH already retries for ~30s. If it still fails (Mist
+	// GenerateDTSH waits up to its header window. If it still fails (Mist
 	// busy, transient hiccup), schedule background retries with backoff
 	// so finalized chapters reach frozen without waiting for a viewer
 	// to happen to boot the asset first.

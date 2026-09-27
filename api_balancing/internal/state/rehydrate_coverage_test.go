@@ -62,7 +62,6 @@ func (r *rehydrateDVRRepo) UpdateDVRProgressByHash(_ context.Context, _, _ strin
 func (r *rehydrateDVRRepo) UpdateDVRCompletionByHash(_ context.Context, _, _ string, _, _ int64, _, _ string) error {
 	return nil
 }
-func (r *rehydrateDVRRepo) NeedsDtshSync(_ context.Context, _ string) bool { return false }
 
 type rehydrateClipRepo struct {
 	records []ClipRecord
@@ -578,4 +577,3 @@ func (r *resolvingDVRRepo) UpdateDVRCompletionByHash(_ context.Context, _, _ str
 	r.completionCalls++
 	return nil
 }
-func (r *resolvingDVRRepo) NeedsDtshSync(_ context.Context, _ string) bool { return false }

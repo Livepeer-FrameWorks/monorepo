@@ -4821,10 +4821,6 @@ func processDVRProgress(progress *ipcpb.DVRProgress, session NodeSession, logger
 			}).Warn("Ignoring DVR progress: reporting node is not the dispatched recording owner (or lookup failed)")
 			return
 		}
-		if err := recordDVRStartTime(streamCtx(), dvrHash, tenantID, storageNodeID, progress.GetStartedAt()); err != nil {
-			logger.WithError(err).WithField("dvr_hash", dvrHash).Warn("Failed to persist DVR recording start time")
-			return
-		}
 	}
 
 	// The durable progress write classifies the report: applied=true only for an accepted active
@@ -8621,13 +8617,6 @@ func TriggerDtshSync(nodeID, assetHash, assetType, filePath string) {
 			return
 		}
 		req.PresignedPutUrl = presignedURL
-	case "dvr":
-		// Whole-DVR .dtsh sync is NOT dispatched: DVR whole-freeze is unsupported, and a multi-object DVR
-		// index has no single descriptor to stage+verify — issuing canonical PUT URLs would hand the node an
-		// unverifiable overwrite window. DVR playback uses per-chapter VOD artifacts, whose .dtsh IS staged
-		// and verified via the VOD path. (Whole-DVR index staging is docs/rfcs/cross-cluster-durable-replication-v1.md scope.)
-		logger.Debug("Skipping whole-DVR .dtsh sync (unsupported; chapters sync via the staged VOD path)")
-		return
 	case "vod":
 		// VOD .dtsh, like clip: the presigned PUT targets an attempt-scoped STAGING key derived from the
 		// persisted descriptor (sync_object_key + ".dtsh"), never the canonical key or the node filePath —
@@ -8643,8 +8632,9 @@ func TriggerDtshSync(nodeID, assetHash, assetType, filePath string) {
 		}
 		req.PresignedPutUrl = presignedURL
 	default:
-		// Only clip and vod have a single staged+verified .dtsh index. Any other type (DVR is handled above;
-		// anything else is unexpected) must NOT claim a dtsh attempt or dispatch a request with an empty URL.
+		// Only clip and vod have a single staged+verified .dtsh index. A recording has none: each chapter
+		// is a VOD artifact with its own index. No other type may claim a dtsh attempt or dispatch a
+		// request with an empty URL.
 		logger.Warn("Skipping .dtsh sync: unsupported asset_type")
 		return
 	}
@@ -9562,9 +9552,6 @@ func buildArtifactStorageLifecycleEvent(ctx context.Context, state artifactStora
 	if state.artifactHash == "" {
 		return nil
 	}
-	if state.frozen && state.synced && !state.finalized {
-		state.finalized = dtshSyncedForArtifact(ctx, state.artifactHash)
-	}
 	if state.tenantID == "" || state.artifactType == "" {
 		artifactType, tenantID, streamInternal, streamID := artifactLifecycleIdentity(ctx, state.artifactHash)
 		if state.artifactType == "" {
@@ -9579,6 +9566,9 @@ func buildArtifactStorageLifecycleEvent(ctx context.Context, state artifactStora
 		if state.streamID == "" {
 			state.streamID = streamID
 		}
+	}
+	if state.artifactType != "dvr" && state.frozen && state.synced && !state.finalized {
+		state.finalized = dtshSyncedForArtifact(ctx, state.artifactHash)
 	}
 	switch state.artifactType {
 	case "clip":
@@ -9616,6 +9606,8 @@ func buildArtifactStorageLifecycleEvent(ctx context.Context, state artifactStora
 			CompletedAt:     int64Ptr(time.Now().Unix()),
 		}
 	case "dvr":
+		// A recording's replay index lives on each chapter, so the parent
+		// carries no finalized state (IsFinalized stays unset).
 		return &ipcpb.DVRLifecycleData{
 			Status:             ipcpb.DVRLifecycleData_STATUS_STOPPED,
 			DvrHash:            state.artifactHash,
@@ -9628,7 +9620,6 @@ func buildArtifactStorageLifecycleEvent(ctx context.Context, state artifactStora
 			SyncStatus:         stringPtrIfNotEmpty(state.syncStatus),
 			HasLocalCopy:       boolPtr(state.hot),
 			IsSynced:           boolPtr(state.synced),
-			IsFinalized:        boolPtr(state.finalized),
 		}
 	default:
 		return nil

@@ -273,7 +273,6 @@ func (f *fakeDVRRepo) UpdateDVRProgressByHash(_ context.Context, _, _ string, _ 
 func (f *fakeDVRRepo) UpdateDVRCompletionByHash(_ context.Context, _, _ string, _, _ int64, _, _ string) error {
 	return nil
 }
-func (f *fakeDVRRepo) NeedsDtshSync(_ context.Context, _ string) bool { return false }
 
 // ApplyDVRProgress must resolve the DVR hash to its internal stream name and
 // stamp the live DVR progress fields onto that node's stream instance.
@@ -341,7 +340,6 @@ func (f *rejectingDVRRepo) UpdateDVRProgressByHash(_ context.Context, _, _ strin
 func (f *rejectingDVRRepo) UpdateDVRCompletionByHash(_ context.Context, _, _ string, _, _ int64, _, _ string) error {
 	return nil
 }
-func (f *rejectingDVRRepo) NeedsDtshSync(_ context.Context, _ string) bool { return false }
 
 // A progress report the durable write rejects (non-owner) must return the error and mutate NO
 // stream-instance sink — the rejection short-circuits before mirroring.
@@ -385,7 +383,6 @@ func (f *terminalNoopDVRRepo) UpdateDVRProgressByHash(_ context.Context, _, _ st
 func (f *terminalNoopDVRRepo) UpdateDVRCompletionByHash(_ context.Context, _, _ string, _, _ int64, _, _ string) error {
 	return nil
 }
-func (f *terminalNoopDVRRepo) NeedsDtshSync(_ context.Context, _ string) bool { return false }
 
 // A late progress report against a terminal/finalizing row is a durable no-op (applied=false): it must
 // return applied=false and mutate NO stream-instance sink, so the memory mirror can never resurrect a

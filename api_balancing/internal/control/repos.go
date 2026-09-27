@@ -237,18 +237,6 @@ func (r *dvrRepositoryDB) UpdateDVRCompletionByHash(ctx context.Context, dvrHash
 	})
 }
 
-// NeedsDtshSync returns true if the DVR is synced to S3 but .dtsh files weren't included
-func (r *dvrRepositoryDB) NeedsDtshSync(ctx context.Context, dvrHash string) bool {
-	if db == nil {
-		return false
-	}
-	needsSync, err := foghorndb.New(db).DVRNeedsDtshSync(ctx, dvrHash)
-	if err != nil {
-		return false
-	}
-	return needsSync
-}
-
 // ============================================================================
 // NODE REPOSITORY
 // ============================================================================

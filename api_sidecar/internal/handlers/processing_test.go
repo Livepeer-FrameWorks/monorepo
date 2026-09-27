@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -944,7 +945,7 @@ func TestGenerateDTSHFetchesJSONEndpoint(t *testing.T) {
 	}))
 	t.Cleanup(server.Close)
 
-	if err := GenerateDTSH(server.URL, "vod+artifact123", logrus.NewEntry(logrus.New())); err != nil {
+	if err := GenerateDTSH(server.URL, "vod+artifact123", "", logrus.NewEntry(logrus.New())); err != nil {
 		t.Fatalf("GenerateDTSH failed: %v", err)
 	}
 	if gotPath != "/json_vod+artifact123.js" {
@@ -952,7 +953,75 @@ func TestGenerateDTSHFetchesJSONEndpoint(t *testing.T) {
 	}
 }
 
+func shortenDTSHHeaderWindow(t *testing.T, window time.Duration) {
+	t.Helper()
+	prevWindow, prevPoll := dtshHeaderWindow, dtshPollInterval
+	dtshHeaderWindow, dtshPollInterval = window, 10*time.Millisecond
+	t.Cleanup(func() { dtshHeaderWindow, dtshPollInterval = prevWindow, prevPoll })
+}
+
+// The input keeps building the header after its boot request answers "not
+// ready"; booting again inside that time starts a second input. One boot is
+// sent, and the sidecar landing later is the success signal.
+func TestGenerateDTSHForPathBootsOnceWhileHeaderBuilds(t *testing.T) {
+	shortenDTSHHeaderWindow(t, 5*time.Second)
+	dtshPath := filepath.Join(t.TempDir(), "artifact.mkv.dtsh")
+	var boots atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if boots.Add(1) == 1 {
+			go func() {
+				time.Sleep(2500 * time.Millisecond)
+				_ = os.WriteFile(dtshPath, validDTSHBytes(), 0o644)
+			}()
+		}
+		_, _ = w.Write([]byte(`{"error":"Stream is booting"}`))
+	}))
+	t.Cleanup(server.Close)
+
+	if err := GenerateDTSHForPath(server.URL, "vod+bootonce", dtshPath, logrus.NewEntry(logrus.New())); err != nil {
+		t.Fatalf("GenerateDTSHForPath failed: %v", err)
+	}
+	if got := boots.Load(); got != 1 {
+		t.Fatalf("stream booted %d times while its header was building, want 1", got)
+	}
+}
+
+// Concurrent requests for one stream (inline finalize, background retry,
+// Foghorn's re-request) share one generation and one boot.
+func TestGenerateDTSHForPathSharesConcurrentGenerations(t *testing.T) {
+	shortenDTSHHeaderWindow(t, 5*time.Second)
+	dtshPath := filepath.Join(t.TempDir(), "artifact.mkv.dtsh")
+	var boots atomic.Int32
+	release := make(chan struct{})
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		boots.Add(1)
+		<-release
+		_ = os.WriteFile(dtshPath, validDTSHBytes(), 0o644)
+		_, _ = w.Write([]byte(`{"meta":{"tracks":{}}}`))
+	}))
+	t.Cleanup(server.Close)
+
+	const callers = 4
+	errs := make(chan error, callers)
+	for range callers {
+		go func() {
+			errs <- GenerateDTSHForPath(server.URL, "vod+shared", dtshPath, logrus.NewEntry(logrus.New()))
+		}()
+	}
+	time.Sleep(200 * time.Millisecond)
+	close(release)
+	for range callers {
+		if err := <-errs; err != nil {
+			t.Fatalf("GenerateDTSHForPath failed: %v", err)
+		}
+	}
+	if got := boots.Load(); got != 1 {
+		t.Fatalf("%d concurrent generations booted the stream %d times, want 1", callers, got)
+	}
+}
+
 func TestGenerateDTSHForPathRequiresSidecarFile(t *testing.T) {
+	shortenDTSHHeaderWindow(t, 500*time.Millisecond)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_, _ = w.Write([]byte(`{"meta":{"tracks":{}}}`))
 	}))
@@ -1000,6 +1069,7 @@ func TestGenerateDTSHForPathWaitsForSidecarFile(t *testing.T) {
 }
 
 func TestGenerateDTSHForPathRejectsEmptyTrackSidecar(t *testing.T) {
+	shortenDTSHHeaderWindow(t, 500*time.Millisecond)
 	dir := t.TempDir()
 	dtshPath := filepath.Join(dir, "artifact.mkv.dtsh")
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

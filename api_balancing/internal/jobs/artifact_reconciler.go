@@ -695,7 +695,7 @@ func (r *ArtifactReconciler) projectCommodoreArtifactStateForCluster(ctx context
 			Tracks:           tracks,
 			SyncStatus:       nullStringPtr(syncStatus),
 			IsSynced:         boolPtr(syncStatus.Valid && syncStatus.String == "synced"),
-			IsFinalized:      boolPtr(dtshSynced.Valid && dtshSynced.Bool),
+			IsFinalized:      catalogIsFinalized(artifactType, dtshSynced),
 			StorageLocation:  nullStringPtr(storageLocation),
 			StorageClusterId: nullStringPtr(storageCluster),
 			HasThumbnails:    boolPtr(hasThumbnails.Valid && hasThumbnails.Bool),
@@ -806,6 +806,16 @@ func nullStringPtr(v sql.NullString) *string {
 }
 
 func boolPtr(b bool) *bool { return &b }
+
+// catalogIsFinalized reports whether an artifact's replay index is stored.
+// A recording keeps that index on each chapter, so its parent row has no
+// finalized state and projects none.
+func catalogIsFinalized(artifactType string, dtshSynced sql.NullBool) *bool {
+	if artifactType == "dvr" {
+		return nil
+	}
+	return boolPtr(dtshSynced.Valid && dtshSynced.Bool)
+}
 
 // strPtrOrNil maps an empty string to a nil optional. A projecting cluster always has a cluster
 // id set; a nil/absent source_cluster_id is rejected by Commodore (it is required), so this only

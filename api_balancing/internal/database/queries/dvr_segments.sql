@@ -12,6 +12,17 @@ WHERE artifact_hash = $1 AND segment_name = $2;
 UPDATE foghorn.dvr_segments SET status = 'pending'
 WHERE artifact_hash = $1 AND segment_name = $2 AND status = 'lost_local';
 
+-- name: AnchorDVRStartAtFirstMedia :exec
+-- The first recorded segment's wall-clock start anchors the chapter grid.
+-- Millisecond arithmetic on an interval keeps the value exact.
+UPDATE foghorn.artifacts
+SET started_at = TIMESTAMPTZ 'epoch' + sqlc.arg(media_start_ms)::bigint * INTERVAL '1 millisecond',
+    updated_at = NOW()
+WHERE artifact_hash = sqlc.arg(artifact_hash)
+  AND tenant_id::text = sqlc.arg(tenant_id)::text
+  AND artifact_type = 'dvr'
+  AND started_at IS NULL;
+
 -- name: GetNextDVRSegmentSequence :one
 SELECT (COALESCE(MAX(sequence), -1) + 1)::bigint FROM foghorn.dvr_segments WHERE artifact_hash = $1;
 

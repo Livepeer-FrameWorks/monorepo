@@ -234,6 +234,30 @@ func (q *Queries) LockChapterParentRecording(ctx context.Context, chapterID stri
 	return err
 }
 
+const setChapterParentRecordingTracks = `-- name: SetChapterParentRecordingTracks :exec
+UPDATE foghorn.artifacts p
+SET tracks = $1::text::jsonb, updated_at = NOW()
+FROM foghorn.dvr_chapters c
+WHERE c.chapter_id = $2
+  AND p.artifact_hash = c.artifact_hash
+  AND p.artifact_type = 'dvr'
+  AND p.tenant_id::text = $3::text
+  AND p.tracks IS DISTINCT FROM $1::text::jsonb
+`
+
+type SetChapterParentRecordingTracksParams struct {
+	TracksJson string `db:"tracks_json" json:"tracks_json"`
+	ChapterID  string `db:"chapter_id" json:"chapter_id"`
+	TenantID   string `db:"tenant_id" json:"tenant_id"`
+}
+
+// A recording has no media file of its own; its catalog tracks are those of
+// its most recently finalized chapter.
+func (q *Queries) SetChapterParentRecordingTracks(ctx context.Context, arg SetChapterParentRecordingTracksParams) error {
+	_, err := q.db.ExecContext(ctx, setChapterParentRecordingTracks, arg.TracksJson, arg.ChapterID, arg.TenantID)
+	return err
+}
+
 const upsertChapterVodMetadata = `-- name: UpsertChapterVodMetadata :exec
 INSERT INTO foghorn.vod_metadata (
     artifact_hash, duration_ms, resolution, video_codec, audio_codec,

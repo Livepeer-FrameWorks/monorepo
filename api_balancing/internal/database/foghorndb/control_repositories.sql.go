@@ -87,23 +87,6 @@ func (q *Queries) ClipNeedsDtshSync(ctx context.Context, artifactHash string) (b
 	return exists, err
 }
 
-const dVRNeedsDtshSync = `-- name: DVRNeedsDtshSync :one
-SELECT EXISTS (
-    SELECT 1 FROM foghorn.artifacts
-    WHERE artifact_hash = $1
-      AND artifact_type = 'dvr'
-      AND sync_status = 'synced'
-      AND COALESCE(dtsh_synced, false) = false
-)
-`
-
-func (q *Queries) DVRNeedsDtshSync(ctx context.Context, artifactHash string) (bool, error) {
-	row := q.db.QueryRowContext(ctx, dVRNeedsDtshSync, artifactHash)
-	var exists bool
-	err := row.Scan(&exists)
-	return exists, err
-}
-
 const deleteArtifactNode = `-- name: DeleteArtifactNode :exec
 DELETE FROM foghorn.artifact_nodes WHERE artifact_hash = $1 AND node_id = $2
 `

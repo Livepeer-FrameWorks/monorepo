@@ -3004,15 +3004,15 @@ func storedArtifactRoleToString(role ipcpb.StoredArtifact_Role) string {
 }
 
 // checkAndTriggerDtshSync checks for artifacts that have .dtsh locally but weren't synced with it
-// This catches the race condition where .dtsh is created after the initial sync
+// This catches the race condition where .dtsh is created after the initial sync.
+// Recordings are absent: their replay index is produced per chapter.
 func (sm *StreamStateManager) checkAndTriggerDtshSync(nodeID string, artifacts []*ipcpb.StoredArtifact) {
 	sm.mu.RLock()
 	clipsRepo := sm.repos.Clips
-	dvrRepo := sm.repos.DVR
 	artifactsRepo := sm.repos.Artifacts
 	sm.mu.RUnlock()
 
-	if clipsRepo == nil && dvrRepo == nil && artifactsRepo == nil {
+	if clipsRepo == nil && artifactsRepo == nil {
 		return
 	}
 
@@ -3034,8 +3034,6 @@ func (sm *StreamStateManager) checkAndTriggerDtshSync(nodeID string, artifacts [
 		switch {
 		case artifactType == "clip" && clipsRepo != nil:
 			needsSync = clipsRepo.NeedsDtshSync(ctx, hash)
-		case artifactType == "dvr" && dvrRepo != nil:
-			needsSync = dvrRepo.NeedsDtshSync(ctx, hash)
 		case artifactType == "vod" && artifactsRepo != nil:
 			needsSync = artifactsRepo.NeedsVODDtshSync(ctx, hash)
 		}
@@ -4269,8 +4267,6 @@ type DVRRepository interface {
 	ResolveInternalNameByHash(ctx context.Context, dvrHash string) (string, error)
 	UpdateDVRProgressByHash(ctx context.Context, dvrHash string, status string, sizeBytes int64, segmentCount uint32, nodeID string) (applied bool, currentStatus string, err error)
 	UpdateDVRCompletionByHash(ctx context.Context, dvrHash string, finalStatus string, durationSeconds int64, sizeBytes int64, manifestPath string, errorMsg string) error
-	// NeedsDtshSync returns true if the DVR is synced to S3 but .dtsh files weren't included
-	NeedsDtshSync(ctx context.Context, dvrHash string) bool
 }
 
 type NodeRepository interface {

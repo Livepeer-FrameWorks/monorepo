@@ -31,6 +31,9 @@ type Querier interface {
 	AllocateArtifactNodeCopyVersion(ctx context.Context, arg AllocateArtifactNodeCopyVersionParams) (int64, error)
 	AllocateConfigSeedVersion(ctx context.Context, nodeID string) (int64, error)
 	AllocateNodeControlFence(ctx context.Context, nodeID string) (int64, error)
+	// The first recorded segment's wall-clock start anchors the chapter grid.
+	// Millisecond arithmetic on an interval keeps the value exact.
+	AnchorDVRStartAtFirstMedia(ctx context.Context, arg AnchorDVRStartAtFirstMediaParams) error
 	ArmStreamCleanupSecondSweep(ctx context.Context, arg ArmStreamCleanupSecondSweepParams) error
 	ArtifactHasActiveNodes(ctx context.Context, artifactHash string) (bool, error)
 	ArtifactLifecycleStatus(ctx context.Context, artifactHash string) (sql.NullString, error)
@@ -113,7 +116,6 @@ type Querier interface {
 	CountUnreclaimedDVRSegments(ctx context.Context, arg CountUnreclaimedDVRSegmentsParams) (int64, error)
 	CountUnverifiedThumbnailObjects(ctx context.Context, attemptID string) (int64, error)
 	DVRHasStoredSegments(ctx context.Context, artifactHash string) (bool, error)
-	DVRNeedsDtshSync(ctx context.Context, artifactHash string) (bool, error)
 	DVRRecordingState(ctx context.Context, arg DVRRecordingStateParams) (DVRRecordingStateRow, error)
 	DVRRecordingTenant(ctx context.Context, internalName sql.NullString) (string, error)
 	DVRTerminalChapterMaterialized(ctx context.Context, arg DVRTerminalChapterMaterializedParams) (bool, error)
@@ -652,6 +654,9 @@ type Querier interface {
 	SetArtifactNodeLastEmittedVersion(ctx context.Context, arg SetArtifactNodeLastEmittedVersionParams) error
 	SetArtifactSyncStatus(ctx context.Context, arg SetArtifactSyncStatusParams) error
 	SetBillingAttributionCursor(ctx context.Context, arg SetBillingAttributionCursorParams) error
+	// A recording has no media file of its own; its catalog tracks are those of
+	// its most recently finalized chapter.
+	SetChapterParentRecordingTracks(ctx context.Context, arg SetChapterParentRecordingTracksParams) error
 	SetDVRChapterPlaybackID(ctx context.Context, arg SetDVRChapterPlaybackIDParams) error
 	SetFreezePublicationLedgerCursor(ctx context.Context, lastKey string) error
 	SetLegacyActiveObjectKey(ctx context.Context, arg SetLegacyActiveObjectKeyParams) (int64, error)

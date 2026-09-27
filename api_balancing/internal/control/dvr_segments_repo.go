@@ -196,6 +196,15 @@ func InsertDVRSegment(
 		}); err != nil {
 			return fmt.Errorf("insert segment: %w", err)
 		}
+		// Chapters are laid out from the first recorded media, not from the
+		// moment the recorder reported that it started.
+		if mediaStartMs >= unixEpochMsFloor {
+			if err := qtx.AnchorDVRStartAtFirstMedia(ctx, foghorndb.AnchorDVRStartAtFirstMediaParams{
+				ArtifactHash: artifactHash, TenantID: tenantID, MediaStartMs: mediaStartMs,
+			}); err != nil {
+				return fmt.Errorf("anchor recording start: %w", err)
+			}
+		}
 		seq = nextSeq
 		return nil
 	})
@@ -205,8 +214,11 @@ func InsertDVRSegment(
 	return seq, nil
 }
 
+// unixEpochMsFloor separates wall-clock segment times (Unix ms) from
+// recording-relative ones.
+const unixEpochMsFloor = int64(1_000_000_000_000)
+
 func sameSegmentDifferentClockDomain(existingStartMs, existingEndMs, incomingStartMs, incomingEndMs, durationMs int64) bool {
-	const unixEpochMsFloor = int64(1_000_000_000_000)
 	if durationMs <= 0 || existingEndMs-existingStartMs != durationMs || incomingEndMs-incomingStartMs != durationMs {
 		return false
 	}

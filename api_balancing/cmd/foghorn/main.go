@@ -2085,11 +2085,15 @@ func main() {
 	// frozen on S3. Deletes local TS files via Helmsman + the recovery
 	// bridge S3 objects directly.
 	if s3ForFederation != nil {
-		chapterReclaimer := jobs.NewChapterReclaimSweep(jobs.ChapterReclaimSweepConfig{
+		chapterReclaimCfg := jobs.ChapterReclaimSweepConfig{
 			DB:       db,
 			Logger:   logger,
 			S3Delete: chapterReclaimS3Adapter{client: s3ForFederation},
-		})
+		}
+		if peerManager != nil {
+			chapterReclaimCfg.IsLeader = peerManager.IsLeader
+		}
+		chapterReclaimer := jobs.NewChapterReclaimSweep(chapterReclaimCfg)
 		chapterReclaimer.Start()
 		defer chapterReclaimer.Stop()
 	}

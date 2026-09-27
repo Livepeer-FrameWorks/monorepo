@@ -26,6 +26,7 @@ import (
 	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
 
 	"github.com/sirupsen/logrus"
+	"golang.org/x/sync/singleflight"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
@@ -3422,89 +3423,121 @@ func (h *ProcessingJobHandler) stopProcessingSessions(log *logrus.Entry, mistCli
 	}
 }
 
+var (
+	// dtshHeaderWindow bounds one DTSH generation: the time Mist may take to
+	// build a missing header plus the sidecar's trip through the relay.
+	dtshHeaderWindow = 40 * time.Second
+	// dtshPollInterval is how often the sidecar file is checked.
+	dtshPollInterval = 200 * time.Millisecond
+	// dtshGenerations collapses concurrent generations for one stream into a
+	// single boot, since each boot of an offline stream starts an input.
+	dtshGenerations singleflight.Group
+)
+
 // GenerateDTSH boots a stream via the /json_{streamName}.js endpoint to trigger
 // DTSH generation. MistServer's input module reads headers and writes the .dtsh
 // file as a side effect. Works for any stream type (vod+, processing+, etc.)
 // because our fork boots offline streams on HTTP GET.
-func GenerateDTSH(mistServerURL, streamName string, log *logrus.Entry) error {
+//
+// The input keeps building the header after the boot request returns, and a
+// second boot inside that time starts another input for the same stream. So
+// the stream is booted once, the sidecar at dtshPath is polled, and a boot is
+// repeated only after processingBootRetryInterval. With an empty dtshPath the
+// boot request's own answer is the result.
+func GenerateDTSH(mistServerURL, streamName, dtshPath string, log *logrus.Entry) error {
 	if mistServerURL == "" {
 		return fmt.Errorf("MISTSERVER_URL not configured")
 	}
 	url := mistJSONURL(mistServerURL, streamName, "")
-
-	for i := 0; i < 15; i++ {
-		if i > 0 {
-			time.Sleep(2 * time.Second)
-		}
-		httpReq, _ := http.NewRequestWithContext(context.Background(), http.MethodGet, url, nil)
-		resp, err := http.DefaultClient.Do(httpReq)
-		if err != nil {
-			log.WithError(err).Debug("DTSH generation: json endpoint not ready")
-			continue
-		}
-		body, _ := io.ReadAll(resp.Body)
-		_ = resp.Body.Close()
-		if resp.StatusCode != http.StatusOK {
-			log.WithField("status", resp.StatusCode).Debug("DTSH generation: json endpoint returned error")
-			continue
-		}
-
-		var data map[string]interface{}
-		if err := json.Unmarshal(body, &data); err != nil {
-			continue
-		}
-		if _, hasError := data["error"]; hasError {
-			log.WithField("error", data["error"]).Debug("DTSH generation: stream not ready")
-			continue
-		}
-		// The input answered, which only means the boot happened; the sidecar
-		// itself may still be rejected on its way to disk.
-		log.Debug("DTSH generation: json endpoint answered")
-		return nil
+	if dtshPath == "" {
+		return bootDTSHStream(url)
 	}
-	return fmt.Errorf("timed out waiting for DTSH generation")
+
+	deadline := time.Now().Add(dtshHeaderWindow)
+	var lastBoot time.Time
+	var bootErr, fileErr error
+	for {
+		if lastBoot.IsZero() || time.Since(lastBoot) >= processingBootRetryInterval {
+			lastBoot = time.Now()
+			if bootErr = bootDTSHStream(url); bootErr != nil {
+				log.WithError(bootErr).Debug("DTSH generation: boot request did not answer; waiting for the input")
+			}
+		}
+		if fileErr = validDTSHFile(dtshPath); fileErr == nil {
+			return nil
+		}
+		if time.Now().After(deadline) {
+			if bootErr != nil {
+				return fmt.Errorf("dtsh file not ready at %s: %w (last boot: %w)", dtshPath, fileErr, bootErr)
+			}
+			return fmt.Errorf("dtsh file not ready at %s: %w", dtshPath, fileErr)
+		}
+		time.Sleep(dtshPollInterval)
+	}
+}
+
+// bootDTSHStream issues one boot request. Mist holds it while the input
+// starts, so a timeout does not mean the boot failed.
+func bootDTSHStream(url string) error {
+	ctx, cancel := context.WithTimeout(context.Background(), processingBootRequestTimeout)
+	defer cancel()
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return err
+	}
+	resp, err := http.DefaultClient.Do(httpReq)
+	if err != nil {
+		return err
+	}
+	body, readErr := io.ReadAll(resp.Body)
+	_ = resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("HTTP %d from %s", resp.StatusCode, url)
+	}
+	if readErr != nil {
+		return fmt.Errorf("read %s: %w", url, readErr)
+	}
+	var data map[string]interface{}
+	if err := json.Unmarshal(body, &data); err != nil {
+		return fmt.Errorf("decode %s: %w", url, err)
+	}
+	if msg, hasError := data["error"]; hasError {
+		return fmt.Errorf("stream not ready: %v", msg)
+	}
+	return nil
 }
 
 // GenerateDTSHForPath boots the stream and reports success only once a valid
 // sidecar exists at dtshPath. Mist uploads the sidecar through the relay,
 // which refuses a malformed one; that refusal is logged by the relay.
+// Concurrent callers for the same stream share one generation.
 func GenerateDTSHForPath(mistServerURL, streamName, dtshPath string, log *logrus.Entry) error {
-	if err := GenerateDTSH(mistServerURL, streamName, log); err != nil {
-		return err
-	}
+	_, err, shared := dtshGenerations.Do(streamName, func() (interface{}, error) {
+		return nil, GenerateDTSH(mistServerURL, streamName, dtshPath, log)
+	})
 	if dtshPath == "" {
-		return nil
-	}
-	if err := waitForDTSHFile(dtshPath, 10*time.Second); err != nil {
-		log.WithError(err).WithField("dtsh_path", dtshPath).Warn("DTSH generation: stream booted but no valid sidecar landed; see the relay sidecar PUT log for the rejection")
 		return err
 	}
-	log.WithField("dtsh_path", dtshPath).Info("DTSH generation completed and sidecar validated")
+	if err != nil {
+		log.WithError(err).WithField("dtsh_path", dtshPath).Warn("DTSH generation: no valid sidecar landed; see the relay sidecar PUT log for a rejection")
+		return err
+	}
+	log.WithFields(logrus.Fields{"dtsh_path": dtshPath, "shared": shared}).Info("DTSH generation completed and sidecar validated")
 	return nil
 }
 
-func waitForDTSHFile(dtshPath string, timeout time.Duration) error {
-	deadline := time.Now().Add(timeout)
-	var lastErr error
-	for {
-		info, err := os.Stat(dtshPath)
-		switch {
-		case err == nil && info.Mode().IsRegular() && info.Size() > 0:
-			if validateErr := dtsh.ValidateFile(dtshPath); validateErr != nil {
-				lastErr = fmt.Errorf("dtsh file invalid: %s: %w", dtshPath, validateErr)
-				break
-			}
-			return nil
-		case err == nil:
-			lastErr = fmt.Errorf("dtsh file is empty: %s", dtshPath)
-		default:
-			lastErr = err
-		}
-		if time.Now().After(deadline) {
-			return fmt.Errorf("dtsh file not ready at %s: %w", dtshPath, lastErr)
-		}
-		time.Sleep(200 * time.Millisecond)
+func validDTSHFile(dtshPath string) error {
+	info, err := os.Stat(dtshPath)
+	switch {
+	case err != nil:
+		return err
+	case !info.Mode().IsRegular() || info.Size() == 0:
+		return fmt.Errorf("dtsh file is empty: %s", dtshPath)
 	}
+	if err := dtsh.ValidateFile(dtshPath); err != nil {
+		return fmt.Errorf("dtsh file invalid: %s: %w", dtshPath, err)
+	}
+	return nil
 }
 
 // isHLSSource detects if the source is an HLS manifest (segmented).

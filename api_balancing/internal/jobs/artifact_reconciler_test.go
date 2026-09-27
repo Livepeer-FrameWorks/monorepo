@@ -913,6 +913,46 @@ func TestProjectCommodoreArtifactState_DeletionAbsentDoesNotAdvance(t *testing.T
 	}
 }
 
+// A recording's replay index lives on its chapters: the parent snapshot
+// carries no finalized state even when the row's dtsh flag is set, while a
+// VOD keeps reporting its own.
+func TestProjectCommodoreArtifactState_DVRParentHasNoFinalizedState(t *testing.T) {
+	mockDB, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer mockDB.Close()
+
+	commodore := &mockCommodoreClient{}
+	r := newTestReconciler(t, mockDB, nil, commodore, nil)
+	r.batchSize = 10
+	r.clusterID = "media-us-1"
+
+	rows := sqlmock.NewRows(projectionRowCols).
+		AddRow("dvr-hash", "dvr", "tenant-1", "media-us-1", true, int64(1024),
+			int64(60000), nil, "synced", true, "s3", int64(3), "completed", nil, nil, nil).
+		AddRow("vod-hash", "vod", "tenant-1", "media-us-1", true, int64(1024),
+			int64(60000), nil, "synced", true, "s3", int64(4), "ready", nil, nil, nil)
+	mock.ExpectQuery("FROM foghorn.artifacts").WithArgs(10, "media-us-1").WillReturnRows(rows)
+	mock.ExpectExec("UPDATE foghorn.artifacts SET catalog_synced_rev").
+		WithArgs(int64(3), "dvr-hash").WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectExec("UPDATE foghorn.artifacts SET catalog_synced_rev").
+		WithArgs(int64(4), "vod-hash").WillReturnResult(sqlmock.NewResult(0, 1))
+
+	if count, _ := r.projectCommodoreArtifactState(context.Background()); count != 2 {
+		t.Fatalf("expected 2 projections, got %d", count)
+	}
+	if got := commodore.snapshotCalls[0].IsFinalized; got != nil {
+		t.Fatalf("dvr parent projected isFinalized=%v, want unset", *got)
+	}
+	if got := commodore.snapshotCalls[1].IsFinalized; got == nil || !*got {
+		t.Fatalf("vod projected isFinalized=%v, want true", got)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
+
 // projectionRowCols is the column list the projection scan selects, in order.
 var projectionRowCols = []string{
 	"artifact_hash", "artifact_type", "tenant_id", "storage_cluster_id", "has_thumbnails", "size_bytes",

@@ -13,6 +13,29 @@ import (
 	"github.com/lib/pq"
 )
 
+const anchorDVRStartAtFirstMedia = `-- name: AnchorDVRStartAtFirstMedia :exec
+UPDATE foghorn.artifacts
+SET started_at = TIMESTAMPTZ 'epoch' + $1::bigint * INTERVAL '1 millisecond',
+    updated_at = NOW()
+WHERE artifact_hash = $2
+  AND tenant_id::text = $3::text
+  AND artifact_type = 'dvr'
+  AND started_at IS NULL
+`
+
+type AnchorDVRStartAtFirstMediaParams struct {
+	MediaStartMs int64  `db:"media_start_ms" json:"media_start_ms"`
+	ArtifactHash string `db:"artifact_hash" json:"artifact_hash"`
+	TenantID     string `db:"tenant_id" json:"tenant_id"`
+}
+
+// The first recorded segment's wall-clock start anchors the chapter grid.
+// Millisecond arithmetic on an interval keeps the value exact.
+func (q *Queries) AnchorDVRStartAtFirstMedia(ctx context.Context, arg AnchorDVRStartAtFirstMediaParams) error {
+	_, err := q.db.ExecContext(ctx, anchorDVRStartAtFirstMedia, arg.MediaStartMs, arg.ArtifactHash, arg.TenantID)
+	return err
+}
+
 const getDVRSegmentProgress = `-- name: GetDVRSegmentProgress :one
 SELECT COUNT(*)::bigint AS segment_count, COALESCE(SUM(size_bytes), 0)::bigint AS size_bytes
 FROM foghorn.dvr_segments
