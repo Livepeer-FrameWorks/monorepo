@@ -168,6 +168,8 @@ var (
 	// releasePrepareTierCatalogFn renders the Purser bootstrap desired state
 	// before the first mutation and returns the step that applies it.
 	releasePrepareTierCatalogFn = prepareReleaseTierCatalog
+	// releaseNewHostConvergenceFn builds the pre-upgrade host convergence.
+	releaseNewHostConvergenceFn = newReleaseHostConvergence
 )
 
 // prepareReleaseTierCatalog renders the bootstrap desired state that
@@ -343,7 +345,7 @@ func runReleaseApply(cmd *cobra.Command, rc *resolvedCluster, opts releaseApplyO
 	// required operator inputs must exist, before the first mutation.
 	var hostConvergence *releaseHostConvergence
 	if len(hostSteps) > 0 {
-		hostConvergence, err = newReleaseHostConvergence(cmd, rc, platformVersion, sshPool)
+		hostConvergence, err = releaseNewHostConvergenceFn(cmd, rc, platformVersion, sshPool)
 		if err != nil {
 			return fmt.Errorf("pre-upgrade host convergence: %w", err)
 		}
@@ -380,7 +382,7 @@ func runReleaseApply(cmd *cobra.Command, rc *resolvedCluster, opts releaseApplyO
 
 	ux.Subheading(out, "[1/4] Pre-upgrade host convergence")
 	if len(hostSteps) == 0 {
-		fmt.Fprintln(out, "  no mesh, data service, managed dependency, Kafka topic, or MirrorMaker2 hosts in this manifest")
+		fmt.Fprintln(out, "  no planned hosts in this manifest")
 	} else {
 		if convergeErr := hostConvergence.run(cmd.Context(), hostSteps, opts.dryRun); convergeErr != nil {
 			writeReleaseHostConvergenceResumeHint(cmd.ErrOrStderr(), platformVersion, opts.dryRun)

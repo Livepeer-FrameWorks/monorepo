@@ -74,7 +74,12 @@ Quartermaster, Navigator, Commodore, Purser, Bridge, or a data store (Postgres o
 YugabyteDB, Kafka brokers or controllers, ClickHouse); MEDIA when it runs
 Foghorn, Chandler, the Livepeer gateway or signer, Helmsman or Mist, Redis, or is
 an edge; otherwise OTHER. It takes the most critical tier of anything it runs,
-and an unclassified service is CONTROL. Privateer convergence runs a CONTROL
+and an unclassified service is CONTROL. Host convergence starts with the node
+baseline and OS tuning on every planned host (`cli/cmd/node_host_convergence.go`,
+the same per-host converger `cluster provision` runs): the most critical host
+alone as a canary, then batches of four in tier order, each wave gated on a new
+SSH login to its hosts so a baseline that locks the operator out stops at the
+canary. Privateer convergence runs a CONTROL
 canary alone, the other CONTROL hosts one at a time, MEDIA hosts one per cell
 (`hosts.<name>.cluster`) with cells in parallel, then OTHER hosts eight at a
 time, and gates each wave on mesh health for its hosts. Redis convergence

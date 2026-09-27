@@ -147,11 +147,18 @@ Before the first change, and under `--dry-run` too, `release apply` refuses to s
 
 `release apply` prints four numbered stages:
 
-1. **Pre-upgrade host convergence.** Privateer on every mesh host, every Redis server and
-   Sentinel, the data services and managed dependencies described [below](#data-services-and-managed-dependencies),
-   the declared Kafka topics, and MirrorMaker2 workers. Each host runs the same role as
-   `cluster provision` in check mode first, and a host that already matches is skipped without a
-   restart. Privateer restarts in waves that start with a single canary host, and mesh health is
+1. **Pre-upgrade host convergence.** In order: the node baseline and OS tuning on every host,
+   Privateer on every mesh host, every Redis server and Sentinel, the data services and managed
+   dependencies described [below](#data-services-and-managed-dependencies), the declared Kafka
+   topics, and MirrorMaker2 workers. Each host runs the same role as `cluster provision` in check
+   mode first, and a host that already matches is skipped without a restart. `cluster release
+   plan` and `release apply --dry-run` list every step and, per host, the role tasks that would
+   change. The node baseline (operator tools, journald and logrotate retention, key-only sshd, a
+   fail2ban `sshd` jail; see [Key-Only SSH](/operators/prerequisites/#key-only-ssh)) and OS tuning
+   converge in waves that start with a single canary host followed by batches of four; after
+   each wave a new SSH login must succeed on every host of that wave before the next wave starts.
+   They restart no platform service: sshd reloads and journald restarts only on a host whose
+   configuration changed. Privateer restarts in waves that start with a single canary host, and mesh health is
    verified after each wave before the next starts. Privateer's DNS socket stays open across its
    restart, so `.internal` lookups are delayed rather than failed. A Sentinel-mode Redis instance
    converges one host at a time: the servers that are not the live primary, each of which must

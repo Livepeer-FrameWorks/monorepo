@@ -3,6 +3,7 @@ package cmd
 import (
 	"context"
 	"errors"
+	"io"
 	"strings"
 	"testing"
 
@@ -17,12 +18,13 @@ import (
 )
 
 // releaseApplyHarness drives runReleaseApply against a single-host PostgreSQL manifest with scripted release metadata,
-// ledgers and data-migration states. The first mutation `release apply` reaches after its preflight is the service
-// database step of the expand migrations; the harness records it and stops there.
+// ledgers and data-migration states. The first mutation `release apply` reaches after its preflight is the node
+// baseline convergence, which the harness records; it stops at the service database step of the expand migrations.
 type releaseApplyHarness struct {
-	missingFrom    string // prior releases at or above this version report a missing postdeploy migration
-	pendingDataID  string // this required data migration reports pending; every other one is completed
-	mutationCalled bool
+	missingFrom       string // prior releases at or above this version report a missing postdeploy migration
+	pendingDataID     string // this required data migration reports pending; every other one is completed
+	mutationCalled    bool
+	nodeBaselineHosts []string
 }
 
 var errHarnessStoppedAtMutation = errors.New("harness: stopped at the first mutation")
@@ -31,10 +33,26 @@ func (h *releaseApplyHarness) install(t *testing.T) {
 	t.Helper()
 	origFetch, origEnsure, origStates := fetchReleaseManifestFn, ensureServiceDatabasesFn, readServiceDatabaseStatesFn
 	origPG, origCH, origData := missingPostgresMigrationsFn, missingClickHouseMigrationsFn, priorDataMigrationSourceFn
+	origHostConvergence := releaseNewHostConvergenceFn
 	t.Cleanup(func() {
 		fetchReleaseManifestFn, ensureServiceDatabasesFn, readServiceDatabaseStatesFn = origFetch, origEnsure, origStates
 		missingPostgresMigrationsFn, missingClickHouseMigrationsFn, priorDataMigrationSourceFn = origPG, origCH, origData
+		releaseNewHostConvergenceFn = origHostConvergence
 	})
+	releaseNewHostConvergenceFn = func(cmd *cobra.Command, rc *resolvedCluster, _ string, _ *ssh.Pool) (*releaseHostConvergence, error) {
+		return &releaseHostConvergence{
+			cmd:         cmd,
+			manifest:    rc.Manifest,
+			runtimeData: map[string]any{},
+			sharedEnv:   map[string]string{"SERVICE_TOKEN": "token"},
+			nodeHostFn: func(_ context.Context, host inventory.Host, _ bool, _ io.Writer) error {
+				h.mutationCalled = true
+				h.nodeBaselineHosts = append(h.nodeBaselineHosts, host.Name)
+				return nil
+			},
+			verifySSHFn: func(context.Context, []string) error { return nil },
+		}, nil
+	}
 	fetchReleaseManifestFn = func(_ gitops.FetchOptions, _ []string, _, version string) (*gitops.Manifest, error) {
 		return &gitops.Manifest{PlatformVersion: version}, nil
 	}

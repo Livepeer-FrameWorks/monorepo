@@ -29004,9 +29004,10 @@ frameworks cluster upgrade --all --yes
 ### frameworks cluster release
 
 Run a full cluster release as one ordered, resumable plan: pre-upgrade host convergence
-(Privateer seeds, Redis servers and Sentinels, Yugabyte, ClickHouse, Kafka controllers and
-brokers, vmagent/vmalert/vmauth, nginx/Caddy, compose dependencies, declared Kafka topics,
-MirrorMaker2 workers; changed hosts one at a time behind health gates) → expand migrations → service
+(node baseline and OS tuning on every host, Privateer seeds, Redis servers and Sentinels,
+Yugabyte, ClickHouse, Kafka controllers and brokers, vmagent/vmalert/vmauth, nginx/Caddy,
+compose dependencies, declared Kafka topics, MirrorMaker2 workers; changed hosts only, behind
+health gates) → expand migrations → service
 upgrades in dependency order → reconciliation transitions interleaved at their declared
 dependency points → stale placement cleanup → postdeploy migrations. Contract migrations are printed as a deferred
 operator step and run only after the rollback window closes. This is the **normal** upgrade path;
@@ -37154,6 +37155,23 @@ ssh-copy-id -i ~/.ssh/frameworks_ed25519.pub admin@central-02
 # ... repeat for all hosts
 ```
 
+### Key-Only SSH
+
+The node baseline that `cluster provision` and `cluster release apply` converge
+on every host restricts sshd to key authentication:
+
+- `PasswordAuthentication no` and `KbdInteractiveAuthentication no`
+- `PermitRootLogin prohibit-password` (root may still log in with a key)
+- `MaxStartups 10:30:60` and `LoginGraceTime 20`
+- a fail2ban `sshd` jail: 5 failed logins within 10 minutes ban the source for 1 hour
+
+These settings live in `/etc/ssh/sshd_config.d/00-frameworks.conf`, which sorts
+ahead of distribution and cloud-init drop-ins. Before the first run, make sure
+every person and tool that logs in to the hosts has a key installed; password
+logins stop working when the baseline converges. Each rendered file is checked
+with `sshd -t` before sshd reloads, and a configuration sshd rejects is rolled
+back without reloading.
+
 ### SSH Configuration
 
 Configure `~/.ssh/config` for convenient access:
@@ -37456,11 +37474,18 @@ Before the first change, and under `--dry-run` too, `release apply` refuses to s
 
 `release apply` prints four numbered stages:
 
-1. **Pre-upgrade host convergence.** Privateer on every mesh host, every Redis server and
-   Sentinel, the data services and managed dependencies described [below](#data-services-and-managed-dependencies),
-   the declared Kafka topics, and MirrorMaker2 workers. Each host runs the same role as
-   `cluster provision` in check mode first, and a host that already matches is skipped without a
-   restart. Privateer restarts in waves that start with a single canary host, and mesh health is
+1. **Pre-upgrade host convergence.** In order: the node baseline and OS tuning on every host,
+   Privateer on every mesh host, every Redis server and Sentinel, the data services and managed
+   dependencies described [below](#data-services-and-managed-dependencies), the declared Kafka
+   topics, and MirrorMaker2 workers. Each host runs the same role as `cluster provision` in check
+   mode first, and a host that already matches is skipped without a restart. `cluster release
+   plan` and `release apply --dry-run` list every step and, per host, the role tasks that would
+   change. The node baseline (operator tools, journald and logrotate retention, key-only sshd, a
+   fail2ban `sshd` jail; see [Key-Only SSH](/operators/prerequisites/#key-only-ssh)) and OS tuning
+   converge in waves that start with a single canary host followed by batches of four; after
+   each wave a new SSH login must succeed on every host of that wave before the next wave starts.
+   They restart no platform service: sshd reloads and journald restarts only on a host whose
+   configuration changed. Privateer restarts in waves that start with a single canary host, and mesh health is
    verified after each wave before the next starts. Privateer's DNS socket stays open across its
    restart, so `.internal` lookups are delayed rather than failed. A Sentinel-mode Redis instance
    converges one host at a time: the servers that are not the live primary, each of which must

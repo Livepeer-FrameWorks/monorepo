@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"io"
 	"slices"
 	"sync"
 	"testing"
@@ -118,7 +119,11 @@ func runServiceConvergence(t *testing.T, manifest *inventory.Manifest, fake *ser
 		verifyMeshFn: func(context.Context, []string) error {
 			return nil
 		},
-		serviceOps: ops,
+		// The node baseline stage runs first on every planned host; its own
+		// tests cover it.
+		nodeHostFn:  func(context.Context, inventory.Host, bool, io.Writer) error { return nil },
+		verifySSHFn: func(context.Context, []string) error { return nil },
+		serviceOps:  ops,
 	}
 	err = c.run(context.Background(), steps, dryRun)
 	return serviceConvergenceRun{events: fake.log.snapshot(), out: out.String(), err: err}

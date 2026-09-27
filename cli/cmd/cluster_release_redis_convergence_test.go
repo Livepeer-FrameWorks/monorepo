@@ -58,7 +58,13 @@ func redisConvergenceSteps(t *testing.T, manifest *inventory.Manifest) []release
 	if err != nil {
 		t.Fatalf("plan: %v", err)
 	}
-	return planReleaseHostConvergence(plan, manifest)
+	var steps []releaseHostConvergenceStep
+	for _, step := range planReleaseHostConvergence(plan, manifest) {
+		if step.Kind != releaseHostStepNodeBaseline {
+			steps = append(steps, step)
+		}
+	}
+	return steps
 }
 
 func TestReleaseHostConvergencePlansRedisReplicasSentinelsThenPrimary(t *testing.T) {

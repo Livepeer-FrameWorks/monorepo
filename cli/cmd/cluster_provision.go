@@ -778,11 +778,7 @@ func executeProvision(ctx context.Context, cmd *cobra.Command, rc *resolvedClust
 	sshPool := ssh.NewPool(30*time.Second, sshKey)
 	defer sshPool.Close()
 
-	if err := ensureNodeBaseline(ctx, cmd, manifest, plan, sshPool, force); err != nil {
-		return err
-	}
-
-	if err := ensureNodeTuning(ctx, cmd, manifest, plan, sshPool, force); err != nil {
+	if err := ensureNodeHosts(ctx, cmd, manifest, plan, sshPool, force); err != nil {
 		return err
 	}
 
@@ -3624,56 +3620,33 @@ func applyPlatformReleaseVersionDefault(config *provisioner.ServiceConfig, platf
 	}
 }
 
-func ensureNodeBaseline(ctx context.Context, cmd *cobra.Command, manifest *inventory.Manifest, plan *orchestrator.ExecutionPlan, pool *ssh.Pool, force bool) error {
+// ensureNodeHosts converges the node baseline and OS tuning on every planned
+// host, a bounded number of hosts at a time, before any service is provisioned.
+func ensureNodeHosts(ctx context.Context, cmd *cobra.Command, manifest *inventory.Manifest, plan *orchestrator.ExecutionPlan, pool *ssh.Pool, force bool) error {
 	hostNames := plannedProvisionHosts(plan)
 	if len(hostNames) == 0 {
 		return nil
 	}
-	prov, err := provisioner.NewNodeBaselineProvisioner(pool)
-	if err != nil {
-		return fmt.Errorf("node baseline: %w", err)
-	}
-	ux.Subheading(cmd.OutOrStdout(), fmt.Sprintf("Ensuring Node Baseline (%d host(s))", len(hostNames)))
-
-	type baselineTarget struct {
-		name string
-		host inventory.Host
-	}
-	targets := make([]baselineTarget, 0, len(hostNames))
+	out := cmd.OutOrStdout()
+	ux.Subheading(out, fmt.Sprintf("Ensuring Node Baseline and Tuning (%d host(s))", len(hostNames)))
+	hosts := make([]inventory.Host, 0, len(hostNames))
 	for _, hostName := range hostNames {
 		host, ok := manifest.GetHost(hostName)
 		if !ok {
 			return fmt.Errorf("node baseline: host %s not found in manifest", hostName)
 		}
-		targets = append(targets, baselineTarget{name: hostName, host: host})
+		hosts = append(hosts, host)
 	}
 
+	shared := &lockedWriter{w: out}
 	g, gCtx := errgroup.WithContext(ctx)
 	g.SetLimit(nodeBaselineConcurrency)
-	for _, target := range targets {
-		target := target
+	for _, host := range hosts {
 		g.Go(func() error {
-			hostName := target.name
-			fmt.Fprintf(cmd.OutOrStdout(), "  Ensuring node baseline on %s...\n", hostName)
-			config := provisioner.ServiceConfig{
-				Mode:     "native",
-				Metadata: map[string]any{},
-				Force:    force,
-			}
-			if !force {
-				wouldChange, checkErr := provisionWouldChange(gCtx, prov, target.host, config, nil)
-				if checkErr != nil {
-					return fmt.Errorf("node baseline %s precheck: %w", hostName, checkErr)
-				}
-				if !wouldChange {
-					fmt.Fprintf(cmd.OutOrStdout(), "    node baseline on %s already matches desired state\n", hostName)
-					return nil
-				}
-			}
-			if err := runProvisionPhase(gCtx, provisionApplyTimeout, "node baseline", func(phaseCtx context.Context) error {
-				return prov.Provision(phaseCtx, target.host, config)
-			}); err != nil {
-				return fmt.Errorf("node baseline %s: %w", hostName, err)
+			hostOut := &linePrefixWriter{w: shared, prefix: "  [" + host.Name + "] "}
+			defer hostOut.Flush()
+			if err := convergeNodeHost(gCtx, hostOut, pool, manifest, host, force, false); err != nil {
+				return fmt.Errorf("%s: %w", host.Name, err)
 			}
 			return nil
 		})
@@ -3681,72 +3654,7 @@ func ensureNodeBaseline(ctx context.Context, cmd *cobra.Command, manifest *inven
 	if err := g.Wait(); err != nil {
 		return err
 	}
-	ux.Success(cmd.OutOrStdout(), "Node baseline ready")
-	return nil
-}
-
-func ensureNodeTuning(ctx context.Context, cmd *cobra.Command, manifest *inventory.Manifest, plan *orchestrator.ExecutionPlan, pool *ssh.Pool, force bool) error {
-	hostNames := plannedProvisionHosts(plan)
-	if len(hostNames) == 0 {
-		return nil
-	}
-	prov, err := provisioner.NewNodeTuningProvisioner(pool)
-	if err != nil {
-		return fmt.Errorf("node tuning: %w", err)
-	}
-	ux.Subheading(cmd.OutOrStdout(), fmt.Sprintf("Ensuring Node Tuning (%d host(s))", len(hostNames)))
-
-	type tuningTarget struct {
-		name    string
-		host    inventory.Host
-		profile string
-	}
-	targets := make([]tuningTarget, 0, len(hostNames))
-	for _, hostName := range hostNames {
-		host, ok := manifest.GetHost(hostName)
-		if !ok {
-			return fmt.Errorf("node tuning: host %s not found in manifest", hostName)
-		}
-		targets = append(targets, tuningTarget{
-			name:    hostName,
-			host:    host,
-			profile: nodeTuningProfileForHost(manifest, host),
-		})
-	}
-
-	g, gCtx := errgroup.WithContext(ctx)
-	g.SetLimit(nodeBaselineConcurrency)
-	for _, target := range targets {
-		g.Go(func() error {
-			hostName := target.name
-			fmt.Fprintf(cmd.OutOrStdout(), "  Ensuring node tuning on %s (profile=%s)...\n", hostName, target.profile)
-			config := provisioner.ServiceConfig{
-				Mode:     "native",
-				Metadata: map[string]any{"profile": target.profile},
-				Force:    force,
-			}
-			if !force {
-				wouldChange, checkErr := provisionWouldChange(gCtx, prov, target.host, config, nil)
-				if checkErr != nil {
-					return fmt.Errorf("node tuning %s precheck: %w", hostName, checkErr)
-				}
-				if !wouldChange {
-					fmt.Fprintf(cmd.OutOrStdout(), "    node tuning on %s already matches desired state\n", hostName)
-					return nil
-				}
-			}
-			if err := runProvisionPhase(gCtx, provisionApplyTimeout, "node tuning", func(phaseCtx context.Context) error {
-				return prov.Provision(phaseCtx, target.host, config)
-			}); err != nil {
-				return fmt.Errorf("node tuning %s: %w", hostName, err)
-			}
-			return nil
-		})
-	}
-	if err := g.Wait(); err != nil {
-		return err
-	}
-	ux.Success(cmd.OutOrStdout(), "Node tuning ready")
+	ux.Success(out, "Node baseline and tuning ready")
 	return nil
 }
 

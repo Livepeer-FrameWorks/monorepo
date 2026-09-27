@@ -24,6 +24,11 @@ import (
 // It converges the host-level substrate the upgraded services resolve and
 // consume, through the same provisioner paths `cluster provision` uses:
 //
+//   - The node baseline (operator tools, journald and logrotate retention,
+//     key-only sshd, fail2ban) and OS tuning on every planned host, in
+//     criticality waves; a new SSH login to each host of a wave must succeed
+//     before the next wave starts. Only sshd reloads and journald restarts,
+//     and only on hosts whose config changed.
 //   - Privateer on every mesh host (binary, seed peers, seed DNS). Seeds carry
 //     the names both the previous and the target release dial, so converging
 //     them first breaks no running service.
@@ -48,14 +53,16 @@ import (
 // then restarts together, so the workers of a target never run mixed configs
 // through a sequence of rebalances.
 const (
-	releaseHostStepPrivateer   = "privateer"
-	releaseHostStepKafkaTopics = "kafka-topics"
-	releaseHostStepMirrorMaker = "kafka-mirrormaker"
+	releaseHostStepNodeBaseline = "node-baseline"
+	releaseHostStepPrivateer    = "privateer"
+	releaseHostStepKafkaTopics  = "kafka-topics"
+	releaseHostStepMirrorMaker  = "kafka-mirrormaker"
 )
 
 // releaseHostConvergenceStep is one ordered step of the stage. Task is nil for
-// the Kafka topic step, which runs against each cluster's first broker. Group
-// names the Redis instance a Redis step belongs to.
+// a node baseline step, whose Label is the host, and for the Kafka topic step,
+// which runs against each cluster's first broker. Group names the Redis
+// instance a Redis step belongs to.
 type releaseHostConvergenceStep struct {
 	Kind  string
 	Label string
@@ -64,8 +71,10 @@ type releaseHostConvergenceStep struct {
 }
 
 // planReleaseHostConvergence derives the stage from the execution plan and the
-// manifest: Privateer hosts, then Redis instances, then the Kafka clusters that
-// declare topics, then MirrorMaker2 worker hosts. It performs no I/O.
+// manifest: every planned host's node baseline, then Privateer hosts, then
+// Redis instances, then the data services and managed dependencies, then the
+// Kafka clusters that declare topics, then MirrorMaker2 worker hosts. It
+// performs no I/O.
 func planReleaseHostConvergence(plan *orchestrator.ExecutionPlan, manifest *inventory.Manifest) []releaseHostConvergenceStep {
 	var privateer, redis, mirrorMaker []*orchestrator.Task
 	if plan != nil {
@@ -88,6 +97,9 @@ func planReleaseHostConvergence(plan *orchestrator.ExecutionPlan, manifest *inve
 	byHost(mirrorMaker)
 
 	var steps []releaseHostConvergenceStep
+	for _, host := range plannedProvisionHosts(plan) {
+		steps = append(steps, releaseHostConvergenceStep{Kind: releaseHostStepNodeBaseline, Label: host})
+	}
 	for _, task := range privateer {
 		steps = append(steps, releaseHostConvergenceStep{Kind: releaseHostStepPrivateer, Label: task.Host, Task: task})
 	}
@@ -133,6 +145,28 @@ func releasePrivateerWaves(manifest *inventory.Manifest, steps []releaseHostConv
 // once after the canary.
 const privateerConvergenceBatch = 4
 
+// releaseNodeBaselineWaves orders the node baseline hosts the way Privateer
+// hosts are ordered: the most critical host alone as a canary, then batches.
+// A bad sshd render is caught by the role's sshd -t check; the waves bound what
+// anything it misses can reach before the SSH login gate sees it.
+func releaseNodeBaselineWaves(manifest *inventory.Manifest, steps []releaseHostConvergenceStep) []rolloutWave {
+	var hosts []string
+	for _, step := range steps {
+		if step.Kind == releaseHostStepNodeBaseline {
+			hosts = append(hosts, step.Label)
+		}
+	}
+	if len(hosts) == 0 {
+		return nil
+	}
+	tiers := rolloutHostTiers(manifest)
+	return buildComponentBatchWaves(hosts, func(host string) rolloutTier { return tiers[host] }, nodeBaselineConvergenceBatch)
+}
+
+// nodeBaselineConvergenceBatch bounds how many hosts converge their node
+// baseline at once after the canary.
+const nodeBaselineConvergenceBatch = 4
+
 // writeReleaseHostConvergencePlan prints the stage: the Privateer waves, then
 // one line per remaining step kind.
 func writeReleaseHostConvergencePlan(out io.Writer, heading string, manifest *inventory.Manifest, steps []releaseHostConvergenceStep) {
@@ -141,6 +175,12 @@ func writeReleaseHostConvergencePlan(out io.Writer, heading string, manifest *in
 		return
 	}
 	fmt.Fprintf(out, "  %s (hosts already converged are skipped):\n", heading)
+	if waves := releaseNodeBaselineWaves(manifest, steps); len(waves) > 0 {
+		fmt.Fprintln(out, "     · Node baseline and OS tuning (tools, journald/logrotate retention, key-only sshd, fail2ban), in waves (a new SSH login to each host gates each wave; only sshd reloads and journald restarts):")
+		for i, wave := range waves {
+			fmt.Fprintf(out, "         %d. %s\n", i+1, wave.describe())
+		}
+	}
 	if waves := releasePrivateerWaves(manifest, steps); len(waves) > 0 {
 		fmt.Fprintln(out, "     · Privateer binary, seed peers, and seed DNS, in waves (mesh health gates each wave):")
 		for i, wave := range waves {
@@ -181,6 +221,10 @@ type releaseHostConvergence struct {
 	mirrorMakerRestartFn        func(context.Context, *orchestrator.Task) error
 	// verifyMeshFn replaces the SSH mesh health gate in tests.
 	verifyMeshFn func(context.Context, []string) error
+	// nodeHostFn and verifySSHFn replace the node baseline convergence and the
+	// SSH login gate in tests.
+	nodeHostFn  func(ctx context.Context, host inventory.Host, dryRun bool, out io.Writer) error
+	verifySSHFn func(context.Context, []string) error
 	// redisOps and redisTiming replace the SSH Redis operations and the gate
 	// timeouts in tests.
 	redisOps    redisReleaseOps
@@ -342,6 +386,9 @@ func (c *releaseHostConvergence) preflightEnvContract(steps []releaseHostConverg
 // the remaining steps in order.
 func (c *releaseHostConvergence) run(ctx context.Context, steps []releaseHostConvergenceStep, dryRun bool) error {
 	out := c.cmd.OutOrStdout()
+	if err := c.runNodeBaselineWaves(ctx, steps, dryRun); err != nil {
+		return err
+	}
 	if err := c.runPrivateerWaves(ctx, steps, dryRun); err != nil {
 		return err
 	}
@@ -354,7 +401,7 @@ func (c *releaseHostConvergence) run(ctx context.Context, steps []releaseHostCon
 	var mirrorMakers []*orchestrator.Task
 	for i, step := range steps {
 		switch step.Kind {
-		case releaseHostStepPrivateer, releaseHostStepRedis, releaseHostStepService:
+		case releaseHostStepNodeBaseline, releaseHostStepPrivateer, releaseHostStepRedis, releaseHostStepService:
 			continue
 		case releaseHostStepMirrorMaker:
 			fmt.Fprintf(out, "\n[host %d/%d] %s on %s\n", i+1, len(steps), step.Kind, step.Label)
@@ -383,6 +430,58 @@ func (c *releaseHostConvergence) run(ctx context.Context, steps []releaseHostCon
 		}
 	}
 	return c.restartPendingMirrorMakers(ctx, mirrorMakers, dryRun)
+}
+
+// runNodeBaselineWaves converges each planned host's node baseline and OS
+// tuning wave by wave. Before the next wave starts, a new SSH login must
+// succeed on every host of the wave just converged, so a baseline that locks
+// the operator out stops the rollout at its canary.
+func (c *releaseHostConvergence) runNodeBaselineWaves(ctx context.Context, steps []releaseHostConvergenceStep, dryRun bool) error {
+	waves := releaseNodeBaselineWaves(c.manifest, steps)
+	if len(waves) == 0 {
+		return nil
+	}
+	out := c.cmd.OutOrStdout()
+	fmt.Fprintf(out, "\nNode baseline and OS tuning on %d host(s) in %d wave(s)\n", len(releaseNodeBaselineHosts(waves)), len(waves))
+	converge := c.nodeHostFn
+	if converge == nil {
+		converge = func(ctx context.Context, host inventory.Host, dryRun bool, out io.Writer) error {
+			return convergeNodeHost(ctx, out, c.pool, c.manifest, host, false, dryRun)
+		}
+	}
+	verify := c.verifySSHFn
+	if verify == nil {
+		verify = func(ctx context.Context, hosts []string) error {
+			return verifyFreshSSHLogin(ctx, c.pool, c.manifest, hosts)
+		}
+	}
+	err := runRolloutWaves(ctx, out, waves,
+		func(ctx context.Context, name string, hostOut io.Writer) error {
+			host, ok := c.manifest.GetHost(name)
+			if !ok {
+				return fmt.Errorf("host %s not found in manifest", name)
+			}
+			fmt.Fprintf(hostOut, "node baseline on %s\n", name)
+			return converge(ctx, host, dryRun, hostOut)
+		},
+		func(wave rolloutWave) error {
+			if dryRun {
+				return nil
+			}
+			return verify(ctx, wave.hosts())
+		})
+	if err != nil {
+		return fmt.Errorf("node baseline: %w", err)
+	}
+	return nil
+}
+
+func releaseNodeBaselineHosts(waves []rolloutWave) []string {
+	var hosts []string
+	for _, wave := range waves {
+		hosts = append(hosts, wave.hosts()...)
+	}
+	return hosts
 }
 
 // runPrivateerWaves converges the Privateer hosts wave by wave. Before the

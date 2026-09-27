@@ -101,6 +101,9 @@ func TestReleaseKafkaConvergencePlansControllersThenBrokers(t *testing.T) {
 	steps := planReleaseHostConvergence(plan, manifest)
 	var got []string
 	for _, step := range steps {
+		if step.Kind == releaseHostStepNodeBaseline {
+			continue
+		}
 		got = append(got, step.Kind+":"+step.Group+":"+step.Task.Type+":"+step.Label)
 	}
 	want := []string{

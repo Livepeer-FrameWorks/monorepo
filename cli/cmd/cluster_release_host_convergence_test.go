@@ -74,6 +74,9 @@ func TestReleaseHostConvergenceOrdersMeshTopicsThenMirrorMaker(t *testing.T) {
 		got = append(got, step.Kind+":"+step.Label)
 	}
 	want := []string{
+		"node-baseline:central-eu-1",
+		"node-baseline:regional-eu-1",
+		"node-baseline:regional-us-1",
 		"privateer:central-eu-1",
 		"privateer:regional-eu-1",
 		"privateer:regional-us-1",
@@ -87,6 +90,12 @@ func TestReleaseHostConvergenceOrdersMeshTopicsThenMirrorMaker(t *testing.T) {
 		t.Fatalf("host convergence steps = %v, want %v", got, want)
 	}
 	for _, step := range steps {
+		if step.Kind == releaseHostStepNodeBaseline {
+			if step.Task != nil {
+				t.Fatalf("node baseline step carries a service task %v", step.Task.Name)
+			}
+			continue
+		}
 		if step.Kind == releaseHostStepKafkaTopics {
 			if step.Task != nil {
 				t.Fatalf("kafka topic step carries a host task %v; it must never provision a broker", step.Task.Name)
@@ -104,6 +113,7 @@ func TestReleaseHostConvergenceOrdersMeshTopicsThenMirrorMaker(t *testing.T) {
 	var out bytes.Buffer
 	writeReleaseHostConvergencePlan(&out, "1. pre-upgrade host convergence", manifest, steps)
 	for _, line := range []string{
+		"Node baseline and OS tuning (tools, journald/logrotate retention, key-only sshd, fail2ban), in waves (a new SSH login to each host gates each wave; only sshd reloads and journald restarts):",
 		"Privateer binary, seed peers, and seed DNS, in waves (mesh health gates each wave):",
 		"1. canary: regional-eu-1",
 		"2. batch 1 (2 at a time): regional-us-1, central-eu-1",
@@ -116,7 +126,7 @@ func TestReleaseHostConvergenceOrdersMeshTopicsThenMirrorMaker(t *testing.T) {
 	}
 }
 
-func TestReleaseHostConvergenceEmptyWithoutMeshOrKafka(t *testing.T) {
+func TestReleaseHostConvergenceOnlyBaselineWithoutMeshOrKafka(t *testing.T) {
 	manifest := &inventory.Manifest{
 		Profile:  "dev",
 		Hosts:    map[string]inventory.Host{"core-1": {Name: "core-1", ExternalIP: "10.0.0.1"}},
@@ -126,8 +136,9 @@ func TestReleaseHostConvergenceEmptyWithoutMeshOrKafka(t *testing.T) {
 	if err != nil {
 		t.Fatalf("plan: %v", err)
 	}
-	if steps := planReleaseHostConvergence(plan, manifest); len(steps) != 0 {
-		t.Fatalf("steps = %+v, want none", steps)
+	steps := planReleaseHostConvergence(plan, manifest)
+	if len(steps) != 1 || steps[0].Kind != releaseHostStepNodeBaseline || steps[0].Label != "core-1" {
+		t.Fatalf("steps = %+v, want only the node baseline on core-1", steps)
 	}
 	var out bytes.Buffer
 	writeReleaseHostConvergencePlan(&out, "1. pre-upgrade host convergence", manifest, nil)

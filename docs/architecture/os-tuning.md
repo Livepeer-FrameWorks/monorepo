@@ -19,12 +19,12 @@ node ever changes is through `frameworks cluster provision` or
 ## Architecture
 
 ```
-provision flow                                update flow
-──────────────                                ───────────
-ensureNodeBaseline   (installs OS packages)
-        │
+provision / release apply flow                update flow
+──────────────────────────────                ───────────
+node_baseline  (convergeNodeHost; packages,
+        │       logs, sshd, fail2ban)
         ▼
-ensureNodeTuning     (this role)             frameworks cluster os update --check
+node_tuning    (this role)                   frameworks cluster os update --check
         │                                              │
         ├─► apt policy   (disable u-u, timers)         ▼
         ├─► needrestart  (list-only mode)              read-only inventory
@@ -104,7 +104,9 @@ in-Ansible `ulimit -n` check is not faithful.
 
 ## Node baseline: log retention and SSH
 
-`node_baseline` runs before `node_tuning` on every host and, besides the
+`node_baseline` runs before `node_tuning` on every host, in `cluster provision`
+and again in every `cluster release apply` host convergence, where only hosts
+whose check-mode precheck reports a change converge. Besides the
 operator tool packages, owns the host's log bounds and SSH exposure. Its
 settings are fixed values, applied on every supported family (Debian,
 RedHat, Arch, Alpine):
@@ -127,7 +129,7 @@ precheck converge a host that lacks them.
 - `ansible/playbooks/node_tuning.yml` - One-host playbook (used by edge standalone)
 - `ansible/playbooks/cluster_os_update.yml` - Mutating upgrade + restart + reboot
 - `cli/cmd/cluster_os_update.go` - `frameworks cluster os update [--check|--apply]`
-- `cli/cmd/cluster_provision.go` (`ensureNodeTuning`) - Wires the role after `ensureNodeBaseline`
+- `cli/cmd/node_host_convergence.go` (`convergeNodeHost`) - Converges node_baseline then node_tuning on one host; `cluster provision` (`ensureNodeHosts`) and `cluster release apply` host convergence both call it
 - `cli/pkg/provisioner/node_tuning.go` - Provisioner wrapping the role
 - `cli/pkg/provisioner/node_tuning_role.go` - One-host helper used by `EdgeProvisioner`
 - `docs/rfcs/cluster-os-update-drain.md` - Drain integration sequencing (follow-up)
