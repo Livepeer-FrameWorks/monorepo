@@ -261,10 +261,27 @@ func (r *RedisStateStore) SetStreamInstance(name, nodeID string, state *StreamIn
 }
 
 func (r *RedisStateStore) GetAllStreamInstances() (map[string]map[string]*StreamInstanceState, error) {
-	records, err := scanRedisMap(r, "{"+r.clusterID+"}:stream_instances:*", func(data string) (*streamInstanceRecord, string, error) {
+	prefix := "{" + r.clusterID + "}:stream_instances:"
+	records, err := scanRedisKeyedMap(r, prefix+"*", func(key, data string) (*streamInstanceRecord, string, error) {
 		var rec streamInstanceRecord
 		if err := json.Unmarshal([]byte(data), &rec); err != nil {
 			return nil, "", err
+		}
+		if rec.State == nil {
+			// A bare instance names its node but not its stream; the key
+			// names both.
+			var state StreamInstanceState
+			if err := json.Unmarshal([]byte(data), &state); err != nil {
+				return nil, "", err
+			}
+			streamName, found := strings.CutSuffix(strings.TrimPrefix(key, prefix), ":"+state.NodeID)
+			if !found || state.NodeID == "" || streamName == "" {
+				return nil, "", fmt.Errorf("stream instance key %q does not name its stream and node", key)
+			}
+			rec = streamInstanceRecord{InternalName: streamName, NodeID: state.NodeID, State: &state}
+		}
+		if rec.InternalName == "" || rec.NodeID == "" {
+			return nil, "", fmt.Errorf("stream instance record under %q has no stream or node", key)
 		}
 		return &rec, rec.InternalName + ":" + rec.NodeID, nil
 	})
@@ -585,6 +602,11 @@ func (r *RedisStateStore) ReadStateChanges(ctx context.Context, fromID string, h
 type redisScanner[T any] func(data string) (T, string, error)
 
 func scanRedisMap[T any](r *RedisStateStore, pattern string, parser redisScanner[T]) (map[string]T, error) {
+	return scanRedisKeyedMap(r, pattern, func(_, data string) (T, string, error) { return parser(data) })
+}
+
+// scanRedisKeyedMap is scanRedisMap for values whose identity is in the key.
+func scanRedisKeyedMap[T any](r *RedisStateStore, pattern string, parser func(key, data string) (T, string, error)) (map[string]T, error) {
 	ctx := context.Background()
 	cursor := uint64(0)
 	result := make(map[string]T)
@@ -603,7 +625,7 @@ func scanRedisMap[T any](r *RedisStateStore, pattern string, parser redisScanner
 				}
 				continue
 			}
-			parsed, resultKey, err := parser(value)
+			parsed, resultKey, err := parser(key, value)
 			if err != nil {
 				if stateLogger != nil {
 					stateLogger.WithError(err).WithField("key", key).Warn("Failed to parse redis value during scan")
