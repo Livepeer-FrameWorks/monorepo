@@ -1,0 +1,9 @@
+---
+# Docker daemon log default. The compose renderers (this role's
+# generic-compose.yml.j2, the chatwoot/listmonk/edge templates, and the CLI's
+# Go renderers via cli/internal/composelog) set the same caps per service.
+compose_stack_docker_log_policy:
+  log-driver: local
+  log-opts:
+    max-size: "50m"
+    max-file: "5"

@@ -205,7 +205,8 @@ func serviceComposeVars(_ context.Context, cfg ServiceRoleConfig, _ inventory.Ho
 	}
 	if cfg.ServiceName == "metabase" {
 		applyMetabaseComposeDefaults(envMap)
-		composeVolumes = append(composeVolumes, "/var/lib/frameworks/metabase:/metabase-data")
+		composeFiles[metabaseLog4j2File] = metabaseLog4j2Config
+		composeVolumes = append(composeVolumes, "/var/lib/frameworks/metabase:/metabase-data", "./"+metabaseLog4j2File+":"+metabaseLog4j2MountPath+":ro")
 		composeStateDirs = append(composeStateDirs, map[string]string{
 			"path":  "/var/lib/frameworks/metabase",
 			"owner": "2000",
@@ -273,7 +274,41 @@ func applyMetabaseComposeDefaults(env map[string]string) {
 	if env["MB_DB_PASS"] == "" {
 		env["MB_DB_PASS"] = env["DATABASE_PASSWORD"]
 	}
+	logConfig := "-Dlog4j.configurationFile=file:" + metabaseLog4j2MountPath
+	if !strings.Contains(env["JAVA_OPTS"], logConfig) {
+		env["JAVA_OPTS"] = strings.TrimSpace(env["JAVA_OPTS"] + " " + logConfig)
+	}
 }
+
+const (
+	metabaseLog4j2File      = "metabase/log4j2.xml"
+	metabaseLog4j2MountPath = "/etc/metabase/log4j2.xml"
+)
+
+// metabaseLog4j2Config replaces the image's bundled log4j2.xml, which runs the
+// request middleware, query processor, plugin and metabot loggers at DEBUG and
+// so logs every API request. Every Metabase logger here is at INFO.
+const metabaseLog4j2Config = `<?xml version="1.0" encoding="UTF-8"?>
+<Configuration>
+  <Appenders>
+    <Console name="STDOUT" target="SYSTEM_OUT" follow="true">
+      <PatternLayout pattern="%date %level %logger{2} :: %message %notEmpty{%X}%n%throwable">
+        <replace regex=":basic-auth \\[.*\\]" replacement=":basic-auth [redacted]"/>
+      </PatternLayout>
+    </Console>
+  </Appenders>
+  <Loggers>
+    <Logger name="com.mchange" level="ERROR"/>
+    <Logger name="liquibase" level="INFO"/>
+    <Logger name="metabase" level="INFO"/>
+    <Logger name="metabase-enterprise" level="INFO"/>
+    <Logger name="org.quartz" level="INFO"/>
+    <Root level="WARN">
+      <AppenderRef ref="STDOUT"/>
+    </Root>
+  </Loggers>
+</Configuration>
+`
 
 func metabaseUsesDockerHostGateway(env map[string]string) bool {
 	return env["MB_DB_HOST"] == "host.docker.internal" || strings.HasPrefix(env["MB_DB_HOST"], "host.docker.internal:")

@@ -17,6 +17,8 @@ import (
 	"path/filepath"
 	"strings"
 
+	"frameworks/cli/internal/composelog"
+
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/maintenance"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/mist"
 )
@@ -198,7 +200,7 @@ func edgeTuningService(edgeOS string) string {
         sysctl -w net.core.default_qdisc=fq || true
         sysctl -w net.ipv4.tcp_congestion_control=bbr || true
     restart: "no"
-
+` + composelog.Block("    ") + `
 `
 }
 
@@ -346,7 +348,7 @@ func RenderEdgeTemplates(vars EdgeVars) ([]EdgeRenderedFile, error) {
       - ./vmagent-edge.yml:/etc/frameworks/vmagent-edge.yml:ro
       - ./telemetry:/etc/frameworks/telemetry:ro
     restart: unless-stopped
-
+` + composelog.Block("    ") + `
 `
 	}
 
@@ -413,6 +415,7 @@ func RenderEdgeTemplates(vars EdgeVars) ([]EdgeRenderedFile, error) {
 		content = strings.ReplaceAll(content, "{{EDGE_ACCELERATOR_BLOCK}}", edgeAcceleratorBlock(vars.ONNXProfile, vars.ONNXDRIDevice))
 		content = strings.ReplaceAll(content, "{{EDGE_NETWORK_BLOCK}}", edgeNetworkBlock(vars.EdgeOS))
 		content = strings.ReplaceAll(content, "{{EDGE_TUNING_SERVICE}}", edgeTuningService(vars.EdgeOS))
+		content = strings.ReplaceAll(content, "{{CONTAINER_LOGGING}}", composelog.Block("    "))
 		content = strings.ReplaceAll(content, "{{CHANDLER_UPSTREAM}}", vars.ChandlerUpstream)
 		content = strings.ReplaceAll(content, "{{TELEMETRY_URL}}", vars.TelemetryURL)
 		content = strings.ReplaceAll(content, "{{VMAGENT_EDGE_SERVICE}}", vmagentServiceBlock)

@@ -6,6 +6,11 @@ services:
     # Covers pkg/server's 65 s pre-stop readiness delay plus its 30 s
     # shutdown timeout (TestPreStopDelayCoversPollersAndFitsStopBudget).
     stop_grace_period: 2m
+    logging:
+      driver: local
+      options:
+        max-size: "50m"
+        max-file: "5"
 {% if compose_stack_env | default({}) | length > 0 %}
     env_file:
       - .env

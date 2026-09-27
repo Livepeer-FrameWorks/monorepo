@@ -73,6 +73,11 @@ services:
       - ./.edge-enroll.env:/run/frameworks/.edge-enroll.env
       - ./.edge.env:/run/frameworks/.edge.env
     restart: unless-stopped
+    logging:
+      driver: local
+      options:
+        max-size: "50m"
+        max-file: "5"
 {% if edge_container_flavor | default('linux') == 'darwin' %}
 
   edge-tuning:
@@ -93,6 +98,11 @@ services:
         sysctl -w net.core.default_qdisc=fq || true
         sysctl -w net.ipv4.tcp_congestion_control=bbr || true
     restart: "no"
+    logging:
+      driver: local
+      options:
+        max-size: "50m"
+        max-file: "5"
 {% endif %}
 {# prepare.yml proves that a new or preserved bearer token exists. #}
 {% if edge_telemetry_url | length > 0 %}
@@ -120,6 +130,11 @@ services:
       - ./vmagent-edge.yml:/etc/frameworks/vmagent-edge.yml:ro
       - ./telemetry:/etc/frameworks/telemetry:ro
     restart: unless-stopped
+    logging:
+      driver: local
+      options:
+        max-size: "50m"
+        max-file: "5"
 {% endif %}
 
 volumes:

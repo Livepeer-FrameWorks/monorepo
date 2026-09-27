@@ -3,9 +3,12 @@ package services
 import (
 	"bytes"
 	"fmt"
-	"gopkg.in/yaml.v3"
 	"os"
 	"path/filepath"
+
+	"frameworks/cli/internal/composelog"
+
+	"gopkg.in/yaml.v3"
 )
 
 // ComposeModel is a minimal Docker Compose structure used for generation.
@@ -41,6 +44,7 @@ func GenerateFragments(dir string, specs []ServiceSpec, overwrite bool) error {
 			"container_name": fmt.Sprintf("frameworks-%s", deployName),
 			"restart":        "unless-stopped",
 			"env_file":       []string{".central.env"},
+			"logging":        composelog.Map(),
 		}
 		if len(s.Ports) > 0 {
 			svc["ports"] = s.Ports

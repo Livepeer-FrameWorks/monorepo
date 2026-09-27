@@ -29,7 +29,7 @@ services:
       - ./.edge-enroll.env:/run/frameworks/.edge-enroll.env
       - ./.edge.env:/run/frameworks/.edge.env
     restart: unless-stopped
-
+{{CONTAINER_LOGGING}}
 {{EDGE_TUNING_SERVICE}}{{VMAGENT_EDGE_SERVICE}}
 volumes:
   frameworks_opt: {}

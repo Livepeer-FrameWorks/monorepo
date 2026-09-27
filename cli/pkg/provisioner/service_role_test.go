@@ -233,7 +233,7 @@ func TestServiceComposeVarsMapsMetabasePostgresEnv(t *testing.T) {
 	if !ok {
 		t.Fatalf("compose_stack_service got %T, want map[string]any", vars["compose_stack_service"])
 	}
-	assertStringSlice(t, service["volumes"], []string{"/var/lib/frameworks/metabase:/metabase-data"})
+	assertStringSlice(t, service["volumes"], []string{"/var/lib/frameworks/metabase:/metabase-data", "./metabase/log4j2.xml:/etc/metabase/log4j2.xml:ro"})
 	assertStringSlice(t, service["extra_hosts"], []string{"host.docker.internal:host-gateway"})
 	wantStateDirs := []map[string]string{{
 		"path":  "/var/lib/frameworks/metabase",
@@ -243,6 +243,38 @@ func TestServiceComposeVarsMapsMetabasePostgresEnv(t *testing.T) {
 	}}
 	if got := vars["compose_stack_state_dirs"]; !reflect.DeepEqual(got, wantStateDirs) {
 		t.Fatalf("compose_stack_state_dirs got %#v, want %#v", got, wantStateDirs)
+	}
+}
+
+func TestServiceComposeVarsRunsMetabaseLoggersAtInfo(t *testing.T) {
+	vars, err := serviceComposeVars(context.Background(), ServiceRoleConfig{
+		ServiceName:  "metabase",
+		DefaultPort:  3001,
+		DefaultImage: "metabase/metabase:v0.59.1",
+	}, inventory.Host{Name: "central-eu-1"}, ServiceConfig{
+		Mode:     "docker",
+		EnvVars:  map[string]string{"JAVA_OPTS": "-Xmx2g"},
+		Metadata: map[string]any{},
+	}, RoleBuildHelpers{})
+	if err != nil {
+		t.Fatalf("serviceComposeVars: %v", err)
+	}
+	env := vars["compose_stack_env"].(map[string]any)
+	if got, want := env["JAVA_OPTS"], "-Xmx2g -Dlog4j.configurationFile=file:/etc/metabase/log4j2.xml"; got != want {
+		t.Fatalf("JAVA_OPTS = %v, want %v", got, want)
+	}
+	files := vars["compose_stack_files"].(map[string]string)
+	config := files["metabase/log4j2.xml"]
+	if config == "" {
+		t.Fatalf("compose_stack_files has no metabase/log4j2.xml: %#v", files)
+	}
+	if strings.Contains(config, `level="DEBUG"`) || strings.Contains(config, `level="TRACE"`) {
+		t.Fatalf("metabase log4j2.xml enables debug logging:\n%s", config)
+	}
+	for _, logger := range []string{`name="metabase" level="INFO"`, `name="metabase-enterprise" level="INFO"`} {
+		if !strings.Contains(config, logger) {
+			t.Fatalf("metabase log4j2.xml missing %s:\n%s", logger, config)
+		}
 	}
 }
 

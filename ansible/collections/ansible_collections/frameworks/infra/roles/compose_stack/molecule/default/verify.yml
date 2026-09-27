@@ -21,6 +21,18 @@
           - "'18080:80' in (compose_file.content | b64decode)"
           - "'MARKER=ok' in (env_file.content | b64decode)"
 
+    - name: Read Docker daemon config
+      ansible.builtin.slurp:
+        src: /etc/docker/daemon.json
+      register: daemon_json
+
+    - name: Assert Docker daemon log policy
+      ansible.builtin.assert:
+        that:
+          - (daemon_json.content | b64decode | from_json)['log-driver'] == 'local'
+          - (daemon_json.content | b64decode | from_json)['log-opts']['max-size'] == '50m'
+          - (daemon_json.content | b64decode | from_json)['log-opts']['max-file'] == '5'
+
     - name: Rerun role (idempotence)
       ansible.builtin.include_role:
         name: frameworks.infra.compose_stack

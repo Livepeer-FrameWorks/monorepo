@@ -8,6 +8,7 @@ import (
 	"sort"
 	"strings"
 
+	"frameworks/cli/internal/composelog"
 	"frameworks/cli/pkg/ansiblerun"
 	"frameworks/cli/pkg/inventory"
 	"frameworks/cli/pkg/ssh"
@@ -165,6 +166,7 @@ func reverseProxyComposeContent(
 	if httpsPort > 0 {
 		fmt.Fprintf(&b, "      - \"%d:443\"\n", httpsPort)
 	}
+	b.WriteString(composelog.Block("    "))
 	fmt.Fprintf(&b, `    volumes:
 `)
 	configNames := make([]string, 0, len(configMounts))

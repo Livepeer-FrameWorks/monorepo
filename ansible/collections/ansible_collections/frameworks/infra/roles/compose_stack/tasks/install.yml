@@ -172,6 +172,52 @@
     - compose_stack_manage_docker | bool
     - not (compose_stack_render_only | default(false) | bool)
 
+# The daemon default covers containers no FrameWorks compose file created; the
+# compose renderers set the same caps on every service they declare. Other keys
+# an operator set in daemon.json are kept.
+- name: Ensure Docker config directory
+  ansible.builtin.file:
+    path: /etc/docker
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+  when: compose_stack_manage_docker | bool
+
+- name: Read Docker daemon config
+  ansible.builtin.slurp:
+    src: /etc/docker/daemon.json
+  register: compose_stack_daemon_json_current
+  failed_when: false
+  when: compose_stack_manage_docker | bool
+
+- name: Render Docker daemon log policy
+  ansible.builtin.copy:
+    dest: /etc/docker/daemon.json
+    content: "{{ compose_stack_daemon_json_existing | combine(compose_stack_docker_log_policy) | to_nice_json }}\n"
+    owner: root
+    group: root
+    mode: "0644"
+  vars:
+    compose_stack_daemon_json_existing: >-
+      {{ (compose_stack_daemon_json_current.content | b64decode | from_json)
+         if (compose_stack_daemon_json_current.content | default('') | length > 0) else {} }}
+  register: compose_stack_daemon_json
+  when: compose_stack_manage_docker | bool
+
+# Restarted inline rather than through a handler so the new policy is live
+# before the stack below is created, without flushing handlers that callers
+# notified for their own stack.
+- name: Restart Docker for the daemon log policy # noqa: no-handler
+  ansible.builtin.service:
+    name: "{{ compose_stack_docker_service }}"
+    state: restarted
+  when:
+    - compose_stack_manage_docker | bool
+    - not (compose_stack_render_only | default(false) | bool)
+    - not ansible_check_mode
+    - compose_stack_daemon_json is changed
+
 - name: Ensure Docker service is running
   ansible.builtin.service:
     name: "{{ compose_stack_docker_service }}"

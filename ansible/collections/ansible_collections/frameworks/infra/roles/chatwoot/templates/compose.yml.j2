@@ -3,6 +3,11 @@ services:
     image: {{ chatwoot_image }}
     container_name: frameworks-chatwoot
     restart: always
+    logging:
+      driver: local
+      options:
+        max-size: "50m"
+        max-file: "5"
     entrypoint: ["/bin/sh", "-c"]
     command:
       - |
@@ -52,6 +57,11 @@ services:
     image: {{ chatwoot_image }}
     container_name: frameworks-chatwoot-worker
     restart: always
+    logging:
+      driver: local
+      options:
+        max-size: "50m"
+        max-file: "5"
     command: bundle exec sidekiq -C config/sidekiq.yml
     env_file:
       - .env
