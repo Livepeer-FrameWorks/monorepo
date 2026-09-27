@@ -2226,8 +2226,12 @@ func (s *CommodoreServer) validateStreamKey(ctx context.Context, req *commodorep
 			}
 			if held.ActiveIngestClusterID.Valid && held.ActiveIngestClusterID.String != "" && held.ActiveIngestClaimID.String != claimToken {
 				where := "cluster " + held.ActiveIngestClusterID.String
+				// The owner's token goes back only to its own cluster, the one
+				// whose records can prove that owner's session has ended.
+				heldToken := ""
 				if held.ActiveIngestClusterID.String == activeIngestClusterID {
 					where = "this cluster by another publisher"
+					heldToken = held.ActiveIngestClaimID.String
 				}
 				s.logger.WithFields(logging.Fields{
 					"stream_key":            logging.RedactSecret(streamKey),
@@ -2238,6 +2242,7 @@ func (s *CommodoreServer) validateStreamKey(ctx context.Context, req *commodorep
 					Valid:           false,
 					Error:           "Stream is already ingesting on " + where,
 					RejectionReason: commodorepb.StreamKeyRejectionReason_STREAM_KEY_REJECTION_DUPLICATE_INGEST,
+					HeldClaimToken:  heldToken,
 				}, nil
 			}
 			s.logger.WithFields(logging.Fields{

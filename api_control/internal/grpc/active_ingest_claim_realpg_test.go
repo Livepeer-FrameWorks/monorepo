@@ -113,9 +113,45 @@ func TestValidateStreamKey_SameClusterCannotStealLiveClaim_RealPG(t *testing.T) 
 		t.Fatalf("rejection reason = %v, want DUPLICATE_INGEST", second.GetRejectionReason())
 	}
 
+	// The refusal names the owner to its own cluster, which can prove whether that owner ended.
+	if second.GetHeldClaimToken() != "connection-A" {
+		t.Fatalf("held_claim_token = %q, want connection-A", second.GetHeldClaimToken())
+	}
+
 	cluster, token := readClaim(t, conn)
 	if cluster != "media-eu" || token != "connection-A" {
 		t.Fatalf("claim was stolen: cluster=%q owner=%q, want media-eu/connection-A", cluster, token)
+	}
+}
+
+// A live claim held by another cluster is refused without naming its owner: only the holding
+// cluster's records can show whether that session ended, so no other cluster may release it.
+func TestValidateStreamKey_OtherClusterClaimOwnerIsNotDisclosed_RealPG(t *testing.T) {
+	conn := startCommodoreRealPG(t)
+	seedClaimStream(t, conn, "sk-foreign")
+	server := claimServer(conn)
+	ctx := serviceCtx()
+
+	if _, err := conn.ExecContext(ctx, `
+		UPDATE commodore.streams
+		SET active_ingest_cluster_id = 'media-us', active_ingest_claim_id = 'connection-US',
+		    active_ingest_cluster_updated_at = NOW()
+		WHERE id = $1::uuid
+	`, claimStreamID); err != nil {
+		t.Fatalf("seed foreign claim: %v", err)
+	}
+
+	resp, err := server.ValidateStreamKey(ctx, &commodorepb.ValidateStreamKeyRequest{
+		StreamKey: "sk-foreign", ClusterId: "media-eu", ClaimToken: "connection-B",
+	})
+	if err != nil {
+		t.Fatalf("validate: %v", err)
+	}
+	if resp.GetValid() || resp.GetRejectionReason() != commodorepb.StreamKeyRejectionReason_STREAM_KEY_REJECTION_DUPLICATE_INGEST {
+		t.Fatalf("valid=%v reason=%v, want a DUPLICATE_INGEST refusal", resp.GetValid(), resp.GetRejectionReason())
+	}
+	if resp.GetHeldClaimToken() != "" {
+		t.Fatalf("another cluster's claim owner was disclosed: %q", resp.GetHeldClaimToken())
 	}
 }
 

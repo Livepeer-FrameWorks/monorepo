@@ -486,6 +486,11 @@ message ValidateStreamKeyResponse {
   // this for structured logging and metrics labels; the `error` field
   // remains the human-readable detail.
   StreamKeyRejectionReason rejection_reason = 30;
+  // Set only on a DUPLICATE_INGEST rejection whose live claim is held in the requesting cluster:
+  // the claim_token that owns it. A caller whose own records show that token's session ended may
+  // release exactly that token (SyncActiveIngestPlacement release, owner-fenced) and ask again. It
+  // is never set for a claim held by another cluster.
+  string held_claim_token = 37;
 
   // ===== BILLING MODEL & SUSPENSION =====
   // billing_model: "postpaid" (default) or "prepaid"

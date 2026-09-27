@@ -47,6 +47,17 @@ WHERE tenant_id = sqlc.arg(tenant_id)::text::uuid
   AND start_trigger_uuid = sqlc.arg(claim_token) AND ended_at IS NULL
 RETURNING id::text AS session_id, node_id, COALESCE(stream_id::text, '')::text AS stream_id;
 
+-- name: IngestClaimOwnerEnded :one
+SELECT COALESCE(
+         bool_or(ingest_cluster_id = sqlc.arg(ingest_cluster_id)::text AND ended_at IS NOT NULL)
+           AND NOT bool_or(ended_at IS NULL),
+         false
+       )::boolean AS ended
+FROM foghorn.ingest_sessions
+WHERE tenant_id = sqlc.arg(tenant_id)::text::uuid
+  AND stream_internal_name = sqlc.arg(stream_internal_name)
+  AND start_trigger_uuid = sqlc.arg(claim_token);
+
 -- name: ListNeverProjectedIngestSessions :many
 SELECT id::text AS session_id, tenant_id::text AS tenant_id, stream_internal_name,
        start_trigger_uuid

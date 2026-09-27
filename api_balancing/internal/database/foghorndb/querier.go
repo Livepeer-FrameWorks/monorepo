@@ -337,6 +337,7 @@ type Querier interface {
 	HasActiveStreamIngestSession(ctx context.Context, arg HasActiveStreamIngestSessionParams) (bool, error)
 	HasMediaAuthorityConfirmationRequired(ctx context.Context, asOf time.Time) (bool, error)
 	HealLostDVRSegment(ctx context.Context, arg HealLostDVRSegmentParams) error
+	IngestClaimOwnerEnded(ctx context.Context, arg IngestClaimOwnerEndedParams) (bool, error)
 	IngestCloseTombstoneExists(ctx context.Context, arg IngestCloseTombstoneExistsParams) (bool, error)
 	IngestGenerationEnded(ctx context.Context, arg IngestGenerationEndedParams) (bool, error)
 	IngestRegistrationCutoff(ctx context.Context) (time.Time, error)

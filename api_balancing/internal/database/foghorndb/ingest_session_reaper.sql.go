@@ -34,6 +34,37 @@ func (q *Queries) EndSupersededNodeIngestSession(ctx context.Context, arg EndSup
 	return session_id, err
 }
 
+const ingestClaimOwnerEnded = `-- name: IngestClaimOwnerEnded :one
+SELECT COALESCE(
+         bool_or(ingest_cluster_id = $1::text AND ended_at IS NOT NULL)
+           AND NOT bool_or(ended_at IS NULL),
+         false
+       )::boolean AS ended
+FROM foghorn.ingest_sessions
+WHERE tenant_id = $2::text::uuid
+  AND stream_internal_name = $3
+  AND start_trigger_uuid = $4
+`
+
+type IngestClaimOwnerEndedParams struct {
+	IngestClusterID    string `db:"ingest_cluster_id" json:"ingest_cluster_id"`
+	TenantID           string `db:"tenant_id" json:"tenant_id"`
+	StreamInternalName string `db:"stream_internal_name" json:"stream_internal_name"`
+	ClaimToken         string `db:"claim_token" json:"claim_token"`
+}
+
+func (q *Queries) IngestClaimOwnerEnded(ctx context.Context, arg IngestClaimOwnerEndedParams) (bool, error) {
+	row := q.db.QueryRowContext(ctx, ingestClaimOwnerEnded,
+		arg.IngestClusterID,
+		arg.TenantID,
+		arg.StreamInternalName,
+		arg.ClaimToken,
+	)
+	var ended bool
+	err := row.Scan(&ended)
+	return ended, err
+}
+
 const ingestRegistrationCutoff = `-- name: IngestRegistrationCutoff :one
 SELECT NOW()::timestamptz AS cutoff
 `

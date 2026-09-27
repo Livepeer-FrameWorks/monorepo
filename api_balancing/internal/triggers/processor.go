@@ -1781,7 +1781,8 @@ func (p *Processor) handlePushRewrite(trigger *ipcpb.MistTrigger) (_ string, _ b
 	var streamValidation *commodorepb.ValidateStreamKeyResponse
 	usedLocalAdmission := usedLocalIdentity
 	if !usedLocalIdentity && p.commodoreClient != nil {
-		streamValidation, err = p.commodoreClient.ValidateStreamKeyForClaim(admissionCtx, pushRewrite.GetStreamName(), ingestClusterID, claimToken)
+		streamValidation, err = control.ClaimIngestPlacement(admissionCtx, p.commodoreClient, pushRewrite.GetStreamName(),
+			identity.GetTenantId(), identity.GetInternalName(), ingestClusterID, claimToken, p.logger)
 	}
 	if err != nil || streamValidation == nil {
 		if localValidation == nil || !localValidation.GetValid() {

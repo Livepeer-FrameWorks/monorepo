@@ -1169,6 +1169,11 @@ type ValidateStreamKeyResponse struct {
 	// this for structured logging and metrics labels; the `error` field
 	// remains the human-readable detail.
 	RejectionReason StreamKeyRejectionReason `protobuf:"varint,30,opt,name=rejection_reason,json=rejectionReason,proto3,enum=commodore.StreamKeyRejectionReason" json:"rejection_reason,omitempty"`
+	// Set only on a DUPLICATE_INGEST rejection whose live claim is held in the requesting cluster:
+	// the claim_token that owns it. A caller whose own records show that token's session ended may
+	// release exactly that token (SyncActiveIngestPlacement release, owner-fenced) and ask again. It
+	// is never set for a claim held by another cluster.
+	HeldClaimToken string `protobuf:"bytes,37,opt,name=held_claim_token,json=heldClaimToken,proto3" json:"held_claim_token,omitempty"`
 	// ===== BILLING MODEL & SUSPENSION =====
 	// billing_model: "postpaid" (default) or "prepaid"
 	// Used by Foghorn to determine cache TTL (1 min for prepaid, 10 min for postpaid)
@@ -1319,6 +1324,13 @@ func (x *ValidateStreamKeyResponse) GetRejectionReason() StreamKeyRejectionReaso
 		return x.RejectionReason
 	}
 	return StreamKeyRejectionReason_STREAM_KEY_REJECTION_UNSPECIFIED
+}
+
+func (x *ValidateStreamKeyResponse) GetHeldClaimToken() string {
+	if x != nil {
+		return x.HeldClaimToken
+	}
+	return ""
 }
 
 func (x *ValidateStreamKeyResponse) GetBillingModel() string {
@@ -14851,8 +14863,7 @@ const file_commodore_proto_rawDesc = "" +
 	"\n" +
 	"cluster_id\x18\x02 \x01(\tR\tclusterId\x12\x1f\n" +
 	"\vclaim_token\x18\x03 \x01(\tR\n" +
-	"claimToken\"\xf0\n" +
-	"\n" +
+	"claimToken\"\x9a\v\n" +
 	"\x19ValidateStreamKeyResponse\x12\x14\n" +
 	"\x05valid\x18\x01 \x01(\bR\x05valid\x12%\n" +
 	"\x0eclaim_acquired\x18  \x01(\bR\rclaimAcquired\x12\x17\n" +
@@ -14862,7 +14873,8 @@ const file_commodore_proto_rawDesc = "" +
 	"\x05error\x18\x05 \x01(\tR\x05error\x120\n" +
 	"\x14is_recording_enabled\x18\x06 \x01(\bR\x12isRecordingEnabled\x12\x1b\n" +
 	"\tstream_id\x18\a \x01(\tR\bstreamId\x12N\n" +
-	"\x10rejection_reason\x18\x1e \x01(\x0e2#.commodore.StreamKeyRejectionReasonR\x0frejectionReason\x12#\n" +
+	"\x10rejection_reason\x18\x1e \x01(\x0e2#.commodore.StreamKeyRejectionReasonR\x0frejectionReason\x12(\n" +
+	"\x10held_claim_token\x18% \x01(\tR\x0eheldClaimToken\x12#\n" +
 	"\rbilling_model\x18\b \x01(\tR\fbillingModel\x12!\n" +
 	"\fis_suspended\x18\t \x01(\bR\visSuspended\x12.\n" +
 	"\x13is_balance_negative\x18\n" +
