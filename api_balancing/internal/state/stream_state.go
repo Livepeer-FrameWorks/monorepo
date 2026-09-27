@@ -1424,9 +1424,12 @@ func (sm *StreamStateManager) SetOfflineContext(ctx context.Context, internalNam
 	union.Playable = sm.anyPlayableInstanceLocked(internalName)
 	union.LastUpdate = now
 	sm.deriveUnionStatsLocked(internalName, union)
-	streamPayload, _ := json.Marshal(union)
-	instPayload, _ := json.Marshal(inst)
+	streamPayload, streamMarshalErr := json.Marshal(union)
+	instPayload, instMarshalErr := json.Marshal(inst)
 	sm.mu.Unlock()
+	if marshalErr := errors.Join(streamMarshalErr, instMarshalErr); marshalErr != nil {
+		return marshalErr
+	}
 
 	streamErr := sm.persistStreamWriteThroughContext(ctx, internalName, streamPayload)
 	instanceErr := sm.persistStreamInstanceWriteThroughContext(ctx, internalName, nodeID, instPayload)
