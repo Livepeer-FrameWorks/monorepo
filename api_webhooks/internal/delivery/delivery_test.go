@@ -54,7 +54,7 @@ func TestRenderIsTheProtoJSONEnvelope(t *testing.T) {
 			t.Fatalf("body %s lacks %q", first, key)
 		}
 	}
-	if string(body["created_at"]) != `"2026-09-19T10:00:00.000123Z"` || string(body["type"]) != `"clip.ready"` || string(body["api_version"]) != `"v1"` {
+	if string(body["created_at"]) != `"2026-09-19T10:00:00.000123000Z"` || string(body["type"]) != `"clip.ready"` || string(body["api_version"]) != `"v1"` {
 		t.Fatalf("envelope = %s", first)
 	}
 	var data map[string]any
@@ -169,7 +169,33 @@ func TestRenderTest(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if string(body) != `{"id":"d1","type":"webhook.test","api_version":"v1","created_at":"1970-01-01T00:00:00Z","data":{"endpointId":"ep1"}}` {
+	if string(body) != `{"id":"d1","type":"webhook.test","api_version":"v1","created_at":"1970-01-01T00:00:00.000000000Z","data":{"endpointId":"ep1"}}` {
 		t.Fatalf("test body = %s", body)
+	}
+}
+
+// created_at has one width, so events created later never sort before
+// earlier ones because their fraction ended in zeros.
+func TestRenderedCreatedAtHasFixedWidth(t *testing.T) {
+	base := time.Date(2026, 9, 27, 16, 20, 51, 0, time.UTC)
+	var previous string
+	for _, at := range []time.Time{base.Add(900 * time.Millisecond), base.Add(910 * time.Millisecond), base.Add(910*time.Millisecond + 1)} {
+		rendered, err := RenderTest("d", "ep", "v1", at)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var body struct {
+			CreatedAt string `json:"created_at"`
+		}
+		if err := json.Unmarshal(rendered, &body); err != nil {
+			t.Fatal(err)
+		}
+		if len(body.CreatedAt) != len("2026-09-27T16:20:51.000000000Z") {
+			t.Fatalf("created_at %q is not fixed width", body.CreatedAt)
+		}
+		if previous != "" && body.CreatedAt <= previous {
+			t.Fatalf("created_at %q sorts before the earlier %q", body.CreatedAt, previous)
+		}
+		previous = body.CreatedAt
 	}
 }

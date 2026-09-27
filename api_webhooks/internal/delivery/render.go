@@ -74,6 +74,10 @@ func RenderTest(deliveryID, endpointID, apiVersion string, at time.Time) ([]byte
 	return marshalBody(deliveryID, ledger.TestEventType, apiVersion, at, data)
 }
 
+// createdAtLayout renders every created_at with nine fractional digits.
+// RFC3339Nano drops trailing zeros, which gives timestamps different widths.
+const createdAtLayout = "2006-01-02T15:04:05.000000000Z07:00"
+
 func marshalBody(id, eventType, apiVersion string, at time.Time, data []byte) ([]byte, error) {
 	// protojson deliberately varies its whitespace; json.Marshal compacts a
 	// RawMessage, so the body bytes do not depend on it.
@@ -81,7 +85,7 @@ func marshalBody(id, eventType, apiVersion string, at time.Time, data []byte) ([
 		ID:         id,
 		Type:       eventType,
 		APIVersion: apiVersion,
-		CreatedAt:  at.UTC().Format(time.RFC3339Nano),
+		CreatedAt:  at.UTC().Format(createdAtLayout),
 		Data:       json.RawMessage(data),
 	})
 }
