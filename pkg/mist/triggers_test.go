@@ -10,6 +10,29 @@ import (
 	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
 )
 
+// Every field Mist joins with newlines survives parsing, including an empty
+// last one, and a newline-terminated payload keeps its fields.
+func TestTriggerPayloadsKeepEmptyTrailingFields(t *testing.T) {
+	logger := logging.NewLogger()
+	pushEnd, err := ParseTriggerToProtobuf(TriggerPushEnd, []byte("7\nlive+s\nsrc\ndst\n[]\n"), "node-1", logger)
+	if err != nil {
+		t.Fatalf("PUSH_END with an empty push status refused: %v", err)
+	}
+	if got := pushEnd.GetPushEnd(); got.GetPushId() != 7 || got.GetLogMessages() != "[]" || got.GetPushStatus() != "" {
+		t.Fatalf("PUSH_END = %+v", got)
+	}
+	userNew, err := ParseTriggerToProtobuf(TriggerUserNew, []byte("live+s\n203.0.113.1\ntkn\nHLS\nhttp://e/x.m3u8\nsess\n\n\n\n"), "node-1", logger)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if v := userNew.GetViewerConnect(); v.Origin == nil || v.GetOrigin() != "" || v.Referer == nil {
+		t.Fatalf("USER_NEW without request headers lost its origin fields: %+v", v)
+	}
+	if got := TriggerFields([]byte("a\r\nb\r\n")); len(got) != 3 || got[0] != "a" || got[1] != "b" || got[2] != "" {
+		t.Fatalf("TriggerFields = %q", got)
+	}
+}
+
 func TestStreamBufferPreservesEmitterPID(t *testing.T) {
 	for _, pid := range []string{"123", "", "0", "-1", "bad", "9223372036854775808"} {
 		t.Run(pid, func(t *testing.T) {

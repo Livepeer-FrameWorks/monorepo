@@ -188,12 +188,14 @@ func ParseTriggerToProtobuf(triggerType TriggerType, rawPayload []byte, nodeID s
 // the viewer's Origin and Referer (lines 8 and 9).
 const userNewOriginFields = 9
 
-// payloadLines splits a trigger payload into its lines, keeping empty ones.
-// Only the line terminator of the last line is dropped.
-func payloadLines(rawPayload []byte) []string {
+// TriggerFields splits a trigger payload into its newline-separated fields,
+// keeping empty ones. Mist joins fields with newlines, so a payload ending in
+// a newline has an empty last field (PUSH_END with no push status); trimming
+// the payload would drop that field and the trigger would look truncated.
+// Triggers Mist terminates with a newline (USER_NEW) get one extra empty field.
+func TriggerFields(rawPayload []byte) []string {
 	payload := strings.ReplaceAll(string(rawPayload), "\r\n", "\n")
 	payload = strings.ReplaceAll(payload, "\r", "\n")
-	payload = strings.TrimSuffix(payload, "\n")
 	if payload == "" {
 		return nil
 	}
@@ -202,15 +204,7 @@ func payloadLines(rawPayload []byte) []string {
 
 // ParseTriggerToProtobufWithHeaders parses a trigger and captures Mist's retry-stable identity headers.
 func ParseTriggerToProtobufWithHeaders(triggerType TriggerType, rawPayload []byte, headers http.Header, nodeID string, logger logging.Logger) (*ipcpb.MistTrigger, error) {
-	// Parse parameters from newline-separated format
-	// Handle both \n and \r\n line endings
-	payloadStr := strings.TrimSpace(string(rawPayload))
-	payloadStr = strings.ReplaceAll(payloadStr, "\r\n", "\n")
-	payloadStr = strings.ReplaceAll(payloadStr, "\r", "\n")
-	params := []string{}
-	if payloadStr != "" {
-		params = strings.Split(payloadStr, "\n")
-	}
+	params := TriggerFields(rawPayload)
 
 	mistTrigger := &ipcpb.MistTrigger{
 		TriggerType: string(triggerType),
@@ -364,12 +358,9 @@ func ParseTriggerToProtobufWithHeaders(triggerType TriggerType, rawPayload []byt
 			SessionId:   params[5],
 		}
 		// Lines 8 and 9 are the viewer request's Origin and Referer. Mist always
-		// writes both, often empty, and terminates the payload with a newline,
-		// so they are read from the untrimmed payload: trimming would drop empty
-		// trailing lines and make an observed request without headers look like
-		// a Mist build that does not report them.
-		if lines := payloadLines(rawPayload); len(lines) >= userNewOriginFields {
-			origin, referer := lines[7], lines[8]
+		// writes both, often empty, so a request without headers still has them.
+		if len(params) >= userNewOriginFields {
+			origin, referer := params[7], params[8]
 			viewer.Origin, viewer.Referer = &origin, &referer
 		}
 		mistTrigger.TriggerPayload = &ipcpb.MistTrigger_ViewerConnect{ViewerConnect: viewer}
@@ -571,6 +562,10 @@ func ParseTriggerToProtobufWithHeaders(triggerType TriggerType, rawPayload []byt
 			trigger.ExitReason = &exitReason
 		}
 		humanParts := params[11:]
+		// Mist terminates this payload with a newline after the summary.
+		if last := len(humanParts) - 1; last > 0 && humanParts[last] == "" {
+			humanParts = humanParts[:last]
+		}
 		summaryJSON := strings.TrimSpace(humanParts[len(humanParts)-1])
 		if !strings.HasPrefix(summaryJSON, "{") {
 			return nil, fmt.Errorf("RECORDING_END missing final track summary JSON")

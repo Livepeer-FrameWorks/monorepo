@@ -2472,8 +2472,8 @@ func HandleLivepeerSegmentComplete(c *gin.Context) {
 		return
 	}
 
-	payloadStr := strings.TrimSpace(string(body))
-	params := strings.Split(payloadStr, "\n")
+	payloadStr := string(body)
+	params := mist.TriggerFields(body)
 	if len(params) < 15 {
 		parseErr := fmt.Errorf("LIVEPEER_SEGMENT_COMPLETE incomplete payload: got %d fields, want at least 15", len(params))
 		incMistWebhook("LIVEPEER_SEGMENT_COMPLETE", "parse_error")
@@ -2616,8 +2616,8 @@ func HandleProcessAVSegmentComplete(c *gin.Context) {
 		return
 	}
 
-	payloadStr := strings.TrimSpace(string(body))
-	params := strings.Split(payloadStr, "\n")
+	payloadStr := string(body)
+	params := mist.TriggerFields(body)
 	if len(params) < 31 {
 		parseErr := fmt.Errorf("PROCESS_AV_VIRTUAL_SEGMENT_COMPLETE incomplete payload: got %d fields, want at least 31", len(params))
 		incMistWebhook("PROCESS_AV_VIRTUAL_SEGMENT_COMPLETE", "parse_error")
@@ -2932,8 +2932,8 @@ func HandleThumbnailUpdated(c *gin.Context) {
 		return
 	}
 
-	payloadStr := strings.TrimSpace(string(body))
-	lines := strings.Split(payloadStr, "\n")
+	payloadStr := string(body)
+	lines := mist.TriggerFields(body)
 	if len(lines) < 2 {
 		incMistWebhook("THUMBNAIL_UPDATED", "parse_error")
 		logger.WithField("payload", payloadStr).Warn("THUMBNAIL_UPDATED incomplete payload")
@@ -2947,6 +2947,12 @@ func HandleThumbnailUpdated(c *gin.Context) {
 		if p := strings.TrimSpace(line); p != "" {
 			filePaths = append(filePaths, p)
 		}
+	}
+	if len(filePaths) == 0 {
+		incMistWebhook("THUMBNAIL_UPDATED", "parse_error")
+		logger.WithField("payload", payloadStr).Warn("THUMBNAIL_UPDATED names no thumbnail file")
+		c.String(http.StatusOK, "OK")
+		return
 	}
 
 	logger.WithFields(logging.Fields{

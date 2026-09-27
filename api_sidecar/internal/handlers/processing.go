@@ -3157,7 +3157,7 @@ func RouteLivepeerSegmentComplete(evt LivepeerSegmentCompleteEvent) {
 // ParseProcessExitTrigger parses the newline-separated PROCESS_EXIT trigger payload.
 // Format: stream_name\nprocess_type\nconfig_json\npid\nexit_code\nboot_count\nstatus\nshort_reason\nlong_reason
 func ParseProcessExitTrigger(body []byte) (ProcessExitEvent, error) {
-	lines := strings.Split(strings.TrimSpace(string(body)), "\n")
+	lines := mist.TriggerFields(body)
 	if len(lines) < 7 {
 		return ProcessExitEvent{}, fmt.Errorf("PROCESS_EXIT payload too short: %d lines", len(lines))
 	}

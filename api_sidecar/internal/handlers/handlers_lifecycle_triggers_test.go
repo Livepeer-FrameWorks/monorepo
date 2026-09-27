@@ -238,6 +238,29 @@ func TestPushEndParseFailureDoesNotPersistRawPayload(t *testing.T) {
 	}
 }
 
+// Mist joins PUSH_END's six fields with newlines, so a push that ended with
+// no status sends a payload ending in a newline. That is a complete PUSH_END.
+func TestPushEndWithEmptyLastFieldIsForwarded(t *testing.T) {
+	setupTriggerTest(t, "tenant-life")
+
+	var got *ipcpb.MistTrigger
+	stubSendMistTrigger(t, func(trigger *ipcpb.MistTrigger) (*control.MistTriggerResult, error) {
+		got = trigger
+		return &control.MistTriggerResult{}, nil
+	})
+
+	ctx, rec := newWebhookContext("7\nlive+stream-1\ndtsc://edge/dvr+abc\ndtsc://edge/dvr+abc\n[\"push started\"]\n")
+	HandlePushEnd(ctx)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 for a complete PUSH_END", rec.Code)
+	}
+	pushEnd := got.GetPushEnd()
+	if pushEnd == nil || pushEnd.GetPushId() != 7 || pushEnd.GetStreamName() != "live+stream-1" || pushEnd.GetLogMessages() != "[\"push started\"]" || pushEnd.GetPushStatus() != "" {
+		t.Fatalf("forwarded PUSH_END = %+v", pushEnd)
+	}
+}
+
 func TestHandleStreamBufferFireAndForget(t *testing.T) {
 	setupTriggerTest(t, "tenant-life")
 
