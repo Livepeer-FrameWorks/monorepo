@@ -141,6 +141,9 @@ func NewTriggerWAL(dir string) (*TriggerWAL, error) {
 			w.indexRuntimeLocked(id, IngestRuntimeOrderKey(trigger))
 		}
 	}
+	if err := w.sealLeftoverStaged(); err != nil {
+		return nil, err
+	}
 	return w, nil
 }
 

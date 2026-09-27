@@ -52,6 +52,7 @@ func initTriggerForwarder(logger logging.Logger) {
 		triggerWAL = wal
 		triggerForwarderStarted.Store(true)
 		go triggerForwarderLoop(logger)
+		go processBillingSweepLoop(wal)
 	})
 }
 

@@ -72,7 +72,7 @@ Mist sends `sync:false` triggers and returns after writing the request body. It 
 | `RECORDING_END`                       | Final recording facts         | Durable Helmsman WAL                                                                                                  |
 | `RECORDING_SEGMENT`                   | Final recording-segment facts | Durable Helmsman WAL                                                                                                  |
 | `LIVEPEER_SEGMENT_COMPLETE`           | Livepeer processing usage     | Durable Helmsman WAL                                                                                                  |
-| `PROCESS_AV_VIRTUAL_SEGMENT_COMPLETE` | AV processing usage           | Durable Helmsman WAL                                                                                                  |
+| `PROCESS_AV_VIRTUAL_SEGMENT_COMPLETE` | AV processing usage           | Durable Helmsman WAL, one event per process output per 10 s window                                                    |
 | `STREAM_BUFFER`                       | Stream health/state           | Best effort                                                                                                           |
 | `LIVE_TRACK_LIST`                     | Track inventory               | Best effort                                                                                                           |
 | `THUMBNAIL_UPDATED`                   | Thumbnail update              | Best effort                                                                                                           |

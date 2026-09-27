@@ -2778,10 +2778,9 @@ func HandleProcessAVSegmentComplete(c *gin.Context) {
 		IsFinal:             boolPtr(isFinalBool),
 	}
 
-	// Build canonical MistTrigger so Foghorn's durable-ack dispatch matches
-	// on trigger_type = PROCESS_AV_VIRTUAL_SEGMENT_COMPLETE. forwardDurable
-	// stamps the stable source_event_id on RequestId; the raw body is the
-	// source hash input.
+	// The sample joins its process output's current billing window; the window, not the sample,
+	// is the durable event Foghorn acknowledges. X-PID is the MistProcAV process that fired the
+	// trigger, so two processes never share a window even when their payloads are identical.
 	billingTrigger := &ipcpb.MistTrigger{
 		TriggerType: string(mist.TriggerProcessAVSegmentComplete),
 		NodeId:      control.GetCurrentNodeID(),
@@ -2792,7 +2791,11 @@ func HandleProcessAVSegmentComplete(c *gin.Context) {
 		},
 	}
 	applyTenantContext(billingTrigger)
-	sourceEventID, err := forwardDurable(string(mist.TriggerProcessAVSegmentComplete), body, billingTrigger)
+	processKey := strings.Join([]string{
+		strings.TrimSpace(c.GetHeader("X-PID")), streamName, trackType, inputCodec, outputCodec,
+		outputWidth + "x" + outputHeight,
+	}, "\x00")
+	sourceEventID, err := control.RecordProcessBillingSample(processKey, billingTrigger)
 	if err != nil {
 		respondDurableEnqueueError(c, logger, "PROCESS_AV_VIRTUAL_SEGMENT_COMPLETE", sourceEventID, err)
 		return

@@ -103,6 +103,35 @@ The id is stamped onto `MistTrigger.RequestId`; Foghorn uses it to address the a
 
 The preferred natural key is Mist's retry-stable `X-Trigger-UUID` plus `X-Trigger-UnixMillis`, captured for both typed and parse-failure records. This collapses transport retries while keeping two distinct events with identical bodies separate. Legacy requests without those headers fall back to the body-derived key. The WAL is `append-only with idempotent natural key`, not a journal of delivery attempts.
 
+### Transcode billing windows
+
+MistProcAV fires `PROCESS_AV_VIRTUAL_SEGMENT_COMPLETE` once per process about
+every second. Helmsman does not journal each sample as its own event. It folds
+the samples of one process output into one event per 10-second wall-clock
+window (`api_sidecar/internal/control/process_billing_window.go`):
+
+- The process output is identified by Mist's `X-PID` header plus the sink
+  stream, track type, codecs and output resolution, so two processes never
+  share a window even when their payloads are byte-identical.
+- Durations, source/sink media advance, frame deltas and byte deltas are
+  summed; cumulative counters, dimensions and timestamps take the latest
+  sample; real-time factors, fps and bitrate are recomputed over the window.
+  Periscope bills `source_advanced_ms`, so the window bills exactly what its
+  samples would have.
+- Each sample rewrites the window's running total in `<wal>/staging/` with the
+  same write-fsync-rename sequence as an append before Helmsman answers, so no
+  accepted sample depends on memory. The forwarder cannot see a staged window.
+  It is sealed into the sample lane when the window ends or the process reports
+  its final sample (`is_final`); a restart seals every staged window it finds.
+- The window's `source_event_id` is
+  `ComputeSourceEventID(node_id, trigger_type, process_key, boot_id:window_start_ms)`.
+  The boot id keeps a window opened after a restart from reusing the id of one
+  already delivered, which downstream deduplication would otherwise drop.
+
+`LIVEPEER_SEGMENT_COMPLETE` stays one event per segment: each event is a
+transcoded segment whose segment number, Livepeer session and per-segment
+`renditions_json` are billing and audit dimensions that a sum cannot carry.
+
 For push-target status ordering, an absent `X-Trigger-UnixMillis` is also kept
 as unknown. Known event times reject older observations and rank a terminal
 status above `pushing` at an equal timestamp; unknown-time observations use
@@ -205,12 +234,11 @@ Foghorn maps processor errors via `classifyTriggerError` (`api_balancing/interna
 - **api_sidecar crashes between Mist's 200 OK and the next forwarder tick.** WAL is fsynced before the response, so the trigger survives. On restart, the forwarder resumes from the oldest entry. Same `source_event_id` → idempotent across crashes.
 - **api_balancing crashes during processing.** The control connection ends, which ends Helmsman's ack wait at once; the reconnected stream re-sends (a Foghorn that stays connected but never answers is covered by the 30s ack timeout). Foghorn re-enriches and re-publishes; downstream dedup on `EventId`.
 - **Decklog returns Kafka publish error.** Processor returns the error, Foghorn sends a negative retryable ack. WAL entry stays; next tick retries. This includes the raw trigger journal publish. If the underlying Kafka cluster is unavailable for hours, the WAL accumulates — operators see the pending-depth metric and can intervene.
-- **An always-on multi-rendition processing stream creates many rows.**
-  `PROCESS_AV_VIRTUAL_SEGMENT_COMPLETE` is one billable rendition completion,
-  not one event per input stream. Five renditions at a five-second segment
-  interval produce about 3,600 durable facts per hour. That cardinality is
-  expected; a growing age/depth after downstream recovery is not. Replay and
-  inspection are bounded so expected cardinality cannot wedge recovery.
+- **An always-on multi-rendition processing stream.** Each rendition is its
+  own MistProcAV process, so four renditions produce four samples a second and
+  1,440 billing windows an hour. A growing age/depth after downstream recovery
+  is not expected. Replay and inspection are bounded so expected cardinality
+  cannot wedge recovery.
 - **WAL append fails.** Helmsman returns `503` for accurate diagnostics and emits `mist_webhook_requests_total{status="wal_error"}`. Mist does not read asynchronous trigger responses, so this status does not cause Mist to retry. The event was not accepted into the durable boundary.
 - **Helmsman parse/schema error after reading the body.** The raw body is wrapped in `RawMistWebhookTrigger` and durably journaled before `200 OK`, so MistServer parser drift cannot silently drop an accounting trigger. The raw envelope is operator-visible in `raw_mist_triggers`; typed final-fact projection simply skips it until the parser is fixed and the raw record is replayed.
 - **Downstream non-retryable error (schema/tenant).** The WAL entry is moved to a `.dead` file for inspection and is not retried. Re-sending the same payload would fail the same way. Operator inspects by reading the WAL directory.
