@@ -4560,13 +4560,7 @@ func (p *Processor) handleStreamBuffer(trigger *ipcpb.MistTrigger) (string, bool
 	// session's own node. STREAM_BUFFER is best-effort, so a failed write loses this session's
 	// stream.live rather than blocking the trigger.
 	if state.NativeBufferStatePlayable(streamBuffer.GetBufferState()) {
-		liveCtx, cancelLive := context.WithTimeout(context.Background(), 3*time.Second)
-		if _, liveErr := control.MarkIngestSessionPlayable(liveCtx, info.TenantID, trigger.GetNodeId(), internalName, trigger.GetTriggerUnixMillis()); liveErr != nil {
-			p.logger.WithError(liveErr).WithFields(logging.Fields{
-				"internal_name": internalName, "node_id": trigger.GetNodeId(),
-			}).Warn("Failed to record the ingest session's first playable buffer")
-		}
-		cancelLive()
+		p.markIngestSessionPlayable(info.TenantID, trigger.GetNodeId(), internalName, trigger.GetTriggerUnixMillis())
 	}
 
 	// Forward original StreamBufferTrigger to Decklog (preserves all track data and health metrics)
@@ -5540,8 +5534,28 @@ func (p *Processor) handleStreamLifecycleUpdate(trigger *ipcpb.MistTrigger) (str
 		if state.DefaultManager().ObserveStreamPlayabilityLevel(internal, nodeID, slu.GetBufferPlayable(), slu.GetBufferSampledUnixMillis()) {
 			p.logger.WithFields(logging.Fields{"internal_name": internal, "node_id": nodeID, "buffer_playable": slu.GetBufferPlayable()}).Debug("Applied buffer playability level from periodic report")
 		}
+		// Mist fires STREAM_BUFFER FULL once per buffer process, so a
+		// publisher that reconnects into a buffer that is still FULL gets no
+		// edge. A playable buffer fed by a connected input, sampled after the
+		// session started, is the new session's first playable buffer.
+		if slu.GetBufferPlayable() && slu.GetTotalInputs() > 0 && !slu.GetReplicated() && !suppressUnverifiedForward {
+			p.markIngestSessionPlayable(info.TenantID, nodeID, internal, slu.GetBufferSampledUnixMillis())
+		}
 	}
 	return "", false, nil
+}
+
+// markIngestSessionPlayable records the first playable buffer of the node's
+// active ingest session; a failed write loses that session's stream.live
+// rather than blocking the trigger.
+func (p *Processor) markIngestSessionPlayable(tenantID, nodeID, internalName string, eventMillis int64) {
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	if _, err := control.MarkIngestSessionPlayable(ctx, tenantID, nodeID, internalName, eventMillis); err != nil {
+		p.logger.WithError(err).WithFields(logging.Fields{
+			"internal_name": internalName, "node_id": nodeID,
+		}).Warn("Failed to record the ingest session's first playable buffer")
+	}
 }
 
 // offlineIsStreamWide types an offline edge (STREAM_END or a vanish-diff
