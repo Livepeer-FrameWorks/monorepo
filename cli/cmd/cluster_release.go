@@ -30,8 +30,8 @@ func newClusterReleaseCmd() *cobra.Command {
 		Short: "Apply a cluster release as one ordered, resumable plan",
 		Long: `Run a full cluster release as a single ordered plan:
 
-  pre-upgrade host convergence (Privateer seeds, declared Kafka topics,
-    MirrorMaker2 workers; unchanged hosts skipped)
+  pre-upgrade host convergence (Privateer seeds, Redis servers and Sentinels,
+    declared Kafka topics, MirrorMaker2 workers; unchanged hosts skipped)
   → service databases and expand migrations
   → service upgrades in dependency order
   → reconciliation transitions interleaved at their declared points
@@ -378,7 +378,7 @@ func runReleaseApply(cmd *cobra.Command, rc *resolvedCluster, opts releaseApplyO
 
 	ux.Subheading(out, "[1/4] Pre-upgrade host convergence")
 	if len(hostSteps) == 0 {
-		fmt.Fprintln(out, "  no mesh, Kafka topic, or MirrorMaker2 hosts in this manifest")
+		fmt.Fprintln(out, "  no mesh, Redis, Kafka topic, or MirrorMaker2 hosts in this manifest")
 	} else {
 		if convergeErr := hostConvergence.run(cmd.Context(), hostSteps, opts.dryRun); convergeErr != nil {
 			writeReleaseHostConvergenceResumeHint(cmd.ErrOrStderr(), platformVersion, opts.dryRun)

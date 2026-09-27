@@ -77,7 +77,12 @@ an edge; otherwise OTHER. It takes the most critical tier of anything it runs,
 and an unclassified service is CONTROL. Privateer convergence runs a CONTROL
 canary alone, the other CONTROL hosts one at a time, MEDIA hosts one per cell
 (`hosts.<name>.cluster`) with cells in parallel, then OTHER hosts eight at a
-time, and gates each wave on mesh health for its hosts. A service upgrade keeps
+time, and gates each wave on mesh health for its hosts. Redis convergence
+(`cli/cmd/cluster_release_redis_convergence.go`) follows Privateer: each
+Sentinel-mode instance converges one host at a time, with every server except
+the live primary first (each gated on a synced replication link), then each
+Sentinel (gated on `SENTINEL CKQUORUM`), then the live primary, which a
+Sentinel failover demotes first when its role check reports a change. A service upgrade keeps
 the dependency order across services and rolls one service's replicas by the
 deploy's tier: CONTROL one at a time with the first as canary, MEDIA one per
 cell with cells in parallel, OTHER together. The effective `MaxUnavailable`

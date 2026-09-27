@@ -9929,7 +9929,7 @@ A page of DVR chapter refs. Paginated for unbounded artifact lifetime: default p
 - **syncStatus**: `String` — Current S3 sync state (pending, in_progress, synced, failed, lost_local).
 - **hasLocalCopy**: `Boolean` — Present full local node copy (origin or cache): true when at least one node holds a complete local copy, false when none remain (playback via read-through relay from S3). Null when the placement overlay (Periscope) is unavailable — unknown, not &#39;no local copy&#39;. Durable S3-only state is derived by consumers as isSynced &amp;&amp; hasLocalCopy == false.
 - **isSynced**: `Boolean` — True when S3 has an authoritative copy.
-- **isFinalized**: `Boolean` — True when the S3 copy includes the Mist .dtsh index.
+- **isFinalized**: `Boolean` — Always null for a recording: its replay index is stored per chapter, so read isFinalized on each chapter&#39;s VOD asset.
 - **frozenAt**: `Time` ([Time](/builders/api-schema/shared/#time))
 - **s3Url**: `String`
 - **thumbnailAssets**: `ThumbnailAssets` ([ThumbnailAssets](/builders/api-schema/shared/#thumbnailassets)) — Server-resolved Chandler URLs for the DVR&#39;s poster and sprite thumbnails. Null until Foghorn confirms the thumbnail upload.
@@ -28995,7 +28995,8 @@ frameworks cluster upgrade --all --yes
 ### frameworks cluster release
 
 Run a full cluster release as one ordered, resumable plan: pre-upgrade host convergence
-(Privateer seeds, declared Kafka topics, MirrorMaker2 workers) → expand migrations → service
+(Privateer seeds, Redis servers and Sentinels, declared Kafka topics, MirrorMaker2 workers) →
+expand migrations → service
 upgrades in dependency order → reconciliation transitions interleaved at their declared
 dependency points → stale placement cleanup → postdeploy migrations. Contract migrations are printed as a deferred
 operator step and run only after the rollback window closes. This is the **normal** upgrade path;
@@ -32112,7 +32113,7 @@ services:
 - `cluster` (optional) - Explicit cluster assignment. Must reference a key in `clusters`. When omitted, the service's role determines its cluster automatically
 - `clusters` (optional) - List form of `cluster` for cluster-scoped media services that serve several clusters. Cannot be combined with `cluster`. Foghorn and Chandler deployments must declare exactly one cluster; use one service entry per cell
 - `host` (optional) - Single host
-- `hosts` (optional) - Multiple hosts for replicas. The CLI creates one task per host (e.g., `bridge@regional-eu-1`)
+- `hosts` (optional) - Multiple hosts for replicas. The CLI creates one task per host (e.g., `bridge@regional-eu-1`). Commodore, Quartermaster, Purser and Periscope-query keep serving when one replica host is lost: their callers spread requests over every healthy replica that `<service>.internal` resolves to, and Privateer is given every Quartermaster address and fails over between them. Run each of them on at least two `hosts` in the aggregator region for control-plane redundancy; the hosts may belong to different clusters, because every caller resolves every replica
 - `replicas` (optional) - Replica count
 - `port` (optional)
 - `grpc_port` (optional)
@@ -33249,7 +33250,7 @@ Read by `api_mesh/cmd/privateer`.
 | `SERVICE_TOKEN` | string |  | required, secret | v0.3.0 | Shared service-to-service bearer token for mesh sync with Quartermaster and certificate calls to Navigator. |
 | `MESH_PRIVATE_KEY_FILE` | string |  | required | v0.3.0 | Path of the WireGuard private key. When the file is missing and MESH_JOIN_TOKEN is set, enrollment generates and writes it. |
 | `PRIVATEER_DATA_DIR` | string |  |  | v0.3.0 | Directory for enrollment state and the last known mesh. Empty uses /var/lib/privateer. |
-| `QUARTERMASTER_GRPC_ADDR` | string |  |  | v0.3.0 | Quartermaster gRPC address for mesh sync. Empty uses the address from persisted enrollment state; startup fails when neither is set. |
+| `QUARTERMASTER_GRPC_ADDR` | string |  |  | v0.3.0 | Quartermaster gRPC address for mesh sync, or a comma-separated list of every Quartermaster replica; syncs fail over between them. Empty uses the address from persisted enrollment state; startup fails when neither is set. |
 | `QUARTERMASTER_GRPC_TLS_SERVER_NAME` | string |  |  | v0.3.0 | TLS server name override for the Quartermaster connection. Empty uses the canonical internal name. |
 | `NAVIGATOR_GRPC_ADDR` | string |  |  | v0.3.0 | Navigator gRPC address for internal and ingress certificate sync. Empty disables certificate sync. |
 | `NAVIGATOR_GRPC_TLS_SERVER_NAME` | string |  |  | v0.3.0 | TLS server name override for the Navigator connection. Empty uses the canonical internal name. |
@@ -37442,12 +37443,21 @@ Before the first change, and under `--dry-run` too, `release apply` refuses to s
 
 `release apply` prints four numbered stages:
 
-1. **Pre-upgrade host convergence.** Privateer on every mesh host, the declared Kafka topics, and
-   MirrorMaker2 workers. Each host runs the same role as `cluster provision` in check mode first,
-   and a host that already matches is skipped without a restart. Privateer restarts in waves that
-   start with a single canary host, and mesh health is verified after each wave before the next
-   starts. Privateer's DNS socket stays open across its restart, so `.internal` lookups are
-   delayed rather than failed. The Kafka step creates declared topics and applies declared topic
+1. **Pre-upgrade host convergence.** Privateer on every mesh host, every Redis server and
+   Sentinel, the declared Kafka topics, and MirrorMaker2 workers. Each host runs the same role as
+   `cluster provision` in check mode first, and a host that already matches is skipped without a
+   restart. Privateer restarts in waves that start with a single canary host, and mesh health is
+   verified after each wave before the next starts. Privateer's DNS socket stays open across its
+   restart, so `.internal` lookups are delayed rather than failed. A Sentinel-mode Redis instance
+   converges one host at a time: the servers that are not the live primary, each of which must
+   then report a synced replication link, then each Sentinel, which must then pass
+   `SENTINEL CKQUORUM`, then the live primary. When the primary's configuration changed, Sentinel
+   first fails it over to a synced replica, and the demoted server must sync from the new primary.
+   The live primary is read from the servers, not the manifest, so a primary Sentinel moved is
+   handled. The stage refuses to continue when two servers both report the primary role. A
+   single-mode instance restarts in place, and only when its configuration changed. Redis and
+   Sentinel log to journald (`journalctl -u frameworks-redis-<instance>`); convergence removes
+   the old unrotated files under `/var/log/frameworks/redis`. The Kafka step creates declared topics and applies declared topic
    configuration; it never reconfigures or restarts a broker or controller. MirrorMaker2 workers
    converge their configuration first, then every changed worker restarts together.
 2. **Expand migrations.** Service databases the manifest declares but the cluster does not have

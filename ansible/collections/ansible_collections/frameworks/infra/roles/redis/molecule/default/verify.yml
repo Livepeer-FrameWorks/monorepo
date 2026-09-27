@@ -53,6 +53,27 @@
       retries: 30
       delay: 1
 
+    - name: Read the HA server and Sentinel journals
+      ansible.builtin.command: "journalctl -u {{ item }} --no-pager -o cat"
+      register: ha_journals
+      changed_when: false
+      loop:
+        - frameworks-redis-ha-a
+        - frameworks-redis-ha-a-sentinel
+
+    - name: Inspect the named Redis log directory
+      ansible.builtin.stat:
+        path: /var/log/frameworks/redis
+      register: ha_log_dir
+
+    - name: Assert named instances log to journald, not to an unrotated file
+      ansible.builtin.assert:
+        that:
+          - "'Ready to accept connections' in ha_journals.results[0].stdout"
+          - ha_journals.results[1].stdout | length > 0
+          - not ha_log_dir.stat.exists
+        fail_msg: "named Redis instances must log to journald and create no /var/log/frameworks/redis files"
+
     - name: Force a Sentinel failover
       ansible.builtin.command:
         argv: "{{ ha_cli + ['-p', '26390', 'SENTINEL', 'FAILOVER', 'molecule-ha'] }}"
@@ -131,6 +152,19 @@
       ansible.builtin.assert:
         that: ha_pids_before.stdout == ha_pids_after.stdout
 
+    - name: Recreate the named Redis log directory
+      ansible.builtin.file:
+        path: /var/log/frameworks/redis
+        state: directory
+        mode: "0750"
+
+    - name: Leave unrotated file logs in the named Redis log directory
+      ansible.builtin.copy:
+        dest: "/var/log/frameworks/redis/{{ item }}.log"
+        content: "MASTER aborted replication with an error: NOAUTH Authentication required.\n"
+        mode: "0640"
+      loop: [ha-b, ha-a-sentinel]
+
     - name: Re-provision the HA set with changed declared settings
       ansible.builtin.include_role:
         name: frameworks.infra.redis
@@ -178,3 +212,13 @@
           - ha_master_after_provision.stdout_lines[1] == '6391'
           - ha_maxmemory.stdout_lines[1] == '67108864'
         fail_msg: "re-provisioning demoted the live primary or dropped declared settings"
+
+    - name: Inspect the named Redis log directory after re-provisioning
+      ansible.builtin.stat:
+        path: /var/log/frameworks/redis
+      register: ha_log_dir_after_provision
+
+    - name: Assert re-provisioning removed the unrotated file logs
+      ansible.builtin.assert:
+        that: not ha_log_dir_after_provision.stat.exists
+        fail_msg: "re-provisioning left unrotated Redis log files under /var/log/frameworks/redis"

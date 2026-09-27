@@ -1063,7 +1063,8 @@ frameworks cluster upgrade --all --yes
 ### frameworks cluster release
 
 Run a full cluster release as one ordered, resumable plan: pre-upgrade host convergence
-(Privateer seeds, declared Kafka topics, MirrorMaker2 workers) → expand migrations → service
+(Privateer seeds, Redis servers and Sentinels, declared Kafka topics, MirrorMaker2 workers) →
+expand migrations → service
 upgrades in dependency order → reconciliation transitions interleaved at their declared
 dependency points → stale placement cleanup → postdeploy migrations. Contract migrations are printed as a deferred
 operator step and run only after the rollback window closes. This is the **normal** upgrade path;

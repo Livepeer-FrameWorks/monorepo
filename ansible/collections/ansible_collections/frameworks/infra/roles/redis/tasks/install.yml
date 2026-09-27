@@ -127,12 +127,6 @@
       mode: "0755"
     - path: "{{ redis_data_dir }}"
       mode: "0750"
-    - path: /var/log/frameworks
-      owner: root
-      group: root
-      mode: "0755"
-    - path: "{{ redis_log_dir }}"
-      mode: "0750"
   when:
     - redis_named_instance | bool
 
@@ -321,8 +315,6 @@
     test -w "{{ redis_runtime_config_path }}"
     test -d "{{ redis_data_dir }}"
     test -w "{{ redis_data_dir }}"
-    test -d "{{ redis_log_dir }}"
-    test -w "{{ redis_log_dir }}"
   args:
     executable: /bin/bash
   become: true
@@ -339,7 +331,7 @@
     msg: >-
       Redis runtime user {{ redis_runtime_user }} cannot access the named instance paths.
       config={{ redis_config_path }}, runtime={{ redis_runtime_config_path }},
-      data={{ redis_data_dir }}, log={{ redis_log_dir }}.
+      data={{ redis_data_dir }}.
       Check output: {{ redis_runtime_access_check.stderr | default(redis_runtime_access_check.stdout) | default('permission check failed') }}
   when:
     - not ansible_check_mode
@@ -412,13 +404,6 @@
       failed_when: false
       check_mode: false
 
-    - name: Capture named Redis log after failed start
-      ansible.builtin.slurp:
-        src: "{{ redis_log_file }}"
-      register: redis_log
-      failed_when: false
-      check_mode: false
-
     - name: Fail with named Redis startup diagnostics
       ansible.builtin.fail:
         msg: |-
@@ -429,5 +414,37 @@
           journalctl:
           {{ redis_journal.stdout | default('(no journal output)') }}
 
-          redis log:
-          {{ (redis_log.content | default('') | b64decode) or '(no redis log output)' }}
+# Runs after the restart above, so the process no longer holds the file open
+# and its space is freed.
+- name: Remove unrotated named Redis log file
+  ansible.builtin.file:
+    path: "{{ redis_named_log_file }}"
+    state: absent
+  when:
+    - redis_named_instance | bool
+
+- name: Inspect the named Redis log directory
+  ansible.builtin.stat:
+    path: "{{ redis_named_log_dir }}"
+  register: redis_named_log_dir_stat
+  when:
+    - redis_named_instance | bool
+
+- name: Find files left in the named Redis log directory
+  ansible.builtin.find:
+    paths: "{{ redis_named_log_dir }}"
+    file_type: any
+    hidden: true
+  register: redis_named_log_dir_files
+  when:
+    - redis_named_instance | bool
+    - redis_named_log_dir_stat.stat.isdir | default(false)
+
+- name: Remove empty named Redis log directory
+  ansible.builtin.file:
+    path: "{{ redis_named_log_dir }}"
+    state: absent
+  when:
+    - redis_named_instance | bool
+    - redis_named_log_dir_stat.stat.isdir | default(false)
+    - redis_named_log_dir_files.matched == 0

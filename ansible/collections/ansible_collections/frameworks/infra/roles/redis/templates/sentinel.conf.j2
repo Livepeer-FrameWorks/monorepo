@@ -13,7 +13,8 @@ supervised systemd
 daemonize no
 
 dir {{ redis_data_dir }}
-logfile {{ redis_log_file }}
+{# Logs go to journald through stdout; see instance.conf.j2. #}
+logfile ""
 pidfile /run/{{ redis_service_name }}/sentinel.pid
 
 sentinel monitor {{ redis_master_name }} {{ redis_sentinel_monitor_host }} {{ redis_sentinel_monitor_port }} {{ redis_sentinel_quorum }}

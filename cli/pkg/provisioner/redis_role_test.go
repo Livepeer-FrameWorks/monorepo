@@ -56,15 +56,54 @@ func TestRedisEveryServerCarriesMasterAuth(t *testing.T) {
 	}
 }
 
-func TestRedisStartupDiagnosticsIncludeRedisLog(t *testing.T) {
-	install := readRedisRepoFile(t, "ansible/collections/ansible_collections/frameworks/infra/roles/redis/tasks/install.yml")
+// A replica that cannot authenticate logs a line every few milliseconds; a
+// log file has no size cap and fills the root disk, journald does.
+func TestRedisNamedInstancesLogToJournald(t *testing.T) {
+	role := "ansible/collections/ansible_collections/frameworks/infra/roles/redis/"
+	for _, template := range []string{"templates/instance.conf.j2", "templates/sentinel.conf.j2"} {
+		content := readRedisRepoFile(t, role+template)
+		if !strings.Contains(content, "\nlogfile \"\"\n") {
+			t.Fatalf("%s must log to stdout (journald), got:\n%s", template, content)
+		}
+	}
+	install := readRedisRepoFile(t, role+"tasks/install.yml")
 	for _, want := range []string{
-		"Capture named Redis log after failed start",
-		`src: "{{ redis_log_file }}"`,
-		"redis log:",
+		"Capture named Redis journal after failed start",
+		"Remove unrotated named Redis log file",
+		`path: "{{ redis_named_log_file }}"`,
+		"Remove empty named Redis log directory",
 	} {
 		if !strings.Contains(install, want) {
-			t.Fatalf("redis startup diagnostics should include Redis' own log output; missing %q", want)
+			t.Fatalf("install must keep startup diagnostics in the journal and remove file logs; missing %q", want)
+		}
+	}
+	if strings.Contains(install, "redis_log_dir") || strings.Contains(install, "redis_log_file") {
+		t.Fatal("install must not create or write a named Redis log file")
+	}
+}
+
+// Release convergence probes live roles over SSH; the password must be read on
+// the host, never passed on the command line.
+func TestRedisCLICommandTargetsTheInstanceWithoutThePassword(t *testing.T) {
+	server := RedisCLICommand(ServiceConfig{Port: 6380, Metadata: map[string]any{
+		"instance": "foghorn", "redis_role": "replica", "bind": "10.88.0.2 127.0.0.1", "password": "s3cret",
+	}}, "INFO", "replication")
+	for _, want := range []string{"/etc/frameworks/redis/foghorn.conf", "-h '\\''127.0.0.1'\\'' -p 6380 '\\''INFO'\\'' '\\''replication'\\''", "REDISCLI_AUTH", "sudo -n sh -c"} {
+		if !strings.Contains(server, want) {
+			t.Fatalf("server command missing %q:\n%s", want, server)
+		}
+	}
+	sentinel := RedisCLICommand(ServiceConfig{Port: 6380, Metadata: map[string]any{
+		"instance": "foghorn", "redis_role": "sentinel", "redis_sentinel_port": 26390, "bind": "10.88.0.2", "password": "s3cret",
+	}}, "SENTINEL", "CKQUORUM", "foghorn")
+	for _, want := range []string{"/var/lib/frameworks/redis/foghorn-sentinel/sentinel.conf", "-h '\\''10.88.0.2'\\'' -p 26390"} {
+		if !strings.Contains(sentinel, want) {
+			t.Fatalf("sentinel command missing %q:\n%s", want, sentinel)
+		}
+	}
+	for _, command := range []string{server, sentinel} {
+		if strings.Contains(command, "s3cret") {
+			t.Fatalf("command carries the password:\n%s", command)
 		}
 	}
 }

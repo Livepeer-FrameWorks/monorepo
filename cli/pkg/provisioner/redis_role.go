@@ -2,6 +2,8 @@ package provisioner
 
 import (
 	"context"
+	"fmt"
+	"slices"
 	"strings"
 	"time"
 
@@ -101,4 +103,55 @@ func redisSystemdServiceName(config ServiceConfig) string {
 		instance += "-sentinel"
 	}
 	return "frameworks-redis-" + instance
+}
+
+// RedisCLICommand returns a shell command that runs valkey-cli (or redis-cli)
+// with args against the named server or Sentinel the config renders, on its
+// host. The password is read on the host from the file the role renders
+// requirepass into, so it never appears on a command line; reading that file
+// needs root or passwordless sudo.
+func RedisCLICommand(config ServiceConfig, args ...string) string {
+	instance := firstNonEmpty(metaString(config.Metadata, "instance"), metaString(config.Metadata, "instance_name"))
+	port := config.Port
+	if port == 0 {
+		port = 6379
+	}
+	passwordFile := "/etc/redis.conf"
+	if instance != "" {
+		passwordFile = "/etc/frameworks/redis/" + instance + ".conf"
+	}
+	if metaString(config.Metadata, "redis_role") == "sentinel" {
+		port = 26379
+		if sp, ok := config.Metadata["redis_sentinel_port"].(int); ok && sp > 0 {
+			port = sp
+		}
+		passwordFile = "/var/lib/frameworks/redis/" + instance + "-sentinel/sentinel.conf"
+	}
+	quoted := make([]string, 0, len(args))
+	for _, arg := range args {
+		quoted = append(quoted, ssh.ShellQuote(arg))
+	}
+	script := fmt.Sprintf(`set -eu
+cli="$(command -v valkey-cli || command -v redis-cli || true)"
+if [ -z "$cli" ]; then echo "neither valkey-cli nor redis-cli is installed" >&2; exit 127; fi
+pass="$(awk '$1 == "requirepass" { p = $2 } END { print p }' %s 2>/dev/null | tr -d '"' || true)"
+if [ -n "$pass" ]; then export REDISCLI_AUTH="$pass"; fi
+"$cli" -h %s -p %d %s`, ssh.ShellQuote(passwordFile), ssh.ShellQuote(redisLocalHost(metaString(config.Metadata, "bind"))), port, strings.Join(quoted, " "))
+	return `if [ "$(id -u)" = 0 ]; then sh -c ` + ssh.ShellQuote(script) + `; else sudo -n sh -c ` + ssh.ShellQuote(script) + `; fi`
+}
+
+// redisLocalHost picks the address a local client reaches the instance on,
+// matching the role's redis_local_host: loopback when bound, else the first
+// bind address.
+func redisLocalHost(bind string) string {
+	addrs := strings.Fields(bind)
+	for _, loopback := range []string{"127.0.0.1", "::1"} {
+		if slices.Contains(addrs, loopback) {
+			return loopback
+		}
+	}
+	if len(addrs) > 0 {
+		return addrs[0]
+	}
+	return "127.0.0.1"
 }

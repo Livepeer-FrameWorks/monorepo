@@ -17,7 +17,9 @@ appendonly {{ redis_appendonly }}
 appendfsync everysec
 
 loglevel notice
-logfile {{ redis_log_file }}
+{# Empty logfile sends the log to stdout, which systemd hands to journald
+   (size-capped); a log file here grows without bound. #}
+logfile ""
 pidfile /run/{{ redis_service_name }}/redis.pid
 databases 16
 

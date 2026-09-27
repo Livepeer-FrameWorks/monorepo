@@ -147,12 +147,21 @@ Before the first change, and under `--dry-run` too, `release apply` refuses to s
 
 `release apply` prints four numbered stages:
 
-1. **Pre-upgrade host convergence.** Privateer on every mesh host, the declared Kafka topics, and
-   MirrorMaker2 workers. Each host runs the same role as `cluster provision` in check mode first,
-   and a host that already matches is skipped without a restart. Privateer restarts in waves that
-   start with a single canary host, and mesh health is verified after each wave before the next
-   starts. Privateer's DNS socket stays open across its restart, so `.internal` lookups are
-   delayed rather than failed. The Kafka step creates declared topics and applies declared topic
+1. **Pre-upgrade host convergence.** Privateer on every mesh host, every Redis server and
+   Sentinel, the declared Kafka topics, and MirrorMaker2 workers. Each host runs the same role as
+   `cluster provision` in check mode first, and a host that already matches is skipped without a
+   restart. Privateer restarts in waves that start with a single canary host, and mesh health is
+   verified after each wave before the next starts. Privateer's DNS socket stays open across its
+   restart, so `.internal` lookups are delayed rather than failed. A Sentinel-mode Redis instance
+   converges one host at a time: the servers that are not the live primary, each of which must
+   then report a synced replication link, then each Sentinel, which must then pass
+   `SENTINEL CKQUORUM`, then the live primary. When the primary's configuration changed, Sentinel
+   first fails it over to a synced replica, and the demoted server must sync from the new primary.
+   The live primary is read from the servers, not the manifest, so a primary Sentinel moved is
+   handled. The stage refuses to continue when two servers both report the primary role. A
+   single-mode instance restarts in place, and only when its configuration changed. Redis and
+   Sentinel log to journald (`journalctl -u frameworks-redis-<instance>`); convergence removes
+   the old unrotated files under `/var/log/frameworks/redis`. The Kafka step creates declared topics and applies declared topic
    configuration; it never reconfigures or restarts a broker or controller. MirrorMaker2 workers
    converge their configuration first, then every changed worker restarts together.
 2. **Expand migrations.** Service databases the manifest declares but the cluster does not have

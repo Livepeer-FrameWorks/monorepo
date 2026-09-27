@@ -27,6 +27,8 @@ import (
 //   - Privateer on every mesh host (binary, seed peers, seed DNS). Seeds carry
 //     the names both the previous and the target release dial, so converging
 //     them first breaks no running service.
+//   - Every Redis server and Sentinel, keeping a primary serving throughout
+//     (cluster_release_redis_convergence.go).
 //   - The declared Kafka topics, created when missing, with their declared
 //     topic config (retention) applied to existing topics. Brokers and
 //     controllers are never reconfigured or restarted.
@@ -51,24 +53,28 @@ const (
 )
 
 // releaseHostConvergenceStep is one ordered step of the stage. Task is nil for
-// the Kafka topic step, which runs against each cluster's first broker.
+// the Kafka topic step, which runs against each cluster's first broker. Group
+// names the Redis instance a Redis step belongs to.
 type releaseHostConvergenceStep struct {
 	Kind  string
 	Label string
+	Group string
 	Task  *orchestrator.Task
 }
 
 // planReleaseHostConvergence derives the stage from the execution plan and the
-// manifest: Privateer hosts, then the Kafka clusters that declare topics, then
-// MirrorMaker2 worker hosts, each group in host order. It performs no I/O.
+// manifest: Privateer hosts, then Redis instances, then the Kafka clusters that
+// declare topics, then MirrorMaker2 worker hosts. It performs no I/O.
 func planReleaseHostConvergence(plan *orchestrator.ExecutionPlan, manifest *inventory.Manifest) []releaseHostConvergenceStep {
-	var privateer, mirrorMaker []*orchestrator.Task
+	var privateer, redis, mirrorMaker []*orchestrator.Task
 	if plan != nil {
 		for _, task := range plan.AllTasks {
 			switch {
 			case task == nil:
 			case task.Phase == orchestrator.PhaseMesh && task.Type == "privateer":
 				privateer = append(privateer, task)
+			case task.Type == releaseHostStepRedis:
+				redis = append(redis, task)
 			case task.Type == "kafka-mirrormaker":
 				mirrorMaker = append(mirrorMaker, task)
 			}
@@ -84,6 +90,7 @@ func planReleaseHostConvergence(plan *orchestrator.ExecutionPlan, manifest *inve
 	for _, task := range privateer {
 		steps = append(steps, releaseHostConvergenceStep{Kind: releaseHostStepPrivateer, Label: task.Host, Task: task})
 	}
+	steps = append(steps, planRedisConvergenceSteps(redis)...)
 	var topicClusters []string
 	clusters := allKafkaClusters(manifest)
 	for i := range clusters {
@@ -138,6 +145,7 @@ func writeReleaseHostConvergencePlan(out io.Writer, heading string, manifest *in
 			fmt.Fprintf(out, "         %d. %s\n", i+1, wave.describe())
 		}
 	}
+	writeRedisConvergencePlan(out, steps)
 	groups := map[string][]string{}
 	for _, step := range steps {
 		groups[step.Kind] = append(groups[step.Kind], step.Label)
@@ -170,6 +178,10 @@ type releaseHostConvergence struct {
 	mirrorMakerRestartFn        func(context.Context, *orchestrator.Task) error
 	// verifyMeshFn replaces the SSH mesh health gate in tests.
 	verifyMeshFn func(context.Context, []string) error
+	// redisOps and redisTiming replace the SSH Redis operations and the gate
+	// timeouts in tests.
+	redisOps    redisReleaseOps
+	redisTiming *redisGateTiming
 }
 
 func (c *releaseHostConvergence) verifyMesh(ctx context.Context, hosts []string) error {
@@ -321,17 +333,20 @@ func (c *releaseHostConvergence) preflightEnvContract(steps []releaseHostConverg
 }
 
 // run executes (or, with dryRun, previews) the stage: the Privateer waves,
-// each gated on the mesh health of its hosts, then the remaining steps in
-// order.
+// each gated on the mesh health of its hosts, then the Redis instances, then
+// the remaining steps in order.
 func (c *releaseHostConvergence) run(ctx context.Context, steps []releaseHostConvergenceStep, dryRun bool) error {
 	out := c.cmd.OutOrStdout()
 	if err := c.runPrivateerWaves(ctx, steps, dryRun); err != nil {
 		return err
 	}
+	if err := c.runRedis(ctx, steps, dryRun); err != nil {
+		return err
+	}
 	var mirrorMakers []*orchestrator.Task
 	for i, step := range steps {
 		switch step.Kind {
-		case releaseHostStepPrivateer:
+		case releaseHostStepPrivateer, releaseHostStepRedis:
 			continue
 		case releaseHostStepMirrorMaker:
 			fmt.Fprintf(out, "\n[host %d/%d] %s on %s\n", i+1, len(steps), step.Kind, step.Label)
@@ -404,6 +419,13 @@ func (c *releaseHostConvergence) runPrivateerWaves(ctx context.Context, steps []
 // Each call renders from its own copy of the runtime data, since Privateer
 // hosts in one wave converge concurrently.
 func (c *releaseHostConvergence) convergeTask(ctx context.Context, task *orchestrator.Task, dryRun bool, out io.Writer) error {
+	return c.convergeTaskBefore(ctx, task, dryRun, out, nil)
+}
+
+// convergeTaskBefore is convergeTask with beforeChange run right before the
+// role changes the host, or, with dryRun, where it would; its error aborts
+// the step. A host the precheck finds converged never calls it.
+func (c *releaseHostConvergence) convergeTaskBefore(ctx context.Context, task *orchestrator.Task, dryRun bool, out io.Writer, beforeChange func() error) error {
 	host, ok := c.manifest.GetHost(task.Host)
 	if !ok {
 		return fmt.Errorf("host %s not found in manifest", task.Host)
@@ -416,7 +438,7 @@ func (c *releaseHostConvergence) convergeTask(ctx context.Context, task *orchest
 		runtimeData[provisioner.KafkaMirrorMakerDeferRestartKey] = true
 	}
 	if !dryRun {
-		_, err := provisionTask(ctx, task, host, c.pool, c.manifest, false, false, runtimeData, c.manifestDir, c.sharedEnv, c.clusterEnvs, c.releaseRepos, nil)
+		_, err := provisionTask(ctx, task, host, c.pool, c.manifest, false, false, runtimeData, c.manifestDir, c.sharedEnv, c.clusterEnvs, c.releaseRepos, beforeChange)
 		return err
 	}
 	prov, config, err := renderProvisionTask(task, c.pool, c.manifest, false, runtimeData, c.manifestDir, c.sharedEnv, c.clusterEnvs, c.releaseRepos)
@@ -437,12 +459,15 @@ func (c *releaseHostConvergence) convergeTask(ctx context.Context, task *orchest
 		if checkErr != nil {
 			return fmt.Errorf("precheck: %w", checkErr)
 		}
-		if inspection.Changed {
-			fmt.Fprintln(out, "    [DRY-RUN] would converge (role check reports changes; the service restarts)")
-			writeProvisionChangeTasks(out, "      ", inspection.Tasks)
-		} else {
+		if !inspection.Changed {
 			ux.Success(out, "    already converged; would skip")
+			return nil
 		}
+		fmt.Fprintln(out, "    [DRY-RUN] would converge (role check reports changes; the service restarts)")
+		writeProvisionChangeTasks(out, "      ", inspection.Tasks)
+	}
+	if beforeChange != nil {
+		return beforeChange()
 	}
 	return nil
 }

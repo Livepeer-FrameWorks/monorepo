@@ -592,6 +592,18 @@ the declared settings change, and then carries over the live role (from the
 running process, else the last persisted state), so it never demotes the
 current primary or points Sentinel back at the original one. Every server
 carries `masterauth`, because any of them can be demoted to a replica.
+Servers and Sentinels log to journald (`logfile ""`), whose size cap bounds
+a replica stuck in a reconnect loop; the role removes any log file left under
+`/var/log/frameworks/redis`.
+
+`frameworks cluster release apply` converges these hosts before it upgrades
+services, so a role change reaches running clusters without
+`cluster provision --force`. It reads the live primary from the servers,
+converges the other servers one at a time and waits for each to sync, then
+each Sentinel with a `SENTINEL CKQUORUM` check, and converges the live primary
+last. When the primary's config changed, a `SENTINEL FAILOVER` first moves the
+primary role to a synced replica, so the restart hits a replica. See
+`cli/cmd/cluster_release_redis_convergence.go`.
 
 ```
           sentinel-1    sentinel-2    sentinel-3
