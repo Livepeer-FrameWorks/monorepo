@@ -165,6 +165,22 @@ func TestVerifyViewerJWT_Expired(t *testing.T) {
 	}
 }
 
+func TestVerifyViewerJWT_JudgesTimeClaimsAtTheGivenInstant(t *testing.T) {
+	priv, pub, kid := mustGenKey(t)
+	admitted := time.Now().Add(-2 * time.Hour)
+	tok := mintES256(t, priv, kid, jwt.MapClaims{
+		"exp": admitted.Add(time.Hour).Unix(),
+		"iat": admitted.Unix(),
+	})
+	keys := []SigningKey{{Kid: kid, PublicKeyPEM: pub}}
+	if _, err := VerifyViewerJWT(tok, keys, VerifyOptions{At: admitted}); err != nil {
+		t.Fatalf("token valid at admission was refused: %v", err)
+	}
+	if _, err := VerifyViewerJWT(tok, keys, VerifyOptions{}); !errors.Is(err, ErrTokenExpired) {
+		t.Fatalf("want ErrTokenExpired when judged now, got %v", err)
+	}
+}
+
 func TestVerifyViewerJWT_MissingExpiration(t *testing.T) {
 	priv, pub, kid := mustGenKey(t)
 	tok := mintES256(t, priv, kid, jwt.MapClaims{

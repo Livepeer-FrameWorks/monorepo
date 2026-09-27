@@ -56,6 +56,11 @@ type VerifyOptions struct {
 	RequiredClaims map[string]string
 	// SkewTolerance applied to exp / iat / nbf checks.
 	SkewTolerance time.Duration
+	// At is the instant exp / iat / nbf are judged at; zero means now. An
+	// established session is re-checked against a changed key set as of the
+	// moment it was admitted, so a policy change does not also enforce token
+	// expiry mid-session.
+	At time.Time
 }
 
 // VerifyViewerJWT validates a viewer-supplied JWT against the supplied
@@ -77,11 +82,16 @@ func VerifyViewerJWT(tokenString string, keys []SigningKey, opts VerifyOptions) 
 		allowedKidSet[k] = true
 	}
 
-	parser := jwt.NewParser(
+	parserOptions := []jwt.ParserOption{
 		jwt.WithValidMethods([]string{"ES256"}),
 		jwt.WithLeeway(opts.SkewTolerance),
 		jwt.WithExpirationRequired(),
-	)
+	}
+	if !opts.At.IsZero() {
+		at := opts.At
+		parserOptions = append(parserOptions, jwt.WithTimeFunc(func() time.Time { return at }))
+	}
+	parser := jwt.NewParser(parserOptions...)
 
 	var resolveErr error
 	token, err := parser.Parse(tokenString, func(t *jwt.Token) (any, error) {
