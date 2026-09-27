@@ -132,6 +132,7 @@ case "$action" in
     rsync --archive --compress --delete \
       --exclude-from="$exclude_file" \
       --exclude='/.git' \
+      --exclude='/.stack' \
       --exclude='config/env/secrets.env' \
       --exclude='*.agekey' \
       -e "ssh -o BatchMode=yes -o ConnectTimeout=8 -o ControlMaster=no -o ControlPath=none -p $remote_port" \
