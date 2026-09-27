@@ -131,6 +131,16 @@ log_json() {
   shift 2
   logs_since "$since" "$@" | jq -Rrc "fromjson? | $filter" 2>/dev/null
 }
+# log_json_at <since> <jq filter> <service...>: log_json with each line's
+# receive time added as .at, from Docker at a fixed nanosecond width, so .at
+# values order lines across services by string comparison. The services' own
+# .time is whole seconds and cannot order events within a second.
+log_json_at() {
+  local since=$1 filter=$2
+  shift 2
+  docker compose -p "$COMPOSE_PROJECT_NAME" logs --no-color --no-log-prefix --timestamps --since "$since" "$@" 2>/dev/null |
+    jq -Rrc "((capture(\"^(?<at>[^ ]+) (?<line>.*)\$\"))?) as \$l | \$l.line | fromjson? | objects | .at = \$l.at | $filter" 2>/dev/null
+}
 
 # Network faults on one service's network namespace. The edge bundle (Caddy,
 # Mist, Helmsman) and its edge proxy share one namespace, so rules there act on

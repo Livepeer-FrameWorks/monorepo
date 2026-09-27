@@ -66,16 +66,23 @@ PUB=$(publish_until_admitted "$EDGE_A_RTMP" "$(echo "$S" | jq -r '.streamKey')" 
   { fail "publisher never admitted"; finish; }
 
 play_location() { curl -s -m 10 -o /dev/null -D - "$FOGHORN_A_URL/play/$PB/hls?jwt=$1" | awk 'tolower($1)=="location:"{print $2}' | tr -d '\r'; }
-declare -A VARIANT POLLER
+declare -A VARIANT POLLER EDGE CELL_REPLICAS
+# Placement puts each viewer on its own edge; the stream is served from both
+# cells' edges. A viewer's refusal, its USER_NEW re-run and its Foghorn calls
+# are read on the edge that viewer's session is on.
 opened() {
-  local n loc
+  local n loc host
   for n in 1 2 3; do
     [ -n "${VARIANT[$n]:-}" ] && continue
     loc=$(play_location "${TOKEN[$n]}")
     [ -n "$loc" ] || return 1
     VARIANT[$n]=$(hls_session_url "$loc")
     [ -n "${VARIANT[$n]}" ] || return 1
-    SERVING_HOST=$(printf '%s' "$loc" | sed -E 's#^[a-z]+://([^/:]+).*#\1#')
+    host=$(printf '%s' "$loc" | sed -E 's#^[a-z]+://([^/:]+).*#\1#')
+    case "$host" in
+      *edge-b*) EDGE[$n]=$STACK_EDGE_B_SERVICE CELL_REPLICAS[$n]="foghorn-b foghorn-b-2" ;;
+      *) EDGE[$n]=$STACK_EDGE_A_SERVICE CELL_REPLICAS[$n]="foghorn foghorn-2" ;;
+    esac
   done
 }
 eventually 120 "three JWT viewers (one per key) open sessions" opened || finish
@@ -96,18 +103,21 @@ for n in 1 2 3; do
     tail -3 "$STACK_STATE_DIR/revoke-viewer-$n.log" | sed 's/^/    poll /'
   fi
 done
-case "$SERVING_HOST" in
-  *edge-b*) SERVING=$STACK_EDGE_B_SERVICE FOGHORNS=(foghorn-b foghorn-b-2) ;;
-  *) SERVING=$STACK_EDGE_A_SERVICE FOGHORNS=(foghorn foghorn-2) ;;
-esac
-echo "    serving edge $SERVING; cell replicas ${FOGHORNS[*]}"
-granted() { [ -n "$(log_json 10m "select(.msg == \"Playback grant applied\" and .internal_name == \"live+$IN\") | .time" "$SERVING")" ]; }
-check "the serving edge holds the stream's playback grant" granted
+for n in 1 2 3; do
+  echo "    viewer $n on ${EDGE[$n]}; cell replicas ${CELL_REPLICAS[$n]}"
+done
+granted() { [ -n "$(log_json 10m "select(.msg == \"Playback grant applied\" and .internal_name == \"live+$IN\") | .time" "$1")" ]; }
+for edge in $(printf '%s\n' "${EDGE[@]}" | sort -u); do
+  check "$edge, serving a viewer, holds the stream's playback grant" granted "$edge"
+done
 
-# foghorn_calls <since> <until>: per-viewer triggers the serving edge sent
-# Foghorn in that window (RFC 3339 times, compared as strings).
+# foghorn_calls <since> <before>: per-viewer triggers any edge serving a viewer
+# sent Foghorn before the Docker receive time <before>. The lines' own .time is
+# whole seconds, which would count a new session's call made after the refusal
+# within the same second.
 foghorn_calls() {
-  log_json "$1" "select(.time != null and .time <= \"$2\" and (.msg == \"PLAY_REWRITE resolved by Foghorn\" or .msg == \"USER_NEW approved by Foghorn\" or .msg == \"USER_NEW denied by Foghorn\")) | .msg" "$SERVING" | grep -c .
+  # shellcheck disable=SC2046 # one word per distinct edge service
+  log_json_at "$1" "select(.at < \"$2\" and (.msg == \"PLAY_REWRITE resolved by Foghorn\" or .msg == \"USER_NEW approved by Foghorn\" or .msg == \"USER_NEW denied by Foghorn\")) | .msg" $(printf '%s\n' "${EDGE[@]}" | sort -u) | grep -c .
 }
 CROSSED=0
 for n in 1 2; do
@@ -117,13 +127,14 @@ for n in 1 2; do
   R=$(gql 'mutation($id:ID!){revokeSigningKey(id:$id){__typename}}' "$(jq -cn --arg id "$(echo "${KEY[$n]}" | jq -r .id)" '{id:$id}')")
   gql_ok "$R" '.data.revokeSigningKey.__typename' SigningKey || { fail "revokeSigningKey: $R"; break; }
   REFUSED_AT=""
+  SERVING=${EDGE[$n]} FOGHORNS=(${CELL_REPLICAS[$n]})
   refused_on_edge() {
-    REFUSED_AT=$(log_json "$SINCE" "select(.msg == \"Playback session refused on the updated grant\" and .kid == \"$kid\") | .time" "$SERVING" | sed -n 1p)
+    REFUSED_AT=$(log_json_at "$SINCE" "select(.msg == \"Playback session refused on the updated grant\" and .kid == \"$kid\") | .at" "$SERVING" | sed -n 1p)
     [ -n "$REFUSED_AT" ]
   }
-  eventually 60 "the edge refused key $n's session on the updated grant" refused_on_edge || break
+  eventually 60 "$SERVING (viewer $n's edge) refused key $n's session on the updated grant" refused_on_edge || break
   rerun_refused() { log_has "$SINCE" 'USER_NEW refused: session failed' "$SERVING"; }
-  eventually 20 "Mist's re-run USER_NEW for it was answered on the edge" rerun_refused
+  eventually 20 "Mist's re-run USER_NEW for it was answered on $SERVING" rerun_refused
   calls=$(foghorn_calls "$SINCE" "$REFUSED_AT")
   check "the re-check sent no per-viewer trigger to Foghorn until the refusal (got $calls)" [ "$calls" = 0 ]
   gone() { stopped "$n" "$SINCE_S"; }
