@@ -103,6 +103,12 @@ services:
     <<: *default-env
     image: pgvector/pgvector:pg18@sha256:42e7f6b4e1eceb02ff14e3e6bc6108bbe259abbe83879dc1845d0da1ddeb555d
     container_name: frameworks-postgres
+    # Every Go service instance opens a pool of up to 25 connections
+    # (pkg/database DefaultConfig), and replicas of one service run their
+    # periodic jobs on the same ticks. Twelve Go instances share this server in
+    # the dev and stack profiles, plus Listmonk and Chatwoot: the server must
+    # admit every pool at its limit, which Postgres's default of 100 does not.
+    command: ["postgres", "-c", "max_connections=400"]
     environment:
       POSTGRES_USER: ${POSTGRES_USER}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
