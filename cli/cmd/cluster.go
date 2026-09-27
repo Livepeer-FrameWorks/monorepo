@@ -136,6 +136,10 @@ type resolvedCluster struct {
 	systemTenantOnce sync.Once
 	systemTenantID   string
 	systemTenantErr  error
+
+	runtimeDataOnce sync.Once
+	runtimeData     map[string]any
+	runtimeDataErr  error
 }
 
 const devGeneratedSecretsRelativePath = ".frameworks/dev-generated-secrets.env"

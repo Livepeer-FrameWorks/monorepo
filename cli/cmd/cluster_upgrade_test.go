@@ -17,7 +17,7 @@ import (
 	"frameworks/cli/pkg/orchestrator"
 )
 
-func TestPrepareUpgradeRuntimeDataIncludesInternalPKI(t *testing.T) {
+func TestClusterRuntimeDataIncludesInternalPKI(t *testing.T) {
 	rootCert, _, intermediateCert, intermediateKey := genTestInternalCA(t)
 	intermediateKeyDER, err := x509.MarshalECPrivateKey(intermediateKey)
 	if err != nil {
@@ -41,9 +41,12 @@ func TestPrepareUpgradeRuntimeDataIncludesInternalPKI(t *testing.T) {
 		},
 	}
 
-	runtimeData, err := prepareUpgradeRuntimeData(manifest, "", sharedEnv, "system-tenant")
+	rc := resolvedClusterWithEnv(manifest, sharedEnv)
+	rc.Source = inventory.SourceContext
+	rc.ContextSystemTenantID = "system-tenant"
+	runtimeData, err := rc.RuntimeData(context.Background(), "")
 	if err != nil {
-		t.Fatalf("prepareUpgradeRuntimeData: %v", err)
+		t.Fatalf("RuntimeData: %v", err)
 	}
 	if runtimeData["service_token"] != "service-token" || runtimeData["system_tenant_id"] != "system-tenant" {
 		t.Fatalf("upgrade runtime identities = %#v", runtimeData)
@@ -359,26 +362,35 @@ func TestUpgradeReleaseInfoFindsInfrastructureEntries(t *testing.T) {
 	}
 }
 
-func TestUpgradeInstanceIDCarriesTheYugabyteNodeIdentity(t *testing.T) {
-	manifest := &inventory.Manifest{Infrastructure: inventory.InfrastructureConfig{Postgres: &inventory.PostgresConfig{
-		Enabled: true,
-		Engine:  "yugabyte",
-		Nodes: []inventory.PostgresNode{
-			{Host: "db-a", ID: 1},
-			{Host: "db-b", ID: 2},
-			{Host: "db-c", ID: 3},
+func TestPlannedUpgradeTaskCarriesTheYugabyteNodeIdentity(t *testing.T) {
+	manifest := &inventory.Manifest{
+		Profile: "dev",
+		Hosts: map[string]inventory.Host{
+			"db-a": {Name: "db-a", ExternalIP: "10.0.0.1"},
+			"db-b": {Name: "db-b", ExternalIP: "10.0.0.2"},
+			"db-c": {Name: "db-c", ExternalIP: "10.0.0.3"},
 		},
-	}}}
+		Infrastructure: inventory.InfrastructureConfig{Postgres: &inventory.PostgresConfig{
+			Enabled: true,
+			Engine:  "yugabyte",
+			Nodes: []inventory.PostgresNode{
+				{Host: "db-a", ID: 1},
+				{Host: "db-b", ID: 2},
+				{Host: "db-c", ID: 3},
+			},
+		}},
+	}
 	// The placement zone of a node is derived from this id, so each host must resolve to its own.
 	for host, want := range map[string]string{"db-a": "1", "db-b": "2", "db-c": "3"} {
-		if got := upgradeInstanceID(manifest, "yugabyte", inventory.Host{Name: host}); got != want {
-			t.Fatalf("upgradeInstanceID(%s) = %q, want %q", host, got, want)
+		task, err := plannedUpgradeTask(manifest, "yugabyte", "yugabyte", host)
+		if err != nil {
+			t.Fatalf("plannedUpgradeTask(%s): %v", host, err)
+		}
+		if task.InstanceID != want || task.Phase != orchestrator.PhaseInfrastructure {
+			t.Fatalf("plannedUpgradeTask(%s) = instance %q phase %v, want instance %q in the infrastructure phase", host, task.InstanceID, task.Phase, want)
 		}
 	}
-	if got := upgradeInstanceID(manifest, "commodore", inventory.Host{Name: "db-a"}); got != "" {
-		t.Fatalf("upgradeInstanceID for a non-yugabyte service = %q, want empty", got)
-	}
-	if got := upgradeInstanceID(manifest, "yugabyte", inventory.Host{Name: "unknown"}); got != "" {
-		t.Fatalf("upgradeInstanceID for a host outside the universe = %q, want empty", got)
+	if _, err := plannedUpgradeTask(manifest, "yugabyte", "yugabyte", "unknown"); err == nil {
+		t.Fatal("a host outside the universe resolved a task")
 	}
 }

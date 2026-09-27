@@ -1009,7 +1009,21 @@ frameworks cluster upgrade <service> [flags]
    transition)
 2. Run the pre-deploy gate once (schema + data migrations; cluster-level)
 3. For **every** host the service runs on: detect state, deploy the new
-   version (pull image or download binary), and validate health
+   version (pull image or download binary), and validate health. A host that
+   already runs the target version runs the role's check-mode precheck
+   instead: it redeploys only when its rendered configuration (env, secrets,
+   role files) changed, without automatic rollback, and is otherwise skipped.
+
+Each replica renders exactly as `cluster provision` renders it: the planner's
+task for that host (its cluster, instance identity, and phase, so
+infrastructure credentials are included) and the same runtime identities
+(system tenant, cluster owner tenants, Quartermaster address).
+
+`upgrade redis` converges every Redis server and Sentinel of every instance
+through the same stage as `release apply` host convergence: servers that are
+not the live primary, then the Sentinels, then the live primary after a
+Sentinel failover. Each host changes only when its role precheck reports a
+difference.
 
 For an HA service, `upgrade` (and `--all`) moves every replica, not just the
 first — a partial failure aborts the sequence. `upgrade yugabyte` moves every

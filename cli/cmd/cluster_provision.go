@@ -6398,12 +6398,24 @@ func renderProvisionTask(task *orchestrator.Task, pool *ssh.Pool, manifest *inve
 	if err != nil {
 		return nil, provisioner.ServiceConfig{}, fmt.Errorf("failed to get provisioner: %w", err)
 	}
-	config, err := buildTaskConfig(task, manifest, runtimeData, force, manifestDir, sharedEnv, clusterEnvs, releaseRepos)
+	config, err := renderTaskConfig(task, manifest, force, runtimeData, manifestDir, sharedEnv, clusterEnvs, releaseRepos)
 	if err != nil {
 		return nil, provisioner.ServiceConfig{}, err
 	}
+	return prov, config, nil
+}
+
+// renderTaskConfig is the one ServiceConfig render for a planner task, shared
+// by provision, upgrade, release apply and its host convergence: the task
+// config, the env schema contract, and, for an infrastructure task, the
+// shared database credentials its role applies.
+func renderTaskConfig(task *orchestrator.Task, manifest *inventory.Manifest, force bool, runtimeData map[string]any, manifestDir string, sharedEnv map[string]string, clusterEnvs map[string]map[string]string, releaseRepos []string) (provisioner.ServiceConfig, error) {
+	config, err := buildTaskConfig(task, manifest, runtimeData, force, manifestDir, sharedEnv, clusterEnvs, releaseRepos)
+	if err != nil {
+		return provisioner.ServiceConfig{}, err
+	}
 	if contractErr := validateTaskServiceEnvContract(manifest, task, config); contractErr != nil {
-		return nil, provisioner.ServiceConfig{}, contractErr
+		return provisioner.ServiceConfig{}, contractErr
 	}
 
 	// Infrastructure roles need shared credentials during the initial
@@ -6420,9 +6432,9 @@ func renderProvisionTask(task *orchestrator.Task, pool *ssh.Pool, manifest *inve
 		}
 	}
 	if err := validateInfrastructureRuntimeRoleConfig(task.Type, config); err != nil {
-		return nil, provisioner.ServiceConfig{}, err
+		return provisioner.ServiceConfig{}, err
 	}
-	return prov, config, nil
+	return config, nil
 }
 
 // detectProvisionTaskState reports the task's installed state. A failed probe

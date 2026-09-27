@@ -13,12 +13,10 @@ import (
 	"text/tabwriter"
 	"time"
 
-	"frameworks/cli/pkg/bootstrap"
 	"frameworks/cli/pkg/detect"
 	"frameworks/cli/pkg/inventory"
 	"frameworks/cli/pkg/orchestrator"
 	"frameworks/cli/pkg/provisioner"
-	"frameworks/cli/pkg/remoteaccess"
 	fwssh "frameworks/cli/pkg/ssh"
 
 	"github.com/spf13/cobra"
@@ -111,7 +109,7 @@ func runClusterDiff(cmd *cobra.Command, rc *resolvedCluster) error {
 	if err != nil {
 		return fmt.Errorf("load cluster env_files: %w", err)
 	}
-	runtimeData, err := buildFastPathRuntimeData(ctx, manifest, sharedEnv, filepath.Dir(rc.ManifestPath), sshKey)
+	runtimeData, err := rc.RuntimeData(ctx, sshKey)
 	if err != nil {
 		return err
 	}
@@ -193,55 +191,6 @@ type authoritativeDiff struct {
 type diffProvCacheEntry struct {
 	prov provisioner.Provisioner
 	err  error
-}
-
-func buildFastPathRuntimeData(ctx context.Context, manifest *inventory.Manifest, sharedEnv map[string]string, manifestDir, sshKey string) (map[string]any, error) {
-	runtimeData := map[string]any{}
-	if token := strings.TrimSpace(sharedEnv["SERVICE_TOKEN"]); token != "" {
-		runtimeData["service_token"] = token
-	}
-	if edgeTelemetryJWTRequired(manifest) {
-		if err := ensureEdgeTelemetryJWTKeypair(runtimeData, sharedEnv); err != nil {
-			return nil, fmt.Errorf("load edge telemetry jwt keypair: %w", err)
-		}
-	}
-	if internalPKIBootstrapRequired(manifest) {
-		pki, err := loadInternalPKIBootstrap(sharedEnv, manifestDir)
-		if err != nil {
-			return nil, fmt.Errorf("load internal PKI bootstrap material: %w", err)
-		}
-		runtimeData["internal_pki_bootstrap"] = pki
-	}
-	qm, hasQuartermaster := manifest.Services["quartermaster"]
-	if !hasQuartermaster || !qm.Enabled {
-		return runtimeData, nil
-	}
-	if strings.TrimSpace(sharedEnv["SERVICE_TOKEN"]) == "" {
-		return nil, fmt.Errorf("build authoritative desired state: SERVICE_TOKEN is required to resolve control-plane identities")
-	}
-	sess, err := remoteaccess.OpenSession(remoteaccess.Options{
-		Manifest:      manifest,
-		SSHKeyPath:    sshKey,
-		AllowInsecure: isDevProfile(manifest),
-	})
-	if err != nil {
-		return nil, fmt.Errorf("build authoritative desired state: open control-plane session: %w", err)
-	}
-	defer sess.Close()
-	ownerTenantIDs, err := resolveClusterOwnerTenantIDs(ctx, manifest, runtimeData, sess)
-	if err != nil {
-		return nil, fmt.Errorf("build authoritative desired state: resolve cluster owners: %w", err)
-	}
-	systemTenantID := strings.TrimSpace(ownerTenantIDs[bootstrap.SystemTenantAlias])
-	if systemTenantID == "" {
-		return nil, fmt.Errorf("build authoritative desired state: Quartermaster returned no system tenant UUID")
-	}
-	runtimeData["system_tenant_id"] = systemTenantID
-	runtimeData["owner_tenant_ids_by_alias"] = ownerTenantIDs
-	if qmAddr, addrErr := resolveServiceGRPCAddr(manifest, "quartermaster", defaultGRPCPort("quartermaster")); addrErr == nil {
-		runtimeData["quartermaster_grpc_addr"] = qmAddr
-	}
-	return runtimeData, nil
 }
 
 // collectClusterDiffEntries walks every enabled application/interface/

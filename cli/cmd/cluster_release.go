@@ -353,7 +353,7 @@ func runReleaseApply(cmd *cobra.Command, rc *resolvedCluster, opts releaseApplyO
 			return contractErr
 		}
 	}
-	if envErr := preflightReleaseRequiredEnv(cmd.Context(), rc, services); envErr != nil {
+	if envErr := preflightReleaseRequiredEnv(cmd.Context(), rc, services, sshKey); envErr != nil {
 		return envErr
 	}
 
@@ -463,14 +463,14 @@ func runReleaseApply(cmd *cobra.Command, rc *resolvedCluster, opts releaseApplyO
 // writeReleaseResumeHint tells the operator how a release that stopped in
 // stage 3 continues. Rerunning is safe because every earlier stage is
 // idempotent: converged hosts and applied expand migrations are skipped, and a
-// service already on the target version reports "already at version" without
-// redeploying.
+// replica already on the target version is redeployed only when its role
+// precheck reports a configuration change.
 func writeReleaseResumeHint(w io.Writer, platformVersion string, dryRun bool) {
 	if dryRun {
 		return
 	}
 	fmt.Fprintf(w, "\nRelease apply stopped before postdeploy migrations; they have not run.\n")
-	fmt.Fprintf(w, "After fixing the cause, rerun `frameworks cluster release apply --version %s` to resume: services already on %s report up to date and are skipped.\n", platformVersion, platformVersion)
+	fmt.Fprintf(w, "After fixing the cause, rerun `frameworks cluster release apply --version %s` to resume: replicas already on %s whose configuration matches report up to date and are skipped; the others converge.\n", platformVersion, platformVersion)
 }
 
 // writeReleaseHostConvergenceResumeHint tells the operator how a release that

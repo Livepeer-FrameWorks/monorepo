@@ -9,7 +9,6 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -394,6 +393,10 @@ func runUpgrade(cmd *cobra.Command, rc *resolvedCluster, serviceName, version st
 	var err error
 	version = defaultUpgradeVersion(manifest, version)
 
+	if serviceName == "redis" {
+		return result, runUpgradeRedis(cmd, rc, version, dryRun, yes)
+	}
+
 	// Resolve deploy name (services/interfaces) or use serviceName for infrastructure
 	deployName := serviceName
 	if svcCfg, ok := manifest.Services[serviceName]; ok {
@@ -522,17 +525,9 @@ func runUpgrade(cmd *cobra.Command, rc *resolvedCluster, serviceName, version st
 	if gateErr := runUpgradePreDeployGate(ctx, cmd, rc, sshPool, manifest, gitopsManifest.PlatformVersion, serviceName, deployName, skipMigrationCheck, skipDataMigrationCheck); gateErr != nil {
 		return result, gateErr
 	}
-	systemTenantID, tenantErr := rc.ResolveSystemTenantID(ctx)
-	if tenantErr != nil {
-		return result, fmt.Errorf("resolve system tenant for service configuration: %w", tenantErr)
-	}
-	sharedEnv, envErr := rc.PreparedSharedEnv()
-	if envErr != nil {
-		return result, fmt.Errorf("load manifest env_files for service configuration: %w", envErr)
-	}
-	upgradeRuntimeData, runtimeErr := prepareUpgradeRuntimeData(manifest, filepath.Dir(manifestPath), sharedEnv, systemTenantID)
+	upgradeRuntimeData, runtimeErr := rc.RuntimeData(ctx, sshKey)
 	if runtimeErr != nil {
-		return result, runtimeErr
+		return result, fmt.Errorf("prepare service upgrade runtime data: %w", runtimeErr)
 	}
 
 	// Confirmation once, before touching any replica.
@@ -678,6 +673,65 @@ func runUpgrade(cmd *cobra.Command, rc *resolvedCluster, serviceName, version st
 	return result, nil
 }
 
+// runUpgradeRedis converges every Redis server and Sentinel through the Redis
+// stage of `release apply` host convergence, which keeps a primary serving
+// (replicas, then Sentinels, then the live primary after a failover). Redis is
+// not a release artifact, so there is no version detection or rollback: each
+// host's role precheck decides whether it changes.
+func runUpgradeRedis(cmd *cobra.Command, rc *resolvedCluster, version string, dryRun, yes bool) error {
+	out := cmd.OutOrStdout()
+	plan, err := orchestrator.NewPlanner(rc.Manifest).Plan(context.Background(), orchestrator.ProvisionOptions{Phase: orchestrator.PhaseAll})
+	if err != nil {
+		return fmt.Errorf("plan Redis: %w", err)
+	}
+	var tasks []*orchestrator.Task
+	for _, task := range plan.AllTasks {
+		if task != nil && task.Type == releaseHostStepRedis {
+			tasks = append(tasks, task)
+		}
+	}
+	if len(tasks) == 0 {
+		return fmt.Errorf("service redis not found or not enabled in manifest")
+	}
+	platformVersion, err := resolveReleasePlatformVersion(rc, version)
+	if err != nil {
+		return fmt.Errorf("resolve target platform version: %w", err)
+	}
+	steps := planRedisConvergenceSteps(tasks)
+	ux.Heading(out, fmt.Sprintf("Converging Redis (%d host step(s)) for %s", len(steps), platformVersion))
+	writeRedisConvergencePlan(out, steps)
+
+	if !dryRun && !yes {
+		fmt.Fprintf(os.Stderr, "\nConverge Redis? [y/N]: ")
+		response, readErr := bufio.NewReader(os.Stdin).ReadString('\n')
+		if readErr != nil {
+			return fmt.Errorf("failed to read confirmation: %w", readErr)
+		}
+		if r := strings.TrimSpace(strings.ToLower(response)); r != "y" && r != "yes" {
+			fmt.Fprintln(out, "Cancelled")
+			return nil
+		}
+	}
+
+	sshPool := ssh.NewPool(30*time.Second, stringFlag(cmd, "ssh-key").Value)
+	defer sshPool.Close()
+	convergence, err := releaseNewHostConvergenceFn(cmd, rc, platformVersion, sshPool)
+	if err != nil {
+		return err
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(len(steps))*10*time.Minute)
+	defer cancel()
+	if err := convergence.runRedis(ctx, steps, dryRun); err != nil {
+		return err
+	}
+	if dryRun {
+		fmt.Fprintln(out, "\nDry-run complete. Use without --dry-run to execute.")
+		return nil
+	}
+	ux.Success(out, "Redis converged")
+	return nil
+}
+
 // Database initialization and whole-node validation require YSQL, so they run only after both process phases.
 func completeYugabyteUpgradeHost(ctx context.Context, rc *resolvedCluster, sshPool *ssh.Pool, manifest *inventory.Manifest, host inventory.Host, serviceName, deployName, version string, runtimeData map[string]any) error {
 	config, _, err := buildUpgradeTaskConfig(rc, manifest, host, serviceName, deployName, runtimeData)
@@ -746,15 +800,6 @@ func restartYugabyteProcess(ctx context.Context, rc *resolvedCluster, sshPool *s
 	return restarter.Restart(ctx, host, config)
 }
 
-func prepareUpgradeRuntimeData(manifest *inventory.Manifest, manifestDir string, sharedEnv map[string]string, systemTenantID string) (map[string]any, error) {
-	runtimeData, err := provisionRuntimeData(manifest, manifestDir, sharedEnv)
-	if err != nil {
-		return nil, fmt.Errorf("prepare service upgrade runtime data: %w", err)
-	}
-	runtimeData["system_tenant_id"] = systemTenantID
-	return runtimeData, nil
-}
-
 // resolveUpgradeHosts returns every host an upgrade must touch for serviceName.
 //
 // Most infrastructure services resolve to their single documented primary host
@@ -763,7 +808,8 @@ func prepareUpgradeRuntimeData(manifest *inventory.Manifest, manifestDir string,
 // behind; the upgrade loop changes them one at a time through the Yugabyte roll.
 // Application services, interfaces, and observability components resolve to
 // ALL hosts they run on so HA replicas are upgraded together rather than
-// leaving stale replicas behind.
+// leaving stale replicas behind. Redis does not resolve here: runUpgradeRedis
+// converges every server and Sentinel instead.
 func resolveUpgradeHosts(manifest *inventory.Manifest, serviceName string) ([]inventory.Host, bool) {
 	switch serviceName {
 	case "postgres":
@@ -796,13 +842,6 @@ func resolveUpgradeHosts(manifest *inventory.Manifest, serviceName string) ([]in
 	case "clickhouse":
 		if ch := manifest.Infrastructure.ClickHouse; ch != nil && ch.Enabled {
 			if host, ok := manifest.GetHost(ch.CoordinatorHost()); ok {
-				return []inventory.Host{host}, true
-			}
-		}
-		return nil, false
-	case "redis":
-		if r := manifest.Infrastructure.Redis; r != nil && r.Enabled && len(r.Instances) > 0 {
-			if host, ok := manifest.GetHost(r.Instances[0].Host); ok {
 				return []inventory.Host{host}, true
 			}
 		}
@@ -878,13 +917,6 @@ func upgradeServiceOnHost(ctx context.Context, cmd *cobra.Command, rc *resolvedC
 		fmt.Fprintf(cmd.OutOrStdout(), "    New image: %s\n", svcInfo.FullImage)
 	}
 
-	// A Docker tag is not an artifact identity. Release manifests pin an OCI
-	// digest, so a corrected image under the same version must still reconcile.
-	if deployedArtifactMatches(state, svcInfo) && !dryRun {
-		ux.Success(cmd.OutOrStdout(), fmt.Sprintf("  %s already at version %s, nothing to do", host.ExternalIP, svcInfo.Version))
-		return result, nil
-	}
-
 	config, task, err := buildUpgradeTaskConfig(rc, manifest, host, serviceName, deployName, runtimeData)
 	if err != nil {
 		return result, err
@@ -924,16 +956,33 @@ func upgradeServiceOnHost(ctx context.Context, cmd *cobra.Command, rc *resolvedC
 		config.Metadata["allow_engine_change"] = true
 	}
 
+	prov, err := taskProvisioner(deployName, sshPool)
+	if err != nil {
+		return result, fmt.Errorf("failed to get provisioner: %w", err)
+	}
+
+	// A Docker tag is not an artifact identity. Release manifests pin an OCI digest, so a corrected image under the
+	// same version must still reconcile. A replica already on the target artifact converges only when the role's
+	// check-mode precheck finds its rendered config (env, secrets, role files) differs, so a rerun applies config
+	// fixes without redeploying unchanged replicas.
+	if deployedArtifactMatches(state, svcInfo) && !dryRun {
+		needed, precheckErr := currentArtifactNeedsConvergence(ctx, cmd.OutOrStdout(), prov, host, config, svcInfo.Version)
+		if precheckErr != nil {
+			return result, fmt.Errorf("%s on %s: %w", serviceName, host.ExternalIP, precheckErr)
+		}
+		if !needed {
+			return result, nil
+		}
+		canRollback = false
+		rollbackDisabledReason = "the host already runs this version; only its configuration changed"
+	}
+
 	if dryRun {
 		if firstInstall {
 			fmt.Fprintf(cmd.OutOrStdout(), "    [DRY-RUN] Would install %s at %s (mode: %s)\n", host.ExternalIP, svcInfo.Version, config.Mode)
 			result.installed = true
 		} else {
 			fmt.Fprintf(cmd.OutOrStdout(), "    [DRY-RUN] Would upgrade %s from %s to %s (mode: %s)\n", host.ExternalIP, state.Version, svcInfo.Version, state.Mode)
-		}
-		prov, provErr := provisioner.GetProvisioner(deployName, sshPool)
-		if provErr != nil {
-			return result, fmt.Errorf("failed to get provisioner: %w", provErr)
 		}
 		checker, ok := prov.(provisioner.CheckDiffer)
 		if !ok {
@@ -950,11 +999,7 @@ func upgradeServiceOnHost(ctx context.Context, cmd *cobra.Command, rc *resolvedC
 	// Role-backed services handle stop/restart via handlers notified on
 	// binary/config change — explicit stop between install phases would
 	// only duplicate work the role already does.
-	prov, err := provisioner.GetProvisioner(deployName, sshPool)
-	if err != nil {
-		return result, fmt.Errorf("failed to get provisioner: %w", err)
-	}
-
+	//
 	// DEPLOY WITHOUT validating (pull image / download binary + start). Validation is a SEPARATE step below so a
 	// readiness failure lands in the health-check rollback block rather than returning here — Provision bundles the
 	// validate tag, which would abort before rollback. Deploy is part of the Provisioner contract.
@@ -1042,35 +1087,32 @@ func upgradeServiceOnHost(ctx context.Context, cmd *cobra.Command, rc *resolvedC
 	return upgradeResult{changed: true, installed: firstInstall}, nil
 }
 
-// buildUpgradeTaskConfig renders the ServiceConfig an upgrade deploys to one replica: the same buildTaskConfig the
-// provision flow uses, fed by a synthetic application task. It also returns that task, whose ClusterID is the
-// effective cluster the config renders against.
-//
-// The ClusterID MUST be set: buildServiceEnvVars only layers a cluster's env_files (which carry regional
-// STORAGE_S3_* credentials + descriptor) when task.ClusterID is set. Omitting it renders shared/empty S3 config,
-// which the storage-backend agreement gate would then skip on an empty bucket. The effective cluster is the
-// service's explicit assignment, else the target host's cluster.
+// currentArtifactNeedsConvergence runs the role's check-mode precheck for a replica that already runs the target
+// artifact and reports whether its rendered configuration differs, naming the role tasks that would change. A
+// precheck that cannot run fails the replica rather than leaving a configuration fix unapplied.
+func currentArtifactNeedsConvergence(ctx context.Context, out io.Writer, prov provisioner.Provisioner, host inventory.Host, config provisioner.ServiceConfig, version string) (bool, error) {
+	inspection, err := provisionInspectChanges(ctx, prov, host, config, nil)
+	if err != nil {
+		return false, fmt.Errorf("precheck of the running %s: %w", version, err)
+	}
+	if !inspection.Changed {
+		ux.Success(out, fmt.Sprintf("  %s already at version %s and converged, nothing to do", host.ExternalIP, version))
+		return false, nil
+	}
+	fmt.Fprintf(out, "    already at version %s; the role check reports configuration changes, converging\n", version)
+	writeProvisionChangeTasks(out, "      ", inspection.Tasks)
+	return true, nil
+}
+
+// buildUpgradeTaskConfig renders the ServiceConfig an upgrade deploys to one replica through renderTaskConfig, the
+// render `cluster provision` uses, for the planner's own task for that replica. The planner task carries the
+// replica's effective cluster (so the cluster's env_files, with regional STORAGE_S3_* credentials, layer in), its
+// instance identity (a Yugabyte node's placement zone comes from its node id), and its phase (an infrastructure task
+// renders with the shared database credentials). It also returns that task.
 func buildUpgradeTaskConfig(rc *resolvedCluster, manifest *inventory.Manifest, host inventory.Host, serviceName, deployName string, runtimeData map[string]any) (provisioner.ServiceConfig, *orchestrator.Task, error) {
-	clusterID := ""
-	if svcCfg, ok := manifest.Services[serviceName]; ok {
-		if len(svcCfg.Clusters) > 0 {
-			clusterID = svcCfg.Clusters[0]
-		} else if svcCfg.Cluster != "" {
-			clusterID = svcCfg.Cluster
-		}
-	}
-	if clusterID == "" {
-		clusterID = host.Cluster
-	}
-	task := &orchestrator.Task{
-		Name:       serviceName,
-		Type:       deployName,
-		ServiceID:  serviceName,
-		InstanceID: upgradeInstanceID(manifest, serviceName, host),
-		Host:       host.Name,
-		ClusterID:  clusterID,
-		Phase:      orchestrator.PhaseApplications,
-		Idempotent: true,
+	task, err := plannedUpgradeTask(manifest, serviceName, deployName, host.Name)
+	if err != nil {
+		return provisioner.ServiceConfig{}, nil, err
 	}
 	manifestDir := filepath.Dir(rc.ManifestPath)
 	sharedEnv, envErr := rc.PreparedSharedEnv()
@@ -1081,30 +1123,46 @@ func buildUpgradeTaskConfig(rc *resolvedCluster, manifest *inventory.Manifest, h
 	if clusterEnvsErr != nil {
 		return provisioner.ServiceConfig{}, nil, fmt.Errorf("load cluster env_files: %w", clusterEnvsErr)
 	}
-	config, err := buildTaskConfig(task, manifest, runtimeData, true, manifestDir, sharedEnv, clusterEnvs, rc.ReleaseRepos)
+	config, err := renderTaskConfig(task, manifest, true, runtimeData, manifestDir, sharedEnv, clusterEnvs, rc.ReleaseRepos)
 	if err != nil {
 		return provisioner.ServiceConfig{}, nil, fmt.Errorf("build upgrade config: %w", err)
 	}
 	return config, task, nil
 }
 
-// upgradeInstanceID resolves the manifest identity of the replica being upgraded, for services whose role vars are
-// derived from it. A Yugabyte node's placement zone comes from its node id, so upgrading with an empty instance would
-// rewrite every node's tserver/master config to the zone of node 1 and collapse the universe's fault domains.
-func upgradeInstanceID(manifest *inventory.Manifest, serviceName string, host inventory.Host) string {
-	if serviceName != "yugabyte" {
-		return ""
+// plannedUpgradeTask returns the planner's task that deploys deployName for serviceName on hostName.
+func plannedUpgradeTask(manifest *inventory.Manifest, serviceName, deployName, hostName string) (*orchestrator.Task, error) {
+	plan, err := orchestrator.NewPlanner(manifest).Plan(context.Background(), orchestrator.ProvisionOptions{Phase: orchestrator.PhaseAll})
+	if err != nil {
+		return nil, fmt.Errorf("plan %s on %s: %w", serviceName, hostName, err)
 	}
-	pg := manifest.Infrastructure.Postgres
-	if pg == nil {
-		return ""
-	}
-	for _, node := range pg.Nodes {
-		if node.Host == host.Name {
-			return strconv.Itoa(node.ID)
+	var onHost []*orchestrator.Task
+	for _, task := range plan.AllTasks {
+		if task != nil && task.Host == hostName && task.Type == deployName {
+			onHost = append(onHost, task)
 		}
 	}
-	return ""
+	if len(onHost) > 1 {
+		var byService []*orchestrator.Task
+		for _, task := range onHost {
+			if task.ServiceID == serviceName {
+				byService = append(byService, task)
+			}
+		}
+		onHost = byService
+	}
+	switch len(onHost) {
+	case 1:
+		return onHost[0], nil
+	case 0:
+		return nil, fmt.Errorf("the manifest plans no %s (%s) task on %s", serviceName, deployName, hostName)
+	default:
+		names := make([]string, 0, len(onHost))
+		for _, task := range onHost {
+			names = append(names, task.Name)
+		}
+		return nil, fmt.Errorf("the manifest plans several %s (%s) tasks on %s (%s); upgrade them through `cluster release apply`", serviceName, deployName, hostName, strings.Join(names, ", "))
+	}
 }
 
 func deployedArtifactMatches(state *detect.ServiceState, target *gitops.ServiceInfo) bool {

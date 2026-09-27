@@ -24,7 +24,7 @@ func TestReleaseApplyUpgradeFailurePrintsResumeHint(t *testing.T) {
 	for _, want := range []string{
 		"postdeploy migrations; they have not run",
 		"rerun `frameworks cluster release apply --version v0.3.11` to resume",
-		"report up to date and are skipped",
+		"whose configuration matches report up to date and are skipped; the others converge",
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("output missing %q:\n%s", want, out)

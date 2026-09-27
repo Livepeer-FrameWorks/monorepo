@@ -344,7 +344,7 @@ func newReleaseHostConvergence(cmd *cobra.Command, rc *resolvedCluster, platform
 	if err != nil {
 		return nil, fmt.Errorf("load cluster env_files: %w", err)
 	}
-	runtimeData, err := provisionRuntimeData(&frozen, manifestDir, sharedEnv)
+	runtimeData, err := rc.RuntimeData(cmd.Context(), stringFlag(cmd, "ssh-key").Value)
 	if err != nil {
 		return nil, err
 	}

@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"io"
-	"path/filepath"
 	"sort"
 	"strings"
 
@@ -138,19 +137,11 @@ func preflightProvisionRequiredEnv(out io.Writer, plan *orchestrator.ExecutionPl
 // or upgrade with the same runtime data and config the upgrade deploys, and
 // fails before the first mutation when one fails the schema contract or lacks
 // a declared operator input.
-func preflightReleaseRequiredEnv(ctx context.Context, rc *resolvedCluster, services []string) error {
+func preflightReleaseRequiredEnv(ctx context.Context, rc *resolvedCluster, services []string, sshKey string) error {
 	var runtimeData map[string]any
 	gaps, err := collectReleaseRequiredEnvGaps(rc.Manifest, services, func(serviceName, deployName string, host inventory.Host) (map[string]string, error) {
 		if runtimeData == nil {
-			systemTenantID, tenantErr := rc.ResolveSystemTenantID(ctx)
-			if tenantErr != nil {
-				return nil, fmt.Errorf("resolve system tenant: %w", tenantErr)
-			}
-			sharedEnv, envErr := rc.PreparedSharedEnv()
-			if envErr != nil {
-				return nil, fmt.Errorf("load manifest env_files: %w", envErr)
-			}
-			data, dataErr := prepareUpgradeRuntimeData(rc.Manifest, filepath.Dir(rc.ManifestPath), sharedEnv, systemTenantID)
+			data, dataErr := rc.RuntimeData(ctx, sshKey)
 			if dataErr != nil {
 				return nil, dataErr
 			}
