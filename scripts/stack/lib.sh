@@ -107,6 +107,67 @@ stack_exec() { # stack_exec <service> <command...>
   shift
   docker compose -p "$COMPOSE_PROJECT_NAME" exec -T "$service" "$@"
 }
+container_of() { docker compose -p "$COMPOSE_PROJECT_NAME" ps -q "$1" 2>/dev/null | head -1; } # container_of <service>
+# logs_since <since> <service>...: the services' logs from <since> (RFC 3339 UTC).
+logs_since() {
+  local since=$1
+  shift
+  docker compose -p "$COMPOSE_PROJECT_NAME" logs --no-color --no-log-prefix --since "$since" "$@" 2>/dev/null
+}
+utc_now() { date -u +%Y-%m-%dT%H:%M:%S.%NZ; }
+
+# Network faults on one service's network namespace. The edge bundle (Caddy,
+# Mist, Helmsman) and its edge proxy share one namespace, so rules there act on
+# the whole node while it keeps running, keeps its address and keeps its local
+# (loopback) traffic. A helper container joined to that namespace with
+# NET_ADMIN holds the tools; the rules live in their own chains (FW_FAULT_IN,
+# FW_FAULT_OUT), so clearing them never touches Docker's own rules. The tools
+# are installed before any rule exists, while the namespace still has its
+# network.
+: "${STACK_NETFAULT_IMAGE:=alpine:3.22}"
+netfault_name() { printf '%s-netfault-%s' "$COMPOSE_PROJECT_NAME" "$1"; }
+netfault_start() { # netfault_start <service>
+  local cid name deadline
+  command -v docker >/dev/null 2>&1 && [ -S /var/run/docker.sock ] && [ -n "${COMPOSE_PROJECT_NAME:-}" ] || {
+    blocked "network faults on $1 need docker access in stack-runner"
+    return 1
+  }
+  cid=$(container_of "$1")
+  [ -n "$cid" ] || { blocked "no running container for $1"; return 1; }
+  name=$(netfault_name "$1")
+  docker rm -f "$name" >/dev/null 2>&1
+  docker image inspect "$STACK_NETFAULT_IMAGE" >/dev/null 2>&1 || docker pull -q "$STACK_NETFAULT_IMAGE" >/dev/null 2>&1
+  docker run -d --name "$name" --net "container:$cid" --cap-add NET_ADMIN "$STACK_NETFAULT_IMAGE" sh -c '
+    apk add --no-cache iptables iproute2 >/dev/null || exit 1
+    for c in IN OUT; do iptables -N FW_FAULT_$c || exit 1; done
+    iptables -I INPUT -j FW_FAULT_IN && iptables -I OUTPUT -j FW_FAULT_OUT || exit 1
+    touch /ready
+    exec sleep infinity' >/dev/null || { blocked "could not start the network fault helper for $1"; return 1; }
+  deadline=$(($(date +%s) + 120))
+  until docker exec "$name" test -f /ready 2>/dev/null; do
+    if [ "$(date +%s)" -ge "$deadline" ] || [ "$(docker inspect -f '{{.State.Running}}' "$name" 2>/dev/null)" != true ]; then
+      blocked "network fault helper for $1 not ready: $(docker logs "$name" 2>&1 | tail -3)"
+      return 1
+    fi
+    sleep 1
+  done
+}
+netfault() { # netfault <service> <command...>: runs in the helper, inside the service's namespace
+  local name
+  name=$(netfault_name "$1")
+  shift
+  docker exec "$name" "$@"
+}
+netfault_clear() { netfault "$1" sh -c 'iptables -F FW_FAULT_IN && iptables -F FW_FAULT_OUT'; }
+netfault_rules() { netfault "$1" sh -c 'iptables -S FW_FAULT_IN; iptables -S FW_FAULT_OUT' 2>/dev/null; }
+netfault_stop() { # netfault_stop <service>: removes the rules, their chains and the helper
+  local name
+  name=$(netfault_name "$1")
+  docker exec "$name" sh -c 'iptables -D INPUT -j FW_FAULT_IN; iptables -D OUTPUT -j FW_FAULT_OUT
+    for c in IN OUT; do iptables -F FW_FAULT_$c; iptables -X FW_FAULT_$c; done' >/dev/null 2>&1
+  docker rm -f "$name" >/dev/null 2>&1
+  return 0
+}
 
 # ---- API -------------------------------------------------------------------
 
@@ -169,6 +230,21 @@ ch() { # ch <sql>: CLICKHOUSE_URL carries the credentials as query parameters
 internal_name_of() { # internal_name_of <stream uuid>
   pg commodore "SELECT internal_name FROM commodore.streams WHERE tenant_id='$STACK_TENANT_ID' AND id='$1'"
 }
+# ingest_sessions <foghorn db> <internal name>: "id|node|ended_reason|started epoch|ended epoch"
+# per ingest generation of the stream, oldest first. Mist runtimes are named
+# live+<internal name>.
+ingest_sessions() {
+  pg "$1" "SELECT id, node_id, COALESCE(ended_reason,''), floor(EXTRACT(EPOCH FROM started_at))::bigint,
+      COALESCE(floor(EXTRACT(EPOCH FROM ended_at))::bigint, 0)
+    FROM foghorn.ingest_sessions WHERE tenant_id='$STACK_TENANT_ID'
+      AND stream_internal_name IN ('$2', 'live+$2') ORDER BY started_at"
+}
+# open_generation <foghorn db> <internal name>: the open, projected session's id.
+open_generation() {
+  pg "$1" "SELECT id FROM foghorn.ingest_sessions WHERE tenant_id='$STACK_TENANT_ID'
+      AND stream_internal_name IN ('$2', 'live+$2') AND ended_at IS NULL AND projection_state='active'
+    ORDER BY started_at DESC"
+}
 
 # ---- media ------------------------------------------------------------------
 
@@ -191,6 +267,24 @@ wait_publisher() { # wait_publisher <pid> [timeout_seconds]
     [ "$(date +%s)" -lt "$deadline" ] || return 1
     sleep 1
   done
+}
+# publish_until_admitted <rtmp base> <stream key> <WxH> <fps> <seconds> [timeout]:
+# scenario setup for a stream whose publisher must be live before a fault is
+# injected. Restarts the publisher while its push is refused (a freshly started
+# stack refuses ingest until placement authority is ready) and prints the PID
+# of the one that stayed connected for 8 s. Not for an admission under test.
+publish_until_admitted() {
+  local deadline=$(($(date +%s) + ${6:-120})) pid
+  while [ "$(date +%s)" -lt "$deadline" ]; do
+    pid=$(publish "$1" "$2" "$3" "$4" "$5") || return 1
+    for _ in 1 2 3 4 5 6 7 8; do
+      kill -0 "$pid" 2>/dev/null || break
+      sleep 1
+    done
+    if kill -0 "$pid" 2>/dev/null; then echo "$pid"; return 0; fi
+    sleep 3
+  done
+  return 1
 }
 render_mp4() { # render_mp4 <out> <WxH> <fps> <seconds>
   need ffmpeg || return 1
@@ -241,6 +335,34 @@ media_at() { # media_at <foghorn> <playback id>: a resolved viewer gets real TS 
   [ -n "$loc" ] || return 1
   got=$(segment_fetch "$loc")
   case "$got" in 200\ *) [ "${got#200 }" -gt 0 ] ;; *) return 1 ;; esac
+}
+# hls_position <master url>: the index of the newest segment of the first
+# variant (media sequence + segment count), fetched from wherever the URL points
+# (an edge address serves without Foghorn). Empty when unreachable.
+hls_position() {
+  python3 - "$1" <<'PY' 2>/dev/null
+import sys, urllib.request, urllib.parse
+def get(url):
+    with urllib.request.urlopen(url, timeout=8) as r:
+        return r.read().decode("utf-8", "replace")
+url = sys.argv[1]
+body = get(url)
+if "#EXT-X-STREAM-INF" in body:
+    url = urllib.parse.urljoin(url, next(l.strip() for l in body.splitlines() if l.strip() and not l.startswith("#")))
+    body = get(url)
+seq = next((int(l.split(":")[1]) for l in body.splitlines() if l.startswith("#EXT-X-MEDIA-SEQUENCE:")), 0)
+print(seq + sum(1 for l in body.splitlines() if l.startswith("#EXTINF:")))
+PY
+}
+# hls_session_url <master url>: the first variant's media playlist URL, which
+# carries the viewer session Mist handed out, so polling it is one ongoing viewer.
+hls_session_url() {
+  python3 - "$1" <<'PY' 2>/dev/null
+import sys, urllib.request, urllib.parse
+with urllib.request.urlopen(sys.argv[1], timeout=8) as r:
+    body = r.read().decode("utf-8", "replace")
+print(urllib.parse.urljoin(sys.argv[1], next(l.strip() for l in body.splitlines() if l.strip() and not l.startswith("#"))))
+PY
 }
 master_variants() { # master_variants <master url>: "WxH bandwidth" per variant
   curl -s -m 10 "$1" | awk -F'RESOLUTION=' '/^#EXT-X-STREAM-INF/{split($2,a,","); print a[1]}'

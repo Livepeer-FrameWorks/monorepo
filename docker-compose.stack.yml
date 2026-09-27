@@ -267,12 +267,19 @@ services:
     build:
       args:
         EDGE_BASE_IMAGE: ubuntu:24.04
+    # Every Foghorn instance of the cell, as production renders the node's
+    # control address list: a node whose instance goes away fails over to the
+    # other one instead of staying without control.
+    environment:
+      FOGHORN_CONTROL_ADDR: foghorn:18029,foghorn-2:18029
     # The dev edge serves the repo's demo recordings from a bind mount; a stack
     # edge must never write into the source tree, so it gets a slot volume.
     volumes:
       - edge_a_storage:/data/storage
   edge-b:
     image: ${STACK_EDGE_IMAGE:-frameworks-edge:dev}
+    environment:
+      FOGHORN_CONTROL_ADDR: foghorn-b:18029,foghorn-b-2:18029
   foghorn:
     environment:
       <<: *stack-s3-cell-a
@@ -280,6 +287,10 @@ services:
     environment:
       <<: *stack-s3-cell-a
       PLAYBACK_WEBHOOK_ALLOW_PRIVATE_DESTINATIONS: "true"
+      # Mist's balancer source for the edges this replica controls. The dev
+      # fallback is <FOGHORN_HOST>:18008, but this replica serves public HTTP
+      # on 18018.
+      FOGHORN_URL: http://foghorn-2:18018
   foghorn-b:
     environment:
       <<: *stack-s3-cell-b
