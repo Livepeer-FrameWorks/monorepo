@@ -1,0 +1,20 @@
+---
+# Log retention and SSH protection packages. fail2ban reads sshd failures
+# from the journal on systemd hosts, which needs the systemd Python binding.
+# On EL, fail2ban ships in EPEL (installed first).
+node_baseline_host_packages_by_family:
+  Debian: [logrotate, fail2ban, python3-systemd]
+  RedHat: [logrotate, fail2ban, python3-systemd]
+  Archlinux: [logrotate, fail2ban, python-systemd]
+  Alpine: [logrotate, fail2ban]
+
+node_baseline_sshd_service_by_family:
+  Debian: ssh
+node_baseline_sshd_service: "{{ node_baseline_sshd_service_by_family[ansible_facts.os_family] | default('sshd') }}"
+node_baseline_sshd_binary: /usr/sbin/sshd
+node_baseline_sshd_dropin: /etc/ssh/sshd_config.d/00-frameworks.conf
+
+node_baseline_journald_max_use: 2G
+# Percent of the filesystem holding /var/log/journal left free. journald only
+# accepts sizes, so the role converts this against the measured filesystem.
+node_baseline_journald_keep_free_percent: 10

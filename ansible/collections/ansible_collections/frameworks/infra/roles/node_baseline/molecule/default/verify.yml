@@ -1,0 +1,63 @@
+---
+- name: Verify
+  hosts: all
+  become: true
+  gather_facts: true
+  tasks:
+    - name: Read installed packages
+      ansible.builtin.package_facts:
+
+    - name: Assert log retention and SSH protection packages
+      ansible.builtin.assert:
+        that:
+          - "'logrotate' in ansible_facts.packages"
+          - "'fail2ban' in ansible_facts.packages"
+
+    - name: Read effective sshd settings
+      ansible.builtin.command: /usr/sbin/sshd -T -C user=root,host=example.test,addr=192.0.2.1
+      register: sshd_effective
+      changed_when: false
+
+    - name: Assert sshd accepts keys only
+      ansible.builtin.assert:
+        that:
+          - "'passwordauthentication no' in sshd_effective.stdout_lines"
+          - "'kbdinteractiveauthentication no' in sshd_effective.stdout_lines"
+          - "'permitrootlogin without-password' in sshd_effective.stdout_lines"
+          - "'maxstartups 10:30:60' in sshd_effective.stdout_lines"
+          - "'logingracetime 20' in sshd_effective.stdout_lines"
+
+    - name: Read journald drop-in
+      ansible.builtin.slurp:
+        src: /etc/systemd/journald.conf.d/frameworks.conf
+      register: journald_dropin
+
+    - name: Assert journald retention
+      ansible.builtin.assert:
+        that:
+          - "'SystemMaxUse=2G' in (journald_dropin.content | b64decode)"
+          - "(journald_dropin.content | b64decode) is search('SystemKeepFree=[1-9][0-9]*M')"
+
+    - name: Read logrotate timer state
+      ansible.builtin.command: systemctl is-enabled logrotate.timer
+      register: logrotate_timer
+      changed_when: false
+
+    - name: Assert logrotate runs
+      ansible.builtin.assert:
+        that: logrotate_timer.stdout == "enabled"
+
+    - name: Read fail2ban sshd jail
+      ansible.builtin.command: fail2ban-client status sshd
+      register: fail2ban_sshd
+      changed_when: false
+
+    - name: Rerun for idempotence
+      ansible.builtin.include_role:
+        name: frameworks.infra.node_baseline
+      register: idem
+
+    - name: Fail if second apply changed anything
+      ansible.builtin.assert:
+        that: idem is not changed
+        fail_msg: "node_baseline role not idempotent"

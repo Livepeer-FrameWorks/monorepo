@@ -74,6 +74,7 @@ jobs:
           - kafka
           - caddy
           - compose_stack
+          - node_baseline
           - prometheus_stack
           - privateer
           - listmonk

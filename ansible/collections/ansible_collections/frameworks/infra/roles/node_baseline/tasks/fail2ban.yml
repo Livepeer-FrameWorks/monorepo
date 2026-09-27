@@ -1,0 +1,29 @@
+---
+# jail.d/*.local overrides the distro jail defaults. Debian's sshd jail reads
+# /var/log/auth.log, which bookworm and later no longer write, so the journal
+# backend is set explicitly on systemd hosts.
+- name: Node_baseline | fail2ban sshd jail
+  when: "'fail2ban' in (ansible_facts.packages | default({}))"
+  block:
+    - name: Node_baseline | write fail2ban sshd jail
+      ansible.builtin.template:
+        src: fail2ban_sshd.local.j2
+        dest: /etc/fail2ban/jail.d/frameworks-sshd.local
+        owner: root
+        group: root
+        mode: "0644"
+      register: node_baseline_fail2ban_jail
+
+    - name: Node_baseline | run fail2ban
+      ansible.builtin.service:
+        name: fail2ban
+        state: started
+        enabled: true
+
+    - name: Node_baseline | reload fail2ban for the sshd jail # noqa: no-handler
+      ansible.builtin.service:
+        name: fail2ban
+        state: reloaded
+      when:
+        - not ansible_check_mode
+        - node_baseline_fail2ban_jail is changed

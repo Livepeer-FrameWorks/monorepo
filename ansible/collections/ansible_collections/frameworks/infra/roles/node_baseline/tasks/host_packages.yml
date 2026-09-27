@@ -1,0 +1,43 @@
+---
+- name: Node_baseline | resolve log retention and SSH protection packages
+  ansible.builtin.set_fact:
+    node_baseline_host_packages: "{{ node_baseline_host_packages_by_family[ansible_facts.os_family] | default([]) }}"
+
+- name: Node_baseline | read installed packages
+  ansible.builtin.package_facts:
+  when: node_baseline_host_packages | length > 0
+
+# Package installs are skipped in check mode (a stale package index can make
+# them fail there), so this is what the release precheck sees when a host
+# lacks one of these packages.
+- name: Node_baseline | report missing log retention and SSH protection packages
+  ansible.builtin.debug:
+    msg: "Missing packages: {{ node_baseline_missing_host_packages | join(', ') }}"
+  changed_when: node_baseline_missing_host_packages | length > 0
+  when: node_baseline_missing_host_packages | length > 0
+  vars:
+    node_baseline_missing_host_packages: >-
+      {{ node_baseline_host_packages | reject('in', (ansible_facts.packages | default({})).keys() | list) | list }}
+
+- name: Node_baseline | enable EPEL for fail2ban
+  ansible.builtin.package:
+    name: epel-release
+    state: present
+  when:
+    - not ansible_check_mode
+    - ansible_facts.os_family == "RedHat"
+    - ansible_facts.distribution != "Fedora"
+
+- name: Node_baseline | install log retention and SSH protection packages
+  ansible.builtin.package:
+    name: "{{ node_baseline_host_packages }}"
+    state: present
+  when:
+    - not ansible_check_mode
+    - node_baseline_host_packages | length > 0
+
+- name: Node_baseline | refresh installed packages
+  ansible.builtin.package_facts:
+  when:
+    - not ansible_check_mode
+    - node_baseline_host_packages | length > 0

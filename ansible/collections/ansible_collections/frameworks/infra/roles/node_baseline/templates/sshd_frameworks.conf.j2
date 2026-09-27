@@ -1,0 +1,14 @@
+# Managed by frameworks.infra.node_baseline. Edits will be overwritten.
+#
+# sshd keeps the first value it reads for each keyword. This drop-in sorts
+# ahead of distro and cloud-init drop-ins (50-cloud-init.conf re-enables
+# passwords), so these settings win. FrameWorks reaches hosts with SSH keys
+# only.
+PasswordAuthentication no
+KbdInteractiveAuthentication no
+PermitRootLogin prohibit-password
+PubkeyAuthentication yes
+# Unauthenticated connections: drop 30% of new ones beyond 10 pending, all
+# beyond 60, and give each 20 seconds to authenticate.
+MaxStartups 10:30:60
+LoginGraceTime 20

@@ -114,6 +114,23 @@ ssh-copy-id -i ~/.ssh/frameworks_ed25519.pub admin@central-02
 # ... repeat for all hosts
 ```
 
+### Key-Only SSH
+
+The node baseline that `cluster provision` and `cluster release apply` converge
+on every host restricts sshd to key authentication:
+
+- `PasswordAuthentication no` and `KbdInteractiveAuthentication no`
+- `PermitRootLogin prohibit-password` (root may still log in with a key)
+- `MaxStartups 10:30:60` and `LoginGraceTime 20`
+- a fail2ban `sshd` jail: 5 failed logins within 10 minutes ban the source for 1 hour
+
+These settings live in `/etc/ssh/sshd_config.d/00-frameworks.conf`, which sorts
+ahead of distribution and cloud-init drop-ins. Before the first run, make sure
+every person and tool that logs in to the hosts has a key installed; password
+logins stop working when the baseline converges. Each rendered file is checked
+with `sshd -t` before sshd reloads, and a configuration sshd rejects is rolled
+back without reloading.
+
 ### SSH Configuration
 
 Configure `~/.ssh/config` for convenient access:

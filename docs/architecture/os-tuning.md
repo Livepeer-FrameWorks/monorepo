@@ -102,6 +102,25 @@ file content (and mode) but does not assert `ulimit -n` at runtime —
 Ansible's privilege escalation does not establish a PAM session, so an
 in-Ansible `ulimit -n` check is not faithful.
 
+## Node baseline: log retention and SSH
+
+`node_baseline` runs before `node_tuning` on every host and, besides the
+operator tool packages, owns the host's log bounds and SSH exposure. Its
+settings are fixed values, applied on every supported family (Debian,
+RedHat, Arch, Alpine):
+
+| Concern                | Setting                                                                                                                                                                                                                                                                                                                                             |
+| ---------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| journald               | `/etc/systemd/journald.conf.d/frameworks.conf`: `SystemMaxUse=2G`; `SystemKeepFree` is 10% of the filesystem holding `/var/log`, converted to MiB at render time because journald only accepts sizes. journald restarts when the drop-in changes.                                                                                                   |
+| logrotate              | Installed everywhere; `logrotate.timer` enabled on systemd hosts (Arch and EL ship it disabled).                                                                                                                                                                                                                                                    |
+| sshd                   | `/etc/ssh/sshd_config.d/00-frameworks.conf`: key-only (`PasswordAuthentication no`, `KbdInteractiveAuthentication no`, `PermitRootLogin prohibit-password`), `MaxStartups 10:30:60`, `LoginGraceTime 20`. Each file is validated with `sshd -t` before it replaces the live one; a failing complete config is rolled back and sshd is not reloaded. |
+| fail2ban               | `sshd` jail in `/etc/fail2ban/jail.d/frameworks-sshd.local` (journal backend on systemd hosts, 5 failures in 10 min ban for 1 h). EL installs `epel-release` first.                                                                                                                                                                                 |
+| Docker (compose_stack) | `/etc/docker/daemon.json` `log-driver: local`, `max-size 50m`, `max-file 5`, merged into existing keys; every rendered compose service carries the same `logging:` block.                                                                                                                                                                           |
+
+Package installs are skipped in check mode, so the role reports a missing
+logrotate/fail2ban package as a change there; this is what makes the release
+precheck converge a host that lacks them.
+
 ## Key Files
 
 - `ansible/collections/ansible_collections/frameworks/infra/roles/node_tuning/` - The role itself

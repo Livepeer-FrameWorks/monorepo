@@ -1,0 +1,113 @@
+---
+- name: Node_baseline | detect sshd
+  ansible.builtin.stat:
+    path: "{{ node_baseline_sshd_binary }}"
+  register: node_baseline_sshd_bin
+
+# Each file is validated with sshd -t before it replaces the live one, and the
+# complete config again afterwards. A config that still fails is rolled back
+# before sshd is reloaded, so a bad render never reaches the running daemon
+# or its next start.
+- name: Node_baseline | harden sshd
+  when: node_baseline_sshd_bin.stat.exists
+  block:
+    - name: Node_baseline | ensure sshd drop-in directory
+      ansible.builtin.file:
+        path: /etc/ssh/sshd_config.d
+        state: directory
+        owner: root
+        group: root
+        mode: "0755"
+
+    # sshd -t refuses to run without its privilege separation directory, which
+    # Debian's ssh.service creates only when it starts.
+    - name: Node_baseline | ensure the sshd privilege separation directory
+      ansible.builtin.file:
+        path: /run/sshd
+        state: directory
+        owner: root
+        group: root
+        mode: "0755"
+      when: ansible_facts.os_family == "Debian"
+
+    - name: Node_baseline | write sshd hardening drop-in
+      ansible.builtin.template:
+        src: sshd_frameworks.conf.j2
+        dest: "{{ node_baseline_sshd_dropin }}"
+        owner: root
+        group: root
+        mode: "0644"
+        backup: true
+        validate: "{{ node_baseline_sshd_binary }} -t -f %s"
+      register: node_baseline_sshd_dropin_result
+
+    - name: Node_baseline | include sshd drop-ins ahead of the main config
+      ansible.builtin.lineinfile:
+        path: /etc/ssh/sshd_config
+        regexp: '^\s*Include\s+/etc/ssh/sshd_config\.d/\*\.conf\s*$'
+        line: Include /etc/ssh/sshd_config.d/*.conf
+        insertbefore: BOF
+        backup: true
+        validate: "{{ node_baseline_sshd_binary }} -t -f %s"
+      register: node_baseline_sshd_include_result
+
+    - name: Node_baseline | validate the complete sshd config
+      ansible.builtin.command:
+        argv: ["{{ node_baseline_sshd_binary }}", -t]
+      changed_when: false
+      when: not ansible_check_mode
+
+    - name: Node_baseline | remove validated sshd backups
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: absent
+      loop: >-
+        {{ [node_baseline_sshd_dropin_result.backup_file | default(''),
+            node_baseline_sshd_include_result.backup_file | default('')] | select | list }}
+
+  rescue:
+    - name: Node_baseline | restore the previous sshd drop-in
+      ansible.builtin.copy:
+        src: "{{ node_baseline_sshd_dropin_result.backup_file }}"
+        dest: "{{ node_baseline_sshd_dropin }}"
+        remote_src: true
+        owner: root
+        group: root
+        mode: "0644"
+      when: node_baseline_sshd_dropin_result.backup_file is defined
+
+    - name: Node_baseline | remove a new sshd drop-in that failed validation
+      ansible.builtin.file:
+        path: "{{ node_baseline_sshd_dropin }}"
+        state: absent
+      when:
+        - node_baseline_sshd_dropin_result is changed
+        - node_baseline_sshd_dropin_result.backup_file is not defined
+
+    - name: Node_baseline | restore the previous sshd main config
+      ansible.builtin.copy:
+        src: "{{ node_baseline_sshd_include_result.backup_file }}"
+        dest: /etc/ssh/sshd_config
+        remote_src: true
+        owner: root
+        group: root
+        mode: "0644"
+      when: node_baseline_sshd_include_result.backup_file is defined
+
+    - name: Node_baseline | refuse the sshd change
+      ansible.builtin.fail:
+        msg: >-
+          sshd rejected the hardened configuration; the previous files are
+          restored and sshd was not reloaded. Run `{{ node_baseline_sshd_binary }} -t`
+          on {{ inventory_hostname }} to see the conflicting setting.
+
+# A reload keeps established sessions (including this one) and applies the
+# settings to new connections.
+- name: Node_baseline | reload sshd # noqa: no-handler
+  ansible.builtin.service:
+    name: "{{ node_baseline_sshd_service }}"
+    state: reloaded
+  when:
+    - not ansible_check_mode
+    - node_baseline_sshd_bin.stat.exists
+    - node_baseline_sshd_dropin_result is changed or node_baseline_sshd_include_result is changed

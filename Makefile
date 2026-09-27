@@ -1826,7 +1826,7 @@ ANSIBLE_ENV := ANSIBLE_LOCAL_TEMP=$(ANSIBLE_LOCAL_TEMP) ANSIBLE_HOME=$(ANSIBLE_H
 ANSIBLE_PLAYBOOKS := $(wildcard $(ANSIBLE_DIR)/playbooks/*.yml)
 ANSIBLE_COLLECTION_ROOT := $(ANSIBLE_DIR)/collections/ansible_collections/frameworks/infra
 ANSIBLE_MOLECULE_IMAGE ?= geerlingguy/docker-ubuntu2404-ansible:latest
-ANSIBLE_MOLECULE_ROLES := yugabyte postgres redis clickhouse zookeeper kafka caddy compose_stack prometheus_stack privateer listmonk mistserver helmsman edge
+ANSIBLE_MOLECULE_ROLES := yugabyte postgres redis clickhouse zookeeper kafka caddy compose_stack node_baseline prometheus_stack privateer listmonk mistserver helmsman edge
 ANSIBLE_MOLECULE_ENV := $(ANSIBLE_ENV) \
 	ANSIBLE_COLLECTIONS_PATH=$(CURDIR)/$(ANSIBLE_DIR)/collections:$(CURDIR)/$(ANSIBLE_DIR)/.cache/collections \
 	ANSIBLE_ROLES_PATH=$(CURDIR)/$(ANSIBLE_DIR)/.cache/roles \

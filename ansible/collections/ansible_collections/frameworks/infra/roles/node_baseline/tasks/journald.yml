@@ -1,0 +1,40 @@
+---
+- name: Node_baseline | measure the journal filesystem
+  ansible.builtin.command:
+    argv: [df, -P, -k, /var/log]
+  register: node_baseline_journal_fs
+  changed_when: false
+  check_mode: false
+
+- name: Node_baseline | derive journald free-space floor
+  ansible.builtin.set_fact:
+    node_baseline_journald_keep_free_mb: >-
+      {{ ((node_baseline_journal_fs.stdout_lines[-1].split()[1] | int) * node_baseline_journald_keep_free_percent / 100 / 1024) | int }}
+
+- name: Node_baseline | ensure journald drop-in directory
+  ansible.builtin.file:
+    path: /etc/systemd/journald.conf.d
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Node_baseline | write journald retention drop-in
+  ansible.builtin.template:
+    src: journald_frameworks.conf.j2
+    dest: /etc/systemd/journald.conf.d/frameworks.conf
+    owner: root
+    group: root
+    mode: "0644"
+  register: node_baseline_journald_dropin
+
+# journald reads its config only at start. systemd keeps journald's open
+# stdout streams in its file descriptor store across the restart, so running
+# services keep logging.
+- name: Node_baseline | restart journald for the retention drop-in # noqa: no-handler
+  ansible.builtin.systemd:
+    name: systemd-journald
+    state: restarted
+  when:
+    - not ansible_check_mode
+    - node_baseline_journald_dropin is changed

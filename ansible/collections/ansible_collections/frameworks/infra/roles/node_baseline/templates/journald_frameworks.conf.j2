@@ -1,0 +1,6 @@
+# Managed by frameworks.infra.node_baseline. Edits will be overwritten.
+#
+# SystemKeepFree is {{ node_baseline_journald_keep_free_percent }}% of the filesystem holding /var/log/journal.
+[Journal]
+SystemMaxUse={{ node_baseline_journald_max_use }}
+SystemKeepFree={{ node_baseline_journald_keep_free_mb }}M

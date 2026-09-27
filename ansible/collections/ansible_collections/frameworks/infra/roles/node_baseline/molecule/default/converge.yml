@@ -1,0 +1,19 @@
+---
+- name: Converge
+  hosts: all
+  become: true
+  gather_facts: true
+  pre_tasks:
+    # Provisioned nodes are reached over SSH; the container image has no sshd.
+    - name: Install openssh-server
+      ansible.builtin.package:
+        name: openssh-server
+        state: present
+
+    - name: Generate sshd host keys
+      ansible.builtin.command: ssh-keygen -A
+      changed_when: false
+  tasks:
+    - name: Apply frameworks.infra.node_baseline
+      ansible.builtin.include_role:
+        name: frameworks.infra.node_baseline

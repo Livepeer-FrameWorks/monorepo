@@ -1,0 +1,14 @@
+# Managed by frameworks.infra.node_baseline. Edits will be overwritten.
+[sshd]
+enabled = true
+mode = normal
+{% if ansible_facts.service_mgr == 'systemd' %}
+backend = systemd
+{% else %}
+backend = auto
+logpath = /var/log/messages
+{% endif %}
+maxretry = 5
+findtime = 10m
+bantime = 1h
+ignoreip = 127.0.0.1/8 ::1
