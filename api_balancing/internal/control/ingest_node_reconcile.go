@@ -21,6 +21,9 @@ const (
 	// IngestEndedSupersededByNewNode: a publisher for the same stream was admitted on another node
 	// while this session's node had no control connection.
 	IngestEndedSupersededByNewNode = "superseded_by_new_node"
+	// IngestEndedNodeLost: the session's node had no control connection to any replica and no
+	// evidence of life for IngestNodeLostAfter (ReapLostNodeIngestSessionsOnce).
+	IngestEndedNodeLost = "node_lost"
 	// ingestEndedPlacementClaimLost: Commodore refused the placement renewal because another
 	// publisher holds the stream's claim (RetireIngestSessionByClaim).
 	ingestEndedPlacementClaimLost = "placement_claim_lost"
@@ -33,7 +36,7 @@ type NodeIngestDrainFunc func(ctx context.Context, nodeID string, req *ipcpb.Dra
 type NodeIngestReconcileResult struct {
 	Kept    int // open sessions the node still holds
 	Ended   int // open sessions the node no longer holds, ended absent_on_reregister
-	Stopped int // generations the node holds that another publisher took over, told to stop
+	Stopped int // generations the node holds but no longer owns (taken over or node_lost), told to stop
 }
 
 // IngestRegistrationCutoff reads the database clock for a registration. Session rows carry the
@@ -56,7 +59,12 @@ func IngestRegistrationCutoff(ctx context.Context) (time.Time, error) {
 //     new connection are not yet in the node's list;
 //   - a listed generation whose session another publisher took over (takeover on another node, or a
 //     placement claim lost to another cluster) is told to stop with a drain fenced on that exact
-//     generation, so the node cannot keep publishing a stream it no longer owns.
+//     generation, so the node cannot keep publishing a stream it no longer owns;
+//   - a listed generation that ended as node_lost is told to stop the same way, successor or not.
+//     Its stream.idle and DVR stop were already emitted, so the encoder's reconnect gets a fresh
+//     admission instead of the ended session being reopened;
+//   - a listed generation that ended on its own evidence (close, stream end, runtime absence) with
+//     no successor is left to the node's runtime reconciliation.
 //
 // current reports whether the registration that produced reported is still the node's connection;
 // a newer registration reconciles on its own, so this one stops.
@@ -135,8 +143,11 @@ func ReconcileNodeIngestSessions(ctx context.Context, nodeID string, reported []
 			"node_id": nodeID, "internal_name": row.StreamInternalName, "ingest_generation": row.SessionID,
 			"ended_reason": row.EndedReason, "active_generation": row.ActiveGeneration, "active_node_id": row.ActiveNodeID,
 		}
+		// A node_lost generation is stopped even with no successor: its stream.idle and DVR stop are
+		// already out, so the publisher must reconnect for a fresh admission rather than continue
+		// under an ended session.
 		lostOwnership := row.EndedReason == IngestEndedSupersededByNewNode || row.EndedReason == ingestEndedPlacementClaimLost ||
-			(row.ActiveGeneration != "" && row.ActiveGeneration != row.SessionID)
+			row.EndedReason == IngestEndedNodeLost || (row.ActiveGeneration != "" && row.ActiveGeneration != row.SessionID)
 		if !lostOwnership {
 			// The session ended on its own evidence (close, stream end, runtime absence). The node's
 			// Mist absence reconciliation retires its local record; nothing else owns the stream.
@@ -175,6 +186,10 @@ func ReconcileNodeIngestSessions(ctx context.Context, nodeID string, reported []
 			continue
 		}
 		result.Stopped++
+		if row.EndedReason == IngestEndedNodeLost && row.ActiveGeneration == "" {
+			logger.WithFields(fields).Warn("Told the re-registered node to stop its ingest publisher: its session ended as node_lost while the node was unreachable; the encoder's reconnect is admitted as a new generation")
+			continue
+		}
 		logger.WithFields(fields).Warn("Told the re-registered node to stop its ingest publisher: another publisher took the stream over while the node was unreachable")
 	}
 	for _, id := range generationIDs {

@@ -7,6 +7,12 @@ FROM foghorn.ingest_sessions
 WHERE node_id = sqlc.arg(node_id) AND ended_at IS NULL AND projection_state = 'active'
   AND started_at < sqlc.arg(started_before)::timestamptz;
 
+-- name: ListOpenProjectedIngestSessions :many
+SELECT id::text AS session_id, tenant_id::text AS tenant_id, node_id, stream_internal_name
+FROM foghorn.ingest_sessions
+WHERE ended_at IS NULL AND projection_state = 'active'
+ORDER BY node_id, started_at;
+
 -- name: ListNodeIngestGenerations :many
 SELECT s.id::text AS session_id, s.tenant_id::text AS tenant_id, s.stream_internal_name,
        (s.ended_at IS NOT NULL)::boolean AS ended, COALESCE(s.ended_reason, '')::text AS ended_reason,

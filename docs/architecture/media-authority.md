@@ -631,8 +631,10 @@ prepare`, perform the native restore, then use `cluster restore-fence complete`
   publisher. `PUSH_INPUT_CLOSE` is the exact PID/generation finalizer.
   Event-time-fenced `STREAM_END`, takeover by a publisher admitted on another
   node while this node is absent, the node's re-registration inventory,
-  projection abort, and placement-claim loss are backstops that end only the
-  matching durable generation. Control-connection loss alone ends none. Helmsman's Mist inventory supplies the local runtime backstop:
+  projection abort, placement-claim loss, and the 5-minute lost-node window
+  (`node_lost`: no control connection and no live pulled copy of the node's
+  streams on a connected edge) are backstops that end only the matching durable
+  generation. Shorter control-connection loss ends none. Helmsman's Mist inventory supplies the local runtime backstop:
   it compares the admitted connector PID with Mist's `sourcepids`, so a viewer
   or replacement input retaining the same runtime name cannot mask a dead
   publisher. Mist exposes `sourcepids`; the FrameWorks fork additionally

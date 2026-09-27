@@ -261,6 +261,12 @@ func (f *lockedIngestGenerationFence) Unlock() {
 // After stream end the value becomes a bounded tombstone that lets late control commands prove
 // they still target the exact local publisher generation they were created for.
 func RecordAdmittedIngestGeneration(runtimeName, generation string, connectorPID int64) error {
+	return recordAdmittedIngestGeneration(runtimeName, generation, connectorPID, "")
+}
+
+// recordAdmittedIngestGeneration also remembers which runtime the admitting stream key (by digest)
+// went into, so that key's next PUSH_REWRITE is ordered after this runtime's end triggers.
+func recordAdmittedIngestGeneration(runtimeName, generation string, connectorPID int64, admissionKey string) error {
 	runtimeName = strings.TrimSpace(runtimeName)
 	generation = strings.TrimSpace(generation)
 	if runtimeName == "" || generation == "" || connectorPID <= 0 {
@@ -272,13 +278,14 @@ func RecordAdmittedIngestGeneration(runtimeName, generation string, connectorPID
 	store := ingestGenerationStore
 	ingestGenerationStoreMu.RUnlock()
 	if store != nil {
-		if err := store.Put(runtimeName, generation, connectorPID); err != nil {
+		if err := store.PutAdmission(runtimeName, generation, connectorPID, admissionKey); err != nil {
 			return err
 		}
 	}
 	fence.generation = generation
 	fence.connectorPID = connectorPID
 	fence.active = true
+	rememberAdmittedRuntime(admissionKey, runtimeName)
 	return nil
 }
 
@@ -403,10 +410,12 @@ func rehydrateIngestGenerationFences(records map[string]storage.IngestGeneration
 		fence.connectorPID = record.ConnectorPID
 		fence.active = record.Active
 		fence.Unlock()
+		rememberAdmittedRuntime(record.AdmissionKey, runtimeName)
 	}
 }
 
 func evictInMemoryGenerationFences(runtimeNames []string) {
+	forgetAdmittedRuntimes(runtimeNames)
 	for _, runtimeName := range runtimeNames {
 		admittedIngestGenerations.Lock()
 		fence := admittedIngestGenerations.byRuntime[runtimeName]
@@ -706,6 +715,14 @@ func SendMistTriggerContext(ctx context.Context, mistTrigger *ipcpb.MistTrigger,
 	if requestDeadline, ok := ctx.Deadline(); ok && requestDeadline.Before(deadline) {
 		deadline = requestDeadline
 	}
+	var admissionKey string
+	if triggerType == string(mist.TriggerPushRewrite) {
+		admissionKey = pushAdmissionKey(mistTrigger.GetPushRewrite().GetStreamName())
+		if err := awaitPushRewriteCausalOrder(ctx, deadline, mistTrigger, logger); err != nil {
+			TriggersSent.WithLabelValues(triggerType, "prior_end_undelivered").Inc()
+			return &MistTriggerResult{Abort: true, ErrorCode: ipcpb.IngestErrorCode_INGEST_ERROR_TIMEOUT}, err
+		}
+	}
 
 	var lastErr error
 	for attempt := 1; attempt <= attempts; attempt++ {
@@ -740,8 +757,9 @@ func SendMistTriggerContext(ctx context.Context, mistTrigger *ipcpb.MistTrigger,
 		responseCh := make(chan *ipcpb.MistTriggerResponse, 1)
 		pendingMutex <- struct{}{}
 		pendingMistTriggers[mistTrigger.RequestId] = pendingMistTrigger{
-			responseCh:  responseCh,
-			triggerType: triggerType,
+			responseCh:   responseCh,
+			triggerType:  triggerType,
+			admissionKey: admissionKey,
 		}
 		<-pendingMutex
 
@@ -793,6 +811,9 @@ func boundedMistTriggerSendContext(parent context.Context, timeout time.Duration
 type pendingMistTrigger struct {
 	responseCh  chan *ipcpb.MistTriggerResponse
 	triggerType string
+	// admissionKey is the stream-key digest of a PUSH_REWRITE, recorded with the runtime it is
+	// admitted into.
+	admissionKey string
 }
 
 // pendingMistTriggers tracks blocking trigger requests waiting for responses.
@@ -979,7 +1000,7 @@ func handleMistTriggerResponse(response *ipcpb.MistTriggerResponse) {
 		// Record before releasing the waiting HTTP handler. The Recv loop may immediately observe a
 		// queued control command after this response; updating synchronously makes stream ordering a
 		// generation fence even before the PUSH_REWRITE handler returns the approval to Mist.
-		if err := RecordAdmittedIngestGeneration(response.GetResponse(), response.GetIngestGeneration(), response.GetIngestConnectorPid()); err != nil {
+		if err := recordAdmittedIngestGeneration(response.GetResponse(), response.GetIngestGeneration(), response.GetIngestConnectorPid(), pending.admissionKey); err != nil {
 			if pkgLogger != nil {
 				pkgLogger.WithError(err).WithField("runtime_name", response.GetResponse()).Error("Failed to persist accepted ingest generation; refusing publisher")
 			}

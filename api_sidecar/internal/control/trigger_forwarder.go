@@ -180,6 +180,9 @@ func drainTriggerWAL(logger logging.Logger) {
 		return // no active stream; pending entries stay on disk
 	}
 	for {
+		if !drainPriorityRuntimes(triggerWAL, logger) {
+			return
+		}
 		pending, err := triggerWAL.PendingBatch(triggerWALDrainBatch)
 		if err != nil {
 			logger.WithError(err).Warn("Failed to read trigger WAL batch")
@@ -192,6 +195,13 @@ func drainTriggerWAL(logger logging.Logger) {
 		for _, trigger := range pending {
 			if getStream() == nil {
 				return // disconnect mid-drain; resume on reconnect
+			}
+			// An admission waiting on a runtime's end triggers is served before the next entry.
+			if !drainPriorityRuntimes(triggerWAL, logger) {
+				return
+			}
+			if !triggerWAL.IsPending(trigger.GetRequestId()) {
+				continue // delivered ahead of order for a waiting admission
 			}
 			if !sendDurableTriggerAndAwaitAck(trigger, logger) {
 				failed = true

@@ -125,6 +125,15 @@ reported failed.
   waits for the retry tick. This prevents a six-figure backlog from being read
   and unmarshaled in full before the first send.
 - No TTL — the file stays until it is acked or manually purged. Operators should monitor pending depth.
+- Entries that end an ingest runtime's publisher (`PUSH_INPUT_CLOSE`,
+  `STREAM_END`) are also indexed by Mist runtime name, rebuilt from disk at
+  startup. A PUSH_REWRITE for a stream key last admitted into that runtime waits
+  until those entries are acknowledged. The forwarder delivers them ahead of
+  older entries while an admission waits, and skips them when their turn in the
+  ordered drain comes. The wait is bounded by the PUSH_REWRITE budget. At the
+  deadline the PUSH_REWRITE fails, which Mist answers by refusing the push, and
+  `helmsman_triggers_sent_total{status="prior_end_undelivered"}` counts it. See
+  viewer-routing.md for why the close must reach Foghorn first.
 
 The package is a Go-only library; tests in `trigger_wal_test.go` cover idempotent append, idempotent ack, crash-restart recovery (open a fresh handle on the same dir), and ordered drain.
 

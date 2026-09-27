@@ -457,9 +457,26 @@ evidence. One case is a publisher for the same stream admitted on another node
 while the old node has no `conn_owner` on any replica. That admission
 supersedes the old session in the same transaction (`superseded_by_new_node`)
 and replaces it one for one in the tenant count. The other cases are the
-publisher's close, `STREAM_END`, Helmsman's runtime-absence report, or the
-node's re-registration inventory (below). While the old node is connected, or
-its presence cannot be read, a second publisher is `DUPLICATE_INGEST`.
+publisher's close, `STREAM_END`, Helmsman's runtime-absence report, the
+node's re-registration inventory (below), or the lost-node window. While the
+old node is connected, or its presence cannot be read, a second publisher is
+`DUPLICATE_INGEST`.
+
+The lost-node window bounds a session whose node never comes back. One Foghorn
+replica per cell, the holder of the `ingest-node-lost` Valkey lease, runs the
+check every 30 seconds. It keeps a clock per node that has open sessions and no
+`conn_owner` on any replica. Evidence of life restarts that clock: the node
+registering again, or a connected edge in the cell reporting a live pulled copy
+of one of the node's streams (a replicated instance with an input or a playable
+buffer, reported within the last minute). With one publisher per stream, such a
+copy can only be fed by that node. After a fixed 5 minutes with neither, each
+of the node's sessions ends as `node_lost` through the offline path: the source
+projection is withdrawn, `stream.idle` is emitted, the DVR stop is claimed, and
+the tenant stream slot is freed. The ending runs under the node retirement
+guard, so a node registering at that moment either keeps its sessions or
+registers after they ended. Each end is logged with the node, stream,
+generation and absence duration. The window is a constant. A lease handover
+starts the clocks again, which can only postpone an end.
 
 The takeover can be admitted only after Commodore's 30-second placement lease
 lapses. Renewal is sharded by control-connection ownership, so nobody renews an
@@ -476,6 +493,33 @@ that node's sessions:
 - A listed generation that another node has taken over gets a `DrainStream`
   fenced on that exact generation, so the node stops the input it no longer
   owns.
+- A listed generation that ended as `node_lost` gets the same drain, even with
+  no successor. Its `stream.idle` and DVR stop are already out, so the old row is
+  not reopened. The encoder's reconnect is a new PUSH_REWRITE with a new
+  generation, DVR and `stream.live`.
+- A listed generation that ended on its own evidence (close, `STREAM_END`,
+  runtime absence) with no successor is left to Helmsman's runtime
+  reconciliation.
+
+Late triggers from an ended generation change nothing. The old node's WAL can
+still deliver its `PUSH_INPUT_CLOSE`, `STREAM_END` or runtime-absence report
+after a takeover, a same-node successor, or `node_lost`. The close and the
+runtime-absence report match only the exact connector PID or generation. The
+`STREAM_END` reaper is node-scoped and fenced by event time. The offline backstop
+is suppressed while any session of the stream is open. None of them ends the
+successor or emits a second `stream.idle`.
+
+Helmsman orders each runtime's triggers the way a Kafka partition orders one
+key. Ending triggers go through its durable WAL, while PUSH_REWRITE is forwarded
+synchronously. Helmsman remembers, with the persisted generation record, which
+runtime each stream key (as a digest) was admitted into. Before forwarding a
+PUSH_REWRITE, it delivers that runtime's pending `PUSH_INPUT_CLOSE` and
+`STREAM_END` entries ahead of the rest of the WAL and waits for Foghorn's
+acknowledgements. Without this, a reconnect on the same node could reach Foghorn
+before the old connection's close and be refused as a duplicate. The wait uses
+the PUSH_REWRITE budget. If the entries are still undelivered, Foghorn is
+unreachable, and the PUSH_REWRITE fails with 503 and a logged reason. Other
+runtimes' admissions are not delayed.
 
 A registration without `live_ingest_generations_reported` (an older sidecar or
 an unreadable store) proves nothing, and no session ends because of it.

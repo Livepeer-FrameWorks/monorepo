@@ -187,6 +187,48 @@ func (q *Queries) ListNodeProjectedIngestSessionsBefore(ctx context.Context, arg
 	return items, nil
 }
 
+const listOpenProjectedIngestSessions = `-- name: ListOpenProjectedIngestSessions :many
+SELECT id::text AS session_id, tenant_id::text AS tenant_id, node_id, stream_internal_name
+FROM foghorn.ingest_sessions
+WHERE ended_at IS NULL AND projection_state = 'active'
+ORDER BY node_id, started_at
+`
+
+type ListOpenProjectedIngestSessionsRow struct {
+	SessionID          string `db:"session_id" json:"session_id"`
+	TenantID           string `db:"tenant_id" json:"tenant_id"`
+	NodeID             string `db:"node_id" json:"node_id"`
+	StreamInternalName string `db:"stream_internal_name" json:"stream_internal_name"`
+}
+
+func (q *Queries) ListOpenProjectedIngestSessions(ctx context.Context) ([]ListOpenProjectedIngestSessionsRow, error) {
+	rows, err := q.db.QueryContext(ctx, listOpenProjectedIngestSessions)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListOpenProjectedIngestSessionsRow{}
+	for rows.Next() {
+		var i ListOpenProjectedIngestSessionsRow
+		if err := rows.Scan(
+			&i.SessionID,
+			&i.TenantID,
+			&i.NodeID,
+			&i.StreamInternalName,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const purgeExpiredCloseTombstones = `-- name: PurgeExpiredCloseTombstones :execrows
 DELETE FROM foghorn.ingest_close_tombstones
 WHERE created_at < NOW() - make_interval(secs => $1::double precision)

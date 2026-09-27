@@ -40,6 +40,31 @@ type TriggerWAL struct {
 	head      int
 	active    map[string]struct{}
 	pathsByID map[string][]string
+
+	// runtimeByID and idsByRuntime index the pending entries that end an ingest runtime's publisher
+	// (PUSH_INPUT_CLOSE, STREAM_END) by Mist runtime name, so a new admission for that runtime can be
+	// ordered after them. changed is closed and replaced whenever an entry leaves the WAL.
+	runtimeByID  map[string]string
+	idsByRuntime map[string]map[string]struct{}
+	changed      chan struct{}
+}
+
+// IngestRuntimeOrderKey returns the Mist runtime whose publisher the trigger reports ended, or ""
+// when the trigger does not end an ingest publisher. Processing inputs are sidecar-local jobs, not
+// admitted publishers.
+func IngestRuntimeOrderKey(trigger *ipcpb.MistTrigger) string {
+	var runtime string
+	switch {
+	case trigger.GetPushInputClose() != nil:
+		runtime = trigger.GetPushInputClose().GetStreamName()
+	case trigger.GetStreamEnd() != nil:
+		runtime = trigger.GetStreamEnd().GetStreamName()
+	}
+	runtime = strings.TrimSpace(runtime)
+	if strings.HasPrefix(runtime, "processing+") {
+		return ""
+	}
+	return runtime
 }
 
 // NewTriggerWAL creates (or opens) the WAL directory.
@@ -53,18 +78,111 @@ func NewTriggerWAL(dir string) (*TriggerWAL, error) {
 	}
 	sort.Strings(files)
 	w := &TriggerWAL{
-		dir:       dir,
-		pending:   files,
-		active:    make(map[string]struct{}, len(files)),
-		pathsByID: make(map[string][]string, len(files)),
+		dir:          dir,
+		pending:      files,
+		active:       make(map[string]struct{}, len(files)),
+		pathsByID:    make(map[string][]string, len(files)),
+		runtimeByID:  make(map[string]string),
+		idsByRuntime: make(map[string]map[string]struct{}),
+		changed:      make(chan struct{}),
 	}
 	for _, path := range files {
 		w.active[path] = struct{}{}
-		if id, ok := sourceEventIDFromPath(path); ok {
-			w.pathsByID[id] = append(w.pathsByID[id], path)
+		id, ok := sourceEventIDFromPath(path)
+		if !ok {
+			continue
+		}
+		w.pathsByID[id] = append(w.pathsByID[id], path)
+		// Entries that survive a restart keep their ordering role; an unreadable entry is still
+		// forwarded in WAL order, it just cannot hold back an admission.
+		if trigger, err := readTriggerFile(path); err == nil {
+			w.indexRuntimeLocked(id, IngestRuntimeOrderKey(trigger))
 		}
 	}
 	return w, nil
+}
+
+func readTriggerFile(path string) (*ipcpb.MistTrigger, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	var t ipcpb.MistTrigger
+	if err := proto.Unmarshal(data, &t); err != nil {
+		return nil, err
+	}
+	return &t, nil
+}
+
+func (w *TriggerWAL) indexRuntimeLocked(sourceEventID, runtime string) {
+	if runtime == "" {
+		return
+	}
+	w.runtimeByID[sourceEventID] = runtime
+	ids := w.idsByRuntime[runtime]
+	if ids == nil {
+		ids = make(map[string]struct{})
+		w.idsByRuntime[runtime] = ids
+	}
+	ids[sourceEventID] = struct{}{}
+}
+
+// removedLocked drops an entry that left the WAL from the runtime index and wakes every waiter.
+func (w *TriggerWAL) removedLocked(sourceEventID string) {
+	if runtime, ok := w.runtimeByID[sourceEventID]; ok {
+		delete(w.runtimeByID, sourceEventID)
+		if ids := w.idsByRuntime[runtime]; ids != nil {
+			delete(ids, sourceEventID)
+			if len(ids) == 0 {
+				delete(w.idsByRuntime, runtime)
+			}
+		}
+	}
+	close(w.changed)
+	w.changed = make(chan struct{})
+}
+
+// PendingForRuntime reports how many entries ending runtime's publisher are still undelivered, and
+// a channel that is closed at the next removal of any entry.
+func (w *TriggerWAL) PendingForRuntime(runtime string) (int, <-chan struct{}) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return len(w.idsByRuntime[strings.TrimSpace(runtime)]), w.changed
+}
+
+// PendingRuntimeBatch returns the undelivered entries that end runtime's publisher, oldest first.
+func (w *TriggerWAL) PendingRuntimeBatch(runtime string) ([]*ipcpb.MistTrigger, error) {
+	w.mu.Lock()
+	ids := w.idsByRuntime[strings.TrimSpace(runtime)]
+	files := make([]string, 0, len(ids))
+	for id := range ids {
+		for _, path := range w.pathsByID[id] {
+			if _, ok := w.active[path]; ok {
+				files = append(files, path)
+			}
+		}
+	}
+	w.mu.Unlock()
+	sort.Strings(files)
+	out := make([]*ipcpb.MistTrigger, 0, len(files))
+	for _, path := range files {
+		t, err := readTriggerFile(path)
+		if errors.Is(err, os.ErrNotExist) {
+			continue
+		}
+		if err != nil {
+			return nil, fmt.Errorf("trigger wal read %s: %w", filepath.Base(path), err)
+		}
+		out = append(out, t)
+	}
+	return out, nil
+}
+
+// IsPending reports whether sourceEventID is still awaiting delivery.
+func (w *TriggerWAL) IsPending(sourceEventID string) bool {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return len(w.pathsByID[sourceEventID]) > 0
 }
 
 // DefaultTriggerWALDir resolves the on-disk directory used by the WAL.
@@ -159,6 +277,7 @@ func (w *TriggerWAL) Append(trigger *ipcpb.MistTrigger) (bool, error) {
 		return false, fmt.Errorf("trigger wal rename: %w", err)
 	}
 	w.addPathLocked(id, path)
+	w.indexRuntimeLocked(id, IngestRuntimeOrderKey(trigger))
 	if err := syncDir(w.dir); err != nil {
 		return false, fmt.Errorf("trigger wal sync dir: %w", err)
 	}
@@ -180,6 +299,7 @@ func (w *TriggerWAL) Ack(sourceEventID string) error {
 	delete(w.pathsByID, sourceEventID)
 	w.advanceHeadLocked()
 	if len(files) > 0 {
+		w.removedLocked(sourceEventID)
 		if err := syncDir(w.dir); err != nil {
 			return fmt.Errorf("trigger wal ack sync dir: %w", err)
 		}
@@ -204,6 +324,7 @@ func (w *TriggerWAL) DeadLetter(sourceEventID string) error {
 	delete(w.pathsByID, sourceEventID)
 	w.advanceHeadLocked()
 	if len(files) > 0 {
+		w.removedLocked(sourceEventID)
 		if err := syncDir(w.dir); err != nil {
 			return fmt.Errorf("trigger wal dead-letter sync dir: %w", err)
 		}

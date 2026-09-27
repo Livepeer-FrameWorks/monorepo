@@ -9,7 +9,9 @@ import (
 var (
 	// TriggersSent tracks all MistTrigger events sent to Foghorn
 	// Labels: trigger_type (e.g., "PUSH_REWRITE", "USER_NEW", "process_billing")
-	//         status: "sent", "send_error", "stream_disconnected", "exhausted"
+	//         status: "sent", "send_error", "stream_disconnected", "exhausted",
+	//                 "prior_end_undelivered" (PUSH_REWRITE refused: the runtime's previous end
+	//                 triggers could not reach Foghorn within the admission budget)
 	TriggersSent = promauto.NewCounterVec(
 		prometheus.CounterOpts{
 			Namespace: "helmsman",

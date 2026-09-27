@@ -314,9 +314,11 @@ Everything above is the demand-driven half. The proactive half — orchestrated 
   pending until its ordered Redis CAS succeeds; failed or abandoned projections are durably retired.
 - **Offline teardown is a durable transition**. `PUSH_INPUT_CLOSE` ends the exact generation.
   `STREAM_END` is an event-time-fenced aggregate backstop. Losing a node's control connection ends
-  nothing. A publisher admitted on another node while the old node is absent supersedes its session
-  under the node retirement guard, and the returning node's registration inventory ends the sessions
-  it no longer holds and drains generations taken over elsewhere. Stream-wide effects are leased from `ingest_offline_effects`, rechecked and applied
+  nothing by itself. A publisher admitted on another node while the old node is absent supersedes its
+  session under the node retirement guard. The returning node's registration inventory ends the
+  sessions it no longer holds and drains generations taken over elsewhere or ended as `node_lost`.
+  A node that stays away for 5 minutes, with no connected edge serving a live pulled copy of its
+  streams, has its sessions ended as `node_lost` by the lease-holding replica, under the same guard. Stream-wide effects are leased from `ingest_offline_effects`, rechecked and applied
   under the same stream lock as admission, so a reconnect either supersedes teardown or projects after
   it completes.
 - **A DVR never changes publisher sessions**. A recording binds to the generation that created it;

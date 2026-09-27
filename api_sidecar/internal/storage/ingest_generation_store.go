@@ -31,6 +31,10 @@ type IngestGenerationRecord struct {
 	ConnectorPID int64  `json:"connector_pid"`
 	Active       bool   `json:"active"`
 	UpdatedAt    int64  `json:"updated_at_unix_milli"`
+	// AdmissionKey is a one-way digest of the PUSH_REWRITE stream key that admitted the runtime. A
+	// reconnect presents the same key before Foghorn names the runtime, so the digest lets Helmsman
+	// order the new admission after the runtime's undelivered end triggers.
+	AdmissionKey string `json:"admission_key,omitempty"`
 }
 
 // IngestGenerationStore persists one atomic record per Mist runtime. Active entries survive
@@ -87,6 +91,12 @@ func (s *IngestGenerationStore) Load() (map[string]IngestGenerationRecord, error
 }
 
 func (s *IngestGenerationStore) Put(runtimeName, generation string, connectorPID int64) error {
+	return s.PutAdmission(runtimeName, generation, connectorPID, "")
+}
+
+// PutAdmission records an admitted generation together with the digest of the stream key that
+// admitted it. An empty admissionKey records the generation without one.
+func (s *IngestGenerationStore) PutAdmission(runtimeName, generation string, connectorPID int64, admissionKey string) error {
 	runtimeName = strings.TrimSpace(runtimeName)
 	generation = strings.TrimSpace(generation)
 	if runtimeName == "" || generation == "" || connectorPID <= 0 {
@@ -98,7 +108,8 @@ func (s *IngestGenerationStore) Put(runtimeName, generation string, connectorPID
 	defer runtimeLock.Unlock()
 	s.mu.Lock()
 	previous, existed := s.records[runtimeName]
-	if existed && previous.Active && previous.Generation == generation && previous.ConnectorPID == connectorPID {
+	if existed && previous.Active && previous.Generation == generation && previous.ConnectorPID == connectorPID &&
+		(admissionKey == "" || previous.AdmissionKey == admissionKey) {
 		// A blocking-trigger replay is the same admission, not a new grace
 		// period. Preserve the original timestamp and avoid a redundant disk
 		// replacement so repeated delivery cannot postpone runtime reconciliation.
@@ -121,6 +132,11 @@ func (s *IngestGenerationStore) Put(runtimeName, generation string, connectorPID
 		ConnectorPID: connectorPID,
 		Active:       true,
 		UpdatedAt:    time.Now().UnixMilli(),
+		AdmissionKey: admissionKey,
+	}
+	if existed && previous.Active && previous.Generation == generation && previous.ConnectorPID == connectorPID {
+		// Adding the key to a replayed admission keeps its original grace period.
+		record.UpdatedAt = previous.UpdatedAt
 	}
 	if err := s.writeRecord(record); err != nil {
 		if reservedActive {

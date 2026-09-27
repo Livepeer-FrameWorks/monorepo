@@ -427,6 +427,7 @@ type Querier interface {
 	ListNodeIngestGenerations(ctx context.Context, arg ListNodeIngestGenerationsParams) ([]ListNodeIngestGenerationsRow, error)
 	ListNodeMaintenance(ctx context.Context) ([]ListNodeMaintenanceRow, error)
 	ListNodeProjectedIngestSessionsBefore(ctx context.Context, arg ListNodeProjectedIngestSessionsBeforeParams) ([]ListNodeProjectedIngestSessionsBeforeRow, error)
+	ListOpenProjectedIngestSessions(ctx context.Context) ([]ListOpenProjectedIngestSessionsRow, error)
 	ListOriginNodes(ctx context.Context, artifactHash string) ([]string, error)
 	ListPendingArtifactsForFreeze(ctx context.Context, limit int32) ([]ListPendingArtifactsForFreezeRow, error)
 	ListPendingDVRSegments(ctx context.Context, arg ListPendingDVRSegmentsParams) ([]FoghornDvrSegment, error)

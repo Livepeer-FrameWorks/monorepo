@@ -21,15 +21,17 @@ import (
 // closed.
 type NodeRetireGuardFunc func(ctx context.Context, nodeID string) (release func(), err error)
 
-// An ingest session is never ended because its node lost the control connection. A Helmsman
-// reconnect or a Foghorn-side partition leaves Mist and its publishers running, so absence is not
-// evidence the publisher stopped. Sessions end on evidence:
+// Losing the control connection does not by itself end an ingest session. A Helmsman reconnect or a
+// Foghorn-side partition leaves Mist and its publishers running, so short absence is not evidence
+// the publisher stopped. Sessions end on evidence:
 //   - PUSH_INPUT_CLOSE, STREAM_END, and Helmsman's INGEST_RUNTIME_ABSENT report the publisher gone;
 //   - a publisher for the same stream admitted on another node while this node is absent takes the
 //     stream over (MintIngestSession, reason superseded_by_new_node);
 //   - the node re-registers without listing the generation (ReconcileNodeIngestSessions, reason
 //     absent_on_reregister);
-//   - Commodore refuses the placement renewal (RetireIngestSessionByClaim).
+//   - Commodore refuses the placement renewal (RetireIngestSessionByClaim);
+//   - the node stays without a control connection and without evidence of life for
+//     IngestNodeLostAfter (ReapLostNodeIngestSessionsOnce, reason node_lost).
 
 // RetireIngestSession ends one active session with the given reason and, in the SAME transaction,
 // claims the bound DVR stop and queues the source-offline transition in the same stream-locked

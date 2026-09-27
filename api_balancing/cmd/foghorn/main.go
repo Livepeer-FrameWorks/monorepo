@@ -2216,9 +2216,11 @@ func main() {
 	dvrIntentRecoveryJob.Start()
 	defer dvrIntentRecoveryJob.Stop()
 
-	// Retire ingest sessions whose admission never confirmed its source projection, and purge expired
-	// close-before-insert tombstones. Losing a node's control connection ends no session: a publisher
-	// on another node takes the stream over, and a returning node's registration reconciles its own.
+	// Retire ingest sessions whose admission never confirmed its source projection, purge expired
+	// close-before-insert tombstones, and (on the lost-node lease holder) end the sessions of a node
+	// that stays without a control connection and without evidence of life past the lost-node window.
+	// Shorter control loss ends no session: a publisher on another node takes the stream over, and a
+	// returning node's registration reconciles its own.
 	ingestSessionReaperJob := jobs.NewIngestSessionReaperJob(jobs.IngestSessionReaperConfig{
 		Logger: logger,
 	})
