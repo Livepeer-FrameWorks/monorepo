@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -16,6 +17,7 @@ import (
 	"github.com/DATA-DOG/go-sqlmock"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/mist"
+	quartermasterpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/quartermaster"
 
 	"github.com/gin-gonic/gin"
 	"github.com/prometheus/client_golang/prometheus"
@@ -285,6 +287,89 @@ func TestAuthorizeSignedLivepeerLiveJobRefusesNodeLostSessionAsEnded(t *testing.
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// A session kept open past the node's 5-minute eviction (evidence of life) still authorises its
+// transcode: with the node gone from state, the segment source binds on the node's Quartermaster
+// inventory record — its recorded addresses, cluster and edge type.
+func TestAuthorizeSignedLivepeerLiveJobBindsEvictedNodeOnInventoryRecord(t *testing.T) {
+	const openSession = "55555555-5555-4555-8555-555555555555"
+	record := func() *quartermasterpb.InfrastructureNode {
+		external := "198.51.100.7"
+		internal := "203.0.113.4"
+		return &quartermasterpb.InfrastructureNode{NodeId: "edge-1", ClusterId: "edge-cell", NodeType: "edge", ExternalIp: &external, InternalIp: &internal}
+	}
+	cases := []struct {
+		name       string
+		remoteIP   string
+		record     func() *quartermasterpb.InfrastructureNode
+		lookupErr  error
+		wantReason string
+	}{
+		{name: "recorded internal address", remoteIP: "203.0.113.4", record: record},
+		{name: "recorded external address", remoteIP: "198.51.100.7", record: record},
+		{name: "unrecorded address", remoteIP: "203.0.113.9", record: record, wantReason: authRejectNodeMismatch},
+		{name: "other cluster", remoteIP: "203.0.113.4", record: func() *quartermasterpb.InfrastructureNode {
+			r := record()
+			r.ClusterId = "other-cell"
+			return r
+		}, wantReason: authRejectNodeBinding},
+		{name: "not an edge", remoteIP: "203.0.113.4", record: func() *quartermasterpb.InfrastructureNode {
+			r := record()
+			r.NodeType = "core"
+			return r
+		}, wantReason: authRejectNodeBinding},
+		{name: "record unreadable", remoteIP: "203.0.113.4", lookupErr: errors.New("quartermaster unavailable"), wantReason: authRejectNodeBinding},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			configureLivepeerAuthNode(t, true, true, false)
+			state.ResetDefaultManagerForTests()
+			oldLookup := livepeerSourceNodeRecord
+			t.Cleanup(func() { livepeerSourceNodeRecord = oldLookup })
+			livepeerSourceNodeRecord = func(_ context.Context, nodeID string) (*quartermasterpb.InfrastructureNode, error) {
+				if nodeID != "edge-1" {
+					t.Fatalf("looked up node %q, want the token's node", nodeID)
+				}
+				if tc.lookupErr != nil {
+					return nil, tc.lookupErr
+				}
+				return tc.record(), nil
+			}
+			expectLiveAuthSession(t, openSession, "active", false, "")
+			request := liveAuthRequest(t, openSession)
+			request.RemoteIP = tc.remoteIP
+			got, reason := authorizeSignedLivepeerJob(context.Background(), "live+stream-Ab12Cd34", request)
+			if reason != tc.wantReason {
+				t.Fatalf("reason=%q context=%+v, want %q", reason, got, tc.wantReason)
+			}
+			if tc.wantReason == "" && (got == nil || got.NodeID != "edge-1" || got.StreamID != "stream-id") {
+				t.Fatalf("authorised context = %+v", got)
+			}
+		})
+	}
+}
+
+// A processing job needs the node's current capability report, so an evicted processing node is
+// not bound on its inventory record.
+func TestAuthorizeSignedLivepeerProcessingJobDoesNotBindEvictedNode(t *testing.T) {
+	configureLivepeerAuthNode(t, true, true, true)
+	state.ResetDefaultManagerForTests()
+	oldLookup := livepeerSourceNodeRecord
+	t.Cleanup(func() { livepeerSourceNodeRecord = oldLookup })
+	livepeerSourceNodeRecord = func(context.Context, string) (*quartermasterpb.InfrastructureNode, error) {
+		t.Fatal("a processing job must not bind on the inventory record")
+		return nil, nil
+	}
+	request := livepeerAuthRequest{
+		JobToken: mintLivepeerAuthToken(t, control.TranscodeJobClaims{
+			ManifestID: "processing+artifact", AttemptOrGeneration: "0", Session: "job-1", JobID: "job-1", SpecDigest: strings.Repeat("a", 64),
+		}),
+		RemoteIP: "203.0.113.4",
+	}
+	if got, reason := authorizeSignedLivepeerJob(context.Background(), "processing+artifact", request); got != nil || reason != authRejectNodeMismatch {
+		t.Fatalf("evicted processing node: reason=%q context=%+v, want node_mismatch", reason, got)
 	}
 }
 

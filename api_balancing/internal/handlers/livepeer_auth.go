@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"math"
+	"net"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -16,6 +17,7 @@ import (
 	"frameworks/api_balancing/internal/state"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/mist"
+	quartermasterpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/quartermaster"
 
 	"github.com/gin-gonic/gin"
 )
@@ -153,6 +155,15 @@ func authorizeSignedLivepeerJob(ctx context.Context, manifestID string, req live
 	}
 	remoteIP := strings.TrimSpace(req.RemoteIP)
 	nodeID := state.DefaultManager().NodeIDByClientIP(remoteIP)
+	if nodeID == "" && !processing && state.DefaultManager().GetNodeState(claims.NodeID) == nil {
+		// The node left this Foghorn's state (evicted after 5 minutes without a control connection)
+		// while its open session keeps the job authorised. Bind the source on the node's durable
+		// inventory record instead; the session admitted on that node already proves ingest.
+		if reason := bindEvictedLiveSourceNode(ctx, manifestID, remoteIP, claims); reason != "" {
+			return nil, reason
+		}
+		return finishLivepeerAuthorization(manifestID, req, claims, liveCtx)
+	}
 	if nodeID == "" || nodeID != claims.NodeID {
 		logger.WithFields(logging.Fields{
 			"manifest_id":   manifestID,
@@ -186,7 +197,12 @@ func authorizeSignedLivepeerJob(ctx context.Context, manifestID string, req live
 	} else if !node.CapIngest {
 		return nil, authRejectNodeCapability
 	}
+	return finishLivepeerAuthorization(manifestID, req, claims, authCtx)
+}
 
+// finishLivepeerAuthorization checks the gateway's reported source and profiles against the
+// authorised job and completes its context.
+func finishLivepeerAuthorization(manifestID string, req livepeerAuthRequest, claims control.TranscodeJobClaims, authCtx *LivepeerAuthContext) (*LivepeerAuthContext, string) {
 	if authCtx.ExpectedSource != nil && !livepeerSourceMatches(req.Source, *authCtx.ExpectedSource) {
 		if logger != nil {
 			logger.WithFields(logging.Fields{
@@ -233,6 +249,60 @@ func authorizeSignedLivepeerJob(ctx context.Context, manifestID string, req live
 	authCtx.NodeID = claims.NodeID
 	authCtx.SpecDigest = claims.SpecDigest
 	return authCtx, ""
+}
+
+// livepeerSourceNodeRecord reads a node's Quartermaster inventory record; tests replace it.
+var livepeerSourceNodeRecord = func(ctx context.Context, nodeID string) (*quartermasterpb.InfrastructureNode, error) {
+	if quartermasterClient == nil {
+		return nil, errors.New("quartermaster client not configured")
+	}
+	return quartermasterClient.GetNodeByLogicalName(ctx, nodeID)
+}
+
+// bindEvictedLiveSourceNode binds a live job's segment source to the token's node through
+// Quartermaster's inventory record, for a node this Foghorn no longer holds in state. The record
+// keeps the node's last reported addresses and its cluster after the node goes quiet. It returns
+// "" when remoteIP is one of the node's recorded addresses and the node is an edge in the token's
+// cluster, and the rejection reason otherwise; an unreadable record refuses as node_binding.
+func bindEvictedLiveSourceNode(ctx context.Context, manifestID, remoteIP string, claims control.TranscodeJobClaims) string {
+	fields := logging.Fields{
+		"manifest_id":      manifestID,
+		"remote_ip":        remoteIP,
+		"token_node_id":    claims.NodeID,
+		"token_cluster_id": claims.ClusterID,
+	}
+	lookupCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
+	defer cancel()
+	record, err := livepeerSourceNodeRecord(lookupCtx, claims.NodeID)
+	if err != nil || record == nil {
+		if err != nil {
+			fields["error"] = err.Error()
+		}
+		logger.WithFields(fields).Warn("livepeer auth: the token's node is not in state and its inventory record could not be read")
+		return authRejectNodeBinding
+	}
+	fields["node_cluster_id"] = record.GetClusterId()
+	fields["node_type"] = record.GetNodeType()
+	source := net.ParseIP(remoteIP)
+	matched := false
+	for _, addr := range []string{record.GetExternalIp(), record.GetInternalIp(), record.GetWireguardIp()} {
+		if ip := net.ParseIP(strings.TrimSpace(addr)); ip != nil && source != nil && ip.Equal(source) {
+			matched = true
+			break
+		}
+	}
+	if !matched {
+		fields["node_external_ip"] = record.GetExternalIp()
+		fields["node_internal_ip"] = record.GetInternalIp()
+		fields["node_wireguard_ip"] = record.GetWireguardIp()
+		logger.WithFields(fields).Warn("livepeer auth: segment source is not an address recorded for the token's node")
+		return authRejectNodeMismatch
+	}
+	if record.GetClusterId() != claims.ClusterID || record.GetNodeType() != "edge" {
+		logger.WithFields(fields).Warn("livepeer auth: the token's node is not an edge in the token's cluster")
+		return authRejectNodeBinding
+	}
+	return ""
 }
 
 // verifyLivepeerJobToken checks the job token's signature and claims, then binds
