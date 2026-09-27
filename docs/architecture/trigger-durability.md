@@ -167,7 +167,7 @@ reported failed.
 - Online replay reads at most 1,024 decoded entries per lane ahead of the send
   cursor, so a six-figure backlog is never read and unmarshaled in full before
   the first send.
-- No TTL — the file stays until it is acked or manually purged. Operators should monitor pending depth.
+- No TTL — the file stays until it is acked or manually purged. Operators watch the oldest pending age.
 - Entries that end an ingest runtime's publisher (`PUSH_INPUT_CLOSE`,
   `STREAM_END`) are also indexed by Mist runtime name, rebuilt from disk at
   startup. A PUSH_REWRITE for a stream key last admitted into that runtime waits
@@ -255,7 +255,12 @@ Foghorn maps processor errors via `classifyTriggerError` (`api_balancing/interna
 
 ## Operational handles
 
-- WAL directory pending file count is the canonical "is anything stuck?" signal.
+- `helmsman_trigger_wal_oldest_pending_age_seconds{lane}` is the canonical "is
+  anything stuck?" signal. It is computed at scrape time from the oldest entry
+  of each lane, so it keeps growing while nothing drains. The
+  `HelmsmanTriggerWALStuck` alert fires when it exceeds five minutes for two
+  minutes. `helmsman_trigger_wal_pending` gives the total depth; a steady
+  nonzero depth is normal for an always-on transcoding node.
 - `mist_webhook_requests_total{trigger_type, status}` carries `durably_enqueued`, `durably_enqueued_parse_error`, and `wal_error` statuses for each final/accounting handler.
 - `GET /triggers/wal` returns total `pending_depth` plus the oldest 100 rows and
   an `entries_truncated` flag; it does not decode the whole backlog.

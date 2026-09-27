@@ -1,6 +1,9 @@
 package control
 
 import (
+	"time"
+
+	"frameworks/api_sidecar/internal/storage"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promauto"
 )
@@ -165,6 +168,28 @@ var (
 		},
 	)
 
+	// TriggerWALOldestPendingAge is how long the oldest undelivered entry of each lane has waited,
+	// computed at scrape time so a forwarder that has stopped making progress still reports a
+	// growing age. Zero when the lane is empty.
+	_ = promauto.NewGaugeFunc(
+		prometheus.GaugeOpts{
+			Namespace:   "helmsman",
+			Name:        "trigger_wal_oldest_pending_age_seconds",
+			Help:        "Age of the oldest durable Mist trigger awaiting a positive ack from Foghorn",
+			ConstLabels: prometheus.Labels{"lane": "lifecycle"},
+		},
+		func() float64 { return triggerWALOldestPendingAge(storage.LaneLifecycle) },
+	)
+	_ = promauto.NewGaugeFunc(
+		prometheus.GaugeOpts{
+			Namespace:   "helmsman",
+			Name:        "trigger_wal_oldest_pending_age_seconds",
+			Help:        "Age of the oldest durable Mist trigger awaiting a positive ack from Foghorn",
+			ConstLabels: prometheus.Labels{"lane": "sample"},
+		},
+		func() float64 { return triggerWALOldestPendingAge(storage.LaneSample) },
+	)
+
 	// TriggerWALAppends counts WAL writes from Helmsman's HTTP handlers,
 	// before any forward attempt. Labels: trigger_type, status:"appended"
 	// (fresh source_event_id), "duplicate" (idempotent re-delivery from
@@ -190,3 +215,15 @@ var (
 		[]string{"trigger_type", "outcome"},
 	)
 )
+
+func triggerWALOldestPendingAge(lane storage.TriggerLane) float64 {
+	wal := triggerWAL
+	if wal == nil {
+		return 0
+	}
+	oldest, ok := wal.OldestPending(lane)
+	if !ok {
+		return 0
+	}
+	return max(time.Since(oldest).Seconds(), 0)
+}

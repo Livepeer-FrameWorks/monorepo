@@ -439,13 +439,13 @@ groups:
           description: "A durable ConfigSeed apply acknowledgement failed identity or signature validation and requires operator inspection."
 
       - alert: HelmsmanTriggerWALStuck
-        expr: helmsman_trigger_wal_pending > 0
-        for: 10m
+        expr: helmsman_trigger_wal_oldest_pending_age_seconds > 300
+        for: 2m
         labels:
           severity: warning
         annotations:
-          summary: "Helmsman durable trigger WAL is not draining"
-          description: "One or more Mist lifecycle triggers have awaited a positive Foghorn acknowledgement for ten minutes."
+          summary: "Helmsman durable trigger WAL is falling behind"
+          description: "The oldest {{ $labels.lane }} trigger on {{ $labels.node_id }} has awaited a positive Foghorn acknowledgement for {{ $value | humanizeDuration }}; billing and lifecycle facts reach analytics that late."
 
       - alert: HelmsmanCredentialCleanupStuck
         expr: helmsman_credential_cleanup_pending > 0 and helmsman_credential_cleanup_pending_seconds > 300 and helmsman_credential_cleanup_observation_error == 0

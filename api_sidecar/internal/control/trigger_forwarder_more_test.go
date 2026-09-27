@@ -3,9 +3,12 @@ package control
 import (
 	"errors"
 	"testing"
+	"time"
 
 	"frameworks/api_sidecar/internal/storage"
 	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
+
+	"github.com/prometheus/client_golang/prometheus"
 )
 
 // withTestTriggerWAL points the package-global durable WAL at a temp dir and
@@ -77,6 +80,49 @@ func TestUpdateTriggerWALDepthGauge(t *testing.T) {
 
 	withTestTriggerWAL(t)
 	updateTriggerWALDepthGauge() // with a WAL open: still must not panic
+}
+
+// The oldest-pending age of each lane is exported at scrape time, so it keeps growing while
+// nothing drains.
+func TestTriggerWALOldestPendingAgeGauge(t *testing.T) {
+	wal := withTestTriggerWAL(t)
+	gathered := func(lane string) float64 {
+		t.Helper()
+		families, err := prometheus.DefaultGatherer.Gather()
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, family := range families {
+			if family.GetName() != "helmsman_trigger_wal_oldest_pending_age_seconds" {
+				continue
+			}
+			for _, metric := range family.GetMetric() {
+				for _, label := range metric.GetLabel() {
+					if label.GetName() == "lane" && label.GetValue() == lane {
+						return metric.GetGauge().GetValue()
+					}
+				}
+			}
+		}
+		t.Fatalf("no oldest-pending age for lane %s", lane)
+		return 0
+	}
+	if age := gathered("lifecycle"); age != 0 {
+		t.Fatalf("empty lane age = %v, want 0", age)
+	}
+	stuckSince := time.Now().Add(-7 * time.Minute)
+	if _, err := wal.Append(&ipcpb.MistTrigger{RequestId: "stuck-user-end", TriggerType: "USER_END", Timestamp: stuckSince.UnixMilli()}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := wal.Append(&ipcpb.MistTrigger{RequestId: "fresh-sample", TriggerType: "PROCESS_AV_VIRTUAL_SEGMENT_COMPLETE", Timestamp: time.Now().UnixMilli()}); err != nil {
+		t.Fatal(err)
+	}
+	if age := gathered("lifecycle"); age < 420 || age > 430 {
+		t.Fatalf("lifecycle lane age = %v, want about 420s", age)
+	}
+	if age := gathered("sample"); age > 10 {
+		t.Fatalf("sample lane age = %v, want near 0", age)
+	}
 }
 
 // handleMistTriggerAck routes an ack to the forwarder pass blocked on its
