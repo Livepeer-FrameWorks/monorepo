@@ -9,6 +9,7 @@ Group={{ prometheus_stack_group }}
 ExecStart={{ vmauth_bin }} \
   -httpListenAddr=:{{ vmauth_port }} \
   -auth.config={{ vmauth_config_path }}
+ExecReload=/bin/kill -HUP $MAINPID
 Restart=always
 RestartSec=5
 

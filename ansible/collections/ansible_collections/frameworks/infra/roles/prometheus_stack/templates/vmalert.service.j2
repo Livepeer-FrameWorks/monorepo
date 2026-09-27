@@ -17,6 +17,7 @@ Wants=network-online.target
 User={{ prometheus_stack_user }}
 Group={{ prometheus_stack_group }}
 ExecStart={{ vmalert_bin }} {{ vmalert_args | join(' ') }}
+ExecReload=/bin/kill -HUP $MAINPID
 Restart=always
 RestartSec=5
 

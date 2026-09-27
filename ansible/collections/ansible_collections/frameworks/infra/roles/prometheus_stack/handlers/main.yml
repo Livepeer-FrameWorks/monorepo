@@ -43,3 +43,33 @@
     daemon_reload: true
   register: alertmanager_restarted
   when: not ansible_check_mode
+
+# Scrape config, alert rules, and auth config reload on SIGHUP (ExecReload);
+# the role validates each with the binary's -dryRun before it replaces the
+# running file. A restart notified in the same run loads them already.
+- name: Reload vmagent
+  listen: vmagent reload
+  ansible.builtin.systemd:
+    name: vmagent
+    state: reloaded
+  when:
+    - not ansible_check_mode
+    - vmagent_restarted is not defined
+
+- name: Reload vmauth
+  listen: vmauth reload
+  ansible.builtin.systemd:
+    name: vmauth
+    state: reloaded
+  when:
+    - not ansible_check_mode
+    - vmauth_restarted is not defined
+
+- name: Reload vmalert
+  listen: vmalert reload
+  ansible.builtin.systemd:
+    name: vmalert
+    state: reloaded
+  when:
+    - not ansible_check_mode
+    - vmalert_restarted is not defined

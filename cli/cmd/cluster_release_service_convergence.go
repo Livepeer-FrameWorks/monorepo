@@ -38,6 +38,8 @@ func releaseServiceStages() []releaseServiceStage {
 		{name: "yugabyte", taskTypes: []string{"yugabyte"}, describe: describeYugabyteConvergence, run: runYugabyteConvergence},
 		{name: "clickhouse", taskTypes: []string{"clickhouse"}, describe: describeClickHouseConvergence, run: runClickHouseConvergence},
 		{name: "kafka", taskTypes: []string{"kafka-controller", "kafka"}, describe: describeKafkaConvergence, run: runKafkaConvergence},
+		{name: "observability", taskTypes: []string{"vmagent", "vmalert", "vmauth"}, describe: describeObservabilityConvergence, run: runObservabilityConvergence},
+		{name: "proxies", taskTypes: []string{"nginx", "caddy"}, describe: describeProxyConvergence, run: runProxyConvergence},
 	}
 }
 

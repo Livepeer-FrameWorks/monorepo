@@ -114,6 +114,8 @@
     group: "{{ omit if ansible_check_mode else prometheus_stack_group }}"
     mode: "0755"
 
+# vmagent -dryRun parses the scrape config, so an invalid one never replaces
+# the running file; a valid one is reloaded without dropping buffered samples.
 - name: Render vmagent scrape config
   ansible.builtin.template:
     src: vmagent-scrape.yml.j2
@@ -121,7 +123,8 @@
     owner: root
     group: root
     mode: "0644"
-  notify: vmagent restart
+    validate: "{{ omit if ansible_check_mode else vmagent_bin ~ ' -dryRun -promscrape.config=%s' }}"
+  notify: vmagent reload
 
 - name: Render vmagent env file
   ansible.builtin.template:

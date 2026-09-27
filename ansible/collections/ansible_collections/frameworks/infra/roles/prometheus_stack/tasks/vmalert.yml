@@ -120,7 +120,7 @@
   loop: "{{ vmalert_rule_files }}"
   loop_control:
     label: "{{ item.name }}"
-  notify: vmalert restart
+  notify: vmalert reload
 
 - name: Find rendered vmalert rule files
   ansible.builtin.find:
@@ -139,7 +139,7 @@
       | map(attribute='path')
       | difference(vmalert_rule_files | map(attribute='name') | map('regex_replace', '^', vmalert_rules_dir ~ '/') | list)
     }}
-  notify: vmalert restart
+  notify: vmalert reload
 
 - name: Render vmalert systemd unit
   ansible.builtin.template:

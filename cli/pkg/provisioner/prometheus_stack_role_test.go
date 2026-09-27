@@ -263,3 +263,33 @@ func TestPrometheusStackVMAgentCapsRemoteWriteBuffer(t *testing.T) {
 		t.Fatalf("both vmagent ExecStart variants must cap the buffer at 1GB, found %d:\n%s", got, unit)
 	}
 }
+
+// A config change reaches vmagent, vmalert, and vmauth by SIGHUP after the
+// binary's -dryRun accepted it; only a new binary or unit restarts them.
+func TestPrometheusStackReloadsValidatedConfigs(t *testing.T) {
+	role := "ansible/collections/ansible_collections/frameworks/infra/roles/prometheus_stack/"
+	for _, component := range []string{"vmagent", "vmalert", "vmauth"} {
+		unit := readRepoFile(t, role+"templates/"+component+".service.j2")
+		if !strings.Contains(unit, "ExecReload=/bin/kill -HUP $MAINPID\n") {
+			t.Fatalf("%s unit has no SIGHUP reload:\n%s", component, unit)
+		}
+	}
+	handlers := readRepoFile(t, role+"handlers/main.yml")
+	for _, component := range []string{"vmagent", "vmalert", "vmauth"} {
+		if !strings.Contains(handlers, "listen: "+component+" reload\n  ansible.builtin.systemd:\n    name: "+component+"\n    state: reloaded\n  when:\n    - not ansible_check_mode\n    - "+component+"_restarted is not defined\n") {
+			t.Fatalf("handlers lack a %s reload that yields to a restart:\n%s", component, handlers)
+		}
+	}
+	for file, want := range map[string][]string{
+		"tasks/vmagent.yml": {"validate: \"{{ omit if ansible_check_mode else vmagent_bin ~ ' -dryRun -promscrape.config=%s' }}\"\n  notify: vmagent reload"},
+		"tasks/vmauth.yml":  {"validate: \"{{ omit if ansible_check_mode else vmauth_bin ~ ' -dryRun -auth.config=%s' }}\"\n  notify: vmauth reload"},
+		"tasks/vmalert.yml": {"validate: \"{{ vmalert_bin }} -dryRun -rule=%s\"\n  loop: \"{{ vmalert_rule_files }}\"", "  notify: vmalert reload"},
+	} {
+		content := readRepoFile(t, role+file)
+		for _, w := range want {
+			if !strings.Contains(content, w) {
+				t.Fatalf("%s missing %q", file, w)
+			}
+		}
+	}
+}

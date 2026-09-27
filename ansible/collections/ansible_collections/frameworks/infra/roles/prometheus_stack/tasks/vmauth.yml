@@ -113,6 +113,8 @@
     group: root
     mode: "0755"
 
+# vmauth -dryRun validates the auth config, so an invalid one never replaces
+# the running file; a valid one is reloaded without dropping connections.
 - name: Render vmauth config
   ansible.builtin.template:
     src: vmauth.yml.j2
@@ -120,7 +122,8 @@
     owner: root
     group: "{{ prometheus_stack_group }}"
     mode: "0640"
-  notify: vmauth restart
+    validate: "{{ omit if ansible_check_mode else vmauth_bin ~ ' -dryRun -auth.config=%s' }}"
+  notify: vmauth reload
 
 - name: Render vmauth systemd unit
   ansible.builtin.template:

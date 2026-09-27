@@ -3,6 +3,7 @@ package cmd
 import (
 	"bytes"
 	"context"
+	"errors"
 	"slices"
 	"sync"
 	"testing"
@@ -48,11 +49,12 @@ func serviceTaskKey(host inventory.Host, config provisioner.ServiceConfig) strin
 
 // serviceReleaseProvisioner is a role whose precheck reports drift on every
 // task not in converged, which records each apply and then runs
-// afterProvision.
+// afterProvision, and whose apply fails for the tasks in failing.
 type serviceReleaseProvisioner struct {
 	fakeTaskProvisioner
 	log            *serviceEventLog
 	converged      map[string]bool
+	failing        map[string]bool
 	afterProvision func(key string)
 }
 
@@ -70,6 +72,9 @@ func (p *serviceReleaseProvisioner) WouldChange(_ context.Context, host inventor
 func (p *serviceReleaseProvisioner) Provision(_ context.Context, host inventory.Host, config provisioner.ServiceConfig) error {
 	key := serviceTaskKey(host, config)
 	p.log.add("provision:" + key)
+	if p.failing[key] {
+		return errors.New("config test failed")
+	}
 	if p.afterProvision != nil {
 		p.afterProvision(key)
 	}

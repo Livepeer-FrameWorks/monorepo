@@ -24,6 +24,7 @@ ExecStart={{ vmagent_bin }} \
   -remoteWrite.maxDiskUsagePerURL=1GB \
   -remoteWrite.url=${VMAGENT_REMOTE_WRITE_URL}
 {% endif %}
+ExecReload=/bin/kill -HUP $MAINPID
 Restart=always
 RestartSec=5
 
