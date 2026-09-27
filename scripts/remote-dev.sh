@@ -25,7 +25,10 @@ require_command() {
 }
 
 repo_root=$(git rev-parse --show-toplevel 2>/dev/null) || die "run this from a monorepo checkout"
-gitops_dir=${FRAMEWORKS_GITOPS_DIR:-"$(dirname "$repo_root")/gitops"}
+# The GitOps checkout sits next to the main checkout; a linked worktree's own
+# directory is nested elsewhere, so resolve from the shared .git directory.
+main_checkout=$(dirname "$(git rev-parse --path-format=absolute --git-common-dir)")
+gitops_dir=${FRAMEWORKS_GITOPS_DIR:-"$(dirname "$main_checkout")/gitops"}
 inventory="$gitops_dir/development/hosts.enc.yaml"
 remote_user=${REMOTE_DEV_USER:-$(id -un)}
 
@@ -67,7 +70,7 @@ initialize_slot() {
   local base bundle head init_script remote_bundle repo_url upstream
   head=$(git -C "$repo_root" rev-parse HEAD)
   repo_url=${REMOTE_DEV_REPO_URL:-https://github.com/Livepeer-FrameWorks/monorepo.git}
-  init_script="set -e; mkdir -p $(printf '%q' "$(dirname "$remote_repo")"); if [[ ! -d $(printf '%q' "$remote_repo/.git") ]]; then git clone --filter=blob:none --no-checkout $(printf '%q' "$repo_url") $(printf '%q' "$remote_repo"); fi; cd $(printf '%q' "$remote_repo"); if git fetch --depth=1 origin $(printf '%q' "$head") >/dev/null 2>&1 || git cat-file -e $(printf '%q' "$head^{commit}") 2>/dev/null; then git checkout --detach --force $(printf '%q' "$head"); else git checkout --detach --force origin/HEAD; fi"
+  init_script="set -e; mkdir -p $(printf '%q' "$(dirname "$remote_repo")"); if [[ ! -d $(printf '%q' "$remote_repo/.git") ]]; then if [[ -d $(printf '%q' "$remote_repo") ]]; then rm -f $(printf '%q' "$remote_repo/.git"); git -C $(printf '%q' "$remote_repo") init -q; git -C $(printf '%q' "$remote_repo") remote add origin $(printf '%q' "$repo_url"); else git clone --filter=blob:none --no-checkout $(printf '%q' "$repo_url") $(printf '%q' "$remote_repo"); fi; fi; cd $(printf '%q' "$remote_repo"); if git fetch --depth=1 origin $(printf '%q' "$head") >/dev/null 2>&1 || git cat-file -e $(printf '%q' "$head^{commit}") 2>/dev/null; then git checkout --detach --force $(printf '%q' "$head"); else git checkout --detach --force origin/HEAD; fi"
   # The command is deliberately assembled locally and shell-quoted before SSH.
   # shellcheck disable=SC2029
   ssh "${ssh_args[@]}" "$remote_target" "bash -lc $(printf '%q' "$init_script")"
@@ -128,7 +131,7 @@ case "$action" in
     git -C "$repo_root" ls-files --others --ignored --exclude-standard --directory >"$exclude_file"
     rsync --archive --compress --delete \
       --exclude-from="$exclude_file" \
-      --exclude='.git/' \
+      --exclude='/.git' \
       --exclude='config/env/secrets.env' \
       --exclude='*.agekey' \
       -e "ssh -o BatchMode=yes -o ConnectTimeout=8 -o ControlMaster=no -o ControlPath=none -p $remote_port" \

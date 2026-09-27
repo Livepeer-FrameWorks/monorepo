@@ -4,6 +4,16 @@ set -euo pipefail
 repo_root=$(git rev-parse --show-toplevel)
 cd "$repo_root"
 
+# Git hooks export GIT_DIR (linked worktrees) and a relative GIT_INDEX_FILE. Once
+# golangci-lint runs from a module directory, git would take that directory as the
+# work tree root and lose the index, so --new-from-rev would report every issue.
+if [[ -n "${GIT_DIR:-}" ]]; then
+  export GIT_WORK_TREE="$repo_root"
+fi
+if [[ -n "${GIT_INDEX_FILE:-}" && "$GIT_INDEX_FILE" != /* ]]; then
+  export GIT_INDEX_FILE="$repo_root/$GIT_INDEX_FILE"
+fi
+
 if [[ $# -eq 0 ]]; then
   echo 'No staged Go files to lint.'
   exit 0

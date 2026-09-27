@@ -270,7 +270,10 @@ func TestTenantDailyStatsIncludesRestreamEgressWithoutInventingViewers_RealClick
 	`, tenantID, streamID, viewerWindow.UnixMilli(), viewerWindow.Add(5*time.Minute).UnixMilli(), now.UnixMilli()+2); err != nil {
 		t.Fatal(err)
 	}
-	excludedWindow := now.Add(-48 * time.Hour)
+	// Day-grain ranges start at the day of viewerWindow-1h, which is two days
+	// back when the test runs before 01:00 UTC. Noon of the day before that day
+	// is outside every range below at any time of day.
+	excludedWindow := viewerWindow.Add(-time.Hour).Truncate(24 * time.Hour).Add(-12 * time.Hour)
 	if _, err := db.ExecContext(context.Background(), `
 		INSERT INTO periscope.restream_sessions_final
 		(tenant_id, node_id, source_event_id, cluster_id, stream_id, stream_name,
