@@ -58,6 +58,10 @@ func mistTriggerForwardContext(requestContext context.Context, trigger *ipcpb.Mi
 // stamps source_event_id and dispatches via this variable.
 var sendDurableMistTrigger = control.SendDurableMistTrigger
 
+// recordProcessBillingSample is the durable sink for MistProcAV billing samples, which join their
+// process's billing window rather than the WAL one by one; tests stub it with the durable send.
+var recordProcessBillingSample = control.RecordProcessBillingSample
+
 // VideoExtensions lists file extensions recognized as video container formats.
 var VideoExtensions = []string{".mp4", ".webm", ".mkv", ".avi", ".ts", ".mov", ".m4v", ".flv"}
 
@@ -2795,7 +2799,7 @@ func HandleProcessAVSegmentComplete(c *gin.Context) {
 		strings.TrimSpace(c.GetHeader("X-PID")), streamName, trackType, inputCodec, outputCodec,
 		outputWidth + "x" + outputHeight,
 	}, "\x00")
-	sourceEventID, err := control.RecordProcessBillingSample(processKey, billingTrigger)
+	sourceEventID, err := recordProcessBillingSample(processKey, billingTrigger)
 	if err != nil {
 		respondDurableEnqueueError(c, logger, "PROCESS_AV_VIRTUAL_SEGMENT_COMPLETE", sourceEventID, err)
 		return

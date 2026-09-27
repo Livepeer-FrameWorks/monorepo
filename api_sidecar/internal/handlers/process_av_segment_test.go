@@ -58,3 +58,43 @@ func TestProcessAVWindowWithoutDecodedMediaIsNotRecorded(t *testing.T) {
 		t.Fatalf("processed audio window recorded as %s %s->%s %d ms", billing.GetTrackType(), billing.GetInputCodec(), billing.GetOutputCodec(), billing.GetDurationMs())
 	}
 }
+
+// A process's pre-decoder report never reaches its billing window; the processed samples around it
+// join one window under the process id and the audio label their output codec gives them.
+func TestProcessAVPreDecoderSampleStaysOutOfBillingWindow(t *testing.T) {
+	setupTriggerTest(t, "tenant-procav")
+	type recorded struct {
+		key     string
+		billing *ipcpb.ProcessBillingEvent
+	}
+	var got []recorded
+	original := recordProcessBillingSample
+	recordProcessBillingSample = func(key string, trigger *ipcpb.MistTrigger) (string, error) {
+		got = append(got, recorded{key: key, billing: trigger.GetProcessBilling()})
+		return "window", nil
+	}
+	t.Cleanup(func() { recordProcessBillingSample = original })
+
+	for _, body := range []string{
+		processAVPayload("video", "1", "0", "0", "none", "libopus", "0"),
+		processAVPayload("video", "1", "50", "50", "aac", "libopus", "0"),
+		processAVPayload("video", "0", "0", "0", "aac", "libopus", "0"),
+		processAVPayload("audio", "1", "48", "48", "aac", "libopus", "48000"),
+	} {
+		ctx, recorder := newWebhookContext(body)
+		ctx.Request.Header.Set("X-PID", "4242")
+		HandleProcessAVSegmentComplete(ctx)
+		if recorder.Code != http.StatusOK {
+			t.Fatalf("window answered %d", recorder.Code)
+		}
+	}
+	if len(got) != 2 {
+		t.Fatalf("recorded %d samples, want the 2 with decoded media", len(got))
+	}
+	if got[0].key != got[1].key || !strings.HasPrefix(got[0].key, "4242\x00") || !strings.Contains(got[0].key, "\x00audio\x00") {
+		t.Fatalf("samples of one audio process keyed %q and %q", got[0].key, got[1].key)
+	}
+	if total := got[0].billing.GetDurationMs() + got[1].billing.GetDurationMs(); total != 2000 {
+		t.Fatalf("window duration %d ms, want 2000", total)
+	}
+}

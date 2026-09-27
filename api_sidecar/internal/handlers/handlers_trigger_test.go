@@ -85,9 +85,15 @@ func stubSendMistTrigger(t *testing.T, fn func(*ipcpb.MistTrigger) (*control.Mis
 		_, err := fn(trigger)
 		return err
 	}
+	originalBilling := recordProcessBillingSample
+	recordProcessBillingSample = func(_ string, trigger *ipcpb.MistTrigger) (string, error) {
+		_, err := fn(trigger)
+		return trigger.GetRequestId(), err
+	}
 	t.Cleanup(func() {
 		sendMistTrigger = originalSend
 		sendDurableMistTrigger = originalDurable
+		recordProcessBillingSample = originalBilling
 	})
 }
 
