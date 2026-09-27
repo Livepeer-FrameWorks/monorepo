@@ -289,6 +289,49 @@ Always redeploy an edge through `edge provision` rather than pulling a new image
 rendered deployment: the render carries the persistent Helmsman state volume, which holds node
 identity and undelivered control acknowledgements.
 
+### Edge configuration
+
+Foghorn rolls component versions; it does not change an edge's rendered configuration (env
+files, systemd units, the compose file). A new CLI carries the current edge configuration, and
+re-running `edge provision` with it is how that configuration reaches the edges:
+
+1. Install the new CLI.
+2. See which edges drifted and what would change:
+
+   ```bash
+   frameworks edge provision --manifest <edge-manifest> --dry-run
+   ```
+
+   Every node is checked in Ansible check mode. The plan per node is `skip` (no drift),
+   `apply` (changes that keep media running), or `drain+apply`, with the diff and the changed
+   tasks.
+
+3. Apply it:
+
+   ```bash
+   frameworks edge provision --manifest <edge-manifest>
+   ```
+
+Re-running provision reuses each node's enrolled identity. Enrolled nodes are prechecked first
+and only nodes that drifted are applied, one at a time; `--parallel` only applies to fresh
+installs. A MistServer binary change goes through MistServer's rolling reload and keeps its
+streams. When the apply must restart MistServer or Caddy, or recreate the edge container (a new
+compose file, image, or env file), the CLI first sets the node to `draining` through Foghorn,
+waits until its sessions end (up to 4 hours, as `cluster nodes remove` does), applies, and then
+restores the mode the node had. A node an operator already set to `draining` or `maintenance`
+keeps that mode. If the sessions do not end in time the node is left unchanged and back in
+`normal`; if the apply fails the node stays `draining` until you resume it with
+`frameworks edge mode normal --ssh <target>`.
+
+Self-hosted single edges use the same path: `frameworks edge provision --ssh <user@host> --dry-run`,
+then without `--dry-run`, with the flags the node was provisioned with.
+
+Each provision writes a provisioned-config marker on the node (the CLI version and a digest of
+the rendered configuration). Helmsman reports it to Foghorn, which returns it in node health,
+and `frameworks cluster doctor` lists every edge whose configuration was rendered by an
+older CLI (or before markers existed). `frameworks edge doctor` shows the same for the node it
+runs on.
+
 ## Version selection
 
 `--version` accepts:

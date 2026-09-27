@@ -155,6 +155,12 @@ frameworks cluster doctor [flags]
   index of each platform database, with distinct tablets and tablet peers. A database
   created before its colocated layout is reported as a warning; see
   [YugabyteDB Physical Layout](/operators/yugabyte-layout)
+- **Edge config version:** Every registered edge whose configuration was rendered
+  by an older CLI than the one running doctor, or that has no provisioned-config
+  marker yet, from the marker each node reports through Foghorn node health. Needs
+  lifecycle access (Quartermaster and Foghorn) from the active context; without it
+  the check is reported as not checked. Re-run `edge provision` (with `--dry-run`
+  first) to bring those edges current
 
 With `--deep`, doctor additionally executes every enabled database-backed binary's
 read-only schema capability pack against the live PostgreSQL/YugabyteDB and
@@ -2414,7 +2420,8 @@ frameworks edge provision --manifest edges.yaml
 - `--enrollment-token string` - Enrollment token for auto-provisioning (skips explicit domain flags)
 - `--manifest string` - Path to edge manifest file
 - `--cluster-manifest string` - Cluster manifest used to load platform `SERVICE_TOKEN` for edge manifest `register_qm`
-- `--parallel int` - Number of concurrent provisions (default: 1)
+- `--parallel int` - Number of fresh nodes installed concurrently (default: 1); enrolled nodes are always applied one at a time
+- `--dry-run` - Check every node in Ansible check mode and print its plan (`skip`, `apply`, `drain+apply`, or `install`) and diff; change nothing
 - `--tune` - Apply sysctl/limits tuning
 - `--register` - Register node in Quartermaster (manual/admin path only — see note below)
 - `--fetch-cert` - Fetch TLS certificate from Navigator
@@ -2423,6 +2430,8 @@ frameworks edge provision --manifest edges.yaml
 - `--bandwidth-mbps int` - Advertised edge bandwidth limit in Mbps; Helmsman writes it to MistServer `bwlimit` and reports it to Foghorn
 - `--max-transcodes int` - Maximum local transcodes reported by Helmsman
 - `--storage-capacity-bytes uint` - Local storage capacity limit reported by Helmsman
+
+Re-running `edge provision` on an enrolled node reuses its identity and re-renders its configuration from this CLI. Enrolled nodes are checked in Ansible check mode first; nodes without drift are skipped. An apply that would restart MistServer or Caddy, or recreate the edge container, is preceded by a drain through Foghorn (the node's sessions end first) and followed by restoring the node's prior mode. See [Running upgrades](/operators/running-upgrades/#edge-configuration).
 
 `--register` is for the platform manual provisioning path, where an admin supplies `--pool-domain`/`--node-domain` directly without an enrollment token and wants to create the Quartermaster node row in the same step. It is rejected unless the active context uses the `platform` persona, and it is rejected when combined with `--enrollment-token` because the token path already registers the node through Foghorn's `PreRegisterEdge`. Manifest entries that set `register_qm: true` follow the same platform-only rule and cannot be combined with an enrollment token.
 
@@ -2470,7 +2479,7 @@ frameworks edge status --domain edge1.example.com --ssh admin@edge1.example.com
 
 ### frameworks edge update
 
-Update edge node software to latest version.
+Refresh the edge services. On a container stack rendered by `edge init`, the compose file and `.edge.env` are first re-rendered from this CLI's templates (node identity, pinned image, endpoints, telemetry, and edited restream settings are kept; the write-once enrollment and secrets files are untouched), then the images are pulled and the stack is brought up. A container stack provisioned by `edge provision` is re-rendered by re-running `edge provision`; `edge update` refuses it. Native stacks reload MistServer (rolling), restart Helmsman, and reload Caddy.
 
 ```bash
 frameworks edge update
@@ -2525,7 +2534,7 @@ frameworks edge logs --follow --tail 500
 
 ### frameworks edge doctor
 
-Run comprehensive health checks on the edge node.
+Run comprehensive health checks on the edge node. The **Config Version** section reads the node's provisioned-config marker and reports whether its configuration was rendered by this CLI (`current`), an older one (`stale`), or before markers existed (`unmarked`); the last two come with an `edge provision --dry-run` next step.
 
 ```bash
 frameworks edge doctor --domain edge1.example.com

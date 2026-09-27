@@ -53,13 +53,16 @@ Update/restart the deployed edge services:
 frameworks edge update --dir /opt/frameworks-edge
 ```
 
-In container mode this:
+In container mode (a stack rendered by `edge init`) this:
 
-1. Pulls a new edge image from the registry
-2. Recreates the `frameworks-edge` container
-3. Preserves configuration, binaries, and data (named volumes; on Ansible-provisioned nodes hot storage is the `storage/` directory next to the compose file)
+1. Re-renders `docker-compose.edge.yml` and `.edge.env` from this CLI's templates, keeping the node identity, pinned image, endpoints, telemetry, and any restream settings you edited; the enrollment and secrets env files are not touched
+2. Pulls the edge image from the registry
+3. Recreates the `frameworks-edge` container when its configuration or image changed
+4. Preserves binaries and data (named volumes)
 
-In native mode, `edge update` restarts the native services. In both modes, day-to-day component convergence (Helmsman/MistServer/Caddy versions) is driven by the control plane's release reconciler — `edge update` is the coarse image/service refresh, not the update mechanism.
+A node set up with `frameworks edge provision` is re-rendered by re-running `edge provision` (add `--dry-run` to see the drift first); `edge update` refuses it.
+
+In native mode, `edge update` reloads MistServer (rolling), restarts Helmsman, and reloads Caddy. In both modes, day-to-day component convergence (Helmsman/MistServer/Caddy versions) is driven by the control plane's release reconciler — `edge update` is the coarse image/service refresh, not the update mechanism.
 
 Check current version:
 

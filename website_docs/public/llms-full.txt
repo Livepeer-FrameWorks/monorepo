@@ -24046,13 +24046,16 @@ Update/restart the deployed edge services:
 frameworks edge update --dir /opt/frameworks-edge
 ```
 
-In container mode this:
+In container mode (a stack rendered by `edge init`) this:
 
-1. Pulls a new edge image from the registry
-2. Recreates the `frameworks-edge` container
-3. Preserves configuration, binaries, and data (named volumes; on Ansible-provisioned nodes hot storage is the `storage/` directory next to the compose file)
+1. Re-renders `docker-compose.edge.yml` and `.edge.env` from this CLI's templates, keeping the node identity, pinned image, endpoints, telemetry, and any restream settings you edited; the enrollment and secrets env files are not touched
+2. Pulls the edge image from the registry
+3. Recreates the `frameworks-edge` container when its configuration or image changed
+4. Preserves binaries and data (named volumes)
 
-In native mode, `edge update` restarts the native services. In both modes, day-to-day component convergence (Helmsman/MistServer/Caddy versions) is driven by the control plane's release reconciler — `edge update` is the coarse image/service refresh, not the update mechanism.
+A node set up with `frameworks edge provision` is re-rendered by re-running `edge provision` (add `--dry-run` to see the drift first); `edge update` refuses it.
+
+In native mode, `edge update` reloads MistServer (rolling), restarts Helmsman, and reloads Caddy. In both modes, day-to-day component convergence (Helmsman/MistServer/Caddy versions) is driven by the control plane's release reconciler — `edge update` is the coarse image/service refresh, not the update mechanism.
 
 Check current version:
 
@@ -28087,6 +28090,12 @@ frameworks cluster doctor [flags]
   index of each platform database, with distinct tablets and tablet peers. A database
   created before its colocated layout is reported as a warning; see
   [YugabyteDB Physical Layout](/operators/yugabyte-layout)
+- **Edge config version:** Every registered edge whose configuration was rendered
+  by an older CLI than the one running doctor, or that has no provisioned-config
+  marker yet, from the marker each node reports through Foghorn node health. Needs
+  lifecycle access (Quartermaster and Foghorn) from the active context; without it
+  the check is reported as not checked. Re-run `edge provision` (with `--dry-run`
+  first) to bring those edges current
 
 With `--deep`, doctor additionally executes every enabled database-backed binary's
 read-only schema capability pack against the live PostgreSQL/YugabyteDB and
@@ -30346,7 +30355,8 @@ frameworks edge provision --manifest edges.yaml
 - `--enrollment-token string` - Enrollment token for auto-provisioning (skips explicit domain flags)
 - `--manifest string` - Path to edge manifest file
 - `--cluster-manifest string` - Cluster manifest used to load platform `SERVICE_TOKEN` for edge manifest `register_qm`
-- `--parallel int` - Number of concurrent provisions (default: 1)
+- `--parallel int` - Number of fresh nodes installed concurrently (default: 1); enrolled nodes are always applied one at a time
+- `--dry-run` - Check every node in Ansible check mode and print its plan (`skip`, `apply`, `drain+apply`, or `install`) and diff; change nothing
 - `--tune` - Apply sysctl/limits tuning
 - `--register` - Register node in Quartermaster (manual/admin path only — see note below)
 - `--fetch-cert` - Fetch TLS certificate from Navigator
@@ -30355,6 +30365,8 @@ frameworks edge provision --manifest edges.yaml
 - `--bandwidth-mbps int` - Advertised edge bandwidth limit in Mbps; Helmsman writes it to MistServer `bwlimit` and reports it to Foghorn
 - `--max-transcodes int` - Maximum local transcodes reported by Helmsman
 - `--storage-capacity-bytes uint` - Local storage capacity limit reported by Helmsman
+
+Re-running `edge provision` on an enrolled node reuses its identity and re-renders its configuration from this CLI. Enrolled nodes are checked in Ansible check mode first; nodes without drift are skipped. An apply that would restart MistServer or Caddy, or recreate the edge container, is preceded by a drain through Foghorn (the node's sessions end first) and followed by restoring the node's prior mode. See [Running upgrades](/operators/running-upgrades/#edge-configuration).
 
 `--register` is for the platform manual provisioning path, where an admin supplies `--pool-domain`/`--node-domain` directly without an enrollment token and wants to create the Quartermaster node row in the same step. It is rejected unless the active context uses the `platform` persona, and it is rejected when combined with `--enrollment-token` because the token path already registers the node through Foghorn's `PreRegisterEdge`. Manifest entries that set `register_qm: true` follow the same platform-only rule and cannot be combined with an enrollment token.
 
@@ -30402,7 +30414,7 @@ frameworks edge status --domain edge1.example.com --ssh admin@edge1.example.com
 
 ### frameworks edge update
 
-Update edge node software to latest version.
+Refresh the edge services. On a container stack rendered by `edge init`, the compose file and `.edge.env` are first re-rendered from this CLI's templates (node identity, pinned image, endpoints, telemetry, and edited restream settings are kept; the write-once enrollment and secrets files are untouched), then the images are pulled and the stack is brought up. A container stack provisioned by `edge provision` is re-rendered by re-running `edge provision`; `edge update` refuses it. Native stacks reload MistServer (rolling), restart Helmsman, and reload Caddy.
 
 ```bash
 frameworks edge update
@@ -30457,7 +30469,7 @@ frameworks edge logs --follow --tail 500
 
 ### frameworks edge doctor
 
-Run comprehensive health checks on the edge node.
+Run comprehensive health checks on the edge node. The **Config Version** section reads the node's provisioned-config marker and reports whether its configuration was rendered by this CLI (`current`), an older one (`stale`), or before markers existed (`unmarked`); the last two come with an `edge provision --dry-run` next step.
 
 ```bash
 frameworks edge doctor --domain edge1.example.com
@@ -33110,8 +33122,8 @@ Read by `api_sidecar/cmd/helmsman`.
 | `HELMSMAN_ROTATE_NODE_IDENTITY` | string | `false` |  | v0.3.0 | Requests a node identity rotation with EDGE_ENROLLMENT_TOKEN at startup. A value that is not a boolean counts as false. |
 | `HELMSMAN_ENROLLMENT_TOKEN_FILE` | string |  |  | v0.3.0 | Env file whose EDGE_ENROLLMENT_TOKEN is cleared after Foghorn accepts the enrollment. |
 | `HELMSMAN_RUNTIME_ENV_FILE` | string |  |  | v0.3.0 | Env file whose HELMSMAN_ROTATE_NODE_IDENTITY is cleared after Foghorn accepts the enrollment. |
-| `HELMSMAN_FREEZE_THRESHOLD` | string | `0.85` |  | v0.3.0 | Disk usage fraction at which the storage manager starts freezing local artifacts to cold storage. A value that is not a number counts as 0. |
-| `HELMSMAN_TARGET_AFTER_FREEZE` | string | `0.70` |  | v0.3.0 | Disk usage fraction the storage manager frees space down to once freezing starts. A value that is not a number counts as 0. |
+| `HELMSMAN_FREEZE_THRESHOLD` | string | `0.85` |  | v0.3.0 | Usage fraction of the media storage space at which the storage manager starts freezing local artifacts to cold storage. The media storage space is the filesystem minus a fixed 10 GiB system reserve, further capped by HELMSMAN_STORAGE_CAPACITY_BYTES when set. A value that is not a number counts as 0. |
+| `HELMSMAN_TARGET_AFTER_FREEZE` | string | `0.70` |  | v0.3.0 | Usage fraction of the media storage space the storage manager frees space down to once freezing starts. A value that is not a number counts as 0. |
 | `HELMSMAN_RELAY_TRUSTED_CIDR` | string |  |  | v0.3.0 | Comma-separated CIDRs whose direct peers reach the artifact relay like loopback. Invalid entries are ignored with a warning. Leave empty unless MistServer reaches Helmsman over a non-loopback address. |
 | `HELMSMAN_BLOCKING_GRACE_MS` | string | `2000` |  | v0.3.0 | Milliseconds a blocking Mist trigger waits for the Foghorn control stream to reconnect before failing. A value that is not an integer uses 2000. |
 | `HELMSMAN_OPERATIONAL_MODE` | string | `normal` |  | v0.3.0 | Operational mode requested at registration: normal, draining, or maintenance. Foghorn stays authoritative and may override it. |
@@ -37585,6 +37597,49 @@ A release that raises the minimum says so in its release note, with the interrup
 Always redeploy an edge through `edge provision` rather than pulling a new image against an old
 rendered deployment: the render carries the persistent Helmsman state volume, which holds node
 identity and undelivered control acknowledgements.
+
+### Edge configuration
+
+Foghorn rolls component versions; it does not change an edge's rendered configuration (env
+files, systemd units, the compose file). A new CLI carries the current edge configuration, and
+re-running `edge provision` with it is how that configuration reaches the edges:
+
+1. Install the new CLI.
+2. See which edges drifted and what would change:
+
+   ```bash
+   frameworks edge provision --manifest <edge-manifest> --dry-run
+   ```
+
+   Every node is checked in Ansible check mode. The plan per node is `skip` (no drift),
+   `apply` (changes that keep media running), or `drain+apply`, with the diff and the changed
+   tasks.
+
+3. Apply it:
+
+   ```bash
+   frameworks edge provision --manifest <edge-manifest>
+   ```
+
+Re-running provision reuses each node's enrolled identity. Enrolled nodes are prechecked first
+and only nodes that drifted are applied, one at a time; `--parallel` only applies to fresh
+installs. A MistServer binary change goes through MistServer's rolling reload and keeps its
+streams. When the apply must restart MistServer or Caddy, or recreate the edge container (a new
+compose file, image, or env file), the CLI first sets the node to `draining` through Foghorn,
+waits until its sessions end (up to 4 hours, as `cluster nodes remove` does), applies, and then
+restores the mode the node had. A node an operator already set to `draining` or `maintenance`
+keeps that mode. If the sessions do not end in time the node is left unchanged and back in
+`normal`; if the apply fails the node stays `draining` until you resume it with
+`frameworks edge mode normal --ssh <target>`.
+
+Self-hosted single edges use the same path: `frameworks edge provision --ssh <user@host> --dry-run`,
+then without `--dry-run`, with the flags the node was provisioned with.
+
+Each provision writes a provisioned-config marker on the node (the CLI version and a digest of
+the rendered configuration). Helmsman reports it to Foghorn, which returns it in node health,
+and `frameworks cluster doctor` lists every edge whose configuration was rendered by an
+older CLI (or before markers existed). `frameworks edge doctor` shows the same for the node it
+runs on.
 
 ## Version selection
 
