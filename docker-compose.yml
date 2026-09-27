@@ -150,7 +150,12 @@ services:
       interval: 10s
       timeout: 5s
       retries: 3
-      start_period: 10s
+      # First boot runs initdb and loads every service schema before the
+      # server takes PID 1, which takes about 40 s on a loaded host. The
+      # start period covers that with margin; probes during it run every
+      # 2 s, and the first success marks the container healthy.
+      start_period: 180s
+      start_interval: 2s
 
   # Media edge (profile: edge): the single edge bundle image, Caddy + MistServer +
   # Helmsman under s6-overlay, the shape every production edge runs. Stage its
