@@ -10,6 +10,7 @@ import (
 
 	"frameworks/api_sidecar/internal/config"
 	"frameworks/api_sidecar/internal/control"
+	"frameworks/api_sidecar/internal/playbackgrant/playbackgranttest"
 	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
 )
 
@@ -200,11 +201,14 @@ func TestHandlePlayRewriteBranches(t *testing.T) {
 	})
 }
 
-// A reachable Foghorn is consulted on EVERY request: PLAY_REWRITE carries
-// per-viewer billing/accounting/analytics on the Foghorn side, so the handler
-// must not short-circuit a repeat from local cache while Foghorn is up.
+// A request that belongs to no session admitted on this edge is decided by a
+// reachable Foghorn every time: PLAY_REWRITE carries per-viewer placement,
+// billing and accounting on the Foghorn side, and a stream name alone is not
+// a session, even while the edge holds the stream's grant.
 func TestHandlePlayRewriteAlwaysConsultsReachableFoghorn(t *testing.T) {
 	setupTriggerTest(t, "tenant-blk")
+	store := installTestPlaybackGrants(t, &fakeMistSessions{}, noGrantFetch(t))
+	store.ApplyGrant(playbackgranttest.Grant("60546679b497415db2338cd5cae54992", ipcpb.PlaybackGrantPolicyKind_PLAYBACK_GRANT_POLICY_KIND_PUBLIC, nil, "frameworks-demo"))
 	const body = "frameworks-demo\n192.0.2.10\nHLS\nhttp://example.com/view"
 
 	calls := 0

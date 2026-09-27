@@ -1957,6 +1957,7 @@ func runClient(endpoint controlEndpoint, logger logging.Logger) error {
 	streamReconnected = make(chan struct{})
 	streamReconnectedM.Unlock()
 	notifyControlConnected()
+	notifyPlaybackGrantsConnected()
 
 	// Re-send any messages queued during disconnect.
 	drainOutbox(connection)
@@ -2115,6 +2116,10 @@ func runClient(endpoint controlEndpoint, logger logging.Logger) error {
 			case *ipcpb.ControlMessage_AuthorizeRelayPullResponse:
 				// Authorize-relay-pull response: route to the waiting goroutine.
 				go handleAuthorizeRelayPullResponse(x.AuthorizeRelayPullResponse)
+			case *ipcpb.ControlMessage_PlaybackGrant:
+				handlePlaybackGrant(x.PlaybackGrant)
+			case *ipcpb.ControlMessage_PlaybackGrantResponse:
+				go handlePlaybackGrantResponse(x.PlaybackGrantResponse)
 			case *ipcpb.ControlMessage_DtshSyncRequest:
 				// Handle incremental .dtsh sync request from Foghorn
 				if dtshSyncRequestHandler != nil {
@@ -3458,6 +3463,9 @@ func handleStopSessions(logger logging.Logger, req *ipcpb.StopSessionsRequest) {
 	if len(req.StreamNames) == 0 {
 		return
 	}
+	if sessions := currentPlaybackGrantSessions(); sessions != nil {
+		sessions.StopStreams(req.StreamNames, req.GetReason())
+	}
 
 	cfg := currentConfig
 	if cfg == nil {
@@ -3499,11 +3507,26 @@ func handleStopSessions(logger logging.Logger, req *ipcpb.StopSessionsRequest) {
 // signing-key change so MistServer's per-session decision cache is rebuilt
 // against the fresh policy.
 //
-// Maps to MistServer's `invalidate_sessions` JSON API. Distinct from
-// handleStopSessions — stop disconnects, invalidate re-evaluates.
+// Streams whose playback grant this edge holds are re-checked by the grant
+// store instead: one grant fetch per stream and a local re-check that
+// invalidates only the sessions that now fail. The rest map to MistServer's
+// `invalidate_sessions` JSON API. Distinct from handleStopSessions — stop
+// disconnects, invalidate re-evaluates.
 func handleInvalidateSessions(logger logging.Logger, req *ipcpb.InvalidateSessionsRequest) {
 	if req == nil || len(req.StreamNames) == 0 {
 		return
+	}
+	if sessions := currentPlaybackGrantSessions(); sessions != nil {
+		untracked := sessions.RecheckStreams(req.StreamNames)
+		if held := len(req.StreamNames) - len(untracked); held > 0 {
+			logger.WithFields(logging.Fields{
+				"tenant_id": req.TenantId, "reason": req.Reason, "streams_on_grant": held,
+			}).Info("Re-checking granted streams' sessions on their playback grants")
+		}
+		if len(untracked) == 0 {
+			return
+		}
+		req = &ipcpb.InvalidateSessionsRequest{StreamNames: untracked, TenantId: req.GetTenantId(), Reason: req.GetReason()}
 	}
 
 	cfg := currentConfig

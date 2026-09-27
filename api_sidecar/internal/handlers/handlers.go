@@ -258,6 +258,7 @@ func Init(log logging.Logger, m *HandlerMetrics, nodeID string) {
 		return Current().DeleteVOD(vodHash)
 	})
 	control.SetActiveProcessingJobsProvider(ActiveProcessingJobIDs)
+	initPlaybackGrants(logger)
 
 	logger.WithField("node_name", nodeName).Info("Handlers initialized")
 }
@@ -844,7 +845,9 @@ func HandlePlayRewrite(c *gin.Context) {
 		return
 	}
 
-	if play := mistTrigger.GetPlayRewrite(); play != nil {
+	play := mistTrigger.GetPlayRewrite()
+	viewerRequest := false
+	if play != nil {
 		requested := play.GetRequestedStream()
 		if _, ok := getProcessingSourceOverride(requested); ok {
 			logger.WithField("stream_name", requested).Info("PLAY_REWRITE resolved local source override")
@@ -858,13 +861,41 @@ func HandlePlayRewrite(c *gin.Context) {
 			c.String(http.StatusOK, requested)
 			return
 		}
-		// A stream-name mapping does not authorize this viewer, destination or
-		// policy revision. Every public rewrite requires a Foghorn decision.
+		// Only a session Foghorn admitted on this edge is answered here: the
+		// request must carry that session's token from its address, for its
+		// stream and protocol, under a valid grant. A stream name alone never
+		// is; a new session is Foghorn's decision.
+		viewerRequest = playbackGrants != nil && mist.IsPlaybackViewerRequest(play.GetOutputType(), play.GetRequestUrl())
+		if viewerRequest {
+			if internal, ok := playbackGrants.ServeAdmitted(requested, play.GetViewerHost(), play.GetOutputType(), play.GetRequestUrl()); ok {
+				incMistWebhook("PLAY_REWRITE", "admitted_session")
+				logger.WithFields(logging.Fields{"requested_stream": requested, "response": internal}).
+					Debug("PLAY_REWRITE answered for an admitted session")
+				respondMistAction(c, http.StatusOK, ipcpb.MistTriggerAction_MIST_TRIGGER_ACTION_VALUE, "", internal)
+				return
+			}
+		}
 	}
 
 	// Forward trigger to Foghorn via gRPC and get response
 	applyTenantContext(mistTrigger)
 	result, err := sendMistTrigger(mistTriggerForwardContext(c.Request.Context(), mistTrigger), mistTrigger, logger)
+	if err != nil && viewerRequest {
+		// Foghorn cannot be asked. A new session of a stream whose grant this
+		// edge holds is mapped on the grant; its credential and origin are
+		// checked when Mist runs USER_NEW for it.
+		decision := playbackGrants.DecideNewRequest(play.GetRequestedStream())
+		if decision.Allow {
+			playbackGrants.AdmitRequest(play.GetRequestedStream(), decision.Internal, play.GetViewerHost(), play.GetOutputType(), play.GetRequestUrl())
+			incMistWebhook("PLAY_REWRITE", "admitted_on_grant")
+			logger.WithError(err).WithFields(logging.Fields{"requested_stream": play.GetRequestedStream(), "response": decision.Internal}).
+				Info("PLAY_REWRITE admitted on the playback grant; Foghorn unreachable")
+			respondMistAction(c, http.StatusOK, ipcpb.MistTriggerAction_MIST_TRIGGER_ACTION_VALUE, "", decision.Internal)
+			return
+		}
+		logger.WithFields(logging.Fields{"requested_stream": play.GetRequestedStream(), "reason": decision.Reason}).
+			Warn("PLAY_REWRITE refused: Foghorn unreachable and no playback grant admits a new session")
+	}
 	if err != nil {
 		incMistWebhook("PLAY_REWRITE", "forward_error")
 		logger.WithError(err).Error("Failed to forward PLAY_REWRITE to Foghorn")
@@ -908,6 +939,11 @@ func HandlePlayRewrite(c *gin.Context) {
 		"response": result.Response,
 	}).Info("PLAY_REWRITE resolved by Foghorn")
 	incMistWebhook("PLAY_REWRITE", "success")
+	if viewerRequest {
+		if playbackGrants.AdmitRequest(play.GetRequestedStream(), result.Response, play.GetViewerHost(), play.GetOutputType(), play.GetRequestUrl()) {
+			playbackGrants.FetchIfMissing(result.Response)
+		}
+	}
 
 	// Track successful operation
 	if metrics != nil {
@@ -1756,10 +1792,44 @@ func HandleUserNew(c *gin.Context) {
 		metrics.InfrastructureEvents.WithLabelValues("user_connected").Inc()
 	}
 
+	viewer := mistTrigger.GetViewerConnect()
+	if viewer != nil && playbackGrants != nil {
+		// A session this edge invalidated because it failed a newer grant:
+		// the grant is Foghorn's latest word on it, so the re-run is refused
+		// here.
+		if reason, refused := playbackGrants.Refused(viewer.GetSessionId()); refused {
+			incMistWebhook("USER_NEW", "refused_on_grant")
+			logger.WithFields(logging.Fields{
+				"session_id": viewer.GetSessionId(), "stream_name": viewer.GetStreamName(), "reason": reason,
+			}).Info("USER_NEW refused: session failed its stream's updated playback grant")
+			respondMistAction(c, http.StatusOK, ipcpb.MistTriggerAction_MIST_TRIGGER_ACTION_DENY, "refused", "false")
+			return
+		}
+	}
+
 	// Forward trigger to Foghorn via gRPC and get response
 	applyTenantContext(mistTrigger)
 	result, err := sendMistTrigger(mistTriggerForwardContext(c.Request.Context(), mistTrigger), mistTrigger, logger)
 	if err != nil {
+		if viewer != nil && playbackGrants != nil {
+			// Foghorn cannot be asked: a public or JWT stream's new session is
+			// checked against the held grant. Foghorn re-decides and accounts
+			// it once the control stream is back.
+			decision := playbackGrants.DecideNewSession(viewer)
+			if decision.Allow {
+				playbackGrants.AdmitSession(viewer, true)
+				acquireViewerLeaseForSession(viewer.GetSessionId(), viewer.GetStreamName())
+				incMistWebhook("USER_NEW", "admitted_on_grant")
+				logger.WithError(err).WithFields(logging.Fields{
+					"session_id": viewer.GetSessionId(), "stream_name": viewer.GetStreamName(), "kid": decision.Kid,
+				}).Info("USER_NEW admitted on the playback grant; Foghorn unreachable")
+				respondMistAction(c, http.StatusOK, ipcpb.MistTriggerAction_MIST_TRIGGER_ACTION_VALUE, "", "true")
+				return
+			}
+			logger.WithFields(logging.Fields{
+				"session_id": viewer.GetSessionId(), "stream_name": viewer.GetStreamName(), "reason": decision.Reason,
+			}).Warn("USER_NEW refused: Foghorn unreachable and the playback grant does not admit the session")
+		}
 		incMistWebhook("USER_NEW", "forward_error")
 		logger.WithError(err).Error("Failed to forward USER_NEW to Foghorn")
 		c.String(http.StatusServiceUnavailable, "trigger handler unavailable")
@@ -1777,8 +1847,18 @@ func HandleUserNew(c *gin.Context) {
 			"response":   result.Response,
 			"error_code": result.ErrorCode.String(),
 		}).Info("USER_NEW denied by Foghorn")
+		if viewer != nil && playbackGrants != nil {
+			playbackGrants.ForgetSession(viewer)
+		}
 		respondMistResult(c, result, ipcpb.MistTriggerAction_MIST_TRIGGER_ACTION_DENY)
 		return
+	}
+	if viewer != nil && playbackGrants != nil {
+		if strings.TrimSpace(result.Response) == "true" {
+			playbackGrants.AdmitSession(viewer, false)
+		} else {
+			playbackGrants.ForgetSession(viewer)
+		}
 	}
 
 	logger.WithFields(logging.Fields{
@@ -1848,6 +1928,9 @@ func HandleUserEnd(c *gin.Context) {
 	if vd := mistTrigger.GetViewerDisconnect(); vd != nil {
 		if tracker := leases.GlobalTracker(); tracker != nil {
 			tracker.ReleaseViewer(vd.GetSessionId())
+		}
+		if playbackGrants != nil {
+			playbackGrants.EndSession(vd.GetSessionId())
 		}
 	}
 
