@@ -56,13 +56,13 @@ func TestEffectiveDiskSpace(t *testing.T) {
 		t.Fatalf("GetDiskSpaceWalk: %v", err)
 	}
 
-	t.Run("capacity zero returns raw filesystem space", func(t *testing.T) {
+	t.Run("capacity zero returns filesystem space minus the system reserve", func(t *testing.T) {
 		eff, err := EffectiveDiskSpace(dir, 0)
 		if err != nil {
 			t.Fatalf("EffectiveDiskSpace: %v", err)
 		}
-		if eff.TotalBytes != raw.TotalBytes {
-			t.Fatalf("TotalBytes = %d, want raw %d (no cap)", eff.TotalBytes, raw.TotalBytes)
+		if want := saturatingSub(raw.TotalBytes, SystemReserveBytes); eff.TotalBytes != want {
+			t.Fatalf("TotalBytes = %d, want raw %d minus reserve = %d", eff.TotalBytes, raw.TotalBytes, want)
 		}
 	})
 
@@ -85,8 +85,8 @@ func TestEffectiveDiskSpace(t *testing.T) {
 		if err != nil {
 			t.Fatalf("EffectiveDiskSpace: %v", err)
 		}
-		if eff.TotalBytes != raw.TotalBytes {
-			t.Fatalf("TotalBytes = %d, want filesystem total %d", eff.TotalBytes, raw.TotalBytes)
+		if want := saturatingSub(raw.TotalBytes, SystemReserveBytes); eff.TotalBytes != want {
+			t.Fatalf("TotalBytes = %d, want filesystem total minus reserve %d", eff.TotalBytes, want)
 		}
 		// Available disk is non-monotonic between the raw snapshot above and
 		// this call, so a strict <= would flake. The invariant under test is

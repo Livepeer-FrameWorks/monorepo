@@ -114,8 +114,8 @@ type Helmsman struct {
 	EnrollmentTokenFile string `env:"HELMSMAN_ENROLLMENT_TOKEN_FILE" desc:"Env file whose EDGE_ENROLLMENT_TOKEN is cleared after Foghorn accepts the enrollment." introduced:"v0.3.0"`
 	RuntimeEnvFile      string `env:"HELMSMAN_RUNTIME_ENV_FILE" desc:"Env file whose HELMSMAN_ROTATE_NODE_IDENTITY is cleared after Foghorn accepts the enrollment." introduced:"v0.3.0"`
 
-	StorageFreezeThreshold   string `env:"HELMSMAN_FREEZE_THRESHOLD" default:"0.85" desc:"Disk usage fraction at which the storage manager starts freezing local artifacts to cold storage. A value that is not a number counts as 0." introduced:"v0.3.0"`
-	StorageTargetAfterFreeze string `env:"HELMSMAN_TARGET_AFTER_FREEZE" default:"0.70" desc:"Disk usage fraction the storage manager frees space down to once freezing starts. A value that is not a number counts as 0." introduced:"v0.3.0"`
+	StorageFreezeThreshold   string `env:"HELMSMAN_FREEZE_THRESHOLD" default:"0.85" desc:"Usage fraction of the media storage space at which the storage manager starts freezing local artifacts to cold storage. The media storage space is the filesystem minus a fixed 10 GiB system reserve, further capped by HELMSMAN_STORAGE_CAPACITY_BYTES when set. A value that is not a number counts as 0." introduced:"v0.3.0"`
+	StorageTargetAfterFreeze string `env:"HELMSMAN_TARGET_AFTER_FREEZE" default:"0.70" desc:"Usage fraction of the media storage space the storage manager frees space down to once freezing starts. A value that is not a number counts as 0." introduced:"v0.3.0"`
 	RelayTrustedCIDR         string `env:"HELMSMAN_RELAY_TRUSTED_CIDR" desc:"Comma-separated CIDRs whose direct peers reach the artifact relay like loopback. Invalid entries are ignored with a warning. Leave empty unless MistServer reaches Helmsman over a non-loopback address." introduced:"v0.3.0"`
 
 	BlockingGraceMs          string `env:"HELMSMAN_BLOCKING_GRACE_MS" default:"2000" desc:"Milliseconds a blocking Mist trigger waits for the Foghorn control stream to reconnect before failing. A value that is not an integer uses 2000." introduced:"v0.3.0"`

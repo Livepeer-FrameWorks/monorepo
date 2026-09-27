@@ -434,7 +434,17 @@ Helmsman nodes manage local storage pressure independently to avoid disk exhaust
 > This does not change S3-backed copies or central database records.
 
 The cold-storage manager also has separate freeze thresholds: by default it starts
-freezing at 85% disk usage and targets 70% after freeze operations.
+freezing at 85% usage, targets 70% after freeze operations, and deletes even
+frozen copies above 95%.
+
+Every percentage above is a share of the media storage space, not of the raw
+filesystem: the filesystem minus a fixed 10 GiB system reserve
+(`storage.SystemReserveBytes`), further capped by
+`HELMSMAN_STORAGE_CAPACITY_BYTES` when set. Edge media shares the root
+filesystem with the journal (capped at 2 GiB), container logs, the trigger WAL
+and control outbox, Mist and Helmsman state, and the next edge image during an
+upgrade. A fixed reserve keeps that headroom on small disks, where 5% of the
+filesystem would be a few hundred MiB.
 
 ## Retention and Cleanup Jobs
 

@@ -229,12 +229,8 @@ func (cm *CleanupMonitor) getStorageUsage(path string) (float64, uint64, uint64,
 		return 0, 0, 0, err
 	}
 	totalBytes := space.TotalBytes
-	freeBytes := space.AvailableBytes
-	usedBytes := totalBytes - freeBytes
-
-	usagePercent := float64(usedBytes) / float64(totalBytes)
-
-	return usagePercent, usedBytes, totalBytes, nil
+	usedBytes := totalBytes - min(space.AvailableBytes, totalBytes)
+	return space.UsageFraction(), usedBytes, totalBytes, nil
 }
 
 // getCleanupCandidates returns artifacts that are candidates for cleanup

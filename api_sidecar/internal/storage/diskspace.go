@@ -55,31 +55,66 @@ func GetDiskSpaceWalk(path string) (*DiskSpace, error) {
 	}
 }
 
+// SystemReserveBytes is the space media storage never plans to use on its
+// filesystem, whatever the disk size. Edge media shares the root filesystem
+// with the journal (journald is capped at 2 GiB), container logs, the trigger
+// WAL and control outbox (one file per trigger, so a control-plane outage on
+// a busy node grows them by gigabytes), Mist and Helmsman state, and the
+// layers of the next edge image pulled beside the running one during an
+// upgrade (several GiB for the accelerator variants). 10 GiB covers those
+// together; a percentage threshold alone leaves a small disk a few hundred
+// MiB for all of them.
+const SystemReserveBytes uint64 = 10 << 30
+
+// EffectiveDiskSpace returns the space media storage may use at path: the
+// filesystem minus SystemReserveBytes, further capped by capacityBytes when
+// it is non-zero. Freeze, eviction and admission thresholds are fractions of
+// the returned total, so they are computed against capacity minus reserve.
 func EffectiveDiskSpace(path string, capacityBytes uint64) (*DiskSpace, error) {
 	space, err := GetDiskSpaceWalk(path)
 	if err != nil {
 		return nil, err
 	}
+	var usedBytes uint64
+	if capacityBytes > 0 {
+		usedBytes, err = DirectorySize(path)
+		if err != nil {
+			return nil, err
+		}
+	}
+	effective := MediaDiskSpace(*space, SystemReserveBytes, capacityBytes, usedBytes)
+	return &effective, nil
+}
+
+// MediaDiskSpace applies the system reserve to raw filesystem stats and then
+// the optional logical capacity cap, where dirUsedBytes is what the media
+// directory already holds. A filesystem no larger than the reserve reports
+// zero total and zero available.
+func MediaDiskSpace(raw DiskSpace, reserve, capacityBytes, dirUsedBytes uint64) DiskSpace {
+	total := saturatingSub(raw.TotalBytes, reserve)
+	available := min(saturatingSub(raw.AvailableBytes, reserve), total)
 	if capacityBytes == 0 {
-		return space, nil
+		return DiskSpace{TotalBytes: total, AvailableBytes: available}
 	}
-	usedBytes, err := DirectorySize(path)
-	if err != nil {
-		return nil, err
+	available = min(available, saturatingSub(capacityBytes, dirUsedBytes))
+	total = min(total, capacityBytes)
+	return DiskSpace{TotalBytes: total, AvailableBytes: available}
+}
+
+// UsageFraction is the used share of the media space. A zero total (a
+// filesystem no larger than the reserve) counts as full.
+func (d DiskSpace) UsageFraction() float64 {
+	if d.TotalBytes == 0 {
+		return 1
 	}
-	logicalAvailable := uint64(0)
-	if usedBytes < capacityBytes {
-		logicalAvailable = capacityBytes - usedBytes
+	return float64(d.TotalBytes-min(d.AvailableBytes, d.TotalBytes)) / float64(d.TotalBytes)
+}
+
+func saturatingSub(a, b uint64) uint64 {
+	if a <= b {
+		return 0
 	}
-	available := space.AvailableBytes
-	if logicalAvailable < available {
-		available = logicalAvailable
-	}
-	total := space.TotalBytes
-	if capacityBytes < total {
-		total = capacityBytes
-	}
-	return &DiskSpace{TotalBytes: total, AvailableBytes: available}, nil
+	return a - b
 }
 
 func DirectorySize(path string) (uint64, error) {

@@ -817,8 +817,8 @@ Read by `api_sidecar/cmd/helmsman`.
 | `HELMSMAN_ROTATE_NODE_IDENTITY` | string | `false` |  | v0.3.0 | Requests a node identity rotation with EDGE_ENROLLMENT_TOKEN at startup. A value that is not a boolean counts as false. |
 | `HELMSMAN_ENROLLMENT_TOKEN_FILE` | string |  |  | v0.3.0 | Env file whose EDGE_ENROLLMENT_TOKEN is cleared after Foghorn accepts the enrollment. |
 | `HELMSMAN_RUNTIME_ENV_FILE` | string |  |  | v0.3.0 | Env file whose HELMSMAN_ROTATE_NODE_IDENTITY is cleared after Foghorn accepts the enrollment. |
-| `HELMSMAN_FREEZE_THRESHOLD` | string | `0.85` |  | v0.3.0 | Disk usage fraction at which the storage manager starts freezing local artifacts to cold storage. A value that is not a number counts as 0. |
-| `HELMSMAN_TARGET_AFTER_FREEZE` | string | `0.70` |  | v0.3.0 | Disk usage fraction the storage manager frees space down to once freezing starts. A value that is not a number counts as 0. |
+| `HELMSMAN_FREEZE_THRESHOLD` | string | `0.85` |  | v0.3.0 | Usage fraction of the media storage space at which the storage manager starts freezing local artifacts to cold storage. The media storage space is the filesystem minus a fixed 10 GiB system reserve, further capped by HELMSMAN_STORAGE_CAPACITY_BYTES when set. A value that is not a number counts as 0. |
+| `HELMSMAN_TARGET_AFTER_FREEZE` | string | `0.70` |  | v0.3.0 | Usage fraction of the media storage space the storage manager frees space down to once freezing starts. A value that is not a number counts as 0. |
 | `HELMSMAN_RELAY_TRUSTED_CIDR` | string |  |  | v0.3.0 | Comma-separated CIDRs whose direct peers reach the artifact relay like loopback. Invalid entries are ignored with a warning. Leave empty unless MistServer reaches Helmsman over a non-loopback address. |
 | `HELMSMAN_BLOCKING_GRACE_MS` | string | `2000` |  | v0.3.0 | Milliseconds a blocking Mist trigger waits for the Foghorn control stream to reconnect before failing. A value that is not an integer uses 2000. |
 | `HELMSMAN_OPERATIONAL_MODE` | string | `normal` |  | v0.3.0 | Operational mode requested at registration: normal, draining, or maintenance. Foghorn stays authoritative and may override it. |

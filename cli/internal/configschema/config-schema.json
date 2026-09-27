@@ -4554,14 +4554,14 @@
           "type": "string",
           "default": "0.85",
           "introduced": "v0.3.0",
-          "description": "Disk usage fraction at which the storage manager starts freezing local artifacts to cold storage. A value that is not a number counts as 0."
+          "description": "Usage fraction of the media storage space at which the storage manager starts freezing local artifacts to cold storage. The media storage space is the filesystem minus a fixed 10 GiB system reserve, further capped by HELMSMAN_STORAGE_CAPACITY_BYTES when set. A value that is not a number counts as 0."
         },
         {
           "key": "HELMSMAN_TARGET_AFTER_FREEZE",
           "type": "string",
           "default": "0.70",
           "introduced": "v0.3.0",
-          "description": "Disk usage fraction the storage manager frees space down to once freezing starts. A value that is not a number counts as 0."
+          "description": "Usage fraction of the media storage space the storage manager frees space down to once freezing starts. A value that is not a number counts as 0."
         },
         {
           "key": "HELMSMAN_RELAY_TRUSTED_CIDR",
