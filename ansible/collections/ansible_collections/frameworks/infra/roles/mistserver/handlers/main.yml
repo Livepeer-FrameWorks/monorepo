@@ -1,4 +1,14 @@
 ---
+# Check mode skips the restart itself; this changed result is how a
+# check-mode plan learns that applying it would restart MistServer (and drop
+# its streams), as opposed to the rolling reload below.
+- name: Report mistserver restart in check mode
+  listen: mistserver restart
+  ansible.builtin.debug:
+    msg: MistServer would restart
+  changed_when: true
+  when: ansible_check_mode
+
 - name: Restart mistserver
   listen: mistserver restart
   ansible.builtin.systemd:

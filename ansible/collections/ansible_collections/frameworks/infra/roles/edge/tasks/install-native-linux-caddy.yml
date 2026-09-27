@@ -100,6 +100,21 @@
   ansible.builtin.set_fact:
     edge_caddy_install_sentinel: "/opt/frameworks/caddy/.installed-{{ edge_caddy_artifact_checksum | default('') | hash('sha1') }}"
 
+# Check mode skips the extract below, so a new Caddy pin would otherwise
+# not surface as the restart it causes.
+- name: Inspect Caddy install sentinel
+  ansible.builtin.stat:
+    path: "{{ edge_caddy_install_sentinel }}"
+  register: edge_caddy_sentinel_stat
+  when: ansible_check_mode
+
+- name: Report Caddy artifact drift in check mode
+  ansible.builtin.debug:
+    msg: "Caddy would be installed from {{ edge_caddy_artifact_url }}"
+  changed_when: not (edge_caddy_sentinel_stat.stat.exists | default(false))
+  notify: edge caddy restart
+  when: ansible_check_mode
+
 - name: Extract Caddy
   ansible.builtin.unarchive:
     src: "/tmp/caddy.tar.gz"

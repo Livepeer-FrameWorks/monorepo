@@ -76,6 +76,27 @@ func TestRecapOutputerParsesChangedCounts(t *testing.T) {
 	}
 }
 
+// A changed handler result belongs to the handler, not to the last task.
+func TestRecapOutputerAttributesChangedHandlers(t *testing.T) {
+	out := &RecapOutputer{}
+	src := strings.NewReader("TASK [frameworks.infra.mistserver : Render env file] ***\n" +
+		"changed: [edge-1]\n" +
+		"RUNNING HANDLER [frameworks.infra.mistserver : Report mistserver restart in check mode] ***\n" +
+		"changed: [edge-1] => {\"msg\": \"MistServer would restart\"}\n" +
+		"RUNNING HANDLER [frameworks.infra.mistserver : Restart mistserver] ***\n" +
+		"skipping: [edge-1]\n" +
+		"PLAY RECAP ***\n" +
+		"edge-1 : ok=3 changed=2 unreachable=0 failed=0\n")
+	if err := out.Print(context.Background(), src, nil); err != nil {
+		t.Fatalf("Print: %v", err)
+	}
+	got := out.ChangedTasks["edge-1"]
+	want := []string{"Render env file", "Report mistserver restart in check mode"}
+	if strings.Join(got, "|") != strings.Join(want, "|") {
+		t.Fatalf("changed tasks = %v, want %v", got, want)
+	}
+}
+
 func TestRecapOutputerNoChangedIsNoop(t *testing.T) {
 	out := &RecapOutputer{}
 	src := strings.NewReader("TASK [x] *********************************************************************\n")

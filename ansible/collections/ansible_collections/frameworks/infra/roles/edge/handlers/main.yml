@@ -1,4 +1,22 @@
 ---
+# Check mode skips the restarts themselves; these changed results tell a
+# check-mode plan (`edge provision`'s precheck) that applying it would
+# restart Caddy or recreate the edge container, so the node is drained
+# first.
+- name: Report edge caddy restart in check mode
+  listen: edge caddy restart
+  ansible.builtin.debug:
+    msg: Caddy would restart
+  changed_when: true
+  when: ansible_check_mode
+
+- name: Report edge container recreate in check mode
+  listen: edge container recreate
+  ansible.builtin.debug:
+    msg: The edge container would be recreated
+  changed_when: true
+  when: ansible_check_mode
+
 - name: Edge caddy restart
   listen: edge caddy restart
   ansible.builtin.systemd:

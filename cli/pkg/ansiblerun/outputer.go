@@ -134,16 +134,26 @@ func (o *RecapOutputer) Tasks() []string {
 	return tasks
 }
 
+// parseTaskLine returns the task name of a TASK or RUNNING HANDLER banner,
+// without its role prefix. Handlers count as tasks so a changed handler
+// result is attributed to the handler, not to the task that notified it.
 func parseTaskLine(line string) (string, bool) {
 	line = strings.TrimSpace(line)
-	if !strings.HasPrefix(line, "TASK [") {
+	prefix := ""
+	for _, candidate := range []string{"TASK [", "RUNNING HANDLER ["} {
+		if strings.HasPrefix(line, candidate) {
+			prefix = candidate
+			break
+		}
+	}
+	if prefix == "" {
 		return "", false
 	}
-	end := strings.Index(line[len("TASK ["):], "]")
+	end := strings.Index(line[len(prefix):], "]")
 	if end < 0 {
 		return "", false
 	}
-	task := strings.TrimSpace(line[len("TASK [") : len("TASK [")+end])
+	task := strings.TrimSpace(line[len(prefix) : len(prefix)+end])
 	if roleSep := strings.LastIndex(task, " : "); roleSep >= 0 {
 		task = strings.TrimSpace(task[roleSep+3:])
 	}

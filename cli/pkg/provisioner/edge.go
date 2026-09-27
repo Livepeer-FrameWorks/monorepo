@@ -8,6 +8,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"net"
+	"os"
 	"regexp"
 	"strings"
 	"time"
@@ -147,12 +148,24 @@ func (c *EdgeProvisionConfig) requireEnrollmentToken() error {
 //	[5-6] install + start (frameworks.infra.edge role, mode + OS aware)
 //	[7] public HTTPS verify after ConfigSeed activation
 func (e *EdgeProvisioner) Provision(ctx context.Context, host inventory.Host, config EdgeProvisionConfig) error {
+	_, err := e.provision(ctx, host, config)
+	return err
+}
+
+// DryRun runs Provision's dry-run pipeline (remote preflight plus the role in
+// check mode with --diff) and returns the check-mode verdict.
+func (e *EdgeProvisioner) DryRun(ctx context.Context, host inventory.Host, config EdgeProvisionConfig) (EdgeInspection, error) {
+	config.DryRun = true
+	return e.provision(ctx, host, config)
+}
+
+func (e *EdgeProvisioner) provision(ctx context.Context, host inventory.Host, config EdgeProvisionConfig) (EdgeInspection, error) {
 	mode := config.resolvedMode()
 	if mode != "native" && mode != "container" {
-		return fmt.Errorf("invalid edge mode %q (valid: container, native; 'docker' is a deprecated alias for container)", config.Mode)
+		return EdgeInspection{}, fmt.Errorf("invalid edge mode %q (valid: container, native; 'docker' is a deprecated alias for container)", config.Mode)
 	}
 	if strings.TrimSpace(config.FoghornGRPCAddr) == "" {
-		return fmt.Errorf("edge Foghorn gRPC address is required; use Bridge enrollment or a cluster manifest that can derive the target Foghorn endpoint")
+		return EdgeInspection{}, fmt.Errorf("edge Foghorn gRPC address is required; use Bridge enrollment or a cluster manifest that can derive the target Foghorn endpoint")
 	}
 	// Both modes install pinned release artifacts (native tarballs or the
 	// edge image digest), so an unpinned run gets the stable channel rather
@@ -168,12 +181,12 @@ func (e *EdgeProvisioner) Provision(ctx context.Context, host inventory.Host, co
 	fmt.Printf("Preparing remote host %s...\n", host.ExternalIP)
 	remoteOS, remoteArch, err := e.DetectRemoteArch(ctx, host)
 	if err != nil {
-		return fmt.Errorf("failed to detect remote OS: %w", err)
+		return EdgeInspection{}, fmt.Errorf("failed to detect remote OS: %w", err)
 	}
 	fmt.Printf("  platform: %s/%s\n", remoteOS, remoteArch)
 	profile, err := e.resolveONNXProfile(ctx, host, mode, remoteOS, remoteArch, config.ONNXProfile)
 	if err != nil {
-		return err
+		return EdgeInspection{}, err
 	}
 	config.ONNXProfile = profile
 	if profile == "openvino" && mode == "container" {
@@ -185,13 +198,13 @@ func (e *EdgeProvisioner) Provision(ctx context.Context, host inventory.Host, co
 
 	fmt.Println("  ensuring Python for Ansible")
 	if err := ensureRemoteAnsiblePython(ctx, e.sshPool, host, config.DryRun); err != nil {
-		return err
+		return EdgeInspection{}, err
 	}
 
 	if !config.SkipPreflight {
 		fmt.Printf("[1/7] Running preflight checks on %s...\n", host.ExternalIP)
 		if err := e.runPreflight(ctx, host, mode); err != nil {
-			return fmt.Errorf("preflight failed: %w", err)
+			return EdgeInspection{}, fmt.Errorf("preflight failed: %w", err)
 		}
 	} else {
 		fmt.Println("[1/7] Skipping preflight checks")
@@ -207,7 +220,7 @@ func (e *EdgeProvisioner) Provision(ctx context.Context, host inventory.Host, co
 			fmt.Println("[2/7] Applying OS tuning (node_tuning role, profile=edge)...")
 		}
 		if err := runNodeTuningRole(ctx, e.sshPool, host, "edge", config.DryRun); err != nil {
-			return fmt.Errorf("node tuning failed: %w", err)
+			return EdgeInspection{}, fmt.Errorf("node tuning failed: %w", err)
 		}
 	default:
 		fmt.Println("[2/7] Skipping OS tuning")
@@ -216,7 +229,7 @@ func (e *EdgeProvisioner) Provision(ctx context.Context, host inventory.Host, co
 	if config.BeforeInstall != nil {
 		fmt.Println("[3/7] Running control-plane registration/enrollment")
 		if err := config.BeforeInstall(ctx, &config); err != nil {
-			return err
+			return EdgeInspection{}, err
 		}
 	} else {
 		fmt.Println("[3/7] No control-plane registration step")
@@ -224,21 +237,23 @@ func (e *EdgeProvisioner) Provision(ctx context.Context, host inventory.Host, co
 	fmt.Println("[4/7] TLS certificates will be delivered after enrollment via ConfigSeed")
 	if !config.DryRun {
 		if err := config.requireEnrollmentToken(); err != nil {
-			return err
+			return EdgeInspection{}, err
 		}
 	}
 
 	if config.DryRun {
 		fmt.Printf("[5-6/7] Checking edge stack (%s, %s)...\n", mode, remoteOS)
-	} else {
-		fmt.Printf("[5-6/7] Installing edge stack (%s, %s)...\n", mode, remoteOS)
-	}
-	if err := runEdgeRole(ctx, e.sshPool, host, &config, remoteOS, remoteArch, config.DryRun); err != nil {
-		return fmt.Errorf("edge role apply failed: %w", err)
-	}
-	if config.DryRun {
+		inspection, inspectErr := inspectEdgeRole(ctx, e, host, &config, remoteOS, remoteArch, true, os.Stdout)
+		if inspectErr != nil {
+			return inspection, fmt.Errorf("edge role check failed: %w", inspectErr)
+		}
+		fmt.Printf("  plan: %s\n", inspection.Summary())
 		fmt.Println("[7/7] Skipping HTTPS verification in dry-run mode")
-		return nil
+		return inspection, nil
+	}
+	fmt.Printf("[5-6/7] Installing edge stack (%s, %s)...\n", mode, remoteOS)
+	if err := runEdgeRole(ctx, e.sshPool, host, &config, remoteOS, remoteArch, false); err != nil {
+		return EdgeInspection{}, fmt.Errorf("edge role apply failed: %w", err)
 	}
 
 	domain := config.verificationDomain()
@@ -249,14 +264,14 @@ func (e *EdgeProvisioner) Provision(ctx context.Context, host inventory.Host, co
 			timeout = 3 * time.Minute
 		}
 		if err := e.verifyHTTPS(domain, host.ExternalIP, timeout); err != nil {
-			return fmt.Errorf("HTTPS verification failed: %w", err)
+			return EdgeInspection{}, fmt.Errorf("HTTPS verification failed: %w", err)
 		}
 	} else {
 		fmt.Println("[7/7] No domain set, skipping HTTPS verification")
 	}
 
 	fmt.Printf("Edge node provisioned successfully on %s (%s mode)\n", host.ExternalIP, mode)
-	return nil
+	return EdgeInspection{}, nil
 }
 
 // runPreflight does host-readiness checks over SSH before any playbook runs.

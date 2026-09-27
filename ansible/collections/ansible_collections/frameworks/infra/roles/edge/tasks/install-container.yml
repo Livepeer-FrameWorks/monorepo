@@ -103,6 +103,7 @@
     dest: "{{ edge_base_dir }}/.edge.env"
     mode: "0644"
   no_log: true
+  notify: edge container recreate
 
 # Secrets stay out of the world-readable compose file; prepare.yml reuses
 # the password from this file on re-runs, so the rendered content is stable.
@@ -113,6 +114,7 @@
       MIST_API_PASSWORD={{ edge_effective_mist_api_password }}
     mode: "0600"
   no_log: true
+  notify: edge container recreate
 
 # Write-once: a fresh token on re-provision must not change the compose env
 # (which would recreate the edge container); Foghorn ignores tokens for
@@ -127,6 +129,7 @@
     mode: "0600"
     force: "{{ (edge_force_reenroll | bool) and (edge_enrollment_token | length > 0) }}"
   no_log: true
+  notify: edge container recreate
 
 # macOS runs Docker Desktop/OrbStack (preflight verified the CLI); Linux
 # package management would fail and the daemon belongs to the desktop app.
@@ -181,6 +184,17 @@
   loop: "{{ edge_legacy_containers.results | default([]) | map(attribute='stdout_lines') | map('default', []) | flatten }}"
   changed_when: true
   when: not ansible_check_mode
+
+# compose_stack renders the compose file; a different file (a new image
+# digest, env layout, or volume) recreates the edge container on apply.
+# prepare.yml read the deployed file.
+- name: Detect edge compose file drift
+  ansible.builtin.debug:
+    msg: The edge compose file differs from the deployed one
+  changed_when: >-
+    (edge_existing_compose_file.content | default('') | b64decode)
+    != lookup('ansible.builtin.template', 'compose.yml.j2')
+  notify: edge container recreate
 
 - name: Delegate to compose_stack for edge
   ansible.builtin.include_role:

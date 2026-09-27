@@ -18,6 +18,7 @@ import (
 	"frameworks/cli/pkg/ssh"
 
 	fwversion "github.com/Livepeer-FrameWorks/monorepo/pkg/version"
+	goansible_result "github.com/apenella/go-ansible/v2/pkg/execute/result"
 )
 
 // runEdgeRole is the role-backed install path used by EdgeProvisioner for
@@ -31,6 +32,23 @@ import (
 // — subsequent reads of that password (e.g. logging, retry) see the same
 // value.
 func runEdgeRole(ctx context.Context, pool *ssh.Pool, host inventory.Host, config *EdgeProvisionConfig, remoteOS, remoteArch string, dryRun bool) error {
+	run := edgeRoleRun{Tags: []string{"install", "configure", "service", "validate"}}
+	if dryRun {
+		run = edgeRoleRun{Tags: []string{"install", "configure"}, Check: true, Diff: true}
+	}
+	return runEdgeRoleWith(ctx, pool, host, config, remoteOS, remoteArch, run)
+}
+
+// edgeRoleRun selects how the edge playbook runs: which tags, whether in
+// check mode, and where its output goes (nil streams to the terminal).
+type edgeRoleRun struct {
+	Tags     []string
+	Check    bool
+	Diff     bool
+	Outputer goansible_result.ResultsOutputer
+}
+
+func runEdgeRoleWith(ctx context.Context, pool *ssh.Pool, host inventory.Host, config *EdgeProvisionConfig, remoteOS, remoteArch string, run edgeRoleRun) error {
 	vars, err := edgeRoleVars(config, remoteOS, remoteArch)
 	if err != nil {
 		return err
@@ -114,18 +132,14 @@ func runEdgeRole(ctx context.Context, pool *ssh.Pool, host inventory.Host, confi
 		}
 	}
 
-	tags := []string{"install", "configure", "service", "validate"}
-	if dryRun {
-		tags = []string{"install", "configure"}
-	}
-
 	return executor.Execute(ctx, ansiblerun.ExecuteOptions{
 		Playbook:   filepath.Join(root, "playbooks/edge.yml"),
 		Inventory:  invPath,
 		ExtraVars:  vars,
-		Tags:       tags,
-		Check:      dryRun,
-		Diff:       dryRun,
+		Tags:       run.Tags,
+		Check:      run.Check,
+		Diff:       run.Diff,
+		Outputer:   run.Outputer,
 		PrivateKey: privateKey,
 		User:       host.User,
 		Become:     become,

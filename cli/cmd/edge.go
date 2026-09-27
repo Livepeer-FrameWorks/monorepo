@@ -15,7 +15,6 @@ import (
 	"regexp"
 	"runtime"
 	"strings"
-	"sync"
 	"time"
 
 	fwcfg "frameworks/cli/internal/config"
@@ -803,6 +802,17 @@ func newEdgeProvisionCmd() *cobra.Command {
   6. Start edge stack (docker compose up)
   7. Wait for HTTPS readiness
 
+Re-running provision on an enrolled node is the upgrade path: it reuses the
+node identity and renders this CLI's edge config. Each enrolled node is first
+checked in Ansible check mode; a node without drift is skipped, and nodes
+that drifted are applied one at a time (--parallel only applies to fresh
+installs). A MistServer binary change goes through its rolling reload and
+keeps streams up. When the apply must restart MistServer or Caddy, or
+recreate the edge container, the node is set to draining through Foghorn
+first, the apply waits until its sessions end, and the prior mode is
+restored afterwards. --dry-run prints each node's plan and diff and changes
+nothing.
+
 Single node example:
   frameworks edge provision --ssh ubuntu@edge-1.example.com \
     --pool-domain edge.media-eu.example.com \
@@ -904,7 +914,10 @@ Multi-node manifest example:
 					clusterID = enrollment.ClusterID
 				}
 			}
-			if enrollmentToken != "" {
+			if enrollmentToken != "" && dryRun {
+				fmt.Fprintln(cmd.OutOrStdout(), "Dry-run: skipping pre-registration with the enrollment token")
+			}
+			if enrollmentToken != "" && !dryRun {
 				fmt.Fprintln(cmd.OutOrStdout(), "Pre-registering edge via enrollment token...")
 				preRegTarget := sshTarget
 				if isLocal {
@@ -1044,7 +1057,10 @@ Multi-node manifest example:
 				AlreadyEnrolled: enrollment != nil,
 				ForceReenroll:   forceReenroll,
 			}
-			if registerNode || fetchCert {
+			if dryRun && (registerNode || fetchCert) {
+				fmt.Fprintln(cmd.OutOrStdout(), "  dry-run: Quartermaster registration and certificate fetch are skipped")
+			}
+			if (registerNode || fetchCert) && !dryRun {
 				epConfig.BeforeInstall = func(ctx context.Context, cfg *provisioner.EdgeProvisionConfig) error {
 					if registerNode {
 						fmt.Fprintln(cmd.OutOrStdout(), "  - Preparing Quartermaster enrollment")
@@ -1076,11 +1092,17 @@ Multi-node manifest example:
 				}
 			}
 
-			pool := fwssh.NewPool(30*time.Second, sshKey)
-			ep := provisioner.NewEdgeProvisioner(pool)
-
-			if err := ep.Provision(cmd.Context(), host, epConfig); err != nil {
+			runningMode := mode
+			if enrollment != nil && enrollment.Mode != "" {
+				runningMode = enrollment.Mode
+			}
+			node := newProvisionedEdgeNode(cmd.OutOrStdout(), nodeName, host, epConfig, sshTarget, sshKey, runningMode, enrollment != nil)
+			results := runEdgeRollout(cmd.Context(), cmd.OutOrStdout(), []edgeRolloutNode{node}, 1, dryRun)
+			if err := summarizeEdgeRollout(cmd.OutOrStdout(), results, dryRun); err != nil {
 				return err
+			}
+			if dryRun || results[0].Action == edgeActionSkip {
+				return nil
 			}
 
 			ux.Success(cmd.OutOrStdout(), fmt.Sprintf("Edge node provisioned at https://%s", primaryDomain))
@@ -1114,27 +1136,19 @@ Multi-node manifest example:
 	cmd.Flags().BoolVar(&fetchCert, "fetch-cert", false, "Fetch TLS certificate from Navigator (DNS-01 challenge)")
 	cmd.Flags().StringVar(&manifestPath, "manifest", "", "Path to edge manifest file (edges.yaml) for multi-node provisioning")
 	cmd.Flags().StringVar(&clusterManifestPath, "cluster-manifest", "", "Path to cluster manifest used for platform SERVICE_TOKEN in edge manifest mode")
-	cmd.Flags().IntVar(&parallel, "parallel", 1, "Number of nodes to provision in parallel (for manifest mode)")
+	cmd.Flags().IntVar(&parallel, "parallel", 1, "Number of fresh nodes to install in parallel (manifest mode); enrolled nodes are always applied one at a time")
 	cmd.Flags().StringVar(&mode, "mode", "container", "Deployment mode: container (single edge image) or native (systemd/launchd); 'docker' is a deprecated alias for container")
 	cmd.Flags().StringVar(&version, "version", "", "Platform version for binary resolution (e.g., stable, v1.2.3)")
 	cmd.Flags().StringVar(&onnxProfile, "onnx-profile", "auto", "MistServer ONNX profile: auto, cpu, coreml, cuda, tensorrt, or openvino")
 	cmd.Flags().BoolVar(&local, "local", false, "Provision this machine as a user LaunchAgent (no admin required, macOS only)")
 	cmd.Flags().StringVar(&ageKeyFile, "age-key", "", "Path to age private key for SOPS-encrypted host files (default: $SOPS_AGE_KEY_FILE)")
-	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "Load and validate manifest, show provision plan, but do not execute")
+	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "Check every node in Ansible check mode and print its plan and diff; change nothing")
 	cmd.Flags().StringSliceVar(&capabilities, "capability", nil, "Edge capability to enable (repeatable: ingest, edge, storage, processing)")
 	cmd.Flags().IntVar(&bandwidthMbps, "bandwidth-mbps", 0, "Advertised edge bandwidth limit in Mbps")
 	cmd.Flags().IntVar(&maxTranscodes, "max-transcodes", 0, "Maximum local transcodes for Helmsman to report")
 	cmd.Flags().Uint64Var(&storageCapacityBytes, "storage-capacity-bytes", 0, "Local storage capacity limit for Helmsman to report")
 
 	return cmd
-}
-
-// EdgeProvisionResult holds the result of provisioning a single edge node
-type EdgeProvisionResult struct {
-	NodeName string
-	SSHAddr  string
-	Success  bool
-	Error    error
 }
 
 // runEdgeProvisionFromManifest provisions multiple edge nodes from a manifest file
@@ -1229,96 +1243,42 @@ func runEdgeProvisionFromManifest(cmd *cobra.Command, cliCtx fwcfg.Context, mani
 		}
 	}
 
-	// Semaphore for parallelism control
-	sem := make(chan struct{}, parallel)
-	var wg sync.WaitGroup
-	results := make(chan EdgeProvisionResult, len(manifest.Nodes))
+	// Every node is resolved (enrollment detection, pre-registration of fresh
+	// nodes) before anything is applied, so the rollout can precheck all live
+	// nodes first and order the applies.
+	var nodes []edgeRolloutNode
+	var prepareFailures []edgeRolloutResult
+	for _, n := range manifest.Nodes {
+		poolDomain := manifest.PoolDomain
+		clusterID := n.ResolvedCluster(manifest.ClusterID)
+		nodeDomain := edgeManifestNodeDomain(manifest.RootDomain, clusterID, n.Subdomain)
+		fmt.Fprintf(cmd.OutOrStdout(), "\n[%s] Resolving node...\n", n.Name)
 
-	// Provision each node
-	for _, node := range manifest.Nodes {
-		wg.Add(1)
-		go func(n inventory.EdgeNode) {
-			defer wg.Done()
-			sem <- struct{}{}        // Acquire semaphore
-			defer func() { <-sem }() // Release semaphore
-
-			result := EdgeProvisionResult{
-				NodeName: n.Name,
-				SSHAddr:  n.SSH,
-			}
-
-			// Keep the manifest pool domain available for compatibility, but
-			// the concrete node domain is the runtime identity for this host.
-			poolDomain := manifest.PoolDomain
-			clusterID := n.ResolvedCluster(manifest.ClusterID)
-			nodeDomain := edgeManifestNodeDomain(manifest.RootDomain, clusterID, n.Subdomain)
-
-			// Domain used for the node's own runtime identity and readiness.
-			primaryDomain := firstNonEmpty(nodeDomain, poolDomain)
-
-			fmt.Fprintf(cmd.OutOrStdout(), "\n[%s] Starting provisioning...\n", n.Name)
-
-			sshKey := defaultSSHKey
-			token := enrollmentToken
-			if token == "" {
-				token = manifest.EnrollmentToken
-			}
-			nodeMode := n.ResolvedMode(manifest.Mode)
-			if cmd.Flags().Changed("mode") {
-				nodeMode = cliMode
-			}
-			nodeVersion := manifest.Channel
-			if cmd.Flags().Changed("version") {
-				nodeVersion = cliVersion
-			}
-			nodeTelemetryURL := edgeManifestTelemetryWriteURL(manifest, clusterManifest, clusterID)
-			foghornAddr := edgeManifestNodeFoghornAddr(n, manifest.RootDomain, clusterID)
-			err := provisionSingleEdgeNode(cmd, controlCtx, n.SSH, sshKey, n.Name, nodeDomain, poolDomain, clusterID, n.Region, manifest.Email, token, n.ExternalIP, false, n.ApplyTune, n.RegisterQM, skipPreflight, timeout, nodeMode, nodeVersion, cliONNXProfile, foghornAddr, n.FoghornTLSServerName, controlCABundlePEM, nodeTelemetryURL, "", n.TelemetryAddress, n.ResolvedCapabilities(manifest.Capabilities), n.ResolvedBandwidthMbps(manifest.BandwidthMbps), n.ResolvedMaxTranscodes(manifest.MaxTranscodes), n.ResolvedStorageBytes(manifest.StorageBytes), dryRun, forceReenroll)
-			if err != nil {
-				result.Error = err
-				result.Success = false
-				fmt.Fprintf(cmd.OutOrStdout(), "[%s] FAILED: %v\n", n.Name, err)
-			} else {
-				result.Success = true
-				if dryRun {
-					fmt.Fprintf(cmd.OutOrStdout(), "[%s] DRY-RUN OK\n", n.Name)
-				} else {
-					fmt.Fprintf(cmd.OutOrStdout(), "[%s] SUCCESS: HTTPS TLS ready at https://%s\n", n.Name, primaryDomain)
-				}
-			}
-
-			results <- result
-		}(node)
-	}
-
-	// Wait for all goroutines to finish
-	go func() {
-		wg.Wait()
-		close(results)
-	}()
-
-	// Collect results
-	var succeeded, failed int
-	var failedNodes []string
-	for result := range results {
-		if result.Success {
-			succeeded++
-		} else {
-			failed++
-			failedNodes = append(failedNodes, result.NodeName)
+		token := enrollmentToken
+		if token == "" {
+			token = manifest.EnrollmentToken
 		}
+		nodeMode := n.ResolvedMode(manifest.Mode)
+		if cmd.Flags().Changed("mode") {
+			nodeMode = cliMode
+		}
+		nodeVersion := manifest.Channel
+		if cmd.Flags().Changed("version") {
+			nodeVersion = cliVersion
+		}
+		nodeTelemetryURL := edgeManifestTelemetryWriteURL(manifest, clusterManifest, clusterID)
+		foghornAddr := edgeManifestNodeFoghornAddr(n, manifest.RootDomain, clusterID)
+		node, err := prepareManifestEdgeNode(cmd, controlCtx, n.SSH, defaultSSHKey, n.Name, nodeDomain, poolDomain, clusterID, n.Region, manifest.Email, token, n.ExternalIP, false, n.ApplyTune, n.RegisterQM, skipPreflight, timeout, nodeMode, nodeVersion, cliONNXProfile, foghornAddr, n.FoghornTLSServerName, controlCABundlePEM, nodeTelemetryURL, "", n.TelemetryAddress, n.ResolvedCapabilities(manifest.Capabilities), n.ResolvedBandwidthMbps(manifest.BandwidthMbps), n.ResolvedMaxTranscodes(manifest.MaxTranscodes), n.ResolvedStorageBytes(manifest.StorageBytes), dryRun, forceReenroll)
+		if err != nil {
+			fmt.Fprintf(cmd.OutOrStdout(), "[%s] FAILED: %v\n", n.Name, err)
+			prepareFailures = append(prepareFailures, edgeRolloutResult{Name: n.Name, Err: err})
+			continue
+		}
+		nodes = append(nodes, node)
 	}
 
-	// Summary
-	fmt.Fprintf(cmd.OutOrStdout(), "\n=== Provisioning Summary ===\n")
-	fmt.Fprintf(cmd.OutOrStdout(), "  Succeeded: %d/%d\n", succeeded, len(manifest.Nodes))
-	fmt.Fprintf(cmd.OutOrStdout(), "  Failed: %d/%d\n", failed, len(manifest.Nodes))
-	if len(failedNodes) > 0 {
-		fmt.Fprintf(cmd.OutOrStdout(), "  Failed nodes: %v\n", failedNodes)
-		return fmt.Errorf("%d nodes failed to provision", failed)
-	}
-
-	return nil
+	results := runEdgeRollout(cmd.Context(), cmd.OutOrStdout(), nodes, parallel, dryRun)
+	return summarizeEdgeRollout(cmd.OutOrStdout(), append(results, prepareFailures...), dryRun)
 }
 
 func edgeManifestNeedsControlPlane(manifest *inventory.EdgeManifest) bool {
@@ -1646,23 +1606,27 @@ func populateEdgePreRegistration(ctx context.Context, cmd *cobra.Command, cliCtx
 	return nil
 }
 
-// provisionSingleEdgeNode provisions a single edge node using EdgeProvisioner.
-// knownExternalIP, when non-empty, is the canonical IP from the manifest's
-// hosts inventory; it bypasses the remote ifconfig.me probe in both the
-// preregistration and Quartermaster registration paths.
-func provisionSingleEdgeNode(cmd *cobra.Command, cliCtx fwcfg.Context, sshTarget, sshKey, nodeName, nodeDomain, poolDomain, clusterID, region, email, enrollmentToken, knownExternalIP string, fetchCert, applyTuning, registerNode, skipPreflight bool, timeout time.Duration, mode, version, onnxProfile, foghornGRPCAddr, foghornGRPCTLSServerName, caBundlePEM, telemetryURL, telemetryToken, telemetryAddress string, capabilities []string, bandwidthMbps, maxTranscodes int, storageCapacityBytes uint64, dryRun, forceReenroll bool) error {
+// prepareManifestEdgeNode resolves one manifest node for the rollout:
+// enrollment detection, pre-registration of a fresh node, and the
+// EdgeProvisionConfig its apply uses. knownExternalIP, when non-empty, is the
+// canonical IP from the manifest's hosts inventory; it bypasses the remote
+// ifconfig.me probe in both the preregistration and Quartermaster
+// registration paths.
+func prepareManifestEdgeNode(cmd *cobra.Command, cliCtx fwcfg.Context, sshTarget, sshKey, nodeName, nodeDomain, poolDomain, clusterID, region, email, enrollmentToken, knownExternalIP string, fetchCert, applyTuning, registerNode, skipPreflight bool, timeout time.Duration, mode, version, onnxProfile, foghornGRPCAddr, foghornGRPCTLSServerName, caBundlePEM, telemetryURL, telemetryToken, telemetryAddress string, capabilities []string, bandwidthMbps, maxTranscodes int, storageCapacityBytes uint64, dryRun, forceReenroll bool) (edgeRolloutNode, error) {
 	// Already-enrolled detection: reuse the identity a completed install
 	// left on the host instead of re-running PreRegisterEdge (Foghorn
 	// resolves enrolled nodes by fingerprint; a re-presented token only
 	// churns config files and risks a new node identity). Runs before the
 	// register_qm guards below: an enrolled node neutralizes register_qm and
-	// the token, so contradictory-but-ignorable combos must not error.
+	// the token, so contradictory-but-ignorable combos must not error. The
+	// probe is read-only, so dry-runs use it too and check against the
+	// node's real identity.
 	var enrollment *provisioner.EdgeEnrollment
-	if !forceReenroll && !dryRun {
+	if !forceReenroll {
 		var detectErr error
 		enrollment, detectErr = detectExistingEdgeEnrollment(cmd.Context(), sshTarget, sshKey, false)
 		if detectErr != nil {
-			return detectErr
+			return edgeRolloutNode{}, detectErr
 		}
 	}
 	var enrolledNodeID string
@@ -1689,10 +1653,10 @@ func provisionSingleEdgeNode(cmd *cobra.Command, cliCtx fwcfg.Context, sshTarget
 	// mode reaches this helper without going through that RunE, so duplicate
 	// the contract here to keep the rule single-source.
 	if registerNode && enrollmentToken != "" && !dryRun {
-		return fmt.Errorf("register_qm is for the manual provisioning path; the token path already registers the node via Foghorn")
+		return edgeRolloutNode{}, fmt.Errorf("register_qm is for the manual provisioning path; the token path already registers the node via Foghorn")
 	}
 	if registerNode && cliCtx.Persona != fwcfg.PersonaPlatform && !dryRun {
-		return fmt.Errorf("register_qm requires Quartermaster access; use a platform context for manual node registration")
+		return edgeRolloutNode{}, fmt.Errorf("register_qm requires Quartermaster access; use a platform context for manual node registration")
 	}
 
 	var preRegFoghornAddr string
@@ -1704,7 +1668,7 @@ func provisionSingleEdgeNode(cmd *cobra.Command, cliCtx fwcfg.Context, sshTarget
 		preRegResp, err := bootstrapEdgeViaBridge(preRegCtx, cliCtx, enrollmentToken, sshTarget, sshKey, preferredNodeID, knownExternalIP)
 		cancel()
 		if err != nil {
-			return fmt.Errorf("pre-registration failed: %w", err)
+			return edgeRolloutNode{}, fmt.Errorf("pre-registration failed: %w", err)
 		}
 		preRegFoghornAddr = preRegResp.GetFoghornGrpcAddr()
 		preRegCABundle = string(preRegResp.GetInternalCaBundle())
@@ -1722,13 +1686,13 @@ func provisionSingleEdgeNode(cmd *cobra.Command, cliCtx fwcfg.Context, sshTarget
 			telemetryToken = telemetry.GetBearerToken()
 		}
 		if strings.TrimSpace(telemetryURL) != "" && strings.TrimSpace(telemetryToken) == "" {
-			return fmt.Errorf("edge telemetry write URL resolved but Foghorn did not issue a bearer token")
+			return edgeRolloutNode{}, fmt.Errorf("edge telemetry write URL resolved but Foghorn did not issue a bearer token")
 		}
 	}
 	primaryDomain := firstNonEmpty(nodeDomain, poolDomain)
 
 	if fetchCert && email == "" {
-		return fmt.Errorf("--email is required when using --fetch-cert")
+		return edgeRolloutNode{}, fmt.Errorf("--email is required when using --fetch-cert")
 	}
 
 	// Parse SSH target (user@host) into inventory.Host
@@ -1809,9 +1773,11 @@ func provisionSingleEdgeNode(cmd *cobra.Command, cliCtx fwcfg.Context, sshTarget
 		}
 	}
 
-	pool := fwssh.NewPool(30*time.Second, sshKey)
-	ep := provisioner.NewEdgeProvisioner(pool)
-	return ep.Provision(cmd.Context(), host, config)
+	runningMode := mode
+	if enrollment != nil && enrollment.Mode != "" {
+		runningMode = enrollment.Mode
+	}
+	return newProvisionedEdgeNode(cmd.OutOrStdout(), nodeName, host, config, sshTarget, sshKey, runningMode, enrollment != nil), nil
 }
 
 func firstNonEmpty(values ...string) string {
