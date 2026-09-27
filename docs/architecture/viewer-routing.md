@@ -119,8 +119,12 @@ the session's `USER_NEW`; the edge answers the session's later requests itself.
   authorities' hard validity. A revoked signing key is absent from the active
   keys. Foghorn sends it once per stream per control connection
   (`control.OfferPlaybackGrant`) and again whenever an applied authority changes
-  it (`HandleMediaAuthorityApply` → `pushPlaybackGrantUpdates`, relayed to the
-  replica holding the edge). Helmsman fetches a grant itself
+  it. Only the replica that applies an authority observes it, while any replica
+  may hold the control stream of an edge with the stream's grant: the applying
+  replica pushes to the edges it holds and announces the apply on the cell's
+  shared state changelog (`playback_authority` entries), and every other replica
+  pushes the new grant to the edges it holds. Each replica sends only over its
+  own control streams. Helmsman fetches a grant itself
   (`PlaybackGrantRequest`, one per stream) after a restart, on every control
   reconnect, when an admission arrives without one, and before one expires.
   A cell with no ready signed authority for the stream issues no grant, and the
@@ -165,8 +169,11 @@ the session's `USER_NEW`; the edge answers the session's later requests itself.
 - **Restart.** Helmsman rebuilds the table from Mist's live session list (session
   id, address, stream, protocol) and fetches one grant per stream. Mist's list
   has no token, so a rebuilt session binds to the first request from its address
-  on its stream and protocol (a JWT stream checks the token first); two live
-  sessions from one address leave the choice to Foghorn.
+  on its stream and protocol (a JWT stream checks the token first). Several live
+  sessions from one address (viewers behind one NAT) cannot be told apart, so
+  each token from that address is answered without a Mist session id; the
+  answer only maps the stream name, and a token that is really a new viewer
+  opens a new Mist session whose `USER_NEW` Foghorn decides.
 
 Placement is decided when a session is admitted. A later placement revision
 applies to new sessions; an established session keeps its node until it ends or
