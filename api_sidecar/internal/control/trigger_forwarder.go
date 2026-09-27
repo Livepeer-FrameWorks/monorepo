@@ -8,8 +8,6 @@ import (
 	"frameworks/api_sidecar/internal/storage"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
-
-	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 // Durable forwarding for final-event and source-presence Mist triggers.
@@ -19,21 +17,16 @@ import (
 // before truncating the WAL row. See docs/architecture/trigger-durability.md.
 
 const (
-	// triggerAckTimeout bounds how long a single forwarder pass waits for
-	// a positive/negative ack before giving up and re-trying on the next
-	// pass. Foghorn's downstream (Decklog + Kafka) is generally low-ms but
-	// can spike under load; 30s is well past p99.
+	// triggerAckTimeout bounds how long one sent entry waits for its ack before it counts as
+	// failed and is retried on a later pass. Foghorn's downstream (Decklog + Kafka) is generally
+	// low-ms but can spike under load; 30s is well past p99.
 	triggerAckTimeout = 30 * time.Second
 
 	// triggerForwarderTickInterval bounds how often the forwarder retries
 	// independently of explicit wakeups, so timed-out or post-reconnect
-	// entries get a fresh attempt without external prodding.
+	// entries get a fresh attempt without external prodding. A failed entry
+	// is also held back this long before it is sent again.
 	triggerForwarderTickInterval = 10 * time.Second
-
-	// triggerWALDrainBatch bounds protobuf decoding while allowing a healthy
-	// connection to continue through successive batches without waiting for the
-	// next retry tick.
-	triggerWALDrainBatch = 256
 )
 
 var (
@@ -172,122 +165,6 @@ func triggerForwarderLoop(logger logging.Logger) {
 		case <-ticker.C:
 		}
 	}
-}
-
-func drainTriggerWAL(logger logging.Logger) {
-	connection := getConnection()
-	if connection == nil {
-		return // no active stream; pending entries stay on disk
-	}
-	// A pass delivers in WAL order on one connection. Once that connection is gone the pass ends,
-	// and the next one starts again from the oldest entry, priority runtimes first.
-	onPassConnection := func() bool {
-		current := getConnection()
-		return current != nil && current.epoch == connection.epoch
-	}
-	for {
-		if !drainPriorityRuntimes(triggerWAL, logger) {
-			return
-		}
-		pending, err := triggerWAL.PendingBatch(triggerWALDrainBatch)
-		if err != nil {
-			logger.WithError(err).Warn("Failed to read trigger WAL batch")
-			return
-		}
-		if len(pending) == 0 {
-			return
-		}
-		failed := false
-		for _, trigger := range pending {
-			if !onPassConnection() {
-				return // disconnect mid-drain; resume on reconnect
-			}
-			// An admission waiting on a runtime's end triggers is served before the next entry.
-			if !drainPriorityRuntimes(triggerWAL, logger) {
-				return
-			}
-			if !triggerWAL.IsPending(trigger.GetRequestId()) {
-				continue // delivered ahead of order for a waiting admission
-			}
-			if !sendDurableTriggerAndAwaitAck(trigger, logger) {
-				failed = true
-			}
-		}
-		if failed {
-			return // retry failed rows on the periodic pass; do not hot-loop
-		}
-	}
-}
-
-func sendDurableTriggerAndAwaitAck(trigger *ipcpb.MistTrigger, logger logging.Logger) bool {
-	requestID := trigger.GetRequestId()
-	if requestID == "" {
-		logger.Warn("Skipping WAL trigger with empty request_id")
-		return false
-	}
-
-	ch := make(chan *ipcpb.MistTriggerAck, 1)
-	pendingTriggerAcksMu.Lock()
-	pendingTriggerAcks[requestID] = ch
-	pendingTriggerAcksMu.Unlock()
-	defer func() {
-		pendingTriggerAcksMu.Lock()
-		delete(pendingTriggerAcks, requestID)
-		pendingTriggerAcksMu.Unlock()
-	}()
-
-	// The ack can only arrive on the connection the trigger was sent on, so the wait is bound to it.
-	connection := getConnection()
-	if connection == nil || connection.stream == nil {
-		return false
-	}
-	msg := &ipcpb.ControlMessage{
-		SentAt:  timestamppb.Now(),
-		Payload: &ipcpb.ControlMessage_MistTrigger{MistTrigger: trigger},
-	}
-	logFields := TriggerSummaryFields(trigger, requestID)
-	if err := connection.stream.Send(msg); err != nil {
-		logger.WithError(err).WithFields(logFields).Warn("Stream send failed; will retry from WAL")
-		return false
-	}
-
-	triggerType := trigger.GetTriggerType()
-	select {
-	case ack := <-ch:
-		if ack.GetSuccess() {
-			TriggerAckOutcomes.WithLabelValues(triggerType, "success").Inc()
-			if err := triggerWAL.Ack(requestID); err != nil {
-				logger.WithError(err).WithField("source_event_id", requestID).Warn("Failed to truncate WAL entry after positive ack")
-			}
-			updateTriggerWALDepthGauge()
-			return true
-		}
-		if ack.GetRetryable() {
-			TriggerAckOutcomes.WithLabelValues(triggerType, "retryable").Inc()
-			logFields["error_code"] = ack.GetErrorCode().String()
-			logger.WithFields(logFields).Warn("Negative retryable ack; will retry on next forwarder pass")
-			return false
-		}
-		TriggerAckOutcomes.WithLabelValues(triggerType, "non_retryable").Inc()
-		logFields["error_code"] = ack.GetErrorCode().String()
-		logFields["error_message"] = ack.GetErrorMessage()
-		logger.WithFields(logFields).Error("Non-retryable trigger ack; moving entry to dead-letter")
-		if err := triggerWAL.DeadLetter(requestID); err != nil {
-			logger.WithError(err).WithFields(logFields).Warn("Failed to dead-letter non-retryable WAL entry")
-			return false
-		}
-		updateTriggerWALDepthGauge()
-		return true
-	case <-connection.ended:
-		// The entry stays in the WAL; the next connection resends it under the same
-		// source_event_id, which every downstream consumer deduplicates on.
-		TriggerAckOutcomes.WithLabelValues(triggerType, "connection_ended").Inc()
-		logger.WithFields(logFields).Warn("Control connection ended before the trigger ack; resending on the next connection")
-	case <-time.After(triggerAckTimeout):
-		TriggerAckOutcomes.WithLabelValues(triggerType, "timeout").Inc()
-		logger.WithFields(logFields).Warn("Timed out waiting for trigger ack; will retry")
-	}
-	return false
 }
 
 // TriggerSummaryFields returns stable incident-response fields for a Mist trigger.

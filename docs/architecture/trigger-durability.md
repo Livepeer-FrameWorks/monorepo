@@ -119,11 +119,12 @@ reported failed.
 - Startup builds an in-memory index of file paths and source event IDs. Payloads
   remain on disk; the index never duplicates the protobuf bodies in memory.
 - `Ack(source_event_id)` deletes the indexed file for any `received_at_ms` prefix.
+  The removal is not fsynced: a crash that brings the file back only resends an
+  entry Foghorn already committed, under the same `source_event_id`.
 - `DeadLetter(source_event_id)` renames non-retryable rows to `.dead`; they are no longer retried but remain inspectable on disk.
-- Online replay uses `PendingBatch(256)` in oldest-first order. A healthy
-  connection immediately continues with the next batch, while one failed batch
-  waits for the retry tick. This prevents a six-figure backlog from being read
-  and unmarshaled in full before the first send.
+- Online replay reads at most 1,024 decoded entries ahead of the send cursor,
+  so a six-figure backlog is never read and unmarshaled in full before the
+  first send.
 - No TTL — the file stays until it is acked or manually purged. Operators should monitor pending depth.
 - Entries that end an ingest runtime's publisher (`PUSH_INPUT_CLOSE`,
   `STREAM_END`) are also indexed by Mist runtime name, rebuilt from disk at
@@ -155,11 +156,12 @@ api_sidecar/internal/handlers (Helmsman)
 
 (asynchronously)
 api_sidecar/internal/control trigger_forwarder.go
-  - drains bounded WAL.PendingBatch() windows in order
-  - for each entry: stream.Send(ControlMessage_MistTrigger),
-                    register ack channel keyed by source_event_id,
-                    wait up to triggerAckTimeout (30s) or until the
-                    connection it was sent on ends
+  - keeps up to 64 entries awaiting their ack on one connection, acks
+    matched by source_event_id; each waits up to triggerAckTimeout (30s)
+    or until the connection it was sent on ends
+  - entries sharing an order key (every end trigger of one stream; one
+    viewer session's USER_END) are sent one at a time in WAL order, so
+    none overtakes an earlier one; billing samples carry no order key
     ↓
 api_balancing/internal/control/server.go (Foghorn)
   - processMistTrigger dispatches to MistTriggerProcessor
@@ -170,10 +172,12 @@ api_balancing/internal/control/server.go (Foghorn)
     ↓ (control stream)
 api_sidecar handleMistTriggerAck
   - on success=true: WAL.Ack(source_event_id) → file deleted
-  - on success=false, retryable=true: leave in WAL, next tick re-sends
+  - on success=false, retryable=true: leave in WAL, hold it (and later
+                                      entries with its order key) back
+                                      for 10s, then re-send
   - on success=false, retryable=false: dead-letter the WAL file,
                                        log + metric; operator must inspect
-  - on timeout: leave in WAL, next tick re-sends
+  - on timeout: as for a retryable failure
   - on the connection ending: leave in WAL; the next connection's first
     pass re-sends from the oldest entry, runtimes an admission waits on first
 ```
@@ -192,7 +196,7 @@ Foghorn maps processor errors via `classifyTriggerError` (`api_balancing/interna
 
 ## Failure modes and recovery
 
-- **api_sidecar crashes between Mist's 200 OK and the next forwarder tick.** WAL is fsynced before the response, so the trigger survives. On restart, the forwarder drains bounded `PendingBatch()` windows. Same `source_event_id` → idempotent across crashes.
+- **api_sidecar crashes between Mist's 200 OK and the next forwarder tick.** WAL is fsynced before the response, so the trigger survives. On restart, the forwarder resumes from the oldest entry. Same `source_event_id` → idempotent across crashes.
 - **api_balancing crashes during processing.** The control connection ends, which ends Helmsman's ack wait at once; the reconnected stream re-sends (a Foghorn that stays connected but never answers is covered by the 30s ack timeout). Foghorn re-enriches and re-publishes; downstream dedup on `EventId`.
 - **Decklog returns Kafka publish error.** Processor returns the error, Foghorn sends a negative retryable ack. WAL entry stays; next tick retries. This includes the raw trigger journal publish. If the underlying Kafka cluster is unavailable for hours, the WAL accumulates — operators see the pending-depth metric and can intervene.
 - **An always-on multi-rendition processing stream creates many rows.**

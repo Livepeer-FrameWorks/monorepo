@@ -9,7 +9,6 @@ import (
 	"sync"
 	"time"
 
-	"frameworks/api_sidecar/internal/storage"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
 )
@@ -143,30 +142,14 @@ func awaitPushRewriteCausalOrder(ctx context.Context, deadline time.Time, trigge
 	return nil
 }
 
-// drainPriorityRuntimes delivers the pending end triggers of every runtime an admission waits on.
-// It returns false when a delivery failed, so the caller stops this pass as it does for any failed
-// entry.
-func drainPriorityRuntimes(wal *storage.TriggerWAL, logger logging.Logger) bool {
+// priorityRuntimeNames lists the runtimes an admission waits on; the forwarder delivers their
+// pending end triggers ahead of every other entry.
+func priorityRuntimeNames() []string {
 	priorityRuntimes.Lock()
+	defer priorityRuntimes.Unlock()
 	runtimes := make([]string, 0, len(priorityRuntimes.waiters))
 	for runtime := range priorityRuntimes.waiters {
 		runtimes = append(runtimes, runtime)
 	}
-	priorityRuntimes.Unlock()
-	for _, runtime := range runtimes {
-		triggers, err := wal.PendingRuntimeBatch(runtime)
-		if err != nil {
-			logger.WithError(err).WithField("runtime_name", runtime).Warn("Failed to read a waiting runtime's end triggers from the WAL")
-			return false
-		}
-		for _, trigger := range triggers {
-			if getStream() == nil {
-				return false
-			}
-			if !sendDurableTriggerAndAwaitAck(trigger, logger) {
-				return false
-			}
-		}
-	}
-	return true
+	return runtimes
 }

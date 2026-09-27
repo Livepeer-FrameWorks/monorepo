@@ -47,6 +47,16 @@ type TriggerWAL struct {
 	runtimeByID  map[string]string
 	idsByRuntime map[string]map[string]struct{}
 	changed      chan struct{}
+
+	// reorders counts insertions that landed before the newest pending path. A reader walking the
+	// index with a path cursor restarts from the head when it changes, so such an entry is not skipped.
+	reorders uint64
+}
+
+// PendingEntry is one undelivered WAL entry with the path that orders it.
+type PendingEntry struct {
+	Path    string
+	Trigger *ipcpb.MistTrigger
 }
 
 // IngestRuntimeOrderKey returns the Mist runtime whose publisher the trigger reports ended, or ""
@@ -285,7 +295,10 @@ func (w *TriggerWAL) Append(trigger *ipcpb.MistTrigger) (bool, error) {
 }
 
 // Ack removes the durable entry for source_event_id. Idempotent — calling
-// Ack on an already-acked id is a no-op.
+// Ack on an already-acked id is a no-op. The removal is not fsynced: a crash
+// that brings the file back only resends an entry Foghorn already committed,
+// under the same source_event_id every downstream consumer deduplicates on,
+// and a directory fsync per ack would serialize the forwarder on the disk.
 func (w *TriggerWAL) Ack(sourceEventID string) error {
 	w.mu.Lock()
 	defer w.mu.Unlock()
@@ -300,9 +313,6 @@ func (w *TriggerWAL) Ack(sourceEventID string) error {
 	w.advanceHeadLocked()
 	if len(files) > 0 {
 		w.removedLocked(sourceEventID)
-		if err := syncDir(w.dir); err != nil {
-			return fmt.Errorf("trigger wal ack sync dir: %w", err)
-		}
 	}
 	return nil
 }
@@ -375,6 +385,53 @@ func (w *TriggerWAL) PendingBatch(limit int) ([]*ipcpb.MistTrigger, error) {
 	return out, nil
 }
 
+// PendingAfter returns at most limit undelivered entries whose path sorts after the given path,
+// oldest first. An empty after starts at the oldest entry.
+func (w *TriggerWAL) PendingAfter(after string, limit int) ([]PendingEntry, error) {
+	w.mu.Lock()
+	start := w.head
+	if after != "" {
+		if index := sort.SearchStrings(w.pending[w.head:], after); index >= 0 {
+			start = w.head + index
+		}
+	}
+	files := make([]string, 0)
+	for i := start; i < len(w.pending); i++ {
+		path := w.pending[i]
+		if path <= after {
+			continue
+		}
+		if _, ok := w.active[path]; !ok {
+			continue
+		}
+		files = append(files, path)
+		if limit > 0 && len(files) >= limit {
+			break
+		}
+	}
+	w.mu.Unlock()
+
+	out := make([]PendingEntry, 0, len(files))
+	for _, path := range files {
+		t, err := readTriggerFile(path)
+		if errors.Is(err, os.ErrNotExist) {
+			continue
+		}
+		if err != nil {
+			return nil, fmt.Errorf("trigger wal read %s: %w", filepath.Base(path), err)
+		}
+		out = append(out, PendingEntry{Path: path, Trigger: t})
+	}
+	return out, nil
+}
+
+// Reorders reports how many entries have been inserted behind the newest pending path.
+func (w *TriggerWAL) Reorders() uint64 {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.reorders
+}
+
 // PendingDepth returns the count without unmarshaling — for metrics.
 func (w *TriggerWAL) PendingDepth() (int, error) {
 	w.mu.Lock()
@@ -389,6 +446,7 @@ func (w *TriggerWAL) addPathLocked(sourceEventID, path string) {
 		w.pending = append(w.pending, path)
 		return
 	}
+	w.reorders++
 	index := sort.SearchStrings(w.pending, path)
 	w.pending = append(w.pending, "")
 	copy(w.pending[index+1:], w.pending[index:])

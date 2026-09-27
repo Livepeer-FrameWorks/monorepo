@@ -2,6 +2,7 @@ package control
 
 import (
 	"testing"
+	"time"
 
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
@@ -15,7 +16,16 @@ func resetPendingAcks(t *testing.T) {
 	t.Helper()
 	prev := pendingTriggerAcks
 	pendingTriggerAcks = make(map[string]chan *ipcpb.MistTriggerAck)
-	t.Cleanup(func() { pendingTriggerAcks = prev })
+	triggerRetryNotBefore.Lock()
+	prevRetries := triggerRetryNotBefore.at
+	triggerRetryNotBefore.at = make(map[string]time.Time)
+	triggerRetryNotBefore.Unlock()
+	t.Cleanup(func() {
+		pendingTriggerAcks = prev
+		triggerRetryNotBefore.Lock()
+		triggerRetryNotBefore.at = prevRetries
+		triggerRetryNotBefore.Unlock()
+	})
 }
 
 // deliverAckAfterSend waits for the forwarder to put a control message on the
@@ -36,105 +46,54 @@ func deliverAckAfterSend(t *testing.T, stream *fakeControlStream, success, retry
 	return trig
 }
 
-func TestSendDurableTriggerAndAwaitAckEmptyRequestID(t *testing.T) {
-	// No request_id means we can't correlate an ack — refuse without sending.
-	if sendDurableTriggerAndAwaitAck(&ipcpb.MistTrigger{TriggerType: "USER_END"}, testLogger()) {
-		t.Fatal("trigger without request_id must not be reported as forwarded")
-	}
+// drainAsync runs one forwarder pass and returns a channel closed when it ends.
+func drainAsync() <-chan struct{} {
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		drainTriggerWAL(testLogger())
+	}()
+	return done
 }
 
-func TestSendDurableTriggerAndAwaitAckDisconnected(t *testing.T) {
-	withTestTriggerWAL(t)
-	resetPendingAcks(t)
-	clearConn()
-	if sendDurableTriggerAndAwaitAck(&ipcpb.MistTrigger{RequestId: "evt-dc", TriggerType: "USER_END"}, testLogger()) {
-		t.Fatal("no stream must not be reported as forwarded")
-	}
-}
-
-// A positive ack truncates the WAL row and reports the trigger forwarded.
-func TestSendDurableTriggerAndAwaitAckSuccessTruncatesWAL(t *testing.T) {
+// A retryable negative ack leaves the entry in the WAL and holds it back, so the next pass,
+// started by the wakeup of an unrelated append, does not resend it at once.
+func TestDrainTriggerWALRetryableAckKeepsAndDefersEntry(t *testing.T) {
 	wal := withTestTriggerWAL(t)
 	resetPendingAcks(t)
 	stream := connectFake(t)
 
-	trig := &ipcpb.MistTrigger{RequestId: "evt-ok", TriggerType: "USER_END"}
-	if _, err := wal.Append(trig); err != nil {
+	if _, err := wal.Append(&ipcpb.MistTrigger{RequestId: "evt-retry", TriggerType: "USER_END"}); err != nil {
 		t.Fatalf("append: %v", err)
 	}
-
-	done := make(chan struct{})
-	var ok bool
-	go func() {
-		defer close(done)
-		ok = sendDurableTriggerAndAwaitAck(trig, testLogger())
-	}()
-
-	deliverAckAfterSend(t, stream, true, false)
-	waitForTestDone(t, done, "success ack")
-
-	if !ok {
-		t.Fatal("positive ack should report forwarded=true")
-	}
-	if depth, _ := wal.PendingDepth(); depth != 0 {
-		t.Fatalf("WAL not truncated after positive ack: depth=%d", depth)
-	}
-}
-
-// A retryable negative ack leaves the entry on the WAL for the next pass.
-func TestSendDurableTriggerAndAwaitAckRetryableKeepsWAL(t *testing.T) {
-	wal := withTestTriggerWAL(t)
-	resetPendingAcks(t)
-	stream := connectFake(t)
-
-	trig := &ipcpb.MistTrigger{RequestId: "evt-retry", TriggerType: "USER_END"}
-	if _, err := wal.Append(trig); err != nil {
-		t.Fatalf("append: %v", err)
-	}
-
-	done := make(chan struct{})
-	var ok bool
-	go func() {
-		defer close(done)
-		ok = sendDurableTriggerAndAwaitAck(trig, testLogger())
-	}()
-
+	done := drainAsync()
 	deliverAckAfterSend(t, stream, false, true)
 	waitForTestDone(t, done, "retryable ack")
-
-	if ok {
-		t.Fatal("retryable negative ack must report forwarded=false")
-	}
 	if depth, _ := wal.PendingDepth(); depth != 1 {
 		t.Fatalf("retryable ack must keep the WAL entry: depth=%d", depth)
 	}
+
+	waitForTestDone(t, drainAsync(), "deferred pass")
+	select {
+	case msg := <-stream.sendCh:
+		t.Fatalf("entry resent before its retry delay: %v", msg.GetMistTrigger().GetRequestId())
+	default:
+	}
 }
 
-// A non-retryable negative ack moves the entry to the dead-letter store and
-// reports done (true) so the forwarder stops re-sending a poison entry.
-func TestSendDurableTriggerAndAwaitAckNonRetryableDeadLetters(t *testing.T) {
+// A non-retryable negative ack moves the entry to the dead-letter store so the forwarder stops
+// re-sending a poison entry.
+func TestDrainTriggerWALNonRetryableAckDeadLetters(t *testing.T) {
 	wal := withTestTriggerWAL(t)
 	resetPendingAcks(t)
 	stream := connectFake(t)
 
-	trig := &ipcpb.MistTrigger{RequestId: "evt-poison", TriggerType: "USER_END"}
-	if _, err := wal.Append(trig); err != nil {
+	if _, err := wal.Append(&ipcpb.MistTrigger{RequestId: "evt-poison", TriggerType: "USER_END"}); err != nil {
 		t.Fatalf("append: %v", err)
 	}
-
-	done := make(chan struct{})
-	var ok bool
-	go func() {
-		defer close(done)
-		ok = sendDurableTriggerAndAwaitAck(trig, testLogger())
-	}()
-
+	done := drainAsync()
 	deliverAckAfterSend(t, stream, false, false)
 	waitForTestDone(t, done, "non-retryable ack")
-
-	if !ok {
-		t.Fatal("non-retryable ack must report done=true so the forwarder stops re-sending")
-	}
 	if depth, _ := wal.PendingDepth(); depth != 0 {
 		t.Fatalf("non-retryable ack must clear the pending entry: depth=%d", depth)
 	}
