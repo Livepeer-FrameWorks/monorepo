@@ -456,6 +456,78 @@ func TestTriggerWALSeparatesLanes(t *testing.T) {
 	}
 }
 
+// Opening the WAL takes each entry's lane from its file name: an entry whose payload cannot be read
+// at open time still lands in the lane its name records.
+func TestTriggerWALOpenIndexesFromFileNames(t *testing.T) {
+	dir := t.TempDir()
+	wal, err := NewTriggerWAL(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, appendErr := wal.Append(&ipcpb.MistTrigger{RequestId: "sample-a", TriggerType: "PROCESS_AV_VIRTUAL_SEGMENT_COMPLETE", Timestamp: 1700000000001}); appendErr != nil {
+		t.Fatal(appendErr)
+	}
+	samplePath := filepath.Join(dir, "1700000000001-sample-a.s.pb")
+	if chmodErr := os.Chmod(samplePath, 0); chmodErr != nil {
+		t.Fatalf("sample entry was not written under its classed name: %v", chmodErr)
+	}
+	reopened, err := NewTriggerWAL(dir)
+	if chmodErr := os.Chmod(samplePath, 0o600); chmodErr != nil {
+		t.Fatal(chmodErr)
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	pending, err := reopened.PendingAfter(LaneSample, "", 0)
+	if err != nil || len(pending) != 1 || pending[0].Trigger.GetRequestId() != "sample-a" {
+		t.Fatalf("sample lane after reopen = %v, err %v", pending, err)
+	}
+}
+
+// Entries written before file names carried a class are classified once, renamed, and keep their
+// lane and runtime ordering role.
+func TestTriggerWALClassifiesLegacyEntries(t *testing.T) {
+	dir := t.TempDir()
+	legacy := []*ipcpb.MistTrigger{
+		{RequestId: "legacy-close", TriggerType: "PUSH_INPUT_CLOSE", Timestamp: 1700000000001,
+			TriggerPayload: &ipcpb.MistTrigger_PushInputClose{PushInputClose: &ipcpb.PushInputCloseTrigger{StreamName: "live+legacy"}}},
+		{RequestId: "legacy-sample", TriggerType: "LIVEPEER_SEGMENT_COMPLETE", Timestamp: 1700000000002},
+		{RequestId: "legacy-user-end", TriggerType: "USER_END", Timestamp: 1700000000003},
+	}
+	for _, trigger := range legacy {
+		payload, err := proto.Marshal(trigger)
+		if err != nil {
+			t.Fatal(err)
+		}
+		name := strconv.FormatInt(trigger.GetTimestamp(), 10) + "-" + trigger.GetRequestId() + ".pb"
+		if err := writeFile(t, filepath.Join(dir, name), payload); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for range 2 {
+		wal, err := NewTriggerWAL(dir)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if pending, _ := wal.PendingForRuntime("live+legacy"); pending != 1 {
+			t.Fatalf("legacy runtime end pending = %d, want 1", pending)
+		}
+		samples, err := wal.PendingAfter(LaneSample, "", 0)
+		if err != nil || len(samples) != 1 || samples[0].Trigger.GetRequestId() != "legacy-sample" {
+			t.Fatalf("sample lane = %v, err %v", samples, err)
+		}
+		lifecycle, err := wal.PendingAfter(LaneLifecycle, "", 0)
+		if err != nil || len(lifecycle) != 2 {
+			t.Fatalf("lifecycle lane = %v, err %v", lifecycle, err)
+		}
+	}
+	for _, name := range []string{"1700000000001-legacy-close.e.pb", "1700000000002-legacy-sample.s.pb", "1700000000003-legacy-user-end.l.pb"} {
+		if _, err := os.Stat(filepath.Join(dir, name)); err != nil {
+			t.Fatalf("legacy entry not renamed to %s: %v", name, err)
+		}
+	}
+}
+
 func writeFile(t *testing.T, path string, data []byte) error {
 	t.Helper()
 	return os.WriteFile(path, data, 0o600)

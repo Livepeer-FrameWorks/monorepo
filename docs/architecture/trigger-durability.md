@@ -143,10 +143,17 @@ reported failed.
 `api_sidecar/internal/storage/trigger_wal.go`.
 
 - Directory: explicit `FRAMEWORKS_TRIGGER_WAL_DIR`, otherwise `<HELMSMAN_STATE_DIR>/trigger-wal`. Helmsman refuses startup without a durable state root; it never falls back to the reclaimable media volume, a user cache directory, or `/tmp`.
-- One file per durable trigger: `<received_at_ms>-<source_event_id>.pb` containing the marshaled `pb.MistTrigger`.
+- One file per durable trigger: `<received_at_ms>-<source_event_id>.<class>.pb`
+  containing the marshaled `pb.MistTrigger`. The class is `s` for a billing
+  sample, `e` for an entry that ends an ingest runtime (`PUSH_INPUT_CLOSE`,
+  non-processing `STREAM_END`), and `l` for every other lifecycle entry.
 - Writes are atomic: write to `.tmp`, `fsync`, `rename` into place, then fsync the WAL directory. Append returns only after the file and directory entry are durable.
-- Startup builds an in-memory index of file paths and source event IDs. Payloads
-  remain on disk; the index never duplicates the protobuf bodies in memory.
+- Startup builds an in-memory index of file paths and source event IDs from the
+  directory listing. Only `e` entries are read, to rebuild the runtime index;
+  every other lane and identity comes from the file name, so a six-figure
+  backlog does not delay startup. Entries written before names carried a class
+  are read once in parallel and renamed to their classed name. Payloads remain
+  on disk; the index never duplicates the protobuf bodies in memory.
 - `Ack(source_event_id)` deletes the indexed file for any `received_at_ms` prefix.
   The removal is not fsynced: a crash that brings the file back only resends an
   entry Foghorn already committed, under the same `source_event_id`.

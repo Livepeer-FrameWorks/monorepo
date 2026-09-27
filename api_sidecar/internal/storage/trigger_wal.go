@@ -104,6 +104,30 @@ func IngestRuntimeOrderKey(trigger *ipcpb.MistTrigger) string {
 	return runtime
 }
 
+// Every entry's file name carries its class, so opening the WAL indexes a six-figure backlog from
+// the directory listing alone. Only entries that end an ingest runtime are read, to rebuild the
+// runtime index; they are a small fraction of any backlog.
+const (
+	classLifecycle  = "l"
+	classRuntimeEnd = "e"
+	classSample     = "s"
+)
+
+// legacyClassifyWorkers bounds the parallel reads that classify entries written before file names
+// carried a class.
+const legacyClassifyWorkers = 8
+
+func triggerClass(trigger *ipcpb.MistTrigger) string {
+	switch {
+	case TriggerLaneOf(trigger) == LaneSample:
+		return classSample
+	case IngestRuntimeOrderKey(trigger) != "":
+		return classRuntimeEnd
+	default:
+		return classLifecycle
+	}
+}
+
 // NewTriggerWAL creates (or opens) the WAL directory.
 func NewTriggerWAL(dir string) (*TriggerWAL, error) {
 	if err := os.MkdirAll(dir, 0o700); err != nil {
@@ -112,6 +136,10 @@ func NewTriggerWAL(dir string) (*TriggerWAL, error) {
 	files, err := filepath.Glob(filepath.Join(dir, "*.pb"))
 	if err != nil {
 		return nil, fmt.Errorf("trigger wal index glob: %w", err)
+	}
+	files, err = classifyLegacyEntries(dir, files)
+	if err != nil {
+		return nil, err
 	}
 	sort.Strings(files)
 	w := &TriggerWAL{
@@ -123,28 +151,81 @@ func NewTriggerWAL(dir string) (*TriggerWAL, error) {
 		changed:      make(chan struct{}),
 	}
 	for _, path := range files {
-		// Entries that survive a restart keep their lane and ordering role; an unreadable entry
-		// is still forwarded in the lifecycle lane, it just cannot hold back an admission.
-		trigger, readErr := readTriggerFile(path)
+		id, class, ok := parseEntryPath(path)
 		lane := LaneLifecycle
-		if readErr == nil {
-			lane = TriggerLaneOf(trigger)
+		if class == classSample {
+			lane = LaneSample
 		}
 		w.active[path] = lane
 		w.lanes[lane].pending = append(w.lanes[lane].pending, path)
-		id, ok := sourceEventIDFromPath(path)
 		if !ok {
 			continue
 		}
 		w.pathsByID[id] = append(w.pathsByID[id], path)
-		if readErr == nil {
-			w.indexRuntimeLocked(id, IngestRuntimeOrderKey(trigger))
+		// An unreadable runtime end is still forwarded in WAL order; it just cannot hold back an
+		// admission.
+		if class == classRuntimeEnd {
+			if trigger, readErr := readTriggerFile(path); readErr == nil {
+				w.indexRuntimeLocked(id, IngestRuntimeOrderKey(trigger))
+			}
 		}
 	}
 	if err := w.sealLeftoverStaged(); err != nil {
 		return nil, err
 	}
 	return w, nil
+}
+
+// classifyLegacyEntries renames entries whose file name carries no class to their classed name,
+// reading them in parallel, and returns the resulting paths. An entry that cannot be read keeps
+// its name and drains in the lifecycle lane.
+func classifyLegacyEntries(dir string, files []string) ([]string, error) {
+	var legacy []int
+	for i, path := range files {
+		if _, class, ok := parseEntryPath(path); ok && class == "" {
+			legacy = append(legacy, i)
+		}
+	}
+	if len(legacy) == 0 {
+		return files, nil
+	}
+	jobs := make(chan int)
+	var wg sync.WaitGroup
+	var mu sync.Mutex
+	var renameErr error
+	for range min(legacyClassifyWorkers, len(legacy)) {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for i := range jobs {
+				path := files[i]
+				trigger, err := readTriggerFile(path)
+				if err != nil {
+					continue
+				}
+				classed := strings.TrimSuffix(path, ".pb") + "." + triggerClass(trigger) + ".pb"
+				if err := os.Rename(path, classed); err != nil {
+					mu.Lock()
+					renameErr = errors.Join(renameErr, fmt.Errorf("trigger wal classify %s: %w", filepath.Base(path), err))
+					mu.Unlock()
+					continue
+				}
+				files[i] = classed
+			}
+		}()
+	}
+	for _, i := range legacy {
+		jobs <- i
+	}
+	close(jobs)
+	wg.Wait()
+	if renameErr != nil {
+		return nil, renameErr
+	}
+	if err := syncDir(dir); err != nil {
+		return nil, fmt.Errorf("trigger wal classify sync dir: %w", err)
+	}
+	return files, nil
 }
 
 func readTriggerFile(path string) (*ipcpb.MistTrigger, error) {
@@ -292,7 +373,7 @@ func (w *TriggerWAL) Append(trigger *ipcpb.MistTrigger) (bool, error) {
 		return false, nil
 	}
 
-	path := w.path(id, trigger.GetTimestamp())
+	path := w.path(id, trigger.GetTimestamp(), triggerClass(trigger))
 
 	payload, err := proto.Marshal(trigger)
 	if err != nil {
@@ -505,22 +586,30 @@ func (w *TriggerWAL) advanceHeadsLocked() {
 	}
 }
 
-func sourceEventIDFromPath(path string) (string, bool) {
+// parseEntryPath splits an entry file name, <received_at_ms>-<source_event_id>[.<class>].pb, into
+// its source_event_id and class. The class is empty for entries written before names carried one.
+func parseEntryPath(path string) (id, class string, ok bool) {
 	name := strings.TrimSuffix(filepath.Base(path), ".pb")
+	for _, c := range []string{classLifecycle, classRuntimeEnd, classSample} {
+		if trimmed, found := strings.CutSuffix(name, "."+c); found {
+			name, class = trimmed, c
+			break
+		}
+	}
 	separator := strings.IndexByte(name, '-')
 	if separator <= 0 || separator == len(name)-1 {
-		return "", false
+		return "", class, false
 	}
-	return name[separator+1:], true
+	return name[separator+1:], class, true
 }
 
-func (w *TriggerWAL) path(sourceEventID string, receivedAt int64) string {
+func (w *TriggerWAL) path(sourceEventID string, receivedAt int64, class string) string {
 	if receivedAt <= 0 {
 		receivedAt = time.Now().UnixMilli()
 	} else if receivedAt < 1_000_000_000_000 {
 		receivedAt *= 1000
 	}
-	name := strconv.FormatInt(receivedAt, 10) + "-" + sourceEventID + ".pb"
+	name := strconv.FormatInt(receivedAt, 10) + "-" + sourceEventID + "." + class + ".pb"
 	return filepath.Join(w.dir, name)
 }
 

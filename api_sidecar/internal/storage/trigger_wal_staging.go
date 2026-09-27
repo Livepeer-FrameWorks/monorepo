@@ -72,7 +72,7 @@ func (w *TriggerWAL) sealLocked(sourceEventID string, sealedAt time.Time) error 
 	if err != nil {
 		return fmt.Errorf("trigger wal read staged %s: %w", sourceEventID, err)
 	}
-	path := w.path(sourceEventID, sealedAt.UnixMilli())
+	path := w.path(sourceEventID, sealedAt.UnixMilli(), triggerClass(trigger))
 	if err := os.Rename(staged, path); err != nil {
 		return fmt.Errorf("trigger wal seal rename: %w", err)
 	}
