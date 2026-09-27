@@ -191,3 +191,9 @@
     compose_stack_compose_content: "{{ lookup('template', 'compose.yml.j2') }}"
     # Docker Desktop/OrbStack own the engine on macOS — no Linux packages.
     compose_stack_manage_docker: "{{ ansible_facts.os_family != 'Darwin' }}"
+
+# ./state is HELMSMAN_STATE_DIR (/data/state) inside the edge container.
+- name: Record provisioned edge config
+  ansible.builtin.import_tasks: config-marker.yml
+  vars:
+    edge_config_marker_dir: "{{ edge_base_dir }}/state"

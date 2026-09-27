@@ -334,3 +334,11 @@
 - name: Apply vmagent edge telemetry (when enabled)
   ansible.builtin.import_tasks: install-native-linux-vmagent.yml
   when: edge_telemetry_url | length > 0
+
+# helmsman_state_dir is the Helmsman role's Linux default; the edge role does
+# not override it for native Linux installs.
+- name: Record provisioned edge config
+  ansible.builtin.import_tasks: config-marker.yml
+  vars:
+    edge_config_marker_dir: /var/lib/frameworks/helmsman
+    edge_config_marker_owner: frameworks

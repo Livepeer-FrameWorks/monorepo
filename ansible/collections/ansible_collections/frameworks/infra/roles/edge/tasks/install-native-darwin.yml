@@ -367,3 +367,12 @@
       HELMSMAN_TLS_CERT_PATH: "{{ edge_darwin_conf_dir }}/certs/cert.pem"
       HELMSMAN_TLS_KEY_PATH: "{{ edge_darwin_conf_dir }}/certs/key.pem"
     helmsman_darwin_domain: "{{ edge_darwin_domain }}"
+
+# The Helmsman role's per-domain state dirs (helmsman_darwin_*_state_dir).
+- name: Record provisioned edge config (darwin)
+  ansible.builtin.import_tasks: config-marker.yml
+  vars:
+    edge_config_marker_dir: >-
+      {{ (ansible_env.HOME ~ '/.local/var/lib/frameworks/helmsman')
+         if edge_darwin_domain == 'user'
+         else '/usr/local/var/lib/frameworks/helmsman' }}

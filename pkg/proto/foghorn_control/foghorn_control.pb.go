@@ -791,8 +791,12 @@ type GetNodeHealthResponse struct {
 	Latitude          *float64                `protobuf:"fixed64,18,opt,name=latitude,proto3,oneof" json:"latitude,omitempty"`
 	Longitude         *float64                `protobuf:"fixed64,19,opt,name=longitude,proto3,oneof" json:"longitude,omitempty"`
 	ComponentVersions []*NodeComponentVersion `protobuf:"bytes,20,rep,name=component_versions,json=componentVersions,proto3" json:"component_versions,omitempty"`
-	unknownFields     protoimpl.UnknownFields
-	sizeCache         protoimpl.SizeCache
+	// Edge config last applied by the provisioner, as the node reports it.
+	// Empty when the node has not reported a provisioned-config marker.
+	ProvisionedConfigCliVersion string `protobuf:"bytes,21,opt,name=provisioned_config_cli_version,json=provisionedConfigCliVersion,proto3" json:"provisioned_config_cli_version,omitempty"`
+	ProvisionedConfigDigest     string `protobuf:"bytes,22,opt,name=provisioned_config_digest,json=provisionedConfigDigest,proto3" json:"provisioned_config_digest,omitempty"`
+	unknownFields               protoimpl.UnknownFields
+	sizeCache                   protoimpl.SizeCache
 }
 
 func (x *GetNodeHealthResponse) Reset() {
@@ -963,6 +967,20 @@ func (x *GetNodeHealthResponse) GetComponentVersions() []*NodeComponentVersion {
 		return x.ComponentVersions
 	}
 	return nil
+}
+
+func (x *GetNodeHealthResponse) GetProvisionedConfigCliVersion() string {
+	if x != nil {
+		return x.ProvisionedConfigCliVersion
+	}
+	return ""
+}
+
+func (x *GetNodeHealthResponse) GetProvisionedConfigDigest() string {
+	if x != nil {
+		return x.ProvisionedConfigDigest
+	}
+	return ""
 }
 
 type NodeComponentVersion struct {
@@ -1549,7 +1567,7 @@ const file_foghorn_control_proto_rawDesc = "" +
 	"\amessage\x18\x03 \x01(\tR\amessage\x12:\n" +
 	"\x06status\x18\x04 \x01(\x0e2\".foghorn_control.SetNodeModeStatusR\x06status\"/\n" +
 	"\x14GetNodeHealthRequest\x12\x17\n" +
-	"\anode_id\x18\x01 \x01(\tR\x06nodeId\"\xad\x06\n" +
+	"\anode_id\x18\x01 \x01(\tR\x06nodeId\"\xae\a\n" +
 	"\x15GetNodeHealthResponse\x12\x17\n" +
 	"\anode_id\x18\x01 \x01(\tR\x06nodeId\x12)\n" +
 	"\x10operational_mode\x18\x02 \x01(\tR\x0foperationalMode\x12\x1d\n" +
@@ -1575,7 +1593,9 @@ const file_foghorn_control_proto_rawDesc = "" +
 	"\blocation\x18\x11 \x01(\tR\blocation\x12\x1f\n" +
 	"\blatitude\x18\x12 \x01(\x01H\x00R\blatitude\x88\x01\x01\x12!\n" +
 	"\tlongitude\x18\x13 \x01(\x01H\x01R\tlongitude\x88\x01\x01\x12T\n" +
-	"\x12component_versions\x18\x14 \x03(\v2%.foghorn_control.NodeComponentVersionR\x11componentVersionsB\v\n" +
+	"\x12component_versions\x18\x14 \x03(\v2%.foghorn_control.NodeComponentVersionR\x11componentVersions\x12C\n" +
+	"\x1eprovisioned_config_cli_version\x18\x15 \x01(\tR\x1bprovisionedConfigCliVersion\x12:\n" +
+	"\x19provisioned_config_digest\x18\x16 \x01(\tR\x17provisionedConfigDigestB\v\n" +
 	"\t_latitudeB\f\n" +
 	"\n" +
 	"_longitude\"N\n" +

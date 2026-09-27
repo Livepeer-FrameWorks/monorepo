@@ -7,6 +7,8 @@ import (
 
 	"frameworks/cli/internal/configschema"
 	"frameworks/cli/internal/templates"
+
+	fwversion "github.com/Livepeer-FrameWorks/monorepo/pkg/version"
 )
 
 func TestEdgeCapabilityEnv(t *testing.T) {
@@ -68,6 +70,23 @@ func TestEdgeRoleVarsPassHelmsmanEnvContract(t *testing.T) {
 	imageEnv, ok := vars["edge_image_env"].(map[string]string)
 	if !ok || !maps.Equal(imageEnv, templates.EdgeImageEnv()) {
 		t.Fatalf("edge_image_env = %#v, want %v", vars["edge_image_env"], templates.EdgeImageEnv())
+	}
+}
+
+// The role stamps this CLI's release into the provisioned-config marker
+// Helmsman reports, so doctor can list edges rendered by an older CLI.
+func TestEdgeRoleVarsCarryCLIVersionForConfigMarker(t *testing.T) {
+	restore := stubEdgeManifest(t)
+	defer restore()
+	prev := fwversion.Version
+	fwversion.Version = "v9.8.7"
+	defer func() { fwversion.Version = prev }()
+	vars, err := edgeRoleVars(&EdgeProvisionConfig{Mode: "container", Version: "vtest", NodeID: "edge-eu-1"}, "linux", "amd64")
+	if err != nil {
+		t.Fatalf("edgeRoleVars returned error: %v", err)
+	}
+	if vars["edge_cli_version"] != "v9.8.7" {
+		t.Fatalf("edge_cli_version = %#v, want v9.8.7", vars["edge_cli_version"])
 	}
 }
 

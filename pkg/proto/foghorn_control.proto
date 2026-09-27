@@ -119,6 +119,10 @@ message GetNodeHealthResponse {
   optional double latitude = 18;
   optional double longitude = 19;
   repeated NodeComponentVersion component_versions = 20;
+  // Edge config last applied by the provisioner, as the node reports it.
+  // Empty when the node has not reported a provisioned-config marker.
+  string provisioned_config_cli_version = 21;
+  string provisioned_config_digest = 22;
 }
 
 message NodeComponentVersion {

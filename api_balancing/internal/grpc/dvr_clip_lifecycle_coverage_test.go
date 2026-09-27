@@ -12,6 +12,7 @@ import (
 	"github.com/DATA-DOG/go-sqlmock"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/ctxkeys"
 	foghorncontrolpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/foghorn_control"
+	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
 	sharedpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/shared"
 	"github.com/sirupsen/logrus"
 	"google.golang.org/grpc/codes"
@@ -491,6 +492,26 @@ func TestGetNodeHealth_OwnerSnapshotFields(t *testing.T) {
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatalf("unmet SQL expectations: %v", err)
+	}
+}
+
+// Invariant: the edge config marker a node reported is surfaced by node
+// health, which `cluster doctor` compares against the operator's CLI.
+func TestGetNodeHealth_ReportsProvisionedConfig(t *testing.T) {
+	srv, mock := newLifecycleServer(t)
+	sm := seedHealthyNode(t, "node-1", "tenant-owner", "cluster-1")
+	sm.SetNodeProvisionedConfig("node-1", &ipcpb.EdgeProvisionedConfig{CliVersion: "v0.3.11", Digest: "sha256:abc"})
+	mock.ExpectQuery(`SELECT component, COALESCE\(current_version`).
+		WithArgs("node-1").
+		WillReturnRows(sqlmock.NewRows([]string{"component", "version"}))
+
+	ctx := context.WithValue(context.Background(), ctxkeys.KeyAuthType, "service")
+	resp, err := srv.GetNodeHealth(ctx, &foghorncontrolpb.GetNodeHealthRequest{NodeId: "node-1"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if resp.GetProvisionedConfigCliVersion() != "v0.3.11" || resp.GetProvisionedConfigDigest() != "sha256:abc" {
+		t.Fatalf("provisioned config = %q/%q, want v0.3.11/sha256:abc", resp.GetProvisionedConfigCliVersion(), resp.GetProvisionedConfigDigest())
 	}
 }
 

@@ -123,6 +123,10 @@ edge_vmagent_artifact_url: ""
 edge_vmagent_artifact_checksum: ""
 edge_config_schema_version: ""
 
+# CLI release that renders this config; stamped into the provisioned-config
+# marker (tasks/config-marker.yml) that Helmsman reports to Foghorn.
+edge_cli_version: ""
+
 # Remote filesystem layout. Shared by container + native modes.
 edge_base_dir: /opt/frameworks/edge
 edge_conf_dir: /etc/frameworks

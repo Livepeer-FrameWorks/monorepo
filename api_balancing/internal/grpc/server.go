@@ -4991,6 +4991,9 @@ func (s *FoghornGRPCServer) GetNodeHealth(ctx context.Context, req *foghorncontr
 		DiskTotalBytes:    ns.DiskTotalBytes,
 		DiskUsedBytes:     ns.DiskUsedBytes,
 		Location:          ns.Location,
+
+		ProvisionedConfigCliVersion: ns.ProvisionedConfigCLIVersion,
+		ProvisionedConfigDigest:     ns.ProvisionedConfigDigest,
 	}
 	if ns.Latitude != nil {
 		resp.Latitude = ns.Latitude

@@ -1,0 +1,44 @@
+---
+# Provisioned-config marker: the CLI release that rendered this node's config
+# and a digest of the rendered config set. Helmsman reads it from its state
+# dir (edge_config_marker_dir) and reports it to Foghorn; `edge doctor` and
+# `cluster doctor` compare it with the operator's CLI. The digest covers the
+# rendered edge env (and the compose file in container mode) plus the pinned
+# native artifact checksums, so it changes exactly when the rendered config
+# does. It is written last, after the stack converged.
+
+- name: Compute edge config digest
+  ansible.builtin.set_fact:
+    edge_config_digest: >-
+      sha256:{{ (
+        lookup('ansible.builtin.template', 'edge.env.j2')
+        ~ (lookup('ansible.builtin.template', 'compose.yml.j2') if edge_mode != 'native' else '')
+        ~ ([edge_mistserver_artifact_checksum, edge_helmsman_artifact_checksum,
+            edge_caddy_artifact_checksum, edge_vmagent_artifact_checksum] | join('\n'))
+      ) | hash('sha256') }}
+
+- name: Check edge config marker directory
+  ansible.builtin.stat:
+    path: "{{ edge_config_marker_dir }}"
+  register: edge_config_marker_dir_stat
+
+# A fresh host in check mode has no state dir yet; report the marker as a
+# pending change instead of failing the copy.
+- name: Report edge config marker to be written (check mode, fresh host)
+  ansible.builtin.debug:
+    msg: "Edge config marker would be written to {{ edge_config_marker_dir }}"
+  changed_when: true
+  when:
+    - ansible_check_mode
+    - not (edge_config_marker_dir_stat.stat.exists | default(false))
+
+- name: Write edge config marker
+  ansible.builtin.copy:
+    dest: "{{ edge_config_marker_dir }}/provisioned-config.env"
+    content: |
+      EDGE_CONFIG_CLI_VERSION={{ edge_cli_version }}
+      EDGE_CONFIG_DIGEST={{ edge_config_digest }}
+    owner: "{{ edge_config_marker_owner | default(omit, true) }}"
+    group: "{{ edge_config_marker_owner | default(omit, true) }}"
+    mode: "0644"
+  when: not ansible_check_mode or (edge_config_marker_dir_stat.stat.exists | default(false))

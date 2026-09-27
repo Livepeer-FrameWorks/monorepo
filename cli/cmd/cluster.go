@@ -1118,6 +1118,21 @@ func runDoctor(cmd *cobra.Command, rc *resolvedCluster, deep bool) error {
 		fmt.Fprintln(out, "")
 	}
 
+	fmt.Fprintln(out, "Edge Nodes:")
+	fmt.Fprintln(out, "")
+	edgeConfigResult := doctorEdgeConfigVersions(cmd)
+	totalChecks++
+	printHealthResult(cmd, "Edge config version", edgeConfigResult)
+	if edgeConfigResult.OK || edgeConfigResult.Status == yugabyteLayoutWarning {
+		passedChecks++
+	} else {
+		remediationSteps = append(remediationSteps, ux.NextStep{
+			Cmd: "frameworks edge provision --manifest <edges.yaml> --dry-run",
+			Why: "Show each edge's config drift, then re-run without --dry-run to apply this CLI's edge config one node at a time.",
+		})
+	}
+	fmt.Fprintln(out, "")
+
 	cpReport, cpSteps := doctorControlPlane(cmd, rc, serviceToken, sharedEnv, deep)
 
 	ux.Result(out, []ux.ResultField{

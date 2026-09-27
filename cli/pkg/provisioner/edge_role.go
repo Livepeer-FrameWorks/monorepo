@@ -16,6 +16,8 @@ import (
 	"frameworks/cli/pkg/gitops"
 	"frameworks/cli/pkg/inventory"
 	"frameworks/cli/pkg/ssh"
+
+	fwversion "github.com/Livepeer-FrameWorks/monorepo/pkg/version"
 )
 
 // runEdgeRole is the role-backed install path used by EdgeProvisioner for
@@ -197,6 +199,7 @@ func edgeRoleVars(config *EdgeProvisionConfig, remoteOS, remoteArch string) (map
 		"edge_darwin_domain":              darwinDomain,
 		"edge_mistserver_onnx_profile":    profile,
 		"edge_mistserver_onnx_dri_device": config.onnxDRIDevice,
+		"edge_cli_version":                fwversion.Version,
 	}
 	// The role asserts Helmsman's env contract before it starts anything:
 	// against the image env plus rendered env files in container mode, and

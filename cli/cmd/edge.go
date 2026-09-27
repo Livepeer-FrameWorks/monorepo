@@ -2659,6 +2659,7 @@ type edgeDoctorJSONReport struct {
 	ServiceProbeErr string                `json:"service_probe_error,omitempty"`
 	HTTPS           edgeDoctorHTTPS       `json:"https"`
 	StreamChecks    []readiness.EdgeCheck `json:"stream_checks"`
+	ConfigVersion   edgeConfigMarker      `json:"config_version"`
 	Warnings        []readiness.Warning   `json:"warnings"`
 	NextSteps       []ux.NextStep         `json:"next_steps"`
 	OK              bool                  `json:"ok"`
@@ -2803,6 +2804,15 @@ func newEdgeDoctorCmd() *cobra.Command {
 			}
 		}()
 
+		// Without a home dir only the user-domain launchd state dir is
+		// skipped; the system-wide dirs are still probed.
+		home, homeErr := os.UserHomeDir()
+		if homeErr != nil {
+			home = ""
+		}
+		configVersion := localEdgeConfigMarker(os.ReadFile, sudoReadEdgeConfigMarker(cmd), home)
+		renderEdgeConfigMarker(textOut, configVersion)
+
 		// Adaptive hints from readiness — only the remediations relevant to
 		// what actually failed, replacing the previous four static hints.
 		hostChecks := make([]readiness.EdgeCheck, 0, len(results))
@@ -2835,9 +2845,13 @@ func newEdgeDoctorCmd() *cobra.Command {
 			}
 			steps = append(steps, ux.NextStep{Cmd: w.Remediation.Cmd, Why: w.Remediation.Why})
 		}
+		if step, ok := edgeConfigMarkerNextStep(configVersion); ok {
+			steps = append(steps, step)
+		}
 
 		if jsonMode {
 			payload := edgeDoctorJSONReport{
+				ConfigVersion: configVersion,
 				Mode:          deployMode,
 				Domain:        domain,
 				HostChecks:    results,
