@@ -53,6 +53,28 @@ For VS Code Remote - SSH, add the printed SSH stanza to `~/.ssh/config`, connect
 `frameworks-remotedev`, and open the path returned by `path`. Do not run a publicly exposed
 code-server: the SSH tunnel is the editor transport.
 
+## Production-shaped stack before staging
+
+`make verify-stack` brings up two media cells with two Foghorn replicas each, the edge bundle
+(Caddy, MistServer and Helmsman), offchain Livepeer, a webhook receiver and Mailpit, runs the
+scenarios in `scripts/stack/scenarios/`, and checks every container log for defect signatures. It
+is how a change is exercised end to end before a release candidate goes to staging: placement,
+Livepeer live and VOD, recording, clips, cross-cell playback, the API and SDKs, node lifecycle,
+reconnects, control-plane replicas and edge outages. It is too heavy for a laptop and is not a CI
+job; run it on a slot:
+
+```bash
+scripts/remote-dev.sh sync stack-1
+scripts/remote-dev.sh run stack-1 bash -lc 'STACK_SLOT=1 make verify-stack'
+```
+
+- `STACK_SCENARIOS` selects `default`, `manual` (long outage and load scenarios), `all`, or numbers
+  such as `01,04`.
+- `MIST_SOURCE_DIR=<checkout>` builds MistServer from a local fork instead of the pinned release.
+- `STACK_KEEP=1` leaves the slot running for inspection; `STACK_REUSE=1` runs scenarios against a
+  slot that is already up. `make stack-down` removes it.
+- `STACK_SLOT=N` runs independent slots side by side on the same host.
+
 ## Security boundary
 
 - No public DNS record, IPv4 port forward, or unsolicited WAN IPv6 is allowed.

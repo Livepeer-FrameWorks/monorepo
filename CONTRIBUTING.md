@@ -124,6 +124,10 @@ For CPU-, memory-, or database-heavy work, use the VPN-only shared build host wi
 slot. See [Remote development](docs/development/remote-development.md); the short path is
 `scripts/remote-dev.sh sync <slot>` followed by `scripts/remote-dev.sh run <slot> make <target>`.
 
+Before a release candidate goes to staging, run the production-shaped stack (`make verify-stack`)
+on a remote slot: it exercises media, federation, outage and replica scenarios end to end. See
+[Production-shaped stack before staging](docs/development/remote-development.md#production-shaped-stack-before-staging).
+
 ## Release Build Infrastructure
 
 The release pipeline (`.github/workflows/release.yml`) uses two runner types:

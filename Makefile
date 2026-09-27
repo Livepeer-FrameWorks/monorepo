@@ -700,7 +700,8 @@ verify-media-lifecycle:
 # signatures and tears it down. STACK_SLOT=N runs independent slots side by side;
 # MIST_SOURCE_DIR=<checkout> builds Mist from a local fork; STACK_SCENARIOS
 # selects (default | manual | all | 01,04,...); STACK_KEEP=1 keeps the slot.
-# Nightly and manual in .github/workflows/stack.yml; never a push or PR gate.
+# Run it on a remote-dev slot before a release candidate goes to staging
+# (docs/development/remote-development.md); it is not a CI job.
 .PHONY: verify-stack stack-up stack-down
 verify-stack:
 	@bash $(CURDIR)/scripts/stack/verify.sh
