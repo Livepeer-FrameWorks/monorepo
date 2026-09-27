@@ -1593,7 +1593,7 @@ export interface DVRRequest {
     hasLocalCopy: (Scalars['Boolean'] | null)
     /** True when S3 has an authoritative copy. */
     isSynced: (Scalars['Boolean'] | null)
-    /** True when the S3 copy includes the Mist .dtsh index. */
+    /** Always null for a recording: its replay index is stored per chapter, so read isFinalized on each chapter's VOD asset. */
     isFinalized: (Scalars['Boolean'] | null)
     frozenAt: (Scalars['Time'] | null)
     s3Url: (Scalars['String'] | null)
@@ -8723,7 +8723,7 @@ export interface DVRRequestGenqlSelection{
     hasLocalCopy?: boolean | number
     /** True when S3 has an authoritative copy. */
     isSynced?: boolean | number
-    /** True when the S3 copy includes the Mist .dtsh index. */
+    /** Always null for a recording: its replay index is stored per chapter, so read isFinalized on each chapter's VOD asset. */
     isFinalized?: boolean | number
     frozenAt?: boolean | number
     s3Url?: boolean | number

@@ -27294,7 +27294,7 @@ type DVRRequest {
   hasLocalCopy: Boolean
   "True when S3 has an authoritative copy."
   isSynced: Boolean
-  "True when the S3 copy includes the Mist .dtsh index."
+  "Always null for a recording: its replay index is stored per chapter, so read isFinalized on each chapter's VOD asset."
   isFinalized: Boolean
   frozenAt: Time
   s3Url: String

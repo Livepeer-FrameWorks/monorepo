@@ -221,7 +221,7 @@ A page of DVR chapter refs. Paginated for unbounded artifact lifetime: default p
 - **syncStatus**: `String` — Current S3 sync state (pending, in_progress, synced, failed, lost_local).
 - **hasLocalCopy**: `Boolean` — Present full local node copy (origin or cache): true when at least one node holds a complete local copy, false when none remain (playback via read-through relay from S3). Null when the placement overlay (Periscope) is unavailable — unknown, not &#39;no local copy&#39;. Durable S3-only state is derived by consumers as isSynced &amp;&amp; hasLocalCopy == false.
 - **isSynced**: `Boolean` — True when S3 has an authoritative copy.
-- **isFinalized**: `Boolean` — True when the S3 copy includes the Mist .dtsh index.
+- **isFinalized**: `Boolean` — Always null for a recording: its replay index is stored per chapter, so read isFinalized on each chapter&#39;s VOD asset.
 - **frozenAt**: `Time` ([Time](/builders/api-schema/shared/#time))
 - **s3Url**: `String`
 - **thumbnailAssets**: `ThumbnailAssets` ([ThumbnailAssets](/builders/api-schema/shared/#thumbnailassets)) — Server-resolved Chandler URLs for the DVR&#39;s poster and sprite thumbnails. Null until Foghorn confirms the thumbnail upload.
