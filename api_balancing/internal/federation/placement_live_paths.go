@@ -3,6 +3,7 @@ package federation
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/url"
 	"strconv"
 	"strings"
@@ -51,6 +52,8 @@ type placementPublisher struct {
 	starting  bool
 	dtscURL   string
 	expiresAt time.Time
+	// absence names the evidence that keeps a claim from being present.
+	absence string
 }
 
 type placementSourceContext struct {
@@ -164,15 +167,18 @@ func (reader *LivePushPlacementPaths) ResolveSourceGeneration(ctx context.Contex
 		return "", time.Time{}, errors.New("push source authority is expired")
 	}
 	sourceContext := placementSourceContextFor(authority)
-	source, starting, err := reader.publisherState(ctx, sourceContext)
+	source, starting, reason, err := reader.publisherState(ctx, sourceContext)
 	if err != nil {
 		return "", time.Time{}, err
 	}
 	if source == nil {
-		if starting || reader.peerStarting(ctx, sourceContext) {
-			return "", time.Time{}, control.ErrLiveSourceStarting
+		if starting {
+			return "", time.Time{}, fmt.Errorf("%w: %s", control.ErrLiveSourceStarting, reason)
 		}
-		return "", time.Time{}, control.ErrLiveSourceOffline
+		if reader.peerStarting(ctx, sourceContext) {
+			return "", time.Time{}, fmt.Errorf("%w: a peer cell announced the stream live before its first advertisement arrived (%s)", control.ErrLiveSourceStarting, reason)
+		}
+		return "", time.Time{}, fmt.Errorf("%w: %s", control.ErrLiveSourceOffline, reason)
 	}
 	return source.generation, minPlacementExpiry(authority.ExpiresAt, source.expiresAt), nil
 }
@@ -191,7 +197,7 @@ func (reader *LivePushPlacementPaths) peerStarting(ctx context.Context, sourceCo
 
 // publisher returns the current playable publisher, or nil.
 func (reader *LivePushPlacementPaths) publisher(ctx context.Context, sourceContext placementSourceContext) (*placementPublisher, error) {
-	source, _, err := reader.publisherState(ctx, sourceContext)
+	source, _, _, err := reader.publisherState(ctx, sourceContext)
 	return source, err
 }
 
@@ -205,36 +211,38 @@ func (reader *LivePushPlacementPaths) publisher(ctx context.Context, sourceConte
 // reading taken before them, and freshPlacementEvidence refuses evidence stamped
 // after its reference instant. An earlier reading would therefore report a
 // maximally live publisher as absent whenever a heartbeat interleaves.
-func (reader *LivePushPlacementPaths) publisherState(ctx context.Context, sourceContext placementSourceContext) (*placementPublisher, bool, error) {
+// With no present publisher, the returned reason says which evidence is
+// missing.
+func (reader *LivePushPlacementPaths) publisherState(ctx context.Context, sourceContext placementSourceContext) (*placementPublisher, bool, string, error) {
 	if err := ctx.Err(); err != nil {
-		return nil, false, err
+		return nil, false, "", err
 	}
 	entry, found, err := reader.Registry.SourceSnapshot(ctx, sourceContext.tenantID, sourceContext.internalName)
 	if err != nil {
-		return nil, false, err
+		return nil, false, "", err
 	}
 	if err := ctx.Err(); err != nil {
-		return nil, false, err
+		return nil, false, "", err
 	}
 	if !found {
-		return nil, false, nil
+		return nil, false, "the stream has no source entry in this cell's registry", nil
 	}
 	if entry.TenantID != sourceContext.tenantID || entry.InternalName != sourceContext.internalName ||
 		(entry.IngestMode != 0 && entry.IngestMode != control.IngestPush) {
-		return nil, false, errors.New("push source identity is inconsistent")
+		return nil, false, "", errors.New("push source identity is inconsistent")
 	}
 	snapshot := reader.Snapshot()
 	if err := ctx.Err(); err != nil {
-		return nil, false, err
+		return nil, false, "", err
 	}
 	if snapshot == nil || len(snapshot.Nodes) > 4096 {
-		return nil, false, errors.New("push source inventory is unavailable")
+		return nil, false, "", errors.New("push source inventory is unavailable")
 	}
 	now := reader.now()
 	localNodes := make(map[string]state.EnhancedBalancerNodeSnapshot, len(snapshot.Nodes))
 	for _, node := range snapshot.Nodes {
 		if _, duplicate := localNodes[node.NodeID]; duplicate || node.NodeID == "" {
-			return nil, false, errors.New("push source inventory is ambiguous")
+			return nil, false, "", errors.New("push source inventory is ambiguous")
 		}
 		localNodes[node.NodeID] = node
 	}
@@ -258,6 +266,8 @@ func (reader *LivePushPlacementPaths) publisherState(ctx context.Context, source
 			grant := sourceContext.grants[node.ClusterID]
 			claim := placementPublisher{cellID: reader.CellID, clusterID: node.ClusterID, nodeID: loc.OwnerNodeID,
 				generation: loc.SourceGeneration, revision: loc.SourceRevision, starting: true}
+			claim.absence = localClaimAbsence(loc.OwnerNodeID, known, grant.CellID == reader.CellID && grant.AllowIngest, entry.IngestMode == control.IngestPush,
+				node, node.Streams[sourceContext.internalName], sourceContext.tenantID, now)
 			if known && grant.CellID == reader.CellID && grant.AllowIngest && entry.IngestMode == control.IngestPush {
 				stream := node.Streams[sourceContext.internalName]
 				if node.IsActive && stream.TenantID == sourceContext.tenantID && stream.Status == "live" && stream.Playable && stream.Inputs > 0 && !stream.Replicated &&
@@ -276,7 +286,7 @@ func (reader *LivePushPlacementPaths) publisherState(ctx context.Context, source
 		}
 	}
 	if len(entry.Locations) > 64 {
-		return nil, false, errors.New("push source census exceeds bound")
+		return nil, false, "", errors.New("push source census exceeds bound")
 	}
 	totalEdges := 0
 	for cellID, loc := range entry.Locations {
@@ -285,7 +295,7 @@ func (reader *LivePushPlacementPaths) publisherState(ctx context.Context, source
 		}
 		totalEdges += len(loc.EdgeCandidates)
 		if totalEdges > 4096 {
-			return nil, false, errors.New("push source advertisements exceed bound")
+			return nil, false, "", errors.New("push source advertisements exceed bound")
 		}
 		for _, edge := range loc.EdgeCandidates {
 			grant := sourceContext.grants[edge.ClusterID]
@@ -297,6 +307,14 @@ func (reader *LivePushPlacementPaths) publisherState(ctx context.Context, source
 			claim.present = loc.IsLiveNow && edge.Playable
 			claim.starting = loc.IsLiveNow
 			claim.present = claim.present && freshPlacementEvidence(time.Unix(edge.SourceObservedAt, 0), now)
+			switch {
+			case !loc.IsLiveNow:
+				claim.absence = "cell " + cellID + " advertises the stream not live"
+			case !edge.Playable:
+				claim.absence = "cell " + cellID + " advertises the origin buffer not playable"
+			case !claim.present:
+				claim.absence = "cell " + cellID + " advertised source evidence is stale"
+			}
 			claim.expiresAt = minPlacementExpiry(claim.expiresAt, time.Unix(edge.SourceObservedAt, 0).Add(30*time.Second))
 			if claim.present && freshPlacementEvidence(time.Unix(edge.DTSCObservedAt, 0), now) && validPlacementDTSC(edge.DTSCURL, runtimeName) {
 				claim.dtscURL = edge.DTSCURL
@@ -306,7 +324,7 @@ func (reader *LivePushPlacementPaths) publisherState(ctx context.Context, source
 		}
 	}
 	if err := ctx.Err(); err != nil {
-		return nil, false, err
+		return nil, false, "", err
 	}
 	for _, claim := range claims {
 		if claim.revision > fence {
@@ -320,17 +338,51 @@ func (reader *LivePushPlacementPaths) publisherState(ctx context.Context, source
 			continue
 		}
 		if source != nil {
-			return nil, false, errors.New("push source ownership is ambiguous")
+			return nil, false, "", errors.New("push source ownership is ambiguous")
 		}
 		source = claim
 	}
-	if source == nil || source.revision <= withdrawnRevision {
-		return nil, false, nil
+	if source == nil {
+		return nil, false, "no current publisher claim in this cell or a fresh peer advertisement", nil
 	}
-	if !source.present || !now.Before(source.expiresAt) {
-		return nil, source.starting, nil
+	if source.revision <= withdrawnRevision {
+		return nil, false, fmt.Sprintf("the publisher session (revision %d) ended", withdrawnRevision), nil
 	}
-	return source, false, nil
+	if !source.present {
+		return nil, source.starting, source.absence, nil
+	}
+	if !now.Before(source.expiresAt) {
+		return nil, source.starting, "the publisher's evidence expired at " + source.expiresAt.Format(time.RFC3339Nano), nil
+	}
+	return source, false, "", nil
+}
+
+// localClaimAbsence names the first condition that keeps this cell's owner
+// claim from being a present publisher, or "" when none does.
+func localClaimAbsence(ownerNodeID string, known, granted, push bool, node state.EnhancedBalancerNodeSnapshot, stream state.BalancerStreamSummary, tenantID string, now time.Time) string {
+	switch {
+	case !known:
+		return "owner node " + ownerNodeID + " is not in this replica's healthy inventory"
+	case !granted:
+		return "owner node's cluster " + node.ClusterID + " is not an ingest grant of this cell"
+	case !push:
+		return "the stream is not a push source"
+	case !node.IsActive:
+		return "owner node is not active"
+	case !freshPlacementEvidence(node.LastHeartbeat, now):
+		return "owner node heartbeat is not fresh (" + node.LastHeartbeat.Format(time.RFC3339Nano) + ")"
+	case stream.Status != "live" || stream.Inputs == 0:
+		return fmt.Sprintf("owner node reports status %q with %d inputs", stream.Status, stream.Inputs)
+	case !stream.Playable:
+		return "owner node's buffer is not playable"
+	case stream.TenantID != tenantID:
+		return "owner node's stream instance has no verified tenant"
+	case stream.Replicated:
+		return "owner node's instance is a replica"
+	case !freshPlacementEvidence(stream.ObservedAt, now):
+		return "owner node's stream report is not fresh (" + stream.ObservedAt.Format(time.RFC3339Nano) + ")"
+	}
+	return ""
 }
 
 func freshPlacementEvidence(observed, now time.Time) bool {

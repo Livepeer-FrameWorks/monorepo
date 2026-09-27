@@ -2812,6 +2812,11 @@ func (s *FoghornGRPCServer) resolveLiveViewerEndpoint(ctx context.Context, req *
 		if errors.Is(prepareErr, control.ErrInvalidViewerProtocol) {
 			return nil, status.Error(codes.InvalidArgument, prepareErr.Error())
 		}
+		if s.logger != nil && (errors.Is(prepareErr, control.ErrLiveSourceStarting) || errors.Is(prepareErr, control.ErrLiveSourceOffline)) {
+			s.logger.WithError(prepareErr).WithFields(logging.Fields{
+				"internal_name": internalName, "tenant_id": tenantID,
+			}).Info("Live viewer resolve refused: no present publisher")
+		}
 		if errors.Is(prepareErr, control.ErrLiveSourceStarting) {
 			return nil, grpcutil.StreamStartingError(control.LiveSourceStartingRetryAfter)
 		}

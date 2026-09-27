@@ -2517,6 +2517,11 @@ func HandleGenericViewerPlayback(c *gin.Context) {
 			return
 		}
 
+		if errors.Is(err, control.ErrLiveSourceStarting) || errors.Is(err, control.ErrLiveSourceOffline) {
+			logger.WithError(err).WithFields(logging.Fields{
+				"view_key": viewKey, "internal_name": contentID, "content_type": contentType,
+			}).Info("Live viewer resolve refused: no present publisher")
+		}
 		if errors.Is(err, control.ErrLiveSourceStarting) {
 			c.Header("Retry-After", strconv.Itoa(int(control.LiveSourceStartingRetryAfter/time.Second)))
 			respondPlaybackError(c, http.StatusServiceUnavailable, "STREAM_STARTING", "The stream is starting; retry after the advised delay", nil)

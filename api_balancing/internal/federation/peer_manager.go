@@ -85,8 +85,8 @@ const (
 
 type peerState struct {
 	addr string
-	// addrs is every known replica, addr first. Only request/response RPCs
-	// use the others; the peer channel stays on addr.
+	// addrs is every known replica, addr first. The peer channel starts on
+	// addr and moves along addrs when a replica refuses or drops it.
 	addrs         []string
 	controlCellID string
 	tenantIDs     []string
@@ -147,7 +147,15 @@ func (a *foghornPoolAdapter) Touch(clusterID string) {
 	a.pool.Touch(clusterID)
 }
 
+// OpenPeerChannel opens the channel once the replica's connection is ready.
+// Opening waits for readiness without bound, which on a stopped replica would
+// hold the channel until that replica returned instead of trying another.
 func (c *foghornPeerClient) OpenPeerChannel(ctx context.Context) (foghornfederationpb.FoghornFederation_PeerChannelClient, error) {
+	if conn := c.client.Conn(); conn != nil {
+		if err := awaitConnReady(ctx, conn, peerChannelConnectTimeout); err != nil {
+			return nil, err
+		}
+	}
 	return foghornfed.For(c.client).Federation().PeerChannel(ctx)
 }
 
@@ -910,9 +918,15 @@ const (
 	// streamAdPushInterval paces stream advertisements. Peers hold a peer's live
 	// streams for remoteLiveStreamTTL (30s), so six of these intervals fit inside
 	// the window a single missed push has to make up.
-	streamAdPushInterval         = 5 * time.Second
-	artifactPushInterval         = 30 * time.Second
-	peerReconnectBackoff         = 10 * time.Second
+	streamAdPushInterval = 5 * time.Second
+	artifactPushInterval = 30 * time.Second
+	peerReconnectBackoff = 10 * time.Second
+	// peerReplicaFailoverDelay separates tries of the peer cell's replicas
+	// within one pass.
+	peerReplicaFailoverDelay = 250 * time.Millisecond
+	// peerChannelConnectTimeout bounds how long one replica may take to
+	// accept the connection before the next replica is tried.
+	peerChannelConnectTimeout    = 5 * time.Second
 	streamPeerTombstoneRetention = time.Hour
 	streamPeerTombstoneScanCount = int64(512)
 	maintenanceInterval          = 10 * time.Second
@@ -1551,6 +1565,21 @@ func (pm *PeerManager) connectPeer(request peerConnectRequest) {
 	if backoff <= 0 {
 		backoff = peerReconnectBackoff
 	}
+	// The channel may terminate on any replica of the peer's cell: whichever
+	// replica receives it writes the advertisements to the cell's shared
+	// state. A lost or refused channel moves to the next replica at once, so
+	// one stopped replica never cuts this cell's advertisements off; the
+	// backoff paces only a pass in which every replica failed.
+	nextReplica, failuresInRow := 0, 0
+	retry := func(addrCount int) {
+		failuresInRow++
+		if failuresInRow < addrCount {
+			time.Sleep(peerReplicaFailoverDelay)
+			return
+		}
+		failuresInRow = 0
+		time.Sleep(backoff)
+	}
 
 	for {
 		select {
@@ -1569,24 +1598,27 @@ func (pm *PeerManager) connectPeer(request peerConnectRequest) {
 			return
 		}
 		ps.cancel = cancel
-		addr := ps.addr
+		addrs := peerReplicaAddrs(ps.addr, ps.addrs)
 		pm.mu.Unlock()
+		addr := addrs[nextReplica%len(addrs)]
+		nextReplica++
 
 		client, err := pm.pool.GetOrCreate(clusterID, addr)
 		if err != nil {
-			pm.logger.WithError(err).WithField("peer_cluster", clusterID).Warn("Failed to get Foghorn client for peer")
+			pm.logger.WithError(err).WithFields(logging.Fields{"peer_cluster": clusterID, "peer_addr": addr}).Warn("Failed to get Foghorn client for peer")
 			cancel()
-			time.Sleep(backoff)
+			retry(len(addrs))
 			continue
 		}
 
 		stream, err := client.OpenPeerChannel(ctx)
 		if err != nil {
-			pm.logger.WithError(err).WithField("peer_cluster", clusterID).Warn("Failed to open PeerChannel")
+			pm.logger.WithError(err).WithFields(logging.Fields{"peer_cluster": clusterID, "peer_addr": addr}).Warn("Failed to open PeerChannel; trying the peer cell's next replica")
 			cancel()
-			time.Sleep(backoff)
+			retry(len(addrs))
 			continue
 		}
+		failuresInRow = 0
 
 		pm.mu.Lock()
 		current, ok = pm.peers[clusterID]
@@ -1609,7 +1641,7 @@ func (pm *PeerManager) connectPeer(request peerConnectRequest) {
 		// holds pm.mu.
 		go pm.peerWriteLoop(ctx, clusterID, sendCh, stream, cancel)
 
-		pm.logger.WithField("peer_cluster", clusterID).Info("PeerChannel connected")
+		pm.logger.WithFields(logging.Fields{"peer_cluster": clusterID, "peer_addr": addr}).Info("PeerChannel connected")
 		pm.emitFederationEvent(&ipcpb.FederationEventData{
 			EventType:   ipcpb.FederationEventType_PEER_CONNECTED,
 			PeerCluster: &clusterID,
@@ -1636,12 +1668,12 @@ func (pm *PeerManager) connectPeer(request peerConnectRequest) {
 			return
 		}
 
-		pm.logger.WithField("peer_cluster", clusterID).Info("PeerChannel disconnected, will reconnect")
+		pm.logger.WithFields(logging.Fields{"peer_cluster": clusterID, "peer_addr": addr}).Info("PeerChannel disconnected; reconnecting through the peer cell's next replica")
 		pm.emitFederationEvent(&ipcpb.FederationEventData{
 			EventType:   ipcpb.FederationEventType_PEER_DISCONNECTED,
 			PeerCluster: &clusterID,
 		})
-		time.Sleep(backoff)
+		retry(len(addrs))
 	}
 }
 

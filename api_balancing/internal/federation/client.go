@@ -149,8 +149,13 @@ func awaitReplicaConnection(ctx context.Context, client *foghorn.GRPCClient) err
 	if failFast, ok := ctx.Value(replicaFailFastKey{}).(bool); !ok || !failFast || client == nil || client.Conn() == nil {
 		return nil
 	}
-	conn := client.Conn()
-	ctx, cancel := context.WithTimeout(ctx, replicaConnectBudget)
+	return awaitConnReady(ctx, client.Conn(), replicaConnectBudget)
+}
+
+// awaitConnReady returns once conn is ready, or Unavailable when it failed or
+// did not connect within budget.
+func awaitConnReady(ctx context.Context, conn *grpc.ClientConn, budget time.Duration) error {
+	ctx, cancel := context.WithTimeout(ctx, budget)
 	defer cancel()
 	for {
 		state := conn.GetState()
@@ -170,7 +175,7 @@ func awaitReplicaConnection(ctx context.Context, client *foghorn.GRPCClient) err
 			conn.Connect()
 		}
 		if !conn.WaitForStateChange(ctx, state) {
-			return status.Errorf(codes.Unavailable, "replica not connected within %s (%s)", replicaConnectBudget, state)
+			return status.Errorf(codes.Unavailable, "replica not connected within %s (%s)", budget, state)
 		}
 	}
 }
