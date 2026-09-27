@@ -817,19 +817,13 @@ func (s *Store) dropGrantLocked(internal string) {
 }
 
 func (s *Store) bindRebuiltLocked(key sessionKey, g *grant, now time.Time) *session {
-	var match *rebuiltSession
+	var matches []*rebuiltSession
 	for _, rb := range s.rebuilt {
-		if rb.host != key.host || rb.stream != key.stream || !slices.Contains(rb.protocols, key.connector) {
-			continue
+		if rb.host == key.host && rb.stream == key.stream && slices.Contains(rb.protocols, key.connector) {
+			matches = append(matches, rb)
 		}
-		if match != nil {
-			// Two sessions from one address: the token cannot be matched to
-			// either, so Foghorn decides.
-			return nil
-		}
-		match = rb
 	}
-	if match == nil {
+	if len(matches) == 0 {
 		return nil
 	}
 	if g.msg.GetPolicy().GetKind() == ipcpb.PlaybackGrantPolicyKind_PLAYBACK_GRANT_POLICY_KIND_JWT {
@@ -837,8 +831,16 @@ func (s *Store) bindRebuiltLocked(key sessionKey, g *grant, now time.Time) *sess
 			return nil
 		}
 	}
-	delete(s.rebuilt, match.sessionID)
-	sess := &session{key: key, sessionID: match.sessionID, admittedAt: now, lastUsed: now, kid: tokenKid(key.token)}
+	sess := &session{key: key, admittedAt: now, lastUsed: now, kid: tokenKid(key.token)}
+	if len(matches) == 1 {
+		sess.sessionID = matches[0].sessionID
+		delete(s.rebuilt, matches[0].sessionID)
+	}
+	// With several live sessions from one address (viewers behind one NAT)
+	// the token cannot be tied to one of them; it is answered without a Mist
+	// session id and the records stay for the address's other tokens. The
+	// answer only maps the stream name: a token that is really a new viewer
+	// opens a new Mist session, whose USER_NEW Foghorn decides.
 	s.sessions[key] = sess
 	return sess
 }
