@@ -29,7 +29,9 @@ type ViewerSession struct {
 // sessions (session ids prefixed I and O) are left out.
 func (c *Client) ViewerSessions(ctx context.Context) ([]ViewerSession, error) {
 	response, err := c.makeAPIRequestContext(ctx, map[string]interface{}{
-		"clients": map[string]interface{}{"fields": []string{"sessid", "host", "stream", "protocol"}},
+		// Without a time Mist reports the sessions of ten minutes ago; -5 asks
+		// for those active five seconds ago, as the stats poller does.
+		"clients": map[string]interface{}{"time": -5, "fields": []string{"sessid", "host", "stream", "protocol"}},
 	})
 	if err != nil {
 		return nil, fmt.Errorf("clients query failed: %w", err)
