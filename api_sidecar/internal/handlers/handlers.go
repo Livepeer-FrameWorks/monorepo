@@ -2636,7 +2636,6 @@ func HandleProcessAVSegmentComplete(c *gin.Context) {
 	}
 
 	streamName := params[0]
-	trackType := params[1]
 	secondsSinceLast := params[2]
 	inputFrames := params[3]
 	outputFrames := params[4]
@@ -2651,6 +2650,7 @@ func HandleProcessAVSegmentComplete(c *gin.Context) {
 	// selectors and analytics key on the codec.
 	inputCodec := mist.CanonicalCodecName(params[12])
 	outputCodec := mist.CanonicalCodecName(params[13])
+	trackType := processAVTrackType(params[1], outputCodec)
 	inputWidth := params[14]
 	inputHeight := params[15]
 	outputWidth := params[16]
@@ -2669,7 +2669,7 @@ func HandleProcessAVSegmentComplete(c *gin.Context) {
 	outputBitrateBps := params[29]
 	isFinal := params[30]
 
-	logger.WithFields(logging.Fields{
+	segmentFields := logging.Fields{
 		"trigger_type":       "PROCESS_AV_VIRTUAL_SEGMENT_COMPLETE",
 		"stream_name":        streamName,
 		"track_type":         trackType,
@@ -2680,7 +2680,7 @@ func HandleProcessAVSegmentComplete(c *gin.Context) {
 		"resolution_out":     outputWidth + "x" + outputHeight,
 		"rtf_out":            rtfOut,
 		"is_final":           isFinal,
-	}).Info("MistProcAV segment processed")
+	}
 
 	if metrics != nil {
 		if isFinal == "1" {
@@ -2728,6 +2728,17 @@ func HandleProcessAVSegmentComplete(c *gin.Context) {
 	})
 
 	durationMs := secondsSinceLastInt * 1000
+
+	// MistProcAV reports on a timer from the moment it starts, before its
+	// decoder has opened: such a window names no input codec and carries no
+	// media. It is not a processed segment and records nothing.
+	if inputCodec == "none" || (durationMs == 0 && inputFramesDeltaInt == 0 && outputFramesDeltaInt == 0) {
+		incMistWebhook("PROCESS_AV_VIRTUAL_SEGMENT_COMPLETE", "skipped_no_media")
+		logger.WithFields(segmentFields).Debug("MistProcAV window before any decoded media; not recorded")
+		c.String(http.StatusOK, "OK")
+		return
+	}
+	logger.WithFields(segmentFields).Info("MistProcAV segment processed")
 
 	billingEvent := &ipcpb.ProcessBillingEvent{
 		NodeId:              nodeName,
@@ -2790,6 +2801,19 @@ func HandleProcessAVSegmentComplete(c *gin.Context) {
 	}
 
 	c.String(http.StatusOK, "OK")
+}
+
+// processAVTrackType labels a MistProcAV window by the codec it encodes to.
+// MistProcAV calls every process "video" until its encoder has an audio
+// sample rate, so an audio process's first windows arrive as video.
+func processAVTrackType(reported, outputCodec string) string {
+	switch outputCodec {
+	case "aac", "opus", "mp3", "flac", "vorbis", "ac3", "eac3", "alac", "pcm_s16le", "pcm_s16be", "pcm_s24le", "pcm_s32le", "pcm_f32le":
+		return "audio"
+	case "h264", "hevc", "av1", "vp8", "vp9", "jpeg":
+		return "video"
+	}
+	return reported
 }
 
 // Helper functions for optional proto fields
