@@ -584,6 +584,25 @@ func expectLocalObject(mock sqlmock.Sqlmock, objectBytes []byte, validUntil time
 			AddRow(objectBytes, localPayloadDigest(objectBytes), time.Now().Add(time.Minute), validUntil, sharedauthority.LiveStreamAuthorityID("30000000-0000-0000-0000-000000000001"), int64(4), ready, false, int64(8)))
 }
 
+// localAuthorityPairQuery is the one-statement object and tenant read an internal-name lookup makes.
+const localAuthorityPairQuery = "GetLocalReadAuthorityPairByInternalName"
+
+func expectLocalPair(mock sqlmock.Sqlmock, objectBytes, tenantBytes []byte, objectValid, tenantValid time.Time, ready bool) {
+	mock.ExpectQuery(localAuthorityPairQuery).
+		WillReturnRows(sqlmock.NewRows([]string{
+			"payload", "payload_sha256", "refresh_after", "valid_until", "authority_id", "authority_version", "local_read_ready",
+			"withheld_by_tenant_revival", "tenant_authority_version", "tenant_found", "tenant_id",
+			"tenant_payload", "tenant_payload_sha256", "tenant_refresh_after", "tenant_valid_until",
+			"tenant_read_ready", "tenant_ingest_ready", "tenant_source_ready",
+		}).AddRow(
+			objectBytes, localPayloadDigest(objectBytes), time.Now().Add(time.Minute), objectValid,
+			sharedauthority.LiveStreamAuthorityID("30000000-0000-0000-0000-000000000001"), int64(4), ready,
+			false, int64(8), true, "10000000-0000-0000-0000-000000000001",
+			tenantBytes, localPayloadDigest(tenantBytes), time.Now().Add(time.Minute), tenantValid,
+			ready, false, false,
+		))
+}
+
 func expectLocalTenant(mock sqlmock.Sqlmock, tenantBytes []byte, validUntil time.Time, ready bool) {
 	mock.ExpectQuery(regexp.QuoteMeta("SELECT authority.payload, authority.payload_sha256, authority.refresh_after, authority.valid_until,")).
 		WillReturnRows(sqlmock.NewRows([]string{"payload", "payload_sha256", "refresh_after", "valid_until", "authority_version", "local_read_ready", "local_ingest_ready", "local_source_ready"}).
@@ -713,7 +732,7 @@ func TestPlayRewriteLocalDriverErrorUsesConnectedResolver(t *testing.T) {
 func TestUserNewLocalAuthorityDriverErrorUsesConnectedPublicMarker(t *testing.T) {
 	p, mock, closeDB, _, _ := localAuthorityFixture(t)
 	defer closeDB()
-	mock.ExpectQuery(regexp.QuoteMeta("SELECT authority.payload, authority.payload_sha256, authority.refresh_after, authority.valid_until,")).
+	mock.ExpectQuery(localAuthorityPairQuery).
 		WillReturnError(sql.ErrConnDone)
 
 	decision, err := p.enforcePlaybackPolicy(context.Background(), "stream-internal", streamContext{
@@ -783,12 +802,9 @@ func TestPlayRewriteResolvesRuntimeNameFromLocalAuthorityWithoutControlPlane(t *
 	validUntil := time.Now().Add(time.Hour)
 	p, mock, closeDB, tenantBytes, objectBytes := localAuthorityFixture(t)
 	defer closeDB()
-	// The playback-id index cannot match a runtime name; the internal-name index
-	// strips the prefix and answers.
-	mock.ExpectQuery(regexp.QuoteMeta("SELECT authority.payload, authority.payload_sha256, authority.refresh_after, authority.valid_until,")).
-		WillReturnError(sql.ErrNoRows)
-	expectLocalObject(mock, objectBytes, validUntil, true)
-	expectLocalTenant(mock, tenantBytes, validUntil, true)
+	// The internal-name index strips the runtime prefix and answers; the playback-id index is
+	// not consulted for a runtime name.
+	expectLocalPair(mock, objectBytes, tenantBytes, validUntil, validUntil, true)
 	expectLocalTenant(mock, tenantBytes, validUntil, true)
 
 	connected, cleanup, stub := setupCommodoreClientWithStub(t, nil, nil)

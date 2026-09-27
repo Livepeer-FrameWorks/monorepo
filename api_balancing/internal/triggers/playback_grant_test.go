@@ -172,10 +172,7 @@ func TestAuthorityApplyPushesTheNewGrantToHoldingEdges(t *testing.T) {
 			validUntil := time.Now().Add(30 * 24 * time.Hour).Truncate(time.Second)
 			p, mock, closeDB, tenantBytes, objectBytes := localAuthorityFixture(t)
 			defer closeDB()
-			expectLocalObject(mock, withObjectPolicy(t, objectBytes, tc.policy, tc.lifecycle), validUntil, true)
-			if tc.lifecycle == mediaauthoritypb.AuthorityLifecycle_AUTHORITY_LIFECYCLE_ACTIVE {
-				expectLocalTenant(mock, tenantBytes, validUntil, true)
-			}
+			expectLocalPair(mock, withObjectPolicy(t, objectBytes, tc.policy, tc.lifecycle), tenantBytes, validUntil, validUntil, true)
 			delivery := newRecordingGrantDelivery()
 			delivery.held = []string{"live+stream-internal"}
 			delivery.holders["live+stream-internal"] = []string{"edge-node-1", "edge-node-2"}
@@ -197,8 +194,7 @@ func TestTenantApplyPushesEachGrantedStream(t *testing.T) {
 	validUntil := time.Now().Add(time.Hour).Truncate(time.Second)
 	p, mock, closeDB, tenantBytes, objectBytes := localAuthorityFixture(t)
 	defer closeDB()
-	expectLocalObject(mock, objectBytes, validUntil, true)
-	expectLocalTenant(mock, tenantBytes, validUntil, true)
+	expectLocalPair(mock, objectBytes, tenantBytes, validUntil, validUntil, true)
 	delivery := newRecordingGrantDelivery()
 	delivery.held = []string{"live+stream-internal"}
 	delivery.holders["live+stream-internal"] = []string{"edge-node-1"}

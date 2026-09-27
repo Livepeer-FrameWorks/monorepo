@@ -22,8 +22,7 @@ func TestRuntimePlaybackUsesLocalInternalNameWithoutCoreFetch(t *testing.T) {
 	p, mock, closeDB, tenantBytes, objectBytes := localAuthorityFixture(t)
 	defer closeDB()
 	asked := recordFetches(p)
-	expectLocalObject(mock, objectBytes, time.Now().Add(time.Hour), true)
-	expectLocalTenant(mock, tenantBytes, time.Now().Add(time.Hour), true)
+	expectLocalPair(mock, objectBytes, tenantBytes, time.Now().Add(time.Hour), time.Now().Add(time.Hour), true)
 	content, found, err := p.ResolveLocalContent(context.Background(), "live+stream-internal")
 	if err != nil || !found || content == nil || content.InternalName != "stream-internal" {
 		t.Fatalf("runtime source not resolved locally: %+v, %v, %v", content, found, err)
@@ -113,7 +112,7 @@ func TestAbsentPlaybackIsAskedForByTheNameTheRequestUsed(t *testing.T) {
 	p, mock, closeDB, _, _ := localAuthorityFixture(t)
 	defer closeDB()
 	asked := recordFetches(p)
-	mock.ExpectQuery(regexp.QuoteMeta(localAuthorityObjectQuery)).WillReturnError(sql.ErrNoRows)
+	mock.ExpectQuery(localAuthorityPairQuery).WillReturnError(sql.ErrNoRows)
 	mock.ExpectQuery("BeginMediaAuthorityConfirmation").WillReturnRows(sqlmock.NewRows([]string{"started_at"}).AddRow(time.Now()))
 
 	_, found, err := p.resolveReadyLocalPlayback(context.Background(), "stream-internal", false)

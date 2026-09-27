@@ -200,7 +200,9 @@ api_sidecar/internal/control trigger_forwarder.go
     ↓
 api_balancing/internal/control/server.go (Foghorn)
   - processMistTrigger dispatches to MistTriggerProcessor
-  - Processor enriches and forwards via Decklog client
+  - Processor enriches and forwards via Decklog client; enrichment reads
+    the stream's local media-object authority and its tenant authority in
+    one statement (Store.ReadPairByInternalName)
   - Decklog.SendTrigger() → api_firehose SendEvent unary RPC
     → producer.PublishTypedEvent() + raw_mist_triggers publish → Kafka publish → ack
   - on Decklog return: sendMistTriggerAck(stream, requestID, err)
@@ -258,6 +260,12 @@ Foghorn maps processor errors via `classifyTriggerError` (`api_balancing/interna
 
 - **A new unary RPC.** The bidi stream is the existing control plane and already carries every other control message; adding a parallel transport would split the connection state.
 - **Switching to Decklog directly from Helmsman.** Foghorn does tenant/cluster enrichment between Helmsman and Decklog (`ensureTriggerTenantID`, cluster_id population). Skipping it would force every edge node to know how to enrich, replicating Foghorn's identity work.
+- **Acking before the Kafka publish.** Foghorn has no durable store for
+  trigger publishes; the Helmsman WAL is that store. Acking earlier would need
+  a Foghorn outbox written to Yugabyte, which costs the same cross-region round
+  trip as the publish it replaces. The publish latency is instead overlapped:
+  the forwarder keeps 64 entries in flight, so the per-entry round trip bounds
+  latency, not throughput.
 - **A SummingMergeTree journal of attempts.** The journal is a `ReplacingMergeTree` because we want exactly one logical row per `source_event_id`; an attempt log is interesting for incident review but not for billing. The forwarder already exposes retry counts via metrics.
 
 ## Related

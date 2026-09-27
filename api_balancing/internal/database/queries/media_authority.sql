@@ -268,6 +268,36 @@ WHERE projection.internal_name = sqlc.arg(internal_name)
 ORDER BY (projection.lifecycle = 'active') DESC, projection.authority_version DESC
 LIMIT 1;
 
+-- name: GetLocalReadAuthorityPairByInternalName :one
+SELECT object_authority.payload, object_authority.payload_sha256,
+       object_authority.refresh_after, object_authority.valid_until,
+       object_projection.authority_id, object_projection.authority_version, object_projection.local_read_ready,
+       COALESCE(tenant_projection.objects_trusted_from > object_authority.confirmed_at, FALSE)::boolean AS withheld_by_tenant_revival,
+       COALESCE(tenant_projection.authority_version, 0)::bigint AS tenant_authority_version,
+       (tenant_authority.authority_id IS NOT NULL)::boolean AS tenant_found,
+       object_projection.tenant_id::text AS tenant_id,
+       tenant_authority.payload AS tenant_payload,
+       tenant_authority.payload_sha256 AS tenant_payload_sha256,
+       tenant_authority.refresh_after AS tenant_refresh_after,
+       tenant_authority.valid_until AS tenant_valid_until,
+       COALESCE(tenant_projection.local_read_ready, FALSE)::boolean AS tenant_read_ready,
+       COALESCE(tenant_projection.local_ingest_ready, FALSE)::boolean AS tenant_ingest_ready,
+       COALESCE(tenant_projection.local_source_ready, FALSE)::boolean AS tenant_source_ready
+FROM foghorn.media_object_authority_projection AS object_projection
+JOIN foghorn.media_authorities AS object_authority
+  ON object_authority.authority_kind = 'media_object'
+ AND object_authority.authority_id = object_projection.authority_id
+ AND object_authority.authority_version = object_projection.authority_version
+LEFT JOIN foghorn.tenant_authority_projection AS tenant_projection
+  ON tenant_projection.tenant_id = object_projection.tenant_id
+LEFT JOIN foghorn.media_authorities AS tenant_authority
+  ON tenant_authority.authority_kind = 'tenant'
+ AND tenant_authority.authority_id = tenant_projection.tenant_id::text
+ AND tenant_authority.authority_version = tenant_projection.authority_version
+WHERE object_projection.internal_name = sqlc.arg(internal_name)
+ORDER BY (object_projection.lifecycle = 'active') DESC, object_projection.authority_version DESC
+LIMIT 1;
+
 -- name: GetLocalMediaObjectAuthorityByPublishingCredential :one
 SELECT authority.payload, authority.payload_sha256, authority.refresh_after, authority.valid_until,
        projection.authority_id, projection.authority_version,

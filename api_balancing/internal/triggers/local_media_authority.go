@@ -194,10 +194,18 @@ func (p *Processor) readReadyLocalPlayback(ctx context.Context, input string, by
 	}
 	var object localauthority.MediaObjectSnapshot
 	var err error
+	// An internal-name read, the one every trigger enrichment makes, fetches the tenant authority
+	// in the same statement; a playback-ID read fetches it after the object.
+	tenantRead := func() (localauthority.TenantSnapshot, error) {
+		return p.mediaAuthorityStore.TenantForObject(ctx, object)
+	}
 	if byPlaybackID {
 		object, err = p.mediaAuthorityStore.MediaObjectByPlaybackID(ctx, input)
 	} else {
-		object, err = p.mediaAuthorityStore.MediaObjectByInternalName(ctx, input)
+		var pair localauthority.ReadPair
+		pair, err = p.mediaAuthorityStore.ReadPairByInternalName(ctx, input)
+		object = pair.Object
+		tenantRead = func() (localauthority.TenantSnapshot, error) { return pair.Tenant, pair.TenantErr }
 	}
 	if errors.Is(err, sql.ErrNoRows) {
 		p.observeMediaAuthorityLocalRead(index, "absent")
@@ -228,7 +236,7 @@ func (p *Processor) readReadyLocalPlayback(ctx context.Context, input string, by
 		p.observeMediaAuthorityLocalRead(index, "denied")
 		return result, true, errLocalAuthorityDenied
 	}
-	tenant, err := p.mediaAuthorityStore.TenantForObject(ctx, object)
+	tenant, err := tenantRead()
 	if err != nil {
 		p.observeMediaAuthorityLocalRead("tenant", "error")
 		return result, true, fmt.Errorf("read local tenant authority: %w", err)

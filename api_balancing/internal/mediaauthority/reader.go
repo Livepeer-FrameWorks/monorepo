@@ -174,6 +174,10 @@ func (s *Store) Tenant(ctx context.Context, tenantID string) (TenantSnapshot, er
 	if err != nil {
 		return TenantSnapshot{}, err
 	}
+	return s.tenantSnapshot(tenantID, row)
+}
+
+func (s *Store) tenantSnapshot(tenantID string, row foghorndb.GetLocalTenantAuthorityRow) (TenantSnapshot, error) {
 	snapshot := TenantSnapshot{
 		Version: row.AuthorityVersion, Ready: row.LocalReadReady, IngestReady: row.LocalIngestReady,
 		SourceReady: row.LocalSourceReady, Freshness: authorityFreshness(s.now().UTC(), row.RefreshAfter, row.ValidUntil),
@@ -193,6 +197,56 @@ func (s *Store) Tenant(ctx context.Context, tenantID string) (TenantSnapshot, er
 	}
 	snapshot.Authority = payload
 	return snapshot, nil
+}
+
+// ReadPair is a media object's read authority and its tenant's, read together.
+type ReadPair struct {
+	Object MediaObjectSnapshot
+	Tenant TenantSnapshot
+	// TenantErr is what TenantForObject returns for Object.
+	TenantErr error
+}
+
+// ReadPairByInternalName reads the object authority for internalName and its tenant authority in
+// one statement, so both come from one database snapshot and a trigger pays one round trip. The
+// result is what MediaObjectByInternalName followed by TenantForObject return. An object whose
+// payload names another tenant than its projection row takes the separate tenant read.
+func (s *Store) ReadPairByInternalName(ctx context.Context, internalName string) (ReadPair, error) {
+	internalName = stripRuntimePrefix(internalName)
+	if internalName == "" {
+		return ReadPair{}, errors.New("internal name is required")
+	}
+	row, err := foghorndb.New(s.db).GetLocalReadAuthorityPairByInternalName(ctx, internalName)
+	if err != nil {
+		return ReadPair{}, err
+	}
+	object, err := decodeMediaObjectSnapshot(row.Payload, row.PayloadSha256, row.AuthorityID, row.AuthorityVersion, row.LocalReadReady, row.RefreshAfter, row.ValidUntil, s.now().UTC())
+	object.ParentVersion = row.TenantAuthorityVersion
+	object.Freshness = s.fencedFreshness(object.Freshness, "media_object", object.AuthorityID, row.WithheldByTenantRevival)
+	s.observeFreshness(object.Freshness, AuthorityLookup{AuthorityID: object.AuthorityID})
+	pair := ReadPair{Object: object}
+	if err != nil {
+		return pair, err
+	}
+	tenantID := object.Authority.GetTenantId()
+	switch {
+	case tenantID != row.TenantID:
+		pair.Tenant, pair.TenantErr = s.TenantForObject(ctx, object)
+		return pair, nil
+	case !row.TenantFound:
+		pair.TenantErr = sql.ErrNoRows
+		return pair, nil
+	}
+	pair.Tenant, pair.TenantErr = s.tenantSnapshot(tenantID, foghorndb.GetLocalTenantAuthorityRow{
+		Payload: row.TenantPayload, PayloadSha256: row.TenantPayloadSha256,
+		RefreshAfter: row.TenantRefreshAfter.Time, ValidUntil: row.TenantValidUntil.Time,
+		AuthorityVersion: row.TenantAuthorityVersion, LocalReadReady: row.TenantReadReady,
+		LocalIngestReady: row.TenantIngestReady, LocalSourceReady: row.TenantSourceReady,
+	})
+	if pair.TenantErr == nil && pair.Tenant.Version != object.ParentVersion {
+		pair.Tenant = s.recheckObjectParent(ctx, object, pair.Tenant)
+	}
+	return pair, nil
 }
 
 func (s *Store) MediaObjectByPlaybackID(ctx context.Context, playbackID string) (MediaObjectSnapshot, error) {

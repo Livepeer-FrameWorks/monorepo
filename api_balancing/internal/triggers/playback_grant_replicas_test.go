@@ -60,8 +60,7 @@ func TestKeyRevokedOnOneReplicaReachesTheEdgeGrantedByAnother(t *testing.T) {
 		},
 	}
 	validUntil := time.Now().Add(30 * 24 * time.Hour).Truncate(time.Second)
-	expectLocalObject(mock1, withObjectPolicy(t, objectBytes, revoked, mediaauthoritypb.AuthorityLifecycle_AUTHORITY_LIFECYCLE_ACTIVE), validUntil, true)
-	expectLocalTenant(mock1, tenantBytes, validUntil, true)
+	expectLocalPair(mock1, withObjectPolicy(t, objectBytes, revoked, mediaauthoritypb.AuthorityLifecycle_AUTHORITY_LIFECYCLE_ACTIVE), tenantBytes, validUntil, validUntil, true)
 
 	p2.onPlaybackAuthorityApplied(localauthority.ApplyResult{
 		Kind: "media_object", InternalName: "stream-internal", TenantID: "10000000-0000-0000-0000-000000000001", Version: 5,
