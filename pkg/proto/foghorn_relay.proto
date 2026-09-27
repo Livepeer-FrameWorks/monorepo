@@ -53,6 +53,9 @@ message ForwardCommandRequest {
     // bidi stream; relay so the unload + session-disconnect lands on the
     // right Helmsman.
     helmsmancontrol.DrainStreamRequest drain_stream = 28;
+    // Playback grant updates reach an edge whose control stream is held by a
+    // peer Foghorn.
+    helmsmancontrol.PlaybackGrant playback_grant = 30;
   }
 }
 

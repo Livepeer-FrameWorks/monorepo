@@ -406,6 +406,15 @@ message ControlMessage {
     // (PROCESS_REPLACE) with local renditions. Informational: the stream
     // keeps running on the replacement.
     StreamTranscodeDegraded stream_transcode_degraded = 172;
+    // Foghorn -> Helmsman: the playback grant for one stream on this edge.
+    // Sent on the first viewer admission of the stream on the edge and
+    // whenever the signed authority behind it changes. See
+    // docs/architecture/viewer-routing.md (edge playback grants).
+    PlaybackGrant playback_grant = 173;
+    // Helmsman -> Foghorn: fetch the current grant for one stream, used after
+    // a Helmsman restart, a control reconnect and a policy invalidation.
+    PlaybackGrantRequest playback_grant_request = 174;
+    PlaybackGrantResponse playback_grant_response = 175;
   }
 }
 
@@ -586,6 +595,71 @@ message InvalidateSessionsRequest {
   repeated string stream_names = 1; // Internal stream names whose sessions need re-evaluating
   string tenant_id = 2;             // For logging/audit
   string reason = 3;                // e.g., "policy_change", "key_revoked", "webhook_rotated"
+}
+
+// PlaybackGrant is Foghorn's playback authority for one stream, held in
+// Helmsman's memory. It maps the names a viewer may request to the Mist
+// stream, carries the policy a new session is checked against, and is valid
+// until the signed media and tenant authority behind it expire. It never
+// admits a viewer by itself: Helmsman answers PLAY_REWRITE locally only for a
+// session Foghorn admitted on this edge, and checks new sessions against the
+// grant only when Foghorn cannot be asked.
+message PlaybackGrant {
+  // Mist stream the grant maps to (live+..., vod+..., dvr+...).
+  string internal_name = 1;
+  // PLAY_REWRITE names that resolve to internal_name.
+  repeated string requested_names = 2;
+  string tenant_id = 3;
+  PlaybackGrantPolicy policy = 4;
+  int64 object_authority_version = 5;
+  int64 tenant_authority_version = 6;
+  // Earliest hard validity of the signed object and tenant authority.
+  google.protobuf.Timestamp valid_until = 7;
+  // The authority no longer admits playback (tombstone, tenant or billing
+  // denial, hard expiry). Helmsman drops the grant and re-checks the stream's
+  // sessions with Foghorn.
+  bool revoked = 8;
+  string revoked_reason = 9;
+}
+
+enum PlaybackGrantPolicyKind {
+  PLAYBACK_GRANT_POLICY_KIND_UNSPECIFIED = 0;
+  PLAYBACK_GRANT_POLICY_KIND_PUBLIC = 1;
+  PLAYBACK_GRANT_POLICY_KIND_JWT = 2;
+  // Every new session is decided by Foghorn: webhook policies, and policies
+  // whose authority requires connected evaluation.
+  PLAYBACK_GRANT_POLICY_KIND_CONNECTED = 3;
+}
+
+// PlaybackGrantPolicy is the edge-checkable part of a playback policy. A
+// signing key that has been revoked is absent from active_keys.
+message PlaybackGrantPolicy {
+  PlaybackGrantPolicyKind kind = 1;
+  // Normalized origins admitted to play; "*" admits any, empty = no restriction.
+  repeated string allowed_origins = 2;
+  repeated string allowed_kids = 3;
+  repeated PlaybackGrantKey active_keys = 4;
+  repeated string required_audiences = 5;
+  map<string, string> required_claims_json = 6;
+}
+
+message PlaybackGrantKey {
+  string kid = 1;
+  string public_key_pem = 2;
+}
+
+// PlaybackGrantRequest names one Mist stream; request_id correlates the response.
+message PlaybackGrantRequest {
+  string request_id = 1;
+  string internal_name = 2;
+}
+
+// PlaybackGrantResponse carries the grant, or the reason none can be issued
+// (no ready signed authority for the stream in this cell).
+message PlaybackGrantResponse {
+  string request_id = 1;
+  PlaybackGrant grant = 2;
+  string error = 3;
 }
 
 // ActivatePushTargets tells Helmsman to start pushing a stream to external targets.
