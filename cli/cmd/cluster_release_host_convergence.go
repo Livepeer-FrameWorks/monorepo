@@ -29,9 +29,10 @@ import (
 //     them first breaks no running service.
 //   - Every Redis server and Sentinel, keeping a primary serving throughout
 //     (cluster_release_redis_convergence.go).
+//   - The stateful data services and managed dependencies, each host alone
+//     and gated on the service's health (cluster_release_service_convergence.go).
 //   - The declared Kafka topics, created when missing, with their declared
-//     topic config (retention) applied to existing topics. Brokers and
-//     controllers are never reconfigured or restarted.
+//     topic config (retention) applied to existing topics.
 //   - MirrorMaker2 workers on every declared link worker host, so each
 //     region's mirrored topics exist before Signalman and Bridge roll.
 //
@@ -91,6 +92,7 @@ func planReleaseHostConvergence(plan *orchestrator.ExecutionPlan, manifest *inve
 		steps = append(steps, releaseHostConvergenceStep{Kind: releaseHostStepPrivateer, Label: task.Host, Task: task})
 	}
 	steps = append(steps, planRedisConvergenceSteps(redis)...)
+	steps = append(steps, planReleaseServiceSteps(plan)...)
 	var topicClusters []string
 	clusters := allKafkaClusters(manifest)
 	for i := range clusters {
@@ -146,6 +148,7 @@ func writeReleaseHostConvergencePlan(out io.Writer, heading string, manifest *in
 		}
 	}
 	writeRedisConvergencePlan(out, steps)
+	writeReleaseServiceConvergencePlan(out, steps)
 	groups := map[string][]string{}
 	for _, step := range steps {
 		groups[step.Kind] = append(groups[step.Kind], step.Label)
@@ -182,6 +185,8 @@ type releaseHostConvergence struct {
 	// timeouts in tests.
 	redisOps    redisReleaseOps
 	redisTiming *redisGateTiming
+	// serviceOps replaces the live operations of the service stages in tests.
+	serviceOps *releaseServiceOps
 }
 
 func (c *releaseHostConvergence) verifyMesh(ctx context.Context, hosts []string) error {
@@ -343,10 +348,13 @@ func (c *releaseHostConvergence) run(ctx context.Context, steps []releaseHostCon
 	if err := c.runRedis(ctx, steps, dryRun); err != nil {
 		return err
 	}
+	if err := c.runReleaseServices(ctx, steps, dryRun); err != nil {
+		return err
+	}
 	var mirrorMakers []*orchestrator.Task
 	for i, step := range steps {
 		switch step.Kind {
-		case releaseHostStepPrivateer, releaseHostStepRedis:
+		case releaseHostStepPrivateer, releaseHostStepRedis, releaseHostStepService:
 			continue
 		case releaseHostStepMirrorMaker:
 			fmt.Fprintf(out, "\n[host %d/%d] %s on %s\n", i+1, len(steps), step.Kind, step.Label)
@@ -437,6 +445,7 @@ func (c *releaseHostConvergence) convergeTaskBefore(ctx context.Context, task *o
 	if task.Type == releaseHostStepMirrorMaker {
 		runtimeData[provisioner.KafkaMirrorMakerDeferRestartKey] = true
 	}
+	maps.Copy(runtimeData, releaseRuntimeOverrides(task))
 	if !dryRun {
 		_, err := provisionTask(ctx, task, host, c.pool, c.manifest, false, false, runtimeData, c.manifestDir, c.sharedEnv, c.clusterEnvs, c.releaseRepos, beforeChange)
 		return err

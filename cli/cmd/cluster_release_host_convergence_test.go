@@ -77,6 +77,8 @@ func TestReleaseHostConvergenceOrdersMeshTopicsThenMirrorMaker(t *testing.T) {
 		"privateer:central-eu-1",
 		"privateer:regional-eu-1",
 		"privateer:regional-us-1",
+		"service:regional-eu-1",
+		"service:regional-us-1",
 		"kafka-topics:eu-west, us-east",
 		"kafka-mirrormaker:regional-eu-1",
 		"kafka-mirrormaker:regional-us-1",
@@ -94,8 +96,8 @@ func TestReleaseHostConvergenceOrdersMeshTopicsThenMirrorMaker(t *testing.T) {
 		if step.Task == nil || step.Task.Host != step.Label {
 			t.Fatalf("step %s:%s has task %+v, want the planner task for that host", step.Kind, step.Label, step.Task)
 		}
-		if step.Task.Type == "kafka" || step.Task.Type == "kafka-controller" {
-			t.Fatalf("host convergence must not include broker or controller tasks, got %s", step.Task.Name)
+		if (step.Task.Type == "kafka" || step.Task.Type == "kafka-controller") && (step.Kind != releaseHostStepService || step.Group != "kafka") {
+			t.Fatalf("brokers and controllers converge only in the gated Kafka service stage, got %s in %s", step.Task.Name, step.Kind)
 		}
 	}
 
