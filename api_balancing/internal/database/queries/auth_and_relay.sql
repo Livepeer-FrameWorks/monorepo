@@ -25,12 +25,14 @@ SELECT s.id::text AS session_id,
        s.node_id,
        COALESCE(s.ingest_cluster_id, '')::text AS ingest_cluster_id,
        s.stream_internal_name,
-       s.processes_json
+       s.processes_json,
+       COALESCE(s.stream_id::text, '')::text AS stream_id,
+       s.projection_state,
+       (s.ended_at IS NOT NULL)::boolean AS ended,
+       COALESCE(s.ended_reason, '')::text AS ended_reason
 FROM foghorn.ingest_sessions s
 WHERE s.id::text = sqlc.arg(session_id)::text
   AND s.stream_internal_name = sqlc.arg(stream_internal_name)::text
-  AND s.ended_at IS NULL
-  AND s.projection_state = 'active'
 LIMIT 1;
 
 -- name: GetDVRArtifactTenantID :one

@@ -186,27 +186,14 @@ func TestAuthorizeSignedLivepeerLiveJobBindsGenerationAndCanonicalSpec(t *testin
 	}
 }
 
-// A buffer that outlives its publisher keeps the process config Foghorn signed
-// for the previous ingest session. After a republish that session has ended, so
-// a restarted Livepeer process presenting its token is refused, and the log
-// names the ended session rather than only stale_job.
-func TestAuthorizeSignedLivepeerLiveJobLogsEndedSessionOnRepublish(t *testing.T) {
-	sm := configureLivepeerAuthNode(t, true, true, false)
-	logs := logrustest.NewLocal(logger)
-	if err := sm.UpdateStreamFromBuffer("live+stream", "stream", "edge-1", "tenant-1", "FULL", ""); err != nil {
-		t.Fatal(err)
-	}
-	sm.SetStreamStreamID("stream", "stream-id")
-	processesJSON := `[{"process":"Livepeer","target_profiles":[{"name":"360p","bitrate":900000,"height":360,"profile":"H264ConstrainedHigh"}],"workload":"live","deadline_ms":1000,"min_speed":1,"frameworks_gateway_cluster_ids":["media-gateway"]}]`
-	digest, err := mist.LivepeerJobSpecDigest(processesJSON)
-	if err != nil {
-		t.Fatal(err)
-	}
-	const endedSession = "11111111-1111-4111-8111-111111111111"
-	token := mintLivepeerAuthToken(t, control.TranscodeJobClaims{
-		ManifestID: "live+stream", AttemptOrGeneration: endedSession, Session: endedSession, SpecDigest: digest,
-	})
+const liveAuthProcessesJSON = `[{"process":"Livepeer","target_profiles":[{"name":"360p","bitrate":900000,"height":360,"profile":"H264ConstrainedHigh"}],"workload":"live","deadline_ms":1000,"min_speed":1,"frameworks_gateway_cluster_ids":["media-gateway"]}]`
 
+var liveAuthSessionColumns = []string{"session_id", "tenant_id", "node_id", "ingest_cluster_id", "stream_internal_name", "processes_json", "stream_id", "projection_state", "ended", "ended_reason"}
+
+// expectLiveAuthSession installs a mock database answering the live-session lookup for sessionID
+// with one row in the given state, bound to the token's node, cluster and tenant.
+func expectLiveAuthSession(t *testing.T, sessionID, projectionState string, ended bool, endedReason string) sqlmock.Sqlmock {
+	t.Helper()
 	mockDB, mock, err := sqlmock.New()
 	if err != nil {
 		t.Fatal(err)
@@ -214,24 +201,104 @@ func TestAuthorizeSignedLivepeerLiveJobLogsEndedSessionOnRepublish(t *testing.T)
 	oldDB := db
 	db = mockDB
 	t.Cleanup(func() { db = oldDB; _ = mockDB.Close() })
-	mock.ExpectQuery(`FROM foghorn\.ingest_sessions s[\s\S]*s\.ended_at IS NULL`).
-		WithArgs(endedSession, "stream").
-		WillReturnRows(sqlmock.NewRows([]string{"session_id", "tenant_id", "node_id", "ingest_cluster_id", "stream_internal_name", "processes_json"}))
+	mock.ExpectQuery(`FROM foghorn\.ingest_sessions s`).
+		WithArgs(sessionID, "stream").
+		WillReturnRows(sqlmock.NewRows(liveAuthSessionColumns).AddRow(
+			sessionID, "tenant-1", "edge-1", "edge-cell", "stream", liveAuthProcessesJSON,
+			"stream-id", projectionState, ended, endedReason))
+	return mock
+}
 
-	request := livepeerAuthRequest{
-		JobToken: token, RemoteIP: "203.0.113.4", Source: livepeerSource{Width: 1280, Height: 720, FPS: 30, Codec: "h264"},
+func liveAuthRequest(t *testing.T, session string) livepeerAuthRequest {
+	t.Helper()
+	digest, err := mist.LivepeerJobSpecDigest(liveAuthProcessesJSON)
+	if err != nil {
+		t.Fatal(err)
 	}
-	got, reason := authorizeSignedLivepeerJob(context.Background(), "live+stream-Ab12Cd34", request)
-	if got != nil || reason != authRejectStaleJob {
-		t.Fatalf("ended-session live token: reason=%q context=%+v, want stale_job", reason, got)
+	return livepeerAuthRequest{
+		JobToken: mintLivepeerAuthToken(t, control.TranscodeJobClaims{
+			ManifestID: "live+stream", AttemptOrGeneration: session, Session: session, SpecDigest: digest,
+		}),
+		RemoteIP: "203.0.113.4", Source: livepeerSource{Width: 1280, Height: 720, FPS: 30, Codec: "h264"},
+	}
+}
+
+// A buffer that outlives its publisher keeps the process config Foghorn signed
+// for the previous ingest session. After a republish that session has ended, so
+// a restarted Livepeer process presenting its token is refused as session_ended,
+// and the log names the ended session and why it ended.
+func TestAuthorizeSignedLivepeerLiveJobLogsEndedSessionOnRepublish(t *testing.T) {
+	configureLivepeerAuthNode(t, true, true, false)
+	logs := logrustest.NewLocal(logger)
+	const endedSession = "11111111-1111-4111-8111-111111111111"
+	mock := expectLiveAuthSession(t, endedSession, "active", true, "closed")
+
+	got, reason := authorizeSignedLivepeerJob(context.Background(), "live+stream-Ab12Cd34", liveAuthRequest(t, endedSession))
+	if got != nil || reason != authRejectSessionEnded {
+		t.Fatalf("ended-session live token: reason=%q context=%+v, want session_ended", reason, got)
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatal(err)
 	}
 	entry := logs.LastEntry()
-	if entry == nil || entry.Data["check"] != liveCheckSessionNotActive || entry.Data["token_session"] != endedSession ||
-		entry.Data["token_node_id"] != "edge-1" {
+	if entry == nil || entry.Data["token_session"] != endedSession || entry.Data["ended_reason"] != "closed" ||
+		entry.Data["stream"] != "live+stream" {
 		t.Fatalf("rejection log does not name the ended session: %+v", entry)
+	}
+}
+
+// A node whose control stream dropped is marked unhealthy and stale at once, while Mist keeps
+// ingesting and transcoding. A Livepeer process that (re)authorises during that outage presents a
+// token for a session that is still open and projected on that node: the job stands.
+func TestAuthorizeSignedLivepeerLiveJobStandsThroughControlLoss(t *testing.T) {
+	sm := configureLivepeerAuthNode(t, true, true, false)
+	sm.MarkNodeDisconnected("edge-1")
+	if node := sm.GetNodeState("edge-1"); node == nil || node.IsHealthy || !node.IsStale {
+		t.Fatalf("control loss did not mark the node unhealthy and stale: %+v", node)
+	}
+	const openSession = "22222222-2222-4222-8222-222222222222"
+	mock := expectLiveAuthSession(t, openSession, "active", false, "")
+
+	got, reason := authorizeSignedLivepeerJob(context.Background(), "live+stream-Ab12Cd34", liveAuthRequest(t, openSession))
+	if got == nil || reason != "" {
+		t.Fatalf("open session refused during control loss: reason=%q", reason)
+	}
+	if got.StreamID != "stream-id" || got.TenantID != "tenant-1" || got.NodeID != "edge-1" {
+		t.Fatalf("authorised context = %+v", got)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// After node_lost the session has ended and the node has been evicted from state, so its segment
+// source no longer maps to a node. The refusal is the ended session, not a node mismatch.
+func TestAuthorizeSignedLivepeerLiveJobRefusesNodeLostSessionAsEnded(t *testing.T) {
+	configureLivepeerAuthNode(t, true, true, false)
+	state.ResetDefaultManagerForTests()
+	const lostSession = "33333333-3333-4333-8333-333333333333"
+	mock := expectLiveAuthSession(t, lostSession, "active", true, "node_lost")
+
+	got, reason := authorizeSignedLivepeerJob(context.Background(), "live+stream-Ab12Cd34", liveAuthRequest(t, lostSession))
+	if got != nil || reason != authRejectSessionEnded {
+		t.Fatalf("node_lost session: reason=%q context=%+v, want session_ended", reason, got)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// An open session does not stand in for the node binding: segments from an address that is not
+// the token's node are still refused.
+func TestAuthorizeSignedLivepeerLiveJobStillBindsSourceNode(t *testing.T) {
+	configureLivepeerAuthNode(t, true, true, false)
+	const openSession = "44444444-4444-4444-8444-444444444444"
+	expectLiveAuthSession(t, openSession, "active", false, "")
+	request := liveAuthRequest(t, openSession)
+	request.RemoteIP = "203.0.113.9"
+	got, reason := authorizeSignedLivepeerJob(context.Background(), "live+stream-Ab12Cd34", request)
+	if got != nil || reason != authRejectNodeMismatch {
+		t.Fatalf("foreign source address: reason=%q context=%+v, want node_mismatch", reason, got)
 	}
 }
 

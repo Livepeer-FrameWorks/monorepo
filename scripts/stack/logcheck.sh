@@ -24,7 +24,8 @@ signatures='core dumped|dumped core|SIGSEGV|SIGABRT|terminate called|^panic:|gor
 #   the Livepeer fallback scenarios kill the gateway on purpose, which surfaces
 #   only as connection-level failures (a refused or reset connection, and the
 #   process shutting down its sink); an HTTP status from the gateway, such as
-#   the staging 403, is never allowlisted;
+#   the staging 403, is not allowlisted here (see drop_ended_session_403 for the
+#   one refusal that is by design);
 #   a publisher ending its push closes the connection under Mist.
 mist_fail_allow='Could not connect to|Connection refused|Connection reset|Broken pipe|Sink thread failed|Logging unclean exit reason: set inactive'
 # Signature hits that are expected, with why: the same gateway kill ends the
@@ -36,12 +37,38 @@ signature_allow='Process `Livepeer` \(PID [0-9]+\) exited with unrecoverable err
 
 out="$(mktemp)"
 trap 'rm -f "$out"' EXIT
+
+# A Livepeer 403 is expected for exactly one cause: Foghorn refused the transcode because its
+# ingest session had ended (session_ended, e.g. node_lost while the edge was cut off; scenario 14
+# case B). The generation is over, the node is told to stop it, and Mist hands the stream to local
+# renditions. Foghorn logs each such refusal with the stream, so a 403 is allowlisted only for a
+# stream it names; a 403 for any other stream, such as the staging one refused while its session
+# was open, still fails.
+ended_session_streams="$(
+  stack_compose ps --services 2>/dev/null | grep -E '^foghorn' | while IFS= read -r svc; do
+    stack_compose logs --no-color --no-log-prefix ${since_args[@]+"${since_args[@]}"} "$svc" 2>/dev/null
+  done | grep -F 'livepeer auth: refused a transcode of an ended ingest session' |
+    grep -oE '"stream":"live\+[A-Za-z0-9_-]+"' | cut -d'"' -f4 | sort -u
+)"
+drop_ended_session_403() { # stdin: log lines; drops Livepeer 403 lines of the streams above
+  if [ -z "$ended_session_streams" ]; then
+    cat
+    return
+  fi
+  ENDED_SESSION_STREAMS="$ended_session_streams" awk '
+    BEGIN { n = split(ENVIRON["ENDED_SESSION_STREAMS"], s, "\n") }
+    /Livepeer upload fatal HTTP status 403 Forbidden/ {
+      for (i = 1; i <= n; i++) if (s[i] != "" && index($0, s[i] "→") + index($0, s[i] " (") > 0) next
+    }
+    { print }'
+}
+
 found=0
 while IFS= read -r svc; do
   [ -n "$svc" ] || continue
   stack_compose logs --no-color --no-log-prefix ${since_args[@]+"${since_args[@]}"} "$svc" 2>/dev/null >"$out" || continue
-  hits="$(grep -E "$signatures" "$out" | grep -vE "$signature_allow" || true)"
-  mist_fails="$(grep -E 'FAIL\|' "$out" | grep -vE "$mist_fail_allow" || true)"
+  hits="$(grep -E "$signatures" "$out" | grep -vE "$signature_allow" | drop_ended_session_403 || true)"
+  mist_fails="$(grep -E 'FAIL\|' "$out" | grep -vE "$mist_fail_allow" | drop_ended_session_403 || true)"
   if [ -n "$hits" ] || [ -n "$mist_fails" ]; then
     found=1
     printf '\n== %s\n' "$svc"

@@ -100,10 +100,15 @@ func HandleLivepeerAuth(c *gin.Context) {
 
 	authCtx, reason := authorizeSignedLivepeerJob(c.Request.Context(), manifestID, req)
 	if authCtx == nil {
-		logger.WithFields(logging.Fields{
+		entry := logger.WithFields(logging.Fields{
 			"manifest_id": manifestID,
 			"reason":      reason,
-		}).Warn("livepeer auth: unknown stream rejected")
+		})
+		if reason == authRejectSessionEnded {
+			entry.Info("livepeer auth: stream rejected")
+		} else {
+			entry.Warn("livepeer auth: unknown stream rejected")
+		}
 		incLivepeerAuthRejected(reason)
 		c.JSON(http.StatusForbidden, gin.H{"error": "unknown stream"})
 		return
@@ -134,6 +139,18 @@ func authorizeSignedLivepeerJob(ctx context.Context, manifestID string, req live
 	if reason != "" {
 		return nil, reason
 	}
+	// A live job is decided by its ingest session before the node binding. The session row is the
+	// durable authority: while it is open the job stands through a control-plane outage, and once it
+	// has ended the refusal must name that end rather than whatever node state the end left behind
+	// (after node_lost the node is also evicted, which would otherwise read as a node mismatch).
+	processing := isProcessingManifestID(claims.ManifestID)
+	var liveCtx *LivepeerAuthContext
+	if !processing {
+		liveCtx, reason = authorizeLiveTranscode(ctx, claims)
+		if liveCtx == nil {
+			return nil, reason
+		}
+	}
 	remoteIP := strings.TrimSpace(req.RemoteIP)
 	nodeID := state.DefaultManager().NodeIDByClientIP(remoteIP)
 	if nodeID == "" || nodeID != claims.NodeID {
@@ -145,13 +162,17 @@ func authorizeSignedLivepeerJob(ctx context.Context, manifestID string, req live
 		}).Warn("livepeer auth: segment source is not the node the job token names")
 		return nil, authRejectNodeMismatch
 	}
+	// Health and heartbeat freshness are not checked: a node whose control stream dropped is marked
+	// unhealthy and stale at once, yet its media and its already-authorised jobs keep running. The
+	// job's durable record (open ingest session, dispatched processing job) bound to this node is the
+	// authority; the node state only proves the segments come from that node in the token's cluster.
 	node := state.DefaultManager().GetNodeState(nodeID)
-	if node == nil || !node.IsHealthy || node.IsStale || node.ClusterID != claims.ClusterID || !node.CapEdge {
-		return nil, authRejectNodeUnhealthy
+	if node == nil || node.ClusterID != claims.ClusterID || !node.CapEdge {
+		return nil, authRejectNodeBinding
 	}
 
-	var authCtx *LivepeerAuthContext
-	if isProcessingManifestID(claims.ManifestID) {
+	authCtx := liveCtx
+	if processing {
 		if !node.CapProcessing {
 			return nil, authRejectNodeCapability
 		}
@@ -159,14 +180,11 @@ func authorizeSignedLivepeerJob(ctx context.Context, manifestID string, req live
 			return nil, authRejectNodeCapability
 		}
 		authCtx = authorizeProcessingTranscode(ctx, claims)
-	} else {
-		if !node.CapIngest {
-			return nil, authRejectNodeCapability
+		if authCtx == nil {
+			return nil, authRejectStaleJob
 		}
-		authCtx = authorizeLiveTranscode(ctx, claims)
-	}
-	if authCtx == nil {
-		return nil, authRejectStaleJob
+	} else if !node.CapIngest {
+		return nil, authRejectNodeCapability
 	}
 
 	if authCtx.ExpectedSource != nil && !livepeerSourceMatches(req.Source, *authCtx.ExpectedSource) {
@@ -308,7 +326,10 @@ func authorizeChapterTranscode(ctx context.Context, artifactHash string, claims 
 	return &LivepeerAuthContext{TenantID: row.TenantID, StreamID: streamID, ProcessesJSON: row.ProcessesJson}
 }
 
-func authorizeLiveTranscode(ctx context.Context, claims control.TranscodeJobClaims) *LivepeerAuthContext {
+// authorizeLiveTranscode binds a live job token to the stream's ingest session. It returns the
+// authorised context, or nil and the rejection reason: session_ended when the token's session has
+// ended (an expected outcome, logged at info), stale_job for every other binding failure.
+func authorizeLiveTranscode(ctx context.Context, claims control.TranscodeJobClaims) (*LivepeerAuthContext, string) {
 	if claims.Session == "" || claims.Session != claims.AttemptOrGeneration {
 		return rejectLiveTranscode(claims, liveCheckGeneration, nil)
 	}
@@ -327,7 +348,7 @@ func authorizeLiveTranscode(ctx context.Context, claims control.TranscodeJobClai
 				"stream_spec_digest": stream.LivepeerSpecDigest,
 			})
 		}
-		return &LivepeerAuthContext{TenantID: stream.TenantID, StreamID: stream.StreamID, ProcessesJSON: stream.LivepeerProcessesJSON}
+		return &LivepeerAuthContext{TenantID: stream.TenantID, StreamID: stream.StreamID, ProcessesJSON: stream.LivepeerProcessesJSON}, ""
 	}
 	if db == nil {
 		return rejectLiveTranscode(claims, liveCheckSessionLookup, logging.Fields{"error": "no database"})
@@ -336,10 +357,7 @@ func authorizeLiveTranscode(ctx context.Context, claims control.TranscodeJobClai
 		SessionID: claims.Session, StreamInternalName: internalName,
 	})
 	if errors.Is(err, sql.ErrNoRows) {
-		// The token's ingest session has ended or is not active for this stream,
-		// e.g. a buffer that outlived its publisher still holds the previous
-		// session's signed process config.
-		return rejectLiveTranscode(claims, liveCheckSessionNotActive, nil)
+		return rejectLiveTranscode(claims, liveCheckSessionNotActive, logging.Fields{"session_status": "absent"})
 	}
 	if err != nil {
 		return rejectLiveTranscode(claims, liveCheckSessionLookup, logging.Fields{"error": err.Error()})
@@ -351,25 +369,45 @@ func authorizeLiveTranscode(ctx context.Context, claims control.TranscodeJobClai
 			"session_cluster_id": row.IngestClusterID,
 		})
 	}
+	if row.Ended {
+		// The generation this job was signed for is over (its publisher closed, the node was lost,
+		// or a newer publisher took the stream), so its transcode must stop. Mist replaces the
+		// refused Livepeer process with local renditions until the node stops the stream.
+		if logger != nil {
+			logger.WithFields(logging.Fields{
+				"stream":        claims.ManifestID,
+				"token_session": claims.Session,
+				"token_node_id": claims.NodeID,
+				"ended_reason":  row.EndedReason,
+			}).Info("livepeer auth: refused a transcode of an ended ingest session")
+		}
+		return nil, authRejectSessionEnded
+	}
+	if row.ProjectionState != "active" {
+		return rejectLiveTranscode(claims, liveCheckSessionNotActive, logging.Fields{"session_status": row.ProjectionState})
+	}
 	digest, err := mist.LivepeerJobSpecDigest(row.ProcessesJson)
 	if err != nil || digest != claims.SpecDigest {
 		return rejectLiveTranscode(claims, liveCheckSpecDigest, logging.Fields{"session_spec_digest": digest})
 	}
-	streamID := ""
-	if stream := state.DefaultManager().GetStreamState(internalName); stream != nil {
-		streamID = strings.TrimSpace(stream.StreamID)
+	streamID := strings.TrimSpace(row.StreamID)
+	if streamID == "" {
+		// Sessions minted before the stream ID was recorded on the row.
+		if stream := state.DefaultManager().GetStreamState(internalName); stream != nil {
+			streamID = strings.TrimSpace(stream.StreamID)
+		}
 	}
 	if streamID == "" {
 		return rejectLiveTranscode(claims, liveCheckStreamState, logging.Fields{"stream_status": "no stream id"})
 	}
-	return &LivepeerAuthContext{TenantID: row.TenantID, StreamID: streamID, ProcessesJSON: row.ProcessesJson}
+	return &LivepeerAuthContext{TenantID: row.TenantID, StreamID: streamID, ProcessesJSON: row.ProcessesJson}, ""
 }
 
 // rejectLiveTranscode logs which live binding a stale_job rejection failed, with
-// the token's identities and the observed values, and returns nil.
-func rejectLiveTranscode(claims control.TranscodeJobClaims, check string, observed logging.Fields) *LivepeerAuthContext {
+// the token's identities and the observed values, and returns nil with stale_job.
+func rejectLiveTranscode(claims control.TranscodeJobClaims, check string, observed logging.Fields) (*LivepeerAuthContext, string) {
 	if logger == nil {
-		return nil
+		return nil, authRejectStaleJob
 	}
 	fields := logging.Fields{
 		"check":             check,
@@ -385,7 +423,7 @@ func rejectLiveTranscode(claims control.TranscodeJobClaims, check string, observ
 		fields[k] = v
 	}
 	logger.WithFields(fields).Warn("livepeer auth: live job token is not bound to the stream's current session")
-	return nil
+	return nil, authRejectStaleJob
 }
 
 func livepeerSourceMatches(observed, expected livepeerSource) bool {
@@ -471,11 +509,16 @@ const (
 	authRejectInvalidRequest = "invalid_request"
 	// authRejectInvalidToken prefixes invalid_token_<check>, where check is a
 	// control.TranscodeTokenCheck* value or one of the binding checks below.
-	authRejectInvalidToken   = "invalid_token"
-	authRejectNodeMismatch   = "node_mismatch"
-	authRejectNodeUnhealthy  = "node_unhealthy"
+	authRejectInvalidToken = "invalid_token"
+	authRejectNodeMismatch = "node_mismatch"
+	// authRejectNodeBinding: the source node is unknown here, in another cluster than the token's,
+	// or not an edge.
+	authRejectNodeBinding    = "node_binding"
 	authRejectNodeCapability = "node_capability"
 	authRejectStaleJob       = "stale_job"
+	// authRejectSessionEnded: the live job's ingest session has ended; the expected refusal once a
+	// generation is over.
+	authRejectSessionEnded   = "session_ended"
 	authRejectInvalidSpec    = "invalid_spec"
 	authRejectSpecMismatch   = "spec_mismatch"
 	authRejectSourceMismatch = "source_mismatch"

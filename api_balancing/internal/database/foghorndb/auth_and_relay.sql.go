@@ -58,12 +58,14 @@ SELECT s.id::text AS session_id,
        s.node_id,
        COALESCE(s.ingest_cluster_id, '')::text AS ingest_cluster_id,
        s.stream_internal_name,
-       s.processes_json
+       s.processes_json,
+       COALESCE(s.stream_id::text, '')::text AS stream_id,
+       s.projection_state,
+       (s.ended_at IS NOT NULL)::boolean AS ended,
+       COALESCE(s.ended_reason, '')::text AS ended_reason
 FROM foghorn.ingest_sessions s
 WHERE s.id::text = $1::text
   AND s.stream_internal_name = $2::text
-  AND s.ended_at IS NULL
-  AND s.projection_state = 'active'
 LIMIT 1
 `
 
@@ -79,6 +81,10 @@ type GetLiveTranscodeAuthContextRow struct {
 	IngestClusterID    string `db:"ingest_cluster_id" json:"ingest_cluster_id"`
 	StreamInternalName string `db:"stream_internal_name" json:"stream_internal_name"`
 	ProcessesJson      string `db:"processes_json" json:"processes_json"`
+	StreamID           string `db:"stream_id" json:"stream_id"`
+	ProjectionState    string `db:"projection_state" json:"projection_state"`
+	Ended              bool   `db:"ended" json:"ended"`
+	EndedReason        string `db:"ended_reason" json:"ended_reason"`
 }
 
 func (q *Queries) GetLiveTranscodeAuthContext(ctx context.Context, arg GetLiveTranscodeAuthContextParams) (GetLiveTranscodeAuthContextRow, error) {
@@ -91,6 +97,10 @@ func (q *Queries) GetLiveTranscodeAuthContext(ctx context.Context, arg GetLiveTr
 		&i.IngestClusterID,
 		&i.StreamInternalName,
 		&i.ProcessesJson,
+		&i.StreamID,
+		&i.ProjectionState,
+		&i.Ended,
+		&i.EndedReason,
 	)
 	return i, err
 }
