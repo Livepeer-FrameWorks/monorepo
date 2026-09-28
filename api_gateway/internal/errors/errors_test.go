@@ -11,7 +11,9 @@ import (
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/auth"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/grpcutil"
 
+	"github.com/99designs/gqlgen/graphql/errcode"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
+	"github.com/vektah/gqlparser/v2/gqlerror"
 	"google.golang.org/genproto/googleapis/rpc/errdetails"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -372,5 +374,32 @@ func TestErrorPresenterMapsPlaybackStreamStateAfterPropagation(t *testing.T) {
 	generic := ErrorPresenter(logging.NewLogger())(context.Background(), across(status.Error(codes.Unavailable, "viewer placement unavailable: capacity")))
 	if generic.Extensions["code"] != "UNAVAILABLE" {
 		t.Fatalf("capacity refusal presented as %#v", generic.Extensions)
+	}
+}
+
+// Client-caused errors are logged at info so error-level Bridge logs stay a
+// signal of platform faults.
+func TestClientFault(t *testing.T) {
+	cases := []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{"validation", &gqlerror.Error{Message: "Cannot query field", Extensions: map[string]any{"code": errcode.ValidationFailed}}, true},
+		{"parse", &gqlerror.Error{Message: "Unexpected <EOF>", Extensions: map[string]any{"code": errcode.ParseFailed}}, true},
+		{"unauthenticated", fmt.Errorf("resolve: %w", auth.ErrUnauthenticated), true},
+		{"forbidden", middleware.ErrForbidden, true},
+		{"not found", status.Error(codes.NotFound, "stream"), true},
+		{"precondition", fmt.Errorf("commodore: %w", status.Error(codes.FailedPrecondition, "create a key first")), true},
+		{"unavailable", status.Error(codes.Unavailable, "periscope down"), false},
+		{"internal", status.Error(codes.Internal, "boom"), false},
+		{"untyped", errors.New("nil pointer"), false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := clientFault(tc.err); got != tc.want {
+				t.Fatalf("clientFault = %v, want %v", got, tc.want)
+			}
+		})
 	}
 }

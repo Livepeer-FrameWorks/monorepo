@@ -12,6 +12,7 @@ import (
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 
 	"github.com/99designs/gqlgen/graphql"
+	"github.com/99designs/gqlgen/graphql/errcode"
 	"github.com/vektah/gqlparser/v2/gqlerror"
 	"google.golang.org/genproto/googleapis/rpc/errdetails"
 	"google.golang.org/grpc/codes"
@@ -33,10 +34,37 @@ var grpcCodeMessages = map[codes.Code]string{
 	codes.Internal:           "internal error",
 }
 
+// clientFault reports errors caused by the request rather than by the
+// platform: an invalid document, missing auth, or a gRPC status that describes
+// the caller's input or state.
+func clientFault(err error) bool {
+	var gqlErr *gqlerror.Error
+	if errors.As(err, &gqlErr) {
+		if code, ok := gqlErr.Extensions["code"].(string); ok && (code == errcode.ValidationFailed || code == errcode.ParseFailed) {
+			return true
+		}
+	}
+	if errors.Is(err, auth.ErrUnauthenticated) || errors.Is(err, middleware.ErrForbidden) {
+		return true
+	}
+	if st, ok := status.FromError(err); ok {
+		switch st.Code() {
+		case codes.InvalidArgument, codes.OutOfRange, codes.NotFound, codes.AlreadyExists, codes.Aborted,
+			codes.PermissionDenied, codes.Unauthenticated, codes.FailedPrecondition, codes.ResourceExhausted:
+			return true
+		}
+	}
+	return false
+}
+
 func ErrorPresenter(logger logging.Logger) graphql.ErrorPresenterFunc {
 	return func(ctx context.Context, err error) *gqlerror.Error {
 		if err != nil {
-			logger.WithError(err).Error("GraphQL request failed")
+			if clientFault(err) {
+				logger.WithError(err).Info("GraphQL request rejected")
+			} else {
+				logger.WithError(err).Error("GraphQL request failed")
+			}
 		}
 		presented := graphql.DefaultErrorPresenter(ctx, err)
 		if message, extensions, ok := publicGRPCError(err); ok {
