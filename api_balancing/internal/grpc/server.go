@@ -2729,16 +2729,8 @@ func (s *FoghornGRPCServer) ResolveViewerEndpoint(ctx context.Context, req *shar
 		return nil, err
 	}
 
-	// Create virtual viewer for live streams (consistent with HTTP handlers)
-	if resolvedType == "live" && response.Primary != nil && response.Primary.NodeId != "" {
-		internalName := resolution.RoutingInternalName()
-		if internalName == "" {
-			internalName = req.ContentId
-		}
-		viewerID := state.DefaultManager().CreateVirtualViewer(response.Primary.NodeId, internalName, clientIP)
-		control.AppendViewerCorrelationID(response, viewerID)
-	}
-
+	// A live viewer's reservation was made by the destination cell's preparation,
+	// and the endpoint URLs already carry its ID.
 	return response, nil
 }
 

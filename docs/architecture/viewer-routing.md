@@ -419,11 +419,28 @@ Foghorn replicas.
 ### Decision: Always Origin-Pull
 
 A viewer receives the destination selected by global serving policy, which may
-belong to a different cluster from the Foghorn resolving the request. The
-resolving cluster is not a geographic preference. For a live source on another
-edge, placement arranges the DTSC origin pull into the selected serving edge;
-the browser connects to that edge, not the ingest node. Stored media uses the
-selected destination's artifact relay instead of an arranged live-origin pull.
+belong to a different cluster from the Foghorn resolving the request. With the
+viewer's coordinates, distance decides locality. Without them (VPN, private
+address, GeoIP miss), the cell that received the request stands in for the
+viewer's location: geo-DNS already sent the viewer to a nearby cell, and the
+viewer leaves it only when none of its nodes is inside the load bound. Within
+that locality a node holding the stream serves before one that must pull it
+(see [media placement ordering](media-placement-policy.md#policy-semantics)).
+For a live source on another edge, placement arranges the DTSC origin pull into
+the selected serving edge; the browser connects to that edge, not the ingest
+node. Stored media uses the selected destination's artifact relay instead of an
+arranged live-origin pull.
+
+### Burst reservations
+
+The destination cell reserves every live viewer it prepares: the prepared node
+carries the viewer's estimated bandwidth as a pending viewer, keyed by the
+preparation's attempt ID. The playback URLs carry that ID as `fwcid`, and the
+viewer's `PLAY_REWRITE` in the node's cell activates the reservation; an unused
+one lapses with the pending-viewer timeout. Because the reservation lives where
+the node's observations are produced, a cross-cell coordinator sees it on its
+next observation, and power of two choices keeps replicas working from the same
+lagged telemetry from herding onto one node.
 
 See `docs/architecture/stream-replication-topology.md` for the full origin-pull lifecycle and loop prevention.
 

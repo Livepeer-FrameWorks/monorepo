@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"frameworks/api_balancing/internal/control"
+	"frameworks/api_balancing/internal/state"
 	federationpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/foghorn_federation"
 	mediaauthoritypb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/media_authority"
 	placementpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/media_placement"
@@ -150,6 +151,30 @@ func TestConfiguredRelayCanMoveOriginWithoutAConfigurationChange(t *testing.T) {
 	replacement, found, err := runtime.Registry.CurrentInboundPull(t.Context(), request.Query.InternalName, request.NodeId)
 	if err != nil || !found || replacement.AttemptID == first.AttemptID || replacement.SourceNodeID != "eu-replacement" || len(fed.calls) != 2 {
 		t.Fatalf("configured origin was not atomically replaced: %+v, %v, notifications=%d", replacement, err, len(fed.calls))
+	}
+}
+
+// The destination reserves the live viewer it prepared on the prepared node,
+// under the attempt ID the viewer's playback URL carries, and a retried
+// preparation of the same attempt does not reserve again.
+func TestLivePreparationReservesTheViewerOnTheDestinationNode(t *testing.T) {
+	sm := state.ResetDefaultManagerForTests()
+	t.Cleanup(func() { state.ResetDefaultManagerForTests() })
+	fixture, reader, _ := configuredFixture(t, "pull", "rtsp://upstream.example/live", []string{"us"})
+	fixture.pair.Object.Authority.PlaybackId = "public-playback"
+	fixture.query.SourceGeneration = generationFor(t, reader, configuredAuthority(t, fixture))
+	runtime, request := mediaServeFixture(t, fixture)
+	for attempt := 0; attempt < 2; attempt++ {
+		if _, err := runtime.Reconcile(t.Context(), request, PlacementReceipt{}, nil); err != nil {
+			t.Fatalf("live preparation: %v", err)
+		}
+	}
+	node := sm.GetNodeState(request.NodeId)
+	if node == nil || node.PendingRedirects != 1 || node.AddBandwidth == 0 {
+		t.Fatalf("prepared node carries no single pending viewer: %+v", node)
+	}
+	if _, started := sm.StartVirtualViewerByID(request.AttemptId, request.NodeId, request.Query.InternalName, ""); !started {
+		t.Fatal("the viewer presenting the attempt ID did not activate the reservation")
 	}
 }
 

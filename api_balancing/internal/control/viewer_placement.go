@@ -199,7 +199,13 @@ func resolvePreparedViewerEndpoint(ctx context.Context, preparer ViewerPlacement
 			Outputs: outputs}
 		metadata := &sharedpb.PlaybackMetadata{ContentId: request.PlaybackID, ContentType: "live", TenantId: request.TenantID, StreamId: &request.StreamID,
 			Status: "live", IsLive: true, ProtocolHints: protocolHints, ThumbnailAssets: buildThumbnailAssets(resolveThumbnailChandlerBase(activeIngestClusterID), request.StreamID)}
-		return &sharedpb.ViewerEndpointResponse{Primary: endpoint, Metadata: metadata}, nil
+		response := &sharedpb.ViewerEndpointResponse{Primary: endpoint, Metadata: metadata}
+		if request.ArtifactID == "" {
+			// The destination reserved this live viewer under the attempt ID; the
+			// viewer's connection presents it to activate that reservation.
+			AppendViewerCorrelationID(response, prepared.AttemptID)
+		}
+		return response, nil
 	}
 	return nil, balancer.ErrPlacementUnavailable
 }

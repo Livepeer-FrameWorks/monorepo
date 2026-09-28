@@ -1,8 +1,10 @@
 package handlers
 
 import (
-	sharedpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/shared"
 	"testing"
+
+	"frameworks/api_balancing/internal/control"
+	sharedpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/shared"
 )
 
 func TestAppendManifestPath(t *testing.T) {
@@ -164,11 +166,12 @@ func TestFindProtocolURL(t *testing.T) {
 	}
 }
 
-// The redirect handler appends the manifest path BEFORE the correlation ID, so
-// the manifest segment must land on the path and the fwcid stay in the query.
-func TestManifestThenCorrelationIDOrdering(t *testing.T) {
-	url := appendManifestPath("https://edge/view/cmaf/s/", "index.mpd")
-	url = appendCorrelationID(url, "viewer-123")
+// A live endpoint already carries its fwcid when the redirect handler appends
+// the manifest path, so the manifest segment must land on the path and the
+// fwcid stay in the query.
+func TestManifestPathKeepsCorrelationID(t *testing.T) {
+	url := control.AppendCorrelationID("https://edge/view/cmaf/s/", "viewer-123")
+	url = appendManifestPath(url, "index.mpd")
 	want := "https://edge/view/cmaf/s/index.mpd?fwcid=viewer-123"
 	if url != want {
 		t.Fatalf("ordering = %q, want %q", url, want)

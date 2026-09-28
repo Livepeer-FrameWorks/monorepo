@@ -40,6 +40,41 @@ func configureTestNode(sm *StreamStateManager, nodeID string) {
 	sm.TouchNode(nodeID, true)
 }
 
+// The destination cell reserves a prepared viewer under the preparation's
+// attempt ID: the node's projected load rises at once, a retried preparation
+// reserves once, and the viewer's connection presenting that ID activates it.
+func TestReservePendingViewerByAttemptID(t *testing.T) {
+	sm := setupStateManager(t)
+	nodeID := "node-1"
+	configureTestNode(sm, nodeID)
+	sm.mu.Lock()
+	sm.nodes[nodeID].EstBandwidthPerUser = 256 * 1024
+	sm.mu.Unlock()
+
+	if !sm.ReservePendingViewer("attempt-1", nodeID, "stream") {
+		t.Fatal("first preparation did not reserve")
+	}
+	if sm.ReservePendingViewer("attempt-1", nodeID, "stream") {
+		t.Fatal("a retried preparation reserved twice")
+	}
+	sm.mu.Lock()
+	pending, reserved := sm.nodes[nodeID].PendingRedirects, sm.nodes[nodeID].AddBandwidth
+	sm.mu.Unlock()
+	if pending != 1 || reserved == 0 {
+		t.Fatalf("reservation not applied: pending=%d reserved=%d", pending, reserved)
+	}
+
+	viewerID, started := sm.StartVirtualViewerByID("attempt-1", nodeID, "stream", "203.0.113.10")
+	if viewerID != "attempt-1" || !started {
+		t.Fatalf("connection did not activate the reservation: id=%q started=%v", viewerID, started)
+	}
+	sm.mu.Lock()
+	defer sm.mu.Unlock()
+	if sm.nodes[nodeID].PendingRedirects != 0 {
+		t.Fatalf("activated reservation still pending: %d", sm.nodes[nodeID].PendingRedirects)
+	}
+}
+
 func TestCreateVirtualViewer_SaturatesAddBandwidth(t *testing.T) {
 	sm := setupStateManager(t)
 	nodeID := "node-1"

@@ -4475,7 +4475,29 @@ func (sm *StreamStateManager) EnsurePendingVirtualViewer(nodeID, streamName, cli
 	return viewerID, true
 }
 
+// ReservePendingViewer records a live viewer this cell prepared for one of its
+// nodes, under the preparation's attempt ID. The viewer's playback URL carries
+// that ID, so its connection activates this reservation; until then the node
+// carries the viewer's estimated bandwidth. A repeated ID is a no-op, so a
+// retried preparation reserves once.
+func (sm *StreamStateManager) ReservePendingViewer(viewerID, nodeID, streamName string) bool {
+	if viewerID == "" || nodeID == "" || streamName == "" {
+		return false
+	}
+	sm.mu.Lock()
+	defer sm.mu.Unlock()
+	if _, exists := sm.virtualViewers[viewerID]; exists {
+		return false
+	}
+	sm.createVirtualViewerWithIDLocked(viewerID, nodeID, streamName, "")
+	return true
+}
+
 func (sm *StreamStateManager) createVirtualViewerLocked(nodeID, streamName, clientIP string) string {
+	return sm.createVirtualViewerWithIDLocked(uuid.New().String(), nodeID, streamName, clientIP)
+}
+
+func (sm *StreamStateManager) createVirtualViewerWithIDLocked(viewerID, nodeID, streamName, clientIP string) string {
 	// Ensure node exists
 	node := sm.nodes[nodeID]
 	if node == nil {
@@ -4487,7 +4509,6 @@ func (sm *StreamStateManager) createVirtualViewerLocked(nodeID, streamName, clie
 	estBW := sm.calculateEstBandwidthPerUserLocked(node)
 
 	// Create the virtual viewer
-	viewerID := uuid.New().String()
 	viewer := &VirtualViewer{
 		ID:           viewerID,
 		NodeID:       nodeID,

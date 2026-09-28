@@ -2567,21 +2567,11 @@ func HandleGenericViewerPlayback(c *gin.Context) {
 		return
 	}
 
-	// Create virtual viewer for live streams to track this redirect
-	// This adds a bandwidth penalty immediately, before USER_NEW confirms the connection
-	viewerID := ""
-	if contentType == "live" && response.Primary != nil && response.Primary.NodeId != "" {
-		viewerInternalName := resolution.RoutingInternalName()
-		if viewerInternalName == "" {
-			viewerInternalName = contentID
-		}
-		viewerID = state.DefaultManager().CreateVirtualViewer(response.Primary.NodeId, viewerInternalName, viewerIP)
-	}
+	// A live viewer's bandwidth is reserved by the destination cell when it
+	// prepares the node, and the endpoint URLs already carry that reservation's ID.
 
 	// If no protocol or "any", return full JSON response
 	if protocol == "" || protocol == "any" {
-		control.AppendViewerCorrelationID(response, viewerID)
-
 		// Record metrics
 		if metrics != nil {
 			metrics.RoutingDecisions.WithLabelValues("generic_viewer_"+contentType, response.Primary.NodeId).Inc()
@@ -2625,9 +2615,6 @@ func HandleGenericViewerPlayback(c *gin.Context) {
 
 	// Append manifest path if specified
 	redirectURL = appendManifestPath(redirectURL, manifestPath)
-	if viewerID != "" {
-		redirectURL = appendCorrelationID(redirectURL, viewerID)
-	}
 
 	// Record metrics
 	if metrics != nil {
@@ -2643,10 +2630,6 @@ func HandleGenericViewerPlayback(c *gin.Context) {
 
 	// Return 307 Temporary Redirect
 	c.Redirect(http.StatusTemporaryRedirect, redirectURL)
-}
-
-func appendCorrelationID(redirectURL, viewerID string) string {
-	return control.AppendCorrelationID(redirectURL, viewerID)
 }
 
 // appendManifestPath joins a requested manifest path (e.g. "index.m3u8") onto a

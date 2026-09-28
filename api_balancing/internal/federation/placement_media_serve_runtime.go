@@ -144,8 +144,13 @@ func (runtime *MediaServePreparationRuntime) Reconcile(ctx context.Context, req 
 	if err != nil {
 		return nil, err
 	}
+	live := authority.ObjectKind == mediaauthoritypb.MediaObjectKind_MEDIA_OBJECT_KIND_LIVE_STREAM
 	if push {
-		return runtime.Push.Reconcile(ctx, req, receipt, bind)
+		prepared, pushErr := runtime.Push.Reconcile(ctx, req, receipt, bind)
+		if pushErr == nil {
+			reserveLiveViewer(req)
+		}
+		return prepared, pushErr
 	}
 	observed, err := runtime.observe(ctx, req, authority, pair)
 	if err != nil {
@@ -193,6 +198,9 @@ func (runtime *MediaServePreparationRuntime) Reconcile(ctx context.Context, req 
 	if err != nil {
 		return nil, status.Error(codes.FailedPrecondition, err.Error())
 	}
+	if live {
+		reserveLiveViewer(req)
+	}
 	q := req.Query
 	return &placementpb.Preparation{
 		Outcome:  placementpb.PreparationOutcome_PREPARATION_OUTCOME_ACCEPTED,
@@ -201,6 +209,13 @@ func (runtime *MediaServePreparationRuntime) Reconcile(ctx context.Context, req 
 		PolicyRevision: q.PolicyRevision, ParentRevision: q.ParentRevision, PolicyDigest: q.PolicyDigest,
 		AttemptId: req.AttemptId, Endpoint: observed.endpoint, PublicBaseUrl: observed.node.Host, OutputsJson: outputsJSON, ExpiresAt: timestamppb.New(observed.expiresAt),
 	}, nil
+}
+
+// reserveLiveViewer reserves the prepared node's bandwidth for the viewer in
+// this cell, which owns the node's load observations and receives its
+// connection. The attempt ID is the viewer's playback correlation ID.
+func reserveLiveViewer(req *placementpb.PreparePlacementRequest) {
+	state.DefaultManager().ReservePendingViewer(req.GetAttemptId(), req.GetNodeId(), req.GetQuery().GetInternalName())
 }
 
 // classify reads the signed pair once and reports whether the push runtime owns
