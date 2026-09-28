@@ -413,7 +413,7 @@ func runProvision(cmd *cobra.Command, rc *resolvedCluster, only, version string,
 
 	if phaseSyncsEdgeReleaseTarget(phase) && !targetedProvision {
 		ux.Heading(out, "Syncing edge release target")
-		if err := syncClusterEdgeReleaseTargetFromGitOps(cmd, rc, manifest.ResolvedChannel(), sharedEnv); err != nil {
+		if err := syncClusterEdgeReleaseTargetFollowing(cmd, rc, manifest.ResolvedChannel(), sharedEnv); err != nil {
 			return fmt.Errorf("edge release target sync: %w", err)
 		}
 	}

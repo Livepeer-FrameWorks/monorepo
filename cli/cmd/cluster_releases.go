@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -369,7 +370,23 @@ func syncClusterEdgeReleaseTargetFromGitOps(cmd *cobra.Command, rc *resolvedClus
 		selector = rc.Manifest.ResolvedChannel()
 	}
 	channel, resolved := gitops.ResolveVersion(selector)
-	return syncEdgeReleaseTargetResolved(cmd, rc, channel, resolved, selector, sharedEnv)
+	return syncEdgeReleaseTargetResolved(cmd, rc, channel, resolved, selector, sharedEnv, false)
+}
+
+// syncClusterEdgeReleaseTargetFollowing is the sync provisioning runs as a side
+// effect. A channel selector there only names the track; an exact version that
+// `cluster release apply` pinned on that track stays pinned, so provisioning a
+// node never lets the edge fleet move past the deployed control plane.
+func syncClusterEdgeReleaseTargetFollowing(cmd *cobra.Command, rc *resolvedCluster, selector string, sharedEnv map[string]string) error {
+	if rc == nil || rc.Manifest == nil {
+		return nil
+	}
+	selector = strings.TrimSpace(selector)
+	if selector == "" {
+		selector = rc.Manifest.ResolvedChannel()
+	}
+	channel, resolved := gitops.ResolveVersion(selector)
+	return syncEdgeReleaseTargetResolved(cmd, rc, channel, resolved, selector, sharedEnv, true)
 }
 
 // syncClusterEdgeReleaseTargetPinned pins the edge release target to an EXACT (channel, concreteVersion). Used by
@@ -381,10 +398,10 @@ func syncClusterEdgeReleaseTargetPinned(cmd *cobra.Command, rc *resolvedCluster,
 	}
 	// Passing the concrete version as the "selector" makes releaseTargetVersionForSelector return the concrete
 	// PlatformVersion (a pinned target) rather than "" (track-latest).
-	return syncEdgeReleaseTargetResolved(cmd, rc, channel, concreteVersion, concreteVersion, sharedEnv)
+	return syncEdgeReleaseTargetResolved(cmd, rc, channel, concreteVersion, concreteVersion, sharedEnv, false)
 }
 
-func syncEdgeReleaseTargetResolved(cmd *cobra.Command, rc *resolvedCluster, channel, fetchVersion, targetSelector string, sharedEnv map[string]string) error {
+func syncEdgeReleaseTargetResolved(cmd *cobra.Command, rc *resolvedCluster, channel, fetchVersion, targetSelector string, sharedEnv map[string]string, keepPin bool) error {
 	operationCtx, operationCancel := context.WithTimeout(cmd.Context(), edgeReleaseSyncTimeout)
 	defer operationCancel()
 	originalContext := cmd.Context()
@@ -415,10 +432,16 @@ func syncEdgeReleaseTargetResolved(cmd *cobra.Command, rc *resolvedCluster, chan
 	}
 
 	clusterIDs := rc.Manifest.AllClusterIDs()
+	versionsSet := map[string]struct{}{}
 	for _, clusterID := range clusterIDs {
-		rolloutPlan, paused, err := existingReleaseTargetControlsWithRetry(operationCtx, qm, ctxCfg, clusterID)
+		existing, err := existingReleaseTargetWithRetry(operationCtx, qm, ctxCfg, clusterID)
 		if err != nil {
 			return err
+		}
+		rolloutPlan, paused := releaseTargetControls(existing)
+		clusterVersion := targetVersion
+		if keepPin {
+			clusterVersion = retainedPinnedVersion(existing, catalogChannel, targetVersion)
 		}
 		err = retryEdgeReleaseSyncRPC(operationCtx, func() error {
 			cctx, cancel := clusterNodesRPCContext(operationCtx, ctxCfg, edgeReleaseSyncRPCTimeout)
@@ -426,7 +449,7 @@ func syncEdgeReleaseTargetResolved(cmd *cobra.Command, rc *resolvedCluster, chan
 			_, rpcErr := qm.SetClusterReleaseTarget(cctx, &quartermasterpb.SetClusterReleaseTargetRequest{Target: &quartermasterpb.ClusterReleaseTarget{
 				ClusterId:       clusterID,
 				Channel:         catalogChannel,
-				TargetVersion:   targetVersion,
+				TargetVersion:   clusterVersion,
 				RolloutPlanJson: rolloutPlan,
 				Paused:          paused,
 			}})
@@ -435,14 +458,30 @@ func syncEdgeReleaseTargetResolved(cmd *cobra.Command, rc *resolvedCluster, chan
 		if err != nil {
 			return fmt.Errorf("set edge release target for cluster %s: %w", clusterID, err)
 		}
+		versionsSet[firstNonEmpty(clusterVersion, "latest")] = struct{}{}
 	}
+	versions := make([]string, 0, len(versionsSet))
+	for version := range versionsSet {
+		versions = append(versions, version)
+	}
+	sort.Strings(versions)
 	ux.Result(cmd.OutOrStdout(), []ux.ResultField{{
 		Key: "edge-release-target",
 		OK:  true,
 		Detail: fmt.Sprintf("track=%s version=%s clusters=%d",
-			catalogChannel, firstNonEmpty(targetVersion, "latest"), len(clusterIDs)),
+			catalogChannel, firstNonEmpty(strings.Join(versions, ","), "latest"), len(clusterIDs)),
 	}})
 	return nil
+}
+
+// retainedPinnedVersion keeps an existing exact pin when the requested target
+// only names the same channel's track; a new exact version or a channel change
+// replaces it.
+func retainedPinnedVersion(existing *quartermasterpb.ClusterReleaseTarget, channel, requestedVersion string) string {
+	if requestedVersion != "" || existing == nil || existing.GetChannel() != channel {
+		return requestedVersion
+	}
+	return strings.TrimSpace(existing.GetTargetVersion())
 }
 
 func retryEdgeReleaseSyncRPC(ctx context.Context, fn func() error) error {
@@ -488,36 +527,49 @@ func isRetryableControlPlaneRPCError(err error) bool {
 	}
 }
 
-func existingReleaseTargetControlsWithRetry(ctx context.Context, qm *qmclient.GRPCClient, ctxCfg fwcfg.Context, clusterID string) (string, bool, error) {
-	var rolloutPlan string
-	var paused bool
+func existingReleaseTargetWithRetry(ctx context.Context, qm *qmclient.GRPCClient, ctxCfg fwcfg.Context, clusterID string) (*quartermasterpb.ClusterReleaseTarget, error) {
+	var target *quartermasterpb.ClusterReleaseTarget
 	err := retryEdgeReleaseSyncRPC(ctx, func() error {
 		cctx, cancel := clusterNodesRPCContext(ctx, ctxCfg, edgeReleaseSyncRPCTimeout)
 		defer cancel()
 		var rpcErr error
-		rolloutPlan, paused, rpcErr = existingReleaseTargetControls(cctx, qm, clusterID)
+		target, rpcErr = existingReleaseTarget(cctx, qm, clusterID)
 		return rpcErr
 	})
-	return rolloutPlan, paused, err
+	return target, err
 }
 
-func existingReleaseTargetControls(ctx context.Context, qm edgeReleaseQMClient, clusterID string) (string, bool, error) {
+// existingReleaseTarget returns the cluster's current target, or nil when it has none.
+func existingReleaseTarget(ctx context.Context, qm edgeReleaseQMClient, clusterID string) (*quartermasterpb.ClusterReleaseTarget, error) {
 	resp, err := qm.GetClusterReleaseTarget(ctx, &quartermasterpb.GetClusterReleaseTargetRequest{ClusterId: clusterID})
 	if err != nil {
 		if status.Code(err) == codes.NotFound {
-			return "{}", false, nil
+			return nil, nil
 		}
-		return "", false, fmt.Errorf("load existing edge release target for cluster %s: %w", clusterID, err)
+		return nil, fmt.Errorf("load existing edge release target for cluster %s: %w", clusterID, err)
 	}
-	target := resp.GetTarget()
+	return resp.GetTarget(), nil
+}
+
+func existingReleaseTargetControls(ctx context.Context, qm edgeReleaseQMClient, clusterID string) (string, bool, error) {
+	target, err := existingReleaseTarget(ctx, qm, clusterID)
+	if err != nil {
+		return "", false, err
+	}
+	rolloutPlan, paused := releaseTargetControls(target)
+	return rolloutPlan, paused, nil
+}
+
+// releaseTargetControls carries an existing target's operator rollout controls into a re-sync.
+func releaseTargetControls(target *quartermasterpb.ClusterReleaseTarget) (string, bool) {
 	if target == nil {
-		return "{}", false, nil
+		return "{}", false
 	}
 	rolloutPlan := strings.TrimSpace(target.GetRolloutPlanJson())
 	if rolloutPlan == "" {
 		rolloutPlan = "{}"
 	}
-	return rolloutPlan, target.GetPaused(), nil
+	return rolloutPlan, target.GetPaused()
 }
 
 func edgeReleaseQMClientForGitOpsSync(cmd *cobra.Command, rc *resolvedCluster, sharedEnv map[string]string) (*qmclient.GRPCClient, fwcfg.Context, func(), error) {

@@ -1235,10 +1235,11 @@ func runEdgeProvisionFromManifest(cmd *cobra.Command, cliCtx fwcfg.Context, mani
 	}
 	if !dryRun && needsControlPlane && clusterManifestPath != "" {
 		effectiveVersion := manifest.Channel
-		if cmd.Flags().Changed("version") {
+		explicitVersion := cmd.Flags().Changed("version")
+		if explicitVersion {
 			effectiveVersion = cliVersion
 		}
-		if err := syncEdgeManifestReleaseTarget(cmd, clusterManifestPath, ageKeyFile, effectiveVersion); err != nil {
+		if err := syncEdgeManifestReleaseTarget(cmd, clusterManifestPath, ageKeyFile, effectiveVersion, explicitVersion); err != nil {
 			return err
 		}
 	}
@@ -1293,7 +1294,7 @@ func edgeManifestNeedsControlPlane(manifest *inventory.EdgeManifest) bool {
 	return false
 }
 
-func syncEdgeManifestReleaseTarget(cmd *cobra.Command, clusterManifestPath, ageKeyFile, selector string) error {
+func syncEdgeManifestReleaseTarget(cmd *cobra.Command, clusterManifestPath, ageKeyFile, selector string, explicitVersion bool) error {
 	clusterManifestPath = strings.TrimSpace(clusterManifestPath)
 	if clusterManifestPath == "" {
 		return nil
@@ -1309,7 +1310,11 @@ func syncEdgeManifestReleaseTarget(cmd *cobra.Command, clusterManifestPath, ageK
 		Source:       inventory.SourceManifestFlag,
 		ReleaseRepos: edgeManifestReleaseRepositories(clusterManifestPath),
 	}
-	if err := syncClusterEdgeReleaseTargetFromGitOps(cmd, rc, selector, nil); err != nil {
+	syncTarget := syncClusterEdgeReleaseTargetFollowing
+	if explicitVersion {
+		syncTarget = syncClusterEdgeReleaseTargetFromGitOps
+	}
+	if err := syncTarget(cmd, rc, selector, nil); err != nil {
 		return fmt.Errorf("sync edge release target before edge install: %w", err)
 	}
 	return nil
