@@ -74,9 +74,16 @@ func ybRelayoutEngine(database, ownerRole, runtimeRole string, nodes ...*SSHYuga
 	}
 }
 
+// ybStatementTimeout bounds one fixture statement. A statement stuck in a
+// fresh engine then fails its test with the database and node named, instead
+// of holding the whole contract package until its 20-minute test timeout.
+const ybStatementTimeout = 3 * time.Minute
+
 func ybNodeApply(t *testing.T, node *SSHYugabyteNode, database, sql string) string {
 	t.Helper()
-	out, err := node.Query(context.Background(), database, sql)
+	ctx, cancel := context.WithTimeout(context.Background(), ybStatementTimeout)
+	defer cancel()
+	out, err := node.Query(ctx, database, sql)
 	if err != nil {
 		t.Fatalf("apply SQL to %s on %s: %v", database, node.Name(), err)
 	}

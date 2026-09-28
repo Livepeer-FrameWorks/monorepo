@@ -48,7 +48,7 @@
 
 **Before pushing (and before calling work done):**
 
-- Run `make test` and `make verify-prepush`. The latter runs CI's Frontend lint, Generated contracts, frontend component, and Migration release state jobs (ESLint, Prettier, docs links, config reference, GraphQL/SDK/event contracts, Houdini codegen, component tests, migration/catalog validation, schema convergence, Valkey contracts), which unit tests and lint do not cover. It needs Docker; run it on remotedev when the laptop cannot.
+- Run `make test` and `make verify-prepush`. The latter runs every CI job except Go test (which `make test` covers), step for step: Go lint, Go build, Frontend lint, Frontend build, Generated contracts, frontend components, SDKs, Migration release state, Yugabyte database contracts, feature registry, pricing catalog and compose profiles. A hook-level or per-package lint is not a substitute. It needs Docker; run it on remotedev when the laptop cannot.
 - Never tell the maintainer to push or tag until `make verify-prepush` passed on that exact commit.
 
 **Key rules:**
