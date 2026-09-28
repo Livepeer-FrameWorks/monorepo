@@ -90,7 +90,10 @@ done
 FAILOVER=$(logs_since "$KILL_TS" "${FOGHORNS_B[@]}" | grep -E 'Remote placement preparation (failed on a|answered by another) cell replica')
 printf '    failover log lines: %s\n' "$(echo "$FAILOVER" | grep -c .)"
 echo "$FAILOVER" | head -4 | cut -c1-300
-answered_elsewhere() { echo "$FAILOVER" | grep 'answered by another cell replica' | grep -qv "\"peer_addr\":\"$FIRST\""; }
+# Counted, not `grep -q`: under pipefail an early exit breaks the upstream pipe.
+answered_elsewhere() {
+  [ "$(echo "$FAILOVER" | grep 'answered by another cell replica' | grep -vc "\"peer_addr\":\"$FIRST\"")" -gt 0 ]
+}
 check "cell B logged a preparation answered by a replica other than $FIRST" answered_elsewhere
 
 restore
