@@ -5,7 +5,6 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
-	"net/url"
 	"sort"
 	"strconv"
 	"strings"
@@ -2636,7 +2635,7 @@ func (p *Processor) handlePlayRewrite(trigger *ipcpb.MistTrigger) (string, bool,
 	}
 	isLivePlayback := target.ContentType == "live" || strings.HasPrefix(target.InternalName, "live+")
 	if isLivePlayback && !acceptedProcessingRead && mist.IsPlaybackViewerRequest(playRewrite.GetOutputType(), playRewrite.GetRequestUrl()) {
-		correlationID := extractCorrelationID(playRewrite.GetRequestUrl())
+		correlationID := mist.ViewerSessionID(playRewrite.GetRequestUrl())
 		if viewerID, started := state.DefaultManager().StartVirtualViewerByID(correlationID, trigger.GetNodeId(), resolvedName, playRewrite.GetViewerHost()); started {
 			state.DefaultManager().UpdateUserConnection(resolvedName, trigger.GetNodeId(), target.TenantID, 1)
 			p.logger.WithFields(logging.Fields{
@@ -4381,8 +4380,8 @@ func (p *Processor) handleUserNew(trigger *ipcpb.MistTrigger) (string, bool, err
 	capacityID := viewerCapacityID(userNew.GetRequestUrl(), userNew.GetSessionId())
 
 	// Per-tenant concurrent-viewer cap. Hard limit, independent of cluster
-	// load. Set semantics on fwcid deduplicate Mist sessions that belong to
-	// the same playback redirect; direct playback without fwcid falls back to
+	// load. Set semantics on the playback session deduplicate the Mist sessions
+	// one playback spans; playback that started at the edge falls back to
 	// session_id. Cap value is the broadcaster's tenant max_viewers, cached in
 	// streamContext at PUSH_REWRITE.
 	if !acceptedPull && info.TenantID != "" && info.MaxViewers > 0 {
@@ -4455,7 +4454,7 @@ func (p *Processor) handleUserNew(trigger *ipcpb.MistTrigger) (string, bool, err
 	}
 
 	clientIP := userNew.GetHost()
-	correlationID := extractCorrelationID(userNew.GetRequestUrl())
+	correlationID := mist.ViewerSessionID(userNew.GetRequestUrl())
 	if attached := state.DefaultManager().AttachVirtualViewerSession(
 		correlationID,
 		trigger.GetNodeId(),
@@ -5145,20 +5144,11 @@ func (p *Processor) handleUserEnd(trigger *ipcpb.MistTrigger) (string, bool, err
 	return "", false, nil
 }
 
-func extractCorrelationID(requestURL string) string {
-	if requestURL == "" {
-		return ""
-	}
-	parsedURL, err := url.Parse(requestURL)
-	if err != nil {
-		return ""
-	}
-	return parsedURL.Query().Get("fwcid")
-}
-
+// viewerCapacityID counts a viewer once per FrameWorks playback session, across the Mist sessions
+// it spans; a session that started at the edge counts as its Mist session.
 func viewerCapacityID(requestURL, sessionID string) string {
-	if viewerID := extractCorrelationID(requestURL); viewerID != "" {
-		return viewerID
+	if playbackSession := mist.ViewerSessionID(requestURL); playbackSession != "" {
+		return playbackSession
 	}
 	return sessionID
 }

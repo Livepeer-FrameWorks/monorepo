@@ -2583,8 +2583,21 @@ func (s *FoghornGRPCServer) DeleteDVR(ctx context.Context, req *sharedpb.DeleteD
 
 // VIEWER CONTROL SERVICE IMPLEMENTATION
 
-// ResolveViewerEndpoint resolves the best endpoint(s) for a viewer
+// ResolveViewerEndpoint resolves the best endpoint(s) for a viewer. Every resolved playback leaves
+// with its FrameWorks playback session stamped on all of its URLs.
 func (s *FoghornGRPCServer) ResolveViewerEndpoint(ctx context.Context, req *sharedpb.ViewerEndpointRequest) (*sharedpb.ViewerEndpointResponse, error) {
+	response, err := s.resolveViewerEndpoint(ctx, req)
+	if err != nil {
+		return nil, err
+	}
+	stamped, sessionErr := control.WithViewerSession(response)
+	if sessionErr != nil {
+		return nil, status.Error(codes.Internal, sessionErr.Error())
+	}
+	return stamped, nil
+}
+
+func (s *FoghornGRPCServer) resolveViewerEndpoint(ctx context.Context, req *sharedpb.ViewerEndpointRequest) (*sharedpb.ViewerEndpointResponse, error) {
 	ctx = control.MediaRequestContext(ctx, "viewer_grpc")
 	if req.ContentId == "" {
 		return nil, status.Error(codes.InvalidArgument, "content_id is required")

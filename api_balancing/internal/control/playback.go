@@ -29,6 +29,7 @@ import (
 
 	"google.golang.org/grpc/codes"
 	grpcstatus "google.golang.org/grpc/status"
+	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
@@ -853,10 +854,11 @@ func placeStoredMedia(ctx context.Context, deps *PlaybackDependencies, tenantID,
 		if deps.StoredMediaPreparer == nil {
 			return nil, nil, fmt.Errorf("%w: storage candidates and policy destinations do not intersect", ErrStoredMediaPlacementUnavailable)
 		}
-		prepared, _, err := resolvePreparedViewerEndpoint(ctx, deps.StoredMediaPreparer, request, permission.ObjectID, "")
+		prepared, attemptID, err := resolvePreparedViewerEndpoint(ctx, deps.StoredMediaPreparer, request, permission.ObjectID, "")
 		if err != nil {
 			return nil, nil, fmt.Errorf("%w: %w", ErrStoredMediaPlacementUnavailable, err)
 		}
+		AppendEndpointViewerSession(prepared.Primary, attemptID)
 		for name, output := range prepared.Primary.Outputs {
 			output.Capabilities = BuildOutputCapabilities(name, false)
 		}
@@ -1044,31 +1046,64 @@ func resolveDVRThumbnailTarget(ctx context.Context, conn foghorndb.DBTX, token s
 	return target, err
 }
 
-// AppendViewerCorrelationID adds the virtual viewer ID to every playback URL in a response.
-func AppendViewerCorrelationID(resp *sharedpb.ViewerEndpointResponse, viewerID string) {
-	if resp == nil || viewerID == "" {
+// WithViewerSession returns a copy of a resolved playback with its one FrameWorks playback session
+// stamped on every URL. A prepared destination already reserved the viewer under its attempt ID
+// and stamped that endpoint, so an issued session any endpoint carries is kept; otherwise a new
+// session is issued. The response is copied because endpoint catalogs can be shared between
+// resolutions, and a session belongs to exactly one.
+func WithViewerSession(resp *sharedpb.ViewerEndpointResponse) (*sharedpb.ViewerEndpointResponse, error) {
+	if resp == nil || resp.GetPrimary() == nil {
+		return resp, nil
+	}
+	sessionID := ""
+	for _, endpoint := range append([]*sharedpb.ViewerEndpoint{resp.GetPrimary()}, resp.GetFallbacks()...) {
+		if sessionID = mist.ViewerSessionID(endpoint.GetUrl()); sessionID != "" {
+			break
+		}
+	}
+	if sessionID == "" {
+		issued, err := mist.NewViewerSessionID()
+		if err != nil {
+			return nil, fmt.Errorf("issue playback session: %w", err)
+		}
+		sessionID = issued
+	}
+	stamped, ok := proto.Clone(resp).(*sharedpb.ViewerEndpointResponse)
+	if !ok {
+		return nil, errors.New("invalid playback response")
+	}
+	AppendViewerSession(stamped, sessionID)
+	return stamped, nil
+}
+
+// AppendViewerSession stamps a playback session on every URL of a response.
+func AppendViewerSession(resp *sharedpb.ViewerEndpointResponse, sessionID string) {
+	if resp == nil || sessionID == "" {
 		return
 	}
-	appendToEndpoint := func(endpoint *sharedpb.ViewerEndpoint) {
-		if endpoint == nil {
-			return
-		}
-		endpoint.Url = AppendCorrelationID(endpoint.GetUrl(), viewerID)
-		for _, output := range endpoint.GetOutputs() {
-			if output != nil {
-				output.Url = AppendCorrelationID(output.GetUrl(), viewerID)
-			}
-		}
-	}
-	appendToEndpoint(resp.Primary)
+	AppendEndpointViewerSession(resp.Primary, sessionID)
 	for _, endpoint := range resp.Fallbacks {
-		appendToEndpoint(endpoint)
+		AppendEndpointViewerSession(endpoint, sessionID)
 	}
 }
 
-// AppendCorrelationID adds a virtual viewer ID to a playback URL.
-func AppendCorrelationID(rawURL, viewerID string) string {
-	if viewerID == "" || rawURL == "" {
+// AppendEndpointViewerSession stamps a playback session on an endpoint and all its outputs.
+func AppendEndpointViewerSession(endpoint *sharedpb.ViewerEndpoint, sessionID string) {
+	if endpoint == nil {
+		return
+	}
+	endpoint.Url = AppendViewerSessionParam(endpoint.GetUrl(), sessionID)
+	for _, output := range endpoint.GetOutputs() {
+		if output != nil {
+			output.Url = AppendViewerSessionParam(output.GetUrl(), sessionID)
+		}
+	}
+}
+
+// AppendViewerSessionParam stamps a playback session on one playback URL as Mist's session
+// token, which Mist carries into every manifest and segment URL of the playback.
+func AppendViewerSessionParam(rawURL, sessionID string) string {
+	if sessionID == "" || rawURL == "" {
 		return rawURL
 	}
 	parsedURL, err := url.Parse(rawURL)
@@ -1076,7 +1111,7 @@ func AppendCorrelationID(rawURL, viewerID string) string {
 		return rawURL
 	}
 	query := parsedURL.Query()
-	query.Set("fwcid", viewerID)
+	query.Set(mist.ViewerSessionParam, sessionID)
 	parsedURL.RawQuery = query.Encode()
 	return parsedURL.String()
 }

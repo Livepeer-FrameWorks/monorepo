@@ -4,6 +4,7 @@ import {
   PlayerController,
   buildQualityLevelsFromMistTracks,
   buildStreamInfoFromEndpoints,
+  playbackSessionFromUrl,
   withQueryParam,
 } from "../src/core/PlayerController";
 import { normalizeMistSourceUrls } from "../src/core/MistSourceUrls";
@@ -99,9 +100,44 @@ describe("client session URL stamping", () => {
       type: "live",
     });
 
+    // A FrameWorks edge reads the viewer JWT as fwjwt; Mist would read `jwt` as its session
+    // token in place of the playback session.
     expect(info.source[0].url).toBe(
-      "https://edge.test/view/hls/live/index.m3u8?tkn=mist-token&jwt=viewer-jwt"
+      "https://edge.test/view/hls/live/index.m3u8?tkn=mist-token&fwjwt=viewer-jwt"
     );
+
+    (controller as any).endpointMode = "direct-mist";
+    const direct = (controller as any).applyPlaybackAuthToStreamInfo({
+      source: [{ type: "html5/video/mp4", url: "https://mist.test/view/live.mp4" }],
+      meta: { tracks: [] },
+      type: "live",
+    });
+    expect(direct.source[0].url).toBe("https://mist.test/view/live.mp4?jwt=viewer-jwt");
+  });
+
+  it("reports session telemetry under the playback session the platform issued", () => {
+    const session = "0192f3a1-4b2c-7d3e-8f40-123456789abc";
+    const controller = new PlayerController({
+      contentId: "live-1",
+      telemetry: { session: true },
+      playerManager: { on: vi.fn(() => () => {}) } as any,
+    });
+    (controller as any).clientSessionId = "attach-1";
+    (controller as any).endpoints = {
+      primary: {
+        nodeId: "node-1",
+        protocol: "HLS",
+        url: `https://edge.test/hls/live/index.m3u8?tkn=${session}`,
+        outputs: { MP4: { protocol: "MP4", url: `https://edge.test/live.mp4?tkn=${session}` } },
+      },
+      fallbacks: [],
+    };
+    (controller as any).applyPlaybackAuthToEndpoints();
+    expect((controller as any).clientSessionId).toBe(session);
+    expect((controller as any).endpoints.primary.outputs.MP4.url).toContain(`fwsid=${session}`);
+
+    expect(playbackSessionFromUrl("https://edge.test/v.mp4?tkn=3735928559")).toBeNull();
+    expect(playbackSessionFromUrl(`https://edge.test/v.mp4?tkn=${session}#t=1`)).toBe(session);
   });
 });
 

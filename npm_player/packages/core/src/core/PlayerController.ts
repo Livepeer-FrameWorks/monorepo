@@ -71,7 +71,30 @@ export {
 } from "./QualityLevels";
 export type { MistQualityLevel, MistQualityTrackInput } from "./QualityLevels";
 
-function withPlaybackJWT(rawUrl: string, token: string): string {
+/**
+ * The query parameter a viewer JWT travels in. FrameWorks edges read it as `fwjwt`: Mist reads a
+ * `jwt` parameter as its session token in place of the playback session (`tkn`) the platform
+ * issued. A standalone MistServer reached directly validates `jwt` itself.
+ */
+function playbackJWTParam(endpointMode: "gateway" | "provided" | "direct-mist"): string {
+  return endpointMode === "direct-mist" ? "jwt" : "fwjwt";
+}
+
+const PLAYBACK_SESSION_PATTERN =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
+
+/** The FrameWorks playback session a resolved URL carries as Mist's `tkn`, if any. */
+export function playbackSessionFromUrl(rawUrl: string | undefined): string | null {
+  if (!rawUrl) return null;
+  const queryIndex = rawUrl.indexOf("?");
+  if (queryIndex === -1) return null;
+  const hashIndex = rawUrl.indexOf("#", queryIndex);
+  const query = rawUrl.slice(queryIndex + 1, hashIndex === -1 ? undefined : hashIndex);
+  const token = new URLSearchParams(query).get("tkn");
+  return token && PLAYBACK_SESSION_PATTERN.test(token) ? token : null;
+}
+
+function withPlaybackJWT(rawUrl: string, token: string, param: string): string {
   const hashIndex = rawUrl.indexOf("#");
   const beforeHash = hashIndex === -1 ? rawUrl : rawUrl.slice(0, hashIndex);
   const hash = hashIndex === -1 ? "" : rawUrl.slice(hashIndex);
@@ -79,7 +102,7 @@ function withPlaybackJWT(rawUrl: string, token: string): string {
   const base = queryIndex === -1 ? beforeHash : beforeHash.slice(0, queryIndex);
   const query = queryIndex === -1 ? "" : beforeHash.slice(queryIndex + 1);
   const params = new URLSearchParams(query);
-  params.set("jwt", token);
+  params.set(param, token);
   const encoded = params.toString();
   return `${base}${encoded ? `?${encoded}` : ""}${hash}`;
 }
@@ -1144,17 +1167,19 @@ export class PlayerController extends TypedEventEmitter<PlayerControllerEvents> 
    * values ride along on Gateway-resolved URLs, fallbacks, the outputs map,
    * and URLs hydrated from a direct MistServer poll.
    *
-   * Query-mode (`?jwt=<token>`) works across HLS, DASH, WHEP/WebRTC, and MP4
-   * progressive. `fwsid` is only added when session telemetry is enabled.
+   * Query-mode works across HLS, DASH, WHEP/WebRTC, and MP4 progressive; the
+   * JWT travels as `fwjwt` to FrameWorks edges and as `jwt` to a directly
+   * reached MistServer. `fwsid` is only added when session telemetry is enabled.
    */
   private applyPlaybackAuthToEndpoints(): void {
     if (!this.endpoints) return;
+    this.adoptResolvedPlaybackSession();
     const auth = this.config.playbackAuth;
     const rewriteUrl = (u: string | undefined): string | undefined => {
       if (!u) return u;
       let rewritten = u;
       if (auth?.token && auth.transport !== "header") {
-        rewritten = withPlaybackJWT(rewritten, auth.token);
+        rewritten = withPlaybackJWT(rewritten, auth.token, playbackJWTParam(this.endpointMode));
       }
       if (this.clientSessionId) {
         rewritten = withQueryParam(rewritten, "fwsid", this.clientSessionId);
@@ -1179,6 +1204,17 @@ export class PlayerController extends TypedEventEmitter<PlayerControllerEvents> 
     }
   }
 
+  /**
+   * A FrameWorks-resolved playback carries its playback session as Mist's `tkn` on every URL. With
+   * session telemetry on, the player reports under that session, so its telemetry, Mist's
+   * session and the platform's viewer records share one identifier.
+   */
+  private adoptResolvedPlaybackSession(): void {
+    if (!this.config.telemetry?.session || this.endpointMode === "direct-mist") return;
+    const session = playbackSessionFromUrl(this.endpoints?.primary?.url);
+    if (session) this.clientSessionId = session;
+  }
+
   private playbackAuthHeaders(): Record<string, string> | undefined {
     const auth = this.config.playbackAuth;
     if (!auth?.token || auth.transport !== "header") return undefined;
@@ -1192,7 +1228,7 @@ export class PlayerController extends TypedEventEmitter<PlayerControllerEvents> 
     let source = info.source.map((item) => {
       let url = item.url;
       if (auth?.token && auth.transport !== "header") {
-        url = withPlaybackJWT(url, auth.token);
+        url = withPlaybackJWT(url, auth.token, playbackJWTParam(this.endpointMode));
       }
       if (this.clientSessionId) {
         url = withQueryParam(url, "fwsid", this.clientSessionId);
@@ -5285,6 +5321,7 @@ export class PlayerController extends TypedEventEmitter<PlayerControllerEvents> 
     return new BootTracer({
       contentId: this.config.contentId,
       sessionId: this.clientSessionId ?? undefined,
+      getSessionId: () => this.clientSessionId,
       contentType: this.getResolvedContentType() ?? undefined,
       playerVersion: PlayerController.VERSION,
       getEndpoints: () => this.endpoints,

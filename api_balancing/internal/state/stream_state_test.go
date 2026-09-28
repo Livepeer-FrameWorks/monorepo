@@ -589,6 +589,38 @@ func TestStartVirtualViewerByID_UsesCorrelationID(t *testing.T) {
 	}
 }
 
+// Players behind one address are separate playbacks with separate sessions. A session this
+// replica holds no reservation for is its own viewer, and repeated requests of that session
+// (every manifest and segment carries it) start it once.
+func TestStartVirtualViewerByID_KeepsSessionsBehindOneAddressApart(t *testing.T) {
+	sm := NewStreamStateManager()
+	nodeID, streamName, household := "node-household", "stream-household", "198.51.100.20"
+
+	var sessions []string
+	for range 5 {
+		sessionID := "0192f3a1-0000-7000-8000-00000000000" + string(rune('a'+len(sessions)))
+		viewerID, started := sm.StartVirtualViewerByID(sessionID, nodeID, streamName, household)
+		if !started || viewerID != sessionID {
+			t.Fatalf("session %s behind the shared address: id=%q started=%v", sessionID, viewerID, started)
+		}
+		sessions = append(sessions, sessionID)
+	}
+	if _, again := sm.StartVirtualViewerByID(sessions[0], nodeID, streamName, household); again {
+		t.Fatal("a repeated request of a started session started it again")
+	}
+	sm.mu.RLock()
+	defer sm.mu.RUnlock()
+	active := 0
+	for _, id := range sm.viewersByNode[nodeID] {
+		if viewer := sm.virtualViewers[id]; viewer != nil && viewer.State == VirtualViewerActive {
+			active++
+		}
+	}
+	if active != len(sessions) {
+		t.Fatalf("five sessions behind one address are %d active viewers, want 5", active)
+	}
+}
+
 func TestStartVirtualViewerByID_DeduplicatesDirectPlaybackByIP(t *testing.T) {
 	sm := NewStreamStateManager()
 

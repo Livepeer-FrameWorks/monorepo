@@ -166,13 +166,13 @@ func TestFindProtocolURL(t *testing.T) {
 	}
 }
 
-// A live endpoint already carries its fwcid when the redirect handler appends
+// An endpoint already carries its playback session when the redirect handler appends
 // the manifest path, so the manifest segment must land on the path and the
-// fwcid stay in the query.
-func TestManifestPathKeepsCorrelationID(t *testing.T) {
-	url := control.AppendCorrelationID("https://edge/view/cmaf/s/", "viewer-123")
+// session stay in the query.
+func TestManifestPathKeepsViewerSession(t *testing.T) {
+	url := control.AppendViewerSessionParam("https://edge/view/cmaf/s/", "viewer-123")
 	url = appendManifestPath(url, "index.mpd")
-	want := "https://edge/view/cmaf/s/index.mpd?fwcid=viewer-123"
+	want := "https://edge/view/cmaf/s/index.mpd?tkn=viewer-123"
 	if url != want {
 		t.Fatalf("ordering = %q, want %q", url, want)
 	}

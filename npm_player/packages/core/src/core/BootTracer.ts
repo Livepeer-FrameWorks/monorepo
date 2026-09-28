@@ -80,6 +80,11 @@ export interface BootTracerConfig {
   contentId: string;
   /** Optional attach-scoped correlation id shared with session QoE telemetry. */
   sessionId?: string;
+  /**
+   * The playback session once resolution issued one, read when the trace finalizes: boot starts
+   * before the platform assigns the session the trace belongs to.
+   */
+  getSessionId?: () => string | null;
   contentType?: ContentType;
   playerVersion?: string;
   /** Invoked exactly once when the trace finalizes. */
@@ -306,7 +311,7 @@ export class BootTracer {
 
     return {
       traceId: this.traceId,
-      sessionId: this.sessionId,
+      sessionId: this.config.getSessionId?.() ?? this.sessionId,
       contentId: this.config.contentId,
       contentType: this.config.contentType,
       isLive: this.isLive,

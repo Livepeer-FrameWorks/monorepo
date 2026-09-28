@@ -135,9 +135,9 @@ the session's `USER_NEW`; the edge answers the session's later requests itself.
   protocol. A `PLAY_REWRITE` that carries a known session's token from its
   address, for its stream and protocol, under a valid grant is answered locally,
   with Foghorn up or down. Anything else asks Foghorn: the first request (Mist
-  hands out the token in its answer), another address or token, a request with a
-  playback-redirect correlation id (`fwcid`), which confirms the `/play` pending
-  viewer, and a cookie or bearer token, which `PLAY_REWRITE` cannot see. A
+  hands out the token in its answer), another address or token, a new playback,
+  which carries its own playback session that the edge has not admitted, and a
+  cookie or bearer token, which `PLAY_REWRITE` cannot see. A
   session ends at `USER_END`, after three idle minutes, or when its grant
   expires. On the dev stack (scenario 17) one HLS viewer's 21 requests reach
   Foghorn with one `PLAY_REWRITE`, plus the session's `USER_NEW`, instead of one
@@ -435,9 +435,14 @@ arranged live-origin pull.
 
 The destination cell reserves every live viewer it prepares: the prepared node
 carries the viewer's estimated bandwidth as a pending viewer, keyed by the
-preparation's attempt ID. The playback URLs carry that ID as `fwcid`, and the
-viewer's `PLAY_REWRITE` in the node's cell activates the reservation; an unused
-one lapses with the pending-viewer timeout. Because the reservation lives where
+preparation's attempt ID, which is the playback session. Every resolved playback,
+of any object, carries its session on all its URLs as Mist's session token
+(`tkn`); Mist copies it into every manifest and segment URL and bundles the
+viewer's connections under it. The viewer's `PLAY_REWRITE` in the node's cell
+activates the reservation; an unused one lapses with the pending-viewer timeout.
+A session the cell holds no reservation for is still its own viewer, so players
+behind one address are counted apart. A viewer JWT travels next to it as
+`fwjwt`, because Mist reads a `jwt` parameter as its session token. Because the reservation lives where
 the node's observations are produced, a cross-cell coordinator sees it on its
 next observation, and power of two choices keeps replicas working from the same
 lagged telemetry from herding onto one node.

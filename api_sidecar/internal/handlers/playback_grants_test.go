@@ -147,12 +147,17 @@ func TestAdmittedHLSSessionReachesFoghornOnce(t *testing.T) {
 		t.Fatalf("PLAY_REWRITE reached Foghorn %d times for one admitted session, want 1", got)
 	}
 
-	// The token alone is not the session: another address, another token or
-	// a playback redirect correlation id is Foghorn's decision.
+	// The token alone is not the session: another address, another token or a
+	// new playback from the same address, which carries its own playback session,
+	// is Foghorn's decision.
+	newPlayback, err := mist.NewViewerSessionID()
+	if err != nil {
+		t.Fatal(err)
+	}
 	for _, body := range []string{
 		playRewriteBody("pb1", "203.0.113.7", "http://edge:8080/hls/pb1/1/0.ts?tkn=tkn-1"),
 		playRewriteBody("pb1", "192.0.2.10", "http://edge:8080/hls/pb1/1/0.ts?tkn=tkn-other"),
-		playRewriteBody("pb1", "192.0.2.10", "http://edge:8080/hls/pb1/index.m3u8?tkn=tkn-1&fwcid=viewer-2"),
+		playRewriteBody("pb1", "192.0.2.10", "http://edge:8080/hls/pb1/index.m3u8?tkn="+newPlayback),
 	} {
 		playRewrite(t, body)
 	}

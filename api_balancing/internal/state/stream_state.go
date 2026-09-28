@@ -4559,6 +4559,13 @@ func (sm *StreamStateManager) StartVirtualViewerByID(viewerID, nodeID, streamNam
 			sm.mu.Unlock()
 			return viewer.ID, started
 		}
+		// A playback session this replica holds no reservation for is still its own viewer:
+		// matching it by client address would merge every player behind one address.
+		if sm.virtualViewers[viewerID] == nil {
+			sm.addActiveVirtualViewerLocked(viewerID, nodeID, streamName, clientIP)
+			sm.mu.Unlock()
+			return viewerID, true
+		}
 	}
 
 	var oldestPending *VirtualViewer
@@ -4584,18 +4591,21 @@ func (sm *StreamStateManager) StartVirtualViewerByID(viewerID, nodeID, streamNam
 	}
 
 	activeViewerID := uuid.New().String()
-	viewer := &VirtualViewer{
-		ID:          activeViewerID,
+	sm.addActiveVirtualViewerLocked(activeViewerID, nodeID, streamName, clientIP)
+	sm.mu.Unlock()
+	return activeViewerID, true
+}
+
+func (sm *StreamStateManager) addActiveVirtualViewerLocked(viewerID, nodeID, streamName, clientIP string) {
+	sm.virtualViewers[viewerID] = &VirtualViewer{
+		ID:          viewerID,
 		NodeID:      nodeID,
 		StreamName:  streamName,
 		ClientIP:    clientIP,
 		State:       VirtualViewerActive,
 		ConnectTime: time.Now(),
 	}
-	sm.virtualViewers[activeViewerID] = viewer
-	sm.viewersByNode[nodeID] = append(sm.viewersByNode[nodeID], activeViewerID)
-	sm.mu.Unlock()
-	return activeViewerID, true
+	sm.viewersByNode[nodeID] = append(sm.viewersByNode[nodeID], viewerID)
 }
 
 func (sm *StreamStateManager) activateVirtualViewerLocked(node *NodeState, viewer *VirtualViewer) bool {

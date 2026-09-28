@@ -20,6 +20,7 @@ import (
 	"frameworks/api_balancing/internal/triggers"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/mist"
 	commodorepb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/commodore"
+	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
 	sharedpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/shared"
 	"github.com/golang-jwt/jwt/v5"
 	logrustest "github.com/sirupsen/logrus/hooks/test"
@@ -90,8 +91,9 @@ func TestPreparedViewerHTTPQueryCredentialHandoff(t *testing.T) {
 				location = body.Primary.URL
 				for _, output := range body.Primary.Outputs {
 					outputURL, parseErr := url.Parse(output.URL)
-					if parseErr != nil || outputURL.Query().Get("jwt") != token {
-						t.Fatal("full output catalog lost viewer credentials")
+					if parseErr != nil || outputURL.Query().Get(mist.ViewerJWTParam) != token || outputURL.Query().Has("jwt") ||
+						mist.ViewerSessionID(output.URL) == "" {
+						t.Fatal("full output catalog lost viewer credentials or its playback session")
 					}
 				}
 			} else if w.Code != http.StatusTemporaryRedirect {
@@ -101,22 +103,34 @@ func TestPreparedViewerHTTPQueryCredentialHandoff(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if u.Host != "us.example" || u.Query().Get("jwt") != token || u.Query().Get("receipt") != "prepared" || u.Query().Has("unrelated") {
-				t.Fatal("selected destination or credential handoff changed")
+			// The JWT travels as fwjwt, never as Mist's jwt, which Mist would read as the session
+			// token in place of the playback session.
+			session := mist.ViewerSessionID(location)
+			if u.Host != "us.example" || u.Query().Get(mist.ViewerJWTParam) != token || u.Query().Has("jwt") || session == "" ||
+				u.Query().Get("receipt") != "prepared" || u.Query().Has("unrelated") {
+				t.Fatal("selected destination, credential handoff or playback session changed")
 			}
 			if w.Header().Get("Cache-Control") != "private, no-store" || w.Header().Get("Referrer-Policy") != "no-referrer" {
 				t.Fatal("credential-bearing response can be cached or referred")
 			}
-			payload := strings.Join([]string{"live+internal", "203.0.113.10", u.Query().Get("jwt"), "HLS", location, "session"}, "\n")
-			trigger, err := mist.ParseTriggerToProtobuf(mist.TriggerUserNew, []byte(payload), "us-edge", logger)
-			if err != nil {
-				t.Fatal(err)
+			// Mist reports the request's tkn as the session token and the first request URL.
+			userNew := func(requestURL string) *ipcpb.ViewerConnectTrigger {
+				t.Helper()
+				payload := strings.Join([]string{"live+internal", "203.0.113.10", session, "HLS", requestURL, "session"}, "\n")
+				trigger, err := mist.ParseTriggerToProtobuf(mist.TriggerUserNew, []byte(payload), "us-edge", logger)
+				if err != nil {
+					t.Fatal(err)
+				}
+				return trigger.GetViewerConnect()
 			}
-			if got := triggers.EvaluatePlaybackPolicy(context.Background(), logger, "internal", trigger.GetViewerConnect(), policy); got != "true" {
+			if got := triggers.EvaluatePlaybackPolicy(context.Background(), logger, "internal", userNew(location), policy); got != "true" {
 				t.Fatal("handoff token fails edge playback policy")
 			}
-			trigger.GetViewerConnect().ViewerToken = ""
-			if got := triggers.EvaluatePlaybackPolicy(context.Background(), logger, "internal", trigger.GetViewerConnect(), policy); got != "false" {
+			withoutJWT := *u
+			query := withoutJWT.Query()
+			query.Del(mist.ViewerJWTParam)
+			withoutJWT.RawQuery = query.Encode()
+			if got := triggers.EvaluatePlaybackPolicy(context.Background(), logger, "internal", userNew(withoutJWT.String()), policy); got != "false" {
 				t.Fatal("edge policy accepted missing handoff token")
 			}
 		})

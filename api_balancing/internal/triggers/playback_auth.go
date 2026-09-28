@@ -20,6 +20,7 @@ import (
 	"frameworks/api_balancing/internal/control"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/auth"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/mist"
 	commodorepb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/commodore"
 	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/restream"
@@ -216,7 +217,9 @@ func (p *Processor) enforceJWTPolicy(ctx context.Context, internalName string, u
 		p.logPlaybackDeny(internalName, userNew, "policy-jwt-empty", "")
 		return denyDecision("jwt", "policy-jwt-empty", "")
 	}
-	token := userNew.GetViewerToken()
+	// The JWT travels as fwjwt on the session's first request URL, which USER_NEW reports;
+	// a direct request's own jwt is the token Mist reports.
+	token := mist.ViewerJWT(userNew.GetRequestUrl(), userNew.GetViewerToken())
 	if token == "" {
 		p.logPlaybackDeny(internalName, userNew, "missing-token", "")
 		return denyDecision("jwt", "missing-token", "")
@@ -436,7 +439,7 @@ func (p *Processor) enforceWebhookPolicy(ctx context.Context, internalName strin
 		// is evaluated here as a viewer, so its request URL can still carry the
 		// platform's per-attempt source credential; that never leaves with it.
 		"requestUrl":  control.RedactSourcePullCredential(userNew.GetRequestUrl()),
-		"viewerToken": userNew.GetViewerToken(),
+		"viewerToken": mist.ViewerJWT(userNew.GetRequestUrl(), userNew.GetViewerToken()),
 		"connector":   userNew.GetConnector(),
 		"origin":      userNew.GetOrigin(),
 		"referer":     userNew.GetReferer(),

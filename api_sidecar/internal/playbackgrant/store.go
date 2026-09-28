@@ -103,8 +103,12 @@ type session struct {
 	// origin is the canonical request origin USER_NEW reported; observed is
 	// false while only PLAY_REWRITE, which carries no request headers, has
 	// been seen for the session.
-	origin     string
-	observed   bool
+	origin   string
+	observed bool
+	// credential is the playback credential the session was admitted with (fwjwt, or a direct
+	// request's jwt). The session key's token is Mist's session token, which for a playback
+	// FrameWorks resolved is the playback session and not a credential.
+	credential string
 	kid        string
 	admittedAt time.Time
 	lastUsed   time.Time
@@ -252,14 +256,10 @@ func NormalizeHost(host string) string {
 // ServeAdmitted answers a PLAY_REWRITE from a session Foghorn admitted on this
 // edge. It returns the Mist stream when the request carries the session's
 // token from the session's address, for the session's stream and protocol,
-// and the stream's grant is valid. A request carrying a playback redirect
-// correlation id (fwcid) is a new playback intent and always goes to Foghorn,
-// which confirms the pending redirect.
+// and the stream's grant is valid. A new playback carries a playback session
+// this edge has not admitted, so it has no session here and goes to Foghorn,
+// which activates the reservation its destination made for it.
 func (s *Store) ServeAdmitted(requested, host, connector, requestURL string) (string, bool) {
-	values := requestQuery(requestURL)
-	if values == nil || values.Get("fwcid") != "" {
-		return "", false
-	}
 	token := SessionToken(requestURL)
 	if token == "" {
 		return "", false
@@ -331,7 +331,7 @@ func (s *Store) DecideNewSession(vc *ipcpb.ViewerConnectTrigger) Decision {
 	if g.msg.GetPolicy().GetKind() == ipcpb.PlaybackGrantPolicyKind_PLAYBACK_GRANT_POLICY_KIND_CONNECTED {
 		return Decision{Reason: "stream policy decides every new session in Foghorn"}
 	}
-	facts := sessionFacts{token: vc.GetViewerToken(), observed: vc.Origin != nil || vc.Referer != nil, at: now}
+	facts := sessionFacts{token: mist.ViewerJWT(vc.GetRequestUrl(), vc.GetViewerToken()), observed: vc.Origin != nil || vc.Referer != nil, at: now}
 	if facts.observed {
 		facts.origin = auth.RequestOrigin(vc.GetOrigin(), vc.GetReferer())
 	}
@@ -377,7 +377,8 @@ func (s *Store) AdmitRequest(requested, internal, host, connector, requestURL st
 	if token != "" {
 		key := sessionKey{token: token, host: NormalizeHost(host), stream: internal, connector: connector}
 		if s.sessions[key] == nil {
-			s.sessions[key] = &session{key: key, admittedAt: now, lastUsed: now, kid: tokenKid(token)}
+			credential := mist.ViewerJWT(requestURL, token)
+			s.sessions[key] = &session{key: key, admittedAt: now, lastUsed: now, credential: credential, kid: tokenKid(credential)}
 		} else {
 			s.sessions[key].lastUsed = now
 		}
@@ -403,7 +404,10 @@ func (s *Store) AdmitSession(vc *ipcpb.ViewerConnectTrigger, local bool) {
 	}
 	sess.lastUsed = now
 	sess.sessionID = vc.GetSessionId()
-	sess.kid = tokenKid(token)
+	if credential := mist.ViewerJWT(vc.GetRequestUrl(), token); credential != "" {
+		sess.credential = credential
+		sess.kid = tokenKid(credential)
+	}
 	sess.observed = vc.Origin != nil || vc.Referer != nil
 	if sess.observed {
 		sess.origin = auth.RequestOrigin(vc.GetOrigin(), vc.GetReferer())
@@ -509,7 +513,7 @@ func (s *Store) ApplyGrant(msg *ipcpb.PlaybackGrant) {
 				s.scheduleRecheckLocked(sess.sessionID, now)
 				continue
 			}
-			if _, reason := g.admits(sessionFacts{token: key.token, origin: sess.origin, observed: sess.observed, at: sess.admittedAt}); reason != "" {
+			if _, reason := g.admits(sessionFacts{token: sess.credential, origin: sess.origin, observed: sess.observed, at: sess.admittedAt}); reason != "" {
 				delete(s.sessions, key)
 				if sess.sessionID != "" {
 					invalidate = append(invalidate, sess.sessionID)

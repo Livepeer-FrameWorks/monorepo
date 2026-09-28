@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"math"
-	"strings"
 	"testing"
 	"time"
 
@@ -99,15 +98,7 @@ func TestPreparedViewerSelectsNodeOnceAndReturnsFullMistCatalog(t *testing.T) {
 	}
 	// The destination reserved the live viewer under the attempt ID, so every
 	// URL must present it for PLAY_REWRITE to activate that reservation.
-	wantCID := "fwcid=" + attemptID
-	if !strings.Contains(response.Primary.GetUrl(), wantCID) {
-		t.Errorf("live URL %q lacks %s", response.Primary.GetUrl(), wantCID)
-	}
-	for key, output := range response.Primary.Outputs {
-		if !strings.Contains(output.GetUrl(), wantCID) {
-			t.Errorf("live output %s URL %q lacks %s", key, output.GetUrl(), wantCID)
-		}
-	}
+	assertCarriesViewerSession(t, response.GetPrimary(), attemptID)
 }
 
 func TestPreparedViewerRejectsMismatchedOrAmbiguousOutcomes(t *testing.T) {
@@ -169,30 +160,32 @@ func TestPreparedViewerAcceptsEveryLiveRuntimeName(t *testing.T) {
 func TestPreparedDVRViewerUsesRecordingAuthority(t *testing.T) {
 	resolution := &ContentResolution{ContentType: "dvr", ContentId: "recording-public", InternalName: "dvr+recording-internal",
 		ArtifactID: "recording-id", ArtifactHash: "recording-hash", TenantId: "tenant", StreamId: "parent-stream"}
+	var attemptID string
 	resp, err := ResolvePreparedDVRViewerEndpoint(t.Context(), viewerPreparerFunc(func(_ context.Context, req ViewerPlacementRequest) (balancer.PlacementPreparationResult, error) {
 		if req.StreamID != "" || req.ArtifactID != "recording-id" || req.ArtifactHash != "recording-hash" || req.InternalName != "recording-internal" || req.PlaybackID != "recording-public" {
 			t.Fatalf("recording identity replaced by parent: %+v", req)
 		}
 		result := preparedViewer(t, req)
 		result.ObjectID = sharedauthority.ArtifactAuthorityID("recording-id")
+		attemptID = result.AttemptID
 		return result, nil
 	}), resolution, "hls", nil)
 	if err != nil || resp.GetMetadata().GetContentType() != "dvr" || resp.GetMetadata().GetStreamId() != "parent-stream" {
 		t.Fatalf("DVR response %v: %v", resp, err)
 	}
-	assertNoViewerCorrelationID(t, resp.GetPrimary())
+	assertCarriesViewerSession(t, resp.GetPrimary(), attemptID)
 }
 
-// Only live preparation reserves a viewer on the destination; a recording or
-// stored-media URL carrying an attempt ID would name a reservation that does not exist.
-func assertNoViewerCorrelationID(t *testing.T, endpoint *sharedpb.ViewerEndpoint) {
+// A prepared playback of any object is one playback session, the attempt ID its destination
+// prepared under, and every URL presents it as Mist's session token.
+func assertCarriesViewerSession(t *testing.T, endpoint *sharedpb.ViewerEndpoint, session string) {
 	t.Helper()
-	if strings.Contains(endpoint.GetUrl(), "fwcid=") {
-		t.Errorf("non-live URL %q carries fwcid", endpoint.GetUrl())
+	if session == "" || mist.ViewerSessionID(endpoint.GetUrl()) != session {
+		t.Errorf("URL %q does not carry the playback session %q", endpoint.GetUrl(), session)
 	}
 	for key, output := range endpoint.GetOutputs() {
-		if strings.Contains(output.GetUrl(), "fwcid=") {
-			t.Errorf("non-live output %s URL %q carries fwcid", key, output.GetUrl())
+		if mist.ViewerSessionID(output.GetUrl()) != session {
+			t.Errorf("output %s URL %q does not carry the playback session %q", key, output.GetUrl(), session)
 		}
 	}
 }
@@ -254,6 +247,7 @@ func TestStoredMediaPlacementPreparesPreferredCellWithoutLocalCopy(t *testing.T)
 	for _, scenario := range []string{"cold remote", "no local nodes", "explicit mp4", "preparation refused", "wrong object", "expired permission"} {
 		t.Run(scenario, func(t *testing.T) {
 			calls := 0
+			var attemptID string
 			deps := &PlaybackDependencies{
 				StoredMediaPlacement: storedMediaPermitterFunc(func(_ context.Context, request ViewerPlacementRequest) (ViewerPlacementPermission, error) {
 					if request.ArtifactHash != "hash" || request.StreamID != "" || request.InternalName != "internal" || request.PlaybackID != "public" {
@@ -276,6 +270,7 @@ func TestStoredMediaPlacementPreparesPreferredCellWithoutLocalCopy(t *testing.T)
 						t.Fatalf("remote preparation lost artifact identity: %+v", request)
 					}
 					prepared := preparedViewer(t, request)
+					attemptID = prepared.AttemptID
 					prepared.ObjectID = "artifact:1"
 					if scenario == "wrong object" {
 						prepared.ObjectID = "artifact:other"
@@ -304,7 +299,7 @@ func TestStoredMediaPlacementPreparesPreferredCellWithoutLocalCopy(t *testing.T)
 						t.Fatalf("stored media lost seek-capable %s output", protocol)
 					}
 				}
-				assertNoViewerCorrelationID(t, endpoint)
+				assertCarriesViewerSession(t, endpoint, attemptID)
 			} else if !errors.Is(err, ErrStoredMediaPlacementUnavailable) || endpoint != nil || len(local) != 0 {
 				t.Fatalf("failed preparation exposed an endpoint: %+v %+v %v", local, endpoint, err)
 			}

@@ -116,9 +116,9 @@ func ResolvePreparedLiveViewerEndpoint(ctx context.Context, preparer ViewerPlace
 	if err != nil {
 		return nil, err
 	}
-	// The destination reserved this live viewer under the attempt ID; the
-	// viewer's connection presents it to activate that reservation.
-	AppendViewerCorrelationID(response, attemptID)
+	// The attempt ID is the playback session; the destination reserved the viewer under it, and
+	// the viewer's connection presents it to activate that reservation.
+	AppendViewerSession(response, attemptID)
 	return response, nil
 }
 
@@ -130,18 +130,19 @@ func ResolvePreparedDVRViewerEndpoint(ctx context.Context, preparer ViewerPlacem
 	}
 	request := ViewerPlacementRequest{TenantID: resolution.TenantId, ArtifactID: resolution.ArtifactID, ArtifactHash: resolution.ArtifactHash,
 		InternalName: resolution.InternalName, PlaybackID: resolution.ContentId, Protocol: protocol, Location: location}
-	resp, _, err := resolvePreparedViewerEndpoint(ctx, preparer, request, sharedauthority.ArtifactAuthorityID(resolution.ArtifactID), resolution.OriginClusterID)
+	resp, attemptID, err := resolvePreparedViewerEndpoint(ctx, preparer, request, sharedauthority.ArtifactAuthorityID(resolution.ArtifactID), resolution.OriginClusterID)
 	if err != nil {
 		return nil, err
 	}
+	AppendViewerSession(resp, attemptID)
 	resp.Metadata.ContentType, resp.Metadata.Status, resp.Metadata.DvrStatus = "dvr", "recording", "recording"
 	resp.Metadata.StreamId = &resolution.StreamId
 	resp.Metadata.ThumbnailAssets = buildThumbnailAssets(resolveThumbnailChandlerBase(resolution.OriginClusterID), resolution.StreamId)
 	return resp, nil
 }
 
-// resolvePreparedViewerEndpoint also returns the preparation's attempt ID, which a live
-// destination reserved the viewer under.
+// resolvePreparedViewerEndpoint also returns the preparation's attempt ID, which is the
+// playback session the caller stamps on the response.
 func resolvePreparedViewerEndpoint(ctx context.Context, preparer ViewerPlacementPreparer, request ViewerPlacementRequest, objectID, activeIngestClusterID string) (*sharedpb.ViewerEndpointResponse, string, error) {
 	if preparer == nil {
 		return nil, "", errors.New("viewer placement is required but unavailable")

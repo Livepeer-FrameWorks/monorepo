@@ -4,6 +4,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/mist"
 	clusterpeerpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/cluster_peer"
 	sharedpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/shared"
 )
@@ -99,25 +100,25 @@ func TestToWebSocketURL(t *testing.T) {
 	}
 }
 
-// AppendCorrelationID stamps the viewer id as ?fwcid=... ; empty inputs are
-// passed through unchanged.
-func TestAppendCorrelationID(t *testing.T) {
-	if got := AppendCorrelationID("", "v1"); got != "" {
+// AppendViewerSessionParam stamps the playback session as Mist's session token (?tkn=...);
+// empty inputs are passed through unchanged.
+func TestAppendViewerSessionParam(t *testing.T) {
+	if got := AppendViewerSessionParam("", "v1"); got != "" {
 		t.Errorf("empty url should pass through, got %q", got)
 	}
-	if got := AppendCorrelationID("https://h/x", ""); got != "https://h/x" {
-		t.Errorf("empty viewer id should pass through, got %q", got)
+	if got := AppendViewerSessionParam("https://h/x", ""); got != "https://h/x" {
+		t.Errorf("empty session should pass through, got %q", got)
 	}
-	got := AppendCorrelationID("https://h/x?a=1", "v1")
-	if !strings.Contains(got, "fwcid=v1") || !strings.Contains(got, "a=1") {
-		t.Errorf("expected fwcid + preserved query, got %q", got)
+	got := AppendViewerSessionParam("https://h/x?a=1", "v1")
+	if !strings.Contains(got, "tkn=v1") || !strings.Contains(got, "a=1") {
+		t.Errorf("expected tkn + preserved query, got %q", got)
 	}
 }
 
-// AppendViewerCorrelationID stamps the id onto the primary endpoint, its derived
-// outputs, and every fallback. A nil response or empty id is a no-op.
-func TestAppendViewerCorrelationID(t *testing.T) {
-	AppendViewerCorrelationID(nil, "v1") // must not panic
+// AppendViewerSession stamps the session onto the primary endpoint, its derived
+// outputs, and every fallback. A nil response or empty session is a no-op.
+func TestAppendViewerSession(t *testing.T) {
+	AppendViewerSession(nil, "v1") // must not panic
 
 	resp := &sharedpb.ViewerEndpointResponse{
 		Primary: &sharedpb.ViewerEndpoint{
@@ -126,15 +127,63 @@ func TestAppendViewerCorrelationID(t *testing.T) {
 		},
 		Fallbacks: []*sharedpb.ViewerEndpoint{{Url: "https://h/fallback"}},
 	}
-	AppendViewerCorrelationID(resp, "v1")
+	AppendViewerSession(resp, "v1")
 
-	if !strings.Contains(resp.Primary.GetUrl(), "fwcid=v1") {
+	if !strings.Contains(resp.Primary.GetUrl(), "tkn=v1") {
 		t.Errorf("primary url not stamped: %q", resp.Primary.GetUrl())
 	}
-	if !strings.Contains(resp.Primary.GetOutputs()["mp4"].GetUrl(), "fwcid=v1") {
+	if !strings.Contains(resp.Primary.GetOutputs()["mp4"].GetUrl(), "tkn=v1") {
 		t.Errorf("primary output not stamped: %q", resp.Primary.GetOutputs()["mp4"].GetUrl())
 	}
-	if !strings.Contains(resp.Fallbacks[0].GetUrl(), "fwcid=v1") {
+	if !strings.Contains(resp.Fallbacks[0].GetUrl(), "tkn=v1") {
 		t.Errorf("fallback not stamped: %q", resp.Fallbacks[0].GetUrl())
+	}
+}
+
+// Every resolved playback leaves with exactly one session on all of its URLs: the one a prepared
+// destination reserved under when any endpoint carries it, otherwise a newly issued one. The
+// resolved response itself is never modified, since endpoint catalogs can be shared.
+func TestWithViewerSessionIssuesOneSessionPerPlayback(t *testing.T) {
+	catalog := &sharedpb.ViewerEndpointResponse{
+		Primary: &sharedpb.ViewerEndpoint{Url: "https://warm/hls/a/index.m3u8",
+			Outputs: map[string]*sharedpb.OutputEndpoint{"MP4": {Url: "https://warm/a.mp4"}}},
+		Fallbacks: []*sharedpb.ViewerEndpoint{{Url: "https://other/hls/a/index.m3u8"}},
+	}
+	first, err := WithViewerSession(catalog)
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := WithViewerSession(catalog)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(catalog.GetPrimary().GetUrl(), "tkn=") || strings.Contains(catalog.GetPrimary().GetOutputs()["MP4"].GetUrl(), "tkn=") {
+		t.Fatalf("the shared catalog was stamped: %v", catalog)
+	}
+	session := mist.ViewerSessionID(first.GetPrimary().GetUrl())
+	if session == "" || session == mist.ViewerSessionID(second.GetPrimary().GetUrl()) {
+		t.Fatalf("two resolutions got sessions %q and %q, want two distinct issued sessions",
+			session, mist.ViewerSessionID(second.GetPrimary().GetUrl()))
+	}
+	for _, url := range []string{first.GetPrimary().GetOutputs()["MP4"].GetUrl(), first.GetFallbacks()[0].GetUrl()} {
+		if mist.ViewerSessionID(url) != session {
+			t.Errorf("%q does not carry the playback's session %q", url, session)
+		}
+	}
+
+	prepared, err := mist.NewViewerSessionID()
+	if err != nil {
+		t.Fatal(err)
+	}
+	withPrepared := &sharedpb.ViewerEndpointResponse{
+		Primary:   &sharedpb.ViewerEndpoint{Url: "https://warm/a.mp4"},
+		Fallbacks: []*sharedpb.ViewerEndpoint{{Url: AppendViewerSessionParam("https://prepared/a.mp4", prepared)}},
+	}
+	stamped, err := WithViewerSession(withPrepared)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if mist.ViewerSessionID(stamped.GetPrimary().GetUrl()) != prepared {
+		t.Fatalf("primary %q does not carry the prepared destination's session %q", stamped.GetPrimary().GetUrl(), prepared)
 	}
 }

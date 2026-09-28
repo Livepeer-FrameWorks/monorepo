@@ -80,8 +80,8 @@ The Svelte store supports `resolver.update({ protocol: "DASH" })` to replace the
 previous destination while loading a replacement. `authToken` authenticates the Gateway request;
 `playbackAuth` forwards the viewer JWT separately. Cancellation includes pending retries.
 
-For direct live HTTP resolution, an explicit `?jwt=...` viewer credential is preserved on returned
-playback URLs. Treat those URLs as credentials: do not publish or log them. Header/cookie credentials
+For direct live HTTP resolution, an explicit `?jwt=...` viewer credential is carried on returned
+playback URLs as `fwjwt`, next to the playback session (`tkn`). Treat those URLs as credentials: do not publish or log them. Header/cookie credentials
 are not converted into query parameters; your client must attach them to requests to the selected
 edge. Do not assume a browser forwards authorization across an edge redirect. This live-URL behavior
 does not apply to object-storage signed URLs.

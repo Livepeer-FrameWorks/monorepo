@@ -2556,10 +2556,15 @@ func HandleGenericViewerPlayback(c *gin.Context) {
 
 	// Query credentials are explicitly URL-carried. Header/cookie credentials must
 	// remain out of URLs; clients using them attach credentials to the selected edge.
+	// The JWT travels as fwjwt: Mist would read a `jwt` parameter as the session token.
 	if contentType == "live" || contentType == "dvr" {
 		if token := strings.TrimSpace(c.Request.URL.Query().Get("jwt")); token != "" {
-			viewerParams.Set("jwt", token)
+			viewerParams.Set(mist.ViewerJWTParam, token)
 		}
+	}
+	if response, err = control.WithViewerSession(response); err != nil {
+		respondPlaybackError(c, http.StatusInternalServerError, "PLAYBACK_RESOLUTION_FAILED", "Failed to resolve playback endpoint", nil)
+		return
 	}
 	response, err = withViewerQueryParams(response, viewerParams)
 	if err != nil {
@@ -2567,8 +2572,8 @@ func HandleGenericViewerPlayback(c *gin.Context) {
 		return
 	}
 
-	// A live viewer's bandwidth is reserved by the destination cell when it
-	// prepares the node, and the endpoint URLs already carry that reservation's ID.
+	// Every URL carries the playback session; a prepared destination reserved the viewer's
+	// bandwidth under it.
 
 	// If no protocol or "any", return full JSON response
 	if protocol == "" || protocol == "any" {

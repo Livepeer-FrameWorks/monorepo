@@ -200,8 +200,11 @@ players accept it via the `playbackAuth` prop:
 <fw-player content-id="abc123" playback-token="eyJ..."></fw-player>
 ```
 
-By default the player appends `?jwt=<token>` to every resolved playback URL
-(HLS manifest, DASH manifest, WHEP offer, MP4 progressive). You can also set
+By default the player appends `?fwjwt=<token>` to every resolved playback URL
+(HLS manifest, DASH manifest, WHEP offer, MP4 progressive). Every resolved URL
+also carries the playback's session as `tkn`, which the edge uses to keep one
+viewer's connections together; `fwjwt` carries the credential without replacing
+it. You can also set
 `playbackAuth: { token: viewerJwt, transport: "header" }` to send
 `Authorization: Bearer <token>` on player-controlled request paths: HLS.js,
 DASH.js, WHEP, and Mist JSON polling. Query-string delivery remains the
@@ -213,8 +216,9 @@ forwards the viewer JWT on the GraphQL resolve request. Protected objects are
 checked before endpoint URLs and metadata are returned, then checked again by
 MistServer's `USER_NEW` path before media delivery.
 
-If you're not using a FrameWorks player, append `?jwt=<token>` to the
-playback URL yourself, and include `X-Frameworks-Playback-JWT: <token>` on
+If you're not using a FrameWorks player, append `?fwjwt=<token>` to the
+playback URL yourself (a `?jwt=<token>` parameter is also accepted, but then the
+edge groups connections by the token instead of by playback), and include `X-Frameworks-Playback-JWT: <token>` on
 the `resolveViewerEndpoint` GraphQL request. `Authorization: Bearer <token>`
 is also accepted on HTTP playback requests where headers are available.
 
@@ -262,7 +266,7 @@ Your endpoint receives:
   "streamName": "live+abc123",
   "sessionId": "...",
   "viewerIp": "203.0.113.42",
-  "requestUrl": "/abc123.m3u8?jwt=...",
+  "requestUrl": "/abc123.m3u8?tkn=...&fwjwt=...",
   "viewerToken": "<whatever the viewer attached, may be empty>",
   "connector": "HLS",
   "origin": "https://your-site.example",

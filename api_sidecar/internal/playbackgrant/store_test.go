@@ -212,6 +212,45 @@ func TestRevokedGrantInvalidatesTheStreamsSessions(t *testing.T) {
 	}
 }
 
+// A playback FrameWorks resolved carries its session as Mist's token and the viewer's JWT as
+// fwjwt. The session is decided and re-checked on that JWT: a policy change that still admits
+// its key keeps it, one that revokes the key ends it.
+func TestFwjwtSessionIsCheckedOnItsJWTAcrossPolicyChanges(t *testing.T) {
+	m := &recordingMist{}
+	store, _ := newTestStore(t, m, nil)
+	kept, revoked := playbackgranttest.NewSigningKey(t, "kid-kept"), playbackgranttest.NewSigningKey(t, "kid-revoked")
+	jwtGrant := func(keys ...playbackgranttest.SigningKey) *ipcpb.PlaybackGrant {
+		return playbackgranttest.Grant("live+s", ipcpb.PlaybackGrantPolicyKind_PLAYBACK_GRANT_POLICY_KIND_JWT, keys, "pb")
+	}
+	store.ApplyGrant(jwtGrant(kept, revoked))
+	playback := func(key playbackgranttest.SigningKey, mistSession string) (*ipcpb.ViewerConnectTrigger, string) {
+		session, err := mist.NewViewerSessionID()
+		if err != nil {
+			t.Fatal(err)
+		}
+		requestURL := "http://e/hls/pb/index.m3u8?tkn=" + session + "&fwjwt=" + key.Token(t, "v", time.Now().Add(time.Hour))
+		return &ipcpb.ViewerConnectTrigger{StreamName: "live+s", Host: "192.0.2.1", ViewerToken: session, Connector: "HLS",
+			SessionId: mistSession, RequestUrl: requestURL}, session
+	}
+	onKept, keptSession := playback(kept, "mist-kept")
+	onRevoked, _ := playback(revoked, "mist-revoked")
+	for _, vc := range []*ipcpb.ViewerConnectTrigger{onKept, onRevoked} {
+		if d := store.DecideNewSession(vc); !d.Allow {
+			t.Fatalf("session %s refused on its fwjwt: %s", vc.GetSessionId(), d.Reason)
+		}
+	}
+	store.AdmitSession(onKept, false)
+	store.AdmitSession(onRevoked, true)
+
+	store.ApplyGrant(jwtGrant(kept))
+	if got := m.invalidated(); !slices.Equal(got, []string{"mist-revoked"}) {
+		t.Fatalf("invalidated %v after revoking kid-revoked, want only the session admitted on it", got)
+	}
+	if _, ok := store.ServeAdmitted("pb", "192.0.2.1", "HLS", "http://e/hls/pb/0.ts?tkn="+keptSession); !ok {
+		t.Fatal("the session admitted on the kept key is no longer answered locally")
+	}
+}
+
 func TestJWTSessionOnGrantChecksTokenAndOrigin(t *testing.T) {
 	store, _ := newTestStore(t, &recordingMist{}, nil)
 	key := playbackgranttest.NewSigningKey(t, "kid-1")
