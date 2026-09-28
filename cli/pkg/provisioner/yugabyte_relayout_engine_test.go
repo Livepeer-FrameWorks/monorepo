@@ -74,14 +74,21 @@ func ybRelayoutEngine(database, ownerRole, runtimeRole string, nodes ...*SSHYuga
 	}
 }
 
-// ybStatementTimeout bounds one fixture statement. A statement stuck in a
-// fresh engine then fails its test with the database and node named, instead
-// of holding the whole contract package until its 20-minute test timeout.
-const ybStatementTimeout = 3 * time.Minute
+// ybStatementContext ends a fixture statement shortly before the test binary's
+// own timeout. Baseline DDL on a loaded engine legitimately takes minutes, so
+// the statement gets the whole budget; one that exhausts it fails its test
+// naming the database and node, instead of the package dying in a goroutine dump.
+func ybStatementContext(t *testing.T) (context.Context, context.CancelFunc) {
+	deadline, ok := t.Deadline()
+	if !ok {
+		return context.WithCancel(context.Background())
+	}
+	return context.WithDeadline(context.Background(), deadline.Add(-30*time.Second))
+}
 
 func ybNodeApply(t *testing.T, node *SSHYugabyteNode, database, sql string) string {
 	t.Helper()
-	ctx, cancel := context.WithTimeout(context.Background(), ybStatementTimeout)
+	ctx, cancel := ybStatementContext(t)
 	defer cancel()
 	out, err := node.Query(ctx, database, sql)
 	if err != nil {
