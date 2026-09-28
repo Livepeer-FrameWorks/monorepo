@@ -853,7 +853,7 @@ func placeStoredMedia(ctx context.Context, deps *PlaybackDependencies, tenantID,
 		if deps.StoredMediaPreparer == nil {
 			return nil, nil, fmt.Errorf("%w: storage candidates and policy destinations do not intersect", ErrStoredMediaPlacementUnavailable)
 		}
-		prepared, err := resolvePreparedViewerEndpoint(ctx, deps.StoredMediaPreparer, request, permission.ObjectID, "")
+		prepared, _, err := resolvePreparedViewerEndpoint(ctx, deps.StoredMediaPreparer, request, permission.ObjectID, "")
 		if err != nil {
 			return nil, nil, fmt.Errorf("%w: %w", ErrStoredMediaPlacementUnavailable, err)
 		}

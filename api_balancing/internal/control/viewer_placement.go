@@ -112,7 +112,14 @@ func ResolvePreparedLiveViewerEndpoint(ctx context.Context, preparer ViewerPlace
 	if err != nil || request.ArtifactID != "" || strings.HasPrefix(request.InternalName, "dvr+") {
 		return nil, errors.New("live viewer requires its own signed stream identity")
 	}
-	return resolvePreparedViewerEndpoint(ctx, preparer, request, objectID, activeIngestClusterID)
+	response, attemptID, err := resolvePreparedViewerEndpoint(ctx, preparer, request, objectID, activeIngestClusterID)
+	if err != nil {
+		return nil, err
+	}
+	// The destination reserved this live viewer under the attempt ID; the
+	// viewer's connection presents it to activate that reservation.
+	AppendViewerCorrelationID(response, attemptID)
+	return response, nil
 }
 
 // ResolvePreparedDVRViewerEndpoint keeps the recording's authority and playback
@@ -123,7 +130,7 @@ func ResolvePreparedDVRViewerEndpoint(ctx context.Context, preparer ViewerPlacem
 	}
 	request := ViewerPlacementRequest{TenantID: resolution.TenantId, ArtifactID: resolution.ArtifactID, ArtifactHash: resolution.ArtifactHash,
 		InternalName: resolution.InternalName, PlaybackID: resolution.ContentId, Protocol: protocol, Location: location}
-	resp, err := resolvePreparedViewerEndpoint(ctx, preparer, request, sharedauthority.ArtifactAuthorityID(resolution.ArtifactID), resolution.OriginClusterID)
+	resp, _, err := resolvePreparedViewerEndpoint(ctx, preparer, request, sharedauthority.ArtifactAuthorityID(resolution.ArtifactID), resolution.OriginClusterID)
 	if err != nil {
 		return nil, err
 	}
@@ -133,19 +140,21 @@ func ResolvePreparedDVRViewerEndpoint(ctx context.Context, preparer ViewerPlacem
 	return resp, nil
 }
 
-func resolvePreparedViewerEndpoint(ctx context.Context, preparer ViewerPlacementPreparer, request ViewerPlacementRequest, objectID, activeIngestClusterID string) (*sharedpb.ViewerEndpointResponse, error) {
+// resolvePreparedViewerEndpoint also returns the preparation's attempt ID, which a live
+// destination reserved the viewer under.
+func resolvePreparedViewerEndpoint(ctx context.Context, preparer ViewerPlacementPreparer, request ViewerPlacementRequest, objectID, activeIngestClusterID string) (*sharedpb.ViewerEndpointResponse, string, error) {
 	if preparer == nil {
-		return nil, errors.New("viewer placement is required but unavailable")
+		return nil, "", errors.New("viewer placement is required but unavailable")
 	}
 	// Runtime prefixes are not part of the signed object's routing name.
 	request.InternalName = mist.ExtractInternalName(request.InternalName)
 	if request.InternalName == "" || strings.Contains(request.InternalName, "+") || request.PlaybackID == "" || request.TenantID == "" {
-		return nil, errors.New("viewer placement requires exact live stream identity")
+		return nil, "", errors.New("viewer placement requires exact live stream identity")
 	}
 	if request.Protocol != "" {
 		protocol := mist.PlaybackProtocol(request.Protocol)
 		if protocol == "" {
-			return nil, ErrInvalidViewerProtocol
+			return nil, "", ErrInvalidViewerProtocol
 		}
 		request.Protocol = protocol
 	}
@@ -162,7 +171,7 @@ func resolvePreparedViewerEndpoint(ctx context.Context, preparer ViewerPlacement
 			continue
 		}
 		if err != nil {
-			return nil, err
+			return nil, "", err
 		}
 		issued, issueErr := placement.PreparationIssuedAt(prepared.AttemptID)
 		u, urlErr := url.Parse(prepared.Endpoint)
@@ -171,22 +180,22 @@ func resolvePreparedViewerEndpoint(ctx context.Context, preparer ViewerPlacement
 			prepared.Outcome != balancer.PlacementAccepted || prepared.TenantID != request.TenantID || prepared.ObjectID != objectID ||
 			prepared.NodeID == "" || prepared.ClusterID == "" || prepared.SourceGeneration == "" || prepared.Protocol != protocol || !validPreparedViewerScheme(protocol, u.Scheme) ||
 			!now.Before(prepared.ExpiresAt) || prepared.ExpiresAt.After(issued.Add(placement.PreparationLifetime)) || issued.After(now.Add(placement.PreparationClockSkew)) {
-			return nil, errors.New("viewer preparation does not match the requested destination")
+			return nil, "", errors.New("viewer preparation does not match the requested destination")
 		}
 		if err = ctx.Err(); err != nil {
-			return nil, err
+			return nil, "", err
 		}
 		base, baseErr := url.Parse(prepared.PublicBaseURL)
 		if baseErr != nil || base == nil || base.Hostname() == "" || base.User != nil || base.RawQuery != "" || base.Fragment != "" || (base.Scheme != "https" && base.Scheme != "http") {
-			return nil, errors.New("viewer preparation has no valid public base URL")
+			return nil, "", errors.New("viewer preparation has no valid public base URL")
 		}
 		var rawOutputs map[string]any
 		if len(prepared.OutputsJSON) > 1<<20 || json.Unmarshal([]byte(prepared.OutputsJSON), &rawOutputs) != nil || len(rawOutputs) == 0 {
-			return nil, errors.New("viewer preparation has no valid Mist output advertisement")
+			return nil, "", errors.New("viewer preparation has no valid Mist output advertisement")
 		}
 		outputs := BuildAdvertisedPlaybackOutputs(prepared.PublicBaseURL, rawOutputs, request.PlaybackID, true)
 		if !bindPreparedEndpoint(prepared.Endpoint, protocol, outputs) {
-			return nil, errors.New("viewer preparation endpoint is outside its Mist output advertisement")
+			return nil, "", errors.New("viewer preparation endpoint is outside its Mist output advertisement")
 		}
 		protocolHints := make([]string, 0, len(outputs))
 		for name := range outputs {
@@ -199,15 +208,9 @@ func resolvePreparedViewerEndpoint(ctx context.Context, preparer ViewerPlacement
 			Outputs: outputs}
 		metadata := &sharedpb.PlaybackMetadata{ContentId: request.PlaybackID, ContentType: "live", TenantId: request.TenantID, StreamId: &request.StreamID,
 			Status: "live", IsLive: true, ProtocolHints: protocolHints, ThumbnailAssets: buildThumbnailAssets(resolveThumbnailChandlerBase(activeIngestClusterID), request.StreamID)}
-		response := &sharedpb.ViewerEndpointResponse{Primary: endpoint, Metadata: metadata}
-		if request.ArtifactID == "" {
-			// The destination reserved this live viewer under the attempt ID; the
-			// viewer's connection presents it to activate that reservation.
-			AppendViewerCorrelationID(response, prepared.AttemptID)
-		}
-		return response, nil
+		return &sharedpb.ViewerEndpointResponse{Primary: endpoint, Metadata: metadata}, prepared.AttemptID, nil
 	}
-	return nil, balancer.ErrPlacementUnavailable
+	return nil, "", balancer.ErrPlacementUnavailable
 }
 
 func validPreparedViewerScheme(protocol, scheme string) bool {

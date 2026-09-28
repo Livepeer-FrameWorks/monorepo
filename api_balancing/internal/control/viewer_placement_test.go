@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"math"
+	"strings"
 	"testing"
 	"time"
 
@@ -13,6 +14,7 @@ import (
 	sharedauthority "github.com/Livepeer-FrameWorks/monorepo/pkg/mediaauthority"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/mist"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/placement"
+	sharedpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/shared"
 )
 
 type viewerPreparerFunc func(context.Context, ViewerPlacementRequest) (balancer.PlacementPreparationResult, error)
@@ -74,6 +76,7 @@ func TestPreparedViewerNormalizesFormatWithoutPreparingAnotherProtocol(t *testin
 
 func TestPreparedViewerSelectsNodeOnceAndReturnsFullMistCatalog(t *testing.T) {
 	calls := 0
+	var attemptID string
 	response, err := ResolvePreparedLiveViewerEndpoint(context.Background(), viewerPreparerFunc(func(ctx context.Context, request ViewerPlacementRequest) (balancer.PlacementPreparationResult, error) {
 		calls++
 		if request.InternalName != "internal" || request.Location != nil || request.Protocol != mist.AutoPlaybackProtocol {
@@ -82,7 +85,9 @@ func TestPreparedViewerSelectsNodeOnceAndReturnsFullMistCatalog(t *testing.T) {
 		if deadline, ok := ctx.Deadline(); !ok || time.Until(deadline) > 5*time.Second {
 			t.Fatal("viewer preparation lost total deadline")
 		}
-		return preparedViewer(t, request), nil
+		prepared := preparedViewer(t, request)
+		attemptID = prepared.AttemptID
+		return prepared, nil
 	}), ViewerPlacementRequest{TenantID: "tenant", StreamID: "stream", InternalName: "live+internal", PlaybackID: "public"}, "")
 	if err != nil || response.Primary.Protocol != mist.AutoPlaybackProtocol || calls != 1 || len(response.Fallbacks) != 0 || len(response.Primary.Outputs) < 6 || response.Primary.ClusterId != "us" || response.Primary.BaseUrl != "https://edge.example/media" {
 		t.Fatalf("prepared viewer response: %v, %v, calls=%d", response, err, calls)
@@ -90,6 +95,17 @@ func TestPreparedViewerSelectsNodeOnceAndReturnsFullMistCatalog(t *testing.T) {
 	for _, protocol := range []string{"HLS", "DASH", "HLS_CMAF", "MIST_WEBRTC", "WHEP", "MP4", "WEBM", "RAW_WS"} {
 		if response.Primary.Outputs[protocol] == nil {
 			t.Errorf("full Mist catalog omitted %s", protocol)
+		}
+	}
+	// The destination reserved the live viewer under the attempt ID, so every
+	// URL must present it for PLAY_REWRITE to activate that reservation.
+	wantCID := "fwcid=" + attemptID
+	if !strings.Contains(response.Primary.GetUrl(), wantCID) {
+		t.Errorf("live URL %q lacks %s", response.Primary.GetUrl(), wantCID)
+	}
+	for key, output := range response.Primary.Outputs {
+		if !strings.Contains(output.GetUrl(), wantCID) {
+			t.Errorf("live output %s URL %q lacks %s", key, output.GetUrl(), wantCID)
 		}
 	}
 }
@@ -163,6 +179,21 @@ func TestPreparedDVRViewerUsesRecordingAuthority(t *testing.T) {
 	}), resolution, "hls", nil)
 	if err != nil || resp.GetMetadata().GetContentType() != "dvr" || resp.GetMetadata().GetStreamId() != "parent-stream" {
 		t.Fatalf("DVR response %v: %v", resp, err)
+	}
+	assertNoViewerCorrelationID(t, resp.GetPrimary())
+}
+
+// Only live preparation reserves a viewer on the destination; a recording or
+// stored-media URL carrying an attempt ID would name a reservation that does not exist.
+func assertNoViewerCorrelationID(t *testing.T, endpoint *sharedpb.ViewerEndpoint) {
+	t.Helper()
+	if strings.Contains(endpoint.GetUrl(), "fwcid=") {
+		t.Errorf("non-live URL %q carries fwcid", endpoint.GetUrl())
+	}
+	for key, output := range endpoint.GetOutputs() {
+		if strings.Contains(output.GetUrl(), "fwcid=") {
+			t.Errorf("non-live output %s URL %q carries fwcid", key, output.GetUrl())
+		}
 	}
 }
 
@@ -273,6 +304,7 @@ func TestStoredMediaPlacementPreparesPreferredCellWithoutLocalCopy(t *testing.T)
 						t.Fatalf("stored media lost seek-capable %s output", protocol)
 					}
 				}
+				assertNoViewerCorrelationID(t, endpoint)
 			} else if !errors.Is(err, ErrStoredMediaPlacementUnavailable) || endpoint != nil || len(local) != 0 {
 				t.Fatalf("failed preparation exposed an endpoint: %+v %+v %v", local, endpoint, err)
 			}
