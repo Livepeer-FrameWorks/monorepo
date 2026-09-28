@@ -53,6 +53,10 @@ for config in "${configs[@]}"; do
   printf 'Linting %d staged frontend file(s) in %s\n' "${#staged[@]}" "$config"
   (
     cd "$config"
-    ./node_modules/.bin/eslint --no-warn-ignored "${staged[@]}"
+    # Workspace packages have their own install; the player and studio tool roots lint with the
+    # workspace root's ESLint and plugins.
+    eslint=./node_modules/.bin/eslint
+    [[ -x "$eslint" ]] || eslint="$repo_root/node_modules/.bin/eslint"
+    "$eslint" --no-warn-ignored "${staged[@]}"
   )
 done

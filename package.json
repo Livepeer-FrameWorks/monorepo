@@ -15,7 +15,8 @@
     "npm_studio"
   ],
   "scripts": {
-    "lint": "pnpm -r lint",
+    "lint": "pnpm -r lint && pnpm run lint:tool-roots",
+    "lint:tool-roots": "cd npm_player && eslint . && cd ../npm_studio && eslint .",
     "build": "pnpm -r build",
     "test": "pnpm --filter @livepeer-frameworks/api build && pnpm -r --if-present test",
     "test:coverage": "pnpm --filter @livepeer-frameworks/api build && pnpm -r --workspace-concurrency=1 --if-present test:coverage",
@@ -33,13 +34,16 @@
     "@typescript-eslint/parser": "^8.58.2",
     "@typescript-eslint/type-utils": "^8.58.2",
     "@typescript-eslint/utils": "^8.58.2",
+    "eslint": "^10.2.0",
     "eslint-config-prettier": "^10.1.8",
+    "eslint-plugin-svelte": "^3.17.0",
     "globals": "^17.5.0",
     "knip": "^6.4.1",
     "lefthook": "^2.1.5",
     "prettier": "^3.8.3",
     "prettier-plugin-astro": "^0.14.1",
     "prettier-plugin-svelte": "^3.5.1",
+    "svelte-eslint-parser": "^1.5.1",
     "typescript-eslint": "^8.58.2"
   }
 }

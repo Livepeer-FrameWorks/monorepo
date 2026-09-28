@@ -35,9 +35,15 @@ importers:
       '@typescript-eslint/utils':
         specifier: ^8.58.2
         version: 8.58.2(eslint@10.2.0(jiti@2.6.1))(typescript@6.0.2)
+      eslint:
+        specifier: ^10.2.0
+        version: 10.2.0(jiti@2.6.1)
       eslint-config-prettier:
         specifier: ^10.1.8
         version: 10.1.8(eslint@10.2.0(jiti@2.6.1))
+      eslint-plugin-svelte:
+        specifier: ^3.17.0
+        version: 3.17.0(eslint@10.2.0(jiti@2.6.1))(svelte@5.55.4)
       globals:
         specifier: ^17.5.0
         version: 17.5.0
@@ -56,6 +62,9 @@ importers:
       prettier-plugin-svelte:
         specifier: ^3.5.1
         version: 3.5.1(prettier@3.8.3)(svelte@5.55.4)
+      svelte-eslint-parser:
+        specifier: ^1.5.1
+        version: 1.6.0(svelte@5.55.4)
       typescript-eslint:
         specifier: ^8.58.2
         version: 8.58.2(eslint@10.2.0(jiti@2.6.1))(typescript@6.0.2)
@@ -658,16 +667,16 @@ importers:
         version: link:../packages/site-config
       '@livepeer-frameworks/player-core':
         specifier: workspace:^
-        version: link:../npm_player/packages/core
+        version: file:npm_player/packages/core(dashjs@5.2.0(@svta/cml-cta@1.0.6(@svta/cml-structured-field-values@1.1.3(@svta/cml-utils@1.5.0))(@svta/cml-utils@1.5.0))(@svta/cml-structured-field-values@1.1.3(@svta/cml-utils@1.5.0))(@svta/cml-utils@1.5.0))(graphql-ws@6.0.8(crossws@0.3.5)(graphql@16.13.2)(ws@8.18.3))(hls.js@1.6.16)(video.js@8.23.7)
       '@livepeer-frameworks/player-svelte':
         specifier: workspace:^
-        version: link:../npm_player/packages/svelte
+        version: file:npm_player/packages/svelte(@internationalized/date@3.12.1)(@sveltejs/kit@2.57.1(@sveltejs/vite-plugin-svelte@7.0.0(svelte@5.55.4)(vite@8.0.8(@types/node@25.6.0)(esbuild@0.27.7)(jiti@2.6.1)(terser@5.46.1)(yaml@2.9.1)))(svelte@5.55.4)(typescript@6.0.2)(vite@8.0.8(@types/node@25.6.0)(esbuild@0.27.7)(jiti@2.6.1)(terser@5.46.1)(yaml@2.9.1)))(dashjs@5.2.0(@svta/cml-cta@1.0.6(@svta/cml-structured-field-values@1.1.3(@svta/cml-utils@1.5.0))(@svta/cml-utils@1.5.0))(@svta/cml-structured-field-values@1.1.3(@svta/cml-utils@1.5.0))(@svta/cml-utils@1.5.0))(graphql-ws@6.0.8(crossws@0.3.5)(graphql@16.13.2)(ws@8.18.3))(hls.js@1.6.16)(svelte@5.55.4)(video.js@8.23.7)
       '@livepeer-frameworks/streamcrafter-core':
         specifier: workspace:^
-        version: link:../npm_studio/packages/core
+        version: file:npm_studio/packages/core(graphql-ws@6.0.8(crossws@0.3.5)(graphql@16.13.2)(ws@8.18.3))
       '@livepeer-frameworks/streamcrafter-svelte':
         specifier: workspace:^
-        version: link:../npm_studio/packages/svelte
+        version: file:npm_studio/packages/svelte(graphql-ws@6.0.8(crossws@0.3.5)(graphql@16.13.2)(ws@8.18.3))(svelte@5.55.4)
       '@sveltejs/kit':
         specifier: ^2.57.1
         version: 2.57.1(@sveltejs/vite-plugin-svelte@7.0.0(svelte@5.55.4)(vite@8.0.8(@types/node@25.6.0)(esbuild@0.27.7)(jiti@2.6.1)(terser@5.46.1)(yaml@2.9.1)))(svelte@5.55.4)(typescript@6.0.2)(vite@8.0.8(@types/node@25.6.0)(esbuild@0.27.7)(jiti@2.6.1)(terser@5.46.1)(yaml@2.9.1))
@@ -700,7 +709,7 @@ importers:
         version: 5.5.0(graphql@16.13.2)
       graphql-ws:
         specifier: ^6.0.8
-        version: 6.0.8(crossws@0.3.5)(graphql@16.13.2)(ws@8.21.3)
+        version: 6.0.8(crossws@0.3.5)(graphql@16.13.2)(ws@8.18.3)
       h3-js:
         specifier: ^4.4.0
         version: 4.4.0
@@ -899,7 +908,7 @@ importers:
         version: 2.0.1(astro@6.1.6(@types/node@25.6.0)(jiti@2.6.1)(lightningcss@1.32.0)(rollup@4.60.1)(terser@5.46.1)(typescript@6.0.2)(yaml@2.9.1))(mermaid@11.14.0)
       graphql-ws:
         specifier: ^6.0.8
-        version: 6.0.8(crossws@0.3.5)(graphql@16.13.2)(ws@8.18.3)
+        version: 6.0.8(crossws@0.3.5)(graphql@16.13.2)(ws@8.21.3)
       mermaid:
         specifier: ^11.14.0
         version: 11.14.0
@@ -2993,6 +3002,33 @@ packages:
     peerDependenciesMeta:
       graphql-ws:
         optional: true
+
+  '@livepeer-frameworks/player-core@file:npm_player/packages/core':
+    resolution: {directory: npm_player/packages/core, type: directory}
+    peerDependencies:
+      dashjs: ^5.0.0
+      hls.js: ^1.0.0
+      video.js: ^8.0.0
+    peerDependenciesMeta:
+      dashjs:
+        optional: true
+      hls.js:
+        optional: true
+      video.js:
+        optional: true
+
+  '@livepeer-frameworks/player-svelte@file:npm_player/packages/svelte':
+    resolution: {directory: npm_player/packages/svelte, type: directory}
+    peerDependencies:
+      svelte: ^5.0.0
+
+  '@livepeer-frameworks/streamcrafter-core@file:npm_studio/packages/core':
+    resolution: {directory: npm_studio/packages/core, type: directory}
+
+  '@livepeer-frameworks/streamcrafter-svelte@file:npm_studio/packages/svelte':
+    resolution: {directory: npm_studio/packages/svelte, type: directory}
+    peerDependencies:
+      svelte: ^5.0.0
 
   '@manypkg/find-root@3.1.0':
     resolution: {integrity: sha512-BcSqCyKhBVZ5YkSzOiheMCV41kqAFptW6xGqYSTjkVTl9XQpr+pqHhwgGCOHQtjDCv7Is6EFyA14Sm5GVbVABA==}
@@ -12636,6 +12672,14 @@ snapshots:
     dependencies:
       '@lit-labs/ssr-dom-shim': 1.5.1
 
+  '@livepeer-frameworks/api@file:npm_api(graphql-ws@6.0.8(crossws@0.3.5)(graphql@16.13.2)(ws@8.18.3))':
+    dependencies:
+      '@graphql-typed-document-node/core': 3.2.0(graphql@16.13.2)
+      graphql: 16.13.2
+      standardwebhooks: 1.1.1
+    optionalDependencies:
+      graphql-ws: 6.0.8(crossws@0.3.5)(graphql@16.13.2)(ws@8.18.3)
+
   '@livepeer-frameworks/api@file:npm_api(graphql-ws@6.0.8(crossws@0.3.5)(graphql@16.13.2)(ws@8.21.3))':
     dependencies:
       '@graphql-typed-document-node/core': 3.2.0(graphql@16.13.2)
@@ -12643,6 +12687,44 @@ snapshots:
       standardwebhooks: 1.1.1
     optionalDependencies:
       graphql-ws: 6.0.8(crossws@0.3.5)(graphql@16.13.2)(ws@8.21.3)
+
+  '@livepeer-frameworks/player-core@file:npm_player/packages/core(dashjs@5.2.0(@svta/cml-cta@1.0.6(@svta/cml-structured-field-values@1.1.3(@svta/cml-utils@1.5.0))(@svta/cml-utils@1.5.0))(@svta/cml-structured-field-values@1.1.3(@svta/cml-utils@1.5.0))(@svta/cml-utils@1.5.0))(graphql-ws@6.0.8(crossws@0.3.5)(graphql@16.13.2)(ws@8.18.3))(hls.js@1.6.16)(video.js@8.23.7)':
+    dependencies:
+      '@livepeer-frameworks/api': file:npm_api(graphql-ws@6.0.8(crossws@0.3.5)(graphql@16.13.2)(ws@8.18.3))
+      clsx: 2.1.1
+      tailwind-merge: 3.5.0
+    optionalDependencies:
+      dashjs: 5.2.0(@svta/cml-cta@1.0.6(@svta/cml-structured-field-values@1.1.3(@svta/cml-utils@1.5.0))(@svta/cml-utils@1.5.0))(@svta/cml-structured-field-values@1.1.3(@svta/cml-utils@1.5.0))(@svta/cml-utils@1.5.0)
+      hls.js: 1.6.16
+      video.js: 8.23.7
+    transitivePeerDependencies:
+      - graphql-ws
+
+  '@livepeer-frameworks/player-svelte@file:npm_player/packages/svelte(@internationalized/date@3.12.1)(@sveltejs/kit@2.57.1(@sveltejs/vite-plugin-svelte@7.0.0(svelte@5.55.4)(vite@8.0.8(@types/node@25.6.0)(esbuild@0.27.7)(jiti@2.6.1)(terser@5.46.1)(yaml@2.9.1)))(svelte@5.55.4)(typescript@6.0.2)(vite@8.0.8(@types/node@25.6.0)(esbuild@0.27.7)(jiti@2.6.1)(terser@5.46.1)(yaml@2.9.1)))(dashjs@5.2.0(@svta/cml-cta@1.0.6(@svta/cml-structured-field-values@1.1.3(@svta/cml-utils@1.5.0))(@svta/cml-utils@1.5.0))(@svta/cml-structured-field-values@1.1.3(@svta/cml-utils@1.5.0))(@svta/cml-utils@1.5.0))(graphql-ws@6.0.8(crossws@0.3.5)(graphql@16.13.2)(ws@8.18.3))(hls.js@1.6.16)(svelte@5.55.4)(video.js@8.23.7)':
+    dependencies:
+      '@livepeer-frameworks/player-core': file:npm_player/packages/core(dashjs@5.2.0(@svta/cml-cta@1.0.6(@svta/cml-structured-field-values@1.1.3(@svta/cml-utils@1.5.0))(@svta/cml-utils@1.5.0))(@svta/cml-structured-field-values@1.1.3(@svta/cml-utils@1.5.0))(@svta/cml-utils@1.5.0))(graphql-ws@6.0.8(crossws@0.3.5)(graphql@16.13.2)(ws@8.18.3))(hls.js@1.6.16)(video.js@8.23.7)
+      bits-ui: 2.17.3(@internationalized/date@3.12.1)(@sveltejs/kit@2.57.1(@sveltejs/vite-plugin-svelte@7.0.0(svelte@5.55.4)(vite@8.0.8(@types/node@25.6.0)(esbuild@0.27.7)(jiti@2.6.1)(terser@5.46.1)(yaml@2.9.1)))(svelte@5.55.4)(typescript@6.0.2)(vite@8.0.8(@types/node@25.6.0)(esbuild@0.27.7)(jiti@2.6.1)(terser@5.46.1)(yaml@2.9.1)))(svelte@5.55.4)
+      svelte: 5.55.4
+    transitivePeerDependencies:
+      - '@internationalized/date'
+      - '@sveltejs/kit'
+      - dashjs
+      - graphql-ws
+      - hls.js
+      - video.js
+
+  '@livepeer-frameworks/streamcrafter-core@file:npm_studio/packages/core(graphql-ws@6.0.8(crossws@0.3.5)(graphql@16.13.2)(ws@8.18.3))':
+    dependencies:
+      '@livepeer-frameworks/api': file:npm_api(graphql-ws@6.0.8(crossws@0.3.5)(graphql@16.13.2)(ws@8.18.3))
+    transitivePeerDependencies:
+      - graphql-ws
+
+  '@livepeer-frameworks/streamcrafter-svelte@file:npm_studio/packages/svelte(graphql-ws@6.0.8(crossws@0.3.5)(graphql@16.13.2)(ws@8.18.3))(svelte@5.55.4)':
+    dependencies:
+      '@livepeer-frameworks/streamcrafter-core': file:npm_studio/packages/core(graphql-ws@6.0.8(crossws@0.3.5)(graphql@16.13.2)(ws@8.18.3))
+      svelte: 5.55.4
+    transitivePeerDependencies:
+      - graphql-ws
 
   '@manypkg/find-root@3.1.0':
     dependencies:
