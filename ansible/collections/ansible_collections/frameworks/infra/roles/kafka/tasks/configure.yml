@@ -56,4 +56,7 @@
     JMX_PORT: ""
   become: true
   become_user: "{{ kafka_user }}"
+  # The kafka system user has no home, so its default ~/.ansible/tmp is unwritable.
+  vars:
+    ansible_remote_tmp: "{{ kafka_install_dir }}/.ansible/tmp"
   when: not ansible_check_mode
