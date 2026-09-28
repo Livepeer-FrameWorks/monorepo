@@ -206,6 +206,22 @@ func TestEnforceWebhookPolicy(t *testing.T) {
 	})
 }
 
+// A reported latency of 0 means no webhook call; a sub-millisecond call on a
+// local network must still report one.
+func TestWebhookLatencyMillisReportsEveryCall(t *testing.T) {
+	for elapsed, want := range map[time.Duration]int{
+		0:                                  0,
+		300 * time.Microsecond:             1,
+		time.Millisecond:                   1,
+		time.Millisecond + time.Nanosecond: 2,
+		42 * time.Millisecond:              42,
+	} {
+		if got := webhookLatencyMillis(elapsed); got != want {
+			t.Fatalf("webhookLatencyMillis(%v) = %d, want %d", elapsed, got, want)
+		}
+	}
+}
+
 // The webhook client returns a redirect instead of following it: the
 // redirect target is a new destination the policy never saw. The receiver is
 // excepted by CIDR only so a local server can answer.

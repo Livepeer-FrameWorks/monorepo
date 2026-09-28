@@ -470,7 +470,7 @@ func (p *Processor) enforceWebhookPolicy(ctx context.Context, internalName strin
 
 	start := time.Now()
 	resp, err := httpClient.Do(req)
-	latencyMs := int(time.Since(start) / time.Millisecond)
+	latencyMs := webhookLatencyMillis(time.Since(start))
 	if err != nil {
 		// Distinguish SSRF blocks from network errors so operators can tell
 		// "customer misconfigured a private-IP webhook" from "their server
@@ -553,6 +553,13 @@ func (p *Processor) logPlaybackDeny(internalName string, userNew *ipcpb.ViewerCo
 // ----------------------------------------------------------------------------
 // Webhook HTTP client
 // ----------------------------------------------------------------------------
+
+// webhookLatencyMillis rounds a webhook call's duration up to whole
+// milliseconds: a reported 0 means no call was made, so a call that happened
+// always reports at least 1.
+func webhookLatencyMillis(elapsed time.Duration) int {
+	return int((elapsed + time.Millisecond - 1) / time.Millisecond)
+}
 
 // playbackWebhookAllowPrivate is the process-wide
 // PLAYBACK_WEBHOOK_ALLOW_PRIVATE_DESTINATIONS setting. It is package state
