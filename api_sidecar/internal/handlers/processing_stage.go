@@ -15,7 +15,9 @@ import (
 	"frameworks/api_sidecar/internal/admission"
 	"frameworks/api_sidecar/internal/storage"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/mist"
 	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
+	"github.com/google/uuid"
 
 	"github.com/sirupsen/logrus"
 )
@@ -75,6 +77,9 @@ func (h *ProcessingJobHandler) buildLocalProcessingSourceURL(req *ipcpb.Processi
 	if credential := strings.TrimSpace(params["source_credential"]); credential != "" {
 		query.Set("token", credential)
 	}
+	// The read's own Mist session token keeps its end out of viewer accounting: Mist treats an
+	// HTTP read as a viewer session and reports its end with this token.
+	query.Set("tkn", mist.ProcessingReadSessionPrefix+uuid.NewString())
 	if params["source_kind"] == "live" {
 		query.Set("startunix", strconv.FormatInt(startUnix-time.Now().Unix(), 10))
 		query.Set("duration", strconv.FormatInt(stopUnix-startUnix, 10))

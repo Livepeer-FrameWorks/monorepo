@@ -5060,6 +5060,17 @@ func (p *Processor) handleUserEnd(trigger *ipcpb.MistTrigger) (string, bool, err
 		"node_id":           trigger.GetNodeId(),
 	}).Debug("Processing USER_END trigger")
 
+	// A processing read's USER_NEW was admitted as the platform's own read, not a viewer, so its
+	// end is not a viewer session either.
+	if mist.IsProcessingReadDisconnect(userEnd) {
+		p.logger.WithFields(logging.Fields{
+			"session_id":    userEnd.GetSessionId(),
+			"internal_name": internalStreamName,
+			"node_id":       trigger.GetNodeId(),
+		}).Debug("Ignoring USER_END of a processing read")
+		return "", false, nil
+	}
+
 	if !mist.IsPlaybackViewerRequest(userEnd.GetConnector(), "") &&
 		!state.DefaultManager().HasActiveVirtualViewerSession(userEnd.GetSessionId(), trigger.GetNodeId(), internalStreamName) {
 		p.logger.WithFields(logging.Fields{

@@ -155,6 +155,19 @@ func IsPlaybackViewerRequest(connector, requestURL string) bool {
 	return hasPlaybackRequestMarker(req)
 }
 
+// ProcessingReadSessionPrefix begins the Mist session token (tkn) a processing job reads its source
+// under. Mist bundles the read's connections under that token and repeats it as USER_END's first
+// field, so the end of a processing read is told apart from a viewer's without remembered state.
+const ProcessingReadSessionPrefix = "fwproc-"
+
+// IsProcessingReadDisconnect reports whether a USER_END ends a processing read rather than a
+// viewer session. USER_END carries the session token as SessionIdentifier when Mist also reports
+// a session ID, and as SessionId when it does not.
+func IsProcessingReadDisconnect(disconnect *ipcpb.ViewerDisconnectTrigger) bool {
+	return strings.HasPrefix(disconnect.GetSessionIdentifier(), ProcessingReadSessionPrefix) ||
+		strings.HasPrefix(disconnect.GetSessionId(), ProcessingReadSessionPrefix)
+}
+
 func isNonPlaybackAssetConnector(connector string) bool {
 	for part := range strings.SplitSeq(connector, ",") {
 		switch strings.ToLower(strings.TrimSpace(part)) {

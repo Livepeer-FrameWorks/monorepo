@@ -1426,6 +1426,35 @@ func TestBuildLocalProcessingSourceURL_CarriesProcessingSourceCredential(t *test
 	}
 }
 
+// Mist accounts the HTTP read as a viewer session named by its tkn and repeats that token as
+// USER_END's first field. The read's token must make that USER_END recognisable as a
+// processing read once Mist's payload is parsed.
+func TestBuildLocalProcessingSourceURL_NamesTheReadsMistSession(t *testing.T) {
+	h := &ProcessingJobHandler{mistServerURL: "http://mistserver:4242/api2"}
+	req := &ipcpb.ProcessingJobRequest{Params: map[string]string{
+		"source_kind":        "vod",
+		"source_stream_name": "vod+asset-1",
+		"source_start_unix":  "0",
+		"source_stop_unix":   "30",
+	}}
+	u, err := url.Parse(h.buildLocalProcessingSourceURL(req))
+	if err != nil {
+		t.Fatal(err)
+	}
+	token := u.Query().Get("tkn")
+	if token == "" {
+		t.Fatalf("source URL %q carries no Mist session token", u)
+	}
+	userEnd := token + "\nvod+asset-1\nMKV\n127.0.0.1\n30\n0\n1024\n\n\n\n\nmist-session-1"
+	trigger, err := mist.ParseTriggerToProtobuf(mist.TriggerUserEnd, []byte(userEnd), "edge-1", logging.NewLogger())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !mist.IsProcessingReadDisconnect(trigger.GetViewerDisconnect()) {
+		t.Fatalf("USER_END for the read (token %q) is not recognised as a processing read", token)
+	}
+}
+
 func TestStageProcessingSourceDownloadsSourceClip(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodHead {
