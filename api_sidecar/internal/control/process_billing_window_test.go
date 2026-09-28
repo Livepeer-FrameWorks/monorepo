@@ -93,6 +93,34 @@ func TestProcessBillingWindowSumsAndSealsOnFinal(t *testing.T) {
 	}
 }
 
+// A window that turns final after it was opened is sealed once: the window-end sweep leaves
+// nothing open or pending a retry.
+func TestProcessBillingWindowFinalAfterOpenSealsOnce(t *testing.T) {
+	wal := withTestTriggerWAL(t)
+	clock := &fakeClock{now: time.Unix(1_800_000_000, 0)}
+	agg := newTestAggregator(clock)
+
+	for _, final := range []bool{false, true} {
+		if _, err := agg.add(wal, "pid-9", avSample(1000, 1000, 30, 4000, final)); err != nil {
+			t.Fatal(err)
+		}
+		clock.now = clock.now.Add(time.Second)
+	}
+	if len(agg.open) != 0 {
+		t.Fatalf("the sealed final window is still open: %d", len(agg.open))
+	}
+	clock.now = time.Unix(1_800_000_010, 0)
+	agg.sweep(wal)
+	agg.sweep(wal)
+	if len(agg.open) != 0 || len(agg.unsealed) != 0 {
+		t.Fatalf("after the window ended: open=%d unsealed=%d, want the sealed final window gone", len(agg.open), len(agg.unsealed))
+	}
+	events := pendingBilling(t, wal)
+	if len(events) != 1 || events[0].GetDurationMs() != 2000 || !events[0].GetIsFinal() {
+		t.Fatalf("sealed windows = %+v, want one final window of 2000 ms", events)
+	}
+}
+
 // A window with no final sample is sealed when the window ends, and a sample in the next window
 // starts a new event.
 func TestProcessBillingWindowSealsAtWindowEnd(t *testing.T) {

@@ -1,6 +1,8 @@
 package control
 
 import (
+	"errors"
+	"io/fs"
 	"strconv"
 	"sync"
 	"time"
@@ -97,6 +99,8 @@ func (a *processBillingAggregator) add(wal *storage.TriggerWAL, processKey strin
 		TriggerWALAppends.WithLabelValues(triggerType, "aggregated").Inc()
 	}
 	if merged.GetProcessBilling().GetIsFinal() {
+		// A final window is sealed now, so the window-end sweep must not seal it again.
+		delete(a.open, processKey)
 		a.sealLocked(wal, window, now)
 		return window.id, nil
 	}
@@ -108,6 +112,17 @@ func (a *processBillingAggregator) add(wal *storage.TriggerWAL, processKey strin
 // is retried by the sweeper; a restart seals it as well.
 func (a *processBillingAggregator) sealLocked(wal *storage.TriggerWAL, window *processBillingWindowState, now time.Time) {
 	if err := wal.Seal(window.id, now); err != nil {
+		// A window without its staged file can never be sealed; retrying it would only repeat the
+		// failure every sweep.
+		if errors.Is(err, fs.ErrNotExist) {
+			if pkgLogger != nil {
+				pkgLogger.WithError(err).WithFields(logging.Fields{
+					"source_event_id": window.id,
+					"window_start":    window.start.UTC().Format(time.RFC3339),
+				}).Error("Process billing window has no staged event to seal; dropping it")
+			}
+			return
+		}
 		a.unsealed[window.id] = window
 		if pkgLogger != nil {
 			pkgLogger.WithError(err).WithFields(logging.Fields{
