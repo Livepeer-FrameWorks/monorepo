@@ -468,6 +468,13 @@ func (u *sshYugabyteUniverse) ProcessState(ctx context.Context, host inventory.H
 	return "", fmt.Errorf("cannot tell whether %s on %s runs the installed binary (%q)", process, host.Name, strings.TrimSpace(out))
 }
 
+// yugabyteAsRoot runs a node script as root. The probes read the yugabyte
+// user's /proc/<pid>/exe and root-owned config and receipts, which an
+// unprivileged SSH user cannot, so they would report every state as unknown.
+func yugabyteAsRoot(script string) string {
+	return `if [ "$(id -u)" = 0 ]; then bash -c ` + fwssh.ShellQuote(script) + `; else sudo -n bash -c ` + fwssh.ShellQuote(script) + `; fi`
+}
+
 func yugabyteNodeScript(ctx context.Context, pool *fwssh.Pool, host inventory.Host, script string) (string, error) {
 	return yugabyteNodeScriptWithin(ctx, pool, host, script, time.Minute)
 }
@@ -479,7 +486,7 @@ func yugabyteNodeScriptWithin(ctx context.Context, pool *fwssh.Pool, host invent
 	}
 	probeCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
-	result, err := runner.RunScript(probeCtx, script)
+	result, err := runner.RunScript(probeCtx, yugabyteAsRoot(script))
 	if err != nil {
 		return "", fmt.Errorf("%s: %w", host.Name, err)
 	}
