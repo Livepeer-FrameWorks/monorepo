@@ -17,7 +17,7 @@ func TestApplyBaselineMistConfigIncludesOperationalModes(t *testing.T) {
 		"prometheus":             mist.MetricsConfigValue,
 		"sessionInputMode":       15,
 		"sessionOutputMode":      15,
-		"sessionStreamInfoMode":  "1",
+		"sessionStreamInfoMode":  "3",
 		"sessionUnspecifiedMode": 0,
 		"sessionViewerMode":      14,
 		"tknMode":                15,

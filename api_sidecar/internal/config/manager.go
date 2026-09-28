@@ -545,7 +545,10 @@ func applyBaselineMistConfig(desiredConfig map[string]any) {
 	desiredConfig["prometheus"] = mist.MetricsConfigValue
 	desiredConfig["sessionInputMode"] = 15
 	desiredConfig["sessionOutputMode"] = 15
-	desiredConfig["sessionStreamInfoMode"] = "1"
+	// Stream info requests (json_, player.js) form no Mist session: sessions are bundled by tkn,
+	// and an info request sharing a viewer's tkn would otherwise become the session's first
+	// connection, so USER_NEW would arrive as a non-media request and never admit the viewer.
+	desiredConfig["sessionStreamInfoMode"] = "3"
 	desiredConfig["sessionUnspecifiedMode"] = 0
 	desiredConfig["sessionViewerMode"] = 14
 	desiredConfig["tknMode"] = 15
