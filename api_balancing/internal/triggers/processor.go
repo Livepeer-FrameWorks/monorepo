@@ -5518,8 +5518,9 @@ func (p *Processor) handleStreamLifecycleUpdate(trigger *ipcpb.MistTrigger) (str
 	}
 
 	// Forward the enriched StreamLifecycleUpdate to Decklog (unless the tenant is a node assertion we couldn't
-	// verify — the load-balancer state update below still runs).
-	if !suppressUnverifiedForward {
+	// verify — the load-balancer state update below still runs). stream_state_current holds one row per stream,
+	// so only the source's report may reach it; a relay copy would overwrite the source's node and tracks.
+	if !suppressUnverifiedForward && p.lifecycleIsStreamSource(internal, nodeID, slu.GetReplicated()) {
 		if err := p.sendTriggerToDecklog(trigger); err != nil {
 			p.logger.WithFields(logging.Fields{
 				"internal_name": internal,
@@ -5600,6 +5601,25 @@ func (p *Processor) offlineIsStreamWide(internalName, nodeID string) bool {
 	}
 	owner, known := registry.SourceOwner(internalName)
 	return known && owner == nodeID
+}
+
+// lifecycleIsStreamSource reports whether nodeID's live report describes the
+// stream's source. The recorded owner decides when this cell has one. A node
+// with an inbound pull is a relay destination: the pull is recorded before the
+// node starts pulling, ahead of the replicated tag Mist sets once the pulled
+// metadata arrives. With neither known, that tag separates a relay from an ingest.
+func (p *Processor) lifecycleIsStreamSource(internalName, nodeID string, replicated bool) bool {
+	registry := control.StreamRegistryInstance
+	if registry == nil {
+		return !replicated
+	}
+	if owner, known := registry.SourceOwner(internalName); known {
+		return owner == nodeID
+	}
+	if _, relay := registry.InboundPullForNode(internalName, nodeID); relay {
+		return false
+	}
+	return !replicated
 }
 
 // offlineSuppressionLogFields annotates a suppressed offline forward with
