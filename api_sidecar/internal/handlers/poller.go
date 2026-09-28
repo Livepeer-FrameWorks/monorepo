@@ -1651,6 +1651,9 @@ func (pm *PrometheusMonitor) processObservedStreamDataContext(ctx context.Contex
 						"track_name": trackName,
 						"codec":      codec,
 					}
+					if idx, ok := trackMap["idx"].(float64); ok {
+						trackDetail["track_index"] = int(idx)
+					}
 
 					// Extract bitrate (this is the real-time accurate bitrate!)
 					if kbits, ok := trackMap["kbits"].(float64); ok {
@@ -1733,6 +1736,7 @@ func (pm *PrometheusMonitor) processObservedStreamDataContext(ctx context.Contex
 			}
 		}
 
+		sortTracksByMistIndex(trackDetails)
 		monitorLogger.WithFields(logging.Fields{
 			"node_id":     nodeID,
 			"stream_name": streamName,
@@ -3973,6 +3977,24 @@ func streamAPIHasLiveMedia(streamData map[string]any, trackDetails []map[string]
 		return true
 	}
 	return false
+}
+
+// sortTracksByMistIndex orders health tracks by Mist track index. Mist's
+// health map has no order, and a buffer registers its input's tracks before
+// any process output, so index order puts the source video and audio first
+// and makes them the primary tracks instead of a rendition.
+func sortTracksByMistIndex(tracks []map[string]any) {
+	sort.SliceStable(tracks, func(i, j int) bool {
+		a, aok := tracks[i]["track_index"].(int)
+		b, bok := tracks[j]["track_index"].(int)
+		if aok != bok {
+			return aok
+		}
+		if aok && a != b {
+			return a < b
+		}
+		return getString(tracks[i]["track_name"]) < getString(tracks[j]["track_name"])
+	})
 }
 
 func mistStreamReplicated(streamData map[string]any) bool {
