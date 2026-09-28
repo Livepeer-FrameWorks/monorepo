@@ -31,6 +31,37 @@
     - not ansible_check_mode
     - privateer_internal_ca_bundle_pem | length > 0
 
+# The CLI's bundle only bootstraps the host; Privateer rewrites ca.crt from
+# Navigator, so an existing bundle is replaced only when it lacks one of the
+# desired CA certificates, not when its bytes differ.
+- name: Privateer | check internal CA trust bundle holds the desired CA certificates
+  ansible.builtin.shell: |
+    set -euo pipefail
+    fingerprints() {
+      awk '/-----BEGIN CERTIFICATE-----/ { pem = "" }
+           { pem = pem $0 "\n" }
+           /-----END CERTIFICATE-----/ {
+             cmd = "openssl x509 -noout -fingerprint -sha256"
+             printf "%s", pem | cmd
+             close(cmd)
+           }' "$1" | sort -u
+    }
+    bundle={{ (privateer_env.GRPC_TLS_CA_PATH | default(privateer_internal_ca_default_path)) | quote }}
+    test -s "$bundle"
+    desired="$(mktemp)"
+    trap 'rm -f "$desired"' EXIT
+    cat > "$desired"
+    missing="$(comm -23 <(fingerprints "$desired") <(fingerprints "$bundle"))"
+    test -z "$missing"
+  args:
+    executable: /bin/bash
+    stdin: "{{ privateer_internal_ca_bundle_pem }}"
+  register: privateer_internal_ca_bundle_check
+  check_mode: false
+  changed_when: false
+  failed_when: false
+  when: privateer_internal_ca_bundle_pem | length > 0
+
 - name: Privateer | render internal CA trust bundle
   ansible.builtin.copy:
     dest: "{{ privateer_env.GRPC_TLS_CA_PATH | default(privateer_internal_ca_default_path) }}"
@@ -41,29 +72,18 @@
   when:
     - not ansible_check_mode
     - privateer_internal_ca_bundle_pem | length > 0
-
-- name: Privateer | stat internal CA trust bundle for check mode
-  ansible.builtin.stat:
-    path: "{{ privateer_env.GRPC_TLS_CA_PATH | default(privateer_internal_ca_default_path) }}"
-  register: privateer_internal_ca_bundle_stat
-  check_mode: false
-  changed_when: false
-  when: privateer_internal_ca_bundle_pem | length > 0
+    - privateer_internal_ca_bundle_check.rc | default(1) != 0
 
 - name: Privateer | report pending internal CA trust bundle update under --check
   ansible.builtin.debug:
     msg: >-
       privateer would update internal CA trust bundle at
       {{ privateer_env.GRPC_TLS_CA_PATH | default(privateer_internal_ca_default_path) }}
-  changed_when: >-
-    not (privateer_internal_ca_bundle_stat.stat.exists | default(false))
-    or (
-      privateer_internal_ca_bundle_stat.stat.checksum | default('')
-      != (privateer_internal_ca_bundle_pem | hash('sha1'))
-    )
+  changed_when: true
   when:
     - ansible_check_mode
     - privateer_internal_ca_bundle_pem | length > 0
+    - privateer_internal_ca_bundle_check.rc | default(1) != 0
 
 - name: Privateer | ensure runtime service certificate directory
   ansible.builtin.file:
