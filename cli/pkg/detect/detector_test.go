@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
+	"os/exec"
 	"strings"
 	"testing"
 
@@ -400,5 +402,70 @@ func TestSystemdEnvironmentFile(t *testing.T) {
 		if got := systemdEnvironmentFile(input); got != want {
 			t.Fatalf("systemdEnvironmentFile(%q)=%q, want %q", input, got, want)
 		}
+	}
+}
+
+// The yugabyte role runs the yb-master and yb-tserver units, so the engine's version and mode come from them and the
+// selected release's binary, not from the port fallback that reports neither.
+func TestDetect_YugabyteReportsTheInstalledEngine(t *testing.T) {
+	t.Parallel()
+	r := &fakeRunner{
+		responses: []fakeResponse{
+			{matchPrefix: yugabyteDetectScript, exitCode: 0, stdout: "load=loaded active=active version=2025.2.3.0\n"},
+		},
+	}
+	d := newDetectorWithRunner(inventory.Host{Name: "yb-1", ExternalIP: "1.2.3.4", User: "mistserver"}, r)
+
+	state, err := d.Detect(context.Background(), "yugabyte")
+	if err != nil {
+		t.Fatalf("Detect: %v", err)
+	}
+	if !state.Exists || state.Mode != "native" || state.Version != "2025.2.3.0" || !state.Running || state.DetectedBy != "yugabyte" {
+		t.Fatalf("got %+v, want the running native engine 2025.2.3.0", state)
+	}
+	if len(r.calls) != 1 {
+		t.Fatalf("calls = %q, want only the yugabyte probe", r.calls)
+	}
+}
+
+func TestDetect_YugabyteWithoutEngineIsNotInstalled(t *testing.T) {
+	t.Parallel()
+	r := &fakeRunner{
+		responses: []fakeResponse{
+			{matchPrefix: yugabyteDetectScript, exitCode: 0, stdout: "load=not-found active=inactive version=none\n"},
+			{matchPrefix: "ss -tlnp", exitCode: 1},
+		},
+	}
+	d := newDetectorWithRunner(inventory.Host{Name: "yb-1", ExternalIP: "1.2.3.4", User: "root"}, r)
+
+	state, err := d.Detect(context.Background(), "yugabyte")
+	if err != nil {
+		t.Fatalf("Detect: %v", err)
+	}
+	if state.Exists {
+		t.Fatalf("got %+v, want a node without the engine reported as not installed", state)
+	}
+}
+
+// The probe itself parses a real yb-master --version report through a stub binary on the selected release path.
+func TestYugabyteDetectScriptReadsTheEngineVersion(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	bin := root + "/opt/yugabyte/current/bin"
+	if err := os.MkdirAll(bin, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	stub := "#!/bin/sh\necho 'version 2026.1.1.2 build 9 revision abc build_type RELEASE built at 01 Sep 2026'\n"
+	if err := os.WriteFile(bin+"/yb-master", []byte(stub), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	script := strings.ReplaceAll(yugabyteDetectScript, "/opt/yugabyte", root+"/opt/yugabyte")
+	script = strings.ReplaceAll(script, "systemctl show", "false")
+	out, err := exec.CommandContext(context.Background(), "bash", "-c", script).CombinedOutput()
+	if err != nil {
+		t.Fatalf("script: %v: %s", err, out)
+	}
+	if got := strings.TrimSpace(string(out)); got != "load=none active=none version=2026.1.1.2" {
+		t.Fatalf("report = %q", got)
 	}
 }

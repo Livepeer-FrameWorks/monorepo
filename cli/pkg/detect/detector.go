@@ -85,6 +85,9 @@ func (d *Detector) Detect(ctx context.Context, serviceName string) (*ServiceStat
 		d.detectFromSystemd,
 		d.detectFromPort,
 	}
+	if serviceName == "yugabyte" {
+		methods = []func(context.Context, string, *ServiceState) (*DetectionResult, error){d.detectYugabyte, d.detectFromPort}
+	}
 
 	for _, method := range methods {
 		result, err := method(ctx, serviceName, state)
@@ -307,6 +310,54 @@ func systemdEnvironmentFile(value string) string {
 	}
 	first, _, _ := strings.Cut(value, " ")
 	return strings.TrimPrefix(first, "-")
+}
+
+// yugabyteDetectScript reports the yb-master unit and the engine version of the selected YugabyteDB release. The
+// yugabyte role runs the engine as the yb-master and yb-tserver units from /opt/yugabyte, with no frameworks unit or
+// inventory entry, so the generic methods find it only by its port and without a version.
+const yugabyteDetectScript = `set -u
+load="$(systemctl show yb-master --property=LoadState --value 2>/dev/null || true)"
+active="$(systemctl show yb-master --property=ActiveState --value 2>/dev/null || true)"
+version=
+for bin in /opt/yugabyte/current/bin/yb-master /opt/yugabyte/bin/yb-master; do
+  if [ -e "$bin" ]; then
+    report="$("$bin" --version 2>/dev/null || sudo -n "$bin" --version 2>/dev/null || true)"
+    version="$(printf '%s\n' "$report" | sed -n 's/^version \([^ ][^ ]*\).*/\1/p' | head -n 1)"
+    break
+  fi
+done
+echo "load=${load:-none} active=${active:-none} version=${version:-none}"
+`
+
+// detectYugabyte reads the Yugabyte engine a node runs: mode native, its version from the selected release's
+// yb-master, and running when the yb-master unit is active.
+func (d *Detector) detectYugabyte(ctx context.Context, _ string, state *ServiceState) (*DetectionResult, error) {
+	exitCode, stdout, _, err := d.runSSH(ctx, yugabyteDetectScript)
+	if err != nil {
+		return nil, fmt.Errorf("inspect yugabyte engine on %s: %w", d.host.Name, err)
+	}
+	if exitCode != 0 {
+		return &DetectionResult{Method: "yugabyte", Success: false}, nil
+	}
+	fields := map[string]string{}
+	for _, field := range strings.Fields(stdout) {
+		if key, value, ok := strings.Cut(field, "="); ok {
+			fields[key] = value
+		}
+	}
+	version := fields["version"]
+	if version == "none" {
+		version = ""
+	}
+	if fields["load"] != "loaded" && version == "" {
+		return &DetectionResult{Method: "yugabyte", Success: false}, nil
+	}
+	state.Exists = true
+	state.Mode = "native"
+	state.Version = version
+	state.Running = fields["active"] == "active"
+	state.DetectedBy = "yugabyte"
+	return &DetectionResult{Method: "yugabyte", Success: true, State: state}, nil
 }
 
 // detectFromPort checks if service is listening on expected port
