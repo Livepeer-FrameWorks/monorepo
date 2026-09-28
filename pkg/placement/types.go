@@ -169,6 +169,13 @@ type Request struct {
 	Complete bool
 	// ActiveIngestClusterID is an ownership fence, not a score or a grant.
 	ActiveIngestClusterID string
+	// ArrivalClusterIDs are the clusters of the cell that received the request. Geo-DNS sends a
+	// client to a nearby cell, so without client coordinates the arrival cell stands in for the
+	// client's location. It is ignored when Location is set.
+	ArrivalClusterIDs []string
+	// TieBreakSeed, when non-zero, spreads choices among near-equal candidates (power of two
+	// choices). Callers pass a per-request value; zero keeps the order fully deterministic.
+	TieBreakSeed uint64
 }
 
 type Reason string

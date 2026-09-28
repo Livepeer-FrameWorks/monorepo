@@ -66,6 +66,7 @@ func (resolver *IngestPlacementResolver) PrepareIngest(ctx context.Context, requ
 		result, err := resolver.Router.Route(ctx, balancer.PlacementRouteRequest{TenantID: authority.TenantID, ObjectID: authority.ObjectID, InternalName: authority.InternalName,
 			Verb: placement.Ingest, Protocol: request.Protocol, Policy: authority.Policy, PolicyDigest: authority.PolicyDigest, PolicyRevision: authority.PolicyRevision,
 			ParentRevision: authority.ParentRevision, Cells: authority.Cells, Location: request.Location, ActiveIngestClusterID: owner,
+			ArrivalClusterIDs:      control.ServedClustersSnapshot(),
 			TenantAuthorityVersion: authority.TenantAuthorityVersion, ObjectAuthorityVersion: authority.ObjectAuthorityVersion})
 		if err != nil {
 			return balancer.PlacementPreparationResult{}, err

@@ -126,6 +126,7 @@ func (resolver *ViewerPlacementResolver) routeRequest(subject viewerPlacementSub
 	return balancer.PlacementRouteRequest{TenantID: authority.TenantID, ObjectID: authority.ObjectID, InternalName: authority.InternalName,
 		Verb: placement.Serve, Protocol: request.Protocol, SourceGeneration: subject.generation, Policy: authority.Policy, PolicyDigest: authority.PolicyDigest,
 		PolicyRevision: authority.PolicyRevision, ParentRevision: authority.ParentRevision, Cells: authority.Cells, Location: request.Location,
+		ArrivalClusterIDs:      control.ServedClustersSnapshot(),
 		TenantAuthorityVersion: authority.TenantAuthorityVersion, ObjectAuthorityVersion: authority.ObjectAuthorityVersion}
 }
 

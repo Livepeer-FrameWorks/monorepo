@@ -53,6 +53,9 @@ type PlacementRouteRequest struct {
 	Location               *placement.Coordinates
 	ActiveIngestClusterID  string
 	Cells                  []PlacementCell
+	// ArrivalClusterIDs are the clusters of the cell that received the client's request; they
+	// stand in for the client's location when Location is unknown.
+	ArrivalClusterIDs []string
 }
 
 type PlacementCellObservation struct {
@@ -111,6 +114,9 @@ type PlacementRouter struct {
 	Observe func(context.Context, PlacementCell, PlacementRouteRequest) (PlacementCellObservation, error)
 	Prepare func(context.Context, PlacementCell, PlacementPreparationRequest) (PlacementPreparationResult, error)
 	Now     func() time.Time
+	// Seed supplies each evaluation's tie-break seed, spreading concurrent requests over
+	// near-equal nodes. Nil evaluates deterministically.
+	Seed func() uint64
 	// Logger receives per-cell observation failures and refused evaluations;
 	// a refusal is otherwise a bare "no permitted destination" to the caller.
 	Logger logging.Logger
@@ -367,7 +373,7 @@ func (router PlacementRouter) Evaluate(ctx context.Context, req PlacementRouteRe
 	if err != nil {
 		return PlacementEvaluation{}, err
 	}
-	decision, expiresAt, err := census.evaluate(router.now(), census.candidates)
+	decision, expiresAt, err := census.evaluate(router.now(), census.candidates, router.seed())
 	result := PlacementEvaluation{Decision: decision, ExpiresAt: expiresAt}
 	result.observed = make(map[[2]string]placement.Candidate, len(census.candidates))
 	for _, candidate := range census.candidates {
@@ -493,7 +499,14 @@ enqueue:
 	return &placementCensus{request: req, observations: observations, errors: errs, candidates: candidates, destinations: destinations, complete: complete}, nil
 }
 
-func (census *placementCensus) evaluate(now time.Time, candidates []placement.Candidate) (placement.Decision, time.Time, error) {
+func (router PlacementRouter) seed() uint64 {
+	if router.Seed == nil {
+		return 0
+	}
+	return router.Seed()
+}
+
+func (census *placementCensus) evaluate(now time.Time, candidates []placement.Candidate, seed uint64) (placement.Decision, time.Time, error) {
 	evaluationComplete := census.complete
 	var decisionUntil time.Time
 	for index, observation := range census.observations {
@@ -509,6 +522,7 @@ func (census *placementCensus) evaluate(now time.Time, candidates []placement.Ca
 	decision, err := placement.Evaluate(placement.Request{
 		TenantID: req.TenantID, Verb: req.Verb, Policy: req.Policy, Now: now, Location: req.Location,
 		Candidates: candidates, Complete: evaluationComplete, ActiveIngestClusterID: req.ActiveIngestClusterID,
+		ArrivalClusterIDs: req.ArrivalClusterIDs, TieBreakSeed: seed,
 	})
 	return decision, decisionUntil, err
 }
@@ -533,7 +547,7 @@ func (router PlacementRouter) Route(ctx context.Context, req PlacementRouteReque
 			return result, err
 		}
 		evaluatedAt := now()
-		decision, decisionUntil, err := census.evaluate(evaluatedAt, candidates)
+		decision, decisionUntil, err := census.evaluate(evaluatedAt, candidates, router.seed())
 		result.Decision = decision
 		if err != nil {
 			return result, err

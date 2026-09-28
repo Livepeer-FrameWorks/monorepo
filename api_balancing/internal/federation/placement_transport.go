@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math/rand/v2"
 	"slices"
 	"strings"
 	"time"
@@ -37,7 +38,7 @@ type PlacementTransport struct {
 }
 
 func (transport PlacementTransport) Router() balancer.PlacementRouter {
-	return balancer.PlacementRouter{Observe: transport.Observe, Prepare: transport.Prepare, Logger: transport.Logger}
+	return balancer.PlacementRouter{Observe: transport.Observe, Prepare: transport.Prepare, Logger: transport.Logger, Seed: rand.Uint64}
 }
 
 func (transport PlacementTransport) Observe(ctx context.Context, cell balancer.PlacementCell, req balancer.PlacementRouteRequest) (balancer.PlacementCellObservation, error) {

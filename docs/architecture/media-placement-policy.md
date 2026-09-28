@@ -1352,8 +1352,11 @@ split-brain fencing, fresh authority checks, or exact-generation first-media pro
 worker, both live front doors and prepared-source admission share one instance of this store,
 bound to the same control cell.
 
-There is no coordinator identifier or remote-candidate flag in the decision input.
-Changing which Foghorn asks the question cannot change the answer for identical facts.
+There is no remote-candidate flag in the decision input. The request carries the clusters of
+the cell that received the client (`ArrivalClusterIDs`): geo-DNS sends a client to a nearby
+cell, so without client coordinates the arrival cell is the client's location. With client
+coordinates it is ignored, and changing which Foghorn asks cannot change the ranking. Group
+membership never depends on it, so admission checks accept any node of the winning group.
 A cold nearby destination is eligible for serving when its source path is feasible;
 the decision reports `RequiresPull` separately from its rank.
 
@@ -1399,13 +1402,32 @@ separate hard cap. Unknown geography cannot satisfy a hard cap or justify geogra
 spill. Nested fallbacks retain the original minimum-improvement constraint. Failed geo
 spill retains feasible preferred capacity rather than treating it as unavailable.
 
-Default ordering compares client-to-node distance, relative bandwidth headroom, CPU,
-relative memory headroom, stream presence, then stable cluster/node identity. Relative
-bandwidth comparisons retain 128-bit intermediate precision and use each node's own
-limit. Price-first ordering requires a fresh price revision on the group's explicit
-currency/unit basis, then applies the same distance and resource comparisons. Configure
-a hard distance cap when price preference must stay within a geographic quality bound.
-These comparison amounts are not invoices, exchange rates, or billing decisions.
+Default ordering ranks a group's ready nodes in this order:
+
+1. **Load bound.** A node inside the bound (bandwidth used ≤ 80% after pending-viewer
+   reservations, CPU ≤ 80%, RAM used ≤ 85%) can serve another viewer well and ranks before
+   every node outside it.
+2. **Locality.** With client coordinates, nodes within 250 km of the nearest node are local
+   and the rest follow by distance; without them, the arrival cell's clusters are local.
+3. **Presence**, inside the bound: a node holding the stream, then one already pulling it,
+   then one that must start a pull. A pull costs the viewer its boot time, so it is taken
+   only when no holder is inside the bound. Outside the bound, load decides first.
+4. **Weighted load score**, Mist's weights on the same projected metrics:
+   500 × CPU headroom + 500 × RAM headroom + 1000 × bandwidth headroom.
+5. Exact relative bandwidth (128-bit cross products, each node's own limit), CPU, memory,
+   presence, then stable cluster/node identity break score ties.
+
+The bounds and weights are fixed constants. A local node leaves the ranking head only when
+no local node is inside the bound, so a viewer changes cell only when its own cell cannot
+serve it well. When a request carries a tie-break seed, the head is chosen by power of two
+choices among the nodes that share the leader's tier and score within 5% of it; Foghorn
+seeds every viewer and publisher evaluation, so replicas deciding on the same lagged
+telemetry spread a burst instead of all sending it to the momentary best node.
+
+Price-first ordering requires a fresh price revision on the group's explicit currency/unit
+basis and applies it before these comparisons. Configure a hard distance cap when price
+preference must stay within a geographic quality bound. These comparison amounts are not
+invoices, exchange rates, or billing decisions.
 
 “Never rated official” uses both official class and durable charging classification;
 an included allowance, waiver, or promotional credit must not be reported as permanently

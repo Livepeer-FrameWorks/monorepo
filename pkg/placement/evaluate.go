@@ -243,6 +243,107 @@ type ranked struct {
 	candidate Candidate
 	distance  *float64
 	price     *Price
+	// Ranking facts derived per pool by rankPool.
+	locality    int
+	withinBound bool
+	score       float64
+}
+
+// Ranking constants. A node inside the load bound can serve another viewer well; within the
+// bound, a node already holding the stream beats one that must start a pull, because a pull costs
+// the viewer its boot time. Outside the bound, load decides.
+const (
+	// localitySlackKM treats nodes within this distance of the nearest one as equally local.
+	localitySlackKM = 250.0
+	// Load bound: used fraction of bandwidth (after reservations), CPU percent and RAM.
+	boundBandwidthUsed = 0.80
+	boundCPUPercent    = 80.0
+	boundRAMUsed       = 0.85
+	// Mist load-balancer weights, applied to the same projected metrics.
+	weightCPU       = 500.0
+	weightRAM       = 500.0
+	weightBandwidth = 1000.0
+	// nearBestScore is the score fraction within which power of two choices picks among nodes.
+	nearBestScore = 0.05
+)
+
+// rankPool derives locality, the load bound and the weighted score for one group's ready nodes.
+// With client coordinates, nodes within localitySlackKM of the nearest are local; without them,
+// the arrival cell's clusters are.
+func rankPool(nodes []ranked, r Request) {
+	nearest := math.Inf(1)
+	for _, n := range nodes {
+		if n.distance != nil {
+			nearest = math.Min(nearest, *n.distance)
+		}
+	}
+	for i := range nodes {
+		n := &nodes[i]
+		c := n.candidate
+		switch {
+		case r.Location != nil:
+			if n.distance == nil || *n.distance > nearest+localitySlackKM {
+				n.locality = 1
+			}
+		case len(r.ArrivalClusterIDs) > 0 && !slices.Contains(r.ArrivalClusterIDs, c.ClusterID):
+			n.locality = 1
+		}
+		bwUsed := 1 - float64(c.BWAvailable)/float64(c.BWLimit)
+		ramUsed := float64(c.RAMUsed) / float64(c.RAMMax)
+		n.withinBound = bwUsed <= boundBandwidthUsed && c.CPUPercent <= boundCPUPercent && ramUsed <= boundRAMUsed
+		n.score = weightCPU*(1-c.CPUPercent/100) + weightRAM*(1-ramUsed) + weightBandwidth*(1-bwUsed)
+	}
+}
+
+// spreadNearBest applies power of two choices to the head of a ranked pool: two of the nodes that
+// share the best node's tier and score within nearBestScore are drawn from the seed, and the better
+// one leads. Replicas deciding on the same lagged telemetry then spread a burst instead of all
+// sending it to the momentary best node.
+func spreadNearBest(nodes []ranked, order Order, seed uint64) {
+	if seed == 0 || len(nodes) < 2 {
+		return
+	}
+	best := nodes[0]
+	n := 1
+	for n < len(nodes) && sameTier(best, nodes[n], order) && nodes[n].score >= best.score*(1-nearBestScore) {
+		n++
+	}
+	if n < 2 {
+		return
+	}
+	i := int(seed % uint64(n))
+	j := int((seed / uint64(n)) % uint64(n-1))
+	if j >= i {
+		j++
+	}
+	pick := i
+	if compare(nodes[j], nodes[i], order) < 0 {
+		pick = j
+	}
+	chosen := nodes[pick]
+	copy(nodes[1:pick+1], nodes[:pick])
+	nodes[0] = chosen
+}
+
+func sameTier(a, b ranked, order Order) bool {
+	if order == PriceFirst && a.price.AmountMicros != b.price.AmountMicros {
+		return false
+	}
+	if a.withinBound != b.withinBound || a.locality != b.locality {
+		return false
+	}
+	return !a.withinBound || presenceTier(a.candidate.Presence) == presenceTier(b.candidate.Presence)
+}
+
+func presenceTier(p Presence) int {
+	switch p {
+	case Present:
+		return 0
+	case Materializing:
+		return 1
+	default:
+		return 2
+	}
 }
 
 type pool struct {
@@ -352,7 +453,10 @@ func evaluatePlacement(r Request, requireSource bool) (Decision, error) {
 		d.Assessments = append(d.Assessments, a)
 	}
 	for i := range pools {
-		slices.SortFunc(pools[i].ready, func(a, b ranked) int { return compare(a, b, p.Groups[i].Order) })
+		order := p.Groups[i].Order
+		rankPool(pools[i].ready, r)
+		slices.SortFunc(pools[i].ready, func(a, b ranked) int { return compare(a, b, order) })
+		spreadNearBest(pools[i].ready, order, r.TieBreakSeed)
 	}
 	choices, transitions := choose(p.Groups, pools, 0, nil, r.Complete)
 	d.Transitions = transitions
@@ -427,25 +531,39 @@ func choose(groups []Group, pools []pool, i int, distanceLimit *float64, complet
 	return base, nil
 }
 
+// compare orders a pool: nodes inside the load bound first, then local before remote (remote by
+// distance), then, inside the bound, nodes holding the stream before nodes that must pull it,
+// then the weighted load score. Exact metric comparisons only break score ties.
 func compare(a, b ranked, order Order) int {
 	if order == PriceFirst {
 		if n := compareUint(a.price.AmountMicros, b.price.AmountMicros); n != 0 {
 			return n
 		}
 	}
-	if a.distance == nil && b.distance != nil {
-		return 1
-	}
-	if a.distance != nil && b.distance == nil {
-		return -1
-	}
-	if a.distance != nil && b.distance != nil {
-		if *a.distance < *b.distance {
+	if a.withinBound != b.withinBound {
+		if a.withinBound {
 			return -1
 		}
-		if *a.distance > *b.distance {
-			return 1
+		return 1
+	}
+	if n := a.locality - b.locality; n != 0 {
+		return n
+	}
+	if a.locality > 0 {
+		if n := compareDistance(a.distance, b.distance); n != 0 {
+			return n
 		}
+	}
+	if a.withinBound {
+		if n := presenceTier(a.candidate.Presence) - presenceTier(b.candidate.Presence); n != 0 {
+			return n
+		}
+	}
+	if a.score > b.score {
+		return -1
+	}
+	if a.score < b.score {
+		return 1
 	}
 	if n := compareFraction(a.candidate.BWAvailable, a.candidate.BWLimit, b.candidate.BWAvailable, b.candidate.BWLimit); n != 0 {
 		return -n
@@ -459,16 +577,30 @@ func compare(a, b ranked, order Order) int {
 	if n := compareFraction(a.candidate.RAMMax-a.candidate.RAMUsed, a.candidate.RAMMax, b.candidate.RAMMax-b.candidate.RAMUsed, b.candidate.RAMMax); n != 0 {
 		return -n
 	}
-	if a.candidate.Presence == Present && b.candidate.Presence != Present {
-		return -1
-	}
-	if a.candidate.Presence != Present && b.candidate.Presence == Present {
-		return 1
+	if n := presenceTier(a.candidate.Presence) - presenceTier(b.candidate.Presence); n != 0 {
+		return n
 	}
 	if n := strings.Compare(a.candidate.ClusterID, b.candidate.ClusterID); n != 0 {
 		return n
 	}
 	return strings.Compare(a.candidate.NodeID, b.candidate.NodeID)
+}
+
+// compareDistance orders known distances ascending with unknown distances last.
+func compareDistance(a, b *float64) int {
+	switch {
+	case a == nil && b == nil:
+		return 0
+	case a == nil:
+		return 1
+	case b == nil:
+		return -1
+	case *a < *b:
+		return -1
+	case *a > *b:
+		return 1
+	}
+	return 0
 }
 
 func compareUint(a, b uint64) int {
