@@ -34,7 +34,8 @@
 - name: Render additional stack files
   ansible.builtin.copy:
     dest: "{{ compose_stack_project_dir }}/{{ item.key }}"
-    content: "{{ item.value }}"
+    # The CLI base64-encodes file contents so Ansible never templates them.
+    content: "{{ item.value | b64decode }}"
     owner: root
     group: root
     mode: "0644"

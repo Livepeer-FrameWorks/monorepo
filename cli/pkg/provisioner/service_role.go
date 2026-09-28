@@ -239,7 +239,7 @@ func serviceComposeVars(_ context.Context, cfg ServiceRoleConfig, _ inventory.Ho
 			image,
 		),
 		"compose_stack_require_registry_auth": composeRegistryAuthRequired(image),
-		"compose_stack_files":                 composeFiles,
+		"compose_stack_files":                 composeStackFiles(composeFiles),
 		"compose_stack_service": map[string]any{
 			"image":          image,
 			"port":           port,

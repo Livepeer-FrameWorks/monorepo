@@ -121,7 +121,7 @@ func reverseProxyComposeVars(serviceName string, defaultPort int, config Service
 		"compose_stack_name":            serviceName,
 		"compose_stack_project_dir":     "/opt/frameworks/" + serviceName,
 		"compose_stack_compose_content": compose,
-		"compose_stack_files":           configFiles,
+		"compose_stack_files":           composeStackFiles(configFiles),
 	}, nil
 }
 

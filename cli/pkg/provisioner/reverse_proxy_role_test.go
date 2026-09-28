@@ -26,7 +26,7 @@ func TestReverseProxyComposeVarsRendersNginxConfigMount(t *testing.T) {
 	if !strings.Contains(compose, `"18090:80"`) {
 		t.Fatalf("compose did not map host port to container port 80:\n%s", compose)
 	}
-	files := vars["compose_stack_files"].(map[string]any)
+	files := decodedComposeFilesAny(t, vars)
 	rootConf := files["nginx.conf"].(string)
 	conf := files["frameworks.conf"].(string)
 	for _, want := range []string{
@@ -89,7 +89,7 @@ func TestReverseProxyComposeVarsRendersTLSMountsAndHTTPSPort(t *testing.T) {
 		t.Fatalf("reverseProxyComposeVars: %v", err)
 	}
 	compose := vars["compose_stack_compose_content"].(string)
-	files := vars["compose_stack_files"].(map[string]any)
+	files := decodedComposeFilesAny(t, vars)
 	conf := files["frameworks.conf"].(string)
 	for _, want := range []string{
 		`"80:80"`,
@@ -122,7 +122,7 @@ func TestReverseProxyComposeVarsAppliesMediaIngestProfile(t *testing.T) {
 	if err != nil {
 		t.Fatalf("reverseProxyComposeVars: %v", err)
 	}
-	files := vars["compose_stack_files"].(map[string]any)
+	files := decodedComposeFilesAny(t, vars)
 	conf := files["frameworks.conf"].(string)
 	for _, want := range []string{
 		"location = /healthz {",
@@ -169,7 +169,7 @@ func TestReverseProxyComposeVarsRendersTenantAliasPlayback(t *testing.T) {
 		t.Fatalf("reverseProxyComposeVars: %v", err)
 	}
 	compose := vars["compose_stack_compose_content"].(string)
-	files := vars["compose_stack_files"].(map[string]any)
+	files := decodedComposeFilesAny(t, vars)
 	conf := files["frameworks.conf"].(string)
 	for _, want := range []string{
 		`map $ssl_server_name $fw_tenant_alias_sub {`,
@@ -208,7 +208,7 @@ func TestReverseProxyComposeVarsTenantAliasDisabledByDefault(t *testing.T) {
 	if err != nil {
 		t.Fatalf("reverseProxyComposeVars: %v", err)
 	}
-	files := vars["compose_stack_files"].(map[string]any)
+	files := decodedComposeFilesAny(t, vars)
 	conf := files["frameworks.conf"].(string)
 	if strings.Contains(conf, "fw_tenant_alias_sub") {
 		t.Fatalf("tenant-alias blocks rendered without metadata:\n%s", conf)

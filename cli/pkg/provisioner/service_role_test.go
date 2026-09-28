@@ -263,7 +263,7 @@ func TestServiceComposeVarsRunsMetabaseLoggersAtInfo(t *testing.T) {
 	if got, want := env["JAVA_OPTS"], "-Xmx2g -Dlog4j.configurationFile=file:/etc/metabase/log4j2.xml"; got != want {
 		t.Fatalf("JAVA_OPTS = %v, want %v", got, want)
 	}
-	files := vars["compose_stack_files"].(map[string]string)
+	files := decodedComposeFiles(t, vars)
 	config := files["metabase/log4j2.xml"]
 	if config == "" {
 		t.Fatalf("compose_stack_files has no metabase/log4j2.xml: %#v", files)
