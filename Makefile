@@ -42,7 +42,9 @@ endef
 SERVICES = commodore quartermaster purser decklog foghorn helmsman periscope-ingest periscope-query periscope-metering signalman bridge navigator privateer deckhand steward skipper chandler lookout bosun
 
 # All Go modules (including pkg for testing)
-GO_SERVICES = $(shell find . -name "go.mod" -exec dirname {} \;)
+# The Go modules a CI checkout contains. Tracked files only: agent worktrees and
+# other untracked checkouts nested in the repository are not this commit's code.
+GO_SERVICES = $(shell git ls-files -- 'go.mod' '*/go.mod' | xargs -n1 dirname | sort -u | sed 's|^|./|')
 GO_GET_ARGS ?= -u all
 PNPM_UP_ARGS ?= -r
 
@@ -379,14 +381,11 @@ test-go-livepeer-pkg-impact:
 verify-prepush: verify-go-lint verify-frontend-lint verify-generated-contracts test-frontend-components verify-migration-release-state \
 	verify-go-build verify-sdks verify-feature-registry verify-pricing-catalog verify-compose-profiles verify-frontend-build verify-yugabyte-contracts
 
-# Go modules a CI checkout contains; untracked worktrees under the repository are not CI's code.
-GO_TRACKED_MODULES = $(shell git ls-files -- 'go.mod' '*/go.mod' | xargs -n1 dirname | sort -u | sed 's|^|./|')
-
 # The CI "Go lint" job, step for step.
 verify-go-lint:
 	$(MAKE) --no-print-directory verify-db-transactions
 	$(MAKE) --no-print-directory fmt-check
-	$(MAKE) --no-print-directory lint-go GO_SERVICES="$(GO_TRACKED_MODULES)"
+	$(MAKE) --no-print-directory lint-go
 
 # The CI "Go build" job, step for step.
 verify-go-build:
