@@ -1530,9 +1530,15 @@ func (sm *StreamStateManager) UpdateNodeStats(internalName, nodeID string, total
 	}
 	union.LastUpdate = now
 	sm.deriveUnionStatsLocked(internalName, union)
-	streamPayload, _ := json.Marshal(union)
-	instPayload, _ := json.Marshal(inst)
+	streamPayload, streamMarshalErr := json.Marshal(union)
+	instPayload, instMarshalErr := json.Marshal(inst)
 	sm.mu.Unlock()
+	if marshalErr := errors.Join(streamMarshalErr, instMarshalErr); marshalErr != nil {
+		if stateLogger != nil {
+			stateLogger.WithError(marshalErr).WithField("stream", internalName).Warn("Failed to encode stream stats for redis")
+		}
+		return
+	}
 
 	sm.persistStreamWriteThrough(internalName, streamPayload)
 	sm.persistStreamInstanceWriteThrough(internalName, nodeID, instPayload)

@@ -6178,7 +6178,7 @@ func (p *Processor) resolveClusterOwnerTenantID(clusterID string) string {
 		return ""
 	}
 
-	val, ok, _ := p.clusterOwnerCache.Get(context.Background(), clusterID, func(ctx context.Context, key string) (interface{}, bool, error) {
+	val, ok, lookupErr := p.clusterOwnerCache.Get(context.Background(), clusterID, func(ctx context.Context, key string) (interface{}, bool, error) {
 		ctx, cancel := context.WithTimeout(ctx, 2*time.Second)
 		defer cancel()
 
@@ -6197,7 +6197,8 @@ func (p *Processor) resolveClusterOwnerTenantID(clusterID string) string {
 
 		return resp.GetCluster().GetOwnerTenantId(), true, nil
 	})
-	if !ok {
+	// The loader logs the Quartermaster failure; an unresolved owner is reported as none.
+	if lookupErr != nil || !ok {
 		return ""
 	}
 	if ownerID, ok := val.(string); ok {
