@@ -5204,6 +5204,25 @@ func classifyTriggerError(err error) (ipcpb.TriggerAckErrorCode, bool) {
 // sendMistTriggerAck delivers the durable ack back to Helmsman on the
 // same control stream. Caller invokes for any mist.IsDurableTriggerType
 // trigger regardless of blocking flag.
+// mistTriggerRefusal reports whether a trigger error is a decision about the
+// request (an offline or starting stream, a publisher Commodore or placement
+// refused) rather than a fault in processing it.
+func mistTriggerRefusal(err error) bool {
+	if errors.Is(err, ErrLiveSourceOffline) || errors.Is(err, ErrLiveSourceStarting) {
+		return true
+	}
+	ingestErr, ok := errors.AsType[*ingesterrors.IngestError](err)
+	if !ok {
+		return false
+	}
+	switch ingestErr.Code {
+	case ipcpb.IngestErrorCode_INGEST_ERROR_NONE, ipcpb.IngestErrorCode_INGEST_ERROR_INTERNAL, ipcpb.IngestErrorCode_INGEST_ERROR_TIMEOUT:
+		return false
+	default:
+		return true
+	}
+}
+
 func sendMistTriggerAck(stream ipcpb.HelmsmanControl_ConnectServer, requestID string, err error, logger logging.Logger) {
 	if stream == nil {
 		return
@@ -5400,11 +5419,16 @@ func processMistTrigger(trigger *ipcpb.MistTrigger, session NodeSession, stream 
 	}
 	if err != nil {
 		incMistTrigger(triggerType, blocking, "processed_error")
-		logger.WithFields(logging.Fields{
+		fields := logging.Fields{
 			"trigger_type": triggerType,
 			"request_id":   requestID,
 			"error":        err,
-		}).Error("Failed to process MistServer trigger")
+		}
+		if mistTriggerRefusal(err) {
+			logger.WithFields(fields).Info("MistServer trigger refused")
+		} else {
+			logger.WithFields(fields).Error("Failed to process MistServer trigger")
+		}
 
 		if blocking {
 			errorCode := ipcpb.IngestErrorCode_INGEST_ERROR_INTERNAL
