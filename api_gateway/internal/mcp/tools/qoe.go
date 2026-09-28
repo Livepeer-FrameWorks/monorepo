@@ -703,6 +703,7 @@ func handleGetStreamHealth(ctx context.Context, args GetStreamHealthInput, servi
 		}
 	}
 
+	// stream_health_5m averages the primary video track's Mist-reported kbits, so this is already kbps.
 	avgBitrate := totalBitrate / int64(len(resp.Records))
 	var avgFPS float32
 	avgFPSLabel := "unknown"
@@ -712,12 +713,12 @@ func handleGetStreamHealth(ctx context.Context, args GetStreamHealthInput, servi
 	}
 
 	status := "healthy"
-	analysis := fmt.Sprintf("Stream health is good. Avg bitrate: %d kbps, avg FPS: %s.", avgBitrate/1000, avgFPSLabel)
+	analysis := fmt.Sprintf("Stream health is good. Avg bitrate: %d kbps, avg FPS: %s.", avgBitrate, avgFPSLabel)
 	var recommendations []string
 
 	if totalIssues > int32(len(resp.Records)) {
 		status = "warning"
-		analysis = fmt.Sprintf("Stream has %d issues over the time range. Avg bitrate: %d kbps, avg FPS: %s.", totalIssues, avgBitrate/1000, avgFPSLabel)
+		analysis = fmt.Sprintf("Stream has %d issues over the time range. Avg bitrate: %d kbps, avg FPS: %s.", totalIssues, avgBitrate, avgFPSLabel)
 		recommendations = []string{
 			"Review sample issues in stream health dashboard",
 			"Check encoder stability",
@@ -727,7 +728,7 @@ func handleGetStreamHealth(ctx context.Context, args GetStreamHealthInput, servi
 	result := DiagnosticResult{
 		Status: status,
 		Metrics: map[string]interface{}{
-			"avg_bitrate_kbps": avgBitrate / 1000,
+			"avg_bitrate_kbps": avgBitrate,
 			"total_issues":     totalIssues,
 			"quality_tiers":    qualityTiers,
 			"sample_count":     len(resp.Records),

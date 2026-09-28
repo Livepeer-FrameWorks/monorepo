@@ -546,6 +546,7 @@ type FakePeriscope struct {
 
 	GetStreamAnalyticsSummaryFn func(ctx context.Context, tenantID string, streamID string, timeRange *periscope.TimeRangeOpts) (*periscopepb.GetStreamAnalyticsSummaryResponse, error)
 	GetStreamHealthMetricsFn    func(ctx context.Context, tenantID string, streamID *string, timeRange *periscope.TimeRangeOpts, opts *periscope.CursorPaginationOpts) (*periscopepb.GetStreamHealthMetricsResponse, error)
+	GetStreamHealth5mFn         func(ctx context.Context, tenantID string, streamID string, timeRange *periscope.TimeRangeOpts, opts *periscope.CursorPaginationOpts) (*periscopepb.GetStreamHealth5MResponse, error)
 	GetViewerMetricsFn          func(ctx context.Context, tenantID string, streamID *string, timeRange *periscope.TimeRangeOpts, opts *periscope.CursorPaginationOpts) (*periscopepb.GetViewerMetricsResponse, error)
 	GetViewerCountTimeSeriesFn  func(ctx context.Context, tenantID string, streamID *string, timeRange *periscope.TimeRangeOpts, interval string) (*periscopepb.GetViewerCountTimeSeriesResponse, error)
 	GetGeographicDistributionFn func(ctx context.Context, tenantID string, streamID *string, timeRange *periscope.TimeRangeOpts, topN int32) (*periscopepb.GetGeographicDistributionResponse, error)
@@ -629,6 +630,14 @@ func (f *FakePeriscope) GetLiveNodes(ctx context.Context, tenantID string, nodeI
 		panic("FakePeriscope.GetLiveNodes not stubbed")
 	}
 	return f.GetLiveNodesFn(ctx, tenantID, nodeID, relatedTenantIDs)
+}
+
+func (f *FakePeriscope) GetStreamHealth5m(ctx context.Context, tenantID string, streamID string, timeRange *periscope.TimeRangeOpts, opts *periscope.CursorPaginationOpts) (*periscopepb.GetStreamHealth5MResponse, error) {
+	f.Calls++
+	if f.GetStreamHealth5mFn == nil {
+		panic("FakePeriscope.GetStreamHealth5m not stubbed")
+	}
+	return f.GetStreamHealth5mFn(ctx, tenantID, streamID, timeRange, opts)
 }
 
 func (f *FakePeriscope) GetRebufferingEvents(ctx context.Context, tenantID string, streamID *string, nodeID *string, timeRange *periscope.TimeRangeOpts, opts *periscope.CursorPaginationOpts) (*periscopepb.GetRebufferingEventsResponse, error) {

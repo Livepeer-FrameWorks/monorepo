@@ -421,7 +421,12 @@ func (s *Server) registerAccessMiddleware() {
 			if method == "tools/call" {
 				toolName := strings.TrimPrefix(opName, "mcp:tools/call:")
 				if err := authorizeMCPTool(ctx, toolName); err != nil {
-					mcpToolDenialsTotal.WithLabelValues(toolName, "scope").Inc()
+					// The name is caller input; only registered tools become a label value.
+					if _, known := tools.ToolPolicyForName(toolName); known {
+						mcpToolDenialsTotal.WithLabelValues(toolName, "scope").Inc()
+					} else {
+						mcpToolDenialsTotal.WithLabelValues("unknown", "unknown_tool").Inc()
+					}
 					return nil, err
 				}
 			}
@@ -864,7 +869,9 @@ func filterToolsByPolicy(ctx context.Context, result mcp.Result) mcp.Result {
 func authorizeMCPTool(ctx context.Context, toolName string) error {
 	policy, ok := tools.ToolPolicyForName(toolName)
 	if !ok {
-		return &jsonrpc.Error{Code: jsonrpc.CodeInternalError, Message: "tool security policy missing"}
+		// Every registered tool carries a policy (mcp_smoke_test), so a name
+		// without one is not a tool; MCP reports that as invalid params.
+		return &jsonrpc.Error{Code: jsonrpc.CodeInvalidParams, Message: "unknown tool"}
 	}
 	if policy.Public && ctxkeys.GetAuthType(ctx) != "api_token" {
 		return nil

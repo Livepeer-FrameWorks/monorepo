@@ -92,6 +92,10 @@ func TestAuthorizeMCPToolUsesExistingTokenScopes(t *testing.T) {
 			}
 		})
 	}
+	var rpcErr *jsonrpc.Error
+	if err := authorizeMCPTool(jwt, "not_registered"); !errors.As(err, &rpcErr) || rpcErr.Code != jsonrpc.CodeInvalidParams {
+		t.Fatalf("unknown tool must be an invalid-params error, got %v", err)
+	}
 }
 
 func TestAuthorizeMCPHighRiskToolRequiresExplicitAgentGrant(t *testing.T) {
