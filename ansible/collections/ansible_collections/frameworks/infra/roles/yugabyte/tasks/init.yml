@@ -56,7 +56,11 @@
       - item.name is match('^[A-Za-z_][A-Za-z0-9_]*$')
       - (item.owner | default(item.name, true)) is match('^[A-Za-z_][A-Za-z0-9_]*$')
     fail_msg: "Yugabyte database {{ item.name }} and its owner must be plain SQL identifiers"
-  loop: "{{ yugabyte_databases }}"
+  # Loops over the identifiers only: an assert echoes each loop item in its
+  # result, and the database entries carry their passwords.
+  loop: >-
+    {{ yugabyte_databases | map('dict2items')
+       | map('selectattr', 'key', 'in', ['name', 'owner']) | map('items2dict') | list }}
   loop_control:
     label: "{{ item.name }}"
   when: yugabyte_databases | length > 0
