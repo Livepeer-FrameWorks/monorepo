@@ -470,7 +470,7 @@ func (jm *JobManager) Start(ctx context.Context) {
 	if jm.kafkaConsumer != nil {
 		jm.kafkaConsumer.AddHandler(jm.billingTopic, jm.handleUsageReport)
 		go func() {
-			if err := jm.kafkaConsumer.Start(ctx); err != nil {
+			if err := jm.kafkaConsumer.Start(ctx); err != nil && ctx.Err() == nil {
 				jm.logger.WithError(err).Error("Kafka consumer exited with error")
 			}
 		}()

@@ -285,6 +285,11 @@ func (c *Consumer) Start(ctx context.Context) error {
 				if ctx.Err() != nil {
 					return ctx.Err()
 				}
+				// A closed client returns immediately on every poll; shutdown
+				// can close it before cancelling ctx, so stop instead of spinning.
+				if fetches.IsClientClosed() {
+					return kgo.ErrClientClosed
+				}
 				c.logger.Errorf("errors while polling: %v", errs)
 			}
 

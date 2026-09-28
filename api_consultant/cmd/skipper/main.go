@@ -542,7 +542,10 @@ func main() {
 			if consumerErr != nil {
 				logger.WithError(consumerErr).Warn("Failed to create Lookout Kafka consumer - Lookout investigations disabled")
 			} else {
+				// Deferred after Close so it runs first: Start sees shutdown, not a closed client.
+				lookoutCtx, stopLookout := context.WithCancel(context.Background())
 				defer func() { _ = lookoutConsumer.Close() }()
+				defer stopLookout()
 				lookoutTrigger := &heartbeat.LookoutTrigger{
 					Consumer: lookoutConsumer,
 					Agent:    heartbeatAgent,
@@ -553,7 +556,7 @@ func main() {
 				go func() {
 					// Start returns when group membership is lost; restarting the
 					// process rejoins the consumer group from committed offsets.
-					if startErr := lookoutTrigger.Start(context.Background()); startErr != nil {
+					if startErr := lookoutTrigger.Start(lookoutCtx); startErr != nil && lookoutCtx.Err() == nil {
 						logger.WithError(startErr).Fatal("Lookout incident consumer exited")
 					}
 				}()

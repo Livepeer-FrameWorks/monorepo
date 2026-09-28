@@ -176,7 +176,11 @@ func main() {
 	if err != nil {
 		logger.WithError(err).Fatal("Failed to create Kafka consumer")
 	}
-	defer func() { _ = ownershipConsumer.Close() }()
+	// Cancel before closing so Start sees shutdown, not a closed client.
+	defer func() {
+		cancel()
+		_ = ownershipConsumer.Close()
+	}()
 	ownershipHandler := &ownership.Consumer{Reconciler: incidentService, Logger: logger, Metrics: domainMetrics}
 	activityHandler := &notify.ActivityConsumer{Sink: activityStore, Channels: router, Logger: logger, Metrics: domainMetrics}
 	// The consumer reads the aggregator's local service_events topic. Central

@@ -167,6 +167,30 @@ func TestConsumerStartAllowsRebalanceAndRecoversMembershipCommitError(t *testing
 	}
 }
 
+type closedClientPoller struct{ polls int }
+
+func (p *closedClientPoller) PollRecords(context.Context, int) kgo.Fetches {
+	p.polls++
+	return kgo.NewErrFetch(kgo.ErrClientClosed)
+}
+
+func (p *closedClientPoller) CommitRecords(context.Context, ...*kgo.Record) error { return nil }
+
+func (p *closedClientPoller) AllowRebalance() {}
+
+// A closed client answers every poll at once. Shutdown can close it before
+// cancelling the consumer's context; Start must stop, not spin logging errors.
+func TestConsumerStartStopsOnClosedClient(t *testing.T) {
+	poller := &closedClientPoller{}
+	consumer := &Consumer{poller: poller, logger: logrus.New(), handlers: map[string]Handler{}}
+	if err := consumer.Start(context.Background()); !errors.Is(err, kgo.ErrClientClosed) {
+		t.Fatalf("Start error = %v, want ErrClientClosed", err)
+	}
+	if poller.polls != 1 {
+		t.Fatalf("Start polled a closed client %d times, want 1", poller.polls)
+	}
+}
+
 func formatRecordKey(topic string, partition int32, offset int64) string {
 	return topic + ":" + formatInt32(partition) + ":" + formatInt64(offset)
 }

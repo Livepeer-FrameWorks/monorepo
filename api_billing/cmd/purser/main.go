@@ -295,7 +295,11 @@ func main() {
 	defer cancel()
 
 	jobManager.Start(ctx)
-	defer jobManager.Stop()
+	// Cancel before Stop closes the Kafka client, so the consumer sees shutdown.
+	defer func() {
+		cancel()
+		jobManager.Stop()
+	}()
 
 	logger.Info("JobManager started - background billing jobs active")
 
