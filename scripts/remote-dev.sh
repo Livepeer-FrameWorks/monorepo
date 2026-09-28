@@ -70,8 +70,10 @@ initialize_slot() {
   local base bundle head init_script remote_bundle repo_url upstream
   head=$(git -C "$repo_root" rev-parse HEAD)
   repo_url=${REMOTE_DEV_REPO_URL:-https://github.com/Livepeer-FrameWorks/monorepo.git}
-  init_script="set -e; mkdir -p $(printf '%q' "$(dirname "$remote_repo")"); if [[ ! -d $(printf '%q' "$remote_repo/.git") ]]; then if [[ -d $(printf '%q' "$remote_repo") ]]; then rm -f $(printf '%q' "$remote_repo/.git"); git -C $(printf '%q' "$remote_repo") init -q; git -C $(printf '%q' "$remote_repo") remote add origin $(printf '%q' "$repo_url"); else git clone --filter=blob:none --no-checkout $(printf '%q' "$repo_url") $(printf '%q' "$remote_repo"); fi; fi; cd $(printf '%q' "$remote_repo"); if git fetch --depth=1 origin $(printf '%q' "$head") >/dev/null 2>&1 || git cat-file -e $(printf '%q' "$head^{commit}") 2>/dev/null; then git checkout --detach --force $(printf '%q' "$head"); else git fetch --depth=1 origin HEAD; git checkout --detach --force FETCH_HEAD; fi"
+  init_script="set -e; mkdir -p $(printf '%q' "$(dirname "$remote_repo")"); if [[ ! -d $(printf '%q' "$remote_repo/.git") ]]; then if [[ -d $(printf '%q' "$remote_repo") ]]; then rm -f $(printf '%q' "$remote_repo/.git"); git -C $(printf '%q' "$remote_repo") init -q; git -C $(printf '%q' "$remote_repo") remote add origin $(printf '%q' "$repo_url"); else git clone --filter=blob:none --no-checkout $(printf '%q' "$repo_url") $(printf '%q' "$remote_repo"); fi; fi; cd $(printf '%q' "$remote_repo"); if [[ -f .git/shallow ]]; then git fetch --unshallow --tags origin; else git fetch --tags origin; fi; if git cat-file -e $(printf '%q' "$head^{commit}") 2>/dev/null; then git checkout --detach --force $(printf '%q' "$head"); else git fetch origin HEAD; git checkout --detach --force FETCH_HEAD; fi"
   # The command is deliberately assembled locally and shell-quoted before SSH.
+  # A slot keeps full history and tags: release gates (validate-migrations)
+  # need the last shipped release tag reachable from the synced head.
   # shellcheck disable=SC2029
   ssh "${ssh_args[@]}" "$remote_target" "bash -lc $(printf '%q' "$init_script")"
 
