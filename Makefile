@@ -1518,10 +1518,18 @@ verify-schema-yugabyte-schema-isolated:
 	done; \
 	exit $$failed
 
+# Each engine contract builds and relayouts a production-shaped database and runs for minutes, so
+# each gets its own test binary and budget: one slow contract cannot starve the ones after it, and
+# a timeout names the contract that ran out.
 verify-schema-yugabyte-engine-contracts:
 	@test -n "$$FRAMEWORKS_YUGABYTE_TEST_CONTAINER" || { echo "ERROR: use make verify-schema-yugabyte so the engine contracts run in an isolated engine"; exit 1; }
 	@echo "Verifying Yugabyte colocation engine contracts (Docker)..."
-	@$(CONTRACT_GO_TEST) cli yugabyte/colocation-engine -tags schema_verify -run '$(SCHEMA_VERIFY_YUGABYTE_ENGINE_TESTS)' -count=1 -timeout 1200s ./pkg/provisioner/
+	@failed=0; \
+	for contract in $(subst |, ,$(SCHEMA_VERIFY_YUGABYTE_ENGINE_TESTS)); do \
+		echo "  $$contract"; \
+		$(CONTRACT_GO_TEST) cli yugabyte/colocation-engine/$$contract -tags schema_verify -run "^$${contract}\$$" -count=1 -timeout 1200s ./pkg/provisioner/ || failed=1; \
+	done; \
+	exit $$failed
 
 verify-yugabyte-relayout-rehearsal:
 	@docker info >/dev/null 2>&1 || { echo "ERROR: verify-yugabyte-relayout-rehearsal requires a running Docker daemon"; exit 1; }
