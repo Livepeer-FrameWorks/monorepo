@@ -1566,6 +1566,9 @@ verify-yugabyte-services-isolated:
 	@$(CURDIR)/scripts/run-yugabyte-contract-fixture.sh $(MAKE) --no-print-directory verify-yugabyte-foghorn-contracts-b
 	@$(CURDIR)/scripts/run-yugabyte-contract-fixture.sh $(MAKE) --no-print-directory verify-yugabyte-bosun-contracts
 
+# Each contract of the group gets its own test binary and budget: the largest databases' baseline
+# and migration-path contracts each run for many minutes, and one budget for the group runs out
+# on whichever contract comes last.
 verify-schema-yugabyte-schema-contracts:
 	@test -n "$$FRAMEWORKS_YUGABYTE_TEST_DSN" -a -n "$$FRAMEWORKS_YUGABYTE_TEST_CONTAINER" || { echo "ERROR: use make verify-schema-yugabyte so the contracts share one isolated engine"; exit 1; }
 	@case "$$FRAMEWORKS_YUGABYTE_DATABASES" in bosun|commodore|foghorn|lookout|navigator|periscope|purser|quartermaster|skipper) ;; *) echo "ERROR: Yugabyte schema contracts require exactly one supported FRAMEWORKS_YUGABYTE_DATABASES value"; exit 2;; esac
@@ -1576,7 +1579,12 @@ verify-schema-yugabyte-schema-contracts:
 		*) echo "ERROR: unknown Yugabyte schema contract group $$YUGABYTE_SCHEMA_TEST_GROUP"; exit 2 ;; \
 	esac; \
 	echo "Verifying $$FRAMEWORKS_YUGABYTE_DATABASES Yugabyte $$YUGABYTE_SCHEMA_TEST_GROUP contract (Docker)..."; \
-	FRAMEWORKS_SCHEMA_VERIFY_FROM_TAG='$(SCHEMA_VERIFY_FROM_TAG)' $(CONTRACT_GO_TEST) cli yugabyte/$${YUGABYTE_SCHEMA_COVERAGE_NAME:-schema-$$FRAMEWORKS_YUGABYTE_DATABASES-$$YUGABYTE_SCHEMA_TEST_GROUP} -tags schema_verify -run "$$tests" -count=1 -timeout 1200s ./pkg/provisioner/
+	coverage=$${YUGABYTE_SCHEMA_COVERAGE_NAME:-schema-$$FRAMEWORKS_YUGABYTE_DATABASES-$$YUGABYTE_SCHEMA_TEST_GROUP}; \
+	failed=0; \
+	for contract in $$(echo "$$tests" | tr '|' ' '); do \
+		FRAMEWORKS_SCHEMA_VERIFY_FROM_TAG='$(SCHEMA_VERIFY_FROM_TAG)' $(CONTRACT_GO_TEST) cli yugabyte/$$coverage/$$contract -tags schema_verify -run "^$${contract}\$$" -count=1 -timeout 1200s ./pkg/provisioner/ || failed=1; \
+	done; \
+	exit $$failed
 
 verify-yugabyte-shared-fixture:
 	@test -n "$$FRAMEWORKS_YUGABYTE_TEST_DSN" -a -n "$$FRAMEWORKS_YUGABYTE_TEST_CONTAINER" || { echo "ERROR: invoke Yugabyte contracts through their public Make target"; exit 1; }
