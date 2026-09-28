@@ -274,15 +274,18 @@ change Yugabyte nodes one at a time through quorum checks:
   Yugabyte nodes one at a time. A single-node universe is changed without the gate, and
   goes down until the node is back.
 
-- `cluster upgrade yugabyte` follows the YugabyteDB upgrade order: every master, then
-  every tserver, then finalize.
+- `cluster upgrade yugabyte` and the Yugabyte stage of `release apply` follow the
+  YugabyteDB upgrade order: every master, then every tserver, then finalize. Both run
+  the same code (`cli/cmd/yugabyte_engine_upgrade.go`); `release apply` runs it before
+  converging Yugabyte configuration whenever a joined node's engine differs from the
+  release's pin, and refuses a pin older than a node's engine.
   `config/infrastructure.yaml` pins the native engine archives for both architectures;
   `config/schema-contract-engines.yaml` pins the matching build for real-engine tests.
   Release generation includes the native pins in the platform manifest.
   A release carrying engine-upgrade orchestration changes must set `min_cli_version`
   to a CLI containing those changes; updating only the archive pin cannot protect
-  operators using older orchestration. Platform `release apply` does not upgrade
-  the engine: run `cluster upgrade yugabyte` explicitly before scheduling relayout.
+  operators using older orchestration. Finish the engine upgrade before scheduling
+  relayout.
   Archives are extracted into clean `/opt/yugabyte/releases/<artifact-hash>` directories
   and relocated there before an atomic `current` symlink selects the complete artifact
   for CLI tools. Service units use absolute release paths, not the selector. Neither
@@ -308,8 +311,12 @@ change Yugabyte nodes one at a time through quorum checks:
   The role refuses to install another engine on a node that already joined the
   universe unless the upgrade asks for it, so provisioning cannot change the engine
   without this order and the finalize. Until then a node can go back to the old
-  binary; afterwards it cannot rejoin. Finalizing is idempotent, so rerunning the upgrade
-  finishes an interrupted one. Upgrades across a PostgreSQL major version of YSQL need
+  binary; afterwards it cannot rejoin. Before the first change the upgrade writes
+  `/var/lib/yugabyte/data/.frameworks-engine-finalize-pending` on every node and removes
+  it only after finalizing succeeds, because a finalized universe looks the same to a
+  probe as one still waiting for it. Finalizing is idempotent, so rerunning either command
+  finishes an interrupted upgrade: `release apply` resumes when a node's engine differs,
+  a process runs the previous binary, or a marker remains. Upgrades across a PostgreSQL major version of YSQL need
   the separate catalog upgrade steps and are not handled; every supported release runs
   YSQL on PostgreSQL 15.
 

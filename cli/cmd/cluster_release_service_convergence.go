@@ -93,12 +93,16 @@ func releaseServiceTasks(steps []releaseHostConvergenceStep) map[string][]*orche
 	return byStage
 }
 
-// writeReleaseServiceConvergencePlan prints one line per service stage.
-func writeReleaseServiceConvergencePlan(out io.Writer, steps []releaseHostConvergenceStep) {
+// writeReleaseServiceConvergencePlan prints one line per service stage, and
+// under Yugabyte its engine step for the pinned yugabyteEngine.
+func writeReleaseServiceConvergencePlan(out io.Writer, steps []releaseHostConvergenceStep, yugabyteEngine string) {
 	byStage := releaseServiceTasks(steps)
 	for _, stage := range releaseServiceStages() {
 		if tasks := byStage[stage.name]; len(tasks) > 0 {
 			stage.describe(out, tasks)
+			if stage.name == "yugabyte" {
+				describeYugabyteEngine(out, yugabyteEngine)
+			}
 		}
 	}
 }

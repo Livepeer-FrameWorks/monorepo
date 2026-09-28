@@ -112,10 +112,11 @@ func runServiceConvergence(t *testing.T, manifest *inventory.Manifest, fake *ser
 	var out bytes.Buffer
 	cmd.SetOut(&out)
 	c := &releaseHostConvergence{
-		cmd:         cmd,
-		manifest:    manifest,
-		runtimeData: map[string]any{},
-		sharedEnv:   map[string]string{},
+		cmd:            cmd,
+		manifest:       manifest,
+		runtimeData:    map[string]any{},
+		sharedEnv:      map[string]string{},
+		yugabyteEngine: testYugabyteEngine,
 		verifyMeshFn: func(context.Context, []string) error {
 			return nil
 		},

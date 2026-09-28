@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -43,6 +44,47 @@ type fakeUniverse struct {
 	finalizeErr error
 	// catalogMigrations is the installed engine's migration set; empty means a consistent single-major set.
 	catalogMigrations []string
+	// engines maps a node to its installed engine; a missing entry runs testYugabyteEngine. Every node has joined.
+	engines map[string]string
+	// staleBinaries names host/process entries still running the previous engine's binary.
+	staleBinaries map[string]bool
+	// pending holds the nodes whose finalize marker is set; markerWrites records each write as host=version.
+	pending      map[string]bool
+	markerWrites []string
+	engineReads  int
+}
+
+const testYugabyteEngine = "2026.1.1.2"
+
+func (u *fakeUniverse) EngineState(_ context.Context, host inventory.Host) (yugabyteEngineState, error) {
+	u.mu.Lock()
+	defer u.mu.Unlock()
+	u.engineReads++
+	state := yugabyteEngineState{Joined: true, Installed: testYugabyteEngine, FinalizePending: u.pending[host.Name]}
+	if engine, ok := u.engines[host.Name]; ok {
+		state.Installed = engine
+	}
+	for _, process := range []string{"yb-master", "yb-tserver"} {
+		if u.staleBinaries[host.Name+"/"+process] {
+			state.Stale = append(state.Stale, process)
+		}
+	}
+	return state, nil
+}
+
+func (u *fakeUniverse) SetFinalizePending(_ context.Context, host inventory.Host, version string) error {
+	u.mu.Lock()
+	defer u.mu.Unlock()
+	u.markerWrites = append(u.markerWrites, host.Name+"="+version)
+	if u.pending == nil {
+		u.pending = map[string]bool{}
+	}
+	if version == "" {
+		delete(u.pending, host.Name)
+	} else {
+		u.pending[host.Name] = true
+	}
+	return nil
 }
 
 func (u *fakeUniverse) ProcessState(_ context.Context, host inventory.Host, process string) (yugabyteProcessState, error) {
@@ -919,8 +961,8 @@ func TestYugabyteProcessStateDetectsUnappliedConfiguration(t *testing.T) {
 	assertState("unknown")
 }
 
-// TestYugabyteUpgradeRestartsEveryMasterBeforeAnyTServer pins the order YugabyteDB requires for an engine upgrade:
-// the install pass restarts only masters, then masters left on the old engine, then every tserver, then finalize.
+// TestYugabyteUpgradeRestartsEveryMasterBeforeAnyTServer pins that cluster upgrade marks the universe, installs with a
+// master-only restart, and then runs the phases shared with release apply.
 func TestYugabyteUpgradeRestartsEveryMasterBeforeAnyTServer(t *testing.T) {
 	source, err := os.ReadFile("cluster_upgrade.go")
 	if err != nil {
@@ -928,26 +970,195 @@ func TestYugabyteUpgradeRestartsEveryMasterBeforeAnyTServer(t *testing.T) {
 	}
 	text := string(source)
 	steps := []string{
-		`config.Metadata["restart_scope"] = "master"`,
-		`ybRoll.rollStale(ctx, "yb-master", restartOnly("master"))`,
-		`ybRoll.rollStale(ctx, "yb-tserver", restartOnly("tserver"))`,
-		`ybRoll.finalizeUpgrade(ctx)`,
+		`ybRoll.beginEngineUpgrade(ctx, svcInfo.Version)`,
+		`ybRoll.completeEngineUpgrade(ctx, svcInfo.Version,`,
 	}
 	at := -1
 	for _, step := range steps {
 		next := strings.Index(text, step)
-		if next < 0 {
-			t.Fatalf("cluster upgrade lacks %q", step)
+		if next <= at {
+			t.Fatalf("cluster upgrade lacks %q or runs it out of order", step)
 		}
-		if step != steps[0] && next <= at {
-			t.Fatalf("cluster upgrade runs %q out of order", step)
-		}
-		if step != steps[0] {
-			at = next
+		at = next
+	}
+	for _, want := range []string{`config.Metadata["restart_scope"] = "master"`, `config.Metadata["allow_engine_change"] = true`} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("cluster upgrade's install pass lacks %q", want)
 		}
 	}
-	if !strings.Contains(text, `config.Metadata["allow_engine_change"] = true`) {
-		t.Fatal("cluster upgrade does not allow the engine change the role otherwise refuses")
+}
+
+// The shared phases restart every stale master before any tserver, complete every node, finalize, and only then remove
+// the finalize marker.
+func TestYugabyteCompleteEngineUpgradeOrdersMastersTserversFinalize(t *testing.T) {
+	universe := &fakeUniverse{
+		serving:   servingAll(),
+		pending:   map[string]bool{"yb-1": true, "yb-2": true, "yb-3": true},
+		processes: map[string]yugabyteProcessState{"yb-2/yb-master": yugabyteProcessStale, "yb-1/yb-tserver": yugabyteProcessStale, "yb-3/yb-tserver": yugabyteProcessStale},
+	}
+	roll := universe.roll("yb-1", "yb-2", "yb-3")
+	var events []string
+	err := roll.completeEngineUpgrade(context.Background(), testYugabyteEngine, yugabyteEngineNodeOps{
+		Restart: func(_ context.Context, host inventory.Host, scope string) error {
+			events = append(events, scope+":"+host.Name)
+			universe.mu.Lock()
+			universe.processes[host.Name+"/yb-"+scope] = yugabyteProcessCurrent
+			universe.mu.Unlock()
+			return nil
+		},
+		Complete: func(_ context.Context, host inventory.Host) error {
+			universe.mu.Lock()
+			defer universe.mu.Unlock()
+			if len(universe.finalized) > 0 {
+				t.Errorf("completed %s after finalizing", host.Name)
+			}
+			events = append(events, "complete:"+host.Name)
+			return nil
+		},
+	})
+	if err != nil {
+		t.Fatalf("completeEngineUpgrade: %v", err)
+	}
+	want := []string{"master:yb-2", "tserver:yb-1", "tserver:yb-3", "complete:yb-1", "complete:yb-2", "complete:yb-3"}
+	if !slices.Equal(events, want) {
+		t.Fatalf("events = %v\nwant     %v", events, want)
+	}
+	if len(universe.finalized) != 1 || len(universe.pending) != 0 {
+		t.Fatalf("finalized %v, markers left %v; want one finalize and every marker removed", universe.finalized, universe.pending)
+	}
+}
+
+func TestYugabyteCompleteEngineUpgradeKeepsTheMarkerWhenFinalizeFails(t *testing.T) {
+	universe := &fakeUniverse{serving: servingAll(), pending: map[string]bool{"yb-1": true}, finalizeErr: errors.New("upgrade_ysql failed")}
+	roll := universe.roll("yb-1", "yb-2", "yb-3")
+	noop := func(context.Context, inventory.Host) error { return nil }
+	err := roll.completeEngineUpgrade(context.Background(), testYugabyteEngine, yugabyteEngineNodeOps{
+		Restart:  func(context.Context, inventory.Host, string) error { return nil },
+		Complete: noop,
+	})
+	if err == nil || !strings.Contains(err.Error(), "not finalized") {
+		t.Fatalf("err = %v, want the finalize failure", err)
+	}
+	if !universe.pending["yb-1"] {
+		t.Fatal("the finalize marker was removed although finalizing failed")
+	}
+}
+
+func TestPlanYugabyteEngine(t *testing.T) {
+	names := []string{"yb-1", "yb-2", "yb-3"}
+	joined := func(engine string) yugabyteEngineState { return yugabyteEngineState{Joined: true, Installed: engine} }
+	tests := []struct {
+		name    string
+		states  map[string]yugabyteEngineState
+		install []string
+		from    []string
+		resume  bool
+		wantErr string
+	}{
+		{name: "current universe", states: map[string]yugabyteEngineState{"yb-1": joined(testYugabyteEngine), "yb-2": joined(testYugabyteEngine), "yb-3": joined(testYugabyteEngine)}},
+		{
+			name:    "every node on the previous engine",
+			states:  map[string]yugabyteEngineState{"yb-1": joined("2025.2.3.0"), "yb-2": joined("2025.2.3.0"), "yb-3": joined("2025.2.3.0")},
+			install: names, from: []string{"2025.2.3.0"},
+		},
+		{
+			name: "interrupted install",
+			states: map[string]yugabyteEngineState{
+				"yb-1": {Joined: true, Installed: testYugabyteEngine, FinalizePending: true},
+				"yb-2": {Joined: true, Installed: "2025.2.3.0", FinalizePending: true},
+				"yb-3": {Joined: true, Installed: "2025.2.3.0", FinalizePending: true},
+			},
+			install: []string{"yb-2", "yb-3"}, from: []string{"2025.2.3.0"}, resume: true,
+		},
+		{
+			name:   "installed everywhere, a tserver on the previous binary",
+			states: map[string]yugabyteEngineState{"yb-1": {Joined: true, Installed: testYugabyteEngine, Stale: []string{"yb-tserver"}}, "yb-2": joined(testYugabyteEngine), "yb-3": joined(testYugabyteEngine)},
+			resume: true,
+		},
+		{
+			name:   "a node that never joined takes the engine through convergence",
+			states: map[string]yugabyteEngineState{"yb-1": {Installed: "2025.2.3.0"}, "yb-2": joined(testYugabyteEngine), "yb-3": {}},
+		},
+		{
+			name:    "newer engine than the pin",
+			states:  map[string]yugabyteEngineState{"yb-1": joined(testYugabyteEngine), "yb-2": joined("2026.2.0.0"), "yb-3": joined(testYugabyteEngine)},
+			wantErr: "refusing to downgrade the Yugabyte engine on yb-2 from 2026.2.0.0",
+		},
+		{
+			name:    "unreadable engine version",
+			states:  map[string]yugabyteEngineState{"yb-1": joined("2026.1.x")},
+			wantErr: "not a dotted number",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			plan, err := planYugabyteEngine(testYugabyteEngine, names, tt.states)
+			if tt.wantErr != "" {
+				if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
+					t.Fatalf("err = %v, want %q", err, tt.wantErr)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("plan: %v", err)
+			}
+			if !slices.Equal(plan.Install, tt.install) || !slices.Equal(plan.From, tt.from) || plan.Resume != tt.resume {
+				t.Fatalf("plan = %+v, want install %v from %v resume %v", plan, tt.install, tt.from, tt.resume)
+			}
+		})
+	}
+	if _, err := planYugabyteEngine("", names, nil); err == nil {
+		t.Fatal("a release without a Yugabyte engine pin was accepted")
+	}
+}
+
+func TestParseYugabyteEngineState(t *testing.T) {
+	state, err := parseYugabyteEngineState("yb-1", "joined=yes installed=2025.2.3.0 finalize_pending=no stale=yb-master,yb-tserver\n")
+	if err != nil || !state.Joined || state.Installed != "2025.2.3.0" || state.FinalizePending || !slices.Equal(state.Stale, []string{"yb-master", "yb-tserver"}) {
+		t.Fatalf("state = %+v, err %v", state, err)
+	}
+	state, err = parseYugabyteEngineState("yb-1", "joined=no installed=none finalize_pending=yes stale=\n")
+	if err != nil || state.Joined || state.Installed != "" || !state.FinalizePending || len(state.Stale) != 0 {
+		t.Fatalf("fresh state = %+v, err %v", state, err)
+	}
+	if _, err := parseYugabyteEngineState("yb-1", "installed=2025.2.3.0"); err == nil {
+		t.Fatal("a partial report was accepted")
+	}
+}
+
+// The engine probe reads the version from the selected release's yb-master and reports no stale process when none
+// runs under systemd.
+func TestYugabyteEngineStateScriptReadsTheSelectedEngine(t *testing.T) {
+	root := t.TempDir()
+	bin := filepath.Join(root, "opt/yugabyte/current/bin")
+	data := filepath.Join(root, "var/lib/yugabyte/data")
+	for _, dir := range []string{bin, data} {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	stub := "#!/bin/sh\necho 'version 2025.2.3.0 build 20 revision abc build_type RELEASE built at 01 Jan 2026'\n"
+	if err := os.WriteFile(filepath.Join(bin, "yb-master"), []byte(stub), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{".frameworks-bootstrap-complete", ".frameworks-engine-finalize-pending"} {
+		if err := os.WriteFile(filepath.Join(data, name), nil, 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	script := strings.ReplaceAll(yugabyteEngineStateScript, "/opt/yugabyte", filepath.Join(root, "opt/yugabyte"))
+	script = strings.ReplaceAll(script, "/var/lib/yugabyte", filepath.Join(root, "var/lib/yugabyte"))
+	script = strings.ReplaceAll(script, "systemctl show", "false")
+	out, err := exec.Command("bash", "-c", script).CombinedOutput()
+	if err != nil {
+		t.Fatalf("script: %v: %s", err, out)
+	}
+	state, err := parseYugabyteEngineState("yb-1", string(out))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !state.Joined || state.Installed != "2025.2.3.0" || !state.FinalizePending || len(state.Stale) != 0 {
+		t.Fatalf("state = %+v from %q", state, out)
 	}
 }
 

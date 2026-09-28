@@ -78,7 +78,7 @@ func TestReleaseClickHouseConvergenceGatesTheChangedNode(t *testing.T) {
 	if err != nil {
 		t.Fatalf("plan: %v", err)
 	}
-	writeReleaseHostConvergencePlan(&out, "1. pre-upgrade host convergence", manifest, planReleaseHostConvergence(plan, manifest))
+	writeReleaseHostConvergencePlan(&out, "1. pre-upgrade host convergence", manifest, planReleaseHostConvergence(plan, manifest), "")
 	if !strings.Contains(out.String(), "· ClickHouse, one node at a time, each gated on every node reaching Keeper with its replicas caught up: ch-1") {
 		t.Fatalf("plan output:\n%s", out.String())
 	}

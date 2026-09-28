@@ -168,8 +168,9 @@ func releaseNodeBaselineWaves(manifest *inventory.Manifest, steps []releaseHostC
 const nodeBaselineConvergenceBatch = 4
 
 // writeReleaseHostConvergencePlan prints the stage: the Privateer waves, then
-// one line per remaining step kind.
-func writeReleaseHostConvergencePlan(out io.Writer, heading string, manifest *inventory.Manifest, steps []releaseHostConvergenceStep) {
+// one line per remaining step kind. yugabyteEngine is the engine the release
+// pins, empty when unknown.
+func writeReleaseHostConvergencePlan(out io.Writer, heading string, manifest *inventory.Manifest, steps []releaseHostConvergenceStep, yugabyteEngine string) {
 	if len(steps) == 0 {
 		fmt.Fprintf(out, "  %s: none\n", heading)
 		return
@@ -188,7 +189,7 @@ func writeReleaseHostConvergencePlan(out io.Writer, heading string, manifest *in
 		}
 	}
 	writeRedisConvergencePlan(out, steps)
-	writeReleaseServiceConvergencePlan(out, steps)
+	writeReleaseServiceConvergencePlan(out, steps, yugabyteEngine)
 	groups := map[string][]string{}
 	for _, step := range steps {
 		groups[step.Kind] = append(groups[step.Kind], step.Label)
@@ -214,6 +215,8 @@ type releaseHostConvergence struct {
 	sharedEnv    map[string]string
 	clusterEnvs  map[string]map[string]string
 	releaseRepos []string
+	// yugabyteEngine is the Yugabyte engine version the release pins.
+	yugabyteEngine string
 
 	// mirrorMakerRestartPendingFn and mirrorMakerRestartFn replace the SSH
 	// probe and the role restart in tests.

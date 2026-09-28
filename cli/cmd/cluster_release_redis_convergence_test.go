@@ -88,7 +88,7 @@ func TestReleaseHostConvergencePlansRedisReplicasSentinelsThenPrimary(t *testing
 	}
 
 	var out bytes.Buffer
-	writeReleaseHostConvergencePlan(&out, "1. pre-upgrade host convergence", manifest, steps)
+	writeReleaseHostConvergencePlan(&out, "1. pre-upgrade host convergence", manifest, steps, "")
 	for _, line := range []string{
 		"· Redis foghorn, one host at a time: servers redis-a, redis-b, redis-c except the live primary (each must sync), Sentinels redis-a -> redis-b -> redis-c (each must reach quorum), then the live primary after a Sentinel failover",
 		"· Redis platform: redis-a in place (restarts only when its config changes)",

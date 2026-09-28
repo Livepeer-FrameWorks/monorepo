@@ -328,6 +328,10 @@ type yugabyteUniverse interface {
 	CatalogMigrations(ctx context.Context, host inventory.Host) ([]string, error)
 	// ProcessState checks the installed binary and, for tservers, the applied configuration receipt.
 	ProcessState(ctx context.Context, host inventory.Host, process string) (yugabyteProcessState, error)
+	// EngineState reads host's installed engine, its finalize marker, and which processes run another binary.
+	EngineState(ctx context.Context, host inventory.Host) (yugabyteEngineState, error)
+	// SetFinalizePending writes host's finalize marker for version, or removes it when version is empty.
+	SetFinalizePending(ctx context.Context, host inventory.Host, version string) error
 }
 
 // yugabyteProcessState reports whether a process runs its installed binary and, for tservers, desired configuration.

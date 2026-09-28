@@ -103,14 +103,36 @@ runs its role's check-mode precheck, and only a host whose check reports a
 change is touched, one host at a time; the first gate that fails stops the
 stage and leaves later hosts untouched, and a rerun resumes because converged
 hosts are skipped and each remaining change is gated on a healthy service
-first. Yugabyte converges in two passes through the Yugabyte roll: masters
-first (restart scope `master`; the masters must confirm the master can go
-down, and all masters must be alive with one leader before the next node),
-then every tserver whose running binary, applied-config receipt, or
-tserver-scope role check differs, each admitted by `are_nodes_safe_to_take_down`
-and followed by YSQL, tserver liveness, and no under-replicated or leaderless
-tablet. The role refuses an engine change here; `cluster upgrade yugabyte`
-owns that. ClickHouse converges node by node, gated before and after each
+first. Yugabyte first settles its engine, then converges its configuration in
+two passes through the Yugabyte roll. The engine step reads each node's
+installed engine (the selected release's `yb-master --version`), whether a
+process still runs another binary, and a finalize marker. When a joined node
+runs another engine than the release pins, or an earlier upgrade left a
+process on the previous binary or its marker, the stage runs the ordered
+engine upgrade `cluster upgrade yugabyte` runs, from the same code
+(`cli/cmd/yugabyte_engine_upgrade.go`): it writes the marker on every node,
+installs the engine on each node still on the previous one restarting only its
+master (admitted by `are_nodes_safe_to_take_down`, followed by every master
+alive with one leader), restarts every master still on the previous binary,
+then every tserver (each admitted by the masters and followed by YSQL, tserver
+liveness, and no under-replicated or leaderless tablet), initializes and
+validates every node, finalizes (every node serving and the universe healthy,
+the YSQL catalog migration set validated, then AutoFlags promoted and the
+catalog upgraded), and removes the marker. Finalizing leaves nothing a probe
+can compare against the engine, so the marker is what lets a rerun after any
+failed gate finish the upgrade; the per-node engine and process reads let it
+skip what already happened. A joined node on a newer engine than the pin
+refuses the release, since a finalized universe cannot return to an older
+engine. Nodes already on the pinned engine with no marker go straight to the
+configuration passes: masters first (restart scope `master`; the masters must
+confirm the master can go down, and all masters must be alive with one leader
+before the next node), then every tserver whose running binary, applied-config
+receipt, or tserver-scope role check differs, each admitted by
+`are_nodes_safe_to_take_down` and followed by YSQL, tserver liveness, and no
+under-replicated or leaderless tablet. `release apply --dry-run` reads the
+engines and reports the upgrade it would run without writing the marker or
+asking the masters anything; `release plan` names the pinned engine and leaves
+each node's engine to apply. ClickHouse converges node by node, gated before and after each
 change on every node reaching Keeper (`system.zookeeper`) with no replica
 read-only, session-expired, more than 30 s behind, or with parts to fetch.
 Kafka converges each cluster's controllers, then its brokers, gated before and

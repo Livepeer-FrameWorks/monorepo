@@ -123,7 +123,7 @@ func runReleasePlan(cmd *cobra.Command, rc *resolvedCluster, opts releasePlanOpt
 
 	out := cmd.OutOrStdout()
 	ux.Heading(out, fmt.Sprintf("Static release plan for %s (platform %s)", selector, platformVersion))
-	writeReleaseHostConvergencePlan(out, "1. pre-upgrade host convergence", manifest, planReleaseHostConvergence(execution, manifest))
+	writeReleaseHostConvergencePlan(out, "1. pre-upgrade host convergence", manifest, planReleaseHostConvergence(execution, manifest), releaseYugabyteEngine(gm))
 	writeReleasePlanGroup(out, "2. service databases (created with roles and current baseline when missing on the cluster)", releasePlanServiceDatabases(manifest))
 	fmt.Fprintln(out, "  3. schema expand migrations")
 	writeReleasePlanGroup(out, "4. platform artifact upgrades", classes.Platform)
@@ -152,6 +152,18 @@ func runReleasePlan(cmd *cobra.Command, rc *resolvedCluster, opts releasePlanOpt
 	fmt.Fprintln(out, "  other control-plane desired state: inspect with `cluster control-plane plan`; reconcile explicitly when needed")
 	fmt.Fprintln(out, "\nStatic plan complete. No secrets were decrypted and no cluster connections were opened.")
 	return nil
+}
+
+// releaseYugabyteEngine returns the Yugabyte engine version the release pins,
+// or empty when it lists none.
+func releaseYugabyteEngine(gm *gitops.Manifest) string {
+	if gm == nil {
+		return ""
+	}
+	if infra := gm.GetInfrastructure("yugabyte"); infra != nil {
+		return infra.Version
+	}
+	return ""
 }
 
 func writeReleasePlanGroup(out io.Writer, label string, values []string) {
@@ -400,7 +412,7 @@ func runReleaseApply(cmd *cobra.Command, rc *resolvedCluster, opts releaseApplyO
 
 	hostSteps := planReleaseHostConvergence(plan, manifest)
 	ux.Heading(out, fmt.Sprintf("Release plan for %s (platform %s)", version, platformVersion))
-	writeReleaseHostConvergencePlan(out, "1. pre-upgrade host convergence", manifest, hostSteps)
+	writeReleaseHostConvergencePlan(out, "1. pre-upgrade host convergence", manifest, hostSteps, releaseYugabyteEngine(gm))
 	fmt.Fprintln(out, "  2. service databases missing on the cluster (created with roles and current baseline), then expand migrations")
 	fmt.Fprintln(out, "     · read-only Quartermaster report: nodes without an identity key, DNS grants the entitlement migration clears")
 	if len(services) == 0 {
@@ -432,6 +444,7 @@ func runReleaseApply(cmd *cobra.Command, rc *resolvedCluster, opts releaseApplyO
 		if err != nil {
 			return fmt.Errorf("pre-upgrade host convergence: %w", err)
 		}
+		hostConvergence.yugabyteEngine = releaseYugabyteEngine(gm)
 		if contractErr := hostConvergence.preflightEnvContract(hostSteps); contractErr != nil {
 			return contractErr
 		}

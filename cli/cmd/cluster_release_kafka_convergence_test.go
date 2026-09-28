@@ -114,7 +114,7 @@ func TestReleaseKafkaConvergencePlansControllersThenBrokers(t *testing.T) {
 		t.Fatalf("steps = %v\nwant    %v", got, want)
 	}
 	var out bytes.Buffer
-	writeReleaseHostConvergencePlan(&out, "1. pre-upgrade host convergence", manifest, steps)
+	writeReleaseHostConvergencePlan(&out, "1. pre-upgrade host convergence", manifest, steps, "")
 	if !strings.Contains(out.String(), "· Kafka primary, one host at a time, each gated on a quorum leader with every controller caught up and no under-replicated or unavailable partition: controllers kc-1 -> kc-2 -> kc-3, then brokers kb-1 -> kb-2 -> kb-3") {
 		t.Fatalf("plan output:\n%s", out.String())
 	}

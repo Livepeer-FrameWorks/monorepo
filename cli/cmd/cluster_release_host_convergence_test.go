@@ -111,7 +111,7 @@ func TestReleaseHostConvergenceOrdersMeshTopicsThenMirrorMaker(t *testing.T) {
 	}
 
 	var out bytes.Buffer
-	writeReleaseHostConvergencePlan(&out, "1. pre-upgrade host convergence", manifest, steps)
+	writeReleaseHostConvergencePlan(&out, "1. pre-upgrade host convergence", manifest, steps, "")
 	for _, line := range []string{
 		"Node baseline and OS tuning (tools, journald/logrotate retention, key-only sshd, fail2ban), in waves (a new SSH login to each host gates each wave; only sshd reloads and journald restarts):",
 		"Privateer binary, seed peers, and seed DNS, in waves (mesh health gates each wave):",
@@ -141,7 +141,7 @@ func TestReleaseHostConvergenceOnlyBaselineWithoutMeshOrKafka(t *testing.T) {
 		t.Fatalf("steps = %+v, want only the node baseline on core-1", steps)
 	}
 	var out bytes.Buffer
-	writeReleaseHostConvergencePlan(&out, "1. pre-upgrade host convergence", manifest, nil)
+	writeReleaseHostConvergencePlan(&out, "1. pre-upgrade host convergence", manifest, nil, "")
 	if !strings.Contains(out.String(), "1. pre-upgrade host convergence: none") {
 		t.Fatalf("plan output = %q", out.String())
 	}

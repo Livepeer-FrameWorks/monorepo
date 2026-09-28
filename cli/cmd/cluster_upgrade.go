@@ -571,6 +571,9 @@ func runUpgrade(cmd *cobra.Command, rc *resolvedCluster, serviceName, version st
 				}
 			}
 			hosts = ordered
+			if err := ybRoll.beginEngineUpgrade(ctx, svcInfo.Version); err != nil {
+				return result, err
+			}
 		}
 	}
 	hostNames := make([]string, 0, len(hosts))
@@ -633,27 +636,16 @@ func runUpgrade(cmd *cobra.Command, rc *resolvedCluster, serviceName, version st
 		return result, nil
 	}
 	if ybRoll != nil {
-		// YugabyteDB upgrades every master before any tserver. The install pass above restarted only masters; a master
-		// an interrupted run left on the old binary is restarted first, then every tserver still on it.
-		restartOnly := func(scope string) func(context.Context, inventory.Host) error {
-			return func(ctx context.Context, host inventory.Host) error {
+		// The install pass above restarted only masters; the rest of the ordered upgrade is shared with release apply.
+		if err := ybRoll.completeEngineUpgrade(ctx, svcInfo.Version, yugabyteEngineNodeOps{
+			Restart: func(ctx context.Context, host inventory.Host, scope string) error {
 				return restartYugabyteProcess(ctx, rc, sshPool, manifest, host, serviceName, deployName, svcInfo.Version, upgradeRuntimeData, scope)
-			}
-		}
-		fmt.Fprintln(cmd.OutOrStdout(), "\nRestarting Yugabyte masters still on the previous engine, then every tserver...")
-		if err := ybRoll.rollStale(ctx, "yb-master", restartOnly("master")); err != nil {
-			return result, fmt.Errorf("restart Yugabyte masters on %s: %w", svcInfo.Version, err)
-		}
-		if err := ybRoll.rollStale(ctx, "yb-tserver", restartOnly("tserver")); err != nil {
-			return result, fmt.Errorf("every Yugabyte master runs %s but not every tserver; rerun the upgrade to continue: %w", svcInfo.Version, err)
-		}
-		for _, host := range hosts {
-			if err := completeYugabyteUpgradeHost(ctx, rc, sshPool, manifest, host, serviceName, deployName, svcInfo.Version, upgradeRuntimeData); err != nil {
-				return result, err
-			}
-		}
-		if err := ybRoll.finalizeUpgrade(ctx); err != nil {
-			return result, fmt.Errorf("every Yugabyte node runs %s but the upgrade is not finalized; rerun the upgrade to finalize: %w", svcInfo.Version, err)
+			},
+			Complete: func(ctx context.Context, host inventory.Host) error {
+				return completeYugabyteUpgradeHost(ctx, rc, sshPool, manifest, host, serviceName, deployName, svcInfo.Version, upgradeRuntimeData)
+			},
+		}); err != nil {
+			return result, err
 		}
 	}
 
@@ -744,6 +736,12 @@ func completeYugabyteUpgradeHost(ctx context.Context, rc *resolvedCluster, sshPo
 	if err != nil {
 		return err
 	}
+	return initializeAndValidateYugabyteNode(ctx, sshPool, manifest, host, prov, config)
+}
+
+// initializeAndValidateYugabyteNode creates the node's missing databases and validates the whole node, once both of its
+// processes run the engine an upgrade installed.
+func initializeAndValidateYugabyteNode(ctx context.Context, sshPool *ssh.Pool, manifest *inventory.Manifest, host inventory.Host, prov provisioner.Provisioner, config provisioner.ServiceConfig) error {
 	if err := initializeOutsideRelayout(ctx, sshPool, host, manifest.Infrastructure.Postgres, func() error { return prov.Initialize(ctx, host, config) }); err != nil {
 		return fmt.Errorf("initialize Yugabyte on %s: %w", host.Name, err)
 	}
@@ -755,8 +753,7 @@ func completeYugabyteUpgradeHost(ctx context.Context, rc *resolvedCluster, sshPo
 
 // upgradeReleaseInfo returns the release data an upgrade deploys for deployName: its service, interface, or native
 // binary entry, or else its infrastructure entry. Infrastructure components such as Yugabyte and Kafka are listed
-// under infrastructure in a release, and cluster upgrade yugabyte is the only path allowed to change the engine of a
-// node that already joined the universe.
+// under infrastructure in a release.
 func upgradeReleaseInfo(release *gitops.Manifest, deployName string) (*gitops.ServiceInfo, error) {
 	info, err := release.GetServiceInfo(deployName)
 	if err == nil {
@@ -947,8 +944,8 @@ func upgradeServiceOnHost(ctx context.Context, cmd *cobra.Command, rc *resolvedC
 	rc.applyReleaseMetadata(config.Metadata)
 	if serviceName == "yugabyte" {
 		// The install pass of the ordered engine upgrade restarts only the master; every tserver keeps its running
-		// binary until all masters run the new one, and cluster upgrade is the one path allowed to change the engine
-		// of a node that already joined the universe.
+		// binary until all masters run the new one. The role refuses to change the engine of a node that already joined
+		// the universe unless the ordered upgrade allows it.
 		if config.Metadata == nil {
 			config.Metadata = map[string]any{}
 		}

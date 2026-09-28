@@ -87,7 +87,7 @@ func TestReleaseHostConvergenceStageOrder(t *testing.T) {
 	}
 
 	var out bytes.Buffer
-	writeReleaseHostConvergencePlan(&out, "1. pre-upgrade host convergence", manifest, steps)
+	writeReleaseHostConvergencePlan(&out, "1. pre-upgrade host convergence", manifest, steps, "")
 	last := -1
 	for _, line := range []string{
 		"· Node baseline and OS tuning",

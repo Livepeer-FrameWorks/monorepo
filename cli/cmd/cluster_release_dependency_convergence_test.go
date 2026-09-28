@@ -101,7 +101,7 @@ func TestReleaseComposeDependencyConvergence(t *testing.T) {
 		t.Fatalf("plan: %v", err)
 	}
 	var out bytes.Buffer
-	writeReleaseHostConvergencePlan(&out, "1. pre-upgrade host convergence", manifest, planReleaseHostConvergence(plan, manifest))
+	writeReleaseHostConvergencePlan(&out, "1. pre-upgrade host convergence", manifest, planReleaseHostConvergence(plan, manifest), "")
 	if !strings.Contains(out.String(), "· compose dependencies (compose up with the rendered config), one host at a time: metabase@app-2 -> grafana@app-1 -> grafana@app-2") {
 		t.Fatalf("plan output:\n%s", out.String())
 	}
@@ -114,7 +114,7 @@ func TestReleaseDependencyConvergencePlanLines(t *testing.T) {
 		t.Fatalf("plan: %v", err)
 	}
 	var out bytes.Buffer
-	writeReleaseHostConvergencePlan(&out, "1. pre-upgrade host convergence", manifest, planReleaseHostConvergence(plan, manifest))
+	writeReleaseHostConvergencePlan(&out, "1. pre-upgrade host convergence", manifest, planReleaseHostConvergence(plan, manifest), "")
 	for _, line := range []string{
 		"· vmagent, vmalert, and vmauth (configs validated, then reloaded), one host at a time: vmagent@obs-1 -> vmagent@obs-2 -> vmalert@obs-1 -> vmauth@obs-1",
 		"· control-plane nginx and caddy (config tested, then reloaded), one host at a time: nginx@edge-1 -> nginx@edge-2",
