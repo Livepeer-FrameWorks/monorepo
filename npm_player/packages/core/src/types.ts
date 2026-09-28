@@ -103,7 +103,8 @@ export interface PlayerOptions {
 
   /**
    * Viewer-side playback auth (separate from `authToken`, which authenticates
-   * Gateway GraphQL resolution). Defaults to `?jwt=` query transport. Header
+   * Gateway GraphQL resolution). Defaults to query transport: `?fwjwt=` on
+   * FrameWorks-resolved URLs, `?jwt=` to a directly reached MistServer. Header
    * transport is supported for player-controlled request paths such as HLS.js,
    * DASH.js, and WHEP.
    */

@@ -172,7 +172,7 @@ function FullyCustomPlayer() {
 | `options.gatewayUrl`     | `string`                                             | Gateway GraphQL endpoint override                                                                                             |
 | `options.mistUrl`        | `string`                                             | Direct MistServer base URL                                                                                                    |
 | `options.authToken`      | `string`                                             | Bearer token for Gateway GraphQL resolution                                                                                   |
-| `options.playbackAuth`   | `{ token: string; transport?: "query" \| "header" }` | Viewer JWT sent as `?jwt=` by default, or `Authorization: Bearer` on player-controlled transports                             |
+| `options.playbackAuth`   | `{ token: string; transport?: "query" \| "header" }` | Viewer JWT sent as `?fwjwt=` by default, or `Authorization: Bearer` on player-controlled transports                           |
 | `options.autoplay`       | `boolean`                                            | Auto-start playback                                                                                                           |
 | `options.muted`          | `boolean`                                            | Start muted (required for autoplay)                                                                                           |
 | `options.stockControls`  | `boolean`                                            | Use browser-native video controls                                                                                             |
