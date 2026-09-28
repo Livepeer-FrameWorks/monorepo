@@ -173,6 +173,19 @@ psql_db commodore -q -c "UPDATE commodore.users SET password_hash = crypt('$STAC
   fail "could not set the demo user's stack password"
 
 log "7/7 Livepeer gateways discoverable"
+log "6c/7 edge public URLs answering"
+# Each edge's public URL (:8082) is served by an nginx proxy sharing the edge's
+# network namespace. An edge that restarted (first-boot seeding can be killed
+# under host memory pressure) has a new namespace the proxy is not in, so the
+# proxies are recreated against the running edges and each URL must answer.
+stack_compose up -d --no-deps --force-recreate edge-proxy-a edge-proxy-b >/dev/null
+edge_public_answering() {
+  stack_compose exec -T "$1" curl -s -o /dev/null -m 5 http://127.0.0.1:8082/
+}
+for edge in edge edge-b; do
+  wait_for 60 "$edge public URL answering" edge_public_answering "$edge"
+done
+
 # Foghorn fans out only to healthy, freshly probed gateway instances; the
 # Quartermaster poller probes every 30 s.
 gateways_healthy() {
