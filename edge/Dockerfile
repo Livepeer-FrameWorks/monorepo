@@ -8,8 +8,11 @@
 # artifacts inside the container. Binaries live on the /opt/frameworks
 # volume; the init-seed oneshot installs/upgrades them from
 # /usr/share/frameworks/dist (see api_sidecar/internal/edgeseed).
+#
+# The CPU base is the Mist native tarballs' host contract (Ubuntu 24.04,
+# glibc 2.39): Mist is built there and needs GLIBC_2.38 / GLIBCXX_3.4.32.
 
-ARG EDGE_BASE_IMAGE=debian:bookworm-slim
+ARG EDGE_BASE_IMAGE=ubuntu:24.04
 FROM ${EDGE_BASE_IMAGE}
 
 ARG S6_OVERLAY_VERSION=3.2.3.0

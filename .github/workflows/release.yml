@@ -671,7 +671,8 @@ jobs:
           ASSET_NAME=$(jq -re --arg profile "$PROFILE" --arg platform "$PLATFORM" \
             '.profiles[$profile].platforms[$platform].artifact.name' dist/mistserver-release-index.json)
           ASSET=$(jq -ce --arg name "$ASSET_NAME" '.assets[] | select(.name == $name)' dist/mistserver-release.json)
-          BASE_IMAGE=debian:bookworm-slim
+          # The Mist native tarballs' host contract; debian:bookworm's glibc 2.36 cannot run them.
+          BASE_IMAGE=ubuntu:24.04
           if [[ "$PROFILE" != cpu ]]; then
             IMAGE=$(jq -re --arg profile "$PROFILE" --arg platform "$PLATFORM" \
               '.profiles[$profile].platforms[$platform].image.ref' dist/mistserver-release-index.json)
