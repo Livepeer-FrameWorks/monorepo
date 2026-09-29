@@ -15,6 +15,41 @@ type recordingMistAPI struct {
 	addedStreams    []map[string]map[string]interface{}
 	saveCalls       int
 	backupResult    map[string]interface{} // returned by ConfigBackup (nil ⇒ nil)
+	// calls records the order of UpdateConfig, SetDeviceDiscovery,
+	// SetBandwidthLimit and Save calls.
+	calls          []string
+	discoverySets  []bool
+	bandwidthSets  []uint64
+	dedicatedError error
+}
+
+func (m *recordingMistAPI) SetDeviceDiscovery(enabled bool) error {
+	m.calls = append(m.calls, "SetDeviceDiscovery")
+	if m.dedicatedError != nil {
+		return m.dedicatedError
+	}
+	m.discoverySets = append(m.discoverySets, enabled)
+	if m.backupResult != nil {
+		section, _ := m.backupResult["config"].(map[string]interface{})
+		if section == nil {
+			section = map[string]interface{}{}
+			m.backupResult["config"] = section
+		}
+		section["device_discovery"] = enabled
+	}
+	return nil
+}
+
+func (m *recordingMistAPI) SetBandwidthLimit(bytesPerSec uint64) error {
+	m.calls = append(m.calls, "SetBandwidthLimit")
+	if m.dedicatedError != nil {
+		return m.dedicatedError
+	}
+	m.bandwidthSets = append(m.bandwidthSets, bytesPerSec)
+	if m.backupResult != nil {
+		m.backupResult["bandwidth"] = map[string]interface{}{"limit": float64(bytesPerSec)}
+	}
+	return nil
 }
 
 func (m *recordingMistAPI) ConfigBackup() (map[string]interface{}, error) {
@@ -22,11 +57,13 @@ func (m *recordingMistAPI) ConfigBackup() (map[string]interface{}, error) {
 }
 
 func (m *recordingMistAPI) UpdateConfig(partial map[string]interface{}) (map[string]interface{}, error) {
+	m.calls = append(m.calls, "UpdateConfig")
 	m.updatedConfigs = append(m.updatedConfigs, partial)
 	return nil, nil
 }
 
 func (m *recordingMistAPI) Save() error {
+	m.calls = append(m.calls, "Save")
 	m.saveCalls++
 	return nil
 }

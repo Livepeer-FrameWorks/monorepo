@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -232,5 +233,88 @@ func TestPushKillSendsHardKillCommand(t *testing.T) {
 	}
 	if got := commands[1]["push_kill"]; got != float64(42) {
 		t.Fatalf("push_kill = %#v, want 42", got)
+	}
+}
+
+// fakeMistAPI records every non-auth api2 command exactly as sent and answers
+// it with the given response body.
+func fakeMistAPI(t *testing.T, response string) (*httptest.Server, *[]string) {
+	t.Helper()
+	var commands []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		raw := r.URL.Query().Get("command")
+		var cmd map[string]interface{}
+		if err := json.Unmarshal([]byte(raw), &cmd); err != nil {
+			t.Errorf("command JSON: %v", err)
+		}
+		if _, auth := cmd["authorize"]; auth {
+			_, _ = w.Write([]byte(`{"authorize":{"status":"OK"}}`))
+			return
+		}
+		commands = append(commands, raw)
+		_, _ = w.Write([]byte(response))
+	}))
+	t.Cleanup(srv.Close)
+	return srv, &commands
+}
+
+func TestSetDeviceDiscoverySendsCameraConfigCommand(t *testing.T) {
+	srv, commands := fakeMistAPI(t, `{"camera_config":{"device_discovery":false,"auto_camera_streams":false}}`)
+	c := NewClient(logging.NewLogger(), ClientConfig{BaseURL: srv.URL})
+
+	if err := c.SetDeviceDiscovery(false); err != nil {
+		t.Fatalf("SetDeviceDiscovery error = %v", err)
+	}
+	want := []string{`{"camera_config":{"device_discovery":false}}`}
+	if !slices.Equal(*commands, want) {
+		t.Fatalf("commands = %q, want %q", *commands, want)
+	}
+}
+
+func TestSetDeviceDiscoveryRejectsUnappliedEcho(t *testing.T) {
+	for name, response := range map[string]string{
+		"command unknown":    `{}`,
+		"value not applied":  `{"camera_config":{"device_discovery":true}}`,
+		"value missing":      `{"camera_config":{}}`,
+		"generic config key": `{"config":{"device_discovery":false}}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			srv, _ := fakeMistAPI(t, response)
+			c := NewClient(logging.NewLogger(), ClientConfig{BaseURL: srv.URL})
+			if err := c.SetDeviceDiscovery(false); err == nil {
+				t.Fatalf("SetDeviceDiscovery accepted response %s", response)
+			}
+		})
+	}
+}
+
+func TestSetBandwidthLimitSendsBandwidthCommand(t *testing.T) {
+	srv, commands := fakeMistAPI(t, `{"bandwidth":{"limit":125000000,"exceptions":["::1"]}}`)
+	c := NewClient(logging.NewLogger(), ClientConfig{BaseURL: srv.URL})
+
+	if err := c.SetBandwidthLimit(125000000); err != nil {
+		t.Fatalf("SetBandwidthLimit error = %v", err)
+	}
+	// Integer encoding matters: Mist ignores a limit that is not a JSON int,
+	// and sending exceptions would replace the node's exception list.
+	want := []string{`{"bandwidth":{"limit":125000000}}`}
+	if !slices.Equal(*commands, want) {
+		t.Fatalf("commands = %q, want %q", *commands, want)
+	}
+}
+
+func TestSetBandwidthLimitRejectsUnappliedEcho(t *testing.T) {
+	for name, response := range map[string]string{
+		"command unknown": `{}`,
+		"limit unchanged": `{"bandwidth":{"limit":134217728}}`,
+		"limit missing":   `{"bandwidth":{"exceptions":[]}}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			srv, _ := fakeMistAPI(t, response)
+			c := NewClient(logging.NewLogger(), ClientConfig{BaseURL: srv.URL})
+			if err := c.SetBandwidthLimit(125000000); err == nil {
+				t.Fatalf("SetBandwidthLimit accepted response %s", response)
+			}
+		})
 	}
 }

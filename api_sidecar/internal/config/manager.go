@@ -59,6 +59,8 @@ type Manager struct {
 type mistAPI interface {
 	ConfigBackup() (map[string]interface{}, error)
 	UpdateConfig(partial map[string]interface{}) (map[string]interface{}, error)
+	SetDeviceDiscovery(enabled bool) error
+	SetBandwidthLimit(bytesPerSec uint64) error
 	Save() error
 	AddProtocols(protocols []map[string]interface{}) error
 	UpdateProtocol(oldConfig, newConfig map[string]interface{}) error
@@ -400,10 +402,6 @@ func (m *Manager) reconcile() {
 		}
 	}
 
-	if bwLimit := ConfiguredBandwidthLimitBytesPerSec(); bwLimit > 0 {
-		desiredConfig["bwlimit"] = bwLimit
-	}
-
 	// Triggers (pointed at Helmsman webhooks)
 	triggers := desiredTriggers()
 	if err := validateTriggerDefinitions(triggers); err != nil {
@@ -430,6 +428,12 @@ func (m *Manager) reconcile() {
 			m.scheduleRetry()
 			return
 		}
+	}
+
+	if err := m.applyDedicatedMistSettings(); err != nil {
+		m.logger.WithError(err).Warn("Mist dedicated settings failed")
+		m.scheduleRetry()
+		return
 	}
 
 	if err := m.mistClient.Save(); err != nil {
@@ -538,10 +542,6 @@ func validateTriggerDefinitions(value any) error {
 func applyBaselineMistConfig(desiredConfig map[string]any) {
 	desiredConfig["accesslog"] = "LOG"
 	desiredConfig["debug"] = 4
-	// FrameWorks does not use Mist's NDI/ONVIF/VISCA camera auto-discovery; keep its
-	// probe loop (UDP broadcasts, multicast) off. Enabling cameras later flips this
-	// same managed-config key, not an app-level toggle.
-	desiredConfig["device_discovery"] = false
 	desiredConfig["prometheus"] = mist.MetricsConfigValue
 	desiredConfig["sessionInputMode"] = 15
 	desiredConfig["sessionOutputMode"] = 15
@@ -553,6 +553,69 @@ func applyBaselineMistConfig(desiredConfig map[string]any) {
 	desiredConfig["sessionViewerMode"] = 14
 	desiredConfig["tknMode"] = 15
 	desiredConfig["trustedproxy"] = []string{"127.0.0.1", "::1", "localhost", "nginx"}
+}
+
+// applyDedicatedMistSettings writes the managed values Mist's generic config
+// command does not accept: device discovery (camera_config) and the node
+// bandwidth limit (bandwidth). FrameWorks does not use Mist's NDI/ONVIF/VISCA
+// camera auto-discovery, whose probe loop sends UDP broadcast and multicast
+// datagrams every few seconds, so discovery is always off; enabling cameras
+// later flips this managed value, not an app-level toggle. A zero configured
+// bandwidth limit leaves Mist's own limit in place.
+func (m *Manager) applyDedicatedMistSettings() error {
+	if err := m.mistClient.SetDeviceDiscovery(false); err != nil {
+		return fmt.Errorf("device discovery: %w", err)
+	}
+	if limit := ConfiguredBandwidthLimitBytesPerSec(); limit > 0 {
+		if err := m.mistClient.SetBandwidthLimit(limit); err != nil {
+			return fmt.Errorf("bandwidth limit: %w", err)
+		}
+	}
+	return nil
+}
+
+// dedicatedMistSettingsDrifted reports whether a config_backup shows device
+// discovery not disabled or a bandwidth limit other than the configured one.
+// Mist treats an absent device_discovery key as enabled.
+func dedicatedMistSettingsDrifted(current map[string]any) (discovery, bandwidth bool) {
+	discovery = true
+	if configSection, ok := current["config"].(map[string]any); ok {
+		if enabled, isBool := configSection["device_discovery"].(bool); isBool {
+			discovery = enabled
+		}
+	}
+	if limit := ConfiguredBandwidthLimitBytesPerSec(); limit > 0 {
+		bandwidth = true
+		if bandwidthSection, ok := current["bandwidth"].(map[string]any); ok {
+			if got, isNumber := bandwidthSection["limit"].(float64); isNumber {
+				bandwidth = uint64(got) != limit
+			}
+		}
+	}
+	return discovery, bandwidth
+}
+
+func (m *Manager) repairDedicatedMistSettings() {
+	current, err := m.configBackup()
+	if err != nil {
+		m.logger.WithError(err).Warn("Mist settings drift check: ConfigBackup failed")
+		return
+	}
+	discovery, bandwidth := dedicatedMistSettingsDrifted(current)
+	if !discovery && !bandwidth {
+		return
+	}
+	m.logger.WithFields(logging.Fields{
+		"device_discovery_drift": discovery,
+		"bandwidth_limit_drift":  bandwidth,
+	}).Warn("Mist device discovery or bandwidth limit drifted — re-applying")
+	if err := m.applyDedicatedMistSettings(); err != nil {
+		m.logger.WithError(err).Warn("Mist settings drift repair failed")
+		return
+	}
+	if err := m.mistClient.Save(); err != nil {
+		m.logger.WithError(err).Warn("Mist settings drift repair: Save failed")
+	}
 }
 
 func (m *Manager) startDriftRepairLoop() {
@@ -581,6 +644,7 @@ func (m *Manager) repairConfigDrift() {
 		m.logger.WithError(err).Warn("Mist managed stream repair failed")
 	}
 	m.repairTriggerDefinitions()
+	m.repairDedicatedMistSettings()
 }
 
 func (m *Manager) repairTriggerDefinitions() {

@@ -754,6 +754,50 @@ func (c *Client) SetTriggers(triggers map[string]interface{}) error {
 	return err
 }
 
+// SetDeviceDiscovery turns Mist's NDI/ONVIF/VISCA camera discovery loop on or
+// off. Mist accepts this key only through the camera_config command (the
+// generic config command drops it) and stores it as config.device_discovery.
+// The response echoes the stored value; a missing or different echo means Mist
+// did not apply it.
+func (c *Client) SetDeviceDiscovery(enabled bool) error {
+	resp, err := c.makeAPIRequest(map[string]interface{}{
+		"camera_config": map[string]interface{}{"device_discovery": enabled},
+	})
+	if err != nil {
+		return err
+	}
+	echo, ok := resp["camera_config"].(map[string]interface{})
+	if !ok {
+		return fmt.Errorf("camera_config response missing")
+	}
+	if got, ok := echo["device_discovery"].(bool); !ok || got != enabled {
+		return fmt.Errorf("camera_config device_discovery = %v after setting %v", echo["device_discovery"], enabled)
+	}
+	return nil
+}
+
+// SetBandwidthLimit sets Mist's node bandwidth limit in bytes per second
+// through the top-level bandwidth command (the generic config command has no
+// bandwidth key). Mist keeps its bandwidth exceptions list when only the limit
+// is sent, and ignores a limit that is not a JSON integer. The response echoes
+// the stored bandwidth object.
+func (c *Client) SetBandwidthLimit(bytesPerSec uint64) error {
+	resp, err := c.makeAPIRequest(map[string]interface{}{
+		"bandwidth": map[string]interface{}{"limit": bytesPerSec},
+	})
+	if err != nil {
+		return err
+	}
+	echo, ok := resp["bandwidth"].(map[string]interface{})
+	if !ok {
+		return fmt.Errorf("bandwidth response missing")
+	}
+	if got, ok := echo["limit"].(float64); !ok || uint64(got) != bytesPerSec {
+		return fmt.Errorf("bandwidth limit = %v after setting %d", echo["limit"], bytesPerSec)
+	}
+	return nil
+}
+
 // AddStreams adds or updates streams without deleting others
 func (c *Client) AddStreams(streams map[string]map[string]interface{}) error {
 	return c.AddStreamsContext(context.Background(), streams)
