@@ -296,17 +296,29 @@ func TestYugabyteDistributedOptOutSplits(t *testing.T) {
 	ybRequireDistributedTableSplits(t, name, database)
 }
 
+// ybDropDatabase drops a test database. A session still attached to it (Yugabyte's own
+// backends, such as an index backfill a test started) is logged and terminated first,
+// so the drop does not depend on when that session would end by itself.
 func ybDropDatabase(t *testing.T, name, databaseName string) {
 	t.Helper()
+	ysql := func(sql string) (string, error) {
+		return docker(t, "", "exec", name, "ysqlsh", "-h", ybSQLHost(name), "-U", "yugabyte", "-d", "yugabyte", "-v", "ON_ERROR_STOP=1", "-tA", "-c", sql)
+	}
 	deadline := time.Now().Add(30 * time.Second)
 	for {
-		out, err := docker(t, "", "exec", name, "ysqlsh", "-h", ybSQLHost(name), "-U", "yugabyte", "-d", "yugabyte", "-v", "ON_ERROR_STOP=1", "-c", "DROP DATABASE "+databaseName)
+		out, err := ysql("DROP DATABASE " + databaseName)
 		if err == nil {
 			return
 		}
 		if !strings.Contains(err.Error()+out, "is being accessed by other users") || time.Now().After(deadline) {
 			t.Errorf("drop Yugabyte database %s: %v\n%s", databaseName, err, out)
 			return
+		}
+		attached, _ := ysql(fmt.Sprintf(`SELECT pid, COALESCE(application_name, ''), COALESCE(backend_type, ''), COALESCE(state, ''), left(COALESCE(query, ''), 120)
+			FROM pg_stat_activity WHERE datname = '%s' AND pid <> pg_backend_pid()`, databaseName))
+		t.Logf("sessions attached to %s at drop: %s", databaseName, strings.TrimSpace(attached))
+		if _, termErr := ysql(fmt.Sprintf(`SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = '%s' AND pid <> pg_backend_pid()`, databaseName)); termErr != nil {
+			t.Logf("terminate sessions attached to %s: %v", databaseName, termErr)
 		}
 		time.Sleep(time.Second)
 	}
