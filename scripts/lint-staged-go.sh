@@ -61,6 +61,14 @@ for file in "$@"; do
     package_pattern="./${package_dir#"$module_dir"/}"
   fi
 
+  # A package whose files all carry a build tag (e.g. schema_verify helpers) is
+  # outside the default build, which is what `make lint-go` lints via ./...;
+  # naming it explicitly would fail typechecking instead.
+  if ! (cd "$module_dir" && go list "$package_pattern" >/dev/null 2>&1); then
+    echo "Skipping $package_dir: no Go files in the default build (build-tagged package)"
+    continue
+  fi
+
   append_unique "$module_dir|$package_pattern"
 done
 

@@ -79,7 +79,7 @@ func ybStart(t *testing.T, name string) string {
 	rmContainer(t, name)
 	image := infrastructureContractImage(t, "yugabyte")
 	if _, err := docker(t, "", "run", "-d", "--name", name, image,
-		"bin/yugabyted", "start", "--background=false", "--advertise_address=127.0.0.1",
+		"bin/yugabyted", "start", "--background=false", "--ui=false", "--advertise_address=127.0.0.1",
 		"--tserver_flags=yb_enable_read_committed_isolation=true"); err != nil {
 		t.Fatalf("start %s: %v", name, err)
 	}

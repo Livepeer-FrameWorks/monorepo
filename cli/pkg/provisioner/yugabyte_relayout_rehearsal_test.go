@@ -294,7 +294,7 @@ func ybStartThreeNodeCluster(t *testing.T) []*SSHYugabyteNode {
 		// the per-GiB allowance is raised to the headroom of a production-sized node while enforcement stays on.
 		args := []string{
 			"run", "-d", "--name", name, "--hostname", name, "--network", base, "--ip", address, "--memory=2g", image,
-			"bin/yugabyted", "start", "--background=false", "--advertise_address=" + address,
+			"bin/yugabyted", "start", "--background=false", "--ui=false", "--advertise_address=" + address,
 			fmt.Sprintf("--cloud_location=frameworks.eu.z%d", index),
 			"--master_flags=memory_limit_hard_bytes=402653184,tablet_replicas_per_gib_limit=5848",
 			"--tserver_flags=yb_enable_read_committed_isolation=true,memory_limit_hard_bytes=1073741824,tablet_replicas_per_gib_limit=5848",
