@@ -1021,6 +1021,12 @@ func (c *GRPCClient) GetMe(ctx context.Context) (*commodorepb.User, error) {
 	return c.user.GetMe(ctx, &commodorepb.GetMeRequest{})
 }
 
+// AdminLookupUserByEmail resolves an email to its user and tenant. Commodore
+// admits only a platform-operator JWT (ctxkeys.KeyJWTToken).
+func (c *GRPCClient) AdminLookupUserByEmail(ctx context.Context, email string) (*commodorepb.AdminLookupUserByEmailResponse, error) {
+	return c.user.AdminLookupUserByEmail(ctx, &commodorepb.AdminLookupUserByEmailRequest{Email: email})
+}
+
 // Logout logs out a user (invalidates token)
 func (c *GRPCClient) Logout(ctx context.Context, token string) (*commodorepb.LogoutResponse, error) {
 	return c.user.Logout(ctx, &commodorepb.LogoutRequest{Token: token})

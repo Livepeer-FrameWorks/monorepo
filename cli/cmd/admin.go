@@ -2408,6 +2408,8 @@ func newAdminBillingCmd() *cobra.Command {
 	cmd.AddCommand(newAdminBillingInitPostpaidCmd())
 	cmd.AddCommand(newAdminBillingPromoteCmd())
 	cmd.AddCommand(newAdminBillingSetClusterPricingCmd())
+	cmd.AddCommand(newAdminBillingCreditCmd())
+	cmd.AddCommand(newAdminBillingSetTierCmd())
 	return cmd
 }
 
@@ -2417,6 +2419,8 @@ type adminBillingClient interface {
 	InitializePostpaidAccount(ctx context.Context, tenantID string) (*purserpb.InitializePostpaidAccountResponse, error)
 	PromoteToPaid(ctx context.Context, tenantID, tierID string) (*purserpb.PromoteToPaidResponse, error)
 	SetClusterPricing(ctx context.Context, req *purserpb.SetClusterPricingRequest) (*purserpb.ClusterPricing, error)
+	AdjustBalance(ctx context.Context, tenantID string, amountCents int64, description string, referenceID, referenceType *string) (*purserpb.BalanceTransaction, error)
+	AdminAssignTier(ctx context.Context, req *purserpb.AdminAssignTierRequest) (*purserpb.AdminAssignTierResponse, error)
 }
 
 func runBillingTiers(ctx context.Context, w io.Writer, p adminBillingClient, jwt string, outputJSON bool) error {

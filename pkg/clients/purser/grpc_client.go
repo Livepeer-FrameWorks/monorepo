@@ -611,6 +611,12 @@ func (c *GRPCClient) ChangeBillingTier(ctx context.Context, tenantID, tierID str
 	})
 }
 
+// AdminAssignTier assigns a tenant's tier and billing model as an operator
+// decision. Purser admits only service or platform-operator authentication.
+func (c *GRPCClient) AdminAssignTier(ctx context.Context, req *purserpb.AdminAssignTierRequest) (*purserpb.AdminAssignTierResponse, error) {
+	return c.prepaid.AdminAssignTier(ctx, req)
+}
+
 // ============================================================================
 // WEBHOOK OPERATIONS
 // ============================================================================

@@ -35,4 +35,6 @@ message SubscriptionUpdated {
   string tier_id = 2;
   string status = 3;
   repeated string changed_fields = 4;
+  // Operator-supplied reason; set when an operator assigned the tier.
+  string reason = 5;
 }

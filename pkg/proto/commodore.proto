@@ -1499,6 +1499,24 @@ service UserService {
   rpc PollDeviceAuthorization(PollDeviceAuthorizationRequest) returns (AuthResponse);
   rpc LookupDeviceAuthorization(LookupDeviceAuthorizationRequest) returns (LookupDeviceAuthorizationResponse);
   rpc ApproveDeviceAuthorization(ApproveDeviceAuthorizationRequest) returns (ApproveDeviceAuthorizationResponse);
+
+  // AdminLookupUserByEmail resolves the account and tenant behind an email
+  // address for operator tooling. Requires a platform-operator JWT; service
+  // and tenant credentials are refused.
+  rpc AdminLookupUserByEmail(AdminLookupUserByEmailRequest) returns (AdminLookupUserByEmailResponse);
+}
+
+message AdminLookupUserByEmailRequest {
+  string email = 1;
+}
+
+message AdminLookupUserByEmailResponse {
+  string user_id = 1;
+  string tenant_id = 2;
+  string email = 3;
+  string role = 4;
+  bool is_active = 5;
+  bool verified = 6;
 }
 
 // Matches pkg/api/commodore/types.go:LoginRequest (lines 85-88)

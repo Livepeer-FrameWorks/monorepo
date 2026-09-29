@@ -2069,6 +2069,7 @@ const (
 	PrepaidService_GetCryptoTopup_FullMethodName            = "/purser.PrepaidService/GetCryptoTopup"
 	PrepaidService_PromoteToPaid_FullMethodName             = "/purser.PrepaidService/PromoteToPaid"
 	PrepaidService_ChangeBillingTier_FullMethodName         = "/purser.PrepaidService/ChangeBillingTier"
+	PrepaidService_AdminAssignTier_FullMethodName           = "/purser.PrepaidService/AdminAssignTier"
 )
 
 // PrepaidServiceClient is the client API for PrepaidService service.
@@ -2121,6 +2122,12 @@ type PrepaidServiceClient interface {
 	// are applied by the billing-close job after the current invoice clears.
 	// Prepaid → postpaid transition stays on PromoteToPaid.
 	ChangeBillingTier(ctx context.Context, in *ChangeBillingTierRequest, opts ...grpc.CallOption) (*ChangeBillingTierResponse, error)
+	// Operator assignment of a tenant's tier and billing model. Requires service
+	// or platform-operator authentication. It applies immediately in either
+	// direction and skips the payment-collection and billing-profile checks the
+	// self-serve paths enforce; the tier must be active and support the billing
+	// model. Records a billing.subscription_updated event carrying the reason.
+	AdminAssignTier(ctx context.Context, in *AdminAssignTierRequest, opts ...grpc.CallOption) (*AdminAssignTierResponse, error)
 }
 
 type prepaidServiceClient struct {
@@ -2291,6 +2298,16 @@ func (c *prepaidServiceClient) ChangeBillingTier(ctx context.Context, in *Change
 	return out, nil
 }
 
+func (c *prepaidServiceClient) AdminAssignTier(ctx context.Context, in *AdminAssignTierRequest, opts ...grpc.CallOption) (*AdminAssignTierResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(AdminAssignTierResponse)
+	err := c.cc.Invoke(ctx, PrepaidService_AdminAssignTier_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // PrepaidServiceServer is the server API for PrepaidService service.
 // All implementations must embed UnimplementedPrepaidServiceServer
 // for forward compatibility.
@@ -2341,6 +2358,12 @@ type PrepaidServiceServer interface {
 	// are applied by the billing-close job after the current invoice clears.
 	// Prepaid → postpaid transition stays on PromoteToPaid.
 	ChangeBillingTier(context.Context, *ChangeBillingTierRequest) (*ChangeBillingTierResponse, error)
+	// Operator assignment of a tenant's tier and billing model. Requires service
+	// or platform-operator authentication. It applies immediately in either
+	// direction and skips the payment-collection and billing-profile checks the
+	// self-serve paths enforce; the tier must be active and support the billing
+	// model. Records a billing.subscription_updated event carrying the reason.
+	AdminAssignTier(context.Context, *AdminAssignTierRequest) (*AdminAssignTierResponse, error)
 	mustEmbedUnimplementedPrepaidServiceServer()
 }
 
@@ -2398,6 +2421,9 @@ func (UnimplementedPrepaidServiceServer) PromoteToPaid(context.Context, *Promote
 }
 func (UnimplementedPrepaidServiceServer) ChangeBillingTier(context.Context, *ChangeBillingTierRequest) (*ChangeBillingTierResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method ChangeBillingTier not implemented")
+}
+func (UnimplementedPrepaidServiceServer) AdminAssignTier(context.Context, *AdminAssignTierRequest) (*AdminAssignTierResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method AdminAssignTier not implemented")
 }
 func (UnimplementedPrepaidServiceServer) mustEmbedUnimplementedPrepaidServiceServer() {}
 func (UnimplementedPrepaidServiceServer) testEmbeddedByValue()                        {}
@@ -2708,6 +2734,24 @@ func _PrepaidService_ChangeBillingTier_Handler(srv interface{}, ctx context.Cont
 	return interceptor(ctx, in, info, handler)
 }
 
+func _PrepaidService_AdminAssignTier_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(AdminAssignTierRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(PrepaidServiceServer).AdminAssignTier(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: PrepaidService_AdminAssignTier_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(PrepaidServiceServer).AdminAssignTier(ctx, req.(*AdminAssignTierRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // PrepaidService_ServiceDesc is the grpc.ServiceDesc for PrepaidService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -2778,6 +2822,10 @@ var PrepaidService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "ChangeBillingTier",
 			Handler:    _PrepaidService_ChangeBillingTier_Handler,
+		},
+		{
+			MethodName: "AdminAssignTier",
+			Handler:    _PrepaidService_AdminAssignTier_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

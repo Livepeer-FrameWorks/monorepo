@@ -40,6 +40,7 @@ type Querier interface {
 	AllocateHDWalletDerivationIndex(ctx context.Context) (AllocateHDWalletDerivationIndexRow, error)
 	ApplyPendingDowngradeTier(ctx context.Context, arg ApplyPendingDowngradeTierParams) (int64, error)
 	ApplyTenantTierUpgrade(ctx context.Context, arg ApplyTenantTierUpgradeParams) error
+	AssignTenantSubscriptionTier(ctx context.Context, arg AssignTenantSubscriptionTierParams) (int64, error)
 	AssignTenantX402Address(ctx context.Context, arg AssignTenantX402AddressParams) (int64, error)
 	AttachAndUpdateClusterStripeSubscription(ctx context.Context, arg AttachAndUpdateClusterStripeSubscriptionParams) (int64, error)
 	AttachCardCheckoutToPendingPayment(ctx context.Context, arg AttachCardCheckoutToPendingPaymentParams) (int64, error)
@@ -308,6 +309,7 @@ type Querier interface {
 	GetTenantStripeCustomerID(ctx context.Context, tenantID string) (sql.NullString, error)
 	GetTenantStripeSubscriptionID(ctx context.Context, tenantID string) (sql.NullString, error)
 	GetTenantSubscriptionTierID(ctx context.Context, tenantID string) (string, error)
+	GetTierByNameForOperatorAssignment(ctx context.Context, tierName string) (GetTierByNameForOperatorAssignmentRow, error)
 	GetTierForBillingChange(ctx context.Context, tierID string) (GetTierForBillingChangeRow, error)
 	GetUpdatedSubscriptionEventState(ctx context.Context, tenantID string) (GetUpdatedSubscriptionEventStateRow, error)
 	GetX402CurrentBalance(ctx context.Context, arg GetX402CurrentBalanceParams) (int64, error)
@@ -468,6 +470,7 @@ type Querier interface {
 	// Locks the intent row and returns the provider payment it already names.
 	LockProviderIntentPaymentID(ctx context.Context, intentID string) (string, error)
 	LockTenantPresentmentCurrency(ctx context.Context, tenantID string) (LockTenantPresentmentCurrencyRow, error)
+	LockTenantSubscriptionForOperatorAssignment(ctx context.Context, tenantID string) (LockTenantSubscriptionForOperatorAssignmentRow, error)
 	LockTenantSubscriptionForPromotion(ctx context.Context, tenantID string) (LockTenantSubscriptionForPromotionRow, error)
 	LockTenantSubscriptionForTierChange(ctx context.Context, tenantID string) (LockTenantSubscriptionForTierChangeRow, error)
 	// Locks the tenant's subscription row and returns the Mollie subscription it

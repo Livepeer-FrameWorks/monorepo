@@ -25,6 +25,22 @@ type fakeAdminBillingClient struct {
 	pricingReq  *purserpb.SetClusterPricingRequest
 	pricingResp *purserpb.ClusterPricing
 	pricingErr  error
+
+	adjustCalls []adjustBalanceCall
+	adjustResp  *purserpb.BalanceTransaction
+
+	assignCalls []assignTierCall
+	assignResp  *purserpb.AdminAssignTierResponse
+}
+
+func (f *fakeAdminBillingClient) AdjustBalance(_ context.Context, tenantID string, amountCents int64, description string, _, _ *string) (*purserpb.BalanceTransaction, error) {
+	f.adjustCalls = append(f.adjustCalls, adjustBalanceCall{tenantID: tenantID, amountCents: amountCents, description: description})
+	return f.adjustResp, nil
+}
+
+func (f *fakeAdminBillingClient) AdminAssignTier(_ context.Context, req *purserpb.AdminAssignTierRequest) (*purserpb.AdminAssignTierResponse, error) {
+	f.assignCalls = append(f.assignCalls, assignTierCall{req: req})
+	return f.assignResp, nil
 }
 
 func (f *fakeAdminBillingClient) GetBillingTiers(_ context.Context, _ bool, _ *commonpb.CursorPaginationRequest) (*purserpb.GetBillingTiersResponse, error) {

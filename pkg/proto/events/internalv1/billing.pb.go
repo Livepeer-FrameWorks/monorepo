@@ -169,8 +169,10 @@ type SubscriptionUpdated struct {
 	TierId         string                 `protobuf:"bytes,2,opt,name=tier_id,json=tierId,proto3" json:"tier_id,omitempty"`
 	Status         string                 `protobuf:"bytes,3,opt,name=status,proto3" json:"status,omitempty"`
 	ChangedFields  []string               `protobuf:"bytes,4,rep,name=changed_fields,json=changedFields,proto3" json:"changed_fields,omitempty"`
-	unknownFields  protoimpl.UnknownFields
-	sizeCache      protoimpl.SizeCache
+	// Operator-supplied reason; set when an operator assigned the tier.
+	Reason        string `protobuf:"bytes,5,opt,name=reason,proto3" json:"reason,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *SubscriptionUpdated) Reset() {
@@ -231,6 +233,13 @@ func (x *SubscriptionUpdated) GetChangedFields() []string {
 	return nil
 }
 
+func (x *SubscriptionUpdated) GetReason() string {
+	if x != nil {
+		return x.Reason
+	}
+	return ""
+}
+
 var File_events_internal_v1_billing_proto protoreflect.FileDescriptor
 
 const file_events_internal_v1_billing_proto_rawDesc = "" +
@@ -249,12 +258,13 @@ const file_events_internal_v1_billing_proto_rawDesc = "" +
 	"\x0fsubscription_id\x18\x01 \x01(\tR\x0esubscriptionId\x12\x17\n" +
 	"\atier_id\x18\x02 \x01(\tR\x06tierId\x12\x16\n" +
 	"\x06status\x18\x03 \x01(\tR\x06status:5\xc2\xf3\x181\n" +
-	"\x1cbilling.subscription_created\x10\x02\x18\x01\"\rsubscriptions\"\xcd\x01\n" +
+	"\x1cbilling.subscription_created\x10\x02\x18\x01\"\rsubscriptions\"\xe5\x01\n" +
 	"\x13SubscriptionUpdated\x12'\n" +
 	"\x0fsubscription_id\x18\x01 \x01(\tR\x0esubscriptionId\x12\x17\n" +
 	"\atier_id\x18\x02 \x01(\tR\x06tierId\x12\x16\n" +
 	"\x06status\x18\x03 \x01(\tR\x06status\x12%\n" +
-	"\x0echanged_fields\x18\x04 \x03(\tR\rchangedFields:5\xc2\xf3\x181\n" +
+	"\x0echanged_fields\x18\x04 \x03(\tR\rchangedFields\x12\x16\n" +
+	"\x06reason\x18\x05 \x01(\tR\x06reason:5\xc2\xf3\x181\n" +
 	"\x1cbilling.subscription_updated\x10\x02\x18\x01\"\rsubscriptionsBPZNgithub.com/Livepeer-FrameWorks/monorepo/pkg/proto/events/internalv1;internalv1b\x06proto3"
 
 var (

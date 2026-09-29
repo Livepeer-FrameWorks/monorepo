@@ -1175,6 +1175,13 @@ service PrepaidService {
   // are applied by the billing-close job after the current invoice clears.
   // Prepaid → postpaid transition stays on PromoteToPaid.
   rpc ChangeBillingTier(ChangeBillingTierRequest) returns (ChangeBillingTierResponse);
+
+  // Operator assignment of a tenant's tier and billing model. Requires service
+  // or platform-operator authentication. It applies immediately in either
+  // direction and skips the payment-collection and billing-profile checks the
+  // self-serve paths enforce; the tier must be active and support the billing
+  // model. Records a billing.subscription_updated event carrying the reason.
+  rpc AdminAssignTier(AdminAssignTierRequest) returns (AdminAssignTierResponse);
 }
 
 // ============================================================================
@@ -1486,6 +1493,30 @@ message ChangeBillingTierResponse {
   // Populated on immediate apply.
   repeated string eligible_cluster_ids = 6;
   string primary_cluster_id = 7;
+}
+
+message AdminAssignTierRequest {
+  string tenant_id = 1;
+  string tier_name = 2;
+  // "prepaid" or "postpaid". Empty selects the model the tier supports.
+  string billing_model = 3;
+  // Why the operator assigned the tier; recorded on the audit event.
+  string reason = 4;
+}
+
+message AdminAssignTierResponse {
+  string subscription_id = 1;
+  string tier_id = 2;
+  string tier_name = 3;
+  int32 tier_level = 4;
+  string billing_model = 5;
+  string previous_tier_name = 6;
+  string previous_billing_model = 7;
+  // False when the tenant already had this tier and model and nothing was
+  // written; cluster access is reconciled either way.
+  bool changed = 8;
+  repeated string eligible_cluster_ids = 9;
+  string primary_cluster_id = 10;
 }
 
 // ============================================================================

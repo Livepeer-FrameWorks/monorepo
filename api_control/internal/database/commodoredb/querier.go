@@ -14,6 +14,7 @@ type Querier interface {
 	AbandonExpiredAccountEmails(ctx context.Context, windowMs int64) (int64, error)
 	AcquireIngestClaim(ctx context.Context, arg AcquireIngestClaimParams) (AcquireIngestClaimRow, error)
 	ActivateMediaPlacementPolicy(ctx context.Context, arg ActivateMediaPlacementPolicyParams) (int64, error)
+	AdminGetUserByEmail(ctx context.Context, email string) (AdminGetUserByEmailRow, error)
 	// Settles unfinished rows of the pre-obligation inbox so their targets can be
 	// folded into obligations. Leased rows belong to a replica still draining the
 	// inbox and are left alone.

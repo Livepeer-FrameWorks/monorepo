@@ -97,3 +97,33 @@ SET pending_tier_id = sqlc.arg(tier_id)::text::uuid,
     next_billing_date = COALESCE(next_billing_date, sqlc.arg(period_end)),
     updated_at = NOW()
 WHERE tenant_id = sqlc.arg(tenant_id)::text::uuid;
+
+-- name: LockTenantSubscriptionForOperatorAssignment :one
+SELECT subscription.id::text AS subscription_id, subscription.tier_id::text AS tier_id,
+       tier.tier_name, COALESCE(tier.tier_level, 0)::integer AS tier_level,
+       subscription.billing_model, subscription.status,
+       (subscription.pending_tier_id IS NOT NULL)::boolean AS has_pending_tier,
+       subscription.billing_period_start, subscription.billing_period_end
+FROM purser.tenant_subscriptions subscription
+JOIN purser.billing_tiers tier ON tier.id = subscription.tier_id
+WHERE subscription.tenant_id = sqlc.arg(tenant_id)::text::uuid
+FOR UPDATE OF subscription;
+
+-- name: GetTierByNameForOperatorAssignment :one
+SELECT id::text AS id, tier_name, COALESCE(tier_level, 0)::integer AS tier_level,
+       COALESCE(is_active, true)::boolean AS is_active,
+       COALESCE(is_default_prepaid, false)::boolean AS is_default_prepaid
+FROM purser.billing_tiers
+WHERE tier_name = sqlc.arg(tier_name);
+
+-- name: AssignTenantSubscriptionTier :execrows
+UPDATE purser.tenant_subscriptions
+SET tier_id = sqlc.arg(tier_id)::text::uuid,
+    status = CASE
+        WHEN billing_model = 'prepaid' AND sqlc.arg(billing_model)::text = 'postpaid' THEN 'active'
+        ELSE status
+    END,
+    billing_model = sqlc.arg(billing_model)::text,
+    pending_tier_id = NULL, pending_effective_at = NULL, pending_reason = NULL,
+    updated_at = NOW()
+WHERE tenant_id = sqlc.arg(tenant_id)::text::uuid;

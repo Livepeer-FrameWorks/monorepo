@@ -92,6 +92,7 @@ func TestBillingMutationAuthorizationProtectsEveryPrivilegedRPC(t *testing.T) {
 		"/purser.PrepaidService/InitializePostpaidAccount",
 		"/purser.PrepaidService/EnsureFreeAccount",
 		"/purser.StripeService/SyncSubscription",
+		"/purser.PrepaidService/AdminAssignTier",
 	}
 	for _, method := range methods {
 		t.Run(method, func(t *testing.T) {

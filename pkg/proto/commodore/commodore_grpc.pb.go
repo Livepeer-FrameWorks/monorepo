@@ -2667,6 +2667,7 @@ const (
 	UserService_PollDeviceAuthorization_FullMethodName    = "/commodore.UserService/PollDeviceAuthorization"
 	UserService_LookupDeviceAuthorization_FullMethodName  = "/commodore.UserService/LookupDeviceAuthorization"
 	UserService_ApproveDeviceAuthorization_FullMethodName = "/commodore.UserService/ApproveDeviceAuthorization"
+	UserService_AdminLookupUserByEmail_FullMethodName     = "/commodore.UserService/AdminLookupUserByEmail"
 )
 
 // UserServiceClient is the client API for UserService service.
@@ -2710,6 +2711,10 @@ type UserServiceClient interface {
 	PollDeviceAuthorization(ctx context.Context, in *PollDeviceAuthorizationRequest, opts ...grpc.CallOption) (*AuthResponse, error)
 	LookupDeviceAuthorization(ctx context.Context, in *LookupDeviceAuthorizationRequest, opts ...grpc.CallOption) (*LookupDeviceAuthorizationResponse, error)
 	ApproveDeviceAuthorization(ctx context.Context, in *ApproveDeviceAuthorizationRequest, opts ...grpc.CallOption) (*ApproveDeviceAuthorizationResponse, error)
+	// AdminLookupUserByEmail resolves the account and tenant behind an email
+	// address for operator tooling. Requires a platform-operator JWT; service
+	// and tenant credentials are refused.
+	AdminLookupUserByEmail(ctx context.Context, in *AdminLookupUserByEmailRequest, opts ...grpc.CallOption) (*AdminLookupUserByEmailResponse, error)
 }
 
 type userServiceClient struct {
@@ -2960,6 +2965,16 @@ func (c *userServiceClient) ApproveDeviceAuthorization(ctx context.Context, in *
 	return out, nil
 }
 
+func (c *userServiceClient) AdminLookupUserByEmail(ctx context.Context, in *AdminLookupUserByEmailRequest, opts ...grpc.CallOption) (*AdminLookupUserByEmailResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(AdminLookupUserByEmailResponse)
+	err := c.cc.Invoke(ctx, UserService_AdminLookupUserByEmail_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // UserServiceServer is the server API for UserService service.
 // All implementations must embed UnimplementedUserServiceServer
 // for forward compatibility.
@@ -3001,6 +3016,10 @@ type UserServiceServer interface {
 	PollDeviceAuthorization(context.Context, *PollDeviceAuthorizationRequest) (*AuthResponse, error)
 	LookupDeviceAuthorization(context.Context, *LookupDeviceAuthorizationRequest) (*LookupDeviceAuthorizationResponse, error)
 	ApproveDeviceAuthorization(context.Context, *ApproveDeviceAuthorizationRequest) (*ApproveDeviceAuthorizationResponse, error)
+	// AdminLookupUserByEmail resolves the account and tenant behind an email
+	// address for operator tooling. Requires a platform-operator JWT; service
+	// and tenant credentials are refused.
+	AdminLookupUserByEmail(context.Context, *AdminLookupUserByEmailRequest) (*AdminLookupUserByEmailResponse, error)
 	mustEmbedUnimplementedUserServiceServer()
 }
 
@@ -3082,6 +3101,9 @@ func (UnimplementedUserServiceServer) LookupDeviceAuthorization(context.Context,
 }
 func (UnimplementedUserServiceServer) ApproveDeviceAuthorization(context.Context, *ApproveDeviceAuthorizationRequest) (*ApproveDeviceAuthorizationResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method ApproveDeviceAuthorization not implemented")
+}
+func (UnimplementedUserServiceServer) AdminLookupUserByEmail(context.Context, *AdminLookupUserByEmailRequest) (*AdminLookupUserByEmailResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method AdminLookupUserByEmail not implemented")
 }
 func (UnimplementedUserServiceServer) mustEmbedUnimplementedUserServiceServer() {}
 func (UnimplementedUserServiceServer) testEmbeddedByValue()                     {}
@@ -3536,6 +3558,24 @@ func _UserService_ApproveDeviceAuthorization_Handler(srv interface{}, ctx contex
 	return interceptor(ctx, in, info, handler)
 }
 
+func _UserService_AdminLookupUserByEmail_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(AdminLookupUserByEmailRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(UserServiceServer).AdminLookupUserByEmail(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: UserService_AdminLookupUserByEmail_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(UserServiceServer).AdminLookupUserByEmail(ctx, req.(*AdminLookupUserByEmailRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // UserService_ServiceDesc is the grpc.ServiceDesc for UserService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -3638,6 +3678,10 @@ var UserService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "ApproveDeviceAuthorization",
 			Handler:    _UserService_ApproveDeviceAuthorization_Handler,
+		},
+		{
+			MethodName: "AdminLookupUserByEmail",
+			Handler:    _UserService_AdminLookupUserByEmail_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

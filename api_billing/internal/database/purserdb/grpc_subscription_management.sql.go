@@ -39,6 +39,33 @@ func (q *Queries) ApplyTenantTierUpgrade(ctx context.Context, arg ApplyTenantTie
 	return err
 }
 
+const assignTenantSubscriptionTier = `-- name: AssignTenantSubscriptionTier :execrows
+UPDATE purser.tenant_subscriptions
+SET tier_id = $1::text::uuid,
+    status = CASE
+        WHEN billing_model = 'prepaid' AND $2::text = 'postpaid' THEN 'active'
+        ELSE status
+    END,
+    billing_model = $2::text,
+    pending_tier_id = NULL, pending_effective_at = NULL, pending_reason = NULL,
+    updated_at = NOW()
+WHERE tenant_id = $3::text::uuid
+`
+
+type AssignTenantSubscriptionTierParams struct {
+	TierID       string `db:"tier_id" json:"tier_id"`
+	BillingModel string `db:"billing_model" json:"billing_model"`
+	TenantID     string `db:"tenant_id" json:"tenant_id"`
+}
+
+func (q *Queries) AssignTenantSubscriptionTier(ctx context.Context, arg AssignTenantSubscriptionTierParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, assignTenantSubscriptionTier, arg.TierID, arg.BillingModel, arg.TenantID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
 const backfillTenantBillingPeriod = `-- name: BackfillTenantBillingPeriod :exec
 UPDATE purser.tenant_subscriptions
 SET billing_period_start = COALESCE(billing_period_start, $1),
@@ -200,6 +227,35 @@ func (q *Queries) GetPostpaidPromotionTier(ctx context.Context, arg GetPostpaidP
 	return i, err
 }
 
+const getTierByNameForOperatorAssignment = `-- name: GetTierByNameForOperatorAssignment :one
+SELECT id::text AS id, tier_name, COALESCE(tier_level, 0)::integer AS tier_level,
+       COALESCE(is_active, true)::boolean AS is_active,
+       COALESCE(is_default_prepaid, false)::boolean AS is_default_prepaid
+FROM purser.billing_tiers
+WHERE tier_name = $1
+`
+
+type GetTierByNameForOperatorAssignmentRow struct {
+	ID               string `db:"id" json:"id"`
+	TierName         string `db:"tier_name" json:"tier_name"`
+	TierLevel        int32  `db:"tier_level" json:"tier_level"`
+	IsActive         bool   `db:"is_active" json:"is_active"`
+	IsDefaultPrepaid bool   `db:"is_default_prepaid" json:"is_default_prepaid"`
+}
+
+func (q *Queries) GetTierByNameForOperatorAssignment(ctx context.Context, tierName string) (GetTierByNameForOperatorAssignmentRow, error) {
+	row := q.db.QueryRowContext(ctx, getTierByNameForOperatorAssignment, tierName)
+	var i GetTierByNameForOperatorAssignmentRow
+	err := row.Scan(
+		&i.ID,
+		&i.TierName,
+		&i.TierLevel,
+		&i.IsActive,
+		&i.IsDefaultPrepaid,
+	)
+	return i, err
+}
+
 const getTierForBillingChange = `-- name: GetTierForBillingChange :one
 SELECT tier_level, tier_name, is_default_prepaid, is_active
 FROM purser.billing_tiers
@@ -221,6 +277,47 @@ func (q *Queries) GetTierForBillingChange(ctx context.Context, tierID string) (G
 		&i.TierName,
 		&i.IsDefaultPrepaid,
 		&i.IsActive,
+	)
+	return i, err
+}
+
+const lockTenantSubscriptionForOperatorAssignment = `-- name: LockTenantSubscriptionForOperatorAssignment :one
+SELECT subscription.id::text AS subscription_id, subscription.tier_id::text AS tier_id,
+       tier.tier_name, COALESCE(tier.tier_level, 0)::integer AS tier_level,
+       subscription.billing_model, subscription.status,
+       (subscription.pending_tier_id IS NOT NULL)::boolean AS has_pending_tier,
+       subscription.billing_period_start, subscription.billing_period_end
+FROM purser.tenant_subscriptions subscription
+JOIN purser.billing_tiers tier ON tier.id = subscription.tier_id
+WHERE subscription.tenant_id = $1::text::uuid
+FOR UPDATE OF subscription
+`
+
+type LockTenantSubscriptionForOperatorAssignmentRow struct {
+	SubscriptionID     string       `db:"subscription_id" json:"subscription_id"`
+	TierID             string       `db:"tier_id" json:"tier_id"`
+	TierName           string       `db:"tier_name" json:"tier_name"`
+	TierLevel          int32        `db:"tier_level" json:"tier_level"`
+	BillingModel       string       `db:"billing_model" json:"billing_model"`
+	Status             string       `db:"status" json:"status"`
+	HasPendingTier     bool         `db:"has_pending_tier" json:"has_pending_tier"`
+	BillingPeriodStart sql.NullTime `db:"billing_period_start" json:"billing_period_start"`
+	BillingPeriodEnd   sql.NullTime `db:"billing_period_end" json:"billing_period_end"`
+}
+
+func (q *Queries) LockTenantSubscriptionForOperatorAssignment(ctx context.Context, tenantID string) (LockTenantSubscriptionForOperatorAssignmentRow, error) {
+	row := q.db.QueryRowContext(ctx, lockTenantSubscriptionForOperatorAssignment, tenantID)
+	var i LockTenantSubscriptionForOperatorAssignmentRow
+	err := row.Scan(
+		&i.SubscriptionID,
+		&i.TierID,
+		&i.TierName,
+		&i.TierLevel,
+		&i.BillingModel,
+		&i.Status,
+		&i.HasPendingTier,
+		&i.BillingPeriodStart,
+		&i.BillingPeriodEnd,
 	)
 	return i, err
 }

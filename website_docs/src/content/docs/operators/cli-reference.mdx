@@ -1976,6 +1976,8 @@ Billing tier and subscription management.
 - `init-postpaid` - Initialize postpaid billing for a tenant (resolves default postpaid tier, provisions cluster access)
 - `promote` - Promote tenant from prepaid to postpaid billing (re-evaluates cluster subscriptions)
 - `set-cluster-pricing` - Set or update pricing config for a cluster
+- `credit` - Add (or with `--debit`, remove) EUR prepaid balance for a tenant
+- `set-tier` - Put a tenant on a billing tier as an operator decision
 
 ```bash
 # List billing tiers
@@ -1994,6 +1996,72 @@ frameworks admin billing set-cluster-pricing \
   --required-tier-level 0 \
   --allow-free-tier
 ```
+
+---
+
+### frameworks admin billing credit
+
+Add EUR prepaid balance to a tenant, typically to fund a staging or test tenant or a comped
+account. The tenant's tier and billing model do not change: prepaid tenants spend the balance on
+usage, and postpaid tenants have it applied as credit when their invoice closes. Purser creates the
+balance if the tenant has none, records `operator credit: <reason>` (or `operator debit: <reason>`)
+as the transaction's reason, and records your user as its actor when you are logged in. The command
+prints the transaction ID and the resulting balance.
+
+**Flags:**
+
+- `--tenant-id` - Tenant UUID (this or `--email`)
+- `--email` - Email of a user in the tenant; resolving it needs a platform-operator session
+  (`frameworks login`)
+- `--amount` - EUR amount with at most two decimals, for example `25.00` (required)
+- `--reason` - Why the balance changes; recorded on the transaction (required)
+- `--debit` - Confirms a negative `--amount`; a negative amount without it is refused, and
+  `--debit` with a positive amount is refused
+
+```bash
+frameworks admin billing credit --email owner@example.com --amount 25.00 --reason "staging storage test"
+frameworks admin billing credit --tenant-id <UUID> --amount=-5.00 --debit --reason "reverse test credit"
+```
+
+Write negative amounts as `--amount=-5.00` so the shell argument is not read as a flag.
+
+---
+
+### frameworks admin billing set-tier
+
+Assign a billing tier to a tenant as an operator decision. The change applies immediately in either
+direction, and unlike the self-serve tier change it does not require a Stripe or Mollie subscription
+or a complete billing profile. Purser refuses a tier that does not exist or is inactive, a billing
+model the tier does not run (level-0 tiers such as `payg` run prepaid, all other tiers run
+postpaid), and a tenant whose account was closed. A tenant without a subscription gets one on the
+assigned tier. Moving to prepaid creates the prepaid balance; moving from prepaid to postpaid keeps
+the balance as invoice credit and reactivates a subscription suspended for low balance. A scheduled
+downgrade is cleared.
+
+After the change Purser reconciles cluster access for the new tier and refreshes cached tenant
+limits, the same as a self-serve tier change, and records `billing.subscription_updated` with
+`--reason` and the calling identity. Assigning the tier and model the tenant already has changes
+nothing and records no event; cluster access is reconciled again.
+
+A postpaid paid tier invoices its base price and usage when the period closes. Prepaid balance is
+applied to that invoice as credit, so pair `set-tier` with `credit` for a comped account.
+
+**Flags:**
+
+- `--tenant-id` - Tenant UUID (this or `--email`)
+- `--email` - Email of a user in the tenant; resolving it needs a platform-operator session
+- `--tier` - Tier name from `frameworks admin billing tiers`, for example `payg` or `production`
+  (required)
+- `--billing-model` - `prepaid` or `postpaid`; defaults to the model the tier runs
+- `--reason` - Why the tier changes; recorded on the audit event (required)
+
+```bash
+frameworks admin billing set-tier --email owner@example.com --tier production --reason "comped partner"
+frameworks admin billing set-tier --tenant-id <UUID> --tier payg --billing-model prepaid --reason "back to pay as you go"
+```
+
+Both commands call Purser RPCs that accept only the manifest service token or a platform-operator
+session; tenant users and API tokens are refused.
 
 ---
 
