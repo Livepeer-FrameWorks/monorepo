@@ -308,12 +308,13 @@ func TestClickHouseBackupRestoreRoundTrip_RealClickHouse(t *testing.T) {
 		t.Fatal(err)
 	}
 	chApply(t, name, string(baseline))
+	// api_requests keeps 90 days (TTL), so seeded facts are dated relative to now.
 	chApply(t, name, `CREATE TABLE IF NOT EXISTS periscope._migrations (
   version LowCardinality(String), phase LowCardinality(String), seq UInt32, filename String, checksum FixedString(64),
   applied_at DateTime64(3) DEFAULT now64()) ENGINE = ReplicatedReplacingMergeTree(applied_at) ORDER BY (version, phase, seq);
 INSERT INTO periscope._migrations (version, phase, seq, filename, checksum) VALUES ('v0.3.10', 'expand', 1, '001.sql', repeat('a', 64));
 INSERT INTO periscope.api_requests (timestamp, tenant_id, operation_type, operation_name, request_count)
-  SELECT toDateTime('2026-07-01 00:00:00') + number * 86400, generateUUIDv4(), 'query', concat('op\t', toString(number)), number + 1 FROM numbers(40);`)
+  SELECT toStartOfDay(now()) - INTERVAL 40 DAY + number * 86400, generateUUIDv4(), 'query', concat('op\t', toString(number)), number + 1 FROM numbers(40);`)
 
 	ctx := context.Background()
 	r := dockerStreamRunner{container: name}
@@ -345,7 +346,7 @@ INSERT INTO periscope.api_requests (timestamp, tenant_id, operation_type, operat
 	}
 
 	chApply(t, name, `INSERT INTO periscope.api_requests (timestamp, tenant_id, operation_type, request_count)
-  SELECT toDateTime('2026-09-15 00:00:00') + number * 60, generateUUIDv4(), 'mutation', 7 FROM numbers(15);`)
+  SELECT toStartOfDay(now()) + number * 60, generateUUIDv4(), 'mutation', 7 FROM numbers(15);`)
 
 	t.Run("interrupted preparation cannot roll back live data", func(t *testing.T) {
 		live, err := ClickHouseFingerprint(ctx, r, c, "api_requests", columns)
