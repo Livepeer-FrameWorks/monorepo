@@ -16,6 +16,7 @@ func main() {
 		componentsPath = flag.String("components", "", "Override for .github/release-components.json (defaults to <monorepo>/.github/release-components.json)")
 		out            = flag.String("out", "", "Write JSON output to this path; if empty, write to stdout")
 		updateChannels = flag.Bool("update-channels", false, "Advance GitOps channel pointers for --tag and exit")
+		mistIndex      = flag.String("mist-index", "", "MistServer release index (mistserver-release-index.json) the edge image bakes; enables the edge image decision")
 	)
 	flag.Parse()
 
@@ -45,6 +46,7 @@ func main() {
 	}
 
 	planner := NewPlanner(*monorepoRoot, *gitopsDir, *newTag, components)
+	planner.MistIndexPath = *mistIndex
 	plan, err := planner.Plan()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "release-plan: %v\n", err)

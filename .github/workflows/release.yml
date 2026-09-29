@@ -94,12 +94,13 @@ jobs:
   # ---------------------------------------------------------------------------
   release-plan:
     name: Release Plan (source-hash, carry-forward)
-    needs: [release-preflight]
+    needs: [release-preflight, resolve-mistserver]
     runs-on: ubuntu-latest
     outputs:
       baseline_tag: ${{ steps.plan.outputs.baseline_tag }}
       build_count: ${{ steps.plan.outputs.build_count }}
       carry_forward_count: ${{ steps.plan.outputs.carry_forward_count }}
+      edge_action: ${{ steps.plan.outputs.edge_action }}
     steps:
       - name: Checkout monorepo
         uses: actions/checkout@v6
@@ -117,6 +118,13 @@ jobs:
           token: ${{ steps.gitops_app_token.outputs.token }}
           path: gitops
           fetch-depth: 1
+      # The edge image bakes the Mist release resolved once for the whole
+      # workflow, so its decision hashes that same pinned index.
+      - name: Download MistServer release metadata
+        uses: actions/download-artifact@v8
+        with:
+          name: mistserver-release
+          path: mist
       - uses: actions/setup-go@v6
         with:
           go-version-file: .go-version
@@ -133,11 +141,15 @@ jobs:
             --monorepo "${GITHUB_WORKSPACE}" \
             --gitops "${GITHUB_WORKSPACE}/gitops" \
             --tag "${{ github.ref_name }}" \
+            --mist-index "${GITHUB_WORKSPACE}/mist/mistserver-release-index.json" \
             --out "${GITHUB_WORKSPACE}/dist/release-plan.json"
           # Surface key counts to the workflow summary.
-          jq -r '"baseline_tag=\(.baseline_tag // "")"' "${GITHUB_WORKSPACE}/dist/release-plan.json" >> "$GITHUB_OUTPUT"
-          jq -r '"build_count=\(.summary.build_count)"' "${GITHUB_WORKSPACE}/dist/release-plan.json" >> "$GITHUB_OUTPUT"
-          jq -r '"carry_forward_count=\(.summary.carry_forward_count)"' "${GITHUB_WORKSPACE}/dist/release-plan.json" >> "$GITHUB_OUTPUT"
+          {
+            jq -r '"baseline_tag=\(.baseline_tag // "")"' "${GITHUB_WORKSPACE}/dist/release-plan.json"
+            jq -r '"build_count=\(.summary.build_count)"' "${GITHUB_WORKSPACE}/dist/release-plan.json"
+            jq -r '"carry_forward_count=\(.summary.carry_forward_count)"' "${GITHUB_WORKSPACE}/dist/release-plan.json"
+            jq -re '"edge_action=\(.decisions.edge.action)"' "${GITHUB_WORKSPACE}/dist/release-plan.json"
+          } >> "$GITHUB_OUTPUT"
           {
             echo "### Release plan"
             echo ""
@@ -576,6 +588,10 @@ jobs:
             dist/mistserver-release.json
             dist/mistserver-release-index.json
 
+  # A carried-forward edge image is not rebuilt: every step below is gated on
+  # the release-plan edge decision and merge-edge-image retags the baseline's
+  # variants instead. The job itself still runs (and succeeds) so a skipped
+  # job never propagates a skip to merge-edge-image and the manifest.
   build-edge-image:
     name: Build Edge Image (${{ matrix.profile }} / ${{ matrix.arch }})
     needs:
@@ -610,21 +626,25 @@ jobs:
     runs-on: ${{ matrix.runner }}
     steps:
       - name: Checkout
+        if: needs.release-plan.outputs.edge_action != 'carry_forward'
         uses: actions/checkout@v6
 
       - name: Download release-plan decision
+        if: needs.release-plan.outputs.edge_action != 'carry_forward'
         uses: actions/download-artifact@v8
         with:
           name: release-plan
           path: dist
 
       - name: Download MistServer release metadata
+        if: needs.release-plan.outputs.edge_action != 'carry_forward'
         uses: actions/download-artifact@v8
         with:
           name: mistserver-release
           path: dist
 
       - name: Download service binary artifacts
+        if: needs.release-plan.outputs.edge_action != 'carry_forward'
         uses: actions/download-artifact@v8
         with:
           name: binary-all-linux-${{ matrix.arch }}
@@ -635,6 +655,7 @@ jobs:
       # bytes native nodes run) at its carried service_version so the
       # release reconciler sees converged versions.
       - name: Resolve helmsman artifact (build or carry-forward)
+        if: needs.release-plan.outputs.edge_action != 'carry_forward'
         id: helmsman
         run: |
           set -euo pipefail
@@ -662,6 +683,7 @@ jobs:
           echo "version=${version}" >> "$GITHUB_OUTPUT"
 
       - name: Resolve MistServer native tarball
+        if: needs.release-plan.outputs.edge_action != 'carry_forward'
         id: mist
         run: |
           set -euo pipefail
@@ -687,6 +709,7 @@ jobs:
           echo "Resolved MistServer ${TAG} ${PROFILE}: ${ASSET_NAME}"
 
       - name: Resolve pinned Caddy tarball
+        if: needs.release-plan.outputs.edge_action != 'carry_forward'
         id: caddy
         run: |
           set -euo pipefail
@@ -702,7 +725,11 @@ jobs:
           print(f"version={caddy['version']}")
           PY
 
+      # No --config-schema-version: a per-tag value would make every image
+      # unique and defeat carry-forward. Provisioning supplies
+      # FRAMEWORKS_CONFIG_SCHEMA_VERSION from the release manifest instead.
       - name: Stage edge dist
+        if: needs.release-plan.outputs.edge_action != 'carry_forward'
         run: |
           set -euo pipefail
           ./edge/stage-dist.sh \
@@ -715,13 +742,14 @@ jobs:
             --mist-profile "${{ matrix.profile }}" \
             --caddy-url "${{ steps.caddy.outputs.url }}" \
             --caddy-sha256 "${{ steps.caddy.outputs.checksum }}" \
-            --caddy-version "${{ steps.caddy.outputs.version }}" \
-            --config-schema-version "${{ github.ref_name }}"
+            --caddy-version "${{ steps.caddy.outputs.version }}"
 
       - name: Set up Docker Buildx
+        if: needs.release-plan.outputs.edge_action != 'carry_forward'
         uses: docker/setup-buildx-action@v4
 
       - name: Log in to GHCR
+        if: needs.release-plan.outputs.edge_action != 'carry_forward'
         uses: docker/login-action@v4
         with:
           registry: ghcr.io
@@ -729,12 +757,14 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Log in to DockerHub
+        if: needs.release-plan.outputs.edge_action != 'carry_forward'
         uses: docker/login-action@v4
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
       - name: Build & push edge image (${{ matrix.arch }})
+        if: needs.release-plan.outputs.edge_action != 'carry_forward'
         uses: docker/build-push-action@v7
         with:
           context: edge
@@ -749,17 +779,21 @@ jobs:
           tags: |
             ${{ env.REGISTRY }}/frameworks-edge:${{ github.ref_name }}${{ matrix.tag_suffix }}-${{ matrix.arch }}
             livepeerframeworks/frameworks-edge:${{ github.ref_name }}${{ matrix.tag_suffix }}-${{ matrix.arch }}
-          cache-from: type=gha,scope=edge-${{ matrix.profile }}-${{ matrix.arch }}
-          cache-to: type=gha,mode=max,ignore-error=true,scope=edge-${{ matrix.profile }}-${{ matrix.arch }}
 
   merge-edge-image:
     name: Merge Edge Image Manifest
-    needs: [classify-release, build-edge-image]
+    needs: [classify-release, release-plan, build-edge-image]
     runs-on: ubuntu-latest
     permissions:
       contents: read
       packages: write
     steps:
+      - name: Download release-plan decision
+        uses: actions/download-artifact@v8
+        with:
+          name: release-plan
+          path: dist
+
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v4
 
@@ -776,7 +810,49 @@ jobs:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
+      # Carry-forward: publish this release's edge tags as carbon copies of
+      # the baseline's digest-pinned variants. No image-edge.json is written;
+      # the manifest job emits the carried entry from release-plan verbatim,
+      # exactly like carried services.
+      - name: Retag carried-forward edge image
+        if: needs.release-plan.outputs.edge_action == 'carry_forward'
+        run: |
+          set -euo pipefail
+          TAG="${{ github.ref_name }}"
+          TRACK="${{ needs.classify-release.outputs.image_track }}"
+          CARRIED=$(jq -ce '.decisions.edge | select(.action == "carry_forward") | .carried_service' dist/release-plan.json)
+          FROM=$(jq -re '.decisions.edge.baseline_tag' dist/release-plan.json)
+          for PROFILE in cpu cuda tensorrt openvino; do
+            SUFFIX=""
+            if [[ "$PROFILE" != cpu ]]; then
+              SUFFIX="-onnx-${PROFILE}"
+            fi
+            for REGISTRY in ghcr dockerhub; do
+              if [[ "$REGISTRY" == ghcr ]]; then
+                REPO="${{ env.REGISTRY }}/frameworks-edge"
+              else
+                REPO="livepeerframeworks/frameworks-edge"
+              fi
+              SRC_IMAGE=$(echo "$CARRIED" | jq -re --arg p "$PROFILE" --arg r "$REGISTRY" '.variants[$p].images[$r].image')
+              SRC_DIGEST=$(echo "$CARRIED" | jq -re --arg p "$PROFILE" --arg r "$REGISTRY" '.variants[$p].images[$r].digest')
+              TAGS=("-t" "${REPO}:${TAG}${SUFFIX}")
+              if [[ "$PROFILE" == cpu ]]; then
+                TAGS+=("-t" "${REPO}:${TRACK}")
+              fi
+              docker buildx imagetools create "${TAGS[@]}" "${SRC_IMAGE%:*}@${SRC_DIGEST}"
+              GOT="sha256:$(docker buildx imagetools inspect "${REPO}:${TAG}${SUFFIX}" --raw | sha256sum | cut -d' ' -f1)"
+              if [[ "$GOT" != "$SRC_DIGEST" ]]; then
+                echo "${REPO}:${TAG}${SUFFIX} resolved to ${GOT}, want carried ${SRC_DIGEST} from ${FROM}" >&2
+                exit 1
+              fi
+              echo "==> ${REPO}:${TAG}${SUFFIX} -> ${SRC_DIGEST} (carried from ${FROM})"
+            done
+          done
+          mkdir -p final
+          touch final/keep.txt
+
       - name: Create multi-arch edge manifest
+        if: needs.release-plan.outputs.edge_action != 'carry_forward'
         run: |
           set -euo pipefail
           TAG="${{ github.ref_name }}"

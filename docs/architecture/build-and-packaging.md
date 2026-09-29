@@ -59,7 +59,7 @@ of truth for their runner and compiler details.
 
 ### Docker Images
 
-Service and webapp Docker images are built per arch, then `merge-image-manifests` and `merge-webapp-manifests` assemble multi-arch tags for GHCR and Docker Hub.
+Service and webapp Docker images are built per arch, then `merge-image-manifests` and `merge-webapp-manifests` assemble multi-arch tags for GHCR and Docker Hub. The edge image builds per variant and arch in `build-edge-image`, and `merge-edge-image` assembles its tags. That build has no layer cache. Its own layers take about 20 s, while a `type=gha` cache exported the multi-GB accelerator base layers (418 s for `cuda`), never produced a hit, and evicted other caches at the 10 GB limit.
 When multiple binaries share one Dockerfile/context, the component catalog's
 optional `docker_cmd` selects the command package passed as `CMD_PACKAGE`.
 It must match the component's native `cmd`; release tests enforce this for the
@@ -197,6 +197,33 @@ Web interface hashes include the interface context, root pnpm manifests and lock
 
 Every external `COPY` input in an interface Dockerfile must be covered by the root inputs, automatic GraphQL inputs, or that interface's `extra_hash_paths`. This prevents a changed SDK from being carried forward inside an older Chartroom or Foredeck bundle.
 
+### Source-hash recipe (edge image)
+
+The single-image edge container (`frameworks-edge`, manifest `services[]` entry `edge`) gets one decision that covers all four variants: `cpu` (linux/amd64 + linux/arm64) and the amd64-only `cuda`, `tensorrt` and `openvino` accelerator images. The `release-plan` job depends on `resolve-mistserver` and passes the pinned `mistserver-release-index.json` as `--mist-index`, so the decision hashes exactly the Mist release the build would bake. The recipe lives in `tools/release-plan/edge.go`:
+
+| Input                                                                                                  | Why                                                                                            |
+| ------------------------------------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------- |
+| Every file under `edge/` except the staged `edge/dist/`, with its executable bit                       | `Dockerfile` (CPU base default, S6 overlay version + checksums), `stage-dist.sh`, `rootfs/`    |
+| The helmsman decision's `source_hash`                                                                  | The image bakes the helmsman linux tarball                                                     |
+| Mist `release_tag`, and per variant + platform the native tarball name + checksum                      | `MIST_VERSION` and the Mist tree baked into `/usr/share/frameworks/dist`                       |
+| Per accelerator variant, the Mist base image `ref@digest`                                              | Accelerator variants build `FROM` Mist's runtime image                                         |
+| The `caddy` entry in `config/infrastructure.yaml` (version + linux-amd64/linux-arm64 URL and checksum) | The baked Caddy binary and `CADDY_VERSION`                                                     |
+| Workflow salt                                                                                          | Covers the `build-edge-image` steps, including the `ubuntu:24.04` CPU base and stage-dist args |
+
+One hash serves every variant because the manifest records one `source_hash` per `services[]` entry, and CLI manifest decoding is strict, so a per-variant hash field would break every released CLI that reads the manifest. The variants share every input except Mist's per-profile artifacts, which all come from the same Mist release. `TestEdgeImageVariantsMatchReleaseWorkflow` keeps the variant list in `edge.go` equal to the `build-edge-image` matrix.
+
+The image bakes no per-tag value. `CONFIG_SCHEMA_VERSION` is not staged into `versions.env`; provisioning sets `FRAMEWORKS_CONFIG_SCHEMA_VERSION` from the release manifest, and every convergence check ignores `config_schema`.
+
+The edge image carries forward only when:
+
+1. its hash equals the baseline `edge` entry's `source_hash`,
+2. helmsman itself carries forward, so the baked helmsman bytes and `HELMSMAN_VERSION` are the ones the baseline image contains, and
+3. the baseline entry pins every variant with an image and digest in both Docker Hub and GHCR.
+
+On carry-forward, every `build-edge-image` step is skipped. The job itself still runs, because a skipped job would also skip `merge-edge-image` and the manifest. `merge-edge-image` then runs `docker buildx imagetools create` from each variant's baseline `image@digest` to this release's tags, in both registries. The CPU variant also gets the track tag. A single-source `imagetools create` is a carbon copy, and the job fails if a new tag resolves to a digest other than the carried one. It writes no `image-edge.json`: the manifest job emits the carried `edge` entry from the release plan like any other carried service, with the baseline's `service_version`, digests and variants plus `carried_from`. A built edge image records the decision's `source_hash` on its manifest entry, which is what the next release compares against.
+
+The floating inputs a hash cannot see are the same as for the service images. The `ubuntu:24.04` tag and the apt packages installed on top of it are only refreshed when some hashed input changes.
+
 ### Baseline resolution
 
 Platform tags are `vX.Y.Z` or lowercase `vX.Y.Z-rcN` (for example,
@@ -272,7 +299,7 @@ Darwin binaries are signed and notarized at build time. A carried-forward Darwin
 - The macOS CLI zip is the shipped notarized container and the only supported macOS CLI release asset.
 - The `GITOPS_APP_ID` variable (not secret) is reused for both gitops and homebrew-tap repo access. The app needs `repositories: homebrew-tap` in the token scope.
 - `libsrtp` Homebrew package is called `srtp`, not `libsrtp`.
-- The edge image's baked dist (`edge/dist/versions.env`) ships a MistServer dev **stub**
-  (`MIST_VERSION=stub-0.0.1` — a shell script that just idles). Real MistServer arrives via
-  the release manifest's `external_dependencies.mistserver` (edgeseed/updater pull), never
-  from the baked dist; `edge/stage-dist.sh` stages real component tarballs for actual builds.
+- `edge/dist/` is build output of `edge/stage-dist.sh` and is gitignored. A local tree
+  may hold a dev stub there (for example `MIST_VERSION=stub-0.0.1`). The release build
+  stages the pinned helmsman, MistServer and Caddy tarballs into it, and the edge
+  release hash excludes it.

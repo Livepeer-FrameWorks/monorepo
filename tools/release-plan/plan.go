@@ -17,6 +17,9 @@ type Planner struct {
 	GitopsDir    string
 	NewTag       string
 	Components   ReleaseComponents
+	// MistIndexPath is the MistServer release index the release pinned. When
+	// set, the plan includes the frameworks-edge image decision.
+	MistIndexPath string
 
 	workflowSalt       string
 	goToolchainVersion string
@@ -85,6 +88,13 @@ func (p *Planner) Plan() (*PlanOutput, error) {
 			return nil, fmt.Errorf("decide webapp %s: %w", app.Name, err)
 		}
 		out.Decisions[app.Name] = d
+	}
+	if p.MistIndexPath != "" {
+		d, err := p.decideForEdgeImage(out.Decisions, baselineManifest)
+		if err != nil {
+			return nil, fmt.Errorf("decide edge image: %w", err)
+		}
+		out.Decisions[d.Name] = d
 	}
 
 	for _, d := range out.Decisions {
