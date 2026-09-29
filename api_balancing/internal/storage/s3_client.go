@@ -97,6 +97,10 @@ func NewS3Client(cfg S3Config, logger logging.Logger) (*S3Client, error) {
 		s3Opts = append(s3Opts, func(o *s3.Options) {
 			o.BaseEndpoint = aws.String(cfg.Endpoint)
 			o.UsePathStyle = true // Required for MinIO and most S3-compatible storage
+			// S3-compatible stores return no checksums; with default validation the SDK
+			// logs a skipped-validation warning on every read.
+			o.RequestChecksumCalculation = aws.RequestChecksumCalculationWhenRequired
+			o.ResponseChecksumValidation = aws.ResponseChecksumValidationWhenRequired
 		})
 	}
 
