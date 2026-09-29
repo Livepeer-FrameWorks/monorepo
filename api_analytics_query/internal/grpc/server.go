@@ -142,6 +142,15 @@ func sanitizeFloat64(v float64) float64 {
 	return v
 }
 
+// derefOrZero reads a scanned Nullable column into a non-optional proto field.
+func derefOrZero[T any](v *T) T {
+	if v == nil {
+		var zero T
+		return zero
+	}
+	return *v
+}
+
 func (s *PeriscopeServer) queryStreamRuntimeSummary(ctx context.Context, tenantID string, startTime, endTime time.Time) (float64, int32, int32, error) {
 	var streamHours float64
 	var peakConcurrent, totalStreams int32
@@ -456,9 +465,11 @@ func (s *PeriscopeServer) GetStreamEvents(ctx context.Context, req *periscopepb.
 		var totalInputs, totalOutputs *uint16
 		var latitude, longitude *float64
 		var schemaVersion uint8
+		// stream_end rows carry no status.
+		var eventStatus *string
 
 		err := rows.Scan(
-			&event.EventId, &ts, &event.EventType, &event.Status, &event.NodeId, &eventData, &event.StreamId,
+			&event.EventId, &ts, &event.EventType, &eventStatus, &event.NodeId, &eventData, &event.StreamId,
 			&bufferState, &hasIssues, &trackCount, &qualityTier,
 			&primaryWidth, &primaryHeight, &primaryFps, &primaryCodec, &primaryBitrate,
 			&downloadedBytes, &uploadedBytes, &totalViewers, &totalInputs, &totalOutputs, &viewerSeconds,
@@ -466,8 +477,10 @@ func (s *PeriscopeServer) GetStreamEvents(ctx context.Context, req *periscopepb.
 			&event.SourceRegion, &event.SourceClusterId, &event.StreamOriginRegion, &event.StreamOriginClusterId, &schemaVersion,
 		)
 		if err != nil {
+			s.logger.WithError(err).Warn("Failed to scan stream event row")
 			continue
 		}
+		event.Status = derefOrZero(eventStatus)
 
 		event.Timestamp = timestamppb.New(ts)
 		event.EventData = eventData
@@ -637,6 +650,7 @@ func (s *PeriscopeServer) GetBufferEvents(ctx context.Context, req *periscopepb.
 
 		err := rows.Scan(&eventID, &ts, &bufferState, &event.NodeId, &eventData)
 		if err != nil {
+			s.logger.WithError(err).Warn("Failed to scan buffer event row")
 			continue
 		}
 
@@ -757,18 +771,33 @@ func (s *PeriscopeServer) GetStreamHealthMetrics(ctx context.Context, req *peris
 		var audioCodec *string
 		var frameMsMax, frameMsMin, keyframeMsMax, keyframeMsMin, frameJitterMs *float32
 		var framesMax, framesMin *uint32
+		// Samples omit whatever the edge could not measure (a GOP before the
+		// second keyframe, a video field on an audio-only stream), so every
+		// nullable column scans into a pointer; unmeasured values read as zero.
+		var bitrate, gopSize, width, height, bufferSize *int32
+		var fps, bufferHealth *float32
+		var codec *string
 
 		err := rows.Scan(
 			&ts, &metricTenantID, &m.StreamId, &m.NodeId,
-			&m.Bitrate, &m.Fps, &m.GopSize, &frameMsMax, &frameMsMin, &framesMax, &framesMin, &keyframeMsMax, &keyframeMsMin, &frameJitterMs, &m.Width, &m.Height,
-			&m.BufferSize, &m.BufferHealth, &m.BufferState,
-			&m.Codec, &m.QualityTier, &trackMetadata,
+			&bitrate, &fps, &gopSize, &frameMsMax, &frameMsMin, &framesMax, &framesMin, &keyframeMsMax, &keyframeMsMin, &frameJitterMs, &width, &height,
+			&bufferSize, &bufferHealth, &m.BufferState,
+			&codec, &m.QualityTier, &trackMetadata,
 			&hasIssues, &issuesDesc, &trackCount,
 			&audioChannels, &audioSampleRate, &audioCodec, &audioBitrate,
 		)
 		if err != nil {
+			s.logger.WithError(err).Warn("Failed to scan stream health sample row")
 			continue
 		}
+		m.Bitrate = derefOrZero(bitrate)
+		m.Fps = derefOrZero(fps)
+		m.GopSize = derefOrZero(gopSize)
+		m.Width = derefOrZero(width)
+		m.Height = derefOrZero(height)
+		m.BufferSize = derefOrZero(bufferSize)
+		m.BufferHealth = derefOrZero(bufferHealth)
+		m.Codec = derefOrZero(codec)
 
 		// Generate composite ID for pagination
 		m.Id = fmt.Sprintf("%s_%s_%s", ts.Format(time.RFC3339), m.StreamId, m.NodeId)
@@ -1019,6 +1048,7 @@ func (s *PeriscopeServer) GetStreamsStatus(ctx context.Context, req *periscopepb
 			&bufferState, &qualityTier, &primaryWidth, &primaryHeight,
 			&primaryFps, &primaryCodec, &primaryBitrate, &hasIssues, &issuesDescription)
 		if err != nil {
+			s.logger.WithError(err).Warn("Failed to scan stream status row")
 			continue
 		}
 
@@ -1554,6 +1584,7 @@ func (s *PeriscopeServer) GetTrackListEvents(ctx context.Context, req *periscope
 
 		err := rows.Scan(&eventID, &ts, &event.NodeId, &trackListJSON, &event.TrackCount, &streamID)
 		if err != nil {
+			s.logger.WithError(err).Warn("Failed to scan track list event row")
 			continue
 		}
 
@@ -1683,6 +1714,7 @@ func (s *PeriscopeServer) GetConnectionEvents(ctx context.Context, req *periscop
 			&event.ClusterId, &event.OriginClusterId, &event.ControlCellId,
 		)
 		if err != nil {
+			s.logger.WithError(err).Warn("Failed to scan viewer connection event row")
 			continue
 		}
 
@@ -1825,6 +1857,7 @@ func (s *PeriscopeServer) GetNodeMetrics(ctx context.Context, req *periscopepb.G
 			&m.Latitude, &m.Longitude,
 		)
 		if err != nil {
+			s.logger.WithError(err).Warn("Failed to scan node metrics sample row")
 			continue
 		}
 
@@ -2425,6 +2458,7 @@ func (s *PeriscopeServer) GetRoutingEfficiency(ctx context.Context, req *perisco
 		var code string
 		var cnt int64
 		if err := rows.Scan(&code, &cnt); err != nil {
+			s.logger.WithError(err).Warn("Failed to scan routing country row")
 			continue
 		}
 		countries = append(countries, &periscopepb.RoutingCountryStat{
@@ -3216,6 +3250,7 @@ func (s *PeriscopeServer) GetNetworkLiveStats(ctx context.Context, _ *periscopep
 			var id string
 			var streams, viewers int32
 			if err := sRows.Scan(&id, &streams, &viewers); err != nil {
+				s.logger.WithError(err).Warn("Failed to scan cluster live stream count row")
 				continue
 			}
 			if cs, ok := statsMap[id]; ok {
@@ -3338,6 +3373,7 @@ func (s *PeriscopeServer) GetClipEvents(ctx context.Context, req *periscopepb.Ge
 			&startUnix, &stopUnix, &ingestNodeID, &percent, &message, &filePath, &s3URL, &sizeBytes, &expiresAt,
 		)
 		if err != nil {
+			s.logger.WithError(err).Warn("Failed to scan clip event row")
 			continue
 		}
 
