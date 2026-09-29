@@ -40,8 +40,9 @@ func TestReleaseWorkflowUsesSharedClassifier(t *testing.T) {
 			t.Errorf("release workflow still classifies tags itself (found %q)", forbidden)
 		}
 	}
-	if got := strings.Count(workflow, "needs.classify-release.outputs.image_track"); got != 3 {
-		t.Errorf("image manifests reading the shared image track = %d, want 3 (services, edge, webapps)", got)
+	// The edge has two exclusive paths: a rebuilt edge's manifest and a carried-forward edge's retag.
+	if got := strings.Count(workflow, "needs.classify-release.outputs.image_track"); got != 4 {
+		t.Errorf("image manifests reading the shared image track = %d, want 4 (services, built edge, carried edge, webapps)", got)
 	}
 	for _, required := range []string{"cd ../monorepo/tools/release-plan", `--tag "${GITHUB_REF_NAME}"`, "--update-channels"} {
 		if !strings.Contains(workflow, required) {
