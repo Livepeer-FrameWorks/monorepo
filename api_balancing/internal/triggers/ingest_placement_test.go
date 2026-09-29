@@ -73,7 +73,7 @@ func TestConfigureLiveIngestPlacementAdmissionUsesPublicRuntime(t *testing.T) {
 }
 
 func TestCheckIngestPlacementRequiresBoundDecision(t *testing.T) {
-	for _, scenario := range []string{"never-installed", "allow", "unavailable", "missing-connector", "unsupported-connector", "wrong-protocol", "wrong-verb", "wrong-node", "wrong-tenant", "expired", "too-long", "missing-digest", "denied"} {
+	for _, scenario := range []string{"never-installed", "allow", "allow-full-lifetime-after-refresh", "unavailable", "missing-connector", "unsupported-connector", "wrong-protocol", "wrong-verb", "wrong-node", "wrong-tenant", "expired", "too-long", "missing-digest", "denied"} {
 		t.Run(scenario, func(t *testing.T) {
 			p := newTestProcessor(t)
 			connector := "TSSRT"
@@ -102,6 +102,11 @@ func TestCheckIngestPlacementRequiresBoundDecision(t *testing.T) {
 						decision.ExpiresAt = time.Now().Add(time.Minute)
 					case "missing-digest":
 						decision.PolicyDigest = ""
+					case "allow-full-lifetime-after-refresh":
+						// Admission refreshed a stale observation before deciding, so it
+						// anchored the full preparation lifetime to its own later clock.
+						time.Sleep(5 * time.Millisecond)
+						decision.ExpiresAt = time.Now().Add(placement.PreparationLifetime)
 					}
 					return decision, nil
 				})
@@ -122,7 +127,7 @@ func TestCheckIngestPlacementRequiresBoundDecision(t *testing.T) {
 				if err == nil || decision != nil || calls != 0 {
 					t.Fatalf("uninstalled admission admitted a publisher: %v %v", decision, err)
 				}
-			case "allow":
+			case "allow", "allow-full-lifetime-after-refresh":
 				if err != nil || decision == nil || decision.Protocol != "srt" || calls != 1 {
 					t.Fatalf("bound decision rejected: %v %v", decision, err)
 				}

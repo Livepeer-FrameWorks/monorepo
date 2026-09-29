@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"math"
 	"net/netip"
 	"strings"
@@ -73,7 +74,6 @@ func (p *Processor) checkIngestPlacement(ctx context.Context, tenantID, internal
 	}
 	ctx, cancel := context.WithTimeout(ctx, 3*time.Second)
 	defer cancel()
-	started := time.Now()
 	decision, err := p.ingestPlacementAdmission(ctx, IngestPlacementConnection{TenantID: tenantID, InternalName: internalName, ClusterID: clusterID, NodeID: nodeID,
 		Connector: connector, PublisherAddress: publisherAddress})
 	if err != nil {
@@ -82,15 +82,45 @@ func (p *Processor) checkIngestPlacement(ctx context.Context, tenantID, internal
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	digest, digestErr := hex.DecodeString(decision.PolicyDigest)
-	if decision.TenantID != tenantID || decision.InternalName != internalName || decision.ClusterID != clusterID || decision.NodeID != nodeID || decision.Verb != placement.Ingest ||
-		decision.ObjectID == "" || decision.Protocol != protocol ||
-		decision.PolicyRevision > math.MaxInt64 || decision.ParentRevision > math.MaxInt64 || digestErr != nil || len(digest) != 32 || hex.EncodeToString(digest) != decision.PolicyDigest ||
-		decision.TenantAuthorityVersion <= 0 || decision.ObjectAuthorityVersion <= 0 ||
-		!time.Now().Before(decision.ExpiresAt) || decision.ExpiresAt.After(started.Add(placement.PreparationLifetime)) {
-		return nil, errors.New("ingest placement decision is expired or not bound to this publisher")
+	if err := ingestPlacementDecisionBinding(decision, tenantID, internalName, clusterID, nodeID, protocol, time.Now()); err != nil {
+		return nil, err
 	}
 	return &decision, nil
+}
+
+// ingestPlacementDecisionBinding checks that an admission decision is for this
+// publisher and still valid at returned, the moment admission handed it back.
+// Admission anchors the decision's lifetime to its own clock reading, which
+// can be later than any instant taken before the call (it may refresh a stale
+// observation first), so the lifetime bound is measured from returned. Each
+// refusal names the binding that failed.
+func ingestPlacementDecisionBinding(decision federation.PlacementAdmissionDecision, tenantID, internalName, clusterID, nodeID, protocol string, returned time.Time) error {
+	refuse := func(format string, args ...any) error {
+		return fmt.Errorf("ingest placement decision is not bound to this publisher: "+format, args...)
+	}
+	switch {
+	case decision.TenantID != tenantID || decision.InternalName != internalName:
+		return refuse("decision is for %s/%s", decision.TenantID, decision.InternalName)
+	case decision.ClusterID != clusterID || decision.NodeID != nodeID:
+		return refuse("decision places on %s/%s, publisher arrived on %s/%s", decision.ClusterID, decision.NodeID, clusterID, nodeID)
+	case decision.Verb != placement.Ingest || decision.ObjectID == "" || decision.Protocol != protocol:
+		return refuse("decision verb %q object %q protocol %q, publisher protocol %q", decision.Verb, decision.ObjectID, decision.Protocol, protocol)
+	case decision.PolicyRevision > math.MaxInt64 || decision.ParentRevision > math.MaxInt64:
+		return refuse("policy revision %d parent %d out of range", decision.PolicyRevision, decision.ParentRevision)
+	}
+	if digest, err := hex.DecodeString(decision.PolicyDigest); err != nil || len(digest) != 32 || hex.EncodeToString(digest) != decision.PolicyDigest {
+		return refuse("policy digest %q is not a canonical sha256", decision.PolicyDigest)
+	}
+	if decision.TenantAuthorityVersion <= 0 || decision.ObjectAuthorityVersion <= 0 {
+		return refuse("authority versions tenant=%d object=%d are unset", decision.TenantAuthorityVersion, decision.ObjectAuthorityVersion)
+	}
+	if !returned.Before(decision.ExpiresAt) {
+		return fmt.Errorf("ingest placement decision expired at %s, admission returned at %s", decision.ExpiresAt.UTC().Format(time.RFC3339Nano), returned.UTC().Format(time.RFC3339Nano))
+	}
+	if decision.ExpiresAt.After(returned.Add(placement.PreparationLifetime)) {
+		return refuse("expiry %s is beyond the %s preparation lifetime from %s", decision.ExpiresAt.UTC().Format(time.RFC3339Nano), placement.PreparationLifetime, returned.UTC().Format(time.RFC3339Nano))
+	}
+	return nil
 }
 
 // IngestPlacementAdapter derives the publisher's policy inputs from signed object
