@@ -34,6 +34,7 @@
 | Schema migrations & baseline     | `docs/standards/schema-migrations.md`                          |
 | Release catalog & upgrade gates  | `cli/internal/releases/catalog.yaml`                           |
 | Release notes & operator steps   | `docs/standards/release-notes.md`                              |
+| Blog posts                       | `docs/standards/blog-posts.md`                                 |
 | Deployment & ops                 | `website_docs/src/content/docs/operators/`                     |
 | Dev runtime                      | `docker-compose.yml`                                           |
 | Release pipeline                 | `.github/workflows/release.yml`                                |
