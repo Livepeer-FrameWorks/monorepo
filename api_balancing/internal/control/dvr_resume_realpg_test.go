@@ -115,9 +115,8 @@ func TestAdoptResumedDVR_RealPG(t *testing.T) {
 }
 
 // A recording whose writer ended on its own while its session is still live (a reconnect
-// adopted a recording whose push Mist had just ended) is detached, and DVR intent recovery
-// then lists the live session for a fresh recording. A recording ended with its session is
-// left bound.
+// adopted a recording whose push Mist had just ended) is detached, and its live session is
+// claimed at once for a fresh recording. A recording ended with its session is left bound.
 func TestDetachEndedWriterFromLiveSession_RealPG(t *testing.T) {
 	conn := startRealPG(t)
 	prev := db
@@ -144,7 +143,9 @@ func TestDetachEndedWriterFromLiveSession_RealPG(t *testing.T) {
 		t.Fatalf("a live session with an active recording must not be listed: %+v %v", got, err)
 	}
 
-	detachEndedWriterFromLiveSession(ctx, "h-detach", lg)
+	if detached := detachEndedWriterFromLiveSession(ctx, "h-detach", lg); detached != live {
+		t.Fatalf("detached session = %q, want %q", detached, live)
+	}
 
 	var bound sql.NullString
 	if err := db.QueryRow(`SELECT ingest_generation::text FROM foghorn.artifacts WHERE artifact_hash='h-detach'`).Scan(&bound); err != nil {
@@ -153,9 +154,20 @@ func TestDetachEndedWriterFromLiveSession_RealPG(t *testing.T) {
 	if bound.Valid {
 		t.Fatalf("recording still bound to %s", bound.String)
 	}
-	got, err := ClaimUnstartedDVRIntents(ctx, time.Minute, 50)
+	// A session that reconnected seconds ago is inside the scan's grace, yet its recording
+	// already ended: the immediate claim takes it without waiting for the grace.
+	if _, err := db.Exec(`UPDATE foghorn.ingest_sessions SET started_at = NOW() WHERE id = $1::uuid`, live); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := ClaimUnstartedDVRIntents(ctx, time.Minute, 50); err != nil || len(got) != 0 {
+		t.Fatalf("the scan must leave a session inside its grace: %+v %v", got, err)
+	}
+	got, err := ClaimDVRIntentForSession(ctx, live)
 	if err != nil || len(got) != 1 || got[0].SessionID != live {
-		t.Fatalf("the live session must be listed for a fresh recording: %+v %v", got, err)
+		t.Fatalf("the live session must be claimed for a fresh recording: %+v %v", got, err)
+	}
+	if again, err := ClaimDVRIntentForSession(ctx, live); err != nil || len(again) != 0 {
+		t.Fatalf("a claimed intent is leased and must not be claimed twice: %+v %v", again, err)
 	}
 
 	// A recording whose session already ended keeps its binding.
@@ -172,7 +184,9 @@ func TestDetachEndedWriterFromLiveSession_RealPG(t *testing.T) {
 	if _, err := db.Exec(`UPDATE foghorn.ingest_sessions SET ended_at=NOW(), ended_at_unix_millis=2000 WHERE id=$1::uuid`, ended); err != nil {
 		t.Fatal(err)
 	}
-	detachEndedWriterFromLiveSession(ctx, "h-ended", lg)
+	if detached := detachEndedWriterFromLiveSession(ctx, "h-ended", lg); detached != "" {
+		t.Fatalf("a recording ended with its session must not be detached, got session %q", detached)
+	}
 	if err := db.QueryRow(`SELECT ingest_generation::text FROM foghorn.artifacts WHERE artifact_hash='h-ended'`).Scan(&bound); err != nil {
 		t.Fatal(err)
 	}

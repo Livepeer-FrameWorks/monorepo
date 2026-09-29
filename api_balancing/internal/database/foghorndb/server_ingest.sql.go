@@ -234,16 +234,18 @@ func (q *Queries) ClaimDVRStopsForGeneration(ctx context.Context, arg ClaimDVRSt
 
 const claimUnstartedDVRIntents = `-- name: ClaimUnstartedDVRIntents :many
 WITH claimed AS (SELECT s.id FROM foghorn.ingest_sessions s WHERE s.dvr_intent IS NOT NULL AND s.ended_at IS NULL AND s.dvr_intent_error IS NULL
-AND (s.dvr_intent_lease_until IS NULL OR s.dvr_intent_lease_until<NOW()) AND s.started_at<NOW()-($2::bigint*INTERVAL '1 second')
-AND NOT EXISTS (SELECT 1 FROM foghorn.artifacts a WHERE a.ingest_generation = s.id AND a.artifact_type = 'dvr') ORDER BY s.started_at FOR UPDATE SKIP LOCKED LIMIT $3)
+AND ($2::text IS NULL OR s.id = $2::text::uuid)
+AND (s.dvr_intent_lease_until IS NULL OR s.dvr_intent_lease_until<NOW()) AND s.started_at<NOW()-($3::bigint*INTERVAL '1 second')
+AND NOT EXISTS (SELECT 1 FROM foghorn.artifacts a WHERE a.ingest_generation = s.id AND a.artifact_type = 'dvr') ORDER BY s.started_at FOR UPDATE SKIP LOCKED LIMIT $4)
 UPDATE foghorn.ingest_sessions u SET dvr_intent_attempts = u.dvr_intent_attempts+1, dvr_intent_lease_until = NOW()+($1::bigint*INTERVAL '1 second') FROM claimed WHERE u.id = claimed.id
 RETURNING u.id::text AS id, u.tenant_id::text AS tenant_id, u.stream_internal_name, u.node_id, u.dvr_intent::text AS dvr_intent, u.dvr_intent_attempts
 `
 
 type ClaimUnstartedDVRIntentsParams struct {
-	LeaseSeconds int64 `db:"lease_seconds" json:"lease_seconds"`
-	GraceSeconds int64 `db:"grace_seconds" json:"grace_seconds"`
-	BatchLimit   int32 `db:"batch_limit" json:"batch_limit"`
+	LeaseSeconds int64          `db:"lease_seconds" json:"lease_seconds"`
+	SessionID    sql.NullString `db:"session_id" json:"session_id"`
+	GraceSeconds int64          `db:"grace_seconds" json:"grace_seconds"`
+	BatchLimit   int32          `db:"batch_limit" json:"batch_limit"`
 }
 
 type ClaimUnstartedDVRIntentsRow struct {
@@ -255,8 +257,14 @@ type ClaimUnstartedDVRIntentsRow struct {
 	DvrIntentAttempts  int32  `db:"dvr_intent_attempts" json:"dvr_intent_attempts"`
 }
 
+// A session_id limits the claim to that one session.
 func (q *Queries) ClaimUnstartedDVRIntents(ctx context.Context, arg ClaimUnstartedDVRIntentsParams) ([]ClaimUnstartedDVRIntentsRow, error) {
-	rows, err := q.db.QueryContext(ctx, claimUnstartedDVRIntents, arg.LeaseSeconds, arg.GraceSeconds, arg.BatchLimit)
+	rows, err := q.db.QueryContext(ctx, claimUnstartedDVRIntents,
+		arg.LeaseSeconds,
+		arg.SessionID,
+		arg.GraceSeconds,
+		arg.BatchLimit,
+	)
 	if err != nil {
 		return nil, err
 	}
@@ -364,24 +372,37 @@ func (q *Queries) CountActiveTenantIngestSessions(ctx context.Context, tenantID 
 }
 
 const detachEndedWriterFromLiveSession = `-- name: DetachEndedWriterFromLiveSession :one
+WITH target AS (
+    SELECT a.artifact_hash, a.ingest_generation AS session_id
+    FROM foghorn.artifacts a
+    WHERE a.artifact_hash = $1
+      AND a.artifact_type = 'dvr'
+      AND a.status IN ('requested', 'starting', 'recording')
+      AND EXISTS (SELECT 1 FROM foghorn.ingest_sessions s WHERE s.id = a.ingest_generation AND s.ended_at IS NULL)
+    FOR UPDATE
+)
 UPDATE foghorn.artifacts a
 SET ingest_generation = NULL, updated_at = NOW()
-WHERE a.artifact_hash = $1
-  AND a.artifact_type = 'dvr'
-  AND a.status IN ('requested', 'starting', 'recording')
-  AND EXISTS (SELECT 1 FROM foghorn.ingest_sessions s WHERE s.id = a.ingest_generation AND s.ended_at IS NULL)
-RETURNING COALESCE(a.stream_internal_name, '')::text AS stream_internal_name
+FROM target
+WHERE a.artifact_hash = target.artifact_hash
+RETURNING COALESCE(a.stream_internal_name, '')::text AS stream_internal_name, target.session_id::text AS session_id
 `
+
+type DetachEndedWriterFromLiveSessionRow struct {
+	StreamInternalName string `db:"stream_internal_name" json:"stream_internal_name"`
+	SessionID          string `db:"session_id" json:"session_id"`
+}
 
 // A recording whose writer ended on its own (no stop was claimed, so it is still
 // active) while the session it is bound to is still live leaves that session
 // unrecorded, e.g. a reconnect adopted a recording whose push Mist had just ended.
-// Detaching it lets ClaimUnstartedDVRIntents start the session a fresh recording.
-func (q *Queries) DetachEndedWriterFromLiveSession(ctx context.Context, artifactHash string) (string, error) {
+// Detaching it lets ClaimUnstartedDVRIntents start the session a fresh recording;
+// it returns the detached session.
+func (q *Queries) DetachEndedWriterFromLiveSession(ctx context.Context, artifactHash string) (DetachEndedWriterFromLiveSessionRow, error) {
 	row := q.db.QueryRowContext(ctx, detachEndedWriterFromLiveSession, artifactHash)
-	var stream_internal_name string
-	err := row.Scan(&stream_internal_name)
-	return stream_internal_name, err
+	var i DetachEndedWriterFromLiveSessionRow
+	err := row.Scan(&i.StreamInternalName, &i.SessionID)
+	return i, err
 }
 
 const endSupersededPIDIngestSession = `-- name: EndSupersededPIDIngestSession :exec

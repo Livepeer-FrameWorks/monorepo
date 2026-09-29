@@ -82,6 +82,7 @@ type Querier interface {
 	ClaimStreamCleanupObligations(ctx context.Context, arg ClaimStreamCleanupObligationsParams) ([]ClaimStreamCleanupObligationsRow, error)
 	ClaimStuckIncompleteThumbnailAttempts(ctx context.Context, arg ClaimStuckIncompleteThumbnailAttemptsParams) ([]ClaimStuckIncompleteThumbnailAttemptsRow, error)
 	ClaimUnprojectedPublishedThumbnailAttempts(ctx context.Context, arg ClaimUnprojectedPublishedThumbnailAttemptsParams) ([]ClaimUnprojectedPublishedThumbnailAttemptsRow, error)
+	// A session_id limits the claim to that one session.
 	ClaimUnstartedDVRIntents(ctx context.Context, arg ClaimUnstartedDVRIntentsParams) ([]ClaimUnstartedDVRIntentsRow, error)
 	ClaimVodAbort(ctx context.Context, arg ClaimVodAbortParams) (int64, error)
 	ClaimVodCompletion(ctx context.Context, arg ClaimVodCompletionParams) (int64, error)
@@ -162,8 +163,9 @@ type Querier interface {
 	// A recording whose writer ended on its own (no stop was claimed, so it is still
 	// active) while the session it is bound to is still live leaves that session
 	// unrecorded, e.g. a reconnect adopted a recording whose push Mist had just ended.
-	// Detaching it lets ClaimUnstartedDVRIntents start the session a fresh recording.
-	DetachEndedWriterFromLiveSession(ctx context.Context, artifactHash string) (string, error)
+	// Detaching it lets ClaimUnstartedDVRIntents start the session a fresh recording;
+	// it returns the detached session.
+	DetachEndedWriterFromLiveSession(ctx context.Context, artifactHash string) (DetachEndedWriterFromLiveSessionRow, error)
 	DtshSyncedForArtifact(ctx context.Context, artifactHash string) (bool, error)
 	EndLapsedPendingIngestSession(ctx context.Context, arg EndLapsedPendingIngestSessionParams) (EndLapsedPendingIngestSessionRow, error)
 	EndSupersededNodeIngestSession(ctx context.Context, arg EndSupersededNodeIngestSessionParams) (string, error)

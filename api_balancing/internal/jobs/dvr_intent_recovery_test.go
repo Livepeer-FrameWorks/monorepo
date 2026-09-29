@@ -51,6 +51,39 @@ func TestDVRIntentRecovery_ReplaysStartFromIntent(t *testing.T) {
 	}
 }
 
+// A session whose recording ended while it stays live is recorded afresh at once: the
+// job claims that one session's intent and replays StartDVR bound to it.
+func TestDVRIntentRecovery_RecordSessionNow(t *testing.T) {
+	intentJSON, err := protojson.Marshal(&sharedpb.StartDVRRequest{TenantId: "t1", InternalName: "live+s1"})
+	if err != nil {
+		t.Fatalf("marshal intent: %v", err)
+	}
+	j := NewDVRIntentRecoveryJob(DVRIntentRecoveryConfig{Logger: logging.NewLogger()})
+	var claimed string
+	j.claimSession = func(_ context.Context, sessionID string) ([]control.UnstartedDVRIntent, error) {
+		claimed = sessionID
+		return []control.UnstartedDVRIntent{{
+			SessionID: sessionID, TenantID: "t1", InternalName: "live+s1", NodeID: "node-1", Intent: intentJSON, Attempts: 1,
+		}}, nil
+	}
+	started := make(chan *sharedpb.StartDVRRequest, 1)
+	j.startDVR = func(_ context.Context, req *sharedpb.StartDVRRequest, _ string) (*sharedpb.StartDVRResponse, error) {
+		started <- req
+		return &sharedpb.StartDVRResponse{DvrHash: "h", Status: "requested"}, nil
+	}
+
+	j.RecordSessionNow("gen-2")
+
+	select {
+	case req := <-started:
+		if claimed != "gen-2" || req.GetIngestGeneration() != "gen-2" {
+			t.Fatalf("claimed %q, started generation %q; want gen-2 for both", claimed, req.GetIngestGeneration())
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("StartDVR was not replayed for the session")
+	}
+}
+
 // An undecodable payload is moved to the EXPLICIT terminal error state (operator-visible,
 // never re-claimed), while a following healthy intent still starts.
 func TestDVRIntentRecovery_TerminalErrorForUndecodable(t *testing.T) {

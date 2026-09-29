@@ -165,16 +165,26 @@ INSERT INTO foghorn.ingest_close_tombstones (tenant_id, node_id, connector_pid, 
 -- A recording whose writer ended on its own (no stop was claimed, so it is still
 -- active) while the session it is bound to is still live leaves that session
 -- unrecorded, e.g. a reconnect adopted a recording whose push Mist had just ended.
--- Detaching it lets ClaimUnstartedDVRIntents start the session a fresh recording.
+-- Detaching it lets ClaimUnstartedDVRIntents start the session a fresh recording;
+-- it returns the detached session.
+WITH target AS (
+    SELECT a.artifact_hash, a.ingest_generation AS session_id
+    FROM foghorn.artifacts a
+    WHERE a.artifact_hash = sqlc.arg(artifact_hash)
+      AND a.artifact_type = 'dvr'
+      AND a.status IN ('requested', 'starting', 'recording')
+      AND EXISTS (SELECT 1 FROM foghorn.ingest_sessions s WHERE s.id = a.ingest_generation AND s.ended_at IS NULL)
+    FOR UPDATE
+)
 UPDATE foghorn.artifacts a
 SET ingest_generation = NULL, updated_at = NOW()
-WHERE a.artifact_hash = sqlc.arg(artifact_hash)
-  AND a.artifact_type = 'dvr'
-  AND a.status IN ('requested', 'starting', 'recording')
-  AND EXISTS (SELECT 1 FROM foghorn.ingest_sessions s WHERE s.id = a.ingest_generation AND s.ended_at IS NULL)
-RETURNING COALESCE(a.stream_internal_name, '')::text AS stream_internal_name;
+FROM target
+WHERE a.artifact_hash = target.artifact_hash
+RETURNING COALESCE(a.stream_internal_name, '')::text AS stream_internal_name, target.session_id::text AS session_id;
 -- name: ClaimUnstartedDVRIntents :many
+-- A session_id limits the claim to that one session.
 WITH claimed AS (SELECT s.id FROM foghorn.ingest_sessions s WHERE s.dvr_intent IS NOT NULL AND s.ended_at IS NULL AND s.dvr_intent_error IS NULL
+AND (sqlc.narg(session_id)::text IS NULL OR s.id = sqlc.narg(session_id)::text::uuid)
 AND (s.dvr_intent_lease_until IS NULL OR s.dvr_intent_lease_until<NOW()) AND s.started_at<NOW()-(sqlc.arg(grace_seconds)::bigint*INTERVAL '1 second')
 AND NOT EXISTS (SELECT 1 FROM foghorn.artifacts a WHERE a.ingest_generation = s.id AND a.artifact_type = 'dvr') ORDER BY s.started_at FOR UPDATE SKIP LOCKED LIMIT sqlc.arg(batch_limit))
 UPDATE foghorn.ingest_sessions u SET dvr_intent_attempts = u.dvr_intent_attempts+1, dvr_intent_lease_until = NOW()+(sqlc.arg(lease_seconds)::bigint*INTERVAL '1 second') FROM claimed WHERE u.id = claimed.id

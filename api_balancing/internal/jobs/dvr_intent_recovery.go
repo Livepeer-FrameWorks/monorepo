@@ -40,6 +40,9 @@ type DVRIntentRecoveryJob struct {
 	// claimIntents is the injectable claim seam (defaults to control.ClaimUnstartedDVRIntents,
 	// which atomically leases + counts). The job holds no DB handle of its own.
 	claimIntents func(ctx context.Context, olderThan time.Duration, limit int) ([]control.UnstartedDVRIntent, error)
+	// claimSession is the injectable single-session claim seam (defaults to
+	// control.ClaimDVRIntentForSession).
+	claimSession func(ctx context.Context, sessionID string) ([]control.UnstartedDVRIntent, error)
 	// failIntent records an EXPLICIT terminal error (defaults to control.FailDVRIntent) for an
 	// undecodable payload or a cap-exhausted intent — never a silent exclusion. Tenant-scoped.
 	failIntent func(ctx context.Context, tenantID, sessionID, reason string) error
@@ -76,6 +79,7 @@ func NewDVRIntentRecoveryJob(cfg DVRIntentRecoveryConfig) *DVRIntentRecoveryJob 
 		batchSize:    batchSize,
 		stopCh:       make(chan struct{}),
 		claimIntents: control.ClaimUnstartedDVRIntents,
+		claimSession: control.ClaimDVRIntentForSession,
 		failIntent:   control.FailDVRIntent,
 	}
 	if cfg.Starter != nil {
@@ -135,6 +139,27 @@ func (j *DVRIntentRecoveryJob) reconcile() {
 		}
 		j.reconcileOne(ctx, it)
 	}
+}
+
+// RecordSessionNow replays the DVR intent of one live session without waiting for the
+// scan, for a session whose recording ended while it stays live. A replay that fails
+// leaves the intent leased, and the scan retries it after the lease.
+func (j *DVRIntentRecoveryJob) RecordSessionNow(sessionID string) {
+	if j.startDVR == nil || j.claimSession == nil || j.failIntent == nil {
+		return
+	}
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+		defer cancel()
+		intents, err := j.claimSession(ctx, sessionID)
+		if err != nil {
+			j.logger.WithError(err).WithField("session_id", sessionID).Warn("DVR intent-recovery: failed to claim the intent of a session whose recording ended")
+			return
+		}
+		for _, it := range intents {
+			j.reconcileOne(ctx, it)
+		}
+	}()
 }
 
 func (j *DVRIntentRecoveryJob) reconcileOne(ctx context.Context, it control.UnstartedDVRIntent) {

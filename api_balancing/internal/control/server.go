@@ -4377,17 +4377,32 @@ func ClaimUnstartedDVRIntents(ctx context.Context, olderThan time.Duration, limi
 	if db == nil {
 		return nil, nil
 	}
-	graceSeconds := int64(olderThan / time.Second)
-	leaseSeconds := int64(DVRIntentLeaseDuration / time.Second)
 	// Selection bounds the retry to LIVE work: only intents for a session that is still active
 	// (ended_at IS NULL) with no terminal error and no bound DVR artifact yet, off-lease and past
 	// the grace. There is no attempt-cap filter — transient StartDVR failures retry under the lease
 	// for as long as the session is active (a recoverable outage must not permanently abandon a
 	// recording); once the stream ends, ended_at drops the row from the scan. dvr_intent_attempts is
 	// informational (it grows in a persistent-failure loop, bounded in RATE by the lease).
-	rows, err := foghorndb.New(db).ClaimUnstartedDVRIntents(ctx, foghorndb.ClaimUnstartedDVRIntentsParams{
-		GraceSeconds: graceSeconds, BatchLimit: int32(limit), LeaseSeconds: leaseSeconds,
+	return claimDVRIntents(ctx, foghorndb.ClaimUnstartedDVRIntentsParams{
+		GraceSeconds: int64(olderThan / time.Second), BatchLimit: int32(limit),
 	})
+}
+
+// ClaimDVRIntentForSession claims the DVR intent of one live session with no grace, for a
+// session known to be unrecorded now: the fast path already ran and its recording ended.
+// The lease is the same as the recovery scan's, so the two never replay it together.
+func ClaimDVRIntentForSession(ctx context.Context, sessionID string) ([]UnstartedDVRIntent, error) {
+	if db == nil {
+		return nil, nil
+	}
+	return claimDVRIntents(ctx, foghorndb.ClaimUnstartedDVRIntentsParams{
+		SessionID: sql.NullString{String: sessionID, Valid: true}, BatchLimit: 1,
+	})
+}
+
+func claimDVRIntents(ctx context.Context, params foghorndb.ClaimUnstartedDVRIntentsParams) ([]UnstartedDVRIntent, error) {
+	params.LeaseSeconds = int64(DVRIntentLeaseDuration / time.Second)
+	rows, err := foghorndb.New(db).ClaimUnstartedDVRIntents(ctx, params)
 	if err != nil {
 		return nil, fmt.Errorf("claim unstarted DVR intents: %w", err)
 	}
@@ -4951,7 +4966,7 @@ func processDVRStopped(stopped *ipcpb.DVRStopped, session NodeSession, logger lo
 	go func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 		defer cancel()
-		detachEndedWriterFromLiveSession(ctx, dvrHash, logger)
+		unrecordedSession := detachEndedWriterFromLiveSession(ctx, dvrHash, logger)
 		final, err := FinalizeDVR(ctx, dvrHash, FinalizeOptions{
 			ReportedStatus:  status,
 			StartedAtUnix:   stopped.GetStartedAt(),
@@ -4976,27 +4991,42 @@ func processDVRStopped(stopped *ipcpb.DVRStopped, session NodeSession, logger lo
 		}
 		// The terminal DVR STOPPED lifecycle event is enqueued INSIDE FinalizeDVR's transaction (durable,
 		// atomic with the terminal state) — no separate crash-lossy callback here.
+		// The fresh recording starts once the ended one is settled, so the two never overlap.
+		if unrecordedSession != "" && unrecordedSessionHandler != nil {
+			unrecordedSessionHandler(unrecordedSession)
+		}
 	}()
 }
+
+// unrecordedSessionHandler starts a fresh recording for a live session whose recording
+// ended; DVR intent recovery is the backstop when it is unset or fails.
+var unrecordedSessionHandler func(sessionID string)
+
+// SetUnrecordedSessionHandler registers the handler that records a live session afresh
+// once its ended recording is settled. Set once at startup.
+func SetUnrecordedSessionHandler(fn func(sessionID string)) { unrecordedSessionHandler = fn }
 
 // detachEndedWriterFromLiveSession runs before FinalizeDVR settles a recording whose writer
 // ended. A recording that ends while still active (no stop was claimed) and bound to a
 // session that is still live leaves that session unrecorded; detaching it hands the session
-// to DVR intent recovery, which starts it a fresh recording. A failure is logged and the
-// finalize proceeds: the recording itself is complete either way.
-func detachEndedWriterFromLiveSession(ctx context.Context, dvrHash string, logger logging.Logger) {
+// to DVR intent recovery, which starts it a fresh recording. It returns the detached
+// session, or "" when nothing was detached. A failure is logged and the finalize proceeds:
+// the recording itself is complete either way.
+func detachEndedWriterFromLiveSession(ctx context.Context, dvrHash string, logger logging.Logger) string {
 	if db == nil {
-		return
+		return ""
 	}
-	internalName, err := foghorndb.New(db).DetachEndedWriterFromLiveSession(ctx, dvrHash)
+	row, err := foghorndb.New(db).DetachEndedWriterFromLiveSession(ctx, dvrHash)
 	switch {
 	case errors.Is(err, sql.ErrNoRows):
+		return ""
 	case err != nil:
 		logger.WithError(err).WithField("dvr_hash", dvrHash).Error("Failed to detach a recording whose writer ended from its live session")
-	default:
-		logger.WithFields(logging.Fields{"dvr_hash": dvrHash, "internal_name": internalName}).
-			Warn("Recording writer ended while its session is still live; the session will be recorded afresh")
+		return ""
 	}
+	logger.WithFields(logging.Fields{"dvr_hash": dvrHash, "internal_name": row.StreamInternalName, "session_id": row.SessionID}).
+		Warn("Recording writer ended while its session is still live; the session will be recorded afresh")
+	return row.SessionID
 }
 
 // ResolveClipHash implements the ResolveClipHash RPC method

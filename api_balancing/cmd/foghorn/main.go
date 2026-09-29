@@ -2221,6 +2221,7 @@ func main() {
 	})
 	dvrIntentRecoveryJob.Start()
 	defer dvrIntentRecoveryJob.Stop()
+	control.SetUnrecordedSessionHandler(dvrIntentRecoveryJob.RecordSessionNow)
 
 	// Retire ingest sessions whose admission never confirmed its source projection, purge expired
 	// close-before-insert tombstones, and (on the lost-node lease holder) end the sessions of a node
