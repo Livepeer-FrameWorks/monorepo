@@ -25,7 +25,7 @@ func TestSourceReauthorizationRenewsPermissionNotPhysicalPull(t *testing.T) {
 			destination.Runtime.(*PolicyBoundPlacementRuntime).Policy.Now = clock
 			destination.RetainPrepared = media.RetainPreparedSourceDemand
 			fence := int64(9007199254740993)
-			media.DestinationFence = func(context.Context, string, string) (int64, error) { return fence, nil }
+			media.Paths.DestinationFence = func(context.Context, string, string) (int64, error) { return fence, nil }
 			request.Query.ClientLocation = &placementpb.Coordinates{Latitude: 37, Longitude: -122}
 			request.ExpiresAt = timestamppb.New(now.Add(time.Second))
 			first, err := destination.PreparePlacement(context.Background(), request)

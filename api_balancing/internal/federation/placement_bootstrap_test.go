@@ -37,7 +37,7 @@ func TestConfigureLivePlacementDestinationPreparesAndReusesServingPull(t *testin
 	media := runtime.Media.(*PlacementMediaRuntime)
 	dispatch := media.Serve.(*MediaServePreparationRuntime)
 	serve := dispatch.Push
-	serve.DestinationFence = func(context.Context, string, string) (int64, error) { return 9007199254740993, nil }
+	serve.Paths.DestinationFence = func(context.Context, string, string) (int64, error) { return 9007199254740993, nil }
 	if serve.Registry != deps.Registry || serve.Arrange != deps.Arrange || PlacementPathReader(dispatch.Paths) != destination.Discovery.Paths ||
 		serve.Paths != dispatch.Paths.Push ||
 		destination.Receipts.Client != deps.Redis || runtime.Policy.IngestFence == nil || media.Ingest == nil {

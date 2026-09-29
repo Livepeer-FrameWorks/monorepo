@@ -95,9 +95,9 @@ func pushRuntimeFixture(t *testing.T) (*PlacementDestination, *LivePushPreparati
 	f.discovery.Now = store.Now
 	req.Query, req.NodeId = f.query, "node-00"
 	fed := &fakeNotifyFedClient{mutateAck: func(ack *federationpb.OriginPullAck) { ack.DtscUrl = "dtsc://eu.example:14200/live+internal" }}
+	paths.DestinationFence = func(context.Context, string, string) (int64, error) { return 9007199254740993, nil }
 	media := &LivePushPreparationRuntime{
-		DestinationFence: func(context.Context, string, string) (int64, error) { return 9007199254740993, nil },
-		Authority:        f.discovery.Authority, Paths: paths, Registry: registry,
+		Authority: f.discovery.Authority, Paths: paths, Registry: registry,
 		Arrange: makeDepsAt(t, fed, map[string]string{"eu-cell": "peer:18009"}, store.Now), Now: store.Now,
 	}
 	// As ConfigureLivePlacementDestination wires it: discovery offers a relay

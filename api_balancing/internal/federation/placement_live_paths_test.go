@@ -37,7 +37,8 @@ func livePathFixture(t *testing.T) (*discoveryFixture, *LivePushPlacementPaths, 
 		}}},
 	}}}
 	reader := &LivePushPlacementPaths{CellID: "us-cell", Registry: r, Snapshot: func() *state.BalancerSnapshot { return f.snapshot }, Now: func() time.Time { return f.now },
-		SourceCellReachable: func(string) bool { return true }}
+		SourceCellReachable: func(string) bool { return true },
+		DestinationFence:    func(context.Context, string, string) (int64, error) { return 9007199254740993, nil }}
 	// Discovery dispatches by signed kind; these fixtures exercise the push
 	// reader behind that dispatcher, which is how the destination assembles it.
 	f.discovery.Paths = &MediaPlacementPaths{Push: reader}
@@ -57,6 +58,36 @@ func TestLivePushPathsColdUSNodesUseEntitledIngestOnlyEUSource(t *testing.T) {
 	for _, node := range response.Candidates {
 		if !node.SourceFeasible || node.Presence != placementpb.Presence_PRESENCE_ABSENT || node.Capacity != placementpb.Capacity_CAPACITY_AVAILABLE {
 			t.Fatalf("cold US node was penalized or claimed presence: %+v", node)
+		}
+	}
+}
+
+// A failed connection-ownership read says nothing about the destination: its
+// capacity is unknown, not refused. A read that finds no connection refuses it.
+func TestLivePushPathsFailedConnectionReadLeavesRelayUnknown(t *testing.T) {
+	f, reader, _ := livePathFixture(t)
+	reads := 0
+	reader.DestinationFence = func(context.Context, string, string) (int64, error) {
+		reads++
+		return 0, errors.New("shared ownership read failed")
+	}
+	response, err := f.discovery.QueryPlacementCandidates(context.Background(), f.query)
+	if err != nil || len(response.GetCandidates()) != 12 || reads != 12 {
+		t.Fatalf("discovery: %+v, %v, reads=%d", response, err, reads)
+	}
+	for _, candidate := range response.Candidates {
+		if candidate.Capacity != placementpb.Capacity_CAPACITY_UNKNOWN {
+			t.Fatalf("failed ownership read decided the destination: %+v", candidate)
+		}
+	}
+	reader.DestinationFence = func(context.Context, string, string) (int64, error) { return 0, control.ErrDestinationNotConnected }
+	response, err = f.discovery.QueryPlacementCandidates(context.Background(), f.query)
+	if err != nil || len(response.GetCandidates()) != 12 {
+		t.Fatalf("discovery: %+v, %v", response, err)
+	}
+	for _, candidate := range response.Candidates {
+		if candidate.Capacity != placementpb.Capacity_CAPACITY_UNAVAILABLE {
+			t.Fatalf("disconnected relay destination offered: %+v", candidate)
 		}
 	}
 }

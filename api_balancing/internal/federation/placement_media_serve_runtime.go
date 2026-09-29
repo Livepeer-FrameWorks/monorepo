@@ -315,9 +315,9 @@ func (runtime *MediaServePreparationRuntime) observe(ctx context.Context, req *p
 			if source == nil || source.dtscURL == "" {
 				return mediaPreparationState{}, status.Error(codes.FailedPrecondition, "configured relay source is unavailable")
 			}
-			fence, fenceErr := runtime.Push.currentDestinationFence(ctx, req.NodeId, req.ClusterId)
+			fence, fenceErr := configured.destinationFence(ctx, req.NodeId, req.ClusterId)
 			if fenceErr != nil {
-				return mediaPreparationState{}, fenceErr
+				return mediaPreparationState{}, status.Error(codes.Unavailable, "destination connection ownership is unavailable")
 			}
 			state.configuredRelay = source
 			state.configuredGeneration = descriptor.Generation

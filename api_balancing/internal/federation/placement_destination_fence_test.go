@@ -8,6 +8,7 @@ import (
 
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/placement"
 	federationpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/foghorn_federation"
+	placementpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/media_placement"
 	"google.golang.org/protobuf/proto"
 )
 
@@ -15,7 +16,7 @@ func TestPreparedSourceReconnectRequiresFreshAuthorizationButReusesPull(t *testi
 	destination, media, _, _, fed, req := pushRuntimeFixture(t)
 	ctx := context.Background()
 	fence := int64(9007199254740993)
-	media.DestinationFence = func(context.Context, string, string) (int64, error) { return fence, nil }
+	media.Paths.DestinationFence = func(context.Context, string, string) (int64, error) { return fence, nil }
 	if _, err := destination.PreparePlacement(ctx, req); err != nil {
 		t.Fatal(err)
 	}
@@ -57,24 +58,34 @@ func TestPushPreparationRequiresKnownDestinationFence(t *testing.T) {
 		t.Run(outcome, func(t *testing.T) {
 			destination, media, _, _, fed, req := pushRuntimeFixture(t)
 			fence := int64(9007199254740993)
-			media.DestinationFence = func(context.Context, string, string) (int64, error) { return fence, nil }
+			media.Paths.DestinationFence = func(context.Context, string, string) (int64, error) { return fence, nil }
 			switch outcome {
 			case "missing":
-				media.DestinationFence = nil
+				media.Paths.DestinationFence = nil
 			case "zero":
 				fence = 0
 			case "negative":
 				fence = -1
 			case "unavailable":
-				media.DestinationFence = func(context.Context, string, string) (int64, error) { return 0, errors.New("ownership unavailable") }
+				media.Paths.DestinationFence = func(context.Context, string, string) (int64, error) { return 0, errors.New("ownership unavailable") }
 			case "reconnect-during-arrangement":
 				fed.mutateAck = func(ack *federationpb.OriginPullAck) {
 					ack.DtscUrl = "dtsc://eu.example:14200/live+internal"
 					fence++
 				}
 			}
-			if result, err := destination.PreparePlacement(context.Background(), req); err == nil || result != nil {
-				t.Fatalf("unbound destination accepted: %v, %v", result, err)
+			result, err := destination.PreparePlacement(context.Background(), req)
+			switch outcome {
+			case "missing", "zero", "negative":
+				// A read that finds no connection is a definitive refusal of this
+				// node, answered as a typed outcome the coordinator moves past.
+				if err != nil || result.GetOutcome() != placementpb.PreparationOutcome_PREPARATION_OUTCOME_NODE_UNAVAILABLE || result.GetEndpoint() != "" {
+					t.Fatalf("disconnected destination was not refused as unavailable: %v, %v", result, err)
+				}
+			default:
+				if err == nil || result != nil {
+					t.Fatalf("unbound destination accepted: %v, %v", result, err)
+				}
 			}
 			if outcome != "reconnect-during-arrangement" && len(fed.calls) != 0 {
 				t.Fatal("source notified without destination ownership")
@@ -90,7 +101,7 @@ func TestPreparedSourceRechecksDestinationOwnershipAfterResolution(t *testing.T)
 		t.Fatal(err)
 	}
 	reads := 0
-	media.DestinationFence = func(context.Context, string, string) (int64, error) {
+	media.Paths.DestinationFence = func(context.Context, string, string) (int64, error) {
 		reads++
 		if reads == 1 {
 			return 9007199254740993, nil

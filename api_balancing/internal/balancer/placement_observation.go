@@ -85,6 +85,10 @@ type PlacementClusterFacts struct {
 type PlacementNodePath struct {
 	Presence       placement.Presence
 	SourceFeasible bool
+	// Unavailable names an observed condition that keeps the path reader from
+	// preparing this node for the request, such as a relay destination without
+	// a current control connection. The node is observed as unavailable.
+	Unavailable string
 }
 
 type PlacementObservationRequest struct {
@@ -191,6 +195,9 @@ func observePlacementNodes(req PlacementObservationRequest, capacityOnly bool) (
 		if detail := placementUnavailableDetail(node.IsActive, mode, validAddress, capable, protocolAvailable, unknownStream || placementStreamAllowed(node.ConfigStreams, req.InternalName)); detail != "" {
 			candidate.Capacity = placement.CapacityUnavailable
 			candidate.CapacityDetail = detail
+		} else if path.Unavailable != "" {
+			candidate.Capacity = placement.CapacityUnavailable
+			candidate.CapacityDetail = path.Unavailable
 		} else if !pathKnown || unknownStream {
 			// Missing source or stream-allowlist evidence is not a known node refusal.
 			candidate.Capacity = placement.CapacityUnknown

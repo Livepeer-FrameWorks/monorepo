@@ -58,9 +58,10 @@ func configuredRelayRuntimeFixture(t *testing.T, mode string) (*PlacementDestina
 		t.Fatal(err)
 	}
 	t.Cleanup(registry.DisableRedisSync)
+	paths.Push.DestinationFence = func(context.Context, string, string) (int64, error) { return 7, nil }
+	paths.Configured.DestinationFence = paths.Push.DestinationFence
 	push := &LivePushPreparationRuntime{
 		Authority: fixture.discovery.Authority, Paths: paths.Push, Registry: registry, Arrange: arrange, Now: store.Now,
-		DestinationFence: func(context.Context, string, string) (int64, error) { return 7, nil },
 	}
 	serve := &MediaServePreparationRuntime{CellID: "us-cell", Authority: fixture.discovery.Authority, Paths: paths,
 		Push: push, Registry: registry, Arrange: arrange, Snapshot: fixture.discovery.Snapshot, Now: store.Now}

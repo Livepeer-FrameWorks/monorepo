@@ -34,6 +34,20 @@ type ConfiguredSourcePlacementPaths struct {
 	// SourceCellReachable reports whether a pull from the named source cell
 	// can be arranged; see LivePushPlacementPaths.SourceCellReachable.
 	SourceCellReachable func(cellID string) bool
+	// DestinationFence reads a destination's current control-connection fence;
+	// nil reads control.DestinationConnectionFence. Discovery and relay
+	// preparation both read it through destinationFence.
+	DestinationFence func(ctx context.Context, nodeID, clusterID string) (int64, error)
+}
+
+// destinationFence returns the relay destination's current control-connection
+// fence; see LivePushPlacementPaths.destinationFence.
+func (reader *ConfiguredSourcePlacementPaths) destinationFence(ctx context.Context, nodeID, clusterID string) (int64, error) {
+	var read func(context.Context, string, string) (int64, error)
+	if reader != nil {
+		read = reader.DestinationFence
+	}
+	return readDestinationFence(ctx, read, nodeID, clusterID)
 }
 
 // configuredSource is credential-free evidence that one node currently serves the
@@ -178,7 +192,17 @@ func (reader *ConfiguredSourcePlacementPaths) ObservePlacementPaths(ctx context.
 		result.ExpiresAt = minPlacementExpiry(result.ExpiresAt, source.expiresAt)
 	}
 	for _, node := range destinations.Nodes {
-		result.Paths[node.NodeID] = reader.nodePath(descriptor, authority, dial, node, source, now)
+		path, relay := reader.nodePath(descriptor, authority, dial, node, source, now)
+		if relay {
+			// Relay preparation needs the destination's control connection, so a
+			// disconnected destination is not offered; see relayDestinationPath.
+			var known bool
+			if path, known = relayDestinationPath(ctx, reader.DestinationFence, node, path); !known {
+				delete(result.Paths, node.NodeID)
+				continue
+			}
+		}
+		result.Paths[node.NodeID] = path
 	}
 	return result, nil
 }
@@ -186,23 +210,25 @@ func (reader *ConfiguredSourcePlacementPaths) ObservePlacementPaths(ctx context.
 // nodePath decides one destination's evidence. Presence is this node's own live
 // copy; feasibility is either signed consent to dial the configured input or an
 // existing copy the destination may relay under its external-source consent.
-func (reader *ConfiguredSourcePlacementPaths) nodePath(descriptor control.MediaSourceDescriptor, authority balancer.PlacementAuthority, dial *balancer.PlacementAuthority, node state.EnhancedBalancerNodeSnapshot, source *configuredSource, now time.Time) balancer.PlacementNodePath {
-	path := balancer.PlacementNodePath{Presence: placement.Absent}
+// relay reports that the path is feasible only by relaying that copy.
+func (reader *ConfiguredSourcePlacementPaths) nodePath(descriptor control.MediaSourceDescriptor, authority balancer.PlacementAuthority, dial *balancer.PlacementAuthority, node state.EnhancedBalancerNodeSnapshot, source *configuredSource, now time.Time) (path balancer.PlacementNodePath, relay bool) {
+	path = balancer.PlacementNodePath{Presence: placement.Absent}
 	if reader.livesOn(node, descriptor, authority, now) {
 		path.Presence = placement.Present
-		return path
+		return path, false
 	}
 	if reader.mayOriginate(descriptor, authority, dial, node.ClusterID, node.NodeID, now) {
 		path.SourceFeasible = true
-		return path
+		return path, false
 	}
 	if source == nil || source.dtscURL == "" || (source.cellID == reader.CellID && source.nodeID == node.NodeID) {
-		return path
+		return path, false
 	}
 	if source.clusterID == node.ClusterID || authority.Clusters[node.ClusterID].AllowExternalSource {
 		path.SourceFeasible = true
+		return path, true
 	}
-	return path
+	return path, false
 }
 
 // mayOriginate reports signed consent for a node to dial the configured input

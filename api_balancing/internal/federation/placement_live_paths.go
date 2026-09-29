@@ -41,6 +41,52 @@ type LivePushPlacementPaths struct {
 	// can be arranged (ArrangeOriginPullDeps.CanArrangeFromCell). Without it
 	// only a source in this cell is relayable.
 	SourceCellReachable func(cellID string) bool
+	// DestinationFence reads a destination's current control-connection fence;
+	// nil reads control.DestinationConnectionFence.
+	DestinationFence func(ctx context.Context, nodeID, clusterID string) (int64, error)
+}
+
+// PlacementDetailControlDisconnected marks a relay destination whose control
+// connection is not current: a pull cannot be arranged on it.
+const PlacementDetailControlDisconnected = "control_disconnected"
+
+// destinationFence returns the destination's current control-connection
+// fence. Arranging a relay on a destination needs that connection, so
+// discovery and preparation both read it here.
+func (reader *LivePushPlacementPaths) destinationFence(ctx context.Context, nodeID, clusterID string) (int64, error) {
+	var read func(context.Context, string, string) (int64, error)
+	if reader != nil {
+		read = reader.DestinationFence
+	}
+	return readDestinationFence(ctx, read, nodeID, clusterID)
+}
+
+// readDestinationFence reads through read, or control.DestinationConnectionFence
+// when read is nil. A non-positive fence is no connection.
+func readDestinationFence(ctx context.Context, read func(context.Context, string, string) (int64, error), nodeID, clusterID string) (int64, error) {
+	if read == nil {
+		read = control.DestinationConnectionFence
+	}
+	fence, err := read(ctx, nodeID, clusterID)
+	if err == nil && fence <= 0 {
+		err = control.ErrDestinationNotConnected
+	}
+	return fence, err
+}
+
+// relayDestinationPath applies the relay destination's connection to its path:
+// a destination without a current control connection cannot have a pull
+// arranged on it and is unavailable. ok is false when the read failed, which
+// leaves the destination's path unknown rather than refused.
+func relayDestinationPath(ctx context.Context, read func(context.Context, string, string) (int64, error), node state.EnhancedBalancerNodeSnapshot, path balancer.PlacementNodePath) (balancer.PlacementNodePath, bool) {
+	_, err := readDestinationFence(ctx, read, node.NodeID, node.ClusterID)
+	switch {
+	case errors.Is(err, control.ErrDestinationNotConnected):
+		path.Unavailable = PlacementDetailControlDisconnected
+	case err != nil:
+		return path, false
+	}
+	return path, true
 }
 
 type placementPublisher struct {
@@ -122,6 +168,14 @@ func (reader *LivePushPlacementPaths) ObservePlacementPaths(ctx context.Context,
 			path.Presence = placement.Present
 		} else if reader.relayRefusal(source, authority, node.ClusterID) == "" {
 			path.SourceFeasible = true
+			// Preparation refuses a relay destination without a current control
+			// connection (an announced Helmsman restart holds node health while
+			// the connection is gone), so discovery does not offer it.
+			var known bool
+			if path, known = relayDestinationPath(ctx, reader.DestinationFence, node, path); !known {
+				delete(result.Paths, node.NodeID)
+				continue
+			}
 		}
 		// A replica's live buffer is not evidence of this publisher generation.
 		// Preparation must bind its exact pull attempt before claiming presence.

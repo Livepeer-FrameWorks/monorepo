@@ -23,6 +23,11 @@ func LocalSourceConnectionFence(nodeID, clusterID string) (int64, bool) {
 	return c.fence, true
 }
 
+// ErrDestinationNotConnected means the ownership read succeeded and found no
+// current control connection for the destination. Any other error from
+// DestinationConnectionFence is a failed read that says nothing about the node.
+var ErrDestinationNotConnected = errors.New("destination connection ownership is unavailable")
+
 // DestinationConnectionFence uses shared ownership when configured: the selected
 // destination can be connected to another Foghorn replica. A failed shared read
 // must not fall back to a potentially superseded local registration.
@@ -45,7 +50,7 @@ func DestinationConnectionFence(ctx context.Context, nodeID, clusterID string) (
 	} else if fence, ok := LocalSourceConnectionFence(nodeID, clusterID); ok {
 		return fence, nil
 	}
-	return 0, errors.New("destination connection ownership is unavailable")
+	return 0, ErrDestinationNotConnected
 }
 
 // Admission cannot use the legacy untracked-connection allowance. Both

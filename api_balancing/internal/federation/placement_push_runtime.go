@@ -22,13 +22,14 @@ import (
 // PolicyBoundPlacementRuntime supplies global admission. Arrangement publishes
 // a tracked source for Mist's existing source resolver; it does not claim media
 // readiness or start a separate pull for each viewer.
+// The destination's connection fence is read through Paths, the reader
+// discovery uses, so both agree on which relay destinations are connected.
 type LivePushPreparationRuntime struct {
-	Authority        PlacementAuthorityReader
-	Paths            *LivePushPlacementPaths
-	Registry         *control.StreamRegistry
-	Arrange          *ArrangeOriginPullDeps
-	Now              func() time.Time
-	DestinationFence func(context.Context, string, string) (int64, error)
+	Authority PlacementAuthorityReader
+	Paths     *LivePushPlacementPaths
+	Registry  *control.StreamRegistry
+	Arrange   *ArrangeOriginPullDeps
+	Now       func() time.Time
 }
 
 var _ PlacementPreparationRuntime = (*LivePushPreparationRuntime)(nil)
@@ -223,12 +224,8 @@ func pushPullMatchesSource(pull *PlacementPullBinding, source *placementPublishe
 }
 
 func (runtime *LivePushPreparationRuntime) currentDestinationFence(ctx context.Context, nodeID, clusterID string) (int64, error) {
-	read := runtime.DestinationFence
-	if read == nil {
-		read = control.DestinationConnectionFence
-	}
-	fence, err := read(ctx, nodeID, clusterID)
-	if err != nil || fence <= 0 {
+	fence, err := runtime.Paths.destinationFence(ctx, nodeID, clusterID)
+	if err != nil {
 		return 0, status.Error(codes.Unavailable, "destination connection ownership is unavailable")
 	}
 	return fence, nil
