@@ -132,12 +132,23 @@ func (r *Resolver) DoListDVRChapters(
 			v := int(c.GetIntervalSeconds())
 			iv = &v
 		}
+		// A finalized chapter reports the media it holds, as DoGetDVRChapter does: the
+		// terminal chapter's scheduled end is the stop claim, which Mist's resume window
+		// places past the last recorded media.
+		startMs := c.GetStartMs()
+		if actual := c.GetActualMediaStartMs(); actual > 0 {
+			startMs = actual
+		}
+		endMs := c.GetEndMs()
+		if actual := c.GetActualMediaEndMs(); actual > startMs {
+			endMs = actual
+		}
 		ref := &model.DVRChapterRef{
 			ChapterID:       c.GetChapterId(),
 			Mode:            chapterModeFromString(c.GetMode()),
 			IntervalSeconds: iv,
-			StartMs:         float64(c.GetStartMs()),
-			EndMs:           float64(c.GetEndMs()),
+			StartMs:         float64(startMs),
+			EndMs:           float64(endMs),
 			IsCurrent:       c.GetIsCurrent(),
 			State:           chapterStateFromString(c.GetState()),
 			HasGaps:         c.GetHasGaps(),

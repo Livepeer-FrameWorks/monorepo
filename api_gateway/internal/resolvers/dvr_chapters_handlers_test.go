@@ -85,6 +85,16 @@ func TestDoListDVRChapters(t *testing.T) {
 						SegmentCount:    1,
 						PlaybackId:      "pb-c1",
 					},
+					{
+						// A finalized terminal chapter: scheduled to the stop claim, holding media to 22 s.
+						ChapterId:          "c2",
+						Mode:               "fixed_interval",
+						StartMs:            30000,
+						EndMs:              60000,
+						State:              "finalized",
+						ActualMediaStartMs: 30500,
+						ActualMediaEndMs:   52000,
+					},
 				},
 				NextPageToken: "next-tok",
 			}, nil
@@ -98,8 +108,14 @@ func TestDoListDVRChapters(t *testing.T) {
 		got.RangeStartMs != 0 || got.RangeEndMs != 60000 || got.PageSize != 50 || got.PageToken != "tok0" {
 		t.Fatalf("request built wrong: %+v", got)
 	}
-	if len(out.Chapters) != 1 {
-		t.Fatalf("expected 1 chapter, got %d", len(out.Chapters))
+	if len(out.Chapters) != 2 {
+		t.Fatalf("expected 2 chapters, got %d", len(out.Chapters))
+	}
+	if open := out.Chapters[0]; open.StartMs != 0 || open.EndMs != 30000 {
+		t.Fatalf("a chapter without a media span keeps its scheduled range, got %v..%v", open.StartMs, open.EndMs)
+	}
+	if final := out.Chapters[1]; final.StartMs != 30500 || final.EndMs != 52000 {
+		t.Fatalf("a finalized chapter reports the media it holds, got %v..%v", final.StartMs, final.EndMs)
 	}
 	ref := out.Chapters[0]
 	if ref.ChapterID != "c1" || ref.Mode != model.DVRChapterModeFixedInterval || ref.State != model.DVRChapterStateOpen {
