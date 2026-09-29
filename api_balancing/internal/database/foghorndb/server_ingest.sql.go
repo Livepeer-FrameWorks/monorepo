@@ -363,6 +363,27 @@ func (q *Queries) CountActiveTenantIngestSessions(ctx context.Context, tenantID 
 	return column_1, err
 }
 
+const detachEndedWriterFromLiveSession = `-- name: DetachEndedWriterFromLiveSession :one
+UPDATE foghorn.artifacts a
+SET ingest_generation = NULL, updated_at = NOW()
+WHERE a.artifact_hash = $1
+  AND a.artifact_type = 'dvr'
+  AND a.status IN ('requested', 'starting', 'recording')
+  AND EXISTS (SELECT 1 FROM foghorn.ingest_sessions s WHERE s.id = a.ingest_generation AND s.ended_at IS NULL)
+RETURNING COALESCE(a.stream_internal_name, '')::text AS stream_internal_name
+`
+
+// A recording whose writer ended on its own (no stop was claimed, so it is still
+// active) while the session it is bound to is still live leaves that session
+// unrecorded, e.g. a reconnect adopted a recording whose push Mist had just ended.
+// Detaching it lets ClaimUnstartedDVRIntents start the session a fresh recording.
+func (q *Queries) DetachEndedWriterFromLiveSession(ctx context.Context, artifactHash string) (string, error) {
+	row := q.db.QueryRowContext(ctx, detachEndedWriterFromLiveSession, artifactHash)
+	var stream_internal_name string
+	err := row.Scan(&stream_internal_name)
+	return stream_internal_name, err
+}
+
 const endSupersededPIDIngestSession = `-- name: EndSupersededPIDIngestSession :exec
 UPDATE foghorn.ingest_sessions SET ended_at  =  NOW(), ended_at_unix_millis  =  $1, ended_reason  =  'superseded_pid_reuse' WHERE id  =  $2::uuid AND ended_at IS NULL
 `

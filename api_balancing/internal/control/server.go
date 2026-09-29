@@ -4259,17 +4259,20 @@ type CloseFinalization struct {
 	// this session's.
 	ClaimToken string
 	ClusterID  string
-	// DVRHash / StorageNodeID identify the DVR whose stop obligation was claimed in the
-	// same transaction, for a best-effort immediate send. Empty when no active DVR was
-	// bound; the recovery drain re-sends regardless once stop_pending is durable.
-	DVRHash       string
-	StorageNodeID string
 }
 
-// FinalizeIngestSessionClose ends the exact ingest generation, claims its DVR stop, and queues its
-// source-offline effects in one stream-locked transaction. The committed stop is drained by
-// DVRStartingRecoveryJob when immediate dispatch is unavailable; an uncommitted close is retried
-// from Helmsman's trigger WAL.
+// FinalizeIngestSessionClose ends the exact ingest generation and queues its source-offline
+// effects in one stream-locked transaction; an uncommitted close is retried from Helmsman's
+// trigger WAL.
+//
+// The close does not stop the session's recording. Mist keeps a live push buffer for its
+// resume window after the publisher leaves, and the recording push keeps writing it: a
+// publisher that reconnects to the same buffer continues the same recording (StartDVR
+// rebinds it to the new generation, AdoptResumedDVR). When nobody reconnects, Mist unloads
+// the buffer, which ends the push; Helmsman reports the finished recording (DVRStopped) and
+// FinalizeDVR settles it. The buffer unload also fires STREAM_END, whose node-keyed
+// StopDVRForEndedSource claims any recording still bound to an ended generation, so a lost
+// completion report cannot strand a writer.
 //
 // The event-time fence (started_at_unix_millis <= closeMillis) leaves a newer same-node
 // session intact when the OS reused the connector PID; a fenced or already-ended close
@@ -4290,10 +4293,9 @@ func FinalizeIngestSessionClose(ctx context.Context, tenantID, nodeID string, co
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 
-	var claims []DVRStopClaim
 	playbackID := streamEventPlaybackID(ctx, internalName)
 	err := database.WithRetryablePostgresTx(ctx, db, nil, func(tx *sql.Tx) error {
-		res, claims = CloseFinalization{}, nil
+		res = CloseFinalization{}
 		// Serialize against CreateIngestSession on the SAME (tenant, stream) lock so a close-before-insert
 		// is ordered: either this close's tombstone commits before the mint reads it (the mint then denies
 		// the dead connector), or the mint commits first and the UPDATE below ends the row it created.
@@ -4325,16 +4327,6 @@ func FinalizeIngestSessionClose(ctx context.Context, tenantID, nodeID string, co
 		res.EndedSessionID = ended.ID
 		res.ClaimToken = ended.StartTriggerUuid
 		res.ClusterID = ended.ClusterID
-
-		// Claim the stop obligation for the DVR bound to THIS generation, in the SAME tx as the
-		// session end (atomic: either both commit and the durable stop_pending is drained by
-		// recovery even if the send below fails, or neither commits and the close is retried).
-		var claimErr error
-		claims, claimErr = ClaimDVRStops(ctx, tx,
-			`ingest_generation = $1::uuid AND tenant_id::text = $2`, ended.ID, tenantID)
-		if claimErr != nil {
-			return fmt.Errorf("claim DVR stop obligation for ingest generation: %w", claimErr)
-		}
 		if idleErr := domainevents.StreamIdle(ctx, tx, tenantID, ended.StreamID, playbackID); idleErr != nil {
 			return idleErr
 		}
@@ -4352,13 +4344,6 @@ func FinalizeIngestSessionClose(ctx context.Context, tenantID, nodeID string, co
 	if err != nil {
 		return CloseFinalization{}, err
 	}
-
-	// Durable now (survives the send failing). Dispatch best-effort AFTER commit.
-	if len(claims) > 0 {
-		res.DVRHash = claims[0].DVRHash
-		res.StorageNodeID = claims[0].StorageNodeID
-	}
-	DispatchDVRStops(claims, logger)
 	return res, nil
 }
 
@@ -4966,6 +4951,7 @@ func processDVRStopped(stopped *ipcpb.DVRStopped, session NodeSession, logger lo
 	go func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 		defer cancel()
+		detachEndedWriterFromLiveSession(ctx, dvrHash, logger)
 		final, err := FinalizeDVR(ctx, dvrHash, FinalizeOptions{
 			ReportedStatus:  status,
 			StartedAtUnix:   stopped.GetStartedAt(),
@@ -4991,6 +4977,26 @@ func processDVRStopped(stopped *ipcpb.DVRStopped, session NodeSession, logger lo
 		// The terminal DVR STOPPED lifecycle event is enqueued INSIDE FinalizeDVR's transaction (durable,
 		// atomic with the terminal state) — no separate crash-lossy callback here.
 	}()
+}
+
+// detachEndedWriterFromLiveSession runs before FinalizeDVR settles a recording whose writer
+// ended. A recording that ends while still active (no stop was claimed) and bound to a
+// session that is still live leaves that session unrecorded; detaching it hands the session
+// to DVR intent recovery, which starts it a fresh recording. A failure is logged and the
+// finalize proceeds: the recording itself is complete either way.
+func detachEndedWriterFromLiveSession(ctx context.Context, dvrHash string, logger logging.Logger) {
+	if db == nil {
+		return
+	}
+	internalName, err := foghorndb.New(db).DetachEndedWriterFromLiveSession(ctx, dvrHash)
+	switch {
+	case errors.Is(err, sql.ErrNoRows):
+	case err != nil:
+		logger.WithError(err).WithField("dvr_hash", dvrHash).Error("Failed to detach a recording whose writer ended from its live session")
+	default:
+		logger.WithFields(logging.Fields{"dvr_hash": dvrHash, "internal_name": internalName}).
+			Warn("Recording writer ended while its session is still live; the session will be recorded afresh")
+	}
 }
 
 // ResolveClipHash implements the ResolveClipHash RPC method

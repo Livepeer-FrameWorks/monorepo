@@ -94,6 +94,33 @@ WHERE stream_internal_name = sqlc.arg(stream_internal_name)
 ORDER BY created_at DESC
 LIMIT 1;
 
+-- name: AdoptResumedDVR :one
+-- A publisher that reconnects to the same Mist buffer within its resume window
+-- continues the recording the previous session started on that source node:
+-- the newest active recording bound to an ended generation is rebound to the
+-- new generation. Runs under the (stream, source node) DVR start lock.
+UPDATE foghorn.artifacts a
+SET ingest_generation = sqlc.arg(new_generation)::uuid,
+    dvr_start_dispatch = jsonb_set(a.dvr_start_dispatch, '{ingest_generation}', to_jsonb(sqlc.arg(new_generation)::text)),
+    updated_at = NOW()
+WHERE a.artifact_hash = (
+    SELECT c.artifact_hash
+    FROM foghorn.artifacts c
+    JOIN foghorn.ingest_sessions s ON s.id = c.ingest_generation
+    WHERE c.tenant_id = sqlc.arg(tenant_id)::uuid
+      AND c.stream_internal_name = sqlc.arg(stream_internal_name)
+      AND c.artifact_type = 'dvr'
+      AND c.status IN ('requested', 'starting', 'recording')
+      AND c.federated_pointer = false
+      AND c.dvr_start_dispatch->>'source_node_id' = sqlc.arg(source_node_id)::text
+      AND c.ingest_generation <> sqlc.arg(new_generation)::uuid
+      AND s.ended_at IS NOT NULL
+    ORDER BY c.created_at DESC
+    LIMIT 1
+    FOR UPDATE OF c
+)
+RETURNING a.artifact_hash, a.status;
+
 -- name: InsertRequestedDVRArtifact :exec
 INSERT INTO foghorn.artifacts (
     artifact_hash, artifact_type, stream_internal_name, internal_name,

@@ -145,8 +145,7 @@ func pushInputCloseTrigger(internalName string, pid int64) *ipcpb.MistTrigger {
 const endedGeneration = "11111111-2222-3333-4444-555555555555"
 
 // expectSessionFinalized mocks FinalizeIngestSessionClose ending a real
-// session: the UPDATE returns its generation and the DVR-stop claim finds
-// nothing to stop.
+// session: the UPDATE returns its generation. The close claims no DVR stop.
 // closingClaimToken owns the placement claim the seeded session took; the
 // release matches on it.
 const closingClaimToken = "trigger-uuid-1"
@@ -157,8 +156,6 @@ func expectSessionFinalized(mock sqlmock.Sqlmock, generation string) {
 	mock.ExpectQuery(`UPDATE foghorn\.ingest_sessions[\s\S]*RETURNING id`).
 		WillReturnRows(sqlmock.NewRows([]string{"id", "start_trigger_uuid", "ingest_cluster_id", "stream_id"}).
 			AddRow(generation, closingClaimToken, "demo-media", ""))
-	mock.ExpectQuery(`foghorn\.artifacts`).
-		WillReturnRows(sqlmock.NewRows([]string{"artifact_hash", "storage_node_id"}))
 	mock.ExpectQuery(`INSERT INTO foghorn.source_projection_revision_counter`).
 		WithArgs(sqlmock.AnyArg(), sqlmock.AnyArg()).
 		WillReturnRows(sqlmock.NewRows([]string{"revision"}).AddRow(int64(2)))

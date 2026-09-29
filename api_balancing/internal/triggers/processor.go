@@ -4134,13 +4134,12 @@ func (p *Processor) handlePushInputClose(trigger *ipcpb.MistTrigger) (string, bo
 		pic.NodeId = &nodeID
 	}
 
-	// Primary DVR finalizer: the publisher this close belongs to IS the ingest session
-	// that produced the recording. Atomically end that exact generation (event-time fenced
-	// against PID reuse) AND claim the stop obligation for its bound DVR, in one
-	// transaction, so a crash between the two can never strand a live writer. Requires
-	// Mist's connector PID (payload field 4); when absent, finalization falls to the
-	// node-keyed STREAM_END backstop. A finalize error is surfaced (retryable NACK) so the
-	// durable close is re-sent rather than silently acked.
+	// End the exact ingest generation this publisher held (event-time fenced against PID
+	// reuse). Its recording keeps running through Mist's resume window, so a reconnect to
+	// the same buffer continues it; Mist's buffer unload ends it otherwise (see
+	// FinalizeIngestSessionClose). Requires Mist's connector PID (payload field 4). A
+	// finalize error is surfaced (retryable NACK) so the durable close is re-sent rather
+	// than silently acked.
 	var closeFinalizeErr error
 	pid := pic.GetPid()
 	if pid <= 0 {
@@ -4172,7 +4171,6 @@ func (p *Processor) handlePushInputClose(trigger *ipcpb.MistTrigger) (string, bo
 			p.logger.WithFields(logging.Fields{
 				"internal_name":     internalName,
 				"ingest_generation": fin.EndedSessionID,
-				"dvr_hash":          fin.DVRHash,
 			}).Info("PUSH_INPUT_CLOSE finalized ingest session")
 			// Release THIS session's placement claim whenever it was durably ended — INDEPENDENT of
 			// whether this replica's local registry still holds the projection to flip. The release is

@@ -23,6 +23,11 @@ type Querier interface {
 	AdmissionGenerationActive(ctx context.Context, arg AdmissionGenerationActiveParams) (bool, error)
 	AdmissionPushTargetAttemptCurrent(ctx context.Context, arg AdmissionPushTargetAttemptCurrentParams) (bool, error)
 	AdoptRemoteArtifact(ctx context.Context, arg AdoptRemoteArtifactParams) (int64, error)
+	// A publisher that reconnects to the same Mist buffer within its resume window
+	// continues the recording the previous session started on that source node:
+	// the newest active recording bound to an ended generation is rebound to the
+	// new generation. Runs under the (stream, source node) DVR start lock.
+	AdoptResumedDVR(ctx context.Context, arg AdoptResumedDVRParams) (AdoptResumedDVRRow, error)
 	AdvanceActiveSourceProjectionRevision(ctx context.Context, arg AdvanceActiveSourceProjectionRevisionParams) (int64, error)
 	AdvanceAdmissionEffectSourceRevision(ctx context.Context, arg AdvanceAdmissionEffectSourceRevisionParams) (int64, error)
 	AdvanceCatalogWatermark(ctx context.Context, arg AdvanceCatalogWatermarkParams) error
@@ -154,6 +159,11 @@ type Querier interface {
 	DeleteVODMetadata(ctx context.Context, artifactHash string) error
 	DeleteVodMetadata(ctx context.Context, artifactHash string) error
 	DequeueThumbnailCleanup(ctx context.Context, objectKey string) error
+	// A recording whose writer ended on its own (no stop was claimed, so it is still
+	// active) while the session it is bound to is still live leaves that session
+	// unrecorded, e.g. a reconnect adopted a recording whose push Mist had just ended.
+	// Detaching it lets ClaimUnstartedDVRIntents start the session a fresh recording.
+	DetachEndedWriterFromLiveSession(ctx context.Context, artifactHash string) (string, error)
 	DtshSyncedForArtifact(ctx context.Context, artifactHash string) (bool, error)
 	EndLapsedPendingIngestSession(ctx context.Context, arg EndLapsedPendingIngestSessionParams) (EndLapsedPendingIngestSessionRow, error)
 	EndSupersededNodeIngestSession(ctx context.Context, arg EndSupersededNodeIngestSessionParams) (string, error)

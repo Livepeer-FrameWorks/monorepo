@@ -1665,6 +1665,33 @@ func dvrRecordingSupersededSession(dispatch sql.NullString, liveSourceNodeID, li
 	return d.SourceNodeID != "" && d.SourceNodeID != liveSourceNodeID
 }
 
+// adoptResumedDVR rebinds the recording a previous, now ended, session left running on
+// this source node to the starting session's generation, under the same (stream, source
+// node) lock as a fresh start. It adopts nothing when the start has no generation, when
+// the previous session's recording is already stopping or terminal, or when it runs for
+// another source node; the caller then records fresh.
+func (s *FoghornGRPCServer) adoptResumedDVR(ctx context.Context, req *sharedpb.StartDVRRequest, sourceNodeID string) (hash, recordingStatus string, adopted bool, err error) {
+	err = s.withArtifactLifecycleTx(ctx, func(tx *sql.Tx) error {
+		queries := foghorndb.New(tx)
+		if lockErr := queries.AcquireDVRStartLock(ctx, control.DVRStartLockKey(req.InternalName, sourceNodeID)); lockErr != nil {
+			return lockErr
+		}
+		row, adoptErr := queries.AdoptResumedDVR(ctx, foghorndb.AdoptResumedDVRParams{
+			NewGeneration: req.GetIngestGeneration(), TenantID: req.TenantId,
+			StreamInternalName: sql.NullString{String: req.InternalName, Valid: true}, SourceNodeID: sourceNodeID,
+		})
+		if errors.Is(adoptErr, sql.ErrNoRows) {
+			return nil
+		}
+		if adoptErr != nil {
+			return adoptErr
+		}
+		hash, recordingStatus, adopted = row.ArtifactHash, row.Status.String, true
+		return nil
+	})
+	return hash, recordingStatus, adopted, err
+}
+
 // respondExistingActiveDVR returns the correct start response for an already-active
 // DVR row for this stream: the honest reconciled in-flight state for a
 // requested/starting row (never a false already_started-dead), or already_started
@@ -1811,6 +1838,25 @@ func (s *FoghornGRPCServer) startDVR(ctx context.Context, req *sharedpb.StartDVR
 		// Unexpected DB error (not "no active DVR"): log and proceed as if none exists;
 		// a genuine duplicate is still caught by the advisory-lock re-check below.
 		s.logger.WithError(scanErr).WithField("internal_name", req.InternalName).Warn("Failed to check for existing active DVR")
+	}
+
+	if existingHash != "" && req.GetIngestGeneration() != "" {
+		// A reconnect to the same Mist buffer continues the recording its previous
+		// session left running there (the publisher's close does not stop it).
+		hash, recordingStatus, adopted, adoptErr := s.adoptResumedDVR(ctx, req, sourceNodeID)
+		if adoptErr != nil {
+			s.logger.WithError(adoptErr).WithField("internal_name", req.InternalName).Error("Failed to adopt the resumed session's recording")
+			return nil, status.Error(codes.Internal, "failed to adopt resumed recording")
+		}
+		if adopted {
+			s.logger.WithFields(logging.Fields{
+				"internal_name":     req.InternalName,
+				"dvr_hash":          hash,
+				"ingest_generation": req.GetIngestGeneration(),
+				"source_node":       sourceNodeID,
+			}).Info("Publisher resumed the stream on the same node; continuing its recording")
+			return s.respondExistingActiveDVR(ctx, req, hash, recordingStatus, baseURL)
+		}
 	}
 
 	if existingHash != "" && dvrRecordingSupersededSession(sql.NullString{String: existingDispatch, Valid: existingDispatch != ""}, sourceNodeID, req.GetIngestGeneration()) {

@@ -161,6 +161,18 @@ WHERE tenant_id  =  sqlc.arg(tenant_id)::uuid AND node_id  =  sqlc.arg(node_id) 
 RETURNING id::text AS id, start_trigger_uuid, COALESCE(ingest_cluster_id, '')::text AS cluster_id, COALESCE(stream_id::text, '')::text AS stream_id;
 -- name: InsertIngestCloseTombstone :exec
 INSERT INTO foghorn.ingest_close_tombstones (tenant_id, node_id, connector_pid, stream_internal_name, close_unix_millis) VALUES (sqlc.arg(tenant_id)::uuid, sqlc.arg(node_id), sqlc.arg(connector_pid), sqlc.arg(stream_internal_name), sqlc.arg(close_unix_millis));
+-- name: DetachEndedWriterFromLiveSession :one
+-- A recording whose writer ended on its own (no stop was claimed, so it is still
+-- active) while the session it is bound to is still live leaves that session
+-- unrecorded, e.g. a reconnect adopted a recording whose push Mist had just ended.
+-- Detaching it lets ClaimUnstartedDVRIntents start the session a fresh recording.
+UPDATE foghorn.artifacts a
+SET ingest_generation = NULL, updated_at = NOW()
+WHERE a.artifact_hash = sqlc.arg(artifact_hash)
+  AND a.artifact_type = 'dvr'
+  AND a.status IN ('requested', 'starting', 'recording')
+  AND EXISTS (SELECT 1 FROM foghorn.ingest_sessions s WHERE s.id = a.ingest_generation AND s.ended_at IS NULL)
+RETURNING COALESCE(a.stream_internal_name, '')::text AS stream_internal_name;
 -- name: ClaimUnstartedDVRIntents :many
 WITH claimed AS (SELECT s.id FROM foghorn.ingest_sessions s WHERE s.dvr_intent IS NOT NULL AND s.ended_at IS NULL AND s.dvr_intent_error IS NULL
 AND (s.dvr_intent_lease_until IS NULL OR s.dvr_intent_lease_until<NOW()) AND s.started_at<NOW()-(sqlc.arg(grace_seconds)::bigint*INTERVAL '1 second')

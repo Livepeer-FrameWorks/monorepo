@@ -19,6 +19,58 @@ func (q *Queries) AcquireDVRStartLock(ctx context.Context, lockKey string) error
 	return err
 }
 
+const adoptResumedDVR = `-- name: AdoptResumedDVR :one
+UPDATE foghorn.artifacts a
+SET ingest_generation = $1::uuid,
+    dvr_start_dispatch = jsonb_set(a.dvr_start_dispatch, '{ingest_generation}', to_jsonb($1::text)),
+    updated_at = NOW()
+WHERE a.artifact_hash = (
+    SELECT c.artifact_hash
+    FROM foghorn.artifacts c
+    JOIN foghorn.ingest_sessions s ON s.id = c.ingest_generation
+    WHERE c.tenant_id = $2::uuid
+      AND c.stream_internal_name = $3
+      AND c.artifact_type = 'dvr'
+      AND c.status IN ('requested', 'starting', 'recording')
+      AND c.federated_pointer = false
+      AND c.dvr_start_dispatch->>'source_node_id' = $4::text
+      AND c.ingest_generation <> $1::uuid
+      AND s.ended_at IS NOT NULL
+    ORDER BY c.created_at DESC
+    LIMIT 1
+    FOR UPDATE OF c
+)
+RETURNING a.artifact_hash, a.status
+`
+
+type AdoptResumedDVRParams struct {
+	NewGeneration      string         `db:"new_generation" json:"new_generation"`
+	TenantID           string         `db:"tenant_id" json:"tenant_id"`
+	StreamInternalName sql.NullString `db:"stream_internal_name" json:"stream_internal_name"`
+	SourceNodeID       string         `db:"source_node_id" json:"source_node_id"`
+}
+
+type AdoptResumedDVRRow struct {
+	ArtifactHash string         `db:"artifact_hash" json:"artifact_hash"`
+	Status       sql.NullString `db:"status" json:"status"`
+}
+
+// A publisher that reconnects to the same Mist buffer within its resume window
+// continues the recording the previous session started on that source node:
+// the newest active recording bound to an ended generation is rebound to the
+// new generation. Runs under the (stream, source node) DVR start lock.
+func (q *Queries) AdoptResumedDVR(ctx context.Context, arg AdoptResumedDVRParams) (AdoptResumedDVRRow, error) {
+	row := q.db.QueryRowContext(ctx, adoptResumedDVR,
+		arg.NewGeneration,
+		arg.TenantID,
+		arg.StreamInternalName,
+		arg.SourceNodeID,
+	)
+	var i AdoptResumedDVRRow
+	err := row.Scan(&i.ArtifactHash, &i.Status)
+	return i, err
+}
+
 const advanceVodToProcessing = `-- name: AdvanceVodToProcessing :execrows
 UPDATE foghorn.artifacts AS a
 SET status = 'processing',
