@@ -184,7 +184,7 @@ func (q *Queries) CompleteMainArtifactSync(ctx context.Context, arg CompleteMain
 }
 
 const completeProcessingJob = `-- name: CompleteProcessingJob :exec
-UPDATE foghorn.processing_jobs SET status = 'completed', progress = 100, output_metadata = $2, completed_at = NOW(), updated_at = NOW() WHERE job_id = $1
+UPDATE foghorn.processing_jobs SET status = 'completed', progress = 100, output_metadata = $2, error_message = NULL, completed_at = NOW(), updated_at = NOW() WHERE job_id = $1
 `
 
 type CompleteProcessingJobParams struct {
@@ -192,6 +192,7 @@ type CompleteProcessingJobParams struct {
 	OutputMetadata sql.NullString `db:"output_metadata" json:"output_metadata"`
 }
 
+// A requeue records why the previous attempt failed; the attempt that completes supersedes it.
 func (q *Queries) CompleteProcessingJob(ctx context.Context, arg CompleteProcessingJobParams) error {
 	_, err := q.db.ExecContext(ctx, completeProcessingJob, arg.JobID, arg.OutputMetadata)
 	return err

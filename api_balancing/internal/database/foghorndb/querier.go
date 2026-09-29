@@ -106,6 +106,7 @@ type Querier interface {
 	CompleteDVRFinalization(ctx context.Context, arg CompleteDVRFinalizationParams) (int64, error)
 	CompleteIncrementalDtshSync(ctx context.Context, arg CompleteIncrementalDtshSyncParams) (int64, error)
 	CompleteMainArtifactSync(ctx context.Context, arg CompleteMainArtifactSyncParams) (int64, error)
+	// A requeue records why the previous attempt failed; the attempt that completes supersedes it.
 	CompleteProcessingJob(ctx context.Context, arg CompleteProcessingJobParams) error
 	// Only a fetch begun after a trust barrier can confirm the held version.
 	ConfirmMediaAuthority(ctx context.Context, arg ConfirmMediaAuthorityParams) error

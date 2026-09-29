@@ -6,6 +6,8 @@ import (
 	"database/sql"
 	"testing"
 
+	"frameworks/api_balancing/internal/database/foghorndb"
+
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/events"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	publicv1 "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/events/public/v1"
@@ -79,6 +81,29 @@ func TestProcessingFailureReachesFailed_RealPG(t *testing.T) {
 	}
 	if failed.GetReason() != publicv1.MediaFailureReason_MEDIA_FAILURE_REASON_SOURCE_UNAVAILABLE {
 		t.Fatalf("upload.failed reason = %s, want SOURCE_UNAVAILABLE", failed.GetReason())
+	}
+}
+
+// A job retried after a failed attempt and then completed reports no error: the
+// requeue's reason described the attempt the completion superseded.
+func TestCompletedProcessingJobClearsRetryReason_RealPG(t *testing.T) {
+	conn := startRealPG(t)
+	seedActiveImportJob(t, conn)
+	if _, err := conn.Exec(`UPDATE foghorn.processing_jobs SET retry_count = 1,
+		error_message = 'recording validation failed: PROCESS_TRACKS_CHANGED' WHERE job_id = $1::uuid`, processingFailureJob); err != nil {
+		t.Fatal(err)
+	}
+	if err := foghorndb.New(conn).CompleteProcessingJob(t.Context(), foghorndb.CompleteProcessingJobParams{JobID: processingFailureJob}); err != nil {
+		t.Fatal(err)
+	}
+	var status string
+	var jobErr sql.NullString
+	var retries int
+	if err := conn.QueryRow(`SELECT status, error_message, retry_count FROM foghorn.processing_jobs WHERE job_id = $1::uuid`, processingFailureJob).Scan(&status, &jobErr, &retries); err != nil {
+		t.Fatal(err)
+	}
+	if status != "completed" || jobErr.Valid || retries != 1 {
+		t.Fatalf("job = %q error=%v retries=%d, want completed with no error and the retry kept", status, jobErr, retries)
 	}
 }
 

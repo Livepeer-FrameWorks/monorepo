@@ -48,7 +48,8 @@ bitrate_kbps = NULLIF(sqlc.narg(bitrate_kbps)::text, '')::integer, width = NULLI
 fps = NULLIF(sqlc.narg(fps)::text, '')::real, audio_channels = NULLIF(sqlc.narg(audio_channels)::text, '')::integer, audio_sample_rate = NULLIF(sqlc.narg(audio_sample_rate)::text, '')::integer,
 updated_at = NOW() WHERE artifact_hash = sqlc.arg(artifact_hash);
 -- name: CompleteProcessingJob :exec
-UPDATE foghorn.processing_jobs SET status = 'completed', progress = 100, output_metadata = sqlc.narg(output_metadata), completed_at = NOW(), updated_at = NOW() WHERE job_id = $1;
+-- A requeue records why the previous attempt failed; the attempt that completes supersedes it.
+UPDATE foghorn.processing_jobs SET status = 'completed', progress = 100, output_metadata = sqlc.narg(output_metadata), error_message = NULL, completed_at = NOW(), updated_at = NOW() WHERE job_id = $1;
 -- name: LockProcessingJobForFailure :one
 SELECT pj.status, COALESCE(pj.processing_node_id, '')::text AS processing_node_id, COALESCE(a.artifact_hash, '')::text AS artifact_hash, COALESCE(a.artifact_type, '')::text AS artifact_type, COALESCE(a.tenant_id::text, '')::text AS tenant_id, COALESCE(a.stream_id::text, '')::text AS stream_id, COALESCE(a.stream_internal_name, '')::text AS stream_internal_name
 FROM foghorn.processing_jobs pj LEFT JOIN foghorn.artifacts a ON pj.artifact_hash = a.artifact_hash WHERE pj.job_id = $1 FOR UPDATE OF pj;
