@@ -18,6 +18,7 @@ import (
 	"frameworks/api_billing/internal/database/purserdb"
 
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/database"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/shopspring/decimal"
 )
@@ -63,19 +64,72 @@ type observedDeposit struct {
 }
 
 func (cm *CryptoMonitor) scanRPCDeposits(ctx context.Context) {
-	for _, network := range DepositNetworks(cm.includeTestnets) {
-		if network.GetRPCEndpointWithDefault() == "" {
-			cm.recordScannerError(ctx, network.Name, "configuration", "configuration", "RPC endpoint is not configured")
-			continue
-		}
-		if err := cm.scanRPCNetwork(ctx, network); err != nil {
-			cm.recordScannerError(ctx, network.Name, cryptoScannerErrorStage(err), cryptoScannerErrorReason(err), err.Error())
-			cm.logger.WithError(err).WithField("network", network.Name).Warn("Crypto RPC scan failed")
+	if cm.depositScanActive(ctx) {
+		for _, network := range DepositNetworks(cm.includeTestnets) {
+			var err error
+			if network.GetRPCEndpointWithDefault() == "" {
+				err = newCryptoScannerError("configuration", fmt.Errorf("%s is not configured", network.RPCEndpointEnv))
+			} else {
+				err = cm.scanRPCNetwork(ctx, network)
+			}
+			cm.noteNetworkScanResult(ctx, network.Name, err)
 		}
 	}
 	cm.allocateConfirmedDepositEvents(ctx)
 	cm.reconcileCompletedCryptoTopupInvoices(ctx)
 	cm.refreshCryptoCustodyMetrics(ctx)
+}
+
+// depositScanActive reports whether any deposit address can exist. Deposit
+// addresses are derived from the HD wallet xpub, so until hd_wallet_state holds
+// one there is nothing to observe and the chain scan stays idle. The state is
+// re-read every tick because an operator can initialize the xpub at runtime;
+// each change of state or inactive reason is logged once.
+func (cm *CryptoMonitor) depositScanActive(ctx context.Context) bool {
+	reason := ""
+	xpub, err := purserdb.New(cm.db).GetHDWalletXpub(ctx)
+	switch {
+	case errors.Is(err, sql.ErrNoRows) || (err == nil && strings.TrimSpace(xpub) == ""):
+		reason = "HD wallet xpub is not initialized; no deposit address can exist"
+	case err != nil:
+		reason = "read hd_wallet_state: " + err.Error()
+	}
+	if cm.scanState == nil || *cm.scanState != reason {
+		if reason == "" {
+			cm.logger.Info("Crypto deposit scanner active")
+		} else {
+			cm.logger.WithField("reason", reason).Info("Crypto deposit scanner inactive")
+		}
+		cm.scanState = &reason
+	}
+	return reason == ""
+}
+
+// noteNetworkScanResult records every failed scan in the scanner error metric
+// and cursor row, and logs a network's failure only when its stage or reason
+// changes, plus once on recovery.
+func (cm *CryptoMonitor) noteNetworkScanResult(ctx context.Context, network string, err error) {
+	if cm.networkFailures == nil {
+		cm.networkFailures = map[string]string{}
+	}
+	previous, failing := cm.networkFailures[network]
+	if err == nil {
+		if failing {
+			delete(cm.networkFailures, network)
+			cm.logger.WithField("network", network).Info("Crypto RPC scan recovered")
+		}
+		return
+	}
+	stage, reason := cryptoScannerErrorStage(err), cryptoScannerErrorReason(err)
+	cm.recordScannerError(ctx, network, stage, reason, err.Error())
+	key := stage + "/" + reason
+	if failing && previous == key {
+		return
+	}
+	cm.networkFailures[network] = key
+	cm.logger.WithError(err).WithFields(logging.Fields{
+		"network": network, "stage": stage, "reason": reason,
+	}).Warn("Crypto RPC scan failed")
 }
 
 func (cm *CryptoMonitor) scanRPCNetwork(ctx context.Context, network NetworkConfig) error {
@@ -218,11 +272,22 @@ func cryptoScannerErrorReason(err error) string {
 }
 
 func (cm *CryptoMonitor) loadOrCreateScanCursor(ctx context.Context, network NetworkConfig, safeHead int64) (int64, sql.NullInt64, sql.NullString, error) {
-	start, err := cryptoScannerStartBlock(network.Name, safeHead)
+	queries := purserdb.New(cm.db)
+	cursor, err := queries.GetCryptoScanCursor(ctx, network.Name)
+	if err == nil {
+		return cursor.NextBlock, cursor.LastScannedBlock, cursor.LastScannedBlockHash, nil
+	}
+	if !errors.Is(err, sql.ErrNoRows) {
+		return 0, sql.NullInt64{}, sql.NullString{}, err
+	}
+	addresses, err := queries.ListKnownCryptoDepositAddresses(ctx, network.Name)
 	if err != nil {
 		return 0, sql.NullInt64{}, sql.NullString{}, err
 	}
-	queries := purserdb.New(cm.db)
+	start, err := cryptoScannerStartBlock(network.Name, safeHead, len(addresses))
+	if err != nil {
+		return 0, sql.NullInt64{}, sql.NullString{}, err
+	}
 	err = queries.EnsureCryptoScanCursor(ctx, purserdb.EnsureCryptoScanCursorParams{
 		Network: network.Name, NextBlock: start,
 		SafeHeadBlock: sql.NullInt64{Int64: safeHead, Valid: true},
@@ -230,33 +295,50 @@ func (cm *CryptoMonitor) loadOrCreateScanCursor(ctx context.Context, network Net
 	if err != nil {
 		return 0, sql.NullInt64{}, sql.NullString{}, err
 	}
-	cursor, err := queries.GetCryptoScanCursor(ctx, network.Name)
+	cursor, err = queries.GetCryptoScanCursor(ctx, network.Name)
 	return cursor.NextBlock, cursor.LastScannedBlock, cursor.LastScannedBlockHash, err
 }
 
-func cryptoScannerStartBlock(network string, safeHead int64) (int64, error) {
-	rt := appconfig.Runtime()
-	key := "CRYPTO_SCAN_START_BLOCK_" + strings.ToUpper(strings.ReplaceAll(network, "-", "_"))
-	value := rt.NetworkSetting(key)
-	if value != "" {
-		start, err := strconv.ParseInt(value, 10, 64)
-		if err != nil || start < 0 {
-			return 0, fmt.Errorf("%s must be a non-negative block number", key)
-		}
-		return start, nil
+// cryptoScannerStartBlock picks where a network's first cursor starts. An
+// explicit CRYPTO_SCAN_START_BLOCK_<NETWORK> always wins. Without one, a
+// network with no issued deposit addresses starts at the safe head: a transfer
+// to an address can only land after the address is issued, which is after the
+// current finalized head. Only a network that already has addresses but no
+// cursor needs the explicit anchor in production, because starting at the head
+// could skip deposits to those addresses; outside production it starts 1000
+// blocks behind the safe head.
+func cryptoScannerStartBlock(network string, safeHead int64, knownAddresses int) (int64, error) {
+	key := cryptoNetworkEnvKey("CRYPTO_SCAN_START_BLOCK", network)
+	start, explicit, err := explicitCryptoScannerStart(key)
+	if err != nil || explicit {
+		return start, err
 	}
-	if rt.IsProduction() {
-		return 0, fmt.Errorf("%s is required in production", key)
+	if knownAddresses == 0 {
+		return max(safeHead, 0), nil
 	}
-	start := safeHead - 1000
-	if start < 0 {
-		start = 0
+	if appconfig.Runtime().IsProduction() {
+		return 0, fmt.Errorf("%s is required in production: %d deposit addresses exist on %s without a scan cursor", key, knownAddresses, network)
 	}
-	return start, nil
+	return max(safeHead-1000, 0), nil
 }
 
+func explicitCryptoScannerStart(key string) (int64, bool, error) {
+	value := appconfig.Runtime().NetworkSetting(key)
+	if value == "" {
+		return 0, false, nil
+	}
+	start, err := strconv.ParseInt(value, 10, 64)
+	if err != nil || start < 0 {
+		return 0, true, fmt.Errorf("%s must be a non-negative block number", key)
+	}
+	return start, true, nil
+}
+
+// ValidateCryptoScannerStart rejects a malformed explicit start block. An
+// absent value is valid: the scanner derives the start or records why it
+// cannot, which readiness sees through the cursor's last error.
 func ValidateCryptoScannerStart(network string) error {
-	_, err := cryptoScannerStartBlock(network, 0)
+	_, _, err := explicitCryptoScannerStart(cryptoNetworkEnvKey("CRYPTO_SCAN_START_BLOCK", network))
 	return err
 }
 

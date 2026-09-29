@@ -150,9 +150,10 @@ silently mark the invoice paid.
 Native ETH must be sent as a top-level transaction to the deposit address;
 internal contract transfers are not an accepted deposit method. USDC is read
 from contract `Transfer` logs. Both use restart-safe JSON-RPC cursors and
-separate deposit-event records. Production operators configure an explicit
-`CRYPTO_SCAN_START_BLOCK_<NETWORK>` anchor so initial deployment cannot skip
-older issued addresses.
+separate deposit-event records. A network's first cursor starts at the
+finalized head before any address is issued there, so no deposit can predate
+it; recreating a cursor for a network that already has issued addresses
+requires an explicit `CRYPTO_SCAN_START_BLOCK_<NETWORK>` anchor in production.
 
 LPT is not supported as a top-up asset. Chainlink doesn't publish an official LPT/USD aggregator, so `topup_balance` rejects `asset: "LPT"`.
 

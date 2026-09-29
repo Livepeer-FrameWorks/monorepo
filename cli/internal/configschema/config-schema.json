@@ -1584,31 +1584,31 @@
           "key": "CRYPTO_SCAN_START_BLOCK_ETHEREUM",
           "type": "string",
           "introduced": "v0.3.0",
-          "description": "Ethereum mainnet block where the crypto deposit scanner starts when it has no cursor. Required in production; otherwise the scan starts 1000 blocks behind the safe head."
+          "description": "Ethereum mainnet block where the crypto deposit scanner starts when it has no cursor. Unset, a network with no issued deposit addresses starts at the safe head; a network that already has addresses but lost its cursor requires it in production and otherwise starts 1000 blocks behind the safe head."
         },
         {
           "key": "CRYPTO_SCAN_START_BLOCK_BASE",
           "type": "string",
           "introduced": "v0.3.0",
-          "description": "Base mainnet block where the crypto deposit scanner starts when it has no cursor. Required in production; otherwise the scan starts 1000 blocks behind the safe head."
+          "description": "Base mainnet block where the crypto deposit scanner starts when it has no cursor. Unset, a network with no issued deposit addresses starts at the safe head; a network that already has addresses but lost its cursor requires it in production and otherwise starts 1000 blocks behind the safe head."
         },
         {
           "key": "CRYPTO_SCAN_START_BLOCK_ARBITRUM",
           "type": "string",
           "introduced": "v0.3.0",
-          "description": "Arbitrum One block where the crypto deposit scanner starts when it has no cursor. Required in production; otherwise the scan starts 1000 blocks behind the safe head."
+          "description": "Arbitrum One block where the crypto deposit scanner starts when it has no cursor. Unset, a network with no issued deposit addresses starts at the safe head; a network that already has addresses but lost its cursor requires it in production and otherwise starts 1000 blocks behind the safe head."
         },
         {
           "key": "CRYPTO_SCAN_START_BLOCK_BASE_SEPOLIA",
           "type": "string",
           "introduced": "v0.3.0",
-          "description": "Base Sepolia block where the crypto deposit scanner starts when it has no cursor. Required in production; otherwise the scan starts 1000 blocks behind the safe head."
+          "description": "Base Sepolia block where the crypto deposit scanner starts when it has no cursor. Unset, a network with no issued deposit addresses starts at the safe head; a network that already has addresses but lost its cursor requires it in production and otherwise starts 1000 blocks behind the safe head."
         },
         {
           "key": "CRYPTO_SCAN_START_BLOCK_ARBITRUM_SEPOLIA",
           "type": "string",
           "introduced": "v0.3.0",
-          "description": "Arbitrum Sepolia block where the crypto deposit scanner starts when it has no cursor. Required in production; otherwise the scan starts 1000 blocks behind the safe head."
+          "description": "Arbitrum Sepolia block where the crypto deposit scanner starts when it has no cursor. Unset, a network with no issued deposit addresses starts at the safe head; a network that already has addresses but lost its cursor requires it in production and otherwise starts 1000 blocks behind the safe head."
         },
         {
           "key": "CRYPTO_DEPOSITS_ENABLED",

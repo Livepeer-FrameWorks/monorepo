@@ -2,15 +2,20 @@ package handlers
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
+	"sync/atomic"
 	"testing"
 
 	"frameworks/api_billing/internal/appconfig/appconfigtest"
 	"github.com/DATA-DOG/go-sqlmock"
+	"github.com/sirupsen/logrus"
+	logtest "github.com/sirupsen/logrus/hooks/test"
 )
 
 func TestCryptoScannerErrorStage(t *testing.T) {
@@ -63,25 +68,186 @@ func TestHexQuantityToDecimal(t *testing.T) {
 	}
 }
 
-func TestCryptoScannerStartBlockRequiresProductionAnchor(t *testing.T) {
-	appconfigtest.Set(t, "BUILD_ENV", "production")
-	appconfigtest.Set(t, "CRYPTO_SCAN_START_BLOCK_BASE", "")
-	if _, err := cryptoScannerStartBlock("base", 10_000); err == nil {
-		t.Fatal("production scanner accepted an implicit start block")
+func TestCryptoScannerStartBlock(t *testing.T) {
+	tests := map[string]struct {
+		buildEnv  string
+		anchor    string
+		safeHead  int64
+		addresses int
+		want      int64
+		wantErr   string
+	}{
+		"explicit anchor wins":                     {buildEnv: "production", anchor: "1234", addresses: 3, want: 1234},
+		"malformed anchor is refused":              {buildEnv: "production", anchor: "-5", wantErr: "must be a non-negative block number"},
+		"production without addresses uses head":   {buildEnv: "production", want: 10_000},
+		"production with addresses needs anchor":   {buildEnv: "production", addresses: 3, wantErr: "CRYPTO_SCAN_START_BLOCK_BASE is required in production: 3 deposit addresses exist on base"},
+		"development without addresses uses head":  {buildEnv: "development", want: 10_000},
+		"development with addresses looks back":    {buildEnv: "development", addresses: 3, want: 9_000},
+		"development look-back is bounded at zero": {buildEnv: "development", safeHead: 500, addresses: 1, want: 0},
 	}
-	appconfigtest.Set(t, "CRYPTO_SCAN_START_BLOCK_BASE", "1234")
-	got, err := cryptoScannerStartBlock("base", 10_000)
-	if err != nil || got != 1234 {
-		t.Fatalf("start block = %d, %v", got, err)
+	for name, test := range tests {
+		t.Run(name, func(t *testing.T) {
+			appconfigtest.Set(t, "BUILD_ENV", test.buildEnv)
+			appconfigtest.Set(t, "CRYPTO_SCAN_START_BLOCK_BASE", test.anchor)
+			safeHead := test.safeHead
+			if safeHead == 0 {
+				safeHead = 10_000
+			}
+			got, err := cryptoScannerStartBlock("base", safeHead, test.addresses)
+			if test.wantErr != "" {
+				if err == nil || !strings.Contains(err.Error(), test.wantErr) {
+					t.Fatalf("err = %v, want %q", err, test.wantErr)
+				}
+				return
+			}
+			if err != nil || got != test.want {
+				t.Fatalf("start block = %d, %v; want %d", got, err, test.want)
+			}
+		})
 	}
 }
 
-func TestCryptoScannerDevelopmentBootstrapIsBounded(t *testing.T) {
-	appconfigtest.Set(t, "BUILD_ENV", "development")
-	appconfigtest.Set(t, "CRYPTO_SCAN_START_BLOCK_BASE", "")
-	got, err := cryptoScannerStartBlock("base", 10_000)
-	if err != nil || got != 9_000 {
-		t.Fatalf("start block = %d, %v", got, err)
+func TestValidateCryptoScannerStartOnlyRejectsMalformedAnchor(t *testing.T) {
+	appconfigtest.Set(t, "BUILD_ENV", "production")
+	appconfigtest.Set(t, "CRYPTO_SCAN_START_BLOCK_BASE_SEPOLIA", "")
+	if err := ValidateCryptoScannerStart("base-sepolia"); err != nil {
+		t.Fatalf("absent anchor refused: %v", err)
+	}
+	appconfigtest.Set(t, "CRYPTO_SCAN_START_BLOCK_BASE_SEPOLIA", "not-a-block")
+	if err := ValidateCryptoScannerStart("base-sepolia"); err == nil {
+		t.Fatal("malformed anchor accepted")
+	}
+}
+
+// A production network that has never issued a deposit address gets its first
+// cursor at the safe head without an explicit anchor.
+func TestLoadOrCreateScanCursorDerivesStartWithoutIssuedAddresses(t *testing.T) {
+	appconfigtest.Set(t, "BUILD_ENV", "production")
+	appconfigtest.Set(t, "CRYPTO_SCAN_START_BLOCK_BASE_SEPOLIA", "")
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	mock.MatchExpectationsInOrder(false)
+	cursorColumns := []string{"next_block", "last_scanned_block", "last_scanned_block_hash"}
+	mock.ExpectQuery("FROM purser.crypto_scan_cursors").WithArgs("base-sepolia").
+		WillReturnRows(sqlmock.NewRows(cursorColumns))
+	mock.ExpectQuery("FROM purser.crypto_wallets").WithArgs("base-sepolia").
+		WillReturnRows(sqlmock.NewRows([]string{"wallet_address"}))
+	mock.ExpectExec("INSERT INTO purser.crypto_scan_cursors").
+		WithArgs("base-sepolia", int64(7_000), int64(7_000)).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectQuery("FROM purser.crypto_scan_cursors").WithArgs("base-sepolia").
+		WillReturnRows(sqlmock.NewRows(cursorColumns).AddRow(int64(7_000), nil, nil))
+
+	monitor := &CryptoMonitor{db: db}
+	next, _, _, err := monitor.loadOrCreateScanCursor(context.Background(), Networks["base-sepolia"], 7_000)
+	if err != nil {
+		t.Fatalf("loadOrCreateScanCursor: %v", err)
+	}
+	if next != 7_000 {
+		t.Fatalf("next block = %d, want the safe head 7000", next)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+type countingRPC struct {
+	calls atomic.Int64
+	fail  bool
+}
+
+func (c *countingRPC) serve(t *testing.T) *httptest.Server {
+	t.Helper()
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		defer request.Body.Close()
+		c.calls.Add(1)
+		if c.fail {
+			writer.WriteHeader(http.StatusServiceUnavailable)
+			return
+		}
+		_ = json.NewEncoder(writer).Encode(map[string]any{"jsonrpc": "2.0", "id": 1, "result": "0x10"})
+	}))
+	t.Cleanup(server.Close)
+	for _, network := range Networks {
+		appconfigtest.Set(t, network.RPCEndpointEnv, server.URL)
+	}
+	return server
+}
+
+func logMessages(hook *logtest.Hook, level logrus.Level, message string) int {
+	count := 0
+	for _, entry := range hook.AllEntries() {
+		if entry.Level == level && entry.Message == message {
+			count++
+		}
+	}
+	return count
+}
+
+// Without an HD wallet xpub no deposit address can exist: the scanner makes no
+// RPC calls, records no scanner errors, and says so once.
+func TestScanRPCDepositsIsInactiveWithoutHDWalletXpub(t *testing.T) {
+	appconfigtest.Set(t, "BUILD_ENV", "production")
+	rpc := &countingRPC{}
+	rpc.serve(t)
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	for range 3 {
+		mock.ExpectQuery("FROM purser.hd_wallet_state").WillReturnError(sql.ErrNoRows)
+	}
+	logger, hook := logtest.NewNullLogger()
+	monitor := &CryptoMonitor{db: db, logger: logger, rpc: NewRPCClient(), includeTestnets: true}
+	for range 3 {
+		monitor.scanRPCDeposits(context.Background())
+	}
+	if got := rpc.calls.Load(); got != 0 {
+		t.Fatalf("RPC calls = %d, want none while no deposit address can exist", got)
+	}
+	if got := logMessages(hook, logrus.WarnLevel, "Crypto RPC scan failed"); got != 0 {
+		t.Fatalf("scan failure warnings = %d, want none", got)
+	}
+	if got := logMessages(hook, logrus.InfoLevel, "Crypto deposit scanner inactive"); got != 1 {
+		t.Fatalf("inactive notices = %d, want exactly one", got)
+	}
+}
+
+// A persistent per-network failure is logged once per network, not per tick,
+// and recovery is logged once.
+func TestScanRPCDepositsLogsPersistentFailureOnce(t *testing.T) {
+	appconfigtest.Set(t, "BUILD_ENV", "production")
+	rpc := &countingRPC{fail: true}
+	rpc.serve(t)
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	for range 3 {
+		mock.ExpectQuery("FROM purser.hd_wallet_state").
+			WillReturnRows(sqlmock.NewRows([]string{"xpub"}).AddRow("xpub-test"))
+	}
+	logger, hook := logtest.NewNullLogger()
+	monitor := &CryptoMonitor{db: db, logger: logger, rpc: NewRPCClient(), includeTestnets: true}
+	for range 3 {
+		monitor.scanRPCDeposits(context.Background())
+	}
+	if rpc.calls.Load() == 0 {
+		t.Fatal("active scanner made no RPC calls")
+	}
+	networks := len(DepositNetworks(true))
+	if got := logMessages(hook, logrus.WarnLevel, "Crypto RPC scan failed"); got != networks {
+		t.Fatalf("scan failure warnings = %d over 3 ticks, want one per network (%d)", got, networks)
+	}
+	monitor.noteNetworkScanResult(context.Background(), "base", nil)
+	monitor.noteNetworkScanResult(context.Background(), "base", nil)
+	if got := logMessages(hook, logrus.InfoLevel, "Crypto RPC scan recovered"); got != 1 {
+		t.Fatalf("recovery notices = %d, want one", got)
 	}
 }
 

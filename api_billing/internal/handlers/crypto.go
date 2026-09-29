@@ -42,6 +42,11 @@ type CryptoMonitor struct {
 	rpc             *RPCClient
 	metrics         *PurserMetrics
 	taxInvoices     *X402Handler
+	// scanState is the last logged scanner inactive reason ("" = active);
+	// nil until the first tick. Only the monitor goroutine touches it.
+	scanState *string
+	// networkFailures holds each failing network's last logged stage/reason.
+	networkFailures map[string]string
 }
 
 // CryptoTransaction represents a blockchain transaction
