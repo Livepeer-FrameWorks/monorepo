@@ -2211,6 +2211,15 @@ func isMediaHealthTrack(trackType, codec string) bool {
 	return true
 }
 
+// countsTowardStreamHealth mirrors Mist's getHealthJSON, which judges stream
+// stability on original continuous-media tracks only. A process output (a
+// transcoded rendition) arrives in its producer's delivery rhythm, whole
+// segments at a time, so its jitter and buffer describe that process rather
+// than the ingest.
+func countsTowardStreamHealth(trackType, codec, sourceTrack string) bool {
+	return sourceTrack == "" && isMediaHealthTrack(trackType, codec)
+}
+
 // enrichStreamBufferTrigger computes Helmsman-specific metrics from parsed tracks
 func enrichStreamBufferTrigger(trigger *ipcpb.StreamBufferTrigger) {
 	if trigger == nil {
@@ -2235,7 +2244,7 @@ func enrichStreamBufferTrigger(trigger *ipcpb.StreamBufferTrigger) {
 
 	// Optionally append Helmsman's derived analysis (supplementary diagnostics)
 	for _, track := range tracks {
-		if !isMediaHealthTrack(track.GetTrackType(), track.GetCodec()) {
+		if !countsTowardStreamHealth(track.GetTrackType(), track.GetCodec(), track.GetSourceTrack()) {
 			continue
 		}
 		// Check for high jitter (>100ms is concerning)

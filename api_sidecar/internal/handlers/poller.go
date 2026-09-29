@@ -1654,6 +1654,9 @@ func (pm *PrometheusMonitor) processObservedStreamDataContext(ctx context.Contex
 					if idx, ok := trackMap["idx"].(float64); ok {
 						trackDetail["track_index"] = int(idx)
 					}
+					if source, ok := trackMap["source"].(string); ok && source != "" {
+						trackDetail["source_track"] = source
+					}
 
 					// Extract bitrate (this is the real-time accurate bitrate!)
 					if kbits, ok := trackMap["kbits"].(float64); ok {
@@ -3873,7 +3876,7 @@ func convertStreamAPIToMistTrigger(nodeID, streamName, internalName string, stre
 	}
 
 	for _, track := range trackDetails {
-		if !isMediaHealthTrack(getString(track["type"]), getString(track["codec"])) {
+		if !countsTowardStreamHealth(getString(track["type"]), getString(track["codec"]), getString(track["source_track"])) {
 			continue
 		}
 		if jitter, ok := track["jitter"].(int); ok && jitter > 100 {
