@@ -359,26 +359,98 @@ func TestHandleGetAsset_QueryDoesNotBypassServerCache(t *testing.T) {
 	}
 }
 
-// Readiness proves ONLY that this instance can read its immutable backend: a reachable store is healthy, an
-// unreachable one is unhealthy. No resolver, no Foghorn.
+// Readiness proves ONLY that this instance can read its immutable backend, from the recorded background probe: not
+// ready before the first successful sentinel read, ready once one succeeded, and still ready through failures shorter
+// than storeReadinessWindow. A store that stays unreadable past the window is not ready, and the next successful
+// read restores readiness. No resolver, no Foghorn.
 func TestStoreReadinessCheck(t *testing.T) {
-	fake := &fakeS3{data: []byte("jpeg-data")}
+	newHandler := func() (*AssetHandler, *time.Time) {
+		h, _, _, _ := newTestHandler(&fakeS3{data: []byte("ready")}, "")
+		now := time.Date(2026, 9, 29, 12, 0, 0, 0, time.UTC)
+		h.now = func() time.Time { return now }
+		return h, &now
+	}
+	stall := errors.New("get readiness sentinel: context deadline exceeded")
 
-	t.Run("store reachable is healthy", func(t *testing.T) {
-		h, _, _, _ := newTestHandler(fake, "")
-		h.storeReachableFn = func(context.Context) bool { return true }
+	t.Run("not ready before any sentinel read", func(t *testing.T) {
+		h, _ := newHandler()
+		if got := h.StoreReadinessCheck()(); got.Status != monitoring.StatusUnhealthy {
+			t.Fatalf("expected unhealthy before the first probe, got %+v", got)
+		}
+	})
+
+	t.Run("not ready while the sentinel was never readable, with the reason", func(t *testing.T) {
+		h, _ := newHandler()
+		h.recordStoreProbe(errors.New("AccessDenied"))
+		got := h.StoreReadinessCheck()()
+		if got.Status != monitoring.StatusUnhealthy || !strings.Contains(got.Message, "AccessDenied") {
+			t.Fatalf("expected unhealthy naming the probe failure, got %+v", got)
+		}
+	})
+
+	t.Run("a failure inside the window keeps the instance ready", func(t *testing.T) {
+		h, now := newHandler()
+		h.recordStoreProbe(nil)
+		*now = now.Add(storeProbeInterval)
+		h.recordStoreProbe(stall)
+		*now = now.Add(storeProbeInterval)
+		if got := h.StoreReadinessCheck()(); got.Status != monitoring.StatusHealthy {
+			t.Fatalf("expected healthy after one failed read inside the window, got %+v", got)
+		}
+	})
+
+	t.Run("a store unreadable past the window is not ready until it reads again", func(t *testing.T) {
+		h, now := newHandler()
+		h.recordStoreProbe(nil)
+		*now = now.Add(storeReadinessWindow + time.Second)
+		h.recordStoreProbe(stall)
+		got := h.StoreReadinessCheck()()
+		if got.Status != monitoring.StatusUnhealthy || !strings.Contains(got.Message, "deadline exceeded") {
+			t.Fatalf("expected unhealthy naming the probe failure past the window, got %+v", got)
+		}
+		h.recordStoreProbe(nil)
+		if got := h.StoreReadinessCheck()(); got.Status != monitoring.StatusHealthy {
+			t.Fatalf("expected healthy after the sentinel reads again, got %+v", got)
+		}
+	})
+
+	t.Run("the check never reads the store itself", func(t *testing.T) {
+		h, _ := newHandler()
+		h.storeProbeFn = func(context.Context) error {
+			t.Fatal("StoreReadinessCheck must answer from the recorded probe, not read the store")
+			return nil
+		}
+		h.recordStoreProbe(nil)
 		if got := h.StoreReadinessCheck()(); got.Status != monitoring.StatusHealthy {
 			t.Fatalf("expected healthy, got %+v", got)
 		}
 	})
+}
 
-	t.Run("store unreachable is unhealthy", func(t *testing.T) {
-		h, _, _, _ := newTestHandler(fake, "")
-		h.storeReachableFn = func(context.Context) bool { return false }
-		if got := h.StoreReadinessCheck()(); got.Status != monitoring.StatusUnhealthy {
-			t.Fatalf("expected unhealthy when the store is unreachable, got %+v", got)
+// RunStoreProbe reads the sentinel as soon as it starts, so readiness does not wait a full interval after boot.
+func TestRunStoreProbeReadsImmediately(t *testing.T) {
+	h, _, _, _ := newTestHandler(&fakeS3{data: []byte("ready")}, "")
+	probed := make(chan struct{}, 1)
+	h.storeProbeFn = func(context.Context) error {
+		select {
+		case probed <- struct{}{}:
+		default:
 		}
-	})
+		return nil
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() { h.RunStoreProbe(ctx); close(done) }()
+	select {
+	case <-probed:
+	case <-time.After(time.Second):
+		t.Fatal("RunStoreProbe did not probe on start")
+	}
+	cancel()
+	<-done
+	if got := h.StoreReadinessCheck()(); got.Status != monitoring.StatusHealthy {
+		t.Fatalf("expected healthy after the start-up probe, got %+v", got)
+	}
 }
 
 // The service router owns /ready, so the asset routes must not register it; a second registration panics in gin.
@@ -393,12 +465,12 @@ func TestRegisterRoutesLeavesReadyToServiceRouter(t *testing.T) {
 // read proves this instance can read the served namespace, and ANY failure — sentinel absent, AccessDenied, wrong
 // bucket, bad credentials, transport, OR a body that fails mid-read/empty — is NOT ready. Reading a real object (not a
 // missing one) to completion is what stops a denied/absent/truncated response from masquerading as ready.
-func TestProbeStoreReachable_RequiresSentinelRead(t *testing.T) {
+func TestProbeStore_RequiresSentinelRead(t *testing.T) {
 	t.Run("sentinel fully readable is ready and probes the sentinel key under the prefix", func(t *testing.T) {
 		fake := &fakeS3{data: []byte("ready\n")}
 		h, _, _, _ := newTestHandler(fake, "prod")
-		if !h.probeStoreReachable(context.Background()) {
-			t.Fatal("a fully-readable sentinel must be ready")
+		if err := h.probeStore(context.Background()); err != nil {
+			t.Fatalf("a fully-readable sentinel must be ready: %v", err)
 		}
 		if want := "prod/" + mediakeys.ReadinessSentinelKey; fake.lastKey != want {
 			t.Fatalf("probed key = %q, want %q (sentinel under served namespace + prefix)", fake.lastKey, want)
@@ -414,7 +486,7 @@ func TestProbeStoreReachable_RequiresSentinelRead(t *testing.T) {
 		} {
 			fake := &fakeS3{err: e}
 			h, _, _, _ := newTestHandler(fake, "")
-			if h.probeStoreReachable(context.Background()) {
+			if h.probeStore(context.Background()) == nil {
 				t.Fatalf("GetObject error %v must be NOT ready", e)
 			}
 		}
@@ -423,7 +495,7 @@ func TestProbeStoreReachable_RequiresSentinelRead(t *testing.T) {
 	t.Run("a body that fails mid-read is not ready", func(t *testing.T) {
 		fake := &fakeS3{data: []byte("re"), bodyErr: errors.New("connection reset mid-body")}
 		h, _, _, _ := newTestHandler(fake, "")
-		if h.probeStoreReachable(context.Background()) {
+		if h.probeStore(context.Background()) == nil {
 			t.Fatal("a mid-body read failure must be NOT ready (response headers alone do not prove a read)")
 		}
 	})
@@ -431,7 +503,7 @@ func TestProbeStoreReachable_RequiresSentinelRead(t *testing.T) {
 	t.Run("an empty body is not ready", func(t *testing.T) {
 		fake := &fakeS3{data: []byte{}}
 		h, _, _, _ := newTestHandler(fake, "")
-		if h.probeStoreReachable(context.Background()) {
+		if h.probeStore(context.Background()) == nil {
 			t.Fatal("an empty sentinel body must be NOT ready")
 		}
 	})

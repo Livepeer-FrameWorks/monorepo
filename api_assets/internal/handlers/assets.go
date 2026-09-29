@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"path"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -85,9 +86,13 @@ type AssetHandler struct {
 	cacheMisses prometheus.Counter
 	s3Errors    prometheus.Counter
 
-	// storeReachableFn overrides the /ready store probe (test seam); nil in production, where probeStoreReachable
-	// performs the real bounded GetObject against the immutable backend.
-	storeReachableFn func(ctx context.Context) bool
+	storeState storeProbeState
+
+	// storeProbeFn overrides the sentinel read (test seam); nil in production, where probeStore performs the real
+	// bounded GetObject against the immutable backend.
+	storeProbeFn func(ctx context.Context) error
+	// now overrides the clock for readiness-window tests; nil in production.
+	now func() time.Time
 }
 
 func NewAssetHandler(cfg S3Config, lru *cache.LRU, logger logging.Logger, cacheHits, cacheMisses, s3Errors prometheus.Counter) (*AssetHandler, error) {
@@ -147,45 +152,128 @@ func (h *AssetHandler) RegisterRoutes(router *gin.Engine) {
 	}
 }
 
+const (
+	// storeProbeInterval is how often the background probe reads the readiness sentinel.
+	storeProbeInterval = 5 * time.Second
+	// storeProbeTimeout bounds one sentinel read.
+	storeProbeTimeout = 2 * time.Second
+	// storeReadinessWindow is how long one successful sentinel read keeps the instance ready. It spans several probe
+	// intervals, so a single stalled or failed read does not flip readiness; only a store that stays unreadable for
+	// the whole window does.
+	storeReadinessWindow = 20 * time.Second
+)
+
+// storeProbeState is the outcome of the background sentinel probe that /ready reports.
+type storeProbeState struct {
+	mu          sync.Mutex
+	lastSuccess time.Time
+	lastErr     error
+	failing     bool
+}
+
 // StoreReadinessCheck reports whether this Chandler can read its immutable backend, the only thing a static-object
-// server needs to prove before serving. Registered on the service ReadinessChecker, it makes /ready answer 200 when
-// the store is readable and 503 otherwise. It involves no resolver, no Foghorn, and no publication state
+// server needs to prove before serving. Registered on the service ReadinessChecker, it makes /ready answer 200 while
+// the readiness sentinel was read within storeReadinessWindow and 503 otherwise, including before the first
+// successful read. It answers from the state RunStoreProbe records and never touches the object store itself, so
+// /ready stays fast whatever the store's latency. It involves no resolver, no Foghorn, and no publication state
 // (docs/architecture/thumbnails.md).
 func (h *AssetHandler) StoreReadinessCheck() monitoring.HealthCheck {
 	return func() monitoring.CheckResult {
-		if h.probeStoreReachable(context.Background()) {
-			return monitoring.CheckResult{Status: monitoring.StatusHealthy}
+		h.storeState.mu.Lock()
+		lastSuccess, lastErr := h.storeState.lastSuccess, h.storeState.lastErr
+		h.storeState.mu.Unlock()
+		if lastSuccess.IsZero() {
+			msg := "readiness sentinel has not been read from the object store yet"
+			if lastErr != nil {
+				msg = fmt.Sprintf("readiness sentinel is not readable from the object store: %v", lastErr)
+			}
+			return monitoring.CheckResult{Status: monitoring.StatusUnhealthy, Message: msg}
 		}
-		return monitoring.CheckResult{Status: monitoring.StatusUnhealthy, Message: "readiness sentinel is not readable from the object store"}
+		age := h.clock().Sub(lastSuccess)
+		if age > storeReadinessWindow {
+			return monitoring.CheckResult{
+				Status:  monitoring.StatusUnhealthy,
+				Message: fmt.Sprintf("readiness sentinel last read %s ago: %v", age.Round(time.Second), lastErr),
+			}
+		}
+		return monitoring.CheckResult{Status: monitoring.StatusHealthy}
 	}
 }
 
-// probeStoreReachable does a bounded GetObject of the readiness sentinel (mediakeys.ReadinessSentinelKey, written by
+// RunStoreProbe reads the readiness sentinel immediately and then every storeProbeInterval until ctx ends, recording
+// each outcome for StoreReadinessCheck.
+func (h *AssetHandler) RunStoreProbe(ctx context.Context) {
+	ticker := time.NewTicker(storeProbeInterval)
+	defer ticker.Stop()
+	for {
+		h.recordStoreProbe(h.probeStore(ctx))
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+		}
+	}
+}
+
+// recordStoreProbe stores one probe outcome and logs when the store starts or stops answering, with the failure.
+func (h *AssetHandler) recordStoreProbe(err error) {
+	h.storeState.mu.Lock()
+	defer h.storeState.mu.Unlock()
+	if err == nil {
+		if h.storeState.failing {
+			h.logger.Info("Readiness sentinel readable from the object store again")
+		}
+		h.storeState.lastSuccess = h.clock()
+		h.storeState.lastErr = nil
+		h.storeState.failing = false
+		return
+	}
+	if !h.storeState.failing {
+		h.logger.WithError(err).WithField("bucket", h.bucket).Warn("Readiness sentinel read from the object store failed")
+	}
+	h.storeState.lastErr = err
+	h.storeState.failing = true
+}
+
+func (h *AssetHandler) clock() time.Time {
+	if h.now != nil {
+		return h.now()
+	}
+	return time.Now()
+}
+
+// probeStore does a bounded GetObject of the readiness sentinel (mediakeys.ReadinessSentinelKey, written by
 // Foghorn) and FULLY READS its body: readiness requires the whole tiny object to arrive, so a mid-body transport
 // failure — not just a successful response header — is caught. Any failure (sentinel absent, AccessDenied, wrong
-// bucket/endpoint, bad credentials, a truncated/failed body read, empty body) is NOT ready. The test seam
-// storeReachableFn overrides it.
-func (h *AssetHandler) probeStoreReachable(ctx context.Context) bool {
-	if h.storeReachableFn != nil {
-		return h.storeReachableFn(ctx)
+// bucket/endpoint, bad credentials, a truncated/failed body read, empty body) is returned as an error. The test seam
+// storeProbeFn overrides it.
+func (h *AssetHandler) probeStore(ctx context.Context) error {
+	if h.storeProbeFn != nil {
+		return h.storeProbeFn(ctx)
 	}
 	if h.s3 == nil {
-		return false
+		return errors.New("object store client not configured")
 	}
-	probeCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
+	probeCtx, cancel := context.WithTimeout(ctx, storeProbeTimeout)
 	defer cancel()
 	out, err := h.s3.GetObject(probeCtx, &s3.GetObjectInput{
 		Bucket: aws.String(h.bucket),
 		Key:    aws.String(h.fullKey(mediakeys.ReadinessSentinelKey)),
 	})
 	if err != nil {
-		return false
+		return fmt.Errorf("get readiness sentinel: %w", err)
 	}
 	defer out.Body.Close() //nolint:errcheck
 	// Read the whole (tiny) object, bounded, so a stream that fails mid-body cannot report ready. A non-empty read is
 	// the proof; the exact content is not asserted (Foghorn owns it).
 	data, rErr := io.ReadAll(io.LimitReader(out.Body, 256))
-	return rErr == nil && len(data) > 0
+	switch {
+	case rErr != nil:
+		return fmt.Errorf("read readiness sentinel body: %w", rErr)
+	case len(data) == 0:
+		return errors.New("readiness sentinel is empty")
+	}
+	return nil
 }
 
 // isNotFoundS3Error reports whether err is the object-store's AUTHORITATIVE "no such object" (typed NoSuchKey/NotFound,

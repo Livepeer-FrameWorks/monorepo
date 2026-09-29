@@ -86,6 +86,7 @@ func main() {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
+	go assetHandler.RunStoreProbe(ctx)
 	go registerWithQuartermaster(ctx, cfg, qmConfig, logger)
 
 	server.RegisterEnvFileReload("chandler", logger)
@@ -101,7 +102,8 @@ func main() {
 
 // newChandlerRouter builds the standard service router plus the asset routes.
 // The object-store probe is the readiness check, so /ready answers 200 only
-// while this instance can read its immutable backend and 503 otherwise.
+// while this instance can read its immutable backend and 503 otherwise. The
+// probe itself runs in AssetHandler.RunStoreProbe; /ready reports its result.
 func newChandlerRouter(spec server.RouterSpec, assetHandler *handlers.AssetHandler) *gin.Engine {
 	spec.Ready.AddCheck("store", assetHandler.StoreReadinessCheck())
 	router := server.NewServiceRouter(spec)

@@ -409,7 +409,11 @@ absent-object or AccessDenied response can no longer masquerade as ready, and it
 storage authority and the only writer of this bucket) at boot, CONVERGENTLY — bounded per-attempt with retry, and
 Foghorn fails closed if it cannot establish it — before Foghorn serves; the object persists in S3, and Chandler stays
 read-only. Because a fresh cell's Chandler cannot be ready until that sentinel exists, the planner deploys Chandler
-after the in-cell Foghorn. `/ready` returns 200 only on a successful sentinel read and 503 otherwise. Readiness — not liveness — is what gates deployment
+after the in-cell Foghorn. A background probe reads the sentinel at start and every 5 s (2 s per read); `/ready`
+answers from its result without touching the store, returning 200 while a read succeeded within the last 20 s and 503
+before the first successful read or once the store has stayed unreadable for that window. A single stalled or failed
+read therefore neither delays `/ready` past a caller's probe budget nor flips it, and each failure streak is logged
+with its error. Readiness — not liveness — is what gates deployment
 and service discovery (the rollout gate, the doctor probe, and the endpoint Quartermaster advertises all use `/ready`),
 so an instance that is up but cannot serve its bucket is never rolled out or advertised as serviceable. There is no
 Foghorn capability handshake at request time — Chandler only reads a static object.
