@@ -94,15 +94,20 @@ SET status = $1::text,
         THEN COALESCE(backend_id, NULLIF($5::text, '')) ELSE backend_id END,
     durable_backend_local = durable_backend_local OR $2::int > 0,
     size_bytes = COALESCE(NULLIF($6::bigint, 0), size_bytes),
-    duration_seconds = COALESCE(NULLIF($7::bigint, 0)::int, duration_seconds),
-    retention_until = $8, updated_at = NOW(),
-    ended_at = COALESCE(ended_at, $9),
+    -- The recorded media span, not the writer's lifetime: the recording push outlives the
+    -- publisher for Mist's resume window, so the reported wall-clock duration runs long.
+    duration_seconds = COALESCE(
+        (SELECT round((max(s.media_end_ms) - min(s.media_start_ms)) / 1000.0)::int
+           FROM foghorn.dvr_segments s WHERE s.artifact_hash = $7),
+        NULLIF($8::bigint, 0)::int, duration_seconds),
+    retention_until = $9, updated_at = NOW(),
+    ended_at = COALESCE(ended_at, $10),
     dvr_start_dispatch = CASE
-        WHEN $10::boolean THEN dvr_start_dispatch
+        WHEN $11::boolean THEN dvr_start_dispatch
         WHEN COALESCE(dvr_start_dispatch->>'node_id', '') <> ''
             THEN jsonb_build_object('node_id', dvr_start_dispatch->>'node_id')
         ELSE NULL END
-WHERE artifact_hash = $11 AND artifact_type = 'dvr'
+WHERE artifact_hash = $7 AND artifact_type = 'dvr'
   AND status = 'finalizing' AND tenant_id::text = $12
 `
 
@@ -113,11 +118,11 @@ type CompleteDVRFinalizationParams struct {
 	StorageClusterID     string       `db:"storage_cluster_id" json:"storage_cluster_id"`
 	BackendID            string       `db:"backend_id" json:"backend_id"`
 	SizeBytes            int64        `db:"size_bytes" json:"size_bytes"`
+	ArtifactHash         string       `db:"artifact_hash" json:"artifact_hash"`
 	DurationSeconds      int64        `db:"duration_seconds" json:"duration_seconds"`
 	RetentionUntil       sql.NullTime `db:"retention_until" json:"retention_until"`
 	EndedAt              sql.NullTime `db:"ended_at" json:"ended_at"`
 	RetainStopObligation bool         `db:"retain_stop_obligation" json:"retain_stop_obligation"`
-	ArtifactHash         string       `db:"artifact_hash" json:"artifact_hash"`
 	TenantID             string       `db:"tenant_id" json:"tenant_id"`
 }
 
@@ -132,11 +137,11 @@ func (q *Queries) CompleteDVRFinalization(ctx context.Context, arg CompleteDVRFi
 		arg.StorageClusterID,
 		arg.BackendID,
 		arg.SizeBytes,
+		arg.ArtifactHash,
 		arg.DurationSeconds,
 		arg.RetentionUntil,
 		arg.EndedAt,
 		arg.RetainStopObligation,
-		arg.ArtifactHash,
 		arg.TenantID,
 	)
 	if err != nil {

@@ -33,7 +33,12 @@ SET status = sqlc.arg(final_status)::text,
         THEN COALESCE(backend_id, NULLIF(sqlc.arg(backend_id)::text, '')) ELSE backend_id END,
     durable_backend_local = durable_backend_local OR sqlc.arg(uploaded_segments)::int > 0,
     size_bytes = COALESCE(NULLIF(sqlc.arg(size_bytes)::bigint, 0), size_bytes),
-    duration_seconds = COALESCE(NULLIF(sqlc.arg(duration_seconds)::bigint, 0)::int, duration_seconds),
+    -- The recorded media span, not the writer's lifetime: the recording push outlives the
+    -- publisher for Mist's resume window, so the reported wall-clock duration runs long.
+    duration_seconds = COALESCE(
+        (SELECT round((max(s.media_end_ms) - min(s.media_start_ms)) / 1000.0)::int
+           FROM foghorn.dvr_segments s WHERE s.artifact_hash = sqlc.arg(artifact_hash)),
+        NULLIF(sqlc.arg(duration_seconds)::bigint, 0)::int, duration_seconds),
     retention_until = sqlc.narg(retention_until), updated_at = NOW(),
     ended_at = COALESCE(ended_at, sqlc.arg(ended_at)),
     dvr_start_dispatch = CASE
