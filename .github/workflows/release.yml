@@ -1388,7 +1388,8 @@ jobs:
           codesign --verify --verbose=2 "$binary"
 
           cp "$binary" "$staging_dir/frameworks"
-          ditto -c -k --keepParent "$staging_dir/frameworks" "$release_zip"
+          # Archive the staging directory's contents so `frameworks` sits at the zip root.
+          ditto -c -k "$staging_dir" "$release_zip"
           xcrun notarytool submit "$release_zip" \
             --apple-id "${{ secrets.APPLE_ID }}" \
             --password "${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}" \
