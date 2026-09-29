@@ -3,8 +3,8 @@ title: "Your Stream, Your Edge: Media Placement Policy"
 date: 2026-09-09
 authors:
   - frameworks
-excerpt: "Where a request is answered, where a stream originates, and where a viewer receives it are three different places. Placement policy makes the choice between them an explicit, signed rule instead of a load-balancing score."
-description: "Where a request is answered, where a stream originates, and where a viewer receives it are three different places. Placement policy makes the choice between them an explicit, signed rule instead of a load-balancing score."
+excerpt: "Where a request is answered, where a stream originates, and where a viewer receives it are three different places. Placement policy lets you state which capacity your streams may use and in what order, such as your own servers first, and enforces it where media starts."
+description: "Where a request is answered, where a stream originates, and where a viewer receives it are three different places. Placement policy lets you state which capacity your streams may use and in what order, such as your own servers first, and enforces it where media starts."
 tags:
   - engineering
   - architecture
@@ -12,57 +12,46 @@ tags:
   - releases
 ---
 
-When a broadcaster goes live in Europe and someone opens the stream in the United States, that viewer is usually routed to a healthy US edge, not to an edge near whichever Foghorn instance answered the routing request. The Foghorn that answers does not get to decide what "nearby" means just because it received the request.
+When a broadcaster goes live in Europe and someone opens the stream in the United States, that viewer should be served from a healthy US edge. Until this release, the answer depended partly on which part of the platform happened to receive the viewer's request: arrive at a European coordinator, and "nearby" was measured from Europe.
 
-Media placement treats three locations separately: where a request is answered, where a stream originates, and where a viewer receives it.
+Media placement treats three locations separately: where a request is answered, where a stream originates, and where a viewer receives it. The viewer's distance is measured from the viewer, and accounts can now state their own rules about which capacity their streams may use.
 
-## From federation to a placement decision
+## Nearby means near the viewer
 
 [Federation](/blog/federation-went-live) gave clusters a way to find streams and source them from one another. Placement decides where that capability should be used.
 
-The routing path now compares eligible edges using the same facts everywhere: health, usable capacity, distance, and whether the stream is already available there or needs a source connection. A cluster boundary is not a distance penalty. An edge in Virginia does not become less attractive to a viewer in Virginia because the request happened to reach an EU coordinator.
+Every eligible edge is compared on the same facts: health, usable capacity, distance to the viewer, and whether the stream is already there or needs a source connection. A cluster boundary is not a distance penalty. An edge in Virginia does not become less attractive to a viewer in Virginia because the request reached a coordinator in the EU.
 
-When the chosen edge needs the stream, its owning Foghorn arranges the source path. The first viewer may pay some setup latency; later viewers reuse the stream there. If the edge cannot accept the work, the resolver moves to the next permitted candidate rather than quietly substituting a node local to whichever coordinator answered. DNS can make reaching the platform faster, but a sensible answer no longer depends on the viewer arriving at the "right" Foghorn first.
+When the chosen edge does not have the stream yet, it is pulled there. The first viewer may pay some setup latency; later viewers reuse the copy. If the chosen edge cannot accept the work, the next permitted candidate is tried, rather than whatever node sits next to the coordinator that answered.
 
-## Nearby is only part of the answer
+## My own servers first
 
-Some accounts want a different rule: use their own servers first and spill over only when those are full or too far from the audience, never use platform-official media capacity, or prefer a marketplace operator that offers a better price within the regions they care about.
+Nearby is only part of the answer. Some accounts run their own edge servers and want the platform to treat them as the first choice, not one option among many.
 
-Placement policies make those choices explicit. Ingest and serving have separate rules, because the best place for a broadcaster to publish is not necessarily the best place for every viewer to watch. Account defaults cover the ordinary case; stream-specific rules can narrow them.
+Take a broadcaster who operates two edge servers in their own facility in Frankfurt and also has access to platform capacity. Their account rule says: serve viewers from my servers first, and use platform capacity only when mine are full or the viewer is too far away.
 
-Each source type keeps its own rules. Push streams have publisher placement and stream keys.
-Pull streams have upstream-source pins plus viewer placement. Deployment-managed loops and local
-feeds keep their operator-owned source location while viewer policy decides where audiences are
-served. A local source is not modelled as a publisher.
+A viewer in Berlin is served from the broadcaster's own servers, as they would expect. A viewer in Chicago is beyond the distance threshold the broadcaster configured, so the rule permits spillover and that viewer is served from a platform edge in the US, which pulls the stream across once. During a large event the Frankfurt servers fill up, and new European viewers spill onto platform capacity while existing sessions stay where they are.
 
-"Prefer" and "never" mean different things. A preference can have a fallback. A prohibition applies even when a closer edge is available. If a private-only policy has no available private capacity, the stream is reported unavailable rather than moved onto paid capacity. A geographic gap is defined by a configured distance threshold, not inferred from a continent label.
+The preview for that rule shows which capacity groups qualify, why a candidate was excluded, and which condition would permit spillover. It is careful about evidence: a self-hosted cluster that cannot be reached is not treated as proof that it is full, and a missing price is not treated as free.
 
-## Decisions you can inspect
+The same rule could be stricter. "Prefer" and "never" mean different things: a preference can fall back, a prohibition cannot. If an account says never to use platform capacity and its own servers have no room, the stream is reported unavailable rather than moved onto paid capacity. Ingest and serving have separate rules, because the best place for a broadcaster to publish is not necessarily the best place for every viewer to watch. Account defaults cover the ordinary case; stream-specific rules can narrow them.
 
-The choice is two-sided. You can prefer a cluster without being allowed to use it, and a cluster owner can offer viewer capacity without accepting publishers. Owner controls separate ingest, viewer serving, and receiving sources from other clusters. Review shows the intended change; rollout shows whether the required recipients have applied it, since saving a rule does not mean every connection already follows it.
-
-A preview shows which capacity groups qualify, why a candidate was excluded, and which condition would permit spillover. The runtime decision records the policy revision and the chosen destination separately from the origin and the coordinator.
-
-Price comparisons use your effective pricing, not a number copied from a marketplace card. When a price is not known, the comparison reports it as unknown instead of estimating one. An estimated placement cost is not a promise about the final bill; billing still follows the work that actually happened.
+The choice is two-sided: a cluster owner can offer viewer capacity without accepting publishers, and your preference for a cluster does not grant you access to it.
 
 ## Enforced where media actually starts
 
-Placement is enforced at two points: publisher admission and viewer admission.
+Placement is enforced at the two points where media starts: when a publisher connects and when a viewer connects.
 
-For publishers, MistServer now reports which connector accepted the connection as part of the push trigger itself. Foghorn evaluates ingest policy against that observed protocol, never against the URL the encoder sent, because the encoder controls that URL and RTMP lets a client label a connection however it likes. A publisher that lands on a node the policy forbids is refused after the claim is taken and the claim is released, so nothing is held for a session that never starts.
+For publishers, the policy is checked against the protocol the edge actually observed accepting the connection, never against the URL the encoder sent, because the encoder controls that URL and RTMP lets a client label a connection however it likes. A publisher that lands on a node the policy forbids is refused, and nothing is held for a session that never starts.
 
-For viewers, the same policy gate that prepared the destination admits the connection at the edge. A denied HLS request now gets a complete refusal and a closed connection instead of a response that never finishes, so players fail over instead of stalling.
+For viewers, the same policy that chose the destination admits the connection at the edge. A denied HLS request gets a complete refusal and a closed connection instead of a response that never finishes, so players fail over instead of stalling.
 
-The same restrictions reach final admission through signed authority. A control-plane outage does not turn a deny into an allow, and it does not make distributed ownership disappear: an active publisher keeps its claim, and outage ingest has a single authorized owner. During an outage, availability is limited rather than policy widened.
+The rules reach the edge as signed authority, which matters during outages. A control-plane outage does not turn a deny into an allow. A publisher who is already live stays live, and edges keep enforcing the last rules they received. During an outage, availability can be limited, but policy is never widened.
 
-## Turning it on without a flag
+## What it does not cover yet
 
-Signed authority carries the policy. Edge cells that have not been upgraded yet are handled by attestation, not a configuration flag. Every Foghorn replica records, in a shared ledger, whether it has installed placement enforcement. When a cell acknowledges a signed authority delivery, the acknowledging replica reports whether every live replica in that cell enforces the policy schema. The control plane issues the first policy-bearing authority to an account only when every cell that serves it has attested. Until then the account keeps its previous authority, and each newly ready cell queues the accounts it still holds on the old schema. Once issued, policy never rolls back; a later grant on a cell that cannot enforce it is refused instead.
+Saving a rule is not the same as every connection following it. A new rule takes effect once every cell that holds your content confirms it enforces placement, and the rollout status shows where that stands. A publisher who is already live stays on their current ingest cluster; changing the rule does not migrate them.
 
-## Next: where media rests, and where work runs
+This release covers ingest and viewer delivery. Where recordings are stored and where processing jobs run are separate decisions on the roadmap, and viewer-serving rules do not control them today.
 
-This release's placement work concerns ingest and delivery. Durable storage and processing placement are separate engines on the roadmap.
-
-They follow the same approach (state the constraints, compare eligible capacity, explain the choice) but have different responsibilities. Storage must track copies, durability, retention and safe removal. Processing must match a job to compatible hardware, capacity and execution cost.
-
-Together, those future pieces can enable regional recording policies, hot and cold storage tiers, and choosing suitable processing capacity by location or cost. Viewer-serving rules do not control storage or processing today.
+The [media placement guide](/builders/media-placement) covers writing, reviewing and previewing rules, including the self-hosted-first example in the API Explorer demo. Cluster owners should read [media placement controls](/operators/media-placement) for capacity permissions and rollout status.

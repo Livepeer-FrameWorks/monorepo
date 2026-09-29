@@ -212,7 +212,7 @@ See [Recordings, Clips & VOD](/builders/recordings#archive-chapters) and
 
 ## Multi-Cluster Playback
 
-In multi-cluster deployments, Foghorn handles cross-cluster routing transparently. When a viewer requests a stream from a remote cluster, Foghorn arranges origin-pull replication or redirects via HTTP 307.
+In multi-cluster deployments, cross-cluster routing is transparent. When a viewer requests a stream that is live in another cluster, an edge in the viewer's own cluster pulls it from the origin and serves it. The viewer is never redirected to the other cluster.
 
 The player SDK handles this automatically when it runs in the viewer's browser or playback device:
 Gateway resolution returns the right Foghorn-backed edge endpoints for that viewer's region.

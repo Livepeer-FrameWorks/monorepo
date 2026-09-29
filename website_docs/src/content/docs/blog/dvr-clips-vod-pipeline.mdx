@@ -3,56 +3,58 @@ title: "DVR, Clips, and VOD: What Happens After the Live Edge"
 date: 2026-06-08
 authors:
   - frameworks
-excerpt: "A live stream is a ring buffer on an edge node. Everything that outlives it — DVR archives, chapters, clips, VOD — has to be copied out before the buffer moves on. How that pipeline works, including across clusters."
-description: "A live stream is a ring buffer on an edge node. Everything that outlives it — DVR archives, chapters, clips, VOD — has to be copied out before the buffer moves on. How that pipeline works, including across clusters."
+excerpt: "A live stream is a ring buffer on an edge node. A channel that streams for 90 days straight is still one recording, replayable in chapters, and a plan change halfway through never shortens an archive that is already recording."
+description: "A live stream is a ring buffer on an edge node. A channel that streams for 90 days straight is still one recording, replayable in chapters, and a plan change halfway through never shortens an archive that is already recording."
 tags:
   - engineering
   - architecture
   - dvr
 ---
 
-A live stream, at the edge, is a ring buffer. MistServer keeps a bounded window of segments on disk, old ones fall off the back, and when the stream ends the buffer eventually stops mattering. Everything that outlives the broadcast — the seekable archive, the highlight clip, the uploaded VOD — has to be copied out of that buffer before it disappears. This post walks through that pipeline.
+A live stream, at the edge, is a ring buffer. MistServer keeps a bounded window of segments on disk, old ones fall off the back, and when the stream ends the buffer eventually stops mattering. Everything that outlives the broadcast (the seekable archive, the highlight clip, the replay a viewer opens next week) has to be copied out of that buffer before it disappears.
 
-## Three clocks
+Short streams make that easy to get roughly right. Long ones do not. This post follows one always-on channel through three months of recording, a plan change and a highlight clip.
 
-The design that made DVR tractable for us was separating three timescales that look related but aren't.
+## A channel that never stops is one recording
 
-The **live DVR window** is what a viewer can scrub back through while the stream is up. It's sized per billing tier and lives on the edge node.
+Picture a 24/7 channel, such as a venue camera that nobody turns off. It goes live on the first of the month and stays live for 90 days.
 
-The **stream session** is the recording itself. One session produces one DVR artifact, with no per-artifact length cap — a channel that streams for 90 days straight is one artifact. A stream that ends and comes back an hour later starts a new one.
+On FrameWorks that is one recording. A session produces one DVR artifact with no per-artifact length cap, so a channel that streams for 90 days straight is one artifact. If the stream drops and comes back an hour later, that is a new session and a new recording.
 
-**Retention** is how long the archive survives after the stream ends: the tier's retention period, counted from the moment the session finalized. The retention policy is snapshotted when the recording starts, so a mid-stream plan change never silently shortens an archive that's already recording. An active recording is invisible to retention entirely; the clock starts at the end.
+We got there by separating three clocks that look related but are not:
 
-Underneath all three sits the source of truth: a per-segment ledger in Foghorn's database. Every recorded segment gets a row with a monotonically assigned sequence number, its start and end timestamps in stream media time, its storage key, and its status. There are no manifest files in object storage to keep consistent — playlists are generated from the ledger when something needs one.
+- The **live DVR window** is how far back a viewer can scrub while the stream is up. It is sized by plan and kept short so live playlists stay small.
+- The **session** is the recording itself, as long as the ingest stays live.
+- **Retention** is how long the archive survives after the stream ends, counted from the moment the session finishes. An active recording is invisible to retention: a channel on day 89 cannot lose day 1 to an expiry timer.
 
-## Chapters, and why the archive is never one file
+Underneath, every recorded segment is tracked with its position in stream time and where it is stored. Playlists are generated from that record when something needs one, so there are no manifest files in object storage that can drift out of step with the media they describe.
 
-A 90-day artifact is unmanageable as a unit, so replay works through **chapters**: bounded slices of the archive, each finalized into its own VOD artifact. Chapters are cut either at a fixed size matching the tier's window, or on fixed UTC intervals (hourly at minimum, anchored to the epoch, so chapter boundaries are predictable without knowing when the stream started).
+## Replaying three months without downloading three months
 
-Finalizing a chapter is a processing job. The sidecar builds a temporary HLS playlist over the chapter's segments — with program-date-time tags derived from the ledger, so wall-clock timing survives the conversion — and Mist remuxes it into a canonical MKV. A thumbnailer pass generates the poster and sprite track, and a follow-up step produces the seek-index sidecar. From that point the chapter is playable; a later "freeze" step uploads the MKV to object storage, after which the chapter is fully cold and the temporary per-segment copies can be reclaimed.
+Nobody wants to open a 90-day file. So replay works through chapters: bounded slices of the recording, each finalized into its own ordinary VOD asset. Chapters can match the length of the live window or follow fixed UTC intervals such as hourly or daily, so an application that wants "yesterday afternoon" converts that to a UTC range and lists the chapters in it. Each chapter keeps wall-clock timing, so a player can show the real time of day for any position.
 
-The chapter lifecycle is a straight line: open → closed → finalizing → finalized → frozen → reclaimed. Playback is legal from `finalized` onward. If a chapter can't finalize because its source segments are gone, it fails explicitly rather than producing a shorter file that pretends to be complete.
+A chapter becomes playable as soon as it is finalized, and is later uploaded to object storage, after which the temporary per-segment copies are removed. If a chapter cannot be built because its source segments were lost, it is marked failed rather than published as a shorter file that pretends to be complete.
 
-## Clips are processing jobs too
+Because chapters are ordinary VOD, they follow the same playback path, the same access policy and the same rules across clusters as any uploaded video. A remote cluster never asks for "the 90-day archive"; it asks for a chapter. If that chapter is already in object storage, the viewer gets a signed download from storage. If it is not uploaded yet but the node that recorded it still has the complete file, it is served from there. If neither is true yet, the request is refused with a retryable answer, and a later attempt succeeds once the upload finishes.
 
-Clipping used to be its own bespoke path; it's now the same processing-job machinery with a different source. A clip request records an artifact in `requested` state, resolves what it's cutting from — the live buffer, the rolling DVR window, or an already-finalized chapter — and queues a job that produces a canonical MKV. The job carries the source kind, the time range, and the output name; a failed job marks the artifact failed and emits a lifecycle event, so the dashboard shows "clip failed" instead of a spinner that never resolves.
+## What a plan change does to an archive in progress
 
-Lifecycle events for all of this flow through the same analytics backbone as everything else: sidecar to Foghorn to Kafka, landing in ClickHouse for state queries and in the WebSocket layer for live UI updates. The clips panel in the dashboard is a materialized view of those events, joined with the business metadata (titles, ownership, retention) that lives in Commodore.
+On day 40, the channel's owner changes plan. The obvious question is what happens to the recording that has been running for 40 days.
 
-## Across clusters
+Nothing, until it ends. The retention that applies to a recording is resolved when the recording starts and stored with it. A downgrade halfway through never quietly shortens an archive that is already recording, and the plan in force when the stream finally stops is never looked up again to recompute it. The new plan applies from the next session.
 
-Federation made streams portable between clusters; artifacts needed the same treatment, with one extra wrinkle — the bytes are big and mostly cold.
+Re-resolving retention at the end would let a plan change reach back and shorten weeks of footage someone was counting on, so we chose to resolve it once, at the start. If you want a particular archive kept longer, you can set a retention override on that finalized asset afterwards, within your plan's cap.
 
-Reads go through a single RPC to the cluster that owns the artifact. If the artifact has been frozen to object storage, the owner answers with a presigned download URL and the requesting cluster never touches the media path. If freezing hasn't finished but an origin node still holds the complete file, the owner can answer with a relay URL that serves the bytes from that node directly — no waiting for the S3 sync, and no storage credentials shared between clusters. If neither is true yet, the answer is a plain 503: the freeze pipeline is already moving the bytes, and a later attempt will succeed without anyone running a polling loop.
+The same rule applies to chapter settings: changing how a stream cuts chapters takes effect from the next broadcast, and a recording in progress keeps the setting it started with.
 
-Whole DVR artifacts are excluded from that surface. A remote cluster can't ask for "the 90-day archive" — replay is always through chapters, which are just VOD artifacts and follow the same rules as any other.
+## Clips come from the same place
 
-Writes federate too. When a cluster needs to store artifact bytes it doesn't have local storage for, it delegates to the cluster that owns the storage, which verifies it actually _is_ the owner — right cluster, and its configured storage backend matches what the topology service advertises — before minting upload URLs. A cluster can't be tricked into signing uploads into someone else's bucket.
+On day 63 something worth sharing happens. A clip can be cut from the live buffer, from the rolling DVR window, or from a chapter that has already been finalized. It goes through the same processing path as chapters and produces the same kind of VOD asset. A clip that fails is marked failed and shows up that way in the dashboard, instead of a spinner that never resolves.
 
-## Cleanup and thumbnails
+## What it costs
 
-Cleanup is layered. Edges evict local DVR segments under disk pressure, oldest first, because object storage holds the durable copy. Expired artifacts are soft-deleted first and hard-deleted (database and storage) only after a 30-day grace window. Orphaned local files get a periodic sweep. Reclaiming a chapter's temporary segments is two-phase — local deletion confirmed before the cold copies go — so a crash between the phases leaves extra data, never missing data.
+A long recording is only as durable as its path to object storage. Edges evict local segments under disk pressure, oldest first, because the durable copy lives in object storage. Every cleanup step deletes only after that durable copy is confirmed, so a crash in the middle of cleanup leaves extra data behind, never missing data.
 
-Thumbnails ride the same rails: the poster and a 10×10 sprite grid of 160×90 frames per chapter or clip, addressed by stable artifact identifiers, served through a small caching asset service, with a WebVTT index so players can show scrub previews without downloading video.
+The live window is also not the archive. A viewer who joins on day 90 can scrub back only as far as the live window allows; everything older is reached through chapters.
 
-The failure this whole design guards against is the segment ledger and object storage disagreeing about what exists — which is why the ledger is the single source of truth and every cleanup phase deletes only after the durable copy is confirmed. Docs: [DVR chapters](/builders/dvr-chapters), [clips](/builders/clips), [recordings](/builders/recordings), [storage and retention](/builders/storage-and-retention), and the operator's view in [DVR operations](/operators/dvr).
+Docs: [DVR chapters](/builders/dvr-chapters), [clips](/builders/clips), [recordings](/builders/recordings), [storage and retention](/builders/storage-and-retention), and the operator's view in [DVR operations](/operators/dvr).

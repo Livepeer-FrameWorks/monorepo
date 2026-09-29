@@ -1,76 +1,52 @@
 ---
-title: "Lookout: Alerts Become Incidents"
+title: "Incidents: One Failure, One Thing to Work On"
 date: 2026-09-17
 authors:
   - frameworks
-excerpt: "Lookout turns grouped Alertmanager notifications into tenant-aware incidents with a durable timeline, realtime updates, operator delivery, and Skipper investigations."
-description: "Lookout turns grouped Alertmanager notifications into tenant-aware incidents with a durable timeline, realtime updates, operator delivery, and Skipper investigations."
+excerpt: "Platform alerts now become incidents: one record per failure with a timeline, acknowledgement, assignment and live updates, visible to the tenant who owns the cluster and reachable through the dashboard, GraphQL and MCP."
+description: "Platform alerts now become incidents: one record per failure with a timeline, acknowledgement, assignment and live updates, visible to the tenant who owns the cluster and reachable through the dashboard, GraphQL and MCP."
 tags:
   - announcements
   - operations
   - observability
 ---
 
-An incident tracks the work that follows an alert: who owns it, what is still firing,
-who acknowledged it, what changed, and whether the problem is actually over. FrameWorks already
-had metrics and alert rules, but handing raw Alertmanager notifications to every tenant would have
-mixed infrastructure details, tenant boundaries, and delivery policy into one brittle interface.
+A server in one of your clusters loses power. It was running five services, and every one of them stops answering health checks at the same moment. Each produces its own "service unreachable" alert. Handled as plain notifications, that is five near-identical messages at once, the same messages again every few hours while the machine stays down, and no shared place to record that someone is already on it.
 
-Lookout is the incident service between alerting and people. It receives grouped Alertmanager
-notifications, resolves the alerting cluster to its current owner, and creates either a
-platform-only incident or a tenant-visible incident. The result is available in the dashboard,
-GraphQL, MCP tools, and realtime subscriptions.
+FrameWorks now turns alerts into incidents. That power loss becomes one incident for the cluster, listing every service that went dark, with a timeline, an owner and a status that stays correct until the last alert clears.
 
-## Tenant ownership is part of ingestion
+## What the node failure looks like now
 
-Ownership is the hard part: cluster ownership can change while alerts are arriving, and a control-plane outage must never make another tenant's incident visible.
+The failing services still fire individually, and Alertmanager still does what it is good at: evaluating rules, grouping related alerts, applying silences, and retrying delivery. Alerts of the same kind in the same cluster and region arrive as one group, and each group becomes one incident.
 
-Lookout keeps a verified cluster-scope record from Quartermaster. Ingestion and ownership changes
-coordinate through database locks and revisions, so an open incident is either written with the
-new owner or moved to that owner after the concurrent ingest commits. When ownership cannot be
-verified, the incident stays platform-scoped. That fails closed for tenant visibility while still
-letting operators see an outage during a control-plane failure.
+Alertmanager waits briefly for related alerts, then sends the five "service unreachable" alerts as one group. One incident opens with five firing alerts. When Alertmanager repeats the group a few hours later because the machine is still down, the existing incident is updated rather than a new one opened. An on-call engineer acknowledges it, which records who took it without silencing anything; if a sixth service fails, the incident still shows it. Notes and assignment build a timeline as the work happens. When the server comes back and every alert in the group resolves, the incident resolves itself.
 
-Resolved incidents do not move when ownership changes. They remain part of the operational
-history of the tenant that owned the cluster when the incident happened.
+If someone resolves an incident by hand, repeats of the same alerts do not reopen it. A genuinely new alert opens a new incident. That keeps a closed incident closed without hiding a second failure.
 
-## One incident, not a stream of pages
+Every state change is pushed through a live subscription, so the dashboard updates without polling. After a reconnect, the incident itself is the durable record to read, not the stream of changes.
 
-Alertmanager still does what it is good at: rule evaluation, grouping, inhibition, silences, and
-delivery retries. Lookout turns each group into a state machine:
+## Incidents belong to whoever owns the cluster
 
-- new firing alerts open an incident;
-- repeated notifications update the existing incident;
-- acknowledgement records ownership without stopping alert ingestion;
-- assignments and notes build an operational timeline;
-- the incident auto-resolves when every alert resolves, or can be resolved manually;
-- repeated copies of the same alert do not reopen a manually resolved incident.
+A tenant running their own cluster should see incidents about their infrastructure and nobody else's. So each incident is scoped to the tenant that owns the cluster the alert came from, and a tenant can only read or change incidents on clusters they own. Asking for another tenant's incident returns the same answer as asking for one that does not exist.
 
-Every state change is visible through `liveIncidentUpdates`, while GraphQL queries remain the
-durable source of truth after a reconnect.
+Ownership can change while alerts are arriving, and the system that records ownership can itself be part of the outage. The rule for that case is simple: when ownership cannot be confirmed, the incident stays visible to platform operators only. A tenant might see their incident late, but never someone else's, and operators still see the outage while the control plane is down.
 
-## Delivery survives the failure it reports
+Resolved incidents stay with the tenant that owned the cluster when they happened. Moving a cluster to a new owner does not hand over its history.
 
-Platform incidents can notify email, Slack, and Discord. Tenant incidents are published for
-Skipper investigation and tenant realtime delivery. Those sends use a lease-fenced transactional
-outbox: the incident and its delivery obligation commit together, multiple Lookout replicas cannot
-successfully settle the same claim, and temporary downstream failures retry with backoff.
+## Delivery keeps working during the failure it reports
 
-Critical alerts also have a direct Alertmanager email route. That route deliberately bypasses
-Lookout, so an outage in the incident service does not suppress the page reporting it. A permanent
-Watchdog alert goes to an external heartbeat endpoint; if Alertmanager itself stops delivering,
-the missing heartbeat becomes the signal.
+An incident system is most needed when things are broken, which is also when it is most likely to be affected. We designed delivery around that.
 
-## One workflow for people and agents
+Platform incidents notify operators by email, Slack and Discord. Tenant incidents feed the tenant's live dashboard and Skipper. An incident and the obligation to announce it are saved together, so a notification service that is briefly down delays the message and retries it later rather than losing it. When more than one copy of the incident service is running, each delivery is claimed by one copy at a time, so a restart or a failover does not leave a message unsent.
 
-Tenants work incidents under **Infrastructure → Incidents**. Platform operators have a
-cross-tenant view under **Platform Admin → Incidents**. The same actions are available through
-GraphQL and the Gateway's MCP tools: list, inspect, acknowledge, assign, resolve, and add a note.
+Critical alerts also have a second path that bypasses the incident system entirely and goes straight to email. If the incident service is the thing that failed, the page about it still goes out. And an alert that fires permanently is sent to an external heartbeat monitor once a minute; if the alerting pipeline itself stops, the heartbeat goes quiet and the external monitor raises the alarm.
 
-Skipper consumes the tenant incident feed and can attach an investigation report to the incident
-timeline. It does not silently acknowledge or resolve anything; analysis and state-changing
-operator actions remain separate.
+## The same workflow for people and agents
 
-Start with the [incident API guide](/builders/incidents). Operators deploying the service should
-use [Alerting and Incidents](/operators/alerting), which covers the Lookout database, Alertmanager
-token, heartbeat, notification channels, and an end-to-end delivery test.
+Tenants work incidents under **Infrastructure → Incidents**. Platform operators have a cross-tenant view under **Platform Admin → Incidents**. The same actions are available through GraphQL and the MCP tools: list, inspect, acknowledge, assign, resolve and add a note.
+
+Skipper reads the tenant incident feed and can attach an investigation report to the timeline. It never acknowledges or resolves anything on its own; analysis and state changes stay separate, and a person decides when an incident is over.
+
+Which alert rules exist is still an operator decision, and incidents do not merge alerts of different kinds into one record: a failed server that also trips a second, different alert rule produces two incidents, one per rule.
+
+Start with the [incidents API guide](/builders/incidents). Operators deploying incidents should read [Alerting and Incidents](/operators/alerting), which covers notification channels, the heartbeat and an end-to-end delivery test.

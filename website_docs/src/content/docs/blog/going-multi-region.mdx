@@ -1,98 +1,62 @@
 ---
-title: "Going Multi-Region: Regional Kafka, One Aggregator"
+title: "Going Multi-Region: Local Latency, One Bill"
 date: 2026-05-26
 authors:
   - frameworks
-excerpt: "FrameWorks now runs an EU and a US region. Media stays regional; analytics and billing events converge on an EU aggregator through MirrorMaker2. How the topology works, and how billing stays effectively-once across an at-least-once mirror."
-description: "FrameWorks now runs an EU and a US region. Media stays regional; analytics and billing events converge on an EU aggregator through MirrorMaker2. How the topology works, and how billing stays effectively-once across an at-least-once mirror."
+excerpt: "FrameWorks now runs an EU and a US region. Viewers and broadcasters are handled entirely in their own region, while analytics and billing converge in one place, so a tenant gets one bill that counts every region exactly once."
+description: "FrameWorks now runs an EU and a US region. Viewers and broadcasters are handled entirely in their own region, while analytics and billing converge in one place, so a tenant gets one bill that counts every region exactly once."
 tags:
   - engineering
   - architecture
   - kafka
 ---
 
-FrameWorks now runs two regions: eu-west and us-east. A viewer in Virginia gets a US edge, a US Foghorn routing decision, US Redis, and a US Kafka cluster absorbing the event firehose. State and billing stay in one place; most of the design work went into keeping it that way.
+A viewer in Virginia opens a stream. In a single-region platform hosted in Europe, the routing decision, the session bookkeeping and the event traffic for that viewer all cross the Atlantic before the first frame arrives.
 
-## What runs where
+FrameWorks now runs two regions, eu-west and us-east. That viewer in Virginia gets a US edge, a US routing decision, and a US event pipeline absorbing the telemetry their session produces. The tenant who owns the stream still gets one dashboard and one bill covering both regions. Most of the design work went into keeping that second sentence true.
 
-Each region is a full media cell: Foghorn for routing, edge nodes, a Livepeer gateway for transcoding, Redis with Sentinel (a master, two replicas, and a three-sentinel quorum per region), the realtime layer, the event ingest path, and its own Kafka cluster. Kafka runs KRaft — three brokers and three controllers per region, replication factor 3, `min_insync_replicas: 2`, and no ZooKeeper anywhere. We retired the last ZooKeeper reference this spring; consensus lives in the controllers now.
+## Nothing on the viewer's path crosses the ocean
 
-Central services stay in the EU: the distributed SQL cluster that backs the platform services, ClickHouse for analytics, and the control plane (provisioning, tenant management, billing, DNS).
+Each region is a complete media cell. It has its own edge nodes, its own routing and load balancing, its own transcoding capacity, its own cache, its own realtime layer and its own Kafka cluster. A broadcaster pushing into us-east and a viewer watching from us-east never wait on a request to Europe: stream startup, routing and playback admission are all answered inside the region.
 
-The asymmetric piece is Kafka. The EU cluster is marked `role: aggregator` in the topology
-manifest; every other region is `role: regional`. MirrorMaker2 runs as coordinated workers in each
-link's target region. Links into the aggregator carry the durable event set:
+What stays central is the state that has to be single: the control plane (accounts, provisioning, billing, DNS), the database behind it, and ClickHouse for analytics. None of those sit on the path between a viewer pressing play and video arriving.
 
-- `analytics_events` — stream lifecycle, viewer events, routing decisions
-- `service_events` — service-level events from the control-plane services
-- `analytics.raw_mist_triggers` — the raw media-trigger audit journal
-- `billing.usage_reports` — per-tenant usage from the analytics query layer
-- `decklog_events_dlq` — the ingest dead-letter queue, aggregated so failed events can be inspected and replayed from one place
+## Why events converge in one region
 
-MM2's replication policy prefixes mirrored topics with the source region, so US events land on the
-aggregator as `us-east.analytics_events` next to the EU-native `analytics_events`. A reverse link
-copies only `analytics_events` and `service_events` to the US cluster. Signalman therefore consumes
-its local bare topics plus the source-prefixed realtime topics from the other region. A GraphQL
-client can stay on its nearest Gateway and Signalman while still receiving changes produced in
-either region; the raw trigger journal, billing reports, and dead-letter queue are not broadcast
-back out.
+The media is regional, but the questions a tenant asks are not. "How many people watched last week?" and "what do I owe?" need every region's data in one place.
+
+We use Kafka's MirrorMaker 2 to copy each region's durable event streams (analytics, service events, billing usage reports and the dead-letter queue) into a single aggregator cluster in the EU, where ClickHouse and billing already live. A narrower link in the other direction carries only the realtime events that dashboards subscribe to, so a GraphQL subscription stays connected to its nearest region and still sees changes from both. Mirroring durable data toward the consumers that need it was a much smaller commitment than teaching every consumer about every region.
 
 ```mermaid
 graph LR
     subgraph "us-east"
-        USV["Viewers / Streams"] --> USF["Foghorn US"]
-        USF --> USD["Decklog US"]
-        USD --> USK["Kafka US<br/><small>KRaft · RF 3</small>"]
-        USK --> USS["Signalman US"]
+        USV["Viewers and broadcasters"] --> USE["Edges and routing"]
+        USE --> USK["Regional Kafka"]
     end
     subgraph "eu-west (aggregator)"
-        EUD["Decklog EU"] --> EUK["Kafka EU<br/><small>role: aggregator</small>"]
-        EUK --> EUS["Signalman EU"]
-        EUK --> PI["Periscope-Ingest"]
-        PI --> CH[("ClickHouse")]
-        EUK --> PUR["Purser<br/><small>billing</small>"]
+        EUK["Aggregator Kafka"] --> CH[("Analytics")]
+        EUK --> BILL["Billing"]
     end
-    USK -- "durable + realtime<br/><small>us-east.* prefix</small>" --> EUK
-    EUK -- "realtime only<br/><small>eu-west.* prefix</small>" --> USK
+    USK -- "durable + realtime events" --> EUK
+    EUK -- "realtime only" --> USK
 ```
 
-## One durable aggregator, narrow realtime links
+Producers need no knowledge of the topology. A service in us-east writes to its regional pipeline and is done; the mirror moves the event later. The mesh is declared explicitly in our [public cluster manifest](https://github.com/Livepeer-FrameWorks/gitops), and the CLI refuses a manifest with a missing or misplaced link. Two regions make a full mesh cheap. Before a third region, we will measure realtime volume and decide whether broadcasting every realtime event everywhere still makes sense.
 
-The consumers decided the shape. ClickHouse is central, the analytics ingest service is pinned to
-the aggregator, and billing needs every region's usage reports in one place before it can rate
-them. Mirroring the durable topics to where those consumers already live is a much smaller
-commitment than making every durable consumer region-aware.
+## At-least-once mirrors, exactly-once bills
 
-Periscope-Ingest gets the list of source prefixes mirrored into the aggregator and registers the
-same handlers for the bare and prefixed topics. Signalman gets the source prefixes mirrored into
-its own Kafka cluster and does the same for the two realtime topics. Producers need no topology
-logic: Decklog reads its regional broker list from the environment, and services in each cell dial
-their regional Decklog.
+Mirroring is at-least-once. Regions can partition. A mirror can deliver the same event twice after a restart. Billing sits downstream of all of it, and a tenant should never pay twice for one viewer session.
 
-The manifest declares every directed MM2 link explicitly, and the CLI rejects a missing pair,
-unknown region, duplicate link, or worker placed outside the target region. That full mesh is
-deliberate for the current two-region topology. Before adding a third region, we will measure the
-realtime rate and either retain the small mesh or replace it with subscriber-aware forwarding;
-broadcasting every realtime event to an unbounded number of regions is not the long-term scaling
-model.
+Every event carries a unique ID and the region and cluster it came from. Analytics deduplicates on that ID, so a replayed or double-mirrored event collapses into the row that already exists. Events that record a state change, such as billing usage or an artifact being created, are written in the same database transaction as the change itself and shipped afterwards, so an outage in the regional event pipeline delays them without losing them. Loss-tolerant telemetry such as load-balancing samples skips that step and accepts a small loss window.
 
-## The consistency bill
+The finalized facts billing depends on, like a completed viewer session, needed one more change, and it came from a race we found rather than one we predicted. ClickHouse offers table engines that deduplicate rows in the background, which looks like exactly the right tool. It is not. When a Kafka consumer group rebalances, two parser instances can briefly process the same partition. Combine that with the timing of background merges, and a finalized fact can disappear without any error being raised.
 
-Mirroring is at-least-once, regions can partition, and billing sits downstream of all of it. Most of the design effort went into the guarantees.
+So those facts are stored append-only, and the current truth is computed when it is read. When two writers disagree about the value of a billed fact, the disagreement is written to an audit table and raised as a metric, and supported cases become explicit corrections on the bill. Nothing is silently overwritten, and every change to what a tenant owes can be traced back to the events that caused it.
 
-Every event carries an envelope with a UUIDv7 `event_id`, its source region, and its source cluster. ClickHouse tables dedup on `event_id` (with ingest-side dedup in front), which turns at-least-once mirroring into effectively-once analytics: a replayed or double-mirrored event collapses into the same row. Ordering is only guaranteed per partition, so consumers reconstruct state on read rather than trusting arrival order.
+## What it costs and what it does not do
 
-Events that carry state (billing, artifact lifecycle, provisioning) don't go fire-and-forget. Producers write them to a local outbox table in the same transaction as the state change; a drain worker ships them to Decklog and catches up after any outage, so a regional event-pipeline blip delays those events without losing them. Loss-tolerant telemetry — API usage counters, load-balancing samples — skips the outbox and accepts the loss window.
+Cross-region dashboard updates arrive a little later than local ones, because they travel over the mirror. Analytics for a US stream reaches ClickHouse after the mirror delivers it, not the instant it happens. Keeping one central control plane means an EU-side control-plane outage is felt in both regions for account and billing operations, although viewers already watching keep watching.
 
-The billing read model takes one more step. Finalized facts (a viewer session ended, a processing segment completed) land in append-only tables — deliberately _not_ ClickHouse's self-deduplicating table engine, because two parser instances racing during a consumer-group rebalance plus a merge-timing window can drop a fact without any error. Readers materialize the current truth with `min`/`argMax` at query time, and when two writers disagree about a fact, the divergence is recorded in an audit table and surfaced as a metric rather than silently overwritten.
+In return, a tenant sees one bill that covers usage in every region, counted once, and viewers see latency set by their own region. Viewers whose stream lives in the other region are served through [federation](/blog/federation-went-live): a nearby edge pulls the stream across once, and later viewers watch it locally.
 
-## What it looks like from outside
-
-Media startup and routing decisions never wait on a cross-region round trip. Cross-region realtime dashboard
-updates traverse the narrow MM2 link asynchronously, while local updates remain local. Analytics
-dashboards aggregate both regions because the durable data converges on the aggregator. A tenant's
-bill covers usage in every region because Purser reads the aggregate path. And
-[federation](/blog/federation-went-live) rides on top: the regions' Foghorns peer with each other,
-so cross-region viewers get the same origin-pull-or-redirect treatment as any cross-cluster viewer.
-
-The topology, as always, is in the [public manifest](https://github.com/Livepeer-FrameWorks/gitops) — see [multi-cluster operations](/operators/multi-cluster) and the [cluster manifest reference](/operators/cluster-manifest) for the operator's view.
+The operator's view, including how regions and mirror links are declared, is in [multi-cluster operations](/operators/multi-cluster) and the [cluster manifest reference](/operators/cluster-manifest).

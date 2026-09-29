@@ -1,54 +1,48 @@
 ---
-title: "Two CAs, One Mesh: How FrameWorks Services Get Their Identity"
+title: "Trusting an Edge Node on Hardware We Don't Own"
 date: 2026-04-02
 authors:
   - frameworks
-excerpt: "Navigator runs an internal CA for service-to-service traffic and drives ACME for public endpoints; Privateer distributes keys and WireGuard config to every node. Why a sovereign platform has to own its own trust root."
-description: "Navigator runs an internal CA for service-to-service traffic and drives ACME for public endpoints; Privateer distributes keys and WireGuard config to every node. Why a sovereign platform has to own its own trust root."
+excerpt: "A FrameWorks edge can run on a server we have never seen. How it proves who it is without a shared secret, why it never holds our internal certificate authority, and why we run our own mesh instead of Tailscale."
+description: "A FrameWorks edge can run on a server we have never seen. How it proves who it is without a shared secret, why it never holds our internal certificate authority, and why we run our own mesh instead of Tailscale."
 tags:
   - engineering
   - architecture
   - security
 ---
 
-A provider plane spanning owned and leased infrastructure needs a portable trust root rather than a cloud-vendor identity dependency. Certificates, mesh coordination, and service identity must remain under FrameWorks operator control. That constraint shaped transport security, and this post walks through the result. Customer edges do not receive this provider trust root.
+With [bring-your-own-compute](/hybrid/edge-nodes), the machine that delivers your viewers' video may sit in your rack, a colocation cage, or a rented server we have never logged into. That machine still has to talk to the FrameWorks control plane, and the control plane has to believe it is the edge it claims to be. The obvious shortcuts each carry a risk. A secret baked into every edge image leaks the first time one box is compromised. Handing every edge our internal certificate root turns the anchor for service-to-service traffic into a file anyone with a VM can copy. A hosted mesh coordinator puts our network topology and the power to add peers in someone else's hands.
 
-## Two certificate systems
+The design we settled on keeps two trust roots apart. Provider services trust each other through a FrameWorks-owned internal CA. Anything that faces the internet, edges included, uses public web PKI. An edge verifies the control plane with a certificate its operating system already trusts, and identifies itself with a token minted for one tenant.
 
-Everything TLS in FrameWorks traces back to one of two issuers, and both live in Navigator, our DNS and certificate service.
+## An edge you don't own never sees the internal root
 
-The **internal CA** covers service-to-service gRPC on the private network. Navigator issues the leaves; Privateer (more on it below) delivers the CA certificate and each service's cert and key onto the node. Services talk to each other over TLS with the internal root pinned.
+Every TLS listener in FrameWorks belongs to exactly one of two issuers. The internal CA covers gRPC between provider services on the private network. Public ACME certificates cover everything a browser, a viewer, or an edge node touches, including per-tenant custom domains, which get the same issue-and-renew lifecycle.
 
-**Public ACME** covers everything a browser or a viewer touches. Navigator drives DNS-01 challenges, stores the resulting bundles, and publishes them to the reverse proxies and to Foghorn's external listener. Per-tenant custom domains get the same lifecycle: DNS record, ACME issuance, tenant-scoped storage, automatic renewal.
+The control-plane listener that edges connect to presents a publicly trusted certificate for the cluster. A customer edge therefore needs no FrameWorks CA material at all: it does not receive the provider trust root, does not join the backend mesh, and holds no federation credentials. That listener must never present the internal certificate, so in production the service refuses to start if the public certificate is unavailable, rather than serve the wrong identity on a public port.
 
-There is no separate "mesh TLS" system. Mesh traffic is internal-CA; public traffic is web PKI; every listener belongs to exactly one of the two.
+Clients on our side are just as strict. Each one dials with the address to connect to and the identity the server must prove as two separate inputs. A DNS change can send a client somewhere else, but it cannot make the client accept a certificate for a different name.
 
-Authentication rides _on top of_ the transport rather than inside it: service tokens, JWTs, and enrollment tokens over server-authenticated TLS. We haven't done transport mTLS or SPIFFE-style workload identity; per-edge client certificates are an open design item. What we have today is encrypted transport with a pinned root, plus a credential on every call that can be checked and logged.
+## How an edge proves who it is
 
-## The one service with two front doors
+A new edge presents an enrollment token. The token is minted for one tenant, can be scoped to a specific cluster, and can carry a usage limit for provisioning many nodes at once. Tokens are consumed atomically, so a single-use token that has already been spent cannot be replayed by whoever finds it later. A node that has enrolled before is recognized from its network identity and hashed hardware identifiers and does not need a new token.
 
-Foghorn is both an internal control-plane service and the public-facing edge authority, so it runs two gRPC listeners in one process. The internal listener (port 18019) serves control RPCs, health polling, and federation, with an internal-CA certificate. The external listener (port 18029) serves edge nodes out on the public internet — managed or bring-your-own — with an ACME cluster-wildcard certificate that their standard system trust stores already accept.
+After enrollment, every call from the edge carries a credential that the control plane checks and logs. Authentication rides on top of server-authenticated TLS rather than inside it. The only unauthenticated surfaces are health checks and the enrollment entry point itself, which validates the token before doing anything else.
 
-The external listener must never serve the internal certificate. In production, if Navigator can't supply the cluster wildcard bundle, Foghorn refuses to start rather than serve the wrong identity on a public port. On the client side, every gRPC client dials with an explicit tuple of address, expected TLS name, and CA material. Keeping the dial address separate from the identity the server must prove means a DNS change cannot make a client trust the wrong server.
+The [edge connection guide](/hybrid/connecting) walks through creating a token and enrolling a node.
 
-## Privateer: the part that touches every node
+## Why we did not use Tailscale
 
-Privateer is the mesh agent that runs on every backend node. It assembles the WireGuard mesh from three layers of configuration: static identity from the gitops manifest (each host's mesh address and public key), seed peers for bootstrap, and the managed layer — peers, mesh DNS, and PKI material — synced continuously from Quartermaster and cached locally so a node that reboots during a control-plane outage comes back with its last known mesh. Privateer composes the WireGuard config itself; hand-written tunnel configs aren't a supported input. It also serves local DNS for mesh hostnames, so services find each other by name inside the overlay.
+Inside the provider plane, backend nodes talk over a WireGuard mesh. The question was who coordinates it. The mesh coordinator decides which keys count as trusted peers, which makes it part of the trust root: whoever runs it can add a node to the network.
 
-We considered Tailscale, but its coordination plane is a SaaS, with topology visible to a third party and per-device pricing. Headscale trades that for a dependency on an external project at the center of our trust model. Provider mesh coordination therefore remains a first-party service: Privateer and Quartermaster.
+We looked at Tailscale first. Its coordination plane is a hosted service, so our topology would be visible to a third party, and pricing is per device. Headscale removes the hosted dependency but places an external project at the center of our trust model. Both would have put the decision about who joins our network outside the platform operator's control.
 
-## How an edge node joins
+So mesh coordination is first-party. A small agent on every backend node builds the WireGuard configuration from three sources: the host's static identity in the deployment manifest, a set of seed peers for bootstrap, and peers, mesh DNS, and certificates synced from the control plane. It caches the last known mesh locally, so a node that reboots while the control plane is down comes back with the peers it had. Hand-written tunnel configs are not a supported input, so every peer traces back to the manifest or the control plane. The manifest itself is [public](/blog/public-gitops), with host addresses and keys encrypted.
 
-Edge nodes are the untrusted boundary: with [bring-your-own-compute](/hybrid/edge-nodes), they may run on hardware we do not own. Enrollment is two-phase:
+## What this model does not do yet
 
-**Returning nodes** are recognized by fingerprint. The edge presents its network identity and hashed hardware identifiers; Quartermaster resolves them to a known node and tenant, and the node is registered immediately.
+Authentication is tokens over TLS, not transport mTLS. We have not built per-edge client certificates or SPIFFE-style workload identity; per-edge client certificates are an open design item. What exists today is encrypted transport with a pinned root on the inside, publicly verifiable certificates on the outside, and a credential on every call that can be checked and logged.
 
-**New nodes** present an enrollment token minted for a tenant (and optionally a specific cluster, with an optional usage limit for bulk provisioning). A pre-registration step validates the token, assigns the node identity and its DNS names, and hands back the internal CA bundle so the node can verify what it talks to from the first real RPC onward. Tokens are consumed atomically, so a leaked single-use token that has already been spent cannot be reused.
+Shared and dedicated provider capacity use the same architecture. Teams that self-host the entire stack run their own CA, mesh, DNS, and control plane as an independent platform with its own trust root; that platform does not join the FrameWorks network.
 
-Everything after enrollment goes through the authenticated listeners with per-request credentials. The only unauthenticated surface is health checking and the enrollment entry point itself, which validates its token in-method.
-
-## Deployment models
-
-Shared and dedicated provider capacity use the same trust architecture. Customer-operated MistServer/Helmsman edges authenticate to the public Foghorn boundary and do not join the backend mesh, receive federation credentials, or operate their own FrameWorks CA. Teams that self-host the entire stack run their own Foghorn, Livepeer, Chandler, object storage, DNS, analytics, control plane, and CA as an independent platform with its own trust root; that platform does not join the FrameWorks network.
-
-The operator-facing details live in [mesh networking](/operators/mesh-bootstrap), [DNS and cluster routing](/operators/dns), and the [architecture overview](/operators/architecture).
+Operators can find the setup details in [mesh networking](/operators/mesh-bootstrap), [DNS and certificates](/operators/dns), and the [architecture overview](/operators/architecture).

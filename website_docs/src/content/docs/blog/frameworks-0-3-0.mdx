@@ -3,43 +3,42 @@ title: "FrameWorks 0.3.0"
 date: 2026-07-05
 authors:
   - frameworks
-excerpt: "FrameWorks 0.3.0 adds platform admin, analytics, resilient edge playback, media placement, safer agent workflows, and the real-time foundation for chat and conferencing."
-description: "FrameWorks 0.3.0 adds platform admin, analytics, resilient edge playback, media placement, safer agent workflows, and the real-time foundation for chat and conferencing."
+excerpt: "FrameWorks 0.3.0 adds platform admin, analytics, playback that survives control-plane blips, media placement policies, safer agent workflows, and the real-time foundation for chat and conferencing."
+description: "FrameWorks 0.3.0 adds platform admin, analytics, playback that survives control-plane blips, media placement policies, safer agent workflows, and the real-time foundation for chat and conferencing."
 tags:
   - announcements
   - releases
   - roadmap
 ---
 
-FrameWorks 0.3.0 is out.
+FrameWorks 0.3.0 is out. Until this release, running a FrameWorks platform meant answering many everyday questions from private dashboards and a database console. 0.3.0 gives operators and tenants a supported view of what is happening, keeps viewers watching through control-plane blips, lets you say where your streams may run, and puts guardrails around what AI agents can do. Operators upgrading self-hosted edges should read the note at the end first.
 
-## Upgrade note: edge protocol v4 hard cut
+## Operators and tenants can see what is happening
 
-This release intentionally raises Foghorn's minimum Helmsman control protocol to
-v4 without a mixed-version window. The provider control plane upgrades before
-the desired edge release is synchronized. During that window, older v2/v3 edges are
-rejected, disappear from platform routing, and cannot receive their in-band updater
-command.
+Platform admin is the most direct change. A cross-tenant admin API and admin console give operators one supported place to inspect tenants, clusters, billing, and content. Access to it is an explicit grant, and every use lands in an audit log. That matters for hosted operations and for anyone running more than one cluster.
 
-Edge-only self-hosters must manually redeploy the 0.3.0 edge image after the control
-plane rollout. The same applies to an older edge that was offline during the rollout and
-returns later. It cannot reconnect until it has been updated to v4. This one-time edge
-interruption is an explicit release decision; the generation fence remains fail closed.
+Analytics is moving out of the internal-only bucket. Playback quality of experience, tenant activity, operator activity, stream monitoring controls, and a consolidated set of dashboard charts put the platform's state in front of the people who can act on it. The goal is answering normal operational questions without opening three private dashboards and a SQL console. For programmatic access, see the [analytics API](/builders/analytics-api).
 
-0.3.0 adds platform admin, analytics, edge resilience, media placement, agent workflows, and groundwork for chat and conferencing.
+## Playback and placement hold up under failure
 
-Platform admin is the most direct change. The cross-tenant admin API, admin console, and explicit operator grant model give operators a supported place to inspect tenants, clusters, billing, and content. That matters for hosted operations and for anyone running more than one cluster. Admin access is now an explicit grant with an audit log.
+Viewers who are already watching keep watching when the control plane is briefly unreachable. New viewers are admitted from signed answers the media cluster already holds, so a short central outage does not turn into refused playback. One viewer's approval is never reused for another: an earlier yes says nothing about the new viewer's location, their permission, or a policy that changed since. [Viewers keep watching when the control plane blips](/blog/live-playback-control-blips) explains the rule and its limits. Alongside it, clusters tell each other which streams they can serve, so a viewer can be served through a peer cluster, and native edge installs on Linux and macOS are smoother.
 
-Analytics is also moving out of the "internal-only" bucket. Playback QoE, tenant activity, operator activity, stream monitoring controls, and the consolidated dashboard charts make the platform state more visible to the people who can act on it. The goal is answering normal operational questions without opening three private dashboards and a SQL console.
+Media placement is the other routing change. Where a request is answered, where a stream originates, and where a viewer receives it are three different places, and 0.3.0 stops treating a cluster boundary as a distance penalty. On top of that sits a placement policy per account and per stream: prefer your own capacity, spill over only when you run out of capacity or have no coverage in a region, never use platform-official capacity, or rank marketplace capacity by effective price. A policy only takes effect in a cluster that has confirmed it enforces it. [Your stream, your edge](/blog/your-stream-your-edge) tells the full story, and the [media placement docs](/builders/media-placement) show how to preview a policy. Storage and processing placement are not in this release.
 
-Edge playback is getting stricter about partial failure. Foghorn and Helmsman now have better behavior when the stream is healthy but the control plane is briefly unavailable: registry stale-serving for transient resolve failures, bounded Helmsman recovery for previously approved play rewrites, HA state sync through Redis changelogs, federation advertisements for resilient playback, and native edge install improvements across Linux and macOS.
+## Agents can act, with guardrails
 
-Media placement is the other routing change in this tag. Where a request is answered, where a stream originates, and where a viewer receives it are three different places, and 0.3.0 stops treating a cluster boundary as a distance penalty. On top of that sits a typed placement policy per account and per stream: prefer your own capacity, spill over only on capacity or a defined geographic hole, never touch platform-official capacity, or rank marketplace capacity by effective price. Policies reach final admission through signed authority, and a cell only receives policy-bearing authority once its Foghorn replicas have attested that they enforce it. The full account is in [Your stream, your edge](/blog/your-stream-your-edge). Storage and processing placement are deliberately not in this tag.
+Skipper and MCP ship in 0.3.0 because AI agents are becoming part of how people operate streams. The useful work is diagnosis from real stream state, schema-aware API help, a billing preflight before expensive actions, confirmation before anything changes, and labels that say whether an answer came from docs, schema, metrics, or model inference. Billing changes and private-infrastructure tools now require an owner or admin identity as well as the matching API token scope, so an agent linked to a regular member account no longer sees those tools at all. The [MCP docs](/agents/mcp) cover connecting an agent.
 
-Skipper and MCP are part of 0.3.0 because agents are becoming an operations surface. The useful work is diagnostics from real stream state, schema-aware API help, billing preflight before expensive actions, confirmation gates around mutations, and source labels that say whether an answer came from docs, schema, metrics, or model inference. Billing mutations and private-infrastructure tools now require an owner/admin identity as well as the matching API-token scope, so member-linked agents no longer receive those tools in discovery.
+## What is not in 0.3.0
 
-Chat and conferencing are next because FrameWorks already has pieces of the real-time stack: support conversations, message lifecycle events, Signalman subscriptions, and Skipper conversations. Conferencing needs room state, participant identity, moderation, recording rules, pricing, and media routing built around active participants. 0.3.0 sets up that direction by tightening the real-time and operator foundations first.
+Chat and conferencing are next, because FrameWorks already has pieces of the real-time stack: support conversations, message lifecycle events, live subscriptions, and Skipper conversations. Conferencing still needs room state, participant identity, moderation, recording rules, pricing, and media routing built around active participants. 0.3.0 tightens the real-time and operator foundations that work depends on.
 
-Composer stays on the roadmap. It is still one of the more interesting media features: overlays, lower thirds, SSAI, transcription, object detection, picture-in-picture, automated clipping. It also has a lot of product contract behind it: API shape, placement model, lifecycle, billing meters, permissions, dashboard controls, and MCP access. It ships once those contracts are defined.
+Composer stays on the roadmap. Overlays, lower thirds, server-side ad insertion, transcription, object detection, picture-in-picture, and automated clipping are among the more interesting media features we could build, and each carries a product contract: API shape, placement, lifecycle, billing meters, permissions, dashboard controls, and MCP access. It ships once those contracts are defined.
 
-BYOC also gets clearer in this line. Bring-your-own MistServer/Helmsman edge nodes are the supported boundary. FrameWorks still operates Foghorn, federation, Livepeer, Chandler, storage, DNS, analytics, billing, and the control plane; customer-operated versions of that coupled stack are not a deeper edge tier.
+Bring-your-own-compute also gets a clearer boundary. You can run your own edge nodes with MistServer, and FrameWorks keeps running routing, federation, transcoding, storage, DNS, analytics, billing, and the control plane. There is no deeper tier where a customer runs part of that coupled stack. Teams that want all of it self-host the entire stack as an independent platform.
+
+## Operator note: self-hosted edges must be redeployed
+
+This release raises the minimum protocol version between edges and the control plane, with no window where old and new versions work together. The control plane upgrades first. From that moment, edges on the older protocol are refused, drop out of routing, and cannot receive the automatic update that would fix them.
+
+If you run edge nodes yourself, redeploy them with the 0.3.0 edge image after the control plane rollout. The same applies to an older edge that was offline during the rollout and comes back later: it cannot reconnect until it has been updated. This one-time interruption was a deliberate trade: an edge that cannot show it speaks the new protocol is refused rather than trusted. The [upgrade guide](/operators/running-upgrades#edge-nodes) has the redeploy command, and the [self-hosted edge rollout runbook](/operators/selfhosted-edge-rollout) covers release order and recovery.

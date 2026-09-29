@@ -3,58 +3,50 @@ title: "An AI Agent Walks Into a Streaming Platform"
 date: 2026-05-18
 authors:
   - frameworks
-excerpt: "No signup form, no credit card, no human: an agent authenticates with a wallet signature, hits a 402, pays in USDC over x402, and creates a stream. How FrameWorks treats agents as first-class users."
-description: "No signup form, no credit card, no human: an agent authenticates with a wallet signature, hits a 402, pays in USDC over x402, and creates a stream. How FrameWorks treats agents as first-class users."
+excerpt: "No signup form, no credit card, no human: an agent signs in with a wallet, gets a payment request when its balance runs out, pays in USDC, and carries on. How FrameWorks treats agents as first-class users."
+description: "No signup form, no credit card, no human: an agent signs in with a wallet, gets a payment request when its balance runs out, pays in USDC, and carries on. How FrameWorks treats agents as first-class users."
 tags:
   - engineering
   - ai
   - payments
 ---
 
-Here is the onboarding flow for an AI agent: create an EVM wallet, request and sign a one-time login challenge, configure a stream at zero balance, then fund the tenant before any rated ingest, playback, storage, or processing begins. No signup form, email verification loop, or card is required for prepaid use.
+Most video platforms assume a person is at the keyboard. Signup wants an email address and a click on a verification link, billing wants a card, and when something goes wrong the answer is a support ticket. An AI agent can do none of those things. It can hold a wallet, sign messages, call an API, and read structured errors.
 
-## Identity is a signature
+FrameWorks lets an agent become a paying customer with only those abilities. It signs in with a wallet, sets up what it needs at zero balance, and pays for usage in USDC when a billable call asks for it.
 
-Agents authenticate with EIP-191 `personal_sign` over a server-issued, five-minute, single-use challenge. The server stores its hash and atomically consumes it, so copied or concurrent replays cannot create another session. The first successful exchange auto-provisions a prepaid tenant, an email-less user, a zero balance, and the wallet binding. Adding a verified email and collection method makes postpaid available; it is not required for prepaid use.
+## One agent's first run
 
-API requests currently have a zero price, but their usage is still metered and
-itemized alongside bandwidth, viewer time, storage, processing, and AI work.
-Usage is reported in five-minute summaries and rated against the tenant and
-work-cluster contract; if an available balance is exhausted, new billable
-operations are blocked until it is topped up. Enforcement is automatic.
+Say an agent has been asked to publish a finished video on FrameWorks. It has never used the platform and has no account.
 
-## The 402 is the API
+It starts with an EVM wallet. It asks FrameWorks for a one-time login message, signs it with the wallet's key, and sends the signature back. That signature is the whole signup. The first successful sign-in creates an account tied to that wallet, with no email address and a balance of zero.
 
-When an authenticated agent calls a rated operation without enough balance, the answer is HTTP 402 with a tenant-bound payment offer. The agent signs a USDC transfer authorization off-chain — [x402](https://github.com/coinbase/x402) rides on EIP-3009 — and retries with `PAYMENT-SIGNATURE`. FrameWorks submits it, waits for a confirmed successful receipt, atomically credits the balance, and then reruns ordinary admission policy. Payment never doubles as login or bypasses suspension.
+At zero balance the agent can already do a lot: read its account status, create API credentials, configure a stream, and look up what the platform offers. None of that costs anything, so none of it needs money.
 
-```mermaid
-sequenceDiagram
-    participant A as Agent
-    participant G as Gateway MCP
-    participant P as Purser (billing)
-    participant C as Base / Arbitrum
-    A->>G: create_vod_upload (bearer auth)
-    G-->>A: 402 · payment requirements
-    A->>A: sign EIP-3009 authorization (off-chain)
-    A->>G: retry + PAYMENT-SIGNATURE
-    G->>P: verify signature, settle
-    P->>C: submit tx (server pays gas)
-    P->>P: confirmed credit + canonical balance recheck
-    G-->>A: upload created
-```
+Then it asks to create the upload. Processing a video is billable work, and the balance is empty, so the call comes back with HTTP 402 Payment Required and a payment offer bound to this account: the amount, the token, and the networks it can pay on.
 
-x402 settles on Base and Arbitrum. We skipped Ethereum mainnet — a few dollars of gas per transaction makes no sense for topping up a streaming balance. For agents (or humans) who prefer plain transfers, there's also a classic deposit flow: a derived deposit address, a price-locked quote, and block-explorer polling until ETH or USDC arrives.
+The agent signs a USDC transfer authorization for that amount and submits it as a top-up. FrameWorks relays the transfer, so the agent does not need to hold gas, waits until the chain confirms it, and credits the balance. The agent retries the upload, the usual balance and account checks run again, and the upload is created.
 
-Two guardrails apply. Rated operations require authentication and positive available balance, while reads, configuration, cleanup, and payment recovery remain usable at zero balance. A failed rated check returns a structured blocker with the x402 offer, so an agent learns _what to fix and how to pay_ without parsing prose. Payments over €100, and payments carrying a VAT-number claim, require a complete billing profile and use the full-document path; exactly €100 can still use a simplified document.
+No step in that run needed a person. The agent never read an email, typed a card number, or waited for support.
 
-Settlement handles its own failure modes: verification happens before any provisioning side effect, credits are idempotent under webhook and retry replay, and a crash between "payment verified" and "access granted" resolves on retry rather than stranding a paid-but-inactive account.
+## Why payment is part of the API
+
+The [x402](https://www.x402.org/) protocol gives the 402 status code a machine-readable body: what to pay, how, and where. An agent that hits a billable call without funds gets a structured answer that names the fix and carries the offer to pay it, so it does not have to parse an error message written for humans.
+
+We settle on Base and Arbitrum. We skipped Ethereum mainnet, because a few dollars of gas per transaction makes no sense for topping up a streaming balance. Agents, or people, who prefer a plain transfer can use a deposit flow instead: ask for a quote, get a deposit address, and send ETH or USDC to it.
+
+## What a wallet-only account can and cannot do
+
+A wallet costs nothing to create, so a wallet-only account is always prepaid: it has to fund its balance before it consumes anything billable. That is what stops someone from minting thousands of wallets and running work on credit. Adding and verifying an email address later opens the other billing options.
+
+Payment and identity stay separate. Paying never signs an agent in, and a payment does not override a suspended account; after the top-up, the retried call goes through the same checks as any other request. Usage is metered and itemized the same way whether the caller is a person or an agent.
+
+The cost of this model for the agent's operator is that the wallet is the account. Whoever holds the key controls the account and its balance, so the key belongs somewhere the agent can use it and nothing else can read it.
 
 ## One MCP surface for the whole platform
 
-Once onboarded, the agent uses the Gateway's [MCP](/agents/mcp) surface: runtime-discovered tools spanning wallet onboarding, streams, clips, DVR, VOD, playback, QoE diagnostics, billing, support, schema introspection, and infrastructure, plus [Skipper's](/agents/skipper) `ask_consultant` — alongside read-only resources for streams, analytics, nodes, and billing state. A small public surface covers wallet challenge issuance, playback resolution, and marketplace browsing, because an agent needs to be able to discover how to become a customer before it is one. Tenant-bound payment options and submission require the wallet-authenticated tenant they credit.
+Once signed in, the agent works through the [MCP server](/agents/mcp): tools for streams, clips, DVR, VOD, playback, quality diagnostics, billing, and support, plus read-only resources for account and stream state. A small part of it is public, covering sign-in and playback lookup, because an agent has to be able to find out how to become a customer before it is one.
 
-Skipper and the Gateway have separate roles. Skipper consults: its `ask_consultant` pipeline can search knowledge and run diagnostics but has mutation tools blocked, so a free-form consulting answer can never delete a stream as a side effect. State changes go through the dedicated Gateway tools, each with its own authorization and its own preflight. The Gateway injects the caller's tenant context into everything it forwards, so a spoke never sees a request without knowing exactly which tenant it's acting for.
+[Skipper](/agents/skipper), the AI video consultant, is available on the same surface for questions such as why a stream is buffering. It can search documentation and run diagnostics but cannot change anything on that path, so asking it a question never deletes a stream as a side effect. Changes go through the dedicated tools, each with its own authorization. We wrote about Skipper [when it launched](/blog/skipper-launch).
 
-We wrote about Skipper itself [when it launched](/blog/skipper-launch); the agent-facing docs start at [agents overview](/agents/overview), with [wallet auth](/agents/wallet-auth) and [payments](/agents/payments) covering this post's flow in reference form.
-
-Agents can't read onboarding emails or contact support, so payment is a protocol step and each error names its fix.
+The [agents overview](/agents/overview) is the place to start. [Wallet authentication](/agents/wallet-auth) and [agent payments](/agents/payments) cover this post's flow step by step, including the payment networks, the deposit flow, and the errors an agent should expect.

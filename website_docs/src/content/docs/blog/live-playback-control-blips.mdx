@@ -1,32 +1,46 @@
 ---
-title: Keeping Live Playback Up During Control-Plane Blips
+title: "Viewers Keep Watching When the Control Plane Blips"
 date: 2026-07-03
 authors:
   - frameworks
-excerpt: "How Foghorn and Helmsman handle live playback when the media path is healthy but fresh control-plane resolution is briefly unavailable."
-description: "How Foghorn and Helmsman handle live playback when the media path is healthy but fresh control-plane resolution is briefly unavailable."
+excerpt: "A brief control-plane outage no longer decides who can watch. Viewers who are already watching keep watching, new viewers are admitted from signed answers the media cluster already holds, and one viewer's approval is never reused for another."
+description: "A brief control-plane outage no longer decides who can watch. Viewers who are already watching keep watching, new viewers are admitted from signed answers the media cluster already holds, and one viewer's approval is never reused for another."
 tags:
   - architecture
   - playback
   - edge
 ---
 
-Live playback has an awkward dependency: the media path can be perfectly healthy while the control plane is briefly unavailable.
+Picture a stream in the middle of a broadcast. The encoder is pushing, the edge nodes are serving video, and people are watching. Then the control plane becomes unreachable for a few seconds: a deploy, a database failover, a network partition between regions. Nothing about the media changed. What matters is what happens to the people already watching, and to the people who press play during those seconds.
 
-A viewer asks MistServer for `playback_id`. Mist fires a blocking `PLAY_REWRITE` trigger to Helmsman. Helmsman asks Foghorn what that token should resolve to. Foghorn reads the signed stream/artifact and tenant authority already persisted in its media cell, then combines it with local runtime placement.
+The rule FrameWorks follows: viewers who are already watching keep watching when the control plane is briefly unreachable. New viewers are admitted from a signed, durable answer the media cluster already holds. If no valid answer exists, the new viewer is refused cleanly. A missing answer is never treated as permission.
 
-Policy belongs in Foghorn, but a failure to reach Foghorn must not be treated as a policy decision.
+## A failure to answer is not an answer
 
-The old Mist trigger interface could not distinguish a returned value, an explicit denial, and a handler failure. Its legacy fallback string was `true`; for `PLAY_REWRITE`, that is a literal stream name, not permission. It also does not reveal the internal stream behind an unresolved playback token. The real defect was the untyped contract and the different ways each call site consumed the same fallback string.
+Every new playback request on an edge node goes through a hook: before MistServer starts serving, it asks the FrameWorks edge agent what the requested playback ID resolves to and whether this viewer may have it. The agent asks the cluster's regional load balancer, which holds the policy.
 
-The FrameWorks Mist fork now accepts an explicit trigger action. `PLAY_REWRITE` uses `deny` when Helmsman cannot answer, and an authoritative rejection is also returned as `deny`. No sentinel stream name is involved. Helmsman continuously repairs the full managed trigger definition, because a missing trigger skips the decision entirely rather than invoking its failure action.
+The weak spot was what happened when that question could not be answered. MistServer's hook interface had a single fallback value for "the handler failed", and for playback that fallback was a string that read as a stream name. It could not tell an explicit denial apart from a handler that never replied, and different call sites interpreted the same fallback differently. A control-plane problem could reach the viewer as an arbitrary answer rather than as a failure.
 
-Denying the viewer is still a poor outcome when the media cell already holds a valid, durable answer, so FrameWorks keeps that answer in the media cell. Commodore distributes signed, versioned tenant and media-object authority to every eligible Foghorn cell. Foghorn verifies and commits it before acknowledging. A soft-expired decision keeps serving while Foghorn requests a refresh; hard expiry, a signed denial/tombstone, or a verification failure never becomes an allow. Because the projection is in the cell database, a Foghorn restart does not create a control-plane cold start.
+Our MistServer fork now accepts an explicit action for each hook. For playback, a handler that cannot answer produces a denial, and an authoritative rejection produces the same denial. No sentinel value is involved. The edge agent also keeps the hook's definition repaired continuously, because a hook that has gone missing skips the decision entirely instead of failing it.
 
-Helmsman asks Foghorn for each new public play rewrite. It does not replay a previous viewer's successful stream-name mapping when Foghorn is unreachable: that mapping says nothing about the new viewer's location, the selected destination's current permission, or a changed tenant policy.
+## Each media cluster holds its own signed answers
 
-Signed Foghorn authority protects the media cell from upstream control-plane outages. Losing every reachable Foghorn is a different failure: new requests need reconnect or failover before they can obtain a decision. If no valid answer exists, Mist applies the trigger's explicit denial rather than interpreting an arbitrary fallback string.
+Refusing new viewers is still a poor outcome when the media cluster already knows the right answer. So the control plane distributes signed, versioned authority for tenants and media to every cluster that serves them. The cluster verifies each update and commits it to its own database before acknowledging it.
 
-This affects admission of new requests; it does not terminate established playback. Control-plane interruptions are covered by verified authority, and a cached stream name is never treated as permission.
+A decision past its soft expiry keeps serving while the cluster requests a refresh. Hard expiry, a signed revocation, or a failed signature check never turns into an allow. Because the answers live in the cluster's database, restarting the regional load balancer does not force a round trip to the central control plane before viewers can be admitted again.
 
-The same authority now covers ingest ownership, pull/native sources, processing policy, multistream targets, and restart configuration. Owner-service changes create durable refresh outboxes; signed replacements and revocations converge independently to each cell. New management operations and new x402 settlement still require the control plane, but already-authorized media does not.
+The same signed authority covers ingest ownership, pull sources, processing policy, multistream targets, and restart configuration. Changes and revocations reach each cluster independently. What still needs a live control plane is new management work, such as creating a stream, and new x402 settlement. Media that is already authorized does not.
+
+## Why an earlier viewer's approval is not reused
+
+There is a tempting shortcut: when the regional load balancer is unreachable, remember the last successful answer for a playback ID and hand it to the next viewer who asks for the same one. We do not do this.
+
+An approval for an earlier viewer says nothing about the new viewer's location, about whether the destination that viewer would be sent to still permits them, or about a tenant policy that changed since. Consider a geofenced event, or a signing key that was just revoked. Replaying an earlier yes in those cases would admit exactly the viewers the policy exists to stop. Every new viewer gets a fresh decision from the regional load balancer, based on the signed authority it holds.
+
+## What still fails
+
+Signed local authority protects a media cluster from outages further upstream. Losing every reachable regional load balancer for a cluster is a different failure. New requests then have to reconnect or fail over before they can get a decision, and if no valid answer exists, MistServer applies the explicit denial.
+
+That affects the admission of new viewers only. Playback that is already established is not terminated because the control plane went quiet. The honest boundary is expiry: stored authority serves through its signed validity window, and never beyond it.
+
+The [architecture overview](/operators/architecture#multi-cluster-topology) describes how signed authority reaches each cluster, and [playback access control](/builders/playback-access-control) covers the policies it carries.

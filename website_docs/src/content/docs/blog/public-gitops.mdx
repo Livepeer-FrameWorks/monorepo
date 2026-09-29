@@ -11,7 +11,7 @@ tags:
   - sovereignty
 ---
 
-Last week we merged our private gitops repo into the public one. The commit message is one line: "merge gitops-private for deployment transparency." Since then, the [FrameWorks gitops repo](https://github.com/Livepeer-FrameWorks/gitops) has contained our actual production deployment — every service, database, message broker, cache, and host-to-role mapping, in plaintext, for anyone to read.
+Last week we merged our private gitops repo into the public one. The commit message is one line: "merge gitops-private for deployment transparency." Since then, the [FrameWorks gitops repo](https://github.com/Livepeer-FrameWorks/gitops) has contained our actual production deployment: every service, database, message broker, cache, and host-to-role mapping, in plaintext, for anyone to read.
 
 The position follows from how we operate the product. FrameWorks publishes the topology of its managed provider plane rather than hiding how production is wired. The cluster manifest that drives our deployment is published as-is, and each cluster in it carries an explicit `public_topology: true` flag. The same `frameworks` CLI and GitOps layout are what anyone self-hosting the entire stack uses to deploy and upgrade their own independent platform.
 
@@ -19,7 +19,7 @@ The position follows from how we operate the product. FrameWorks publishes the t
 
 The repo splits into two kinds of files.
 
-**Plaintext:** the cluster manifest (topology, service placement, database and broker wiring, per-service configuration), the edge-node topology, the non-secret operator environment, and the release manifests with their channel pointers. SOPS-encrypted files also keep their YAML keys and structure visible — you can see _that_ there's a WireGuard private key per host and what the file layout is, just not the value.
+**Plaintext:** the cluster manifest (topology, service placement, database and broker wiring, per-service configuration), the edge-node topology, the non-secret operator environment, and the release manifests with their channel pointers. SOPS-encrypted files also keep their YAML keys and structure visible, so you can see _that_ there's a WireGuard private key per host and what the file layout is, just not the value.
 
 **Encrypted:** the hosts file (server addresses, SSH targets, WireGuard private keys) and the secrets env files (API keys, passwords, tokens). Everything encrypted uses [SOPS](https://github.com/getsops/sops) with [age](https://github.com/FiloSottile/age) keys.
 
@@ -29,14 +29,14 @@ The interesting property is what the plaintext half enables. Anyone evaluating F
 
 A public repo with an encryption boundary is one careless commit away from being a public repo without one. Three pre-commit hooks enforce it:
 
-- **No plaintext secrets** — staged secrets files must actually be SOPS-encrypted: env files need the SOPS version marker, encrypted YAML needs its `sops:` metadata block. A decrypted file that someone forgot to re-encrypt fails the commit.
-- **No leaked addresses** — staged plaintext manifests are grepped for IP addresses that belong in the encrypted hosts file, with only documentation ranges and loopback allowed through.
-- **No age keys** — any staged file containing an age secret-key prefix fails the commit, so a private key can't ride along in a config or a note.
+- **No plaintext secrets.** Staged secrets files must actually be SOPS-encrypted: env files need the SOPS version marker, encrypted YAML needs its `sops:` metadata block. A decrypted file that someone forgot to re-encrypt fails the commit.
+- **No leaked addresses.** Staged plaintext manifests are grepped for IP addresses that belong in the encrypted hosts file, with only documentation ranges and loopback allowed through.
+- **No age keys.** Any staged file containing an age secret-key prefix fails the commit, so a private key can't ride along in a config or a note.
 
-Secret edits go through a small wrapper script that decrypts to a temp file, applies the change, and re-encrypts — nobody hand-edits encrypted files. Key management is documented in the repo itself: adding a teammate is a keypair plus `sops updatekeys`; a compromised key means removing it _and_ rotating every value it could decrypt, on the theory that once the ciphertext is public, revoking the key alone protects nothing.
+Secret edits go through a small wrapper script that decrypts to a temp file, applies the change, and re-encrypts. Nobody hand-edits encrypted files. Key management is documented in the repo itself: adding a teammate is a keypair plus `sops updatekeys`; a compromised key means removing it _and_ rotating every value it could decrypt, on the theory that once the ciphertext is public, revoking the key alone protects nothing.
 
 ## What it costs
 
-The downside: our infrastructure is easier to case. An attacker can read which services exist, where the trust boundaries are, and what a valuable target would be. We accepted that because most of it is discoverable anyway — port scans, DNS, TLS certificates, and job postings reconstruct a topology diagram slowly but reliably — while the part that gives an attacker traction (addresses, credentials, keys) stays encrypted. What we got in return is a deployment reference that can't go stale, since the deploy tooling reads the same file you do.
+The downside: our infrastructure is easier to case. An attacker can read which services exist, where the trust boundaries are, and what a valuable target would be. We accepted that because most of it is discoverable anyway: port scans, DNS, TLS certificates, and job postings reconstruct a topology diagram slowly but reliably, while the part that gives an attacker traction (addresses, credentials, keys) stays encrypted. What we got in return is a deployment reference that can't go stale, since the deploy tooling reads the same file you do.
 
 FrameWorks infrastructure operators start from the [deployment guide](/operators/deployment); customer edge operators should use the [hybrid edge guide](/hybrid/overview).
