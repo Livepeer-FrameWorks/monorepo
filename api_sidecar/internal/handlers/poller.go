@@ -3744,7 +3744,7 @@ func convertStreamAPIToMistTrigger(nodeID, streamName, internalName string, stre
 	var primaryBitrate int32
 	var primaryCodec string
 	var primaryVideoBufferMs, primaryVideoJitterMs uint32
-	var foundVideo, foundAudio bool
+	var foundAudio bool
 
 	if len(trackDetails) > 0 {
 		// Serialize full track details to JSON for storage
@@ -3753,13 +3753,30 @@ func convertStreamAPIToMistTrigger(nodeID, streamName, internalName string, stre
 			streamLifecycleUpdate.TrackDetailsJson = &trackDetailsStr
 		}
 
-		for _, track := range trackDetails {
-			trackType, _ := track["type"].(string)
-			trackCodec := getString(track["codec"])
+		primaryVideoIdx := mist.PrimaryVideoIndex(len(trackDetails), func(i int) mist.VideoTrackFacts {
+			track := trackDetails[i]
+			facts := mist.VideoTrackFacts{
+				TrackType:   getString(track["type"]),
+				Codec:       getString(track["codec"]),
+				SourceTrack: getString(track["source_track"]),
+				TrackIndex:  -1,
+			}
+			if height, ok := track["height"].(int); ok {
+				facts.Height = int32(height)
+			}
+			if idx, ok := track["track_index"].(int); ok {
+				facts.TrackIndex = int32(idx)
+			}
+			return facts
+		})
 
-			// Extract primary video track info; thumbnail tracks are not media video.
-			if trackType == "video" && isMediaHealthTrack(trackType, trackCodec) && !foundVideo {
-				foundVideo = true
+		for i, track := range trackDetails {
+			trackType := getString(track["type"])
+
+			// Primary video is the original continuous-video track with the
+			// largest known height; thumbnails and renditions never describe
+			// the stream's resolution.
+			if i == primaryVideoIdx {
 				if width, ok := track["width"].(int); ok {
 					primaryWidth = int32(width)
 				}

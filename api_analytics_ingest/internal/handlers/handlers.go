@@ -2528,16 +2528,14 @@ func (h *AnalyticsHandler) processStreamBuffer(ctx context.Context, event kafka.
 	return nil
 }
 
-// extractPrimaryTracks finds the first video and audio tracks from a list of StreamTracks
+// extractPrimaryTracks returns the video track that the Helmsman quality tier
+// describes (original continuous video with the largest known height, never a
+// thumbnail or rendition) and the first audio track.
 func extractPrimaryTracks(tracks []*ipcpb.StreamTrack) (video, audio *ipcpb.StreamTrack) {
+	video = mist.PrimaryVideoTrack(tracks)
 	for _, t := range tracks {
-		if t.GetTrackType() == "video" && video == nil {
-			video = t
-		}
-		if t.GetTrackType() == "audio" && audio == nil {
+		if t.GetTrackType() == "audio" {
 			audio = t
-		}
-		if video != nil && audio != nil {
 			break
 		}
 	}

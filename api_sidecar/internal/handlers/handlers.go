@@ -2300,15 +2300,13 @@ func enrichLiveTrackListTrigger(trigger *ipcpb.StreamTrackListTrigger) {
 	trigger.VideoTrackCount = &videoTrackCount
 	trigger.AudioTrackCount = &audioTrackCount
 
-	// Extract primary video track info
-	for _, primary := range videoTracks {
-		if normalizeTrackCodec(primary.Codec) == "JPEG" {
-			continue
-		}
-		if primary.Width != nil {
+	// Primary video is the same track the quality tier describes. Unknown
+	// (zero) dimensions stay unset so they never read as a low resolution.
+	if primary := mist.PrimaryVideoTrack(tracks); primary != nil {
+		if primary.GetWidth() > 0 {
 			trigger.PrimaryWidth = primary.Width
 		}
-		if primary.Height != nil {
+		if primary.GetHeight() > 0 {
 			trigger.PrimaryHeight = primary.Height
 		}
 		if primary.Fps != nil {
@@ -2321,7 +2319,6 @@ func enrichLiveTrackListTrigger(trigger *ipcpb.StreamTrackListTrigger) {
 		if primary.Codec != "" {
 			trigger.PrimaryVideoCodec = &primary.Codec
 		}
-		break
 	}
 
 	// Extract primary audio track info
@@ -2349,23 +2346,14 @@ func enrichLiveTrackListTrigger(trigger *ipcpb.StreamTrackListTrigger) {
 	}
 }
 
-// determineQualityTier determines quality tier with rich format: "1080p60 H264 @ 6Mbps"
+// determineQualityTier determines quality tier with rich format: "1080p60 H264 @ 6Mbps".
+// It returns "" while the primary video's height is unknown.
 func determineQualityTier(tracks []*ipcpb.StreamTrack) string {
-	// Find primary video track (highest resolution)
-	var primaryVideo *ipcpb.StreamTrack
-	maxHeight := int32(0)
-	for _, track := range tracks {
-		if track.TrackType == "video" && normalizeTrackCodec(track.Codec) != "JPEG" && track.Height != nil {
-			if *track.Height > maxHeight {
-				maxHeight = *track.Height
-				primaryVideo = track
-			}
-		}
-	}
-
-	if primaryVideo == nil || maxHeight == 0 {
+	primaryVideo := mist.PrimaryVideoTrack(tracks)
+	if primaryVideo == nil || primaryVideo.GetHeight() <= 0 {
 		return ""
 	}
+	maxHeight := primaryVideo.GetHeight()
 
 	// Resolution tier
 	var resolution string

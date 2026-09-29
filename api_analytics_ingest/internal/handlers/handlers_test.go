@@ -657,6 +657,11 @@ func TestExtractPrimaryTracks(t *testing.T) {
 	videoPrimary := &ipcpb.StreamTrack{TrackType: "video", TrackName: "video-primary"}
 	videoSecondary := &ipcpb.StreamTrack{TrackType: "video", TrackName: "video-secondary"}
 	audioPrimary := &ipcpb.StreamTrack{TrackType: "audio", TrackName: "audio-primary"}
+	// Mist reports tracks as a JSON object, so a thumbnail or rendition can
+	// precede the source; the source is still the primary video.
+	thumbnail := &ipcpb.StreamTrack{TrackType: "video", Codec: "JPEG", TrackName: "video_JPEG_160x90_0fps_pre_3", Height: proto.Int32(90)}
+	rendition := &ipcpb.StreamTrack{TrackType: "video", Codec: "H264", TrackName: "video_H264_854x480_30fps_3", Height: proto.Int32(480), SourceTrack: proto.String("0")}
+	source := &ipcpb.StreamTrack{TrackType: "video", Codec: "H264", TrackName: "video_H264_1280x720_30fps_0", Height: proto.Int32(720)}
 
 	cases := []struct {
 		name      string
@@ -668,6 +673,8 @@ func TestExtractPrimaryTracks(t *testing.T) {
 		{name: "audio only", tracks: []*ipcpb.StreamTrack{audioPrimary}, wantVideo: nil, wantAudio: audioPrimary},
 		{name: "video then audio", tracks: []*ipcpb.StreamTrack{videoPrimary, audioPrimary}, wantVideo: videoPrimary, wantAudio: audioPrimary},
 		{name: "multiple videos", tracks: []*ipcpb.StreamTrack{videoPrimary, videoSecondary, audioPrimary}, wantVideo: videoPrimary, wantAudio: audioPrimary},
+		{name: "source after thumbnail and rendition", tracks: []*ipcpb.StreamTrack{thumbnail, rendition, audioPrimary, source}, wantVideo: source, wantAudio: audioPrimary},
+		{name: "thumbnail only", tracks: []*ipcpb.StreamTrack{thumbnail, audioPrimary}, wantVideo: nil, wantAudio: audioPrimary},
 	}
 
 	for _, tc := range cases {

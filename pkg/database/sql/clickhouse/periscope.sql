@@ -262,13 +262,17 @@ SELECT
     avg(frame_jitter_ms) AS avg_frame_jitter_ms,
     max(frame_jitter_ms) AS max_frame_jitter_ms,
     countIf(buffer_state = 'DRY') AS buffer_dry_count,
-    ifNull(argMax(
-        if(height >= 2160, '2160p',
-          if(height >= 1440, '1440p',
-            if(height >= 1080, '1080p',
-              if(height >= 720, '720p',
-                if(height >= 480, '480p', 'SD'))))), timestamp
-    ), 'Unknown') AS quality_tier
+    -- The tier comes from the latest sample with a known height. Samples
+    -- without video dimensions (buffer edges, stream end) carry NULL height
+    -- and must not rank as SD; a block with no known height is 'Unknown'.
+    if(countIf(height > 0) = 0, 'Unknown', argMaxIf(
+        multiIf(assumeNotNull(height) >= 2160, '2160p',
+                assumeNotNull(height) >= 1440, '1440p',
+                assumeNotNull(height) >= 1080, '1080p',
+                assumeNotNull(height) >= 720, '720p',
+                assumeNotNull(height) >= 480, '480p', 'SD'),
+        timestamp, height > 0
+    )) AS quality_tier
 FROM stream_health_samples
 GROUP BY timestamp_5m, tenant_id, stream_id, internal_name, node_id;
 

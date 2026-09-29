@@ -5141,7 +5141,7 @@ func (s *PeriscopeServer) GetStreamHealthSummary(ctx context.Context, req *peris
 			sum(issue_count) AS total_issues,
 			count() AS samples,
 			countIf(issue_count > 0) AS issue_samples,
-			argMax(quality_tier, timestamp_5m) AS latest_tier
+			argMaxIf(quality_tier, timestamp_5m, quality_tier NOT IN ('', 'Unknown')) AS latest_tier
 		FROM stream_health_5m
 		WHERE tenant_id = ? AND timestamp_5m >= ? AND timestamp_5m <= ?
 	`
