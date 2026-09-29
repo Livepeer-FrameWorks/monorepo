@@ -12,7 +12,6 @@ import (
 	"frameworks/api_consultant/internal/diagnostics"
 	"frameworks/api_consultant/internal/skipper"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/clients/periscope"
-	"github.com/Livepeer-FrameWorks/monorepo/pkg/ctxkeys"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/llm"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	commodorepb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/commodore"
@@ -100,6 +99,10 @@ type Orchestrator interface {
 	Run(ctx context.Context, messages []llm.Message, streamer chat.TokenStreamer) (chat.OrchestratorResult, error)
 }
 
+// PeriscopeClient is the heartbeat's read surface. Heartbeat calls run on the
+// service token, so the tenant is named only by the request's tenant_id:
+// Periscope ignores service-token x-tenant-id metadata and logs it as an
+// injection attempt, so the call context must not carry a tenant identity.
 type PeriscopeClient interface {
 	GetStreamHealthSummary(ctx context.Context, tenantID string, streamID *string, timeRange *periscope.TimeRangeOpts) (*periscopepb.GetStreamHealthSummaryResponse, error)
 	GetClientQoeSummary(ctx context.Context, tenantID string, streamID *string, timeRange *periscope.TimeRangeOpts) (*periscopepb.GetClientQoeSummaryResponse, error)
@@ -260,7 +263,6 @@ func (a *Agent) countActiveStreams(ctx context.Context, tenantID string) (int, e
 	if a.periscope == nil {
 		return 0, errors.New("periscope client unavailable")
 	}
-	ctx = context.WithValue(ctx, ctxkeys.KeyTenantID, tenantID)
 	resp, err := a.periscope.GetPlatformOverview(ctx, tenantID, nil)
 	if err != nil {
 		return 0, err
@@ -440,7 +442,6 @@ func (a *Agent) collectPerStreamAnomalies(ctx context.Context, tm tenantMonitori
 
 func (a *Agent) loadSnapshot(ctx context.Context, tm tenantMonitoring) (*healthSnapshot, error) {
 	tenantID := tm.TenantID
-	ctx = context.WithValue(ctx, ctxkeys.KeyTenantID, tenantID)
 	now := time.Now()
 	window := defaultSummaryWindow
 	timeRange := &periscope.TimeRangeOpts{

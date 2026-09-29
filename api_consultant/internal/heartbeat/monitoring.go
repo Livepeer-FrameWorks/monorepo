@@ -3,7 +3,6 @@ package heartbeat
 import (
 	"context"
 
-	"github.com/Livepeer-FrameWorks/monorepo/pkg/ctxkeys"
 	commodorepb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/commodore"
 	periscopepb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/periscope"
 )
@@ -163,7 +162,6 @@ func (a *Agent) tierEntitled(ctx context.Context, tenantID string) bool {
 		}
 		return true
 	}
-	ctx = context.WithValue(ctx, ctxkeys.KeyTenantID, tenantID)
 	status, err := a.purser.GetBillingStatus(ctx, tenantID)
 	if err != nil {
 		if a.logger != nil {
