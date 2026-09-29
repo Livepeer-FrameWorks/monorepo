@@ -5,6 +5,7 @@ import (
 	"sync"
 
 	"frameworks/api_gateway/graph/model"
+	"frameworks/api_gateway/internal/middleware"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/billing/storagecost"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/ctxkeys"
 	purserpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/purser"
@@ -74,6 +75,11 @@ func (r *Resolver) ProjectStorageCostForCaller(ctx context.Context, sizeBytes in
 	}
 	tenantID := ctxkeys.GetTenantID(ctx)
 	if tenantID == "" {
+		return nil, nil
+	}
+	// Tier pricing is billing data: Purser serves it to callers with billing:read
+	// only, so an API token without that scope sees no projection.
+	if !middleware.HasPermission(ctx, "billing:read") {
 		return nil, nil
 	}
 	pricing, err := r.resolveStoragePricing(ctx, tenantID)
