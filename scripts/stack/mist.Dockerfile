@@ -29,13 +29,14 @@ RUN --mount=type=cache,id=fw-stack-mist-work,target=/work,sharing=locked \
     rsync -a --delete --filter='P /subprojects/*/' /src/ /work/src/; \
     if [ ! -f /work/build/build.ninja ]; then \
       meson setup /work/build /work/src \
+        --buildtype=debugoptimized \
         --default-library=static --wrap-mode=default --prefer-static \
         --force-fallback-for=mbedtls,usrsctp,libavcodec,libavfilter,libavformat,libavutil,libswscale,libswresample,x264 \
         -DWITH_AV=true -DONNX=disabled -DNORIST=true -DNOUPDATE=true -DDEBUG=3 \
         -DVERSION=${MIST_SOURCE_REVISION} -DRELEASE=FrameWorks_stack \
         --prefix=/opt/mist-install; \
     else \
-      meson configure /work/build -DVERSION=${MIST_SOURCE_REVISION}; \
+      meson configure /work/build -Dbuildtype=debugoptimized -DVERSION=${MIST_SOURCE_REVISION}; \
     fi; \
     ninja -C /work/build; \
     rm -rf /opt/mist-install; \
