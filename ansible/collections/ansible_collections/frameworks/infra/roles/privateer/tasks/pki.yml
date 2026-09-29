@@ -178,6 +178,9 @@
     executable: /bin/bash
   become: true
   become_user: "{{ privateer_user }}"
+  # The privateer system user has no home, so its default ~/.ansible/tmp is unwritable.
+  vars:
+    ansible_remote_tmp: "{{ privateer_data_dir }}/.ansible/tmp"
   changed_when: false
   when:
     - not ansible_check_mode
