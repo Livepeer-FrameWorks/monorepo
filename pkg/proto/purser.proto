@@ -1196,6 +1196,11 @@ service PrepaidService {
   // transfer) for the full open balance of an invoice, which marks it paid.
   // Platform operators only.
   rpc AdminRecordInvoicePayment(AdminRecordInvoicePaymentRequest) returns (AdminRecordInvoicePaymentResponse);
+
+  // Lists finalized usage invoices that charged prepaid tenants again for
+  // usage their prepaid balance had already paid, with what to refund. Read
+  // only. Platform operators only.
+  rpc AdminListPrepaidDoubleCharges(AdminListPrepaidDoubleChargesRequest) returns (AdminListPrepaidDoubleChargesResponse);
 }
 
 // ============================================================================
@@ -1600,6 +1605,46 @@ message AdminRecordInvoicePaymentResponse {
   string amount = 2;
   string currency = 3;
   string invoice_status = 4;
+}
+
+message AdminListPrepaidDoubleChargesRequest {
+  // Limits the list to one tenant when set.
+  string tenant_id = 1;
+  // At most this many invoices; 0 means 500.
+  int32 limit = 2;
+}
+
+// A finalized usage invoice whose period was paid, wholly or partly, from the
+// tenant's prepaid balance as usage was reported, and which rated that usage
+// again. EUR amounts are cents.
+message PrepaidDoubleCharge {
+  string tenant_id = 1;
+  string invoice_id = 2;
+  string invoice_number = 3;
+  string status = 4;
+  google.protobuf.Timestamp period_start = 5;
+  google.protobuf.Timestamp period_end = 6;
+  // What the invoice charged after invoice credit.
+  int64 invoice_amount_cents = 7;
+  // The prepaid balance applied to the invoice as invoice credit.
+  int64 invoice_credit_cents = 8;
+  // The invoice's usage lines, without base and monthly cluster fees.
+  int64 invoice_usage_cents = 9;
+  // What prepaid usage settlements took from the balance for the period.
+  int64 prepaid_usage_paid_cents = 10;
+  // Usage charged twice: the invoice's usage, up to what the balance had
+  // already paid for it. The amount to refund.
+  int64 double_charged_cents = 11;
+  // The invoice's total as charged, in its presentment currency.
+  int64 presentment_amount_cents = 12;
+  string presentment_currency = 13;
+}
+
+message AdminListPrepaidDoubleChargesResponse {
+  repeated PrepaidDoubleCharge charges = 1;
+  int64 total_double_charged_cents = 2;
+  // The list stopped at the limit; more invoices may be affected.
+  bool truncated = 3;
 }
 
 // ============================================================================

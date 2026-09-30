@@ -2656,6 +2656,18 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_billing_invoices_base_fee_period
     ON purser.billing_invoices(tenant_id, base_fee_period_start)
     WHERE base_fee_period_start IS NOT NULL;
 
+-- A prepaid statement states a prepaid period: its usage at rated prices, what
+-- the prepaid balance paid for it, top-ups and balances. The balance already
+-- paid for it, so a statement is never payable and never holds invoice credit.
+ALTER TABLE purser.billing_invoices
+    ADD COLUMN IF NOT EXISTS document_kind VARCHAR(20) NOT NULL DEFAULT 'invoice';
+ALTER TABLE purser.billing_invoices
+    DROP CONSTRAINT IF EXISTS chk_billing_invoices_document_kind,
+    ADD CONSTRAINT chk_billing_invoices_document_kind CHECK (
+        document_kind = 'invoice'
+        OR (document_kind = 'prepaid_statement' AND amount = 0 AND prepaid_credit_applied = 0)
+    );
+
 -- Tax documents state net and VAT in EUR whatever currency they were paid in,
 -- with the rate and reference date of the conversion.
 ALTER TABLE purser.simplified_invoices

@@ -271,12 +271,23 @@ func (jm *JobManager) validateUsageSummaryMeters(ctx context.Context, summary mo
 	return nil
 }
 
+// mollieAnchoredPeriod is the billing period that ends on Mollie's next
+// payment date. A period that started later, at a switch from prepaid that
+// closed the prepaid phase, keeps that start: the phase before it is on its
+// prepaid statement.
+func mollieAnchoredPeriod(mollieNext time.Time, billingPeriodStart sql.NullTime) (time.Time, time.Time) {
+	periodEnd := time.Date(mollieNext.Year(), mollieNext.Month(), mollieNext.Day(), 0, 0, 0, 0, time.UTC)
+	periodStart := periodEnd.AddDate(0, -1, 0)
+	if billingPeriodStart.Valid && billingPeriodStart.Time.After(periodStart) && billingPeriodStart.Time.Before(periodEnd) {
+		periodStart = billingPeriodStart.Time
+	}
+	return periodStart, periodEnd
+}
+
 func loadSubscriptionPeriod(ctx context.Context, db *sql.DB, tenantID string, now time.Time) (time.Time, time.Time, error) {
 	period, err := purserdb.New(db).GetActiveSubscriptionPeriod(ctx, tenantID)
 	if err == nil && period.MollieNextPaymentDate.Valid {
-		mollieNext := period.MollieNextPaymentDate.Time
-		periodEnd := time.Date(mollieNext.Year(), mollieNext.Month(), mollieNext.Day(), 0, 0, 0, 0, time.UTC)
-		periodStart := periodEnd.AddDate(0, -1, 0)
+		periodStart, periodEnd := mollieAnchoredPeriod(period.MollieNextPaymentDate.Time, period.BillingPeriodStart)
 		return periodStart, periodEnd, nil
 	}
 	if err == nil && period.BillingPeriodStart.Valid && period.BillingPeriodEnd.Valid && period.BillingPeriodEnd.Time.After(period.BillingPeriodStart.Time) {
@@ -1735,8 +1746,7 @@ func (jm *JobManager) finalizeSubscriptionPeriods(ctx context.Context, dueSubscr
 			periodStart = billingPeriodStart.Time
 			periodEnd = closeAt
 		} else if mollieNextPaymentDate.Valid {
-			periodEnd = time.Date(mollieNextPaymentDate.Time.Year(), mollieNextPaymentDate.Time.Month(), mollieNextPaymentDate.Time.Day(), 0, 0, 0, 0, time.UTC)
-			periodStart = periodEnd.AddDate(0, -1, 0)
+			periodStart, periodEnd = mollieAnchoredPeriod(mollieNextPaymentDate.Time, billingPeriodStart)
 		} else if billingPeriodStart.Valid && billingPeriodEnd.Valid && billingPeriodEnd.Time.After(billingPeriodStart.Time) {
 			periodStart = billingPeriodStart.Time
 			periodEnd = billingPeriodEnd.Time
@@ -1790,21 +1800,33 @@ func (jm *JobManager) finalizeSubscriptionPeriods(ctx context.Context, dueSubscr
 			continue
 		}
 
+		// The prepaid balance already paid a prepaid tenant's usage as it was
+		// reported, so its period closes with a statement, not an invoice.
+		if subscription.BillingModel == "prepaid" && !closingEarly {
+			if jm.finalizePrepaidStatementPeriod(ctx, subscription, periodStart, periodEnd, draftInvoiceID) {
+				invoicesGenerated++
+			}
+			continue
+		}
+
+		// A period that follows a prepaid phase closed by a switch to postpaid
+		// also rates that phase's usage no prepaid settlement paid.
+		phaseStart, phaseErr := closedPrepaidPhaseStart(ctx, jm.db, tenantID, periodStart)
+		if phaseErr != nil {
+			jm.logger.WithError(phaseErr).WithField("tenant_id", tenantID).Error("Failed to look up a closed prepaid phase; skipping invoice for this period")
+			continue
+		}
+
 		// Aggregate canonical usage metrics for the billing period. SUM handles
 		// flow/delta meters; MAX handles peak gauges; unique counts are skipped
 		// here and come from Periscope enrichment because scalar windows cannot
 		// be summed into unique users.
 		// Fetch usage partitioned by cluster_id. A scan/query failure must
 		// abort this tenant's invoice: rating against an empty/partial usage
-		// map underbills.
-		perClusterUsage, usageErr := jm.collectInvoiceUsage(ctx, tenantID, periodStart, periodEnd)
+		// map underbills. Usage the prepaid balance paid is not rated again.
+		perClusterUsage, perClusterDimensioned, usageErr := jm.collectPostpaidInvoiceUsage(ctx, tenantID, periodStart, periodEnd, phaseStart)
 		if usageErr != nil {
 			jm.logger.WithError(usageErr).WithField("tenant_id", tenantID).Error("Failed to collect usage; skipping invoice for this period")
-			continue
-		}
-		perClusterDimensioned, dimensionErr := jm.collectInvoiceDimensionedUsage(ctx, tenantID, periodStart, periodEnd)
-		if dimensionErr != nil {
-			jm.logger.WithError(dimensionErr).WithField("tenant_id", tenantID).Error("Failed to collect dimensioned usage; skipping invoice for this period")
 			continue
 		}
 		usageData := flattenUsageAcrossClusters(perClusterUsage)
@@ -1872,6 +1894,9 @@ func (jm *JobManager) finalizeSubscriptionPeriods(ctx context.Context, dueSubscr
 				"base_price":       basePrice,
 				"metering_enabled": meteringEnabled,
 			},
+			// This invoice leaves out usage the prepaid balance paid; the
+			// prepaid double-charge diagnostic skips invoices that carry it.
+			prepaidSettledUsageExcludedKey: true,
 		}
 
 		// Add rollup-able billing metrics
@@ -1898,7 +1923,9 @@ func (jm *JobManager) finalizeSubscriptionPeriods(ctx context.Context, dueSubscr
 			continue
 		}
 
-		periodDuration := periodEnd.Sub(periodStart)
+		// A period a switch from prepaid started mid-way is as long as the
+		// period it split, so the next period is not shortened with it.
+		periodDuration := periodEnd.Sub(phaseStart)
 		if periodDuration <= 0 {
 			periodDuration = 30 * 24 * time.Hour
 		}
@@ -3445,14 +3472,15 @@ func (jm *JobManager) updateInvoiceDraft(ctx context.Context, tenantID string) e
 
 	// Aggregate usage via the shared fail-closed helper; query/scan/iteration
 	// errors abort the draft update so we never apply the wrong prepaid
-	// credit on partial usage and ack the Kafka message as processed.
-	perClusterUsage, err := jm.collectInvoiceUsage(ctx, tenantID, periodStart, periodEnd)
+	// credit on partial usage and ack the Kafka message as processed. Usage
+	// the prepaid balance paid is not rated again.
+	phaseStart, err := closedPrepaidPhaseStart(ctx, jm.db, tenantID, periodStart)
+	if err != nil {
+		return err
+	}
+	perClusterUsage, perClusterDimensioned, err := jm.collectPostpaidInvoiceUsage(ctx, tenantID, periodStart, periodEnd, phaseStart)
 	if err != nil {
 		return fmt.Errorf("collect invoice usage: %w", err)
-	}
-	perClusterDimensioned, err := jm.collectInvoiceDimensionedUsage(ctx, tenantID, periodStart, periodEnd)
-	if err != nil {
-		return fmt.Errorf("collect dimensioned invoice usage: %w", err)
 	}
 	usageTotals := flattenUsageAcrossClusters(perClusterUsage)
 

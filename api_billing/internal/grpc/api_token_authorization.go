@@ -85,6 +85,8 @@ var privilegedBillingMutationMethods = map[string]struct{}{
 	"/purser.PrepaidService/AdminGetBillingGrant":      {},
 	"/purser.PrepaidService/AdminRevokeBillingGrant":   {},
 	"/purser.PrepaidService/AdminRecordInvoicePayment": {},
+	// Read only, but it reads every tenant's invoices.
+	"/purser.PrepaidService/AdminListPrepaidDoubleCharges": {},
 }
 
 var contextBoundBillingMutationMethods = map[string]struct{}{

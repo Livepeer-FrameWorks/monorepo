@@ -3,6 +3,7 @@ package handlers
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"math"
@@ -25,8 +26,9 @@ type invoiceEmailPayload struct {
 }
 
 const (
-	invoiceCreatedNotification  = "invoice_created"
-	overdueReminderNotification = "overdue_reminder"
+	invoiceCreatedNotification   = "invoice_created"
+	overdueReminderNotification  = "overdue_reminder"
+	prepaidStatementNotification = "prepaid_statement"
 )
 
 type invoiceEmailOutboxStore struct {
@@ -34,9 +36,10 @@ type invoiceEmailOutboxStore struct {
 }
 
 type invoiceEmailDispatcher struct {
-	jobs         *JobManager
-	send         func(recipient, invoiceID string, amount, meteredAmount, grossMeteredAmount float64, currency string, dueDate time.Time, lineItems []EmailInvoiceLineItem, fx EmailFX) error
-	sendReminder func(recipient, invoiceID string, amount float64, currency string, daysPastDue int, fx EmailFX) error
+	jobs          *JobManager
+	send          func(recipient, invoiceID string, amount, meteredAmount, grossMeteredAmount float64, currency string, dueDate time.Time, lineItems []EmailInvoiceLineItem, fx EmailFX) error
+	sendReminder  func(recipient, invoiceID string, amount float64, currency string, daysPastDue int, fx EmailFX) error
+	sendStatement func(recipient string, statement EmailPrepaidStatement, lineItems []EmailInvoiceLineItem) error
 }
 
 func enqueueInvoiceEmailTx(ctx context.Context, tx *sql.Tx, invoiceID, tenantID, recipient, status string) error {
@@ -199,6 +202,9 @@ func (d *invoiceEmailDispatcher) Dispatch(ctx context.Context, payload invoiceEm
 	if payload.NotificationType == overdueReminderNotification {
 		return d.dispatchOverdueReminder(ctx, payload)
 	}
+	if payload.NotificationType == prepaidStatementNotification {
+		return d.dispatchPrepaidStatement(ctx, payload)
+	}
 	if payload.NotificationType != "" && payload.NotificationType != invoiceCreatedNotification {
 		return []string{"smtp"}, fmt.Errorf("unsupported invoice notification type %q", payload.NotificationType)
 	}
@@ -239,6 +245,39 @@ func (d *invoiceEmailDispatcher) Dispatch(ctx context.Context, payload invoiceEm
 	}
 	if err := send(payload.Recipient, payload.InvoiceID, amount, header.MeteredAmount,
 		header.GrossMeteredAmount, currency, header.DueDate, lineItems, invoiceFX); err != nil {
+		return []string{"smtp"}, err
+	}
+	return nil, nil
+}
+
+func (d *invoiceEmailDispatcher) dispatchPrepaidStatement(ctx context.Context, payload invoiceEmailPayload) ([]string, error) {
+	row, err := purserdb.New(d.jobs.db).GetPrepaidStatement(ctx, purserdb.GetPrepaidStatementParams{
+		InvoiceID: payload.InvoiceID, TenantID: payload.TenantID,
+	})
+	if err != nil {
+		return []string{"smtp"}, fmt.Errorf("load prepaid statement for email: %w", err)
+	}
+	var usageDetails struct {
+		Statement PrepaidStatementDetails `json:"statement"`
+	}
+	if err = json.Unmarshal(row.UsageDetails, &usageDetails); err != nil {
+		return []string{"smtp"}, fmt.Errorf("decode prepaid statement %s: %w", payload.InvoiceID, err)
+	}
+	lineItems, err := d.jobs.loadEmailLineItems(ctx, payload.InvoiceID, payload.TenantID)
+	if err != nil {
+		return []string{"smtp"}, err
+	}
+	send := d.sendStatement
+	if send == nil {
+		if d.jobs.emailService == nil || !d.jobs.emailService.IsConfigured() {
+			return []string{"smtp"}, errors.New("invoice email SMTP is not configured")
+		}
+		send = func(recipient string, statement EmailPrepaidStatement, lineItems []EmailInvoiceLineItem) error {
+			return d.jobs.emailService.SendPrepaidStatementEmail(recipient, "", statement, lineItems)
+		}
+	}
+	statement := NewEmailPrepaidStatement(payload.InvoiceID, row.InvoiceNumber, row.PeriodStart.Time, row.PeriodEnd.Time, usageDetails.Statement)
+	if err := send(payload.Recipient, statement, lineItems); err != nil {
 		return []string{"smtp"}, err
 	}
 	return nil, nil

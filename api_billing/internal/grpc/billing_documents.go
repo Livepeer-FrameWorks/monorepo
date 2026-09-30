@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"database/sql"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"html/template"
@@ -14,6 +15,7 @@ import (
 
 	"frameworks/api_billing/internal/appconfig"
 	"frameworks/api_billing/internal/database/purserdb"
+	"frameworks/api_billing/internal/handlers"
 
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/middleware"
 	purserpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/purser"
@@ -188,6 +190,44 @@ func exchangeRateFields(currency, unitsPerEUR string, referenceDate time.Time) [
 	}
 }
 
+// prepaidStatementFields states a prepaid statement: not a bill, what the
+// period's usage rated to, what the prepaid balance paid, and the balance.
+func prepaidStatementFields(periodStart, periodEnd sql.NullTime, statement handlers.PrepaidStatementDetails) []billingDocumentHTMLField {
+	eur := func(cents int64) string { return "EUR " + moneyString(cents) }
+	fields := []billingDocumentHTMLField{
+		{Label: "Document", Value: "Statement of a prepaid balance. Not an invoice: the prepaid balance paid for the usage stated as it was reported, and nothing is due."},
+	}
+	if statement.ClosesPrepaidPhase {
+		fields = append(fields, billingDocumentHTMLField{Label: "Closes", Value: "Prepaid billing, at the switch to postpaid billing"})
+	}
+	if periodStart.Valid {
+		fields = append(fields, billingDocumentHTMLField{Label: "Period start", Value: periodStart.Time.UTC().Format(time.RFC3339)})
+	}
+	if periodEnd.Valid {
+		fields = append(fields, billingDocumentHTMLField{Label: "Period end", Value: periodEnd.Time.UTC().Format(time.RFC3339)})
+	}
+	fields = append(fields,
+		billingDocumentHTMLField{Label: "Usage at rated prices", Value: eur(statement.RatedUsageCents)},
+		billingDocumentHTMLField{Label: "Paid from prepaid balance for this usage", Value: eur(statement.PaidFromBalanceCents)},
+	)
+	if statement.PeriodFeesCents != 0 {
+		fields = append(fields, billingDocumentHTMLField{Label: "Monthly fees charged to prepaid balance", Value: eur(statement.PeriodFeesCents)})
+	}
+	fields = append(fields,
+		billingDocumentHTMLField{Label: "Balance at period start", Value: eur(statement.OpeningBalanceCents)},
+		billingDocumentHTMLField{Label: fmt.Sprintf("Top-ups (%d)", statement.Topups), Value: eur(statement.TopupCents)},
+		billingDocumentHTMLField{Label: "Usage deducted in period", Value: eur(-statement.UsagePostedCents)},
+	)
+	if statement.OtherMovementsCents != 0 {
+		fields = append(fields, billingDocumentHTMLField{Label: "Other balance changes", Value: eur(statement.OtherMovementsCents)})
+	}
+	fields = append(fields, billingDocumentHTMLField{Label: "Balance at period end", Value: eur(statement.PeriodEndBalanceCents)})
+	if statement.PeriodFeesCents != 0 {
+		fields = append(fields, billingDocumentHTMLField{Label: "Balance after monthly fees", Value: eur(statement.ClosingBalanceCents)})
+	}
+	return append(fields, billingDocumentHTMLField{Label: "Amount due", Value: "EUR 0.00, nothing to pay"})
+}
+
 func supplierDocumentFields() (string, string, string, string) {
 	rt := appconfig.Runtime()
 	return rt.SupplierName, rt.SupplierAddress, rt.SupplierVATNumber, rt.SupplierRegistrationNumber
@@ -242,6 +282,23 @@ func (s *PurserServer) GetBillingDocument(ctx context.Context, req *purserpb.Get
 			row.eurAmountCents = sql.NullInt64{Int64: document.EurAmountCents, Valid: true}
 			row.unitsPerEUR, row.fxReferenceDate = document.PresentmentUnitsPerEur, dateText(document.PresentmentReferenceDate.Time)
 		}
+	case "prepaid_statement":
+		var document purserdb.GetPrepaidStatementDocumentRow
+		document, err = queries.GetPrepaidStatementDocument(ctx, purserdb.GetPrepaidStatementDocumentParams{DocumentID: documentID, TenantID: tenantID})
+		if err != nil {
+			break
+		}
+		var details struct {
+			Statement handlers.PrepaidStatementDetails `json:"statement"`
+		}
+		if err = json.Unmarshal(document.UsageDetails, &details); err != nil {
+			return nil, status.Errorf(codes.Internal, "decode prepaid statement: %v", err)
+		}
+		row.number, row.amountCents, row.currency, row.status = document.InvoiceNumber, 0, "EUR", document.Status
+		row.issuedAt, row.retentionUntil = document.IssuedAt.Time, document.RetentionUntil
+		setCustomer(document.CustomerName, document.CustomerCompany, document.CustomerAddress, document.CustomerVat)
+		base.Title = "Prepaid balance statement"
+		base.Fields = append(base.Fields, prepaidStatementFields(document.PeriodStart, document.PeriodEnd, details.Statement)...)
 	case "simplified_invoice":
 		var document purserdb.GetSimplifiedInvoiceDocumentRow
 		document, err = queries.GetSimplifiedInvoiceDocument(ctx, purserdb.GetSimplifiedInvoiceDocumentParams{DocumentID: documentID, TenantID: tenantID})

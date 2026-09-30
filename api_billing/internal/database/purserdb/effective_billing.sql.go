@@ -216,3 +216,47 @@ func (q *Queries) LoadActiveEffectiveTier(ctx context.Context, tenantID string) 
 	)
 	return i, err
 }
+
+const loadSubscriptionEffectiveTier = `-- name: LoadSubscriptionEffectiveTier :one
+SELECT bt.id AS tier_id, bt.tier_name, bt.base_price::text AS base_price,
+       bt.currency, COALESCE(bt.metering_enabled, false) AS metering_enabled,
+       ts.id AS subscription_id,
+       COALESCE(og.waive_usage, false)::boolean AS waive_usage,
+       og.base_price AS granted_base_price
+FROM purser.tenant_subscriptions ts
+JOIN purser.billing_tiers bt ON bt.id = ts.tier_id
+LEFT JOIN purser.subscription_operator_grants og
+    ON og.subscription_id = ts.id AND (og.expires_at IS NULL OR og.expires_at > NOW())
+WHERE ts.tenant_id = $1::text::uuid
+ORDER BY ts.created_at DESC
+LIMIT 1
+`
+
+type LoadSubscriptionEffectiveTierRow struct {
+	TierID           uuid.UUID      `db:"tier_id" json:"tier_id"`
+	TierName         string         `db:"tier_name" json:"tier_name"`
+	BasePrice        string         `db:"base_price" json:"base_price"`
+	Currency         string         `db:"currency" json:"currency"`
+	MeteringEnabled  bool           `db:"metering_enabled" json:"metering_enabled"`
+	SubscriptionID   uuid.UUID      `db:"subscription_id" json:"subscription_id"`
+	WaiveUsage       bool           `db:"waive_usage" json:"waive_usage"`
+	GrantedBasePrice sql.NullString `db:"granted_base_price" json:"granted_base_price"`
+}
+
+// LoadActiveEffectiveTier for a subscription in any status: a prepaid period
+// is stated at its tier's prices although the balance suspended the tenant.
+func (q *Queries) LoadSubscriptionEffectiveTier(ctx context.Context, tenantID string) (LoadSubscriptionEffectiveTierRow, error) {
+	row := q.db.QueryRowContext(ctx, loadSubscriptionEffectiveTier, tenantID)
+	var i LoadSubscriptionEffectiveTierRow
+	err := row.Scan(
+		&i.TierID,
+		&i.TierName,
+		&i.BasePrice,
+		&i.Currency,
+		&i.MeteringEnabled,
+		&i.SubscriptionID,
+		&i.WaiveUsage,
+		&i.GrantedBasePrice,
+	)
+	return i, err
+}

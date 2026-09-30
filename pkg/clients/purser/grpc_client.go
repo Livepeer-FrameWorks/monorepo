@@ -637,6 +637,12 @@ func (c *GRPCClient) AdminRecordInvoicePayment(ctx context.Context, req *purserp
 	return c.prepaid.AdminRecordInvoicePayment(ctx, req)
 }
 
+// AdminListPrepaidDoubleCharges lists invoices that charged prepaid tenants
+// again for usage their prepaid balance had already paid.
+func (c *GRPCClient) AdminListPrepaidDoubleCharges(ctx context.Context, req *purserpb.AdminListPrepaidDoubleChargesRequest) (*purserpb.AdminListPrepaidDoubleChargesResponse, error) {
+	return c.prepaid.AdminListPrepaidDoubleCharges(ctx, req)
+}
+
 // ============================================================================
 // WEBHOOK OPERATIONS
 // ============================================================================

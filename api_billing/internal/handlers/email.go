@@ -58,6 +58,52 @@ type EmailData struct {
 	LineItemGroups []EmailLineItemGroup
 	// FX states the EUR equivalent of Amount when Currency is not EUR.
 	FX EmailFX
+	// Statement is set for a prepaid statement email.
+	Statement EmailPrepaidStatement
+}
+
+// EmailPrepaidStatement is a prepaid statement as its email states it.
+// Amounts are EUR with two decimals.
+type EmailPrepaidStatement struct {
+	StatementID        string
+	Number             string
+	PeriodStart        time.Time
+	PeriodEnd          time.Time
+	ClosesPrepaidPhase bool
+	RatedUsage         string
+	PaidFromBalance    string
+	PeriodFees         string
+	HasPeriodFees      bool
+	OpeningBalance     string
+	Topups             string
+	TopupCount         int64
+	UsagePosted        string
+	OtherMovements     string
+	HasOtherMovements  bool
+	PeriodEndBalance   string
+	ClosingBalance     string
+}
+
+// NewEmailPrepaidStatement formats a stored statement for its email.
+func NewEmailPrepaidStatement(statementID, number string, periodStart, periodEnd time.Time, details PrepaidStatementDetails) EmailPrepaidStatement {
+	eur := func(cents int64) string { return decimal.New(cents, -2).StringFixed(2) }
+	return EmailPrepaidStatement{
+		StatementID: statementID, Number: number,
+		PeriodStart: periodStart, PeriodEnd: periodEnd,
+		ClosesPrepaidPhase: details.ClosesPrepaidPhase,
+		RatedUsage:         eur(details.RatedUsageCents),
+		PaidFromBalance:    eur(details.PaidFromBalanceCents),
+		PeriodFees:         eur(details.PeriodFeesCents),
+		HasPeriodFees:      details.PeriodFeesCents != 0,
+		OpeningBalance:     eur(details.OpeningBalanceCents),
+		Topups:             eur(details.TopupCents),
+		TopupCount:         details.Topups,
+		UsagePosted:        eur(details.UsagePostedCents),
+		OtherMovements:     eur(details.OtherMovementsCents),
+		HasOtherMovements:  details.OtherMovementsCents != 0,
+		PeriodEndBalance:   eur(details.PeriodEndBalanceCents),
+		ClosingBalance:     eur(details.ClosingBalanceCents),
+	}
 }
 
 // EmailFX is the EUR amount a non-EUR amount converts to at an ECB reference
@@ -179,6 +225,31 @@ func (es *EmailService) SendInvoiceCreatedEmail(tenantEmail, tenantName, invoice
 		return fmt.Errorf("failed to render invoice created template: %w", err)
 	}
 
+	return es.sendEmail(tenantEmail, subject, body)
+}
+
+// SendPrepaidStatementEmail sends a prepaid tenant the statement of a period:
+// its usage at rated prices, what the prepaid balance paid, and the balance.
+// Nothing is due; the email says so and asks for no payment.
+func (es *EmailService) SendPrepaidStatementEmail(tenantEmail, tenantName string, statement EmailPrepaidStatement, lineItems []EmailInvoiceLineItem) error {
+	if !es.IsConfigured() {
+		es.logger.Warn("Email service not configured, skipping prepaid statement email")
+		return nil
+	}
+	subject := fmt.Sprintf("Prepaid statement %s, %s to %s - nothing to pay - FrameWorks", statement.Number,
+		statement.PeriodStart.UTC().Format("January 2, 2006"), statement.PeriodEnd.UTC().Format("January 2, 2006"))
+	body, err := es.renderTemplate("prepaid_statement", EmailData{
+		TenantName:     tenantName,
+		InvoiceID:      statement.Number,
+		Currency:       "EUR",
+		LoginURL:       billingPageURL(),
+		LineItems:      lineItems,
+		LineItemGroups: groupEmailLineItems(lineItems),
+		Statement:      statement,
+	})
+	if err != nil {
+		return fmt.Errorf("failed to render prepaid statement template: %w", err)
+	}
 	return es.sendEmail(tenantEmail, subject, body)
 }
 
@@ -357,6 +428,12 @@ func (es *EmailService) SendOverdueReminderEmail(tenantEmail, tenantName, invoic
 func invoiceBillingURL(invoiceID string) string {
 	base := strings.TrimRight(appconfig.Runtime().WebAppURL, "/")
 	return base + "/account/billing?invoice=" + url.QueryEscape(invoiceID)
+}
+
+// billingPageURL is the billing page, where billing documents such as prepaid
+// statements are listed.
+func billingPageURL() string {
+	return strings.TrimRight(appconfig.Runtime().WebAppURL, "/") + "/account/billing"
 }
 
 // SendAccountSuspendedEmail sends notification when a tenant is suspended for negative balance

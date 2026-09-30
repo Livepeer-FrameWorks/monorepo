@@ -5882,7 +5882,15 @@ func (s *PurserServer) PromoteToPaid(ctx context.Context, req *purserpb.PromoteT
 	if tenantID == "" {
 		return nil, status.Error(codes.InvalidArgument, "tenant_id is required")
 	}
+	// The promotion closes the prepaid phase with its statement, rated here
+	// outside the transaction.
+	phase, prepareErr := s.preparePrepaidPhaseClose(ctx, tenantID)
+	if prepareErr != nil {
+		return nil, prepareErr
+	}
+	phaseClosed := false
 	stage, err := runRetryableTx(ctx, s.db, func(tx *sql.Tx) error {
+		phaseClosed = false
 		queries := purserdb.New(tx)
 		subscription, err := queries.LockTenantSubscriptionForPromotion(ctx, tenantID)
 		if errors.Is(err, sql.ErrNoRows) {
@@ -5931,6 +5939,9 @@ func (s *PurserServer) PromoteToPaid(ctx context.Context, req *purserpb.PromoteT
 		}
 
 		if subscription.BillingModel == "prepaid" {
+			if phaseClosed, err = commitPrepaidPhaseClose(ctx, tx, phase); err != nil {
+				return err
+			}
 			_, err = queries.PromotePrepaidTenantSubscription(ctx, purserdb.PromotePrepaidTenantSubscriptionParams{
 				TierID: tier.ID, TenantID: tenantID,
 			})
@@ -5948,6 +5959,9 @@ func (s *PurserServer) PromoteToPaid(ctx context.Context, req *purserpb.PromoteT
 		return nil, status.Errorf(codes.Internal, "failed to commit: %v", err)
 	default:
 		return nil, err
+	}
+	if phaseClosed {
+		phase.Log()
 	}
 
 	canonical, err := purserdb.New(s.db).GetCanonicalPromotedSubscription(ctx, purserdb.GetCanonicalPromotedSubscriptionParams{

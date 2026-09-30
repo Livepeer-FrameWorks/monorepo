@@ -1113,7 +1113,8 @@ SELECT ts.tenant_id::text AS tenant_id,
        )::boolean AS has_mollie_customer,
        bt.tier_name,
        bt.display_name,
-       bt.billing_period
+       bt.billing_period,
+       ts.billing_model
 FROM purser.tenant_subscriptions ts
 JOIN purser.billing_tiers bt ON ts.tier_id = bt.id
 WHERE ts.status = 'active'
@@ -1146,6 +1147,7 @@ type ListSubscriptionsDueForInvoiceRow struct {
 	TierName              string         `db:"tier_name" json:"tier_name"`
 	DisplayName           string         `db:"display_name" json:"display_name"`
 	BillingPeriod         string         `db:"billing_period" json:"billing_period"`
+	BillingModel          string         `db:"billing_model" json:"billing_model"`
 }
 
 func (q *Queries) ListSubscriptionsDueForInvoice(ctx context.Context, now time.Time) ([]ListSubscriptionsDueForInvoiceRow, error) {
@@ -1174,6 +1176,7 @@ func (q *Queries) ListSubscriptionsDueForInvoice(ctx context.Context, now time.T
 			&i.TierName,
 			&i.DisplayName,
 			&i.BillingPeriod,
+			&i.BillingModel,
 		); err != nil {
 			return nil, err
 		}

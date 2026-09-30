@@ -77,6 +77,15 @@ type Querier interface {
 	ClearTenantStripeCheckoutPending(ctx context.Context, tenantID string) error
 	CollectInvoiceDimensionedUsage(ctx context.Context, arg CollectInvoiceDimensionedUsageParams) ([]CollectInvoiceDimensionedUsageRow, error)
 	CollectInvoiceUsage(ctx context.Context, arg CollectInvoiceUsageParams) ([]CollectInvoiceUsageRow, error)
+	// CollectPostpaidInvoiceUsage per meter dimension.
+	CollectPostpaidInvoiceDimensionedUsage(ctx context.Context, arg CollectPostpaidInvoiceDimensionedUsageParams) ([]CollectPostpaidInvoiceDimensionedUsageRow, error)
+	// The usage a postpaid invoice of [window_start, window_end) rates. A usage
+	// record a prepaid usage settlement paid from the balance belongs to the
+	// prepaid statement, never to an invoice. A period that starts at a switch
+	// from prepaid also rates the records of the prepaid phase before it that
+	// reached Purser after the switch, which the balance never paid:
+	// unsettled_from is where that phase began, or window_start otherwise.
+	CollectPostpaidInvoiceUsage(ctx context.Context, arg CollectPostpaidInvoiceUsageParams) ([]CollectPostpaidInvoiceUsageRow, error)
 	CompleteBillingEventOutbox(ctx context.Context, id string) error
 	CompleteBillingEventOutboxToken(ctx context.Context, arg CompleteBillingEventOutboxTokenParams) (int64, error)
 	// Settles a claimed event inside the transaction of its effects. It matches
@@ -98,6 +107,9 @@ type Querier interface {
 	ConfirmX402SettlementAttempt(ctx context.Context, arg ConfirmX402SettlementAttemptParams) error
 	ConsumeCryptoSweepSources(ctx context.Context, itemID string) error
 	ConsumeX402RateLimit(ctx context.Context, arg ConsumeX402RateLimitParams) (int32, error)
+	// An open draft of the period, left by postpaid billing earlier in the period,
+	// becomes the period's statement.
+	ConvertDraftToPrepaidStatement(ctx context.Context, arg ConvertDraftToPrepaidStatementParams) (ConvertDraftToPrepaidStatementRow, error)
 	CountActiveMeteringSources(ctx context.Context, arg CountActiveMeteringSourcesParams) (int64, error)
 	CountCurrentEUVATRates(ctx context.Context) (int64, error)
 	CountFinalizedInvoicesForPeriod(ctx context.Context, arg CountFinalizedInvoicesForPeriodParams) (int64, error)
@@ -126,6 +138,7 @@ type Querier interface {
 	EnqueueBillingEventOutboxNoReturn(ctx context.Context, arg EnqueueBillingEventOutboxNoReturnParams) error
 	EnqueueInvoiceEmail(ctx context.Context, arg EnqueueInvoiceEmailParams) error
 	EnqueueMediaAuthorityRefresh(ctx context.Context, arg EnqueueMediaAuthorityRefreshParams) (int64, error)
+	EnqueuePrepaidStatementEmail(ctx context.Context, arg EnqueuePrepaidStatementEmailParams) error
 	EnqueueProviderWebhook(ctx context.Context, arg EnqueueProviderWebhookParams) error
 	EnqueueStripeMeterEvents(ctx context.Context, arg EnqueueStripeMeterEventsParams) error
 	EnsureBillingCollectionBalance(ctx context.Context, arg EnsureBillingCollectionBalanceParams) error
@@ -188,6 +201,9 @@ type Querier interface {
 	GetCancelableSubscriptionID(ctx context.Context, tenantID string) (uuid.UUID, error)
 	GetCanonicalPromotedSubscription(ctx context.Context, arg GetCanonicalPromotedSubscriptionParams) (GetCanonicalPromotedSubscriptionRow, error)
 	GetCanonicalSubscriptionTier(ctx context.Context, tenantID string) (GetCanonicalSubscriptionTierRow, error)
+	// Where the prepaid phase began that a switch to postpaid closed at
+	// period_start, from the statement that closed it.
+	GetClosedPrepaidPhaseStart(ctx context.Context, arg GetClosedPrepaidPhaseStartParams) (time.Time, error)
 	GetClusterOwnerLedgerState(ctx context.Context, ownerID string) (GetClusterOwnerLedgerStateRow, error)
 	GetClusterPricingConfig(ctx context.Context, clusterID string) (GetClusterPricingConfigRow, error)
 	GetClusterStripeSubscriptionID(ctx context.Context, arg GetClusterStripeSubscriptionIDParams) (sql.NullString, error)
@@ -284,6 +300,12 @@ type Querier interface {
 	GetPrepaidBalanceForJobs(ctx context.Context, arg GetPrepaidBalanceForJobsParams) (int64, error)
 	GetPrepaidCryptoTopup(ctx context.Context, arg GetPrepaidCryptoTopupParams) (GetPrepaidCryptoTopupRow, error)
 	GetPrepaidDrainRate(ctx context.Context, tenantID string) (int64, error)
+	GetPrepaidStatement(ctx context.Context, arg GetPrepaidStatementParams) (GetPrepaidStatementRow, error)
+	GetPrepaidStatementDocument(ctx context.Context, arg GetPrepaidStatementDocumentParams) (GetPrepaidStatementDocumentRow, error)
+	// Balance movements a statement states, read under the prepaid balance lock:
+	// everything posted since the period start and since its end, and the
+	// top-ups and usage deductions posted inside the period.
+	GetPrepaidStatementLedger(ctx context.Context, arg GetPrepaidStatementLedgerParams) (GetPrepaidStatementLedgerRow, error)
 	GetPreparedX402SettlementAttempt(ctx context.Context, settlementID string) (GetPreparedX402SettlementAttemptRow, error)
 	// The original and EUR amounts already reversed from one payment or top-up by
 	// succeeded reversals other than provider_reversal_id. The caller holds the
@@ -305,6 +327,9 @@ type Querier interface {
 	// The operator grant recorded for a tenant's subscription, whether or not it
 	// is still in force; active reports whether it applies now.
 	GetSubscriptionOperatorGrant(ctx context.Context, tenantID string) (GetSubscriptionOperatorGrantRow, error)
+	// The subscription facts that decide a prepaid phase and its statement, and
+	// the database clock that usage record receipt times are written with.
+	GetSubscriptionPrepaidPhase(ctx context.Context, tenantID string) (GetSubscriptionPrepaidPhaseRow, error)
 	GetSubscriptionProviderIDs(ctx context.Context, tenantID string) (GetSubscriptionProviderIDsRow, error)
 	GetTenantAdmissionStatus(ctx context.Context, arg GetTenantAdmissionStatusParams) (GetTenantAdmissionStatusRow, error)
 	GetTenantBillingDetails(ctx context.Context, tenantID string) (GetTenantBillingDetailsRow, error)
@@ -369,6 +394,12 @@ type Querier interface {
 	// The pending row takes the disputed share of the payment's EUR amount at the
 	// payment's rate, so the later funds_withdrawn transition moves the same EUR.
 	InsertPendingStripeDispute(ctx context.Context, arg InsertPendingStripeDisputeParams) error
+	// A statement is finalized when it is written: nothing is due, so it is paid.
+	// It is stated in EUR, the currency of the prepaid balance.
+	InsertPrepaidStatement(ctx context.Context, arg InsertPrepaidStatementParams) (InsertPrepaidStatementRow, error)
+	// The period's monthly fees a prepaid statement charged to the balance; the
+	// statement is the reference, so the charge is written once.
+	InsertPrepaidStatementFeeTransaction(ctx context.Context, arg InsertPrepaidStatementFeeTransactionParams) error
 	InsertPrepaidTopupReversalTransaction(ctx context.Context, arg InsertPrepaidTopupReversalTransactionParams) error
 	InsertPrepaidUsageSettlement(ctx context.Context, arg InsertPrepaidUsageSettlementParams) (int64, error)
 	InsertPreparedX402SettlementAttempt(ctx context.Context, arg InsertPreparedX402SettlementAttemptParams) error
@@ -425,6 +456,7 @@ type Querier interface {
 	ListInvoiceLineItemsForTenant(ctx context.Context, arg ListInvoiceLineItemsForTenantParams) ([]ListInvoiceLineItemsForTenantRow, error)
 	ListInvoiceLineKeys(ctx context.Context, arg ListInvoiceLineKeysParams) ([]string, error)
 	ListInvoicePaymentsForTenant(ctx context.Context, arg ListInvoicePaymentsForTenantParams) ([]ListInvoicePaymentsForTenantRow, error)
+	// Prepaid statements are billing documents, not invoices.
 	ListInvoicesForTenant(ctx context.Context, arg ListInvoicesForTenantParams) ([]ListInvoicesForTenantRow, error)
 	ListKnownCryptoDepositAddresses(ctx context.Context, network string) ([]string, error)
 	ListLatestFXRateReferenceDates(ctx context.Context) ([]ListLatestFXRateReferenceDatesRow, error)
@@ -444,6 +476,13 @@ type Querier interface {
 	ListPendingX402Settlements(ctx context.Context) ([]ListPendingX402SettlementsRow, error)
 	ListPlacementAllowanceUsage(ctx context.Context, arg ListPlacementAllowanceUsageParams) ([]ListPlacementAllowanceUsageRow, error)
 	ListPlacementPricingBoundaries(ctx context.Context, arg ListPlacementPricingBoundariesParams) ([]ListPlacementPricingBoundariesRow, error)
+	// Finalized usage invoices whose period holds prepaid usage settlements: the
+	// tenant was prepaid during the period, and usage its prepaid balance had
+	// already paid was rated again on the invoice. Invoices that leave
+	// prepaid-settled usage out record prepaid_settled_usage_excluded and are not
+	// listed. usage_amount is the invoice's usage lines without base and monthly
+	// cluster fees.
+	ListPrepaidDoubleCharges(ctx context.Context, arg ListPrepaidDoubleChargesParams) ([]ListPrepaidDoubleChargesRow, error)
 	ListProviderPaymentAttemptsForRetry(ctx context.Context, maxAttempts int32) ([]ListProviderPaymentAttemptsForRetryRow, error)
 	// Monthly clusters billed on Purser invoices that were active at any point of
 	// the period, with the time they were active from and their cancellation.
@@ -468,6 +507,9 @@ type Querier interface {
 	LoadActiveEffectiveTier(ctx context.Context, tenantID string) (LoadActiveEffectiveTierRow, error)
 	LoadClusterPricingHistory(ctx context.Context, arg LoadClusterPricingHistoryParams) (LoadClusterPricingHistoryRow, error)
 	LoadEffectiveDNSEntitlements(ctx context.Context, tenantID string) (LoadEffectiveDNSEntitlementsRow, error)
+	// LoadActiveEffectiveTier for a subscription in any status: a prepaid period
+	// is stated at its tier's prices although the balance suspended the tenant.
+	LoadSubscriptionEffectiveTier(ctx context.Context, tenantID string) (LoadSubscriptionEffectiveTierRow, error)
 	LockAllocatedDepositReversal(ctx context.Context, eventID string) (LockAllocatedDepositReversalRow, error)
 	LockBillingCollectionBalance(ctx context.Context, arg LockBillingCollectionBalanceParams) (int64, error)
 	LockBillingPaymentStatus(ctx context.Context, arg LockBillingPaymentStatusParams) (string, error)
@@ -613,6 +655,9 @@ type Querier interface {
 	StageOverdueInvoiceReminders(ctx context.Context) (int64, error)
 	StageStripeCheckoutTier(ctx context.Context, arg StageStripeCheckoutTierParams) (int64, error)
 	StageTenantSubscriptionPendingStripe(ctx context.Context, arg StageTenantSubscriptionPendingStripeParams) error
+	// A switch from prepaid to postpaid closed the prepaid phase at
+	// period_start: the postpaid period runs from there.
+	StartPostpaidPhase(ctx context.Context, arg StartPostpaidPhaseParams) (int64, error)
 	SubtractPrepaidBalance(ctx context.Context, arg SubtractPrepaidBalanceParams) (int64, error)
 	SubtractX402TenantBalanceRollup(ctx context.Context, arg SubtractX402TenantBalanceRollupParams) (int64, error)
 	SumAllowanceUsage(ctx context.Context, arg SumAllowanceUsageParams) (float64, error)
@@ -622,6 +667,9 @@ type Querier interface {
 	// own idempotency reference.
 	SumAppliedInvoiceCredit(ctx context.Context, arg SumAppliedInvoiceCreditParams) (SumAppliedInvoiceCreditRow, error)
 	SumPrepaidUsageSettlements(ctx context.Context, arg SumPrepaidUsageSettlementsParams) (int64, error)
+	// What prepaid usage settlements took from the balance for usage of billing
+	// periods starting inside [period_start, period_end).
+	SumPrepaidUsageSettlementsForStatement(ctx context.Context, arg SumPrepaidUsageSettlementsForStatementParams) (SumPrepaidUsageSettlementsForStatementRow, error)
 	SuspendActiveTenantSubscription(ctx context.Context, tenantID string) (int64, error)
 	SuspendActiveTenantSubscriptions(ctx context.Context, tenantID string) (int64, error)
 	TenantSubscriptionExists(ctx context.Context, tenantID string) (bool, error)

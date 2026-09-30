@@ -177,6 +177,7 @@ FROM purser.billing_invoices invoice
 LEFT JOIN purser.tenant_subscriptions subscription ON subscription.tenant_id = invoice.tenant_id
 WHERE invoice.id = $1::text::uuid
   AND invoice.tenant_id = $2::text::uuid
+  AND invoice.document_kind = 'invoice'
   AND invoice.status <> 'draft'
 `
 
@@ -396,7 +397,7 @@ SELECT id::text AS id, kind, document_number, amount_cents, currency, status,
        COALESCE(units_per_eur, '')::text AS units_per_eur,
        COALESCE(TO_CHAR(fx_reference_date, 'YYYY-MM-DD'), '')::text AS fx_reference_date
 FROM (
-    SELECT id, 'invoice'::text AS kind, invoice_number AS document_number,
+    SELECT id, document_kind::text AS kind, invoice_number AS document_number,
            COALESCE(presentment_amount_cents, ROUND(amount * 100)::bigint)::bigint AS amount_cents,
            COALESCE(presentment_currency, currency)::varchar AS currency, status,
            COALESCE(created_at, NOW()) AS issued_at, retention_until,

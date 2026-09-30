@@ -21,6 +21,11 @@ var billingEmailMetaByName = map[string]billingEmailMeta{
 		Eyebrow:   "Billing",
 		Title:     "Your new invoice is ready",
 	},
+	"prepaid_statement": {
+		Preheader: "Your FrameWorks prepaid statement. Nothing to pay: your prepaid balance already covered this usage.",
+		Eyebrow:   "Prepaid statement",
+		Title:     "Your prepaid statement. Nothing to pay",
+	},
 	"payment_success": {
 		Preheader: "Your FrameWorks payment was confirmed.",
 		Eyebrow:   "Payment received",
@@ -75,6 +80,42 @@ var billingEmailTemplates = map[string]string{
 {{end}}{{end}}
 <p style="margin:20px 0 0; color:#24283b; font-size:15px; line-height:23px;">{{if .PaymentRequired}}Open the invoice to choose a payment method and pay the outstanding balance.{{else}}No payment is required. You can still review the invoice details.{{end}}</p>
 {{template "action" (action .LoginURL (ifText .PaymentRequired "View and pay invoice" "View invoice"))}}`,
+
+	"prepaid_statement": `
+<p style="margin:0 0 16px; color:#24283b; font-size:15px; line-height:23px;">{{if .TenantName}}Hello {{.TenantName}},{{else}}Hello,{{end}}</p>
+<p style="margin:0 0 18px; color:#24283b; font-size:15px; line-height:23px;">{{if .Statement.ClosesPrepaidPhase}}Your account moved to postpaid billing. This is the closing statement of your prepaid balance{{else}}This is the statement of your prepaid balance{{end}} for {{.Statement.PeriodStart.Format "January 2, 2006"}} to {{.Statement.PeriodEnd.Format "January 2, 2006"}}. It is not a bill: your usage was paid from your prepaid balance as it happened, and there is nothing to pay.</p>
+<table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="width:100%; margin:20px 0; border-collapse:collapse; background:#edf8f4; border-left:3px solid #2f7d69;">
+  <tr><td style="padding:12px 15px; color:#667085; font-size:13px; border-bottom:1px solid #cfe6de;">Statement</td><td align="right" style="padding:12px 15px; color:#24283b; font-size:14px; font-weight:bold; border-bottom:1px solid #cfe6de;">{{.Statement.Number}}</td></tr>
+  <tr><td style="padding:12px 15px; color:#667085; font-size:13px; border-bottom:1px solid #cfe6de;">Usage at rated prices</td><td align="right" style="padding:12px 15px; color:#24283b; font-size:14px; border-bottom:1px solid #cfe6de;">{{.Statement.RatedUsage}} EUR</td></tr>
+  <tr><td style="padding:12px 15px; color:#667085; font-size:13px; border-bottom:1px solid #cfe6de;">Paid from your prepaid balance for this usage</td><td align="right" style="padding:12px 15px; color:#24283b; font-size:14px; border-bottom:1px solid #cfe6de;">{{.Statement.PaidFromBalance}} EUR</td></tr>
+  {{if .Statement.HasPeriodFees}}<tr><td style="padding:12px 15px; color:#667085; font-size:13px; border-bottom:1px solid #cfe6de;">Monthly fees charged to your prepaid balance</td><td align="right" style="padding:12px 15px; color:#24283b; font-size:14px; border-bottom:1px solid #cfe6de;">{{.Statement.PeriodFees}} EUR</td></tr>{{end}}
+  <tr><td style="padding:12px 15px; color:#667085; font-size:13px;">Amount due</td><td align="right" style="padding:12px 15px; color:#2f7d69; font-size:14px; font-weight:bold;">0.00 EUR, nothing to pay</td></tr>
+</table>
+<h2 style="margin:28px 0 12px; color:#24283b; font-size:18px; line-height:24px;">Prepaid balance</h2>
+<table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="width:100%; border-collapse:collapse; margin-bottom:14px; font-size:13px;">
+  <tr><td style="padding:9px 8px; color:#24283b; border-bottom:1px solid #e7edf0;">Balance at the start of the period</td><td align="right" style="padding:9px 8px; color:#24283b; border-bottom:1px solid #e7edf0;">{{.Statement.OpeningBalance}} EUR</td></tr>
+  <tr><td style="padding:9px 8px; color:#24283b; border-bottom:1px solid #e7edf0;">Top-ups ({{.Statement.TopupCount}})</td><td align="right" style="padding:9px 8px; color:#24283b; border-bottom:1px solid #e7edf0;">+{{.Statement.Topups}} EUR</td></tr>
+  <tr><td style="padding:9px 8px; color:#24283b; border-bottom:1px solid #e7edf0;">Usage deducted during the period</td><td align="right" style="padding:9px 8px; color:#24283b; border-bottom:1px solid #e7edf0;">-{{.Statement.UsagePosted}} EUR</td></tr>
+  {{if .Statement.HasOtherMovements}}<tr><td style="padding:9px 8px; color:#24283b; border-bottom:1px solid #e7edf0;">Other balance changes</td><td align="right" style="padding:9px 8px; color:#24283b; border-bottom:1px solid #e7edf0;">{{.Statement.OtherMovements}} EUR</td></tr>{{end}}
+  <tr><td style="padding:9px 8px; color:#24283b; border-bottom:1px solid #e7edf0;">Balance at the end of the period</td><td align="right" style="padding:9px 8px; color:#24283b; border-bottom:1px solid #e7edf0;">{{.Statement.PeriodEndBalance}} EUR</td></tr>
+  {{if .Statement.HasPeriodFees}}<tr><td style="padding:9px 8px; color:#24283b; border-bottom:1px solid #e7edf0;">Balance after this statement's monthly fees</td><td align="right" style="padding:9px 8px; color:#24283b; border-bottom:1px solid #e7edf0;">{{.Statement.ClosingBalance}} EUR</td></tr>{{end}}
+</table>
+{{if .LineItemGroups}}
+<h2 style="margin:28px 0 12px; color:#24283b; font-size:18px; line-height:24px;">Usage in this period</h2>
+{{range .LineItemGroups}}
+<h3 style="margin:20px 0 8px; color:#24283b; font-size:15px; line-height:21px;">{{if .ClusterName}}{{.ClusterName}}{{else}}Cluster {{.ClusterID}}{{end}}</h3>
+<table width="100%" cellspacing="0" cellpadding="0" border="0" style="width:100%; border-collapse:collapse; margin-bottom:14px; font-size:13px;">
+  <tr style="background:#eef5f8;"><th align="left" style="padding:9px 8px; color:#3d4a68; border-bottom:1px solid #ccdde5;">Item</th><th align="right" style="padding:9px 8px; color:#3d4a68; border-bottom:1px solid #ccdde5;">Quantity</th><th align="right" style="padding:9px 8px; color:#3d4a68; border-bottom:1px solid #ccdde5;">Unit price</th><th align="right" style="padding:9px 8px; color:#3d4a68; border-bottom:1px solid #ccdde5;">Rated</th></tr>
+  {{range .Lines}}<tr>
+    <td style="padding:9px 8px; color:#24283b; border-bottom:1px solid #e7edf0;">{{.Description}}{{if .DimensionLabel}}<div style="color:#667085; font-size:11px; line-height:16px;">{{.DimensionLabel}}</div>{{end}}{{if .PricingLabel}}<div style="color:#667085; font-size:11px; line-height:16px;">{{.PricingLabel}}</div>{{end}}</td>
+    <td align="right" style="padding:9px 8px; color:#24283b; border-bottom:1px solid #e7edf0;">{{.Quantity}}{{if .Unit}} {{.Unit}}{{end}}</td>
+    <td align="right" style="padding:9px 8px; color:#24283b; border-bottom:1px solid #e7edf0;">{{.UnitPrice}} {{.Currency}}</td>
+    <td align="right" style="padding:9px 8px; color:#24283b; border-bottom:1px solid #e7edf0;">{{.Total}} {{.Currency}}</td>
+  </tr>{{end}}
+</table>
+{{end}}{{end}}
+<p style="margin:20px 0 0; color:#24283b; font-size:15px; line-height:23px;">No payment is required. The statement is kept with your billing documents.</p>
+{{template "action" (action .LoginURL "View billing documents")}}`,
 
 	"payment_success": `
 <p style="margin:0 0 16px; color:#24283b; font-size:15px; line-height:23px;">{{if .TenantName}}Hello {{.TenantName}},{{else}}Hello,{{end}}</p>

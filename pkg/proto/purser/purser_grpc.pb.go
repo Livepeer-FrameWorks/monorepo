@@ -2053,27 +2053,28 @@ var ClusterPricingService_ServiceDesc = grpc.ServiceDesc{
 }
 
 const (
-	PrepaidService_GetPrepaidBalance_FullMethodName         = "/purser.PrepaidService/GetPrepaidBalance"
-	PrepaidService_TopupBalance_FullMethodName              = "/purser.PrepaidService/TopupBalance"
-	PrepaidService_DeductBalance_FullMethodName             = "/purser.PrepaidService/DeductBalance"
-	PrepaidService_AdjustBalance_FullMethodName             = "/purser.PrepaidService/AdjustBalance"
-	PrepaidService_ListBalanceTransactions_FullMethodName   = "/purser.PrepaidService/ListBalanceTransactions"
-	PrepaidService_InitializePrepaidBalance_FullMethodName  = "/purser.PrepaidService/InitializePrepaidBalance"
-	PrepaidService_InitializePrepaidAccount_FullMethodName  = "/purser.PrepaidService/InitializePrepaidAccount"
-	PrepaidService_InitializePostpaidAccount_FullMethodName = "/purser.PrepaidService/InitializePostpaidAccount"
-	PrepaidService_EnsureFreeAccount_FullMethodName         = "/purser.PrepaidService/EnsureFreeAccount"
-	PrepaidService_CreateCardTopup_FullMethodName           = "/purser.PrepaidService/CreateCardTopup"
-	PrepaidService_GetPendingTopup_FullMethodName           = "/purser.PrepaidService/GetPendingTopup"
-	PrepaidService_ListPendingTopups_FullMethodName         = "/purser.PrepaidService/ListPendingTopups"
-	PrepaidService_CreateCryptoTopup_FullMethodName         = "/purser.PrepaidService/CreateCryptoTopup"
-	PrepaidService_GetCryptoTopup_FullMethodName            = "/purser.PrepaidService/GetCryptoTopup"
-	PrepaidService_PromoteToPaid_FullMethodName             = "/purser.PrepaidService/PromoteToPaid"
-	PrepaidService_ChangeBillingTier_FullMethodName         = "/purser.PrepaidService/ChangeBillingTier"
-	PrepaidService_AdminAssignTier_FullMethodName           = "/purser.PrepaidService/AdminAssignTier"
-	PrepaidService_AdminSetBillingGrant_FullMethodName      = "/purser.PrepaidService/AdminSetBillingGrant"
-	PrepaidService_AdminGetBillingGrant_FullMethodName      = "/purser.PrepaidService/AdminGetBillingGrant"
-	PrepaidService_AdminRevokeBillingGrant_FullMethodName   = "/purser.PrepaidService/AdminRevokeBillingGrant"
-	PrepaidService_AdminRecordInvoicePayment_FullMethodName = "/purser.PrepaidService/AdminRecordInvoicePayment"
+	PrepaidService_GetPrepaidBalance_FullMethodName             = "/purser.PrepaidService/GetPrepaidBalance"
+	PrepaidService_TopupBalance_FullMethodName                  = "/purser.PrepaidService/TopupBalance"
+	PrepaidService_DeductBalance_FullMethodName                 = "/purser.PrepaidService/DeductBalance"
+	PrepaidService_AdjustBalance_FullMethodName                 = "/purser.PrepaidService/AdjustBalance"
+	PrepaidService_ListBalanceTransactions_FullMethodName       = "/purser.PrepaidService/ListBalanceTransactions"
+	PrepaidService_InitializePrepaidBalance_FullMethodName      = "/purser.PrepaidService/InitializePrepaidBalance"
+	PrepaidService_InitializePrepaidAccount_FullMethodName      = "/purser.PrepaidService/InitializePrepaidAccount"
+	PrepaidService_InitializePostpaidAccount_FullMethodName     = "/purser.PrepaidService/InitializePostpaidAccount"
+	PrepaidService_EnsureFreeAccount_FullMethodName             = "/purser.PrepaidService/EnsureFreeAccount"
+	PrepaidService_CreateCardTopup_FullMethodName               = "/purser.PrepaidService/CreateCardTopup"
+	PrepaidService_GetPendingTopup_FullMethodName               = "/purser.PrepaidService/GetPendingTopup"
+	PrepaidService_ListPendingTopups_FullMethodName             = "/purser.PrepaidService/ListPendingTopups"
+	PrepaidService_CreateCryptoTopup_FullMethodName             = "/purser.PrepaidService/CreateCryptoTopup"
+	PrepaidService_GetCryptoTopup_FullMethodName                = "/purser.PrepaidService/GetCryptoTopup"
+	PrepaidService_PromoteToPaid_FullMethodName                 = "/purser.PrepaidService/PromoteToPaid"
+	PrepaidService_ChangeBillingTier_FullMethodName             = "/purser.PrepaidService/ChangeBillingTier"
+	PrepaidService_AdminAssignTier_FullMethodName               = "/purser.PrepaidService/AdminAssignTier"
+	PrepaidService_AdminSetBillingGrant_FullMethodName          = "/purser.PrepaidService/AdminSetBillingGrant"
+	PrepaidService_AdminGetBillingGrant_FullMethodName          = "/purser.PrepaidService/AdminGetBillingGrant"
+	PrepaidService_AdminRevokeBillingGrant_FullMethodName       = "/purser.PrepaidService/AdminRevokeBillingGrant"
+	PrepaidService_AdminRecordInvoicePayment_FullMethodName     = "/purser.PrepaidService/AdminRecordInvoicePayment"
+	PrepaidService_AdminListPrepaidDoubleCharges_FullMethodName = "/purser.PrepaidService/AdminListPrepaidDoubleCharges"
 )
 
 // PrepaidServiceClient is the client API for PrepaidService service.
@@ -2143,6 +2144,10 @@ type PrepaidServiceClient interface {
 	// transfer) for the full open balance of an invoice, which marks it paid.
 	// Platform operators only.
 	AdminRecordInvoicePayment(ctx context.Context, in *AdminRecordInvoicePaymentRequest, opts ...grpc.CallOption) (*AdminRecordInvoicePaymentResponse, error)
+	// Lists finalized usage invoices that charged prepaid tenants again for
+	// usage their prepaid balance had already paid, with what to refund. Read
+	// only. Platform operators only.
+	AdminListPrepaidDoubleCharges(ctx context.Context, in *AdminListPrepaidDoubleChargesRequest, opts ...grpc.CallOption) (*AdminListPrepaidDoubleChargesResponse, error)
 }
 
 type prepaidServiceClient struct {
@@ -2363,6 +2368,16 @@ func (c *prepaidServiceClient) AdminRecordInvoicePayment(ctx context.Context, in
 	return out, nil
 }
 
+func (c *prepaidServiceClient) AdminListPrepaidDoubleCharges(ctx context.Context, in *AdminListPrepaidDoubleChargesRequest, opts ...grpc.CallOption) (*AdminListPrepaidDoubleChargesResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(AdminListPrepaidDoubleChargesResponse)
+	err := c.cc.Invoke(ctx, PrepaidService_AdminListPrepaidDoubleCharges_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // PrepaidServiceServer is the server API for PrepaidService service.
 // All implementations must embed UnimplementedPrepaidServiceServer
 // for forward compatibility.
@@ -2430,6 +2445,10 @@ type PrepaidServiceServer interface {
 	// transfer) for the full open balance of an invoice, which marks it paid.
 	// Platform operators only.
 	AdminRecordInvoicePayment(context.Context, *AdminRecordInvoicePaymentRequest) (*AdminRecordInvoicePaymentResponse, error)
+	// Lists finalized usage invoices that charged prepaid tenants again for
+	// usage their prepaid balance had already paid, with what to refund. Read
+	// only. Platform operators only.
+	AdminListPrepaidDoubleCharges(context.Context, *AdminListPrepaidDoubleChargesRequest) (*AdminListPrepaidDoubleChargesResponse, error)
 	mustEmbedUnimplementedPrepaidServiceServer()
 }
 
@@ -2502,6 +2521,9 @@ func (UnimplementedPrepaidServiceServer) AdminRevokeBillingGrant(context.Context
 }
 func (UnimplementedPrepaidServiceServer) AdminRecordInvoicePayment(context.Context, *AdminRecordInvoicePaymentRequest) (*AdminRecordInvoicePaymentResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method AdminRecordInvoicePayment not implemented")
+}
+func (UnimplementedPrepaidServiceServer) AdminListPrepaidDoubleCharges(context.Context, *AdminListPrepaidDoubleChargesRequest) (*AdminListPrepaidDoubleChargesResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method AdminListPrepaidDoubleCharges not implemented")
 }
 func (UnimplementedPrepaidServiceServer) mustEmbedUnimplementedPrepaidServiceServer() {}
 func (UnimplementedPrepaidServiceServer) testEmbeddedByValue()                        {}
@@ -2902,6 +2924,24 @@ func _PrepaidService_AdminRecordInvoicePayment_Handler(srv interface{}, ctx cont
 	return interceptor(ctx, in, info, handler)
 }
 
+func _PrepaidService_AdminListPrepaidDoubleCharges_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(AdminListPrepaidDoubleChargesRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(PrepaidServiceServer).AdminListPrepaidDoubleCharges(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: PrepaidService_AdminListPrepaidDoubleCharges_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(PrepaidServiceServer).AdminListPrepaidDoubleCharges(ctx, req.(*AdminListPrepaidDoubleChargesRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // PrepaidService_ServiceDesc is the grpc.ServiceDesc for PrepaidService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -2992,6 +3032,10 @@ var PrepaidService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "AdminRecordInvoicePayment",
 			Handler:    _PrepaidService_AdminRecordInvoicePayment_Handler,
+		},
+		{
+			MethodName: "AdminListPrepaidDoubleCharges",
+			Handler:    _PrepaidService_AdminListPrepaidDoubleCharges_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

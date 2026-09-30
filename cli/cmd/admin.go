@@ -2412,6 +2412,7 @@ func newAdminBillingCmd() *cobra.Command {
 	cmd.AddCommand(newAdminBillingSetTierCmd())
 	cmd.AddCommand(newAdminBillingGrantCmd())
 	cmd.AddCommand(newAdminBillingRecordPaymentCmd())
+	cmd.AddCommand(newAdminBillingPrepaidDoubleChargesCmd())
 	return cmd
 }
 

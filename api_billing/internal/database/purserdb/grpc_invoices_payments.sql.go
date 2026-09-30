@@ -76,6 +76,7 @@ LEFT JOIN purser.tenant_subscriptions subscription
   ON invoice.tenant_id = subscription.tenant_id
  AND subscription.status != 'cancelled'
 WHERE invoice.id = $1::text::uuid
+  AND invoice.document_kind = 'invoice'
   AND (NOT $2::boolean
       OR invoice.tenant_id = $3::text::uuid)
 `
@@ -366,6 +367,7 @@ SELECT id::text AS id,
        finalized_at
 FROM purser.billing_invoices
 WHERE tenant_id = $1::text::uuid
+  AND document_kind = 'invoice'
   AND (NOT $2::boolean OR status = $3)
   AND (
       NOT $4::boolean
@@ -419,6 +421,7 @@ type ListInvoicesForTenantRow struct {
 	FinalizedAt              sql.NullTime    `db:"finalized_at" json:"finalized_at"`
 }
 
+// Prepaid statements are billing documents, not invoices.
 func (q *Queries) ListInvoicesForTenant(ctx context.Context, arg ListInvoicesForTenantParams) ([]ListInvoicesForTenantRow, error) {
 	rows, err := q.db.QueryContext(ctx, listInvoicesForTenant,
 		arg.TenantID,

@@ -108,18 +108,80 @@ func collectInvoiceDimensionedUsage(ctx context.Context, queries *purserdb.Queri
 	}
 	out := map[string][]rating.DimensionedQuantity{}
 	for _, row := range rows {
-		dimensions := map[string]string{}
-		if len(row.Dimensions) > 0 {
-			if err := json.Unmarshal(row.Dimensions, &dimensions); err != nil {
-				return nil, fmt.Errorf("decode dimensions for %s: %w", row.UsageType, err)
-			}
+		quantity, err := dimensionedQuantity(row.UsageType, row.Unit, row.Dimensions, row.Quantity)
+		if err != nil {
+			return nil, err
 		}
-		out[row.ClusterID] = append(out[row.ClusterID], rating.DimensionedQuantity{
-			Meter: rating.Meter(row.UsageType), Unit: row.Unit, Dimensions: dimensions,
-			Quantity: decimal.NewFromFloat(row.Quantity),
-		})
+		out[row.ClusterID] = append(out[row.ClusterID], quantity)
 	}
 	return out, nil
+}
+
+func dimensionedQuantity(usageType, unit string, rawDimensions json.RawMessage, value float64) (rating.DimensionedQuantity, error) {
+	dimensions := map[string]string{}
+	if len(rawDimensions) > 0 {
+		if err := json.Unmarshal(rawDimensions, &dimensions); err != nil {
+			return rating.DimensionedQuantity{}, fmt.Errorf("decode dimensions for %s: %w", usageType, err)
+		}
+	}
+	return rating.DimensionedQuantity{
+		Meter: rating.Meter(usageType), Unit: unit, Dimensions: dimensions,
+		Quantity: decimal.NewFromFloat(value),
+	}, nil
+}
+
+// collectPostpaidInvoiceUsage is the usage a postpaid invoice of
+// [periodStart, periodEnd) rates, per cluster in both shapes rating takes.
+// Usage a prepaid settlement paid from the balance is left out: it belongs to
+// the prepaid statement. unsettledFrom reaches back to the start of a prepaid
+// phase a switch to postpaid closed at periodStart, so the phase's usage that
+// reached Purser after the switch is rated here instead of going unbilled.
+func (jm *JobManager) collectPostpaidInvoiceUsage(ctx context.Context, tenantID string, periodStart, periodEnd, unsettledFrom time.Time) (map[string]map[string]float64, map[string][]rating.DimensionedQuantity, error) {
+	queries := purserdb.New(jm.db)
+	rows, err := queries.CollectPostpaidInvoiceUsage(ctx, purserdb.CollectPostpaidInvoiceUsageParams{
+		TenantID: tenantID, WindowStart: periodStart, WindowEnd: periodEnd, UnsettledFrom: unsettledFrom,
+	})
+	if err != nil {
+		return nil, nil, fmt.Errorf("query or iterate usage rows: %w", err)
+	}
+	perCluster := map[string]map[string]float64{}
+	for _, row := range rows {
+		if perCluster[row.ClusterID] == nil {
+			perCluster[row.ClusterID] = map[string]float64{}
+		}
+		perCluster[row.ClusterID][row.UsageType] = row.AggregatedValue
+	}
+	dimensionedRows, err := queries.CollectPostpaidInvoiceDimensionedUsage(ctx, purserdb.CollectPostpaidInvoiceDimensionedUsageParams{
+		TenantID: tenantID, WindowStart: periodStart, WindowEnd: periodEnd, UnsettledFrom: unsettledFrom,
+	})
+	if err != nil {
+		return nil, nil, fmt.Errorf("query dimensioned usage: %w", err)
+	}
+	dimensioned := map[string][]rating.DimensionedQuantity{}
+	for _, row := range dimensionedRows {
+		quantity, err := dimensionedQuantity(row.UsageType, row.Unit, row.Dimensions, row.Quantity)
+		if err != nil {
+			return nil, nil, err
+		}
+		dimensioned[row.ClusterID] = append(dimensioned[row.ClusterID], quantity)
+	}
+	return perCluster, dimensioned, nil
+}
+
+// closedPrepaidPhaseStart is where the prepaid phase began that a switch to
+// postpaid closed at periodStart. It is periodStart when the period does not
+// follow a closed prepaid phase.
+func closedPrepaidPhaseStart(ctx context.Context, db purserdb.DBTX, tenantID string, periodStart time.Time) (time.Time, error) {
+	phaseStart, err := purserdb.New(db).GetClosedPrepaidPhaseStart(ctx, purserdb.GetClosedPrepaidPhaseStartParams{
+		TenantID: tenantID, PeriodStart: periodStart,
+	})
+	if errors.Is(err, sql.ErrNoRows) {
+		return periodStart, nil
+	}
+	if err != nil {
+		return time.Time{}, fmt.Errorf("look up the prepaid phase before %s: %w", periodStart.Format(time.RFC3339), err)
+	}
+	return phaseStart, nil
 }
 
 // flattenUsageAcrossClusters returns the union of all per-cluster meter values

@@ -256,7 +256,8 @@ SELECT ts.tenant_id::text AS tenant_id,
        )::boolean AS has_mollie_customer,
        bt.tier_name,
        bt.display_name,
-       bt.billing_period
+       bt.billing_period,
+       ts.billing_model
 FROM purser.tenant_subscriptions ts
 JOIN purser.billing_tiers bt ON ts.tier_id = bt.id
 WHERE ts.status = 'active'

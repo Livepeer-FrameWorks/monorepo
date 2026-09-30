@@ -453,17 +453,20 @@ func TestUpdateInvoiceDraftWritesRatedLineItemsTransactionally(t *testing.T) {
 	mock.ExpectQuery(`SELECT COUNT\(\*\) FROM purser\.billing_invoices`).
 		WithArgs(tenantID, periodStart).
 		WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(0))
+	mock.ExpectQuery(`-- name: GetClosedPrepaidPhaseStart`).
+		WithArgs(tenantID, periodStart).
+		WillReturnError(sql.ErrNoRows)
 		// New per-cluster shape: rows carry cluster_id. Empty cluster_id
 		// resolves through platform-official tier pricing.
 	// 5,256,000 GiB-seconds = 2 GiB-months under the GiB-seconds→GiB-month
 	// rating conversion. The tier prices hot at $1/GiB-month, so the
 	// resulting metered line is $2.00.
 	mock.ExpectQuery(`FROM purser\.usage_records`).
-		WithArgs(tenantID, periodStart, periodEnd).
+		WithArgs(tenantID, periodStart, periodEnd, periodStart).
 		WillReturnRows(sqlmock.NewRows([]string{"cluster_id", "usage_type", "aggregated_value"}).
 			AddRow("", "storage_gb_seconds_hot", 5256000.0))
 	mock.ExpectQuery(`dimensioned_rows AS`).
-		WithArgs(tenantID, periodStart, periodEnd).
+		WithArgs(tenantID, periodStart, periodEnd, periodStart).
 		WillReturnRows(sqlmock.NewRows([]string{"cluster_id", "usage_type", "unit", "dimensions", "quantity"}))
 	mock.ExpectQuery(`SELECT stripe_subscription_id, mollie_subscription_id\s+FROM purser\.tenant_subscriptions`).
 		WithArgs(tenantID).
@@ -548,14 +551,17 @@ func TestUpdateInvoiceDraftReturnsPriorPrepaidCreditTheDraftNoLongerUses(t *test
 	mock.ExpectQuery(`SELECT COUNT\(\*\) FROM purser\.billing_invoices`).
 		WithArgs(tenantID, periodStart).
 		WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(0))
+	mock.ExpectQuery(`-- name: GetClosedPrepaidPhaseStart`).
+		WithArgs(tenantID, periodStart).
+		WillReturnError(sql.ErrNoRows)
 	// 5,256,000 GiB-seconds = 2 GiB-months under the GiB-seconds→GiB-month
 	// rating conversion. Tier prices hot at $1/GiB-month → $2 metered.
 	mock.ExpectQuery(`FROM purser\.usage_records`).
-		WithArgs(tenantID, periodStart, periodEnd).
+		WithArgs(tenantID, periodStart, periodEnd, periodStart).
 		WillReturnRows(sqlmock.NewRows([]string{"cluster_id", "usage_type", "aggregated_value"}).
 			AddRow("", "storage_gb_seconds_hot", 5256000.0))
 	mock.ExpectQuery(`dimensioned_rows AS`).
-		WithArgs(tenantID, periodStart, periodEnd).
+		WithArgs(tenantID, periodStart, periodEnd, periodStart).
 		WillReturnRows(sqlmock.NewRows([]string{"cluster_id", "usage_type", "unit", "dimensions", "quantity"}))
 	mock.ExpectQuery(`SELECT stripe_subscription_id, mollie_subscription_id\s+FROM purser\.tenant_subscriptions`).
 		WithArgs(tenantID).

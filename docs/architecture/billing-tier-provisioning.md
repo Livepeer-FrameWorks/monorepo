@@ -65,10 +65,71 @@ Billing tiers drive cluster access. When an account is created or promoted, the 
    resolves `is_default_postpaid = true`.
 4. Free needs verified email but no postal profile/provider. Paid postpaid tiers
    require complete billing identity and confirmed Stripe/Mollie collection.
-5. Purser commits prepaid → postpaid while retaining prepaid credit.
+5. In the same transaction Purser closes the prepaid phase (see Prepaid
+   statements below) and commits prepaid → postpaid while retaining prepaid
+   credit.
 6. Purser rereads the canonical committed tier, then reconciles clusters and
    invalidates caches. A same-target retry is idempotent.
 ```
+
+`AdminAssignTier` (`frameworks admin billing set-tier`) closes the prepaid
+phase the same way when it moves a tenant from prepaid to postpaid.
+
+## Prepaid Statements
+
+A prepaid tenant pays usage from its EUR prepaid balance as each usage report
+arrives: `processPrepaidUsage` rates the billing period's cumulative usage and
+records the marginal amount in `prepaid_usage_settlements` with a `usage`
+balance transaction. Its period therefore never ends in an invoice. The
+month-end job (`finalizeSubscriptionPeriods`) closes a prepaid tenant's period
+with a **prepaid statement** instead: a `billing_invoices` row with
+`document_kind = 'prepaid_statement'`, number `STM-…`, status `paid`, amount
+0 and no invoice credit (a check constraint holds a statement to both).
+
+- It itemizes the period's usage at the rated prices the settlements used, as
+  invoice line items.
+- `usage_details.statement` states what the prepaid settlements took from the
+  balance for the period (the authority for what the usage cost), the rated
+  total, top-ups and usage deductions posted in the period, the balance at the
+  period's start and end, and any monthly fees. A rated total that differs from
+  what was paid by more than a cent is logged as a warning; late corrections and
+  reports settled after a price change are the usual cause.
+- Any invoice credit an earlier postpaid draft of the period still held returns
+  to the balance, and such a draft becomes the statement.
+- Monthly fees Purser bills itself (the tier base fee when it is not collected
+  by a provider subscription, and Purser-invoiced monthly cluster fees from
+  `cluster_subscriptions`, prorated like on invoices) are charged to the prepaid
+  balance with the statement, as one `usage` balance transaction with
+  `reference_type = 'prepaid_statement_fees'`. The balance may go negative; the
+  prepaid thresholds suspend the tenant then, as for usage.
+- Marketplace operator credits accrue from the statement's lines, since the
+  balance paid them.
+- A `prepaid_statement` email (`invoice_email_outbox`) states that nothing is
+  due. Statements are listed with the billing documents (kind
+  `prepaid_statement`), not with invoices, and cannot be paid.
+- The subscription advances to its next period in the same transaction.
+
+**Switch to postpaid mid-period.** The prepaid phase is closed at the switch:
+the switch path rates the closing statement for [period start, switch) before
+its transaction and writes it inside it (flagged `closes_prepaid_phase`), and
+the postpaid period starts at the switch and ends where the prepaid period
+would have. The switch time comes from the database clock. The postpaid draft
+and invoice rate only usage records no prepaid settlement paid: the records of
+their period, plus records of the closed prepaid phase that reached Purser
+after the switch (late reports the balance never paid). Usage is billed once,
+under the model in force when its report was processed. The base-fee rules are
+unchanged: the postpaid period's base fee is billed as before, and the period
+after it is as long as the period the switch split. Invoices written this way
+record `prepaid_settled_usage_excluded` in `usage_details`.
+
+**Earlier double charges.** Before statements, month-end finalization invoiced
+prepaid tenants and rated again the usage their balance had paid, taking the
+total as invoice credit from the same balance or charging it to the card; a
+tenant promoted mid-period was invoiced for the prepaid part as well.
+`frameworks admin billing prepaid-double-charges` (Purser
+`AdminListPrepaidDoubleCharges`) lists those invoices read-only with the amount
+charged twice: the invoice's usage up to what the settlements took for the
+period. Refunds are an operator decision.
 
 ## Collection Readiness and Operator Grants
 

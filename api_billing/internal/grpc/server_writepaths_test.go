@@ -149,11 +149,13 @@ func TestPromoteToPaidDefaultTierCarriesCredit(t *testing.T) {
 	cache := &recordingCommodoreCache{}
 	s.tierReconciler = reconciler
 	s.commodoreClient = cache
+	expectPrepaidPhaseRead(mock, "tenant-1", "prepaid")
 	mock.ExpectBegin()
 	expectLockedPromotionSubscription(mock, "tenant-1", "prepaid", "tier-prepaid", "stripe", "sub_ready", "billing@example.com", "Example Customer", []byte(`{"street":"Main 1","city":"Amsterdam","postal_code":"1000AA","country":"NL"}`))
 	mock.ExpectQuery(`SELECT id::text AS id, tier_level, tier_name, is_default_prepaid, is_active`).
 		WithArgs(false, "").
 		WillReturnRows(sqlmock.NewRows([]string{"id", "tier_level", "tier_name", "is_default_prepaid", "is_active"}).AddRow("tier-paid", int32(2), "supporter", false, true))
+	expectPrepaidPhaseRead(mock, "tenant-1", "prepaid")
 	mock.ExpectQuery(`UPDATE purser\.tenant_subscriptions\s+SET billing_model = 'postpaid'`).
 		WithArgs("tier-paid", "tenant-1").
 		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow("sub-1"))
@@ -219,6 +221,7 @@ func expectCanonicalTierReconcile(mock sqlmock.Sqlmock, tenantID, tierID string,
 
 func TestPromoteToPaidRequiresCompleteBillingDetails(t *testing.T) {
 	s, mock := newReadServer(t, true)
+	expectPrepaidPhaseRead(mock, "tenant-1", "prepaid")
 	mock.ExpectBegin()
 	expectLockedPromotionSubscription(mock, "tenant-1", "prepaid", "tier-prepaid", nil, nil, "billing@example.com", nil, nil)
 	mock.ExpectQuery(`SELECT id::text AS id, tier_level, tier_name, is_default_prepaid, is_active`).
@@ -252,6 +255,7 @@ func TestPromoteToPaidExplicitTierRejectsNonEligible(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			s, mock := newReadServer(t, true)
+			expectPrepaidPhaseRead(mock, "tenant-1", "prepaid")
 			mock.ExpectBegin()
 			expectLockedPromotionSubscription(mock, "tenant-1", "prepaid", "tier-prepaid", nil, nil, nil, nil, nil)
 			mock.ExpectQuery(`SELECT id::text AS id, tier_level, tier_name, is_default_prepaid, is_active`).
@@ -271,12 +275,14 @@ func TestPromoteToPaidExplicitTierRejectsNonEligible(t *testing.T) {
 
 func TestPromoteToPaidAllowsVerifiedFreePathWithoutBillingProfileOrProvider(t *testing.T) {
 	s, mock := newReadServer(t, true)
+	expectPrepaidPhaseRead(mock, "tenant-1", "prepaid")
 	mock.ExpectBegin()
 	expectLockedPromotionSubscription(mock, "tenant-1", "prepaid", "tier-prepaid", nil, nil, nil, nil, nil)
 	mock.ExpectQuery(`SELECT id::text AS id, tier_level, tier_name, is_default_prepaid, is_active`).
 		WithArgs(true, "tier-free").
 		WillReturnRows(sqlmock.NewRows([]string{"id", "tier_level", "tier_name", "is_default_prepaid", "is_active"}).
 			AddRow("tier-free", int32(1), "free", false, true))
+	expectPrepaidPhaseRead(mock, "tenant-1", "prepaid")
 	mock.ExpectQuery(`UPDATE purser\.tenant_subscriptions\s+SET billing_model = 'postpaid'`).
 		WithArgs("tier-free", "tenant-1").
 		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow("sub-1"))
@@ -299,6 +305,7 @@ func expectCompleteBillingDetails(mock sqlmock.Sqlmock, tenantID string) {
 func TestPromoteToPaidNotFoundAndAlreadyPostpaid(t *testing.T) {
 	t.Run("no subscription", func(t *testing.T) {
 		s, mock := newReadServer(t, true)
+		mock.ExpectQuery(`SELECT billing_model, status, billing_email`).WithArgs("tenant-x").WillReturnError(sqlmockNoRows())
 		mock.ExpectBegin()
 		mock.ExpectQuery(`SELECT id::text AS id, billing_model, tier_id::text AS tier_id`).
 			WithArgs("tenant-x").
@@ -311,6 +318,7 @@ func TestPromoteToPaidNotFoundAndAlreadyPostpaid(t *testing.T) {
 	})
 	t.Run("same postpaid tier is idempotent", func(t *testing.T) {
 		s, mock := newReadServer(t, true)
+		expectPrepaidPhaseRead(mock, "tenant-1", "postpaid")
 		mock.ExpectBegin()
 		expectLockedPromotionSubscription(mock, "tenant-1", "postpaid", "tier-free", nil, nil, nil, nil, nil)
 		mock.ExpectQuery(`SELECT id::text AS id, tier_level, tier_name, is_default_prepaid, is_active`).
@@ -323,6 +331,18 @@ func TestPromoteToPaidNotFoundAndAlreadyPostpaid(t *testing.T) {
 			t.Fatalf("response=%+v err=%v", response, err)
 		}
 	})
+}
+
+// expectPrepaidPhaseRead expects the read of the subscription facts that decide
+// whether a switch to postpaid closes a prepaid phase. The period starts at the
+// database clock's now, so a prepaid subscription has no phase to close.
+func expectPrepaidPhaseRead(mock sqlmock.Sqlmock, tenantID, model string) {
+	periodStart := time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)
+	mock.ExpectQuery(`SELECT billing_model, status, billing_email,\s+billing_period_start, billing_period_end`).WithArgs(tenantID).
+		WillReturnRows(sqlmock.NewRows([]string{
+			"billing_model", "status", "billing_email", "billing_period_start", "billing_period_end",
+			"stripe_subscription_id", "mollie_subscription_id", "database_now",
+		}).AddRow(model, "active", nil, periodStart, periodStart.AddDate(0, 1, 0), nil, nil, periodStart))
 }
 
 func expectLockedPromotionSubscription(mock sqlmock.Sqlmock, tenantID, model, tierID string, paymentMethod, stripeSubscription, email, name, address any) {

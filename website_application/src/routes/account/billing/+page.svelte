@@ -56,7 +56,13 @@
   let paymentLoadingInvoiceId = $state<string | null>(null);
   type BillingDocument = {
     id: string;
-    kind: "invoice" | "simplified_invoice" | "crypto_invoice" | "payment_receipt" | "credit_note";
+    kind:
+      | "invoice"
+      | "prepaid_statement"
+      | "simplified_invoice"
+      | "crypto_invoice"
+      | "payment_receipt"
+      | "credit_note";
     document_number: string;
     amount_cents: number;
     currency: string;
@@ -181,6 +187,7 @@
   function billingDocumentLabel(kind: BillingDocument["kind"]) {
     return {
       invoice: "Invoice",
+      prepaid_statement: "Prepaid statement (nothing to pay)",
       simplified_invoice: "Simplified invoice",
       crypto_invoice: "Crypto invoice",
       payment_receipt: "Payment receipt",

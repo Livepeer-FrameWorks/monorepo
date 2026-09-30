@@ -75,6 +75,23 @@ func LoadEffectiveTierTx(ctx context.Context, tx *sql.Tx, tenantID string) (*Eff
 	return loadEffectiveTier(ctx, tx, tenantID)
 }
 
+// LoadSubscriptionEffectiveTier is LoadEffectiveTier for the tenant's
+// subscription in any status, such as a prepaid subscription its balance
+// suspended.
+func LoadSubscriptionEffectiveTier(ctx context.Context, db *sql.DB, tenantID string) (*EffectiveTier, error) {
+	if db == nil {
+		return nil, errors.New("LoadSubscriptionEffectiveTier: nil db")
+	}
+	if tenantID == "" {
+		return nil, errors.New("LoadSubscriptionEffectiveTier: empty tenant_id")
+	}
+	row, err := purserdb.New(db).LoadSubscriptionEffectiveTier(ctx, tenantID)
+	if err != nil {
+		return nil, err
+	}
+	return effectiveTierFromRow(ctx, db, purserdb.LoadActiveEffectiveTierRow(row))
+}
+
 func loadEffectiveTier(ctx context.Context, db purserdb.DBTX, tenantID string) (*EffectiveTier, error) {
 	if tenantID == "" {
 		return nil, errors.New("LoadEffectiveTier: empty tenant_id")
@@ -84,7 +101,10 @@ func loadEffectiveTier(ctx context.Context, db purserdb.DBTX, tenantID string) (
 	if err != nil {
 		return nil, err
 	}
+	return effectiveTierFromRow(ctx, db, row)
+}
 
+func effectiveTierFromRow(ctx context.Context, db purserdb.DBTX, row purserdb.LoadActiveEffectiveTierRow) (*EffectiveTier, error) {
 	basePriceText := row.BasePrice
 	if row.GrantedBasePrice.Valid {
 		basePriceText = row.GrantedBasePrice.String

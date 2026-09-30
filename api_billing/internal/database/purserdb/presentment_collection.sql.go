@@ -353,7 +353,8 @@ SELECT ts.tenant_id::text AS tenant_id,
        )::boolean AS has_mollie_customer,
        bt.tier_name,
        bt.display_name,
-       bt.billing_period
+       bt.billing_period,
+       ts.billing_model
 FROM purser.tenant_subscriptions ts
 JOIN purser.billing_tiers bt ON ts.tier_id = bt.id
 WHERE ts.tenant_id = $1::text::uuid
@@ -377,6 +378,7 @@ type GetSubscriptionForInvoiceRow struct {
 	TierName              string         `db:"tier_name" json:"tier_name"`
 	DisplayName           string         `db:"display_name" json:"display_name"`
 	BillingPeriod         string         `db:"billing_period" json:"billing_period"`
+	BillingModel          string         `db:"billing_model" json:"billing_model"`
 }
 
 // The columns ListSubscriptionsDueForInvoice returns, for one tenant whose
@@ -401,6 +403,7 @@ func (q *Queries) GetSubscriptionForInvoice(ctx context.Context, tenantID string
 		&i.TierName,
 		&i.DisplayName,
 		&i.BillingPeriod,
+		&i.BillingModel,
 	)
 	return i, err
 }

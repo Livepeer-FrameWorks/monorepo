@@ -26,10 +26,12 @@ LEFT JOIN purser.tenant_subscriptions subscription
   ON invoice.tenant_id = subscription.tenant_id
  AND subscription.status != 'cancelled'
 WHERE invoice.id = sqlc.arg(invoice_id)::text::uuid
+  AND invoice.document_kind = 'invoice'
   AND (NOT sqlc.arg(enforce_tenant)::boolean
       OR invoice.tenant_id = sqlc.arg(tenant_id)::text::uuid);
 
 -- name: ListInvoicesForTenant :many
+-- Prepaid statements are billing documents, not invoices.
 SELECT id::text AS id,
        tenant_id::text AS tenant_id,
        amount::double precision AS amount,
@@ -53,6 +55,7 @@ SELECT id::text AS id,
        finalized_at
 FROM purser.billing_invoices
 WHERE tenant_id = sqlc.arg(tenant_id)::text::uuid
+  AND document_kind = 'invoice'
   AND (NOT sqlc.arg(filter_status)::boolean OR status = sqlc.arg(status))
   AND (
       NOT sqlc.arg(has_cursor)::boolean
