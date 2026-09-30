@@ -43,6 +43,14 @@ const catalogBackfillBatch = 500
 // DVR parents. Converges once every such parent's children are cascaded.
 const dvrChildRepairBatch = 200
 
+// catalogProjectionRetryBase is the first backoff step for a row whose projection did not prove
+// coverage. It is independent of the fallback interval because the common miss is transient:
+// Foghorn commits a new artifact before Commodore registers its catalog row (CreateClip /
+// upload registration run after Foghorn's RPC returns), so a pass in that window sees
+// Found=false and the facts that land seconds later must reach the catalog on the next retry.
+// The SQL doubles it per consecutive miss up to the one-hour ceiling.
+const catalogProjectionRetryBase = 5 * time.Second
+
 // ReconcilerCommodoreClient defines Commodore operations needed by the reconciler.
 // Catalog projection goes exclusively through UpdateArtifactCatalogSnapshot (the sole
 // revision-guarded writer); the per-field update RPCs were removed.
@@ -669,6 +677,7 @@ func (r *ArtifactReconciler) projectCommodoreArtifactStateForCluster(ctx context
 				r.advanceCatalogWatermark(ctx, hash, revision)
 				count++
 			} else {
+				r.logCatalogNotCovered(hash, artifactType, revision, resp, "deletion_tombstone_not_covered")
 				r.backoffCatalogRow(ctx, hash)
 			}
 			continue
@@ -722,6 +731,7 @@ func (r *ArtifactReconciler) projectCommodoreArtifactStateForCluster(ctx context
 		if !resp.GetFound() {
 			// The catalog row isn't there yet (created out of band / registration lag). Do NOT
 			// advance the watermark — back off so it can't monopolize the batch, and retry later.
+			r.logCatalogNotCovered(hash, artifactType, revision, resp, "catalog_row_not_registered")
 			r.backoffCatalogRow(ctx, hash)
 			continue
 		}
@@ -729,6 +739,7 @@ func (r *ArtifactReconciler) projectCommodoreArtifactStateForCluster(ctx context
 			// Found, but Commodore's stored revision is behind what we asked for: a concurrent
 			// insert landed between the guarded UPDATE and the readback, or the guard rejected a
 			// stale attempt. Coverage is NOT proven for this revision — back off and retry.
+			r.logCatalogNotCovered(hash, artifactType, revision, resp, "catalog_revision_behind")
 			r.backoffCatalogRow(ctx, hash)
 			continue
 		}
@@ -737,6 +748,7 @@ func (r *ArtifactReconciler) projectCommodoreArtifactStateForCluster(ctx context
 		// and echoes "", so we do NOT advance; the row stays dirty and re-projects after Commodore upgrades (bounded to
 		// thumbnailed rows during the window). Rows with no serving cluster (NULL) need no ack.
 		if sent := snapshot.GetThumbnailServingClusterId(); sent != "" && resp.GetThumbnailServingClusterId() != sent {
+			r.logCatalogNotCovered(hash, artifactType, revision, resp, "thumbnail_serving_cluster_not_acked")
 			r.backoffCatalogRow(ctx, hash)
 			continue
 		}
@@ -745,6 +757,21 @@ func (r *ArtifactReconciler) projectCommodoreArtifactStateForCluster(ctx context
 		count++
 	}
 	return count, scanned
+}
+
+// logCatalogNotCovered records why a projection attempt did not prove Commodore coverage. These
+// outcomes back the row off without an RPC error, so without this line a catalog that stays
+// behind Foghorn (size, thumbnails, sync state missing from the API) leaves no trace.
+func (r *ArtifactReconciler) logCatalogNotCovered(hash, artifactType string, revision int64, resp *commodorepb.UpdateArtifactCatalogSnapshotResponse, reason string) {
+	r.logger.WithFields(logging.Fields{
+		"artifact_hash":             hash,
+		"artifact_type":             artifactType,
+		"source_revision":           revision,
+		"catalog_found":             resp.GetFound(),
+		"catalog_revision":          resp.GetCurrentRevision(),
+		"retry_base_seconds":        catalogProjectionRetryBase.Seconds(),
+		"catalog_not_covered_cause": reason,
+	}).Info("Catalog projection not yet covered; backing off")
 }
 
 // advanceCatalogWatermark sets catalog_synced_rev = revision when it hasn't already moved
@@ -758,18 +785,15 @@ func (r *ArtifactReconciler) advanceCatalogWatermark(ctx context.Context, hash s
 }
 
 // backoffCatalogRow stamps catalog_next_attempt_at with an EXPONENTIAL backoff so the scan skips
-// this row until it elapses. The base is the reconcile interval and it doubles per consecutive
-// failure (capped at 1h): a fixed backoff shorter than the interval would leave a permanently-
-// failing row eligible again before every pass (re-filling the oldest-first batch and starving
-// newer rows), so the delay must exceed the cadence and grow. It does NOT advance
-// catalog_synced_rev (coverage is unproven). catalog_next_attempt_at / attempts are not
-// snapshot-projected fields, so this write does not bump catalog_revision.
+// this row until it elapses: catalogProjectionRetryBase doubled per consecutive miss, capped at
+// 1h. The backoff does not reset when the row mutates, so its first step has to be short — a
+// row that missed once during registration lag would otherwise hold its later sync/thumbnail
+// facts out of the catalog for the whole step. Growth keeps a permanently-failing row from
+// re-filling the oldest-first batch. It does NOT advance catalog_synced_rev (coverage is
+// unproven). catalog_next_attempt_at / attempts are not snapshot-projected fields, so this
+// write does not bump catalog_revision.
 func (r *ArtifactReconciler) backoffCatalogRow(ctx context.Context, hash string) {
-	baseSecs := int(r.interval.Seconds())
-	if baseSecs < 1 {
-		baseSecs = 1
-	}
-	if err := foghorndb.New(r.db).BackoffCatalogProjection(ctx, foghorndb.BackoffCatalogProjectionParams{ArtifactHash: hash, BaseSeconds: float64(baseSecs)}); err != nil {
+	if err := foghorndb.New(r.db).BackoffCatalogProjection(ctx, foghorndb.BackoffCatalogProjectionParams{ArtifactHash: hash, BaseSeconds: catalogProjectionRetryBase.Seconds()}); err != nil {
 		r.logger.WithError(err).WithField("artifact_hash", hash).Warn("Failed to set catalog projection backoff")
 	}
 }

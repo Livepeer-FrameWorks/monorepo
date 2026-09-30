@@ -88,7 +88,7 @@ const backoffCatalogProjection = `-- name: BackoffCatalogProjection :exec
 UPDATE foghorn.artifacts
 SET catalog_projection_attempts = catalog_projection_attempts + 1,
     catalog_next_attempt_at = NOW() + make_interval(secs =>
-        LEAST($1::float8 * power(2, LEAST(catalog_projection_attempts + 1, 6)), 3600))
+        LEAST($1::float8 * power(2, LEAST(catalog_projection_attempts + 1, 10)), 3600))
 WHERE artifact_hash = $2
 `
 

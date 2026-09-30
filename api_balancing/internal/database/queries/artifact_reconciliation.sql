@@ -127,7 +127,7 @@ WHERE artifact_hash = $2 AND catalog_synced_rev < $1;
 UPDATE foghorn.artifacts
 SET catalog_projection_attempts = catalog_projection_attempts + 1,
     catalog_next_attempt_at = NOW() + make_interval(secs =>
-        LEAST(sqlc.arg(base_seconds)::float8 * power(2, LEAST(catalog_projection_attempts + 1, 6)), 3600))
+        LEAST(sqlc.arg(base_seconds)::float8 * power(2, LEAST(catalog_projection_attempts + 1, 10)), 3600))
 WHERE artifact_hash = sqlc.arg(artifact_hash);
 
 -- name: QuarantineCatalogProjection :exec
