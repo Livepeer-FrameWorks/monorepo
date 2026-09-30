@@ -687,6 +687,7 @@ message PushTargetSpec {
   string target_uri = 2;                   // Full RTMP/SRT URI
   string name = 3;                         // User-friendly label (for logging)
   string platform = 4;
+  string video_choice = 5;
 }
 
 // DeactivatePushTargets tells Helmsman to stop all pushes for a stream.
@@ -748,6 +749,8 @@ enum RestreamReason {
   RESTREAM_REASON_CAPACITY_EXHAUSTED = 6;
   RESTREAM_REASON_CONFIGURATION_ERROR = 7;
   RESTREAM_REASON_STOPPED = 8;
+  RESTREAM_REASON_MEDIA_SELECTION_FAILED = 9;
+  RESTREAM_REASON_EDGE_UPGRADE_REQUIRED = 10;
 }
 
 // PushTargetStatusReport is sent by Helmsman to Foghorn to report push lifecycle events.

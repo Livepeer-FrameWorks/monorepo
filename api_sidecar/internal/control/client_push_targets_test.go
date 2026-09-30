@@ -92,10 +92,14 @@ func TestHandleActivatePushTargets(t *testing.T) {
 				_, _ = w.Write([]byte(`{"authorize":{"status":"OK"}}`))
 				return
 			}
+			if _, ok := parsed["push_track_params_v1"]; ok {
+				_, _ = w.Write([]byte(`{"push_track_params_v1":true}`))
+				return
+			}
 			if ps, ok := parsed["push_start"].(map[string]any); ok {
 				pmu.Lock()
 				startCalls++
-				startedPushes = append(startedPushes, []any{float64(startCalls), ps["stream"], ps["target"], ps["target"]})
+				startedPushes = append(startedPushes, []any{float64(startCalls), ps["stream"], ps["target"], ps["target"], nil, nil, ps["params"]})
 				pmu.Unlock()
 				_, _ = w.Write([]byte(`{}`))
 				return
@@ -135,6 +139,218 @@ func TestHandleActivatePushTargets(t *testing.T) {
 		}
 		if acks[0].GetActivationAttempt() != "attempt-success" {
 			t.Fatalf("successful acknowledgement dropped activation attempt: %+v", acks[0])
+		}
+	})
+
+	t.Run("old Mist keeps AUTO and SRT while blocking explicit selection", func(t *testing.T) {
+		var mu sync.Mutex
+		var pushes [][]any
+		var autoHadParams bool
+		var stopCalls int
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			var command map[string]any
+			body, _ := io.ReadAll(r.Body)
+			if len(body) == 0 {
+				body = []byte(r.URL.Query().Get("command"))
+			}
+			_ = json.Unmarshal(body, &command)
+			w.Header().Set("Content-Type", "application/json")
+			if _, ok := command["authorize"]; ok {
+				_, _ = w.Write([]byte(`{"authorize":{"status":"OK"}}`))
+				return
+			}
+			if _, ok := command["push_track_params_v1"]; ok {
+				_, _ = w.Write([]byte(`{}`))
+				return
+			}
+			if start, ok := command["push_start"].(map[string]any); ok {
+				mu.Lock()
+				if start["target"] == "rtmp://1.1.1.1/live/key" {
+					_, autoHadParams = start["params"]
+				}
+				pushes = append(pushes, []any{float64(len(pushes) + 1), start["stream"], start["target"], start["target"], nil, nil})
+				mu.Unlock()
+				_, _ = w.Write([]byte(`{}`))
+				return
+			}
+			if _, ok := command["push_list"]; ok {
+				mu.Lock()
+				response, _ := json.Marshal(map[string]any{"push_list": pushes})
+				mu.Unlock()
+				_, _ = w.Write(response)
+				return
+			}
+			if _, ok := command["push_stop"]; ok {
+				mu.Lock()
+				stopCalls++
+				mu.Unlock()
+			}
+			_, _ = w.Write([]byte(`{}`))
+		}))
+		t.Cleanup(srv.Close)
+		withConfig(t, &sidecarcfg.HelmsmanConfig{MistServerURL: srv.URL})
+		RecordAdmittedIngestGeneration("live+mixed-protocols", "gen-mixed-protocols", 201)
+		var result *ipcpb.ActivatePushTargetsResult
+		request := &ipcpb.ActivatePushTargets{
+			StreamName: "live+mixed-protocols", SourceGeneration: "gen-mixed-protocols", TargetRevision: 1, ActivationAttempt: "attempt-mixed-protocols",
+			Targets: []*ipcpb.PushTargetSpec{
+				{TargetId: "rtmp", TargetUri: "rtmp://1.1.1.1/live/key", VideoChoice: "AUTO"},
+				{TargetId: "srt", TargetUri: "srt://8.8.4.4:9000/live"},
+				{TargetId: "explicit", TargetUri: "rtmp://1.1.1.2/live/key", VideoChoice: "SOURCE_VIDEO"},
+			},
+		}
+		activatePushTargetsForTest(t, logging.NewLogger(), request, func(message *ipcpb.ControlMessage) { result = message.GetActivatePushTargetsResult() })
+		mu.Lock()
+		gotPushes := append([][]any(nil), pushes...)
+		mu.Unlock()
+		if len(gotPushes) != 2 || autoHadParams {
+			t.Fatalf("old Mist started wrong targets: %+v", gotPushes)
+		}
+		if result == nil || result.GetConverged() || len(result.GetTargets()) != 3 {
+			t.Fatalf("mixed capability result = %+v", result)
+		}
+		byID := make(map[string]*ipcpb.PushTargetConvergence)
+		for _, outcome := range result.GetTargets() {
+			byID[outcome.GetTargetId()] = outcome
+		}
+		if !byID["rtmp"].GetActive() || !byID["srt"].GetActive() ||
+			byID["explicit"].GetReason() != ipcpb.RestreamReason_RESTREAM_REASON_EDGE_UPGRADE_REQUIRED {
+			t.Fatalf("mixed capability outcomes = %+v", result.GetTargets())
+		}
+		request.TargetRevision = 2
+		request.ActivationAttempt = "attempt-mixed-protocols-two"
+		activatePushTargetsForTest(t, logging.NewLogger(), request, func(message *ipcpb.ControlMessage) { result = message.GetActivatePushTargetsResult() })
+		mu.Lock()
+		defer mu.Unlock()
+		if len(pushes) != 2 || stopCalls != 0 || result == nil {
+			t.Fatalf("legacy AUTO push was restarted on a new attempt: pushes=%+v stops=%d result=%+v", pushes, stopCalls, result)
+		}
+	})
+
+	t.Run("transient Mist capability error keeps an existing push", func(t *testing.T) {
+		const streamName = "live+capability-retry"
+		const targetURI = "rtmp://1.1.1.1/live/key"
+		var stopMu sync.Mutex
+		var stopCalls int
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			command := r.URL.Query().Get("command")
+			if command == "" {
+				body, _ := io.ReadAll(r.Body)
+				command = string(body)
+			}
+			var parsed map[string]any
+			_ = json.Unmarshal([]byte(command), &parsed)
+			w.Header().Set("Content-Type", "application/json")
+			if _, ok := parsed["authorize"]; ok {
+				_, _ = w.Write([]byte(`{"authorize":{"status":"OK"}}`))
+				return
+			}
+			if _, ok := parsed["push_list"]; ok {
+				_, _ = w.Write([]byte(`{"push_list":[[17,"live+capability-retry","rtmp://1.1.1.1/live/key","rtmp://1.1.1.1/live/key",null,null,{"video":"restream_auto"}]]}`))
+				return
+			}
+			if _, ok := parsed["push_track_params_v1"]; ok {
+				w.WriteHeader(http.StatusServiceUnavailable)
+				return
+			}
+			if _, ok := parsed["push_stop"]; ok {
+				stopMu.Lock()
+				stopCalls++
+				stopMu.Unlock()
+			}
+			_, _ = w.Write([]byte(`{}`))
+		}))
+		t.Cleanup(srv.Close)
+		withConfig(t, &sidecarcfg.HelmsmanConfig{MistServerURL: srv.URL})
+		RecordAdmittedIngestGeneration(streamName, "generation", 201)
+		var result *ipcpb.ActivatePushTargetsResult
+		activatePushTargetsForTest(t, logging.NewLogger(), &ipcpb.ActivatePushTargets{
+			StreamName: streamName, SourceGeneration: "generation", TargetRevision: 1, ActivationAttempt: "capability-retry",
+			Targets: []*ipcpb.PushTargetSpec{{TargetId: "target", TargetUri: targetURI, VideoChoice: "AUTO"}},
+		}, func(message *ipcpb.ControlMessage) { result = message.GetActivatePushTargetsResult() })
+		stopMu.Lock()
+		defer stopMu.Unlock()
+		if stopCalls != 0 {
+			t.Fatalf("transient capability error stopped a healthy push %d times", stopCalls)
+		}
+		if result == nil || !result.GetConverged() || len(result.GetTargets()) != 1 || !result.GetTargets()[0].GetActive() {
+			t.Fatalf("healthy existing push was not preserved as active: %+v", result)
+		}
+	})
+
+	t.Run("same URI policy update waits for the old process", func(t *testing.T) {
+		const streamName = "live+policy-replacement"
+		const targetURI = "rtmp://1.1.1.1/live/key"
+		var mu sync.Mutex
+		var pushes [][]any
+		var starts, stops, delayedLists, overlap int
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			command := r.URL.Query().Get("command")
+			if command == "" {
+				body, _ := io.ReadAll(r.Body)
+				command = string(body)
+			}
+			var parsed map[string]any
+			_ = json.Unmarshal([]byte(command), &parsed)
+			w.Header().Set("Content-Type", "application/json")
+			if _, ok := parsed["authorize"]; ok {
+				_, _ = w.Write([]byte(`{"authorize":{"status":"OK"}}`))
+				return
+			}
+			if _, ok := parsed["push_track_params_v1"]; ok {
+				_, _ = w.Write([]byte(`{"push_track_params_v1":true}`))
+				return
+			}
+			mu.Lock()
+			defer mu.Unlock()
+			if _, ok := parsed["push_list"]; ok {
+				response, _ := json.Marshal(map[string]any{"push_list": pushes})
+				_, _ = w.Write(response)
+				if delayedLists > 0 {
+					delayedLists--
+					if delayedLists == 0 {
+						pushes = nil
+					}
+				}
+				return
+			}
+			if _, ok := parsed["push_stop"]; ok {
+				stops++
+				delayedLists = 2
+				_, _ = w.Write([]byte(`{}`))
+				return
+			}
+			if start, ok := parsed["push_start"].(map[string]any); ok {
+				if len(pushes) != 0 {
+					overlap++
+				}
+				starts++
+				pushes = append(pushes, []any{starts, start["stream"], start["target"], start["target"], nil, nil, start["params"]})
+			}
+			_, _ = w.Write([]byte(`{}`))
+		}))
+		t.Cleanup(srv.Close)
+		withConfig(t, &sidecarcfg.HelmsmanConfig{MistServerURL: srv.URL})
+		RecordAdmittedIngestGeneration(streamName, "generation", 201)
+		activate := func(revision int64, choice string) *ipcpb.ActivatePushTargetsResult {
+			var result *ipcpb.ActivatePushTargetsResult
+			activatePushTargetsForTest(t, logging.NewLogger(), &ipcpb.ActivatePushTargets{
+				StreamName: streamName, SourceGeneration: "generation", TargetRevision: revision, ActivationAttempt: "policy-replacement",
+				Targets: []*ipcpb.PushTargetSpec{{TargetId: "target", TargetUri: targetURI, VideoChoice: choice}},
+			}, func(message *ipcpb.ControlMessage) { result = message.GetActivatePushTargetsResult() })
+			return result
+		}
+		if result := activate(1, "AUTO"); result == nil || !result.GetConverged() {
+			t.Fatalf("initial activation = %+v", result)
+		}
+		result := activate(2, "SOURCE_VIDEO")
+		mu.Lock()
+		defer mu.Unlock()
+		if result == nil || !result.GetConverged() || len(result.GetTargets()) != 1 || result.GetTargets()[0].GetMistPushId() != 2 {
+			t.Fatalf("replacement activation = %+v", result)
+		}
+		if starts != 2 || stops != 1 || overlap != 0 {
+			t.Fatalf("replacement order: starts=%d stops=%d overlapping starts=%d", starts, stops, overlap)
 		}
 	})
 
@@ -292,9 +508,13 @@ func TestHandleActivatePushTargets(t *testing.T) {
 				_, _ = w.Write([]byte(`{"authorize":{"status":"OK"}}`))
 				return
 			}
+			if _, ok := command["push_track_params_v1"]; ok {
+				_, _ = w.Write([]byte(`{"push_track_params_v1":true}`))
+				return
+			}
 			if start, ok := command["push_start"].(map[string]any); ok {
 				mu.Lock()
-				pushes = append(pushes, []any{float64(len(pushes) + 1), start["stream"], start["target"], start["target"]})
+				pushes = append(pushes, []any{float64(len(pushes) + 1), start["stream"], start["target"], start["target"], nil, nil, start["params"]})
 				mu.Unlock()
 				_, _ = w.Write([]byte(`{}`))
 				return
@@ -341,7 +561,7 @@ func TestHandleActivatePushTargets(t *testing.T) {
 	t.Run("duplicate destination URI is terminal without wedging its healthy sibling", func(t *testing.T) {
 		const streamName = "live+duplicate-uri"
 		const targetURI = "rtmp://8.8.8.8/live/key"
-		url, calls := pushListMistServer(t, [][]any{{float64(41), streamName, targetURI, targetURI}})
+		url, calls := pushListMistServer(t, [][]any{{float64(41), streamName, targetURI, targetURI, nil, nil, map[string]any{"video": "restream_auto"}}})
 		withConfig(t, &sidecarcfg.HelmsmanConfig{MistServerURL: url})
 		RecordAdmittedIngestGeneration(streamName, "gen-duplicate", 205)
 
@@ -375,7 +595,7 @@ func TestHandleActivatePushTargets(t *testing.T) {
 	t.Run("duplicate target identity is terminal without retry livelock", func(t *testing.T) {
 		const streamName = "live+duplicate-id"
 		const canonicalURI = "rtmp://8.8.8.8/live/key"
-		url, calls := pushListMistServer(t, [][]any{{float64(42), streamName, canonicalURI, canonicalURI}})
+		url, calls := pushListMistServer(t, [][]any{{float64(42), streamName, canonicalURI, canonicalURI, nil, nil, map[string]any{"video": "restream_auto"}}})
 		withConfig(t, &sidecarcfg.HelmsmanConfig{MistServerURL: url})
 		RecordAdmittedIngestGeneration(streamName, "gen-duplicate-id", 206)
 
@@ -540,6 +760,10 @@ func pushListMistServer(t *testing.T, entries [][]any) (url string, calls func(s
 			_, _ = w.Write([]byte(`{"authorize":{"status":"OK"}}`))
 			return
 		}
+		if _, ok := parsed["push_track_params_v1"]; ok {
+			_, _ = w.Write([]byte(`{"push_track_params_v1":true}`))
+			return
+		}
 		if _, ok := parsed["push_list"]; ok {
 			mu.Lock()
 			current := append([][]any(nil), pushes...)
@@ -551,7 +775,7 @@ func pushListMistServer(t *testing.T, entries [][]any) (url string, calls func(s
 		if raw, ok := parsed["push_start"].(map[string]any); ok {
 			mu.Lock()
 			nextPushID++
-			pushes = append(pushes, []any{float64(nextPushID), raw["stream"], raw["target"], raw["target"]})
+			pushes = append(pushes, []any{float64(nextPushID), raw["stream"], raw["target"], raw["target"], nil, nil, raw["params"]})
 			mu.Unlock()
 		}
 		_, _ = w.Write([]byte(`{}`))
@@ -720,6 +944,10 @@ func TestPushTargetReconciliationSerializesActivateAndDeactivate(t *testing.T) {
 			_, _ = w.Write([]byte(`{"authorize":{"status":"OK"}}`))
 			return
 		}
+		if _, ok := command["push_track_params_v1"]; ok {
+			_, _ = w.Write([]byte(`{"push_track_params_v1":true}`))
+			return
+		}
 		mu.Lock()
 		if blocked {
 			select {
@@ -731,7 +959,7 @@ func TestPushTargetReconciliationSerializesActivateAndDeactivate(t *testing.T) {
 		if start, ok := command["push_start"].(map[string]any); ok {
 			mu.Lock()
 			blocked = true
-			pushes = [][]any{{float64(1), start["stream"], start["target"], start["target"]}}
+			pushes = [][]any{{float64(1), start["stream"], start["target"], start["target"], nil, nil, start["params"]}}
 			mu.Unlock()
 			close(pushStartEntered)
 			<-releasePushStart
@@ -823,6 +1051,10 @@ func TestDeactivatePushTargetsDoesNotHoldGenerationFenceDuringMistIO(t *testing.
 			_, _ = w.Write([]byte(`{"authorize":{"status":"OK"}}`))
 			return
 		}
+		if _, ok := command["push_track_params_v1"]; ok {
+			_, _ = w.Write([]byte(`{"push_track_params_v1":true}`))
+			return
+		}
 		if _, ok := command["push_list"]; ok {
 			blocked := false
 			once.Do(func() { close(entered); blocked = true })
@@ -888,9 +1120,13 @@ func TestActivatePushTargetsRemovesStalePushAfterGenerationChangesDuringMistIO(t
 			_, _ = w.Write([]byte(`{"authorize":{"status":"OK"}}`))
 			return
 		}
+		if _, ok := command["push_track_params_v1"]; ok {
+			_, _ = w.Write([]byte(`{"push_track_params_v1":true}`))
+			return
+		}
 		if start, ok := command["push_start"].(map[string]any); ok {
 			mu.Lock()
-			pushes = [][]any{{float64(1), start["stream"], start["target"], start["target"]}}
+			pushes = [][]any{{float64(1), start["stream"], start["target"], start["target"], nil, nil, start["params"]}}
 			mu.Unlock()
 			_, _ = w.Write([]byte(`{}`))
 			return

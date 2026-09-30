@@ -74,6 +74,23 @@ func (q *Queries) GetDVRSourceRoute(ctx context.Context, arg GetDVRSourceRoutePa
 	return i, err
 }
 
+const getStreamLiveVideoABR = `-- name: GetStreamLiveVideoABR :one
+SELECT live_video_abr FROM commodore.streams
+WHERE id = $1 AND tenant_id = $2 AND deleted_at IS NULL
+`
+
+type GetStreamLiveVideoABRParams struct {
+	ID       string `db:"id" json:"id"`
+	TenantID string `db:"tenant_id" json:"tenant_id"`
+}
+
+func (q *Queries) GetStreamLiveVideoABR(ctx context.Context, arg GetStreamLiveVideoABRParams) (string, error) {
+	row := q.db.QueryRowContext(ctx, getStreamLiveVideoABR, arg.ID, arg.TenantID)
+	var live_video_abr string
+	err := row.Scan(&live_video_abr)
+	return live_video_abr, err
+}
+
 const getStreamProcessingOverrides = `-- name: GetStreamProcessingOverrides :one
 SELECT processes_live, processes_dvr, processes_clip, processes_dvr_finalize, processes_vod
 FROM commodore.stream_processing_config

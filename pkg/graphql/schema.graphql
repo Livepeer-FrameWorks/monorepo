@@ -2648,6 +2648,8 @@ input CreateStreamInput {
   description: String
   "Enable DVR recording (default: false)."
   record: Boolean = false
+  "Live video renditions: INHERIT uses the tier policy; OFF keeps source video and audio conversion."
+  liveVideoAbr: String = "INHERIT"
   "Source ingest model. Defaults to PUSH."
   ingestMode: IngestMode = PUSH
   "Pull-source configuration. Required when ingestMode is PULL."
@@ -2667,6 +2669,8 @@ input UpdateStreamInput {
   description: String
   "Enable or disable DVR recording."
   record: Boolean
+  "INHERIT uses the tier policy; OFF disables live video renditions from the next ingest."
+  liveVideoAbr: String
   "Ingest model cannot be changed after create; sending a different value returns a validation error."
   ingestMode: IngestMode
   "Update the pull-source configuration for an existing pull stream."
@@ -4100,6 +4104,8 @@ type Stream implements Node {
   playbackId: String!
   "Whether DVR recording is enabled for this stream."
   record: Boolean!
+  "INHERIT or OFF for live video renditions."
+  liveVideoAbr: String!
   "How source media enters the stream."
   ingestMode: IngestMode!
   "Pull-source config for pull streams; null for push streams."
@@ -7340,6 +7346,8 @@ type PushTarget {
   platform: String
   "User-friendly label for this target."
   name: String!
+  "AUTO, SOURCE_VIDEO, or PROCESSED_VIDEO. Audio is selected independently."
+  videoChoice: String!
   "Target URI (masked in responses — stream key portion is redacted)."
   targetUri: String!
   "Whether this target is enabled for automatic push on stream start."
@@ -7360,6 +7368,8 @@ input CreatePushTargetInput {
   platform: String
   "User-friendly label for this target."
   name: String!
+  "AUTO, SOURCE_VIDEO, or PROCESSED_VIDEO for RTMP targets."
+  videoChoice: String = "AUTO"
   "Full target URI including stream key (e.g., rtmp://live.twitch.tv/app/live_xxxx)."
   targetUri: String!
 }
@@ -7367,6 +7377,8 @@ input CreatePushTargetInput {
 input UpdatePushTargetInput {
   "Updated label."
   name: String
+  "AUTO, SOURCE_VIDEO, or PROCESSED_VIDEO for RTMP targets."
+  videoChoice: String
   "Updated target URI."
   targetUri: String
   "Enable or disable this target."

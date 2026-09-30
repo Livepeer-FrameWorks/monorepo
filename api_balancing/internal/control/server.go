@@ -4728,6 +4728,10 @@ const RestreamAttemptFenceProtocolMin int32 = 6
 // that a job assigned to the node is no longer running there.
 const ProcessingJobInventoryProtocolMin int32 = 7
 
+// RestreamTrackPolicyProtocolMin is the first sidecar protocol that applies a
+// push target's video choice instead of ignoring it.
+const RestreamTrackPolicyProtocolMin int32 = 8
+
 // NodeJobInventoryHandler re-dispatches work assigned to nodeID before
 // registeredAt that the node's registration did not report as running.
 // current reports whether that registration's connection is still the node's
@@ -7786,6 +7790,9 @@ func SendLocalActivatePushTargets(ctx context.Context, nodeID string, req *ipcpb
 	if err := CheckLocalRestreamAttemptSupport(nodeID); err != nil {
 		return err
 	}
+	if err := CheckLocalRestreamTrackPolicySupport(nodeID, req); err != nil {
+		return err
+	}
 	registry.mu.RLock()
 	c := registry.conns[nodeID]
 	registry.mu.RUnlock()
@@ -7807,6 +7814,39 @@ func SendLocalActivatePushTargets(ctx context.Context, nodeID string, req *ipcpb
 		incRestreamReconcile("activate", "dispatched")
 	}
 	return err
+}
+
+// CheckLocalRestreamTrackPolicySupport prevents an older sidecar from silently
+// ignoring a target's video choice during a rolling upgrade.
+func CheckLocalRestreamTrackPolicySupport(nodeID string, req *ipcpb.ActivatePushTargets) error {
+	if req == nil {
+		return nil
+	}
+	needsPolicy := false
+	for _, target := range req.GetTargets() {
+		choice := strings.TrimSpace(target.GetVideoChoice())
+		uri := strings.ToLower(strings.TrimSpace(target.GetTargetUri()))
+		if choice != "" && choice != "AUTO" && (strings.HasPrefix(uri, "rtmp://") || strings.HasPrefix(uri, "rtmps://")) {
+			needsPolicy = true
+			break
+		}
+	}
+	if !needsPolicy {
+		return nil
+	}
+	if registry == nil {
+		return ErrNotConnected
+	}
+	registry.mu.RLock()
+	c := registry.conns[nodeID]
+	registry.mu.RUnlock()
+	if c == nil {
+		return ErrNotConnected
+	}
+	if c.protocolVersion < RestreamTrackPolicyProtocolMin {
+		return status.Error(codes.FailedPrecondition, "edge sidecar upgrade required for restream video selection")
+	}
+	return nil
 }
 
 // CheckLocalRestreamAttemptSupport reports whether this replica's current

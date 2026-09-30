@@ -188,6 +188,7 @@ message PushTargetSecret {
   string target_uri = 2;
   string name = 3;
   string platform = 4;
+  string video_choice = 5;
 }
 
 message LiveStreamSecret {

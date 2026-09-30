@@ -1,12 +1,12 @@
 -- name: InsertPushTarget :exec
 INSERT INTO commodore.push_targets (
-    id, tenant_id, stream_id, platform, name, target_uri,
+    id, tenant_id, stream_id, platform, name, target_uri, video_choice,
     is_enabled, status, created_at, updated_at
 )
-VALUES ($1, $2, $3, $4, $5, $6, true, 'idle', $7, $7);
+VALUES ($1, $2, $3, $4, $5, $6, $7, true, 'idle', $8, $8);
 
 -- name: ListPushTargets :many
-SELECT id, stream_id, platform, name, target_uri, is_enabled, status,
+SELECT id, stream_id, platform, name, target_uri, video_choice, is_enabled, status,
        reason_code, last_error, last_pushed_at, created_at, updated_at
 FROM commodore.push_targets pt
 WHERE pt.stream_id = sqlc.arg(stream_id) AND pt.tenant_id = sqlc.arg(tenant_id)
@@ -38,6 +38,7 @@ ORDER BY sibling.id;
 UPDATE commodore.push_targets pt
 SET name = CASE WHEN sqlc.arg(apply_name)::boolean THEN sqlc.arg(name) ELSE name END,
     target_uri = CASE WHEN sqlc.arg(apply_target_uri)::boolean THEN sqlc.arg(target_uri) ELSE target_uri END,
+    video_choice = CASE WHEN sqlc.arg(apply_video_choice)::boolean THEN sqlc.arg(video_choice) ELSE video_choice END,
     is_enabled = CASE WHEN sqlc.arg(apply_enabled)::boolean THEN sqlc.arg(is_enabled)::boolean ELSE is_enabled END,
     updated_at = NOW()
 WHERE pt.id = sqlc.arg(id) AND pt.tenant_id = sqlc.arg(tenant_id)
@@ -48,7 +49,7 @@ WHERE pt.id = sqlc.arg(id) AND pt.tenant_id = sqlc.arg(tenant_id)
         AND (s.user_id = sqlc.arg(user_id) OR sqlc.arg(tenant_manager)::boolean)
         AND s.deleted_at IS NULL
   )
-RETURNING id, stream_id, platform, name, target_uri, is_enabled, status,
+RETURNING id, stream_id, platform, name, target_uri, video_choice, is_enabled, status,
           reason_code, last_error, last_pushed_at, created_at, updated_at;
 
 -- name: DeletePushTarget :one
@@ -64,7 +65,7 @@ WHERE pt.id = sqlc.arg(id) AND pt.tenant_id = sqlc.arg(tenant_id)
 RETURNING stream_id;
 
 -- name: ListEnabledPushTargets :many
-SELECT id, platform, name, target_uri
+SELECT id, platform, name, target_uri, video_choice
 FROM commodore.push_targets
 WHERE stream_id = $1 AND tenant_id = $2 AND is_enabled = true;
 
@@ -88,7 +89,7 @@ SET status = sqlc.arg(status),
     END,
     updated_at = NOW()
 WHERE id = sqlc.arg(id) AND tenant_id = sqlc.arg(tenant_id)
-RETURNING id, stream_id, platform, name, target_uri, is_enabled, status,
+RETURNING id, stream_id, platform, name, target_uri, video_choice, is_enabled, status,
           reason_code, last_error, last_pushed_at, created_at, updated_at;
 
 -- name: GetPushTargetStreamOwner :one

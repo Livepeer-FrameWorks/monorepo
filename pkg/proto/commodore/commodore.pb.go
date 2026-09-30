@@ -272,43 +272,46 @@ func (SourceLocationMode) EnumDescriptor() ([]byte, []int) {
 type PushTargetStatusReason int32
 
 const (
-	PushTargetStatusReason_PUSH_TARGET_STATUS_REASON_UNSPECIFIED           PushTargetStatusReason = 0
-	PushTargetStatusReason_PUSH_TARGET_STATUS_REASON_CONNECTED             PushTargetStatusReason = 1
-	PushTargetStatusReason_PUSH_TARGET_STATUS_REASON_COMPLETED             PushTargetStatusReason = 2
-	PushTargetStatusReason_PUSH_TARGET_STATUS_REASON_DESTINATION_REJECTED  PushTargetStatusReason = 3
-	PushTargetStatusReason_PUSH_TARGET_STATUS_REASON_NETWORK_ERROR         PushTargetStatusReason = 4
-	PushTargetStatusReason_PUSH_TARGET_STATUS_REASON_PROCESS_ERROR         PushTargetStatusReason = 5
-	PushTargetStatusReason_PUSH_TARGET_STATUS_REASON_CAPACITY_EXHAUSTED    PushTargetStatusReason = 6
-	PushTargetStatusReason_PUSH_TARGET_STATUS_REASON_CONFIGURATION_ERROR   PushTargetStatusReason = 7
-	PushTargetStatusReason_PUSH_TARGET_STATUS_REASON_STOPPED               PushTargetStatusReason = 8
-	PushTargetStatusReason_PUSH_TARGET_STATUS_REASON_EDGE_UPGRADE_REQUIRED PushTargetStatusReason = 9
+	PushTargetStatusReason_PUSH_TARGET_STATUS_REASON_UNSPECIFIED            PushTargetStatusReason = 0
+	PushTargetStatusReason_PUSH_TARGET_STATUS_REASON_CONNECTED              PushTargetStatusReason = 1
+	PushTargetStatusReason_PUSH_TARGET_STATUS_REASON_COMPLETED              PushTargetStatusReason = 2
+	PushTargetStatusReason_PUSH_TARGET_STATUS_REASON_DESTINATION_REJECTED   PushTargetStatusReason = 3
+	PushTargetStatusReason_PUSH_TARGET_STATUS_REASON_NETWORK_ERROR          PushTargetStatusReason = 4
+	PushTargetStatusReason_PUSH_TARGET_STATUS_REASON_PROCESS_ERROR          PushTargetStatusReason = 5
+	PushTargetStatusReason_PUSH_TARGET_STATUS_REASON_CAPACITY_EXHAUSTED     PushTargetStatusReason = 6
+	PushTargetStatusReason_PUSH_TARGET_STATUS_REASON_CONFIGURATION_ERROR    PushTargetStatusReason = 7
+	PushTargetStatusReason_PUSH_TARGET_STATUS_REASON_STOPPED                PushTargetStatusReason = 8
+	PushTargetStatusReason_PUSH_TARGET_STATUS_REASON_EDGE_UPGRADE_REQUIRED  PushTargetStatusReason = 9
+	PushTargetStatusReason_PUSH_TARGET_STATUS_REASON_MEDIA_SELECTION_FAILED PushTargetStatusReason = 10
 )
 
 // Enum value maps for PushTargetStatusReason.
 var (
 	PushTargetStatusReason_name = map[int32]string{
-		0: "PUSH_TARGET_STATUS_REASON_UNSPECIFIED",
-		1: "PUSH_TARGET_STATUS_REASON_CONNECTED",
-		2: "PUSH_TARGET_STATUS_REASON_COMPLETED",
-		3: "PUSH_TARGET_STATUS_REASON_DESTINATION_REJECTED",
-		4: "PUSH_TARGET_STATUS_REASON_NETWORK_ERROR",
-		5: "PUSH_TARGET_STATUS_REASON_PROCESS_ERROR",
-		6: "PUSH_TARGET_STATUS_REASON_CAPACITY_EXHAUSTED",
-		7: "PUSH_TARGET_STATUS_REASON_CONFIGURATION_ERROR",
-		8: "PUSH_TARGET_STATUS_REASON_STOPPED",
-		9: "PUSH_TARGET_STATUS_REASON_EDGE_UPGRADE_REQUIRED",
+		0:  "PUSH_TARGET_STATUS_REASON_UNSPECIFIED",
+		1:  "PUSH_TARGET_STATUS_REASON_CONNECTED",
+		2:  "PUSH_TARGET_STATUS_REASON_COMPLETED",
+		3:  "PUSH_TARGET_STATUS_REASON_DESTINATION_REJECTED",
+		4:  "PUSH_TARGET_STATUS_REASON_NETWORK_ERROR",
+		5:  "PUSH_TARGET_STATUS_REASON_PROCESS_ERROR",
+		6:  "PUSH_TARGET_STATUS_REASON_CAPACITY_EXHAUSTED",
+		7:  "PUSH_TARGET_STATUS_REASON_CONFIGURATION_ERROR",
+		8:  "PUSH_TARGET_STATUS_REASON_STOPPED",
+		9:  "PUSH_TARGET_STATUS_REASON_EDGE_UPGRADE_REQUIRED",
+		10: "PUSH_TARGET_STATUS_REASON_MEDIA_SELECTION_FAILED",
 	}
 	PushTargetStatusReason_value = map[string]int32{
-		"PUSH_TARGET_STATUS_REASON_UNSPECIFIED":           0,
-		"PUSH_TARGET_STATUS_REASON_CONNECTED":             1,
-		"PUSH_TARGET_STATUS_REASON_COMPLETED":             2,
-		"PUSH_TARGET_STATUS_REASON_DESTINATION_REJECTED":  3,
-		"PUSH_TARGET_STATUS_REASON_NETWORK_ERROR":         4,
-		"PUSH_TARGET_STATUS_REASON_PROCESS_ERROR":         5,
-		"PUSH_TARGET_STATUS_REASON_CAPACITY_EXHAUSTED":    6,
-		"PUSH_TARGET_STATUS_REASON_CONFIGURATION_ERROR":   7,
-		"PUSH_TARGET_STATUS_REASON_STOPPED":               8,
-		"PUSH_TARGET_STATUS_REASON_EDGE_UPGRADE_REQUIRED": 9,
+		"PUSH_TARGET_STATUS_REASON_UNSPECIFIED":            0,
+		"PUSH_TARGET_STATUS_REASON_CONNECTED":              1,
+		"PUSH_TARGET_STATUS_REASON_COMPLETED":              2,
+		"PUSH_TARGET_STATUS_REASON_DESTINATION_REJECTED":   3,
+		"PUSH_TARGET_STATUS_REASON_NETWORK_ERROR":          4,
+		"PUSH_TARGET_STATUS_REASON_PROCESS_ERROR":          5,
+		"PUSH_TARGET_STATUS_REASON_CAPACITY_EXHAUSTED":     6,
+		"PUSH_TARGET_STATUS_REASON_CONFIGURATION_ERROR":    7,
+		"PUSH_TARGET_STATUS_REASON_STOPPED":                8,
+		"PUSH_TARGET_STATUS_REASON_EDGE_UPGRADE_REQUIRED":  9,
+		"PUSH_TARGET_STATUS_REASON_MEDIA_SELECTION_FAILED": 10,
 	}
 )
 
@@ -9347,6 +9350,7 @@ type CreateStreamRequest struct {
 	// ingest placement constraints. Absent = no stream ingest restriction.
 	// CUSTOM is not accepted as input.
 	SourceLocation *StreamSourceLocation `protobuf:"bytes,7,opt,name=source_location,json=sourceLocation,proto3" json:"source_location,omitempty"`
+	LiveVideoAbr   string                `protobuf:"bytes,8,opt,name=live_video_abr,json=liveVideoAbr,proto3" json:"live_video_abr,omitempty"` // INHERIT (default) or OFF
 	unknownFields  protoimpl.UnknownFields
 	sizeCache      protoimpl.SizeCache
 }
@@ -9428,6 +9432,13 @@ func (x *CreateStreamRequest) GetSourceLocation() *StreamSourceLocation {
 		return x.SourceLocation
 	}
 	return nil
+}
+
+func (x *CreateStreamRequest) GetLiveVideoAbr() string {
+	if x != nil {
+		return x.LiveVideoAbr
+	}
+	return ""
 }
 
 type SourceLocationCluster struct {
@@ -9996,6 +10007,7 @@ type Stream struct {
 	// Consequence warnings of the source-location write in the UpdateStream
 	// call that returned this stream; empty on reads.
 	SourceLocationWarnings []*media_placement.Warning `protobuf:"bytes,32,rep,name=source_location_warnings,json=sourceLocationWarnings,proto3" json:"source_location_warnings,omitempty"`
+	LiveVideoAbr           string                     `protobuf:"bytes,33,opt,name=live_video_abr,json=liveVideoAbr,proto3" json:"live_video_abr,omitempty"` // INHERIT or OFF
 	unknownFields          protoimpl.UnknownFields
 	sizeCache              protoimpl.SizeCache
 }
@@ -10245,6 +10257,13 @@ func (x *Stream) GetSourceLocationWarnings() []*media_placement.Warning {
 		return x.SourceLocationWarnings
 	}
 	return nil
+}
+
+func (x *Stream) GetLiveVideoAbr() string {
+	if x != nil {
+		return x.LiveVideoAbr
+	}
+	return ""
 }
 
 // PullSourceAllowedClustersInput wraps the placement-pin list so callers can
@@ -10625,6 +10644,7 @@ type UpdateStreamRequest struct {
 	// CUSTOM is not accepted as input, and a stream whose own ingest rules are
 	// CUSTOM rejects source-location writes.
 	SourceLocation *StreamSourceLocation `protobuf:"bytes,10,opt,name=source_location,json=sourceLocation,proto3" json:"source_location,omitempty"`
+	LiveVideoAbr   *string               `protobuf:"bytes,11,opt,name=live_video_abr,json=liveVideoAbr,proto3,oneof" json:"live_video_abr,omitempty"` // INHERIT or OFF; absent = preserve
 	unknownFields  protoimpl.UnknownFields
 	sizeCache      protoimpl.SizeCache
 }
@@ -10727,6 +10747,13 @@ func (x *UpdateStreamRequest) GetSourceLocation() *StreamSourceLocation {
 		return x.SourceLocation
 	}
 	return nil
+}
+
+func (x *UpdateStreamRequest) GetLiveVideoAbr() string {
+	if x != nil && x.LiveVideoAbr != nil {
+		return *x.LiveVideoAbr
+	}
+	return ""
 }
 
 type DeleteStreamRequest struct {
@@ -11246,7 +11273,8 @@ type PushTarget struct {
 	LastPushedAt  *timestamppb.Timestamp `protobuf:"bytes,9,opt,name=last_pushed_at,json=lastPushedAt,proto3,oneof" json:"last_pushed_at,omitempty"`
 	CreatedAt     *timestamppb.Timestamp `protobuf:"bytes,10,opt,name=created_at,json=createdAt,proto3" json:"created_at,omitempty"`
 	UpdatedAt     *timestamppb.Timestamp `protobuf:"bytes,11,opt,name=updated_at,json=updatedAt,proto3" json:"updated_at,omitempty"`
-	ReasonCode    string                 `protobuf:"bytes,12,opt,name=reason_code,json=reasonCode,proto3" json:"reason_code,omitempty"` // Stable machine-readable lifecycle reason
+	ReasonCode    string                 `protobuf:"bytes,12,opt,name=reason_code,json=reasonCode,proto3" json:"reason_code,omitempty"`    // Stable machine-readable lifecycle reason
+	VideoChoice   string                 `protobuf:"bytes,13,opt,name=video_choice,json=videoChoice,proto3" json:"video_choice,omitempty"` // AUTO, SOURCE_VIDEO, PROCESSED_VIDEO
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -11365,12 +11393,20 @@ func (x *PushTarget) GetReasonCode() string {
 	return ""
 }
 
+func (x *PushTarget) GetVideoChoice() string {
+	if x != nil {
+		return x.VideoChoice
+	}
+	return ""
+}
+
 type CreatePushTargetRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	StreamId      string                 `protobuf:"bytes,1,opt,name=stream_id,json=streamId,proto3" json:"stream_id,omitempty"`
 	Platform      string                 `protobuf:"bytes,2,opt,name=platform,proto3" json:"platform,omitempty"`
 	Name          string                 `protobuf:"bytes,3,opt,name=name,proto3" json:"name,omitempty"`
-	TargetUri     string                 `protobuf:"bytes,4,opt,name=target_uri,json=targetUri,proto3" json:"target_uri,omitempty"` // Full URI with stream key (rtmp://live.twitch.tv/app/{key})
+	TargetUri     string                 `protobuf:"bytes,4,opt,name=target_uri,json=targetUri,proto3" json:"target_uri,omitempty"`       // Full URI with stream key (rtmp://live.twitch.tv/app/{key})
+	VideoChoice   string                 `protobuf:"bytes,5,opt,name=video_choice,json=videoChoice,proto3" json:"video_choice,omitempty"` // AUTO (default), SOURCE_VIDEO, PROCESSED_VIDEO
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -11429,6 +11465,13 @@ func (x *CreatePushTargetRequest) GetName() string {
 func (x *CreatePushTargetRequest) GetTargetUri() string {
 	if x != nil {
 		return x.TargetUri
+	}
+	return ""
+}
+
+func (x *CreatePushTargetRequest) GetVideoChoice() string {
+	if x != nil {
+		return x.VideoChoice
 	}
 	return ""
 }
@@ -11527,6 +11570,7 @@ type UpdatePushTargetRequest struct {
 	Name          *string                `protobuf:"bytes,2,opt,name=name,proto3,oneof" json:"name,omitempty"`
 	TargetUri     *string                `protobuf:"bytes,3,opt,name=target_uri,json=targetUri,proto3,oneof" json:"target_uri,omitempty"`
 	IsEnabled     *bool                  `protobuf:"varint,4,opt,name=is_enabled,json=isEnabled,proto3,oneof" json:"is_enabled,omitempty"`
+	VideoChoice   *string                `protobuf:"bytes,5,opt,name=video_choice,json=videoChoice,proto3,oneof" json:"video_choice,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -11587,6 +11631,13 @@ func (x *UpdatePushTargetRequest) GetIsEnabled() bool {
 		return *x.IsEnabled
 	}
 	return false
+}
+
+func (x *UpdatePushTargetRequest) GetVideoChoice() string {
+	if x != nil && x.VideoChoice != nil {
+		return *x.VideoChoice
+	}
+	return ""
 }
 
 type DeletePushTargetRequest struct {
@@ -11805,6 +11856,7 @@ type PushTargetInternal struct {
 	Platform      string                 `protobuf:"bytes,2,opt,name=platform,proto3" json:"platform,omitempty"`
 	Name          string                 `protobuf:"bytes,3,opt,name=name,proto3" json:"name,omitempty"`
 	TargetUri     string                 `protobuf:"bytes,4,opt,name=target_uri,json=targetUri,proto3" json:"target_uri,omitempty"` // Unmasked - contains full stream key
+	VideoChoice   string                 `protobuf:"bytes,5,opt,name=video_choice,json=videoChoice,proto3" json:"video_choice,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -11863,6 +11915,13 @@ func (x *PushTargetInternal) GetName() string {
 func (x *PushTargetInternal) GetTargetUri() string {
 	if x != nil {
 		return x.TargetUri
+	}
+	return ""
+}
+
+func (x *PushTargetInternal) GetVideoChoice() string {
+	if x != nil {
+		return x.VideoChoice
 	}
 	return ""
 }
@@ -15771,7 +15830,7 @@ const file_commodore_proto_rawDesc = "" +
 	"\awallets\x18\r \x03(\v2\x19.commodore.WalletIdentityR\awallets\x12+\n" +
 	"\x11platform_operator\x18\x0e \x01(\bR\x10platformOperatorB\b\n" +
 	"\x06_emailB\x10\n" +
-	"\x0e_last_login_at\"\xb5\x02\n" +
+	"\x0e_last_login_at\"\xdb\x02\n" +
 	"\x13CreateStreamRequest\x12\x14\n" +
 	"\x05title\x18\x01 \x01(\tR\x05title\x12 \n" +
 	"\vdescription\x18\x02 \x01(\tR\vdescription\x12\x1b\n" +
@@ -15781,7 +15840,8 @@ const file_commodore_proto_rawDesc = "" +
 	"ingestMode\x12;\n" +
 	"\vpull_source\x18\x06 \x01(\v2\x1a.commodore.PullSourceInputR\n" +
 	"pullSource\x12H\n" +
-	"\x0fsource_location\x18\a \x01(\v2\x1f.commodore.StreamSourceLocationR\x0esourceLocation\"Q\n" +
+	"\x0fsource_location\x18\a \x01(\v2\x1f.commodore.StreamSourceLocationR\x0esourceLocation\x12$\n" +
+	"\x0elive_video_abr\x18\b \x01(\tR\fliveVideoAbr\"Q\n" +
 	"\x15SourceLocationCluster\x12\x1d\n" +
 	"\n" +
 	"cluster_id\x18\x01 \x01(\tR\tclusterId\x12\x19\n" +
@@ -15847,7 +15907,7 @@ const file_commodore_proto_rawDesc = "" +
 	"\n" +
 	"stream_ids\x18\x01 \x03(\tR\tstreamIds\"F\n" +
 	"\x17GetStreamsBatchResponse\x12+\n" +
-	"\astreams\x18\x01 \x03(\v2\x11.commodore.StreamR\astreams\"\x87\r\n" +
+	"\astreams\x18\x01 \x03(\v2\x11.commodore.StreamR\astreams\"\xad\r\n" +
 	"\x06Stream\x12\x14\n" +
 	"\x05title\x18\x01 \x01(\tR\x05title\x12 \n" +
 	"\vdescription\x18\x02 \x01(\tR\vdescription\x12#\n" +
@@ -15890,7 +15950,8 @@ const file_commodore_proto_rawDesc = "" +
 	"monitoring\x12C\n" +
 	"\x0emanaged_source\x18\x1e \x01(\v2\x1c.commodore.ManagedSourceViewR\rmanagedSource\x12H\n" +
 	"\x0fsource_location\x18\x1f \x01(\v2\x1f.commodore.StreamSourceLocationR\x0esourceLocation\x12R\n" +
-	"\x18source_location_warnings\x18  \x03(\v2\x18.media_placement.WarningR\x16sourceLocationWarningsB\r\n" +
+	"\x18source_location_warnings\x18  \x03(\v2\x18.media_placement.WarningR\x16sourceLocationWarnings\x12$\n" +
+	"\x0elive_video_abr\x18! \x01(\tR\fliveVideoAbrB\r\n" +
 	"\v_started_atB\v\n" +
 	"\t_ended_atB\x13\n" +
 	"\x11_thumbnail_assetsB\x1f\n" +
@@ -15927,7 +15988,7 @@ const file_commodore_proto_rawDesc = "" +
 	"\astreams\x18\x01 \x03(\v2\x11.commodore.StreamR\astreams\x12@\n" +
 	"\n" +
 	"pagination\x18\x02 \x01(\v2 .common.CursorPaginationResponseR\n" +
-	"pagination\"\xec\x04\n" +
+	"pagination\"\xaa\x05\n" +
 	"\x13UpdateStreamRequest\x12\x1b\n" +
 	"\tstream_id\x18\x01 \x01(\tR\bstreamId\x12\x17\n" +
 	"\x04name\x18\x02 \x01(\tH\x00R\x04name\x88\x01\x01\x12%\n" +
@@ -15943,14 +16004,16 @@ const file_commodore_proto_rawDesc = "" +
 	"monitoring\x18\t \x01(\x0e2\x1b.commodore.MonitoringToggleH\x06R\n" +
 	"monitoring\x88\x01\x01\x12H\n" +
 	"\x0fsource_location\x18\n" +
-	" \x01(\v2\x1f.commodore.StreamSourceLocationR\x0esourceLocationB\a\n" +
+	" \x01(\v2\x1f.commodore.StreamSourceLocationR\x0esourceLocation\x12)\n" +
+	"\x0elive_video_abr\x18\v \x01(\tH\aR\fliveVideoAbr\x88\x01\x01B\a\n" +
 	"\x05_nameB\x0e\n" +
 	"\f_descriptionB\t\n" +
 	"\a_recordB\x0e\n" +
 	"\f_ingest_modeB\x13\n" +
 	"\x11_dvr_chapter_modeB\x1f\n" +
 	"\x1d_dvr_chapter_interval_secondsB\r\n" +
-	"\v_monitoring\"2\n" +
+	"\v_monitoringB\x11\n" +
+	"\x0f_live_video_abr\"2\n" +
 	"\x13DeleteStreamRequest\x12\x1b\n" +
 	"\tstream_id\x18\x01 \x01(\tR\bstreamId\"\xd4\x01\n" +
 	"\x14DeleteStreamResponse\x12\x18\n" +
@@ -15996,7 +16059,7 @@ const file_commodore_proto_rawDesc = "" +
 	"pagination\"P\n" +
 	"\x1aDeactivateStreamKeyRequest\x12\x1b\n" +
 	"\tstream_id\x18\x01 \x01(\tR\bstreamId\x12\x15\n" +
-	"\x06key_id\x18\x02 \x01(\tR\x05keyId\"\xcf\x03\n" +
+	"\x06key_id\x18\x02 \x01(\tR\x05keyId\"\xf2\x03\n" +
 	"\n" +
 	"PushTarget\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x1b\n" +
@@ -16017,28 +16080,32 @@ const file_commodore_proto_rawDesc = "" +
 	"\n" +
 	"updated_at\x18\v \x01(\v2\x1a.google.protobuf.TimestampR\tupdatedAt\x12\x1f\n" +
 	"\vreason_code\x18\f \x01(\tR\n" +
-	"reasonCodeB\x11\n" +
-	"\x0f_last_pushed_at\"\x85\x01\n" +
+	"reasonCode\x12!\n" +
+	"\fvideo_choice\x18\r \x01(\tR\vvideoChoiceB\x11\n" +
+	"\x0f_last_pushed_at\"\xa8\x01\n" +
 	"\x17CreatePushTargetRequest\x12\x1b\n" +
 	"\tstream_id\x18\x01 \x01(\tR\bstreamId\x12\x1a\n" +
 	"\bplatform\x18\x02 \x01(\tR\bplatform\x12\x12\n" +
 	"\x04name\x18\x03 \x01(\tR\x04name\x12\x1d\n" +
 	"\n" +
-	"target_uri\x18\x04 \x01(\tR\ttargetUri\"5\n" +
+	"target_uri\x18\x04 \x01(\tR\ttargetUri\x12!\n" +
+	"\fvideo_choice\x18\x05 \x01(\tR\vvideoChoice\"5\n" +
 	"\x16ListPushTargetsRequest\x12\x1b\n" +
 	"\tstream_id\x18\x01 \x01(\tR\bstreamId\"S\n" +
 	"\x17ListPushTargetsResponse\x128\n" +
-	"\fpush_targets\x18\x01 \x03(\v2\x15.commodore.PushTargetR\vpushTargets\"\xb1\x01\n" +
+	"\fpush_targets\x18\x01 \x03(\v2\x15.commodore.PushTargetR\vpushTargets\"\xea\x01\n" +
 	"\x17UpdatePushTargetRequest\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x17\n" +
 	"\x04name\x18\x02 \x01(\tH\x00R\x04name\x88\x01\x01\x12\"\n" +
 	"\n" +
 	"target_uri\x18\x03 \x01(\tH\x01R\ttargetUri\x88\x01\x01\x12\"\n" +
 	"\n" +
-	"is_enabled\x18\x04 \x01(\bH\x02R\tisEnabled\x88\x01\x01B\a\n" +
+	"is_enabled\x18\x04 \x01(\bH\x02R\tisEnabled\x88\x01\x01\x12&\n" +
+	"\fvideo_choice\x18\x05 \x01(\tH\x03R\vvideoChoice\x88\x01\x01B\a\n" +
 	"\x05_nameB\r\n" +
 	"\v_target_uriB\r\n" +
-	"\v_is_enabled\")\n" +
+	"\v_is_enabledB\x0f\n" +
+	"\r_video_choice\")\n" +
 	"\x17DeletePushTargetRequest\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\"\x7f\n" +
 	"\x18DeletePushTargetResponse\x12\x18\n" +
@@ -16052,13 +16119,14 @@ const file_commodore_proto_rawDesc = "" +
 	"\x1cGetStreamPushTargetsResponse\x12@\n" +
 	"\fpush_targets\x18\x01 \x03(\v2\x1d.commodore.PushTargetInternalR\vpushTargets\x127\n" +
 	"\x15push_targets_complete\x18\x02 \x01(\bH\x00R\x13pushTargetsComplete\x88\x01\x01B\x18\n" +
-	"\x16_push_targets_complete\"s\n" +
+	"\x16_push_targets_complete\"\x96\x01\n" +
 	"\x12PushTargetInternal\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x1a\n" +
 	"\bplatform\x18\x02 \x01(\tR\bplatform\x12\x12\n" +
 	"\x04name\x18\x03 \x01(\tR\x04name\x12\x1d\n" +
 	"\n" +
-	"target_uri\x18\x04 \x01(\tR\ttargetUri\"\xd2\x01\n" +
+	"target_uri\x18\x04 \x01(\tR\ttargetUri\x12!\n" +
+	"\fvideo_choice\x18\x05 \x01(\tR\vvideoChoice\"\xd2\x01\n" +
 	"\x1dUpdatePushTargetStatusRequest\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x1b\n" +
 	"\ttenant_id\x18\x02 \x01(\tR\btenantId\x12\x16\n" +
@@ -16365,7 +16433,7 @@ const file_commodore_proto_rawDesc = "" +
 	" SOURCE_LOCATION_MODE_UNSPECIFIED\x10\x00\x12\x1c\n" +
 	"\x18SOURCE_LOCATION_MODE_ANY\x10\x01\x12#\n" +
 	"\x1fSOURCE_LOCATION_MODE_RESTRICTED\x10\x02\x12\x1f\n" +
-	"\x1bSOURCE_LOCATION_MODE_CUSTOM\x10\x03*\xe4\x03\n" +
+	"\x1bSOURCE_LOCATION_MODE_CUSTOM\x10\x03*\x9a\x04\n" +
 	"\x16PushTargetStatusReason\x12)\n" +
 	"%PUSH_TARGET_STATUS_REASON_UNSPECIFIED\x10\x00\x12'\n" +
 	"#PUSH_TARGET_STATUS_REASON_CONNECTED\x10\x01\x12'\n" +
@@ -16376,7 +16444,9 @@ const file_commodore_proto_rawDesc = "" +
 	",PUSH_TARGET_STATUS_REASON_CAPACITY_EXHAUSTED\x10\x06\x121\n" +
 	"-PUSH_TARGET_STATUS_REASON_CONFIGURATION_ERROR\x10\a\x12%\n" +
 	"!PUSH_TARGET_STATUS_REASON_STOPPED\x10\b\x123\n" +
-	"/PUSH_TARGET_STATUS_REASON_EDGE_UPGRADE_REQUIRED\x10\t*\x9f\x01\n" +
+	"/PUSH_TARGET_STATUS_REASON_EDGE_UPGRADE_REQUIRED\x10\t\x124\n" +
+	"0PUSH_TARGET_STATUS_REASON_MEDIA_SELECTION_FAILED\x10\n" +
+	"*\x9f\x01\n" +
 	"\x14MediaRetentionTarget\x12&\n" +
 	"\"MEDIA_RETENTION_TARGET_UNSPECIFIED\x10\x00\x12\x1e\n" +
 	"\x1aMEDIA_RETENTION_TARGET_DVR\x10\x01\x12\x1f\n" +

@@ -787,6 +787,7 @@ export const scalarFields = {
     "CreatePushTargetInput": [
         "platform",
         "name",
+        "videoChoice",
         "targetUri",
         "__typename"
     ],
@@ -805,6 +806,7 @@ export const scalarFields = {
         "name",
         "description",
         "record",
+        "liveVideoAbr",
         "ingestMode",
         "__typename"
     ],
@@ -2370,6 +2372,7 @@ export const scalarFields = {
         "streamId",
         "platform",
         "name",
+        "videoChoice",
         "targetUri",
         "isEnabled",
         "status",
@@ -2949,6 +2952,7 @@ export const scalarFields = {
         "streamKey",
         "playbackId",
         "record",
+        "liveVideoAbr",
         "ingestMode",
         "createdAt",
         "updatedAt",
@@ -3532,6 +3536,7 @@ export const scalarFields = {
     ],
     "UpdatePushTargetInput": [
         "name",
+        "videoChoice",
         "targetUri",
         "isEnabled",
         "__typename"
@@ -3540,6 +3545,7 @@ export const scalarFields = {
         "name",
         "description",
         "record",
+        "liveVideoAbr",
         "ingestMode",
         "dvrChapterMode",
         "dvrChapterIntervalSeconds",

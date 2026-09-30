@@ -3,6 +3,7 @@ fragment PushTargetFields on PushTarget {
   streamId
   platform
   name
+  videoChoice
   targetUri
   isEnabled
   status

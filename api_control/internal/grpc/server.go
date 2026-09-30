@@ -1417,6 +1417,9 @@ func tierProcessesForLifecycle(tier *purserpb.BillingTier, lifecycle string) str
 func (s *CommodoreServer) resolveProcessesJSON(ctx context.Context, tenantID, streamID, clusterID, lifecycle string) string {
 	processesJSON, err := s.resolveProcessesJSONStrict(ctx, tenantID, streamID, clusterID, lifecycle)
 	if err != nil {
+		if processesJSON != "" {
+			return processesJSON
+		}
 		return "[]"
 	}
 	return processesJSON
@@ -1496,6 +1499,16 @@ func (s *CommodoreServer) resolveProcessesJSONStrict(ctx context.Context, tenant
 
 	if processesJSON == "" || processesJSON == "[]" {
 		return "[]", nil
+	}
+
+	if lifecycle == "live" && streamID != "" {
+		abr, abrErr := commodoredb.New(s.db).GetStreamLiveVideoABR(ctx, commodoredb.GetStreamLiveVideoABRParams{ID: streamID, TenantID: tenantID})
+		if abrErr != nil {
+			return mist.NormalizeProcessConfigSelectors(processesJSON), fmt.Errorf("load stream live video ABR setting: %w", abrErr)
+		}
+		if abr == "OFF" {
+			processesJSON = mist.StripLiveVideoRenditions(processesJSON)
+		}
 	}
 
 	// Livepeer entries carry no hardcoded_broadcasters — Foghorn fills the
@@ -2124,7 +2137,7 @@ func (s *CommodoreServer) validateStreamKey(ctx context.Context, req *commodorep
 	} else {
 		for _, row := range pushRows {
 			t := commodorepb.PushTargetInternal{
-				Id: row.ID, Platform: row.Platform.String, Name: row.Name, TargetUri: row.TargetUri,
+				Id: row.ID, Platform: row.Platform.String, Name: row.Name, TargetUri: row.TargetUri, VideoChoice: row.VideoChoice,
 			}
 			decrypted, decErr := s.fieldEncryptor.Decrypt(t.TargetUri)
 			if decErr != nil {
@@ -6573,6 +6586,10 @@ func (s *CommodoreServer) CreateStream(ctx context.Context, req *commodorepb.Cre
 	if permissionErr := requireTenantStreamPermission(ctx, "streams:write"); permissionErr != nil {
 		return nil, permissionErr
 	}
+	liveVideoABR, abrErr := normalizeLiveVideoABR(req.GetLiveVideoAbr())
+	if abrErr != nil {
+		return nil, status.Error(codes.InvalidArgument, abrErr.Error())
+	}
 
 	// Check if tenant is suspended (prepaid balance < -$10)
 	if suspended, suspendErr := s.isTenantSuspended(ctx, tenantID); suspendErr != nil {
@@ -6632,6 +6649,13 @@ func (s *CommodoreServer) CreateStream(ctx context.Context, req *commodorepb.Cre
 				s.logger.WithError(err).Error("Failed to create stream")
 				return txStatus(status.Errorf(codes.Internal, "failed to create stream: %v", err), err)
 			}
+			if liveVideoABR != "INHERIT" {
+				if err = txQueries.SetCreatedStreamLiveVideoABR(ctx, commodoredb.SetCreatedStreamLiveVideoABRParams{
+					LiveVideoAbr: liveVideoABR, ID: created.StreamID, TenantID: tenantID,
+				}); err != nil {
+					return txStatus(status.Errorf(codes.Internal, "failed to set stream ABR: %v", err), err)
+				}
+			}
 			if ingestMode == "pull" {
 				var encURI string
 				encURI, err = s.pullSourceEncryptor.Encrypt(strings.TrimSpace(req.GetPullSource().GetSourceUri()))
@@ -6679,6 +6703,9 @@ func (s *CommodoreServer) CreateStream(ctx context.Context, req *commodorepb.Cre
 			}
 
 			changedFields := []string{"title"}
+			if liveVideoABR != "INHERIT" {
+				changedFields = append(changedFields, "live_video_abr")
+			}
 			if req.GetDescription() != "" {
 				changedFields = append(changedFields, "description")
 			}
@@ -7108,6 +7135,16 @@ func (s *CommodoreServer) UpdateStream(ctx context.Context, req *commodorepb.Upd
 	}
 	applyStreamUpdate := false
 	changedFields := []string{}
+	if req.LiveVideoAbr != nil {
+		liveVideoABR, abrErr := normalizeLiveVideoABR(req.GetLiveVideoAbr())
+		if abrErr != nil {
+			return nil, status.Error(codes.InvalidArgument, abrErr.Error())
+		}
+		updateParams.ApplyLiveVideoAbr = true
+		updateParams.LiveVideoAbr = liveVideoABR
+		applyStreamUpdate = true
+		changedFields = append(changedFields, "live_video_abr")
+	}
 
 	if req.Name != nil {
 		updateParams.ApplyTitle = true
@@ -7899,10 +7936,34 @@ func normalizePushTargetPlatform(value string) (string, error) {
 	return value, nil
 }
 
+func normalizePushTargetVideoChoice(value string) (string, error) {
+	value = strings.ToUpper(strings.TrimSpace(value))
+	if value == "" {
+		value = "AUTO"
+	}
+	switch value {
+	case "AUTO", "SOURCE_VIDEO", "PROCESSED_VIDEO":
+		return value, nil
+	default:
+		return "", errors.New("video_choice must be AUTO, SOURCE_VIDEO, or PROCESSED_VIDEO")
+	}
+}
+
+func normalizeLiveVideoABR(value string) (string, error) {
+	switch strings.ToUpper(strings.TrimSpace(value)) {
+	case "", "INHERIT":
+		return "INHERIT", nil
+	case "OFF":
+		return "OFF", nil
+	default:
+		return "", errors.New("live_video_abr must be INHERIT or OFF")
+	}
+}
+
 func (s *CommodoreServer) pushTargetResponse(
 	id, streamID string,
 	platform sql.NullString,
-	name, targetURI string,
+	name, targetURI, videoChoice string,
 	isEnabled sql.NullBool,
 	targetStatus sql.NullString, reasonCode string, lastError sql.NullString,
 	lastPushedAt, createdAt, updatedAt sql.NullTime,
@@ -7913,14 +7974,14 @@ func (s *CommodoreServer) pushTargetResponse(
 		s.logger.WithError(err).WithField("push_target_id", id).Warn("Failed to decrypt target_uri")
 		return nil, fmt.Errorf("decrypt push target %s: %w", id, err)
 	}
-	return pushTargetMetadataResponse(id, streamID, platform, name, maskTargetURI(decryptedURI), isEnabled,
+	return pushTargetMetadataResponse(id, streamID, platform, name, maskTargetURI(decryptedURI), videoChoice, isEnabled,
 		targetStatus, reasonCode, lastError, lastPushedAt, createdAt, updatedAt)
 }
 
 func pushTargetMetadataResponse(
 	id, streamID string,
 	platform sql.NullString,
-	name, maskedTargetURI string,
+	name, maskedTargetURI, videoChoice string,
 	isEnabled sql.NullBool,
 	targetStatus sql.NullString, reasonCode string, lastError sql.NullString,
 	lastPushedAt, createdAt, updatedAt sql.NullTime,
@@ -7931,7 +7992,8 @@ func pushTargetMetadataResponse(
 	target := &commodorepb.PushTarget{
 		Id: id, StreamId: streamID, Platform: platform.String, Name: name,
 		TargetUri: maskedTargetURI, IsEnabled: isEnabled.Bool,
-		Status: targetStatus.String, ReasonCode: reasonCode, CreatedAt: timestamppb.New(createdAt.Time),
+		VideoChoice: videoChoice,
+		Status:      targetStatus.String, ReasonCode: reasonCode, CreatedAt: timestamppb.New(createdAt.Time),
 		UpdatedAt: timestamppb.New(updatedAt.Time),
 	}
 	if lastError.Valid {
@@ -7967,6 +8029,13 @@ func (s *CommodoreServer) CreatePushTarget(ctx context.Context, req *commodorepb
 	platform, validationErr := normalizePushTargetPlatform(req.GetPlatform())
 	if validationErr != nil {
 		return nil, status.Error(codes.InvalidArgument, validationErr.Error())
+	}
+	videoChoice, validationErr := normalizePushTargetVideoChoice(req.GetVideoChoice())
+	if validationErr != nil {
+		return nil, status.Error(codes.InvalidArgument, validationErr.Error())
+	}
+	if strings.HasPrefix(strings.ToLower(targetURI), "srt://") && videoChoice != "AUTO" {
+		return nil, status.Error(codes.InvalidArgument, "video_choice is available for RTMP targets only")
 	}
 
 	queries := commodoredb.New(s.db)
@@ -8010,7 +8079,7 @@ func (s *CommodoreServer) CreatePushTarget(ctx context.Context, req *commodorepb
 		if insertErr := commodoredb.New(tx).InsertPushTarget(ctx, commodoredb.InsertPushTargetParams{
 			ID: id, TenantID: tenantID, StreamID: streamID,
 			Platform: sql.NullString{String: platform, Valid: true}, Name: name,
-			TargetUri: encryptedURI, CreatedAt: sql.NullTime{Time: now, Valid: true},
+			TargetUri: encryptedURI, VideoChoice: videoChoice, CreatedAt: sql.NullTime{Time: now, Valid: true},
 		}); insertErr != nil {
 			return insertErr
 		}
@@ -8021,16 +8090,17 @@ func (s *CommodoreServer) CreatePushTarget(ctx context.Context, req *commodorepb
 	}
 
 	return &commodorepb.PushTarget{
-		Id:         id,
-		StreamId:   streamID,
-		Platform:   platform,
-		Name:       name,
-		TargetUri:  maskTargetURI(targetURI),
-		IsEnabled:  true,
-		Status:     "idle",
-		ReasonCode: "unspecified",
-		CreatedAt:  timestamppb.New(now),
-		UpdatedAt:  timestamppb.New(now),
+		Id:          id,
+		StreamId:    streamID,
+		Platform:    platform,
+		Name:        name,
+		TargetUri:   maskTargetURI(targetURI),
+		IsEnabled:   true,
+		Status:      "idle",
+		ReasonCode:  "unspecified",
+		VideoChoice: videoChoice,
+		CreatedAt:   timestamppb.New(now),
+		UpdatedAt:   timestamppb.New(now),
 	}, nil
 }
 
@@ -8058,12 +8128,12 @@ func (s *CommodoreServer) ListPushTargets(ctx context.Context, req *commodorepb.
 	targets := make([]*commodorepb.PushTarget, 0, len(rows))
 	for _, row := range rows {
 		target, mapErr := s.pushTargetResponse(
-			row.ID, row.StreamID, row.Platform, row.Name, row.TargetUri, row.IsEnabled,
+			row.ID, row.StreamID, row.Platform, row.Name, row.TargetUri, row.VideoChoice, row.IsEnabled,
 			row.Status, row.ReasonCode, row.LastError, row.LastPushedAt, row.CreatedAt, row.UpdatedAt,
 		)
 		if mapErr != nil {
 			target, mapErr = pushTargetMetadataResponse(
-				row.ID, row.StreamID, row.Platform, row.Name, "", row.IsEnabled,
+				row.ID, row.StreamID, row.Platform, row.Name, "", row.VideoChoice, row.IsEnabled,
 				row.Status, row.ReasonCode, row.LastError, row.LastPushedAt, row.CreatedAt, row.UpdatedAt,
 			)
 			if mapErr != nil {
@@ -8139,6 +8209,17 @@ func (s *CommodoreServer) UpdatePushTarget(ctx context.Context, req *commodorepb
 		params.ApplyEnabled = true
 		params.IsEnabled = req.GetIsEnabled()
 	}
+	if req.VideoChoice != nil {
+		videoChoice, validationErr := normalizePushTargetVideoChoice(req.GetVideoChoice())
+		if validationErr != nil {
+			return nil, status.Error(codes.InvalidArgument, validationErr.Error())
+		}
+		params.ApplyVideoChoice = true
+		params.VideoChoice = videoChoice
+	} else if params.ApplyTargetUri && strings.HasPrefix(strings.ToLower(strings.TrimSpace(req.GetTargetUri())), "srt://") {
+		params.ApplyVideoChoice = true
+		params.VideoChoice = "AUTO"
+	}
 
 	var row commodoredb.UpdatePushTargetFieldsRow
 	err = s.withEventTx(ctx, func(tx *sql.Tx) error {
@@ -8147,17 +8228,29 @@ func (s *CommodoreServer) UpdatePushTarget(ctx context.Context, req *commodorepb
 		if updateErr != nil {
 			return updateErr
 		}
+		if row.VideoChoice != "AUTO" {
+			plainURI, decryptErr := s.fieldEncryptor.Decrypt(row.TargetUri)
+			if decryptErr != nil {
+				return decryptErr
+			}
+			if strings.HasPrefix(strings.ToLower(plainURI), "srt://") {
+				return status.Error(codes.InvalidArgument, "video_choice is available for RTMP targets only")
+			}
+		}
 		return s.enqueueStreamUpdatedTx(ctx, tx, tenantID, userID, row.StreamID, []string{"push_targets"})
 	})
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, status.Error(codes.NotFound, "push target not found")
+	}
+	if status.Code(err) == codes.InvalidArgument {
+		return nil, err
 	}
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "database error: %v", err)
 	}
 
 	target, err := s.pushTargetResponse(
-		row.ID, row.StreamID, row.Platform, row.Name, row.TargetUri, row.IsEnabled,
+		row.ID, row.StreamID, row.Platform, row.Name, row.TargetUri, row.VideoChoice, row.IsEnabled,
 		row.Status, row.ReasonCode, row.LastError, row.LastPushedAt, row.CreatedAt, row.UpdatedAt,
 	)
 	if err != nil {
@@ -8227,7 +8320,7 @@ func (s *CommodoreServer) GetStreamPushTargets(ctx context.Context, req *commodo
 	complete := true
 	for _, row := range rows {
 		t := commodorepb.PushTargetInternal{
-			Id: row.ID, Platform: row.Platform.String, Name: row.Name, TargetUri: row.TargetUri,
+			Id: row.ID, Platform: row.Platform.String, Name: row.Name, TargetUri: row.TargetUri, VideoChoice: row.VideoChoice,
 		}
 		decrypted, decErr := s.fieldEncryptor.Decrypt(t.TargetUri)
 		if decErr != nil {
@@ -8287,7 +8380,7 @@ func (s *CommodoreServer) UpdatePushTargetStatus(ctx context.Context, req *commo
 	}
 
 	target, err := s.pushTargetResponse(
-		row.ID, row.StreamID, row.Platform, row.Name, row.TargetUri, row.IsEnabled,
+		row.ID, row.StreamID, row.Platform, row.Name, row.TargetUri, row.VideoChoice, row.IsEnabled,
 		row.Status, row.ReasonCode, row.LastError, row.LastPushedAt, row.CreatedAt, row.UpdatedAt,
 	)
 	if err != nil {
@@ -8371,6 +8464,8 @@ func pushTargetStatusReasonMessage(reason commodorepb.PushTargetStatusReason) st
 		return "restream target configuration is invalid"
 	case commodorepb.PushTargetStatusReason_PUSH_TARGET_STATUS_REASON_EDGE_UPGRADE_REQUIRED:
 		return "edge sidecar upgrade required for restream activation"
+	case commodorepb.PushTargetStatusReason_PUSH_TARGET_STATUS_REASON_MEDIA_SELECTION_FAILED:
+		return "no compatible video and audio tracks for this destination"
 	default:
 		return ""
 	}
@@ -8394,6 +8489,8 @@ func pushTargetStatusReasonCode(reason commodorepb.PushTargetStatusReason) strin
 		return "configuration_error"
 	case commodorepb.PushTargetStatusReason_PUSH_TARGET_STATUS_REASON_EDGE_UPGRADE_REQUIRED:
 		return "edge_upgrade_required"
+	case commodorepb.PushTargetStatusReason_PUSH_TARGET_STATUS_REASON_MEDIA_SELECTION_FAILED:
+		return "media_selection_failed"
 	case commodorepb.PushTargetStatusReason_PUSH_TARGET_STATUS_REASON_STOPPED:
 		return "stopped"
 	default:
@@ -8965,7 +9062,8 @@ func (s *CommodoreServer) streamFromConfigRow(row commodoredb.StreamConfigRow) (
 		IsRecordingEnabled: row.IsRecordingEnabled.Bool,
 		IsRecording:        row.IsRecordingEnabled.Bool,
 		IngestMode:         row.IngestMode, Monitoring: monitoringToggleFromNullBool(row.MonitoringEnabled),
-		CreatedAt: timestamppb.New(row.CreatedAt.Time), UpdatedAt: timestamppb.New(row.UpdatedAt.Time),
+		LiveVideoAbr: row.LiveVideoABR,
+		CreatedAt:    timestamppb.New(row.CreatedAt.Time), UpdatedAt: timestamppb.New(row.UpdatedAt.Time),
 	}
 	if row.Description.Valid {
 		stream.Description = row.Description.String

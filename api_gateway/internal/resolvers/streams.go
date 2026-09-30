@@ -143,6 +143,10 @@ func (r *Resolver) DoCreateStream(ctx context.Context, input model.CreateStreamI
 		if input.Record != nil {
 			isRecording = *input.Record
 		}
+		liveVideoABR := "INHERIT"
+		if input.LiveVideoAbr != nil {
+			liveVideoABR = *input.LiveVideoAbr
+		}
 		streamID := uuid.NewString()
 		return &commodorepb.Stream{
 			StreamId:     streamID,
@@ -153,6 +157,7 @@ func (r *Resolver) DoCreateStream(ctx context.Context, input model.CreateStreamI
 			PlaybackId:   "pb_demo_" + now.Format("150405"),
 			Status:       "offline",
 			IsRecording:  isRecording,
+			LiveVideoAbr: liveVideoABR,
 			CreatedAt:    timestamppb.New(now),
 			UpdatedAt:    timestamppb.New(now),
 		}, nil
@@ -169,6 +174,9 @@ func (r *Resolver) DoCreateStream(ctx context.Context, input model.CreateStreamI
 	}
 	if input.Record != nil {
 		req.IsRecording = *input.Record
+	}
+	if input.LiveVideoAbr != nil {
+		req.LiveVideoAbr = *input.LiveVideoAbr
 	}
 	if input.IngestMode != nil {
 		req.IngestMode = ingestModeToWire(*input.IngestMode)

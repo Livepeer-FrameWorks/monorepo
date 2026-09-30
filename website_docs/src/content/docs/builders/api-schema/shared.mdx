@@ -556,6 +556,7 @@ Redacted pull-input source configuration.
 - **streamId**: `ID!`
 - **platform**: `String` — Platform identifier (twitch, youtube, facebook, kick, x, custom).
 - **name**: `String!` — User-friendly label for this target.
+- **videoChoice**: `String!` — AUTO, SOURCE_VIDEO, or PROCESSED_VIDEO. Audio is selected independently.
 - **targetUri**: `String!` — Target URI (masked in responses — stream key portion is redacted).
 - **isEnabled**: `Boolean!` — Whether this target is enabled for automatic push on stream start.
 - **status**: `String!` — Current push status: pending, pushing, retrying, stopping, idle, or failed.
@@ -749,6 +750,7 @@ Implements [Node](/builders/api-schema/shared/#node).
 - **streamKey**: `String` — Secret key for publisher-authenticated ingest; null for pull and managed sources. The key lets its holder publish to the stream, so an API token needs the streams:write scope: without it this field is null and the response carries a FORBIDDEN error at its path.
 - **playbackId**: `String!` — Public identifier for playback URLs.
 - **record**: `Boolean!` — Whether DVR recording is enabled for this stream.
+- **liveVideoAbr**: `String!` — INHERIT or OFF for live video renditions.
 - **ingestMode**: `IngestMode!` ([IngestMode](/builders/api-schema/shared/#ingestmode)) — How source media enters the stream.
 - **pullSource**: `PullSourceView` ([PullSourceView](/builders/api-schema/shared/#pullsourceview)) — Pull-source config for pull streams; null for push streams.
 - **managedSource**: `ManagedSourceView` ([ManagedSourceView](/builders/api-schema/shared/#managedsourceview)) — Safe source summary for managed streams; null for push and pull streams.

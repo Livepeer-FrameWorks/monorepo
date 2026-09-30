@@ -4277,6 +4277,8 @@ type ArtifactEventDefaultFieldsStream struct {
 	PlaybackId string `json:"playbackId"`
 	// Whether DVR recording is enabled for this stream.
 	Record bool `json:"record"`
+	// INHERIT or OFF for live video renditions.
+	LiveVideoAbr string `json:"liveVideoAbr"`
 	// How source media enters the stream.
 	IngestMode IngestMode `json:"ingestMode"`
 	// Pull-source config for pull streams; null for push streams.
@@ -4340,6 +4342,9 @@ func (v *ArtifactEventDefaultFieldsStream) GetPlaybackId() string { return v.Pla
 
 // GetRecord returns ArtifactEventDefaultFieldsStream.Record, and is useful for accessing the field via an interface.
 func (v *ArtifactEventDefaultFieldsStream) GetRecord() bool { return v.Record }
+
+// GetLiveVideoAbr returns ArtifactEventDefaultFieldsStream.LiveVideoAbr, and is useful for accessing the field via an interface.
+func (v *ArtifactEventDefaultFieldsStream) GetLiveVideoAbr() string { return v.LiveVideoAbr }
 
 // GetIngestMode returns ArtifactEventDefaultFieldsStream.IngestMode, and is useful for accessing the field via an interface.
 func (v *ArtifactEventDefaultFieldsStream) GetIngestMode() IngestMode { return v.IngestMode }
@@ -4617,6 +4622,8 @@ type ArtifactEventDefaultFieldsStreamPushTargetsPushTarget struct {
 	Platform *string `json:"platform"`
 	// User-friendly label for this target.
 	Name string `json:"name"`
+	// AUTO, SOURCE_VIDEO, or PROCESSED_VIDEO. Audio is selected independently.
+	VideoChoice string `json:"videoChoice"`
 	// Target URI (masked in responses — stream key portion is redacted).
 	TargetUri string `json:"targetUri"`
 	// Whether this target is enabled for automatic push on stream start.
@@ -4647,6 +4654,11 @@ func (v *ArtifactEventDefaultFieldsStreamPushTargetsPushTarget) GetPlatform() *s
 
 // GetName returns ArtifactEventDefaultFieldsStreamPushTargetsPushTarget.Name, and is useful for accessing the field via an interface.
 func (v *ArtifactEventDefaultFieldsStreamPushTargetsPushTarget) GetName() string { return v.Name }
+
+// GetVideoChoice returns ArtifactEventDefaultFieldsStreamPushTargetsPushTarget.VideoChoice, and is useful for accessing the field via an interface.
+func (v *ArtifactEventDefaultFieldsStreamPushTargetsPushTarget) GetVideoChoice() string {
+	return v.VideoChoice
+}
 
 // GetTargetUri returns ArtifactEventDefaultFieldsStreamPushTargetsPushTarget.TargetUri, and is useful for accessing the field via an interface.
 func (v *ArtifactEventDefaultFieldsStreamPushTargetsPushTarget) GetTargetUri() string {
@@ -4849,6 +4861,8 @@ type ArtifactEventInNodeDefaultFieldsStream struct {
 	PlaybackId string `json:"playbackId"`
 	// Whether DVR recording is enabled for this stream.
 	Record bool `json:"record"`
+	// INHERIT or OFF for live video renditions.
+	LiveVideoAbr string `json:"liveVideoAbr"`
 	// How source media enters the stream.
 	IngestMode IngestMode `json:"ingestMode"`
 	// Pull-source config for pull streams; null for push streams.
@@ -4912,6 +4926,9 @@ func (v *ArtifactEventInNodeDefaultFieldsStream) GetPlaybackId() string { return
 
 // GetRecord returns ArtifactEventInNodeDefaultFieldsStream.Record, and is useful for accessing the field via an interface.
 func (v *ArtifactEventInNodeDefaultFieldsStream) GetRecord() bool { return v.Record }
+
+// GetLiveVideoAbr returns ArtifactEventInNodeDefaultFieldsStream.LiveVideoAbr, and is useful for accessing the field via an interface.
+func (v *ArtifactEventInNodeDefaultFieldsStream) GetLiveVideoAbr() string { return v.LiveVideoAbr }
 
 // GetIngestMode returns ArtifactEventInNodeDefaultFieldsStream.IngestMode, and is useful for accessing the field via an interface.
 func (v *ArtifactEventInNodeDefaultFieldsStream) GetIngestMode() IngestMode { return v.IngestMode }
@@ -5215,6 +5232,8 @@ type ArtifactEventInNodeDefaultFieldsStreamPushTargetsPushTarget struct {
 	Platform *string `json:"platform"`
 	// User-friendly label for this target.
 	Name string `json:"name"`
+	// AUTO, SOURCE_VIDEO, or PROCESSED_VIDEO. Audio is selected independently.
+	VideoChoice string `json:"videoChoice"`
 	// Target URI (masked in responses — stream key portion is redacted).
 	TargetUri string `json:"targetUri"`
 	// Whether this target is enabled for automatic push on stream start.
@@ -5245,6 +5264,11 @@ func (v *ArtifactEventInNodeDefaultFieldsStreamPushTargetsPushTarget) GetPlatfor
 
 // GetName returns ArtifactEventInNodeDefaultFieldsStreamPushTargetsPushTarget.Name, and is useful for accessing the field via an interface.
 func (v *ArtifactEventInNodeDefaultFieldsStreamPushTargetsPushTarget) GetName() string { return v.Name }
+
+// GetVideoChoice returns ArtifactEventInNodeDefaultFieldsStreamPushTargetsPushTarget.VideoChoice, and is useful for accessing the field via an interface.
+func (v *ArtifactEventInNodeDefaultFieldsStreamPushTargetsPushTarget) GetVideoChoice() string {
+	return v.VideoChoice
+}
 
 // GetTargetUri returns ArtifactEventInNodeDefaultFieldsStreamPushTargetsPushTarget.TargetUri, and is useful for accessing the field via an interface.
 func (v *ArtifactEventInNodeDefaultFieldsStreamPushTargetsPushTarget) GetTargetUri() string {
@@ -5463,6 +5487,8 @@ type ArtifactStateDefaultFieldsStream struct {
 	PlaybackId string `json:"playbackId"`
 	// Whether DVR recording is enabled for this stream.
 	Record bool `json:"record"`
+	// INHERIT or OFF for live video renditions.
+	LiveVideoAbr string `json:"liveVideoAbr"`
 	// How source media enters the stream.
 	IngestMode IngestMode `json:"ingestMode"`
 	// Pull-source config for pull streams; null for push streams.
@@ -5526,6 +5552,9 @@ func (v *ArtifactStateDefaultFieldsStream) GetPlaybackId() string { return v.Pla
 
 // GetRecord returns ArtifactStateDefaultFieldsStream.Record, and is useful for accessing the field via an interface.
 func (v *ArtifactStateDefaultFieldsStream) GetRecord() bool { return v.Record }
+
+// GetLiveVideoAbr returns ArtifactStateDefaultFieldsStream.LiveVideoAbr, and is useful for accessing the field via an interface.
+func (v *ArtifactStateDefaultFieldsStream) GetLiveVideoAbr() string { return v.LiveVideoAbr }
 
 // GetIngestMode returns ArtifactStateDefaultFieldsStream.IngestMode, and is useful for accessing the field via an interface.
 func (v *ArtifactStateDefaultFieldsStream) GetIngestMode() IngestMode { return v.IngestMode }
@@ -5803,6 +5832,8 @@ type ArtifactStateDefaultFieldsStreamPushTargetsPushTarget struct {
 	Platform *string `json:"platform"`
 	// User-friendly label for this target.
 	Name string `json:"name"`
+	// AUTO, SOURCE_VIDEO, or PROCESSED_VIDEO. Audio is selected independently.
+	VideoChoice string `json:"videoChoice"`
 	// Target URI (masked in responses — stream key portion is redacted).
 	TargetUri string `json:"targetUri"`
 	// Whether this target is enabled for automatic push on stream start.
@@ -5833,6 +5864,11 @@ func (v *ArtifactStateDefaultFieldsStreamPushTargetsPushTarget) GetPlatform() *s
 
 // GetName returns ArtifactStateDefaultFieldsStreamPushTargetsPushTarget.Name, and is useful for accessing the field via an interface.
 func (v *ArtifactStateDefaultFieldsStreamPushTargetsPushTarget) GetName() string { return v.Name }
+
+// GetVideoChoice returns ArtifactStateDefaultFieldsStreamPushTargetsPushTarget.VideoChoice, and is useful for accessing the field via an interface.
+func (v *ArtifactStateDefaultFieldsStreamPushTargetsPushTarget) GetVideoChoice() string {
+	return v.VideoChoice
+}
 
 // GetTargetUri returns ArtifactStateDefaultFieldsStreamPushTargetsPushTarget.TargetUri, and is useful for accessing the field via an interface.
 func (v *ArtifactStateDefaultFieldsStreamPushTargetsPushTarget) GetTargetUri() string {
@@ -10132,6 +10168,8 @@ type ClientMetrics5mDefaultFieldsStream struct {
 	PlaybackId string `json:"playbackId"`
 	// Whether DVR recording is enabled for this stream.
 	Record bool `json:"record"`
+	// INHERIT or OFF for live video renditions.
+	LiveVideoAbr string `json:"liveVideoAbr"`
 	// How source media enters the stream.
 	IngestMode IngestMode `json:"ingestMode"`
 	// Pull-source config for pull streams; null for push streams.
@@ -10195,6 +10233,9 @@ func (v *ClientMetrics5mDefaultFieldsStream) GetPlaybackId() string { return v.P
 
 // GetRecord returns ClientMetrics5mDefaultFieldsStream.Record, and is useful for accessing the field via an interface.
 func (v *ClientMetrics5mDefaultFieldsStream) GetRecord() bool { return v.Record }
+
+// GetLiveVideoAbr returns ClientMetrics5mDefaultFieldsStream.LiveVideoAbr, and is useful for accessing the field via an interface.
+func (v *ClientMetrics5mDefaultFieldsStream) GetLiveVideoAbr() string { return v.LiveVideoAbr }
 
 // GetIngestMode returns ClientMetrics5mDefaultFieldsStream.IngestMode, and is useful for accessing the field via an interface.
 func (v *ClientMetrics5mDefaultFieldsStream) GetIngestMode() IngestMode { return v.IngestMode }
@@ -10480,6 +10521,8 @@ type ClientMetrics5mDefaultFieldsStreamPushTargetsPushTarget struct {
 	Platform *string `json:"platform"`
 	// User-friendly label for this target.
 	Name string `json:"name"`
+	// AUTO, SOURCE_VIDEO, or PROCESSED_VIDEO. Audio is selected independently.
+	VideoChoice string `json:"videoChoice"`
 	// Target URI (masked in responses — stream key portion is redacted).
 	TargetUri string `json:"targetUri"`
 	// Whether this target is enabled for automatic push on stream start.
@@ -10510,6 +10553,11 @@ func (v *ClientMetrics5mDefaultFieldsStreamPushTargetsPushTarget) GetPlatform() 
 
 // GetName returns ClientMetrics5mDefaultFieldsStreamPushTargetsPushTarget.Name, and is useful for accessing the field via an interface.
 func (v *ClientMetrics5mDefaultFieldsStreamPushTargetsPushTarget) GetName() string { return v.Name }
+
+// GetVideoChoice returns ClientMetrics5mDefaultFieldsStreamPushTargetsPushTarget.VideoChoice, and is useful for accessing the field via an interface.
+func (v *ClientMetrics5mDefaultFieldsStreamPushTargetsPushTarget) GetVideoChoice() string {
+	return v.VideoChoice
+}
 
 // GetTargetUri returns ClientMetrics5mDefaultFieldsStreamPushTargetsPushTarget.TargetUri, and is useful for accessing the field via an interface.
 func (v *ClientMetrics5mDefaultFieldsStreamPushTargetsPushTarget) GetTargetUri() string {
@@ -11354,6 +11402,8 @@ type ClipInNodeDefaultFieldsStream struct {
 	PlaybackId string `json:"playbackId"`
 	// Whether DVR recording is enabled for this stream.
 	Record bool `json:"record"`
+	// INHERIT or OFF for live video renditions.
+	LiveVideoAbr string `json:"liveVideoAbr"`
 	// How source media enters the stream.
 	IngestMode IngestMode `json:"ingestMode"`
 	// Pull-source config for pull streams; null for push streams.
@@ -11417,6 +11467,9 @@ func (v *ClipInNodeDefaultFieldsStream) GetPlaybackId() string { return v.Playba
 
 // GetRecord returns ClipInNodeDefaultFieldsStream.Record, and is useful for accessing the field via an interface.
 func (v *ClipInNodeDefaultFieldsStream) GetRecord() bool { return v.Record }
+
+// GetLiveVideoAbr returns ClipInNodeDefaultFieldsStream.LiveVideoAbr, and is useful for accessing the field via an interface.
+func (v *ClipInNodeDefaultFieldsStream) GetLiveVideoAbr() string { return v.LiveVideoAbr }
 
 // GetIngestMode returns ClipInNodeDefaultFieldsStream.IngestMode, and is useful for accessing the field via an interface.
 func (v *ClipInNodeDefaultFieldsStream) GetIngestMode() IngestMode { return v.IngestMode }
@@ -11688,6 +11741,8 @@ type ClipInNodeDefaultFieldsStreamPushTargetsPushTarget struct {
 	Platform *string `json:"platform"`
 	// User-friendly label for this target.
 	Name string `json:"name"`
+	// AUTO, SOURCE_VIDEO, or PROCESSED_VIDEO. Audio is selected independently.
+	VideoChoice string `json:"videoChoice"`
 	// Target URI (masked in responses — stream key portion is redacted).
 	TargetUri string `json:"targetUri"`
 	// Whether this target is enabled for automatic push on stream start.
@@ -11714,6 +11769,11 @@ func (v *ClipInNodeDefaultFieldsStreamPushTargetsPushTarget) GetPlatform() *stri
 
 // GetName returns ClipInNodeDefaultFieldsStreamPushTargetsPushTarget.Name, and is useful for accessing the field via an interface.
 func (v *ClipInNodeDefaultFieldsStreamPushTargetsPushTarget) GetName() string { return v.Name }
+
+// GetVideoChoice returns ClipInNodeDefaultFieldsStreamPushTargetsPushTarget.VideoChoice, and is useful for accessing the field via an interface.
+func (v *ClipInNodeDefaultFieldsStreamPushTargetsPushTarget) GetVideoChoice() string {
+	return v.VideoChoice
+}
 
 // GetTargetUri returns ClipInNodeDefaultFieldsStreamPushTargetsPushTarget.TargetUri, and is useful for accessing the field via an interface.
 func (v *ClipInNodeDefaultFieldsStreamPushTargetsPushTarget) GetTargetUri() string {
@@ -13313,6 +13373,8 @@ type ConnectionEventDefaultFieldsStream struct {
 	PlaybackId string `json:"playbackId"`
 	// Whether DVR recording is enabled for this stream.
 	Record bool `json:"record"`
+	// INHERIT or OFF for live video renditions.
+	LiveVideoAbr string `json:"liveVideoAbr"`
 	// How source media enters the stream.
 	IngestMode IngestMode `json:"ingestMode"`
 	// Pull-source config for pull streams; null for push streams.
@@ -13376,6 +13438,9 @@ func (v *ConnectionEventDefaultFieldsStream) GetPlaybackId() string { return v.P
 
 // GetRecord returns ConnectionEventDefaultFieldsStream.Record, and is useful for accessing the field via an interface.
 func (v *ConnectionEventDefaultFieldsStream) GetRecord() bool { return v.Record }
+
+// GetLiveVideoAbr returns ConnectionEventDefaultFieldsStream.LiveVideoAbr, and is useful for accessing the field via an interface.
+func (v *ConnectionEventDefaultFieldsStream) GetLiveVideoAbr() string { return v.LiveVideoAbr }
 
 // GetIngestMode returns ConnectionEventDefaultFieldsStream.IngestMode, and is useful for accessing the field via an interface.
 func (v *ConnectionEventDefaultFieldsStream) GetIngestMode() IngestMode { return v.IngestMode }
@@ -13661,6 +13726,8 @@ type ConnectionEventDefaultFieldsStreamPushTargetsPushTarget struct {
 	Platform *string `json:"platform"`
 	// User-friendly label for this target.
 	Name string `json:"name"`
+	// AUTO, SOURCE_VIDEO, or PROCESSED_VIDEO. Audio is selected independently.
+	VideoChoice string `json:"videoChoice"`
 	// Target URI (masked in responses — stream key portion is redacted).
 	TargetUri string `json:"targetUri"`
 	// Whether this target is enabled for automatic push on stream start.
@@ -13691,6 +13758,11 @@ func (v *ConnectionEventDefaultFieldsStreamPushTargetsPushTarget) GetPlatform() 
 
 // GetName returns ConnectionEventDefaultFieldsStreamPushTargetsPushTarget.Name, and is useful for accessing the field via an interface.
 func (v *ConnectionEventDefaultFieldsStreamPushTargetsPushTarget) GetName() string { return v.Name }
+
+// GetVideoChoice returns ConnectionEventDefaultFieldsStreamPushTargetsPushTarget.VideoChoice, and is useful for accessing the field via an interface.
+func (v *ConnectionEventDefaultFieldsStreamPushTargetsPushTarget) GetVideoChoice() string {
+	return v.VideoChoice
+}
 
 // GetTargetUri returns ConnectionEventDefaultFieldsStreamPushTargetsPushTarget.TargetUri, and is useful for accessing the field via an interface.
 func (v *ConnectionEventDefaultFieldsStreamPushTargetsPushTarget) GetTargetUri() string {
@@ -13959,6 +14031,8 @@ type ConnectionEventInNodeDefaultFieldsStream struct {
 	PlaybackId string `json:"playbackId"`
 	// Whether DVR recording is enabled for this stream.
 	Record bool `json:"record"`
+	// INHERIT or OFF for live video renditions.
+	LiveVideoAbr string `json:"liveVideoAbr"`
 	// How source media enters the stream.
 	IngestMode IngestMode `json:"ingestMode"`
 	// Pull-source config for pull streams; null for push streams.
@@ -14022,6 +14096,9 @@ func (v *ConnectionEventInNodeDefaultFieldsStream) GetPlaybackId() string { retu
 
 // GetRecord returns ConnectionEventInNodeDefaultFieldsStream.Record, and is useful for accessing the field via an interface.
 func (v *ConnectionEventInNodeDefaultFieldsStream) GetRecord() bool { return v.Record }
+
+// GetLiveVideoAbr returns ConnectionEventInNodeDefaultFieldsStream.LiveVideoAbr, and is useful for accessing the field via an interface.
+func (v *ConnectionEventInNodeDefaultFieldsStream) GetLiveVideoAbr() string { return v.LiveVideoAbr }
 
 // GetIngestMode returns ConnectionEventInNodeDefaultFieldsStream.IngestMode, and is useful for accessing the field via an interface.
 func (v *ConnectionEventInNodeDefaultFieldsStream) GetIngestMode() IngestMode { return v.IngestMode }
@@ -14333,6 +14410,8 @@ type ConnectionEventInNodeDefaultFieldsStreamPushTargetsPushTarget struct {
 	Platform *string `json:"platform"`
 	// User-friendly label for this target.
 	Name string `json:"name"`
+	// AUTO, SOURCE_VIDEO, or PROCESSED_VIDEO. Audio is selected independently.
+	VideoChoice string `json:"videoChoice"`
 	// Target URI (masked in responses — stream key portion is redacted).
 	TargetUri string `json:"targetUri"`
 	// Whether this target is enabled for automatic push on stream start.
@@ -14364,6 +14443,11 @@ func (v *ConnectionEventInNodeDefaultFieldsStreamPushTargetsPushTarget) GetPlatf
 // GetName returns ConnectionEventInNodeDefaultFieldsStreamPushTargetsPushTarget.Name, and is useful for accessing the field via an interface.
 func (v *ConnectionEventInNodeDefaultFieldsStreamPushTargetsPushTarget) GetName() string {
 	return v.Name
+}
+
+// GetVideoChoice returns ConnectionEventInNodeDefaultFieldsStreamPushTargetsPushTarget.VideoChoice, and is useful for accessing the field via an interface.
+func (v *ConnectionEventInNodeDefaultFieldsStreamPushTargetsPushTarget) GetVideoChoice() string {
+	return v.VideoChoice
 }
 
 // GetTargetUri returns ConnectionEventInNodeDefaultFieldsStreamPushTargetsPushTarget.TargetUri, and is useful for accessing the field via an interface.
@@ -20234,6 +20318,8 @@ type CreatePushTargetInput struct {
 	Platform *string `json:"platform"`
 	// User-friendly label for this target.
 	Name string `json:"name"`
+	// AUTO, SOURCE_VIDEO, or PROCESSED_VIDEO for RTMP targets.
+	VideoChoice *string `json:"videoChoice"`
 	// Full target URI including stream key (e.g., rtmp://live.twitch.tv/app/live_xxxx).
 	TargetUri string `json:"targetUri"`
 }
@@ -20243,6 +20329,9 @@ func (v *CreatePushTargetInput) GetPlatform() *string { return v.Platform }
 
 // GetName returns CreatePushTargetInput.Name, and is useful for accessing the field via an interface.
 func (v *CreatePushTargetInput) GetName() string { return v.Name }
+
+// GetVideoChoice returns CreatePushTargetInput.VideoChoice, and is useful for accessing the field via an interface.
+func (v *CreatePushTargetInput) GetVideoChoice() *string { return v.VideoChoice }
 
 // GetTargetUri returns CreatePushTargetInput.TargetUri, and is useful for accessing the field via an interface.
 func (v *CreatePushTargetInput) GetTargetUri() string { return v.TargetUri }
@@ -21274,6 +21363,8 @@ type CreateStreamInput struct {
 	Description *string `json:"description"`
 	// Enable DVR recording (default: false).
 	Record *bool `json:"record"`
+	// Live video renditions: INHERIT uses the tier policy; OFF keeps source video and audio conversion.
+	LiveVideoAbr *string `json:"liveVideoAbr"`
 	// Source ingest model. Defaults to PUSH.
 	IngestMode *IngestMode `json:"ingestMode"`
 	// Pull-source configuration. Required when ingestMode is PULL.
@@ -21290,6 +21381,9 @@ func (v *CreateStreamInput) GetDescription() *string { return v.Description }
 
 // GetRecord returns CreateStreamInput.Record, and is useful for accessing the field via an interface.
 func (v *CreateStreamInput) GetRecord() *bool { return v.Record }
+
+// GetLiveVideoAbr returns CreateStreamInput.LiveVideoAbr, and is useful for accessing the field via an interface.
+func (v *CreateStreamInput) GetLiveVideoAbr() *string { return v.LiveVideoAbr }
 
 // GetIngestMode returns CreateStreamInput.IngestMode, and is useful for accessing the field via an interface.
 func (v *CreateStreamInput) GetIngestMode() *IngestMode { return v.IngestMode }
@@ -28505,6 +28599,8 @@ type GeographicDistributionDefaultFieldsStream struct {
 	PlaybackId string `json:"playbackId"`
 	// Whether DVR recording is enabled for this stream.
 	Record bool `json:"record"`
+	// INHERIT or OFF for live video renditions.
+	LiveVideoAbr string `json:"liveVideoAbr"`
 	// How source media enters the stream.
 	IngestMode IngestMode `json:"ingestMode"`
 	// Pull-source config for pull streams; null for push streams.
@@ -28568,6 +28664,9 @@ func (v *GeographicDistributionDefaultFieldsStream) GetPlaybackId() string { ret
 
 // GetRecord returns GeographicDistributionDefaultFieldsStream.Record, and is useful for accessing the field via an interface.
 func (v *GeographicDistributionDefaultFieldsStream) GetRecord() bool { return v.Record }
+
+// GetLiveVideoAbr returns GeographicDistributionDefaultFieldsStream.LiveVideoAbr, and is useful for accessing the field via an interface.
+func (v *GeographicDistributionDefaultFieldsStream) GetLiveVideoAbr() string { return v.LiveVideoAbr }
 
 // GetIngestMode returns GeographicDistributionDefaultFieldsStream.IngestMode, and is useful for accessing the field via an interface.
 func (v *GeographicDistributionDefaultFieldsStream) GetIngestMode() IngestMode { return v.IngestMode }
@@ -28881,6 +28980,8 @@ type GeographicDistributionDefaultFieldsStreamPushTargetsPushTarget struct {
 	Platform *string `json:"platform"`
 	// User-friendly label for this target.
 	Name string `json:"name"`
+	// AUTO, SOURCE_VIDEO, or PROCESSED_VIDEO. Audio is selected independently.
+	VideoChoice string `json:"videoChoice"`
 	// Target URI (masked in responses — stream key portion is redacted).
 	TargetUri string `json:"targetUri"`
 	// Whether this target is enabled for automatic push on stream start.
@@ -28912,6 +29013,11 @@ func (v *GeographicDistributionDefaultFieldsStreamPushTargetsPushTarget) GetPlat
 // GetName returns GeographicDistributionDefaultFieldsStreamPushTargetsPushTarget.Name, and is useful for accessing the field via an interface.
 func (v *GeographicDistributionDefaultFieldsStreamPushTargetsPushTarget) GetName() string {
 	return v.Name
+}
+
+// GetVideoChoice returns GeographicDistributionDefaultFieldsStreamPushTargetsPushTarget.VideoChoice, and is useful for accessing the field via an interface.
+func (v *GeographicDistributionDefaultFieldsStreamPushTargetsPushTarget) GetVideoChoice() string {
+	return v.VideoChoice
 }
 
 // GetTargetUri returns GeographicDistributionDefaultFieldsStreamPushTargetsPushTarget.TargetUri, and is useful for accessing the field via an interface.
@@ -49049,6 +49155,9 @@ func (v *GetNodeNodeStream) GetPlaybackId() string { return v.StreamInNodeDefaul
 // GetRecord returns GetNodeNodeStream.Record, and is useful for accessing the field via an interface.
 func (v *GetNodeNodeStream) GetRecord() bool { return v.StreamInNodeDefaultFields.Record }
 
+// GetLiveVideoAbr returns GetNodeNodeStream.LiveVideoAbr, and is useful for accessing the field via an interface.
+func (v *GetNodeNodeStream) GetLiveVideoAbr() string { return v.StreamInNodeDefaultFields.LiveVideoAbr }
+
 // GetIngestMode returns GetNodeNodeStream.IngestMode, and is useful for accessing the field via an interface.
 func (v *GetNodeNodeStream) GetIngestMode() IngestMode { return v.StreamInNodeDefaultFields.IngestMode }
 
@@ -49157,6 +49266,8 @@ type __premarshalGetNodeNodeStream struct {
 
 	Record bool `json:"record"`
 
+	LiveVideoAbr string `json:"liveVideoAbr"`
+
 	IngestMode IngestMode `json:"ingestMode"`
 
 	PullSource *StreamInNodeDefaultFieldsPullSourcePullSourceView `json:"pullSource"`
@@ -49205,6 +49316,7 @@ func (v *GetNodeNodeStream) __premarshalJSON() (*__premarshalGetNodeNodeStream, 
 	retval.StreamKey = v.StreamInNodeDefaultFields.StreamKey
 	retval.PlaybackId = v.StreamInNodeDefaultFields.PlaybackId
 	retval.Record = v.StreamInNodeDefaultFields.Record
+	retval.LiveVideoAbr = v.StreamInNodeDefaultFields.LiveVideoAbr
 	retval.IngestMode = v.StreamInNodeDefaultFields.IngestMode
 	retval.PullSource = v.StreamInNodeDefaultFields.PullSource
 	retval.ManagedSource = v.StreamInNodeDefaultFields.ManagedSource
@@ -79723,6 +79835,8 @@ type ProcessingUsageRecordDefaultFieldsStream struct {
 	PlaybackId string `json:"playbackId"`
 	// Whether DVR recording is enabled for this stream.
 	Record bool `json:"record"`
+	// INHERIT or OFF for live video renditions.
+	LiveVideoAbr string `json:"liveVideoAbr"`
 	// How source media enters the stream.
 	IngestMode IngestMode `json:"ingestMode"`
 	// Pull-source config for pull streams; null for push streams.
@@ -79786,6 +79900,9 @@ func (v *ProcessingUsageRecordDefaultFieldsStream) GetPlaybackId() string { retu
 
 // GetRecord returns ProcessingUsageRecordDefaultFieldsStream.Record, and is useful for accessing the field via an interface.
 func (v *ProcessingUsageRecordDefaultFieldsStream) GetRecord() bool { return v.Record }
+
+// GetLiveVideoAbr returns ProcessingUsageRecordDefaultFieldsStream.LiveVideoAbr, and is useful for accessing the field via an interface.
+func (v *ProcessingUsageRecordDefaultFieldsStream) GetLiveVideoAbr() string { return v.LiveVideoAbr }
 
 // GetIngestMode returns ProcessingUsageRecordDefaultFieldsStream.IngestMode, and is useful for accessing the field via an interface.
 func (v *ProcessingUsageRecordDefaultFieldsStream) GetIngestMode() IngestMode { return v.IngestMode }
@@ -80097,6 +80214,8 @@ type ProcessingUsageRecordDefaultFieldsStreamPushTargetsPushTarget struct {
 	Platform *string `json:"platform"`
 	// User-friendly label for this target.
 	Name string `json:"name"`
+	// AUTO, SOURCE_VIDEO, or PROCESSED_VIDEO. Audio is selected independently.
+	VideoChoice string `json:"videoChoice"`
 	// Target URI (masked in responses — stream key portion is redacted).
 	TargetUri string `json:"targetUri"`
 	// Whether this target is enabled for automatic push on stream start.
@@ -80128,6 +80247,11 @@ func (v *ProcessingUsageRecordDefaultFieldsStreamPushTargetsPushTarget) GetPlatf
 // GetName returns ProcessingUsageRecordDefaultFieldsStreamPushTargetsPushTarget.Name, and is useful for accessing the field via an interface.
 func (v *ProcessingUsageRecordDefaultFieldsStreamPushTargetsPushTarget) GetName() string {
 	return v.Name
+}
+
+// GetVideoChoice returns ProcessingUsageRecordDefaultFieldsStreamPushTargetsPushTarget.VideoChoice, and is useful for accessing the field via an interface.
+func (v *ProcessingUsageRecordDefaultFieldsStreamPushTargetsPushTarget) GetVideoChoice() string {
+	return v.VideoChoice
 }
 
 // GetTargetUri returns ProcessingUsageRecordDefaultFieldsStreamPushTargetsPushTarget.TargetUri, and is useful for accessing the field via an interface.
@@ -80521,6 +80645,8 @@ type ProcessingUsageRecordInNodeDefaultFieldsStream struct {
 	PlaybackId string `json:"playbackId"`
 	// Whether DVR recording is enabled for this stream.
 	Record bool `json:"record"`
+	// INHERIT or OFF for live video renditions.
+	LiveVideoAbr string `json:"liveVideoAbr"`
 	// How source media enters the stream.
 	IngestMode IngestMode `json:"ingestMode"`
 	// Pull-source config for pull streams; null for push streams.
@@ -80586,6 +80712,11 @@ func (v *ProcessingUsageRecordInNodeDefaultFieldsStream) GetPlaybackId() string 
 
 // GetRecord returns ProcessingUsageRecordInNodeDefaultFieldsStream.Record, and is useful for accessing the field via an interface.
 func (v *ProcessingUsageRecordInNodeDefaultFieldsStream) GetRecord() bool { return v.Record }
+
+// GetLiveVideoAbr returns ProcessingUsageRecordInNodeDefaultFieldsStream.LiveVideoAbr, and is useful for accessing the field via an interface.
+func (v *ProcessingUsageRecordInNodeDefaultFieldsStream) GetLiveVideoAbr() string {
+	return v.LiveVideoAbr
+}
 
 // GetIngestMode returns ProcessingUsageRecordInNodeDefaultFieldsStream.IngestMode, and is useful for accessing the field via an interface.
 func (v *ProcessingUsageRecordInNodeDefaultFieldsStream) GetIngestMode() IngestMode {
@@ -80907,6 +81038,8 @@ type ProcessingUsageRecordInNodeDefaultFieldsStreamPushTargetsPushTarget struct 
 	Platform *string `json:"platform"`
 	// User-friendly label for this target.
 	Name string `json:"name"`
+	// AUTO, SOURCE_VIDEO, or PROCESSED_VIDEO. Audio is selected independently.
+	VideoChoice string `json:"videoChoice"`
 	// Target URI (masked in responses — stream key portion is redacted).
 	TargetUri string `json:"targetUri"`
 	// Whether this target is enabled for automatic push on stream start.
@@ -80940,6 +81073,11 @@ func (v *ProcessingUsageRecordInNodeDefaultFieldsStreamPushTargetsPushTarget) Ge
 // GetName returns ProcessingUsageRecordInNodeDefaultFieldsStreamPushTargetsPushTarget.Name, and is useful for accessing the field via an interface.
 func (v *ProcessingUsageRecordInNodeDefaultFieldsStreamPushTargetsPushTarget) GetName() string {
 	return v.Name
+}
+
+// GetVideoChoice returns ProcessingUsageRecordInNodeDefaultFieldsStreamPushTargetsPushTarget.VideoChoice, and is useful for accessing the field via an interface.
+func (v *ProcessingUsageRecordInNodeDefaultFieldsStreamPushTargetsPushTarget) GetVideoChoice() string {
+	return v.VideoChoice
 }
 
 // GetTargetUri returns ProcessingUsageRecordInNodeDefaultFieldsStreamPushTargetsPushTarget.TargetUri, and is useful for accessing the field via an interface.
@@ -81710,6 +81848,8 @@ type QualityTierDailyDefaultFieldsStream struct {
 	PlaybackId string `json:"playbackId"`
 	// Whether DVR recording is enabled for this stream.
 	Record bool `json:"record"`
+	// INHERIT or OFF for live video renditions.
+	LiveVideoAbr string `json:"liveVideoAbr"`
 	// How source media enters the stream.
 	IngestMode IngestMode `json:"ingestMode"`
 	// Pull-source config for pull streams; null for push streams.
@@ -81773,6 +81913,9 @@ func (v *QualityTierDailyDefaultFieldsStream) GetPlaybackId() string { return v.
 
 // GetRecord returns QualityTierDailyDefaultFieldsStream.Record, and is useful for accessing the field via an interface.
 func (v *QualityTierDailyDefaultFieldsStream) GetRecord() bool { return v.Record }
+
+// GetLiveVideoAbr returns QualityTierDailyDefaultFieldsStream.LiveVideoAbr, and is useful for accessing the field via an interface.
+func (v *QualityTierDailyDefaultFieldsStream) GetLiveVideoAbr() string { return v.LiveVideoAbr }
 
 // GetIngestMode returns QualityTierDailyDefaultFieldsStream.IngestMode, and is useful for accessing the field via an interface.
 func (v *QualityTierDailyDefaultFieldsStream) GetIngestMode() IngestMode { return v.IngestMode }
@@ -82060,6 +82203,8 @@ type QualityTierDailyDefaultFieldsStreamPushTargetsPushTarget struct {
 	Platform *string `json:"platform"`
 	// User-friendly label for this target.
 	Name string `json:"name"`
+	// AUTO, SOURCE_VIDEO, or PROCESSED_VIDEO. Audio is selected independently.
+	VideoChoice string `json:"videoChoice"`
 	// Target URI (masked in responses — stream key portion is redacted).
 	TargetUri string `json:"targetUri"`
 	// Whether this target is enabled for automatic push on stream start.
@@ -82090,6 +82235,11 @@ func (v *QualityTierDailyDefaultFieldsStreamPushTargetsPushTarget) GetPlatform()
 
 // GetName returns QualityTierDailyDefaultFieldsStreamPushTargetsPushTarget.Name, and is useful for accessing the field via an interface.
 func (v *QualityTierDailyDefaultFieldsStreamPushTargetsPushTarget) GetName() string { return v.Name }
+
+// GetVideoChoice returns QualityTierDailyDefaultFieldsStreamPushTargetsPushTarget.VideoChoice, and is useful for accessing the field via an interface.
+func (v *QualityTierDailyDefaultFieldsStreamPushTargetsPushTarget) GetVideoChoice() string {
+	return v.VideoChoice
+}
 
 // GetTargetUri returns QualityTierDailyDefaultFieldsStreamPushTargetsPushTarget.TargetUri, and is useful for accessing the field via an interface.
 func (v *QualityTierDailyDefaultFieldsStreamPushTargetsPushTarget) GetTargetUri() string {
@@ -82300,6 +82450,8 @@ type RebufferingEventDefaultFieldsStream struct {
 	PlaybackId string `json:"playbackId"`
 	// Whether DVR recording is enabled for this stream.
 	Record bool `json:"record"`
+	// INHERIT or OFF for live video renditions.
+	LiveVideoAbr string `json:"liveVideoAbr"`
 	// How source media enters the stream.
 	IngestMode IngestMode `json:"ingestMode"`
 	// Pull-source config for pull streams; null for push streams.
@@ -82363,6 +82515,9 @@ func (v *RebufferingEventDefaultFieldsStream) GetPlaybackId() string { return v.
 
 // GetRecord returns RebufferingEventDefaultFieldsStream.Record, and is useful for accessing the field via an interface.
 func (v *RebufferingEventDefaultFieldsStream) GetRecord() bool { return v.Record }
+
+// GetLiveVideoAbr returns RebufferingEventDefaultFieldsStream.LiveVideoAbr, and is useful for accessing the field via an interface.
+func (v *RebufferingEventDefaultFieldsStream) GetLiveVideoAbr() string { return v.LiveVideoAbr }
 
 // GetIngestMode returns RebufferingEventDefaultFieldsStream.IngestMode, and is useful for accessing the field via an interface.
 func (v *RebufferingEventDefaultFieldsStream) GetIngestMode() IngestMode { return v.IngestMode }
@@ -82650,6 +82805,8 @@ type RebufferingEventDefaultFieldsStreamPushTargetsPushTarget struct {
 	Platform *string `json:"platform"`
 	// User-friendly label for this target.
 	Name string `json:"name"`
+	// AUTO, SOURCE_VIDEO, or PROCESSED_VIDEO. Audio is selected independently.
+	VideoChoice string `json:"videoChoice"`
 	// Target URI (masked in responses — stream key portion is redacted).
 	TargetUri string `json:"targetUri"`
 	// Whether this target is enabled for automatic push on stream start.
@@ -82680,6 +82837,11 @@ func (v *RebufferingEventDefaultFieldsStreamPushTargetsPushTarget) GetPlatform()
 
 // GetName returns RebufferingEventDefaultFieldsStreamPushTargetsPushTarget.Name, and is useful for accessing the field via an interface.
 func (v *RebufferingEventDefaultFieldsStreamPushTargetsPushTarget) GetName() string { return v.Name }
+
+// GetVideoChoice returns RebufferingEventDefaultFieldsStreamPushTargetsPushTarget.VideoChoice, and is useful for accessing the field via an interface.
+func (v *RebufferingEventDefaultFieldsStreamPushTargetsPushTarget) GetVideoChoice() string {
+	return v.VideoChoice
+}
 
 // GetTargetUri returns RebufferingEventDefaultFieldsStreamPushTargetsPushTarget.TargetUri, and is useful for accessing the field via an interface.
 func (v *RebufferingEventDefaultFieldsStreamPushTargetsPushTarget) GetTargetUri() string {
@@ -89607,6 +89769,8 @@ type RoutingEventDefaultFieldsStream struct {
 	PlaybackId string `json:"playbackId"`
 	// Whether DVR recording is enabled for this stream.
 	Record bool `json:"record"`
+	// INHERIT or OFF for live video renditions.
+	LiveVideoAbr string `json:"liveVideoAbr"`
 	// How source media enters the stream.
 	IngestMode IngestMode `json:"ingestMode"`
 	// Pull-source config for pull streams; null for push streams.
@@ -89670,6 +89834,9 @@ func (v *RoutingEventDefaultFieldsStream) GetPlaybackId() string { return v.Play
 
 // GetRecord returns RoutingEventDefaultFieldsStream.Record, and is useful for accessing the field via an interface.
 func (v *RoutingEventDefaultFieldsStream) GetRecord() bool { return v.Record }
+
+// GetLiveVideoAbr returns RoutingEventDefaultFieldsStream.LiveVideoAbr, and is useful for accessing the field via an interface.
+func (v *RoutingEventDefaultFieldsStream) GetLiveVideoAbr() string { return v.LiveVideoAbr }
 
 // GetIngestMode returns RoutingEventDefaultFieldsStream.IngestMode, and is useful for accessing the field via an interface.
 func (v *RoutingEventDefaultFieldsStream) GetIngestMode() IngestMode { return v.IngestMode }
@@ -89945,6 +90112,8 @@ type RoutingEventDefaultFieldsStreamPushTargetsPushTarget struct {
 	Platform *string `json:"platform"`
 	// User-friendly label for this target.
 	Name string `json:"name"`
+	// AUTO, SOURCE_VIDEO, or PROCESSED_VIDEO. Audio is selected independently.
+	VideoChoice string `json:"videoChoice"`
 	// Target URI (masked in responses — stream key portion is redacted).
 	TargetUri string `json:"targetUri"`
 	// Whether this target is enabled for automatic push on stream start.
@@ -89975,6 +90144,11 @@ func (v *RoutingEventDefaultFieldsStreamPushTargetsPushTarget) GetPlatform() *st
 
 // GetName returns RoutingEventDefaultFieldsStreamPushTargetsPushTarget.Name, and is useful for accessing the field via an interface.
 func (v *RoutingEventDefaultFieldsStreamPushTargetsPushTarget) GetName() string { return v.Name }
+
+// GetVideoChoice returns RoutingEventDefaultFieldsStreamPushTargetsPushTarget.VideoChoice, and is useful for accessing the field via an interface.
+func (v *RoutingEventDefaultFieldsStreamPushTargetsPushTarget) GetVideoChoice() string {
+	return v.VideoChoice
+}
 
 // GetTargetUri returns RoutingEventDefaultFieldsStreamPushTargetsPushTarget.TargetUri, and is useful for accessing the field via an interface.
 func (v *RoutingEventDefaultFieldsStreamPushTargetsPushTarget) GetTargetUri() string {
@@ -96585,6 +96759,8 @@ type StorageEventDefaultFieldsStream struct {
 	PlaybackId string `json:"playbackId"`
 	// Whether DVR recording is enabled for this stream.
 	Record bool `json:"record"`
+	// INHERIT or OFF for live video renditions.
+	LiveVideoAbr string `json:"liveVideoAbr"`
 	// How source media enters the stream.
 	IngestMode IngestMode `json:"ingestMode"`
 	// Pull-source config for pull streams; null for push streams.
@@ -96648,6 +96824,9 @@ func (v *StorageEventDefaultFieldsStream) GetPlaybackId() string { return v.Play
 
 // GetRecord returns StorageEventDefaultFieldsStream.Record, and is useful for accessing the field via an interface.
 func (v *StorageEventDefaultFieldsStream) GetRecord() bool { return v.Record }
+
+// GetLiveVideoAbr returns StorageEventDefaultFieldsStream.LiveVideoAbr, and is useful for accessing the field via an interface.
+func (v *StorageEventDefaultFieldsStream) GetLiveVideoAbr() string { return v.LiveVideoAbr }
 
 // GetIngestMode returns StorageEventDefaultFieldsStream.IngestMode, and is useful for accessing the field via an interface.
 func (v *StorageEventDefaultFieldsStream) GetIngestMode() IngestMode { return v.IngestMode }
@@ -96923,6 +97102,8 @@ type StorageEventDefaultFieldsStreamPushTargetsPushTarget struct {
 	Platform *string `json:"platform"`
 	// User-friendly label for this target.
 	Name string `json:"name"`
+	// AUTO, SOURCE_VIDEO, or PROCESSED_VIDEO. Audio is selected independently.
+	VideoChoice string `json:"videoChoice"`
 	// Target URI (masked in responses — stream key portion is redacted).
 	TargetUri string `json:"targetUri"`
 	// Whether this target is enabled for automatic push on stream start.
@@ -96953,6 +97134,11 @@ func (v *StorageEventDefaultFieldsStreamPushTargetsPushTarget) GetPlatform() *st
 
 // GetName returns StorageEventDefaultFieldsStreamPushTargetsPushTarget.Name, and is useful for accessing the field via an interface.
 func (v *StorageEventDefaultFieldsStreamPushTargetsPushTarget) GetName() string { return v.Name }
+
+// GetVideoChoice returns StorageEventDefaultFieldsStreamPushTargetsPushTarget.VideoChoice, and is useful for accessing the field via an interface.
+func (v *StorageEventDefaultFieldsStreamPushTargetsPushTarget) GetVideoChoice() string {
+	return v.VideoChoice
+}
 
 // GetTargetUri returns StorageEventDefaultFieldsStreamPushTargetsPushTarget.TargetUri, and is useful for accessing the field via an interface.
 func (v *StorageEventDefaultFieldsStreamPushTargetsPushTarget) GetTargetUri() string {
@@ -97157,6 +97343,8 @@ type StorageEventInNodeDefaultFieldsStream struct {
 	PlaybackId string `json:"playbackId"`
 	// Whether DVR recording is enabled for this stream.
 	Record bool `json:"record"`
+	// INHERIT or OFF for live video renditions.
+	LiveVideoAbr string `json:"liveVideoAbr"`
 	// How source media enters the stream.
 	IngestMode IngestMode `json:"ingestMode"`
 	// Pull-source config for pull streams; null for push streams.
@@ -97220,6 +97408,9 @@ func (v *StorageEventInNodeDefaultFieldsStream) GetPlaybackId() string { return 
 
 // GetRecord returns StorageEventInNodeDefaultFieldsStream.Record, and is useful for accessing the field via an interface.
 func (v *StorageEventInNodeDefaultFieldsStream) GetRecord() bool { return v.Record }
+
+// GetLiveVideoAbr returns StorageEventInNodeDefaultFieldsStream.LiveVideoAbr, and is useful for accessing the field via an interface.
+func (v *StorageEventInNodeDefaultFieldsStream) GetLiveVideoAbr() string { return v.LiveVideoAbr }
 
 // GetIngestMode returns StorageEventInNodeDefaultFieldsStream.IngestMode, and is useful for accessing the field via an interface.
 func (v *StorageEventInNodeDefaultFieldsStream) GetIngestMode() IngestMode { return v.IngestMode }
@@ -97517,6 +97708,8 @@ type StorageEventInNodeDefaultFieldsStreamPushTargetsPushTarget struct {
 	Platform *string `json:"platform"`
 	// User-friendly label for this target.
 	Name string `json:"name"`
+	// AUTO, SOURCE_VIDEO, or PROCESSED_VIDEO. Audio is selected independently.
+	VideoChoice string `json:"videoChoice"`
 	// Target URI (masked in responses — stream key portion is redacted).
 	TargetUri string `json:"targetUri"`
 	// Whether this target is enabled for automatic push on stream start.
@@ -97547,6 +97740,11 @@ func (v *StorageEventInNodeDefaultFieldsStreamPushTargetsPushTarget) GetPlatform
 
 // GetName returns StorageEventInNodeDefaultFieldsStreamPushTargetsPushTarget.Name, and is useful for accessing the field via an interface.
 func (v *StorageEventInNodeDefaultFieldsStreamPushTargetsPushTarget) GetName() string { return v.Name }
+
+// GetVideoChoice returns StorageEventInNodeDefaultFieldsStreamPushTargetsPushTarget.VideoChoice, and is useful for accessing the field via an interface.
+func (v *StorageEventInNodeDefaultFieldsStreamPushTargetsPushTarget) GetVideoChoice() string {
+	return v.VideoChoice
+}
 
 // GetTargetUri returns StorageEventInNodeDefaultFieldsStreamPushTargetsPushTarget.TargetUri, and is useful for accessing the field via an interface.
 func (v *StorageEventInNodeDefaultFieldsStreamPushTargetsPushTarget) GetTargetUri() string {
@@ -97779,6 +97977,8 @@ type StreamAnalyticsDailyDefaultFieldsStream struct {
 	PlaybackId string `json:"playbackId"`
 	// Whether DVR recording is enabled for this stream.
 	Record bool `json:"record"`
+	// INHERIT or OFF for live video renditions.
+	LiveVideoAbr string `json:"liveVideoAbr"`
 	// How source media enters the stream.
 	IngestMode IngestMode `json:"ingestMode"`
 	// Pull-source config for pull streams; null for push streams.
@@ -97842,6 +98042,9 @@ func (v *StreamAnalyticsDailyDefaultFieldsStream) GetPlaybackId() string { retur
 
 // GetRecord returns StreamAnalyticsDailyDefaultFieldsStream.Record, and is useful for accessing the field via an interface.
 func (v *StreamAnalyticsDailyDefaultFieldsStream) GetRecord() bool { return v.Record }
+
+// GetLiveVideoAbr returns StreamAnalyticsDailyDefaultFieldsStream.LiveVideoAbr, and is useful for accessing the field via an interface.
+func (v *StreamAnalyticsDailyDefaultFieldsStream) GetLiveVideoAbr() string { return v.LiveVideoAbr }
 
 // GetIngestMode returns StreamAnalyticsDailyDefaultFieldsStream.IngestMode, and is useful for accessing the field via an interface.
 func (v *StreamAnalyticsDailyDefaultFieldsStream) GetIngestMode() IngestMode { return v.IngestMode }
@@ -98151,6 +98354,8 @@ type StreamAnalyticsDailyDefaultFieldsStreamPushTargetsPushTarget struct {
 	Platform *string `json:"platform"`
 	// User-friendly label for this target.
 	Name string `json:"name"`
+	// AUTO, SOURCE_VIDEO, or PROCESSED_VIDEO. Audio is selected independently.
+	VideoChoice string `json:"videoChoice"`
 	// Target URI (masked in responses — stream key portion is redacted).
 	TargetUri string `json:"targetUri"`
 	// Whether this target is enabled for automatic push on stream start.
@@ -98182,6 +98387,11 @@ func (v *StreamAnalyticsDailyDefaultFieldsStreamPushTargetsPushTarget) GetPlatfo
 // GetName returns StreamAnalyticsDailyDefaultFieldsStreamPushTargetsPushTarget.Name, and is useful for accessing the field via an interface.
 func (v *StreamAnalyticsDailyDefaultFieldsStreamPushTargetsPushTarget) GetName() string {
 	return v.Name
+}
+
+// GetVideoChoice returns StreamAnalyticsDailyDefaultFieldsStreamPushTargetsPushTarget.VideoChoice, and is useful for accessing the field via an interface.
+func (v *StreamAnalyticsDailyDefaultFieldsStreamPushTargetsPushTarget) GetVideoChoice() string {
+	return v.VideoChoice
 }
 
 // GetTargetUri returns StreamAnalyticsDailyDefaultFieldsStreamPushTargetsPushTarget.TargetUri, and is useful for accessing the field via an interface.
@@ -98528,6 +98738,8 @@ type StreamAnalyticsSummaryDefaultFieldsStream struct {
 	PlaybackId string `json:"playbackId"`
 	// Whether DVR recording is enabled for this stream.
 	Record bool `json:"record"`
+	// INHERIT or OFF for live video renditions.
+	LiveVideoAbr string `json:"liveVideoAbr"`
 	// How source media enters the stream.
 	IngestMode IngestMode `json:"ingestMode"`
 	// Pull-source config for pull streams; null for push streams.
@@ -98591,6 +98803,9 @@ func (v *StreamAnalyticsSummaryDefaultFieldsStream) GetPlaybackId() string { ret
 
 // GetRecord returns StreamAnalyticsSummaryDefaultFieldsStream.Record, and is useful for accessing the field via an interface.
 func (v *StreamAnalyticsSummaryDefaultFieldsStream) GetRecord() bool { return v.Record }
+
+// GetLiveVideoAbr returns StreamAnalyticsSummaryDefaultFieldsStream.LiveVideoAbr, and is useful for accessing the field via an interface.
+func (v *StreamAnalyticsSummaryDefaultFieldsStream) GetLiveVideoAbr() string { return v.LiveVideoAbr }
 
 // GetIngestMode returns StreamAnalyticsSummaryDefaultFieldsStream.IngestMode, and is useful for accessing the field via an interface.
 func (v *StreamAnalyticsSummaryDefaultFieldsStream) GetIngestMode() IngestMode { return v.IngestMode }
@@ -98904,6 +99119,8 @@ type StreamAnalyticsSummaryDefaultFieldsStreamPushTargetsPushTarget struct {
 	Platform *string `json:"platform"`
 	// User-friendly label for this target.
 	Name string `json:"name"`
+	// AUTO, SOURCE_VIDEO, or PROCESSED_VIDEO. Audio is selected independently.
+	VideoChoice string `json:"videoChoice"`
 	// Target URI (masked in responses — stream key portion is redacted).
 	TargetUri string `json:"targetUri"`
 	// Whether this target is enabled for automatic push on stream start.
@@ -98935,6 +99152,11 @@ func (v *StreamAnalyticsSummaryDefaultFieldsStreamPushTargetsPushTarget) GetPlat
 // GetName returns StreamAnalyticsSummaryDefaultFieldsStreamPushTargetsPushTarget.Name, and is useful for accessing the field via an interface.
 func (v *StreamAnalyticsSummaryDefaultFieldsStreamPushTargetsPushTarget) GetName() string {
 	return v.Name
+}
+
+// GetVideoChoice returns StreamAnalyticsSummaryDefaultFieldsStreamPushTargetsPushTarget.VideoChoice, and is useful for accessing the field via an interface.
+func (v *StreamAnalyticsSummaryDefaultFieldsStreamPushTargetsPushTarget) GetVideoChoice() string {
+	return v.VideoChoice
 }
 
 // GetTargetUri returns StreamAnalyticsSummaryDefaultFieldsStreamPushTargetsPushTarget.TargetUri, and is useful for accessing the field via an interface.
@@ -99125,6 +99347,8 @@ type StreamConnectionHourlyDefaultFieldsStream struct {
 	PlaybackId string `json:"playbackId"`
 	// Whether DVR recording is enabled for this stream.
 	Record bool `json:"record"`
+	// INHERIT or OFF for live video renditions.
+	LiveVideoAbr string `json:"liveVideoAbr"`
 	// How source media enters the stream.
 	IngestMode IngestMode `json:"ingestMode"`
 	// Pull-source config for pull streams; null for push streams.
@@ -99188,6 +99412,9 @@ func (v *StreamConnectionHourlyDefaultFieldsStream) GetPlaybackId() string { ret
 
 // GetRecord returns StreamConnectionHourlyDefaultFieldsStream.Record, and is useful for accessing the field via an interface.
 func (v *StreamConnectionHourlyDefaultFieldsStream) GetRecord() bool { return v.Record }
+
+// GetLiveVideoAbr returns StreamConnectionHourlyDefaultFieldsStream.LiveVideoAbr, and is useful for accessing the field via an interface.
+func (v *StreamConnectionHourlyDefaultFieldsStream) GetLiveVideoAbr() string { return v.LiveVideoAbr }
 
 // GetIngestMode returns StreamConnectionHourlyDefaultFieldsStream.IngestMode, and is useful for accessing the field via an interface.
 func (v *StreamConnectionHourlyDefaultFieldsStream) GetIngestMode() IngestMode { return v.IngestMode }
@@ -99501,6 +99728,8 @@ type StreamConnectionHourlyDefaultFieldsStreamPushTargetsPushTarget struct {
 	Platform *string `json:"platform"`
 	// User-friendly label for this target.
 	Name string `json:"name"`
+	// AUTO, SOURCE_VIDEO, or PROCESSED_VIDEO. Audio is selected independently.
+	VideoChoice string `json:"videoChoice"`
 	// Target URI (masked in responses — stream key portion is redacted).
 	TargetUri string `json:"targetUri"`
 	// Whether this target is enabled for automatic push on stream start.
@@ -99532,6 +99761,11 @@ func (v *StreamConnectionHourlyDefaultFieldsStreamPushTargetsPushTarget) GetPlat
 // GetName returns StreamConnectionHourlyDefaultFieldsStreamPushTargetsPushTarget.Name, and is useful for accessing the field via an interface.
 func (v *StreamConnectionHourlyDefaultFieldsStreamPushTargetsPushTarget) GetName() string {
 	return v.Name
+}
+
+// GetVideoChoice returns StreamConnectionHourlyDefaultFieldsStreamPushTargetsPushTarget.VideoChoice, and is useful for accessing the field via an interface.
+func (v *StreamConnectionHourlyDefaultFieldsStreamPushTargetsPushTarget) GetVideoChoice() string {
+	return v.VideoChoice
 }
 
 // GetTargetUri returns StreamConnectionHourlyDefaultFieldsStreamPushTargetsPushTarget.TargetUri, and is useful for accessing the field via an interface.
@@ -99827,6 +100061,8 @@ type StreamEventDefaultFieldsStream struct {
 	PlaybackId string `json:"playbackId"`
 	// Whether DVR recording is enabled for this stream.
 	Record bool `json:"record"`
+	// INHERIT or OFF for live video renditions.
+	LiveVideoAbr string `json:"liveVideoAbr"`
 	// How source media enters the stream.
 	IngestMode IngestMode `json:"ingestMode"`
 	// Pull-source config for pull streams; null for push streams.
@@ -99890,6 +100126,9 @@ func (v *StreamEventDefaultFieldsStream) GetPlaybackId() string { return v.Playb
 
 // GetRecord returns StreamEventDefaultFieldsStream.Record, and is useful for accessing the field via an interface.
 func (v *StreamEventDefaultFieldsStream) GetRecord() bool { return v.Record }
+
+// GetLiveVideoAbr returns StreamEventDefaultFieldsStream.LiveVideoAbr, and is useful for accessing the field via an interface.
+func (v *StreamEventDefaultFieldsStream) GetLiveVideoAbr() string { return v.LiveVideoAbr }
 
 // GetIngestMode returns StreamEventDefaultFieldsStream.IngestMode, and is useful for accessing the field via an interface.
 func (v *StreamEventDefaultFieldsStream) GetIngestMode() IngestMode { return v.IngestMode }
@@ -100163,6 +100402,8 @@ type StreamEventDefaultFieldsStreamPushTargetsPushTarget struct {
 	Platform *string `json:"platform"`
 	// User-friendly label for this target.
 	Name string `json:"name"`
+	// AUTO, SOURCE_VIDEO, or PROCESSED_VIDEO. Audio is selected independently.
+	VideoChoice string `json:"videoChoice"`
 	// Target URI (masked in responses — stream key portion is redacted).
 	TargetUri string `json:"targetUri"`
 	// Whether this target is enabled for automatic push on stream start.
@@ -100191,6 +100432,11 @@ func (v *StreamEventDefaultFieldsStreamPushTargetsPushTarget) GetPlatform() *str
 
 // GetName returns StreamEventDefaultFieldsStreamPushTargetsPushTarget.Name, and is useful for accessing the field via an interface.
 func (v *StreamEventDefaultFieldsStreamPushTargetsPushTarget) GetName() string { return v.Name }
+
+// GetVideoChoice returns StreamEventDefaultFieldsStreamPushTargetsPushTarget.VideoChoice, and is useful for accessing the field via an interface.
+func (v *StreamEventDefaultFieldsStreamPushTargetsPushTarget) GetVideoChoice() string {
+	return v.VideoChoice
+}
 
 // GetTargetUri returns StreamEventDefaultFieldsStreamPushTargetsPushTarget.TargetUri, and is useful for accessing the field via an interface.
 func (v *StreamEventDefaultFieldsStreamPushTargetsPushTarget) GetTargetUri() string {
@@ -100483,6 +100729,8 @@ type StreamEventInNodeDefaultFieldsStream struct {
 	PlaybackId string `json:"playbackId"`
 	// Whether DVR recording is enabled for this stream.
 	Record bool `json:"record"`
+	// INHERIT or OFF for live video renditions.
+	LiveVideoAbr string `json:"liveVideoAbr"`
 	// How source media enters the stream.
 	IngestMode IngestMode `json:"ingestMode"`
 	// Pull-source config for pull streams; null for push streams.
@@ -100546,6 +100794,9 @@ func (v *StreamEventInNodeDefaultFieldsStream) GetPlaybackId() string { return v
 
 // GetRecord returns StreamEventInNodeDefaultFieldsStream.Record, and is useful for accessing the field via an interface.
 func (v *StreamEventInNodeDefaultFieldsStream) GetRecord() bool { return v.Record }
+
+// GetLiveVideoAbr returns StreamEventInNodeDefaultFieldsStream.LiveVideoAbr, and is useful for accessing the field via an interface.
+func (v *StreamEventInNodeDefaultFieldsStream) GetLiveVideoAbr() string { return v.LiveVideoAbr }
 
 // GetIngestMode returns StreamEventInNodeDefaultFieldsStream.IngestMode, and is useful for accessing the field via an interface.
 func (v *StreamEventInNodeDefaultFieldsStream) GetIngestMode() IngestMode { return v.IngestMode }
@@ -100837,6 +101088,8 @@ type StreamEventInNodeDefaultFieldsStreamPushTargetsPushTarget struct {
 	Platform *string `json:"platform"`
 	// User-friendly label for this target.
 	Name string `json:"name"`
+	// AUTO, SOURCE_VIDEO, or PROCESSED_VIDEO. Audio is selected independently.
+	VideoChoice string `json:"videoChoice"`
 	// Target URI (masked in responses — stream key portion is redacted).
 	TargetUri string `json:"targetUri"`
 	// Whether this target is enabled for automatic push on stream start.
@@ -100867,6 +101120,11 @@ func (v *StreamEventInNodeDefaultFieldsStreamPushTargetsPushTarget) GetPlatform(
 
 // GetName returns StreamEventInNodeDefaultFieldsStreamPushTargetsPushTarget.Name, and is useful for accessing the field via an interface.
 func (v *StreamEventInNodeDefaultFieldsStreamPushTargetsPushTarget) GetName() string { return v.Name }
+
+// GetVideoChoice returns StreamEventInNodeDefaultFieldsStreamPushTargetsPushTarget.VideoChoice, and is useful for accessing the field via an interface.
+func (v *StreamEventInNodeDefaultFieldsStreamPushTargetsPushTarget) GetVideoChoice() string {
+	return v.VideoChoice
+}
 
 // GetTargetUri returns StreamEventInNodeDefaultFieldsStreamPushTargetsPushTarget.TargetUri, and is useful for accessing the field via an interface.
 func (v *StreamEventInNodeDefaultFieldsStreamPushTargetsPushTarget) GetTargetUri() string {
@@ -101467,6 +101725,8 @@ type StreamHealthMetricDefaultFieldsStream struct {
 	PlaybackId string `json:"playbackId"`
 	// Whether DVR recording is enabled for this stream.
 	Record bool `json:"record"`
+	// INHERIT or OFF for live video renditions.
+	LiveVideoAbr string `json:"liveVideoAbr"`
 	// How source media enters the stream.
 	IngestMode IngestMode `json:"ingestMode"`
 	// Pull-source config for pull streams; null for push streams.
@@ -101530,6 +101790,9 @@ func (v *StreamHealthMetricDefaultFieldsStream) GetPlaybackId() string { return 
 
 // GetRecord returns StreamHealthMetricDefaultFieldsStream.Record, and is useful for accessing the field via an interface.
 func (v *StreamHealthMetricDefaultFieldsStream) GetRecord() bool { return v.Record }
+
+// GetLiveVideoAbr returns StreamHealthMetricDefaultFieldsStream.LiveVideoAbr, and is useful for accessing the field via an interface.
+func (v *StreamHealthMetricDefaultFieldsStream) GetLiveVideoAbr() string { return v.LiveVideoAbr }
 
 // GetIngestMode returns StreamHealthMetricDefaultFieldsStream.IngestMode, and is useful for accessing the field via an interface.
 func (v *StreamHealthMetricDefaultFieldsStream) GetIngestMode() IngestMode { return v.IngestMode }
@@ -101827,6 +102090,8 @@ type StreamHealthMetricDefaultFieldsStreamPushTargetsPushTarget struct {
 	Platform *string `json:"platform"`
 	// User-friendly label for this target.
 	Name string `json:"name"`
+	// AUTO, SOURCE_VIDEO, or PROCESSED_VIDEO. Audio is selected independently.
+	VideoChoice string `json:"videoChoice"`
 	// Target URI (masked in responses — stream key portion is redacted).
 	TargetUri string `json:"targetUri"`
 	// Whether this target is enabled for automatic push on stream start.
@@ -101857,6 +102122,11 @@ func (v *StreamHealthMetricDefaultFieldsStreamPushTargetsPushTarget) GetPlatform
 
 // GetName returns StreamHealthMetricDefaultFieldsStreamPushTargetsPushTarget.Name, and is useful for accessing the field via an interface.
 func (v *StreamHealthMetricDefaultFieldsStreamPushTargetsPushTarget) GetName() string { return v.Name }
+
+// GetVideoChoice returns StreamHealthMetricDefaultFieldsStreamPushTargetsPushTarget.VideoChoice, and is useful for accessing the field via an interface.
+func (v *StreamHealthMetricDefaultFieldsStreamPushTargetsPushTarget) GetVideoChoice() string {
+	return v.VideoChoice
+}
 
 // GetTargetUri returns StreamHealthMetricDefaultFieldsStreamPushTargetsPushTarget.TargetUri, and is useful for accessing the field via an interface.
 func (v *StreamHealthMetricDefaultFieldsStreamPushTargetsPushTarget) GetTargetUri() string {
@@ -102127,6 +102397,8 @@ type StreamHealthMetricInNodeDefaultFieldsStream struct {
 	PlaybackId string `json:"playbackId"`
 	// Whether DVR recording is enabled for this stream.
 	Record bool `json:"record"`
+	// INHERIT or OFF for live video renditions.
+	LiveVideoAbr string `json:"liveVideoAbr"`
 	// How source media enters the stream.
 	IngestMode IngestMode `json:"ingestMode"`
 	// Pull-source config for pull streams; null for push streams.
@@ -102190,6 +102462,9 @@ func (v *StreamHealthMetricInNodeDefaultFieldsStream) GetPlaybackId() string { r
 
 // GetRecord returns StreamHealthMetricInNodeDefaultFieldsStream.Record, and is useful for accessing the field via an interface.
 func (v *StreamHealthMetricInNodeDefaultFieldsStream) GetRecord() bool { return v.Record }
+
+// GetLiveVideoAbr returns StreamHealthMetricInNodeDefaultFieldsStream.LiveVideoAbr, and is useful for accessing the field via an interface.
+func (v *StreamHealthMetricInNodeDefaultFieldsStream) GetLiveVideoAbr() string { return v.LiveVideoAbr }
 
 // GetIngestMode returns StreamHealthMetricInNodeDefaultFieldsStream.IngestMode, and is useful for accessing the field via an interface.
 func (v *StreamHealthMetricInNodeDefaultFieldsStream) GetIngestMode() IngestMode { return v.IngestMode }
@@ -102507,6 +102782,8 @@ type StreamHealthMetricInNodeDefaultFieldsStreamPushTargetsPushTarget struct {
 	Platform *string `json:"platform"`
 	// User-friendly label for this target.
 	Name string `json:"name"`
+	// AUTO, SOURCE_VIDEO, or PROCESSED_VIDEO. Audio is selected independently.
+	VideoChoice string `json:"videoChoice"`
 	// Target URI (masked in responses — stream key portion is redacted).
 	TargetUri string `json:"targetUri"`
 	// Whether this target is enabled for automatic push on stream start.
@@ -102540,6 +102817,11 @@ func (v *StreamHealthMetricInNodeDefaultFieldsStreamPushTargetsPushTarget) GetPl
 // GetName returns StreamHealthMetricInNodeDefaultFieldsStreamPushTargetsPushTarget.Name, and is useful for accessing the field via an interface.
 func (v *StreamHealthMetricInNodeDefaultFieldsStreamPushTargetsPushTarget) GetName() string {
 	return v.Name
+}
+
+// GetVideoChoice returns StreamHealthMetricInNodeDefaultFieldsStreamPushTargetsPushTarget.VideoChoice, and is useful for accessing the field via an interface.
+func (v *StreamHealthMetricInNodeDefaultFieldsStreamPushTargetsPushTarget) GetVideoChoice() string {
+	return v.VideoChoice
 }
 
 // GetTargetUri returns StreamHealthMetricInNodeDefaultFieldsStreamPushTargetsPushTarget.TargetUri, and is useful for accessing the field via an interface.
@@ -102720,6 +103002,8 @@ type StreamInNodeDefaultFields struct {
 	PlaybackId string `json:"playbackId"`
 	// Whether DVR recording is enabled for this stream.
 	Record bool `json:"record"`
+	// INHERIT or OFF for live video renditions.
+	LiveVideoAbr string `json:"liveVideoAbr"`
 	// How source media enters the stream.
 	IngestMode IngestMode `json:"ingestMode"`
 	// Pull-source config for pull streams; null for push streams.
@@ -102783,6 +103067,9 @@ func (v *StreamInNodeDefaultFields) GetPlaybackId() string { return v.PlaybackId
 
 // GetRecord returns StreamInNodeDefaultFields.Record, and is useful for accessing the field via an interface.
 func (v *StreamInNodeDefaultFields) GetRecord() bool { return v.Record }
+
+// GetLiveVideoAbr returns StreamInNodeDefaultFields.LiveVideoAbr, and is useful for accessing the field via an interface.
+func (v *StreamInNodeDefaultFields) GetLiveVideoAbr() string { return v.LiveVideoAbr }
 
 // GetIngestMode returns StreamInNodeDefaultFields.IngestMode, and is useful for accessing the field via an interface.
 func (v *StreamInNodeDefaultFields) GetIngestMode() IngestMode { return v.IngestMode }
@@ -103149,6 +103436,8 @@ type StreamInNodeDefaultFieldsPushTargetsPushTarget struct {
 	Platform *string `json:"platform"`
 	// User-friendly label for this target.
 	Name string `json:"name"`
+	// AUTO, SOURCE_VIDEO, or PROCESSED_VIDEO. Audio is selected independently.
+	VideoChoice string `json:"videoChoice"`
 	// Target URI (masked in responses — stream key portion is redacted).
 	TargetUri string `json:"targetUri"`
 	// Whether this target is enabled for automatic push on stream start.
@@ -103175,6 +103464,11 @@ func (v *StreamInNodeDefaultFieldsPushTargetsPushTarget) GetPlatform() *string {
 
 // GetName returns StreamInNodeDefaultFieldsPushTargetsPushTarget.Name, and is useful for accessing the field via an interface.
 func (v *StreamInNodeDefaultFieldsPushTargetsPushTarget) GetName() string { return v.Name }
+
+// GetVideoChoice returns StreamInNodeDefaultFieldsPushTargetsPushTarget.VideoChoice, and is useful for accessing the field via an interface.
+func (v *StreamInNodeDefaultFieldsPushTargetsPushTarget) GetVideoChoice() string {
+	return v.VideoChoice
+}
 
 // GetTargetUri returns StreamInNodeDefaultFieldsPushTargetsPushTarget.TargetUri, and is useful for accessing the field via an interface.
 func (v *StreamInNodeDefaultFieldsPushTargetsPushTarget) GetTargetUri() string { return v.TargetUri }
@@ -104765,6 +105059,8 @@ type TenantEventDefaultFieldsConnectionEventStream struct {
 	PlaybackId string `json:"playbackId"`
 	// Whether DVR recording is enabled for this stream.
 	Record bool `json:"record"`
+	// INHERIT or OFF for live video renditions.
+	LiveVideoAbr string `json:"liveVideoAbr"`
 	// How source media enters the stream.
 	IngestMode IngestMode `json:"ingestMode"`
 	// When this stream was created.
@@ -104804,6 +105100,11 @@ func (v *TenantEventDefaultFieldsConnectionEventStream) GetPlaybackId() string {
 
 // GetRecord returns TenantEventDefaultFieldsConnectionEventStream.Record, and is useful for accessing the field via an interface.
 func (v *TenantEventDefaultFieldsConnectionEventStream) GetRecord() bool { return v.Record }
+
+// GetLiveVideoAbr returns TenantEventDefaultFieldsConnectionEventStream.LiveVideoAbr, and is useful for accessing the field via an interface.
+func (v *TenantEventDefaultFieldsConnectionEventStream) GetLiveVideoAbr() string {
+	return v.LiveVideoAbr
+}
 
 // GetIngestMode returns TenantEventDefaultFieldsConnectionEventStream.IngestMode, and is useful for accessing the field via an interface.
 func (v *TenantEventDefaultFieldsConnectionEventStream) GetIngestMode() IngestMode {
@@ -105224,6 +105525,8 @@ type TenantEventDefaultFieldsProcessingEventProcessingUsageRecordStream struct {
 	PlaybackId string `json:"playbackId"`
 	// Whether DVR recording is enabled for this stream.
 	Record bool `json:"record"`
+	// INHERIT or OFF for live video renditions.
+	LiveVideoAbr string `json:"liveVideoAbr"`
 	// How source media enters the stream.
 	IngestMode IngestMode `json:"ingestMode"`
 	// When this stream was created.
@@ -105274,6 +105577,11 @@ func (v *TenantEventDefaultFieldsProcessingEventProcessingUsageRecordStream) Get
 // GetRecord returns TenantEventDefaultFieldsProcessingEventProcessingUsageRecordStream.Record, and is useful for accessing the field via an interface.
 func (v *TenantEventDefaultFieldsProcessingEventProcessingUsageRecordStream) GetRecord() bool {
 	return v.Record
+}
+
+// GetLiveVideoAbr returns TenantEventDefaultFieldsProcessingEventProcessingUsageRecordStream.LiveVideoAbr, and is useful for accessing the field via an interface.
+func (v *TenantEventDefaultFieldsProcessingEventProcessingUsageRecordStream) GetLiveVideoAbr() string {
+	return v.LiveVideoAbr
 }
 
 // GetIngestMode returns TenantEventDefaultFieldsProcessingEventProcessingUsageRecordStream.IngestMode, and is useful for accessing the field via an interface.
@@ -105485,6 +105793,8 @@ type TenantEventDefaultFieldsRoutingEventStream struct {
 	PlaybackId string `json:"playbackId"`
 	// Whether DVR recording is enabled for this stream.
 	Record bool `json:"record"`
+	// INHERIT or OFF for live video renditions.
+	LiveVideoAbr string `json:"liveVideoAbr"`
 	// How source media enters the stream.
 	IngestMode IngestMode `json:"ingestMode"`
 	// When this stream was created.
@@ -105522,6 +105832,9 @@ func (v *TenantEventDefaultFieldsRoutingEventStream) GetPlaybackId() string { re
 
 // GetRecord returns TenantEventDefaultFieldsRoutingEventStream.Record, and is useful for accessing the field via an interface.
 func (v *TenantEventDefaultFieldsRoutingEventStream) GetRecord() bool { return v.Record }
+
+// GetLiveVideoAbr returns TenantEventDefaultFieldsRoutingEventStream.LiveVideoAbr, and is useful for accessing the field via an interface.
+func (v *TenantEventDefaultFieldsRoutingEventStream) GetLiveVideoAbr() string { return v.LiveVideoAbr }
 
 // GetIngestMode returns TenantEventDefaultFieldsRoutingEventStream.IngestMode, and is useful for accessing the field via an interface.
 func (v *TenantEventDefaultFieldsRoutingEventStream) GetIngestMode() IngestMode { return v.IngestMode }
@@ -105660,6 +105973,8 @@ type TenantEventDefaultFieldsStorageEventStream struct {
 	PlaybackId string `json:"playbackId"`
 	// Whether DVR recording is enabled for this stream.
 	Record bool `json:"record"`
+	// INHERIT or OFF for live video renditions.
+	LiveVideoAbr string `json:"liveVideoAbr"`
 	// How source media enters the stream.
 	IngestMode IngestMode `json:"ingestMode"`
 	// When this stream was created.
@@ -105697,6 +106012,9 @@ func (v *TenantEventDefaultFieldsStorageEventStream) GetPlaybackId() string { re
 
 // GetRecord returns TenantEventDefaultFieldsStorageEventStream.Record, and is useful for accessing the field via an interface.
 func (v *TenantEventDefaultFieldsStorageEventStream) GetRecord() bool { return v.Record }
+
+// GetLiveVideoAbr returns TenantEventDefaultFieldsStorageEventStream.LiveVideoAbr, and is useful for accessing the field via an interface.
+func (v *TenantEventDefaultFieldsStorageEventStream) GetLiveVideoAbr() string { return v.LiveVideoAbr }
 
 // GetIngestMode returns TenantEventDefaultFieldsStorageEventStream.IngestMode, and is useful for accessing the field via an interface.
 func (v *TenantEventDefaultFieldsStorageEventStream) GetIngestMode() IngestMode { return v.IngestMode }
@@ -105995,6 +106313,8 @@ type TenantEventDefaultFieldsStreamEventStream struct {
 	PlaybackId string `json:"playbackId"`
 	// Whether DVR recording is enabled for this stream.
 	Record bool `json:"record"`
+	// INHERIT or OFF for live video renditions.
+	LiveVideoAbr string `json:"liveVideoAbr"`
 	// How source media enters the stream.
 	IngestMode IngestMode `json:"ingestMode"`
 	// When this stream was created.
@@ -106032,6 +106352,9 @@ func (v *TenantEventDefaultFieldsStreamEventStream) GetPlaybackId() string { ret
 
 // GetRecord returns TenantEventDefaultFieldsStreamEventStream.Record, and is useful for accessing the field via an interface.
 func (v *TenantEventDefaultFieldsStreamEventStream) GetRecord() bool { return v.Record }
+
+// GetLiveVideoAbr returns TenantEventDefaultFieldsStreamEventStream.LiveVideoAbr, and is useful for accessing the field via an interface.
+func (v *TenantEventDefaultFieldsStreamEventStream) GetLiveVideoAbr() string { return v.LiveVideoAbr }
 
 // GetIngestMode returns TenantEventDefaultFieldsStreamEventStream.IngestMode, and is useful for accessing the field via an interface.
 func (v *TenantEventDefaultFieldsStreamEventStream) GetIngestMode() IngestMode { return v.IngestMode }
@@ -106226,6 +106549,8 @@ type TenantEventDefaultFieldsTrackListUpdateStream struct {
 	PlaybackId string `json:"playbackId"`
 	// Whether DVR recording is enabled for this stream.
 	Record bool `json:"record"`
+	// INHERIT or OFF for live video renditions.
+	LiveVideoAbr string `json:"liveVideoAbr"`
 	// How source media enters the stream.
 	IngestMode IngestMode `json:"ingestMode"`
 	// When this stream was created.
@@ -106265,6 +106590,11 @@ func (v *TenantEventDefaultFieldsTrackListUpdateStream) GetPlaybackId() string {
 
 // GetRecord returns TenantEventDefaultFieldsTrackListUpdateStream.Record, and is useful for accessing the field via an interface.
 func (v *TenantEventDefaultFieldsTrackListUpdateStream) GetRecord() bool { return v.Record }
+
+// GetLiveVideoAbr returns TenantEventDefaultFieldsTrackListUpdateStream.LiveVideoAbr, and is useful for accessing the field via an interface.
+func (v *TenantEventDefaultFieldsTrackListUpdateStream) GetLiveVideoAbr() string {
+	return v.LiveVideoAbr
+}
 
 // GetIngestMode returns TenantEventDefaultFieldsTrackListUpdateStream.IngestMode, and is useful for accessing the field via an interface.
 func (v *TenantEventDefaultFieldsTrackListUpdateStream) GetIngestMode() IngestMode {
@@ -106487,6 +106817,8 @@ type TenantEventDefaultFieldsViewerMetricsStream struct {
 	PlaybackId string `json:"playbackId"`
 	// Whether DVR recording is enabled for this stream.
 	Record bool `json:"record"`
+	// INHERIT or OFF for live video renditions.
+	LiveVideoAbr string `json:"liveVideoAbr"`
 	// How source media enters the stream.
 	IngestMode IngestMode `json:"ingestMode"`
 	// When this stream was created.
@@ -106524,6 +106856,9 @@ func (v *TenantEventDefaultFieldsViewerMetricsStream) GetPlaybackId() string { r
 
 // GetRecord returns TenantEventDefaultFieldsViewerMetricsStream.Record, and is useful for accessing the field via an interface.
 func (v *TenantEventDefaultFieldsViewerMetricsStream) GetRecord() bool { return v.Record }
+
+// GetLiveVideoAbr returns TenantEventDefaultFieldsViewerMetricsStream.LiveVideoAbr, and is useful for accessing the field via an interface.
+func (v *TenantEventDefaultFieldsViewerMetricsStream) GetLiveVideoAbr() string { return v.LiveVideoAbr }
 
 // GetIngestMode returns TenantEventDefaultFieldsViewerMetricsStream.IngestMode, and is useful for accessing the field via an interface.
 func (v *TenantEventDefaultFieldsViewerMetricsStream) GetIngestMode() IngestMode { return v.IngestMode }
@@ -110171,6 +110506,8 @@ type TrackListEventDefaultFieldsStream struct {
 	PlaybackId string `json:"playbackId"`
 	// Whether DVR recording is enabled for this stream.
 	Record bool `json:"record"`
+	// INHERIT or OFF for live video renditions.
+	LiveVideoAbr string `json:"liveVideoAbr"`
 	// How source media enters the stream.
 	IngestMode IngestMode `json:"ingestMode"`
 	// Pull-source config for pull streams; null for push streams.
@@ -110234,6 +110571,9 @@ func (v *TrackListEventDefaultFieldsStream) GetPlaybackId() string { return v.Pl
 
 // GetRecord returns TrackListEventDefaultFieldsStream.Record, and is useful for accessing the field via an interface.
 func (v *TrackListEventDefaultFieldsStream) GetRecord() bool { return v.Record }
+
+// GetLiveVideoAbr returns TrackListEventDefaultFieldsStream.LiveVideoAbr, and is useful for accessing the field via an interface.
+func (v *TrackListEventDefaultFieldsStream) GetLiveVideoAbr() string { return v.LiveVideoAbr }
 
 // GetIngestMode returns TrackListEventDefaultFieldsStream.IngestMode, and is useful for accessing the field via an interface.
 func (v *TrackListEventDefaultFieldsStream) GetIngestMode() IngestMode { return v.IngestMode }
@@ -110511,6 +110851,8 @@ type TrackListEventDefaultFieldsStreamPushTargetsPushTarget struct {
 	Platform *string `json:"platform"`
 	// User-friendly label for this target.
 	Name string `json:"name"`
+	// AUTO, SOURCE_VIDEO, or PROCESSED_VIDEO. Audio is selected independently.
+	VideoChoice string `json:"videoChoice"`
 	// Target URI (masked in responses — stream key portion is redacted).
 	TargetUri string `json:"targetUri"`
 	// Whether this target is enabled for automatic push on stream start.
@@ -110541,6 +110883,11 @@ func (v *TrackListEventDefaultFieldsStreamPushTargetsPushTarget) GetPlatform() *
 
 // GetName returns TrackListEventDefaultFieldsStreamPushTargetsPushTarget.Name, and is useful for accessing the field via an interface.
 func (v *TrackListEventDefaultFieldsStreamPushTargetsPushTarget) GetName() string { return v.Name }
+
+// GetVideoChoice returns TrackListEventDefaultFieldsStreamPushTargetsPushTarget.VideoChoice, and is useful for accessing the field via an interface.
+func (v *TrackListEventDefaultFieldsStreamPushTargetsPushTarget) GetVideoChoice() string {
+	return v.VideoChoice
+}
 
 // GetTargetUri returns TrackListEventDefaultFieldsStreamPushTargetsPushTarget.TargetUri, and is useful for accessing the field via an interface.
 func (v *TrackListEventDefaultFieldsStreamPushTargetsPushTarget) GetTargetUri() string {
@@ -110773,6 +111120,8 @@ type TrackListEventInNodeDefaultFieldsStream struct {
 	PlaybackId string `json:"playbackId"`
 	// Whether DVR recording is enabled for this stream.
 	Record bool `json:"record"`
+	// INHERIT or OFF for live video renditions.
+	LiveVideoAbr string `json:"liveVideoAbr"`
 	// How source media enters the stream.
 	IngestMode IngestMode `json:"ingestMode"`
 	// Pull-source config for pull streams; null for push streams.
@@ -110836,6 +111185,9 @@ func (v *TrackListEventInNodeDefaultFieldsStream) GetPlaybackId() string { retur
 
 // GetRecord returns TrackListEventInNodeDefaultFieldsStream.Record, and is useful for accessing the field via an interface.
 func (v *TrackListEventInNodeDefaultFieldsStream) GetRecord() bool { return v.Record }
+
+// GetLiveVideoAbr returns TrackListEventInNodeDefaultFieldsStream.LiveVideoAbr, and is useful for accessing the field via an interface.
+func (v *TrackListEventInNodeDefaultFieldsStream) GetLiveVideoAbr() string { return v.LiveVideoAbr }
 
 // GetIngestMode returns TrackListEventInNodeDefaultFieldsStream.IngestMode, and is useful for accessing the field via an interface.
 func (v *TrackListEventInNodeDefaultFieldsStream) GetIngestMode() IngestMode { return v.IngestMode }
@@ -111145,6 +111497,8 @@ type TrackListEventInNodeDefaultFieldsStreamPushTargetsPushTarget struct {
 	Platform *string `json:"platform"`
 	// User-friendly label for this target.
 	Name string `json:"name"`
+	// AUTO, SOURCE_VIDEO, or PROCESSED_VIDEO. Audio is selected independently.
+	VideoChoice string `json:"videoChoice"`
 	// Target URI (masked in responses — stream key portion is redacted).
 	TargetUri string `json:"targetUri"`
 	// Whether this target is enabled for automatic push on stream start.
@@ -111176,6 +111530,11 @@ func (v *TrackListEventInNodeDefaultFieldsStreamPushTargetsPushTarget) GetPlatfo
 // GetName returns TrackListEventInNodeDefaultFieldsStreamPushTargetsPushTarget.Name, and is useful for accessing the field via an interface.
 func (v *TrackListEventInNodeDefaultFieldsStreamPushTargetsPushTarget) GetName() string {
 	return v.Name
+}
+
+// GetVideoChoice returns TrackListEventInNodeDefaultFieldsStreamPushTargetsPushTarget.VideoChoice, and is useful for accessing the field via an interface.
+func (v *TrackListEventInNodeDefaultFieldsStreamPushTargetsPushTarget) GetVideoChoice() string {
+	return v.VideoChoice
 }
 
 // GetTargetUri returns TrackListEventInNodeDefaultFieldsStreamPushTargetsPushTarget.TargetUri, and is useful for accessing the field via an interface.
@@ -111463,6 +111822,8 @@ type TrackListUpdateDefaultFieldsStream struct {
 	PlaybackId string `json:"playbackId"`
 	// Whether DVR recording is enabled for this stream.
 	Record bool `json:"record"`
+	// INHERIT or OFF for live video renditions.
+	LiveVideoAbr string `json:"liveVideoAbr"`
 	// How source media enters the stream.
 	IngestMode IngestMode `json:"ingestMode"`
 	// Pull-source config for pull streams; null for push streams.
@@ -111526,6 +111887,9 @@ func (v *TrackListUpdateDefaultFieldsStream) GetPlaybackId() string { return v.P
 
 // GetRecord returns TrackListUpdateDefaultFieldsStream.Record, and is useful for accessing the field via an interface.
 func (v *TrackListUpdateDefaultFieldsStream) GetRecord() bool { return v.Record }
+
+// GetLiveVideoAbr returns TrackListUpdateDefaultFieldsStream.LiveVideoAbr, and is useful for accessing the field via an interface.
+func (v *TrackListUpdateDefaultFieldsStream) GetLiveVideoAbr() string { return v.LiveVideoAbr }
 
 // GetIngestMode returns TrackListUpdateDefaultFieldsStream.IngestMode, and is useful for accessing the field via an interface.
 func (v *TrackListUpdateDefaultFieldsStream) GetIngestMode() IngestMode { return v.IngestMode }
@@ -111811,6 +112175,8 @@ type TrackListUpdateDefaultFieldsStreamPushTargetsPushTarget struct {
 	Platform *string `json:"platform"`
 	// User-friendly label for this target.
 	Name string `json:"name"`
+	// AUTO, SOURCE_VIDEO, or PROCESSED_VIDEO. Audio is selected independently.
+	VideoChoice string `json:"videoChoice"`
 	// Target URI (masked in responses — stream key portion is redacted).
 	TargetUri string `json:"targetUri"`
 	// Whether this target is enabled for automatic push on stream start.
@@ -111841,6 +112207,11 @@ func (v *TrackListUpdateDefaultFieldsStreamPushTargetsPushTarget) GetPlatform() 
 
 // GetName returns TrackListUpdateDefaultFieldsStreamPushTargetsPushTarget.Name, and is useful for accessing the field via an interface.
 func (v *TrackListUpdateDefaultFieldsStreamPushTargetsPushTarget) GetName() string { return v.Name }
+
+// GetVideoChoice returns TrackListUpdateDefaultFieldsStreamPushTargetsPushTarget.VideoChoice, and is useful for accessing the field via an interface.
+func (v *TrackListUpdateDefaultFieldsStreamPushTargetsPushTarget) GetVideoChoice() string {
+	return v.VideoChoice
+}
 
 // GetTargetUri returns TrackListUpdateDefaultFieldsStreamPushTargetsPushTarget.TargetUri, and is useful for accessing the field via an interface.
 func (v *TrackListUpdateDefaultFieldsStreamPushTargetsPushTarget) GetTargetUri() string {
@@ -113861,6 +114232,8 @@ func (v *UpdateMediaRetentionUpdateMediaRetentionValidationError) __premarshalJS
 type UpdatePushTargetInput struct {
 	// Updated label.
 	Name *string `json:"name"`
+	// AUTO, SOURCE_VIDEO, or PROCESSED_VIDEO for RTMP targets.
+	VideoChoice *string `json:"videoChoice"`
 	// Updated target URI.
 	TargetUri *string `json:"targetUri"`
 	// Enable or disable this target.
@@ -113869,6 +114242,9 @@ type UpdatePushTargetInput struct {
 
 // GetName returns UpdatePushTargetInput.Name, and is useful for accessing the field via an interface.
 func (v *UpdatePushTargetInput) GetName() *string { return v.Name }
+
+// GetVideoChoice returns UpdatePushTargetInput.VideoChoice, and is useful for accessing the field via an interface.
+func (v *UpdatePushTargetInput) GetVideoChoice() *string { return v.VideoChoice }
 
 // GetTargetUri returns UpdatePushTargetInput.TargetUri, and is useful for accessing the field via an interface.
 func (v *UpdatePushTargetInput) GetTargetUri() *string { return v.TargetUri }
@@ -114105,6 +114481,8 @@ type UpdateStreamInput struct {
 	Description *string `json:"description"`
 	// Enable or disable DVR recording.
 	Record *bool `json:"record"`
+	// INHERIT uses the tier policy; OFF disables live video renditions from the next ingest.
+	LiveVideoAbr *string `json:"liveVideoAbr"`
 	// Ingest model cannot be changed after create; sending a different value returns a validation error.
 	IngestMode *IngestMode `json:"ingestMode"`
 	// Update the pull-source configuration for an existing pull stream.
@@ -114132,6 +114510,9 @@ func (v *UpdateStreamInput) GetDescription() *string { return v.Description }
 
 // GetRecord returns UpdateStreamInput.Record, and is useful for accessing the field via an interface.
 func (v *UpdateStreamInput) GetRecord() *bool { return v.Record }
+
+// GetLiveVideoAbr returns UpdateStreamInput.LiveVideoAbr, and is useful for accessing the field via an interface.
+func (v *UpdateStreamInput) GetLiveVideoAbr() *string { return v.LiveVideoAbr }
 
 // GetIngestMode returns UpdateStreamInput.IngestMode, and is useful for accessing the field via an interface.
 func (v *UpdateStreamInput) GetIngestMode() *IngestMode { return v.IngestMode }
@@ -115922,6 +116303,8 @@ type ViewerCountBucketDefaultFieldsStream struct {
 	PlaybackId string `json:"playbackId"`
 	// Whether DVR recording is enabled for this stream.
 	Record bool `json:"record"`
+	// INHERIT or OFF for live video renditions.
+	LiveVideoAbr string `json:"liveVideoAbr"`
 	// How source media enters the stream.
 	IngestMode IngestMode `json:"ingestMode"`
 	// Pull-source config for pull streams; null for push streams.
@@ -115985,6 +116368,9 @@ func (v *ViewerCountBucketDefaultFieldsStream) GetPlaybackId() string { return v
 
 // GetRecord returns ViewerCountBucketDefaultFieldsStream.Record, and is useful for accessing the field via an interface.
 func (v *ViewerCountBucketDefaultFieldsStream) GetRecord() bool { return v.Record }
+
+// GetLiveVideoAbr returns ViewerCountBucketDefaultFieldsStream.LiveVideoAbr, and is useful for accessing the field via an interface.
+func (v *ViewerCountBucketDefaultFieldsStream) GetLiveVideoAbr() string { return v.LiveVideoAbr }
 
 // GetIngestMode returns ViewerCountBucketDefaultFieldsStream.IngestMode, and is useful for accessing the field via an interface.
 func (v *ViewerCountBucketDefaultFieldsStream) GetIngestMode() IngestMode { return v.IngestMode }
@@ -116276,6 +116662,8 @@ type ViewerCountBucketDefaultFieldsStreamPushTargetsPushTarget struct {
 	Platform *string `json:"platform"`
 	// User-friendly label for this target.
 	Name string `json:"name"`
+	// AUTO, SOURCE_VIDEO, or PROCESSED_VIDEO. Audio is selected independently.
+	VideoChoice string `json:"videoChoice"`
 	// Target URI (masked in responses — stream key portion is redacted).
 	TargetUri string `json:"targetUri"`
 	// Whether this target is enabled for automatic push on stream start.
@@ -116306,6 +116694,11 @@ func (v *ViewerCountBucketDefaultFieldsStreamPushTargetsPushTarget) GetPlatform(
 
 // GetName returns ViewerCountBucketDefaultFieldsStreamPushTargetsPushTarget.Name, and is useful for accessing the field via an interface.
 func (v *ViewerCountBucketDefaultFieldsStreamPushTargetsPushTarget) GetName() string { return v.Name }
+
+// GetVideoChoice returns ViewerCountBucketDefaultFieldsStreamPushTargetsPushTarget.VideoChoice, and is useful for accessing the field via an interface.
+func (v *ViewerCountBucketDefaultFieldsStreamPushTargetsPushTarget) GetVideoChoice() string {
+	return v.VideoChoice
+}
 
 // GetTargetUri returns ViewerCountBucketDefaultFieldsStreamPushTargetsPushTarget.TargetUri, and is useful for accessing the field via an interface.
 func (v *ViewerCountBucketDefaultFieldsStreamPushTargetsPushTarget) GetTargetUri() string {
@@ -116600,6 +116993,8 @@ type ViewerGeographicDefaultFieldsStream struct {
 	PlaybackId string `json:"playbackId"`
 	// Whether DVR recording is enabled for this stream.
 	Record bool `json:"record"`
+	// INHERIT or OFF for live video renditions.
+	LiveVideoAbr string `json:"liveVideoAbr"`
 	// How source media enters the stream.
 	IngestMode IngestMode `json:"ingestMode"`
 	// Pull-source config for pull streams; null for push streams.
@@ -116663,6 +117058,9 @@ func (v *ViewerGeographicDefaultFieldsStream) GetPlaybackId() string { return v.
 
 // GetRecord returns ViewerGeographicDefaultFieldsStream.Record, and is useful for accessing the field via an interface.
 func (v *ViewerGeographicDefaultFieldsStream) GetRecord() bool { return v.Record }
+
+// GetLiveVideoAbr returns ViewerGeographicDefaultFieldsStream.LiveVideoAbr, and is useful for accessing the field via an interface.
+func (v *ViewerGeographicDefaultFieldsStream) GetLiveVideoAbr() string { return v.LiveVideoAbr }
 
 // GetIngestMode returns ViewerGeographicDefaultFieldsStream.IngestMode, and is useful for accessing the field via an interface.
 func (v *ViewerGeographicDefaultFieldsStream) GetIngestMode() IngestMode { return v.IngestMode }
@@ -116950,6 +117348,8 @@ type ViewerGeographicDefaultFieldsStreamPushTargetsPushTarget struct {
 	Platform *string `json:"platform"`
 	// User-friendly label for this target.
 	Name string `json:"name"`
+	// AUTO, SOURCE_VIDEO, or PROCESSED_VIDEO. Audio is selected independently.
+	VideoChoice string `json:"videoChoice"`
 	// Target URI (masked in responses — stream key portion is redacted).
 	TargetUri string `json:"targetUri"`
 	// Whether this target is enabled for automatic push on stream start.
@@ -116980,6 +117380,11 @@ func (v *ViewerGeographicDefaultFieldsStreamPushTargetsPushTarget) GetPlatform()
 
 // GetName returns ViewerGeographicDefaultFieldsStreamPushTargetsPushTarget.Name, and is useful for accessing the field via an interface.
 func (v *ViewerGeographicDefaultFieldsStreamPushTargetsPushTarget) GetName() string { return v.Name }
+
+// GetVideoChoice returns ViewerGeographicDefaultFieldsStreamPushTargetsPushTarget.VideoChoice, and is useful for accessing the field via an interface.
+func (v *ViewerGeographicDefaultFieldsStreamPushTargetsPushTarget) GetVideoChoice() string {
+	return v.VideoChoice
+}
 
 // GetTargetUri returns ViewerGeographicDefaultFieldsStreamPushTargetsPushTarget.TargetUri, and is useful for accessing the field via an interface.
 func (v *ViewerGeographicDefaultFieldsStreamPushTargetsPushTarget) GetTargetUri() string {
@@ -117162,6 +117567,8 @@ type ViewerHoursHourlyDefaultFieldsStream struct {
 	PlaybackId string `json:"playbackId"`
 	// Whether DVR recording is enabled for this stream.
 	Record bool `json:"record"`
+	// INHERIT or OFF for live video renditions.
+	LiveVideoAbr string `json:"liveVideoAbr"`
 	// How source media enters the stream.
 	IngestMode IngestMode `json:"ingestMode"`
 	// Pull-source config for pull streams; null for push streams.
@@ -117225,6 +117632,9 @@ func (v *ViewerHoursHourlyDefaultFieldsStream) GetPlaybackId() string { return v
 
 // GetRecord returns ViewerHoursHourlyDefaultFieldsStream.Record, and is useful for accessing the field via an interface.
 func (v *ViewerHoursHourlyDefaultFieldsStream) GetRecord() bool { return v.Record }
+
+// GetLiveVideoAbr returns ViewerHoursHourlyDefaultFieldsStream.LiveVideoAbr, and is useful for accessing the field via an interface.
+func (v *ViewerHoursHourlyDefaultFieldsStream) GetLiveVideoAbr() string { return v.LiveVideoAbr }
 
 // GetIngestMode returns ViewerHoursHourlyDefaultFieldsStream.IngestMode, and is useful for accessing the field via an interface.
 func (v *ViewerHoursHourlyDefaultFieldsStream) GetIngestMode() IngestMode { return v.IngestMode }
@@ -117516,6 +117926,8 @@ type ViewerHoursHourlyDefaultFieldsStreamPushTargetsPushTarget struct {
 	Platform *string `json:"platform"`
 	// User-friendly label for this target.
 	Name string `json:"name"`
+	// AUTO, SOURCE_VIDEO, or PROCESSED_VIDEO. Audio is selected independently.
+	VideoChoice string `json:"videoChoice"`
 	// Target URI (masked in responses — stream key portion is redacted).
 	TargetUri string `json:"targetUri"`
 	// Whether this target is enabled for automatic push on stream start.
@@ -117546,6 +117958,11 @@ func (v *ViewerHoursHourlyDefaultFieldsStreamPushTargetsPushTarget) GetPlatform(
 
 // GetName returns ViewerHoursHourlyDefaultFieldsStreamPushTargetsPushTarget.Name, and is useful for accessing the field via an interface.
 func (v *ViewerHoursHourlyDefaultFieldsStreamPushTargetsPushTarget) GetName() string { return v.Name }
+
+// GetVideoChoice returns ViewerHoursHourlyDefaultFieldsStreamPushTargetsPushTarget.VideoChoice, and is useful for accessing the field via an interface.
+func (v *ViewerHoursHourlyDefaultFieldsStreamPushTargetsPushTarget) GetVideoChoice() string {
+	return v.VideoChoice
+}
 
 // GetTargetUri returns ViewerHoursHourlyDefaultFieldsStreamPushTargetsPushTarget.TargetUri, and is useful for accessing the field via an interface.
 func (v *ViewerHoursHourlyDefaultFieldsStreamPushTargetsPushTarget) GetTargetUri() string {
@@ -117732,6 +118149,8 @@ type ViewerHoursHourlyInNodeDefaultFieldsStream struct {
 	PlaybackId string `json:"playbackId"`
 	// Whether DVR recording is enabled for this stream.
 	Record bool `json:"record"`
+	// INHERIT or OFF for live video renditions.
+	LiveVideoAbr string `json:"liveVideoAbr"`
 	// How source media enters the stream.
 	IngestMode IngestMode `json:"ingestMode"`
 	// Pull-source config for pull streams; null for push streams.
@@ -117795,6 +118214,9 @@ func (v *ViewerHoursHourlyInNodeDefaultFieldsStream) GetPlaybackId() string { re
 
 // GetRecord returns ViewerHoursHourlyInNodeDefaultFieldsStream.Record, and is useful for accessing the field via an interface.
 func (v *ViewerHoursHourlyInNodeDefaultFieldsStream) GetRecord() bool { return v.Record }
+
+// GetLiveVideoAbr returns ViewerHoursHourlyInNodeDefaultFieldsStream.LiveVideoAbr, and is useful for accessing the field via an interface.
+func (v *ViewerHoursHourlyInNodeDefaultFieldsStream) GetLiveVideoAbr() string { return v.LiveVideoAbr }
 
 // GetIngestMode returns ViewerHoursHourlyInNodeDefaultFieldsStream.IngestMode, and is useful for accessing the field via an interface.
 func (v *ViewerHoursHourlyInNodeDefaultFieldsStream) GetIngestMode() IngestMode { return v.IngestMode }
@@ -118108,6 +118530,8 @@ type ViewerHoursHourlyInNodeDefaultFieldsStreamPushTargetsPushTarget struct {
 	Platform *string `json:"platform"`
 	// User-friendly label for this target.
 	Name string `json:"name"`
+	// AUTO, SOURCE_VIDEO, or PROCESSED_VIDEO. Audio is selected independently.
+	VideoChoice string `json:"videoChoice"`
 	// Target URI (masked in responses — stream key portion is redacted).
 	TargetUri string `json:"targetUri"`
 	// Whether this target is enabled for automatic push on stream start.
@@ -118139,6 +118563,11 @@ func (v *ViewerHoursHourlyInNodeDefaultFieldsStreamPushTargetsPushTarget) GetPla
 // GetName returns ViewerHoursHourlyInNodeDefaultFieldsStreamPushTargetsPushTarget.Name, and is useful for accessing the field via an interface.
 func (v *ViewerHoursHourlyInNodeDefaultFieldsStreamPushTargetsPushTarget) GetName() string {
 	return v.Name
+}
+
+// GetVideoChoice returns ViewerHoursHourlyInNodeDefaultFieldsStreamPushTargetsPushTarget.VideoChoice, and is useful for accessing the field via an interface.
+func (v *ViewerHoursHourlyInNodeDefaultFieldsStreamPushTargetsPushTarget) GetVideoChoice() string {
+	return v.VideoChoice
 }
 
 // GetTargetUri returns ViewerHoursHourlyInNodeDefaultFieldsStreamPushTargetsPushTarget.TargetUri, and is useful for accessing the field via an interface.
@@ -118366,6 +118795,8 @@ type ViewerMetricsDefaultFieldsStream struct {
 	PlaybackId string `json:"playbackId"`
 	// Whether DVR recording is enabled for this stream.
 	Record bool `json:"record"`
+	// INHERIT or OFF for live video renditions.
+	LiveVideoAbr string `json:"liveVideoAbr"`
 	// How source media enters the stream.
 	IngestMode IngestMode `json:"ingestMode"`
 	// Pull-source config for pull streams; null for push streams.
@@ -118429,6 +118860,9 @@ func (v *ViewerMetricsDefaultFieldsStream) GetPlaybackId() string { return v.Pla
 
 // GetRecord returns ViewerMetricsDefaultFieldsStream.Record, and is useful for accessing the field via an interface.
 func (v *ViewerMetricsDefaultFieldsStream) GetRecord() bool { return v.Record }
+
+// GetLiveVideoAbr returns ViewerMetricsDefaultFieldsStream.LiveVideoAbr, and is useful for accessing the field via an interface.
+func (v *ViewerMetricsDefaultFieldsStream) GetLiveVideoAbr() string { return v.LiveVideoAbr }
 
 // GetIngestMode returns ViewerMetricsDefaultFieldsStream.IngestMode, and is useful for accessing the field via an interface.
 func (v *ViewerMetricsDefaultFieldsStream) GetIngestMode() IngestMode { return v.IngestMode }
@@ -118706,6 +119140,8 @@ type ViewerMetricsDefaultFieldsStreamPushTargetsPushTarget struct {
 	Platform *string `json:"platform"`
 	// User-friendly label for this target.
 	Name string `json:"name"`
+	// AUTO, SOURCE_VIDEO, or PROCESSED_VIDEO. Audio is selected independently.
+	VideoChoice string `json:"videoChoice"`
 	// Target URI (masked in responses — stream key portion is redacted).
 	TargetUri string `json:"targetUri"`
 	// Whether this target is enabled for automatic push on stream start.
@@ -118736,6 +119172,11 @@ func (v *ViewerMetricsDefaultFieldsStreamPushTargetsPushTarget) GetPlatform() *s
 
 // GetName returns ViewerMetricsDefaultFieldsStreamPushTargetsPushTarget.Name, and is useful for accessing the field via an interface.
 func (v *ViewerMetricsDefaultFieldsStreamPushTargetsPushTarget) GetName() string { return v.Name }
+
+// GetVideoChoice returns ViewerMetricsDefaultFieldsStreamPushTargetsPushTarget.VideoChoice, and is useful for accessing the field via an interface.
+func (v *ViewerMetricsDefaultFieldsStreamPushTargetsPushTarget) GetVideoChoice() string {
+	return v.VideoChoice
+}
 
 // GetTargetUri returns ViewerMetricsDefaultFieldsStreamPushTargetsPushTarget.TargetUri, and is useful for accessing the field via an interface.
 func (v *ViewerMetricsDefaultFieldsStreamPushTargetsPushTarget) GetTargetUri() string {
@@ -118958,6 +119399,8 @@ type ViewerSessionDefaultFieldsStream struct {
 	PlaybackId string `json:"playbackId"`
 	// Whether DVR recording is enabled for this stream.
 	Record bool `json:"record"`
+	// INHERIT or OFF for live video renditions.
+	LiveVideoAbr string `json:"liveVideoAbr"`
 	// How source media enters the stream.
 	IngestMode IngestMode `json:"ingestMode"`
 	// Pull-source config for pull streams; null for push streams.
@@ -119021,6 +119464,9 @@ func (v *ViewerSessionDefaultFieldsStream) GetPlaybackId() string { return v.Pla
 
 // GetRecord returns ViewerSessionDefaultFieldsStream.Record, and is useful for accessing the field via an interface.
 func (v *ViewerSessionDefaultFieldsStream) GetRecord() bool { return v.Record }
+
+// GetLiveVideoAbr returns ViewerSessionDefaultFieldsStream.LiveVideoAbr, and is useful for accessing the field via an interface.
+func (v *ViewerSessionDefaultFieldsStream) GetLiveVideoAbr() string { return v.LiveVideoAbr }
 
 // GetIngestMode returns ViewerSessionDefaultFieldsStream.IngestMode, and is useful for accessing the field via an interface.
 func (v *ViewerSessionDefaultFieldsStream) GetIngestMode() IngestMode { return v.IngestMode }
@@ -119298,6 +119744,8 @@ type ViewerSessionDefaultFieldsStreamPushTargetsPushTarget struct {
 	Platform *string `json:"platform"`
 	// User-friendly label for this target.
 	Name string `json:"name"`
+	// AUTO, SOURCE_VIDEO, or PROCESSED_VIDEO. Audio is selected independently.
+	VideoChoice string `json:"videoChoice"`
 	// Target URI (masked in responses — stream key portion is redacted).
 	TargetUri string `json:"targetUri"`
 	// Whether this target is enabled for automatic push on stream start.
@@ -119328,6 +119776,11 @@ func (v *ViewerSessionDefaultFieldsStreamPushTargetsPushTarget) GetPlatform() *s
 
 // GetName returns ViewerSessionDefaultFieldsStreamPushTargetsPushTarget.Name, and is useful for accessing the field via an interface.
 func (v *ViewerSessionDefaultFieldsStreamPushTargetsPushTarget) GetName() string { return v.Name }
+
+// GetVideoChoice returns ViewerSessionDefaultFieldsStreamPushTargetsPushTarget.VideoChoice, and is useful for accessing the field via an interface.
+func (v *ViewerSessionDefaultFieldsStreamPushTargetsPushTarget) GetVideoChoice() string {
+	return v.VideoChoice
+}
 
 // GetTargetUri returns ViewerSessionDefaultFieldsStreamPushTargetsPushTarget.TargetUri, and is useful for accessing the field via an interface.
 func (v *ViewerSessionDefaultFieldsStreamPushTargetsPushTarget) GetTargetUri() string {
@@ -119560,6 +120013,8 @@ type ViewerSessionInNodeDefaultFieldsStream struct {
 	PlaybackId string `json:"playbackId"`
 	// Whether DVR recording is enabled for this stream.
 	Record bool `json:"record"`
+	// INHERIT or OFF for live video renditions.
+	LiveVideoAbr string `json:"liveVideoAbr"`
 	// How source media enters the stream.
 	IngestMode IngestMode `json:"ingestMode"`
 	// Pull-source config for pull streams; null for push streams.
@@ -119623,6 +120078,9 @@ func (v *ViewerSessionInNodeDefaultFieldsStream) GetPlaybackId() string { return
 
 // GetRecord returns ViewerSessionInNodeDefaultFieldsStream.Record, and is useful for accessing the field via an interface.
 func (v *ViewerSessionInNodeDefaultFieldsStream) GetRecord() bool { return v.Record }
+
+// GetLiveVideoAbr returns ViewerSessionInNodeDefaultFieldsStream.LiveVideoAbr, and is useful for accessing the field via an interface.
+func (v *ViewerSessionInNodeDefaultFieldsStream) GetLiveVideoAbr() string { return v.LiveVideoAbr }
 
 // GetIngestMode returns ViewerSessionInNodeDefaultFieldsStream.IngestMode, and is useful for accessing the field via an interface.
 func (v *ViewerSessionInNodeDefaultFieldsStream) GetIngestMode() IngestMode { return v.IngestMode }
@@ -119926,6 +120384,8 @@ type ViewerSessionInNodeDefaultFieldsStreamPushTargetsPushTarget struct {
 	Platform *string `json:"platform"`
 	// User-friendly label for this target.
 	Name string `json:"name"`
+	// AUTO, SOURCE_VIDEO, or PROCESSED_VIDEO. Audio is selected independently.
+	VideoChoice string `json:"videoChoice"`
 	// Target URI (masked in responses — stream key portion is redacted).
 	TargetUri string `json:"targetUri"`
 	// Whether this target is enabled for automatic push on stream start.
@@ -119956,6 +120416,11 @@ func (v *ViewerSessionInNodeDefaultFieldsStreamPushTargetsPushTarget) GetPlatfor
 
 // GetName returns ViewerSessionInNodeDefaultFieldsStreamPushTargetsPushTarget.Name, and is useful for accessing the field via an interface.
 func (v *ViewerSessionInNodeDefaultFieldsStreamPushTargetsPushTarget) GetName() string { return v.Name }
+
+// GetVideoChoice returns ViewerSessionInNodeDefaultFieldsStreamPushTargetsPushTarget.VideoChoice, and is useful for accessing the field via an interface.
+func (v *ViewerSessionInNodeDefaultFieldsStreamPushTargetsPushTarget) GetVideoChoice() string {
+	return v.VideoChoice
+}
 
 // GetTargetUri returns ViewerSessionInNodeDefaultFieldsStreamPushTargetsPushTarget.TargetUri, and is useful for accessing the field via an interface.
 func (v *ViewerSessionInNodeDefaultFieldsStreamPushTargetsPushTarget) GetTargetUri() string {
@@ -127796,6 +128261,7 @@ fragment ArtifactEventDefaultFields on ArtifactEvent {
 		streamKey
 		playbackId
 		record
+		liveVideoAbr
 		ingestMode
 		pullSource {
 			sourceUriRedacted
@@ -127843,6 +128309,7 @@ fragment ArtifactEventDefaultFields on ArtifactEvent {
 			streamId
 			platform
 			name
+			videoChoice
 			targetUri
 			isEnabled
 			status
@@ -128017,6 +128484,7 @@ fragment ArtifactStateDefaultFields on ArtifactState {
 		streamKey
 		playbackId
 		record
+		liveVideoAbr
 		ingestMode
 		pullSource {
 			sourceUriRedacted
@@ -128064,6 +128532,7 @@ fragment ArtifactStateDefaultFields on ArtifactState {
 			streamId
 			platform
 			name
+			videoChoice
 			targetUri
 			isEnabled
 			status
@@ -128722,6 +129191,7 @@ fragment ClientMetrics5mDefaultFields on ClientMetrics5m {
 		streamKey
 		playbackId
 		record
+		liveVideoAbr
 		ingestMode
 		pullSource {
 			sourceUriRedacted
@@ -128769,6 +129239,7 @@ fragment ClientMetrics5mDefaultFields on ClientMetrics5m {
 			streamId
 			platform
 			name
+			videoChoice
 			targetUri
 			isEnabled
 			status
@@ -129848,6 +130319,7 @@ fragment ConnectionEventDefaultFields on ConnectionEvent {
 		streamKey
 		playbackId
 		record
+		liveVideoAbr
 		ingestMode
 		pullSource {
 			sourceUriRedacted
@@ -129895,6 +130367,7 @@ fragment ConnectionEventDefaultFields on ConnectionEvent {
 			streamId
 			platform
 			name
+			videoChoice
 			targetUri
 			isEnabled
 			status
@@ -130458,6 +130931,7 @@ fragment GeographicDistributionDefaultFields on GeographicDistribution {
 		streamKey
 		playbackId
 		record
+		liveVideoAbr
 		ingestMode
 		pullSource {
 			sourceUriRedacted
@@ -130505,6 +130979,7 @@ fragment GeographicDistributionDefaultFields on GeographicDistribution {
 			streamId
 			platform
 			name
+			videoChoice
 			targetUri
 			isEnabled
 			status
@@ -131929,6 +132404,7 @@ fragment ArtifactEventInNodeDefaultFields on ArtifactEvent {
 		streamKey
 		playbackId
 		record
+		liveVideoAbr
 		ingestMode
 		pullSource {
 			sourceUriRedacted
@@ -131976,6 +132452,7 @@ fragment ArtifactEventInNodeDefaultFields on ArtifactEvent {
 			streamId
 			platform
 			name
+			videoChoice
 			targetUri
 			isEnabled
 			status
@@ -132037,6 +132514,7 @@ fragment ClientMetrics5mDefaultFields on ClientMetrics5m {
 		streamKey
 		playbackId
 		record
+		liveVideoAbr
 		ingestMode
 		pullSource {
 			sourceUriRedacted
@@ -132084,6 +132562,7 @@ fragment ClientMetrics5mDefaultFields on ClientMetrics5m {
 			streamId
 			platform
 			name
+			videoChoice
 			targetUri
 			isEnabled
 			status
@@ -132132,6 +132611,7 @@ fragment ClipInNodeDefaultFields on Clip {
 		streamKey
 		playbackId
 		record
+		liveVideoAbr
 		ingestMode
 		pullSource {
 			sourceUriRedacted
@@ -132179,6 +132659,7 @@ fragment ClipInNodeDefaultFields on Clip {
 			streamId
 			platform
 			name
+			videoChoice
 			targetUri
 			isEnabled
 			status
@@ -132297,6 +132778,7 @@ fragment ConnectionEventInNodeDefaultFields on ConnectionEvent {
 		streamKey
 		playbackId
 		record
+		liveVideoAbr
 		ingestMode
 		pullSource {
 			sourceUriRedacted
@@ -132344,6 +132826,7 @@ fragment ConnectionEventInNodeDefaultFields on ConnectionEvent {
 			streamId
 			platform
 			name
+			videoChoice
 			targetUri
 			isEnabled
 			status
@@ -132529,6 +133012,7 @@ fragment ProcessingUsageRecordInNodeDefaultFields on ProcessingUsageRecord {
 		streamKey
 		playbackId
 		record
+		liveVideoAbr
 		ingestMode
 		pullSource {
 			sourceUriRedacted
@@ -132576,6 +133060,7 @@ fragment ProcessingUsageRecordInNodeDefaultFields on ProcessingUsageRecord {
 			streamId
 			platform
 			name
+			videoChoice
 			targetUri
 			isEnabled
 			status
@@ -132664,6 +133149,7 @@ fragment QualityTierDailyDefaultFields on QualityTierDaily {
 		streamKey
 		playbackId
 		record
+		liveVideoAbr
 		ingestMode
 		pullSource {
 			sourceUriRedacted
@@ -132711,6 +133197,7 @@ fragment QualityTierDailyDefaultFields on QualityTierDaily {
 			streamId
 			platform
 			name
+			videoChoice
 			targetUri
 			isEnabled
 			status
@@ -132775,6 +133262,7 @@ fragment StorageEventInNodeDefaultFields on StorageEvent {
 		streamKey
 		playbackId
 		record
+		liveVideoAbr
 		ingestMode
 		pullSource {
 			sourceUriRedacted
@@ -132822,6 +133310,7 @@ fragment StorageEventInNodeDefaultFields on StorageEvent {
 			streamId
 			platform
 			name
+			videoChoice
 			targetUri
 			isEnabled
 			status
@@ -132885,6 +133374,7 @@ fragment StreamInNodeDefaultFields on Stream {
 	streamKey
 	playbackId
 	record
+	liveVideoAbr
 	ingestMode
 	pullSource {
 		sourceUriRedacted
@@ -132936,6 +133426,7 @@ fragment StreamInNodeDefaultFields on Stream {
 		streamId
 		platform
 		name
+		videoChoice
 		targetUri
 		isEnabled
 		status
@@ -132985,6 +133476,7 @@ fragment StreamAnalyticsDailyDefaultFields on StreamAnalyticsDaily {
 		streamKey
 		playbackId
 		record
+		liveVideoAbr
 		ingestMode
 		pullSource {
 			sourceUriRedacted
@@ -133032,6 +133524,7 @@ fragment StreamAnalyticsDailyDefaultFields on StreamAnalyticsDaily {
 			streamId
 			platform
 			name
+			videoChoice
 			targetUri
 			isEnabled
 			status
@@ -133077,6 +133570,7 @@ fragment StreamConnectionHourlyDefaultFields on StreamConnectionHourly {
 		streamKey
 		playbackId
 		record
+		liveVideoAbr
 		ingestMode
 		pullSource {
 			sourceUriRedacted
@@ -133124,6 +133618,7 @@ fragment StreamConnectionHourlyDefaultFields on StreamConnectionHourly {
 			streamId
 			platform
 			name
+			videoChoice
 			targetUri
 			isEnabled
 			status
@@ -133167,6 +133662,7 @@ fragment StreamEventInNodeDefaultFields on StreamEvent {
 		streamKey
 		playbackId
 		record
+		liveVideoAbr
 		ingestMode
 		pullSource {
 			sourceUriRedacted
@@ -133214,6 +133710,7 @@ fragment StreamEventInNodeDefaultFields on StreamEvent {
 			streamId
 			platform
 			name
+			videoChoice
 			targetUri
 			isEnabled
 			status
@@ -133303,6 +133800,7 @@ fragment StreamHealthMetricInNodeDefaultFields on StreamHealthMetric {
 		streamKey
 		playbackId
 		record
+		liveVideoAbr
 		ingestMode
 		pullSource {
 			sourceUriRedacted
@@ -133350,6 +133848,7 @@ fragment StreamHealthMetricInNodeDefaultFields on StreamHealthMetric {
 			streamId
 			platform
 			name
+			videoChoice
 			targetUri
 			isEnabled
 			status
@@ -133424,6 +133923,7 @@ fragment TrackListEventInNodeDefaultFields on TrackListEvent {
 		streamKey
 		playbackId
 		record
+		liveVideoAbr
 		ingestMode
 		pullSource {
 			sourceUriRedacted
@@ -133471,6 +133971,7 @@ fragment TrackListEventInNodeDefaultFields on TrackListEvent {
 			streamId
 			platform
 			name
+			videoChoice
 			targetUri
 			isEnabled
 			status
@@ -133539,6 +134040,7 @@ fragment ViewerHoursHourlyInNodeDefaultFields on ViewerHoursHourly {
 		streamKey
 		playbackId
 		record
+		liveVideoAbr
 		ingestMode
 		pullSource {
 			sourceUriRedacted
@@ -133586,6 +134088,7 @@ fragment ViewerHoursHourlyInNodeDefaultFields on ViewerHoursHourly {
 			streamId
 			platform
 			name
+			videoChoice
 			targetUri
 			isEnabled
 			status
@@ -133632,6 +134135,7 @@ fragment ViewerSessionInNodeDefaultFields on ViewerSession {
 		streamKey
 		playbackId
 		record
+		liveVideoAbr
 		ingestMode
 		pullSource {
 			sourceUriRedacted
@@ -133679,6 +134183,7 @@ fragment ViewerSessionInNodeDefaultFields on ViewerSession {
 			streamId
 			platform
 			name
+			videoChoice
 			targetUri
 			isEnabled
 			status
@@ -135118,6 +135623,7 @@ fragment ProcessingUsageRecordDefaultFields on ProcessingUsageRecord {
 		streamKey
 		playbackId
 		record
+		liveVideoAbr
 		ingestMode
 		pullSource {
 			sourceUriRedacted
@@ -135165,6 +135671,7 @@ fragment ProcessingUsageRecordDefaultFields on ProcessingUsageRecord {
 			streamId
 			platform
 			name
+			videoChoice
 			targetUri
 			isEnabled
 			status
@@ -135316,6 +135823,7 @@ fragment QualityTierDailyDefaultFields on QualityTierDaily {
 		streamKey
 		playbackId
 		record
+		liveVideoAbr
 		ingestMode
 		pullSource {
 			sourceUriRedacted
@@ -135363,6 +135871,7 @@ fragment QualityTierDailyDefaultFields on QualityTierDaily {
 			streamId
 			platform
 			name
+			videoChoice
 			targetUri
 			isEnabled
 			status
@@ -135474,6 +135983,7 @@ fragment RebufferingEventDefaultFields on RebufferingEvent {
 		streamKey
 		playbackId
 		record
+		liveVideoAbr
 		ingestMode
 		pullSource {
 			sourceUriRedacted
@@ -135521,6 +136031,7 @@ fragment RebufferingEventDefaultFields on RebufferingEvent {
 			streamId
 			platform
 			name
+			videoChoice
 			targetUri
 			isEnabled
 			status
@@ -135900,6 +136411,7 @@ fragment RoutingEventDefaultFields on RoutingEvent {
 		streamKey
 		playbackId
 		record
+		liveVideoAbr
 		ingestMode
 		pullSource {
 			sourceUriRedacted
@@ -135947,6 +136459,7 @@ fragment RoutingEventDefaultFields on RoutingEvent {
 			streamId
 			platform
 			name
+			videoChoice
 			targetUri
 			isEnabled
 			status
@@ -136612,6 +137125,7 @@ fragment StorageEventDefaultFields on StorageEvent {
 		streamKey
 		playbackId
 		record
+		liveVideoAbr
 		ingestMode
 		pullSource {
 			sourceUriRedacted
@@ -136659,6 +137173,7 @@ fragment StorageEventDefaultFields on StorageEvent {
 			streamId
 			platform
 			name
+			videoChoice
 			targetUri
 			isEnabled
 			status
@@ -136932,6 +137447,7 @@ fragment StreamAnalyticsDailyDefaultFields on StreamAnalyticsDaily {
 		streamKey
 		playbackId
 		record
+		liveVideoAbr
 		ingestMode
 		pullSource {
 			sourceUriRedacted
@@ -136979,6 +137495,7 @@ fragment StreamAnalyticsDailyDefaultFields on StreamAnalyticsDaily {
 			streamId
 			platform
 			name
+			videoChoice
 			targetUri
 			isEnabled
 			status
@@ -137083,6 +137600,7 @@ fragment StreamAnalyticsSummaryDefaultFields on StreamAnalyticsSummary {
 		streamKey
 		playbackId
 		record
+		liveVideoAbr
 		ingestMode
 		pullSource {
 			sourceUriRedacted
@@ -137130,6 +137648,7 @@ fragment StreamAnalyticsSummaryDefaultFields on StreamAnalyticsSummary {
 			streamId
 			platform
 			name
+			videoChoice
 			targetUri
 			isEnabled
 			status
@@ -137261,6 +137780,7 @@ fragment StreamAnalyticsSummaryDefaultFields on StreamAnalyticsSummary {
 		streamKey
 		playbackId
 		record
+		liveVideoAbr
 		ingestMode
 		pullSource {
 			sourceUriRedacted
@@ -137308,6 +137828,7 @@ fragment StreamAnalyticsSummaryDefaultFields on StreamAnalyticsSummary {
 			streamId
 			platform
 			name
+			videoChoice
 			targetUri
 			isEnabled
 			status
@@ -137436,6 +137957,7 @@ fragment StreamConnectionHourlyDefaultFields on StreamConnectionHourly {
 		streamKey
 		playbackId
 		record
+		liveVideoAbr
 		ingestMode
 		pullSource {
 			sourceUriRedacted
@@ -137483,6 +138005,7 @@ fragment StreamConnectionHourlyDefaultFields on StreamConnectionHourly {
 			streamId
 			platform
 			name
+			videoChoice
 			targetUri
 			isEnabled
 			status
@@ -137585,6 +138108,7 @@ fragment StreamEventDefaultFields on StreamEvent {
 		streamKey
 		playbackId
 		record
+		liveVideoAbr
 		ingestMode
 		pullSource {
 			sourceUriRedacted
@@ -137632,6 +138156,7 @@ fragment StreamEventDefaultFields on StreamEvent {
 			streamId
 			platform
 			name
+			videoChoice
 			targetUri
 			isEnabled
 			status
@@ -137839,6 +138364,7 @@ fragment StreamHealthMetricDefaultFields on StreamHealthMetric {
 		streamKey
 		playbackId
 		record
+		liveVideoAbr
 		ingestMode
 		pullSource {
 			sourceUriRedacted
@@ -137886,6 +138412,7 @@ fragment StreamHealthMetricDefaultFields on StreamHealthMetric {
 			streamId
 			platform
 			name
+			videoChoice
 			targetUri
 			isEnabled
 			status
@@ -138458,6 +138985,7 @@ fragment TrackListEventDefaultFields on TrackListEvent {
 		streamKey
 		playbackId
 		record
+		liveVideoAbr
 		ingestMode
 		pullSource {
 			sourceUriRedacted
@@ -138505,6 +139033,7 @@ fragment TrackListEventDefaultFields on TrackListEvent {
 			streamId
 			platform
 			name
+			videoChoice
 			targetUri
 			isEnabled
 			status
@@ -138779,6 +139308,7 @@ fragment ViewerGeographicDefaultFields on ViewerGeographic {
 		streamKey
 		playbackId
 		record
+		liveVideoAbr
 		ingestMode
 		pullSource {
 			sourceUriRedacted
@@ -138826,6 +139356,7 @@ fragment ViewerGeographicDefaultFields on ViewerGeographic {
 			streamId
 			platform
 			name
+			videoChoice
 			targetUri
 			isEnabled
 			status
@@ -138937,6 +139468,7 @@ fragment ViewerHoursHourlyDefaultFields on ViewerHoursHourly {
 		streamKey
 		playbackId
 		record
+		liveVideoAbr
 		ingestMode
 		pullSource {
 			sourceUriRedacted
@@ -138984,6 +139516,7 @@ fragment ViewerHoursHourlyDefaultFields on ViewerHoursHourly {
 			streamId
 			platform
 			name
+			videoChoice
 			targetUri
 			isEnabled
 			status
@@ -139089,6 +139622,7 @@ fragment ViewerSessionDefaultFields on ViewerSession {
 		streamKey
 		playbackId
 		record
+		liveVideoAbr
 		ingestMode
 		pullSource {
 			sourceUriRedacted
@@ -139136,6 +139670,7 @@ fragment ViewerSessionDefaultFields on ViewerSession {
 			streamId
 			platform
 			name
+			videoChoice
 			targetUri
 			isEnabled
 			status
@@ -139255,6 +139790,7 @@ fragment ViewerCountBucketDefaultFields on ViewerCountBucket {
 		streamKey
 		playbackId
 		record
+		liveVideoAbr
 		ingestMode
 		pullSource {
 			sourceUriRedacted
@@ -139302,6 +139838,7 @@ fragment ViewerCountBucketDefaultFields on ViewerCountBucket {
 			streamId
 			platform
 			name
+			videoChoice
 			targetUri
 			isEnabled
 			status
@@ -140832,6 +141369,7 @@ fragment ConnectionEventDefaultFields on ConnectionEvent {
 		streamKey
 		playbackId
 		record
+		liveVideoAbr
 		ingestMode
 		pullSource {
 			sourceUriRedacted
@@ -140879,6 +141417,7 @@ fragment ConnectionEventDefaultFields on ConnectionEvent {
 			streamId
 			platform
 			name
+			videoChoice
 			targetUri
 			isEnabled
 			status
@@ -141001,6 +141540,7 @@ fragment TenantEventDefaultFields on TenantEvent {
 			streamKey
 			playbackId
 			record
+			liveVideoAbr
 			ingestMode
 			createdAt
 			updatedAt
@@ -141054,6 +141594,7 @@ fragment TenantEventDefaultFields on TenantEvent {
 			streamKey
 			playbackId
 			record
+			liveVideoAbr
 			ingestMode
 			createdAt
 			updatedAt
@@ -141093,6 +141634,7 @@ fragment TenantEventDefaultFields on TenantEvent {
 			streamKey
 			playbackId
 			record
+			liveVideoAbr
 			ingestMode
 			createdAt
 			updatedAt
@@ -141134,6 +141676,7 @@ fragment TenantEventDefaultFields on TenantEvent {
 			streamKey
 			playbackId
 			record
+			liveVideoAbr
 			ingestMode
 			createdAt
 			updatedAt
@@ -141183,6 +141726,7 @@ fragment TenantEventDefaultFields on TenantEvent {
 			streamKey
 			playbackId
 			record
+			liveVideoAbr
 			ingestMode
 			createdAt
 			updatedAt
@@ -141235,6 +141779,7 @@ fragment TenantEventDefaultFields on TenantEvent {
 			streamKey
 			playbackId
 			record
+			liveVideoAbr
 			ingestMode
 			createdAt
 			updatedAt
@@ -141302,6 +141847,7 @@ fragment TenantEventDefaultFields on TenantEvent {
 			streamKey
 			playbackId
 			record
+			liveVideoAbr
 			ingestMode
 			createdAt
 			updatedAt
@@ -141455,6 +142001,7 @@ fragment ProcessingUsageRecordDefaultFields on ProcessingUsageRecord {
 		streamKey
 		playbackId
 		record
+		liveVideoAbr
 		ingestMode
 		pullSource {
 			sourceUriRedacted
@@ -141502,6 +142049,7 @@ fragment ProcessingUsageRecordDefaultFields on ProcessingUsageRecord {
 			streamId
 			platform
 			name
+			videoChoice
 			targetUri
 			isEnabled
 			status
@@ -141610,6 +142158,7 @@ fragment StorageEventDefaultFields on StorageEvent {
 		streamKey
 		playbackId
 		record
+		liveVideoAbr
 		ingestMode
 		pullSource {
 			sourceUriRedacted
@@ -141657,6 +142206,7 @@ fragment StorageEventDefaultFields on StorageEvent {
 			streamId
 			platform
 			name
+			videoChoice
 			targetUri
 			isEnabled
 			status
@@ -141730,6 +142280,7 @@ fragment StreamEventDefaultFields on StreamEvent {
 		streamKey
 		playbackId
 		record
+		liveVideoAbr
 		ingestMode
 		pullSource {
 			sourceUriRedacted
@@ -141777,6 +142328,7 @@ fragment StreamEventDefaultFields on StreamEvent {
 			streamId
 			platform
 			name
+			videoChoice
 			targetUri
 			isEnabled
 			status
@@ -141902,6 +142454,7 @@ fragment TrackListUpdateDefaultFields on TrackListUpdate {
 		streamKey
 		playbackId
 		record
+		liveVideoAbr
 		ingestMode
 		pullSource {
 			sourceUriRedacted
@@ -141949,6 +142502,7 @@ fragment TrackListUpdateDefaultFields on TrackListUpdate {
 			streamId
 			platform
 			name
+			videoChoice
 			targetUri
 			isEnabled
 			status
@@ -142037,6 +142591,7 @@ fragment ViewerMetricsDefaultFields on ViewerMetrics {
 		streamKey
 		playbackId
 		record
+		liveVideoAbr
 		ingestMode
 		pullSource {
 			sourceUriRedacted
@@ -142084,6 +142639,7 @@ fragment ViewerMetricsDefaultFields on ViewerMetrics {
 			streamId
 			platform
 			name
+			videoChoice
 			targetUri
 			isEnabled
 			status

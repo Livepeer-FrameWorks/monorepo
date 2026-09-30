@@ -1475,6 +1475,7 @@
                         "dvrChapterMode": "WINDOW_SIZED",
                         "id": "id-1",
                         "ingestMode": "PUSH",
+                        "liveVideoAbr": "text",
                         "managedSource": {
                           "alwaysOn": true,
                           "placementCount": 1,
@@ -1531,7 +1532,8 @@
                             "reasonCode": "text",
                             "status": "text",
                             "streamId": "id-1",
-                            "targetUri": "text"
+                            "targetUri": "text",
+                            "videoChoice": "text"
                           }
                         ],
                         "record": true,
@@ -1643,6 +1645,7 @@
                         "dvrChapterMode": "WINDOW_SIZED",
                         "id": "id-1",
                         "ingestMode": "PUSH",
+                        "liveVideoAbr": "text",
                         "managedSource": {
                           "alwaysOn": true,
                           "placementCount": 1,
@@ -1699,7 +1702,8 @@
                             "reasonCode": "text",
                             "status": "text",
                             "streamId": "id-1",
-                            "targetUri": "text"
+                            "targetUri": "text",
+                            "videoChoice": "text"
                           }
                         ],
                         "record": true,
@@ -2180,6 +2184,7 @@
                         "dvrChapterMode": "WINDOW_SIZED",
                         "id": "id-1",
                         "ingestMode": "PUSH",
+                        "liveVideoAbr": "text",
                         "managedSource": {
                           "alwaysOn": true,
                           "placementCount": 1,
@@ -2236,7 +2241,8 @@
                             "reasonCode": "text",
                             "status": "text",
                             "streamId": "id-1",
-                            "targetUri": "text"
+                            "targetUri": "text",
+                            "videoChoice": "text"
                           }
                         ],
                         "record": true,
@@ -2868,6 +2874,7 @@
                         "dvrChapterMode": "WINDOW_SIZED",
                         "id": "id-1",
                         "ingestMode": "PUSH",
+                        "liveVideoAbr": "text",
                         "managedSource": {
                           "alwaysOn": true,
                           "placementCount": 1,
@@ -2924,7 +2931,8 @@
                             "reasonCode": "text",
                             "status": "text",
                             "streamId": "id-1",
-                            "targetUri": "text"
+                            "targetUri": "text",
+                            "videoChoice": "text"
                           }
                         ],
                         "record": true,
@@ -3225,6 +3233,7 @@
                     "dvrChapterMode": "WINDOW_SIZED",
                     "id": "id-1",
                     "ingestMode": "PUSH",
+                    "liveVideoAbr": "text",
                     "managedSource": {
                       "alwaysOn": true,
                       "placementCount": 1,
@@ -3281,7 +3290,8 @@
                         "reasonCode": "text",
                         "status": "text",
                         "streamId": "id-1",
-                        "targetUri": "text"
+                        "targetUri": "text",
+                        "videoChoice": "text"
                       }
                     ],
                     "record": true,
@@ -4941,6 +4951,7 @@
                           "dvrChapterMode": "WINDOW_SIZED",
                           "id": "id-1",
                           "ingestMode": "PUSH",
+                          "liveVideoAbr": "text",
                           "managedSource": {
                             "alwaysOn": true,
                             "placementCount": 1,
@@ -4997,7 +5008,8 @@
                               "reasonCode": "text",
                               "status": "text",
                               "streamId": "id-1",
-                              "targetUri": "text"
+                              "targetUri": "text",
+                              "videoChoice": "text"
                             }
                           ],
                           "record": true,
@@ -5099,6 +5111,7 @@
                           "dvrChapterMode": "WINDOW_SIZED",
                           "id": "id-1",
                           "ingestMode": "PUSH",
+                          "liveVideoAbr": "text",
                           "managedSource": {
                             "alwaysOn": true,
                             "placementCount": 1,
@@ -5155,7 +5168,8 @@
                               "reasonCode": "text",
                               "status": "text",
                               "streamId": "id-1",
-                              "targetUri": "text"
+                              "targetUri": "text",
+                              "videoChoice": "text"
                             }
                           ],
                           "record": true,
@@ -5229,6 +5243,7 @@
                         "dvrChapterMode": "WINDOW_SIZED",
                         "id": "id-1",
                         "ingestMode": "PUSH",
+                        "liveVideoAbr": "text",
                         "managedSource": {
                           "alwaysOn": true,
                           "placementCount": 1,
@@ -5285,7 +5300,8 @@
                             "reasonCode": "text",
                             "status": "text",
                             "streamId": "id-1",
-                            "targetUri": "text"
+                            "targetUri": "text",
+                            "videoChoice": "text"
                           }
                         ],
                         "record": true,
@@ -5521,6 +5537,7 @@
                         "dvrChapterMode": "WINDOW_SIZED",
                         "id": "id-1",
                         "ingestMode": "PUSH",
+                        "liveVideoAbr": "text",
                         "managedSource": {
                           "alwaysOn": true,
                           "placementCount": 1,
@@ -5577,7 +5594,8 @@
                             "reasonCode": "text",
                             "status": "text",
                             "streamId": "id-1",
-                            "targetUri": "text"
+                            "targetUri": "text",
+                            "videoChoice": "text"
                           }
                         ],
                         "record": true,
@@ -5915,6 +5933,7 @@
                         "dvrChapterMode": "WINDOW_SIZED",
                         "id": "id-1",
                         "ingestMode": "PUSH",
+                        "liveVideoAbr": "text",
                         "managedSource": {
                           "alwaysOn": true,
                           "placementCount": 1,
@@ -5971,7 +5990,8 @@
                             "reasonCode": "text",
                             "status": "text",
                             "streamId": "id-1",
-                            "targetUri": "text"
+                            "targetUri": "text",
+                            "videoChoice": "text"
                           }
                         ],
                         "record": true,
@@ -6141,6 +6161,7 @@
                           "dvrChapterMode": "WINDOW_SIZED",
                           "id": "id-1",
                           "ingestMode": "PUSH",
+                          "liveVideoAbr": "text",
                           "managedSource": {
                             "alwaysOn": true,
                             "placementCount": 1,
@@ -6197,7 +6218,8 @@
                               "reasonCode": "text",
                               "status": "text",
                               "streamId": "id-1",
-                              "targetUri": "text"
+                              "targetUri": "text",
+                              "videoChoice": "text"
                             }
                           ],
                           "record": true,
@@ -6303,6 +6325,7 @@
                           "dvrChapterMode": "WINDOW_SIZED",
                           "id": "id-1",
                           "ingestMode": "PUSH",
+                          "liveVideoAbr": "text",
                           "managedSource": {
                             "alwaysOn": true,
                             "placementCount": 1,
@@ -6359,7 +6382,8 @@
                               "reasonCode": "text",
                               "status": "text",
                               "streamId": "id-1",
-                              "targetUri": "text"
+                              "targetUri": "text",
+                              "videoChoice": "text"
                             }
                           ],
                           "record": true,
@@ -6458,6 +6482,7 @@
                     "dvrChapterMode": "WINDOW_SIZED",
                     "id": "id-1",
                     "ingestMode": "PUSH",
+                    "liveVideoAbr": "text",
                     "managedSource": {
                       "alwaysOn": true,
                       "placementCount": 1,
@@ -6514,7 +6539,8 @@
                         "reasonCode": "text",
                         "status": "text",
                         "streamId": "id-1",
-                        "targetUri": "text"
+                        "targetUri": "text",
+                        "videoChoice": "text"
                       }
                     ],
                     "record": true,
@@ -6574,6 +6600,7 @@
                           "dvrChapterMode": "WINDOW_SIZED",
                           "id": "id-1",
                           "ingestMode": "PUSH",
+                          "liveVideoAbr": "text",
                           "managedSource": {
                             "alwaysOn": true,
                             "placementCount": 1,
@@ -6630,7 +6657,8 @@
                               "reasonCode": "text",
                               "status": "text",
                               "streamId": "id-1",
-                              "targetUri": "text"
+                              "targetUri": "text",
+                              "videoChoice": "text"
                             }
                           ],
                           "record": true,
@@ -6726,6 +6754,7 @@
                         "dvrChapterMode": "WINDOW_SIZED",
                         "id": "id-1",
                         "ingestMode": "PUSH",
+                        "liveVideoAbr": "text",
                         "managedSource": {
                           "alwaysOn": true,
                           "placementCount": 1,
@@ -6782,7 +6811,8 @@
                             "reasonCode": "text",
                             "status": "text",
                             "streamId": "id-1",
-                            "targetUri": "text"
+                            "targetUri": "text",
+                            "videoChoice": "text"
                           }
                         ],
                         "record": true,
@@ -6922,6 +6952,7 @@
                         "dvrChapterMode": "WINDOW_SIZED",
                         "id": "id-1",
                         "ingestMode": "PUSH",
+                        "liveVideoAbr": "text",
                         "managedSource": {
                           "alwaysOn": true,
                           "placementCount": 1,
@@ -6978,7 +7009,8 @@
                             "reasonCode": "text",
                             "status": "text",
                             "streamId": "id-1",
-                            "targetUri": "text"
+                            "targetUri": "text",
+                            "videoChoice": "text"
                           }
                         ],
                         "record": true,
@@ -7277,6 +7309,7 @@
                         "dvrChapterMode": "WINDOW_SIZED",
                         "id": "id-1",
                         "ingestMode": "PUSH",
+                        "liveVideoAbr": "text",
                         "managedSource": {
                           "alwaysOn": true,
                           "placementCount": 1,
@@ -7333,7 +7366,8 @@
                             "reasonCode": "text",
                             "status": "text",
                             "streamId": "id-1",
-                            "targetUri": "text"
+                            "targetUri": "text",
+                            "videoChoice": "text"
                           }
                         ],
                         "record": true,
@@ -7504,6 +7538,7 @@
                           "dvrChapterMode": "WINDOW_SIZED",
                           "id": "id-1",
                           "ingestMode": "PUSH",
+                          "liveVideoAbr": "text",
                           "managedSource": {
                             "alwaysOn": true,
                             "placementCount": 1,
@@ -7560,7 +7595,8 @@
                               "reasonCode": "text",
                               "status": "text",
                               "streamId": "id-1",
-                              "targetUri": "text"
+                              "targetUri": "text",
+                              "videoChoice": "text"
                             }
                           ],
                           "record": true,
@@ -7630,6 +7666,7 @@
                           "dvrChapterMode": "WINDOW_SIZED",
                           "id": "id-1",
                           "ingestMode": "PUSH",
+                          "liveVideoAbr": "text",
                           "managedSource": {
                             "alwaysOn": true,
                             "placementCount": 1,
@@ -7686,7 +7723,8 @@
                               "reasonCode": "text",
                               "status": "text",
                               "streamId": "id-1",
-                              "targetUri": "text"
+                              "targetUri": "text",
+                              "videoChoice": "text"
                             }
                           ],
                           "record": true,
@@ -7772,6 +7810,7 @@
                         "dvrChapterMode": "WINDOW_SIZED",
                         "id": "id-1",
                         "ingestMode": "PUSH",
+                        "liveVideoAbr": "text",
                         "managedSource": {
                           "alwaysOn": true,
                           "placementCount": 1,
@@ -7828,7 +7867,8 @@
                             "reasonCode": "text",
                             "status": "text",
                             "streamId": "id-1",
-                            "targetUri": "text"
+                            "targetUri": "text",
+                            "videoChoice": "text"
                           }
                         ],
                         "record": true,
@@ -7894,6 +7934,7 @@
                           "dvrChapterMode": "WINDOW_SIZED",
                           "id": "id-1",
                           "ingestMode": "PUSH",
+                          "liveVideoAbr": "text",
                           "managedSource": {
                             "alwaysOn": true,
                             "placementCount": 1,
@@ -7950,7 +7991,8 @@
                               "reasonCode": "text",
                               "status": "text",
                               "streamId": "id-1",
-                              "targetUri": "text"
+                              "targetUri": "text",
+                              "videoChoice": "text"
                             }
                           ],
                           "record": true,
@@ -8822,6 +8864,7 @@
               "dvrChapterMode": "WINDOW_SIZED",
               "id": "id-1",
               "ingestMode": "PUSH",
+              "liveVideoAbr": "text",
               "managedSource": {
                 "alwaysOn": true,
                 "placementCount": 1,
@@ -8878,7 +8921,8 @@
                   "reasonCode": "text",
                   "status": "text",
                   "streamId": "id-1",
-                  "targetUri": "text"
+                  "targetUri": "text",
+                  "videoChoice": "text"
                 }
               ],
               "record": true,
@@ -8974,6 +9018,7 @@
                 "dvrChapterMode": "WINDOW_SIZED",
                 "id": "id-1",
                 "ingestMode": "PUSH",
+                "liveVideoAbr": "text",
                 "monitoring": "INHERIT",
                 "name": "text",
                 "playbackId": "text",
@@ -9047,6 +9092,7 @@
                 "dvrChapterMode": "WINDOW_SIZED",
                 "id": "id-1",
                 "ingestMode": "PUSH",
+                "liveVideoAbr": "text",
                 "monitoring": "INHERIT",
                 "name": "text",
                 "playbackId": "text",
@@ -9100,6 +9146,7 @@
                 "dvrChapterMode": "WINDOW_SIZED",
                 "id": "id-1",
                 "ingestMode": "PUSH",
+                "liveVideoAbr": "text",
                 "monitoring": "INHERIT",
                 "name": "text",
                 "playbackId": "text",
@@ -9137,6 +9184,7 @@
                 "dvrChapterMode": "WINDOW_SIZED",
                 "id": "id-1",
                 "ingestMode": "PUSH",
+                "liveVideoAbr": "text",
                 "monitoring": "INHERIT",
                 "name": "text",
                 "playbackId": "text",
@@ -9205,6 +9253,7 @@
                 "dvrChapterMode": "WINDOW_SIZED",
                 "id": "id-1",
                 "ingestMode": "PUSH",
+                "liveVideoAbr": "text",
                 "monitoring": "INHERIT",
                 "name": "text",
                 "playbackId": "text",
@@ -9260,6 +9309,7 @@
                 "dvrChapterMode": "WINDOW_SIZED",
                 "id": "id-1",
                 "ingestMode": "PUSH",
+                "liveVideoAbr": "text",
                 "monitoring": "INHERIT",
                 "name": "text",
                 "playbackId": "text",
@@ -9317,6 +9367,7 @@
                 "dvrChapterMode": "WINDOW_SIZED",
                 "id": "id-1",
                 "ingestMode": "PUSH",
+                "liveVideoAbr": "text",
                 "monitoring": "INHERIT",
                 "name": "text",
                 "playbackId": "text",
@@ -9427,6 +9478,7 @@
               "dvrChapterMode": "WINDOW_SIZED",
               "id": "id-1",
               "ingestMode": "PUSH",
+              "liveVideoAbr": "text",
               "managedSource": {
                 "alwaysOn": true,
                 "placementCount": 1,
@@ -9483,7 +9535,8 @@
                   "reasonCode": "text",
                   "status": "text",
                   "streamId": "id-1",
-                  "targetUri": "text"
+                  "targetUri": "text",
+                  "videoChoice": "text"
                 }
               ],
               "record": true,
@@ -9546,6 +9599,7 @@
               "dvrChapterMode": "WINDOW_SIZED",
               "id": "id-1",
               "ingestMode": "PUSH",
+              "liveVideoAbr": "text",
               "managedSource": {
                 "alwaysOn": true,
                 "placementCount": 1,
@@ -9602,7 +9656,8 @@
                   "reasonCode": "text",
                   "status": "text",
                   "streamId": "id-1",
-                  "targetUri": "text"
+                  "targetUri": "text",
+                  "videoChoice": "text"
                 }
               ],
               "record": true,
@@ -9676,6 +9731,7 @@
               "dvrChapterMode": "WINDOW_SIZED",
               "id": "id-1",
               "ingestMode": "PUSH",
+              "liveVideoAbr": "text",
               "managedSource": {
                 "alwaysOn": true,
                 "placementCount": 1,
@@ -9732,7 +9788,8 @@
                   "reasonCode": "text",
                   "status": "text",
                   "streamId": "id-1",
-                  "targetUri": "text"
+                  "targetUri": "text",
+                  "videoChoice": "text"
                 }
               ],
               "record": true,
@@ -9823,6 +9880,7 @@
               "dvrChapterMode": "WINDOW_SIZED",
               "id": "id-1",
               "ingestMode": "PUSH",
+              "liveVideoAbr": "text",
               "managedSource": {
                 "alwaysOn": true,
                 "placementCount": 1,
@@ -9879,7 +9937,8 @@
                   "reasonCode": "text",
                   "status": "text",
                   "streamId": "id-1",
-                  "targetUri": "text"
+                  "targetUri": "text",
+                  "videoChoice": "text"
                 }
               ],
               "record": true,
@@ -9963,6 +10022,7 @@
               "dvrChapterMode": "WINDOW_SIZED",
               "id": "id-1",
               "ingestMode": "PUSH",
+              "liveVideoAbr": "text",
               "managedSource": {
                 "alwaysOn": true,
                 "placementCount": 1,
@@ -10019,7 +10079,8 @@
                   "reasonCode": "text",
                   "status": "text",
                   "streamId": "id-1",
-                  "targetUri": "text"
+                  "targetUri": "text",
+                  "videoChoice": "text"
                 }
               ],
               "record": true,

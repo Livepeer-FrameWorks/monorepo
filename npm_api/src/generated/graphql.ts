@@ -265,6 +265,8 @@ export type CreatePushTargetInput = {
   platform?: string | null | undefined;
   /** Full target URI including stream key (e.g., rtmp://live.twitch.tv/app/live_xxxx). */
   targetUri: string;
+  /** AUTO, SOURCE_VIDEO, or PROCESSED_VIDEO for RTMP targets. */
+  videoChoice?: string | null | undefined;
 };
 
 export type CreateSigningKeyInput = {
@@ -278,6 +280,8 @@ export type CreateStreamInput = {
   description?: string | null | undefined;
   /** Source ingest model. Defaults to PUSH. */
   ingestMode?: IngestMode | null | undefined;
+  /** Live video renditions: INHERIT uses the tier policy; OFF keeps source video and audio conversion. */
+  liveVideoAbr?: string | null | undefined;
   /** Human-readable name for the stream. */
   name: string;
   /** Pull-source configuration. Required when ingestMode is PULL. */
@@ -1192,6 +1196,8 @@ export type UpdatePushTargetInput = {
   name?: string | null | undefined;
   /** Updated target URI. */
   targetUri?: string | null | undefined;
+  /** AUTO, SOURCE_VIDEO, or PROCESSED_VIDEO for RTMP targets. */
+  videoChoice?: string | null | undefined;
 };
 
 /**
@@ -1216,6 +1222,8 @@ export type UpdateStreamInput = {
   dvrChapterMode?: DVRChapterMode | null | undefined;
   /** Ingest model cannot be changed after create; sending a different value returns a validation error. */
   ingestMode?: IngestMode | null | undefined;
+  /** INHERIT uses the tier policy; OFF disables live video renditions from the next ingest. */
+  liveVideoAbr?: string | null | undefined;
   /** Per-stream Skipper monitoring override. INHERIT follows the tenant tier. */
   monitoring?: MonitoringToggle | null | undefined;
   /** New name for the stream. */
@@ -1558,7 +1566,8 @@ name: string, /** Optional description for the stream. */
 description: string | null, /** Secret key for publisher-authenticated ingest; null for pull and managed sources. The key lets its holder publish to the stream, so an API token needs the streams:write scope: without it this field is null and the response carries a FORBIDDEN error at its path. */
 streamKey: string | null, /** Public identifier for playback URLs. */
 playbackId: string, /** Whether DVR recording is enabled for this stream. */
-record: boolean, /** How source media enters the stream. */
+record: boolean, /** INHERIT or OFF for live video renditions. */
+liveVideoAbr: string, /** How source media enters the stream. */
 ingestMode: IngestMode, /** When this stream was created. */
 createdAt: string, /** When this stream was last modified. */
 updatedAt: string, /** How saved recordings are split into chapters. Snapshotted when a recording starts; changes apply from the next broadcast. NONE = live rewind only, nothing kept after the broadcast. */
@@ -1599,7 +1608,7 @@ primaryCodec: string | null, /** Primary video bitrate in kbps. */
 primaryBitrate: number | null, /** Whether the stream has active quality issues. */
 hasIssues: boolean | null, /** Human-readable description of current issues. */
 issuesDescription: string | null } | null, /** Configured multistream push targets for this stream. */
-pushTargets: Array<{ id: string, streamId: string, platform: string | null, name: string, targetUri: string, isEnabled: boolean, status: string, lastError: string | null, reasonCode: string | null, lastPushedAt: string | null, createdAt: string }>, /** Playback access policy. null/PUBLIC = anyone with the playbackId can watch. */
+pushTargets: Array<{ id: string, streamId: string, platform: string | null, name: string, videoChoice: string, targetUri: string, isEnabled: boolean, status: string, lastError: string | null, reasonCode: string | null, lastPushedAt: string | null, createdAt: string }>, /** Playback access policy. null/PUBLIC = anyone with the playbackId can watch. */
 playbackPolicy: { type: PlaybackPolicyType, /** Sites allowed to embed the content, as normalized `scheme://host[:port]` origins; `*` allows any. Empty = no restriction. A browser viewer whose Origin (or Referer) is not listed is denied. */
 allowedOrigins: Array<string> } | null, /** Server-resolved Chandler URLs for the stream's poster and sprite thumbnails. Derived from active_ingest_cluster_id + stream_id at SELECT time. Null when the stream has never been live; the poster.jpg 404s until Helmsman uploads its first frame, which the player's fallback chain handles. */
 thumbnailAssets: { posterUrl: string, spriteVttUrl: string, spriteJpgUrl: string, assetKey: string } | null, /** Per-stream retention overrides for DVR and clips. Null when the stream has no overrides set (inherits the tenant default). VOD uploads aren't stream-bound, so they don't appear here. */
@@ -1613,7 +1622,8 @@ name: string, /** Optional description for the stream. */
 description: string | null, /** Secret key for publisher-authenticated ingest; null for pull and managed sources. The key lets its holder publish to the stream, so an API token needs the streams:write scope: without it this field is null and the response carries a FORBIDDEN error at its path. */
 streamKey: string | null, /** Public identifier for playback URLs. */
 playbackId: string, /** Whether DVR recording is enabled for this stream. */
-record: boolean, /** How source media enters the stream. */
+record: boolean, /** INHERIT or OFF for live video renditions. */
+liveVideoAbr: string, /** How source media enters the stream. */
 ingestMode: IngestMode, /** When this stream was created. */
 createdAt: string, /** When this stream was last modified. */
 updatedAt: string, /** How saved recordings are split into chapters. Snapshotted when a recording starts; changes apply from the next broadcast. NONE = live rewind only, nothing kept after the broadcast. */
@@ -1654,7 +1664,7 @@ primaryCodec: string | null, /** Primary video bitrate in kbps. */
 primaryBitrate: number | null, /** Whether the stream has active quality issues. */
 hasIssues: boolean | null, /** Human-readable description of current issues. */
 issuesDescription: string | null } | null, /** Configured multistream push targets for this stream. */
-pushTargets: Array<{ id: string, streamId: string, platform: string | null, name: string, targetUri: string, isEnabled: boolean, status: string, lastError: string | null, reasonCode: string | null, lastPushedAt: string | null, createdAt: string }>, /** Playback access policy. null/PUBLIC = anyone with the playbackId can watch. */
+pushTargets: Array<{ id: string, streamId: string, platform: string | null, name: string, videoChoice: string, targetUri: string, isEnabled: boolean, status: string, lastError: string | null, reasonCode: string | null, lastPushedAt: string | null, createdAt: string }>, /** Playback access policy. null/PUBLIC = anyone with the playbackId can watch. */
 playbackPolicy: { type: PlaybackPolicyType, /** Sites allowed to embed the content, as normalized `scheme://host[:port]` origins; `*` allows any. Empty = no restriction. A browser viewer whose Origin (or Referer) is not listed is denied. */
 allowedOrigins: Array<string> } | null, /** Server-resolved Chandler URLs for the stream's poster and sprite thumbnails. Derived from active_ingest_cluster_id + stream_id at SELECT time. Null when the stream has never been live; the poster.jpg 404s until Helmsman uploads its first frame, which the player's fallback chain handles. */
 thumbnailAssets: { posterUrl: string, spriteVttUrl: string, spriteJpgUrl: string, assetKey: string } | null, /** Per-stream retention overrides for DVR and clips. Null when the stream has no overrides set (inherits the tenant default). VOD uploads aren't stream-bound, so they don't appear here. */
@@ -1668,7 +1678,8 @@ name: string, /** Optional description for the stream. */
 description: string | null, /** Secret key for publisher-authenticated ingest; null for pull and managed sources. The key lets its holder publish to the stream, so an API token needs the streams:write scope: without it this field is null and the response carries a FORBIDDEN error at its path. */
 streamKey: string | null, /** Public identifier for playback URLs. */
 playbackId: string, /** Whether DVR recording is enabled for this stream. */
-record: boolean, /** How source media enters the stream. */
+record: boolean, /** INHERIT or OFF for live video renditions. */
+liveVideoAbr: string, /** How source media enters the stream. */
 ingestMode: IngestMode, /** When this stream was created. */
 createdAt: string, /** When this stream was last modified. */
 updatedAt: string, /** How saved recordings are split into chapters. Snapshotted when a recording starts; changes apply from the next broadcast. NONE = live rewind only, nothing kept after the broadcast. */
@@ -1709,7 +1720,7 @@ primaryCodec: string | null, /** Primary video bitrate in kbps. */
 primaryBitrate: number | null, /** Whether the stream has active quality issues. */
 hasIssues: boolean | null, /** Human-readable description of current issues. */
 issuesDescription: string | null } | null, /** Configured multistream push targets for this stream. */
-pushTargets: Array<{ id: string, streamId: string, platform: string | null, name: string, targetUri: string, isEnabled: boolean, status: string, lastError: string | null, reasonCode: string | null, lastPushedAt: string | null, createdAt: string }>, /** Playback access policy. null/PUBLIC = anyone with the playbackId can watch. */
+pushTargets: Array<{ id: string, streamId: string, platform: string | null, name: string, videoChoice: string, targetUri: string, isEnabled: boolean, status: string, lastError: string | null, reasonCode: string | null, lastPushedAt: string | null, createdAt: string }>, /** Playback access policy. null/PUBLIC = anyone with the playbackId can watch. */
 playbackPolicy: { type: PlaybackPolicyType, /** Sites allowed to embed the content, as normalized `scheme://host[:port]` origins; `*` allows any. Empty = no restriction. A browser viewer whose Origin (or Referer) is not listed is denied. */
 allowedOrigins: Array<string> } | null, /** Server-resolved Chandler URLs for the stream's poster and sprite thumbnails. Derived from active_ingest_cluster_id + stream_id at SELECT time. Null when the stream has never been live; the poster.jpg 404s until Helmsman uploads its first frame, which the player's fallback chain handles. */
 thumbnailAssets: { posterUrl: string, spriteVttUrl: string, spriteJpgUrl: string, assetKey: string } | null, /** Per-stream retention overrides for DVR and clips. Null when the stream has no overrides set (inherits the tenant default). VOD uploads aren't stream-bound, so they don't appear here. */
@@ -1918,7 +1929,8 @@ name: string, /** Optional description for the stream. */
 description: string | null, /** Secret key for publisher-authenticated ingest; null for pull and managed sources. The key lets its holder publish to the stream, so an API token needs the streams:write scope: without it this field is null and the response carries a FORBIDDEN error at its path. */
 streamKey: string | null, /** Public identifier for playback URLs. */
 playbackId: string, /** Whether DVR recording is enabled for this stream. */
-record: boolean, /** How source media enters the stream. */
+record: boolean, /** INHERIT or OFF for live video renditions. */
+liveVideoAbr: string, /** How source media enters the stream. */
 ingestMode: IngestMode, /** When this stream was created. */
 createdAt: string, /** When this stream was last modified. */
 updatedAt: string, /** How saved recordings are split into chapters. Snapshotted when a recording starts; changes apply from the next broadcast. NONE = live rewind only, nothing kept after the broadcast. */
@@ -1959,7 +1971,7 @@ primaryCodec: string | null, /** Primary video bitrate in kbps. */
 primaryBitrate: number | null, /** Whether the stream has active quality issues. */
 hasIssues: boolean | null, /** Human-readable description of current issues. */
 issuesDescription: string | null } | null, /** Configured multistream push targets for this stream. */
-pushTargets: Array<{ id: string, streamId: string, platform: string | null, name: string, targetUri: string, isEnabled: boolean, status: string, lastError: string | null, reasonCode: string | null, lastPushedAt: string | null, createdAt: string }>, /** Playback access policy. null/PUBLIC = anyone with the playbackId can watch. */
+pushTargets: Array<{ id: string, streamId: string, platform: string | null, name: string, videoChoice: string, targetUri: string, isEnabled: boolean, status: string, lastError: string | null, reasonCode: string | null, lastPushedAt: string | null, createdAt: string }>, /** Playback access policy. null/PUBLIC = anyone with the playbackId can watch. */
 playbackPolicy: { type: PlaybackPolicyType, /** Sites allowed to embed the content, as normalized `scheme://host[:port]` origins; `*` allows any. Empty = no restriction. A browser viewer whose Origin (or Referer) is not listed is denied. */
 allowedOrigins: Array<string> } | null, /** Server-resolved Chandler URLs for the stream's poster and sprite thumbnails. Derived from active_ingest_cluster_id + stream_id at SELECT time. Null when the stream has never been live; the poster.jpg 404s until Helmsman uploads its first frame, which the player's fallback chain handles. */
 thumbnailAssets: { posterUrl: string, spriteVttUrl: string, spriteJpgUrl: string, assetKey: string } | null, /** Per-stream retention overrides for DVR and clips. Null when the stream has no overrides set (inherits the tenant default). VOD uploads aren't stream-bound, so they don't appear here. */
@@ -2001,7 +2013,8 @@ name: string, /** Optional description for the stream. */
 description: string | null, /** Secret key for publisher-authenticated ingest; null for pull and managed sources. The key lets its holder publish to the stream, so an API token needs the streams:write scope: without it this field is null and the response carries a FORBIDDEN error at its path. */
 streamKey: string | null, /** Public identifier for playback URLs. */
 playbackId: string, /** Whether DVR recording is enabled for this stream. */
-record: boolean, /** How source media enters the stream. */
+record: boolean, /** INHERIT or OFF for live video renditions. */
+liveVideoAbr: string, /** How source media enters the stream. */
 ingestMode: IngestMode, /** When this stream was created. */
 createdAt: string, /** When this stream was last modified. */
 updatedAt: string, /** How saved recordings are split into chapters. Snapshotted when a recording starts; changes apply from the next broadcast. NONE = live rewind only, nothing kept after the broadcast. */
@@ -2042,7 +2055,7 @@ primaryCodec: string | null, /** Primary video bitrate in kbps. */
 primaryBitrate: number | null, /** Whether the stream has active quality issues. */
 hasIssues: boolean | null, /** Human-readable description of current issues. */
 issuesDescription: string | null } | null, /** Configured multistream push targets for this stream. */
-pushTargets: Array<{ id: string, streamId: string, platform: string | null, name: string, targetUri: string, isEnabled: boolean, status: string, lastError: string | null, reasonCode: string | null, lastPushedAt: string | null, createdAt: string }>, /** Playback access policy. null/PUBLIC = anyone with the playbackId can watch. */
+pushTargets: Array<{ id: string, streamId: string, platform: string | null, name: string, videoChoice: string, targetUri: string, isEnabled: boolean, status: string, lastError: string | null, reasonCode: string | null, lastPushedAt: string | null, createdAt: string }>, /** Playback access policy. null/PUBLIC = anyone with the playbackId can watch. */
 playbackPolicy: { type: PlaybackPolicyType, /** Sites allowed to embed the content, as normalized `scheme://host[:port]` origins; `*` allows any. Empty = no restriction. A browser viewer whose Origin (or Referer) is not listed is denied. */
 allowedOrigins: Array<string> } | null, /** Server-resolved Chandler URLs for the stream's poster and sprite thumbnails. Derived from active_ingest_cluster_id + stream_id at SELECT time. Null when the stream has never been live; the poster.jpg 404s until Helmsman uploads its first frame, which the player's fallback chain handles. */
 thumbnailAssets: { posterUrl: string, spriteVttUrl: string, spriteJpgUrl: string, assetKey: string } | null, /** Per-stream retention overrides for DVR and clips. Null when the stream has no overrides set (inherits the tenant default). VOD uploads aren't stream-bound, so they don't appear here. */
@@ -2148,7 +2161,8 @@ name: string, /** Optional description for the stream. */
 description: string | null, /** Secret key for publisher-authenticated ingest; null for pull and managed sources. The key lets its holder publish to the stream, so an API token needs the streams:write scope: without it this field is null and the response carries a FORBIDDEN error at its path. */
 streamKey: string | null, /** Public identifier for playback URLs. */
 playbackId: string, /** Whether DVR recording is enabled for this stream. */
-record: boolean, /** How source media enters the stream. */
+record: boolean, /** INHERIT or OFF for live video renditions. */
+liveVideoAbr: string, /** How source media enters the stream. */
 ingestMode: IngestMode, /** When this stream was created. */
 createdAt: string, /** When this stream was last modified. */
 updatedAt: string, /** How saved recordings are split into chapters. Snapshotted when a recording starts; changes apply from the next broadcast. NONE = live rewind only, nothing kept after the broadcast. */
@@ -2189,7 +2203,7 @@ primaryCodec: string | null, /** Primary video bitrate in kbps. */
 primaryBitrate: number | null, /** Whether the stream has active quality issues. */
 hasIssues: boolean | null, /** Human-readable description of current issues. */
 issuesDescription: string | null } | null, /** Configured multistream push targets for this stream. */
-pushTargets: Array<{ id: string, streamId: string, platform: string | null, name: string, targetUri: string, isEnabled: boolean, status: string, lastError: string | null, reasonCode: string | null, lastPushedAt: string | null, createdAt: string }>, /** Playback access policy. null/PUBLIC = anyone with the playbackId can watch. */
+pushTargets: Array<{ id: string, streamId: string, platform: string | null, name: string, videoChoice: string, targetUri: string, isEnabled: boolean, status: string, lastError: string | null, reasonCode: string | null, lastPushedAt: string | null, createdAt: string }>, /** Playback access policy. null/PUBLIC = anyone with the playbackId can watch. */
 playbackPolicy: { type: PlaybackPolicyType, /** Sites allowed to embed the content, as normalized `scheme://host[:port]` origins; `*` allows any. Empty = no restriction. A browser viewer whose Origin (or Referer) is not listed is denied. */
 allowedOrigins: Array<string> } | null, /** Server-resolved Chandler URLs for the stream's poster and sprite thumbnails. Derived from active_ingest_cluster_id + stream_id at SELECT time. Null when the stream has never been live; the poster.jpg 404s until Helmsman uploads its first frame, which the player's fallback chain handles. */
 thumbnailAssets: { posterUrl: string, spriteVttUrl: string, spriteJpgUrl: string, assetKey: string } | null, /** Per-stream retention overrides for DVR and clips. Null when the stream has no overrides set (inherits the tenant default). VOD uploads aren't stream-bound, so they don't appear here. */
@@ -2203,7 +2217,8 @@ name: string, /** Optional description for the stream. */
 description: string | null, /** Secret key for publisher-authenticated ingest; null for pull and managed sources. The key lets its holder publish to the stream, so an API token needs the streams:write scope: without it this field is null and the response carries a FORBIDDEN error at its path. */
 streamKey: string | null, /** Public identifier for playback URLs. */
 playbackId: string, /** Whether DVR recording is enabled for this stream. */
-record: boolean, /** How source media enters the stream. */
+record: boolean, /** INHERIT or OFF for live video renditions. */
+liveVideoAbr: string, /** How source media enters the stream. */
 ingestMode: IngestMode, /** When this stream was created. */
 createdAt: string, /** When this stream was last modified. */
 updatedAt: string, /** How saved recordings are split into chapters. Snapshotted when a recording starts; changes apply from the next broadcast. NONE = live rewind only, nothing kept after the broadcast. */
@@ -2244,7 +2259,7 @@ primaryCodec: string | null, /** Primary video bitrate in kbps. */
 primaryBitrate: number | null, /** Whether the stream has active quality issues. */
 hasIssues: boolean | null, /** Human-readable description of current issues. */
 issuesDescription: string | null } | null, /** Configured multistream push targets for this stream. */
-pushTargets: Array<{ id: string, streamId: string, platform: string | null, name: string, targetUri: string, isEnabled: boolean, status: string, lastError: string | null, reasonCode: string | null, lastPushedAt: string | null, createdAt: string }>, /** Playback access policy. null/PUBLIC = anyone with the playbackId can watch. */
+pushTargets: Array<{ id: string, streamId: string, platform: string | null, name: string, videoChoice: string, targetUri: string, isEnabled: boolean, status: string, lastError: string | null, reasonCode: string | null, lastPushedAt: string | null, createdAt: string }>, /** Playback access policy. null/PUBLIC = anyone with the playbackId can watch. */
 playbackPolicy: { type: PlaybackPolicyType, /** Sites allowed to embed the content, as normalized `scheme://host[:port]` origins; `*` allows any. Empty = no restriction. A browser viewer whose Origin (or Referer) is not listed is denied. */
 allowedOrigins: Array<string> } | null, /** Server-resolved Chandler URLs for the stream's poster and sprite thumbnails. Derived from active_ingest_cluster_id + stream_id at SELECT time. Null when the stream has never been live; the poster.jpg 404s until Helmsman uploads its first frame, which the player's fallback chain handles. */
 thumbnailAssets: { posterUrl: string, spriteVttUrl: string, spriteJpgUrl: string, assetKey: string } | null, /** Per-stream retention overrides for DVR and clips. Null when the stream has no overrides set (inherits the tenant default). VOD uploads aren't stream-bound, so they don't appear here. */
@@ -2405,7 +2420,8 @@ name: string, /** Optional description for the stream. */
 description: string | null, /** Secret key for publisher-authenticated ingest; null for pull and managed sources. The key lets its holder publish to the stream, so an API token needs the streams:write scope: without it this field is null and the response carries a FORBIDDEN error at its path. */
 streamKey: string | null, /** Public identifier for playback URLs. */
 playbackId: string, /** Whether DVR recording is enabled for this stream. */
-record: boolean, /** How source media enters the stream. */
+record: boolean, /** INHERIT or OFF for live video renditions. */
+liveVideoAbr: string, /** How source media enters the stream. */
 ingestMode: IngestMode, /** When this stream was created. */
 createdAt: string, /** When this stream was last modified. */
 updatedAt: string, /** How saved recordings are split into chapters. Snapshotted when a recording starts; changes apply from the next broadcast. NONE = live rewind only, nothing kept after the broadcast. */
@@ -2446,7 +2462,7 @@ primaryCodec: string | null, /** Primary video bitrate in kbps. */
 primaryBitrate: number | null, /** Whether the stream has active quality issues. */
 hasIssues: boolean | null, /** Human-readable description of current issues. */
 issuesDescription: string | null } | null, /** Configured multistream push targets for this stream. */
-pushTargets: Array<{ id: string, streamId: string, platform: string | null, name: string, targetUri: string, isEnabled: boolean, status: string, lastError: string | null, reasonCode: string | null, lastPushedAt: string | null, createdAt: string }>, /** Playback access policy. null/PUBLIC = anyone with the playbackId can watch. */
+pushTargets: Array<{ id: string, streamId: string, platform: string | null, name: string, videoChoice: string, targetUri: string, isEnabled: boolean, status: string, lastError: string | null, reasonCode: string | null, lastPushedAt: string | null, createdAt: string }>, /** Playback access policy. null/PUBLIC = anyone with the playbackId can watch. */
 playbackPolicy: { type: PlaybackPolicyType, /** Sites allowed to embed the content, as normalized `scheme://host[:port]` origins; `*` allows any. Empty = no restriction. A browser viewer whose Origin (or Referer) is not listed is denied. */
 allowedOrigins: Array<string> } | null, /** Server-resolved Chandler URLs for the stream's poster and sprite thumbnails. Derived from active_ingest_cluster_id + stream_id at SELECT time. Null when the stream has never been live; the poster.jpg 404s until Helmsman uploads its first frame, which the player's fallback chain handles. */
 thumbnailAssets: { posterUrl: string, spriteVttUrl: string, spriteJpgUrl: string, assetKey: string } | null, /** Per-stream retention overrides for DVR and clips. Null when the stream has no overrides set (inherits the tenant default). VOD uploads aren't stream-bound, so they don't appear here. */
@@ -2725,7 +2741,8 @@ name: string, /** Optional description for the stream. */
 description: string | null, /** Secret key for publisher-authenticated ingest; null for pull and managed sources. The key lets its holder publish to the stream, so an API token needs the streams:write scope: without it this field is null and the response carries a FORBIDDEN error at its path. */
 streamKey: string | null, /** Public identifier for playback URLs. */
 playbackId: string, /** Whether DVR recording is enabled for this stream. */
-record: boolean, /** How source media enters the stream. */
+record: boolean, /** INHERIT or OFF for live video renditions. */
+liveVideoAbr: string, /** How source media enters the stream. */
 ingestMode: IngestMode, /** When this stream was created. */
 createdAt: string, /** When this stream was last modified. */
 updatedAt: string, /** How saved recordings are split into chapters. Snapshotted when a recording starts; changes apply from the next broadcast. NONE = live rewind only, nothing kept after the broadcast. */
@@ -2766,7 +2783,7 @@ primaryCodec: string | null, /** Primary video bitrate in kbps. */
 primaryBitrate: number | null, /** Whether the stream has active quality issues. */
 hasIssues: boolean | null, /** Human-readable description of current issues. */
 issuesDescription: string | null } | null, /** Configured multistream push targets for this stream. */
-pushTargets: Array<{ id: string, streamId: string, platform: string | null, name: string, targetUri: string, isEnabled: boolean, status: string, lastError: string | null, reasonCode: string | null, lastPushedAt: string | null, createdAt: string }>, /** Playback access policy. null/PUBLIC = anyone with the playbackId can watch. */
+pushTargets: Array<{ id: string, streamId: string, platform: string | null, name: string, videoChoice: string, targetUri: string, isEnabled: boolean, status: string, lastError: string | null, reasonCode: string | null, lastPushedAt: string | null, createdAt: string }>, /** Playback access policy. null/PUBLIC = anyone with the playbackId can watch. */
 playbackPolicy: { type: PlaybackPolicyType, /** Sites allowed to embed the content, as normalized `scheme://host[:port]` origins; `*` allows any. Empty = no restriction. A browser viewer whose Origin (or Referer) is not listed is denied. */
 allowedOrigins: Array<string> } | null, /** Server-resolved Chandler URLs for the stream's poster and sprite thumbnails. Derived from active_ingest_cluster_id + stream_id at SELECT time. Null when the stream has never been live; the poster.jpg 404s until Helmsman uploads its first frame, which the player's fallback chain handles. */
 thumbnailAssets: { posterUrl: string, spriteVttUrl: string, spriteJpgUrl: string, assetKey: string } | null, /** Per-stream retention overrides for DVR and clips. Null when the stream has no overrides set (inherits the tenant default). VOD uploads aren't stream-bound, so they don't appear here. */
@@ -2780,7 +2797,8 @@ name: string, /** Optional description for the stream. */
 description: string | null, /** Secret key for publisher-authenticated ingest; null for pull and managed sources. The key lets its holder publish to the stream, so an API token needs the streams:write scope: without it this field is null and the response carries a FORBIDDEN error at its path. */
 streamKey: string | null, /** Public identifier for playback URLs. */
 playbackId: string, /** Whether DVR recording is enabled for this stream. */
-record: boolean, /** How source media enters the stream. */
+record: boolean, /** INHERIT or OFF for live video renditions. */
+liveVideoAbr: string, /** How source media enters the stream. */
 ingestMode: IngestMode, /** When this stream was created. */
 createdAt: string, /** When this stream was last modified. */
 updatedAt: string, /** How saved recordings are split into chapters. Snapshotted when a recording starts; changes apply from the next broadcast. NONE = live rewind only, nothing kept after the broadcast. */
@@ -2821,7 +2839,7 @@ primaryCodec: string | null, /** Primary video bitrate in kbps. */
 primaryBitrate: number | null, /** Whether the stream has active quality issues. */
 hasIssues: boolean | null, /** Human-readable description of current issues. */
 issuesDescription: string | null } | null, /** Configured multistream push targets for this stream. */
-pushTargets: Array<{ id: string, streamId: string, platform: string | null, name: string, targetUri: string, isEnabled: boolean, status: string, lastError: string | null, reasonCode: string | null, lastPushedAt: string | null, createdAt: string }>, /** Playback access policy. null/PUBLIC = anyone with the playbackId can watch. */
+pushTargets: Array<{ id: string, streamId: string, platform: string | null, name: string, videoChoice: string, targetUri: string, isEnabled: boolean, status: string, lastError: string | null, reasonCode: string | null, lastPushedAt: string | null, createdAt: string }>, /** Playback access policy. null/PUBLIC = anyone with the playbackId can watch. */
 playbackPolicy: { type: PlaybackPolicyType, /** Sites allowed to embed the content, as normalized `scheme://host[:port]` origins; `*` allows any. Empty = no restriction. A browser viewer whose Origin (or Referer) is not listed is denied. */
 allowedOrigins: Array<string> } | null, /** Server-resolved Chandler URLs for the stream's poster and sprite thumbnails. Derived from active_ingest_cluster_id + stream_id at SELECT time. Null when the stream has never been live; the poster.jpg 404s until Helmsman uploads its first frame, which the player's fallback chain handles. */
 thumbnailAssets: { posterUrl: string, spriteVttUrl: string, spriteJpgUrl: string, assetKey: string } | null, /** Per-stream retention overrides for DVR and clips. Null when the stream has no overrides set (inherits the tenant default). VOD uploads aren't stream-bound, so they don't appear here. */
@@ -2847,7 +2865,8 @@ name: string, /** Optional description for the stream. */
 description: string | null, /** Secret key for publisher-authenticated ingest; null for pull and managed sources. The key lets its holder publish to the stream, so an API token needs the streams:write scope: without it this field is null and the response carries a FORBIDDEN error at its path. */
 streamKey: string | null, /** Public identifier for playback URLs. */
 playbackId: string, /** Whether DVR recording is enabled for this stream. */
-record: boolean, /** How source media enters the stream. */
+record: boolean, /** INHERIT or OFF for live video renditions. */
+liveVideoAbr: string, /** How source media enters the stream. */
 ingestMode: IngestMode, /** When this stream was created. */
 createdAt: string, /** When this stream was last modified. */
 updatedAt: string, /** How saved recordings are split into chapters. Snapshotted when a recording starts; changes apply from the next broadcast. NONE = live rewind only, nothing kept after the broadcast. */
@@ -2888,7 +2907,7 @@ primaryCodec: string | null, /** Primary video bitrate in kbps. */
 primaryBitrate: number | null, /** Whether the stream has active quality issues. */
 hasIssues: boolean | null, /** Human-readable description of current issues. */
 issuesDescription: string | null } | null, /** Configured multistream push targets for this stream. */
-pushTargets: Array<{ id: string, streamId: string, platform: string | null, name: string, targetUri: string, isEnabled: boolean, status: string, lastError: string | null, reasonCode: string | null, lastPushedAt: string | null, createdAt: string }>, /** Playback access policy. null/PUBLIC = anyone with the playbackId can watch. */
+pushTargets: Array<{ id: string, streamId: string, platform: string | null, name: string, videoChoice: string, targetUri: string, isEnabled: boolean, status: string, lastError: string | null, reasonCode: string | null, lastPushedAt: string | null, createdAt: string }>, /** Playback access policy. null/PUBLIC = anyone with the playbackId can watch. */
 playbackPolicy: { type: PlaybackPolicyType, /** Sites allowed to embed the content, as normalized `scheme://host[:port]` origins; `*` allows any. Empty = no restriction. A browser viewer whose Origin (or Referer) is not listed is denied. */
 allowedOrigins: Array<string> } | null, /** Server-resolved Chandler URLs for the stream's poster and sprite thumbnails. Derived from active_ingest_cluster_id + stream_id at SELECT time. Null when the stream has never been live; the poster.jpg 404s until Helmsman uploads its first frame, which the player's fallback chain handles. */
 thumbnailAssets: { posterUrl: string, spriteVttUrl: string, spriteJpgUrl: string, assetKey: string } | null, /** Per-stream retention overrides for DVR and clips. Null when the stream has no overrides set (inherits the tenant default). VOD uploads aren't stream-bound, so they don't appear here. */
@@ -2904,7 +2923,8 @@ name: string, /** Optional description for the stream. */
 description: string | null, /** Secret key for publisher-authenticated ingest; null for pull and managed sources. The key lets its holder publish to the stream, so an API token needs the streams:write scope: without it this field is null and the response carries a FORBIDDEN error at its path. */
 streamKey: string | null, /** Public identifier for playback URLs. */
 playbackId: string, /** Whether DVR recording is enabled for this stream. */
-record: boolean, /** How source media enters the stream. */
+record: boolean, /** INHERIT or OFF for live video renditions. */
+liveVideoAbr: string, /** How source media enters the stream. */
 ingestMode: IngestMode, /** When this stream was created. */
 createdAt: string, /** When this stream was last modified. */
 updatedAt: string, /** How saved recordings are split into chapters. Snapshotted when a recording starts; changes apply from the next broadcast. NONE = live rewind only, nothing kept after the broadcast. */
@@ -2945,7 +2965,7 @@ primaryCodec: string | null, /** Primary video bitrate in kbps. */
 primaryBitrate: number | null, /** Whether the stream has active quality issues. */
 hasIssues: boolean | null, /** Human-readable description of current issues. */
 issuesDescription: string | null } | null, /** Configured multistream push targets for this stream. */
-pushTargets: Array<{ id: string, streamId: string, platform: string | null, name: string, targetUri: string, isEnabled: boolean, status: string, lastError: string | null, reasonCode: string | null, lastPushedAt: string | null, createdAt: string }>, /** Playback access policy. null/PUBLIC = anyone with the playbackId can watch. */
+pushTargets: Array<{ id: string, streamId: string, platform: string | null, name: string, videoChoice: string, targetUri: string, isEnabled: boolean, status: string, lastError: string | null, reasonCode: string | null, lastPushedAt: string | null, createdAt: string }>, /** Playback access policy. null/PUBLIC = anyone with the playbackId can watch. */
 playbackPolicy: { type: PlaybackPolicyType, /** Sites allowed to embed the content, as normalized `scheme://host[:port]` origins; `*` allows any. Empty = no restriction. A browser viewer whose Origin (or Referer) is not listed is denied. */
 allowedOrigins: Array<string> } | null, /** Server-resolved Chandler URLs for the stream's poster and sprite thumbnails. Derived from active_ingest_cluster_id + stream_id at SELECT time. Null when the stream has never been live; the poster.jpg 404s until Helmsman uploads its first frame, which the player's fallback chain handles. */
 thumbnailAssets: { posterUrl: string, spriteVttUrl: string, spriteJpgUrl: string, assetKey: string } | null, /** Per-stream retention overrides for DVR and clips. Null when the stream has no overrides set (inherits the tenant default). VOD uploads aren't stream-bound, so they don't appear here. */
@@ -2962,7 +2982,8 @@ name: string, /** Optional description for the stream. */
 description: string | null, /** Secret key for publisher-authenticated ingest; null for pull and managed sources. The key lets its holder publish to the stream, so an API token needs the streams:write scope: without it this field is null and the response carries a FORBIDDEN error at its path. */
 streamKey: string | null, /** Public identifier for playback URLs. */
 playbackId: string, /** Whether DVR recording is enabled for this stream. */
-record: boolean, /** How source media enters the stream. */
+record: boolean, /** INHERIT or OFF for live video renditions. */
+liveVideoAbr: string, /** How source media enters the stream. */
 ingestMode: IngestMode, /** When this stream was created. */
 createdAt: string, /** When this stream was last modified. */
 updatedAt: string, /** How saved recordings are split into chapters. Snapshotted when a recording starts; changes apply from the next broadcast. NONE = live rewind only, nothing kept after the broadcast. */
@@ -3003,7 +3024,7 @@ primaryCodec: string | null, /** Primary video bitrate in kbps. */
 primaryBitrate: number | null, /** Whether the stream has active quality issues. */
 hasIssues: boolean | null, /** Human-readable description of current issues. */
 issuesDescription: string | null } | null, /** Configured multistream push targets for this stream. */
-pushTargets: Array<{ id: string, streamId: string, platform: string | null, name: string, targetUri: string, isEnabled: boolean, status: string, lastError: string | null, reasonCode: string | null, lastPushedAt: string | null, createdAt: string }>, /** Playback access policy. null/PUBLIC = anyone with the playbackId can watch. */
+pushTargets: Array<{ id: string, streamId: string, platform: string | null, name: string, videoChoice: string, targetUri: string, isEnabled: boolean, status: string, lastError: string | null, reasonCode: string | null, lastPushedAt: string | null, createdAt: string }>, /** Playback access policy. null/PUBLIC = anyone with the playbackId can watch. */
 playbackPolicy: { type: PlaybackPolicyType, /** Sites allowed to embed the content, as normalized `scheme://host[:port]` origins; `*` allows any. Empty = no restriction. A browser viewer whose Origin (or Referer) is not listed is denied. */
 allowedOrigins: Array<string> } | null, /** Server-resolved Chandler URLs for the stream's poster and sprite thumbnails. Derived from active_ingest_cluster_id + stream_id at SELECT time. Null when the stream has never been live; the poster.jpg 404s until Helmsman uploads its first frame, which the player's fallback chain handles. */
 thumbnailAssets: { posterUrl: string, spriteVttUrl: string, spriteJpgUrl: string, assetKey: string } | null, /** Per-stream retention overrides for DVR and clips. Null when the stream has no overrides set (inherits the tenant default). VOD uploads aren't stream-bound, so they don't appear here. */
@@ -3055,7 +3076,8 @@ name: string, /** Optional description for the stream. */
 description: string | null, /** Secret key for publisher-authenticated ingest; null for pull and managed sources. The key lets its holder publish to the stream, so an API token needs the streams:write scope: without it this field is null and the response carries a FORBIDDEN error at its path. */
 streamKey: string | null, /** Public identifier for playback URLs. */
 playbackId: string, /** Whether DVR recording is enabled for this stream. */
-record: boolean, /** How source media enters the stream. */
+record: boolean, /** INHERIT or OFF for live video renditions. */
+liveVideoAbr: string, /** How source media enters the stream. */
 ingestMode: IngestMode, /** When this stream was created. */
 createdAt: string, /** When this stream was last modified. */
 updatedAt: string, /** How saved recordings are split into chapters. Snapshotted when a recording starts; changes apply from the next broadcast. NONE = live rewind only, nothing kept after the broadcast. */
@@ -3096,7 +3118,7 @@ primaryCodec: string | null, /** Primary video bitrate in kbps. */
 primaryBitrate: number | null, /** Whether the stream has active quality issues. */
 hasIssues: boolean | null, /** Human-readable description of current issues. */
 issuesDescription: string | null } | null, /** Configured multistream push targets for this stream. */
-pushTargets: Array<{ id: string, streamId: string, platform: string | null, name: string, targetUri: string, isEnabled: boolean, status: string, lastError: string | null, reasonCode: string | null, lastPushedAt: string | null, createdAt: string }>, /** Playback access policy. null/PUBLIC = anyone with the playbackId can watch. */
+pushTargets: Array<{ id: string, streamId: string, platform: string | null, name: string, videoChoice: string, targetUri: string, isEnabled: boolean, status: string, lastError: string | null, reasonCode: string | null, lastPushedAt: string | null, createdAt: string }>, /** Playback access policy. null/PUBLIC = anyone with the playbackId can watch. */
 playbackPolicy: { type: PlaybackPolicyType, /** Sites allowed to embed the content, as normalized `scheme://host[:port]` origins; `*` allows any. Empty = no restriction. A browser viewer whose Origin (or Referer) is not listed is denied. */
 allowedOrigins: Array<string> } | null, /** Server-resolved Chandler URLs for the stream's poster and sprite thumbnails. Derived from active_ingest_cluster_id + stream_id at SELECT time. Null when the stream has never been live; the poster.jpg 404s until Helmsman uploads its first frame, which the player's fallback chain handles. */
 thumbnailAssets: { posterUrl: string, spriteVttUrl: string, spriteJpgUrl: string, assetKey: string } | null, /** Per-stream retention overrides for DVR and clips. Null when the stream has no overrides set (inherits the tenant default). VOD uploads aren't stream-bound, so they don't appear here. */
@@ -3110,7 +3132,8 @@ name: string, /** Optional description for the stream. */
 description: string | null, /** Secret key for publisher-authenticated ingest; null for pull and managed sources. The key lets its holder publish to the stream, so an API token needs the streams:write scope: without it this field is null and the response carries a FORBIDDEN error at its path. */
 streamKey: string | null, /** Public identifier for playback URLs. */
 playbackId: string, /** Whether DVR recording is enabled for this stream. */
-record: boolean, /** How source media enters the stream. */
+record: boolean, /** INHERIT or OFF for live video renditions. */
+liveVideoAbr: string, /** How source media enters the stream. */
 ingestMode: IngestMode, /** When this stream was created. */
 createdAt: string, /** When this stream was last modified. */
 updatedAt: string, /** How saved recordings are split into chapters. Snapshotted when a recording starts; changes apply from the next broadcast. NONE = live rewind only, nothing kept after the broadcast. */
@@ -3151,7 +3174,7 @@ primaryCodec: string | null, /** Primary video bitrate in kbps. */
 primaryBitrate: number | null, /** Whether the stream has active quality issues. */
 hasIssues: boolean | null, /** Human-readable description of current issues. */
 issuesDescription: string | null } | null, /** Configured multistream push targets for this stream. */
-pushTargets: Array<{ id: string, streamId: string, platform: string | null, name: string, targetUri: string, isEnabled: boolean, status: string, lastError: string | null, reasonCode: string | null, lastPushedAt: string | null, createdAt: string }>, /** Playback access policy. null/PUBLIC = anyone with the playbackId can watch. */
+pushTargets: Array<{ id: string, streamId: string, platform: string | null, name: string, videoChoice: string, targetUri: string, isEnabled: boolean, status: string, lastError: string | null, reasonCode: string | null, lastPushedAt: string | null, createdAt: string }>, /** Playback access policy. null/PUBLIC = anyone with the playbackId can watch. */
 playbackPolicy: { type: PlaybackPolicyType, /** Sites allowed to embed the content, as normalized `scheme://host[:port]` origins; `*` allows any. Empty = no restriction. A browser viewer whose Origin (or Referer) is not listed is denied. */
 allowedOrigins: Array<string> } | null, /** Server-resolved Chandler URLs for the stream's poster and sprite thumbnails. Derived from active_ingest_cluster_id + stream_id at SELECT time. Null when the stream has never been live; the poster.jpg 404s until Helmsman uploads its first frame, which the player's fallback chain handles. */
 thumbnailAssets: { posterUrl: string, spriteVttUrl: string, spriteJpgUrl: string, assetKey: string } | null, /** Per-stream retention overrides for DVR and clips. Null when the stream has no overrides set (inherits the tenant default). VOD uploads aren't stream-bound, so they don't appear here. */
@@ -3167,7 +3190,8 @@ name: string, /** Optional description for the stream. */
 description: string | null, /** Secret key for publisher-authenticated ingest; null for pull and managed sources. The key lets its holder publish to the stream, so an API token needs the streams:write scope: without it this field is null and the response carries a FORBIDDEN error at its path. */
 streamKey: string | null, /** Public identifier for playback URLs. */
 playbackId: string, /** Whether DVR recording is enabled for this stream. */
-record: boolean, /** How source media enters the stream. */
+record: boolean, /** INHERIT or OFF for live video renditions. */
+liveVideoAbr: string, /** How source media enters the stream. */
 ingestMode: IngestMode, /** When this stream was created. */
 createdAt: string, /** When this stream was last modified. */
 updatedAt: string, /** How saved recordings are split into chapters. Snapshotted when a recording starts; changes apply from the next broadcast. NONE = live rewind only, nothing kept after the broadcast. */
@@ -3208,7 +3232,7 @@ primaryCodec: string | null, /** Primary video bitrate in kbps. */
 primaryBitrate: number | null, /** Whether the stream has active quality issues. */
 hasIssues: boolean | null, /** Human-readable description of current issues. */
 issuesDescription: string | null } | null, /** Configured multistream push targets for this stream. */
-pushTargets: Array<{ id: string, streamId: string, platform: string | null, name: string, targetUri: string, isEnabled: boolean, status: string, lastError: string | null, reasonCode: string | null, lastPushedAt: string | null, createdAt: string }>, /** Playback access policy. null/PUBLIC = anyone with the playbackId can watch. */
+pushTargets: Array<{ id: string, streamId: string, platform: string | null, name: string, videoChoice: string, targetUri: string, isEnabled: boolean, status: string, lastError: string | null, reasonCode: string | null, lastPushedAt: string | null, createdAt: string }>, /** Playback access policy. null/PUBLIC = anyone with the playbackId can watch. */
 playbackPolicy: { type: PlaybackPolicyType, /** Sites allowed to embed the content, as normalized `scheme://host[:port]` origins; `*` allows any. Empty = no restriction. A browser viewer whose Origin (or Referer) is not listed is denied. */
 allowedOrigins: Array<string> } | null, /** Server-resolved Chandler URLs for the stream's poster and sprite thumbnails. Derived from active_ingest_cluster_id + stream_id at SELECT time. Null when the stream has never been live; the poster.jpg 404s until Helmsman uploads its first frame, which the player's fallback chain handles. */
 thumbnailAssets: { posterUrl: string, spriteVttUrl: string, spriteJpgUrl: string, assetKey: string } | null, /** Per-stream retention overrides for DVR and clips. Null when the stream has no overrides set (inherits the tenant default). VOD uploads aren't stream-bound, so they don't appear here. */
@@ -3225,7 +3249,8 @@ name: string, /** Optional description for the stream. */
 description: string | null, /** Secret key for publisher-authenticated ingest; null for pull and managed sources. The key lets its holder publish to the stream, so an API token needs the streams:write scope: without it this field is null and the response carries a FORBIDDEN error at its path. */
 streamKey: string | null, /** Public identifier for playback URLs. */
 playbackId: string, /** Whether DVR recording is enabled for this stream. */
-record: boolean, /** How source media enters the stream. */
+record: boolean, /** INHERIT or OFF for live video renditions. */
+liveVideoAbr: string, /** How source media enters the stream. */
 ingestMode: IngestMode, /** When this stream was created. */
 createdAt: string, /** When this stream was last modified. */
 updatedAt: string, /** How saved recordings are split into chapters. Snapshotted when a recording starts; changes apply from the next broadcast. NONE = live rewind only, nothing kept after the broadcast. */
@@ -3266,7 +3291,7 @@ primaryCodec: string | null, /** Primary video bitrate in kbps. */
 primaryBitrate: number | null, /** Whether the stream has active quality issues. */
 hasIssues: boolean | null, /** Human-readable description of current issues. */
 issuesDescription: string | null } | null, /** Configured multistream push targets for this stream. */
-pushTargets: Array<{ id: string, streamId: string, platform: string | null, name: string, targetUri: string, isEnabled: boolean, status: string, lastError: string | null, reasonCode: string | null, lastPushedAt: string | null, createdAt: string }>, /** Playback access policy. null/PUBLIC = anyone with the playbackId can watch. */
+pushTargets: Array<{ id: string, streamId: string, platform: string | null, name: string, videoChoice: string, targetUri: string, isEnabled: boolean, status: string, lastError: string | null, reasonCode: string | null, lastPushedAt: string | null, createdAt: string }>, /** Playback access policy. null/PUBLIC = anyone with the playbackId can watch. */
 playbackPolicy: { type: PlaybackPolicyType, /** Sites allowed to embed the content, as normalized `scheme://host[:port]` origins; `*` allows any. Empty = no restriction. A browser viewer whose Origin (or Referer) is not listed is denied. */
 allowedOrigins: Array<string> } | null, /** Server-resolved Chandler URLs for the stream's poster and sprite thumbnails. Derived from active_ingest_cluster_id + stream_id at SELECT time. Null when the stream has never been live; the poster.jpg 404s until Helmsman uploads its first frame, which the player's fallback chain handles. */
 thumbnailAssets: { posterUrl: string, spriteVttUrl: string, spriteJpgUrl: string, assetKey: string } | null, /** Per-stream retention overrides for DVR and clips. Null when the stream has no overrides set (inherits the tenant default). VOD uploads aren't stream-bound, so they don't appear here. */
@@ -3282,7 +3307,8 @@ name: string, /** Optional description for the stream. */
 description: string | null, /** Secret key for publisher-authenticated ingest; null for pull and managed sources. The key lets its holder publish to the stream, so an API token needs the streams:write scope: without it this field is null and the response carries a FORBIDDEN error at its path. */
 streamKey: string | null, /** Public identifier for playback URLs. */
 playbackId: string, /** Whether DVR recording is enabled for this stream. */
-record: boolean, /** How source media enters the stream. */
+record: boolean, /** INHERIT or OFF for live video renditions. */
+liveVideoAbr: string, /** How source media enters the stream. */
 ingestMode: IngestMode, /** When this stream was created. */
 createdAt: string, /** When this stream was last modified. */
 updatedAt: string, /** How saved recordings are split into chapters. Snapshotted when a recording starts; changes apply from the next broadcast. NONE = live rewind only, nothing kept after the broadcast. */
@@ -3323,7 +3349,7 @@ primaryCodec: string | null, /** Primary video bitrate in kbps. */
 primaryBitrate: number | null, /** Whether the stream has active quality issues. */
 hasIssues: boolean | null, /** Human-readable description of current issues. */
 issuesDescription: string | null } | null, /** Configured multistream push targets for this stream. */
-pushTargets: Array<{ id: string, streamId: string, platform: string | null, name: string, targetUri: string, isEnabled: boolean, status: string, lastError: string | null, reasonCode: string | null, lastPushedAt: string | null, createdAt: string }>, /** Playback access policy. null/PUBLIC = anyone with the playbackId can watch. */
+pushTargets: Array<{ id: string, streamId: string, platform: string | null, name: string, videoChoice: string, targetUri: string, isEnabled: boolean, status: string, lastError: string | null, reasonCode: string | null, lastPushedAt: string | null, createdAt: string }>, /** Playback access policy. null/PUBLIC = anyone with the playbackId can watch. */
 playbackPolicy: { type: PlaybackPolicyType, /** Sites allowed to embed the content, as normalized `scheme://host[:port]` origins; `*` allows any. Empty = no restriction. A browser viewer whose Origin (or Referer) is not listed is denied. */
 allowedOrigins: Array<string> } | null, /** Server-resolved Chandler URLs for the stream's poster and sprite thumbnails. Derived from active_ingest_cluster_id + stream_id at SELECT time. Null when the stream has never been live; the poster.jpg 404s until Helmsman uploads its first frame, which the player's fallback chain handles. */
 thumbnailAssets: { posterUrl: string, spriteVttUrl: string, spriteJpgUrl: string, assetKey: string } | null, /** Per-stream retention overrides for DVR and clips. Null when the stream has no overrides set (inherits the tenant default). VOD uploads aren't stream-bound, so they don't appear here. */
@@ -3337,7 +3363,8 @@ name: string, /** Optional description for the stream. */
 description: string | null, /** Secret key for publisher-authenticated ingest; null for pull and managed sources. The key lets its holder publish to the stream, so an API token needs the streams:write scope: without it this field is null and the response carries a FORBIDDEN error at its path. */
 streamKey: string | null, /** Public identifier for playback URLs. */
 playbackId: string, /** Whether DVR recording is enabled for this stream. */
-record: boolean, /** How source media enters the stream. */
+record: boolean, /** INHERIT or OFF for live video renditions. */
+liveVideoAbr: string, /** How source media enters the stream. */
 ingestMode: IngestMode, /** When this stream was created. */
 createdAt: string, /** When this stream was last modified. */
 updatedAt: string, /** How saved recordings are split into chapters. Snapshotted when a recording starts; changes apply from the next broadcast. NONE = live rewind only, nothing kept after the broadcast. */
@@ -3378,7 +3405,7 @@ primaryCodec: string | null, /** Primary video bitrate in kbps. */
 primaryBitrate: number | null, /** Whether the stream has active quality issues. */
 hasIssues: boolean | null, /** Human-readable description of current issues. */
 issuesDescription: string | null } | null, /** Configured multistream push targets for this stream. */
-pushTargets: Array<{ id: string, streamId: string, platform: string | null, name: string, targetUri: string, isEnabled: boolean, status: string, lastError: string | null, reasonCode: string | null, lastPushedAt: string | null, createdAt: string }>, /** Playback access policy. null/PUBLIC = anyone with the playbackId can watch. */
+pushTargets: Array<{ id: string, streamId: string, platform: string | null, name: string, videoChoice: string, targetUri: string, isEnabled: boolean, status: string, lastError: string | null, reasonCode: string | null, lastPushedAt: string | null, createdAt: string }>, /** Playback access policy. null/PUBLIC = anyone with the playbackId can watch. */
 playbackPolicy: { type: PlaybackPolicyType, /** Sites allowed to embed the content, as normalized `scheme://host[:port]` origins; `*` allows any. Empty = no restriction. A browser viewer whose Origin (or Referer) is not listed is denied. */
 allowedOrigins: Array<string> } | null, /** Server-resolved Chandler URLs for the stream's poster and sprite thumbnails. Derived from active_ingest_cluster_id + stream_id at SELECT time. Null when the stream has never been live; the poster.jpg 404s until Helmsman uploads its first frame, which the player's fallback chain handles. */
 thumbnailAssets: { posterUrl: string, spriteVttUrl: string, spriteJpgUrl: string, assetKey: string } | null, /** Per-stream retention overrides for DVR and clips. Null when the stream has no overrides set (inherits the tenant default). VOD uploads aren't stream-bound, so they don't appear here. */
@@ -3392,7 +3419,8 @@ name: string, /** Optional description for the stream. */
 description: string | null, /** Secret key for publisher-authenticated ingest; null for pull and managed sources. The key lets its holder publish to the stream, so an API token needs the streams:write scope: without it this field is null and the response carries a FORBIDDEN error at its path. */
 streamKey: string | null, /** Public identifier for playback URLs. */
 playbackId: string, /** Whether DVR recording is enabled for this stream. */
-record: boolean, /** How source media enters the stream. */
+record: boolean, /** INHERIT or OFF for live video renditions. */
+liveVideoAbr: string, /** How source media enters the stream. */
 ingestMode: IngestMode, /** When this stream was created. */
 createdAt: string, /** When this stream was last modified. */
 updatedAt: string, /** How saved recordings are split into chapters. Snapshotted when a recording starts; changes apply from the next broadcast. NONE = live rewind only, nothing kept after the broadcast. */
@@ -3433,7 +3461,7 @@ primaryCodec: string | null, /** Primary video bitrate in kbps. */
 primaryBitrate: number | null, /** Whether the stream has active quality issues. */
 hasIssues: boolean | null, /** Human-readable description of current issues. */
 issuesDescription: string | null } | null, /** Configured multistream push targets for this stream. */
-pushTargets: Array<{ id: string, streamId: string, platform: string | null, name: string, targetUri: string, isEnabled: boolean, status: string, lastError: string | null, reasonCode: string | null, lastPushedAt: string | null, createdAt: string }>, /** Playback access policy. null/PUBLIC = anyone with the playbackId can watch. */
+pushTargets: Array<{ id: string, streamId: string, platform: string | null, name: string, videoChoice: string, targetUri: string, isEnabled: boolean, status: string, lastError: string | null, reasonCode: string | null, lastPushedAt: string | null, createdAt: string }>, /** Playback access policy. null/PUBLIC = anyone with the playbackId can watch. */
 playbackPolicy: { type: PlaybackPolicyType, /** Sites allowed to embed the content, as normalized `scheme://host[:port]` origins; `*` allows any. Empty = no restriction. A browser viewer whose Origin (or Referer) is not listed is denied. */
 allowedOrigins: Array<string> } | null, /** Server-resolved Chandler URLs for the stream's poster and sprite thumbnails. Derived from active_ingest_cluster_id + stream_id at SELECT time. Null when the stream has never been live; the poster.jpg 404s until Helmsman uploads its first frame, which the player's fallback chain handles. */
 thumbnailAssets: { posterUrl: string, spriteVttUrl: string, spriteJpgUrl: string, assetKey: string } | null, /** Per-stream retention overrides for DVR and clips. Null when the stream has no overrides set (inherits the tenant default). VOD uploads aren't stream-bound, so they don't appear here. */
@@ -3451,7 +3479,8 @@ name: string, /** Optional description for the stream. */
 description: string | null, /** Secret key for publisher-authenticated ingest; null for pull and managed sources. The key lets its holder publish to the stream, so an API token needs the streams:write scope: without it this field is null and the response carries a FORBIDDEN error at its path. */
 streamKey: string | null, /** Public identifier for playback URLs. */
 playbackId: string, /** Whether DVR recording is enabled for this stream. */
-record: boolean, /** How source media enters the stream. */
+record: boolean, /** INHERIT or OFF for live video renditions. */
+liveVideoAbr: string, /** How source media enters the stream. */
 ingestMode: IngestMode, /** When this stream was created. */
 createdAt: string, /** When this stream was last modified. */
 updatedAt: string, /** How saved recordings are split into chapters. Snapshotted when a recording starts; changes apply from the next broadcast. NONE = live rewind only, nothing kept after the broadcast. */
@@ -3492,7 +3521,7 @@ primaryCodec: string | null, /** Primary video bitrate in kbps. */
 primaryBitrate: number | null, /** Whether the stream has active quality issues. */
 hasIssues: boolean | null, /** Human-readable description of current issues. */
 issuesDescription: string | null } | null, /** Configured multistream push targets for this stream. */
-pushTargets: Array<{ id: string, streamId: string, platform: string | null, name: string, targetUri: string, isEnabled: boolean, status: string, lastError: string | null, reasonCode: string | null, lastPushedAt: string | null, createdAt: string }>, /** Playback access policy. null/PUBLIC = anyone with the playbackId can watch. */
+pushTargets: Array<{ id: string, streamId: string, platform: string | null, name: string, videoChoice: string, targetUri: string, isEnabled: boolean, status: string, lastError: string | null, reasonCode: string | null, lastPushedAt: string | null, createdAt: string }>, /** Playback access policy. null/PUBLIC = anyone with the playbackId can watch. */
 playbackPolicy: { type: PlaybackPolicyType, /** Sites allowed to embed the content, as normalized `scheme://host[:port]` origins; `*` allows any. Empty = no restriction. A browser viewer whose Origin (or Referer) is not listed is denied. */
 allowedOrigins: Array<string> } | null, /** Server-resolved Chandler URLs for the stream's poster and sprite thumbnails. Derived from active_ingest_cluster_id + stream_id at SELECT time. Null when the stream has never been live; the poster.jpg 404s until Helmsman uploads its first frame, which the player's fallback chain handles. */
 thumbnailAssets: { posterUrl: string, spriteVttUrl: string, spriteJpgUrl: string, assetKey: string } | null, /** Per-stream retention overrides for DVR and clips. Null when the stream has no overrides set (inherits the tenant default). VOD uploads aren't stream-bound, so they don't appear here. */
@@ -3506,7 +3535,8 @@ name: string, /** Optional description for the stream. */
 description: string | null, /** Secret key for publisher-authenticated ingest; null for pull and managed sources. The key lets its holder publish to the stream, so an API token needs the streams:write scope: without it this field is null and the response carries a FORBIDDEN error at its path. */
 streamKey: string | null, /** Public identifier for playback URLs. */
 playbackId: string, /** Whether DVR recording is enabled for this stream. */
-record: boolean, /** How source media enters the stream. */
+record: boolean, /** INHERIT or OFF for live video renditions. */
+liveVideoAbr: string, /** How source media enters the stream. */
 ingestMode: IngestMode, /** When this stream was created. */
 createdAt: string, /** When this stream was last modified. */
 updatedAt: string, /** How saved recordings are split into chapters. Snapshotted when a recording starts; changes apply from the next broadcast. NONE = live rewind only, nothing kept after the broadcast. */
@@ -3547,7 +3577,7 @@ primaryCodec: string | null, /** Primary video bitrate in kbps. */
 primaryBitrate: number | null, /** Whether the stream has active quality issues. */
 hasIssues: boolean | null, /** Human-readable description of current issues. */
 issuesDescription: string | null } | null, /** Configured multistream push targets for this stream. */
-pushTargets: Array<{ id: string, streamId: string, platform: string | null, name: string, targetUri: string, isEnabled: boolean, status: string, lastError: string | null, reasonCode: string | null, lastPushedAt: string | null, createdAt: string }>, /** Playback access policy. null/PUBLIC = anyone with the playbackId can watch. */
+pushTargets: Array<{ id: string, streamId: string, platform: string | null, name: string, videoChoice: string, targetUri: string, isEnabled: boolean, status: string, lastError: string | null, reasonCode: string | null, lastPushedAt: string | null, createdAt: string }>, /** Playback access policy. null/PUBLIC = anyone with the playbackId can watch. */
 playbackPolicy: { type: PlaybackPolicyType, /** Sites allowed to embed the content, as normalized `scheme://host[:port]` origins; `*` allows any. Empty = no restriction. A browser viewer whose Origin (or Referer) is not listed is denied. */
 allowedOrigins: Array<string> } | null, /** Server-resolved Chandler URLs for the stream's poster and sprite thumbnails. Derived from active_ingest_cluster_id + stream_id at SELECT time. Null when the stream has never been live; the poster.jpg 404s until Helmsman uploads its first frame, which the player's fallback chain handles. */
 thumbnailAssets: { posterUrl: string, spriteVttUrl: string, spriteJpgUrl: string, assetKey: string } | null, /** Per-stream retention overrides for DVR and clips. Null when the stream has no overrides set (inherits the tenant default). VOD uploads aren't stream-bound, so they don't appear here. */
@@ -3564,7 +3594,8 @@ name: string, /** Optional description for the stream. */
 description: string | null, /** Secret key for publisher-authenticated ingest; null for pull and managed sources. The key lets its holder publish to the stream, so an API token needs the streams:write scope: without it this field is null and the response carries a FORBIDDEN error at its path. */
 streamKey: string | null, /** Public identifier for playback URLs. */
 playbackId: string, /** Whether DVR recording is enabled for this stream. */
-record: boolean, /** How source media enters the stream. */
+record: boolean, /** INHERIT or OFF for live video renditions. */
+liveVideoAbr: string, /** How source media enters the stream. */
 ingestMode: IngestMode, /** When this stream was created. */
 createdAt: string, /** How saved recordings are split into chapters. Snapshotted when a recording starts; changes apply from the next broadcast. NONE = live rewind only, nothing kept after the broadcast. */
 dvrChapterMode: DVRChapterMode | null, /** Chapter interval in seconds. Required when dvrChapterMode = FIXED_INTERVAL, ignored otherwise. Minimum 3600 (1 hour). */
@@ -3607,7 +3638,7 @@ primaryCodec: string | null, /** Primary video bitrate in kbps. */
 primaryBitrate: number | null, /** Whether the stream has active quality issues. */
 hasIssues: boolean | null, /** Human-readable description of current issues. */
 issuesDescription: string | null } | null, /** Configured multistream push targets for this stream. */
-pushTargets: Array<{ id: string, streamId: string, platform: string | null, name: string, targetUri: string, isEnabled: boolean, status: string, lastError: string | null, reasonCode: string | null, lastPushedAt: string | null, createdAt: string }>, /** Playback access policy. null/PUBLIC = anyone with the playbackId can watch. */
+pushTargets: Array<{ id: string, streamId: string, platform: string | null, name: string, videoChoice: string, targetUri: string, isEnabled: boolean, status: string, lastError: string | null, reasonCode: string | null, lastPushedAt: string | null, createdAt: string }>, /** Playback access policy. null/PUBLIC = anyone with the playbackId can watch. */
 playbackPolicy: { type: PlaybackPolicyType, /** Sites allowed to embed the content, as normalized `scheme://host[:port]` origins; `*` allows any. Empty = no restriction. A browser viewer whose Origin (or Referer) is not listed is denied. */
 allowedOrigins: Array<string>, /** JWT-policy details, populated when type == JWT. */
 jwt: { /** Allowed signing key IDs. Empty = any active tenant key. */
@@ -3665,7 +3696,8 @@ name: string, /** Optional description for the stream. */
 description: string | null, /** Secret key for publisher-authenticated ingest; null for pull and managed sources. The key lets its holder publish to the stream, so an API token needs the streams:write scope: without it this field is null and the response carries a FORBIDDEN error at its path. */
 streamKey: string | null, /** Public identifier for playback URLs. */
 playbackId: string, /** Whether DVR recording is enabled for this stream. */
-record: boolean, /** How source media enters the stream. */
+record: boolean, /** INHERIT or OFF for live video renditions. */
+liveVideoAbr: string, /** How source media enters the stream. */
 ingestMode: IngestMode, /** When this stream was created. */
 createdAt: string, /** When this stream was last modified. */
 updatedAt: string, /** How saved recordings are split into chapters. Snapshotted when a recording starts; changes apply from the next broadcast. NONE = live rewind only, nothing kept after the broadcast. */
@@ -3678,7 +3710,8 @@ name: string, /** Optional description for the stream. */
 description: string | null, /** Secret key for publisher-authenticated ingest; null for pull and managed sources. The key lets its holder publish to the stream, so an API token needs the streams:write scope: without it this field is null and the response carries a FORBIDDEN error at its path. */
 streamKey: string | null, /** Public identifier for playback URLs. */
 playbackId: string, /** Whether DVR recording is enabled for this stream. */
-record: boolean, /** How source media enters the stream. */
+record: boolean, /** INHERIT or OFF for live video renditions. */
+liveVideoAbr: string, /** How source media enters the stream. */
 ingestMode: IngestMode, /** When this stream was created. */
 createdAt: string, /** When this stream was last modified. */
 updatedAt: string, /** How saved recordings are split into chapters. Snapshotted when a recording starts; changes apply from the next broadcast. NONE = live rewind only, nothing kept after the broadcast. */
@@ -3691,7 +3724,8 @@ name: string, /** Optional description for the stream. */
 description: string | null, /** Secret key for publisher-authenticated ingest; null for pull and managed sources. The key lets its holder publish to the stream, so an API token needs the streams:write scope: without it this field is null and the response carries a FORBIDDEN error at its path. */
 streamKey: string | null, /** Public identifier for playback URLs. */
 playbackId: string, /** Whether DVR recording is enabled for this stream. */
-record: boolean, /** How source media enters the stream. */
+record: boolean, /** INHERIT or OFF for live video renditions. */
+liveVideoAbr: string, /** How source media enters the stream. */
 ingestMode: IngestMode, /** When this stream was created. */
 createdAt: string, /** When this stream was last modified. */
 updatedAt: string, /** How saved recordings are split into chapters. Snapshotted when a recording starts; changes apply from the next broadcast. NONE = live rewind only, nothing kept after the broadcast. */
@@ -3704,7 +3738,8 @@ name: string, /** Optional description for the stream. */
 description: string | null, /** Secret key for publisher-authenticated ingest; null for pull and managed sources. The key lets its holder publish to the stream, so an API token needs the streams:write scope: without it this field is null and the response carries a FORBIDDEN error at its path. */
 streamKey: string | null, /** Public identifier for playback URLs. */
 playbackId: string, /** Whether DVR recording is enabled for this stream. */
-record: boolean, /** How source media enters the stream. */
+record: boolean, /** INHERIT or OFF for live video renditions. */
+liveVideoAbr: string, /** How source media enters the stream. */
 ingestMode: IngestMode, /** When this stream was created. */
 createdAt: string, /** When this stream was last modified. */
 updatedAt: string, /** How saved recordings are split into chapters. Snapshotted when a recording starts; changes apply from the next broadcast. NONE = live rewind only, nothing kept after the broadcast. */
@@ -3717,7 +3752,8 @@ name: string, /** Optional description for the stream. */
 description: string | null, /** Secret key for publisher-authenticated ingest; null for pull and managed sources. The key lets its holder publish to the stream, so an API token needs the streams:write scope: without it this field is null and the response carries a FORBIDDEN error at its path. */
 streamKey: string | null, /** Public identifier for playback URLs. */
 playbackId: string, /** Whether DVR recording is enabled for this stream. */
-record: boolean, /** How source media enters the stream. */
+record: boolean, /** INHERIT or OFF for live video renditions. */
+liveVideoAbr: string, /** How source media enters the stream. */
 ingestMode: IngestMode, /** When this stream was created. */
 createdAt: string, /** When this stream was last modified. */
 updatedAt: string, /** How saved recordings are split into chapters. Snapshotted when a recording starts; changes apply from the next broadcast. NONE = live rewind only, nothing kept after the broadcast. */
@@ -3730,7 +3766,8 @@ name: string, /** Optional description for the stream. */
 description: string | null, /** Secret key for publisher-authenticated ingest; null for pull and managed sources. The key lets its holder publish to the stream, so an API token needs the streams:write scope: without it this field is null and the response carries a FORBIDDEN error at its path. */
 streamKey: string | null, /** Public identifier for playback URLs. */
 playbackId: string, /** Whether DVR recording is enabled for this stream. */
-record: boolean, /** How source media enters the stream. */
+record: boolean, /** INHERIT or OFF for live video renditions. */
+liveVideoAbr: string, /** How source media enters the stream. */
 ingestMode: IngestMode, /** When this stream was created. */
 createdAt: string, /** When this stream was last modified. */
 updatedAt: string, /** How saved recordings are split into chapters. Snapshotted when a recording starts; changes apply from the next broadcast. NONE = live rewind only, nothing kept after the broadcast. */
@@ -3743,7 +3780,8 @@ name: string, /** Optional description for the stream. */
 description: string | null, /** Secret key for publisher-authenticated ingest; null for pull and managed sources. The key lets its holder publish to the stream, so an API token needs the streams:write scope: without it this field is null and the response carries a FORBIDDEN error at its path. */
 streamKey: string | null, /** Public identifier for playback URLs. */
 playbackId: string, /** Whether DVR recording is enabled for this stream. */
-record: boolean, /** How source media enters the stream. */
+record: boolean, /** INHERIT or OFF for live video renditions. */
+liveVideoAbr: string, /** How source media enters the stream. */
 ingestMode: IngestMode, /** When this stream was created. */
 createdAt: string, /** When this stream was last modified. */
 updatedAt: string, /** How saved recordings are split into chapters. Snapshotted when a recording starts; changes apply from the next broadcast. NONE = live rewind only, nothing kept after the broadcast. */
@@ -3762,7 +3800,8 @@ name: string, /** Optional description for the stream. */
 description: string | null, /** Secret key for publisher-authenticated ingest; null for pull and managed sources. The key lets its holder publish to the stream, so an API token needs the streams:write scope: without it this field is null and the response carries a FORBIDDEN error at its path. */
 streamKey: string | null, /** Public identifier for playback URLs. */
 playbackId: string, /** Whether DVR recording is enabled for this stream. */
-record: boolean, /** How source media enters the stream. */
+record: boolean, /** INHERIT or OFF for live video renditions. */
+liveVideoAbr: string, /** How source media enters the stream. */
 ingestMode: IngestMode, /** When this stream was created. */
 createdAt: string, /** When this stream was last modified. */
 updatedAt: string, /** How saved recordings are split into chapters. Snapshotted when a recording starts; changes apply from the next broadcast. NONE = live rewind only, nothing kept after the broadcast. */
@@ -3803,7 +3842,7 @@ primaryCodec: string | null, /** Primary video bitrate in kbps. */
 primaryBitrate: number | null, /** Whether the stream has active quality issues. */
 hasIssues: boolean | null, /** Human-readable description of current issues. */
 issuesDescription: string | null } | null, /** Configured multistream push targets for this stream. */
-pushTargets: Array<{ id: string, streamId: string, platform: string | null, name: string, targetUri: string, isEnabled: boolean, status: string, lastError: string | null, reasonCode: string | null, lastPushedAt: string | null, createdAt: string }>, /** Playback access policy. null/PUBLIC = anyone with the playbackId can watch. */
+pushTargets: Array<{ id: string, streamId: string, platform: string | null, name: string, videoChoice: string, targetUri: string, isEnabled: boolean, status: string, lastError: string | null, reasonCode: string | null, lastPushedAt: string | null, createdAt: string }>, /** Playback access policy. null/PUBLIC = anyone with the playbackId can watch. */
 playbackPolicy: { type: PlaybackPolicyType, /** Sites allowed to embed the content, as normalized `scheme://host[:port]` origins; `*` allows any. Empty = no restriction. A browser viewer whose Origin (or Referer) is not listed is denied. */
 allowedOrigins: Array<string> } | null, /** Server-resolved Chandler URLs for the stream's poster and sprite thumbnails. Derived from active_ingest_cluster_id + stream_id at SELECT time. Null when the stream has never been live; the poster.jpg 404s until Helmsman uploads its first frame, which the player's fallback chain handles. */
 thumbnailAssets: { posterUrl: string, spriteVttUrl: string, spriteJpgUrl: string, assetKey: string } | null, /** Per-stream retention overrides for DVR and clips. Null when the stream has no overrides set (inherits the tenant default). VOD uploads aren't stream-bound, so they don't appear here. */
@@ -3817,7 +3856,8 @@ name: string, /** Optional description for the stream. */
 description: string | null, /** Secret key for publisher-authenticated ingest; null for pull and managed sources. The key lets its holder publish to the stream, so an API token needs the streams:write scope: without it this field is null and the response carries a FORBIDDEN error at its path. */
 streamKey: string | null, /** Public identifier for playback URLs. */
 playbackId: string, /** Whether DVR recording is enabled for this stream. */
-record: boolean, /** How source media enters the stream. */
+record: boolean, /** INHERIT or OFF for live video renditions. */
+liveVideoAbr: string, /** How source media enters the stream. */
 ingestMode: IngestMode, /** When this stream was created. */
 createdAt: string, /** When this stream was last modified. */
 updatedAt: string, /** How saved recordings are split into chapters. Snapshotted when a recording starts; changes apply from the next broadcast. NONE = live rewind only, nothing kept after the broadcast. */
@@ -3858,7 +3898,7 @@ primaryCodec: string | null, /** Primary video bitrate in kbps. */
 primaryBitrate: number | null, /** Whether the stream has active quality issues. */
 hasIssues: boolean | null, /** Human-readable description of current issues. */
 issuesDescription: string | null } | null, /** Configured multistream push targets for this stream. */
-pushTargets: Array<{ id: string, streamId: string, platform: string | null, name: string, targetUri: string, isEnabled: boolean, status: string, lastError: string | null, reasonCode: string | null, lastPushedAt: string | null, createdAt: string }>, /** Playback access policy. null/PUBLIC = anyone with the playbackId can watch. */
+pushTargets: Array<{ id: string, streamId: string, platform: string | null, name: string, videoChoice: string, targetUri: string, isEnabled: boolean, status: string, lastError: string | null, reasonCode: string | null, lastPushedAt: string | null, createdAt: string }>, /** Playback access policy. null/PUBLIC = anyone with the playbackId can watch. */
 playbackPolicy: { type: PlaybackPolicyType, /** Sites allowed to embed the content, as normalized `scheme://host[:port]` origins; `*` allows any. Empty = no restriction. A browser viewer whose Origin (or Referer) is not listed is denied. */
 allowedOrigins: Array<string> } | null, /** Server-resolved Chandler URLs for the stream's poster and sprite thumbnails. Derived from active_ingest_cluster_id + stream_id at SELECT time. Null when the stream has never been live; the poster.jpg 404s until Helmsman uploads its first frame, which the player's fallback chain handles. */
 thumbnailAssets: { posterUrl: string, spriteVttUrl: string, spriteJpgUrl: string, assetKey: string } | null, /** Per-stream retention overrides for DVR and clips. Null when the stream has no overrides set (inherits the tenant default). VOD uploads aren't stream-bound, so they don't appear here. */
@@ -3872,7 +3912,8 @@ name: string, /** Optional description for the stream. */
 description: string | null, /** Secret key for publisher-authenticated ingest; null for pull and managed sources. The key lets its holder publish to the stream, so an API token needs the streams:write scope: without it this field is null and the response carries a FORBIDDEN error at its path. */
 streamKey: string | null, /** Public identifier for playback URLs. */
 playbackId: string, /** Whether DVR recording is enabled for this stream. */
-record: boolean, /** How source media enters the stream. */
+record: boolean, /** INHERIT or OFF for live video renditions. */
+liveVideoAbr: string, /** How source media enters the stream. */
 ingestMode: IngestMode, /** When this stream was created. */
 createdAt: string, /** When this stream was last modified. */
 updatedAt: string, /** How saved recordings are split into chapters. Snapshotted when a recording starts; changes apply from the next broadcast. NONE = live rewind only, nothing kept after the broadcast. */
@@ -3913,7 +3954,7 @@ primaryCodec: string | null, /** Primary video bitrate in kbps. */
 primaryBitrate: number | null, /** Whether the stream has active quality issues. */
 hasIssues: boolean | null, /** Human-readable description of current issues. */
 issuesDescription: string | null } | null, /** Configured multistream push targets for this stream. */
-pushTargets: Array<{ id: string, streamId: string, platform: string | null, name: string, targetUri: string, isEnabled: boolean, status: string, lastError: string | null, reasonCode: string | null, lastPushedAt: string | null, createdAt: string }>, /** Playback access policy. null/PUBLIC = anyone with the playbackId can watch. */
+pushTargets: Array<{ id: string, streamId: string, platform: string | null, name: string, videoChoice: string, targetUri: string, isEnabled: boolean, status: string, lastError: string | null, reasonCode: string | null, lastPushedAt: string | null, createdAt: string }>, /** Playback access policy. null/PUBLIC = anyone with the playbackId can watch. */
 playbackPolicy: { type: PlaybackPolicyType, /** Sites allowed to embed the content, as normalized `scheme://host[:port]` origins; `*` allows any. Empty = no restriction. A browser viewer whose Origin (or Referer) is not listed is denied. */
 allowedOrigins: Array<string> } | null, /** Server-resolved Chandler URLs for the stream's poster and sprite thumbnails. Derived from active_ingest_cluster_id + stream_id at SELECT time. Null when the stream has never been live; the poster.jpg 404s until Helmsman uploads its first frame, which the player's fallback chain handles. */
 thumbnailAssets: { posterUrl: string, spriteVttUrl: string, spriteJpgUrl: string, assetKey: string } | null, /** Per-stream retention overrides for DVR and clips. Null when the stream has no overrides set (inherits the tenant default). VOD uploads aren't stream-bound, so they don't appear here. */
@@ -3929,7 +3970,8 @@ name: string, /** Optional description for the stream. */
 description: string | null, /** Secret key for publisher-authenticated ingest; null for pull and managed sources. The key lets its holder publish to the stream, so an API token needs the streams:write scope: without it this field is null and the response carries a FORBIDDEN error at its path. */
 streamKey: string | null, /** Public identifier for playback URLs. */
 playbackId: string, /** Whether DVR recording is enabled for this stream. */
-record: boolean, /** How source media enters the stream. */
+record: boolean, /** INHERIT or OFF for live video renditions. */
+liveVideoAbr: string, /** How source media enters the stream. */
 ingestMode: IngestMode, /** When this stream was created. */
 createdAt: string, /** When this stream was last modified. */
 updatedAt: string, /** How saved recordings are split into chapters. Snapshotted when a recording starts; changes apply from the next broadcast. NONE = live rewind only, nothing kept after the broadcast. */
@@ -3970,7 +4012,7 @@ primaryCodec: string | null, /** Primary video bitrate in kbps. */
 primaryBitrate: number | null, /** Whether the stream has active quality issues. */
 hasIssues: boolean | null, /** Human-readable description of current issues. */
 issuesDescription: string | null } | null, /** Configured multistream push targets for this stream. */
-pushTargets: Array<{ id: string, streamId: string, platform: string | null, name: string, targetUri: string, isEnabled: boolean, status: string, lastError: string | null, reasonCode: string | null, lastPushedAt: string | null, createdAt: string }>, /** Playback access policy. null/PUBLIC = anyone with the playbackId can watch. */
+pushTargets: Array<{ id: string, streamId: string, platform: string | null, name: string, videoChoice: string, targetUri: string, isEnabled: boolean, status: string, lastError: string | null, reasonCode: string | null, lastPushedAt: string | null, createdAt: string }>, /** Playback access policy. null/PUBLIC = anyone with the playbackId can watch. */
 playbackPolicy: { type: PlaybackPolicyType, /** Sites allowed to embed the content, as normalized `scheme://host[:port]` origins; `*` allows any. Empty = no restriction. A browser viewer whose Origin (or Referer) is not listed is denied. */
 allowedOrigins: Array<string> } | null, /** Server-resolved Chandler URLs for the stream's poster and sprite thumbnails. Derived from active_ingest_cluster_id + stream_id at SELECT time. Null when the stream has never been live; the poster.jpg 404s until Helmsman uploads its first frame, which the player's fallback chain handles. */
 thumbnailAssets: { posterUrl: string, spriteVttUrl: string, spriteJpgUrl: string, assetKey: string } | null, /** Per-stream retention overrides for DVR and clips. Null when the stream has no overrides set (inherits the tenant default). VOD uploads aren't stream-bound, so they don't appear here. */
@@ -3988,7 +4030,8 @@ name: string, /** Optional description for the stream. */
 description: string | null, /** Secret key for publisher-authenticated ingest; null for pull and managed sources. The key lets its holder publish to the stream, so an API token needs the streams:write scope: without it this field is null and the response carries a FORBIDDEN error at its path. */
 streamKey: string | null, /** Public identifier for playback URLs. */
 playbackId: string, /** Whether DVR recording is enabled for this stream. */
-record: boolean, /** How source media enters the stream. */
+record: boolean, /** INHERIT or OFF for live video renditions. */
+liveVideoAbr: string, /** How source media enters the stream. */
 ingestMode: IngestMode, /** When this stream was created. */
 createdAt: string, /** When this stream was last modified. */
 updatedAt: string, /** How saved recordings are split into chapters. Snapshotted when a recording starts; changes apply from the next broadcast. NONE = live rewind only, nothing kept after the broadcast. */
@@ -4029,7 +4072,7 @@ primaryCodec: string | null, /** Primary video bitrate in kbps. */
 primaryBitrate: number | null, /** Whether the stream has active quality issues. */
 hasIssues: boolean | null, /** Human-readable description of current issues. */
 issuesDescription: string | null } | null, /** Configured multistream push targets for this stream. */
-pushTargets: Array<{ id: string, streamId: string, platform: string | null, name: string, targetUri: string, isEnabled: boolean, status: string, lastError: string | null, reasonCode: string | null, lastPushedAt: string | null, createdAt: string }>, /** Playback access policy. null/PUBLIC = anyone with the playbackId can watch. */
+pushTargets: Array<{ id: string, streamId: string, platform: string | null, name: string, videoChoice: string, targetUri: string, isEnabled: boolean, status: string, lastError: string | null, reasonCode: string | null, lastPushedAt: string | null, createdAt: string }>, /** Playback access policy. null/PUBLIC = anyone with the playbackId can watch. */
 playbackPolicy: { type: PlaybackPolicyType, /** Sites allowed to embed the content, as normalized `scheme://host[:port]` origins; `*` allows any. Empty = no restriction. A browser viewer whose Origin (or Referer) is not listed is denied. */
 allowedOrigins: Array<string> } | null, /** Server-resolved Chandler URLs for the stream's poster and sprite thumbnails. Derived from active_ingest_cluster_id + stream_id at SELECT time. Null when the stream has never been live; the poster.jpg 404s until Helmsman uploads its first frame, which the player's fallback chain handles. */
 thumbnailAssets: { posterUrl: string, spriteVttUrl: string, spriteJpgUrl: string, assetKey: string } | null, /** Per-stream retention overrides for DVR and clips. Null when the stream has no overrides set (inherits the tenant default). VOD uploads aren't stream-bound, so they don't appear here. */
@@ -4043,7 +4086,8 @@ name: string, /** Optional description for the stream. */
 description: string | null, /** Secret key for publisher-authenticated ingest; null for pull and managed sources. The key lets its holder publish to the stream, so an API token needs the streams:write scope: without it this field is null and the response carries a FORBIDDEN error at its path. */
 streamKey: string | null, /** Public identifier for playback URLs. */
 playbackId: string, /** Whether DVR recording is enabled for this stream. */
-record: boolean, /** How source media enters the stream. */
+record: boolean, /** INHERIT or OFF for live video renditions. */
+liveVideoAbr: string, /** How source media enters the stream. */
 ingestMode: IngestMode, /** When this stream was created. */
 createdAt: string, /** When this stream was last modified. */
 updatedAt: string, /** How saved recordings are split into chapters. Snapshotted when a recording starts; changes apply from the next broadcast. NONE = live rewind only, nothing kept after the broadcast. */
@@ -4084,7 +4128,7 @@ primaryCodec: string | null, /** Primary video bitrate in kbps. */
 primaryBitrate: number | null, /** Whether the stream has active quality issues. */
 hasIssues: boolean | null, /** Human-readable description of current issues. */
 issuesDescription: string | null } | null, /** Configured multistream push targets for this stream. */
-pushTargets: Array<{ id: string, streamId: string, platform: string | null, name: string, targetUri: string, isEnabled: boolean, status: string, lastError: string | null, reasonCode: string | null, lastPushedAt: string | null, createdAt: string }>, /** Playback access policy. null/PUBLIC = anyone with the playbackId can watch. */
+pushTargets: Array<{ id: string, streamId: string, platform: string | null, name: string, videoChoice: string, targetUri: string, isEnabled: boolean, status: string, lastError: string | null, reasonCode: string | null, lastPushedAt: string | null, createdAt: string }>, /** Playback access policy. null/PUBLIC = anyone with the playbackId can watch. */
 playbackPolicy: { type: PlaybackPolicyType, /** Sites allowed to embed the content, as normalized `scheme://host[:port]` origins; `*` allows any. Empty = no restriction. A browser viewer whose Origin (or Referer) is not listed is denied. */
 allowedOrigins: Array<string> } | null, /** Server-resolved Chandler URLs for the stream's poster and sprite thumbnails. Derived from active_ingest_cluster_id + stream_id at SELECT time. Null when the stream has never been live; the poster.jpg 404s until Helmsman uploads its first frame, which the player's fallback chain handles. */
 thumbnailAssets: { posterUrl: string, spriteVttUrl: string, spriteJpgUrl: string, assetKey: string } | null, /** Per-stream retention overrides for DVR and clips. Null when the stream has no overrides set (inherits the tenant default). VOD uploads aren't stream-bound, so they don't appear here. */
@@ -4098,7 +4142,8 @@ name: string, /** Optional description for the stream. */
 description: string | null, /** Secret key for publisher-authenticated ingest; null for pull and managed sources. The key lets its holder publish to the stream, so an API token needs the streams:write scope: without it this field is null and the response carries a FORBIDDEN error at its path. */
 streamKey: string | null, /** Public identifier for playback URLs. */
 playbackId: string, /** Whether DVR recording is enabled for this stream. */
-record: boolean, /** How source media enters the stream. */
+record: boolean, /** INHERIT or OFF for live video renditions. */
+liveVideoAbr: string, /** How source media enters the stream. */
 ingestMode: IngestMode, /** When this stream was created. */
 createdAt: string, /** When this stream was last modified. */
 updatedAt: string, /** How saved recordings are split into chapters. Snapshotted when a recording starts; changes apply from the next broadcast. NONE = live rewind only, nothing kept after the broadcast. */
@@ -4139,7 +4184,7 @@ primaryCodec: string | null, /** Primary video bitrate in kbps. */
 primaryBitrate: number | null, /** Whether the stream has active quality issues. */
 hasIssues: boolean | null, /** Human-readable description of current issues. */
 issuesDescription: string | null } | null, /** Configured multistream push targets for this stream. */
-pushTargets: Array<{ id: string, streamId: string, platform: string | null, name: string, targetUri: string, isEnabled: boolean, status: string, lastError: string | null, reasonCode: string | null, lastPushedAt: string | null, createdAt: string }>, /** Playback access policy. null/PUBLIC = anyone with the playbackId can watch. */
+pushTargets: Array<{ id: string, streamId: string, platform: string | null, name: string, videoChoice: string, targetUri: string, isEnabled: boolean, status: string, lastError: string | null, reasonCode: string | null, lastPushedAt: string | null, createdAt: string }>, /** Playback access policy. null/PUBLIC = anyone with the playbackId can watch. */
 playbackPolicy: { type: PlaybackPolicyType, /** Sites allowed to embed the content, as normalized `scheme://host[:port]` origins; `*` allows any. Empty = no restriction. A browser viewer whose Origin (or Referer) is not listed is denied. */
 allowedOrigins: Array<string> } | null, /** Server-resolved Chandler URLs for the stream's poster and sprite thumbnails. Derived from active_ingest_cluster_id + stream_id at SELECT time. Null when the stream has never been live; the poster.jpg 404s until Helmsman uploads its first frame, which the player's fallback chain handles. */
 thumbnailAssets: { posterUrl: string, spriteVttUrl: string, spriteJpgUrl: string, assetKey: string } | null, /** Per-stream retention overrides for DVR and clips. Null when the stream has no overrides set (inherits the tenant default). VOD uploads aren't stream-bound, so they don't appear here. */
@@ -4153,7 +4198,8 @@ name: string, /** Optional description for the stream. */
 description: string | null, /** Secret key for publisher-authenticated ingest; null for pull and managed sources. The key lets its holder publish to the stream, so an API token needs the streams:write scope: without it this field is null and the response carries a FORBIDDEN error at its path. */
 streamKey: string | null, /** Public identifier for playback URLs. */
 playbackId: string, /** Whether DVR recording is enabled for this stream. */
-record: boolean, /** How source media enters the stream. */
+record: boolean, /** INHERIT or OFF for live video renditions. */
+liveVideoAbr: string, /** How source media enters the stream. */
 ingestMode: IngestMode, /** When this stream was created. */
 createdAt: string, /** When this stream was last modified. */
 updatedAt: string, /** How saved recordings are split into chapters. Snapshotted when a recording starts; changes apply from the next broadcast. NONE = live rewind only, nothing kept after the broadcast. */
@@ -4194,7 +4240,7 @@ primaryCodec: string | null, /** Primary video bitrate in kbps. */
 primaryBitrate: number | null, /** Whether the stream has active quality issues. */
 hasIssues: boolean | null, /** Human-readable description of current issues. */
 issuesDescription: string | null } | null, /** Configured multistream push targets for this stream. */
-pushTargets: Array<{ id: string, streamId: string, platform: string | null, name: string, targetUri: string, isEnabled: boolean, status: string, lastError: string | null, reasonCode: string | null, lastPushedAt: string | null, createdAt: string }>, /** Playback access policy. null/PUBLIC = anyone with the playbackId can watch. */
+pushTargets: Array<{ id: string, streamId: string, platform: string | null, name: string, videoChoice: string, targetUri: string, isEnabled: boolean, status: string, lastError: string | null, reasonCode: string | null, lastPushedAt: string | null, createdAt: string }>, /** Playback access policy. null/PUBLIC = anyone with the playbackId can watch. */
 playbackPolicy: { type: PlaybackPolicyType, /** Sites allowed to embed the content, as normalized `scheme://host[:port]` origins; `*` allows any. Empty = no restriction. A browser viewer whose Origin (or Referer) is not listed is denied. */
 allowedOrigins: Array<string> } | null, /** Server-resolved Chandler URLs for the stream's poster and sprite thumbnails. Derived from active_ingest_cluster_id + stream_id at SELECT time. Null when the stream has never been live; the poster.jpg 404s until Helmsman uploads its first frame, which the player's fallback chain handles. */
 thumbnailAssets: { posterUrl: string, spriteVttUrl: string, spriteJpgUrl: string, assetKey: string } | null, /** Per-stream retention overrides for DVR and clips. Null when the stream has no overrides set (inherits the tenant default). VOD uploads aren't stream-bound, so they don't appear here. */
@@ -4208,7 +4254,8 @@ name: string, /** Optional description for the stream. */
 description: string | null, /** Secret key for publisher-authenticated ingest; null for pull and managed sources. The key lets its holder publish to the stream, so an API token needs the streams:write scope: without it this field is null and the response carries a FORBIDDEN error at its path. */
 streamKey: string | null, /** Public identifier for playback URLs. */
 playbackId: string, /** Whether DVR recording is enabled for this stream. */
-record: boolean, /** How source media enters the stream. */
+record: boolean, /** INHERIT or OFF for live video renditions. */
+liveVideoAbr: string, /** How source media enters the stream. */
 ingestMode: IngestMode, /** When this stream was created. */
 createdAt: string, /** When this stream was last modified. */
 updatedAt: string, /** How saved recordings are split into chapters. Snapshotted when a recording starts; changes apply from the next broadcast. NONE = live rewind only, nothing kept after the broadcast. */
@@ -4249,7 +4296,7 @@ primaryCodec: string | null, /** Primary video bitrate in kbps. */
 primaryBitrate: number | null, /** Whether the stream has active quality issues. */
 hasIssues: boolean | null, /** Human-readable description of current issues. */
 issuesDescription: string | null } | null, /** Configured multistream push targets for this stream. */
-pushTargets: Array<{ id: string, streamId: string, platform: string | null, name: string, targetUri: string, isEnabled: boolean, status: string, lastError: string | null, reasonCode: string | null, lastPushedAt: string | null, createdAt: string }>, /** Playback access policy. null/PUBLIC = anyone with the playbackId can watch. */
+pushTargets: Array<{ id: string, streamId: string, platform: string | null, name: string, videoChoice: string, targetUri: string, isEnabled: boolean, status: string, lastError: string | null, reasonCode: string | null, lastPushedAt: string | null, createdAt: string }>, /** Playback access policy. null/PUBLIC = anyone with the playbackId can watch. */
 playbackPolicy: { type: PlaybackPolicyType, /** Sites allowed to embed the content, as normalized `scheme://host[:port]` origins; `*` allows any. Empty = no restriction. A browser viewer whose Origin (or Referer) is not listed is denied. */
 allowedOrigins: Array<string> } | null, /** Server-resolved Chandler URLs for the stream's poster and sprite thumbnails. Derived from active_ingest_cluster_id + stream_id at SELECT time. Null when the stream has never been live; the poster.jpg 404s until Helmsman uploads its first frame, which the player's fallback chain handles. */
 thumbnailAssets: { posterUrl: string, spriteVttUrl: string, spriteJpgUrl: string, assetKey: string } | null, /** Per-stream retention overrides for DVR and clips. Null when the stream has no overrides set (inherits the tenant default). VOD uploads aren't stream-bound, so they don't appear here. */
@@ -4263,7 +4310,8 @@ name: string, /** Optional description for the stream. */
 description: string | null, /** Secret key for publisher-authenticated ingest; null for pull and managed sources. The key lets its holder publish to the stream, so an API token needs the streams:write scope: without it this field is null and the response carries a FORBIDDEN error at its path. */
 streamKey: string | null, /** Public identifier for playback URLs. */
 playbackId: string, /** Whether DVR recording is enabled for this stream. */
-record: boolean, /** How source media enters the stream. */
+record: boolean, /** INHERIT or OFF for live video renditions. */
+liveVideoAbr: string, /** How source media enters the stream. */
 ingestMode: IngestMode, /** When this stream was created. */
 createdAt: string, /** When this stream was last modified. */
 updatedAt: string, /** How saved recordings are split into chapters. Snapshotted when a recording starts; changes apply from the next broadcast. NONE = live rewind only, nothing kept after the broadcast. */
@@ -4304,7 +4352,7 @@ primaryCodec: string | null, /** Primary video bitrate in kbps. */
 primaryBitrate: number | null, /** Whether the stream has active quality issues. */
 hasIssues: boolean | null, /** Human-readable description of current issues. */
 issuesDescription: string | null } | null, /** Configured multistream push targets for this stream. */
-pushTargets: Array<{ id: string, streamId: string, platform: string | null, name: string, targetUri: string, isEnabled: boolean, status: string, lastError: string | null, reasonCode: string | null, lastPushedAt: string | null, createdAt: string }>, /** Playback access policy. null/PUBLIC = anyone with the playbackId can watch. */
+pushTargets: Array<{ id: string, streamId: string, platform: string | null, name: string, videoChoice: string, targetUri: string, isEnabled: boolean, status: string, lastError: string | null, reasonCode: string | null, lastPushedAt: string | null, createdAt: string }>, /** Playback access policy. null/PUBLIC = anyone with the playbackId can watch. */
 playbackPolicy: { type: PlaybackPolicyType, /** Sites allowed to embed the content, as normalized `scheme://host[:port]` origins; `*` allows any. Empty = no restriction. A browser viewer whose Origin (or Referer) is not listed is denied. */
 allowedOrigins: Array<string> } | null, /** Server-resolved Chandler URLs for the stream's poster and sprite thumbnails. Derived from active_ingest_cluster_id + stream_id at SELECT time. Null when the stream has never been live; the poster.jpg 404s until Helmsman uploads its first frame, which the player's fallback chain handles. */
 thumbnailAssets: { posterUrl: string, spriteVttUrl: string, spriteJpgUrl: string, assetKey: string } | null, /** Per-stream retention overrides for DVR and clips. Null when the stream has no overrides set (inherits the tenant default). VOD uploads aren't stream-bound, so they don't appear here. */
@@ -5619,7 +5667,7 @@ export type GetArtifactEventsConnectionQueryVariables = Exact<{
 
 export type GetArtifactEventsConnectionQuery = { /** Unified analytics surface providing access to all platform metrics. Combines data from Periscope (historical) and Signalman (real-time). */
 analytics: { /** Lifecycle analytics: stream events, artifacts, connections. */
-lifecycle: { artifactEventsConnection: { totalCount: number, edges: Array<{ cursor: string, node: { id: string, timestamp: string, streamId: string, playbackId: string | null, stage: string, contentType: string | null, startUnix: number | null, stopUnix: number | null, ingestNodeId: string | null, percent: number | null, message: string | null, filePath: string | null, s3Url: string | null, sizeBytes: number | null, expiresAt: number | null, stream: { id: string, streamId: string, name: string, description: string | null, streamKey: string | null, playbackId: string, record: boolean, ingestMode: IngestMode, createdAt: string, updatedAt: string, dvrChapterMode: DVRChapterMode | null, dvrChapterIntervalSeconds: number | null, monitoring: MonitoringToggle, pullSource: { sourceUriRedacted: string, enabled: boolean, class: string } | null, managedSource: { sourceKind: string, alwaysOn: boolean, placementCount: number } | null, sourceLocation: { mode: SourceLocationMode, avoidNodeIds: Array<string> }, metrics: { status: StreamStatus, isLive: boolean, currentViewers: number, startedAt: string | null, updatedAt: string, nodeId: string | null, trackCount: number | null, totalInputs: number | null, uploadedBytes: number, downloadedBytes: number, viewerSeconds: number, packetsSent: number | null, packetsLost: number | null, packetsRetransmitted: number | null, bufferState: string | null, qualityTier: string | null, primaryWidth: number | null, primaryHeight: number | null, primaryFps: number | null, primaryCodec: string | null, primaryBitrate: number | null, hasIssues: boolean | null, issuesDescription: string | null } | null, pushTargets: Array<{ id: string, streamId: string, platform: string | null, name: string, targetUri: string, isEnabled: boolean, status: string, lastError: string | null, reasonCode: string | null, lastPushedAt: string | null, createdAt: string }>, playbackPolicy: { type: PlaybackPolicyType, allowedOrigins: Array<string> } | null, thumbnailAssets: { posterUrl: string, spriteVttUrl: string, spriteJpgUrl: string, assetKey: string } | null, retentionOverrides: { streamId: string, dvrRetentionDaysOverride: number | null, clipRetentionDaysOverride: number | null } | null } | null } }>, pageInfo: { startCursor: string | null, endCursor: string | null, hasNextPage: boolean, hasPreviousPage: boolean } } } } };
+lifecycle: { artifactEventsConnection: { totalCount: number, edges: Array<{ cursor: string, node: { id: string, timestamp: string, streamId: string, playbackId: string | null, stage: string, contentType: string | null, startUnix: number | null, stopUnix: number | null, ingestNodeId: string | null, percent: number | null, message: string | null, filePath: string | null, s3Url: string | null, sizeBytes: number | null, expiresAt: number | null, stream: { id: string, streamId: string, name: string, description: string | null, streamKey: string | null, playbackId: string, record: boolean, liveVideoAbr: string, ingestMode: IngestMode, createdAt: string, updatedAt: string, dvrChapterMode: DVRChapterMode | null, dvrChapterIntervalSeconds: number | null, monitoring: MonitoringToggle, pullSource: { sourceUriRedacted: string, enabled: boolean, class: string } | null, managedSource: { sourceKind: string, alwaysOn: boolean, placementCount: number } | null, sourceLocation: { mode: SourceLocationMode, avoidNodeIds: Array<string> }, metrics: { status: StreamStatus, isLive: boolean, currentViewers: number, startedAt: string | null, updatedAt: string, nodeId: string | null, trackCount: number | null, totalInputs: number | null, uploadedBytes: number, downloadedBytes: number, viewerSeconds: number, packetsSent: number | null, packetsLost: number | null, packetsRetransmitted: number | null, bufferState: string | null, qualityTier: string | null, primaryWidth: number | null, primaryHeight: number | null, primaryFps: number | null, primaryCodec: string | null, primaryBitrate: number | null, hasIssues: boolean | null, issuesDescription: string | null } | null, pushTargets: Array<{ id: string, streamId: string, platform: string | null, name: string, videoChoice: string, targetUri: string, isEnabled: boolean, status: string, lastError: string | null, reasonCode: string | null, lastPushedAt: string | null, createdAt: string }>, playbackPolicy: { type: PlaybackPolicyType, allowedOrigins: Array<string> } | null, thumbnailAssets: { posterUrl: string, spriteVttUrl: string, spriteJpgUrl: string, assetKey: string } | null, retentionOverrides: { streamId: string, dvrRetentionDaysOverride: number | null, clipRetentionDaysOverride: number | null } | null } | null } }>, pageInfo: { startCursor: string | null, endCursor: string | null, hasNextPage: boolean, hasPreviousPage: boolean } } } } };
 
 export type GetArtifactNodeCopiesQueryVariables = Exact<{
   artifactHash: string;
@@ -5642,7 +5690,7 @@ export type GetArtifactStatesConnectionQueryVariables = Exact<{
 
 export type GetArtifactStatesConnectionQuery = { /** Unified analytics surface providing access to all platform metrics. Combines data from Periscope (historical) and Signalman (real-time). */
 analytics: { /** Lifecycle analytics: stream events, artifacts, connections. */
-lifecycle: { artifactStatesConnection: { totalCount: number, edges: Array<{ cursor: string, node: { streamId: string, playbackId: string | null, contentType: string, stage: string, progressPercent: number, errorMessage: string | null, requestedAt: string, startedAt: string | null, completedAt: string | null, clipStartUnix: number | null, clipStopUnix: number | null, segmentCount: number | null, manifestPath: string | null, filePath: string | null, s3Url: string | null, sizeBytes: number | null, processingNodeId: string | null, expiresAt: string | null, stream: { id: string, streamId: string, name: string, description: string | null, streamKey: string | null, playbackId: string, record: boolean, ingestMode: IngestMode, createdAt: string, updatedAt: string, dvrChapterMode: DVRChapterMode | null, dvrChapterIntervalSeconds: number | null, monitoring: MonitoringToggle, pullSource: { sourceUriRedacted: string, enabled: boolean, class: string } | null, managedSource: { sourceKind: string, alwaysOn: boolean, placementCount: number } | null, sourceLocation: { mode: SourceLocationMode, avoidNodeIds: Array<string> }, metrics: { status: StreamStatus, isLive: boolean, currentViewers: number, startedAt: string | null, updatedAt: string, nodeId: string | null, trackCount: number | null, totalInputs: number | null, uploadedBytes: number, downloadedBytes: number, viewerSeconds: number, packetsSent: number | null, packetsLost: number | null, packetsRetransmitted: number | null, bufferState: string | null, qualityTier: string | null, primaryWidth: number | null, primaryHeight: number | null, primaryFps: number | null, primaryCodec: string | null, primaryBitrate: number | null, hasIssues: boolean | null, issuesDescription: string | null } | null, pushTargets: Array<{ id: string, streamId: string, platform: string | null, name: string, targetUri: string, isEnabled: boolean, status: string, lastError: string | null, reasonCode: string | null, lastPushedAt: string | null, createdAt: string }>, playbackPolicy: { type: PlaybackPolicyType, allowedOrigins: Array<string> } | null, thumbnailAssets: { posterUrl: string, spriteVttUrl: string, spriteJpgUrl: string, assetKey: string } | null, retentionOverrides: { streamId: string, dvrRetentionDaysOverride: number | null, clipRetentionDaysOverride: number | null } | null } | null } }>, pageInfo: { startCursor: string | null, endCursor: string | null, hasNextPage: boolean, hasPreviousPage: boolean } } } } };
+lifecycle: { artifactStatesConnection: { totalCount: number, edges: Array<{ cursor: string, node: { streamId: string, playbackId: string | null, contentType: string, stage: string, progressPercent: number, errorMessage: string | null, requestedAt: string, startedAt: string | null, completedAt: string | null, clipStartUnix: number | null, clipStopUnix: number | null, segmentCount: number | null, manifestPath: string | null, filePath: string | null, s3Url: string | null, sizeBytes: number | null, processingNodeId: string | null, expiresAt: string | null, stream: { id: string, streamId: string, name: string, description: string | null, streamKey: string | null, playbackId: string, record: boolean, liveVideoAbr: string, ingestMode: IngestMode, createdAt: string, updatedAt: string, dvrChapterMode: DVRChapterMode | null, dvrChapterIntervalSeconds: number | null, monitoring: MonitoringToggle, pullSource: { sourceUriRedacted: string, enabled: boolean, class: string } | null, managedSource: { sourceKind: string, alwaysOn: boolean, placementCount: number } | null, sourceLocation: { mode: SourceLocationMode, avoidNodeIds: Array<string> }, metrics: { status: StreamStatus, isLive: boolean, currentViewers: number, startedAt: string | null, updatedAt: string, nodeId: string | null, trackCount: number | null, totalInputs: number | null, uploadedBytes: number, downloadedBytes: number, viewerSeconds: number, packetsSent: number | null, packetsLost: number | null, packetsRetransmitted: number | null, bufferState: string | null, qualityTier: string | null, primaryWidth: number | null, primaryHeight: number | null, primaryFps: number | null, primaryCodec: string | null, primaryBitrate: number | null, hasIssues: boolean | null, issuesDescription: string | null } | null, pushTargets: Array<{ id: string, streamId: string, platform: string | null, name: string, videoChoice: string, targetUri: string, isEnabled: boolean, status: string, lastError: string | null, reasonCode: string | null, lastPushedAt: string | null, createdAt: string }>, playbackPolicy: { type: PlaybackPolicyType, allowedOrigins: Array<string> } | null, thumbnailAssets: { posterUrl: string, spriteVttUrl: string, spriteJpgUrl: string, assetKey: string } | null, retentionOverrides: { streamId: string, dvrRetentionDaysOverride: number | null, clipRetentionDaysOverride: number | null } | null } | null } }>, pageInfo: { startCursor: string | null, endCursor: string | null, hasNextPage: boolean, hasPreviousPage: boolean } } } } };
 
 export type GetBalanceTransactionsConnectionQueryVariables = Exact<{
   page?: ConnectionInput | null | undefined;
@@ -5787,7 +5835,7 @@ export type GetClientQoeConnectionQueryVariables = Exact<{
 
 export type GetClientQoeConnectionQuery = { /** Unified analytics surface providing access to all platform metrics. Combines data from Periscope (historical) and Signalman (real-time). */
 analytics: { /** Health analytics: stream quality, rebuffering, client QoE. */
-health: { clientQoeConnection: { totalCount: number, edges: Array<{ cursor: string, node: { id: string, timestamp: string, streamId: string, nodeId: string, activeSessions: number, avgBandwidthIn: number, avgBandwidthOut: number, avgConnectionTime: number, packetLossRate: number | null, stream: { id: string, streamId: string, name: string, description: string | null, streamKey: string | null, playbackId: string, record: boolean, ingestMode: IngestMode, createdAt: string, updatedAt: string, dvrChapterMode: DVRChapterMode | null, dvrChapterIntervalSeconds: number | null, monitoring: MonitoringToggle, pullSource: { sourceUriRedacted: string, enabled: boolean, class: string } | null, managedSource: { sourceKind: string, alwaysOn: boolean, placementCount: number } | null, sourceLocation: { mode: SourceLocationMode, avoidNodeIds: Array<string> }, metrics: { status: StreamStatus, isLive: boolean, currentViewers: number, startedAt: string | null, updatedAt: string, nodeId: string | null, trackCount: number | null, totalInputs: number | null, uploadedBytes: number, downloadedBytes: number, viewerSeconds: number, packetsSent: number | null, packetsLost: number | null, packetsRetransmitted: number | null, bufferState: string | null, qualityTier: string | null, primaryWidth: number | null, primaryHeight: number | null, primaryFps: number | null, primaryCodec: string | null, primaryBitrate: number | null, hasIssues: boolean | null, issuesDescription: string | null } | null, pushTargets: Array<{ id: string, streamId: string, platform: string | null, name: string, targetUri: string, isEnabled: boolean, status: string, lastError: string | null, reasonCode: string | null, lastPushedAt: string | null, createdAt: string }>, playbackPolicy: { type: PlaybackPolicyType, allowedOrigins: Array<string> } | null, thumbnailAssets: { posterUrl: string, spriteVttUrl: string, spriteJpgUrl: string, assetKey: string } | null, retentionOverrides: { streamId: string, dvrRetentionDaysOverride: number | null, clipRetentionDaysOverride: number | null } | null } | null } }>, pageInfo: { startCursor: string | null, endCursor: string | null, hasNextPage: boolean, hasPreviousPage: boolean } } } } };
+health: { clientQoeConnection: { totalCount: number, edges: Array<{ cursor: string, node: { id: string, timestamp: string, streamId: string, nodeId: string, activeSessions: number, avgBandwidthIn: number, avgBandwidthOut: number, avgConnectionTime: number, packetLossRate: number | null, stream: { id: string, streamId: string, name: string, description: string | null, streamKey: string | null, playbackId: string, record: boolean, liveVideoAbr: string, ingestMode: IngestMode, createdAt: string, updatedAt: string, dvrChapterMode: DVRChapterMode | null, dvrChapterIntervalSeconds: number | null, monitoring: MonitoringToggle, pullSource: { sourceUriRedacted: string, enabled: boolean, class: string } | null, managedSource: { sourceKind: string, alwaysOn: boolean, placementCount: number } | null, sourceLocation: { mode: SourceLocationMode, avoidNodeIds: Array<string> }, metrics: { status: StreamStatus, isLive: boolean, currentViewers: number, startedAt: string | null, updatedAt: string, nodeId: string | null, trackCount: number | null, totalInputs: number | null, uploadedBytes: number, downloadedBytes: number, viewerSeconds: number, packetsSent: number | null, packetsLost: number | null, packetsRetransmitted: number | null, bufferState: string | null, qualityTier: string | null, primaryWidth: number | null, primaryHeight: number | null, primaryFps: number | null, primaryCodec: string | null, primaryBitrate: number | null, hasIssues: boolean | null, issuesDescription: string | null } | null, pushTargets: Array<{ id: string, streamId: string, platform: string | null, name: string, videoChoice: string, targetUri: string, isEnabled: boolean, status: string, lastError: string | null, reasonCode: string | null, lastPushedAt: string | null, createdAt: string }>, playbackPolicy: { type: PlaybackPolicyType, allowedOrigins: Array<string> } | null, thumbnailAssets: { posterUrl: string, spriteVttUrl: string, spriteJpgUrl: string, assetKey: string } | null, retentionOverrides: { streamId: string, dvrRetentionDaysOverride: number | null, clipRetentionDaysOverride: number | null } | null } | null } }>, pageInfo: { startCursor: string | null, endCursor: string | null, hasNextPage: boolean, hasPreviousPage: boolean } } } } };
 
 export type GetClientQoeSummaryQueryVariables = Exact<{
   streamId?: string | null | undefined;
@@ -5971,7 +6019,7 @@ export type GetConnectionEventsConnectionQueryVariables = Exact<{
 
 export type GetConnectionEventsConnectionQuery = { /** Unified analytics surface providing access to all platform metrics. Combines data from Periscope (historical) and Signalman (real-time). */
 analytics: { /** Lifecycle analytics: stream events, artifacts, connections. */
-lifecycle: { connectionEventsConnection: { totalCount: number, edges: Array<{ cursor: string, node: { id: string, eventId: string, timestamp: string, streamId: string, sessionId: string, connectionAddr: string | null, connector: string, nodeId: string, countryCode: string | null, city: string | null, latitude: number | null, longitude: number | null, eventType: string, requestUrl: string | null, clusterId: string, originClusterId: string | null, controlCellId: string | null, sessionDurationSeconds: number | null, bytesTransferred: number | null, stream: { id: string, streamId: string, name: string, description: string | null, streamKey: string | null, playbackId: string, record: boolean, ingestMode: IngestMode, createdAt: string, updatedAt: string, dvrChapterMode: DVRChapterMode | null, dvrChapterIntervalSeconds: number | null, monitoring: MonitoringToggle, pullSource: { sourceUriRedacted: string, enabled: boolean, class: string } | null, managedSource: { sourceKind: string, alwaysOn: boolean, placementCount: number } | null, sourceLocation: { mode: SourceLocationMode, avoidNodeIds: Array<string> }, metrics: { status: StreamStatus, isLive: boolean, currentViewers: number, startedAt: string | null, updatedAt: string, nodeId: string | null, trackCount: number | null, totalInputs: number | null, uploadedBytes: number, downloadedBytes: number, viewerSeconds: number, packetsSent: number | null, packetsLost: number | null, packetsRetransmitted: number | null, bufferState: string | null, qualityTier: string | null, primaryWidth: number | null, primaryHeight: number | null, primaryFps: number | null, primaryCodec: string | null, primaryBitrate: number | null, hasIssues: boolean | null, issuesDescription: string | null } | null, pushTargets: Array<{ id: string, streamId: string, platform: string | null, name: string, targetUri: string, isEnabled: boolean, status: string, lastError: string | null, reasonCode: string | null, lastPushedAt: string | null, createdAt: string }>, playbackPolicy: { type: PlaybackPolicyType, allowedOrigins: Array<string> } | null, thumbnailAssets: { posterUrl: string, spriteVttUrl: string, spriteJpgUrl: string, assetKey: string } | null, retentionOverrides: { streamId: string, dvrRetentionDaysOverride: number | null, clipRetentionDaysOverride: number | null } | null } | null, clientBucket: { h3Index: string, resolution: number } | null, nodeBucket: { h3Index: string, resolution: number } | null } }>, pageInfo: { startCursor: string | null, endCursor: string | null, hasNextPage: boolean, hasPreviousPage: boolean } } } } };
+lifecycle: { connectionEventsConnection: { totalCount: number, edges: Array<{ cursor: string, node: { id: string, eventId: string, timestamp: string, streamId: string, sessionId: string, connectionAddr: string | null, connector: string, nodeId: string, countryCode: string | null, city: string | null, latitude: number | null, longitude: number | null, eventType: string, requestUrl: string | null, clusterId: string, originClusterId: string | null, controlCellId: string | null, sessionDurationSeconds: number | null, bytesTransferred: number | null, stream: { id: string, streamId: string, name: string, description: string | null, streamKey: string | null, playbackId: string, record: boolean, liveVideoAbr: string, ingestMode: IngestMode, createdAt: string, updatedAt: string, dvrChapterMode: DVRChapterMode | null, dvrChapterIntervalSeconds: number | null, monitoring: MonitoringToggle, pullSource: { sourceUriRedacted: string, enabled: boolean, class: string } | null, managedSource: { sourceKind: string, alwaysOn: boolean, placementCount: number } | null, sourceLocation: { mode: SourceLocationMode, avoidNodeIds: Array<string> }, metrics: { status: StreamStatus, isLive: boolean, currentViewers: number, startedAt: string | null, updatedAt: string, nodeId: string | null, trackCount: number | null, totalInputs: number | null, uploadedBytes: number, downloadedBytes: number, viewerSeconds: number, packetsSent: number | null, packetsLost: number | null, packetsRetransmitted: number | null, bufferState: string | null, qualityTier: string | null, primaryWidth: number | null, primaryHeight: number | null, primaryFps: number | null, primaryCodec: string | null, primaryBitrate: number | null, hasIssues: boolean | null, issuesDescription: string | null } | null, pushTargets: Array<{ id: string, streamId: string, platform: string | null, name: string, videoChoice: string, targetUri: string, isEnabled: boolean, status: string, lastError: string | null, reasonCode: string | null, lastPushedAt: string | null, createdAt: string }>, playbackPolicy: { type: PlaybackPolicyType, allowedOrigins: Array<string> } | null, thumbnailAssets: { posterUrl: string, spriteVttUrl: string, spriteJpgUrl: string, assetKey: string } | null, retentionOverrides: { streamId: string, dvrRetentionDaysOverride: number | null, clipRetentionDaysOverride: number | null } | null } | null, clientBucket: { h3Index: string, resolution: number } | null, nodeBucket: { h3Index: string, resolution: number } | null } }>, pageInfo: { startCursor: string | null, endCursor: string | null, hasNextPage: boolean, hasPreviousPage: boolean } } } } };
 
 export type GetConversationQueryVariables = Exact<{
   id: string;
@@ -6072,7 +6120,8 @@ name: string, /** Optional description for the stream. */
 description: string | null, /** Secret key for publisher-authenticated ingest; null for pull and managed sources. The key lets its holder publish to the stream, so an API token needs the streams:write scope: without it this field is null and the response carries a FORBIDDEN error at its path. */
 streamKey: string | null, /** Public identifier for playback URLs. */
 playbackId: string, /** Whether DVR recording is enabled for this stream. */
-record: boolean, /** How source media enters the stream. */
+record: boolean, /** INHERIT or OFF for live video renditions. */
+liveVideoAbr: string, /** How source media enters the stream. */
 ingestMode: IngestMode, /** When this stream was created. */
 createdAt: string, /** When this stream was last modified. */
 updatedAt: string, /** How saved recordings are split into chapters. Snapshotted when a recording starts; changes apply from the next broadcast. NONE = live rewind only, nothing kept after the broadcast. */
@@ -6113,7 +6162,7 @@ primaryCodec: string | null, /** Primary video bitrate in kbps. */
 primaryBitrate: number | null, /** Whether the stream has active quality issues. */
 hasIssues: boolean | null, /** Human-readable description of current issues. */
 issuesDescription: string | null } | null, /** Configured multistream push targets for this stream. */
-pushTargets: Array<{ id: string, streamId: string, platform: string | null, name: string, targetUri: string, isEnabled: boolean, status: string, lastError: string | null, reasonCode: string | null, lastPushedAt: string | null, createdAt: string }>, /** Playback access policy. null/PUBLIC = anyone with the playbackId can watch. */
+pushTargets: Array<{ id: string, streamId: string, platform: string | null, name: string, videoChoice: string, targetUri: string, isEnabled: boolean, status: string, lastError: string | null, reasonCode: string | null, lastPushedAt: string | null, createdAt: string }>, /** Playback access policy. null/PUBLIC = anyone with the playbackId can watch. */
 playbackPolicy: { type: PlaybackPolicyType, /** Sites allowed to embed the content, as normalized `scheme://host[:port]` origins; `*` allows any. Empty = no restriction. A browser viewer whose Origin (or Referer) is not listed is denied. */
 allowedOrigins: Array<string> } | null, /** Server-resolved Chandler URLs for the stream's poster and sprite thumbnails. Derived from active_ingest_cluster_id + stream_id at SELECT time. Null when the stream has never been live; the poster.jpg 404s until Helmsman uploads its first frame, which the player's fallback chain handles. */
 thumbnailAssets: { posterUrl: string, spriteVttUrl: string, spriteJpgUrl: string, assetKey: string } | null, /** Per-stream retention overrides for DVR and clips. Null when the stream has no overrides set (inherits the tenant default). VOD uploads aren't stream-bound, so they don't appear here. */
@@ -6406,7 +6455,8 @@ name: string, /** Optional description for the stream. */
 description: string | null, /** Secret key for publisher-authenticated ingest; null for pull and managed sources. The key lets its holder publish to the stream, so an API token needs the streams:write scope: without it this field is null and the response carries a FORBIDDEN error at its path. */
 streamKey: string | null, /** Public identifier for playback URLs. */
 playbackId: string, /** Whether DVR recording is enabled for this stream. */
-record: boolean, /** How source media enters the stream. */
+record: boolean, /** INHERIT or OFF for live video renditions. */
+liveVideoAbr: string, /** How source media enters the stream. */
 ingestMode: IngestMode, /** When this stream was created. */
 createdAt: string, /** When this stream was last modified. */
 updatedAt: string, /** How saved recordings are split into chapters. Snapshotted when a recording starts; changes apply from the next broadcast. NONE = live rewind only, nothing kept after the broadcast. */
@@ -6447,7 +6497,7 @@ primaryCodec: string | null, /** Primary video bitrate in kbps. */
 primaryBitrate: number | null, /** Whether the stream has active quality issues. */
 hasIssues: boolean | null, /** Human-readable description of current issues. */
 issuesDescription: string | null } | null, /** Configured multistream push targets for this stream. */
-pushTargets: Array<{ id: string, streamId: string, platform: string | null, name: string, targetUri: string, isEnabled: boolean, status: string, lastError: string | null, reasonCode: string | null, lastPushedAt: string | null, createdAt: string }>, /** Playback access policy. null/PUBLIC = anyone with the playbackId can watch. */
+pushTargets: Array<{ id: string, streamId: string, platform: string | null, name: string, videoChoice: string, targetUri: string, isEnabled: boolean, status: string, lastError: string | null, reasonCode: string | null, lastPushedAt: string | null, createdAt: string }>, /** Playback access policy. null/PUBLIC = anyone with the playbackId can watch. */
 playbackPolicy: { type: PlaybackPolicyType, /** Sites allowed to embed the content, as normalized `scheme://host[:port]` origins; `*` allows any. Empty = no restriction. A browser viewer whose Origin (or Referer) is not listed is denied. */
 allowedOrigins: Array<string> } | null, /** Server-resolved Chandler URLs for the stream's poster and sprite thumbnails. Derived from active_ingest_cluster_id + stream_id at SELECT time. Null when the stream has never been live; the poster.jpg 404s until Helmsman uploads its first frame, which the player's fallback chain handles. */
 thumbnailAssets: { posterUrl: string, spriteVttUrl: string, spriteJpgUrl: string, assetKey: string } | null, /** Per-stream retention overrides for DVR and clips. Null when the stream has no overrides set (inherits the tenant default). VOD uploads aren't stream-bound, so they don't appear here. */
@@ -6461,7 +6511,8 @@ name: string, /** Optional description for the stream. */
 description: string | null, /** Secret key for publisher-authenticated ingest; null for pull and managed sources. The key lets its holder publish to the stream, so an API token needs the streams:write scope: without it this field is null and the response carries a FORBIDDEN error at its path. */
 streamKey: string | null, /** Public identifier for playback URLs. */
 playbackId: string, /** Whether DVR recording is enabled for this stream. */
-record: boolean, /** How source media enters the stream. */
+record: boolean, /** INHERIT or OFF for live video renditions. */
+liveVideoAbr: string, /** How source media enters the stream. */
 ingestMode: IngestMode, /** When this stream was created. */
 createdAt: string, /** When this stream was last modified. */
 updatedAt: string, /** How saved recordings are split into chapters. Snapshotted when a recording starts; changes apply from the next broadcast. NONE = live rewind only, nothing kept after the broadcast. */
@@ -6502,7 +6553,7 @@ primaryCodec: string | null, /** Primary video bitrate in kbps. */
 primaryBitrate: number | null, /** Whether the stream has active quality issues. */
 hasIssues: boolean | null, /** Human-readable description of current issues. */
 issuesDescription: string | null } | null, /** Configured multistream push targets for this stream. */
-pushTargets: Array<{ id: string, streamId: string, platform: string | null, name: string, targetUri: string, isEnabled: boolean, status: string, lastError: string | null, reasonCode: string | null, lastPushedAt: string | null, createdAt: string }>, /** Playback access policy. null/PUBLIC = anyone with the playbackId can watch. */
+pushTargets: Array<{ id: string, streamId: string, platform: string | null, name: string, videoChoice: string, targetUri: string, isEnabled: boolean, status: string, lastError: string | null, reasonCode: string | null, lastPushedAt: string | null, createdAt: string }>, /** Playback access policy. null/PUBLIC = anyone with the playbackId can watch. */
 playbackPolicy: { type: PlaybackPolicyType, /** Sites allowed to embed the content, as normalized `scheme://host[:port]` origins; `*` allows any. Empty = no restriction. A browser viewer whose Origin (or Referer) is not listed is denied. */
 allowedOrigins: Array<string> } | null, /** Server-resolved Chandler URLs for the stream's poster and sprite thumbnails. Derived from active_ingest_cluster_id + stream_id at SELECT time. Null when the stream has never been live; the poster.jpg 404s until Helmsman uploads its first frame, which the player's fallback chain handles. */
 thumbnailAssets: { posterUrl: string, spriteVttUrl: string, spriteJpgUrl: string, assetKey: string } | null, /** Per-stream retention overrides for DVR and clips. Null when the stream has no overrides set (inherits the tenant default). VOD uploads aren't stream-bound, so they don't appear here. */
@@ -6539,7 +6590,8 @@ name: string, /** Optional description for the stream. */
 description: string | null, /** Secret key for publisher-authenticated ingest; null for pull and managed sources. The key lets its holder publish to the stream, so an API token needs the streams:write scope: without it this field is null and the response carries a FORBIDDEN error at its path. */
 streamKey: string | null, /** Public identifier for playback URLs. */
 playbackId: string, /** Whether DVR recording is enabled for this stream. */
-record: boolean, /** How source media enters the stream. */
+record: boolean, /** INHERIT or OFF for live video renditions. */
+liveVideoAbr: string, /** How source media enters the stream. */
 ingestMode: IngestMode, /** When this stream was created. */
 createdAt: string, /** When this stream was last modified. */
 updatedAt: string, /** How saved recordings are split into chapters. Snapshotted when a recording starts; changes apply from the next broadcast. NONE = live rewind only, nothing kept after the broadcast. */
@@ -6580,7 +6632,7 @@ primaryCodec: string | null, /** Primary video bitrate in kbps. */
 primaryBitrate: number | null, /** Whether the stream has active quality issues. */
 hasIssues: boolean | null, /** Human-readable description of current issues. */
 issuesDescription: string | null } | null, /** Configured multistream push targets for this stream. */
-pushTargets: Array<{ id: string, streamId: string, platform: string | null, name: string, targetUri: string, isEnabled: boolean, status: string, lastError: string | null, reasonCode: string | null, lastPushedAt: string | null, createdAt: string }>, /** Playback access policy. null/PUBLIC = anyone with the playbackId can watch. */
+pushTargets: Array<{ id: string, streamId: string, platform: string | null, name: string, videoChoice: string, targetUri: string, isEnabled: boolean, status: string, lastError: string | null, reasonCode: string | null, lastPushedAt: string | null, createdAt: string }>, /** Playback access policy. null/PUBLIC = anyone with the playbackId can watch. */
 playbackPolicy: { type: PlaybackPolicyType, /** Sites allowed to embed the content, as normalized `scheme://host[:port]` origins; `*` allows any. Empty = no restriction. A browser viewer whose Origin (or Referer) is not listed is denied. */
 allowedOrigins: Array<string> } | null, /** Server-resolved Chandler URLs for the stream's poster and sprite thumbnails. Derived from active_ingest_cluster_id + stream_id at SELECT time. Null when the stream has never been live; the poster.jpg 404s until Helmsman uploads its first frame, which the player's fallback chain handles. */
 thumbnailAssets: { posterUrl: string, spriteVttUrl: string, spriteJpgUrl: string, assetKey: string } | null, /** Per-stream retention overrides for DVR and clips. Null when the stream has no overrides set (inherits the tenant default). VOD uploads aren't stream-bound, so they don't appear here. */
@@ -6634,7 +6686,8 @@ name: string, /** Optional description for the stream. */
 description: string | null, /** Secret key for publisher-authenticated ingest; null for pull and managed sources. The key lets its holder publish to the stream, so an API token needs the streams:write scope: without it this field is null and the response carries a FORBIDDEN error at its path. */
 streamKey: string | null, /** Public identifier for playback URLs. */
 playbackId: string, /** Whether DVR recording is enabled for this stream. */
-record: boolean, /** How source media enters the stream. */
+record: boolean, /** INHERIT or OFF for live video renditions. */
+liveVideoAbr: string, /** How source media enters the stream. */
 ingestMode: IngestMode, /** When this stream was created. */
 createdAt: string, /** When this stream was last modified. */
 updatedAt: string, /** How saved recordings are split into chapters. Snapshotted when a recording starts; changes apply from the next broadcast. NONE = live rewind only, nothing kept after the broadcast. */
@@ -6675,7 +6728,7 @@ primaryCodec: string | null, /** Primary video bitrate in kbps. */
 primaryBitrate: number | null, /** Whether the stream has active quality issues. */
 hasIssues: boolean | null, /** Human-readable description of current issues. */
 issuesDescription: string | null } | null, /** Configured multistream push targets for this stream. */
-pushTargets: Array<{ id: string, streamId: string, platform: string | null, name: string, targetUri: string, isEnabled: boolean, status: string, lastError: string | null, reasonCode: string | null, lastPushedAt: string | null, createdAt: string }>, /** Playback access policy. null/PUBLIC = anyone with the playbackId can watch. */
+pushTargets: Array<{ id: string, streamId: string, platform: string | null, name: string, videoChoice: string, targetUri: string, isEnabled: boolean, status: string, lastError: string | null, reasonCode: string | null, lastPushedAt: string | null, createdAt: string }>, /** Playback access policy. null/PUBLIC = anyone with the playbackId can watch. */
 playbackPolicy: { type: PlaybackPolicyType, /** Sites allowed to embed the content, as normalized `scheme://host[:port]` origins; `*` allows any. Empty = no restriction. A browser viewer whose Origin (or Referer) is not listed is denied. */
 allowedOrigins: Array<string> } | null, /** Server-resolved Chandler URLs for the stream's poster and sprite thumbnails. Derived from active_ingest_cluster_id + stream_id at SELECT time. Null when the stream has never been live; the poster.jpg 404s until Helmsman uploads its first frame, which the player's fallback chain handles. */
 thumbnailAssets: { posterUrl: string, spriteVttUrl: string, spriteJpgUrl: string, assetKey: string } | null, /** Per-stream retention overrides for DVR and clips. Null when the stream has no overrides set (inherits the tenant default). VOD uploads aren't stream-bound, so they don't appear here. */
@@ -6747,7 +6800,8 @@ name: string, /** Optional description for the stream. */
 description: string | null, /** Secret key for publisher-authenticated ingest; null for pull and managed sources. The key lets its holder publish to the stream, so an API token needs the streams:write scope: without it this field is null and the response carries a FORBIDDEN error at its path. */
 streamKey: string | null, /** Public identifier for playback URLs. */
 playbackId: string, /** Whether DVR recording is enabled for this stream. */
-record: boolean, /** How source media enters the stream. */
+record: boolean, /** INHERIT or OFF for live video renditions. */
+liveVideoAbr: string, /** How source media enters the stream. */
 ingestMode: IngestMode, /** When this stream was created. */
 createdAt: string, /** When this stream was last modified. */
 updatedAt: string, /** How saved recordings are split into chapters. Snapshotted when a recording starts; changes apply from the next broadcast. NONE = live rewind only, nothing kept after the broadcast. */
@@ -6788,7 +6842,7 @@ primaryCodec: string | null, /** Primary video bitrate in kbps. */
 primaryBitrate: number | null, /** Whether the stream has active quality issues. */
 hasIssues: boolean | null, /** Human-readable description of current issues. */
 issuesDescription: string | null } | null, /** Configured multistream push targets for this stream. */
-pushTargets: Array<{ id: string, streamId: string, platform: string | null, name: string, targetUri: string, isEnabled: boolean, status: string, lastError: string | null, reasonCode: string | null, lastPushedAt: string | null, createdAt: string }>, /** Playback access policy. null/PUBLIC = anyone with the playbackId can watch. */
+pushTargets: Array<{ id: string, streamId: string, platform: string | null, name: string, videoChoice: string, targetUri: string, isEnabled: boolean, status: string, lastError: string | null, reasonCode: string | null, lastPushedAt: string | null, createdAt: string }>, /** Playback access policy. null/PUBLIC = anyone with the playbackId can watch. */
 playbackPolicy: { type: PlaybackPolicyType, /** Sites allowed to embed the content, as normalized `scheme://host[:port]` origins; `*` allows any. Empty = no restriction. A browser viewer whose Origin (or Referer) is not listed is denied. */
 allowedOrigins: Array<string> } | null, /** Server-resolved Chandler URLs for the stream's poster and sprite thumbnails. Derived from active_ingest_cluster_id + stream_id at SELECT time. Null when the stream has never been live; the poster.jpg 404s until Helmsman uploads its first frame, which the player's fallback chain handles. */
 thumbnailAssets: { posterUrl: string, spriteVttUrl: string, spriteJpgUrl: string, assetKey: string } | null, /** Per-stream retention overrides for DVR and clips. Null when the stream has no overrides set (inherits the tenant default). VOD uploads aren't stream-bound, so they don't appear here. */
@@ -6801,7 +6855,8 @@ name: string, /** Optional description for the stream. */
 description: string | null, /** Secret key for publisher-authenticated ingest; null for pull and managed sources. The key lets its holder publish to the stream, so an API token needs the streams:write scope: without it this field is null and the response carries a FORBIDDEN error at its path. */
 streamKey: string | null, /** Public identifier for playback URLs. */
 playbackId: string, /** Whether DVR recording is enabled for this stream. */
-record: boolean, /** How source media enters the stream. */
+record: boolean, /** INHERIT or OFF for live video renditions. */
+liveVideoAbr: string, /** How source media enters the stream. */
 ingestMode: IngestMode, /** When this stream was created. */
 createdAt: string, /** When this stream was last modified. */
 updatedAt: string, /** How saved recordings are split into chapters. Snapshotted when a recording starts; changes apply from the next broadcast. NONE = live rewind only, nothing kept after the broadcast. */
@@ -6842,7 +6897,7 @@ primaryCodec: string | null, /** Primary video bitrate in kbps. */
 primaryBitrate: number | null, /** Whether the stream has active quality issues. */
 hasIssues: boolean | null, /** Human-readable description of current issues. */
 issuesDescription: string | null } | null, /** Configured multistream push targets for this stream. */
-pushTargets: Array<{ id: string, streamId: string, platform: string | null, name: string, targetUri: string, isEnabled: boolean, status: string, lastError: string | null, reasonCode: string | null, lastPushedAt: string | null, createdAt: string }>, /** Playback access policy. null/PUBLIC = anyone with the playbackId can watch. */
+pushTargets: Array<{ id: string, streamId: string, platform: string | null, name: string, videoChoice: string, targetUri: string, isEnabled: boolean, status: string, lastError: string | null, reasonCode: string | null, lastPushedAt: string | null, createdAt: string }>, /** Playback access policy. null/PUBLIC = anyone with the playbackId can watch. */
 playbackPolicy: { type: PlaybackPolicyType, /** Sites allowed to embed the content, as normalized `scheme://host[:port]` origins; `*` allows any. Empty = no restriction. A browser viewer whose Origin (or Referer) is not listed is denied. */
 allowedOrigins: Array<string> } | null, /** Server-resolved Chandler URLs for the stream's poster and sprite thumbnails. Derived from active_ingest_cluster_id + stream_id at SELECT time. Null when the stream has never been live; the poster.jpg 404s until Helmsman uploads its first frame, which the player's fallback chain handles. */
 thumbnailAssets: { posterUrl: string, spriteVttUrl: string, spriteJpgUrl: string, assetKey: string } | null, /** Per-stream retention overrides for DVR and clips. Null when the stream has no overrides set (inherits the tenant default). VOD uploads aren't stream-bound, so they don't appear here. */
@@ -6863,7 +6918,8 @@ name: string, /** Optional description for the stream. */
 description: string | null, /** Secret key for publisher-authenticated ingest; null for pull and managed sources. The key lets its holder publish to the stream, so an API token needs the streams:write scope: without it this field is null and the response carries a FORBIDDEN error at its path. */
 streamKey: string | null, /** Public identifier for playback URLs. */
 playbackId: string, /** Whether DVR recording is enabled for this stream. */
-record: boolean, /** How source media enters the stream. */
+record: boolean, /** INHERIT or OFF for live video renditions. */
+liveVideoAbr: string, /** How source media enters the stream. */
 ingestMode: IngestMode, /** When this stream was created. */
 createdAt: string, /** When this stream was last modified. */
 updatedAt: string, /** How saved recordings are split into chapters. Snapshotted when a recording starts; changes apply from the next broadcast. NONE = live rewind only, nothing kept after the broadcast. */
@@ -6904,7 +6960,7 @@ primaryCodec: string | null, /** Primary video bitrate in kbps. */
 primaryBitrate: number | null, /** Whether the stream has active quality issues. */
 hasIssues: boolean | null, /** Human-readable description of current issues. */
 issuesDescription: string | null } | null, /** Configured multistream push targets for this stream. */
-pushTargets: Array<{ id: string, streamId: string, platform: string | null, name: string, targetUri: string, isEnabled: boolean, status: string, lastError: string | null, reasonCode: string | null, lastPushedAt: string | null, createdAt: string }>, /** Playback access policy. null/PUBLIC = anyone with the playbackId can watch. */
+pushTargets: Array<{ id: string, streamId: string, platform: string | null, name: string, videoChoice: string, targetUri: string, isEnabled: boolean, status: string, lastError: string | null, reasonCode: string | null, lastPushedAt: string | null, createdAt: string }>, /** Playback access policy. null/PUBLIC = anyone with the playbackId can watch. */
 playbackPolicy: { type: PlaybackPolicyType, /** Sites allowed to embed the content, as normalized `scheme://host[:port]` origins; `*` allows any. Empty = no restriction. A browser viewer whose Origin (or Referer) is not listed is denied. */
 allowedOrigins: Array<string> } | null, /** Server-resolved Chandler URLs for the stream's poster and sprite thumbnails. Derived from active_ingest_cluster_id + stream_id at SELECT time. Null when the stream has never been live; the poster.jpg 404s until Helmsman uploads its first frame, which the player's fallback chain handles. */
 thumbnailAssets: { posterUrl: string, spriteVttUrl: string, spriteJpgUrl: string, assetKey: string } | null, /** Per-stream retention overrides for DVR and clips. Null when the stream has no overrides set (inherits the tenant default). VOD uploads aren't stream-bound, so they don't appear here. */
@@ -6917,7 +6973,8 @@ name: string, /** Optional description for the stream. */
 description: string | null, /** Secret key for publisher-authenticated ingest; null for pull and managed sources. The key lets its holder publish to the stream, so an API token needs the streams:write scope: without it this field is null and the response carries a FORBIDDEN error at its path. */
 streamKey: string | null, /** Public identifier for playback URLs. */
 playbackId: string, /** Whether DVR recording is enabled for this stream. */
-record: boolean, /** How source media enters the stream. */
+record: boolean, /** INHERIT or OFF for live video renditions. */
+liveVideoAbr: string, /** How source media enters the stream. */
 ingestMode: IngestMode, /** When this stream was created. */
 createdAt: string, /** How saved recordings are split into chapters. Snapshotted when a recording starts; changes apply from the next broadcast. NONE = live rewind only, nothing kept after the broadcast. */
 dvrChapterMode: DVRChapterMode | null, /** Chapter interval in seconds. Required when dvrChapterMode = FIXED_INTERVAL, ignored otherwise. Minimum 3600 (1 hour). */
@@ -6960,7 +7017,7 @@ primaryCodec: string | null, /** Primary video bitrate in kbps. */
 primaryBitrate: number | null, /** Whether the stream has active quality issues. */
 hasIssues: boolean | null, /** Human-readable description of current issues. */
 issuesDescription: string | null } | null, /** Configured multistream push targets for this stream. */
-pushTargets: Array<{ id: string, streamId: string, platform: string | null, name: string, targetUri: string, isEnabled: boolean, status: string, lastError: string | null, reasonCode: string | null, lastPushedAt: string | null, createdAt: string }>, /** Playback access policy. null/PUBLIC = anyone with the playbackId can watch. */
+pushTargets: Array<{ id: string, streamId: string, platform: string | null, name: string, videoChoice: string, targetUri: string, isEnabled: boolean, status: string, lastError: string | null, reasonCode: string | null, lastPushedAt: string | null, createdAt: string }>, /** Playback access policy. null/PUBLIC = anyone with the playbackId can watch. */
 playbackPolicy: { type: PlaybackPolicyType, /** Sites allowed to embed the content, as normalized `scheme://host[:port]` origins; `*` allows any. Empty = no restriction. A browser viewer whose Origin (or Referer) is not listed is denied. */
 allowedOrigins: Array<string>, /** JWT-policy details, populated when type == JWT. */
 jwt: { /** Allowed signing key IDs. Empty = any active tenant key. */
@@ -6980,7 +7037,8 @@ name: string, /** Optional description for the stream. */
 description: string | null, /** Secret key for publisher-authenticated ingest; null for pull and managed sources. The key lets its holder publish to the stream, so an API token needs the streams:write scope: without it this field is null and the response carries a FORBIDDEN error at its path. */
 streamKey: string | null, /** Public identifier for playback URLs. */
 playbackId: string, /** Whether DVR recording is enabled for this stream. */
-record: boolean, /** How source media enters the stream. */
+record: boolean, /** INHERIT or OFF for live video renditions. */
+liveVideoAbr: string, /** How source media enters the stream. */
 ingestMode: IngestMode, /** When this stream was created. */
 createdAt: string, /** When this stream was last modified. */
 updatedAt: string, /** How saved recordings are split into chapters. Snapshotted when a recording starts; changes apply from the next broadcast. NONE = live rewind only, nothing kept after the broadcast. */
@@ -7021,7 +7079,7 @@ primaryCodec: string | null, /** Primary video bitrate in kbps. */
 primaryBitrate: number | null, /** Whether the stream has active quality issues. */
 hasIssues: boolean | null, /** Human-readable description of current issues. */
 issuesDescription: string | null } | null, /** Configured multistream push targets for this stream. */
-pushTargets: Array<{ id: string, streamId: string, platform: string | null, name: string, targetUri: string, isEnabled: boolean, status: string, lastError: string | null, reasonCode: string | null, lastPushedAt: string | null, createdAt: string }>, /** Playback access policy. null/PUBLIC = anyone with the playbackId can watch. */
+pushTargets: Array<{ id: string, streamId: string, platform: string | null, name: string, videoChoice: string, targetUri: string, isEnabled: boolean, status: string, lastError: string | null, reasonCode: string | null, lastPushedAt: string | null, createdAt: string }>, /** Playback access policy. null/PUBLIC = anyone with the playbackId can watch. */
 playbackPolicy: { type: PlaybackPolicyType, /** Sites allowed to embed the content, as normalized `scheme://host[:port]` origins; `*` allows any. Empty = no restriction. A browser viewer whose Origin (or Referer) is not listed is denied. */
 allowedOrigins: Array<string> } | null, /** Server-resolved Chandler URLs for the stream's poster and sprite thumbnails. Derived from active_ingest_cluster_id + stream_id at SELECT time. Null when the stream has never been live; the poster.jpg 404s until Helmsman uploads its first frame, which the player's fallback chain handles. */
 thumbnailAssets: { posterUrl: string, spriteVttUrl: string, spriteJpgUrl: string, assetKey: string } | null, /** Per-stream retention overrides for DVR and clips. Null when the stream has no overrides set (inherits the tenant default). VOD uploads aren't stream-bound, so they don't appear here. */
@@ -7034,7 +7092,8 @@ name: string, /** Optional description for the stream. */
 description: string | null, /** Secret key for publisher-authenticated ingest; null for pull and managed sources. The key lets its holder publish to the stream, so an API token needs the streams:write scope: without it this field is null and the response carries a FORBIDDEN error at its path. */
 streamKey: string | null, /** Public identifier for playback URLs. */
 playbackId: string, /** Whether DVR recording is enabled for this stream. */
-record: boolean, /** How source media enters the stream. */
+record: boolean, /** INHERIT or OFF for live video renditions. */
+liveVideoAbr: string, /** How source media enters the stream. */
 ingestMode: IngestMode, /** When this stream was created. */
 createdAt: string, /** When this stream was last modified. */
 updatedAt: string, /** How saved recordings are split into chapters. Snapshotted when a recording starts; changes apply from the next broadcast. NONE = live rewind only, nothing kept after the broadcast. */
@@ -7075,7 +7134,7 @@ primaryCodec: string | null, /** Primary video bitrate in kbps. */
 primaryBitrate: number | null, /** Whether the stream has active quality issues. */
 hasIssues: boolean | null, /** Human-readable description of current issues. */
 issuesDescription: string | null } | null, /** Configured multistream push targets for this stream. */
-pushTargets: Array<{ id: string, streamId: string, platform: string | null, name: string, targetUri: string, isEnabled: boolean, status: string, lastError: string | null, reasonCode: string | null, lastPushedAt: string | null, createdAt: string }>, /** Playback access policy. null/PUBLIC = anyone with the playbackId can watch. */
+pushTargets: Array<{ id: string, streamId: string, platform: string | null, name: string, videoChoice: string, targetUri: string, isEnabled: boolean, status: string, lastError: string | null, reasonCode: string | null, lastPushedAt: string | null, createdAt: string }>, /** Playback access policy. null/PUBLIC = anyone with the playbackId can watch. */
 playbackPolicy: { type: PlaybackPolicyType, /** Sites allowed to embed the content, as normalized `scheme://host[:port]` origins; `*` allows any. Empty = no restriction. A browser viewer whose Origin (or Referer) is not listed is denied. */
 allowedOrigins: Array<string> } | null, /** Server-resolved Chandler URLs for the stream's poster and sprite thumbnails. Derived from active_ingest_cluster_id + stream_id at SELECT time. Null when the stream has never been live; the poster.jpg 404s until Helmsman uploads its first frame, which the player's fallback chain handles. */
 thumbnailAssets: { posterUrl: string, spriteVttUrl: string, spriteJpgUrl: string, assetKey: string } | null, /** Per-stream retention overrides for DVR and clips. Null when the stream has no overrides set (inherits the tenant default). VOD uploads aren't stream-bound, so they don't appear here. */
@@ -7088,7 +7147,8 @@ name: string, /** Optional description for the stream. */
 description: string | null, /** Secret key for publisher-authenticated ingest; null for pull and managed sources. The key lets its holder publish to the stream, so an API token needs the streams:write scope: without it this field is null and the response carries a FORBIDDEN error at its path. */
 streamKey: string | null, /** Public identifier for playback URLs. */
 playbackId: string, /** Whether DVR recording is enabled for this stream. */
-record: boolean, /** How source media enters the stream. */
+record: boolean, /** INHERIT or OFF for live video renditions. */
+liveVideoAbr: string, /** How source media enters the stream. */
 ingestMode: IngestMode, /** When this stream was created. */
 createdAt: string, /** When this stream was last modified. */
 updatedAt: string, /** How saved recordings are split into chapters. Snapshotted when a recording starts; changes apply from the next broadcast. NONE = live rewind only, nothing kept after the broadcast. */
@@ -7129,7 +7189,7 @@ primaryCodec: string | null, /** Primary video bitrate in kbps. */
 primaryBitrate: number | null, /** Whether the stream has active quality issues. */
 hasIssues: boolean | null, /** Human-readable description of current issues. */
 issuesDescription: string | null } | null, /** Configured multistream push targets for this stream. */
-pushTargets: Array<{ id: string, streamId: string, platform: string | null, name: string, targetUri: string, isEnabled: boolean, status: string, lastError: string | null, reasonCode: string | null, lastPushedAt: string | null, createdAt: string }>, /** Playback access policy. null/PUBLIC = anyone with the playbackId can watch. */
+pushTargets: Array<{ id: string, streamId: string, platform: string | null, name: string, videoChoice: string, targetUri: string, isEnabled: boolean, status: string, lastError: string | null, reasonCode: string | null, lastPushedAt: string | null, createdAt: string }>, /** Playback access policy. null/PUBLIC = anyone with the playbackId can watch. */
 playbackPolicy: { type: PlaybackPolicyType, /** Sites allowed to embed the content, as normalized `scheme://host[:port]` origins; `*` allows any. Empty = no restriction. A browser viewer whose Origin (or Referer) is not listed is denied. */
 allowedOrigins: Array<string> } | null, /** Server-resolved Chandler URLs for the stream's poster and sprite thumbnails. Derived from active_ingest_cluster_id + stream_id at SELECT time. Null when the stream has never been live; the poster.jpg 404s until Helmsman uploads its first frame, which the player's fallback chain handles. */
 thumbnailAssets: { posterUrl: string, spriteVttUrl: string, spriteJpgUrl: string, assetKey: string } | null, /** Per-stream retention overrides for DVR and clips. Null when the stream has no overrides set (inherits the tenant default). VOD uploads aren't stream-bound, so they don't appear here. */
@@ -7143,7 +7203,8 @@ name: string, /** Optional description for the stream. */
 description: string | null, /** Secret key for publisher-authenticated ingest; null for pull and managed sources. The key lets its holder publish to the stream, so an API token needs the streams:write scope: without it this field is null and the response carries a FORBIDDEN error at its path. */
 streamKey: string | null, /** Public identifier for playback URLs. */
 playbackId: string, /** Whether DVR recording is enabled for this stream. */
-record: boolean, /** How source media enters the stream. */
+record: boolean, /** INHERIT or OFF for live video renditions. */
+liveVideoAbr: string, /** How source media enters the stream. */
 ingestMode: IngestMode, /** When this stream was created. */
 createdAt: string, /** When this stream was last modified. */
 updatedAt: string, /** How saved recordings are split into chapters. Snapshotted when a recording starts; changes apply from the next broadcast. NONE = live rewind only, nothing kept after the broadcast. */
@@ -7184,7 +7245,7 @@ primaryCodec: string | null, /** Primary video bitrate in kbps. */
 primaryBitrate: number | null, /** Whether the stream has active quality issues. */
 hasIssues: boolean | null, /** Human-readable description of current issues. */
 issuesDescription: string | null } | null, /** Configured multistream push targets for this stream. */
-pushTargets: Array<{ id: string, streamId: string, platform: string | null, name: string, targetUri: string, isEnabled: boolean, status: string, lastError: string | null, reasonCode: string | null, lastPushedAt: string | null, createdAt: string }>, /** Playback access policy. null/PUBLIC = anyone with the playbackId can watch. */
+pushTargets: Array<{ id: string, streamId: string, platform: string | null, name: string, videoChoice: string, targetUri: string, isEnabled: boolean, status: string, lastError: string | null, reasonCode: string | null, lastPushedAt: string | null, createdAt: string }>, /** Playback access policy. null/PUBLIC = anyone with the playbackId can watch. */
 playbackPolicy: { type: PlaybackPolicyType, /** Sites allowed to embed the content, as normalized `scheme://host[:port]` origins; `*` allows any. Empty = no restriction. A browser viewer whose Origin (or Referer) is not listed is denied. */
 allowedOrigins: Array<string> } | null, /** Server-resolved Chandler URLs for the stream's poster and sprite thumbnails. Derived from active_ingest_cluster_id + stream_id at SELECT time. Null when the stream has never been live; the poster.jpg 404s until Helmsman uploads its first frame, which the player's fallback chain handles. */
 thumbnailAssets: { posterUrl: string, spriteVttUrl: string, spriteJpgUrl: string, assetKey: string } | null, /** Per-stream retention overrides for DVR and clips. Null when the stream has no overrides set (inherits the tenant default). VOD uploads aren't stream-bound, so they don't appear here. */
@@ -7198,7 +7259,8 @@ name: string, /** Optional description for the stream. */
 description: string | null, /** Secret key for publisher-authenticated ingest; null for pull and managed sources. The key lets its holder publish to the stream, so an API token needs the streams:write scope: without it this field is null and the response carries a FORBIDDEN error at its path. */
 streamKey: string | null, /** Public identifier for playback URLs. */
 playbackId: string, /** Whether DVR recording is enabled for this stream. */
-record: boolean, /** How source media enters the stream. */
+record: boolean, /** INHERIT or OFF for live video renditions. */
+liveVideoAbr: string, /** How source media enters the stream. */
 ingestMode: IngestMode, /** When this stream was created. */
 createdAt: string, /** When this stream was last modified. */
 updatedAt: string, /** How saved recordings are split into chapters. Snapshotted when a recording starts; changes apply from the next broadcast. NONE = live rewind only, nothing kept after the broadcast. */
@@ -7239,7 +7301,7 @@ primaryCodec: string | null, /** Primary video bitrate in kbps. */
 primaryBitrate: number | null, /** Whether the stream has active quality issues. */
 hasIssues: boolean | null, /** Human-readable description of current issues. */
 issuesDescription: string | null } | null, /** Configured multistream push targets for this stream. */
-pushTargets: Array<{ id: string, streamId: string, platform: string | null, name: string, targetUri: string, isEnabled: boolean, status: string, lastError: string | null, reasonCode: string | null, lastPushedAt: string | null, createdAt: string }>, /** Playback access policy. null/PUBLIC = anyone with the playbackId can watch. */
+pushTargets: Array<{ id: string, streamId: string, platform: string | null, name: string, videoChoice: string, targetUri: string, isEnabled: boolean, status: string, lastError: string | null, reasonCode: string | null, lastPushedAt: string | null, createdAt: string }>, /** Playback access policy. null/PUBLIC = anyone with the playbackId can watch. */
 playbackPolicy: { type: PlaybackPolicyType, /** Sites allowed to embed the content, as normalized `scheme://host[:port]` origins; `*` allows any. Empty = no restriction. A browser viewer whose Origin (or Referer) is not listed is denied. */
 allowedOrigins: Array<string> } | null, /** Server-resolved Chandler URLs for the stream's poster and sprite thumbnails. Derived from active_ingest_cluster_id + stream_id at SELECT time. Null when the stream has never been live; the poster.jpg 404s until Helmsman uploads its first frame, which the player's fallback chain handles. */
 thumbnailAssets: { posterUrl: string, spriteVttUrl: string, spriteJpgUrl: string, assetKey: string } | null, /** Per-stream retention overrides for DVR and clips. Null when the stream has no overrides set (inherits the tenant default). VOD uploads aren't stream-bound, so they don't appear here. */
@@ -7253,7 +7315,8 @@ name: string, /** Optional description for the stream. */
 description: string | null, /** Secret key for publisher-authenticated ingest; null for pull and managed sources. The key lets its holder publish to the stream, so an API token needs the streams:write scope: without it this field is null and the response carries a FORBIDDEN error at its path. */
 streamKey: string | null, /** Public identifier for playback URLs. */
 playbackId: string, /** Whether DVR recording is enabled for this stream. */
-record: boolean, /** How source media enters the stream. */
+record: boolean, /** INHERIT or OFF for live video renditions. */
+liveVideoAbr: string, /** How source media enters the stream. */
 ingestMode: IngestMode, /** When this stream was created. */
 createdAt: string, /** When this stream was last modified. */
 updatedAt: string, /** How saved recordings are split into chapters. Snapshotted when a recording starts; changes apply from the next broadcast. NONE = live rewind only, nothing kept after the broadcast. */
@@ -7294,7 +7357,7 @@ primaryCodec: string | null, /** Primary video bitrate in kbps. */
 primaryBitrate: number | null, /** Whether the stream has active quality issues. */
 hasIssues: boolean | null, /** Human-readable description of current issues. */
 issuesDescription: string | null } | null, /** Configured multistream push targets for this stream. */
-pushTargets: Array<{ id: string, streamId: string, platform: string | null, name: string, targetUri: string, isEnabled: boolean, status: string, lastError: string | null, reasonCode: string | null, lastPushedAt: string | null, createdAt: string }>, /** Playback access policy. null/PUBLIC = anyone with the playbackId can watch. */
+pushTargets: Array<{ id: string, streamId: string, platform: string | null, name: string, videoChoice: string, targetUri: string, isEnabled: boolean, status: string, lastError: string | null, reasonCode: string | null, lastPushedAt: string | null, createdAt: string }>, /** Playback access policy. null/PUBLIC = anyone with the playbackId can watch. */
 playbackPolicy: { type: PlaybackPolicyType, /** Sites allowed to embed the content, as normalized `scheme://host[:port]` origins; `*` allows any. Empty = no restriction. A browser viewer whose Origin (or Referer) is not listed is denied. */
 allowedOrigins: Array<string> } | null, /** Server-resolved Chandler URLs for the stream's poster and sprite thumbnails. Derived from active_ingest_cluster_id + stream_id at SELECT time. Null when the stream has never been live; the poster.jpg 404s until Helmsman uploads its first frame, which the player's fallback chain handles. */
 thumbnailAssets: { posterUrl: string, spriteVttUrl: string, spriteJpgUrl: string, assetKey: string } | null, /** Per-stream retention overrides for DVR and clips. Null when the stream has no overrides set (inherits the tenant default). VOD uploads aren't stream-bound, so they don't appear here. */
@@ -7307,7 +7370,8 @@ name: string, /** Optional description for the stream. */
 description: string | null, /** Secret key for publisher-authenticated ingest; null for pull and managed sources. The key lets its holder publish to the stream, so an API token needs the streams:write scope: without it this field is null and the response carries a FORBIDDEN error at its path. */
 streamKey: string | null, /** Public identifier for playback URLs. */
 playbackId: string, /** Whether DVR recording is enabled for this stream. */
-record: boolean, /** How source media enters the stream. */
+record: boolean, /** INHERIT or OFF for live video renditions. */
+liveVideoAbr: string, /** How source media enters the stream. */
 ingestMode: IngestMode, /** When this stream was created. */
 createdAt: string, /** When this stream was last modified. */
 updatedAt: string, /** How saved recordings are split into chapters. Snapshotted when a recording starts; changes apply from the next broadcast. NONE = live rewind only, nothing kept after the broadcast. */
@@ -7348,7 +7412,7 @@ primaryCodec: string | null, /** Primary video bitrate in kbps. */
 primaryBitrate: number | null, /** Whether the stream has active quality issues. */
 hasIssues: boolean | null, /** Human-readable description of current issues. */
 issuesDescription: string | null } | null, /** Configured multistream push targets for this stream. */
-pushTargets: Array<{ id: string, streamId: string, platform: string | null, name: string, targetUri: string, isEnabled: boolean, status: string, lastError: string | null, reasonCode: string | null, lastPushedAt: string | null, createdAt: string }>, /** Playback access policy. null/PUBLIC = anyone with the playbackId can watch. */
+pushTargets: Array<{ id: string, streamId: string, platform: string | null, name: string, videoChoice: string, targetUri: string, isEnabled: boolean, status: string, lastError: string | null, reasonCode: string | null, lastPushedAt: string | null, createdAt: string }>, /** Playback access policy. null/PUBLIC = anyone with the playbackId can watch. */
 playbackPolicy: { type: PlaybackPolicyType, /** Sites allowed to embed the content, as normalized `scheme://host[:port]` origins; `*` allows any. Empty = no restriction. A browser viewer whose Origin (or Referer) is not listed is denied. */
 allowedOrigins: Array<string> } | null, /** Server-resolved Chandler URLs for the stream's poster and sprite thumbnails. Derived from active_ingest_cluster_id + stream_id at SELECT time. Null when the stream has never been live; the poster.jpg 404s until Helmsman uploads its first frame, which the player's fallback chain handles. */
 thumbnailAssets: { posterUrl: string, spriteVttUrl: string, spriteJpgUrl: string, assetKey: string } | null, /** Per-stream retention overrides for DVR and clips. Null when the stream has no overrides set (inherits the tenant default). VOD uploads aren't stream-bound, so they don't appear here. */
@@ -7629,7 +7693,7 @@ export type GetProcessingUsageConnectionQueryVariables = Exact<{
 export type GetProcessingUsageConnectionQuery = { /** Unified analytics surface providing access to all platform metrics. Combines data from Periscope (historical) and Signalman (real-time). */
 analytics: { /** Usage analytics: streaming hours, storage, and processing. */
 usage: { /** Processing usage: transcoding, clipping, DVR operations. */
-processing: { processingUsageConnection: { totalCount: number, edges: Array<{ cursor: string, node: { id: string, timestamp: string, nodeId: string, streamId: string, processType: string, clusterId: string | null, originClusterId: string | null, controlCellId: string | null, trackType: string | null, durationMs: number, inputCodec: string | null, outputCodec: string | null, segmentNumber: number | null, width: number | null, height: number | null, renditionCount: number | null, broadcasterUrl: string | null, uploadTimeUs: number | null, livepeerSessionId: string | null, segmentStartMs: number | null, inputBytes: number | null, outputBytesTotal: number | null, attemptCount: number | null, turnaroundMs: number | null, speedFactor: number | null, renditionsJson: string | null, inputFrames: number | null, outputFrames: number | null, decodeUsPerFrame: number | null, transformUsPerFrame: number | null, encodeUsPerFrame: number | null, isFinal: boolean | null, inputFramesDelta: number | null, outputFramesDelta: number | null, inputBytesDelta: number | null, outputBytesDelta: number | null, inputWidth: number | null, inputHeight: number | null, outputWidth: number | null, outputHeight: number | null, inputFpks: number | null, outputFpsMeasured: number | null, sampleRate: number | null, channels: number | null, sourceTimestampMs: number | null, sinkTimestampMs: number | null, sourceAdvancedMs: number | null, sinkAdvancedMs: number | null, rtfIn: number | null, rtfOut: number | null, pipelineLagMs: number | null, outputBitrateBps: number | null, stream: { id: string, streamId: string, name: string, description: string | null, streamKey: string | null, playbackId: string, record: boolean, ingestMode: IngestMode, createdAt: string, updatedAt: string, dvrChapterMode: DVRChapterMode | null, dvrChapterIntervalSeconds: number | null, monitoring: MonitoringToggle, pullSource: { sourceUriRedacted: string, enabled: boolean, class: string } | null, managedSource: { sourceKind: string, alwaysOn: boolean, placementCount: number } | null, sourceLocation: { mode: SourceLocationMode, avoidNodeIds: Array<string> }, metrics: { status: StreamStatus, isLive: boolean, currentViewers: number, startedAt: string | null, updatedAt: string, nodeId: string | null, trackCount: number | null, totalInputs: number | null, uploadedBytes: number, downloadedBytes: number, viewerSeconds: number, packetsSent: number | null, packetsLost: number | null, packetsRetransmitted: number | null, bufferState: string | null, qualityTier: string | null, primaryWidth: number | null, primaryHeight: number | null, primaryFps: number | null, primaryCodec: string | null, primaryBitrate: number | null, hasIssues: boolean | null, issuesDescription: string | null } | null, pushTargets: Array<{ id: string, streamId: string, platform: string | null, name: string, targetUri: string, isEnabled: boolean, status: string, lastError: string | null, reasonCode: string | null, lastPushedAt: string | null, createdAt: string }>, playbackPolicy: { type: PlaybackPolicyType, allowedOrigins: Array<string> } | null, thumbnailAssets: { posterUrl: string, spriteVttUrl: string, spriteJpgUrl: string, assetKey: string } | null, retentionOverrides: { streamId: string, dvrRetentionDaysOverride: number | null, clipRetentionDaysOverride: number | null } | null } | null } }>, pageInfo: { startCursor: string | null, endCursor: string | null, hasNextPage: boolean, hasPreviousPage: boolean }, summaries: Array<{ date: string, livepeerSeconds: number, livepeerSegmentCount: number, livepeerUniqueStreams: number, livepeerH264Seconds: number, livepeerVp9Seconds: number, livepeerAv1Seconds: number, livepeerHevcSeconds: number, nativeAvSeconds: number, nativeAvSegmentCount: number, nativeAvUniqueStreams: number, nativeAvH264Seconds: number, nativeAvVp9Seconds: number, nativeAvAv1Seconds: number, nativeAvHevcSeconds: number, nativeAvAacSeconds: number, nativeAvOpusSeconds: number, audioSeconds: number, videoSeconds: number }> } } } } };
+processing: { processingUsageConnection: { totalCount: number, edges: Array<{ cursor: string, node: { id: string, timestamp: string, nodeId: string, streamId: string, processType: string, clusterId: string | null, originClusterId: string | null, controlCellId: string | null, trackType: string | null, durationMs: number, inputCodec: string | null, outputCodec: string | null, segmentNumber: number | null, width: number | null, height: number | null, renditionCount: number | null, broadcasterUrl: string | null, uploadTimeUs: number | null, livepeerSessionId: string | null, segmentStartMs: number | null, inputBytes: number | null, outputBytesTotal: number | null, attemptCount: number | null, turnaroundMs: number | null, speedFactor: number | null, renditionsJson: string | null, inputFrames: number | null, outputFrames: number | null, decodeUsPerFrame: number | null, transformUsPerFrame: number | null, encodeUsPerFrame: number | null, isFinal: boolean | null, inputFramesDelta: number | null, outputFramesDelta: number | null, inputBytesDelta: number | null, outputBytesDelta: number | null, inputWidth: number | null, inputHeight: number | null, outputWidth: number | null, outputHeight: number | null, inputFpks: number | null, outputFpsMeasured: number | null, sampleRate: number | null, channels: number | null, sourceTimestampMs: number | null, sinkTimestampMs: number | null, sourceAdvancedMs: number | null, sinkAdvancedMs: number | null, rtfIn: number | null, rtfOut: number | null, pipelineLagMs: number | null, outputBitrateBps: number | null, stream: { id: string, streamId: string, name: string, description: string | null, streamKey: string | null, playbackId: string, record: boolean, liveVideoAbr: string, ingestMode: IngestMode, createdAt: string, updatedAt: string, dvrChapterMode: DVRChapterMode | null, dvrChapterIntervalSeconds: number | null, monitoring: MonitoringToggle, pullSource: { sourceUriRedacted: string, enabled: boolean, class: string } | null, managedSource: { sourceKind: string, alwaysOn: boolean, placementCount: number } | null, sourceLocation: { mode: SourceLocationMode, avoidNodeIds: Array<string> }, metrics: { status: StreamStatus, isLive: boolean, currentViewers: number, startedAt: string | null, updatedAt: string, nodeId: string | null, trackCount: number | null, totalInputs: number | null, uploadedBytes: number, downloadedBytes: number, viewerSeconds: number, packetsSent: number | null, packetsLost: number | null, packetsRetransmitted: number | null, bufferState: string | null, qualityTier: string | null, primaryWidth: number | null, primaryHeight: number | null, primaryFps: number | null, primaryCodec: string | null, primaryBitrate: number | null, hasIssues: boolean | null, issuesDescription: string | null } | null, pushTargets: Array<{ id: string, streamId: string, platform: string | null, name: string, videoChoice: string, targetUri: string, isEnabled: boolean, status: string, lastError: string | null, reasonCode: string | null, lastPushedAt: string | null, createdAt: string }>, playbackPolicy: { type: PlaybackPolicyType, allowedOrigins: Array<string> } | null, thumbnailAssets: { posterUrl: string, spriteVttUrl: string, spriteJpgUrl: string, assetKey: string } | null, retentionOverrides: { streamId: string, dvrRetentionDaysOverride: number | null, clipRetentionDaysOverride: number | null } | null } | null } }>, pageInfo: { startCursor: string | null, endCursor: string | null, hasNextPage: boolean, hasPreviousPage: boolean }, summaries: Array<{ date: string, livepeerSeconds: number, livepeerSegmentCount: number, livepeerUniqueStreams: number, livepeerH264Seconds: number, livepeerVp9Seconds: number, livepeerAv1Seconds: number, livepeerHevcSeconds: number, nativeAvSeconds: number, nativeAvSegmentCount: number, nativeAvUniqueStreams: number, nativeAvH264Seconds: number, nativeAvVp9Seconds: number, nativeAvAv1Seconds: number, nativeAvHevcSeconds: number, nativeAvAacSeconds: number, nativeAvOpusSeconds: number, audioSeconds: number, videoSeconds: number }> } } } } };
 
 export type GetQualityTierDailyConnectionQueryVariables = Exact<{
   page?: ConnectionInput | null | undefined;
@@ -7642,7 +7706,7 @@ export type GetQualityTierDailyConnectionQueryVariables = Exact<{
 export type GetQualityTierDailyConnectionQuery = { /** Unified analytics surface providing access to all platform metrics. Combines data from Periscope (historical) and Signalman (real-time). */
 analytics: { /** Usage analytics: streaming hours, storage, and processing. */
 usage: { /** Streaming usage: viewer hours, geographic distribution, quality tiers. */
-streaming: { qualityTierDailyConnection: { totalCount: number, edges: Array<{ cursor: string, node: { id: string, day: string, streamId: string, tier2160pMinutes: number, tier1440pMinutes: number, tier1080pMinutes: number, tier720pMinutes: number, tier480pMinutes: number, tierSdMinutes: number, primaryTier: string, codecH264Minutes: number, codecH265Minutes: number, codecVp9Minutes: number, codecAv1Minutes: number, avgBitrate: number, avgFps: number, stream: { id: string, streamId: string, name: string, description: string | null, streamKey: string | null, playbackId: string, record: boolean, ingestMode: IngestMode, createdAt: string, updatedAt: string, dvrChapterMode: DVRChapterMode | null, dvrChapterIntervalSeconds: number | null, monitoring: MonitoringToggle, pullSource: { sourceUriRedacted: string, enabled: boolean, class: string } | null, managedSource: { sourceKind: string, alwaysOn: boolean, placementCount: number } | null, sourceLocation: { mode: SourceLocationMode, avoidNodeIds: Array<string> }, metrics: { status: StreamStatus, isLive: boolean, currentViewers: number, startedAt: string | null, updatedAt: string, nodeId: string | null, trackCount: number | null, totalInputs: number | null, uploadedBytes: number, downloadedBytes: number, viewerSeconds: number, packetsSent: number | null, packetsLost: number | null, packetsRetransmitted: number | null, bufferState: string | null, qualityTier: string | null, primaryWidth: number | null, primaryHeight: number | null, primaryFps: number | null, primaryCodec: string | null, primaryBitrate: number | null, hasIssues: boolean | null, issuesDescription: string | null } | null, pushTargets: Array<{ id: string, streamId: string, platform: string | null, name: string, targetUri: string, isEnabled: boolean, status: string, lastError: string | null, reasonCode: string | null, lastPushedAt: string | null, createdAt: string }>, playbackPolicy: { type: PlaybackPolicyType, allowedOrigins: Array<string> } | null, thumbnailAssets: { posterUrl: string, spriteVttUrl: string, spriteJpgUrl: string, assetKey: string } | null, retentionOverrides: { streamId: string, dvrRetentionDaysOverride: number | null, clipRetentionDaysOverride: number | null } | null } | null } }>, pageInfo: { startCursor: string | null, endCursor: string | null, hasNextPage: boolean, hasPreviousPage: boolean } } } } } };
+streaming: { qualityTierDailyConnection: { totalCount: number, edges: Array<{ cursor: string, node: { id: string, day: string, streamId: string, tier2160pMinutes: number, tier1440pMinutes: number, tier1080pMinutes: number, tier720pMinutes: number, tier480pMinutes: number, tierSdMinutes: number, primaryTier: string, codecH264Minutes: number, codecH265Minutes: number, codecVp9Minutes: number, codecAv1Minutes: number, avgBitrate: number, avgFps: number, stream: { id: string, streamId: string, name: string, description: string | null, streamKey: string | null, playbackId: string, record: boolean, liveVideoAbr: string, ingestMode: IngestMode, createdAt: string, updatedAt: string, dvrChapterMode: DVRChapterMode | null, dvrChapterIntervalSeconds: number | null, monitoring: MonitoringToggle, pullSource: { sourceUriRedacted: string, enabled: boolean, class: string } | null, managedSource: { sourceKind: string, alwaysOn: boolean, placementCount: number } | null, sourceLocation: { mode: SourceLocationMode, avoidNodeIds: Array<string> }, metrics: { status: StreamStatus, isLive: boolean, currentViewers: number, startedAt: string | null, updatedAt: string, nodeId: string | null, trackCount: number | null, totalInputs: number | null, uploadedBytes: number, downloadedBytes: number, viewerSeconds: number, packetsSent: number | null, packetsLost: number | null, packetsRetransmitted: number | null, bufferState: string | null, qualityTier: string | null, primaryWidth: number | null, primaryHeight: number | null, primaryFps: number | null, primaryCodec: string | null, primaryBitrate: number | null, hasIssues: boolean | null, issuesDescription: string | null } | null, pushTargets: Array<{ id: string, streamId: string, platform: string | null, name: string, videoChoice: string, targetUri: string, isEnabled: boolean, status: string, lastError: string | null, reasonCode: string | null, lastPushedAt: string | null, createdAt: string }>, playbackPolicy: { type: PlaybackPolicyType, allowedOrigins: Array<string> } | null, thumbnailAssets: { posterUrl: string, spriteVttUrl: string, spriteJpgUrl: string, assetKey: string } | null, retentionOverrides: { streamId: string, dvrRetentionDaysOverride: number | null, clipRetentionDaysOverride: number | null } | null } | null } }>, pageInfo: { startCursor: string | null, endCursor: string | null, hasNextPage: boolean, hasPreviousPage: boolean } } } } } };
 
 export type GetRebufferingEventsConnectionQueryVariables = Exact<{
   page?: ConnectionInput | null | undefined;
@@ -7655,7 +7719,7 @@ export type GetRebufferingEventsConnectionQueryVariables = Exact<{
 
 export type GetRebufferingEventsConnectionQuery = { /** Unified analytics surface providing access to all platform metrics. Combines data from Periscope (historical) and Signalman (real-time). */
 analytics: { /** Health analytics: stream quality, rebuffering, client QoE. */
-health: { rebufferingEventsConnection: { totalCount: number, edges: Array<{ cursor: string, node: { timestamp: string, streamId: string, nodeId: string, bufferState: BufferState, previousState: BufferState, rebufferStart: boolean, rebufferEnd: boolean, stream: { id: string, streamId: string, name: string, description: string | null, streamKey: string | null, playbackId: string, record: boolean, ingestMode: IngestMode, createdAt: string, updatedAt: string, dvrChapterMode: DVRChapterMode | null, dvrChapterIntervalSeconds: number | null, monitoring: MonitoringToggle, pullSource: { sourceUriRedacted: string, enabled: boolean, class: string } | null, managedSource: { sourceKind: string, alwaysOn: boolean, placementCount: number } | null, sourceLocation: { mode: SourceLocationMode, avoidNodeIds: Array<string> }, metrics: { status: StreamStatus, isLive: boolean, currentViewers: number, startedAt: string | null, updatedAt: string, nodeId: string | null, trackCount: number | null, totalInputs: number | null, uploadedBytes: number, downloadedBytes: number, viewerSeconds: number, packetsSent: number | null, packetsLost: number | null, packetsRetransmitted: number | null, bufferState: string | null, qualityTier: string | null, primaryWidth: number | null, primaryHeight: number | null, primaryFps: number | null, primaryCodec: string | null, primaryBitrate: number | null, hasIssues: boolean | null, issuesDescription: string | null } | null, pushTargets: Array<{ id: string, streamId: string, platform: string | null, name: string, targetUri: string, isEnabled: boolean, status: string, lastError: string | null, reasonCode: string | null, lastPushedAt: string | null, createdAt: string }>, playbackPolicy: { type: PlaybackPolicyType, allowedOrigins: Array<string> } | null, thumbnailAssets: { posterUrl: string, spriteVttUrl: string, spriteJpgUrl: string, assetKey: string } | null, retentionOverrides: { streamId: string, dvrRetentionDaysOverride: number | null, clipRetentionDaysOverride: number | null } | null } | null } }>, pageInfo: { startCursor: string | null, endCursor: string | null, hasNextPage: boolean, hasPreviousPage: boolean } } } } };
+health: { rebufferingEventsConnection: { totalCount: number, edges: Array<{ cursor: string, node: { timestamp: string, streamId: string, nodeId: string, bufferState: BufferState, previousState: BufferState, rebufferStart: boolean, rebufferEnd: boolean, stream: { id: string, streamId: string, name: string, description: string | null, streamKey: string | null, playbackId: string, record: boolean, liveVideoAbr: string, ingestMode: IngestMode, createdAt: string, updatedAt: string, dvrChapterMode: DVRChapterMode | null, dvrChapterIntervalSeconds: number | null, monitoring: MonitoringToggle, pullSource: { sourceUriRedacted: string, enabled: boolean, class: string } | null, managedSource: { sourceKind: string, alwaysOn: boolean, placementCount: number } | null, sourceLocation: { mode: SourceLocationMode, avoidNodeIds: Array<string> }, metrics: { status: StreamStatus, isLive: boolean, currentViewers: number, startedAt: string | null, updatedAt: string, nodeId: string | null, trackCount: number | null, totalInputs: number | null, uploadedBytes: number, downloadedBytes: number, viewerSeconds: number, packetsSent: number | null, packetsLost: number | null, packetsRetransmitted: number | null, bufferState: string | null, qualityTier: string | null, primaryWidth: number | null, primaryHeight: number | null, primaryFps: number | null, primaryCodec: string | null, primaryBitrate: number | null, hasIssues: boolean | null, issuesDescription: string | null } | null, pushTargets: Array<{ id: string, streamId: string, platform: string | null, name: string, videoChoice: string, targetUri: string, isEnabled: boolean, status: string, lastError: string | null, reasonCode: string | null, lastPushedAt: string | null, createdAt: string }>, playbackPolicy: { type: PlaybackPolicyType, allowedOrigins: Array<string> } | null, thumbnailAssets: { posterUrl: string, spriteVttUrl: string, spriteJpgUrl: string, assetKey: string } | null, retentionOverrides: { streamId: string, dvrRetentionDaysOverride: number | null, clipRetentionDaysOverride: number | null } | null } | null } }>, pageInfo: { startCursor: string | null, endCursor: string | null, hasNextPage: boolean, hasPreviousPage: boolean } } } } };
 
 export type GetRecentPullSourceEventsQueryVariables = Exact<{
   id: string;
@@ -7717,7 +7781,7 @@ export type GetRoutingEventsConnectionQueryVariables = Exact<{
 
 export type GetRoutingEventsConnectionQuery = { /** Unified analytics surface providing access to all platform metrics. Combines data from Periscope (historical) and Signalman (real-time). */
 analytics: { /** Infrastructure analytics: routing, node metrics, services. */
-infra: { routingEventsConnection: { totalCount: number, edges: Array<{ cursor: string, node: { timestamp: string, streamId: string, selectedNode: string, nodeId: string | null, status: string, details: string | null, score: number | null, clientCountry: string | null, clientLatitude: number | null, clientLongitude: number | null, nodeLatitude: number | null, nodeLongitude: number | null, nodeName: string | null, routingDistance: number | null, candidatesCount: number | null, latencyMs: number | null, eventType: string | null, source: string | null, streamTenantId: string | null, clusterId: string | null, remoteClusterId: string | null, selectedClusterId: string | null, controlCellId: string | null, originClusterId: string | null, stream: { id: string, streamId: string, name: string, description: string | null, streamKey: string | null, playbackId: string, record: boolean, ingestMode: IngestMode, createdAt: string, updatedAt: string, dvrChapterMode: DVRChapterMode | null, dvrChapterIntervalSeconds: number | null, monitoring: MonitoringToggle, pullSource: { sourceUriRedacted: string, enabled: boolean, class: string } | null, managedSource: { sourceKind: string, alwaysOn: boolean, placementCount: number } | null, sourceLocation: { mode: SourceLocationMode, avoidNodeIds: Array<string> }, metrics: { status: StreamStatus, isLive: boolean, currentViewers: number, startedAt: string | null, updatedAt: string, nodeId: string | null, trackCount: number | null, totalInputs: number | null, uploadedBytes: number, downloadedBytes: number, viewerSeconds: number, packetsSent: number | null, packetsLost: number | null, packetsRetransmitted: number | null, bufferState: string | null, qualityTier: string | null, primaryWidth: number | null, primaryHeight: number | null, primaryFps: number | null, primaryCodec: string | null, primaryBitrate: number | null, hasIssues: boolean | null, issuesDescription: string | null } | null, pushTargets: Array<{ id: string, streamId: string, platform: string | null, name: string, targetUri: string, isEnabled: boolean, status: string, lastError: string | null, reasonCode: string | null, lastPushedAt: string | null, createdAt: string }>, playbackPolicy: { type: PlaybackPolicyType, allowedOrigins: Array<string> } | null, thumbnailAssets: { posterUrl: string, spriteVttUrl: string, spriteJpgUrl: string, assetKey: string } | null, retentionOverrides: { streamId: string, dvrRetentionDaysOverride: number | null, clipRetentionDaysOverride: number | null } | null } | null, clientBucket: { h3Index: string, resolution: number } | null, nodeBucket: { h3Index: string, resolution: number } | null } }>, pageInfo: { startCursor: string | null, endCursor: string | null, hasNextPage: boolean, hasPreviousPage: boolean } } } } };
+infra: { routingEventsConnection: { totalCount: number, edges: Array<{ cursor: string, node: { timestamp: string, streamId: string, selectedNode: string, nodeId: string | null, status: string, details: string | null, score: number | null, clientCountry: string | null, clientLatitude: number | null, clientLongitude: number | null, nodeLatitude: number | null, nodeLongitude: number | null, nodeName: string | null, routingDistance: number | null, candidatesCount: number | null, latencyMs: number | null, eventType: string | null, source: string | null, streamTenantId: string | null, clusterId: string | null, remoteClusterId: string | null, selectedClusterId: string | null, controlCellId: string | null, originClusterId: string | null, stream: { id: string, streamId: string, name: string, description: string | null, streamKey: string | null, playbackId: string, record: boolean, liveVideoAbr: string, ingestMode: IngestMode, createdAt: string, updatedAt: string, dvrChapterMode: DVRChapterMode | null, dvrChapterIntervalSeconds: number | null, monitoring: MonitoringToggle, pullSource: { sourceUriRedacted: string, enabled: boolean, class: string } | null, managedSource: { sourceKind: string, alwaysOn: boolean, placementCount: number } | null, sourceLocation: { mode: SourceLocationMode, avoidNodeIds: Array<string> }, metrics: { status: StreamStatus, isLive: boolean, currentViewers: number, startedAt: string | null, updatedAt: string, nodeId: string | null, trackCount: number | null, totalInputs: number | null, uploadedBytes: number, downloadedBytes: number, viewerSeconds: number, packetsSent: number | null, packetsLost: number | null, packetsRetransmitted: number | null, bufferState: string | null, qualityTier: string | null, primaryWidth: number | null, primaryHeight: number | null, primaryFps: number | null, primaryCodec: string | null, primaryBitrate: number | null, hasIssues: boolean | null, issuesDescription: string | null } | null, pushTargets: Array<{ id: string, streamId: string, platform: string | null, name: string, videoChoice: string, targetUri: string, isEnabled: boolean, status: string, lastError: string | null, reasonCode: string | null, lastPushedAt: string | null, createdAt: string }>, playbackPolicy: { type: PlaybackPolicyType, allowedOrigins: Array<string> } | null, thumbnailAssets: { posterUrl: string, spriteVttUrl: string, spriteJpgUrl: string, assetKey: string } | null, retentionOverrides: { streamId: string, dvrRetentionDaysOverride: number | null, clipRetentionDaysOverride: number | null } | null } | null, clientBucket: { h3Index: string, resolution: number } | null, nodeBucket: { h3Index: string, resolution: number } | null } }>, pageInfo: { startCursor: string | null, endCursor: string | null, hasNextPage: boolean, hasPreviousPage: boolean } } } } };
 
 export type GetServiceInstancesConnectionQueryVariables = Exact<{
   page?: ConnectionInput | null | undefined;
@@ -7825,7 +7889,7 @@ export type GetStorageEventsConnectionQueryVariables = Exact<{
 
 export type GetStorageEventsConnectionQuery = { /** Unified analytics surface providing access to all platform metrics. Combines data from Periscope (historical) and Signalman (real-time). */
 analytics: { /** Lifecycle analytics: stream events, artifacts, connections. */
-lifecycle: { storageEventsConnection: { totalCount: number, edges: Array<{ cursor: string, node: { id: string, timestamp: string, streamId: string, assetHash: string, action: string, assetType: string, sizeBytes: number, s3Url: string | null, localPath: string | null, nodeId: string, clusterId: string | null, originClusterId: string | null, controlCellId: string | null, durationMs: number | null, warmDurationMs: number | null, error: string | null, stream: { id: string, streamId: string, name: string, description: string | null, streamKey: string | null, playbackId: string, record: boolean, ingestMode: IngestMode, createdAt: string, updatedAt: string, dvrChapterMode: DVRChapterMode | null, dvrChapterIntervalSeconds: number | null, monitoring: MonitoringToggle, pullSource: { sourceUriRedacted: string, enabled: boolean, class: string } | null, managedSource: { sourceKind: string, alwaysOn: boolean, placementCount: number } | null, sourceLocation: { mode: SourceLocationMode, avoidNodeIds: Array<string> }, metrics: { status: StreamStatus, isLive: boolean, currentViewers: number, startedAt: string | null, updatedAt: string, nodeId: string | null, trackCount: number | null, totalInputs: number | null, uploadedBytes: number, downloadedBytes: number, viewerSeconds: number, packetsSent: number | null, packetsLost: number | null, packetsRetransmitted: number | null, bufferState: string | null, qualityTier: string | null, primaryWidth: number | null, primaryHeight: number | null, primaryFps: number | null, primaryCodec: string | null, primaryBitrate: number | null, hasIssues: boolean | null, issuesDescription: string | null } | null, pushTargets: Array<{ id: string, streamId: string, platform: string | null, name: string, targetUri: string, isEnabled: boolean, status: string, lastError: string | null, reasonCode: string | null, lastPushedAt: string | null, createdAt: string }>, playbackPolicy: { type: PlaybackPolicyType, allowedOrigins: Array<string> } | null, thumbnailAssets: { posterUrl: string, spriteVttUrl: string, spriteJpgUrl: string, assetKey: string } | null, retentionOverrides: { streamId: string, dvrRetentionDaysOverride: number | null, clipRetentionDaysOverride: number | null } | null } | null } }>, pageInfo: { startCursor: string | null, endCursor: string | null, hasNextPage: boolean, hasPreviousPage: boolean } } } } };
+lifecycle: { storageEventsConnection: { totalCount: number, edges: Array<{ cursor: string, node: { id: string, timestamp: string, streamId: string, assetHash: string, action: string, assetType: string, sizeBytes: number, s3Url: string | null, localPath: string | null, nodeId: string, clusterId: string | null, originClusterId: string | null, controlCellId: string | null, durationMs: number | null, warmDurationMs: number | null, error: string | null, stream: { id: string, streamId: string, name: string, description: string | null, streamKey: string | null, playbackId: string, record: boolean, liveVideoAbr: string, ingestMode: IngestMode, createdAt: string, updatedAt: string, dvrChapterMode: DVRChapterMode | null, dvrChapterIntervalSeconds: number | null, monitoring: MonitoringToggle, pullSource: { sourceUriRedacted: string, enabled: boolean, class: string } | null, managedSource: { sourceKind: string, alwaysOn: boolean, placementCount: number } | null, sourceLocation: { mode: SourceLocationMode, avoidNodeIds: Array<string> }, metrics: { status: StreamStatus, isLive: boolean, currentViewers: number, startedAt: string | null, updatedAt: string, nodeId: string | null, trackCount: number | null, totalInputs: number | null, uploadedBytes: number, downloadedBytes: number, viewerSeconds: number, packetsSent: number | null, packetsLost: number | null, packetsRetransmitted: number | null, bufferState: string | null, qualityTier: string | null, primaryWidth: number | null, primaryHeight: number | null, primaryFps: number | null, primaryCodec: string | null, primaryBitrate: number | null, hasIssues: boolean | null, issuesDescription: string | null } | null, pushTargets: Array<{ id: string, streamId: string, platform: string | null, name: string, videoChoice: string, targetUri: string, isEnabled: boolean, status: string, lastError: string | null, reasonCode: string | null, lastPushedAt: string | null, createdAt: string }>, playbackPolicy: { type: PlaybackPolicyType, allowedOrigins: Array<string> } | null, thumbnailAssets: { posterUrl: string, spriteVttUrl: string, spriteJpgUrl: string, assetKey: string } | null, retentionOverrides: { streamId: string, dvrRetentionDaysOverride: number | null, clipRetentionDaysOverride: number | null } | null } | null } }>, pageInfo: { startCursor: string | null, endCursor: string | null, hasNextPage: boolean, hasPreviousPage: boolean } } } } };
 
 export type GetStorageUsageConnectionQueryVariables = Exact<{
   page?: ConnectionInput | null | undefined;
@@ -7852,7 +7916,7 @@ export type GetStreamAnalyticsDailyConnectionQueryVariables = Exact<{
 export type GetStreamAnalyticsDailyConnectionQuery = { /** Unified analytics surface providing access to all platform metrics. Combines data from Periscope (historical) and Signalman (real-time). */
 analytics: { /** Usage analytics: streaming hours, storage, and processing. */
 usage: { /** Streaming usage: viewer hours, geographic distribution, quality tiers. */
-streaming: { streamAnalyticsDailyConnection: { totalCount: number, edges: Array<{ cursor: string, node: { id: string, day: string, streamId: string, totalViews: number, uniqueViewers: number, uniqueCountries: number, uniqueCities: number, egressBytes: number, stream: { id: string, streamId: string, name: string, description: string | null, streamKey: string | null, playbackId: string, record: boolean, ingestMode: IngestMode, createdAt: string, updatedAt: string, dvrChapterMode: DVRChapterMode | null, dvrChapterIntervalSeconds: number | null, monitoring: MonitoringToggle, pullSource: { sourceUriRedacted: string, enabled: boolean, class: string } | null, managedSource: { sourceKind: string, alwaysOn: boolean, placementCount: number } | null, sourceLocation: { mode: SourceLocationMode, avoidNodeIds: Array<string> }, metrics: { status: StreamStatus, isLive: boolean, currentViewers: number, startedAt: string | null, updatedAt: string, nodeId: string | null, trackCount: number | null, totalInputs: number | null, uploadedBytes: number, downloadedBytes: number, viewerSeconds: number, packetsSent: number | null, packetsLost: number | null, packetsRetransmitted: number | null, bufferState: string | null, qualityTier: string | null, primaryWidth: number | null, primaryHeight: number | null, primaryFps: number | null, primaryCodec: string | null, primaryBitrate: number | null, hasIssues: boolean | null, issuesDescription: string | null } | null, pushTargets: Array<{ id: string, streamId: string, platform: string | null, name: string, targetUri: string, isEnabled: boolean, status: string, lastError: string | null, reasonCode: string | null, lastPushedAt: string | null, createdAt: string }>, playbackPolicy: { type: PlaybackPolicyType, allowedOrigins: Array<string> } | null, thumbnailAssets: { posterUrl: string, spriteVttUrl: string, spriteJpgUrl: string, assetKey: string } | null, retentionOverrides: { streamId: string, dvrRetentionDaysOverride: number | null, clipRetentionDaysOverride: number | null } | null } | null } }>, pageInfo: { startCursor: string | null, endCursor: string | null, hasNextPage: boolean, hasPreviousPage: boolean } } } } } };
+streaming: { streamAnalyticsDailyConnection: { totalCount: number, edges: Array<{ cursor: string, node: { id: string, day: string, streamId: string, totalViews: number, uniqueViewers: number, uniqueCountries: number, uniqueCities: number, egressBytes: number, stream: { id: string, streamId: string, name: string, description: string | null, streamKey: string | null, playbackId: string, record: boolean, liveVideoAbr: string, ingestMode: IngestMode, createdAt: string, updatedAt: string, dvrChapterMode: DVRChapterMode | null, dvrChapterIntervalSeconds: number | null, monitoring: MonitoringToggle, pullSource: { sourceUriRedacted: string, enabled: boolean, class: string } | null, managedSource: { sourceKind: string, alwaysOn: boolean, placementCount: number } | null, sourceLocation: { mode: SourceLocationMode, avoidNodeIds: Array<string> }, metrics: { status: StreamStatus, isLive: boolean, currentViewers: number, startedAt: string | null, updatedAt: string, nodeId: string | null, trackCount: number | null, totalInputs: number | null, uploadedBytes: number, downloadedBytes: number, viewerSeconds: number, packetsSent: number | null, packetsLost: number | null, packetsRetransmitted: number | null, bufferState: string | null, qualityTier: string | null, primaryWidth: number | null, primaryHeight: number | null, primaryFps: number | null, primaryCodec: string | null, primaryBitrate: number | null, hasIssues: boolean | null, issuesDescription: string | null } | null, pushTargets: Array<{ id: string, streamId: string, platform: string | null, name: string, videoChoice: string, targetUri: string, isEnabled: boolean, status: string, lastError: string | null, reasonCode: string | null, lastPushedAt: string | null, createdAt: string }>, playbackPolicy: { type: PlaybackPolicyType, allowedOrigins: Array<string> } | null, thumbnailAssets: { posterUrl: string, spriteVttUrl: string, spriteJpgUrl: string, assetKey: string } | null, retentionOverrides: { streamId: string, dvrRetentionDaysOverride: number | null, clipRetentionDaysOverride: number | null } | null } | null } }>, pageInfo: { startCursor: string | null, endCursor: string | null, hasNextPage: boolean, hasPreviousPage: boolean } } } } } };
 
 export type GetStreamAnalyticsSummariesConnectionQueryVariables = Exact<{
   page?: ConnectionInput | null | undefined;
@@ -7867,7 +7931,7 @@ export type GetStreamAnalyticsSummariesConnectionQuery = { /** Unified analytics
 analytics: { /** Usage analytics: streaming hours, storage, and processing. */
 usage: { /** Streaming usage: viewer hours, geographic distribution, quality tiers. */
 streaming: { /** Pre-aggregated analytics summaries for multiple streams. Returns sorted, paginated results with tenant-wide share percentages. */
-streamAnalyticsSummariesConnection: { totalCount: number, edges: Array<{ cursor: string, node: { streamId: string, rangeAvgViewers: number, rangePeakConcurrentViewers: number, rangeTotalViews: number, rangeTotalSessions: number, rangeAvgBufferHealth: number, rangeAvgBitrate: number, rangeAvgFps: number, rangePacketLossRate: number | null, rangeAvgConnectionTime: number | null, rangeViewerHours: number, rangeEgressGb: number, rangeAvgSessionSeconds: number, rangeAvgBytesPerSession: number, rangeUniqueViewers: number, rangeUniqueCountries: number, rangeRebufferCount: number, rangeIssueCount: number, rangeBufferDryCount: number, rangeEgressSharePercent: number | null, rangeViewerSharePercent: number | null, rangeViewerHoursSharePercent: number | null, stream: { id: string, streamId: string, name: string, description: string | null, streamKey: string | null, playbackId: string, record: boolean, ingestMode: IngestMode, createdAt: string, updatedAt: string, dvrChapterMode: DVRChapterMode | null, dvrChapterIntervalSeconds: number | null, monitoring: MonitoringToggle, pullSource: { sourceUriRedacted: string, enabled: boolean, class: string } | null, managedSource: { sourceKind: string, alwaysOn: boolean, placementCount: number } | null, sourceLocation: { mode: SourceLocationMode, avoidNodeIds: Array<string> }, metrics: { status: StreamStatus, isLive: boolean, currentViewers: number, startedAt: string | null, updatedAt: string, nodeId: string | null, trackCount: number | null, totalInputs: number | null, uploadedBytes: number, downloadedBytes: number, viewerSeconds: number, packetsSent: number | null, packetsLost: number | null, packetsRetransmitted: number | null, bufferState: string | null, qualityTier: string | null, primaryWidth: number | null, primaryHeight: number | null, primaryFps: number | null, primaryCodec: string | null, primaryBitrate: number | null, hasIssues: boolean | null, issuesDescription: string | null } | null, pushTargets: Array<{ id: string, streamId: string, platform: string | null, name: string, targetUri: string, isEnabled: boolean, status: string, lastError: string | null, reasonCode: string | null, lastPushedAt: string | null, createdAt: string }>, playbackPolicy: { type: PlaybackPolicyType, allowedOrigins: Array<string> } | null, thumbnailAssets: { posterUrl: string, spriteVttUrl: string, spriteJpgUrl: string, assetKey: string } | null, retentionOverrides: { streamId: string, dvrRetentionDaysOverride: number | null, clipRetentionDaysOverride: number | null } | null } | null, timeRange: { start: string, end: string }, rangeQuality: { tier2160pMinutes: number, tier1440pMinutes: number, tier1080pMinutes: number, tier720pMinutes: number, tier480pMinutes: number, tierSdMinutes: number, codecH264Minutes: number, codecH265Minutes: number, codecVp9Minutes: number, codecAv1Minutes: number } } }>, pageInfo: { startCursor: string | null, endCursor: string | null, hasNextPage: boolean, hasPreviousPage: boolean } } } } } };
+streamAnalyticsSummariesConnection: { totalCount: number, edges: Array<{ cursor: string, node: { streamId: string, rangeAvgViewers: number, rangePeakConcurrentViewers: number, rangeTotalViews: number, rangeTotalSessions: number, rangeAvgBufferHealth: number, rangeAvgBitrate: number, rangeAvgFps: number, rangePacketLossRate: number | null, rangeAvgConnectionTime: number | null, rangeViewerHours: number, rangeEgressGb: number, rangeAvgSessionSeconds: number, rangeAvgBytesPerSession: number, rangeUniqueViewers: number, rangeUniqueCountries: number, rangeRebufferCount: number, rangeIssueCount: number, rangeBufferDryCount: number, rangeEgressSharePercent: number | null, rangeViewerSharePercent: number | null, rangeViewerHoursSharePercent: number | null, stream: { id: string, streamId: string, name: string, description: string | null, streamKey: string | null, playbackId: string, record: boolean, liveVideoAbr: string, ingestMode: IngestMode, createdAt: string, updatedAt: string, dvrChapterMode: DVRChapterMode | null, dvrChapterIntervalSeconds: number | null, monitoring: MonitoringToggle, pullSource: { sourceUriRedacted: string, enabled: boolean, class: string } | null, managedSource: { sourceKind: string, alwaysOn: boolean, placementCount: number } | null, sourceLocation: { mode: SourceLocationMode, avoidNodeIds: Array<string> }, metrics: { status: StreamStatus, isLive: boolean, currentViewers: number, startedAt: string | null, updatedAt: string, nodeId: string | null, trackCount: number | null, totalInputs: number | null, uploadedBytes: number, downloadedBytes: number, viewerSeconds: number, packetsSent: number | null, packetsLost: number | null, packetsRetransmitted: number | null, bufferState: string | null, qualityTier: string | null, primaryWidth: number | null, primaryHeight: number | null, primaryFps: number | null, primaryCodec: string | null, primaryBitrate: number | null, hasIssues: boolean | null, issuesDescription: string | null } | null, pushTargets: Array<{ id: string, streamId: string, platform: string | null, name: string, videoChoice: string, targetUri: string, isEnabled: boolean, status: string, lastError: string | null, reasonCode: string | null, lastPushedAt: string | null, createdAt: string }>, playbackPolicy: { type: PlaybackPolicyType, allowedOrigins: Array<string> } | null, thumbnailAssets: { posterUrl: string, spriteVttUrl: string, spriteJpgUrl: string, assetKey: string } | null, retentionOverrides: { streamId: string, dvrRetentionDaysOverride: number | null, clipRetentionDaysOverride: number | null } | null } | null, timeRange: { start: string, end: string }, rangeQuality: { tier2160pMinutes: number, tier1440pMinutes: number, tier1080pMinutes: number, tier720pMinutes: number, tier480pMinutes: number, tierSdMinutes: number, codecH264Minutes: number, codecH265Minutes: number, codecVp9Minutes: number, codecAv1Minutes: number } } }>, pageInfo: { startCursor: string | null, endCursor: string | null, hasNextPage: boolean, hasPreviousPage: boolean } } } } } };
 
 export type GetStreamAnalyticsSummaryQueryVariables = Exact<{
   streamId: string;
@@ -7888,7 +7952,8 @@ name: string, /** Optional description for the stream. */
 description: string | null, /** Secret key for publisher-authenticated ingest; null for pull and managed sources. The key lets its holder publish to the stream, so an API token needs the streams:write scope: without it this field is null and the response carries a FORBIDDEN error at its path. */
 streamKey: string | null, /** Public identifier for playback URLs. */
 playbackId: string, /** Whether DVR recording is enabled for this stream. */
-record: boolean, /** How source media enters the stream. */
+record: boolean, /** INHERIT or OFF for live video renditions. */
+liveVideoAbr: string, /** How source media enters the stream. */
 ingestMode: IngestMode, /** When this stream was created. */
 createdAt: string, /** When this stream was last modified. */
 updatedAt: string, /** How saved recordings are split into chapters. Snapshotted when a recording starts; changes apply from the next broadcast. NONE = live rewind only, nothing kept after the broadcast. */
@@ -7929,7 +7994,7 @@ primaryCodec: string | null, /** Primary video bitrate in kbps. */
 primaryBitrate: number | null, /** Whether the stream has active quality issues. */
 hasIssues: boolean | null, /** Human-readable description of current issues. */
 issuesDescription: string | null } | null, /** Configured multistream push targets for this stream. */
-pushTargets: Array<{ id: string, streamId: string, platform: string | null, name: string, targetUri: string, isEnabled: boolean, status: string, lastError: string | null, reasonCode: string | null, lastPushedAt: string | null, createdAt: string }>, /** Playback access policy. null/PUBLIC = anyone with the playbackId can watch. */
+pushTargets: Array<{ id: string, streamId: string, platform: string | null, name: string, videoChoice: string, targetUri: string, isEnabled: boolean, status: string, lastError: string | null, reasonCode: string | null, lastPushedAt: string | null, createdAt: string }>, /** Playback access policy. null/PUBLIC = anyone with the playbackId can watch. */
 playbackPolicy: { type: PlaybackPolicyType, /** Sites allowed to embed the content, as normalized `scheme://host[:port]` origins; `*` allows any. Empty = no restriction. A browser viewer whose Origin (or Referer) is not listed is denied. */
 allowedOrigins: Array<string> } | null, /** Server-resolved Chandler URLs for the stream's poster and sprite thumbnails. Derived from active_ingest_cluster_id + stream_id at SELECT time. Null when the stream has never been live; the poster.jpg 404s until Helmsman uploads its first frame, which the player's fallback chain handles. */
 thumbnailAssets: { posterUrl: string, spriteVttUrl: string, spriteJpgUrl: string, assetKey: string } | null, /** Per-stream retention overrides for DVR and clips. Null when the stream has no overrides set (inherits the tenant default). VOD uploads aren't stream-bound, so they don't appear here. */
@@ -7949,7 +8014,7 @@ export type GetStreamConnectionHourlyConnectionQueryVariables = Exact<{
 export type GetStreamConnectionHourlyConnectionQuery = { /** Unified analytics surface providing access to all platform metrics. Combines data from Periscope (historical) and Signalman (real-time). */
 analytics: { /** Usage analytics: streaming hours, storage, and processing. */
 usage: { /** Streaming usage: viewer hours, geographic distribution, quality tiers. */
-streaming: { streamConnectionHourlyConnection: { totalCount: number, edges: Array<{ cursor: string, node: { id: string, hour: string, streamId: string, totalBytes: number, uniqueViewers: number, totalSessions: number, stream: { id: string, streamId: string, name: string, description: string | null, streamKey: string | null, playbackId: string, record: boolean, ingestMode: IngestMode, createdAt: string, updatedAt: string, dvrChapterMode: DVRChapterMode | null, dvrChapterIntervalSeconds: number | null, monitoring: MonitoringToggle, pullSource: { sourceUriRedacted: string, enabled: boolean, class: string } | null, managedSource: { sourceKind: string, alwaysOn: boolean, placementCount: number } | null, sourceLocation: { mode: SourceLocationMode, avoidNodeIds: Array<string> }, metrics: { status: StreamStatus, isLive: boolean, currentViewers: number, startedAt: string | null, updatedAt: string, nodeId: string | null, trackCount: number | null, totalInputs: number | null, uploadedBytes: number, downloadedBytes: number, viewerSeconds: number, packetsSent: number | null, packetsLost: number | null, packetsRetransmitted: number | null, bufferState: string | null, qualityTier: string | null, primaryWidth: number | null, primaryHeight: number | null, primaryFps: number | null, primaryCodec: string | null, primaryBitrate: number | null, hasIssues: boolean | null, issuesDescription: string | null } | null, pushTargets: Array<{ id: string, streamId: string, platform: string | null, name: string, targetUri: string, isEnabled: boolean, status: string, lastError: string | null, reasonCode: string | null, lastPushedAt: string | null, createdAt: string }>, playbackPolicy: { type: PlaybackPolicyType, allowedOrigins: Array<string> } | null, thumbnailAssets: { posterUrl: string, spriteVttUrl: string, spriteJpgUrl: string, assetKey: string } | null, retentionOverrides: { streamId: string, dvrRetentionDaysOverride: number | null, clipRetentionDaysOverride: number | null } | null } | null } }>, pageInfo: { startCursor: string | null, endCursor: string | null, hasNextPage: boolean, hasPreviousPage: boolean } } } } } };
+streaming: { streamConnectionHourlyConnection: { totalCount: number, edges: Array<{ cursor: string, node: { id: string, hour: string, streamId: string, totalBytes: number, uniqueViewers: number, totalSessions: number, stream: { id: string, streamId: string, name: string, description: string | null, streamKey: string | null, playbackId: string, record: boolean, liveVideoAbr: string, ingestMode: IngestMode, createdAt: string, updatedAt: string, dvrChapterMode: DVRChapterMode | null, dvrChapterIntervalSeconds: number | null, monitoring: MonitoringToggle, pullSource: { sourceUriRedacted: string, enabled: boolean, class: string } | null, managedSource: { sourceKind: string, alwaysOn: boolean, placementCount: number } | null, sourceLocation: { mode: SourceLocationMode, avoidNodeIds: Array<string> }, metrics: { status: StreamStatus, isLive: boolean, currentViewers: number, startedAt: string | null, updatedAt: string, nodeId: string | null, trackCount: number | null, totalInputs: number | null, uploadedBytes: number, downloadedBytes: number, viewerSeconds: number, packetsSent: number | null, packetsLost: number | null, packetsRetransmitted: number | null, bufferState: string | null, qualityTier: string | null, primaryWidth: number | null, primaryHeight: number | null, primaryFps: number | null, primaryCodec: string | null, primaryBitrate: number | null, hasIssues: boolean | null, issuesDescription: string | null } | null, pushTargets: Array<{ id: string, streamId: string, platform: string | null, name: string, videoChoice: string, targetUri: string, isEnabled: boolean, status: string, lastError: string | null, reasonCode: string | null, lastPushedAt: string | null, createdAt: string }>, playbackPolicy: { type: PlaybackPolicyType, allowedOrigins: Array<string> } | null, thumbnailAssets: { posterUrl: string, spriteVttUrl: string, spriteJpgUrl: string, assetKey: string } | null, retentionOverrides: { streamId: string, dvrRetentionDaysOverride: number | null, clipRetentionDaysOverride: number | null } | null } | null } }>, pageInfo: { startCursor: string | null, endCursor: string | null, hasNextPage: boolean, hasPreviousPage: boolean } } } } } };
 
 export type GetStreamEventsConnectionQueryVariables = Exact<{
   page?: ConnectionInput | null | undefined;
@@ -7961,7 +8026,7 @@ export type GetStreamEventsConnectionQueryVariables = Exact<{
 
 export type GetStreamEventsConnectionQuery = { /** Unified analytics surface providing access to all platform metrics. Combines data from Periscope (historical) and Signalman (real-time). */
 analytics: { /** Lifecycle analytics: stream events, artifacts, connections. */
-lifecycle: { streamEventsConnection: { totalCount: number, edges: Array<{ cursor: string, node: { id: string, eventId: string, streamId: string | null, nodeId: string | null, type: StreamEventType, status: StreamStatus | null, timestamp: string, details: string | null, payload: unknown, source: StreamEventSource, bufferState: string | null, hasIssues: boolean | null, trackCount: number | null, qualityTier: string | null, primaryWidth: number | null, primaryHeight: number | null, primaryFps: number | null, primaryCodec: string | null, primaryBitrate: number | null, downloadedBytes: number | null, uploadedBytes: number | null, totalViewers: number | null, totalInputs: number | null, totalOutputs: number | null, viewerSeconds: number | null, requestUrl: string | null, protocol: string | null, latitude: number | null, longitude: number | null, location: string | null, countryCode: string | null, city: string | null, sourceRegion: string, sourceClusterId: string, streamOriginRegion: string, streamOriginClusterId: string, schemaVersion: number, stream: { id: string, streamId: string, name: string, description: string | null, streamKey: string | null, playbackId: string, record: boolean, ingestMode: IngestMode, createdAt: string, updatedAt: string, dvrChapterMode: DVRChapterMode | null, dvrChapterIntervalSeconds: number | null, monitoring: MonitoringToggle, pullSource: { sourceUriRedacted: string, enabled: boolean, class: string } | null, managedSource: { sourceKind: string, alwaysOn: boolean, placementCount: number } | null, sourceLocation: { mode: SourceLocationMode, avoidNodeIds: Array<string> }, metrics: { status: StreamStatus, isLive: boolean, currentViewers: number, startedAt: string | null, updatedAt: string, nodeId: string | null, trackCount: number | null, totalInputs: number | null, uploadedBytes: number, downloadedBytes: number, viewerSeconds: number, packetsSent: number | null, packetsLost: number | null, packetsRetransmitted: number | null, bufferState: string | null, qualityTier: string | null, primaryWidth: number | null, primaryHeight: number | null, primaryFps: number | null, primaryCodec: string | null, primaryBitrate: number | null, hasIssues: boolean | null, issuesDescription: string | null } | null, pushTargets: Array<{ id: string, streamId: string, platform: string | null, name: string, targetUri: string, isEnabled: boolean, status: string, lastError: string | null, reasonCode: string | null, lastPushedAt: string | null, createdAt: string }>, playbackPolicy: { type: PlaybackPolicyType, allowedOrigins: Array<string> } | null, thumbnailAssets: { posterUrl: string, spriteVttUrl: string, spriteJpgUrl: string, assetKey: string } | null, retentionOverrides: { streamId: string, dvrRetentionDaysOverride: number | null, clipRetentionDaysOverride: number | null } | null } | null } }>, pageInfo: { startCursor: string | null, endCursor: string | null, hasNextPage: boolean, hasPreviousPage: boolean } } } } };
+lifecycle: { streamEventsConnection: { totalCount: number, edges: Array<{ cursor: string, node: { id: string, eventId: string, streamId: string | null, nodeId: string | null, type: StreamEventType, status: StreamStatus | null, timestamp: string, details: string | null, payload: unknown, source: StreamEventSource, bufferState: string | null, hasIssues: boolean | null, trackCount: number | null, qualityTier: string | null, primaryWidth: number | null, primaryHeight: number | null, primaryFps: number | null, primaryCodec: string | null, primaryBitrate: number | null, downloadedBytes: number | null, uploadedBytes: number | null, totalViewers: number | null, totalInputs: number | null, totalOutputs: number | null, viewerSeconds: number | null, requestUrl: string | null, protocol: string | null, latitude: number | null, longitude: number | null, location: string | null, countryCode: string | null, city: string | null, sourceRegion: string, sourceClusterId: string, streamOriginRegion: string, streamOriginClusterId: string, schemaVersion: number, stream: { id: string, streamId: string, name: string, description: string | null, streamKey: string | null, playbackId: string, record: boolean, liveVideoAbr: string, ingestMode: IngestMode, createdAt: string, updatedAt: string, dvrChapterMode: DVRChapterMode | null, dvrChapterIntervalSeconds: number | null, monitoring: MonitoringToggle, pullSource: { sourceUriRedacted: string, enabled: boolean, class: string } | null, managedSource: { sourceKind: string, alwaysOn: boolean, placementCount: number } | null, sourceLocation: { mode: SourceLocationMode, avoidNodeIds: Array<string> }, metrics: { status: StreamStatus, isLive: boolean, currentViewers: number, startedAt: string | null, updatedAt: string, nodeId: string | null, trackCount: number | null, totalInputs: number | null, uploadedBytes: number, downloadedBytes: number, viewerSeconds: number, packetsSent: number | null, packetsLost: number | null, packetsRetransmitted: number | null, bufferState: string | null, qualityTier: string | null, primaryWidth: number | null, primaryHeight: number | null, primaryFps: number | null, primaryCodec: string | null, primaryBitrate: number | null, hasIssues: boolean | null, issuesDescription: string | null } | null, pushTargets: Array<{ id: string, streamId: string, platform: string | null, name: string, videoChoice: string, targetUri: string, isEnabled: boolean, status: string, lastError: string | null, reasonCode: string | null, lastPushedAt: string | null, createdAt: string }>, playbackPolicy: { type: PlaybackPolicyType, allowedOrigins: Array<string> } | null, thumbnailAssets: { posterUrl: string, spriteVttUrl: string, spriteJpgUrl: string, assetKey: string } | null, retentionOverrides: { streamId: string, dvrRetentionDaysOverride: number | null, clipRetentionDaysOverride: number | null } | null } | null } }>, pageInfo: { startCursor: string | null, endCursor: string | null, hasNextPage: boolean, hasPreviousPage: boolean } } } } };
 
 export type GetStreamHealth5mConnectionQueryVariables = Exact<{
   page?: ConnectionInput | null | undefined;
@@ -7985,7 +8050,7 @@ export type GetStreamHealthConnectionQueryVariables = Exact<{
 
 export type GetStreamHealthConnectionQuery = { /** Unified analytics surface providing access to all platform metrics. Combines data from Periscope (historical) and Signalman (real-time). */
 analytics: { /** Health analytics: stream quality, rebuffering, client QoE. */
-health: { streamHealthConnection: { totalCount: number, edges: Array<{ cursor: string, node: { id: string, timestamp: string, streamId: string, nodeId: string, issuesDescription: string | null, hasIssues: boolean, bitrate: number | null, fps: number | null, width: number | null, height: number | null, codec: string | null, qualityTier: string | null, gopSize: number | null, frameMsMax: number | null, frameMsMin: number | null, framesMax: number | null, framesMin: number | null, keyframeMsMax: number | null, keyframeMsMin: number | null, frameJitterMs: number | null, trackCount: number | null, bufferState: BufferState, bufferHealth: number | null, bufferSize: number | null, audioChannels: number | null, audioSampleRate: number | null, audioCodec: string | null, audioBitrate: number | null, trackMetadata: unknown, stream: { id: string, streamId: string, name: string, description: string | null, streamKey: string | null, playbackId: string, record: boolean, ingestMode: IngestMode, createdAt: string, updatedAt: string, dvrChapterMode: DVRChapterMode | null, dvrChapterIntervalSeconds: number | null, monitoring: MonitoringToggle, pullSource: { sourceUriRedacted: string, enabled: boolean, class: string } | null, managedSource: { sourceKind: string, alwaysOn: boolean, placementCount: number } | null, sourceLocation: { mode: SourceLocationMode, avoidNodeIds: Array<string> }, metrics: { status: StreamStatus, isLive: boolean, currentViewers: number, startedAt: string | null, updatedAt: string, nodeId: string | null, trackCount: number | null, totalInputs: number | null, uploadedBytes: number, downloadedBytes: number, viewerSeconds: number, packetsSent: number | null, packetsLost: number | null, packetsRetransmitted: number | null, bufferState: string | null, qualityTier: string | null, primaryWidth: number | null, primaryHeight: number | null, primaryFps: number | null, primaryCodec: string | null, primaryBitrate: number | null, hasIssues: boolean | null, issuesDescription: string | null } | null, pushTargets: Array<{ id: string, streamId: string, platform: string | null, name: string, targetUri: string, isEnabled: boolean, status: string, lastError: string | null, reasonCode: string | null, lastPushedAt: string | null, createdAt: string }>, playbackPolicy: { type: PlaybackPolicyType, allowedOrigins: Array<string> } | null, thumbnailAssets: { posterUrl: string, spriteVttUrl: string, spriteJpgUrl: string, assetKey: string } | null, retentionOverrides: { streamId: string, dvrRetentionDaysOverride: number | null, clipRetentionDaysOverride: number | null } | null } | null } }>, pageInfo: { startCursor: string | null, endCursor: string | null, hasNextPage: boolean, hasPreviousPage: boolean } } } } };
+health: { streamHealthConnection: { totalCount: number, edges: Array<{ cursor: string, node: { id: string, timestamp: string, streamId: string, nodeId: string, issuesDescription: string | null, hasIssues: boolean, bitrate: number | null, fps: number | null, width: number | null, height: number | null, codec: string | null, qualityTier: string | null, gopSize: number | null, frameMsMax: number | null, frameMsMin: number | null, framesMax: number | null, framesMin: number | null, keyframeMsMax: number | null, keyframeMsMin: number | null, frameJitterMs: number | null, trackCount: number | null, bufferState: BufferState, bufferHealth: number | null, bufferSize: number | null, audioChannels: number | null, audioSampleRate: number | null, audioCodec: string | null, audioBitrate: number | null, trackMetadata: unknown, stream: { id: string, streamId: string, name: string, description: string | null, streamKey: string | null, playbackId: string, record: boolean, liveVideoAbr: string, ingestMode: IngestMode, createdAt: string, updatedAt: string, dvrChapterMode: DVRChapterMode | null, dvrChapterIntervalSeconds: number | null, monitoring: MonitoringToggle, pullSource: { sourceUriRedacted: string, enabled: boolean, class: string } | null, managedSource: { sourceKind: string, alwaysOn: boolean, placementCount: number } | null, sourceLocation: { mode: SourceLocationMode, avoidNodeIds: Array<string> }, metrics: { status: StreamStatus, isLive: boolean, currentViewers: number, startedAt: string | null, updatedAt: string, nodeId: string | null, trackCount: number | null, totalInputs: number | null, uploadedBytes: number, downloadedBytes: number, viewerSeconds: number, packetsSent: number | null, packetsLost: number | null, packetsRetransmitted: number | null, bufferState: string | null, qualityTier: string | null, primaryWidth: number | null, primaryHeight: number | null, primaryFps: number | null, primaryCodec: string | null, primaryBitrate: number | null, hasIssues: boolean | null, issuesDescription: string | null } | null, pushTargets: Array<{ id: string, streamId: string, platform: string | null, name: string, videoChoice: string, targetUri: string, isEnabled: boolean, status: string, lastError: string | null, reasonCode: string | null, lastPushedAt: string | null, createdAt: string }>, playbackPolicy: { type: PlaybackPolicyType, allowedOrigins: Array<string> } | null, thumbnailAssets: { posterUrl: string, spriteVttUrl: string, spriteJpgUrl: string, assetKey: string } | null, retentionOverrides: { streamId: string, dvrRetentionDaysOverride: number | null, clipRetentionDaysOverride: number | null } | null } | null } }>, pageInfo: { startCursor: string | null, endCursor: string | null, hasNextPage: boolean, hasPreviousPage: boolean } } } } };
 
 export type GetStreamHealthSummaryQueryVariables = Exact<{
   streamId?: string | null | undefined;
@@ -8060,7 +8125,7 @@ export type GetTrackListConnectionQueryVariables = Exact<{
 
 export type GetTrackListConnectionQuery = { /** Unified analytics surface providing access to all platform metrics. Combines data from Periscope (historical) and Signalman (real-time). */
 analytics: { /** Lifecycle analytics: stream events, artifacts, connections. */
-lifecycle: { trackListConnection: { totalCount: number, edges: Array<{ cursor: string, node: { id: string, streamId: string, nodeId: string | null, trackList: string, trackCount: number, timestamp: string, stream: { id: string, streamId: string, name: string, description: string | null, streamKey: string | null, playbackId: string, record: boolean, ingestMode: IngestMode, createdAt: string, updatedAt: string, dvrChapterMode: DVRChapterMode | null, dvrChapterIntervalSeconds: number | null, monitoring: MonitoringToggle, pullSource: { sourceUriRedacted: string, enabled: boolean, class: string } | null, managedSource: { sourceKind: string, alwaysOn: boolean, placementCount: number } | null, sourceLocation: { mode: SourceLocationMode, avoidNodeIds: Array<string> }, metrics: { status: StreamStatus, isLive: boolean, currentViewers: number, startedAt: string | null, updatedAt: string, nodeId: string | null, trackCount: number | null, totalInputs: number | null, uploadedBytes: number, downloadedBytes: number, viewerSeconds: number, packetsSent: number | null, packetsLost: number | null, packetsRetransmitted: number | null, bufferState: string | null, qualityTier: string | null, primaryWidth: number | null, primaryHeight: number | null, primaryFps: number | null, primaryCodec: string | null, primaryBitrate: number | null, hasIssues: boolean | null, issuesDescription: string | null } | null, pushTargets: Array<{ id: string, streamId: string, platform: string | null, name: string, targetUri: string, isEnabled: boolean, status: string, lastError: string | null, reasonCode: string | null, lastPushedAt: string | null, createdAt: string }>, playbackPolicy: { type: PlaybackPolicyType, allowedOrigins: Array<string> } | null, thumbnailAssets: { posterUrl: string, spriteVttUrl: string, spriteJpgUrl: string, assetKey: string } | null, retentionOverrides: { streamId: string, dvrRetentionDaysOverride: number | null, clipRetentionDaysOverride: number | null } | null } | null, tracks: Array<{ trackName: string, trackType: string, codec: string | null, bitrateKbps: number | null, bitrateBps: number | null, buffer: number | null, jitter: number | null, width: number | null, height: number | null, fps: number | null, resolution: string | null, hasBFrames: boolean | null, channels: number | null, sampleRate: number | null }> | null } }>, pageInfo: { startCursor: string | null, endCursor: string | null, hasNextPage: boolean, hasPreviousPage: boolean } } } } };
+lifecycle: { trackListConnection: { totalCount: number, edges: Array<{ cursor: string, node: { id: string, streamId: string, nodeId: string | null, trackList: string, trackCount: number, timestamp: string, stream: { id: string, streamId: string, name: string, description: string | null, streamKey: string | null, playbackId: string, record: boolean, liveVideoAbr: string, ingestMode: IngestMode, createdAt: string, updatedAt: string, dvrChapterMode: DVRChapterMode | null, dvrChapterIntervalSeconds: number | null, monitoring: MonitoringToggle, pullSource: { sourceUriRedacted: string, enabled: boolean, class: string } | null, managedSource: { sourceKind: string, alwaysOn: boolean, placementCount: number } | null, sourceLocation: { mode: SourceLocationMode, avoidNodeIds: Array<string> }, metrics: { status: StreamStatus, isLive: boolean, currentViewers: number, startedAt: string | null, updatedAt: string, nodeId: string | null, trackCount: number | null, totalInputs: number | null, uploadedBytes: number, downloadedBytes: number, viewerSeconds: number, packetsSent: number | null, packetsLost: number | null, packetsRetransmitted: number | null, bufferState: string | null, qualityTier: string | null, primaryWidth: number | null, primaryHeight: number | null, primaryFps: number | null, primaryCodec: string | null, primaryBitrate: number | null, hasIssues: boolean | null, issuesDescription: string | null } | null, pushTargets: Array<{ id: string, streamId: string, platform: string | null, name: string, videoChoice: string, targetUri: string, isEnabled: boolean, status: string, lastError: string | null, reasonCode: string | null, lastPushedAt: string | null, createdAt: string }>, playbackPolicy: { type: PlaybackPolicyType, allowedOrigins: Array<string> } | null, thumbnailAssets: { posterUrl: string, spriteVttUrl: string, spriteJpgUrl: string, assetKey: string } | null, retentionOverrides: { streamId: string, dvrRetentionDaysOverride: number | null, clipRetentionDaysOverride: number | null } | null } | null, tracks: Array<{ trackName: string, trackType: string, codec: string | null, bitrateKbps: number | null, bitrateBps: number | null, buffer: number | null, jitter: number | null, width: number | null, height: number | null, fps: number | null, resolution: string | null, hasBFrames: boolean | null, channels: number | null, sampleRate: number | null }> | null } }>, pageInfo: { startCursor: string | null, endCursor: string | null, hasNextPage: boolean, hasPreviousPage: boolean } } } } };
 
 export type GetValidateStreamKeyQueryVariables = Exact<{
   streamKey: string;
@@ -8093,7 +8158,7 @@ export type GetViewerGeographicsConnectionQueryVariables = Exact<{
 export type GetViewerGeographicsConnectionQuery = { /** Unified analytics surface providing access to all platform metrics. Combines data from Periscope (historical) and Signalman (real-time). */
 analytics: { /** Usage analytics: streaming hours, storage, and processing. */
 usage: { /** Streaming usage: viewer hours, geographic distribution, quality tiers. */
-streaming: { viewerGeographicsConnection: { totalCount: number, edges: Array<{ cursor: string, node: { timestamp: string, streamId: string | null, nodeId: string | null, countryCode: string | null, city: string | null, latitude: number | null, longitude: number | null, viewerCount: number | null, connectionAddr: string | null, eventType: string | null, source: string | null, sessionDurationSeconds: number | null, bytesTransferred: number | null, connector: string | null, stream: { id: string, streamId: string, name: string, description: string | null, streamKey: string | null, playbackId: string, record: boolean, ingestMode: IngestMode, createdAt: string, updatedAt: string, dvrChapterMode: DVRChapterMode | null, dvrChapterIntervalSeconds: number | null, monitoring: MonitoringToggle, pullSource: { sourceUriRedacted: string, enabled: boolean, class: string } | null, managedSource: { sourceKind: string, alwaysOn: boolean, placementCount: number } | null, sourceLocation: { mode: SourceLocationMode, avoidNodeIds: Array<string> }, metrics: { status: StreamStatus, isLive: boolean, currentViewers: number, startedAt: string | null, updatedAt: string, nodeId: string | null, trackCount: number | null, totalInputs: number | null, uploadedBytes: number, downloadedBytes: number, viewerSeconds: number, packetsSent: number | null, packetsLost: number | null, packetsRetransmitted: number | null, bufferState: string | null, qualityTier: string | null, primaryWidth: number | null, primaryHeight: number | null, primaryFps: number | null, primaryCodec: string | null, primaryBitrate: number | null, hasIssues: boolean | null, issuesDescription: string | null } | null, pushTargets: Array<{ id: string, streamId: string, platform: string | null, name: string, targetUri: string, isEnabled: boolean, status: string, lastError: string | null, reasonCode: string | null, lastPushedAt: string | null, createdAt: string }>, playbackPolicy: { type: PlaybackPolicyType, allowedOrigins: Array<string> } | null, thumbnailAssets: { posterUrl: string, spriteVttUrl: string, spriteJpgUrl: string, assetKey: string } | null, retentionOverrides: { streamId: string, dvrRetentionDaysOverride: number | null, clipRetentionDaysOverride: number | null } | null } | null } }>, pageInfo: { startCursor: string | null, endCursor: string | null, hasNextPage: boolean, hasPreviousPage: boolean } } } } } };
+streaming: { viewerGeographicsConnection: { totalCount: number, edges: Array<{ cursor: string, node: { timestamp: string, streamId: string | null, nodeId: string | null, countryCode: string | null, city: string | null, latitude: number | null, longitude: number | null, viewerCount: number | null, connectionAddr: string | null, eventType: string | null, source: string | null, sessionDurationSeconds: number | null, bytesTransferred: number | null, connector: string | null, stream: { id: string, streamId: string, name: string, description: string | null, streamKey: string | null, playbackId: string, record: boolean, liveVideoAbr: string, ingestMode: IngestMode, createdAt: string, updatedAt: string, dvrChapterMode: DVRChapterMode | null, dvrChapterIntervalSeconds: number | null, monitoring: MonitoringToggle, pullSource: { sourceUriRedacted: string, enabled: boolean, class: string } | null, managedSource: { sourceKind: string, alwaysOn: boolean, placementCount: number } | null, sourceLocation: { mode: SourceLocationMode, avoidNodeIds: Array<string> }, metrics: { status: StreamStatus, isLive: boolean, currentViewers: number, startedAt: string | null, updatedAt: string, nodeId: string | null, trackCount: number | null, totalInputs: number | null, uploadedBytes: number, downloadedBytes: number, viewerSeconds: number, packetsSent: number | null, packetsLost: number | null, packetsRetransmitted: number | null, bufferState: string | null, qualityTier: string | null, primaryWidth: number | null, primaryHeight: number | null, primaryFps: number | null, primaryCodec: string | null, primaryBitrate: number | null, hasIssues: boolean | null, issuesDescription: string | null } | null, pushTargets: Array<{ id: string, streamId: string, platform: string | null, name: string, videoChoice: string, targetUri: string, isEnabled: boolean, status: string, lastError: string | null, reasonCode: string | null, lastPushedAt: string | null, createdAt: string }>, playbackPolicy: { type: PlaybackPolicyType, allowedOrigins: Array<string> } | null, thumbnailAssets: { posterUrl: string, spriteVttUrl: string, spriteJpgUrl: string, assetKey: string } | null, retentionOverrides: { streamId: string, dvrRetentionDaysOverride: number | null, clipRetentionDaysOverride: number | null } | null } | null } }>, pageInfo: { startCursor: string | null, endCursor: string | null, hasNextPage: boolean, hasPreviousPage: boolean } } } } } };
 
 export type GetViewerHoursHourlyConnectionQueryVariables = Exact<{
   page?: ConnectionInput | null | undefined;
@@ -8106,7 +8171,7 @@ export type GetViewerHoursHourlyConnectionQueryVariables = Exact<{
 export type GetViewerHoursHourlyConnectionQuery = { /** Unified analytics surface providing access to all platform metrics. Combines data from Periscope (historical) and Signalman (real-time). */
 analytics: { /** Usage analytics: streaming hours, storage, and processing. */
 usage: { /** Streaming usage: viewer hours, geographic distribution, quality tiers. */
-streaming: { viewerHoursHourlyConnection: { totalCount: number, edges: Array<{ cursor: string, node: { id: string, hour: string, streamId: string | null, countryCode: string | null, uniqueViewers: number, totalSessionSeconds: number, totalBytes: number, viewerHours: number, egressGb: number, stream: { id: string, streamId: string, name: string, description: string | null, streamKey: string | null, playbackId: string, record: boolean, ingestMode: IngestMode, createdAt: string, updatedAt: string, dvrChapterMode: DVRChapterMode | null, dvrChapterIntervalSeconds: number | null, monitoring: MonitoringToggle, pullSource: { sourceUriRedacted: string, enabled: boolean, class: string } | null, managedSource: { sourceKind: string, alwaysOn: boolean, placementCount: number } | null, sourceLocation: { mode: SourceLocationMode, avoidNodeIds: Array<string> }, metrics: { status: StreamStatus, isLive: boolean, currentViewers: number, startedAt: string | null, updatedAt: string, nodeId: string | null, trackCount: number | null, totalInputs: number | null, uploadedBytes: number, downloadedBytes: number, viewerSeconds: number, packetsSent: number | null, packetsLost: number | null, packetsRetransmitted: number | null, bufferState: string | null, qualityTier: string | null, primaryWidth: number | null, primaryHeight: number | null, primaryFps: number | null, primaryCodec: string | null, primaryBitrate: number | null, hasIssues: boolean | null, issuesDescription: string | null } | null, pushTargets: Array<{ id: string, streamId: string, platform: string | null, name: string, targetUri: string, isEnabled: boolean, status: string, lastError: string | null, reasonCode: string | null, lastPushedAt: string | null, createdAt: string }>, playbackPolicy: { type: PlaybackPolicyType, allowedOrigins: Array<string> } | null, thumbnailAssets: { posterUrl: string, spriteVttUrl: string, spriteJpgUrl: string, assetKey: string } | null, retentionOverrides: { streamId: string, dvrRetentionDaysOverride: number | null, clipRetentionDaysOverride: number | null } | null } | null } }>, pageInfo: { startCursor: string | null, endCursor: string | null, hasNextPage: boolean, hasPreviousPage: boolean } } } } } };
+streaming: { viewerHoursHourlyConnection: { totalCount: number, edges: Array<{ cursor: string, node: { id: string, hour: string, streamId: string | null, countryCode: string | null, uniqueViewers: number, totalSessionSeconds: number, totalBytes: number, viewerHours: number, egressGb: number, stream: { id: string, streamId: string, name: string, description: string | null, streamKey: string | null, playbackId: string, record: boolean, liveVideoAbr: string, ingestMode: IngestMode, createdAt: string, updatedAt: string, dvrChapterMode: DVRChapterMode | null, dvrChapterIntervalSeconds: number | null, monitoring: MonitoringToggle, pullSource: { sourceUriRedacted: string, enabled: boolean, class: string } | null, managedSource: { sourceKind: string, alwaysOn: boolean, placementCount: number } | null, sourceLocation: { mode: SourceLocationMode, avoidNodeIds: Array<string> }, metrics: { status: StreamStatus, isLive: boolean, currentViewers: number, startedAt: string | null, updatedAt: string, nodeId: string | null, trackCount: number | null, totalInputs: number | null, uploadedBytes: number, downloadedBytes: number, viewerSeconds: number, packetsSent: number | null, packetsLost: number | null, packetsRetransmitted: number | null, bufferState: string | null, qualityTier: string | null, primaryWidth: number | null, primaryHeight: number | null, primaryFps: number | null, primaryCodec: string | null, primaryBitrate: number | null, hasIssues: boolean | null, issuesDescription: string | null } | null, pushTargets: Array<{ id: string, streamId: string, platform: string | null, name: string, videoChoice: string, targetUri: string, isEnabled: boolean, status: string, lastError: string | null, reasonCode: string | null, lastPushedAt: string | null, createdAt: string }>, playbackPolicy: { type: PlaybackPolicyType, allowedOrigins: Array<string> } | null, thumbnailAssets: { posterUrl: string, spriteVttUrl: string, spriteJpgUrl: string, assetKey: string } | null, retentionOverrides: { streamId: string, dvrRetentionDaysOverride: number | null, clipRetentionDaysOverride: number | null } | null } | null } }>, pageInfo: { startCursor: string | null, endCursor: string | null, hasNextPage: boolean, hasPreviousPage: boolean } } } } } };
 
 export type GetViewerSessionsConnectionQueryVariables = Exact<{
   page?: ConnectionInput | null | undefined;
@@ -8118,7 +8183,7 @@ export type GetViewerSessionsConnectionQueryVariables = Exact<{
 
 export type GetViewerSessionsConnectionQuery = { /** Unified analytics surface providing access to all platform metrics. Combines data from Periscope (historical) and Signalman (real-time). */
 analytics: { /** Lifecycle analytics: stream events, artifacts, connections. */
-lifecycle: { viewerSessionsConnection: { totalCount: number, edges: Array<{ cursor: string, node: { id: string, timestamp: string, streamId: string, nodeId: string | null, sessionId: string, connectedAt: string | null, disconnectedAt: string | null, connector: string | null, countryCode: string | null, city: string | null, latitude: number | null, longitude: number | null, durationSeconds: number | null, bytesUp: number | null, bytesDown: number | null, connectionQuality: number | null, bufferHealth: number | null, stream: { id: string, streamId: string, name: string, description: string | null, streamKey: string | null, playbackId: string, record: boolean, ingestMode: IngestMode, createdAt: string, updatedAt: string, dvrChapterMode: DVRChapterMode | null, dvrChapterIntervalSeconds: number | null, monitoring: MonitoringToggle, pullSource: { sourceUriRedacted: string, enabled: boolean, class: string } | null, managedSource: { sourceKind: string, alwaysOn: boolean, placementCount: number } | null, sourceLocation: { mode: SourceLocationMode, avoidNodeIds: Array<string> }, metrics: { status: StreamStatus, isLive: boolean, currentViewers: number, startedAt: string | null, updatedAt: string, nodeId: string | null, trackCount: number | null, totalInputs: number | null, uploadedBytes: number, downloadedBytes: number, viewerSeconds: number, packetsSent: number | null, packetsLost: number | null, packetsRetransmitted: number | null, bufferState: string | null, qualityTier: string | null, primaryWidth: number | null, primaryHeight: number | null, primaryFps: number | null, primaryCodec: string | null, primaryBitrate: number | null, hasIssues: boolean | null, issuesDescription: string | null } | null, pushTargets: Array<{ id: string, streamId: string, platform: string | null, name: string, targetUri: string, isEnabled: boolean, status: string, lastError: string | null, reasonCode: string | null, lastPushedAt: string | null, createdAt: string }>, playbackPolicy: { type: PlaybackPolicyType, allowedOrigins: Array<string> } | null, thumbnailAssets: { posterUrl: string, spriteVttUrl: string, spriteJpgUrl: string, assetKey: string } | null, retentionOverrides: { streamId: string, dvrRetentionDaysOverride: number | null, clipRetentionDaysOverride: number | null } | null } | null, clientBucket: { h3Index: string, resolution: number } | null } }>, pageInfo: { startCursor: string | null, endCursor: string | null, hasNextPage: boolean, hasPreviousPage: boolean } } } } };
+lifecycle: { viewerSessionsConnection: { totalCount: number, edges: Array<{ cursor: string, node: { id: string, timestamp: string, streamId: string, nodeId: string | null, sessionId: string, connectedAt: string | null, disconnectedAt: string | null, connector: string | null, countryCode: string | null, city: string | null, latitude: number | null, longitude: number | null, durationSeconds: number | null, bytesUp: number | null, bytesDown: number | null, connectionQuality: number | null, bufferHealth: number | null, stream: { id: string, streamId: string, name: string, description: string | null, streamKey: string | null, playbackId: string, record: boolean, liveVideoAbr: string, ingestMode: IngestMode, createdAt: string, updatedAt: string, dvrChapterMode: DVRChapterMode | null, dvrChapterIntervalSeconds: number | null, monitoring: MonitoringToggle, pullSource: { sourceUriRedacted: string, enabled: boolean, class: string } | null, managedSource: { sourceKind: string, alwaysOn: boolean, placementCount: number } | null, sourceLocation: { mode: SourceLocationMode, avoidNodeIds: Array<string> }, metrics: { status: StreamStatus, isLive: boolean, currentViewers: number, startedAt: string | null, updatedAt: string, nodeId: string | null, trackCount: number | null, totalInputs: number | null, uploadedBytes: number, downloadedBytes: number, viewerSeconds: number, packetsSent: number | null, packetsLost: number | null, packetsRetransmitted: number | null, bufferState: string | null, qualityTier: string | null, primaryWidth: number | null, primaryHeight: number | null, primaryFps: number | null, primaryCodec: string | null, primaryBitrate: number | null, hasIssues: boolean | null, issuesDescription: string | null } | null, pushTargets: Array<{ id: string, streamId: string, platform: string | null, name: string, videoChoice: string, targetUri: string, isEnabled: boolean, status: string, lastError: string | null, reasonCode: string | null, lastPushedAt: string | null, createdAt: string }>, playbackPolicy: { type: PlaybackPolicyType, allowedOrigins: Array<string> } | null, thumbnailAssets: { posterUrl: string, spriteVttUrl: string, spriteJpgUrl: string, assetKey: string } | null, retentionOverrides: { streamId: string, dvrRetentionDaysOverride: number | null, clipRetentionDaysOverride: number | null } | null } | null, clientBucket: { h3Index: string, resolution: number } | null } }>, pageInfo: { startCursor: string | null, endCursor: string | null, hasNextPage: boolean, hasPreviousPage: boolean } } } } };
 
 export type GetViewerTimeSeriesConnectionQueryVariables = Exact<{
   page?: ConnectionInput | null | undefined;
@@ -8131,7 +8196,7 @@ export type GetViewerTimeSeriesConnectionQueryVariables = Exact<{
 export type GetViewerTimeSeriesConnectionQuery = { /** Unified analytics surface providing access to all platform metrics. Combines data from Periscope (historical) and Signalman (real-time). */
 analytics: { /** Usage analytics: streaming hours, storage, and processing. */
 usage: { /** Streaming usage: viewer hours, geographic distribution, quality tiers. */
-streaming: { viewerTimeSeriesConnection: { totalCount: number, edges: Array<{ cursor: string, node: { timestamp: string, viewerCount: number, streamId: string | null, stream: { id: string, streamId: string, name: string, description: string | null, streamKey: string | null, playbackId: string, record: boolean, ingestMode: IngestMode, createdAt: string, updatedAt: string, dvrChapterMode: DVRChapterMode | null, dvrChapterIntervalSeconds: number | null, monitoring: MonitoringToggle, pullSource: { sourceUriRedacted: string, enabled: boolean, class: string } | null, managedSource: { sourceKind: string, alwaysOn: boolean, placementCount: number } | null, sourceLocation: { mode: SourceLocationMode, avoidNodeIds: Array<string> }, metrics: { status: StreamStatus, isLive: boolean, currentViewers: number, startedAt: string | null, updatedAt: string, nodeId: string | null, trackCount: number | null, totalInputs: number | null, uploadedBytes: number, downloadedBytes: number, viewerSeconds: number, packetsSent: number | null, packetsLost: number | null, packetsRetransmitted: number | null, bufferState: string | null, qualityTier: string | null, primaryWidth: number | null, primaryHeight: number | null, primaryFps: number | null, primaryCodec: string | null, primaryBitrate: number | null, hasIssues: boolean | null, issuesDescription: string | null } | null, pushTargets: Array<{ id: string, streamId: string, platform: string | null, name: string, targetUri: string, isEnabled: boolean, status: string, lastError: string | null, reasonCode: string | null, lastPushedAt: string | null, createdAt: string }>, playbackPolicy: { type: PlaybackPolicyType, allowedOrigins: Array<string> } | null, thumbnailAssets: { posterUrl: string, spriteVttUrl: string, spriteJpgUrl: string, assetKey: string } | null, retentionOverrides: { streamId: string, dvrRetentionDaysOverride: number | null, clipRetentionDaysOverride: number | null } | null } | null } }>, pageInfo: { startCursor: string | null, endCursor: string | null, hasNextPage: boolean, hasPreviousPage: boolean } } } } } };
+streaming: { viewerTimeSeriesConnection: { totalCount: number, edges: Array<{ cursor: string, node: { timestamp: string, viewerCount: number, streamId: string | null, stream: { id: string, streamId: string, name: string, description: string | null, streamKey: string | null, playbackId: string, record: boolean, liveVideoAbr: string, ingestMode: IngestMode, createdAt: string, updatedAt: string, dvrChapterMode: DVRChapterMode | null, dvrChapterIntervalSeconds: number | null, monitoring: MonitoringToggle, pullSource: { sourceUriRedacted: string, enabled: boolean, class: string } | null, managedSource: { sourceKind: string, alwaysOn: boolean, placementCount: number } | null, sourceLocation: { mode: SourceLocationMode, avoidNodeIds: Array<string> }, metrics: { status: StreamStatus, isLive: boolean, currentViewers: number, startedAt: string | null, updatedAt: string, nodeId: string | null, trackCount: number | null, totalInputs: number | null, uploadedBytes: number, downloadedBytes: number, viewerSeconds: number, packetsSent: number | null, packetsLost: number | null, packetsRetransmitted: number | null, bufferState: string | null, qualityTier: string | null, primaryWidth: number | null, primaryHeight: number | null, primaryFps: number | null, primaryCodec: string | null, primaryBitrate: number | null, hasIssues: boolean | null, issuesDescription: string | null } | null, pushTargets: Array<{ id: string, streamId: string, platform: string | null, name: string, videoChoice: string, targetUri: string, isEnabled: boolean, status: string, lastError: string | null, reasonCode: string | null, lastPushedAt: string | null, createdAt: string }>, playbackPolicy: { type: PlaybackPolicyType, allowedOrigins: Array<string> } | null, thumbnailAssets: { posterUrl: string, spriteVttUrl: string, spriteJpgUrl: string, assetKey: string } | null, retentionOverrides: { streamId: string, dvrRetentionDaysOverride: number | null, clipRetentionDaysOverride: number | null } | null } | null } }>, pageInfo: { startCursor: string | null, endCursor: string | null, hasNextPage: boolean, hasPreviousPage: boolean } } } } } };
 
 export type GetVodRetentionQueryVariables = Exact<{
   artifactHash: string;
@@ -8239,7 +8304,8 @@ name: string, /** Optional description for the stream. */
 description: string | null, /** Secret key for publisher-authenticated ingest; null for pull and managed sources. The key lets its holder publish to the stream, so an API token needs the streams:write scope: without it this field is null and the response carries a FORBIDDEN error at its path. */
 streamKey: string | null, /** Public identifier for playback URLs. */
 playbackId: string, /** Whether DVR recording is enabled for this stream. */
-record: boolean, /** How source media enters the stream. */
+record: boolean, /** INHERIT or OFF for live video renditions. */
+liveVideoAbr: string, /** How source media enters the stream. */
 ingestMode: IngestMode, /** When this stream was created. */
 createdAt: string, /** When this stream was last modified. */
 updatedAt: string, /** How saved recordings are split into chapters. Snapshotted when a recording starts; changes apply from the next broadcast. NONE = live rewind only, nothing kept after the broadcast. */
@@ -8280,7 +8346,7 @@ primaryCodec: string | null, /** Primary video bitrate in kbps. */
 primaryBitrate: number | null, /** Whether the stream has active quality issues. */
 hasIssues: boolean | null, /** Human-readable description of current issues. */
 issuesDescription: string | null } | null, /** Configured multistream push targets for this stream. */
-pushTargets: Array<{ id: string, streamId: string, platform: string | null, name: string, targetUri: string, isEnabled: boolean, status: string, lastError: string | null, reasonCode: string | null, lastPushedAt: string | null, createdAt: string }>, /** Playback access policy. null/PUBLIC = anyone with the playbackId can watch. */
+pushTargets: Array<{ id: string, streamId: string, platform: string | null, name: string, videoChoice: string, targetUri: string, isEnabled: boolean, status: string, lastError: string | null, reasonCode: string | null, lastPushedAt: string | null, createdAt: string }>, /** Playback access policy. null/PUBLIC = anyone with the playbackId can watch. */
 playbackPolicy: { type: PlaybackPolicyType, /** Sites allowed to embed the content, as normalized `scheme://host[:port]` origins; `*` allows any. Empty = no restriction. A browser viewer whose Origin (or Referer) is not listed is denied. */
 allowedOrigins: Array<string> } | null, /** Server-resolved Chandler URLs for the stream's poster and sprite thumbnails. Derived from active_ingest_cluster_id + stream_id at SELECT time. Null when the stream has never been live; the poster.jpg 404s until Helmsman uploads its first frame, which the player's fallback chain handles. */
 thumbnailAssets: { posterUrl: string, spriteVttUrl: string, spriteJpgUrl: string, assetKey: string } | null, /** Per-stream retention overrides for DVR and clips. Null when the stream has no overrides set (inherits the tenant default). VOD uploads aren't stream-bound, so they don't appear here. */
@@ -8320,7 +8386,8 @@ name: string, /** Optional description for the stream. */
 description: string | null, /** Secret key for publisher-authenticated ingest; null for pull and managed sources. The key lets its holder publish to the stream, so an API token needs the streams:write scope: without it this field is null and the response carries a FORBIDDEN error at its path. */
 streamKey: string | null, /** Public identifier for playback URLs. */
 playbackId: string, /** Whether DVR recording is enabled for this stream. */
-record: boolean, /** How source media enters the stream. */
+record: boolean, /** INHERIT or OFF for live video renditions. */
+liveVideoAbr: string, /** How source media enters the stream. */
 ingestMode: IngestMode, /** When this stream was created. */
 createdAt: string, /** When this stream was last modified. */
 updatedAt: string, /** How saved recordings are split into chapters. Snapshotted when a recording starts; changes apply from the next broadcast. NONE = live rewind only, nothing kept after the broadcast. */
@@ -8333,7 +8400,8 @@ name: string, /** Optional description for the stream. */
 description: string | null, /** Secret key for publisher-authenticated ingest; null for pull and managed sources. The key lets its holder publish to the stream, so an API token needs the streams:write scope: without it this field is null and the response carries a FORBIDDEN error at its path. */
 streamKey: string | null, /** Public identifier for playback URLs. */
 playbackId: string, /** Whether DVR recording is enabled for this stream. */
-record: boolean, /** How source media enters the stream. */
+record: boolean, /** INHERIT or OFF for live video renditions. */
+liveVideoAbr: string, /** How source media enters the stream. */
 ingestMode: IngestMode, /** When this stream was created. */
 createdAt: string, /** When this stream was last modified. */
 updatedAt: string, /** How saved recordings are split into chapters. Snapshotted when a recording starts; changes apply from the next broadcast. NONE = live rewind only, nothing kept after the broadcast. */
@@ -8346,7 +8414,8 @@ name: string, /** Optional description for the stream. */
 description: string | null, /** Secret key for publisher-authenticated ingest; null for pull and managed sources. The key lets its holder publish to the stream, so an API token needs the streams:write scope: without it this field is null and the response carries a FORBIDDEN error at its path. */
 streamKey: string | null, /** Public identifier for playback URLs. */
 playbackId: string, /** Whether DVR recording is enabled for this stream. */
-record: boolean, /** How source media enters the stream. */
+record: boolean, /** INHERIT or OFF for live video renditions. */
+liveVideoAbr: string, /** How source media enters the stream. */
 ingestMode: IngestMode, /** When this stream was created. */
 createdAt: string, /** When this stream was last modified. */
 updatedAt: string, /** How saved recordings are split into chapters. Snapshotted when a recording starts; changes apply from the next broadcast. NONE = live rewind only, nothing kept after the broadcast. */
@@ -8359,7 +8428,8 @@ name: string, /** Optional description for the stream. */
 description: string | null, /** Secret key for publisher-authenticated ingest; null for pull and managed sources. The key lets its holder publish to the stream, so an API token needs the streams:write scope: without it this field is null and the response carries a FORBIDDEN error at its path. */
 streamKey: string | null, /** Public identifier for playback URLs. */
 playbackId: string, /** Whether DVR recording is enabled for this stream. */
-record: boolean, /** How source media enters the stream. */
+record: boolean, /** INHERIT or OFF for live video renditions. */
+liveVideoAbr: string, /** How source media enters the stream. */
 ingestMode: IngestMode, /** When this stream was created. */
 createdAt: string, /** When this stream was last modified. */
 updatedAt: string, /** How saved recordings are split into chapters. Snapshotted when a recording starts; changes apply from the next broadcast. NONE = live rewind only, nothing kept after the broadcast. */
@@ -8372,7 +8442,8 @@ name: string, /** Optional description for the stream. */
 description: string | null, /** Secret key for publisher-authenticated ingest; null for pull and managed sources. The key lets its holder publish to the stream, so an API token needs the streams:write scope: without it this field is null and the response carries a FORBIDDEN error at its path. */
 streamKey: string | null, /** Public identifier for playback URLs. */
 playbackId: string, /** Whether DVR recording is enabled for this stream. */
-record: boolean, /** How source media enters the stream. */
+record: boolean, /** INHERIT or OFF for live video renditions. */
+liveVideoAbr: string, /** How source media enters the stream. */
 ingestMode: IngestMode, /** When this stream was created. */
 createdAt: string, /** When this stream was last modified. */
 updatedAt: string, /** How saved recordings are split into chapters. Snapshotted when a recording starts; changes apply from the next broadcast. NONE = live rewind only, nothing kept after the broadcast. */
@@ -8385,7 +8456,8 @@ name: string, /** Optional description for the stream. */
 description: string | null, /** Secret key for publisher-authenticated ingest; null for pull and managed sources. The key lets its holder publish to the stream, so an API token needs the streams:write scope: without it this field is null and the response carries a FORBIDDEN error at its path. */
 streamKey: string | null, /** Public identifier for playback URLs. */
 playbackId: string, /** Whether DVR recording is enabled for this stream. */
-record: boolean, /** How source media enters the stream. */
+record: boolean, /** INHERIT or OFF for live video renditions. */
+liveVideoAbr: string, /** How source media enters the stream. */
 ingestMode: IngestMode, /** When this stream was created. */
 createdAt: string, /** When this stream was last modified. */
 updatedAt: string, /** How saved recordings are split into chapters. Snapshotted when a recording starts; changes apply from the next broadcast. NONE = live rewind only, nothing kept after the broadcast. */
@@ -8398,7 +8470,8 @@ name: string, /** Optional description for the stream. */
 description: string | null, /** Secret key for publisher-authenticated ingest; null for pull and managed sources. The key lets its holder publish to the stream, so an API token needs the streams:write scope: without it this field is null and the response carries a FORBIDDEN error at its path. */
 streamKey: string | null, /** Public identifier for playback URLs. */
 playbackId: string, /** Whether DVR recording is enabled for this stream. */
-record: boolean, /** How source media enters the stream. */
+record: boolean, /** INHERIT or OFF for live video renditions. */
+liveVideoAbr: string, /** How source media enters the stream. */
 ingestMode: IngestMode, /** When this stream was created. */
 createdAt: string, /** When this stream was last modified. */
 updatedAt: string, /** How saved recordings are split into chapters. Snapshotted when a recording starts; changes apply from the next broadcast. NONE = live rewind only, nothing kept after the broadcast. */
@@ -8443,7 +8516,8 @@ name: string, /** Optional description for the stream. */
 description: string | null, /** Secret key for publisher-authenticated ingest; null for pull and managed sources. The key lets its holder publish to the stream, so an API token needs the streams:write scope: without it this field is null and the response carries a FORBIDDEN error at its path. */
 streamKey: string | null, /** Public identifier for playback URLs. */
 playbackId: string, /** Whether DVR recording is enabled for this stream. */
-record: boolean, /** How source media enters the stream. */
+record: boolean, /** INHERIT or OFF for live video renditions. */
+liveVideoAbr: string, /** How source media enters the stream. */
 ingestMode: IngestMode, /** When this stream was created. */
 createdAt: string, /** When this stream was last modified. */
 updatedAt: string, /** How saved recordings are split into chapters. Snapshotted when a recording starts; changes apply from the next broadcast. NONE = live rewind only, nothing kept after the broadcast. */
@@ -8484,7 +8558,7 @@ primaryCodec: string | null, /** Primary video bitrate in kbps. */
 primaryBitrate: number | null, /** Whether the stream has active quality issues. */
 hasIssues: boolean | null, /** Human-readable description of current issues. */
 issuesDescription: string | null } | null, /** Configured multistream push targets for this stream. */
-pushTargets: Array<{ id: string, streamId: string, platform: string | null, name: string, targetUri: string, isEnabled: boolean, status: string, lastError: string | null, reasonCode: string | null, lastPushedAt: string | null, createdAt: string }>, /** Playback access policy. null/PUBLIC = anyone with the playbackId can watch. */
+pushTargets: Array<{ id: string, streamId: string, platform: string | null, name: string, videoChoice: string, targetUri: string, isEnabled: boolean, status: string, lastError: string | null, reasonCode: string | null, lastPushedAt: string | null, createdAt: string }>, /** Playback access policy. null/PUBLIC = anyone with the playbackId can watch. */
 playbackPolicy: { type: PlaybackPolicyType, /** Sites allowed to embed the content, as normalized `scheme://host[:port]` origins; `*` allows any. Empty = no restriction. A browser viewer whose Origin (or Referer) is not listed is denied. */
 allowedOrigins: Array<string> } | null, /** Server-resolved Chandler URLs for the stream's poster and sprite thumbnails. Derived from active_ingest_cluster_id + stream_id at SELECT time. Null when the stream has never been live; the poster.jpg 404s until Helmsman uploads its first frame, which the player's fallback chain handles. */
 thumbnailAssets: { posterUrl: string, spriteVttUrl: string, spriteJpgUrl: string, assetKey: string } | null, /** Per-stream retention overrides for DVR and clips. Null when the stream has no overrides set (inherits the tenant default). VOD uploads aren't stream-bound, so they don't appear here. */
@@ -8505,7 +8579,8 @@ name: string, /** Optional description for the stream. */
 description: string | null, /** Secret key for publisher-authenticated ingest; null for pull and managed sources. The key lets its holder publish to the stream, so an API token needs the streams:write scope: without it this field is null and the response carries a FORBIDDEN error at its path. */
 streamKey: string | null, /** Public identifier for playback URLs. */
 playbackId: string, /** Whether DVR recording is enabled for this stream. */
-record: boolean, /** How source media enters the stream. */
+record: boolean, /** INHERIT or OFF for live video renditions. */
+liveVideoAbr: string, /** How source media enters the stream. */
 ingestMode: IngestMode, /** When this stream was created. */
 createdAt: string, /** When this stream was last modified. */
 updatedAt: string, /** How saved recordings are split into chapters. Snapshotted when a recording starts; changes apply from the next broadcast. NONE = live rewind only, nothing kept after the broadcast. */
@@ -8546,7 +8621,7 @@ primaryCodec: string | null, /** Primary video bitrate in kbps. */
 primaryBitrate: number | null, /** Whether the stream has active quality issues. */
 hasIssues: boolean | null, /** Human-readable description of current issues. */
 issuesDescription: string | null } | null, /** Configured multistream push targets for this stream. */
-pushTargets: Array<{ id: string, streamId: string, platform: string | null, name: string, targetUri: string, isEnabled: boolean, status: string, lastError: string | null, reasonCode: string | null, lastPushedAt: string | null, createdAt: string }>, /** Playback access policy. null/PUBLIC = anyone with the playbackId can watch. */
+pushTargets: Array<{ id: string, streamId: string, platform: string | null, name: string, videoChoice: string, targetUri: string, isEnabled: boolean, status: string, lastError: string | null, reasonCode: string | null, lastPushedAt: string | null, createdAt: string }>, /** Playback access policy. null/PUBLIC = anyone with the playbackId can watch. */
 playbackPolicy: { type: PlaybackPolicyType, /** Sites allowed to embed the content, as normalized `scheme://host[:port]` origins; `*` allows any. Empty = no restriction. A browser viewer whose Origin (or Referer) is not listed is denied. */
 allowedOrigins: Array<string> } | null, /** Server-resolved Chandler URLs for the stream's poster and sprite thumbnails. Derived from active_ingest_cluster_id + stream_id at SELECT time. Null when the stream has never been live; the poster.jpg 404s until Helmsman uploads its first frame, which the player's fallback chain handles. */
 thumbnailAssets: { posterUrl: string, spriteVttUrl: string, spriteJpgUrl: string, assetKey: string } | null, /** Per-stream retention overrides for DVR and clips. Null when the stream has no overrides set (inherits the tenant default). VOD uploads aren't stream-bound, so they don't appear here. */
@@ -8567,7 +8642,8 @@ name: string, /** Optional description for the stream. */
 description: string | null, /** Secret key for publisher-authenticated ingest; null for pull and managed sources. The key lets its holder publish to the stream, so an API token needs the streams:write scope: without it this field is null and the response carries a FORBIDDEN error at its path. */
 streamKey: string | null, /** Public identifier for playback URLs. */
 playbackId: string, /** Whether DVR recording is enabled for this stream. */
-record: boolean, /** How source media enters the stream. */
+record: boolean, /** INHERIT or OFF for live video renditions. */
+liveVideoAbr: string, /** How source media enters the stream. */
 ingestMode: IngestMode, /** When this stream was created. */
 createdAt: string, /** When this stream was last modified. */
 updatedAt: string, /** How saved recordings are split into chapters. Snapshotted when a recording starts; changes apply from the next broadcast. NONE = live rewind only, nothing kept after the broadcast. */
@@ -8608,7 +8684,7 @@ primaryCodec: string | null, /** Primary video bitrate in kbps. */
 primaryBitrate: number | null, /** Whether the stream has active quality issues. */
 hasIssues: boolean | null, /** Human-readable description of current issues. */
 issuesDescription: string | null } | null, /** Configured multistream push targets for this stream. */
-pushTargets: Array<{ id: string, streamId: string, platform: string | null, name: string, targetUri: string, isEnabled: boolean, status: string, lastError: string | null, reasonCode: string | null, lastPushedAt: string | null, createdAt: string }>, /** Playback access policy. null/PUBLIC = anyone with the playbackId can watch. */
+pushTargets: Array<{ id: string, streamId: string, platform: string | null, name: string, videoChoice: string, targetUri: string, isEnabled: boolean, status: string, lastError: string | null, reasonCode: string | null, lastPushedAt: string | null, createdAt: string }>, /** Playback access policy. null/PUBLIC = anyone with the playbackId can watch. */
 playbackPolicy: { type: PlaybackPolicyType, /** Sites allowed to embed the content, as normalized `scheme://host[:port]` origins; `*` allows any. Empty = no restriction. A browser viewer whose Origin (or Referer) is not listed is denied. */
 allowedOrigins: Array<string> } | null, /** Server-resolved Chandler URLs for the stream's poster and sprite thumbnails. Derived from active_ingest_cluster_id + stream_id at SELECT time. Null when the stream has never been live; the poster.jpg 404s until Helmsman uploads its first frame, which the player's fallback chain handles. */
 thumbnailAssets: { posterUrl: string, spriteVttUrl: string, spriteJpgUrl: string, assetKey: string } | null, /** Per-stream retention overrides for DVR and clips. Null when the stream has no overrides set (inherits the tenant default). VOD uploads aren't stream-bound, so they don't appear here. */
@@ -8636,7 +8712,8 @@ name: string, /** Optional description for the stream. */
 description: string | null, /** Secret key for publisher-authenticated ingest; null for pull and managed sources. The key lets its holder publish to the stream, so an API token needs the streams:write scope: without it this field is null and the response carries a FORBIDDEN error at its path. */
 streamKey: string | null, /** Public identifier for playback URLs. */
 playbackId: string, /** Whether DVR recording is enabled for this stream. */
-record: boolean, /** How source media enters the stream. */
+record: boolean, /** INHERIT or OFF for live video renditions. */
+liveVideoAbr: string, /** How source media enters the stream. */
 ingestMode: IngestMode, /** When this stream was created. */
 createdAt: string, /** When this stream was last modified. */
 updatedAt: string, /** How saved recordings are split into chapters. Snapshotted when a recording starts; changes apply from the next broadcast. NONE = live rewind only, nothing kept after the broadcast. */
@@ -8677,7 +8754,7 @@ primaryCodec: string | null, /** Primary video bitrate in kbps. */
 primaryBitrate: number | null, /** Whether the stream has active quality issues. */
 hasIssues: boolean | null, /** Human-readable description of current issues. */
 issuesDescription: string | null } | null, /** Configured multistream push targets for this stream. */
-pushTargets: Array<{ id: string, streamId: string, platform: string | null, name: string, targetUri: string, isEnabled: boolean, status: string, lastError: string | null, reasonCode: string | null, lastPushedAt: string | null, createdAt: string }>, /** Playback access policy. null/PUBLIC = anyone with the playbackId can watch. */
+pushTargets: Array<{ id: string, streamId: string, platform: string | null, name: string, videoChoice: string, targetUri: string, isEnabled: boolean, status: string, lastError: string | null, reasonCode: string | null, lastPushedAt: string | null, createdAt: string }>, /** Playback access policy. null/PUBLIC = anyone with the playbackId can watch. */
 playbackPolicy: { type: PlaybackPolicyType, /** Sites allowed to embed the content, as normalized `scheme://host[:port]` origins; `*` allows any. Empty = no restriction. A browser viewer whose Origin (or Referer) is not listed is denied. */
 allowedOrigins: Array<string> } | null, /** Server-resolved Chandler URLs for the stream's poster and sprite thumbnails. Derived from active_ingest_cluster_id + stream_id at SELECT time. Null when the stream has never been live; the poster.jpg 404s until Helmsman uploads its first frame, which the player's fallback chain handles. */
 thumbnailAssets: { posterUrl: string, spriteVttUrl: string, spriteJpgUrl: string, assetKey: string } | null, /** Per-stream retention overrides for DVR and clips. Null when the stream has no overrides set (inherits the tenant default). VOD uploads aren't stream-bound, so they don't appear here. */
@@ -8698,7 +8775,8 @@ name: string, /** Optional description for the stream. */
 description: string | null, /** Secret key for publisher-authenticated ingest; null for pull and managed sources. The key lets its holder publish to the stream, so an API token needs the streams:write scope: without it this field is null and the response carries a FORBIDDEN error at its path. */
 streamKey: string | null, /** Public identifier for playback URLs. */
 playbackId: string, /** Whether DVR recording is enabled for this stream. */
-record: boolean, /** How source media enters the stream. */
+record: boolean, /** INHERIT or OFF for live video renditions. */
+liveVideoAbr: string, /** How source media enters the stream. */
 ingestMode: IngestMode, /** When this stream was created. */
 createdAt: string, /** When this stream was last modified. */
 updatedAt: string, /** How saved recordings are split into chapters. Snapshotted when a recording starts; changes apply from the next broadcast. NONE = live rewind only, nothing kept after the broadcast. */
@@ -8739,7 +8817,7 @@ primaryCodec: string | null, /** Primary video bitrate in kbps. */
 primaryBitrate: number | null, /** Whether the stream has active quality issues. */
 hasIssues: boolean | null, /** Human-readable description of current issues. */
 issuesDescription: string | null } | null, /** Configured multistream push targets for this stream. */
-pushTargets: Array<{ id: string, streamId: string, platform: string | null, name: string, targetUri: string, isEnabled: boolean, status: string, lastError: string | null, reasonCode: string | null, lastPushedAt: string | null, createdAt: string }>, /** Playback access policy. null/PUBLIC = anyone with the playbackId can watch. */
+pushTargets: Array<{ id: string, streamId: string, platform: string | null, name: string, videoChoice: string, targetUri: string, isEnabled: boolean, status: string, lastError: string | null, reasonCode: string | null, lastPushedAt: string | null, createdAt: string }>, /** Playback access policy. null/PUBLIC = anyone with the playbackId can watch. */
 playbackPolicy: { type: PlaybackPolicyType, /** Sites allowed to embed the content, as normalized `scheme://host[:port]` origins; `*` allows any. Empty = no restriction. A browser viewer whose Origin (or Referer) is not listed is denied. */
 allowedOrigins: Array<string> } | null, /** Server-resolved Chandler URLs for the stream's poster and sprite thumbnails. Derived from active_ingest_cluster_id + stream_id at SELECT time. Null when the stream has never been live; the poster.jpg 404s until Helmsman uploads its first frame, which the player's fallback chain handles. */
 thumbnailAssets: { posterUrl: string, spriteVttUrl: string, spriteJpgUrl: string, assetKey: string } | null, /** Per-stream retention overrides for DVR and clips. Null when the stream has no overrides set (inherits the tenant default). VOD uploads aren't stream-bound, so they don't appear here. */
@@ -10273,6 +10351,7 @@ export const ArtifactEventDefaultFieldsFragmentDoc = /*#__PURE__*/ new TypedDocu
     streamKey
     playbackId
     record
+    liveVideoAbr
     ingestMode
     pullSource {
       sourceUriRedacted
@@ -10320,6 +10399,7 @@ export const ArtifactEventDefaultFieldsFragmentDoc = /*#__PURE__*/ new TypedDocu
       streamId
       platform
       name
+      videoChoice
       targetUri
       isEnabled
       status
@@ -10374,6 +10454,7 @@ export const ArtifactEventInNodeDefaultFieldsFragmentDoc = /*#__PURE__*/ new Typ
     streamKey
     playbackId
     record
+    liveVideoAbr
     ingestMode
     pullSource {
       sourceUriRedacted
@@ -10421,6 +10502,7 @@ export const ArtifactEventInNodeDefaultFieldsFragmentDoc = /*#__PURE__*/ new Typ
       streamId
       platform
       name
+      videoChoice
       targetUri
       isEnabled
       status
@@ -10473,6 +10555,7 @@ export const ArtifactStateDefaultFieldsFragmentDoc = /*#__PURE__*/ new TypedDocu
     streamKey
     playbackId
     record
+    liveVideoAbr
     ingestMode
     pullSource {
       sourceUriRedacted
@@ -10520,6 +10603,7 @@ export const ArtifactStateDefaultFieldsFragmentDoc = /*#__PURE__*/ new TypedDocu
       streamId
       platform
       name
+      videoChoice
       targetUri
       isEnabled
       status
@@ -11037,6 +11121,7 @@ export const ClientMetrics5mDefaultFieldsFragmentDoc = /*#__PURE__*/ new TypedDo
     streamKey
     playbackId
     record
+    liveVideoAbr
     ingestMode
     pullSource {
       sourceUriRedacted
@@ -11084,6 +11169,7 @@ export const ClientMetrics5mDefaultFieldsFragmentDoc = /*#__PURE__*/ new TypedDo
       streamId
       platform
       name
+      videoChoice
       targetUri
       isEnabled
       status
@@ -11146,6 +11232,7 @@ export const ClipInNodeDefaultFieldsFragmentDoc = /*#__PURE__*/ new TypedDocumen
     streamKey
     playbackId
     record
+    liveVideoAbr
     ingestMode
     pullSource {
       sourceUriRedacted
@@ -11193,6 +11280,7 @@ export const ClipInNodeDefaultFieldsFragmentDoc = /*#__PURE__*/ new TypedDocumen
       streamId
       platform
       name
+      videoChoice
       targetUri
       isEnabled
       status
@@ -11447,6 +11535,7 @@ export const ConnectionEventDefaultFieldsFragmentDoc = /*#__PURE__*/ new TypedDo
     streamKey
     playbackId
     record
+    liveVideoAbr
     ingestMode
     pullSource {
       sourceUriRedacted
@@ -11494,6 +11583,7 @@ export const ConnectionEventDefaultFieldsFragmentDoc = /*#__PURE__*/ new TypedDo
       streamId
       platform
       name
+      videoChoice
       targetUri
       isEnabled
       status
@@ -11560,6 +11650,7 @@ export const ConnectionEventInNodeDefaultFieldsFragmentDoc = /*#__PURE__*/ new T
     streamKey
     playbackId
     record
+    liveVideoAbr
     ingestMode
     pullSource {
       sourceUriRedacted
@@ -11607,6 +11698,7 @@ export const ConnectionEventInNodeDefaultFieldsFragmentDoc = /*#__PURE__*/ new T
       streamId
       platform
       name
+      videoChoice
       targetUri
       isEnabled
       status
@@ -11884,6 +11976,7 @@ export const GeographicDistributionDefaultFieldsFragmentDoc = /*#__PURE__*/ new 
     streamKey
     playbackId
     record
+    liveVideoAbr
     ingestMode
     pullSource {
       sourceUriRedacted
@@ -11931,6 +12024,7 @@ export const GeographicDistributionDefaultFieldsFragmentDoc = /*#__PURE__*/ new 
       streamId
       platform
       name
+      videoChoice
       targetUri
       isEnabled
       status
@@ -13016,6 +13110,7 @@ export const ProcessingUsageRecordDefaultFieldsFragmentDoc = /*#__PURE__*/ new T
     streamKey
     playbackId
     record
+    liveVideoAbr
     ingestMode
     pullSource {
       sourceUriRedacted
@@ -13063,6 +13158,7 @@ export const ProcessingUsageRecordDefaultFieldsFragmentDoc = /*#__PURE__*/ new T
       streamId
       platform
       name
+      videoChoice
       targetUri
       isEnabled
       status
@@ -13154,6 +13250,7 @@ export const ProcessingUsageRecordInNodeDefaultFieldsFragmentDoc = /*#__PURE__*/
     streamKey
     playbackId
     record
+    liveVideoAbr
     ingestMode
     pullSource {
       sourceUriRedacted
@@ -13201,6 +13298,7 @@ export const ProcessingUsageRecordInNodeDefaultFieldsFragmentDoc = /*#__PURE__*/
       streamId
       platform
       name
+      videoChoice
       targetUri
       isEnabled
       status
@@ -13311,6 +13409,7 @@ export const QualityTierDailyDefaultFieldsFragmentDoc = /*#__PURE__*/ new TypedD
     streamKey
     playbackId
     record
+    liveVideoAbr
     ingestMode
     pullSource {
       sourceUriRedacted
@@ -13358,6 +13457,7 @@ export const QualityTierDailyDefaultFieldsFragmentDoc = /*#__PURE__*/ new TypedD
       streamId
       platform
       name
+      videoChoice
       targetUri
       isEnabled
       status
@@ -13419,6 +13519,7 @@ export const RebufferingEventDefaultFieldsFragmentDoc = /*#__PURE__*/ new TypedD
     streamKey
     playbackId
     record
+    liveVideoAbr
     ingestMode
     pullSource {
       sourceUriRedacted
@@ -13466,6 +13567,7 @@ export const RebufferingEventDefaultFieldsFragmentDoc = /*#__PURE__*/ new TypedD
       streamId
       platform
       name
+      videoChoice
       targetUri
       isEnabled
       status
@@ -13526,6 +13628,7 @@ export const RoutingEventDefaultFieldsFragmentDoc = /*#__PURE__*/ new TypedDocum
     streamKey
     playbackId
     record
+    liveVideoAbr
     ingestMode
     pullSource {
       sourceUriRedacted
@@ -13573,6 +13676,7 @@ export const RoutingEventDefaultFieldsFragmentDoc = /*#__PURE__*/ new TypedDocum
       streamId
       platform
       name
+      videoChoice
       targetUri
       isEnabled
       status
@@ -13827,6 +13931,7 @@ export const StorageEventDefaultFieldsFragmentDoc = /*#__PURE__*/ new TypedDocum
     streamKey
     playbackId
     record
+    liveVideoAbr
     ingestMode
     pullSource {
       sourceUriRedacted
@@ -13874,6 +13979,7 @@ export const StorageEventDefaultFieldsFragmentDoc = /*#__PURE__*/ new TypedDocum
       streamId
       platform
       name
+      videoChoice
       targetUri
       isEnabled
       status
@@ -13929,6 +14035,7 @@ export const StorageEventInNodeDefaultFieldsFragmentDoc = /*#__PURE__*/ new Type
     streamKey
     playbackId
     record
+    liveVideoAbr
     ingestMode
     pullSource {
       sourceUriRedacted
@@ -13976,6 +14083,7 @@ export const StorageEventInNodeDefaultFieldsFragmentDoc = /*#__PURE__*/ new Type
       streamId
       platform
       name
+      videoChoice
       targetUri
       isEnabled
       status
@@ -14047,6 +14155,7 @@ export const StreamAnalyticsDailyDefaultFieldsFragmentDoc = /*#__PURE__*/ new Ty
     streamKey
     playbackId
     record
+    liveVideoAbr
     ingestMode
     pullSource {
       sourceUriRedacted
@@ -14094,6 +14203,7 @@ export const StreamAnalyticsDailyDefaultFieldsFragmentDoc = /*#__PURE__*/ new Ty
       streamId
       platform
       name
+      videoChoice
       targetUri
       isEnabled
       status
@@ -14139,6 +14249,7 @@ export const StreamAnalyticsSummaryDefaultFieldsFragmentDoc = /*#__PURE__*/ new 
     streamKey
     playbackId
     record
+    liveVideoAbr
     ingestMode
     pullSource {
       sourceUriRedacted
@@ -14186,6 +14297,7 @@ export const StreamAnalyticsSummaryDefaultFieldsFragmentDoc = /*#__PURE__*/ new 
       streamId
       platform
       name
+      videoChoice
       targetUri
       isEnabled
       status
@@ -14265,6 +14377,7 @@ export const StreamConnectionHourlyDefaultFieldsFragmentDoc = /*#__PURE__*/ new 
     streamKey
     playbackId
     record
+    liveVideoAbr
     ingestMode
     pullSource {
       sourceUriRedacted
@@ -14312,6 +14425,7 @@ export const StreamConnectionHourlyDefaultFieldsFragmentDoc = /*#__PURE__*/ new 
       streamId
       platform
       name
+      videoChoice
       targetUri
       isEnabled
       status
@@ -14357,6 +14471,7 @@ export const StreamEventDefaultFieldsFragmentDoc = /*#__PURE__*/ new TypedDocume
     streamKey
     playbackId
     record
+    liveVideoAbr
     ingestMode
     pullSource {
       sourceUriRedacted
@@ -14404,6 +14519,7 @@ export const StreamEventDefaultFieldsFragmentDoc = /*#__PURE__*/ new TypedDocume
       streamId
       platform
       name
+      videoChoice
       targetUri
       isEnabled
       status
@@ -14480,6 +14596,7 @@ export const StreamEventInNodeDefaultFieldsFragmentDoc = /*#__PURE__*/ new Typed
     streamKey
     playbackId
     record
+    liveVideoAbr
     ingestMode
     pullSource {
       sourceUriRedacted
@@ -14527,6 +14644,7 @@ export const StreamEventInNodeDefaultFieldsFragmentDoc = /*#__PURE__*/ new Typed
       streamId
       platform
       name
+      videoChoice
       targetUri
       isEnabled
       status
@@ -14637,6 +14755,7 @@ export const StreamHealthMetricDefaultFieldsFragmentDoc = /*#__PURE__*/ new Type
     streamKey
     playbackId
     record
+    liveVideoAbr
     ingestMode
     pullSource {
       sourceUriRedacted
@@ -14684,6 +14803,7 @@ export const StreamHealthMetricDefaultFieldsFragmentDoc = /*#__PURE__*/ new Type
       streamId
       platform
       name
+      videoChoice
       targetUri
       isEnabled
       status
@@ -14752,6 +14872,7 @@ export const StreamHealthMetricInNodeDefaultFieldsFragmentDoc = /*#__PURE__*/ ne
     streamKey
     playbackId
     record
+    liveVideoAbr
     ingestMode
     pullSource {
       sourceUriRedacted
@@ -14799,6 +14920,7 @@ export const StreamHealthMetricInNodeDefaultFieldsFragmentDoc = /*#__PURE__*/ ne
       streamId
       platform
       name
+      videoChoice
       targetUri
       isEnabled
       status
@@ -14877,6 +14999,7 @@ export const StreamInNodeDefaultFieldsFragmentDoc = /*#__PURE__*/ new TypedDocum
   streamKey
   playbackId
   record
+  liveVideoAbr
   ingestMode
   pullSource {
     sourceUriRedacted
@@ -14928,6 +15051,7 @@ export const StreamInNodeDefaultFieldsFragmentDoc = /*#__PURE__*/ new TypedDocum
     streamId
     platform
     name
+    videoChoice
     targetUri
     isEnabled
     status
@@ -15092,6 +15216,7 @@ export const TenantEventDefaultFieldsFragmentDoc = /*#__PURE__*/ new TypedDocume
       streamKey
       playbackId
       record
+      liveVideoAbr
       ingestMode
       createdAt
       updatedAt
@@ -15145,6 +15270,7 @@ export const TenantEventDefaultFieldsFragmentDoc = /*#__PURE__*/ new TypedDocume
       streamKey
       playbackId
       record
+      liveVideoAbr
       ingestMode
       createdAt
       updatedAt
@@ -15184,6 +15310,7 @@ export const TenantEventDefaultFieldsFragmentDoc = /*#__PURE__*/ new TypedDocume
       streamKey
       playbackId
       record
+      liveVideoAbr
       ingestMode
       createdAt
       updatedAt
@@ -15225,6 +15352,7 @@ export const TenantEventDefaultFieldsFragmentDoc = /*#__PURE__*/ new TypedDocume
       streamKey
       playbackId
       record
+      liveVideoAbr
       ingestMode
       createdAt
       updatedAt
@@ -15274,6 +15402,7 @@ export const TenantEventDefaultFieldsFragmentDoc = /*#__PURE__*/ new TypedDocume
       streamKey
       playbackId
       record
+      liveVideoAbr
       ingestMode
       createdAt
       updatedAt
@@ -15326,6 +15455,7 @@ export const TenantEventDefaultFieldsFragmentDoc = /*#__PURE__*/ new TypedDocume
       streamKey
       playbackId
       record
+      liveVideoAbr
       ingestMode
       createdAt
       updatedAt
@@ -15393,6 +15523,7 @@ export const TenantEventDefaultFieldsFragmentDoc = /*#__PURE__*/ new TypedDocume
       streamKey
       playbackId
       record
+      liveVideoAbr
       ingestMode
       createdAt
       updatedAt
@@ -15485,6 +15616,7 @@ export const TrackListEventDefaultFieldsFragmentDoc = /*#__PURE__*/ new TypedDoc
     streamKey
     playbackId
     record
+    liveVideoAbr
     ingestMode
     pullSource {
       sourceUriRedacted
@@ -15532,6 +15664,7 @@ export const TrackListEventDefaultFieldsFragmentDoc = /*#__PURE__*/ new TypedDoc
       streamId
       platform
       name
+      videoChoice
       targetUri
       isEnabled
       status
@@ -15593,6 +15726,7 @@ export const TrackListEventInNodeDefaultFieldsFragmentDoc = /*#__PURE__*/ new Ty
     streamKey
     playbackId
     record
+    liveVideoAbr
     ingestMode
     pullSource {
       sourceUriRedacted
@@ -15640,6 +15774,7 @@ export const TrackListEventInNodeDefaultFieldsFragmentDoc = /*#__PURE__*/ new Ty
       streamId
       platform
       name
+      videoChoice
       targetUri
       isEnabled
       status
@@ -15700,6 +15835,7 @@ export const TrackListUpdateDefaultFieldsFragmentDoc = /*#__PURE__*/ new TypedDo
     streamKey
     playbackId
     record
+    liveVideoAbr
     ingestMode
     pullSource {
       sourceUriRedacted
@@ -15747,6 +15883,7 @@ export const TrackListUpdateDefaultFieldsFragmentDoc = /*#__PURE__*/ new TypedDo
       streamId
       platform
       name
+      videoChoice
       targetUri
       isEnabled
       status
@@ -15826,6 +15963,7 @@ export const ViewerCountBucketDefaultFieldsFragmentDoc = /*#__PURE__*/ new Typed
     streamKey
     playbackId
     record
+    liveVideoAbr
     ingestMode
     pullSource {
       sourceUriRedacted
@@ -15873,6 +16011,7 @@ export const ViewerCountBucketDefaultFieldsFragmentDoc = /*#__PURE__*/ new Typed
       streamId
       platform
       name
+      videoChoice
       targetUri
       isEnabled
       status
@@ -15934,6 +16073,7 @@ export const ViewerGeographicDefaultFieldsFragmentDoc = /*#__PURE__*/ new TypedD
     streamKey
     playbackId
     record
+    liveVideoAbr
     ingestMode
     pullSource {
       sourceUriRedacted
@@ -15981,6 +16121,7 @@ export const ViewerGeographicDefaultFieldsFragmentDoc = /*#__PURE__*/ new TypedD
       streamId
       platform
       name
+      videoChoice
       targetUri
       isEnabled
       status
@@ -16035,6 +16176,7 @@ export const ViewerHoursHourlyDefaultFieldsFragmentDoc = /*#__PURE__*/ new Typed
     streamKey
     playbackId
     record
+    liveVideoAbr
     ingestMode
     pullSource {
       sourceUriRedacted
@@ -16082,6 +16224,7 @@ export const ViewerHoursHourlyDefaultFieldsFragmentDoc = /*#__PURE__*/ new Typed
       streamId
       platform
       name
+      videoChoice
       targetUri
       isEnabled
       status
@@ -16130,6 +16273,7 @@ export const ViewerHoursHourlyInNodeDefaultFieldsFragmentDoc = /*#__PURE__*/ new
     streamKey
     playbackId
     record
+    liveVideoAbr
     ingestMode
     pullSource {
       sourceUriRedacted
@@ -16177,6 +16321,7 @@ export const ViewerHoursHourlyInNodeDefaultFieldsFragmentDoc = /*#__PURE__*/ new
       streamId
       platform
       name
+      videoChoice
       targetUri
       isEnabled
       status
@@ -16224,6 +16369,7 @@ export const ViewerMetricsDefaultFieldsFragmentDoc = /*#__PURE__*/ new TypedDocu
     streamKey
     playbackId
     record
+    liveVideoAbr
     ingestMode
     pullSource {
       sourceUriRedacted
@@ -16271,6 +16417,7 @@ export const ViewerMetricsDefaultFieldsFragmentDoc = /*#__PURE__*/ new TypedDocu
       streamId
       platform
       name
+      videoChoice
       targetUri
       isEnabled
       status
@@ -16331,6 +16478,7 @@ export const ViewerSessionDefaultFieldsFragmentDoc = /*#__PURE__*/ new TypedDocu
     streamKey
     playbackId
     record
+    liveVideoAbr
     ingestMode
     pullSource {
       sourceUriRedacted
@@ -16378,6 +16526,7 @@ export const ViewerSessionDefaultFieldsFragmentDoc = /*#__PURE__*/ new TypedDocu
       streamId
       platform
       name
+      videoChoice
       targetUri
       isEnabled
       status
@@ -16438,6 +16587,7 @@ export const ViewerSessionInNodeDefaultFieldsFragmentDoc = /*#__PURE__*/ new Typ
     streamKey
     playbackId
     record
+    liveVideoAbr
     ingestMode
     pullSource {
       sourceUriRedacted
@@ -16485,6 +16635,7 @@ export const ViewerSessionInNodeDefaultFieldsFragmentDoc = /*#__PURE__*/ new Typ
       streamId
       platform
       name
+      videoChoice
       targetUri
       isEnabled
       status
@@ -19008,6 +19159,7 @@ export const GetArtifactEventsConnectionDocument = /*#__PURE__*/ new TypedDocume
     streamKey
     playbackId
     record
+    liveVideoAbr
     ingestMode
     pullSource {
       sourceUriRedacted
@@ -19055,6 +19207,7 @@ export const GetArtifactEventsConnectionDocument = /*#__PURE__*/ new TypedDocume
       streamId
       platform
       name
+      videoChoice
       targetUri
       isEnabled
       status
@@ -19161,6 +19314,7 @@ export const GetArtifactStatesConnectionDocument = /*#__PURE__*/ new TypedDocume
     streamKey
     playbackId
     record
+    liveVideoAbr
     ingestMode
     pullSource {
       sourceUriRedacted
@@ -19208,6 +19362,7 @@ export const GetArtifactStatesConnectionDocument = /*#__PURE__*/ new TypedDocume
       streamId
       platform
       name
+      videoChoice
       targetUri
       isEnabled
       status
@@ -19672,6 +19827,7 @@ export const GetClientQoeConnectionDocument = /*#__PURE__*/ new TypedDocumentStr
     streamKey
     playbackId
     record
+    liveVideoAbr
     ingestMode
     pullSource {
       sourceUriRedacted
@@ -19719,6 +19875,7 @@ export const GetClientQoeConnectionDocument = /*#__PURE__*/ new TypedDocumentStr
       streamId
       platform
       name
+      videoChoice
       targetUri
       isEnabled
       status
@@ -20263,6 +20420,7 @@ export const GetConnectionEventsConnectionDocument = /*#__PURE__*/ new TypedDocu
     streamKey
     playbackId
     record
+    liveVideoAbr
     ingestMode
     pullSource {
       sourceUriRedacted
@@ -20310,6 +20468,7 @@ export const GetConnectionEventsConnectionDocument = /*#__PURE__*/ new TypedDocu
       streamId
       platform
       name
+      videoChoice
       targetUri
       isEnabled
       status
@@ -20590,6 +20749,7 @@ export const GetGeographicDistributionDocument = /*#__PURE__*/ new TypedDocument
     streamKey
     playbackId
     record
+    liveVideoAbr
     ingestMode
     pullSource {
       sourceUriRedacted
@@ -20637,6 +20797,7 @@ export const GetGeographicDistributionDocument = /*#__PURE__*/ new TypedDocument
       streamId
       platform
       name
+      videoChoice
       targetUri
       isEnabled
       status
@@ -21514,6 +21675,7 @@ fragment ArtifactEventInNodeDefaultFields on ArtifactEvent {
     streamKey
     playbackId
     record
+    liveVideoAbr
     ingestMode
     pullSource {
       sourceUriRedacted
@@ -21561,6 +21723,7 @@ fragment ArtifactEventInNodeDefaultFields on ArtifactEvent {
       streamId
       platform
       name
+      videoChoice
       targetUri
       isEnabled
       status
@@ -21622,6 +21785,7 @@ fragment ClientMetrics5mDefaultFields on ClientMetrics5m {
     streamKey
     playbackId
     record
+    liveVideoAbr
     ingestMode
     pullSource {
       sourceUriRedacted
@@ -21669,6 +21833,7 @@ fragment ClientMetrics5mDefaultFields on ClientMetrics5m {
       streamId
       platform
       name
+      videoChoice
       targetUri
       isEnabled
       status
@@ -21717,6 +21882,7 @@ fragment ClipInNodeDefaultFields on Clip {
     streamKey
     playbackId
     record
+    liveVideoAbr
     ingestMode
     pullSource {
       sourceUriRedacted
@@ -21764,6 +21930,7 @@ fragment ClipInNodeDefaultFields on Clip {
       streamId
       platform
       name
+      videoChoice
       targetUri
       isEnabled
       status
@@ -21882,6 +22049,7 @@ fragment ConnectionEventInNodeDefaultFields on ConnectionEvent {
     streamKey
     playbackId
     record
+    liveVideoAbr
     ingestMode
     pullSource {
       sourceUriRedacted
@@ -21929,6 +22097,7 @@ fragment ConnectionEventInNodeDefaultFields on ConnectionEvent {
       streamId
       platform
       name
+      videoChoice
       targetUri
       isEnabled
       status
@@ -22114,6 +22283,7 @@ fragment ProcessingUsageRecordInNodeDefaultFields on ProcessingUsageRecord {
     streamKey
     playbackId
     record
+    liveVideoAbr
     ingestMode
     pullSource {
       sourceUriRedacted
@@ -22161,6 +22331,7 @@ fragment ProcessingUsageRecordInNodeDefaultFields on ProcessingUsageRecord {
       streamId
       platform
       name
+      videoChoice
       targetUri
       isEnabled
       status
@@ -22249,6 +22420,7 @@ fragment QualityTierDailyDefaultFields on QualityTierDaily {
     streamKey
     playbackId
     record
+    liveVideoAbr
     ingestMode
     pullSource {
       sourceUriRedacted
@@ -22296,6 +22468,7 @@ fragment QualityTierDailyDefaultFields on QualityTierDaily {
       streamId
       platform
       name
+      videoChoice
       targetUri
       isEnabled
       status
@@ -22360,6 +22533,7 @@ fragment StorageEventInNodeDefaultFields on StorageEvent {
     streamKey
     playbackId
     record
+    liveVideoAbr
     ingestMode
     pullSource {
       sourceUriRedacted
@@ -22407,6 +22581,7 @@ fragment StorageEventInNodeDefaultFields on StorageEvent {
       streamId
       platform
       name
+      videoChoice
       targetUri
       isEnabled
       status
@@ -22474,6 +22649,7 @@ fragment StreamAnalyticsDailyDefaultFields on StreamAnalyticsDaily {
     streamKey
     playbackId
     record
+    liveVideoAbr
     ingestMode
     pullSource {
       sourceUriRedacted
@@ -22521,6 +22697,7 @@ fragment StreamAnalyticsDailyDefaultFields on StreamAnalyticsDaily {
       streamId
       platform
       name
+      videoChoice
       targetUri
       isEnabled
       status
@@ -22566,6 +22743,7 @@ fragment StreamConnectionHourlyDefaultFields on StreamConnectionHourly {
     streamKey
     playbackId
     record
+    liveVideoAbr
     ingestMode
     pullSource {
       sourceUriRedacted
@@ -22613,6 +22791,7 @@ fragment StreamConnectionHourlyDefaultFields on StreamConnectionHourly {
       streamId
       platform
       name
+      videoChoice
       targetUri
       isEnabled
       status
@@ -22656,6 +22835,7 @@ fragment StreamEventInNodeDefaultFields on StreamEvent {
     streamKey
     playbackId
     record
+    liveVideoAbr
     ingestMode
     pullSource {
       sourceUriRedacted
@@ -22703,6 +22883,7 @@ fragment StreamEventInNodeDefaultFields on StreamEvent {
       streamId
       platform
       name
+      videoChoice
       targetUri
       isEnabled
       status
@@ -22792,6 +22973,7 @@ fragment StreamHealthMetricInNodeDefaultFields on StreamHealthMetric {
     streamKey
     playbackId
     record
+    liveVideoAbr
     ingestMode
     pullSource {
       sourceUriRedacted
@@ -22839,6 +23021,7 @@ fragment StreamHealthMetricInNodeDefaultFields on StreamHealthMetric {
       streamId
       platform
       name
+      videoChoice
       targetUri
       isEnabled
       status
@@ -22901,6 +23084,7 @@ fragment StreamInNodeDefaultFields on Stream {
   streamKey
   playbackId
   record
+  liveVideoAbr
   ingestMode
   pullSource {
     sourceUriRedacted
@@ -22952,6 +23136,7 @@ fragment StreamInNodeDefaultFields on Stream {
     streamId
     platform
     name
+    videoChoice
     targetUri
     isEnabled
     status
@@ -23009,6 +23194,7 @@ fragment TrackListEventInNodeDefaultFields on TrackListEvent {
     streamKey
     playbackId
     record
+    liveVideoAbr
     ingestMode
     pullSource {
       sourceUriRedacted
@@ -23056,6 +23242,7 @@ fragment TrackListEventInNodeDefaultFields on TrackListEvent {
       streamId
       platform
       name
+      videoChoice
       targetUri
       isEnabled
       status
@@ -23124,6 +23311,7 @@ fragment ViewerHoursHourlyInNodeDefaultFields on ViewerHoursHourly {
     streamKey
     playbackId
     record
+    liveVideoAbr
     ingestMode
     pullSource {
       sourceUriRedacted
@@ -23171,6 +23359,7 @@ fragment ViewerHoursHourlyInNodeDefaultFields on ViewerHoursHourly {
       streamId
       platform
       name
+      videoChoice
       targetUri
       isEnabled
       status
@@ -23217,6 +23406,7 @@ fragment ViewerSessionInNodeDefaultFields on ViewerSession {
     streamKey
     playbackId
     record
+    liveVideoAbr
     ingestMode
     pullSource {
       sourceUriRedacted
@@ -23264,6 +23454,7 @@ fragment ViewerSessionInNodeDefaultFields on ViewerSession {
       streamId
       platform
       name
+      videoChoice
       targetUri
       isEnabled
       status
@@ -24126,6 +24317,7 @@ fragment ProcessingUsageRecordDefaultFields on ProcessingUsageRecord {
     streamKey
     playbackId
     record
+    liveVideoAbr
     ingestMode
     pullSource {
       sourceUriRedacted
@@ -24173,6 +24365,7 @@ fragment ProcessingUsageRecordDefaultFields on ProcessingUsageRecord {
       streamId
       platform
       name
+      videoChoice
       targetUri
       isEnabled
       status
@@ -24293,6 +24486,7 @@ fragment QualityTierDailyDefaultFields on QualityTierDaily {
     streamKey
     playbackId
     record
+    liveVideoAbr
     ingestMode
     pullSource {
       sourceUriRedacted
@@ -24340,6 +24534,7 @@ fragment QualityTierDailyDefaultFields on QualityTierDaily {
       streamId
       platform
       name
+      videoChoice
       targetUri
       isEnabled
       status
@@ -24423,6 +24618,7 @@ fragment RebufferingEventDefaultFields on RebufferingEvent {
     streamKey
     playbackId
     record
+    liveVideoAbr
     ingestMode
     pullSource {
       sourceUriRedacted
@@ -24470,6 +24666,7 @@ fragment RebufferingEventDefaultFields on RebufferingEvent {
       streamId
       platform
       name
+      videoChoice
       targetUri
       isEnabled
       status
@@ -24694,6 +24891,7 @@ fragment RoutingEventDefaultFields on RoutingEvent {
     streamKey
     playbackId
     record
+    liveVideoAbr
     ingestMode
     pullSource {
       sourceUriRedacted
@@ -24741,6 +24939,7 @@ fragment RoutingEventDefaultFields on RoutingEvent {
       streamId
       platform
       name
+      videoChoice
       targetUri
       isEnabled
       status
@@ -25048,6 +25247,7 @@ fragment StorageEventDefaultFields on StorageEvent {
     streamKey
     playbackId
     record
+    liveVideoAbr
     ingestMode
     pullSource {
       sourceUriRedacted
@@ -25095,6 +25295,7 @@ fragment StorageEventDefaultFields on StorageEvent {
       streamId
       platform
       name
+      videoChoice
       targetUri
       isEnabled
       status
@@ -25227,6 +25428,7 @@ fragment StreamAnalyticsDailyDefaultFields on StreamAnalyticsDaily {
     streamKey
     playbackId
     record
+    liveVideoAbr
     ingestMode
     pullSource {
       sourceUriRedacted
@@ -25274,6 +25476,7 @@ fragment StreamAnalyticsDailyDefaultFields on StreamAnalyticsDaily {
       streamId
       platform
       name
+      videoChoice
       targetUri
       isEnabled
       status
@@ -25350,6 +25553,7 @@ fragment StreamAnalyticsSummaryDefaultFields on StreamAnalyticsSummary {
     streamKey
     playbackId
     record
+    liveVideoAbr
     ingestMode
     pullSource {
       sourceUriRedacted
@@ -25397,6 +25601,7 @@ fragment StreamAnalyticsSummaryDefaultFields on StreamAnalyticsSummary {
       streamId
       platform
       name
+      videoChoice
       targetUri
       isEnabled
       status
@@ -25484,6 +25689,7 @@ export const GetStreamAnalyticsSummaryDocument = /*#__PURE__*/ new TypedDocument
     streamKey
     playbackId
     record
+    liveVideoAbr
     ingestMode
     pullSource {
       sourceUriRedacted
@@ -25531,6 +25737,7 @@ export const GetStreamAnalyticsSummaryDocument = /*#__PURE__*/ new TypedDocument
       streamId
       platform
       name
+      videoChoice
       targetUri
       isEnabled
       status
@@ -25640,6 +25847,7 @@ fragment StreamConnectionHourlyDefaultFields on StreamConnectionHourly {
     streamKey
     playbackId
     record
+    liveVideoAbr
     ingestMode
     pullSource {
       sourceUriRedacted
@@ -25687,6 +25895,7 @@ fragment StreamConnectionHourlyDefaultFields on StreamConnectionHourly {
       streamId
       platform
       name
+      videoChoice
       targetUri
       isEnabled
       status
@@ -25760,6 +25969,7 @@ fragment StreamEventDefaultFields on StreamEvent {
     streamKey
     playbackId
     record
+    liveVideoAbr
     ingestMode
     pullSource {
       sourceUriRedacted
@@ -25807,6 +26017,7 @@ fragment StreamEventDefaultFields on StreamEvent {
       streamId
       platform
       name
+      videoChoice
       targetUri
       isEnabled
       status
@@ -25956,6 +26167,7 @@ fragment StreamHealthMetricDefaultFields on StreamHealthMetric {
     streamKey
     playbackId
     record
+    liveVideoAbr
     ingestMode
     pullSource {
       sourceUriRedacted
@@ -26003,6 +26215,7 @@ fragment StreamHealthMetricDefaultFields on StreamHealthMetric {
       streamId
       platform
       name
+      videoChoice
       targetUri
       isEnabled
       status
@@ -26235,6 +26448,7 @@ fragment TrackListEventDefaultFields on TrackListEvent {
     streamKey
     playbackId
     record
+    liveVideoAbr
     ingestMode
     pullSource {
       sourceUriRedacted
@@ -26282,6 +26496,7 @@ fragment TrackListEventDefaultFields on TrackListEvent {
       streamId
       platform
       name
+      videoChoice
       targetUri
       isEnabled
       status
@@ -26419,6 +26634,7 @@ fragment ViewerGeographicDefaultFields on ViewerGeographic {
     streamKey
     playbackId
     record
+    liveVideoAbr
     ingestMode
     pullSource {
       sourceUriRedacted
@@ -26466,6 +26682,7 @@ fragment ViewerGeographicDefaultFields on ViewerGeographic {
       streamId
       platform
       name
+      videoChoice
       targetUri
       isEnabled
       status
@@ -26550,6 +26767,7 @@ fragment ViewerHoursHourlyDefaultFields on ViewerHoursHourly {
     streamKey
     playbackId
     record
+    liveVideoAbr
     ingestMode
     pullSource {
       sourceUriRedacted
@@ -26597,6 +26815,7 @@ fragment ViewerHoursHourlyDefaultFields on ViewerHoursHourly {
       streamId
       platform
       name
+      videoChoice
       targetUri
       isEnabled
       status
@@ -26673,6 +26892,7 @@ fragment ViewerSessionDefaultFields on ViewerSession {
     streamKey
     playbackId
     record
+    liveVideoAbr
     ingestMode
     pullSource {
       sourceUriRedacted
@@ -26720,6 +26940,7 @@ fragment ViewerSessionDefaultFields on ViewerSession {
       streamId
       platform
       name
+      videoChoice
       targetUri
       isEnabled
       status
@@ -26810,6 +27031,7 @@ fragment ViewerCountBucketDefaultFields on ViewerCountBucket {
     streamKey
     playbackId
     record
+    liveVideoAbr
     ingestMode
     pullSource {
       sourceUriRedacted
@@ -26857,6 +27079,7 @@ fragment ViewerCountBucketDefaultFields on ViewerCountBucket {
       streamId
       platform
       name
+      videoChoice
       targetUri
       isEnabled
       status
@@ -27122,6 +27345,7 @@ export const LiveConnectionEventsDocument = /*#__PURE__*/ new TypedDocumentStrin
     streamKey
     playbackId
     record
+    liveVideoAbr
     ingestMode
     pullSource {
       sourceUriRedacted
@@ -27169,6 +27393,7 @@ export const LiveConnectionEventsDocument = /*#__PURE__*/ new TypedDocumentStrin
       streamId
       platform
       name
+      videoChoice
       targetUri
       isEnabled
       status
@@ -27265,6 +27490,7 @@ export const LiveFirehoseDocument = /*#__PURE__*/ new TypedDocumentString(`
       streamKey
       playbackId
       record
+      liveVideoAbr
       ingestMode
       createdAt
       updatedAt
@@ -27318,6 +27544,7 @@ export const LiveFirehoseDocument = /*#__PURE__*/ new TypedDocumentString(`
       streamKey
       playbackId
       record
+      liveVideoAbr
       ingestMode
       createdAt
       updatedAt
@@ -27357,6 +27584,7 @@ export const LiveFirehoseDocument = /*#__PURE__*/ new TypedDocumentString(`
       streamKey
       playbackId
       record
+      liveVideoAbr
       ingestMode
       createdAt
       updatedAt
@@ -27398,6 +27626,7 @@ export const LiveFirehoseDocument = /*#__PURE__*/ new TypedDocumentString(`
       streamKey
       playbackId
       record
+      liveVideoAbr
       ingestMode
       createdAt
       updatedAt
@@ -27447,6 +27676,7 @@ export const LiveFirehoseDocument = /*#__PURE__*/ new TypedDocumentString(`
       streamKey
       playbackId
       record
+      liveVideoAbr
       ingestMode
       createdAt
       updatedAt
@@ -27499,6 +27729,7 @@ export const LiveFirehoseDocument = /*#__PURE__*/ new TypedDocumentString(`
       streamKey
       playbackId
       record
+      liveVideoAbr
       ingestMode
       createdAt
       updatedAt
@@ -27566,6 +27797,7 @@ export const LiveFirehoseDocument = /*#__PURE__*/ new TypedDocumentString(`
       streamKey
       playbackId
       record
+      liveVideoAbr
       ingestMode
       createdAt
       updatedAt
@@ -27683,6 +27915,7 @@ export const LiveProcessingEventsDocument = /*#__PURE__*/ new TypedDocumentStrin
     streamKey
     playbackId
     record
+    liveVideoAbr
     ingestMode
     pullSource {
       sourceUriRedacted
@@ -27730,6 +27963,7 @@ export const LiveProcessingEventsDocument = /*#__PURE__*/ new TypedDocumentStrin
       streamId
       platform
       name
+      videoChoice
       targetUri
       isEnabled
       status
@@ -27825,6 +28059,7 @@ export const LiveStorageEventsDocument = /*#__PURE__*/ new TypedDocumentString(`
     streamKey
     playbackId
     record
+    liveVideoAbr
     ingestMode
     pullSource {
       sourceUriRedacted
@@ -27872,6 +28107,7 @@ export const LiveStorageEventsDocument = /*#__PURE__*/ new TypedDocumentString(`
       streamId
       platform
       name
+      videoChoice
       targetUri
       isEnabled
       status
@@ -27932,6 +28168,7 @@ export const LiveStreamEventsDocument = /*#__PURE__*/ new TypedDocumentString(`
     streamKey
     playbackId
     record
+    liveVideoAbr
     ingestMode
     pullSource {
       sourceUriRedacted
@@ -27979,6 +28216,7 @@ export const LiveStreamEventsDocument = /*#__PURE__*/ new TypedDocumentString(`
       streamId
       platform
       name
+      videoChoice
       targetUri
       isEnabled
       status
@@ -28080,6 +28318,7 @@ export const LiveTrackListUpdatesDocument = /*#__PURE__*/ new TypedDocumentStrin
     streamKey
     playbackId
     record
+    liveVideoAbr
     ingestMode
     pullSource {
       sourceUriRedacted
@@ -28127,6 +28366,7 @@ export const LiveTrackListUpdatesDocument = /*#__PURE__*/ new TypedDocumentStrin
       streamId
       platform
       name
+      videoChoice
       targetUri
       isEnabled
       status
@@ -28202,6 +28442,7 @@ export const LiveViewerMetricsDocument = /*#__PURE__*/ new TypedDocumentString(`
     streamKey
     playbackId
     record
+    liveVideoAbr
     ingestMode
     pullSource {
       sourceUriRedacted
@@ -28249,6 +28490,7 @@ export const LiveViewerMetricsDocument = /*#__PURE__*/ new TypedDocumentString(`
       streamId
       platform
       name
+      videoChoice
       targetUri
       isEnabled
       status

@@ -14,7 +14,7 @@
   import { Select, SelectContent, SelectItem, SelectTrigger } from "$lib/components/ui/select";
   import { getIconComponent } from "$lib/iconUtils";
 
-  let { open = $bindable(false), loading = false, onCreate } = $props();
+  let { open = $bindable(false), loading = false, liveVideoAbr = "INHERIT", onCreate } = $props();
 
   const PLATFORM_PRESETS: Record<
     string,
@@ -56,10 +56,12 @@
   let name = $state("");
   let streamKey = $state("");
   let customUri = $state("");
+  let videoChoice = $state("AUTO");
 
   let preset = $derived(PLATFORM_PRESETS[platform]);
   let isCustom = $derived(platform === "custom");
   let targetUri = $derived(isCustom ? customUri : `${preset.ingestUrl}${streamKey}`);
+  let isSrt = $derived(targetUri.trim().toLowerCase().startsWith("srt://"));
   let isValid = $derived(
     name.trim().length > 0 && (isCustom ? customUri.trim().length > 0 : streamKey.trim().length > 0)
   );
@@ -70,6 +72,7 @@
       name = "";
       streamKey = "";
       customUri = "";
+      videoChoice = "AUTO";
     }
   });
 
@@ -79,6 +82,7 @@
       platform: isCustom ? undefined : platform,
       name: name.trim(),
       targetUri,
+      videoChoice: isSrt ? "AUTO" : videoChoice,
     });
   }
 </script>
@@ -162,6 +166,40 @@
           <p class="text-xs text-muted-foreground/70">
             {preset.ingestUrl}<span class="text-info">&lbrace;your key&rbrace;</span>
           </p>
+        </div>
+      {/if}
+      {#if !isSrt}
+        <div class="space-y-2">
+          <Label for="createVideoChoice" class="text-sm font-medium text-foreground"
+            >Video track</Label
+          >
+          <Select
+            value={videoChoice}
+            onValueChange={(value) => (videoChoice = value)}
+            type="single"
+          >
+            <SelectTrigger id="createVideoChoice" class="w-full">
+              {videoChoice === "SOURCE_VIDEO"
+                ? "Source video"
+                : videoChoice === "PROCESSED_VIDEO"
+                  ? "Processed video"
+                  : "Automatic (recommended)"}
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="AUTO">Automatic (recommended)</SelectItem>
+              <SelectItem value="SOURCE_VIDEO">Source video only</SelectItem>
+              <SelectItem value="PROCESSED_VIDEO">Processed video only</SelectItem>
+            </SelectContent>
+          </Select>
+          <p class="text-xs text-muted-foreground/70">
+            Automatic uses source video when compatible and a rendition when required by the
+            destination.
+          </p>
+          {#if liveVideoAbr === "OFF" && videoChoice === "PROCESSED_VIDEO"}
+            <p class="text-xs text-warning">
+              Live video ABR is off for this stream, so processed video may be unavailable.
+            </p>
+          {/if}
         </div>
       {/if}
     </form>

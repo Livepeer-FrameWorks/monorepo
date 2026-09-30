@@ -122,6 +122,8 @@ Practical consequences:
   recording for archived ranges.
 - **Access control, multistream targets, thumbnails, and analytics** attach per stream entity.
 
+The optional `liveVideoAbr` stream setting controls live video renditions. `INHERIT` follows the tier policy; `OFF` removes live video renditions from the next ingest while preserving audio conversion, thumbnails, and recording. RTMP restream targets can independently request automatic, source, or processed video selection; see [Multistreaming](/builders/multistreaming).
+
 For 24/7-style streams, the recording can continue as one DVR artifact for the full stream session.
 Replay viewers navigate that archive through chapters or explicit time ranges, while the live
 player still receives a bounded seekback window. See [Recordings, Clips & VOD](/builders/recordings#archive-chapters).

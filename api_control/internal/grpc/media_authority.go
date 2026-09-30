@@ -543,7 +543,7 @@ func (s *CommodoreServer) compileLiveStreamSecret(ctx context.Context, authority
 			s.observeFieldDecryptFailure("push_target_uri", row.TargetUri)
 			return nil, parkAuthorityCompile("push_target_decrypt_failed", fmt.Errorf("decrypt push target %q for media authority: %w", row.ID, err))
 		}
-		secret.PushTargets = append(secret.PushTargets, &mediaauthoritypb.PushTargetSecret{TargetId: row.ID, TargetUri: uri, Name: row.Name, Platform: row.Platform.String})
+		secret.PushTargets = append(secret.PushTargets, &mediaauthoritypb.PushTargetSecret{TargetId: row.ID, TargetUri: uri, Name: row.Name, Platform: row.Platform.String, VideoChoice: row.VideoChoice})
 	}
 	sort.Slice(secret.PushTargets, func(i, j int) bool { return secret.PushTargets[i].GetTargetId() < secret.PushTargets[j].GetTargetId() })
 	// An authenticated empty secret is meaningful for push ingest: it proves

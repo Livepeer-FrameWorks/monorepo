@@ -108,12 +108,13 @@ func RegisterStreamTools(server *mcp.Server, clients *clients.ServiceClients, re
 
 // CreateStreamInput represents input for create_stream tool.
 type CreateStreamInput struct {
-	Name        string               `json:"name" jsonschema:"Stream display name"`
-	Description string               `json:"description,omitempty" jsonschema:"Stream description"`
-	Record      bool                 `json:"record,omitempty" jsonschema:"Enable DVR recording"`
-	Public      bool                 `json:"public,omitempty" jsonschema:"Make stream publicly discoverable"`
-	IngestMode  string               `json:"ingest_mode,omitempty" jsonschema:"push or pull. Defaults to push."`
-	PullSource  *PullSourceToolInput `json:"pull_source,omitempty" jsonschema:"Required when ingest_mode is pull"`
+	Name         string               `json:"name" jsonschema:"Stream display name"`
+	Description  string               `json:"description,omitempty" jsonschema:"Stream description"`
+	Record       bool                 `json:"record,omitempty" jsonschema:"Enable DVR recording"`
+	LiveVideoABR string               `json:"live_video_abr,omitempty" jsonschema:"INHERIT (default) or OFF for live video renditions"`
+	Public       bool                 `json:"public,omitempty" jsonschema:"Make stream publicly discoverable"`
+	IngestMode   string               `json:"ingest_mode,omitempty" jsonschema:"push or pull. Defaults to push."`
+	PullSource   *PullSourceToolInput `json:"pull_source,omitempty" jsonschema:"Required when ingest_mode is pull"`
 	// Private and multicast pull sources need a restricted location.
 	SourceLocation *SourceLocationToolInput `json:"source_location,omitempty" jsonschema:"Where the source may be ingested. Omit for any cluster FrameWorks chooses; required as restricted for private (LAN) or multicast pull sources."`
 }
@@ -184,6 +185,7 @@ func handleCreateStream(ctx context.Context, args CreateStreamInput, clients *cl
 		Description:    args.Description,
 		IsPublic:       args.Public,
 		IsRecording:    args.Record,
+		LiveVideoAbr:   args.LiveVideoABR,
 		IngestMode:     args.IngestMode,
 		PullSource:     toProtoPullSource(args.PullSource),
 		SourceLocation: location,
@@ -216,12 +218,13 @@ func handleCreateStream(ctx context.Context, args CreateStreamInput, clients *cl
 
 // UpdateStreamInput represents input for update_stream tool.
 type UpdateStreamInput struct {
-	StreamID    string               `json:"stream_id" jsonschema:"Relay ID or stream_id to update"`
-	Name        *string              `json:"name,omitempty" jsonschema:"New stream name"`
-	Description *string              `json:"description,omitempty" jsonschema:"New description"`
-	Record      *bool                `json:"record,omitempty" jsonschema:"Enable/disable recording"`
-	IngestMode  *string              `json:"ingest_mode,omitempty" jsonschema:"Existing ingest mode. A different value is rejected."`
-	PullSource  *PullSourceToolInput `json:"pull_source,omitempty" jsonschema:"Replacement pull-source configuration for pull streams"`
+	StreamID     string               `json:"stream_id" jsonschema:"Relay ID or stream_id to update"`
+	Name         *string              `json:"name,omitempty" jsonschema:"New stream name"`
+	Description  *string              `json:"description,omitempty" jsonschema:"New description"`
+	Record       *bool                `json:"record,omitempty" jsonschema:"Enable/disable recording"`
+	LiveVideoABR *string              `json:"live_video_abr,omitempty" jsonschema:"INHERIT or OFF; omit to keep the current setting"`
+	IngestMode   *string              `json:"ingest_mode,omitempty" jsonschema:"Existing ingest mode. A different value is rejected."`
+	PullSource   *PullSourceToolInput `json:"pull_source,omitempty" jsonschema:"Replacement pull-source configuration for pull streams"`
 	// Omitted keeps the current location.
 	SourceLocation *SourceLocationToolInput `json:"source_location,omitempty" jsonschema:"Replacement source location. Omit to keep the current one. Custom placement rules are edited with the media placement tools."`
 }
@@ -232,6 +235,7 @@ type UpdateStreamResult struct {
 	StreamID       string                    `json:"stream_id"`
 	Name           string                    `json:"name"`
 	IngestMode     string                    `json:"ingest_mode"`
+	LiveVideoABR   string                    `json:"live_video_abr"`
 	PullSource     *PullSourceToolResult     `json:"pull_source,omitempty"`
 	SourceLocation *SourceLocationToolResult `json:"source_location,omitempty"`
 	Message        string                    `json:"message"`
@@ -261,6 +265,7 @@ func handleUpdateStream(ctx context.Context, args UpdateStreamInput, clients *cl
 		Name:           args.Name,
 		Description:    args.Description,
 		Record:         args.Record,
+		LiveVideoAbr:   args.LiveVideoABR,
 		IngestMode:     args.IngestMode,
 		PullSource:     toProtoPullSource(args.PullSource),
 		SourceLocation: location,
@@ -275,6 +280,7 @@ func handleUpdateStream(ctx context.Context, args UpdateStreamInput, clients *cl
 		StreamID:       stream.StreamId,
 		Name:           stream.Title,
 		IngestMode:     stream.IngestMode,
+		LiveVideoABR:   stream.GetLiveVideoAbr(),
 		PullSource:     fromProtoPullSource(stream.PullSource),
 		SourceLocation: fromProtoSourceLocation(stream.GetSourceLocation()),
 		Message:        fmt.Sprintf("Stream '%s' updated.", stream.Title),

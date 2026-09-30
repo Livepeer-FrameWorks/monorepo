@@ -8,6 +8,17 @@ import (
 	"testing"
 )
 
+func TestStripLiveVideoRenditionsKeepsAudioAndThumbnails(t *testing.T) {
+	input := `[{"process":"AV","codec":"AAC"},{"process":"AV","codec":"Opus"},{"process":"AV","codec":"wav"},{"process":"AV","codec":"AC3"},{"process":"AV","codec":"PCM"},{"process":"AV","codec":"MP2"},{"process":"AV","codec":"Vorbis"},{"process":"Livepeer","target_profiles":[{"name":"720p"}]},{"process":"AV","codec":"H264"},{"process":"Thumbs"}]`
+	var result []map[string]any
+	if err := json.Unmarshal([]byte(StripLiveVideoRenditions(input)), &result); err != nil {
+		t.Fatal(err)
+	}
+	if len(result) != 8 || result[0]["codec"] != "AAC" || result[1]["codec"] != "Opus" || result[2]["codec"] != "wav" || result[3]["codec"] != "AC3" || result[4]["codec"] != "PCM" || result[5]["codec"] != "MP2" || result[6]["codec"] != "Vorbis" || result[7]["process"] != "Thumbs" {
+		t.Fatalf("surviving live processes = %#v", result)
+	}
+}
+
 func TestSoftwareEncodingOnlyMarksAVProcessesWithoutAnExplicitChoice(t *testing.T) {
 	input := `[{"process":"AV","codec":"H264"},{"process":"AV","codec":"H264","accel":"hw"},{"process":"Thumbs"},{"process":"Livepeer"}]`
 	var got []map[string]any

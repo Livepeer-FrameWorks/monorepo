@@ -1755,6 +1755,7 @@ message CreateStreamRequest {
   // ingest placement constraints. Absent = no stream ingest restriction.
   // CUSTOM is not accepted as input.
   StreamSourceLocation source_location = 7;
+  string live_video_abr = 8;             // INHERIT (default) or OFF
 }
 
 enum SourceLocationMode {
@@ -1906,6 +1907,7 @@ message Stream {
   // Consequence warnings of the source-location write in the UpdateStream
   // call that returned this stream; empty on reads.
   repeated media_placement.Warning source_location_warnings = 32;
+  string live_video_abr = 33;            // INHERIT or OFF
 }
 
 // PullSourceAllowedClustersInput wraps the placement-pin list so callers can
@@ -1975,6 +1977,7 @@ message UpdateStreamRequest {
   // CUSTOM is not accepted as input, and a stream whose own ingest rules are
   // CUSTOM rejects source-location writes.
   StreamSourceLocation source_location = 10;
+  optional string live_video_abr = 11;   // INHERIT or OFF; absent = preserve
 }
 
 message DeleteStreamRequest {
@@ -2073,6 +2076,7 @@ message PushTarget {
   google.protobuf.Timestamp created_at = 10;
   google.protobuf.Timestamp updated_at = 11;
   string reason_code = 12;                    // Stable machine-readable lifecycle reason
+  string video_choice = 13;                   // AUTO, SOURCE_VIDEO, PROCESSED_VIDEO
 }
 
 message CreatePushTargetRequest {
@@ -2080,6 +2084,7 @@ message CreatePushTargetRequest {
   string platform = 2;
   string name = 3;
   string target_uri = 4;                   // Full URI with stream key (rtmp://live.twitch.tv/app/{key})
+  string video_choice = 5;                 // AUTO (default), SOURCE_VIDEO, PROCESSED_VIDEO
 }
 
 message ListPushTargetsRequest {
@@ -2095,6 +2100,7 @@ message UpdatePushTargetRequest {
   optional string name = 2;
   optional string target_uri = 3;
   optional bool is_enabled = 4;
+  optional string video_choice = 5;
 }
 
 message DeletePushTargetRequest {
@@ -2124,6 +2130,7 @@ message PushTargetInternal {
   string platform = 2;
   string name = 3;
   string target_uri = 4;                   // Unmasked - contains full stream key
+  string video_choice = 5;
 }
 
 // Internal: Foghorn updates status on push lifecycle events
@@ -2146,6 +2153,7 @@ enum PushTargetStatusReason {
   PUSH_TARGET_STATUS_REASON_CONFIGURATION_ERROR = 7;
   PUSH_TARGET_STATUS_REASON_STOPPED = 8;
   PUSH_TARGET_STATUS_REASON_EDGE_UPGRADE_REQUIRED = 9;
+  PUSH_TARGET_STATUS_REASON_MEDIA_SELECTION_FAILED = 10;
 }
 
 // ============================================================================

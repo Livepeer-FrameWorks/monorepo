@@ -123,6 +123,7 @@
   let newStreamTitle = $state("");
   let newStreamDescription = $state("");
   let newStreamRecord = $state(false);
+  let newStreamLiveVideoAbr = $state("INHERIT");
   let newStreamIngestMode = $state<"PUSH" | "PULL">("PUSH");
   let newStreamPullSourceUri = $state("");
   let newStreamPullSourceEnabled = $state(true);
@@ -305,6 +306,7 @@
         name: newStreamTitle.trim(),
         description: newStreamDescription.trim() || undefined,
         record: newStreamRecord,
+        liveVideoAbr: newStreamLiveVideoAbr,
         ingestMode: newStreamIngestMode,
         pullSource:
           newStreamIngestMode === "PULL"
@@ -334,6 +336,7 @@
         newStreamTitle = "";
         newStreamDescription = "";
         newStreamRecord = false;
+        newStreamLiveVideoAbr = "INHERIT";
         newStreamIngestMode = "PUSH";
         newStreamPullSourceUri = "";
         newStreamPullSourceEnabled = true;
@@ -899,6 +902,7 @@
   bind:title={newStreamTitle}
   bind:description={newStreamDescription}
   bind:record={newStreamRecord}
+  bind:liveVideoAbr={newStreamLiveVideoAbr}
   bind:ingestMode={newStreamIngestMode}
   bind:pullSourceUri={newStreamPullSourceUri}
   bind:pullSourceEnabled={newStreamPullSourceEnabled}
@@ -911,6 +915,7 @@
     newStreamTitle = "";
     newStreamDescription = "";
     newStreamRecord = false;
+    newStreamLiveVideoAbr = "INHERIT";
     newStreamIngestMode = "PUSH";
     newStreamPullSourceUri = "";
     newStreamPullSourceEnabled = true;

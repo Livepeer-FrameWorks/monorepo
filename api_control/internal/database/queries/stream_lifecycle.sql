@@ -19,6 +19,10 @@ UPDATE commodore.streams
 SET is_recording_enabled = true
 WHERE id = $1;
 
+-- name: SetCreatedStreamLiveVideoABR :exec
+UPDATE commodore.streams SET live_video_abr = $1
+WHERE id = $2 AND tenant_id = $3;
+
 -- name: GetStreamUpdateState :one
 SELECT internal_name, ingest_mode, is_recording_enabled
 FROM commodore.streams
@@ -37,6 +41,7 @@ SET title = CASE WHEN sqlc.arg(apply_title)::boolean THEN sqlc.arg(title) ELSE t
     dvr_chapter_mode = CASE WHEN sqlc.arg(apply_chapter_mode)::boolean THEN sqlc.narg(chapter_mode)::varchar ELSE dvr_chapter_mode END,
     dvr_chapter_interval_seconds = CASE WHEN sqlc.arg(apply_chapter_interval)::boolean THEN sqlc.narg(chapter_interval)::integer ELSE dvr_chapter_interval_seconds END,
     monitoring_enabled = CASE WHEN sqlc.arg(apply_monitoring)::boolean THEN sqlc.narg(monitoring_enabled)::boolean ELSE monitoring_enabled END,
+    live_video_abr = CASE WHEN sqlc.arg(apply_live_video_abr)::boolean THEN sqlc.arg(live_video_abr)::varchar ELSE live_video_abr END,
     updated_at = NOW()
 WHERE id = sqlc.arg(stream_id)::uuid
   AND user_id = sqlc.arg(user_id)::uuid

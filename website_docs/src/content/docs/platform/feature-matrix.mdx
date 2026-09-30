@@ -32,7 +32,7 @@ Planned items in this area are detailed on the [Roadmap](/roadmap#streaming).
 | **Live streams** | Available | API, Agents (MCP), Dashboard, Docs | Push streams with stream keys over RTMP/E-RTMP, SRT, and WHIP (WebRTC); pull streams from RTSP, SRT, RIST, HLS, MPEG-TS, and Mist/DTSC sources; and operator-managed local file, playlist, and process sources. |
 | ↳ Stream keys *(foundation)* | Available | API, Agents (MCP), Dashboard, Docs | Per-stream ingest credentials with rotation. |
 | ↳ Pull streams | Expanding | API, Agents (MCP), Dashboard, Docs | Stream inputs pulled from upstream sources (RTSP, SRT, RIST, HLS, etc.) instead of pushed, with resolution-stage lifecycle audit. |
-| ↳ Multistream push targets | Available | API, Agents (MCP), Dashboard, Docs | Forward live streams to additional RTMP/SRT destinations. |
+| ↳ Multistream push targets | Available | API, Agents (MCP), Dashboard, Docs | Forward live streams to RTMP/SRT destinations with per-target video choice and an optional per-stream live video ABR switch. |
 | **StreamCrafter (browser studio)** | Available | API, Dashboard, Docs | Browser-based broadcasting studio — WHIP/WebRTC ingest, compositing, and multi-source mixing. Ships as npm packages @livepeer-frameworks/streamcrafter-&#123;core,react,svelte,wc&#125; and powers the dashboard's Go Live page. |
 | **Device discovery and contribution inputs** | Planned | — | Edge-local discovery for cameras, PTZ devices, NDI sources, USB capture, HDMI inputs, and local contribution paths. |
 

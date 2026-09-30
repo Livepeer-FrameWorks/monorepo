@@ -358,6 +358,12 @@ class CreatePushTargetInput(BaseModel):
     "Platform identifier (twitch, youtube, facebook, kick, x, custom)."
     name: str = Field(description="User-friendly label for this target.")
     "User-friendly label for this target."
+    video_choice: Optional[str] = Field(
+        alias="videoChoice",
+        default="AUTO",
+        description="AUTO, SOURCE_VIDEO, or PROCESSED_VIDEO for RTMP targets.",
+    )
+    "AUTO, SOURCE_VIDEO, or PROCESSED_VIDEO for RTMP targets."
     target_uri: str = Field(
         alias="targetUri",
         description="Full target URI including stream key (e.g., rtmp://live.twitch.tv/app/live_xxxx).",
@@ -385,6 +391,12 @@ class CreateStreamInput(BaseModel):
         default=False, description="Enable DVR recording (default: false)."
     )
     "Enable DVR recording (default: false)."
+    live_video_abr: Optional[str] = Field(
+        alias="liveVideoAbr",
+        default="INHERIT",
+        description="Live video renditions: INHERIT uses the tier policy; OFF keeps source video and audio conversion.",
+    )
+    "Live video renditions: INHERIT uses the tier policy; OFF keeps source video and audio conversion."
     ingest_mode: Optional[IngestMode] = Field(
         alias="ingestMode",
         default=IngestMode.PUSH,
@@ -978,6 +990,12 @@ class UpdateMediaRetentionInput(BaseModel):
 class UpdatePushTargetInput(BaseModel):
     name: Optional[str] = Field(default=None, description="Updated label.")
     "Updated label."
+    video_choice: Optional[str] = Field(
+        alias="videoChoice",
+        default=None,
+        description="AUTO, SOURCE_VIDEO, or PROCESSED_VIDEO for RTMP targets.",
+    )
+    "AUTO, SOURCE_VIDEO, or PROCESSED_VIDEO for RTMP targets."
     target_uri: Optional[str] = Field(
         alias="targetUri", default=None, description="Updated target URI."
     )
@@ -1002,6 +1020,12 @@ class UpdateStreamInput(BaseModel):
         default=None, description="Enable or disable DVR recording."
     )
     "Enable or disable DVR recording."
+    live_video_abr: Optional[str] = Field(
+        alias="liveVideoAbr",
+        default=None,
+        description="INHERIT uses the tier policy; OFF disables live video renditions from the next ingest.",
+    )
+    "INHERIT uses the tier policy; OFF disables live video renditions from the next ingest."
     ingest_mode: Optional[IngestMode] = Field(
         alias="ingestMode",
         default=None,

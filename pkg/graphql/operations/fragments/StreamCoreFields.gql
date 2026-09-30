@@ -6,6 +6,7 @@ fragment StreamCoreFields on Stream {
   streamKey
   playbackId
   record
+  liveVideoAbr
   ingestMode
   pullSource {
     sourceUriRedacted

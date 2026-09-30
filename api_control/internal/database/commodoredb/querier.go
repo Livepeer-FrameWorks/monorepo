@@ -217,6 +217,7 @@ type Querier interface {
 	GetStreamForDeletion(ctx context.Context, arg GetStreamForDeletionParams) (GetStreamForDeletionRow, error)
 	GetStreamIDForDVRRegistration(ctx context.Context, arg GetStreamIDForDVRRegistrationParams) (string, error)
 	GetStreamIngestModeForUser(ctx context.Context, arg GetStreamIngestModeForUserParams) (string, error)
+	GetStreamLiveVideoABR(ctx context.Context, arg GetStreamLiveVideoABRParams) (string, error)
 	GetStreamMistSourcePins(ctx context.Context, arg GetStreamMistSourcePinsParams) ([]string, error)
 	GetStreamPlaybackID(ctx context.Context, arg GetStreamPlaybackIDParams) (string, error)
 	GetStreamPolicyForBundle(ctx context.Context, streamID string) (GetStreamPolicyForBundleRow, error)
@@ -504,6 +505,7 @@ type Querier interface {
 	RotateRefreshToken(ctx context.Context, arg RotateRefreshTokenParams) error
 	SetClipPlaybackPolicy(ctx context.Context, arg SetClipPlaybackPolicyParams) (string, error)
 	SetCreatedStreamDescription(ctx context.Context, arg SetCreatedStreamDescriptionParams) error
+	SetCreatedStreamLiveVideoABR(ctx context.Context, arg SetCreatedStreamLiveVideoABRParams) error
 	SetMediaAuthorityCompilerFingerprint(ctx context.Context, fingerprint string) error
 	SetMediaPlacementChangeRollout(ctx context.Context, arg SetMediaPlacementChangeRolloutParams) (int64, error)
 	SetPasswordResetToken(ctx context.Context, arg SetPasswordResetTokenParams) error

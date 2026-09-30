@@ -42,16 +42,21 @@ func (r *Resolver) DoCreatePushTarget(ctx context.Context, streamID string, inpu
 		if input.Platform != nil && strings.TrimSpace(*input.Platform) != "" {
 			platform = *input.Platform
 		}
+		videoChoice := "AUTO"
+		if input.VideoChoice != nil {
+			videoChoice = *input.VideoChoice
+		}
 		return &commodorepb.PushTarget{
-			Id:        "push_target_demo_created",
-			StreamId:  streamID,
-			Platform:  platform,
-			Name:      input.Name,
-			TargetUri: restream.MaskTargetURI(input.TargetURI),
-			IsEnabled: true,
-			Status:    "idle",
-			CreatedAt: now,
-			UpdatedAt: now,
+			Id:          "push_target_demo_created",
+			StreamId:    streamID,
+			Platform:    platform,
+			Name:        input.Name,
+			VideoChoice: videoChoice,
+			TargetUri:   restream.MaskTargetURI(input.TargetURI),
+			IsEnabled:   true,
+			Status:      "idle",
+			CreatedAt:   now,
+			UpdatedAt:   now,
 		}, nil
 	}
 
@@ -59,6 +64,9 @@ func (r *Resolver) DoCreatePushTarget(ctx context.Context, streamID string, inpu
 		StreamId:  streamID,
 		Name:      input.Name,
 		TargetUri: input.TargetURI,
+	}
+	if input.VideoChoice != nil {
+		req.VideoChoice = *input.VideoChoice
 	}
 	if input.Platform != nil {
 		req.Platform = *input.Platform
@@ -93,16 +101,21 @@ func (r *Resolver) DoUpdatePushTarget(ctx context.Context, id string, input mode
 		if input.IsEnabled != nil {
 			enabled = *input.IsEnabled
 		}
+		videoChoice := "AUTO"
+		if input.VideoChoice != nil {
+			videoChoice = *input.VideoChoice
+		}
 		return &commodorepb.PushTarget{
-			Id:        id,
-			StreamId:  demo.DemoStreamID,
-			Platform:  "custom",
-			Name:      name,
-			TargetUri: restream.MaskTargetURI(targetURI),
-			IsEnabled: enabled,
-			Status:    "idle",
-			CreatedAt: now,
-			UpdatedAt: now,
+			Id:          id,
+			StreamId:    demo.DemoStreamID,
+			Platform:    "custom",
+			Name:        name,
+			VideoChoice: videoChoice,
+			TargetUri:   restream.MaskTargetURI(targetURI),
+			IsEnabled:   enabled,
+			Status:      "idle",
+			CreatedAt:   now,
+			UpdatedAt:   now,
 		}, nil
 	}
 
@@ -123,6 +136,9 @@ func (r *Resolver) DoUpdatePushTarget(ctx context.Context, id string, input mode
 	}
 	if input.IsEnabled != nil {
 		req.IsEnabled = input.IsEnabled
+	}
+	if input.VideoChoice != nil {
+		req.VideoChoice = input.VideoChoice
 	}
 
 	target, err := r.Clients.Commodore.UpdatePushTarget(ctx, req)

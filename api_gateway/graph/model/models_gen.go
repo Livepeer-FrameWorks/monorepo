@@ -1012,6 +1012,8 @@ type CreatePushTargetInput struct {
 	Platform *string `json:"platform,omitempty"`
 	// User-friendly label for this target.
 	Name string `json:"name"`
+	// AUTO, SOURCE_VIDEO, or PROCESSED_VIDEO for RTMP targets.
+	VideoChoice *string `json:"videoChoice,omitempty"`
 	// Full target URI including stream key (e.g., rtmp://live.twitch.tv/app/live_xxxx).
 	TargetURI string `json:"targetUri"`
 }
@@ -1040,6 +1042,8 @@ type CreateStreamInput struct {
 	Description *string `json:"description,omitempty"`
 	// Enable DVR recording (default: false).
 	Record *bool `json:"record,omitempty"`
+	// Live video renditions: INHERIT uses the tier policy; OFF keeps source video and audio conversion.
+	LiveVideoAbr *string `json:"liveVideoAbr,omitempty"`
 	// Source ingest model. Defaults to PUSH.
 	IngestMode *IngestMode `json:"ingestMode,omitempty"`
 	// Pull-source configuration. Required when ingestMode is PULL.
@@ -2999,6 +3003,8 @@ type UpdateMediaRetentionInput struct {
 type UpdatePushTargetInput struct {
 	// Updated label.
 	Name *string `json:"name,omitempty"`
+	// AUTO, SOURCE_VIDEO, or PROCESSED_VIDEO for RTMP targets.
+	VideoChoice *string `json:"videoChoice,omitempty"`
 	// Updated target URI.
 	TargetURI *string `json:"targetUri,omitempty"`
 	// Enable or disable this target.
@@ -3014,6 +3020,8 @@ type UpdateStreamInput struct {
 	Description *string `json:"description,omitempty"`
 	// Enable or disable DVR recording.
 	Record *bool `json:"record,omitempty"`
+	// INHERIT uses the tier policy; OFF disables live video renditions from the next ingest.
+	LiveVideoAbr *string `json:"liveVideoAbr,omitempty"`
 	// Ingest model cannot be changed after create; sending a different value returns a validation error.
 	IngestMode *IngestMode `json:"ingestMode,omitempty"`
 	// Update the pull-source configuration for an existing pull stream.

@@ -30,7 +30,7 @@ func scopeTestStreamRow() *sqlmock.Rows {
 		"s1", "live+abc", scopeTestStreamKey, "pb-1", "Title", nil,
 		false, fixedTS, fixedTS, "push",
 		nil, nil, "{}", nil, false, nil, "{}", nil,
-		nil, nil, nil, nil, nil)
+		nil, nil, nil, nil, nil, "INHERIT")
 }
 
 func TestStreamReadRPCsRejectAPITokenWithoutStreamScope(t *testing.T) {

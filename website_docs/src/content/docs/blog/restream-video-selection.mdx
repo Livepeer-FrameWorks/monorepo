@@ -1,0 +1,61 @@
+---
+title: "Restreams Send the Original Video Wherever It Fits"
+date: 2026-09-29
+authors:
+  - frameworks
+excerpt: "When one live stream goes to several destinations, each restream now gets the original video if the destination accepts it and a compatible rendition if it does not, without encoding again what already fits."
+description: "When one live stream goes to several destinations, each restream now gets the original video if the destination accepts it and a compatible rendition if it does not, without encoding again what already fits."
+tags:
+  - announcements
+  - engineering
+---
+
+A broadcaster publishes one high-bitrate 1080p60 H.264 stream to FrameWorks and restreams it to two
+places: YouTube and Kick. YouTube takes the stream as it is. Kick documents a hard ceiling of 8 Mbps
+for video, and this stream is above it. One input, two destinations with different rules.
+
+Each restream now picks its video separately. YouTube gets the original video, untouched. Kick gets a
+rendition that fits under its ceiling, taken from the renditions the stream already produces for
+adaptive playback. Nothing is encoded a second time for either destination.
+
+## Why passthrough matters
+
+Every encode between the broadcaster and a destination adds delay, costs compute, and loses some
+quality, because a lossy encoder working from already-compressed video cannot get back what the first
+encode dropped. When the original video already meets a destination's rules, the best thing to send
+is those exact bytes. For YouTube in this scenario that is what happens: the audience there sees what
+the broadcaster's encoder produced.
+
+The capped destination still needs something it will accept. A stream with a live video ladder is
+already producing lower renditions so that viewers on slower connections can play it. Choosing one of
+those for Kick means the restream costs no encode of its own. The decision is made per destination,
+from the tracks the stream actually has and the limits that destination documents, when the restream
+starts.
+
+Audio is chosen on its own. A browser publishing over WebRTC sends Opus audio, and RTMP destinations
+expect AAC. The restream can take the original video and a converted AAC track together, so a
+browser-published stream can still go out with its video untouched.
+
+## When a stream does not need a ladder
+
+Some streams have no use for lower renditions, such as a stream that exists mainly to be restreamed
+to destinations that accept the original. For those, the live video ladder can now be turned off per
+stream. Audio conversion, thumbnails, and recording keep working, and the stream no longer produces
+video renditions nobody watches.
+
+The trade-off is direct. With the ladder off, there is no rendition to fall back on, so every
+destination has to accept the original video. In the scenario above, Kick would have nothing it can
+take. If you need to be sure which kind of video a destination receives, each restream target can also
+be set to require the original or require a rendition, instead of choosing automatically.
+
+## What it does not check
+
+Destination limits are applied where the platform documents a hard ceiling. For YouTube, Twitch, and
+custom RTMP destinations, the restream checks that the codec is accepted but does not enforce their
+recommended bitrates, because those are recommendations rather than limits. Whether a publisher's
+encoder keeps a constant bitrate or a fixed keyframe interval is not visible from the stream's track
+information, so a destination that requires either still depends on how the encoder is configured.
+And a destination can refuse a publish for reasons of its own.
+
+The [multistreaming guide](/builders/multistreaming) lists each preset's limits, the per-target video
+setting, and how to turn off the live video ladder for a stream.

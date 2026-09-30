@@ -7,6 +7,7 @@ import "database/sql"
 type StreamConfigRow struct {
 	ID, InternalName, StreamKey, PlaybackID, Title, IngestMode                                            string
 	Description, SourceURIEnc, ManagedSourceKind, ActiveIngestClusterID, DVRChapterMode                   sql.NullString
+	LiveVideoABR                                                                                          string
 	IsRecordingEnabled, PullEnabled, MonitoringEnabled                                                    sql.NullBool
 	ManagedAlwaysOn                                                                                       bool
 	CreatedAt, UpdatedAt                                                                                  sql.NullTime
@@ -21,7 +22,7 @@ func streamConfigRow(
 	managedSourceKind sql.NullString, managedAlwaysOn bool,
 	managedPlacementCount sql.NullInt32, managedAllowed []string,
 	activeIngest, chapterMode sql.NullString, chapterInterval,
-	dvrRetention, clipRetention sql.NullInt32, monitoring sql.NullBool,
+	dvrRetention, clipRetention sql.NullInt32, monitoring sql.NullBool, liveVideoABR string,
 ) StreamConfigRow {
 	return StreamConfigRow{
 		ID: id, InternalName: internalName, StreamKey: streamKey, PlaybackID: playbackID,
@@ -32,7 +33,7 @@ func streamConfigRow(
 		ManagedPlacementCount: managedPlacementCount, ManagedAllowedClusterIDs: managedAllowed,
 		ActiveIngestClusterID: activeIngest, DVRChapterMode: chapterMode,
 		DVRChapterIntervalSeconds: chapterInterval, DVRRetentionDaysOverride: dvrRetention,
-		ClipRetentionDaysOverride: clipRetention, MonitoringEnabled: monitoring,
+		ClipRetentionDaysOverride: clipRetention, MonitoringEnabled: monitoring, LiveVideoABR: liveVideoABR,
 	}
 }
 
@@ -41,7 +42,7 @@ func (r GetStreamConfigRow) Config() StreamConfigRow {
 		r.IsRecordingEnabled, r.CreatedAt, r.UpdatedAt, r.IngestMode, r.SourceUriEnc, r.Enabled,
 		r.PullAllowedClusterIds, r.ManagedSourceKind, r.ManagedAlwaysOn, r.ManagedPlacementCount,
 		r.ManagedAllowedClusterIds, r.ActiveIngestClusterID, r.DvrChapterMode, r.DvrChapterIntervalSeconds,
-		r.DvrRetentionDaysOverride, r.ClipRetentionDaysOverride, r.MonitoringEnabled)
+		r.DvrRetentionDaysOverride, r.ClipRetentionDaysOverride, r.MonitoringEnabled, r.LiveVideoAbr)
 }
 
 func (r GetStreamsConfigBatchRow) Config() StreamConfigRow {
@@ -49,7 +50,7 @@ func (r GetStreamsConfigBatchRow) Config() StreamConfigRow {
 		r.IsRecordingEnabled, r.CreatedAt, r.UpdatedAt, r.IngestMode, r.SourceUriEnc, r.Enabled,
 		r.PullAllowedClusterIds, r.ManagedSourceKind, r.ManagedAlwaysOn, r.ManagedPlacementCount,
 		r.ManagedAllowedClusterIds, r.ActiveIngestClusterID, r.DvrChapterMode, r.DvrChapterIntervalSeconds,
-		r.DvrRetentionDaysOverride, r.ClipRetentionDaysOverride, r.MonitoringEnabled)
+		r.DvrRetentionDaysOverride, r.ClipRetentionDaysOverride, r.MonitoringEnabled, r.LiveVideoAbr)
 }
 
 func (r ListStreamsForwardRow) Config() StreamConfigRow {
@@ -57,7 +58,7 @@ func (r ListStreamsForwardRow) Config() StreamConfigRow {
 		r.IsRecordingEnabled, r.CreatedAt, r.UpdatedAt, r.IngestMode, r.SourceUriEnc, r.Enabled,
 		r.PullAllowedClusterIds, r.ManagedSourceKind, r.ManagedAlwaysOn, r.ManagedPlacementCount,
 		r.ManagedAllowedClusterIds, r.ActiveIngestClusterID, r.DvrChapterMode, r.DvrChapterIntervalSeconds,
-		r.DvrRetentionDaysOverride, r.ClipRetentionDaysOverride, r.MonitoringEnabled)
+		r.DvrRetentionDaysOverride, r.ClipRetentionDaysOverride, r.MonitoringEnabled, r.LiveVideoAbr)
 }
 
 func (r ListStreamsForwardAfterRow) Config() StreamConfigRow {
@@ -65,7 +66,7 @@ func (r ListStreamsForwardAfterRow) Config() StreamConfigRow {
 		r.IsRecordingEnabled, r.CreatedAt, r.UpdatedAt, r.IngestMode, r.SourceUriEnc, r.Enabled,
 		r.PullAllowedClusterIds, r.ManagedSourceKind, r.ManagedAlwaysOn, r.ManagedPlacementCount,
 		r.ManagedAllowedClusterIds, r.ActiveIngestClusterID, r.DvrChapterMode, r.DvrChapterIntervalSeconds,
-		r.DvrRetentionDaysOverride, r.ClipRetentionDaysOverride, r.MonitoringEnabled)
+		r.DvrRetentionDaysOverride, r.ClipRetentionDaysOverride, r.MonitoringEnabled, r.LiveVideoAbr)
 }
 
 func (r ListStreamsBackwardRow) Config() StreamConfigRow {
@@ -73,7 +74,7 @@ func (r ListStreamsBackwardRow) Config() StreamConfigRow {
 		r.IsRecordingEnabled, r.CreatedAt, r.UpdatedAt, r.IngestMode, r.SourceUriEnc, r.Enabled,
 		r.PullAllowedClusterIds, r.ManagedSourceKind, r.ManagedAlwaysOn, r.ManagedPlacementCount,
 		r.ManagedAllowedClusterIds, r.ActiveIngestClusterID, r.DvrChapterMode, r.DvrChapterIntervalSeconds,
-		r.DvrRetentionDaysOverride, r.ClipRetentionDaysOverride, r.MonitoringEnabled)
+		r.DvrRetentionDaysOverride, r.ClipRetentionDaysOverride, r.MonitoringEnabled, r.LiveVideoAbr)
 }
 
 func (r ListStreamsBackwardBeforeRow) Config() StreamConfigRow {
@@ -81,5 +82,5 @@ func (r ListStreamsBackwardBeforeRow) Config() StreamConfigRow {
 		r.IsRecordingEnabled, r.CreatedAt, r.UpdatedAt, r.IngestMode, r.SourceUriEnc, r.Enabled,
 		r.PullAllowedClusterIds, r.ManagedSourceKind, r.ManagedAlwaysOn, r.ManagedPlacementCount,
 		r.ManagedAllowedClusterIds, r.ActiveIngestClusterID, r.DvrChapterMode, r.DvrChapterIntervalSeconds,
-		r.DvrRetentionDaysOverride, r.ClipRetentionDaysOverride, r.MonitoringEnabled)
+		r.DvrRetentionDaysOverride, r.ClipRetentionDaysOverride, r.MonitoringEnabled, r.LiveVideoAbr)
 }

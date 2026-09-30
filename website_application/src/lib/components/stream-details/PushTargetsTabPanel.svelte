@@ -10,6 +10,7 @@
     streamId: string;
     platform: string | null;
     name: string;
+    videoChoice: string;
     targetUri: string;
     isEnabled: boolean;
     status: string;
@@ -94,6 +95,7 @@
       capacity_exhausted: "Viewer capacity exhausted",
       configuration_error: "Configuration error",
       edge_upgrade_required: "Edge upgrade required",
+      media_selection_failed: "No compatible media tracks",
       stopped: "Delivery stopped",
     };
     return labels[reasonCode ?? ""] ?? null;
@@ -140,6 +142,11 @@
                   <Badge variant="outline" class="shrink-0">
                     {getPlatformLabel(target.platform)}
                   </Badge>
+                  {#if target.videoChoice && target.videoChoice !== "AUTO"}
+                    <Badge variant="outline" class="shrink-0">
+                      {target.videoChoice === "SOURCE_VIDEO" ? "Source video" : "Processed video"}
+                    </Badge>
+                  {/if}
                   <Badge
                     variant={target.isEnabled ? "default" : "secondary"}
                     tone={target.isEnabled ? getStatusTone(target.status) : "default"}

@@ -129,7 +129,7 @@ Subject: `streams/<stream id>`.
 | `stream.idle`        | The ingest session ends.                                          | `streamId`, `playbackId`                                                                |
 
 `changedFields` values are snake_case identifiers, not GraphQL field names: `title`,
-`description`, `is_recording_enabled`, `pull_source`, `source_location`,
+`description`, `is_recording_enabled`, `live_video_abr`, `pull_source`, `source_location`,
 `dvr_chapter_mode`, `dvr_chapter_interval_seconds`, `monitoring_enabled`, `playback_policy`,
 `stream_keys`, and `push_targets`.
 
@@ -183,7 +183,9 @@ Subject: `push_targets/<target id>`.
 
 `status` and `previousStatus` are `MULTISTREAM_STATUS_IDLE`, `_PENDING`, `_PUSHING`, `_RETRYING`,
 `_STOPPING`, or `_FAILED` (each prefixed `MULTISTREAM_STATUS`). `targetName` is your label for the
-target, never its URL.
+target, never its URL. The public target's `reasonCode` can be `media_selection_failed` when Mist
+cannot find a compatible video and audio pair; webhook payloads do not include destination URIs
+or raw Mist logs.
 
 ## API tokens
 

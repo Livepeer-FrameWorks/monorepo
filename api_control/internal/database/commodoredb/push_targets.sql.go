@@ -63,20 +63,21 @@ func (q *Queries) GetPushTargetStreamOwner(ctx context.Context, arg GetPushTarge
 
 const insertPushTarget = `-- name: InsertPushTarget :exec
 INSERT INTO commodore.push_targets (
-    id, tenant_id, stream_id, platform, name, target_uri,
+    id, tenant_id, stream_id, platform, name, target_uri, video_choice,
     is_enabled, status, created_at, updated_at
 )
-VALUES ($1, $2, $3, $4, $5, $6, true, 'idle', $7, $7)
+VALUES ($1, $2, $3, $4, $5, $6, $7, true, 'idle', $8, $8)
 `
 
 type InsertPushTargetParams struct {
-	ID        string         `db:"id" json:"id"`
-	TenantID  string         `db:"tenant_id" json:"tenant_id"`
-	StreamID  string         `db:"stream_id" json:"stream_id"`
-	Platform  sql.NullString `db:"platform" json:"platform"`
-	Name      string         `db:"name" json:"name"`
-	TargetUri string         `db:"target_uri" json:"target_uri"`
-	CreatedAt sql.NullTime   `db:"created_at" json:"created_at"`
+	ID          string         `db:"id" json:"id"`
+	TenantID    string         `db:"tenant_id" json:"tenant_id"`
+	StreamID    string         `db:"stream_id" json:"stream_id"`
+	Platform    sql.NullString `db:"platform" json:"platform"`
+	Name        string         `db:"name" json:"name"`
+	TargetUri   string         `db:"target_uri" json:"target_uri"`
+	VideoChoice string         `db:"video_choice" json:"video_choice"`
+	CreatedAt   sql.NullTime   `db:"created_at" json:"created_at"`
 }
 
 func (q *Queries) InsertPushTarget(ctx context.Context, arg InsertPushTargetParams) error {
@@ -87,13 +88,14 @@ func (q *Queries) InsertPushTarget(ctx context.Context, arg InsertPushTargetPara
 		arg.Platform,
 		arg.Name,
 		arg.TargetUri,
+		arg.VideoChoice,
 		arg.CreatedAt,
 	)
 	return err
 }
 
 const listEnabledPushTargets = `-- name: ListEnabledPushTargets :many
-SELECT id, platform, name, target_uri
+SELECT id, platform, name, target_uri, video_choice
 FROM commodore.push_targets
 WHERE stream_id = $1 AND tenant_id = $2 AND is_enabled = true
 `
@@ -104,10 +106,11 @@ type ListEnabledPushTargetsParams struct {
 }
 
 type ListEnabledPushTargetsRow struct {
-	ID        string         `db:"id" json:"id"`
-	Platform  sql.NullString `db:"platform" json:"platform"`
-	Name      string         `db:"name" json:"name"`
-	TargetUri string         `db:"target_uri" json:"target_uri"`
+	ID          string         `db:"id" json:"id"`
+	Platform    sql.NullString `db:"platform" json:"platform"`
+	Name        string         `db:"name" json:"name"`
+	TargetUri   string         `db:"target_uri" json:"target_uri"`
+	VideoChoice string         `db:"video_choice" json:"video_choice"`
 }
 
 func (q *Queries) ListEnabledPushTargets(ctx context.Context, arg ListEnabledPushTargetsParams) ([]ListEnabledPushTargetsRow, error) {
@@ -124,6 +127,7 @@ func (q *Queries) ListEnabledPushTargets(ctx context.Context, arg ListEnabledPus
 			&i.Platform,
 			&i.Name,
 			&i.TargetUri,
+			&i.VideoChoice,
 		); err != nil {
 			return nil, err
 		}
@@ -196,7 +200,7 @@ func (q *Queries) ListPushTargetSiblingsForOwner(ctx context.Context, arg ListPu
 }
 
 const listPushTargets = `-- name: ListPushTargets :many
-SELECT id, stream_id, platform, name, target_uri, is_enabled, status,
+SELECT id, stream_id, platform, name, target_uri, video_choice, is_enabled, status,
        reason_code, last_error, last_pushed_at, created_at, updated_at
 FROM commodore.push_targets pt
 WHERE pt.stream_id = $1 AND pt.tenant_id = $2
@@ -223,6 +227,7 @@ type ListPushTargetsRow struct {
 	Platform     sql.NullString `db:"platform" json:"platform"`
 	Name         string         `db:"name" json:"name"`
 	TargetUri    string         `db:"target_uri" json:"target_uri"`
+	VideoChoice  string         `db:"video_choice" json:"video_choice"`
 	IsEnabled    sql.NullBool   `db:"is_enabled" json:"is_enabled"`
 	Status       sql.NullString `db:"status" json:"status"`
 	ReasonCode   string         `db:"reason_code" json:"reason_code"`
@@ -252,6 +257,7 @@ func (q *Queries) ListPushTargets(ctx context.Context, arg ListPushTargetsParams
 			&i.Platform,
 			&i.Name,
 			&i.TargetUri,
+			&i.VideoChoice,
 			&i.IsEnabled,
 			&i.Status,
 			&i.ReasonCode,
@@ -325,31 +331,34 @@ const updatePushTargetFields = `-- name: UpdatePushTargetFields :one
 UPDATE commodore.push_targets pt
 SET name = CASE WHEN $1::boolean THEN $2 ELSE name END,
     target_uri = CASE WHEN $3::boolean THEN $4 ELSE target_uri END,
-    is_enabled = CASE WHEN $5::boolean THEN $6::boolean ELSE is_enabled END,
+    video_choice = CASE WHEN $5::boolean THEN $6 ELSE video_choice END,
+    is_enabled = CASE WHEN $7::boolean THEN $8::boolean ELSE is_enabled END,
     updated_at = NOW()
-WHERE pt.id = $7 AND pt.tenant_id = $8
+WHERE pt.id = $9 AND pt.tenant_id = $10
   AND EXISTS (
       SELECT 1 FROM commodore.streams s
       WHERE s.id = pt.stream_id
-        AND s.tenant_id = $8
-        AND (s.user_id = $9 OR $10::boolean)
+        AND s.tenant_id = $10
+        AND (s.user_id = $11 OR $12::boolean)
         AND s.deleted_at IS NULL
   )
-RETURNING id, stream_id, platform, name, target_uri, is_enabled, status,
+RETURNING id, stream_id, platform, name, target_uri, video_choice, is_enabled, status,
           reason_code, last_error, last_pushed_at, created_at, updated_at
 `
 
 type UpdatePushTargetFieldsParams struct {
-	ApplyName      bool   `db:"apply_name" json:"apply_name"`
-	Name           string `db:"name" json:"name"`
-	ApplyTargetUri bool   `db:"apply_target_uri" json:"apply_target_uri"`
-	TargetUri      string `db:"target_uri" json:"target_uri"`
-	ApplyEnabled   bool   `db:"apply_enabled" json:"apply_enabled"`
-	IsEnabled      bool   `db:"is_enabled" json:"is_enabled"`
-	ID             string `db:"id" json:"id"`
-	TenantID       string `db:"tenant_id" json:"tenant_id"`
-	UserID         string `db:"user_id" json:"user_id"`
-	TenantManager  bool   `db:"tenant_manager" json:"tenant_manager"`
+	ApplyName        bool   `db:"apply_name" json:"apply_name"`
+	Name             string `db:"name" json:"name"`
+	ApplyTargetUri   bool   `db:"apply_target_uri" json:"apply_target_uri"`
+	TargetUri        string `db:"target_uri" json:"target_uri"`
+	ApplyVideoChoice bool   `db:"apply_video_choice" json:"apply_video_choice"`
+	VideoChoice      string `db:"video_choice" json:"video_choice"`
+	ApplyEnabled     bool   `db:"apply_enabled" json:"apply_enabled"`
+	IsEnabled        bool   `db:"is_enabled" json:"is_enabled"`
+	ID               string `db:"id" json:"id"`
+	TenantID         string `db:"tenant_id" json:"tenant_id"`
+	UserID           string `db:"user_id" json:"user_id"`
+	TenantManager    bool   `db:"tenant_manager" json:"tenant_manager"`
 }
 
 type UpdatePushTargetFieldsRow struct {
@@ -358,6 +367,7 @@ type UpdatePushTargetFieldsRow struct {
 	Platform     sql.NullString `db:"platform" json:"platform"`
 	Name         string         `db:"name" json:"name"`
 	TargetUri    string         `db:"target_uri" json:"target_uri"`
+	VideoChoice  string         `db:"video_choice" json:"video_choice"`
 	IsEnabled    sql.NullBool   `db:"is_enabled" json:"is_enabled"`
 	Status       sql.NullString `db:"status" json:"status"`
 	ReasonCode   string         `db:"reason_code" json:"reason_code"`
@@ -373,6 +383,8 @@ func (q *Queries) UpdatePushTargetFields(ctx context.Context, arg UpdatePushTarg
 		arg.Name,
 		arg.ApplyTargetUri,
 		arg.TargetUri,
+		arg.ApplyVideoChoice,
+		arg.VideoChoice,
 		arg.ApplyEnabled,
 		arg.IsEnabled,
 		arg.ID,
@@ -387,6 +399,7 @@ func (q *Queries) UpdatePushTargetFields(ctx context.Context, arg UpdatePushTarg
 		&i.Platform,
 		&i.Name,
 		&i.TargetUri,
+		&i.VideoChoice,
 		&i.IsEnabled,
 		&i.Status,
 		&i.ReasonCode,
@@ -412,7 +425,7 @@ SET status = $1,
     END,
     updated_at = NOW()
 WHERE id = $6 AND tenant_id = $7
-RETURNING id, stream_id, platform, name, target_uri, is_enabled, status,
+RETURNING id, stream_id, platform, name, target_uri, video_choice, is_enabled, status,
           reason_code, last_error, last_pushed_at, created_at, updated_at
 `
 
@@ -432,6 +445,7 @@ type UpdatePushTargetStatusRow struct {
 	Platform     sql.NullString `db:"platform" json:"platform"`
 	Name         string         `db:"name" json:"name"`
 	TargetUri    string         `db:"target_uri" json:"target_uri"`
+	VideoChoice  string         `db:"video_choice" json:"video_choice"`
 	IsEnabled    sql.NullBool   `db:"is_enabled" json:"is_enabled"`
 	Status       sql.NullString `db:"status" json:"status"`
 	ReasonCode   string         `db:"reason_code" json:"reason_code"`
@@ -458,6 +472,7 @@ func (q *Queries) UpdatePushTargetStatus(ctx context.Context, arg UpdatePushTarg
 		&i.Platform,
 		&i.Name,
 		&i.TargetUri,
+		&i.VideoChoice,
 		&i.IsEnabled,
 		&i.Status,
 		&i.ReasonCode,

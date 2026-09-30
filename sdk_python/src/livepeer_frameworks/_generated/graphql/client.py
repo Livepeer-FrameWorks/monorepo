@@ -3583,6 +3583,7 @@ class GraphQLClient(BaseClient):
                 streamKey
                 playbackId
                 record
+                liveVideoAbr
                 ingestMode
                 pullSource {
                   sourceUriRedacted
@@ -3630,6 +3631,7 @@ class GraphQLClient(BaseClient):
                   streamId
                   platform
                   name
+                  videoChoice
                   targetUri
                   isEnabled
                   status
@@ -3784,6 +3786,7 @@ class GraphQLClient(BaseClient):
                 streamKey
                 playbackId
                 record
+                liveVideoAbr
                 ingestMode
                 pullSource {
                   sourceUriRedacted
@@ -3831,6 +3834,7 @@ class GraphQLClient(BaseClient):
                   streamId
                   platform
                   name
+                  videoChoice
                   targetUri
                   isEnabled
                   status
@@ -4421,6 +4425,7 @@ class GraphQLClient(BaseClient):
                 streamKey
                 playbackId
                 record
+                liveVideoAbr
                 ingestMode
                 pullSource {
                   sourceUriRedacted
@@ -4468,6 +4473,7 @@ class GraphQLClient(BaseClient):
                   streamId
                   platform
                   name
+                  videoChoice
                   targetUri
                   isEnabled
                   status
@@ -5288,6 +5294,7 @@ class GraphQLClient(BaseClient):
                 streamKey
                 playbackId
                 record
+                liveVideoAbr
                 ingestMode
                 pullSource {
                   sourceUriRedacted
@@ -5335,6 +5342,7 @@ class GraphQLClient(BaseClient):
                   streamId
                   platform
                   name
+                  videoChoice
                   targetUri
                   isEnabled
                   status
@@ -5750,6 +5758,7 @@ class GraphQLClient(BaseClient):
                 streamKey
                 playbackId
                 record
+                liveVideoAbr
                 ingestMode
                 pullSource {
                   sourceUriRedacted
@@ -5797,6 +5806,7 @@ class GraphQLClient(BaseClient):
                   streamId
                   platform
                   name
+                  videoChoice
                   targetUri
                   isEnabled
                   status
@@ -6982,6 +6992,7 @@ class GraphQLClient(BaseClient):
                 streamKey
                 playbackId
                 record
+                liveVideoAbr
                 ingestMode
                 pullSource {
                   sourceUriRedacted
@@ -7029,6 +7040,7 @@ class GraphQLClient(BaseClient):
                   streamId
                   platform
                   name
+                  videoChoice
                   targetUri
                   isEnabled
                   status
@@ -7092,6 +7104,7 @@ class GraphQLClient(BaseClient):
                 streamKey
                 playbackId
                 record
+                liveVideoAbr
                 ingestMode
                 pullSource {
                   sourceUriRedacted
@@ -7139,6 +7152,7 @@ class GraphQLClient(BaseClient):
                   streamId
                   platform
                   name
+                  videoChoice
                   targetUri
                   isEnabled
                   status
@@ -7188,6 +7202,7 @@ class GraphQLClient(BaseClient):
                 streamKey
                 playbackId
                 record
+                liveVideoAbr
                 ingestMode
                 pullSource {
                   sourceUriRedacted
@@ -7235,6 +7250,7 @@ class GraphQLClient(BaseClient):
                   streamId
                   platform
                   name
+                  videoChoice
                   targetUri
                   isEnabled
                   status
@@ -7355,6 +7371,7 @@ class GraphQLClient(BaseClient):
                 streamKey
                 playbackId
                 record
+                liveVideoAbr
                 ingestMode
                 pullSource {
                   sourceUriRedacted
@@ -7402,6 +7419,7 @@ class GraphQLClient(BaseClient):
                   streamId
                   platform
                   name
+                  videoChoice
                   targetUri
                   isEnabled
                   status
@@ -7594,6 +7612,7 @@ class GraphQLClient(BaseClient):
                 streamKey
                 playbackId
                 record
+                liveVideoAbr
                 ingestMode
                 pullSource {
                   sourceUriRedacted
@@ -7641,6 +7660,7 @@ class GraphQLClient(BaseClient):
                   streamId
                   platform
                   name
+                  videoChoice
                   targetUri
                   isEnabled
                   status
@@ -7730,6 +7750,7 @@ class GraphQLClient(BaseClient):
                 streamKey
                 playbackId
                 record
+                liveVideoAbr
                 ingestMode
                 pullSource {
                   sourceUriRedacted
@@ -7777,6 +7798,7 @@ class GraphQLClient(BaseClient):
                   streamId
                   platform
                   name
+                  videoChoice
                   targetUri
                   isEnabled
                   status
@@ -7843,6 +7865,7 @@ class GraphQLClient(BaseClient):
                 streamKey
                 playbackId
                 record
+                liveVideoAbr
                 ingestMode
                 pullSource {
                   sourceUriRedacted
@@ -7890,6 +7913,7 @@ class GraphQLClient(BaseClient):
                   streamId
                   platform
                   name
+                  videoChoice
                   targetUri
                   isEnabled
                   status
@@ -7959,6 +7983,7 @@ class GraphQLClient(BaseClient):
                 streamKey
                 playbackId
                 record
+                liveVideoAbr
                 ingestMode
                 pullSource {
                   sourceUriRedacted
@@ -8006,6 +8031,7 @@ class GraphQLClient(BaseClient):
                   streamId
                   platform
                   name
+                  videoChoice
                   targetUri
                   isEnabled
                   status
@@ -8052,6 +8078,7 @@ class GraphQLClient(BaseClient):
                 streamKey
                 playbackId
                 record
+                liveVideoAbr
                 ingestMode
                 pullSource {
                   sourceUriRedacted
@@ -8099,6 +8126,7 @@ class GraphQLClient(BaseClient):
                   streamId
                   platform
                   name
+                  videoChoice
                   targetUri
                   isEnabled
                   status
@@ -8143,6 +8171,7 @@ class GraphQLClient(BaseClient):
                 streamKey
                 playbackId
                 record
+                liveVideoAbr
                 ingestMode
                 pullSource {
                   sourceUriRedacted
@@ -8190,6 +8219,7 @@ class GraphQLClient(BaseClient):
                   streamId
                   platform
                   name
+                  videoChoice
                   targetUri
                   isEnabled
                   status
@@ -8281,6 +8311,7 @@ class GraphQLClient(BaseClient):
                 streamKey
                 playbackId
                 record
+                liveVideoAbr
                 ingestMode
                 pullSource {
                   sourceUriRedacted
@@ -8328,6 +8359,7 @@ class GraphQLClient(BaseClient):
                   streamId
                   platform
                   name
+                  videoChoice
                   targetUri
                   isEnabled
                   status
@@ -8391,6 +8423,7 @@ class GraphQLClient(BaseClient):
               streamKey
               playbackId
               record
+              liveVideoAbr
               ingestMode
               pullSource {
                 sourceUriRedacted
@@ -8442,6 +8475,7 @@ class GraphQLClient(BaseClient):
                 streamId
                 platform
                 name
+                videoChoice
                 targetUri
                 isEnabled
                 status
@@ -8501,6 +8535,7 @@ class GraphQLClient(BaseClient):
                 streamKey
                 playbackId
                 record
+                liveVideoAbr
                 ingestMode
                 pullSource {
                   sourceUriRedacted
@@ -8548,6 +8583,7 @@ class GraphQLClient(BaseClient):
                   streamId
                   platform
                   name
+                  videoChoice
                   targetUri
                   isEnabled
                   status
@@ -8618,6 +8654,7 @@ class GraphQLClient(BaseClient):
                 streamKey
                 playbackId
                 record
+                liveVideoAbr
                 ingestMode
                 pullSource {
                   sourceUriRedacted
@@ -8665,6 +8702,7 @@ class GraphQLClient(BaseClient):
                   streamId
                   platform
                   name
+                  videoChoice
                   targetUri
                   isEnabled
                   status
@@ -8712,6 +8750,7 @@ class GraphQLClient(BaseClient):
                 streamKey
                 playbackId
                 record
+                liveVideoAbr
                 ingestMode
                 pullSource {
                   sourceUriRedacted
@@ -8759,6 +8798,7 @@ class GraphQLClient(BaseClient):
                   streamId
                   platform
                   name
+                  videoChoice
                   targetUri
                   isEnabled
                   status
@@ -10017,6 +10057,7 @@ class GraphQLClient(BaseClient):
                 streamKey
                 playbackId
                 record
+                liveVideoAbr
                 ingestMode
                 pullSource {
                   sourceUriRedacted
@@ -10064,6 +10105,7 @@ class GraphQLClient(BaseClient):
                   streamId
                   platform
                   name
+                  videoChoice
                   targetUri
                   isEnabled
                   status
@@ -10211,6 +10253,7 @@ class GraphQLClient(BaseClient):
                 streamKey
                 playbackId
                 record
+                liveVideoAbr
                 ingestMode
                 pullSource {
                   sourceUriRedacted
@@ -10258,6 +10301,7 @@ class GraphQLClient(BaseClient):
                   streamId
                   platform
                   name
+                  videoChoice
                   targetUri
                   isEnabled
                   status
@@ -10368,6 +10412,7 @@ class GraphQLClient(BaseClient):
                 streamKey
                 playbackId
                 record
+                liveVideoAbr
                 ingestMode
                 pullSource {
                   sourceUriRedacted
@@ -10415,6 +10460,7 @@ class GraphQLClient(BaseClient):
                   streamId
                   platform
                   name
+                  videoChoice
                   targetUri
                   isEnabled
                   status
@@ -10746,6 +10792,7 @@ class GraphQLClient(BaseClient):
                 streamKey
                 playbackId
                 record
+                liveVideoAbr
                 ingestMode
                 pullSource {
                   sourceUriRedacted
@@ -10793,6 +10840,7 @@ class GraphQLClient(BaseClient):
                   streamId
                   platform
                   name
+                  videoChoice
                   targetUri
                   isEnabled
                   status
@@ -11305,6 +11353,7 @@ class GraphQLClient(BaseClient):
                 streamKey
                 playbackId
                 record
+                liveVideoAbr
                 ingestMode
                 pullSource {
                   sourceUriRedacted
@@ -11352,6 +11401,7 @@ class GraphQLClient(BaseClient):
                   streamId
                   platform
                   name
+                  videoChoice
                   targetUri
                   isEnabled
                   status
@@ -11539,6 +11589,7 @@ class GraphQLClient(BaseClient):
                 streamKey
                 playbackId
                 record
+                liveVideoAbr
                 ingestMode
                 pullSource {
                   sourceUriRedacted
@@ -11586,6 +11637,7 @@ class GraphQLClient(BaseClient):
                   streamId
                   platform
                   name
+                  videoChoice
                   targetUri
                   isEnabled
                   status
@@ -11689,6 +11741,7 @@ class GraphQLClient(BaseClient):
                 streamKey
                 playbackId
                 record
+                liveVideoAbr
                 ingestMode
                 pullSource {
                   sourceUriRedacted
@@ -11736,6 +11789,7 @@ class GraphQLClient(BaseClient):
                   streamId
                   platform
                   name
+                  videoChoice
                   targetUri
                   isEnabled
                   status
@@ -11846,6 +11900,7 @@ class GraphQLClient(BaseClient):
                 streamKey
                 playbackId
                 record
+                liveVideoAbr
                 ingestMode
                 pullSource {
                   sourceUriRedacted
@@ -11893,6 +11948,7 @@ class GraphQLClient(BaseClient):
                   streamId
                   platform
                   name
+                  videoChoice
                   targetUri
                   isEnabled
                   status
@@ -12023,6 +12079,7 @@ class GraphQLClient(BaseClient):
                 streamKey
                 playbackId
                 record
+                liveVideoAbr
                 ingestMode
                 pullSource {
                   sourceUriRedacted
@@ -12070,6 +12127,7 @@ class GraphQLClient(BaseClient):
                   streamId
                   platform
                   name
+                  videoChoice
                   targetUri
                   isEnabled
                   status
@@ -12169,6 +12227,7 @@ class GraphQLClient(BaseClient):
                 streamKey
                 playbackId
                 record
+                liveVideoAbr
                 ingestMode
                 pullSource {
                   sourceUriRedacted
@@ -12216,6 +12275,7 @@ class GraphQLClient(BaseClient):
                   streamId
                   platform
                   name
+                  videoChoice
                   targetUri
                   isEnabled
                   status
@@ -12417,6 +12477,7 @@ class GraphQLClient(BaseClient):
                 streamKey
                 playbackId
                 record
+                liveVideoAbr
                 ingestMode
                 pullSource {
                   sourceUriRedacted
@@ -12464,6 +12525,7 @@ class GraphQLClient(BaseClient):
                   streamId
                   platform
                   name
+                  videoChoice
                   targetUri
                   isEnabled
                   status
@@ -12812,6 +12874,7 @@ class GraphQLClient(BaseClient):
                 streamKey
                 playbackId
                 record
+                liveVideoAbr
                 ingestMode
                 pullSource {
                   sourceUriRedacted
@@ -12859,6 +12922,7 @@ class GraphQLClient(BaseClient):
                   streamId
                   platform
                   name
+                  videoChoice
                   targetUri
                   isEnabled
                   status
@@ -13060,6 +13124,7 @@ class GraphQLClient(BaseClient):
                 streamKey
                 playbackId
                 record
+                liveVideoAbr
                 ingestMode
                 pullSource {
                   sourceUriRedacted
@@ -13107,6 +13172,7 @@ class GraphQLClient(BaseClient):
                   streamId
                   platform
                   name
+                  videoChoice
                   targetUri
                   isEnabled
                   status
@@ -13216,6 +13282,7 @@ class GraphQLClient(BaseClient):
                 streamKey
                 playbackId
                 record
+                liveVideoAbr
                 ingestMode
                 pullSource {
                   sourceUriRedacted
@@ -13263,6 +13330,7 @@ class GraphQLClient(BaseClient):
                   streamId
                   platform
                   name
+                  videoChoice
                   targetUri
                   isEnabled
                   status
@@ -13365,6 +13433,7 @@ class GraphQLClient(BaseClient):
                 streamKey
                 playbackId
                 record
+                liveVideoAbr
                 ingestMode
                 pullSource {
                   sourceUriRedacted
@@ -13412,6 +13481,7 @@ class GraphQLClient(BaseClient):
                   streamId
                   platform
                   name
+                  videoChoice
                   targetUri
                   isEnabled
                   status
@@ -13528,6 +13598,7 @@ class GraphQLClient(BaseClient):
                 streamKey
                 playbackId
                 record
+                liveVideoAbr
                 ingestMode
                 pullSource {
                   sourceUriRedacted
@@ -13575,6 +13646,7 @@ class GraphQLClient(BaseClient):
                   streamId
                   platform
                   name
+                  videoChoice
                   targetUri
                   isEnabled
                   status

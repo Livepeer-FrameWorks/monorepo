@@ -1923,6 +1923,10 @@ input CreatePushTargetInput {
   """
   name: String!
   """
+  AUTO, SOURCE_VIDEO, or PROCESSED_VIDEO for RTMP targets.
+  """
+  videoChoice: String = "AUTO"
+  """
   Full target URI including stream key (e.g., rtmp://live.twitch.tv/app/live_xxxx).
   """
   targetUri: String!
@@ -1966,6 +1970,10 @@ input CreateStreamInput {
   Enable DVR recording (default: false).
   """
   record: Boolean = false
+  """
+  Live video renditions: INHERIT uses the tier policy; OFF keeps source video and audio conversion.
+  """
+  liveVideoAbr: String = "INHERIT"
   """
   Source ingest model. Defaults to PUSH.
   """
@@ -6150,6 +6158,10 @@ type PushTarget {
   """
   name: String!
   """
+  AUTO, SOURCE_VIDEO, or PROCESSED_VIDEO. Audio is selected independently.
+  """
+  videoChoice: String!
+  """
   Target URI (masked in responses — stream key portion is redacted).
   """
   targetUri: String!
@@ -7816,6 +7828,10 @@ type Stream implements Node {
   """
   record: Boolean!
   """
+  INHERIT or OFF for live video renditions.
+  """
+  liveVideoAbr: String!
+  """
   How source media enters the stream.
   """
   ingestMode: IngestMode!
@@ -9001,6 +9017,10 @@ input UpdatePushTargetInput {
   """
   name: String
   """
+  AUTO, SOURCE_VIDEO, or PROCESSED_VIDEO for RTMP targets.
+  """
+  videoChoice: String
+  """
   Updated target URI.
   """
   targetUri: String
@@ -9027,6 +9047,10 @@ input UpdateStreamInput {
   Enable or disable DVR recording.
   """
   record: Boolean
+  """
+  INHERIT uses the tier policy; OFF disables live video renditions from the next ingest.
+  """
+  liveVideoAbr: String
   """
   Ingest model cannot be changed after create; sending a different value returns a validation error.
   """

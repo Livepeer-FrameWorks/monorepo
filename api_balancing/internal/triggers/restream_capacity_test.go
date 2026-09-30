@@ -86,6 +86,86 @@ func TestUnsupportedRestreamProtocolReleasesCapacityAndUsesUpgradeReason(t *test
 	}
 }
 
+func TestOldSidecarDispatchesCompatibleTargetsAlongsideExplicitChoice(t *testing.T) {
+	capacity := state.ResetDefaultTenantCapacityForTests()
+	t.Cleanup(func() { state.ResetDefaultTenantCapacityForTests() })
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	previousDB := control.GetDB()
+	control.SetDB(db)
+	t.Cleanup(func() { control.SetDB(previousDB) })
+	if configErr := control.ConfigureAdmissionEffectEncryption("mixed-sidecar-restream-test-key"); configErr != nil {
+		t.Fatal(configErr)
+	}
+	const (
+		tenantID   = "11111111-1111-4111-8111-111111111111"
+		generation = "33333333-3333-4333-8333-333333333333"
+		attempt    = "44444444-4444-4444-8444-444444444444"
+		streamName = "live+mixed-sidecar"
+	)
+	activation := &ipcpb.ActivatePushTargets{
+		StreamName: streamName, TenantId: tenantID, SourceGeneration: generation,
+		TargetRevision: 7, ActivationAttempt: attempt, MaxViewers: 3,
+		Targets: []*ipcpb.PushTargetSpec{
+			{TargetId: "11111111-1111-4111-8111-111111111112", TargetUri: "rtmp://example.test/live/auto", VideoChoice: "AUTO"},
+			{TargetId: "11111111-1111-4111-8111-111111111113", TargetUri: "srt://example.test:9000/live"},
+			{TargetId: "11111111-1111-4111-8111-111111111114", TargetUri: "rtmp://example.test/live/source", VideoChoice: "SOURCE_VIDEO"},
+		},
+	}
+	effect := control.AdmissionEffect{
+		TenantID: tenantID, InternalName: "mixed-sidecar", NodeID: "node-a", SourceGeneration: generation,
+		DrainDone: true, BroadcastDone: true, DecklogDone: true,
+	}
+	if pending, reserveErr := newTestProcessor(t).reserveRestreamCapacity(context.Background(), effect, activation, 3); reserveErr != nil || pending {
+		t.Fatalf("reserve capacity: pending=%v err=%v", pending, reserveErr)
+	}
+	if got := capacity.CountViewers(tenantID); got != 3 {
+		t.Fatalf("initial capacity=%d, want 3", got)
+	}
+	effect.PushTargets, err = proto.Marshal(activation)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mock.ExpectExec(regexp.QuoteMeta("INSERT INTO foghorn.push_target_status_outbox")).
+		WithArgs(activation.Targets[2].TargetId, tenantID, "failed", pushstatusoutbox.ReasonEdgeUpgradeRequired, sqlmock.AnyArg(), sqlmock.AnyArg()).
+		WillReturnResult(sqlmock.NewResult(1, 1))
+	mock.ExpectExec(regexp.QuoteMeta("UPDATE foghorn.admission_push_target_revisions")).
+		WithArgs(sqlmock.AnyArg(), generation, int64(7), attempt).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	p := newTestProcessor(t)
+	p.nodeOwnedLocally = func(string) bool { return true }
+	p.restreamAttemptSupport = func(string) error { return nil }
+	p.restreamTrackPolicySupport = func(_ string, req *ipcpb.ActivatePushTargets) error {
+		for _, target := range req.GetTargets() {
+			if target.GetVideoChoice() == "SOURCE_VIDEO" {
+				return status.Error(codes.FailedPrecondition, "sidecar too old")
+			}
+		}
+		return nil
+	}
+	var dispatched *ipcpb.ActivatePushTargets
+	p.sendActivateLocal = func(_ context.Context, _ string, req *ipcpb.ActivatePushTargets) error {
+		dispatched = proto.Clone(req).(*ipcpb.ActivatePushTargets)
+		return nil
+	}
+	if _, err := p.ApplyAdmissionEffect(context.Background(), effect); err != nil {
+		t.Fatal(err)
+	}
+	if dispatched == nil || len(dispatched.GetTargets()) != 2 || dispatched.Targets[0].GetVideoChoice() != "AUTO" ||
+		dispatched.Targets[1].GetTargetId() != activation.Targets[1].GetTargetId() {
+		t.Fatalf("compatible dispatch = %+v", dispatched)
+	}
+	if got := capacity.CountViewers(tenantID); got != 2 {
+		t.Fatalf("remaining capacity=%d, want 2", got)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestFinalRestreamStatusBindsPreviouslyUnobservedMistPushID(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	if err != nil {

@@ -206,40 +206,46 @@ func (RestreamState) EnumDescriptor() ([]byte, []int) {
 type RestreamReason int32
 
 const (
-	RestreamReason_RESTREAM_REASON_UNSPECIFIED          RestreamReason = 0
-	RestreamReason_RESTREAM_REASON_CONNECTED            RestreamReason = 1
-	RestreamReason_RESTREAM_REASON_COMPLETED            RestreamReason = 2
-	RestreamReason_RESTREAM_REASON_DESTINATION_REJECTED RestreamReason = 3
-	RestreamReason_RESTREAM_REASON_NETWORK_ERROR        RestreamReason = 4
-	RestreamReason_RESTREAM_REASON_PROCESS_ERROR        RestreamReason = 5
-	RestreamReason_RESTREAM_REASON_CAPACITY_EXHAUSTED   RestreamReason = 6
-	RestreamReason_RESTREAM_REASON_CONFIGURATION_ERROR  RestreamReason = 7
-	RestreamReason_RESTREAM_REASON_STOPPED              RestreamReason = 8
+	RestreamReason_RESTREAM_REASON_UNSPECIFIED            RestreamReason = 0
+	RestreamReason_RESTREAM_REASON_CONNECTED              RestreamReason = 1
+	RestreamReason_RESTREAM_REASON_COMPLETED              RestreamReason = 2
+	RestreamReason_RESTREAM_REASON_DESTINATION_REJECTED   RestreamReason = 3
+	RestreamReason_RESTREAM_REASON_NETWORK_ERROR          RestreamReason = 4
+	RestreamReason_RESTREAM_REASON_PROCESS_ERROR          RestreamReason = 5
+	RestreamReason_RESTREAM_REASON_CAPACITY_EXHAUSTED     RestreamReason = 6
+	RestreamReason_RESTREAM_REASON_CONFIGURATION_ERROR    RestreamReason = 7
+	RestreamReason_RESTREAM_REASON_STOPPED                RestreamReason = 8
+	RestreamReason_RESTREAM_REASON_MEDIA_SELECTION_FAILED RestreamReason = 9
+	RestreamReason_RESTREAM_REASON_EDGE_UPGRADE_REQUIRED  RestreamReason = 10
 )
 
 // Enum value maps for RestreamReason.
 var (
 	RestreamReason_name = map[int32]string{
-		0: "RESTREAM_REASON_UNSPECIFIED",
-		1: "RESTREAM_REASON_CONNECTED",
-		2: "RESTREAM_REASON_COMPLETED",
-		3: "RESTREAM_REASON_DESTINATION_REJECTED",
-		4: "RESTREAM_REASON_NETWORK_ERROR",
-		5: "RESTREAM_REASON_PROCESS_ERROR",
-		6: "RESTREAM_REASON_CAPACITY_EXHAUSTED",
-		7: "RESTREAM_REASON_CONFIGURATION_ERROR",
-		8: "RESTREAM_REASON_STOPPED",
+		0:  "RESTREAM_REASON_UNSPECIFIED",
+		1:  "RESTREAM_REASON_CONNECTED",
+		2:  "RESTREAM_REASON_COMPLETED",
+		3:  "RESTREAM_REASON_DESTINATION_REJECTED",
+		4:  "RESTREAM_REASON_NETWORK_ERROR",
+		5:  "RESTREAM_REASON_PROCESS_ERROR",
+		6:  "RESTREAM_REASON_CAPACITY_EXHAUSTED",
+		7:  "RESTREAM_REASON_CONFIGURATION_ERROR",
+		8:  "RESTREAM_REASON_STOPPED",
+		9:  "RESTREAM_REASON_MEDIA_SELECTION_FAILED",
+		10: "RESTREAM_REASON_EDGE_UPGRADE_REQUIRED",
 	}
 	RestreamReason_value = map[string]int32{
-		"RESTREAM_REASON_UNSPECIFIED":          0,
-		"RESTREAM_REASON_CONNECTED":            1,
-		"RESTREAM_REASON_COMPLETED":            2,
-		"RESTREAM_REASON_DESTINATION_REJECTED": 3,
-		"RESTREAM_REASON_NETWORK_ERROR":        4,
-		"RESTREAM_REASON_PROCESS_ERROR":        5,
-		"RESTREAM_REASON_CAPACITY_EXHAUSTED":   6,
-		"RESTREAM_REASON_CONFIGURATION_ERROR":  7,
-		"RESTREAM_REASON_STOPPED":              8,
+		"RESTREAM_REASON_UNSPECIFIED":            0,
+		"RESTREAM_REASON_CONNECTED":              1,
+		"RESTREAM_REASON_COMPLETED":              2,
+		"RESTREAM_REASON_DESTINATION_REJECTED":   3,
+		"RESTREAM_REASON_NETWORK_ERROR":          4,
+		"RESTREAM_REASON_PROCESS_ERROR":          5,
+		"RESTREAM_REASON_CAPACITY_EXHAUSTED":     6,
+		"RESTREAM_REASON_CONFIGURATION_ERROR":    7,
+		"RESTREAM_REASON_STOPPED":                8,
+		"RESTREAM_REASON_MEDIA_SELECTION_FAILED": 9,
+		"RESTREAM_REASON_EDGE_UPGRADE_REQUIRED":  10,
 	}
 )
 
@@ -5661,6 +5667,7 @@ type PushTargetSpec struct {
 	TargetUri     string                 `protobuf:"bytes,2,opt,name=target_uri,json=targetUri,proto3" json:"target_uri,omitempty"` // Full RTMP/SRT URI
 	Name          string                 `protobuf:"bytes,3,opt,name=name,proto3" json:"name,omitempty"`                            // User-friendly label (for logging)
 	Platform      string                 `protobuf:"bytes,4,opt,name=platform,proto3" json:"platform,omitempty"`
+	VideoChoice   string                 `protobuf:"bytes,5,opt,name=video_choice,json=videoChoice,proto3" json:"video_choice,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -5719,6 +5726,13 @@ func (x *PushTargetSpec) GetName() string {
 func (x *PushTargetSpec) GetPlatform() string {
 	if x != nil {
 		return x.Platform
+	}
+	return ""
+}
+
+func (x *PushTargetSpec) GetVideoChoice() string {
+	if x != nil {
+		return x.VideoChoice
 	}
 	return ""
 }
@@ -22317,13 +22331,14 @@ const file_ipc_proto_rawDesc = "" +
 	"\x0ftarget_revision\x18\x06 \x01(\x03R\x0etargetRevision\x12\x1f\n" +
 	"\vmax_viewers\x18\a \x01(\x05R\n" +
 	"maxViewers\x12-\n" +
-	"\x12activation_attempt\x18\b \x01(\tR\x11activationAttempt\"|\n" +
+	"\x12activation_attempt\x18\b \x01(\tR\x11activationAttempt\"\x9f\x01\n" +
 	"\x0ePushTargetSpec\x12\x1b\n" +
 	"\ttarget_id\x18\x01 \x01(\tR\btargetId\x12\x1d\n" +
 	"\n" +
 	"target_uri\x18\x02 \x01(\tR\ttargetUri\x12\x12\n" +
 	"\x04name\x18\x03 \x01(\tR\x04name\x12\x1a\n" +
-	"\bplatform\x18\x04 \x01(\tR\bplatform\"\x8e\x01\n" +
+	"\bplatform\x18\x04 \x01(\tR\bplatform\x12!\n" +
+	"\fvideo_choice\x18\x05 \x01(\tR\vvideoChoice\"\x8e\x01\n" +
 	"\x15DeactivatePushTargets\x12\x1f\n" +
 	"\vstream_name\x18\x01 \x01(\tR\n" +
 	"streamName\x12+\n" +
@@ -24743,7 +24758,7 @@ const file_ipc_proto_rawDesc = "" +
 	"\x17RESTREAM_STATE_RETRYING\x10\x03\x12\x1b\n" +
 	"\x17RESTREAM_STATE_STOPPING\x10\x04\x12\x17\n" +
 	"\x13RESTREAM_STATE_IDLE\x10\x05\x12\x19\n" +
-	"\x15RESTREAM_STATE_FAILED\x10\x06*\xcd\x02\n" +
+	"\x15RESTREAM_STATE_FAILED\x10\x06*\xa4\x03\n" +
 	"\x0eRestreamReason\x12\x1f\n" +
 	"\x1bRESTREAM_REASON_UNSPECIFIED\x10\x00\x12\x1d\n" +
 	"\x19RESTREAM_REASON_CONNECTED\x10\x01\x12\x1d\n" +
@@ -24753,7 +24768,10 @@ const file_ipc_proto_rawDesc = "" +
 	"\x1dRESTREAM_REASON_PROCESS_ERROR\x10\x05\x12&\n" +
 	"\"RESTREAM_REASON_CAPACITY_EXHAUSTED\x10\x06\x12'\n" +
 	"#RESTREAM_REASON_CONFIGURATION_ERROR\x10\a\x12\x1b\n" +
-	"\x17RESTREAM_REASON_STOPPED\x10\b*\xdc\x01\n" +
+	"\x17RESTREAM_REASON_STOPPED\x10\b\x12*\n" +
+	"&RESTREAM_REASON_MEDIA_SELECTION_FAILED\x10\t\x12)\n" +
+	"%RESTREAM_REASON_EDGE_UPGRADE_REQUIRED\x10\n" +
+	"*\xdc\x01\n" +
 	"\x11MistTriggerAction\x12#\n" +
 	"\x1fMIST_TRIGGER_ACTION_UNSPECIFIED\x10\x00\x12\x1d\n" +
 	"\x19MIST_TRIGGER_ACTION_VALUE\x10\x01\x12\x1c\n" +

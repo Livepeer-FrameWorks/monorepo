@@ -193,6 +193,11 @@ Sources smaller than 640×360 get no video renditions. Renditions keep the sourc
 `H264ConstrainedHigh`. Audio compatibility processes generate Opus when the incoming audio is not
 already Opus and AAC when it is not already AAC.
 
+Set a stream's advanced `liveVideoAbr` option to `OFF` to omit its live video
+renditions on the next ingest session. Audio compatibility and thumbnail
+processes continue. A destination that needs a lower or different video track
+may have no compatible track when live video ABR is off.
+
 Foghorn fills in the Livepeer Gateway instances for the stream's cluster at dispatch time. If no
 Livepeer Gateway is registered, each rendition is converted to a local MistProcAV process so the
 media node encodes the same ladder itself.

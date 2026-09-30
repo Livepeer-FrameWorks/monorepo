@@ -20,6 +20,7 @@ type restreamTarget struct {
 	targetRevision    int64
 	activationAttempt string
 	platform          string
+	videoChoice       string
 	targetURI         string
 }
 
@@ -98,6 +99,13 @@ func installRestreamDesiredStateForControlEpoch(req *ipcpb.ActivatePushTargets, 
 		}
 		targetID := strings.TrimSpace(spec.GetTargetId())
 		uri := strings.TrimSpace(spec.GetTargetUri())
+		videoChoice := strings.TrimSpace(spec.GetVideoChoice())
+		if videoChoice == "" {
+			videoChoice = "AUTO"
+		}
+		if videoChoice != "AUTO" && videoChoice != "SOURCE_VIDEO" && videoChoice != "PROCESSED_VIDEO" {
+			return restreamDesiredState{}, restreamInstallInvalid
+		}
 		if _, duplicate := next.byID[targetID]; duplicate {
 			return restreamDesiredState{}, restreamInstallInvalid
 		}
@@ -109,7 +117,8 @@ func installRestreamDesiredStateForControlEpoch(req *ipcpb.ActivatePushTargets, 
 			streamID: strings.TrimSpace(req.GetStreamId()), streamName: strings.TrimSpace(req.GetStreamName()),
 			sourceGeneration: next.sourceGeneration, targetRevision: next.targetRevision,
 			activationAttempt: strings.TrimSpace(req.GetActivationAttempt()),
-			platform:          strings.TrimSpace(spec.GetPlatform()), targetURI: uri,
+			platform:          strings.TrimSpace(spec.GetPlatform()),
+			videoChoice:       videoChoice, targetURI: uri,
 		}
 		next.uriToID[uri] = targetID
 	}
@@ -145,7 +154,7 @@ func installRestreamDesiredStateForControlEpoch(req *ipcpb.ActivatePushTargets, 
 		for targetID, target := range current.byID {
 			nextTarget, stillDesired := next.byID[targetID]
 			if current.sourceGeneration != next.sourceGeneration || !stillDesired || nextTarget.targetURI != target.targetURI ||
-				nextTarget.activationAttempt != target.activationAttempt {
+				nextTarget.videoChoice != target.videoChoice || nextTarget.platform != target.platform {
 				next.retiredByURI[target.targetURI] = retiredRestreamTarget{
 					restreamTarget: target,
 					expiresAt:      now.Add(restreamRetiredIdentityTTL),
@@ -159,7 +168,8 @@ func installRestreamDesiredStateForControlEpoch(req *ipcpb.ActivatePushTargets, 
 			}
 			nextTarget, unchanged := next.byID[targetID]
 			unchanged = unchanged && current.sourceGeneration == next.sourceGeneration &&
-				nextTarget.targetURI == target.targetURI && nextTarget.activationAttempt == target.activationAttempt
+				nextTarget.targetURI == target.targetURI && nextTarget.videoChoice == target.videoChoice &&
+				nextTarget.platform == target.platform
 			if unchanged {
 				next.pushIDToID[pushID] = targetID
 				continue
@@ -249,8 +259,17 @@ func bindRestreamPushIDs(streamName, sourceGeneration string, targetRevision int
 			continue
 		}
 		if targetID, found := state.uriToID[strings.TrimSpace(push.TargetURI)]; found {
+			if _, retired := state.retiredByPushID[int64(push.ID)]; retired {
+				continue
+			}
+			target := state.byID[targetID]
+			if restreamIsRTMPURI(target.targetURI) {
+				legacyAuto := target.videoChoice == "AUTO" && len(push.Params) == 0
+				if !legacyAuto && !restreamPushParamsMatch(push.Params, restreamTrackParams(target.platform, target.videoChoice)) {
+					continue
+				}
+			}
 			state.pushIDToID[int64(push.ID)] = targetID
-			delete(state.retiredByPushID, int64(push.ID))
 		}
 	}
 	restreamRegistry.streams[streamName] = state

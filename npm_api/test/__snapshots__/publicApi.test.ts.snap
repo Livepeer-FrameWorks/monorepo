@@ -234,7 +234,7 @@ exports[`public API > operation manifest 1`] = `
       "since": "v0.3.11",
     },
     "GetArtifactEventsConnection": {
-      "hash": "sha256:908614bdfb035175104c063a318c8d1c283fbc1028f0275c389ee693c0bd9b94",
+      "hash": "sha256:0a1365dc2cf9be5a4759c87f2a6eebb98a44b2ee528be907201e0131955a1191",
       "kind": "query",
       "since": "v0.3.11",
     },
@@ -244,7 +244,7 @@ exports[`public API > operation manifest 1`] = `
       "since": "v0.3.11",
     },
     "GetArtifactStatesConnection": {
-      "hash": "sha256:7456be9b088c1125fd4ac6e5b6e9af43139e50158acc3616132b2ed270126a6c",
+      "hash": "sha256:27a3031ce62afda7c75340978148c87246b1ed2d787664283b5b25605d8f28e5",
       "kind": "query",
       "since": "v0.3.11",
     },
@@ -279,7 +279,7 @@ exports[`public API > operation manifest 1`] = `
       "since": "v0.3.11",
     },
     "GetClientQoeConnection": {
-      "hash": "sha256:6bb8fe5c8fe94bbc615e713512fede8424a5eb595b6cd1768e662c45edef58fa",
+      "hash": "sha256:5972deb7518db27d0acf37a15c179df06becaeed86a99cc3305471dae8456991",
       "kind": "query",
       "since": "v0.3.11",
     },
@@ -354,7 +354,7 @@ exports[`public API > operation manifest 1`] = `
       "since": "v0.3.11",
     },
     "GetConnectionEventsConnection": {
-      "hash": "sha256:b3a397bd4d91e88030bb9fde661f7714ea5ffee912d53c7a08655d73104f1d3b",
+      "hash": "sha256:b5dfe33b3db4cf25e7e1a8923a34e08603dcf19cdfa3c824bb7dcd0ad42ae4e0",
       "kind": "query",
       "since": "v0.3.11",
     },
@@ -394,7 +394,7 @@ exports[`public API > operation manifest 1`] = `
       "since": "v0.3.11",
     },
     "GetGeographicDistribution": {
-      "hash": "sha256:22310e6e655ea5a8a0d84eefaf7fa78e87f6bbc2ee48194d103fa65a1c58077e",
+      "hash": "sha256:04867f290309c90067fd5ce11337ae5bfcc4b6cee4a4f858426a63b119b249e5",
       "kind": "query",
       "since": "v0.3.11",
     },
@@ -484,7 +484,7 @@ exports[`public API > operation manifest 1`] = `
       "since": "v0.3.11",
     },
     "GetNode": {
-      "hash": "sha256:1f15c59ad6013fa67f9ca31a773ae00d211c340764a8c46b1c3bdee507997d85",
+      "hash": "sha256:bdaa892b8863cfdc5593d27d039a327f82e4c74012bef33eae22fc003feaede4",
       "kind": "query",
       "since": "v0.3.11",
     },
@@ -579,17 +579,17 @@ exports[`public API > operation manifest 1`] = `
       "since": "v0.3.11",
     },
     "GetProcessingUsageConnection": {
-      "hash": "sha256:c7155dd21345d3264eeb4fd34b927cfa27d5b6b4dfc232b4b04441709b0331a3",
+      "hash": "sha256:d862285967efc4a9d689b02a1561cc919e3eccc98eb1ffbba4fb44aa268633a1",
       "kind": "query",
       "since": "v0.3.11",
     },
     "GetQualityTierDailyConnection": {
-      "hash": "sha256:e93a8b4ed6042b58614c38c6a349a1556f6753fd7c0f26ed4a1f5235f30463de",
+      "hash": "sha256:fd0a4ff75456717255bca1736e50dd2f4210946d936a53edf117555fc1eca1c7",
       "kind": "query",
       "since": "v0.3.11",
     },
     "GetRebufferingEventsConnection": {
-      "hash": "sha256:555eec2782afd5d8f3a18e91522ab10efc9af4c9d469bb06c752956e91d50fd0",
+      "hash": "sha256:83cee7e1ee23e7eeb6a7329bdca4be4e6fe459653a74de28d13670faf8e5cad8",
       "kind": "query",
       "since": "v0.3.11",
     },
@@ -614,7 +614,7 @@ exports[`public API > operation manifest 1`] = `
       "since": "v0.3.11",
     },
     "GetRoutingEventsConnection": {
-      "hash": "sha256:4a1e32b5db5b8d616978faf0772b1d48f421e046a06b224e819e62b0e7afe6d9",
+      "hash": "sha256:3f4233f1fd0ca1ca1fe568238f88c252018af748305ea522e0a41c3ec71e83ee",
       "kind": "query",
       "since": "v0.3.11",
     },
@@ -669,7 +669,7 @@ exports[`public API > operation manifest 1`] = `
       "since": "v0.3.11",
     },
     "GetStorageEventsConnection": {
-      "hash": "sha256:41d4d4bae64fdfd919e551058ed32e20383eb07dd74f0da6b3c579122b9a2dc3",
+      "hash": "sha256:4ffb5e39e6f80ed4dea60fd78decea3381826c18fdaa983291390238b2c8c3c2",
       "kind": "query",
       "since": "v0.3.11",
     },
@@ -684,27 +684,27 @@ exports[`public API > operation manifest 1`] = `
       "since": "v0.3.11",
     },
     "GetStreamAnalyticsDailyConnection": {
-      "hash": "sha256:f7752f4f1c9bcea33fc933be1744242d5e53bd2c7caced9eaf30d29c111a81d8",
+      "hash": "sha256:c1d9267272adc820915805340b725ee6d956c5d83866a676e4381847b4afc86c",
       "kind": "query",
       "since": "v0.3.11",
     },
     "GetStreamAnalyticsSummariesConnection": {
-      "hash": "sha256:e23ed11d7dd374ee8207288e2dc36a7e98acfe9e1baa8b826819da92f7af635a",
+      "hash": "sha256:24f072f2a1d47d320945d0fb829e006b4f47aaac6f98b9a3532085cefc49d237",
       "kind": "query",
       "since": "v0.3.11",
     },
     "GetStreamAnalyticsSummary": {
-      "hash": "sha256:7af02f0882a72683670838f13ff9bcc557c2ab79d6ba0d4ccd57d7560c80f4b9",
+      "hash": "sha256:068639a107d8ee313280a6d3e3b44783624784d1eca081b64083577584bd2252",
       "kind": "query",
       "since": "v0.3.11",
     },
     "GetStreamConnectionHourlyConnection": {
-      "hash": "sha256:db0dea38e00d1793306bd0353aca98007273461b0165ce1611ffab5fbf566ed3",
+      "hash": "sha256:9b25d1051db79f3bcd830660166a895fbed736befb114601f45627115014c571",
       "kind": "query",
       "since": "v0.3.11",
     },
     "GetStreamEventsConnection": {
-      "hash": "sha256:cc46eb900d1957f468091857cfe6be8aa01fc22a0ac58fb52753d6b9525d6105",
+      "hash": "sha256:1ac5ec02db334561743e2072155c66d8b3e1e6d151355e393350a025f69fdf28",
       "kind": "query",
       "since": "v0.3.11",
     },
@@ -714,7 +714,7 @@ exports[`public API > operation manifest 1`] = `
       "since": "v0.3.11",
     },
     "GetStreamHealthConnection": {
-      "hash": "sha256:8d366abb4370ffcce26ae4332036f501a920650ff22ee54bd56d710c62920e7f",
+      "hash": "sha256:b3f0706abbed14edbd26f7f82dc2c0fb631c61e4e90d2d395bff81499dcbbca7",
       "kind": "query",
       "since": "v0.3.11",
     },
@@ -759,7 +759,7 @@ exports[`public API > operation manifest 1`] = `
       "since": "v0.3.11",
     },
     "GetTrackListConnection": {
-      "hash": "sha256:1bda5335a5bbe2f4fb97f4308c5cb051022b72694a814f0fbc3575055d72f6ca",
+      "hash": "sha256:3b1b425f6455c4c8f1b7c498ba8621d59d3b4570981ec3ba153af919a1640eed",
       "kind": "query",
       "since": "v0.3.11",
     },
@@ -779,22 +779,22 @@ exports[`public API > operation manifest 1`] = `
       "since": "v0.3.11",
     },
     "GetViewerGeographicsConnection": {
-      "hash": "sha256:b1bba218d878e1df25e1c8094765aa759f28f74130e6da0206bdd5ef783fcb3b",
+      "hash": "sha256:47cecdc08874da3579aabd5a476e4dd7e56e020da3e240eb3174281a0427de12",
       "kind": "query",
       "since": "v0.3.11",
     },
     "GetViewerHoursHourlyConnection": {
-      "hash": "sha256:6beba5d654daf5dba0ee881fce4cca94009e255ad3d84a223eb9c5f83f0a5256",
+      "hash": "sha256:018aa66d0969c2a9b44937d269b04765094f759f83b4a1ce543ececdd0b2aa5c",
       "kind": "query",
       "since": "v0.3.11",
     },
     "GetViewerSessionsConnection": {
-      "hash": "sha256:84eeebe8308d32696c232e69ff776162bd773c2ffd6933eba69995274fa03435",
+      "hash": "sha256:74763e12720615dfb5537d8532fc745da27dd06aa76e6e0e83820c4f3fde3ceb",
       "kind": "query",
       "since": "v0.3.11",
     },
     "GetViewerTimeSeriesConnection": {
-      "hash": "sha256:74f4ed8379dd64d16ebfc32108019d45a958e9ca73cf87c03a82d71b32b3c5fe",
+      "hash": "sha256:6f5baada9f10374e02ed2fa72db154449775d6ce0d3266b1fc21dbb9da73ddb1",
       "kind": "query",
       "since": "v0.3.11",
     },
@@ -904,7 +904,7 @@ exports[`public API > operation manifest 1`] = `
       "since": "v0.3.11",
     },
     "LiveConnectionEvents": {
-      "hash": "sha256:d5edd5744d3aa6cd0891963ae6def84dc491e6d5b0fb232737bff977137ad0c7",
+      "hash": "sha256:6cbbf86a267848b0ec581195fba622191dc62544de5a8491dd36466b5df5b75f",
       "kind": "subscription",
       "since": "v0.3.11",
     },
@@ -914,7 +914,7 @@ exports[`public API > operation manifest 1`] = `
       "since": "v0.3.11",
     },
     "LiveFirehose": {
-      "hash": "sha256:318c9911c07626293ee423ead56147c70d442b76387341ab7bd150486cb707c2",
+      "hash": "sha256:eefdcbfb5adce3580d223e2d7408e3839d5a5283852fdb5baca5490bf6973489",
       "kind": "subscription",
       "since": "v0.3.11",
     },
@@ -929,17 +929,17 @@ exports[`public API > operation manifest 1`] = `
       "since": "v0.3.11",
     },
     "LiveProcessingEvents": {
-      "hash": "sha256:01d919f79e8815429b377d3938849dbec4a5fd35b157e32e9dbcabc02151d5ff",
+      "hash": "sha256:66d8a0ee3edda46d48141e5266a10482df523984fd8fa7cd2d7e864547499cdd",
       "kind": "subscription",
       "since": "v0.3.11",
     },
     "LiveStorageEvents": {
-      "hash": "sha256:78d63bfe1e808e20617abef428ed16619b1b6fdf5a0c93c7ca86bc06601d1452",
+      "hash": "sha256:f2c0505ecb585120313774cf59d3b52154b1edebd66742dfdc8baa878addb783",
       "kind": "subscription",
       "since": "v0.3.11",
     },
     "LiveStreamEvents": {
-      "hash": "sha256:4d390f065a4d02544173714928e15dec6a4d601145f05839c4935a68f134732f",
+      "hash": "sha256:914cd16187b9d40e65c3edb6cccf25a80353887e4172584b9be1768b2a4c4361",
       "kind": "subscription",
       "since": "v0.3.11",
     },
@@ -949,12 +949,12 @@ exports[`public API > operation manifest 1`] = `
       "since": "v0.3.11",
     },
     "LiveTrackListUpdates": {
-      "hash": "sha256:46aa0a8b67ba0102fba052c022041f2c4c2df8a100a3c24a680e2c8b6b08c616",
+      "hash": "sha256:0e9e4672839825bd2eef94bdd00dd612a41ca7d3f3e6685b4da7a42181be69aa",
       "kind": "subscription",
       "since": "v0.3.11",
     },
     "LiveViewerMetrics": {
-      "hash": "sha256:f0cac21df7c6798632b9972b7401c0282bf123072589f2778401cc51756a79ca",
+      "hash": "sha256:c1349958f173016c8b48c0b2aca8f44dc4235bbee4754c5d0470fa6385c9426d",
       "kind": "subscription",
       "since": "v0.3.11",
     },

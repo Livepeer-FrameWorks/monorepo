@@ -756,6 +756,9 @@ func (r *Resolver) DoUpdateStream(ctx context.Context, id string, input model.Up
 				if input.Monitoring != nil {
 					stream.Monitoring = monitoringToggleToProto(*input.Monitoring)
 				}
+				if input.LiveVideoAbr != nil {
+					stream.LiveVideoAbr = *input.LiveVideoAbr
+				}
 				return stream, nil
 			}
 		}
@@ -782,6 +785,9 @@ func (r *Resolver) DoUpdateStream(ctx context.Context, id string, input model.Up
 	}
 	if input.Record != nil {
 		req.Record = input.Record
+	}
+	if input.LiveVideoAbr != nil {
+		req.LiveVideoAbr = input.LiveVideoAbr
 	}
 	if input.IngestMode != nil {
 		req.IngestMode = strPtr(ingestModeToWire(*input.IngestMode))

@@ -32,7 +32,7 @@ func RegisterMultistreamTools(server *mcp.Server, serviceClients *clients.Servic
 	})
 	addTool(server, &mcp.Tool{
 		Name:        "update_push_target",
-		Description: "Update a push target's name, target URI, or enabled flag. Live changes are reconciled asynchronously; list_push_targets exposes pending, pushing, retrying, stopping, idle, or failed state.",
+		Description: "Update a push target's name, target URI, enabled flag, or video choice. Live changes are reconciled asynchronously; list_push_targets exposes pending, pushing, retrying, stopping, idle, or failed state.",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, args UpdatePushTargetInput) (*mcp.CallToolResult, any, error) {
 		return handleUpdatePushTarget(ctx, args, serviceClients, checker, logger)
 	})
@@ -51,17 +51,19 @@ type ListPushTargetsInput struct {
 }
 
 type CreatePushTargetInput struct {
-	StreamID  string `json:"stream_id" jsonschema:"Stream ID that should be forwarded to the destination."`
-	Platform  string `json:"platform" jsonschema:"'twitch' | 'youtube' | 'facebook' | 'kick' | 'x' | 'custom'"`
-	Name      string `json:"name" jsonschema:"Human-readable destination name."`
-	TargetURI string `json:"target_uri" jsonschema:"Full RTMP/RTMPS/SRT URI including the destination stream key."`
+	StreamID    string `json:"stream_id" jsonschema:"Stream ID that should be forwarded to the destination."`
+	Platform    string `json:"platform" jsonschema:"'twitch' | 'youtube' | 'facebook' | 'kick' | 'x' | 'custom'"`
+	Name        string `json:"name" jsonschema:"Human-readable destination name."`
+	TargetURI   string `json:"target_uri" jsonschema:"Full RTMP/RTMPS/SRT URI including the destination stream key."`
+	VideoChoice string `json:"video_choice,omitempty" jsonschema:"RTMP video choice: AUTO (default), SOURCE_VIDEO, or PROCESSED_VIDEO."`
 }
 
 type UpdatePushTargetInput struct {
-	ID        string  `json:"id" jsonschema:"Push-target ID returned by list_push_targets."`
-	Name      *string `json:"name,omitempty" jsonschema:"Replacement human-readable destination name."`
-	TargetURI *string `json:"target_uri,omitempty" jsonschema:"Replacement RTMP, RTMPS, or SRT destination URI including its stream key."`
-	IsEnabled *bool   `json:"is_enabled,omitempty" jsonschema:"Whether FrameWorks should actively forward the stream to this destination."`
+	ID          string  `json:"id" jsonschema:"Push-target ID returned by list_push_targets."`
+	Name        *string `json:"name,omitempty" jsonschema:"Replacement human-readable destination name."`
+	TargetURI   *string `json:"target_uri,omitempty" jsonschema:"Replacement RTMP, RTMPS, or SRT destination URI including its stream key."`
+	IsEnabled   *bool   `json:"is_enabled,omitempty" jsonschema:"Whether FrameWorks should actively forward the stream to this destination."`
+	VideoChoice *string `json:"video_choice,omitempty" jsonschema:"RTMP video choice: AUTO, SOURCE_VIDEO, or PROCESSED_VIDEO."`
 }
 
 type DeletePushTargetInput struct {
@@ -75,6 +77,7 @@ type PushTargetResult struct {
 	StreamID     string `json:"stream_id"`
 	Platform     string `json:"platform"`
 	Name         string `json:"name"`
+	VideoChoice  string `json:"video_choice"`
 	TargetURI    string `json:"target_uri"` // masked on read
 	IsEnabled    bool   `json:"is_enabled"`
 	Status       string `json:"status"`
@@ -115,10 +118,11 @@ func handleCreatePushTarget(ctx context.Context, args CreatePushTargetInput, c *
 		return toolError("stream_id, platform, name, and target_uri are all required")
 	}
 	t, err := c.Commodore.CreatePushTarget(ctx, &commodorepb.CreatePushTargetRequest{
-		StreamId:  args.StreamID,
-		Platform:  strings.ToLower(args.Platform),
-		Name:      args.Name,
-		TargetUri: args.TargetURI,
+		StreamId:    args.StreamID,
+		Platform:    strings.ToLower(args.Platform),
+		Name:        args.Name,
+		TargetUri:   args.TargetURI,
+		VideoChoice: args.VideoChoice,
 	})
 	if err != nil {
 		logger.WithError(err).Warn("create_push_target failed")
@@ -141,6 +145,7 @@ func handleUpdatePushTarget(ctx context.Context, args UpdatePushTargetInput, c *
 	req.Name = args.Name
 	req.TargetUri = args.TargetURI
 	req.IsEnabled = args.IsEnabled
+	req.VideoChoice = args.VideoChoice
 	t, err := c.Commodore.UpdatePushTarget(ctx, req)
 	if err != nil {
 		logger.WithError(err).Warn("update_push_target failed")
@@ -172,15 +177,16 @@ func pushTargetToResult(t *commodorepb.PushTarget) PushTargetResult {
 		return PushTargetResult{}
 	}
 	out := PushTargetResult{
-		ID:         t.GetId(),
-		StreamID:   t.GetStreamId(),
-		Platform:   t.GetPlatform(),
-		Name:       t.GetName(),
-		TargetURI:  t.GetTargetUri(),
-		IsEnabled:  t.GetIsEnabled(),
-		Status:     t.GetStatus(),
-		ReasonCode: t.GetReasonCode(),
-		LastError:  t.GetLastError(),
+		ID:          t.GetId(),
+		StreamID:    t.GetStreamId(),
+		Platform:    t.GetPlatform(),
+		Name:        t.GetName(),
+		VideoChoice: t.GetVideoChoice(),
+		TargetURI:   t.GetTargetUri(),
+		IsEnabled:   t.GetIsEnabled(),
+		Status:      t.GetStatus(),
+		ReasonCode:  t.GetReasonCode(),
+		LastError:   t.GetLastError(),
 	}
 	if ts := t.GetLastPushedAt(); ts != nil {
 		out.LastPushedAt = ts.AsTime().Format("2006-01-02T15:04:05Z07:00")

@@ -14,10 +14,12 @@ type PushEndStatus struct {
 	DurationMS    int64
 	BytesSent     uint64
 	BytesObserved bool
+	ReasonCode    string
 }
 
-// ParsePushEndStatus accepts Mist's legacy numeric status and its successful
-// JSON statistics object. Unknown or malformed non-zero forms fail closed.
+// ParsePushEndStatus accepts Mist's legacy numeric status and JSON statistics.
+// A bounded failure reason overrides an otherwise duration-bearing status.
+// Unknown or malformed non-zero forms fail closed.
 func ParsePushEndStatus(raw string) PushEndStatus {
 	raw = strings.TrimSpace(raw)
 	if raw == "" || raw == "0" {
@@ -32,11 +34,24 @@ func ParsePushEndStatus(raw string) PushEndStatus {
 	}
 	durationMS, durationObserved := firstDurationMS(values)
 	bytesSent, bytesObserved := firstUint(values, "bytes_sent", "sent_bytes", "bytes", "up")
+	reasonCode := ""
+	failed := false
+	if value, exists := values["reason_code"]; exists {
+		if code, ok := value.(string); ok && code != "" {
+			failed = true
+			if code == "media_selection_failed" {
+				reasonCode = code
+			}
+		} else if !ok {
+			failed = true
+		}
+	}
 	return PushEndStatus{
-		Succeeded:     durationObserved || bytesObserved,
+		Succeeded:     (durationObserved || bytesObserved) && !failed,
 		DurationMS:    durationMS,
 		BytesSent:     bytesSent,
 		BytesObserved: bytesObserved,
+		ReasonCode:    reasonCode,
 	}
 }
 

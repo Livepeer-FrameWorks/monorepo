@@ -52,6 +52,20 @@ type PushInfo struct {
 	ActualURI  string                 `json:"actual_uri"`
 	Logs       []string               `json:"logs"`
 	Status     map[string]interface{} `json:"status"`
+	Params     map[string]interface{} `json:"params"`
+}
+
+type PushTrackParams struct {
+	Video            string   `json:"video"`
+	VideoCodecs      []string `json:"video_codecs,omitempty"`
+	MaxVideoWidth    int      `json:"max_video_width,omitempty"`
+	MaxVideoHeight   int      `json:"max_video_height,omitempty"`
+	MaxVideoFPS      int      `json:"max_video_fps,omitempty"`
+	MaxVideoBPS      int      `json:"max_video_bps,omitempty"`
+	AudioCodecs      []string `json:"audio_codecs,omitempty"`
+	MaxAudioBPS      int      `json:"max_audio_bps,omitempty"`
+	MaxAudioChannels int      `json:"max_audio_channels,omitempty"`
+	MaxAudioRate     int      `json:"max_audio_rate,omitempty"`
 }
 
 // StreamInfo represents stream information
@@ -193,14 +207,51 @@ func (c *Client) PushStart(streamName, targetURI string) error {
 		},
 	}
 
-	_, err := c.makeAPIRequest(command)
+	result, err := c.makeAPIRequest(command)
 	if err != nil {
 		return fmt.Errorf("push_start failed: %w", err)
+	}
+	if response, ok := result["push_start"].(map[string]interface{}); ok {
+		if message, ok := response["error"].(string); ok && message != "" {
+			return fmt.Errorf("push_start rejected: %s", message)
+		}
 	}
 
 	c.Logger.WithField("stream", streamName).Info("Started MistServer push")
 
 	return nil
+}
+
+func (c *Client) PushStartWithParams(streamName, targetURI string, params PushTrackParams) error {
+	command := map[string]interface{}{
+		"push_start": map[string]interface{}{
+			"stream": streamName,
+			"target": targetURI,
+			"params": params,
+		},
+	}
+	result, err := c.makeAPIRequest(command)
+	if err != nil {
+		return fmt.Errorf("push_start failed: %w", err)
+	}
+	if response, ok := result["push_start"].(map[string]interface{}); ok {
+		if message, ok := response["error"].(string); ok && message != "" {
+			return fmt.Errorf("push_start rejected: %s", message)
+		}
+	}
+	return nil
+}
+
+func (c *Client) SupportsPushTrackParams() (bool, error) {
+	result, err := c.makeAPIRequest(map[string]interface{}{"push_track_params_v1": true})
+	if err != nil {
+		return false, err
+	}
+	supported, ok := result["push_track_params_v1"].(bool)
+	if !ok {
+		return false, nil
+	}
+	return supported, nil
 }
 
 func mistCommandName(command map[string]interface{}) string {
@@ -294,6 +345,11 @@ func parsePushList(pushListRaw interface{}) ([]PushInfo, error) {
 		if len(pushArray) > 5 {
 			if status, ok := pushArray[5].(map[string]interface{}); ok {
 				push.Status = status
+			}
+		}
+		if len(pushArray) > 6 {
+			if params, ok := pushArray[6].(map[string]interface{}); ok {
+				push.Params = params
 			}
 		}
 

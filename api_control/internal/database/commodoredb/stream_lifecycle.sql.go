@@ -549,6 +549,22 @@ func (q *Queries) SetCreatedStreamDescription(ctx context.Context, arg SetCreate
 	return err
 }
 
+const setCreatedStreamLiveVideoABR = `-- name: SetCreatedStreamLiveVideoABR :exec
+UPDATE commodore.streams SET live_video_abr = $1
+WHERE id = $2 AND tenant_id = $3
+`
+
+type SetCreatedStreamLiveVideoABRParams struct {
+	LiveVideoAbr string `db:"live_video_abr" json:"live_video_abr"`
+	ID           string `db:"id" json:"id"`
+	TenantID     string `db:"tenant_id" json:"tenant_id"`
+}
+
+func (q *Queries) SetCreatedStreamLiveVideoABR(ctx context.Context, arg SetCreatedStreamLiveVideoABRParams) error {
+	_, err := q.db.ExecContext(ctx, setCreatedStreamLiveVideoABR, arg.LiveVideoAbr, arg.ID, arg.TenantID)
+	return err
+}
+
 const softDeleteStream = `-- name: SoftDeleteStream :exec
 UPDATE commodore.streams
 SET deleted_at = COALESCE(deleted_at, NOW()), updated_at = NOW()
@@ -628,10 +644,11 @@ SET title = CASE WHEN $1::boolean THEN $2 ELSE title END,
     dvr_chapter_mode = CASE WHEN $7::boolean THEN $8::varchar ELSE dvr_chapter_mode END,
     dvr_chapter_interval_seconds = CASE WHEN $9::boolean THEN $10::integer ELSE dvr_chapter_interval_seconds END,
     monitoring_enabled = CASE WHEN $11::boolean THEN $12::boolean ELSE monitoring_enabled END,
+    live_video_abr = CASE WHEN $13::boolean THEN $14::varchar ELSE live_video_abr END,
     updated_at = NOW()
-WHERE id = $13::uuid
-  AND user_id = $14::uuid
-  AND tenant_id = $15::uuid
+WHERE id = $15::uuid
+  AND user_id = $16::uuid
+  AND tenant_id = $17::uuid
   AND deleted_at IS NULL
 `
 
@@ -648,6 +665,8 @@ type UpdateStreamFieldsParams struct {
 	ChapterInterval      sql.NullInt32  `db:"chapter_interval" json:"chapter_interval"`
 	ApplyMonitoring      bool           `db:"apply_monitoring" json:"apply_monitoring"`
 	MonitoringEnabled    sql.NullBool   `db:"monitoring_enabled" json:"monitoring_enabled"`
+	ApplyLiveVideoAbr    bool           `db:"apply_live_video_abr" json:"apply_live_video_abr"`
+	LiveVideoAbr         string         `db:"live_video_abr" json:"live_video_abr"`
 	StreamID             string         `db:"stream_id" json:"stream_id"`
 	UserID               string         `db:"user_id" json:"user_id"`
 	TenantID             string         `db:"tenant_id" json:"tenant_id"`
@@ -667,6 +686,8 @@ func (q *Queries) UpdateStreamFields(ctx context.Context, arg UpdateStreamFields
 		arg.ChapterInterval,
 		arg.ApplyMonitoring,
 		arg.MonitoringEnabled,
+		arg.ApplyLiveVideoAbr,
+		arg.LiveVideoAbr,
 		arg.StreamID,
 		arg.UserID,
 		arg.TenantID,

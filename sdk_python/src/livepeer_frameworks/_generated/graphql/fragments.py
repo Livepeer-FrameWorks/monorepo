@@ -116,6 +116,10 @@ class ArtifactEventDefaultStream(BaseModel):
         description="Whether DVR recording is enabled for this stream."
     )
     "Whether DVR recording is enabled for this stream."
+    live_video_abr: str = Field(
+        alias="liveVideoAbr", description="INHERIT or OFF for live video renditions."
+    )
+    "INHERIT or OFF for live video renditions."
     ingest_mode: IngestMode = Field(
         alias="ingestMode", description="How source media enters the stream."
     )
@@ -345,6 +349,11 @@ class ArtifactEventDefaultStreamPushTargets(BaseModel):
     "Platform identifier (twitch, youtube, facebook, kick, x, custom)."
     name: str = Field(description="User-friendly label for this target.")
     "User-friendly label for this target."
+    video_choice: str = Field(
+        alias="videoChoice",
+        description="AUTO, SOURCE_VIDEO, or PROCESSED_VIDEO. Audio is selected independently.",
+    )
+    "AUTO, SOURCE_VIDEO, or PROCESSED_VIDEO. Audio is selected independently."
     target_uri: str = Field(
         alias="targetUri",
         description="Target URI (masked in responses — stream key portion is redacted).",
@@ -464,6 +473,10 @@ class ArtifactEventInNodeDefaultStream(BaseModel):
         description="Whether DVR recording is enabled for this stream."
     )
     "Whether DVR recording is enabled for this stream."
+    live_video_abr: str = Field(
+        alias="liveVideoAbr", description="INHERIT or OFF for live video renditions."
+    )
+    "INHERIT or OFF for live video renditions."
     ingest_mode: IngestMode = Field(
         alias="ingestMode", description="How source media enters the stream."
     )
@@ -695,6 +708,11 @@ class ArtifactEventInNodeDefaultStreamPushTargets(BaseModel):
     "Platform identifier (twitch, youtube, facebook, kick, x, custom)."
     name: str = Field(description="User-friendly label for this target.")
     "User-friendly label for this target."
+    video_choice: str = Field(
+        alias="videoChoice",
+        description="AUTO, SOURCE_VIDEO, or PROCESSED_VIDEO. Audio is selected independently.",
+    )
+    "AUTO, SOURCE_VIDEO, or PROCESSED_VIDEO. Audio is selected independently."
     target_uri: str = Field(
         alias="targetUri",
         description="Target URI (masked in responses — stream key portion is redacted).",
@@ -817,6 +835,10 @@ class ArtifactStateDefaultStream(BaseModel):
         description="Whether DVR recording is enabled for this stream."
     )
     "Whether DVR recording is enabled for this stream."
+    live_video_abr: str = Field(
+        alias="liveVideoAbr", description="INHERIT or OFF for live video renditions."
+    )
+    "INHERIT or OFF for live video renditions."
     ingest_mode: IngestMode = Field(
         alias="ingestMode", description="How source media enters the stream."
     )
@@ -1046,6 +1068,11 @@ class ArtifactStateDefaultStreamPushTargets(BaseModel):
     "Platform identifier (twitch, youtube, facebook, kick, x, custom)."
     name: str = Field(description="User-friendly label for this target.")
     "User-friendly label for this target."
+    video_choice: str = Field(
+        alias="videoChoice",
+        description="AUTO, SOURCE_VIDEO, or PROCESSED_VIDEO. Audio is selected independently.",
+    )
+    "AUTO, SOURCE_VIDEO, or PROCESSED_VIDEO. Audio is selected independently."
     target_uri: str = Field(
         alias="targetUri",
         description="Target URI (masked in responses — stream key portion is redacted).",
@@ -2419,6 +2446,10 @@ class ClientMetrics5mDefaultStream(BaseModel):
         description="Whether DVR recording is enabled for this stream."
     )
     "Whether DVR recording is enabled for this stream."
+    live_video_abr: str = Field(
+        alias="liveVideoAbr", description="INHERIT or OFF for live video renditions."
+    )
+    "INHERIT or OFF for live video renditions."
     ingest_mode: IngestMode = Field(
         alias="ingestMode", description="How source media enters the stream."
     )
@@ -2648,6 +2679,11 @@ class ClientMetrics5mDefaultStreamPushTargets(BaseModel):
     "Platform identifier (twitch, youtube, facebook, kick, x, custom)."
     name: str = Field(description="User-friendly label for this target.")
     "User-friendly label for this target."
+    video_choice: str = Field(
+        alias="videoChoice",
+        description="AUTO, SOURCE_VIDEO, or PROCESSED_VIDEO. Audio is selected independently.",
+    )
+    "AUTO, SOURCE_VIDEO, or PROCESSED_VIDEO. Audio is selected independently."
     target_uri: str = Field(
         alias="targetUri",
         description="Target URI (masked in responses — stream key portion is redacted).",
@@ -3094,6 +3130,10 @@ class ClipInNodeDefaultStream(BaseModel):
         description="Whether DVR recording is enabled for this stream."
     )
     "Whether DVR recording is enabled for this stream."
+    live_video_abr: str = Field(
+        alias="liveVideoAbr", description="INHERIT or OFF for live video renditions."
+    )
+    "INHERIT or OFF for live video renditions."
     ingest_mode: IngestMode = Field(
         alias="ingestMode", description="How source media enters the stream."
     )
@@ -3321,6 +3361,11 @@ class ClipInNodeDefaultStreamPushTargets(BaseModel):
     "Platform identifier (twitch, youtube, facebook, kick, x, custom)."
     name: str = Field(description="User-friendly label for this target.")
     "User-friendly label for this target."
+    video_choice: str = Field(
+        alias="videoChoice",
+        description="AUTO, SOURCE_VIDEO, or PROCESSED_VIDEO. Audio is selected independently.",
+    )
+    "AUTO, SOURCE_VIDEO, or PROCESSED_VIDEO. Audio is selected independently."
     target_uri: str = Field(
         alias="targetUri",
         description="Target URI (masked in responses — stream key portion is redacted).",
@@ -3892,6 +3937,10 @@ class ConnectionEventDefaultStream(BaseModel):
         description="Whether DVR recording is enabled for this stream."
     )
     "Whether DVR recording is enabled for this stream."
+    live_video_abr: str = Field(
+        alias="liveVideoAbr", description="INHERIT or OFF for live video renditions."
+    )
+    "INHERIT or OFF for live video renditions."
     ingest_mode: IngestMode = Field(
         alias="ingestMode", description="How source media enters the stream."
     )
@@ -4121,6 +4170,11 @@ class ConnectionEventDefaultStreamPushTargets(BaseModel):
     "Platform identifier (twitch, youtube, facebook, kick, x, custom)."
     name: str = Field(description="User-friendly label for this target.")
     "User-friendly label for this target."
+    video_choice: str = Field(
+        alias="videoChoice",
+        description="AUTO, SOURCE_VIDEO, or PROCESSED_VIDEO. Audio is selected independently.",
+    )
+    "AUTO, SOURCE_VIDEO, or PROCESSED_VIDEO. Audio is selected independently."
     target_uri: str = Field(
         alias="targetUri",
         description="Target URI (masked in responses — stream key portion is redacted).",
@@ -4260,6 +4314,10 @@ class ConnectionEventInNodeDefaultStream(BaseModel):
         description="Whether DVR recording is enabled for this stream."
     )
     "Whether DVR recording is enabled for this stream."
+    live_video_abr: str = Field(
+        alias="liveVideoAbr", description="INHERIT or OFF for live video renditions."
+    )
+    "INHERIT or OFF for live video renditions."
     ingest_mode: IngestMode = Field(
         alias="ingestMode", description="How source media enters the stream."
     )
@@ -4493,6 +4551,11 @@ class ConnectionEventInNodeDefaultStreamPushTargets(BaseModel):
     "Platform identifier (twitch, youtube, facebook, kick, x, custom)."
     name: str = Field(description="User-friendly label for this target.")
     "User-friendly label for this target."
+    video_choice: str = Field(
+        alias="videoChoice",
+        description="AUTO, SOURCE_VIDEO, or PROCESSED_VIDEO. Audio is selected independently.",
+    )
+    "AUTO, SOURCE_VIDEO, or PROCESSED_VIDEO. Audio is selected independently."
     target_uri: str = Field(
         alias="targetUri",
         description="Target URI (masked in responses — stream key portion is redacted).",
@@ -5336,6 +5399,10 @@ class GeographicDistributionDefaultStream(BaseModel):
         description="Whether DVR recording is enabled for this stream."
     )
     "Whether DVR recording is enabled for this stream."
+    live_video_abr: str = Field(
+        alias="liveVideoAbr", description="INHERIT or OFF for live video renditions."
+    )
+    "INHERIT or OFF for live video renditions."
     ingest_mode: IngestMode = Field(
         alias="ingestMode", description="How source media enters the stream."
     )
@@ -5571,6 +5638,11 @@ class GeographicDistributionDefaultStreamPushTargets(BaseModel):
     "Platform identifier (twitch, youtube, facebook, kick, x, custom)."
     name: str = Field(description="User-friendly label for this target.")
     "User-friendly label for this target."
+    video_choice: str = Field(
+        alias="videoChoice",
+        description="AUTO, SOURCE_VIDEO, or PROCESSED_VIDEO. Audio is selected independently.",
+    )
+    "AUTO, SOURCE_VIDEO, or PROCESSED_VIDEO. Audio is selected independently."
     target_uri: str = Field(
         alias="targetUri",
         description="Target URI (masked in responses — stream key portion is redacted).",
@@ -7524,6 +7596,10 @@ class ProcessingUsageRecordDefaultStream(BaseModel):
         description="Whether DVR recording is enabled for this stream."
     )
     "Whether DVR recording is enabled for this stream."
+    live_video_abr: str = Field(
+        alias="liveVideoAbr", description="INHERIT or OFF for live video renditions."
+    )
+    "INHERIT or OFF for live video renditions."
     ingest_mode: IngestMode = Field(
         alias="ingestMode", description="How source media enters the stream."
     )
@@ -7757,6 +7833,11 @@ class ProcessingUsageRecordDefaultStreamPushTargets(BaseModel):
     "Platform identifier (twitch, youtube, facebook, kick, x, custom)."
     name: str = Field(description="User-friendly label for this target.")
     "User-friendly label for this target."
+    video_choice: str = Field(
+        alias="videoChoice",
+        description="AUTO, SOURCE_VIDEO, or PROCESSED_VIDEO. Audio is selected independently.",
+    )
+    "AUTO, SOURCE_VIDEO, or PROCESSED_VIDEO. Audio is selected independently."
     target_uri: str = Field(
         alias="targetUri",
         description="Target URI (masked in responses — stream key portion is redacted).",
@@ -7915,6 +7996,10 @@ class ProcessingUsageRecordInNodeDefaultStream(BaseModel):
         description="Whether DVR recording is enabled for this stream."
     )
     "Whether DVR recording is enabled for this stream."
+    live_video_abr: str = Field(
+        alias="liveVideoAbr", description="INHERIT or OFF for live video renditions."
+    )
+    "INHERIT or OFF for live video renditions."
     ingest_mode: IngestMode = Field(
         alias="ingestMode", description="How source media enters the stream."
     )
@@ -8150,6 +8235,11 @@ class ProcessingUsageRecordInNodeDefaultStreamPushTargets(BaseModel):
     "Platform identifier (twitch, youtube, facebook, kick, x, custom)."
     name: str = Field(description="User-friendly label for this target.")
     "User-friendly label for this target."
+    video_choice: str = Field(
+        alias="videoChoice",
+        description="AUTO, SOURCE_VIDEO, or PROCESSED_VIDEO. Audio is selected independently.",
+    )
+    "AUTO, SOURCE_VIDEO, or PROCESSED_VIDEO. Audio is selected independently."
     target_uri: str = Field(
         alias="targetUri",
         description="Target URI (masked in responses — stream key portion is redacted).",
@@ -8346,6 +8436,10 @@ class QualityTierDailyDefaultStream(BaseModel):
         description="Whether DVR recording is enabled for this stream."
     )
     "Whether DVR recording is enabled for this stream."
+    live_video_abr: str = Field(
+        alias="liveVideoAbr", description="INHERIT or OFF for live video renditions."
+    )
+    "INHERIT or OFF for live video renditions."
     ingest_mode: IngestMode = Field(
         alias="ingestMode", description="How source media enters the stream."
     )
@@ -8575,6 +8669,11 @@ class QualityTierDailyDefaultStreamPushTargets(BaseModel):
     "Platform identifier (twitch, youtube, facebook, kick, x, custom)."
     name: str = Field(description="User-friendly label for this target.")
     "User-friendly label for this target."
+    video_choice: str = Field(
+        alias="videoChoice",
+        description="AUTO, SOURCE_VIDEO, or PROCESSED_VIDEO. Audio is selected independently.",
+    )
+    "AUTO, SOURCE_VIDEO, or PROCESSED_VIDEO. Audio is selected independently."
     target_uri: str = Field(
         alias="targetUri",
         description="Target URI (masked in responses — stream key portion is redacted).",
@@ -8699,6 +8798,10 @@ class RebufferingEventDefaultStream(BaseModel):
         description="Whether DVR recording is enabled for this stream."
     )
     "Whether DVR recording is enabled for this stream."
+    live_video_abr: str = Field(
+        alias="liveVideoAbr", description="INHERIT or OFF for live video renditions."
+    )
+    "INHERIT or OFF for live video renditions."
     ingest_mode: IngestMode = Field(
         alias="ingestMode", description="How source media enters the stream."
     )
@@ -8928,6 +9031,11 @@ class RebufferingEventDefaultStreamPushTargets(BaseModel):
     "Platform identifier (twitch, youtube, facebook, kick, x, custom)."
     name: str = Field(description="User-friendly label for this target.")
     "User-friendly label for this target."
+    video_choice: str = Field(
+        alias="videoChoice",
+        description="AUTO, SOURCE_VIDEO, or PROCESSED_VIDEO. Audio is selected independently.",
+    )
+    "AUTO, SOURCE_VIDEO, or PROCESSED_VIDEO. Audio is selected independently."
     target_uri: str = Field(
         alias="targetUri",
         description="Target URI (masked in responses — stream key portion is redacted).",
@@ -9078,6 +9186,10 @@ class RoutingEventDefaultStream(BaseModel):
         description="Whether DVR recording is enabled for this stream."
     )
     "Whether DVR recording is enabled for this stream."
+    live_video_abr: str = Field(
+        alias="liveVideoAbr", description="INHERIT or OFF for live video renditions."
+    )
+    "INHERIT or OFF for live video renditions."
     ingest_mode: IngestMode = Field(
         alias="ingestMode", description="How source media enters the stream."
     )
@@ -9307,6 +9419,11 @@ class RoutingEventDefaultStreamPushTargets(BaseModel):
     "Platform identifier (twitch, youtube, facebook, kick, x, custom)."
     name: str = Field(description="User-friendly label for this target.")
     "User-friendly label for this target."
+    video_choice: str = Field(
+        alias="videoChoice",
+        description="AUTO, SOURCE_VIDEO, or PROCESSED_VIDEO. Audio is selected independently.",
+    )
+    "AUTO, SOURCE_VIDEO, or PROCESSED_VIDEO. Audio is selected independently."
     target_uri: str = Field(
         alias="targetUri",
         description="Target URI (masked in responses — stream key portion is redacted).",
@@ -9732,6 +9849,10 @@ class StorageEventDefaultStream(BaseModel):
         description="Whether DVR recording is enabled for this stream."
     )
     "Whether DVR recording is enabled for this stream."
+    live_video_abr: str = Field(
+        alias="liveVideoAbr", description="INHERIT or OFF for live video renditions."
+    )
+    "INHERIT or OFF for live video renditions."
     ingest_mode: IngestMode = Field(
         alias="ingestMode", description="How source media enters the stream."
     )
@@ -9961,6 +10082,11 @@ class StorageEventDefaultStreamPushTargets(BaseModel):
     "Platform identifier (twitch, youtube, facebook, kick, x, custom)."
     name: str = Field(description="User-friendly label for this target.")
     "User-friendly label for this target."
+    video_choice: str = Field(
+        alias="videoChoice",
+        description="AUTO, SOURCE_VIDEO, or PROCESSED_VIDEO. Audio is selected independently.",
+    )
+    "AUTO, SOURCE_VIDEO, or PROCESSED_VIDEO. Audio is selected independently."
     target_uri: str = Field(
         alias="targetUri",
         description="Target URI (masked in responses — stream key portion is redacted).",
@@ -10081,6 +10207,10 @@ class StorageEventInNodeDefaultStream(BaseModel):
         description="Whether DVR recording is enabled for this stream."
     )
     "Whether DVR recording is enabled for this stream."
+    live_video_abr: str = Field(
+        alias="liveVideoAbr", description="INHERIT or OFF for live video renditions."
+    )
+    "INHERIT or OFF for live video renditions."
     ingest_mode: IngestMode = Field(
         alias="ingestMode", description="How source media enters the stream."
     )
@@ -10312,6 +10442,11 @@ class StorageEventInNodeDefaultStreamPushTargets(BaseModel):
     "Platform identifier (twitch, youtube, facebook, kick, x, custom)."
     name: str = Field(description="User-friendly label for this target.")
     "User-friendly label for this target."
+    video_choice: str = Field(
+        alias="videoChoice",
+        description="AUTO, SOURCE_VIDEO, or PROCESSED_VIDEO. Audio is selected independently.",
+    )
+    "AUTO, SOURCE_VIDEO, or PROCESSED_VIDEO. Audio is selected independently."
     target_uri: str = Field(
         alias="targetUri",
         description="Target URI (masked in responses — stream key portion is redacted).",
@@ -10439,6 +10574,10 @@ class StreamAnalyticsDailyDefaultStream(BaseModel):
         description="Whether DVR recording is enabled for this stream."
     )
     "Whether DVR recording is enabled for this stream."
+    live_video_abr: str = Field(
+        alias="liveVideoAbr", description="INHERIT or OFF for live video renditions."
+    )
+    "INHERIT or OFF for live video renditions."
     ingest_mode: IngestMode = Field(
         alias="ingestMode", description="How source media enters the stream."
     )
@@ -10672,6 +10811,11 @@ class StreamAnalyticsDailyDefaultStreamPushTargets(BaseModel):
     "Platform identifier (twitch, youtube, facebook, kick, x, custom)."
     name: str = Field(description="User-friendly label for this target.")
     "User-friendly label for this target."
+    video_choice: str = Field(
+        alias="videoChoice",
+        description="AUTO, SOURCE_VIDEO, or PROCESSED_VIDEO. Audio is selected independently.",
+    )
+    "AUTO, SOURCE_VIDEO, or PROCESSED_VIDEO. Audio is selected independently."
     target_uri: str = Field(
         alias="targetUri",
         description="Target URI (masked in responses — stream key portion is redacted).",
@@ -10814,6 +10958,10 @@ class StreamAnalyticsSummaryDefaultStream(BaseModel):
         description="Whether DVR recording is enabled for this stream."
     )
     "Whether DVR recording is enabled for this stream."
+    live_video_abr: str = Field(
+        alias="liveVideoAbr", description="INHERIT or OFF for live video renditions."
+    )
+    "INHERIT or OFF for live video renditions."
     ingest_mode: IngestMode = Field(
         alias="ingestMode", description="How source media enters the stream."
     )
@@ -11049,6 +11197,11 @@ class StreamAnalyticsSummaryDefaultStreamPushTargets(BaseModel):
     "Platform identifier (twitch, youtube, facebook, kick, x, custom)."
     name: str = Field(description="User-friendly label for this target.")
     "User-friendly label for this target."
+    video_choice: str = Field(
+        alias="videoChoice",
+        description="AUTO, SOURCE_VIDEO, or PROCESSED_VIDEO. Audio is selected independently.",
+    )
+    "AUTO, SOURCE_VIDEO, or PROCESSED_VIDEO. Audio is selected independently."
     target_uri: str = Field(
         alias="targetUri",
         description="Target URI (masked in responses — stream key portion is redacted).",
@@ -11181,6 +11334,10 @@ class StreamConnectionHourlyDefaultStream(BaseModel):
         description="Whether DVR recording is enabled for this stream."
     )
     "Whether DVR recording is enabled for this stream."
+    live_video_abr: str = Field(
+        alias="liveVideoAbr", description="INHERIT or OFF for live video renditions."
+    )
+    "INHERIT or OFF for live video renditions."
     ingest_mode: IngestMode = Field(
         alias="ingestMode", description="How source media enters the stream."
     )
@@ -11416,6 +11573,11 @@ class StreamConnectionHourlyDefaultStreamPushTargets(BaseModel):
     "Platform identifier (twitch, youtube, facebook, kick, x, custom)."
     name: str = Field(description="User-friendly label for this target.")
     "User-friendly label for this target."
+    video_choice: str = Field(
+        alias="videoChoice",
+        description="AUTO, SOURCE_VIDEO, or PROCESSED_VIDEO. Audio is selected independently.",
+    )
+    "AUTO, SOURCE_VIDEO, or PROCESSED_VIDEO. Audio is selected independently."
     target_uri: str = Field(
         alias="targetUri",
         description="Target URI (masked in responses — stream key portion is redacted).",
@@ -11557,6 +11719,10 @@ class StreamEventDefaultStream(BaseModel):
         description="Whether DVR recording is enabled for this stream."
     )
     "Whether DVR recording is enabled for this stream."
+    live_video_abr: str = Field(
+        alias="liveVideoAbr", description="INHERIT or OFF for live video renditions."
+    )
+    "INHERIT or OFF for live video renditions."
     ingest_mode: IngestMode = Field(
         alias="ingestMode", description="How source media enters the stream."
     )
@@ -11784,6 +11950,11 @@ class StreamEventDefaultStreamPushTargets(BaseModel):
     "Platform identifier (twitch, youtube, facebook, kick, x, custom)."
     name: str = Field(description="User-friendly label for this target.")
     "User-friendly label for this target."
+    video_choice: str = Field(
+        alias="videoChoice",
+        description="AUTO, SOURCE_VIDEO, or PROCESSED_VIDEO. Audio is selected independently.",
+    )
+    "AUTO, SOURCE_VIDEO, or PROCESSED_VIDEO. Audio is selected independently."
     target_uri: str = Field(
         alias="targetUri",
         description="Target URI (masked in responses — stream key portion is redacted).",
@@ -11925,6 +12096,10 @@ class StreamEventInNodeDefaultStream(BaseModel):
         description="Whether DVR recording is enabled for this stream."
     )
     "Whether DVR recording is enabled for this stream."
+    live_video_abr: str = Field(
+        alias="liveVideoAbr", description="INHERIT or OFF for live video renditions."
+    )
+    "INHERIT or OFF for live video renditions."
     ingest_mode: IngestMode = Field(
         alias="ingestMode", description="How source media enters the stream."
     )
@@ -12154,6 +12329,11 @@ class StreamEventInNodeDefaultStreamPushTargets(BaseModel):
     "Platform identifier (twitch, youtube, facebook, kick, x, custom)."
     name: str = Field(description="User-friendly label for this target.")
     "User-friendly label for this target."
+    video_choice: str = Field(
+        alias="videoChoice",
+        description="AUTO, SOURCE_VIDEO, or PROCESSED_VIDEO. Audio is selected independently.",
+    )
+    "AUTO, SOURCE_VIDEO, or PROCESSED_VIDEO. Audio is selected independently."
     target_uri: str = Field(
         alias="targetUri",
         description="Target URI (masked in responses — stream key portion is redacted).",
@@ -12409,6 +12589,10 @@ class StreamHealthMetricDefaultStream(BaseModel):
         description="Whether DVR recording is enabled for this stream."
     )
     "Whether DVR recording is enabled for this stream."
+    live_video_abr: str = Field(
+        alias="liveVideoAbr", description="INHERIT or OFF for live video renditions."
+    )
+    "INHERIT or OFF for live video renditions."
     ingest_mode: IngestMode = Field(
         alias="ingestMode", description="How source media enters the stream."
     )
@@ -12640,6 +12824,11 @@ class StreamHealthMetricDefaultStreamPushTargets(BaseModel):
     "Platform identifier (twitch, youtube, facebook, kick, x, custom)."
     name: str = Field(description="User-friendly label for this target.")
     "User-friendly label for this target."
+    video_choice: str = Field(
+        alias="videoChoice",
+        description="AUTO, SOURCE_VIDEO, or PROCESSED_VIDEO. Audio is selected independently.",
+    )
+    "AUTO, SOURCE_VIDEO, or PROCESSED_VIDEO. Audio is selected independently."
     target_uri: str = Field(
         alias="targetUri",
         description="Target URI (masked in responses — stream key portion is redacted).",
@@ -12773,6 +12962,10 @@ class StreamHealthMetricInNodeDefaultStream(BaseModel):
         description="Whether DVR recording is enabled for this stream."
     )
     "Whether DVR recording is enabled for this stream."
+    live_video_abr: str = Field(
+        alias="liveVideoAbr", description="INHERIT or OFF for live video renditions."
+    )
+    "INHERIT or OFF for live video renditions."
     ingest_mode: IngestMode = Field(
         alias="ingestMode", description="How source media enters the stream."
     )
@@ -13008,6 +13201,11 @@ class StreamHealthMetricInNodeDefaultStreamPushTargets(BaseModel):
     "Platform identifier (twitch, youtube, facebook, kick, x, custom)."
     name: str = Field(description="User-friendly label for this target.")
     "User-friendly label for this target."
+    video_choice: str = Field(
+        alias="videoChoice",
+        description="AUTO, SOURCE_VIDEO, or PROCESSED_VIDEO. Audio is selected independently.",
+    )
+    "AUTO, SOURCE_VIDEO, or PROCESSED_VIDEO. Audio is selected independently."
     target_uri: str = Field(
         alias="targetUri",
         description="Target URI (masked in responses — stream key portion is redacted).",
@@ -13121,6 +13319,10 @@ class StreamInNodeDefault(BaseModel):
         description="Whether DVR recording is enabled for this stream."
     )
     "Whether DVR recording is enabled for this stream."
+    live_video_abr: str = Field(
+        alias="liveVideoAbr", description="INHERIT or OFF for live video renditions."
+    )
+    "INHERIT or OFF for live video renditions."
     ingest_mode: IngestMode = Field(
         alias="ingestMode", description="How source media enters the stream."
     )
@@ -13360,6 +13562,11 @@ class StreamInNodeDefaultPushTargets(BaseModel):
     "Platform identifier (twitch, youtube, facebook, kick, x, custom)."
     name: str = Field(description="User-friendly label for this target.")
     "User-friendly label for this target."
+    video_choice: str = Field(
+        alias="videoChoice",
+        description="AUTO, SOURCE_VIDEO, or PROCESSED_VIDEO. Audio is selected independently.",
+    )
+    "AUTO, SOURCE_VIDEO, or PROCESSED_VIDEO. Audio is selected independently."
     target_uri: str = Field(
         alias="targetUri",
         description="Target URI (masked in responses — stream key portion is redacted).",
@@ -13827,6 +14034,10 @@ class TenantEventDefaultStreamEventStream(BaseModel):
         description="Whether DVR recording is enabled for this stream."
     )
     "Whether DVR recording is enabled for this stream."
+    live_video_abr: str = Field(
+        alias="liveVideoAbr", description="INHERIT or OFF for live video renditions."
+    )
+    "INHERIT or OFF for live video renditions."
     ingest_mode: IngestMode = Field(
         alias="ingestMode", description="How source media enters the stream."
     )
@@ -13909,6 +14120,10 @@ class TenantEventDefaultViewerMetricsStream(BaseModel):
         description="Whether DVR recording is enabled for this stream."
     )
     "Whether DVR recording is enabled for this stream."
+    live_video_abr: str = Field(
+        alias="liveVideoAbr", description="INHERIT or OFF for live video renditions."
+    )
+    "INHERIT or OFF for live video renditions."
     ingest_mode: IngestMode = Field(
         alias="ingestMode", description="How source media enters the stream."
     )
@@ -13996,6 +14211,10 @@ class TenantEventDefaultConnectionEventStream(BaseModel):
         description="Whether DVR recording is enabled for this stream."
     )
     "Whether DVR recording is enabled for this stream."
+    live_video_abr: str = Field(
+        alias="liveVideoAbr", description="INHERIT or OFF for live video renditions."
+    )
+    "INHERIT or OFF for live video renditions."
     ingest_mode: IngestMode = Field(
         alias="ingestMode", description="How source media enters the stream."
     )
@@ -14083,6 +14302,10 @@ class TenantEventDefaultTrackListUpdateStream(BaseModel):
         description="Whether DVR recording is enabled for this stream."
     )
     "Whether DVR recording is enabled for this stream."
+    live_video_abr: str = Field(
+        alias="liveVideoAbr", description="INHERIT or OFF for live video renditions."
+    )
+    "INHERIT or OFF for live video renditions."
     ingest_mode: IngestMode = Field(
         alias="ingestMode", description="How source media enters the stream."
     )
@@ -14178,6 +14401,10 @@ class TenantEventDefaultStorageEventStream(BaseModel):
         description="Whether DVR recording is enabled for this stream."
     )
     "Whether DVR recording is enabled for this stream."
+    live_video_abr: str = Field(
+        alias="liveVideoAbr", description="INHERIT or OFF for live video renditions."
+    )
+    "INHERIT or OFF for live video renditions."
     ingest_mode: IngestMode = Field(
         alias="ingestMode", description="How source media enters the stream."
     )
@@ -14313,6 +14540,10 @@ class TenantEventDefaultProcessingEventStream(BaseModel):
         description="Whether DVR recording is enabled for this stream."
     )
     "Whether DVR recording is enabled for this stream."
+    live_video_abr: str = Field(
+        alias="liveVideoAbr", description="INHERIT or OFF for live video renditions."
+    )
+    "INHERIT or OFF for live video renditions."
     ingest_mode: IngestMode = Field(
         alias="ingestMode", description="How source media enters the stream."
     )
@@ -14405,6 +14636,10 @@ class TenantEventDefaultRoutingEventStream(BaseModel):
         description="Whether DVR recording is enabled for this stream."
     )
     "Whether DVR recording is enabled for this stream."
+    live_video_abr: str = Field(
+        alias="liveVideoAbr", description="INHERIT or OFF for live video renditions."
+    )
+    "INHERIT or OFF for live video renditions."
     ingest_mode: IngestMode = Field(
         alias="ingestMode", description="How source media enters the stream."
     )
@@ -14535,6 +14770,10 @@ class TrackListEventDefaultStream(BaseModel):
         description="Whether DVR recording is enabled for this stream."
     )
     "Whether DVR recording is enabled for this stream."
+    live_video_abr: str = Field(
+        alias="liveVideoAbr", description="INHERIT or OFF for live video renditions."
+    )
+    "INHERIT or OFF for live video renditions."
     ingest_mode: IngestMode = Field(
         alias="ingestMode", description="How source media enters the stream."
     )
@@ -14764,6 +15003,11 @@ class TrackListEventDefaultStreamPushTargets(BaseModel):
     "Platform identifier (twitch, youtube, facebook, kick, x, custom)."
     name: str = Field(description="User-friendly label for this target.")
     "User-friendly label for this target."
+    video_choice: str = Field(
+        alias="videoChoice",
+        description="AUTO, SOURCE_VIDEO, or PROCESSED_VIDEO. Audio is selected independently.",
+    )
+    "AUTO, SOURCE_VIDEO, or PROCESSED_VIDEO. Audio is selected independently."
     target_uri: str = Field(
         alias="targetUri",
         description="Target URI (masked in responses — stream key portion is redacted).",
@@ -14892,6 +15136,10 @@ class TrackListEventInNodeDefaultStream(BaseModel):
         description="Whether DVR recording is enabled for this stream."
     )
     "Whether DVR recording is enabled for this stream."
+    live_video_abr: str = Field(
+        alias="liveVideoAbr", description="INHERIT or OFF for live video renditions."
+    )
+    "INHERIT or OFF for live video renditions."
     ingest_mode: IngestMode = Field(
         alias="ingestMode", description="How source media enters the stream."
     )
@@ -15125,6 +15373,11 @@ class TrackListEventInNodeDefaultStreamPushTargets(BaseModel):
     "Platform identifier (twitch, youtube, facebook, kick, x, custom)."
     name: str = Field(description="User-friendly label for this target.")
     "User-friendly label for this target."
+    video_choice: str = Field(
+        alias="videoChoice",
+        description="AUTO, SOURCE_VIDEO, or PROCESSED_VIDEO. Audio is selected independently.",
+    )
+    "AUTO, SOURCE_VIDEO, or PROCESSED_VIDEO. Audio is selected independently."
     target_uri: str = Field(
         alias="targetUri",
         description="Target URI (masked in responses — stream key portion is redacted).",
@@ -15261,6 +15514,10 @@ class TrackListUpdateDefaultStream(BaseModel):
         description="Whether DVR recording is enabled for this stream."
     )
     "Whether DVR recording is enabled for this stream."
+    live_video_abr: str = Field(
+        alias="liveVideoAbr", description="INHERIT or OFF for live video renditions."
+    )
+    "INHERIT or OFF for live video renditions."
     ingest_mode: IngestMode = Field(
         alias="ingestMode", description="How source media enters the stream."
     )
@@ -15490,6 +15747,11 @@ class TrackListUpdateDefaultStreamPushTargets(BaseModel):
     "Platform identifier (twitch, youtube, facebook, kick, x, custom)."
     name: str = Field(description="User-friendly label for this target.")
     "User-friendly label for this target."
+    video_choice: str = Field(
+        alias="videoChoice",
+        description="AUTO, SOURCE_VIDEO, or PROCESSED_VIDEO. Audio is selected independently.",
+    )
+    "AUTO, SOURCE_VIDEO, or PROCESSED_VIDEO. Audio is selected independently."
     target_uri: str = Field(
         alias="targetUri",
         description="Target URI (masked in responses — stream key portion is redacted).",
@@ -15629,6 +15891,10 @@ class ViewerCountBucketDefaultStream(BaseModel):
         description="Whether DVR recording is enabled for this stream."
     )
     "Whether DVR recording is enabled for this stream."
+    live_video_abr: str = Field(
+        alias="liveVideoAbr", description="INHERIT or OFF for live video renditions."
+    )
+    "INHERIT or OFF for live video renditions."
     ingest_mode: IngestMode = Field(
         alias="ingestMode", description="How source media enters the stream."
     )
@@ -15858,6 +16124,11 @@ class ViewerCountBucketDefaultStreamPushTargets(BaseModel):
     "Platform identifier (twitch, youtube, facebook, kick, x, custom)."
     name: str = Field(description="User-friendly label for this target.")
     "User-friendly label for this target."
+    video_choice: str = Field(
+        alias="videoChoice",
+        description="AUTO, SOURCE_VIDEO, or PROCESSED_VIDEO. Audio is selected independently.",
+    )
+    "AUTO, SOURCE_VIDEO, or PROCESSED_VIDEO. Audio is selected independently."
     target_uri: str = Field(
         alias="targetUri",
         description="Target URI (masked in responses — stream key portion is redacted).",
@@ -16004,6 +16275,10 @@ class ViewerGeographicDefaultStream(BaseModel):
         description="Whether DVR recording is enabled for this stream."
     )
     "Whether DVR recording is enabled for this stream."
+    live_video_abr: str = Field(
+        alias="liveVideoAbr", description="INHERIT or OFF for live video renditions."
+    )
+    "INHERIT or OFF for live video renditions."
     ingest_mode: IngestMode = Field(
         alias="ingestMode", description="How source media enters the stream."
     )
@@ -16233,6 +16508,11 @@ class ViewerGeographicDefaultStreamPushTargets(BaseModel):
     "Platform identifier (twitch, youtube, facebook, kick, x, custom)."
     name: str = Field(description="User-friendly label for this target.")
     "User-friendly label for this target."
+    video_choice: str = Field(
+        alias="videoChoice",
+        description="AUTO, SOURCE_VIDEO, or PROCESSED_VIDEO. Audio is selected independently.",
+    )
+    "AUTO, SOURCE_VIDEO, or PROCESSED_VIDEO. Audio is selected independently."
     target_uri: str = Field(
         alias="targetUri",
         description="Target URI (masked in responses — stream key portion is redacted).",
@@ -16346,6 +16626,10 @@ class ViewerHoursHourlyDefaultStream(BaseModel):
         description="Whether DVR recording is enabled for this stream."
     )
     "Whether DVR recording is enabled for this stream."
+    live_video_abr: str = Field(
+        alias="liveVideoAbr", description="INHERIT or OFF for live video renditions."
+    )
+    "INHERIT or OFF for live video renditions."
     ingest_mode: IngestMode = Field(
         alias="ingestMode", description="How source media enters the stream."
     )
@@ -16575,6 +16859,11 @@ class ViewerHoursHourlyDefaultStreamPushTargets(BaseModel):
     "Platform identifier (twitch, youtube, facebook, kick, x, custom)."
     name: str = Field(description="User-friendly label for this target.")
     "User-friendly label for this target."
+    video_choice: str = Field(
+        alias="videoChoice",
+        description="AUTO, SOURCE_VIDEO, or PROCESSED_VIDEO. Audio is selected independently.",
+    )
+    "AUTO, SOURCE_VIDEO, or PROCESSED_VIDEO. Audio is selected independently."
     target_uri: str = Field(
         alias="targetUri",
         description="Target URI (masked in responses — stream key portion is redacted).",
@@ -16690,6 +16979,10 @@ class ViewerHoursHourlyInNodeDefaultStream(BaseModel):
         description="Whether DVR recording is enabled for this stream."
     )
     "Whether DVR recording is enabled for this stream."
+    live_video_abr: str = Field(
+        alias="liveVideoAbr", description="INHERIT or OFF for live video renditions."
+    )
+    "INHERIT or OFF for live video renditions."
     ingest_mode: IngestMode = Field(
         alias="ingestMode", description="How source media enters the stream."
     )
@@ -16925,6 +17218,11 @@ class ViewerHoursHourlyInNodeDefaultStreamPushTargets(BaseModel):
     "Platform identifier (twitch, youtube, facebook, kick, x, custom)."
     name: str = Field(description="User-friendly label for this target.")
     "User-friendly label for this target."
+    video_choice: str = Field(
+        alias="videoChoice",
+        description="AUTO, SOURCE_VIDEO, or PROCESSED_VIDEO. Audio is selected independently.",
+    )
+    "AUTO, SOURCE_VIDEO, or PROCESSED_VIDEO. Audio is selected independently."
     target_uri: str = Field(
         alias="targetUri",
         description="Target URI (masked in responses — stream key portion is redacted).",
@@ -17049,6 +17347,10 @@ class ViewerMetricsDefaultStream(BaseModel):
         description="Whether DVR recording is enabled for this stream."
     )
     "Whether DVR recording is enabled for this stream."
+    live_video_abr: str = Field(
+        alias="liveVideoAbr", description="INHERIT or OFF for live video renditions."
+    )
+    "INHERIT or OFF for live video renditions."
     ingest_mode: IngestMode = Field(
         alias="ingestMode", description="How source media enters the stream."
     )
@@ -17278,6 +17580,11 @@ class ViewerMetricsDefaultStreamPushTargets(BaseModel):
     "Platform identifier (twitch, youtube, facebook, kick, x, custom)."
     name: str = Field(description="User-friendly label for this target.")
     "User-friendly label for this target."
+    video_choice: str = Field(
+        alias="videoChoice",
+        description="AUTO, SOURCE_VIDEO, or PROCESSED_VIDEO. Audio is selected independently.",
+    )
+    "AUTO, SOURCE_VIDEO, or PROCESSED_VIDEO. Audio is selected independently."
     target_uri: str = Field(
         alias="targetUri",
         description="Target URI (masked in responses — stream key portion is redacted).",
@@ -17402,6 +17709,10 @@ class ViewerSessionDefaultStream(BaseModel):
         description="Whether DVR recording is enabled for this stream."
     )
     "Whether DVR recording is enabled for this stream."
+    live_video_abr: str = Field(
+        alias="liveVideoAbr", description="INHERIT or OFF for live video renditions."
+    )
+    "INHERIT or OFF for live video renditions."
     ingest_mode: IngestMode = Field(
         alias="ingestMode", description="How source media enters the stream."
     )
@@ -17631,6 +17942,11 @@ class ViewerSessionDefaultStreamPushTargets(BaseModel):
     "Platform identifier (twitch, youtube, facebook, kick, x, custom)."
     name: str = Field(description="User-friendly label for this target.")
     "User-friendly label for this target."
+    video_choice: str = Field(
+        alias="videoChoice",
+        description="AUTO, SOURCE_VIDEO, or PROCESSED_VIDEO. Audio is selected independently.",
+    )
+    "AUTO, SOURCE_VIDEO, or PROCESSED_VIDEO. Audio is selected independently."
     target_uri: str = Field(
         alias="targetUri",
         description="Target URI (masked in responses — stream key portion is redacted).",
@@ -17760,6 +18076,10 @@ class ViewerSessionInNodeDefaultStream(BaseModel):
         description="Whether DVR recording is enabled for this stream."
     )
     "Whether DVR recording is enabled for this stream."
+    live_video_abr: str = Field(
+        alias="liveVideoAbr", description="INHERIT or OFF for live video renditions."
+    )
+    "INHERIT or OFF for live video renditions."
     ingest_mode: IngestMode = Field(
         alias="ingestMode", description="How source media enters the stream."
     )
@@ -17991,6 +18311,11 @@ class ViewerSessionInNodeDefaultStreamPushTargets(BaseModel):
     "Platform identifier (twitch, youtube, facebook, kick, x, custom)."
     name: str = Field(description="User-friendly label for this target.")
     "User-friendly label for this target."
+    video_choice: str = Field(
+        alias="videoChoice",
+        description="AUTO, SOURCE_VIDEO, or PROCESSED_VIDEO. Audio is selected independently.",
+    )
+    "AUTO, SOURCE_VIDEO, or PROCESSED_VIDEO. Audio is selected independently."
     target_uri: str = Field(
         alias="targetUri",
         description="Target URI (masked in responses — stream key portion is redacted).",

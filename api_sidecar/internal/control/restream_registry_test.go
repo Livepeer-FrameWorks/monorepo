@@ -135,11 +135,14 @@ func TestResolveRestreamTargetFencesReusedURIByMistPushID(t *testing.T) {
 	if _, result := installRestreamDesiredState(request("generation-a", 1)); result != restreamInstallApplied {
 		t.Fatalf("generation-a install=%v", result)
 	}
-	bindRestreamPushIDs(streamName, "generation-a", 1, []mist.PushInfo{{ID: 7, StreamName: streamName, TargetURI: targetURI}})
+	bindRestreamPushIDs(streamName, "generation-a", 1, []mist.PushInfo{{ID: 7, StreamName: streamName, TargetURI: targetURI, Params: map[string]interface{}{"video": "restream_auto"}}})
 	if _, result := installRestreamDesiredState(request("generation-b", 2)); result != restreamInstallApplied {
 		t.Fatalf("generation-b install=%v", result)
 	}
-	bindRestreamPushIDs(streamName, "generation-b", 2, []mist.PushInfo{{ID: 8, StreamName: streamName, TargetURI: targetURI}})
+	bindRestreamPushIDs(streamName, "generation-b", 2, []mist.PushInfo{
+		{ID: 7, StreamName: streamName, TargetURI: targetURI, Params: map[string]interface{}{"video": "restream_auto"}},
+		{ID: 8, StreamName: streamName, TargetURI: targetURI, Params: map[string]interface{}{"video": "restream_auto"}},
+	})
 
 	oldReport, ok := ResolveRestreamTarget(streamName, 7, targetURI, "")
 	if !ok || oldReport.GetSourceGeneration() != "generation-a" || oldReport.GetTargetRevision() != 1 {
@@ -167,24 +170,62 @@ func TestUnchangedPushIDStaysCurrentDuringRevisionInstall(t *testing.T) {
 		delete(restreamRegistry.streams, streamName)
 		restreamRegistry.Unlock()
 	})
-	request := func(revision int64) *ipcpb.ActivatePushTargets {
+	request := func(revision int64, attempt string) *ipcpb.ActivatePushTargets {
 		return &ipcpb.ActivatePushTargets{
 			TenantId: "tenant-a", StreamId: "stream-a", StreamName: streamName,
-			SourceGeneration: "generation-a", TargetRevision: revision,
+			SourceGeneration: "generation-a", TargetRevision: revision, ActivationAttempt: attempt,
 			Targets: []*ipcpb.PushTargetSpec{{TargetId: "target-a", Platform: "youtube", TargetUri: targetURI}},
 		}
 	}
-	if _, result := installRestreamDesiredState(request(1)); result != restreamInstallApplied {
+	if _, result := installRestreamDesiredState(request(1, "attempt-one")); result != restreamInstallApplied {
 		t.Fatalf("revision 1 install=%v", result)
 	}
-	bindRestreamPushIDs(streamName, "generation-a", 1, []mist.PushInfo{{ID: 7, StreamName: streamName, TargetURI: targetURI}})
-	if _, result := installRestreamDesiredState(request(2)); result != restreamInstallApplied {
+	bindRestreamPushIDs(streamName, "generation-a", 1, []mist.PushInfo{{ID: 7, StreamName: streamName, TargetURI: targetURI, Params: map[string]interface{}{"video": "restream_auto"}}})
+	if _, result := installRestreamDesiredState(request(2, "attempt-two")); result != restreamInstallApplied {
 		t.Fatalf("revision 2 install=%v", result)
 	}
 
 	report, ok := ResolveRestreamTarget(streamName, 7, targetURI, "")
-	if !ok || report.GetTargetRevision() != 2 || report.GetSourceGeneration() != "generation-a" {
+	if !ok || report.GetTargetRevision() != 2 || report.GetSourceGeneration() != "generation-a" || report.GetActivationAttempt() != "attempt-two" {
 		t.Fatalf("unchanged push ID was retired during revision install: report=%+v ok=%v", report, ok)
+	}
+}
+
+func TestSameURIVideoChoiceReplacementRetiresOldPushID(t *testing.T) {
+	const streamName = "live+registry-choice"
+	const targetURI = "rtmp://example.test/live/key"
+	restreamRegistry.Lock()
+	delete(restreamRegistry.streams, streamName)
+	restreamRegistry.Unlock()
+	t.Cleanup(func() {
+		restreamRegistry.Lock()
+		delete(restreamRegistry.streams, streamName)
+		restreamRegistry.Unlock()
+	})
+	request := func(revision int64, choice string) *ipcpb.ActivatePushTargets {
+		return &ipcpb.ActivatePushTargets{
+			TenantId: "tenant-a", StreamId: "stream-a", StreamName: streamName,
+			SourceGeneration: "generation-a", TargetRevision: revision,
+			Targets: []*ipcpb.PushTargetSpec{{TargetId: "target-a", Platform: "youtube", TargetUri: targetURI, VideoChoice: choice}},
+		}
+	}
+	if _, result := installRestreamDesiredState(request(1, "AUTO")); result != restreamInstallApplied {
+		t.Fatalf("revision 1 install=%v", result)
+	}
+	old := mist.PushInfo{ID: 7, StreamName: streamName, TargetURI: targetURI, Params: map[string]interface{}{"video": "restream_auto"}}
+	bindRestreamPushIDs(streamName, "generation-a", 1, []mist.PushInfo{old})
+	if _, result := installRestreamDesiredState(request(2, "SOURCE_VIDEO")); result != restreamInstallApplied {
+		t.Fatalf("revision 2 install=%v", result)
+	}
+	replacement := mist.PushInfo{ID: 8, StreamName: streamName, TargetURI: targetURI, Params: map[string]interface{}{"video": "restream_source"}}
+	bindRestreamPushIDs(streamName, "generation-a", 2, []mist.PushInfo{old, replacement})
+	oldReport, ok := ResolveRestreamTarget(streamName, 7, targetURI, "")
+	if !ok || oldReport.GetTargetRevision() != 1 {
+		t.Fatalf("old push rebound to new choice: %+v, ok=%v", oldReport, ok)
+	}
+	newReport, ok := ResolveRestreamTarget(streamName, 8, targetURI, "")
+	if !ok || newReport.GetTargetRevision() != 2 {
+		t.Fatalf("replacement push was not bound: %+v, ok=%v", newReport, ok)
 	}
 }
 

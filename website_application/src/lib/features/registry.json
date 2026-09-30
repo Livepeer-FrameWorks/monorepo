@@ -194,7 +194,7 @@
           "area": "",
           "kind": "product",
           "audience": "product",
-          "description": "Forward live streams to additional RTMP/SRT destinations.",
+          "description": "Forward live streams to RTMP/SRT destinations with per-target video choice and an optional per-stream live video ABR switch.",
           "status": "shipped",
           "required_surfaces": {
             "docs": {

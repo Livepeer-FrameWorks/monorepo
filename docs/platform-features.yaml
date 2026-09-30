@@ -136,7 +136,7 @@ features:
 
       - slug: multistream-targets
         name: Multistream push targets
-        description: Forward live streams to additional RTMP/SRT destinations.
+        description: Forward live streams to RTMP/SRT destinations with per-target video choice and an optional per-stream live video ABR switch.
         status: shipped
         required_surfaces:
           graphql: { required: true }

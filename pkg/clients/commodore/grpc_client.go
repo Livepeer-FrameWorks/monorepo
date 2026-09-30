@@ -1475,6 +1475,8 @@ func pushTargetStatusReason(reasonCode string) commodorepb.PushTargetStatusReaso
 		return commodorepb.PushTargetStatusReason_PUSH_TARGET_STATUS_REASON_CONFIGURATION_ERROR
 	case "edge_upgrade_required":
 		return commodorepb.PushTargetStatusReason_PUSH_TARGET_STATUS_REASON_EDGE_UPGRADE_REQUIRED
+	case "media_selection_failed":
+		return commodorepb.PushTargetStatusReason_PUSH_TARGET_STATUS_REASON_MEDIA_SELECTION_FAILED
 	case "stopped":
 		return commodorepb.PushTargetStatusReason_PUSH_TARGET_STATUS_REASON_STOPPED
 	default:

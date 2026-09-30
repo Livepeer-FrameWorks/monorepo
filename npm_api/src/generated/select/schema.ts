@@ -4054,6 +4054,8 @@ export interface PushTarget {
     platform: (Scalars['String'] | null)
     /** User-friendly label for this target. */
     name: Scalars['String']
+    /** AUTO, SOURCE_VIDEO, or PROCESSED_VIDEO. Audio is selected independently. */
+    videoChoice: Scalars['String']
     /** Target URI (masked in responses — stream key portion is redacted). */
     targetUri: Scalars['String']
     /** Whether this target is enabled for automatic push on stream start. */
@@ -5093,6 +5095,8 @@ export interface Stream {
     playbackId: Scalars['String']
     /** Whether DVR recording is enabled for this stream. */
     record: Scalars['Boolean']
+    /** INHERIT or OFF for live video renditions. */
+    liveVideoAbr: Scalars['String']
     /** How source media enters the stream. */
     ingestMode: IngestMode
     /** Pull-source config for pull streams; null for push streams. */
@@ -8350,6 +8354,8 @@ export interface CreatePushTargetInput {
 platform?: (Scalars['String'] | null),
 /** User-friendly label for this target. */
 name: Scalars['String'],
+/** AUTO, SOURCE_VIDEO, or PROCESSED_VIDEO for RTMP targets. */
+videoChoice?: (Scalars['String'] | null),
 /** Full target URI including stream key (e.g., rtmp://live.twitch.tv/app/live_xxxx). */
 targetUri: Scalars['String']}
 
@@ -8389,6 +8395,8 @@ name: Scalars['String'],
 description?: (Scalars['String'] | null),
 /** Enable DVR recording (default: false). */
 record?: (Scalars['Boolean'] | null),
+/** Live video renditions: INHERIT uses the tier policy; OFF keeps source video and audio conversion. */
+liveVideoAbr?: (Scalars['String'] | null),
 /** Source ingest model. Defaults to PUSH. */
 ingestMode?: (IngestMode | null),
 /** Pull-source configuration. Required when ingestMode is PULL. */
@@ -11690,6 +11698,8 @@ export interface PushTargetGenqlSelection{
     platform?: boolean | number
     /** User-friendly label for this target. */
     name?: boolean | number
+    /** AUTO, SOURCE_VIDEO, or PROCESSED_VIDEO. Audio is selected independently. */
+    videoChoice?: boolean | number
     /** Target URI (masked in responses — stream key portion is redacted). */
     targetUri?: boolean | number
     /** Whether this target is enabled for automatic push on stream start. */
@@ -13081,6 +13091,8 @@ export interface StreamGenqlSelection{
     playbackId?: boolean | number
     /** Whether DVR recording is enabled for this stream. */
     record?: boolean | number
+    /** INHERIT or OFF for live video renditions. */
+    liveVideoAbr?: boolean | number
     /** How source media enters the stream. */
     ingestMode?: boolean | number
     /** Pull-source config for pull streams; null for push streams. */
@@ -14205,6 +14217,8 @@ export interface UpdateMediaRetentionResultGenqlSelection{
 export interface UpdatePushTargetInput {
 /** Updated label. */
 name?: (Scalars['String'] | null),
+/** AUTO, SOURCE_VIDEO, or PROCESSED_VIDEO for RTMP targets. */
+videoChoice?: (Scalars['String'] | null),
 /** Updated target URI. */
 targetUri?: (Scalars['String'] | null),
 /** Enable or disable this target. */
@@ -14222,6 +14236,8 @@ name?: (Scalars['String'] | null),
 description?: (Scalars['String'] | null),
 /** Enable or disable DVR recording. */
 record?: (Scalars['Boolean'] | null),
+/** INHERIT uses the tier policy; OFF disables live video renditions from the next ingest. */
+liveVideoAbr?: (Scalars['String'] | null),
 /** Ingest model cannot be changed after create; sending a different value returns a validation error. */
 ingestMode?: (IngestMode | null),
 /** Update the pull-source configuration for an existing pull stream. */

@@ -3618,6 +3618,7 @@ class AsyncGraphQLClient(AsyncBaseClient):
                 streamKey
                 playbackId
                 record
+                liveVideoAbr
                 ingestMode
                 pullSource {
                   sourceUriRedacted
@@ -3665,6 +3666,7 @@ class AsyncGraphQLClient(AsyncBaseClient):
                   streamId
                   platform
                   name
+                  videoChoice
                   targetUri
                   isEnabled
                   status
@@ -3819,6 +3821,7 @@ class AsyncGraphQLClient(AsyncBaseClient):
                 streamKey
                 playbackId
                 record
+                liveVideoAbr
                 ingestMode
                 pullSource {
                   sourceUriRedacted
@@ -3866,6 +3869,7 @@ class AsyncGraphQLClient(AsyncBaseClient):
                   streamId
                   platform
                   name
+                  videoChoice
                   targetUri
                   isEnabled
                   status
@@ -4456,6 +4460,7 @@ class AsyncGraphQLClient(AsyncBaseClient):
                 streamKey
                 playbackId
                 record
+                liveVideoAbr
                 ingestMode
                 pullSource {
                   sourceUriRedacted
@@ -4503,6 +4508,7 @@ class AsyncGraphQLClient(AsyncBaseClient):
                   streamId
                   platform
                   name
+                  videoChoice
                   targetUri
                   isEnabled
                   status
@@ -5323,6 +5329,7 @@ class AsyncGraphQLClient(AsyncBaseClient):
                 streamKey
                 playbackId
                 record
+                liveVideoAbr
                 ingestMode
                 pullSource {
                   sourceUriRedacted
@@ -5370,6 +5377,7 @@ class AsyncGraphQLClient(AsyncBaseClient):
                   streamId
                   platform
                   name
+                  videoChoice
                   targetUri
                   isEnabled
                   status
@@ -5785,6 +5793,7 @@ class AsyncGraphQLClient(AsyncBaseClient):
                 streamKey
                 playbackId
                 record
+                liveVideoAbr
                 ingestMode
                 pullSource {
                   sourceUriRedacted
@@ -5832,6 +5841,7 @@ class AsyncGraphQLClient(AsyncBaseClient):
                   streamId
                   platform
                   name
+                  videoChoice
                   targetUri
                   isEnabled
                   status
@@ -7019,6 +7029,7 @@ class AsyncGraphQLClient(AsyncBaseClient):
                 streamKey
                 playbackId
                 record
+                liveVideoAbr
                 ingestMode
                 pullSource {
                   sourceUriRedacted
@@ -7066,6 +7077,7 @@ class AsyncGraphQLClient(AsyncBaseClient):
                   streamId
                   platform
                   name
+                  videoChoice
                   targetUri
                   isEnabled
                   status
@@ -7129,6 +7141,7 @@ class AsyncGraphQLClient(AsyncBaseClient):
                 streamKey
                 playbackId
                 record
+                liveVideoAbr
                 ingestMode
                 pullSource {
                   sourceUriRedacted
@@ -7176,6 +7189,7 @@ class AsyncGraphQLClient(AsyncBaseClient):
                   streamId
                   platform
                   name
+                  videoChoice
                   targetUri
                   isEnabled
                   status
@@ -7225,6 +7239,7 @@ class AsyncGraphQLClient(AsyncBaseClient):
                 streamKey
                 playbackId
                 record
+                liveVideoAbr
                 ingestMode
                 pullSource {
                   sourceUriRedacted
@@ -7272,6 +7287,7 @@ class AsyncGraphQLClient(AsyncBaseClient):
                   streamId
                   platform
                   name
+                  videoChoice
                   targetUri
                   isEnabled
                   status
@@ -7392,6 +7408,7 @@ class AsyncGraphQLClient(AsyncBaseClient):
                 streamKey
                 playbackId
                 record
+                liveVideoAbr
                 ingestMode
                 pullSource {
                   sourceUriRedacted
@@ -7439,6 +7456,7 @@ class AsyncGraphQLClient(AsyncBaseClient):
                   streamId
                   platform
                   name
+                  videoChoice
                   targetUri
                   isEnabled
                   status
@@ -7631,6 +7649,7 @@ class AsyncGraphQLClient(AsyncBaseClient):
                 streamKey
                 playbackId
                 record
+                liveVideoAbr
                 ingestMode
                 pullSource {
                   sourceUriRedacted
@@ -7678,6 +7697,7 @@ class AsyncGraphQLClient(AsyncBaseClient):
                   streamId
                   platform
                   name
+                  videoChoice
                   targetUri
                   isEnabled
                   status
@@ -7767,6 +7787,7 @@ class AsyncGraphQLClient(AsyncBaseClient):
                 streamKey
                 playbackId
                 record
+                liveVideoAbr
                 ingestMode
                 pullSource {
                   sourceUriRedacted
@@ -7814,6 +7835,7 @@ class AsyncGraphQLClient(AsyncBaseClient):
                   streamId
                   platform
                   name
+                  videoChoice
                   targetUri
                   isEnabled
                   status
@@ -7880,6 +7902,7 @@ class AsyncGraphQLClient(AsyncBaseClient):
                 streamKey
                 playbackId
                 record
+                liveVideoAbr
                 ingestMode
                 pullSource {
                   sourceUriRedacted
@@ -7927,6 +7950,7 @@ class AsyncGraphQLClient(AsyncBaseClient):
                   streamId
                   platform
                   name
+                  videoChoice
                   targetUri
                   isEnabled
                   status
@@ -7996,6 +8020,7 @@ class AsyncGraphQLClient(AsyncBaseClient):
                 streamKey
                 playbackId
                 record
+                liveVideoAbr
                 ingestMode
                 pullSource {
                   sourceUriRedacted
@@ -8043,6 +8068,7 @@ class AsyncGraphQLClient(AsyncBaseClient):
                   streamId
                   platform
                   name
+                  videoChoice
                   targetUri
                   isEnabled
                   status
@@ -8089,6 +8115,7 @@ class AsyncGraphQLClient(AsyncBaseClient):
                 streamKey
                 playbackId
                 record
+                liveVideoAbr
                 ingestMode
                 pullSource {
                   sourceUriRedacted
@@ -8136,6 +8163,7 @@ class AsyncGraphQLClient(AsyncBaseClient):
                   streamId
                   platform
                   name
+                  videoChoice
                   targetUri
                   isEnabled
                   status
@@ -8180,6 +8208,7 @@ class AsyncGraphQLClient(AsyncBaseClient):
                 streamKey
                 playbackId
                 record
+                liveVideoAbr
                 ingestMode
                 pullSource {
                   sourceUriRedacted
@@ -8227,6 +8256,7 @@ class AsyncGraphQLClient(AsyncBaseClient):
                   streamId
                   platform
                   name
+                  videoChoice
                   targetUri
                   isEnabled
                   status
@@ -8318,6 +8348,7 @@ class AsyncGraphQLClient(AsyncBaseClient):
                 streamKey
                 playbackId
                 record
+                liveVideoAbr
                 ingestMode
                 pullSource {
                   sourceUriRedacted
@@ -8365,6 +8396,7 @@ class AsyncGraphQLClient(AsyncBaseClient):
                   streamId
                   platform
                   name
+                  videoChoice
                   targetUri
                   isEnabled
                   status
@@ -8428,6 +8460,7 @@ class AsyncGraphQLClient(AsyncBaseClient):
               streamKey
               playbackId
               record
+              liveVideoAbr
               ingestMode
               pullSource {
                 sourceUriRedacted
@@ -8479,6 +8512,7 @@ class AsyncGraphQLClient(AsyncBaseClient):
                 streamId
                 platform
                 name
+                videoChoice
                 targetUri
                 isEnabled
                 status
@@ -8538,6 +8572,7 @@ class AsyncGraphQLClient(AsyncBaseClient):
                 streamKey
                 playbackId
                 record
+                liveVideoAbr
                 ingestMode
                 pullSource {
                   sourceUriRedacted
@@ -8585,6 +8620,7 @@ class AsyncGraphQLClient(AsyncBaseClient):
                   streamId
                   platform
                   name
+                  videoChoice
                   targetUri
                   isEnabled
                   status
@@ -8655,6 +8691,7 @@ class AsyncGraphQLClient(AsyncBaseClient):
                 streamKey
                 playbackId
                 record
+                liveVideoAbr
                 ingestMode
                 pullSource {
                   sourceUriRedacted
@@ -8702,6 +8739,7 @@ class AsyncGraphQLClient(AsyncBaseClient):
                   streamId
                   platform
                   name
+                  videoChoice
                   targetUri
                   isEnabled
                   status
@@ -8749,6 +8787,7 @@ class AsyncGraphQLClient(AsyncBaseClient):
                 streamKey
                 playbackId
                 record
+                liveVideoAbr
                 ingestMode
                 pullSource {
                   sourceUriRedacted
@@ -8796,6 +8835,7 @@ class AsyncGraphQLClient(AsyncBaseClient):
                   streamId
                   platform
                   name
+                  videoChoice
                   targetUri
                   isEnabled
                   status
@@ -10054,6 +10094,7 @@ class AsyncGraphQLClient(AsyncBaseClient):
                 streamKey
                 playbackId
                 record
+                liveVideoAbr
                 ingestMode
                 pullSource {
                   sourceUriRedacted
@@ -10101,6 +10142,7 @@ class AsyncGraphQLClient(AsyncBaseClient):
                   streamId
                   platform
                   name
+                  videoChoice
                   targetUri
                   isEnabled
                   status
@@ -10248,6 +10290,7 @@ class AsyncGraphQLClient(AsyncBaseClient):
                 streamKey
                 playbackId
                 record
+                liveVideoAbr
                 ingestMode
                 pullSource {
                   sourceUriRedacted
@@ -10295,6 +10338,7 @@ class AsyncGraphQLClient(AsyncBaseClient):
                   streamId
                   platform
                   name
+                  videoChoice
                   targetUri
                   isEnabled
                   status
@@ -10405,6 +10449,7 @@ class AsyncGraphQLClient(AsyncBaseClient):
                 streamKey
                 playbackId
                 record
+                liveVideoAbr
                 ingestMode
                 pullSource {
                   sourceUriRedacted
@@ -10452,6 +10497,7 @@ class AsyncGraphQLClient(AsyncBaseClient):
                   streamId
                   platform
                   name
+                  videoChoice
                   targetUri
                   isEnabled
                   status
@@ -10783,6 +10829,7 @@ class AsyncGraphQLClient(AsyncBaseClient):
                 streamKey
                 playbackId
                 record
+                liveVideoAbr
                 ingestMode
                 pullSource {
                   sourceUriRedacted
@@ -10830,6 +10877,7 @@ class AsyncGraphQLClient(AsyncBaseClient):
                   streamId
                   platform
                   name
+                  videoChoice
                   targetUri
                   isEnabled
                   status
@@ -11342,6 +11390,7 @@ class AsyncGraphQLClient(AsyncBaseClient):
                 streamKey
                 playbackId
                 record
+                liveVideoAbr
                 ingestMode
                 pullSource {
                   sourceUriRedacted
@@ -11389,6 +11438,7 @@ class AsyncGraphQLClient(AsyncBaseClient):
                   streamId
                   platform
                   name
+                  videoChoice
                   targetUri
                   isEnabled
                   status
@@ -11576,6 +11626,7 @@ class AsyncGraphQLClient(AsyncBaseClient):
                 streamKey
                 playbackId
                 record
+                liveVideoAbr
                 ingestMode
                 pullSource {
                   sourceUriRedacted
@@ -11623,6 +11674,7 @@ class AsyncGraphQLClient(AsyncBaseClient):
                   streamId
                   platform
                   name
+                  videoChoice
                   targetUri
                   isEnabled
                   status
@@ -11726,6 +11778,7 @@ class AsyncGraphQLClient(AsyncBaseClient):
                 streamKey
                 playbackId
                 record
+                liveVideoAbr
                 ingestMode
                 pullSource {
                   sourceUriRedacted
@@ -11773,6 +11826,7 @@ class AsyncGraphQLClient(AsyncBaseClient):
                   streamId
                   platform
                   name
+                  videoChoice
                   targetUri
                   isEnabled
                   status
@@ -11883,6 +11937,7 @@ class AsyncGraphQLClient(AsyncBaseClient):
                 streamKey
                 playbackId
                 record
+                liveVideoAbr
                 ingestMode
                 pullSource {
                   sourceUriRedacted
@@ -11930,6 +11985,7 @@ class AsyncGraphQLClient(AsyncBaseClient):
                   streamId
                   platform
                   name
+                  videoChoice
                   targetUri
                   isEnabled
                   status
@@ -12060,6 +12116,7 @@ class AsyncGraphQLClient(AsyncBaseClient):
                 streamKey
                 playbackId
                 record
+                liveVideoAbr
                 ingestMode
                 pullSource {
                   sourceUriRedacted
@@ -12107,6 +12164,7 @@ class AsyncGraphQLClient(AsyncBaseClient):
                   streamId
                   platform
                   name
+                  videoChoice
                   targetUri
                   isEnabled
                   status
@@ -12206,6 +12264,7 @@ class AsyncGraphQLClient(AsyncBaseClient):
                 streamKey
                 playbackId
                 record
+                liveVideoAbr
                 ingestMode
                 pullSource {
                   sourceUriRedacted
@@ -12253,6 +12312,7 @@ class AsyncGraphQLClient(AsyncBaseClient):
                   streamId
                   platform
                   name
+                  videoChoice
                   targetUri
                   isEnabled
                   status
@@ -12454,6 +12514,7 @@ class AsyncGraphQLClient(AsyncBaseClient):
                 streamKey
                 playbackId
                 record
+                liveVideoAbr
                 ingestMode
                 pullSource {
                   sourceUriRedacted
@@ -12501,6 +12562,7 @@ class AsyncGraphQLClient(AsyncBaseClient):
                   streamId
                   platform
                   name
+                  videoChoice
                   targetUri
                   isEnabled
                   status
@@ -12849,6 +12911,7 @@ class AsyncGraphQLClient(AsyncBaseClient):
                 streamKey
                 playbackId
                 record
+                liveVideoAbr
                 ingestMode
                 pullSource {
                   sourceUriRedacted
@@ -12896,6 +12959,7 @@ class AsyncGraphQLClient(AsyncBaseClient):
                   streamId
                   platform
                   name
+                  videoChoice
                   targetUri
                   isEnabled
                   status
@@ -13097,6 +13161,7 @@ class AsyncGraphQLClient(AsyncBaseClient):
                 streamKey
                 playbackId
                 record
+                liveVideoAbr
                 ingestMode
                 pullSource {
                   sourceUriRedacted
@@ -13144,6 +13209,7 @@ class AsyncGraphQLClient(AsyncBaseClient):
                   streamId
                   platform
                   name
+                  videoChoice
                   targetUri
                   isEnabled
                   status
@@ -13253,6 +13319,7 @@ class AsyncGraphQLClient(AsyncBaseClient):
                 streamKey
                 playbackId
                 record
+                liveVideoAbr
                 ingestMode
                 pullSource {
                   sourceUriRedacted
@@ -13300,6 +13367,7 @@ class AsyncGraphQLClient(AsyncBaseClient):
                   streamId
                   platform
                   name
+                  videoChoice
                   targetUri
                   isEnabled
                   status
@@ -13402,6 +13470,7 @@ class AsyncGraphQLClient(AsyncBaseClient):
                 streamKey
                 playbackId
                 record
+                liveVideoAbr
                 ingestMode
                 pullSource {
                   sourceUriRedacted
@@ -13449,6 +13518,7 @@ class AsyncGraphQLClient(AsyncBaseClient):
                   streamId
                   platform
                   name
+                  videoChoice
                   targetUri
                   isEnabled
                   status
@@ -13565,6 +13635,7 @@ class AsyncGraphQLClient(AsyncBaseClient):
                 streamKey
                 playbackId
                 record
+                liveVideoAbr
                 ingestMode
                 pullSource {
                   sourceUriRedacted
@@ -13612,6 +13683,7 @@ class AsyncGraphQLClient(AsyncBaseClient):
                   streamId
                   platform
                   name
+                  videoChoice
                   targetUri
                   isEnabled
                   status
@@ -14034,6 +14106,7 @@ class AsyncGraphQLClient(AsyncBaseClient):
                 streamKey
                 playbackId
                 record
+                liveVideoAbr
                 ingestMode
                 pullSource {
                   sourceUriRedacted
@@ -14081,6 +14154,7 @@ class AsyncGraphQLClient(AsyncBaseClient):
                   streamId
                   platform
                   name
+                  videoChoice
                   targetUri
                   isEnabled
                   status
@@ -14206,6 +14280,7 @@ class AsyncGraphQLClient(AsyncBaseClient):
                   streamKey
                   playbackId
                   record
+                  liveVideoAbr
                   ingestMode
                   createdAt
                   updatedAt
@@ -14259,6 +14334,7 @@ class AsyncGraphQLClient(AsyncBaseClient):
                   streamKey
                   playbackId
                   record
+                  liveVideoAbr
                   ingestMode
                   createdAt
                   updatedAt
@@ -14298,6 +14374,7 @@ class AsyncGraphQLClient(AsyncBaseClient):
                   streamKey
                   playbackId
                   record
+                  liveVideoAbr
                   ingestMode
                   createdAt
                   updatedAt
@@ -14339,6 +14416,7 @@ class AsyncGraphQLClient(AsyncBaseClient):
                   streamKey
                   playbackId
                   record
+                  liveVideoAbr
                   ingestMode
                   createdAt
                   updatedAt
@@ -14388,6 +14466,7 @@ class AsyncGraphQLClient(AsyncBaseClient):
                   streamKey
                   playbackId
                   record
+                  liveVideoAbr
                   ingestMode
                   createdAt
                   updatedAt
@@ -14440,6 +14519,7 @@ class AsyncGraphQLClient(AsyncBaseClient):
                   streamKey
                   playbackId
                   record
+                  liveVideoAbr
                   ingestMode
                   createdAt
                   updatedAt
@@ -14507,6 +14587,7 @@ class AsyncGraphQLClient(AsyncBaseClient):
                   streamKey
                   playbackId
                   record
+                  liveVideoAbr
                   ingestMode
                   createdAt
                   updatedAt
@@ -14666,6 +14747,7 @@ class AsyncGraphQLClient(AsyncBaseClient):
                 streamKey
                 playbackId
                 record
+                liveVideoAbr
                 ingestMode
                 pullSource {
                   sourceUriRedacted
@@ -14713,6 +14795,7 @@ class AsyncGraphQLClient(AsyncBaseClient):
                   streamId
                   platform
                   name
+                  videoChoice
                   targetUri
                   isEnabled
                   status
@@ -14823,6 +14906,7 @@ class AsyncGraphQLClient(AsyncBaseClient):
                 streamKey
                 playbackId
                 record
+                liveVideoAbr
                 ingestMode
                 pullSource {
                   sourceUriRedacted
@@ -14870,6 +14954,7 @@ class AsyncGraphQLClient(AsyncBaseClient):
                   streamId
                   platform
                   name
+                  videoChoice
                   targetUri
                   isEnabled
                   status
@@ -14945,6 +15030,7 @@ class AsyncGraphQLClient(AsyncBaseClient):
                 streamKey
                 playbackId
                 record
+                liveVideoAbr
                 ingestMode
                 pullSource {
                   sourceUriRedacted
@@ -14992,6 +15078,7 @@ class AsyncGraphQLClient(AsyncBaseClient):
                   streamId
                   platform
                   name
+                  videoChoice
                   targetUri
                   isEnabled
                   status
@@ -15123,6 +15210,7 @@ class AsyncGraphQLClient(AsyncBaseClient):
                 streamKey
                 playbackId
                 record
+                liveVideoAbr
                 ingestMode
                 pullSource {
                   sourceUriRedacted
@@ -15170,6 +15258,7 @@ class AsyncGraphQLClient(AsyncBaseClient):
                   streamId
                   platform
                   name
+                  videoChoice
                   targetUri
                   isEnabled
                   status
@@ -15260,6 +15349,7 @@ class AsyncGraphQLClient(AsyncBaseClient):
                 streamKey
                 playbackId
                 record
+                liveVideoAbr
                 ingestMode
                 pullSource {
                   sourceUriRedacted
@@ -15307,6 +15397,7 @@ class AsyncGraphQLClient(AsyncBaseClient):
                   streamId
                   platform
                   name
+                  videoChoice
                   targetUri
                   isEnabled
                   status

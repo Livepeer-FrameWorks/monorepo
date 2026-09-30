@@ -57,7 +57,9 @@ const foghornInternalServerName = "foghorn.internal"
 //     and deactivation results.
 //   - Version 7 = reports the processing jobs it is running in Register, so Foghorn can re-dispatch the
 //     jobs a restarted sidecar lost (ProcessingJobInventoryProtocolMin on Foghorn).
-const controlProtocolVersion int32 = 7
+//   - Version 8 = honors the video choice carried by restream activation and passes the
+//     corresponding media policy to a capable Mist controller.
+const controlProtocolVersion int32 = 8
 
 // DeleteClipFunc is the function type for clip deletion
 type DeleteClipFunc func(clipHash string) (uint64, error)
@@ -3927,7 +3929,51 @@ func handleActivatePushTargets(logger logging.Logger, req *ipcpb.ActivatePushTar
 		report(false, "push inventory unavailable", outcomes...)
 		return
 	}
+	needsTrackParams := false
+	trackParamsSupported := true
+	trackPolicyBlocked := make(map[string]ipcpb.RestreamReason)
+	for _, target := range desired.byID {
+		if restreamIsRTMPURI(target.targetURI) {
+			needsTrackParams = true
+			break
+		}
+	}
+	if needsTrackParams {
+		supported, capabilityErr := mistClient.SupportsPushTrackParams()
+		trackParamsSupported = supported && capabilityErr == nil
+		if capabilityErr != nil || !supported {
+			reason := ipcpb.RestreamReason_RESTREAM_REASON_EDGE_UPGRADE_REQUIRED
+			if capabilityErr != nil {
+				reason = ipcpb.RestreamReason_RESTREAM_REASON_PROCESS_ERROR
+			}
+			for _, target := range validTargets {
+				if restreamIsRTMPURI(target.GetTargetUri()) &&
+					strings.TrimSpace(target.GetVideoChoice()) != "" && target.GetVideoChoice() != "AUTO" {
+					trackPolicyBlocked[target.GetTargetId()] = reason
+				}
+			}
+		}
+	}
 	live := livePushTargetURIs(pushes, req.GetStreamName())
+	for targetID, reason := range trackPolicyBlocked {
+		if reason != ipcpb.RestreamReason_RESTREAM_REASON_PROCESS_ERROR {
+			continue
+		}
+		if target, found := desired.byID[targetID]; found {
+			if _, active := findDesiredRestreamPush(pushes, req.GetStreamName(), target, !trackParamsSupported); active {
+				delete(trackPolicyBlocked, targetID)
+			}
+		}
+	}
+	if len(trackPolicyBlocked) > 0 && firstFailure == "" {
+		firstFailure = "Mist track selection unavailable"
+	}
+	pushByURI := make(map[string]mist.PushInfo, len(pushes))
+	for _, push := range pushes {
+		if push.StreamName == req.GetStreamName() {
+			pushByURI[push.TargetURI] = push
+		}
+	}
 	for _, push := range pushes {
 		if push.StreamName != req.GetStreamName() || !IsExternalRestreamURI(push.TargetURI) {
 			continue
@@ -3944,10 +3990,62 @@ func handleActivatePushTargets(logger logging.Logger, req *ipcpb.ActivatePushTar
 			continue
 		}
 		targetURI := target.targetURI
-		if live[targetURI] {
+		if reason, blocked := trackPolicyBlocked[target.targetID]; blocked {
+			if reason == ipcpb.RestreamReason_RESTREAM_REASON_EDGE_UPGRADE_REQUIRED && live[targetURI] {
+				if stopErr := mistClient.PushStop(pushByURI[targetURI].ID); stopErr != nil && firstFailure == "" {
+					firstFailure = "incompatible push could not be stopped"
+				}
+			}
 			continue
 		}
-		err := mistClient.PushStart(runtimeReq.StreamName, targetURI)
+		isRTMP := restreamIsRTMPURI(targetURI)
+		params := restreamTrackParams(target.platform, target.videoChoice)
+		if live[targetURI] {
+			if !isRTMP || restreamPushParamsMatch(pushByURI[targetURI].Params, params) ||
+				(!trackParamsSupported && target.videoChoice == "AUTO" && len(pushByURI[targetURI].Params) == 0) {
+				continue
+			}
+			if stopErr := mistClient.PushStop(pushByURI[targetURI].ID); stopErr != nil {
+				if firstFailure == "" {
+					firstFailure = "outdated push could not be stopped"
+				}
+				continue
+			}
+			deadline := time.Now().Add(5 * time.Second)
+			stopped := false
+			for time.Now().Before(deadline) {
+				remaining, listErr := mistClient.PushList()
+				if listErr != nil {
+					if firstFailure == "" {
+						firstFailure = "replacement push inventory unavailable"
+					}
+					break
+				}
+				stopped = true
+				for _, push := range remaining {
+					if push.ID == pushByURI[targetURI].ID {
+						stopped = false
+						break
+					}
+				}
+				if stopped {
+					break
+				}
+				time.Sleep(100 * time.Millisecond)
+			}
+			if !stopped {
+				if firstFailure == "" {
+					firstFailure = "outdated push has not stopped"
+				}
+				continue
+			}
+		}
+		var err error
+		if isRTMP && trackParamsSupported {
+			err = mistClient.PushStartWithParams(runtimeReq.StreamName, targetURI, params)
+		} else {
+			err = mistClient.PushStart(runtimeReq.StreamName, targetURI)
+		}
 		if err != nil {
 			logger.WithFields(logging.Fields{
 				"stream_name": req.StreamName,
@@ -3967,13 +4065,14 @@ func handleActivatePushTargets(logger logging.Logger, req *ipcpb.ActivatePushTar
 	if confirmErr != nil {
 		firstFailure = "post-reconcile push inventory unavailable"
 	} else {
-		nowLive := livePushTargetURIs(confirm, req.StreamName)
 		for _, target := range desired.byID {
 			if _, retryable := retryableTargetIDs[target.targetID]; retryable {
 				continue
 			}
-			uri := target.targetURI
-			if !nowLive[uri] {
+			if _, blocked := trackPolicyBlocked[target.targetID]; blocked {
+				continue
+			}
+			if _, found := findDesiredRestreamPush(confirm, req.StreamName, target, !trackParamsSupported); !found {
 				firstFailure = "push process not created for " + target.targetID
 				break
 			}
@@ -4033,11 +4132,26 @@ func handleActivatePushTargets(logger logging.Logger, req *ipcpb.ActivatePushTar
 	outcomes = append(outcomes, rejectedOutcomes...)
 	outcomes = append(outcomes, configurationOutcomes...)
 	outcomes = append(outcomes, retryableOutcomes...)
+	for _, target := range validTargets {
+		if reason, blocked := trackPolicyBlocked[target.GetTargetId()]; blocked {
+			message := "Mist track selection unavailable"
+			if reason == ipcpb.RestreamReason_RESTREAM_REASON_EDGE_UPGRADE_REQUIRED {
+				message = "edge Mist upgrade required for restream video selection"
+				sendActivationFailureStatus(logger, req, target, reason, message)
+			} else {
+				sendActivationRetryStatus(logger, req, target, reason, message)
+			}
+			outcomes = append(outcomes, activationFailureOutcome(target, reason, message))
+		}
+	}
 	failedReports := make([]restreamTarget, 0, len(desired.byID))
 	retryReports := make([]restreamTarget, 0, len(desired.byID))
 	if confirmErr != nil {
 		for _, target := range desired.byID {
 			if _, retryable := retryableTargetIDs[target.targetID]; retryable {
+				continue
+			}
+			if _, blocked := trackPolicyBlocked[target.targetID]; blocked {
 				continue
 			}
 			outcomes = append(outcomes, &ipcpb.PushTargetConvergence{
@@ -4048,22 +4162,16 @@ func handleActivatePushTargets(logger logging.Logger, req *ipcpb.ActivatePushTar
 			retryReports = append(retryReports, target)
 		}
 	} else {
-		nowLive := livePushTargetURIs(confirm, req.GetStreamName())
 		for _, target := range desired.byID {
 			if _, retryable := retryableTargetIDs[target.targetID]; retryable {
 				continue
 			}
-			uri := target.targetURI
-			if nowLive[uri] {
-				mistPushID := int64(0)
-				for _, push := range confirm {
-					if push.StreamName == req.GetStreamName() && strings.TrimSpace(push.TargetURI) == uri {
-						mistPushID = int64(push.ID)
-						break
-					}
-				}
+			if _, blocked := trackPolicyBlocked[target.targetID]; blocked {
+				continue
+			}
+			if push, found := findDesiredRestreamPush(confirm, req.GetStreamName(), target, !trackParamsSupported); found {
 				outcomes = append(outcomes, &ipcpb.PushTargetConvergence{
-					TargetId: target.targetID, MistPushId: mistPushID, Active: true,
+					TargetId: target.targetID, MistPushId: int64(push.ID), Active: true,
 					Reason: ipcpb.RestreamReason_RESTREAM_REASON_CONNECTED,
 				})
 				continue

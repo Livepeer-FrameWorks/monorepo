@@ -200,7 +200,8 @@ type Processor struct {
 	// sendActivateLocal overrides the local-only activation dispatch (tests; production nil).
 	sendActivateLocal func(ctx context.Context, nodeID string, req *ipcpb.ActivatePushTargets) error
 	// restreamAttemptSupport overrides sidecar capability lookup (tests; production nil).
-	restreamAttemptSupport func(nodeID string) error
+	restreamAttemptSupport     func(nodeID string) error
+	restreamTrackPolicySupport func(nodeID string, req *ipcpb.ActivatePushTargets) error
 	// marshalAdmissionEffect is the serialization boundary for the durable admission obligation.
 	// Tests inject failures here to prove a post-mint denial releases its pending generation.
 	marshalAdmissionEffect func(proto.Message) ([]byte, error)
@@ -287,7 +288,7 @@ func (p *Processor) HandleMediaAuthorityApply(ctx context.Context, result locala
 		for _, target := range secret.GetPushTargets() {
 			desired.Targets = append(desired.Targets, &ipcpb.PushTargetSpec{
 				TargetId: target.GetTargetId(), TargetUri: target.GetTargetUri(),
-				Name: target.GetName(), Platform: target.GetPlatform(),
+				Name: target.GetName(), Platform: target.GetPlatform(), VideoChoice: target.GetVideoChoice(),
 			})
 		}
 	}
@@ -2229,6 +2230,7 @@ func (p *Processor) handlePushRewrite(trigger *ipcpb.MistTrigger) (_ string, _ b
 					for _, t := range targets {
 						specs = append(specs, &ipcpb.PushTargetSpec{
 							TargetId: t.GetId(), TargetUri: t.GetTargetUri(), Name: t.GetName(), Platform: t.GetPlatform(),
+							VideoChoice: t.GetVideoChoice(),
 						})
 					}
 					targetRevision := pushTargetActivationRevision(localAuthority.object.Version)
@@ -4049,7 +4051,8 @@ func (p *Processor) handleRestreamStatus(trigger *ipcpb.MistTrigger) (string, bo
 		switch report.GetReason() {
 		case ipcpb.RestreamReason_RESTREAM_REASON_COMPLETED,
 			ipcpb.RestreamReason_RESTREAM_REASON_NETWORK_ERROR,
-			ipcpb.RestreamReason_RESTREAM_REASON_PROCESS_ERROR:
+			ipcpb.RestreamReason_RESTREAM_REASON_PROCESS_ERROR,
+			ipcpb.RestreamReason_RESTREAM_REASON_MEDIA_SELECTION_FAILED:
 			rearmed, err := control.RearmAdmissionPushTargetsAfterRuntimeEnd(
 				context.Background(), report.GetTenantId(), mist.ExtractInternalName(report.GetStreamName()),
 				report.GetSourceGeneration(), report.GetTargetRevision(),
@@ -4899,12 +4902,52 @@ func (p *Processor) ApplyAdmissionEffect(ctx context.Context, effect control.Adm
 				legs.PoisonNote = appendPoisonNote(legs.PoisonNote, "push-target payload undecodable: "+err.Error())
 			} else {
 				activation.SourceGeneration = effect.SourceGeneration
-				checkAttemptSupport := control.CheckLocalRestreamAttemptSupport
+				attemptSupport := control.CheckLocalRestreamAttemptSupport
+				policySupport := control.CheckLocalRestreamTrackPolicySupport
 				if p.restreamAttemptSupport != nil {
-					checkAttemptSupport = p.restreamAttemptSupport
+					attemptSupport = p.restreamAttemptSupport
+				}
+				if p.restreamTrackPolicySupport != nil {
+					policySupport = p.restreamTrackPolicySupport
+				}
+				var policySubsetErr error
+				if attemptSupport(effect.NodeID) == nil &&
+					status.Code(policySupport(effect.NodeID, &activation)) == codes.FailedPrecondition {
+					compatible := make([]*ipcpb.PushTargetSpec, 0, len(activation.GetTargets()))
+					for _, target := range activation.GetTargets() {
+						uri := strings.ToLower(strings.TrimSpace(target.GetTargetUri()))
+						choice := strings.TrimSpace(target.GetVideoChoice())
+						if (strings.HasPrefix(uri, "rtmp://") || strings.HasPrefix(uri, "rtmps://")) && choice != "" && choice != "AUTO" {
+							message := "edge sidecar upgrade required for restream video selection"
+							policySubsetErr = errors.Join(policySubsetErr, p.releaseRestreamCapacity(pushTargetInfo{
+								TargetID: target.GetTargetId(), TenantID: effect.TenantID, NodeID: effect.NodeID,
+								SourceGeneration: effect.SourceGeneration, TargetRevision: activation.GetTargetRevision(),
+								MaxViewers: activation.GetMaxViewers(),
+							}))
+							policySubsetErr = errors.Join(policySubsetErr, p.updatePushTargetStatusByID(
+								target.GetTargetId(), effect.TenantID, activation.GetStreamName(), "failed",
+								pushstatusoutbox.ReasonEdgeUpgradeRequired, &message, time.Now().UnixMilli(),
+							))
+							if policySubsetErr == nil {
+								retirePushTargetID(activation.GetStreamName(), target.GetTargetId(), effect.SourceGeneration,
+									activation.GetTargetRevision(), activation.GetActivationAttempt())
+							}
+							continue
+						}
+						compatible = append(compatible, target)
+					}
+					activation.Targets = compatible
+				}
+				checkAttemptSupport := func(nodeID string) error {
+					if err := attemptSupport(nodeID); err != nil {
+						return err
+					}
+					return policySupport(nodeID, &activation)
 				}
 				supportErr := checkAttemptSupport(effect.NodeID)
-				if status.Code(supportErr) == codes.FailedPrecondition {
+				if policySubsetErr != nil {
+					effectErr = errors.Join(effectErr, policySubsetErr)
+				} else if status.Code(supportErr) == codes.FailedPrecondition {
 					message := "edge sidecar upgrade required for restream activation"
 					var releaseErr error
 					for _, target := range activation.GetTargets() {
@@ -4952,6 +4995,7 @@ func (p *Processor) ApplyAdmissionEffect(ctx context.Context, effect control.Adm
 						for _, spec := range activation.GetTargets() {
 							targets = append(targets, &commodorepb.PushTargetInternal{
 								Id: spec.GetTargetId(), TargetUri: spec.GetTargetUri(), Name: spec.GetName(), Platform: spec.GetPlatform(),
+								VideoChoice: spec.GetVideoChoice(),
 							})
 						}
 						trackPushTargetsForGeneration(
@@ -7434,6 +7478,10 @@ func restreamReasonCode(reason ipcpb.RestreamReason) string {
 		return pushstatusoutbox.ReasonCapacityExhausted
 	case ipcpb.RestreamReason_RESTREAM_REASON_CONFIGURATION_ERROR:
 		return pushstatusoutbox.ReasonConfigurationError
+	case ipcpb.RestreamReason_RESTREAM_REASON_MEDIA_SELECTION_FAILED:
+		return pushstatusoutbox.ReasonMediaSelectionFailed
+	case ipcpb.RestreamReason_RESTREAM_REASON_EDGE_UPGRADE_REQUIRED:
+		return pushstatusoutbox.ReasonEdgeUpgradeRequired
 	case ipcpb.RestreamReason_RESTREAM_REASON_STOPPED:
 		return pushstatusoutbox.ReasonStopped
 	default:
@@ -7446,6 +7494,7 @@ func restreamReasonIsTerminal(reason ipcpb.RestreamReason) bool {
 	case ipcpb.RestreamReason_RESTREAM_REASON_DESTINATION_REJECTED,
 		ipcpb.RestreamReason_RESTREAM_REASON_CAPACITY_EXHAUSTED,
 		ipcpb.RestreamReason_RESTREAM_REASON_CONFIGURATION_ERROR,
+		ipcpb.RestreamReason_RESTREAM_REASON_EDGE_UPGRADE_REQUIRED,
 		ipcpb.RestreamReason_RESTREAM_REASON_STOPPED:
 		return true
 	default:

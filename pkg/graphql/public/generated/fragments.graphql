@@ -28,6 +28,7 @@ fragment ArtifactEventDefaultFields on ArtifactEvent {
     streamKey
     playbackId
     record
+    liveVideoAbr
     ingestMode
     pullSource {
       sourceUriRedacted
@@ -75,6 +76,7 @@ fragment ArtifactEventDefaultFields on ArtifactEvent {
       streamId
       platform
       name
+      videoChoice
       targetUri
       isEnabled
       status
@@ -128,6 +130,7 @@ fragment ArtifactEventInNodeDefaultFields on ArtifactEvent {
     streamKey
     playbackId
     record
+    liveVideoAbr
     ingestMode
     pullSource {
       sourceUriRedacted
@@ -175,6 +178,7 @@ fragment ArtifactEventInNodeDefaultFields on ArtifactEvent {
       streamId
       platform
       name
+      videoChoice
       targetUri
       isEnabled
       status
@@ -226,6 +230,7 @@ fragment ArtifactStateDefaultFields on ArtifactState {
     streamKey
     playbackId
     record
+    liveVideoAbr
     ingestMode
     pullSource {
       sourceUriRedacted
@@ -273,6 +278,7 @@ fragment ArtifactStateDefaultFields on ArtifactState {
       streamId
       platform
       name
+      videoChoice
       targetUri
       isEnabled
       status
@@ -768,6 +774,7 @@ fragment ClientMetrics5mDefaultFields on ClientMetrics5m {
     streamKey
     playbackId
     record
+    liveVideoAbr
     ingestMode
     pullSource {
       sourceUriRedacted
@@ -815,6 +822,7 @@ fragment ClientMetrics5mDefaultFields on ClientMetrics5m {
       streamId
       platform
       name
+      videoChoice
       targetUri
       isEnabled
       status
@@ -873,6 +881,7 @@ fragment ClipInNodeDefaultFields on Clip {
     streamKey
     playbackId
     record
+    liveVideoAbr
     ingestMode
     pullSource {
       sourceUriRedacted
@@ -920,6 +929,7 @@ fragment ClipInNodeDefaultFields on Clip {
       streamId
       platform
       name
+      videoChoice
       targetUri
       isEnabled
       status
@@ -1160,6 +1170,7 @@ fragment ConnectionEventDefaultFields on ConnectionEvent {
     streamKey
     playbackId
     record
+    liveVideoAbr
     ingestMode
     pullSource {
       sourceUriRedacted
@@ -1207,6 +1218,7 @@ fragment ConnectionEventDefaultFields on ConnectionEvent {
       streamId
       platform
       name
+      videoChoice
       targetUri
       isEnabled
       status
@@ -1272,6 +1284,7 @@ fragment ConnectionEventInNodeDefaultFields on ConnectionEvent {
     streamKey
     playbackId
     record
+    liveVideoAbr
     ingestMode
     pullSource {
       sourceUriRedacted
@@ -1319,6 +1332,7 @@ fragment ConnectionEventInNodeDefaultFields on ConnectionEvent {
       streamId
       platform
       name
+      videoChoice
       targetUri
       isEnabled
       status
@@ -1580,6 +1594,7 @@ fragment GeographicDistributionDefaultFields on GeographicDistribution {
     streamKey
     playbackId
     record
+    liveVideoAbr
     ingestMode
     pullSource {
       sourceUriRedacted
@@ -1627,6 +1642,7 @@ fragment GeographicDistributionDefaultFields on GeographicDistribution {
       streamId
       platform
       name
+      videoChoice
       targetUri
       isEnabled
       status
@@ -2645,6 +2661,7 @@ fragment ProcessingUsageRecordDefaultFields on ProcessingUsageRecord {
     streamKey
     playbackId
     record
+    liveVideoAbr
     ingestMode
     pullSource {
       sourceUriRedacted
@@ -2692,6 +2709,7 @@ fragment ProcessingUsageRecordDefaultFields on ProcessingUsageRecord {
       streamId
       platform
       name
+      videoChoice
       targetUri
       isEnabled
       status
@@ -2782,6 +2800,7 @@ fragment ProcessingUsageRecordInNodeDefaultFields on ProcessingUsageRecord {
     streamKey
     playbackId
     record
+    liveVideoAbr
     ingestMode
     pullSource {
       sourceUriRedacted
@@ -2829,6 +2848,7 @@ fragment ProcessingUsageRecordInNodeDefaultFields on ProcessingUsageRecord {
       streamId
       platform
       name
+      videoChoice
       targetUri
       isEnabled
       status
@@ -2934,6 +2954,7 @@ fragment QualityTierDailyDefaultFields on QualityTierDaily {
     streamKey
     playbackId
     record
+    liveVideoAbr
     ingestMode
     pullSource {
       sourceUriRedacted
@@ -2981,6 +3002,7 @@ fragment QualityTierDailyDefaultFields on QualityTierDaily {
       streamId
       platform
       name
+      videoChoice
       targetUri
       isEnabled
       status
@@ -3040,6 +3062,7 @@ fragment RebufferingEventDefaultFields on RebufferingEvent {
     streamKey
     playbackId
     record
+    liveVideoAbr
     ingestMode
     pullSource {
       sourceUriRedacted
@@ -3087,6 +3110,7 @@ fragment RebufferingEventDefaultFields on RebufferingEvent {
       streamId
       platform
       name
+      videoChoice
       targetUri
       isEnabled
       status
@@ -3144,6 +3168,7 @@ fragment RoutingEventDefaultFields on RoutingEvent {
     streamKey
     playbackId
     record
+    liveVideoAbr
     ingestMode
     pullSource {
       sourceUriRedacted
@@ -3191,6 +3216,7 @@ fragment RoutingEventDefaultFields on RoutingEvent {
       streamId
       platform
       name
+      videoChoice
       targetUri
       isEnabled
       status
@@ -3427,6 +3453,7 @@ fragment StorageEventDefaultFields on StorageEvent {
     streamKey
     playbackId
     record
+    liveVideoAbr
     ingestMode
     pullSource {
       sourceUriRedacted
@@ -3474,6 +3501,7 @@ fragment StorageEventDefaultFields on StorageEvent {
       streamId
       platform
       name
+      videoChoice
       targetUri
       isEnabled
       status
@@ -3528,6 +3556,7 @@ fragment StorageEventInNodeDefaultFields on StorageEvent {
     streamKey
     playbackId
     record
+    liveVideoAbr
     ingestMode
     pullSource {
       sourceUriRedacted
@@ -3575,6 +3604,7 @@ fragment StorageEventInNodeDefaultFields on StorageEvent {
       streamId
       platform
       name
+      videoChoice
       targetUri
       isEnabled
       status
@@ -3644,6 +3674,7 @@ fragment StreamAnalyticsDailyDefaultFields on StreamAnalyticsDaily {
     streamKey
     playbackId
     record
+    liveVideoAbr
     ingestMode
     pullSource {
       sourceUriRedacted
@@ -3691,6 +3722,7 @@ fragment StreamAnalyticsDailyDefaultFields on StreamAnalyticsDaily {
       streamId
       platform
       name
+      videoChoice
       targetUri
       isEnabled
       status
@@ -3735,6 +3767,7 @@ fragment StreamAnalyticsSummaryDefaultFields on StreamAnalyticsSummary {
     streamKey
     playbackId
     record
+    liveVideoAbr
     ingestMode
     pullSource {
       sourceUriRedacted
@@ -3782,6 +3815,7 @@ fragment StreamAnalyticsSummaryDefaultFields on StreamAnalyticsSummary {
       streamId
       platform
       name
+      videoChoice
       targetUri
       isEnabled
       status
@@ -3860,6 +3894,7 @@ fragment StreamConnectionHourlyDefaultFields on StreamConnectionHourly {
     streamKey
     playbackId
     record
+    liveVideoAbr
     ingestMode
     pullSource {
       sourceUriRedacted
@@ -3907,6 +3942,7 @@ fragment StreamConnectionHourlyDefaultFields on StreamConnectionHourly {
       streamId
       platform
       name
+      videoChoice
       targetUri
       isEnabled
       status
@@ -3951,6 +3987,7 @@ fragment StreamEventDefaultFields on StreamEvent {
     streamKey
     playbackId
     record
+    liveVideoAbr
     ingestMode
     pullSource {
       sourceUriRedacted
@@ -3998,6 +4035,7 @@ fragment StreamEventDefaultFields on StreamEvent {
       streamId
       platform
       name
+      videoChoice
       targetUri
       isEnabled
       status
@@ -4073,6 +4111,7 @@ fragment StreamEventInNodeDefaultFields on StreamEvent {
     streamKey
     playbackId
     record
+    liveVideoAbr
     ingestMode
     pullSource {
       sourceUriRedacted
@@ -4120,6 +4159,7 @@ fragment StreamEventInNodeDefaultFields on StreamEvent {
       streamId
       platform
       name
+      videoChoice
       targetUri
       isEnabled
       status
@@ -4227,6 +4267,7 @@ fragment StreamHealthMetricDefaultFields on StreamHealthMetric {
     streamKey
     playbackId
     record
+    liveVideoAbr
     ingestMode
     pullSource {
       sourceUriRedacted
@@ -4274,6 +4315,7 @@ fragment StreamHealthMetricDefaultFields on StreamHealthMetric {
       streamId
       platform
       name
+      videoChoice
       targetUri
       isEnabled
       status
@@ -4341,6 +4383,7 @@ fragment StreamHealthMetricInNodeDefaultFields on StreamHealthMetric {
     streamKey
     playbackId
     record
+    liveVideoAbr
     ingestMode
     pullSource {
       sourceUriRedacted
@@ -4388,6 +4431,7 @@ fragment StreamHealthMetricInNodeDefaultFields on StreamHealthMetric {
       streamId
       platform
       name
+      videoChoice
       targetUri
       isEnabled
       status
@@ -4462,6 +4506,7 @@ fragment StreamInNodeDefaultFields on Stream {
   streamKey
   playbackId
   record
+  liveVideoAbr
   ingestMode
   pullSource {
     sourceUriRedacted
@@ -4513,6 +4558,7 @@ fragment StreamInNodeDefaultFields on Stream {
     streamId
     platform
     name
+    videoChoice
     targetUri
     isEnabled
     status
@@ -4664,6 +4710,7 @@ fragment TenantEventDefaultFields on TenantEvent {
       streamKey
       playbackId
       record
+      liveVideoAbr
       ingestMode
       createdAt
       updatedAt
@@ -4717,6 +4764,7 @@ fragment TenantEventDefaultFields on TenantEvent {
       streamKey
       playbackId
       record
+      liveVideoAbr
       ingestMode
       createdAt
       updatedAt
@@ -4756,6 +4804,7 @@ fragment TenantEventDefaultFields on TenantEvent {
       streamKey
       playbackId
       record
+      liveVideoAbr
       ingestMode
       createdAt
       updatedAt
@@ -4797,6 +4846,7 @@ fragment TenantEventDefaultFields on TenantEvent {
       streamKey
       playbackId
       record
+      liveVideoAbr
       ingestMode
       createdAt
       updatedAt
@@ -4846,6 +4896,7 @@ fragment TenantEventDefaultFields on TenantEvent {
       streamKey
       playbackId
       record
+      liveVideoAbr
       ingestMode
       createdAt
       updatedAt
@@ -4898,6 +4949,7 @@ fragment TenantEventDefaultFields on TenantEvent {
       streamKey
       playbackId
       record
+      liveVideoAbr
       ingestMode
       createdAt
       updatedAt
@@ -4965,6 +5017,7 @@ fragment TenantEventDefaultFields on TenantEvent {
       streamKey
       playbackId
       record
+      liveVideoAbr
       ingestMode
       createdAt
       updatedAt
@@ -5054,6 +5107,7 @@ fragment TrackListEventDefaultFields on TrackListEvent {
     streamKey
     playbackId
     record
+    liveVideoAbr
     ingestMode
     pullSource {
       sourceUriRedacted
@@ -5101,6 +5155,7 @@ fragment TrackListEventDefaultFields on TrackListEvent {
       streamId
       platform
       name
+      videoChoice
       targetUri
       isEnabled
       status
@@ -5161,6 +5216,7 @@ fragment TrackListEventInNodeDefaultFields on TrackListEvent {
     streamKey
     playbackId
     record
+    liveVideoAbr
     ingestMode
     pullSource {
       sourceUriRedacted
@@ -5208,6 +5264,7 @@ fragment TrackListEventInNodeDefaultFields on TrackListEvent {
       streamId
       platform
       name
+      videoChoice
       targetUri
       isEnabled
       status
@@ -5267,6 +5324,7 @@ fragment TrackListUpdateDefaultFields on TrackListUpdate {
     streamKey
     playbackId
     record
+    liveVideoAbr
     ingestMode
     pullSource {
       sourceUriRedacted
@@ -5314,6 +5372,7 @@ fragment TrackListUpdateDefaultFields on TrackListUpdate {
       streamId
       platform
       name
+      videoChoice
       targetUri
       isEnabled
       status
@@ -5391,6 +5450,7 @@ fragment ViewerCountBucketDefaultFields on ViewerCountBucket {
     streamKey
     playbackId
     record
+    liveVideoAbr
     ingestMode
     pullSource {
       sourceUriRedacted
@@ -5438,6 +5498,7 @@ fragment ViewerCountBucketDefaultFields on ViewerCountBucket {
       streamId
       platform
       name
+      videoChoice
       targetUri
       isEnabled
       status
@@ -5496,6 +5557,7 @@ fragment ViewerGeographicDefaultFields on ViewerGeographic {
     streamKey
     playbackId
     record
+    liveVideoAbr
     ingestMode
     pullSource {
       sourceUriRedacted
@@ -5543,6 +5605,7 @@ fragment ViewerGeographicDefaultFields on ViewerGeographic {
       streamId
       platform
       name
+      videoChoice
       targetUri
       isEnabled
       status
@@ -5596,6 +5659,7 @@ fragment ViewerHoursHourlyDefaultFields on ViewerHoursHourly {
     streamKey
     playbackId
     record
+    liveVideoAbr
     ingestMode
     pullSource {
       sourceUriRedacted
@@ -5643,6 +5707,7 @@ fragment ViewerHoursHourlyDefaultFields on ViewerHoursHourly {
       streamId
       platform
       name
+      videoChoice
       targetUri
       isEnabled
       status
@@ -5690,6 +5755,7 @@ fragment ViewerHoursHourlyInNodeDefaultFields on ViewerHoursHourly {
     streamKey
     playbackId
     record
+    liveVideoAbr
     ingestMode
     pullSource {
       sourceUriRedacted
@@ -5737,6 +5803,7 @@ fragment ViewerHoursHourlyInNodeDefaultFields on ViewerHoursHourly {
       streamId
       platform
       name
+      videoChoice
       targetUri
       isEnabled
       status
@@ -5783,6 +5850,7 @@ fragment ViewerMetricsDefaultFields on ViewerMetrics {
     streamKey
     playbackId
     record
+    liveVideoAbr
     ingestMode
     pullSource {
       sourceUriRedacted
@@ -5830,6 +5898,7 @@ fragment ViewerMetricsDefaultFields on ViewerMetrics {
       streamId
       platform
       name
+      videoChoice
       targetUri
       isEnabled
       status
@@ -5889,6 +5958,7 @@ fragment ViewerSessionDefaultFields on ViewerSession {
     streamKey
     playbackId
     record
+    liveVideoAbr
     ingestMode
     pullSource {
       sourceUriRedacted
@@ -5936,6 +6006,7 @@ fragment ViewerSessionDefaultFields on ViewerSession {
       streamId
       platform
       name
+      videoChoice
       targetUri
       isEnabled
       status
@@ -5995,6 +6066,7 @@ fragment ViewerSessionInNodeDefaultFields on ViewerSession {
     streamKey
     playbackId
     record
+    liveVideoAbr
     ingestMode
     pullSource {
       sourceUriRedacted
@@ -6042,6 +6114,7 @@ fragment ViewerSessionInNodeDefaultFields on ViewerSession {
       streamId
       platform
       name
+      videoChoice
       targetUri
       isEnabled
       status

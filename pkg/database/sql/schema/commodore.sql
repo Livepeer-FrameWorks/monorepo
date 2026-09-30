@@ -244,6 +244,8 @@ CREATE TABLE IF NOT EXISTS commodore.streams (
     
     -- ===== DVR RECORDING =====
     is_recording_enabled BOOLEAN DEFAULT FALSE,
+    live_video_abr VARCHAR(16) NOT NULL DEFAULT 'INHERIT'
+        CONSTRAINT chk_streams_live_video_abr CHECK (live_video_abr IN ('INHERIT', 'OFF')),
 
     -- ===== SKIPPER MONITORING =====
     -- Per-stream override for Skipper AI health monitoring. Tri-state:
@@ -465,6 +467,8 @@ CREATE TABLE IF NOT EXISTS commodore.push_targets (
     name VARCHAR(255) NOT NULL,                   -- User-friendly label ("My Twitch")
     target_uri TEXT NOT NULL,                     -- versioned encrypted rtmp://live.twitch.tv/app/{stream_key}
     is_enabled BOOLEAN DEFAULT TRUE,
+    video_choice VARCHAR(24) NOT NULL DEFAULT 'AUTO'
+        CONSTRAINT chk_push_targets_video_choice CHECK (video_choice IN ('AUTO', 'SOURCE_VIDEO', 'PROCESSED_VIDEO')),
 
     -- ===== RUNTIME STATE =====
     -- Updated by Foghorn when PUSH_OUT_START / PUSH_END triggers fire
@@ -1924,6 +1928,7 @@ BEGIN
        AND OLD.playback_id IS NOT DISTINCT FROM NEW.playback_id
        AND OLD.stream_key IS NOT DISTINCT FROM NEW.stream_key
        AND OLD.ingest_mode IS NOT DISTINCT FROM NEW.ingest_mode
+       AND OLD.live_video_abr IS NOT DISTINCT FROM NEW.live_video_abr
        AND OLD.always_on IS NOT DISTINCT FROM NEW.always_on
        AND OLD.is_recording_enabled IS NOT DISTINCT FROM NEW.is_recording_enabled
        AND OLD.requires_auth IS NOT DISTINCT FROM NEW.requires_auth
@@ -1942,7 +1947,7 @@ $$;
 
 CREATE OR REPLACE TRIGGER trg_live_stream_media_authority
 AFTER INSERT OR DELETE OR UPDATE OF tenant_id, user_id, internal_name, playback_id, stream_key,
-    ingest_mode, always_on, is_recording_enabled, requires_auth, playback_policy,
+    ingest_mode, live_video_abr, always_on, is_recording_enabled, requires_auth, playback_policy,
     playback_webhook_secret_enc, active_ingest_cluster_id, deleted_at
 ON commodore.streams
 FOR EACH ROW EXECUTE FUNCTION commodore.live_stream_media_authority_changed();
@@ -1977,7 +1982,7 @@ ON commodore.stream_mist_sources
 FOR EACH ROW EXECUTE FUNCTION commodore.live_stream_child_media_authority_changed('native_source_changed');
 
 CREATE OR REPLACE TRIGGER trg_push_target_media_authority
-AFTER INSERT OR DELETE OR UPDATE OF tenant_id, stream_id, platform, name, target_uri, is_enabled
+AFTER INSERT OR DELETE OR UPDATE OF tenant_id, stream_id, platform, name, target_uri, is_enabled, video_choice
 ON commodore.push_targets
 FOR EACH ROW EXECUTE FUNCTION commodore.live_stream_child_media_authority_changed('push_target_changed');
 

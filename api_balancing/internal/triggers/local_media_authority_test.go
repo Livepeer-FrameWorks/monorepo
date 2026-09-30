@@ -35,6 +35,18 @@ func localPayloadDigest(payload []byte) []byte {
 	return digest[:]
 }
 
+func TestSamePushTargetsDetectsVideoChoiceChange(t *testing.T) {
+	local := []*mediaauthoritypb.PushTargetSecret{{TargetId: "target", TargetUri: "rtmp://example.test/live/key", VideoChoice: "AUTO"}}
+	connected := []*commodorepb.PushTargetInternal{{Id: "target", TargetUri: "rtmp://example.test/live/key", VideoChoice: "SOURCE_VIDEO"}}
+	if samePushTargets(local, connected) {
+		t.Fatal("a changed video choice must invalidate the signed local decision")
+	}
+	connected[0].VideoChoice = "AUTO"
+	if !samePushTargets(local, connected) {
+		t.Fatal("identical target settings should preserve the signed local decision")
+	}
+}
+
 // admitViewerPlacementForTest answers the viewer placement seam for fixtures whose
 // subject is resolution rather than policy. There is no unenforced viewer path, so
 // the decision still has to be bound to the connection it was asked about: it is

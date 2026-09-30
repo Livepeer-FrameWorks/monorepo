@@ -4,6 +4,7 @@
   import { Input } from "$lib/components/ui/input";
   import { Label } from "$lib/components/ui/label";
   import { Checkbox } from "$lib/components/ui/checkbox";
+  import { Select, SelectContent, SelectItem, SelectTrigger } from "$lib/components/ui/select";
   import {
     Dialog,
     DialogContent,
@@ -20,29 +21,40 @@
     targetUri: string;
     isEnabled: boolean;
     platform?: string | null;
+    videoChoice?: string | null;
   }
 
   let {
     open = $bindable(false),
     target = null,
     loading = false,
+    liveVideoAbr = "INHERIT",
     onUpdate,
   }: {
     open: boolean;
     target: PushTarget | null;
     loading: boolean;
-    onUpdate?: (data: { name?: string; targetUri?: string; isEnabled?: boolean }) => void;
+    liveVideoAbr?: string;
+    onUpdate?: (data: {
+      name?: string;
+      targetUri?: string;
+      isEnabled?: boolean;
+      videoChoice?: string;
+    }) => void;
   } = $props();
 
   let name = $state("");
   let targetUri = $state("");
   let isEnabled = $state(true);
+  let videoChoice = $state("AUTO");
+  let isSrt = $derived(targetUri.trim().toLowerCase().startsWith("srt://"));
 
   $effect(() => {
     if (open && target) {
       name = target.name;
       targetUri = target.targetUri;
       isEnabled = target.isEnabled;
+      videoChoice = target.videoChoice ?? "AUTO";
     }
   });
 
@@ -50,10 +62,18 @@
 
   async function handleSubmit() {
     if (!isValid || !target) return;
-    const updates: { name?: string; targetUri?: string; isEnabled?: boolean } = {};
+    const updates: {
+      name?: string;
+      targetUri?: string;
+      isEnabled?: boolean;
+      videoChoice?: string;
+    } = {};
     if (name.trim() !== target.name) updates.name = name.trim();
     if (targetUri.trim() !== target.targetUri) updates.targetUri = targetUri.trim();
     if (isEnabled !== target.isEnabled) updates.isEnabled = isEnabled;
+    const desiredVideoChoice = isSrt ? "AUTO" : videoChoice;
+    if (desiredVideoChoice !== (target.videoChoice ?? "AUTO"))
+      updates.videoChoice = desiredVideoChoice;
     if (Object.keys(updates).length > 0) {
       await onUpdate?.(updates);
     } else {
@@ -105,6 +125,43 @@
         <p class="text-xs text-muted-foreground/70">
           Supports rtmp://, rtmps://, and srt:// protocols
         </p>
+      </div>
+
+      <div class="flex items-start space-x-2">
+        {#if !isSrt}
+          <div class="w-full space-y-2">
+            <Label for="editVideoChoice" class="text-sm font-medium text-foreground"
+              >Video track</Label
+            >
+            <Select
+              value={videoChoice}
+              onValueChange={(value) => (videoChoice = value)}
+              type="single"
+            >
+              <SelectTrigger id="editVideoChoice" class="w-full">
+                {videoChoice === "SOURCE_VIDEO"
+                  ? "Source video"
+                  : videoChoice === "PROCESSED_VIDEO"
+                    ? "Processed video"
+                    : "Automatic (recommended)"}
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="AUTO">Automatic (recommended)</SelectItem>
+                <SelectItem value="SOURCE_VIDEO">Source video only</SelectItem>
+                <SelectItem value="PROCESSED_VIDEO">Processed video only</SelectItem>
+              </SelectContent>
+            </Select>
+            <p class="text-xs text-muted-foreground/70">
+              Automatic uses source video when compatible and a rendition when required by the
+              destination.
+            </p>
+            {#if liveVideoAbr === "OFF" && videoChoice === "PROCESSED_VIDEO"}
+              <p class="text-xs text-warning">
+                Live video ABR is off for this stream, so processed video may be unavailable.
+              </p>
+            {/if}
+          </div>
+        {/if}
       </div>
 
       <div class="flex items-start space-x-2">

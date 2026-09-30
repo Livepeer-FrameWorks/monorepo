@@ -182,6 +182,7 @@ func (p *Processor) readReadyLocalIngest(ctx context.Context, credential string)
 	for _, target := range secret.GetPushTargets() {
 		response.PushTargets = append(response.PushTargets, &commodorepb.PushTargetInternal{
 			Id: target.GetTargetId(), Platform: target.GetPlatform(), Name: target.GetName(), TargetUri: target.GetTargetUri(),
+			VideoChoice: target.GetVideoChoice(),
 		})
 	}
 	outcome := "valid"
@@ -283,7 +284,7 @@ func samePushTargets(local []*mediaauthoritypb.PushTargetSecret, connected []*co
 	}
 	for _, target := range local {
 		candidate := byID[target.GetTargetId()]
-		if target == nil || candidate == nil || target.GetTargetUri() != candidate.GetTargetUri() || target.GetName() != candidate.GetName() || target.GetPlatform() != candidate.GetPlatform() {
+		if target == nil || candidate == nil || target.GetTargetUri() != candidate.GetTargetUri() || target.GetName() != candidate.GetName() || target.GetPlatform() != candidate.GetPlatform() || target.GetVideoChoice() != candidate.GetVideoChoice() {
 			return false
 		}
 	}

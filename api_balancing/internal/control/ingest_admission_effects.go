@@ -1071,7 +1071,7 @@ func samePushTargetSet(left, right *ipcpb.ActivatePushTargets) bool {
 	}
 	for _, target := range right.GetTargets() {
 		other, ok := byID[target.GetTargetId()]
-		if !ok || other.GetTargetUri() != target.GetTargetUri() || other.GetName() != target.GetName() || other.GetPlatform() != target.GetPlatform() {
+		if !ok || other.GetTargetUri() != target.GetTargetUri() || other.GetName() != target.GetName() || other.GetPlatform() != target.GetPlatform() || other.GetVideoChoice() != target.GetVideoChoice() {
 			return false
 		}
 	}

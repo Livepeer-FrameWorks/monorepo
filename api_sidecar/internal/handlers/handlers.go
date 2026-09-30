@@ -1442,14 +1442,7 @@ func HandlePushEnd(c *gin.Context) {
 			if parsed.DurationMS > 0 {
 				report.StartedAtMs = report.EndedAtMs - parsed.DurationMS
 			}
-			if parsed.Succeeded {
-				report.State = ipcpb.RestreamState_RESTREAM_STATE_IDLE
-				report.Reason = ipcpb.RestreamReason_RESTREAM_REASON_COMPLETED
-			} else {
-				report.State = ipcpb.RestreamState_RESTREAM_STATE_FAILED
-				report.Reason = ipcpb.RestreamReason_RESTREAM_REASON_PROCESS_ERROR
-				report.SanitizedMessage = "restream push failed"
-			}
+			report.State, report.Reason, report.SanitizedMessage = restreamPushEndOutcome(parsed)
 			tenantID := report.GetTenantId()
 			sanitized := &ipcpb.MistTrigger{
 				TriggerType: string(mist.TriggerRestreamStatusFinal), NodeId: getNodeID(), Timestamp: report.EndedAtMs,
@@ -1491,6 +1484,18 @@ func HandlePushEnd(c *gin.Context) {
 	}
 
 	c.String(http.StatusOK, "OK")
+}
+
+func restreamPushEndOutcome(parsed mist.PushEndStatus) (ipcpb.RestreamState, ipcpb.RestreamReason, string) {
+	if parsed.ReasonCode == "media_selection_failed" {
+		return ipcpb.RestreamState_RESTREAM_STATE_FAILED, ipcpb.RestreamReason_RESTREAM_REASON_MEDIA_SELECTION_FAILED,
+			"no compatible video and audio tracks for this destination"
+	}
+	if parsed.Succeeded {
+		return ipcpb.RestreamState_RESTREAM_STATE_IDLE, ipcpb.RestreamReason_RESTREAM_REASON_COMPLETED, ""
+	}
+	return ipcpb.RestreamState_RESTREAM_STATE_FAILED, ipcpb.RestreamReason_RESTREAM_REASON_PROCESS_ERROR,
+		"restream push failed"
 }
 
 // HandlePushInputClose handles PUSH_INPUT_CLOSE webhook.

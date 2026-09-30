@@ -3,6 +3,10 @@ SELECT processes_live, processes_dvr, processes_clip, processes_dvr_finalize, pr
 FROM commodore.stream_processing_config
 WHERE stream_id = $1;
 
+-- name: GetStreamLiveVideoABR :one
+SELECT live_video_abr FROM commodore.streams
+WHERE id = $1 AND tenant_id = $2 AND deleted_at IS NULL;
+
 -- name: GetTenantProcessingOverrides :one
 SELECT processes_live, processes_dvr, processes_clip, processes_dvr_finalize, processes_vod
 FROM commodore.tenant_processing_config

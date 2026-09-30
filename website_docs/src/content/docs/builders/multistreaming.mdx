@@ -72,6 +72,7 @@ In the stream detail page, open the **Multistream** tab to manage push targets.
 - **Enable/Disable** — Toggle targets on or off without deleting them
 - **Status** — See real-time push status for each target
 - **Edit** — Update the name, stream key, or target URI at any time
+- **Video track** — Keep Automatic for source video when compatible, or require source or processed video for an RTMP target
 - **Delete** — Remove targets you no longer need
 
 ## GraphQL API
@@ -86,6 +87,7 @@ mutation {
       platform: "twitch"
       name: "My Twitch Channel"
       targetUri: "rtmp://live.twitch.tv/app/live_xxxxxxxxxxxx"
+      videoChoice: "AUTO"
     }
   ) {
     id
@@ -95,6 +97,7 @@ mutation {
     isEnabled
     status
     reasonCode
+    videoChoice
   }
 }
 ```
@@ -116,6 +119,7 @@ query {
       isEnabled
       status
       reasonCode
+      videoChoice
       lastError
       lastPushedAt
     }
@@ -134,7 +138,15 @@ query {
 Use `reasonCode` for automation and `lastError` for sanitized operator-facing detail. The
 stable reason values are `unspecified`, `connected`, `completed`, `destination_rejected`,
 `network_error`, `process_error`, `capacity_exhausted`, `configuration_error`,
-`edge_upgrade_required`, and `stopped`.
+`edge_upgrade_required`, `media_selection_failed`, and `stopped`.
+
+### Video track choice
+
+`videoChoice` is `AUTO` by default. Mist starts with the original video when its codec and known metadata fit the destination. If a documented hard limit rules it out, Mist chooses one compatible processed rendition. `SOURCE_VIDEO` requires an original video track; `PROCESSED_VIDEO` requires a rendition. The choice applies to video only: a compatible AAC conversion can still provide audio. A stream with only video or only audio can use `AUTO`; Mist gives a newly discovered single track one second for its companion to appear before publishing headers. If compatible tracks remain unavailable for 30 seconds after source tracks appear, the target reports `media_selection_failed` and retries while the broadcast remains live.
+
+Kick targets use the documented H.264, 1080p60, 8 Mbps and AAC stereo 48 kHz ceilings. X targets use H.264 video up to 12 Mbps and AAC audio; the AAC bitrate is left unconstrained because common publisher defaults exceed X's recommendation. Twitch, YouTube and custom RTMP targets use codec negotiation without enforcing recommendation-only bitrate limits. FrameWorks cannot infer CBR or GOP compliance from Mist track metadata; configure the publisher or managed encoder to meet the destination's requirements.
+
+For streams that do not need a video ladder, set `liveVideoAbr: "OFF"` on `createStream` or `updateStream`. This removes live video rendition processes from the next ingest while keeping audio conversion, thumbnails, and recording. `INHERIT` uses the tier's processing policy. A target set to `PROCESSED_VIDEO` needs the live ladder or another video process to supply a rendition.
 
 ### Update a Push Target
 

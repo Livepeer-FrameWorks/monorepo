@@ -25,7 +25,7 @@ SELECT s.id, s.internal_name, s.stream_key, s.playback_id, s.title, s.descriptio
        mn.placement_count AS managed_placement_count,
        COALESCE(mn.allowed_cluster_ids, '{}') AS managed_allowed_cluster_ids,
        s.active_ingest_cluster_id, s.dvr_chapter_mode, s.dvr_chapter_interval_seconds,
-       s.dvr_retention_days_override, s.clip_retention_days_override, s.monitoring_enabled
+       s.dvr_retention_days_override, s.clip_retention_days_override, s.monitoring_enabled, s.live_video_abr
 FROM commodore.streams s
 LEFT JOIN commodore.stream_pull_sources p ON p.stream_id = s.id
 LEFT JOIN commodore.stream_mist_sources mn ON mn.stream_id = s.id
@@ -45,7 +45,7 @@ SELECT s.id, s.internal_name, s.stream_key, s.playback_id, s.title, s.descriptio
        mn.placement_count AS managed_placement_count,
        COALESCE(mn.allowed_cluster_ids, '{}') AS managed_allowed_cluster_ids,
        s.active_ingest_cluster_id, s.dvr_chapter_mode, s.dvr_chapter_interval_seconds,
-       s.dvr_retention_days_override, s.clip_retention_days_override, s.monitoring_enabled
+       s.dvr_retention_days_override, s.clip_retention_days_override, s.monitoring_enabled, s.live_video_abr
 FROM commodore.streams s
 LEFT JOIN commodore.stream_pull_sources p ON p.stream_id = s.id
 LEFT JOIN commodore.stream_mist_sources mn ON mn.stream_id = s.id
@@ -66,7 +66,7 @@ SELECT s.id, s.internal_name, s.stream_key, s.playback_id, s.title, s.descriptio
        mn.placement_count AS managed_placement_count,
        COALESCE(mn.allowed_cluster_ids, '{}') AS managed_allowed_cluster_ids,
        s.active_ingest_cluster_id, s.dvr_chapter_mode, s.dvr_chapter_interval_seconds,
-       s.dvr_retention_days_override, s.clip_retention_days_override, s.monitoring_enabled
+       s.dvr_retention_days_override, s.clip_retention_days_override, s.monitoring_enabled, s.live_video_abr
 FROM commodore.streams s
 LEFT JOIN commodore.stream_pull_sources p ON p.stream_id = s.id
 LEFT JOIN commodore.stream_mist_sources mn ON mn.stream_id = s.id
@@ -86,7 +86,7 @@ SELECT s.id, s.internal_name, s.stream_key, s.playback_id, s.title, s.descriptio
        mn.placement_count AS managed_placement_count,
        COALESCE(mn.allowed_cluster_ids, '{}') AS managed_allowed_cluster_ids,
        s.active_ingest_cluster_id, s.dvr_chapter_mode, s.dvr_chapter_interval_seconds,
-       s.dvr_retention_days_override, s.clip_retention_days_override, s.monitoring_enabled
+       s.dvr_retention_days_override, s.clip_retention_days_override, s.monitoring_enabled, s.live_video_abr
 FROM commodore.streams s
 LEFT JOIN commodore.stream_pull_sources p ON p.stream_id = s.id
 LEFT JOIN commodore.stream_mist_sources mn ON mn.stream_id = s.id
@@ -107,7 +107,7 @@ SELECT s.id, s.internal_name, s.stream_key, s.playback_id, s.title, s.descriptio
        mn.placement_count AS managed_placement_count,
        COALESCE(mn.allowed_cluster_ids, '{}') AS managed_allowed_cluster_ids,
        s.active_ingest_cluster_id, s.dvr_chapter_mode, s.dvr_chapter_interval_seconds,
-       s.dvr_retention_days_override, s.clip_retention_days_override, s.monitoring_enabled
+       s.dvr_retention_days_override, s.clip_retention_days_override, s.monitoring_enabled, s.live_video_abr
 FROM commodore.streams s
 LEFT JOIN commodore.stream_pull_sources p ON p.stream_id = s.id
 LEFT JOIN commodore.stream_mist_sources mn ON mn.stream_id = s.id
@@ -122,7 +122,7 @@ SELECT s.id, s.internal_name, s.stream_key, s.playback_id, s.title, s.descriptio
        mn.placement_count AS managed_placement_count,
        COALESCE(mn.allowed_cluster_ids, '{}') AS managed_allowed_cluster_ids,
        s.active_ingest_cluster_id, s.dvr_chapter_mode, s.dvr_chapter_interval_seconds,
-       s.dvr_retention_days_override, s.clip_retention_days_override, s.monitoring_enabled
+       s.dvr_retention_days_override, s.clip_retention_days_override, s.monitoring_enabled, s.live_video_abr
 FROM commodore.streams s
 LEFT JOIN commodore.stream_pull_sources p ON p.stream_id = s.id
 LEFT JOIN commodore.stream_mist_sources mn ON mn.stream_id = s.id

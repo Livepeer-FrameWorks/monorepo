@@ -34,7 +34,7 @@ func TestCompileLiveStreamSecretPreservesAuthenticatedEmptyTargetSet(t *testing.
 	}
 	defer db.Close()
 	mock.ExpectQuery("FROM commodore.push_targets").WithArgs("stream-1", "tenant-1").
-		WillReturnRows(sqlmock.NewRows([]string{"id", "platform", "name", "target_uri"}))
+		WillReturnRows(sqlmock.NewRows([]string{"id", "platform", "name", "target_uri", "video_choice"}))
 	s := &CommodoreServer{
 		db: db,
 		mediaAuthorityRecipients: sharedauthority.SealRecipientSet{

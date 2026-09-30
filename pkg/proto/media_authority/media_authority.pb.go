@@ -1258,6 +1258,7 @@ type PushTargetSecret struct {
 	TargetUri     string                 `protobuf:"bytes,2,opt,name=target_uri,json=targetUri,proto3" json:"target_uri,omitempty"`
 	Name          string                 `protobuf:"bytes,3,opt,name=name,proto3" json:"name,omitempty"`
 	Platform      string                 `protobuf:"bytes,4,opt,name=platform,proto3" json:"platform,omitempty"`
+	VideoChoice   string                 `protobuf:"bytes,5,opt,name=video_choice,json=videoChoice,proto3" json:"video_choice,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1316,6 +1317,13 @@ func (x *PushTargetSecret) GetName() string {
 func (x *PushTargetSecret) GetPlatform() string {
 	if x != nil {
 		return x.Platform
+	}
+	return ""
+}
+
+func (x *PushTargetSecret) GetVideoChoice() string {
+	if x != nil {
+		return x.VideoChoice
 	}
 	return ""
 }
@@ -2044,13 +2052,14 @@ const file_media_authority_proto_rawDesc = "" +
 	"\x05nonce\x18\x04 \x01(\fR\x05nonce\x12\x1e\n" +
 	"\n" +
 	"ciphertext\x18\x05 \x01(\fR\n" +
-	"ciphertext\"~\n" +
+	"ciphertext\"\xa1\x01\n" +
 	"\x10PushTargetSecret\x12\x1b\n" +
 	"\ttarget_id\x18\x01 \x01(\tR\btargetId\x12\x1d\n" +
 	"\n" +
 	"target_uri\x18\x02 \x01(\tR\ttargetUri\x12\x12\n" +
 	"\x04name\x18\x03 \x01(\tR\x04name\x12\x1a\n" +
-	"\bplatform\x18\x04 \x01(\tR\bplatform\"\x87\x04\n" +
+	"\bplatform\x18\x04 \x01(\tR\bplatform\x12!\n" +
+	"\fvideo_choice\x18\x05 \x01(\tR\vvideoChoice\"\x87\x04\n" +
 	"\x10LiveStreamSecret\x12!\n" +
 	"\fauthority_id\x18\x01 \x01(\tR\vauthorityId\x12\x1b\n" +
 	"\ttenant_id\x18\x02 \x01(\tR\btenantId\x12\x1d\n" +

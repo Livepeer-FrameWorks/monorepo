@@ -27,6 +27,7 @@
     title: string;
     description: string;
     record: boolean;
+    liveVideoAbr: string;
     ingestMode: "PUSH" | "PULL";
     pullSourceUri: string;
     pullSourceEnabled: boolean;
@@ -42,6 +43,7 @@
     title = $bindable(),
     description = $bindable(),
     record = $bindable(),
+    liveVideoAbr = $bindable(),
     ingestMode = $bindable(),
     pullSourceUri = $bindable(),
     pullSourceEnabled = $bindable(),
@@ -127,6 +129,29 @@
           </p>
         </div>
       </div>
+
+      <details class="text-sm">
+        <summary class="cursor-pointer text-xs text-muted-foreground"
+          >Advanced video processing</summary
+        >
+        <div class="mt-3 space-y-2">
+          <Label for="createLiveVideoAbr" class="text-sm text-foreground"
+            >Live video renditions</Label
+          >
+          <select
+            id="createLiveVideoAbr"
+            bind:value={liveVideoAbr}
+            disabled={creating}
+            class="w-full rounded-none border border-input bg-background px-3 py-2 text-sm"
+          >
+            <option value="INHERIT">Use tier setting</option>
+            <option value="OFF">Off — keep source video only</option>
+          </select>
+          <p class="text-xs text-muted-foreground">
+            Audio conversion remains available for restream destinations.
+          </p>
+        </div>
+      </details>
 
       <div>
         <span class="block text-sm font-medium text-muted-foreground mb-2">Ingest Mode</span>

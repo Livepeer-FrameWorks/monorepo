@@ -52,4 +52,9 @@ func TestSamePushTargetSetIgnoresEnvelopeRevisionButNotDeliveryPolicy(t *testing
 	if samePushTargetSet(current, targetChange) {
 		t.Fatal("a target change must re-arm the output obligation")
 	}
+	choiceChange := proto.CloneOf(unrelatedRevision)
+	choiceChange.Targets[0].VideoChoice = "SOURCE_VIDEO"
+	if samePushTargetSet(current, choiceChange) {
+		t.Fatal("a video choice change must re-arm the output obligation")
+	}
 }

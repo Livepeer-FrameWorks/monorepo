@@ -47,8 +47,8 @@ MistServer supports auto-push rules in its config, but we don't use them because
 5. The admission-effects worker sends `ActivatePushTargets` to the origin Helmsman. It retains/rearms the same payload after Foghorn or Helmsman reconnect; a newer target version cannot be substituted beneath an existing publisher. Re-arms use exponential backoff, stop after 12 attempts in one unstable cycle, and reset that cycle only after the obligation remained stable for five minutes.
 6. Foghorn reserves one slot from the tenant's existing `max_viewers` delivery-capacity pool per enabled destination. There is no separate restream quota.
 7. Helmsman rejects private, loopback, link-local, metadata, or otherwise non-public destination addresses unless an operator explicitly allows the destination network.
-8. Helmsman reconciles Mist's actual push list to the exact fenced target revision and starts missing targets.
-9. MistServer begins pushing RTMP/SRT to each destination.
+8. Helmsman reconciles Mist's actual push list to the exact fenced target revision and effective track parameters, then starts missing targets. RTMP pushes pass `video_choice` and documented platform hard limits as typed Mist `push_start.params`.
+9. MistServer selects one compatible video and audio pair from current track metadata. It prefers original video in `AUTO`, uses a processed rendition for a known hard-limit failure, and pins the selected track while valid. SRT keeps its existing selection behavior.
 
 ### Status Tracking
 
@@ -111,7 +111,9 @@ Commodore stores the bounded machine `reason_code` separately from the
 sanitized operator-facing `last_error`, so automation never has to parse prose.
 The stable vocabulary is `unspecified`, `connected`, `completed`,
 `destination_rejected`, `network_error`, `process_error`, `capacity_exhausted`,
-`configuration_error`, `edge_upgrade_required`, and `stopped`.
+`configuration_error`, `edge_upgrade_required`, `media_selection_failed`, and `stopped`.
+
+`streams.live_video_abr` defaults to `INHERIT`. `OFF` filters video rendition jobs from the effective live process policy after tier and override resolution; audio conversion and thumbnails remain. `push_targets.video_choice` defaults to `AUTO` and accepts `SOURCE_VIDEO` or `PROCESSED_VIDEO` for RTMP. Both settings are stored with the stream or target and included in versioned authority and runtime reconciliation. Foghorn requires sidecar control protocol 8 for an explicit RTMP video choice; it dispatches default `AUTO` and SRT targets even when another target needs the upgrade. Mist advertises `push_track_params_v1`; an older Mist uses the existing unparameterized push for `AUTO`, while explicit video choices yield `edge_upgrade_required`. For a same-URI choice change, Helmsman stops the old Mist process and waits until its process ID leaves inventory before starting the replacement. Runtime binding and convergence require the new process parameters, so a delayed old `PUSH_END` cannot settle the replacement. An unchanged push retains its process identity across activation attempts, and its final report uses the current attempt. A temporary absence of compatible tracks is retryable after 30 seconds from first source-track discovery.
 
 ### Control Channel (Foghorn ↔ Helmsman)
 

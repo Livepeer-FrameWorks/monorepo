@@ -86,6 +86,37 @@ func StripLivepeerProcesses(processesJSON string) string {
 	return string(out)
 }
 
+// StripLiveVideoRenditions removes live video encoders while retaining audio
+// conversion and non-rendition processing such as thumbnails.
+func StripLiveVideoRenditions(processesJSON string) string {
+	var processes []map[string]interface{}
+	if err := json.Unmarshal([]byte(processesJSON), &processes); err != nil {
+		return processesJSON
+	}
+	filtered := make([]map[string]interface{}, 0, len(processes))
+	for _, process := range processes {
+		typeName, typeOK := process["process"].(string)
+		if !typeOK {
+			filtered = append(filtered, process)
+			continue
+		}
+		if typeName == "Livepeer" {
+			continue
+		}
+		if typeName == "AV" {
+			if avCodecKind(process["codec"]) != "audio" {
+				continue
+			}
+		}
+		filtered = append(filtered, process)
+	}
+	encoded, err := json.Marshal(filtered)
+	if err != nil {
+		return processesJSON
+	}
+	return string(encoded)
+}
+
 // ReplaceLivepeerWithLocal converts Livepeer process entries into equivalent
 // local MistProcAV entries. Each Livepeer target_profile becomes a separate
 // AV process entry using MistProcAV's native option names.
@@ -897,7 +928,7 @@ func avCodecKind(value interface{}) string {
 		return ""
 	}
 	switch strings.ToLower(codec) {
-	case "aac", "opus", "mp3", "flac", "wav":
+	case "aac", "opus", "mp3", "mp2", "ac3", "eac3", "flac", "wav", "pcm", "vorbis":
 		return "audio"
 	case "h264", "h265", "hevc", "vp8", "vp9", "av1", "mpeg2":
 		return "video"

@@ -2564,6 +2564,7 @@ type ComplexityRoot struct {
 		Status       func(childComplexity int) int
 		StreamID     func(childComplexity int) int
 		TargetUri    func(childComplexity int) int
+		VideoChoice  func(childComplexity int) int
 	}
 
 	QualityTierDaily struct {
@@ -3152,6 +3153,7 @@ type ComplexityRoot struct {
 		DvrChapterMode            func(childComplexity int) int
 		ID                        func(childComplexity int) int
 		IngestMode                func(childComplexity int) int
+		LiveVideoAbr              func(childComplexity int) int
 		ManagedSource             func(childComplexity int) int
 		Metrics                   func(childComplexity int) int
 		Monitoring                func(childComplexity int) int
@@ -5148,6 +5150,7 @@ type StreamResolver interface {
 	StreamKey(ctx context.Context, obj *commodorepb.Stream) (*string, error)
 
 	Record(ctx context.Context, obj *commodorepb.Stream) (bool, error)
+
 	IngestMode(ctx context.Context, obj *commodorepb.Stream) (model.IngestMode, error)
 
 	SourceLocation(ctx context.Context, obj *commodorepb.Stream) (*model.SourceLocation, error)
@@ -16516,6 +16519,12 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.ComplexityRoot.PushTarget.TargetUri(childComplexity), true
+	case "PushTarget.videoChoice":
+		if e.ComplexityRoot.PushTarget.VideoChoice == nil {
+			break
+		}
+
+		return e.ComplexityRoot.PushTarget.VideoChoice(childComplexity), true
 
 	case "QualityTierDaily.avgBitrate":
 		if e.ComplexityRoot.QualityTierDaily.AvgBitrate == nil {
@@ -19380,6 +19389,12 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.ComplexityRoot.Stream.IngestMode(childComplexity), true
+	case "Stream.liveVideoAbr":
+		if e.ComplexityRoot.Stream.LiveVideoAbr == nil {
+			break
+		}
+
+		return e.ComplexityRoot.Stream.LiveVideoAbr(childComplexity), true
 	case "Stream.managedSource":
 		if e.ComplexityRoot.Stream.ManagedSource == nil {
 			break
@@ -27156,6 +27171,8 @@ input CreateStreamInput {
   description: String
   "Enable DVR recording (default: false)."
   record: Boolean = false
+  "Live video renditions: INHERIT uses the tier policy; OFF keeps source video and audio conversion."
+  liveVideoAbr: String = "INHERIT"
   "Source ingest model. Defaults to PUSH."
   ingestMode: IngestMode = PUSH
   "Pull-source configuration. Required when ingestMode is PULL."
@@ -27175,6 +27192,8 @@ input UpdateStreamInput {
   description: String
   "Enable or disable DVR recording."
   record: Boolean
+  "INHERIT uses the tier policy; OFF disables live video renditions from the next ingest."
+  liveVideoAbr: String
   "Ingest model cannot be changed after create; sending a different value returns a validation error."
   ingestMode: IngestMode
   "Update the pull-source configuration for an existing pull stream."
@@ -28608,6 +28627,8 @@ type Stream implements Node {
   playbackId: String!
   "Whether DVR recording is enabled for this stream."
   record: Boolean!
+  "INHERIT or OFF for live video renditions."
+  liveVideoAbr: String!
   "How source media enters the stream."
   ingestMode: IngestMode!
   "Pull-source config for pull streams; null for push streams."
@@ -31848,6 +31869,8 @@ type PushTarget {
   platform: String
   "User-friendly label for this target."
   name: String!
+  "AUTO, SOURCE_VIDEO, or PROCESSED_VIDEO. Audio is selected independently."
+  videoChoice: String!
   "Target URI (masked in responses — stream key portion is redacted)."
   targetUri: String!
   "Whether this target is enabled for automatic push on stream start."
@@ -31868,6 +31891,8 @@ input CreatePushTargetInput {
   platform: String
   "User-friendly label for this target."
   name: String!
+  "AUTO, SOURCE_VIDEO, or PROCESSED_VIDEO for RTMP targets."
+  videoChoice: String = "AUTO"
   "Full target URI including stream key (e.g., rtmp://live.twitch.tv/app/live_xxxx)."
   targetUri: String!
 }
@@ -31875,6 +31900,8 @@ input CreatePushTargetInput {
 input UpdatePushTargetInput {
   "Updated label."
   name: String
+  "AUTO, SOURCE_VIDEO, or PROCESSED_VIDEO for RTMP targets."
+  videoChoice: String
   "Updated target URI."
   targetUri: String
   "Enable or disable this target."
@@ -41546,6 +41573,8 @@ func (ec *executionContext) fieldContext_ArtifactEvent_stream(_ context.Context,
 				return ec.fieldContext_Stream_playbackId(ctx, field)
 			case "record":
 				return ec.fieldContext_Stream_record(ctx, field)
+			case "liveVideoAbr":
+				return ec.fieldContext_Stream_liveVideoAbr(ctx, field)
 			case "ingestMode":
 				return ec.fieldContext_Stream_ingestMode(ctx, field)
 			case "pullSource":
@@ -42256,6 +42285,8 @@ func (ec *executionContext) fieldContext_ArtifactState_stream(_ context.Context,
 				return ec.fieldContext_Stream_playbackId(ctx, field)
 			case "record":
 				return ec.fieldContext_Stream_record(ctx, field)
+			case "liveVideoAbr":
+				return ec.fieldContext_Stream_liveVideoAbr(ctx, field)
 			case "ingestMode":
 				return ec.fieldContext_Stream_ingestMode(ctx, field)
 			case "pullSource":
@@ -48317,6 +48348,8 @@ func (ec *executionContext) fieldContext_ClientMetrics5m_stream(_ context.Contex
 				return ec.fieldContext_Stream_playbackId(ctx, field)
 			case "record":
 				return ec.fieldContext_Stream_record(ctx, field)
+			case "liveVideoAbr":
+				return ec.fieldContext_Stream_liveVideoAbr(ctx, field)
 			case "ingestMode":
 				return ec.fieldContext_Stream_ingestMode(ctx, field)
 			case "pullSource":
@@ -49119,6 +49152,8 @@ func (ec *executionContext) fieldContext_Clip_stream(_ context.Context, field gr
 				return ec.fieldContext_Stream_playbackId(ctx, field)
 			case "record":
 				return ec.fieldContext_Stream_record(ctx, field)
+			case "liveVideoAbr":
+				return ec.fieldContext_Stream_liveVideoAbr(ctx, field)
 			case "ingestMode":
 				return ec.fieldContext_Stream_ingestMode(ctx, field)
 			case "pullSource":
@@ -54777,6 +54812,8 @@ func (ec *executionContext) fieldContext_ConnectionEvent_stream(_ context.Contex
 				return ec.fieldContext_Stream_playbackId(ctx, field)
 			case "record":
 				return ec.fieldContext_Stream_record(ctx, field)
+			case "liveVideoAbr":
+				return ec.fieldContext_Stream_liveVideoAbr(ctx, field)
 			case "ingestMode":
 				return ec.fieldContext_Stream_ingestMode(ctx, field)
 			case "pullSource":
@@ -58883,6 +58920,8 @@ func (ec *executionContext) fieldContext_DVRRequest_stream(_ context.Context, fi
 				return ec.fieldContext_Stream_playbackId(ctx, field)
 			case "record":
 				return ec.fieldContext_Stream_record(ctx, field)
+			case "liveVideoAbr":
+				return ec.fieldContext_Stream_liveVideoAbr(ctx, field)
 			case "ingestMode":
 				return ec.fieldContext_Stream_ingestMode(ctx, field)
 			case "pullSource":
@@ -61811,6 +61850,8 @@ func (ec *executionContext) fieldContext_GeographicDistribution_stream(_ context
 				return ec.fieldContext_Stream_playbackId(ctx, field)
 			case "record":
 				return ec.fieldContext_Stream_record(ctx, field)
+			case "liveVideoAbr":
+				return ec.fieldContext_Stream_liveVideoAbr(ctx, field)
 			case "ingestMode":
 				return ec.fieldContext_Stream_ingestMode(ctx, field)
 			case "pullSource":
@@ -65144,6 +65185,8 @@ func (ec *executionContext) fieldContext_IngestMetadata_stream(_ context.Context
 				return ec.fieldContext_Stream_playbackId(ctx, field)
 			case "record":
 				return ec.fieldContext_Stream_record(ctx, field)
+			case "liveVideoAbr":
+				return ec.fieldContext_Stream_liveVideoAbr(ctx, field)
 			case "ingestMode":
 				return ec.fieldContext_Stream_ingestMode(ctx, field)
 			case "pullSource":
@@ -78408,6 +78451,8 @@ func (ec *executionContext) fieldContext_Mutation_createPushTarget(ctx context.C
 				return ec.fieldContext_PushTarget_platform(ctx, field)
 			case "name":
 				return ec.fieldContext_PushTarget_name(ctx, field)
+			case "videoChoice":
+				return ec.fieldContext_PushTarget_videoChoice(ctx, field)
 			case "targetUri":
 				return ec.fieldContext_PushTarget_targetUri(ctx, field)
 			case "isEnabled":
@@ -78473,6 +78518,8 @@ func (ec *executionContext) fieldContext_Mutation_updatePushTarget(ctx context.C
 				return ec.fieldContext_PushTarget_platform(ctx, field)
 			case "name":
 				return ec.fieldContext_PushTarget_name(ctx, field)
+			case "videoChoice":
+				return ec.fieldContext_PushTarget_videoChoice(ctx, field)
 			case "targetUri":
 				return ec.fieldContext_PushTarget_targetUri(ctx, field)
 			case "isEnabled":
@@ -90941,6 +90988,8 @@ func (ec *executionContext) fieldContext_ProcessingUsageRecord_stream(_ context.
 				return ec.fieldContext_Stream_playbackId(ctx, field)
 			case "record":
 				return ec.fieldContext_Stream_record(ctx, field)
+			case "liveVideoAbr":
+				return ec.fieldContext_Stream_liveVideoAbr(ctx, field)
 			case "ingestMode":
 				return ec.fieldContext_Stream_ingestMode(ctx, field)
 			case "pullSource":
@@ -93559,6 +93608,35 @@ func (ec *executionContext) fieldContext_PushTarget_name(_ context.Context, fiel
 	return fc, nil
 }
 
+func (ec *executionContext) _PushTarget_videoChoice(ctx context.Context, field graphql.CollectedField, obj *commodorepb.PushTarget) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_PushTarget_videoChoice,
+		func(ctx context.Context) (any, error) {
+			return obj.VideoChoice, nil
+		},
+		nil,
+		ec.marshalNString2string,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_PushTarget_videoChoice(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "PushTarget",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type String does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
 func (ec *executionContext) _PushTarget_targetUri(ctx context.Context, field graphql.CollectedField, obj *commodorepb.PushTarget) (ret graphql.Marshaler) {
 	return graphql.ResolveField(
 		ctx,
@@ -93887,6 +93965,8 @@ func (ec *executionContext) fieldContext_QualityTierDaily_stream(_ context.Conte
 				return ec.fieldContext_Stream_playbackId(ctx, field)
 			case "record":
 				return ec.fieldContext_Stream_record(ctx, field)
+			case "liveVideoAbr":
+				return ec.fieldContext_Stream_liveVideoAbr(ctx, field)
 			case "ingestMode":
 				return ec.fieldContext_Stream_ingestMode(ctx, field)
 			case "pullSource":
@@ -95195,6 +95275,8 @@ func (ec *executionContext) fieldContext_Query_stream(ctx context.Context, field
 				return ec.fieldContext_Stream_playbackId(ctx, field)
 			case "record":
 				return ec.fieldContext_Stream_record(ctx, field)
+			case "liveVideoAbr":
+				return ec.fieldContext_Stream_liveVideoAbr(ctx, field)
 			case "ingestMode":
 				return ec.fieldContext_Stream_ingestMode(ctx, field)
 			case "pullSource":
@@ -99870,6 +99952,8 @@ func (ec *executionContext) fieldContext_RebufferingEvent_stream(_ context.Conte
 				return ec.fieldContext_Stream_playbackId(ctx, field)
 			case "record":
 				return ec.fieldContext_Stream_record(ctx, field)
+			case "liveVideoAbr":
+				return ec.fieldContext_Stream_liveVideoAbr(ctx, field)
 			case "ingestMode":
 				return ec.fieldContext_Stream_ingestMode(ctx, field)
 			case "pullSource":
@@ -100913,6 +100997,8 @@ func (ec *executionContext) fieldContext_RoutingEvent_stream(_ context.Context, 
 				return ec.fieldContext_Stream_playbackId(ctx, field)
 			case "record":
 				return ec.fieldContext_Stream_record(ctx, field)
+			case "liveVideoAbr":
+				return ec.fieldContext_Stream_liveVideoAbr(ctx, field)
 			case "ingestMode":
 				return ec.fieldContext_Stream_ingestMode(ctx, field)
 			case "pullSource":
@@ -107293,6 +107379,8 @@ func (ec *executionContext) fieldContext_StorageEvent_stream(_ context.Context, 
 				return ec.fieldContext_Stream_playbackId(ctx, field)
 			case "record":
 				return ec.fieldContext_Stream_record(ctx, field)
+			case "liveVideoAbr":
+				return ec.fieldContext_Stream_liveVideoAbr(ctx, field)
 			case "ingestMode":
 				return ec.fieldContext_Stream_ingestMode(ctx, field)
 			case "pullSource":
@@ -109007,6 +109095,35 @@ func (ec *executionContext) fieldContext_Stream_record(_ context.Context, field 
 	return fc, nil
 }
 
+func (ec *executionContext) _Stream_liveVideoAbr(ctx context.Context, field graphql.CollectedField, obj *commodorepb.Stream) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_Stream_liveVideoAbr,
+		func(ctx context.Context) (any, error) {
+			return obj.LiveVideoAbr, nil
+		},
+		nil,
+		ec.marshalNString2string,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_Stream_liveVideoAbr(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "Stream",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type String does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
 func (ec *executionContext) _Stream_ingestMode(ctx context.Context, field graphql.CollectedField, obj *commodorepb.Stream) (ret graphql.Marshaler) {
 	return graphql.ResolveField(
 		ctx,
@@ -109314,6 +109431,8 @@ func (ec *executionContext) fieldContext_Stream_pushTargets(_ context.Context, f
 				return ec.fieldContext_PushTarget_platform(ctx, field)
 			case "name":
 				return ec.fieldContext_PushTarget_name(ctx, field)
+			case "videoChoice":
+				return ec.fieldContext_PushTarget_videoChoice(ctx, field)
 			case "targetUri":
 				return ec.fieldContext_PushTarget_targetUri(ctx, field)
 			case "isEnabled":
@@ -109715,6 +109834,8 @@ func (ec *executionContext) fieldContext_StreamAnalyticsDaily_stream(_ context.C
 				return ec.fieldContext_Stream_playbackId(ctx, field)
 			case "record":
 				return ec.fieldContext_Stream_record(ctx, field)
+			case "liveVideoAbr":
+				return ec.fieldContext_Stream_liveVideoAbr(ctx, field)
 			case "ingestMode":
 				return ec.fieldContext_Stream_ingestMode(ctx, field)
 			case "pullSource":
@@ -110194,6 +110315,8 @@ func (ec *executionContext) fieldContext_StreamAnalyticsSummary_stream(_ context
 				return ec.fieldContext_Stream_playbackId(ctx, field)
 			case "record":
 				return ec.fieldContext_Stream_record(ctx, field)
+			case "liveVideoAbr":
+				return ec.fieldContext_Stream_liveVideoAbr(ctx, field)
 			case "ingestMode":
 				return ec.fieldContext_Stream_ingestMode(ctx, field)
 			case "pullSource":
@@ -111432,6 +111555,8 @@ func (ec *executionContext) fieldContext_StreamConnectionHourly_stream(_ context
 				return ec.fieldContext_Stream_playbackId(ctx, field)
 			case "record":
 				return ec.fieldContext_Stream_record(ctx, field)
+			case "liveVideoAbr":
+				return ec.fieldContext_Stream_liveVideoAbr(ctx, field)
 			case "ingestMode":
 				return ec.fieldContext_Stream_ingestMode(ctx, field)
 			case "pullSource":
@@ -111961,6 +112086,8 @@ func (ec *executionContext) fieldContext_StreamEdge_node(_ context.Context, fiel
 				return ec.fieldContext_Stream_playbackId(ctx, field)
 			case "record":
 				return ec.fieldContext_Stream_record(ctx, field)
+			case "liveVideoAbr":
+				return ec.fieldContext_Stream_liveVideoAbr(ctx, field)
 			case "ingestMode":
 				return ec.fieldContext_Stream_ingestMode(ctx, field)
 			case "pullSource":
@@ -112123,6 +112250,8 @@ func (ec *executionContext) fieldContext_StreamEvent_stream(_ context.Context, f
 				return ec.fieldContext_Stream_playbackId(ctx, field)
 			case "record":
 				return ec.fieldContext_Stream_record(ctx, field)
+			case "liveVideoAbr":
+				return ec.fieldContext_Stream_liveVideoAbr(ctx, field)
 			case "ingestMode":
 				return ec.fieldContext_Stream_ingestMode(ctx, field)
 			case "pullSource":
@@ -114240,6 +114369,8 @@ func (ec *executionContext) fieldContext_StreamHealthMetric_stream(_ context.Con
 				return ec.fieldContext_Stream_playbackId(ctx, field)
 			case "record":
 				return ec.fieldContext_Stream_record(ctx, field)
+			case "liveVideoAbr":
+				return ec.fieldContext_Stream_liveVideoAbr(ctx, field)
 			case "ingestMode":
 				return ec.fieldContext_Stream_ingestMode(ctx, field)
 			case "pullSource":
@@ -115731,6 +115862,8 @@ func (ec *executionContext) fieldContext_StreamKey_stream(_ context.Context, fie
 				return ec.fieldContext_Stream_playbackId(ctx, field)
 			case "record":
 				return ec.fieldContext_Stream_record(ctx, field)
+			case "liveVideoAbr":
+				return ec.fieldContext_Stream_liveVideoAbr(ctx, field)
 			case "ingestMode":
 				return ec.fieldContext_Stream_ingestMode(ctx, field)
 			case "pullSource":
@@ -118739,6 +118872,8 @@ func (ec *executionContext) fieldContext_StreamsConnection_nodes(_ context.Conte
 				return ec.fieldContext_Stream_playbackId(ctx, field)
 			case "record":
 				return ec.fieldContext_Stream_record(ctx, field)
+			case "liveVideoAbr":
+				return ec.fieldContext_Stream_liveVideoAbr(ctx, field)
 			case "ingestMode":
 				return ec.fieldContext_Stream_ingestMode(ctx, field)
 			case "pullSource":
@@ -125195,6 +125330,8 @@ func (ec *executionContext) fieldContext_TrackListEvent_stream(_ context.Context
 				return ec.fieldContext_Stream_playbackId(ctx, field)
 			case "record":
 				return ec.fieldContext_Stream_record(ctx, field)
+			case "liveVideoAbr":
+				return ec.fieldContext_Stream_liveVideoAbr(ctx, field)
 			case "ingestMode":
 				return ec.fieldContext_Stream_ingestMode(ctx, field)
 			case "pullSource":
@@ -125700,6 +125837,8 @@ func (ec *executionContext) fieldContext_TrackListUpdate_stream(_ context.Contex
 				return ec.fieldContext_Stream_playbackId(ctx, field)
 			case "record":
 				return ec.fieldContext_Stream_record(ctx, field)
+			case "liveVideoAbr":
+				return ec.fieldContext_Stream_liveVideoAbr(ctx, field)
 			case "ingestMode":
 				return ec.fieldContext_Stream_ingestMode(ctx, field)
 			case "pullSource":
@@ -127727,6 +127866,8 @@ func (ec *executionContext) fieldContext_ViewerCountBucket_stream(_ context.Cont
 				return ec.fieldContext_Stream_playbackId(ctx, field)
 			case "record":
 				return ec.fieldContext_Stream_record(ctx, field)
+			case "liveVideoAbr":
+				return ec.fieldContext_Stream_liveVideoAbr(ctx, field)
 			case "ingestMode":
 				return ec.fieldContext_Stream_ingestMode(ctx, field)
 			case "pullSource":
@@ -128682,6 +128823,8 @@ func (ec *executionContext) fieldContext_ViewerGeographic_stream(_ context.Conte
 				return ec.fieldContext_Stream_playbackId(ctx, field)
 			case "record":
 				return ec.fieldContext_Stream_record(ctx, field)
+			case "liveVideoAbr":
+				return ec.fieldContext_Stream_liveVideoAbr(ctx, field)
 			case "ingestMode":
 				return ec.fieldContext_Stream_ingestMode(ctx, field)
 			case "pullSource":
@@ -129446,6 +129589,8 @@ func (ec *executionContext) fieldContext_ViewerHoursHourly_stream(_ context.Cont
 				return ec.fieldContext_Stream_playbackId(ctx, field)
 			case "record":
 				return ec.fieldContext_Stream_record(ctx, field)
+			case "liveVideoAbr":
+				return ec.fieldContext_Stream_liveVideoAbr(ctx, field)
 			case "ingestMode":
 				return ec.fieldContext_Stream_ingestMode(ctx, field)
 			case "pullSource":
@@ -129987,6 +130132,8 @@ func (ec *executionContext) fieldContext_ViewerMetrics_stream(_ context.Context,
 				return ec.fieldContext_Stream_playbackId(ctx, field)
 			case "record":
 				return ec.fieldContext_Stream_record(ctx, field)
+			case "liveVideoAbr":
+				return ec.fieldContext_Stream_liveVideoAbr(ctx, field)
 			case "ingestMode":
 				return ec.fieldContext_Stream_ingestMode(ctx, field)
 			case "pullSource":
@@ -130671,6 +130818,8 @@ func (ec *executionContext) fieldContext_ViewerSession_stream(_ context.Context,
 				return ec.fieldContext_Stream_playbackId(ctx, field)
 			case "record":
 				return ec.fieldContext_Stream_record(ctx, field)
+			case "liveVideoAbr":
+				return ec.fieldContext_Stream_liveVideoAbr(ctx, field)
 			case "ingestMode":
 				return ec.fieldContext_Stream_ingestMode(ctx, field)
 			case "pullSource":
@@ -138390,7 +138539,11 @@ func (ec *executionContext) unmarshalInputCreatePushTargetInput(ctx context.Cont
 		asMap[k] = v
 	}
 
-	fieldsInOrder := [...]string{"platform", "name", "targetUri"}
+	if _, present := asMap["videoChoice"]; !present {
+		asMap["videoChoice"] = "AUTO"
+	}
+
+	fieldsInOrder := [...]string{"platform", "name", "videoChoice", "targetUri"}
 	for _, k := range fieldsInOrder {
 		v, ok := asMap[k]
 		if !ok {
@@ -138411,6 +138564,13 @@ func (ec *executionContext) unmarshalInputCreatePushTargetInput(ctx context.Cont
 				return it, err
 			}
 			it.Name = data
+		case "videoChoice":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("videoChoice"))
+			data, err := ec.unmarshalOString2ᚖstring(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.VideoChoice = data
 		case "targetUri":
 			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("targetUri"))
 			data, err := ec.unmarshalNString2string(ctx, v)
@@ -138467,11 +138627,14 @@ func (ec *executionContext) unmarshalInputCreateStreamInput(ctx context.Context,
 	if _, present := asMap["record"]; !present {
 		asMap["record"] = false
 	}
+	if _, present := asMap["liveVideoAbr"]; !present {
+		asMap["liveVideoAbr"] = "INHERIT"
+	}
 	if _, present := asMap["ingestMode"]; !present {
 		asMap["ingestMode"] = "PUSH"
 	}
 
-	fieldsInOrder := [...]string{"name", "description", "record", "ingestMode", "pullSource", "sourceLocation"}
+	fieldsInOrder := [...]string{"name", "description", "record", "liveVideoAbr", "ingestMode", "pullSource", "sourceLocation"}
 	for _, k := range fieldsInOrder {
 		v, ok := asMap[k]
 		if !ok {
@@ -138499,6 +138662,13 @@ func (ec *executionContext) unmarshalInputCreateStreamInput(ctx context.Context,
 				return it, err
 			}
 			it.Record = data
+		case "liveVideoAbr":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("liveVideoAbr"))
+			data, err := ec.unmarshalOString2ᚖstring(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.LiveVideoAbr = data
 		case "ingestMode":
 			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("ingestMode"))
 			data, err := ec.unmarshalOIngestMode2ᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐIngestMode(ctx, v)
@@ -140690,7 +140860,7 @@ func (ec *executionContext) unmarshalInputUpdatePushTargetInput(ctx context.Cont
 		asMap[k] = v
 	}
 
-	fieldsInOrder := [...]string{"name", "targetUri", "isEnabled"}
+	fieldsInOrder := [...]string{"name", "videoChoice", "targetUri", "isEnabled"}
 	for _, k := range fieldsInOrder {
 		v, ok := asMap[k]
 		if !ok {
@@ -140704,6 +140874,13 @@ func (ec *executionContext) unmarshalInputUpdatePushTargetInput(ctx context.Cont
 				return it, err
 			}
 			it.Name = data
+		case "videoChoice":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("videoChoice"))
+			data, err := ec.unmarshalOString2ᚖstring(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.VideoChoice = data
 		case "targetUri":
 			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("targetUri"))
 			data, err := ec.unmarshalOString2ᚖstring(ctx, v)
@@ -140734,7 +140911,7 @@ func (ec *executionContext) unmarshalInputUpdateStreamInput(ctx context.Context,
 		asMap[k] = v
 	}
 
-	fieldsInOrder := [...]string{"name", "description", "record", "ingestMode", "pullSource", "sourceLocation", "dvrChapterMode", "dvrChapterIntervalSeconds", "monitoring"}
+	fieldsInOrder := [...]string{"name", "description", "record", "liveVideoAbr", "ingestMode", "pullSource", "sourceLocation", "dvrChapterMode", "dvrChapterIntervalSeconds", "monitoring"}
 	for _, k := range fieldsInOrder {
 		v, ok := asMap[k]
 		if !ok {
@@ -140762,6 +140939,13 @@ func (ec *executionContext) unmarshalInputUpdateStreamInput(ctx context.Context,
 				return it, err
 			}
 			it.Record = data
+		case "liveVideoAbr":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("liveVideoAbr"))
+			data, err := ec.unmarshalOString2ᚖstring(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.LiveVideoAbr = data
 		case "ingestMode":
 			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("ingestMode"))
 			data, err := ec.unmarshalOIngestMode2ᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐIngestMode(ctx, v)
@@ -170809,6 +170993,11 @@ func (ec *executionContext) _PushTarget(ctx context.Context, sel ast.SelectionSe
 			if out.Values[i] == graphql.Null {
 				atomic.AddUint32(&out.Invalids, 1)
 			}
+		case "videoChoice":
+			out.Values[i] = ec._PushTarget_videoChoice(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				atomic.AddUint32(&out.Invalids, 1)
+			}
 		case "targetUri":
 			out.Values[i] = ec._PushTarget_targetUri(ctx, field, obj)
 			if out.Values[i] == graphql.Null {
@@ -178443,6 +178632,11 @@ func (ec *executionContext) _Stream(ctx context.Context, sel ast.SelectionSet, o
 			}
 
 			out.Concurrently(i, func(ctx context.Context) graphql.Marshaler { return innerFunc(ctx, out) })
+		case "liveVideoAbr":
+			out.Values[i] = ec._Stream_liveVideoAbr(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				atomic.AddUint32(&out.Invalids, 1)
+			}
 		case "ingestMode":
 			field := field
 

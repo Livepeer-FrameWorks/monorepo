@@ -54,7 +54,7 @@ func pushListRow() *sqlmock.Rows {
 		"managed_source_kind", "managed_always_on", "managed_placement_count",
 		"managed_allowed_cluster_ids", "active_ingest_cluster_id",
 		"dvr_chapter_mode", "dvr_chapter_interval_seconds",
-		"dvr_retention_days_override", "clip_retention_days_override", "monitoring_enabled",
+		"dvr_retention_days_override", "clip_retention_days_override", "monitoring_enabled", "live_video_abr",
 	})
 }
 
@@ -67,7 +67,7 @@ func pushFullRow() *sqlmock.Rows {
 		"managed_source_kind", "managed_always_on", "managed_placement_count",
 		"managed_allowed_cluster_ids", "active_ingest_cluster_id",
 		"dvr_chapter_mode", "dvr_chapter_interval_seconds",
-		"dvr_retention_days_override", "clip_retention_days_override", "monitoring_enabled",
+		"dvr_retention_days_override", "clip_retention_days_override", "monitoring_enabled", "live_video_abr",
 	})
 }
 
@@ -210,7 +210,7 @@ func TestUpdateStream(t *testing.T) {
 			WithArgs(
 				true, "New Title", false, nil, false, false,
 				false, nil, false, nil, false, nil,
-				"s1", "u1", testTenantID,
+				false, "", "s1", "u1", testTenantID,
 			).
 			WillReturnResult(sqlmock.NewResult(0, 1))
 		expectDualEventInsert(mock, "stream.updated", eventStreamUpdated)
@@ -222,7 +222,7 @@ func TestUpdateStream(t *testing.T) {
 				"s1", "live+abc", "key-1", "pb-1", "New Title", nil,
 				false, fixedTS, fixedTS, "push",
 				nil, nil, "{}", nil, false, nil, "{}", nil,
-				nil, nil, nil, nil, nil))
+				nil, nil, nil, nil, nil, "INHERIT"))
 		expectStreamPlacementRead(mock, nil)
 
 		stream, err := s.UpdateStream(ctxAs("u1", testTenantID, "owner"), &commodorepb.UpdateStreamRequest{
@@ -251,7 +251,7 @@ func TestUpdateStream(t *testing.T) {
 		updateArgs := []driver.Value{
 			true, "New Title", false, nil, false, false,
 			false, nil, false, nil, false, nil,
-			"s1", "u1", testTenantID,
+			false, "", "s1", "u1", testTenantID,
 		}
 		mock.ExpectBegin()
 		mock.ExpectExec("UPDATE commodore.streams SET").WithArgs(updateArgs...).
@@ -268,7 +268,7 @@ func TestUpdateStream(t *testing.T) {
 				"s1", "live+abc", "key-1", "pb-1", "New Title", nil,
 				false, fixedTS, fixedTS, "push",
 				nil, nil, "{}", nil, false, nil, "{}", nil,
-				nil, nil, nil, nil, nil))
+				nil, nil, nil, nil, nil, "INHERIT"))
 		expectStreamPlacementRead(mock, nil)
 
 		stream, err := s.UpdateStream(ctxAs("u1", testTenantID, "owner"), &commodorepb.UpdateStreamRequest{
@@ -300,7 +300,7 @@ func TestUpdateStream(t *testing.T) {
 				"s1", "live+abc", "key-1", "pb-1", "Title", nil,
 				false, fixedTS, fixedTS, "push",
 				nil, nil, "{}", nil, false, nil, "{}", nil,
-				nil, nil, nil, nil, nil))
+				nil, nil, nil, nil, nil, "INHERIT"))
 		expectStreamPlacementRead(mock, nil)
 
 		if _, err := s.UpdateStream(ctxAs("u1", testTenantID, "owner"), &commodorepb.UpdateStreamRequest{StreamId: "s1"}); err != nil {
@@ -323,7 +323,7 @@ func TestUpdateStream(t *testing.T) {
 			WithArgs(
 				false, "", false, nil, false, false,
 				false, nil, false, nil, true, false,
-				"s1", "u1", testTenantID,
+				false, "", "s1", "u1", testTenantID,
 			).
 			WillReturnResult(sqlmock.NewResult(0, 1))
 		expectDualEventInsert(mock, "stream.updated", eventStreamUpdated)
@@ -334,7 +334,7 @@ func TestUpdateStream(t *testing.T) {
 				"s1", "live+abc", "key-1", "pb-1", "Title", nil,
 				false, fixedTS, fixedTS, "push",
 				nil, nil, "{}", nil, false, nil, "{}", nil,
-				nil, nil, nil, nil, false))
+				nil, nil, nil, nil, false, "INHERIT"))
 		expectStreamPlacementRead(mock, nil)
 
 		monitoring := commodorepb.MonitoringToggle_MONITORING_TOGGLE_OFF
@@ -430,8 +430,8 @@ func TestListStreams(t *testing.T) {
 		mock.ExpectQuery("LEFT JOIN commodore.stream_pull_sources").
 			WithArgs("u1", testTenantID, false, "", int32(51)).
 			WillReturnRows(pushListRow().
-				AddRow("s1", "live+a", "k1", "pb1", "First", nil, false, fixedTS, fixedTS, "push", nil, nil, "{}", nil, false, nil, "{}", nil, nil, nil, nil, nil, nil).
-				AddRow("s2", "live+b", "k2", "pb2", "Second", "desc", true, fixedTS, fixedTS, "push", nil, nil, "{}", nil, false, nil, "{}", nil, nil, nil, nil, nil, nil))
+				AddRow("s1", "live+a", "k1", "pb1", "First", nil, false, fixedTS, fixedTS, "push", nil, nil, "{}", nil, false, nil, "{}", nil, nil, nil, nil, nil, nil, "INHERIT").
+				AddRow("s2", "live+b", "k2", "pb2", "Second", "desc", true, fixedTS, fixedTS, "push", nil, nil, "{}", nil, false, nil, "{}", nil, nil, nil, nil, nil, nil, "INHERIT"))
 		restricted, err := proto.Marshal(&placementpb.PolicySet{Revision: 1, Ingest: &placementpb.Rules{SchemaVersion: 1, Constraints: &placementpb.Constraints{
 			Allow: &placementpb.SelectorSet{Any: []*placementpb.Selector{{ClusterIds: []string{"edge-a"}, NodeIds: []string{"node-1"}}}},
 		}}})

@@ -126,6 +126,21 @@ func TestPushStartAmbiguityClassification(t *testing.T) {
 	})
 }
 
+func TestPushStartReportsMistRejection(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.Contains(r.URL.Query().Get("command"), "authorize") {
+			_, _ = w.Write([]byte(`{"authorize":{"status":"OK"}}`))
+			return
+		}
+		_, _ = w.Write([]byte(`{"push_start":{"error":"Invalid RTMP push parameters"}}`))
+	}))
+	defer srv.Close()
+	client := NewClient(logging.NewLogger(), ClientConfig{BaseURL: srv.URL})
+	if err := client.PushStart("live+x", "/data/dvr/x/seg.ts"); err == nil || !strings.Contains(err.Error(), "push_start rejected") {
+		t.Fatalf("Mist rejection = %v", err)
+	}
+}
+
 func TestPushStartTransportErrorDoesNotExposeDestinationSecret(t *testing.T) {
 	const canary = "super-secret-stream-key"
 	c := NewClient(logging.NewLogger(), ClientConfig{BaseURL: "http://mist.invalid"})

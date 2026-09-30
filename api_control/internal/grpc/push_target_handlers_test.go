@@ -35,14 +35,14 @@ func newPushTargetTestServer(t *testing.T) (*CommodoreServer, sqlmock.Sqlmock, *
 
 func pushTargetRows() *sqlmock.Rows {
 	return sqlmock.NewRows([]string{
-		"id", "stream_id", "platform", "name", "target_uri", "is_enabled",
+		"id", "stream_id", "platform", "name", "target_uri", "video_choice", "is_enabled",
 		"status", "reason_code", "last_error", "last_pushed_at", "created_at", "updated_at",
 	})
 }
 
 func expectNoEnabledPushTargets(mock sqlmock.Sqlmock, streamID, tenantID string) {
 	mock.ExpectQuery("FROM commodore.push_targets").WithArgs(streamID, tenantID).
-		WillReturnRows(sqlmock.NewRows([]string{"id", "platform", "name", "target_uri"}))
+		WillReturnRows(sqlmock.NewRows([]string{"id", "platform", "name", "target_uri", "video_choice"}))
 }
 
 func pushTargetServiceContext() context.Context {
@@ -172,7 +172,7 @@ func TestCreatePushTarget(t *testing.T) {
 		// The stored target_uri arg must be the ciphertext, never the plaintext.
 		mock.ExpectBegin()
 		mock.ExpectExec("INSERT INTO commodore.push_targets").
-			WithArgs(sqlmock.AnyArg(), testTenantID, "s1", "custom", "n", encryptedArg{s.fieldEncryptor}, sqlmock.AnyArg()).
+			WithArgs(sqlmock.AnyArg(), testTenantID, "s1", "custom", "n", encryptedArg{s.fieldEncryptor}, "AUTO", sqlmock.AnyArg()).
 			WillReturnResult(sqlmock.NewResult(0, 1))
 		expectDualEventInsert(mock, "stream.updated", eventStreamUpdated)
 		mock.ExpectCommit()
@@ -209,7 +209,7 @@ func TestCreatePushTarget(t *testing.T) {
 		mock.ExpectQuery("SELECT EXISTS").WithArgs("s1", testTenantID, "u1", true).
 			WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(true))
 		mock.ExpectQuery("FROM commodore.push_targets").WithArgs("s1", testTenantID, "u1", true).
-			WillReturnRows(pushTargetRows().AddRow("pt-existing", "s1", "custom", "existing", stored, true, "idle", "unspecified", nil, nil, now, now))
+			WillReturnRows(pushTargetRows().AddRow("pt-existing", "s1", "custom", "existing", stored, "AUTO", true, "idle", "unspecified", nil, nil, now, now))
 
 		_, err = s.CreatePushTarget(ctxAs("u1", testTenantID, "owner"), &commodorepb.CreatePushTargetRequest{
 			StreamId: "s1", Name: "duplicate", TargetUri: uri,
@@ -259,7 +259,7 @@ func TestListPushTargets(t *testing.T) {
 		mock.ExpectQuery("FROM commodore.push_targets").
 			WithArgs("s1", testTenantID, "u1", true).
 			WillReturnRows(pushTargetRows().
-				AddRow("pt1", "s1", "custom", "twitch", stored, true, "idle", "unspecified", nil, nil, now, now))
+				AddRow("pt1", "s1", "custom", "twitch", stored, "AUTO", true, "idle", "unspecified", nil, nil, now, now))
 
 		resp, err := s.ListPushTargets(ctxAs("u1", testTenantID, "owner"), &commodorepb.ListPushTargetsRequest{StreamId: "s1"})
 		if err != nil {
@@ -285,7 +285,7 @@ func TestListPushTargets(t *testing.T) {
 		defer done()
 		now := time.Now()
 		mock.ExpectQuery("FROM commodore.push_targets").WithArgs("s1", testTenantID, "u1", true).
-			WillReturnRows(pushTargetRows().AddRow("pt-broken", "s1", "custom", "broken", "enc:v1:not-valid", true, "failed", "configuration_error", nil, nil, now, now))
+			WillReturnRows(pushTargetRows().AddRow("pt-broken", "s1", "custom", "broken", "enc:v1:not-valid", "AUTO", true, "failed", "configuration_error", nil, nil, now, now))
 
 		resp, err := s.ListPushTargets(ctxAs("u1", testTenantID, "owner"), &commodorepb.ListPushTargetsRequest{StreamId: "s1"})
 		if err != nil {
@@ -319,9 +319,9 @@ func TestListPushTargets(t *testing.T) {
 		now := time.Now()
 		mock.ExpectQuery("FROM commodore.push_targets").WithArgs("s1", testTenantID, "u1", true).
 			WillReturnRows(pushTargetRows().
-				AddRow("legacy", "s1", "custom", "legacy", legacyStored, true, "idle", "unspecified", nil, nil, now, now).
-				AddRow("previous", "s1", "custom", "previous", previousStored, true, "idle", "unspecified", nil, nil, now, now).
-				AddRow("active", "s1", "custom", "active", activeStored, true, "idle", "unspecified", nil, nil, now, now))
+				AddRow("legacy", "s1", "custom", "legacy", legacyStored, "AUTO", true, "idle", "unspecified", nil, nil, now, now).
+				AddRow("previous", "s1", "custom", "previous", previousStored, "AUTO", true, "idle", "unspecified", nil, nil, now, now).
+				AddRow("active", "s1", "custom", "active", activeStored, "AUTO", true, "idle", "unspecified", nil, nil, now, now))
 
 		resp, err := s.ListPushTargets(ctxAs("u1", testTenantID, "owner"), &commodorepb.ListPushTargetsRequest{StreamId: "s1"})
 		if err != nil {
@@ -366,8 +366,8 @@ func TestGetStreamPushTargets(t *testing.T) {
 		// Helmsman can actually push. No masking.
 		mock.ExpectQuery("FROM commodore.push_targets").
 			WithArgs("s1", testTenantID).
-			WillReturnRows(sqlmock.NewRows([]string{"id", "platform", "name", "target_uri"}).
-				AddRow("pt1", "custom", "twitch", stored))
+			WillReturnRows(sqlmock.NewRows([]string{"id", "platform", "name", "target_uri", "video_choice"}).
+				AddRow("pt1", "custom", "twitch", stored, "AUTO"))
 
 		resp, err := s.GetStreamPushTargets(pushTargetServiceContext(),
 			&commodorepb.GetStreamPushTargetsRequest{StreamId: "s1", TenantId: testTenantID})
@@ -393,9 +393,9 @@ func TestGetStreamPushTargets(t *testing.T) {
 		defer done()
 		mock.ExpectQuery("FROM commodore.push_targets").
 			WithArgs("s1", testTenantID).
-			WillReturnRows(sqlmock.NewRows([]string{"id", "platform", "name", "target_uri"}).
-				AddRow("pt-broken", "custom", "broken", "enc:v3:missing:not-valid").
-				AddRow("pt-good", "youtube", "healthy", "rtmp://example.test/live/key"))
+			WillReturnRows(sqlmock.NewRows([]string{"id", "platform", "name", "target_uri", "video_choice"}).
+				AddRow("pt-broken", "custom", "broken", "enc:v3:missing:not-valid", "AUTO").
+				AddRow("pt-good", "youtube", "healthy", "rtmp://example.test/live/key", "AUTO"))
 
 		resp, err := s.GetStreamPushTargets(pushTargetServiceContext(),
 			&commodorepb.GetStreamPushTargetsRequest{StreamId: "s1", TenantId: testTenantID})
@@ -504,7 +504,7 @@ func TestUpdatePushTarget(t *testing.T) {
 		mock.ExpectBegin()
 		mock.ExpectQuery("UPDATE commodore.push_targets").
 			WillReturnRows(pushTargetRows().
-				AddRow("pt1", "s1", "custom", name, stored, true, "idle", "unspecified", nil, nil, now, now))
+				AddRow("pt1", "s1", "custom", name, stored, "AUTO", true, "idle", "unspecified", nil, nil, now, now))
 		expectDualEventInsert(mock, "stream.updated", eventStreamUpdated)
 		mock.ExpectCommit()
 

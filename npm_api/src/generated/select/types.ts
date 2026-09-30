@@ -3096,6 +3096,9 @@ const types: CompressedTypeMap<number> = {
             "name": [
                 1
             ],
+            "videoChoice": [
+                1
+            ],
             "targetUri": [
                 1
             ],
@@ -3151,6 +3154,9 @@ const types: CompressedTypeMap<number> = {
             ],
             "record": [
                 2
+            ],
+            "liveVideoAbr": [
+                1
             ],
             "ingestMode": [
                 197
@@ -8947,6 +8953,9 @@ const types: CompressedTypeMap<number> = {
             "name": [
                 1
             ],
+            "videoChoice": [
+                1
+            ],
             "targetUri": [
                 1
             ],
@@ -11569,6 +11578,9 @@ const types: CompressedTypeMap<number> = {
             "record": [
                 2
             ],
+            "liveVideoAbr": [
+                1
+            ],
             "ingestMode": [
                 197
             ],
@@ -13674,6 +13686,9 @@ const types: CompressedTypeMap<number> = {
             "name": [
                 1
             ],
+            "videoChoice": [
+                1
+            ],
             "targetUri": [
                 1
             ],
@@ -13693,6 +13708,9 @@ const types: CompressedTypeMap<number> = {
             ],
             "record": [
                 2
+            ],
+            "liveVideoAbr": [
+                1
             ],
             "ingestMode": [
                 197

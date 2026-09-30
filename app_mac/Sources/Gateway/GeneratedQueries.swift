@@ -622,6 +622,7 @@ enum GQL {
     streamId
     platform
     name
+    videoChoice
     targetUri
     isEnabled
     status
@@ -664,6 +665,7 @@ enum GQL {
     streamKey
     playbackId
     record
+    liveVideoAbr
     ingestMode
     pullSource {
       sourceUriRedacted

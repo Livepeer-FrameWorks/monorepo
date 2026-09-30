@@ -37,6 +37,7 @@
     name?: string | null;
     description?: string | null;
     record?: boolean | null;
+    liveVideoAbr?: string | null;
     ingestMode?: "PUSH" | "PULL" | "MANAGED" | string | null;
     pullSource?: {
       sourceUriRedacted?: string | null;
@@ -56,6 +57,7 @@
     name: string;
     description: string;
     record: boolean;
+    liveVideoAbr: string;
     pullSourceUri: string;
     pullSourceEnabled: boolean;
     /** Present only when the user changed the source location. */
@@ -72,6 +74,7 @@
   let {
     open = $bindable(false),
     stream,
+    hasProcessedVideoTargets = false,
     clusterOptions = [],
     placementHref,
     loading = false,
@@ -79,6 +82,7 @@
   }: {
     open: boolean;
     stream: EditableStream | null;
+    hasProcessedVideoTargets?: boolean;
     clusterOptions?: SourceLocationClusterChoice[];
     placementHref?: string;
     loading?: boolean;
@@ -94,6 +98,7 @@
     name: string;
     description: string;
     record: boolean;
+    liveVideoAbr: string;
     pullSourceUri: string;
     pullSourceEnabled: boolean;
     sourceLocation: SourceLocationDraft;
@@ -105,6 +110,7 @@
     name: "",
     description: "",
     record: false,
+    liveVideoAbr: "INHERIT",
     pullSourceUri: "",
     pullSourceEnabled: true,
     sourceLocation: anySourceLocation(),
@@ -167,6 +173,7 @@
       name: source.name || "",
       description: source.description || "",
       record: source.record || false,
+      liveVideoAbr: source.liveVideoAbr ?? "INHERIT",
       pullSourceUri: "",
       pullSourceEnabled: source.pullSource?.enabled ?? true,
       sourceLocation: draftFromSourceLocation(source.sourceLocation) ?? anySourceLocation(),
@@ -231,6 +238,7 @@
       name: formData.name,
       description: formData.description,
       record: formData.record,
+      liveVideoAbr: formData.liveVideoAbr,
       pullSourceUri: formData.pullSourceUri,
       pullSourceEnabled: formData.pullSourceEnabled,
       sourceLocation: sourceLocationChanged
@@ -346,6 +354,33 @@
           </p>
         </div>
       {/if}
+
+      <details class="text-sm">
+        <summary class="cursor-pointer text-xs text-muted-foreground"
+          >Advanced video processing</summary
+        >
+        <div class="mt-3 space-y-2">
+          <Label for="editLiveVideoAbr" class="text-sm text-foreground">Live video renditions</Label
+          >
+          <select
+            id="editLiveVideoAbr"
+            bind:value={formData.liveVideoAbr}
+            class="w-full rounded-none border border-input bg-background px-3 py-2 text-sm"
+          >
+            <option value="INHERIT">Use tier setting</option>
+            <option value="OFF">Off — keep source video only</option>
+          </select>
+          <p class="text-xs text-muted-foreground">
+            Audio conversion stays available. Takes effect from the next broadcast.
+          </p>
+          {#if formData.liveVideoAbr === "OFF" && hasProcessedVideoTargets}
+            <p class="text-xs text-amber-600 dark:text-amber-400">
+              Enabled targets that require processed video need a separate video process or live
+              renditions turned on.
+            </p>
+          {/if}
+        </div>
+      </details>
 
       <div class="space-y-2 border-l border-[hsl(var(--tn-fg-gutter)/0.3)] pl-3">
         <div class="text-sm font-medium text-foreground">Retention overrides</div>

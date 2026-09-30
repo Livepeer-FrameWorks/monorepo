@@ -132,3 +132,37 @@ func TestRestreamActivationDispatchRequiresProtocolSixAndAttempt(t *testing.T) {
 		t.Fatalf("protocol-6 activation was not dispatched with its attempt: %+v", stream.sent)
 	}
 }
+
+func TestRestreamVideoChoiceRequiresProtocolEight(t *testing.T) {
+	previousRegistry := registry
+	t.Cleanup(func() { registry = previousRegistry })
+	stream := &mockStream{}
+	connection := &conn{stream: stream, rawNodeID: "node", canonicalID: "node", protocolVersion: ProcessingJobInventoryProtocolMin}
+	registry = &Registry{conns: map[string]*conn{"node": connection}, log: logging.NewLogger()}
+	request := &ipcpb.ActivatePushTargets{
+		StreamName: "live+choice", SourceGeneration: "generation", TargetRevision: 1, ActivationAttempt: "attempt",
+		Targets: []*ipcpb.PushTargetSpec{{TargetUri: "rtmps://example.test/live/key", VideoChoice: "AUTO"}},
+	}
+	if err := SendLocalActivatePushTargets(context.Background(), "node", request); err != nil {
+		t.Fatalf("protocol-7 default choice should remain available during rollout: %v", err)
+	}
+	request.Targets[0].TargetUri = "srt://example.test:9000"
+	request.Targets[0].VideoChoice = "SOURCE_VIDEO"
+	if err := SendLocalActivatePushTargets(context.Background(), "node", request); err != nil {
+		t.Fatalf("protocol-7 SRT should ignore video choice: %v", err)
+	}
+	request.Targets[0].TargetUri = "rtmps://example.test/live/key"
+	if err := SendLocalActivatePushTargets(context.Background(), "node", request); status.Code(err) != codes.FailedPrecondition {
+		t.Fatalf("protocol-7 explicit RTMP video choice error=%v, want FailedPrecondition", err)
+	}
+	if len(stream.sent) != 2 {
+		t.Fatalf("explicit video choice was dispatched to a sidecar that ignores it")
+	}
+	connection.protocolVersion = RestreamTrackPolicyProtocolMin
+	if err := SendLocalActivatePushTargets(context.Background(), "node", request); err != nil {
+		t.Fatal(err)
+	}
+	if len(stream.sent) != 3 {
+		t.Fatalf("protocol-8 video choice dispatch count=%d, want 3", len(stream.sent))
+	}
+}

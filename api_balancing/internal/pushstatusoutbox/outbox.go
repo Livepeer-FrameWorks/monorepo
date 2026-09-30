@@ -19,16 +19,17 @@ type Client interface {
 }
 
 const (
-	ReasonUnspecified         = "unspecified"
-	ReasonConnected           = "connected"
-	ReasonCompleted           = "completed"
-	ReasonDestinationRejected = "destination_rejected"
-	ReasonNetworkError        = "network_error"
-	ReasonProcessError        = "process_error"
-	ReasonCapacityExhausted   = "capacity_exhausted"
-	ReasonConfigurationError  = "configuration_error"
-	ReasonEdgeUpgradeRequired = "edge_upgrade_required"
-	ReasonStopped             = "stopped"
+	ReasonUnspecified          = "unspecified"
+	ReasonConnected            = "connected"
+	ReasonCompleted            = "completed"
+	ReasonDestinationRejected  = "destination_rejected"
+	ReasonNetworkError         = "network_error"
+	ReasonProcessError         = "process_error"
+	ReasonCapacityExhausted    = "capacity_exhausted"
+	ReasonConfigurationError   = "configuration_error"
+	ReasonEdgeUpgradeRequired  = "edge_upgrade_required"
+	ReasonMediaSelectionFailed = "media_selection_failed"
+	ReasonStopped              = "stopped"
 )
 
 // Metrics contains bounded-label status-delivery outcomes.

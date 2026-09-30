@@ -174,6 +174,7 @@
       id: t.id,
       streamId: t.streamId,
       platform: t.platform ?? null,
+      videoChoice: t.videoChoice ?? "AUTO",
       name: t.name,
       targetUri: t.targetUri,
       isEnabled: t.isEnabled,
@@ -534,6 +535,7 @@
     name?: string;
     description?: string;
     record?: boolean;
+    liveVideoAbr?: string;
     pullSourceUri?: string;
     pullSourceEnabled?: boolean;
     sourceLocation?: SourceLocationDraft;
@@ -563,6 +565,7 @@
         name: formData.name,
         description: formData.description,
         record: formData.record,
+        liveVideoAbr: formData.liveVideoAbr,
         ingestMode: stream.ingestMode,
         pullSource,
         sourceLocation: stream.ingestMode === "PULL" ? formData.sourceLocation : undefined,
@@ -707,6 +710,7 @@
     platform?: string;
     name: string;
     targetUri: string;
+    videoChoice?: string;
   }) {
     try {
       actionLoading.createPushTarget = true;
@@ -729,6 +733,7 @@
     name?: string;
     targetUri?: string;
     isEnabled?: boolean;
+    videoChoice?: string;
   }) {
     if (!editingPushTarget) return;
     try {
@@ -1087,6 +1092,9 @@
   <StreamEditModal
     bind:open={showEditModal}
     {stream}
+    hasProcessedVideoTargets={pushTargets.some(
+      (target) => target.isEnabled && target.videoChoice === "PROCESSED_VIDEO"
+    )}
     {clusterOptions}
     placementHref={resolve("/streams/[id]/placement", { id: streamId }) + "?verb=ingest"}
     loading={actionLoading.editStream}
@@ -1105,11 +1113,13 @@
   />
   <PushTargetCreateModal
     bind:open={showCreatePushTargetModal}
+    liveVideoAbr={stream?.liveVideoAbr ?? "INHERIT"}
     loading={actionLoading.createPushTarget}
     onCreate={handleCreatePushTarget}
   />
   <PushTargetEditModal
     bind:open={showEditPushTargetModal}
+    liveVideoAbr={stream?.liveVideoAbr ?? "INHERIT"}
     target={editingPushTarget}
     loading={actionLoading.updatePushTarget}
     onUpdate={handleUpdatePushTarget}
