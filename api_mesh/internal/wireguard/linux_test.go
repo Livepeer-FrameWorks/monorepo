@@ -11,9 +11,14 @@ import (
 	"golang.zx2c4.com/wireguard/wgctrl/wgtypes"
 )
 
+// fakeWgctrlClient models the kernel device: ConfigureDevice applies the
+// config to device with the kernel's peer semantics, including ReplacePeers
+// dropping every peer (and with it the peer's transfer counters).
 type fakeWgctrlClient struct {
 	configureCalls []configureCall
 	configureErr   error
+	deviceErr      error
+	device         wgtypes.Device
 	closed         bool
 }
 
@@ -22,9 +27,67 @@ type configureCall struct {
 	cfg  wgtypes.Config
 }
 
+func (f *fakeWgctrlClient) Device(name string) (*wgtypes.Device, error) {
+	if f.deviceErr != nil {
+		return nil, f.deviceErr
+	}
+	dev := f.device
+	dev.Name = name
+	dev.Peers = append([]wgtypes.Peer(nil), f.device.Peers...)
+	return &dev, nil
+}
+
 func (f *fakeWgctrlClient) ConfigureDevice(name string, cfg wgtypes.Config) error {
 	f.configureCalls = append(f.configureCalls, configureCall{name: name, cfg: cfg})
-	return f.configureErr
+	if f.configureErr != nil {
+		return f.configureErr
+	}
+	if cfg.PrivateKey != nil {
+		f.device.PrivateKey = *cfg.PrivateKey
+		f.device.PublicKey = cfg.PrivateKey.PublicKey()
+	}
+	if cfg.ListenPort != nil {
+		f.device.ListenPort = *cfg.ListenPort
+	}
+	if cfg.ReplacePeers {
+		f.device.Peers = nil
+	}
+	for _, pc := range cfg.Peers {
+		idx := -1
+		for i, p := range f.device.Peers {
+			if p.PublicKey == pc.PublicKey {
+				idx = i
+			}
+		}
+		if pc.Remove {
+			if idx >= 0 {
+				f.device.Peers = append(f.device.Peers[:idx], f.device.Peers[idx+1:]...)
+			}
+			continue
+		}
+		if idx < 0 {
+			if pc.UpdateOnly {
+				continue
+			}
+			f.device.Peers = append(f.device.Peers, wgtypes.Peer{PublicKey: pc.PublicKey})
+			idx = len(f.device.Peers) - 1
+		}
+		peer := &f.device.Peers[idx]
+		if pc.PresharedKey != nil {
+			peer.PresharedKey = *pc.PresharedKey
+		}
+		if pc.Endpoint != nil {
+			peer.Endpoint = pc.Endpoint
+		}
+		if pc.PersistentKeepaliveInterval != nil {
+			peer.PersistentKeepaliveInterval = *pc.PersistentKeepaliveInterval
+		}
+		if pc.ReplaceAllowedIPs {
+			peer.AllowedIPs = nil
+		}
+		peer.AllowedIPs = append(peer.AllowedIPs, pc.AllowedIPs...)
+	}
+	return nil
 }
 
 func (f *fakeWgctrlClient) Close() error {
@@ -170,8 +233,8 @@ func TestLinuxManager_ApplyConfiguresDevice(t *testing.T) {
 	if got.name != "wg-test" {
 		t.Errorf("interface name = %q, want wg-test", got.name)
 	}
-	if !got.cfg.ReplacePeers {
-		t.Error("ReplacePeers must be true (full sync)")
+	if got.cfg.ReplacePeers {
+		t.Error("ReplacePeers must be false: it drops every peer session")
 	}
 	if got.cfg.PrivateKey == nil || *got.cfg.PrivateKey != priv {
 		t.Errorf("private key mismatch")

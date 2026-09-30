@@ -16,6 +16,7 @@ import (
 // interface exists so tests can swap in a fake without a real netlink
 // socket; production paths always pass a *wgctrl.Client.
 type wgctrlClient interface {
+	Device(name string) (*wgtypes.Device, error)
 	ConfigureDevice(name string, cfg wgtypes.Config) error
 	Close() error
 }
@@ -218,8 +219,14 @@ func (m *linuxManager) Apply(cfg Config) error {
 	if err := ValidateForApply(cfg); err != nil {
 		return fmt.Errorf("wireguard policy: %w", err)
 	}
-	if err := m.client.ConfigureDevice(m.interfaceName, toWGTypes(cfg)); err != nil {
-		return fmt.Errorf("configure %s: %w", m.interfaceName, err)
+	current, err := m.client.Device(m.interfaceName)
+	if err != nil {
+		return fmt.Errorf("read %s: %w", m.interfaceName, err)
+	}
+	if delta, changed := deviceConfigDelta(cfg, current); changed {
+		if err := m.client.ConfigureDevice(m.interfaceName, delta); err != nil {
+			return fmt.Errorf("configure %s: %w", m.interfaceName, err)
+		}
 	}
 	if err := m.link.EnsureAddress(m.interfaceName, cfg.Address); err != nil {
 		return err
