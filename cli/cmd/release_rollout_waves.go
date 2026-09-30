@@ -480,6 +480,9 @@ func runRolloutWave(ctx context.Context, out io.Writer, wave rolloutWave, run ro
 					mu.Lock()
 					failures = append(failures, fmt.Errorf("%s: %w", host, err))
 					mu.Unlock()
+					// Written once the failure is recorded: from here no lane
+					// claims another host, and hosts already running finish.
+					fmt.Fprintf(shared, "[%s] failed; no further hosts start in wave %s\n", host, wave.Name)
 					return
 				}
 			}

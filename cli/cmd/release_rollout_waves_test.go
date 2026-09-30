@@ -284,7 +284,10 @@ func TestRunRolloutWavesRunsLanesConcurrentlyWithPrefixedLines(t *testing.T) {
 
 func TestRunRolloutWavesParallelLaneStopsAfterSiblingFailure(t *testing.T) {
 	waves := []rolloutWave{{Name: "media", Lanes: [][]string{{"a1", "a2"}, {"b1", "b2"}}, Limit: 2}}
+	// a1Failed closes when the runner reports a1's failure as recorded, which
+	// is the point after which no lane may claim another host.
 	a1Failed := make(chan struct{})
+	out := &closeOnWrite{marker: "[a1] failed; no further hosts start", done: a1Failed}
 	b1Started := make(chan struct{})
 	var mu sync.Mutex
 	var ran []string
@@ -297,7 +300,6 @@ func TestRunRolloutWavesParallelLaneStopsAfterSiblingFailure(t *testing.T) {
 			// Fail only once the sibling lane is running, so both lanes are
 			// provably in flight when the failure lands.
 			<-b1Started
-			defer close(a1Failed)
 			return errors.New("boom")
 		case "b1":
 			close(b1Started)
@@ -305,7 +307,7 @@ func TestRunRolloutWavesParallelLaneStopsAfterSiblingFailure(t *testing.T) {
 		}
 		return nil
 	}
-	err := runRolloutWaves(context.Background(), io.Discard, waves, run, nil)
+	err := runRolloutWaves(context.Background(), out, waves, run, nil)
 	var stopped *rolloutStoppedError
 	if !errors.As(err, &stopped) {
 		t.Fatalf("err = %v, want *rolloutStoppedError", err)
@@ -319,6 +321,26 @@ func TestRunRolloutWavesParallelLaneStopsAfterSiblingFailure(t *testing.T) {
 	if !slices.Equal(notStarted, []string{"a2", "b2"}) {
 		t.Fatalf("not started = %v, want a2 and b2", notStarted)
 	}
+}
+
+// closeOnWrite closes done the first time the output contains marker.
+type closeOnWrite struct {
+	mu     sync.Mutex
+	buf    strings.Builder
+	marker string
+	done   chan struct{}
+	closed bool
+}
+
+func (c *closeOnWrite) Write(p []byte) (int, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.buf.Write(p)
+	if !c.closed && strings.Contains(c.buf.String(), c.marker) {
+		c.closed = true
+		close(c.done)
+	}
+	return len(p), nil
 }
 
 // meshProvisioner is a Privateer provisioner whose role always reports drift
