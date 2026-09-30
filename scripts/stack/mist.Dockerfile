@@ -10,6 +10,9 @@
 #
 # The source tree, extracted subprojects and build directory live in BuildKit
 # cache mounts, so a rerun recompiles only what changed since the last build.
+# The cached tree is updated by content, and a changed file takes the time of
+# the copy: a checkout whose edited header is older than objects built from
+# another tree would otherwise leave those objects stale and link old symbols.
 
 FROM ubuntu:24.04 AS build
 ENV DEBIAN_FRONTEND=noninteractive
@@ -26,7 +29,7 @@ ARG MIST_SOURCE_REVISION=unknown
 RUN --mount=type=cache,id=fw-stack-mist-work,target=/work,sharing=locked \
     set -eu; \
     mkdir -p /work/src; \
-    rsync -a --delete --filter='P /subprojects/*/' /src/ /work/src/; \
+    rsync -rlpD --checksum --delete --filter='P /subprojects/*/' /src/ /work/src/; \
     if [ ! -f /work/build/build.ninja ]; then \
       meson setup /work/build /work/src \
         --buildtype=debugoptimized \
