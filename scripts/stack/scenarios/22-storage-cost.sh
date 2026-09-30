@@ -37,7 +37,7 @@ cost_projected() {
   # Tier pricing is billing data: a session (or a token with billing:read) sees it.
   C=$(gql_session 'query($i:StorageArtifactsInput){storageArtifactsConnection(input:$i){nodes{status sizeBytes storageCost{perDay perMonth currency}}}}' \
     "$(jq -cn --arg h "$CHASH" '{i:{artifactHash:$h,first:1}}')")
-  echo "    clip: $(echo "$C" | jq -c '.data.storageArtifactsConnection.nodes[0] // .errors')"
+  echo "    clip: $(echo "$C" | jq -c '.data.storageArtifactsConnection.nodes[0] // .errors // .')"
   json_has "$C" '.data.storageArtifactsConnection.nodes[0] | (.sizeBytes // 0) > 0 and .storageCost != null and .storageCost.perMonth > 0 and (.storageCost.currency | length) == 3'
 }
 eventually 240 "the ready clip projects a storage cost for the paid tier" cost_projected

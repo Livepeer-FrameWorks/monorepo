@@ -218,8 +218,14 @@ gateway_discoverable() {
   [ "$(pg quartermaster "SELECT count(*) FROM quartermaster.service_instances WHERE instance_id = '$1' AND health_status = 'healthy' AND last_health_check > NOW() - INTERVAL '45 seconds'")" = 1 ]
 }
 session_token() { # session_token: the demo user's access JWT from /auth/login (cached per scenario)
-  local cache="$STACK_STATE_DIR/session-$STACK_SCENARIO.jwt" jar
-  if [ -s "$cache" ]; then cat "$cache"; return 0; fi
+  local cache="$STACK_STATE_DIR/session-$STACK_SCENARIO.jwt" jar exp
+  # The runner outlives a scenario run (STACK_REUSE), so a cached token is reused only
+  # while it has more than a minute left; access tokens live 15 minutes.
+  if [ -s "$cache" ]; then
+    exp=$(python3 -c 'import base64,json,sys; p=sys.argv[1].split(".")[1]; p+="="*(-len(p)%4); print(json.loads(base64.urlsafe_b64decode(p))["exp"])' "$(cat "$cache")" 2>/dev/null || echo 0)
+    if [ "${exp:-0}" -gt $(($(date +%s) + 60)) ]; then cat "$cache"; return 0; fi
+    rm -f "$cache"
+  fi
   jar=$(mktemp)
   curl -s -m 30 -c "$jar" -o /dev/null "$BRIDGE_URL/auth/login" -H 'Content-Type: application/json' \
     --data "$(jq -cn --arg e "$STACK_DEMO_EMAIL" --arg p "$STACK_DEMO_PASSWORD" --argjson b "$(bot_fields)" \
