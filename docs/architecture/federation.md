@@ -47,6 +47,11 @@ StreamRegistry files each as a federated `Location` keyed by the sending control
 cell. That directory is what the placement readers consult; each federated edge is
 gated on advertisement freshness, so a cell that stops advertising disappears
 rather than going stale. See [media placement](media-placement-policy.md).
+Only a cell's PeerManager leader advertises. When the leader dies, a standby
+replica takes its 15s lease within a second of expiry and advertises on each
+PeerChannel as soon as it connects, without waiting for the 5s push. A peer's
+30s window starts at the edge report an advertisement carries, which is up to
+one 10s report interval old when sent, so the handoff has to fit in what is left.
 
 **Legacy `/source` (Mist source resolution).** This path does not read the
 federated directory at all. It resolves `origin_cluster_id` for the stream — from

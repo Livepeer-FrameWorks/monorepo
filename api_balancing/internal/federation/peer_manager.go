@@ -930,8 +930,17 @@ const (
 	streamPeerTombstoneRetention = time.Hour
 	streamPeerTombstoneScanCount = int64(512)
 	maintenanceInterval          = 10 * time.Second
-	leaderAcquireInterval        = 5 * time.Second
-	leaderRole                   = "peer_manager"
+	// leaderAcquireInterval is how often a standby replica tries to take a
+	// lease its crashed holder can no longer renew. Only the leader advertises
+	// this cell's streams, and peers drop a stream's advertised source 30s
+	// after the edge report it carries, which is up to one edge report
+	// interval (10s) old when sent. The lease TTL (15s) plus this poll must
+	// leave the new leader room to connect and advertise inside what remains.
+	leaderAcquireInterval = time.Second
+	// standbySyncInterval paces a standby replica's reload of peer addresses
+	// and leader connectivity from Redis, independent of the lease poll.
+	standbySyncInterval = 5 * time.Second
+	leaderRole          = "peer_manager"
 	// peerSendQueueSize bounds the per-peer writer mailbox. Every federation frame
 	// is best-effort with its own backstop (periodic re-push, or a TTL on the
 	// receiver's cache), so on overflow the oldest frame is evicted (latest-wins)
@@ -944,6 +953,7 @@ const (
 // Non-leaders periodically sync peer addresses from Redis so that
 // GetPeerAddr works on every replica.
 func (pm *PeerManager) run() {
+	var loadedAt time.Time
 	for {
 		select {
 		case <-pm.done:
@@ -953,13 +963,17 @@ func (pm *PeerManager) run() {
 
 		if pm.tryAcquireLease() {
 			pm.runAsLeader()
+			loadedAt = time.Time{}
 		}
 
-		if err := pm.loadPeerAddressesFromRedis(); err != nil {
-			pm.logger.WithError(err).Debug("Failed to load federation peer authority")
-		}
-		if err := pm.loadPeerConnectivity(); err != nil {
-			pm.logger.WithError(err).Warn("Failed to load federation peer connectivity from the cell leader")
+		if time.Since(loadedAt) >= standbySyncInterval {
+			loadedAt = time.Now()
+			if err := pm.loadPeerAddressesFromRedis(); err != nil {
+				pm.logger.WithError(err).Debug("Failed to load federation peer authority")
+			}
+			if err := pm.loadPeerConnectivity(); err != nil {
+				pm.logger.WithError(err).Warn("Failed to load federation peer connectivity from the cell leader")
+			}
 		}
 
 		select {
@@ -1646,6 +1660,7 @@ func (pm *PeerManager) connectPeer(request peerConnectRequest) {
 			EventType:   ipcpb.FederationEventType_PEER_CONNECTED,
 			PeerCluster: &clusterID,
 		})
+		pm.advertiseToConnectedPeer(clusterID, ps)
 
 		// Receive loop — processes incoming messages until the stream closes
 		pm.recvLoop(clusterID, stream)
@@ -2047,10 +2062,63 @@ func (pm *PeerManager) pushStreamAds() {
 	if sm == nil {
 		return
 	}
+	messages, live, ok := pm.currentStreamAds(sm)
+	if !ok {
+		return
+	}
+	if live == 0 {
+		// Two things still have to happen on a tick that advertises nothing.
+		// The live-lifecycle refresh reads stream state, not the balancer
+		// snapshot, so a stream whose node has dropped out of the snapshot is
+		// still live and still owes its peers a TTL refresh. And the connection
+		// pool evicts by idle time, so a cluster that advertises nothing for
+		// MaxIdleTime loses the PeerChannel underneath it.
+		pm.mu.RLock()
+		pm.refreshRemoteLiveStreams(sm, "")
+		pm.mu.RUnlock()
+		pm.touchConnectedPeers()
+		return
+	}
 
+	pm.mu.RLock()
+	defer pm.mu.RUnlock()
+	pm.sendStreamAdsLocked(messages)
+	pm.refreshRemoteLiveStreams(sm, "")
+}
+
+// advertiseToConnectedPeer sends a peer whose channel just connected this
+// cell's current stream advertisements and live-lifecycle refresh, instead of
+// leaving it to the next periodic push. A channel connects when this replica
+// takes over leadership from one that died, and the peer's evidence of this
+// cell's streams is by then as old as the lease expiry plus the takeover poll;
+// waiting out another push interval could let that evidence lapse and turn
+// the peer's viewers away while the streams are live here.
+func (pm *PeerManager) advertiseToConnectedPeer(peerID string, ps *peerState) {
+	sm := state.DefaultManager()
+	if sm == nil {
+		return
+	}
+	messages, _, ok := pm.currentStreamAds(sm)
+	if !ok {
+		return
+	}
+	pm.mu.RLock()
+	defer pm.mu.RUnlock()
+	if !pm.isLeader || pm.peers[peerID] != ps || !ps.connected || ps.stream == nil {
+		return
+	}
+	pm.sendStreamAdsToPeerLocked(peerID, ps, messages)
+	pm.refreshRemoteLiveStreams(sm, peerID)
+}
+
+// currentStreamAds builds the advertisement of every live stream in the
+// balancer snapshot. live counts the live streams found, including any whose
+// advertisement has no contributing edge; ok is false when there is no
+// snapshot to advertise from.
+func (pm *PeerManager) currentStreamAds(sm *state.StreamStateManager) (messages []*foghornfederationpb.PeerMessage, live int, ok bool) {
 	snapshot := sm.GetBalancerSnapshotAtomic()
 	if snapshot == nil {
-		return
+		return nil, 0, false
 	}
 
 	sources := make(map[string]control.StreamEntry)
@@ -2078,15 +2146,7 @@ func (pm *PeerManager) pushStreamAds() {
 	}
 
 	if len(streamNames) == 0 {
-		// Two things still have to happen on a tick that advertises nothing.
-		// The live-lifecycle refresh reads stream state, not the balancer
-		// snapshot, so a stream whose node has dropped out of the snapshot is
-		// still live and still owes its peers a TTL refresh. And the connection
-		// pool evicts by idle time, so a cluster that advertises nothing for
-		// MaxIdleTime loses the PeerChannel underneath it.
-		pm.refreshRemoteLiveStreams(sm)
-		pm.touchConnectedPeers()
-		return
+		return nil, 0, true
 	}
 
 	// Look up the recording node for any stream that has an active
@@ -2097,7 +2157,7 @@ func (pm *PeerManager) pushStreamAds() {
 	dvrRecordingNodes := pm.lookupDVRRecordingNodes(streamNames)
 
 	now := time.Now()
-	messages := make([]*foghornfederationpb.PeerMessage, 0, len(streamNames))
+	messages = make([]*foghornfederationpb.PeerMessage, 0, len(streamNames))
 	for _, name := range streamNames {
 		ad := pm.buildStreamAd(sm, snapshot, name, sources[name], now)
 		if ad == nil {
@@ -2106,11 +2166,7 @@ func (pm *PeerManager) pushStreamAds() {
 		ad.DvrRecordingNodeId = dvrRecordingNodes[name]
 		messages = append(messages, pm.streamAdMessage(ad))
 	}
-
-	pm.mu.RLock()
-	defer pm.mu.RUnlock()
-	pm.sendStreamAdsLocked(messages)
-	pm.refreshRemoteLiveStreams(sm)
+	return messages, len(streamNames), true
 }
 
 // buildStreamAd builds the advertisement for one live stream from the balancer
@@ -2220,17 +2276,23 @@ func (pm *PeerManager) sendStreamAdsLocked(messages []*foghornfederationpb.PeerM
 		if !ps.connected || ps.stream == nil {
 			continue
 		}
-		pm.touchPool(peerID)
-		for _, msg := range messages {
-			ad := msg.GetStreamAd()
-			if ad == nil {
-				continue
-			}
-			if !pm.shouldSendStreamToPeer(peerID, ps, ad.InternalName, ad.TenantId) {
-				continue
-			}
-			pm.enqueue(peerID, ps, msg)
+		pm.sendStreamAdsToPeerLocked(peerID, ps, messages)
+	}
+}
+
+// sendStreamAdsToPeerLocked offers each stream advertisement the peer is
+// authorized for to that one connected peer. Caller holds pm.mu (R or W).
+func (pm *PeerManager) sendStreamAdsToPeerLocked(peerID string, ps *peerState, messages []*foghornfederationpb.PeerMessage) {
+	pm.touchPool(peerID)
+	for _, msg := range messages {
+		ad := msg.GetStreamAd()
+		if ad == nil {
+			continue
 		}
+		if !pm.shouldSendStreamToPeer(peerID, ps, ad.InternalName, ad.TenantId) {
+			continue
+		}
+		pm.enqueue(peerID, ps, msg)
 	}
 }
 
@@ -2240,7 +2302,8 @@ func (pm *PeerManager) sendStreamAdsLocked(messages []*foghornfederationpb.PeerM
 // periodic refresh the record expires and cross-cell duplicate-ingest dedup
 // silently stops holding after the first half-minute of every stream. Deduped
 // by internal name because the same stream may be live on several nodes.
-func (pm *PeerManager) refreshRemoteLiveStreams(sm *state.StreamStateManager) {
+// A non-empty only limits the refresh to that peer. Caller holds pm.mu (R or W).
+func (pm *PeerManager) refreshRemoteLiveStreams(sm *state.StreamStateManager, only string) {
 	seen := make(map[string]bool)
 	now := time.Now().Unix()
 	for _, ss := range sm.GetAllStreamStates() {
@@ -2266,7 +2329,7 @@ func (pm *PeerManager) refreshRemoteLiveStreams(sm *state.StreamStateManager) {
 			},
 		}
 		for peerID, ps := range pm.peers {
-			if !ps.connected || ps.stream == nil {
+			if (only != "" && peerID != only) || !ps.connected || ps.stream == nil {
 				continue
 			}
 			if !pm.shouldSendStreamToPeer(peerID, ps, ss.InternalName, ss.TenantID) {
