@@ -388,9 +388,7 @@ func runTokensCreate(ctx context.Context, w io.Writer, cli adminTokensClient, jw
 		return err
 	}
 	if outputJSON {
-		enc := json.NewEncoder(w)
-		enc.SetIndent("", "  ")
-		return enc.Encode(resp)
+		return writeProtoJSON(w, resp)
 	}
 	ux.Success(w, fmt.Sprintf("Created token %q (id=%s)", resp.TokenName, resp.Id))
 	if resp.TokenValue != "" {
@@ -407,9 +405,7 @@ func runTokensList(ctx context.Context, w io.Writer, cli adminTokensClient, jwt 
 		return err
 	}
 	if outputJSON {
-		enc := json.NewEncoder(w)
-		enc.SetIndent("", "  ")
-		return enc.Encode(resp)
+		return writeProtoJSON(w, resp)
 	}
 	ux.Heading(w, fmt.Sprintf("Tokens (%d)", len(resp.Tokens)))
 	for _, t := range resp.Tokens {
@@ -695,9 +691,7 @@ func runBootstrapTokenCreate(ctx context.Context, w io.Writer, qm adminBootstrap
 		return err
 	}
 	if outputJSON {
-		enc := json.NewEncoder(w)
-		enc.SetIndent("", "  ")
-		return enc.Encode(resp)
+		return writeProtoJSON(w, resp)
 	}
 	ux.Result(w, []ux.ResultField{
 		{Key: "token", OK: true, Detail: resp.Token.Token},
@@ -720,9 +714,7 @@ func runBootstrapTokensList(ctx context.Context, w io.Writer, qm adminBootstrapT
 		return err
 	}
 	if outputJSON {
-		enc := json.NewEncoder(w)
-		enc.SetIndent("", "  ")
-		return enc.Encode(resp)
+		return writeProtoJSON(w, resp)
 	}
 	ux.Heading(w, fmt.Sprintf("Bootstrap tokens (%d)", len(resp.Tokens)))
 	for _, t := range resp.Tokens {
@@ -947,9 +939,7 @@ func runTenantsList(ctx context.Context, w io.Writer, qm adminTenantsClient, jwt
 		return err
 	}
 	if outputJSON {
-		enc := json.NewEncoder(w)
-		enc.SetIndent("", "  ")
-		return enc.Encode(resp)
+		return writeProtoJSON(w, resp)
 	}
 	ux.Heading(w, fmt.Sprintf("Tenants (%d)", len(resp.Tenants)))
 	for _, t := range resp.Tenants {
@@ -1005,9 +995,7 @@ func runClustersList(ctx context.Context, w io.Writer, qm adminClustersClient, j
 		return err
 	}
 	if outputJSON {
-		enc := json.NewEncoder(w)
-		enc.SetIndent("", "  ")
-		return enc.Encode(resp)
+		return writeProtoJSON(w, resp)
 	}
 	ux.Heading(w, fmt.Sprintf("Clusters (%d)", len(resp.Clusters)))
 	for _, c := range resp.Clusters {
@@ -1025,9 +1013,7 @@ func runClusterCreate(ctx context.Context, w io.Writer, qm adminClustersClient, 
 		return err
 	}
 	if outputJSON {
-		enc := json.NewEncoder(w)
-		enc.SetIndent("", "  ")
-		return enc.Encode(resp)
+		return writeProtoJSON(w, resp)
 	}
 	ux.Success(w, fmt.Sprintf("Created cluster %s (%s)", resp.Cluster.ClusterName, resp.Cluster.ClusterId))
 	return nil
@@ -1041,9 +1027,7 @@ func runClusterUpdate(ctx context.Context, w io.Writer, qm adminClustersClient, 
 		return err
 	}
 	if outputJSON {
-		enc := json.NewEncoder(w)
-		enc.SetIndent("", "  ")
-		return enc.Encode(resp)
+		return writeProtoJSON(w, resp)
 	}
 	ux.Success(w, fmt.Sprintf("Updated cluster %s (%s)", resp.Cluster.ClusterName, resp.Cluster.ClusterId))
 	return nil
@@ -1262,9 +1246,7 @@ func runClusterAccessList(ctx context.Context, w io.Writer, qm adminClusterOpsCl
 		return err
 	}
 	if outputJSON {
-		enc := json.NewEncoder(w)
-		enc.SetIndent("", "  ")
-		return enc.Encode(resp)
+		return writeProtoJSON(w, resp)
 	}
 	ux.Heading(w, fmt.Sprintf("Accessible clusters (%d)", len(resp.Clusters)))
 	for _, c := range resp.Clusters {
@@ -1291,9 +1273,7 @@ func runClusterSubscriptionsList(ctx context.Context, w io.Writer, qm adminClust
 		return err
 	}
 	if outputJSON {
-		enc := json.NewEncoder(w)
-		enc.SetIndent("", "  ")
-		return enc.Encode(resp)
+		return writeProtoJSON(w, resp)
 	}
 	ux.Heading(w, fmt.Sprintf("Subscriptions (%d)", len(resp.Clusters)))
 	for _, c := range resp.Clusters {
@@ -1341,9 +1321,7 @@ func runClusterCreateEdge(ctx context.Context, w io.Writer, qm adminClusterOpsCl
 		return err
 	}
 	if outputJSON {
-		enc := json.NewEncoder(w)
-		enc.SetIndent("", "  ")
-		return enc.Encode(resp)
+		return writeProtoJSON(w, resp)
 	}
 	c := resp.Cluster
 	t := resp.BootstrapToken
@@ -1368,9 +1346,7 @@ func runClusterEnrollmentToken(ctx context.Context, w io.Writer, qm adminCluster
 		return err
 	}
 	if outputJSON {
-		enc := json.NewEncoder(w)
-		enc.SetIndent("", "  ")
-		return enc.Encode(resp)
+		return writeProtoJSON(w, resp)
 	}
 	ux.Result(w, []ux.ResultField{
 		{Key: "token", OK: true, Detail: resp.Token.Token},
@@ -1494,9 +1470,7 @@ func runInviteCreate(ctx context.Context, w io.Writer, qm adminClusterInvitesCli
 		return err
 	}
 	if outputJSON {
-		enc := json.NewEncoder(w)
-		enc.SetIndent("", "  ")
-		return enc.Encode(resp)
+		return writeProtoJSON(w, resp)
 	}
 	ux.Success(w, fmt.Sprintf("Created invite %s for tenant %s (token=%s)", resp.Id, resp.InvitedTenantId, resp.InviteToken))
 	return nil
@@ -1510,9 +1484,7 @@ func runInvitesList(ctx context.Context, w io.Writer, qm adminClusterInvitesClie
 		return err
 	}
 	if outputJSON {
-		enc := json.NewEncoder(w)
-		enc.SetIndent("", "  ")
-		return enc.Encode(resp)
+		return writeProtoJSON(w, resp)
 	}
 	ux.Heading(w, fmt.Sprintf("Invites (%d)", len(resp.Invites)))
 	for _, inv := range resp.Invites {
@@ -1539,9 +1511,7 @@ func runInvitesListMine(ctx context.Context, w io.Writer, qm adminClusterInvites
 		return err
 	}
 	if outputJSON {
-		enc := json.NewEncoder(w)
-		enc.SetIndent("", "  ")
-		return enc.Encode(resp)
+		return writeProtoJSON(w, resp)
 	}
 	ux.Heading(w, fmt.Sprintf("Invites (%d)", len(resp.Invites)))
 	for _, inv := range resp.Invites {
@@ -1558,9 +1528,7 @@ func runInviteAccept(ctx context.Context, w io.Writer, qm adminClusterInvitesCli
 		return err
 	}
 	if outputJSON {
-		enc := json.NewEncoder(w)
-		enc.SetIndent("", "  ")
-		return enc.Encode(resp)
+		return writeProtoJSON(w, resp)
 	}
 	ux.Result(w, []ux.ResultField{
 		{Key: "cluster", OK: true, Detail: resp.ClusterId},
@@ -1929,9 +1897,7 @@ func runNodesList(ctx context.Context, w io.Writer, qm adminNodesClient, jwt, cl
 		return err
 	}
 	if outputJSON {
-		enc := json.NewEncoder(w)
-		enc.SetIndent("", "  ")
-		return enc.Encode(resp)
+		return writeProtoJSON(w, resp)
 	}
 	ux.Heading(w, fmt.Sprintf("Nodes (%d)", len(resp.Nodes)))
 	for _, n := range resp.Nodes {
@@ -1948,9 +1914,7 @@ func runNodeCreate(ctx context.Context, w io.Writer, qm adminNodesClient, jwt st
 		return err
 	}
 	if outputJSON {
-		enc := json.NewEncoder(w)
-		enc.SetIndent("", "  ")
-		return enc.Encode(resp)
+		return writeProtoJSON(w, resp)
 	}
 	ux.Success(w, fmt.Sprintf("Created node %s (id=%s)", resp.Node.NodeName, resp.Node.NodeId))
 	return nil
@@ -1974,9 +1938,7 @@ func runServicePoolStatus(ctx context.Context, w io.Writer, qm adminNodesClient,
 		return err
 	}
 	if outputJSON {
-		enc := json.NewEncoder(w)
-		enc.SetIndent("", "  ")
-		return enc.Encode(resp)
+		return writeProtoJSON(w, resp)
 	}
 	ux.Heading(w, fmt.Sprintf("%s service pool: %d total, %d assigned, %d unassigned", serviceType, resp.Total, resp.Assigned, resp.Unassigned))
 	for _, c := range resp.Clusters {
@@ -2438,9 +2400,7 @@ func runBillingTiers(ctx context.Context, w io.Writer, p adminBillingClient, jwt
 		return err
 	}
 	if outputJSON {
-		enc := json.NewEncoder(w)
-		enc.SetIndent("", "  ")
-		return enc.Encode(resp)
+		return writeProtoJSON(w, resp)
 	}
 	ux.Heading(w, fmt.Sprintf("Billing tiers (%d)", len(resp.Tiers)))
 	for _, t := range resp.Tiers {
@@ -2465,9 +2425,7 @@ func runBillingInitPostpaid(ctx context.Context, w io.Writer, p adminBillingClie
 		return err
 	}
 	if outputJSON {
-		enc := json.NewEncoder(w)
-		enc.SetIndent("", "  ")
-		return enc.Encode(resp)
+		return writeProtoJSON(w, resp)
 	}
 	ux.Success(w, "Initialized postpaid account")
 	_, _ = fmt.Fprintf(w, "  Subscription: %s\n", resp.SubscriptionId)
@@ -2487,9 +2445,7 @@ func runBillingPromote(ctx context.Context, w io.Writer, p adminBillingClient, j
 		return err
 	}
 	if outputJSON {
-		enc := json.NewEncoder(w)
-		enc.SetIndent("", "  ")
-		return enc.Encode(resp)
+		return writeProtoJSON(w, resp)
 	}
 	ux.Success(w, "Promoted to postpaid billing")
 	_, _ = fmt.Fprintf(w, "  Subscription: %s\n", resp.SubscriptionId)
@@ -2511,9 +2467,7 @@ func runBillingSetClusterPricing(ctx context.Context, w io.Writer, p adminBillin
 		return err
 	}
 	if outputJSON {
-		enc := json.NewEncoder(w)
-		enc.SetIndent("", "  ")
-		return enc.Encode(resp)
+		return writeProtoJSON(w, resp)
 	}
 	ux.Success(w, fmt.Sprintf("Set cluster pricing for %s (model=%s)", clusterID, resp.PricingModel))
 	return nil
@@ -2649,9 +2603,7 @@ func runUserCreate(ctx context.Context, w io.Writer, cli adminUsersClient, jwt, 
 		return err
 	}
 	if outputJSON {
-		enc := json.NewEncoder(w)
-		enc.SetIndent("", "  ")
-		return enc.Encode(resp)
+		return writeProtoJSON(w, resp)
 	}
 	ux.Result(w, []ux.ResultField{
 		{Key: "email", OK: true, Detail: resp.User.GetEmail()},
@@ -2828,9 +2780,7 @@ func runMigrateArtifacts(ctx context.Context, w io.Writer, fed adminArtifactMigr
 		return fmt.Errorf("migration error: %s", resp.Error)
 	}
 	if outputJSON {
-		enc := json.NewEncoder(w)
-		enc.SetIndent("", "  ")
-		return enc.Encode(resp)
+		return writeProtoJSON(w, resp)
 	}
 	ux.Success(w, "Artifact metadata migration complete")
 	ux.Result(w, []ux.ResultField{

@@ -2,7 +2,6 @@ package cmd
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"io"
 	"regexp"
@@ -172,9 +171,7 @@ func runBillingCredit(ctx context.Context, w io.Writer, p adminBillingClient, lo
 		return fmt.Errorf("adjust balance for tenant %s: %w", tenantID, err)
 	}
 	if outputJSON {
-		enc := json.NewEncoder(w)
-		enc.SetIndent("", "  ")
-		return enc.Encode(txn)
+		return writeProtoJSON(w, txn)
 	}
 	magnitude := cents
 	if magnitude < 0 {
@@ -234,9 +231,7 @@ func runBillingSetTier(ctx context.Context, w io.Writer, p adminBillingClient, l
 		return fmt.Errorf("assign tier %s to tenant %s: %w", tier, tenantID, err)
 	}
 	if outputJSON {
-		enc := json.NewEncoder(w)
-		enc.SetIndent("", "  ")
-		return enc.Encode(resp)
+		return writeProtoJSON(w, resp)
 	}
 	current := fmt.Sprintf("%s (%s)", resp.GetTierName(), resp.GetBillingModel())
 	if resp.GetChanged() {

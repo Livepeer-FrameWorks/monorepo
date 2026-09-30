@@ -733,9 +733,7 @@ func runClusterNodesList(ctx context.Context, w io.Writer, qm clusterNodesListQM
 		return err
 	}
 	if outputJSON {
-		enc := json.NewEncoder(w)
-		enc.SetIndent("", "  ")
-		return enc.Encode(resp)
+		return writeProtoJSON(w, resp)
 	}
 
 	var health map[string]*foghorncontrolpb.GetNodeHealthResponse

@@ -2,7 +2,6 @@ package cmd
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"io"
 	"strings"
@@ -139,9 +138,7 @@ func runBillingGrantRevoke(ctx context.Context, w io.Writer, p adminBillingClien
 
 func writeBillingGrant(w io.Writer, headline, tenantID, email string, resp *purserpb.AdminBillingGrantResponse, outputJSON bool) error {
 	if outputJSON {
-		enc := json.NewEncoder(w)
-		enc.SetIndent("", "  ")
-		return enc.Encode(resp)
+		return writeProtoJSON(w, resp)
 	}
 	ux.Success(w, headline)
 	fields := []ux.ResultField{{Key: "tenant", OK: true, Detail: tenantID}}
@@ -328,9 +325,7 @@ func runBillingRecordPayment(ctx context.Context, w io.Writer, p adminBillingCli
 		return fmt.Errorf("record payment for invoice %s: %w", invoiceID, err)
 	}
 	if outputJSON {
-		enc := json.NewEncoder(w)
-		enc.SetIndent("", "  ")
-		return enc.Encode(resp)
+		return writeProtoJSON(w, resp)
 	}
 	ux.Success(w, fmt.Sprintf("Recorded %s %s against invoice %s", resp.GetCurrency(), resp.GetAmount(), invoiceID))
 	fields := []ux.ResultField{{Key: "tenant", OK: true, Detail: tenantID}}

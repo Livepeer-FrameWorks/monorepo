@@ -3,6 +3,7 @@ package cmd
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"strings"
 	"testing"
 	"time"
@@ -89,5 +90,24 @@ func TestRunBillingRecordPaymentRequiresReference(t *testing.T) {
 	}
 	if len(fake.paymentReqs) != 0 {
 		t.Fatal("no payment may be recorded without a reference")
+	}
+}
+
+func TestRunBillingGrantShowJSONReportsNoGrant(t *testing.T) {
+	fake := &fakeAdminBillingClient{grantResp: &purserpb.AdminBillingGrantResponse{}}
+	var out bytes.Buffer
+	if err := runBillingGrantShow(context.Background(), &out, fake, nil, "", billingTenantTarget{TenantID: billingOperatorTenant}, true); err != nil {
+		t.Fatalf("grant show: %v", err)
+	}
+	var decoded map[string]any
+	if err := json.Unmarshal(out.Bytes(), &decoded); err != nil {
+		t.Fatalf("output is not JSON: %v\n%s", err, out.String())
+	}
+	grant, present := decoded["grant"]
+	if !present || grant != nil {
+		t.Fatalf("grant = %#v (present=%v), want an explicit null:\n%s", grant, present, out.String())
+	}
+	if decoded["collection_ready"] != false {
+		t.Fatalf("collection_ready = %#v:\n%s", decoded["collection_ready"], out.String())
 	}
 }

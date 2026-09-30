@@ -2,7 +2,6 @@ package cmd
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"io"
 	"strings"
@@ -89,9 +88,7 @@ func runTokensListAllTenants(ctx context.Context, w io.Writer, cli adminAllTenan
 		return err
 	}
 	if outputJSON {
-		enc := json.NewEncoder(w)
-		enc.SetIndent("", "  ")
-		return enc.Encode(&commodorepb.AdminListAPITokensResponse{Tokens: tokens})
+		return writeProtoJSON(w, &commodorepb.AdminListAPITokensResponse{Tokens: tokens})
 	}
 	heading := fmt.Sprintf("API tokens across tenants (%d)", len(tokens))
 	if filter.UnsupportedScopesOnly {
@@ -192,9 +189,7 @@ func runNodeFingerprintsList(ctx context.Context, w io.Writer, qm adminNodeFinge
 		return err
 	}
 	if outputJSON {
-		enc := json.NewEncoder(w)
-		enc.SetIndent("", "  ")
-		return enc.Encode(&quartermasterpb.ListNodeFingerprintsResponse{Fingerprints: bindings})
+		return writeProtoJSON(w, &quartermasterpb.ListNodeFingerprintsResponse{Fingerprints: bindings})
 	}
 	heading := fmt.Sprintf("Node fingerprint bindings (%d)", len(bindings))
 	if duplicatesOnly {

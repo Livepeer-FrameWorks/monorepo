@@ -3,11 +3,14 @@ package cmd
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"strings"
 	"testing"
 	"time"
 
 	purserpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/purser"
+	"google.golang.org/protobuf/encoding/protojson"
+	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
@@ -53,5 +56,55 @@ func TestRunBillingPrepaidDoubleChargesPrintsWhatToRefund(t *testing.T) {
 	out.Reset()
 	if err := runBillingPrepaidDoubleCharges(context.Background(), &out, fake, "", "", 0, false); err != nil || !strings.Contains(out.String(), "No invoice charged") {
 		t.Fatalf("empty report = %q, %v", out.String(), err)
+	}
+}
+
+func TestRunBillingPrepaidDoubleChargesJSONKeepsEmptyReport(t *testing.T) {
+	fake := &fakePrepaidDoubleChargeClient{resp: &purserpb.AdminListPrepaidDoubleChargesResponse{}}
+	var out bytes.Buffer
+	if err := runBillingPrepaidDoubleCharges(context.Background(), &out, fake, "", "", 0, true); err != nil {
+		t.Fatalf("runBillingPrepaidDoubleCharges: %v", err)
+	}
+	var decoded map[string]any
+	if err := json.Unmarshal(out.Bytes(), &decoded); err != nil {
+		t.Fatalf("output is not JSON: %v\n%s", err, out.String())
+	}
+	charges, ok := decoded["charges"].([]any)
+	if !ok || len(charges) != 0 {
+		t.Fatalf("charges = %#v, want an empty list:\n%s", decoded["charges"], out.String())
+	}
+	if decoded["truncated"] != false || decoded["total_double_charged_cents"] != "0" {
+		t.Fatalf("empty report fields = %v:\n%s", decoded, out.String())
+	}
+	var parsed purserpb.AdminListPrepaidDoubleChargesResponse
+	if err := protojson.Unmarshal(out.Bytes(), &parsed); err != nil {
+		t.Fatalf("output is not the proto JSON of the response: %v", err)
+	}
+}
+
+func TestRunBillingPrepaidDoubleChargesJSONUsesProtoJSON(t *testing.T) {
+	start := time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC)
+	fake := &fakePrepaidDoubleChargeClient{resp: &purserpb.AdminListPrepaidDoubleChargesResponse{
+		TotalDoubleChargedCents: 200,
+		Charges: []*purserpb.PrepaidDoubleCharge{{
+			TenantId: "11111111-1111-4111-8111-111111111111", InvoiceNumber: "INV-0000000007",
+			PeriodStart: timestamppb.New(start), DoubleChargedCents: 200,
+		}},
+	}}
+	var out bytes.Buffer
+	if err := runBillingPrepaidDoubleCharges(context.Background(), &out, fake, "", "", 0, true); err != nil {
+		t.Fatalf("runBillingPrepaidDoubleCharges: %v", err)
+	}
+	var parsed purserpb.AdminListPrepaidDoubleChargesResponse
+	if err := protojson.Unmarshal(out.Bytes(), &parsed); err != nil {
+		t.Fatalf("output is not the proto JSON of the response: %v\n%s", err, out.String())
+	}
+	if !proto.Equal(&parsed, fake.resp) {
+		t.Fatalf("round trip = %v, want %v", &parsed, fake.resp)
+	}
+	for _, want := range []string{`"invoice_number": "INV-0000000007"`, `"period_start": "2026-08-01T00:00:00Z"`} {
+		if !strings.Contains(out.String(), want) {
+			t.Errorf("output lacks %s:\n%s", want, out.String())
+		}
 	}
 }

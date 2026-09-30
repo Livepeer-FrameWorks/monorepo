@@ -2,7 +2,6 @@ package cmd
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"io"
 	"strings"
@@ -39,9 +38,7 @@ func runBillingPrepaidDoubleCharges(ctx context.Context, w io.Writer, p prepaidD
 		return fmt.Errorf("list prepaid double charges: %w", err)
 	}
 	if outputJSON {
-		enc := json.NewEncoder(w)
-		enc.SetIndent("", "  ")
-		return enc.Encode(resp)
+		return writeProtoJSON(w, resp)
 	}
 	if len(resp.GetCharges()) == 0 {
 		ux.Success(w, "No invoice charged a prepaid tenant again for usage its prepaid balance paid")
@@ -88,7 +85,7 @@ with 'frameworks admin billing credit' or through the payment provider.
 
 Needs a platform-operator session or the manifest service token.`,
 		Example: `  frameworks admin billing prepaid-double-charges
-  frameworks admin billing prepaid-double-charges --tenant-id <uuid> -o json`,
+  frameworks admin billing prepaid-double-charges --tenant-id <uuid> --output json`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			p, ctxCfg, cleanup, err := purserGRPCClientFromContext(cmd.Context())
 			if err != nil {

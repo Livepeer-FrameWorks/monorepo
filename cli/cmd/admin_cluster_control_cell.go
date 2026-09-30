@@ -2,7 +2,6 @@ package cmd
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"io"
 	"strings"
@@ -84,9 +83,7 @@ func runClusterReassignControlCell(ctx context.Context, w io.Writer, qm adminCon
 		return err
 	}
 	if outputJSON {
-		enc := json.NewEncoder(w)
-		enc.SetIndent("", "  ")
-		return enc.Encode(resp)
+		return writeProtoJSON(w, resp)
 	}
 	ux.Success(w, fmt.Sprintf("Cluster %s is moving from control cell %s to %s", resp.GetClusterId(), resp.GetPreviousControlCellId(), resp.GetControlCellId()))
 	printControlCellReassignment(w, resp)
@@ -101,9 +98,7 @@ func runClusterControlCellStatus(ctx context.Context, w io.Writer, qm adminContr
 		return err
 	}
 	if outputJSON {
-		enc := json.NewEncoder(w)
-		enc.SetIndent("", "  ")
-		return enc.Encode(resp)
+		return writeProtoJSON(w, resp)
 	}
 	ux.Heading(w, fmt.Sprintf("Cluster %s", resp.GetClusterId()))
 	printControlCellReassignment(w, resp)

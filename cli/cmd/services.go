@@ -230,9 +230,7 @@ func runServicesDiscover(ctx context.Context, w io.Writer, qc servicesQMClient, 
 		return err
 	}
 	if outputJSON {
-		enc := json.NewEncoder(w)
-		enc.SetIndent("", "  ")
-		return enc.Encode(resp)
+		return writeProtoJSON(w, resp)
 	}
 	fmt.Fprintf(w, "Discovered %d instance(s) of %s\n", len(resp.Instances), svcType)
 	sort.SliceStable(resp.Instances, func(i, j int) bool { return resp.Instances[i].InstanceId < resp.Instances[j].InstanceId })
