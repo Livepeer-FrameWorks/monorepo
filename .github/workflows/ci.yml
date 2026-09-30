@@ -5,8 +5,6 @@ on:
     branches: [master, main]
   push:
     branches: [master]
-  schedule:
-    - cron: "17 3 * * *"
   workflow_dispatch: # manual trigger from Actions UI
 
 concurrency:
@@ -607,7 +605,7 @@ jobs:
   migration-release-state:
     name: Migration release state
     needs: changes
-    if: needs.changes.outputs.release == 'true' || needs.changes.outputs.database == 'true' || github.event_name == 'workflow_dispatch' || github.event_name == 'schedule'
+    if: needs.changes.outputs.release == 'true' || needs.changes.outputs.database == 'true' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
@@ -681,7 +679,7 @@ jobs:
   database-yugabyte:
     name: Yugabyte database contract
     needs: changes
-    if: needs.changes.outputs.yugabyte_core == 'true' || needs.changes.outputs.yugabyte_commodore == 'true' || needs.changes.outputs.yugabyte_purser == 'true' || needs.changes.outputs.yugabyte_navigator == 'true' || needs.changes.outputs.yugabyte_skipper == 'true' || needs.changes.outputs.yugabyte_quartermaster == 'true' || needs.changes.outputs.yugabyte_periscope == 'true' || needs.changes.outputs.yugabyte_foghorn == 'true' || needs.changes.outputs.yugabyte_lookout == 'true' || needs.changes.outputs.yugabyte_bosun == 'true' || github.event_name == 'workflow_dispatch' || github.event_name == 'schedule'
+    if: needs.changes.outputs.yugabyte_core == 'true' || needs.changes.outputs.yugabyte_commodore == 'true' || needs.changes.outputs.yugabyte_purser == 'true' || needs.changes.outputs.yugabyte_navigator == 'true' || needs.changes.outputs.yugabyte_skipper == 'true' || needs.changes.outputs.yugabyte_quartermaster == 'true' || needs.changes.outputs.yugabyte_periscope == 'true' || needs.changes.outputs.yugabyte_foghorn == 'true' || needs.changes.outputs.yugabyte_lookout == 'true' || needs.changes.outputs.yugabyte_bosun == 'true' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
@@ -694,57 +692,57 @@ jobs:
         env:
           GOTOOLCHAIN: local
       - name: Run exhaustive Yugabyte contracts
-        if: needs.changes.outputs.yugabyte_core == 'true' || github.event_name == 'workflow_dispatch' || github.event_name == 'schedule'
+        if: needs.changes.outputs.yugabyte_core == 'true' || github.event_name == 'workflow_dispatch'
         run: make verify-schema-yugabyte
         env:
           CONTRACT_COVERAGE_DIR: ${{ github.workspace }}/coverage/contracts
       - name: Run Commodore Yugabyte contracts
-        if: github.event_name != 'workflow_dispatch' && github.event_name != 'schedule' && needs.changes.outputs.yugabyte_core != 'true' && needs.changes.outputs.yugabyte_commodore == 'true'
+        if: github.event_name != 'workflow_dispatch' && needs.changes.outputs.yugabyte_core != 'true' && needs.changes.outputs.yugabyte_commodore == 'true'
         run: make verify-yugabyte-service SERVICE=commodore
         env:
           CONTRACT_COVERAGE_DIR: ${{ github.workspace }}/coverage/contracts
       - name: Run Purser Yugabyte contracts
-        if: github.event_name != 'workflow_dispatch' && github.event_name != 'schedule' && needs.changes.outputs.yugabyte_core != 'true' && needs.changes.outputs.yugabyte_purser == 'true'
+        if: github.event_name != 'workflow_dispatch' && needs.changes.outputs.yugabyte_core != 'true' && needs.changes.outputs.yugabyte_purser == 'true'
         run: make verify-yugabyte-service SERVICE=purser
         env:
           CONTRACT_COVERAGE_DIR: ${{ github.workspace }}/coverage/contracts
       - name: Run Navigator Yugabyte contracts
-        if: github.event_name != 'workflow_dispatch' && github.event_name != 'schedule' && needs.changes.outputs.yugabyte_core != 'true' && needs.changes.outputs.yugabyte_navigator == 'true'
+        if: github.event_name != 'workflow_dispatch' && needs.changes.outputs.yugabyte_core != 'true' && needs.changes.outputs.yugabyte_navigator == 'true'
         run: make verify-yugabyte-service SERVICE=navigator
         env:
           CONTRACT_COVERAGE_DIR: ${{ github.workspace }}/coverage/contracts
       - name: Run Skipper Yugabyte contracts
-        if: github.event_name != 'workflow_dispatch' && github.event_name != 'schedule' && needs.changes.outputs.yugabyte_core != 'true' && needs.changes.outputs.yugabyte_skipper == 'true'
+        if: github.event_name != 'workflow_dispatch' && needs.changes.outputs.yugabyte_core != 'true' && needs.changes.outputs.yugabyte_skipper == 'true'
         run: make verify-yugabyte-service SERVICE=skipper
         env:
           CONTRACT_COVERAGE_DIR: ${{ github.workspace }}/coverage/contracts
       - name: Run Quartermaster Yugabyte contracts
-        if: github.event_name != 'workflow_dispatch' && github.event_name != 'schedule' && needs.changes.outputs.yugabyte_core != 'true' && needs.changes.outputs.yugabyte_quartermaster == 'true'
+        if: github.event_name != 'workflow_dispatch' && needs.changes.outputs.yugabyte_core != 'true' && needs.changes.outputs.yugabyte_quartermaster == 'true'
         run: make verify-yugabyte-service SERVICE=quartermaster
         env:
           CONTRACT_COVERAGE_DIR: ${{ github.workspace }}/coverage/contracts
       - name: Run Periscope Metering Yugabyte contracts
-        if: github.event_name != 'workflow_dispatch' && github.event_name != 'schedule' && needs.changes.outputs.yugabyte_core != 'true' && needs.changes.outputs.yugabyte_periscope == 'true'
+        if: github.event_name != 'workflow_dispatch' && needs.changes.outputs.yugabyte_core != 'true' && needs.changes.outputs.yugabyte_periscope == 'true'
         run: make verify-yugabyte-service SERVICE=periscope-metering
         env:
           CONTRACT_COVERAGE_DIR: ${{ github.workspace }}/coverage/contracts
       - name: Run Foghorn Yugabyte contracts
-        if: github.event_name != 'workflow_dispatch' && github.event_name != 'schedule' && needs.changes.outputs.yugabyte_core != 'true' && needs.changes.outputs.yugabyte_foghorn == 'true'
+        if: github.event_name != 'workflow_dispatch' && needs.changes.outputs.yugabyte_core != 'true' && needs.changes.outputs.yugabyte_foghorn == 'true'
         run: make verify-yugabyte-service SERVICE=foghorn
         env:
           CONTRACT_COVERAGE_DIR: ${{ github.workspace }}/coverage/contracts
       - name: Run Lookout Yugabyte contracts
-        if: github.event_name != 'workflow_dispatch' && github.event_name != 'schedule' && needs.changes.outputs.yugabyte_core != 'true' && needs.changes.outputs.yugabyte_lookout == 'true'
+        if: github.event_name != 'workflow_dispatch' && needs.changes.outputs.yugabyte_core != 'true' && needs.changes.outputs.yugabyte_lookout == 'true'
         run: make verify-yugabyte-service SERVICE=lookout
         env:
           CONTRACT_COVERAGE_DIR: ${{ github.workspace }}/coverage/contracts
       - name: Run Bosun Yugabyte contracts
-        if: github.event_name != 'workflow_dispatch' && github.event_name != 'schedule' && needs.changes.outputs.yugabyte_core != 'true' && needs.changes.outputs.yugabyte_bosun == 'true'
+        if: github.event_name != 'workflow_dispatch' && needs.changes.outputs.yugabyte_core != 'true' && needs.changes.outputs.yugabyte_bosun == 'true'
         run: make verify-yugabyte-service SERVICE=bosun
         env:
           CONTRACT_COVERAGE_DIR: ${{ github.workspace }}/coverage/contracts
       - name: Run Yugabyte HA contract
-        if: needs.changes.outputs.yugabyte_core == 'true' || github.event_name == 'workflow_dispatch' || github.event_name == 'schedule'
+        if: needs.changes.outputs.yugabyte_core == 'true' || github.event_name == 'workflow_dispatch'
         run: make verify-yugabyte-ha
         env:
           CONTRACT_COVERAGE_DIR: ${{ github.workspace }}/coverage/contracts
