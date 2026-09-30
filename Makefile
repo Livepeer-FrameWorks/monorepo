@@ -419,11 +419,9 @@ verify-frontend-build:
 	$(MAKE) --no-print-directory test-logbook-image-health VERSION=ci
 
 # The CI "Yugabyte database contract" job, step for step. Needs Docker.
+# verify-schema-yugabyte already runs every service's contracts (verify-yugabyte-services-isolated).
 verify-yugabyte-contracts:
 	$(MAKE) --no-print-directory verify-schema-yugabyte
-	@for service in commodore purser navigator skipper quartermaster periscope-metering foghorn lookout bosun; do \
-		$(MAKE) --no-print-directory verify-yugabyte-service SERVICE=$$service || exit 1; \
-	done
 	$(MAKE) --no-print-directory verify-yugabyte-ha
 
 # The CI "Frontend lint" job, step for step (.github/workflows/ci.yml). Rebase
