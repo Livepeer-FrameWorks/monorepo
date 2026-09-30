@@ -825,12 +825,13 @@ func (jm *JobManager) processUsageReservation(ctx context.Context, summary model
 		})
 	}
 	finalized := perCluster[summary.ClusterID]
-	finalizedAmount, err := ratePrepaidQuantities(currency, rules, finalized, billingPeriodStart, billingPeriodEnd)
+	waiveUsage := tier.WaivesUsage(appconfig.Runtime().WaiveUsageCharges)
+	finalizedAmount, err := ratePrepaidQuantities(currency, rules, finalized, billingPeriodStart, billingPeriodEnd, waiveUsage)
 	if err != nil {
 		return fmt.Errorf("rate finalized usage before reservation: %w", err)
 	}
 	combined := append(append([]rating.DimensionedQuantity{}, finalized...), active...)
-	combinedAmount, err := ratePrepaidQuantities(currency, rules, combined, billingPeriodStart, billingPeriodEnd)
+	combinedAmount, err := ratePrepaidQuantities(currency, rules, combined, billingPeriodStart, billingPeriodEnd, waiveUsage)
 	if err != nil {
 		return fmt.Errorf("rate usage reservation: %w", err)
 	}
@@ -868,7 +869,7 @@ func (jm *JobManager) processUsageReservation(ctx context.Context, summary model
 	})
 }
 
-func ratePrepaidQuantities(currency string, rules []rating.Rule, quantities []rating.DimensionedQuantity, periodStart, periodEnd time.Time) (decimal.Decimal, error) {
+func ratePrepaidQuantities(currency string, rules []rating.Rule, quantities []rating.DimensionedQuantity, periodStart, periodEnd time.Time, waiveUsage bool) (decimal.Decimal, error) {
 	usage := make(map[rating.Meter]decimal.Decimal)
 	for _, quantity := range quantities {
 		usage[quantity.Meter] = usage[quantity.Meter].Add(quantity.Quantity)
@@ -877,7 +878,7 @@ func ratePrepaidQuantities(currency string, rules []rating.Rule, quantities []ra
 		Currency: currency, BasePrice: decimal.Zero, Rules: rules,
 		Usage: usage, Quantities: quantities,
 		PeriodStart: periodStart, PeriodEnd: periodEnd,
-		WaiveUsageCharges: appconfig.Runtime().WaiveUsageCharges,
+		WaiveUsageCharges: waiveUsage,
 	})
 	if err != nil {
 		return decimal.Zero, err
@@ -1105,7 +1106,7 @@ func (jm *JobManager) rateCumulativePrepaidUsage(
 		if currency != billing.LedgerCurrency {
 			return decimal.Zero, fmt.Errorf("prepaid usage on cluster %s prices in %s but prepaid balance currency is %s", clusterID, currency, billing.LedgerCurrency)
 		}
-		amount, err := ratePrepaidQuantities(currency, rules, quantities, periodStart, periodEnd)
+		amount, err := ratePrepaidQuantities(currency, rules, quantities, periodStart, periodEnd, tier.WaivesUsage(appconfig.Runtime().WaiveUsageCharges))
 		if err != nil {
 			return decimal.Zero, fmt.Errorf("rate cumulative prepaid usage for cluster %s: %w", clusterID, err)
 		}
@@ -1603,7 +1604,7 @@ func (jm *JobManager) finalizeSubscriptionPeriods(ctx context.Context, dueSubscr
 		if periodEnd.After(now) {
 			continue // Billing period not closed yet
 		}
-		if meteringCompletenessRequired(meteringEnabled) {
+		if meteringCompletenessRequired(meteringEnabled, tier.UsageWaived) {
 			if completenessErr := jm.assertMeteringComplete(ctx, tenantID, periodStart, periodEnd); completenessErr != nil {
 				jm.logger.WithError(completenessErr).WithField("tenant_id", tenantID).Error("Metering incomplete; invoice finalization blocked")
 				continue
@@ -2021,8 +2022,10 @@ func finalizedInvoiceStatus(total decimal.Decimal) string {
 	return "pending"
 }
 
-func meteringCompletenessRequired(meteringEnabled bool) bool {
-	return meteringEnabled && !appconfig.Runtime().WaiveUsageCharges
+// meteringCompletenessRequired reports whether an invoice waits for complete
+// metering: waived usage rates at zero, so missing reports change nothing.
+func meteringCompletenessRequired(meteringEnabled, tenantUsageWaived bool) bool {
+	return meteringEnabled && !tenantUsageWaived && !appconfig.Runtime().WaiveUsageCharges
 }
 
 func (jm *JobManager) assertMeteringComplete(ctx context.Context, tenantID string, periodStart, periodEnd time.Time) error {

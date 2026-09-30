@@ -813,8 +813,9 @@ message BillingStatusResponse {
   reserved "usage_summary";
   repeated string payment_methods = 11;  // Public methods: card, crypto_eth, crypto_usdc, bank_transfer
   bool collection_ready = 12;             // Confirmed reusable postpaid collection setup
-  string collection_provider = 13;        // stripe or mollie when collection_ready
+  string collection_provider = 13;        // stripe, mollie or operator when collection_ready
   repeated string setup_providers = 14;   // Fully configured providers available for postpaid setup
+  OperatorBillingGrant operator_grant = 15; // Operator arrangement in force, if any
 }
 
 // Payment record
@@ -1182,6 +1183,19 @@ service PrepaidService {
   // self-serve paths enforce; the tier must be active and support the billing
   // model. Records a billing.subscription_updated event carrying the reason.
   rpc AdminAssignTier(AdminAssignTierRequest) returns (AdminAssignTierResponse);
+
+  // Operator billing arrangement for one tenant: a base fee in place of the
+  // tier's, usage rated at zero, invoices the operator collects by hand, and
+  // an optional expiry. It replaces the self-serve requirement that a paid
+  // postpaid tier has Stripe or Mollie collection. Platform operators only.
+  rpc AdminSetBillingGrant(AdminSetBillingGrantRequest) returns (AdminBillingGrantResponse);
+  rpc AdminGetBillingGrant(AdminGetBillingGrantRequest) returns (AdminBillingGrantResponse);
+  rpc AdminRevokeBillingGrant(AdminRevokeBillingGrantRequest) returns (AdminBillingGrantResponse);
+
+  // Records a payment the operator received outside any provider (a bank
+  // transfer) for the full open balance of an invoice, which marks it paid.
+  // Platform operators only.
+  rpc AdminRecordInvoicePayment(AdminRecordInvoicePaymentRequest) returns (AdminRecordInvoicePaymentResponse);
 }
 
 // ============================================================================
@@ -1517,6 +1531,75 @@ message AdminAssignTierResponse {
   bool changed = 8;
   repeated string eligible_cluster_ids = 9;
   string primary_cluster_id = 10;
+}
+
+// An operator's billing arrangement for a tenant's subscription.
+message OperatorBillingGrant {
+  string subscription_id = 1;
+  // Base fee in EUR in place of the tier's, e.g. "0.00". Unset keeps the tier price.
+  optional string base_price = 2;
+  // Usage rates at zero; quantities are still metered and shown.
+  bool waive_usage = 3;
+  // "provider": Stripe or Mollie collect as for any tenant.
+  // "invoice": the operator collects invoices by hand.
+  string collection = 4;
+  // The grant stops applying at this time. Unset: until revoked.
+  google.protobuf.Timestamp expires_at = 5;
+  string reason = 6;
+  string granted_by = 7;
+  google.protobuf.Timestamp granted_at = 8;
+  // False once expires_at has passed.
+  bool active = 9;
+}
+
+message AdminSetBillingGrantRequest {
+  string tenant_id = 1;
+  // Also assigns this tier (as AdminAssignTier) before the grant applies.
+  // Empty keeps the tenant's tier.
+  string tier_name = 2;
+  optional string base_price = 3;
+  bool waive_usage = 4;
+  // "provider" (default) or "invoice".
+  string collection = 5;
+  google.protobuf.Timestamp expires_at = 6;
+  // Why the operator granted it; recorded on the grant and the audit event.
+  string reason = 7;
+}
+
+message AdminGetBillingGrantRequest {
+  string tenant_id = 1;
+}
+
+message AdminRevokeBillingGrantRequest {
+  string tenant_id = 1;
+  string reason = 2;
+}
+
+message AdminBillingGrantResponse {
+  // Unset when the tenant has no grant.
+  OperatorBillingGrant grant = 1;
+  // Set when the request assigned a tier.
+  AdminAssignTierResponse tier = 2;
+  // Whether rated work is admitted for the tenant's postpaid charges now,
+  // and who collects them: stripe, mollie or operator.
+  bool collection_ready = 3;
+  string collection_provider = 4;
+}
+
+message AdminRecordInvoicePaymentRequest {
+  string tenant_id = 1;
+  string invoice_id = 2;
+  // The bank transfer or other reference the payment arrived with.
+  string reference = 3;
+  string reason = 4;
+}
+
+message AdminRecordInvoicePaymentResponse {
+  string payment_id = 1;
+  // Amount recorded, in the invoice's presentment currency.
+  string amount = 2;
+  string currency = 3;
+  string invoice_status = 4;
 }
 
 // ============================================================================

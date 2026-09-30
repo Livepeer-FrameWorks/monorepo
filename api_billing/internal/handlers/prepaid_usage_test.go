@@ -41,8 +41,8 @@ func expectEffectiveTier(mock sqlmock.Sqlmock, tenant, tierID string, metering b
 	const subscriptionID = "62000000-0000-4000-8000-000000000001"
 	mock.ExpectQuery(`FROM purser\.tenant_subscriptions ts\s+JOIN purser\.billing_tiers bt`).
 		WithArgs(tenant).
-		WillReturnRows(sqlmock.NewRows([]string{"id", "tier_name", "base_price", "currency", "metering_enabled", "sub_id"}).
-			AddRow(tierID, "Pro", "79.00", billing.LedgerCurrency, metering, subscriptionID))
+		WillReturnRows(sqlmock.NewRows([]string{"id", "tier_name", "base_price", "currency", "metering_enabled", "sub_id", "waive_usage", "granted_base_price"}).
+			AddRow(tierID, "Pro", "79.00", billing.LedgerCurrency, metering, subscriptionID, false, nil))
 
 	rules := sqlmock.NewRows([]string{"meter", "model", "currency", "included_quantity", "unit_price", "config"})
 	if withRule {

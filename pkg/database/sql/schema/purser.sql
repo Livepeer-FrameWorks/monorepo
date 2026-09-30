@@ -703,6 +703,25 @@ CREATE TABLE IF NOT EXISTS purser.subscription_entitlement_overrides (
     PRIMARY KEY (subscription_id, key)
 );
 
+-- An operator's billing arrangement for one subscription. It replaces the
+-- self-serve rule that a paid postpaid tier needs Stripe or Mollie collection:
+-- base_price overrides the tier's base fee (NULL keeps the tier price),
+-- waive_usage rates metered usage at zero, and collection 'invoice' means the
+-- operator collects invoices by hand. A grant past expires_at no longer
+-- applies; the row stays as the record of what was granted.
+CREATE TABLE IF NOT EXISTS purser.subscription_operator_grants (
+    subscription_id UUID PRIMARY KEY REFERENCES purser.tenant_subscriptions(id) ON DELETE CASCADE,
+    base_price NUMERIC(10,2),
+    waive_usage BOOLEAN NOT NULL DEFAULT false,
+    collection VARCHAR(16) NOT NULL DEFAULT 'provider',
+    expires_at TIMESTAMPTZ,
+    reason TEXT NOT NULL,
+    granted_by TEXT,
+    granted_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    CONSTRAINT chk_subscription_operator_grant_collection CHECK (collection IN ('provider', 'invoice')),
+    CONSTRAINT chk_subscription_operator_grant_base_price CHECK (base_price IS NULL OR base_price >= 0)
+);
+
 -- ============================================================================
 -- INVOICE LINE ITEMS
 -- ============================================================================

@@ -140,3 +140,47 @@ func TestFreeStatementPreservesUsageAtZeroDue(t *testing.T) {
 		t.Fatalf("zero-due Free statement status = %q, want paid", status)
 	}
 }
+
+// An operator grant with a zero base fee and waived usage rates the invoice to
+// nothing while keeping the usage quantities and what they would have cost.
+func TestOperatorGrantRatesBaseFeeAndUsageToZero(t *testing.T) {
+	appconfigtest.Set(t, "WAIVE_USAGE_CHARGES", "false")
+	mockDB, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("sqlmock: %v", err)
+	}
+	defer mockDB.Close()
+	expectNoPurserInvoicedClusters(mock)
+
+	tier := &billingpkg.EffectiveTier{
+		TierID: "supporter-tier", TierName: "supporter", Currency: "EUR",
+		BasePrice: dec("0"), BasePriceGranted: true, UsageWaived: true, MeteringEnabled: true,
+		Rules: []rating.Rule{{
+			Meter: rating.MeterDeliveredMinutes, Model: rating.ModelAllUsage,
+			Currency: "EUR", UnitPrice: dec("0.05"),
+		}},
+	}
+	jm := &JobManager{db: mockDB, logger: logging.NewLogger(), billing: &Service{}}
+	periodStart := time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)
+	result, err := jm.rateInvoiceForTenant(
+		context.Background(), "tenant-supporter", periodStart, periodStart.AddDate(0, 1, 0), tier,
+		true, false,
+		map[string]map[string]float64{"": {string(rating.MeterDeliveredMinutes): 120}},
+		map[string][]rating.DimensionedQuantity{},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !result.TotalAmount.IsZero() || !result.BaseAmount.IsZero() || !result.UsageAmount.IsZero() {
+		t.Fatalf("granted totals = net:%s base:%s usage:%s, want all zero", result.TotalAmount, result.BaseAmount, result.UsageAmount)
+	}
+	if !result.GrossUsageAmount.Equal(dec("6")) {
+		t.Fatalf("gross usage = %s, want 6 (120 minutes at 0.05)", result.GrossUsageAmount)
+	}
+	if result.BaseLine.Description != "Base subscription (operator arrangement)" {
+		t.Fatalf("base line description = %q", result.BaseLine.Description)
+	}
+	if meteringCompletenessRequired(tier.MeteringEnabled, tier.UsageWaived) {
+		t.Fatal("waived usage must not hold the invoice for complete metering")
+	}
+}

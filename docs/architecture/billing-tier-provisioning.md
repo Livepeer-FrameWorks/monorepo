@@ -70,6 +70,40 @@ Billing tiers drive cluster access. When an account is created or promoted, the 
    invalidates caches. A same-target retry is idempotent.
 ```
 
+## Collection Readiness and Operator Grants
+
+A postpaid paid tier admits rated work only while its charges can be collected.
+`postpaidCollectionReadiness` (`api_billing/internal/grpc/collection_readiness.go`)
+is the one rule, used by tenant admission, billing status and the self-serve tier
+change:
+
+1. A Stripe or Mollie setup that can charge off-session: a provider subscription,
+   or the saved Stripe card or valid Mollie mandate that advance-billed tenants
+   run on. Provider `stripe` or `mollie`.
+2. Otherwise an operator grant in force (`purser.subscription_operator_grants`)
+   with `collection = 'invoice'`: the operator collects invoices by hand and
+   records payments (`AdminRecordInvoicePayment`). Provider `operator`.
+3. Otherwise a grant under which the tenant owes nothing: base fee 0 and usage
+   waived. Provider `operator`.
+
+An operator grant is one row per subscription, set with
+`frameworks admin billing grant set` (`AdminSetBillingGrant`):
+
+- `base_price` replaces the tier's base fee in `LoadEffectiveTier`, so every
+  invoice and base-fee path sees it. A grant that sets it is refused while a
+  Stripe or Mollie subscription exists, because that subscription bills the
+  tier's price on the provider's side; while it applies, Stripe Checkout runs in
+  setup mode (card only) and Mollie subscriptions are refused.
+- `waive_usage` rates usage at zero for that tenant, the per-tenant form of
+  `WAIVE_USAGE_CHARGES`. Quantities and would-have-cost amounts stay on the
+  invoice.
+- `expires_at` is evaluated at read time: an expired grant stops applying
+  everywhere at once, with no job, and stays on record.
+
+Grant changes record `billing.subscription_updated` with `changed_fields =
+["operator_grant"]` and the operator's reason. Metering and rating are unchanged
+by a grant.
+
 ## Default Tier Configuration
 
 Default tiers are configured via boolean flags on `purser.billing_tiers`:
@@ -105,6 +139,9 @@ Purser grants each eligible cluster through Quartermaster's service-token `Boots
 
 - Quartermaster's `CreateTenant` still auto-subscribes to the single `is_default_cluster=true` cluster as a safety net and sets `official_cluster_id`. Purser's later cluster provisioning is idempotent, so overlap is harmless.
 - Tier-specific paid collection must be completed before selecting a non-Free
-  postpaid tier. Free activation remains provider-free.
+  postpaid tier, unless an operator grant stands in for it. Free activation
+  remains provider-free.
+- `AdminAssignTier` (`set-tier`) changes the tier only. A paid postpaid tier
+  assigned that way without collection or a grant is refused rated work.
 - `PromoteToPaid` honors an explicit active, postpaid-eligible `tier_id`; an
   empty value selects the default postpaid tier.

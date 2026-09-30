@@ -31,6 +31,31 @@ type fakeAdminBillingClient struct {
 
 	assignCalls []assignTierCall
 	assignResp  *purserpb.AdminAssignTierResponse
+
+	grantReqs   []*purserpb.AdminSetBillingGrantRequest
+	grantResp   *purserpb.AdminBillingGrantResponse
+	revokeCalls []string
+	paymentReqs []*purserpb.AdminRecordInvoicePaymentRequest
+	paymentResp *purserpb.AdminRecordInvoicePaymentResponse
+}
+
+func (f *fakeAdminBillingClient) AdminSetBillingGrant(_ context.Context, req *purserpb.AdminSetBillingGrantRequest) (*purserpb.AdminBillingGrantResponse, error) {
+	f.grantReqs = append(f.grantReqs, req)
+	return f.grantResp, nil
+}
+
+func (f *fakeAdminBillingClient) AdminGetBillingGrant(context.Context, string) (*purserpb.AdminBillingGrantResponse, error) {
+	return f.grantResp, nil
+}
+
+func (f *fakeAdminBillingClient) AdminRevokeBillingGrant(_ context.Context, tenantID, reason string) (*purserpb.AdminBillingGrantResponse, error) {
+	f.revokeCalls = append(f.revokeCalls, tenantID+"|"+reason)
+	return f.grantResp, nil
+}
+
+func (f *fakeAdminBillingClient) AdminRecordInvoicePayment(_ context.Context, req *purserpb.AdminRecordInvoicePaymentRequest) (*purserpb.AdminRecordInvoicePaymentResponse, error) {
+	f.paymentReqs = append(f.paymentReqs, req)
+	return f.paymentResp, nil
 }
 
 func (f *fakeAdminBillingClient) AdjustBalance(_ context.Context, tenantID string, amountCents int64, description string, _, _ *string) (*purserpb.BalanceTransaction, error) {

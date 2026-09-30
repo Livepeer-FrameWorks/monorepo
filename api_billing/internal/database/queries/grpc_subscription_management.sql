@@ -53,9 +53,20 @@ WHERE id = sqlc.arg(tier_id)::text::uuid;
 
 -- name: GetPostpaidCollectionSetup :one
 SELECT payment_method, stripe_subscription_id, mollie_subscription_id,
-       billing_email, billing_name, COALESCE(billing_address, '{}'::jsonb) AS billing_address
-FROM purser.tenant_subscriptions
-WHERE tenant_id = sqlc.arg(tenant_id)::text::uuid;
+       billing_email, billing_name, COALESCE(billing_address, '{}'::jsonb) AS billing_address,
+       ts.stripe_customer_id,
+       EXISTS (
+           SELECT 1 FROM purser.mollie_mandates mm
+           WHERE mm.tenant_id = ts.tenant_id AND mm.status = 'valid'
+       )::boolean AS has_valid_mollie_mandate,
+       og.collection AS grant_collection,
+       COALESCE(og.waive_usage, false)::boolean AS grant_waive_usage,
+       COALESCE(og.base_price, target.base_price)::text AS effective_base_price
+FROM purser.tenant_subscriptions ts
+JOIN purser.billing_tiers target ON target.id = sqlc.arg(target_tier_id)::text::uuid
+LEFT JOIN purser.subscription_operator_grants og
+    ON og.subscription_id = ts.id AND (og.expires_at IS NULL OR og.expires_at > NOW())
+WHERE ts.tenant_id = sqlc.arg(tenant_id)::text::uuid;
 
 -- name: GetOpenInvoiceBillingPeriod :one
 SELECT period_start, period_end

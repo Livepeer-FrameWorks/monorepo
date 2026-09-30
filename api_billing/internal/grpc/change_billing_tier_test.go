@@ -46,9 +46,9 @@ func expectLoadTargetTier(mock sqlmock.Sqlmock, tierID string, tierLevel int32, 
 
 func expectCollectionReady(mock sqlmock.Sqlmock) {
 	mock.ExpectQuery(`SELECT payment_method, stripe_subscription_id, mollie_subscription_id,`).
-		WithArgs(tenantID).
-		WillReturnRows(sqlmock.NewRows([]string{"payment_method", "stripe_subscription_id", "mollie_subscription_id", "billing_email", "billing_name", "billing_address"}).
-			AddRow("stripe", "sub_confirmed", nil, "billing@example.com", "Customer Name", []byte(`{"street":"Main 1","city":"Leiden","postal_code":"2332 ED","country":"NL"}`)))
+		WithArgs(sqlmock.AnyArg(), tenantID).
+		WillReturnRows(sqlmock.NewRows([]string{"payment_method", "stripe_subscription_id", "mollie_subscription_id", "billing_email", "billing_name", "billing_address", "stripe_customer_id", "has_valid_mollie_mandate", "grant_collection", "grant_waive_usage", "effective_base_price"}).
+			AddRow("stripe", "sub_confirmed", nil, "billing@example.com", "Customer Name", []byte(`{"street":"Main 1","city":"Leiden","postal_code":"2332 ED","country":"NL"}`), nil, false, nil, false, "0.00"))
 }
 
 func TestChangeBillingTier_RejectsPrepaid(t *testing.T) {
@@ -284,9 +284,9 @@ func TestChangeBillingTier_FreeCannotActivatePaidTierWithoutCollection(t *testin
 	expectLoadSubscription(mock, tenantID, freeTierID, 1, "postpaid", now, now.Add(time.Hour))
 	expectLoadTargetTier(mock, prodTierID, 4, false, true)
 	mock.ExpectQuery(`SELECT payment_method, stripe_subscription_id, mollie_subscription_id,`).
-		WithArgs(tenantID).
-		WillReturnRows(sqlmock.NewRows([]string{"payment_method", "stripe_subscription_id", "mollie_subscription_id", "billing_email", "billing_name", "billing_address"}).
-			AddRow(nil, nil, nil, nil, nil, []byte(`{}`)))
+		WithArgs(sqlmock.AnyArg(), tenantID).
+		WillReturnRows(sqlmock.NewRows([]string{"payment_method", "stripe_subscription_id", "mollie_subscription_id", "billing_email", "billing_name", "billing_address", "stripe_customer_id", "has_valid_mollie_mandate", "grant_collection", "grant_waive_usage", "effective_base_price"}).
+			AddRow(nil, nil, nil, nil, nil, []byte(`{}`), nil, false, nil, false, "0.00"))
 
 	_, err = server.ChangeBillingTier(context.Background(), &purserpb.ChangeBillingTierRequest{
 		TenantId: tenantID,

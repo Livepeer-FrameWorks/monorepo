@@ -11,7 +11,6 @@ import (
 	"github.com/shopspring/decimal"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
-	"frameworks/api_billing/internal/appconfig"
 	"frameworks/api_billing/internal/fx"
 	"frameworks/api_billing/internal/rating"
 	purserpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/purser"
@@ -24,7 +23,7 @@ import (
 //
 // usage carries canonical usage_type → total values. The map is not limited to
 // today's billed meters; rating rules decide which meters produce lines.
-func buildRatingInputForUsage(usage map[string]float64, quantities []rating.DimensionedQuantity, currency string, basePrice decimal.Decimal, rules []rating.Rule) rating.Input {
+func buildRatingInputForUsage(usage map[string]float64, quantities []rating.DimensionedQuantity, currency string, basePrice decimal.Decimal, rules []rating.Rule, waiveUsage bool) rating.Input {
 	usageMap := make(map[rating.Meter]decimal.Decimal, len(usage))
 	for meter, total := range usage {
 		m := rating.Meter(meter)
@@ -39,7 +38,7 @@ func buildRatingInputForUsage(usage map[string]float64, quantities []rating.Dime
 		Rules:             rules,
 		Usage:             usageMap,
 		Quantities:        quantities,
-		WaiveUsageCharges: appconfig.Runtime().WaiveUsageCharges,
+		WaiveUsageCharges: waiveUsage,
 	}
 }
 

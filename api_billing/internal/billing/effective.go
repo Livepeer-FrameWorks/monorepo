@@ -31,12 +31,26 @@ type EffectiveTier struct {
 	MeteringEnabled bool
 	Rules           []rating.Rule
 	Entitlements    map[string]string // JSON-encoded values, keyed by entitlement key
+	// UsageWaived is set by an operator grant in force: usage rates at zero,
+	// as the platform-wide WAIVE_USAGE_CHARGES does for every tenant.
+	UsageWaived bool
+	// BasePriceGranted reports that an operator grant set BasePrice in place
+	// of the tier's base fee.
+	BasePriceGranted bool
+}
+
+// WaivesUsage reports whether this tenant's usage rates at zero, either
+// platform-wide or by its operator grant.
+func (t *EffectiveTier) WaivesUsage(platformWaiver bool) bool {
+	return platformWaiver || (t != nil && t.UsageWaived)
 }
 
 // LoadEffectiveTier loads a tenant's tier configuration and applies their
 // subscription-level overrides. The returned EffectiveTier is read-only.
 //
 // Override semantics:
+//   - an operator grant in force (subscription_operator_grants) replaces the
+//     tier's base fee when it sets one, and can waive usage.
 //   - subscription_pricing_overrides shadow tier_pricing_rules per (meter):
 //     a row in the override table replaces the tier rule wholesale; partial
 //     fields fall back to the tier rule's values.
@@ -71,9 +85,13 @@ func loadEffectiveTier(ctx context.Context, db purserdb.DBTX, tenantID string) (
 		return nil, err
 	}
 
-	bp, err := decimal.NewFromString(row.BasePrice)
+	basePriceText := row.BasePrice
+	if row.GrantedBasePrice.Valid {
+		basePriceText = row.GrantedBasePrice.String
+	}
+	bp, err := decimal.NewFromString(basePriceText)
 	if err != nil {
-		return nil, fmt.Errorf("parse base_price %q: %w", row.BasePrice, err)
+		return nil, fmt.Errorf("parse base_price %q: %w", basePriceText, err)
 	}
 
 	rules, err := loadTierRules(ctx, db, row.TierID.String())
@@ -95,14 +113,16 @@ func loadEffectiveTier(ctx context.Context, db purserdb.DBTX, tenantID string) (
 	}
 
 	return &EffectiveTier{
-		SubscriptionID:  row.SubscriptionID.String(),
-		TierID:          row.TierID.String(),
-		TierName:        row.TierName,
-		Currency:        row.Currency,
-		BasePrice:       bp,
-		MeteringEnabled: row.MeteringEnabled,
-		Rules:           rules,
-		Entitlements:    entitlements,
+		SubscriptionID:   row.SubscriptionID.String(),
+		TierID:           row.TierID.String(),
+		TierName:         row.TierName,
+		Currency:         row.Currency,
+		BasePrice:        bp,
+		MeteringEnabled:  row.MeteringEnabled,
+		Rules:            rules,
+		Entitlements:     entitlements,
+		UsageWaived:      row.WaiveUsage,
+		BasePriceGranted: row.GrantedBasePrice.Valid,
 	}, nil
 }
 

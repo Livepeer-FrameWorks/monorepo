@@ -106,6 +106,9 @@ type Querier interface {
 	CountOpenCryptoAccountingAnomalies(ctx context.Context) (int64, error)
 	CountOpenMeteringAnomalies(ctx context.Context, arg CountOpenMeteringAnomaliesParams) (int64, error)
 	CountX402NonceUses(ctx context.Context, arg CountX402NonceUsesParams) (int64, error)
+	// A payment the operator received outside any provider (a bank transfer) and
+	// records against the invoice it pays.
+	CreateConfirmedOperatorInvoicePayment(ctx context.Context, arg CreateConfirmedOperatorInvoicePaymentParams) error
 	CreateCryptoWallet(ctx context.Context, arg CreateCryptoWalletParams) error
 	CreatePendingInvoicePayment(ctx context.Context, arg CreatePendingInvoicePaymentParams) error
 	CreateX402PaymentQuote(ctx context.Context, arg CreateX402PaymentQuoteParams) error
@@ -116,6 +119,7 @@ type Querier interface {
 	DeleteBootstrapTierPricingRule(ctx context.Context, arg DeleteBootstrapTierPricingRuleParams) error
 	DeleteInvoiceLineItem(ctx context.Context, arg DeleteInvoiceLineItemParams) error
 	DeleteSubscriptionEntitlementOverrides(ctx context.Context, subscriptionID uuid.UUID) error
+	DeleteSubscriptionOperatorGrant(ctx context.Context, subscriptionID string) (int64, error)
 	DeleteSubscriptionPricingOverrides(ctx context.Context, subscriptionID uuid.UUID) error
 	EnqueueBillingEventOutbox(ctx context.Context, arg EnqueueBillingEventOutboxParams) (uuid.UUID, error)
 	EnqueueBillingEventOutboxNoReturn(ctx context.Context, arg EnqueueBillingEventOutboxNoReturnParams) error
@@ -154,6 +158,8 @@ type Querier interface {
 	GetActiveInvoicePayment(ctx context.Context, arg GetActiveInvoicePaymentParams) (GetActiveInvoicePaymentRow, error)
 	GetActiveMeterDefinition(ctx context.Context, meter string) (GetActiveMeterDefinitionRow, error)
 	GetActiveMollieCollectionDetails(ctx context.Context, tenantID string) (GetActiveMollieCollectionDetailsRow, error)
+	// Whether an operator grant in force sets this tenant's base fee.
+	GetActiveOperatorBaseFeeOverride(ctx context.Context, tenantID string) (bool, error)
 	// A Stripe customer is collectable through its subscription or, without a
 	// subscription, through the default payment method saved by setup checkout.
 	GetActiveStripeCollectionDetails(ctx context.Context, tenantID string) (GetActiveStripeCollectionDetailsRow, error)
@@ -271,7 +277,7 @@ type Querier interface {
 	GetPendingTopupForReversal(ctx context.Context, providerPaymentID sql.NullString) (GetPendingTopupForReversalRow, error)
 	GetPersistedCryptoSweepBatch(ctx context.Context, batchID string) (GetPersistedCryptoSweepBatchRow, error)
 	GetPersistedCryptoSweepItem(ctx context.Context, arg GetPersistedCryptoSweepItemParams) (GetPersistedCryptoSweepItemRow, error)
-	GetPostpaidCollectionSetup(ctx context.Context, tenantID string) (GetPostpaidCollectionSetupRow, error)
+	GetPostpaidCollectionSetup(ctx context.Context, arg GetPostpaidCollectionSetupParams) (GetPostpaidCollectionSetupRow, error)
 	GetPostpaidPromotionTier(ctx context.Context, arg GetPostpaidPromotionTierParams) (GetPostpaidPromotionTierRow, error)
 	GetPrepaidBalance(ctx context.Context, arg GetPrepaidBalanceParams) (GetPrepaidBalanceRow, error)
 	GetPrepaidBalanceForJobs(ctx context.Context, arg GetPrepaidBalanceForJobsParams) (int64, error)
@@ -283,6 +289,9 @@ type Querier interface {
 	// payment or top-up row lock, so concurrent reversals see each other.
 	GetPriorReversalTotals(ctx context.Context, arg GetPriorReversalTotalsParams) (GetPriorReversalTotalsRow, error)
 	GetProviderSettlement(ctx context.Context, arg GetProviderSettlementParams) (GetProviderSettlementRow, error)
+	// Whether a Stripe or Mollie subscription bills the tier's base fee on the
+	// provider's side for this subscription.
+	GetProviderSubscriptionState(ctx context.Context, tenantID string) (GetProviderSubscriptionStateRow, error)
 	GetSimplifiedInvoiceDocument(ctx context.Context, arg GetSimplifiedInvoiceDocumentParams) (GetSimplifiedInvoiceDocumentRow, error)
 	GetStoragePricing(ctx context.Context, arg GetStoragePricingParams) (GetStoragePricingRow, error)
 	GetStripeInvoiceCardPayment(ctx context.Context, arg GetStripeInvoiceCardPaymentParams) (GetStripeInvoiceCardPaymentRow, error)
@@ -292,6 +301,9 @@ type Querier interface {
 	// The columns ListSubscriptionsDueForInvoice returns, for one tenant whose
 	// period is closed early.
 	GetSubscriptionForInvoice(ctx context.Context, tenantID string) (GetSubscriptionForInvoiceRow, error)
+	// The operator grant recorded for a tenant's subscription, whether or not it
+	// is still in force; active reports whether it applies now.
+	GetSubscriptionOperatorGrant(ctx context.Context, tenantID string) (GetSubscriptionOperatorGrantRow, error)
 	GetSubscriptionProviderIDs(ctx context.Context, tenantID string) (GetSubscriptionProviderIDsRow, error)
 	GetTenantAdmissionStatus(ctx context.Context, arg GetTenantAdmissionStatusParams) (GetTenantAdmissionStatusRow, error)
 	GetTenantBillingDetails(ctx context.Context, tenantID string) (GetTenantBillingDetailsRow, error)
@@ -450,6 +462,7 @@ type Querier interface {
 	ListUsageAggregates(ctx context.Context, arg ListUsageAggregatesParams) ([]ListUsageAggregatesRow, error)
 	ListUsageRecords(ctx context.Context, arg ListUsageRecordsParams) ([]ListUsageRecordsRow, error)
 	ListX402QuoteMetrics(ctx context.Context) ([]ListX402QuoteMetricsRow, error)
+	// granted_base_price and waive_usage come from an operator grant in force.
 	LoadActiveEffectiveTier(ctx context.Context, tenantID string) (LoadActiveEffectiveTierRow, error)
 	LoadClusterPricingHistory(ctx context.Context, arg LoadClusterPricingHistoryParams) (LoadClusterPricingHistoryRow, error)
 	LoadEffectiveDNSEntitlements(ctx context.Context, tenantID string) (LoadEffectiveDNSEntitlementsRow, error)
@@ -660,6 +673,7 @@ type Querier interface {
 	UpsertStripeClusterCheckoutIntent(ctx context.Context, arg UpsertStripeClusterCheckoutIntentParams) (string, error)
 	UpsertStripeTenantCheckoutIntent(ctx context.Context, arg UpsertStripeTenantCheckoutIntentParams) (string, error)
 	UpsertSubscriptionEntitlementOverride(ctx context.Context, arg UpsertSubscriptionEntitlementOverrideParams) error
+	UpsertSubscriptionOperatorGrant(ctx context.Context, arg UpsertSubscriptionOperatorGrantParams) error
 	UpsertSubscriptionPricingOverride(ctx context.Context, arg UpsertSubscriptionPricingOverrideParams) error
 	UpsertSucceededPaymentReversal(ctx context.Context, arg UpsertSucceededPaymentReversalParams) (string, error)
 	UpsertUsageAdjustment(ctx context.Context, arg UpsertUsageAdjustmentParams) error

@@ -23,8 +23,8 @@ func TestProcessPrepaidUsage_CurrencyMismatchRejected(t *testing.T) {
 	// consistent so LoadEffectiveTier accepts them), metering enabled.
 	mock.ExpectQuery(`FROM purser\.tenant_subscriptions ts\s+JOIN purser\.billing_tiers bt`).
 		WithArgs(tenant).
-		WillReturnRows(sqlmock.NewRows([]string{"id", "tier_name", "base_price", "currency", "metering_enabled", "sub_id"}).
-			AddRow(tier, "Pro", "79.00", other, true, subscriptionID))
+		WillReturnRows(sqlmock.NewRows([]string{"id", "tier_name", "base_price", "currency", "metering_enabled", "sub_id", "waive_usage", "granted_base_price"}).
+			AddRow(tier, "Pro", "79.00", other, true, subscriptionID, false, nil))
 	mock.ExpectQuery(`FROM purser\.tier_pricing_rules WHERE tier_id`).
 		WithArgs(tier).
 		WillReturnRows(sqlmock.NewRows([]string{"meter", "model", "currency", "included_quantity", "unit_price", "config"}).

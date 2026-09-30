@@ -329,15 +329,15 @@ func TestValidateWindowCompletionRequiresSourceRegion(t *testing.T) {
 
 func TestMeteringCompletenessRequiredFollowsExistingBetaWaiver(t *testing.T) {
 	appconfigtest.Set(t, "WAIVE_USAGE_CHARGES", "true")
-	if meteringCompletenessRequired(true) {
+	if meteringCompletenessRequired(true, false) {
 		t.Fatal("waived usage charges must not block subscription invoices on metering completeness")
 	}
 
 	appconfigtest.Set(t, "WAIVE_USAGE_CHARGES", "false")
-	if !meteringCompletenessRequired(true) {
+	if !meteringCompletenessRequired(true, false) {
 		t.Fatal("metered billing must require complete source windows")
 	}
-	if meteringCompletenessRequired(false) {
+	if meteringCompletenessRequired(false, false) {
 		t.Fatal("a tier with metering disabled must not require metering completeness")
 	}
 }

@@ -57,7 +57,7 @@ func expectQuoteSnapshot(mock sqlmock.Sqlmock, now time.Time, failure string) {
 		mock.ExpectRollback()
 		return
 	}
-	tier.WillReturnRows(sqlmock.NewRows([]string{"tier_id", "tier_name", "base_price", "currency", "metering_enabled", "subscription_id"}).AddRow(quoteTier, "pro", "10", "EUR", true, quoteSubscription))
+	tier.WillReturnRows(sqlmock.NewRows([]string{"tier_id", "tier_name", "base_price", "currency", "metering_enabled", "subscription_id", "waive_usage", "granted_base_price"}).AddRow(quoteTier, "pro", "10", "EUR", true, quoteSubscription, false, nil))
 	mock.ExpectQuery("tier_pricing_rules").WithArgs(quoteTier).WillReturnRows(sqlmock.NewRows([]string{"meter", "model", "currency", "included_quantity", "unit_price", "config"}).AddRow("egress_gb", "all_usage", "EUR", "0", "0.05", "{}").AddRow("delivered_minutes", "all_usage", "EUR", "0", "0.02", "{}"))
 	mock.ExpectQuery("subscription_pricing_overrides").WithArgs(quoteSubscription).WillReturnRows(sqlmock.NewRows([]string{"meter", "model", "currency", "included_quantity", "unit_price", "config"}))
 	mock.ExpectQuery("tier_entitlements").WithArgs(quoteTier).WillReturnRows(sqlmock.NewRows([]string{"key", "value"}))

@@ -25,7 +25,7 @@ func expectSnapshotClock(mock sqlmock.Sqlmock, at time.Time) {
 }
 
 func expectSnapshotTier(mock sqlmock.Sqlmock) {
-	mock.ExpectQuery("tenant_subscriptions").WithArgs(snapshotTenant).WillReturnRows(sqlmock.NewRows([]string{"tier_id", "tier_name", "base_price", "currency", "metering_enabled", "subscription_id"}).AddRow(snapshotTier, "pro", "10", "EUR", true, snapshotSubscription))
+	mock.ExpectQuery("tenant_subscriptions").WithArgs(snapshotTenant).WillReturnRows(sqlmock.NewRows([]string{"tier_id", "tier_name", "base_price", "currency", "metering_enabled", "subscription_id", "waive_usage", "granted_base_price"}).AddRow(snapshotTier, "pro", "10", "EUR", true, snapshotSubscription, false, nil))
 	mock.ExpectQuery("tier_pricing_rules").WithArgs(snapshotTier).WillReturnRows(sqlmock.NewRows([]string{"meter", "model", "currency", "included_quantity", "unit_price", "config"}).AddRow("egress_gb", "all_usage", "EUR", "0", "0.05", "{}"))
 	mock.ExpectQuery("subscription_pricing_overrides").WithArgs(snapshotSubscription).WillReturnRows(sqlmock.NewRows([]string{"meter", "model", "currency", "included_quantity", "unit_price", "config"}))
 	mock.ExpectQuery("tier_entitlements").WithArgs(snapshotTier).WillReturnRows(sqlmock.NewRows([]string{"key", "value"}))

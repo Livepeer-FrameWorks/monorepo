@@ -2851,17 +2851,17 @@ func (s *Service) getTenantInfo(tenantID string) (*models.Tenant, error) {
 // aggregate over sibling payment rows, and a concurrent confirmation that has
 // not committed would otherwise make it conclude the invoice is short.
 func (s *Service) settleInvoiceIfCovered(ctx context.Context, tx *sql.Tx, queries *purserdb.Queries, invoiceID string, now time.Time) error {
-	if _, err := settleCoveredInvoiceTx(ctx, tx, queries, invoiceID, now); err != nil {
+	if _, err := SettleCoveredInvoiceTx(ctx, tx, queries, invoiceID, now); err != nil {
 		s.logger.WithError(err).WithField("invoice_id", invoiceID).Error("Failed to settle invoice")
 		return err
 	}
 	return nil
 }
 
-// settleCoveredInvoiceTx marks a pending or overdue invoice paid when its
+// SettleCoveredInvoiceTx marks a pending or overdue invoice paid when its
 // confirmed payments cover its presentment amount, then persists its operator
 // credits and billing.invoice_paid. It reports whether the invoice was marked.
-func settleCoveredInvoiceTx(ctx context.Context, tx *sql.Tx, queries *purserdb.Queries, invoiceID string, now time.Time) (bool, error) {
+func SettleCoveredInvoiceTx(ctx context.Context, tx *sql.Tx, queries *purserdb.Queries, invoiceID string, now time.Time) (bool, error) {
 	rowsAffected, err := queries.MarkFullySettledBillingInvoicePaid(ctx, purserdb.MarkFullySettledBillingInvoicePaidParams{
 		PaidAt: sql.NullTime{Time: now, Valid: true}, InvoiceID: invoiceID,
 	})

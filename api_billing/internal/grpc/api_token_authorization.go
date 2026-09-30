@@ -81,6 +81,10 @@ var privilegedBillingMutationMethods = map[string]struct{}{
 	"/purser.PrepaidService/EnsureFreeAccount":         {},
 	"/purser.StripeService/SyncSubscription":           {},
 	"/purser.PrepaidService/AdminAssignTier":           {},
+	"/purser.PrepaidService/AdminSetBillingGrant":      {},
+	"/purser.PrepaidService/AdminGetBillingGrant":      {},
+	"/purser.PrepaidService/AdminRevokeBillingGrant":   {},
+	"/purser.PrepaidService/AdminRecordInvoicePayment": {},
 }
 
 var contextBoundBillingMutationMethods = map[string]struct{}{

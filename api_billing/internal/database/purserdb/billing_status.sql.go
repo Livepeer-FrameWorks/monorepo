@@ -155,9 +155,19 @@ SELECT
     ts.stripe_subscription_id,
     ts.mollie_subscription_id,
     bt.tier_name,
-    COALESCE(bt.tier_level, 0)::integer AS tier_level
+    COALESCE(bt.tier_level, 0)::integer AS tier_level,
+    ts.stripe_customer_id,
+    EXISTS (
+        SELECT 1 FROM purser.mollie_mandates mm
+        WHERE mm.tenant_id = ts.tenant_id AND mm.status = 'valid'
+    )::boolean AS has_valid_mollie_mandate,
+    og.collection AS grant_collection,
+    COALESCE(og.waive_usage, false)::boolean AS grant_waive_usage,
+    COALESCE(og.base_price, bt.base_price)::text AS effective_base_price
 FROM purser.tenant_subscriptions ts
 JOIN purser.billing_tiers bt ON bt.id = ts.tier_id
+LEFT JOIN purser.subscription_operator_grants og
+    ON og.subscription_id = ts.id AND (og.expires_at IS NULL OR og.expires_at > NOW())
 LEFT JOIN purser.prepaid_balances pb
     ON pb.tenant_id = ts.tenant_id AND pb.currency = $1
 LEFT JOIN LATERAL (
@@ -179,15 +189,20 @@ type GetTenantAdmissionStatusParams struct {
 }
 
 type GetTenantAdmissionStatusRow struct {
-	BillingModel         string         `db:"billing_model" json:"billing_model"`
-	SubscriptionStatus   string         `db:"subscription_status" json:"subscription_status"`
-	BalanceCents         sql.NullInt64  `db:"balance_cents" json:"balance_cents"`
-	ReservedBalanceCents int64          `db:"reserved_balance_cents" json:"reserved_balance_cents"`
-	PaymentMethod        sql.NullString `db:"payment_method" json:"payment_method"`
-	StripeSubscriptionID sql.NullString `db:"stripe_subscription_id" json:"stripe_subscription_id"`
-	MollieSubscriptionID sql.NullString `db:"mollie_subscription_id" json:"mollie_subscription_id"`
-	TierName             string         `db:"tier_name" json:"tier_name"`
-	TierLevel            int32          `db:"tier_level" json:"tier_level"`
+	BillingModel          string         `db:"billing_model" json:"billing_model"`
+	SubscriptionStatus    string         `db:"subscription_status" json:"subscription_status"`
+	BalanceCents          sql.NullInt64  `db:"balance_cents" json:"balance_cents"`
+	ReservedBalanceCents  int64          `db:"reserved_balance_cents" json:"reserved_balance_cents"`
+	PaymentMethod         sql.NullString `db:"payment_method" json:"payment_method"`
+	StripeSubscriptionID  sql.NullString `db:"stripe_subscription_id" json:"stripe_subscription_id"`
+	MollieSubscriptionID  sql.NullString `db:"mollie_subscription_id" json:"mollie_subscription_id"`
+	TierName              string         `db:"tier_name" json:"tier_name"`
+	TierLevel             int32          `db:"tier_level" json:"tier_level"`
+	StripeCustomerID      sql.NullString `db:"stripe_customer_id" json:"stripe_customer_id"`
+	HasValidMollieMandate bool           `db:"has_valid_mollie_mandate" json:"has_valid_mollie_mandate"`
+	GrantCollection       sql.NullString `db:"grant_collection" json:"grant_collection"`
+	GrantWaiveUsage       bool           `db:"grant_waive_usage" json:"grant_waive_usage"`
+	EffectiveBasePrice    string         `db:"effective_base_price" json:"effective_base_price"`
 }
 
 func (q *Queries) GetTenantAdmissionStatus(ctx context.Context, arg GetTenantAdmissionStatusParams) (GetTenantAdmissionStatusRow, error) {
@@ -203,6 +218,11 @@ func (q *Queries) GetTenantAdmissionStatus(ctx context.Context, arg GetTenantAdm
 		&i.MollieSubscriptionID,
 		&i.TierName,
 		&i.TierLevel,
+		&i.StripeCustomerID,
+		&i.HasValidMollieMandate,
+		&i.GrantCollection,
+		&i.GrantWaiveUsage,
+		&i.EffectiveBasePrice,
 	)
 	return i, err
 }
@@ -223,9 +243,19 @@ SELECT
     ts.payment_method,
     ts.stripe_subscription_id,
     ts.mollie_subscription_id,
-    bt.tier_name
+    bt.tier_name,
+    ts.stripe_customer_id,
+    EXISTS (
+        SELECT 1 FROM purser.mollie_mandates mm
+        WHERE mm.tenant_id = ts.tenant_id AND mm.status = 'valid'
+    )::boolean AS has_valid_mollie_mandate,
+    og.collection AS grant_collection,
+    COALESCE(og.waive_usage, false)::boolean AS grant_waive_usage,
+    COALESCE(og.base_price, bt.base_price)::text AS effective_base_price
 FROM purser.tenant_subscriptions ts
 JOIN purser.billing_tiers bt ON bt.id = ts.tier_id
+LEFT JOIN purser.subscription_operator_grants og
+    ON og.subscription_id = ts.id AND (og.expires_at IS NULL OR og.expires_at > NOW())
 LEFT JOIN purser.prepaid_balances pb
     ON pb.tenant_id = ts.tenant_id AND pb.currency = $1
 LEFT JOIN LATERAL (
@@ -303,21 +333,26 @@ type GetTenantBillingStatusParams struct {
 }
 
 type GetTenantBillingStatusRow struct {
-	BillingModel         string         `db:"billing_model" json:"billing_model"`
-	SubscriptionStatus   string         `db:"subscription_status" json:"subscription_status"`
-	BalanceCents         sql.NullInt64  `db:"balance_cents" json:"balance_cents"`
-	ReservedBalanceCents int64          `db:"reserved_balance_cents" json:"reserved_balance_cents"`
-	RetentionValue       string         `db:"retention_value" json:"retention_value"`
-	DvrEntitlements      string         `db:"dvr_entitlements" json:"dvr_entitlements"`
-	TierID               string         `db:"tier_id" json:"tier_id"`
-	BillingPeriodStart   sql.NullTime   `db:"billing_period_start" json:"billing_period_start"`
-	BillingPeriodEnd     sql.NullTime   `db:"billing_period_end" json:"billing_period_end"`
-	StorageLimitValue    string         `db:"storage_limit_value" json:"storage_limit_value"`
-	ResourceLimits       string         `db:"resource_limits" json:"resource_limits"`
-	PaymentMethod        sql.NullString `db:"payment_method" json:"payment_method"`
-	StripeSubscriptionID sql.NullString `db:"stripe_subscription_id" json:"stripe_subscription_id"`
-	MollieSubscriptionID sql.NullString `db:"mollie_subscription_id" json:"mollie_subscription_id"`
-	TierName             string         `db:"tier_name" json:"tier_name"`
+	BillingModel          string         `db:"billing_model" json:"billing_model"`
+	SubscriptionStatus    string         `db:"subscription_status" json:"subscription_status"`
+	BalanceCents          sql.NullInt64  `db:"balance_cents" json:"balance_cents"`
+	ReservedBalanceCents  int64          `db:"reserved_balance_cents" json:"reserved_balance_cents"`
+	RetentionValue        string         `db:"retention_value" json:"retention_value"`
+	DvrEntitlements       string         `db:"dvr_entitlements" json:"dvr_entitlements"`
+	TierID                string         `db:"tier_id" json:"tier_id"`
+	BillingPeriodStart    sql.NullTime   `db:"billing_period_start" json:"billing_period_start"`
+	BillingPeriodEnd      sql.NullTime   `db:"billing_period_end" json:"billing_period_end"`
+	StorageLimitValue     string         `db:"storage_limit_value" json:"storage_limit_value"`
+	ResourceLimits        string         `db:"resource_limits" json:"resource_limits"`
+	PaymentMethod         sql.NullString `db:"payment_method" json:"payment_method"`
+	StripeSubscriptionID  sql.NullString `db:"stripe_subscription_id" json:"stripe_subscription_id"`
+	MollieSubscriptionID  sql.NullString `db:"mollie_subscription_id" json:"mollie_subscription_id"`
+	TierName              string         `db:"tier_name" json:"tier_name"`
+	StripeCustomerID      sql.NullString `db:"stripe_customer_id" json:"stripe_customer_id"`
+	HasValidMollieMandate bool           `db:"has_valid_mollie_mandate" json:"has_valid_mollie_mandate"`
+	GrantCollection       sql.NullString `db:"grant_collection" json:"grant_collection"`
+	GrantWaiveUsage       bool           `db:"grant_waive_usage" json:"grant_waive_usage"`
+	EffectiveBasePrice    string         `db:"effective_base_price" json:"effective_base_price"`
 }
 
 func (q *Queries) GetTenantBillingStatus(ctx context.Context, arg GetTenantBillingStatusParams) (GetTenantBillingStatusRow, error) {
@@ -344,6 +379,11 @@ func (q *Queries) GetTenantBillingStatus(ctx context.Context, arg GetTenantBilli
 		&i.StripeSubscriptionID,
 		&i.MollieSubscriptionID,
 		&i.TierName,
+		&i.StripeCustomerID,
+		&i.HasValidMollieMandate,
+		&i.GrantCollection,
+		&i.GrantWaiveUsage,
+		&i.EffectiveBasePrice,
 	)
 	return i, err
 }

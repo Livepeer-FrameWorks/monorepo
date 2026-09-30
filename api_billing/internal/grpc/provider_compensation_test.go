@@ -28,6 +28,13 @@ func expectCollectionProfile(mock sqlmock.Sqlmock, tenantID, presentmentCurrency
 		}).AddRow(presentmentCurrency, "active", "postpaid", nil, nil, nil, nil, nil, nil, "11111111-1111-1111-1111-111111111111"))
 }
 
+// expectNoOperatorBaseFeeGrant answers the operator-grant base fee lookup: none.
+func expectNoOperatorBaseFeeGrant(mock sqlmock.Sqlmock, tenantID string) {
+	mock.ExpectQuery(`-- name: GetActiveOperatorBaseFeeOverride`).
+		WithArgs(tenantID).
+		WillReturnRows(sqlmock.NewRows([]string{"overrides_base_fee"}))
+}
+
 func TestCreateCheckoutSessionExpiresStripeSessionWhenLocalStageFails(t *testing.T) {
 	mockDB, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherRegexp))
 	if err != nil {
@@ -55,6 +62,7 @@ func TestCreateCheckoutSessionExpiresStripeSessionWhenLocalStageFails(t *testing
 		WithArgs(false, tierID).
 		WillReturnRows(sqlmock.NewRows([]string{"tier_name", "currency", "stripe_price_id_monthly"}).AddRow("Pro", "USD", "price_123"))
 	expectCollectionProfile(mock, "tenant-a", "EUR")
+	expectNoOperatorBaseFeeGrant(mock, "tenant-a")
 	mock.ExpectQuery(`SELECT pending_reason, COALESCE\(pending_tier_id::text, ''\)::text AS pending_tier_id`).
 		WithArgs("tenant-a").
 		WillReturnRows(sqlmock.NewRows([]string{"pending_reason", "pending_tier_id"}).AddRow(nil, ""))
@@ -114,6 +122,7 @@ func TestCreateMollieSubscriptionCancelsProviderSubscriptionWhenLocalPersistFail
 		WillReturnRows(sqlmock.NewRows([]string{"billing_email", "billing_name", "billing_company", "tax_id", "billing_address", "updated_at", "presentment_currency"}).
 			AddRow("billing@example.com", "Example Customer", "Example", nil, []byte(`{"street":"Main 1","city":"Amsterdam","postal_code":"1000AA","country":"NL"}`), time.Now(), "EUR"))
 	expectCollectionProfile(mock, "tenant-a", "EUR")
+	expectNoOperatorBaseFeeGrant(mock, "tenant-a")
 	mock.ExpectQuery(`SELECT EXISTS\(`).
 		WithArgs("tenant-a").
 		WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(true))

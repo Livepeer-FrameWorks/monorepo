@@ -430,8 +430,8 @@ func TestUpdateInvoiceDraftWritesRatedLineItemsTransactionally(t *testing.T) {
 
 	mock.ExpectQuery(`SELECT bt\.id AS tier_id, bt\.tier_name, bt\.base_price::text AS base_price`).
 		WithArgs(tenantID).
-		WillReturnRows(sqlmock.NewRows([]string{"id", "tier_name", "base_price", "currency", "metering_enabled", "subscription_id"}).
-			AddRow(tierID, "supporter", "100.00", currency, true, subscriptionID))
+		WillReturnRows(sqlmock.NewRows([]string{"id", "tier_name", "base_price", "currency", "metering_enabled", "subscription_id", "waive_usage", "granted_base_price"}).
+			AddRow(tierID, "supporter", "100.00", currency, true, subscriptionID, false, nil))
 	mock.ExpectQuery(`FROM purser\.tier_pricing_rules`).
 		WithArgs(tierID).
 		WillReturnRows(sqlmock.NewRows([]string{"meter", "model", "currency", "included_quantity", "unit_price", "config"}).
@@ -528,8 +528,8 @@ func TestUpdateInvoiceDraftClampsPriorPrepaidCreditToZeroNet(t *testing.T) {
 
 	mock.ExpectQuery(`SELECT bt\.id AS tier_id, bt\.tier_name, bt\.base_price::text AS base_price`).
 		WithArgs(tenantID).
-		WillReturnRows(sqlmock.NewRows([]string{"id", "tier_name", "base_price", "currency", "metering_enabled", "subscription_id"}).
-			AddRow(tierID, "supporter", "100.00", currency, true, subscriptionID))
+		WillReturnRows(sqlmock.NewRows([]string{"id", "tier_name", "base_price", "currency", "metering_enabled", "subscription_id", "waive_usage", "granted_base_price"}).
+			AddRow(tierID, "supporter", "100.00", currency, true, subscriptionID, false, nil))
 	mock.ExpectQuery(`FROM purser\.tier_pricing_rules`).
 		WithArgs(tierID).
 		WillReturnRows(sqlmock.NewRows([]string{"meter", "model", "currency", "included_quantity", "unit_price", "config"}).

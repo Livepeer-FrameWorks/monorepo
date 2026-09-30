@@ -265,6 +265,9 @@ func TestGetBillingStatusNoActiveSubscription(t *testing.T) {
 	// getAvailablePaymentMethods → hd_wallet_state
 	mock.ExpectQuery(`SELECT xpub FROM purser\.hd_wallet_state`).
 		WillReturnError(sqlmockNoRows())
+	// collection readiness and operator grant → no subscription, no grant
+	mock.ExpectQuery(`name: GetTenantAdmissionStatus`).WillReturnError(sqlmockNoRows())
+	mock.ExpectQuery(`name: GetSubscriptionOperatorGrant`).WillReturnError(sqlmockNoRows())
 
 	resp, err := s.GetBillingStatus(context.Background(), &purserpb.GetBillingStatusRequest{TenantId: "tenant-1"})
 	if err != nil {

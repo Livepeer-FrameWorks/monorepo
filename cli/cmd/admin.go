@@ -2410,6 +2410,8 @@ func newAdminBillingCmd() *cobra.Command {
 	cmd.AddCommand(newAdminBillingSetClusterPricingCmd())
 	cmd.AddCommand(newAdminBillingCreditCmd())
 	cmd.AddCommand(newAdminBillingSetTierCmd())
+	cmd.AddCommand(newAdminBillingGrantCmd())
+	cmd.AddCommand(newAdminBillingRecordPaymentCmd())
 	return cmd
 }
 
@@ -2421,6 +2423,10 @@ type adminBillingClient interface {
 	SetClusterPricing(ctx context.Context, req *purserpb.SetClusterPricingRequest) (*purserpb.ClusterPricing, error)
 	AdjustBalance(ctx context.Context, tenantID string, amountCents int64, description string, referenceID, referenceType *string) (*purserpb.BalanceTransaction, error)
 	AdminAssignTier(ctx context.Context, req *purserpb.AdminAssignTierRequest) (*purserpb.AdminAssignTierResponse, error)
+	AdminSetBillingGrant(ctx context.Context, req *purserpb.AdminSetBillingGrantRequest) (*purserpb.AdminBillingGrantResponse, error)
+	AdminGetBillingGrant(ctx context.Context, tenantID string) (*purserpb.AdminBillingGrantResponse, error)
+	AdminRevokeBillingGrant(ctx context.Context, tenantID, reason string) (*purserpb.AdminBillingGrantResponse, error)
+	AdminRecordInvoicePayment(ctx context.Context, req *purserpb.AdminRecordInvoicePaymentRequest) (*purserpb.AdminRecordInvoicePaymentResponse, error)
 }
 
 func runBillingTiers(ctx context.Context, w io.Writer, p adminBillingClient, jwt string, outputJSON bool) error {

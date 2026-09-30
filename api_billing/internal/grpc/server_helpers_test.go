@@ -67,7 +67,7 @@ func TestBuildRatingInputForUsage(t *testing.T) {
 	}
 	quantities := []rating.DimensionedQuantity{{Meter: rating.MeterMediaSeconds, Unit: "second", Dimensions: map[string]string{"output_codec": "h264"}, Quantity: decimal.NewFromInt(100)}}
 
-	in := buildRatingInputForUsage(usage, quantities, "EUR", decimal.NewFromInt(10), nil)
+	in := buildRatingInputForUsage(usage, quantities, "EUR", decimal.NewFromInt(10), nil, false)
 
 	if in.Currency != "EUR" || !in.BasePrice.Equal(decimal.NewFromInt(10)) {
 		t.Errorf("currency/base wrong: %s / %s", in.Currency, in.BasePrice)

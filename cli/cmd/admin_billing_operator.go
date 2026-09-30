@@ -341,10 +341,13 @@ Without --billing-model the tier's model is used.
 
 Purser reconciles cluster access for the new tier, refreshes cached tenant
 limits, and records billing.subscription_updated with --reason and the
-calling identity (your user when logged in). A postpaid paid tier invoices its base price and usage when the
-period closes; prepaid balance is applied to that invoice as credit, so pair
-set-tier with 'billing credit' for a comped account.`,
-		Example: `  frameworks admin billing set-tier --email owner@example.com --tier production --reason "comped partner"
+calling identity (your user when logged in).
+
+A postpaid paid tier admits rated work only once its charges can be collected:
+the tenant's own Stripe or Mollie setup, or an operator arrangement. To bill a
+tenant differently (no monthly fee, invoices you collect by hand, nothing owed
+until a date), use 'frameworks admin billing grant set --tier ...' instead.`,
+		Example: `  frameworks admin billing set-tier --email owner@example.com --tier production --reason "upgraded after card setup"
   frameworks admin billing set-tier --tenant-id <uuid> --tier payg --billing-model prepaid --reason "back to pay as you go"`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			req.Target = target

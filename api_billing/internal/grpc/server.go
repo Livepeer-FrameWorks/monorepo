@@ -520,9 +520,7 @@ type tenantAdmissionData struct {
 	SubscriptionStatus   string
 	BalanceCents         sql.NullInt64
 	ReservedBalanceCents int64
-	PaymentMethod        sql.NullString
-	StripeSubscriptionID sql.NullString
-	MollieSubscriptionID sql.NullString
+	Collection           postpaidCollectionFacts
 	TierName             string
 	TierLevel            int32
 }
@@ -546,15 +544,7 @@ func mapTenantAdmissionStatus(row tenantAdmissionData) *purserpb.GetTenantAdmiss
 		balance = row.BalanceCents.Int64
 	}
 	availableBalance := balance - row.ReservedBalanceCents
-	collectionProvider := ""
-	collectionReady := false
-	if row.PaymentMethod.String == "stripe" && row.StripeSubscriptionID.Valid && row.StripeSubscriptionID.String != "" {
-		collectionProvider = "stripe"
-		collectionReady = true
-	} else if row.PaymentMethod.String == "mollie" && row.MollieSubscriptionID.Valid && row.MollieSubscriptionID.String != "" {
-		collectionProvider = "mollie"
-		collectionReady = true
-	}
+	collectionReady, collectionProvider := postpaidCollectionReadiness(row.Collection)
 	return &purserpb.GetTenantAdmissionStatusResponse{
 		BillingModel:          model,
 		IsSuspended:           row.SubscriptionStatus == "suspended",
@@ -600,9 +590,13 @@ func (s *PurserServer) GetTenantAdmissionStatus(ctx context.Context, req *purser
 	return mapTenantAdmissionStatus(tenantAdmissionData{
 		BillingModel: row.BillingModel, SubscriptionStatus: row.SubscriptionStatus,
 		BalanceCents: row.BalanceCents, ReservedBalanceCents: row.ReservedBalanceCents,
-		PaymentMethod: row.PaymentMethod, StripeSubscriptionID: row.StripeSubscriptionID,
-		MollieSubscriptionID: row.MollieSubscriptionID, TierName: row.TierName,
-		TierLevel: row.TierLevel,
+		Collection: postpaidCollectionFacts{
+			PaymentMethod: row.PaymentMethod, StripeSubscriptionID: row.StripeSubscriptionID,
+			MollieSubscriptionID: row.MollieSubscriptionID, StripeCustomerID: row.StripeCustomerID,
+			HasValidMollieMandate: row.HasValidMollieMandate, GrantCollection: row.GrantCollection,
+			GrantWaiveUsage: row.GrantWaiveUsage, EffectiveBasePrice: row.EffectiveBasePrice,
+		},
+		TierName: row.TierName, TierLevel: row.TierLevel,
 	}), nil
 }
 
@@ -658,8 +652,13 @@ func (s *PurserServer) GetTenantBillingStatus(ctx context.Context, req *purserpb
 	admission := mapTenantAdmissionStatus(tenantAdmissionData{
 		BillingModel: billingStatus.BillingModel, SubscriptionStatus: billingStatus.SubscriptionStatus,
 		BalanceCents: billingStatus.BalanceCents, ReservedBalanceCents: billingStatus.ReservedBalanceCents,
-		PaymentMethod: billingStatus.PaymentMethod, StripeSubscriptionID: billingStatus.StripeSubscriptionID,
-		MollieSubscriptionID: billingStatus.MollieSubscriptionID, TierName: billingStatus.TierName,
+		Collection: postpaidCollectionFacts{
+			PaymentMethod: billingStatus.PaymentMethod, StripeSubscriptionID: billingStatus.StripeSubscriptionID,
+			MollieSubscriptionID: billingStatus.MollieSubscriptionID, StripeCustomerID: billingStatus.StripeCustomerID,
+			HasValidMollieMandate: billingStatus.HasValidMollieMandate, GrantCollection: billingStatus.GrantCollection,
+			GrantWaiveUsage: billingStatus.GrantWaiveUsage, EffectiveBasePrice: billingStatus.EffectiveBasePrice,
+		},
+		TierName: billingStatus.TierName,
 	})
 
 	retentionRaw := sql.NullString{String: billingStatus.RetentionValue, Valid: billingStatus.RetentionValue != ""}
@@ -2952,12 +2951,16 @@ func (s *PurserServer) GetBillingStatus(ctx context.Context, req *purserpb.GetBi
 		PaymentMethods:    s.getAvailablePaymentMethods(ctx),
 		SetupProviders:    s.getAvailablePostpaidProviders(),
 	}
-	if subscription.GetPaymentMethod() == "stripe" && subscription.GetStripeSubscriptionId() != "" {
-		resp.CollectionReady = true
-		resp.CollectionProvider = "stripe"
-	} else if subscription.GetPaymentMethod() == "mollie" && subscription.GetMollieSubscriptionId() != "" {
-		resp.CollectionReady = true
-		resp.CollectionProvider = "mollie"
+	admission, err := s.GetTenantAdmissionStatus(ctx, &purserpb.GetTenantAdmissionStatusRequest{TenantId: tenantID})
+	if err != nil {
+		return nil, err
+	}
+	resp.CollectionReady = admission.GetCollectionReady()
+	resp.CollectionProvider = admission.GetCollectionProvider()
+	if grant, grantErr := s.loadOperatorGrant(ctx, tenantID); grantErr != nil {
+		return nil, grantErr
+	} else if grant.GetActive() {
+		resp.OperatorGrant = grant
 	}
 
 	if subscription.GetNextBillingDate() != nil {
@@ -3297,7 +3300,7 @@ func (s *PurserServer) GetTenantUsage(ctx context.Context, req *purserpb.TenantU
 		if resolved.Currency != resp.Currency {
 			return nil, status.Errorf(codes.FailedPrecondition, "cluster %s prices in %s but response currency is %s", clusterID, resolved.Currency, resp.Currency)
 		}
-		in := buildRatingInputForUsage(clusterUsage, perClusterDimensioned[clusterID], resolved.Currency, decimal.Zero, resolved.MeteredRules)
+		in := buildRatingInputForUsage(clusterUsage, perClusterDimensioned[clusterID], resolved.Currency, decimal.Zero, resolved.MeteredRules, tier.WaivesUsage(appconfig.Runtime().WaiveUsageCharges))
 		res, rateErr := rating.Rate(in)
 		if rateErr != nil {
 			return nil, status.Errorf(codes.Internal, "rate usage for cluster %s: %v", clusterID, rateErr)
@@ -6043,7 +6046,9 @@ func (s *PurserServer) ChangeBillingTier(ctx context.Context, req *purserpb.Chan
 			return status.Error(codes.FailedPrecondition, "target tier is not postpaid-eligible")
 		}
 		if !strings.EqualFold(target.TierName, "free") {
-			collection, collectionErr := queries.GetPostpaidCollectionSetup(ctx, tenantID)
+			collection, collectionErr := queries.GetPostpaidCollectionSetup(ctx, purserdb.GetPostpaidCollectionSetupParams{
+				TenantID: tenantID, TargetTierID: targetTierID,
+			})
 			if collectionErr != nil {
 				return txStatusErrorf(collectionErr, codes.Internal, "verify postpaid collection setup: %v", collectionErr)
 			}
@@ -6054,8 +6059,12 @@ func (s *PurserServer) ChangeBillingTier(ctx context.Context, req *purserpb.Chan
 			if !profileComplete {
 				return status.Error(codes.FailedPrecondition, "customer legal name, billing email, and postal address are required before selecting a paid tier")
 			}
-			collectionReady := collection.PaymentMethod.String == "stripe" && collection.StripeSubscriptionID.Valid && collection.StripeSubscriptionID.String != "" ||
-				collection.PaymentMethod.String == "mollie" && collection.MollieSubscriptionID.Valid && collection.MollieSubscriptionID.String != ""
+			collectionReady, _ := postpaidCollectionReadiness(postpaidCollectionFacts{
+				PaymentMethod: collection.PaymentMethod, StripeSubscriptionID: collection.StripeSubscriptionID,
+				MollieSubscriptionID: collection.MollieSubscriptionID, StripeCustomerID: collection.StripeCustomerID,
+				HasValidMollieMandate: collection.HasValidMollieMandate, GrantCollection: collection.GrantCollection,
+				GrantWaiveUsage: collection.GrantWaiveUsage, EffectiveBasePrice: collection.EffectiveBasePrice,
+			})
 			if !collectionReady {
 				return status.Error(codes.FailedPrecondition, "complete Stripe or Mollie subscription setup before selecting a paid tier")
 			}
@@ -6368,7 +6377,13 @@ func (s *PurserServer) CreateCheckoutSession(ctx context.Context, req *purserpb.
 	if presentmentErr != nil {
 		return nil, presentmentErr
 	}
-	setupMode := presentmentCurrency != billing.LedgerCurrency
+	// An operator arrangement that sets the base fee has Checkout save a card
+	// too: a Stripe subscription would bill the tier's price on Stripe's side.
+	baseFeeGranted, grantErr := s.operatorGrantSetsBaseFee(ctx, tenantID)
+	if grantErr != nil {
+		return nil, grantErr
+	}
+	setupMode := presentmentCurrency != billing.LedgerCurrency || baseFeeGranted
 	if tier.PriceID == "" && !setupMode {
 		return nil, status.Errorf(codes.FailedPrecondition, "tier %s has no Stripe %s price configured", tier.TierName, billingPeriod)
 	}
@@ -6842,6 +6857,13 @@ func (s *PurserServer) CreateMollieSubscription(ctx context.Context, req *purser
 	}
 	if presentmentCurrency != billing.LedgerCurrency {
 		return nil, status.Errorf(codes.FailedPrecondition, "tenants billed in %s have no Mollie subscription; the base fee is charged on the mandate", presentmentCurrency)
+	}
+	// A Mollie subscription charges the tier's base price; a base fee set by an
+	// operator arrangement would be charged twice or wrongly.
+	if baseFeeGranted, grantErr := s.operatorGrantSetsBaseFee(ctx, tenantID); grantErr != nil {
+		return nil, grantErr
+	} else if baseFeeGranted {
+		return nil, status.Error(codes.FailedPrecondition, "the base fee is set by an operator arrangement, which a Mollie subscription cannot carry; add a card instead")
 	}
 
 	// Precondition: a tenant_subscriptions row must exist before we ask

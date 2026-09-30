@@ -33,10 +33,11 @@ func TestGetTenantAdmissionStatusMapsBoundedDecision(t *testing.T) {
 	cols := []string{
 		"billing_model", "subscription_status", "balance_cents", "reserved_balance_cents",
 		"payment_method", "stripe_subscription_id", "mollie_subscription_id", "tier_name", "tier_level",
+		"stripe_customer_id", "has_valid_mollie_mandate", "grant_collection", "grant_waive_usage", "effective_base_price",
 	}
 	mock.ExpectQuery(`FROM purser\.tenant_subscriptions ts`).
 		WithArgs("EUR", "tenant-1").
-		WillReturnRows(sqlmock.NewRows(cols).AddRow("prepaid", "active", int64(100), int64(125), nil, nil, nil, "prepaid", int32(2)))
+		WillReturnRows(sqlmock.NewRows(cols).AddRow("prepaid", "active", int64(100), int64(125), nil, nil, nil, "prepaid", int32(2), nil, false, nil, false, "0.00"))
 
 	resp, err := s.GetTenantAdmissionStatus(context.Background(), &purserpb.GetTenantAdmissionStatusRequest{TenantId: "tenant-1"})
 	if err != nil {
@@ -51,7 +52,10 @@ func TestGetTenantAdmissionStatusMapsBoundedDecision(t *testing.T) {
 
 	postpaid := mapTenantAdmissionStatus(tenantAdmissionData{
 		BillingModel: "postpaid", SubscriptionStatus: "suspended", BalanceCents: sql.NullInt64{Int64: -50, Valid: true},
-		PaymentMethod: sql.NullString{String: "stripe", Valid: true}, StripeSubscriptionID: sql.NullString{String: "sub_1", Valid: true}, TierName: "pro",
+		Collection: postpaidCollectionFacts{
+			PaymentMethod: sql.NullString{String: "stripe", Valid: true}, StripeSubscriptionID: sql.NullString{String: "sub_1", Valid: true},
+		},
+		TierName: "pro",
 	})
 	if postpaid.IsBalanceNegative || !postpaid.IsSuspended || !postpaid.CollectionReady || postpaid.CollectionProvider != "stripe" || postpaid.TierName != "pro" {
 		t.Fatalf("unexpected postpaid decision: %+v", postpaid)
@@ -91,13 +95,14 @@ func TestGetTenantBillingStatusPrepaidNegativeBalance(t *testing.T) {
 		"billing_model", "status", "balance_cents", "reserved_balance_cents", "retention", "dvr_entitlements",
 		"tier_id", "billing_period_start", "billing_period_end", "storage_limit", "resource_limits",
 		"payment_method", "stripe_subscription_id", "mollie_subscription_id", "tier_name",
+		"stripe_customer_id", "has_valid_mollie_mandate", "grant_collection", "grant_waive_usage", "effective_base_price",
 	}
 
 	t.Run("prepaid non-positive trips negative", func(t *testing.T) {
 		s, mock := newReadServer(t, true)
 		mock.ExpectQuery(`LEFT JOIN purser\.prepaid_balances pb`).
 			WillReturnRows(sqlmock.NewRows(cols).
-				AddRow("prepaid", "active", int64(-50), int64(0), "", "", "", nil, nil, "", "", nil, nil, nil, "prepaid"))
+				AddRow("prepaid", "active", int64(-50), int64(0), "", "", "", nil, nil, "", "", nil, nil, nil, "prepaid", nil, false, nil, false, "0.00"))
 
 		resp, err := s.GetTenantBillingStatus(context.Background(), &purserpb.GetTenantBillingStatusRequest{TenantId: "tenant-1"})
 		if err != nil {
@@ -112,7 +117,7 @@ func TestGetTenantBillingStatusPrepaidNegativeBalance(t *testing.T) {
 		s, mock := newReadServer(t, true)
 		mock.ExpectQuery(`LEFT JOIN purser\.prepaid_balances pb`).
 			WillReturnRows(sqlmock.NewRows(cols).
-				AddRow("prepaid", "active", int64(100), int64(125), "", "", "", nil, nil, "", "", nil, nil, nil, "prepaid"))
+				AddRow("prepaid", "active", int64(100), int64(125), "", "", "", nil, nil, "", "", nil, nil, nil, "prepaid", nil, false, nil, false, "0.00"))
 
 		resp, err := s.GetTenantBillingStatus(context.Background(), &purserpb.GetTenantBillingStatusRequest{TenantId: "tenant-1"})
 		if err != nil {
@@ -127,7 +132,7 @@ func TestGetTenantBillingStatusPrepaidNegativeBalance(t *testing.T) {
 		s, mock := newReadServer(t, true)
 		mock.ExpectQuery(`LEFT JOIN purser\.prepaid_balances pb`).
 			WillReturnRows(sqlmock.NewRows(cols).
-				AddRow("postpaid", "suspended", int64(-50), int64(0), "", "", "", nil, nil, "", "", "stripe", "sub_1", nil, "pro"))
+				AddRow("postpaid", "suspended", int64(-50), int64(0), "", "", "", nil, nil, "", "", "stripe", "sub_1", nil, "pro", nil, false, nil, false, "0.00"))
 
 		resp, err := s.GetTenantBillingStatus(context.Background(), &purserpb.GetTenantBillingStatusRequest{TenantId: "tenant-1"})
 		if err != nil {

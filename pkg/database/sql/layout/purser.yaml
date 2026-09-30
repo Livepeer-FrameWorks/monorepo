@@ -17,6 +17,7 @@ colocated_tables:
   - purser.tenant_subscriptions
   - purser.subscription_pricing_overrides
   - purser.subscription_entitlement_overrides
+  - purser.subscription_operator_grants
   - purser.cluster_owners
   - purser.platform_fee_policy
   - purser.prepaid_balances

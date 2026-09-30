@@ -194,6 +194,9 @@ func (jm *JobManager) rateInvoiceForTenant(
 		basePrice = tier.BasePrice
 	}
 	baseDescription := "Base subscription"
+	if tier.BasePriceGranted {
+		baseDescription = "Base subscription (operator arrangement)"
+	}
 	basePricingSource := pricing.SourceTier
 	if baseProviderManaged {
 		baseDescription = "Base subscription (billed separately)"
@@ -289,7 +292,7 @@ func (jm *JobManager) rateInvoiceForTenant(
 			Quantities:        perClusterDimensioned[cid],
 			PeriodStart:       periodStart,
 			PeriodEnd:         periodEnd,
-			WaiveUsageCharges: appconfig.Runtime().WaiveUsageCharges,
+			WaiveUsageCharges: tier.WaivesUsage(appconfig.Runtime().WaiveUsageCharges),
 		}
 		res, err := rating.Rate(input)
 		if err != nil {

@@ -2070,6 +2070,10 @@ const (
 	PrepaidService_PromoteToPaid_FullMethodName             = "/purser.PrepaidService/PromoteToPaid"
 	PrepaidService_ChangeBillingTier_FullMethodName         = "/purser.PrepaidService/ChangeBillingTier"
 	PrepaidService_AdminAssignTier_FullMethodName           = "/purser.PrepaidService/AdminAssignTier"
+	PrepaidService_AdminSetBillingGrant_FullMethodName      = "/purser.PrepaidService/AdminSetBillingGrant"
+	PrepaidService_AdminGetBillingGrant_FullMethodName      = "/purser.PrepaidService/AdminGetBillingGrant"
+	PrepaidService_AdminRevokeBillingGrant_FullMethodName   = "/purser.PrepaidService/AdminRevokeBillingGrant"
+	PrepaidService_AdminRecordInvoicePayment_FullMethodName = "/purser.PrepaidService/AdminRecordInvoicePayment"
 )
 
 // PrepaidServiceClient is the client API for PrepaidService service.
@@ -2128,6 +2132,17 @@ type PrepaidServiceClient interface {
 	// self-serve paths enforce; the tier must be active and support the billing
 	// model. Records a billing.subscription_updated event carrying the reason.
 	AdminAssignTier(ctx context.Context, in *AdminAssignTierRequest, opts ...grpc.CallOption) (*AdminAssignTierResponse, error)
+	// Operator billing arrangement for one tenant: a base fee in place of the
+	// tier's, usage rated at zero, invoices the operator collects by hand, and
+	// an optional expiry. It replaces the self-serve requirement that a paid
+	// postpaid tier has Stripe or Mollie collection. Platform operators only.
+	AdminSetBillingGrant(ctx context.Context, in *AdminSetBillingGrantRequest, opts ...grpc.CallOption) (*AdminBillingGrantResponse, error)
+	AdminGetBillingGrant(ctx context.Context, in *AdminGetBillingGrantRequest, opts ...grpc.CallOption) (*AdminBillingGrantResponse, error)
+	AdminRevokeBillingGrant(ctx context.Context, in *AdminRevokeBillingGrantRequest, opts ...grpc.CallOption) (*AdminBillingGrantResponse, error)
+	// Records a payment the operator received outside any provider (a bank
+	// transfer) for the full open balance of an invoice, which marks it paid.
+	// Platform operators only.
+	AdminRecordInvoicePayment(ctx context.Context, in *AdminRecordInvoicePaymentRequest, opts ...grpc.CallOption) (*AdminRecordInvoicePaymentResponse, error)
 }
 
 type prepaidServiceClient struct {
@@ -2308,6 +2323,46 @@ func (c *prepaidServiceClient) AdminAssignTier(ctx context.Context, in *AdminAss
 	return out, nil
 }
 
+func (c *prepaidServiceClient) AdminSetBillingGrant(ctx context.Context, in *AdminSetBillingGrantRequest, opts ...grpc.CallOption) (*AdminBillingGrantResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(AdminBillingGrantResponse)
+	err := c.cc.Invoke(ctx, PrepaidService_AdminSetBillingGrant_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *prepaidServiceClient) AdminGetBillingGrant(ctx context.Context, in *AdminGetBillingGrantRequest, opts ...grpc.CallOption) (*AdminBillingGrantResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(AdminBillingGrantResponse)
+	err := c.cc.Invoke(ctx, PrepaidService_AdminGetBillingGrant_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *prepaidServiceClient) AdminRevokeBillingGrant(ctx context.Context, in *AdminRevokeBillingGrantRequest, opts ...grpc.CallOption) (*AdminBillingGrantResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(AdminBillingGrantResponse)
+	err := c.cc.Invoke(ctx, PrepaidService_AdminRevokeBillingGrant_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *prepaidServiceClient) AdminRecordInvoicePayment(ctx context.Context, in *AdminRecordInvoicePaymentRequest, opts ...grpc.CallOption) (*AdminRecordInvoicePaymentResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(AdminRecordInvoicePaymentResponse)
+	err := c.cc.Invoke(ctx, PrepaidService_AdminRecordInvoicePayment_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // PrepaidServiceServer is the server API for PrepaidService service.
 // All implementations must embed UnimplementedPrepaidServiceServer
 // for forward compatibility.
@@ -2364,6 +2419,17 @@ type PrepaidServiceServer interface {
 	// self-serve paths enforce; the tier must be active and support the billing
 	// model. Records a billing.subscription_updated event carrying the reason.
 	AdminAssignTier(context.Context, *AdminAssignTierRequest) (*AdminAssignTierResponse, error)
+	// Operator billing arrangement for one tenant: a base fee in place of the
+	// tier's, usage rated at zero, invoices the operator collects by hand, and
+	// an optional expiry. It replaces the self-serve requirement that a paid
+	// postpaid tier has Stripe or Mollie collection. Platform operators only.
+	AdminSetBillingGrant(context.Context, *AdminSetBillingGrantRequest) (*AdminBillingGrantResponse, error)
+	AdminGetBillingGrant(context.Context, *AdminGetBillingGrantRequest) (*AdminBillingGrantResponse, error)
+	AdminRevokeBillingGrant(context.Context, *AdminRevokeBillingGrantRequest) (*AdminBillingGrantResponse, error)
+	// Records a payment the operator received outside any provider (a bank
+	// transfer) for the full open balance of an invoice, which marks it paid.
+	// Platform operators only.
+	AdminRecordInvoicePayment(context.Context, *AdminRecordInvoicePaymentRequest) (*AdminRecordInvoicePaymentResponse, error)
 	mustEmbedUnimplementedPrepaidServiceServer()
 }
 
@@ -2424,6 +2490,18 @@ func (UnimplementedPrepaidServiceServer) ChangeBillingTier(context.Context, *Cha
 }
 func (UnimplementedPrepaidServiceServer) AdminAssignTier(context.Context, *AdminAssignTierRequest) (*AdminAssignTierResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method AdminAssignTier not implemented")
+}
+func (UnimplementedPrepaidServiceServer) AdminSetBillingGrant(context.Context, *AdminSetBillingGrantRequest) (*AdminBillingGrantResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method AdminSetBillingGrant not implemented")
+}
+func (UnimplementedPrepaidServiceServer) AdminGetBillingGrant(context.Context, *AdminGetBillingGrantRequest) (*AdminBillingGrantResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method AdminGetBillingGrant not implemented")
+}
+func (UnimplementedPrepaidServiceServer) AdminRevokeBillingGrant(context.Context, *AdminRevokeBillingGrantRequest) (*AdminBillingGrantResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method AdminRevokeBillingGrant not implemented")
+}
+func (UnimplementedPrepaidServiceServer) AdminRecordInvoicePayment(context.Context, *AdminRecordInvoicePaymentRequest) (*AdminRecordInvoicePaymentResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method AdminRecordInvoicePayment not implemented")
 }
 func (UnimplementedPrepaidServiceServer) mustEmbedUnimplementedPrepaidServiceServer() {}
 func (UnimplementedPrepaidServiceServer) testEmbeddedByValue()                        {}
@@ -2752,6 +2830,78 @@ func _PrepaidService_AdminAssignTier_Handler(srv interface{}, ctx context.Contex
 	return interceptor(ctx, in, info, handler)
 }
 
+func _PrepaidService_AdminSetBillingGrant_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(AdminSetBillingGrantRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(PrepaidServiceServer).AdminSetBillingGrant(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: PrepaidService_AdminSetBillingGrant_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(PrepaidServiceServer).AdminSetBillingGrant(ctx, req.(*AdminSetBillingGrantRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _PrepaidService_AdminGetBillingGrant_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(AdminGetBillingGrantRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(PrepaidServiceServer).AdminGetBillingGrant(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: PrepaidService_AdminGetBillingGrant_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(PrepaidServiceServer).AdminGetBillingGrant(ctx, req.(*AdminGetBillingGrantRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _PrepaidService_AdminRevokeBillingGrant_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(AdminRevokeBillingGrantRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(PrepaidServiceServer).AdminRevokeBillingGrant(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: PrepaidService_AdminRevokeBillingGrant_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(PrepaidServiceServer).AdminRevokeBillingGrant(ctx, req.(*AdminRevokeBillingGrantRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _PrepaidService_AdminRecordInvoicePayment_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(AdminRecordInvoicePaymentRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(PrepaidServiceServer).AdminRecordInvoicePayment(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: PrepaidService_AdminRecordInvoicePayment_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(PrepaidServiceServer).AdminRecordInvoicePayment(ctx, req.(*AdminRecordInvoicePaymentRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // PrepaidService_ServiceDesc is the grpc.ServiceDesc for PrepaidService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -2826,6 +2976,22 @@ var PrepaidService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "AdminAssignTier",
 			Handler:    _PrepaidService_AdminAssignTier_Handler,
+		},
+		{
+			MethodName: "AdminSetBillingGrant",
+			Handler:    _PrepaidService_AdminSetBillingGrant_Handler,
+		},
+		{
+			MethodName: "AdminGetBillingGrant",
+			Handler:    _PrepaidService_AdminGetBillingGrant_Handler,
+		},
+		{
+			MethodName: "AdminRevokeBillingGrant",
+			Handler:    _PrepaidService_AdminRevokeBillingGrant_Handler,
+		},
+		{
+			MethodName: "AdminRecordInvoicePayment",
+			Handler:    _PrepaidService_AdminRecordInvoicePayment_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

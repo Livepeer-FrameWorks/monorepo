@@ -567,7 +567,7 @@ func reducePreviousBaseFeeInvoiceTx(ctx context.Context, tx *sql.Tx, tenantID st
 		}
 	}
 	if reduction.covered {
-		if _, err := settleCoveredInvoiceTx(ctx, tx, queries, reduction.invoiceID, now); err != nil {
+		if _, err := SettleCoveredInvoiceTx(ctx, tx, queries, reduction.invoiceID, now); err != nil {
 			return err
 		}
 	}

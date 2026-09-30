@@ -159,22 +159,43 @@ func (q *Queries) GetOpenInvoiceBillingPeriod(ctx context.Context, arg GetOpenIn
 
 const getPostpaidCollectionSetup = `-- name: GetPostpaidCollectionSetup :one
 SELECT payment_method, stripe_subscription_id, mollie_subscription_id,
-       billing_email, billing_name, COALESCE(billing_address, '{}'::jsonb) AS billing_address
-FROM purser.tenant_subscriptions
-WHERE tenant_id = $1::text::uuid
+       billing_email, billing_name, COALESCE(billing_address, '{}'::jsonb) AS billing_address,
+       ts.stripe_customer_id,
+       EXISTS (
+           SELECT 1 FROM purser.mollie_mandates mm
+           WHERE mm.tenant_id = ts.tenant_id AND mm.status = 'valid'
+       )::boolean AS has_valid_mollie_mandate,
+       og.collection AS grant_collection,
+       COALESCE(og.waive_usage, false)::boolean AS grant_waive_usage,
+       COALESCE(og.base_price, target.base_price)::text AS effective_base_price
+FROM purser.tenant_subscriptions ts
+JOIN purser.billing_tiers target ON target.id = $1::text::uuid
+LEFT JOIN purser.subscription_operator_grants og
+    ON og.subscription_id = ts.id AND (og.expires_at IS NULL OR og.expires_at > NOW())
+WHERE ts.tenant_id = $2::text::uuid
 `
 
-type GetPostpaidCollectionSetupRow struct {
-	PaymentMethod        sql.NullString  `db:"payment_method" json:"payment_method"`
-	StripeSubscriptionID sql.NullString  `db:"stripe_subscription_id" json:"stripe_subscription_id"`
-	MollieSubscriptionID sql.NullString  `db:"mollie_subscription_id" json:"mollie_subscription_id"`
-	BillingEmail         sql.NullString  `db:"billing_email" json:"billing_email"`
-	BillingName          sql.NullString  `db:"billing_name" json:"billing_name"`
-	BillingAddress       json.RawMessage `db:"billing_address" json:"billing_address"`
+type GetPostpaidCollectionSetupParams struct {
+	TargetTierID string `db:"target_tier_id" json:"target_tier_id"`
+	TenantID     string `db:"tenant_id" json:"tenant_id"`
 }
 
-func (q *Queries) GetPostpaidCollectionSetup(ctx context.Context, tenantID string) (GetPostpaidCollectionSetupRow, error) {
-	row := q.db.QueryRowContext(ctx, getPostpaidCollectionSetup, tenantID)
+type GetPostpaidCollectionSetupRow struct {
+	PaymentMethod         sql.NullString  `db:"payment_method" json:"payment_method"`
+	StripeSubscriptionID  sql.NullString  `db:"stripe_subscription_id" json:"stripe_subscription_id"`
+	MollieSubscriptionID  sql.NullString  `db:"mollie_subscription_id" json:"mollie_subscription_id"`
+	BillingEmail          sql.NullString  `db:"billing_email" json:"billing_email"`
+	BillingName           sql.NullString  `db:"billing_name" json:"billing_name"`
+	BillingAddress        json.RawMessage `db:"billing_address" json:"billing_address"`
+	StripeCustomerID      sql.NullString  `db:"stripe_customer_id" json:"stripe_customer_id"`
+	HasValidMollieMandate bool            `db:"has_valid_mollie_mandate" json:"has_valid_mollie_mandate"`
+	GrantCollection       sql.NullString  `db:"grant_collection" json:"grant_collection"`
+	GrantWaiveUsage       bool            `db:"grant_waive_usage" json:"grant_waive_usage"`
+	EffectiveBasePrice    string          `db:"effective_base_price" json:"effective_base_price"`
+}
+
+func (q *Queries) GetPostpaidCollectionSetup(ctx context.Context, arg GetPostpaidCollectionSetupParams) (GetPostpaidCollectionSetupRow, error) {
+	row := q.db.QueryRowContext(ctx, getPostpaidCollectionSetup, arg.TargetTierID, arg.TenantID)
 	var i GetPostpaidCollectionSetupRow
 	err := row.Scan(
 		&i.PaymentMethod,
@@ -183,6 +204,11 @@ func (q *Queries) GetPostpaidCollectionSetup(ctx context.Context, tenantID strin
 		&i.BillingEmail,
 		&i.BillingName,
 		&i.BillingAddress,
+		&i.StripeCustomerID,
+		&i.HasValidMollieMandate,
+		&i.GrantCollection,
+		&i.GrantWaiveUsage,
+		&i.EffectiveBasePrice,
 	)
 	return i, err
 }

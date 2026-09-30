@@ -254,8 +254,8 @@ func TestLoadEffectiveTier_ResolvesActiveSubscription(t *testing.T) {
 	tierID := uuid.MustParse("42000000-0000-4000-8000-000000000001")
 	subscriptionID := uuid.MustParse("43000000-0000-4000-8000-000000000001")
 	mock.ExpectQuery("tenant_subscriptions").WithArgs(tenantID.String()).WillReturnRows(
-		sqlmock.NewRows([]string{"id", "tier_name", "base_price", "currency", "metering_enabled", "subscription_id"}).
-			AddRow(tierID, "pro", "10.00", "EUR", true, subscriptionID),
+		sqlmock.NewRows([]string{"id", "tier_name", "base_price", "currency", "metering_enabled", "subscription_id", "waive_usage", "granted_base_price"}).
+			AddRow(tierID, "pro", "10.00", "EUR", true, subscriptionID, false, nil),
 	)
 	mock.ExpectQuery("tier_pricing_rules").WithArgs(tierID.String()).WillReturnRows(
 		sqlmock.NewRows([]string{"meter", "model", "currency", "included_quantity", "unit_price", "config"}).

@@ -617,6 +617,26 @@ func (c *GRPCClient) AdminAssignTier(ctx context.Context, req *purserpb.AdminAss
 	return c.prepaid.AdminAssignTier(ctx, req)
 }
 
+// AdminSetBillingGrant records an operator billing arrangement for a tenant.
+func (c *GRPCClient) AdminSetBillingGrant(ctx context.Context, req *purserpb.AdminSetBillingGrantRequest) (*purserpb.AdminBillingGrantResponse, error) {
+	return c.prepaid.AdminSetBillingGrant(ctx, req)
+}
+
+// AdminGetBillingGrant returns a tenant's operator billing arrangement.
+func (c *GRPCClient) AdminGetBillingGrant(ctx context.Context, tenantID string) (*purserpb.AdminBillingGrantResponse, error) {
+	return c.prepaid.AdminGetBillingGrant(ctx, &purserpb.AdminGetBillingGrantRequest{TenantId: tenantID})
+}
+
+// AdminRevokeBillingGrant removes a tenant's operator billing arrangement.
+func (c *GRPCClient) AdminRevokeBillingGrant(ctx context.Context, tenantID, reason string) (*purserpb.AdminBillingGrantResponse, error) {
+	return c.prepaid.AdminRevokeBillingGrant(ctx, &purserpb.AdminRevokeBillingGrantRequest{TenantId: tenantID, Reason: reason})
+}
+
+// AdminRecordInvoicePayment records a payment received outside any provider.
+func (c *GRPCClient) AdminRecordInvoicePayment(ctx context.Context, req *purserpb.AdminRecordInvoicePaymentRequest) (*purserpb.AdminRecordInvoicePaymentResponse, error) {
+	return c.prepaid.AdminRecordInvoicePayment(ctx, req)
+}
+
 // ============================================================================
 // WEBHOOK OPERATIONS
 // ============================================================================
