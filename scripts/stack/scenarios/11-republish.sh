@@ -1,11 +1,14 @@
 #!/usr/bin/env bash
 # stack-scenario: default
-# A recording stream stopped and republished within seconds: the republish's
-# buffer can come up just before its DVR push attaches, which is exactly when
-# the push used to end with no tracks and never be re-issued. The new session
-# must record (a segment within 30 s) and announce recording.started.
+# A recording stream stopped and published again. Inside Mist's 12 s resume
+# window the publisher resumes its tracks and its recording continues. After the
+# buffer unloads, the republish's buffer can come up just before its DVR push
+# attaches, which is exactly when the push used to end with no tracks and never
+# be re-issued: that new broadcast must record (a segment within 30 s) and
+# announce recording.started.
 # Catches: N19 (republished recordings never start: empty RECORDING_END
-# dropped as a parse error, unconfirmed push quarantined forever).
+# dropped as a parse error, unconfirmed push quarantined forever), N26 (a
+# reconnect inside the resume window splitting or ending its recording).
 . "$(dirname "$0")/../lib.sh"
 
 need ffmpeg jq curl python3 || finish
@@ -39,10 +42,26 @@ first_recording() { FIRST=$(dvr_hashes | head -1); [ -n "$FIRST" ] && [ "$(segme
 eventually 60 "the first session records a segment" first_recording
 wait_publisher "$PUB" 100 || fail "first publisher still running after 100 s"
 
-log "republish 10 s after the stop"
-sleep 10
+# Inside Mist's resume window the buffer is still loaded: the publisher resumes
+# its tracks and the recording it left continues. Resumed media continues the
+# recording's timeline without the wall-clock gap, so progress is counted in
+# segments: the segment open at the stop closes, and at least one more follows.
+log "republish 5 s after the stop, inside the resume window"
+sleep 5
+SEGMENTS_AT_STOP=$(segments_of "$FIRST")
+PUB=$(publish "$EDGE_A_RTMP" "$KEY" 854x480 15 40)
+continues() { [ "$(segments_of "$FIRST")" -ge $((SEGMENTS_AT_STOP + 2)) ]; }
+eventually 30 "the resumed publish continues the same recording within 30 s" continues
+one_recording() { [ "$(dvr_hashes | wc -l | tr -d ' ')" = 1 ]; }
+check "the resumed publish does not start a second recording" one_recording
+wait_publisher "$PUB" 100 || fail "resumed publisher still running after 100 s"
+
+# After the buffer unloads, a republish is a new broadcast: it must record
+# (a segment within 30 s) and announce recording.started.
+log "republish 30 s after the stop, after the buffer unloaded"
+sleep 30
 REPUB_AT=$(date +%s)
-PUB=$(publish "$EDGE_A_RTMP" "$KEY" 854x480 15 90)
+PUB=$(publish "$EDGE_A_RTMP" "$KEY" 854x480 15 60)
 new_dvr() { SECOND=$(dvr_hashes | tail -1); [ -n "$SECOND" ] && [ "$SECOND" != "$FIRST" ]; }
 eventually 30 "the republish starts a new recording" new_dvr
 # Only a recording distinct from the first session counts: without a new DVR,
@@ -52,7 +71,7 @@ left=$((30 - ($(date +%s) - REPUB_AT)))
 [ "$left" -ge 1 ] || left=1
 eventually "$left" "the republished recording has a segment within 30 s" second_records
 two_started() { [ "$(started_count)" -ge 2 ]; }
-eventually 60 "recording.started delivered for both sessions" two_started
+eventually 60 "recording.started delivered for both recordings" two_started
 
 kill "$PUB" 2>/dev/null
 delete_stream "$SID" >/dev/null
