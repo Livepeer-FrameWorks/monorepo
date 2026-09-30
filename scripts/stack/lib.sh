@@ -280,14 +280,18 @@ open_generation() {
 
 # ---- media ------------------------------------------------------------------
 
-# publish <rtmp base> <stream key> <WxH> <fps> <seconds>: background RTMP publisher.
-# Prints the PID. A lavfi test pattern with a tone, 2 s GOP, no FLV metadata track.
+# publish <rtmp base> <stream key> <WxH> <fps> <seconds> [metadata]: background
+# RTMP publisher. Prints the PID. A lavfi test pattern with a tone, 2 s GOP. By
+# default it sends no FLV metadata; "metadata" sends onMetaData as OBS and most
+# encoders do, which Mist ingests as a JSON track that carries no data.
 publish() {
   need ffmpeg || return 1
+  local flvflags=no_metadata
+  [ "${6:-}" = metadata ] && flvflags=+add_keyframe_index
   ffmpeg -hide_banner -loglevel error -re \
     -f lavfi -i "testsrc2=size=$3:rate=$4" -f lavfi -i 'sine=frequency=440:sample_rate=48000' \
     -t "$5" -c:v libx264 -preset veryfast -g $(($4 * 2)) -pix_fmt yuv420p -c:a aac -b:a 96k \
-    -flvflags no_metadata -f flv "$1/$2" >"$STACK_STATE_DIR/publish-$2.log" 2>&1 &
+    -flvflags "$flvflags" -f flv "$1/$2" >"$STACK_STATE_DIR/publish-$2.log" 2>&1 &
   echo $!
 }
 # publish runs ffmpeg inside the caller's $(...) subshell, so the PID it prints

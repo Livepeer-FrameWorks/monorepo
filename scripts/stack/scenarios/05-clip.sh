@@ -16,7 +16,9 @@ SID=$(echo "$S" | jq -r '.id // empty')
 PB=$(echo "$S" | jq -r '.playbackId // empty')
 KEY=$(echo "$S" | jq -r '.streamKey // empty')
 [ -n "$SID" ] || { fail "createStream: $S"; finish; }
-PUB=$(publish "$EDGE_A_RTMP" "$KEY" 640x360 15 240)
+# Publish with FLV metadata as real encoders do: the live stream then carries
+# an empty JSON track, which a clip recording must not wait on.
+PUB=$(publish "$EDGE_A_RTMP" "$KEY" 640x360 15 240 metadata)
 trap 'kill "$PUB" 2>/dev/null; delete_stream "$SID"' EXIT
 eventually 90 "stream live" media_at "${FOGHORN_A_URLS%% *}" "$PB"
 
