@@ -43,7 +43,14 @@ func TestRenditionCoverageError(t *testing.T) {
 		{"rendition ends early", []*ipcpb.StreamTrack{src,
 			coverageTrack("360p", "video", "H264", "video_H264_854x480", 0, 120000)}, "ends 60000ms before the source"},
 		{"thumbnails are not renditions", []*ipcpb.StreamTrack{src, thumbs}, ""},
-		{"no source video", []*ipcpb.StreamTrack{audio,
+		// A job that hides the source video from its recording: the source audio
+		// is the reference, so a ladder cut short after a producer swap fails.
+		{"no source video: renditions judged against the source audio", []*ipcpb.StreamTrack{audio,
+			coverageTrack("480p", "video", "H264", "video_H264_854x480", 0, 11900),
+			coverageTrack("360p", "video", "H264", "video_H264_854x480", 0, 11900)}, "ends 168100ms before the source"},
+		{"no source video: full ladder against the source audio", []*ipcpb.StreamTrack{audio,
+			coverageTrack("360p", "video", "H264", "video_H264_854x480", 0, 179960)}, ""},
+		{"no original track at all", []*ipcpb.StreamTrack{
 			coverageTrack("360p", "video", "H264", "video_H264_854x480", 90000, 91000)}, ""},
 		{"rendition without a written span is not judged", []*ipcpb.StreamTrack{src,
 			{TrackName: "360p", TrackType: "video", Codec: "H264", SourceTrack: &srcName}}, ""},

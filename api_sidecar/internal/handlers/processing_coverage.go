@@ -36,16 +36,27 @@ const renditionStartToleranceMs = 2000
 // would serve a ladder whose rungs disagree about what the video holds.
 // Image (JPEG) tracks are thumbnails, not renditions. Tracks without a written
 // span (a Mist that does not report one) are not judged.
+//
+// A job whose processes hide the source video from the recording still records
+// the source audio, so the longest recorded original track of any type is the
+// reference then; without one, renditions are not judged here.
 func renditionCoverageError(tracks []*ipcpb.StreamTrack) error {
 	written := func(t *ipcpb.StreamTrack) bool { return t.WrittenFirstMs != nil && t.WrittenLastMs != nil }
-	var source *ipcpb.StreamTrack
+	span := func(t *ipcpb.StreamTrack) int64 { return t.GetWrittenLastMs() - t.GetWrittenFirstMs() }
+	var source, original *ipcpb.StreamTrack
 	for _, t := range tracks {
-		if t.GetTrackType() != "video" || t.GetSourceTrack() != "" || strings.EqualFold(t.GetCodec(), "JPEG") || !written(t) {
+		if t.GetSourceTrack() != "" || strings.EqualFold(t.GetCodec(), "JPEG") || !written(t) {
 			continue
 		}
-		if source == nil || t.GetWrittenLastMs()-t.GetWrittenFirstMs() > source.GetWrittenLastMs()-source.GetWrittenFirstMs() {
+		if t.GetTrackType() == "video" && (source == nil || span(t) > span(source)) {
 			source = t
 		}
+		if t.GetTrackType() != "meta" && (original == nil || span(t) > span(original)) {
+			original = t
+		}
+	}
+	if source == nil {
+		source = original
 	}
 	if source == nil {
 		return nil
