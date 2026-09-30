@@ -226,6 +226,26 @@ func (q *Queries) ClearAppliedPendingDowngrade(ctx context.Context, arg ClearApp
 	return err
 }
 
+const clearOpenInvoicePrepaidCredit = `-- name: ClearOpenInvoicePrepaidCredit :exec
+UPDATE purser.billing_invoices
+SET prepaid_credit_applied = 0,
+    amount = base_amount + metered_amount,
+    updated_at = NOW()
+WHERE id = $1::text::uuid
+  AND tenant_id = $2::text::uuid
+  AND status IN ('draft', 'manual_review')
+`
+
+type ClearOpenInvoicePrepaidCreditParams struct {
+	InvoiceID string `db:"invoice_id" json:"invoice_id"`
+	TenantID  string `db:"tenant_id" json:"tenant_id"`
+}
+
+func (q *Queries) ClearOpenInvoicePrepaidCredit(ctx context.Context, arg ClearOpenInvoicePrepaidCreditParams) error {
+	_, err := q.db.ExecContext(ctx, clearOpenInvoicePrepaidCredit, arg.InvoiceID, arg.TenantID)
+	return err
+}
+
 const countActiveMeteringSources = `-- name: CountActiveMeteringSources :one
 SELECT COUNT(*)
 FROM purser.metering_sources
@@ -974,6 +994,44 @@ func (q *Queries) ListMollieObservationDrainInvoiceIDs(ctx context.Context) ([]s
 	return items, nil
 }
 
+const listOpenInvoicesHoldingPrepaidCredit = `-- name: ListOpenInvoicesHoldingPrepaidCredit :many
+SELECT id::text AS id, period_start
+FROM purser.billing_invoices
+WHERE tenant_id = $1::text::uuid
+  AND status IN ('draft', 'manual_review')
+  AND period_start IS NOT NULL
+ORDER BY period_start
+FOR UPDATE
+`
+
+type ListOpenInvoicesHoldingPrepaidCreditRow struct {
+	ID          string       `db:"id" json:"id"`
+	PeriodStart sql.NullTime `db:"period_start" json:"period_start"`
+}
+
+func (q *Queries) ListOpenInvoicesHoldingPrepaidCredit(ctx context.Context, tenantID string) ([]ListOpenInvoicesHoldingPrepaidCreditRow, error) {
+	rows, err := q.db.QueryContext(ctx, listOpenInvoicesHoldingPrepaidCredit, tenantID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListOpenInvoicesHoldingPrepaidCreditRow{}
+	for rows.Next() {
+		var i ListOpenInvoicesHoldingPrepaidCreditRow
+		if err := rows.Scan(&i.ID, &i.PeriodStart); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listProviderPaymentAttemptsForRetry = `-- name: ListProviderPaymentAttemptsForRetry :many
 SELECT attempt.provider,
        invoice.tenant_id::text AS tenant_id,
@@ -1376,24 +1434,34 @@ func (q *Queries) StageOverdueInvoiceReminders(ctx context.Context) (int64, erro
 }
 
 const sumAppliedInvoiceCredit = `-- name: SumAppliedInvoiceCredit :one
-SELECT COALESCE(SUM(-amount_cents), 0)::bigint AS applied_cents
+SELECT COALESCE(SUM(-amount_cents), 0)::bigint AS applied_cents,
+       COUNT(*)::bigint AS entries
 FROM purser.balance_transactions
 WHERE tenant_id = $1::text::uuid
   AND reference_type = 'invoice_credit'
-  AND description = $2
-  AND amount_cents < 0
+  AND description IN ($2::text, $3::text)
 `
 
 type SumAppliedInvoiceCreditParams struct {
-	TenantID    string         `db:"tenant_id" json:"tenant_id"`
-	Description sql.NullString `db:"description" json:"description"`
+	TenantID            string `db:"tenant_id" json:"tenant_id"`
+	AppliedDescription  string `db:"applied_description" json:"applied_description"`
+	ReturnedDescription string `db:"returned_description" json:"returned_description"`
 }
 
-func (q *Queries) SumAppliedInvoiceCredit(ctx context.Context, arg SumAppliedInvoiceCreditParams) (int64, error) {
-	row := q.db.QueryRowContext(ctx, sumAppliedInvoiceCredit, arg.TenantID, arg.Description)
-	var applied_cents int64
-	err := row.Scan(&applied_cents)
-	return applied_cents, err
+type SumAppliedInvoiceCreditRow struct {
+	AppliedCents int64 `db:"applied_cents" json:"applied_cents"`
+	Entries      int64 `db:"entries" json:"entries"`
+}
+
+// applied_cents is the credit a billing period's invoice holds from the
+// prepaid balance: its debits net of the credit returned to the balance.
+// entries numbers the period's ledger rows so each later movement gets its
+// own idempotency reference.
+func (q *Queries) SumAppliedInvoiceCredit(ctx context.Context, arg SumAppliedInvoiceCreditParams) (SumAppliedInvoiceCreditRow, error) {
+	row := q.db.QueryRowContext(ctx, sumAppliedInvoiceCredit, arg.TenantID, arg.AppliedDescription, arg.ReturnedDescription)
+	var i SumAppliedInvoiceCreditRow
+	err := row.Scan(&i.AppliedCents, &i.Entries)
+	return i, err
 }
 
 const sumPrepaidUsageSettlements = `-- name: SumPrepaidUsageSettlements :one

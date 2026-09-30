@@ -724,9 +724,10 @@ func (jm *JobManager) pricingResolver() pricing.QuartermasterClient {
 }
 
 // persistManualReviewDraft writes a held draft invoice for ops visibility
-// without firing any downstream side effects. No prepaid credit is deducted,
-// no period advance, no Stripe meter push. Lines persist so ops can see
-// what would have been billed. Resolution flow: ops fixes the cluster
+// without firing any downstream side effects. The held invoice records no
+// prepaid credit, so credit an earlier draft of the period took returns to the
+// balance; no period advance, no Stripe meter push. Lines persist so ops can
+// see what would have been billed. Resolution flow: ops fixes the cluster
 // pricing → updateInvoiceDraft re-runs → side effects fire once on the
 // corrected total.
 func (jm *JobManager) persistManualReviewDraft(
@@ -743,8 +744,15 @@ func (jm *JobManager) persistManualReviewDraft(
 	grossMeteredAmt := ratingResult.GrossUsageAmount.Round(2).String()
 	creditAmt := decimal.Zero.String()
 
-	return withTx(ctx, jm.db, func(tx *sql.Tx) error {
-		invoiceID, txErr := purserdb.New(tx).UpsertManualReviewInvoice(ctx, purserdb.UpsertManualReviewInvoiceParams{
+	var invoiceID string
+	var creditChange invoiceCreditChange
+	err := withTx(ctx, jm.db, func(tx *sql.Tx) error {
+		var txErr error
+		creditChange, txErr = reconcileInvoicePrepaidCreditTx(ctx, tx, tenantID, periodStart, 0)
+		if txErr != nil {
+			return txErr
+		}
+		heldID, txErr := purserdb.New(tx).UpsertManualReviewInvoice(ctx, purserdb.UpsertManualReviewInvoiceParams{
 			TenantID: tenantID, Amount: totalAmt, Currency: currency, DueDate: dueDate,
 			BaseAmount: baseAmt, MeteredAmount: meteredAmt, PrepaidCreditApplied: creditAmt,
 			PeriodStart:        sql.NullTime{Time: periodStart, Valid: true},
@@ -754,6 +762,12 @@ func (jm *JobManager) persistManualReviewDraft(
 		if txErr != nil {
 			return fmt.Errorf("upsert manual_review draft: %w", txErr)
 		}
-		return persistInvoiceLineItems(ctx, tx, invoiceID.String(), tenantID, ratingResult)
+		invoiceID = heldID.String()
+		return persistInvoiceLineItems(ctx, tx, invoiceID, tenantID, ratingResult)
 	})
+	if err != nil {
+		return err
+	}
+	logInvoiceCreditChange(jm.logger, tenantID, invoiceID, periodStart, creditChange)
+	return nil
 }

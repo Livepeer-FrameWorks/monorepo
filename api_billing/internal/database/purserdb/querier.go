@@ -72,6 +72,7 @@ type Querier interface {
 	ClaimX402PaymentQuote(ctx context.Context, arg ClaimX402PaymentQuoteParams) (int64, error)
 	ClearAccountClosureCollectionBalances(ctx context.Context, tenantID string) (int64, error)
 	ClearAppliedPendingDowngrade(ctx context.Context, arg ClearAppliedPendingDowngradeParams) error
+	ClearOpenInvoicePrepaidCredit(ctx context.Context, arg ClearOpenInvoicePrepaidCreditParams) error
 	ClearStagedStripeClusterSubscription(ctx context.Context, arg ClearStagedStripeClusterSubscriptionParams) error
 	ClearTenantStripeCheckoutPending(ctx context.Context, tenantID string) error
 	CollectInvoiceDimensionedUsage(ctx context.Context, arg CollectInvoiceDimensionedUsageParams) ([]CollectInvoiceDimensionedUsageRow, error)
@@ -431,6 +432,7 @@ type Querier interface {
 	ListMarketplaceCreditLines(ctx context.Context, invoiceID string) ([]ListMarketplaceCreditLinesRow, error)
 	ListMollieObservationDrainInvoiceIDs(ctx context.Context) ([]string, error)
 	ListMolliePaymentObservationsForInvoice(ctx context.Context, arg ListMolliePaymentObservationsForInvoiceParams) ([]ListMolliePaymentObservationsForInvoiceRow, error)
+	ListOpenInvoicesHoldingPrepaidCredit(ctx context.Context, tenantID string) ([]ListOpenInvoicesHoldingPrepaidCreditRow, error)
 	ListOperatorAccrualsForInvoice(ctx context.Context, invoiceID string) ([]ListOperatorAccrualsForInvoiceRow, error)
 	ListOperatorClusters(ctx context.Context, tenantID string) ([]ListOperatorClustersRow, error)
 	ListOperatorPayouts(ctx context.Context, arg ListOperatorPayoutsParams) ([]ListOperatorPayoutsRow, error)
@@ -614,7 +616,11 @@ type Querier interface {
 	SubtractPrepaidBalance(ctx context.Context, arg SubtractPrepaidBalanceParams) (int64, error)
 	SubtractX402TenantBalanceRollup(ctx context.Context, arg SubtractX402TenantBalanceRollupParams) (int64, error)
 	SumAllowanceUsage(ctx context.Context, arg SumAllowanceUsageParams) (float64, error)
-	SumAppliedInvoiceCredit(ctx context.Context, arg SumAppliedInvoiceCreditParams) (int64, error)
+	// applied_cents is the credit a billing period's invoice holds from the
+	// prepaid balance: its debits net of the credit returned to the balance.
+	// entries numbers the period's ledger rows so each later movement gets its
+	// own idempotency reference.
+	SumAppliedInvoiceCredit(ctx context.Context, arg SumAppliedInvoiceCreditParams) (SumAppliedInvoiceCreditRow, error)
 	SumPrepaidUsageSettlements(ctx context.Context, arg SumPrepaidUsageSettlementsParams) (int64, error)
 	SuspendActiveTenantSubscription(ctx context.Context, tenantID string) (int64, error)
 	SuspendActiveTenantSubscriptions(ctx context.Context, tenantID string) (int64, error)

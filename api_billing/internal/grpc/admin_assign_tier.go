@@ -9,6 +9,7 @@ import (
 
 	"frameworks/api_billing/internal/billingevents"
 	"frameworks/api_billing/internal/database/purserdb"
+	"frameworks/api_billing/internal/handlers"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/billing"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/middleware"
@@ -66,8 +67,9 @@ func (s *PurserServer) AdminAssignTier(ctx context.Context, req *purserpb.AdminA
 	userID := middleware.GetUserID(ctx)
 
 	var resp *purserpb.AdminAssignTierResponse
+	var creditReturns []handlers.InvoiceCreditReturn
 	stage, err := runRetryableTx(ctx, s.db, func(tx *sql.Tx) error {
-		resp = nil
+		resp, creditReturns = nil, nil
 		queries := purserdb.New(tx)
 		tier, err := queries.GetTierByNameForOperatorAssignment(ctx, tierName)
 		if errors.Is(err, sql.ErrNoRows) {
@@ -152,6 +154,11 @@ func (s *PurserServer) AdminAssignTier(ctx context.Context, req *purserpb.AdminA
 			}); err != nil {
 				return txStatusErrorf(err, codes.Internal, "create prepaid balance: %v", err)
 			}
+			if !created && current.BillingModel != "prepaid" {
+				if creditReturns, err = handlers.ReturnOpenInvoicePrepaidCreditTx(ctx, tx, tenantID); err != nil {
+					return txStatusErrorf(err, codes.Internal, "return open invoice credit to prepaid balance: %v", err)
+				}
+			}
 		} else {
 			periodStart, periodEnd, periodErr := resolveBillingPeriod(ctx, tx, tenantID, current.BillingPeriodStart, current.BillingPeriodEnd, now)
 			if periodErr != nil {
@@ -187,6 +194,16 @@ func (s *PurserServer) AdminAssignTier(ctx context.Context, req *purserpb.AdminA
 		return nil, status.Errorf(codes.Internal, "commit tier assignment: %v", err)
 	default:
 		return nil, err
+	}
+	for _, credit := range creditReturns {
+		s.logger.WithFields(logging.Fields{
+			"tenant_id":      tenantID,
+			"invoice_id":     credit.InvoiceID,
+			"billing_period": credit.PeriodStart.Format("2006-01"),
+			"returned_cents": credit.ReturnedCents,
+			"balance_cents":  credit.BalanceCents,
+			"operator":       userID,
+		}).Info("Returned open invoice credit to prepaid balance on move to prepaid")
 	}
 
 	eligibleClusters, primaryCluster, clusterErr := s.reconcileCanonicalTierClusterAccess(ctx, tenantID)

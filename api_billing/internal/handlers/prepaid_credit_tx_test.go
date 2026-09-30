@@ -190,9 +190,12 @@ func TestApplyInvoicePrepaidCreditTxAppliesOnlyMissingDelta(t *testing.T) {
 		t.Fatalf("BeginTx: %v", err)
 	}
 
+	mock.ExpectQuery(`SELECT balance_cents FROM purser\.prepaid_balances`).
+		WithArgs(tenantID, currency).
+		WillReturnRows(sqlmock.NewRows([]string{"balance_cents"}).AddRow(int64(10000)))
 	mock.ExpectQuery(`SELECT COALESCE\(SUM\(-amount_cents\), 0\)`).
-		WithArgs(tenantID, "Invoice credit: 2026-04").
-		WillReturnRows(sqlmock.NewRows([]string{"applied"}).AddRow(int64(2000)))
+		WithArgs(tenantID, "Invoice credit: 2026-04", "Invoice credit returned: 2026-04").
+		WillReturnRows(sqlmock.NewRows([]string{"applied_cents", "entries"}).AddRow(int64(2000), int64(1)))
 	mock.ExpectExec(`INSERT INTO purser\.prepaid_balances`).
 		WithArgs(tenantID, currency).
 		WillReturnResult(sqlmock.NewResult(0, 0))
@@ -207,12 +210,12 @@ func TestApplyInvoicePrepaidCreditTxAppliesOnlyMissingDelta(t *testing.T) {
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectRollback()
 
-	applied, err := jm.applyInvoicePrepaidCreditTx(context.Background(), tx, tenantID, periodStart, 10200)
+	change, err := jm.applyInvoicePrepaidCreditTx(context.Background(), tx, tenantID, periodStart, 10200)
 	if err != nil {
 		t.Fatalf("applyInvoicePrepaidCreditTx: %v", err)
 	}
-	if applied != 10200 {
-		t.Fatalf("applied = %d, want 10200", applied)
+	if change.AppliedCents != 10200 {
+		t.Fatalf("applied = %d, want 10200", change.AppliedCents)
 	}
 	if err := tx.Rollback(); err != nil {
 		t.Fatalf("Rollback: %v", err)

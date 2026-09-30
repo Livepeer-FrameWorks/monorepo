@@ -7,6 +7,7 @@ import (
 	"database/sql"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/ctxkeys"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
@@ -206,6 +207,42 @@ func TestAdminAssignTier_RealPG(t *testing.T) { //nolint:funlen // One database 
 		}
 		if n := purserCount(t, db, `SELECT COUNT(*) FROM purser.prepaid_balances WHERE tenant_id = $1::uuid AND currency = 'EUR'`, tenantID); n != 1 {
 			t.Fatalf("prepaid balance rows = %d, want 1", n)
+		}
+	})
+
+	t.Run("moving back to prepaid returns the credit an open draft holds", func(t *testing.T) {
+		tenantID := seed(t, "production", "postpaid", "active")
+		periodStart := time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)
+		// The tenant's 10.00 balance went to its September draft as credit.
+		for _, statement := range []string{
+			`INSERT INTO purser.prepaid_balances (tenant_id, balance_cents, currency) VALUES ($1, 0, 'EUR')`,
+			`INSERT INTO purser.balance_transactions (tenant_id, amount_cents, balance_after_cents, transaction_type, description, reference_id, reference_type)
+				VALUES ($1, -1000, 0, 'credit', 'Invoice credit: 2026-09', gen_random_uuid(), 'invoice_credit')`,
+			`INSERT INTO purser.billing_invoices (tenant_id, amount, currency, status, due_date, base_amount, metered_amount, prepaid_credit_applied, period_start, period_end)
+				VALUES ($1, 69.00, 'EUR', 'draft', $2::timestamptz + INTERVAL '1 month 14 days', 79.00, 0, 10.00, $2, $2::timestamptz + INTERVAL '1 month')`,
+		} {
+			args := []any{tenantID}
+			if strings.Contains(statement, "billing_invoices") {
+				args = append(args, periodStart)
+			}
+			if _, err := db.ExecContext(ctx, statement, args...); err != nil {
+				t.Fatalf("seed: %v\n%s", err, statement)
+			}
+		}
+		if _, err := server.AdminAssignTier(operatorAssignCtx(operatorID), &purserpb.AdminAssignTierRequest{
+			TenantId: tenantID, TierName: "payg", Reason: "back to pay as you go",
+		}); err != nil {
+			t.Fatalf("AdminAssignTier: %v", err)
+		}
+		if n := purserCount(t, db, `SELECT balance_cents FROM purser.prepaid_balances WHERE tenant_id = $1::uuid`, tenantID); n != 1000 {
+			t.Fatalf("balance = %d, want the 1000 cents the draft held", n)
+		}
+		var amount, credit string
+		if err := db.QueryRowContext(ctx, `SELECT amount::text, prepaid_credit_applied::text FROM purser.billing_invoices WHERE tenant_id = $1::uuid`, tenantID).Scan(&amount, &credit); err != nil {
+			t.Fatal(err)
+		}
+		if amount != "79.00" || credit != "0.00" {
+			t.Fatalf("draft amount %s credit %s, want 79.00 with no credit", amount, credit)
 		}
 	})
 

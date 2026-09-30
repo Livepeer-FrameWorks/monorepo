@@ -198,94 +198,106 @@ func TestDeductPrepaidBalanceForCreditTx(t *testing.T) {
 	})
 }
 
-// applyInvoicePrepaidCreditTx is delta-based: it brings the applied invoice
-// credit UP TO grossCents, never re-charging credit already applied for the
-// same tenant/period. The short-circuit (already >= gross) must issue no
-// further deduction.
+// applyInvoicePrepaidCreditTx makes the period's invoice credit follow the
+// invoice: it debits only the missing amount when the invoice grows, moves
+// nothing when the credit already matches, and returns the excess to the
+// balance when the invoice shrinks.
 func TestApplyInvoicePrepaidCreditTx(t *testing.T) {
 	periodStart := time.Date(2026, 4, 1, 0, 0, 0, 0, time.UTC)
+	const tenantID = "tenant-1"
 
-	t.Run("already fully applied issues no further deduction", func(t *testing.T) {
+	run := func(t *testing.T, gross int64, expect func(sqlmock.Sqlmock)) invoiceCreditChange {
+		t.Helper()
 		mockDB, mock, err := sqlmock.New()
 		if err != nil {
 			t.Fatalf("sqlmock: %v", err)
 		}
 		defer mockDB.Close()
-
-		const tenantID = "tenant-1"
-		const gross = int64(100)
-
 		mock.ExpectBegin()
-		mock.ExpectQuery("SELECT COALESCE\\(SUM\\(-amount_cents\\), 0\\)").
-			WillReturnRows(sqlmock.NewRows([]string{"applied"}).AddRow(int64(100)))
+		expect(mock)
 		mock.ExpectCommit()
-
 		tx, err := mockDB.BeginTx(context.Background(), nil)
 		if err != nil {
 			t.Fatalf("begin: %v", err)
 		}
 		jm := &JobManager{db: mockDB, logger: logging.NewLogger(), billing: &Service{}}
-		applied, err := jm.applyInvoicePrepaidCreditTx(context.Background(), tx, tenantID, periodStart, gross)
+		change, err := jm.applyInvoicePrepaidCreditTx(context.Background(), tx, tenantID, periodStart, gross)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
-		}
-		if applied != 100 {
-			t.Fatalf("applied=%d, want 100 (unchanged, no deduction)", applied)
 		}
 		if err := tx.Commit(); err != nil {
 			t.Fatalf("commit: %v", err)
 		}
 		if err := mock.ExpectationsWereMet(); err != nil {
 			t.Errorf("unmet expectations: %v", err)
+		}
+		return change
+	}
+	lockBalance := func(mock sqlmock.Sqlmock, balance int64) {
+		mock.ExpectQuery(`SELECT balance_cents FROM purser\.prepaid_balances`).
+			WithArgs(tenantID, billing.LedgerCurrency).
+			WillReturnRows(sqlmock.NewRows([]string{"balance_cents"}).AddRow(balance))
+	}
+	heldCredit := func(mock sqlmock.Sqlmock, held, entries int64) {
+		mock.ExpectQuery(`SELECT COALESCE\(SUM\(-amount_cents\), 0\)`).
+			WithArgs(tenantID, "Invoice credit: 2026-04", "Invoice credit returned: 2026-04").
+			WillReturnRows(sqlmock.NewRows([]string{"applied_cents", "entries"}).AddRow(held, entries))
+	}
+
+	t.Run("credit matching the invoice moves nothing", func(t *testing.T) {
+		change := run(t, 100, func(mock sqlmock.Sqlmock) {
+			lockBalance(mock, 500)
+			heldCredit(mock, 100, 1)
+		})
+		if change != (invoiceCreditChange{PreviousCents: 100, AppliedCents: 100, BalanceCents: 500}) {
+			t.Fatalf("change = %+v, want 100 held and unchanged", change)
 		}
 	})
 
 	t.Run("deducts only the missing delta", func(t *testing.T) {
-		mockDB, mock, err := sqlmock.New()
-		if err != nil {
-			t.Fatalf("sqlmock: %v", err)
+		const gross, alreadyApplied, balance = int64(150), int64(2), int64(1000)
+		const delta = gross - alreadyApplied
+		change := run(t, gross, func(mock sqlmock.Sqlmock) {
+			lockBalance(mock, balance)
+			heldCredit(mock, alreadyApplied, 1)
+			mock.ExpectExec("INSERT INTO purser.prepaid_balances").WillReturnResult(sqlmock.NewResult(0, 1))
+			lockBalance(mock, balance)
+			mock.ExpectExec("INSERT INTO purser.balance_transactions").
+				WithArgs(tenantID, -delta, balance-delta, "Invoice credit: 2026-04", sqlmock.AnyArg(), "invoice_credit").
+				WillReturnResult(sqlmock.NewResult(0, 1))
+			mock.ExpectExec("UPDATE purser.prepaid_balances").
+				WithArgs(balance-delta, tenantID, billing.LedgerCurrency).
+				WillReturnResult(sqlmock.NewResult(0, 1))
+		})
+		if change != (invoiceCreditChange{PreviousCents: alreadyApplied, AppliedCents: gross, BalanceCents: balance - delta}) {
+			t.Fatalf("change = %+v, want %d applied", change, gross)
 		}
-		defer mockDB.Close()
+	})
 
-		const tenantID = "tenant-1"
-		const gross = int64(150)
-		const alreadyApplied = int64(2)
-		const delta = gross - alreadyApplied // 148
-		const balance = int64(1000)
-		const newBalance = balance - delta
+	t.Run("returns credit the invoice no longer uses", func(t *testing.T) {
+		change := run(t, 0, func(mock sqlmock.Sqlmock) {
+			lockBalance(mock, 0)
+			heldCredit(mock, 1000, 1)
+			mock.ExpectExec("INSERT INTO purser.balance_transactions").
+				WithArgs(tenantID, int64(1000), int64(1000), "Invoice credit returned: 2026-04", sqlmock.AnyArg(), "invoice_credit").
+				WillReturnResult(sqlmock.NewResult(0, 1))
+			mock.ExpectExec("UPDATE purser.prepaid_balances").
+				WithArgs(int64(1000), tenantID, billing.LedgerCurrency).
+				WillReturnResult(sqlmock.NewResult(0, 1))
+		})
+		if change != (invoiceCreditChange{PreviousCents: 1000, AppliedCents: 0, BalanceCents: 1000}) {
+			t.Fatalf("change = %+v, want all 1000 returned", change)
+		}
+	})
 
-		mock.ExpectBegin()
-		mock.ExpectQuery("SELECT COALESCE\\(SUM\\(-amount_cents\\), 0\\)").
-			WillReturnRows(sqlmock.NewRows([]string{"applied"}).AddRow(alreadyApplied))
-		// nested deductPrepaidBalanceForCreditTx for the 148-cent delta
-		mock.ExpectExec("INSERT INTO purser.prepaid_balances").WillReturnResult(sqlmock.NewResult(0, 1))
-		mock.ExpectQuery(`SELECT balance_cents.*FOR UPDATE`).
-			WillReturnRows(sqlmock.NewRows([]string{"balance_cents"}).AddRow(balance))
-		mock.ExpectExec("INSERT INTO purser.balance_transactions").
-			WithArgs(tenantID, -delta, newBalance, sqlmock.AnyArg(), sqlmock.AnyArg(), "invoice_credit").
-			WillReturnResult(sqlmock.NewResult(0, 1))
-		mock.ExpectExec("UPDATE purser.prepaid_balances").
-			WithArgs(newBalance, tenantID, billing.LedgerCurrency).
-			WillReturnResult(sqlmock.NewResult(0, 1))
-		mock.ExpectCommit()
-
-		tx, err := mockDB.BeginTx(context.Background(), nil)
-		if err != nil {
-			t.Fatalf("begin: %v", err)
-		}
-		jm := &JobManager{db: mockDB, logger: logging.NewLogger(), billing: &Service{}}
-		applied, err := jm.applyInvoicePrepaidCreditTx(context.Background(), tx, tenantID, periodStart, gross)
-		if err != nil {
-			t.Fatalf("unexpected error: %v", err)
-		}
-		if applied != gross {
-			t.Fatalf("applied=%d, want %d (already + delta)", applied, gross)
-		}
-		if err := tx.Commit(); err != nil {
-			t.Fatalf("commit: %v", err)
-		}
-		if err := mock.ExpectationsWereMet(); err != nil {
-			t.Errorf("unmet expectations: %v", err)
+	t.Run("tenant without a prepaid balance holds no credit", func(t *testing.T) {
+		change := run(t, 500, func(mock sqlmock.Sqlmock) {
+			mock.ExpectQuery(`SELECT balance_cents FROM purser\.prepaid_balances`).
+				WithArgs(tenantID, billing.LedgerCurrency).
+				WillReturnRows(sqlmock.NewRows([]string{"balance_cents"}))
+		})
+		if change != (invoiceCreditChange{}) {
+			t.Fatalf("change = %+v, want none", change)
 		}
 	})
 }

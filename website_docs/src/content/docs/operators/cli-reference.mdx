@@ -2037,9 +2037,11 @@ direction, and unlike the self-serve tier change it does not require a Stripe or
 or a complete billing profile. Purser refuses a tier that does not exist or is inactive, a billing
 model the tier does not run (level-0 tiers such as `payg` run prepaid, all other tiers run
 postpaid), and a tenant whose account was closed. A tenant without a subscription gets one on the
-assigned tier. Moving to prepaid creates the prepaid balance; moving from prepaid to postpaid keeps
-the balance as invoice credit and reactivates a subscription suspended for low balance. A scheduled
-downgrade is cleared.
+assigned tier. Moving to prepaid creates the prepaid balance and returns any credit an open draft
+invoice holds to it; moving from prepaid to postpaid keeps the balance as invoice credit and
+reactivates a subscription suspended for low balance. An invoice takes only the credit it uses: when
+a later draft is smaller, for example after a billing grant lowers the base fee, the difference goes
+back to the balance. A scheduled downgrade is cleared.
 
 After the change Purser reconciles cluster access for the new tier and refreshes cached tenant
 limits, the same as a self-serve tier change, and records `billing.subscription_updated` with

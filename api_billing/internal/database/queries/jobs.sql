@@ -177,12 +177,34 @@ WHERE tenant_id = sqlc.arg(tenant_id)::text::uuid
   AND currency = sqlc.arg(currency);
 
 -- name: SumAppliedInvoiceCredit :one
-SELECT COALESCE(SUM(-amount_cents), 0)::bigint AS applied_cents
+-- applied_cents is the credit a billing period's invoice holds from the
+-- prepaid balance: its debits net of the credit returned to the balance.
+-- entries numbers the period's ledger rows so each later movement gets its
+-- own idempotency reference.
+SELECT COALESCE(SUM(-amount_cents), 0)::bigint AS applied_cents,
+       COUNT(*)::bigint AS entries
 FROM purser.balance_transactions
 WHERE tenant_id = sqlc.arg(tenant_id)::text::uuid
   AND reference_type = 'invoice_credit'
-  AND description = sqlc.arg(description)
-  AND amount_cents < 0;
+  AND description IN (sqlc.arg(applied_description)::text, sqlc.arg(returned_description)::text);
+
+-- name: ListOpenInvoicesHoldingPrepaidCredit :many
+SELECT id::text AS id, period_start
+FROM purser.billing_invoices
+WHERE tenant_id = sqlc.arg(tenant_id)::text::uuid
+  AND status IN ('draft', 'manual_review')
+  AND period_start IS NOT NULL
+ORDER BY period_start
+FOR UPDATE;
+
+-- name: ClearOpenInvoicePrepaidCredit :exec
+UPDATE purser.billing_invoices
+SET prepaid_credit_applied = 0,
+    amount = base_amount + metered_amount,
+    updated_at = NOW()
+WHERE id = sqlc.arg(invoice_id)::text::uuid
+  AND tenant_id = sqlc.arg(tenant_id)::text::uuid
+  AND status IN ('draft', 'manual_review');
 
 -- name: InsertUsageBalanceTransaction :execrows
 INSERT INTO purser.balance_transactions (
