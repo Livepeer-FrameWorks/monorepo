@@ -132,6 +132,12 @@
           WHERE n.nspname = target_schema
             AND c.relkind IN ('r', 'p', 'v', 'm', 'S', 'f')
             AND c.relowner <> target_owner_oid
+            -- A sequence owned by a column (serial, identity) cannot change owner by itself; ALTER TABLE moves it.
+            AND NOT (c.relkind = 'S' AND EXISTS (
+              SELECT 1 FROM pg_depend d
+              WHERE d.classid = 'pg_class'::regclass AND d.objid = c.oid
+                AND d.refclassid = 'pg_class'::regclass AND d.deptype IN ('a', 'i')
+            ))
         LOOP
           IF obj.relkind = 'S' THEN
             EXECUTE format('ALTER SEQUENCE %I.%I OWNER TO %I', obj.nspname, obj.relname, target_owner);

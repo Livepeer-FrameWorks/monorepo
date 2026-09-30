@@ -47,7 +47,10 @@
 # plain DROP INDEX takes the table's ACCESS EXCLUSIVE lock, so the repair runs between its own lock and statement
 # timeouts and resets them before the concurrent build that follows (DROP INDEX CONCURRENTLY cannot run inside the
 # conditional block). The timeouts are set before the repair statement, because a statement's timeout is armed when
-# it starts. The item timeouts are set after the advisory lock so a concurrent migrator still waits for it.
+# it starts. The item timeouts are set after the advisory lock so a concurrent migrator still waits for it. On
+# YugabyteDB a CREATE ROLE or other shared-catalog DDL anywhere on the cluster during the build aborts it, and the
+# engine's own retry of CREATE INDEX CONCURRENTLY IF NOT EXISTS then finds the aborted index and reports success, so
+# after its statements the item checks every guarded index is valid and ready before it writes its ledger row.
 - name: Apply migration (Yugabyte)
   community.postgresql.postgresql_query:
     login_host: 127.0.0.1
@@ -73,7 +76,10 @@
         ]
         + item.statements
         + [
-          "RESET ROLE",
+          "RESET ROLE"
+        ]
+        + ((item.invalid_index_guards | default([]) | length > 0) | ternary([invalid_index_verify_sql], []))
+        + [
           migration_ledger_sql,
           "SELECT pg_advisory_unlock(hashtext('frameworks_migrations'), hashtext('" ~ item.db ~ "'))"
         ]
@@ -108,6 +114,23 @@
           END LOOP;
         END IF;
       END $repair$
+    invalid_index_verify_sql: >-
+      DO $verify$
+      DECLARE broken text;
+      BEGIN
+        SELECT string_agg(guard, ', ' ORDER BY guard) INTO broken
+          FROM unnest(ARRAY['{{ item.invalid_index_guards | default([]) | map('replace', "'", "''") | join("', '") }}']::text[]) AS guard
+         WHERE NOT EXISTS (
+           SELECT 1
+             FROM pg_index i
+             JOIN pg_class c ON c.oid = i.indexrelid
+             JOIN pg_namespace n ON n.oid = c.relnamespace
+            WHERE n.nspname || '.' || c.relname = guard
+              AND i.indisvalid AND i.indisready);
+        IF broken IS NOT NULL THEN
+          RAISE EXCEPTION 'concurrent index build left % missing or invalid; the item is not recorded and its rerun rebuilds it', broken;
+        END IF;
+      END $verify$
     migration_ledger_sql: >-
       INSERT INTO _migrations (version, phase, seq, filename, checksum, transactional)
       VALUES ('{{ item.version }}', '{{ item.phase }}', {{ item.sequence }},

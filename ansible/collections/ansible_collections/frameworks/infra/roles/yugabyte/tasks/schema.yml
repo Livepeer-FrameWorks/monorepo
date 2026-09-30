@@ -1,7 +1,7 @@
 ---
 # Baseline schema SQL runs locally as the built-in Yugabyte admin role. The CLI
-# passes local temp file paths; Ansible copies those bytes and executes them via
-# community.postgresql.postgresql_script so SQL text is never Jinja-rendered.
+# passes local temp file paths; Ansible copies those bytes and executes them
+# with ysqlsh -f so SQL text is never Jinja-rendered.
 # A baseline is applied to a schema without tables, or to any item with
 # reapply=true: the CLI sets it when completing a schema whose baseline apply
 # was interrupted and for the scratch reference database that completion is
@@ -70,18 +70,41 @@
     - yugabyte_schema_items | default([]) | length > 0
     - (not (yugabyte_schema_has_tables_by_db[item.db] | default(false))) or (item.reapply | default(false) | bool)
 
+# ysqlsh sends the baseline one statement at a time in autocommit. Sent as one query, the file runs as one implicit
+# transaction that YugabyteDB can neither keep nor retry: DDL runs outside transaction blocks, so an ALTER TABLE or
+# foreign key on a colocated database's shared tablet aborts the transaction holding the file's earlier inserts
+# (40001), and query-layer retries do not apply to multi-statement queries. ON_ERROR_STOP ends the apply at the
+# first failing statement; a reapply finishes it through the baseline's IF NOT EXISTS DDL. The tools come from the
+# selected release, as relayout selects them, or from an in-place installation the role has not converted yet.
 - name: Apply baseline schemas via YSQL
-  community.postgresql.postgresql_script:
-    login_host: 127.0.0.1
-    login_port: "{{ yugabyte_ysql_port }}"
-    login_user: "{{ yugabyte_superuser_role }}"
-    login_password: "{{ yugabyte_superuser_password }}"
-    login_db: "{{ item.db }}"
-    path: "/tmp/frameworks-schema-{{ item.db | regex_replace('[^A-Za-z0-9_.-]', '_') }}.sql"
+  ansible.builtin.shell: |
+    set -eu
+    current={{ yugabyte_current_link | quote }}
+    ysqlsh=""
+    if [ -e "$current" ] || [ -L "$current" ]; then
+      for candidate in "$current/postgres/bin/ysqlsh" "$current/bin/ysqlsh"; do
+        if [ -x "$candidate" ]; then ysqlsh="$candidate"; break; fi
+      done
+    else
+      for candidate in {{ (yugabyte_install_dir ~ '/postgres/bin/ysqlsh') | quote }} {{ (yugabyte_install_dir ~ '/bin/ysqlsh') | quote }}; do
+        if [ -x "$candidate" ]; then ysqlsh="$candidate"; break; fi
+      done
+    fi
+    if [ -z "$ysqlsh" ]; then
+      echo "no ysqlsh in the selected YugabyteDB release or {{ yugabyte_install_dir }}" >&2
+      exit 2
+    fi
+    exec "$ysqlsh" -X -q -v ON_ERROR_STOP=1 -h 127.0.0.1 -p {{ yugabyte_ysql_port | quote }} \
+      -U {{ yugabyte_superuser_role | quote }} -d {{ item.db | quote }} \
+      -f {{ ('/tmp/frameworks-schema-' ~ (item.db | regex_replace('[^A-Za-z0-9_.-]', '_')) ~ '.sql') | quote }}
+  args:
+    executable: /bin/bash
+  environment:
+    PGPASSWORD: "{{ yugabyte_superuser_password }}"
+  changed_when: true
   loop: "{{ yugabyte_schema_items | default([]) }}"
   loop_control:
     label: "{{ item.db }}"
-  no_log: true
   when:
     - not ansible_check_mode
     - yugabyte_schema_items | default([]) | length > 0
@@ -125,6 +148,12 @@
           WHERE n.nspname = target_schema
             AND c.relkind IN ('r', 'p', 'v', 'm', 'S', 'f')
             AND c.relowner <> target_owner_oid
+            -- A sequence owned by a column (serial, identity) cannot change owner by itself; ALTER TABLE moves it.
+            AND NOT (c.relkind = 'S' AND EXISTS (
+              SELECT 1 FROM pg_depend d
+              WHERE d.classid = 'pg_class'::regclass AND d.objid = c.oid
+                AND d.refclassid = 'pg_class'::regclass AND d.deptype IN ('a', 'i')
+            ))
         LOOP
           IF obj.relkind = 'S' THEN
             EXECUTE format('ALTER SEQUENCE %I.%I OWNER TO %I', obj.nspname, obj.relname, target_owner);
