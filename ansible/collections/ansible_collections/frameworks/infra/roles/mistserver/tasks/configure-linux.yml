@@ -68,23 +68,6 @@
   no_log: true
   notify: mistserver restart
 
-- name: Ensure MistServer account seed directory
-  ansible.builtin.file:
-    path: "{{ mistserver_account_seed_script | dirname }}"
-    state: directory
-    owner: root
-    group: root
-    mode: "0755"
-
-- name: Install MistServer account seed helper
-  ansible.builtin.copy:
-    src: mistserver-account-seed.py
-    dest: "{{ mistserver_account_seed_script }}"
-    owner: root
-    group: root
-    mode: "0755"
-  notify: mistserver restart
-
 - name: Render systemd unit
   ansible.builtin.template:
     src: mistserver.service.j2

@@ -12,9 +12,9 @@ EnvironmentFile={{ mistserver_env_file }}
 Environment=MIST_LOG_SYSTEMD=1
 Environment=LD_LIBRARY_PATH={{ mistserver_install_dir }}/opt/mist-onnx/lib:{{ mistserver_install_dir }}/lib:{{ mistserver_install_dir }}/lib/x86_64-linux-gnu:{{ mistserver_install_dir }}/lib/aarch64-linux-gnu:/opt/mist-onnx/lib
 ExecStartPre=+/bin/bash -c "rm -f /dev/shm/Mst* /dev/shm/sem.MstSemStat"
-# Seeds MIST_API_USERNAME/MIST_API_PASSWORD from the EnvironmentFile into the
-# config, so the password never appears on MistController's command line.
-ExecStartPre=+{{ mistserver_account_seed_python }} {{ mistserver_account_seed_script }} {{ mistserver_config_file }} {{ mistserver_user }} {{ mistserver_group }}
+# MistController takes its API account from MIST_API_USERNAME/MIST_API_PASSWORD
+# in the EnvironmentFile and removes both from its environment before starting
+# any input, output or process, so the password never appears on a command line.
 ExecStart={{ mistserver_install_dir }}/bin/MistController -c {{ mistserver_config_file }}
 ExecStopPost=+/bin/bash -c "rm -f /dev/shm/Mst* /dev/shm/sem.MstSemStat"
 ExecReload=/bin/kill -s USR1 $MAINPID

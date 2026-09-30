@@ -70,7 +70,7 @@ type EdgeVars struct {
 	MistUpstream     string // localhost:8080 in both modes
 	CaddyAdminAddr   string // Container: "unix//run/caddy/admin.sock", Native: "localhost:2019"
 	SiteAddress      string // Caddy site address: "*.cluster.root" (wildcard) or "edge.cluster.root" (single)
-	MistAPIPassword  string // MistServer API auth password (seeded as the Mist API account and used by helmsman)
+	MistAPIPassword  string // MistServer API auth password (MIST_API_PASSWORD for MistController's API account and helmsman)
 	EdgeImage        string // Single edge image (helmsman+Mist+Caddy); manifest-pinned (image@digest) when a release is selected.
 	ONNXProfile      string // Profile baked into EdgeImage; NVIDIA profiles need GPU device access.
 	ONNXDRIDevice    bool   // Pass an available Intel DRM device into an OpenVINO container.

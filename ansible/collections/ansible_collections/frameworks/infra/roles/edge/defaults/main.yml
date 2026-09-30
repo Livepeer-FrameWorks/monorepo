@@ -63,7 +63,7 @@ edge_restream_allowed_private_cidrs: ""
 edge_restream_denied_cidrs: ""
 
 # Generated upstream (Go caller passes a random 32-char hex). Shared between
-# mistserver (API account seeded into its config) and helmsman (MIST_API_PASSWORD env).
+# mistserver and helmsman, both through the MIST_API_PASSWORD env var.
 edge_mist_api_password: ""
 
 # Container-mode edge image (helmsman + MistServer + Caddy under s6-overlay).

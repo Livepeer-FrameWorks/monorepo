@@ -91,7 +91,7 @@ type EdgeProvisionConfig struct {
 
 	// mistPassword is lazily populated by mistAPIPassword() so a single
 	// Provision invocation sees one consistent MIST_API_PASSWORD across
-	// the mistserver account seed and helmsman (env var).
+	// mistserver and helmsman (both via the env var).
 	mistPassword  string
 	onnxDRIDevice bool
 }

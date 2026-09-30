@@ -2,9 +2,9 @@
 # MistServer edge media server. Pinned artifact URL+checksum flow in from the
 # CLI (resolved out of the release manifest). The upstream tarball keeps the
 # Mist* executables together under bin/; MistController is the service entry
-# point. The API account is seeded into the Mist config by
-# files/mistserver-account-seed.py before each start, never passed as
-# `MistController -a user:password`, which the process list would expose.
+# point. It takes the API account from MIST_API_USERNAME/MIST_API_PASSWORD in
+# its environment (the env file), never from `MistController -a
+# user:password`, which the process list would expose.
 
 mistserver_artifact_url: ""
 mistserver_artifact_checksum: ""
@@ -41,10 +41,6 @@ mistserver_systemd_name: frameworks-mistserver
 mistserver_unit_path: "/etc/systemd/system/{{ mistserver_systemd_name }}.service"
 # The upstream unit must not run beside the managed service: both bind the same media ports.
 mistserver_legacy_systemd_name: mistserver
-# Pre-start helper that seeds the API account; kept outside the install tree,
-# which component updates replace.
-mistserver_account_seed_script: "{{ mistserver_install_dir | dirname }}/libexec/mistserver-account-seed.py"
-mistserver_account_seed_python: "{{ ansible_python_interpreter | default(ansible_facts['python']['executable'] | default('/usr/bin/python3')) }}"
 mistserver_controller_port: 4242
 mistserver_controller_interface: 127.0.0.1
 # Bound on the post-reload authenticated api2 check: attempts x (timeout +
