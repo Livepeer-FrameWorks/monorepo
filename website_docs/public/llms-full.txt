@@ -29846,6 +29846,8 @@ Billing tier and subscription management.
 - `grant set` / `grant show` / `grant revoke` - Operator billing arrangements: base fee, usage
   waiver, manual invoicing, expiry
 - `record-payment` - Record a bank transfer that paid an invoice
+- `prepaid-double-charges` - List invoices that charged prepaid tenants twice for the same usage
+  (read-only)
 
 ```bash
 # List billing tiers
@@ -29904,7 +29906,9 @@ model the tier does not run (level-0 tiers such as `payg` run prepaid, all other
 postpaid), and a tenant whose account was closed. A tenant without a subscription gets one on the
 assigned tier. Moving to prepaid creates the prepaid balance and returns any credit an open draft
 invoice holds to it; moving from prepaid to postpaid keeps the balance as invoice credit and
-reactivates a subscription suspended for low balance. An invoice takes only the credit it uses: when
+reactivates a subscription suspended for low balance. Moving from prepaid to postpaid also closes
+the prepaid part of the period with a prepaid statement, emailed to the tenant, and starts the
+postpaid period at the change, so the first postpaid invoice charges only usage from the change on. An invoice takes only the credit it uses: when
 a later draft is smaller, for example after a billing grant lowers the base fee, the difference goes
 back to the balance. A scheduled downgrade is cleared.
 
@@ -30031,6 +30035,36 @@ frameworks admin billing record-payment --tenant-id <UUID> --invoice-id <UUID> -
 
 The `grant` and `record-payment` commands call Purser RPCs that accept only the manifest service
 token or a platform-operator session.
+
+---
+
+### frameworks admin billing prepaid-double-charges
+
+List finalized usage invoices that charged a prepaid tenant again for usage its prepaid balance had
+already paid. A prepaid tenant pays usage from its balance as it is reported, and its period now
+closes with a prepaid statement that has nothing due. Before that, the month end invoiced prepaid
+tenants and took the invoice total from the same balance as invoice credit, or charged it to the
+card on file; a tenant moved from prepaid to postpaid mid-period was also invoiced for the prepaid
+part of the period.
+
+For each invoice the report prints the tenant, the invoice number and ID, its status and period,
+the usage on the invoice, what the prepaid balance paid for the same period, the invoice credit,
+what the invoice charged, and the amount charged twice: the invoice's usage up to what the balance
+had already paid. That is the amount to refund. The command only reads; refund with
+`frameworks admin billing credit` or through the payment provider.
+
+**Flags:**
+
+- `--tenant-id` - Only this tenant
+- `--limit` - At most this many invoices (default 500); the report says when it stopped at the limit
+
+```bash
+frameworks admin billing prepaid-double-charges
+frameworks admin billing prepaid-double-charges --tenant-id <UUID> -o json
+```
+
+The command calls a Purser RPC that accepts only the manifest service token or a platform-operator
+session.
 
 ---
 
