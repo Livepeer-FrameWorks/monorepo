@@ -56,3 +56,35 @@ func TestTenantCacheDoesNotHoldBillingUnavailableForTheTTL(t *testing.T) {
 		t.Fatalf("billing state not re-read after the retry delay: %v", err)
 	}
 }
+
+// Staging: a tenant moved to payg and given credit kept getting the postpaid
+// 402 for five minutes, the postpaid cache TTL. A refusal re-reads the tenant.
+func TestRefusedRequestRereadsBillingStatus(t *testing.T) {
+	unfunded := &quartermasterpb.ValidateTenantResponse{Valid: true, BillingModel: "postpaid", TierName: "supporter"}
+	funded := &quartermasterpb.ValidateTenantResponse{Valid: true, BillingModel: "prepaid", TierName: "payg"}
+	v := &scriptedTenantValidator{responses: []*quartermasterpb.ValidateTenantResponse{unfunded, funded}}
+	tc := NewTenantCache(v, logging.NewLogger())
+	status, err := tc.GetBillingAccessStatus("t1")
+	if err != nil {
+		t.Fatalf("first lookup: %v", err)
+	}
+	req := AccessRequest{TenantID: "t1", OperationName: "CreateClip", OperationNames: []string{"createClip"}, OperationType: "mutation"}
+	if !billingStatusRefuses(status, req, false) {
+		t.Fatal("a postpaid paid tier without collection must refuse rated work")
+	}
+	fresh, err := tc.RefreshBillingAccessStatus("t1")
+	if err != nil {
+		t.Fatalf("refresh: %v", err)
+	}
+	if fresh.BillingModel != "prepaid" || billingStatusRefuses(fresh, req, false) {
+		t.Fatalf("refresh kept the stale refusal: %+v", fresh)
+	}
+	// A client retrying a refused request is answered from the cache until the
+	// refresh interval passes.
+	if _, err := tc.RefreshBillingAccessStatus("t1"); err != nil {
+		t.Fatalf("second refresh: %v", err)
+	}
+	if v.calls != 2 {
+		t.Fatalf("Quartermaster called %d times, want 2 (refresh throttled)", v.calls)
+	}
+}

@@ -1302,3 +1302,41 @@ func TestPaidHTTPMutationOversizedResultBecomesReplayableTerminalEnvelope(t *tes
 		t.Fatalf("replay response=%d executions=%d", second.Code, executions)
 	}
 }
+
+type refreshingBillingChecker struct {
+	cached, fresh BillingAccessStatus
+	refreshes     int
+}
+
+func (c *refreshingBillingChecker) GetBillingAccessStatus(string) (BillingAccessStatus, error) {
+	return c.cached, nil
+}
+
+func (c *refreshingBillingChecker) RefreshBillingAccessStatus(string) (BillingAccessStatus, error) {
+	c.refreshes++
+	return c.fresh, nil
+}
+
+func TestEvaluateAccessRereadsBillingBeforeRefusing(t *testing.T) {
+	rl := NewRateLimiter(RateLimitConfig{})
+	defer rl.Stop()
+	req := AccessRequest{
+		TenantID: "tenant-1", ClientIP: "10.0.0.1", Path: "/graphql",
+		OperationName: "createClip", OperationType: "mutation",
+	}
+	billing := &refreshingBillingChecker{
+		cached: BillingAccessStatus{BillingModel: "postpaid", TierName: "supporter"},
+		fresh:  BillingAccessStatus{BillingModel: "prepaid", TierName: "payg"},
+	}
+	if decision := EvaluateAccess(context.Background(), req, rl, func(string) (int, int) { return 100, 10 }, billing, nil, nil, nil, nil); !decision.Allowed {
+		t.Fatalf("a tenant whose tier changed since the cached refusal must be admitted: %+v", decision)
+	}
+	if billing.refreshes != 1 {
+		t.Fatalf("refreshes = %d, want 1", billing.refreshes)
+	}
+
+	admitted := &refreshingBillingChecker{cached: BillingAccessStatus{BillingModel: "prepaid", TierName: "payg"}}
+	if decision := EvaluateAccess(context.Background(), req, rl, func(string) (int, int) { return 100, 10 }, admitted, nil, nil, nil, nil); !decision.Allowed || admitted.refreshes != 0 {
+		t.Fatalf("an admitted request must not re-read billing: %+v refreshes=%d", decision, admitted.refreshes)
+	}
+}

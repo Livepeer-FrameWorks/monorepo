@@ -47,6 +47,11 @@ func GraphQLOperationAccess(billingChecker BillingChecker) graphql.OperationMidd
 			}
 			return next(ctx)
 		}
+		if refresher, ok := billingChecker.(BillingRefresher); ok && billingStatusRefuses(status, req, unfundedAllowed) {
+			if fresh, refreshErr := refresher.RefreshBillingAccessStatus(req.TenantID); refreshErr == nil {
+				status = fresh
+			}
+		}
 		if status.IsSuspended && !suspendedRequestAllowed(req) {
 			return graphqlAccessDenied("account is suspended", "ACCOUNT_SUSPENDED")
 		}

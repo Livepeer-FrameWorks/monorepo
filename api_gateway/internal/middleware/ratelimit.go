@@ -209,6 +209,28 @@ type BillingChecker interface {
 	GetBillingAccessStatus(tenantID string) (BillingAccessStatus, error)
 }
 
+// BillingRefresher re-reads a tenant's billing status past its cache.
+type BillingRefresher interface {
+	RefreshBillingAccessStatus(tenantID string) (BillingAccessStatus, error)
+}
+
+// billingStatusRefuses reports whether a billing snapshot refuses the request.
+func billingStatusRefuses(status BillingAccessStatus, req AccessRequest, unfundedAllowed bool) bool {
+	if status.IsSuspended && !suspendedRequestAllowed(req) {
+		return true
+	}
+	if unfundedAllowed {
+		return false
+	}
+	switch status.BillingModel {
+	case "prepaid":
+		return status.IsBalanceNegative
+	case "postpaid":
+		return !strings.EqualFold(status.TierName, "free") && !status.CollectionReady
+	}
+	return false
+}
+
 // X402Provider provides x402 payment requirements for 402 responses
 type X402Provider interface {
 	GetPaymentRequirements(ctx context.Context, tenantID, resource string) (*purserpb.PaymentRequirements, error)
@@ -726,6 +748,15 @@ func EvaluateAccess(ctx context.Context, req AccessRequest, rl *RateLimiter, get
 					return billingStatusUnavailableDecision(headers)
 				}
 			} else {
+				// The snapshot is cached for minutes, so a tier change or credit
+				// would keep being refused until it expires. A refusal asks the
+				// billing authority again first; admission can only be stale
+				// toward refusing for as long as the refresh throttle.
+				if refresher, ok := billingChecker.(BillingRefresher); ok && billingStatusRefuses(status, req, unfundedAllowed) {
+					if fresh, refreshErr := refresher.RefreshBillingAccessStatus(tenantIDStr); refreshErr == nil {
+						status = fresh
+					}
+				}
 				billingModel = status.BillingModel
 				tierName = status.TierName
 				collectionReady = status.CollectionReady
@@ -1349,7 +1380,13 @@ type TenantCache struct {
 	cache            sync.Map // map[tenantID]*TenantRateLimits
 	cacheTTLPostpaid time.Duration
 	cacheTTLPrepaid  time.Duration
+	lastRefresh      sync.Map // map[tenantID]time.Time of the last RefreshBillingAccessStatus fetch
 }
+
+// billingRefreshInterval bounds how often a refused tenant makes the gateway
+// re-read its billing status, so a client retrying a refused request cannot
+// turn every retry into a Quartermaster call.
+const billingRefreshInterval = 5 * time.Second
 
 // NewTenantCache creates a new tenant cache
 func NewTenantCache(client TenantValidator, logger logging.Logger) *TenantCache {
@@ -1380,8 +1417,11 @@ func (tc *TenantCache) getTenantInfo(tenantID string) (*TenantRateLimits, error)
 			return limits, nil
 		}
 	}
+	return tc.fetchTenantInfo(tenantID)
+}
 
-	// Fetch from Quartermaster
+// fetchTenantInfo reads the tenant from Quartermaster and caches the result.
+func (tc *TenantCache) fetchTenantInfo(tenantID string) (*TenantRateLimits, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 
@@ -1473,6 +1513,20 @@ func (tc *TenantCache) GetBillingAccessStatus(tenantID string) (BillingAccessSta
 		IsBalanceNegative:  info.IsBalanceNegative,
 		IsSuspended:        info.IsSuspended,
 	}, nil
+}
+
+// RefreshBillingAccessStatus re-reads the tenant past its cache TTL, at most
+// once per billingRefreshInterval; within that interval it answers from the
+// cache, which the last refresh just filled.
+func (tc *TenantCache) RefreshBillingAccessStatus(tenantID string) (BillingAccessStatus, error) {
+	now := time.Now()
+	if last, ok := tc.lastRefresh.Load(tenantID); !ok || now.Sub(last.(time.Time)) >= billingRefreshInterval { //nolint:errcheck // type guaranteed by sync.Map usage
+		tc.lastRefresh.Store(tenantID, now)
+		if _, err := tc.fetchTenantInfo(tenantID); err != nil {
+			return BillingAccessStatus{}, err
+		}
+	}
+	return tc.GetBillingAccessStatus(tenantID)
 }
 
 // GetLimitsFunc returns a function suitable for use with RateLimitMiddleware
