@@ -10,6 +10,7 @@ repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 container="fw-yugabyte-contract-${PPID}-$$"
 container_started=false
 started_at=$SECONDS
+baselines=""
 
 cleanup() {
   local status=$?
@@ -24,6 +25,9 @@ cleanup() {
   fi
   if [[ "$container_started" == true ]]; then
     docker rm -fv "$container" >/dev/null 2>&1 || true
+  fi
+  if [[ -n "$baselines" ]]; then
+    rm -rf "$baselines"
   fi
 }
 trap cleanup EXIT
@@ -50,9 +54,19 @@ image="$(resolve_image)" || {
   exit 1
 }
 
+# Service tests load the baselines the release applies: rendered by the release code path, with each database's layout.
+baselines="$(mktemp -d "${TMPDIR:-/tmp}/frameworks-yugabyte-baselines.XXXXXX")"
+(cd "$repo_root/cli" && go run ./internal/yugabytecontractbaselines -out "$baselines")
+
+# The engine runs with the tserver flags production sets that change behaviour (Read Committed isolation). Its data
+# directory is a tmpfs because the contracts load many baselines and baseline DDL runs about twice as long on the
+# container's disk-backed filesystem. The heaviest lane peaked at 2.9 GB of tmpfs and 5.2 GB of container memory;
+# tmpfs pages are only taken as they are written, and the tserver refuses writes once less than 5% of the directory
+# is free, which a 4 GB tmpfs reached.
 docker run -d --name "$container" -P --hostname "$container" \
+  --tmpfs /var/lib/frameworks-yugabyte-contract-data:size=12g \
   "$image" \
-  bash -c 'exec bin/yugabyted start --background=false --ui=false --base_dir=/tmp/frameworks-yugabyte-contract-data --advertise_address="$(hostname -i)" --tserver_flags=yb_enable_read_committed_isolation=true' \
+  bash -c 'exec bin/yugabyted start --background=false --ui=false --callhome=false --base_dir=/var/lib/frameworks-yugabyte-contract-data --advertise_address="$(hostname -i)" --tserver_flags=yb_enable_read_committed_isolation=true' \
   >/dev/null
 container_started=true
 
@@ -84,9 +98,18 @@ if [[ "$ready" != true ]]; then
   exit 1
 fi
 
+# Service contracts reuse a loaded baseline database only while its catalog version is the one the load left, which
+# holds only if every DDL statement raises that version.
+catalog_version_on_ddl="$(docker exec "$container" ysqlsh -h "$container" -U yugabyte -d yugabyte -tAc 'SHOW yb_always_increment_catalog_version_on_ddl' 2>&1 || true)"
+if [[ "$catalog_version_on_ddl" != "on" ]]; then
+  echo "ERROR: yb_always_increment_catalog_version_on_ddl is \"$catalog_version_on_ddl\", want on" >&2
+  exit 1
+fi
+
 export FRAMEWORKS_YUGABYTE_TEST_CONTAINER="$container"
 export FRAMEWORKS_YUGABYTE_TEST_DSN="postgres://yugabyte@127.0.0.1:${port}/yugabyte?sslmode=disable"
 export FRAMEWORKS_YUGABYTE_TEST_RETAIN_DATABASES=1
+export FRAMEWORKS_YUGABYTE_TEST_BASELINES="$baselines"
 
 echo "Shared Yugabyte contract engine ready in $((SECONDS - started_at))s; running: $*"
 "$@"

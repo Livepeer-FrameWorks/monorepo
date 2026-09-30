@@ -521,14 +521,7 @@ func startQueryCatalogRealPG(t *testing.T) *sql.DB {
 
 func startQueryCatalogRealYugabyte(t *testing.T) *sql.DB {
 	t.Helper()
-	if db, ok := dockerpg.OpenSharedYugabyteDatabase(t, "purser"); ok {
-		schema, err := dbsql.Content.ReadFile("schema/purser.sql")
-		if err != nil {
-			t.Fatal(err)
-		}
-		if _, err := db.Exec(string(schema)); err != nil {
-			t.Fatal(err)
-		}
+	if db, ok := dockerpg.OpenSharedYugabyteBaseline(t, "purser", "purser"); ok {
 		return db
 	}
 	if _, err := exec.LookPath("docker"); err != nil {

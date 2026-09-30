@@ -13,7 +13,6 @@ import (
 
 	"frameworks/api_control/internal/database/commodoredb"
 	"frameworks/api_control/internal/placementpolicy"
-	dbsql "github.com/Livepeer-FrameWorks/monorepo/pkg/database/sql"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	sharedauthority "github.com/Livepeer-FrameWorks/monorepo/pkg/mediaauthority"
 	mediapb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/media_authority"
@@ -32,16 +31,9 @@ func TestMediaPlacementObjectPolicy_RealYugabyte(t *testing.T) {
 
 func placementObjectYugabyte(t *testing.T, name string) *sql.DB {
 	t.Helper()
-	db, ok := dockerpg.OpenSharedYugabyteDatabase(t, name)
+	db, ok := dockerpg.OpenSharedYugabyteBaseline(t, name, "commodore")
 	if !ok {
 		t.Skip("requires the shared Yugabyte contract fixture")
-	}
-	baseline, err := dbsql.Content.ReadFile("schema/commodore.sql")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := db.Exec(string(baseline)); err != nil {
-		t.Fatal(err)
 	}
 	return db
 }

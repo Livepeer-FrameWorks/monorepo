@@ -143,6 +143,35 @@ index. The validator requires the exact index name and validity predicates in
 the same postdeploy statement because an interrupted concurrent
 build can leave an invalid relation that a later `IF NOT EXISTS` silently skips.
 
+### Rerun-safe statements
+
+YugabyteDB applies a migration one statement at a time in autocommit and records it only
+after the last statement, so a failed or interrupted item is rerun from its first statement
+over the statements it already applied. PostgreSQL still applies a transactional file as one
+transaction, but every post-floor PostgreSQL-family migration must be written for the
+YugabyteDB path, and `make validate-migrations` rejects any statement that is not
+rerun-safe:
+
+- `CREATE` uses `IF NOT EXISTS` or `OR REPLACE`, or follows `DROP … IF EXISTS` of the same
+  object earlier in the file (`CREATE TRIGGER` needs the drop on the same table).
+- `DROP` uses `IF EXISTS`; `ALTER TABLE … ADD COLUMN` uses `IF NOT EXISTS`; `DROP COLUMN`
+  and `DROP CONSTRAINT` use `IF EXISTS`.
+- `ADD CONSTRAINT <name>` (and `ADD PRIMARY KEY`, via `<table>_pkey`) follows
+  `DROP CONSTRAINT IF EXISTS <name>` on the same table, earlier in the file or in the same
+  `ALTER TABLE`. Unnamed constraints are rejected.
+- Nothing is renamed or moved with `SET SCHEMA`.
+- `INSERT` has `ON CONFLICT` or a `NOT EXISTS` guard. `UPDATE` must converge when repeated:
+  the validator rejects stepping a column by a literal (`n = n + 1`, `s = s || 'x'`), and
+  anything else is the author's responsibility.
+- A `DO` block is accepted as written; its body must check the catalog before it changes
+  anything.
+
+Statements of shipped or RC-tagged files that break the rule are never edited. They are
+listed with the file's checksum in `yugabyteRerunGuards`
+(`cli/pkg/provisioner/migrate_rerun_safety.go`) and executed on YugabyteDB under a guard
+with the same effect; the validator rejects a guard whose file changed, whose statement no
+longer matches, or whose statement is already safe.
+
 ## Dry-run safety
 
 Migration dry-runs inspect the live `_migrations` ledgers and report pending files,
@@ -178,19 +207,31 @@ history and runs the same proof as two independently gated jobs whenever release
 migrations, or baseline/provisioner schema code changes: `make verify-schema-migrations-core`
 for PostgreSQL and ClickHouse, and `make verify-schema-yugabyte` for YugabyteDB.
 
-The exhaustive Yugabyte target reconstructs every supported tagged/current database and is
-therefore a release and scheduled-CI proof, not the default inner-loop check for every Go
+The exhaustive Yugabyte target reconstructs every supported tagged/current database, so it
+is a release and shared-harness proof, not the default inner-loop check for every Go
 change. Use `make verify-yugabyte-service SERVICE=<name>` for query or repository changes in
 one of `commodore`, `purser`, `navigator`, `skipper`, `quartermaster`,
 `periscope-metering`, `foghorn`, `lookout`, or `bosun`. Use
 `make verify-yugabyte-database DATABASE=<name>` when that database's baseline, migrations,
 or capability assumptions changed; this runs its tagged/current convergence plus its service
-contracts. The database name for Periscope Metering is `periscope`. Both focused targets use
-one bounded suite-owned Yugabyte process per service batch and a fresh database per mutating
-test. CI follows the same split: shared Yugabyte/schema/harness changes run the exhaustive
-and HA gates, while a service-owned repository change runs only that service's
-real-Yugabyte contracts. Scheduled
-and manually dispatched CI continue to run the exhaustive gates.
+contracts. The database name for Periscope Metering is `periscope`. A focused target runs its
+contract test processes one after another on one single-node engine with a tmpfs data
+directory. The exhaustive target splits its processes into six lanes, each such an engine
+running its processes one after another; `YUGABYTE_CONTRACT_JOBS` lanes (default 2) run at
+once, since a YugabyteDB engine cannot run DDL in one database while another process creates
+or drops a database (see `docs/architecture/database-ha.md`). Beside the lanes it runs the backup
+and restore round trip and the yugabyte role contract (`make verify-yugabyte-role-engine`:
+the role's baseline and migration tasks through `ansible-playbook`, which needs the pinned
+collections from `make ansible-galaxy-install`), each on engines of its own. Service contracts load the
+baseline the release applies (rendered by `cli/internal/yugabytecontractbaselines`) into
+databases created in the declared layout, and, for services whose database is declared
+colocated, also into distributed databases, the shape an existing production database keeps
+until it is relaid out. A test process loads each baseline once and resets it to the
+baseline's rows between tests, loading a new one after a test that changed its catalog. CI
+follows the same split on pull requests and master pushes: shared Yugabyte/schema/harness
+changes run the exhaustive and HA gates, while a service-owned repository change runs only
+that service's real-Yugabyte contracts. A manually dispatched run executes the exhaustive
+gates.
 
 ## Migration prechecks
 
@@ -467,9 +508,12 @@ defines `release`, `database`, `yugabyte_core`, and per-service `yugabyte_*` fil
 covering Ansible database roles, service database packages, baselines, migrations,
 seeds, engine configuration, Compose topology, and the contract harnesses. The schema
 lane runs when `release` or `database` matched; the Yugabyte lane runs the exhaustive
-gates on `yugabyte_core` and only the touched service's contracts otherwise. The
-nightly `schedule` trigger and `workflow_dispatch` force the full lane regardless of
-path detection, so a filter gap is bounded by one day rather than shipped.
+gates on `yugabyte_core` and only the touched service's contracts otherwise. These gates
+run on pull requests and master pushes; there is no scheduled run, so a path a filter
+misses is not exercised until a change that matches runs the gate or someone dispatches
+the workflow manually (`workflow_dispatch` runs the full lane regardless of path
+detection). A new database-relevant path must therefore be added to the filters with the
+change that introduces it.
 
 ### What these contracts are deliberately not
 

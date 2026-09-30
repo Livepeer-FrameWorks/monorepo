@@ -13,7 +13,6 @@ import (
 	"time"
 
 	"frameworks/api_control/internal/placementpolicy"
-	dbsql "github.com/Livepeer-FrameWorks/monorepo/pkg/database/sql"
 	placementpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/media_placement"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/testutil/dockerpg"
 	"google.golang.org/protobuf/proto"
@@ -24,16 +23,9 @@ func TestMediaPlacementRepository_RealPG(t *testing.T) {
 }
 
 func TestMediaPlacementRepository_RealYugabyte(t *testing.T) {
-	db, ok := dockerpg.OpenSharedYugabyteDatabase(t, "commodore_placement")
+	db, ok := dockerpg.OpenSharedYugabyteBaseline(t, "commodore_placement", "commodore")
 	if !ok {
 		t.Skip("requires the shared Yugabyte contract fixture")
-	}
-	baseline, err := dbsql.Content.ReadFile("schema/commodore.sql")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := db.Exec(string(baseline)); err != nil {
-		t.Fatal(err)
 	}
 	testMediaPlacementRepository(t, db)
 }

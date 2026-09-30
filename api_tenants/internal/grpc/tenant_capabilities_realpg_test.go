@@ -11,7 +11,6 @@ import (
 	"time"
 
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/ctxkeys"
-	dbsql "github.com/Livepeer-FrameWorks/monorepo/pkg/database/sql"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	quartermasterpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/quartermaster"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/testutil/dockerpg"
@@ -44,11 +43,12 @@ func TestTenantClusterCapabilities_RealPG(t *testing.T) {
 	if err := dockerpg.WaitReady(db, name); err != nil {
 		t.Fatal(err)
 	}
+	applyQuartermasterBaseline(t, db)
 	verifyTenantClusterCapabilities(t, db)
 }
 
 func TestTenantClusterCapabilities_RealYugabyte(t *testing.T) {
-	db, ok := dockerpg.OpenSharedYugabyteDatabase(t, "quartermaster_capabilities")
+	db, ok := dockerpg.OpenSharedYugabyteBaseline(t, "quartermaster_capabilities", "quartermaster")
 	if !ok {
 		t.Skip("requires shared Yugabyte contract fixture")
 	}
@@ -57,13 +57,6 @@ func TestTenantClusterCapabilities_RealYugabyte(t *testing.T) {
 
 func verifyTenantClusterCapabilities(t *testing.T, db *sql.DB) { //nolint:funlen // One engine fixture proves entitlement parity and every freshness flip.
 	t.Helper()
-	schema, err := dbsql.Content.ReadFile("schema/quartermaster.sql")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := db.Exec(string(schema)); err != nil {
-		t.Fatal(err)
-	}
 
 	const (
 		tenant = "11111111-1111-4111-8111-111111111181"

@@ -8,7 +8,6 @@ import (
 	"testing"
 
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/ctxkeys"
-	dbsql "github.com/Livepeer-FrameWorks/monorepo/pkg/database/sql"
 	placementpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/media_placement"
 	quartermasterpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/quartermaster"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/testutil/dockerpg"
@@ -55,16 +54,9 @@ func TestMediaPlacementOptions_RealPG(t *testing.T) {
 }
 
 func TestMediaPlacementOptions_RealYugabyte(t *testing.T) {
-	db, ok := dockerpg.OpenSharedYugabyteDatabase(t, "commodore_placement_options")
+	db, ok := dockerpg.OpenSharedYugabyteBaseline(t, "commodore_placement_options", "commodore")
 	if !ok {
 		t.Skip("requires the shared Yugabyte contract fixture")
-	}
-	baseline, err := dbsql.Content.ReadFile("schema/commodore.sql")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := db.Exec(string(baseline)); err != nil {
-		t.Fatal(err)
 	}
 	testMediaPlacementOptionsDatabase(t, db)
 }

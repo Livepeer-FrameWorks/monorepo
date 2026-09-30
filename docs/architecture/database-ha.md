@@ -201,6 +201,22 @@ because almost every Skipper table grows with conversations, crawls, or embeddin
   database while the parent stays one tablet, and equal placement for an upgraded and a
   fresh database.
 
+### Shared-catalog DDL disturbs DDL in other databases
+
+`CREATE DATABASE`, `DROP DATABASE`, `ALTER DATABASE … RENAME` and `CREATE ROLE` raise the
+catalog version of every database on the cluster. Measured on the pinned engine
+(2026.1.1.2) with baselines loading into four other databases at the same time:
+`CREATE DATABASE` itself fails with `Keyspace '<name>' already exists` and the loads are
+unaffected; `DROP DATABASE` and `RENAME` abort the concurrent loads with an error; and
+`CREATE ROLE` succeeds while leaving online index builds in the other databases invalid
+without an error (the `CREATE INDEX IF NOT EXISTS` that YSQL retries internally finds the
+aborted index and skips it). `GRANT`/`REVOKE … ON DATABASE`, `COMMENT ON DATABASE` and
+`ALTER DATABASE … CONNECTION LIMIT` had no such effect. Provisioning a database, creating
+a role, or relaying out a database while another database runs a migration is exposed to
+this. For the same reason the Yugabyte contract harness never runs two contract processes on
+one engine at once (processes on an engine run one after another, and only separate engines
+run concurrently), and a process creates its databases before it runs DDL in several of them.
+
 ### DDL aborts DML on colocated siblings
 
 `ALTER TABLE` on any table in a colocated database aborts every open multi-statement
@@ -222,22 +238,33 @@ PostgreSQL and YugabyteDB:
 - Autocommit statements are not replayed by services, because a failure can land after
   commit. YugabyteDB retries them on the server under Read Committed, which
   `yb_enable_read_committed_isolation=true` enables to match PostgreSQL's default.
-- A transactional migration item sets `lock_timeout` and `statement_timeout` after taking
-  the migration advisory lock, and is replayed only when the server cancels it with
-  `canceling statement due to lock timeout`, so on PostgreSQL a blocked `ALTER` never
-  queues live traffic behind it. On YugabyteDB DDL is not transactional by default, so a
-  replay re-runs statements that already took effect; migrations are written to re-run
-  cleanly (`IF NOT EXISTS`, `DROP ... IF EXISTS` before `ADD`). A `.notx.sql` item runs
-  without timeouts, because a concurrent index build waits for older transactions, and is
-  never replayed. An interrupted concurrent build leaves an invalid index that
-  `IF NOT EXISTS` would skip, so a `.notx.sql` item drops the invalid indexes it builds
-  and then rebuilds them. It does so inside the migration advisory lock, and only while
-  the ledger still lacks the item: a build in progress is invalid too, so outside the
+- On PostgreSQL a transactional migration item runs as one transaction: it sets `lock_timeout`
+  and `statement_timeout` after taking the migration advisory lock, and is replayed only when
+  the server cancels it with `canceling statement due to lock timeout`, so a blocked `ALTER`
+  never queues live traffic behind it.
+- On YugabyteDB DDL runs outside transaction blocks (`ysql_yb_ddl_transaction_block_enabled`
+  is off in 2026.1), and a schema change on a colocated database aborts a transaction that
+  already wrote rows with `40001`, so an item is never sent as one transaction. The role's
+  `frameworks.infra.yugabyte_migration_apply` module holds the advisory lock on one
+  autocommit session and runs the item's statements one at a time, each in its own
+  transaction, as the owner; the ledger row is written only after the last statement and,
+  for a `.notx.sql` item, after every guarded index is valid and ready. A transactional item
+  runs each statement under `lock_timeout` 5 s and `statement_timeout` 15 min and replays
+  only that statement on `55P03`, `40001` or `40P01`, up to six times, 10 s apart. On the
+  pinned engine `lock_timeout` does not end a wait for a row lock. A failed or interrupted
+  item keeps the statements it applied and has no ledger row; its rerun executes every
+  statement again. Post-floor migrations must therefore be rerun-safe statement by statement
+  (see Schema Migrations); statements of shipped files that are not are executed under the
+  equivalent guards in `cli/pkg/provisioner/migrate_rerun_safety.go`.
+- A `.notx.sql` item runs without timeouts, because a concurrent index build waits for older
+  transactions, and is never replayed. An interrupted concurrent build leaves an invalid
+  index that `IF NOT EXISTS` would skip, so a `.notx.sql` item drops the invalid indexes it
+  builds and then rebuilds them. It does so inside the migration advisory lock, and only
+  while the ledger still lacks the item: a build in progress is invalid too, so outside the
   lock a second migrator could drop an index the first is still building. A plain
-  `DROP INDEX` takes the table's `ACCESS EXCLUSIVE` lock, so the repair runs between its
-  own 5 s lock timeout and 60 s statement timeout. They are set before the repair,
-  because a statement's timeout is armed when it starts, and reset before the concurrent
-  build that follows.
+  `DROP INDEX` takes the table's `ACCESS EXCLUSIVE` lock, so the repair runs between its own
+  5 s lock timeout and 60 s statement timeout, reset before the concurrent build that
+  follows.
 
 ### Changing Yugabyte nodes one at a time
 

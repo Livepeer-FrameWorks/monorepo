@@ -933,14 +933,7 @@ func startCommodoreQueryCatalogRealPG(t *testing.T) *sql.DB {
 
 func startCommodoreQueryCatalogRealYugabyte(t *testing.T) *sql.DB {
 	t.Helper()
-	if db, ok := dockerpg.OpenSharedYugabyteDatabase(t, "commodore"); ok {
-		schema, err := dbsql.Content.ReadFile("schema/commodore.sql")
-		if err != nil {
-			t.Fatal(err)
-		}
-		if _, err := db.Exec(string(schema)); err != nil {
-			t.Fatal(err)
-		}
+	if db, ok := dockerpg.OpenSharedYugabyteBaseline(t, "commodore", "commodore"); ok {
 		return db
 	}
 	if _, err := exec.LookPath("docker"); err != nil {

@@ -11,7 +11,6 @@ import (
 	"time"
 
 	"frameworks/api_tenants/internal/database/quartermasterdb"
-	dbsql "github.com/Livepeer-FrameWorks/monorepo/pkg/database/sql"
 	quartermasterpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/quartermaster"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/testutil/dockerpg"
 	"github.com/sirupsen/logrus"
@@ -41,11 +40,12 @@ func TestPrivateClusterOwnershipLimitSerializes_RealPG(t *testing.T) {
 	if err := dockerpg.WaitReady(db, name); err != nil {
 		t.Fatal(err)
 	}
+	applyQuartermasterBaseline(t, db)
 	verifyPrivateClusterOwnershipLimitSerializes(t, db)
 }
 
 func TestPrivateClusterOwnershipLimitSerializes_RealYugabyte(t *testing.T) {
-	db, ok := dockerpg.OpenSharedYugabyteDatabase(t, "quartermaster_owned_cluster_limit")
+	db, ok := dockerpg.OpenSharedYugabyteBaseline(t, "quartermaster_owned_cluster_limit", "quartermaster")
 	if !ok {
 		t.Skip("requires shared Yugabyte contract fixture")
 	}
@@ -55,13 +55,6 @@ func TestPrivateClusterOwnershipLimitSerializes_RealYugabyte(t *testing.T) {
 func verifyPrivateClusterOwnershipLimitSerializes(t *testing.T, db *sql.DB) {
 	t.Helper()
 	ctx := context.Background()
-	schema, err := dbsql.Content.ReadFile("schema/quartermaster.sql")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := db.ExecContext(ctx, string(schema)); err != nil {
-		t.Fatal(err)
-	}
 	const (
 		racingTenant  = "11111111-1111-4111-8111-111111111181"
 		holderTenant  = "11111111-1111-4111-8111-111111111182"

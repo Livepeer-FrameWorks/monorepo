@@ -11,7 +11,6 @@ import (
 	"time"
 
 	"frameworks/api_balancing/internal/database/foghorndb"
-	dbsql "github.com/Livepeer-FrameWorks/monorepo/pkg/database/sql"
 	sharedauthority "github.com/Livepeer-FrameWorks/monorepo/pkg/mediaauthority"
 	commodorepb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/commodore"
 	mediaauthoritypb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/media_authority"
@@ -66,16 +65,9 @@ func TestMediaAuthorityRecovery_RealPG(t *testing.T) {
 }
 
 func TestMediaAuthorityRecovery_RealYugabyte(t *testing.T) {
-	db, ok := dockerpg.OpenSharedYugabyteDatabase(t, "foghorn_authority_recovery")
+	db, ok := dockerpg.OpenSharedYugabyteBaseline(t, "foghorn_authority_recovery", "foghorn")
 	if !ok {
 		t.Skip("requires the shared Yugabyte fixture: run make verify-foghorn-db")
-	}
-	schema, err := dbsql.Content.ReadFile("schema/foghorn.sql")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err = db.Exec(string(schema)); err != nil {
-		t.Fatal(err)
 	}
 	testMediaAuthorityRecovery(t, db)
 }

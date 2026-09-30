@@ -292,14 +292,7 @@ func startMeteringQueryCatalogRealPG(t *testing.T) *sql.DB {
 
 func startMeteringQueryCatalogRealYugabyte(t *testing.T) *sql.DB {
 	t.Helper()
-	if db, ok := dockerpg.OpenSharedYugabyteDatabase(t, "periscope_metering"); ok {
-		schema, err := dbsql.Content.ReadFile("schema/periscope.sql")
-		if err != nil {
-			t.Fatal(err)
-		}
-		if _, err := db.Exec(string(schema)); err != nil {
-			t.Fatal(err)
-		}
+	if db, ok := dockerpg.OpenSharedYugabyteBaseline(t, "periscope_metering", "periscope"); ok {
 		return db
 	}
 	if _, err := exec.LookPath("docker"); err != nil {

@@ -1792,14 +1792,7 @@ func startFoghornCatalogPostgres(t *testing.T) *sql.DB {
 
 func startFoghornCatalogYugabyte(t *testing.T) *sql.DB {
 	t.Helper()
-	if db, ok := dockerpg.OpenSharedYugabyteDatabase(t, "foghorn"); ok {
-		schema, err := dbsql.Content.ReadFile("schema/foghorn.sql")
-		if err != nil {
-			t.Fatal(err)
-		}
-		if _, err := db.Exec(string(schema)); err != nil {
-			t.Fatal(err)
-		}
+	if db, ok := dockerpg.OpenSharedYugabyteBaseline(t, "foghorn", "foghorn"); ok {
 		return db
 	}
 	name := fmt.Sprintf("fw-foghorn-catalog-yb-%d", time.Now().UnixNano())

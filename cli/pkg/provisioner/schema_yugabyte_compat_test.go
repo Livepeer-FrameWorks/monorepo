@@ -11,6 +11,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -94,6 +95,26 @@ func ybStart(t *testing.T, name string) string {
 			t.Fatalf("%s did not become ready:\n%s", name, logs)
 		}
 		time.Sleep(time.Second)
+	}
+}
+
+// ybEnsureLoginRole creates a login role with no privileges beyond LOGIN unless it exists, and fails when an existing
+// role of that name, created by a contract that ran earlier on the same engine, holds more: superuser, CREATEDB,
+// CREATEROLE, REPLICATION, BYPASSRLS, or membership in another role.
+func ybEnsureLoginRole(t *testing.T, name, role string) {
+	t.Helper()
+	statement := fmt.Sprintf(`DO $$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = %s) THEN CREATE ROLE %s LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS; END IF;
+END $$;`, relayoutLiteral(role), relayoutIdentifier(role))
+	if out, err := docker(t, "", "exec", name, "ysqlsh", "-h", ybSQLHost(name), "-U", "yugabyte", "-d", "yugabyte", "-v", "ON_ERROR_STOP=1", "-c", statement); err != nil {
+		t.Fatalf("create Yugabyte role %s: %v\n%s", role, err, out)
+	}
+	attributes := ybQuery(t, name, "yugabyte", fmt.Sprintf(`SELECT concat_ws(',', rolcanlogin, rolsuper, rolcreatedb, rolcreaterole, rolreplication, rolbypassrls,
+       (SELECT count(*) FROM pg_auth_members m WHERE m.member = r.oid))
+FROM pg_roles r WHERE rolname = %s`, relayoutLiteral(role)))
+	if attributes != "t,f,f,f,f,f,0" {
+		t.Fatalf("Yugabyte role %s has login,superuser,createdb,createrole,replication,bypassrls,memberships = %s, want t,f,f,f,f,f,0", role, attributes)
 	}
 }
 
@@ -371,50 +392,136 @@ func ybVerifyTaggedMigrationPaths(t *testing.T) {
 	name := ybStart(t, fmt.Sprintf("fw-sv-yb-upgrades-%d", time.Now().UnixNano()))
 	// Existing clusters keep distributed databases until they are relaid out, and new ones get the declared layout, so
 	// the upgrade path is proven in both shapes. Both receive the layout-rewritten SQL the yugabyte role applies.
+	//
+	// Every database is created before any baseline is applied, and the databases are then built at the same time: on
+	// YugabyteDB a CREATE DATABASE fails while another database runs DDL (docs/architecture/database-ha.md).
+	type taggedRun struct {
+		service, shape, upgradeDatabase string
+		layout                          *DatabaseLayout
+		current                         ybCurrentBaseline
+		upgraded                        string
+		applied                         int
+	}
+	var runs []*taggedRun
 	for _, service := range services {
 		for _, shape := range []string{"declared", "distributed"} {
-			t.Run(service+"/"+shape, func(t *testing.T) {
-				upgradeDatabase := service + "_upgrade_" + shape
-				currentDatabase := service + "_current_" + shape
-				layout := ybDatabaseLayout(t, service)
-				create := func(database string) {
-					if shape == "declared" {
-						ybCreateDatabase(t, name, database, layout)
-					} else {
-						ybCreateDatabase(t, name, database, &DatabaseLayout{Database: service, Layout: DatabaseLayoutDistributed})
-					}
-					t.Cleanup(func() { ybDropDatabase(t, name, database) })
-				}
-				create(upgradeDatabase)
-				create(currentDatabase)
-				ybApply(t, name, upgradeDatabase, ybLayoutSQL(t, layout, baselineAtTagOrRelease(t, fromTag, "schema/"+service+".sql", postTag)))
-
-				applied := 0
-				for _, migration := range postTag {
-					if migration.Database == service {
-						ybApply(t, name, upgradeDatabase, ybLayoutSQL(t, layout, migration.content))
-						applied++
-					}
-				}
-				currentBaseline, readErr := dbsql.Content.ReadFile("schema/" + service + ".sql")
-				if readErr != nil {
-					t.Fatalf("read current %s baseline: %v", service, readErr)
-				}
-				ybApply(t, name, currentDatabase, ybLayoutSQL(t, layout, string(currentBaseline)))
-				ybRequireAllIndexesValid(t, name, upgradeDatabase)
-				ybRequireAllIndexesValid(t, name, currentDatabase)
-				if shape == "declared" {
-					// Contract migrations drop relations whose tablets are removed asynchronously, so the upgraded database
-					// is checked for placement only.
-					ybRequireDeclaredPlacement(t, name, upgradeDatabase, layout, false)
-					ybRequireDeclaredPlacement(t, name, currentDatabase, layout, true)
-				}
-				requirePGSchemasEqual(t, "yugabyte "+service+" "+shape+" tagged upgrade vs current baseline",
-					ybIntrospect(t, name, currentDatabase), ybIntrospect(t, name, upgradeDatabase))
-				t.Logf("yugabyte: upgraded %s %s baseline with %d migration(s) (%s)", service, fromTag, applied, shape)
-			})
+			run := &taggedRun{service: service, shape: shape, upgradeDatabase: service + "_upgrade_" + shape, layout: ybDatabaseLayout(t, service)}
+			ybCreateDatabase(t, name, run.upgradeDatabase, ybShapeLayout(run.layout, shape))
+			t.Cleanup(func() { ybDropDatabase(t, name, run.upgradeDatabase) })
+			run.current = ybCreateCurrentBaseline(t, name, service, shape)
+			runs = append(runs, run)
 		}
 	}
+	if !t.Run("build", func(t *testing.T) {
+		for _, run := range runs {
+			t.Run(run.service+"/"+run.shape+"/upgrade", func(t *testing.T) {
+				t.Parallel()
+				ybApply(t, name, run.upgradeDatabase, ybLayoutSQL(t, run.layout, baselineAtTagOrRelease(t, fromTag, "schema/"+run.service+".sql", postTag)))
+				for _, migration := range postTag {
+					if migration.Database == run.service {
+						ybApply(t, name, run.upgradeDatabase, ybLayoutSQL(t, run.layout, migration.content))
+						run.applied++
+					}
+				}
+				ybRequireAllIndexesValid(t, name, run.upgradeDatabase)
+				if run.shape == "declared" {
+					// Contract migrations drop relations whose tablets are removed asynchronously, so the upgraded
+					// database is checked for placement only.
+					ybRequireDeclaredPlacement(t, name, run.upgradeDatabase, run.layout, false)
+				}
+				run.upgraded = ybIntrospect(t, name, run.upgradeDatabase)
+			})
+			t.Run(run.service+"/"+run.shape+"/current", func(t *testing.T) {
+				t.Parallel()
+				run.current = ybLoadCurrentBaseline(t, name, run.current)
+			})
+		}
+	}) {
+		return
+	}
+	for _, run := range runs {
+		t.Run(run.service+"/"+run.shape, func(t *testing.T) {
+			requirePGSchemasEqual(t, "yugabyte "+run.service+" "+run.shape+" tagged upgrade vs current baseline", run.current.introspection, run.upgraded)
+			t.Logf("yugabyte: upgraded %s %s baseline with %d migration(s) (%s)", run.service, fromTag, run.applied, run.shape)
+		})
+	}
+}
+
+// ybCurrentBaseline is a database holding a service's current baseline and, once loaded, the schema introspection
+// taken right after the baseline was applied.
+type ybCurrentBaseline struct {
+	service, shape string
+	database       string
+	introspection  string
+}
+
+// ybCurrentBaselines holds the current-baseline databases this test process created, by engine, service, and shape,
+// so the tagged upgrade contract and the capability contract read one database instead of loading two.
+var ybCurrentBaselines sync.Map
+
+// ybCurrentBaselineState is one created current-baseline database: loaded once its load finished, or the test whose
+// load failed.
+type ybCurrentBaselineState struct {
+	current  ybCurrentBaseline
+	failedIn string
+}
+
+func ybCurrentBaselineKey(name, service, shape string) string {
+	return name + "/" + service + "/" + shape
+}
+
+func ybShapeLayout(layout *DatabaseLayout, shape string) *DatabaseLayout {
+	if shape == "declared" {
+		return layout
+	}
+	return &DatabaseLayout{Database: layout.Database, Layout: DatabaseLayoutDistributed}
+}
+
+// ybCreateCurrentBaseline creates <service>_current_<shape>, in the service's declared layout or distributed, unless
+// this process already loaded it on this engine.
+func ybCreateCurrentBaseline(t *testing.T, name, service, shape string) ybCurrentBaseline {
+	t.Helper()
+	if existing, ok := ybCurrentBaselines.Load(ybCurrentBaselineKey(name, service, shape)); ok {
+		state := existing.(*ybCurrentBaselineState)
+		if state.failedIn != "" {
+			t.Fatalf("the %s %s current baseline failed to load in %s; its error is reported there", service, shape, state.failedIn)
+		}
+		return state.current
+	}
+	current := ybCurrentBaseline{service: service, shape: shape, database: service + "_current_" + shape}
+	ybCreateDatabase(t, name, current.database, ybShapeLayout(ybDatabaseLayout(t, service), shape))
+	ybCurrentBaselines.Store(ybCurrentBaselineKey(name, service, shape), &ybCurrentBaselineState{current: current})
+	return current
+}
+
+// ybLoadCurrentBaseline applies the current baseline with the service's layout, as the yugabyte role applies it, then
+// requires valid indexes and, in the declared shape, the layout's placement and tablet count, and records the schema
+// introspection before any contract changes the database.
+func ybLoadCurrentBaseline(t *testing.T, name string, current ybCurrentBaseline) ybCurrentBaseline {
+	t.Helper()
+	if current.introspection != "" {
+		return current
+	}
+	loaded := false
+	defer func() {
+		if !loaded {
+			ybCurrentBaselines.Store(ybCurrentBaselineKey(name, current.service, current.shape), &ybCurrentBaselineState{current: current, failedIn: t.Name()})
+		}
+	}()
+	layout := ybDatabaseLayout(t, current.service)
+	baseline, err := dbsql.Content.ReadFile("schema/" + current.service + ".sql")
+	if err != nil {
+		t.Fatalf("read current %s baseline: %v", current.service, err)
+	}
+	ybApply(t, name, current.database, ybLayoutSQL(t, layout, string(baseline)))
+	ybRequireAllIndexesValid(t, name, current.database)
+	if current.shape == "declared" {
+		ybRequireDeclaredPlacement(t, name, current.database, layout, true)
+	}
+	current.introspection = ybIntrospect(t, name, current.database)
+	ybCurrentBaselines.Store(ybCurrentBaselineKey(name, current.service, current.shape), &ybCurrentBaselineState{current: current})
+	loaded = true
+	return current
 }
 
 func TestYugabyteTaggedMigrationPaths(t *testing.T) {
@@ -472,58 +579,50 @@ func TestYugabyteCurrentBaselinesAndCapabilities(t *testing.T) {
 	name = ybStart(t, name)
 
 	services, _ := yugabyteServiceDatabases(t)
-	selected := make(map[string]struct{}, len(services))
+	// selected maps each selected service database to the Yugabyte database holding its current declared baseline.
+	selected := make(map[string]string, len(services))
 	splitProven := false
 	for _, service := range services {
-		selected[service] = struct{}{}
 		layout := ybDatabaseLayout(t, service)
-		ybCreateDatabase(t, name, service, layout)
-		path := "schema/" + service + ".sql"
-		schemaSQL, err := dbsql.Content.ReadFile(path)
-		if err != nil {
-			t.Fatalf("read %s: %v", path, err)
-		}
-		ybApply(t, name, service, ybLayoutSQL(t, layout, string(schemaSQL)))
-		ybRequireAllIndexesValid(t, name, service)
-		ybRequireDeclaredPlacement(t, name, service, layout, true)
+		database := ybLoadCurrentBaseline(t, name, ybCreateCurrentBaseline(t, name, service, "declared")).database
+		selected[service] = database
 		if layout.Colocated() && !splitProven {
-			ybRequireDistributedTableSplits(t, name, service)
+			ybRequireDistributedTableSplits(t, name, database)
 			splitProven = true
 		}
 		runtimeRole := service + "_runtime"
-		if out, createErr := docker(t, "", "exec", name, "ysqlsh", "-h", ybSQLHost(name), "-U", "yugabyte", "-d", "yugabyte", "-v", "ON_ERROR_STOP=1", "-c", "CREATE ROLE "+runtimeRole+" LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION"); createErr != nil {
-			t.Fatalf("create Yugabyte runtime role %s: %v\n%s", runtimeRole, createErr, out)
-		}
-		ybGrantRuntimeRole(t, name, service, service, runtimeRole)
+		ybEnsureLoginRole(t, name, runtimeRole)
+		ybGrantRuntimeRole(t, name, database, service, runtimeRole)
 	}
 	for _, binary := range pkgdatabase.CapabilityServices() {
 		databaseName, ownsDatabase := releases.ServiceDatabaseLookup(binary)
 		if !ownsDatabase || strings.TrimSpace(databaseName) == "" {
 			t.Fatalf("PostgreSQL capability service %q has no catalogued Yugabyte database", binary)
 		}
-		if _, ok := selected[databaseName]; !ok {
+		database, ok := selected[databaseName]
+		if !ok {
 			continue
 		}
 		for _, capability := range pkgdatabase.CapabilitiesFor(binary, pkgdatabase.EnginePostgres) {
-			ybApply(t, name, databaseName, fmt.Sprintf("SET ROLE %s_runtime; %s; RESET ROLE;", databaseName, capability.Probe))
+			ybApply(t, name, database, fmt.Sprintf("SET ROLE %s_runtime; %s; RESET ROLE;", databaseName, capability.Probe))
 		}
 	}
-	if _, ok := selected["purser"]; ok {
-		if out, ddlErr := docker(t, "", "exec", name, "ysqlsh", "-h", ybSQLHost(name), "-U", "yugabyte", "-d", "purser", "-v", "ON_ERROR_STOP=1", "-c", "SET ROLE purser_runtime; CREATE TABLE purser.runtime_role_must_not_create (id integer)"); ddlErr == nil {
+	if purser, ok := selected["purser"]; ok {
+		if out, ddlErr := docker(t, "", "exec", name, "ysqlsh", "-h", ybSQLHost(name), "-U", "yugabyte", "-d", purser, "-v", "ON_ERROR_STOP=1", "-c", "SET ROLE purser_runtime; CREATE TABLE purser.runtime_role_must_not_create (id integer)"); ddlErr == nil {
 			t.Fatalf("Yugabyte runtime role unexpectedly created a table: %s", out)
 		}
 		purserSeed, err := dbsql.Content.ReadFile(demoSeeds["purser"])
 		if err != nil {
 			t.Fatalf("read Purser demo seed: %v", err)
 		}
-		ybApply(t, name, "purser", string(purserSeed))
-		ybApply(t, name, "purser", string(purserSeed))
+		ybApply(t, name, purser, string(purserSeed))
+		ybApply(t, name, purser, string(purserSeed))
 	}
 	// These statements represent concrete runtime assumptions not proven by
 	// merely accepting DDL: JSONB null normalization, conflict inference,
 	// transactional advisory locks, and work-queue row locking.
-	if _, ok := selected["purser"]; ok {
-		ybApply(t, name, "purser", `
+	if purser, ok := selected["purser"]; ok {
+		ybApply(t, name, purser, `
 BEGIN;
 SELECT pg_advisory_xact_lock(8675309);
 SELECT COALESCE(NULL::jsonb, '{}'::jsonb);
@@ -532,8 +631,8 @@ FOR UPDATE SKIP LOCKED;
 ROLLBACK;
 `)
 	}
-	if _, ok := selected["commodore"]; ok {
-		ybApply(t, name, "commodore", `
+	if commodore, ok := selected["commodore"]; ok {
+		ybApply(t, name, commodore, `
 BEGIN;
 SELECT pg_advisory_xact_lock(hashtext('tenant-contract'), hashtext('stream-contract'));
 ROLLBACK;

@@ -37,21 +37,30 @@ func (l makeRecipeLine) activeFor(vars map[string]string) bool {
 }
 
 var (
-	makeRuleLine          = regexp.MustCompile(`^([A-Za-z0-9_.-]+):(?:[^=]|$)(.*)$`)
-	makeConditionalLine   = regexp.MustCompile(`^(ifeq|ifneq|ifdef|ifndef|else|endif)\b`)
-	makeIfeqVariable      = regexp.MustCompile(`ifeq \(\$\(([A-Z_]+)\),([^)]*)\)$`)
-	makeSubInvocation     = regexp.MustCompile(`\$\(MAKE\)((?:\s+\S+)+)`)
-	contractProfileEmit   = regexp.MustCompile(`\$\(CONTRACT_GO_TEST\)\s+\S+\s+(postgres|clickhouse|valkey|yugabyte)/([a-z0-9-]+)\s`)
-	schemaCoverageLiteral = regexp.MustCompile(`YUGABYTE_SCHEMA_COVERAGE_NAME=(schema-[a-z0-9-]+)`)
-	ciMakeCommand         = regexp.MustCompile(`(?m)^\s+run: make ([a-z0-9-]+)((?:[ \t]+[A-Z_]+=[a-z0-9-]+)*)[ \t]*$`)
+	makeRuleLine        = regexp.MustCompile(`^([A-Za-z0-9_.%-]+):(?:[^=]|$)(.*)$`)
+	makeSimpleVariable  = regexp.MustCompile(`^([A-Z0-9_]+) := (.*)$`)
+	makeConditionalLine = regexp.MustCompile(`^(ifeq|ifneq|ifdef|ifndef|else|endif)\b`)
+	makeIfeqVariable    = regexp.MustCompile(`ifeq \(\$\(([A-Z_]+)\),([^)]*)\)$`)
+	makeSubInvocation   = regexp.MustCompile(`\$\(MAKE\)((?:\s+\S+)+)`)
+	contractProfileEmit = regexp.MustCompile(`\$\(CONTRACT_GO_TEST\)\s+\S+\s+(postgres|clickhouse|valkey|yugabyte)/([a-z0-9-]+)\s`)
+	ciMakeCommand       = regexp.MustCompile(`(?m)^\s+run: make ([a-z0-9-]+)((?:[ \t]+[A-Z_]+=[a-z0-9-]+)*)[ \t]*$`)
+	// schemaUnitTarget names one Yugabyte schema contract group for one database; the verify-schema-yugabyte-unit-%
+	// pattern rule runs it.
+	schemaUnitTarget = regexp.MustCompile(`^verify-schema-yugabyte-unit-([a-z]+)-(compat|completion|preflight)$`)
 )
 
+// parseMakeTargets reads every rule, including pattern rules. A prerequisite that names a simple (:=) variable defined
+// earlier with a plain word list is expanded to those words.
 func parseMakeTargets(makefile string) map[string]*makeTarget {
 	targets := map[string]*makeTarget{}
+	variables := map[string]string{}
 	var current *makeTarget
 	// Each frame holds one if/else chain: the conditions of its current branch.
 	var frames [][]makeCondition
 	for _, line := range strings.Split(makefile, "\n") {
+		if match := makeSimpleVariable.FindStringSubmatch(line); match != nil && !strings.Contains(match[2], "$") {
+			variables[match[1]] = match[2]
+		}
 		switch {
 		case strings.HasPrefix(line, "\t"):
 			if current != nil {
@@ -76,7 +85,15 @@ func parseMakeTargets(makefile string) map[string]*makeTarget {
 			target = &makeTarget{}
 			targets[match[1]] = target
 		}
-		target.prereqs = append(target.prereqs, strings.Fields(strings.TrimPrefix(line, match[1]+":"))...)
+		for _, prereq := range strings.Fields(strings.TrimPrefix(line, match[1]+":")) {
+			if name, ok := strings.CutPrefix(prereq, "$("); ok {
+				if value, known := variables[strings.TrimSuffix(name, ")")]; known {
+					target.prereqs = append(target.prereqs, strings.Fields(value)...)
+					continue
+				}
+			}
+			target.prereqs = append(target.prereqs, prereq)
+		}
 		current = target
 	}
 	return targets
@@ -118,8 +135,23 @@ func applyMakeConditional(frames [][]makeCondition, line string) [][]makeConditi
 	return frames
 }
 
+// resolveMakeTarget returns the rule for name: its explicit rule, or else the pattern rule whose % matches it.
+func resolveMakeTarget(targets map[string]*makeTarget, name string) (*makeTarget, bool) {
+	if target, ok := targets[name]; ok {
+		return target, true
+	}
+	for pattern, target := range targets {
+		prefix, suffix, isPattern := strings.Cut(pattern, "%")
+		if isPattern && len(name) > len(prefix)+len(suffix) && strings.HasPrefix(name, prefix) && strings.HasSuffix(name, suffix) {
+			return target, true
+		}
+	}
+	return nil, false
+}
+
 // reachableMakeTargets follows prerequisites and $(MAKE) sub-invocations from root. vars substitutes $(NAME)
-// references in sub-invocation target names; a name that still holds a variable afterwards is not followed.
+// references in sub-invocation target names; a name that still holds a variable afterwards is not followed, and
+// neither is a prerequisite that names a variable parseMakeTargets could not expand.
 func reachableMakeTargets(t *testing.T, targets map[string]*makeTarget, root string, vars map[string]string) map[string]bool {
 	t.Helper()
 	seen := map[string]bool{}
@@ -127,10 +159,10 @@ func reachableMakeTargets(t *testing.T, targets map[string]*makeTarget, root str
 	for len(queue) > 0 {
 		name := queue[0]
 		queue = queue[1:]
-		if seen[name] {
+		if seen[name] || strings.Contains(name, "$") {
 			continue
 		}
-		target, ok := targets[name]
+		target, ok := resolveMakeTarget(targets, name)
 		if !ok {
 			t.Errorf("Makefile target %q (reached from %q) not found", name, root)
 			continue
@@ -161,30 +193,27 @@ func reachableMakeTargets(t *testing.T, targets map[string]*makeTarget, root str
 }
 
 // emittedContractProfiles lists "<engine>/<profile>" coverage paths the reached targets write through
-// run-go-contract-test.sh.
-func emittedContractProfiles(makefile string, targets map[string]*makeTarget, reached map[string]bool) map[string]bool {
+// run-go-contract-test.sh. A schema unit target writes yugabyte/schema-<database> for its compat group and
+// yugabyte/schema-<database>-<group> otherwise, when its pattern rule assigns that coverage name.
+func emittedContractProfiles(targets map[string]*makeTarget, reached map[string]bool) map[string]bool {
 	profiles := map[string]bool{}
 	for name := range reached {
-		var schemaShards, groupedSchemaShards bool
-		for _, recipeLine := range targets[name].recipe {
-			line := recipeLine.text
-			for _, match := range contractProfileEmit.FindAllStringSubmatch(line, -1) {
+		target, _ := resolveMakeTarget(targets, name)
+		recipe := ""
+		for _, recipeLine := range target.recipe {
+			recipe += recipeLine.text + "\n"
+			for _, match := range contractProfileEmit.FindAllStringSubmatch(recipeLine.text, -1) {
 				profiles[match[1]+"/"+match[2]] = true
 			}
-			for _, match := range schemaCoverageLiteral.FindAllStringSubmatch(line, -1) {
-				profiles["yugabyte/"+match[1]] = true
-			}
-			schemaShards = schemaShards || strings.Contains(line, `coverage_name="schema-$$database"`)
-			groupedSchemaShards = groupedSchemaShards || strings.Contains(line, "for group in compat completion preflight; do")
 		}
-		if schemaShards {
-			for _, database := range makeVariableWords(makefile, "YUGABYTE_SCHEMA_DATABASES") {
-				profile := "yugabyte/schema-" + database
+		if unit := schemaUnitTarget.FindStringSubmatch(name); unit != nil {
+			database, group := unit[1], unit[2]
+			assignment, profile := `coverage="schema-$$database"`, "yugabyte/schema-"+database
+			if group != "compat" {
+				assignment, profile = `coverage="schema-$$database-`+group+`"`, profile+"-"+group
+			}
+			if strings.Contains(recipe, group+") ") && strings.Contains(recipe, assignment) {
 				profiles[profile] = true
-				if groupedSchemaShards {
-					profiles[profile+"-completion"] = true
-					profiles[profile+"-preflight"] = true
-				}
 			}
 		}
 	}
@@ -233,7 +262,7 @@ func ciContractProfiles(t *testing.T, makefile, job string) map[string]bool {
 			reached[name] = true
 		}
 	}
-	return emittedContractProfiles(makefile, targets, reached)
+	return emittedContractProfiles(targets, reached)
 }
 
 func sortedKeys(set map[string]bool) []string {

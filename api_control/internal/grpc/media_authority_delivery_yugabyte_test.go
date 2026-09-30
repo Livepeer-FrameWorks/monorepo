@@ -9,25 +9,14 @@ import (
 	"testing"
 	"time"
 
-	dbsql "github.com/Livepeer-FrameWorks/monorepo/pkg/database/sql"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/testutil/dockerpg"
 )
 
 func startPlacementDeliveryYugabyte(t *testing.T, prefix string) *sql.DB {
 	t.Helper()
-	db, ok := dockerpg.OpenSharedYugabyteDatabase(t, prefix)
+	db, ok := dockerpg.OpenSharedYugabyteBaseline(t, prefix, "commodore")
 	if !ok {
 		t.Skip("requires make verify-placement-yugabyte-db")
-	}
-	baseline, err := dbsql.Content.ReadFile("schema/commodore.sql")
-	if err != nil {
-		t.Fatal(err)
-	}
-	// Setup, not the contract under test: distributed DDL cost grows with the
-	// schema and with engine load, so the package -timeout bounds it instead of
-	// a per-test deadline.
-	if _, err := db.Exec(string(baseline)); err != nil {
-		t.Fatal(err)
 	}
 	return db
 }

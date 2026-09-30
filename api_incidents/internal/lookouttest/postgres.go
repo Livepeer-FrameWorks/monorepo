@@ -54,8 +54,7 @@ func StartPostgres(t *testing.T) *sql.DB {
 // image for this test. The Lookout baseline is applied either way.
 func StartYugabyte(t *testing.T) *sql.DB {
 	t.Helper()
-	if db, ok := dockerpg.OpenSharedYugabyteDatabase(t, "lookout"); ok {
-		applyBaseline(t, db)
+	if db, ok := dockerpg.OpenSharedYugabyteBaseline(t, "lookout", "lookout"); ok {
 		return db
 	}
 	if _, err := exec.LookPath("docker"); err != nil {

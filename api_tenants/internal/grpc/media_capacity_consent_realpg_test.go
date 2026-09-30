@@ -45,18 +45,20 @@ func TestCapacityConsentManagement_RealPG(t *testing.T) {
 	if err := dockerpg.WaitReady(db, name); err != nil {
 		t.Fatal(err)
 	}
+	applyQuartermasterBaseline(t, db)
 	verifyCapacityConsentManagement(t, db)
 }
 
 func TestCapacityConsentManagement_RealYugabyte(t *testing.T) {
-	db, ok := dockerpg.OpenSharedYugabyteDatabase(t, "quartermaster_consent_management")
+	db, ok := dockerpg.OpenSharedYugabyteBaseline(t, "quartermaster_consent_management", "quartermaster")
 	if !ok {
 		t.Skip("requires shared Yugabyte contract fixture")
 	}
 	verifyCapacityConsentManagement(t, db)
 }
 
-func verifyCapacityConsentManagement(t *testing.T, db *sql.DB) {
+// applyQuartermasterBaseline loads the Quartermaster baseline into a fresh PostgreSQL database.
+func applyQuartermasterBaseline(t *testing.T, db *sql.DB) {
 	t.Helper()
 	schema, err := dbsql.Content.ReadFile("schema/quartermaster.sql")
 	if err != nil {
@@ -65,6 +67,10 @@ func verifyCapacityConsentManagement(t *testing.T, db *sql.DB) {
 	if _, err := db.Exec(string(schema)); err != nil {
 		t.Fatal(err)
 	}
+}
+
+func verifyCapacityConsentManagement(t *testing.T, db *sql.DB) {
+	t.Helper()
 	const tenant = "11111111-1111-4111-8111-111111111171"
 	const other = "11111111-1111-4111-8111-111111111172"
 	ctx := consentActor(tenant, "actor-owner", "owner")

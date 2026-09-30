@@ -63,7 +63,7 @@ func startPostgres(t *testing.T) *sql.DB {
 // production driver configuration with bosun.sql applied.
 func startYugabyte(t *testing.T) *sql.DB {
 	t.Helper()
-	if fixture, ok := dockerpg.OpenSharedYugabyteDatabase(t, "bosun"); ok {
+	if fixture, ok := dockerpg.OpenSharedYugabyteBaseline(t, "bosun", "bosun"); ok {
 		var name string
 		if err := fixture.QueryRow(`SELECT current_database()`).Scan(&name); err != nil {
 			t.Fatal(err)
@@ -73,7 +73,7 @@ func startYugabyte(t *testing.T) *sql.DB {
 			t.Fatal(err)
 		}
 		dsn.Path = "/" + name
-		return connectWithBaseline(t, dsn.String(), os.Getenv(dockerpg.SharedYugabyteContainerEnv), 90*time.Second)
+		return connect(t, dsn.String(), os.Getenv(dockerpg.SharedYugabyteContainerEnv), 90*time.Second)
 	}
 	if _, err := exec.LookPath("docker"); err != nil {
 		t.Skip("docker not available")
@@ -98,6 +98,20 @@ func startYugabyte(t *testing.T) *sql.DB {
 // main.go uses, and applies bosun.sql.
 func connectWithBaseline(t *testing.T, dsn, container string, budget time.Duration) *sql.DB {
 	t.Helper()
+	db := connect(t, dsn, container, budget)
+	schema, err := dbsql.Content.ReadFile("schema/bosun.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.ExecContext(context.Background(), string(schema)); err != nil {
+		t.Fatalf("apply bosun baseline: %v", err)
+	}
+	return db
+}
+
+// connect connects through database.Connect, the configuration main.go uses.
+func connect(t *testing.T, dsn, container string, budget time.Duration) *sql.DB {
+	t.Helper()
 	cfg := database.DefaultConfig()
 	cfg.URL = dsn
 	var db *sql.DB
@@ -116,13 +130,6 @@ func connectWithBaseline(t *testing.T, dsn, container string, budget time.Durati
 	t.Cleanup(func() { _ = db.Close() })
 	if err := dockerpg.WaitReadyFor(db, container, budget); err != nil {
 		t.Fatal(err)
-	}
-	schema, err := dbsql.Content.ReadFile("schema/bosun.sql")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := db.Exec(string(schema)); err != nil {
-		t.Fatalf("apply bosun baseline: %v", err)
 	}
 	return db
 }
