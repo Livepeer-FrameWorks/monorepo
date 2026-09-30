@@ -15,6 +15,7 @@ import (
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/connectivity"
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/timestamppb"
@@ -57,6 +58,13 @@ type GRPCConfig struct {
 	CACertFile         string
 	CACertPEM          string
 	ServerName         string
+	// ReadyTimeout bounds how long one RPC waits for the channel to reach
+	// READY before failing with codes.Unavailable, separately from Timeout,
+	// which bounds the whole call. Zero waits for readiness up to Timeout.
+	ReadyTimeout time.Duration
+	// SlowCallThreshold logs a Warn for every RPC that takes longer than this
+	// or ends in DeadlineExceeded or Unavailable. Zero disables the log.
+	SlowCallThreshold time.Duration
 }
 
 // periscopeTimeoutInterceptor bounds WaitForReady calls even when a shared
@@ -72,6 +80,81 @@ func periscopeTimeoutInterceptor(timeout time.Duration) grpc.UnaryClientIntercep
 		boundedCtx, cancel := context.WithTimeout(ctx, timeout)
 		defer cancel()
 		return invoker(boundedCtx, method, req, reply, cc, opts...)
+	}
+}
+
+// periscopeReadyInterceptor fails an RPC with codes.Unavailable when the
+// channel does not reach READY within readyTimeout. The default call option
+// WaitForReady(true) otherwise holds the RPC in the channel for as long as its
+// deadline allows while no replica is connected and SERVING. It runs outside
+// the failsafe interceptor so one call spends at most one ready wait instead
+// of one per retry attempt.
+func periscopeReadyInterceptor(readyTimeout time.Duration) grpc.UnaryClientInterceptor {
+	return func(ctx context.Context, method string, req, reply interface{}, cc *grpc.ClientConn, invoker grpc.UnaryInvoker, opts ...grpc.CallOption) error {
+		if readyTimeout > 0 && cc != nil {
+			if err := waitChannelReady(ctx, cc, readyTimeout); err != nil {
+				return err
+			}
+		}
+		return invoker(ctx, method, req, reply, cc, opts...)
+	}
+}
+
+func waitChannelReady(ctx context.Context, cc *grpc.ClientConn, readyTimeout time.Duration) error {
+	state := cc.GetState()
+	if state == connectivity.Ready {
+		return nil
+	}
+	waitCtx, cancel := context.WithTimeout(ctx, readyTimeout)
+	defer cancel()
+	// An IDLE channel only starts connecting on Connect or on an RPC.
+	cc.Connect()
+	for state != connectivity.Ready {
+		if state == connectivity.Shutdown {
+			return status.Error(codes.Unavailable, "periscope channel is shut down")
+		}
+		if !cc.WaitForStateChange(waitCtx, state) {
+			if err := ctx.Err(); err != nil {
+				return status.FromContextError(err).Err()
+			}
+			return status.Errorf(codes.Unavailable, "periscope channel not ready after %s (state %s)", readyTimeout, state)
+		}
+		state = cc.GetState()
+	}
+	return nil
+}
+
+// periscopeSlowCallInterceptor logs RPCs that exceed threshold or end in
+// DeadlineExceeded/Unavailable, with the channel state at completion, so a
+// call stuck waiting on a not-ready channel is distinguishable from a slow
+// Periscope query.
+func periscopeSlowCallInterceptor(logger logging.Logger, threshold time.Duration) grpc.UnaryClientInterceptor {
+	return func(ctx context.Context, method string, req, reply interface{}, cc *grpc.ClientConn, invoker grpc.UnaryInvoker, opts ...grpc.CallOption) error {
+		if logger == nil || threshold <= 0 {
+			return invoker(ctx, method, req, reply, cc, opts...)
+		}
+		start := time.Now()
+		err := invoker(ctx, method, req, reply, cc, opts...)
+		elapsed := time.Since(start)
+		code := status.Code(err)
+		if elapsed <= threshold && code != codes.DeadlineExceeded && code != codes.Unavailable {
+			return err
+		}
+		channelState := "unknown"
+		if cc != nil {
+			channelState = cc.GetState().String()
+		}
+		fields := logging.Fields{
+			"method":        method,
+			"elapsed_ms":    elapsed.Milliseconds(),
+			"channel_state": channelState,
+			"code":          code.String(),
+		}
+		if err != nil {
+			fields["error"] = err.Error()
+		}
+		logger.WithFields(fields).Warn("Slow or failed Periscope RPC")
+		return err
 	}
 }
 
@@ -172,8 +255,13 @@ func NewGRPCClient(config GRPCConfig) (*GRPCClient, error) {
 	opts = append(opts,
 		transport,
 		grpc.WithDefaultCallOptions(grpc.WaitForReady(true)),
+		// The channel stays connected between RPCs so a request after a quiet
+		// period does not pay the reconnect and health-check round trip.
+		grpc.WithIdleTimeout(0),
 		grpc.WithChainUnaryInterceptor(
+			periscopeSlowCallInterceptor(config.Logger, config.SlowCallThreshold),
 			periscopeTimeoutInterceptor(config.Timeout),
+			periscopeReadyInterceptor(config.ReadyTimeout),
 			clients.FailsafeUnaryInterceptor("periscope", config.Logger),
 			authInterceptor(config.ServiceToken, config.DelegatedJWTSecret),
 		),
@@ -182,6 +270,7 @@ func NewGRPCClient(config GRPCConfig) (*GRPCClient, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to connect to Periscope gRPC: %w", err)
 	}
+	conn.Connect()
 
 	return &GRPCClient{
 		conn:         conn,

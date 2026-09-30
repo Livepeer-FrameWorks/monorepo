@@ -73,6 +73,15 @@ type Config struct {
 	Region    string
 }
 
+// Every Bridge Periscope RPC serves a user request. A channel with no
+// connected, SERVING replica fails the call after PeriscopeReadyTimeout
+// instead of holding it for the full call Timeout, and calls slower than
+// PeriscopeSlowCallThreshold are logged with the channel state.
+const (
+	PeriscopeReadyTimeout      = 3 * time.Second
+	PeriscopeSlowCallThreshold = time.Second
+)
+
 // NewServiceClients creates and initializes all downstream service gRPC clients
 func NewServiceClients(cfg Config) (*ServiceClients, error) {
 	if cfg.Timeout == 0 {
@@ -109,6 +118,8 @@ func NewServiceClients(cfg Config) (*ServiceClients, error) {
 		AllowInsecure:      grpcAllowInsecure,
 		CACertFile:         grpcCACertFile,
 		ServerName:         cfg.Periscope.TLSServerName,
+		ReadyTimeout:       PeriscopeReadyTimeout,
+		SlowCallThreshold:  PeriscopeSlowCallThreshold,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("failed to create Periscope gRPC client: %w", err)

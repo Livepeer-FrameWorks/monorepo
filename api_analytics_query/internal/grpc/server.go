@@ -938,6 +938,16 @@ func (s *PeriscopeServer) GetStreamStatus(ctx context.Context, req *periscopepb.
 		&nodeID, &trackCount, &totalInputs, &uploadedBytes, &downloadedBytes, &viewerSeconds,
 		&packetsSent, &packetsLost, &packetsRetransmitted)
 
+	// A failed read still answers "offline", which callers render as a stream
+	// that is not live; the log is what tells a ClickHouse failure apart from
+	// a stream without state.
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		s.logger.WithError(err).WithFields(logging.Fields{
+			"tenant_id": tenantID,
+			"stream_id": streamID,
+		}).Warn("Stream status read failed; answering offline")
+	}
+
 	if err == nil {
 		resp.Status = streamStatus
 		resp.CurrentViewers = int64(currentViewers)

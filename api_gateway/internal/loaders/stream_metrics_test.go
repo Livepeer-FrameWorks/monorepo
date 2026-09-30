@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 
 	"frameworks/api_gateway/internal/clients/clientstest"
 	periscopepb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/periscope"
@@ -101,5 +102,44 @@ func TestStreamMetrics_LoadPropagatesError(t *testing.T) {
 	l := NewStreamMetricsLoader(fake)
 	if _, err := l.Load(context.Background(), "t1", "a"); !errors.Is(err, sentinel) {
 		t.Fatalf("want sentinel, got %v", err)
+	}
+}
+
+// stream.metrics reads run inside a user's GraphQL request; a caller context
+// without a deadline must still reach Periscope with a short one.
+func TestStreamMetrics_ReadsCarryRequestPathDeadline(t *testing.T) {
+	var deadlines []time.Duration
+	record := func(ctx context.Context) {
+		deadline, ok := ctx.Deadline()
+		if !ok {
+			deadlines = append(deadlines, -1)
+			return
+		}
+		deadlines = append(deadlines, time.Until(deadline))
+	}
+	fake := &clientstest.FakePeriscope{
+		GetStreamStatusFn: func(ctx context.Context, _, _ string) (*periscopepb.StreamStatusResponse, error) {
+			record(ctx)
+			return &periscopepb.StreamStatusResponse{}, nil
+		},
+		GetStreamsStatusFn: func(ctx context.Context, _ string, _ []string) (*periscopepb.StreamsStatusResponse, error) {
+			record(ctx)
+			return &periscopepb.StreamsStatusResponse{}, nil
+		},
+	}
+	l := NewStreamMetricsLoader(fake)
+	if _, err := l.Load(context.Background(), "t1", "live+s1"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := l.LoadMany(context.Background(), "t1", []string{"live+s2"}); err != nil {
+		t.Fatal(err)
+	}
+	if len(deadlines) != 2 {
+		t.Fatalf("backend calls = %d, want 2", len(deadlines))
+	}
+	for i, remaining := range deadlines {
+		if remaining <= 0 || remaining > 5*time.Second {
+			t.Fatalf("call %d reached Periscope with remaining deadline %v, want (0, 5s]", i, remaining)
+		}
 	}
 }

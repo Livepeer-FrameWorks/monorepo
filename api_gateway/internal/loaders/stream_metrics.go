@@ -3,10 +3,17 @@ package loaders
 import (
 	"context"
 	"sync"
+	"time"
 
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/clients/periscope"
 	periscopepb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/periscope"
 )
+
+// streamStatusTimeout bounds the live-status reads behind stream.metrics. They
+// are point lookups resolved inside a user's GraphQL request, so a stalled
+// Periscope fails the field within this bound instead of the client's
+// general call timeout.
+const streamStatusTimeout = 5 * time.Second
 
 // StreamMetricsLoader loads stream metrics with request-scoped caching.
 // Uses batch fetch when multiple streams are requested.
@@ -35,8 +42,9 @@ func (l *StreamMetricsLoader) Load(ctx context.Context, tenantID, internalName s
 	}
 	l.mu.Unlock()
 
-	// Fetch from Periscope
-	resp, err := l.client.GetStreamStatus(ctx, tenantID, internalName)
+	readCtx, cancel := context.WithTimeout(ctx, streamStatusTimeout)
+	defer cancel()
+	resp, err := l.client.GetStreamStatus(readCtx, tenantID, internalName)
 	if err != nil {
 		return nil, err
 	}
@@ -68,8 +76,9 @@ func (l *StreamMetricsLoader) LoadMany(ctx context.Context, tenantID string, int
 		return results, nil
 	}
 
-	// Batch fetch from Periscope
-	resp, err := l.client.GetStreamsStatus(ctx, tenantID, toFetch)
+	readCtx, cancel := context.WithTimeout(ctx, streamStatusTimeout)
+	defer cancel()
+	resp, err := l.client.GetStreamsStatus(readCtx, tenantID, toFetch)
 	if err != nil {
 		return nil, err
 	}
