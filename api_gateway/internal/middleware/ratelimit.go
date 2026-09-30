@@ -1391,9 +1391,12 @@ const billingRefreshInterval = 5 * time.Second
 // NewTenantCache creates a new tenant cache
 func NewTenantCache(client TenantValidator, logger logging.Logger) *TenantCache {
 	return &TenantCache{
-		client:           client,
-		logger:           logger,
-		cacheTTLPostpaid: 5 * time.Minute, // Postpaid tenants: 5 minute cache
+		client: client,
+		logger: logger,
+		// Operator tier changes and billing grants reach the gateway only
+		// through this TTL when they admit less than before, so postpaid
+		// tenants are re-read as often as prepaid ones.
+		cacheTTLPostpaid: 1 * time.Minute,
 		cacheTTLPrepaid:  1 * time.Minute, // Prepaid tenants: 1 minute cache (faster enforcement)
 	}
 }
