@@ -252,7 +252,11 @@ func TestArchitectureGuard_databaseSchemaTasksAvoidNoopCatalogDDL(t *testing.T) 
 			if !strings.Contains(migrateBody, applyLoop) {
 				t.Fatalf("%s migrate task must apply only the precomputed pending list", tc.name)
 			}
-			if !strings.Contains(readRoleTask(t, ansibleRoots[0], tc.role, "migrate_item.yml"), "pg_advisory_lock(hashtext('frameworks_migrations')") {
+			lockSource := readRoleTask(t, ansibleRoots[0], tc.role, "migrate_item.yml")
+			if strings.Contains(lockSource, "frameworks.infra.yugabyte_migration_apply:") {
+				lockSource = yugabyteMigrationModuleSource(t)
+			}
+			if !strings.Contains(lockSource, "pg_advisory_lock(hashtext('frameworks_migrations')") {
 				t.Fatalf("%s migrate task must serialize schema changes with an advisory lock", tc.name)
 			}
 			if !strings.Contains(migrateBody, "Report pending migrations") {
@@ -296,6 +300,7 @@ func TestArchitectureGuard_databaseWritesDoNotRunInCheckMode(t *testing.T) {
 		"community.postgresql.postgresql_query:",
 		"community.postgresql.postgresql_script:",
 		"community.postgresql.postgresql_user:",
+		"frameworks.infra.yugabyte_migration_apply:",
 	}
 
 	for _, role := range []string{"postgres", "yugabyte"} {

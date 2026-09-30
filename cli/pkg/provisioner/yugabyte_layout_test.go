@@ -467,7 +467,7 @@ func TestBuildMigrationItemsForYugabyteRewritesSQLButKeepsIdentity(t *testing.T)
 	if postgres[0]["sql"] != content || yugabyte[0]["sql"] != want {
 		t.Fatalf("sql postgres=%q yugabyte=%q, want yugabyte %q", postgres[0]["sql"], yugabyte[0]["sql"], want)
 	}
-	if statements, ok := yugabyte[0]["statements"].([]string); !ok || len(statements) != 1 || statements[0] != want {
+	if statements, ok := yugabyte[0]["statements"].([]string); !ok || len(statements) != 1 || statements[0] != strings.TrimSuffix(want, ";") {
 		t.Fatalf("yugabyte statements = %#v", yugabyte[0]["statements"])
 	}
 	if postgres[0]["checksum"] != "checksum-1" || yugabyte[0]["checksum"] != "checksum-1" {

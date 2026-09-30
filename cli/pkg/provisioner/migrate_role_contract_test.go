@@ -2,6 +2,9 @@ package provisioner
 
 import (
 	"fmt"
+	"os"
+	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -11,6 +14,7 @@ import (
 type roleTask struct {
 	Name    string         `yaml:"name"`
 	Query   map[string]any `yaml:"community.postgresql.postgresql_query"`
+	Apply   map[string]any `yaml:"frameworks.infra.yugabyte_migration_apply"`
 	Include map[string]any `yaml:"ansible.builtin.include_tasks"`
 	Fail    map[string]any `yaml:"ansible.builtin.fail"`
 	Until   string         `yaml:"until"`
@@ -38,16 +42,13 @@ func roleTaskIndex(tasks []roleTask, prefix string) int {
 	return -1
 }
 
-// TestMigrationRolesBoundOnlyTransactionalItemsAndRepairInvalidIndexes pins the migration apply contract in both
-// roles: timeouts and lock-timeout replays apply to transactional items only, the replay matches the server's
-// lock-timeout error rather than any message containing the words, and an invalid index left by an interrupted
-// concurrent build is repaired by its own item inside the migration advisory lock. A build in progress is invalid too,
-// so a repair outside the lock could drop an index another migrator is still building; inside it, the item also
-// rechecks the ledger so an index another migrator finished is kept.
-func TestMigrationRolesBoundOnlyTransactionalItemsAndRepairInvalidIndexes(t *testing.T) {
+// TestMigrationRolesRepairInvalidIndexesOnlyInsideTheLockedApply pins that in both roles an invalid index left by an
+// interrupted concurrent build is repaired only by its own item's apply, inside the migration advisory lock. A build
+// in progress is invalid too, so a repair outside the lock could drop an index another migrator is still building;
+// inside it, the item also rechecks the ledger so an index another migrator finished is kept.
+func TestMigrationRolesRepairInvalidIndexesOnlyInsideTheLockedApply(t *testing.T) {
 	for _, role := range []string{"postgres", "yugabyte"} {
 		t.Run(role, func(t *testing.T) {
-			itemTasks := parseRoleTasks(t, role, "migrate_item.yml")
 			for _, file := range []string{"migrate.yml", "migrate_item.yml"} {
 				for _, task := range parseRoleTasks(t, role, file) {
 					if strings.Contains(strings.ToLower(task.Name), "invalid index") {
@@ -58,12 +59,27 @@ func TestMigrationRolesBoundOnlyTransactionalItemsAndRepairInvalidIndexes(t *tes
 					}
 				}
 			}
+		})
+	}
+}
+
+// TestPostgresMigrationRoleAppliesEachItemInOneLockedTransaction pins the PostgreSQL apply: one transaction per
+// transactional item, the repair between its own timeouts inside the advisory lock, item timeouts for transactional
+// items only, and a whole-item replay only on the server's lock-timeout error rather than any message containing the
+// words.
+func TestPostgresMigrationRoleAppliesEachItemInOneLockedTransaction(t *testing.T) {
+	for _, role := range []string{"postgres"} {
+		t.Run(role, func(t *testing.T) {
+			itemTasks := parseRoleTasks(t, role, "migrate_item.yml")
 			apply := roleTaskIndex(itemTasks, "Apply migration")
 			if apply < 0 {
 				t.Fatal("no apply task")
 			}
 			applyTask := itemTasks[apply]
 			query, _ := applyTask.Query["query"].(string)
+			if autocommit := fmt.Sprint(applyTask.Query["autocommit"]); autocommit != "{{ not (item.transactional | default(true)) }}" {
+				t.Fatalf("apply autocommit = %s, want one transaction for a transactional item", autocommit)
+			}
 			lockAt := strings.Index(query, "pg_advisory_lock(")
 			repairAt := strings.Index(query, "invalid_index_repair_sql,")
 			statementsAt := strings.Index(query, "+ item.statements")
@@ -108,6 +124,106 @@ func TestMigrationRolesBoundOnlyTransactionalItemsAndRepairInvalidIndexes(t *tes
 			}
 		})
 	}
+}
+
+// TestYugabyteMigrationRoleAppliesStatementByStatement pins the YugabyteDB apply: the role hands each item to
+// frameworks.infra.yugabyte_migration_apply, which holds the advisory lock on one autocommit session, repairs invalid
+// guarded indexes between their own timeouts, runs the statements one at a time as the owner with the item timeouts and
+// a per-statement replay for transactional items only, verifies guarded indexes, and writes the ledger row last.
+func TestYugabyteMigrationRoleAppliesStatementByStatement(t *testing.T) {
+	itemTasks := parseRoleTasks(t, "yugabyte", "migrate_item.yml")
+	apply := roleTaskIndex(itemTasks, "Apply migration")
+	if apply < 0 {
+		t.Fatal("no apply task")
+	}
+	task := itemTasks[apply]
+	if task.Apply == nil || task.Query != nil || task.Until != "" {
+		t.Fatalf("apply task must call frameworks.infra.yugabyte_migration_apply without a whole-item replay: %+v", task)
+	}
+	for key, want := range map[string]string{
+		"db":                   "{{ item.db }}",
+		"owner":                "{{ item.owner }}",
+		"statements":           "{{ item.statements }}",
+		"bounded":              "{{ item.transactional | default(true) }}",
+		"lock_timeout":         "5s",
+		"statement_timeout":    "15min",
+		"retries":              "6",
+		"retry_delay":          "10",
+		"invalid_index_repair": "{{ (item.invalid_index_guards | default([]) | length > 0) | ternary(invalid_index_repair_sql, '') }}",
+		"invalid_index_verify": "{{ (item.invalid_index_guards | default([]) | length > 0) | ternary(invalid_index_verify_sql, '') }}",
+		"ledger_insert":        "{{ migration_ledger_sql }}",
+	} {
+		if got := fmt.Sprint(task.Apply[key]); got != want {
+			t.Errorf("apply %s = %q, want %q", key, got, want)
+		}
+	}
+	if !strings.Contains(fmt.Sprint(task.When), "not ansible_check_mode") {
+		t.Fatalf("apply runs in check mode: when %v", task.When)
+	}
+	repair, _ := task.Vars["invalid_index_repair_sql"].(string)
+	for _, want := range []string{
+		"IF NOT EXISTS (SELECT 1 FROM _migrations",
+		"version = '{{ item.version }}' AND phase = '{{ item.phase }}' AND seq = {{ item.sequence }}",
+		"WHERE NOT i.indisvalid",
+		"item.invalid_index_guards",
+		"EXECUTE 'DROP INDEX IF EXISTS ' || target",
+	} {
+		if !strings.Contains(repair, want) {
+			t.Fatalf("invalid-index repair lacks %q:\n%s", want, repair)
+		}
+	}
+	if ledger, _ := task.Vars["migration_ledger_sql"].(string); !strings.Contains(ledger, "INSERT INTO _migrations") {
+		t.Fatalf("ledger insert = %q", ledger)
+	}
+
+	module := yugabyteMigrationModuleSource(t)
+	if !strings.Contains(module, "connect_to_db(module, conn_params, autocommit=True)") {
+		t.Fatal("the module must run every statement in autocommit")
+	}
+	order := []string{
+		"pg_advisory_lock(hashtext('frameworks_migrations'), hashtext(%s))",
+		`run("SET statement_timeout = '60s'")`,
+		`run("SET lock_timeout = '5s'")`,
+		`run(params["invalid_index_repair"])`,
+		`run("RESET lock_timeout")`,
+		`run("RESET statement_timeout")`,
+		`if params["bounded"]:`,
+		"set_config('lock_timeout', %s, false)",
+		"set_config('statement_timeout', %s, false)",
+		`run('SET ROLE "%s"'`,
+		`for index, statement in enumerate(params["statements"], start=1):`,
+		"run(statement)",
+		`if not params["bounded"] or attempt >= params["retries"] or not is_retryable(exc):`,
+		`run("RESET ROLE")`,
+		`run(params["invalid_index_verify"])`,
+		`run(params["ledger_insert"])`,
+		"pg_advisory_unlock(hashtext('frameworks_migrations'), hashtext(%s))",
+	}
+	at := -1
+	for _, step := range order {
+		next := strings.Index(module, step)
+		if next <= at {
+			t.Fatalf("module runs %q out of order (want %q)", step, order)
+		}
+		at = next
+	}
+	if !strings.Contains(module, `RETRYABLE_SQLSTATES = ("55P03", "40001", "40P01")`) {
+		t.Fatal("the module must replay a statement only on a lock timeout, serialization failure, or deadlock")
+	}
+}
+
+func yugabyteMigrationModuleSource(t *testing.T) string {
+	t.Helper()
+	_, current, _, ok := runtime.Caller(0)
+	if !ok {
+		t.Fatal("runtime.Caller failed")
+	}
+	path := filepath.Join(filepath.Dir(current), "..", "..", "..", "ansible", "collections", "ansible_collections", "frameworks", "infra", "plugins", "modules", "yugabyte_migration_apply.py")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read %s: %v", path, err)
+	}
+	return string(data)
 }
 
 // TestMigrationRolesRunEachPrecheckReadOnlyImmediatelyBeforeItsItem pins where prechecks run: migrate.yml applies

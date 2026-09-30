@@ -133,14 +133,18 @@ func ValidateEmbeddedPostgresMigrations() error {
 	if err != nil {
 		return err
 	}
-	var precheckErr error
+	var precheckErr, rerunErr error
 	if issues := validateMigrationPrechecks(dbsql.Content, migrations); len(issues) > 0 {
 		precheckErr = &MigrationValidationError{Issues: issues}
+	}
+	if issues := append(validateMigrationRerunSafety(migrations), validateRerunGuardTargets(migrations)...); len(issues) > 0 {
+		rerunErr = &MigrationValidationError{Issues: issues}
 	}
 	return errors.Join(
 		validatePostgresMigrationSet(migrations),
 		validateEmbeddedMigrationReleaseCeiling(migrations),
 		precheckErr,
+		rerunErr,
 	)
 }
 
@@ -448,7 +452,7 @@ func validatePostgresMigrationSet(migrations []Migration) error {
 		}
 		if !migration.Transactional && hasConcurrentIndex {
 			// The statements checked here are the ones the roles execute, split by the same tokenizer.
-			statements, _, splitErr := migrationStatements(migration)
+			statements, _, splitErr := migrationStatements(migration, SQLEnginePostgres)
 			if splitErr != nil {
 				issues = append(issues, MigrationValidationIssue{Path: migration.Path, Message: splitErr.Error()})
 			}

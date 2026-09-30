@@ -35,64 +35,43 @@
     - item.precheck_query | default('') | length > 0
     - precheck_rows | length > 0
 
-# Migrations run while services are live. A transactional item sets lock_timeout, so a statement that cannot get its
-# lock fails fast instead of queueing live traffic behind it, and statement_timeout, and is replayed only when it
-# failed on the lock timeout: its own statements roll back with it (on YugabyteDB, DDL is not transactional by
-# default, so replay relies on migrations being written to re-run cleanly). A .notx.sql item runs without timeouts,
-# because a concurrent index build waits for older transactions and a large build can run long; it is never
-# replayed. An interrupted CREATE INDEX CONCURRENTLY leaves an invalid index that IF NOT EXISTS would skip, so the
-# ledger row would be written over a broken index; the item repairs it itself, inside the advisory lock. Only then is
-# a guarded index known to be abandoned: every migrator builds under that lock, and a build in progress is invalid
-# too. The repair also rechecks the ledger, so an item another migrator applied meanwhile keeps its valid index. A
-# plain DROP INDEX takes the table's ACCESS EXCLUSIVE lock, so the repair runs between its own lock and statement
-# timeouts and resets them before the concurrent build that follows (DROP INDEX CONCURRENTLY cannot run inside the
-# conditional block). The timeouts are set before the repair statement, because a statement's timeout is armed when
-# it starts. The item timeouts are set after the advisory lock so a concurrent migrator still waits for it. On
+# Migrations run while services are live. YugabyteDB runs DDL outside transaction blocks, and a schema change on a
+# colocated database aborts a transaction that already wrote rows (40001), so an item is never sent as one transaction:
+# frameworks.infra.yugabyte_migration_apply runs its statements one at a time in autocommit on one session, which holds
+# the per-database advisory lock for the whole item, and writes the ledger row only after the last statement. A failed
+# or interrupted item keeps the statements it applied and has no ledger row; its rerun executes every statement again,
+# which `cluster migrate validate` requires each post-floor statement to survive (cli/pkg/provisioner/
+# migrate_rerun_safety.go). A transactional item runs each statement under lock_timeout, so a statement that cannot get
+# its lock fails fast instead of queueing live traffic behind it, and statement_timeout, and replays only that statement
+# when it failed on the lock timeout, a serialization failure, or a deadlock. A .notx.sql item runs without timeouts,
+# because a concurrent index build waits for older transactions and a large build can run long; it is never replayed.
+# An interrupted CREATE INDEX CONCURRENTLY leaves an invalid index that IF NOT EXISTS would skip, so the ledger row
+# would be written over a broken index; the item repairs it itself, inside the advisory lock. Only then is a guarded
+# index known to be abandoned: every migrator builds under that lock, and a build in progress is invalid too. The
+# repair also rechecks the ledger, so an item another migrator applied meanwhile keeps its valid index. A plain DROP
+# INDEX takes the table's ACCESS EXCLUSIVE lock, so the repair runs between its own lock and statement timeouts. On
 # YugabyteDB a CREATE ROLE or other shared-catalog DDL anywhere on the cluster during the build aborts it, and the
 # engine's own retry of CREATE INDEX CONCURRENTLY IF NOT EXISTS then finds the aborted index and reports success, so
 # after its statements the item checks every guarded index is valid and ready before it writes its ledger row.
 - name: Apply migration (Yugabyte)
-  community.postgresql.postgresql_query:
+  frameworks.infra.yugabyte_migration_apply:
     login_host: 127.0.0.1
     login_port: "{{ yugabyte_ysql_port }}"
     login_user: "{{ yugabyte_superuser_role }}"
     login_password: "{{ yugabyte_superuser_password }}"
     db: "{{ item.db }}"
-    query: >-
-      {{
-        [
-          "SELECT pg_advisory_lock(hashtext('frameworks_migrations'), hashtext('" ~ item.db ~ "'))"
-        ]
-        + ((item.invalid_index_guards | default([]) | length > 0) | ternary([
-            "SET statement_timeout = '60s'",
-            "SET lock_timeout = '5s'",
-            invalid_index_repair_sql,
-            "RESET lock_timeout",
-            "RESET statement_timeout"
-          ], []))
-        + ((item.transactional | default(true)) | ternary(["SET lock_timeout = '5s'", "SET statement_timeout = '15min'"], []))
-        + [
-          'SET ROLE "' ~ item.owner ~ '"'
-        ]
-        + item.statements
-        + [
-          "RESET ROLE"
-        ]
-        + ((item.invalid_index_guards | default([]) | length > 0) | ternary([invalid_index_verify_sql], []))
-        + [
-          migration_ledger_sql,
-          "SELECT pg_advisory_unlock(hashtext('frameworks_migrations'), hashtext('" ~ item.db ~ "'))"
-        ]
-      }}
-    autocommit: "{{ not (item.transactional | default(true)) }}"
+    owner: "{{ item.owner }}"
+    label: "{{ item.db }}/{{ item.version }}/{{ item.phase }}/{{ item.filename }}"
+    statements: "{{ item.statements }}"
+    bounded: "{{ item.transactional | default(true) }}"
+    lock_timeout: 5s
+    statement_timeout: 15min
+    retries: 6
+    retry_delay: 10
+    invalid_index_repair: "{{ (item.invalid_index_guards | default([]) | length > 0) | ternary(invalid_index_repair_sql, '') }}"
+    invalid_index_verify: "{{ (item.invalid_index_guards | default([]) | length > 0) | ternary(invalid_index_verify_sql, '') }}"
+    ledger_insert: "{{ migration_ledger_sql }}"
   register: yugabyte_migration_apply
-  until: >-
-    yugabyte_migration_apply is succeeded
-    or not (item.transactional | default(true))
-    or 'canceling statement due to lock timeout' not in (yugabyte_migration_apply.msg | default(''))
-  retries: 6
-  delay: 10
-  no_log: true
   when: not ansible_check_mode
   vars:
     invalid_index_repair_sql: >-

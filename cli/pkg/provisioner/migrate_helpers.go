@@ -3,7 +3,6 @@ package provisioner
 import (
 	"errors"
 	"fmt"
-	"strings"
 
 	"frameworks/cli/internal/releases"
 
@@ -91,7 +90,7 @@ func buildMigrationItemsFromList(all []Migration, databases []SchemaDatabase, ph
 			m.content = rewritten
 		}
 		for _, target := range targets {
-			item, err := migrationItem(target, m, prechecks[m.Path])
+			item, err := migrationItem(target, m, prechecks[m.Path], engine)
 			if err != nil {
 				return nil, err
 			}
@@ -148,8 +147,8 @@ func migrationLedgerItem(target SchemaDatabase, m Migration) map[string]any {
 }
 
 // migrationItem is a migration ready for the roles to apply: its ledger identity plus the statements to execute.
-func migrationItem(target SchemaDatabase, m Migration, precheck migrationPrecheck) (map[string]any, error) {
-	statements, guards, err := migrationStatements(m)
+func migrationItem(target SchemaDatabase, m Migration, precheck migrationPrecheck, engine SQLEngine) (map[string]any, error) {
+	statements, guards, err := migrationStatements(m, engine)
 	if err != nil {
 		return nil, fmt.Errorf("migration %s/%s/%s/%s: %w", m.Database, m.Version, m.Phase, m.Filename, err)
 	}
@@ -165,21 +164,26 @@ func migrationItem(target SchemaDatabase, m Migration, precheck migrationPrechec
 	return item, nil
 }
 
-// migrationStatements returns the statements a migration item executes. A transactional migration runs as one
-// script. A non-transactional one is split with the tokenizer the YugabyteDB layout rewriter uses, so both agree on
-// statement boundaries; its concurrent index builds are returned as schema.index guards.
-func migrationStatements(m Migration) ([]string, []string, error) {
-	if m.Transactional {
+// migrationStatements returns the statements a migration item executes. On PostgreSQL a transactional migration runs
+// as one script in one transaction. Every other item is split with the tokenizer the YugabyteDB layout rewriter uses,
+// so both agree on statement boundaries: a .notx.sql item because its statements need autocommit, and every
+// YugabyteDB item because the yugabyte role applies it statement by statement (see migrate_rerun_safety.go), with the
+// rerun guards of its shipped file applied. Concurrent index builds are returned as schema.index guards.
+func migrationStatements(m Migration, engine SQLEngine) ([]string, []string, error) {
+	if m.Transactional && engine != SQLEngineYugabyte {
 		return []string{m.content}, []string{}, nil
 	}
-	statements, err := sqlStatements(m.content)
+	texts, statements, err := migrationStatementTexts(m.content)
 	if err != nil {
 		return nil, nil, err
 	}
-	texts := make([]string, 0, len(statements))
+	if engine == SQLEngineYugabyte {
+		if texts, err = applyRerunGuards(m, texts, statements); err != nil {
+			return nil, nil, err
+		}
+	}
 	guards := []string{}
 	for _, statement := range statements {
-		texts = append(texts, strings.TrimSpace(m.content[statement[0].start:statement[len(statement)-1].end]))
 		guard, err := concurrentIndexGuard(statement)
 		if err != nil {
 			return nil, nil, err

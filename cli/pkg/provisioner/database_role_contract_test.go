@@ -79,6 +79,17 @@ func TestDatabaseMigrationsRunAsDeclaredOwner(t *testing.T) {
 			body := strings.Index(migration, `+ item.statements`)
 			resetRole := strings.Index(migration, `"RESET ROLE"`)
 			ledger := strings.LastIndex(migration, "INSERT INTO _migrations")
+			if engine == "yugabyte" {
+				// The YugabyteDB apply module runs the statements; the task hands it the owner and the ledger insert.
+				if !strings.Contains(migration, `owner: "{{ item.owner }}"`) || !strings.Contains(migration, `ledger_insert: "{{ migration_ledger_sql }}"`) {
+					t.Fatal("yugabyte apply task must pass the item owner and the ledger insert to the apply module")
+				}
+				migration = yugabyteMigrationModuleSource(t)
+				setRole = strings.Index(migration, `run('SET ROLE "%s"'`)
+				body = strings.Index(migration, "run(statement)")
+				resetRole = strings.Index(migration, `run("RESET ROLE")`)
+				ledger = strings.Index(migration, `run(params["ledger_insert"])`)
+			}
 			if setRole < 0 || body < 0 || resetRole < 0 || ledger < 0 || setRole >= body || body >= resetRole || resetRole >= ledger {
 				t.Fatalf("%s migration task must execute body as owner and reset before ledger write", engine)
 			}
