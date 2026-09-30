@@ -29843,6 +29843,9 @@ Billing tier and subscription management.
 - `set-cluster-pricing` - Set or update pricing config for a cluster
 - `credit` - Add (or with `--debit`, remove) EUR prepaid balance for a tenant
 - `set-tier` - Put a tenant on a billing tier as an operator decision
+- `grant set` / `grant show` / `grant revoke` - Operator billing arrangements: base fee, usage
+  waiver, manual invoicing, expiry
+- `record-payment` - Record a bank transfer that paid an invoice
 
 ```bash
 # List billing tiers
@@ -29899,17 +29902,22 @@ direction, and unlike the self-serve tier change it does not require a Stripe or
 or a complete billing profile. Purser refuses a tier that does not exist or is inactive, a billing
 model the tier does not run (level-0 tiers such as `payg` run prepaid, all other tiers run
 postpaid), and a tenant whose account was closed. A tenant without a subscription gets one on the
-assigned tier. Moving to prepaid creates the prepaid balance; moving from prepaid to postpaid keeps
-the balance as invoice credit and reactivates a subscription suspended for low balance. A scheduled
-downgrade is cleared.
+assigned tier. Moving to prepaid creates the prepaid balance and returns any credit an open draft
+invoice holds to it; moving from prepaid to postpaid keeps the balance as invoice credit and
+reactivates a subscription suspended for low balance. An invoice takes only the credit it uses: when
+a later draft is smaller, for example after a billing grant lowers the base fee, the difference goes
+back to the balance. A scheduled downgrade is cleared.
 
 After the change Purser reconciles cluster access for the new tier and refreshes cached tenant
 limits, the same as a self-serve tier change, and records `billing.subscription_updated` with
 `--reason` and the calling identity. Assigning the tier and model the tenant already has changes
 nothing and records no event; cluster access is reconciled again.
 
-A postpaid paid tier invoices its base price and usage when the period closes. Prepaid balance is
-applied to that invoice as credit, so pair `set-tier` with `credit` for a comped account.
+A postpaid paid tier invoices its base price and usage when the period closes, and rated work is
+admitted only once those charges can be collected: the tenant's own Stripe or Mollie setup, or an
+operator arrangement from `grant set`. A tenant put on a paid postpaid tier with `set-tier` alone,
+without either, is refused rated work with `PAYMENT_SETUP_REQUIRED`. Use `grant set --tier` to
+assign the tier together with the arrangement.
 
 **Flags:**
 
@@ -29927,6 +29935,102 @@ frameworks admin billing set-tier --tenant-id <UUID> --tier payg --billing-model
 
 Both commands call Purser RPCs that accept only the manifest service token or a platform-operator
 session; tenant users and API tokens are refused.
+
+---
+
+### frameworks admin billing grant
+
+An operator billing arrangement for one tenant. It stands in for the self-serve rule that a paid
+postpaid tier needs Stripe or Mollie collection, for accounts you decide to bill differently: a
+supporter without a monthly fee, a house account you invoice by hand, a staging tenant that pays
+nothing until a date. Metering and rating keep running under an arrangement, so invoices still
+show what the tenant used.
+
+An arrangement has four parts:
+
+- **Base fee** (`--base-fee`): an EUR amount in place of the tier's base fee, for example `0`.
+  Refused while the tenant has a Stripe or Mollie subscription, because that subscription bills the
+  tier's price on the provider's side. While it applies, a tenant adding a card through Checkout
+  saves the card without starting a Stripe subscription, and a Mollie subscription is refused.
+- **Usage** (`--waive-usage`): rate usage at zero. Without it usage is billed at the tier's rates.
+- **Collection** (`--collection`): `provider` (default) leaves collection to Stripe or Mollie, so a
+  tenant that owes usage needs a card; until it adds one, rated work is refused with
+  `PAYMENT_SETUP_REQUIRED`. `invoice` means you collect invoices by hand: invoices are issued and
+  emailed as usual, stay pending until you record the payment with `record-payment`, and get the
+  usual overdue reminders.
+- **Expiry** (`--until`): a date (the arrangement runs through that day, UTC) or an RFC 3339 time.
+  After it the tier and the tenant's own payment setup apply again. Without it the arrangement runs
+  until revoked.
+
+A tenant that owes nothing (base fee 0 and usage waived) needs no collection setup. An invoice uses
+the arrangement in force when its period is invoiced.
+
+#### frameworks admin billing grant set
+
+Record an arrangement, replacing any previous one. `--tier` assigns the tier first, as `set-tier`
+does. Records `billing.subscription_updated` with `--reason`, and prints the arrangement and whether
+the tenant's charges can now be collected.
+
+**Flags:**
+
+- `--tenant-id` / `--email` - The tenant, as for `set-tier`
+- `--tier` - Also assign this tier; empty keeps the tenant's tier
+- `--base-fee` - EUR base fee in place of the tier's, for example `0`
+- `--waive-usage` - Rate usage at zero
+- `--collection` - `provider` (default) or `invoice`
+- `--until` - End of the arrangement
+- `--reason` - Why; recorded on the arrangement and the audit event (required)
+
+```bash
+# Supporter without a monthly fee; the tenant adds a card for usage
+frameworks admin billing grant set --email owner@example.com --tier supporter --base-fee 0 --reason "beta supporter"
+
+# House account: no monthly fee, usage invoiced and collected by hand
+frameworks admin billing grant set --tenant-id <UUID> --tier supporter --base-fee 0 --collection invoice --reason "house account"
+
+# Staging tenant that pays nothing until the end of the year
+frameworks admin billing grant set --tenant-id <UUID> --tier production --base-fee 0 --waive-usage --until 2026-12-31 --reason "staging test"
+```
+
+#### frameworks admin billing grant show
+
+Print the tenant's arrangement, including an expired one, and whether its charges can be collected
+and by whom (`stripe`, `mollie` or `operator`).
+
+```bash
+frameworks admin billing grant show --email owner@example.com
+```
+
+#### frameworks admin billing grant revoke
+
+Remove the arrangement; the tier and the tenant's own payment setup apply from then on. `--reason`
+is required and recorded on the audit event.
+
+```bash
+frameworks admin billing grant revoke --tenant-id <UUID> --reason "supporter period over"
+```
+
+---
+
+### frameworks admin billing record-payment
+
+Record a payment you received outside Stripe and Mollie, such as a bank transfer from a tenant on
+`--collection invoice`. The payment covers the full open balance of a pending or overdue invoice,
+in the currency the invoice was presented in, and marks the invoice paid.
+
+**Flags:**
+
+- `--tenant-id` / `--email` - The tenant
+- `--invoice-id` - Invoice UUID (required)
+- `--reference` - The reference the payment arrived with (required)
+- `--reason` - Why; recorded on the audit event (required)
+
+```bash
+frameworks admin billing record-payment --tenant-id <UUID> --invoice-id <UUID> --reference "transfer 2026-10-03" --reason "bank transfer received"
+```
+
+The `grant` and `record-payment` commands call Purser RPCs that accept only the manifest service
+token or a platform-operator session.
 
 ---
 
