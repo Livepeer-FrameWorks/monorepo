@@ -16,6 +16,22 @@
   no_log: true
   notify: mistserver restart
 
+- name: Ensure MistServer account seed directory (darwin)
+  ansible.builtin.file:
+    path: "{{ mistserver_darwin_base_dir }}/libexec"
+    state: directory
+    mode: "0755"
+
+- name: Install MistServer account seed helper (darwin)
+  ansible.builtin.copy:
+    src: mistserver-account-seed.py
+    dest: "{{ mistserver_darwin_base_dir }}/libexec/mistserver-account-seed.py"
+    mode: "0755"
+  notify: mistserver restart
+
+# MistController reads config.json from its working directory (the plist's
+# WorkingDirectory). The API account is seeded into it from the env file, so
+# the password never appears on MistController's command line.
 - name: Render launchd wrapper script
   ansible.builtin.copy:
     dest: "{{ mistserver_darwin_base_dir }}/mistserver/run.sh"
@@ -30,8 +46,10 @@
           *=*) export "$line" ;;
         esac
       done < "{{ mistserver_darwin_conf_dir }}/mistserver.env"
-      exec "{{ mistserver_darwin_base_dir }}/mistserver/bin/MistController" \
-        -a "${MIST_API_USERNAME}:${MIST_API_PASSWORD}"
+      "{{ mistserver_account_seed_python }}" "{{ mistserver_darwin_base_dir }}/libexec/mistserver-account-seed.py" \
+        "{{ mistserver_darwin_base_dir }}/mistserver/bin/config.json"
+      unset MIST_API_PASSWORD
+      exec "{{ mistserver_darwin_base_dir }}/mistserver/bin/MistController"
     mode: "0755"
   notify: mistserver restart
 

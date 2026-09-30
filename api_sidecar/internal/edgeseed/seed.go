@@ -6,6 +6,8 @@ package edgeseed
 
 import (
 	"bytes"
+	"crypto/md5" //nolint:gosec // MistServer stores account passwords as MD5 digests
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -168,20 +170,36 @@ func seedBootstrapConfig(fw, caddyIDs ids) error {
 	}
 
 	// Mist owns the rest of its config at runtime (Helmsman writes streams
-	// and protocols through its API), so only the controller listener the
-	// image depends on is reconciled; Mist is not running during the seed.
+	// and protocols through its API), so only the controller listener and
+	// API account the image depends on are reconciled; Mist is not running
+	// during the seed. The account is seeded here rather than passed as
+	// `MistController -a user:password`, which would expose the password in
+	// the process list.
 	mistConf := filepath.Join(etcFrameworks, "mistserver.conf")
 	current, err := os.ReadFile(mistConf)
 	if err != nil && !os.IsNotExist(err) {
 		return fmt.Errorf("read MistServer config: %w", err)
 	}
+	mistUser, mistPassword := mistAccountFromEnv()
 	next, changed, reconcileErr := reconcileMistControllerConfig(current)
+	if reconcileErr == nil {
+		var accountChanged bool
+		next, accountChanged, reconcileErr = reconcileMistAccount(next, mistUser, mistPassword)
+		changed = changed || accountChanged
+	}
 	if reconcileErr != nil {
+		// Without its account Mist would start with an open initial-setup API.
+		if mistPassword != "" {
+			return fmt.Errorf("seed MistServer API account into %s: %w", mistConf, reconcileErr)
+		}
 		fmt.Printf("seed-edge: WARNING: leaving %s as is: %v\n", mistConf, reconcileErr)
 		return nil
 	}
 	if changed {
-		if err := os.WriteFile(mistConf, next, 0o644); err != nil {
+		if err := os.WriteFile(mistConf, next, 0o600); err != nil {
+			return err
+		}
+		if err := os.Chmod(mistConf, 0o600); err != nil {
 			return err
 		}
 		if err := os.Chown(mistConf, fw.uid, fw.gid); err != nil {
@@ -189,6 +207,63 @@ func seedBootstrapConfig(fw, caddyIDs ids) error {
 		}
 	}
 	return nil
+}
+
+// defaultMistAPIUsername matches the edge image's MIST_API_USERNAME default
+// and the native mistserver role's mistserver_api_user.
+const defaultMistAPIUsername = "frameworks"
+
+// mistAccountFromEnv returns the MistServer API account from
+// MIST_API_USERNAME and MIST_API_PASSWORD.
+func mistAccountFromEnv() (username, password string) {
+	username = strings.TrimSpace(os.Getenv("MIST_API_USERNAME"))
+	if username == "" {
+		username = defaultMistAPIUsername
+	}
+	return username, os.Getenv("MIST_API_PASSWORD")
+}
+
+// reconcileMistAccount sets account.<username>.password in a MistServer
+// config to the MD5 hex digest of password, the form Mist stores and checks
+// API logins against, keeping every other key and account. An empty password
+// leaves the config unchanged. A config that already holds the digest is
+// returned byte for byte.
+func reconcileMistAccount(raw []byte, username, password string) ([]byte, bool, error) {
+	if password == "" {
+		return raw, false, nil
+	}
+	if username == "" {
+		return nil, false, fmt.Errorf("empty MistServer API username")
+	}
+	data := map[string]any{}
+	if len(strings.TrimSpace(string(raw))) > 0 {
+		decoder := json.NewDecoder(bytes.NewReader(raw))
+		decoder.UseNumber()
+		if err := decoder.Decode(&data); err != nil {
+			return nil, false, fmt.Errorf("parse MistServer config: %w", err)
+		}
+	}
+	sum := md5.Sum([]byte(password)) //nolint:gosec // Mist's account format is an MD5 digest
+	digest := hex.EncodeToString(sum[:])
+	accounts, ok := data["account"].(map[string]any)
+	if !ok {
+		accounts = map[string]any{}
+	}
+	entry, ok := accounts[username].(map[string]any)
+	if !ok {
+		entry = map[string]any{}
+	}
+	if entry["password"] == digest {
+		return raw, false, nil
+	}
+	entry["password"] = digest
+	accounts[username] = entry
+	data["account"] = accounts
+	out, err := json.Marshal(data)
+	if err != nil {
+		return nil, false, err
+	}
+	return append(out, '\n'), true, nil
 }
 
 // Controller listener the edge image's Mist run script and Helmsman

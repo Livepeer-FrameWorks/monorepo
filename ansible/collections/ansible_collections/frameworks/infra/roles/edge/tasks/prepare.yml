@@ -111,8 +111,8 @@
       }}
   no_log: true
 
-# An empty password silently disables MistServer controller auth (the
-# container run script drops -a, native passes an empty credential). The Go
+# An empty password leaves MistServer without its API account (the container
+# seed skips it, the native pre-start seed refuses to start Mist). The Go
 # provisioner always generates one; direct role users must supply
 # edge_mist_api_password.
 - name: Assert MistServer API password resolved

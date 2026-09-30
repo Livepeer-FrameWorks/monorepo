@@ -70,7 +70,7 @@ type EdgeVars struct {
 	MistUpstream     string // localhost:8080 in both modes
 	CaddyAdminAddr   string // Container: "unix//run/caddy/admin.sock", Native: "localhost:2019"
 	SiteAddress      string // Caddy site address: "*.cluster.root" (wildcard) or "edge.cluster.root" (single)
-	MistAPIPassword  string // MistServer API auth password (used for -a flag and helmsman config sync)
+	MistAPIPassword  string // MistServer API auth password (seeded as the Mist API account and used by helmsman)
 	EdgeImage        string // Single edge image (helmsman+Mist+Caddy); manifest-pinned (image@digest) when a release is selected.
 	ONNXProfile      string // Profile baked into EdgeImage; NVIDIA profiles need GPU device access.
 	ONNXDRIDevice    bool   // Pass an available Intel DRM device into an OpenVINO container.
@@ -369,7 +369,7 @@ func RenderEdgeTemplates(vars EdgeVars) ([]EdgeRenderedFile, error) {
 	if vars.Mode != "native" {
 		out = append(out, EdgeRenderedFile{
 			Path:      ".edge-secrets.env",
-			Content:   []byte("# Shared MistServer controller password (mist -a / helmsman API client).\n# Write-once: delete this file and re-run edge init to rotate.\nMIST_API_PASSWORD=" + vars.MistAPIPassword + "\n"),
+			Content:   []byte("# Shared MistServer controller password (Mist API account / helmsman API client).\n# Write-once: delete this file and re-run edge init to rotate.\nMIST_API_PASSWORD=" + vars.MistAPIPassword + "\n"),
 			Mode:      0o600,
 			WriteMode: EdgeWriteIfMissing,
 		})

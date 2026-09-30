@@ -580,7 +580,7 @@ func edgeCaddyBinary(manifest *gitops.Manifest, arch, remoteOS, remoteArch strin
 }
 
 // ensureEdgeMistPassword returns the shared MistServer API password used by
-// mistserver (-a) + helmsman (MIST_API_PASSWORD). Generated lazily on the
+// mistserver (seeded into its config) + helmsman (MIST_API_PASSWORD). Generated lazily on the
 // first call per config so docker + native installs see the same value
 // within a single Provision invocation. Fails closed — an entropy error
 // aborts the install rather than installing a predictable credential.
