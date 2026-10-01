@@ -21,22 +21,24 @@ func newCodecJM(t *testing.T) (*JobManager, sqlmock.Sqlmock) {
 	return &JobManager{db: mockDB, logger: logging.NewLogger(), billing: &Service{}}, mock
 }
 
-// collectInvoiceUsage unions usage_records + usage_adjustments and groups per
+// collectPhaseUsage unions usage_records + usage_adjustments and groups per
 // (cluster, meter). Assert the per-cluster nested map and the query-error path.
-func TestCollectInvoiceUsageMapsRowsAndError(t *testing.T) {
+func TestCollectPhaseUsageMapsRowsAndError(t *testing.T) {
 	t.Run("maps rows", func(t *testing.T) {
 		jm, mock := newCodecJM(t)
 		ps := time.Date(2026, 5, 1, 0, 0, 0, 0, time.UTC)
 		pe := ps.AddDate(0, 1, 0)
 		mock.ExpectQuery(`FROM purser\.usage_records`).
-			WithArgs("tenant-1", ps, pe).
+			WithArgs("tenant-1", ps, pe, ps, nil).
 			WillReturnRows(sqlmock.NewRows([]string{"cluster_id", "usage_type", "aggregated_value"}).
 				AddRow("cluster-a", "egress_bytes", float64(1024)).
 				AddRow("", "media_seconds", float64(33)))
+		mock.ExpectQuery(`dimensioned_rows AS`).
+			WillReturnRows(sqlmock.NewRows([]string{"cluster_id", "usage_type", "unit", "dimensions", "quantity"}))
 
-		got, err := jm.collectInvoiceUsage(context.Background(), "tenant-1", ps, pe)
+		got, _, err := collectPhaseUsage(context.Background(), jm.db, "tenant-1", usagePhase{start: ps, end: pe, chainFrom: ps})
 		if err != nil {
-			t.Fatalf("collectInvoiceUsage: %v", err)
+			t.Fatalf("collectPhaseUsage: %v", err)
 		}
 		if got["cluster-a"]["egress_bytes"] != 1024 || got[""]["media_seconds"] != 33 {
 			t.Fatalf("usage map wrong: %+v", got)
@@ -49,7 +51,7 @@ func TestCollectInvoiceUsageMapsRowsAndError(t *testing.T) {
 		pe := ps.AddDate(0, 1, 0)
 		mock.ExpectQuery(`FROM purser\.usage_records`).
 			WillReturnError(errors.New("db down"))
-		if _, err := jm.collectInvoiceUsage(context.Background(), "tenant-1", ps, pe); err == nil {
+		if _, _, err := collectPhaseUsage(context.Background(), jm.db, "tenant-1", usagePhase{start: ps, end: pe, chainFrom: ps}); err == nil {
 			t.Fatal("expected query error, got nil")
 		}
 	})

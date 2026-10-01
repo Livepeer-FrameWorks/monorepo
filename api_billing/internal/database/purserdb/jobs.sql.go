@@ -476,21 +476,6 @@ func (q *Queries) GetActiveSubscriptionPeriod(ctx context.Context, tenantID stri
 	return i, err
 }
 
-const getActiveTenantBillingModelForJobs = `-- name: GetActiveTenantBillingModelForJobs :one
-SELECT COALESCE(billing_model, 'postpaid') AS billing_model
-FROM purser.tenant_subscriptions
-WHERE tenant_id = $1::text::uuid AND status = 'active'
-ORDER BY created_at DESC
-LIMIT 1
-`
-
-func (q *Queries) GetActiveTenantBillingModelForJobs(ctx context.Context, tenantID string) (string, error) {
-	row := q.db.QueryRowContext(ctx, getActiveTenantBillingModelForJobs, tenantID)
-	var billing_model string
-	err := row.Scan(&billing_model)
-	return billing_model, err
-}
-
 const getBalanceTransactionAmountByReference = `-- name: GetBalanceTransactionAmountByReference :one
 SELECT amount_cents
 FROM purser.balance_transactions
@@ -1235,6 +1220,48 @@ func (q *Queries) LockPrepaidBalanceCents(ctx context.Context, arg LockPrepaidBa
 	return balance_cents, err
 }
 
+const lockSubscriptionForPeriodClose = `-- name: LockSubscriptionForPeriodClose :exec
+SELECT 1
+FROM purser.tenant_subscriptions
+WHERE tenant_id = $1::text::uuid
+FOR UPDATE
+`
+
+// Locks the tenant's subscription row before a period's closing document
+// touches the prepaid balance, in the order usage settlement and switches
+// take the two locks.
+func (q *Queries) LockSubscriptionForPeriodClose(ctx context.Context, tenantID string) error {
+	_, err := q.db.ExecContext(ctx, lockSubscriptionForPeriodClose, tenantID)
+	return err
+}
+
+const lockSubscriptionForUsage = `-- name: LockSubscriptionForUsage :one
+SELECT CASE WHEN status = 'active' THEN COALESCE(billing_model, 'postpaid') ELSE 'postpaid' END::text AS billing_model,
+       billing_period_start, billing_period_end
+FROM purser.tenant_subscriptions
+WHERE tenant_id = $1::text::uuid
+FOR SHARE
+`
+
+type LockSubscriptionForUsageRow struct {
+	BillingModel       string       `db:"billing_model" json:"billing_model"`
+	BillingPeriodStart sql.NullTime `db:"billing_period_start" json:"billing_period_start"`
+	BillingPeriodEnd   sql.NullTime `db:"billing_period_end" json:"billing_period_end"`
+}
+
+// Locks the tenant's subscription row FOR SHARE while a usage report is
+// received or settled. A switch between prepaid and postpaid holds the row
+// FOR UPDATE, so a report's records commit either before the switch counts
+// the usage it closes or after the switch committed, and the billing model
+// read here is the one of the phase the records belong to. billing_model is
+// postpaid for a subscription that is not active.
+func (q *Queries) LockSubscriptionForUsage(ctx context.Context, tenantID string) (LockSubscriptionForUsageRow, error) {
+	row := q.db.QueryRowContext(ctx, lockSubscriptionForUsage, tenantID)
+	var i LockSubscriptionForUsageRow
+	err := row.Scan(&i.BillingModel, &i.BillingPeriodStart, &i.BillingPeriodEnd)
+	return i, err
+}
+
 const markPendingBillingPaymentFailed = `-- name: MarkPendingBillingPaymentFailed :exec
 UPDATE purser.billing_payments
 SET status = 'failed', updated_at = NOW()
@@ -1263,26 +1290,34 @@ UPDATE purser.usage_adjustments
 SET applied_invoice_id = $1::text::uuid,
     updated_at = NOW()
 WHERE tenant_id = $2::text::uuid
-  AND period_start < $3
-  AND period_end > $4
+  AND period_start < $3::timestamptz
+  AND period_end > LEAST($4::timestamptz, $5::timestamptz)
+  AND (period_start >= $5::timestamptz OR created_at >= $5::timestamptz)
+  AND ($6::timestamptz IS NULL OR created_at < $6::timestamptz)
   AND status = 'applied'
   AND value_kind = 'correction_delta'
   AND applied_invoice_id IS NULL
 `
 
 type MarkUsageAdjustmentsAppliedToInvoiceParams struct {
-	InvoiceID   string    `db:"invoice_id" json:"invoice_id"`
-	TenantID    string    `db:"tenant_id" json:"tenant_id"`
-	PeriodEnd   time.Time `db:"period_end" json:"period_end"`
-	PeriodStart time.Time `db:"period_start" json:"period_start"`
+	InvoiceID      string       `db:"invoice_id" json:"invoice_id"`
+	TenantID       string       `db:"tenant_id" json:"tenant_id"`
+	PeriodEnd      time.Time    `db:"period_end" json:"period_end"`
+	ChainFrom      time.Time    `db:"chain_from" json:"chain_from"`
+	PeriodStart    time.Time    `db:"period_start" json:"period_start"`
+	ReceivedBefore sql.NullTime `db:"received_before" json:"received_before"`
 }
 
+// Marks the usage corrections the billing document of the phase
+// [period_start, period_end) rated, by the rule CollectPhaseUsage applies.
 func (q *Queries) MarkUsageAdjustmentsAppliedToInvoice(ctx context.Context, arg MarkUsageAdjustmentsAppliedToInvoiceParams) error {
 	_, err := q.db.ExecContext(ctx, markUsageAdjustmentsAppliedToInvoice,
 		arg.InvoiceID,
 		arg.TenantID,
 		arg.PeriodEnd,
+		arg.ChainFrom,
 		arg.PeriodStart,
+		arg.ReceivedBefore,
 	)
 	return err
 }
@@ -1615,7 +1650,14 @@ INSERT INTO purser.usage_records (
     $6, $7, $8,
     $9::double precision, $10::jsonb,
     $11, $12, $13,
-    $14, NOW()
+    $14,
+    GREATEST(NOW(), (
+        SELECT MAX(phase_close.period_end)
+        FROM purser.billing_invoices phase_close
+        WHERE phase_close.tenant_id = $1::text::uuid
+          AND ((phase_close.document_kind = 'prepaid_statement' AND phase_close.usage_details->'statement'->>'closes_prepaid_phase' = 'true')
+            OR (phase_close.document_kind = 'invoice' AND phase_close.usage_details->>'closes_postpaid_phase' = 'true'))
+    ))
 )
 ON CONFLICT (
     tenant_id, cluster_id, source_id, usage_type, dimension_key, period_start, period_end
@@ -1639,6 +1681,11 @@ type UpsertCanonicalUsageRecordParams struct {
 	ValueKind    string          `db:"value_kind" json:"value_kind"`
 }
 
+// created_at is the receipt time that assigns the record to a billing phase.
+// The writer holds the subscription row FOR SHARE (LockSubscriptionForUsage),
+// so a switch that committed before has its closing document visible here;
+// a record written after a switch is never dated before it, whenever its
+// transaction began.
 func (q *Queries) UpsertCanonicalUsageRecord(ctx context.Context, arg UpsertCanonicalUsageRecordParams) error {
 	_, err := q.db.ExecContext(ctx, upsertCanonicalUsageRecord,
 		arg.TenantID,
@@ -2074,13 +2121,20 @@ const upsertUsageAdjustment = `-- name: UpsertUsageAdjustment :exec
 INSERT INTO purser.usage_adjustments (
     tenant_id, cluster_id, usage_type, unit, dimensions, dimension_key, delta_value,
     period_start, period_end, value_kind, status,
-    source_system, source_id, reason, details
+    source_system, source_id, reason, details, created_at
 ) VALUES (
     $1::text::uuid, $2, $3,
     $4, COALESCE($5::jsonb, '{}'::jsonb),
     $6, $7::double precision, $8,
     $9, 'correction_delta', 'applied', $10,
-    $11, $12, $13::jsonb
+    $11, $12, $13::jsonb,
+    GREATEST(NOW(), (
+        SELECT MAX(phase_close.period_end)
+        FROM purser.billing_invoices phase_close
+        WHERE phase_close.tenant_id = $1::text::uuid
+          AND ((phase_close.document_kind = 'prepaid_statement' AND phase_close.usage_details->'statement'->>'closes_prepaid_phase' = 'true')
+            OR (phase_close.document_kind = 'invoice' AND phase_close.usage_details->>'closes_postpaid_phase' = 'true'))
+    ))
 )
 ON CONFLICT (source_system, source_id) DO NOTHING
 `
@@ -2101,6 +2155,8 @@ type UpsertUsageAdjustmentParams struct {
 	Details      json.RawMessage `db:"details" json:"details"`
 }
 
+// created_at assigns the correction to a billing phase the way
+// UpsertCanonicalUsageRecord dates usage records.
 func (q *Queries) UpsertUsageAdjustment(ctx context.Context, arg UpsertUsageAdjustmentParams) error {
 	_, err := q.db.ExecContext(ctx, upsertUsageAdjustment,
 		arg.TenantID,
@@ -2164,6 +2220,32 @@ func (q *Queries) UpsertUsageReservation(ctx context.Context, arg UpsertUsageRes
 		arg.Currency,
 	)
 	return err
+}
+
+const usageDocumentStartsEarlierInMonth = `-- name: UsageDocumentStartsEarlierInMonth :one
+SELECT EXISTS (
+    SELECT 1 FROM purser.billing_invoices
+    WHERE tenant_id = $1::text::uuid
+      AND base_fee_period_start IS NULL
+      AND period_start >= $2::timestamptz
+      AND period_start < $3::timestamptz
+)::boolean AS earlier
+`
+
+type UsageDocumentStartsEarlierInMonthParams struct {
+	TenantID    string    `db:"tenant_id" json:"tenant_id"`
+	MonthStart  time.Time `db:"month_start" json:"month_start"`
+	PeriodStart time.Time `db:"period_start" json:"period_start"`
+}
+
+// Whether another billing document of the tenant's usage periods starts in
+// [month_start, period_start): the document starting at period_start is then
+// not the first of its month and holds its invoice credit under its own key.
+func (q *Queries) UsageDocumentStartsEarlierInMonth(ctx context.Context, arg UsageDocumentStartsEarlierInMonthParams) (bool, error) {
+	row := q.db.QueryRowContext(ctx, usageDocumentStartsEarlierInMonth, arg.TenantID, arg.MonthStart, arg.PeriodStart)
+	var earlier bool
+	err := row.Scan(&earlier)
+	return earlier, err
 }
 
 const usageReportExists = `-- name: UsageReportExists :one

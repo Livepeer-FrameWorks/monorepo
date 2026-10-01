@@ -101,12 +101,27 @@ ON CONFLICT (tenant_id, source_id, cluster_id) DO UPDATE SET
     currency = EXCLUDED.currency, updated_at = NOW()
 WHERE EXCLUDED.sequence > purser.usage_reservations.sequence;
 
--- name: GetActiveTenantBillingModelForJobs :one
-SELECT COALESCE(billing_model, 'postpaid') AS billing_model
+-- name: LockSubscriptionForUsage :one
+-- Locks the tenant's subscription row FOR SHARE while a usage report is
+-- received or settled. A switch between prepaid and postpaid holds the row
+-- FOR UPDATE, so a report's records commit either before the switch counts
+-- the usage it closes or after the switch committed, and the billing model
+-- read here is the one of the phase the records belong to. billing_model is
+-- postpaid for a subscription that is not active.
+SELECT CASE WHEN status = 'active' THEN COALESCE(billing_model, 'postpaid') ELSE 'postpaid' END::text AS billing_model,
+       billing_period_start, billing_period_end
 FROM purser.tenant_subscriptions
-WHERE tenant_id = sqlc.arg(tenant_id)::text::uuid AND status = 'active'
-ORDER BY created_at DESC
-LIMIT 1;
+WHERE tenant_id = sqlc.arg(tenant_id)::text::uuid
+FOR SHARE;
+
+-- name: LockSubscriptionForPeriodClose :exec
+-- Locks the tenant's subscription row before a period's closing document
+-- touches the prepaid balance, in the order usage settlement and switches
+-- take the two locks.
+SELECT 1
+FROM purser.tenant_subscriptions
+WHERE tenant_id = sqlc.arg(tenant_id)::text::uuid
+FOR UPDATE;
 
 -- name: PrepaidUsageSettlementExists :one
 SELECT EXISTS (
@@ -187,6 +202,18 @@ FROM purser.balance_transactions
 WHERE tenant_id = sqlc.arg(tenant_id)::text::uuid
   AND reference_type = 'invoice_credit'
   AND description IN (sqlc.arg(applied_description)::text, sqlc.arg(returned_description)::text);
+
+-- name: UsageDocumentStartsEarlierInMonth :one
+-- Whether another billing document of the tenant's usage periods starts in
+-- [month_start, period_start): the document starting at period_start is then
+-- not the first of its month and holds its invoice credit under its own key.
+SELECT EXISTS (
+    SELECT 1 FROM purser.billing_invoices
+    WHERE tenant_id = sqlc.arg(tenant_id)::text::uuid
+      AND base_fee_period_start IS NULL
+      AND period_start >= sqlc.arg(month_start)::timestamptz
+      AND period_start < sqlc.arg(period_start)::timestamptz
+)::boolean AS earlier;
 
 -- name: ListOpenInvoicesHoldingPrepaidCredit :many
 SELECT id::text AS id, period_start
@@ -337,12 +364,16 @@ WHERE purser.billing_invoices.status IN ('draft', 'manual_review')
 RETURNING id::text AS id;
 
 -- name: MarkUsageAdjustmentsAppliedToInvoice :exec
+-- Marks the usage corrections the billing document of the phase
+-- [period_start, period_end) rated, by the rule CollectPhaseUsage applies.
 UPDATE purser.usage_adjustments
 SET applied_invoice_id = sqlc.arg(invoice_id)::text::uuid,
     updated_at = NOW()
 WHERE tenant_id = sqlc.arg(tenant_id)::text::uuid
-  AND period_start < sqlc.arg(period_end)
-  AND period_end > sqlc.arg(period_start)
+  AND period_start < sqlc.arg(period_end)::timestamptz
+  AND period_end > LEAST(sqlc.arg(chain_from)::timestamptz, sqlc.arg(period_start)::timestamptz)
+  AND (period_start >= sqlc.arg(period_start)::timestamptz OR created_at >= sqlc.arg(period_start)::timestamptz)
+  AND (sqlc.narg(received_before)::timestamptz IS NULL OR created_at < sqlc.narg(received_before)::timestamptz)
   AND status = 'applied'
   AND value_kind = 'correction_delta'
   AND applied_invoice_id IS NULL;
@@ -671,6 +702,11 @@ INSERT INTO purser.usage_records_quarantine (
 );
 
 -- name: UpsertCanonicalUsageRecord :exec
+-- created_at is the receipt time that assigns the record to a billing phase.
+-- The writer holds the subscription row FOR SHARE (LockSubscriptionForUsage),
+-- so a switch that committed before has its closing document visible here;
+-- a record written after a switch is never dated before it, whenever its
+-- transaction began.
 INSERT INTO purser.usage_records (
     tenant_id, cluster_id, usage_type, unit, dimensions, dimension_key,
     source_id, report_id, usage_value, usage_details,
@@ -681,7 +717,14 @@ INSERT INTO purser.usage_records (
     sqlc.arg(dimension_key), sqlc.arg(source_id), sqlc.arg(report_id),
     sqlc.arg(usage_value)::double precision, sqlc.arg(usage_details)::jsonb,
     sqlc.arg(period_start), sqlc.arg(period_end), sqlc.arg(granularity),
-    sqlc.arg(value_kind), NOW()
+    sqlc.arg(value_kind),
+    GREATEST(NOW(), (
+        SELECT MAX(phase_close.period_end)
+        FROM purser.billing_invoices phase_close
+        WHERE phase_close.tenant_id = sqlc.arg(tenant_id)::text::uuid
+          AND ((phase_close.document_kind = 'prepaid_statement' AND phase_close.usage_details->'statement'->>'closes_prepaid_phase' = 'true')
+            OR (phase_close.document_kind = 'invoice' AND phase_close.usage_details->>'closes_postpaid_phase' = 'true'))
+    ))
 )
 ON CONFLICT (
     tenant_id, cluster_id, source_id, usage_type, dimension_key, period_start, period_end
@@ -746,16 +789,25 @@ FROM purser.meter_definitions
 WHERE meter = sqlc.arg(meter);
 
 -- name: UpsertUsageAdjustment :exec
+-- created_at assigns the correction to a billing phase the way
+-- UpsertCanonicalUsageRecord dates usage records.
 INSERT INTO purser.usage_adjustments (
     tenant_id, cluster_id, usage_type, unit, dimensions, dimension_key, delta_value,
     period_start, period_end, value_kind, status,
-    source_system, source_id, reason, details
+    source_system, source_id, reason, details, created_at
 ) VALUES (
     sqlc.arg(tenant_id)::text::uuid, sqlc.arg(cluster_id), sqlc.arg(usage_type),
     sqlc.arg(unit), COALESCE(sqlc.arg(dimensions)::jsonb, '{}'::jsonb),
     sqlc.arg(dimension_key), sqlc.arg(delta_value)::double precision, sqlc.arg(period_start),
     sqlc.arg(period_end), 'correction_delta', 'applied', sqlc.arg(source_system),
-    sqlc.arg(source_id), sqlc.arg(reason), sqlc.arg(details)::jsonb
+    sqlc.arg(source_id), sqlc.arg(reason), sqlc.arg(details)::jsonb,
+    GREATEST(NOW(), (
+        SELECT MAX(phase_close.period_end)
+        FROM purser.billing_invoices phase_close
+        WHERE phase_close.tenant_id = sqlc.arg(tenant_id)::text::uuid
+          AND ((phase_close.document_kind = 'prepaid_statement' AND phase_close.usage_details->'statement'->>'closes_prepaid_phase' = 'true')
+            OR (phase_close.document_kind = 'invoice' AND phase_close.usage_details->>'closes_postpaid_phase' = 'true'))
+    ))
 )
 ON CONFLICT (source_system, source_id) DO NOTHING;
 

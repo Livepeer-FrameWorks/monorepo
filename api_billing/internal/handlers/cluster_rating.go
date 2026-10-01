@@ -62,61 +62,6 @@ type clusterRatingResult struct {
 	ClustersByID map[string]*pricing.ClusterPricing
 }
 
-// collectInvoiceUsage aggregates usage_records grouped by (cluster_id,
-// usage_type) for one (tenant, period) tuple. MAX for peak meters, SUM
-// for the rest; uniques skipped (states can't be summed scalar). Only
-// canonical-ledger 'delta' rows are counted; non-delta rows stay out of
-// invoice aggregation.
-//
-// usage_records rows with empty cluster_id bucket under "" and are mapped by
-// the resolver to platform_official.
-//
-// Returns (cluster_id → meter → aggregated_value). Errors abort the caller —
-// rating an invoice on partial usage underbills.
-func (jm *JobManager) collectInvoiceUsage(ctx context.Context, tenantID string, periodStart, periodEnd time.Time) (map[string]map[string]float64, error) {
-	rows, err := purserdb.New(jm.db).CollectInvoiceUsage(ctx, purserdb.CollectInvoiceUsageParams{
-		TenantID:    tenantID,
-		WindowStart: periodStart,
-		WindowEnd:   periodEnd,
-	})
-	if err != nil {
-		return nil, fmt.Errorf("query or iterate usage rows: %w", err)
-	}
-
-	out := map[string]map[string]float64{}
-	for _, row := range rows {
-		if out[row.ClusterID] == nil {
-			out[row.ClusterID] = map[string]float64{}
-		}
-		out[row.ClusterID][row.UsageType] = row.AggregatedValue
-	}
-	return out, nil
-}
-
-func (jm *JobManager) collectInvoiceDimensionedUsage(ctx context.Context, tenantID string, periodStart, periodEnd time.Time) (map[string][]rating.DimensionedQuantity, error) {
-	return collectInvoiceDimensionedUsage(ctx, purserdb.New(jm.db), tenantID, periodStart, periodEnd)
-}
-
-func collectInvoiceDimensionedUsage(ctx context.Context, queries *purserdb.Queries, tenantID string, periodStart, periodEnd time.Time) (map[string][]rating.DimensionedQuantity, error) {
-	rows, err := queries.CollectInvoiceDimensionedUsage(ctx, purserdb.CollectInvoiceDimensionedUsageParams{
-		TenantID:    tenantID,
-		WindowStart: periodStart,
-		WindowEnd:   periodEnd,
-	})
-	if err != nil {
-		return nil, fmt.Errorf("query dimensioned usage: %w", err)
-	}
-	out := map[string][]rating.DimensionedQuantity{}
-	for _, row := range rows {
-		quantity, err := dimensionedQuantity(row.UsageType, row.Unit, row.Dimensions, row.Quantity)
-		if err != nil {
-			return nil, err
-		}
-		out[row.ClusterID] = append(out[row.ClusterID], quantity)
-	}
-	return out, nil
-}
-
 func dimensionedQuantity(usageType, unit string, rawDimensions json.RawMessage, value float64) (rating.DimensionedQuantity, error) {
 	dimensions := map[string]string{}
 	if len(rawDimensions) > 0 {
@@ -130,16 +75,90 @@ func dimensionedQuantity(usageType, unit string, rawDimensions json.RawMessage, 
 	}, nil
 }
 
-// collectPostpaidInvoiceUsage is the usage a postpaid invoice of
-// [periodStart, periodEnd) rates, per cluster in both shapes rating takes.
-// Usage a prepaid settlement paid from the balance is left out: it belongs to
-// the prepaid statement. unsettledFrom reaches back to the start of a prepaid
-// phase a switch to postpaid closed at periodStart, so the phase's usage that
-// reached Purser after the switch is rated here instead of going unbilled.
-func (jm *JobManager) collectPostpaidInvoiceUsage(ctx context.Context, tenantID string, periodStart, periodEnd, unsettledFrom time.Time) (map[string]map[string]float64, map[string][]rating.DimensionedQuantity, error) {
-	queries := purserdb.New(jm.db)
-	rows, err := queries.CollectPostpaidInvoiceUsage(ctx, purserdb.CollectPostpaidInvoiceUsageParams{
-		TenantID: tenantID, WindowStart: periodStart, WindowEnd: periodEnd, UnsettledFrom: unsettledFrom,
+// usagePhase is one phase of a billing period that switches between prepaid
+// and postpaid split: its window, where the split period began and ends, and
+// for a phase a switch closes now, the time records must have reached Purser
+// by.
+type usagePhase struct {
+	start, end time.Time
+	// chainFrom is the split period's start (splitPeriodStart): records of
+	// earlier phases that reached Purser after this phase began belong here.
+	chainFrom time.Time
+	// periodEnd is where the split period ends; zero means end.
+	periodEnd time.Time
+	// receivedBefore, when set, is the switch that closes this phase.
+	receivedBefore sql.NullTime
+}
+
+// splitEnd is where the split period the phase belongs to ends.
+func (p usagePhase) splitEnd() time.Time {
+	if p.periodEnd.IsZero() {
+		return p.end
+	}
+	return p.periodEnd
+}
+
+// splitStart is where the split period the phase belongs to began.
+func (p usagePhase) splitStart() time.Time {
+	if p.chainFrom.IsZero() || p.chainFrom.After(p.start) {
+		return p.start
+	}
+	return p.chainFrom
+}
+
+// baseFeeShare is what the phase pays of a base fee charged for its split
+// period: each phase pays for its own time. The share runs from the phase's
+// start to its end, in whole seconds of the split period, each end rounded
+// half away from zero to the cent, so the phases' shares add up to exactly
+// the fee. A phase that is the whole period, or runs past its end, pays at
+// most the whole fee.
+func (p usagePhase) baseFeeShare(fee decimal.Decimal) decimal.Decimal {
+	from, until := p.splitStart(), p.splitEnd()
+	whole := int64(until.Sub(from) / time.Second)
+	if whole <= 0 || (!p.start.After(from) && !p.end.Before(until)) {
+		return fee
+	}
+	position := func(t time.Time) decimal.Decimal {
+		if t.After(until) {
+			t = until
+		}
+		elapsed := int64(t.Sub(from) / time.Second)
+		return fee.Shift(2).Mul(decimal.NewFromInt(elapsed)).Div(decimal.NewFromInt(whole)).Round(0)
+	}
+	return position(p.end).Sub(position(p.start)).Shift(-2)
+}
+
+// applyBaseFeeShare charges a rated document's base fee for its phase's
+// share of the split period (baseFeeShare).
+func applyBaseFeeShare(result *clusterRatingResult, phase usagePhase) {
+	if !result.BaseAmount.IsPositive() {
+		return
+	}
+	share := phase.baseFeeShare(result.BaseAmount)
+	if share.Equal(result.BaseAmount) {
+		return
+	}
+	until := phase.end
+	if until.After(phase.splitEnd()) {
+		until = phase.splitEnd()
+	}
+	result.TotalAmount = result.TotalAmount.Sub(result.BaseAmount).Add(share)
+	result.BaseAmount = share
+	result.BaseLine.UnitPrice = share
+	result.BaseLine.Amount = share
+	result.BaseLine.Description = fmt.Sprintf("%s %s to %s", result.BaseLine.Description,
+		phase.start.UTC().Format(time.DateOnly), until.UTC().Format(time.DateOnly))
+}
+
+// collectPhaseUsage is the usage the billing document of a phase rates, per
+// cluster in both shapes rating takes. A usage record or correction belongs
+// to the phase in force when it reached Purser: CollectPhaseUsage holds the
+// rule, so the phases of a split period never share one.
+func collectPhaseUsage(ctx context.Context, db purserdb.DBTX, tenantID string, phase usagePhase) (map[string]map[string]float64, map[string][]rating.DimensionedQuantity, error) {
+	queries := purserdb.New(db)
+	rows, err := queries.CollectPhaseUsage(ctx, purserdb.CollectPhaseUsageParams{
+		TenantID: tenantID, WindowStart: phase.start, WindowEnd: phase.end, ChainFrom: phase.chainFrom,
+		ReceivedBefore: phase.receivedBefore,
 	})
 	if err != nil {
 		return nil, nil, fmt.Errorf("query or iterate usage rows: %w", err)
@@ -151,35 +170,56 @@ func (jm *JobManager) collectPostpaidInvoiceUsage(ctx context.Context, tenantID 
 		}
 		perCluster[row.ClusterID][row.UsageType] = row.AggregatedValue
 	}
-	dimensionedRows, err := queries.CollectPostpaidInvoiceDimensionedUsage(ctx, purserdb.CollectPostpaidInvoiceDimensionedUsageParams{
-		TenantID: tenantID, WindowStart: periodStart, WindowEnd: periodEnd, UnsettledFrom: unsettledFrom,
-	})
+	dimensioned, err := collectPhaseDimensionedUsage(ctx, queries, tenantID, phase)
 	if err != nil {
-		return nil, nil, fmt.Errorf("query dimensioned usage: %w", err)
-	}
-	dimensioned := map[string][]rating.DimensionedQuantity{}
-	for _, row := range dimensionedRows {
-		quantity, err := dimensionedQuantity(row.UsageType, row.Unit, row.Dimensions, row.Quantity)
-		if err != nil {
-			return nil, nil, err
-		}
-		dimensioned[row.ClusterID] = append(dimensioned[row.ClusterID], quantity)
+		return nil, nil, err
 	}
 	return perCluster, dimensioned, nil
 }
 
-// closedPrepaidPhaseStart is where the prepaid phase began that a switch to
-// postpaid closed at periodStart. It is periodStart when the period does not
-// follow a closed prepaid phase.
-func closedPrepaidPhaseStart(ctx context.Context, db purserdb.DBTX, tenantID string, periodStart time.Time) (time.Time, error) {
-	phaseStart, err := purserdb.New(db).GetClosedPrepaidPhaseStart(ctx, purserdb.GetClosedPrepaidPhaseStartParams{
+// collectPhaseDimensionedUsage is collectPhaseUsage per meter dimension.
+func collectPhaseDimensionedUsage(ctx context.Context, queries *purserdb.Queries, tenantID string, phase usagePhase) (map[string][]rating.DimensionedQuantity, error) {
+	rows, err := queries.CollectPhaseDimensionedUsage(ctx, purserdb.CollectPhaseDimensionedUsageParams{
+		TenantID: tenantID, WindowStart: phase.start, WindowEnd: phase.end, ChainFrom: phase.chainFrom,
+		ReceivedBefore: phase.receivedBefore,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("query dimensioned usage: %w", err)
+	}
+	dimensioned := map[string][]rating.DimensionedQuantity{}
+	for _, row := range rows {
+		quantity, err := dimensionedQuantity(row.UsageType, row.Unit, row.Dimensions, row.Quantity)
+		if err != nil {
+			return nil, err
+		}
+		dimensioned[row.ClusterID] = append(dimensioned[row.ClusterID], quantity)
+	}
+	return dimensioned, nil
+}
+
+// prepaidUsagePhase is the phase prepaid settlements, reservations and the
+// statement of the prepaid period [periodStart, periodEnd) rate.
+func prepaidUsagePhase(ctx context.Context, db purserdb.DBTX, tenantID string, periodStart, periodEnd time.Time) (usagePhase, error) {
+	chainFrom, err := splitPeriodStart(ctx, db, tenantID, periodStart)
+	if err != nil {
+		return usagePhase{}, err
+	}
+	return usagePhase{start: periodStart, end: periodEnd, chainFrom: chainFrom}, nil
+}
+
+// splitPeriodStart is where the period began that switches between prepaid
+// and postpaid split up to periodStart, following the documents that closed
+// each phase at its switch. It is periodStart when no switch ended a phase
+// there.
+func splitPeriodStart(ctx context.Context, db purserdb.DBTX, tenantID string, periodStart time.Time) (time.Time, error) {
+	phaseStart, err := purserdb.New(db).GetSplitPeriodStart(ctx, purserdb.GetSplitPeriodStartParams{
 		TenantID: tenantID, PeriodStart: periodStart,
 	})
 	if errors.Is(err, sql.ErrNoRows) {
 		return periodStart, nil
 	}
 	if err != nil {
-		return time.Time{}, fmt.Errorf("look up the prepaid phase before %s: %w", periodStart.Format(time.RFC3339), err)
+		return time.Time{}, fmt.Errorf("look up the phases before %s: %w", periodStart.Format(time.RFC3339), err)
 	}
 	return phaseStart, nil
 }

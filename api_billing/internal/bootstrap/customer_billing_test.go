@@ -233,3 +233,34 @@ func TestReconcileCustomerBilling_EntitlementOverrides(t *testing.T) {
 		t.Errorf("unmet expectations: %v", err)
 	}
 }
+
+// A billing model change on an existing tenant closes its running period with
+// a statement or invoice, which only the operator tier assignment writes, so
+// desired state that declares another model is refused, not applied.
+func TestReconcileCustomerBilling_RefusesBillingModelSwitch(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("sqlmock: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	tenantUUID := "11111111-1111-1111-1111-111111111111"
+	tierUUID := "22222222-2222-2222-2222-222222222222"
+	mock.ExpectQuery(`SELECT id, COALESCE\(tier_level, 0\)::integer AS tier_level, currency[\s\S]+FROM purser\.billing_tiers[\s\S]+WHERE tier_name = \$1`).
+		WithArgs("payg").
+		WillReturnRows(sqlmock.NewRows([]string{"id", "tier_level", "currency"}).AddRow(tierUUID, int32(0), "EUR"))
+	mock.ExpectQuery(regexp.QuoteMeta("FROM purser.tenant_subscriptions")).
+		WithArgs(tenantUUID).
+		WillReturnRows(sqlmock.NewRows([]string{"tier_id", "billing_model"}).AddRow(tierUUID, "postpaid"))
+
+	qm := &fakeQM{tenantUUIDs: map[string]string{"acme": tenantUUID}}
+	_, _, err = ReconcileCustomerBilling(context.Background(), db, []CustomerBilling{{
+		Tenant: TenantRef{Ref: "quartermaster.tenants[acme]"}, Model: "prepaid", Tier: "payg", ClusterAccess: "none",
+	}}, qm)
+	if err == nil || !regexp.MustCompile(`runs postpaid billing; desired state declares prepaid`).MatchString(err.Error()) {
+		t.Fatalf("ReconcileCustomerBilling error = %v, want the billing model switch refused", err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Errorf("unmet expectations: %v", err)
+	}
+}

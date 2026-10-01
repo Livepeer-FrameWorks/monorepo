@@ -168,6 +168,39 @@ func (q *Queries) GetSubscriptionOperatorGrant(ctx context.Context, tenantID str
 	return i, err
 }
 
+const getSubscriptionTierForGrant = `-- name: GetSubscriptionTierForGrant :one
+SELECT ts.id::text AS subscription_id, ts.tier_id::text AS tier_id, bt.tier_name,
+       COALESCE(bt.tier_level, 0)::integer AS tier_level, ts.billing_model
+FROM purser.tenant_subscriptions ts
+JOIN purser.billing_tiers bt ON bt.id = ts.tier_id
+WHERE ts.tenant_id = $1::text::uuid AND ts.status != 'cancelled'
+ORDER BY ts.created_at DESC
+LIMIT 1
+`
+
+type GetSubscriptionTierForGrantRow struct {
+	SubscriptionID string `db:"subscription_id" json:"subscription_id"`
+	TierID         string `db:"tier_id" json:"tier_id"`
+	TierName       string `db:"tier_name" json:"tier_name"`
+	TierLevel      int32  `db:"tier_level" json:"tier_level"`
+	BillingModel   string `db:"billing_model" json:"billing_model"`
+}
+
+// The tier and billing model of the tenant's subscription, which an operator
+// grant applies to.
+func (q *Queries) GetSubscriptionTierForGrant(ctx context.Context, tenantID string) (GetSubscriptionTierForGrantRow, error) {
+	row := q.db.QueryRowContext(ctx, getSubscriptionTierForGrant, tenantID)
+	var i GetSubscriptionTierForGrantRow
+	err := row.Scan(
+		&i.SubscriptionID,
+		&i.TierID,
+		&i.TierName,
+		&i.TierLevel,
+		&i.BillingModel,
+	)
+	return i, err
+}
+
 const upsertSubscriptionOperatorGrant = `-- name: UpsertSubscriptionOperatorGrant :exec
 INSERT INTO purser.subscription_operator_grants (
     subscription_id, base_price, waive_usage, collection, expires_at, reason, granted_by, granted_at

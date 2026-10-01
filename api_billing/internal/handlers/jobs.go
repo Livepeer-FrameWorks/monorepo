@@ -26,7 +26,6 @@ import (
 	"frameworks/api_billing/internal/database/purserdb"
 	"frameworks/api_billing/internal/fx"
 	billingmollie "frameworks/api_billing/internal/mollie"
-	"frameworks/api_billing/internal/operator"
 	"frameworks/api_billing/internal/pricing"
 	"frameworks/api_billing/internal/rating"
 	billingstripe "frameworks/api_billing/internal/stripe"
@@ -282,6 +281,23 @@ func mollieAnchoredPeriod(mollieNext time.Time, billingPeriodStart sql.NullTime)
 		periodStart = billingPeriodStart.Time
 	}
 	return periodStart, periodEnd
+}
+
+// nextBillingPeriodEnd is the end of the period that follows a period ending
+// at periodEnd. splitStart is where that period began before switches
+// between prepaid and postpaid split it (splitPeriodStart), so the next
+// period is as long as the whole period and not as its last part. A period of
+// whole calendar months is followed by as many calendar months; any other
+// period, such as a 30-day one or a fragment a split left without its closing
+// documents, by one calendar month.
+func nextBillingPeriodEnd(splitStart, periodEnd time.Time) time.Time {
+	start, end := splitStart.UTC(), periodEnd.UTC()
+	for months := 1; months <= 12; months++ {
+		if start.AddDate(0, months, 0).Equal(end) {
+			return end.AddDate(0, months, 0)
+		}
+	}
+	return end.AddDate(0, 1, 0)
 }
 
 func loadSubscriptionPeriod(ctx context.Context, db *sql.DB, tenantID string, now time.Time) (time.Time, time.Time, error) {
@@ -698,20 +714,15 @@ func (jm *JobManager) handleUsageReport(ctx context.Context, msg kafka.Message) 
 		return jm.processUsageReservation(ctx, summary)
 	}
 
-	acceptedUsage, err := jm.processUsageSummary(ctx, summary, ingestSource)
+	// The report is processed under the billing model of the phase its
+	// records belong to, read while they were written.
+	acceptedUsage, billingModel, err := jm.receiveUsageSummary(ctx, summary, ingestSource)
 	if err != nil {
 		jm.logger.WithError(err).WithFields(logging.Fields{
 			"tenant_id": summary.TenantID,
 			"report_id": summary.ReportID,
 		}).Error("Failed to process usage summary from Kafka")
 		return err
-	}
-
-	// Check billing model to determine processing path
-	billingModel, err := jm.getTenantBillingModel(ctx, summary.TenantID)
-	if err != nil {
-		jm.logger.WithError(err).WithField("tenant_id", summary.TenantID).Error("Failed to get billing model")
-		return fmt.Errorf("billing model lookup failed: %w", err)
 	}
 
 	if billingModel == "prepaid" {
@@ -818,7 +829,11 @@ func (jm *JobManager) processUsageReservation(ctx context.Context, summary model
 	if err != nil {
 		return err
 	}
-	perCluster, err := jm.collectInvoiceDimensionedUsage(ctx, summary.TenantID, billingPeriodStart, billingPeriodEnd)
+	phase, err := prepaidUsagePhase(ctx, jm.db, summary.TenantID, billingPeriodStart, billingPeriodEnd)
+	if err != nil {
+		return err
+	}
+	perCluster, err := collectPhaseDimensionedUsage(ctx, purserdb.New(jm.db), summary.TenantID, phase)
 	if err != nil {
 		return fmt.Errorf("collect finalized usage for reservation: %w", err)
 	}
@@ -897,15 +912,6 @@ func ratePrepaidQuantities(currency string, rules []rating.Rule, quantities []ra
 	return result.UsageAmount, nil
 }
 
-// getTenantBillingModel returns the billing model for a tenant (prepaid or postpaid)
-func (jm *JobManager) getTenantBillingModel(ctx context.Context, tenantID string) (string, error) {
-	billingModel, err := purserdb.New(jm.db).GetActiveTenantBillingModelForJobs(ctx, tenantID)
-	if errors.Is(err, sql.ErrNoRows) {
-		return "postpaid", nil // Default for tenants without subscription
-	}
-	return billingModel, err
-}
-
 // buildUsageDataFromSummary is used by aggregate rating paths that do not need
 // per-dimension rows. Financial persistence iterates summary.Meters directly.
 func buildUsageDataFromSummary(summary models.UsageSummary) map[string]float64 {
@@ -967,21 +973,37 @@ func (jm *JobManager) processPrepaidUsage(ctx context.Context, summary models.Us
 	if alreadySettled {
 		return nil
 	}
-	billingPeriodStart, billingPeriodEnd, err := jm.prepaidBillingPeriod(ctx, summary.TenantID, periodStart)
-	if err != nil {
-		return err
-	}
 	referenceID := usageSummaryReferenceID(summary)
 	periodLabel := summary.PeriodStart.UTC().Format(time.RFC3339) + "/" + summary.PeriodEnd.UTC().Format(time.RFC3339)
 	result := prepaidUsageSettlementResult{}
-	settledByPeer := false
+	settledByPeer, leftPrepaid := false, false
+	var billingPeriodStart time.Time
 	err = database.WithRetryablePostgresTx(ctx, jm.db, nil, func(tx *sql.Tx) error {
 		// WithRetryablePostgresTx can invoke this closure again after either a
 		// body or commit failure. Never carry an aborted attempt's outcome into
 		// the successful attempt's post-commit threshold handling.
 		result = prepaidUsageSettlementResult{}
-		settledByPeer = false
+		settledByPeer, leftPrepaid = false, false
 		queries := purserdb.New(tx)
+		// The subscription row lock comes first, as in the switches between
+		// prepaid and postpaid: a settlement never runs against a period a
+		// switch is closing. A tenant that left prepaid since the report was
+		// received has its prepaid phase closed by a statement, which settled
+		// the phase's usage.
+		subscription, lockErr := queries.LockSubscriptionForUsage(ctx, summary.TenantID)
+		if errors.Is(lockErr, sql.ErrNoRows) {
+			leftPrepaid = true
+			return nil
+		}
+		if lockErr != nil {
+			return fmt.Errorf("lock subscription: %w", lockErr)
+		}
+		if subscription.BillingModel != "prepaid" {
+			leftPrepaid = true
+			return nil
+		}
+		var billingPeriodEnd time.Time
+		billingPeriodStart, billingPeriodEnd = prepaidPhasePeriod(subscription.BillingPeriodStart, subscription.BillingPeriodEnd, periodStart)
 		if insertErr := queries.EnsurePrepaidBalance(ctx, purserdb.EnsurePrepaidBalanceParams{
 			TenantID: summary.TenantID, Currency: currency,
 		}); insertErr != nil {
@@ -1003,7 +1025,11 @@ func (jm *JobManager) processPrepaidUsage(ctx context.Context, summary models.Us
 			return nil
 		}
 
-		perCluster, collectErr := collectInvoiceDimensionedUsage(ctx, queries, summary.TenantID, billingPeriodStart, billingPeriodEnd)
+		phase, phaseErr := prepaidUsagePhase(ctx, tx, summary.TenantID, billingPeriodStart, billingPeriodEnd)
+		if phaseErr != nil {
+			return phaseErr
+		}
+		perCluster, collectErr := collectPhaseDimensionedUsage(ctx, queries, summary.TenantID, phase)
 		if collectErr != nil {
 			return fmt.Errorf("collect cumulative prepaid usage: %w", collectErr)
 		}
@@ -1056,10 +1082,18 @@ func (jm *JobManager) processPrepaidUsage(ctx context.Context, summary models.Us
 	if settledByPeer {
 		return nil
 	}
+	if leftPrepaid {
+		jm.logger.WithFields(logging.Fields{
+			"tenant_id": summary.TenantID,
+			"report_id": summary.ReportID,
+		}).Info("Tenant left prepaid before its usage report was settled; the prepaid phase's statement settled it")
+		return nil
+	}
 
 	jm.logger.WithFields(logging.Fields{
 		"tenant_id":               summary.TenantID,
 		"period":                  periodLabel,
+		"billing_period_start":    billingPeriodStart.Format(time.RFC3339),
 		"marginal_micro":          result.marginalMicro,
 		"cumulative_amount_micro": result.desiredCumulativeMicro,
 	}).Info("Settled cumulative prepaid usage")
@@ -1229,15 +1263,65 @@ func invoiceCreditReturnedDescription(periodStart time.Time) string {
 	return fmt.Sprintf("Invoice credit returned: %s", periodStart.Format("2006-01"))
 }
 
-// invoiceCreditReferenceID names one movement of a period's invoice credit.
-// entries is the number of ledger rows the period already has, so a debit
-// that repeats an earlier amount after credit was returned gets its own
+// invoiceCreditKey names the ledger rows that hold one billing document's
+// invoice credit: SumAppliedInvoiceCredit sums the rows with its two
+// descriptions, and reference keeps their idempotency references apart from
+// other keys'.
+type invoiceCreditKey struct {
+	applied, returned, reference string
+}
+
+// monthInvoiceCreditKey is the key of the invoice credit held by the first
+// billing document starting in a month: the month the period starts in.
+func monthInvoiceCreditKey(periodStart time.Time) invoiceCreditKey {
+	return invoiceCreditKey{
+		applied:   invoiceCreditDescription(periodStart),
+		returned:  invoiceCreditReturnedDescription(periodStart),
+		reference: periodStart.Format("2006-01-02"),
+	}
+}
+
+// startInvoiceCreditKey is the key of the invoice credit held by a later
+// billing document of a month: its exact period start.
+func startInvoiceCreditKey(periodStart time.Time) invoiceCreditKey {
+	start := periodStart.UTC().Format(time.RFC3339Nano)
+	return invoiceCreditKey{
+		applied:   "Invoice credit: " + start,
+		returned:  "Invoice credit returned: " + start,
+		reference: start,
+	}
+}
+
+// documentInvoiceCreditKey is the key of the invoice credit the tenant's
+// billing document starting at periodStart holds. Each document has its own:
+// the first document starting in a month holds it under the month's key,
+// which every document had while a month started one period at most, and a
+// later one of the same month, after a period closed early or a switch
+// between prepaid and postpaid, under its exact start. One document's
+// reconciliation therefore never takes or returns another's credit.
+func documentInvoiceCreditKey(ctx context.Context, queries *purserdb.Queries, tenantID string, periodStart time.Time) (invoiceCreditKey, error) {
+	monthStart := time.Date(periodStart.Year(), periodStart.Month(), 1, 0, 0, 0, 0, periodStart.Location())
+	earlier, err := queries.UsageDocumentStartsEarlierInMonth(ctx, purserdb.UsageDocumentStartsEarlierInMonthParams{
+		TenantID: tenantID, MonthStart: monthStart, PeriodStart: periodStart,
+	})
+	if err != nil {
+		return invoiceCreditKey{}, fmt.Errorf("look up earlier documents of the month: %w", err)
+	}
+	if earlier {
+		return startInvoiceCreditKey(periodStart), nil
+	}
+	return monthInvoiceCreditKey(periodStart), nil
+}
+
+// invoiceCreditReferenceID names one movement of a document's invoice
+// credit. entries is the number of ledger rows the key already has, so a
+// debit that repeats an earlier amount after credit was returned gets its own
 // reference instead of colliding with the first one.
-func invoiceCreditReferenceID(tenantID string, periodStart time.Time, entries, heldCents, deltaCents int64) string {
+func invoiceCreditReferenceID(tenantID string, key invoiceCreditKey, entries, heldCents, deltaCents int64) string {
 	raw := fmt.Sprintf(
 		"invoice_credit:%s:%s:%d:%d:%d",
 		tenantID,
-		periodStart.Format("2006-01-02"),
+		key.reference,
 		entries,
 		heldCents,
 		deltaCents,
@@ -1266,12 +1350,14 @@ func (jm *JobManager) applyInvoicePrepaidCreditTx(ctx context.Context, tx *sql.T
 	return reconcileInvoicePrepaidCreditTx(ctx, tx, tenantID, periodStart, grossCents)
 }
 
-// reconcileInvoicePrepaidCreditTx moves prepaid balance so the period's
-// invoice holds exactly the credit it uses: its gross amount, bounded by the
-// credit it already holds plus the positive prepaid balance. When the invoice
-// grows, only the missing amount is debited; when it shrinks (a grant or tier
-// change lowers the base fee, a correction lowers usage, the draft is held for
-// manual review) the excess returns to the balance with its own ledger row.
+// reconcileInvoicePrepaidCreditTx moves prepaid balance so the tenant's
+// billing document starting at periodStart holds exactly the credit it uses:
+// its gross amount, bounded by the credit it already holds plus the positive
+// prepaid balance. When the invoice grows, only the missing amount is
+// debited; when it shrinks (a grant or tier change lowers the base fee, a
+// correction lowers usage, the draft is held for manual review) the excess
+// returns to the balance with its own ledger row. The credit is held under
+// the document's own key (documentInvoiceCreditKey).
 //
 // The prepaid balance row lock serializes every movement of a tenant's
 // invoice credit, so the held amount read under it is exact.
@@ -1288,10 +1374,14 @@ func reconcileInvoicePrepaidCreditTx(ctx context.Context, tx *sql.Tx, tenantID s
 	if err != nil {
 		return invoiceCreditChange{}, fmt.Errorf("lock prepaid balance: %w", err)
 	}
+	key, err := documentInvoiceCreditKey(ctx, queries, tenantID, periodStart)
+	if err != nil {
+		return invoiceCreditChange{}, err
+	}
 	held, err := queries.SumAppliedInvoiceCredit(ctx, purserdb.SumAppliedInvoiceCreditParams{
 		TenantID:            tenantID,
-		AppliedDescription:  invoiceCreditDescription(periodStart),
-		ReturnedDescription: invoiceCreditReturnedDescription(periodStart),
+		AppliedDescription:  key.applied,
+		ReturnedDescription: key.returned,
 	})
 	if err != nil {
 		return invoiceCreditChange{}, fmt.Errorf("lookup applied invoice credit: %w", err)
@@ -1304,8 +1394,8 @@ func reconcileInvoicePrepaidCreditTx(ctx context.Context, tx *sql.Tx, tenantID s
 	switch {
 	case target > held.AppliedCents:
 		requestCents := target - held.AppliedCents
-		referenceID := invoiceCreditReferenceID(tenantID, periodStart, held.Entries, held.AppliedCents, requestCents)
-		newBalance, deltaApplied, _, deductErr := deductPrepaidBalanceForCreditTx(ctx, tx, tenantID, requestCents, invoiceCreditDescription(periodStart), &referenceID)
+		referenceID := invoiceCreditReferenceID(tenantID, key, held.Entries, held.AppliedCents, requestCents)
+		newBalance, deltaApplied, _, deductErr := deductPrepaidBalanceForCreditTx(ctx, tx, tenantID, requestCents, key.applied, &referenceID)
 		if deductErr != nil {
 			return invoiceCreditChange{}, fmt.Errorf("deduct invoice credit delta: %w", deductErr)
 		}
@@ -1313,13 +1403,13 @@ func reconcileInvoicePrepaidCreditTx(ctx context.Context, tx *sql.Tx, tenantID s
 		change.BalanceCents = newBalance
 	case target < held.AppliedCents:
 		returnCents := held.AppliedCents - target
-		referenceID := invoiceCreditReferenceID(tenantID, periodStart, held.Entries, held.AppliedCents, -returnCents)
+		referenceID := invoiceCreditReferenceID(tenantID, key, held.Entries, held.AppliedCents, -returnCents)
 		newBalance := balance + returnCents
 		if err = queries.InsertInvoiceCreditBalanceTransaction(ctx, purserdb.InsertInvoiceCreditBalanceTransactionParams{
 			TenantID:          tenantID,
 			AmountCents:       returnCents,
 			BalanceAfterCents: newBalance,
-			Description:       sql.NullString{String: invoiceCreditReturnedDescription(periodStart), Valid: true},
+			Description:       sql.NullString{String: key.returned, Valid: true},
 			ReferenceID:       sql.NullString{String: referenceID, Valid: true},
 			ReferenceType:     sql.NullString{String: "invoice_credit", Valid: true},
 		}); err != nil {
@@ -1716,25 +1806,15 @@ func (jm *JobManager) finalizeSubscriptionPeriods(ctx context.Context, dueSubscr
 	var invoicesGenerated int
 	for _, subscription := range dueSubscriptions {
 		tenantID := subscription.TenantID
-		tierID := subscription.TierID.String()
-		billingEmail := subscription.BillingEmail
-		tierName := subscription.TierName
-		displayName := subscription.DisplayName
 		billingPeriodStart := subscription.BillingPeriodStart
 		billingPeriodEnd := subscription.BillingPeriodEnd
 		mollieNextPaymentDate := subscription.MollieNextPaymentDate
-		stripeSubID := subscription.StripeSubscriptionID
-		mollieSubID := subscription.MollieSubscriptionID
-		paymentMethod := subscription.PaymentMethod
-		presentmentCurrency := strings.ToUpper(strings.TrimSpace(subscription.PresentmentCurrency))
 
 		tier, tierErr := billingpkg.LoadEffectiveTier(ctx, jm.db, tenantID)
 		if tierErr != nil {
 			jm.logger.WithError(tierErr).WithField("tenant_id", tenantID).Error("Failed to load effective tier for invoice")
 			continue
 		}
-		basePrice, _ := tier.BasePrice.Float64()
-		currency := tier.Currency
 		meteringEnabled := tier.MeteringEnabled
 
 		var periodStart, periodEnd time.Time
@@ -1809,128 +1889,26 @@ func (jm *JobManager) finalizeSubscriptionPeriods(ctx context.Context, dueSubscr
 			continue
 		}
 
-		// A period that follows a prepaid phase closed by a switch to postpaid
-		// also rates that phase's usage no prepaid settlement paid.
-		phaseStart, phaseErr := closedPrepaidPhaseStart(ctx, jm.db, tenantID, periodStart)
+		// A period that follows phases switches closed also rates the usage of
+		// those phases that reached Purser after it began.
+		phaseStart, phaseErr := splitPeriodStart(ctx, jm.db, tenantID, periodStart)
 		if phaseErr != nil {
-			jm.logger.WithError(phaseErr).WithField("tenant_id", tenantID).Error("Failed to look up a closed prepaid phase; skipping invoice for this period")
+			jm.logger.WithError(phaseErr).WithField("tenant_id", tenantID).Error("Failed to look up the phases before the period; skipping invoice for this period")
+			continue
+		}
+		phase := usagePhase{start: periodStart, end: periodEnd, chainFrom: phaseStart}
+		if closingEarly && billingPeriodEnd.Valid && billingPeriodEnd.Time.After(periodEnd) {
+			// A period closed early is a phase of the whole period.
+			phase.periodEnd = billingPeriodEnd.Time
+		}
+		run, rateErr := jm.ratePostpaidInvoice(ctx, subscription, tier, phase, draftInvoiceID, false)
+		if rateErr != nil {
+			jm.logger.WithError(rateErr).WithField("tenant_id", tenantID).Error("Failed to rate invoice; skipping invoice for this period")
 			continue
 		}
 
-		// Aggregate canonical usage metrics for the billing period. SUM handles
-		// flow/delta meters; MAX handles peak gauges; unique counts are skipped
-		// here and come from Periscope enrichment because scalar windows cannot
-		// be summed into unique users.
-		// Fetch usage partitioned by cluster_id. A scan/query failure must
-		// abort this tenant's invoice: rating against an empty/partial usage
-		// map underbills. Usage the prepaid balance paid is not rated again.
-		perClusterUsage, perClusterDimensioned, usageErr := jm.collectPostpaidInvoiceUsage(ctx, tenantID, periodStart, periodEnd, phaseStart)
-		if usageErr != nil {
-			jm.logger.WithError(usageErr).WithField("tenant_id", tenantID).Error("Failed to collect usage; skipping invoice for this period")
-			continue
-		}
-		usageData := flattenUsageAcrossClusters(perClusterUsage)
-
-		// The base fee is outside the period's usage invoice when a provider
-		// subscription collects it or Purser charged it in advance on a
-		// base-fee invoice for this period.
-		baseFeeInvoiced, baseFeeErr := purserdb.New(jm.db).BaseFeeInvoiceExistsForPeriod(ctx, purserdb.BaseFeeInvoiceExistsForPeriodParams{
-			TenantID: tenantID, PeriodStart: periodStart,
-		})
-		if baseFeeErr != nil {
-			jm.logger.WithError(baseFeeErr).WithField("tenant_id", tenantID).Error("Failed to check advance base-fee invoice")
-			continue
-		}
-		baseProviderManaged := stripeSubID.Valid || mollieSubID.Valid || baseFeeInvoiced
-		collectionProvider, providerErr := resolveInvoiceCollectionProvider(paymentMethod.String, stripeSubID.Valid, mollieSubID.Valid,
-			subscription.StripeCustomerID.Valid && subscription.StripeCustomerID.String != "", subscription.HasMollieCustomer)
-		if providerErr != nil {
-			jm.logger.WithError(providerErr).WithField("tenant_id", tenantID).Error("Invoice finalization blocked by ambiguous collection provider")
-			continue
-		}
-		ratingResult, ratingErr := jm.rateInvoiceForTenant(ctx, tenantID, periodStart, periodEnd, tier, true, baseProviderManaged, perClusterUsage, perClusterDimensioned)
-		if ratingErr != nil {
-			jm.logger.WithError(ratingErr).WithField("tenant_id", tenantID).Error("Failed to rate usage for invoice")
-			continue
-		}
-		// Money stays in decimal.Decimal until the SQL boundary; NUMERIC
-		// columns bind cleanly via $N::numeric. No float64 touches the cents.
-		baseDec := ratingResult.BaseAmount
-		meteredDec := ratingResult.UsageAmount
-		// unwaivedMeteredDec is the would-have-cost usage total (display only;
-		// equals meteredDec when usage is not waived). It must NEVER feed prepaid
-		// credit, provider charges, the meter outbox, or operator credits.
-		unwaivedMeteredDec := ratingResult.GrossUsageAmount
-		grossDec := ratingResult.TotalAmount
-		creditDec := decimal.Zero
-		totalDec := grossDec
-
-		// Generate invoice
-		invoiceID := uuid.New().String()
-		dueDate := periodEnd.AddDate(0, 0, 14) // 14 days to pay
-
-		// Determine invoice status. manual_review takes precedence: when any
-		// cluster's pricing failed to resolve we hold the entire invoice so
-		// no payment captures, Stripe meter pushes, ledger writes, or
-		// subscription period advances happen until ops resolves and
-		// re-finalizes. Lines persist for ops visibility.
-		status := "pending"
-		if len(ratingResult.ManualReviewReasons) > 0 {
-			status = "manual_review"
-			jm.logger.WithFields(logging.Fields{
-				"tenant_id": tenantID,
-				"reasons":   strings.Join(ratingResult.ManualReviewReasons, "; "),
-			}).Warn("Invoice routed to manual_review; finalization halted")
-		}
-
-		// Build flat usage_details - all metrics at top level for email and API
-		usageDetails := map[string]interface{}{
-			"period_start": periodStart,
-			"period_end":   periodEnd,
-			"tier_info": map[string]interface{}{
-				"tier_id":          tierID,
-				"tier_name":        tierName,
-				"display_name":     displayName,
-				"base_price":       basePrice,
-				"metering_enabled": meteringEnabled,
-			},
-			// This invoice leaves out usage the prepaid balance paid; the
-			// prepaid double-charge diagnostic skips invoices that carry it.
-			prepaidSettledUsageExcludedKey: true,
-		}
-
-		// Add rollup-able billing metrics
-		for k, v := range usageData {
-			usageDetails[k] = v
-		}
-
-		// Add accurate unique counts and geo from Periscope (cannot be rolled up from 5-min windows)
-		enrichCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-		if enrichment := jm.enrichInvoiceFromPeriscope(enrichCtx, tenantID, periodStart, periodEnd); enrichment != nil {
-			for k, v := range enrichment {
-				usageDetails[k] = v
-			}
-		}
-		cancel()
-
-		// Marshal usage details
-		usageJSON, err := json.Marshal(usageDetails)
-		if err != nil {
-			jm.logger.WithFields(logging.Fields{
-				"error":     err,
-				"tenant_id": tenantID,
-			}).Error("Failed to marshal usage data")
-			continue
-		}
-
-		// A period a switch from prepaid started mid-way is as long as the
-		// period it split, so the next period is not shortened with it.
-		periodDuration := periodEnd.Sub(phaseStart)
-		if periodDuration <= 0 {
-			periodDuration = 30 * 24 * time.Hour
-		}
 		nextPeriodStart := periodEnd
-		nextPeriodEnd := periodEnd.Add(periodDuration)
+		nextPeriodEnd := nextBillingPeriodEnd(phaseStart, periodEnd)
 		nextBillingDate := nextPeriodEnd
 
 		// Store invoice header + rated line items atomically. If line-item
@@ -1938,173 +1916,26 @@ func (jm *JobManager) finalizeSubscriptionPeriods(ctx context.Context, dueSubscr
 		// without their line-item audit trail. The subscription period advances
 		// in the same transaction so a finalized invoice cannot leave the
 		// subscription pointing at the already-billed period.
-		var collectionDecision *invoiceCollectionDecision
-		var presentment fx.Record
-		var creditChange invoiceCreditChange
-		generatedInvoiceID, initialStatus, initialUsageJSON := invoiceID, status, usageJSON
+		var result postpaidInvoiceResult
 		err = withTx(ctx, jm.db, func(tx *sql.Tx) error {
-			// withTx replays this closure after retryable failures; every
-			// value the body derives starts from its pre-transaction state.
-			invoiceID, status, usageJSON = generatedInvoiceID, initialStatus, initialUsageJSON
-			creditDec, totalDec, collectionDecision = decimal.Zero, grossDec, nil
-			delete(usageDetails, "collection")
-			queries := purserdb.New(tx)
+			// The subscription row lock comes before the balance's, in the
+			// order usage receipt, settlement and switches take them.
+			if txErr := purserdb.New(tx).LockSubscriptionForPeriodClose(ctx, tenantID); txErr != nil {
+				return fmt.Errorf("lock subscription: %w", txErr)
+			}
 			var txErr error
-			// A held invoice records no credit, so it reconciles the period's
-			// credit to zero and anything an earlier draft took returns.
-			creditTargetCents := int64(0)
-			if len(ratingResult.ManualReviewReasons) == 0 {
-				creditTargetCents = grossDec.Mul(decimal.NewFromInt(100)).Round(0).IntPart()
-			}
-			creditChange, txErr = jm.applyInvoicePrepaidCreditTx(ctx, tx, tenantID, periodStart, creditTargetCents)
+			result, txErr = writePostpaidInvoiceTx(ctx, tx, run)
 			if txErr != nil {
 				return txErr
-			}
-			if len(ratingResult.ManualReviewReasons) == 0 {
-				creditDec = decimal.NewFromInt(creditChange.AppliedCents).Div(decimal.NewFromInt(100))
-				totalDec = grossDec.Sub(creditDec)
-				if totalDec.IsNegative() {
-					totalDec = decimal.Zero
-				}
-				totalDec = totalDec.Round(2)
-				if collectionProvider != "" {
-					decision, decisionErr := applyInvoiceCollectionMinimumTx(
-						ctx, tx, tenantID, collectionProvider, billing.LedgerCurrency,
-						totalDec.Mul(decimal.NewFromInt(100)).IntPart(),
-					)
-					if decisionErr != nil {
-						return fmt.Errorf("apply invoice collection minimum: %w", decisionErr)
-					}
-					collectionDecision = &decision
-					usageDetails["collection"] = map[string]interface{}{
-						"provider":              decision.Provider,
-						"minimum_cents":         decision.MinimumCents,
-						"opening_balance_cents": decision.OpeningBalanceCents,
-						"current_charge_cents":  decision.CurrentChargeCents,
-						"collected_cents":       decision.CollectedCents,
-						"closing_balance_cents": decision.ClosingBalanceCents,
-						"outcome":               decision.Outcome,
-					}
-					usageJSON, txErr = json.Marshal(usageDetails)
-					if txErr != nil {
-						return fmt.Errorf("marshal invoice collection details: %w", txErr)
-					}
-					totalDec = decimal.NewFromInt(decision.CollectedCents).Div(decimal.NewFromInt(100))
-				}
-				status = finalizedInvoiceStatus(totalDec)
-			} else {
-				totalDec = totalDec.Round(2)
-			}
-
-			// Bind decimals as strings into NUMERIC columns so no float64 rounding
-			// can sneak in at the SQL boundary.
-			totalAmt := totalDec.Round(2).String()
-			baseAmt := baseDec.Round(2).String()
-			meteredAmt := meteredDec.Round(2).String()
-			grossMeteredAmt := unwaivedMeteredDec.Round(2).String()
-			creditAmt := creditDec.Round(2).String()
-
-			if draftInvoiceID != "" {
-				invoiceID, txErr = queries.UpdateDraftInvoice(ctx, purserdb.UpdateDraftInvoiceParams{
-					Amount:               totalAmt,
-					BaseAmount:           baseAmt,
-					MeteredAmount:        meteredAmt,
-					PrepaidCreditApplied: creditAmt,
-					Currency:             currency,
-					Status:               status,
-					DueDate:              dueDate,
-					UsageDetails:         json.RawMessage(usageJSON),
-					PeriodStart:          sql.NullTime{Time: periodStart, Valid: true},
-					PeriodEnd:            sql.NullTime{Time: periodEnd, Valid: true},
-					GrossMeteredAmount:   grossMeteredAmt,
-					InvoiceID:            draftInvoiceID,
-					TenantID:             tenantID,
-				})
-				if txErr != nil {
-					return fmt.Errorf("update invoice: %w", txErr)
-				}
-			} else {
-				invoiceID, txErr = queries.UpsertInvoiceForPeriod(ctx, purserdb.UpsertInvoiceForPeriodParams{
-					InvoiceID:            invoiceID,
-					TenantID:             tenantID,
-					Amount:               totalAmt,
-					Currency:             currency,
-					Status:               status,
-					DueDate:              dueDate,
-					BaseAmount:           baseAmt,
-					MeteredAmount:        meteredAmt,
-					PrepaidCreditApplied: creditAmt,
-					UsageDetails:         json.RawMessage(usageJSON),
-					PeriodStart:          sql.NullTime{Time: periodStart, Valid: true},
-					PeriodEnd:            sql.NullTime{Time: periodEnd, Valid: true},
-					GrossMeteredAmount:   grossMeteredAmt,
-				})
-				if txErr != nil {
-					return fmt.Errorf("upsert invoice: %w", txErr)
-				}
-			}
-			txErr = persistInvoiceLineItems(ctx, tx, invoiceID, tenantID, ratingResult)
-			if txErr != nil {
-				return txErr
-			}
-			// A finalized invoice is presented in the tenant's presentment
-			// currency at the ECB rate of the finalization date. Without a
-			// usable rate the whole finalization rolls back and the next run
-			// retries it.
-			if status != "manual_review" {
-				presentment, txErr = finalizeInvoicePresentmentTx(ctx, tx, invoiceID, tenantID, presentmentCurrency, totalDec, time.Now().UTC())
-				if txErr != nil {
-					return txErr
-				}
-			}
-			if collectionDecision != nil {
-				txErr = persistInvoiceCollectionDecisionTx(ctx, tx, invoiceID, tenantID, *collectionDecision)
-				if txErr != nil {
-					return txErr
-				}
-			}
-			if status != "manual_review" {
-				txErr = queries.MarkUsageAdjustmentsAppliedToInvoice(ctx, purserdb.MarkUsageAdjustmentsAppliedToInvoiceParams{
-					InvoiceID:   invoiceID,
-					TenantID:    tenantID,
-					PeriodEnd:   periodEnd,
-					PeriodStart: periodStart,
-				})
-				if txErr != nil {
-					return fmt.Errorf("mark usage adjustments applied to invoice: %w", txErr)
-				}
-			}
-			// Operator credit ledger: write accrual rows for marketplace
-			// lines in the same tx as the invoice finalization. The
-			// helper skips manual_review invoices internally.
-			txErr = operator.ComputeAndPersistCredits(ctx, tx, invoiceID, status)
-			if txErr != nil {
-				return fmt.Errorf("persist operator credits: %w", txErr)
-			}
-			// Enqueue Stripe meter events in the outbox. The async
-			// flusher (separate worker) reads pending rows and pushes
-			// to Stripe; rollback discards the row.
-			txErr = billingstripe.EnqueueMeterEvents(ctx, tx, invoiceID, tenantID, status)
-			if txErr != nil {
-				return fmt.Errorf("enqueue stripe meter events: %w", txErr)
-			}
-			txErr = enqueueInvoiceEmailTx(ctx, tx, invoiceID, tenantID, billingEmail.String, status)
-			if txErr != nil {
-				return fmt.Errorf("enqueue invoice email: %w", txErr)
-			}
-			txErr = enqueueInvoiceCreatedTx(ctx, tx, tenantID, invoiceID, status,
-				totalDec.Round(2).Shift(2).IntPart(), periodStart, periodEnd, dueDate)
-			if txErr != nil {
-				return fmt.Errorf("enqueue invoice_created: %w", txErr)
 			}
 			// manual_review: do not advance the subscription period.
 			// Resolution flow is ops fixes pricing → re-finalize → side
 			// effects fire once on the corrected total. A period closed
 			// early is replaced by the caller.
-			if status == "manual_review" || closingEarly {
+			if result.status == "manual_review" || closingEarly {
 				return nil
 			}
-			rowsAffected, txErr := queries.AdvanceSubscriptionBillingPeriod(ctx, purserdb.AdvanceSubscriptionBillingPeriodParams{
+			rowsAffected, txErr := purserdb.New(tx).AdvanceSubscriptionBillingPeriod(ctx, purserdb.AdvanceSubscriptionBillingPeriodParams{
 				NextBillingDate:    sql.NullTime{Time: nextBillingDate, Valid: true},
 				BillingPeriodStart: sql.NullTime{Time: nextPeriodStart, Valid: true},
 				BillingPeriodEnd:   sql.NullTime{Time: nextPeriodEnd, Valid: true},
@@ -2122,64 +1953,19 @@ func (jm *JobManager) finalizeSubscriptionPeriods(ctx context.Context, dueSubscr
 			jm.logger.WithFields(logging.Fields{
 				"error":     err,
 				"tenant_id": tenantID,
-				"amount":    totalDec.Round(2).String(),
+				"amount":    result.total.Round(2).String(),
 			}).Error("Failed to create invoice")
 			continue
 		}
-		logInvoiceCreditChange(jm.logger, tenantID, invoiceID, periodStart, creditChange)
-
 		invoicesGenerated++
-		totalAmt := totalDec.Round(2).String()
-		baseAmt := baseDec.Round(2).String()
-		meteredAmt := meteredDec.Round(2).String()
-		jm.logger.WithFields(logging.Fields{
-			"invoice_id":       invoiceID,
-			"tenant_id":        tenantID,
-			"tier_name":        tierName,
-			"base_amount":      baseAmt,
-			"metered_amount":   meteredAmt,
-			"total_amount":     totalAmt,
-			"currency":         currency,
-			"due_date":         dueDate,
-			"metering_enabled": meteringEnabled,
-		}).Info("Generated monthly invoice")
-
-		// Drain any out-of-order Mollie subscription payment webhooks that
-		// landed before the local invoice for this period existed. The
-		// webhook handler parked them in mollie_payment_observations; now
-		// that the invoice is finalized, attach them and settle through
-		// the partial-payment-aware path.
-		if status == "pending" {
-			if drainErr := jm.billing.drainMolliePaymentObservationsForInvoice(ctx, invoiceID); drainErr != nil {
-				jm.logger.WithError(drainErr).WithFields(logging.Fields{
-					"tenant_id":  tenantID,
-					"invoice_id": invoiceID,
-				}).Warn("Failed to drain Mollie payment observations")
-			}
-		}
-
-		// Overage collection. Provider subscriptions auto-charge the base;
-		// Purser collects the remaining invoice amount after prepaid credit.
-		// Route through exactly one selected provider. Stale IDs from a prior
-		// provider switch cannot cause a second charge. Webhook reconciliation
-		// uses the shared partial-payment-aware settlement path regardless of
-		// provider.
-		if status == "pending" && presentment.OriginalMinor > 0 {
-			if chargeErr := jm.chargeInvoice(ctx, collectionProvider, tenantID, invoiceID, presentment.OriginalMinor, presentment.OriginalCurrency); chargeErr != nil {
-				jm.logger.WithError(chargeErr).WithFields(logging.Fields{
-					"tenant_id":  tenantID,
-					"invoice_id": invoiceID,
-					"provider":   collectionProvider,
-				}).Warn("Failed to trigger off-session invoice charge")
-			}
-		}
+		jm.afterPostpaidInvoiceCommit(ctx, run, result, "Generated monthly invoice")
 
 		// Apply any scheduled tier downgrade now that the period's invoice has
 		// committed in a non-held state. Three-step ordering favors the user
 		// on partial failure: flip tier first, reconcile cluster access second,
 		// clear pending_* last. Pending stays set on any error so the next
 		// cron tick retries.
-		if status != "manual_review" && !closingEarly {
+		if result.status != "manual_review" && !closingEarly {
 			jm.applyPendingDowngrade(ctx, tenantID)
 			// The next period's base fee, at the tier that period runs on, is
 			// charged in advance when Purser rather than a provider
@@ -3109,8 +2895,59 @@ func parseUsageSummaryPeriod(summary models.UsageSummary) (time.Time, time.Time,
 	return periodStart, periodEnd, granularity, nil
 }
 
-// processUsageSummary processes a single usage summary and stores it in the usage records table
+// processUsageSummary stores a usage summary's records, provider usage and
+// corrections (receiveUsageSummary) and returns the accepted usage.
 func (jm *JobManager) processUsageSummary(ctx context.Context, summary models.UsageSummary, source string) ([]canonicalUsageDelta, error) {
+	accepted, _, err := jm.receiveUsageSummary(ctx, summary, source)
+	return accepted, err
+}
+
+// receiveUsageSummary stores a usage summary in one transaction that holds
+// the tenant's subscription row FOR SHARE (LockSubscriptionForUsage) and
+// returns the accepted usage with the billing model to process it under. A
+// switch between prepaid and postpaid holds that row FOR UPDATE, so the
+// report's records commit before the switch counts the usage of the phase it
+// closes, or after the switch committed and dated no earlier than it: every
+// record belongs to exactly one phase, and the model returned is that
+// phase's. A tenant without a subscription is postpaid.
+func (jm *JobManager) receiveUsageSummary(ctx context.Context, summary models.UsageSummary, source string) ([]canonicalUsageDelta, string, error) {
+	var accepted []canonicalUsageDelta
+	var billingModel string
+	err := database.WithRetryablePostgresTx(ctx, jm.db, nil, func(tx *sql.Tx) error {
+		var txErr error
+		accepted, billingModel, txErr = jm.receiveUsageSummaryTx(ctx, tx, summary, source)
+		return txErr
+	})
+	if err != nil {
+		return nil, "", err
+	}
+	return accepted, billingModel, nil
+}
+
+// receiveUsageSummaryTx is receiveUsageSummary inside the caller's
+// transaction; the subscription row stays locked until it ends.
+func (jm *JobManager) receiveUsageSummaryTx(ctx context.Context, tx *sql.Tx, summary models.UsageSummary, source string) ([]canonicalUsageDelta, string, error) {
+	billingModel := "postpaid"
+	queries := purserdb.New(tx)
+	subscription, err := queries.LockSubscriptionForUsage(ctx, summary.TenantID)
+	switch {
+	case err == nil:
+		billingModel = subscription.BillingModel
+	case errors.Is(err, sql.ErrNoRows):
+	default:
+		return nil, "", fmt.Errorf("lock subscription for usage: %w", err)
+	}
+	accepted, err := jm.persistUsageSummary(ctx, queries, summary, source)
+	if err != nil {
+		return nil, "", err
+	}
+	return accepted, billingModel, nil
+}
+
+// persistUsageSummary writes a usage summary's records, provider usage and
+// corrections with queries. Records failing validation go to quarantine
+// outside the transaction, so a failed quarantine write does not abort it.
+func (jm *JobManager) persistUsageSummary(ctx context.Context, queries *purserdb.Queries, summary models.UsageSummary, source string) ([]canonicalUsageDelta, error) {
 	periodStart, periodEnd, granularity, err := parseUsageSummaryPeriod(summary)
 	if err != nil {
 		return nil, err
@@ -3180,7 +3017,7 @@ func (jm *JobManager) processUsageSummary(ctx context.Context, summary models.Us
 			continue
 		}
 		if source == legacyKafkaSource {
-			adopted, legacyErr := purserdb.New(jm.db).AdoptLegacyUsageRecord(ctx, purserdb.AdoptLegacyUsageRecordParams{
+			adopted, legacyErr := queries.AdoptLegacyUsageRecord(ctx, purserdb.AdoptLegacyUsageRecordParams{
 				Unit: meter.Unit, ReportID: summary.ReportID, UsageDetails: json.RawMessage(usageDetailsJSON),
 				TenantID: summary.TenantID, ClusterID: summary.ClusterID, UsageType: usageType,
 				PeriodStart: sql.NullTime{Time: periodStart, Valid: true},
@@ -3198,7 +3035,7 @@ func (jm *JobManager) processUsageSummary(ctx context.Context, summary models.Us
 			}
 		}
 
-		err = purserdb.New(jm.db).UpsertCanonicalUsageRecord(ctx, purserdb.UpsertCanonicalUsageRecordParams{
+		err = queries.UpsertCanonicalUsageRecord(ctx, purserdb.UpsertCanonicalUsageRecordParams{
 			TenantID:     summary.TenantID,
 			ClusterID:    summary.ClusterID,
 			UsageType:    usageType,
@@ -3231,10 +3068,10 @@ func (jm *JobManager) processUsageSummary(ctx context.Context, summary models.Us
 		})
 	}
 
-	if persistErr := jm.persistProviderUsage(ctx, summary, periodStart, periodEnd, granularity, source); persistErr != nil {
+	if persistErr := persistProviderUsage(ctx, queries, summary, periodStart, periodEnd, granularity, source); persistErr != nil {
 		return nil, persistErr
 	}
-	acceptedAdjustments, err := jm.persistUsageAdjustments(ctx, summary, source)
+	acceptedAdjustments, err := persistUsageAdjustments(ctx, queries, summary, source)
 	if err != nil {
 		return nil, err
 	}
@@ -3248,7 +3085,7 @@ func usageDimensionKey(dimensionJSON []byte) string {
 	return fmt.Sprintf("%x", dimensionHash[:])
 }
 
-func (jm *JobManager) persistProviderUsage(ctx context.Context, summary models.UsageSummary, periodStart, periodEnd time.Time, granularity, source string) error {
+func persistProviderUsage(ctx context.Context, queries *purserdb.Queries, summary models.UsageSummary, periodStart, periodEnd time.Time, granularity, source string) error {
 	if rejection := validateCanonicalUsageWindow(periodStart, periodEnd, granularity, "delta"); rejection != "" {
 		return fmt.Errorf("reject storage provider usage for non-canonical period: %s", rejection)
 	}
@@ -3279,7 +3116,7 @@ func (jm *JobManager) persistProviderUsage(ctx context.Context, summary models.U
 			return fmt.Errorf("marshal provider usage details: %w", marshalErr)
 		}
 		if source == legacyKafkaSource {
-			err = purserdb.New(jm.db).UpsertLegacyProviderUsageRecord(ctx, purserdb.UpsertLegacyProviderUsageRecordParams{
+			err = queries.UpsertLegacyProviderUsageRecord(ctx, purserdb.UpsertLegacyProviderUsageRecordParams{
 				UsageTenantID: summary.TenantID, WorkClusterID: summary.ClusterID,
 				ProviderTenantID: rec.ProviderTenantID, ProviderClusterID: rec.ProviderClusterID,
 				UsageType: rec.Meter.Meter, Unit: rec.Meter.Unit, UsageValue: rec.Meter.Quantity,
@@ -3292,7 +3129,7 @@ func (jm *JobManager) persistProviderUsage(ctx context.Context, summary models.U
 			}
 			continue
 		}
-		err = purserdb.New(jm.db).UpsertProviderUsageRecord(ctx, purserdb.UpsertProviderUsageRecordParams{
+		err = queries.UpsertProviderUsageRecord(ctx, purserdb.UpsertProviderUsageRecordParams{
 			UsageTenantID:     summary.TenantID,
 			WorkClusterID:     summary.ClusterID,
 			ProviderTenantID:  rec.ProviderTenantID,
@@ -3316,7 +3153,7 @@ func (jm *JobManager) persistProviderUsage(ctx context.Context, summary models.U
 	return nil
 }
 
-func (jm *JobManager) persistUsageAdjustments(ctx context.Context, summary models.UsageSummary, source string) ([]canonicalUsageDelta, error) {
+func persistUsageAdjustments(ctx context.Context, queries *purserdb.Queries, summary models.UsageSummary, source string) ([]canonicalUsageDelta, error) {
 	accepted := []canonicalUsageDelta{}
 	for _, adj := range summary.UsageAdjustments {
 		if adj.DeltaValue == 0 {
@@ -3341,7 +3178,7 @@ func (jm *JobManager) persistUsageAdjustments(ctx context.Context, summary model
 			adj.Details = models.JSONB{}
 		}
 		if adj.Unit == "" {
-			unit, unitErr := purserdb.New(jm.db).GetMeterUnitForAdjustment(ctx, adj.UsageType)
+			unit, unitErr := queries.GetMeterUnitForAdjustment(ctx, adj.UsageType)
 			if unitErr != nil {
 				return nil, fmt.Errorf("resolve adjustment unit for %s: %w", adj.UsageType, unitErr)
 			}
@@ -3359,7 +3196,7 @@ func (jm *JobManager) persistUsageAdjustments(ctx context.Context, summary model
 		if marshalErr != nil {
 			return nil, fmt.Errorf("marshal adjustment details: %w", marshalErr)
 		}
-		err = purserdb.New(jm.db).UpsertUsageAdjustment(ctx, purserdb.UpsertUsageAdjustmentParams{
+		err = queries.UpsertUsageAdjustment(ctx, purserdb.UpsertUsageAdjustmentParams{
 			TenantID:     summary.TenantID,
 			ClusterID:    adj.ClusterID,
 			UsageType:    adj.UsageType,
@@ -3474,11 +3311,12 @@ func (jm *JobManager) updateInvoiceDraft(ctx context.Context, tenantID string) e
 	// errors abort the draft update so we never apply the wrong prepaid
 	// credit on partial usage and ack the Kafka message as processed. Usage
 	// the prepaid balance paid is not rated again.
-	phaseStart, err := closedPrepaidPhaseStart(ctx, jm.db, tenantID, periodStart)
+	phaseStart, err := splitPeriodStart(ctx, jm.db, tenantID, periodStart)
 	if err != nil {
 		return err
 	}
-	perClusterUsage, perClusterDimensioned, err := jm.collectPostpaidInvoiceUsage(ctx, tenantID, periodStart, periodEnd, phaseStart)
+	phase := usagePhase{start: periodStart, end: periodEnd, chainFrom: phaseStart}
+	perClusterUsage, perClusterDimensioned, err := collectPhaseUsage(ctx, jm.db, tenantID, phase)
 	if err != nil {
 		return fmt.Errorf("collect invoice usage: %w", err)
 	}
@@ -3508,6 +3346,7 @@ func (jm *JobManager) updateInvoiceDraft(ctx context.Context, tenantID string) e
 	if err != nil {
 		return fmt.Errorf("rate usage: %w", err)
 	}
+	applyBaseFeeShare(ratingResult, phase)
 	baseDec := ratingResult.BaseAmount
 	meteredDec := ratingResult.UsageAmount
 	unwaivedMeteredDec := ratingResult.GrossUsageAmount

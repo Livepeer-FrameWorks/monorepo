@@ -99,7 +99,7 @@ func (s *PurserServer) AdminSetBillingGrant(ctx context.Context, req *purserpb.A
 		if assignErr != nil {
 			return nil, assignErr
 		}
-		resp.Tier = assigned
+		resp.Assignment = assigned
 	}
 
 	userID := middleware.GetUserID(ctx)
@@ -344,6 +344,16 @@ func (s *PurserServer) fillGrantResponse(ctx context.Context, tenantID string, r
 		return err
 	}
 	resp.Grant = grant
+	tier, err := purserdb.New(s.db).GetSubscriptionTierForGrant(ctx, tenantID)
+	switch {
+	case err == nil:
+		resp.Tier = &purserpb.BillingGrantTier{
+			SubscriptionId: tier.SubscriptionID, TierId: tier.TierID, TierName: tier.TierName,
+			TierLevel: tier.TierLevel, BillingModel: tier.BillingModel,
+		}
+	case !errors.Is(err, sql.ErrNoRows):
+		return status.Errorf(codes.Internal, "load subscription tier: %v", err)
+	}
 	admission, err := s.GetTenantAdmissionStatus(ctx, &purserpb.GetTenantAdmissionStatusRequest{TenantId: tenantID})
 	if err != nil {
 		return err

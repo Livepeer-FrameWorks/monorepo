@@ -193,6 +193,9 @@ func TestApplyInvoicePrepaidCreditTxAppliesOnlyMissingDelta(t *testing.T) {
 	mock.ExpectQuery(`SELECT balance_cents FROM purser\.prepaid_balances`).
 		WithArgs(tenantID, currency).
 		WillReturnRows(sqlmock.NewRows([]string{"balance_cents"}).AddRow(int64(10000)))
+	mock.ExpectQuery(`-- name: UsageDocumentStartsEarlierInMonth`).
+		WithArgs(tenantID, periodStart, periodStart).
+		WillReturnRows(sqlmock.NewRows([]string{"earlier"}).AddRow(false))
 	mock.ExpectQuery(`SELECT COALESCE\(SUM\(-amount_cents\), 0\)`).
 		WithArgs(tenantID, "Invoice credit: 2026-04", "Invoice credit returned: 2026-04").
 		WillReturnRows(sqlmock.NewRows([]string{"applied_cents", "entries"}).AddRow(int64(2000), int64(1)))

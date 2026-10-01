@@ -381,8 +381,12 @@ Operators declare explicit rows here when a tenant needs billing tier membership
 and media-cluster entitlement, including `quartermaster.system_tenant`. Account
 entries create users; tenant-to-tier links belong in Purser desired state.
 
-Stable: `tenant.ref`. Update-on-drift for `model`, `tier`, and declared
-`entitlement_overrides`.
+Stable: `tenant.ref`. Update-on-drift for `tier` and declared
+`entitlement_overrides`. `model` is applied when the subscription is created;
+a different `model` for an existing tenant is refused, because a switch
+between prepaid and postpaid closes the running period with a statement or
+invoice that only `frameworks admin billing set-tier` rates and writes. Make
+the switch there, then update the desired state.
 
 When this reconciles, Purser resolves the tenant alias to a UUID, writes the
 tenant's billing/subscription state, and emits post-commit access grants for the

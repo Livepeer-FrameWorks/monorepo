@@ -42,7 +42,10 @@ func operatorTierBillingModel(tierName string, tierLevel int32, isDefaultPrepaid
 // AdminAssignTier puts a tenant on a tier and billing model as an operator
 // decision. Unlike ChangeBillingTier it applies downgrades immediately, moves
 // between prepaid and postpaid in either direction, and does not require a
-// payment provider or billing profile. A tenant with no subscription gets one.
+// payment provider or billing profile. A move between models closes the
+// current phase at the switch with its billing document: a prepaid statement,
+// or a finalized postpaid invoice that is then collected. A tenant with no
+// subscription gets one.
 // Cluster access and the tenant cache follow the same post-commit path as the
 // self-serve tier changes; the subscription trigger queues the media-authority
 // refresh inside the transaction.
@@ -64,20 +67,47 @@ func (s *PurserServer) AdminAssignTier(ctx context.Context, req *purserpb.AdminA
 	if _, err := uuid.Parse(tenantID); err != nil {
 		return nil, status.Error(codes.InvalidArgument, "tenant_id must be a UUID")
 	}
+	// A switch that closes a phase is rated before its transaction; a
+	// subscription or usage that changed in between rates it again.
+	// After the last attempt the caller gets codes.Aborted.
+	for attempt := 1; ; attempt++ {
+		resp, err := s.adminAssignTierOnce(ctx, tenantID, tierName, requestedModel, reason)
+		if errors.Is(err, errPhaseChangedWhileRated) && attempt < phaseCloseAttempts {
+			continue
+		}
+		return resp, err
+	}
+}
+
+// phaseCloseAttempts bounds how often a tier assignment rates a closing
+// document again because the subscription or its usage changed meanwhile.
+const phaseCloseAttempts = 3
+
+// errPhaseChangedWhileRated means the document that closes the current
+// billing phase was rated for a subscription or usage that changed before
+// the switch committed.
+var errPhaseChangedWhileRated = errors.New("the billing phase changed while its closing document was prepared")
+
+func (s *PurserServer) adminAssignTierOnce(ctx context.Context, tenantID, tierName, requestedModel, reason string) (*purserpb.AdminAssignTierResponse, error) {
 	userID := middleware.GetUserID(ctx)
 
-	// A move from prepaid to postpaid closes the prepaid phase with its
-	// statement. The statement is rated here, outside the transaction.
+	// A move between prepaid and postpaid closes the current phase: from
+	// prepaid with its statement, from postpaid with its invoice. The closing
+	// document is rated here, outside the transaction.
 	phase, prepareErr := s.preparePrepaidPhaseCloseForTier(ctx, tenantID, tierName, requestedModel)
+	if prepareErr != nil {
+		return nil, prepareErr
+	}
+	postpaidPhase, prepareErr := s.preparePostpaidPhaseCloseForTier(ctx, tenantID, tierName, requestedModel)
 	if prepareErr != nil {
 		return nil, prepareErr
 	}
 
 	var resp *purserpb.AdminAssignTierResponse
 	var creditReturns []handlers.InvoiceCreditReturn
-	phaseClosed := false
+	phaseClosed, postpaidPhaseClosed := false, false
 	stage, err := runRetryableTx(ctx, s.db, func(tx *sql.Tx) error {
-		phaseClosed = false
+		phaseClosed, postpaidPhaseClosed = false, false
 		resp, creditReturns = nil, nil
 		queries := purserdb.New(tx)
 		tier, err := queries.GetTierByNameForOperatorAssignment(ctx, tierName)
@@ -154,6 +184,11 @@ func (s *PurserServer) AdminAssignTier(ctx context.Context, req *purserpb.AdminA
 				return err
 			}
 		}
+		if !created && current.BillingModel == "postpaid" && model == "prepaid" {
+			if postpaidPhaseClosed, err = commitPostpaidPhaseClose(ctx, tx, postpaidPhase); err != nil {
+				return err
+			}
+		}
 
 		if !created {
 			if _, err = queries.AssignTenantSubscriptionTier(ctx, purserdb.AssignTenantSubscriptionTierParams{
@@ -212,6 +247,9 @@ func (s *PurserServer) AdminAssignTier(ctx context.Context, req *purserpb.AdminA
 	}
 	if phaseClosed {
 		phase.Log()
+	}
+	if postpaidPhaseClosed {
+		postpaidPhase.AfterCommit(ctx)
 	}
 	for _, credit := range creditReturns {
 		s.logger.WithFields(logging.Fields{
@@ -285,14 +323,57 @@ func (s *PurserServer) preparePrepaidPhaseClose(ctx context.Context, tenantID st
 // closed.
 func commitPrepaidPhaseClose(ctx context.Context, tx *sql.Tx, phase *handlers.PrepaidPhaseClose) (bool, error) {
 	if phase == nil {
-		return false, status.Error(codes.Aborted, "the subscription became prepaid while the switch was prepared; retry")
+		return false, txStatusErrorf(errPhaseChangedWhileRated, codes.Aborted, "the subscription became prepaid while the switch was prepared; retry")
 	}
 	closed, err := phase.CommitTx(ctx, tx)
 	if errors.Is(err, handlers.ErrPrepaidPhaseChanged) {
-		return false, status.Errorf(codes.Aborted, "%v; retry", err)
+		return false, txStatusErrorf(errPhaseChangedWhileRated, codes.Aborted, "%v; retry", err)
 	}
 	if err != nil {
 		return false, txStatusErrorf(err, codes.Internal, "close the prepaid period: %v", err)
+	}
+	return closed, nil
+}
+
+// preparePostpaidPhaseCloseForTier rates the invoice that closes the tenant's
+// postpaid phase when assigning tierName moves it to prepaid. A missing tier
+// or a model the tier does not run is refused by the assignment's
+// transaction, so neither prepares anything here.
+func (s *PurserServer) preparePostpaidPhaseCloseForTier(ctx context.Context, tenantID, tierName, requestedModel string) (*handlers.PostpaidPhaseClose, error) {
+	tier, err := purserdb.New(s.db).GetTierByNameForOperatorAssignment(ctx, tierName)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "load billing tier: %v", err)
+	}
+	if model, modelErr := operatorTierBillingModel(tier.TierName, tier.TierLevel, tier.IsDefaultPrepaid, requestedModel); modelErr == nil && model == "prepaid" {
+		phase, prepareErr := handlers.PreparePostpaidPhaseClose(ctx, s.db, s.logger, s.billing, tenantID)
+		if prepareErr != nil {
+			return nil, status.Errorf(codes.Internal, "prepare the invoice that closes the postpaid period: %v", prepareErr)
+		}
+		return phase, nil
+	}
+	return nil, nil
+}
+
+// commitPostpaidPhaseClose finalizes the prepared closing invoice inside the
+// transaction that switches the tenant from postpaid to prepaid, and starts
+// the prepaid period at the switch. It reports whether a postpaid phase was
+// closed.
+func commitPostpaidPhaseClose(ctx context.Context, tx *sql.Tx, phase *handlers.PostpaidPhaseClose) (bool, error) {
+	if phase == nil {
+		return false, txStatusErrorf(errPhaseChangedWhileRated, codes.Aborted, "the subscription became postpaid while the switch was prepared; retry")
+	}
+	closed, err := phase.CommitTx(ctx, tx)
+	if errors.Is(err, handlers.ErrPostpaidPhaseChanged) {
+		return false, txStatusErrorf(errPhaseChangedWhileRated, codes.Aborted, "%v; retry", err)
+	}
+	if errors.Is(err, handlers.ErrBaseFeePaymentPending) {
+		return false, txStatusErrorf(err, codes.FailedPrecondition, "close the postpaid period: %v; retry once that payment has resolved", err)
+	}
+	if err != nil {
+		return false, txStatusErrorf(err, codes.Internal, "close the postpaid period: %v", err)
 	}
 	return closed, nil
 }

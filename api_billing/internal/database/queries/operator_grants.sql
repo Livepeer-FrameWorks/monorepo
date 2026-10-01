@@ -37,6 +37,17 @@ ON CONFLICT (subscription_id) DO UPDATE SET
 DELETE FROM purser.subscription_operator_grants
 WHERE subscription_id = sqlc.arg(subscription_id)::text::uuid;
 
+-- name: GetSubscriptionTierForGrant :one
+-- The tier and billing model of the tenant's subscription, which an operator
+-- grant applies to.
+SELECT ts.id::text AS subscription_id, ts.tier_id::text AS tier_id, bt.tier_name,
+       COALESCE(bt.tier_level, 0)::integer AS tier_level, ts.billing_model
+FROM purser.tenant_subscriptions ts
+JOIN purser.billing_tiers bt ON bt.id = ts.tier_id
+WHERE ts.tenant_id = sqlc.arg(tenant_id)::text::uuid AND ts.status != 'cancelled'
+ORDER BY ts.created_at DESC
+LIMIT 1;
+
 -- name: GetProviderSubscriptionState :one
 -- Whether a Stripe or Mollie subscription bills the tier's base fee on the
 -- provider's side for this subscription.

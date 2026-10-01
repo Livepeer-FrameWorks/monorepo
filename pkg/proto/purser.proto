@@ -1580,15 +1580,27 @@ message AdminRevokeBillingGrantRequest {
   string reason = 2;
 }
 
+// The tier and billing model a tenant's subscription is on.
+message BillingGrantTier {
+  string subscription_id = 1;
+  string tier_id = 2;
+  string tier_name = 3;
+  int32 tier_level = 4;
+  string billing_model = 5;
+}
+
 message AdminBillingGrantResponse {
   // Unset when the tenant has no grant.
   OperatorBillingGrant grant = 1;
-  // Set when the request assigned a tier.
-  AdminAssignTierResponse tier = 2;
+  // The tier and billing model the tenant is on after the request; the
+  // grant's base fee and collection readiness apply to it.
+  BillingGrantTier tier = 2;
   // Whether rated work is admitted for the tenant's postpaid charges now,
   // and who collects them: stripe, mollie or operator.
   bool collection_ready = 3;
   string collection_provider = 4;
+  // Set when the request assigned a tier: what the assignment changed.
+  AdminAssignTierResponse assignment = 5;
 }
 
 message AdminRecordInvoicePaymentRequest {

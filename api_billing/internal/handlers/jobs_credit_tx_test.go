@@ -238,7 +238,12 @@ func TestApplyInvoicePrepaidCreditTx(t *testing.T) {
 			WithArgs(tenantID, billing.LedgerCurrency).
 			WillReturnRows(sqlmock.NewRows([]string{"balance_cents"}).AddRow(balance))
 	}
+	// heldCredit expects the period's credit key lookup (the first document
+	// of April holds the month's key) and its held credit.
 	heldCredit := func(mock sqlmock.Sqlmock, held, entries int64) {
+		mock.ExpectQuery(`-- name: UsageDocumentStartsEarlierInMonth`).
+			WithArgs(tenantID, periodStart, periodStart).
+			WillReturnRows(sqlmock.NewRows([]string{"earlier"}).AddRow(false))
 		mock.ExpectQuery(`SELECT COALESCE\(SUM\(-amount_cents\), 0\)`).
 			WithArgs(tenantID, "Invoice credit: 2026-04", "Invoice credit returned: 2026-04").
 			WillReturnRows(sqlmock.NewRows([]string{"applied_cents", "entries"}).AddRow(held, entries))

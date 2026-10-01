@@ -340,9 +340,9 @@ func expectPrepaidPhaseRead(mock sqlmock.Sqlmock, tenantID, model string) {
 	periodStart := time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)
 	mock.ExpectQuery(`SELECT billing_model, status, billing_email,\s+billing_period_start, billing_period_end`).WithArgs(tenantID).
 		WillReturnRows(sqlmock.NewRows([]string{
-			"billing_model", "status", "billing_email", "billing_period_start", "billing_period_end",
+			"billing_model", "status", "billing_email", "billing_period_start", "billing_period_end", "mollie_next_payment_date",
 			"stripe_subscription_id", "mollie_subscription_id", "database_now",
-		}).AddRow(model, "active", nil, periodStart, periodStart.AddDate(0, 1, 0), nil, nil, periodStart))
+		}).AddRow(model, "active", nil, periodStart, periodStart.AddDate(0, 1, 0), nil, nil, nil, periodStart))
 }
 
 func expectLockedPromotionSubscription(mock sqlmock.Sqlmock, tenantID, model, tierID string, paymentMethod, stripeSubscription, email, name, address any) {

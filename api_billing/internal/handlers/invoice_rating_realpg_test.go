@@ -51,16 +51,12 @@ func TestInvoiceRatingRepository_RealPG(t *testing.T) { //nolint:funlen // One e
 	}
 
 	jobs := &JobManager{db: db, billing: &Service{}}
-	usage, err := jobs.collectInvoiceUsage(ctx, tenantID, periodStart, periodEnd)
+	usage, dimensioned, err := collectPhaseUsage(ctx, db, tenantID, usagePhase{start: periodStart, end: periodEnd, chainFrom: periodStart})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if usage["cluster-a"]["transcode_rendition_seconds"] != 4 {
 		t.Fatalf("aggregated usage = %+v", usage)
-	}
-	dimensioned, err := jobs.collectInvoiceDimensionedUsage(ctx, tenantID, periodStart, periodEnd)
-	if err != nil {
-		t.Fatal(err)
 	}
 	if len(dimensioned["cluster-a"]) != 1 || !dimensioned["cluster-a"][0].Quantity.Equal(decimal.NewFromInt(4)) || dimensioned["cluster-a"][0].Dimensions["output_codec"] != "h264" {
 		t.Fatalf("dimensioned usage = %+v", dimensioned)

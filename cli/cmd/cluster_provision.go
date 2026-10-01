@@ -44,6 +44,7 @@ import (
 	"frameworks/cli/pkg/provisioner"
 	"frameworks/cli/pkg/remoteaccess"
 	"frameworks/cli/pkg/ssh"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/countries"
 	pkgdatabase "github.com/Livepeer-FrameWorks/monorepo/pkg/database"
 	pkgdns "github.com/Livepeer-FrameWorks/monorepo/pkg/dns"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/ingress"
@@ -8055,6 +8056,11 @@ func validateProductionServiceEnv(manifest *inventory.Manifest, serviceID string
 		if strings.TrimSpace(env["DATABASE_PASSWORD"]) == "" && !databaseURLHasPassword(env["DATABASE_URL"]) {
 			return fmt.Errorf("service %s: non-dev deploy requires DATABASE_PASSWORD (or DATABASE_URL with embedded credentials)", serviceID)
 		}
+		if serviceID == "purser" {
+			if missing := missingPurserSupplierIdentity(env); len(missing) > 0 {
+				return fmt.Errorf("service purser: non-dev deploy requires the supplier identity every billing document states: %s (set them in the manifest's env files, e.g. gitops config/<cluster>.env)", strings.Join(missing, ", "))
+			}
+		}
 		if serviceID == "purser" && truthyLivepeerSetting(env["LIVEPEER_DEPOSIT_MONITOR_ENABLED"]) {
 			for _, key := range []string{"ARBITRUM_RPC_ENDPOINT", "X402_GAS_WALLET_ADDRESS", "X402_GAS_WALLET_PRIVKEY"} {
 				if strings.TrimSpace(env[key]) == "" {
@@ -8080,6 +8086,22 @@ func validateProductionServiceEnv(manifest *inventory.Manifest, serviceID string
 }
 
 var meteringSourceIDPattern = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]*$`)
+
+// missingPurserSupplierIdentity names the SUPPLIER_* keys Purser refuses to
+// start without outside development: empty ones, and SUPPLIER_COUNTRY when it
+// is not a two-letter ISO country code.
+func missingPurserSupplierIdentity(env map[string]string) []string {
+	var missing []string
+	for _, key := range []string{"SUPPLIER_NAME", "SUPPLIER_ADDRESS", "SUPPLIER_VAT_NUMBER", "SUPPLIER_REGISTRATION_NUMBER"} {
+		if strings.TrimSpace(env[key]) == "" {
+			missing = append(missing, key)
+		}
+	}
+	if !countries.IsValid(env["SUPPLIER_COUNTRY"]) {
+		missing = append(missing, "SUPPLIER_COUNTRY")
+	}
+	return missing
+}
 
 // databaseURLHasPassword reports whether a PostgreSQL connection string
 // embeds a non-empty password, in URL form (postgres://user:pass@host/db,

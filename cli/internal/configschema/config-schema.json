@@ -1675,7 +1675,7 @@
           "key": "SUPPLIER_NAME",
           "type": "string",
           "introduced": "v0.3.0",
-          "description": "Supplier legal name on billing documents and crypto invoices. The complete SUPPLIER_* set is required for x402 and, in production, for crypto deposits."
+          "description": "Supplier legal name on billing documents and crypto invoices. Outside development Purser refuses to start without the complete SUPPLIER_* set, since every invoice, statement and credit note states it."
         },
         {
           "key": "SUPPLIER_ADDRESS",

@@ -146,7 +146,11 @@ func writeBillingGrant(w io.Writer, headline, tenantID, email string, resp *purs
 		fields = append(fields, ux.ResultField{Key: "email", OK: true, Detail: email})
 	}
 	if tier := resp.GetTier(); tier != nil {
-		fields = append(fields, ux.ResultField{Key: "tier", OK: true, Detail: fmt.Sprintf("%s (%s)", tier.GetTierName(), tier.GetBillingModel())})
+		detail := fmt.Sprintf("%s (%s)", tier.GetTierName(), tier.GetBillingModel())
+		if assignment := resp.GetAssignment(); assignment.GetChanged() && assignment.GetPreviousTierName() != "" {
+			detail += fmt.Sprintf(", was %s (%s)", assignment.GetPreviousTierName(), assignment.GetPreviousBillingModel())
+		}
+		fields = append(fields, ux.ResultField{Key: "tier", OK: true, Detail: detail})
 	}
 	if grant := resp.GetGrant(); grant != nil {
 		base := "tier price"

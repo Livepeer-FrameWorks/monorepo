@@ -73,7 +73,9 @@ Billing tiers drive cluster access. When an account is created or promoted, the 
 ```
 
 `AdminAssignTier` (`frameworks admin billing set-tier`) closes the prepaid
-phase the same way when it moves a tenant from prepaid to postpaid.
+phase the same way when it moves a tenant from prepaid to postpaid, and
+closes the postpaid phase with a finalized invoice when it moves a tenant
+from postpaid to prepaid (see Switch to prepaid mid-period below).
 
 ## Prepaid Statements
 
@@ -94,11 +96,20 @@ with a **prepaid statement** instead: a `billing_invoices` row with
   period's start and end, and any monthly fees. A rated total that differs from
   what was paid by more than a cent is logged as a warning; late corrections and
   reports settled after a price change are the usual cause.
+- The statement settles what the phase's usage still owes the balance: it
+  rates the phase's cumulative usage the way the settlements do and posts the
+  difference to what they took as one more settlement (report id
+  `statement-…`), under the subscription row lock. Usage no settlement paid,
+  such as a report processed under the model the tenant was leaving or after
+  the last settlement, is paid here; a settlement that took usage of another
+  phase is returned. `usage_details.statement.settled_with_statement_cents`
+  states it.
 - Any invoice credit an earlier postpaid draft of the period still held returns
   to the balance, and such a draft becomes the statement.
 - Monthly fees Purser bills itself (the tier base fee when it is not collected
-  by a provider subscription, and Purser-invoiced monthly cluster fees from
-  `cluster_subscriptions`, prorated like on invoices) are charged to the prepaid
+  by a provider subscription, for the phase's share of a split period, and
+  Purser-invoiced monthly cluster fees from `cluster_subscriptions`, prorated
+  like on invoices) are charged to the prepaid
   balance with the statement, as one `usage` balance transaction with
   `reference_type = 'prepaid_statement_fees'`. The balance may go negative; the
   prepaid thresholds suspend the tenant then, as for usage.
@@ -109,18 +120,97 @@ with a **prepaid statement** instead: a `billing_invoices` row with
   `prepaid_statement`), not with invoices, and cannot be paid.
 - The subscription advances to its next period in the same transaction.
 
+**Phases and receipt time.** Switches between prepaid and postpaid split a
+billing period into phases, each closed by its own document. A usage record or
+usage correction belongs to the phase in force when it reached Purser
+(`created_at`, written by the database clock), and switch times come from the
+same clock. A phase's document rates the rows of its window plus rows of
+earlier phases of the split period that reached Purser after the phase began
+(late reports and corrections); a row that reached Purser before the phase
+began belonged to the phase before. `CollectPhaseUsage` holds the rule for
+every document: postpaid drafts and invoices, prepaid settlements and
+reservations, statements, and which corrections a document marks applied.
+
+The boundary is a lock, not a clock race. A usage report is written in one
+transaction (`receiveUsageSummary`) that holds the subscription row
+`FOR SHARE` (`LockSubscriptionForUsage`) and reads the billing model there;
+a switch holds the row `FOR UPDATE`. A report that holds the row when a switch
+reaches it commits first, and the switch's count of received usage
+(`CountPhaseUsageReceivedBefore`) sees it and rates again. A report that takes
+the row after a switch committed is dated no earlier than the latest switch
+(`created_at` is at least the end of the latest closing document), so it
+belongs to the phase that followed, and the model it read is that phase's.
+Prepaid settlement (`processPrepaidUsage`) takes the same row lock and settles
+nothing once the tenant has left prepaid; the closing statement settled that
+phase. Each row is therefore in exactly one phase and paid exactly once.
+
+**Base fee of a split period.** Each phase of a split period pays its plan's
+base fee for its own time: the share runs from the phase's start to its end
+in whole seconds of the split period, each end rounded to the cent, so the
+shares of the phases add up to exactly one fee (`usagePhase.baseFeeShare`).
+This applies to closing invoices and statements, to the month-end document of
+the rest of the period, to drafts, and to the advance base-fee invoice of a
+period a switch from prepaid started.
+
+**Invoice credit keys.** Each billing document holds its prepaid invoice
+credit under its own key (`documentInvoiceCreditKey`): the first document
+starting in a month under the month's key (`Invoice credit: YYYY-MM`, the key
+every document had before), a later document of the same month, after an
+early close or a switch, under its exact period start. No document's
+reconciliation takes or returns another's credit.
+
 **Switch to postpaid mid-period.** The prepaid phase is closed at the switch:
 the switch path rates the closing statement for [period start, switch) before
 its transaction and writes it inside it (flagged `closes_prepaid_phase`), and
 the postpaid period starts at the switch and ends where the prepaid period
-would have. The switch time comes from the database clock. The postpaid draft
-and invoice rate only usage records no prepaid settlement paid: the records of
-their period, plus records of the closed prepaid phase that reached Purser
-after the switch (late reports the balance never paid). Usage is billed once,
-under the model in force when its report was processed. The base-fee rules are
-unchanged: the postpaid period's base fee is billed as before, and the period
-after it is as long as the period the switch split. Invoices written this way
-record `prepaid_settled_usage_excluded` in `usage_details`.
+would have. Usage of the phase that reached Purser while the statement was
+rated returns `ErrPrepaidPhaseChanged`, and the switch rates again. The
+postpaid rest of the period pays the base fee for its share of the period.
+Invoices record `prepaid_settled_usage_excluded` in `usage_details`: they rate
+only their own phase.
+
+**Switch to prepaid mid-period.** A postpaid plan's entitlement ends at the
+switch, so what it used is owed then. `AdminAssignTier` (the only path that
+moves a tenant from postpaid to prepaid; `purser bootstrap` refuses a billing
+model change on an existing tenant and points at `set-tier`) closes the
+postpaid phase with an invoice: `PreparePostpaidPhaseClose` rates
+[period start, switch) before the switch transaction, at the postpaid tier's
+prices and under the operator grant in force, with the base fee for the
+phase's share of the period and Purser-invoiced monthly cluster fees for
+their active time (a base fee a provider subscription or an advance base-fee
+invoice collects is not charged again). The period is the one month-end
+finalization and drafts use, Mollie-anchored when Mollie collects the
+subscription. `CommitTx` writes it inside the transaction under the
+subscription row lock: the open draft of the period becomes the finalized
+invoice (flagged `closes_postpaid_phase`), also a draft that started elsewhere
+than the phase (its credit returns first, under its own key), so no draft
+stays open; the prepaid period starts at the switch and ends where the
+postpaid period would have. An advance base-fee invoice of the period has the
+unused share from the switch returned once (`returnUnusedBaseFeeTx`, the
+tier-change rule): a paid one credits it to the prepaid balance
+(`reference_type = 'base_fee_unused_share'`), an unpaid one is reduced to its
+used share; the invoice records `unused_share_returned`, so no later base-fee
+invoice of the period credits it again. A payment of it still pending refuses
+the switch with `FailedPrecondition`.
+The invoice is collected like any postpaid invoice: email, `invoice_created`,
+and after commit the off-session charge through the subscription's provider,
+or payment by transfer (`AdminRecordInvoicePayment`). Charges the collection
+minimum deferred are charged to the prepaid balance (`collection_carry`),
+since no later postpaid invoice would collect them. A subscription, tier,
+provider setup, operator grant (including one that expired) or count of
+received usage that changed since the rating returns `ErrPostpaidPhaseChanged`;
+`AdminAssignTier` rates again, up to three times, then returns `Aborted`.
+Unresolved cluster pricing refuses the switch. Operator grants never change
+the billing model, so a grant expiring is not a switch.
+
+**Period after a split.** Whichever document closes the last part of a split
+period, the next period is as long as the whole period the switches split,
+not as its last part: `nextBillingPeriodEnd` follows the chain of documents
+that closed a phase (`GetSplitPeriodStart`: statements flagged
+`closes_prepaid_phase` and invoices flagged `closes_postpaid_phase`, one per
+switch) back to the period's start. A period of whole calendar months is
+followed by as many calendar months (September is followed by October, not by
+30 days); any other period by one calendar month from its end.
 
 **Earlier double charges.** Before statements, month-end finalization invoiced
 prepaid tenants and rated again the usage their balance had paid, taking the

@@ -278,7 +278,13 @@ func (jm *JobManager) chargeAdvanceBaseFee(ctx context.Context, tenantID string,
 	if tier.Currency != billing.LedgerCurrency {
 		return fmt.Errorf("tier %s is priced in %s, not the %s price list", tier.TierName, tier.Currency, billing.LedgerCurrency)
 	}
-	baseEUR := tier.BasePrice.Round(2)
+	// A period that a switch from prepaid started mid-way pays the base fee
+	// for its share of the period the switches split.
+	chainFrom, err := splitPeriodStart(ctx, jm.db, tenantID, periodStart)
+	if err != nil {
+		return err
+	}
+	baseEUR := usagePhase{start: periodStart, end: periodEnd, chainFrom: chainFrom}.baseFeeShare(tier.BasePrice.Round(2))
 	billingEmail, emailErr := queries.GetTenantBillingEmail(ctx, tenantID)
 	if emailErr != nil && !errors.Is(emailErr, sql.ErrNoRows) {
 		return fmt.Errorf("load billing email: %w", emailErr)
@@ -415,6 +421,87 @@ const unusedBaseFeeReductionLineKey = "unused_base_fee_reduction"
 // tier change cut short has not resolved yet, so what that invoice still owes
 // is unknown. The new period's base-fee invoice waits for it.
 var errPreviousBaseFeePaymentPending = errors.New("a payment of the previous base-fee invoice is still pending")
+
+// ErrBaseFeePaymentPending means a payment of the advance base-fee invoice
+// whose unused share a switch to prepaid returns has not resolved yet, so
+// what that invoice still owes is unknown; the switch waits for it.
+var ErrBaseFeePaymentPending = errPreviousBaseFeePaymentPending
+
+// unusedBaseFeeReturn is what a switch to prepaid returned of the advance
+// base-fee invoice whose period it cut short.
+type unusedBaseFeeReturn struct {
+	invoiceID     string
+	reducedCents  int64
+	creditedCents int64
+}
+
+// returnUnusedBaseFeeTx returns the unused share of the advance base-fee
+// invoice whose period a switch to prepaid at switchAt cuts short: the
+// prepaid tenant no longer runs on the postpaid tier from the switch, and
+// the prepaid statement charges the prepaid tier's base fee for that time.
+// The share is settled the way a tier change settles it (planPreviousBaseFee):
+// a paid invoice's unused share is credited to the prepaid balance; an unpaid
+// one is reduced to its used share, and only what it no longer owes beyond
+// that is credited. The invoice records the return, so it is returned once
+// and no later base-fee invoice of the period credits it again.
+func returnUnusedBaseFeeTx(ctx context.Context, tx *sql.Tx, tenantID string, switchAt, now time.Time) (unusedBaseFeeReturn, error) {
+	queries := purserdb.New(tx)
+	plan, err := planPreviousBaseFee(ctx, queries, tenantID, switchAt)
+	if err != nil {
+		return unusedBaseFeeReturn{}, err
+	}
+	if !plan.found || plan.credit.invoiceID == "" {
+		return unusedBaseFeeReturn{}, nil
+	}
+	returned := unusedBaseFeeReturn{invoiceID: plan.credit.invoiceID, creditedCents: plan.credit.cents}
+	if plan.reduction != nil {
+		if err = reducePreviousBaseFeeInvoiceTx(ctx, tx, tenantID, *plan.reduction, now); err != nil {
+			return unusedBaseFeeReturn{}, err
+		}
+		returned.reducedCents = plan.reduction.reducedCents
+	}
+	if returned.creditedCents > 0 {
+		if err = queries.EnsurePrepaidBalanceRow(ctx, purserdb.EnsurePrepaidBalanceRowParams{TenantID: tenantID, Currency: billing.LedgerCurrency}); err != nil {
+			return unusedBaseFeeReturn{}, fmt.Errorf("initialize prepaid balance: %w", err)
+		}
+		balance, addErr := queries.AddPrepaidBalance(ctx, purserdb.AddPrepaidBalanceParams{
+			AmountCents: returned.creditedCents, TenantID: tenantID, Currency: billing.LedgerCurrency,
+		})
+		if addErr != nil {
+			return unusedBaseFeeReturn{}, fmt.Errorf("credit prepaid balance: %w", addErr)
+		}
+		if err = queries.InsertBalanceTransaction(ctx, purserdb.InsertBalanceTransactionParams{
+			ID: uuid.New(), TenantID: tenantID, AmountCents: returned.creditedCents, BalanceAfterCents: balance,
+			TransactionType: "adjustment",
+			Description: sql.NullString{String: fmt.Sprintf("Unused base subscription %s to %s, returned at the switch to prepaid",
+				switchAt.UTC().Format(time.DateOnly), plan.credit.periodEnd.UTC().Format(time.DateOnly)), Valid: true},
+			ReferenceID:   sql.NullString{String: returned.invoiceID, Valid: true},
+			ReferenceType: sql.NullString{String: "base_fee_unused_share", Valid: true},
+			ActorKind:     sql.NullString{String: "system", Valid: true},
+			CreatedAt:     sql.NullTime{Time: now, Valid: true},
+		}); err != nil {
+			return unusedBaseFeeReturn{}, fmt.Errorf("record returned base subscription share: %w", err)
+		}
+	}
+	details, err := json.Marshal(map[string]any{
+		"returned_from": switchAt,
+		"reduced":       decimal.New(returned.reducedCents, -2).StringFixed(2),
+		"credited":      decimal.New(returned.creditedCents, -2).StringFixed(2),
+	})
+	if err != nil {
+		return unusedBaseFeeReturn{}, fmt.Errorf("marshal base-fee return: %w", err)
+	}
+	rows, err := queries.MarkBaseFeeUnusedShareReturned(ctx, purserdb.MarkBaseFeeUnusedShareReturnedParams{
+		Details: details, InvoiceID: returned.invoiceID, TenantID: tenantID,
+	})
+	if err != nil {
+		return unusedBaseFeeReturn{}, fmt.Errorf("record the base-fee return on invoice %s: %w", returned.invoiceID, err)
+	}
+	if rows != 1 {
+		return unusedBaseFeeReturn{}, fmt.Errorf("record the base-fee return: base-fee invoice %s not found", returned.invoiceID)
+	}
+	return returned, nil
+}
 
 // previousBaseFee is what a new period's base-fee invoice does with the
 // base-fee invoice whose period it cut short.

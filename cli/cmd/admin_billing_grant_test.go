@@ -111,3 +111,31 @@ func TestRunBillingGrantShowJSONReportsNoGrant(t *testing.T) {
 		t.Fatalf("collection_ready = %#v:\n%s", decoded["collection_ready"], out.String())
 	}
 }
+
+func TestRunBillingGrantShowReportsTheTenantsTier(t *testing.T) {
+	fake := &fakeAdminBillingClient{grantResp: &purserpb.AdminBillingGrantResponse{
+		Tier: &purserpb.BillingGrantTier{SubscriptionId: "sub-1", TierId: "tier-1", TierName: "supporter", TierLevel: 2, BillingModel: "postpaid"},
+	}}
+	var out bytes.Buffer
+	if err := runBillingGrantShow(context.Background(), &out, fake, nil, "", billingTenantTarget{TenantID: billingOperatorTenant}, true); err != nil {
+		t.Fatalf("grant show: %v", err)
+	}
+	var decoded struct {
+		Tier       map[string]any `json:"tier"`
+		Assignment *struct{}      `json:"assignment"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &decoded); err != nil {
+		t.Fatalf("output is not JSON: %v\n%s", err, out.String())
+	}
+	if decoded.Tier["tier_name"] != "supporter" || decoded.Tier["billing_model"] != "postpaid" || decoded.Assignment != nil {
+		t.Fatalf("tier = %#v assignment = %#v, want the supporter postpaid tier and no assignment:\n%s", decoded.Tier, decoded.Assignment, out.String())
+	}
+
+	out.Reset()
+	if err := runBillingGrantShow(context.Background(), &out, fake, nil, "", billingTenantTarget{TenantID: billingOperatorTenant}, false); err != nil {
+		t.Fatalf("grant show: %v", err)
+	}
+	if !strings.Contains(out.String(), "supporter (postpaid)") {
+		t.Fatalf("text output does not name the tenant's tier:\n%s", out.String())
+	}
+}

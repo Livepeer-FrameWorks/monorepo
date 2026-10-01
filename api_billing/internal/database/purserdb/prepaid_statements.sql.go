@@ -10,32 +10,34 @@ import (
 	"database/sql"
 	"encoding/json"
 	"time"
+
+	"github.com/google/uuid"
 )
 
-const collectPostpaidInvoiceDimensionedUsage = `-- name: CollectPostpaidInvoiceDimensionedUsage :many
+const collectPhaseDimensionedUsage = `-- name: CollectPhaseDimensionedUsage :many
 WITH params AS (
     SELECT $1::text::uuid AS tenant_id,
            $2::timestamptz AS window_start,
            $3::timestamptz AS window_end,
-           LEAST($4::timestamptz, $2::timestamptz) AS unsettled_from
+           LEAST($4::timestamptz, $2::timestamptz) AS chain_from,
+           $5::timestamptz AS received_before
 ), dimensioned_rows AS (
     SELECT ur.cluster_id, ur.usage_type, ur.unit, ur.dimensions, ur.usage_value
     FROM purser.usage_records ur CROSS JOIN params p
     WHERE ur.tenant_id = p.tenant_id
       AND ur.period_start < p.window_end
-      AND ur.period_end > p.unsettled_from
-      AND (ur.period_end > p.window_start OR ur.created_at >= p.window_start)
+      AND ur.period_end > p.chain_from
+      AND (ur.period_start >= p.window_start OR ur.created_at >= p.window_start)
+      AND (p.received_before IS NULL OR ur.created_at < p.received_before)
       AND ur.value_kind = 'delta' AND ur.granularity = 'minute_5'
-      AND NOT EXISTS (
-          SELECT 1 FROM purser.prepaid_usage_settlements settlement
-          WHERE settlement.report_id = ur.report_id AND settlement.tenant_id = ur.tenant_id
-      )
     UNION ALL
     SELECT ua.cluster_id, ua.usage_type, ua.unit, ua.dimensions, ua.delta_value
     FROM purser.usage_adjustments ua CROSS JOIN params p
     WHERE ua.tenant_id = p.tenant_id
       AND ua.period_start < p.window_end
-      AND ua.period_end > p.window_start
+      AND ua.period_end > p.chain_from
+      AND (ua.period_start >= p.window_start OR ua.created_at >= p.window_start)
+      AND (p.received_before IS NULL OR ua.created_at < p.received_before)
       AND ua.status = 'applied' AND ua.value_kind = 'correction_delta'
 )
 SELECT COALESCE(r.cluster_id, '') AS cluster_id,
@@ -47,14 +49,15 @@ JOIN purser.meter_definitions d ON d.meter = r.usage_type AND d.active = TRUE
 GROUP BY r.cluster_id, r.usage_type, r.unit, r.dimensions, d.aggregation
 `
 
-type CollectPostpaidInvoiceDimensionedUsageParams struct {
-	TenantID      string    `db:"tenant_id" json:"tenant_id"`
-	WindowStart   time.Time `db:"window_start" json:"window_start"`
-	WindowEnd     time.Time `db:"window_end" json:"window_end"`
-	UnsettledFrom time.Time `db:"unsettled_from" json:"unsettled_from"`
+type CollectPhaseDimensionedUsageParams struct {
+	TenantID       string       `db:"tenant_id" json:"tenant_id"`
+	WindowStart    time.Time    `db:"window_start" json:"window_start"`
+	WindowEnd      time.Time    `db:"window_end" json:"window_end"`
+	ChainFrom      time.Time    `db:"chain_from" json:"chain_from"`
+	ReceivedBefore sql.NullTime `db:"received_before" json:"received_before"`
 }
 
-type CollectPostpaidInvoiceDimensionedUsageRow struct {
+type CollectPhaseDimensionedUsageRow struct {
 	ClusterID  string          `db:"cluster_id" json:"cluster_id"`
 	UsageType  string          `db:"usage_type" json:"usage_type"`
 	Unit       string          `db:"unit" json:"unit"`
@@ -62,21 +65,22 @@ type CollectPostpaidInvoiceDimensionedUsageRow struct {
 	Quantity   float64         `db:"quantity" json:"quantity"`
 }
 
-// CollectPostpaidInvoiceUsage per meter dimension.
-func (q *Queries) CollectPostpaidInvoiceDimensionedUsage(ctx context.Context, arg CollectPostpaidInvoiceDimensionedUsageParams) ([]CollectPostpaidInvoiceDimensionedUsageRow, error) {
-	rows, err := q.db.QueryContext(ctx, collectPostpaidInvoiceDimensionedUsage,
+// CollectPhaseUsage per meter dimension.
+func (q *Queries) CollectPhaseDimensionedUsage(ctx context.Context, arg CollectPhaseDimensionedUsageParams) ([]CollectPhaseDimensionedUsageRow, error) {
+	rows, err := q.db.QueryContext(ctx, collectPhaseDimensionedUsage,
 		arg.TenantID,
 		arg.WindowStart,
 		arg.WindowEnd,
-		arg.UnsettledFrom,
+		arg.ChainFrom,
+		arg.ReceivedBefore,
 	)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	items := []CollectPostpaidInvoiceDimensionedUsageRow{}
+	items := []CollectPhaseDimensionedUsageRow{}
 	for rows.Next() {
-		var i CollectPostpaidInvoiceDimensionedUsageRow
+		var i CollectPhaseDimensionedUsageRow
 		if err := rows.Scan(
 			&i.ClusterID,
 			&i.UsageType,
@@ -97,32 +101,32 @@ func (q *Queries) CollectPostpaidInvoiceDimensionedUsage(ctx context.Context, ar
 	return items, nil
 }
 
-const collectPostpaidInvoiceUsage = `-- name: CollectPostpaidInvoiceUsage :many
+const collectPhaseUsage = `-- name: CollectPhaseUsage :many
 WITH params AS (
     SELECT $1::text::uuid AS tenant_id,
            $2::timestamptz AS window_start,
            $3::timestamptz AS window_end,
-           LEAST($4::timestamptz, $2::timestamptz) AS unsettled_from
+           LEAST($4::timestamptz, $2::timestamptz) AS chain_from,
+           $5::timestamptz AS received_before
 ), usage_rows AS (
     SELECT COALESCE(ur.cluster_id, '') AS cluster_id, ur.usage_type, ur.usage_value
     FROM purser.usage_records ur CROSS JOIN params p
     WHERE ur.tenant_id = p.tenant_id
       AND ur.period_start < p.window_end
-      AND ur.period_end > p.unsettled_from
-      AND (ur.period_end > p.window_start OR ur.created_at >= p.window_start)
+      AND ur.period_end > p.chain_from
+      AND (ur.period_start >= p.window_start OR ur.created_at >= p.window_start)
+      AND (p.received_before IS NULL OR ur.created_at < p.received_before)
       AND ur.usage_type NOT IN ('unique_users', 'total_streams', 'total_viewers', 'unique_users_period')
       AND ur.value_kind = 'delta'
       AND ur.granularity = 'minute_5'
-      AND NOT EXISTS (
-          SELECT 1 FROM purser.prepaid_usage_settlements settlement
-          WHERE settlement.report_id = ur.report_id AND settlement.tenant_id = ur.tenant_id
-      )
     UNION ALL
     SELECT COALESCE(ua.cluster_id, '') AS cluster_id, ua.usage_type, ua.delta_value AS usage_value
     FROM purser.usage_adjustments ua CROSS JOIN params p
     WHERE ua.tenant_id = p.tenant_id
       AND ua.period_start < p.window_end
-      AND ua.period_end > p.window_start
+      AND ua.period_end > p.chain_from
+      AND (ua.period_start >= p.window_start OR ua.created_at >= p.window_start)
+      AND (p.received_before IS NULL OR ua.created_at < p.received_before)
       AND ua.status = 'applied'
       AND ua.value_kind = 'correction_delta'
       AND ua.usage_type NOT IN ('unique_users', 'total_streams', 'total_viewers', 'unique_users_period')
@@ -134,39 +138,46 @@ FROM usage_rows
 GROUP BY cluster_id, usage_type
 `
 
-type CollectPostpaidInvoiceUsageParams struct {
-	TenantID      string    `db:"tenant_id" json:"tenant_id"`
-	WindowStart   time.Time `db:"window_start" json:"window_start"`
-	WindowEnd     time.Time `db:"window_end" json:"window_end"`
-	UnsettledFrom time.Time `db:"unsettled_from" json:"unsettled_from"`
+type CollectPhaseUsageParams struct {
+	TenantID       string       `db:"tenant_id" json:"tenant_id"`
+	WindowStart    time.Time    `db:"window_start" json:"window_start"`
+	WindowEnd      time.Time    `db:"window_end" json:"window_end"`
+	ChainFrom      time.Time    `db:"chain_from" json:"chain_from"`
+	ReceivedBefore sql.NullTime `db:"received_before" json:"received_before"`
 }
 
-type CollectPostpaidInvoiceUsageRow struct {
+type CollectPhaseUsageRow struct {
 	ClusterID       string  `db:"cluster_id" json:"cluster_id"`
 	UsageType       string  `db:"usage_type" json:"usage_type"`
 	AggregatedValue float64 `db:"aggregated_value" json:"aggregated_value"`
 }
 
-// The usage a postpaid invoice of [window_start, window_end) rates. A usage
-// record a prepaid usage settlement paid from the balance belongs to the
-// prepaid statement, never to an invoice. A period that starts at a switch
-// from prepaid also rates the records of the prepaid phase before it that
-// reached Purser after the switch, which the balance never paid:
-// unsettled_from is where that phase began, or window_start otherwise.
-func (q *Queries) CollectPostpaidInvoiceUsage(ctx context.Context, arg CollectPostpaidInvoiceUsageParams) ([]CollectPostpaidInvoiceUsageRow, error) {
-	rows, err := q.db.QueryContext(ctx, collectPostpaidInvoiceUsage,
+// The usage the billing document of the phase [window_start, window_end)
+// rates. Switches between prepaid and postpaid split a period into phases,
+// and a usage record or usage correction belongs to the phase in force when
+// it reached Purser (its created_at, written under the subscription row lock
+// the switch takes, never before the last switch): a phase rates the rows of
+// its window, plus rows of earlier phases of the split period, back to
+// chain_from, that reached Purser after the phase began. A row that reached
+// Purser before window_start belonged to the phase before, which rated it.
+// received_before, when set, bounds the receipt time of a phase a switch
+// closes now; later rows go to the phase that follows. The phases of a split
+// period therefore share no row.
+func (q *Queries) CollectPhaseUsage(ctx context.Context, arg CollectPhaseUsageParams) ([]CollectPhaseUsageRow, error) {
+	rows, err := q.db.QueryContext(ctx, collectPhaseUsage,
 		arg.TenantID,
 		arg.WindowStart,
 		arg.WindowEnd,
-		arg.UnsettledFrom,
+		arg.ChainFrom,
+		arg.ReceivedBefore,
 	)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	items := []CollectPostpaidInvoiceUsageRow{}
+	items := []CollectPhaseUsageRow{}
 	for rows.Next() {
-		var i CollectPostpaidInvoiceUsageRow
+		var i CollectPhaseUsageRow
 		if err := rows.Scan(&i.ClusterID, &i.UsageType, &i.AggregatedValue); err != nil {
 			return nil, err
 		}
@@ -195,15 +206,16 @@ SET invoice_number = 'STM-' || LPAD(nextval('purser.billing_invoice_number_seq')
     gross_metered_amount = $4::text::numeric,
     prepaid_credit_applied = 0,
     usage_details = $5::jsonb,
-    period_end = $6::timestamptz,
+    period_start = $6::timestamptz,
+    period_end = $7::timestamptz,
     presentment_amount_cents = 0,
     presentment_currency = 'EUR',
     presentment_units_per_eur = 1,
     presentment_reference_date = $1::date,
     finalized_at = $1::timestamptz,
     updated_at = NOW()
-WHERE id = $7::text::uuid
-  AND tenant_id = $8::text::uuid
+WHERE id = $8::text::uuid
+  AND tenant_id = $9::text::uuid
   AND status IN ('draft', 'manual_review')
 RETURNING id::text AS id, invoice_number
 `
@@ -214,6 +226,7 @@ type ConvertDraftToPrepaidStatementParams struct {
 	MeteredAmount      string          `db:"metered_amount" json:"metered_amount"`
 	GrossMeteredAmount string          `db:"gross_metered_amount" json:"gross_metered_amount"`
 	UsageDetails       json.RawMessage `db:"usage_details" json:"usage_details"`
+	PeriodStart        time.Time       `db:"period_start" json:"period_start"`
 	PeriodEnd          time.Time       `db:"period_end" json:"period_end"`
 	InvoiceID          string          `db:"invoice_id" json:"invoice_id"`
 	TenantID           string          `db:"tenant_id" json:"tenant_id"`
@@ -225,7 +238,7 @@ type ConvertDraftToPrepaidStatementRow struct {
 }
 
 // An open draft of the period, left by postpaid billing earlier in the period,
-// becomes the period's statement.
+// becomes the period's statement, for the statement's period.
 func (q *Queries) ConvertDraftToPrepaidStatement(ctx context.Context, arg ConvertDraftToPrepaidStatementParams) (ConvertDraftToPrepaidStatementRow, error) {
 	row := q.db.QueryRowContext(ctx, convertDraftToPrepaidStatement,
 		arg.FinalizedAt,
@@ -233,6 +246,7 @@ func (q *Queries) ConvertDraftToPrepaidStatement(ctx context.Context, arg Conver
 		arg.MeteredAmount,
 		arg.GrossMeteredAmount,
 		arg.UsageDetails,
+		arg.PeriodStart,
 		arg.PeriodEnd,
 		arg.InvoiceID,
 		arg.TenantID,
@@ -240,6 +254,50 @@ func (q *Queries) ConvertDraftToPrepaidStatement(ctx context.Context, arg Conver
 	var i ConvertDraftToPrepaidStatementRow
 	err := row.Scan(&i.ID, &i.InvoiceNumber)
 	return i, err
+}
+
+const countPhaseUsageReceivedBefore = `-- name: CountPhaseUsageReceivedBefore :one
+SELECT ((
+    SELECT COUNT(*)
+    FROM purser.usage_records ur
+    WHERE ur.tenant_id = $1::text::uuid
+      AND ur.period_start < $2::timestamptz
+      AND ur.period_end > LEAST($3::timestamptz, $4::timestamptz)
+      AND ur.created_at < $5::timestamptz
+) + (
+    SELECT COUNT(*)
+    FROM purser.usage_adjustments ua
+    WHERE ua.tenant_id = $1::text::uuid
+      AND ua.period_start < $2::timestamptz
+      AND ua.period_end > LEAST($3::timestamptz, $4::timestamptz)
+      AND ua.created_at < $5::timestamptz
+      AND ua.status = 'applied'
+))::bigint AS records
+`
+
+type CountPhaseUsageReceivedBeforeParams struct {
+	TenantID       string    `db:"tenant_id" json:"tenant_id"`
+	WindowEnd      time.Time `db:"window_end" json:"window_end"`
+	ChainFrom      time.Time `db:"chain_from" json:"chain_from"`
+	WindowStart    time.Time `db:"window_start" json:"window_start"`
+	ReceivedBefore time.Time `db:"received_before" json:"received_before"`
+}
+
+// How many usage records and usage corrections of the split period back to
+// chain_from reached Purser before received_before. A switch compares it,
+// under the subscription row lock, with the count it rated to see whether
+// usage arrived while its closing document was rated.
+func (q *Queries) CountPhaseUsageReceivedBefore(ctx context.Context, arg CountPhaseUsageReceivedBeforeParams) (int64, error) {
+	row := q.db.QueryRowContext(ctx, countPhaseUsageReceivedBefore,
+		arg.TenantID,
+		arg.WindowEnd,
+		arg.ChainFrom,
+		arg.WindowStart,
+		arg.ReceivedBefore,
+	)
+	var records int64
+	err := row.Scan(&records)
+	return records, err
 }
 
 const enqueuePrepaidStatementEmail = `-- name: EnqueuePrepaidStatementEmail :exec
@@ -266,30 +324,40 @@ func (q *Queries) EnqueuePrepaidStatementEmail(ctx context.Context, arg EnqueueP
 	return err
 }
 
-const getClosedPrepaidPhaseStart = `-- name: GetClosedPrepaidPhaseStart :one
-SELECT period_start::timestamptz AS phase_start
+const getOpenUsageDraftForPhase = `-- name: GetOpenUsageDraftForPhase :one
+SELECT id::text AS id, period_start::timestamptz AS period_start
 FROM purser.billing_invoices
 WHERE tenant_id = $1::text::uuid
-  AND document_kind = 'prepaid_statement'
-  AND period_end = $2::timestamptz
+  AND document_kind = 'invoice'
+  AND base_fee_period_start IS NULL
+  AND status IN ('draft', 'manual_review')
+  AND period_start IS NOT NULL
   AND period_start < $2::timestamptz
-  AND usage_details->'statement'->>'closes_prepaid_phase' = 'true'
-ORDER BY period_start
+  AND COALESCE(period_end, 'infinity'::timestamptz) > $3::timestamptz
+ORDER BY (period_start = $3::timestamptz) DESC, period_start DESC
 LIMIT 1
 `
 
-type GetClosedPrepaidPhaseStartParams struct {
-	TenantID    string    `db:"tenant_id" json:"tenant_id"`
+type GetOpenUsageDraftForPhaseParams struct {
+	TenantID   string    `db:"tenant_id" json:"tenant_id"`
+	PhaseEnd   time.Time `db:"phase_end" json:"phase_end"`
+	PhaseStart time.Time `db:"phase_start" json:"phase_start"`
+}
+
+type GetOpenUsageDraftForPhaseRow struct {
+	ID          string    `db:"id" json:"id"`
 	PeriodStart time.Time `db:"period_start" json:"period_start"`
 }
 
-// Where the prepaid phase began that a switch to postpaid closed at
-// period_start, from the statement that closed it.
-func (q *Queries) GetClosedPrepaidPhaseStart(ctx context.Context, arg GetClosedPrepaidPhaseStartParams) (time.Time, error) {
-	row := q.db.QueryRowContext(ctx, getClosedPrepaidPhaseStart, arg.TenantID, arg.PeriodStart)
-	var phase_start time.Time
-	err := row.Scan(&phase_start)
-	return phase_start, err
+// The open usage invoice (draft or held for manual review) that a switch
+// closing the phase [phase_start, phase_end) turns into the phase's closing
+// document: the one starting at the phase, else the latest one whose period
+// overlaps it, such as a draft written for a provider-anchored period start.
+func (q *Queries) GetOpenUsageDraftForPhase(ctx context.Context, arg GetOpenUsageDraftForPhaseParams) (GetOpenUsageDraftForPhaseRow, error) {
+	row := q.db.QueryRowContext(ctx, getOpenUsageDraftForPhase, arg.TenantID, arg.PhaseEnd, arg.PhaseStart)
+	var i GetOpenUsageDraftForPhaseRow
+	err := row.Scan(&i.ID, &i.PeriodStart)
+	return i, err
 }
 
 const getPrepaidStatement = `-- name: GetPrepaidStatement :one
@@ -431,9 +499,124 @@ func (q *Queries) GetPrepaidStatementLedger(ctx context.Context, arg GetPrepaidS
 	return i, err
 }
 
+const getSplitPeriodStart = `-- name: GetSplitPeriodStart :one
+WITH RECURSIVE closed_phases AS (
+    SELECT period_start::timestamptz AS phase_start, 1 AS depth
+    FROM purser.billing_invoices
+    WHERE tenant_id = $1::text::uuid
+      AND period_end = $2::timestamptz
+      AND period_start < $2::timestamptz
+      AND ((document_kind = 'prepaid_statement' AND usage_details->'statement'->>'closes_prepaid_phase' = 'true')
+        OR (document_kind = 'invoice' AND usage_details->>'closes_postpaid_phase' = 'true'))
+    UNION
+    SELECT earlier.period_start::timestamptz, closed_phases.depth + 1
+    FROM purser.billing_invoices earlier
+    JOIN closed_phases ON earlier.period_end = closed_phases.phase_start
+    WHERE earlier.tenant_id = $1::text::uuid
+      AND earlier.period_start < closed_phases.phase_start
+      AND ((earlier.document_kind = 'prepaid_statement' AND earlier.usage_details->'statement'->>'closes_prepaid_phase' = 'true')
+        OR (earlier.document_kind = 'invoice' AND earlier.usage_details->>'closes_postpaid_phase' = 'true'))
+      AND closed_phases.depth < 100
+)
+SELECT phase_start
+FROM closed_phases
+ORDER BY phase_start
+LIMIT 1
+`
+
+type GetSplitPeriodStartParams struct {
+	TenantID    string    `db:"tenant_id" json:"tenant_id"`
+	PeriodStart time.Time `db:"period_start" json:"period_start"`
+}
+
+// Where the period began that switches between prepaid and postpaid split up
+// to period_start: the start of the earliest of the contiguous documents that
+// closed a phase at a switch, the last of them ending at period_start. A
+// switch from prepaid closes its phase with a prepaid statement flagged
+// closes_prepaid_phase, a switch from postpaid with an invoice flagged
+// closes_postpaid_phase; each switch adds one document to the chain.
+func (q *Queries) GetSplitPeriodStart(ctx context.Context, arg GetSplitPeriodStartParams) (time.Time, error) {
+	row := q.db.QueryRowContext(ctx, getSplitPeriodStart, arg.TenantID, arg.PeriodStart)
+	var phase_start time.Time
+	err := row.Scan(&phase_start)
+	return phase_start, err
+}
+
+const getSubscriptionForPhaseClose = `-- name: GetSubscriptionForPhaseClose :one
+SELECT ts.tenant_id::text AS tenant_id,
+       ts.billing_email,
+       ts.tier_id,
+       ts.status,
+       ts.billing_period_start,
+       ts.billing_period_end,
+       ts.mollie_next_payment_date,
+       ts.stripe_subscription_id,
+       ts.mollie_subscription_id,
+       ts.payment_method,
+       ts.stripe_customer_id,
+       ts.presentment_currency::text AS presentment_currency,
+       EXISTS (
+           SELECT 1 FROM purser.mollie_customers mc WHERE mc.tenant_id = ts.tenant_id
+       )::boolean AS has_mollie_customer,
+       bt.tier_name,
+       bt.display_name,
+       bt.billing_period,
+       ts.billing_model
+FROM purser.tenant_subscriptions ts
+JOIN purser.billing_tiers bt ON ts.tier_id = bt.id
+WHERE ts.tenant_id = $1::text::uuid
+`
+
+type GetSubscriptionForPhaseCloseRow struct {
+	TenantID              string         `db:"tenant_id" json:"tenant_id"`
+	BillingEmail          sql.NullString `db:"billing_email" json:"billing_email"`
+	TierID                uuid.UUID      `db:"tier_id" json:"tier_id"`
+	Status                string         `db:"status" json:"status"`
+	BillingPeriodStart    sql.NullTime   `db:"billing_period_start" json:"billing_period_start"`
+	BillingPeriodEnd      sql.NullTime   `db:"billing_period_end" json:"billing_period_end"`
+	MollieNextPaymentDate sql.NullTime   `db:"mollie_next_payment_date" json:"mollie_next_payment_date"`
+	StripeSubscriptionID  sql.NullString `db:"stripe_subscription_id" json:"stripe_subscription_id"`
+	MollieSubscriptionID  sql.NullString `db:"mollie_subscription_id" json:"mollie_subscription_id"`
+	PaymentMethod         sql.NullString `db:"payment_method" json:"payment_method"`
+	StripeCustomerID      sql.NullString `db:"stripe_customer_id" json:"stripe_customer_id"`
+	PresentmentCurrency   string         `db:"presentment_currency" json:"presentment_currency"`
+	HasMollieCustomer     bool           `db:"has_mollie_customer" json:"has_mollie_customer"`
+	TierName              string         `db:"tier_name" json:"tier_name"`
+	DisplayName           string         `db:"display_name" json:"display_name"`
+	BillingPeriod         string         `db:"billing_period" json:"billing_period"`
+	BillingModel          string         `db:"billing_model" json:"billing_model"`
+}
+
+// The columns ListSubscriptionsDueForInvoice returns, for a tenant whose
+// postpaid phase a switch to prepaid closes, in any subscription status.
+func (q *Queries) GetSubscriptionForPhaseClose(ctx context.Context, tenantID string) (GetSubscriptionForPhaseCloseRow, error) {
+	row := q.db.QueryRowContext(ctx, getSubscriptionForPhaseClose, tenantID)
+	var i GetSubscriptionForPhaseCloseRow
+	err := row.Scan(
+		&i.TenantID,
+		&i.BillingEmail,
+		&i.TierID,
+		&i.Status,
+		&i.BillingPeriodStart,
+		&i.BillingPeriodEnd,
+		&i.MollieNextPaymentDate,
+		&i.StripeSubscriptionID,
+		&i.MollieSubscriptionID,
+		&i.PaymentMethod,
+		&i.StripeCustomerID,
+		&i.PresentmentCurrency,
+		&i.HasMollieCustomer,
+		&i.TierName,
+		&i.DisplayName,
+		&i.BillingPeriod,
+		&i.BillingModel,
+	)
+	return i, err
+}
+
 const getSubscriptionPrepaidPhase = `-- name: GetSubscriptionPrepaidPhase :one
 SELECT billing_model, status, billing_email,
-       billing_period_start, billing_period_end,
+       billing_period_start, billing_period_end, mollie_next_payment_date,
        stripe_subscription_id, mollie_subscription_id,
        NOW()::timestamptz AS database_now
 FROM purser.tenant_subscriptions
@@ -441,14 +624,15 @@ WHERE tenant_id = $1::text::uuid
 `
 
 type GetSubscriptionPrepaidPhaseRow struct {
-	BillingModel         string         `db:"billing_model" json:"billing_model"`
-	Status               string         `db:"status" json:"status"`
-	BillingEmail         sql.NullString `db:"billing_email" json:"billing_email"`
-	BillingPeriodStart   sql.NullTime   `db:"billing_period_start" json:"billing_period_start"`
-	BillingPeriodEnd     sql.NullTime   `db:"billing_period_end" json:"billing_period_end"`
-	StripeSubscriptionID sql.NullString `db:"stripe_subscription_id" json:"stripe_subscription_id"`
-	MollieSubscriptionID sql.NullString `db:"mollie_subscription_id" json:"mollie_subscription_id"`
-	DatabaseNow          time.Time      `db:"database_now" json:"database_now"`
+	BillingModel          string         `db:"billing_model" json:"billing_model"`
+	Status                string         `db:"status" json:"status"`
+	BillingEmail          sql.NullString `db:"billing_email" json:"billing_email"`
+	BillingPeriodStart    sql.NullTime   `db:"billing_period_start" json:"billing_period_start"`
+	BillingPeriodEnd      sql.NullTime   `db:"billing_period_end" json:"billing_period_end"`
+	MollieNextPaymentDate sql.NullTime   `db:"mollie_next_payment_date" json:"mollie_next_payment_date"`
+	StripeSubscriptionID  sql.NullString `db:"stripe_subscription_id" json:"stripe_subscription_id"`
+	MollieSubscriptionID  sql.NullString `db:"mollie_subscription_id" json:"mollie_subscription_id"`
+	DatabaseNow           time.Time      `db:"database_now" json:"database_now"`
 }
 
 // The subscription facts that decide a prepaid phase and its statement, and
@@ -462,11 +646,45 @@ func (q *Queries) GetSubscriptionPrepaidPhase(ctx context.Context, tenantID stri
 		&i.BillingEmail,
 		&i.BillingPeriodStart,
 		&i.BillingPeriodEnd,
+		&i.MollieNextPaymentDate,
 		&i.StripeSubscriptionID,
 		&i.MollieSubscriptionID,
 		&i.DatabaseNow,
 	)
 	return i, err
+}
+
+const insertCollectionCarryBalanceTransaction = `-- name: InsertCollectionCarryBalanceTransaction :exec
+INSERT INTO purser.balance_transactions (
+    tenant_id, amount_cents, balance_after_cents, transaction_type, description,
+    reference_id, reference_type, actor_kind, created_at
+) VALUES (
+    $1::text::uuid, $2, $3,
+    'usage', $4, $5::text::uuid, 'collection_carry',
+    'system', NOW()
+)
+`
+
+type InsertCollectionCarryBalanceTransactionParams struct {
+	TenantID          string         `db:"tenant_id" json:"tenant_id"`
+	AmountCents       int64          `db:"amount_cents" json:"amount_cents"`
+	BalanceAfterCents int64          `db:"balance_after_cents" json:"balance_after_cents"`
+	Description       sql.NullString `db:"description" json:"description"`
+	InvoiceID         string         `db:"invoice_id" json:"invoice_id"`
+}
+
+// Postpaid charges left below the collection minimum when a switch to
+// prepaid closed the postpaid phase, charged to the prepaid balance; the
+// closing invoice is the reference, so the charge is written once.
+func (q *Queries) InsertCollectionCarryBalanceTransaction(ctx context.Context, arg InsertCollectionCarryBalanceTransactionParams) error {
+	_, err := q.db.ExecContext(ctx, insertCollectionCarryBalanceTransaction,
+		arg.TenantID,
+		arg.AmountCents,
+		arg.BalanceAfterCents,
+		arg.Description,
+		arg.InvoiceID,
+	)
+	return err
 }
 
 const insertPrepaidStatement = `-- name: InsertPrepaidStatement :one
@@ -659,7 +877,7 @@ func (q *Queries) ListPrepaidDoubleCharges(ctx context.Context, arg ListPrepaidD
 	return items, nil
 }
 
-const startPostpaidPhase = `-- name: StartPostpaidPhase :execrows
+const startBillingPhase = `-- name: StartBillingPhase :execrows
 UPDATE purser.tenant_subscriptions
 SET billing_period_start = $1::timestamp,
     billing_period_end = $2::timestamp,
@@ -668,16 +886,16 @@ SET billing_period_start = $1::timestamp,
 WHERE tenant_id = $3::text::uuid
 `
 
-type StartPostpaidPhaseParams struct {
+type StartBillingPhaseParams struct {
 	PeriodStart time.Time `db:"period_start" json:"period_start"`
 	PeriodEnd   time.Time `db:"period_end" json:"period_end"`
 	TenantID    string    `db:"tenant_id" json:"tenant_id"`
 }
 
-// A switch from prepaid to postpaid closed the prepaid phase at
-// period_start: the postpaid period runs from there.
-func (q *Queries) StartPostpaidPhase(ctx context.Context, arg StartPostpaidPhaseParams) (int64, error) {
-	result, err := q.db.ExecContext(ctx, startPostpaidPhase, arg.PeriodStart, arg.PeriodEnd, arg.TenantID)
+// A switch between prepaid and postpaid closed the current phase at
+// period_start: the next phase's period runs from there.
+func (q *Queries) StartBillingPhase(ctx context.Context, arg StartBillingPhaseParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, startBillingPhase, arg.PeriodStart, arg.PeriodEnd, arg.TenantID)
 	if err != nil {
 		return 0, err
 	}

@@ -3,6 +3,7 @@ package appconfig_test
 import (
 	"errors"
 	"slices"
+	"strings"
 	"testing"
 
 	"frameworks/api_billing/internal/appconfig"
@@ -208,5 +209,52 @@ func TestBootstrapVariantsRequireOnlyWhatTheyUse(t *testing.T) {
 	var loadErr *config.LoadError
 	if !errors.As(err, &loadErr) || !slices.Equal(loadErr.Missing, []string{"SERVICE_TOKEN"}) {
 		t.Fatalf("bootstrap validate error = %v, want missing SERVICE_TOKEN", err)
+	}
+}
+
+func TestPurserRequiresTheSupplierIdentityOutsideDevelopment(t *testing.T) {
+	supplier := map[string]string{
+		"SUPPLIER_NAME":                "FrameWorks B.V.",
+		"SUPPLIER_ADDRESS":             "Street 1, 1000 AA Amsterdam",
+		"SUPPLIER_VAT_NUMBER":          "NL000000000B01",
+		"SUPPLIER_REGISTRATION_NUMBER": "00000000",
+		"SUPPLIER_COUNTRY":             "nl",
+	}
+	env := func(buildEnv string, overrides map[string]string) map[string]string {
+		values := map[string]string{"BUILD_ENV": buildEnv}
+		for _, set := range []map[string]string{purserRequired, supplier, overrides} {
+			for key, value := range set {
+				values[key] = value
+			}
+		}
+		return values
+	}
+	for _, tc := range []struct {
+		name      string
+		values    map[string]string
+		wantKeys  []string
+		wantError bool
+	}{
+		{name: "production with the identity", values: env("production", nil)},
+		{name: "production without it", values: env("production", map[string]string{
+			"SUPPLIER_NAME": "", "SUPPLIER_ADDRESS": "", "SUPPLIER_VAT_NUMBER": "", "SUPPLIER_REGISTRATION_NUMBER": "", "SUPPLIER_COUNTRY": "",
+		}), wantError: true, wantKeys: []string{"SUPPLIER_NAME", "SUPPLIER_ADDRESS", "SUPPLIER_VAT_NUMBER", "SUPPLIER_REGISTRATION_NUMBER", "SUPPLIER_COUNTRY"}},
+		{name: "prod with a country that is no ISO code", values: env("prod", map[string]string{"SUPPLIER_COUNTRY": "Netherlands"}),
+			wantError: true, wantKeys: []string{"SUPPLIER_COUNTRY"}},
+		{name: "development without it", values: env("development", map[string]string{
+			"SUPPLIER_NAME": "", "SUPPLIER_ADDRESS": "", "SUPPLIER_VAT_NUMBER": "", "SUPPLIER_REGISTRATION_NUMBER": "", "SUPPLIER_COUNTRY": "",
+		})},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := config.Load[appconfig.Purser](config.Options{Service: "purser", Lookup: lookupFrom(tc.values)})
+			if (err != nil) != tc.wantError {
+				t.Fatalf("Load error = %v, want error %v", err, tc.wantError)
+			}
+			for _, key := range tc.wantKeys {
+				if !strings.Contains(err.Error(), key) {
+					t.Errorf("error %q does not name %s", err, key)
+				}
+			}
+		})
 	}
 }

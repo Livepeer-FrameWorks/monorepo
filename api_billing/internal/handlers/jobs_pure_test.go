@@ -534,3 +534,31 @@ func TestNextProviderPaymentAttempt(t *testing.T) {
 		})
 	}
 }
+
+func TestNextBillingPeriodEnd(t *testing.T) {
+	at := func(value string) time.Time {
+		t.Helper()
+		parsed, err := time.Parse(time.RFC3339Nano, value)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return parsed
+	}
+	for _, tc := range []struct {
+		name, splitStart, periodEnd, want string
+	}{
+		{"calendar month of 30 days", "2026-09-01T00:00:00Z", "2026-10-01T00:00:00Z", "2026-11-01T00:00:00Z"},
+		{"calendar month of 31 days", "2026-10-01T00:00:00Z", "2026-11-01T00:00:00Z", "2026-12-01T00:00:00Z"},
+		{"month anchored mid-day", "2026-09-15T10:30:00Z", "2026-10-15T10:30:00Z", "2026-11-15T10:30:00Z"},
+		{"calendar year", "2026-01-01T00:00:00Z", "2027-01-01T00:00:00Z", "2028-01-01T00:00:00Z"},
+		{"30-day period", "2026-10-01T00:00:00Z", "2026-10-31T00:00:00Z", "2026-12-01T00:00:00Z"},
+		{"fragment of a split period", "2026-10-01T00:00:00Z", "2026-10-01T07:23:22.919Z", "2026-11-01T07:23:22.919Z"},
+		{"empty period", "2026-10-01T00:00:00Z", "2026-10-01T00:00:00Z", "2026-11-01T00:00:00Z"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := nextBillingPeriodEnd(at(tc.splitStart), at(tc.periodEnd)); !got.Equal(at(tc.want)) {
+				t.Fatalf("nextBillingPeriodEnd(%s, %s) = %s, want %s", tc.splitStart, tc.periodEnd, got.Format(time.RFC3339Nano), tc.want)
+			}
+		})
+	}
+}

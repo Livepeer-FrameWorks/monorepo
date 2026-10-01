@@ -70,10 +70,16 @@ func contractProductionManifest(t *testing.T, extraSecrets ...string) *inventory
 			},
 		},
 		Services: map[string]inventory.ServiceConfig{
-			"bridge":          {Enabled: true, Host: "central-eu-1"},
-			"commodore":       {Enabled: true, Host: "central-eu-1"},
-			"quartermaster":   {Enabled: true, Host: "central-eu-1"},
-			"purser":          {Enabled: true, Host: "central-eu-1"},
+			"bridge":        {Enabled: true, Host: "central-eu-1"},
+			"commodore":     {Enabled: true, Host: "central-eu-1"},
+			"quartermaster": {Enabled: true, Host: "central-eu-1"},
+			"purser": {Enabled: true, Host: "central-eu-1", Config: map[string]string{
+				"SUPPLIER_NAME":                "FrameWorks B.V.",
+				"SUPPLIER_ADDRESS":             "Street 1, 1000 AA Amsterdam",
+				"SUPPLIER_VAT_NUMBER":          "NL000000000B01",
+				"SUPPLIER_REGISTRATION_NUMBER": "00000000",
+				"SUPPLIER_COUNTRY":             "NL",
+			}},
 			"periscope-query": {Enabled: true, Host: "central-eu-1"},
 			"periscope-metering": {Enabled: true, Host: "central-eu-1", Config: map[string]string{
 				"METERING_SOURCE_ID":     "periscope-default",

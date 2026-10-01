@@ -166,6 +166,7 @@ FROM purser.billing_invoices
 WHERE tenant_id = $1::text::uuid
   AND base_fee_period_start < $2::timestamptz
   AND base_fee_period_end > $2::timestamptz
+  AND usage_details->'unused_share_returned' IS NULL
 ORDER BY base_fee_period_start DESC
 LIMIT 1
 `
@@ -176,7 +177,8 @@ type FindOverlappedBaseFeeInvoiceParams struct {
 }
 
 // The base-fee invoice of the period a tier change cut short: it started
-// before period_start and would have run past it.
+// before period_start and would have run past it. An invoice whose unused
+// share a switch to prepaid already returned is not found again.
 func (q *Queries) FindOverlappedBaseFeeInvoice(ctx context.Context, arg FindOverlappedBaseFeeInvoiceParams) (string, error) {
 	row := q.db.QueryRowContext(ctx, findOverlappedBaseFeeInvoice, arg.TenantID, arg.PeriodStart)
 	var id string
@@ -752,6 +754,31 @@ func (q *Queries) LockOverlappedBaseFeeInvoice(ctx context.Context, arg LockOver
 		&i.PendingPayments,
 	)
 	return i, err
+}
+
+const markBaseFeeUnusedShareReturned = `-- name: MarkBaseFeeUnusedShareReturned :execrows
+UPDATE purser.billing_invoices
+SET usage_details = usage_details || jsonb_build_object('unused_share_returned', $1::jsonb),
+    updated_at = NOW()
+WHERE id = $2::text::uuid
+  AND tenant_id = $3::text::uuid
+  AND base_fee_period_start IS NOT NULL
+`
+
+type MarkBaseFeeUnusedShareReturnedParams struct {
+	Details   json.RawMessage `db:"details" json:"details"`
+	InvoiceID string          `db:"invoice_id" json:"invoice_id"`
+	TenantID  string          `db:"tenant_id" json:"tenant_id"`
+}
+
+// Records on a base-fee invoice that a switch to prepaid returned the unused
+// share of its period; details states from when and how much.
+func (q *Queries) MarkBaseFeeUnusedShareReturned(ctx context.Context, arg MarkBaseFeeUnusedShareReturnedParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, markBaseFeeUnusedShareReturned, arg.Details, arg.InvoiceID, arg.TenantID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
 }
 
 const reduceUnpaidBaseFeeInvoice = `-- name: ReduceUnpaidBaseFeeInvoice :execrows

@@ -148,6 +148,11 @@ func TestOperatorBillingGrant_RealPG(t *testing.T) { //nolint:funlen // One data
 		if shown.GetGrant() == nil || shown.GetGrant().GetActive() {
 			t.Fatalf("an expired grant stays on record as inactive: %+v", shown.GetGrant())
 		}
+		// Showing a grant reports the tier it applies to; nothing was assigned.
+		if tier := shown.GetTier(); tier.GetTierName() != "supporter" || tier.GetTierId() != supporterID ||
+			tier.GetTierLevel() != 2 || tier.GetBillingModel() != "postpaid" || tier.GetSubscriptionId() == "" || shown.GetAssignment() != nil {
+			t.Fatalf("shown tier = %+v assignment = %+v, want the supporter postpaid subscription and no assignment", tier, shown.GetAssignment())
+		}
 	})
 
 	t.Run("a Stripe subscription blocks a base-fee override", func(t *testing.T) {
@@ -160,6 +165,14 @@ func TestOperatorBillingGrant_RealPG(t *testing.T) { //nolint:funlen // One data
 		grant(t, &purserpb.AdminSetBillingGrantRequest{TenantId: tenantID, WaiveUsage: true, Reason: "usage comp"})
 	})
 
+	t.Run("a grant with a tier reports the assignment and the tier", func(t *testing.T) {
+		tenantID := seed(t, "", "", "")
+		resp := grant(t, &purserpb.AdminSetBillingGrantRequest{TenantId: tenantID, TierName: "supporter", Collection: "invoice", Reason: "house account"})
+		if resp.GetAssignment().GetTierName() != "supporter" || resp.GetAssignment().GetChanged() || resp.GetTier().GetTierName() != "supporter" {
+			t.Fatalf("assignment = %+v tier = %+v, want an unchanged supporter assignment and the supporter tier", resp.GetAssignment(), resp.GetTier())
+		}
+	})
+
 	t.Run("revoke removes the grant", func(t *testing.T) {
 		tenantID := seed(t, "", "", "")
 		grant(t, &purserpb.AdminSetBillingGrantRequest{TenantId: tenantID, Collection: "invoice", Reason: "house account"})
@@ -169,6 +182,9 @@ func TestOperatorBillingGrant_RealPG(t *testing.T) { //nolint:funlen // One data
 		}
 		if resp.GetGrant() != nil || resp.GetCollectionReady() {
 			t.Fatalf("after revoke: grant=%v ready=%v", resp.GetGrant(), resp.GetCollectionReady())
+		}
+		if resp.GetTier().GetTierName() != "supporter" || resp.GetTier().GetBillingModel() != "postpaid" {
+			t.Fatalf("after revoke: tier = %+v, want the supporter postpaid tier the tenant stays on", resp.GetTier())
 		}
 		if _, err := server.AdminRevokeBillingGrant(opCtx, &purserpb.AdminRevokeBillingGrantRequest{TenantId: tenantID, Reason: "again"}); status.Code(err) != codes.NotFound {
 			t.Fatalf("second revoke err = %v, want NotFound", err)

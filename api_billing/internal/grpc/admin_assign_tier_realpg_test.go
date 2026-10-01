@@ -192,7 +192,8 @@ func TestAdminAssignTier_RealPG(t *testing.T) { //nolint:funlen // One database 
 
 	t.Run("postpaid tenant moves to payg prepaid and gets a balance", func(t *testing.T) {
 		tenantID := seed(t, "production", "postpaid", "active")
-		if _, err := db.ExecContext(ctx, `UPDATE purser.tenant_subscriptions SET pending_tier_id = $2, pending_effective_at = NOW() + INTERVAL '1 day', pending_reason = 'downgrade' WHERE tenant_id = $1`, tenantID, tiers["free"]); err != nil {
+		// The switch finalizes the postpaid phase's invoice, presented in EUR.
+		if _, err := db.ExecContext(ctx, `UPDATE purser.tenant_subscriptions SET presentment_currency = 'EUR', pending_tier_id = $2, pending_effective_at = NOW() + INTERVAL '1 day', pending_reason = 'downgrade' WHERE tenant_id = $1`, tenantID, tiers["free"]); err != nil {
 			t.Fatal(err)
 		}
 		resp, err := server.AdminAssignTier(operatorAssignCtx(operatorID), &purserpb.AdminAssignTierRequest{
@@ -215,6 +216,7 @@ func TestAdminAssignTier_RealPG(t *testing.T) { //nolint:funlen // One database 
 		periodStart := time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)
 		// The tenant's 10.00 balance went to its September draft as credit.
 		for _, statement := range []string{
+			`UPDATE purser.tenant_subscriptions SET presentment_currency = 'EUR' WHERE tenant_id = $1`,
 			`INSERT INTO purser.prepaid_balances (tenant_id, balance_cents, currency) VALUES ($1, 0, 'EUR')`,
 			`INSERT INTO purser.balance_transactions (tenant_id, amount_cents, balance_after_cents, transaction_type, description, reference_id, reference_type)
 				VALUES ($1, -1000, 0, 'credit', 'Invoice credit: 2026-09', gen_random_uuid(), 'invoice_credit')`,
@@ -238,7 +240,7 @@ func TestAdminAssignTier_RealPG(t *testing.T) { //nolint:funlen // One database 
 			t.Fatalf("balance = %d, want the 1000 cents the draft held", n)
 		}
 		var amount, credit string
-		if err := db.QueryRowContext(ctx, `SELECT amount::text, prepaid_credit_applied::text FROM purser.billing_invoices WHERE tenant_id = $1::uuid`, tenantID).Scan(&amount, &credit); err != nil {
+		if err := db.QueryRowContext(ctx, `SELECT amount::text, prepaid_credit_applied::text FROM purser.billing_invoices WHERE tenant_id = $1::uuid AND period_start = $2`, tenantID, periodStart).Scan(&amount, &credit); err != nil {
 			t.Fatal(err)
 		}
 		if amount != "79.00" || credit != "0.00" {

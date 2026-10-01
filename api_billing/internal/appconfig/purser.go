@@ -4,10 +4,12 @@
 package appconfig
 
 import (
+	"fmt"
 	"reflect"
 	"strings"
 
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/config"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/countries"
 )
 
 // QuartermasterClient is the Quartermaster connection read by the server and
@@ -72,7 +74,7 @@ type PurserRuntime struct {
 	StripeWebhookSecret string `env:"STRIPE_WEBHOOK_SECRET" secret:"true" desc:"Signing secret that verifies Stripe webhooks. Empty rejects every Stripe webhook. Re-read after an env-file reload." introduced:"v0.3.0"`
 	MollieAPIKey        string `env:"MOLLIE_API_KEY" secret:"true" desc:"Mollie API key. Enables the Mollie client at startup; checkout and provider availability re-read it after an env-file reload." introduced:"v0.3.0"`
 
-	SupplierName               string `env:"SUPPLIER_NAME" desc:"Supplier legal name on billing documents and crypto invoices. The complete SUPPLIER_* set is required for x402 and, in production, for crypto deposits." introduced:"v0.3.0"`
+	SupplierName               string `env:"SUPPLIER_NAME" desc:"Supplier legal name on billing documents and crypto invoices. Outside development Purser refuses to start without the complete SUPPLIER_* set, since every invoice, statement and credit note states it." introduced:"v0.3.0"`
 	SupplierAddress            string `env:"SUPPLIER_ADDRESS" desc:"Supplier postal address on billing documents and crypto invoices." introduced:"v0.3.0"`
 	SupplierVATNumber          string `env:"SUPPLIER_VAT_NUMBER" desc:"Supplier VAT number on billing documents and crypto invoices." introduced:"v0.3.0"`
 	SupplierRegistrationNumber string `env:"SUPPLIER_REGISTRATION_NUMBER" desc:"Supplier company registration number on billing documents and crypto invoices." introduced:"v0.3.0"`
@@ -113,6 +115,37 @@ type PurserRuntime struct {
 	KafkaClientID     string   `env:"KAFKA_CLIENT_ID" default:"purser" desc:"Kafka client ID of the billing usage report consumer." introduced:"v0.3.0"`
 	KafkaGroupID      string   `env:"KAFKA_GROUP_ID" default:"purser-ingest" desc:"Kafka consumer group of the billing usage report consumer." introduced:"v0.3.0"`
 	BillingKafkaTopic string   `env:"BILLING_KAFKA_TOPIC" default:"billing.usage_reports" desc:"Kafka topic the billing usage report consumer reads." introduced:"v0.3.0"`
+}
+
+// Validate requires the supplier identity outside development: every
+// invoice, prepaid statement and credit note Purser renders states it, and
+// crypto invoicing needs it too. Without it document downloads would fail
+// for every tenant.
+func (c *Purser) Validate() error {
+	if missing := c.MissingSupplierIdentity(); len(missing) > 0 && !c.IsDevelopment() {
+		return fmt.Errorf("%s required outside development: billing documents state the supplier", strings.Join(missing, ", "))
+	}
+	return nil
+}
+
+// MissingSupplierIdentity returns the SUPPLIER_* keys that are empty, and
+// SUPPLIER_COUNTRY when it is not a two-letter ISO country code.
+func (r *PurserRuntime) MissingSupplierIdentity() []string {
+	var missing []string
+	for _, field := range []struct{ key, value string }{
+		{"SUPPLIER_NAME", r.SupplierName},
+		{"SUPPLIER_ADDRESS", r.SupplierAddress},
+		{"SUPPLIER_VAT_NUMBER", r.SupplierVATNumber},
+		{"SUPPLIER_REGISTRATION_NUMBER", r.SupplierRegistrationNumber},
+	} {
+		if strings.TrimSpace(field.value) == "" {
+			missing = append(missing, field.key)
+		}
+	}
+	if !countries.IsValid(r.SupplierCountry) {
+		missing = append(missing, "SUPPLIER_COUNTRY")
+	}
+	return missing
 }
 
 // IsProduction reports whether BUILD_ENV selects production runtime behavior.

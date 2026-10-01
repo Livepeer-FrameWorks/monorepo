@@ -17,6 +17,7 @@ import (
 	"frameworks/api_billing/internal/database/purserdb"
 	"frameworks/api_billing/internal/handlers"
 
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/middleware"
 	purserpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/purser"
 	"github.com/google/uuid"
@@ -233,6 +234,24 @@ func supplierDocumentFields() (string, string, string, string) {
 	return rt.SupplierName, rt.SupplierAddress, rt.SupplierVATNumber, rt.SupplierRegistrationNumber
 }
 
+// missingDocumentSupplierFields names the SUPPLIER_* keys whose values a
+// document needs and lacks. Crypto documents carry the supplier identity they
+// were issued with, which takes the place of the configured one.
+func missingDocumentSupplierFields(base billingDocumentHTMLData) []string {
+	var missing []string
+	for _, field := range []struct{ key, value string }{
+		{"SUPPLIER_NAME", base.SupplierName},
+		{"SUPPLIER_ADDRESS", base.SupplierAddress},
+		{"SUPPLIER_VAT_NUMBER", base.SupplierVAT},
+		{"SUPPLIER_REGISTRATION_NUMBER", base.SupplierRegistration},
+	} {
+		if strings.TrimSpace(field.value) == "" {
+			missing = append(missing, field.key)
+		}
+	}
+	return missing
+}
+
 func scanCustomer(name, company, address, vat *sql.NullString) (string, string, string, string) {
 	return name.String, company.String, address.String, vat.String
 }
@@ -392,8 +411,9 @@ func (s *PurserServer) GetBillingDocument(ctx context.Context, req *purserpb.Get
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "load billing document: %v", err)
 	}
-	if strings.TrimSpace(base.SupplierName) == "" || strings.TrimSpace(base.SupplierAddress) == "" || strings.TrimSpace(base.SupplierVAT) == "" || strings.TrimSpace(base.SupplierRegistration) == "" {
-		return nil, status.Error(codes.FailedPrecondition, "supplier information is not configured for document rendering")
+	if missing := missingDocumentSupplierFields(base); len(missing) > 0 {
+		s.logger.WithFields(logging.Fields{"document_id": documentID, "kind": kind, "missing": missing}).Error("Billing document refused: the supplier identity is not configured")
+		return nil, status.Errorf(codes.FailedPrecondition, "supplier information is not configured for document rendering: %s", strings.Join(missing, ", "))
 	}
 	base.Customer, base.CustomerCompany, base.CustomerAddress, base.CustomerVAT = scanCustomer(&name, &company, &address, &vat)
 	return renderBillingDocument(row, base)

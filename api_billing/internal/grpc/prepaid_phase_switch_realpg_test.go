@@ -16,6 +16,7 @@ import (
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	purserpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/purser"
 	"github.com/google/uuid"
+	"github.com/shopspring/decimal"
 )
 
 // A tenant that moves from prepaid to postpaid mid-period paid the prepaid
@@ -104,9 +105,14 @@ func TestPrepaidToPostpaidSwitchInvoicesOnlyUsageFromTheSwitch_RealPG(t *testing
 		tenantID, periodEnd).Scan(&invoiceStart, &metered, &base, &details); err != nil {
 		t.Fatalf("read postpaid invoice: %v", err)
 	}
-	if metered != "3.00" || base != "79.00" || !invoiceStart.Equal(switchAt) {
-		t.Fatalf("postpaid invoice = %s..%s usage %s base %s, want usage 3.00 (150 GiB at 0.02) from the switch at %s: prepaid-phase usage the balance paid was rated again",
-			invoiceStart, periodEnd, metered, base, switchAt)
+	// The postpaid rest of the period pays the base fee for its share of the
+	// period the switch split, in whole seconds, rounded to the cent.
+	elapsed := decimal.NewFromInt(int64(switchAt.Sub(periodStart) / time.Second))
+	whole := decimal.NewFromInt(int64(periodEnd.Sub(periodStart) / time.Second))
+	wantBase := decimal.NewFromInt(7900).Sub(decimal.NewFromInt(7900).Mul(elapsed).Div(whole).Round(0)).Shift(-2)
+	if metered != "3.00" || base != wantBase.StringFixed(2) || !invoiceStart.Equal(switchAt) {
+		t.Fatalf("postpaid invoice = %s..%s usage %s base %s, want usage 3.00 (150 GiB at 0.02) from the switch at %s and base %s: prepaid-phase usage the balance paid was rated again",
+			invoiceStart, periodEnd, metered, base, switchAt, wantBase.StringFixed(2))
 	}
 	if !strings.Contains(details, `"prepaid_settled_usage_excluded": true`) && !strings.Contains(details, `"prepaid_settled_usage_excluded":true`) {
 		t.Fatalf("postpaid invoice does not record that it left out prepaid-settled usage: %s", details)

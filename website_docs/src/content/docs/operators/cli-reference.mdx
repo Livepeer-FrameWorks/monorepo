@@ -2043,7 +2043,16 @@ assigned tier. Moving to prepaid creates the prepaid balance and returns any cre
 invoice holds to it; moving from prepaid to postpaid keeps the balance as invoice credit and
 reactivates a subscription suspended for low balance. Moving from prepaid to postpaid also closes
 the prepaid part of the period with a prepaid statement, emailed to the tenant, and starts the
-postpaid period at the change, so the first postpaid invoice charges only usage from the change on. An invoice takes only the credit it uses: when
+postpaid period at the change, so the first postpaid invoice charges only usage from the change on,
+and the base fee for that part of the period.
+Moving from postpaid to prepaid ends the postpaid plan at the change: its invoice for the period
+up to the change is finalized then, with the usage reported until the change at the postpaid
+tier's prices and the base fee and monthly cluster fees for that part of the period, and collected
+like any invoice (off-session charge through the tenant's provider, or `record-payment` for a bank
+transfer). A base fee charged in advance for the period has its unused part, from the change on,
+returned to the prepaid balance. The prepaid period starts at the change and the prepaid balance
+pays usage reported after it, including late reports for earlier usage. Each plan pays the base fee
+only for its own part of the period, also across several changes. An invoice takes only the credit it uses: when
 a later draft is smaller, for example after a billing grant lowers the base fee, the difference goes
 back to the balance. A scheduled downgrade is cleared.
 
@@ -2133,8 +2142,10 @@ frameworks admin billing grant set --tenant-id <UUID> --tier production --base-f
 
 #### frameworks admin billing grant show
 
-Print the tenant's arrangement, including an expired one, and whether its charges can be collected
-and by whom (`stripe`, `mollie` or `operator`).
+Print the tenant's arrangement, including an expired one, the tier and billing model it applies to,
+and whether its charges can be collected and by whom (`stripe`, `mollie` or `operator`). With
+`--output json`, `tier` is the tenant's tier after the command, and `assignment` is set only when
+`grant set --tier` assigned one.
 
 ```bash
 frameworks admin billing grant show --email owner@example.com

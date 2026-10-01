@@ -152,6 +152,15 @@ func TestBuildUsageDataFromSummaryIncludesGenericMeters(t *testing.T) {
 	}
 }
 
+// expectUsageReceipt expects a usage report's transaction to begin and lock
+// a postpaid tenant's subscription row before its writes.
+func expectUsageReceipt(mock sqlmock.Sqlmock, tenantID string) {
+	mock.ExpectBegin()
+	mock.ExpectQuery(`-- name: LockSubscriptionForUsage`).
+		WithArgs(tenantID).
+		WillReturnRows(sqlmock.NewRows([]string{"billing_model", "billing_period_start", "billing_period_end"}).AddRow("postpaid", nil, nil))
+}
+
 func TestProcessUsageSummaryPersistsProviderUsageAndAdjustments(t *testing.T) {
 	mockDB, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherRegexp))
 	if err != nil {
@@ -190,12 +199,14 @@ func TestProcessUsageSummaryPersistsProviderUsageAndAdjustments(t *testing.T) {
 		}},
 	}
 
+	expectUsageReceipt(mock, summary.TenantID)
 	mock.ExpectExec(`INSERT INTO purser\.provider_usage_records`).
 		WithArgs(summary.TenantID, "cluster-a", "provider-tenant", "provider-cluster", "storage_gb_seconds_hot", "gibibyte_second", 300.0, sqlmock.AnyArg(), sqlmock.AnyArg(), "periscope-eu", "report-1", start, end, "kafka-test", sqlmock.AnyArg()).
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectExec(`INSERT INTO purser\.usage_adjustments`).
 		WithArgs(summary.TenantID, "cluster-a", "storage_gb_seconds_hot", "gibibyte_second", sqlmock.AnyArg(), sqlmock.AnyArg(), -60.0, start, end, "periscope.projection_divergences", "storage-correction-1", "projection_divergence", sqlmock.AnyArg()).
 		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectCommit()
 
 	if _, err := jm.processUsageSummary(context.Background(), summary, "kafka-test"); err != nil {
 		t.Fatalf("processUsageSummary: %v", err)
@@ -231,6 +242,7 @@ func TestProcessUsageSummaryPersistsCanonicalDeltaMeters(t *testing.T) {
 		},
 	}
 
+	expectUsageReceipt(mock, summary.TenantID)
 	for usageType, usageValue := range map[string]float64{
 		"delivered_minutes":       1,
 		"egress_gb":               2.5,
@@ -241,6 +253,7 @@ func TestProcessUsageSummaryPersistsCanonicalDeltaMeters(t *testing.T) {
 			WithArgs(summary.TenantID, "cluster-a", usageType, sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), "periscope-eu", "report-2", usageValue, sqlmock.AnyArg(), start, end, "minute_5", "delta").
 			WillReturnResult(sqlmock.NewResult(0, 1))
 	}
+	mock.ExpectCommit()
 
 	if _, err := jm.processUsageSummary(context.Background(), summary, "kafka-test"); err != nil {
 		t.Fatalf("processUsageSummary: %v", err)
@@ -269,11 +282,13 @@ func TestProcessUsageSummaryPersistsAbsentDimensionsAsEmptyObject(t *testing.T) 
 		}},
 	}
 	dimensionHash := sha256.Sum256([]byte("{}"))
+	expectUsageReceipt(mock, summary.TenantID)
 	mock.ExpectExec(`INSERT INTO purser\.usage_records`).
 		WithArgs(summary.TenantID, summary.ClusterID, "peak_bandwidth_mbps", "megabit_per_second",
 			sqlArgFunc(isEmptyJSONObject), fmt.Sprintf("%x", dimensionHash[:]), summary.SourceID,
 			summary.ReportID, 0.058208, sqlmock.AnyArg(), start, end, "minute_5", "delta").
 		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectCommit()
 
 	accepted, processErr := jm.processUsageSummary(context.Background(), summary, "kafka-test")
 	if processErr != nil {
@@ -306,9 +321,11 @@ func TestProcessUsageSummaryQuarantinesMissingClusterID(t *testing.T) {
 		Meters:      []models.MeterQuantity{{Meter: "delivered_minutes", Unit: "minute", Quantity: 1}},
 	}
 
+	expectUsageReceipt(mock, summary.TenantID)
 	mock.ExpectExec(`INSERT INTO purser\.usage_records_quarantine`).
 		WithArgs(summary.TenantID, "", "delivered_minutes", 1.0, sqlmock.AnyArg(), start, end, "minute_5", "delta", "missing_cluster_id", "kafka-test", sqlmock.AnyArg()).
 		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectCommit()
 
 	accepted, err := jm.processUsageSummary(context.Background(), summary, "kafka-test")
 	if err != nil {
@@ -346,29 +363,31 @@ func TestBuildRatingInputFromCanonicalUsageUsesAcceptedRowsOnly(t *testing.T) {
 	}
 }
 
-func TestCollectInvoiceUsageAggregatesRows(t *testing.T) {
+func TestCollectPhaseUsageAggregatesRows(t *testing.T) {
 	mockDB, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherRegexp))
 	if err != nil {
 		t.Fatalf("sqlmock: %v", err)
 	}
 	defer mockDB.Close()
 
-	jm := &JobManager{db: mockDB, logger: logging.NewLogger(), billing: &Service{}}
 	start := time.Date(2026, 4, 1, 0, 0, 0, 0, time.UTC)
 	end := start.AddDate(0, 1, 0)
 
 	// Rows carry cluster_id; unattributed rows arrive as "".
 	// Two distinct clusters split the same meter to verify partitioning.
 	mock.ExpectQuery(`FROM purser\.usage_records`).
-		WithArgs("tenant-1", start, end).
+		WithArgs("tenant-1", start, end, start, nil).
 		WillReturnRows(sqlmock.NewRows([]string{"cluster_id", "usage_type", "aggregated_value"}).
 			AddRow("", "storage_gb_seconds_hot", 2.5).
 			AddRow("cluster-a", "delivered_minutes", 180.0).
 			AddRow("cluster-b", "delivered_minutes", 90.0))
+	mock.ExpectQuery(`dimensioned_rows AS`).
+		WithArgs("tenant-1", start, end, start, nil).
+		WillReturnRows(sqlmock.NewRows([]string{"cluster_id", "usage_type", "unit", "dimensions", "quantity"}))
 
-	got, err := jm.collectInvoiceUsage(context.Background(), "tenant-1", start, end)
+	got, _, err := collectPhaseUsage(context.Background(), mockDB, "tenant-1", usagePhase{start: start, end: end, chainFrom: start})
 	if err != nil {
-		t.Fatalf("collectInvoiceUsage: %v", err)
+		t.Fatalf("collectPhaseUsage: %v", err)
 	}
 	if got[""]["storage_gb_seconds_hot"] != 2.5 {
 		t.Errorf("unattributed bucket missing storage_gb_seconds_hot: %v", got[""])
@@ -384,29 +403,28 @@ func TestCollectInvoiceUsageAggregatesRows(t *testing.T) {
 	}
 }
 
-func TestCollectInvoiceUsageRowsErrorFailsClosed(t *testing.T) {
+func TestCollectPhaseUsageRowsErrorFailsClosed(t *testing.T) {
 	mockDB, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherRegexp))
 	if err != nil {
 		t.Fatalf("sqlmock: %v", err)
 	}
 	defer mockDB.Close()
 
-	jm := &JobManager{db: mockDB, logger: logging.NewLogger(), billing: &Service{}}
 	start := time.Date(2026, 4, 1, 0, 0, 0, 0, time.UTC)
 	end := start.AddDate(0, 1, 0)
 
 	mock.ExpectQuery(`FROM purser\.usage_records`).
-		WithArgs("tenant-1", start, end).
+		WithArgs("tenant-1", start, end, start, nil).
 		WillReturnRows(sqlmock.NewRows([]string{"cluster_id", "usage_type", "aggregated_value"}).
 			AddRow("", "delivered_minutes", 180.0).
 			RowError(0, errors.New("cursor failed")))
 
-	_, err = jm.collectInvoiceUsage(context.Background(), "tenant-1", start, end)
+	_, _, err = collectPhaseUsage(context.Background(), mockDB, "tenant-1", usagePhase{start: start, end: end, chainFrom: start})
 	if err == nil {
-		t.Fatalf("collectInvoiceUsage err = nil, want cursor failure")
+		t.Fatalf("collectPhaseUsage err = nil, want cursor failure")
 	}
 	if !strings.Contains(err.Error(), "usage row") && !strings.Contains(err.Error(), "usage rows") {
-		t.Fatalf("collectInvoiceUsage err = %v, want usage row context", err)
+		t.Fatalf("collectPhaseUsage err = %v, want usage row context", err)
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Errorf("unmet sqlmock expectations: %v", err)
@@ -453,7 +471,7 @@ func TestUpdateInvoiceDraftWritesRatedLineItemsTransactionally(t *testing.T) {
 	mock.ExpectQuery(`SELECT COUNT\(\*\) FROM purser\.billing_invoices`).
 		WithArgs(tenantID, periodStart).
 		WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(0))
-	mock.ExpectQuery(`-- name: GetClosedPrepaidPhaseStart`).
+	mock.ExpectQuery(`-- name: GetSplitPeriodStart`).
 		WithArgs(tenantID, periodStart).
 		WillReturnError(sql.ErrNoRows)
 		// New per-cluster shape: rows carry cluster_id. Empty cluster_id
@@ -462,11 +480,11 @@ func TestUpdateInvoiceDraftWritesRatedLineItemsTransactionally(t *testing.T) {
 	// rating conversion. The tier prices hot at $1/GiB-month, so the
 	// resulting metered line is $2.00.
 	mock.ExpectQuery(`FROM purser\.usage_records`).
-		WithArgs(tenantID, periodStart, periodEnd, periodStart).
+		WithArgs(tenantID, periodStart, periodEnd, periodStart, nil).
 		WillReturnRows(sqlmock.NewRows([]string{"cluster_id", "usage_type", "aggregated_value"}).
 			AddRow("", "storage_gb_seconds_hot", 5256000.0))
 	mock.ExpectQuery(`dimensioned_rows AS`).
-		WithArgs(tenantID, periodStart, periodEnd, periodStart).
+		WithArgs(tenantID, periodStart, periodEnd, periodStart, nil).
 		WillReturnRows(sqlmock.NewRows([]string{"cluster_id", "usage_type", "unit", "dimensions", "quantity"}))
 	mock.ExpectQuery(`SELECT stripe_subscription_id, mollie_subscription_id\s+FROM purser\.tenant_subscriptions`).
 		WithArgs(tenantID).
@@ -482,6 +500,9 @@ func TestUpdateInvoiceDraftWritesRatedLineItemsTransactionally(t *testing.T) {
 	mock.ExpectQuery(`SELECT balance_cents FROM purser\.prepaid_balances`).
 		WithArgs(tenantID, currency).
 		WillReturnRows(sqlmock.NewRows([]string{"balance_cents"}).AddRow(int64(0)))
+	mock.ExpectQuery(`-- name: UsageDocumentStartsEarlierInMonth`).
+		WithArgs(tenantID, periodStart, periodStart).
+		WillReturnRows(sqlmock.NewRows([]string{"earlier"}).AddRow(false))
 	mock.ExpectQuery(`SELECT COALESCE\(SUM\(-amount_cents\), 0\)`).
 		WithArgs(tenantID, "Invoice credit: 2026-04", "Invoice credit returned: 2026-04").
 		WillReturnRows(sqlmock.NewRows([]string{"applied_cents", "entries"}).AddRow(int64(0), int64(0)))
@@ -551,17 +572,17 @@ func TestUpdateInvoiceDraftReturnsPriorPrepaidCreditTheDraftNoLongerUses(t *test
 	mock.ExpectQuery(`SELECT COUNT\(\*\) FROM purser\.billing_invoices`).
 		WithArgs(tenantID, periodStart).
 		WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(0))
-	mock.ExpectQuery(`-- name: GetClosedPrepaidPhaseStart`).
+	mock.ExpectQuery(`-- name: GetSplitPeriodStart`).
 		WithArgs(tenantID, periodStart).
 		WillReturnError(sql.ErrNoRows)
 	// 5,256,000 GiB-seconds = 2 GiB-months under the GiB-seconds→GiB-month
 	// rating conversion. Tier prices hot at $1/GiB-month → $2 metered.
 	mock.ExpectQuery(`FROM purser\.usage_records`).
-		WithArgs(tenantID, periodStart, periodEnd, periodStart).
+		WithArgs(tenantID, periodStart, periodEnd, periodStart, nil).
 		WillReturnRows(sqlmock.NewRows([]string{"cluster_id", "usage_type", "aggregated_value"}).
 			AddRow("", "storage_gb_seconds_hot", 5256000.0))
 	mock.ExpectQuery(`dimensioned_rows AS`).
-		WithArgs(tenantID, periodStart, periodEnd, periodStart).
+		WithArgs(tenantID, periodStart, periodEnd, periodStart, nil).
 		WillReturnRows(sqlmock.NewRows([]string{"cluster_id", "usage_type", "unit", "dimensions", "quantity"}))
 	mock.ExpectQuery(`SELECT stripe_subscription_id, mollie_subscription_id\s+FROM purser\.tenant_subscriptions`).
 		WithArgs(tenantID).
@@ -577,6 +598,9 @@ func TestUpdateInvoiceDraftReturnsPriorPrepaidCreditTheDraftNoLongerUses(t *test
 	mock.ExpectQuery(`SELECT balance_cents FROM purser\.prepaid_balances`).
 		WithArgs(tenantID, currency).
 		WillReturnRows(sqlmock.NewRows([]string{"balance_cents"}).AddRow(int64(0)))
+	mock.ExpectQuery(`-- name: UsageDocumentStartsEarlierInMonth`).
+		WithArgs(tenantID, periodStart, periodStart).
+		WillReturnRows(sqlmock.NewRows([]string{"earlier"}).AddRow(false))
 	mock.ExpectQuery(`SELECT COALESCE\(SUM\(-amount_cents\), 0\)`).
 		WithArgs(tenantID, "Invoice credit: 2026-04", "Invoice credit returned: 2026-04").
 		WillReturnRows(sqlmock.NewRows([]string{"applied_cents", "entries"}).AddRow(int64(20_000), int64(1)))

@@ -1,35 +1,40 @@
--- name: CollectPostpaidInvoiceUsage :many
--- The usage a postpaid invoice of [window_start, window_end) rates. A usage
--- record a prepaid usage settlement paid from the balance belongs to the
--- prepaid statement, never to an invoice. A period that starts at a switch
--- from prepaid also rates the records of the prepaid phase before it that
--- reached Purser after the switch, which the balance never paid:
--- unsettled_from is where that phase began, or window_start otherwise.
+-- name: CollectPhaseUsage :many
+-- The usage the billing document of the phase [window_start, window_end)
+-- rates. Switches between prepaid and postpaid split a period into phases,
+-- and a usage record or usage correction belongs to the phase in force when
+-- it reached Purser (its created_at, written under the subscription row lock
+-- the switch takes, never before the last switch): a phase rates the rows of
+-- its window, plus rows of earlier phases of the split period, back to
+-- chain_from, that reached Purser after the phase began. A row that reached
+-- Purser before window_start belonged to the phase before, which rated it.
+-- received_before, when set, bounds the receipt time of a phase a switch
+-- closes now; later rows go to the phase that follows. The phases of a split
+-- period therefore share no row.
 WITH params AS (
     SELECT sqlc.arg(tenant_id)::text::uuid AS tenant_id,
            sqlc.arg(window_start)::timestamptz AS window_start,
            sqlc.arg(window_end)::timestamptz AS window_end,
-           LEAST(sqlc.arg(unsettled_from)::timestamptz, sqlc.arg(window_start)::timestamptz) AS unsettled_from
+           LEAST(sqlc.arg(chain_from)::timestamptz, sqlc.arg(window_start)::timestamptz) AS chain_from,
+           sqlc.narg(received_before)::timestamptz AS received_before
 ), usage_rows AS (
     SELECT COALESCE(ur.cluster_id, '') AS cluster_id, ur.usage_type, ur.usage_value
     FROM purser.usage_records ur CROSS JOIN params p
     WHERE ur.tenant_id = p.tenant_id
       AND ur.period_start < p.window_end
-      AND ur.period_end > p.unsettled_from
-      AND (ur.period_end > p.window_start OR ur.created_at >= p.window_start)
+      AND ur.period_end > p.chain_from
+      AND (ur.period_start >= p.window_start OR ur.created_at >= p.window_start)
+      AND (p.received_before IS NULL OR ur.created_at < p.received_before)
       AND ur.usage_type NOT IN ('unique_users', 'total_streams', 'total_viewers', 'unique_users_period')
       AND ur.value_kind = 'delta'
       AND ur.granularity = 'minute_5'
-      AND NOT EXISTS (
-          SELECT 1 FROM purser.prepaid_usage_settlements settlement
-          WHERE settlement.report_id = ur.report_id AND settlement.tenant_id = ur.tenant_id
-      )
     UNION ALL
     SELECT COALESCE(ua.cluster_id, '') AS cluster_id, ua.usage_type, ua.delta_value AS usage_value
     FROM purser.usage_adjustments ua CROSS JOIN params p
     WHERE ua.tenant_id = p.tenant_id
       AND ua.period_start < p.window_end
-      AND ua.period_end > p.window_start
+      AND ua.period_end > p.chain_from
+      AND (ua.period_start >= p.window_start OR ua.created_at >= p.window_start)
+      AND (p.received_before IS NULL OR ua.created_at < p.received_before)
       AND ua.status = 'applied'
       AND ua.value_kind = 'correction_delta'
       AND ua.usage_type NOT IN ('unique_users', 'total_streams', 'total_viewers', 'unique_users_period')
@@ -40,31 +45,31 @@ SELECT cluster_id, usage_type,
 FROM usage_rows
 GROUP BY cluster_id, usage_type;
 
--- name: CollectPostpaidInvoiceDimensionedUsage :many
--- CollectPostpaidInvoiceUsage per meter dimension.
+-- name: CollectPhaseDimensionedUsage :many
+-- CollectPhaseUsage per meter dimension.
 WITH params AS (
     SELECT sqlc.arg(tenant_id)::text::uuid AS tenant_id,
            sqlc.arg(window_start)::timestamptz AS window_start,
            sqlc.arg(window_end)::timestamptz AS window_end,
-           LEAST(sqlc.arg(unsettled_from)::timestamptz, sqlc.arg(window_start)::timestamptz) AS unsettled_from
+           LEAST(sqlc.arg(chain_from)::timestamptz, sqlc.arg(window_start)::timestamptz) AS chain_from,
+           sqlc.narg(received_before)::timestamptz AS received_before
 ), dimensioned_rows AS (
     SELECT ur.cluster_id, ur.usage_type, ur.unit, ur.dimensions, ur.usage_value
     FROM purser.usage_records ur CROSS JOIN params p
     WHERE ur.tenant_id = p.tenant_id
       AND ur.period_start < p.window_end
-      AND ur.period_end > p.unsettled_from
-      AND (ur.period_end > p.window_start OR ur.created_at >= p.window_start)
+      AND ur.period_end > p.chain_from
+      AND (ur.period_start >= p.window_start OR ur.created_at >= p.window_start)
+      AND (p.received_before IS NULL OR ur.created_at < p.received_before)
       AND ur.value_kind = 'delta' AND ur.granularity = 'minute_5'
-      AND NOT EXISTS (
-          SELECT 1 FROM purser.prepaid_usage_settlements settlement
-          WHERE settlement.report_id = ur.report_id AND settlement.tenant_id = ur.tenant_id
-      )
     UNION ALL
     SELECT ua.cluster_id, ua.usage_type, ua.unit, ua.dimensions, ua.delta_value
     FROM purser.usage_adjustments ua CROSS JOIN params p
     WHERE ua.tenant_id = p.tenant_id
       AND ua.period_start < p.window_end
-      AND ua.period_end > p.window_start
+      AND ua.period_end > p.chain_from
+      AND (ua.period_start >= p.window_start OR ua.created_at >= p.window_start)
+      AND (p.received_before IS NULL OR ua.created_at < p.received_before)
       AND ua.status = 'applied' AND ua.value_kind = 'correction_delta'
 )
 SELECT COALESCE(r.cluster_id, '') AS cluster_id,
@@ -75,17 +80,73 @@ FROM dimensioned_rows r
 JOIN purser.meter_definitions d ON d.meter = r.usage_type AND d.active = TRUE
 GROUP BY r.cluster_id, r.usage_type, r.unit, r.dimensions, d.aggregation;
 
--- name: GetClosedPrepaidPhaseStart :one
--- Where the prepaid phase began that a switch to postpaid closed at
--- period_start, from the statement that closed it.
-SELECT period_start::timestamptz AS phase_start
+-- name: CountPhaseUsageReceivedBefore :one
+-- How many usage records and usage corrections of the split period back to
+-- chain_from reached Purser before received_before. A switch compares it,
+-- under the subscription row lock, with the count it rated to see whether
+-- usage arrived while its closing document was rated.
+SELECT ((
+    SELECT COUNT(*)
+    FROM purser.usage_records ur
+    WHERE ur.tenant_id = sqlc.arg(tenant_id)::text::uuid
+      AND ur.period_start < sqlc.arg(window_end)::timestamptz
+      AND ur.period_end > LEAST(sqlc.arg(chain_from)::timestamptz, sqlc.arg(window_start)::timestamptz)
+      AND ur.created_at < sqlc.arg(received_before)::timestamptz
+) + (
+    SELECT COUNT(*)
+    FROM purser.usage_adjustments ua
+    WHERE ua.tenant_id = sqlc.arg(tenant_id)::text::uuid
+      AND ua.period_start < sqlc.arg(window_end)::timestamptz
+      AND ua.period_end > LEAST(sqlc.arg(chain_from)::timestamptz, sqlc.arg(window_start)::timestamptz)
+      AND ua.created_at < sqlc.arg(received_before)::timestamptz
+      AND ua.status = 'applied'
+))::bigint AS records;
+
+-- name: GetOpenUsageDraftForPhase :one
+-- The open usage invoice (draft or held for manual review) that a switch
+-- closing the phase [phase_start, phase_end) turns into the phase's closing
+-- document: the one starting at the phase, else the latest one whose period
+-- overlaps it, such as a draft written for a provider-anchored period start.
+SELECT id::text AS id, period_start::timestamptz AS period_start
 FROM purser.billing_invoices
 WHERE tenant_id = sqlc.arg(tenant_id)::text::uuid
-  AND document_kind = 'prepaid_statement'
-  AND period_end = sqlc.arg(period_start)::timestamptz
-  AND period_start < sqlc.arg(period_start)::timestamptz
-  AND usage_details->'statement'->>'closes_prepaid_phase' = 'true'
-ORDER BY period_start
+  AND document_kind = 'invoice'
+  AND base_fee_period_start IS NULL
+  AND status IN ('draft', 'manual_review')
+  AND period_start IS NOT NULL
+  AND period_start < sqlc.arg(phase_end)::timestamptz
+  AND COALESCE(period_end, 'infinity'::timestamptz) > sqlc.arg(phase_start)::timestamptz
+ORDER BY (period_start = sqlc.arg(phase_start)::timestamptz) DESC, period_start DESC
+LIMIT 1;
+
+-- name: GetSplitPeriodStart :one
+-- Where the period began that switches between prepaid and postpaid split up
+-- to period_start: the start of the earliest of the contiguous documents that
+-- closed a phase at a switch, the last of them ending at period_start. A
+-- switch from prepaid closes its phase with a prepaid statement flagged
+-- closes_prepaid_phase, a switch from postpaid with an invoice flagged
+-- closes_postpaid_phase; each switch adds one document to the chain.
+WITH RECURSIVE closed_phases AS (
+    SELECT period_start::timestamptz AS phase_start, 1 AS depth
+    FROM purser.billing_invoices
+    WHERE tenant_id = sqlc.arg(tenant_id)::text::uuid
+      AND period_end = sqlc.arg(period_start)::timestamptz
+      AND period_start < sqlc.arg(period_start)::timestamptz
+      AND ((document_kind = 'prepaid_statement' AND usage_details->'statement'->>'closes_prepaid_phase' = 'true')
+        OR (document_kind = 'invoice' AND usage_details->>'closes_postpaid_phase' = 'true'))
+    UNION
+    SELECT earlier.period_start::timestamptz, closed_phases.depth + 1
+    FROM purser.billing_invoices earlier
+    JOIN closed_phases ON earlier.period_end = closed_phases.phase_start
+    WHERE earlier.tenant_id = sqlc.arg(tenant_id)::text::uuid
+      AND earlier.period_start < closed_phases.phase_start
+      AND ((earlier.document_kind = 'prepaid_statement' AND earlier.usage_details->'statement'->>'closes_prepaid_phase' = 'true')
+        OR (earlier.document_kind = 'invoice' AND earlier.usage_details->>'closes_postpaid_phase' = 'true'))
+      AND closed_phases.depth < 100
+)
+SELECT phase_start
+FROM closed_phases
+ORDER BY phase_start
 LIMIT 1;
 
 -- name: InsertPrepaidStatement :one
@@ -113,7 +174,7 @@ RETURNING id::text AS id, invoice_number;
 
 -- name: ConvertDraftToPrepaidStatement :one
 -- An open draft of the period, left by postpaid billing earlier in the period,
--- becomes the period's statement.
+-- becomes the period's statement, for the statement's period.
 UPDATE purser.billing_invoices
 SET invoice_number = 'STM-' || LPAD(nextval('purser.billing_invoice_number_seq')::text, 10, '0'),
     document_kind = 'prepaid_statement',
@@ -127,6 +188,7 @@ SET invoice_number = 'STM-' || LPAD(nextval('purser.billing_invoice_number_seq')
     gross_metered_amount = sqlc.arg(gross_metered_amount)::text::numeric,
     prepaid_credit_applied = 0,
     usage_details = sqlc.arg(usage_details)::jsonb,
+    period_start = sqlc.arg(period_start)::timestamptz,
     period_end = sqlc.arg(period_end)::timestamptz,
     presentment_amount_cents = 0,
     presentment_currency = 'EUR',
@@ -220,21 +282,60 @@ WHERE invoice.id = sqlc.arg(document_id)::text::uuid
 -- The subscription facts that decide a prepaid phase and its statement, and
 -- the database clock that usage record receipt times are written with.
 SELECT billing_model, status, billing_email,
-       billing_period_start, billing_period_end,
+       billing_period_start, billing_period_end, mollie_next_payment_date,
        stripe_subscription_id, mollie_subscription_id,
        NOW()::timestamptz AS database_now
 FROM purser.tenant_subscriptions
 WHERE tenant_id = sqlc.arg(tenant_id)::text::uuid;
 
--- name: StartPostpaidPhase :execrows
--- A switch from prepaid to postpaid closed the prepaid phase at
--- period_start: the postpaid period runs from there.
+-- name: StartBillingPhase :execrows
+-- A switch between prepaid and postpaid closed the current phase at
+-- period_start: the next phase's period runs from there.
 UPDATE purser.tenant_subscriptions
 SET billing_period_start = sqlc.arg(period_start)::timestamp,
     billing_period_end = sqlc.arg(period_end)::timestamp,
     next_billing_date = sqlc.arg(period_end)::timestamp,
     updated_at = NOW()
 WHERE tenant_id = sqlc.arg(tenant_id)::text::uuid;
+
+-- name: InsertCollectionCarryBalanceTransaction :exec
+-- Postpaid charges left below the collection minimum when a switch to
+-- prepaid closed the postpaid phase, charged to the prepaid balance; the
+-- closing invoice is the reference, so the charge is written once.
+INSERT INTO purser.balance_transactions (
+    tenant_id, amount_cents, balance_after_cents, transaction_type, description,
+    reference_id, reference_type, actor_kind, created_at
+) VALUES (
+    sqlc.arg(tenant_id)::text::uuid, sqlc.arg(amount_cents), sqlc.arg(balance_after_cents),
+    'usage', sqlc.arg(description), sqlc.arg(invoice_id)::text::uuid, 'collection_carry',
+    'system', NOW()
+);
+
+-- name: GetSubscriptionForPhaseClose :one
+-- The columns ListSubscriptionsDueForInvoice returns, for a tenant whose
+-- postpaid phase a switch to prepaid closes, in any subscription status.
+SELECT ts.tenant_id::text AS tenant_id,
+       ts.billing_email,
+       ts.tier_id,
+       ts.status,
+       ts.billing_period_start,
+       ts.billing_period_end,
+       ts.mollie_next_payment_date,
+       ts.stripe_subscription_id,
+       ts.mollie_subscription_id,
+       ts.payment_method,
+       ts.stripe_customer_id,
+       ts.presentment_currency::text AS presentment_currency,
+       EXISTS (
+           SELECT 1 FROM purser.mollie_customers mc WHERE mc.tenant_id = ts.tenant_id
+       )::boolean AS has_mollie_customer,
+       bt.tier_name,
+       bt.display_name,
+       bt.billing_period,
+       ts.billing_model
+FROM purser.tenant_subscriptions ts
+JOIN purser.billing_tiers bt ON ts.tier_id = bt.id
+WHERE ts.tenant_id = sqlc.arg(tenant_id)::text::uuid;
 
 -- name: ListPrepaidDoubleCharges :many
 -- Finalized usage invoices whose period holds prepaid usage settlements: the

@@ -522,6 +522,24 @@ a leased background worker with exponential backoff. Monitor
 `purser.payment_report_invoice_email_outbox_stuck`; rows appear after five
 failed attempts and are not automatically discarded.
 
+### Supplier identity on billing documents
+
+Every invoice, prepaid statement and credit note Purser renders states the
+supplier. Outside development Purser refuses to start without the complete
+set, and `frameworks cluster provision` and `upgrade` refuse a non-dev deploy
+that lacks it:
+
+```bash
+SUPPLIER_NAME="Example B.V."
+SUPPLIER_ADDRESS="Street 1, 1000 AA Amsterdam"
+SUPPLIER_VAT_NUMBER="NL000000000B01"
+SUPPLIER_REGISTRATION_NUMBER="00000000"
+SUPPLIER_COUNTRY="NL"   # two-letter ISO country code
+```
+
+These are public company details: keep them in the plaintext GitOps config
+(`config/<cluster>.env`), not in SOPS secrets.
+
 ### x402 facilitator and crypto settlement
 
 Production uses FrameWorks' embedded x402 v2 exact/EIP-3009 facilitator by

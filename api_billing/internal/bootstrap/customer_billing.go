@@ -275,6 +275,11 @@ func upsertTenantSubscription(ctx context.Context, exec DBTX, tenantID, tierID s
 	if current.TierID == tierUUID && current.BillingModel == e.Model {
 		return "noop", nil
 	}
+	// A switch between prepaid and postpaid closes the running phase with its
+	// statement or invoice, which only AdminAssignTier rates and writes.
+	if current.BillingModel != e.Model {
+		return "", fmt.Errorf("tenant %s runs %s billing; desired state declares %s, and a switch between billing models closes the current period with a billing document, so make it with `frameworks admin billing set-tier` and then update the desired state", tenantID, current.BillingModel, e.Model)
+	}
 	affected, err := queries.UpdateBootstrapTenantSubscription(ctx, purserdb.UpdateBootstrapTenantSubscriptionParams{
 		TierID: tierUUID, BillingModel: e.Model, TenantID: tenantID,
 	})

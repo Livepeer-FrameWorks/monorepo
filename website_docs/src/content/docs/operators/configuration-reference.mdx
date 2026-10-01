@@ -301,7 +301,7 @@ Read by `api_billing/cmd/purser`.
 | `STRIPE_SECRET_KEY` | string |  | secret | v0.3.0 | Stripe API secret key. Enables the Stripe client and billing tier price sync at startup; checkout and provider availability re-read it after an env-file reload. |
 | `STRIPE_WEBHOOK_SECRET` | string |  | secret | v0.3.0 | Signing secret that verifies Stripe webhooks. Empty rejects every Stripe webhook. Re-read after an env-file reload. |
 | `MOLLIE_API_KEY` | string |  | secret | v0.3.0 | Mollie API key. Enables the Mollie client at startup; checkout and provider availability re-read it after an env-file reload. |
-| `SUPPLIER_NAME` | string |  |  | v0.3.0 | Supplier legal name on billing documents and crypto invoices. The complete SUPPLIER_* set is required for x402 and, in production, for crypto deposits. |
+| `SUPPLIER_NAME` | string |  |  | v0.3.0 | Supplier legal name on billing documents and crypto invoices. Outside development Purser refuses to start without the complete SUPPLIER_* set, since every invoice, statement and credit note states it. |
 | `SUPPLIER_ADDRESS` | string |  |  | v0.3.0 | Supplier postal address on billing documents and crypto invoices. |
 | `SUPPLIER_VAT_NUMBER` | string |  |  | v0.3.0 | Supplier VAT number on billing documents and crypto invoices. |
 | `SUPPLIER_REGISTRATION_NUMBER` | string |  |  | v0.3.0 | Supplier company registration number on billing documents and crypto invoices. |

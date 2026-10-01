@@ -5876,8 +5876,21 @@ func (s *PurserServer) GetCryptoTopup(ctx context.Context, req *purserpb.GetCryp
 // PromoteToPaid upgrades a prepaid account to postpaid. When req.tier_id is
 // provided it must reference an active postpaid tier (tier_level >= 1, not
 // is_default_prepaid); empty selects is_default_postpaid as the floor.
-// Prepaid balance is carried forward as credit.
+// Prepaid balance is carried forward as credit. The prepaid phase's closing
+// statement is rated before the transaction; a subscription or usage that
+// changed in between rates it again, and after the last attempt the caller
+// gets codes.Aborted.
 func (s *PurserServer) PromoteToPaid(ctx context.Context, req *purserpb.PromoteToPaidRequest) (*purserpb.PromoteToPaidResponse, error) {
+	for attempt := 1; ; attempt++ {
+		resp, err := s.promoteToPaidOnce(ctx, req)
+		if errors.Is(err, errPhaseChangedWhileRated) && attempt < phaseCloseAttempts {
+			continue
+		}
+		return resp, err
+	}
+}
+
+func (s *PurserServer) promoteToPaidOnce(ctx context.Context, req *purserpb.PromoteToPaidRequest) (*purserpb.PromoteToPaidResponse, error) {
 	tenantID := req.GetTenantId()
 	if tenantID == "" {
 		return nil, status.Error(codes.InvalidArgument, "tenant_id is required")

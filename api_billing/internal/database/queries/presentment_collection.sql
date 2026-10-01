@@ -111,14 +111,26 @@ RETURNING id::text AS id;
 
 -- name: FindOverlappedBaseFeeInvoice :one
 -- The base-fee invoice of the period a tier change cut short: it started
--- before period_start and would have run past it.
+-- before period_start and would have run past it. An invoice whose unused
+-- share a switch to prepaid already returned is not found again.
 SELECT id::text AS id
 FROM purser.billing_invoices
 WHERE tenant_id = sqlc.arg(tenant_id)::text::uuid
   AND base_fee_period_start < sqlc.arg(period_start)::timestamptz
   AND base_fee_period_end > sqlc.arg(period_start)::timestamptz
+  AND usage_details->'unused_share_returned' IS NULL
 ORDER BY base_fee_period_start DESC
 LIMIT 1;
+
+-- name: MarkBaseFeeUnusedShareReturned :execrows
+-- Records on a base-fee invoice that a switch to prepaid returned the unused
+-- share of its period; details states from when and how much.
+UPDATE purser.billing_invoices
+SET usage_details = usage_details || jsonb_build_object('unused_share_returned', sqlc.arg(details)::jsonb),
+    updated_at = NOW()
+WHERE id = sqlc.arg(invoice_id)::text::uuid
+  AND tenant_id = sqlc.arg(tenant_id)::text::uuid
+  AND base_fee_period_start IS NOT NULL;
 
 -- name: LockOverlappedBaseFeeInvoice :one
 -- Locks the base-fee invoice FindOverlappedBaseFeeInvoice found.

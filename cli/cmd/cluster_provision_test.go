@@ -116,6 +116,44 @@ func TestValidateProductionServiceEnvRequiresMeteringSourceIdentity(t *testing.T
 	}
 }
 
+var testPurserSupplierIdentity = map[string]string{
+	"SUPPLIER_NAME":                "FrameWorks B.V.",
+	"SUPPLIER_ADDRESS":             "Street 1, 1000 AA Amsterdam",
+	"SUPPLIER_VAT_NUMBER":          "NL000000000B01",
+	"SUPPLIER_REGISTRATION_NUMBER": "00000000",
+	"SUPPLIER_COUNTRY":             "NL",
+}
+
+// Purser refuses to start outside development without the supplier identity,
+// so a non-dev deploy is refused before it reaches the host.
+func TestValidateProductionPurserRequiresTheSupplierIdentity(t *testing.T) {
+	valid := map[string]string{"DATABASE_HOST": "postgres.internal", "DATABASE_PASSWORD": "test-password"}
+	maps.Copy(valid, testPurserSupplierIdentity)
+	staging := &inventory.Manifest{Profile: "staging"}
+	if err := validateProductionServiceEnv(staging, "purser", valid); err != nil {
+		t.Fatalf("complete supplier identity rejected: %v", err)
+	}
+	for key := range testPurserSupplierIdentity {
+		t.Run("missing "+key, func(t *testing.T) {
+			env := maps.Clone(valid)
+			delete(env, key)
+			if err := validateProductionServiceEnv(staging, "purser", env); err == nil || !strings.Contains(err.Error(), key) {
+				t.Fatalf("missing %s accepted: %v", key, err)
+			}
+		})
+	}
+	t.Run("country that is no ISO code", func(t *testing.T) {
+		env := maps.Clone(valid)
+		env["SUPPLIER_COUNTRY"] = "Netherlands"
+		if err := validateProductionServiceEnv(staging, "purser", env); err == nil || !strings.Contains(err.Error(), "SUPPLIER_COUNTRY") {
+			t.Fatalf("invalid SUPPLIER_COUNTRY accepted: %v", err)
+		}
+	})
+	if err := validateProductionServiceEnv(&inventory.Manifest{Profile: "dev"}, "purser", nil); err != nil {
+		t.Fatalf("a dev deploy needs no supplier identity: %v", err)
+	}
+}
+
 func TestValidateProductionPurserRequiresCompleteLivepeerFundingConfig(t *testing.T) {
 	manifest := &inventory.Manifest{Profile: "production"}
 	valid := map[string]string{
@@ -124,6 +162,7 @@ func TestValidateProductionPurserRequiresCompleteLivepeerFundingConfig(t *testin
 		"X402_GAS_WALLET_ADDRESS": "0x1111111111111111111111111111111111111111",
 		"X402_GAS_WALLET_PRIVKEY": "encrypted-at-rest-test-value",
 	}
+	maps.Copy(valid, testPurserSupplierIdentity)
 	if err := validateProductionServiceEnv(manifest, "purser", valid); err != nil {
 		t.Fatalf("complete Livepeer funding config rejected: %v", err)
 	}
