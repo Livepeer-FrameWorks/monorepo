@@ -18,6 +18,7 @@ import (
 	"frameworks/api_billing/internal/database/purserdb"
 	qmclient "github.com/Livepeer-FrameWorks/monorepo/pkg/clients/quartermaster"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/models"
 	commonpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/common"
 	quartermasterpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/quartermaster"
 	tenantlimitspb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/tenant_limits"
@@ -99,9 +100,9 @@ func (r *Reconciler) recordFailure(operation string) {
 	}
 }
 
-// OfficialClusterIDs returns the set of platform-official cluster IDs from
-// Quartermaster, cached for 5 minutes. Returns an empty map (never nil) when
-// no rows exist.
+// OfficialClusterIDs returns platform-official cluster IDs from Quartermaster;
+// each value reports whether that cluster can be a tenant's primary. The
+// inventory is cached for 5 minutes and is never nil when no rows exist.
 func (r *Reconciler) OfficialClusterIDs(ctx context.Context) (map[string]bool, error) {
 	r.mu.RLock()
 	if r.cache != nil && time.Now().Before(r.cacheExp) {
@@ -120,7 +121,7 @@ func (r *Reconciler) OfficialClusterIDs(ctx context.Context) (map[string]bool, e
 	}
 	ids := make(map[string]bool, len(resp.GetClusters()))
 	for _, c := range resp.GetClusters() {
-		ids[c.GetClusterId()] = true
+		ids[c.GetClusterId()] = models.ClusterTypeCanBePreferred(c.GetClusterType())
 	}
 
 	r.mu.Lock()
@@ -186,7 +187,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, tenantID string, tierLevel i
 		idSlice = append(idSlice, id)
 	}
 	for id := range currentActive {
-		if !officialIDs[id] {
+		if _, present := officialIDs[id]; !present {
 			idSlice = append(idSlice, id)
 		}
 	}
@@ -211,12 +212,14 @@ func (r *Reconciler) Reconcile(ctx context.Context, tenantID string, tierLevel i
 		eligible = append(eligible, entry)
 		eligibleSet[entry.clusterID] = struct{}{}
 		eligibleClusterIDs = append(eligibleClusterIDs, entry.clusterID)
-		if entry.reqLevel > bestLevel {
-			bestLevel = entry.reqLevel
-			topLevelCandidates = topLevelCandidates[:0]
-		}
-		if entry.reqLevel == bestLevel {
-			topLevelCandidates = append(topLevelCandidates, entry.clusterID)
+		if officialIDs[entry.clusterID] {
+			if entry.reqLevel > bestLevel {
+				bestLevel = entry.reqLevel
+				topLevelCandidates = topLevelCandidates[:0]
+			}
+			if entry.reqLevel == bestLevel {
+				topLevelCandidates = append(topLevelCandidates, entry.clusterID)
+			}
 		}
 	}
 	currentPrimary := ""
@@ -238,9 +241,9 @@ func (r *Reconciler) Reconcile(ctx context.Context, tenantID string, tierLevel i
 		}
 	}
 
-	// (b) Pick + set primary. Prefer the existing primary when it is in the
-	// top-level subset (avoid churn on tied configurations); otherwise the
-	// alphabetically-first cluster at the highest required_tier_level.
+	// (b) Pick + set primary from eligible media-plane clusters. Prefer the
+	// existing primary when it is in the top-level subset; otherwise choose
+	// the alphabetically-first cluster at the highest required_tier_level.
 	if len(topLevelCandidates) > 0 {
 		primaryClusterID = topLevelCandidates[0]
 		if slices.Contains(topLevelCandidates, currentPrimary) {

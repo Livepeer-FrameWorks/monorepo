@@ -23,6 +23,7 @@ import (
 // the official / accessRows / primary / deploymentTier / tenantPages fields.
 type fakeQM struct {
 	official               []string
+	clusterTypes           map[string]string
 	accessRows             []*quartermasterpb.TenantClusterAccessRow
 	primary                string
 	deploymentTier         string
@@ -48,9 +49,35 @@ type fakeQM struct {
 func (f *fakeQM) ListOfficialClusters(ctx context.Context) (*quartermasterpb.ListClustersResponse, error) {
 	cs := make([]*quartermasterpb.InfrastructureCluster, 0, len(f.official))
 	for _, id := range f.official {
-		cs = append(cs, &quartermasterpb.InfrastructureCluster{ClusterId: id})
+		clusterType := "edge"
+		if configured := f.clusterTypes[id]; configured != "" {
+			clusterType = configured
+		}
+		cs = append(cs, &quartermasterpb.InfrastructureCluster{ClusterId: id, ClusterType: clusterType})
 	}
 	return &quartermasterpb.ListClustersResponse{Clusters: cs}, nil
+}
+
+func TestReconcile_CentralClusterNeverBecomesPrimary(t *testing.T) {
+	qm := &fakeQM{
+		official:     []string{"central-primary", "demo-media"},
+		clusterTypes: map[string]string{"central-primary": "central"},
+	}
+	r, mock := newReconcilerWithMock(t, qm)
+	mock.ExpectQuery(`SELECT cluster_id, required_tier_level`).
+		WithArgs(sqlmock.AnyArg(), sqlmock.AnyArg()).
+		WillReturnRows(pricingRows([2]any{"central-primary", 0}, [2]any{"demo-media", 0}))
+	expectDNSEntitlements(mock, "payg", false, false)
+	_, primary, err := r.Reconcile(context.Background(), "tenant-1", 1, "payg")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if primary != "demo-media" {
+		t.Fatalf("primary = %q, want demo-media", primary)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
 }
 
 func (f *fakeQM) ListTenantClusterAccess(ctx context.Context, tenantID string) (*quartermasterpb.ListTenantClusterAccessResponse, error) {
