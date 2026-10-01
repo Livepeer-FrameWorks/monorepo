@@ -1,4 +1,4 @@
-.PHONY: verify-prepush verify-frontend-deps verify-go-lint verify-go-build verify-sdks verify-frontend-build verify-yugabyte-contracts verify-frontend-lint verify-generated-contracts test-frontend-components buildbuild-images build-bin-commodore build-bin-quartermaster build-bin-purser build-bin-decklog build-bin-foghorn build-bin-helmsman build-bin-periscope-ingest build-bin-periscope-query build-bin-periscope-metering build-bin-signalman build-bin-bridge build-bin-navigator build-bin-privateer build-bin-deckhand build-bin-steward build-bin-skipper build-bin-chandler build-bin-lookout build-bin-bosun build-bin-cli cli-embed-assets \
+.PHONY: verify-prepush verify-frontend-deps verify-go-lint verify-go-build verify-sdks verify-frontend-build verify-yugabyte-contracts verify-yugabyte-contracts-deps verify-frontend-lint verify-generated-contracts test-frontend-components buildbuild-images build-bin-commodore build-bin-quartermaster build-bin-purser build-bin-decklog build-bin-foghorn build-bin-helmsman build-bin-periscope-ingest build-bin-periscope-query build-bin-periscope-metering build-bin-signalman build-bin-bridge build-bin-navigator build-bin-privateer build-bin-deckhand build-bin-steward build-bin-skipper build-bin-chandler build-bin-lookout build-bin-bosun build-bin-cli cli-embed-assets \
 		build-image-commodore build-image-quartermaster build-image-purser build-image-decklog build-image-foghorn build-image-periscope-ingest build-image-periscope-query build-image-periscope-metering build-image-signalman build-image-bridge build-image-logbook test-logbook-image-health build-image-navigator build-image-deckhand build-image-steward build-image-skipper build-image-chandler build-image-lookout build-image-bosun \
 		proto proto-check sqlc sqlc-check graphql graphql-events verify-graphql-events graphql-frontend graphql-tray graphql-all clean version install-tools verify test test-cli test-pkg test-topology test-crypto-evm test-dashboards test-commodore test-quartermaster test-purser test-decklog test-foghorn test-helmsman test-periscope-ingest test-periscope-query test-media-topology-real-clickhouse test-signalman test-bridge test-navigator test-privateer test-deckhand test-steward test-skipper test-chandler test-lookout test-bosun coverage env frontend-env tidy update outdated fmt format \
 		lint lint-go lint-frontend lint-all lint-fix lint-report lint-analyze ci-local ci-local-go ci-local-frontend \
@@ -376,10 +376,23 @@ test-go-livepeer-pkg-impact:
 	fi
 
 # verify-prepush runs every CI job (.github/workflows/ci.yml) except "Go test +
-# coverage", which `make test` covers. A CI job without a target here is a job a
-# push can fail that nothing local ran.
-verify-prepush: verify-frontend-deps verify-go-lint verify-frontend-lint verify-generated-contracts test-frontend-components verify-migration-release-state \
-	verify-go-build verify-sdks verify-feature-registry verify-pricing-catalog verify-compose-profiles verify-frontend-build verify-yugabyte-contracts
+# coverage", which `make test` covers, on the commit HEAD. A CI job without a
+# stage here is a job a push can fail that nothing local ran. Each stage runs in
+# its own worktree of HEAD (scripts/verify-prepush.sh), so it refuses to run while
+# tracked files differ from HEAD. A stage is <target>[+<setup>]: setup is the
+# dependency install that CI job runs before its steps. Stages start longest
+# first, VERIFY_PREPUSH_JOBS at a time: the Yugabyte stage takes longest (about
+# an hour), Migration release state about half that, and the other stages a few
+# minutes each, so with three slots the run lasts about as long as the Yugabyte
+# stage. Both Docker stages together peak at about 8.5 GB of containers, which
+# fits a 16 GB Docker VM. VERIFY_PREPUSH_JOBS=1 runs the stages one at a time.
+VERIFY_PREPUSH_JOBS := 3
+VERIFY_PREPUSH_STAGES := verify-yugabyte-contracts+verify-yugabyte-contracts-deps verify-migration-release-state verify-go-build verify-go-lint \
+	verify-sdks+verify-frontend-deps verify-generated-contracts+verify-frontend-deps verify-frontend-build+verify-frontend-deps \
+	verify-frontend-lint+verify-frontend-deps test-frontend-components+verify-frontend-deps verify-compose-profiles verify-feature-registry \
+	verify-pricing-catalog
+verify-prepush:
+	@MAKE='$(MAKE)' $(CURDIR)/scripts/verify-prepush.sh $(VERIFY_PREPUSH_JOBS) $(VERIFY_PREPUSH_STAGES)
 
 # The frontend jobs start from the lockfile install CI's setup-node-pnpm action runs; a
 # node_modules left from an older lockfile lints and builds against the wrong dependencies.
@@ -424,6 +437,11 @@ verify-yugabyte-contracts:
 	$(MAKE) --no-print-directory verify-schema-yugabyte
 	$(MAKE) --no-print-directory verify-yugabyte-ha
 
+# The collections the yugabyte role contract runs, installed as the CI "Yugabyte database contract" job installs
+# them: prometheus.prometheus declares support only up to ansible-core 2.18, and the contract runs a newer one.
+verify-yugabyte-contracts-deps:
+	ANSIBLE_COLLECTIONS_ON_ANSIBLE_VERSION_MISMATCH=ignore $(MAKE) --no-print-directory ansible-galaxy-install
+
 # The CI "Frontend lint" job, step for step (.github/workflows/ci.yml). Rebase
 # conflict resolutions and generated docs bypass the pre-commit Prettier hook.
 verify-frontend-lint:
@@ -450,8 +468,11 @@ verify-generated-contracts:
 	$(MAKE) --no-print-directory graphql-frontend
 	$(MAKE) --no-print-directory verify-sdk-generated
 
+# The component-test steps of the CI "Frontend test + coverage" job. $houdini is gitignored, so the components'
+# transitive $houdini imports resolve only after gql:codegen.
 test-frontend-components:
 	pnpm --filter frameworks-frontend exec svelte-kit sync
+	pnpm --filter frameworks-frontend gql:codegen
 	pnpm --filter frameworks-frontend test:components
 
 # Verify (tidy, fmt, vet, test, build) all Go modules and build images when present
