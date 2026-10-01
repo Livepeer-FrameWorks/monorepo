@@ -232,6 +232,10 @@ func runGalaxyInstall(ctx context.Context, binary, requirements, cacheDir, kind 
 	}
 	cmd := exec.CommandContext(ctx, binary, args...)
 	cmd.Dir = reqDir
+	// Pinned collections such as prometheus.prometheus declare an ansible-core
+	// ceiling below current releases; galaxy refuses to install them on a newer
+	// Ansible unless the mismatch is ignored, as CI's install does too.
+	cmd.Env = append(os.Environ(), "ANSIBLE_COLLECTIONS_ON_ANSIBLE_VERSION_MISMATCH=ignore")
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	if err := cmd.Run(); err != nil {

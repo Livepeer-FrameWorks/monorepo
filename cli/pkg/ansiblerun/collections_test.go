@@ -1,10 +1,40 @@
 package ansiblerun
 
 import (
+	"context"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
+
+// The pinned collections declare older ansible-core ceilings than current
+// releases ship; ansible-galaxy refuses them unless told to ignore the
+// mismatch, which the release apply's install must do on an operator's
+// up-to-date Ansible.
+func TestGalaxyInstallIgnoresAnsibleVersionMismatch(t *testing.T) {
+	dir := t.TempDir()
+	envOut := filepath.Join(dir, "env")
+	binary := filepath.Join(dir, "ansible-galaxy")
+	script := "#!/bin/sh\nenv > " + envOut + "\n"
+	if err := os.WriteFile(binary, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	requirements := filepath.Join(dir, "requirements.yml")
+	if err := os.WriteFile(requirements, []byte("collections: []\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := runGalaxyCollectionInstall(context.Background(), binary, requirements, filepath.Join(dir, "cache")); err != nil {
+		t.Fatalf("collection install: %v", err)
+	}
+	env, err := os.ReadFile(envOut)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(env), "ANSIBLE_COLLECTIONS_ON_ANSIBLE_VERSION_MISMATCH=ignore\n") {
+		t.Fatalf("ansible-galaxy ran without ANSIBLE_COLLECTIONS_ON_ANSIBLE_VERSION_MISMATCH=ignore:\n%s", env)
+	}
+}
 
 func TestHashFile_IsStable(t *testing.T) {
 	dir := t.TempDir()
