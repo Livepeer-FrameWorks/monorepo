@@ -28,6 +28,10 @@ const (
 	etcCaddy            = "/etc/caddy"
 	imageSeededVersions = "/etc/frameworks/image-seeded-versions.env"
 	bootstrapCaddyfile  = "/etc/frameworks/templates/Caddyfile.bootstrap"
+	mistRuntimeConf     = "/etc/frameworks/mistserver.conf"
+	// Optional read-only starting point for a missing mistRuntimeConf; only
+	// the dev compose stack provides it.
+	mistSeedConf = "/etc/frameworks/mistserver.seed.conf"
 )
 
 type component struct {
@@ -167,29 +171,51 @@ func seedBootstrapConfig(fw, caddyIDs ids) error {
 		}
 	}
 
-	// Mist owns the rest of its config at runtime (Helmsman writes streams
-	// and protocols through its API), so only the controller listener the
-	// image depends on is reconciled; Mist is not running during the seed.
-	// MistController takes its API account from MIST_API_USERNAME and
-	// MIST_API_PASSWORD in its environment and stores the digest here, so a
-	// config the seed creates is owner-only. An existing file keeps its mode:
-	// the dev stack bind-mounts a tracked config that its owner must still
-	// read.
-	mistConf := filepath.Join(etcFrameworks, "mistserver.conf")
+	return seedMistConfig(mistRuntimeConf, mistSeedConf, fw)
+}
+
+// seedMistConfig prepares the MistServer runtime config at mistConf before
+// Mist starts. Mist owns the rest of its config at runtime (Helmsman writes
+// streams and protocols through its API), so only the controller listener the
+// image depends on is reconciled.
+//
+// When mistConf does not exist it is created from seedConf if that file
+// exists (the dev compose stack mounts its tracked config there read-only),
+// otherwise from the minimal listener-only seed. An existing mistConf is
+// never replaced from seedConf, which is then not read at all.
+//
+// MistController takes its API account from MIST_API_USERNAME and
+// MIST_API_PASSWORD in its environment and stores the digest in mistConf, so
+// a config created here is owner-only; an existing config keeps its mode.
+func seedMistConfig(mistConf, seedConf string, owner ids) error {
+	created := false
 	current, err := os.ReadFile(mistConf)
-	if err != nil && !os.IsNotExist(err) {
-		return fmt.Errorf("read MistServer config: %w", err)
+	if err != nil {
+		if !os.IsNotExist(err) {
+			return fmt.Errorf("read MistServer config: %w", err)
+		}
+		created = true
+		seed, seedErr := os.ReadFile(seedConf)
+		switch {
+		case seedErr == nil:
+			current = seed
+		case !os.IsNotExist(seedErr):
+			return fmt.Errorf("read MistServer seed config: %w", seedErr)
+		}
 	}
 	next, changed, reconcileErr := reconcileMistControllerConfig(current)
 	if reconcileErr != nil {
+		if created {
+			return fmt.Errorf("seed MistServer config from %s: %w", seedConf, reconcileErr)
+		}
 		fmt.Printf("seed-edge: WARNING: leaving %s as is: %v\n", mistConf, reconcileErr)
 		return nil
 	}
-	if changed {
+	if changed || created {
 		if err := os.WriteFile(mistConf, next, 0o600); err != nil {
 			return err
 		}
-		if err := os.Chown(mistConf, fw.uid, fw.gid); err != nil {
+		if err := os.Chown(mistConf, owner.uid, owner.gid); err != nil {
 			return err
 		}
 	}

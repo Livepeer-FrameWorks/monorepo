@@ -6,7 +6,80 @@ import (
 	"regexp"
 	"strings"
 	"testing"
+
+	"gopkg.in/yaml.v3"
 )
+
+var trackedMistConfigSource = regexp.MustCompile(`^\./infrastructure/(.*/)?[^/]*mistserver[^/]*\.conf$`)
+
+// assertDevMistConfigsAreReadOnlySeeds: MistController saves its config,
+// including the API account digest, back to the file it runs from, so no
+// compose service may mount a tracked infrastructure Mist config read-write
+// or as the runtime config. The dev edges mount it read-only at the seed
+// path, from which seed-edge creates the runtime config in the edge_etc
+// volume.
+func assertDevMistConfigsAreReadOnlySeeds(t *testing.T) {
+	t.Helper()
+	wantSeeds := map[string]string{
+		"edge":   "./infrastructure/mistserver.conf",
+		"edge-b": "./infrastructure/two-cell/mistserver-b.conf",
+	}
+	gotSeeds := map[string]string{}
+	for _, file := range []string{"docker-compose.yml", "docker-compose.stack.yml"} {
+		var compose struct {
+			Services map[string]struct {
+				Volumes []any `yaml:"volumes"`
+			} `yaml:"services"`
+		}
+		if err := yaml.Unmarshal([]byte(readFile(t, repositoryPath(t, file))), &compose); err != nil {
+			t.Fatalf("%s: %v", file, err)
+		}
+		for name, svc := range compose.Services {
+			for _, raw := range svc.Volumes {
+				var source, target string
+				readOnly := false
+				switch v := raw.(type) {
+				case string:
+					parts := strings.Split(v, ":")
+					if len(parts) < 2 {
+						continue
+					}
+					source, target = parts[0], parts[1]
+					if len(parts) > 2 {
+						for _, opt := range strings.Split(parts[2], ",") {
+							readOnly = readOnly || opt == "ro"
+						}
+					}
+				case map[string]any:
+					source, _ = v["source"].(string)
+					target, _ = v["target"].(string)
+					readOnly, _ = v["read_only"].(bool)
+				}
+				if !trackedMistConfigSource.MatchString(source) {
+					continue
+				}
+				if !readOnly {
+					t.Errorf("%s service %s mounts tracked %s read-write; Mist would write its account and runtime state into it", file, name, source)
+				}
+				if target == "/etc/frameworks/mistserver.conf" {
+					t.Errorf("%s service %s mounts tracked %s as the runtime Mist config; mount it at /etc/frameworks/mistserver.seed.conf", file, name, source)
+				}
+				if target == "/etc/frameworks/mistserver.seed.conf" {
+					gotSeeds[name] = source
+				}
+			}
+		}
+	}
+	for name, source := range wantSeeds {
+		if gotSeeds[name] != source {
+			t.Errorf("compose service %s must mount %s read-only at /etc/frameworks/mistserver.seed.conf (got %q)", name, source, gotSeeds[name])
+		}
+	}
+	seed := readFile(t, repositoryPath(t, "api_sidecar/internal/edgeseed/seed.go"))
+	if !strings.Contains(seed, `mistSeedConf = "/etc/frameworks/mistserver.seed.conf"`) {
+		t.Error("seed-edge must create the runtime Mist config from /etc/frameworks/mistserver.seed.conf")
+	}
+}
 
 const mistserverRoleDir = "ansible/collections/ansible_collections/frameworks/infra/roles/mistserver"
 
@@ -190,6 +263,8 @@ func TestDevStackMistAccountComesFromEnvironment(t *testing.T) {
 			t.Errorf("%s carries a pre-baked Mist API account; the edge must create it from MIST_API_USERNAME/MIST_API_PASSWORD", path)
 		}
 	}
+	assertDevMistConfigsAreReadOnlySeeds(t)
+
 	up := readFile(t, repositoryPath(t, "scripts/stack/up.sh"))
 	if !strings.Contains(up, "printf 'MIST_API_PASSWORD=%s\\n' \"$(openssl rand -hex 16)\"") {
 		t.Error("scripts/stack/up.sh must generate MIST_API_PASSWORD into the slot environment")

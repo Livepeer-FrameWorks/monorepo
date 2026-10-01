@@ -203,8 +203,10 @@ services:
       - ./infrastructure/edge/machine-id:/etc/machine-id:ro
       - edge_opt:/opt/frameworks
       - edge_etc:/etc/frameworks
-      # Dev MistServer config; Helmsman reconciles triggers and protocols through the API.
-      - ./infrastructure/mistserver.conf:/etc/frameworks/mistserver.conf
+      # Read-only seed for the edge's runtime Mist config, which seed-edge creates
+      # in edge_etc on first boot; Mist's own saves (account digest, triggers)
+      # stay in the volume. Reseed with `docker compose down -v`.
+      - ./infrastructure/mistserver.conf:/etc/frameworks/mistserver.seed.conf:ro
       - edge_caddy_etc:/etc/caddy
       - edge_caddy_data:/var/lib/caddy
       # Demo recordings (clips, DVR, VOD) served as the edge's local storage.
@@ -2039,7 +2041,7 @@ services:
       - ./infrastructure/two-cell/machine-id:/etc/machine-id:ro
       - edge_b_opt:/opt/frameworks
       - edge_b_etc:/etc/frameworks
-      - ./infrastructure/two-cell/mistserver-b.conf:/etc/frameworks/mistserver.conf
+      - ./infrastructure/two-cell/mistserver-b.conf:/etc/frameworks/mistserver.seed.conf:ro
       - edge_b_caddy_etc:/etc/caddy
       - edge_b_caddy_data:/var/lib/caddy
       - edge_b_storage:/data/storage

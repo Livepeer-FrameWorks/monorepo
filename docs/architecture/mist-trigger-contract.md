@@ -33,7 +33,7 @@ A Foghorn restart stays inside that budget. On shutdown Foghorn holds the health
 
 Multiple matching handlers run in order. `keep` restores the value from immediately before that handler, and `deny` is terminal. Missing trigger configuration is different from a failed handler: Mist skips the trigger entirely. Helmsman's drift reconciler therefore compares and repairs the full definition of all eighteen managed entries, not only their fallback values.
 
-The checked-in `infrastructure/mistserver.conf` is development bootstrap/runtime state, not the trigger source of truth. Development compose may rewrite it while running. Native production installs render only the Mist controller bootstrap into `/etc/mistserver.conf`; in both deployment modes Helmsman's `desiredTriggers()` owns and continuously reconciles the complete trigger definitions through the Mist API.
+The checked-in `infrastructure/mistserver.conf` is a read-only development seed, not the trigger source of truth. Development compose mounts it at `/etc/frameworks/mistserver.seed.conf`, and the edge copies it to its runtime config on first boot. Native production installs render only the Mist controller bootstrap into `/etc/mistserver.conf`; in both deployment modes Helmsman's `desiredTriggers()` owns and continuously reconciles the complete trigger definitions through the Mist API.
 
 ## Blocking trigger matrix
 
@@ -115,4 +115,4 @@ Mist stores trigger handler URLs and legacy default strings in 128-byte shared-m
 
 Helmsman is the authority for the complete managed trigger set. It applies the set after receiving a Foghorn config seed, saves it through the Mist API, and repairs missing or drifted entries every 30 seconds.
 
-The tracked `infrastructure/mistserver.conf` is only the dev compose runtime snapshot; production deployment does not copy it. Native Linux provisioning preserves `/etc/mistserver.conf` while seeding the controller bind settings. The production edge container seeds a minimal `/etc/frameworks/mistserver.conf` inside its persistent `frameworks_etc` volume. In both production shapes, the full stream and trigger configuration arrives from Helmsman's runtime reconciliation rather than an Ansible trigger template.
+The tracked `infrastructure/mistserver.conf` is only the dev compose seed, mounted read-only and copied into the edge's `/etc/frameworks` volume when that volume has no Mist config; production deployment does not use it. Native Linux provisioning preserves `/etc/mistserver.conf` while seeding the controller bind settings. The production edge container seeds a minimal `/etc/frameworks/mistserver.conf` inside its persistent `frameworks_etc` volume. In both production shapes, the full stream and trigger configuration arrives from Helmsman's runtime reconciliation rather than an Ansible trigger template.
