@@ -1,6 +1,13 @@
 ---
 node_baseline_extra_packages: []
 
+# Apt sources the platform no longer installs. The Cloudsmith Caddy repo signs
+# InRelease with a subkey that expired on 2024-03-30; frameworks.infra.caddy
+# installs the checksum-verified GitHub release .deb instead.
+node_baseline_retired_apt_source_files:
+  - /etc/apt/sources.list.d/caddy-stable.list
+  - /etc/apt/keyrings/caddy-stable.asc
+
 node_baseline_packages_by_family:
   Debian:
     - bash

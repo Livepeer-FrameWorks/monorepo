@@ -69,6 +69,11 @@
             done
           changed_when: false
 
+        - name: Remove retired apt sources
+          ansible.builtin.include_role:
+            name: frameworks.infra.node_baseline
+            tasks_from: retired_apt_sources.yml
+
         - name: Refresh apt lists
           ansible.builtin.apt:
             update_cache: true

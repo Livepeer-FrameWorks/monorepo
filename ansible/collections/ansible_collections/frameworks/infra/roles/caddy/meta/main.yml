@@ -3,7 +3,8 @@ galaxy_info:
   role_name: caddy
   author: FrameWorks Infra
   description: >-
-    Install and configure Caddy from the official Cloudsmith apt repo.
+    Install and configure Caddy from the checksum-verified upstream GitHub
+    release .deb.
     Version and site list supplied by the FrameWorks CLI from the manifest's
     caddy.* + ingress_sites.* entries.
   license: AGPL-3.0-or-later

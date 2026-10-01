@@ -1,0 +1,10 @@
+---
+# A present-but-unverifiable apt source makes every ansible.builtin.apt cache
+# refresh on the host fail, so sources the platform no longer installs are
+# removed before any refresh.
+- name: Node_baseline | remove retired apt sources
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: absent
+  loop: "{{ node_baseline_retired_apt_source_files }}"
+  when: ansible_facts.os_family == "Debian"

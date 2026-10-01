@@ -1,5 +1,6 @@
 ---
-# Caddy version — maps onto the Cloudsmith apt repo package version.
+# Caddy version — selects the upstream GitHub release (tag v<version>) whose
+# .deb the role installs.
 caddy_version: "2.8.4"
 caddy_user: caddy
 caddy_group: caddy

@@ -1,0 +1,12 @@
+---
+caddy_release_base_url: https://github.com/caddyserver/caddy/releases/download
+caddy_deb_cache_dir: /var/cache/frameworks/caddy
+
+# ansible_facts.architecture -> Caddy release .deb architecture suffix.
+caddy_deb_arch_map:
+  x86_64: amd64
+  aarch64: arm64
+  armv7l: armv7
+  ppc64le: ppc64le
+  s390x: s390x
+  riscv64: riscv64

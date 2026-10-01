@@ -40,5 +40,5 @@ roles:
     version: "3.3.4"
 
   # caddy_ansible.caddy_ansible is not pinned: the Galaxy-published role is
-  # stale (latest v3.2.0 from 2022). Caddy installs from the Cloudsmith apt
-  # repo directly via frameworks.infra.caddy; no external role required.
+  # stale (latest v3.2.0 from 2022). Caddy installs from the upstream GitHub
+  # release .deb via frameworks.infra.caddy; no external role required.

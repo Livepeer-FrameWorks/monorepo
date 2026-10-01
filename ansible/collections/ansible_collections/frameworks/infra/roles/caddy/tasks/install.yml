@@ -1,33 +1,39 @@
 ---
-- name: Install prerequisites
-  ansible.builtin.apt:
-    name:
-      - debian-keyring
-      - debian-archive-keyring
-      - apt-transport-https
-      - curl
-    state: present
-    update_cache: true
+# Caddy installs from the .deb attached to the upstream GitHub release, verified
+# against that release's SHA-512 checksums file. The package is the same
+# goreleaser build the Cloudsmith apt repo serves, so hosts that installed it
+# from Cloudsmith already hold the same package version.
+- name: Resolve Caddy package architecture
+  ansible.builtin.set_fact:
+    caddy_deb_arch: "{{ caddy_deb_arch_map[ansible_facts.architecture] | default('') }}"
 
-- name: Import Caddy apt signing key
+- name: Assert Caddy package architecture is supported
+  ansible.builtin.assert:
+    that: caddy_deb_arch | length > 0
+    fail_msg: "No Caddy .deb is published for architecture {{ ansible_facts.architecture }}"
+
+- name: Ensure Caddy package cache directory
+  ansible.builtin.file:
+    path: "{{ caddy_deb_cache_dir }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Download pinned Caddy package
   ansible.builtin.get_url:
-    url: https://dl.cloudsmith.io/public/caddy/stable/gpg.key
-    dest: /etc/apt/keyrings/caddy-stable.asc
+    url: "{{ caddy_release_base_url }}/v{{ caddy_version }}/caddy_{{ caddy_version }}_linux_{{ caddy_deb_arch }}.deb"
+    dest: "{{ caddy_deb_cache_dir }}/caddy_{{ caddy_version }}_linux_{{ caddy_deb_arch }}.deb"
+    checksum: "sha512:{{ caddy_release_base_url }}/v{{ caddy_version }}/caddy_{{ caddy_version }}_checksums.txt"
     mode: "0644"
-  when: not ansible_check_mode
+    timeout: 300
+  register: caddy_deb_download
 
-- name: Add Caddy apt repo
-  ansible.builtin.copy:
-    dest: /etc/apt/sources.list.d/caddy-stable.list
-    mode: "0644"
-    content: |
-      deb [signed-by=/etc/apt/keyrings/caddy-stable.asc] https://dl.cloudsmith.io/public/caddy/stable/deb/debian any-version main
-      deb-src [signed-by=/etc/apt/keyrings/caddy-stable.asc] https://dl.cloudsmith.io/public/caddy/stable/deb/debian any-version main
-
+# In check mode a version change shows up as the download above; the package
+# file only exists to inspect once it has been fetched.
 - name: Install pinned Caddy
   ansible.builtin.apt:
-    name: "caddy={{ caddy_version }}*"
-    state: present
-    update_cache: true
-    allow_downgrades: true
+    deb: "{{ caddy_deb_download.dest }}"
+    allow_downgrade: true
   notify: caddy restart
+  when: not (ansible_check_mode and caddy_deb_download is changed)

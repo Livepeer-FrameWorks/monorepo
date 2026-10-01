@@ -16,6 +16,10 @@
   when: node_baseline_resolved_packages | length == 0
   tags: [install]
 
+- name: Node_baseline | retired apt sources
+  ansible.builtin.import_tasks: retired_apt_sources.yml
+  tags: [install]
+
 - name: Node_baseline | refresh apt package cache
   ansible.builtin.apt:
     update_cache: true
