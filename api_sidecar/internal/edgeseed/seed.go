@@ -171,8 +171,10 @@ func seedBootstrapConfig(fw, caddyIDs ids) error {
 	// and protocols through its API), so only the controller listener the
 	// image depends on is reconciled; Mist is not running during the seed.
 	// MistController takes its API account from MIST_API_USERNAME and
-	// MIST_API_PASSWORD in its environment and stores the digest here, so
-	// the file stays owner-only.
+	// MIST_API_PASSWORD in its environment and stores the digest here, so a
+	// config the seed creates is owner-only. An existing file keeps its mode:
+	// the dev stack bind-mounts a tracked config that its owner must still
+	// read.
 	mistConf := filepath.Join(etcFrameworks, "mistserver.conf")
 	current, err := os.ReadFile(mistConf)
 	if err != nil && !os.IsNotExist(err) {
@@ -185,9 +187,6 @@ func seedBootstrapConfig(fw, caddyIDs ids) error {
 	}
 	if changed {
 		if err := os.WriteFile(mistConf, next, 0o600); err != nil {
-			return err
-		}
-		if err := os.Chmod(mistConf, 0o600); err != nil {
 			return err
 		}
 		if err := os.Chown(mistConf, fw.uid, fw.gid); err != nil {

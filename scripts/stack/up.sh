@@ -67,6 +67,9 @@ if [ ! -s "$ENV_FILE" ]; then
     # Edge A enrolls with the demo seed's bootstrap token (edge-b's is fixed in
     # the base compose); without it cell A never has a node.
     printf 'EDGE_ENROLLMENT_TOKEN=demo_bootstrap_token_for_local_development_testing_only\n'
+    # Both edges' MistController creates its API account from this, and
+    # Helmsman logs in with it; the dev Mist configs carry no account.
+    printf 'MIST_API_PASSWORD=%s\n' "$(openssl rand -hex 16)"
     # Cross-cell placement and origin pull run over federation, which the dev
     # .env leaves off for cell A (cell B's compose service hardcodes it on).
     # Edges advertise in-network addresses: the other cell's Mist pulls DTSC
@@ -81,6 +84,8 @@ if [ ! -s "$ENV_FILE" ]; then
   (cd scripts/env && GOCACHE="$PWD/.gocache" go run . --secrets "$secrets" --output "$ENV_FILE") ||
     fail "could not generate the slot environment"
 fi
+grep -qE '^MIST_API_PASSWORD="?[^"[:space:]]' "$ENV_FILE" ||
+  fail "$ENV_FILE has no MIST_API_PASSWORD, so the edges' Mist would start without an API account: remove it and rerun to regenerate the slot environment"
 command -v openssl >/dev/null || fail "openssl is required for the gateway certificates"
 stack_ensure_gateway_certs
 

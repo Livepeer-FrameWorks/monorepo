@@ -1,6 +1,7 @@
 package templates
 
 import (
+	"encoding/json"
 	"os"
 	"regexp"
 	"strings"
@@ -103,6 +104,10 @@ func TestMistControllerReceivesAPIAccountFromEnvironment(t *testing.T) {
 	if !strings.HasPrefix(s6, "#!/command/with-contenv sh\n") {
 		t.Errorf("s6 run script must run with the container environment:\n%s", s6)
 	}
+	guardAt := strings.Index(s6, "if [ -z \"${MIST_API_PASSWORD:-}\" ]; then")
+	if guardAt < 0 || guardAt > strings.Index(s6, "exec s6-setuidgid") || !strings.Contains(s6[guardAt:], "exit 1") {
+		t.Errorf("s6 run script must refuse to start MistController without MIST_API_PASSWORD:\n%s", s6)
+	}
 	if !strings.Contains(readFile(t, repositoryPath(t, "edge/Dockerfile")), "S6_KEEP_ENV=1") {
 		t.Error("edge image must keep the container environment (S6_KEEP_ENV=1) for MistController")
 	}
@@ -167,5 +172,29 @@ func TestMistControllerReceivesAPIAccountFromEnvironment(t *testing.T) {
 	execAt := strings.Index(darwin, "exec \"{{ mistserver_darwin_base_dir }}/mistserver/bin/MistController\"")
 	if exportAt < 0 || readAt < 0 || execAt < 0 || exportAt > execAt || readAt > execAt {
 		t.Errorf("launchd wrapper must export the env file before exec:\n%s", darwin)
+	}
+}
+
+// TestDevStackMistAccountComesFromEnvironment: the dev and stack edges run the
+// production account path, so their Mist configs carry no pre-baked account
+// (one would hide an edge whose MistController never got its password) and the
+// stack's generated slot environment carries a MIST_API_PASSWORD.
+func TestDevStackMistAccountComesFromEnvironment(t *testing.T) {
+	t.Parallel()
+	for _, path := range []string{"infrastructure/mistserver.conf", "infrastructure/two-cell/mistserver-b.conf"} {
+		var config map[string]any
+		if err := json.Unmarshal([]byte(readFile(t, repositoryPath(t, path))), &config); err != nil {
+			t.Fatalf("%s: %v", path, err)
+		}
+		if _, ok := config["account"]; ok {
+			t.Errorf("%s carries a pre-baked Mist API account; the edge must create it from MIST_API_USERNAME/MIST_API_PASSWORD", path)
+		}
+	}
+	up := readFile(t, repositoryPath(t, "scripts/stack/up.sh"))
+	if !strings.Contains(up, "printf 'MIST_API_PASSWORD=%s\\n' \"$(openssl rand -hex 16)\"") {
+		t.Error("scripts/stack/up.sh must generate MIST_API_PASSWORD into the slot environment")
+	}
+	if !strings.Contains(up, "^MIST_API_PASSWORD=") {
+		t.Error("scripts/stack/up.sh must refuse a slot environment without MIST_API_PASSWORD")
 	}
 }

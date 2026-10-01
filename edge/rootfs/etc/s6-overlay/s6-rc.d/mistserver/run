@@ -7,6 +7,13 @@ export LD_LIBRARY_PATH=/opt/frameworks/mistserver/opt/mist-onnx/lib:/opt/framewo
 # frameworks) and MIST_API_PASSWORD in the container environment (kept by
 # S6_KEEP_ENV) and removes both from its environment before starting anything;
 # the password is never passed on the command line, where the process list
-# would expose it.
+# would expose it. Without a password Mist would run with no account and an
+# open first-account setup API while Helmsman cannot log in, so it does not
+# start.
+if [ -z "${MIST_API_PASSWORD:-}" ]; then
+  echo "mistserver: MIST_API_PASSWORD is empty; not starting MistController without its API account" >&2
+  sleep 5
+  exit 1
+fi
 exec s6-setuidgid frameworks /opt/frameworks/mistserver/bin/MistController \
   -c /etc/frameworks/mistserver.conf
