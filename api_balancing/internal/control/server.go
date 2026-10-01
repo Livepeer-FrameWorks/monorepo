@@ -4030,11 +4030,11 @@ func ProjectSourceIfCurrent(ctx context.Context, registry *StreamRegistry, tenan
 	prior, priorGeneration, projected, projectErr := registry.projectSourceWithPriorGeneration(internalName, nodeID, connectorPID, triggerUUID, generation, rev)
 	if projectErr != nil {
 		cause := fmt.Errorf("publish source projection: %w", projectErr)
-		return false, false, errors.Join(cause, abortPendingSourceProjection(ctx, tenantID, internalName, generation))
+		return false, false, errors.Join(cause, abortPendingSourceProjection(ctx, tenantID, internalName, generation, 0))
 	}
 	if !projected {
 		cause := fmt.Errorf("source projection revision %d lost the shared CAS", rev)
-		return false, false, errors.Join(cause, abortPendingSourceProjection(ctx, tenantID, internalName, generation))
+		return false, false, errors.Join(cause, abortPendingSourceProjection(ctx, tenantID, internalName, generation, 0))
 	}
 	// Confirm the projection AND persist the once-only admission-effect obligation ATOMICALLY: the
 	// obligation (push-target activation, prior-owner drain from the CAS result, federation live
@@ -4058,8 +4058,15 @@ func ProjectSourceIfCurrent(ctx context.Context, registry *StreamRegistry, tenan
 	})
 	if confirmErr != nil {
 		// The helper has rolled back the confirmation row lock before cleanup retires the same
-		// pending generation in a new transaction; keeping it open would self-deadlock.
-		return false, false, errors.Join(confirmErr, abortPendingSourceProjection(ctx, tenantID, internalName, generation))
+		// generation in a new transaction; keeping it open would self-deadlock.
+		//
+		// An error here does not prove the confirmation is absent: a deadline that expires while
+		// COMMIT is in flight reports failure for a transaction the server committed. The caller
+		// denies this push, so a committed confirmation would leave an active session with no
+		// publisher, renewing the stream's placement claim and refusing every later publisher as a
+		// duplicate. The cleanup therefore also ends the generation when it is active at the
+		// revision this call confirmed.
+		return false, false, errors.Join(confirmErr, abortPendingSourceProjection(ctx, tenantID, internalName, generation, rev))
 	}
 	return true, false, nil
 }
@@ -4197,20 +4204,35 @@ func repairResumedSourceProjection(ctx context.Context, registry *StreamRegistry
 	}
 }
 
+// sourceProjectionCleanupTimeout bounds the cleanup of a denied admission. The cleanup runs on a
+// context detached from the admission's cancellation: the failures it follows are often that
+// admission's deadline expiring, and a cleanup inheriting the expired deadline would fail before
+// reaching the database.
+const sourceProjectionCleanupTimeout = 3 * time.Second
+
 // abortPendingSourceProjection releases stream authority after a projection that could not be
 // confirmed. The session end and inactive projection intent commit together under the stream lock,
-// so a denied PUSH_REWRITE cannot leave an open row blocking later publishers.
-func abortPendingSourceProjection(ctx context.Context, tenantID, internalName, generation string) error {
+// so a denied PUSH_REWRITE cannot leave an open row blocking later publishers. A pending generation
+// is always ended; confirmedRevision > 0 also ends the generation when it is active at exactly that
+// revision, which is a confirmation committed by the denied admission itself. Ending an active
+// generation also queues the offline broadcast, since its admission obligation may already have
+// announced it live.
+func abortPendingSourceProjection(ctx context.Context, tenantID, internalName, generation string, confirmedRevision int64) error {
 	if db == nil {
 		return errors.New("abort pending source projection: no database configured")
 	}
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), sourceProjectionCleanupTimeout)
+	defer cancel()
+	confirmed := sql.NullInt64{Int64: confirmedRevision, Valid: confirmedRevision > 0}
 	playbackID := streamEventPlaybackID(ctx, internalName)
 	return database.WithRetryablePostgresTx(ctx, db, nil, func(tx *sql.Tx) error {
 		q := foghorndb.New(tx)
 		if lockErr := q.LockIngestStream(ctx, ingestStreamAdvisoryLockKey(tenantID, internalName)); lockErr != nil {
 			return fmt.Errorf("lock abort pending source projection: %w", lockErr)
 		}
-		aborted, err := q.AbortPendingSourceProjection(ctx, foghorndb.AbortPendingSourceProjectionParams{Generation: generation, TenantID: tenantID, StreamInternalName: internalName})
+		aborted, err := q.AbortPendingSourceProjection(ctx, foghorndb.AbortPendingSourceProjectionParams{
+			Generation: generation, TenantID: tenantID, StreamInternalName: internalName, ConfirmedRevision: confirmed,
+		})
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil
 		}
@@ -4224,7 +4246,8 @@ func abortPendingSourceProjection(ctx context.Context, tenantID, internalName, g
 		if err != nil {
 			return err
 		}
-		return enqueueOfflineEffectTx(ctx, tx, tenantID, internalName, aborted.NodeID, generation, revision, OfflineEffectIntent{})
+		intent := OfflineEffectIntent{BroadcastOffline: aborted.ProjectionState == "active"}
+		return enqueueOfflineEffectTx(ctx, tx, tenantID, internalName, aborted.NodeID, generation, revision, intent)
 	})
 }
 
@@ -4232,7 +4255,7 @@ func abortPendingSourceProjection(ctx context.Context, tenantID, internalName, g
 // The database row is the single-publisher authority, so callers must end it before returning a
 // denial or it would strand the stream behind a pending session.
 func AbortPendingIngestSession(ctx context.Context, tenantID, internalName, generation string) error {
-	return abortPendingSourceProjection(ctx, tenantID, internalName, generation)
+	return abortPendingSourceProjection(ctx, tenantID, internalName, generation, 0)
 }
 
 // nextSourceRevision advances the counter at the same tenant/stream key where

@@ -12,6 +12,8 @@ import (
 )
 
 type Querier interface {
+	// Ends a pending generation. A non-NULL confirmed_revision also ends the generation when it is
+	// active at exactly that revision: a confirmation whose commit outcome the admission never saw.
 	AbortPendingSourceProjection(ctx context.Context, arg AbortPendingSourceProjectionParams) (AbortPendingSourceProjectionRow, error)
 	AcquireDVRStartLock(ctx context.Context, lockKey string) error
 	AcquireThumbnailPublishLease(ctx context.Context, arg AcquireThumbnailPublishLeaseParams) (sql.NullString, error)

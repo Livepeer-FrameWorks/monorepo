@@ -143,9 +143,12 @@ WHERE source_generation = sqlc.arg(generation)::uuid
 UPDATE foghorn.ingest_sessions SET projection_state  =  'active', projected_at  =  COALESCE(projected_at, NOW())
 WHERE id  =  sqlc.arg(generation)::uuid AND tenant_id  =  sqlc.arg(tenant_id)::uuid AND stream_internal_name  =  sqlc.arg(stream_internal_name) AND ended_at IS NULL AND source_revision  =  sqlc.narg(source_revision) AND projection_state  =  'pending';
 -- name: AbortPendingSourceProjection :one
+-- Ends a pending generation. A non-NULL confirmed_revision also ends the generation when it is
+-- active at exactly that revision: a confirmation whose commit outcome the admission never saw.
 UPDATE foghorn.ingest_sessions SET ended_at  =  NOW(), ended_at_unix_millis  =  (EXTRACT(EPOCH FROM NOW()) * 1000)::bigint, ended_reason  =  'projection_failed'
-WHERE id  =  sqlc.arg(generation)::uuid AND tenant_id  =  sqlc.arg(tenant_id)::uuid AND stream_internal_name  =  sqlc.arg(stream_internal_name) AND ended_at IS NULL AND projection_state  =  'pending'
-RETURNING node_id, start_trigger_uuid, COALESCE(stream_id::text, '')::text AS stream_id;
+WHERE id  =  sqlc.arg(generation)::uuid AND tenant_id  =  sqlc.arg(tenant_id)::uuid AND stream_internal_name  =  sqlc.arg(stream_internal_name) AND ended_at IS NULL
+  AND (projection_state  =  'pending' OR (projection_state  =  'active' AND source_revision  =  sqlc.narg(confirmed_revision)))
+RETURNING node_id, start_trigger_uuid, COALESCE(stream_id::text, '')::text AS stream_id, projection_state;
 -- name: NextSourceProjectionRevision :one
 -- The database counter includes tenant_id because that is the durable ownership domain.
 -- Commodore guarantees stream_internal_name is globally unique, which is why the corresponding

@@ -12,26 +12,41 @@ import (
 
 const abortPendingSourceProjection = `-- name: AbortPendingSourceProjection :one
 UPDATE foghorn.ingest_sessions SET ended_at  =  NOW(), ended_at_unix_millis  =  (EXTRACT(EPOCH FROM NOW()) * 1000)::bigint, ended_reason  =  'projection_failed'
-WHERE id  =  $1::uuid AND tenant_id  =  $2::uuid AND stream_internal_name  =  $3 AND ended_at IS NULL AND projection_state  =  'pending'
-RETURNING node_id, start_trigger_uuid, COALESCE(stream_id::text, '')::text AS stream_id
+WHERE id  =  $1::uuid AND tenant_id  =  $2::uuid AND stream_internal_name  =  $3 AND ended_at IS NULL
+  AND (projection_state  =  'pending' OR (projection_state  =  'active' AND source_revision  =  $4))
+RETURNING node_id, start_trigger_uuid, COALESCE(stream_id::text, '')::text AS stream_id, projection_state
 `
 
 type AbortPendingSourceProjectionParams struct {
-	Generation         string `db:"generation" json:"generation"`
-	TenantID           string `db:"tenant_id" json:"tenant_id"`
-	StreamInternalName string `db:"stream_internal_name" json:"stream_internal_name"`
+	Generation         string        `db:"generation" json:"generation"`
+	TenantID           string        `db:"tenant_id" json:"tenant_id"`
+	StreamInternalName string        `db:"stream_internal_name" json:"stream_internal_name"`
+	ConfirmedRevision  sql.NullInt64 `db:"confirmed_revision" json:"confirmed_revision"`
 }
 
 type AbortPendingSourceProjectionRow struct {
 	NodeID           string `db:"node_id" json:"node_id"`
 	StartTriggerUuid string `db:"start_trigger_uuid" json:"start_trigger_uuid"`
 	StreamID         string `db:"stream_id" json:"stream_id"`
+	ProjectionState  string `db:"projection_state" json:"projection_state"`
 }
 
+// Ends a pending generation. A non-NULL confirmed_revision also ends the generation when it is
+// active at exactly that revision: a confirmation whose commit outcome the admission never saw.
 func (q *Queries) AbortPendingSourceProjection(ctx context.Context, arg AbortPendingSourceProjectionParams) (AbortPendingSourceProjectionRow, error) {
-	row := q.db.QueryRowContext(ctx, abortPendingSourceProjection, arg.Generation, arg.TenantID, arg.StreamInternalName)
+	row := q.db.QueryRowContext(ctx, abortPendingSourceProjection,
+		arg.Generation,
+		arg.TenantID,
+		arg.StreamInternalName,
+		arg.ConfirmedRevision,
+	)
 	var i AbortPendingSourceProjectionRow
-	err := row.Scan(&i.NodeID, &i.StartTriggerUuid, &i.StreamID)
+	err := row.Scan(
+		&i.NodeID,
+		&i.StartTriggerUuid,
+		&i.StreamID,
+		&i.ProjectionState,
+	)
 	return i, err
 }
 

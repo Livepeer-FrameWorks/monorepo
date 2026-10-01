@@ -25,6 +25,14 @@ import (
 // from the other undetected.
 func startRealPG(t *testing.T) *sql.DB {
 	t.Helper()
+	conn, _ := startRealPGWithDSN(t)
+	return conn
+}
+
+// startRealPGWithDSN is startRealPG that also returns the database's DSN, for a test that opens its
+// own connections to it.
+func startRealPGWithDSN(t *testing.T) (*sql.DB, string) {
+	t.Helper()
 	if _, err := exec.LookPath("docker"); err != nil {
 		t.Skip("docker not available")
 	}
@@ -66,7 +74,7 @@ func startRealPG(t *testing.T) *sql.DB {
 	if _, err := conn.Exec(string(schema)); err != nil {
 		t.Fatalf("apply foghorn.sql: %v", err)
 	}
-	return conn
+	return conn, dsn
 }
 
 // TestClaimFreezeAttempt_RealPG drives the ACTUAL ClaimFreezeAttempt production function against a real

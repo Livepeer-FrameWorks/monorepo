@@ -112,7 +112,7 @@ func installIngestSessionMintThenAbortMock(t *testing.T) {
 	mock.ExpectBegin()
 	mock.ExpectExec(`pg_advisory_xact_lock`).WillReturnResult(sqlmock.NewResult(0, 0))
 	mock.ExpectQuery(`UPDATE foghorn\.ingest_sessions[\s\S]*ended_reason\s+=\s+'projection_failed'`).
-		WillReturnRows(sqlmock.NewRows([]string{"node_id", "start_trigger_uuid", "stream_id"}).AddRow("edge-node-1", "test-trigger-uuid", ""))
+		WillReturnRows(sqlmock.NewRows([]string{"node_id", "start_trigger_uuid", "stream_id", "projection_state"}).AddRow("edge-node-1", "test-trigger-uuid", "", "pending"))
 	mock.ExpectQuery(`INSERT INTO foghorn.source_projection_revision_counter`).WithArgs(sqlmock.AnyArg(), sqlmock.AnyArg()).WillReturnRows(sqlmock.NewRows([]string{"revision"}).AddRow(int64(1)))
 	mock.ExpectExec(`INSERT INTO foghorn\.ingest_offline_effects`).WillReturnResult(sqlmock.NewResult(1, 1))
 	mock.ExpectCommit()
