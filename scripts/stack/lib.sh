@@ -1,7 +1,6 @@
 #!/usr/bin/env bash
 # Shared helpers for the production-shaped stack scenarios (PLAN_TEST_HARDENING.md).
-# Scenarios run inside the stack-runner container, address services by their
-# compose names, and source only this file (which sources endpoints.sh).
+# Scenarios source only this file; the runner supplies the endpoint map.
 #
 # Result lines: PASS / FAIL / BLOCKED. BLOCKED means the stack lacks something
 # the check needs (a tool, a service, fault-injection access); it is never a
@@ -10,24 +9,28 @@
 set -uo pipefail
 
 STACK_LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-if [ -f "$STACK_LIB_DIR/endpoints.sh" ]; then
+stack_endpoints_file=${STACK_ENDPOINTS_FILE:-$STACK_LIB_DIR/endpoints.sh}
+if [ -f "$stack_endpoints_file" ]; then
   # shellcheck source=/dev/null
-  . "$STACK_LIB_DIR/endpoints.sh"
+  . "$stack_endpoints_file"
 fi
 
 # Contract defaults; endpoints.sh overrides any of them.
 : "${BRIDGE_URL:=http://bridge:18000}"
+: "${CHANDLER_URL:=http://chandler:18020}"
 : "${BRIDGE_WS_URL:=${BRIDGE_URL/http/ws}/graphql/ws}"
 : "${FOGHORN_A_URLS:=http://foghorn:18008 http://foghorn-2:18018}"
 : "${FOGHORN_B_URLS:=http://foghorn-b:18008 http://foghorn-b-2:18008}"
 : "${EDGE_A_RTMP:=rtmp://edge:1935/live}"
 : "${EDGE_B_RTMP:=rtmp://edge-b:1935/live}"
+: "${EDGE_A_HOST:=edge}"
 : "${WEBHOOK_RECEIVER_URL:=http://webhook-receiver:18777}"
 : "${WEBHOOK_TARGET_URL:=$WEBHOOK_RECEIVER_URL/hooks}"
 RECEIVER_URL=$WEBHOOK_RECEIVER_URL
 RECEIVER_HOOK_URL=$WEBHOOK_TARGET_URL
 : "${MAILPIT_API_URL:=http://mailpit:8025/api/v1}"
 export MAILPIT_API=${MAILPIT_API_URL%/api/v1}
+: "${STACK_MAIL_MODE:=mailpit}"
 : "${CLICKHOUSE_URL:=http://clickhouse:8123/?user=${CLICKHOUSE_USER:-default}&password=${CLICKHOUSE_PASSWORD:-}}"
 : "${PG_HOST:=postgres}"
 : "${PG_PORT:=5432}"
@@ -108,6 +111,10 @@ stack_exec() { # stack_exec <service> <command...>
   docker compose -p "$COMPOSE_PROJECT_NAME" exec -T "$service" "$@"
 }
 container_of() { docker compose -p "$COMPOSE_PROJECT_NAME" ps -q "$1" 2>/dev/null | head -1; } # container_of <service>
+stack_service_exists() { [ -n "$(container_of "$1")" ]; }
+stack_running() { [ "$(docker compose -p "$COMPOSE_PROJECT_NAME" ps --status running -q "$1" 2>/dev/null | wc -l | tr -d ' ')" -ge 1 ]; }
+stack_healthy() { [ "$(docker inspect -f '{{.State.Health.Status}}' "$(container_of "$1")" 2>/dev/null)" = healthy ]; }
+stack_replica_count() { getent ahostsv4 "$1" | awk '{print $1}' | sort -u | wc -l | tr -d ' '; }
 # logs_since <since> <service>...: the services' logs from <since> (RFC 3339 UTC).
 logs_since() {
   local since=$1
@@ -372,6 +379,7 @@ media_at() { # media_at <foghorn> <playback id>: a resolved viewer gets real TS 
   got=$(segment_fetch "$loc")
   case "$got" in 200\ *) [ "${got#200 }" -gt 0 ] ;; *) return 1 ;; esac
 }
+edge_a_location() { [[ "$1" == "${STACK_EDGE_A_LOCATION_PREFIX:-http://$EDGE_A_HOST:}"* ]]; }
 # hls_position <master url>: the index of the newest segment of the first
 # variant (media sequence + segment count), fetched from wherever the URL points
 # (an edge address serves without Foghorn). Empty when unreachable.
@@ -525,6 +533,42 @@ video_heights() { # video_heights <stream uuid>: sorted rendition heights, JPEG 
 
 # ---- webhooks ---------------------------------------------------------------
 
+test_email() {
+  local tag=$1 base=${STACK_TEST_EMAIL_BASE:-}
+  if [ -z "$base" ]; then
+    printf 'stack-%s@stack.test\n' "$tag"
+  else
+    printf '%s+%s@%s\n' "${base%@*}" "$tag" "${base#*@}"
+  fi
+}
+
+mail_seen() {
+  local address=$1
+  case "$STACK_MAIL_MODE" in
+    imap) python3 "$STACK_LIB_DIR/imap-verification.py" exists "$address" ;;
+    mailpit)
+      curl -s -m 10 "$MAILPIT_API/api/v1/search?query=to:$address" |
+        jq -e '.messages | length > 0' >/dev/null 2>&1
+      ;;
+    *) return 2 ;;
+  esac
+}
+
+mail_token() {
+  local address=$1 id
+  case "$STACK_MAIL_MODE" in
+    imap) python3 "$STACK_LIB_DIR/imap-verification.py" token "$address" ;;
+    mailpit)
+      id=$(curl -s -m 10 "$MAILPIT_API/api/v1/search?query=to:$address" | jq -r '.messages[0].ID // empty')
+      [ -n "$id" ] || return 1
+      curl -s -m 10 "$MAILPIT_API/api/v1/message/$id" | jq -r '.Text // ""' |
+        grep -oE 'verify-email#token=[A-Za-z0-9%_.~-]+' | head -1 | sed 's/.*token=//' |
+        python3 -c 'import sys,urllib.parse; print(urllib.parse.unquote(sys.stdin.read().strip()))'
+      ;;
+    *) return 2 ;;
+  esac
+}
+
 # webhook_endpoint: one "*" endpoint at the receiver per stack run; prints
 # "<endpoint id> <whsec secret>".
 webhook_endpoint() {
@@ -569,3 +613,8 @@ saw_event() {
   webhook_events "$1" | awk -v t="$2" '$1==t && $3=="valid"{ $1=$2=$3=""; print substr($0,4) }' |
     while read -r data; do echo "$data" | jq -e "${3:-true}" >/dev/null 2>&1 && { echo hit; break; }; done | grep -q hit
 }
+
+if [ -n "${STACK_ADAPTER_FILE:-}" ]; then
+  # shellcheck source=/dev/null
+  . "$STACK_ADAPTER_FILE"
+fi

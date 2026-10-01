@@ -16,7 +16,7 @@
 DOWN_SECONDS=${STACK_REPLICA_DOWN_SECONDS:-60}
 UP_SECONDS=${STACK_REPLICA_UP_SECONDS:-40}
 REPLICAS_A=(foghorn foghorn-2)
-need ffmpeg jq curl docker || finish
+need ffmpeg jq curl || finish
 
 SA=$(create_stream "stack-replica-restart-a-$(date +%s)" false)
 SB=$(create_stream "stack-replica-restart-b-$(date +%s)" false)
@@ -39,6 +39,14 @@ done
 
 base_of() { # base_of <service>: the service's public /play base URL
   local b
+  if [ "${STACK_TARGET:-stack}" = staging ]; then
+    local -a bases
+    read -r -a bases <<<"$FOGHORN_A_URLS"
+    case "$1" in
+      foghorn) printf '%s\n' "${bases[0]:-}"; return ;;
+      foghorn-2) printf '%s\n' "${bases[1]:-}"; return ;;
+    esac
+  fi
   for b in $FOGHORN_A_URLS $FOGHORN_B_URLS; do
     case "$b" in "http://$1:"*) echo "$b"; return ;; esac
   done

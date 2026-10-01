@@ -68,11 +68,26 @@ frozen() {
   local row
   row=$(pg "$FOGHORN_A_DB" "SELECT c.frozen_at IS NOT NULL, COALESCE(a.dtsh_synced,false), COALESCE(a.sync_status,'')
     FROM foghorn.dvr_chapters c JOIN foghorn.artifacts a ON a.artifact_hash = c.playback_artifact_hash
-    WHERE c.chapter_id='$FIRST_ID'")
+    WHERE c.chapter_id='$FIRST_ID' AND a.tenant_id='$STACK_TENANT_ID'")
   echo "    frozen|dtsh_synced|sync: $row"
   [ "$row" = "t|t|synced" ]
 }
 eventually 300 "first chapter frozen with its .dtsh synced" frozen
+
+chapter_thumbnails() {
+  local hash published code
+  hash=$(pg "$FOGHORN_A_DB" "SELECT COALESCE(c.playback_artifact_hash,'') FROM foghorn.dvr_chapters c
+    JOIN foghorn.artifacts source ON source.artifact_hash=c.artifact_hash
+    WHERE c.chapter_id='$FIRST_ID' AND source.tenant_id='$STACK_TENANT_ID'")
+  [ -n "$hash" ] || return 1
+  published=$(pg "$FOGHORN_A_DB" "SELECT COALESCE(has_thumbnails,false) FROM foghorn.artifacts
+    WHERE tenant_id='$STACK_TENANT_ID' AND artifact_hash='$hash'")
+  [ "$published" = t ] || { echo "    chapter $FIRST_ID thumbnails not published"; return 1; }
+  code=$(curl -s -m 10 -o /dev/null -w '%{http_code}' "$CHANDLER_URL/assets/$hash/poster.jpg")
+  echo "    chapter poster: HTTP $code"
+  [ "$code" = 200 ]
+}
+eventually 240 "chapter thumbnails are accepted and Chandler serves the poster" chapter_thumbnails
 
 log "recording.ready carries the chapter"
 eventually 60 "recording.ready with the first chapter's playback id" saw_event "$SINCE" recording.ready ".artifact.playbackId == \"$FIRST_PB\""

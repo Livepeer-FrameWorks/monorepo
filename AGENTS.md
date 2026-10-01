@@ -51,6 +51,7 @@
 
 - Run `make test` and `make verify-prepush`. The latter runs every CI job except Go test (which `make test` covers), step for step: Go lint, Go build, Frontend lint, Frontend build, Generated contracts, frontend components, SDKs, Migration release state, Yugabyte database contracts, feature registry, pricing catalog and compose profiles. A hook-level or per-package lint is not a substitute. It needs Docker; run it on remotedev when the laptop cannot.
 - Never tell the maintainer to push or tag until `make verify-prepush` passed on that exact commit.
+- Every bug found in development, CI, remotedev, or staging gets a scenario or focused test that fails on the bug before its fix lands. Record the failing assertion and the green result. Run the stack suite on remotedev for every change; run the same scenarios as a post-rollout smoke only when the maintainer requests staging verification. Do not schedule nightly runs.
 
 **Key rules:**
 

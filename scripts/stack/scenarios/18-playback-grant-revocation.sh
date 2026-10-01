@@ -13,7 +13,7 @@
 # replica that applied it; per-viewer USER_NEW herds on revocation.
 . "$(dirname "$0")/../lib.sh"
 
-need ffmpeg jq curl python3 docker || finish
+need ffmpeg jq curl python3 || finish
 
 new_key() { # new_key <name> -> {id kid pem}
   gql 'mutation($i:CreateSigningKeyInput!){createSigningKey(input:$i){__typename ... on CreateSigningKeySuccess{privateKeyPem signingKey{id kid}}}}' \
@@ -127,7 +127,8 @@ for n in 1 2; do
   R=$(gql 'mutation($id:ID!){revokeSigningKey(id:$id){__typename}}' "$(jq -cn --arg id "$(echo "${KEY[$n]}" | jq -r .id)" '{id:$id}')")
   gql_ok "$R" '.data.revokeSigningKey.__typename' SigningKey || { fail "revokeSigningKey: $R"; break; }
   REFUSED_AT=""
-  SERVING=${EDGE[$n]} FOGHORNS=(${CELL_REPLICAS[$n]})
+  SERVING=${EDGE[$n]}
+  read -r -a FOGHORNS <<<"${CELL_REPLICAS[$n]}"
   refused_on_edge() {
     REFUSED_AT=$(log_json_at "$SINCE" "select(.msg == \"Playback session refused on the updated grant\" and .kid == \"$kid\") | .at" "$SERVING" | sed -n 1p)
     [ -n "$REFUSED_AT" ]

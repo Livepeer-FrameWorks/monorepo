@@ -12,7 +12,7 @@
 . "$(dirname "$0")/../lib.sh"
 
 REQUESTS=${STACK_GRANT_REQUESTS:-20}
-need ffmpeg jq curl python3 docker || finish
+need ffmpeg jq curl python3 || finish
 
 START=$(utc_now)
 S=$(create_stream "stack-grants-$(date +%s)" false)

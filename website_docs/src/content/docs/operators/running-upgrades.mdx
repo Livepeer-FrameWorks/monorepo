@@ -462,6 +462,28 @@ the wait fails its rollout: fix the dependency and rerun the command.
 instance runs, so they check `/health` for every Go service except Chandler. They move to `/ready`
 in the release that requires v0.3.11 as the minimum source.
 
+### Post-rollout staging smoke
+
+After a requested staging rollout, run the stack scenario suite against the
+deployed staging services from an operator checkout on the private network:
+
+```bash
+STACK_TARGET=staging \
+STACK_ENDPOINTS_FILE=/private/path/staging-stack-endpoints.sh \
+STAGING_SERVICE_MAP_FILE=/private/path/staging-service-map.txt \
+make verify-stack
+```
+
+The same scenario scripts and per-scenario log checks run on remotedev before
+the rollout. The private endpoint file supplies the test tenant, credentials,
+mailbox, webhook receiver, and deployed CLI context; the service map connects
+scenario aliases to native hosts and systemd units. A failed or blocked
+scenario is not a passing smoke. `STACK_SCENARIOS` selects an individual
+scenario for diagnosis, and `STACK_REPEAT` repeats a race check. The staging
+target neither provisions nor tears down the cluster. See
+`docs/development/remote-development.md` in the monorepo for the endpoint and
+service-map contract.
+
 ## When to use provision
 
 Use `frameworks cluster provision` for:

@@ -8,6 +8,7 @@
 #   MIST_SOURCE_DIR=<dir>   build MistServer from a local checkout
 #   STACK_KEEP=1            leave the slot running afterwards (for debugging)
 #   STACK_REUSE=1           run against an already-up slot instead of up.sh
+#   STACK_REPEAT=N          repeat each selected scenario N times (default 1)
 #   STACK_DVR_WINDOW_SECONDS=N  the demo tier's DVR window, so the chapter length
 #                           scenario 04 records (default 120)
 #
@@ -16,6 +17,9 @@
 set -uo pipefail
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+if [ "${STACK_TARGET:-stack}" = staging ]; then
+  exec bash "$here/verify-target.sh"
+fi
 # shellcheck source=scripts/stack/common.sh
 . "$here/common.sh"
 cd "$stack_repo_root" || exit 1
@@ -52,7 +56,7 @@ fi
 # The TS SDK smoke imports npm_api's built dist from the mounted checkout.
 if [ ! -f npm_api/dist/index.js ] || [ -n "$(find npm_api/src -newer npm_api/dist/index.js -print -quit 2>/dev/null)" ]; then
   echo "building npm_api dist for the TS SDK smoke"
-  # A fresh workspace (remote-dev slot, CI) has no node_modules; install only
+  # A fresh remotedev workspace has no node_modules; install only
   # what the API package needs.
   if [ ! -d npm_api/node_modules ]; then
     pnpm install --frozen-lockfile --filter '@livepeer-frameworks/api...' 2>&1 | tail -3 ||
@@ -68,6 +72,18 @@ while IFS= read -r path; do
 done < <(stack_compose exec -T -e STACK_SCENARIOS="${STACK_SCENARIOS:-default}" stack-runner \
   bash /repo/scripts/stack/scenarios/list.sh)
 [ "${#scenarios[@]}" -gt 0 ] || { echo "no scenarios selected (STACK_SCENARIOS=${STACK_SCENARIOS:-default})"; exit 1; }
+if printf '%s\n' "${scenarios[@]}" | grep -Eq '/(27|28)-'; then
+  echo 'building the operator CLI for the selected stack scenarios'
+  make build-bin-cli || exit 1
+fi
+repeat=${STACK_REPEAT:-1}
+case "$repeat" in
+  '' | *[!0-9]*) echo "STACK_REPEAT must be an integer from 1 to 100" >&2; exit 1 ;;
+esac
+if [ "$repeat" -lt 1 ] || [ "$repeat" -gt 100 ]; then
+  echo "STACK_REPEAT must be an integer from 1 to 100" >&2
+  exit 1
+fi
 
 # A service container that exited with an error or was OOM-killed breaks the
 # scenarios that route through it, which would otherwise read as a product
@@ -89,14 +105,24 @@ if [ -n "$dead" ]; then
 fi
 for path in "${scenarios[@]}"; do
   name="$(basename "$path" .sh)"
-  printf '\n==== %s ====\n' "$name"
-  stack_compose exec -T -e STACK_DVR_WINDOW_SECONDS="${STACK_DVR_WINDOW_SECONDS:-120}" stack-runner bash "$path"
-  rc=$?
-  case "$rc" in
-    0) summary+=("PASS     $name") ;;
-    2) summary+=("BLOCKED  $name"); blocked=1 ;;
-    *) summary+=("FAIL     $name (exit $rc)"); failed=1 ;;
-  esac
+  for iteration in $(seq 1 "$repeat"); do
+    label="$name ($iteration/$repeat)"
+    printf '\n==== %s ====\n' "$label"
+    scenario_since="$(date -u +%Y-%m-%dT%H:%M:%S.%NZ)"
+    stack_compose exec -T -e STACK_DVR_WINDOW_SECONDS="${STACK_DVR_WINDOW_SECONDS:-120}" stack-runner bash "$path"
+    rc=$?
+    case "$rc" in
+      0) summary+=("PASS     $label") ;;
+      2) summary+=("BLOCKED  $label"); blocked=1 ;;
+      *) summary+=("FAIL     $label (exit $rc)"); failed=1 ;;
+    esac
+    if bash "$here/logcheck.sh" "$scenario_since" "$name"; then
+      summary+=("PASS     $label logs")
+    else
+      summary+=("FAIL     $label logs")
+      failed=1
+    fi
+  done
 done
 
 dead="$(dead_containers)"

@@ -16,7 +16,7 @@
 ROUNDS=${STACK_REPLICA_RESOLVES:-30}
 FOGHORNS_B=(foghorn-b foghorn-b-2)
 EDGE_B=(edge-b edge-proxy-b)
-need ffmpeg jq curl docker || finish
+need ffmpeg jq curl || finish
 
 S=$(create_stream "stack-remote-replica-$(date +%s)" false)
 SID=$(echo "$S" | jq -r '.id // empty')
@@ -38,7 +38,7 @@ log "cell B's edge stopped: cell B must place its viewers in cell A"
 EDGE_B_DOWN=1
 for svc in "${EDGE_B[@]}"; do stack_ctl stop "$svc" || { fail "stop $svc"; finish; }; done
 on_cell_a_edge() { # on_cell_a_edge <foghorn> <playback id>: resolved onto cell A's edge
-  case "$(location_at "$1" "$2")" in "http://$EDGE_A_HOST:"*) return 0 ;; *) return 1 ;; esac
+  edge_a_location "$(location_at "$1" "$2")"
 }
 for base in $FOGHORN_B_URLS; do
   eventually 120 "cell B places the viewer on cell A's edge before the fault via $base" on_cell_a_edge "$base" "$PB"
@@ -56,7 +56,7 @@ echo "    cell A replicas for peers: $(echo "$ADDRS" | tr '\n' ' ')"
 [ "$(echo "$ADDRS" | grep -c .)" -ge 2 ] || { blocked "cell A lists fewer than two healthy Foghorn replicas"; finish; }
 FIRST=$(echo "$ADDRS" | head -1)
 TARGET=${FIRST%:*}
-[ -n "$(container_of "$TARGET")" ] || { blocked "first replica $FIRST is not a service of this stack"; finish; }
+stack_service_exists "$TARGET" || { blocked "first replica $FIRST is not a service of this target"; finish; }
 
 log "kill $TARGET ($FIRST), then $ROUNDS resolve rounds through cell B"
 KILL_TS=$(utc_now)
@@ -66,12 +66,15 @@ declare -A refused ok elsewhere
 for round in $(seq 1 "$ROUNDS"); do
   for base in $FOGHORN_B_URLS; do
     loc=$(location_at "$base" "$PB")
-    case "$loc" in
-      "http://$EDGE_A_HOST:"*) ok[$base]=$((${ok[$base]:-0} + 1)) ;;
-      "") refused[$base]=$((${refused[$base]:-0} + 1))
-        printf '  round %d %s -> %s %s\n' "$round" "$base" "$(play_status "$base" "$PB")" "$(curl -s -m 10 "$base/play/$PB/hls" | head -c 200)" ;;
-      *) elsewhere[$base]=$((${elsewhere[$base]:-0} + 1)); printf '  round %d %s -> %s\n' "$round" "$base" "$loc" ;;
-    esac
+    if edge_a_location "$loc"; then
+      ok[$base]=$((${ok[$base]:-0} + 1))
+    elif [ -z "$loc" ]; then
+      refused[$base]=$((${refused[$base]:-0} + 1))
+      printf '  round %d %s -> %s %s\n' "$round" "$base" "$(play_status "$base" "$PB")" "$(curl -s -m 10 "$base/play/$PB/hls" | head -c 200)"
+    else
+      elsewhere[$base]=$((${elsewhere[$base]:-0} + 1))
+      printf '  round %d %s -> %s\n' "$round" "$base" "$loc"
+    fi
   done
   sleep 1
 done
@@ -97,7 +100,7 @@ answered_elsewhere() {
 check "cell B logged a preparation answered by a replica other than $FIRST" answered_elsewhere
 
 restore
-healthy_again() { [ "$(docker inspect -f '{{.State.Health.Status}}' "$(container_of "$TARGET")" 2>/dev/null)" = healthy ]; }
+healthy_again() { stack_healthy "$TARGET"; }
 eventually 120 "$TARGET healthy again" healthy_again
 eventually 180 "cell B serves media again after the restore" media_at "$FOGHORN_B_URL" "$PB"
 finish

@@ -15,18 +15,8 @@ register() { # register <email> <password>
     '{email:$e,password:$p,first_name:"Stack",last_name:"Tester"} + $b' |
     curl -s -m 20 -w '\n%{http_code}' -H 'Content-Type: application/json' --data-binary @- "$BRIDGE_URL/auth/register"
 }
-mail_ids() { curl -s -m 10 "$MAILPIT_API/api/v1/search?query=to:$1" | jq -r '.messages[]?.ID'; }
-verify_token() { # verify_token <email>: the token from the newest verification mail
-  local id
-  id=$(mail_ids "$1" | head -1)
-  [ -n "$id" ] || return 1
-  curl -s -m 10 "$MAILPIT_API/api/v1/message/$id" | jq -r '.Text // ""' |
-    grep -oE 'verify-email#token=[A-Za-z0-9%_.~-]+' | head -1 | sed 's/.*token=//' | python3 -c 'import sys,urllib.parse;print(urllib.parse.unquote(sys.stdin.read().strip()))'
-}
-has_mail() { [ -n "$(mail_ids "$1")" ]; }
-
 log "register -> email -> verify -> login -> first stream"
-EMAIL="stack-$(date +%s)-$RANDOM@stack.test"
+EMAIL=$(test_email "$(date +%s)-$RANDOM")
 PASSWORD="Stack-$(openssl rand -hex 8 2>/dev/null || echo $RANDOM$RANDOM)"
 R=$(register "$EMAIL" "$PASSWORD")
 code=$(echo "$R" | tail -1)
@@ -39,8 +29,8 @@ else
   fail "register: $R"
   finish
 fi
-eventually 60 "verification email delivered to Mailpit" has_mail "$EMAIL"
-TOKEN=$(verify_token "$EMAIL")
+eventually 60 "verification email delivered" mail_seen "$EMAIL"
+TOKEN=$(mail_token "$EMAIL")
 check "email carries a verify link" [ -n "$TOKEN" ]
 V=$(jq -cn --arg t "$TOKEN" '{token:$t}' | curl -s -m 20 -w '\n%{http_code}' -H 'Content-Type: application/json' --data-binary @- "$BRIDGE_URL/auth/verify")
 check "verify link accepted ($(echo "$V" | tail -1))" [ "$(echo "$V" | tail -1)" = 200 ]
@@ -56,19 +46,35 @@ else
 fi
 
 log "outbox: first SMTP attempt fails, a retry delivers"
-if curl -s -m 5 -o /dev/null -w '%{http_code}' "$MAILPIT_API/api/v1/chaos" | grep -q 200; then
-  EMAIL2="stack-retry-$(date +%s)-$RANDOM@stack.test"
+if [ "${STACK_TARGET:-stack}" = staging ] && declare -F mail_fault_start >/dev/null; then
+  EMAIL2=$(test_email "retry-$(date +%s)-$RANDOM")
+  mail_fault_start || { blocked 'staging SMTP fault could not be installed'; finish; }
+  trap 'mail_fault_stop' EXIT
+  R=$(register "$EMAIL2" "$PASSWORD")
+  check "register accepted while SMTP refuses" [ "$(echo "$R" | tail -1)" = 201 ]
+  sleep 8
+  no_mail() { ! mail_seen "$1"; }
+  check "nothing delivered while SMTP refuses" no_mail "$EMAIL2"
+  mail_fault_stop
+  trap - EXIT
+  eventually 120 "outbox retry delivers the verification email" mail_seen "$EMAIL2"
+  T2=$(mail_token "$EMAIL2")
+  V2=$(jq -cn --arg t "$T2" '{token:$t}' | curl -s -m 20 -o /dev/null -w '%{http_code}' -H 'Content-Type: application/json' --data-binary @- "$BRIDGE_URL/auth/verify")
+  check "the retried link verifies ($V2)" [ "$V2" = 200 ]
+elif curl -s -m 5 -o /dev/null -w '%{http_code}' "$MAILPIT_API/api/v1/chaos" | grep -q 200; then
+  EMAIL2=$(test_email "retry-$(date +%s)-$RANDOM")
   curl -s -m 5 -X PUT -H 'Content-Type: application/json' "$MAILPIT_API/api/v1/chaos" \
     --data '{"Recipient":{"ErrorCode":451,"Probability":100}}' >/dev/null
   R=$(register "$EMAIL2" "$PASSWORD")
   check "register accepted while SMTP refuses" [ "$(echo "$R" | tail -1)" = 201 ]
   sleep 8
-  check "nothing delivered while SMTP refuses" bash -c '[ -z "$0" ]' "$(mail_ids "$EMAIL2")"
+  no_mail() { ! mail_seen "$1"; }
+  check "nothing delivered while SMTP refuses" no_mail "$EMAIL2"
   curl -s -m 5 -X PUT -H 'Content-Type: application/json' "$MAILPIT_API/api/v1/chaos" \
     --data '{"Recipient":{"ErrorCode":451,"Probability":0}}' >/dev/null
   # The outbox backs off from 30 s; allow two retries.
-  eventually 120 "outbox retry delivers the verification email" has_mail "$EMAIL2"
-  T2=$(verify_token "$EMAIL2")
+  eventually 120 "outbox retry delivers the verification email" mail_seen "$EMAIL2"
+  T2=$(mail_token "$EMAIL2")
   V2=$(jq -cn --arg t "$T2" '{token:$t}' | curl -s -m 20 -o /dev/null -w '%{http_code}' -H 'Content-Type: application/json' --data-binary @- "$BRIDGE_URL/auth/verify")
   check "the retried link verifies ($V2)" [ "$V2" = 200 ]
 else

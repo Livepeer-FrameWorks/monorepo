@@ -4,22 +4,38 @@
 # (22P02 persistence errors, Mist core dumps, "completed" then "exhausted",
 # refusals of an unmappable state page) matches one of these.
 #
-#   logcheck.sh [since]   since: docker logs --since value (default: whole run)
+#   logcheck.sh [since] [scenario]   since: docker logs --since value
 #
 # Mist FAIL lines are defects unless allowlisted below with the reason.
 set -uo pipefail
 
-# shellcheck source=scripts/stack/common.sh
-. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/common.sh"
+here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+if [ "${STACK_TARGET:-stack}" = staging ]; then
+  # shellcheck source=scripts/stack/lib.sh
+  . "$here/lib.sh"
+  stack_repo_root=${STACK_REPO:-"$(cd "$here/../.." && pwd)"}
+else
+  # shellcheck source=scripts/stack/common.sh
+  . "$here/common.sh"
+  stack_services() { stack_compose ps --services 2>/dev/null; }
+  stack_logs() { stack_compose logs --no-color --no-log-prefix "$@" 2>/dev/null; }
+fi
 cd "$stack_repo_root" || exit 1
 
 since="${1:-}"
+scenario="${2:-}"
 since_args=()
 [ -n "$since" ] && since_args=(--since "$since")
 
 # "Address already in use": a connector replacement raced the listener it
 # replaces, which leaves the node without that protocol.
 signatures='core dumped|dumped core|SIGSEGV|SIGABRT|terminate called|^panic:|goroutine [0-9]+ \[running\]|SQLSTATE|exhausted retries|Could not map process-controlled|unrecoverable error|Address already in use'
+case "$scenario" in
+  03-* | 04-* | 05-* | 24-*) scenario_signatures='PROCESS_TRACKS_CHANGED|Failed to load page|header.*not declared|Failed to claim thumbnail attempt|Thumbnail upload denied|freeze failed' ;;
+  25-*) scenario_signatures='PROCESS_TRACKS_CHANGED|Failed to load page|header.*not declared|Failed to claim thumbnail attempt|freeze failed|Freeze request: local path not found' ;;
+  26-*) scenario_signatures='DUPLICATE_INGEST|duplicate ingest|admission.*abandoned.*active' ;;
+  *) scenario_signatures='' ;;
+esac
 # Mist FAIL| lines that are expected in the stack, with why:
 #   the Livepeer fallback scenarios kill the gateway on purpose, which surfaces
 #   only as connection-level failures (a refused or reset connection, and the
@@ -48,8 +64,8 @@ trap 'rm -f "$out"' EXIT
 #   declined under dynamic capacity management while the host was loaded). Mist gives up on the
 #   gateway and Foghorn records the stream as degraded to local renditions.
 stream_names_logged_by() { # stream_names_logged_by <service regex> <fixed text> <stream regex>
-  stack_compose ps --services 2>/dev/null | grep -E "$1" | while IFS= read -r svc; do
-    stack_compose logs --no-color --no-log-prefix ${since_args[@]+"${since_args[@]}"} "$svc" 2>/dev/null
+  stack_services | grep -E "$1" | while IFS= read -r svc; do
+    stack_logs ${since_args[@]+"${since_args[@]}"} "$svc"
   done | grep -F "$2" | grep -oE "$3" | sort -u
 }
 ended_session_streams="$(stream_names_logged_by '^foghorn' 'livepeer auth: refused a transcode of an ended ingest session' \
@@ -73,17 +89,30 @@ drop_designed_refusals() { # stdin: log lines; drops each allowlisted refusal of
 }
 
 found=0
+sources=$(stack_services)
+if [ -z "$sources" ]; then
+  echo 'logcheck: FAIL (no log sources)' >&2
+  exit 1
+fi
 while IFS= read -r svc; do
   [ -n "$svc" ] || continue
-  stack_compose logs --no-color --no-log-prefix ${since_args[@]+"${since_args[@]}"} "$svc" 2>/dev/null >"$out" || continue
+  if ! stack_logs ${since_args[@]+"${since_args[@]}"} "$svc" >"$out"; then
+    printf 'logcheck: cannot read %s logs\n' "$svc" >&2
+    found=1
+    continue
+  fi
   hits="$(grep -E "$signatures" "$out" | grep -vE "$signature_allow" | drop_designed_refusals || true)"
+  if [ -n "$scenario_signatures" ]; then
+    scenario_hits="$(grep -iE "$scenario_signatures" "$out" || true)"
+    [ -n "$scenario_hits" ] && hits="${hits}${hits:+$'\n'}${scenario_hits}"
+  fi
   mist_fails="$(grep -E 'FAIL\|' "$out" | grep -vE "$mist_fail_allow" | drop_designed_refusals || true)"
   if [ -n "$hits" ] || [ -n "$mist_fails" ]; then
     found=1
     printf '\n== %s\n' "$svc"
     printf '%s\n' "$hits" "$mist_fails" | sed '/^$/d' | sort | uniq -c | sort -rn | head -20
   fi
-done < <(stack_compose ps --services 2>/dev/null)
+done <<<"$sources"
 
 if [ "$found" -ne 0 ]; then
   echo

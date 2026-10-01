@@ -10,7 +10,7 @@
 . "$(dirname "$0")/../lib.sh"
 
 VIEWERS=${STACK_RESTART_VIEWERS:-3}
-need ffmpeg jq curl python3 docker || finish
+need ffmpeg jq curl python3 || finish
 
 PUBS=() SIDS=() INS=() PBS=() POLLERS=()
 cleanup() {
@@ -61,7 +61,11 @@ fi
 
 log "restart Helmsman on $STACK_EDGE_A_SERVICE"
 RESTART_TS=$(utc_now)
-stack_exec "$STACK_EDGE_A_SERVICE" /command/s6-svc -r /run/service/helmsman || { fail "restart Helmsman"; finish; }
+if [ "${STACK_TARGET:-stack}" = staging ]; then
+  stack_ctl restart "${STACK_HELMSMAN_A_SERVICE:-helmsman-a}" || { fail "restart Helmsman"; finish; }
+else
+  stack_exec "$STACK_EDGE_A_SERVICE" /command/s6-svc -r /run/service/helmsman || { fail "restart Helmsman"; finish; }
+fi
 rebuilt() { log_has "$RESTART_TS" 'Rebuilt playback sessions from Mist' "$STACK_EDGE_A_SERVICE"; }
 eventually 60 "the restarted Helmsman rebuilt its sessions from Mist" rebuilt || finish
 fetched() {

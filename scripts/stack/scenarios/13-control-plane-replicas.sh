@@ -9,13 +9,10 @@
 # publish), clients pinned to one replica (pick_first) or to a draining one.
 . "$(dirname "$0")/../lib.sh"
 
-need ffmpeg jq curl getent || finish
+need ffmpeg jq curl || finish
 
-replica_count() { getent ahostsv4 "$1" | awk '{print $1}' | sort -u | wc -l | tr -d ' '; }
-two_replicas() { [ "$(replica_count "$1")" -ge 2 ]; }
-running() { # running <service>: the compose service has a running container
-  [ "$(docker compose -p "$COMPOSE_PROJECT_NAME" ps --status running -q "$1" 2>/dev/null | wc -l | tr -d ' ')" -ge 1 ]
-}
+two_replicas() { [ "$(stack_replica_count "$1")" -ge 2 ]; }
+running() { stack_running "$1"; }
 stopped() { ! running "$1"; }
 serving_again() { running "$1" && two_replicas "$1"; }
 streams_listed() { json_has "$(gql '{streamsConnection(page:{first:1}){totalCount}}')" '.data.streamsConnection.totalCount >= 0'; }

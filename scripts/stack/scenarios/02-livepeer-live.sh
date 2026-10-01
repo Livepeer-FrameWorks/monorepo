@@ -10,6 +10,7 @@
 GATEWAY=${STACK_LIVEPEER_GATEWAY_A:-livepeer-gateway-a}
 SOURCE_H=480
 need ffmpeg jq curl || finish
+SINCE=$(utc_now)
 
 S=$(create_stream "stack-livepeer-$(date +%s)" false)
 SID=$(echo "$S" | jq -r '.id // empty')
@@ -40,11 +41,16 @@ check "ingest session not degraded while the gateway is up" [ -z "$(degraded_at)
 tallest=$(video_heights "$UUID" | tail -1)
 check "no rendition taller than the ${SOURCE_H}p source (tallest ${tallest:-none})" [ "${tallest:-0}" -le "$SOURCE_H" ]
 every_replica "Livepeer renditions play" "$PB" media_at
+cleared=$(log_json "$SINCE" \
+  "select(.msg == \"Node lifecycle cleared stale replicated stream\" and .internal_name == \"$INTERNAL\") | .time" \
+  foghorn-b foghorn-b-2)
+check 'first cross-cell play was not evicted by a node lifecycle snapshot' [ -z "$cleared" ]
 
 log "gateway dies -> CPU fallback"
 if stack_ctl stop "$GATEWAY"; then
   is_degraded() { [ -n "$(degraded_at)" ]; }
   eventually 90 "Foghorn records the transcode degradation" is_degraded
+  eventually 30 "Foghorn logs the live CPU fallback" log_has "$SINCE" 'Stream transcode degraded to local processing' foghorn foghorn-2
   # One segment window after the switch the CPU renditions carry the same ladder.
   eventually 60 "CPU fallback produces the same 360/480 ladder" ladder
   tallest=$(video_heights "$UUID" | tail -1)

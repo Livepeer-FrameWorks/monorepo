@@ -28,10 +28,9 @@ CONTROL_PORT=${STACK_FOGHORN_CONTROL_PORT:-18029}
 BACKLOG=${STACK_REORDER_BACKLOG_STREAMS:-6}
 CYCLES=${STACK_REORDER_CYCLES:-3}
 FOGHORNS_A=(foghorn foghorn-2)
-need ffmpeg jq curl python3 docker || finish
+need ffmpeg jq curl python3 || finish
 netfault_start "$EDGE_SERVICE" || finish
-EDGE_CONTAINER=$(container_of "$EDGE_SERVICE")
-[ -n "$EDGE_CONTAINER" ] || { fail "find the $EDGE_SERVICE container"; finish; }
+stack_service_exists "$EDGE_SERVICE" || { fail "find the $EDGE_SERVICE target"; finish; }
 
 PUBS=() STREAMS=()
 DECKLOG_PAUSED=0
@@ -60,10 +59,12 @@ edge_metric() { # edge_metric <name>: Helmsman's gauge value inside the edge
 control_connected() { [ "$(edge_metric helmsman_control_stream_connected)" = 1 ]; }
 control_down() { ! control_connected; }
 # rewrite_waiting <since>: Helmsman logged that the target's PUSH_REWRITE waits
-# for the runtime's undelivered end triggers. Read from the container directly:
+# for the runtime's undelivered end triggers. Read from its service log directly:
 # the check runs inside the PUSH_REWRITE budget.
 rewrite_waiting() {
-  docker logs --since "$1" "$EDGE_CONTAINER" 2>&1 | grep 'PUSH_REWRITE waits for the runtime' | grep -qF "$T_IN"
+  local lines
+  lines=$(logs_since "$1" "$EDGE_SERVICE") || return 1
+  grep 'PUSH_REWRITE waits for the runtime' <<<"$lines" | grep -F "$T_IN" >/dev/null
 }
 
 new_stream "stack-reorder-$(date +%s)" || { fail "create the target stream"; finish; }

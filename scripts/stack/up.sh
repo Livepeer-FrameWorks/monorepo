@@ -32,12 +32,12 @@ psql_db() { stack_compose exec -T postgres psql -v ON_ERROR_STOP=1 -U "$1" -d "$
 # service added to docker-compose.yml never joins the stack unnoticed; add a
 # service here when a scenario starts depending on it. Left out on purpose:
 # webapps and docs (chartroom, foredeck, logbook, nginx), support and AI
-# (skipper, deckhand, steward, listmonk, chatwoot, ollama), and billing or
-# incident consumers no scenario asserts on (periscope-metering, lookout).
+# (skipper, deckhand, steward, listmonk, chatwoot, ollama), and incident
+# consumers no scenario asserts on (lookout).
 STACK_SERVICES=(
   postgres kafka kafka-init clickhouse
   quartermaster quartermaster-2 commodore commodore-2 purser bridge decklog signalman bosun chandler
-  periscope-ingest periscope-query
+  periscope-ingest periscope-query periscope-metering
   storage-init storage-init-b "s3-$STACK_S3"
   foghorn foghorn-2 foghorn-redis foghorn-b foghorn-b-2 foghorn-redis-b
   edge edge-b edge-proxy-a edge-proxy-b
@@ -80,6 +80,11 @@ if [ ! -s "$ENV_FILE" ]; then
     printf 'CLICKHOUSE_PASSWORD=frameworks_dev\n'
     printf 'CLICKHOUSE_READONLY_PASSWORD=readonly_dev\n'
     printf 'CLICKHOUSE_ANALYTICS_PASSWORD=analytics_dev\n'
+    printf 'SUPPLIER_NAME=FrameWorks-Stack-Test\n'
+    printf 'SUPPLIER_ADDRESS=Stack-Test-1-Amsterdam\n'
+    printf 'SUPPLIER_VAT_NUMBER=NL000000000B01\n'
+    printf 'SUPPLIER_REGISTRATION_NUMBER=00000000\n'
+    printf 'SUPPLIER_COUNTRY=NL\n'
   } >>"$secrets"
   (cd scripts/env && GOCACHE="$PWD/.gocache" go run . --secrets "$secrets" --output "$ENV_FILE") ||
     fail "could not generate the slot environment"
