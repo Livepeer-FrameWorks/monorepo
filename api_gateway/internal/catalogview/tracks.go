@@ -3,42 +3,71 @@
 // depends on the other. It carries no GraphQL/MCP types — only plain derivations.
 package catalogview
 
-import commodorepb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/commodore"
+import (
+	"strconv"
+	"strings"
+
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/mist"
+	commodorepb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/commodore"
+)
 
 // TrackSummary derives the flat resolution/codec/bitrate summary the VOD surfaces expose from the
-// catalog's per-track array: the first video track supplies resolution + video codec + bitrate,
-// the first audio track supplies the audio codec. Absent fields stay nil.
+// catalog's per-track array. The primary video track (mist.PrimaryVideoIndex: continuous video,
+// originals over renditions, then the largest height) supplies resolution + video codec +
+// bitrate; the primary audio track (mist.PrimaryAudioIndex: originals over transcodes) supplies
+// the audio codec. Thumbnail sprites and previews never count as video. Absent fields stay nil.
+// Catalog tracks carry no Mist track index, so remaining ties resolve to catalog order.
 func TrackSummary(tracks []*commodorepb.MediaTrack) (resolution, videoCodec, audioCodec *string, bitrateKbps *int) {
-	var haveVideo, haveAudio bool
-	for _, t := range tracks {
-		switch t.GetType() {
-		case "video":
-			if haveVideo {
-				continue
-			}
-			haveVideo = true
-			if v := t.GetResolution(); v != "" {
-				vv := v
-				resolution = &vv
-			}
-			if v := t.GetCodec(); v != "" {
-				vv := v
-				videoCodec = &vv
-			}
-			if t.BitrateKbps != nil {
-				b := int(t.GetBitrateKbps())
-				bitrateKbps = &b
-			}
-		case "audio":
-			if haveAudio {
-				continue
-			}
-			haveAudio = true
-			if v := t.GetCodec(); v != "" {
-				vv := v
-				audioCodec = &vv
-			}
+	if i := mist.PrimaryVideoIndex(len(tracks), func(i int) mist.VideoTrackFacts {
+		t := tracks[i]
+		return mist.VideoTrackFacts{
+			TrackType:   t.GetType(),
+			Codec:       t.GetCodec(),
+			SourceTrack: t.GetSourceTrack(),
+			Height:      trackHeight(t),
+			TrackIndex:  -1,
+		}
+	}); i >= 0 {
+		t := tracks[i]
+		if v := t.GetResolution(); v != "" {
+			resolution = &v
+		}
+		if v := t.GetCodec(); v != "" {
+			videoCodec = &v
+		}
+		if t.BitrateKbps != nil {
+			b := int(t.GetBitrateKbps())
+			bitrateKbps = &b
+		}
+	}
+	if i := mist.PrimaryAudioIndex(len(tracks), func(i int) mist.AudioTrackFacts {
+		t := tracks[i]
+		return mist.AudioTrackFacts{
+			TrackType:   t.GetType(),
+			SourceTrack: t.GetSourceTrack(),
+			TrackIndex:  -1,
+		}
+	}); i >= 0 {
+		if v := tracks[i].GetCodec(); v != "" {
+			audioCodec = &v
 		}
 	}
 	return resolution, videoCodec, audioCodec, bitrateKbps
+}
+
+// trackHeight returns the track's height, falling back to the "WxH" resolution string; 0 when
+// neither is known.
+func trackHeight(t *commodorepb.MediaTrack) int32 {
+	if h := t.GetHeight(); h > 0 {
+		return h
+	}
+	_, h, ok := strings.Cut(t.GetResolution(), "x")
+	if !ok {
+		return 0
+	}
+	n, err := strconv.ParseInt(strings.TrimSpace(h), 10, 32)
+	if err != nil || n < 0 {
+		return 0
+	}
+	return int32(n)
 }

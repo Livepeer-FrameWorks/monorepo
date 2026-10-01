@@ -606,7 +606,7 @@ CREATE TABLE IF NOT EXISTS commodore.clips (
     size_bytes BIGINT,
 
     -- Finalized A/V track summary (array of {type,codec,width,height,fps,resolution,
-    -- bitrateKbps,channels,sampleRate}), captured from the completion-validated
+    -- bitrateKbps,channels,sampleRate,sourceTrack}), captured from the completion-validated
     -- ProcessingJobResult and projected onto the catalog by the artifact reconciler.
     tracks JSONB,
 
@@ -689,7 +689,7 @@ CREATE TABLE IF NOT EXISTS commodore.dvr_recordings (
     duration BIGINT,
 
     -- A/V track summary (array of {type,codec,width,height,fps,resolution,bitrateKbps,
-    -- channels,sampleRate}). The parent DVR is a segment LEDGER, never muxed into one file
+    -- channels,sampleRate,sourceTrack}). The parent DVR is a segment LEDGER, never muxed into one file
     -- and never processed, so it receives no ProcessingJobResult: this stays NULL. The
     -- finalized per-file track summary lives on the chapter vod_assets rows (each chapter IS
     -- processed).
@@ -814,7 +814,7 @@ CREATE TABLE IF NOT EXISTS commodore.vod_assets (
     duration BIGINT,
 
     -- Finalized A/V track summary (array of {type,codec,width,height,fps,resolution,
-    -- bitrateKbps,channels,sampleRate}), captured from the completion-validated
+    -- bitrateKbps,channels,sampleRate,sourceTrack}), captured from the completion-validated
     -- ProcessingJobResult and projected onto the catalog by the artifact reconciler.
     tracks JSONB,
 

@@ -662,6 +662,9 @@ func TestExtractPrimaryTracks(t *testing.T) {
 	thumbnail := &ipcpb.StreamTrack{TrackType: "video", Codec: "JPEG", TrackName: "video_JPEG_160x90_0fps_pre_3", Height: proto.Int32(90)}
 	rendition := &ipcpb.StreamTrack{TrackType: "video", Codec: "H264", TrackName: "video_H264_854x480_30fps_3", Height: proto.Int32(480), SourceTrack: proto.String("0")}
 	source := &ipcpb.StreamTrack{TrackType: "video", Codec: "H264", TrackName: "video_H264_1280x720_30fps_0", Height: proto.Int32(720)}
+	// An Opus transcode of the AAC source can precede it; the source is still the primary audio.
+	opusTranscode := &ipcpb.StreamTrack{TrackType: "audio", Codec: "opus", TrackName: "audio_opus_2ch_48000hz_4", TrackIndex: proto.Int32(4), SourceTrack: proto.String("1")}
+	aacSource := &ipcpb.StreamTrack{TrackType: "audio", Codec: "AAC", TrackName: "audio_AAC_2ch_44100hz_1", TrackIndex: proto.Int32(1)}
 
 	cases := []struct {
 		name      string
@@ -675,6 +678,7 @@ func TestExtractPrimaryTracks(t *testing.T) {
 		{name: "multiple videos", tracks: []*ipcpb.StreamTrack{videoPrimary, videoSecondary, audioPrimary}, wantVideo: videoPrimary, wantAudio: audioPrimary},
 		{name: "source after thumbnail and rendition", tracks: []*ipcpb.StreamTrack{thumbnail, rendition, audioPrimary, source}, wantVideo: source, wantAudio: audioPrimary},
 		{name: "thumbnail only", tracks: []*ipcpb.StreamTrack{thumbnail, audioPrimary}, wantVideo: nil, wantAudio: audioPrimary},
+		{name: "source audio after transcode", tracks: []*ipcpb.StreamTrack{opusTranscode, source, aacSource}, wantVideo: source, wantAudio: aacSource},
 	}
 
 	for _, tc := range cases {

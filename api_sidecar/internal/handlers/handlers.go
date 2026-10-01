@@ -2338,9 +2338,8 @@ func enrichLiveTrackListTrigger(trigger *ipcpb.StreamTrackListTrigger) {
 		}
 	}
 
-	// Extract primary audio track info
-	if len(audioTracks) > 0 {
-		primary := audioTracks[0]
+	// Primary audio is the original track, never a transcode of it.
+	if primary := mist.PrimaryAudioTrack(tracks); primary != nil {
 		if primary.BitrateKbps != nil {
 			primaryAudioBitrate := *primary.BitrateKbps
 			trigger.PrimaryAudioBitrate = &primaryAudioBitrate

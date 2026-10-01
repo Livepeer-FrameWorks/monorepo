@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 
+	commodoreclient "github.com/Livepeer-FrameWorks/monorepo/pkg/clients/commodore"
 	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
 )
 
@@ -67,5 +68,25 @@ func TestMarshalRecordingTracks_NonFiniteFpsIsSanitized(t *testing.T) {
 				t.Fatalf("non-finite fps leaked into JSON: %q", got)
 			}
 		})
+	}
+}
+
+// The source track of a process output survives the durable JSON round trip, so catalog readers
+// can tell a rendition or transcode from the original track.
+func TestMarshalRecordingTracks_CarriesSourceTrack(t *testing.T) {
+	source := "1"
+	got, err := marshalRecordingTracks([]*ipcpb.StreamTrack{
+		{TrackType: "audio", Codec: "AAC"},
+		{TrackType: "audio", Codec: "opus", SourceTrack: &source},
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	tracks, err := commodoreclient.UnmarshalMediaTracks([]byte(got))
+	if err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if len(tracks) != 2 || tracks[0].SourceTrack != nil || tracks[1].GetSourceTrack() != "1" {
+		t.Fatalf("source tracks not preserved: %s", got)
 	}
 }

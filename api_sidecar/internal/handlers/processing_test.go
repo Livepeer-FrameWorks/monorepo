@@ -350,122 +350,6 @@ func TestChapterFinalizeCleansProcessingStageOnBuildFailure(t *testing.T) {
 	}
 }
 
-func TestExtractTrackMetadata_VideoAudio(t *testing.T) {
-	meta := map[string]interface{}{
-		"meta": map[string]interface{}{
-			"tracks": map[string]interface{}{
-				"video1": map[string]interface{}{
-					"codec":  "H264",
-					"width":  float64(1920),
-					"height": float64(1080),
-					"fpks":   float64(30000),
-					"bps":    float64(5000000),
-				},
-				"audio1": map[string]interface{}{
-					"codec":    "AAC",
-					"channels": float64(2),
-					"rate":     float64(48000),
-				},
-			},
-			"lastms": float64(120000),
-		},
-	}
-
-	got := extractTrackMetadata(meta)
-
-	expect := map[string]string{
-		"video_codec":       "H264",
-		"width":             "1920",
-		"height":            "1080",
-		"resolution":        "1920x1080",
-		"fps":               "30.00",
-		"bitrate_kbps":      "5000",
-		"audio_codec":       "AAC",
-		"audio_channels":    "2",
-		"audio_sample_rate": "48000",
-		"duration_ms":       "120000",
-	}
-
-	for k, v := range expect {
-		if got[k] != v {
-			t.Errorf("key %q: got %q, want %q", k, got[k], v)
-		}
-	}
-	if len(got) != len(expect) {
-		t.Errorf("result has %d keys, want %d", len(got), len(expect))
-	}
-}
-
-func TestExtractTrackMetadata_VideoOnly(t *testing.T) {
-	meta := map[string]interface{}{
-		"meta": map[string]interface{}{
-			"tracks": map[string]interface{}{
-				"video1": map[string]interface{}{
-					"codec":  "VP9",
-					"width":  float64(1280),
-					"height": float64(720),
-					"fpks":   float64(25000),
-					"bps":    float64(3000000),
-				},
-			},
-			"lastms": float64(60000),
-		},
-	}
-
-	got := extractTrackMetadata(meta)
-
-	videoKeys := []string{"video_codec", "width", "height", "resolution", "fps", "bitrate_kbps", "duration_ms"}
-	for _, k := range videoKeys {
-		if _, ok := got[k]; !ok {
-			t.Errorf("expected key %q to be present", k)
-		}
-	}
-
-	audioKeys := []string{"audio_codec", "audio_channels", "audio_sample_rate"}
-	for _, k := range audioKeys {
-		if _, ok := got[k]; ok {
-			t.Errorf("unexpected audio key %q in video-only result", k)
-		}
-	}
-}
-
-func TestExtractTrackMetadata_IgnoresThumbnailJPEGForPrimaryVideo(t *testing.T) {
-	meta := map[string]interface{}{
-		"meta": map[string]interface{}{
-			"tracks": map[string]interface{}{
-				"video_h264": map[string]interface{}{
-					"codec":  "H264",
-					"width":  float64(640),
-					"height": float64(360),
-				},
-				"video_jpeg": map[string]interface{}{
-					"codec":  "JPEG",
-					"width":  float64(1600),
-					"height": float64(900),
-				},
-			},
-		},
-	}
-
-	got := extractTrackMetadata(meta)
-
-	if got["video_codec"] != "H264" {
-		t.Fatalf("video_codec = %q, want H264", got["video_codec"])
-	}
-	if got["resolution"] != "640x360" {
-		t.Fatalf("resolution = %q, want 640x360", got["resolution"])
-	}
-}
-
-func TestExtractTrackMetadata_EmptyMeta(t *testing.T) {
-	for _, meta := range []map[string]interface{}{nil, {}, {"unrelated": "data"}} {
-		got := extractTrackMetadata(meta)
-		if len(got) != 0 {
-			t.Errorf("expected empty map for meta %v, got %v", meta, got)
-		}
-	}
-}
-
 func TestProcessingTracksCompleteAllowsMissingOptionalProcTracks(t *testing.T) {
 	req := expectedProcessingTracks(`[{"process":"AV","codec":"opus","track_select":"audio=all&video=none&subtitle=none"},{"process":"Thumbs","track_select":"video=lowres"}]`)
 	presence := processingTrackPresence{
@@ -2007,4 +1891,35 @@ func packedString(v string) []byte {
 	out[0] = 0x02
 	binary.BigEndian.PutUint32(out[1:], uint32(len(v)))
 	return append(out, []byte(v)...)
+}
+
+func TestExtractActiveStreamMetadataPrefersSourceTracks(t *testing.T) {
+	got := extractActiveStreamMetadata(map[string]interface{}{
+		"health": map[string]interface{}{
+			"audio_AAC_2ch_44100hz_1": map[string]interface{}{
+				"codec": "AAC", "channels": float64(2), "rate": float64(44100), "idx": float64(1),
+			},
+			"audio_opus_2ch_48000hz_3": map[string]interface{}{
+				"codec": "opus", "channels": float64(2), "rate": float64(48000), "idx": float64(3), "source": "1",
+			},
+			"video_H264_1920x1080_0": map[string]interface{}{
+				"codec": "H264", "width": float64(1920), "height": float64(1080), "idx": float64(0),
+			},
+			"video_H264_1280x720_2": map[string]interface{}{
+				"codec": "H264", "width": float64(1280), "height": float64(720), "idx": float64(2), "source": "0",
+			},
+			"video_JPEG_1600x900_4": map[string]interface{}{
+				"codec": "JPEG", "width": float64(1600), "height": float64(2160), "idx": float64(4),
+			},
+		},
+	})
+	want := map[string]string{
+		"video_codec": "H264", "resolution": "1920x1080", "width": "1920", "height": "1080",
+		"audio_codec": "AAC", "audio_channels": "2", "audio_sample_rate": "44100",
+	}
+	for k, v := range want {
+		if got[k] != v {
+			t.Errorf("%s = %q, want %q", k, got[k], v)
+		}
+	}
 }

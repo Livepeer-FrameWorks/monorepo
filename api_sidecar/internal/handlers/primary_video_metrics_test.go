@@ -104,3 +104,30 @@ func TestPrimaryVideoUnknownHeightStaysUnknown(t *testing.T) {
 		t.Fatalf("poll reported unknown source as height %v tier %v", poll.PrimaryHeight, poll.QualityTier)
 	}
 }
+
+// An Opus transcode of an AAC source can precede the source; the source is the
+// primary audio on the LIVE_TRACK_LIST trigger and the stream API poll.
+func TestPrimaryAudioIsSourceNotTranscode(t *testing.T) {
+	tracks := []*ipcpb.StreamTrack{
+		{TrackType: "audio", Codec: "opus", TrackIndex: int32Ptr(3), SourceTrack: stringPtr("1"), Channels: int32Ptr(2), SampleRate: int32Ptr(48000)},
+		{TrackType: "video", Codec: "H264", TrackIndex: int32Ptr(0), Width: int32Ptr(1920), Height: int32Ptr(1080)},
+		{TrackType: "audio", Codec: "AAC", TrackIndex: int32Ptr(1), Channels: int32Ptr(2), SampleRate: int32Ptr(44100)},
+	}
+	list := &ipcpb.StreamTrackListTrigger{Tracks: tracks}
+	enrichLiveTrackListTrigger(list)
+	if list.GetPrimaryAudioCodec() != "AAC" || list.GetPrimaryAudioSampleRate() != 44100 {
+		t.Errorf("track list primary audio = %q @ %d, want the AAC source", list.GetPrimaryAudioCodec(), list.GetPrimaryAudioSampleRate())
+	}
+	if list.GetAudioTrackCount() != 2 {
+		t.Fatal("transcode must remain in the full track inventory")
+	}
+	details := []map[string]any{
+		{"type": "audio", "codec": "opus", "track_index": 3, "source_track": "1", "channels": 2, "sample_rate": 48000},
+		{"type": "video", "codec": "H264", "track_index": 0, "width": 1920, "height": 1080},
+		{"type": "audio", "codec": "AAC", "track_index": 1, "channels": 2, "sample_rate": 44100},
+	}
+	poll := convertStreamAPIToMistTrigger("node", "live+stream", "stream", nil, nil, details, 3, logging.NewLogger()).GetStreamLifecycleUpdate()
+	if poll.GetAudioCodec() != "AAC" || poll.GetAudioSampleRate() != 44100 {
+		t.Errorf("poll primary audio = %q @ %d, want the AAC source", poll.GetAudioCodec(), poll.GetAudioSampleRate())
+	}
+}

@@ -1048,6 +1048,7 @@ message MediaTrack {
   optional int32 bitrate_kbps = 7;
   optional int32 channels = 8;        // audio
   optional int32 sample_rate = 9;     // audio (Hz)
+  optional string source_track = 10;  // track a process output (rendition, transcode) was derived from; unset on original tracks
 }
 
 // UpdateArtifactCatalogSnapshot carries the authoritative catalog state. MOST fields are

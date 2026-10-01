@@ -3744,7 +3744,6 @@ func convertStreamAPIToMistTrigger(nodeID, streamName, internalName string, stre
 	var primaryBitrate int32
 	var primaryCodec string
 	var primaryVideoBufferMs, primaryVideoJitterMs uint32
-	var foundAudio bool
 
 	if len(trackDetails) > 0 {
 		// Serialize full track details to JSON for storage
@@ -3769,9 +3768,20 @@ func convertStreamAPIToMistTrigger(nodeID, streamName, internalName string, stre
 			}
 			return facts
 		})
+		primaryAudioIdx := mist.PrimaryAudioIndex(len(trackDetails), func(i int) mist.AudioTrackFacts {
+			track := trackDetails[i]
+			facts := mist.AudioTrackFacts{
+				TrackType:   getString(track["type"]),
+				SourceTrack: getString(track["source_track"]),
+				TrackIndex:  -1,
+			}
+			if idx, ok := track["track_index"].(int); ok {
+				facts.TrackIndex = int32(idx)
+			}
+			return facts
+		})
 
 		for i, track := range trackDetails {
-			trackType := getString(track["type"])
 
 			// Primary video is the original continuous-video track with the
 			// largest known height; thumbnails and renditions never describe
@@ -3843,9 +3853,8 @@ func convertStreamAPIToMistTrigger(nodeID, streamName, internalName string, stre
 				}
 			}
 
-			// Extract primary audio track info
-			if trackType == "audio" && !foundAudio {
-				foundAudio = true
+			// Primary audio is the original track, never a transcode of it.
+			if i == primaryAudioIdx {
 				if channels, ok := track["channels"].(int); ok && channels > 0 {
 					ch := uint32(channels)
 					streamLifecycleUpdate.AudioChannels = &ch

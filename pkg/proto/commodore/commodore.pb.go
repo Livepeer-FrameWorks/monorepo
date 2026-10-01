@@ -4348,8 +4348,9 @@ type MediaTrack struct {
 	Fps           *float64               `protobuf:"fixed64,5,opt,name=fps,proto3,oneof" json:"fps,omitempty"`             // video
 	Resolution    *string                `protobuf:"bytes,6,opt,name=resolution,proto3,oneof" json:"resolution,omitempty"` // "1920x1080"
 	BitrateKbps   *int32                 `protobuf:"varint,7,opt,name=bitrate_kbps,json=bitrateKbps,proto3,oneof" json:"bitrate_kbps,omitempty"`
-	Channels      *int32                 `protobuf:"varint,8,opt,name=channels,proto3,oneof" json:"channels,omitempty"`                       // audio
-	SampleRate    *int32                 `protobuf:"varint,9,opt,name=sample_rate,json=sampleRate,proto3,oneof" json:"sample_rate,omitempty"` // audio (Hz)
+	Channels      *int32                 `protobuf:"varint,8,opt,name=channels,proto3,oneof" json:"channels,omitempty"`                          // audio
+	SampleRate    *int32                 `protobuf:"varint,9,opt,name=sample_rate,json=sampleRate,proto3,oneof" json:"sample_rate,omitempty"`    // audio (Hz)
+	SourceTrack   *string                `protobuf:"bytes,10,opt,name=source_track,json=sourceTrack,proto3,oneof" json:"source_track,omitempty"` // track a process output (rendition, transcode) was derived from; unset on original tracks
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -4445,6 +4446,13 @@ func (x *MediaTrack) GetSampleRate() int32 {
 		return *x.SampleRate
 	}
 	return 0
+}
+
+func (x *MediaTrack) GetSourceTrack() string {
+	if x != nil && x.SourceTrack != nil {
+		return *x.SourceTrack
+	}
+	return ""
 }
 
 // UpdateArtifactCatalogSnapshot carries the authoritative catalog state. MOST fields are
@@ -15344,7 +15352,7 @@ const file_commodore_proto_rawDesc = "" +
 	"\x0fretention_until\x18\x03 \x01(\v2\x1a.google.protobuf.TimestampH\x00R\x0eretentionUntil\x88\x01\x01B\x12\n" +
 	"\x10_retention_until\"6\n" +
 	"\x1aUpdateDVRRetentionResponse\x12\x18\n" +
-	"\aupdated\x18\x01 \x01(\bR\aupdated\"\xf3\x02\n" +
+	"\aupdated\x18\x01 \x01(\bR\aupdated\"\xac\x03\n" +
 	"\n" +
 	"MediaTrack\x12\x12\n" +
 	"\x04type\x18\x01 \x01(\tR\x04type\x12\x14\n" +
@@ -15358,14 +15366,17 @@ const file_commodore_proto_rawDesc = "" +
 	"\fbitrate_kbps\x18\a \x01(\x05H\x04R\vbitrateKbps\x88\x01\x01\x12\x1f\n" +
 	"\bchannels\x18\b \x01(\x05H\x05R\bchannels\x88\x01\x01\x12$\n" +
 	"\vsample_rate\x18\t \x01(\x05H\x06R\n" +
-	"sampleRate\x88\x01\x01B\b\n" +
+	"sampleRate\x88\x01\x01\x12&\n" +
+	"\fsource_track\x18\n" +
+	" \x01(\tH\aR\vsourceTrack\x88\x01\x01B\b\n" +
 	"\x06_widthB\t\n" +
 	"\a_heightB\x06\n" +
 	"\x04_fpsB\r\n" +
 	"\v_resolutionB\x0f\n" +
 	"\r_bitrate_kbpsB\v\n" +
 	"\t_channelsB\x0e\n" +
-	"\f_sample_rate\"\x91\t\n" +
+	"\f_sample_rateB\x0f\n" +
+	"\r_source_track\"\x91\t\n" +
 	"$UpdateArtifactCatalogSnapshotRequest\x12\x1b\n" +
 	"\ttenant_id\x18\x01 \x01(\tR\btenantId\x12;\n" +
 	"\n" +

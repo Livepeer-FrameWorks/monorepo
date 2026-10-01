@@ -27,7 +27,7 @@ func marshalRecordingTracks(tracks []*ipcpb.StreamTrack) (string, error) {
 
 // mapStreamTracks translates the wire StreamTrack summary into the commodore
 // MediaTrack projection, keeping only the durable A/V descriptors (codec/geometry/
-// rates) and dropping transient timing/jitter metrics. fps is the only float; a non-finite value
+// rates/source track) and dropping transient timing/jitter metrics. fps is the only float; a non-finite value
 // (NaN/±Inf) is dropped so JSON serialization can't fail and lose the authoritative track set.
 func mapStreamTracks(tracks []*ipcpb.StreamTrack) []*commodorepb.MediaTrack {
 	out := make([]*commodorepb.MediaTrack, 0, len(tracks))
@@ -45,6 +45,7 @@ func mapStreamTracks(tracks []*ipcpb.StreamTrack) []*commodorepb.MediaTrack {
 			BitrateKbps: t.BitrateKbps,
 			Channels:    t.Channels,
 			SampleRate:  t.SampleRate,
+			SourceTrack: t.SourceTrack,
 		})
 	}
 	return out

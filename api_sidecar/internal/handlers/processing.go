@@ -2617,145 +2617,104 @@ func waitForProcessingOutput(outputPath string, timeout time.Duration) (int64, e
 	}
 }
 
-// extractTrackMetadata extracts video/audio metadata from MistServer's stream info.
-func extractTrackMetadata(meta map[string]interface{}) map[string]string {
-	outputs := map[string]string{}
-
-	metaRaw, ok := meta["meta"]
-	if !ok {
-		return outputs
-	}
-	metaMap, ok := metaRaw.(map[string]interface{})
-	if !ok {
-		return outputs
-	}
-	tracksRaw, ok := metaMap["tracks"]
-	if !ok {
-		return outputs
-	}
-	tracks, ok := tracksRaw.(map[string]interface{})
-	if !ok {
-		return outputs
-	}
-
-	for name, trackRaw := range tracks {
-		track, ok := trackRaw.(map[string]interface{})
-		if !ok {
-			continue
-		}
-
-		if strings.HasPrefix(name, "video") {
-			if v, ok := track["codec"].(string); ok && normalizeTrackCodec(v) == "JPEG" {
-				continue
-			}
-			if _, exists := outputs["video_codec"]; exists {
-				continue
-			}
-			if v, ok := track["codec"].(string); ok {
-				outputs["video_codec"] = normalizeTrackCodec(v)
-			}
-			if v, ok := track["width"].(float64); ok {
-				outputs["width"] = strconv.Itoa(int(v))
-			}
-			if v, ok := track["height"].(float64); ok {
-				outputs["height"] = strconv.Itoa(int(v))
-			}
-			if w, ok := outputs["width"]; ok {
-				if ht, ok := outputs["height"]; ok {
-					outputs["resolution"] = w + "x" + ht
-				}
-			}
-			if v, ok := track["fpks"].(float64); ok && v > 0 {
-				outputs["fps"] = fmt.Sprintf("%.2f", v/1000.0)
-			}
-			if v, ok := track["bps"].(float64); ok && v > 0 {
-				outputs["bitrate_kbps"] = strconv.Itoa(int(v / 1000))
-			}
-		}
-
-		if strings.HasPrefix(name, "audio") {
-			if v, ok := track["codec"].(string); ok {
-				outputs["audio_codec"] = v
-			}
-			if v, ok := track["channels"].(float64); ok {
-				outputs["audio_channels"] = strconv.Itoa(int(v))
-			}
-			if v, ok := track["rate"].(float64); ok {
-				outputs["audio_sample_rate"] = strconv.Itoa(int(v))
-			}
-		}
-	}
-
-	if v, ok := metaMap["lastms"].(float64); ok && v > 0 {
-		outputs["duration_ms"] = strconv.Itoa(int(v))
-	}
-
-	return outputs
-}
-
 func extractActiveStreamMetadata(streamData map[string]interface{}) map[string]string {
 	outputs := map[string]string{}
 	health, ok := streamData["health"].(map[string]interface{})
 	if !ok {
 		return outputs
 	}
-	bestVideo := map[string]string{}
-	bestVideoHeight := -1
+	// Health is a JSON object, so names are sorted to make the primary-track tie-break
+	// deterministic; the primary video and audio tracks follow the shared Mist rules.
+	names := make([]string, 0, len(health))
 	for name, trackRaw := range health {
-		track, ok := trackRaw.(map[string]interface{})
-		if !ok {
-			continue
+		if _, ok := trackRaw.(map[string]interface{}); ok {
+			names = append(names, name)
 		}
-		codec := ""
-		if v, ok := track["codec"].(string); ok {
-			codec = normalizeTrackCodec(v)
+	}
+	sort.Strings(names)
+	tracks := make([]map[string]interface{}, 0, len(names))
+	for _, name := range names {
+		if track, ok := health[name].(map[string]interface{}); ok {
+			tracks = append(tracks, track)
 		}
-		if strings.HasPrefix(name, "video_") && codec != "JPEG" {
-			candidate := map[string]string{}
-			if codec != "" {
-				candidate["video_codec"] = codec
-			}
-			height := 0
-			if v, ok := track["width"].(float64); ok {
-				candidate["width"] = strconv.Itoa(int(v))
-			}
-			if v, ok := track["height"].(float64); ok {
-				height = int(v)
-				candidate["height"] = strconv.Itoa(height)
-			}
-			if w, ok := candidate["width"]; ok {
-				if ht, ok := candidate["height"]; ok {
-					candidate["resolution"] = w + "x" + ht
-				}
-			}
-			if v, ok := track["fpks"].(float64); ok && v > 0 {
-				candidate["fps"] = fmt.Sprintf("%.2f", v/1000.0)
-			}
-			if v, ok := track["kbits"].(float64); ok && v > 0 {
-				candidate["bitrate_kbps"] = strconv.Itoa(int(v))
-			}
-			if height > bestVideoHeight {
-				bestVideoHeight = height
-				bestVideo = candidate
+	}
+	trackType := func(i int) string {
+		switch {
+		case strings.HasPrefix(names[i], "video_"):
+			return "video"
+		case strings.HasPrefix(names[i], "audio_"):
+			return "audio"
+		}
+		return ""
+	}
+	trackIndex := func(i int) int32 {
+		if idx, ok := mapInt64(tracks[i], "idx", "track_index"); ok {
+			return int32(idx)
+		}
+		return -1
+	}
+	stringField := func(track map[string]interface{}, key string) string {
+		if v, ok := track[key].(string); ok {
+			return v
+		}
+		return ""
+	}
+
+	if i := mist.PrimaryVideoIndex(len(tracks), func(i int) mist.VideoTrackFacts {
+		height := int32(0)
+		if v, ok := tracks[i]["height"].(float64); ok {
+			height = int32(v)
+		}
+		return mist.VideoTrackFacts{
+			TrackType:   trackType(i),
+			Codec:       normalizeTrackCodec(stringField(tracks[i], "codec")),
+			SourceTrack: stringField(tracks[i], "source"),
+			Height:      height,
+			TrackIndex:  trackIndex(i),
+		}
+	}); i >= 0 {
+		track := tracks[i]
+		if codec := normalizeTrackCodec(stringField(track, "codec")); codec != "" {
+			outputs["video_codec"] = codec
+		}
+		if v, ok := track["width"].(float64); ok {
+			outputs["width"] = strconv.Itoa(int(v))
+		}
+		if v, ok := track["height"].(float64); ok {
+			outputs["height"] = strconv.Itoa(int(v))
+		}
+		if w, ok := outputs["width"]; ok {
+			if ht, ok := outputs["height"]; ok {
+				outputs["resolution"] = w + "x" + ht
 			}
 		}
-		if strings.HasPrefix(name, "audio_") {
-			if codec != "" {
-				outputs["audio_codec"] = codec
-			}
-			if v, ok := track["channels"].(float64); ok {
-				outputs["audio_channels"] = strconv.Itoa(int(v))
-			}
-			if v, ok := track["rate"].(float64); ok {
-				outputs["audio_sample_rate"] = strconv.Itoa(int(v))
-			}
+		if v, ok := track["fpks"].(float64); ok && v > 0 {
+			outputs["fps"] = fmt.Sprintf("%.2f", v/1000.0)
+		}
+		if v, ok := track["kbits"].(float64); ok && v > 0 {
+			outputs["bitrate_kbps"] = strconv.Itoa(int(v))
+		}
+	}
+	if i := mist.PrimaryAudioIndex(len(tracks), func(i int) mist.AudioTrackFacts {
+		return mist.AudioTrackFacts{
+			TrackType:   trackType(i),
+			SourceTrack: stringField(tracks[i], "source"),
+			TrackIndex:  trackIndex(i),
+		}
+	}); i >= 0 {
+		track := tracks[i]
+		if codec := normalizeTrackCodec(stringField(track, "codec")); codec != "" {
+			outputs["audio_codec"] = codec
+		}
+		if v, ok := track["channels"].(float64); ok {
+			outputs["audio_channels"] = strconv.Itoa(int(v))
+		}
+		if v, ok := track["rate"].(float64); ok {
+			outputs["audio_sample_rate"] = strconv.Itoa(int(v))
 		}
 	}
 	if v, ok := streamData["lastms"].(float64); ok && v > 0 {
 		outputs["duration_ms"] = strconv.Itoa(int(v))
-	}
-	for k, v := range bestVideo {
-		outputs[k] = v
 	}
 	return outputs
 }

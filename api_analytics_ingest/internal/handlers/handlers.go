@@ -2530,16 +2530,9 @@ func (h *AnalyticsHandler) processStreamBuffer(ctx context.Context, event kafka.
 
 // extractPrimaryTracks returns the video track that the Helmsman quality tier
 // describes (original continuous video with the largest known height, never a
-// thumbnail or rendition) and the first audio track.
+// thumbnail or rendition) and the original audio track (never a transcode).
 func extractPrimaryTracks(tracks []*ipcpb.StreamTrack) (video, audio *ipcpb.StreamTrack) {
-	video = mist.PrimaryVideoTrack(tracks)
-	for _, t := range tracks {
-		if t.GetTrackType() == "audio" {
-			audio = t
-			break
-		}
-	}
-	return
+	return mist.PrimaryVideoTrack(tracks), mist.PrimaryAudioTrack(tracks)
 }
 
 // processStreamEnd handles STREAM_END webhook events

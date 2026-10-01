@@ -20,6 +20,7 @@ type mediaTrackJSON struct {
 	BitrateKbps *int32   `json:"bitrateKbps,omitempty"`
 	Channels    *int32   `json:"channels,omitempty"`
 	SampleRate  *int32   `json:"sampleRate,omitempty"`
+	SourceTrack *string  `json:"sourceTrack,omitempty"`
 }
 
 // MarshalMediaTracks serializes a MediaTrack slice to the JSONB storage shape.
@@ -32,7 +33,7 @@ func MarshalMediaTracks(tracks []*commodorepb.MediaTrack) ([]byte, error) {
 		rows = append(rows, mediaTrackJSON{
 			Type: t.GetType(), Codec: t.GetCodec(), Width: t.Width, Height: t.Height,
 			Fps: t.Fps, Resolution: t.Resolution, BitrateKbps: t.BitrateKbps,
-			Channels: t.Channels, SampleRate: t.SampleRate,
+			Channels: t.Channels, SampleRate: t.SampleRate, SourceTrack: t.SourceTrack,
 		})
 	}
 	return json.Marshal(rows)
@@ -53,7 +54,7 @@ func UnmarshalMediaTracks(raw []byte) ([]*commodorepb.MediaTrack, error) {
 		out = append(out, &commodorepb.MediaTrack{
 			Type: r.Type, Codec: r.Codec, Width: r.Width, Height: r.Height,
 			Fps: r.Fps, Resolution: r.Resolution, BitrateKbps: r.BitrateKbps,
-			Channels: r.Channels, SampleRate: r.SampleRate,
+			Channels: r.Channels, SampleRate: r.SampleRate, SourceTrack: r.SourceTrack,
 		})
 	}
 	return out, nil
