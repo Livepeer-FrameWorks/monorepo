@@ -39,6 +39,10 @@ const (
 	// streamCleanupOutboxAlertAfterAttempts flags a sustained Foghorn outage; the worker keeps retrying (no
 	// terminal abandon), but logs at Error so on-call is paged.
 	streamCleanupOutboxAlertAfterAttempts = 12
+	// streamDeleteInlineTimeout bounds DeleteStream's inline phase 2 (thumbnail tombstone fan-out, child enumeration,
+	// finalize). That work is detached from the caller's cancellation so a client that gives up cannot cut it between
+	// an acknowledgement and the write that records it; whatever it leaves is the worker's.
+	streamDeleteInlineTimeout = 5 * time.Second
 )
 
 func streamCleanupOutboxConfig() outbox.Config {
@@ -217,6 +221,88 @@ func (s *CommodoreServer) dispatchStreamCleanupOutboxRow(ctx context.Context, ro
 		return []string{row.streamID}, cErr
 	}
 	return nil, nil
+}
+
+// completeStreamDeletionInline is DeleteStream's phase 2 after the phase-1 transaction committed the soft-delete and
+// the durable obligation. It finalizes inline only a stream whose remaining work is fixed: every owning cell acked
+// the thumbnail tombstone and the stream owns no clips or DVR recordings. A stream with child media returns
+// deletion_pending, records the thumbnail acknowledgement so the worker spends its budget on the children, and kicks
+// the worker so the cascade starts now rather than at the next poll. Returns the deletion status and message.
+func (s *CommodoreServer) completeStreamDeletionInline(ctx context.Context, streamID, tenantID string) (string, string) {
+	const pendingMessage = "Stream deletion pending: awaiting cleanup acknowledgement from the serving cell"
+	inlineCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), streamDeleteInlineTimeout)
+	defer cancel()
+	log := s.logger.WithField("stream_id", streamID)
+
+	// Route through the SAME multi-cell dispatcher the outbox uses — live thumbnails live on the ingest cell(s), so a
+	// tenant-primary-only delivery would finalize while an ingest cell's objects survive. deleteStreamThumbnails
+	// returns nil only once EVERY recorded owning cell has acked.
+	if tErr := s.deleteStreamThumbnails(inlineCtx, streamID, tenantID); tErr != nil {
+		log.WithError(tErr).Info("stream thumbnail cleanup incomplete; leaving pending for the outbox worker")
+		s.kickStreamCleanupOutbox()
+		return "deletion_pending", pendingMessage
+	}
+	children, cErr := s.countStreamChildMedia(inlineCtx, streamID, tenantID)
+	if cErr != nil {
+		log.WithError(cErr).Info("stream child-media enumeration failed; leaving pending for the outbox worker")
+		s.kickStreamCleanupOutbox()
+		return "deletion_pending", pendingMessage
+	}
+	if children > 0 {
+		if mErr := s.markStreamThumbnailCleanupAcked(inlineCtx, streamID, tenantID); mErr != nil {
+			log.WithError(mErr).Info("recording the thumbnail cleanup acknowledgement failed; the worker repeats that idempotent phase")
+		}
+		log.WithField("child_media", children).Info("stream owns child media; its deletion continues in the stream cleanup worker")
+		s.kickStreamCleanupOutbox()
+		return "deletion_pending", fmt.Sprintf("Stream deletion pending: removing %d clips and recordings in the background", children)
+	}
+	if fErr := s.finalizeStreamDeletion(inlineCtx, streamID, tenantID, ""); fErr != nil {
+		log.WithError(fErr).Warn("stream deletion finalize failed after ack; outbox worker will retry")
+		s.kickStreamCleanupOutbox()
+		return "deletion_pending", pendingMessage
+	}
+	return "deleted", "Stream deleted successfully"
+}
+
+// countStreamChildMedia counts the stream's cascade-owned clips and DVR recordings still in the catalog, using the
+// same tenant-scoped enumeration as deleteStreamChildMedia.
+func (s *CommodoreServer) countStreamChildMedia(ctx context.Context, streamID, tenantID string) (int, error) {
+	queries := commodoredb.New(s.db)
+	clips, err := queries.ListStreamCleanupClips(ctx, commodoredb.ListStreamCleanupClipsParams{StreamID: streamID, TenantID: tenantID})
+	if err != nil {
+		return 0, fmt.Errorf("list stream clips: %w", err)
+	}
+	dvrs, err := queries.ListStreamCleanupDVRs(ctx, commodoredb.ListStreamCleanupDVRsParams{StreamID: streamID, TenantID: tenantID})
+	if err != nil {
+		return 0, fmt.Errorf("list stream dvr recordings: %w", err)
+	}
+	return len(clips) + len(dvrs), nil
+}
+
+// kickStreamCleanupOutbox runs one worker batch now so a pending obligation is claimed without waiting for the
+// poll. The claim is SKIP LOCKED + leased, so it is safe alongside the polling worker on this and other replicas.
+func (s *CommodoreServer) kickStreamCleanupOutbox() {
+	if s.streamCleanupKickFn != nil {
+		s.streamCleanupKickFn()
+		return
+	}
+	if s.db == nil || s.foghornPool == nil {
+		return
+	}
+	go s.streamCleanupOutboxWorker().ProcessBatch(context.Background())
+}
+
+func (s *CommodoreServer) streamCleanupOutboxWorker() *outbox.Worker[streamCleanupOutboxRow] {
+	cfg := streamCleanupOutboxConfig()
+	// RecordFailure logs the alert itself with the row identity; the worker would log it a second time.
+	cfg.AlertAfterAttempts = 0
+	return &outbox.Worker[streamCleanupOutboxRow]{
+		Config:     cfg,
+		Store:      &streamCleanupOutboxStore{server: s},
+		Dispatcher: &streamCleanupOutboxDispatcher{server: s},
+		Logger:     s.logger,
+		AlertLabel: "stream thumbnail cleanup",
+	}
 }
 
 // markStreamThumbnailCleanupAcked durably records that Foghorn ACKED the thumbnail-cleanup obligation for every owning
@@ -441,16 +527,7 @@ func (s *CommodoreServer) runStreamCleanupOutboxWorker(ctx context.Context) {
 		s.logger.Info("stream cleanup outbox worker disabled: no foghorn pool")
 		return
 	}
-	cfg := streamCleanupOutboxConfig()
-	cfg.AlertAfterAttempts = 0
-	worker := &outbox.Worker[streamCleanupOutboxRow]{
-		Config:     cfg,
-		Store:      &streamCleanupOutboxStore{server: s},
-		Dispatcher: &streamCleanupOutboxDispatcher{server: s},
-		Logger:     s.logger,
-		AlertLabel: "stream thumbnail cleanup",
-	}
-	worker.Run(ctx)
+	s.streamCleanupOutboxWorker().Run(ctx)
 }
 
 // claimStreamCleanupOutboxBatch selects due pending rows, then in the SAME transaction leases them by pushing

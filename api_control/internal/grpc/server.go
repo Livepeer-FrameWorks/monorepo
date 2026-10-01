@@ -253,6 +253,9 @@ type CommodoreServer struct {
 	// each cell via Quartermaster service discovery (resolveFoghornForClusterDirect); wired tests inject a deterministic
 	// fake so the full claim→dispatch→retry→finalize loop can run over real Postgres without a live Foghorn.
 	streamThumbnailDeleteFn func(ctx context.Context, streamID, tenantID, clusterID string) error
+	// streamCleanupKickFn replaces the immediate stream-cleanup worker batch in handler tests that run on a scripted
+	// sqlmock, where a background claim would race the script. Production leaves it nil.
+	streamCleanupKickFn func()
 	// verificationEmailSendFn is a test seam for SMTP delivery of a verification link. Production leaves it nil
 	// and the account email outbox sends through sendVerificationEmail.
 	verificationEmailSendFn func(email, token string) error
@@ -7400,28 +7403,12 @@ func (s *CommodoreServer) DeleteStream(ctx context.Context, req *commodorepb.Del
 	// durable stream-cleanup obligation (dispatchStreamCleanupOutboxRow → deleteStreamChildMedia), so finalization
 	// is gated on every child being gone and a delivery outage can never strand surviving clips/DVR.
 
-	// PHASE 2 (tombstoned → deleted): best-effort SYNCHRONOUS delivery so the common case finalizes promptly. Only a
-	// POSITIVE Foghorn ack of the FULL cascade (thumbnail tombstone + every child clip/DVR) lets us FINALIZE —
-	// hard-delete the row + mark the outbox completed — and report "deleted". Otherwise the row stays soft-deleted
-	// and we return deletion_pending; the outbox worker converges it. We NEVER report "deleted" while any child (or
-	// the tombstone) is unacknowledged.
-	deletionStatus := "deletion_pending"
-	message := "Stream deletion pending: awaiting cleanup acknowledgement from the serving cell"
-	// Route through the SAME multi-cell dispatcher the outbox uses — live thumbnails live on the ingest cell(s), so a
-	// tenant-primary-only sync delivery would finalize while an ingest cell's objects survive. deleteStreamThumbnails
-	// returns nil only once EVERY recorded owning cell has acked.
-	if tErr := s.deleteStreamThumbnails(ctx, streamID, tenantID); tErr == nil {
-		if cErr := s.deleteStreamChildMedia(ctx, streamID, tenantID); cErr != nil {
-			s.logger.WithError(cErr).WithField("stream_id", streamID).Info("stream child-media cleanup incomplete; leaving pending for the outbox worker")
-		} else if fErr := s.finalizeStreamDeletion(ctx, streamID, tenantID, ""); fErr != nil {
-			s.logger.WithError(fErr).WithField("stream_id", streamID).Warn("stream deletion finalize failed after ack; outbox worker will retry")
-		} else {
-			deletionStatus = "deleted"
-			message = "Stream deleted successfully"
-		}
-	} else {
-		s.logger.WithError(tErr).WithField("stream_id", streamID).Info("stream thumbnail cleanup incomplete; leaving pending for the outbox worker")
-	}
+	// PHASE 2 (tombstoned → deleted) runs inline only while it is a fixed amount of work: the thumbnail tombstone
+	// (one RPC per owning cell, concurrently) and the finalize. A stream that still owns clips or DVR recordings
+	// returns deletion_pending and its child cascade runs in the stream-cleanup worker, kicked now, because the
+	// cascade is one Foghorn delete per child and grows with the stream's media. We NEVER report "deleted" while
+	// any child (or the tombstone) is unacknowledged.
+	deletionStatus, message := s.completeStreamDeletionInline(ctx, streamID, tenantID)
 
 	return &commodorepb.DeleteStreamResponse{
 		Message:        message,
