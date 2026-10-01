@@ -1127,8 +1127,10 @@ func buildUpgradeTaskConfig(rc *resolvedCluster, manifest *inventory.Manifest, h
 	return config, task, nil
 }
 
-// plannedUpgradeTask returns the planner's task that deploys deployName for serviceName on hostName.
-func plannedUpgradeTask(manifest *inventory.Manifest, serviceName, deployName, hostName string) (*orchestrator.Task, error) {
+// plannedServiceTasks returns the planner's tasks that deploy deployName on hostName, narrowed to serviceName's own
+// tasks when the host carries several (two aliases of one deploy, or several instances of one infrastructure
+// service). Each task carries what provision renders with: the effective cluster, the instance identity and the phase.
+func plannedServiceTasks(manifest *inventory.Manifest, serviceName, deployName, hostName string) ([]*orchestrator.Task, error) {
 	plan, err := orchestrator.NewPlanner(manifest).Plan(context.Background(), orchestrator.ProvisionOptions{Phase: orchestrator.PhaseAll})
 	if err != nil {
 		return nil, fmt.Errorf("plan %s on %s: %w", serviceName, hostName, err)
@@ -1147,6 +1149,15 @@ func plannedUpgradeTask(manifest *inventory.Manifest, serviceName, deployName, h
 			}
 		}
 		onHost = byService
+	}
+	return onHost, nil
+}
+
+// plannedUpgradeTask returns the planner's task that deploys deployName for serviceName on hostName.
+func plannedUpgradeTask(manifest *inventory.Manifest, serviceName, deployName, hostName string) (*orchestrator.Task, error) {
+	onHost, err := plannedServiceTasks(manifest, serviceName, deployName, hostName)
+	if err != nil {
+		return nil, err
 	}
 	switch len(onHost) {
 	case 1:

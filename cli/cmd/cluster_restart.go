@@ -112,34 +112,41 @@ func restartServiceOnHost(cmd *cobra.Command, rc *resolvedCluster, serviceName, 
 		return fmt.Errorf("provisioner for %s does not support role-based restart", deployName)
 	}
 
-	config, err := buildServiceRoleConfig(cmd, rc, serviceName, deployName, host)
+	targets, err := buildServiceRoleTargets(cmd, rc, serviceName, deployName, host)
 	if err != nil {
 		return fmt.Errorf("restart %s: %w", serviceName, err)
 	}
 
-	if validate {
-		// Restart deploys nothing, so the gate must probe the release already on the host, not the channel's newest.
-		state, detectErr := provisioner.DetectWithConfig(ctx, prov, host, config)
-		if detectErr != nil {
-			return fmt.Errorf("detect installed %s before restart: %w", serviceName, detectErr)
+	for _, target := range targets {
+		label := serviceName
+		if len(targets) > 1 {
+			label = target.task.Name
 		}
-		config = probeInstalledRelease(config, state)
-	}
-
-	if err := restarter.Restart(ctx, host, config); err != nil {
-		return fmt.Errorf("restart %s: %w", serviceName, err)
-	}
-
-	ux.Success(cmd.OutOrStdout(), fmt.Sprintf("%s restarted", serviceName))
-
-	if validate {
-		fmt.Fprintln(cmd.OutOrStdout(), "Validating service health...")
-		time.Sleep(3 * time.Second)
-		if err := prov.Validate(ctx, host, config); err != nil {
-			ux.Fail(cmd.ErrOrStderr(), fmt.Sprintf("Validation failed: %v", err))
-			return fmt.Errorf("service restarted but health check failed")
+		config := target.config
+		if validate {
+			// Restart deploys nothing, so the gate must probe the release already on the host, not the channel's newest.
+			state, detectErr := provisioner.DetectWithConfig(ctx, prov, host, config)
+			if detectErr != nil {
+				return fmt.Errorf("detect installed %s before restart: %w", label, detectErr)
+			}
+			config = probeInstalledRelease(config, state)
 		}
-		fmt.Fprintf(cmd.OutOrStdout(), "  ✓ Service is healthy\n")
+
+		if err := restarter.Restart(ctx, host, config); err != nil {
+			return fmt.Errorf("restart %s: %w", label, err)
+		}
+
+		ux.Success(cmd.OutOrStdout(), fmt.Sprintf("%s restarted", label))
+
+		if validate {
+			fmt.Fprintln(cmd.OutOrStdout(), "Validating service health...")
+			time.Sleep(3 * time.Second)
+			if err := prov.Validate(ctx, host, config); err != nil {
+				ux.Fail(cmd.ErrOrStderr(), fmt.Sprintf("Validation failed: %v", err))
+				return fmt.Errorf("%s restarted but health check failed", label)
+			}
+			fmt.Fprintf(cmd.OutOrStdout(), "  ✓ Service is healthy\n")
+		}
 	}
 
 	return nil
@@ -195,45 +202,52 @@ func probeInstalledRelease(config provisioner.ServiceConfig, state *detect.Servi
 	return config
 }
 
-// resolveServiceHost walks the manifest in the same order as upgrade +
-// provision: infrastructure first, then application services, interfaces,
-// observability.
-// buildServiceRoleConfig builds the ServiceConfig provision would pass for one service on one host, so a role's
-// restart, cleanup and validate tasks see the same env-derived unit names and ports.
-func buildServiceRoleConfig(cmd *cobra.Command, rc *resolvedCluster, serviceName, deployName string, host inventory.Host) (provisioner.ServiceConfig, error) {
+// serviceRoleTarget is one planned deployment of a service on a host and the ServiceConfig provision renders for it.
+type serviceRoleTarget struct {
+	task   *orchestrator.Task
+	config provisioner.ServiceConfig
+}
+
+// buildServiceRoleTargets renders, for every planner task that deploys the service on the host, the ServiceConfig
+// provision passes, so a role's restart, stop and validate tasks see the same cluster, cell, instance, unit names and
+// ports. A host with several instances of one infrastructure service yields one target per instance.
+func buildServiceRoleTargets(cmd *cobra.Command, rc *resolvedCluster, serviceName, deployName string, host inventory.Host) ([]serviceRoleTarget, error) {
 	manifest := rc.Manifest
-	task := &orchestrator.Task{
-		Name:       serviceName,
-		Type:       deployName,
-		ServiceID:  serviceName,
-		Host:       host.Name,
-		Phase:      orchestrator.PhaseApplications,
-		Idempotent: true,
+	tasks, err := plannedServiceTasks(manifest, serviceName, deployName, host.Name)
+	if err != nil {
+		return nil, err
+	}
+	if len(tasks) == 0 {
+		return nil, fmt.Errorf("the manifest plans no %s (%s) task on %s", serviceName, deployName, host.Name)
 	}
 	manifestDir := filepath.Dir(rc.ManifestPath)
 	sharedEnv, envErr := rc.PreparedSharedEnv()
 	if envErr != nil {
-		return provisioner.ServiceConfig{}, fmt.Errorf("prepare shared environment: %w", envErr)
+		return nil, fmt.Errorf("prepare shared environment: %w", envErr)
 	}
 	clusterEnvs, clusterEnvsErr := rc.ClusterEnvs()
 	if clusterEnvsErr != nil {
 		fmt.Fprintf(cmd.OutOrStderr(), "  warning: cluster env decrypt failed: %v\n", clusterEnvsErr)
 		clusterEnvs = nil
 	}
-	config, cfgErr := buildTaskConfig(task, manifest, map[string]any{}, false, manifestDir, sharedEnv, clusterEnvs, rc.ReleaseRepos)
-	if cfgErr != nil {
-		return provisioner.ServiceConfig{}, fmt.Errorf("build role config: %w", cfgErr)
+	targets := make([]serviceRoleTarget, 0, len(tasks))
+	for _, task := range tasks {
+		config, cfgErr := renderTaskConfig(task, manifest, false, map[string]any{}, manifestDir, sharedEnv, clusterEnvs, rc.ReleaseRepos)
+		if cfgErr != nil {
+			return nil, fmt.Errorf("build role config for %s: %w", task.Name, cfgErr)
+		}
+		if missing := missingRequiredExternalEnv(deployName, config.EnvVars); len(missing) > 0 {
+			return nil, requiredEnvPreflightError([]requiredEnvGap{{Target: fmt.Sprintf("%s on %s", task.Name, host.Name), Missing: missing}})
+		}
+		rc.applyReleaseMetadata(config.Metadata)
+		targets = append(targets, serviceRoleTarget{task: task, config: config})
 	}
-	if contractErr := validateTaskServiceEnvContract(manifest, task, config); contractErr != nil {
-		return provisioner.ServiceConfig{}, contractErr
-	}
-	if missing := missingRequiredExternalEnv(deployName, config.EnvVars); len(missing) > 0 {
-		return provisioner.ServiceConfig{}, requiredEnvPreflightError([]requiredEnvGap{{Target: fmt.Sprintf("%s on %s", serviceName, host.Name), Missing: missing}})
-	}
-	rc.applyReleaseMetadata(config.Metadata)
-	return config, nil
+	return targets, nil
 }
 
+// resolveServiceHost walks the manifest in the same order as upgrade +
+// provision: infrastructure first, then application services, interfaces,
+// observability.
 func resolveServiceHost(manifest *inventory.Manifest, serviceName string) (inventory.Host, bool) {
 	switch serviceName {
 	case "postgres":
@@ -333,11 +347,15 @@ func runYugabyteRollingRestart(cmd *cobra.Command, rc *resolvedCluster, deployNa
 		if !found {
 			return fmt.Errorf("yugabyte node %s not found in manifest", name)
 		}
-		task := &orchestrator.Task{
-			Name: "yugabyte", Type: deployName, ServiceID: "yugabyte", Host: host.Name,
-			Phase: orchestrator.PhaseInfrastructure, Idempotent: true,
+		// The planner's node task carries the node id the role derives its placement from.
+		tasks, planErr := plannedServiceTasks(manifest, "yugabyte", deployName, host.Name)
+		if planErr != nil {
+			return planErr
 		}
-		config, cfgErr := buildTaskConfig(task, manifest, map[string]any{}, false, manifestDir, sharedEnv, clusterEnvs, rc.ReleaseRepos)
+		if len(tasks) != 1 {
+			return fmt.Errorf("the manifest plans %d yugabyte node task(s) on %s, want 1", len(tasks), host.Name)
+		}
+		config, cfgErr := renderTaskConfig(tasks[0], manifest, false, map[string]any{}, manifestDir, sharedEnv, clusterEnvs, rc.ReleaseRepos)
 		if cfgErr != nil {
 			return fmt.Errorf("build restart config for %s: %w", host.Name, cfgErr)
 		}

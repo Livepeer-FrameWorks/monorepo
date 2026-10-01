@@ -664,12 +664,14 @@ func (c *roleServiceControl) Stop(ctx context.Context, serviceID string) error {
 		return fmt.Errorf("provisioner for %s does not support role-based stop", deploy)
 	}
 	for _, host := range hosts {
-		config, cfgErr := buildServiceRoleConfig(c.cmd, c.rc, serviceID, deploy, host)
+		roleTargets, cfgErr := buildServiceRoleTargets(c.cmd, c.rc, serviceID, deploy, host)
 		if cfgErr != nil {
 			return cfgErr
 		}
-		if err := stopper.Stop(ctx, host, config); err != nil {
-			return fmt.Errorf("on %s: %w", host.Name, err)
+		for _, target := range roleTargets {
+			if err := stopper.Stop(ctx, host, target.config); err != nil {
+				return fmt.Errorf("on %s: %w", host.Name, err)
+			}
 		}
 	}
 	return nil
@@ -689,18 +691,21 @@ func (c *roleServiceControl) Start(ctx context.Context, serviceID string) error 
 		return fmt.Errorf("provisioner for %s does not support role-based restart", deploy)
 	}
 	for _, host := range hosts {
-		config, cfgErr := buildServiceRoleConfig(c.cmd, c.rc, serviceID, deploy, host)
+		roleTargets, cfgErr := buildServiceRoleTargets(c.cmd, c.rc, serviceID, deploy, host)
 		if cfgErr != nil {
 			return cfgErr
 		}
-		if state, detectErr := provisioner.DetectWithConfig(ctx, prov, host, config); detectErr == nil {
-			config = probeInstalledRelease(config, state)
-		}
-		if err := restarter.Restart(ctx, host, config); err != nil {
-			return fmt.Errorf("on %s: %w", host.Name, err)
-		}
-		if err := prov.Validate(ctx, host, config); err != nil {
-			return fmt.Errorf("on %s: started but did not validate: %w", host.Name, err)
+		for _, target := range roleTargets {
+			config := target.config
+			if state, detectErr := provisioner.DetectWithConfig(ctx, prov, host, config); detectErr == nil {
+				config = probeInstalledRelease(config, state)
+			}
+			if err := restarter.Restart(ctx, host, config); err != nil {
+				return fmt.Errorf("on %s: %w", host.Name, err)
+			}
+			if err := prov.Validate(ctx, host, config); err != nil {
+				return fmt.Errorf("on %s: started but did not validate: %w", host.Name, err)
+			}
 		}
 	}
 	return nil
