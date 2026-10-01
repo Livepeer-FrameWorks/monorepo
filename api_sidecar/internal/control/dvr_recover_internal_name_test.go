@@ -259,7 +259,8 @@ func TestStartRecordingAdoptsExactRetryWithLivePush(t *testing.T) {
 	}}}
 	const sourceURL = "dtsc://remote-node/live+" + internalName
 	ClearDVRSourceOverride("live+" + internalName)
-	dm := &DVRManager{logger: logging.NewLogger(), jobs: make(map[string]*DVRJob), storagePath: storagePath, mistClient: fake}
+	dm := &DVRManager{logger: logging.NewLogger(), jobs: make(map[string]*DVRJob), storagePath: storagePath, mistClient: fake,
+		diskCheck: func(string, uint64) error { return nil }}
 	if err := dm.StartRecording(dvrHash, streamID, internalName, "live+"+internalName, sourceURL, &ipcpb.DVRConfig{}, nil); err != nil {
 		t.Fatalf("exact retry with a live push must adopt idempotently, got %v", err)
 	}
@@ -293,7 +294,8 @@ func TestStartRecordingFailsOnExistingMediaWithoutPush(t *testing.T) {
 	outputDir, sentinelSeg := seedExistingDVRDir(t, storagePath, streamID, dvrHash, internalName, false)
 
 	fake := &fakeMistClient{} // empty PushList → no live push to adopt
-	dm := &DVRManager{logger: logging.NewLogger(), jobs: make(map[string]*DVRJob), storagePath: storagePath, mistClient: fake}
+	dm := &DVRManager{logger: logging.NewLogger(), jobs: make(map[string]*DVRJob), storagePath: storagePath, mistClient: fake,
+		diskCheck: func(string, uint64) error { return nil }}
 	if err := dm.StartRecording(dvrHash, streamID, internalName, "live+"+internalName, "", &ipcpb.DVRConfig{}, nil); err == nil {
 		t.Fatal("StartRecording must fail closed on existing media with no live push")
 	}
@@ -318,7 +320,8 @@ func TestStartRecordingFailsOnIdentityMismatch(t *testing.T) {
 	outputDir, sentinelSeg := seedExistingDVRDir(t, storagePath, streamID, dvrHash, "internal-OTHER", false)
 
 	fake := &fakeMistClient{}
-	dm := &DVRManager{logger: logging.NewLogger(), jobs: make(map[string]*DVRJob), storagePath: storagePath, mistClient: fake}
+	dm := &DVRManager{logger: logging.NewLogger(), jobs: make(map[string]*DVRJob), storagePath: storagePath, mistClient: fake,
+		diskCheck: func(string, uint64) error { return nil }}
 	if err := dm.StartRecording(dvrHash, streamID, "internal-REQUESTED", "live+x", "", &ipcpb.DVRConfig{}, nil); err == nil {
 		t.Fatal("StartRecording must fail closed on an identity mismatch")
 	}
@@ -346,7 +349,8 @@ func TestStartRecordingFailsOnMissingOrCorruptMetadata(t *testing.T) {
 			outputDir, sentinelSeg := seedExistingDVRDir(t, storagePath, streamID, dvrHash, "", tc.corrupt)
 
 			fake := &fakeMistClient{}
-			dm := &DVRManager{logger: logging.NewLogger(), jobs: make(map[string]*DVRJob), storagePath: storagePath, mistClient: fake}
+			dm := &DVRManager{logger: logging.NewLogger(), jobs: make(map[string]*DVRJob), storagePath: storagePath, mistClient: fake,
+				diskCheck: func(string, uint64) error { return nil }}
 			if err := dm.StartRecording(dvrHash, streamID, "internal-x", "live+x", "", &ipcpb.DVRConfig{}, nil); err == nil {
 				t.Fatalf("StartRecording must fail closed on %s metadata", tc.name)
 			}

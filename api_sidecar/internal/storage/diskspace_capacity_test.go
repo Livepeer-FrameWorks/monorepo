@@ -46,12 +46,25 @@ func TestIsInsufficientSpace(t *testing.T) {
 	}
 }
 
+// useRoomyFilesystem makes the admission gate read a 1 TiB filesystem with
+// 500 GiB free, so its verdicts do not depend on the free space of the host
+// running the tests.
+func useRoomyFilesystem(t *testing.T) {
+	t.Helper()
+	prev := statDiskSpace
+	statDiskSpace = func(string) (*DiskSpace, error) {
+		return &DiskSpace{TotalBytes: 1 << 40, AvailableBytes: 500 << 30}, nil
+	}
+	t.Cleanup(func() { statDiskSpace = prev })
+}
+
 // HasSpaceForWithinCapacity is the storage admission gate. A zero request always
 // fits (only the reserve must be free), an impossibly large request is refused
 // with the recognisable sentinel, and a logical capacity cap below used+reserve
 // refuses even though the physical filesystem is huge.
 func TestHasSpaceForWithinCapacity(t *testing.T) {
 	dir := t.TempDir()
+	useRoomyFilesystem(t)
 
 	t.Run("zero request fits", func(t *testing.T) {
 		if err := HasSpaceForWithinCapacity(dir, 0, 0); err != nil {
@@ -79,6 +92,7 @@ func TestHasSpaceForWithinCapacity(t *testing.T) {
 // HasSpaceFor delegates to HasSpaceForWithinCapacity with no logical cap.
 func TestHasSpaceFor(t *testing.T) {
 	dir := t.TempDir()
+	useRoomyFilesystem(t)
 	if err := HasSpaceFor(dir, 0); err != nil {
 		t.Fatalf("zero request should fit, got %v", err)
 	}
