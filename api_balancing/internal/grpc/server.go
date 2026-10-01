@@ -141,6 +141,7 @@ type FoghornGRPCServer struct {
 	instanceID              string
 	redisStore              *state.RedisStateStore
 	artifactCleaner         *artifacts.Cleaner
+	recordThumbnailCleanup  func(context.Context, *sql.Tx, string, string) error
 	mediaAuthorityStore     *localauthority.Store
 	cellPlacementCapability func(context.Context) (localauthority.CellPlacementCapability, error)
 	signingKeyUse           triggers.SigningKeyUseRecorder
@@ -1435,6 +1436,13 @@ func (s *FoghornGRPCServer) DeleteClip(ctx context.Context, req *sharedpb.Delete
 	transitioned := false
 	if err = s.withArtifactLifecycleTx(ctx, func(tx *sql.Tx) error {
 		transitioned = false
+		recordThumbnailCleanup := s.recordThumbnailCleanup
+		if recordThumbnailCleanup == nil {
+			recordThumbnailCleanup = control.RecordStreamCleanupObligationTx
+		}
+		if cleanupErr := recordThumbnailCleanup(ctx, tx, clipRow.TenantID, req.ClipHash); cleanupErr != nil {
+			return fmt.Errorf("record clip thumbnail cleanup: %w", cleanupErr)
+		}
 		affected, execErr := foghorndb.New(tx).DeleteClipCatalog(ctx, foghorndb.DeleteClipCatalogParams{
 			ArtifactHash: req.ClipHash, TenantID: req.GetTenantId(),
 		})
@@ -1482,9 +1490,9 @@ func (s *FoghornGRPCServer) DeleteClip(ctx context.Context, req *sharedpb.Delete
 		s.logger.WithError(jobErr).WithField("clip_hash", req.ClipHash).Warn("Failed to cancel processing jobs for deleted clip")
 	}
 
-	// Physical cleanup runs ONLY after the soft-delete committed. Failures are non-fatal and marked
-	// cleanup-pending: the catalog is already durably deleted, so any lingering bytes are storage
-	// garbage the orphan/purge job reclaims, not a correctness bug.
+	// Physical cleanup runs only after the soft-delete and its thumbnail
+	// obligation committed. A failed node command leaves a durable catalog
+	// deletion that the node cleanup path can retry.
 	cleanupError := ""
 
 	// Send delete request to Helmsman if we know the storage node
@@ -1495,7 +1503,10 @@ func (s *FoghornGRPCServer) DeleteClip(ctx context.Context, req *sharedpb.Delete
 			RequestId: requestID,
 		}
 		if errSend := control.SendClipDelete(nodeID, deleteReq); errSend != nil {
-			cleanupError = fmt.Sprintf("node cleanup pending: %v", errSend)
+			if cleanupError != "" {
+				cleanupError += "; "
+			}
+			cleanupError += fmt.Sprintf("node cleanup pending: %v", errSend)
 			// Log but don't fail - the soft delete already committed, cleanup can happen later
 			s.logger.WithFields(logging.Fields{
 				"clip_hash": req.ClipHash,

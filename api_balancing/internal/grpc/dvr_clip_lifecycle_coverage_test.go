@@ -2,7 +2,9 @@ package grpc
 
 import (
 	"context"
+	"database/sql"
 	"database/sql/driver"
+	"errors"
 	"strings"
 	"testing"
 
@@ -45,7 +47,9 @@ func newLifecycleServer(t *testing.T) (*FoghornGRPCServer, sqlmock.Sqlmock) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = db.Close() })
-	return &FoghornGRPCServer{db: db, logger: logrus.New()}, mock
+	return &FoghornGRPCServer{db: db, logger: logrus.New(),
+		recordThumbnailCleanup: func(context.Context, *sql.Tx, string, string) error { return nil },
+	}, mock
 }
 
 // ---- DeleteClip: tenant-ownership guard + missing-hash + happy soft-delete ----
@@ -92,6 +96,12 @@ func TestDeleteClip_MismatchedTenantNotFound(t *testing.T) {
 // artifactCleaner is nil so S3 cleanup defers but the soft-delete still succeeds.
 func TestDeleteClip_SoftDeleteIssuesTenantScopedUpdate(t *testing.T) {
 	srv, mock := newLifecycleServer(t)
+	cleanupRecorded := false
+	srv.recordThumbnailCleanup = func(ctx context.Context, tx *sql.Tx, tenantID, assetKey string) error {
+		cleanupRecorded = tenantID == "tenant-a" && assetKey == "clip-h"
+		_, err := tx.ExecContext(ctx, "SELECT thumbnail_cleanup_in_delete_transaction")
+		return err
+	}
 	mock.ExpectQuery(`SELECT status, size_bytes`).
 		WithArgs("clip-h", "tenant-a").
 		WillReturnRows(sqlmock.NewRows([]string{
@@ -105,6 +115,8 @@ func TestDeleteClip_SoftDeleteIssuesTenantScopedUpdate(t *testing.T) {
 		WillReturnRows(sqlmock.NewRows([]string{"node_id"}))
 	// Soft-delete + DELETED lifecycle event commit atomically.
 	mock.ExpectBegin()
+	mock.ExpectExec(`SELECT thumbnail_cleanup_in_delete_transaction`).
+		WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectExec(`UPDATE foghorn.artifacts SET status = 'deleted'`).
 		WithArgs("clip-h", "tenant-a").
 		WillReturnResult(sqlmock.NewResult(0, 1))
@@ -131,6 +143,38 @@ func TestDeleteClip_SoftDeleteIssuesTenantScopedUpdate(t *testing.T) {
 	}
 	if !resp.Success {
 		t.Fatalf("expected success, got %+v", resp)
+	}
+	if !cleanupRecorded {
+		t.Fatal("clip deletion did not record durable thumbnail cleanup")
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("unmet SQL expectations: %v", err)
+	}
+}
+
+func TestDeleteClip_ThumbnailCleanupFailureRollsBack(t *testing.T) {
+	srv, mock := newLifecycleServer(t)
+	srv.recordThumbnailCleanup = func(context.Context, *sql.Tx, string, string) error {
+		return errors.New("thumbnail store identity unavailable")
+	}
+	mock.ExpectQuery(`SELECT status, size_bytes`).
+		WithArgs("clip-h", "tenant-a").
+		WillReturnRows(sqlmock.NewRows([]string{
+			"status", "size_bytes", "retention_until", "stream_internal_name",
+			"tenant_id", "user_id", "format", "storage_cluster_id", "origin_cluster_id", "active_object_key",
+			"active_dtsh_key", "sync_object_key", "durable_backend_local", "backend_id",
+		}).AddRow("ready", nil, nil, "live+stream-1", "tenant-a", "user-1", "mkv", nil, nil, nil, nil, nil, false, nil))
+	mock.ExpectQuery(`SELECT node_id FROM foghorn.artifact_nodes`).
+		WithArgs("clip-h").
+		WillReturnRows(sqlmock.NewRows([]string{"node_id"}))
+	mock.ExpectBegin()
+	mock.ExpectRollback()
+
+	_, err := srv.DeleteClip(context.Background(), &sharedpb.DeleteClipRequest{
+		ClipHash: "clip-h", TenantId: "tenant-a",
+	})
+	if status.Code(err) != codes.Internal {
+		t.Fatalf("cleanup obligation failure returned %v, want Internal and no committed catalog deletion", err)
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatalf("unmet SQL expectations: %v", err)

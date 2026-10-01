@@ -15,7 +15,7 @@ import (
 )
 
 // RecordStreamCleanupObligation durably records the tombstone + thumbnail-cleanup obligation for a deleted asset
-// (a live stream, keyed by asset_key = stream_id, which has no foghorn.artifacts row). One Foghorn database belongs to
+// (a live stream keyed by stream_id, or a deleted clip keyed by artifact_hash). One Foghorn database belongs to
 // ONE cell and ONE immutable S3 backend, so the obligation has a SINGLE sweep target: this cell's local store, recorded
 // as a backend_id fingerprint snapshot read BEFORE any control row is deleted. The row's existence is the durable
 // tombstone consulted by AssetTombstoned / the claim, publish, and resolve fences; its pending drain state is worked by
@@ -23,68 +23,78 @@ import (
 // that preserves the ORIGINAL snapshot. FAILS CLOSED (returns an error) on a missing DB or empty identity so the
 // obligation is retried, never silently acknowledged as durable.
 func RecordStreamCleanupObligation(ctx context.Context, dbh *sql.DB, tenantID, assetKey string) error {
-	tenantID = strings.TrimSpace(tenantID)
-	assetKey = strings.TrimSpace(assetKey)
 	// FAIL CLOSED: a nil return is the caller's proof the tombstone is durable, and the RPC turns it into a
 	// positive ack that lets Commodore clear its delivery outbox. A missing DB or an empty identity is NOT a
 	// durable record — it must be an error so the obligation is retried, never silently acknowledged.
 	if dbh == nil {
 		return errors.New("record stream cleanup obligation: no database configured")
 	}
+	return database.WithRetryablePostgresTx(ctx, dbh, nil, func(tx *sql.Tx) error {
+		return RecordStreamCleanupObligationTx(ctx, tx, tenantID, assetKey)
+	})
+}
+
+// RecordStreamCleanupObligationTx composes the thumbnail tombstone with an
+// artifact's catalog transition so a committed deletion cannot lose its
+// cleanup obligation in a process crash.
+func RecordStreamCleanupObligationTx(ctx context.Context, tx *sql.Tx, tenantID, assetKey string) error {
+	tenantID = strings.TrimSpace(tenantID)
+	assetKey = strings.TrimSpace(assetKey)
+	if tx == nil {
+		return errors.New("record stream cleanup obligation: no transaction configured")
+	}
 	if tenantID == "" || assetKey == "" {
 		return errors.New("record stream cleanup obligation: tenant_id and asset_key are required")
 	}
-	return database.WithRetryablePostgresTx(ctx, dbh, nil, func(tx *sql.Tx) error {
-		// Per-asset fence: serialize with a concurrent claim/publish for the same asset_key. A row-lock cannot do this
-		// (the tombstone row does not exist yet, and FOR UPDATE on an absent row locks nothing), so record/claim/publish
-		// share a transaction-scoped advisory lock — whichever commits first, the other observes its result.
-		if lErr := lockThumbnailAsset(ctx, tx, assetKey); lErr != nil {
-			return lErr
-		}
+	// Per-asset fence: serialize with a concurrent claim/publish for the same asset_key. A row-lock cannot do this
+	// (the tombstone row does not exist yet, and FOR UPDATE on an absent row locks nothing), so record/claim/publish
+	// share a transaction-scoped advisory lock — whichever commits first, the other observes its result.
+	if lErr := lockThumbnailAsset(ctx, tx, assetKey); lErr != nil {
+		return lErr
+	}
 
-		// Snapshot the backend the asset's thumbnails were written to, INSIDE the tx and BEFORE any control row is dropped.
-		// Under one-immutable-backend-per-cell every attempt shares this cell's store, so the DISTINCT recorded non-empty
-		// backend_id is unique — assert it rather than picking one arbitrarily. FAIL CLOSED on more than one distinct id:
-		// that violates the invariant (the drainer sweeps a single store), and snapshotting an arbitrary one would leak the
-		// other. An asset with no recorded id (never published / legacy) falls back to this cell's current local fingerprint
-		// (the store its live-stream thumbnails were minted on). The drainer later fails closed if the recorded id no longer
-		// matches the cell's current store (a forbidden repoint).
-		qtx := foghorndb.New(tx)
-		snapshot, sErr := qtx.GetThumbnailAssetBackendSnapshot(ctx, foghorndb.GetThumbnailAssetBackendSnapshotParams{
-			TenantID: tenantID, AssetKey: assetKey,
-		})
-		if sErr != nil {
-			return sErr
-		}
-		distinctBackends := int(snapshot.DistinctBackends)
-		recorded := snapshot.BackendID
-		if distinctBackends > 1 {
-			return fmt.Errorf("record stream cleanup obligation: asset %s has %d distinct thumbnail backend_ids — the one-immutable-backend-per-cell invariant is violated; refusing to snapshot an arbitrary backend", assetKey, distinctBackends)
-		}
-		backendID := recorded
-		if backendID == "" {
-			backendID = localBackendFingerprint()
-		}
-		// FAIL CLOSED on an unattributable obligation: with neither a recorded thumbnail backend nor a local fingerprint we
-		// cannot record WHICH store owns these bytes, and the drainer would otherwise settle the durable obligation after a
-		// guessed-current-store sweep. Refuse rather than persist a NULL identity (never a silent success).
-		if backendID == "" {
-			return fmt.Errorf("record stream cleanup obligation: asset %s has no recorded thumbnail backend and this cell has no local fingerprint — refusing to record an unattributed obligation", assetKey)
-		}
-
-		// Parent tombstone: existence fences claims/publishes; the lease/status/backoff machinery lives here.
-		_, iErr := qtx.InsertStreamCleanupObligation(ctx, foghorndb.InsertStreamCleanupObligationParams{
-			AssetKey: assetKey, TenantID: tenantID, BackendID: sql.NullString{String: backendID, Valid: true},
-		})
-		if iErr != nil {
-			return iErr
-		}
-		// IDEMPOTENT: a fresh insert commits the new tombstone; a re-delivered DeleteStreamThumbnails RPC (RowsAffected==0,
-		// the tombstone already exists) commits nothing new but releases the advisory lock as the durable ack, preserving
-		// the original snapshot. FAIL CLOSED if RowsAffected itself errors rather than assuming a state — Postgres normally
-		// supports it, but a foundational durability record must not proceed on an unknown insert result.
-		return nil
+	// Snapshot the backend the asset's thumbnails were written to, INSIDE the tx and BEFORE any control row is dropped.
+	// Under one-immutable-backend-per-cell every attempt shares this cell's store, so the DISTINCT recorded non-empty
+	// backend_id is unique — assert it rather than picking one arbitrarily. FAIL CLOSED on more than one distinct id:
+	// that violates the invariant (the drainer sweeps a single store), and snapshotting an arbitrary one would leak the
+	// other. An asset with no recorded id (never published / legacy) falls back to this cell's current local fingerprint
+	// (the store its live-stream thumbnails were minted on). The drainer later fails closed if the recorded id no longer
+	// matches the cell's current store (a forbidden repoint).
+	qtx := foghorndb.New(tx)
+	snapshot, sErr := qtx.GetThumbnailAssetBackendSnapshot(ctx, foghorndb.GetThumbnailAssetBackendSnapshotParams{
+		TenantID: tenantID, AssetKey: assetKey,
 	})
+	if sErr != nil {
+		return sErr
+	}
+	distinctBackends := int(snapshot.DistinctBackends)
+	recorded := snapshot.BackendID
+	if distinctBackends > 1 {
+		return fmt.Errorf("record stream cleanup obligation: asset %s has %d distinct thumbnail backend_ids — the one-immutable-backend-per-cell invariant is violated; refusing to snapshot an arbitrary backend", assetKey, distinctBackends)
+	}
+	backendID := recorded
+	if backendID == "" {
+		backendID = localBackendFingerprint()
+	}
+	// FAIL CLOSED on an unattributable obligation: with neither a recorded thumbnail backend nor a local fingerprint we
+	// cannot record WHICH store owns these bytes, and the drainer would otherwise settle the durable obligation after a
+	// guessed-current-store sweep. Refuse rather than persist a NULL identity (never a silent success).
+	if backendID == "" {
+		return fmt.Errorf("record stream cleanup obligation: asset %s has no recorded thumbnail backend and this cell has no local fingerprint — refusing to record an unattributed obligation", assetKey)
+	}
+
+	// Parent tombstone: existence fences claims/publishes; the lease/status/backoff machinery lives here.
+	_, iErr := qtx.InsertStreamCleanupObligation(ctx, foghorndb.InsertStreamCleanupObligationParams{
+		AssetKey: assetKey, TenantID: tenantID, BackendID: sql.NullString{String: backendID, Valid: true},
+	})
+	if iErr != nil {
+		return iErr
+	}
+	// IDEMPOTENT: a fresh insert commits the new tombstone; a re-delivered DeleteStreamThumbnails RPC (RowsAffected==0,
+	// the tombstone already exists) commits nothing new but releases the advisory lock as the durable ack, preserving
+	// the original snapshot. FAIL CLOSED if RowsAffected itself errors rather than assuming a state — Postgres normally
+	// supports it, but a foundational durability record must not proceed on an unknown insert result.
+	return nil
 }
 
 // AssetTombstoned reports whether an asset_key has a durable cleanup tombstone (a stream_cleanup_obligation row,

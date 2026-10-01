@@ -17,11 +17,10 @@ import (
 
 // StreamCleanupJob drains foghorn.stream_cleanup_obligation: for each pending tombstone it sweeps the deleted
 // stream's thumbnail objects from THIS cell's immutable local store, drops the control rows, and marks the row
-// 'cleaned' — leaving the row in place as the durable tombstone. This is the byte-deletion half of the
-// stream-deletion saga: Commodore durably delivers the obligation to the owning cell's Foghorn (which records the
-// tombstone inside a guarded tx); this worker guarantees the bytes actually go away, retried from the durable row
-// rather than lost on a crashed/failed one-shot RPC. A live stream (asset_key = stream_id) has no artifact row, so
-// neither the purge job nor version GC ever reclaims it — this is its only collector.
+// 'cleaned' — leaving the row in place as the durable tombstone. Commodore delivers live-stream obligations to the
+// owning cell; clip deletion records its own obligation in the catalog transaction. This worker guarantees the
+// thumbnail bytes go away, retried from the durable row rather than a one-shot RPC. A live stream
+// (asset_key = stream_id) has no artifact row, so neither the purge job nor version GC can reclaim its thumbnails.
 type StreamCleanupJob struct {
 	db          *sql.DB
 	cleaner     *artifacts.Cleaner
