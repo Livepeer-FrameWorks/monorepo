@@ -18,8 +18,9 @@ func TestReleaseWorkflowKeepsCandidatesOutOfLatest(t *testing.T) {
 	var workflow struct {
 		Jobs map[string]struct {
 			Steps []struct {
-				Uses string            `yaml:"uses"`
-				With map[string]string `yaml:"with"`
+				Name string            `yaml:"name"`
+				Env  map[string]string `yaml:"env"`
+				Run  string            `yaml:"run"`
 			} `yaml:"steps"`
 		} `yaml:"jobs"`
 	}
@@ -28,11 +29,14 @@ func TestReleaseWorkflowKeepsCandidatesOutOfLatest(t *testing.T) {
 	}
 	for _, job := range workflow.Jobs {
 		for _, step := range job.Steps {
-			if !strings.HasPrefix(step.Uses, "softprops/action-gh-release@") {
+			if !strings.Contains(step.Run, "scripts/release-assets") {
 				continue
 			}
-			if step.With["prerelease"] != "${{ contains(github.ref_name, '-rc') }}" || step.With["make_latest"] != "${{ contains(github.ref_name, '-rc') && 'false' || 'legacy' }}" {
-				t.Fatalf("RCs must be prereleases and never latest: %+v", step.With)
+			if step.Env["PRERELEASE"] != "${{ contains(github.ref_name, '-rc') }}" || step.Env["MAKE_LATEST"] != "${{ contains(github.ref_name, '-rc') && 'false' || 'legacy' }}" {
+				t.Fatalf("RCs must be prereleases and never latest: %+v", step.Env)
+			}
+			if !strings.Contains(step.Run, `--prerelease="${PRERELEASE}"`) || !strings.Contains(step.Run, `--make-latest "${MAKE_LATEST}"`) {
+				t.Fatalf("%s must pass PRERELEASE and MAKE_LATEST to release-assets:\n%s", step.Name, step.Run)
 			}
 			return
 		}
