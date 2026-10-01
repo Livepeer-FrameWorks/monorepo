@@ -227,7 +227,11 @@ baseline the release applies (rendered by `cli/internal/yugabytecontractbaseline
 databases created in the declared layout, and, for services whose database is declared
 colocated, also into distributed databases, the shape an existing production database keeps
 until it is relaid out. A test process loads each baseline once and resets it to the
-baseline's rows between tests, loading a new one after a test that changed its catalog. CI
+baseline's rows between tests, loading a new one after a test that changed its catalog and
+dropping the changed one. `scripts/run-go-contract-test.sh` drops every database a test
+process created once it exits, so an engine holds only the running process's databases: each
+table and index of a distributed database is a tablet, and the engine refuses to create
+tablets past its tablet replica limit (1301 on a 16 GB GitHub runner). CI
 follows the same split on pull requests and master pushes: shared Yugabyte/schema/harness
 changes run the exhaustive and HA gates, while a service-owned repository change runs only
 that service's real-Yugabyte contracts. The exhaustive and HA gates run as a matrix with one

@@ -47,7 +47,9 @@ func execSharedYugabyteAdmin(ctx context.Context, adminDSN, statement string) er
 // receives a database that an earlier test used, the database's catalog version is compared with the one it had right
 // after the load, every row is deleted with triggers disabled, and the rows and sequence positions the baseline itself
 // left are restored. A database whose catalog changed (DDL, grants, ANALYZE) or whose test failed is never handed out
-// again, so every test starts from the catalog and data the baseline produces.
+// again, so every test starts from the catalog and data the baseline produces; it is dropped instead, because every
+// tablet it keeps counts against the engine's tablet replica limit (a distributed baseline holds one per table and
+// index). The databases a process still holds for reuse when it exits are dropped by run-go-contract-test.sh.
 func OpenSharedYugabyteBaseline(t testing.TB, prefix, database string) (*sql.DB, bool) {
 	t.Helper()
 	baseDSN := strings.TrimSpace(os.Getenv(SharedYugabyteDSNEnv))
@@ -63,9 +65,12 @@ func OpenSharedYugabyteBaseline(t testing.TB, prefix, database string) (*sql.DB,
 			break
 		}
 		// CREATE DATABASE raises the catalog version of every database on the engine, so an idle database can read
-		// as changed without any test having changed it; it is then set aside like a changed one.
+		// as changed without any test having changed it; it is then dropped like a changed one.
 		if err := entry.reset(baseDSN); err != nil {
-			t.Logf("setting aside shared Yugabyte %s baseline database %s: %v", database, entry.name, err)
+			t.Logf("dropping shared Yugabyte %s baseline database %s instead of reusing it: %v", database, entry.name, err)
+			if dropErr := dropSharedYugabyteDatabase(baseDSN, entry.name); dropErr != nil {
+				t.Errorf("drop shared Yugabyte test database %s: %v", entry.name, dropErr)
+			}
 			entry = nil
 		}
 	}
@@ -89,16 +94,27 @@ func OpenSharedYugabyteBaseline(t testing.TB, prefix, database string) (*sql.DB,
 			pool.put(entry)
 			return
 		}
-		if strings.TrimSpace(os.Getenv(RetainSharedYugabyteDatabasesEnv)) == "1" {
-			return
-		}
-		ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
-		defer cancel()
-		if err := execSharedYugabyteAdmin(ctx, baseDSN, "DROP DATABASE "+entry.name); err != nil {
+		if err := dropSharedYugabyteDatabase(baseDSN, entry.name); err != nil {
 			t.Errorf("drop shared Yugabyte test database %s: %v", entry.name, err)
 		}
 	})
 	return db, true
+}
+
+// dropSharedYugabyteDatabase ends every session on a database that will not be handed out again and drops it.
+func dropSharedYugabyteDatabase(adminDSN, name string) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	admin, err := sql.Open("postgres", adminDSN)
+	if err != nil {
+		return fmt.Errorf("open shared Yugabyte admin connection: %w", err)
+	}
+	defer admin.Close()
+	if err = endSessions(ctx, admin, name); err != nil {
+		return err
+	}
+	_, err = admin.ExecContext(ctx, "DROP DATABASE IF EXISTS "+name)
+	return err
 }
 
 type sharedBaselineDatabasePool struct {

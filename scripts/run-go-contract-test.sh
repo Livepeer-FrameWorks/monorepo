@@ -11,9 +11,60 @@ module_dir=$1
 coverage_name=$2
 shift 2
 
+# On the suite-owned Yugabyte engine (run-yugabyte-contract-fixture.sh) a test process leaves databases behind when it
+# exits: the baselines it held for reuse and the databases it cached across tests. Every tablet they keep counts against
+# the engine's tablet replica limit for the rest of the lane, so the databases that appeared while this go test ran are
+# dropped when it exits, whatever its outcome. The fixture runs one go test at a time on its engine, so each of them
+# belongs to this process.
+shared_yugabyte=${FRAMEWORKS_YUGABYTE_TEST_CONTAINER:-}
+shared_yugabyte_before=""
+
+shared_yugabyte_sql() {
+	docker exec -e PGCONNECT_TIMEOUT=10 "$shared_yugabyte" \
+		ysqlsh -h "$shared_yugabyte" -U yugabyte -d yugabyte -X -v ON_ERROR_STOP=1 -tA -c "$1"
+}
+
+shared_yugabyte_databases() {
+	shared_yugabyte_sql "SELECT format('%I', datname) FROM pg_database WHERE NOT datistemplate AND datname NOT IN ('yugabyte', 'postgres', 'system_platform')"
+}
+
+release_shared_yugabyte_databases() {
+	local status=$? after database literal attempt failed=0
+	if ! after=$(shared_yugabyte_databases); then
+		echo "ERROR: could not list the databases on shared Yugabyte engine $shared_yugabyte to release them" >&2
+		exit $(( status == 0 ? 1 : status ))
+	fi
+	while IFS= read -r database; do
+		[[ -n "$database" ]] || continue
+		literal=${database//\'/\'\'}
+		for (( attempt = 1; ; attempt++ )); do
+			shared_yugabyte_sql "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE format('%I', datname) = '$literal' AND pid <> pg_backend_pid()" >/dev/null || true
+			if shared_yugabyte_sql "DROP DATABASE IF EXISTS $database" >/dev/null; then
+				break
+			fi
+			if (( attempt == 5 )); then
+				echo "ERROR: could not drop database $database from shared Yugabyte engine $shared_yugabyte" >&2
+				failed=1
+				break
+			fi
+			sleep 2
+		done
+	done < <(LC_ALL=C comm -13 <(printf '%s\n' "$shared_yugabyte_before" | LC_ALL=C sort) <(printf '%s\n' "$after" | LC_ALL=C sort))
+	if (( failed )) && (( status == 0 )); then
+		exit 1
+	fi
+	exit "$status"
+}
+
+if [[ -n "$shared_yugabyte" ]]; then
+	shared_yugabyte_before=$(shared_yugabyte_databases)
+	trap release_shared_yugabyte_databases EXIT
+fi
+
 if [[ -z "${CONTRACT_COVERAGE_DIR:-}" ]]; then
 	cd "$module_dir"
-	exec go test "$@"
+	go test "$@"
+	exit 0
 fi
 
 case "$coverage_name" in

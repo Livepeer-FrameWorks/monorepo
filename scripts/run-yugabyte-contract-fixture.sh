@@ -108,7 +108,6 @@ fi
 
 export FRAMEWORKS_YUGABYTE_TEST_CONTAINER="$container"
 export FRAMEWORKS_YUGABYTE_TEST_DSN="postgres://yugabyte@127.0.0.1:${port}/yugabyte?sslmode=disable"
-export FRAMEWORKS_YUGABYTE_TEST_RETAIN_DATABASES=1
 export FRAMEWORKS_YUGABYTE_TEST_BASELINES="$baselines"
 
 echo "Shared Yugabyte contract engine ready in $((SECONDS - started_at))s; running: $*"

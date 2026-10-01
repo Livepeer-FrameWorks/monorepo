@@ -24,9 +24,6 @@ const (
 	// SharedYugabyteContainerEnv lets Docker-based schema introspection reuse the
 	// same suite-owned process without attempting to remove it from a subtest.
 	SharedYugabyteContainerEnv = "FRAMEWORKS_YUGABYTE_TEST_CONTAINER"
-	// RetainSharedYugabyteDatabasesEnv leaves isolated databases for the bounded
-	// fixture to discard with its container, avoiding slow distributed DROP DDL.
-	RetainSharedYugabyteDatabasesEnv = "FRAMEWORKS_YUGABYTE_TEST_RETAIN_DATABASES"
 )
 
 var sharedYugabyteDatabaseSequence atomic.Uint64
