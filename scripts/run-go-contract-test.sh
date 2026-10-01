@@ -38,7 +38,7 @@ release_shared_yugabyte_databases() {
 		[[ -n "$database" ]] || continue
 		literal=${database//\'/\'\'}
 		for (( attempt = 1; ; attempt++ )); do
-			shared_yugabyte_sql "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE format('%I', datname) = '$literal' AND pid <> pg_backend_pid()" >/dev/null || true
+			shared_yugabyte_sql "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname IS NOT NULL AND format('%I', datname) = '$literal' AND pid <> pg_backend_pid()" >/dev/null || true
 			if shared_yugabyte_sql "DROP DATABASE IF EXISTS $database" >/dev/null; then
 				break
 			fi
