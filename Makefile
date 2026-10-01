@@ -463,6 +463,7 @@ verify-generated-contracts:
 	$(MAKE) --no-print-directory verify-config-annotations
 	$(MAKE) --no-print-directory verify-graphql-reference
 	$(MAKE) --no-print-directory verify-release-channels
+	$(MAKE) --no-print-directory verify-release-assets
 	$(MAKE) --no-print-directory verify-graphql-events
 	$(MAKE) --no-print-directory verify-swift-gql
 	$(MAKE) --no-print-directory graphql-frontend
@@ -1787,6 +1788,10 @@ verify-release-channels:
 	@cd pkg && go test ./version/ -run Channel -count=1
 	@cd scripts/release-channel && go test ./... -count=1
 	@cd cli && go test ./internal/releases/ -run Channel -count=1
+
+# The release workflow publishes the GitHub release and its assets through scripts/release-assets.
+verify-release-assets:
+	@cd scripts/release-assets && go test ./... -count=1
 
 verify-swift-gql:
 	@./scripts/generate-swift-gql.sh

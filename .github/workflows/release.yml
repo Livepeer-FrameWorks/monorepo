@@ -2009,7 +2009,7 @@ jobs:
       - build-darwin-pkg
     runs-on: ubuntu-latest
     permissions:
-      contents: write # softprops/action-gh-release uploads release assets
+      contents: write # scripts/release-assets creates the release and uploads its assets
       packages: read # docker login to pull image digests for manifest generation
     steps:
       - uses: actions/checkout@v6
@@ -2683,15 +2683,23 @@ jobs:
           name: tray-app-darwin
           path: dist/tray
         continue-on-error: true
-      - name: Create GitHub Release
-        uses: softprops/action-gh-release@v3
+      - uses: actions/setup-go@v6
         with:
-          tag_name: ${{ github.ref_name }}
-          name: ${{ github.ref_name }}
-          prerelease: ${{ contains(github.ref_name, '-rc') }}
-          make_latest: ${{ contains(github.ref_name, '-rc') && 'false' || 'legacy' }}
-          generate_release_notes: true
-          files: |
+          go-version-file: .go-version
+          cache: false
+        env:
+          GOTOOLCHAIN: local
+      # A release carries over a hundred assets. scripts/release-assets uploads them one at a time with retries that
+      # honour GitHub's rate-limit responses, and a re-run keeps the assets already uploaded unchanged.
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PRERELEASE: ${{ contains(github.ref_name, '-rc') }}
+          MAKE_LATEST: ${{ contains(github.ref_name, '-rc') && 'false' || 'legacy' }}
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          files=(
             dist/manifest.yaml
             dist/cli/*
             dist/binaries/*.tar.gz
@@ -2707,6 +2715,15 @@ jobs:
             dist/logbook-build.tar.gz
             dist/logbook-build.tar.gz.sha256
             scripts/install.sh
+          )
+          go build -C scripts/release-assets -o "${RUNNER_TEMP}/release-assets" .
+          "${RUNNER_TEMP}/release-assets" \
+            --repo "${GITHUB_REPOSITORY}" \
+            --tag "${GITHUB_REF_NAME}" \
+            --prerelease="${PRERELEASE}" \
+            --make-latest "${MAKE_LATEST}" \
+            --generate-notes \
+            "${files[@]}"
 
       - name: Generate Homebrew tap token
         id: homebrew-token

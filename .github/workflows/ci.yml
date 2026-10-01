@@ -75,6 +75,7 @@ jobs:
               - 'api_*/cmd/**'
               - 'scripts/configref/**'
               - 'scripts/release-channel/**'
+              - 'scripts/release-assets/**'
               - 'cli/internal/configschema/**'
               - 'cli/internal/releases/**'
               - '.github/workflows/release.yml'
@@ -537,6 +538,8 @@ jobs:
         run: make verify-graphql-reference
       - name: Release channel classifier
         run: make verify-release-channels
+      - name: Release asset publisher
+        run: make verify-release-assets
       - name: Public event GraphQL types match the event registry
         run: make verify-graphql-events
       - name: Swift GraphQL constants
