@@ -56,14 +56,31 @@ func TestReconcileVirtualViewers_CleansUpAbandonedViewers(t *testing.T) {
 	}
 }
 
+func TestReconcileNodeStreamPresenceReportsLastSnapshotPresence(t *testing.T) {
+	sm := NewStreamStateManager()
+	sm.TouchNode("edge-us-1", true)
+	before := time.Now()
+	sm.ObserveNodeSnapshotStream("frameworks-demo", "edge-us-1", 1, 1, 0, 0, true)
+	after := time.Now()
+	sm.UpdateNodeStats("frameworks-demo", "edge-us-1", 2, 1, 0, 0, true)
+
+	cleared := sm.ReconcileNodeStreamPresence("edge-us-1", map[string]struct{}{})
+	if len(cleared) != 1 || cleared[0].SnapshotPresentAt.Before(before) || cleared[0].SnapshotPresentAt.After(after) {
+		t.Fatalf("cleared = %#v, want the snapshot listing time in [%v, %v]", cleared, before, after)
+	}
+}
+
 func TestReconcileNodeStreamPresenceClearsMissingStreams(t *testing.T) {
 	sm := NewStreamStateManager()
 	sm.TouchNode("edge-us-1", true)
 	sm.UpdateNodeStats("frameworks-demo", "edge-us-1", 3, 1, 100, 200, true)
 
 	cleared := sm.ReconcileNodeStreamPresence("edge-us-1", map[string]struct{}{})
-	if len(cleared) != 1 || cleared[0] != "frameworks-demo" {
+	if len(cleared) != 1 || cleared[0].InternalName != "frameworks-demo" {
 		t.Fatalf("cleared = %#v, want frameworks-demo", cleared)
+	}
+	if !cleared[0].SnapshotPresentAt.IsZero() {
+		t.Fatalf("trigger-reported presence carried snapshot presence %v", cleared[0].SnapshotPresentAt)
 	}
 
 	instances := sm.GetStreamInstances("frameworks-demo")

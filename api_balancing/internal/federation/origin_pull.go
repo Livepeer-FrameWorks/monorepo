@@ -308,7 +308,7 @@ func (d *ArrangeOriginPullDeps) ArrangeOriginPull(ctx context.Context, req Arran
 			return nil, fmt.Errorf("%w: local destination: %w", ErrOriginPullSourceBinding, err)
 		}
 	}
-	if reused, reuseErr := lookupExistingReplication(ctx, registry, req, destNodeID, destClusterID); reused != nil || reuseErr != nil {
+	if reused, reuseErr := lookupExistingReplication(ctx, registry, req, destNodeID, destClusterID, d.now()); reused != nil || reuseErr != nil {
 		return reused, reuseErr
 	}
 
@@ -328,7 +328,7 @@ func (d *ArrangeOriginPullDeps) ArrangeOriginPull(ctx context.Context, req Arran
 			return nil, ctx.Err()
 		case <-timer.C:
 		}
-		if reused, reuseErr := lookupExistingReplication(ctx, registry, req, destNodeID, destClusterID); reused != nil || reuseErr != nil {
+		if reused, reuseErr := lookupExistingReplication(ctx, registry, req, destNodeID, destClusterID, d.now()); reused != nil || reuseErr != nil {
 			return reused, reuseErr
 		}
 		return nil, ErrOriginPullLockContention
@@ -338,7 +338,7 @@ func (d *ArrangeOriginPullDeps) ArrangeOriginPull(ctx context.Context, req Arran
 		defer cancel()
 		d.Cache.ReleaseOriginPullLock(releaseCtx, lockKey, lockOwner)
 	}()
-	if reused, reuseErr := lookupExistingReplication(ctx, registry, req, destNodeID, destClusterID); reused != nil || reuseErr != nil {
+	if reused, reuseErr := lookupExistingReplication(ctx, registry, req, destNodeID, destClusterID, d.now()); reused != nil || reuseErr != nil {
 		return reused, reuseErr
 	}
 
@@ -537,7 +537,7 @@ func originPullDestinationKey(internalName, nodeID string) string {
 	return fmt.Sprintf("%d:%s:%s", len(internalName), internalName, nodeID)
 }
 
-func lookupExistingReplication(ctx context.Context, registry *control.StreamRegistry, req ArrangeOriginPullRequest, nodeID, destClusterID string) (*ArrangeOriginPullResult, error) {
+func lookupExistingReplication(ctx context.Context, registry *control.StreamRegistry, req ArrangeOriginPullRequest, nodeID, destClusterID string, now time.Time) (*ArrangeOriginPullResult, error) {
 	if registry == nil {
 		return nil, ErrOriginPullRegistryNil
 	}
@@ -564,6 +564,11 @@ func lookupExistingReplication(ctx context.Context, registry *control.StreamRegi
 		if err := registry.RequireInboundPlacement(ctx, req.InternalName, pull); err != nil {
 			return nil, fmt.Errorf("%w: require placement for reused source: %w", ErrOriginPullStateUnavailable, err)
 		}
+	}
+	// The caller is about to send a viewer to this destination, which may not
+	// have started the pull; its start grace runs again from this hand-out.
+	if err := registry.RefreshInboundPullReuse(ctx, req.InternalName, pull, now); err != nil {
+		return nil, fmt.Errorf("%w: refresh reused source: %w", ErrOriginPullStateUnavailable, err)
 	}
 	return &ArrangeOriginPullResult{
 		AttemptID:    pull.AttemptID,

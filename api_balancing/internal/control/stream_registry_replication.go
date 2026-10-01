@@ -9,10 +9,102 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/mist"
 	"github.com/google/uuid"
 )
 
 const maxInboundDestinations = 4096
+
+// inboundPullStartGrace is how long a destination has to start a pull after it
+// was arranged, renewed or handed out again. It is the origin's admission
+// window: past it the origin refuses the attempt's unrenewed DTSC connection,
+// so a destination that has not listed the stream by then never started it.
+const inboundPullStartGrace = acceptedPullAdmissionWindow
+
+// inboundPullStartedAt is the latest arrangement event the start grace runs from.
+func inboundPullStartedAt(pull InboundPull) time.Time {
+	started := pull.CreatedAt
+	for _, at := range []time.Time{pull.SourceAcceptedAt, pull.ReusedAt} {
+		if at.After(started) {
+			started = at
+		}
+	}
+	return started
+}
+
+// RefreshInboundPullReuse restarts the destination's start grace when
+// arrangement hands an existing attempt to a new placement. It writes only
+// once half the grace has passed, so repeated hand-outs stay read-only while
+// every hand-out keeps at least half the grace.
+func (r *StreamRegistry) RefreshInboundPullReuse(ctx context.Context, internalName string, expected InboundPull, now time.Time) error {
+	if expected.AttemptID == "" || expected.DestNodeID == "" || now.IsZero() {
+		return ErrReplicationConflict
+	}
+	if now.Before(inboundPullStartedAt(expected).Add(inboundPullStartGrace / 2)) {
+		return nil
+	}
+	_, err := r.mutateInboundPull(ctx, sourceInternalKey(internalName), expected.DestNodeID, func(current InboundPull, exists bool) (InboundPull, error) {
+		if !exists || current.Cleared || current.AttemptID != expected.AttemptID {
+			return InboundPull{}, ErrReplicationConflict
+		}
+		if now.After(current.ReusedAt) {
+			current.ReusedAt = now
+		}
+		return current, nil
+	})
+	return err
+}
+
+// ClearUnstartedInboundPulls clears the node's pulls that a lifecycle snapshot
+// received at snapshotAt does not list although their start grace has passed.
+// listed holds the snapshot's stream names, which Helmsman reports without
+// their runtime prefix. The grace is rechecked against the current record, so
+// a concurrent renewal or hand-out on another replica keeps the pull. Returns
+// the cleared internal names.
+func (r *StreamRegistry) ClearUnstartedInboundPulls(ctx context.Context, nodeID string, listed map[string]struct{}, snapshotAt time.Time) []string {
+	nodeID = strings.TrimSpace(nodeID)
+	if nodeID == "" || snapshotAt.IsZero() {
+		return nil
+	}
+	abandoned := func(pull InboundPull) bool {
+		return !snapshotAt.Before(inboundPullStartedAt(pull).Add(inboundPullStartGrace))
+	}
+	type candidate struct {
+		internalName string
+		attemptID    string
+	}
+	var candidates []candidate
+	r.mu.RLock()
+	for internalName, ce := range r.byInt {
+		if _, ok := listed[mist.ExtractInternalName(internalName)]; ok {
+			continue
+		}
+		pull, ok := inboundPulls(ce.entry.Locations[r.clusterID])[nodeID]
+		if !ok || pull.Cleared || pull.DTSCURL == "" || !abandoned(pull) {
+			continue
+		}
+		candidates = append(candidates, candidate{internalName: internalName, attemptID: pull.AttemptID})
+	}
+	r.mu.RUnlock()
+
+	var cleared []string
+	for _, c := range candidates {
+		_, err := r.mutateInboundPull(ctx, c.internalName, nodeID, func(current InboundPull, exists bool) (InboundPull, error) {
+			if !exists || current.Cleared || current.AttemptID != c.attemptID || !abandoned(current) {
+				return InboundPull{}, ErrReplicationConflict
+			}
+			current.Cleared = true
+			current.PlacementDemand = ""
+			return current, nil
+		})
+		if err == nil {
+			cleared = append(cleared, c.internalName)
+		} else if !errors.Is(err, ErrReplicationConflict) && r.redisLogger != nil {
+			r.redisLogger.WithError(err).WithField("internal_name", c.internalName).Warn("Failed to clear unstarted inbound pull")
+		}
+	}
+	return cleared
+}
 
 var ErrReplicationConflict = errors.New("replication attempt superseded")
 
@@ -48,6 +140,9 @@ type InboundPull struct {
 	DTSCURL              string
 	CreatedAt            time.Time
 	SourceAcceptedAt     time.Time
+	// ReusedAt is when arrangement last handed this existing attempt to a new
+	// placement; the destination's start grace runs from then as well.
+	ReusedAt time.Time
 	// PlacementDemand retains request context for a fresh policy evaluation;
 	// it is not admission evidence and does not extend any receipt lifetime.
 	PlacementDemand string

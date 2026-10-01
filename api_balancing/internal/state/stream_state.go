@@ -262,6 +262,10 @@ type StreamInstanceState struct {
 	// playability. Edges (STREAM_BUFFER) and levels are ordered by these times
 	// so neither can regress the other.
 	BufferPlayableSampledUnixMillis int64 `json:"buffer_playable_sampled_unix_millis,omitempty"`
+	// SnapshotPresentAt is when a node lifecycle snapshot last listed this
+	// stream on this node. Only snapshots set it, so absence in a later
+	// snapshot is judged against presence from the same ordered report.
+	SnapshotPresentAt time.Time `json:"snapshot_present_at,omitzero"`
 }
 
 // VirtualViewerState represents the lifecycle state of a virtual viewer
@@ -1497,6 +1501,16 @@ func (sm *StreamStateManager) SetStreamInstanceInputs(internalName, nodeID strin
 // instances (writing them here directly was last-write-wins across conn-owner
 // instances).
 func (sm *StreamStateManager) UpdateNodeStats(internalName, nodeID string, total, inputs int, up, down int64, replicated bool) {
+	sm.updateNodeStats(internalName, nodeID, total, inputs, up, down, replicated, false)
+}
+
+// ObserveNodeSnapshotStream applies a stream listed in a node lifecycle
+// snapshot and records that snapshot's presence for ReconcileNodeStreamPresence.
+func (sm *StreamStateManager) ObserveNodeSnapshotStream(internalName, nodeID string, total, inputs int, up, down int64, replicated bool) {
+	sm.updateNodeStats(internalName, nodeID, total, inputs, up, down, replicated, true)
+}
+
+func (sm *StreamStateManager) updateNodeStats(internalName, nodeID string, total, inputs int, up, down int64, replicated, snapshot bool) {
 	sm.mu.Lock()
 	now := time.Now()
 	if sm.streamInstances[internalName] == nil {
@@ -1516,6 +1530,9 @@ func (sm *StreamStateManager) UpdateNodeStats(internalName, nodeID string, total
 	inst.BytesDown = down
 	inst.Replicated = replicated
 	inst.LastUpdate = now
+	if snapshot {
+		inst.SnapshotPresentAt = now
+	}
 
 	union := sm.streams[internalName]
 	if union == nil {
@@ -1544,9 +1561,17 @@ func (sm *StreamStateManager) UpdateNodeStats(internalName, nodeID string, total
 	sm.persistStreamInstanceWriteThrough(internalName, nodeID, instPayload)
 }
 
+// AbsentNodeStream is a stream instance a node lifecycle snapshot no longer
+// lists. SnapshotPresentAt is the last snapshot that did list it; zero when
+// no snapshot ever did (the instance came from viewer or trigger bookkeeping).
+type AbsentNodeStream struct {
+	InternalName      string
+	SnapshotPresentAt time.Time
+}
+
 // ReconcileNodeStreamPresence clears per-node stream instances that are
 // absent from Helmsman's current Mist stream snapshot.
-func (sm *StreamStateManager) ReconcileNodeStreamPresence(nodeID string, observed map[string]struct{}) []string {
+func (sm *StreamStateManager) ReconcileNodeStreamPresence(nodeID string, observed map[string]struct{}) []AbsentNodeStream {
 	nodeID = strings.TrimSpace(nodeID)
 	if nodeID == "" {
 		return nil
@@ -1562,7 +1587,7 @@ func (sm *StreamStateManager) ReconcileNodeStreamPresence(nodeID string, observe
 	}
 
 	now := time.Now()
-	var cleared []string
+	var cleared []AbsentNodeStream
 	var streamWrites []streamWrite
 	var instanceWrites []instanceWrite
 
@@ -1606,7 +1631,7 @@ func (sm *StreamStateManager) ReconcileNodeStreamPresence(nodeID string, observe
 			}
 		}
 
-		cleared = append(cleared, internalName)
+		cleared = append(cleared, AbsentNodeStream{InternalName: internalName, SnapshotPresentAt: inst.SnapshotPresentAt})
 	}
 	sm.mu.Unlock()
 

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 
 	"frameworks/api_balancing/internal/control"
 	foghornfederationpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/foghorn_federation"
@@ -126,7 +127,7 @@ func TestArrangeVirtualSourceBindingRevalidatesExistingPhysicalPull(t *testing.T
 	if reused, reuseErr := lookupExistingReplication(context.Background(), control.StreamRegistryInstance, ArrangeOriginPullRequest{
 		InternalName: req.InternalName, TenantID: req.TenantID, Remote: req.Remote, RemoteCluster: req.RemoteCluster,
 		SourceGeneration: "generation", SourceRevision: 7,
-	}, req.DestNodeID, req.DestClusterID); reused != nil || reuseErr != nil {
+	}, req.DestNodeID, req.DestClusterID, time.Now()); reused != nil || reuseErr != nil {
 		t.Fatal("unbound record was promoted from a new candidate advertisement")
 	}
 	bound, err := deps.ArrangeOriginPull(context.Background(), req)

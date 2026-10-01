@@ -522,16 +522,27 @@ func (r *StreamRegistry) SetLivePresence(p LivePresence) {
 // ClearReplicating unmarks an in-flight replication when the upstream
 // pull terminates or expires.
 func (r *StreamRegistry) ClearReplicating(internalName string) {
-	_ = r.clearReplicating(internalName, "")
+	_ = r.clearReplicating(internalName, "", time.Time{})
 }
 
-// ClearReplicatingForNode unmarks a replicated pull only when it belongs
-// to the node that just reported the stream absent.
-func (r *StreamRegistry) ClearReplicatingForNode(internalName, nodeID string) bool {
-	return r.clearReplicating(internalName, strings.TrimSpace(nodeID))
+// ClearReplicatingForNode unmarks the node's pull when the node reported the
+// stream absent after having been seen carrying it at presentAt. A pull
+// arranged after presentAt is the node's next copy, not the one that went
+// away: the destination has not started it yet, so it stays. A zero
+// presentAt clears nothing.
+func (r *StreamRegistry) ClearReplicatingForNode(internalName, nodeID string, presentAt time.Time) bool {
+	nodeID = strings.TrimSpace(nodeID)
+	if nodeID == "" || presentAt.IsZero() {
+		return false
+	}
+	return r.clearReplicating(internalName, nodeID, presentAt)
 }
 
-func (r *StreamRegistry) clearReplicating(internalName, nodeID string) bool {
+// clearReplicating clears active pulls, scoped to nodeID when set. With a
+// non-zero presentAt it skips pulls whose attempt was recorded after it;
+// CreatedAt is fixed per attempt, and ClearInboundPull is fenced to that
+// attempt.
+func (r *StreamRegistry) clearReplicating(internalName, nodeID string, presentAt time.Time) bool {
 	internalName = sourceInternalKey(internalName)
 	if internalName == "" {
 		return false
@@ -546,6 +557,9 @@ func (r *StreamRegistry) clearReplicating(internalName, nodeID string) bool {
 	changed := false
 	for _, pull := range pulls {
 		if nodeID != "" && pull.DestNodeID != nodeID {
+			continue
+		}
+		if !presentAt.IsZero() && pull.CreatedAt.After(presentAt) {
 			continue
 		}
 		cleared, err := r.ClearInboundPull(context.Background(), internalName, pull.DestNodeID, pull.AttemptID)

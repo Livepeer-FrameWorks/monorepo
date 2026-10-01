@@ -5870,20 +5870,34 @@ func (p *Processor) handleNodeLifecycleUpdate(trigger *ipcpb.MistTrigger) (strin
 		observedStreams[internalName] = struct{}{}
 		replicated := s.GetReplicated()
 		if !replicated && control.StreamRegistryInstance != nil {
-			if loc, ok := control.StreamRegistryInstance.LocalReplication(context.Background(), internalName); ok && loc.DestNodeID == nu.GetNodeId() {
+			if _, ok := control.StreamRegistryInstance.LocalReplicationForNode(context.Background(), internalName, nu.GetNodeId()); ok {
 				replicated = true
 			}
 		}
-		state.DefaultManager().UpdateNodeStats(internalName, nu.GetNodeId(), int(s.GetTotal()), int(s.GetInputs()), int64(s.GetBytesUp()), int64(s.GetBytesDown()), replicated)
+		state.DefaultManager().ObserveNodeSnapshotStream(internalName, nu.GetNodeId(), int(s.GetTotal()), int(s.GetInputs()), int64(s.GetBytesUp()), int64(s.GetBytesDown()), replicated)
 	}
+	// Absence clears only a pull the node was seen carrying: a pull arranged
+	// after the node's last listing has not been started by the destination
+	// yet, and a snapshot sampled before Mist asked for its source cannot list it.
 	if cleared := state.DefaultManager().ReconcileNodeStreamPresence(nu.GetNodeId(), observedStreams); len(cleared) > 0 {
-		for _, internalName := range cleared {
-			if control.StreamRegistryInstance != nil && control.StreamRegistryInstance.ClearReplicatingForNode(internalName, nu.GetNodeId()) {
+		for _, absent := range cleared {
+			if control.StreamRegistryInstance != nil && control.StreamRegistryInstance.ClearReplicatingForNode(absent.InternalName, nu.GetNodeId(), absent.SnapshotPresentAt) {
 				p.logger.WithFields(logging.Fields{
 					"node_id":       nu.GetNodeId(),
-					"internal_name": internalName,
+					"internal_name": absent.InternalName,
 				}).Info("Node lifecycle cleared stale replicated stream")
 			}
+		}
+	}
+	// A pull the node still does not list once its start grace has passed was
+	// never started; this snapshot was received after the grace, so it cannot
+	// predate the destination's chance to start it.
+	if control.StreamRegistryInstance != nil {
+		for _, internalName := range control.StreamRegistryInstance.ClearUnstartedInboundPulls(context.Background(), nu.GetNodeId(), observedStreams, time.Now()) {
+			p.logger.WithFields(logging.Fields{
+				"node_id":       nu.GetNodeId(),
+				"internal_name": internalName,
+			}).Info("Node lifecycle cleared origin pull the destination never started")
 		}
 	}
 

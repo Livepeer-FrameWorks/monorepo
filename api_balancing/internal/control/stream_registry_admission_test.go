@@ -193,15 +193,16 @@ func TestLocalReplicationAcceptsSourceRuntimeName(t *testing.T) {
 func TestClearReplicatingForNodeOnlyClearsPinnedNode(t *testing.T) {
 	r := NewStreamRegistry(nil, "cluster-A", time.Minute)
 	markReplicatingForTest(t, r, "stream-1", "cluster-B", "dtsc://origin/live+stream-1", "edge-a", "https://edge-a/view", "origin-node")
+	presentAt := time.Now()
 
-	if cleared := r.ClearReplicatingForNode("stream-1", "edge-b"); cleared {
+	if cleared := r.ClearReplicatingForNode("stream-1", "edge-b", presentAt); cleared {
 		t.Fatal("expected wrong node not to clear replication")
 	}
 	if _, ok := r.LocalReplication(context.Background(), "stream-1"); !ok {
 		t.Fatal("expected replication to remain after wrong-node clear")
 	}
 
-	if cleared := r.ClearReplicatingForNode("stream-1", "edge-a"); !cleared {
+	if cleared := r.ClearReplicatingForNode("stream-1", "edge-a", presentAt); !cleared {
 		t.Fatal("expected pinned node to clear replication")
 	}
 	if _, ok := r.LocalReplication(context.Background(), "stream-1"); ok {
@@ -212,6 +213,23 @@ func TestClearReplicatingForNodeOnlyClearsPinnedNode(t *testing.T) {
 	r.mu.RUnlock()
 	if loc.IsLiveNow {
 		t.Fatal("expected local liveness to clear with replication")
+	}
+}
+
+func TestClearReplicatingForNodeKeepsPullArrangedAfterPresence(t *testing.T) {
+	r := NewStreamRegistry(nil, "cluster-A", time.Minute)
+	presentAt := time.Now()
+	time.Sleep(time.Millisecond)
+	markReplicatingForTest(t, r, "stream-1", "cluster-B", "dtsc://origin/live+stream-1", "edge-a", "https://edge-a/view", "origin-node")
+
+	if cleared := r.ClearReplicatingForNode("stream-1", "edge-a", presentAt); cleared {
+		t.Fatal("presence observed before the pull was arranged cleared it")
+	}
+	if cleared := r.ClearReplicatingForNode("stream-1", "edge-a", time.Time{}); cleared {
+		t.Fatal("a node never seen carrying the stream cleared its pull")
+	}
+	if _, ok := r.LocalReplication(context.Background(), "stream-1"); !ok {
+		t.Fatal("expected the newer pull to remain")
 	}
 }
 

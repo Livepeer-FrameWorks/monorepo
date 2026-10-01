@@ -620,3 +620,34 @@ func markReplicatingForTest(t *testing.T, r *control.StreamRegistry, internalNam
 		t.Fatalf("record inbound pull for %s: %v", internalName, err)
 	}
 }
+
+// Handing an existing attempt to a new viewer restarts the destination's start
+// grace: the viewer's redirect can land just before a snapshot that does not
+// list the stream yet, and that snapshot must not clear the pull as abandoned.
+func TestArrangeReuseRestartsDestinationStartGrace(t *testing.T) {
+	registry := freshRegistry(t)
+	fed := &fakeNotifyFedClient{}
+	now := time.Now()
+	deps := makeDepsAt(t, fed, map[string]string{"cluster-peer": "peer:443"}, func() time.Time { return now })
+	req := makeReq()
+	ctx := context.Background()
+	if _, err := registry.RecordInboundPull(ctx, req.InternalName, control.InboundPull{
+		TenantID: req.TenantID, SourceClusterID: req.RemoteCluster, SourceNodeID: req.Remote.GetNodeId(),
+		DestClusterID: req.DestClusterID, DestNodeID: req.DestNodeID, DTSCURL: "dtsc://peer/live+stream-1",
+		CreatedAt: now.Add(-4 * time.Minute),
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	reused, err := deps.ArrangeOriginPull(ctx, req)
+	if err != nil || !reused.Reused || len(fed.calls) != 0 {
+		t.Fatalf("existing pull was not reused: %+v, %v", reused, err)
+	}
+
+	if cleared := registry.ClearUnstartedInboundPulls(ctx, req.DestNodeID, nil, now.Add(2*time.Minute)); len(cleared) != 0 {
+		t.Fatalf("snapshot shortly after the hand-out cleared the reused pull: %v", cleared)
+	}
+	if cleared := registry.ClearUnstartedInboundPulls(ctx, req.DestNodeID, nil, now.Add(6*time.Minute)); len(cleared) != 1 {
+		t.Fatalf("pull never started after its hand-out was not cleared: %v", cleared)
+	}
+}
