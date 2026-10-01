@@ -7,6 +7,7 @@ import (
 
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/mist"
 	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
+	"github.com/sirupsen/logrus"
 )
 
 // processingResultRetryable is the ProcessingJobResult status for an attempt
@@ -99,6 +100,21 @@ func recordingDurationError(mediaDurationMs, sourceDurationMs int64) error {
 // this node reuses the stream name; reported early, it attaches to the old
 // buffer while that buffer is still stopping and is killed with it.
 const processingStreamStopTimeout = 30 * time.Second
+
+// failedRecordingStatus is the ProcessingJobResult status for a recording that
+// failed validation and whose processing stream cleanupFailedProcessing has
+// already been told to stop. Every job kind that records through a processing
+// stream (VOD, clip, chapter) reports a retryable exit reason as retryable, and
+// reports it only once the stream has stopped.
+func failedRecordingStatus(log *logrus.Entry, mistClient *mist.Client, streamName string, evt ProcessingRecordingEndEvent) string {
+	if !recordingEndRetryable(evt) {
+		return "failed"
+	}
+	if !waitProcessingStreamStopped(mistClient, streamName, processingStreamStopTimeout) {
+		log.Warn("Processing stream still active after cleanup; the retry may attach to it")
+	}
+	return processingResultRetryable
+}
 
 // activeStreamsContain reports whether an active_streams response still lists
 // the stream.

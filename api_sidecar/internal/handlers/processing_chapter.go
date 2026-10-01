@@ -352,7 +352,8 @@ loop:
 				"human_reason":      recordingEnd.HumanExitReason,
 			}).Error("Chapter finalize: recording validation failed")
 			h.cleanupFailedProcessing(log, mistClient, streamName, outputPath)
-			h.sendResult(send, req.GetJobId(), "failed",
+			status := failedRecordingStatus(log, mistClient, streamName, *recordingEnd)
+			h.sendResult(send, req.GetJobId(), status,
 				fmt.Sprintf("recording validation failed: %v", err), nil, "", 0)
 			return
 		}

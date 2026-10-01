@@ -248,7 +248,8 @@ loop:
 			"exit_reason":       recordingEnd.ExitReason,
 		}).Error("Clip: recording validation failed")
 		h.cleanupFailedProcessing(log, mistClient, streamName, outputPath)
-		h.sendResult(send, req.GetJobId(), "failed", fmt.Sprintf("recording validation failed: %v", err), nil, "", 0)
+		status := failedRecordingStatus(log, mistClient, streamName, *recordingEnd)
+		h.sendResult(send, req.GetJobId(), status, fmt.Sprintf("recording validation failed: %v", err), nil, "", 0)
 		return
 	}
 

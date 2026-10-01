@@ -1453,13 +1453,7 @@ loop:
 				"human_reason":      recordingEnd.HumanExitReason,
 			}).Error("Processing recording validation failed")
 			h.cleanupFailedProcessing(log, mistClient, streamName, outputPath)
-			status := "failed"
-			if recordingEndRetryable(*recordingEnd) {
-				status = processingResultRetryable
-				if !waitProcessingStreamStopped(mistClient, streamName, processingStreamStopTimeout) {
-					log.Warn("Processing stream still active after cleanup; the retry may attach to it")
-				}
-			}
+			status := failedRecordingStatus(log, mistClient, streamName, *recordingEnd)
 			h.sendResult(send, req.GetJobId(), status, fmt.Sprintf("recording validation failed: %v", err), nil, "", 0)
 			return
 		}
