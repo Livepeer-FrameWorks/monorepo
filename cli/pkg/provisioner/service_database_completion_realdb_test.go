@@ -390,15 +390,20 @@ func TestYugabyteServiceBaselineReapplyAndCompletion(t *testing.T) {
 					probe.createDatabase(databaseName)
 				}
 				t.Cleanup(func() { ybDropDatabase(t, name, databaseName) })
-				rewrite := func(sql string) string { return ybLayoutSQL(t, layout, sql) }
+				// As BuildSchemaItemsForEngine renders them: the first apply to the empty schema builds its indexes
+				// non-concurrently, and a reapply builds them online.
+				reapply := func(sql string) string { return ybLayoutSQL(t, layout, sql) }
 				applier := func(_ context.Context, databases []SchemaDatabase) error {
 					for _, target := range databases {
-						probe.apply(target.Name, rewrite(embeddedBaselineForTest(t, target.SourceName)))
+						if !target.ReapplyBaseline {
+							t.Fatalf("completion applied %s without reapply", target.Name)
+						}
+						probe.apply(target.Name, reapply(embeddedBaselineForTest(t, target.SourceName)))
 					}
 					return nil
 				}
 
-				probe.apply(databaseName, rewrite(interruptedBaselinePrefix(t, source)))
+				probe.apply(databaseName, ybBaselineSQL(t, layout, interruptedBaselinePrefix(t, source)))
 				state := probe.state(database)
 				if !state.HasUnverifiedSchema() {
 					t.Fatalf("interrupted baseline state = %+v, want tables without marker", state)
@@ -420,7 +425,7 @@ func TestYugabyteServiceBaselineReapplyAndCompletion(t *testing.T) {
 				ybRequireAllIndexesValid(t, name, databaseName)
 
 				complete := probe.catalog(databaseName, source)
-				probe.apply(databaseName, rewrite(embeddedBaselineForTest(t, source)))
+				probe.apply(databaseName, reapply(embeddedBaselineForTest(t, source)))
 				requireCatalogsEqual(t, "schema/"+source+".sql applied again on YugabyteDB", complete, probe.catalog(databaseName, source))
 			})
 		}

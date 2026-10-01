@@ -5,7 +5,11 @@
 # A baseline is applied to a schema without tables, or to any item with
 # reapply=true: the CLI sets it when completing a schema whose baseline apply
 # was interrupted and for the scratch reference database that completion is
-# verified against.
+# verified against. The CLI renders an item without reapply with its indexes
+# built NONCONCURRENTLY, which indexes only the rows present when the build
+# starts; this gate applies such an item only while the schema has no tables,
+# so no session can write to them during the build. A reapply item keeps
+# online index builds.
 
 - name: Ensure YSQL Ansible module prerequisites
   ansible.builtin.import_tasks: ysql_prereqs.yml

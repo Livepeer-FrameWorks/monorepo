@@ -49,8 +49,36 @@ var (
 	schemaUnitTarget = regexp.MustCompile(`^verify-schema-yugabyte-unit-([a-z]+)-(compat|completion|preflight)$`)
 )
 
+var makeVariableReference = regexp.MustCompile(`\$\(([A-Z0-9_]+)\)`)
+
+// expandMakeSimpleVariable returns value with every $(NAME) reference to a variable in variables replaced by its
+// words, and false when value still holds any other reference.
+func expandMakeSimpleVariable(variables map[string]string, value string) (string, bool) {
+	expanded := makeVariableReference.ReplaceAllStringFunc(value, func(reference string) string {
+		if words, known := variables[makeVariableReference.FindStringSubmatch(reference)[1]]; known {
+			return words
+		}
+		return reference
+	})
+	return expanded, !strings.Contains(expanded, "$")
+}
+
+// makeSimpleVariables returns every simple (:=) variable whose value is a word list, once the references it makes to
+// such variables defined before it are expanded.
+func makeSimpleVariables(makefile string) map[string]string {
+	variables := map[string]string{}
+	for _, line := range strings.Split(makefile, "\n") {
+		if match := makeSimpleVariable.FindStringSubmatch(line); match != nil {
+			if value, ok := expandMakeSimpleVariable(variables, match[2]); ok {
+				variables[match[1]] = value
+			}
+		}
+	}
+	return variables
+}
+
 // parseMakeTargets reads every rule, including pattern rules. A prerequisite that names a simple (:=) variable defined
-// earlier with a plain word list is expanded to those words.
+// earlier with a word list, directly or through other such variables, is expanded to those words.
 func parseMakeTargets(makefile string) map[string]*makeTarget {
 	targets := map[string]*makeTarget{}
 	variables := map[string]string{}
@@ -58,8 +86,10 @@ func parseMakeTargets(makefile string) map[string]*makeTarget {
 	// Each frame holds one if/else chain: the conditions of its current branch.
 	var frames [][]makeCondition
 	for _, line := range strings.Split(makefile, "\n") {
-		if match := makeSimpleVariable.FindStringSubmatch(line); match != nil && !strings.Contains(match[2], "$") {
-			variables[match[1]] = match[2]
+		if match := makeSimpleVariable.FindStringSubmatch(line); match != nil {
+			if value, ok := expandMakeSimpleVariable(variables, match[2]); ok {
+				variables[match[1]] = value
+			}
 		}
 		switch {
 		case strings.HasPrefix(line, "\t"):
@@ -246,23 +276,65 @@ func ciJob(t *testing.T, workflow, job, next string) string {
 // coverage profiles those targets write.
 func ciContractProfiles(t *testing.T, makefile, job string) map[string]bool {
 	t.Helper()
-	targets := parseMakeTargets(makefile)
-	reached := map[string]bool{}
 	commands := ciMakeCommand.FindAllStringSubmatch(job, -1)
 	if len(commands) == 0 {
 		t.Fatal("CI job runs no make targets")
 	}
+	invocations := make([]ciMakeInvocation, 0, len(commands))
 	for _, command := range commands {
 		vars := map[string]string{}
 		for _, assignment := range strings.Fields(command[2]) {
 			name, value, _ := strings.Cut(assignment, "=")
 			vars[name] = value
 		}
-		for name := range reachableMakeTargets(t, targets, command[1], vars) {
+		invocations = append(invocations, ciMakeInvocation{target: command[1], vars: vars})
+	}
+	return makeContractProfiles(t, makefile, invocations)
+}
+
+// ciMakeInvocation is one `make <target> [VAR=value]` a CI step runs.
+type ciMakeInvocation struct {
+	target string
+	vars   map[string]string
+}
+
+// makeContractProfiles returns the contract coverage profiles the targets the invocations reach write.
+func makeContractProfiles(t *testing.T, makefile string, invocations []ciMakeInvocation) map[string]bool {
+	t.Helper()
+	targets := parseMakeTargets(makefile)
+	reached := map[string]bool{}
+	for _, invocation := range invocations {
+		for name := range reachableMakeTargets(t, targets, invocation.target, invocation.vars) {
 			reached[name] = true
 		}
 	}
 	return emittedContractProfiles(targets, reached)
+}
+
+// ciYugabyteMatrixTargets returns the Make targets the database-yugabyte CI job runs, one matrix job each: the
+// YUGABYTE_CI_JOBS words the changes job lists through `make yugabyte-ci-matrix`. It fails unless the workflow wires
+// the matrix from that listing and each matrix job runs its target.
+func ciYugabyteMatrixTargets(t *testing.T, workflow, makefile string) []string {
+	t.Helper()
+	changes := ciJob(t, workflow, "changes", "go-build")
+	if !strings.Contains(changes, "yugabyte_matrix: ${{ steps.yugabyte_matrix.outputs.matrix }}") ||
+		!strings.Contains(changes, `run: echo "matrix=$(make --no-print-directory -s yugabyte-ci-matrix)" >> "$GITHUB_OUTPUT"`) {
+		t.Fatal("changes CI job must publish the yugabyte-ci-matrix listing as its yugabyte_matrix output")
+	}
+	job := ciJob(t, workflow, "database-yugabyte", "database-yugabyte-services")
+	if !strings.Contains(job, "matrix: ${{ fromJSON(needs.changes.outputs.yugabyte_matrix) }}") ||
+		!strings.Contains(job, "run: make ${{ matrix.target }}\n") {
+		t.Fatal("database-yugabyte CI job must run one matrix job per yugabyte-ci-matrix target")
+	}
+	matrix, ok := parseMakeTargets(makefile)["yugabyte-ci-matrix"]
+	if !ok || len(matrix.recipe) != 1 || !strings.Contains(matrix.recipe[0].text, "$(YUGABYTE_CI_JOBS)") {
+		t.Fatal("yugabyte-ci-matrix must list YUGABYTE_CI_JOBS")
+	}
+	jobs := strings.Fields(makeSimpleVariables(makefile)["YUGABYTE_CI_JOBS"])
+	if len(jobs) == 0 {
+		t.Fatal("YUGABYTE_CI_JOBS names no targets")
+	}
+	return jobs
 }
 
 func sortedKeys(set map[string]bool) []string {

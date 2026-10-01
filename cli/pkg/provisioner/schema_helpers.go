@@ -158,7 +158,8 @@ func BuildSchemaItems(databases []SchemaDatabase) ([]map[string]any, func(), err
 // BuildSchemaItemsForEngine materializes embedded baseline schemas matching configured database names to local temp
 // files. Returns {db, schema, owner, src} entries suitable for postgres_schema_items / yugabyte_schema_items role
 // vars; Ansible copies the file bytes, executes them with community.postgresql, and grants ownership to the
-// application role. YugabyteDB baselines carry the source database's layout.
+// application role. YugabyteDB baselines carry the source database's layout; one applied to a schema without
+// tables builds its indexes non-concurrently (YugabyteNewSchemaBaselineSQL).
 func BuildSchemaItemsForEngine(databases []SchemaDatabase, engine SQLEngine) ([]map[string]any, func(), error) {
 	if err := validateSQLEngine(engine); err != nil {
 		return nil, func() {}, err
@@ -187,7 +188,13 @@ func BuildSchemaItemsForEngine(databases []SchemaDatabase, engine SQLEngine) ([]
 			return nil, func() {}, err
 		}
 		if engine == SQLEngineYugabyte {
-			rewritten, rewriteErr := yugabyteSQLForSource(database.SourceName, schemaSQL)
+			// The role applies an item without reapply only to a schema without tables. A reapplied baseline
+			// completes a schema that has tables, which may be receiving writes, so its indexes build online.
+			render := yugabyteNewSchemaBaselineSQLForSource
+			if database.ReapplyBaseline {
+				render = yugabyteSQLForSource
+			}
+			rewritten, rewriteErr := render(database.SourceName, schemaSQL)
 			if rewriteErr != nil {
 				cleanup()
 				return nil, func() {}, fmt.Errorf("apply YugabyteDB layout to %s baseline: %w", database.SourceName, rewriteErr)

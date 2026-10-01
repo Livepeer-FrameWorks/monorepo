@@ -38,6 +38,7 @@ jobs:
       yugabyte_foghorn: ${{ steps.filter.outputs.yugabyte_foghorn }}
       yugabyte_lookout: ${{ steps.filter.outputs.yugabyte_lookout }}
       yugabyte_bosun: ${{ steps.filter.outputs.yugabyte_bosun }}
+      yugabyte_matrix: ${{ steps.yugabyte_matrix.outputs.matrix }}
     steps:
       - uses: actions/checkout@v6
       - uses: dorny/paths-filter@v4
@@ -258,6 +259,11 @@ jobs:
               - 'api_balancing/internal/database/foghorndb/**'
               - 'api_balancing/go.mod'
               - 'api_balancing/go.sum'
+      # One Yugabyte database contract job per target in the Makefile's YUGABYTE_CI_JOBS, the targets
+      # verify-yugabyte-contracts runs on one machine.
+      - name: List the Yugabyte contract jobs
+        id: yugabyte_matrix
+        run: echo "matrix=$(make --no-print-directory -s yugabyte-ci-matrix)" >> "$GITHUB_OUTPUT"
 
   go-build:
     name: Go build
@@ -676,11 +682,16 @@ jobs:
           name: valkey-contract-coverage
           fail_ci_if_error: false
 
+  # A change to the shared Yugabyte paths runs every contract, one runner per YUGABYTE_CI_JOBS target, each with an
+  # engine of its own.
   database-yugabyte:
-    name: Yugabyte database contract
+    name: Yugabyte database contract (${{ matrix.target }})
     needs: changes
-    if: needs.changes.outputs.yugabyte_core == 'true' || needs.changes.outputs.yugabyte_commodore == 'true' || needs.changes.outputs.yugabyte_purser == 'true' || needs.changes.outputs.yugabyte_navigator == 'true' || needs.changes.outputs.yugabyte_skipper == 'true' || needs.changes.outputs.yugabyte_quartermaster == 'true' || needs.changes.outputs.yugabyte_periscope == 'true' || needs.changes.outputs.yugabyte_foghorn == 'true' || needs.changes.outputs.yugabyte_lookout == 'true' || needs.changes.outputs.yugabyte_bosun == 'true' || github.event_name == 'workflow_dispatch'
+    if: needs.changes.outputs.yugabyte_core == 'true' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.changes.outputs.yugabyte_matrix) }}
     steps:
       - uses: actions/checkout@v6
         with:
@@ -692,70 +703,99 @@ jobs:
         env:
           GOTOOLCHAIN: local
       - uses: actions/setup-python@v6
-        if: needs.changes.outputs.yugabyte_core == 'true' || github.event_name == 'workflow_dispatch'
+        if: matrix.target == 'yugabyte-role-engine-contracts'
         with:
           python-version: "3.13"
       # The yugabyte role contract drives an AlmaLinux 8 engine whose dnf module respawns under Python 3.6, which
       # ansible-core 2.17 module code no longer parses; 2.21 runs it. prometheus.prometheus declares support only up
       # to 2.18, so the collection install ignores that declaration.
       - name: Install Ansible for the yugabyte role contract
-        if: needs.changes.outputs.yugabyte_core == 'true' || github.event_name == 'workflow_dispatch'
+        if: matrix.target == 'yugabyte-role-engine-contracts'
         run: |
           python -m pip install "ansible-core==2.21.*"
           ANSIBLE_COLLECTIONS_ON_ANSIBLE_VERSION_MISMATCH=ignore make ansible-galaxy-install
-      - name: Run exhaustive Yugabyte contracts
-        if: needs.changes.outputs.yugabyte_core == 'true' || github.event_name == 'workflow_dispatch'
-        run: make verify-schema-yugabyte
+      - name: Run ${{ matrix.target }}
+        run: make ${{ matrix.target }}
         env:
           CONTRACT_COVERAGE_DIR: ${{ github.workspace }}/coverage/contracts
+      - name: Upload Yugabyte contract coverage artifact
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: yugabyte-contract-coverage-${{ matrix.target }}
+          path: coverage/contracts/yugabyte/
+          if-no-files-found: error
+      - name: Upload Yugabyte contract coverage to Codecov
+        if: ${{ !cancelled() }}
+        timeout-minutes: 5
+        continue-on-error: true
+        uses: codecov/codecov-action@v6
+        with:
+          token: ${{ secrets.CODECOV_TOKEN }}
+          directory: coverage/contracts/yugabyte
+          flags: yugabyte-contract
+          name: yugabyte-contract-coverage-${{ matrix.target }}
+          fail_ci_if_error: false
+
+  # Without a shared Yugabyte path change, only the contracts of the services whose database code changed run.
+  database-yugabyte-services:
+    name: Yugabyte service contracts
+    needs: changes
+    if: github.event_name != 'workflow_dispatch' && needs.changes.outputs.yugabyte_core != 'true' && (needs.changes.outputs.yugabyte_commodore == 'true' || needs.changes.outputs.yugabyte_purser == 'true' || needs.changes.outputs.yugabyte_navigator == 'true' || needs.changes.outputs.yugabyte_skipper == 'true' || needs.changes.outputs.yugabyte_quartermaster == 'true' || needs.changes.outputs.yugabyte_periscope == 'true' || needs.changes.outputs.yugabyte_foghorn == 'true' || needs.changes.outputs.yugabyte_lookout == 'true' || needs.changes.outputs.yugabyte_bosun == 'true')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: .go-version
+          cache-dependency-path: "**/go.sum"
+        env:
+          GOTOOLCHAIN: local
       - name: Run Commodore Yugabyte contracts
-        if: github.event_name != 'workflow_dispatch' && needs.changes.outputs.yugabyte_core != 'true' && needs.changes.outputs.yugabyte_commodore == 'true'
+        if: needs.changes.outputs.yugabyte_commodore == 'true'
         run: make verify-yugabyte-service SERVICE=commodore
         env:
           CONTRACT_COVERAGE_DIR: ${{ github.workspace }}/coverage/contracts
       - name: Run Purser Yugabyte contracts
-        if: github.event_name != 'workflow_dispatch' && needs.changes.outputs.yugabyte_core != 'true' && needs.changes.outputs.yugabyte_purser == 'true'
+        if: needs.changes.outputs.yugabyte_purser == 'true'
         run: make verify-yugabyte-service SERVICE=purser
         env:
           CONTRACT_COVERAGE_DIR: ${{ github.workspace }}/coverage/contracts
       - name: Run Navigator Yugabyte contracts
-        if: github.event_name != 'workflow_dispatch' && needs.changes.outputs.yugabyte_core != 'true' && needs.changes.outputs.yugabyte_navigator == 'true'
+        if: needs.changes.outputs.yugabyte_navigator == 'true'
         run: make verify-yugabyte-service SERVICE=navigator
         env:
           CONTRACT_COVERAGE_DIR: ${{ github.workspace }}/coverage/contracts
       - name: Run Skipper Yugabyte contracts
-        if: github.event_name != 'workflow_dispatch' && needs.changes.outputs.yugabyte_core != 'true' && needs.changes.outputs.yugabyte_skipper == 'true'
+        if: needs.changes.outputs.yugabyte_skipper == 'true'
         run: make verify-yugabyte-service SERVICE=skipper
         env:
           CONTRACT_COVERAGE_DIR: ${{ github.workspace }}/coverage/contracts
       - name: Run Quartermaster Yugabyte contracts
-        if: github.event_name != 'workflow_dispatch' && needs.changes.outputs.yugabyte_core != 'true' && needs.changes.outputs.yugabyte_quartermaster == 'true'
+        if: needs.changes.outputs.yugabyte_quartermaster == 'true'
         run: make verify-yugabyte-service SERVICE=quartermaster
         env:
           CONTRACT_COVERAGE_DIR: ${{ github.workspace }}/coverage/contracts
       - name: Run Periscope Metering Yugabyte contracts
-        if: github.event_name != 'workflow_dispatch' && needs.changes.outputs.yugabyte_core != 'true' && needs.changes.outputs.yugabyte_periscope == 'true'
+        if: needs.changes.outputs.yugabyte_periscope == 'true'
         run: make verify-yugabyte-service SERVICE=periscope-metering
         env:
           CONTRACT_COVERAGE_DIR: ${{ github.workspace }}/coverage/contracts
       - name: Run Foghorn Yugabyte contracts
-        if: github.event_name != 'workflow_dispatch' && needs.changes.outputs.yugabyte_core != 'true' && needs.changes.outputs.yugabyte_foghorn == 'true'
+        if: needs.changes.outputs.yugabyte_foghorn == 'true'
         run: make verify-yugabyte-service SERVICE=foghorn
         env:
           CONTRACT_COVERAGE_DIR: ${{ github.workspace }}/coverage/contracts
       - name: Run Lookout Yugabyte contracts
-        if: github.event_name != 'workflow_dispatch' && needs.changes.outputs.yugabyte_core != 'true' && needs.changes.outputs.yugabyte_lookout == 'true'
+        if: needs.changes.outputs.yugabyte_lookout == 'true'
         run: make verify-yugabyte-service SERVICE=lookout
         env:
           CONTRACT_COVERAGE_DIR: ${{ github.workspace }}/coverage/contracts
       - name: Run Bosun Yugabyte contracts
-        if: github.event_name != 'workflow_dispatch' && needs.changes.outputs.yugabyte_core != 'true' && needs.changes.outputs.yugabyte_bosun == 'true'
+        if: needs.changes.outputs.yugabyte_bosun == 'true'
         run: make verify-yugabyte-service SERVICE=bosun
-        env:
-          CONTRACT_COVERAGE_DIR: ${{ github.workspace }}/coverage/contracts
-      - name: Run Yugabyte HA contract
-        if: needs.changes.outputs.yugabyte_core == 'true' || github.event_name == 'workflow_dispatch'
-        run: make verify-yugabyte-ha
         env:
           CONTRACT_COVERAGE_DIR: ${{ github.workspace }}/coverage/contracts
       - name: Upload Yugabyte contract coverage artifact
@@ -779,7 +819,15 @@ jobs:
 
   codecov-notify:
     name: Codecov notify
-    needs: [go-test, frontend-test, frontend-build, migration-release-state, database-yugabyte]
+    needs:
+      [
+        go-test,
+        frontend-test,
+        frontend-build,
+        migration-release-state,
+        database-yugabyte,
+        database-yugabyte-services,
+      ]
     if: always()
     runs-on: ubuntu-latest
     steps:
@@ -809,6 +857,7 @@ jobs:
         compose-profiles,
         migration-release-state,
         database-yugabyte,
+        database-yugabyte-services,
       ]
     if: always()
     runs-on: ubuntu-latest

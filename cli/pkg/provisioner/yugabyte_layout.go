@@ -376,6 +376,73 @@ func yugabyteSQLForSource(source, sql string) (string, error) {
 	return rewritten, nil
 }
 
+// yugabyteNewSchemaBaselineSQLForSource returns a baseline for a YugabyteDB schema without tables, with the source
+// database's layout applied and its indexes built non-concurrently (YugabyteNewSchemaBaselineSQL).
+func yugabyteNewSchemaBaselineSQLForSource(source, sql string) (string, error) {
+	layout, err := yugabyteLayoutForSource(source)
+	if err != nil {
+		return "", err
+	}
+	rewritten, err := YugabyteNewSchemaBaselineSQL(layout, sql)
+	if err != nil {
+		return "", fmt.Errorf("%s: %w", source, err)
+	}
+	return rewritten, nil
+}
+
+// YugabyteNewSchemaBaselineSQL returns a baseline for a YugabyteDB schema without tables: the layout applied and every
+// top-level CREATE INDEX built NONCONCURRENTLY. YugabyteDB builds an index online by default, a backfill whose index
+// states each wait for every tserver and take seconds even on an empty table; a non-concurrent build is a single DDL
+// statement. A non-concurrent build does not index rows that other sessions write while it runs, which a schema
+// without tables cannot receive. An interrupted non-concurrent build rolls back rather than leaving an invalid index
+// that a completing apply's IF NOT EXISTS would skip. Index DDL inside dollar-quoted bodies runs dynamically and keeps
+// the engine default.
+func YugabyteNewSchemaBaselineSQL(layout *DatabaseLayout, sql string) (string, error) {
+	placed, err := RewriteDDLForLayout(layout, sql)
+	if err != nil {
+		return "", err
+	}
+	return buildIndexesNonconcurrently(placed)
+}
+
+// buildIndexesNonconcurrently marks every top-level CREATE [UNIQUE] INDEX NONCONCURRENTLY, replacing CONCURRENTLY
+// where a statement names it.
+func buildIndexesNonconcurrently(sql string) (string, error) {
+	statements, err := sqlStatements(sql)
+	if err != nil {
+		return "", err
+	}
+	var out strings.Builder
+	last := 0
+	for _, stmt := range statements {
+		if len(stmt) == 0 || !isSQLWord(stmt[0], "create") {
+			continue
+		}
+		i := 1
+		if i < len(stmt) && isSQLWord(stmt[i], "unique") {
+			i++
+		}
+		if i >= len(stmt) || !isSQLWord(stmt[i], "index") {
+			continue
+		}
+		next := i + 1
+		switch {
+		case next < len(stmt) && isSQLWord(stmt[next], "nonconcurrently"):
+			continue
+		case next < len(stmt) && isSQLWord(stmt[next], "concurrently"):
+			out.WriteString(sql[last:stmt[next].start])
+			out.WriteString("NONCONCURRENTLY")
+			last = stmt[next].end
+		default:
+			out.WriteString(sql[last:stmt[i].end])
+			out.WriteString(" NONCONCURRENTLY")
+			last = stmt[i].end
+		}
+	}
+	out.WriteString(sql[last:])
+	return out.String(), nil
+}
+
 type tableCreation struct {
 	table string
 	line  int

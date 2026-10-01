@@ -500,6 +500,118 @@ func TestBuildItemsRejectUnknownEngine(t *testing.T) {
 	}
 }
 
+func TestBuildIndexesNonconcurrently(t *testing.T) {
+	for _, tc := range []struct{ name, in, want string }{
+		{"if not exists", "CREATE INDEX IF NOT EXISTS idx ON s.t (a);", "CREATE INDEX NONCONCURRENTLY IF NOT EXISTS idx ON s.t (a);"},
+		{"unique partial lowercase", "create unique index idx on s.t (a) where a > 0;", "create unique index NONCONCURRENTLY idx on s.t (a) where a > 0;"},
+		{"unnamed", "CREATE INDEX ON s.t (a)", "CREATE INDEX NONCONCURRENTLY ON s.t (a)"},
+		{"concurrently replaced", "CREATE UNIQUE INDEX CONCURRENTLY IF NOT EXISTS idx ON s.t (a);", "CREATE UNIQUE INDEX NONCONCURRENTLY IF NOT EXISTS idx ON s.t (a);"},
+		{"already nonconcurrent", "CREATE INDEX NONCONCURRENTLY idx ON s.t (a);", "CREATE INDEX NONCONCURRENTLY idx ON s.t (a);"},
+		{"split across lines after a comment", "/* c */ CREATE\n  INDEX idx ON s.t (a);", "/* c */ CREATE\n  INDEX NONCONCURRENTLY idx ON s.t (a);"},
+		{"index named concurrently", `CREATE INDEX "concurrently" ON s.t (a);`, `CREATE INDEX NONCONCURRENTLY "concurrently" ON s.t (a);`},
+		{"other create statements", "CREATE UNIQUE TABLE_LIKE x;\nCREATE TABLE s.u (a int);\nCREATE INDEXED x;", "CREATE UNIQUE TABLE_LIKE x;\nCREATE TABLE s.u (a int);\nCREATE INDEXED x;"},
+		{
+			"function bodies and escaped strings",
+			"CREATE FUNCTION s.f() RETURNS void LANGUAGE plpgsql AS $fn$ BEGIN CREATE INDEX q ON s.t (a); END $fn$;\nSELECT E'it''s \\' CREATE INDEX r ON s.t (a)';\nCREATE INDEX v ON s.t (a);",
+			"CREATE FUNCTION s.f() RETURNS void LANGUAGE plpgsql AS $fn$ BEGIN CREATE INDEX q ON s.t (a); END $fn$;\nSELECT E'it''s \\' CREATE INDEX r ON s.t (a)';\nCREATE INDEX NONCONCURRENTLY v ON s.t (a);",
+		},
+		{
+			"only top-level statements",
+			"-- CREATE INDEX x ON s.t (a);\nCREATE TABLE IF NOT EXISTS s.t (a int);\nSELECT 'CREATE INDEX y ON s.t (a)';\nDO $$ BEGIN EXECUTE 'CREATE INDEX z ON s.t (a)'; END $$;\nCREATE INDEX w ON s.t (a);",
+			"-- CREATE INDEX x ON s.t (a);\nCREATE TABLE IF NOT EXISTS s.t (a int);\nSELECT 'CREATE INDEX y ON s.t (a)';\nDO $$ BEGIN EXECUTE 'CREATE INDEX z ON s.t (a)'; END $$;\nCREATE INDEX NONCONCURRENTLY w ON s.t (a);",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := buildIndexesNonconcurrently(tc.in)
+			if err != nil || got != tc.want {
+				t.Fatalf("buildIndexesNonconcurrently(%q) = %q, %v; want %q", tc.in, got, err, tc.want)
+			}
+		})
+	}
+}
+
+// topLevelIndexBuilds returns the build mode keyword (concurrently, nonconcurrently, or "" for the engine default) of
+// every top-level CREATE [UNIQUE] INDEX in sql.
+func topLevelIndexBuilds(t *testing.T, sql string) []string {
+	t.Helper()
+	statements, err := sqlStatements(sql)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var modes []string
+	for _, stmt := range statements {
+		if len(stmt) == 0 || !isSQLWord(stmt[0], "create") {
+			continue
+		}
+		i := 1
+		if i < len(stmt) && isSQLWord(stmt[i], "unique") {
+			i++
+		}
+		if i >= len(stmt) || !isSQLWord(stmt[i], "index") {
+			continue
+		}
+		mode := ""
+		if i+1 < len(stmt) && (isSQLWord(stmt[i+1], "concurrently") || isSQLWord(stmt[i+1], "nonconcurrently")) {
+			mode = stmt[i+1].text
+		}
+		modes = append(modes, mode)
+	}
+	return modes
+}
+
+func TestBuildSchemaItemsForYugabyteBuildsNewSchemaIndexesNonconcurrently(t *testing.T) {
+	for _, database := range releases.ServiceDatabaseNames() {
+		t.Run(database, func(t *testing.T) {
+			read := func(engine SQLEngine, reapply bool) string {
+				items, cleanup, err := BuildSchemaItemsForEngine([]SchemaDatabase{{Name: database, ReapplyBaseline: reapply}}, engine)
+				t.Cleanup(cleanup)
+				if err != nil || len(items) != 1 {
+					t.Fatalf("BuildSchemaItemsForEngine(%s) = %d items, %v", engine, len(items), err)
+				}
+				data, err := os.ReadFile(items[0]["src"].(string))
+				if err != nil {
+					t.Fatal(err)
+				}
+				return string(data)
+			}
+			postgres := read(SQLEnginePostgres, false)
+			if strings.Contains(strings.ToUpper(postgres), "NONCONCURRENTLY") {
+				t.Fatal("PostgreSQL has no NONCONCURRENTLY; its baseline must keep plain CREATE INDEX")
+			}
+			want := len(topLevelIndexBuilds(t, postgres))
+			modes := topLevelIndexBuilds(t, read(SQLEngineYugabyte, false))
+			if len(modes) != want {
+				t.Fatalf("YugabyteDB baseline has %d index builds, PostgreSQL baseline %d", len(modes), want)
+			}
+			for i, mode := range modes {
+				if mode != "nonconcurrently" {
+					t.Fatalf("YugabyteDB baseline index build %d is %q, want nonconcurrently", i+1, mode)
+				}
+			}
+			for i, mode := range topLevelIndexBuilds(t, read(SQLEngineYugabyte, true)) {
+				if mode != "" {
+					t.Fatalf("reapplied YugabyteDB baseline index build %d is %q; a schema with tables keeps online builds", i+1, mode)
+				}
+			}
+		})
+	}
+}
+
+func TestBuildMigrationItemsForYugabyteKeepOnlineIndexBuilds(t *testing.T) {
+	content := "CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_a ON foghorn.artifacts (id);\nCREATE INDEX IF NOT EXISTS idx_b ON foghorn.artifacts (id);"
+	all := []Migration{{
+		Database: "foghorn", Version: "v0.3.5", Phase: "expand", Sequence: 3,
+		Filename: "003_indexes.notx.sql", Checksum: "checksum-3", Transactional: false, content: content,
+	}}
+	items, err := buildMigrationItemsFromList(all, []SchemaDatabase{{Name: "foghorn"}}, "expand", "v99.0.0", SQLEngineYugabyte)
+	if err != nil || len(items) != 1 {
+		t.Fatalf("yugabyte items = %v, %v", items, err)
+	}
+	if items[0]["sql"] != content {
+		t.Fatalf("migration sql = %q; a migration runs against live tables and must keep its online index builds", items[0]["sql"])
+	}
+}
+
 func TestYugabyteRoleVarsResolveColocationFromLayoutSource(t *testing.T) {
 	vars, err := yugabyteRoleVars(context.Background(), nilHost(), ServiceConfig{
 		Metadata: map[string]any{

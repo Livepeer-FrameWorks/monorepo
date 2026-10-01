@@ -230,7 +230,10 @@ until it is relaid out. A test process loads each baseline once and resets it to
 baseline's rows between tests, loading a new one after a test that changed its catalog. CI
 follows the same split on pull requests and master pushes: shared Yugabyte/schema/harness
 changes run the exhaustive and HA gates, while a service-owned repository change runs only
-that service's real-Yugabyte contracts. A manually dispatched run executes the exhaustive
+that service's real-Yugabyte contracts. The exhaustive and HA gates run as a matrix with one
+runner per `YUGABYTE_CI_JOBS` target (the selection contracts, the role contract, each lane,
+the backup and restore round trip, and the HA contract); `make verify-yugabyte-contracts`
+runs the same targets on one machine. A manually dispatched run executes the exhaustive
 gates.
 
 ## Migration prechecks

@@ -17,7 +17,8 @@ import (
 
 const (
 	// SharedYugabyteBaselinesEnv names the directory the contract fixture renders service baselines into:
-	// <database>.sql holds the baseline with the database's layout applied, exactly as the release applies it, and
+	// <database>.sql holds the baseline with the database's layout applied, exactly as the release applies it to a
+	// schema without tables (its indexes built non-concurrently), and
 	// <database>.layout holds "colocated" or "distributed", the placement the release creates the database with.
 	SharedYugabyteBaselinesEnv = "FRAMEWORKS_YUGABYTE_TEST_BASELINES"
 

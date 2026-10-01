@@ -131,7 +131,7 @@ END $$;`, relayoutLiteral(logical), relayoutIdentifier(logical), relayoutLiteral
 	if err != nil {
 		t.Fatalf("read %s baseline: %v", logical, err)
 	}
-	ybNodeApply(t, node, source, string(baseline))
+	ybNodeApply(t, node, source, ybBaselineSQL(t, nil, string(baseline)))
 	if analytics, readErr := dbsql.Content.ReadFile("seeds/static/analytics_ro_" + logical + ".sql"); readErr == nil {
 		ybNodeApply(t, node, source, string(analytics))
 	}

@@ -204,6 +204,17 @@ func ybLayoutSQL(t *testing.T, layout *DatabaseLayout, sql string) string {
 	return rewritten
 }
 
+// ybBaselineSQL returns a baseline as the yugabyte role receives it for a schema without tables
+// (YugabyteNewSchemaBaselineSQL).
+func ybBaselineSQL(t *testing.T, layout *DatabaseLayout, sql string) string {
+	t.Helper()
+	rewritten, err := YugabyteNewSchemaBaselineSQL(layout, sql)
+	if err != nil {
+		t.Fatalf("render YugabyteDB baseline: %v", err)
+	}
+	return rewritten
+}
+
 func ybCreateDatabase(t *testing.T, name, databaseName string, layout *DatabaseLayout) {
 	t.Helper()
 	statement := "CREATE DATABASE " + databaseName
@@ -416,7 +427,7 @@ func ybVerifyTaggedMigrationPaths(t *testing.T) {
 		for _, run := range runs {
 			t.Run(run.service+"/"+run.shape+"/upgrade", func(t *testing.T) {
 				t.Parallel()
-				ybApply(t, name, run.upgradeDatabase, ybLayoutSQL(t, run.layout, baselineAtTagOrRelease(t, fromTag, "schema/"+run.service+".sql", postTag)))
+				ybApply(t, name, run.upgradeDatabase, ybBaselineSQL(t, run.layout, baselineAtTagOrRelease(t, fromTag, "schema/"+run.service+".sql", postTag)))
 				for _, migration := range postTag {
 					if migration.Database == run.service {
 						ybApply(t, name, run.upgradeDatabase, ybLayoutSQL(t, run.layout, migration.content))
@@ -513,7 +524,7 @@ func ybLoadCurrentBaseline(t *testing.T, name string, current ybCurrentBaseline)
 	if err != nil {
 		t.Fatalf("read current %s baseline: %v", current.service, err)
 	}
-	ybApply(t, name, current.database, ybLayoutSQL(t, layout, string(baseline)))
+	ybApply(t, name, current.database, ybBaselineSQL(t, layout, string(baseline)))
 	ybRequireAllIndexesValid(t, name, current.database)
 	if current.shape == "declared" {
 		ybRequireDeclaredPlacement(t, name, current.database, layout, true)

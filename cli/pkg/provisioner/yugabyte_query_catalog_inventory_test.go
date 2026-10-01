@@ -92,25 +92,22 @@ func TestYugabyteCIJobChecksOutTagHistory(t *testing.T) {
 		t.Fatal(err)
 	}
 	contents := string(workflow)
-	start := strings.Index(contents, "  database-yugabyte:")
-	if start < 0 {
-		t.Fatal("database-yugabyte CI job not found")
-	}
-	end := strings.Index(contents[start:], "\n  codecov-notify:")
-	if end < 0 {
-		t.Fatal("database-yugabyte CI job terminator not found")
-	}
-	job := contents[start : start+end]
-	checkout := strings.Index(job, "- uses: actions/checkout@")
-	setupGo := strings.Index(job, "- uses: actions/setup-go@")
-	if checkout < 0 || setupGo < 0 || checkout >= setupGo {
-		t.Fatal("database-yugabyte checkout/setup-go steps not found in order")
-	}
-	if !strings.Contains(job[checkout:setupGo], "fetch-depth: 0") {
-		t.Fatal("database-yugabyte checkout must fetch tag history for tagged-upgrade proof")
+	matrixJob := ciJob(t, contents, "database-yugabyte", "database-yugabyte-services")
+	servicesJob := ciJob(t, contents, "database-yugabyte-services", "codecov-notify")
+	for name, job := range map[string]string{"database-yugabyte": matrixJob, "database-yugabyte-services": servicesJob} {
+		checkout := strings.Index(job, "- uses: actions/checkout@")
+		setupGo := strings.Index(job, "- uses: actions/setup-go@")
+		if checkout < 0 || setupGo < 0 || checkout >= setupGo {
+			t.Fatalf("%s checkout/setup-go steps not found in order", name)
+		}
+		if !strings.Contains(job[checkout:setupGo], "fetch-depth: 0") {
+			t.Fatalf("%s checkout must fetch tag history for tagged-upgrade proof", name)
+		}
+		if !strings.Contains(job, "path: coverage/contracts/yugabyte/") || !strings.Contains(job, "directory: coverage/contracts/yugabyte") {
+			t.Fatalf("%s CI job must archive and upload every Yugabyte coverage profile", name)
+		}
 	}
 	for _, command := range []string{
-		"make verify-schema-yugabyte",
 		"make verify-yugabyte-service SERVICE=commodore",
 		"make verify-yugabyte-service SERVICE=purser",
 		"make verify-yugabyte-service SERVICE=navigator",
@@ -121,12 +118,9 @@ func TestYugabyteCIJobChecksOutTagHistory(t *testing.T) {
 		"make verify-yugabyte-service SERVICE=lookout",
 		"make verify-yugabyte-service SERVICE=bosun",
 	} {
-		if !strings.Contains(job, command) {
-			t.Errorf("database-yugabyte CI job lacks scoped command %q", command)
+		if !strings.Contains(servicesJob, command) {
+			t.Errorf("database-yugabyte-services CI job lacks scoped command %q", command)
 		}
-	}
-	if !strings.Contains(job, "path: coverage/contracts/yugabyte/") || !strings.Contains(job, "directory: coverage/contracts/yugabyte") {
-		t.Fatal("database-yugabyte CI job must archive and upload every Yugabyte coverage profile")
 	}
 	makefile, err := os.ReadFile(filepath.Join(repoRoot, "Makefile"))
 	if err != nil {
@@ -191,7 +185,8 @@ func TestYugabyteDatabaseRunsEveryGroupAndServiceLeg(t *testing.T) {
 func TestYugabyteContractInventoryIsComplete(t *testing.T) {
 	makefile := readRepoFile(t, "Makefile")
 	targets := parseMakeTargets(makefile)
-	job := ciJob(t, readRepoFile(t, ".github/workflows/ci.yml"), "database-yugabyte", "codecov-notify")
+	workflow := readRepoFile(t, ".github/workflows/ci.yml")
+	job := ciJob(t, workflow, "database-yugabyte-services", "codecov-notify")
 
 	serviceTarget, ok := targets["verify-yugabyte-service"]
 	if !ok || len(serviceTarget.recipe) == 0 {
@@ -233,7 +228,7 @@ func TestYugabyteContractInventoryIsComplete(t *testing.T) {
 			if strings.HasPrefix(name, "verify-yugabyte-"+service+"-contracts") {
 				legs++
 				if !scopedTargets[name] {
-					t.Errorf("database-yugabyte CI scoped steps do not reach %s", name)
+					t.Errorf("database-yugabyte-services CI steps do not reach %s", name)
 				}
 			}
 		}
@@ -242,9 +237,28 @@ func TestYugabyteContractInventoryIsComplete(t *testing.T) {
 		}
 	}
 
-	profiles := ciContractProfiles(t, makefile, job)
-	if !strings.Contains(job, "path: coverage/contracts/yugabyte/") || !strings.Contains(job, "directory: coverage/contracts/yugabyte") {
-		t.Fatal("database-yugabyte CI job must archive and upload its Yugabyte coverage directory")
+	for _, profile := range sortedKeys(ciContractProfiles(t, makefile, job)) {
+		if !strings.HasPrefix(profile, "yugabyte/") {
+			t.Errorf("database-yugabyte-services CI job writes non-Yugabyte profile %q", profile)
+		}
+	}
+
+	// Each matrix job uploads its coverage directory with if-no-files-found: error, so each target writes a profile,
+	// and the matrix together writes what verify-yugabyte-contracts, the verify-prepush stage, writes on one machine.
+	var matrix []ciMakeInvocation
+	for _, target := range ciYugabyteMatrixTargets(t, workflow, makefile) {
+		if len(makeContractProfiles(t, makefile, []ciMakeInvocation{{target: target}})) == 0 {
+			t.Errorf("database-yugabyte matrix target %s writes no contract coverage profile", target)
+		}
+		matrix = append(matrix, ciMakeInvocation{target: target})
+	}
+	profiles := makeContractProfiles(t, makefile, matrix)
+	prepush := makeContractProfiles(t, makefile, []ciMakeInvocation{{target: "verify-yugabyte-contracts"}})
+	if got, want := strings.Join(sortedKeys(profiles), " "), strings.Join(sortedKeys(prepush), " "); got != want {
+		t.Errorf("database-yugabyte matrix writes profiles\n%s\nverify-yugabyte-contracts writes\n%s", got, want)
+	}
+	if !strings.Contains(makefile, "verify-yugabyte-contracts+verify-yugabyte-contracts-deps") {
+		t.Error("verify-prepush must run verify-yugabyte-contracts")
 	}
 	for _, profile := range sortedKeys(profiles) {
 		if !strings.HasPrefix(profile, "yugabyte/") {

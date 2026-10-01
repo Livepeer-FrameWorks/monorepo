@@ -188,6 +188,15 @@ because almost every Skipper table grows with conversations, crawls, or embeddin
   temporary or unlogged tables, materialized views, top-level `SELECT … INTO`, and
   `CREATE TABLE` inside a function or `DO` body. Tables created through dynamic
   `EXECUTE` strings are invisible to it.
+- A baseline applied to a YugabyteDB schema without tables (a fresh install, a new
+  service database, the contract fixtures) also has every top-level `CREATE [UNIQUE]
+INDEX` rewritten to `CREATE … INDEX NONCONCURRENTLY`. An online build runs a backfill
+  whose index states each wait for every tserver; on the pinned engine a non-concurrent
+  build loads the Purser baseline in 33 s instead of 67 s, Commodore and Foghorn in
+  18 s instead of 38–41 s, with identical index definitions and validity, in colocated
+  and distributed databases alike. A non-concurrent build does not index rows written
+  while it runs, which a schema without tables cannot receive. A baseline reapplied to
+  complete a schema that already has tables, and every migration, keep online builds.
 - Provisioning creates a missing colocated database with
   `CREATE DATABASE … WITH OWNER = … COLOCATION = true`. It never alters or recreates an
   existing database, so an existing database keeps its creation-time placement.

@@ -379,7 +379,7 @@ func ybRoleTaggedSchemaItems(t *testing.T, repo, tag string, names []string) []m
 			}
 			baseline = current
 		}
-		rendered, err := yugabyteSQLForSource(name, string(baseline))
+		rendered, err := yugabyteNewSchemaBaselineSQLForSource(name, string(baseline))
 		if err != nil {
 			t.Fatalf("render %s baseline at %s: %v", name, tag, err)
 		}

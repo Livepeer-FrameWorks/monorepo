@@ -1,6 +1,7 @@
 // Renders every platform service baseline as the release applies it to YugabyteDB, for the shared Yugabyte contract
 // fixture (scripts/run-yugabyte-contract-fixture.sh). For each service database it writes <database>.sql, the baseline
-// with the database's layout applied by the same code path the yugabyte role receives its schema items from, and
+// with the database's layout applied by the same code path the yugabyte role receives its schema items from, rendered
+// for a schema without tables (every contract database is new), so its indexes build non-concurrently, and
 // <database>.layout, "colocated" or "distributed", the placement the release creates the database with. Not a
 // user-facing CLI entrypoint.
 //

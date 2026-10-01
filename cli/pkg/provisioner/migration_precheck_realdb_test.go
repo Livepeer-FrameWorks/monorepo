@@ -239,7 +239,7 @@ func TestMigrationPrecheckRefusesDuplicateFingerprints_RealYugabyte(t *testing.T
 	if err != nil {
 		t.Fatal(err)
 	}
-	ybApply(t, name, database, ybLayoutSQL(t, layout, string(baseline)))
+	ybApply(t, name, database, ybBaselineSQL(t, layout, string(baseline)))
 	verifyFingerprintPrechecks(t, precheckEngine{
 		engine: SQLEngineYugabyte,
 		run: func(t *testing.T, database, script string) (string, error) {
