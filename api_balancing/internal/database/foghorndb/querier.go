@@ -354,6 +354,7 @@ type Querier interface {
 	HasActiveStreamIngestSession(ctx context.Context, arg HasActiveStreamIngestSessionParams) (bool, error)
 	HasMediaAuthorityConfirmationRequired(ctx context.Context, asOf time.Time) (bool, error)
 	HealLostDVRSegment(ctx context.Context, arg HealLostDVRSegmentParams) error
+	IngestAdmissionAbandoned(ctx context.Context, arg IngestAdmissionAbandonedParams) (bool, error)
 	IngestClaimOwnerEnded(ctx context.Context, arg IngestClaimOwnerEndedParams) (bool, error)
 	IngestCloseTombstoneExists(ctx context.Context, arg IngestCloseTombstoneExistsParams) (bool, error)
 	IngestGenerationEnded(ctx context.Context, arg IngestGenerationEndedParams) (bool, error)
@@ -449,6 +450,9 @@ type Querier interface {
 	ListNodeIngestGenerations(ctx context.Context, arg ListNodeIngestGenerationsParams) ([]ListNodeIngestGenerationsRow, error)
 	ListNodeMaintenance(ctx context.Context) ([]ListNodeMaintenanceRow, error)
 	ListNodeProjectedIngestSessionsBefore(ctx context.Context, arg ListNodeProjectedIngestSessionsBeforeParams) ([]ListNodeProjectedIngestSessionsBeforeRow, error)
+	// Node-scoped: the node reports an abandoned execution before it can know the tenant. The trigger
+	// UUID identifies one Mist execution on that node, which minted at most one session per tenant.
+	ListOpenIngestSessionsByTrigger(ctx context.Context, arg ListOpenIngestSessionsByTriggerParams) ([]ListOpenIngestSessionsByTriggerRow, error)
 	ListOpenProjectedIngestSessions(ctx context.Context) ([]ListOpenProjectedIngestSessionsRow, error)
 	ListOriginNodes(ctx context.Context, artifactHash string) ([]string, error)
 	ListPendingArtifactsForFreeze(ctx context.Context, limit int32) ([]ListPendingArtifactsForFreezeRow, error)
@@ -601,6 +605,7 @@ type Querier interface {
 	PruneMediaAuthorityApplyAudit(ctx context.Context, arg PruneMediaAuthorityApplyAuditParams) (int64, error)
 	PurgeAdmissionPushTargetRevisions(ctx context.Context, olderThanMs int64) (int64, error)
 	PurgeExpiredCloseTombstones(ctx context.Context, olderThanSeconds float64) (int64, error)
+	PurgeExpiredIngestAdmissionAbandonments(ctx context.Context, olderThanSeconds float64) (int64, error)
 	PurgeStaleArtifactNodes(ctx context.Context) (int64, error)
 	PurgeTerminalAdmissionEffects(ctx context.Context, olderThanMs int64) (int64, error)
 	PurgeTerminalOfflineEffects(ctx context.Context, olderThanMs int64) (int64, error)
@@ -635,6 +640,7 @@ type Querier interface {
 	// first staged report sizes the artifact; a later one (lease resend, retried
 	// job) matches no row.
 	RecordImportSourceStaged(ctx context.Context, arg RecordImportSourceStagedParams) (int64, error)
+	RecordIngestAdmissionAbandonment(ctx context.Context, arg RecordIngestAdmissionAbandonmentParams) error
 	RecordPublicationPair(ctx context.Context, arg RecordPublicationPairParams) error
 	RefreshDVRArtifactNodeProgress(ctx context.Context, arg RefreshDVRArtifactNodeProgressParams) error
 	RejectArtifactCreationCommand(ctx context.Context, arg RejectArtifactCreationCommandParams) (int64, error)

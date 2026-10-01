@@ -33,6 +33,7 @@ distributed_tables:
   - foghorn.dvr_chapters
   - foghorn.ingest_sessions
   - foghorn.ingest_close_tombstones
+  - foghorn.ingest_admission_abandonments
   - foghorn.source_projection_revision_counter
   - foghorn.ingest_offline_effects
   - foghorn.ingest_admission_effects

@@ -11,6 +11,13 @@ import (
 	"github.com/DATA-DOG/go-sqlmock"
 )
 
+// expectMintExecutionNotAbandoned expects the mint's PUSH_REWRITE execution lock and its check that
+// the node has not reported the execution abandoned.
+func expectMintExecutionNotAbandoned(mock sqlmock.Sqlmock) {
+	mock.ExpectExec(`pg_advisory_xact_lock`).WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectQuery(`ingest_admission_abandonments`).WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(false))
+}
+
 // installIngestSessionMintMock wires a mock control DB that satisfies the synchronous
 // ingest-session mint handlePushRewrite now performs on every accepted push (fail-closed:
 // with no DB the push is denied). Tests that exercise the accept path inject this rather
@@ -44,6 +51,7 @@ func installIngestSessionMint(t *testing.T, streamConnected bool) {
 	mock.ExpectQuery(`tenant_id = \$1::uuid AND node_id = \$2 AND start_trigger_uuid = \$3 AND ended_at IS NULL`).WillReturnError(sql.ErrNoRows)
 
 	mock.ExpectBegin()
+	expectMintExecutionNotAbandoned(mock)
 	mock.ExpectExec(`pg_advisory_xact_lock`).WillReturnResult(sqlmock.NewResult(0, 0))
 	mock.ExpectExec(`pg_advisory_xact_lock`).WillReturnResult(sqlmock.NewResult(0, 0))
 	mock.ExpectQuery(`start_trigger_uuid = \$3\s+FOR UPDATE`).WillReturnError(sql.ErrNoRows)           // new trigger UUID
@@ -98,6 +106,7 @@ func installIngestSessionMintThenAbortMock(t *testing.T) {
 
 	mock.ExpectQuery(`tenant_id = \$1::uuid AND node_id = \$2 AND start_trigger_uuid = \$3 AND ended_at IS NULL`).WillReturnError(sql.ErrNoRows)
 	mock.ExpectBegin()
+	expectMintExecutionNotAbandoned(mock)
 	mock.ExpectExec(`pg_advisory_xact_lock`).WillReturnResult(sqlmock.NewResult(0, 0))
 	mock.ExpectExec(`pg_advisory_xact_lock`).WillReturnResult(sqlmock.NewResult(0, 0))
 	mock.ExpectQuery(`start_trigger_uuid = \$3\s+FOR UPDATE`).WillReturnError(sql.ErrNoRows)
@@ -138,6 +147,7 @@ func installIngestSessionEndedMock(t *testing.T) {
 	mock.ExpectQuery(`tenant_id = \$1::uuid AND node_id = \$2 AND start_trigger_uuid = \$3 AND ended_at IS NULL`).WillReturnError(sql.ErrNoRows)
 
 	mock.ExpectBegin()
+	expectMintExecutionNotAbandoned(mock)
 	mock.ExpectExec(`pg_advisory_xact_lock`).WillReturnResult(sqlmock.NewResult(0, 0))
 	mock.ExpectExec(`pg_advisory_xact_lock`).WillReturnResult(sqlmock.NewResult(0, 0))
 	// The trigger-UUID lookup finds a row for this exact trigger that is already ENDED.
@@ -171,6 +181,7 @@ func installIngestSessionResumedMock(t *testing.T, internalName string, connecto
 	// CreateIngestSession resolves the same trigger UUID to the still-open row (idempotent retry);
 	// the row's full identity (stream AND connector PID) must match the caller's.
 	mock.ExpectBegin()
+	expectMintExecutionNotAbandoned(mock)
 	mock.ExpectExec(`pg_advisory_xact_lock`).WillReturnResult(sqlmock.NewResult(0, 0))
 	mock.ExpectExec(`pg_advisory_xact_lock`).WillReturnResult(sqlmock.NewResult(0, 0))
 	mock.ExpectQuery(`start_trigger_uuid = \$3\s+FOR UPDATE`).
@@ -225,6 +236,7 @@ func installIngestSessionMintMockCaptureDecklog(t *testing.T) *byteArgRecorder {
 	mock.ExpectQuery(`tenant_id = \$1::uuid AND node_id = \$2 AND start_trigger_uuid = \$3 AND ended_at IS NULL`).WillReturnError(sql.ErrNoRows)
 
 	mock.ExpectBegin()
+	expectMintExecutionNotAbandoned(mock)
 	mock.ExpectExec(`pg_advisory_xact_lock`).WillReturnResult(sqlmock.NewResult(0, 0))
 	mock.ExpectExec(`pg_advisory_xact_lock`).WillReturnResult(sqlmock.NewResult(0, 0))
 	mock.ExpectQuery(`start_trigger_uuid = \$3\s+FOR UPDATE`).WillReturnError(sql.ErrNoRows)

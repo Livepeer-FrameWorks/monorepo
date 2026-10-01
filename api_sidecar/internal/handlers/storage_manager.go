@@ -884,6 +884,10 @@ func (sm *StorageManager) HandleFreezeRequest(req *ipcpb.FreezeRequest) {
 	}
 
 	info, err := os.Stat(req.LocalPath)
+	if err != nil && errors.Is(err, fs.ErrNotExist) && nodeArtifactDeletions.deletedRecently(req.AssetHash) {
+		sm.endFreezeOfDeletedArtifact(req.RequestId, FreezeCandidate{AssetType: AssetType(req.AssetType), AssetHash: req.AssetHash, FilePath: req.LocalPath}, false)
+		return
+	}
 	if err != nil {
 		sm.logger.WithError(err).WithField("path", req.LocalPath).Error("Freeze request: local path not found")
 		// ENOENT here is the same terminal lost_local condition as inside the
@@ -999,6 +1003,14 @@ func (sm *StorageManager) uploadAsset(ctx context.Context, asset FreezeCandidate
 		requestID = permResp.RequestId
 	}
 
+	if nodeArtifactDeletions.deletedRecently(asset.AssetHash) {
+		sm.endFreezeOfDeletedArtifact(requestID, asset, false)
+		return nil
+	}
+	// A delete command for this artifact cancels the upload, so the file is not removed under a running PUT.
+	ctx, releaseUpload := nodeArtifactDeletions.trackUpload(ctx, asset.AssetHash)
+	defer releaseUpload()
+
 	_ = sm.sendStorageLifecycle(&ipcpb.StorageLifecycleData{ //nolint:errcheck // best-effort report
 		Action:    ipcpb.StorageLifecycleData_ACTION_SYNC_STARTED,
 		AssetType: string(asset.AssetType),
@@ -1028,6 +1040,11 @@ func (sm *StorageManager) uploadAsset(ctx context.Context, asset FreezeCandidate
 	duration := time.Since(startTime)
 	freezeUploadSeconds.WithLabelValues(string(asset.AssetType)).Observe(duration.Seconds())
 
+	if uploadErr != nil && (errors.Is(context.Cause(ctx), errArtifactDeletedOnNode) ||
+		(errors.Is(uploadErr, fs.ErrNotExist) && nodeArtifactDeletions.deletedRecently(asset.AssetHash))) {
+		sm.endFreezeOfDeletedArtifact(requestID, asset, dtshIncluded)
+		return nil
+	}
 	if uploadErr != nil {
 		freezeUploads.WithLabelValues(string(asset.AssetType), "failed").Inc()
 		durationMs := duration.Milliseconds()
@@ -1085,6 +1102,21 @@ func (sm *StorageManager) uploadAsset(ctx context.Context, asset FreezeCandidate
 	}).Info("Asset synced to S3 (local copy retained)")
 
 	return nil
+}
+
+// endFreezeOfDeletedArtifact ends a freeze whose artifact a delete command removed from this node: nothing more is
+// uploaded, and Foghorn gets a plain failure naming the deletion. It is not a lost copy (Foghorn ordered the
+// removal), so no local-missing transition or lifecycle sample is sent.
+func (sm *StorageManager) endFreezeOfDeletedArtifact(requestID string, asset FreezeCandidate, dtshIncluded bool) {
+	const reason = "artifact deleted on this node; freeze upload stopped"
+	freezeUploads.WithLabelValues(string(asset.AssetType), "artifact_deleted").Inc()
+	sm.logger.WithFields(logging.Fields{
+		"asset_hash": asset.AssetHash,
+		"asset_type": asset.AssetType,
+		"request_id": requestID,
+		"path":       asset.FilePath,
+	}).Info("Freeze ended: the artifact was deleted on this node")
+	_ = sm.sendSyncComplete(requestID, asset.AssetHash, "failed", 0, reason, dtshIncluded, false) //nolint:errcheck // best-effort report; reconnect retries on stream loss
 }
 
 // evictBlockCaches walks vod/ and clips/ for *.blocks/ directories and

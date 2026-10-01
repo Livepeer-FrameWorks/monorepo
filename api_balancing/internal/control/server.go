@@ -3097,7 +3097,8 @@ const (
 	// IngestSessionAlreadyEnded: this EXACT trigger's connector has already been closed (its own
 	// PUSH_INPUT_CLOSE won the race and ended it first). The returned id is the existing ended
 	// session's when one was already inserted; it is empty when a durable close-before-insert
-	// tombstone prevented any session from being minted. In either case the caller MUST deny/no-op
+	// tombstone, or the node's report that it answered this execution to Mist without an accept
+	// (AbandonIngestAdmission), prevented any session from being minted. In either case the caller MUST deny/no-op
 	// admission side effects (input state, capacity, drain, Decklog, DVR) for a connector that is
 	// already gone.
 	IngestSessionAlreadyEnded
@@ -3205,6 +3206,21 @@ func MintIngestSession(ctx context.Context, req IngestSessionRequest, logger log
 	err := database.WithRetryablePostgresTx(ctx, db, &sql.TxOptions{Isolation: sql.LevelReadCommitted}, func(tx *sql.Tx) error {
 		sessionID, outcome, staleStopClaims = "", 0, nil
 		q := foghorndb.New(tx)
+		// An execution its node already answered to Mist without an accept has no publisher: Mist
+		// refused it and never delivers it again. The execution lock orders this check against
+		// AbandonIngestAdmission, which ends whatever this mint commits if it commits first. It is
+		// taken before the tenant and stream locks; the abandonment holds no other lock with it.
+		if lockErr := q.LockIngestStream(ctx, ingestAdmissionTriggerLockKey(nodeID, triggerUUID)); lockErr != nil {
+			return fmt.Errorf("acquire ingest admission execution lock: %w", lockErr)
+		}
+		abandoned, abandonedErr := q.IngestAdmissionAbandoned(ctx, foghorndb.IngestAdmissionAbandonedParams{NodeID: nodeID, StartTriggerUuid: triggerUUID})
+		if abandonedErr != nil {
+			return fmt.Errorf("check abandoned ingest admission: %w", abandonedErr)
+		}
+		if abandoned {
+			outcome = IngestSessionAlreadyEnded
+			return nil
+		}
 		// Serialize every tenant admission before taking the narrower stream lock.
 		// Capped and unlimited authority generations can overlap during rollout or
 		// an outage; taking this lock unconditionally keeps a capped count+insert
@@ -4121,87 +4137,126 @@ func repairResumedSourceProjection(ctx context.Context, registry *StreamRegistry
 		if revisionErr != nil {
 			return false, fmt.Errorf("allocate resumed source repair revision: %w", revisionErr)
 		}
-		// Raw transaction: the stream lock must stay held across the Redis ProjectSource CAS below, which cannot be replayed.
-		tx, err := db.BeginTx(ctx, nil)
-		if err != nil {
-			return false, fmt.Errorf("begin resumed source repair apply: %w", err)
-		}
-		q := foghorndb.New(tx)
-		if err = q.LockIngestStream(ctx, ingestStreamAdvisoryLockKey(tenantID, internalName)); err != nil {
-			rollbackQuiet(tx)
-			return false, fmt.Errorf("lock resumed source repair apply: %w", err)
-		}
-		probe, probeErr := q.ProbeCurrentSourceProjection(ctx, foghorndb.ProbeCurrentSourceProjectionParams{
-			TenantID: tenantID, StreamInternalName: internalName, Generation: generation,
+		// A serialization failure or deadlock aborts the apply transaction, including one reported
+		// by COMMIT after the shared CAS already accepted newRevision. Each replay revalidates the
+		// stream from the database and re-runs the CAS at the same newRevision for the same
+		// publisher identity, which the registry accepts as the same transition, so a replay neither
+		// draws another revision nor publishes a different owner.
+		var outcome resumedRepairOutcome
+		applyErr := database.RetryPostgres(ctx, database.DefaultRetryAttempts, 0, func() error {
+			var attemptErr error
+			outcome, attemptErr = applyResumedSourceRepair(ctx, registry, tenantID, nodeID, internalName, connectorPID, triggerUUID, generation, expectedRevision, newRevision)
+			return attemptErr
 		})
-		if probeErr != nil {
-			rollbackQuiet(tx)
-			return false, fmt.Errorf("revalidate resumed source repair: %w", probeErr)
+		if applyErr != nil {
+			return false, applyErr
 		}
-		if !probe.IsCurrent || probe.ProjectionState != "active" || !probe.SourceRevision.Valid || probe.SourceRevision.Int64 <= 0 {
-			rollbackQuiet(tx)
+		switch outcome {
+		case resumedRepairApplied:
+			return true, nil
+		case resumedRepairNotCurrent:
 			return false, nil
 		}
-		if probe.SourceRevision.Int64 != expectedRevision {
-			rollbackQuiet(tx)
-			continue
-		}
-		advanced, advanceErr := q.AdvanceActiveSourceProjectionRevision(ctx, foghorndb.AdvanceActiveSourceProjectionRevisionParams{
-			NewRevision: sql.NullInt64{Int64: newRevision, Valid: true}, Generation: generation,
-			TenantID: tenantID, StreamInternalName: internalName,
-			PreviousRevision: probe.SourceRevision,
-		})
-		if advanceErr != nil {
-			rollbackQuiet(tx)
-			return false, fmt.Errorf("advance resumed source revision: %w", advanceErr)
-		}
-		if advanced != 1 {
-			rollbackQuiet(tx)
-			continue
-		}
-		effectAdvanced, effectErr := q.AdvanceAdmissionEffectSourceRevision(ctx, foghorndb.AdvanceAdmissionEffectSourceRevisionParams{
-			NewRevision: newRevision, Generation: generation, TenantID: tenantID,
-			StreamInternalName: internalName, PreviousRevision: probe.SourceRevision.Int64,
-		})
-		if effectErr != nil {
-			rollbackQuiet(tx)
-			return false, fmt.Errorf("advance resumed admission-effect revision: %w", effectErr)
-		}
-		if effectAdvanced != 1 {
-			effectRevision, lookupErr := q.GetAdmissionEffectSourceRevision(ctx, foghorndb.GetAdmissionEffectSourceRevisionParams{
-				Generation: generation, TenantID: tenantID, StreamInternalName: internalName,
-			})
-			switch {
-			case errors.Is(lookupErr, sql.ErrNoRows):
-				// Terminal effect rows are retention data, not active source authority. Once every
-				// owed leg has settled they may be purged while the ingest session remains active;
-				// repairing that session must not manufacture a new effect or reject its publisher.
-			case lookupErr != nil:
-				rollbackQuiet(tx)
-				return false, fmt.Errorf("inspect resumed admission-effect revision: %w", lookupErr)
-			default:
-				rollbackQuiet(tx)
-				return false, fmt.Errorf("advance resumed admission-effect revision: generation %s has revision %d, expected %d", generation, effectRevision, probe.SourceRevision.Int64)
-			}
-		}
-		// Keep the per-stream advisory lock through the shared CAS. Concurrent
-		// retries for this generation cannot overtake one another in the
-		// commit-to-publish gap. A rejected write rolls back the stream state, but
-		// never the already-issued cell-wide fencing token.
-		_, projected, projectErr := registry.ProjectSource(internalName, nodeID, connectorPID, triggerUUID, generation, newRevision)
-		if projectErr != nil {
-			rollbackQuiet(tx)
-			return false, fmt.Errorf("publish resumed source repair: %w", projectErr)
-		}
-		if !projected {
-			rollbackQuiet(tx)
-			continue
-		}
-		if err := tx.Commit(); err != nil {
-			return false, fmt.Errorf("commit resumed source repair: %w", err)
-		}
-		return true, nil
 	}
+}
+
+// resumedRepairOutcome is what one apply attempt of repairResumedSourceProjection decided.
+type resumedRepairOutcome int
+
+const (
+	// resumedRepairRestart: the stream moved since the watermark was read; start over from it.
+	resumedRepairRestart resumedRepairOutcome = iota
+	// resumedRepairNotCurrent: the generation is no longer the stream's active session.
+	resumedRepairNotCurrent
+	// resumedRepairApplied: the session, its effect fence, and the shared projection carry newRevision.
+	resumedRepairApplied
+)
+
+// applyResumedSourceRepair advances generation from expectedRevision to newRevision under the stream
+// lock and publishes newRevision through the shared CAS before committing. The transaction has no
+// effect outside the database and the registry CAS; the CAS is idempotent for the same identity at
+// the same revision, so the attempt can be replayed.
+func applyResumedSourceRepair(ctx context.Context, registry *StreamRegistry, tenantID, nodeID, internalName string, connectorPID int64, triggerUUID, generation string, expectedRevision, newRevision int64) (resumedRepairOutcome, error) {
+	// Raw transaction: the stream lock must stay held across the Redis ProjectSource CAS below, which runs between statements and COMMIT; the caller replays the whole attempt.
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		return resumedRepairRestart, fmt.Errorf("begin resumed source repair apply: %w", err)
+	}
+	q := foghorndb.New(tx)
+	if err = q.LockIngestStream(ctx, ingestStreamAdvisoryLockKey(tenantID, internalName)); err != nil {
+		rollbackQuiet(tx)
+		return resumedRepairRestart, fmt.Errorf("lock resumed source repair apply: %w", err)
+	}
+	probe, probeErr := q.ProbeCurrentSourceProjection(ctx, foghorndb.ProbeCurrentSourceProjectionParams{
+		TenantID: tenantID, StreamInternalName: internalName, Generation: generation,
+	})
+	if probeErr != nil {
+		rollbackQuiet(tx)
+		return resumedRepairRestart, fmt.Errorf("revalidate resumed source repair: %w", probeErr)
+	}
+	if !probe.IsCurrent || probe.ProjectionState != "active" || !probe.SourceRevision.Valid || probe.SourceRevision.Int64 <= 0 {
+		rollbackQuiet(tx)
+		return resumedRepairNotCurrent, nil
+	}
+	if probe.SourceRevision.Int64 != expectedRevision {
+		rollbackQuiet(tx)
+		return resumedRepairRestart, nil
+	}
+	advanced, advanceErr := q.AdvanceActiveSourceProjectionRevision(ctx, foghorndb.AdvanceActiveSourceProjectionRevisionParams{
+		NewRevision: sql.NullInt64{Int64: newRevision, Valid: true}, Generation: generation,
+		TenantID: tenantID, StreamInternalName: internalName,
+		PreviousRevision: probe.SourceRevision,
+	})
+	if advanceErr != nil {
+		rollbackQuiet(tx)
+		return resumedRepairRestart, fmt.Errorf("advance resumed source revision: %w", advanceErr)
+	}
+	if advanced != 1 {
+		rollbackQuiet(tx)
+		return resumedRepairRestart, nil
+	}
+	effectAdvanced, effectErr := q.AdvanceAdmissionEffectSourceRevision(ctx, foghorndb.AdvanceAdmissionEffectSourceRevisionParams{
+		NewRevision: newRevision, Generation: generation, TenantID: tenantID,
+		StreamInternalName: internalName, PreviousRevision: probe.SourceRevision.Int64,
+	})
+	if effectErr != nil {
+		rollbackQuiet(tx)
+		return resumedRepairRestart, fmt.Errorf("advance resumed admission-effect revision: %w", effectErr)
+	}
+	if effectAdvanced != 1 {
+		effectRevision, lookupErr := q.GetAdmissionEffectSourceRevision(ctx, foghorndb.GetAdmissionEffectSourceRevisionParams{
+			Generation: generation, TenantID: tenantID, StreamInternalName: internalName,
+		})
+		switch {
+		case errors.Is(lookupErr, sql.ErrNoRows):
+			// Terminal effect rows are retention data, not active source authority. Once every
+			// owed leg has settled they may be purged while the ingest session remains active;
+			// repairing that session must not manufacture a new effect or reject its publisher.
+		case lookupErr != nil:
+			rollbackQuiet(tx)
+			return resumedRepairRestart, fmt.Errorf("inspect resumed admission-effect revision: %w", lookupErr)
+		default:
+			rollbackQuiet(tx)
+			return resumedRepairRestart, fmt.Errorf("advance resumed admission-effect revision: generation %s has revision %d, expected %d", generation, effectRevision, probe.SourceRevision.Int64)
+		}
+	}
+	// Keep the per-stream advisory lock through the shared CAS. Concurrent
+	// retries for this generation cannot overtake one another in the
+	// commit-to-publish gap. A rejected write rolls back the stream state, but
+	// never the already-issued cell-wide fencing token.
+	_, projected, projectErr := registry.ProjectSource(internalName, nodeID, connectorPID, triggerUUID, generation, newRevision)
+	if projectErr != nil {
+		rollbackQuiet(tx)
+		return resumedRepairRestart, fmt.Errorf("publish resumed source repair: %w", projectErr)
+	}
+	if !projected {
+		rollbackQuiet(tx)
+		return resumedRepairRestart, nil
+	}
+	if err := tx.Commit(); err != nil {
+		return resumedRepairRestart, fmt.Errorf("commit resumed source repair: %w", err)
+	}
+	return resumedRepairApplied, nil
 }
 
 // sourceProjectionCleanupTimeout bounds the cleanup of a denied admission. The cleanup runs on a
@@ -6947,10 +7002,11 @@ type S3ClientInterface interface {
 	Exists(ctx context.Context, key string) (bool, error)
 	GetObjectSize(ctx context.Context, key string) (int64, error)
 	// HeadObjectInfo returns existence + size + ETag in one HEAD; PromoteObject copies a staging object to
-	// the canonical key conditional on that ETag (then deletes staging). Together they let completion consume
-	// an attempt-scoped staging upload without ever exposing a canonical-key PUT to the node.
+	// the canonical key conditional on that ETag and returns the copy's ETag ("" when the provider omits it).
+	// Together they let completion consume an attempt-scoped staging upload without ever exposing a
+	// canonical-key PUT to the node.
 	HeadObjectInfo(ctx context.Context, key string) (bool, int64, string, error)
-	PromoteObject(ctx context.Context, srcKey, dstKey, ifMatchETag string) error
+	PromoteObject(ctx context.Context, srcKey, dstKey, ifMatchETag string) (string, error)
 	// BackendDescriptor returns this client's IMMUTABLE storage-backend identity (bucket, endpoint, region, prefix),
 	// so a write can capture the backend_id fingerprint (BackendFingerprint) it landed on for repoint-safe cleanup later.
 	BackendDescriptor() (bucket, endpoint, region, prefix string)
@@ -9145,6 +9201,22 @@ func processSyncCompleteAt(complete *ipcpb.SyncComplete, nodeID string, nodeCloc
 		}
 	}
 
+	// A completion that arrives after its artifact was deleted ends here, before any object-storage work: the
+	// deletion removed the published objects, and the attempt's staged objects are collected from the publication
+	// ledger by the deletion's cleanup. A failed status read falls through to the guarded transitions below, which
+	// refuse a deleted artifact on their own.
+	if deleted, deletedStatus := syncCompletionArtifactDeleted(ctx, assetHash, ownerTenant); deleted {
+		incArtifactSyncOutcome("artifact_deleted")
+		logger.WithFields(logging.Fields{
+			"request_id":      requestID,
+			"asset_hash":      assetHash,
+			"status":          status,
+			"artifact_status": deletedStatus,
+			"node_id":         reportingNodeID,
+		}).Info("Sync completion for an artifact that was deleted meanwhile; nothing is published")
+		return
+	}
+
 	switch status {
 	case "success":
 		incArtifactSyncOutcome("success")
@@ -9235,7 +9307,7 @@ func processSyncCompleteAt(complete *ipcpb.SyncComplete, nodeID string, nodeCloc
 				if lErr := RecordPublicationPairDB(ctx, db, assetHash, tenantID, requestID, stagingKey, candidate); lErr != nil {
 					logger.WithError(lErr).WithField("asset_hash", assetHash).Debug("Sync completion: main publication ledger re-assert failed (non-fatal; claim-time record is authoritative)")
 				}
-				if pErr := s3Client.PromoteObject(ctx, stagingKey, candidate, etag); pErr != nil {
+				if _, pErr := s3Client.PromoteObject(ctx, stagingKey, candidate, etag); pErr != nil {
 					// RETRYABLE (left in_progress). Do NOT enqueue the candidate: the attempt keeps the SAME
 					// server-minted id, so a retry re-publishes to the SAME candidate key (idempotent copy) and
 					// may make it ACTIVE — enqueuing it here would race the retry and could delete the live
@@ -9291,7 +9363,7 @@ func processSyncCompleteAt(complete *ipcpb.SyncComplete, nodeID string, nodeCloc
 					if lErr := RecordPublicationPairDB(ctx, db, assetHash, tenantID, requestID, stagingKey, dcand); lErr != nil {
 						logger.WithError(lErr).WithField("asset_hash", assetHash).Warn("Sync completion: failed to record .dtsh publication ledger; not finalizing dtsh_synced")
 						dtshIncluded = false
-					} else if pErr := s3Client.PromoteObject(ctx, stagingKey, dcand, dEtag); pErr != nil {
+					} else if _, pErr := s3Client.PromoteObject(ctx, stagingKey, dcand, dEtag); pErr != nil {
 						// Downgrade (retryable). The ledger row (recorded above) lets the sweep collect the candidate;
 						// dtshStagingToCleanup (set above) enqueues the staging on a committing main completion.
 						logger.WithError(pErr).WithFields(logging.Fields{"asset_hash": assetHash, "staging_key": stagingKey}).
@@ -9605,6 +9677,26 @@ func processSyncCompleteAt(complete *ipcpb.SyncComplete, nodeID string, nodeCloc
 			logger.WithFields(logging.Fields{"asset_hash": assetHash, "error": errorMsg}).Warn("Asset sync to S3 failed")
 		}
 	}
+}
+
+// syncCompletionArtifactDeleted reports whether the artifact a sync completion names is in a terminal deleted state
+// (deleted, expired, aborted) for its owner tenant, with that status. An unresolved owner or a failed read reports
+// false so the caller's guarded transitions decide.
+func syncCompletionArtifactDeleted(ctx context.Context, assetHash, ownerTenant string) (bool, string) {
+	if db == nil || strings.TrimSpace(ownerTenant) == "" {
+		return false, ""
+	}
+	st, err := foghorndb.New(db).GetArtifactStatusForTenant(ctx, foghorndb.GetArtifactStatusForTenantParams{
+		ArtifactHash: assetHash, TenantID: ownerTenant,
+	})
+	if err != nil {
+		return false, ""
+	}
+	switch st.String {
+	case "deleted", "expired", "aborted":
+		return true, st.String
+	}
+	return false, ""
 }
 
 // applySyncCompletionFailure applies a failed / lost_local sync completion as ONE guarded transaction,
@@ -10651,31 +10743,34 @@ func sendEdgeMistAdminSessionResponse(requestID string, stream ipcpb.HelmsmanCon
 // PUT would overwrite — the per-resource task authorization that keeps a merely tenant-entitled node from
 // naming a resource it isn't running. FAIL CLOSED on every unproven case. Live: the node must be running the
 // stream (in-memory stream instances). Artifacts (vod/dvr/processing): it must hold a non-orphaned copy OR be
-// the artifact's assigned processing node (the copy may not be registered yet during processing).
-func nodeProducesThumbnailResource(ctx context.Context, nodeID string, kind streamident.Kind, isLive bool, streamInternalName, resourceKey, tenantID string) bool {
+// the artifact's assigned processing node (the copy may not be registered yet during processing). A DVR chapter
+// finalization runs as processing+{chapter playback hash} without a processing_jobs row, so its assigned node is
+// the chapter's finalize_node_id while the chapter is finalizing.
+// A failed lookup returns its error so the caller can tell it apart from a denial.
+func nodeProducesThumbnailResource(ctx context.Context, nodeID string, kind streamident.Kind, isLive bool, streamInternalName, resourceKey, tenantID string) (bool, error) {
 	if strings.TrimSpace(nodeID) == "" || strings.TrimSpace(resourceKey) == "" || strings.TrimSpace(tenantID) == "" {
-		return false
+		return false, nil
 	}
 	if isLive {
 		_, ok := state.DefaultManager().GetStreamInstances(streamInternalName)[nodeID]
-		return ok
+		return ok, nil
 	}
 	switch kind {
 	case streamident.KindArtifactVOD, streamident.KindArtifactDVR, streamident.KindArtifactProcessing:
 		conn := GetDB()
 		if conn == nil {
-			return false
+			return false, errors.New("foghorn database not configured")
 		}
 		// TENANT-SCOPED so a hash collision across tenants can't cross-authorize. A serving node must hold a
-		// COMPLETE, non-orphaned copy; a processing node must be the artifact's assigned processor. Both are
-		// scoped to the resolved tenant.
+		// COMPLETE, non-orphaned copy; a processing node must be the artifact's assigned processor or the
+		// finalizing chapter's finalize node. All are scoped to the resolved tenant.
 		ok, err := foghorndb.New(conn).ThumbnailResourceProducedByNode(ctx, foghorndb.ThumbnailResourceProducedByNodeParams{ArtifactHash: resourceKey, NodeID: nodeID, TenantID: tenantID})
 		if err != nil {
-			return false
+			return false, fmt.Errorf("check thumbnail producer for %s on %s: %w", resourceKey, nodeID, err)
 		}
-		return ok.Valid && ok.Bool
+		return ok.Valid && ok.Bool, nil
 	default:
-		return false
+		return false, nil
 	}
 }
 
@@ -10904,8 +10999,16 @@ func processThumbnailUploadRequest(requestID string, req *ipcpb.ThumbnailUploadR
 	// edge) merely for NAMING a resource it is not serving/processing. Live: the node must be running the
 	// stream; artifacts: it must hold a complete copy (serving) or be its assigned processing node. Fail closed.
 	ownCtx, ownCancel := context.WithTimeout(context.Background(), 3*time.Second)
-	produces := nodeProducesThumbnailResource(ownCtx, nodeID, parsed.Kind, isLive, streamInternalName, thumbnailKey, thumbTenantID)
+	produces, produceErr := nodeProducesThumbnailResource(ownCtx, nodeID, parsed.Kind, isLive, streamInternalName, thumbnailKey, thumbTenantID)
 	ownCancel()
+	if produceErr != nil {
+		logger.WithError(produceErr).WithFields(logging.Fields{
+			"internal_name": internalName,
+			"thumbnail_key": thumbnailKey,
+			"node_id":       nodeID,
+		}).Warn("Thumbnail upload dropped: could not check whether the reporting node produces the named resource")
+		return
+	}
 	if !produces {
 		logger.WithFields(logging.Fields{
 			"internal_name": internalName,
@@ -11002,14 +11105,34 @@ func processThumbnailUploadRequest(requestID string, req *ipcpb.ThumbnailUploadR
 	// backend evidence (I2): the mint only reaches here for a StorageMintLocal destination (Unavailable + remote
 	// federation are dropped above), so ClaimThumbnailAttempt records durable_backend_local from that invariant —
 	// cleanup then routes the sweep local even when the origin cluster is a locally-backed ALIAS.
-	claimed, claimErr := ClaimThumbnailAttempt(claimCtx, GetDB(), attemptID, thumbTenantID, thumbnailKey, nodeID, storageCluster, fileNames, time.Now().Add(expiry))
+	claimStarted := time.Now()
+	claim, claimErr := ClaimThumbnailAttemptOutcome(claimCtx, GetDB(), attemptID, thumbTenantID, thumbnailKey, nodeID, storageCluster, fileNames, time.Now().Add(expiry))
 	claimCancel()
-	if claimErr != nil || !claimed {
-		logger.WithError(claimErr).WithFields(logging.Fields{
-			"internal_name": internalName,
-			"thumbnail_key": thumbnailKey,
-			"attempt_id":    attemptID,
-		}).Warn("Failed to claim thumbnail attempt; dropping (a stuck assignment is swept by the reconciler)")
+	claimFields := logging.Fields{
+		"internal_name": internalName,
+		"thumbnail_key": thumbnailKey,
+		"attempt_id":    attemptID,
+		"outcome":       claim.String(),
+	}
+	switch {
+	case claimErr != nil:
+		claimFields["elapsed_ms"] = time.Since(claimStarted).Milliseconds()
+		logger.WithError(claimErr).WithFields(claimFields).Warn("Failed to record thumbnail attempt; dropping upload (nothing was assigned)")
+		return
+	case claim == ThumbnailClaimParentTerminal, claim == ThumbnailClaimAssetTombstoned:
+		// The stream or artifact is being deleted. A live mint reached the claim because the serving-cell
+		// registration is cached; forgetting it makes the next mint re-register, which the deletion refuses.
+		if isLive {
+			thumbnailRegistrationCache.Delete(thumbnailKey)
+		}
+		logger.WithFields(claimFields).Info("Thumbnail upload dropped: the stream or artifact is being deleted")
+		return
+	case claim != ThumbnailClaimed:
+		claimFields["tenant_id"] = thumbTenantID
+		claimFields["node_id"] = nodeID
+		claimFields["storage_cluster"] = storageCluster
+		claimFields["file_count"] = len(fileNames)
+		logger.WithFields(claimFields).Warn("Thumbnail claim refused: assignment identity incomplete; dropping upload")
 		return
 	}
 
@@ -11210,11 +11333,15 @@ func finishThumbnailPublication(ctx context.Context, dbh *sql.DB, a ThumbnailAss
 	// them; the winning completion de-registers exactly these keys inside its publish CAS. Because the candidate
 	// segment is the holder's private token, a stale holder can only ever write (and later have cleaned) its OWN
 	// objects — it can never overwrite or dequeue the winner's.
+	// Each HEAD and CopyObject runs under its own bounded, retried attempt (thumbnailObjectStore), so a stalled request
+	// is abandoned and retried instead of spending the whole completion deadline.
+	versionETags := make(map[string]string, len(objs))
 	for _, o := range objs {
-		exists, size, etag, hErr := s3Client.HeadObjectInfo(ctx, o.StagingKey)
+		headStarted := time.Now()
+		exists, size, etag, hErr := headThumbnailObject(ctx, s3Client, o.StagingKey, logger)
 		if hErr != nil {
-			logger.WithError(hErr).WithFields(logging.Fields{"attempt_id": attemptID, "staging_key": o.StagingKey}).
-				Warn("Thumbnail completion: staging HEAD failed (transient); leaving for retry")
+			logger.WithError(hErr).WithFields(logging.Fields{"attempt_id": attemptID, "staging_key": o.StagingKey, "elapsed_ms": time.Since(headStarted).Milliseconds()}).
+				Warn("Thumbnail completion: staging HEAD failed; leaving for retry")
 			return
 		}
 		if !exists || size <= 0 || strings.TrimSpace(etag) == "" {
@@ -11223,12 +11350,23 @@ func finishThumbnailPublication(ctx context.Context, dbh *sql.DB, a ThumbnailAss
 			return
 		}
 		versionKey := ThumbnailVersionKey(a.AssetKey, publishToken, o.FileName)
-		if pErr := s3Client.PromoteObject(ctx, o.StagingKey, versionKey, etag); pErr != nil {
-			logger.WithError(pErr).WithFields(logging.Fields{"attempt_id": attemptID, "version_key": versionKey}).
-				Warn("Thumbnail completion: promote to candidate key failed (transient); leaving for retry")
+		promoteStarted := time.Now()
+		versionETag, pErr := promoteThumbnailObject(ctx, s3Client, o.StagingKey, versionKey, etag, logger)
+		if pErr != nil {
+			logger.WithError(pErr).WithFields(logging.Fields{"attempt_id": attemptID, "version_key": versionKey, "elapsed_ms": time.Since(promoteStarted).Milliseconds()}).
+				Warn("Thumbnail completion: promote to candidate key failed; leaving for retry")
 			return
 		}
-		moved, mErr := MarkThumbnailObjectVerifiedToken(ctx, dbh, attemptID, o.FileName, versionKey, etag, size, publishToken)
+		// The verified object is the candidate this completion just wrote, so its own ETag from the copy result is
+		// recorded and the projection copies it under that ETag without another HEAD. A provider that omits it from
+		// the copy result leaves the staging ETag recorded; a projection copy refused on that ETag HEADs the
+		// candidate instead.
+		recordedETag := etag
+		if strings.TrimSpace(versionETag) != "" {
+			recordedETag = versionETag
+			versionETags[o.FileName] = versionETag
+		}
+		moved, mErr := MarkThumbnailObjectVerifiedToken(ctx, dbh, attemptID, o.FileName, versionKey, recordedETag, size, publishToken)
 		if mErr != nil {
 			logger.WithError(mErr).WithField("attempt_id", attemptID).Warn("Thumbnail completion: recording verified object failed; leaving for recovery")
 			return
@@ -11287,7 +11425,7 @@ func finishThumbnailPublication(ctx context.Context, dbh *sql.DB, a ThumbnailAss
 		// the context is cancelled), so a loser's straggler overwrite is corrected by the winner's reassert (and a
 		// resurrection by the delayed delete sweep) when it lands within the copy window — the contract is eventual,
 		// with a straggler past the assumed provider tail an accepted residual risk. See docs/architecture/thumbnails.md.
-		if marked, mErr := projectAndMarkThumbnailFromToken(ctx, dbh, s3Client, attemptID, a.AssetKey, a.TenantID, a.DestinationCluster, publishToken, fileNames, logger); mErr != nil {
+		if marked, mErr := projectAndMarkThumbnailFromToken(ctx, dbh, s3Client, attemptID, a.AssetKey, a.TenantID, a.DestinationCluster, publishToken, fileNames, versionETags, logger); mErr != nil {
 			logger.WithError(mErr).WithField("attempt_id", attemptID).Warn("Thumbnail projection failed; leaving unprojected for recovery")
 		} else if marked {
 			// Node-authorized convergence: has_thumbnails is already flipped by the settle; this backfills a MISSING
@@ -11302,17 +11440,15 @@ func finishThumbnailPublication(ctx context.Context, dbh *sql.DB, a ThumbnailAss
 	}
 }
 
-const (
-	deterministicPromoteRetries = 3
-	deterministicPromoteBackoff = 200 * time.Millisecond
-)
-
 // copyThumbnailObjectsToDeterministic copies each object's VersionKey → its deterministic served key
-// (thumbnails/{asset}/{file}) with a bounded per-object retry. It is PURE S3 and runs OUTSIDE any transaction/lock (a
-// PostgreSQL lock cannot serialize this network copy), between the CLAIM and SETTLE fences of projectAndMarkThumbnail.
-// The destination write is unconditional, so a stale straggler is possible; the winner's reassert + the delayed delete
-// sweep converge it. Returns true iff EVERY object was copied (an empty or absent source, or a retry-exhausted transport
-// error, returns false → the caller commits nothing and recovery re-drives).
+// (thumbnails/{asset}/{file}). It is PURE S3 and runs OUTSIDE any transaction/lock (a PostgreSQL lock cannot serialize
+// this network copy), between the CLAIM and SETTLE fences of projectAndMarkThumbnail. Every HEAD and CopyObject runs
+// under its own bounded, retried attempt (thumbnailObjectStore). An object whose source ETag is already known (the
+// completion's copy result, or the ETag recorded at verification) is copied under it without a HEAD; a copy the
+// provider refuses on that ETag falls back to HEADing the source. The destination write is unconditional, so a stale
+// straggler is possible; the winner's reassert + the delayed delete sweep converge it. Returns true iff EVERY object was
+// copied (an empty or absent source, or a retry-exhausted transport error, returns false → the caller commits nothing
+// and recovery re-drives).
 func copyThumbnailObjectsToDeterministic(ctx context.Context, client S3ClientInterface, assetKey string, objs []ThumbnailObject, logger logging.Logger) bool {
 	if client == nil {
 		return false
@@ -11324,40 +11460,37 @@ func copyThumbnailObjectsToDeterministic(ctx context.Context, client S3ClientInt
 			continue
 		}
 		detKey := ThumbnailDeterministicKey(assetKey, o.FileName)
-		var lastErr error
-		copied := false
-		absent := false
-		for attempt := 0; attempt < deterministicPromoteRetries; attempt++ {
-			exists, _, etag, hErr := client.HeadObjectInfo(ctx, o.VersionKey)
-			if hErr != nil {
-				lastErr = hErr // transient — retry
-			} else if !exists || strings.TrimSpace(etag) == "" {
-				absent = true // authoritative absence — the source object isn't there yet; do not retry
-				break
-			} else if pErr := client.PromoteObject(ctx, o.VersionKey, detKey, etag); pErr != nil {
-				lastErr = pErr // transient — retry
-			} else {
-				copied = true
-				lastErr = nil
-				break // success
+		started := time.Now()
+		if known := strings.TrimSpace(o.ETag); known != "" {
+			_, pErr := promoteThumbnailObject(ctx, client, o.VersionKey, detKey, known, logger)
+			if pErr == nil {
+				continue
 			}
-			if attempt < deterministicPromoteRetries-1 {
-				select {
-				case <-ctx.Done():
-					lastErr = ctx.Err()
-					attempt = deterministicPromoteRetries // stop
-				case <-time.After(deterministicPromoteBackoff):
-				}
-			}
-		}
-		if !copied {
-			allCopied = false
-			if absent {
-				logger.WithField("version_key", o.VersionKey).Debug("Deterministic projection: source version object not present yet; leaving unprojected")
-			} else if lastErr != nil {
-				logger.WithError(lastErr).WithField("deterministic_key", detKey).
+			if storage.IsRetryableS3Error(pErr) || ctx.Err() != nil {
+				allCopied = false
+				logger.WithError(pErr).WithFields(logging.Fields{"deterministic_key": detKey, "elapsed_ms": time.Since(started).Milliseconds()}).
 					Warn("Deterministic thumbnail projection failed after retries; leaving unprojected for recovery to re-drive")
+				continue
 			}
+			logger.WithError(pErr).WithField("version_key", o.VersionKey).
+				Debug("Deterministic projection: copy refused on the known source ETag; re-reading the source")
+		}
+		exists, _, etag, hErr := headThumbnailObject(ctx, client, o.VersionKey, logger)
+		if hErr != nil {
+			allCopied = false
+			logger.WithError(hErr).WithFields(logging.Fields{"version_key": o.VersionKey, "elapsed_ms": time.Since(started).Milliseconds()}).
+				Warn("Deterministic thumbnail projection: source HEAD failed after retries; leaving unprojected for recovery to re-drive")
+			continue
+		}
+		if !exists || strings.TrimSpace(etag) == "" {
+			allCopied = false
+			logger.WithField("version_key", o.VersionKey).Debug("Deterministic projection: source version object not present yet; leaving unprojected")
+			continue
+		}
+		if _, pErr := promoteThumbnailObject(ctx, client, o.VersionKey, detKey, etag, logger); pErr != nil {
+			allCopied = false
+			logger.WithError(pErr).WithFields(logging.Fields{"deterministic_key": detKey, "elapsed_ms": time.Since(started).Milliseconds()}).
+				Warn("Deterministic thumbnail projection failed after retries; leaving unprojected for recovery to re-drive")
 		}
 	}
 	return allCopied
@@ -11365,10 +11498,16 @@ func copyThumbnailObjectsToDeterministic(ctx context.Context, client S3ClientInt
 
 // projectAndMarkThumbnailFromToken is the publish-path entry to the fenced projection: it computes each source
 // version key from the winning publishToken (ThumbnailVersionKey) — the just-loaded attempt does not carry the
-// version_key in memory (verification writes it to the DB, not to the in-memory objects) — then runs the fenced
-// project+mark. Returns marked=true only when every object was copied AND the projection stamp committed.
-func projectAndMarkThumbnailFromToken(ctx context.Context, dbh *sql.DB, client S3ClientInterface, attemptID, assetKey, tenantID, servingCluster, publishToken string, fileNames []string, logger logging.Logger) (bool, error) {
-	return projectAndMarkThumbnail(ctx, dbh, client, attemptID, assetKey, tenantID, servingCluster, thumbnailObjectsFromToken(assetKey, publishToken, fileNames), logger)
+// version_key in memory (verification writes it to the DB, not to the in-memory objects) — attaches the ETag the
+// completion's promote returned for each file (versionETags; a missing entry makes the projection HEAD that source),
+// then runs the fenced project+mark. Returns marked=true only when every object was copied AND the projection stamp
+// committed.
+func projectAndMarkThumbnailFromToken(ctx context.Context, dbh *sql.DB, client S3ClientInterface, attemptID, assetKey, tenantID, servingCluster, publishToken string, fileNames []string, versionETags map[string]string, logger logging.Logger) (bool, error) {
+	objs := thumbnailObjectsFromToken(assetKey, publishToken, fileNames)
+	for i := range objs {
+		objs[i].ETag = versionETags[objs[i].FileName]
+	}
+	return projectAndMarkThumbnail(ctx, dbh, client, attemptID, assetKey, tenantID, servingCluster, objs, logger)
 }
 
 // thumbnailObjectsFromToken builds the projection source objects for the publish path: each file's source is its

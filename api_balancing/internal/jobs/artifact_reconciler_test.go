@@ -291,8 +291,7 @@ func TestSendFreezeForArtifact_SendFailureRevertsToFailed(t *testing.T) {
 	defer mockDB.Close()
 	// The revert re-enqueues staging garbage, which now requires a local backend fingerprint — wire the control S3
 	// client, matching a production cell that always has a local store.
-	control.SetS3Client(controlS3Stub{})
-	t.Cleanup(func() { control.SetS3Client(nil) })
+	useControlS3Client(t, controlS3Stub{})
 
 	failingSend := func(nodeID string, req *ipcpb.FreezeRequest) error { return fmt.Errorf("stream send failed") }
 	r := newTestReconciler(t, mockDB, &mockReconcilerS3Client{}, nil, failingSend)

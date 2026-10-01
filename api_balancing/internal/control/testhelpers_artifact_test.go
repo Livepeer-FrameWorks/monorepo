@@ -36,7 +36,9 @@ type mockS3Client struct {
 	getObjectSizeFn        func(ctx context.Context, key string) (int64, error)
 	headObjectInfoFn       func(ctx context.Context, key string) (bool, int64, string, error)
 	promoteObjectFn        func(ctx context.Context, srcKey, dstKey, ifMatchETag string) error
+	promoteETag            string
 	promoteCalls           []string
+	headCalls              []string
 
 	// Optional descriptor override for BackendDescriptor (immutable-backend guard tests). Empty bucket → defaults.
 	descBucket, descEndpoint, descRegion, descPrefix string
@@ -189,20 +191,27 @@ func (m *mockS3Client) GetObjectSize(ctx context.Context, key string) (int64, er
 // HeadObjectInfo defaults to "present, nonzero size, stable etag" so completion promotes; tests override
 // headObjectInfoFn to exercise missing / zero-size / changed-etag behavior.
 func (m *mockS3Client) HeadObjectInfo(ctx context.Context, key string) (bool, int64, string, error) {
+	m.mu.Lock()
+	m.headCalls = append(m.headCalls, key)
+	m.mu.Unlock()
 	if m.headObjectInfoFn != nil {
 		return m.headObjectInfoFn(ctx, key)
 	}
 	return true, verifiedMockObjectSize, "etag-mock", nil
 }
 
-func (m *mockS3Client) PromoteObject(ctx context.Context, srcKey, dstKey, ifMatchETag string) error {
+// PromoteObject returns promoteETag as the destination ETag on success; the default "" models a provider that
+// omits it from the copy result.
+func (m *mockS3Client) PromoteObject(ctx context.Context, srcKey, dstKey, ifMatchETag string) (string, error) {
 	m.mu.Lock()
 	m.promoteCalls = append(m.promoteCalls, srcKey+"->"+dstKey)
 	m.mu.Unlock()
 	if m.promoteObjectFn != nil {
-		return m.promoteObjectFn(ctx, srcKey, dstKey, ifMatchETag)
+		if err := m.promoteObjectFn(ctx, srcKey, dstKey, ifMatchETag); err != nil {
+			return "", err
+		}
 	}
-	return nil
+	return m.promoteETag, nil
 }
 
 func (m *mockS3Client) BackendDescriptor() (bucket, endpoint, region, prefix string) {

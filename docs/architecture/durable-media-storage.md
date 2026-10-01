@@ -108,11 +108,14 @@ Parent-stream deletion is a durable two-phase saga so a caller is never told "de
 
 1. `DeleteStream` (Commodore), in one local tx: mark the stream `deleting` (soft-delete, excluded from list/serve) and
    enqueue the cleanup obligation. Commit. No hard-delete yet.
-2. Best-effort synchronous delivery to Foghorn's `DeleteStreamThumbnails` (writes the durable tombstone for the
-   asset_key — live streams have no artifact row, so the tombstone is what fences them). On a positive ack, finalize:
-   hard-delete the stream rows, complete the outbox, return `deleted`. On failure/unreachable, return
-   `deletion_pending`.
-3. The outbox worker re-delivers and runs the same finalize step, so a delivery outage converges once Foghorn recovers.
+2. Bounded synchronous delivery to Foghorn's `DeleteStreamThumbnails` on every owning cell (writes the durable
+   tombstone for the asset_key — live streams have no artifact row, so the tombstone is what fences them). This step
+   is detached from the caller's cancellation and capped at a few seconds. On a positive ack for a stream that owns
+   no clips or DVR recordings, finalize: hard-delete the stream rows, complete the outbox, return `deleted`.
+   Otherwise return `deletion_pending` and kick the outbox worker. The call never deletes child media inline: that is
+   one Foghorn delete per child, so its cost grows with the stream's media.
+3. The outbox worker re-delivers the tombstone, deletes every child clip and DVR recording through its origin-cluster
+   Foghorn, and runs the same finalize step, so a delivery outage converges once Foghorn recovers.
 
 **Honest bound.** What is durably convergent (I3) is the DELIVERY of the cleanup obligation: the outbox re-delivers
 the tombstone until Foghorn acks, so a prolonged Commodore→Foghorn delivery outage only extends the window until

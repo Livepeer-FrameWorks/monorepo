@@ -189,6 +189,10 @@ Helmsman (webhook handler)
 
 Foghorn (mint + assign)
   → resolves identity to the asset_key: stream_id (live) or artifact_hash (DVR/VOD/clip)
+  → mints only for a node that produces the asset, within the asset's tenant: live = the node running the stream;
+    artifact = a node holding a complete copy, the node assigned its processing job, or, for a DVR chapter
+    finalization (processing+{chapter hash}, which has no processing job row), the chapter's finalize node while
+    the chapter is finalizing
   → MINTS a 128-bit crypto-random attempt_id (the attempt identity + its staging segment)
   → in ONE tx, persists the attempt (status='assigned') + a per-file row per allowlisted file, each with its
     per-attempt STAGING key — BEFORE the node holds any PUT URL
@@ -210,7 +214,11 @@ Foghorn (verify → promote → publish, all guarded, token-fenced)
     every cleanup path uses the same asset-before-row order
   → for EACH object: HEAD-verifies the staged upload (provider etag/size authoritative) and PROMOTES it to its
     per-token candidate key `v/{token}/…` (private to this completion, so a stale holder can only ever write its own
-    candidate, never overwrite the winner's object); a missing/failed object leaves the attempt for retry/sweep
+    candidate, never overwrite the winner's object); a missing/failed object leaves the attempt for retry/sweep.
+    The candidate's ETag from the copy result is recorded, so the projection below copies it without another HEAD.
+    Every HEAD and CopyObject here and in the projection runs under its own attempt timeout (5 s HEAD, 10 s copy,
+    3 attempts); a stalled request is abandoned and retried instead of consuming the 2 min completion deadline or a
+    recovery item's 20 s budget
   → guarded monotonic CAS on the tenant-scoped active pointer: replaying the same attempt is idempotent, while a
     distinct attempt advances only with a strictly greater claim. A stale or equal-claim distinct attempt that lost
     the race is settled 'failed' and its promoted objects are enqueued for cleanup, never leaked

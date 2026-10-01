@@ -57,7 +57,9 @@ func (f *fakeHLSPresigner) GetObjectSize(context.Context, string) (int64, error)
 func (f *fakeHLSPresigner) HeadObjectInfo(context.Context, string) (bool, int64, string, error) {
 	return true, 0, "", nil
 }
-func (f *fakeHLSPresigner) PromoteObject(context.Context, string, string, string) error { return nil }
+func (f *fakeHLSPresigner) PromoteObject(context.Context, string, string, string) (string, error) {
+	return "", nil
+}
 func (f *fakeHLSPresigner) BackendDescriptor() (bucket, endpoint, region, prefix string) {
 	return "bucket", "", "us-east-1", ""
 }
@@ -72,8 +74,7 @@ func newHLSDispatcher() *ProcessingDispatcher {
 // the artifact's s3:// URL. The function fetches over HTTP, so each case serves
 // a manifest from httptest.
 func TestResolveHLSSegmentURLs(t *testing.T) {
-	control.SetS3Client(&fakeHLSPresigner{})
-	t.Cleanup(func() { control.SetS3Client(nil) })
+	useControlS3Client(t, &fakeHLSPresigner{})
 
 	serve := func(t *testing.T, status int, body string) string {
 		t.Helper()

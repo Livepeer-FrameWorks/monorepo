@@ -510,6 +510,22 @@ func (q *Queries) HasActiveStreamIngestSession(ctx context.Context, arg HasActiv
 	return exists, err
 }
 
+const ingestAdmissionAbandoned = `-- name: IngestAdmissionAbandoned :one
+SELECT EXISTS (SELECT 1 FROM foghorn.ingest_admission_abandonments WHERE node_id  =  $1 AND start_trigger_uuid  =  $2)
+`
+
+type IngestAdmissionAbandonedParams struct {
+	NodeID           string `db:"node_id" json:"node_id"`
+	StartTriggerUuid string `db:"start_trigger_uuid" json:"start_trigger_uuid"`
+}
+
+func (q *Queries) IngestAdmissionAbandoned(ctx context.Context, arg IngestAdmissionAbandonedParams) (bool, error) {
+	row := q.db.QueryRowContext(ctx, ingestAdmissionAbandoned, arg.NodeID, arg.StartTriggerUuid)
+	var exists bool
+	err := row.Scan(&exists)
+	return exists, err
+}
+
 const ingestCloseTombstoneExists = `-- name: IngestCloseTombstoneExists :one
 SELECT EXISTS (SELECT 1 FROM foghorn.ingest_close_tombstones WHERE tenant_id  =  $1::uuid AND node_id  =  $2 AND connector_pid  =  $3 AND stream_internal_name  =  $4 AND close_unix_millis >= $5)
 `
@@ -645,6 +661,47 @@ func (q *Queries) InsertIngestSessionWithAuthority(ctx context.Context, arg Inse
 	var id string
 	err := row.Scan(&id)
 	return id, err
+}
+
+const listOpenIngestSessionsByTrigger = `-- name: ListOpenIngestSessionsByTrigger :many
+SELECT id::text AS session_id, tenant_id::text AS tenant_id, stream_internal_name FROM foghorn.ingest_sessions
+WHERE node_id  =  $1 AND start_trigger_uuid  =  $2 AND ended_at IS NULL
+`
+
+type ListOpenIngestSessionsByTriggerParams struct {
+	NodeID           string `db:"node_id" json:"node_id"`
+	StartTriggerUuid string `db:"start_trigger_uuid" json:"start_trigger_uuid"`
+}
+
+type ListOpenIngestSessionsByTriggerRow struct {
+	SessionID          string `db:"session_id" json:"session_id"`
+	TenantID           string `db:"tenant_id" json:"tenant_id"`
+	StreamInternalName string `db:"stream_internal_name" json:"stream_internal_name"`
+}
+
+// Node-scoped: the node reports an abandoned execution before it can know the tenant. The trigger
+// UUID identifies one Mist execution on that node, which minted at most one session per tenant.
+func (q *Queries) ListOpenIngestSessionsByTrigger(ctx context.Context, arg ListOpenIngestSessionsByTriggerParams) ([]ListOpenIngestSessionsByTriggerRow, error) {
+	rows, err := q.db.QueryContext(ctx, listOpenIngestSessionsByTrigger, arg.NodeID, arg.StartTriggerUuid)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListOpenIngestSessionsByTriggerRow{}
+	for rows.Next() {
+		var i ListOpenIngestSessionsByTriggerRow
+		if err := rows.Scan(&i.SessionID, &i.TenantID, &i.StreamInternalName); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const listRecentNodeLifecycles = `-- name: ListRecentNodeLifecycles :many
@@ -1029,4 +1086,21 @@ func (q *Queries) ReapStreamEndIngestSessions(ctx context.Context, arg ReapStrea
 		return nil, err
 	}
 	return items, nil
+}
+
+const recordIngestAdmissionAbandonment = `-- name: RecordIngestAdmissionAbandonment :exec
+INSERT INTO foghorn.ingest_admission_abandonments (node_id, start_trigger_uuid, connector_pid)
+VALUES ($1, $2, $3)
+ON CONFLICT (node_id, start_trigger_uuid) DO NOTHING
+`
+
+type RecordIngestAdmissionAbandonmentParams struct {
+	NodeID           string `db:"node_id" json:"node_id"`
+	StartTriggerUuid string `db:"start_trigger_uuid" json:"start_trigger_uuid"`
+	ConnectorPid     int64  `db:"connector_pid" json:"connector_pid"`
+}
+
+func (q *Queries) RecordIngestAdmissionAbandonment(ctx context.Context, arg RecordIngestAdmissionAbandonmentParams) error {
+	_, err := q.db.ExecContext(ctx, recordIngestAdmissionAbandonment, arg.NodeID, arg.StartTriggerUuid, arg.ConnectorPid)
+	return err
 }

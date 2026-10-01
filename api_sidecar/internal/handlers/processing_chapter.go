@@ -235,36 +235,24 @@ func (h *ProcessingJobHandler) handleChapterFinalize(req *ipcpb.ProcessingJobReq
 	pushStartWallMs := time.Now().UnixMilli()
 	speedSampler := &processingSpeedSampler{}
 
+	var awaitRecordingEnd recordingEndWait
+	defer awaitRecordingEnd.stop()
+
 	recordingEndIsStale := func(evt ProcessingRecordingEndEvent) bool {
 		return recordingEndPredatesPush(evt.TimeStarted, currentPushStartedAt)
-	}
-	terminalSignalsReady := func() (ready bool, terminalFailure bool) {
-		return recordingEnd != nil, false
 	}
 
 loop:
 	for {
 		select {
 		case pushEnd := <-doneCh:
-			if !processingPushSucceeded(pushEnd) {
-				log.WithFields(logging.Fields{
-					"push_id":       pushEnd.PushID,
-					"push_status":   pushEnd.PushStatus,
-					"target_before": pushEnd.TargetBefore,
-					"target_after":  pushEnd.TargetAfter,
-					"push_logs":     pushEnd.LogMessages,
-				}).Error("Chapter finalize: push ended with failure")
-				h.cleanupFailedProcessing(log, mistClient, streamName, outputPath)
-				h.sendResult(send, req.GetJobId(), "failed", processingPushFailureMessage(pushEnd), nil, "", 0)
-				return
-			}
-			log.Info("Chapter finalize: PUSH_END received")
-			if ready, failed := terminalSignalsReady(); failed {
-				return
-			} else if !ready {
-				continue loop
-			}
-			break loop
+			// RECORDING_END is the authoritative completion signal and breaks
+			// the loop, so a PUSH_END here always precedes it.
+			awaitRecordingEnd.start(log, pushEnd)
+			continue loop
+		case <-awaitRecordingEnd.expired():
+			h.reportRecordingOutputVanished(log, mistClient, send, req.GetJobId(), streamName, outputPath, *awaitRecordingEnd.pushEnd)
+			return
 		case recEnd := <-recordingEndCh:
 			if recordingEndIsStale(recEnd) {
 				log.WithFields(logging.Fields{
@@ -281,10 +269,9 @@ loop:
 				"file_path":         recEnd.FilePath,
 				"exit_reason":       recEnd.ExitReason,
 			}).Info("Chapter finalize: RECORDING_END received")
-			if ready, failed := terminalSignalsReady(); failed {
+			if pushEnd, failed := awaitRecordingEnd.failedPush(); failed {
+				h.reportFailedPushWithRecording(log, mistClient, send, req.GetJobId(), streamName, outputPath, pushEnd, recEnd)
 				return
-			} else if !ready {
-				continue loop
 			}
 			break loop
 		case evt := <-processExitCh:
@@ -323,7 +310,7 @@ loop:
 				}
 			}
 			h.sendProgress(send, req.GetJobId(), progressPct, currentMs, spanMs)
-			if time.Since(lastAdvance) >= stallTimeout {
+			if !awaitRecordingEnd.active() && time.Since(lastAdvance) >= stallTimeout {
 				log.WithField("last_ms", lastMs).Warn("Chapter finalize: push stalled")
 				h.cleanupFailedProcessing(log, mistClient, streamName, outputPath)
 				h.sendResult(send, req.GetJobId(), "failed",
@@ -342,21 +329,21 @@ loop:
 		}
 	}
 
-	if recordingEnd != nil {
-		if err := validateProcessingRecordingEnd(*recordingEnd, outputPath); err != nil {
-			log.WithError(err).WithFields(logging.Fields{
-				"bytes":             recordingEnd.BytesWritten,
-				"media_duration_ms": recordingEnd.MediaDurationMs,
-				"file_path":         recordingEnd.FilePath,
-				"exit_reason":       recordingEnd.ExitReason,
-				"human_reason":      recordingEnd.HumanExitReason,
-			}).Error("Chapter finalize: recording validation failed")
-			h.cleanupFailedProcessing(log, mistClient, streamName, outputPath)
-			status := failedRecordingStatus(log, mistClient, streamName, *recordingEnd)
-			h.sendResult(send, req.GetJobId(), status,
-				fmt.Sprintf("recording validation failed: %v", err), nil, "", 0)
-			return
-		}
+	// recordingEnd is set here: the loop only breaks from the recordingEndCh
+	// case; every other terminal path returns.
+	if err := validateProcessingRecordingEnd(*recordingEnd, outputPath); err != nil {
+		log.WithError(err).WithFields(logging.Fields{
+			"bytes":             recordingEnd.BytesWritten,
+			"media_duration_ms": recordingEnd.MediaDurationMs,
+			"file_path":         recordingEnd.FilePath,
+			"exit_reason":       recordingEnd.ExitReason,
+			"human_reason":      recordingEnd.HumanExitReason,
+		}).Error("Chapter finalize: recording validation failed")
+		h.cleanupFailedProcessing(log, mistClient, streamName, outputPath)
+		status := failedRecordingStatus(log, mistClient, streamName, *recordingEnd)
+		h.sendResult(send, req.GetJobId(), status,
+			fmt.Sprintf("recording validation failed: %v", err), nil, "", 0)
+		return
 	}
 
 	outputSizeBytes, err := waitForProcessingOutput(outputPath, 5*time.Second)
@@ -372,7 +359,7 @@ loop:
 	// (mediaEndMs-mediaStartMs). Track selection already picked complete
 	// renditions or source passthrough before push_start; this final gate
 	// verifies the selected output covers the chapter.
-	if recordingEnd != nil && chapterSpanMs > 0 &&
+	if chapterSpanMs > 0 &&
 		chapterSpanMs-float64(recordingEnd.MediaDurationMs) > maxRenditionSpanShortfallMs {
 		log.WithFields(logging.Fields{
 			"media_duration_ms":  recordingEnd.MediaDurationMs,
@@ -405,14 +392,9 @@ loop:
 	}
 	outputs, speedFields := processingSpeedTelemetry(outputs, recordingEnd, speedSampler, pushStartWallMs)
 	log.WithFields(speedFields).Info("Chapter finalize completed")
-	var chapterTracks []*ipcpb.StreamTrack
-	chapterTracksPresent := recordingEnd != nil
-	var chapterDurationMs int64
-	if recordingEnd != nil {
-		chapterTracks = recordingEnd.FullTracks
-		chapterDurationMs = recordingEnd.MediaDurationMs // measured muxed output duration → catalog
-	}
-	h.sendCompletedResult(send, req.GetJobId(), outputs, outputPath, outputSizeBytes, chapterDurationMs, chapterTracks, chapterTracksPresent)
+	// The validated RECORDING_END's tracks are authoritative (present=true), and
+	// its measured muxed duration is the catalog duration.
+	h.sendCompletedResult(send, req.GetJobId(), outputs, outputPath, outputSizeBytes, recordingEnd.MediaDurationMs, recordingEnd.FullTracks, true)
 	log.Info("Chapter finalize result sent, artifact registered with Foghorn")
 
 	// Proactive DTSH generation, mirrored from the VOD processing path

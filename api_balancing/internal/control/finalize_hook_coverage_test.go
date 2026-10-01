@@ -400,6 +400,31 @@ func TestHandleChapterFinalizeResult_TransientFailureRetries(t *testing.T) {
 	}
 }
 
+// INVARIANT: a "retryable" result (Helmsman reports a recording that ended on
+// changed process tracks this way) rolls the chapter finalizing → closed at once,
+// so the queue re-dispatches it instead of waiting for stuck-finalizing recovery.
+func TestHandleChapterFinalizeResult_RetryableResultRetries(t *testing.T) {
+	mock, _, _ := setupArtifactTestDeps(t)
+	startFakeCommodoreServer(t, &fakeCommodoreInternal{})
+
+	const chapterID = "chap-retryable-1"
+	const reason = "recording ended: process tracks changed"
+	result := &ipcpb.ProcessingJobResult{
+		JobId: chapterFinalizeJobIDPrefix + chapterID,
+		Error: reason,
+	}
+
+	mock.ExpectExec(`UPDATE foghorn.dvr_chapters`).
+		WithArgs(reason, chapterID, chapterFinalizeAttempt, "node-1").
+		WillReturnResult(sqlmock.NewResult(0, 1))
+
+	handleChapterFinalizeResult(context.Background(), chapterID, "retryable", chapterFinalizeAttempt, result, "node-1", logging.NewLogger())
+
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("unmet sqlmock expectations: %v", err)
+	}
+}
+
 // (A no-hash/no-output completion is NOT a silent no-op — it bounces the chapter to 'closed'
 // for retry; see TestHandleChapterFinalizeResult_MalformedCompletionBouncesToClosed.)
 

@@ -600,6 +600,24 @@ stream, and a newcomer on another node follows the takeover rules above. The
 never-projected reaper ends whatever is left after two minutes; its claim has
 already lapsed by then.
 
+An admission can also commit, pending or confirmed, after Helmsman stopped
+waiting for it: the answer arrived after Helmsman's 4-second wait, the control
+stream dropped after Foghorn committed, or Helmsman could not persist the
+accepted generation. Helmsman then answers Mist with a 503 and Mist refuses the
+publisher. Helmsman reports every PUSH_REWRITE it forwarded and then answered
+without an accept, except Foghorn's own business denials, as a durable
+`INGEST_ADMISSION_ABANDONED` trigger carrying the trigger UUID and connector
+PID. When Mist's request was already gone, Mist may deliver the same execution
+again, so the report waits for `mist.BlockingTriggerLifetime` and is dropped if
+an accept for that execution reached Mist. Foghorn records the abandonment for
+(node, trigger UUID) under that execution's advisory lock, which the mint also
+takes first, so a later mint of the execution is refused as already ended and
+every session it already minted ends as `admission_abandoned` through the
+offline path: `stream.idle`, DVR stop, offline effects with the offline
+broadcast, and the end of claim renewal. An admission still running for an
+ended session fails its confirmation and is denied. Records are purged with the
+close tombstones.
+
 On registration, Helmsman lists the publisher generations in its persisted
 generation store (`Register.live_ingest_generations`). Foghorn then settles
 that node's sessions:

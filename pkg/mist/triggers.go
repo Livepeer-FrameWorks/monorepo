@@ -50,6 +50,9 @@ const (
 	// produced by Helmsman after consuming a raw PUSH_END locally.
 	TriggerRestreamStatus      TriggerType = "RESTREAM_STATUS"
 	TriggerRestreamStatusFinal TriggerType = "RESTREAM_STATUS_FINAL"
+	// Helmsman's report that it answered a forwarded PUSH_REWRITE execution to
+	// Mist without an accept, so Foghorn must end whatever that execution minted.
+	TriggerIngestAdmissionAbandoned TriggerType = "INGEST_ADMISSION_ABANDONED"
 )
 
 var durableTriggerTypes = map[TriggerType]struct{}{
@@ -62,6 +65,7 @@ var durableTriggerTypes = map[TriggerType]struct{}{
 	TriggerLivepeerSegmentComplete:  {},
 	TriggerProcessAVSegmentComplete: {},
 	TriggerRestreamStatusFinal:      {},
+	TriggerIngestAdmissionAbandoned: {},
 }
 
 // IsDurableTriggerType reports whether Helmsman must persist this trigger

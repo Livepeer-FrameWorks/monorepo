@@ -108,6 +108,7 @@ func TestIsDurableTriggerType(t *testing.T) {
 		TriggerRecordingSegment,
 		TriggerLivepeerSegmentComplete,
 		TriggerProcessAVSegmentComplete,
+		TriggerIngestAdmissionAbandoned,
 	}
 	for _, triggerType := range durable {
 		if !IsDurableTriggerType(string(triggerType)) {

@@ -25,6 +25,8 @@ type NodeRetireGuardFunc func(ctx context.Context, nodeID string) (release func(
 // Foghorn-side partition leaves Mist and its publishers running, so short absence is not evidence
 // the publisher stopped. Sessions end on evidence:
 //   - PUSH_INPUT_CLOSE, STREAM_END, and Helmsman's INGEST_RUNTIME_ABSENT report the publisher gone;
+//   - Helmsman's INGEST_ADMISSION_ABANDONED reports that Mist refused the publisher the session was
+//     admitted for (AbandonIngestAdmission, reason admission_abandoned);
 //   - a publisher for the same stream admitted on another node while this node is absent takes the
 //     stream over (MintIngestSession, reason superseded_by_new_node);
 //   - the node re-registers without listing the generation (ReconcileNodeIngestSessions, reason
@@ -222,16 +224,23 @@ func ReapNeverProjectedIngestSessions(ctx context.Context, olderThan time.Durati
 // redelivered behind its close — bounded by Helmsman's blocking-trigger retry window (seconds), so the
 // default 10-minute TTL is amply conservative. Beyond it the publisher is long gone; a hypothetical
 // even-later rewrite would mint a session with no live publisher, which Helmsman's Mist absence
-// reconciliation or the node's next registration ends. Returns the number of rows deleted.
+// reconciliation or the node's next registration ends. Admission abandonments share the TTL: the
+// execution they refuse is not delivered again past Mist's blocking-trigger lifetime. Returns the
+// number of rows deleted.
 func PurgeExpiredCloseTombstones(ctx context.Context, olderThan time.Duration) (int64, error) {
 	if db == nil {
 		return 0, nil
 	}
-	n, err := foghorndb.New(db).PurgeExpiredCloseTombstones(ctx, olderThan.Seconds())
+	q := foghorndb.New(db)
+	n, err := q.PurgeExpiredCloseTombstones(ctx, olderThan.Seconds())
 	if err != nil {
 		return 0, fmt.Errorf("purge ingest close tombstones: %w", err)
 	}
-	return n, nil
+	abandoned, err := q.PurgeExpiredIngestAdmissionAbandonments(ctx, olderThan.Seconds())
+	if err != nil {
+		return n, fmt.Errorf("purge ingest admission abandonments: %w", err)
+	}
+	return n + abandoned, nil
 }
 
 var errConnOwnerUnavailable = errors.New("conn_owner store unavailable")

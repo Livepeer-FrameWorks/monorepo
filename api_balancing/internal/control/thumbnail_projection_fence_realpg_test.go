@@ -5,6 +5,7 @@ package control
 import (
 	"context"
 	"database/sql"
+	"net/http"
 	"testing"
 	"time"
 
@@ -66,7 +67,7 @@ func TestThumbnailProjectionFence_RealPG(t *testing.T) {
 		// A's late projection: the fence sees A is no longer the active pointer and returns WITHOUT copying, so A's
 		// stale bytes can never reach the shared deterministic key.
 		mock := &mockS3Client{}
-		marked, err := projectAndMarkThumbnailFromToken(ctx, conn, mock, "att-A", asset, "tenant-a", "cluster-a", tokA, files, logger)
+		marked, err := projectAndMarkThumbnailFromToken(ctx, conn, mock, "att-A", asset, "tenant-a", "cluster-a", tokA, files, nil, logger)
 		if err != nil {
 			t.Fatalf("project A: %v", err)
 		}
@@ -89,7 +90,7 @@ func TestThumbnailProjectionFence_RealPG(t *testing.T) {
 			t.Fatalf("record obligation: %v", err)
 		}
 		mock := &mockS3Client{}
-		marked, err := projectAndMarkThumbnailFromToken(ctx, conn, mock, "att-tomb", asset, "tenant-a", "cluster-a", tok, files, logger)
+		marked, err := projectAndMarkThumbnailFromToken(ctx, conn, mock, "att-tomb", asset, "tenant-a", "cluster-a", tok, files, nil, logger)
 		if err != nil {
 			t.Fatalf("project tombstoned: %v", err)
 		}
@@ -115,7 +116,7 @@ func TestThumbnailProjectionFence_RealPG(t *testing.T) {
 			t.Fatalf("mark artifact deleted: %v", err)
 		}
 		mock := &mockS3Client{}
-		marked, err := projectAndMarkThumbnailFromToken(ctx, conn, mock, "att-terminal", asset, tenant, "cluster-a", tok, files, logger)
+		marked, err := projectAndMarkThumbnailFromToken(ctx, conn, mock, "att-terminal", asset, tenant, "cluster-a", tok, files, nil, logger)
 		if err != nil {
 			t.Fatalf("project terminal: %v", err)
 		}
@@ -171,7 +172,7 @@ func TestThumbnailProjectionReassert_RealPG(t *testing.T) {
 		prevS3 := s3Client
 		s3Client = mock
 		t.Cleanup(func() { s3Client = prevS3 })
-		if marked, err := projectAndMarkThumbnailFromToken(ctx, conn, mock, "att-ra", asset, "tenant-a", "cluster-a", tok, files, logger); err != nil || !marked {
+		if marked, err := projectAndMarkThumbnailFromToken(ctx, conn, mock, "att-ra", asset, "tenant-a", "cluster-a", tok, files, nil, logger); err != nil || !marked {
 			t.Fatalf("initial projection must mark: marked=%v err=%v", marked, err)
 		}
 		beforeReassert := len(mock.promoteCalls) // 3 version->deterministic copies so far
@@ -196,7 +197,7 @@ func TestThumbnailProjectionReassert_RealPG(t *testing.T) {
 		prevS3 := s3Client
 		s3Client = mock
 		t.Cleanup(func() { s3Client = prevS3 })
-		if marked, err := projectAndMarkThumbnailFromToken(ctx, conn, mock, "att-rb-A", asset, "tenant-a", "cluster-a", tokA, files, logger); err != nil || !marked {
+		if marked, err := projectAndMarkThumbnailFromToken(ctx, conn, mock, "att-rb-A", asset, "tenant-a", "cluster-a", tokA, files, nil, logger); err != nil || !marked {
 			t.Fatalf("project A: marked=%v err=%v", marked, err)
 		}
 		// B supersedes A. A's reassert clock is still set from its own projection.
@@ -241,8 +242,14 @@ func TestThumbnailProjectionRecoveryPoison_RealPG(t *testing.T) {
 	}
 	staleBefore := time.Now().Add(-2 * time.Minute)
 
-	// The poison attempt's source version object is ABSENT → the copy reports incomplete → progressed=false.
-	poisonS3 := &mockS3Client{headObjectInfoFn: func(context.Context, string) (bool, int64, string, error) { return false, 0, "", nil }}
+	// The poison attempt's source version object is ABSENT → the copy reports incomplete → progressed=false. A copy of
+	// an absent source fails with NoSuchKey and a HEAD finds nothing, as on a real store.
+	poisonS3 := &mockS3Client{
+		headObjectInfoFn: func(context.Context, string) (bool, int64, string, error) { return false, 0, "", nil },
+		promoteObjectFn: func(context.Context, string, string, string) error {
+			return s3StatusError(http.StatusNotFound, "NoSuchKey")
+		},
+	}
 	prevS3 := s3Client
 	s3Client = poisonS3
 	t.Cleanup(func() { s3Client = prevS3 })

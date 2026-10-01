@@ -91,3 +91,7 @@ RETURNING node_id, COALESCE(stream_id::text, '')::text AS stream_id;
 -- name: PurgeExpiredCloseTombstones :execrows
 DELETE FROM foghorn.ingest_close_tombstones
 WHERE created_at < NOW() - make_interval(secs => sqlc.arg(older_than_seconds)::double precision);
+
+-- name: PurgeExpiredIngestAdmissionAbandonments :execrows
+DELETE FROM foghorn.ingest_admission_abandonments
+WHERE created_at < NOW() - make_interval(secs => sqlc.arg(older_than_seconds)::double precision);

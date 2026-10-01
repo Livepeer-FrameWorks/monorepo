@@ -348,22 +348,27 @@ func (c *S3Client) HeadObjectInfo(ctx context.Context, key string) (bool, int64,
 // delete the staging source: staging is kept until the caller's DURABLE commit succeeds (then DeleteStaging),
 // so a crash/DB-failure after the copy but before commit leaves the exact staging bytes for an idempotent
 // retry. The copy itself is idempotent (same bytes → same candidate object). ifMatchETag is REQUIRED — an
-// empty ETag would silently degrade the conditional copy to an unconditional one, so it is rejected.
-func (c *S3Client) PromoteObject(ctx context.Context, srcKey, dstKey, ifMatchETag string) error {
+// empty ETag would silently degrade the conditional copy to an unconditional one, so it is rejected. It returns
+// the destination object's ETag as the provider reported it in the copy result, or "" when the provider omitted it.
+func (c *S3Client) PromoteObject(ctx context.Context, srcKey, dstKey, ifMatchETag string) (string, error) {
 	if strings.TrimSpace(ifMatchETag) == "" {
-		return fmt.Errorf("promote staging object: refusing an unconditional copy (empty source ETag)")
+		return "", fmt.Errorf("promote staging object: refusing an unconditional copy (empty source ETag)")
 	}
 	srcFull := c.fullKey(srcKey)
 	dstFull := c.fullKey(dstKey)
-	if _, err := c.client.CopyObject(ctx, &s3.CopyObjectInput{
+	out, err := c.client.CopyObject(ctx, &s3.CopyObjectInput{
 		Bucket:            aws.String(c.config.Bucket),
 		Key:               aws.String(dstFull),
 		CopySource:        aws.String(c.config.Bucket + "/" + srcFull),
 		CopySourceIfMatch: aws.String(ifMatchETag),
-	}); err != nil {
-		return fmt.Errorf("failed to promote staging object to candidate key: %w", err)
+	})
+	if err != nil {
+		return "", fmt.Errorf("failed to promote staging object to candidate key: %w", err)
 	}
-	return nil
+	if out != nil && out.CopyObjectResult != nil && out.CopyObjectResult.ETag != nil {
+		return *out.CopyObjectResult.ETag, nil
+	}
+	return "", nil
 }
 
 // isNotFoundError checks if the error is a "not found" type error

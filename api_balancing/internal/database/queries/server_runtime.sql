@@ -94,7 +94,8 @@ SELECT sync_object_key FROM foghorn.artifacts WHERE artifact_hash = $1 AND tenan
 SELECT COALESCE(dtsh_synced, false) FROM foghorn.artifacts WHERE artifact_hash = $1;
 -- name: ThumbnailResourceProducedByNode :one
 SELECT EXISTS (SELECT 1 FROM foghorn.artifact_nodes an JOIN foghorn.artifacts a ON a.artifact_hash = an.artifact_hash WHERE an.artifact_hash = $1 AND an.node_id = $2 AND an.is_complete = true AND an.is_orphaned = false AND a.tenant_id::text = $3)
-OR EXISTS (SELECT 1 FROM foghorn.processing_jobs WHERE artifact_hash = $1 AND processing_node_id = $2 AND tenant_id::text = $3 AND status IN ('dispatched', 'processing'));
+OR EXISTS (SELECT 1 FROM foghorn.processing_jobs WHERE artifact_hash = $1 AND processing_node_id = $2 AND tenant_id::text = $3 AND status IN ('dispatched', 'processing'))
+OR EXISTS (SELECT 1 FROM foghorn.dvr_chapters c JOIN foghorn.artifacts a ON a.artifact_hash = c.playback_artifact_hash WHERE c.playback_artifact_hash = $1 AND c.finalize_node_id = $2 AND c.state = 'finalizing' AND a.tenant_id::text = $3);
 -- name: ResolveThumbnailVODArtifact :one
 SELECT artifact_hash, tenant_id::text, origin_cluster_id AS cluster_id FROM foghorn.artifacts WHERE internal_name = $1;
 -- name: ResolveThumbnailProcessingArtifact :one

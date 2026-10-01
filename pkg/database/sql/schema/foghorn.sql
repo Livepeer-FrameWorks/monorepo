@@ -832,6 +832,21 @@ CREATE INDEX IF NOT EXISTS idx_foghorn_ingest_close_tombstones_lookup
 CREATE INDEX IF NOT EXISTS idx_foghorn_ingest_close_tombstones_created
     ON foghorn.ingest_close_tombstones(created_at);
 
+-- PUSH_REWRITE executions a node answered to Mist without an accept after forwarding them for
+-- admission. Mist refuses the publisher on that answer and never delivers the execution again, so a
+-- mint of the execution after this row is refused, and the sessions it minted before are ended.
+-- Keyed by the authenticated node and Mist's trigger UUID: the node reports the execution before
+-- it can know the tenant or stream. Retained for the close-tombstone TTL, far past any delivery.
+CREATE TABLE IF NOT EXISTS foghorn.ingest_admission_abandonments (
+    node_id            VARCHAR(100) NOT NULL,
+    start_trigger_uuid VARCHAR(64) NOT NULL CHECK (start_trigger_uuid <> ''),
+    connector_pid      BIGINT NOT NULL,
+    created_at         TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    PRIMARY KEY (node_id, start_trigger_uuid)
+);
+CREATE INDEX IF NOT EXISTS idx_foghorn_ingest_admission_abandonments_created
+    ON foghorn.ingest_admission_abandonments(created_at);
+
 -- Per-stream source fence. The row key matches the Redis/DB comparison domain and
 -- serializes allocations across pooled Yugabyte sessions.
 CREATE TABLE IF NOT EXISTS foghorn.source_projection_revision_counter (

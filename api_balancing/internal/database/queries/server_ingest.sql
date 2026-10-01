@@ -17,6 +17,17 @@ WHERE tenant_id  =  sqlc.arg(tenant_id)::uuid AND stream_internal_name  =  sqlc.
 UPDATE foghorn.ingest_sessions SET ended_at  =  NOW(), ended_at_unix_millis  =  sqlc.narg(ended_at_unix_millis), ended_reason  =  'superseded_pid_reuse' WHERE id  =  sqlc.arg(session_id)::uuid AND ended_at IS NULL;
 -- name: IngestCloseTombstoneExists :one
 SELECT EXISTS (SELECT 1 FROM foghorn.ingest_close_tombstones WHERE tenant_id  =  sqlc.arg(tenant_id)::uuid AND node_id  =  sqlc.arg(node_id) AND connector_pid  =  sqlc.arg(connector_pid) AND stream_internal_name  =  sqlc.arg(stream_internal_name) AND close_unix_millis >= sqlc.arg(close_unix_millis));
+-- name: IngestAdmissionAbandoned :one
+SELECT EXISTS (SELECT 1 FROM foghorn.ingest_admission_abandonments WHERE node_id  =  sqlc.arg(node_id) AND start_trigger_uuid  =  sqlc.arg(start_trigger_uuid));
+-- name: RecordIngestAdmissionAbandonment :exec
+INSERT INTO foghorn.ingest_admission_abandonments (node_id, start_trigger_uuid, connector_pid)
+VALUES (sqlc.arg(node_id), sqlc.arg(start_trigger_uuid), sqlc.arg(connector_pid))
+ON CONFLICT (node_id, start_trigger_uuid) DO NOTHING;
+-- name: ListOpenIngestSessionsByTrigger :many
+-- Node-scoped: the node reports an abandoned execution before it can know the tenant. The trigger
+-- UUID identifies one Mist execution on that node, which minted at most one session per tenant.
+SELECT id::text AS session_id, tenant_id::text AS tenant_id, stream_internal_name FROM foghorn.ingest_sessions
+WHERE node_id  =  sqlc.arg(node_id) AND start_trigger_uuid  =  sqlc.arg(start_trigger_uuid) AND ended_at IS NULL;
 -- name: InsertIngestSession :one
 INSERT INTO foghorn.ingest_sessions (tenant_id, node_id, stream_internal_name, connector_pid, start_trigger_uuid, started_at_unix_millis, dvr_intent, ingest_cluster_id, projection_state, stream_id)
 VALUES (sqlc.arg(tenant_id)::uuid, sqlc.arg(node_id), sqlc.arg(stream_internal_name), sqlc.arg(connector_pid), sqlc.arg(start_trigger_uuid), sqlc.arg(started_at_unix_millis), sqlc.narg(dvr_intent)::jsonb, NULLIF(sqlc.arg(ingest_cluster_id)::text, ''), 'pending', NULLIF(sqlc.arg(stream_id)::text, '')::uuid) RETURNING id::text;

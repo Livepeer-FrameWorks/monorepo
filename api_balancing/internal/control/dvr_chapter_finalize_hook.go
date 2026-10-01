@@ -109,6 +109,17 @@ func handleChapterFinalizeResult(
 		}
 		return
 	}
+	if jobStatus == "retryable" {
+		// A retryable result is never terminal: the source segments are durable, so
+		// a re-dispatch rebuilds the same chapter range.
+		changed, err := RetryChapterFinalize(ctx, chapterID, result.GetError(), nodeID, expectedAttempt)
+		if err != nil {
+			logger.WithError(err).WithFields(fields).Warn("Chapter finalize: retry rollback failed")
+		} else if !changed {
+			logger.WithFields(fields).Info("Chapter finalize: retry result rejected by attempt/node fence")
+		}
+		return
+	}
 	if jobStatus != "completed" {
 		logger.WithFields(fields).Warn("Chapter finalize: unhandled result status")
 		return

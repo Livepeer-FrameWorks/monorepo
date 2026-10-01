@@ -14,6 +14,7 @@ import (
 // thumbnail-minting cell always has a local store. (controlS3Stub / testCellBackendID live in control_s3_stub_test.go
 // so the untagged freeze/staging tests can reuse them.)
 func TestMain(m *testing.M) {
-	control.SetS3Client(controlS3Stub{})
+	packageControlS3Client = controlS3Stub{}
+	control.SetS3Client(packageControlS3Client)
 	os.Exit(m.Run())
 }

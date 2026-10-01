@@ -39,6 +39,8 @@ type fakeS3API struct {
 	putErr       error
 	deleteErr    error
 	delObjsErr   error
+	copyIn       *s3.CopyObjectInput
+	copyETag     string
 }
 
 func (f *fakeS3API) PutObject(_ context.Context, params *s3.PutObjectInput, _ ...func(*s3.Options)) (*s3.PutObjectOutput, error) {
@@ -57,8 +59,12 @@ func (f *fakeS3API) DeleteObject(_ context.Context, params *s3.DeleteObjectInput
 	return &s3.DeleteObjectOutput{}, nil
 }
 
-func (f *fakeS3API) CopyObject(_ context.Context, _ *s3.CopyObjectInput, _ ...func(*s3.Options)) (*s3.CopyObjectOutput, error) {
-	return &s3.CopyObjectOutput{}, nil
+func (f *fakeS3API) CopyObject(_ context.Context, params *s3.CopyObjectInput, _ ...func(*s3.Options)) (*s3.CopyObjectOutput, error) {
+	f.copyIn = params
+	if f.copyETag == "" {
+		return &s3.CopyObjectOutput{}, nil
+	}
+	return &s3.CopyObjectOutput{CopyObjectResult: &types.CopyObjectResult{ETag: aws.String(f.copyETag)}}, nil
 }
 
 func (f *fakeS3API) DeleteObjects(_ context.Context, params *s3.DeleteObjectsInput, _ ...func(*s3.Options)) (*s3.DeleteObjectsOutput, error) {

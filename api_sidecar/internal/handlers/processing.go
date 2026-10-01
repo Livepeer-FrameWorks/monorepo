@@ -1186,6 +1186,8 @@ func (h *ProcessingJobHandler) Handle(req *ipcpb.ProcessingJobRequest, send func
 	const stallTimeout = 3 * time.Minute
 	pushStartWallMs := time.Now().UnixMilli()
 	speedSampler := &processingSpeedSampler{}
+	var awaitRecordingEnd recordingEndWait
+	defer awaitRecordingEnd.stop()
 
 	// restartWithLocalFallback swaps Livepeer for local MistProcAV and restarts
 	// the push, returning false only after it has already reported a terminal
@@ -1220,6 +1222,7 @@ func (h *ProcessingJobHandler) Handle(req *ipcpb.ProcessingJobRequest, send func
 		// restarted push produces a fresh one. Without this the post-loop
 		// validation would run against the old push's bytes/duration/path.
 		recordingEnd = nil
+		awaitRecordingEnd.stop()
 		var waitErr error
 		outputs, sourceDurationMs, waitErr = h.waitForProcessingStreamReady(context.Background(), log, mistClient, req, streamName, effectiveProcessesJSON, processExitCh, processAVCh, livepeerSegmentCh, ignoredProcessExitBootCounts)
 		if waitErr != nil {
@@ -1269,16 +1272,12 @@ loop:
 	for {
 		select {
 		case pushEnd := <-doneCh:
+			if recordingEnd == nil {
+				awaitRecordingEnd.start(log, pushEnd)
+				continue loop
+			}
 			if !processingPushSucceeded(pushEnd) {
-				log.WithFields(logging.Fields{
-					"push_id":       pushEnd.PushID,
-					"push_status":   pushEnd.PushStatus,
-					"target_before": pushEnd.TargetBefore,
-					"target_after":  pushEnd.TargetAfter,
-					"push_logs":     pushEnd.LogMessages,
-				}).Error("Processing push ended with failure")
-				h.cleanupFailedProcessing(log, mistClient, streamName, outputPath)
-				h.sendResult(send, req.GetJobId(), "failed", processingPushFailureMessage(pushEnd), nil, "", 0)
+				h.reportFailedPushWithRecording(log, mistClient, send, req.GetJobId(), streamName, outputPath, pushEnd, *recordingEnd)
 				return
 			}
 			log.Info("Processing PUSH_END received")
@@ -1288,6 +1287,9 @@ loop:
 				continue loop
 			}
 			break loop
+		case <-awaitRecordingEnd.expired():
+			h.reportRecordingOutputVanished(log, mistClient, send, req.GetJobId(), streamName, outputPath, *awaitRecordingEnd.pushEnd)
+			return
 		case recEnd := <-recordingEndCh:
 			if recordingEndIsStale(recEnd) {
 				log.WithFields(logging.Fields{
@@ -1304,6 +1306,11 @@ loop:
 				"file_path":         recEnd.FilePath,
 				"exit_reason":       recEnd.ExitReason,
 			}).Info("Processing RECORDING_END received")
+			if pushEnd, failed := awaitRecordingEnd.failedPush(); failed {
+				h.reportFailedPushWithRecording(log, mistClient, send, req.GetJobId(), streamName, outputPath, pushEnd, recEnd)
+				return
+			}
+			awaitRecordingEnd.stop()
 			if ready, failed := terminalSignalsReady(); failed {
 				return
 			} else if !ready {
@@ -1420,7 +1427,7 @@ loop:
 
 			h.sendProgress(send, req.GetJobId(), progressPct, currentMs, sourceDurationMs)
 
-			if time.Since(lastAdvance) >= stallTimeout {
+			if !awaitRecordingEnd.active() && time.Since(lastAdvance) >= stallTimeout {
 				if hasLivepeer && !fallbackAttempted {
 					log.WithField("progress_pct", progressPct).Warn("Livepeer stalled, falling back to local MistProcAV")
 					if !restartWithLocalFallback("Livepeer", 0) {

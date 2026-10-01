@@ -1320,6 +1320,8 @@ func (p *Processor) ProcessTypedTrigger(trigger *ipcpb.MistTrigger) (string, boo
 		return p.handleStreamLifecycleUpdate(trigger)
 	case *ipcpb.MistTrigger_IngestRuntimeAbsent:
 		return p.handleIngestRuntimeAbsent(trigger)
+	case *ipcpb.MistTrigger_IngestAdmissionAbandoned:
+		return p.handleIngestAdmissionAbandoned(trigger)
 	case *ipcpb.MistTrigger_ClientLifecycleUpdate:
 		return p.handleClientLifecycleUpdate(trigger)
 	case *ipcpb.MistTrigger_NodeLifecycleUpdate:
@@ -1357,6 +1359,27 @@ func (p *Processor) handleIngestRuntimeAbsent(trigger *ipcpb.MistTrigger) (strin
 	forwarded.TriggerPayload = &ipcpb.MistTrigger_StreamLifecycleUpdate{StreamLifecycleUpdate: lifecycle}
 	return p.handleStreamLifecycleUpdate(forwarded)
 }
+
+// handleIngestAdmissionAbandoned ends whatever a PUSH_REWRITE execution minted after its node answered
+// it to Mist without an accept. The node is the authenticated control connection, never the payload.
+// A malformed report is terminal; a database failure is retried from Helmsman's trigger WAL.
+func (p *Processor) handleIngestAdmissionAbandoned(trigger *ipcpb.MistTrigger) (string, bool, error) {
+	payload := trigger.GetIngestAdmissionAbandoned()
+	nodeID := strings.TrimSpace(trigger.GetNodeId())
+	triggerUUID := strings.TrimSpace(payload.GetTriggerUuid())
+	if nodeID == "" || triggerUUID == "" || payload.GetConnectorPid() <= 0 {
+		return "", false, ingesterrors.NewTerminal(ipcpb.IngestErrorCode_INGEST_ERROR_INTERNAL, "abandoned ingest admission missing node, trigger identity, or connector PID")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if _, err := abandonIngestAdmission(ctx, nodeID, triggerUUID, payload.GetConnectorPid(), p.logger); err != nil {
+		return "", false, fmt.Errorf("abandon ingest admission: %w", err)
+	}
+	return "", false, nil
+}
+
+// abandonIngestAdmission is the durable abandonment; tests replace it to observe the dispatch.
+var abandonIngestAdmission = control.AbandonIngestAdmission
 
 func (p *Processor) handleRawMistWebhook(trigger *ipcpb.MistTrigger) (string, bool, error) {
 	if _, ok := trigger.GetTriggerPayload().(*ipcpb.MistTrigger_RawMistWebhook); !ok {

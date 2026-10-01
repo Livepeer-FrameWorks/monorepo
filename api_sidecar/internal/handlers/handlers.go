@@ -291,6 +291,8 @@ func (h *Handlers) DeleteClip(clipHash string) (uint64, error) {
 	if clipHash == "" {
 		return 0, fmt.Errorf("clip hash is required")
 	}
+	// The command ends the clip on this node whether its bytes go now or after a lease: a freeze upload of it stops.
+	nodeArtifactDeletions.noteDeleted(clipHash)
 	if !leases.IsDestructiveCleanupAllowed() {
 		if err := enqueueDeferredDelete("clip", clipHash); err != nil {
 			return 0, err
@@ -540,6 +542,8 @@ func (h *Handlers) DeleteVOD(vodHash string) (uint64, error) {
 	if vodHash == "" {
 		return 0, fmt.Errorf("VOD hash is required")
 	}
+	// The command ends the VOD on this node whether its bytes go now or after a lease: a freeze upload of it stops.
+	nodeArtifactDeletions.noteDeleted(vodHash)
 	if !leases.IsDestructiveCleanupAllowed() {
 		if err := enqueueDeferredDelete("vod", vodHash); err != nil {
 			return 0, err
@@ -767,6 +771,7 @@ func HandlePushRewrite(c *gin.Context) {
 		}
 
 		c.String(http.StatusServiceUnavailable, "trigger handler unavailable")
+		settlePushRewriteAnswer(mistTrigger, result, false, c.Request.Context().Err() == nil, logger)
 		return
 	}
 
@@ -782,6 +787,7 @@ func HandlePushRewrite(c *gin.Context) {
 		}
 
 		respondMistResult(c, result, ipcpb.MistTriggerAction_MIST_TRIGGER_ACTION_DENY)
+		settlePushRewriteAnswer(mistTrigger, result, false, c.Request.Context().Err() == nil, logger)
 		return
 	}
 	logger.WithFields(logging.Fields{
@@ -798,7 +804,13 @@ func HandlePushRewrite(c *gin.Context) {
 
 	// Return Foghorn's response to MistServer
 	respondMistResult(c, result, ipcpb.MistTriggerAction_MIST_TRIGGER_ACTION_DENY)
+	// The empty-response fallback above answers Mist with a deny.
+	relayedAccept := strings.TrimSpace(result.Response) != "" && result.Action != ipcpb.MistTriggerAction_MIST_TRIGGER_ACTION_DENY
+	settlePushRewriteAnswer(mistTrigger, result, relayedAccept, c.Request.Context().Err() == nil, logger)
 }
+
+// settlePushRewriteAnswer reports a forwarded PUSH_REWRITE answered without an accept; tests observe it.
+var settlePushRewriteAnswer = control.SettlePushRewriteAnswer
 
 // HandlePlayRewrite handles the PLAY_REWRITE trigger from MistServer
 // This is a critical blocking trigger - maps playback IDs to internal stream names for viewing (live streams)

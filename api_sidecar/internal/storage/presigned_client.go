@@ -32,6 +32,18 @@ var presignedURLPattern = regexp.MustCompile(`https?://[^\s"]+`)
 
 const presignedUploadMaxAttempts = 3
 
+// UploadAttemptPolicy bounds the retried PUT of one object.
+type UploadAttemptPolicy struct {
+	// MaxAttempts is the number of PUTs before the upload fails; zero means presignedUploadMaxAttempts.
+	MaxAttempts int
+	// AttemptTimeout bounds one PUT from connect to response headers and body. An attempt the object store does not
+	// answer in time is abandoned and retried; zero leaves attempts bounded only by the caller's context.
+	AttemptTimeout time.Duration
+}
+
+// errAttemptTimedOut marks a PUT abandoned at its UploadAttemptPolicy.AttemptTimeout.
+var errAttemptTimedOut = errors.New("attempt timed out")
+
 type presignedStatusError struct {
 	status int
 	body   string
@@ -94,9 +106,14 @@ func (c *PresignedClient) UploadToPresignedURL(ctx context.Context, presignedURL
 
 // UploadBytesToPresignedURL uploads replayable bytes to S3 using a presigned PUT URL.
 func (c *PresignedClient) UploadBytesToPresignedURL(ctx context.Context, presignedURL string, data []byte, onProgress ProgressCallback) error {
+	return c.UploadBytesWithPolicy(ctx, presignedURL, data, UploadAttemptPolicy{}, onProgress)
+}
+
+// UploadBytesWithPolicy uploads replayable bytes to a presigned PUT URL, retrying under policy.
+func (c *PresignedClient) UploadBytesWithPolicy(ctx context.Context, presignedURL string, data []byte, policy UploadAttemptPolicy, onProgress ProgressCallback) error {
 	return c.uploadReplayable(ctx, presignedURL, int64(len(data)), func() (io.ReadCloser, error) {
 		return io.NopCloser(bytes.NewReader(data)), nil
-	}, onProgress)
+	}, policy, onProgress)
 }
 
 func (c *PresignedClient) uploadOnce(ctx context.Context, presignedURL string, body io.Reader, size int64, onProgress ProgressCallback) error {
@@ -148,19 +165,24 @@ func (c *PresignedClient) UploadFileToPresignedURL(ctx context.Context, presigne
 			return nil, fmt.Errorf("failed to open file: %w", err)
 		}
 		return file, nil
-	}, onProgress)
+	}, UploadAttemptPolicy{}, onProgress)
 }
 
-func (c *PresignedClient) uploadReplayable(ctx context.Context, presignedURL string, size int64, openBody func() (io.ReadCloser, error), onProgress ProgressCallback) error {
+func (c *PresignedClient) uploadReplayable(ctx context.Context, presignedURL string, size int64, openBody func() (io.ReadCloser, error), policy UploadAttemptPolicy, onProgress ProgressCallback) error {
+	maxAttempts := policy.MaxAttempts
+	if maxAttempts <= 0 {
+		maxAttempts = presignedUploadMaxAttempts
+	}
 	var lastErr error
 	attempts := 0
-	for attempt := 1; attempt <= presignedUploadMaxAttempts; attempt++ {
+	for attempt := 1; attempt <= maxAttempts; attempt++ {
 		attempts = attempt
 		body, err := openBody()
 		if err != nil {
 			return err
 		}
-		err = c.uploadOnce(ctx, presignedURL, body, size, onProgress)
+		started := time.Now()
+		err = c.uploadAttempt(ctx, presignedURL, body, size, policy.AttemptTimeout, onProgress)
 		closeErr := body.Close()
 		if err == nil && closeErr != nil {
 			err = closeErr
@@ -169,13 +191,15 @@ func (c *PresignedClient) uploadReplayable(ctx context.Context, presignedURL str
 			return nil
 		}
 		lastErr = err
-		if attempt == presignedUploadMaxAttempts || ctx.Err() != nil || !shouldRetryPresignedUpload(err) {
+		if attempt == maxAttempts || ctx.Err() != nil || !shouldRetryPresignedUpload(err) {
 			break
 		}
 		c.logger.WithFields(logging.Fields{
+			"object":       redactPresignedURLs(presignedURL),
 			"attempt":      attempt,
-			"max_attempts": presignedUploadMaxAttempts,
+			"max_attempts": maxAttempts,
 			"size":         size,
+			"elapsed_ms":   time.Since(started).Milliseconds(),
 			"error":        err,
 		}).Warn("Presigned upload attempt failed; retrying")
 		if waitErr := waitPresignedRetry(ctx, attempt); waitErr != nil {
@@ -183,6 +207,21 @@ func (c *PresignedClient) uploadReplayable(ctx context.Context, presignedURL str
 		}
 	}
 	return fmt.Errorf("upload failed after %d attempt(s): %w", attempts, lastErr)
+}
+
+// uploadAttempt runs one PUT, bounded by attemptTimeout when it is positive. An attempt cut by that bound while the
+// caller's context is still live reports errAttemptTimedOut, which is retryable.
+func (c *PresignedClient) uploadAttempt(ctx context.Context, presignedURL string, body io.Reader, size int64, attemptTimeout time.Duration, onProgress ProgressCallback) error {
+	if attemptTimeout <= 0 {
+		return c.uploadOnce(ctx, presignedURL, body, size, onProgress)
+	}
+	attemptCtx, cancel := context.WithTimeoutCause(ctx, attemptTimeout, errAttemptTimedOut)
+	defer cancel()
+	err := c.uploadOnce(attemptCtx, presignedURL, body, size, onProgress)
+	if err != nil && ctx.Err() == nil && errors.Is(context.Cause(attemptCtx), errAttemptTimedOut) {
+		return fmt.Errorf("object storage did not complete the PUT within %s: %w", attemptTimeout, errAttemptTimedOut)
+	}
+	return err
 }
 
 func shouldRetryPresignedUpload(err error) bool {

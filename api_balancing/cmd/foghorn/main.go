@@ -563,7 +563,7 @@ func main() {
 		),
 		ArtifactSyncOutcomes: metricsCollector.NewCounter(
 			"artifact_sync_outcomes_total",
-			"Artifact SyncComplete outcomes from Helmsman (success/failed/lost_local/dtsh_failed)",
+			"Artifact SyncComplete outcomes from Helmsman (success/failed/lost_local/dtsh_failed/artifact_deleted)",
 			[]string{"outcome"},
 		),
 		ArtifactDeletionOutcomes: artifactDeletionOutcomes,

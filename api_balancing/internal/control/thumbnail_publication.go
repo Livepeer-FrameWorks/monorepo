@@ -80,11 +80,51 @@ type ThumbnailAssignment struct {
 // INSERT lets cleanup route the sweep local even when the destination cluster id differs (a locally-backed
 // alias), without reconstructing from current routing.
 func ClaimThumbnailAttempt(ctx context.Context, dbh *sql.DB, attemptID, tenantID, assetKey, nodeID, destinationCluster string, files []string, expiry time.Time) (claimed bool, err error) {
-	if dbh == nil || attemptID == "" || tenantID == "" || assetKey == "" || nodeID == "" || destinationCluster == "" || len(files) == 0 {
-		return false, nil
+	outcome, err := ClaimThumbnailAttemptOutcome(ctx, dbh, attemptID, tenantID, assetKey, nodeID, destinationCluster, files, expiry)
+	return err == nil && outcome == ThumbnailClaimed, err
+}
+
+// ThumbnailClaimOutcome says whether ClaimThumbnailAttemptOutcome recorded the attempt and, when it did not, why.
+type ThumbnailClaimOutcome int
+
+const (
+	// ThumbnailClaimNotRecorded accompanies an error: the claim transaction failed and nothing was written.
+	ThumbnailClaimNotRecorded ThumbnailClaimOutcome = iota
+	// ThumbnailClaimed means the assignment and its staging object rows are durable.
+	ThumbnailClaimed
+	// ThumbnailClaimIncompleteIdentity means a required identity field (attempt, tenant, asset, node,
+	// destination cluster, files) or the database handle was missing.
+	ThumbnailClaimIncompleteIdentity
+	// ThumbnailClaimParentTerminal means the asset's artifact is deleted, failed, expired or aborted.
+	ThumbnailClaimParentTerminal
+	// ThumbnailClaimAssetTombstoned means the asset carries a deletion cleanup obligation (a deleted live stream).
+	ThumbnailClaimAssetTombstoned
+)
+
+func (o ThumbnailClaimOutcome) String() string {
+	switch o {
+	case ThumbnailClaimed:
+		return "claimed"
+	case ThumbnailClaimIncompleteIdentity:
+		return "incomplete_identity"
+	case ThumbnailClaimParentTerminal:
+		return "parent_terminal"
+	case ThumbnailClaimAssetTombstoned:
+		return "asset_tombstoned"
+	default:
+		return "not_recorded"
 	}
-	err = database.WithRetryablePostgresTx(ctx, dbh, nil, func(tx *sql.Tx) error {
-		claimed = false
+}
+
+// ClaimThumbnailAttemptOutcome is ClaimThumbnailAttempt reporting why a claim was refused. A refusal returns a nil
+// error with the refusal outcome; ThumbnailClaimNotRecorded is returned only with an error.
+func ClaimThumbnailAttemptOutcome(ctx context.Context, dbh *sql.DB, attemptID, tenantID, assetKey, nodeID, destinationCluster string, files []string, expiry time.Time) (ThumbnailClaimOutcome, error) {
+	if dbh == nil || attemptID == "" || tenantID == "" || assetKey == "" || nodeID == "" || destinationCluster == "" || len(files) == 0 {
+		return ThumbnailClaimIncompleteIdentity, nil
+	}
+	outcome := ThumbnailClaimNotRecorded
+	err := database.WithRetryablePostgresTx(ctx, dbh, nil, func(tx *sql.Tx) error {
+		outcome = ThumbnailClaimNotRecorded
 		// Per-asset fence FIRST: serialize with a concurrent stream-deletion (RecordStreamCleanupObligation) so the
 		// tombstone check below cannot race an as-yet-uninserted tombstone row (a row lock can't fence a missing row).
 		if lErr := lockThumbnailAsset(ctx, tx, assetKey); lErr != nil {
@@ -102,6 +142,7 @@ func ClaimThumbnailAttempt(ctx context.Context, dbh *sql.DB, attemptID, tenantID
 			return tErr
 		}
 		if tErr == nil && parentTerminal {
+			outcome = ThumbnailClaimParentTerminal
 			return errTxRollbackNoop // fail-closed: parent is terminal, no upload authority
 		}
 
@@ -112,6 +153,7 @@ func ClaimThumbnailAttempt(ctx context.Context, dbh *sql.DB, attemptID, tenantID
 		if tombstoned, tsErr := assetTombstonedTx(ctx, tx, assetKey); tsErr != nil {
 			return tsErr
 		} else if tombstoned {
+			outcome = ThumbnailClaimAssetTombstoned
 			return errTxRollbackNoop
 		}
 
@@ -138,16 +180,16 @@ func ClaimThumbnailAttempt(ctx context.Context, dbh *sql.DB, attemptID, tenantID
 				return execErr
 			}
 		}
-		claimed = true
+		outcome = ThumbnailClaimed
 		return nil
 	})
 	if errors.Is(err, errTxRollbackNoop) {
-		return false, nil
+		return outcome, nil
 	}
 	if err != nil {
-		return false, err
+		return ThumbnailClaimNotRecorded, err
 	}
-	return claimed, nil
+	return outcome, nil
 }
 
 // LoadThumbnailAttempt returns the assignment + its object rows for a completion to bind against. found=false

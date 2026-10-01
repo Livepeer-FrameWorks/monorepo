@@ -10,7 +10,9 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 )
@@ -136,5 +138,48 @@ func TestUploadFileToPresignedURLRetriesReplayableBody(t *testing.T) {
 		if body != "jpeg" {
 			t.Fatalf("body[%d] = %q, want jpeg", i, body)
 		}
+	}
+}
+
+// An attempt the object store does not answer is abandoned at the policy's attempt timeout and retried, and the
+// failure names the timeout; the caller's own cancellation ends the upload without further attempts.
+func TestUploadBytesWithPolicyAbandonsStalledAttempt(t *testing.T) {
+	var attempts atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = io.Copy(io.Discard, r.Body)
+		if attempts.Add(1) == 1 {
+			<-r.Context().Done()
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+
+	client := NewPresignedClient(logging.NewLogger())
+	policy := UploadAttemptPolicy{MaxAttempts: 2, AttemptTimeout: 200 * time.Millisecond}
+	if err := client.UploadBytesWithPolicy(context.Background(), server.URL, []byte("thumbnail"), policy, nil); err != nil {
+		t.Fatalf("upload after one stalled attempt: %v", err)
+	}
+	if got := attempts.Load(); got != 2 {
+		t.Fatalf("attempts = %d, want 2", got)
+	}
+
+	attempts.Store(0)
+	policy.MaxAttempts = 1
+	err := client.UploadBytesWithPolicy(context.Background(), server.URL, []byte("thumbnail"), policy, nil)
+	if !errors.Is(err, errAttemptTimedOut) || !strings.Contains(err.Error(), "did not complete the PUT within 200ms") {
+		t.Fatalf("stalled single attempt error = %v, want the attempt timeout named", err)
+	}
+
+	attempts.Store(0)
+	ctx, cancel := context.WithCancel(context.Background())
+	time.AfterFunc(100*time.Millisecond, cancel)
+	policy = UploadAttemptPolicy{MaxAttempts: 3, AttemptTimeout: time.Minute}
+	err = client.UploadBytesWithPolicy(ctx, server.URL, []byte("thumbnail"), policy, nil)
+	if err == nil || errors.Is(err, errAttemptTimedOut) {
+		t.Fatalf("canceled upload error = %v, want the caller's cancellation, not an attempt timeout", err)
+	}
+	if got := attempts.Load(); got != 1 {
+		t.Fatalf("attempts after caller cancellation = %d, want 1", got)
 	}
 }

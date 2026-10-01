@@ -2,6 +2,7 @@ package control
 
 import (
 	"context"
+	"errors"
 	"testing"
 
 	"frameworks/api_balancing/internal/state"
@@ -74,21 +75,30 @@ func TestNodeProducesThumbnailResource_ArtifactOwnership(t *testing.T) {
 	mock, _, _ := setupArtifactTestDeps(t)
 	ctx := context.Background()
 
-	if nodeProducesThumbnailResource(ctx, "", streamident.KindArtifactVOD, false, "", "art-1", "tenant-1") {
+	produces := func(node, key, tenant string) bool {
+		t.Helper()
+		ok, err := nodeProducesThumbnailResource(ctx, node, streamident.KindArtifactVOD, false, "", key, tenant)
+		if err != nil {
+			t.Fatalf("unexpected lookup error: %v", err)
+		}
+		return ok
+	}
+	if produces("", "art-1", "tenant-1") {
 		t.Fatal("empty node must be denied")
 	}
-	if nodeProducesThumbnailResource(ctx, "node-1", streamident.KindArtifactVOD, false, "", "", "tenant-1") {
+	if produces("node-1", "", "tenant-1") {
 		t.Fatal("empty resource key must be denied")
 	}
-	if nodeProducesThumbnailResource(ctx, "node-1", streamident.KindArtifactVOD, false, "", "art-1", "") {
+	if produces("node-1", "art-1", "") {
 		t.Fatal("empty tenant must be denied")
 	}
 
-	// Owned (holds a complete copy OR is the assigned processing node), tenant-scoped → authorized.
-	mock.ExpectQuery(`SELECT EXISTS.*foghorn.artifact_nodes an.*is_complete = true.*OR EXISTS.*foghorn.processing_jobs`).
+	// Owned (holds a complete copy, is the assigned processing node, or finalizes the chapter), tenant-scoped →
+	// authorized.
+	mock.ExpectQuery(`SELECT EXISTS.*foghorn.artifact_nodes an.*is_complete = true.*OR EXISTS.*foghorn.processing_jobs.*OR EXISTS.*foghorn.dvr_chapters`).
 		WithArgs("art-1", "node-1", "tenant-1").
 		WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(true))
-	if !nodeProducesThumbnailResource(ctx, "node-1", streamident.KindArtifactVOD, false, "", "art-1", "tenant-1") {
+	if !produces("node-1", "art-1", "tenant-1") {
 		t.Fatal("a node that holds/processes the artifact must be authorized")
 	}
 
@@ -96,8 +106,16 @@ func TestNodeProducesThumbnailResource_ArtifactOwnership(t *testing.T) {
 	mock.ExpectQuery(`SELECT EXISTS.*foghorn.artifact_nodes an.*OR EXISTS.*foghorn.processing_jobs`).
 		WithArgs("art-2", "stranger", "tenant-1").
 		WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(false))
-	if nodeProducesThumbnailResource(ctx, "stranger", streamident.KindArtifactVOD, false, "", "art-2", "tenant-1") {
+	if produces("stranger", "art-2", "tenant-1") {
 		t.Fatal("a node that neither holds nor processes the artifact must be denied")
+	}
+
+	// A failed lookup is reported as an error, not as a denial.
+	mock.ExpectQuery(`SELECT EXISTS.*foghorn.artifact_nodes an`).
+		WithArgs("art-3", "node-1", "tenant-1").
+		WillReturnError(errors.New("connection reset"))
+	if ok, err := nodeProducesThumbnailResource(ctx, "node-1", streamident.KindArtifactVOD, false, "", "art-3", "tenant-1"); ok || err == nil {
+		t.Fatalf("a failed lookup must return its error and deny: ok=%v err=%v", ok, err)
 	}
 
 	if err := mock.ExpectationsWereMet(); err != nil {

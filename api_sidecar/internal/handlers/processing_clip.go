@@ -145,6 +145,8 @@ func (h *ProcessingJobHandler) handleClip(req *ipcpb.ProcessingJobRequest, send 
 	const stallTimeout = 3 * time.Minute
 	pushStartWallMs := time.Now().UnixMilli()
 	speedSampler := &processingSpeedSampler{}
+	var awaitRecordingEnd recordingEndWait
+	defer awaitRecordingEnd.stop()
 
 	recordingEndIsStale := func(evt ProcessingRecordingEndEvent) bool {
 		return recordingEndPredatesPush(evt.TimeStarted, currentPushStartedAt)
@@ -154,23 +156,13 @@ loop:
 	for {
 		select {
 		case pushEnd := <-doneCh:
-			if !processingPushSucceeded(pushEnd) {
-				log.WithFields(logging.Fields{
-					"push_id":       pushEnd.PushID,
-					"push_status":   pushEnd.PushStatus,
-					"target_before": pushEnd.TargetBefore,
-					"target_after":  pushEnd.TargetAfter,
-					"push_logs":     pushEnd.LogMessages,
-				}).Error("Clip: push ended with failure")
-				h.cleanupFailedProcessing(log, mistClient, streamName, outputPath)
-				h.sendResult(send, req.GetJobId(), "failed", processingPushFailureMessage(pushEnd), nil, "", 0)
-				return
-			}
-			log.Info("Clip: PUSH_END received")
-			// RECORDING_END is the authoritative completion signal; keep waiting
-			// for it (the recordingEndCh case breaks the loop). A stall/timeout
-			// backstops a successful PUSH_END that is never followed by one.
+			// RECORDING_END is the authoritative completion signal and breaks
+			// the loop, so a PUSH_END here always precedes it.
+			awaitRecordingEnd.start(log, pushEnd)
 			continue loop
+		case <-awaitRecordingEnd.expired():
+			h.reportRecordingOutputVanished(log, mistClient, send, req.GetJobId(), streamName, outputPath, *awaitRecordingEnd.pushEnd)
+			return
 		case recEnd := <-recordingEndCh:
 			if recordingEndIsStale(recEnd) {
 				log.WithFields(logging.Fields{
@@ -187,6 +179,10 @@ loop:
 				"file_path":         recEnd.FilePath,
 				"exit_reason":       recEnd.ExitReason,
 			}).Info("Clip: RECORDING_END received")
+			if pushEnd, failed := awaitRecordingEnd.failedPush(); failed {
+				h.reportFailedPushWithRecording(log, mistClient, send, req.GetJobId(), streamName, outputPath, pushEnd, recEnd)
+				return
+			}
 			break loop
 		case evt := <-processExitCh:
 			evtFields := processExitFields(evt)
@@ -223,7 +219,7 @@ loop:
 				}
 			}
 			h.sendProgress(send, req.GetJobId(), progressPct, currentMs, sourceDurationMs)
-			if time.Since(lastAdvance) >= stallTimeout {
+			if !awaitRecordingEnd.active() && time.Since(lastAdvance) >= stallTimeout {
 				log.WithField("progress_pct", progressPct).Warn("Clip: processing stalled")
 				h.cleanupFailedProcessing(log, mistClient, streamName, outputPath)
 				h.sendResult(send, req.GetJobId(), "failed",

@@ -312,6 +312,19 @@ func (q *Queries) PurgeExpiredCloseTombstones(ctx context.Context, olderThanSeco
 	return result.RowsAffected()
 }
 
+const purgeExpiredIngestAdmissionAbandonments = `-- name: PurgeExpiredIngestAdmissionAbandonments :execrows
+DELETE FROM foghorn.ingest_admission_abandonments
+WHERE created_at < NOW() - make_interval(secs => $1::double precision)
+`
+
+func (q *Queries) PurgeExpiredIngestAdmissionAbandonments(ctx context.Context, olderThanSeconds float64) (int64, error) {
+	result, err := q.db.ExecContext(ctx, purgeExpiredIngestAdmissionAbandonments, olderThanSeconds)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
 const retireIngestSession = `-- name: RetireIngestSession :one
 UPDATE foghorn.ingest_sessions
 SET ended_at = NOW(), ended_at_unix_millis = (EXTRACT(EPOCH FROM NOW()) * 1000)::bigint,

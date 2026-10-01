@@ -9,11 +9,19 @@ import (
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 )
 
+// expectMintExecutionNotAbandoned expects the mint's PUSH_REWRITE execution lock and its check that
+// the node has not reported the execution abandoned.
+func expectMintExecutionNotAbandoned(mock sqlmock.Sqlmock) {
+	mock.ExpectExec(`SELECT pg_advisory_xact_lock`).WithArgs(sqlmock.AnyArg()).WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectQuery(`ingest_admission_abandonments`).WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(false))
+}
+
 // A first PUSH_REWRITE for a connection mints a fresh ingest session: new trigger UUID, no active
 // incumbent for the stream, plain insert. The advisory lock is now STREAM-scoped.
 func TestCreateIngestSession_MintsNew(t *testing.T) {
 	mock := withMockDB(t)
 	mock.ExpectBegin()
+	expectMintExecutionNotAbandoned(mock)
 	mock.ExpectExec(`SELECT pg_advisory_xact_lock`).WithArgs(sqlmock.AnyArg()).WillReturnResult(sqlmock.NewResult(0, 0))
 	mock.ExpectExec(`SELECT pg_advisory_xact_lock`).WithArgs(sqlmock.AnyArg()).WillReturnResult(sqlmock.NewResult(0, 0))
 	// 1. Trigger-UUID lookup — new UUID.
@@ -49,6 +57,7 @@ func TestCreateIngestSession_MintsNew(t *testing.T) {
 func TestCreateIngestSession_MintsSignedAuthoritySnapshotAtomically(t *testing.T) {
 	mock := withMockDB(t)
 	mock.ExpectBegin()
+	expectMintExecutionNotAbandoned(mock)
 	// Tenant capacity lock, then stream ownership lock.
 	mock.ExpectExec(`SELECT pg_advisory_xact_lock`).WithArgs(sqlmock.AnyArg()).WillReturnResult(sqlmock.NewResult(0, 0))
 	mock.ExpectExec(`SELECT pg_advisory_xact_lock`).WithArgs(sqlmock.AnyArg()).WillReturnResult(sqlmock.NewResult(0, 0))
@@ -81,6 +90,7 @@ func TestCreateIngestSession_MintsSignedAuthoritySnapshotAtomically(t *testing.T
 func TestCreateIngestSession_DuplicateIsIdempotent(t *testing.T) {
 	mock := withMockDB(t)
 	mock.ExpectBegin()
+	expectMintExecutionNotAbandoned(mock)
 	mock.ExpectExec(`SELECT pg_advisory_xact_lock`).WithArgs(sqlmock.AnyArg()).WillReturnResult(sqlmock.NewResult(0, 0))
 	mock.ExpectExec(`SELECT pg_advisory_xact_lock`).WithArgs(sqlmock.AnyArg()).WillReturnResult(sqlmock.NewResult(0, 0))
 	mock.ExpectQuery(`start_trigger_uuid = \$3\s+FOR UPDATE`).
@@ -105,6 +115,7 @@ func TestCreateIngestSession_DuplicateIsIdempotent(t *testing.T) {
 func TestCreateIngestSession_RejectsDuplicatePublisher(t *testing.T) {
 	mock := withMockDB(t)
 	mock.ExpectBegin()
+	expectMintExecutionNotAbandoned(mock)
 	mock.ExpectExec(`SELECT pg_advisory_xact_lock`).WithArgs(sqlmock.AnyArg()).WillReturnResult(sqlmock.NewResult(0, 0))
 	mock.ExpectExec(`SELECT pg_advisory_xact_lock`).WithArgs(sqlmock.AnyArg()).WillReturnResult(sqlmock.NewResult(0, 0))
 	mock.ExpectQuery(`start_trigger_uuid = \$3\s+FOR UPDATE`).
@@ -133,6 +144,7 @@ func TestCreateIngestSession_RejectsDuplicatePublisher(t *testing.T) {
 func TestCreateIngestSession_PidReuseEndsStaleAndMintsFresh(t *testing.T) {
 	mock := withMockDB(t)
 	mock.ExpectBegin()
+	expectMintExecutionNotAbandoned(mock)
 	mock.ExpectExec(`SELECT pg_advisory_xact_lock`).WithArgs(sqlmock.AnyArg()).WillReturnResult(sqlmock.NewResult(0, 0))
 	mock.ExpectExec(`SELECT pg_advisory_xact_lock`).WithArgs(sqlmock.AnyArg()).WillReturnResult(sqlmock.NewResult(0, 0))
 	mock.ExpectQuery(`start_trigger_uuid = \$3\s+FOR UPDATE`).

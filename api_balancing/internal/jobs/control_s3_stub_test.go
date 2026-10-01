@@ -11,6 +11,17 @@ import (
 // assert or match a recorded/adopted backend compare against it.
 var testCellBackendID = control.BackendFingerprint("s3", "cell-bucket", "https://cell.s3", "eu-central", "prod")
 
+// packageControlS3Client is the control S3 client the package's tests run with when a test has not replaced it:
+// nil by default, and controlS3Stub under the real-PG TestMain.
+var packageControlS3Client control.S3ClientInterface
+
+// useControlS3Client wires client into control for one test and restores the package's client afterwards, so a
+// later test never inherits a cleared client.
+func useControlS3Client(t interface{ Cleanup(func()) }, client control.S3ClientInterface) {
+	control.SetS3Client(client)
+	t.Cleanup(func() { control.SetS3Client(packageControlS3Client) })
+}
+
 // controlS3Stub is a control.S3ClientInterface whose only meaningful method is BackendDescriptor — enough for the
 // freeze/thumbnail/staging attribution paths (ClaimFreezeAttempt, EnqueueStagingCleanupTx, RecordStreamCleanupObligation)
 // to attribute this cell's backend. The rest panic: jobs tests never route bytes through control's S3 client (the
@@ -38,4 +49,6 @@ func (controlS3Stub) GetObjectSize(context.Context, string) (int64, error)      
 func (controlS3Stub) HeadObjectInfo(context.Context, string) (bool, int64, string, error) {
 	panic("unused")
 }
-func (controlS3Stub) PromoteObject(context.Context, string, string, string) error { panic("unused") }
+func (controlS3Stub) PromoteObject(context.Context, string, string, string) (string, error) {
+	panic("unused")
+}

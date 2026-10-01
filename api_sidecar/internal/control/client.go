@@ -696,6 +696,9 @@ type MistTriggerResult struct {
 	Reason           string
 	ErrorCode        ipcpb.IngestErrorCode
 	IngestGeneration string
+	// Forwarded reports that the trigger reached the control stream at least once, so Foghorn may
+	// have acted on it whatever this result says.
+	Forwarded bool
 }
 
 // SendMistTrigger forwards a typed MistServer trigger to Foghorn and returns response for blocking triggers
@@ -704,7 +707,7 @@ func SendMistTrigger(mistTrigger *ipcpb.MistTrigger, logger logging.Logger) (*Mi
 }
 
 // SendMistTriggerContext forwards a trigger while honoring the originating HTTP request lifetime.
-func SendMistTriggerContext(ctx context.Context, mistTrigger *ipcpb.MistTrigger, logger logging.Logger) (*MistTriggerResult, error) {
+func SendMistTriggerContext(ctx context.Context, mistTrigger *ipcpb.MistTrigger, logger logging.Logger) (result *MistTriggerResult, err error) {
 	triggerType := mistTrigger.TriggerType
 	if !mistTrigger.Blocking {
 		sendCtx, cancel := boundedMistTriggerSendContext(ctx, mistTriggerTransportSendTimeout)
@@ -715,6 +718,12 @@ func SendMistTriggerContext(ctx context.Context, mistTrigger *ipcpb.MistTrigger,
 		return &MistTriggerResult{}, nil
 	}
 
+	forwarded := false
+	defer func() {
+		if result != nil {
+			result.Forwarded = forwarded
+		}
+	}()
 	attempts := max(maxBlockingAttempts, 1)
 	deadline := time.Now().Add(blockingTimeoutForTrigger(triggerType))
 	if requestDeadline, ok := ctx.Deadline(); ok && requestDeadline.Before(deadline) {
@@ -789,6 +798,7 @@ func SendMistTriggerContext(ctx context.Context, mistTrigger *ipcpb.MistTrigger,
 			lastErr = sendErr
 			continue
 		}
+		forwarded = true
 
 		remaining := time.Until(deadline)
 		if remaining <= 0 {
@@ -797,16 +807,16 @@ func SendMistTriggerContext(ctx context.Context, mistTrigger *ipcpb.MistTrigger,
 			<-pendingMutex
 			break
 		}
-		result, err := awaitMistTriggerResponseContext(ctx, responseCh, mistTrigger.RequestId, remaining)
-		if err == nil {
-			return result, nil
+		awaited, awaitErr := awaitMistTriggerResponseContext(ctx, responseCh, mistTrigger.RequestId, remaining)
+		if awaitErr == nil {
+			return awaited, nil
 		}
-		if errors.Is(err, errStreamDisconnected) {
+		if errors.Is(awaitErr, errStreamDisconnected) {
 			BlockingTriggerRetries.WithLabelValues(triggerType, "stream_disconnected").Inc()
-			lastErr = err
+			lastErr = awaitErr
 			continue
 		}
-		return result, err
+		return awaited, awaitErr
 	}
 
 	TriggersSent.WithLabelValues(triggerType, "exhausted").Inc()
@@ -959,37 +969,67 @@ func awaitMistTriggerResponseContext(ctx context.Context, responseCh chan *ipcpb
 		delete(pendingMistTriggers, requestID)
 		<-pendingMutex
 
-		return &MistTriggerResult{
-			Response:         response.Response,
-			Abort:            response.Abort || response.GetAction() == ipcpb.MistTriggerAction_MIST_TRIGGER_ACTION_DENY,
-			Action:           response.GetAction(),
-			Reason:           response.GetReason(),
-			ErrorCode:        response.ErrorCode,
-			IngestGeneration: response.GetIngestGeneration(),
-		}, nil
+		return mistTriggerResultFromResponse(response), nil
 	case <-ctx.Done():
-		pendingMutex <- struct{}{}
-		delete(pendingMistTriggers, requestID)
-		<-pendingMutex
+		if response, claimed := releasePendingMistTrigger(requestID, responseCh); claimed {
+			return mistTriggerResultFromResponse(response), ctx.Err()
+		}
 		return &MistTriggerResult{Abort: true, ErrorCode: ipcpb.IngestErrorCode_INGEST_ERROR_TIMEOUT}, ctx.Err()
 	case <-disconnectCh:
-		pendingMutex <- struct{}{}
-		delete(pendingMistTriggers, requestID)
-		<-pendingMutex
-
+		if response, claimed := releasePendingMistTrigger(requestID, responseCh); claimed {
+			return mistTriggerResultFromResponse(response), nil
+		}
 		return &MistTriggerResult{
 			Abort:     true,
 			ErrorCode: ipcpb.IngestErrorCode_INGEST_ERROR_INTERNAL,
 		}, errStreamDisconnected
 	case <-time.After(timeout):
-		pendingMutex <- struct{}{}
-		delete(pendingMistTriggers, requestID)
-		<-pendingMutex
-
+		if response, claimed := releasePendingMistTrigger(requestID, responseCh); claimed {
+			return mistTriggerResultFromResponse(response), nil
+		}
 		return &MistTriggerResult{
 			Abort:     true,
 			ErrorCode: ipcpb.IngestErrorCode_INGEST_ERROR_TIMEOUT,
 		}, fmt.Errorf("timeout waiting for MistTrigger response")
+	}
+}
+
+// claimedResponseWait bounds how long a waiter whose deadline passed waits for the response that
+// handleMistTriggerResponse already took from the pending table. The handler only persists an
+// accepted ingest generation before offering it, so the wait is one local fsync.
+const claimedResponseWait = 2 * time.Second
+
+// releasePendingMistTrigger ends a wait that stopped before a response was received. If the pending
+// entry is still registered it is removed, and a response arriving later finds no waiter. If
+// handleMistTriggerResponse already took it, a response is on its way to responseCh: the handler may
+// already have applied it (an accepted PUSH_REWRITE's generation is persisted before the offer), so
+// the waiter receives it instead of discarding an answer its node has acted on.
+func releasePendingMistTrigger(requestID string, responseCh chan *ipcpb.MistTriggerResponse) (*ipcpb.MistTriggerResponse, bool) {
+	pendingMutex <- struct{}{}
+	_, pending := pendingMistTriggers[requestID]
+	if pending {
+		delete(pendingMistTriggers, requestID)
+	}
+	<-pendingMutex
+	if pending {
+		return nil, false
+	}
+	select {
+	case response := <-responseCh:
+		return response, true
+	case <-time.After(claimedResponseWait):
+		return nil, false
+	}
+}
+
+func mistTriggerResultFromResponse(response *ipcpb.MistTriggerResponse) *MistTriggerResult {
+	return &MistTriggerResult{
+		Response:         response.Response,
+		Abort:            response.Abort || response.GetAction() == ipcpb.MistTriggerAction_MIST_TRIGGER_ACTION_DENY,
+		Action:           response.GetAction(),
+		Reason:           response.GetReason(),
+		ErrorCode:        response.ErrorCode,
+		IngestGeneration: response.GetIngestGeneration(),
 	}
 }
 
@@ -4667,8 +4707,43 @@ func SendThumbnailUploadRequest(internalName string, filePaths []string) error {
 	return stream.Send(msg)
 }
 
-// handleThumbnailUploadResponse uploads thumbnail files to S3 using presigned URLs
-// from Foghorn, then sends a ThumbnailUploaded confirmation.
+// Thumbnail uploads share one presigned client so connections to object storage are reused across batches instead
+// of each batch dialing its own. thumbnailUploadSlots bounds the PUTs in flight below that client's per-host
+// connection limit, and a slot is taken before an attempt's deadline starts, so no attempt spends its time queued
+// for a connection.
+var (
+	thumbnailPresignedOnce   sync.Once
+	thumbnailPresignedClient *storage.PresignedClient
+	thumbnailUploadSlots     = make(chan struct{}, 4)
+)
+
+const (
+	// thumbnailUploadMaxAttempts is the PUTs per file. Object storage has left single PUTs unanswered for tens of
+	// seconds, including the retry of the same key; a stalled attempt is abandoned at its deadline and retried.
+	thumbnailUploadMaxAttempts = 4
+	// thumbnailUploadFileDeadline bounds one file, slot wait included, well inside the 15 minute presigned URL TTL.
+	thumbnailUploadFileDeadline = 3 * time.Minute
+	// thumbnailAttemptBase and thumbnailAttemptMinThroughput size one PUT's deadline: a fixed allowance for
+	// connect and response plus the object's bytes at 256 KiB/s.
+	thumbnailAttemptBase          = 5 * time.Second
+	thumbnailAttemptMinThroughput = 256 * 1024
+)
+
+func sharedThumbnailPresignedClient(logger logging.Logger) *storage.PresignedClient {
+	thumbnailPresignedOnce.Do(func() {
+		thumbnailPresignedClient = storage.NewPresignedClient(logger)
+	})
+	return thumbnailPresignedClient
+}
+
+// thumbnailAttemptTimeout is the deadline of one thumbnail PUT of size bytes.
+func thumbnailAttemptTimeout(size int) time.Duration {
+	return (thumbnailAttemptBase + time.Duration(size)*time.Second/thumbnailAttemptMinThroughput).Round(100 * time.Millisecond)
+}
+
+// handleThumbnailUploadResponse uploads thumbnail files to S3 using presigned URLs from Foghorn, then sends a
+// ThumbnailUploaded confirmation. Each file uploads concurrently under its own deadline, so an object-store request
+// that stalls on one file does not use up the time of the others.
 func handleThumbnailUploadResponse(logger logging.Logger, resp *ipcpb.ThumbnailUploadResponse, send func(*ipcpb.ControlMessage)) {
 	thumbnailKey := resp.GetThumbnailKey()
 	uploads := resp.GetUploads()
@@ -4678,86 +4753,29 @@ func handleThumbnailUploadResponse(logger logging.Logger, resp *ipcpb.ThumbnailU
 		"upload_count":  len(uploads),
 	}).Debug("Received thumbnail presigned URLs from Foghorn")
 
-	presignedClient := storage.NewPresignedClient(logger)
-	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
-	defer cancel()
-
-	var uploadedKeys []string
-	failedUploads := 0
-	for _, upload := range uploads {
-		localPath := upload.GetLocalPath()
-		if localPath == "" {
-			logger.WithField("file_name", upload.GetFileName()).Warn("No local_path in thumbnail upload response")
-			failedUploads++
-			continue
-		}
-		if upload.GetPresignedUrl() == "" {
-			logger.WithField("file_name", upload.GetFileName()).Warn("No presigned URL in thumbnail upload response")
-			failedUploads++
-			continue
-		}
-
-		if upload.GetFileName() == "sprite.vtt" {
-			data, err := os.ReadFile(localPath)
-			if err != nil {
-				logger.WithFields(logging.Fields{
-					"file_name":  upload.GetFileName(),
-					"local_path": localPath,
-					"error":      err,
-				}).Error("Failed to read thumbnail VTT")
-				failedUploads++
-				continue
-			}
-			normalized := normalizeThumbnailVTTReferences(string(data))
-			if err := presignedClient.UploadBytesToPresignedURL(ctx, upload.GetPresignedUrl(), []byte(normalized), nil); err != nil {
-				logger.WithFields(logging.Fields{
-					"file_name":  upload.GetFileName(),
-					"local_path": localPath,
-					"s3_key":     upload.GetS3Key(),
-					"error":      err,
-				}).Error("Failed to upload thumbnail to S3")
-				failedUploads++
-				continue
-			}
-		} else {
-			// Read the whole file first: Mist can still be rewriting a
-			// thumbnail when THUMBNAIL_UPDATED fires, and a stat-then-stream
-			// upload dies with a ContentLength/body-length mismatch when the
-			// file changes underneath it. A single in-memory snapshot keeps
-			// length and body consistent (thumbnails are small).
-			data, err := os.ReadFile(localPath)
-			if err != nil {
-				logger.WithFields(logging.Fields{
-					"file_name":  upload.GetFileName(),
-					"local_path": localPath,
-					"error":      err,
-				}).Error("Failed to read thumbnail file")
-				failedUploads++
-				continue
-			}
-			if err := presignedClient.UploadBytesToPresignedURL(ctx, upload.GetPresignedUrl(), data, nil); err != nil {
-				logger.WithFields(logging.Fields{
-					"file_name":  upload.GetFileName(),
-					"local_path": localPath,
-					"s3_key":     upload.GetS3Key(),
-					"error":      err,
-				}).Error("Failed to upload thumbnail to S3")
-				failedUploads++
-				continue
-			}
-		}
-
-		uploadedKeys = append(uploadedKeys, upload.GetS3Key())
-		logger.WithFields(logging.Fields{
-			"file_name": upload.GetFileName(),
-			"s3_key":    upload.GetS3Key(),
-		}).Debug("Thumbnail uploaded to S3")
+	accepted := make([]bool, len(uploads))
+	var wg sync.WaitGroup
+	for i, upload := range uploads {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			accepted[i] = uploadThumbnailFile(logger, thumbnailKey, upload)
+		}()
 	}
+	wg.Wait()
 
-	if failedUploads > 0 || len(uploadedKeys) != len(uploads) {
+	uploadedKeys := make([]string, 0, len(uploads))
+	for i, ok := range accepted {
+		if ok {
+			uploadedKeys = append(uploadedKeys, uploads[i].GetS3Key())
+		}
+	}
+	if len(uploadedKeys) != len(uploads) {
 		logger.WithFields(logging.Fields{
+			"thumbnail_key":  thumbnailKey,
+			"attempt_id":     resp.GetAttemptId(),
 			"uploaded_count": len(uploadedKeys),
-			"failed_count":   failedUploads,
+			"failed_count":   len(uploads) - len(uploadedKeys),
 			"expected_count": len(uploads),
 		}).Warn("Thumbnail upload incomplete; not marking thumbnail ready")
 		return
@@ -4774,6 +4792,67 @@ func handleThumbnailUploadResponse(logger logging.Logger, resp *ipcpb.ThumbnailU
 		SentAt:  timestamppb.Now(),
 		Payload: &ipcpb.ControlMessage_ThumbnailUploaded{ThumbnailUploaded: uploaded},
 	})
+}
+
+// uploadThumbnailFile uploads one staged thumbnail file and reports whether object storage accepted it.
+func uploadThumbnailFile(logger logging.Logger, thumbnailKey string, upload *ipcpb.ThumbnailUploadResponse_PresignedUpload) bool {
+	log := logger.WithFields(logging.Fields{
+		"thumbnail_key": thumbnailKey,
+		"file_name":     upload.GetFileName(),
+		"s3_key":        upload.GetS3Key(),
+	})
+	localPath := upload.GetLocalPath()
+	if localPath == "" {
+		log.Warn("No local_path in thumbnail upload response")
+		return false
+	}
+	if upload.GetPresignedUrl() == "" {
+		log.Warn("No presigned URL in thumbnail upload response")
+		return false
+	}
+
+	// Read the whole file first: Mist can still be rewriting a thumbnail when THUMBNAIL_UPDATED fires, and a
+	// stat-then-stream upload dies with a ContentLength/body-length mismatch when the file changes underneath it.
+	// A single in-memory snapshot keeps length and body consistent (thumbnails are small) and makes every retry
+	// send the same bytes.
+	data, err := os.ReadFile(localPath)
+	if err != nil {
+		log.WithError(err).WithField("local_path", localPath).Error("Failed to read thumbnail file")
+		return false
+	}
+	if upload.GetFileName() == "sprite.vtt" {
+		data = []byte(normalizeThumbnailVTTReferences(string(data)))
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), thumbnailUploadFileDeadline)
+	defer cancel()
+	waitStarted := time.Now()
+	select {
+	case thumbnailUploadSlots <- struct{}{}:
+	case <-ctx.Done():
+		log.WithField("waited_ms", time.Since(waitStarted).Milliseconds()).
+			Warn("Thumbnail upload not started: no upload slot freed before the file deadline")
+		return false
+	}
+	defer func() { <-thumbnailUploadSlots }()
+
+	started := time.Now()
+	attemptTimeout := thumbnailAttemptTimeout(len(data))
+	if err := sharedThumbnailPresignedClient(logger).UploadBytesWithPolicy(ctx, upload.GetPresignedUrl(), data, storage.UploadAttemptPolicy{
+		MaxAttempts:    thumbnailUploadMaxAttempts,
+		AttemptTimeout: attemptTimeout,
+	}, nil); err != nil {
+		log.WithFields(logging.Fields{
+			"size":               len(data),
+			"attempt_timeout_ms": attemptTimeout.Milliseconds(),
+			"queued_ms":          started.Sub(waitStarted).Milliseconds(),
+			"elapsed_ms":         time.Since(started).Milliseconds(),
+			"error":              err,
+		}).Warn("Failed to upload thumbnail to S3")
+		return false
+	}
+	log.WithField("elapsed_ms", time.Since(started).Milliseconds()).Debug("Thumbnail uploaded to S3")
+	return true
 }
 
 func normalizeThumbnailVTTReferences(vtt string) string {

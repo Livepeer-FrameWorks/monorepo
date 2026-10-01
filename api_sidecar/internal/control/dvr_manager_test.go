@@ -238,12 +238,22 @@ segments/seg0.ts
 			TargetURI:  filepath.Join(outputDir, "segments", "$segmentCounter.ts") + "?m3u8=../" + dvrHash + ".m3u8",
 		}},
 	}
+	// Recovery starts the job's monitor goroutine. Its push and startup checks
+	// are pushed past the package run, and the job leaves the map at cleanup so
+	// the monitor stops instead of writing into the removed TempDir.
 	dm := &DVRManager{
-		logger:      logging.NewLogger(),
-		jobs:        make(map[string]*DVRJob),
-		storagePath: storagePath,
-		mistClient:  fakeMist,
+		logger:              logging.NewLogger(),
+		jobs:                make(map[string]*DVRJob),
+		storagePath:         storagePath,
+		mistClient:          fakeMist,
+		pushMonitorInterval: time.Hour,
+		startupTimeout:      time.Hour,
 	}
+	t.Cleanup(func() {
+		dm.mutex.Lock()
+		delete(dm.jobs, dvrHash)
+		dm.mutex.Unlock()
+	})
 
 	if err := dm.recoverActiveDVRJobsFromMist(storagePath, logging.NewLogger()); err != nil {
 		t.Fatalf("recoverActiveDVRJobsFromMist: %v", err)

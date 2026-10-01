@@ -199,7 +199,7 @@ func TestThumbnailPublication_RealPG(t *testing.T) {
 		// Now run the fenced projection with a working object store: it copies to the deterministic key AND flips
 		// has_thumbnails + records the authoritative serving cluster — only now.
 		mock := &mockS3Client{}
-		marked, mErr := projectAndMarkThumbnailFromToken(ctx, conn, mock, attempt, asset, tenant, "cluster-a", tok, files, logging.NewLoggerWithService("test"))
+		marked, mErr := projectAndMarkThumbnailFromToken(ctx, conn, mock, attempt, asset, tenant, "cluster-a", tok, files, nil, logging.NewLoggerWithService("test"))
 		if mErr != nil || !marked {
 			t.Fatalf("fenced projection must mark the winner: marked=%v err=%v", marked, mErr)
 		}

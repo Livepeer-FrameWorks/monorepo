@@ -1044,6 +1044,7 @@ message MistTrigger {
     // or Mist log text, so it is safe for the durable trigger WAL and analytics.
     PushTargetStatusReport restream_status = 45;
     ConnectionPlayTrigger connection_play = 46;
+    IngestAdmissionAbandoned ingest_admission_abandoned = 47;
   }
 
   optional string cluster_id = 33; // Emitting cluster identifier (source_cluster_id in envelope v2 terms)
@@ -2157,6 +2158,19 @@ message IngestRuntimeAbsent {
   StreamLifecycleUpdate lifecycle = 1;
   string ingest_generation = 2;
   int64 ingest_connector_pid = 3;
+}
+
+// A PUSH_REWRITE execution Helmsman forwarded to Foghorn and then answered to
+// Mist without an accept, because the admission's outcome never reached it in
+// time or could not be applied locally. Mist refuses the publisher on that
+// answer and never delivers the execution again, so Foghorn ends any session
+// the execution minted and refuses any later mint of it. Durable: Helmsman
+// keeps it in the trigger WAL until Foghorn acknowledges it.
+message IngestAdmissionAbandoned {
+  // Mist's X-Trigger-UUID of the PUSH_REWRITE execution, the admission's
+  // start_trigger_uuid.
+  string trigger_uuid = 1;
+  int64 connector_pid = 2;
 }
 
 // Raw active_streams observations, not an admission or first-media attestation.
