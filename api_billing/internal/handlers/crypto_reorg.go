@@ -181,6 +181,7 @@ func reverseCryptoPrepaidDepositTx(ctx context.Context, tx *sql.Tx, eventID, old
 	}
 	return queries.InsertReorgedCryptoTopupCreditNote(ctx, purserdb.InsertReorgedCryptoTopupCreditNoteParams{
 		EventID: eventID, TxHash: reversal.txHash.String, TenantID: reversal.tenantID,
+		SupplierSnapshot: DocumentSupplierSnapshot(),
 	})
 }
 
@@ -217,6 +218,7 @@ func reverseCryptoInvoiceDepositTx(ctx context.Context, tx *sql.Tx, eventID, old
 	if err := queries.InsertReorgedCryptoInvoiceCreditNote(ctx, purserdb.InsertReorgedCryptoInvoiceCreditNoteParams{
 		TenantID: reversal.tenantID, InvoiceID: reversal.invoiceID.String, EventID: eventID,
 		AmountCents: payment.AmountCents, Currency: payment.Currency, PaymentID: payment.ID, TxHash: reversal.txHash.String,
+		SupplierSnapshot: DocumentSupplierSnapshot(),
 	}); err != nil {
 		return err
 	}

@@ -11,7 +11,6 @@ import (
 	"strings"
 	"time"
 
-	"frameworks/api_billing/internal/appconfig"
 	"frameworks/api_billing/internal/database/purserdb"
 	"frameworks/api_billing/internal/handlers"
 
@@ -371,14 +370,9 @@ func prepaidStatementFields(periodStart, periodEnd sql.NullTime, statement handl
 	return append(fields, billingDocumentField{Label: "Amount due", Value: "EUR 0.00, nothing to pay"})
 }
 
-func supplierDocumentFields() (string, string, string, string) {
-	rt := appconfig.Runtime()
-	return rt.SupplierName, rt.SupplierAddress, rt.SupplierVATNumber, rt.SupplierRegistrationNumber
-}
-
 // missingDocumentSupplierFields names the SUPPLIER_* keys whose values a
-// document needs and lacks. Crypto documents carry the supplier identity they
-// were issued with, which takes the place of the configured one.
+// document needs and lacks. A document that recorded the supplier identity it
+// was issued with states that one instead of the configured one.
 func missingDocumentSupplierFields(base billingDocumentData) []string {
 	var missing []string
 	for _, field := range []struct{ key, value string }{
@@ -395,7 +389,10 @@ func missingDocumentSupplierFields(base billingDocumentData) []string {
 }
 
 // GetBillingDocument renders one tenant-owned document as a PDF. Rendering
-// only uses persisted financial evidence and the tenant's billing details.
+// only uses persisted financial evidence and the parties the document recorded
+// when it was issued. A document issued before it recorded them states the
+// tenant's current billing details, which its query falls back to, and the
+// configured supplier.
 func (s *PurserServer) GetBillingDocument(ctx context.Context, req *purserpb.GetBillingDocumentRequest) (*purserpb.GetBillingDocumentResponse, error) { //nolint:gocyclo,cyclop,funlen // Each document kind has a deliberately explicit tenant-scoped evidence query.
 	tenantID, err := resolveBillingDocumentTenant(ctx, req.GetTenantId())
 	if err != nil {
@@ -406,8 +403,8 @@ func (s *PurserServer) GetBillingDocument(ctx context.Context, req *purserpb.Get
 		return nil, status.Error(codes.InvalidArgument, "valid document_id required")
 	}
 	kind := strings.TrimSpace(req.GetKind())
-	supplierName, supplierAddress, supplierVAT, supplierRegistration := supplierDocumentFields()
-	base := billingDocumentData{SupplierName: supplierName, SupplierAddress: supplierAddress, SupplierVAT: supplierVAT, SupplierRegistration: supplierRegistration}
+	configured := handlers.ConfiguredDocumentSupplier()
+	base := billingDocumentData{SupplierName: configured.Name, SupplierAddress: configured.Address, SupplierVAT: configured.VATNumber, SupplierRegistration: configured.RegistrationNumber}
 	var row billingDocumentRow
 	row.id, row.kind = documentID, kind
 	queries := purserdb.New(s.db)
@@ -415,6 +412,13 @@ func (s *PurserServer) GetBillingDocument(ctx context.Context, req *purserpb.Get
 		base.Customer, base.CustomerCompany = strings.TrimSpace(name), strings.TrimSpace(company)
 		base.CustomerAddress = customerAddressLines(address)
 		base.CustomerVAT, base.CustomerEmail = strings.TrimSpace(vat), strings.TrimSpace(email)
+	}
+	// setRecordedSupplier states the supplier a document recorded at issue;
+	// without a record the configured supplier stays.
+	setRecordedSupplier := func(recorded bool, name, address, vat, registration string) {
+		if recorded {
+			base.SupplierName, base.SupplierAddress, base.SupplierVAT, base.SupplierRegistration = name, address, vat, registration
+		}
 	}
 	// setLines states the document's persisted line items.
 	var linesCents int64
@@ -436,6 +440,7 @@ func (s *PurserServer) GetBillingDocument(ctx context.Context, req *purserpb.Get
 		row.number, row.amountCents, row.currency, row.status = document.InvoiceNumber, document.AmountCents, document.Currency, document.Status
 		row.issuedAt, row.retentionUntil = document.IssuedAt.Time, document.RetentionUntil
 		setCustomer(document.CustomerName, document.CustomerCompany, document.CustomerAddress, document.CustomerVat, document.CustomerEmail)
+		setRecordedSupplier(document.HasSupplierSnapshot, document.SupplierName, document.SupplierAddress, document.SupplierVatNumber, document.SupplierRegistrationNumber)
 		base.Title = "Invoice"
 		base.Fields = append(base.Fields, billingPeriodField(document.PeriodStart, document.PeriodEnd)...)
 		base.Fields = append(base.Fields, billingDocumentField{Label: "Due", Value: document.DueDate.UTC().Format(time.DateOnly)})
@@ -466,6 +471,7 @@ func (s *PurserServer) GetBillingDocument(ctx context.Context, req *purserpb.Get
 		row.number, row.amountCents, row.currency, row.status = document.InvoiceNumber, 0, "EUR", document.Status
 		row.issuedAt, row.retentionUntil = document.IssuedAt.Time, document.RetentionUntil
 		setCustomer(document.CustomerName, document.CustomerCompany, document.CustomerAddress, document.CustomerVat, document.CustomerEmail)
+		setRecordedSupplier(document.HasSupplierSnapshot, document.SupplierName, document.SupplierAddress, document.SupplierVatNumber, document.SupplierRegistrationNumber)
 		base.Title = "Prepaid balance statement"
 		base.Fields = append(base.Fields, prepaidStatementFields(document.PeriodStart, document.PeriodEnd, details.Statement)...)
 		if err = setLines(); err != nil {
@@ -535,6 +541,7 @@ func (s *PurserServer) GetBillingDocument(ctx context.Context, req *purserpb.Get
 		row.number, row.amountCents, row.currency, row.status = document.DocumentNumber, document.AmountCents, document.Currency, document.Status
 		row.issuedAt, row.retentionUntil = document.IssuedAt.Time, document.RetentionUntil
 		setCustomer(document.CustomerName, document.CustomerCompany, document.CustomerAddress, document.CustomerVat, document.CustomerEmail)
+		setRecordedSupplier(document.HasSupplierSnapshot, document.SupplierName, document.SupplierAddress, document.SupplierVatNumber, document.SupplierRegistrationNumber)
 		base.Title = "Payment receipt"
 		base.Fields = append(base.Fields, billingDocumentField{Label: "Method", Value: document.Method})
 		if document.TxID.Valid {
@@ -548,6 +555,7 @@ func (s *PurserServer) GetBillingDocument(ctx context.Context, req *purserpb.Get
 		row.number, row.amountCents, row.currency, row.status = document.CreditNoteNumber, document.AmountCents, document.Currency, "issued"
 		row.issuedAt, row.retentionUntil = document.IssuedAt, document.RetentionUntil
 		setCustomer(document.CustomerName, document.CustomerCompany, document.CustomerAddress, document.CustomerVat, document.CustomerEmail)
+		setRecordedSupplier(document.HasSupplierSnapshot, document.SupplierName, document.SupplierAddress, document.SupplierVatNumber, document.SupplierRegistrationNumber)
 		base.Title = "Credit note"
 		base.Fields = append(base.Fields,
 			billingDocumentField{Label: "Original document", Value: document.SourceDocumentType + ":" + document.SourceDocumentID},

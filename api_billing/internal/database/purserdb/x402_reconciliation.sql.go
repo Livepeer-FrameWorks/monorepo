@@ -53,12 +53,14 @@ const insertX402ReversalCreditNote = `-- name: InsertX402ReversalCreditNote :exe
 INSERT INTO purser.credit_notes (
     credit_note_number, tenant_id, source_document_type, source_document_id,
     reversal_reference_type, reversal_reference_id, amount_cents, currency,
-    reason, evidence_json
+    reason, evidence_json, customer_snapshot, supplier_snapshot
 )
 SELECT 'CN-' || lpad(nextval('purser.credit_note_number_seq')::text, 10, '0'),
        document.tenant_id, document.source_type, document.id, 'x402_failed', $1,
        document.gross_amount_cents, document.currency, 'x402 settlement reversed after confirmation',
-       jsonb_build_object('transaction_hash', $2::text, 'original_invoice_number', document.invoice_number)
+       jsonb_build_object('transaction_hash', $2::text, 'original_invoice_number', document.invoice_number),
+       purser.billing_customer_snapshot(document.tenant_id),
+       NULLIF($3::text, '')::jsonb
 FROM (
     SELECT id, tenant_id, reference_type, reference_id, gross_amount_cents, currency,
            invoice_number, 'simplified_invoice'::text AS source_type
@@ -68,7 +70,7 @@ FROM (
            invoice_number, 'crypto_invoice'::text AS source_type
     FROM purser.crypto_invoices
 ) document
-WHERE document.tenant_id = $3::text::uuid
+WHERE document.tenant_id = $4::text::uuid
   AND document.reference_type = 'x402_payment'
   AND LOWER(document.reference_id) = LOWER($2)
 ON CONFLICT (source_document_type, source_document_id, reversal_reference_type, reversal_reference_id)
@@ -76,13 +78,19 @@ DO NOTHING
 `
 
 type InsertX402ReversalCreditNoteParams struct {
-	NonceID  string `db:"nonce_id" json:"nonce_id"`
-	TxHash   string `db:"tx_hash" json:"tx_hash"`
-	TenantID string `db:"tenant_id" json:"tenant_id"`
+	NonceID          string `db:"nonce_id" json:"nonce_id"`
+	TxHash           string `db:"tx_hash" json:"tx_hash"`
+	SupplierSnapshot string `db:"supplier_snapshot" json:"supplier_snapshot"`
+	TenantID         string `db:"tenant_id" json:"tenant_id"`
 }
 
 func (q *Queries) InsertX402ReversalCreditNote(ctx context.Context, arg InsertX402ReversalCreditNoteParams) error {
-	_, err := q.db.ExecContext(ctx, insertX402ReversalCreditNote, arg.NonceID, arg.TxHash, arg.TenantID)
+	_, err := q.db.ExecContext(ctx, insertX402ReversalCreditNote,
+		arg.NonceID,
+		arg.TxHash,
+		arg.SupplierSnapshot,
+		arg.TenantID,
+	)
 	return err
 }
 

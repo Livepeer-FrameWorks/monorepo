@@ -128,7 +128,8 @@ type Querier interface {
 	CountPhaseUsageReceivedBefore(ctx context.Context, arg CountPhaseUsageReceivedBeforeParams) (int64, error)
 	CountX402NonceUses(ctx context.Context, arg CountX402NonceUsesParams) (int64, error)
 	// A payment the operator received outside any provider (a bank transfer) and
-	// records against the invoice it pays.
+	// records against the invoice it pays. Its receipt is issued now, to the
+	// invoice's tenant as its billing details are now.
 	CreateConfirmedOperatorInvoicePayment(ctx context.Context, arg CreateConfirmedOperatorInvoicePaymentParams) error
 	CreateCryptoWallet(ctx context.Context, arg CreateCryptoWalletParams) error
 	CreatePendingInvoicePayment(ctx context.Context, arg CreatePendingInvoicePaymentParams) error
@@ -240,7 +241,10 @@ type Querier interface {
 	GetInitializedPrepaidAccount(ctx context.Context, arg GetInitializedPrepaidAccountParams) (GetInitializedPrepaidAccountRow, error)
 	GetInternalSubscriptionID(ctx context.Context, tenantID string) (string, error)
 	// An invoice is issued when it is finalized; created_at is when its draft was
-	// first written.
+	// first written. Like every document read here it states the customer and
+	// supplier recorded when it was issued. A document issued without that record
+	// states the tenant's current billing details, and has_supplier_snapshot false
+	// tells the caller to state the configured supplier.
 	GetInvoiceDocument(ctx context.Context, arg GetInvoiceDocumentParams) (GetInvoiceDocumentRow, error)
 	// amount and currency are the EUR invoice total; the presentment fields are
 	// the total charged in the tenant's presentment currency, empty until the
@@ -314,7 +318,8 @@ type Querier interface {
 	GetPrepaidDrainRate(ctx context.Context, tenantID string) (int64, error)
 	GetPrepaidStatement(ctx context.Context, arg GetPrepaidStatementParams) (GetPrepaidStatementRow, error)
 	// A statement is issued when it is finalized; a statement converted from a
-	// draft keeps the draft's created_at.
+	// draft keeps the draft's created_at. It states the parties recorded when it
+	// was finalized; a statement finalized without them states the current ones.
 	GetPrepaidStatementDocument(ctx context.Context, arg GetPrepaidStatementDocumentParams) (GetPrepaidStatementDocumentRow, error)
 	// Balance movements a statement states, read under the prepaid balance lock:
 	// everything posted since the period start and since its end, and the
@@ -688,6 +693,7 @@ type Querier interface {
 	SetClusterCheckoutIntentCustomer(ctx context.Context, arg SetClusterCheckoutIntentCustomerParams) error
 	SetClusterCheckoutIntentSessionOpen(ctx context.Context, arg SetClusterCheckoutIntentSessionOpenParams) error
 	SetCryptoWalletCreditedAmount(ctx context.Context, arg SetCryptoWalletCreditedAmountParams) (int64, error)
+	// Finalizing records the customer and supplier the invoice is issued to and by.
 	SetInvoicePresentment(ctx context.Context, arg SetInvoicePresentmentParams) (int64, error)
 	SetProviderBillingPaymentAttemptFailure(ctx context.Context, arg SetProviderBillingPaymentAttemptFailureParams) error
 	SetProviderIntentCustomer(ctx context.Context, arg SetProviderIntentCustomerParams) error
@@ -724,6 +730,8 @@ type Querier interface {
 	TouchPendingProviderSettlement(ctx context.Context, arg TouchPendingProviderSettlementParams) error
 	UpdateBillingCollectionBalance(ctx context.Context, arg UpdateBillingCollectionBalanceParams) (int64, error)
 	UpdateBillingPaymentAttemptProviderStatus(ctx context.Context, arg UpdateBillingPaymentAttemptProviderStatusParams) error
+	// A payment that becomes confirmed issues its receipt, which records the
+	// invoice's tenant and the supplier as they are at confirmation.
 	UpdateBillingPaymentProviderStatus(ctx context.Context, arg UpdateBillingPaymentProviderStatusParams) error
 	UpdateBillingTierStripeIDs(ctx context.Context, arg UpdateBillingTierStripeIDsParams) (int64, error)
 	UpdateBootstrapBillingTier(ctx context.Context, arg UpdateBootstrapBillingTierParams) (int64, error)

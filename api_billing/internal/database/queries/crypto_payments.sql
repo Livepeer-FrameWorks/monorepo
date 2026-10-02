@@ -101,7 +101,9 @@ WHERE id = sqlc.arg(wallet_id)::text::uuid AND tenant_id = sqlc.arg(tenant_id)::
 UPDATE purser.billing_payments payment
 SET tx_id = sqlc.arg(tx_hash), status = 'confirmed', confirmed_at = sqlc.arg(confirmed_at),
     updated_at = NOW(), actual_tx_amount = sqlc.arg(actual_tx_amount),
-    asset_type = sqlc.arg(asset_type), network = sqlc.arg(network), block_number = sqlc.arg(block_number)
+    asset_type = sqlc.arg(asset_type), network = sqlc.arg(network), block_number = sqlc.arg(block_number),
+    customer_snapshot = purser.billing_customer_snapshot(invoice.tenant_id),
+    supplier_snapshot = NULLIF(sqlc.arg(supplier_snapshot)::text, '')::jsonb
 FROM purser.billing_invoices invoice
 WHERE payment.invoice_id = sqlc.arg(invoice_id)::text::uuid
   AND payment.invoice_id = invoice.id

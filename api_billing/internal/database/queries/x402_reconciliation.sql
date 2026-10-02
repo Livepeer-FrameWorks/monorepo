@@ -91,12 +91,14 @@ WHERE id = sqlc.arg(id)::text::uuid;
 INSERT INTO purser.credit_notes (
     credit_note_number, tenant_id, source_document_type, source_document_id,
     reversal_reference_type, reversal_reference_id, amount_cents, currency,
-    reason, evidence_json
+    reason, evidence_json, customer_snapshot, supplier_snapshot
 )
 SELECT 'CN-' || lpad(nextval('purser.credit_note_number_seq')::text, 10, '0'),
        document.tenant_id, document.source_type, document.id, 'x402_failed', sqlc.arg(nonce_id),
        document.gross_amount_cents, document.currency, 'x402 settlement reversed after confirmation',
-       jsonb_build_object('transaction_hash', sqlc.arg(tx_hash)::text, 'original_invoice_number', document.invoice_number)
+       jsonb_build_object('transaction_hash', sqlc.arg(tx_hash)::text, 'original_invoice_number', document.invoice_number),
+       purser.billing_customer_snapshot(document.tenant_id),
+       NULLIF(sqlc.arg(supplier_snapshot)::text, '')::jsonb
 FROM (
     SELECT id, tenant_id, reference_type, reference_id, gross_amount_cents, currency,
            invoice_number, 'simplified_invoice'::text AS source_type

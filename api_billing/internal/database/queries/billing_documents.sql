@@ -47,7 +47,10 @@ LIMIT 1000;
 
 -- name: GetInvoiceDocument :one
 -- An invoice is issued when it is finalized; created_at is when its draft was
--- first written.
+-- first written. Like every document read here it states the customer and
+-- supplier recorded when it was issued. A document issued without that record
+-- states the tenant's current billing details, and has_supplier_snapshot false
+-- tells the caller to state the configured supplier.
 SELECT invoice.invoice_number,
        COALESCE(invoice.presentment_amount_cents, ROUND(invoice.amount * 100)::bigint)::bigint AS amount_cents,
        COALESCE(invoice.presentment_currency, invoice.currency)::text AS currency, invoice.status,
@@ -61,11 +64,16 @@ SELECT invoice.invoice_number,
        COALESCE(invoice.usage_details ? 'collection', false)::boolean AS collection_minimum_applied,
        COALESCE(invoice.presentment_units_per_eur::text, '')::text AS presentment_units_per_eur,
        invoice.presentment_reference_date,
-       COALESCE(subscription.billing_email, '')::text AS customer_email,
-       COALESCE(subscription.billing_name, '')::text AS customer_name,
-       COALESCE(subscription.billing_company, '')::text AS customer_company,
-       COALESCE(subscription.billing_address::text, '')::text AS customer_address,
-       COALESCE(subscription.tax_id, '')::text AS customer_vat
+       COALESCE(invoice.customer_snapshot->>'email', subscription.billing_email, '')::text AS customer_email,
+       COALESCE(invoice.customer_snapshot->>'name', subscription.billing_name, '')::text AS customer_name,
+       COALESCE(invoice.customer_snapshot->>'company', subscription.billing_company, '')::text AS customer_company,
+       COALESCE(invoice.customer_snapshot->>'address', subscription.billing_address::text, '')::text AS customer_address,
+       COALESCE(invoice.customer_snapshot->>'vat_number', subscription.tax_id, '')::text AS customer_vat,
+       (invoice.supplier_snapshot IS NOT NULL)::boolean AS has_supplier_snapshot,
+       COALESCE(invoice.supplier_snapshot->>'name', '')::text AS supplier_name,
+       COALESCE(invoice.supplier_snapshot->>'address', '')::text AS supplier_address,
+       COALESCE(invoice.supplier_snapshot->>'vat_number', '')::text AS supplier_vat_number,
+       COALESCE(invoice.supplier_snapshot->>'registration_number', '')::text AS supplier_registration_number
 FROM purser.billing_invoices invoice
 LEFT JOIN purser.tenant_subscriptions subscription ON subscription.tenant_id = invoice.tenant_id
 WHERE invoice.id = sqlc.arg(document_id)::text::uuid
@@ -79,11 +87,16 @@ SELECT ('PAY-' || UPPER(LEFT(REPLACE(payment.id::text, '-', ''), 12)))::text AS 
        COALESCE(payment.confirmed_at, payment.created_at, NOW()) AS issued_at, payment.retention_until,
        payment.method, payment.tx_id,
        payment.eur_amount_cents, payment.fx_units_per_eur::text AS fx_units_per_eur, payment.fx_reference_date,
-       COALESCE(subscription.billing_email, '')::text AS customer_email,
-       COALESCE(subscription.billing_name, '')::text AS customer_name,
-       COALESCE(subscription.billing_company, '')::text AS customer_company,
-       COALESCE(subscription.billing_address::text, '')::text AS customer_address,
-       COALESCE(subscription.tax_id, '')::text AS customer_vat
+       COALESCE(payment.customer_snapshot->>'email', subscription.billing_email, '')::text AS customer_email,
+       COALESCE(payment.customer_snapshot->>'name', subscription.billing_name, '')::text AS customer_name,
+       COALESCE(payment.customer_snapshot->>'company', subscription.billing_company, '')::text AS customer_company,
+       COALESCE(payment.customer_snapshot->>'address', subscription.billing_address::text, '')::text AS customer_address,
+       COALESCE(payment.customer_snapshot->>'vat_number', subscription.tax_id, '')::text AS customer_vat,
+       (payment.supplier_snapshot IS NOT NULL)::boolean AS has_supplier_snapshot,
+       COALESCE(payment.supplier_snapshot->>'name', '')::text AS supplier_name,
+       COALESCE(payment.supplier_snapshot->>'address', '')::text AS supplier_address,
+       COALESCE(payment.supplier_snapshot->>'vat_number', '')::text AS supplier_vat_number,
+       COALESCE(payment.supplier_snapshot->>'registration_number', '')::text AS supplier_registration_number
 FROM purser.billing_payments payment
 JOIN purser.billing_invoices invoice ON invoice.id = payment.invoice_id
 LEFT JOIN purser.tenant_subscriptions subscription ON subscription.tenant_id = invoice.tenant_id
@@ -95,11 +108,16 @@ WHERE payment.id = sqlc.arg(document_id)::text::uuid
 SELECT note.credit_note_number, note.amount_cents, note.currency, note.issued_at, note.retention_until,
        note.source_document_type, note.source_document_id::text AS source_document_id,
        note.reversal_reference_type, note.reversal_reference_id, note.reason,
-       COALESCE(subscription.billing_email, '')::text AS customer_email,
-       COALESCE(subscription.billing_name, '')::text AS customer_name,
-       COALESCE(subscription.billing_company, '')::text AS customer_company,
-       COALESCE(subscription.billing_address::text, '')::text AS customer_address,
-       COALESCE(subscription.tax_id, '')::text AS customer_vat
+       COALESCE(note.customer_snapshot->>'email', subscription.billing_email, '')::text AS customer_email,
+       COALESCE(note.customer_snapshot->>'name', subscription.billing_name, '')::text AS customer_name,
+       COALESCE(note.customer_snapshot->>'company', subscription.billing_company, '')::text AS customer_company,
+       COALESCE(note.customer_snapshot->>'address', subscription.billing_address::text, '')::text AS customer_address,
+       COALESCE(note.customer_snapshot->>'vat_number', subscription.tax_id, '')::text AS customer_vat,
+       (note.supplier_snapshot IS NOT NULL)::boolean AS has_supplier_snapshot,
+       COALESCE(note.supplier_snapshot->>'name', '')::text AS supplier_name,
+       COALESCE(note.supplier_snapshot->>'address', '')::text AS supplier_address,
+       COALESCE(note.supplier_snapshot->>'vat_number', '')::text AS supplier_vat_number,
+       COALESCE(note.supplier_snapshot->>'registration_number', '')::text AS supplier_registration_number
 FROM purser.credit_notes note
 LEFT JOIN purser.tenant_subscriptions subscription ON subscription.tenant_id = note.tenant_id
 WHERE note.id = sqlc.arg(document_id)::text::uuid
@@ -119,11 +137,11 @@ SELECT invoice.invoice_number, invoice.gross_amount_cents, invoice.currency,
        COALESCE(invoice.service_description, 'FrameWorks prepaid usage credit')::text AS service_description,
        COALESCE(invoice.service_quantity, 1)::integer AS service_quantity,
        COALESCE(invoice.service_date, invoice.issued_at::date) AS service_date,
-       COALESCE(subscription.billing_email, '')::text AS customer_email,
-       COALESCE(subscription.billing_name, '')::text AS customer_name,
-       COALESCE(subscription.billing_company, '')::text AS customer_company,
-       COALESCE(subscription.billing_address::text, '')::text AS customer_address,
-       COALESCE(subscription.tax_id, '')::text AS customer_vat
+       COALESCE(invoice.customer_snapshot->>'email', subscription.billing_email, '')::text AS customer_email,
+       COALESCE(invoice.customer_snapshot->>'name', subscription.billing_name, '')::text AS customer_name,
+       COALESCE(invoice.customer_snapshot->>'company', subscription.billing_company, '')::text AS customer_company,
+       COALESCE(invoice.customer_snapshot->>'address', subscription.billing_address::text, '')::text AS customer_address,
+       COALESCE(invoice.customer_snapshot->>'vat_number', subscription.tax_id, '')::text AS customer_vat
 FROM purser.simplified_invoices invoice
 LEFT JOIN purser.tenant_subscriptions subscription ON subscription.tenant_id = invoice.tenant_id
 WHERE invoice.id = sqlc.arg(document_id)::text::uuid

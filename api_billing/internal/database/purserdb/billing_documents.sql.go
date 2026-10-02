@@ -15,11 +15,16 @@ const getCreditNoteDocument = `-- name: GetCreditNoteDocument :one
 SELECT note.credit_note_number, note.amount_cents, note.currency, note.issued_at, note.retention_until,
        note.source_document_type, note.source_document_id::text AS source_document_id,
        note.reversal_reference_type, note.reversal_reference_id, note.reason,
-       COALESCE(subscription.billing_email, '')::text AS customer_email,
-       COALESCE(subscription.billing_name, '')::text AS customer_name,
-       COALESCE(subscription.billing_company, '')::text AS customer_company,
-       COALESCE(subscription.billing_address::text, '')::text AS customer_address,
-       COALESCE(subscription.tax_id, '')::text AS customer_vat
+       COALESCE(note.customer_snapshot->>'email', subscription.billing_email, '')::text AS customer_email,
+       COALESCE(note.customer_snapshot->>'name', subscription.billing_name, '')::text AS customer_name,
+       COALESCE(note.customer_snapshot->>'company', subscription.billing_company, '')::text AS customer_company,
+       COALESCE(note.customer_snapshot->>'address', subscription.billing_address::text, '')::text AS customer_address,
+       COALESCE(note.customer_snapshot->>'vat_number', subscription.tax_id, '')::text AS customer_vat,
+       (note.supplier_snapshot IS NOT NULL)::boolean AS has_supplier_snapshot,
+       COALESCE(note.supplier_snapshot->>'name', '')::text AS supplier_name,
+       COALESCE(note.supplier_snapshot->>'address', '')::text AS supplier_address,
+       COALESCE(note.supplier_snapshot->>'vat_number', '')::text AS supplier_vat_number,
+       COALESCE(note.supplier_snapshot->>'registration_number', '')::text AS supplier_registration_number
 FROM purser.credit_notes note
 LEFT JOIN purser.tenant_subscriptions subscription ON subscription.tenant_id = note.tenant_id
 WHERE note.id = $1::text::uuid
@@ -32,21 +37,26 @@ type GetCreditNoteDocumentParams struct {
 }
 
 type GetCreditNoteDocumentRow struct {
-	CreditNoteNumber      string    `db:"credit_note_number" json:"credit_note_number"`
-	AmountCents           int64     `db:"amount_cents" json:"amount_cents"`
-	Currency              string    `db:"currency" json:"currency"`
-	IssuedAt              time.Time `db:"issued_at" json:"issued_at"`
-	RetentionUntil        time.Time `db:"retention_until" json:"retention_until"`
-	SourceDocumentType    string    `db:"source_document_type" json:"source_document_type"`
-	SourceDocumentID      string    `db:"source_document_id" json:"source_document_id"`
-	ReversalReferenceType string    `db:"reversal_reference_type" json:"reversal_reference_type"`
-	ReversalReferenceID   string    `db:"reversal_reference_id" json:"reversal_reference_id"`
-	Reason                string    `db:"reason" json:"reason"`
-	CustomerEmail         string    `db:"customer_email" json:"customer_email"`
-	CustomerName          string    `db:"customer_name" json:"customer_name"`
-	CustomerCompany       string    `db:"customer_company" json:"customer_company"`
-	CustomerAddress       string    `db:"customer_address" json:"customer_address"`
-	CustomerVat           string    `db:"customer_vat" json:"customer_vat"`
+	CreditNoteNumber           string    `db:"credit_note_number" json:"credit_note_number"`
+	AmountCents                int64     `db:"amount_cents" json:"amount_cents"`
+	Currency                   string    `db:"currency" json:"currency"`
+	IssuedAt                   time.Time `db:"issued_at" json:"issued_at"`
+	RetentionUntil             time.Time `db:"retention_until" json:"retention_until"`
+	SourceDocumentType         string    `db:"source_document_type" json:"source_document_type"`
+	SourceDocumentID           string    `db:"source_document_id" json:"source_document_id"`
+	ReversalReferenceType      string    `db:"reversal_reference_type" json:"reversal_reference_type"`
+	ReversalReferenceID        string    `db:"reversal_reference_id" json:"reversal_reference_id"`
+	Reason                     string    `db:"reason" json:"reason"`
+	CustomerEmail              string    `db:"customer_email" json:"customer_email"`
+	CustomerName               string    `db:"customer_name" json:"customer_name"`
+	CustomerCompany            string    `db:"customer_company" json:"customer_company"`
+	CustomerAddress            string    `db:"customer_address" json:"customer_address"`
+	CustomerVat                string    `db:"customer_vat" json:"customer_vat"`
+	HasSupplierSnapshot        bool      `db:"has_supplier_snapshot" json:"has_supplier_snapshot"`
+	SupplierName               string    `db:"supplier_name" json:"supplier_name"`
+	SupplierAddress            string    `db:"supplier_address" json:"supplier_address"`
+	SupplierVatNumber          string    `db:"supplier_vat_number" json:"supplier_vat_number"`
+	SupplierRegistrationNumber string    `db:"supplier_registration_number" json:"supplier_registration_number"`
 }
 
 func (q *Queries) GetCreditNoteDocument(ctx context.Context, arg GetCreditNoteDocumentParams) (GetCreditNoteDocumentRow, error) {
@@ -68,6 +78,11 @@ func (q *Queries) GetCreditNoteDocument(ctx context.Context, arg GetCreditNoteDo
 		&i.CustomerCompany,
 		&i.CustomerAddress,
 		&i.CustomerVat,
+		&i.HasSupplierSnapshot,
+		&i.SupplierName,
+		&i.SupplierAddress,
+		&i.SupplierVatNumber,
+		&i.SupplierRegistrationNumber,
 	)
 	return i, err
 }
@@ -176,11 +191,16 @@ SELECT invoice.invoice_number,
        COALESCE(invoice.usage_details ? 'collection', false)::boolean AS collection_minimum_applied,
        COALESCE(invoice.presentment_units_per_eur::text, '')::text AS presentment_units_per_eur,
        invoice.presentment_reference_date,
-       COALESCE(subscription.billing_email, '')::text AS customer_email,
-       COALESCE(subscription.billing_name, '')::text AS customer_name,
-       COALESCE(subscription.billing_company, '')::text AS customer_company,
-       COALESCE(subscription.billing_address::text, '')::text AS customer_address,
-       COALESCE(subscription.tax_id, '')::text AS customer_vat
+       COALESCE(invoice.customer_snapshot->>'email', subscription.billing_email, '')::text AS customer_email,
+       COALESCE(invoice.customer_snapshot->>'name', subscription.billing_name, '')::text AS customer_name,
+       COALESCE(invoice.customer_snapshot->>'company', subscription.billing_company, '')::text AS customer_company,
+       COALESCE(invoice.customer_snapshot->>'address', subscription.billing_address::text, '')::text AS customer_address,
+       COALESCE(invoice.customer_snapshot->>'vat_number', subscription.tax_id, '')::text AS customer_vat,
+       (invoice.supplier_snapshot IS NOT NULL)::boolean AS has_supplier_snapshot,
+       COALESCE(invoice.supplier_snapshot->>'name', '')::text AS supplier_name,
+       COALESCE(invoice.supplier_snapshot->>'address', '')::text AS supplier_address,
+       COALESCE(invoice.supplier_snapshot->>'vat_number', '')::text AS supplier_vat_number,
+       COALESCE(invoice.supplier_snapshot->>'registration_number', '')::text AS supplier_registration_number
 FROM purser.billing_invoices invoice
 LEFT JOIN purser.tenant_subscriptions subscription ON subscription.tenant_id = invoice.tenant_id
 WHERE invoice.id = $1::text::uuid
@@ -195,31 +215,39 @@ type GetInvoiceDocumentParams struct {
 }
 
 type GetInvoiceDocumentRow struct {
-	InvoiceNumber            string       `db:"invoice_number" json:"invoice_number"`
-	AmountCents              int64        `db:"amount_cents" json:"amount_cents"`
-	Currency                 string       `db:"currency" json:"currency"`
-	Status                   string       `db:"status" json:"status"`
-	IssuedAt                 sql.NullTime `db:"issued_at" json:"issued_at"`
-	RetentionUntil           time.Time    `db:"retention_until" json:"retention_until"`
-	PeriodStart              sql.NullTime `db:"period_start" json:"period_start"`
-	PeriodEnd                sql.NullTime `db:"period_end" json:"period_end"`
-	DueDate                  time.Time    `db:"due_date" json:"due_date"`
-	EurAmountCents           int64        `db:"eur_amount_cents" json:"eur_amount_cents"`
-	BaseAmountCents          int64        `db:"base_amount_cents" json:"base_amount_cents"`
-	MeteredAmountCents       int64        `db:"metered_amount_cents" json:"metered_amount_cents"`
-	PrepaidCreditCents       int64        `db:"prepaid_credit_cents" json:"prepaid_credit_cents"`
-	CollectionMinimumApplied bool         `db:"collection_minimum_applied" json:"collection_minimum_applied"`
-	PresentmentUnitsPerEur   string       `db:"presentment_units_per_eur" json:"presentment_units_per_eur"`
-	PresentmentReferenceDate sql.NullTime `db:"presentment_reference_date" json:"presentment_reference_date"`
-	CustomerEmail            string       `db:"customer_email" json:"customer_email"`
-	CustomerName             string       `db:"customer_name" json:"customer_name"`
-	CustomerCompany          string       `db:"customer_company" json:"customer_company"`
-	CustomerAddress          string       `db:"customer_address" json:"customer_address"`
-	CustomerVat              string       `db:"customer_vat" json:"customer_vat"`
+	InvoiceNumber              string       `db:"invoice_number" json:"invoice_number"`
+	AmountCents                int64        `db:"amount_cents" json:"amount_cents"`
+	Currency                   string       `db:"currency" json:"currency"`
+	Status                     string       `db:"status" json:"status"`
+	IssuedAt                   sql.NullTime `db:"issued_at" json:"issued_at"`
+	RetentionUntil             time.Time    `db:"retention_until" json:"retention_until"`
+	PeriodStart                sql.NullTime `db:"period_start" json:"period_start"`
+	PeriodEnd                  sql.NullTime `db:"period_end" json:"period_end"`
+	DueDate                    time.Time    `db:"due_date" json:"due_date"`
+	EurAmountCents             int64        `db:"eur_amount_cents" json:"eur_amount_cents"`
+	BaseAmountCents            int64        `db:"base_amount_cents" json:"base_amount_cents"`
+	MeteredAmountCents         int64        `db:"metered_amount_cents" json:"metered_amount_cents"`
+	PrepaidCreditCents         int64        `db:"prepaid_credit_cents" json:"prepaid_credit_cents"`
+	CollectionMinimumApplied   bool         `db:"collection_minimum_applied" json:"collection_minimum_applied"`
+	PresentmentUnitsPerEur     string       `db:"presentment_units_per_eur" json:"presentment_units_per_eur"`
+	PresentmentReferenceDate   sql.NullTime `db:"presentment_reference_date" json:"presentment_reference_date"`
+	CustomerEmail              string       `db:"customer_email" json:"customer_email"`
+	CustomerName               string       `db:"customer_name" json:"customer_name"`
+	CustomerCompany            string       `db:"customer_company" json:"customer_company"`
+	CustomerAddress            string       `db:"customer_address" json:"customer_address"`
+	CustomerVat                string       `db:"customer_vat" json:"customer_vat"`
+	HasSupplierSnapshot        bool         `db:"has_supplier_snapshot" json:"has_supplier_snapshot"`
+	SupplierName               string       `db:"supplier_name" json:"supplier_name"`
+	SupplierAddress            string       `db:"supplier_address" json:"supplier_address"`
+	SupplierVatNumber          string       `db:"supplier_vat_number" json:"supplier_vat_number"`
+	SupplierRegistrationNumber string       `db:"supplier_registration_number" json:"supplier_registration_number"`
 }
 
 // An invoice is issued when it is finalized; created_at is when its draft was
-// first written.
+// first written. Like every document read here it states the customer and
+// supplier recorded when it was issued. A document issued without that record
+// states the tenant's current billing details, and has_supplier_snapshot false
+// tells the caller to state the configured supplier.
 func (q *Queries) GetInvoiceDocument(ctx context.Context, arg GetInvoiceDocumentParams) (GetInvoiceDocumentRow, error) {
 	row := q.db.QueryRowContext(ctx, getInvoiceDocument, arg.DocumentID, arg.TenantID)
 	var i GetInvoiceDocumentRow
@@ -245,6 +273,11 @@ func (q *Queries) GetInvoiceDocument(ctx context.Context, arg GetInvoiceDocument
 		&i.CustomerCompany,
 		&i.CustomerAddress,
 		&i.CustomerVat,
+		&i.HasSupplierSnapshot,
+		&i.SupplierName,
+		&i.SupplierAddress,
+		&i.SupplierVatNumber,
+		&i.SupplierRegistrationNumber,
 	)
 	return i, err
 }
@@ -255,11 +288,16 @@ SELECT ('PAY-' || UPPER(LEFT(REPLACE(payment.id::text, '-', ''), 12)))::text AS 
        COALESCE(payment.confirmed_at, payment.created_at, NOW()) AS issued_at, payment.retention_until,
        payment.method, payment.tx_id,
        payment.eur_amount_cents, payment.fx_units_per_eur::text AS fx_units_per_eur, payment.fx_reference_date,
-       COALESCE(subscription.billing_email, '')::text AS customer_email,
-       COALESCE(subscription.billing_name, '')::text AS customer_name,
-       COALESCE(subscription.billing_company, '')::text AS customer_company,
-       COALESCE(subscription.billing_address::text, '')::text AS customer_address,
-       COALESCE(subscription.tax_id, '')::text AS customer_vat
+       COALESCE(payment.customer_snapshot->>'email', subscription.billing_email, '')::text AS customer_email,
+       COALESCE(payment.customer_snapshot->>'name', subscription.billing_name, '')::text AS customer_name,
+       COALESCE(payment.customer_snapshot->>'company', subscription.billing_company, '')::text AS customer_company,
+       COALESCE(payment.customer_snapshot->>'address', subscription.billing_address::text, '')::text AS customer_address,
+       COALESCE(payment.customer_snapshot->>'vat_number', subscription.tax_id, '')::text AS customer_vat,
+       (payment.supplier_snapshot IS NOT NULL)::boolean AS has_supplier_snapshot,
+       COALESCE(payment.supplier_snapshot->>'name', '')::text AS supplier_name,
+       COALESCE(payment.supplier_snapshot->>'address', '')::text AS supplier_address,
+       COALESCE(payment.supplier_snapshot->>'vat_number', '')::text AS supplier_vat_number,
+       COALESCE(payment.supplier_snapshot->>'registration_number', '')::text AS supplier_registration_number
 FROM purser.billing_payments payment
 JOIN purser.billing_invoices invoice ON invoice.id = payment.invoice_id
 LEFT JOIN purser.tenant_subscriptions subscription ON subscription.tenant_id = invoice.tenant_id
@@ -274,22 +312,27 @@ type GetPaymentReceiptDocumentParams struct {
 }
 
 type GetPaymentReceiptDocumentRow struct {
-	DocumentNumber  string         `db:"document_number" json:"document_number"`
-	AmountCents     int64          `db:"amount_cents" json:"amount_cents"`
-	Currency        string         `db:"currency" json:"currency"`
-	Status          string         `db:"status" json:"status"`
-	IssuedAt        sql.NullTime   `db:"issued_at" json:"issued_at"`
-	RetentionUntil  time.Time      `db:"retention_until" json:"retention_until"`
-	Method          string         `db:"method" json:"method"`
-	TxID            sql.NullString `db:"tx_id" json:"tx_id"`
-	EurAmountCents  int64          `db:"eur_amount_cents" json:"eur_amount_cents"`
-	FxUnitsPerEur   string         `db:"fx_units_per_eur" json:"fx_units_per_eur"`
-	FxReferenceDate time.Time      `db:"fx_reference_date" json:"fx_reference_date"`
-	CustomerEmail   string         `db:"customer_email" json:"customer_email"`
-	CustomerName    string         `db:"customer_name" json:"customer_name"`
-	CustomerCompany string         `db:"customer_company" json:"customer_company"`
-	CustomerAddress string         `db:"customer_address" json:"customer_address"`
-	CustomerVat     string         `db:"customer_vat" json:"customer_vat"`
+	DocumentNumber             string         `db:"document_number" json:"document_number"`
+	AmountCents                int64          `db:"amount_cents" json:"amount_cents"`
+	Currency                   string         `db:"currency" json:"currency"`
+	Status                     string         `db:"status" json:"status"`
+	IssuedAt                   sql.NullTime   `db:"issued_at" json:"issued_at"`
+	RetentionUntil             time.Time      `db:"retention_until" json:"retention_until"`
+	Method                     string         `db:"method" json:"method"`
+	TxID                       sql.NullString `db:"tx_id" json:"tx_id"`
+	EurAmountCents             int64          `db:"eur_amount_cents" json:"eur_amount_cents"`
+	FxUnitsPerEur              string         `db:"fx_units_per_eur" json:"fx_units_per_eur"`
+	FxReferenceDate            time.Time      `db:"fx_reference_date" json:"fx_reference_date"`
+	CustomerEmail              string         `db:"customer_email" json:"customer_email"`
+	CustomerName               string         `db:"customer_name" json:"customer_name"`
+	CustomerCompany            string         `db:"customer_company" json:"customer_company"`
+	CustomerAddress            string         `db:"customer_address" json:"customer_address"`
+	CustomerVat                string         `db:"customer_vat" json:"customer_vat"`
+	HasSupplierSnapshot        bool           `db:"has_supplier_snapshot" json:"has_supplier_snapshot"`
+	SupplierName               string         `db:"supplier_name" json:"supplier_name"`
+	SupplierAddress            string         `db:"supplier_address" json:"supplier_address"`
+	SupplierVatNumber          string         `db:"supplier_vat_number" json:"supplier_vat_number"`
+	SupplierRegistrationNumber string         `db:"supplier_registration_number" json:"supplier_registration_number"`
 }
 
 func (q *Queries) GetPaymentReceiptDocument(ctx context.Context, arg GetPaymentReceiptDocumentParams) (GetPaymentReceiptDocumentRow, error) {
@@ -312,6 +355,11 @@ func (q *Queries) GetPaymentReceiptDocument(ctx context.Context, arg GetPaymentR
 		&i.CustomerCompany,
 		&i.CustomerAddress,
 		&i.CustomerVat,
+		&i.HasSupplierSnapshot,
+		&i.SupplierName,
+		&i.SupplierAddress,
+		&i.SupplierVatNumber,
+		&i.SupplierRegistrationNumber,
 	)
 	return i, err
 }
@@ -330,11 +378,11 @@ SELECT invoice.invoice_number, invoice.gross_amount_cents, invoice.currency,
        COALESCE(invoice.service_description, 'FrameWorks prepaid usage credit')::text AS service_description,
        COALESCE(invoice.service_quantity, 1)::integer AS service_quantity,
        COALESCE(invoice.service_date, invoice.issued_at::date) AS service_date,
-       COALESCE(subscription.billing_email, '')::text AS customer_email,
-       COALESCE(subscription.billing_name, '')::text AS customer_name,
-       COALESCE(subscription.billing_company, '')::text AS customer_company,
-       COALESCE(subscription.billing_address::text, '')::text AS customer_address,
-       COALESCE(subscription.tax_id, '')::text AS customer_vat
+       COALESCE(invoice.customer_snapshot->>'email', subscription.billing_email, '')::text AS customer_email,
+       COALESCE(invoice.customer_snapshot->>'name', subscription.billing_name, '')::text AS customer_name,
+       COALESCE(invoice.customer_snapshot->>'company', subscription.billing_company, '')::text AS customer_company,
+       COALESCE(invoice.customer_snapshot->>'address', subscription.billing_address::text, '')::text AS customer_address,
+       COALESCE(invoice.customer_snapshot->>'vat_number', subscription.tax_id, '')::text AS customer_vat
 FROM purser.simplified_invoices invoice
 LEFT JOIN purser.tenant_subscriptions subscription ON subscription.tenant_id = invoice.tenant_id
 WHERE invoice.id = $1::text::uuid

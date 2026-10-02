@@ -213,9 +213,11 @@ SET invoice_number = 'STM-' || LPAD(nextval('purser.billing_invoice_number_seq')
     presentment_units_per_eur = 1,
     presentment_reference_date = $1::date,
     finalized_at = $1::timestamptz,
+    customer_snapshot = purser.billing_customer_snapshot(tenant_id),
+    supplier_snapshot = NULLIF($8::text, '')::jsonb,
     updated_at = NOW()
-WHERE id = $8::text::uuid
-  AND tenant_id = $9::text::uuid
+WHERE id = $9::text::uuid
+  AND tenant_id = $10::text::uuid
   AND status IN ('draft', 'manual_review')
 RETURNING id::text AS id, invoice_number
 `
@@ -228,6 +230,7 @@ type ConvertDraftToPrepaidStatementParams struct {
 	UsageDetails       json.RawMessage `db:"usage_details" json:"usage_details"`
 	PeriodStart        time.Time       `db:"period_start" json:"period_start"`
 	PeriodEnd          time.Time       `db:"period_end" json:"period_end"`
+	SupplierSnapshot   string          `db:"supplier_snapshot" json:"supplier_snapshot"`
 	InvoiceID          string          `db:"invoice_id" json:"invoice_id"`
 	TenantID           string          `db:"tenant_id" json:"tenant_id"`
 }
@@ -248,6 +251,7 @@ func (q *Queries) ConvertDraftToPrepaidStatement(ctx context.Context, arg Conver
 		arg.UsageDetails,
 		arg.PeriodStart,
 		arg.PeriodEnd,
+		arg.SupplierSnapshot,
 		arg.InvoiceID,
 		arg.TenantID,
 	)
@@ -403,11 +407,16 @@ SELECT invoice.invoice_number, invoice.status,
        COALESCE(invoice.finalized_at, invoice.created_at, NOW()) AS issued_at, invoice.retention_until,
        invoice.period_start, invoice.period_end,
        invoice.usage_details,
-       COALESCE(subscription.billing_email, '')::text AS customer_email,
-       COALESCE(subscription.billing_name, '')::text AS customer_name,
-       COALESCE(subscription.billing_company, '')::text AS customer_company,
-       COALESCE(subscription.billing_address::text, '')::text AS customer_address,
-       COALESCE(subscription.tax_id, '')::text AS customer_vat
+       COALESCE(invoice.customer_snapshot->>'email', subscription.billing_email, '')::text AS customer_email,
+       COALESCE(invoice.customer_snapshot->>'name', subscription.billing_name, '')::text AS customer_name,
+       COALESCE(invoice.customer_snapshot->>'company', subscription.billing_company, '')::text AS customer_company,
+       COALESCE(invoice.customer_snapshot->>'address', subscription.billing_address::text, '')::text AS customer_address,
+       COALESCE(invoice.customer_snapshot->>'vat_number', subscription.tax_id, '')::text AS customer_vat,
+       (invoice.supplier_snapshot IS NOT NULL)::boolean AS has_supplier_snapshot,
+       COALESCE(invoice.supplier_snapshot->>'name', '')::text AS supplier_name,
+       COALESCE(invoice.supplier_snapshot->>'address', '')::text AS supplier_address,
+       COALESCE(invoice.supplier_snapshot->>'vat_number', '')::text AS supplier_vat_number,
+       COALESCE(invoice.supplier_snapshot->>'registration_number', '')::text AS supplier_registration_number
 FROM purser.billing_invoices invoice
 LEFT JOIN purser.tenant_subscriptions subscription ON subscription.tenant_id = invoice.tenant_id
 WHERE invoice.id = $1::text::uuid
@@ -421,22 +430,28 @@ type GetPrepaidStatementDocumentParams struct {
 }
 
 type GetPrepaidStatementDocumentRow struct {
-	InvoiceNumber   string          `db:"invoice_number" json:"invoice_number"`
-	Status          string          `db:"status" json:"status"`
-	IssuedAt        sql.NullTime    `db:"issued_at" json:"issued_at"`
-	RetentionUntil  time.Time       `db:"retention_until" json:"retention_until"`
-	PeriodStart     sql.NullTime    `db:"period_start" json:"period_start"`
-	PeriodEnd       sql.NullTime    `db:"period_end" json:"period_end"`
-	UsageDetails    json.RawMessage `db:"usage_details" json:"usage_details"`
-	CustomerEmail   string          `db:"customer_email" json:"customer_email"`
-	CustomerName    string          `db:"customer_name" json:"customer_name"`
-	CustomerCompany string          `db:"customer_company" json:"customer_company"`
-	CustomerAddress string          `db:"customer_address" json:"customer_address"`
-	CustomerVat     string          `db:"customer_vat" json:"customer_vat"`
+	InvoiceNumber              string          `db:"invoice_number" json:"invoice_number"`
+	Status                     string          `db:"status" json:"status"`
+	IssuedAt                   sql.NullTime    `db:"issued_at" json:"issued_at"`
+	RetentionUntil             time.Time       `db:"retention_until" json:"retention_until"`
+	PeriodStart                sql.NullTime    `db:"period_start" json:"period_start"`
+	PeriodEnd                  sql.NullTime    `db:"period_end" json:"period_end"`
+	UsageDetails               json.RawMessage `db:"usage_details" json:"usage_details"`
+	CustomerEmail              string          `db:"customer_email" json:"customer_email"`
+	CustomerName               string          `db:"customer_name" json:"customer_name"`
+	CustomerCompany            string          `db:"customer_company" json:"customer_company"`
+	CustomerAddress            string          `db:"customer_address" json:"customer_address"`
+	CustomerVat                string          `db:"customer_vat" json:"customer_vat"`
+	HasSupplierSnapshot        bool            `db:"has_supplier_snapshot" json:"has_supplier_snapshot"`
+	SupplierName               string          `db:"supplier_name" json:"supplier_name"`
+	SupplierAddress            string          `db:"supplier_address" json:"supplier_address"`
+	SupplierVatNumber          string          `db:"supplier_vat_number" json:"supplier_vat_number"`
+	SupplierRegistrationNumber string          `db:"supplier_registration_number" json:"supplier_registration_number"`
 }
 
 // A statement is issued when it is finalized; a statement converted from a
-// draft keeps the draft's created_at.
+// draft keeps the draft's created_at. It states the parties recorded when it
+// was finalized; a statement finalized without them states the current ones.
 func (q *Queries) GetPrepaidStatementDocument(ctx context.Context, arg GetPrepaidStatementDocumentParams) (GetPrepaidStatementDocumentRow, error) {
 	row := q.db.QueryRowContext(ctx, getPrepaidStatementDocument, arg.DocumentID, arg.TenantID)
 	var i GetPrepaidStatementDocumentRow
@@ -453,6 +468,11 @@ func (q *Queries) GetPrepaidStatementDocument(ctx context.Context, arg GetPrepai
 		&i.CustomerCompany,
 		&i.CustomerAddress,
 		&i.CustomerVat,
+		&i.HasSupplierSnapshot,
+		&i.SupplierName,
+		&i.SupplierAddress,
+		&i.SupplierVatNumber,
+		&i.SupplierRegistrationNumber,
 	)
 	return i, err
 }
@@ -698,7 +718,7 @@ INSERT INTO purser.billing_invoices (
     base_amount, metered_amount, gross_metered_amount, prepaid_credit_applied,
     usage_details, period_start, period_end,
     presentment_amount_cents, presentment_currency, presentment_units_per_eur,
-    presentment_reference_date, finalized_at, created_at, updated_at
+    presentment_reference_date, finalized_at, customer_snapshot, supplier_snapshot, created_at, updated_at
 ) VALUES (
     $1::text::uuid,
     'STM-' || LPAD(nextval('purser.billing_invoice_number_seq')::text, 10, '0'),
@@ -707,7 +727,9 @@ INSERT INTO purser.billing_invoices (
     $3::text::numeric, $4::text::numeric,
     $5::text::numeric, 0,
     $6::jsonb, $7::timestamptz, $8::timestamptz,
-    0, 'EUR', 1, $2::date, $2::timestamptz, NOW(), NOW()
+    0, 'EUR', 1, $2::date, $2::timestamptz,
+    purser.billing_customer_snapshot($1::text::uuid),
+    NULLIF($9::text, '')::jsonb, NOW(), NOW()
 )
 ON CONFLICT (tenant_id, period_start) WHERE period_start IS NOT NULL
 DO NOTHING
@@ -723,6 +745,7 @@ type InsertPrepaidStatementParams struct {
 	UsageDetails       json.RawMessage `db:"usage_details" json:"usage_details"`
 	PeriodStart        time.Time       `db:"period_start" json:"period_start"`
 	PeriodEnd          time.Time       `db:"period_end" json:"period_end"`
+	SupplierSnapshot   string          `db:"supplier_snapshot" json:"supplier_snapshot"`
 }
 
 type InsertPrepaidStatementRow struct {
@@ -742,6 +765,7 @@ func (q *Queries) InsertPrepaidStatement(ctx context.Context, arg InsertPrepaidS
 		arg.UsageDetails,
 		arg.PeriodStart,
 		arg.PeriodEnd,
+		arg.SupplierSnapshot,
 	)
 	var i InsertPrepaidStatementRow
 	err := row.Scan(&i.ID, &i.InvoiceNumber)

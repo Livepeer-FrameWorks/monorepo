@@ -7,12 +7,15 @@ FROM purser.tenant_subscriptions
 WHERE tenant_id = sqlc.arg(tenant_id)::text::uuid;
 
 -- name: SetInvoicePresentment :execrows
+-- Finalizing records the customer and supplier the invoice is issued to and by.
 UPDATE purser.billing_invoices
 SET presentment_amount_cents = sqlc.arg(presentment_amount_cents)::bigint,
     presentment_currency = sqlc.arg(presentment_currency)::text,
     presentment_units_per_eur = sqlc.arg(presentment_units_per_eur)::text::numeric,
     presentment_reference_date = sqlc.arg(presentment_reference_date)::date,
     finalized_at = sqlc.arg(finalized_at)::timestamptz,
+    customer_snapshot = purser.billing_customer_snapshot(tenant_id),
+    supplier_snapshot = NULLIF(sqlc.arg(supplier_snapshot)::text, '')::jsonb,
     updated_at = NOW()
 WHERE id = sqlc.arg(invoice_id)::text::uuid
   AND tenant_id = sqlc.arg(tenant_id)::text::uuid
@@ -95,7 +98,7 @@ INSERT INTO purser.billing_invoices (
     base_amount, metered_amount, gross_metered_amount, prepaid_credit_applied,
     usage_details, base_fee_period_start, base_fee_period_end,
     presentment_amount_cents, presentment_currency, presentment_units_per_eur,
-    presentment_reference_date, finalized_at, created_at, updated_at
+    presentment_reference_date, finalized_at, customer_snapshot, supplier_snapshot, created_at, updated_at
 ) VALUES (
     sqlc.arg(tenant_id)::text::uuid, sqlc.arg(status)::text, 'EUR', sqlc.arg(amount)::text::numeric,
     sqlc.arg(due_date)::timestamptz,
@@ -103,7 +106,9 @@ INSERT INTO purser.billing_invoices (
     sqlc.arg(usage_details)::jsonb, sqlc.arg(period_start)::timestamptz, sqlc.arg(period_end)::timestamptz,
     sqlc.arg(presentment_amount_cents)::bigint, sqlc.arg(presentment_currency)::text,
     sqlc.arg(presentment_units_per_eur)::text::numeric, sqlc.arg(presentment_reference_date)::date,
-    sqlc.arg(finalized_at)::timestamptz, NOW(), NOW()
+    sqlc.arg(finalized_at)::timestamptz,
+    purser.billing_customer_snapshot(sqlc.arg(tenant_id)::text::uuid),
+    NULLIF(sqlc.arg(supplier_snapshot)::text, '')::jsonb, NOW(), NOW()
 )
 ON CONFLICT (tenant_id, base_fee_period_start) WHERE base_fee_period_start IS NOT NULL
 DO NOTHING

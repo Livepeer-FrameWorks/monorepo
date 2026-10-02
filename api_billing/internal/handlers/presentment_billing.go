@@ -46,6 +46,7 @@ func finalizeInvoicePresentmentTx(ctx context.Context, tx *sql.Tx, invoiceID, te
 		PresentmentUnitsPerEur:   record.UnitsText(),
 		PresentmentReferenceDate: record.ReferenceDate,
 		FinalizedAt:              finalizedAt,
+		SupplierSnapshot:         DocumentSupplierSnapshot(),
 		InvoiceID:                invoiceID,
 		TenantID:                 tenantID,
 	})
@@ -330,6 +331,7 @@ func (jm *JobManager) chargeAdvanceBaseFee(ctx context.Context, tenantID string,
 			PresentmentUnitsPerEur:   record.UnitsText(),
 			PresentmentReferenceDate: record.ReferenceDate,
 			FinalizedAt:              now,
+			SupplierSnapshot:         DocumentSupplierSnapshot(),
 		})
 		if errors.Is(insertErr, sql.ErrNoRows) {
 			return nil

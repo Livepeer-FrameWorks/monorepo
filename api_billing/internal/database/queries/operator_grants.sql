@@ -71,11 +71,12 @@ LIMIT 1;
 
 -- name: CreateConfirmedOperatorInvoicePayment :exec
 -- A payment the operator received outside any provider (a bank transfer) and
--- records against the invoice it pays.
+-- records against the invoice it pays. Its receipt is issued now, to the
+-- invoice's tenant as its billing details are now.
 INSERT INTO purser.billing_payments (
     id, invoice_id, method, amount, currency, tx_id, status, confirmed_at, created_at, updated_at,
     original_amount_cents, original_currency, eur_amount_cents,
-    fx_units_per_eur, fx_source, fx_reference_date
+    fx_units_per_eur, fx_source, fx_reference_date, customer_snapshot, supplier_snapshot
 ) VALUES (
     sqlc.arg(payment_id)::text::uuid,
     sqlc.arg(invoice_id)::text::uuid,
@@ -92,5 +93,10 @@ INSERT INTO purser.billing_payments (
     sqlc.arg(eur_amount_cents)::bigint,
     sqlc.arg(fx_units_per_eur)::text::numeric,
     sqlc.arg(fx_source)::text,
-    sqlc.arg(fx_reference_date)::date
+    sqlc.arg(fx_reference_date)::date,
+    purser.billing_customer_snapshot((
+        SELECT invoice.tenant_id FROM purser.billing_invoices invoice
+        WHERE invoice.id = sqlc.arg(invoice_id)::text::uuid
+    )),
+    NULLIF(sqlc.arg(supplier_snapshot)::text, '')::jsonb
 );

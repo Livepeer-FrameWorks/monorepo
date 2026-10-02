@@ -255,7 +255,9 @@ An invoice states the supplier, the customer's billing details (name, company,
 address, VAT ID, billing email), the billing period, every line item including
 the base fee for the part of the period it covers, the subtotal, the prepaid
 credit applied, and the amount due in EUR and in the presentment currency.
-Documents are dated with the time they were finalized. The response includes
+Documents are dated with the time they were finalized and state the billing
+details and supplier as they were then: changing your billing address later
+changes the documents issued afterwards, not the ones already issued. The response includes
 `X-Document-SHA256`, uses private/no-store caching, and remains reachable for a
 zero-balance prepaid tenant. The billing dashboard exposes the same downloads.
 

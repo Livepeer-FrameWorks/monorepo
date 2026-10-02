@@ -69,13 +69,15 @@ INSERT INTO purser.balance_transactions (
 INSERT INTO purser.credit_notes (
     credit_note_number, tenant_id, source_document_type, source_document_id,
     reversal_reference_type, reversal_reference_id, amount_cents, currency,
-    reason, evidence_json
+    reason, evidence_json, customer_snapshot, supplier_snapshot
 )
 SELECT 'CN-' || lpad(nextval('purser.credit_note_number_seq')::text, 10, '0'),
        invoice.tenant_id, invoice.source_type, invoice.id,
        'crypto_reorg', sqlc.arg(event_id)::text, invoice.gross_amount_cents, invoice.currency,
        'confirmed direct crypto top-up reversed after canonicality failure',
-       jsonb_build_object('transaction_hash', sqlc.arg(tx_hash)::text, 'event_id', sqlc.arg(event_id)::text)
+       jsonb_build_object('transaction_hash', sqlc.arg(tx_hash)::text, 'event_id', sqlc.arg(event_id)::text),
+       purser.billing_customer_snapshot(invoice.tenant_id),
+       NULLIF(sqlc.arg(supplier_snapshot)::text, '')::jsonb
 FROM (
     SELECT id, tenant_id, reference_type, reference_id, gross_amount_cents, currency,
            'simplified_invoice'::text AS source_type
@@ -125,13 +127,15 @@ RETURNING id::text AS id;
 INSERT INTO purser.credit_notes (
     credit_note_number, tenant_id, source_document_type, source_document_id,
     reversal_reference_type, reversal_reference_id, amount_cents, currency,
-    reason, evidence_json
+    reason, evidence_json, customer_snapshot, supplier_snapshot
 ) VALUES (
     'CN-' || lpad(nextval('purser.credit_note_number_seq')::text, 10, '0'),
     sqlc.arg(tenant_id)::text::uuid, 'invoice', sqlc.arg(invoice_id)::text::uuid,
     'crypto_reorg', sqlc.arg(event_id), sqlc.arg(amount_cents), sqlc.arg(currency),
     'confirmed crypto invoice payment reversed after canonicality failure',
-    jsonb_build_object('payment_id', sqlc.arg(payment_id)::text, 'transaction_hash', sqlc.arg(tx_hash)::text)
+    jsonb_build_object('payment_id', sqlc.arg(payment_id)::text, 'transaction_hash', sqlc.arg(tx_hash)::text),
+    purser.billing_customer_snapshot(sqlc.arg(tenant_id)::text::uuid),
+    NULLIF(sqlc.arg(supplier_snapshot)::text, '')::jsonb
 )
 ON CONFLICT (source_document_type, source_document_id, reversal_reference_type, reversal_reference_id)
 DO NOTHING;

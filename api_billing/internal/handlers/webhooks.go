@@ -2720,6 +2720,7 @@ func (s *Service) updateInvoicePaymentStatus(provider, txID, invoiceID, newStatu
 		err = queries.UpdateBillingPaymentProviderStatus(ctx, purserdb.UpdateBillingPaymentProviderStatusParams{
 			Status: newStatus, ConfirmedAt: confirmedAt,
 			TransactionID: optionalSQLString(txID), PaymentID: paymentID,
+			SupplierSnapshot: DocumentSupplierSnapshot(),
 		})
 		if err != nil {
 			return fmt.Errorf("failed to update payment status: %w", err)

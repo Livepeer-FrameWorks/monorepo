@@ -456,7 +456,7 @@ INSERT INTO purser.billing_invoices (
     base_amount, metered_amount, gross_metered_amount, prepaid_credit_applied,
     usage_details, base_fee_period_start, base_fee_period_end,
     presentment_amount_cents, presentment_currency, presentment_units_per_eur,
-    presentment_reference_date, finalized_at, created_at, updated_at
+    presentment_reference_date, finalized_at, customer_snapshot, supplier_snapshot, created_at, updated_at
 ) VALUES (
     $1::text::uuid, $2::text, 'EUR', $3::text::numeric,
     $4::timestamptz,
@@ -464,7 +464,9 @@ INSERT INTO purser.billing_invoices (
     $6::jsonb, $7::timestamptz, $8::timestamptz,
     $9::bigint, $10::text,
     $11::text::numeric, $12::date,
-    $13::timestamptz, NOW(), NOW()
+    $13::timestamptz,
+    purser.billing_customer_snapshot($1::text::uuid),
+    NULLIF($14::text, '')::jsonb, NOW(), NOW()
 )
 ON CONFLICT (tenant_id, base_fee_period_start) WHERE base_fee_period_start IS NOT NULL
 DO NOTHING
@@ -485,6 +487,7 @@ type InsertBaseFeeInvoiceParams struct {
 	PresentmentUnitsPerEur   string          `db:"presentment_units_per_eur" json:"presentment_units_per_eur"`
 	PresentmentReferenceDate time.Time       `db:"presentment_reference_date" json:"presentment_reference_date"`
 	FinalizedAt              time.Time       `db:"finalized_at" json:"finalized_at"`
+	SupplierSnapshot         string          `db:"supplier_snapshot" json:"supplier_snapshot"`
 }
 
 // amount is what the invoice collects: the base fee less any credit for the
@@ -504,6 +507,7 @@ func (q *Queries) InsertBaseFeeInvoice(ctx context.Context, arg InsertBaseFeeInv
 		arg.PresentmentUnitsPerEur,
 		arg.PresentmentReferenceDate,
 		arg.FinalizedAt,
+		arg.SupplierSnapshot,
 	)
 	var id string
 	err := row.Scan(&id)
@@ -856,9 +860,11 @@ SET presentment_amount_cents = $1::bigint,
     presentment_units_per_eur = $3::text::numeric,
     presentment_reference_date = $4::date,
     finalized_at = $5::timestamptz,
+    customer_snapshot = purser.billing_customer_snapshot(tenant_id),
+    supplier_snapshot = NULLIF($6::text, '')::jsonb,
     updated_at = NOW()
-WHERE id = $6::text::uuid
-  AND tenant_id = $7::text::uuid
+WHERE id = $7::text::uuid
+  AND tenant_id = $8::text::uuid
   AND status NOT IN ('draft', 'manual_review')
 `
 
@@ -868,10 +874,12 @@ type SetInvoicePresentmentParams struct {
 	PresentmentUnitsPerEur   string    `db:"presentment_units_per_eur" json:"presentment_units_per_eur"`
 	PresentmentReferenceDate time.Time `db:"presentment_reference_date" json:"presentment_reference_date"`
 	FinalizedAt              time.Time `db:"finalized_at" json:"finalized_at"`
+	SupplierSnapshot         string    `db:"supplier_snapshot" json:"supplier_snapshot"`
 	InvoiceID                string    `db:"invoice_id" json:"invoice_id"`
 	TenantID                 string    `db:"tenant_id" json:"tenant_id"`
 }
 
+// Finalizing records the customer and supplier the invoice is issued to and by.
 func (q *Queries) SetInvoicePresentment(ctx context.Context, arg SetInvoicePresentmentParams) (int64, error) {
 	result, err := q.db.ExecContext(ctx, setInvoicePresentment,
 		arg.PresentmentAmountCents,
@@ -879,6 +887,7 @@ func (q *Queries) SetInvoicePresentment(ctx context.Context, arg SetInvoicePrese
 		arg.PresentmentUnitsPerEur,
 		arg.PresentmentReferenceDate,
 		arg.FinalizedAt,
+		arg.SupplierSnapshot,
 		arg.InvoiceID,
 		arg.TenantID,
 	)

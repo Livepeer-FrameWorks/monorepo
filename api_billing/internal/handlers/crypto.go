@@ -784,6 +784,7 @@ func (cm *CryptoMonitor) confirmInvoicePayment(ctx context.Context, dbTx *sql.Tx
 		AssetType:      sql.NullString{String: wallet.Asset, Valid: true}, Network: sql.NullString{String: wallet.Network, Valid: true},
 		BlockNumber: sql.NullInt64{Int64: tx.BlockNumber, Valid: true}, InvoiceID: *wallet.InvoiceID, TenantID: wallet.TenantID,
 		Method: method, WalletAddress: sql.NullString{String: wallet.WalletAddress, Valid: wallet.WalletAddress != ""},
+		SupplierSnapshot: DocumentSupplierSnapshot(),
 	})
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, fmt.Errorf("pending invoice payment not found for wallet %s", wallet.ID)

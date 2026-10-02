@@ -157,7 +157,7 @@ INSERT INTO purser.billing_invoices (
     base_amount, metered_amount, gross_metered_amount, prepaid_credit_applied,
     usage_details, period_start, period_end,
     presentment_amount_cents, presentment_currency, presentment_units_per_eur,
-    presentment_reference_date, finalized_at, created_at, updated_at
+    presentment_reference_date, finalized_at, customer_snapshot, supplier_snapshot, created_at, updated_at
 ) VALUES (
     sqlc.arg(tenant_id)::text::uuid,
     'STM-' || LPAD(nextval('purser.billing_invoice_number_seq')::text, 10, '0'),
@@ -166,7 +166,9 @@ INSERT INTO purser.billing_invoices (
     sqlc.arg(base_amount)::text::numeric, sqlc.arg(metered_amount)::text::numeric,
     sqlc.arg(gross_metered_amount)::text::numeric, 0,
     sqlc.arg(usage_details)::jsonb, sqlc.arg(period_start)::timestamptz, sqlc.arg(period_end)::timestamptz,
-    0, 'EUR', 1, sqlc.arg(finalized_at)::date, sqlc.arg(finalized_at)::timestamptz, NOW(), NOW()
+    0, 'EUR', 1, sqlc.arg(finalized_at)::date, sqlc.arg(finalized_at)::timestamptz,
+    purser.billing_customer_snapshot(sqlc.arg(tenant_id)::text::uuid),
+    NULLIF(sqlc.arg(supplier_snapshot)::text, '')::jsonb, NOW(), NOW()
 )
 ON CONFLICT (tenant_id, period_start) WHERE period_start IS NOT NULL
 DO NOTHING
@@ -195,6 +197,8 @@ SET invoice_number = 'STM-' || LPAD(nextval('purser.billing_invoice_number_seq')
     presentment_units_per_eur = 1,
     presentment_reference_date = sqlc.arg(finalized_at)::date,
     finalized_at = sqlc.arg(finalized_at)::timestamptz,
+    customer_snapshot = purser.billing_customer_snapshot(tenant_id),
+    supplier_snapshot = NULLIF(sqlc.arg(supplier_snapshot)::text, '')::jsonb,
     updated_at = NOW()
 WHERE id = sqlc.arg(invoice_id)::text::uuid
   AND tenant_id = sqlc.arg(tenant_id)::text::uuid
@@ -265,16 +269,22 @@ WHERE id = sqlc.arg(invoice_id)::text::uuid
 
 -- name: GetPrepaidStatementDocument :one
 -- A statement is issued when it is finalized; a statement converted from a
--- draft keeps the draft's created_at.
+-- draft keeps the draft's created_at. It states the parties recorded when it
+-- was finalized; a statement finalized without them states the current ones.
 SELECT invoice.invoice_number, invoice.status,
        COALESCE(invoice.finalized_at, invoice.created_at, NOW()) AS issued_at, invoice.retention_until,
        invoice.period_start, invoice.period_end,
        invoice.usage_details,
-       COALESCE(subscription.billing_email, '')::text AS customer_email,
-       COALESCE(subscription.billing_name, '')::text AS customer_name,
-       COALESCE(subscription.billing_company, '')::text AS customer_company,
-       COALESCE(subscription.billing_address::text, '')::text AS customer_address,
-       COALESCE(subscription.tax_id, '')::text AS customer_vat
+       COALESCE(invoice.customer_snapshot->>'email', subscription.billing_email, '')::text AS customer_email,
+       COALESCE(invoice.customer_snapshot->>'name', subscription.billing_name, '')::text AS customer_name,
+       COALESCE(invoice.customer_snapshot->>'company', subscription.billing_company, '')::text AS customer_company,
+       COALESCE(invoice.customer_snapshot->>'address', subscription.billing_address::text, '')::text AS customer_address,
+       COALESCE(invoice.customer_snapshot->>'vat_number', subscription.tax_id, '')::text AS customer_vat,
+       (invoice.supplier_snapshot IS NOT NULL)::boolean AS has_supplier_snapshot,
+       COALESCE(invoice.supplier_snapshot->>'name', '')::text AS supplier_name,
+       COALESCE(invoice.supplier_snapshot->>'address', '')::text AS supplier_address,
+       COALESCE(invoice.supplier_snapshot->>'vat_number', '')::text AS supplier_vat_number,
+       COALESCE(invoice.supplier_snapshot->>'registration_number', '')::text AS supplier_registration_number
 FROM purser.billing_invoices invoice
 LEFT JOIN purser.tenant_subscriptions subscription ON subscription.tenant_id = invoice.tenant_id
 WHERE invoice.id = sqlc.arg(document_id)::text::uuid

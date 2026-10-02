@@ -4,7 +4,9 @@ package grpc
 
 import (
 	"context"
+	"crypto/sha256"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -266,4 +268,99 @@ func TestInvoiceDocumentStatesLinesCreditAndBothParties_RealPG(t *testing.T) { /
 		"Subtotal", "EUR 28.75", "Prepaid credit applied", "-EUR 10.00", "Amount due (EUR)", "EUR 18.75",
 		"Amount due", "USD 21.94", "1 EUR = 1.17 USD",
 	)
+}
+
+// A finalized document states the customer and supplier as they were when it
+// was issued. The postpaid phase's closing invoice keeps the billing address,
+// name and supplier address it was finalized with after the tenant and the
+// operator change theirs; the receipt issued after the change states the new
+// ones.
+func TestFinalizedDocumentKeepsThePartiesItWasIssuedTo_RealPG(t *testing.T) { //nolint:funlen // One finalization, one change of both parties, and two documents.
+	appconfigtest.Set(t, "WAIVE_USAGE_CHARGES", "false")
+	appconfigtest.Set(t, "SUPPLIER_NAME", "FrameWorks B.V.")
+	appconfigtest.Set(t, "SUPPLIER_ADDRESS", "Keizersgracht 1, Amsterdam, NL")
+	appconfigtest.Set(t, "SUPPLIER_VAT_NUMBER", "NL000000000B01")
+	appconfigtest.Set(t, "SUPPLIER_REGISTRATION_NUMBER", "12345678")
+	db := startPurserTransitionRealPG(t)
+	ctx := context.Background()
+	tenantID, paygID, supporterID := uuid.NewString(), uuid.NewString(), uuid.NewString()
+	periodStart := time.Now().UTC().Truncate(time.Hour).Add(-10 * 24 * time.Hour)
+	exec := func(query string, args ...any) {
+		t.Helper()
+		if _, err := db.ExecContext(ctx, query, args...); err != nil {
+			t.Fatalf("%v\n%s", err, query)
+		}
+	}
+	exec(`INSERT INTO purser.billing_tiers (id, tier_name, display_name, base_price, currency, tier_level, is_default_prepaid, metering_enabled)
+		VALUES ($1, 'payg', 'Pay As You Go', 0, 'EUR', 0, true, true), ($2, 'supporter', 'Supporter', 79.00, 'EUR', 2, false, true)`, paygID, supporterID)
+	exec(`INSERT INTO purser.tier_pricing_rules (tier_id, meter, model, currency, included_quantity, unit_price, config)
+		VALUES ($1, 'egress_gb', 'all_usage', 'EUR', 0, 0.01, '{}'), ($2, 'egress_gb', 'all_usage', 'EUR', 0, 0.02, '{}')`, paygID, supporterID)
+	exec(`INSERT INTO purser.tenant_subscriptions (tenant_id, tier_id, status, billing_model, billing_email, billing_name, billing_address, tax_id,
+		          billing_period_start, billing_period_end, presentment_currency)
+		VALUES ($1, $2, 'active', 'postpaid', 'ada@example.com', 'Ada Lovelace',
+		        '{"street":"Prinsengracht 263","city":"Amsterdam","postal_code":"1016 GV","country":"NL"}', 'NL111111111B01', $3, $4, 'EUR')`,
+		tenantID, supporterID, periodStart, periodStart.AddDate(0, 1, 0))
+	exec(`INSERT INTO purser.usage_records (
+			tenant_id, cluster_id, usage_type, unit, dimensions, dimension_key,
+			source_id, report_id, usage_value, usage_details,
+			period_start, period_end, granularity, value_kind
+		) VALUES ($1, '', 'egress_gb', 'gibibyte', '{}', $2, 'periscope-default', $3, 150, '{}', $4, $5, 'minute_5', 'delta')`,
+		tenantID, fmt.Sprintf("%x", sha256.Sum256([]byte("{}"))), strings.Repeat("7", 64), periodStart.Add(2*time.Hour), periodStart.Add(2*time.Hour+5*time.Minute))
+
+	server := &PurserServer{db: db, logger: logging.NewLogger(), tierReconciler: &assignTierReconciler{}, commodoreClient: &recordingCommodoreCache{}}
+	operator := operatorAssignCtx("7a000000-0000-4000-8000-000000000005")
+	if _, err := server.AdminAssignTier(operator, &purserpb.AdminAssignTierRequest{TenantId: tenantID, TierName: "payg", Reason: "moves to pay as you go"}); err != nil {
+		t.Fatalf("AdminAssignTier: %v", err)
+	}
+	var invoiceID string
+	if err := db.QueryRowContext(ctx, `SELECT id::text FROM purser.billing_invoices WHERE tenant_id = $1 AND document_kind = 'invoice' AND finalized_at IS NOT NULL`,
+		tenantID).Scan(&invoiceID); err != nil {
+		t.Fatalf("read the finalized closing invoice: %v", err)
+	}
+
+	name, street, city, postal := "Ada King", "Unter den Linden 1", "Berlin", "10117"
+	if _, err := server.UpdateBillingDetails(ctx, &purserpb.UpdateBillingDetailsRequest{
+		TenantId: tenantID, Name: &name,
+		Address: &purserpb.BillingAddress{Street: street, City: city, PostalCode: postal, Country: "DE"},
+	}); err != nil {
+		t.Fatalf("UpdateBillingDetails: %v", err)
+	}
+	appconfigtest.Set(t, "SUPPLIER_ADDRESS", "Herengracht 2, Amsterdam, NL")
+
+	render := func(kind, id string) []string {
+		t.Helper()
+		response, err := server.GetBillingDocument(serviceTestContext(), &purserpb.GetBillingDocumentRequest{TenantId: tenantID, DocumentId: id, Kind: kind})
+		if err != nil {
+			t.Fatalf("GetBillingDocument(%s): %v", kind, err)
+		}
+		return pdfTextRuns(t, response.GetContent())
+	}
+	invoice := render("invoice", invoiceID)
+	requireRuns(t, invoice, "Ada Lovelace", "Prinsengracht 263", "1016 GV Amsterdam", "NL", "VAT NL111111111B01", "ada@example.com", "Keizersgracht 1, Amsterdam, NL")
+	forbidRuns(t, invoice, "Ada King", "Unter den Linden 1", "Berlin", "Herengracht 2")
+
+	paid, err := server.AdminRecordInvoicePayment(operator, &purserpb.AdminRecordInvoicePaymentRequest{
+		TenantId: tenantID, InvoiceId: invoiceID, Reference: "bank transfer 1", Reason: "paid by transfer",
+	})
+	if err != nil {
+		t.Fatalf("AdminRecordInvoicePayment: %v", err)
+	}
+	receipt := render("payment_receipt", paid.GetPaymentId())
+	requireRuns(t, receipt, "Ada King", "Unter den Linden 1", "10117 Berlin", "DE", "VAT NL111111111B01", "Herengracht 2, Amsterdam, NL")
+	forbidRuns(t, receipt, "Ada Lovelace", "Prinsengracht 263", "Keizersgracht 1")
+
+	again := render("invoice", invoiceID)
+	requireRuns(t, again, "Prinsengracht 263", "Keizersgracht 1, Amsterdam, NL")
+}
+
+// forbidRuns fails when any of the texts appears within a drawn run.
+func forbidRuns(t *testing.T, runs []string, forbidden ...string) {
+	t.Helper()
+	for _, text := range forbidden {
+		for _, run := range runs {
+			if strings.Contains(run, text) {
+				t.Errorf("PDF text states %q in %q", text, run)
+			}
+		}
+	}
 }

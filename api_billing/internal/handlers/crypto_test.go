@@ -119,7 +119,7 @@ func TestConfirmInvoicePaymentUpdatesPendingIntent(t *testing.T) {
 	chainTx := CryptoTransaction{Hash: "0xtx", BlockNumber: 123}
 
 	mock.ExpectQuery("UPDATE purser.billing_payments payment").
-		WithArgs("0xtx", sqlmock.AnyArg(), "42.5", "USDC", "base", int64(123), "invoice-1", "tenant-1", "crypto_usdc", "0xwallet").
+		WithArgs("0xtx", sqlmock.AnyArg(), "42.5", "USDC", "base", int64(123), sqlmock.AnyArg(), "invoice-1", "tenant-1", "crypto_usdc", "0xwallet").
 		WillReturnRows(sqlmock.NewRows([]string{"id", "amount", "currency"}).AddRow("payment-1", 42.50, "EUR"))
 	mock.ExpectExec("UPDATE purser.billing_invoices").
 		WithArgs(sqlmock.AnyArg(), "invoice-1", "tenant-1").

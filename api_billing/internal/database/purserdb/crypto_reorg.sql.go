@@ -128,26 +128,29 @@ const insertReorgedCryptoInvoiceCreditNote = `-- name: InsertReorgedCryptoInvoic
 INSERT INTO purser.credit_notes (
     credit_note_number, tenant_id, source_document_type, source_document_id,
     reversal_reference_type, reversal_reference_id, amount_cents, currency,
-    reason, evidence_json
+    reason, evidence_json, customer_snapshot, supplier_snapshot
 ) VALUES (
     'CN-' || lpad(nextval('purser.credit_note_number_seq')::text, 10, '0'),
     $1::text::uuid, 'invoice', $2::text::uuid,
     'crypto_reorg', $3, $4, $5,
     'confirmed crypto invoice payment reversed after canonicality failure',
-    jsonb_build_object('payment_id', $6::text, 'transaction_hash', $7::text)
+    jsonb_build_object('payment_id', $6::text, 'transaction_hash', $7::text),
+    purser.billing_customer_snapshot($1::text::uuid),
+    NULLIF($8::text, '')::jsonb
 )
 ON CONFLICT (source_document_type, source_document_id, reversal_reference_type, reversal_reference_id)
 DO NOTHING
 `
 
 type InsertReorgedCryptoInvoiceCreditNoteParams struct {
-	TenantID    string `db:"tenant_id" json:"tenant_id"`
-	InvoiceID   string `db:"invoice_id" json:"invoice_id"`
-	EventID     string `db:"event_id" json:"event_id"`
-	AmountCents int64  `db:"amount_cents" json:"amount_cents"`
-	Currency    string `db:"currency" json:"currency"`
-	PaymentID   string `db:"payment_id" json:"payment_id"`
-	TxHash      string `db:"tx_hash" json:"tx_hash"`
+	TenantID         string `db:"tenant_id" json:"tenant_id"`
+	InvoiceID        string `db:"invoice_id" json:"invoice_id"`
+	EventID          string `db:"event_id" json:"event_id"`
+	AmountCents      int64  `db:"amount_cents" json:"amount_cents"`
+	Currency         string `db:"currency" json:"currency"`
+	PaymentID        string `db:"payment_id" json:"payment_id"`
+	TxHash           string `db:"tx_hash" json:"tx_hash"`
+	SupplierSnapshot string `db:"supplier_snapshot" json:"supplier_snapshot"`
 }
 
 func (q *Queries) InsertReorgedCryptoInvoiceCreditNote(ctx context.Context, arg InsertReorgedCryptoInvoiceCreditNoteParams) error {
@@ -159,6 +162,7 @@ func (q *Queries) InsertReorgedCryptoInvoiceCreditNote(ctx context.Context, arg 
 		arg.Currency,
 		arg.PaymentID,
 		arg.TxHash,
+		arg.SupplierSnapshot,
 	)
 	return err
 }
@@ -167,13 +171,15 @@ const insertReorgedCryptoTopupCreditNote = `-- name: InsertReorgedCryptoTopupCre
 INSERT INTO purser.credit_notes (
     credit_note_number, tenant_id, source_document_type, source_document_id,
     reversal_reference_type, reversal_reference_id, amount_cents, currency,
-    reason, evidence_json
+    reason, evidence_json, customer_snapshot, supplier_snapshot
 )
 SELECT 'CN-' || lpad(nextval('purser.credit_note_number_seq')::text, 10, '0'),
        invoice.tenant_id, invoice.source_type, invoice.id,
        'crypto_reorg', $1::text, invoice.gross_amount_cents, invoice.currency,
        'confirmed direct crypto top-up reversed after canonicality failure',
-       jsonb_build_object('transaction_hash', $2::text, 'event_id', $1::text)
+       jsonb_build_object('transaction_hash', $2::text, 'event_id', $1::text),
+       purser.billing_customer_snapshot(invoice.tenant_id),
+       NULLIF($3::text, '')::jsonb
 FROM (
     SELECT id, tenant_id, reference_type, reference_id, gross_amount_cents, currency,
            'simplified_invoice'::text AS source_type
@@ -183,7 +189,7 @@ FROM (
            'crypto_invoice'::text AS source_type
     FROM purser.crypto_invoices
 ) invoice
-WHERE invoice.tenant_id = $3::text::uuid
+WHERE invoice.tenant_id = $4::text::uuid
   AND invoice.reference_type = 'crypto_payment'
   AND invoice.reference_id = $2::text
 ON CONFLICT (source_document_type, source_document_id, reversal_reference_type, reversal_reference_id)
@@ -191,13 +197,19 @@ DO NOTHING
 `
 
 type InsertReorgedCryptoTopupCreditNoteParams struct {
-	EventID  string `db:"event_id" json:"event_id"`
-	TxHash   string `db:"tx_hash" json:"tx_hash"`
-	TenantID string `db:"tenant_id" json:"tenant_id"`
+	EventID          string `db:"event_id" json:"event_id"`
+	TxHash           string `db:"tx_hash" json:"tx_hash"`
+	SupplierSnapshot string `db:"supplier_snapshot" json:"supplier_snapshot"`
+	TenantID         string `db:"tenant_id" json:"tenant_id"`
 }
 
 func (q *Queries) InsertReorgedCryptoTopupCreditNote(ctx context.Context, arg InsertReorgedCryptoTopupCreditNoteParams) error {
-	_, err := q.db.ExecContext(ctx, insertReorgedCryptoTopupCreditNote, arg.EventID, arg.TxHash, arg.TenantID)
+	_, err := q.db.ExecContext(ctx, insertReorgedCryptoTopupCreditNote,
+		arg.EventID,
+		arg.TxHash,
+		arg.SupplierSnapshot,
+		arg.TenantID,
+	)
 	return err
 }
 

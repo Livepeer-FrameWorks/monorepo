@@ -572,9 +572,21 @@ ORDER BY payment.created_at DESC
 LIMIT 1;
 
 -- name: UpdateBillingPaymentProviderStatus :exec
+-- A payment that becomes confirmed issues its receipt, which records the
+-- invoice's tenant and the supplier as they are at confirmation.
 UPDATE purser.billing_payments
-SET status = sqlc.arg(status), confirmed_at = sqlc.narg(confirmed_at),
-    tx_id = COALESCE(NULLIF(tx_id, ''), sqlc.arg(transaction_id)), updated_at = NOW()
+SET status = sqlc.arg(status)::text, confirmed_at = sqlc.narg(confirmed_at),
+    tx_id = COALESCE(NULLIF(tx_id, ''), sqlc.arg(transaction_id)), updated_at = NOW(),
+    customer_snapshot = CASE
+        WHEN sqlc.arg(status)::text = 'confirmed' AND status <> 'confirmed' THEN purser.billing_customer_snapshot((
+            SELECT invoice.tenant_id FROM purser.billing_invoices invoice WHERE invoice.id = purser.billing_payments.invoice_id
+        ))
+        ELSE customer_snapshot
+    END,
+    supplier_snapshot = CASE
+        WHEN sqlc.arg(status)::text = 'confirmed' AND status <> 'confirmed' THEN NULLIF(sqlc.arg(supplier_snapshot)::text, '')::jsonb
+        ELSE supplier_snapshot
+    END
 WHERE id = sqlc.arg(payment_id)::text::uuid;
 
 -- name: LockBillingPaymentStatus :one

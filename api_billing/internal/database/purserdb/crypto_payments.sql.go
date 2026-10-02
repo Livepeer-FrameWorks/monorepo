@@ -71,29 +71,32 @@ const confirmCryptoInvoicePayment = `-- name: ConfirmCryptoInvoicePayment :one
 UPDATE purser.billing_payments payment
 SET tx_id = $1, status = 'confirmed', confirmed_at = $2,
     updated_at = NOW(), actual_tx_amount = $3,
-    asset_type = $4, network = $5, block_number = $6
+    asset_type = $4, network = $5, block_number = $6,
+    customer_snapshot = purser.billing_customer_snapshot(invoice.tenant_id),
+    supplier_snapshot = NULLIF($7::text, '')::jsonb
 FROM purser.billing_invoices invoice
-WHERE payment.invoice_id = $7::text::uuid
+WHERE payment.invoice_id = $8::text::uuid
   AND payment.invoice_id = invoice.id
-  AND invoice.tenant_id = $8::text::uuid
-  AND payment.method = $9
+  AND invoice.tenant_id = $9::text::uuid
+  AND payment.method = $10
   AND payment.status = 'pending'
-  AND payment.tx_id = $10
+  AND payment.tx_id = $11
 RETURNING payment.id::text AS id, payment.amount::float8 AS amount,
           payment.currency
 `
 
 type ConfirmCryptoInvoicePaymentParams struct {
-	TxHash         sql.NullString `db:"tx_hash" json:"tx_hash"`
-	ConfirmedAt    sql.NullTime   `db:"confirmed_at" json:"confirmed_at"`
-	ActualTxAmount sql.NullString `db:"actual_tx_amount" json:"actual_tx_amount"`
-	AssetType      sql.NullString `db:"asset_type" json:"asset_type"`
-	Network        sql.NullString `db:"network" json:"network"`
-	BlockNumber    sql.NullInt64  `db:"block_number" json:"block_number"`
-	InvoiceID      string         `db:"invoice_id" json:"invoice_id"`
-	TenantID       string         `db:"tenant_id" json:"tenant_id"`
-	Method         string         `db:"method" json:"method"`
-	WalletAddress  sql.NullString `db:"wallet_address" json:"wallet_address"`
+	TxHash           sql.NullString `db:"tx_hash" json:"tx_hash"`
+	ConfirmedAt      sql.NullTime   `db:"confirmed_at" json:"confirmed_at"`
+	ActualTxAmount   sql.NullString `db:"actual_tx_amount" json:"actual_tx_amount"`
+	AssetType        sql.NullString `db:"asset_type" json:"asset_type"`
+	Network          sql.NullString `db:"network" json:"network"`
+	BlockNumber      sql.NullInt64  `db:"block_number" json:"block_number"`
+	SupplierSnapshot string         `db:"supplier_snapshot" json:"supplier_snapshot"`
+	InvoiceID        string         `db:"invoice_id" json:"invoice_id"`
+	TenantID         string         `db:"tenant_id" json:"tenant_id"`
+	Method           string         `db:"method" json:"method"`
+	WalletAddress    sql.NullString `db:"wallet_address" json:"wallet_address"`
 }
 
 type ConfirmCryptoInvoicePaymentRow struct {
@@ -110,6 +113,7 @@ func (q *Queries) ConfirmCryptoInvoicePayment(ctx context.Context, arg ConfirmCr
 		arg.AssetType,
 		arg.Network,
 		arg.BlockNumber,
+		arg.SupplierSnapshot,
 		arg.InvoiceID,
 		arg.TenantID,
 		arg.Method,

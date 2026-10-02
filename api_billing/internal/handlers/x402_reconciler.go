@@ -949,7 +949,7 @@ func (r *X402Reconciler) debitBalance(ctx context.Context, tenantID string, amou
 		}
 
 		err = queries.InsertX402ReversalCreditNote(ctx, purserdb.InsertX402ReversalCreditNoteParams{
-			NonceID: nonceID, TxHash: txHash, TenantID: tenantID,
+			NonceID: nonceID, TxHash: txHash, TenantID: tenantID, SupplierSnapshot: DocumentSupplierSnapshot(),
 		})
 		if err != nil {
 			failureMessage = "Failed to issue x402 reversal credit note"

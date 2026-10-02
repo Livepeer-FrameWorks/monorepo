@@ -200,7 +200,7 @@ func expectStripePaymentFailedStatusUpdate(mock sqlmock.Sqlmock) *domainEventID 
 	mock.ExpectExec(`pg_advisory_xact_lock`).WithArgs("invoice-1").WillReturnResult(sqlmock.NewResult(0, 0))
 	expectLockedPaymentStatus(mock, "payment-1", webhookTenantID, "pending")
 	mock.ExpectExec(`UPDATE purser\.billing_payments`).
-		WithArgs("failed", sqlmock.AnyArg(), "pi_fail", "payment-1").
+		WithArgs("failed", sqlmock.AnyArg(), "pi_fail", sqlmock.AnyArg(), "payment-1").
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectExec(`UPDATE purser\.billing_payment_attempts`).
 		WithArgs("failed", "pi_fail", "payment-1", "stripe").
@@ -478,7 +478,7 @@ func TestUpdateInvoicePaymentStatusDoesNotMarkPartiallyPaidInvoicePaid(t *testin
 	mock.ExpectExec(`pg_advisory_xact_lock`).WithArgs("invoice-1").WillReturnResult(sqlmock.NewResult(0, 0))
 	expectLockedPaymentStatus(mock, "payment-1", "tenant-1", "pending")
 	mock.ExpectExec(`UPDATE purser\.billing_payments`).
-		WithArgs("confirmed", sqlmock.AnyArg(), "tr_partial", "payment-1").
+		WithArgs("confirmed", sqlmock.AnyArg(), "tr_partial", sqlmock.AnyArg(), "payment-1").
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectExec(`UPDATE purser\.billing_payment_attempts`).
 		WithArgs("succeeded", "tr_partial", "payment-1", "mollie").
@@ -573,7 +573,7 @@ func expectMolliePartialPaymentConfirmation(mock sqlmock.Sqlmock) {
 	mock.ExpectExec(`pg_advisory_xact_lock`).WithArgs("invoice-1").WillReturnResult(sqlmock.NewResult(0, 0))
 	expectLockedPaymentStatus(mock, "payment-1", "tenant-1", "pending")
 	mock.ExpectExec(`UPDATE purser\.billing_payments`).
-		WithArgs("confirmed", sqlmock.AnyArg(), "tr_partial", "payment-1").
+		WithArgs("confirmed", sqlmock.AnyArg(), "tr_partial", sqlmock.AnyArg(), "payment-1").
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectExec(`UPDATE purser\.billing_payment_attempts`).
 		WithArgs("succeeded", "tr_partial", "payment-1", "mollie").
@@ -604,7 +604,7 @@ func TestUpdateInvoicePaymentStatusMarksInvoicePaidWhenConfirmedPaymentsCoverAmo
 	mock.ExpectExec(`pg_advisory_xact_lock`).WithArgs("invoice-2").WillReturnResult(sqlmock.NewResult(0, 0))
 	expectLockedPaymentStatus(mock, "payment-2", webhookTenantID, "pending")
 	mock.ExpectExec(`UPDATE purser\.billing_payments`).
-		WithArgs("confirmed", sqlmock.AnyArg(), "tr_full", "payment-2").
+		WithArgs("confirmed", sqlmock.AnyArg(), "tr_full", sqlmock.AnyArg(), "payment-2").
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectExec(`UPDATE purser\.billing_payment_attempts`).
 		WithArgs("succeeded", "tr_full", "payment-2", "mollie").

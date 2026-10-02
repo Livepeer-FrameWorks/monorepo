@@ -328,7 +328,7 @@ func writePrepaidStatementTx(ctx context.Context, tx *sql.Tx, run *prepaidStatem
 		row, convertErr := queries.ConvertDraftToPrepaidStatement(ctx, purserdb.ConvertDraftToPrepaidStatementParams{
 			FinalizedAt: finalizedAt, BaseAmount: baseAmount, MeteredAmount: meteredAmount,
 			GrossMeteredAmount: grossMetered, UsageDetails: usageJSON, PeriodStart: run.periodStart, PeriodEnd: run.periodEnd,
-			InvoiceID: draftInvoiceID, TenantID: tenantID,
+			SupplierSnapshot: DocumentSupplierSnapshot(), InvoiceID: draftInvoiceID, TenantID: tenantID,
 		})
 		if errors.Is(convertErr, sql.ErrNoRows) {
 			return result, fmt.Errorf("draft %s of the period is no longer open", draftInvoiceID)
@@ -341,7 +341,7 @@ func writePrepaidStatementTx(ctx context.Context, tx *sql.Tx, run *prepaidStatem
 		row, insertErr := queries.InsertPrepaidStatement(ctx, purserdb.InsertPrepaidStatementParams{
 			TenantID: tenantID, FinalizedAt: finalizedAt, BaseAmount: baseAmount, MeteredAmount: meteredAmount,
 			GrossMeteredAmount: grossMetered, UsageDetails: usageJSON,
-			PeriodStart: run.periodStart, PeriodEnd: run.periodEnd,
+			PeriodStart: run.periodStart, PeriodEnd: run.periodEnd, SupplierSnapshot: DocumentSupplierSnapshot(),
 		})
 		if errors.Is(insertErr, sql.ErrNoRows) {
 			return result, fmt.Errorf("the period starting %s already has a billing document", run.periodStart.Format(time.RFC3339))

@@ -15,7 +15,7 @@ const createConfirmedOperatorInvoicePayment = `-- name: CreateConfirmedOperatorI
 INSERT INTO purser.billing_payments (
     id, invoice_id, method, amount, currency, tx_id, status, confirmed_at, created_at, updated_at,
     original_amount_cents, original_currency, eur_amount_cents,
-    fx_units_per_eur, fx_source, fx_reference_date
+    fx_units_per_eur, fx_source, fx_reference_date, customer_snapshot, supplier_snapshot
 ) VALUES (
     $1::text::uuid,
     $2::text::uuid,
@@ -32,7 +32,12 @@ INSERT INTO purser.billing_payments (
     $8::bigint,
     $9::text::numeric,
     $10::text,
-    $11::date
+    $11::date,
+    purser.billing_customer_snapshot((
+        SELECT invoice.tenant_id FROM purser.billing_invoices invoice
+        WHERE invoice.id = $2::text::uuid
+    )),
+    NULLIF($12::text, '')::jsonb
 )
 `
 
@@ -48,10 +53,12 @@ type CreateConfirmedOperatorInvoicePaymentParams struct {
 	FxUnitsPerEur       string       `db:"fx_units_per_eur" json:"fx_units_per_eur"`
 	FxSource            string       `db:"fx_source" json:"fx_source"`
 	FxReferenceDate     time.Time    `db:"fx_reference_date" json:"fx_reference_date"`
+	SupplierSnapshot    string       `db:"supplier_snapshot" json:"supplier_snapshot"`
 }
 
 // A payment the operator received outside any provider (a bank transfer) and
-// records against the invoice it pays.
+// records against the invoice it pays. Its receipt is issued now, to the
+// invoice's tenant as its billing details are now.
 func (q *Queries) CreateConfirmedOperatorInvoicePayment(ctx context.Context, arg CreateConfirmedOperatorInvoicePaymentParams) error {
 	_, err := q.db.ExecContext(ctx, createConfirmedOperatorInvoicePayment,
 		arg.PaymentID,
@@ -65,6 +72,7 @@ func (q *Queries) CreateConfirmedOperatorInvoicePayment(ctx context.Context, arg
 		arg.FxUnitsPerEur,
 		arg.FxSource,
 		arg.FxReferenceDate,
+		arg.SupplierSnapshot,
 	)
 	return err
 }

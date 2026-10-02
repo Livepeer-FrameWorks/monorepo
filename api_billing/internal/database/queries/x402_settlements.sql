@@ -288,7 +288,7 @@ INSERT INTO purser.simplified_invoices (
     evidence_ip_country, evidence_wallet_network, evidence_billing_country,
     evidence_status, evidence_conflict, tax_policy_ref,
     supplier_name, supplier_address, supplier_vat_number, supplier_registration_number,
-    service_description, service_quantity, service_date, issued_at
+    service_description, service_quantity, service_date, customer_snapshot, issued_at
 ) VALUES (
     sqlc.arg(invoice_number), sqlc.arg(tenant_id)::text::uuid,
     sqlc.arg(reference_type), sqlc.arg(reference_id),
@@ -305,7 +305,8 @@ INSERT INTO purser.simplified_invoices (
     sqlc.arg(evidence_conflict), sqlc.arg(tax_policy_ref),
     sqlc.arg(supplier_name), sqlc.arg(supplier_address), sqlc.arg(supplier_vat_number),
     sqlc.arg(supplier_registration_number), sqlc.arg(service_description),
-    sqlc.arg(service_quantity), CURRENT_DATE, NOW()
+    sqlc.arg(service_quantity), CURRENT_DATE,
+    purser.billing_customer_snapshot(sqlc.arg(tenant_id)::text::uuid), NOW()
 );
 
 -- name: LockX402SettlementRollup :one

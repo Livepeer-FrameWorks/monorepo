@@ -92,7 +92,7 @@ func TestReconcileConfirmedSettlementsHandlesReorg(t *testing.T) {
 			sqlmock.AnyArg(), "nonce-2", "x402_failed", nil, nil, nil, nil, sqlmock.AnyArg()).
 		WillReturnResult(sqlmock.NewResult(1, 1))
 	mock.ExpectExec("INSERT INTO purser.credit_notes").
-		WithArgs("nonce-2", "0xreorg", "tenant-1").
+		WithArgs("nonce-2", "0xreorg", sqlmock.AnyArg(), "tenant-1").
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectExec(`INSERT INTO purser\.billing_event_outbox`).
 		WithArgs(sqlmock.AnyArg(), eventX402SettlementFailed, "tenant-1", "", "x402_nonce", "0xreorg", sqlmock.AnyArg()).

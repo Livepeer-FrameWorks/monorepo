@@ -525,7 +525,9 @@ failed attempts and are not automatically discarded.
 ### Supplier identity on billing documents
 
 Every invoice, prepaid statement and credit note Purser renders states the
-supplier. Outside development Purser refuses to start without the complete
+supplier. A document records the supplier identity configured when it is
+issued, so changing these values affects only documents issued afterwards.
+Outside development Purser refuses to start without the complete
 set, and `frameworks cluster provision` and `upgrade` refuse a non-dev deploy
 that lacks it:
 

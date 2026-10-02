@@ -648,7 +648,7 @@ INSERT INTO purser.simplified_invoices (
     evidence_ip_country, evidence_wallet_network, evidence_billing_country,
     evidence_status, evidence_conflict, tax_policy_ref,
     supplier_name, supplier_address, supplier_vat_number, supplier_registration_number,
-    service_description, service_quantity, service_date, issued_at
+    service_description, service_quantity, service_date, customer_snapshot, issued_at
 ) VALUES (
     $1, $2::text::uuid,
     $3, $4,
@@ -665,7 +665,8 @@ INSERT INTO purser.simplified_invoices (
     $25, $26,
     $27, $28, $29,
     $30, $31,
-    $32, CURRENT_DATE, NOW()
+    $32, CURRENT_DATE,
+    purser.billing_customer_snapshot($2::text::uuid), NOW()
 )
 `
 

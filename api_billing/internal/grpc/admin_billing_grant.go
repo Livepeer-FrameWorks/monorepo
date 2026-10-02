@@ -250,6 +250,7 @@ func (s *PurserServer) AdminRecordInvoicePayment(ctx context.Context, req *purse
 			ConfirmedAt:         sql.NullTime{Time: now, Valid: true},
 			OriginalAmountCents: paymentFX.OriginalMinor, EurAmountCents: paymentFX.EURMinor,
 			FxUnitsPerEur: paymentFX.UnitsText(), FxSource: paymentFX.Source, FxReferenceDate: paymentFX.ReferenceDate,
+			SupplierSnapshot: handlers.DocumentSupplierSnapshot(),
 		}); err != nil {
 			return txStatusErrorf(err, codes.Internal, "store payment: %v", err)
 		}

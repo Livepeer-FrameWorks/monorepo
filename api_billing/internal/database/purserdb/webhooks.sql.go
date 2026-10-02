@@ -1382,23 +1382,37 @@ func (q *Queries) UpdateBillingPaymentAttemptProviderStatus(ctx context.Context,
 
 const updateBillingPaymentProviderStatus = `-- name: UpdateBillingPaymentProviderStatus :exec
 UPDATE purser.billing_payments
-SET status = $1, confirmed_at = $2,
-    tx_id = COALESCE(NULLIF(tx_id, ''), $3), updated_at = NOW()
-WHERE id = $4::text::uuid
+SET status = $1::text, confirmed_at = $2,
+    tx_id = COALESCE(NULLIF(tx_id, ''), $3), updated_at = NOW(),
+    customer_snapshot = CASE
+        WHEN $1::text = 'confirmed' AND status <> 'confirmed' THEN purser.billing_customer_snapshot((
+            SELECT invoice.tenant_id FROM purser.billing_invoices invoice WHERE invoice.id = purser.billing_payments.invoice_id
+        ))
+        ELSE customer_snapshot
+    END,
+    supplier_snapshot = CASE
+        WHEN $1::text = 'confirmed' AND status <> 'confirmed' THEN NULLIF($4::text, '')::jsonb
+        ELSE supplier_snapshot
+    END
+WHERE id = $5::text::uuid
 `
 
 type UpdateBillingPaymentProviderStatusParams struct {
-	Status        string         `db:"status" json:"status"`
-	ConfirmedAt   sql.NullTime   `db:"confirmed_at" json:"confirmed_at"`
-	TransactionID sql.NullString `db:"transaction_id" json:"transaction_id"`
-	PaymentID     string         `db:"payment_id" json:"payment_id"`
+	Status           string         `db:"status" json:"status"`
+	ConfirmedAt      sql.NullTime   `db:"confirmed_at" json:"confirmed_at"`
+	TransactionID    sql.NullString `db:"transaction_id" json:"transaction_id"`
+	SupplierSnapshot string         `db:"supplier_snapshot" json:"supplier_snapshot"`
+	PaymentID        string         `db:"payment_id" json:"payment_id"`
 }
 
+// A payment that becomes confirmed issues its receipt, which records the
+// invoice's tenant and the supplier as they are at confirmation.
 func (q *Queries) UpdateBillingPaymentProviderStatus(ctx context.Context, arg UpdateBillingPaymentProviderStatusParams) error {
 	_, err := q.db.ExecContext(ctx, updateBillingPaymentProviderStatus,
 		arg.Status,
 		arg.ConfirmedAt,
 		arg.TransactionID,
+		arg.SupplierSnapshot,
 		arg.PaymentID,
 	)
 	return err

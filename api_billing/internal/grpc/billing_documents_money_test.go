@@ -129,11 +129,11 @@ func TestGetBillingDocumentRendersEveryMoneyDocumentKind(t *testing.T) { //nolin
 	}{
 		{
 			kind: "invoice", query: "-- name: GetInvoiceDocument",
-			columns:    []string{"invoice_number", "amount_cents", "currency", "status", "issued_at", "retention_until", "period_start", "period_end", "due_date", "eur_amount_cents", "base_amount_cents", "metered_amount_cents", "prepaid_credit_cents", "collection_minimum_applied", "presentment_units_per_eur", "presentment_reference_date", "customer_email", "customer_name", "customer_company", "customer_address", "customer_vat"},
-			row:        []driver.Value{"INV-1", int64(1375), "USD", "paid", now, retained, now.AddDate(0, -1, 0), now, now.AddDate(0, 0, 14), int64(1250), int64(1000), int64(750), int64(500), false, "1.1000000000", now, "ada@example.test", "Ada", "Example BV", "Utrecht", "NL123"},
+			columns:    []string{"invoice_number", "amount_cents", "currency", "status", "issued_at", "retention_until", "period_start", "period_end", "due_date", "eur_amount_cents", "base_amount_cents", "metered_amount_cents", "prepaid_credit_cents", "collection_minimum_applied", "presentment_units_per_eur", "presentment_reference_date", "customer_email", "customer_name", "customer_company", "customer_address", "customer_vat", "has_supplier_snapshot", "supplier_name", "supplier_address", "supplier_vat_number", "supplier_registration_number"},
+			row:        []driver.Value{"INV-1", int64(1375), "USD", "paid", now, retained, now.AddDate(0, -1, 0), now, now.AddDate(0, 0, 14), int64(1250), int64(1000), int64(750), int64(500), false, "1.1000000000", now, "ada@example.test", "Ada", "Example BV", "Utrecht", "NL123", true, "Recorded Supplier B.V.", "Haarlem, NL", "NL999", "87654321"},
 			lines:      true,
 			wantNumber: "INV-1", wantAmount: 1375, wantEUR: 1250, wantContent: []string{
-				"Invoice", "USD 13.75", "Billing period", "2026-07-31 10:00 UTC to 2026-08-31 10:00 UTC", "Due", "2026-09-14", "Ada", "ada@example.test",
+				"Invoice", "USD 13.75", "Recorded Supplier B.V.", "Haarlem, NL", "VAT NL999", "Registration 87654321", "Billing period", "2026-07-31 10:00 UTC to 2026-08-31 10:00 UTC", "Due", "2026-09-14", "Ada", "ada@example.test",
 				"Base fee", "Delivered bandwidth", "Subtotal", "EUR 17.50", "Prepaid credit applied", "-EUR 5.00", "Amount due (EUR)", "EUR 12.50",
 				"1 EUR = 1.1 USD", "2026-08-31",
 			},
@@ -152,14 +152,14 @@ func TestGetBillingDocumentRendersEveryMoneyDocumentKind(t *testing.T) { //nolin
 		},
 		{
 			kind: "payment_receipt", query: "-- name: GetPaymentReceiptDocument",
-			columns:    []string{"document_number", "amount_cents", "currency", "status", "issued_at", "retention_until", "method", "tx_id", "eur_amount_cents", "fx_units_per_eur", "fx_reference_date", "customer_email", "customer_name", "customer_company", "customer_address", "customer_vat"},
-			row:        []driver.Value{"PAY-1", int64(999), "EUR", "confirmed", now, retained, "stripe_card", "pi_123", int64(999), "1.0000000000", now, "margaret@example.test", "Margaret", "Compiler Ltd", "London", "GB123"},
-			wantNumber: "PAY-1", wantAmount: 999, wantEUR: 999, wantContent: []string{"Payment receipt", "EUR 9.99", "stripe_card", "pi_123"},
+			columns:    []string{"document_number", "amount_cents", "currency", "status", "issued_at", "retention_until", "method", "tx_id", "eur_amount_cents", "fx_units_per_eur", "fx_reference_date", "customer_email", "customer_name", "customer_company", "customer_address", "customer_vat", "has_supplier_snapshot", "supplier_name", "supplier_address", "supplier_vat_number", "supplier_registration_number"},
+			row:        []driver.Value{"PAY-1", int64(999), "EUR", "confirmed", now, retained, "stripe_card", "pi_123", int64(999), "1.0000000000", now, "margaret@example.test", "Margaret", "Compiler Ltd", "London", "GB123", false, "", "", "", ""},
+			wantNumber: "PAY-1", wantAmount: 999, wantEUR: 999, wantContent: []string{"Payment receipt", "FrameWorks B.V.", "Amsterdam, NL", "EUR 9.99", "stripe_card", "pi_123"},
 		},
 		{
 			kind: "credit_note", query: "-- name: GetCreditNoteDocument",
-			columns:    []string{"credit_note_number", "amount_cents", "currency", "issued_at", "retention_until", "source_document_type", "source_document_id", "reversal_reference_type", "reversal_reference_id", "reason", "customer_email", "customer_name", "customer_company", "customer_address", "customer_vat"},
-			row:        []driver.Value{"CN-1", int64(-250), "EUR", now, retained, "invoice", "inv-1", "refund", "re_1", "customer refund", "barbara@example.test", "Barbara", "COBOL Inc", "New York", "US123"},
+			columns:    []string{"credit_note_number", "amount_cents", "currency", "issued_at", "retention_until", "source_document_type", "source_document_id", "reversal_reference_type", "reversal_reference_id", "reason", "customer_email", "customer_name", "customer_company", "customer_address", "customer_vat", "has_supplier_snapshot", "supplier_name", "supplier_address", "supplier_vat_number", "supplier_registration_number"},
+			row:        []driver.Value{"CN-1", int64(-250), "EUR", now, retained, "invoice", "inv-1", "refund", "re_1", "customer refund", "barbara@example.test", "Barbara", "COBOL Inc", "New York", "US123", false, "", "", "", ""},
 			wantNumber: "CN-1", wantAmount: -250, wantEUR: -1, wantContent: []string{"Credit note", "-2.50", "invoice:inv-1", "refund:re_1", "customer refund", "Total credited", "barbara@example.test"},
 		},
 	}
