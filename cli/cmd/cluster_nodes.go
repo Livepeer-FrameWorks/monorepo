@@ -406,7 +406,7 @@ func verifyExistingClusterNode(cmd *cobra.Command, clusterID, nodeID, targetVers
 		return fmt.Errorf("target node %s is registered with status=%s; re-add is not treated as current", nodeID, registered.GetStatus())
 	}
 
-	fh, fhCtxCfg, fhCleanup, err := clusterNodesFoghornClientFromContext(cmd.Context())
+	fh, fhCtxCfg, fhCleanup, err := clusterNodesFoghornClientFromContext(cmd.Context(), firstNonEmpty(registered.GetClusterId(), clusterID))
 	if err != nil {
 		return fmt.Errorf("verify existing node health: %w", err)
 	}
@@ -764,24 +764,88 @@ func runClusterNodesList(ctx context.Context, w io.Writer, qm clusterNodesListQM
 }
 
 func loadNodeHealth(cmd *cobra.Command, nodes []*quartermasterpb.InfrastructureNode) map[string]*foghorncontrolpb.GetNodeHealthResponse {
-	fh, ctxCfg, cleanup, err := clusterNodesFoghornClientFromContext(cmd.Context())
+	ctxCfg, err := activeClusterLifecycleContextWithAuth(cmd.Context())
 	if err != nil {
 		_, _ = fmt.Fprintf(cmd.ErrOrStderr(), "warning: health unavailable: %v\n", err)
 		return nil
 	}
-	defer cleanup()
-	defer func() { _ = fh.Close() }()
+	resolver := controlplane.NewResolver(ctxCfg)
+	defer resolver.Close()
+	healthByID, dialErrs, _ := collectNodeHealth(cmd.Context(), ctxCfg, nodes, foghornNodeHealthDialer(resolver, ctxCfg))
+	for _, dialErr := range dialErrs {
+		_, _ = fmt.Fprintf(cmd.ErrOrStderr(), "warning: health unavailable: %v\n", dialErr)
+	}
+	return healthByID
+}
 
-	out := make(map[string]*foghorncontrolpb.GetNodeHealthResponse, len(nodes))
+// nodeHealthClient is the Foghorn surface node health reads need.
+type nodeHealthClient interface {
+	GetNodeHealth(ctx context.Context, req *foghorncontrolpb.GetNodeHealthRequest) (*foghorncontrolpb.GetNodeHealthResponse, metadata.MD, error)
+}
+
+// nodeHealthDialer opens a health client on the Foghorn serving clusterID.
+type nodeHealthDialer func(ctx context.Context, clusterID string) (nodeHealthClient, func(), error)
+
+func foghornNodeHealthDialer(resolver *controlplane.Resolver, ctxCfg fwcfg.Context) nodeHealthDialer {
+	return func(ctx context.Context, clusterID string) (nodeHealthClient, func(), error) {
+		fh, err := clusterNodesFoghornClient(ctx, resolver, ctxCfg, clusterID)
+		if err != nil {
+			return nil, nil, err
+		}
+		return fh, func() { _ = fh.Close() }, nil
+	}
+}
+
+// collectNodeHealth reads each node's health from the Foghorn serving the
+// node's own cluster, dialing each cluster's Foghorn once. It returns the
+// health by node ID, one error per cluster whose Foghorn could not be dialed,
+// and, for every node without health, the reason it has none.
+func collectNodeHealth(ctx context.Context, ctxCfg fwcfg.Context, nodes []*quartermasterpb.InfrastructureNode, dial nodeHealthDialer) (map[string]*foghorncontrolpb.GetNodeHealthResponse, []error, map[string]string) {
+	healthByID := make(map[string]*foghorncontrolpb.GetNodeHealthResponse, len(nodes))
+	missing := map[string]string{}
+	var dialErrs []error
+
+	var clusterOrder []string
+	byCluster := map[string][]*quartermasterpb.InfrastructureNode{}
 	for _, n := range nodes {
-		cctx, cancel := clusterNodesRPCContext(cmd.Context(), ctxCfg, 5*time.Second)
-		resp, _, err := fh.GetNodeHealth(cctx, &foghorncontrolpb.GetNodeHealthRequest{NodeId: n.GetNodeId()})
-		cancel()
-		if err == nil {
-			out[n.GetNodeId()] = resp
+		if n == nil {
+			continue
+		}
+		clusterID := strings.TrimSpace(n.GetClusterId())
+		if _, seen := byCluster[clusterID]; !seen {
+			clusterOrder = append(clusterOrder, clusterID)
+		}
+		byCluster[clusterID] = append(byCluster[clusterID], n)
+	}
+	for _, clusterID := range clusterOrder {
+		group := byCluster[clusterID]
+		client, closeClient, err := dial(ctx, clusterID)
+		if err != nil {
+			dialErr := fmt.Errorf("cluster %q: %w", clusterID, err)
+			dialErrs = append(dialErrs, dialErr)
+			for _, n := range group {
+				missing[n.GetNodeId()] = dialErr.Error()
+			}
+			continue
+		}
+		for _, n := range group {
+			cctx, cancel := clusterNodesRPCContext(ctx, ctxCfg, 5*time.Second)
+			resp, _, rpcErr := client.GetNodeHealth(cctx, &foghorncontrolpb.GetNodeHealthRequest{NodeId: n.GetNodeId()})
+			cancel()
+			switch {
+			case rpcErr != nil:
+				missing[n.GetNodeId()] = fmt.Sprintf("GetNodeHealth: %v", rpcErr)
+			case resp == nil:
+				missing[n.GetNodeId()] = "GetNodeHealth returned no health"
+			default:
+				healthByID[n.GetNodeId()] = resp
+			}
+		}
+		if closeClient != nil {
+			closeClient()
 		}
 	}
-	return out
+	return healthByID, dialErrs, missing
 }
 
 func nodeComponentVersions(versions []*foghorncontrolpb.NodeComponentVersion) string {
@@ -949,8 +1013,7 @@ func newClusterNodesModeCmd(name, mode, short string) *cobra.Command {
 				_, _ = fmt.Fprintln(cmd.OutOrStdout(), "Cancelled")
 				return nil
 			}
-			_ = selectedClusterID
-			return setClusterNodeMode(cmd, node.GetNodeId(), mode)
+			return setClusterNodeMode(cmd, firstNonEmpty(node.GetClusterId(), selectedClusterID), node.GetNodeId(), mode)
 		},
 	}
 	cmd.Flags().StringVar(&clusterID, "cluster-id", "", "cluster to manage (defaults to active context cluster_id)")
@@ -999,17 +1062,18 @@ func newClusterNodesFenceCmd(name, short string) *cobra.Command {
 			if name == "remove" {
 				mode = "draining"
 			}
-			if err := setClusterNodeMode(cmd, node.GetNodeId(), mode); err != nil {
+			nodeClusterID := firstNonEmpty(node.GetClusterId(), selectedClusterID)
+			if err := setClusterNodeMode(cmd, nodeClusterID, node.GetNodeId(), mode); err != nil {
 				return err
 			}
 			if name == "remove" {
 				if wait <= 0 {
 					return fmt.Errorf("remove requires a positive --wait deadline; use cluster nodes evict for immediate fencing")
 				}
-				if err := waitForNodeStreams(cmd, node.GetNodeId(), wait); err != nil {
+				if err := waitForNodeStreams(cmd, nodeClusterID, node.GetNodeId(), wait); err != nil {
 					return err
 				}
-				if err := setClusterNodeMode(cmd, node.GetNodeId(), "maintenance"); err != nil {
+				if err := setClusterNodeMode(cmd, nodeClusterID, node.GetNodeId(), "maintenance"); err != nil {
 					return err
 				}
 			}
@@ -1041,8 +1105,8 @@ type nodeModeClient interface {
 	SetNodeMode(ctx context.Context, req *foghorncontrolpb.SetNodeModeRequest) (*foghorncontrolpb.SetNodeModeResponse, metadata.MD, error)
 }
 
-func setClusterNodeMode(cmd *cobra.Command, nodeID, mode string) error {
-	fh, ctxCfg, cleanup, err := clusterNodesFoghornClientFromContext(cmd.Context())
+func setClusterNodeMode(cmd *cobra.Command, clusterID, nodeID, mode string) error {
+	fh, ctxCfg, cleanup, err := clusterNodesFoghornClientFromContext(cmd.Context(), clusterID)
 	if err != nil {
 		return err
 	}
@@ -1071,8 +1135,8 @@ func runSetNodeMode(ctx context.Context, w io.Writer, fh nodeModeClient, ctxCfg 
 	return nil
 }
 
-func waitForNodeStreams(cmd *cobra.Command, nodeID string, timeout time.Duration) error {
-	fh, ctxCfg, cleanup, err := clusterNodesFoghornClientFromContext(cmd.Context())
+func waitForNodeStreams(cmd *cobra.Command, clusterID, nodeID string, timeout time.Duration) error {
+	fh, ctxCfg, cleanup, err := clusterNodesFoghornClientFromContext(cmd.Context(), clusterID)
 	if err != nil {
 		return err
 	}
@@ -1242,21 +1306,87 @@ func clusterNodesQuartermasterGRPCConfig(ep controlplane.Endpoint, ctxCfg fwcfg.
 	}
 }
 
-func clusterNodesFoghornClientFromContext(ctx context.Context) (*fhclient.GRPCClient, fwcfg.Context, func(), error) {
+// clusterNodesFoghornClientFromContext dials the Foghorn that serves clusterID
+// in the active context's manifest.
+func clusterNodesFoghornClientFromContext(ctx context.Context, clusterID string) (*fhclient.GRPCClient, fwcfg.Context, func(), error) {
 	ctxCfg, err := activeClusterLifecycleContextWithAuth(ctx)
 	if err != nil {
 		return nil, fwcfg.Context{}, nil, err
 	}
-	ep, err := controlplane.ResolveGRPC(ctx, ctxCfg, "foghorn")
+	resolver := controlplane.NewResolver(ctxCfg)
+	fh, err := clusterNodesFoghornClient(ctx, resolver, ctxCfg, clusterID)
 	if err != nil {
+		resolver.Close()
 		return nil, fwcfg.Context{}, nil, err
+	}
+	return fh, ctxCfg, resolver.Close, nil
+}
+
+// clusterNodesFoghornClient dials, through resolver, the manifest Foghorn
+// entry serving clusterID. Per-cell manifests deploy one Foghorn per media
+// cluster (foghorn-eu, foghorn-us); a node's health, mode and streams live
+// only in its own cluster's Foghorn. The caller closes the resolver.
+func clusterNodesFoghornClient(ctx context.Context, resolver *controlplane.Resolver, ctxCfg fwcfg.Context, clusterID string) (*fhclient.GRPCClient, error) {
+	ep, entry, err := clusterNodesFoghornEndpoint(ctx, resolver, clusterID)
+	if err != nil {
+		return nil, err
 	}
 	fh, err := fhclient.NewGRPCClient(clusterNodesFoghornGRPCConfig(ep, ctxCfg))
 	if err != nil {
-		ep.Cleanup()
-		return nil, fwcfg.Context{}, nil, fmt.Errorf("failed to connect to Foghorn gRPC: %w", err)
+		return nil, fmt.Errorf("failed to connect to Foghorn gRPC (%s): %w", foghornEntryLabel(entry), err)
 	}
-	return fh, ctxCfg, ep.Cleanup, nil
+	return fh, nil
+}
+
+// clusterNodesFoghornEndpoint resolves the endpoint of the Foghorn entry
+// serving clusterID and returns that entry's name ("" for a local-access
+// context, whose single saved Foghorn endpoint serves every cluster).
+func clusterNodesFoghornEndpoint(ctx context.Context, resolver *controlplane.Resolver, clusterID string) (controlplane.Endpoint, string, error) {
+	manifest, err := resolver.Manifest(ctx)
+	if err != nil {
+		return controlplane.Endpoint{}, "", err
+	}
+	entry, err := foghornEntryForCluster(manifest, clusterID)
+	if err != nil {
+		return controlplane.Endpoint{}, "", err
+	}
+	ep, err := resolver.ResolveGRPCEntry(ctx, "foghorn", entry)
+	if err != nil {
+		return controlplane.Endpoint{}, entry, fmt.Errorf("resolve %s: %w", foghornEntryLabel(entry), err)
+	}
+	return ep, entry, nil
+}
+
+// foghornEntryForCluster names the enabled manifest Foghorn entry serving
+// clusterID, with the placement provision renders by (serviceConfigForDeploy).
+// A nil manifest (local access) returns "". Without a cluster ID only a
+// manifest with exactly one enabled Foghorn entry resolves.
+func foghornEntryForCluster(manifest *inventory.Manifest, clusterID string) (string, error) {
+	if manifest == nil {
+		return "", nil
+	}
+	var entries []string
+	for name, svc := range manifest.Services {
+		if svc.Enabled && serviceDeployMatches(name, svc, "foghorn") {
+			entries = append(entries, name)
+		}
+	}
+	sort.Strings(entries)
+	if len(entries) == 0 {
+		return "", fmt.Errorf("the manifest enables no Foghorn service")
+	}
+	clusterID = strings.TrimSpace(clusterID)
+	if clusterID == "" {
+		if len(entries) == 1 {
+			return entries[0], nil
+		}
+		return "", fmt.Errorf("no cluster ID to choose among Foghorn entries %s", strings.Join(entries, ", "))
+	}
+	name, svc, ok := serviceConfigForDeploy(manifest.Services, "foghorn", clusterID, "")
+	if !ok || !svc.Enabled {
+		return "", fmt.Errorf("no enabled manifest Foghorn entry serves cluster %q (entries: %s)", clusterID, strings.Join(entries, ", "))
+	}
+	return name, nil
 }
 
 func clusterNodesFoghornGRPCConfig(ep controlplane.Endpoint, ctxCfg fwcfg.Context) fhclient.GRPCConfig {

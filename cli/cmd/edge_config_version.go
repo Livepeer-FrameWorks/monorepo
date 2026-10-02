@@ -11,11 +11,13 @@ import (
 	"strings"
 	"time"
 
+	"frameworks/cli/internal/controlplane"
 	"frameworks/cli/internal/releases"
 	"frameworks/cli/internal/ux"
 	"frameworks/cli/internal/xexec"
 	"frameworks/cli/pkg/health"
 
+	qmclient "github.com/Livepeer-FrameWorks/monorepo/pkg/clients/quartermaster"
 	foghorncontrolpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/foghorn_control"
 	quartermasterpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/quartermaster"
 	fwversion "github.com/Livepeer-FrameWorks/monorepo/pkg/version"
@@ -65,11 +67,15 @@ type edgeConfigNode struct {
 	CLIVersion string
 	Digest     string
 	Reported   bool
+	// Unreported is why an edge without health has none.
+	Unreported string
 }
 
 // evaluateEdgeConfigVersions builds the doctor verdict over the cluster's
-// edges: every stale or unmarked edge is listed; an edge whose health was
-// not available is listed as not reporting.
+// edges. Every stale or unmarked edge fails the check. An edge whose health
+// could not be read (not reporting) or whose config cannot be compared with
+// this CLI leaves the check unverified, which is a warning: the doctor only
+// reports healthy when every edge's config was read and is current.
 func evaluateEdgeConfigVersions(nodes []edgeConfigNode, cliVersion string) *health.CheckResult {
 	result := &health.CheckResult{Name: "edge_config_version", CheckedAt: time.Now(), Metadata: map[string]string{}}
 	if len(nodes) == 0 {
@@ -81,7 +87,11 @@ func evaluateEdgeConfigVersions(nodes []edgeConfigNode, cliVersion string) *heal
 	var behind, unknown, silent []string
 	for _, n := range nodes {
 		if !n.Reported {
-			silent = append(silent, n.Name)
+			entry := n.Name
+			if reason := strings.TrimSpace(n.Unreported); reason != "" {
+				entry = fmt.Sprintf("%s (%s)", n.Name, reason)
+			}
+			silent = append(silent, entry)
 			continue
 		}
 		state, detail := classifyEdgeConfig(n.CLIVersion, n.Digest, cliVersion)
@@ -96,31 +106,42 @@ func evaluateEdgeConfigVersions(nodes []edgeConfigNode, cliVersion string) *heal
 	sort.Strings(unknown)
 	sort.Strings(silent)
 	if len(silent) > 0 {
-		result.Metadata["not_reporting"] = strings.Join(silent, ", ")
+		result.Metadata["not_reporting"] = strings.Join(silent, "; ")
 	}
 	if len(unknown) > 0 {
 		result.Metadata["not_comparable"] = strings.Join(unknown, "; ")
 	}
+	var notes []string
+	if len(silent) > 0 {
+		notes = append(notes, fmt.Sprintf("%d not reporting: %s", len(silent), strings.Join(silent, "; ")))
+	}
+	if len(unknown) > 0 {
+		notes = append(notes, "not comparable: "+strings.Join(unknown, "; "))
+	}
 	if len(behind) > 0 {
 		result.Status = "degraded"
 		result.Message = fmt.Sprintf("%d/%d edge(s) run config older than this CLI: %s", len(behind), len(nodes), strings.Join(behind, "; "))
+		if len(notes) > 0 {
+			result.Message += "; " + strings.Join(notes, "; ")
+		}
+		return result
+	}
+	current := len(nodes) - len(silent) - len(unknown)
+	if len(notes) > 0 {
+		result.Status = yugabyteLayoutWarning
+		result.Message = fmt.Sprintf("%d/%d edge(s) verified on this CLI's edge config; %s", current, len(nodes), strings.Join(notes, "; "))
 		return result
 	}
 	result.OK = true
 	result.Status = "healthy"
-	result.Message = fmt.Sprintf("%d edge(s) run this CLI's edge config", len(nodes)-len(silent)-len(unknown))
-	if len(silent) > 0 {
-		result.Message += fmt.Sprintf("; %d not reporting (%s)", len(silent), strings.Join(silent, ", "))
-	}
-	if len(unknown) > 0 {
-		result.Message += "; not comparable: " + strings.Join(unknown, "; ")
-	}
+	result.Message = fmt.Sprintf("%d edge(s) run this CLI's edge config", current)
 	return result
 }
 
 // edgeConfigNodesFromHealth joins the registered edge nodes with the
 // provisioned-config marker Foghorn reports in node health.
-func edgeConfigNodesFromHealth(nodes []*quartermasterpb.InfrastructureNode, healthByID map[string]*foghorncontrolpb.GetNodeHealthResponse) []edgeConfigNode {
+// unreported carries, per node ID, why a node has no health.
+func edgeConfigNodesFromHealth(nodes []*quartermasterpb.InfrastructureNode, healthByID map[string]*foghorncontrolpb.GetNodeHealthResponse, unreported map[string]string) []edgeConfigNode {
 	out := make([]edgeConfigNode, 0, len(nodes))
 	for _, n := range nodes {
 		name := firstNonEmpty(n.GetNodeName(), n.GetNodeId())
@@ -130,6 +151,7 @@ func edgeConfigNodesFromHealth(nodes []*quartermasterpb.InfrastructureNode, heal
 			CLIVersion: h.GetProvisionedConfigCliVersion(),
 			Digest:     h.GetProvisionedConfigDigest(),
 			Reported:   h != nil,
+			Unreported: unreported[n.GetNodeId()],
 		})
 	}
 	return out
@@ -249,25 +271,37 @@ func sudoReadEdgeConfigMarker(cmd *cobra.Command) func(string) (string, bool, er
 	}
 }
 
-// doctorEdgeConfigVersions lists the active cluster's edges whose config is
-// older than this CLI's edge config. It needs lifecycle (Quartermaster +
-// Foghorn) access from the active context; without it the check reports a
-// warning instead of guessing.
-func doctorEdgeConfigVersions(cmd *cobra.Command) *health.CheckResult {
-	qm, ctxCfg, cleanup, err := clusterNodesQMClientFromContext(cmd.Context())
-	if err != nil {
+// doctorEdgeConfigVersions lists the cluster's edges whose config is older
+// than this CLI's edge config. Endpoints resolve against the doctor's own
+// manifest, and each edge's health is read from the Foghorn serving that
+// edge's cluster. It needs lifecycle (Quartermaster + Foghorn) access from the
+// active context; without it the check reports a warning instead of guessing.
+func doctorEdgeConfigVersions(cmd *cobra.Command, rc *resolvedCluster) *health.CheckResult {
+	notChecked := func(format string, args ...any) *health.CheckResult {
 		return &health.CheckResult{Name: "edge_config_version", Status: yugabyteLayoutWarning, CheckedAt: time.Now(),
-			Message: fmt.Sprintf("not checked: %v", err)}
+			Message: "not checked: " + fmt.Sprintf(format, args...)}
 	}
-	defer cleanup()
+	ctxCfg, err := activeClusterLifecycleContextWithAuth(cmd.Context())
+	if err != nil {
+		return notChecked("%v", err)
+	}
+	resolver := controlplane.NewResolverWithManifest(ctxCfg, rc.Manifest, rc.ManifestPath, rc.AgeKey)
+	defer resolver.Close()
+	ep, err := resolver.ResolveGRPC(cmd.Context(), "quartermaster")
+	if err != nil {
+		return notChecked("resolve quartermaster: %v", err)
+	}
+	qm, err := qmclient.NewGRPCClient(clusterNodesQuartermasterGRPCConfig(ep, ctxCfg))
+	if err != nil {
+		return notChecked("connect Quartermaster gRPC: %v", err)
+	}
 	defer func() { _ = qm.Close() }()
 	cctx, cancel := clusterNodesRPCContext(cmd.Context(), ctxCfg, 15*time.Second)
 	resp, err := qm.ListNodes(cctx, ctxCfg.ClusterID, "edge", "", nil)
 	cancel()
 	if err != nil {
-		return &health.CheckResult{Name: "edge_config_version", Status: yugabyteLayoutWarning, CheckedAt: time.Now(),
-			Message: fmt.Sprintf("not checked: list edge nodes: %v", err)}
+		return notChecked("list edge nodes: %v", err)
 	}
-	healthByID := loadNodeHealth(cmd, resp.GetNodes())
-	return evaluateEdgeConfigVersions(edgeConfigNodesFromHealth(resp.GetNodes(), healthByID), fwversion.Version)
+	healthByID, _, missing := collectNodeHealth(cmd.Context(), ctxCfg, resp.GetNodes(), foghornNodeHealthDialer(resolver, ctxCfg))
+	return evaluateEdgeConfigVersions(edgeConfigNodesFromHealth(resp.GetNodes(), healthByID, missing), fwversion.Version)
 }

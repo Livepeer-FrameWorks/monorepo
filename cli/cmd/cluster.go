@@ -15,6 +15,7 @@ import (
 	fwcfg "frameworks/cli/internal/config"
 	"frameworks/cli/internal/readiness"
 	"frameworks/cli/internal/ux"
+	"frameworks/cli/pkg/bootstrap"
 	"frameworks/cli/pkg/credentials"
 	"frameworks/cli/pkg/detect"
 	fwgitops "frameworks/cli/pkg/gitops"
@@ -643,9 +644,13 @@ Default mode (read-only, no SOPS decryption):
   - Application services: HTTP /health endpoints.
   - Database migrations: embedded SQL migrations are compared against the
     PostgreSQL/YugabyteDB _migrations ledger when credentials are available.
-  - Control plane: read-only view of SystemTenantID + Quartermaster address from
-    the active context. Authenticated checks are skipped (reported as
-    "not verified") — pass --deep for the full check.
+  - Edge nodes: each edge's provisioned config version, read from the Foghorn
+    serving that edge's own cluster. An edge whose health cannot be read is a
+    warning, never a pass.
+  - Control plane: read-only view of the system tenant the active context saved
+    (when that context supplied the manifest) + Quartermaster address.
+    Authenticated checks are skipped (reported as "not verified") — pass
+    --deep for the full check.
 
 --deep mode (opts into SOPS decryption to obtain SERVICE_TOKEN and database credentials):
   - All of the above, plus executable PostgreSQL/Yugabyte and ClickHouse
@@ -653,7 +658,9 @@ Default mode (read-only, no SOPS decryption):
     probes run as the least-privilege runtime role, not the owner/migrator.
   - Authenticated Quartermaster/Commodore/Purser checks:
     default cluster + platform-official cluster flags, operator-account presence
-    in the system tenant, pricing config for clusters that declared it.
+    in the system tenant, pricing config for clusters that declared it. Without
+    a saved system tenant, the bootstrap system tenant alias is resolved
+    through Quartermaster.
   - YugabyteDB migration checks can use DATABASE_PASSWORD from decrypted
     env_files when postgres.password is not set directly in the manifest.
   - Requires a readable age key (SOPS_AGE_KEY_FILE, --age-key, or the active
@@ -1124,7 +1131,7 @@ func runDoctor(cmd *cobra.Command, rc *resolvedCluster, deep bool) error {
 
 	fmt.Fprintln(out, "Edge Nodes:")
 	fmt.Fprintln(out, "")
-	edgeConfigResult := doctorEdgeConfigVersions(cmd)
+	edgeConfigResult := doctorEdgeConfigVersions(cmd, rc)
 	totalChecks++
 	printHealthResult(cmd, "Edge config version", edgeConfigResult)
 	if edgeConfigResult.OK || edgeConfigResult.Status == yugabyteLayoutWarning {
@@ -1481,20 +1488,15 @@ func doctorServiceProbe(name string, svc inventory.ServiceConfig) doctorProbe {
 // returns the report plus next-steps derived from any warnings.
 func doctorControlPlane(cmd *cobra.Command, rc *resolvedCluster, serviceToken string, sharedEnv map[string]string, deep bool) (readiness.Report, []ux.NextStep) {
 	manifest := rc.Manifest
-	cfg, err := fwcfg.Load()
-	if err != nil {
-		return readiness.Report{}, nil
-	}
-	active, mErr := fwcfg.MaybeActiveContext(fwcfg.GetRuntimeOverrides(), fwcfg.OSEnv{}, cfg)
-	if mErr != nil || active.SystemTenantID == "" {
+	systemTenantID := doctorContextSystemTenantID(rc)
+	if !deep && systemTenantID == "" {
 		return readiness.Report{}, nil
 	}
 
 	qmAddr, _ := resolveServiceGRPCAddr(manifest, "quartermaster", 19002) //nolint:errcheck // empty on miss is the intent
 
 	runtimeData := map[string]any{
-		"system_tenant_id": active.SystemTenantID,
-		"service_token":    serviceToken,
+		"service_token": serviceToken,
 	}
 	var sess *remoteaccess.Session
 	if deep {
@@ -1505,10 +1507,11 @@ func doctorControlPlane(cmd *cobra.Command, rc *resolvedCluster, serviceToken st
 					Subject: "control-plane.transport",
 					Detail:  fmt.Sprintf("Could not load internal PKI for control-plane checks: %v", pkiErr),
 				}}}
-				return renderDoctorControlPlane(cmd, active.SystemTenantID, qmAddr, report)
+				return renderDoctorControlPlane(cmd, systemTenantID, qmAddr, report)
 			}
 			runtimeData["internal_pki_bootstrap"] = pki
 		}
+		var err error
 		sess, err = remoteaccess.OpenSession(remoteaccess.Options{
 			Manifest:      manifest,
 			SSHKeyPath:    stringFlag(cmd, "ssh-key").Value,
@@ -1519,15 +1522,66 @@ func doctorControlPlane(cmd *cobra.Command, rc *resolvedCluster, serviceToken st
 				Subject: "control-plane.transport",
 				Detail:  fmt.Sprintf("Could not open tunneled control-plane session: %v", err),
 			}}}
-			return renderDoctorControlPlane(cmd, active.SystemTenantID, qmAddr, report)
+			return renderDoctorControlPlane(cmd, systemTenantID, qmAddr, report)
 		}
 		defer sess.Close()
+
+		resolved, warning := doctorResolveSystemTenantID(systemTenantID, func() (string, error) {
+			return resolveSystemTenantIDViaQM(cmd.Context(), manifest, runtimeData, sess)
+		})
+		if warning != nil {
+			report := readiness.Report{Checked: true, Warnings: []readiness.Warning{*warning}}
+			return renderDoctorControlPlane(cmd, "(unresolved)", qmAddr, report)
+		}
+		systemTenantID = resolved
 	}
+	runtimeData["system_tenant_id"] = systemTenantID
 
 	// Deep checks use the same SSH-forwarded service endpoints as provisioning.
 	// Default checks remain unauthenticated and therefore unchecked.
 	report := buildControlPlaneReport(cmd.Context(), manifest, runtimeData, sess)
-	return renderDoctorControlPlane(cmd, active.SystemTenantID, qmAddr, report)
+	return renderDoctorControlPlane(cmd, systemTenantID, qmAddr, report)
+}
+
+// doctorContextSystemTenantID is the system tenant UUID the active context
+// saved, used only when that context also supplied the manifest. A manifest
+// passed explicitly (--manifest, --gitops-dir) may name a different platform,
+// so its system tenant is resolved from that platform's Quartermaster.
+func doctorContextSystemTenantID(rc *resolvedCluster) string {
+	if rc == nil {
+		return ""
+	}
+	if rc.Source != inventory.SourceContext && rc.Source != inventory.SourceContextLastManifest {
+		return ""
+	}
+	return strings.TrimSpace(rc.ContextSystemTenantID)
+}
+
+// doctorResolveSystemTenantID returns the saved system tenant when there is
+// one, and otherwise resolves the bootstrap-declared system tenant alias
+// (bootstrap.SystemTenantAlias, the account gitops bootstrap.yaml refers to
+// as quartermaster.system_tenant) to its UUID through Quartermaster. A failed
+// resolution is a control-plane warning, so the check reports it instead of
+// passing unverified.
+func doctorResolveSystemTenantID(saved string, viaQuartermaster func() (string, error)) (string, *readiness.Warning) {
+	if saved = strings.TrimSpace(saved); saved != "" {
+		return saved, nil
+	}
+	id, err := viaQuartermaster()
+	if err == nil && strings.TrimSpace(id) == "" {
+		err = errors.New("empty UUID in the ResolveTenantAliases response")
+	}
+	if err != nil {
+		return "", &readiness.Warning{
+			Subject: "control-plane.system-tenant",
+			Detail:  fmt.Sprintf("Could not resolve the system tenant (alias %q) from Quartermaster: %v", bootstrap.SystemTenantAlias, err),
+			Remediation: readiness.Remediation{
+				Cmd: "frameworks cluster provision",
+				Why: "Provisioning runs the Quartermaster bootstrap that establishes the system tenant alias.",
+			},
+		}
+	}
+	return strings.TrimSpace(id), nil
 }
 
 func renderDoctorControlPlane(cmd *cobra.Command, systemTenantID, qmAddr string, report readiness.Report) (readiness.Report, []ux.NextStep) {
