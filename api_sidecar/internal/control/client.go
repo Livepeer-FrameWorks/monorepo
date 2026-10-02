@@ -3499,8 +3499,8 @@ func SendSyncComplete(requestID, assetHash, status string, sizeBytes uint64, err
 	return sendControlMessage(msg)
 }
 
-// handleStopSessions terminates all sessions for the given streams on this node
-// Called when a tenant is suspended due to insufficient balance
+// handleStopSessions terminates all sessions, viewers and publisher input, of
+// the given streams on this node. Foghorn sends it when a tenant is suspended.
 func handleStopSessions(logger logging.Logger, req *ipcpb.StopSessionsRequest) {
 	if len(req.StreamNames) == 0 {
 		return
@@ -3520,27 +3520,39 @@ func handleStopSessions(logger logging.Logger, req *ipcpb.StopSessionsRequest) {
 		mistClient.BaseURL = cfg.MistServerURL
 	}
 
+	// Foghorn names streams by internal name; Mist stops sessions by exact
+	// runtime name. Stopping a runtime name ends its viewers and its input
+	// session, so the publisher is disconnected too; its reconnect is refused
+	// at PUSH_REWRITE while the tenant is suspended.
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	live, listErr := mistClient.ViewerSessions(ctx)
+	if listErr != nil {
+		logger.WithError(listErr).WithField("tenant_id", req.TenantId).
+			Warn("Cannot list Mist viewer sessions; stopping the streams under their standard runtime names only")
+	}
+	runtimeNames := mist.SessionStreamNames(req.StreamNames, live)
+
 	logger.WithFields(logging.Fields{
-		"tenant_id":    req.TenantId,
-		"reason":       req.Reason,
-		"stream_count": len(req.StreamNames),
-		"stream_names": req.StreamNames,
+		"tenant_id":     req.TenantId,
+		"reason":        req.Reason,
+		"stream_count":  len(req.StreamNames),
+		"stream_names":  req.StreamNames,
+		"runtime_names": runtimeNames,
 	}).Info("Stopping sessions for suspended tenant")
 
-	// Use batch stop_sessions API
-	err := mistClient.StopSessionsMultiple(req.StreamNames)
-	if err != nil {
+	if err := mistClient.StopSessionsMultipleContext(ctx, runtimeNames); err != nil {
 		logger.WithFields(logging.Fields{
-			"tenant_id":    req.TenantId,
-			"stream_names": req.StreamNames,
-			"error":        err,
+			"tenant_id":     req.TenantId,
+			"runtime_names": runtimeNames,
+			"error":         err,
 		}).Error("Failed to stop sessions via MistServer API")
 		return
 	}
 
 	logger.WithFields(logging.Fields{
-		"tenant_id":    req.TenantId,
-		"stream_names": req.StreamNames,
+		"tenant_id":     req.TenantId,
+		"runtime_names": runtimeNames,
 	}).Info("Successfully stopped sessions for suspended tenant")
 }
 

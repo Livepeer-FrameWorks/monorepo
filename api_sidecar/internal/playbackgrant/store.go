@@ -900,28 +900,22 @@ func (s *Store) invalidate(internal string, sessionIDs []string) {
 }
 
 // stopRevokedStream disconnects every Mist session of a stream whose playback
-// authority was revoked. Mist stops sessions by exact stream name, so the
-// names are the grant's own plus every runtime name Mist lists a viewer of
-// the stream under. Only when Mist refuses the stop are the tracked sessions
-// invalidated instead, so each re-run USER_NEW meets the local refusal.
+// authority was revoked, under every Mist name the stream's sessions run as
+// (mist.SessionStreamNames). Only when Mist refuses the stop are the tracked
+// sessions invalidated instead, so each re-run USER_NEW meets the local
+// refusal.
 func (s *Store) stopRevokedStream(internal string, tracked []string) {
 	if s.mist == nil {
 		return
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), mistCallTimeout)
 	defer cancel()
-	names := []string{internal}
-	bare := mist.ExtractInternalName(internal)
 	live, err := s.mist.ViewerSessions(ctx)
 	if err != nil && s.logger != nil {
 		s.logger.WithError(err).WithField("internal_name", internal).
 			Warn("Cannot list Mist viewer sessions; stopping the revoked stream by its grant name only")
 	}
-	for _, v := range live {
-		if mist.ExtractInternalName(v.Stream) == bare && !slices.Contains(names, v.Stream) {
-			names = append(names, v.Stream)
-		}
-	}
+	names := mist.SessionStreamNames([]string{internal}, live)
 	if err := s.mist.StopSessionsMultipleContext(ctx, names); err != nil {
 		if s.logger != nil {
 			s.logger.WithError(err).WithFields(logging.Fields{"internal_name": internal, "streams": names}).

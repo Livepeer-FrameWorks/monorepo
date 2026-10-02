@@ -22,3 +22,22 @@ func TestParseViewerSessionsKeepsViewersOnly(t *testing.T) {
 		t.Fatal("a response without the session id field was accepted")
 	}
 }
+
+func TestSessionStreamNamesCoversEveryRuntimeNameOfTheStreams(t *testing.T) {
+	live := []ViewerSession{
+		{SessionID: "a", Stream: "live+s"},
+		{SessionID: "b", Stream: "pull+other"},
+		{SessionID: "c", Stream: "dvr+s"},
+		{SessionID: "d", Stream: "live+elsewhere"},
+	}
+	got := SessionStreamNames([]string{"s", "live+other", " "}, live)
+	want := []string{"s", "live+s", "pull+s", "live+other", "pull+other", "dvr+s"}
+	if len(got) != len(want) {
+		t.Fatalf("SessionStreamNames = %v, want %v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("SessionStreamNames = %v, want %v", got, want)
+		}
+	}
+}

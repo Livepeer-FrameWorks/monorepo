@@ -3,6 +3,7 @@ package mist
 import (
 	"context"
 	"fmt"
+	"slices"
 	"strings"
 )
 
@@ -15,6 +16,41 @@ func (c *Client) InvalidateSessionIDs(ctx context.Context, sessionIDs []string) 
 	}
 	_, err := c.makeAPIRequestContext(ctx, map[string]interface{}{"invalidate_sessid": sessionIDs})
 	return err
+}
+
+// SessionStreamNames returns the exact Mist stream names whose sessions belong
+// to the named streams, for stop_sessions, which matches names exactly. A name
+// that carries a runtime prefix is kept as given; a bare internal name also
+// covers the push (live+) and pull (pull+) runtime names a live stream runs
+// under. Every stream Mist lists a viewer session of under the same internal
+// name is added, so a runtime name the edge chose is covered too.
+func SessionStreamNames(names []string, live []ViewerSession) []string {
+	var out []string
+	add := func(name string) {
+		if name != "" && !slices.Contains(out, name) {
+			out = append(out, name)
+		}
+	}
+	bares := make([]string, 0, len(names))
+	for _, name := range names {
+		name = strings.TrimSpace(name)
+		if name == "" {
+			continue
+		}
+		add(name)
+		bare := ExtractInternalName(name)
+		if bare == name {
+			add("live+" + bare)
+			add("pull+" + bare)
+		}
+		bares = append(bares, bare)
+	}
+	for _, session := range live {
+		if slices.Contains(bares, ExtractInternalName(session.Stream)) {
+			add(session.Stream)
+		}
+	}
+	return out
 }
 
 // ViewerSession is one live Mist viewer session from the `clients` API.
