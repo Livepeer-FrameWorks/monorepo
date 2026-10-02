@@ -48,6 +48,11 @@
   when: ansible_facts.service_mgr == "systemd"
   tags: [configure]
 
+- name: Node_baseline | DHCP and RA search domains
+  ansible.builtin.import_tasks: dns_search.yml
+  when: ansible_facts.service_mgr == "systemd"
+  tags: [configure]
+
 - name: Node_baseline | logrotate schedule
   ansible.builtin.import_tasks: logrotate.yml
   tags: [configure]

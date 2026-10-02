@@ -92,6 +92,8 @@ For multi-host deployments, you need:
 
 3. **Firewall Rules** - Open the manifest's WireGuard listen port between backend nodes and keep internal service ports private to the mesh.
 
+4. **No DHCP search domains** - FrameWorks resolves only fully qualified names. A search domain from DHCP or a router advertisement makes the resolver retry a name under that suffix when the upstream drops a query, and a wildcard record there returns a wrong address. Provisioning sets `UseDomains=no` for DHCPv4, DHCPv6 and router advertisements on every systemd-networkd link (netplan included) on platform hosts and Linux edges; on hosts under another network manager, turn off DHCP-provided search domains yourself.
+
 ## SSH Access
 
 ### SSH Key Setup

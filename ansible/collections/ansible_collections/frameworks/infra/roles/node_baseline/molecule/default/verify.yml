@@ -52,6 +52,43 @@
       register: fail2ban_sshd
       changed_when: false
 
+    - name: Read the DHCP lab client index
+      ansible.builtin.slurp:
+        src: /sys/class/net/fwlab-cli/ifindex
+      register: fwlab_ifindex
+
+    - name: Wait for networkd to drop the DHCP search domain
+      ansible.builtin.command:
+        argv: [cat, "/run/systemd/netif/links/{{ fwlab_ifindex.content | b64decode | trim }}"]
+      register: fwlab_link_state
+      changed_when: false
+      until: >-
+        'DOMAINS=' in fwlab_link_state.stdout_lines
+        and fwlab_link_state.stdout is search('NETWORK_FILE_DROPINS=.*90-frameworks-no-search-domains\.conf')
+      retries: 30
+      delay: 1
+
+    - name: Read the DHCP lab client address
+      ansible.builtin.command:
+        argv: [ip, -4, -o, addr, show, dev, fwlab-cli]
+      register: fwlab_addr
+      changed_when: false
+      until: fwlab_addr.stdout is search('inet 192\.0\.2\.')
+      retries: 30
+      delay: 1
+
+    - name: Read the networkd drop-in
+      ansible.builtin.slurp:
+        src: /etc/systemd/network/20-fwlab-cli.network.d/90-frameworks-no-search-domains.conf
+      register: fwlab_dropin
+
+    - name: Assert DHCPv4, DHCPv6 and RA domains are ignored
+      ansible.builtin.assert:
+        that:
+          - (fwlab_dropin.content | b64decode) is search('\[DHCPv4\]\nUseDomains=no')
+          - (fwlab_dropin.content | b64decode) is search('\[DHCPv6\]\nUseDomains=no')
+          - (fwlab_dropin.content | b64decode) is search('\[IPv6AcceptRA\]\nUseDomains=no')
+
     - name: Rerun for idempotence
       ansible.builtin.include_role:
         name: frameworks.infra.node_baseline

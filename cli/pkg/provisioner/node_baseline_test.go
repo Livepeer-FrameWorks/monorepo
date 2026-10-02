@@ -129,3 +129,70 @@ func TestNodeBaselineRoleVarsForwardExtraPackages(t *testing.T) {
 		t.Fatalf("node_baseline_extra_packages = %#v", vars["node_baseline_extra_packages"])
 	}
 }
+
+// A DHCP or RA search domain turns a dropped upstream query into a lookup of
+// the name under that suffix, which a wildcard record answers wrongly. Every
+// host path (node_baseline on cluster hosts, the edge role on standalone
+// edges) writes the networkd drop-in that ignores those domains.
+func TestNodeBaselineIgnoresDHCPAndRASearchDomains(t *testing.T) {
+	const role = "ansible/collections/ansible_collections/frameworks/infra/roles/node_baseline/"
+	main := readRepoFile(t, role+"tasks/main.yml")
+	tasks := readRepoFile(t, role+"tasks/dns_search.yml")
+	dropin := readRepoFile(t, role+"templates/networkd_no_search_domains.conf.j2")
+	handlers := readRepoFile(t, role+"handlers/main.yml")
+	vars := readRepoFile(t, role+"vars/main.yml")
+	edge := readRepoFile(t, "ansible/collections/ansible_collections/frameworks/infra/roles/edge/tasks/main.yml")
+
+	if !strings.Contains(main, "ansible.builtin.import_tasks: dns_search.yml") {
+		t.Errorf("node_baseline main.yml does not import dns_search.yml:\n%s", main)
+	}
+	for _, section := range []string{"[DHCPv4]", "[DHCPv6]", "[IPv6AcceptRA]"} {
+		if !strings.Contains(dropin, section+"\nUseDomains=no\n") {
+			t.Errorf("networkd drop-in must set UseDomains=no under %s:\n%s", section, dropin)
+		}
+	}
+	for _, want := range []string{
+		"systemctl, is-active, systemd-networkd.service",
+		"networkctl list --no-legend --no-pager",
+		"loopback|wireguard) continue",
+		"Network File:",
+		"/etc/systemd/network /run/systemd/network",
+		`dest: "/etc/systemd/network/{{ item }}.d/{{ node_baseline_networkd_dropin_name }}"`,
+		"notify: node_baseline networkd reload",
+	} {
+		if !strings.Contains(tasks, want) {
+			t.Errorf("dns_search.yml missing %q:\n%s", want, tasks)
+		}
+	}
+	if !strings.Contains(vars, "node_baseline_networkd_dropin_name: 90-frameworks-no-search-domains.conf") {
+		t.Errorf("node_baseline vars must name the networkd drop-in:\n%s", vars)
+	}
+	for _, want := range []string{"listen: node_baseline networkd reload", "argv: [networkctl, reload]", "when: not ansible_check_mode"} {
+		if !strings.Contains(handlers, want) {
+			t.Errorf("node_baseline handlers missing %q:\n%s", want, handlers)
+		}
+	}
+	// Privateer's wg0 route is set at runtime with resolvectl; the policy
+	// must not reach into resolved's link settings itself.
+	for _, forbidden := range []string{"[resolvectl", "resolvectl domain", "resolvectl revert", "resolved.conf"} {
+		if strings.Contains(tasks, forbidden) {
+			t.Errorf("dns_search.yml must leave resolved settings to networkd; found %q:\n%s", forbidden, tasks)
+		}
+	}
+
+	start := strings.Index(edge, "- name: Edge | ignore DHCP and RA search domains")
+	install := strings.Index(edge, "- name: Edge | install (container)")
+	if start < 0 || install < 0 || start > install {
+		t.Fatalf("edge role must apply the search domain policy before installing:\n%s", edge)
+	}
+	for _, want := range []string{
+		"name: frameworks.infra.node_baseline",
+		"tasks_from: dns_search.yml",
+		"ansible_facts.os_family != 'Darwin'",
+		"tags: [install, configure]",
+	} {
+		if !strings.Contains(edge[start:install], want) {
+			t.Errorf("edge search domain task missing %q:\n%s", want, edge[start:install])
+		}
+	}
+}

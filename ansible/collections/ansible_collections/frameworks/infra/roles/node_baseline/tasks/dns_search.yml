@@ -1,0 +1,67 @@
+---
+# A search domain handed out by DHCP or a router advertisement makes glibc and
+# Go retry a fully qualified name with that suffix when the upstream resolver
+# drops the query, and a wildcard record under the suffix then answers with a
+# wrong address that looks like success. Platform software only resolves fully
+# qualified names, so every systemd-networkd .network file gets a drop-in that
+# ignores DHCPv4, DHCPv6 and RA domains. Netplan renders into networkd, so its
+# generated files under /run/systemd/network are covered by the same drop-ins.
+# Static Domains= settings and the per-link `~internal` route Privateer sets
+# on wg0 with resolvectl are not DHCP or RA domains and stay as they are.
+- name: Node_baseline | detect systemd-networkd
+  ansible.builtin.command:
+    argv: [systemctl, is-active, systemd-networkd.service]
+  register: node_baseline_networkd_state
+  changed_when: false
+  failed_when: false
+  check_mode: false
+
+- name: Node_baseline | report hosts whose links networkd does not manage
+  ansible.builtin.debug:
+    msg: >-
+      systemd-networkd is not active on {{ inventory_hostname }}; DHCP and RA
+      search domains are left to the host's network manager.
+  when: node_baseline_networkd_state.stdout != "active"
+
+- name: Node_baseline | ignore DHCP and RA search domains
+  when: node_baseline_networkd_state.stdout == "active"
+  block:
+    # The configuration files of the links networkd manages now, plus every
+    # .network file in the writable config directories so a link that is down
+    # during this run keeps the policy when it comes up.
+    - name: Node_baseline | list networkd link configuration files
+      ansible.builtin.shell: |
+        set -euo pipefail
+        {
+          networkctl list --no-legend --no-pager | while read -r _idx link type _oper setup _rest; do
+            case "$type" in loopback|wireguard) continue ;; esac
+            case "$setup" in unmanaged|linger) continue ;; esac
+            { networkctl status --no-pager --lines=0 "$link" || true; } |
+              sed -n 's|^ *Network File: \(/.*\.network\)$|\1|p'
+          done
+          find /etc/systemd/network /run/systemd/network -maxdepth 1 -name '*.network' 2>/dev/null || true
+        } | xargs -r -n1 basename | sort -u
+      args:
+        executable: /bin/bash
+      register: node_baseline_networkd_files
+      changed_when: false
+      check_mode: false
+
+    - name: Node_baseline | ensure networkd drop-in directories
+      ansible.builtin.file:
+        path: "/etc/systemd/network/{{ item }}.d"
+        state: directory
+        owner: root
+        group: root
+        mode: "0755"
+      loop: "{{ node_baseline_networkd_files.stdout_lines }}"
+
+    - name: Node_baseline | write networkd search domain drop-ins
+      ansible.builtin.template:
+        src: networkd_no_search_domains.conf.j2
+        dest: "/etc/systemd/network/{{ item }}.d/{{ node_baseline_networkd_dropin_name }}"
+        owner: root
+        group: root
+        mode: "0644"
+      loop: "{{ node_baseline_networkd_files.stdout_lines }}"
+      notify: node_baseline networkd reload

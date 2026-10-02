@@ -4,8 +4,9 @@ galaxy_info:
   author: FrameWorks Infra
   description: >-
     Installs the baseline operator and diagnostic tools expected on provisioned
-    nodes, bounds journald and rotated log retention, and restricts sshd to key
-    authentication behind a fail2ban jail.
+    nodes, bounds journald and rotated log retention, restricts sshd to key
+    authentication behind a fail2ban jail, and makes systemd-networkd ignore
+    DHCP and RA search domains.
   license: AGPL-3.0-or-later
   min_ansible_version: "2.15"
   platforms:

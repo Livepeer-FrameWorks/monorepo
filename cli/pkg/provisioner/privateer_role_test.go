@@ -221,3 +221,62 @@ func TestPrivateerInternalRouteFollowsWireGuardLink(t *testing.T) {
 		t.Errorf("global resolved drop-in routes names to Privateer:\n%s", dropIn)
 	}
 }
+
+// Stopping Privateer takes .internal resolution down on the host, so the PKI
+// tasks stop it only when they decided a repair is needed, and they decide
+// from read-only probes taken before the stop.
+func TestPrivateerPKIStopsServiceOnlyForRepair(t *testing.T) {
+	pki := readRepoFile(t, "ansible/collections/ansible_collections/frameworks/infra/roles/privateer/tasks/pki.yml")
+	order := []string{
+		"- name: Privateer | check internal CA trust bundle holds the desired CA certificates",
+		"- name: Privateer | discover existing service certificate directories",
+		"- name: Privateer | discover existing service certificate files",
+		"- name: Privateer | discover stale service certificate lock files",
+		"- name: Privateer | decide whether the PKI tree needs repair",
+		"- name: Privateer | stop service before PKI repair",
+		"- name: Privateer | render internal CA trust bundle",
+		"- name: Privateer | normalize existing service certificate directories",
+		"- name: Privateer | normalize existing service certificate files",
+		"- name: Privateer | remove stale service certificate lock files",
+	}
+	last := -1
+	for _, name := range order {
+		idx := strings.Index(pki, name)
+		if idx < 0 {
+			t.Fatalf("pki.yml missing %q", name)
+		}
+		if strings.Count(pki, name) != 1 {
+			t.Fatalf("pki.yml must contain %q once", name)
+		}
+		if idx < last {
+			t.Fatalf("pki.yml task %q is out of order", name)
+		}
+		last = idx
+	}
+
+	stopStart := strings.Index(pki, "- name: Privateer | stop service before PKI repair")
+	stopEnd := stopStart + strings.Index(pki[stopStart:], "\n\n")
+	stop := pki[stopStart:stopEnd]
+	for _, want := range []string{"privateer_pki_repair_needed | bool", "notify: privateer restart"} {
+		if !strings.Contains(stop, want) {
+			t.Errorf("stop task missing %q:\n%s", want, stop)
+		}
+	}
+
+	decideStart := strings.Index(pki, "- name: Privateer | decide whether the PKI tree needs repair")
+	decide := pki[decideStart:stopStart]
+	for _, want := range []string{
+		"privateer_internal_ca_bundle_check.rc | default(1) != 0",
+		"privateer_pki_root.mode | default('') != '2750'",
+		"rejectattr('mode', 'equalto', '2750')",
+		"rejectattr('mode', 'equalto', '0640')",
+		"rejectattr('mode', 'equalto', '0644')",
+		"rejectattr('gr_name', 'equalto', 'frameworks')",
+		"rejectattr('pw_name', 'equalto', privateer_user)",
+		"privateer_service_pki_lock_files.files | default([]) | length > 0",
+	} {
+		if !strings.Contains(decide, want) {
+			t.Errorf("repair decision missing %q:\n%s", want, decide)
+		}
+	}
+}

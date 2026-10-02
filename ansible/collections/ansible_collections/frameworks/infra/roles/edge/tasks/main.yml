@@ -12,6 +12,20 @@
   ansible.builtin.import_tasks: prepare.yml
   tags: [install, configure]
 
+# Standalone `edge provision` does not run node_baseline, so the edge applies
+# the same host resolver policy itself. macOS has no networkd and keeps the
+# search domains its network configuration supplies.
+- name: Edge | ignore DHCP and RA search domains
+  ansible.builtin.include_role:
+    name: frameworks.infra.node_baseline
+    tasks_from: dns_search.yml
+    apply:
+      tags: [install, configure]
+  when:
+    - ansible_facts.os_family != 'Darwin'
+    - ansible_facts.service_mgr == 'systemd'
+  tags: [install, configure]
+
 - name: Edge | install (container)
   ansible.builtin.import_tasks: install-container.yml
   when: edge_mode != 'native'

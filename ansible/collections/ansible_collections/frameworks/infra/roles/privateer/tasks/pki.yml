@@ -6,31 +6,6 @@
     mode: "0755"
   when: not ansible_check_mode
 
-- name: Privateer | collect service state before PKI repair
-  ansible.builtin.service_facts:
-  when: not ansible_check_mode
-
-- name: Privateer | stop service before PKI repair
-  ansible.builtin.systemd:
-    name: frameworks-privateer
-    state: stopped
-  notify: privateer restart
-  when:
-    - not ansible_check_mode
-    - "'frameworks-privateer.service' in ansible_facts.services"
-    - ansible_facts.services['frameworks-privateer.service'].state == 'running'
-
-- name: Privateer | ensure internal PKI directory
-  ansible.builtin.file:
-    path: "{{ (privateer_env.GRPC_TLS_CA_PATH | default(privateer_internal_ca_default_path)) | dirname }}"
-    state: directory
-    owner: "{{ privateer_user }}"
-    group: "{{ privateer_group }}"
-    mode: "0755"
-  when:
-    - not ansible_check_mode
-    - privateer_internal_ca_bundle_pem | length > 0
-
 # The CLI's bundle only bootstraps the host; Privateer rewrites ca.crt from
 # Navigator, so an existing bundle is replaced only when it lacks one of the
 # desired CA certificates, not when its bytes differ.
@@ -61,6 +36,122 @@
   changed_when: false
   failed_when: false
   when: privateer_internal_ca_bundle_pem | length > 0
+
+- name: Privateer | inspect internal PKI directory
+  ansible.builtin.stat:
+    path: "{{ (privateer_env.GRPC_TLS_CA_PATH | default(privateer_internal_ca_default_path)) | dirname }}"
+  register: privateer_pki_dir_stat
+  when:
+    - not ansible_check_mode
+    - privateer_internal_ca_bundle_pem | length > 0
+
+- name: Privateer | inspect runtime service certificate directory
+  ansible.builtin.stat:
+    path: "{{ ((privateer_env.GRPC_TLS_CA_PATH | default(privateer_internal_ca_default_path)) | dirname) + '/services' }}"
+  register: privateer_service_pki_root_stat
+  when:
+    - not ansible_check_mode
+
+- name: Privateer | discover existing service certificate directories
+  ansible.builtin.find:
+    paths: "{{ ((privateer_env.GRPC_TLS_CA_PATH | default(privateer_internal_ca_default_path)) | dirname) + '/services' }}"
+    file_type: directory
+    depth: 1
+  register: privateer_service_pki_dirs
+  when:
+    - not ansible_check_mode
+    - privateer_service_pki_root_stat.stat.isdir | default(false)
+
+- name: Privateer | discover existing service certificate files
+  ansible.builtin.find:
+    paths: "{{ ((privateer_env.GRPC_TLS_CA_PATH | default(privateer_internal_ca_default_path)) | dirname) + '/services' }}"
+    file_type: file
+    recurse: true
+    patterns:
+      - tls.crt
+      - tls.key
+  register: privateer_service_pki_files
+  when:
+    - not ansible_check_mode
+    - privateer_service_pki_root_stat.stat.isdir | default(false)
+
+- name: Privateer | discover stale service certificate lock files
+  ansible.builtin.find:
+    paths: "{{ ((privateer_env.GRPC_TLS_CA_PATH | default(privateer_internal_ca_default_path)) | dirname) + '/services' }}"
+    file_type: file
+    hidden: true
+    recurse: true
+    patterns:
+      - .tls.write.lock
+  register: privateer_service_pki_lock_files
+  when:
+    - not ansible_check_mode
+    - privateer_service_pki_root_stat.stat.isdir | default(false)
+
+# Repair is needed when a task below would change the PKI tree: a trust bundle
+# missing a desired CA, a directory or certificate file whose owner, group or
+# mode drifted, a missing directory, or a leftover write lock. Only a repair
+# stops a running Privateer, so it never rewrites files Privateer is writing;
+# a run that changes nothing here leaves the service up.
+- name: Privateer | decide whether the PKI tree needs repair
+  vars:
+    privateer_pki_found_dirs: "{{ privateer_service_pki_dirs.files | default([]) }}"
+    privateer_pki_found_files: "{{ privateer_service_pki_files.files | default([]) }}"
+    privateer_pki_root: "{{ privateer_service_pki_root_stat.stat | default({}) }}"
+    privateer_pki_ca_dir: "{{ privateer_pki_dir_stat.stat | default({}) }}"
+  ansible.builtin.set_fact:
+    privateer_pki_repair_needed: >-
+      {{
+        (privateer_internal_ca_bundle_pem | length > 0
+          and (privateer_internal_ca_bundle_check.rc | default(1) != 0
+               or not (privateer_pki_ca_dir.isdir | default(false))
+               or privateer_pki_ca_dir.pw_name | default('') != privateer_user
+               or privateer_pki_ca_dir.gr_name | default('') != privateer_group
+               or privateer_pki_ca_dir.mode | default('') != '0755'))
+        or not (privateer_pki_root.isdir | default(false))
+        or privateer_pki_root.pw_name | default('') != privateer_user
+        or privateer_pki_root.gr_name | default('') != 'frameworks'
+        or privateer_pki_root.mode | default('') != '2750'
+        or privateer_pki_found_dirs | rejectattr('pw_name', 'equalto', privateer_user) | list | length > 0
+        or privateer_pki_found_dirs | rejectattr('gr_name', 'equalto', 'frameworks') | list | length > 0
+        or privateer_pki_found_dirs | rejectattr('mode', 'equalto', '2750') | list | length > 0
+        or privateer_pki_found_files | rejectattr('pw_name', 'equalto', privateer_user) | list | length > 0
+        or privateer_pki_found_files | rejectattr('gr_name', 'equalto', 'frameworks') | list | length > 0
+        or privateer_pki_found_files | selectattr('path', 'search', '/tls\\.key$')
+             | rejectattr('mode', 'equalto', '0640') | list | length > 0
+        or privateer_pki_found_files | selectattr('path', 'search', '/tls\\.crt$')
+             | rejectattr('mode', 'equalto', '0644') | list | length > 0
+        or privateer_service_pki_lock_files.files | default([]) | length > 0
+      }}
+  when: not ansible_check_mode
+
+- name: Privateer | collect service state before PKI repair
+  ansible.builtin.service_facts:
+  when:
+    - not ansible_check_mode
+    - privateer_pki_repair_needed | bool
+
+- name: Privateer | stop service before PKI repair
+  ansible.builtin.systemd:
+    name: frameworks-privateer
+    state: stopped
+  notify: privateer restart
+  when:
+    - not ansible_check_mode
+    - privateer_pki_repair_needed | bool
+    - "'frameworks-privateer.service' in ansible_facts.services"
+    - ansible_facts.services['frameworks-privateer.service'].state == 'running'
+
+- name: Privateer | ensure internal PKI directory
+  ansible.builtin.file:
+    path: "{{ (privateer_env.GRPC_TLS_CA_PATH | default(privateer_internal_ca_default_path)) | dirname }}"
+    state: directory
+    owner: "{{ privateer_user }}"
+    group: "{{ privateer_group }}"
+    mode: "0755"
+  when:
+    - not ansible_check_mode
+    - privateer_internal_ca_bundle_pem | length > 0
 
 - name: Privateer | render internal CA trust bundle
   ansible.builtin.copy:
@@ -95,15 +186,6 @@
   when:
     - not ansible_check_mode
 
-- name: Privateer | discover existing service certificate directories
-  ansible.builtin.find:
-    paths: "{{ ((privateer_env.GRPC_TLS_CA_PATH | default(privateer_internal_ca_default_path)) | dirname) + '/services' }}"
-    file_type: directory
-    depth: 1
-  register: privateer_service_pki_dirs
-  when:
-    - not ansible_check_mode
-
 - name: Privateer | normalize existing service certificate directories
   ansible.builtin.file:
     path: "{{ item.path }}"
@@ -112,18 +194,6 @@
     group: frameworks
     mode: "2750"
   loop: "{{ privateer_service_pki_dirs.files | default([]) }}"
-  when:
-    - not ansible_check_mode
-
-- name: Privateer | discover existing service certificate files
-  ansible.builtin.find:
-    paths: "{{ ((privateer_env.GRPC_TLS_CA_PATH | default(privateer_internal_ca_default_path)) | dirname) + '/services' }}"
-    file_type: file
-    recurse: true
-    patterns:
-      - tls.crt
-      - tls.key
-  register: privateer_service_pki_files
   when:
     - not ansible_check_mode
 
@@ -136,18 +206,6 @@
   loop: "{{ privateer_service_pki_files.files | default([]) }}"
   loop_control:
     label: "{{ item.path }}"
-  when:
-    - not ansible_check_mode
-
-- name: Privateer | discover stale service certificate lock files
-  ansible.builtin.find:
-    paths: "{{ ((privateer_env.GRPC_TLS_CA_PATH | default(privateer_internal_ca_default_path)) | dirname) + '/services' }}"
-    file_type: file
-    hidden: true
-    recurse: true
-    patterns:
-      - .tls.write.lock
-  register: privateer_service_pki_lock_files
   when:
     - not ansible_check_mode
 

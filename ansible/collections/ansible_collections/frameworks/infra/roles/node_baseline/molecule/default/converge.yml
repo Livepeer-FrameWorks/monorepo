@@ -13,6 +13,79 @@
     - name: Generate sshd host keys
       ansible.builtin.command: ssh-keygen -A
       changed_when: false
+
+    # A veth pair whose server end runs networkd's DHCP server hands the
+    # client end a domain name, the way a LAN router does. Docker's eth0 has
+    # no .network file, so networkd leaves it alone.
+    - name: Write the DHCP lab networkd configuration
+      ansible.builtin.copy:
+        dest: "/etc/systemd/network/{{ item.name }}"
+        content: "{{ item.content }}"
+        owner: root
+        group: root
+        mode: "0644"
+      loop:
+        - name: 10-fwlab.netdev
+          content: |
+            [NetDev]
+            Name=fwlab-srv
+            Kind=veth
+
+            [Peer]
+            Name=fwlab-cli
+        - name: 10-fwlab-srv.network
+          content: |
+            [Match]
+            Name=fwlab-srv
+
+            [Network]
+            Address=192.0.2.1/24
+            DHCPServer=yes
+            IPv6AcceptRA=no
+            LinkLocalAddressing=no
+
+            [DHCPServer]
+            PoolOffset=100
+            PoolSize=10
+            SendOption=15:string:search.molecule.test
+        - name: 20-fwlab-cli.network
+          content: |
+            [Match]
+            Name=fwlab-cli
+
+            [Network]
+            DHCP=ipv4
+            IPv6AcceptRA=no
+            LinkLocalAddressing=no
+      loop_control:
+        label: "{{ item.name }}"
+      register: fwlab_config
+
+    - name: Start systemd-networkd with the DHCP lab # noqa: no-handler
+      ansible.builtin.systemd:
+        name: systemd-networkd
+        state: restarted
+      when: fwlab_config is changed
+
+    - name: Read the DHCP lab client index
+      ansible.builtin.slurp:
+        src: /sys/class/net/fwlab-cli/ifindex
+      register: fwlab_ifindex
+      until: fwlab_ifindex is succeeded
+      retries: 10
+      delay: 1
+
+    # Before the baseline applies, networkd takes the DHCP domain as a search
+    # domain with its stock settings.
+    - name: Wait for the DHCP lease to set the search domain
+      ansible.builtin.command:
+        argv: [cat, "/run/systemd/netif/links/{{ fwlab_ifindex.content | b64decode | trim }}"]
+      register: fwlab_link_state
+      changed_when: false
+      until: "'DOMAINS=search.molecule.test' in fwlab_link_state.stdout_lines"
+      retries: 30
+      delay: 1
+      when: fwlab_config is changed
   tasks:
     - name: Apply frameworks.infra.node_baseline
       ansible.builtin.include_role:

@@ -1,0 +1,10 @@
+---
+# networkctl reload re-reads the .network files and drop-ins and reconfigures
+# only the links whose configuration changed; networkd then publishes the
+# links' search domains without the DHCP and RA ones to systemd-resolved.
+- name: Node_baseline | reload systemd-networkd
+  listen: node_baseline networkd reload
+  ansible.builtin.command:
+    argv: [networkctl, reload]
+  changed_when: true
+  when: not ansible_check_mode

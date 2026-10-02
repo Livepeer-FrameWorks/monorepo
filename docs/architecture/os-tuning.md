@@ -119,6 +119,20 @@ RedHat, Arch, Alpine):
 | fail2ban               | `sshd` jail in `/etc/fail2ban/jail.d/frameworks-sshd.local` (journal backend on systemd hosts, 5 failures in 10 min ban for 1 h). EL installs `epel-release` first.                                                                                                                                                                                                                                                                                                                                                    |
 | Docker (compose_stack) | `/etc/docker/daemon.json` `log-driver: local`, `max-size 50m`, `max-file 5`, merged into existing keys; every rendered compose service carries the same `logging:` block. After a successful stack apply, `compose-image-prune.sh` removes the stack's superseded images: per image repository the stack declares, the image its containers run and the newest other one (the previous release, so a rollback needs no pull) stay. Docker refuses to remove an image any container uses, so other stacks' images stay. |
 
+DNS search domains: hosts resolve only fully qualified names, so a search
+domain from DHCP or a router advertisement only adds wrong answers. When an
+upstream drops a query, glibc and Go retry the name under that suffix, and a
+wildcard record there answers with a wrong address. On hosts where
+systemd-networkd is active (including netplan's networkd renderer), the role
+writes `/etc/systemd/network/<file>.network.d/90-frameworks-no-search-domains.conf`
+with `UseDomains=no` under `[DHCPv4]`, `[DHCPv6]` and `[IPv6AcceptRA]` for
+every managed link and every `.network` file in `/etc` and `/run`, then runs
+`networkctl reload`. The reload reconfigures each changed link once, which
+renews its DHCP lease. Static `Domains=` and Privateer's `~internal` route on
+`wg0` are not touched. The edge role applies the same tasks on Linux edges.
+Hosts under NetworkManager or ifupdown, and macOS edges, keep their network
+manager's search domains.
+
 Package installs are skipped in check mode, so the role reports a missing
 logrotate/fail2ban package as a change there; this is what makes the release
 precheck converge a host that lacks them.

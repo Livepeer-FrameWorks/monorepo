@@ -14,6 +14,8 @@ node_baseline_sshd_service: "{{ node_baseline_sshd_service_by_family[ansible_fac
 node_baseline_sshd_binary: /usr/sbin/sshd
 node_baseline_sshd_dropin: /etc/ssh/sshd_config.d/00-frameworks.conf
 
+node_baseline_networkd_dropin_name: 90-frameworks-no-search-domains.conf
+
 node_baseline_journald_max_use: 2G
 # Percent of the filesystem holding /var/log/journal left free. journald only
 # accepts sizes, so the role converts this against the measured filesystem.
