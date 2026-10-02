@@ -15,6 +15,7 @@ const getCreditNoteDocument = `-- name: GetCreditNoteDocument :one
 SELECT note.credit_note_number, note.amount_cents, note.currency, note.issued_at, note.retention_until,
        note.source_document_type, note.source_document_id::text AS source_document_id,
        note.reversal_reference_type, note.reversal_reference_id, note.reason,
+       COALESCE(subscription.billing_email, '')::text AS customer_email,
        COALESCE(subscription.billing_name, '')::text AS customer_name,
        COALESCE(subscription.billing_company, '')::text AS customer_company,
        COALESCE(subscription.billing_address::text, '')::text AS customer_address,
@@ -41,6 +42,7 @@ type GetCreditNoteDocumentRow struct {
 	ReversalReferenceType string    `db:"reversal_reference_type" json:"reversal_reference_type"`
 	ReversalReferenceID   string    `db:"reversal_reference_id" json:"reversal_reference_id"`
 	Reason                string    `db:"reason" json:"reason"`
+	CustomerEmail         string    `db:"customer_email" json:"customer_email"`
 	CustomerName          string    `db:"customer_name" json:"customer_name"`
 	CustomerCompany       string    `db:"customer_company" json:"customer_company"`
 	CustomerAddress       string    `db:"customer_address" json:"customer_address"`
@@ -61,6 +63,7 @@ func (q *Queries) GetCreditNoteDocument(ctx context.Context, arg GetCreditNoteDo
 		&i.ReversalReferenceType,
 		&i.ReversalReferenceID,
 		&i.Reason,
+		&i.CustomerEmail,
 		&i.CustomerName,
 		&i.CustomerCompany,
 		&i.CustomerAddress,
@@ -163,12 +166,17 @@ const getInvoiceDocument = `-- name: GetInvoiceDocument :one
 SELECT invoice.invoice_number,
        COALESCE(invoice.presentment_amount_cents, ROUND(invoice.amount * 100)::bigint)::bigint AS amount_cents,
        COALESCE(invoice.presentment_currency, invoice.currency)::text AS currency, invoice.status,
-       COALESCE(invoice.created_at, NOW()) AS issued_at, invoice.retention_until,
+       COALESCE(invoice.finalized_at, invoice.created_at, NOW()) AS issued_at, invoice.retention_until,
        COALESCE(invoice.period_start, invoice.base_fee_period_start) AS period_start,
        COALESCE(invoice.period_end, invoice.base_fee_period_end) AS period_end, invoice.due_date,
        ROUND(invoice.amount * 100)::bigint AS eur_amount_cents,
+       ROUND(COALESCE(invoice.base_amount, 0) * 100)::bigint AS base_amount_cents,
+       ROUND(COALESCE(invoice.metered_amount, 0) * 100)::bigint AS metered_amount_cents,
+       ROUND(COALESCE(invoice.prepaid_credit_applied, 0) * 100)::bigint AS prepaid_credit_cents,
+       COALESCE(invoice.usage_details ? 'collection', false)::boolean AS collection_minimum_applied,
        COALESCE(invoice.presentment_units_per_eur::text, '')::text AS presentment_units_per_eur,
        invoice.presentment_reference_date,
+       COALESCE(subscription.billing_email, '')::text AS customer_email,
        COALESCE(subscription.billing_name, '')::text AS customer_name,
        COALESCE(subscription.billing_company, '')::text AS customer_company,
        COALESCE(subscription.billing_address::text, '')::text AS customer_address,
@@ -197,14 +205,21 @@ type GetInvoiceDocumentRow struct {
 	PeriodEnd                sql.NullTime `db:"period_end" json:"period_end"`
 	DueDate                  time.Time    `db:"due_date" json:"due_date"`
 	EurAmountCents           int64        `db:"eur_amount_cents" json:"eur_amount_cents"`
+	BaseAmountCents          int64        `db:"base_amount_cents" json:"base_amount_cents"`
+	MeteredAmountCents       int64        `db:"metered_amount_cents" json:"metered_amount_cents"`
+	PrepaidCreditCents       int64        `db:"prepaid_credit_cents" json:"prepaid_credit_cents"`
+	CollectionMinimumApplied bool         `db:"collection_minimum_applied" json:"collection_minimum_applied"`
 	PresentmentUnitsPerEur   string       `db:"presentment_units_per_eur" json:"presentment_units_per_eur"`
 	PresentmentReferenceDate sql.NullTime `db:"presentment_reference_date" json:"presentment_reference_date"`
+	CustomerEmail            string       `db:"customer_email" json:"customer_email"`
 	CustomerName             string       `db:"customer_name" json:"customer_name"`
 	CustomerCompany          string       `db:"customer_company" json:"customer_company"`
 	CustomerAddress          string       `db:"customer_address" json:"customer_address"`
 	CustomerVat              string       `db:"customer_vat" json:"customer_vat"`
 }
 
+// An invoice is issued when it is finalized; created_at is when its draft was
+// first written.
 func (q *Queries) GetInvoiceDocument(ctx context.Context, arg GetInvoiceDocumentParams) (GetInvoiceDocumentRow, error) {
 	row := q.db.QueryRowContext(ctx, getInvoiceDocument, arg.DocumentID, arg.TenantID)
 	var i GetInvoiceDocumentRow
@@ -219,8 +234,13 @@ func (q *Queries) GetInvoiceDocument(ctx context.Context, arg GetInvoiceDocument
 		&i.PeriodEnd,
 		&i.DueDate,
 		&i.EurAmountCents,
+		&i.BaseAmountCents,
+		&i.MeteredAmountCents,
+		&i.PrepaidCreditCents,
+		&i.CollectionMinimumApplied,
 		&i.PresentmentUnitsPerEur,
 		&i.PresentmentReferenceDate,
+		&i.CustomerEmail,
 		&i.CustomerName,
 		&i.CustomerCompany,
 		&i.CustomerAddress,
@@ -235,6 +255,7 @@ SELECT ('PAY-' || UPPER(LEFT(REPLACE(payment.id::text, '-', ''), 12)))::text AS 
        COALESCE(payment.confirmed_at, payment.created_at, NOW()) AS issued_at, payment.retention_until,
        payment.method, payment.tx_id,
        payment.eur_amount_cents, payment.fx_units_per_eur::text AS fx_units_per_eur, payment.fx_reference_date,
+       COALESCE(subscription.billing_email, '')::text AS customer_email,
        COALESCE(subscription.billing_name, '')::text AS customer_name,
        COALESCE(subscription.billing_company, '')::text AS customer_company,
        COALESCE(subscription.billing_address::text, '')::text AS customer_address,
@@ -264,6 +285,7 @@ type GetPaymentReceiptDocumentRow struct {
 	EurAmountCents  int64          `db:"eur_amount_cents" json:"eur_amount_cents"`
 	FxUnitsPerEur   string         `db:"fx_units_per_eur" json:"fx_units_per_eur"`
 	FxReferenceDate time.Time      `db:"fx_reference_date" json:"fx_reference_date"`
+	CustomerEmail   string         `db:"customer_email" json:"customer_email"`
 	CustomerName    string         `db:"customer_name" json:"customer_name"`
 	CustomerCompany string         `db:"customer_company" json:"customer_company"`
 	CustomerAddress string         `db:"customer_address" json:"customer_address"`
@@ -285,6 +307,7 @@ func (q *Queries) GetPaymentReceiptDocument(ctx context.Context, arg GetPaymentR
 		&i.EurAmountCents,
 		&i.FxUnitsPerEur,
 		&i.FxReferenceDate,
+		&i.CustomerEmail,
 		&i.CustomerName,
 		&i.CustomerCompany,
 		&i.CustomerAddress,
@@ -307,6 +330,7 @@ SELECT invoice.invoice_number, invoice.gross_amount_cents, invoice.currency,
        COALESCE(invoice.service_description, 'FrameWorks prepaid usage credit')::text AS service_description,
        COALESCE(invoice.service_quantity, 1)::integer AS service_quantity,
        COALESCE(invoice.service_date, invoice.issued_at::date) AS service_date,
+       COALESCE(subscription.billing_email, '')::text AS customer_email,
        COALESCE(subscription.billing_name, '')::text AS customer_name,
        COALESCE(subscription.billing_company, '')::text AS customer_company,
        COALESCE(subscription.billing_address::text, '')::text AS customer_address,
@@ -347,6 +371,7 @@ type GetSimplifiedInvoiceDocumentRow struct {
 	ServiceDescription         string       `db:"service_description" json:"service_description"`
 	ServiceQuantity            int32        `db:"service_quantity" json:"service_quantity"`
 	ServiceDate                sql.NullTime `db:"service_date" json:"service_date"`
+	CustomerEmail              string       `db:"customer_email" json:"customer_email"`
 	CustomerName               string       `db:"customer_name" json:"customer_name"`
 	CustomerCompany            string       `db:"customer_company" json:"customer_company"`
 	CustomerAddress            string       `db:"customer_address" json:"customer_address"`
@@ -380,6 +405,7 @@ func (q *Queries) GetSimplifiedInvoiceDocument(ctx context.Context, arg GetSimpl
 		&i.ServiceDescription,
 		&i.ServiceQuantity,
 		&i.ServiceDate,
+		&i.CustomerEmail,
 		&i.CustomerName,
 		&i.CustomerCompany,
 		&i.CustomerAddress,
@@ -400,7 +426,7 @@ FROM (
     SELECT id, document_kind::text AS kind, invoice_number AS document_number,
            COALESCE(presentment_amount_cents, ROUND(amount * 100)::bigint)::bigint AS amount_cents,
            COALESCE(presentment_currency, currency)::varchar AS currency, status,
-           COALESCE(created_at, NOW()) AS issued_at, retention_until,
+           COALESCE(finalized_at, created_at, NOW()) AS issued_at, retention_until,
            CASE WHEN presentment_amount_cents IS NULL THEN NULL ELSE ROUND(amount * 100)::bigint END AS eur_amount_cents,
            NULL::bigint AS net_eur_cents, NULL::bigint AS vat_eur_cents,
            presentment_units_per_eur::text AS units_per_eur,

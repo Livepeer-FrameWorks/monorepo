@@ -180,8 +180,8 @@ processing and confirmed payments are never blindly retried.
 
 Use `billing://documents` to list retained monthly statements, full crypto invoices, simplified invoices,
 confirmed-payment receipts, and credit notes. Read the returned
-`billing://documents/{kind}/{document_id}` URI for the printable tenant-owned
-document and its SHA-256 integrity metadata. Document reads stay available at
+`billing://documents/{kind}/{document_id}` URI for the tenant-owned document,
+returned as an `application/pdf` blob, and its SHA-256 integrity metadata. Document reads stay available at
 zero prepaid balance.
 
 For postpaid accounts, complete billing identity first and call

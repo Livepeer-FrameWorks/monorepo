@@ -3,6 +3,7 @@ module frameworks/api_billing
 go 1.27.0
 
 require (
+	codeberg.org/go-pdf/fpdf v0.12.0
 	github.com/DATA-DOG/go-sqlmock v1.5.2
 	github.com/Livepeer-FrameWorks/monorepo/pkg v0.0.0
 	github.com/VictorAvelar/mollie-api-go/v4 v4.16.0
@@ -18,6 +19,7 @@ require (
 	github.com/stripe/stripe-go/v85 v85.2.0
 	github.com/x402-foundation/x402/go/v2 v2.23.0
 	golang.org/x/crypto v0.50.0
+	golang.org/x/image v0.40.0
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20260414002931-afd174a4e478
 	google.golang.org/grpc v1.80.0
 	google.golang.org/protobuf v1.36.12
@@ -99,5 +101,5 @@ require (
 	golang.org/x/net v0.53.0 // indirect
 	golang.org/x/sync v0.20.0 // indirect
 	golang.org/x/sys v0.43.0 // indirect
-	golang.org/x/text v0.36.0 // indirect
+	golang.org/x/text v0.37.0 // indirect
 )

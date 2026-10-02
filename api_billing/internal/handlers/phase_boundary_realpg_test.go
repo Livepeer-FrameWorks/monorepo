@@ -774,9 +774,11 @@ func TestSwitchClosesItsPhaseWithAnOverlappingDraftStartingElsewhere_RealPG(t *t
 	}
 	tenant.receive(t, egressReport(tenant.id, strings.Repeat("f", 64), draftStart.Add(time.Hour), 100))
 	draft := readInvoice(t, db, tenant.id, draftStart)
-	if draft.status != "draft" || draft.credit != "2.00" || tenant.balance(t) != 0 {
-		t.Fatalf("draft of the anchored period = status %s credit %s, balance %d; want a draft of 100 GiB at 0.02 holding the whole 2.00 balance", draft.status, draft.credit, tenant.balance(t))
+	if draft.status != "draft" || draft.credit != "0.00" || tenant.balance(t) != 200 {
+		t.Fatalf("draft of the anchored period = status %s credit %s, balance %d; want a draft of 100 GiB at 0.02 leaving the 2.00 on the balance", draft.status, draft.credit, tenant.balance(t))
 	}
+	// The draft holds the whole balance as credit under its own key.
+	holdDraftCredit(t, db, tenant.id, draftStart, 200)
 
 	if _, err := db.ExecContext(ctx, `UPDATE purser.tenant_subscriptions SET mollie_next_payment_date = $2 WHERE tenant_id = $1`, tenant.id, phaseEnd); err != nil {
 		t.Fatal(err)

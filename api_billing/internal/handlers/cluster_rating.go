@@ -751,7 +751,7 @@ func (jm *JobManager) loadEmailLineItems(ctx context.Context, invoiceID, tenantI
 		out = append(out, EmailInvoiceLineItem{
 			Description:    r.Description,
 			Unit:           r.Unit,
-			DimensionLabel: emailDimensionLabel(r.DimensionsJSON),
+			DimensionLabel: LineItemDimensionLabel(r.DimensionsJSON),
 			ClusterID:      r.ClusterID,
 			ClusterName:    clusterNames[r.ClusterID],
 			ClusterKind:    r.ClusterKind,
@@ -767,7 +767,9 @@ func (jm *JobManager) loadEmailLineItems(ctx context.Context, invoiceID, tenantI
 	return out, nil
 }
 
-func emailDimensionLabel(raw []byte) string {
+// LineItemDimensionLabel states an invoice line's dimensions JSON as
+// "key: value" pairs in key order, for invoice emails and billing documents.
+func LineItemDimensionLabel(raw []byte) string {
 	if len(raw) == 0 {
 		return ""
 	}

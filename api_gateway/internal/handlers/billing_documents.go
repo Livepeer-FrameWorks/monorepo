@@ -81,12 +81,12 @@ func (h *BillingDocumentHandlers) Download() gin.HandlerFunc {
 			c.JSON(billingDocumentHTTPStatus(err), gin.H{"error": status.Convert(err).Message()})
 			return
 		}
-		filename := "billing-document.html"
+		filename := "billing-document.pdf"
 		if response.GetDocument() != nil && response.GetDocument().GetDownloadFilename() != "" {
 			filename = safeBillingDocumentFilename.ReplaceAllString(response.GetDocument().GetDownloadFilename(), "-")
 			filename = strings.Trim(filename, ".-")
 			if filename == "" {
-				filename = "billing-document.html"
+				filename = "billing-document.pdf"
 			}
 		}
 		c.Header("Cache-Control", "private, no-store")

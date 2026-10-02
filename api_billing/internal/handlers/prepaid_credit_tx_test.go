@@ -172,14 +172,13 @@ func TestDeductPrepaidBalanceForCreditTx_DuplicateNoOps(t *testing.T) {
 	}
 }
 
-func TestApplyInvoicePrepaidCreditTxAppliesOnlyMissingDelta(t *testing.T) {
+func TestReconcileInvoicePrepaidCreditTxAppliesOnlyMissingDelta(t *testing.T) {
 	mockDB, mock, err := sqlmock.New()
 	if err != nil {
 		t.Fatalf("sqlmock: %v", err)
 	}
 	defer mockDB.Close()
 
-	jm := &JobManager{db: mockDB, logger: logging.NewLogger(), billing: &Service{}}
 	currency := billing.LedgerCurrency
 	tenantID := "tenant-1"
 	periodStart := time.Date(2026, 4, 1, 0, 0, 0, 0, time.UTC)
@@ -213,9 +212,9 @@ func TestApplyInvoicePrepaidCreditTxAppliesOnlyMissingDelta(t *testing.T) {
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectRollback()
 
-	change, err := jm.applyInvoicePrepaidCreditTx(context.Background(), tx, tenantID, periodStart, 10200)
+	change, err := reconcileInvoicePrepaidCreditTx(context.Background(), tx, tenantID, periodStart, 10200)
 	if err != nil {
-		t.Fatalf("applyInvoicePrepaidCreditTx: %v", err)
+		t.Fatalf("reconcileInvoicePrepaidCreditTx: %v", err)
 	}
 	if change.AppliedCents != 10200 {
 		t.Fatalf("applied = %d, want 10200", change.AppliedCents)

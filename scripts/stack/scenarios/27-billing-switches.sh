@@ -111,6 +111,11 @@ api_usage() {
   [ "$((${quantity:-0} - ${api_before:-0}))" -ge 30 ]
 }
 eventually 900 'paid-phase API traffic reached Purser through Periscope metering' api_usage
+balance_postpaid=$(pg purser "SELECT balance_cents FROM purser.prepaid_balances WHERE tenant_id='$tenant' AND currency='EUR'")
+draft_credit=$(pg purser "SELECT COALESCE(SUM(prepaid_credit_applied), 0)::numeric(12,2) FROM purser.billing_invoices
+  WHERE tenant_id='$tenant' AND status='draft'")
+check 'prepaid balance stays EUR 10 while the postpaid period runs' [ "$balance_postpaid" = 1000 ]
+check 'open postpaid draft holds no prepaid credit' [ "$draft_credit" = 0.00 ]
 
 if back=$(cli_json admin billing set-tier --tenant-id "$tenant" --tier payg --billing-model prepaid \
   --reason 'stack billing switch test return' --output json); then
@@ -169,11 +174,14 @@ for item in "prepaid_statement:$statement" "invoice:$invoice"; do
   kind=${item%%:*}; id=${item#*:}
   [ -n "$id" ] || continue
   headers="$STACK_STATE_DIR/billing-$kind.headers"
-  body="$STACK_STATE_DIR/billing-$kind.html"
+  body="$STACK_STATE_DIR/billing-$kind.pdf"
   code=$(curl -s -m 20 -D "$headers" -o "$body" -w '%{http_code}' \
     -H "Authorization: Bearer $jwt" "$BRIDGE_URL/v1/billing/documents/$kind/$id")
   check "$kind document download returned 200" [ "$code" = 200 ]
-  check "$kind document download is nonempty HTML" bash -c 'test -s "$1" && grep -qi "<html" "$1"' _ "$body"
+  check "$kind document download is a PDF" bash -c 'test "$(head -c 5 "$1")" = "%PDF-"' _ "$body"
+  check "$kind document download is served as application/pdf" \
+    grep -qi '^content-type: application/pdf' "$headers"
+  check "$kind document download is named .pdf" grep -qi '^content-disposition:.*\.pdf"' "$headers"
   digest=$(awk 'tolower($1)=="x-document-sha256:"{print $2}' "$headers" | tr -d '\r')
   actual=$(sha256sum "$body" | awk '{print $1}')
   check "$kind document integrity hash matches" [ "$digest" = "$actual" ]

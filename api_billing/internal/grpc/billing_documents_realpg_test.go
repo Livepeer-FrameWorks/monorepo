@@ -8,6 +8,8 @@ import (
 	"testing"
 	"time"
 
+	"frameworks/api_billing/internal/appconfig/appconfigtest"
+
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	purserpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/purser"
 	"github.com/google/uuid"
@@ -194,4 +196,74 @@ func TestListBillingDocumentsUnionStatesChargedAndEURAmounts_RealPG(t *testing.T
 	if first, last := pagedDocuments[0].GetDocumentNumber(), pagedDocuments[999].GetDocumentNumber(); first != "CN-PAGE-1001" || last != "CN-PAGE-0002" {
 		t.Fatalf("paged window = %s .. %s, want the newest 1000 (CN-PAGE-1001 .. CN-PAGE-0002)", first, last)
 	}
+}
+
+// A finalized postpaid invoice downloads as a PDF that states its base fee
+// with the period it covers, its usage lines, the prepaid credit applied, the
+// totals and the amount due, the customer's billing details and the supplier.
+// It is issued when it was finalized, not when its draft was written.
+func TestInvoiceDocumentStatesLinesCreditAndBothParties_RealPG(t *testing.T) { //nolint:funlen // One persisted invoice and its full document.
+	appconfigtest.Set(t, "SUPPLIER_NAME", "FrameWorks B.V.")
+	appconfigtest.Set(t, "SUPPLIER_ADDRESS", "Amsterdam, NL")
+	appconfigtest.Set(t, "SUPPLIER_VAT_NUMBER", "NL000000000B01")
+	appconfigtest.Set(t, "SUPPLIER_REGISTRATION_NUMBER", "12345678")
+	db := startPurserTransitionRealPG(t)
+	ctx := context.Background()
+	server := &PurserServer{db: db, logger: logging.NewLogger()}
+	tenantID, tierID, invoiceID := uuid.NewString(), uuid.NewString(), uuid.NewString()
+	exec := func(query string, args ...any) {
+		t.Helper()
+		if _, err := db.ExecContext(ctx, query, args...); err != nil {
+			t.Fatalf("%v\n%s", err, query)
+		}
+	}
+	periodStart := time.Date(2026, 9, 22, 8, 0, 0, 0, time.UTC)
+	periodEnd := time.Date(2026, 10, 2, 13, 58, 9, 0, time.UTC)
+	draftWritten := time.Date(2026, 9, 22, 8, 5, 0, 0, time.UTC)
+	finalized := time.Date(2026, 10, 2, 13, 58, 34, 0, time.UTC)
+	exec(`INSERT INTO purser.billing_tiers (id, tier_name, display_name, base_price, currency, tier_level)
+	      VALUES ($1, 'supporter', 'Supporter', 79.00, 'EUR', 2)`, tierID)
+	exec(`INSERT INTO purser.tenant_subscriptions (tenant_id, tier_id, status, billing_model, billing_email, billing_name, billing_company, billing_address, tax_id, presentment_currency)
+	      VALUES ($1, $2, 'active', 'postpaid', 'billing@example.com', 'Ada Lovelace', 'Analytical Engines Ltd',
+	              '{"street":"1 Engine Street","city":"London","postal_code":"EC1A 1BB","country":"GB"}', 'GB123456789', 'USD')`, tenantID, tierID)
+	exec(`INSERT INTO purser.billing_invoices (id, tenant_id, invoice_number, status, currency, amount, base_amount, metered_amount, gross_metered_amount,
+	          prepaid_credit_applied, usage_details, period_start, period_end, due_date, created_at,
+	          presentment_amount_cents, presentment_currency, presentment_units_per_eur, presentment_reference_date, finalized_at)
+	      VALUES ($1, $2, 'INV-0000283601', 'pending', 'EUR', 18.75, 26.35, 2.40, 2.40, 10.00, '{}', $3, $4, $5, $6,
+	          2194, 'USD', 1.1700000000, ($7::timestamptz)::date, $7::timestamptz)`,
+		invoiceID, tenantID, periodStart, periodEnd, periodEnd.AddDate(0, 0, 14), draftWritten, finalized)
+	exec(`INSERT INTO purser.invoice_line_items (invoice_id, tenant_id, line_key, meter, unit, dimensions, description, quantity, billable_quantity, unit_price, amount, currency, cluster_id, cluster_kind, pricing_source)
+	      VALUES ($1, $2, 'base_subscription', NULL, '', '{}', 'Supporter 2026-09-22 to 2026-10-02', 1, 1, 26.35, 26.35, 'EUR', NULL, NULL, 'tier'),
+	             ($1, $2, 'meter:egress_gb', 'egress_gb', 'gibibyte', '{"region":"eu"}', 'Delivered bandwidth', 120, 120, 0.02, 2.40, 'EUR', 'cluster-eu-1', 'platform_official', 'cluster_metered')`,
+		invoiceID, tenantID)
+
+	response, err := server.GetBillingDocument(serviceTestContext(), &purserpb.GetBillingDocumentRequest{
+		TenantId: tenantID, DocumentId: invoiceID, Kind: "invoice",
+	})
+	if err != nil {
+		t.Fatalf("GetBillingDocument: %v", err)
+	}
+	document := response.GetDocument()
+	if response.GetContentType() != "application/pdf" || document.GetDownloadFilename() != "INV-0000283601.pdf" {
+		t.Fatalf("invoice downloads as %q %q, want application/pdf INV-0000283601.pdf", response.GetContentType(), document.GetDownloadFilename())
+	}
+	if !document.GetIssuedAt().AsTime().Equal(finalized) || document.GetAmountCents() != 2194 || document.GetCurrency() != "USD" {
+		t.Fatalf("invoice metadata = issued %s amount %d %s, want issued at finalization %s, USD 21.94",
+			document.GetIssuedAt().AsTime(), document.GetAmountCents(), document.GetCurrency(), finalized)
+	}
+	listed, err := server.ListBillingDocuments(serviceTestContext(), &purserpb.ListBillingDocumentsRequest{TenantId: tenantID})
+	if err != nil || len(listed.GetDocuments()) != 1 || !listed.GetDocuments()[0].GetIssuedAt().AsTime().Equal(finalized) ||
+		listed.GetDocuments()[0].GetDownloadFilename() != "INV-0000283601.pdf" {
+		t.Fatalf("listed documents = %+v, %v; want the invoice issued at its finalization as a PDF", listed.GetDocuments(), err)
+	}
+	requireRuns(t, pdfTextRuns(t, response.GetContent()),
+		"Invoice", "INV-0000283601", "Issued 2026-10-02 13:58:34 UTC", "USD 21.94",
+		"FrameWorks B.V.", "VAT NL000000000B01", "Registration 12345678",
+		"Ada Lovelace", "Analytical Engines Ltd", "1 Engine Street", "EC1A 1BB London", "GB", "VAT GB123456789", "billing@example.com",
+		"Billing period", "2026-09-22 08:00 UTC to 2026-10-02 13:58 UTC", "Due", "2026-10-16",
+		"Supporter 2026-09-22 to 2026-10-02", "26.35",
+		"Delivered bandwidth", "region: eu", "cluster-eu-1", "120 gibibyte", "0.02", "2.40",
+		"Subtotal", "EUR 28.75", "Prepaid credit applied", "-EUR 10.00", "Amount due (EUR)", "EUR 18.75",
+		"Amount due", "USD 21.94", "1 EUR = 1.17 USD",
+	)
 }

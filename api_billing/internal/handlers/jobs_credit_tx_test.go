@@ -198,11 +198,11 @@ func TestDeductPrepaidBalanceForCreditTx(t *testing.T) {
 	})
 }
 
-// applyInvoicePrepaidCreditTx makes the period's invoice credit follow the
-// invoice: it debits only the missing amount when the invoice grows, moves
+// reconcileInvoicePrepaidCreditTx makes the period's invoice credit follow
+// its target: it debits only the missing amount when the target grows, moves
 // nothing when the credit already matches, and returns the excess to the
-// balance when the invoice shrinks.
-func TestApplyInvoicePrepaidCreditTx(t *testing.T) {
+// balance when the target shrinks.
+func TestReconcileInvoicePrepaidCreditTx(t *testing.T) {
 	periodStart := time.Date(2026, 4, 1, 0, 0, 0, 0, time.UTC)
 	const tenantID = "tenant-1"
 
@@ -220,8 +220,7 @@ func TestApplyInvoicePrepaidCreditTx(t *testing.T) {
 		if err != nil {
 			t.Fatalf("begin: %v", err)
 		}
-		jm := &JobManager{db: mockDB, logger: logging.NewLogger(), billing: &Service{}}
-		change, err := jm.applyInvoicePrepaidCreditTx(context.Background(), tx, tenantID, periodStart, gross)
+		change, err := reconcileInvoicePrepaidCreditTx(context.Background(), tx, tenantID, periodStart, gross)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}

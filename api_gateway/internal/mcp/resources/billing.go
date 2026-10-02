@@ -99,8 +99,8 @@ func RegisterBillingResources(server *mcp.Server, clients *clients.ServiceClient
 	server.AddResourceTemplate(&mcp.ResourceTemplate{
 		URITemplate: "billing://documents/{kind}/{document_id}",
 		Name:        "Billing Document Download",
-		Description: "One retained tenant-owned printable billing document with its integrity hash.",
-		MIMEType:    "text/html",
+		Description: "One retained tenant-owned billing document as a PDF, with its integrity hash.",
+		MIMEType:    "application/pdf",
 	}, func(ctx context.Context, req *mcp.ReadResourceRequest) (*mcp.ReadResourceResult, error) {
 		return handleBillingDocument(ctx, req.Params.URI, clients)
 	})
@@ -224,8 +224,9 @@ func handleBillingDocument(ctx context.Context, uri string, clients *clients.Ser
 	if err != nil {
 		return nil, fmt.Errorf("failed to read billing document: %w", err)
 	}
+	// Billing documents are PDFs, so the content travels as a binary blob.
 	return &mcp.ReadResourceResult{Contents: []*mcp.ResourceContents{{
-		URI: uri, MIMEType: response.GetContentType(), Text: string(response.GetContent()),
+		URI: uri, MIMEType: response.GetContentType(), Blob: response.GetContent(),
 		Meta: mcp.Meta{"sha256": response.GetSha256()},
 	}}}, nil
 }

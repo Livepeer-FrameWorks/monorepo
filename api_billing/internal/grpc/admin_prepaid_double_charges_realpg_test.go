@@ -104,7 +104,9 @@ func TestAdminListPrepaidDoubleChargesFindsPastFinalizations_RealPG(t *testing.T
 }
 
 // A prepaid statement is listed and downloaded as a statement, never as an
-// invoice, and its document says nothing is due.
+// invoice, and its document says nothing is due. It is issued when it was
+// finalized, after the period it closes, also when it was converted from a
+// draft written earlier in the period.
 func TestPrepaidStatementIsABillingDocumentNotAnInvoice_RealPG(t *testing.T) {
 	appconfigtest.Set(t, "SUPPLIER_NAME", "FrameWorks B.V.")
 	appconfigtest.Set(t, "SUPPLIER_ADDRESS", "Amsterdam, NL")
@@ -114,11 +116,20 @@ func TestPrepaidStatementIsABillingDocumentNotAnInvoice_RealPG(t *testing.T) {
 	ctx := context.Background()
 	tenantID, statementID := uuid.NewString(), uuid.NewString()
 	periodStart := time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC)
+	periodEnd := time.Date(2026, 8, 20, 13, 58, 9, 0, time.UTC)
+	draftWritten := time.Date(2026, 8, 20, 2, 49, 27, 0, time.UTC)
+	finalized := time.Date(2026, 8, 20, 13, 58, 34, 0, time.UTC)
 	if _, err := db.ExecContext(ctx, `
-		INSERT INTO purser.billing_invoices (id, tenant_id, invoice_number, document_kind, status, amount, currency, due_date, base_amount, metered_amount, prepaid_credit_applied, usage_details, period_start, period_end)
+		INSERT INTO purser.billing_invoices (id, tenant_id, invoice_number, document_kind, status, amount, currency, due_date, base_amount, metered_amount, prepaid_credit_applied, usage_details, period_start, period_end,
+		                                     presentment_amount_cents, presentment_currency, presentment_units_per_eur, presentment_reference_date, created_at, finalized_at)
 		VALUES ($1, $2, 'STM-0000000042', 'prepaid_statement', 'paid', 0, 'EUR', $3, 0, 2.00, 0,
 		        '{"statement":{"rated_usage_cents":200,"paid_from_balance_cents":200,"opening_balance_cents":0,"topup_cents":1000,"topups":1,"usage_posted_cents":200,"period_end_balance_cents":800,"closing_balance_cents":800}}',
-		        $4, $3)`, statementID, tenantID, periodStart.AddDate(0, 1, 0), periodStart); err != nil {
+		        $4, $3, 0, 'EUR', 1, ($6::timestamptz)::date, $5, $6::timestamptz)`, statementID, tenantID, periodEnd, periodStart, draftWritten, finalized); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.ExecContext(ctx, `
+		INSERT INTO purser.invoice_line_items (invoice_id, tenant_id, line_key, meter, unit, description, quantity, billable_quantity, unit_price, amount, currency)
+		VALUES ($1, $2, 'meter:egress_gb', 'egress_gb', 'gibibyte', 'Delivered bandwidth', 200, 200, 0.01, 2.00, 'EUR')`, statementID, tenantID); err != nil {
 		t.Fatal(err)
 	}
 	tenantCtx := context.WithValue(ctx, ctxkeys.KeyTenantID, tenantID)
@@ -139,10 +150,15 @@ func TestPrepaidStatementIsABillingDocumentNotAnInvoice_RealPG(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetBillingDocument: %v", err)
 	}
-	content := string(document.GetContent())
-	for _, want := range []string{"Prepaid balance statement", "Not an invoice", "nothing to pay", "Paid from prepaid balance for this usage", "EUR 2.00", "EUR 8.00"} {
-		if !strings.Contains(content, want) {
-			t.Errorf("statement document lacks %q", want)
-		}
+	if !document.GetDocument().GetIssuedAt().AsTime().Equal(finalized) || !documents.GetDocuments()[0].GetIssuedAt().AsTime().Equal(finalized) {
+		t.Fatalf("statement issued at %s (listed %s), want its finalization %s, after the period end %s",
+			document.GetDocument().GetIssuedAt().AsTime(), documents.GetDocuments()[0].GetIssuedAt().AsTime(), finalized, periodEnd)
 	}
+	if document.GetContentType() != "application/pdf" || !strings.HasSuffix(document.GetDocument().GetDownloadFilename(), ".pdf") {
+		t.Fatalf("statement downloads as %q %q, want a PDF", document.GetContentType(), document.GetDocument().GetDownloadFilename())
+	}
+	requireRuns(t, pdfTextRuns(t, document.GetContent()),
+		"Prepaid balance statement", "Issued 2026-08-20 13:58:34 UTC", "Not an invoice", "nothing to pay",
+		"Paid from prepaid balance for this usage", "EUR 2.00", "EUR 8.00",
+		"Delivered bandwidth", "200 gibibyte", "0.01", "2.00")
 }

@@ -249,10 +249,19 @@ the identifier blank when the customer is not VAT registered.
 </Aside>
 
 Authenticated customers can list document metadata at
-`GET /v1/billing/documents` and download a tenant-bound printable HTML attachment
-at `GET /v1/billing/documents/{kind}/{id}`. The response includes
+`GET /v1/billing/documents` and download a tenant-bound PDF attachment
+(`application/pdf`, `<document number>.pdf`) at `GET /v1/billing/documents/{kind}/{id}`.
+An invoice states the supplier, the customer's billing details (name, company,
+address, VAT ID, billing email), the billing period, every line item including
+the base fee for the part of the period it covers, the subtotal, the prepaid
+credit applied, and the amount due in EUR and in the presentment currency.
+Documents are dated with the time they were finalized. The response includes
 `X-Document-SHA256`, uses private/no-store caching, and remains reachable for a
 zero-balance prepaid tenant. The billing dashboard exposes the same downloads.
+
+A postpaid tenant's prepaid balance stays on the balance while the billing
+period runs. Each postpaid invoice takes it as prepaid credit, up to the
+invoice total, when the invoice is finalized at the end of the period.
 
 Invoice notifications link to the exact billing-page invoice. Card payment uses
 the operator-selected Stripe or Mollie hosted checkout; USDC/ETH payment returns

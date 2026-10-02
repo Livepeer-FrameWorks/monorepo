@@ -2040,8 +2040,8 @@ or a complete billing profile. Purser refuses a tier that does not exist or is i
 model the tier does not run (level-0 tiers such as `payg` run prepaid, all other tiers run
 postpaid), and a tenant whose account was closed. A tenant without a subscription gets one on the
 assigned tier. Moving to prepaid creates the prepaid balance and returns any credit an open draft
-invoice holds to it; moving from prepaid to postpaid keeps the balance as invoice credit and
-reactivates a subscription suspended for low balance. Moving from prepaid to postpaid also closes
+invoice holds to it; moving from prepaid to postpaid keeps the balance, which each postpaid invoice
+takes as credit when it is finalized, and reactivates a subscription suspended for low balance. Moving from prepaid to postpaid also closes
 the prepaid part of the period with a prepaid statement, emailed to the tenant, and starts the
 postpaid period at the change, so the first postpaid invoice charges only usage from the change on,
 and the base fee for that part of the period.
@@ -2052,9 +2052,9 @@ like any invoice (off-session charge through the tenant's provider, or `record-p
 transfer). A base fee charged in advance for the period has its unused part, from the change on,
 returned to the prepaid balance. The prepaid period starts at the change and the prepaid balance
 pays usage reported after it, including late reports for earlier usage. Each plan pays the base fee
-only for its own part of the period, also across several changes. An invoice takes only the credit it uses: when
-a later draft is smaller, for example after a billing grant lowers the base fee, the difference goes
-back to the balance. A scheduled downgrade is cleared.
+only for its own part of the period, also across several changes. Drafts hold no credit, so the
+balance stays visible while the postpaid period runs; an invoice takes only the credit it uses, up
+to its total, when it is finalized. A scheduled downgrade is cleared.
 
 After the change Purser reconciles cluster access for the new tier and refreshes cached tenant
 limits, the same as a self-serve tier change, and records `billing.subscription_updated` with

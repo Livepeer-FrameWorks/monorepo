@@ -152,6 +152,14 @@ This applies to closing invoices and statements, to the month-end document of
 the rest of the period, to drafts, and to the advance base-fee invoice of a
 period a switch from prepaid started.
 
+**When invoice credit is taken.** A postpaid tenant's prepaid balance stays
+on the balance while its period runs: the draft (`updateInvoiceDraft`) states
+the gross amount, holds no credit, and returns any credit its key still holds.
+The invoice takes its credit once, in the transaction that finalizes it
+(`writePostpaidInvoiceTx`, at month end, an early close, or the switch to
+prepaid): the gross amount, bounded by the balance then. Manual-review holds,
+statements, and switches hold none.
+
 **Invoice credit keys.** Each billing document holds its prepaid invoice
 credit under its own key (`documentInvoiceCreditKey`): the first document
 starting in a month under the month's key (`Invoice credit: YYYY-MM`, the key

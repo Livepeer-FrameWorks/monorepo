@@ -27,8 +27,8 @@ func (f *fakeBillingDocumentClient) ListBillingDocuments(_ context.Context, tena
 func (f *fakeBillingDocumentClient) GetBillingDocument(_ context.Context, tenantID, kind, documentID string) (*purserpb.GetBillingDocumentResponse, error) {
 	f.getTenant, f.getKind, f.getID = tenantID, kind, documentID
 	return &purserpb.GetBillingDocumentResponse{
-		Document:    &purserpb.BillingDocument{DownloadFilename: "INV-0001.html"},
-		ContentType: "text/html; charset=utf-8", Content: []byte("<html>invoice</html>"), Sha256: "abc123",
+		Document:    &purserpb.BillingDocument{DownloadFilename: "INV-0001.pdf"},
+		ContentType: "application/pdf", Content: []byte("%PDF-1.4 invoice"), Sha256: "abc123",
 	}, nil
 }
 
@@ -51,8 +51,11 @@ func TestBillingDocumentDownloadIsTenantBoundAttachment(t *testing.T) {
 	if fake.getTenant != "11111111-1111-1111-1111-111111111111" || fake.getKind != "invoice" || fake.getID != "22222222-2222-2222-2222-222222222222" {
 		t.Fatalf("unexpected downstream request: %+v", fake)
 	}
-	if disposition := recorder.Header().Get("Content-Disposition"); disposition != `attachment; filename="INV-0001.html"` {
+	if disposition := recorder.Header().Get("Content-Disposition"); disposition != `attachment; filename="INV-0001.pdf"` {
 		t.Fatalf("content disposition = %q", disposition)
+	}
+	if contentType := recorder.Header().Get("Content-Type"); contentType != "application/pdf" || recorder.Body.String() != "%PDF-1.4 invoice" {
+		t.Fatalf("content type = %q body = %q, want the PDF bytes as application/pdf", contentType, recorder.Body.String())
 	}
 	if recorder.Header().Get("Cache-Control") != "private, no-store" || recorder.Header().Get("X-Document-SHA256") != "abc123" {
 		t.Fatalf("missing immutable/private headers: %v", recorder.Header())

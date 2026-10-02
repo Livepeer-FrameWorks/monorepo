@@ -178,8 +178,12 @@ func TestPostpaidToPrepaidSwitchBillsEachPhaseOnce_RealPG(t *testing.T) { //noli
 		t.Fatalf("updateInvoiceDraft: %v", err)
 	}
 	draft := readInvoice(t, db, tenantID, postpaidFrom)
-	if draft.status != "draft" || draft.credit != "10.00" {
-		t.Fatalf("draft = status %s credit %s, want a draft holding the whole 10.00 balance as credit", draft.status, draft.credit)
+	var draftBalance int64
+	if err := db.QueryRowContext(ctx, `SELECT balance_cents FROM purser.prepaid_balances WHERE tenant_id = $1`, tenantID).Scan(&draftBalance); err != nil {
+		t.Fatal(err)
+	}
+	if draft.status != "draft" || draft.credit != "0.00" || draftBalance != 1000 {
+		t.Fatalf("draft = status %s credit %s, balance %d; want a draft holding no credit and the whole 10.00 on the balance", draft.status, draft.credit, draftBalance)
 	}
 
 	closing, prepareErr := PreparePostpaidPhaseClose(ctx, db, logger, svc, tenantID)

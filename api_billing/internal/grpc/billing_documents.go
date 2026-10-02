@@ -1,7 +1,6 @@
 package grpc
 
 import (
-	"bytes"
 	"context"
 	"crypto/sha256"
 	"database/sql"
@@ -9,7 +8,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"html/template"
 	"strings"
 	"time"
 
@@ -21,12 +19,13 @@ import (
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/middleware"
 	purserpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/purser"
 	"github.com/google/uuid"
+	"github.com/shopspring/decimal"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
-const billingDocumentContentType = "text/html; charset=utf-8"
+const billingDocumentContentType = "application/pdf"
 
 type billingDocumentRow struct {
 	id             string
@@ -45,7 +44,9 @@ type billingDocumentRow struct {
 	fxReferenceDate string
 }
 
-type billingDocumentHTMLData struct {
+// billingDocumentData is everything a billing document states; every kind
+// renders through renderBillingDocumentPDF from it.
+type billingDocumentData struct {
 	Title                string
 	Number               string
 	SupplierName         string
@@ -54,30 +55,38 @@ type billingDocumentHTMLData struct {
 	SupplierRegistration string
 	Customer             string
 	CustomerCompany      string
-	CustomerAddress      string
+	CustomerAddress      []string
 	CustomerVAT          string
+	CustomerEmail        string
 	IssuedAt             string
+	IssuedTime           time.Time
 	RetentionUntil       string
 	Status               string
 	Currency             string
 	Amount               string
-	Fields               []billingDocumentHTMLField
+	Fields               []billingDocumentField
+	// LineCurrency is the currency of the line amounts.
+	LineCurrency string
+	Lines        []billingDocumentLine
+	// Totals are drawn below the lines; the last one is the amount due.
+	Totals []billingDocumentField
 }
 
-type billingDocumentHTMLField struct {
+type billingDocumentField struct {
 	Label string
 	Value string
 }
 
-var billingDocumentTemplate = template.Must(template.New("billing-document").Parse(`<!doctype html>
-<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width">
-<title>{{.Title}} {{.Number}}</title>
-<style>body{font:15px system-ui,sans-serif;color:#18202a;max-width:820px;margin:48px auto;padding:0 24px}header{display:flex;justify-content:space-between;gap:32px;border-bottom:2px solid #18202a;padding-bottom:20px}h1{margin:0}.money{font-size:28px;font-weight:700}.parties{display:grid;grid-template-columns:1fr 1fr;gap:32px;margin:28px 0}dl{display:grid;grid-template-columns:180px 1fr;gap:8px 16px}dt{font-weight:600}dd{margin:0;overflow-wrap:anywhere}footer{margin-top:40px;padding-top:16px;border-top:1px solid #ccd3da;color:#53606d;font-size:12px}@media print{body{margin:0}}</style>
-</head><body><header><div><h1>{{.Title}}</h1><div>{{.Number}}</div></div><div><div class="money">{{.Currency}} {{.Amount}}</div><div>{{.Status}}</div></div></header>
-<section class="parties"><div><h2>Supplier</h2><div>{{.SupplierName}}</div><div>{{.SupplierAddress}}</div><div>VAT: {{.SupplierVAT}}</div><div>Registration: {{.SupplierRegistration}}</div></div><div><h2>Customer</h2><div>{{.Customer}}</div><div>{{.CustomerCompany}}</div><div>{{.CustomerAddress}}</div><div>{{if .CustomerVAT}}VAT: {{.CustomerVAT}}{{end}}</div></div></section>
-<dl><dt>Issued</dt><dd>{{.IssuedAt}}</dd>{{range .Fields}}<dt>{{.Label}}</dt><dd>{{.Value}}</dd>{{end}}</dl>
-<footer>Retained until at least {{.RetentionUntil}}. Document number and settlement references are immutable audit identifiers.</footer>
-</body></html>`))
+// billingDocumentLine is one line item: its description, a detail line with
+// its dimensions and cluster, and its formatted quantity, unit price and
+// amount.
+type billingDocumentLine struct {
+	Description string
+	Detail      string
+	Quantity    string
+	UnitPrice   string
+	Amount      string
+}
 
 func resolveBillingDocumentTenant(ctx context.Context, requested string) (string, error) {
 	requested = strings.TrimSpace(requested)
@@ -102,7 +111,7 @@ func billingDocumentProto(row billingDocumentRow) *purserpb.BillingDocument {
 		Id: row.id, Kind: row.kind, DocumentNumber: row.number,
 		AmountCents: row.amountCents, Currency: row.currency, Status: row.status,
 		IssuedAt: timestamppb.New(row.issuedAt), RetentionUntil: timestamppb.New(row.retentionUntil),
-		DownloadFilename: row.number + ".html",
+		DownloadFilename: row.number + ".pdf",
 		UnitsPerEur:      decimalText(row.unitsPerEUR),
 		FxReferenceDate:  row.fxReferenceDate,
 	}
@@ -164,69 +173,202 @@ func moneyString(cents int64) string {
 	return value
 }
 
-func renderBillingDocument(row billingDocumentRow, data billingDocumentHTMLData) (*purserpb.GetBillingDocumentResponse, error) {
+// documentTime states a document timestamp in UTC to the second.
+func documentTime(at time.Time) string {
+	return at.UTC().Format("2006-01-02 15:04:05") + " UTC"
+}
+
+// billingPeriodField states the period a document covers.
+func billingPeriodField(start, end sql.NullTime) []billingDocumentField {
+	if !start.Valid || !end.Valid {
+		return nil
+	}
+	const minute = "2006-01-02 15:04"
+	return []billingDocumentField{{
+		Label: "Billing period",
+		Value: start.Time.UTC().Format(minute) + " UTC to " + end.Time.UTC().Format(minute) + " UTC",
+	}}
+}
+
+func renderBillingDocument(row billingDocumentRow, data billingDocumentData) (*purserpb.GetBillingDocumentResponse, error) {
 	data.Number = row.number
-	data.IssuedAt = row.issuedAt.UTC().Format(time.RFC3339)
-	data.RetentionUntil = row.retentionUntil.UTC().Format("2006-01-02")
+	data.IssuedTime = row.issuedAt.UTC()
+	data.IssuedAt = documentTime(row.issuedAt)
+	data.RetentionUntil = row.retentionUntil.UTC().Format(time.DateOnly)
 	data.Status = row.status
 	data.Currency = row.currency
 	data.Amount = moneyString(row.amountCents)
-	var content bytes.Buffer
-	if err := billingDocumentTemplate.Execute(&content, data); err != nil {
+	content, err := renderBillingDocumentPDF(data)
+	if err != nil {
 		return nil, status.Errorf(codes.Internal, "render billing document: %v", err)
 	}
-	digest := sha256.Sum256(content.Bytes())
+	digest := sha256.Sum256(content)
 	return &purserpb.GetBillingDocumentResponse{
 		Document: billingDocumentProto(row), ContentType: billingDocumentContentType,
-		Content: content.Bytes(), Sha256: hex.EncodeToString(digest[:]),
+		Content: content, Sha256: hex.EncodeToString(digest[:]),
 	}, nil
 }
 
 // exchangeRateFields states the ECB rate a document's EUR amounts were
 // converted at, as units of the document currency per euro.
-func exchangeRateFields(currency, unitsPerEUR string, referenceDate time.Time) []billingDocumentHTMLField {
-	return []billingDocumentHTMLField{
-		{Label: "Exchange rate", Value: fmt.Sprintf("1 EUR = %s %s", unitsPerEUR, currency)},
+func exchangeRateFields(currency, unitsPerEUR string, referenceDate time.Time) []billingDocumentField {
+	return []billingDocumentField{
+		{Label: "Exchange rate", Value: fmt.Sprintf("1 EUR = %s %s", decimalText(unitsPerEUR), currency)},
 		{Label: "Rate reference date", Value: referenceDate.UTC().Format(time.DateOnly)},
 	}
 }
 
+// documentLines states persisted invoice line items and their total in
+// cents. Amounts are in the currency the lines were rated in; quantities
+// carry their unit.
+func documentLines(rows []purserdb.ListInvoiceEmailLineItemsRow) (string, []billingDocumentLine, int64) {
+	currency := ""
+	var totalCents int64
+	lines := make([]billingDocumentLine, 0, len(rows))
+	for _, row := range rows {
+		currency = strings.TrimSpace(row.Currency)
+		if amount, err := decimal.NewFromString(row.Amount); err == nil {
+			totalCents += amount.Shift(2).Round(0).IntPart()
+		}
+		var detail []string
+		if label := handlers.LineItemDimensionLabel(row.Dimensions); label != "" {
+			detail = append(detail, label)
+		}
+		if row.ClusterID != "" {
+			detail = append(detail, "cluster "+row.ClusterID)
+		}
+		quantity := quantityText(row.Quantity)
+		if row.Unit != "" {
+			quantity += " " + row.Unit
+		}
+		lines = append(lines, billingDocumentLine{
+			Description: row.Description, Detail: strings.Join(detail, " · "),
+			Quantity: quantity, UnitPrice: unitPriceText(row.UnitPrice), Amount: amountText(row.Amount),
+		})
+	}
+	return currency, lines, totalCents
+}
+
+// quantityText states a NUMERIC quantity without trailing zeros.
+func quantityText(value string) string {
+	quantity, err := decimal.NewFromString(value)
+	if err != nil {
+		return value
+	}
+	return quantity.String()
+}
+
+// unitPriceText states a NUMERIC unit price with at least two decimals and
+// no trailing zeros beyond them.
+func unitPriceText(value string) string {
+	price, err := decimal.NewFromString(value)
+	if err != nil {
+		return value
+	}
+	if price.Equal(price.Round(2)) {
+		return price.StringFixed(2)
+	}
+	return price.String()
+}
+
+func amountText(value string) string {
+	amount, err := decimal.NewFromString(value)
+	if err != nil {
+		return value
+	}
+	return amount.StringFixed(2)
+}
+
+// invoiceTotals states an invoice's subtotal (its lines, or its base and
+// metered amounts when it has none), the prepaid credit it applied, what the
+// collection minimum carried, and the amount due in EUR and, when presented
+// in another currency, in that currency.
+func invoiceTotals(document purserdb.GetInvoiceDocumentRow, lines []billingDocumentLine, linesCents int64, currency string, amountCents int64) []billingDocumentField {
+	eur := func(cents int64) string {
+		if cents < 0 {
+			return "-EUR " + moneyString(-cents)
+		}
+		return "EUR " + moneyString(cents)
+	}
+	subtotal := document.BaseAmountCents + document.MeteredAmountCents
+	if len(lines) > 0 {
+		subtotal = linesCents
+	}
+	totals := []billingDocumentField{{Label: "Subtotal", Value: eur(subtotal)}}
+	if document.PrepaidCreditCents != 0 {
+		totals = append(totals, billingDocumentField{Label: "Prepaid credit applied", Value: eur(-document.PrepaidCreditCents)})
+	}
+	if carried := document.EurAmountCents - max(subtotal-document.PrepaidCreditCents, 0); carried != 0 && document.CollectionMinimumApplied {
+		label := "Carried from earlier invoices (collection minimum)"
+		if carried < 0 {
+			label = "Carried to a later invoice (collection minimum)"
+		}
+		totals = append(totals, billingDocumentField{Label: label, Value: eur(carried)})
+	}
+	totals = append(totals, billingDocumentField{Label: "Amount due (EUR)", Value: eur(document.EurAmountCents)})
+	if currency != "EUR" {
+		totals = append(totals, billingDocumentField{Label: "Amount due", Value: currency + " " + moneyString(amountCents)})
+	}
+	return totals
+}
+
+// customerAddressLines states a billing address stored as JSON (street,
+// postal code and city, state, country), or the stored text when it is not
+// JSON.
+func customerAddressLines(stored string) []string {
+	stored = strings.TrimSpace(stored)
+	if stored == "" || stored == "{}" {
+		return nil
+	}
+	address := scanBillingAddress([]byte(stored))
+	if address == nil {
+		return []string{stored}
+	}
+	var lines []string
+	for _, line := range []string{
+		address.GetStreet(),
+		strings.TrimSpace(address.GetPostalCode() + " " + address.GetCity()),
+		address.GetState(),
+		strings.ToUpper(address.GetCountry()),
+	} {
+		if strings.TrimSpace(line) != "" {
+			lines = append(lines, line)
+		}
+	}
+	return lines
+}
+
 // prepaidStatementFields states a prepaid statement: not a bill, what the
 // period's usage rated to, what the prepaid balance paid, and the balance.
-func prepaidStatementFields(periodStart, periodEnd sql.NullTime, statement handlers.PrepaidStatementDetails) []billingDocumentHTMLField {
+func prepaidStatementFields(periodStart, periodEnd sql.NullTime, statement handlers.PrepaidStatementDetails) []billingDocumentField {
 	eur := func(cents int64) string { return "EUR " + moneyString(cents) }
-	fields := []billingDocumentHTMLField{
+	fields := []billingDocumentField{
 		{Label: "Document", Value: "Statement of a prepaid balance. Not an invoice: the prepaid balance paid for the usage stated as it was reported, and nothing is due."},
 	}
 	if statement.ClosesPrepaidPhase {
-		fields = append(fields, billingDocumentHTMLField{Label: "Closes", Value: "Prepaid billing, at the switch to postpaid billing"})
+		fields = append(fields, billingDocumentField{Label: "Closes", Value: "Prepaid billing, at the switch to postpaid billing"})
 	}
-	if periodStart.Valid {
-		fields = append(fields, billingDocumentHTMLField{Label: "Period start", Value: periodStart.Time.UTC().Format(time.RFC3339)})
-	}
-	if periodEnd.Valid {
-		fields = append(fields, billingDocumentHTMLField{Label: "Period end", Value: periodEnd.Time.UTC().Format(time.RFC3339)})
-	}
+	fields = append(fields, billingPeriodField(periodStart, periodEnd)...)
 	fields = append(fields,
-		billingDocumentHTMLField{Label: "Usage at rated prices", Value: eur(statement.RatedUsageCents)},
-		billingDocumentHTMLField{Label: "Paid from prepaid balance for this usage", Value: eur(statement.PaidFromBalanceCents)},
+		billingDocumentField{Label: "Usage at rated prices", Value: eur(statement.RatedUsageCents)},
+		billingDocumentField{Label: "Paid from prepaid balance for this usage", Value: eur(statement.PaidFromBalanceCents)},
 	)
 	if statement.PeriodFeesCents != 0 {
-		fields = append(fields, billingDocumentHTMLField{Label: "Monthly fees charged to prepaid balance", Value: eur(statement.PeriodFeesCents)})
+		fields = append(fields, billingDocumentField{Label: "Monthly fees charged to prepaid balance", Value: eur(statement.PeriodFeesCents)})
 	}
 	fields = append(fields,
-		billingDocumentHTMLField{Label: "Balance at period start", Value: eur(statement.OpeningBalanceCents)},
-		billingDocumentHTMLField{Label: fmt.Sprintf("Top-ups (%d)", statement.Topups), Value: eur(statement.TopupCents)},
-		billingDocumentHTMLField{Label: "Usage deducted in period", Value: eur(-statement.UsagePostedCents)},
+		billingDocumentField{Label: "Balance at period start", Value: eur(statement.OpeningBalanceCents)},
+		billingDocumentField{Label: fmt.Sprintf("Top-ups (%d)", statement.Topups), Value: eur(statement.TopupCents)},
+		billingDocumentField{Label: "Usage deducted in period", Value: eur(-statement.UsagePostedCents)},
 	)
 	if statement.OtherMovementsCents != 0 {
-		fields = append(fields, billingDocumentHTMLField{Label: "Other balance changes", Value: eur(statement.OtherMovementsCents)})
+		fields = append(fields, billingDocumentField{Label: "Other balance changes", Value: eur(statement.OtherMovementsCents)})
 	}
-	fields = append(fields, billingDocumentHTMLField{Label: "Balance at period end", Value: eur(statement.PeriodEndBalanceCents)})
+	fields = append(fields, billingDocumentField{Label: "Balance at period end", Value: eur(statement.PeriodEndBalanceCents)})
 	if statement.PeriodFeesCents != 0 {
-		fields = append(fields, billingDocumentHTMLField{Label: "Balance after monthly fees", Value: eur(statement.ClosingBalanceCents)})
+		fields = append(fields, billingDocumentField{Label: "Balance after monthly fees", Value: eur(statement.ClosingBalanceCents)})
 	}
-	return append(fields, billingDocumentHTMLField{Label: "Amount due", Value: "EUR 0.00, nothing to pay"})
+	return append(fields, billingDocumentField{Label: "Amount due", Value: "EUR 0.00, nothing to pay"})
 }
 
 func supplierDocumentFields() (string, string, string, string) {
@@ -237,7 +379,7 @@ func supplierDocumentFields() (string, string, string, string) {
 // missingDocumentSupplierFields names the SUPPLIER_* keys whose values a
 // document needs and lacks. Crypto documents carry the supplier identity they
 // were issued with, which takes the place of the configured one.
-func missingDocumentSupplierFields(base billingDocumentHTMLData) []string {
+func missingDocumentSupplierFields(base billingDocumentData) []string {
 	var missing []string
 	for _, field := range []struct{ key, value string }{
 		{"SUPPLIER_NAME", base.SupplierName},
@@ -252,12 +394,8 @@ func missingDocumentSupplierFields(base billingDocumentHTMLData) []string {
 	return missing
 }
 
-func scanCustomer(name, company, address, vat *sql.NullString) (string, string, string, string) {
-	return name.String, company.String, address.String, vat.String
-}
-
-// GetBillingDocument renders one tenant-owned document as a self-contained,
-// printable HTML attachment. Rendering only uses persisted financial evidence.
+// GetBillingDocument renders one tenant-owned document as a PDF. Rendering
+// only uses persisted financial evidence and the tenant's billing details.
 func (s *PurserServer) GetBillingDocument(ctx context.Context, req *purserpb.GetBillingDocumentRequest) (*purserpb.GetBillingDocumentResponse, error) { //nolint:gocyclo,cyclop,funlen // Each document kind has a deliberately explicit tenant-scoped evidence query.
 	tenantID, err := resolveBillingDocumentTenant(ctx, req.GetTenantId())
 	if err != nil {
@@ -269,38 +407,50 @@ func (s *PurserServer) GetBillingDocument(ctx context.Context, req *purserpb.Get
 	}
 	kind := strings.TrimSpace(req.GetKind())
 	supplierName, supplierAddress, supplierVAT, supplierRegistration := supplierDocumentFields()
-	base := billingDocumentHTMLData{SupplierName: supplierName, SupplierAddress: supplierAddress, SupplierVAT: supplierVAT, SupplierRegistration: supplierRegistration}
+	base := billingDocumentData{SupplierName: supplierName, SupplierAddress: supplierAddress, SupplierVAT: supplierVAT, SupplierRegistration: supplierRegistration}
 	var row billingDocumentRow
 	row.id, row.kind = documentID, kind
-	var name, company, address, vat sql.NullString
 	queries := purserdb.New(s.db)
-	setCustomer := func(customerName, customerCompany, customerAddress, customerVAT string) {
-		name = sql.NullString{String: customerName, Valid: customerName != ""}
-		company = sql.NullString{String: customerCompany, Valid: customerCompany != ""}
-		address = sql.NullString{String: customerAddress, Valid: customerAddress != ""}
-		vat = sql.NullString{String: customerVAT, Valid: customerVAT != ""}
+	setCustomer := func(name, company, address, vat, email string) {
+		base.Customer, base.CustomerCompany = strings.TrimSpace(name), strings.TrimSpace(company)
+		base.CustomerAddress = customerAddressLines(address)
+		base.CustomerVAT, base.CustomerEmail = strings.TrimSpace(vat), strings.TrimSpace(email)
+	}
+	// setLines states the document's persisted line items.
+	var linesCents int64
+	setLines := func() error {
+		items, linesErr := queries.ListInvoiceEmailLineItems(ctx, purserdb.ListInvoiceEmailLineItemsParams{InvoiceID: documentID, TenantID: tenantID})
+		if linesErr != nil {
+			return status.Errorf(codes.Internal, "load billing document lines: %v", linesErr)
+		}
+		base.LineCurrency, base.Lines, linesCents = documentLines(items)
+		return nil
 	}
 	switch kind {
 	case "invoice":
 		var document purserdb.GetInvoiceDocumentRow
 		document, err = queries.GetInvoiceDocument(ctx, purserdb.GetInvoiceDocumentParams{DocumentID: documentID, TenantID: tenantID})
+		if err != nil {
+			break
+		}
 		row.number, row.amountCents, row.currency, row.status = document.InvoiceNumber, document.AmountCents, document.Currency, document.Status
 		row.issuedAt, row.retentionUntil = document.IssuedAt.Time, document.RetentionUntil
-		setCustomer(document.CustomerName, document.CustomerCompany, document.CustomerAddress, document.CustomerVat)
+		setCustomer(document.CustomerName, document.CustomerCompany, document.CustomerAddress, document.CustomerVat, document.CustomerEmail)
 		base.Title = "Invoice"
-		if document.PeriodStart.Valid {
-			base.Fields = append(base.Fields, billingDocumentHTMLField{Label: "Period start", Value: document.PeriodStart.Time.UTC().Format(time.RFC3339)})
-		}
-		if document.PeriodEnd.Valid {
-			base.Fields = append(base.Fields, billingDocumentHTMLField{Label: "Period end", Value: document.PeriodEnd.Time.UTC().Format(time.RFC3339)})
-		}
-		base.Fields = append(base.Fields, billingDocumentHTMLField{Label: "Due", Value: document.DueDate.UTC().Format(time.RFC3339)})
-		base.Fields = append(base.Fields, billingDocumentHTMLField{Label: "Total (EUR)", Value: "EUR " + moneyString(document.EurAmountCents)})
+		base.Fields = append(base.Fields, billingPeriodField(document.PeriodStart, document.PeriodEnd)...)
+		base.Fields = append(base.Fields, billingDocumentField{Label: "Due", Value: document.DueDate.UTC().Format(time.DateOnly)})
 		if document.PresentmentUnitsPerEur != "" && document.PresentmentReferenceDate.Valid {
 			base.Fields = append(base.Fields, exchangeRateFields(row.currency, document.PresentmentUnitsPerEur, document.PresentmentReferenceDate.Time)...)
 			row.eurAmountCents = sql.NullInt64{Int64: document.EurAmountCents, Valid: true}
 			row.unitsPerEUR, row.fxReferenceDate = document.PresentmentUnitsPerEur, dateText(document.PresentmentReferenceDate.Time)
 		}
+		if err = setLines(); err != nil {
+			return nil, err
+		}
+		if base.LineCurrency == "" {
+			base.LineCurrency = "EUR"
+		}
+		base.Totals = invoiceTotals(document, base.Lines, linesCents, row.currency, row.amountCents)
 	case "prepaid_statement":
 		var document purserdb.GetPrepaidStatementDocumentRow
 		document, err = queries.GetPrepaidStatementDocument(ctx, purserdb.GetPrepaidStatementDocumentParams{DocumentID: documentID, TenantID: tenantID})
@@ -315,9 +465,12 @@ func (s *PurserServer) GetBillingDocument(ctx context.Context, req *purserpb.Get
 		}
 		row.number, row.amountCents, row.currency, row.status = document.InvoiceNumber, 0, "EUR", document.Status
 		row.issuedAt, row.retentionUntil = document.IssuedAt.Time, document.RetentionUntil
-		setCustomer(document.CustomerName, document.CustomerCompany, document.CustomerAddress, document.CustomerVat)
+		setCustomer(document.CustomerName, document.CustomerCompany, document.CustomerAddress, document.CustomerVat, document.CustomerEmail)
 		base.Title = "Prepaid balance statement"
 		base.Fields = append(base.Fields, prepaidStatementFields(document.PeriodStart, document.PeriodEnd, details.Statement)...)
+		if err = setLines(); err != nil {
+			return nil, err
+		}
 	case "simplified_invoice":
 		var document purserdb.GetSimplifiedInvoiceDocumentRow
 		document, err = queries.GetSimplifiedInvoiceDocument(ctx, purserdb.GetSimplifiedInvoiceDocumentParams{DocumentID: documentID, TenantID: tenantID})
@@ -325,27 +478,27 @@ func (s *PurserServer) GetBillingDocument(ctx context.Context, req *purserpb.Get
 		row.issuedAt, row.retentionUntil = document.IssuedAt, document.RetentionUntil
 		base.SupplierName, base.SupplierAddress = document.SupplierName, document.SupplierAddress
 		base.SupplierVAT, base.SupplierRegistration = document.SupplierVatNumber, document.SupplierRegistrationNumber
-		setCustomer(document.CustomerName, document.CustomerCompany, document.CustomerAddress, document.CustomerVat)
+		setCustomer(document.CustomerName, document.CustomerCompany, document.CustomerAddress, document.CustomerVat, document.CustomerEmail)
 		base.Title = "Simplified invoice"
 		base.Fields = append(base.Fields,
-			billingDocumentHTMLField{Label: "Net", Value: row.currency + " " + moneyString(document.NetAmountCents)},
-			billingDocumentHTMLField{Label: "VAT", Value: fmt.Sprintf("%s %s (%0.2f%%)", row.currency, moneyString(document.VatAmountCents), float64(document.VatRateBps)/100)},
-			billingDocumentHTMLField{Label: "Total (EUR)", Value: "EUR " + moneyString(document.AmountEurCents)},
-			billingDocumentHTMLField{Label: "Net (EUR)", Value: "EUR " + moneyString(document.NetEurCents)},
-			billingDocumentHTMLField{Label: "VAT (EUR)", Value: "EUR " + moneyString(document.VatEurCents)},
+			billingDocumentField{Label: "Net", Value: row.currency + " " + moneyString(document.NetAmountCents)},
+			billingDocumentField{Label: "VAT", Value: fmt.Sprintf("%s %s (%0.2f%%)", row.currency, moneyString(document.VatAmountCents), float64(document.VatRateBps)/100)},
+			billingDocumentField{Label: "Total (EUR)", Value: "EUR " + moneyString(document.AmountEurCents)},
+			billingDocumentField{Label: "Net (EUR)", Value: "EUR " + moneyString(document.NetEurCents)},
+			billingDocumentField{Label: "VAT (EUR)", Value: "EUR " + moneyString(document.VatEurCents)},
 		)
 		if document.FxUnitsPerEur != "" {
 			base.Fields = append(base.Fields, exchangeRateFields(row.currency, document.FxUnitsPerEur, document.FxReferenceDate)...)
 		}
 		row.setEUR(document.AmountEurCents, document.NetEurCents, document.VatEurCents, document.FxUnitsPerEur, document.FxReferenceDate)
 		base.Fields = append(base.Fields,
-			billingDocumentHTMLField{Label: "Service", Value: document.ServiceDescription},
-			billingDocumentHTMLField{Label: "Quantity", Value: fmt.Sprintf("%d", document.ServiceQuantity)},
-			billingDocumentHTMLField{Label: "Supply date", Value: document.ServiceDate.Time.Format("2006-01-02")},
-			billingDocumentHTMLField{Label: "Settlement reference", Value: document.ReferenceType + ":" + document.ReferenceID},
+			billingDocumentField{Label: "Service", Value: document.ServiceDescription},
+			billingDocumentField{Label: "Quantity", Value: fmt.Sprintf("%d", document.ServiceQuantity)},
+			billingDocumentField{Label: "Supply date", Value: document.ServiceDate.Time.Format("2006-01-02")},
+			billingDocumentField{Label: "Settlement reference", Value: document.ReferenceType + ":" + document.ReferenceID},
 		)
 		if document.TaxValidationStatus == "reverse_charge" {
-			base.Fields = append(base.Fields, billingDocumentHTMLField{Label: "VAT treatment", Value: "Reverse charge — btw verlegd"})
+			base.Fields = append(base.Fields, billingDocumentField{Label: "VAT treatment", Value: "Reverse charge — btw verlegd"})
 		}
 	case "crypto_invoice":
 		var document purserdb.GetCryptoInvoiceDocumentRow
@@ -354,39 +507,38 @@ func (s *PurserServer) GetBillingDocument(ctx context.Context, req *purserpb.Get
 		row.issuedAt, row.retentionUntil = document.IssuedAt, document.RetentionUntil
 		base.SupplierName, base.SupplierAddress = document.SupplierName, document.SupplierAddress
 		base.SupplierVAT, base.SupplierRegistration = document.SupplierVatNumber, document.SupplierRegistrationNumber
-		setCustomer(document.CustomerName, document.CustomerCompany, document.CustomerAddress, document.CustomerVat)
+		setCustomer(document.CustomerName, document.CustomerCompany, document.CustomerAddress, document.CustomerVat, document.CustomerEmail)
 		base.Title = "Invoice"
 		base.Fields = append(base.Fields,
-			billingDocumentHTMLField{Label: "Billing email", Value: document.CustomerEmail},
-			billingDocumentHTMLField{Label: "Net", Value: row.currency + " " + moneyString(document.NetAmountCents)},
-			billingDocumentHTMLField{Label: "VAT", Value: fmt.Sprintf("%s %s (%0.2f%%)", row.currency, moneyString(document.VatAmountCents), float64(document.VatRateBps)/100)},
-			billingDocumentHTMLField{Label: "Total (EUR)", Value: "EUR " + moneyString(document.AmountEurCents)},
-			billingDocumentHTMLField{Label: "Net (EUR)", Value: "EUR " + moneyString(document.NetEurCents)},
-			billingDocumentHTMLField{Label: "VAT (EUR)", Value: "EUR " + moneyString(document.VatEurCents)},
+			billingDocumentField{Label: "Net", Value: row.currency + " " + moneyString(document.NetAmountCents)},
+			billingDocumentField{Label: "VAT", Value: fmt.Sprintf("%s %s (%0.2f%%)", row.currency, moneyString(document.VatAmountCents), float64(document.VatRateBps)/100)},
+			billingDocumentField{Label: "Total (EUR)", Value: "EUR " + moneyString(document.AmountEurCents)},
+			billingDocumentField{Label: "Net (EUR)", Value: "EUR " + moneyString(document.NetEurCents)},
+			billingDocumentField{Label: "VAT (EUR)", Value: "EUR " + moneyString(document.VatEurCents)},
 		)
 		if document.FxUnitsPerEur != "" {
 			base.Fields = append(base.Fields, exchangeRateFields(row.currency, document.FxUnitsPerEur, document.FxReferenceDate)...)
 		}
 		row.setEUR(document.AmountEurCents, document.NetEurCents, document.VatEurCents, document.FxUnitsPerEur, document.FxReferenceDate)
 		base.Fields = append(base.Fields,
-			billingDocumentHTMLField{Label: "Service", Value: document.ServiceDescription},
-			billingDocumentHTMLField{Label: "Quantity", Value: fmt.Sprintf("%d", document.ServiceQuantity)},
-			billingDocumentHTMLField{Label: "Supply date", Value: document.ServiceDate.Format("2006-01-02")},
-			billingDocumentHTMLField{Label: "Settlement reference", Value: document.ReferenceType + ":" + document.ReferenceID},
+			billingDocumentField{Label: "Service", Value: document.ServiceDescription},
+			billingDocumentField{Label: "Quantity", Value: fmt.Sprintf("%d", document.ServiceQuantity)},
+			billingDocumentField{Label: "Supply date", Value: document.ServiceDate.Format("2006-01-02")},
+			billingDocumentField{Label: "Settlement reference", Value: document.ReferenceType + ":" + document.ReferenceID},
 		)
 		if document.TaxValidationStatus == "reverse_charge" {
-			base.Fields = append(base.Fields, billingDocumentHTMLField{Label: "VAT treatment", Value: "Reverse charge — btw verlegd"})
+			base.Fields = append(base.Fields, billingDocumentField{Label: "VAT treatment", Value: "Reverse charge — btw verlegd"})
 		}
 	case "payment_receipt":
 		var document purserdb.GetPaymentReceiptDocumentRow
 		document, err = queries.GetPaymentReceiptDocument(ctx, purserdb.GetPaymentReceiptDocumentParams{DocumentID: documentID, TenantID: tenantID})
 		row.number, row.amountCents, row.currency, row.status = document.DocumentNumber, document.AmountCents, document.Currency, document.Status
 		row.issuedAt, row.retentionUntil = document.IssuedAt.Time, document.RetentionUntil
-		setCustomer(document.CustomerName, document.CustomerCompany, document.CustomerAddress, document.CustomerVat)
+		setCustomer(document.CustomerName, document.CustomerCompany, document.CustomerAddress, document.CustomerVat, document.CustomerEmail)
 		base.Title = "Payment receipt"
-		base.Fields = append(base.Fields, billingDocumentHTMLField{Label: "Method", Value: document.Method})
+		base.Fields = append(base.Fields, billingDocumentField{Label: "Method", Value: document.Method})
 		if document.TxID.Valid {
-			base.Fields = append(base.Fields, billingDocumentHTMLField{Label: "Settlement reference", Value: document.TxID.String})
+			base.Fields = append(base.Fields, billingDocumentField{Label: "Settlement reference", Value: document.TxID.String})
 		}
 		row.eurAmountCents = sql.NullInt64{Int64: document.EurAmountCents, Valid: true}
 		row.unitsPerEUR, row.fxReferenceDate = document.FxUnitsPerEur, dateText(document.FxReferenceDate)
@@ -395,13 +547,14 @@ func (s *PurserServer) GetBillingDocument(ctx context.Context, req *purserpb.Get
 		document, err = queries.GetCreditNoteDocument(ctx, purserdb.GetCreditNoteDocumentParams{DocumentID: documentID, TenantID: tenantID})
 		row.number, row.amountCents, row.currency, row.status = document.CreditNoteNumber, document.AmountCents, document.Currency, "issued"
 		row.issuedAt, row.retentionUntil = document.IssuedAt, document.RetentionUntil
-		setCustomer(document.CustomerName, document.CustomerCompany, document.CustomerAddress, document.CustomerVat)
+		setCustomer(document.CustomerName, document.CustomerCompany, document.CustomerAddress, document.CustomerVat, document.CustomerEmail)
 		base.Title = "Credit note"
 		base.Fields = append(base.Fields,
-			billingDocumentHTMLField{Label: "Original document", Value: document.SourceDocumentType + ":" + document.SourceDocumentID},
-			billingDocumentHTMLField{Label: "Reversal reference", Value: document.ReversalReferenceType + ":" + document.ReversalReferenceID},
-			billingDocumentHTMLField{Label: "Reason", Value: document.Reason},
+			billingDocumentField{Label: "Original document", Value: document.SourceDocumentType + ":" + document.SourceDocumentID},
+			billingDocumentField{Label: "Reversal reference", Value: document.ReversalReferenceType + ":" + document.ReversalReferenceID},
+			billingDocumentField{Label: "Reason", Value: document.Reason},
 		)
+		base.Totals = []billingDocumentField{{Label: "Total credited", Value: row.currency + " " + moneyString(row.amountCents)}}
 	default:
 		return nil, status.Error(codes.InvalidArgument, "unsupported billing document kind")
 	}
@@ -415,6 +568,5 @@ func (s *PurserServer) GetBillingDocument(ctx context.Context, req *purserpb.Get
 		s.logger.WithFields(logging.Fields{"document_id": documentID, "kind": kind, "missing": missing}).Error("Billing document refused: the supplier identity is not configured")
 		return nil, status.Errorf(codes.FailedPrecondition, "supplier information is not configured for document rendering: %s", strings.Join(missing, ", "))
 	}
-	base.Customer, base.CustomerCompany, base.CustomerAddress, base.CustomerVAT = scanCustomer(&name, &company, &address, &vat)
 	return renderBillingDocument(row, base)
 }

@@ -218,7 +218,7 @@ func TestBillingDocumentsListAndDownloadAreTenantScoped(t *testing.T) {
 				t.Fatalf("download request = %q %q %q", tenantID, kind, documentID)
 			}
 			return &purserpb.GetBillingDocumentResponse{
-				ContentType: "text/html; charset=utf-8", Content: []byte("<html>credit note</html>"), Sha256: "digest",
+				ContentType: "application/pdf", Content: []byte("%PDF-1.4 credit note"), Sha256: "digest",
 			}, nil
 		},
 	}
@@ -237,7 +237,8 @@ func TestBillingDocumentsListAndDownloadAreTenantScoped(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if download.Contents[0].Text != "<html>credit note</html>" || download.Contents[0].Meta["sha256"] != "digest" {
+	if string(download.Contents[0].Blob) != "%PDF-1.4 credit note" || download.Contents[0].Text != "" ||
+		download.Contents[0].MIMEType != "application/pdf" || download.Contents[0].Meta["sha256"] != "digest" {
 		t.Fatalf("download = %+v", download.Contents[0])
 	}
 }

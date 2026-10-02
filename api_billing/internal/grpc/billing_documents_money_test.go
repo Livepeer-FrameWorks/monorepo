@@ -75,7 +75,7 @@ func TestListBillingDocumentsReturnsImmutableAuditMetadata(t *testing.T) {
 		t.Fatalf("documents = %d", len(response.GetDocuments()))
 	}
 	invoice := response.GetDocuments()[0]
-	if invoice.GetId() != documentID || invoice.GetKind() != "invoice" || invoice.GetDocumentNumber() != "INV-0001" || invoice.GetAmountCents() != 12345 || invoice.GetDownloadFilename() != "INV-0001.html" {
+	if invoice.GetId() != documentID || invoice.GetKind() != "invoice" || invoice.GetDocumentNumber() != "INV-0001" || invoice.GetAmountCents() != 12345 || invoice.GetDownloadFilename() != "INV-0001.pdf" {
 		t.Fatalf("invoice metadata = %+v", invoice)
 	}
 	if !invoice.GetIssuedAt().AsTime().Equal(now) || !invoice.GetRetentionUntil().AsTime().Equal(now.AddDate(10, 0, 0)) {
@@ -120,6 +120,7 @@ func TestGetBillingDocumentRendersEveryMoneyDocumentKind(t *testing.T) { //nolin
 		query       string
 		columns     []string
 		row         []driver.Value
+		lines       bool // the document reads its persisted line items
 		wantNumber  string
 		wantAmount  int64
 		wantEUR     int64 // -1 when the document states no EUR amount
@@ -128,33 +129,38 @@ func TestGetBillingDocumentRendersEveryMoneyDocumentKind(t *testing.T) { //nolin
 	}{
 		{
 			kind: "invoice", query: "-- name: GetInvoiceDocument",
-			columns:    []string{"invoice_number", "amount_cents", "currency", "status", "issued_at", "retention_until", "period_start", "period_end", "due_date", "eur_amount_cents", "presentment_units_per_eur", "presentment_reference_date", "customer_name", "customer_company", "customer_address", "customer_vat"},
-			row:        []driver.Value{"INV-1", int64(1375), "USD", "paid", now, retained, now.AddDate(0, -1, 0), now, now.AddDate(0, 0, 14), int64(1250), "1.1000000000", now, "Ada", "Example BV", "Utrecht", "NL123"},
-			wantNumber: "INV-1", wantAmount: 1375, wantEUR: 1250, wantContent: []string{"Invoice", "USD 13.75", "Period start", "Due", "Ada", "EUR 12.50", "1 EUR = 1.1000000000 USD", "2026-08-31"},
+			columns:    []string{"invoice_number", "amount_cents", "currency", "status", "issued_at", "retention_until", "period_start", "period_end", "due_date", "eur_amount_cents", "base_amount_cents", "metered_amount_cents", "prepaid_credit_cents", "collection_minimum_applied", "presentment_units_per_eur", "presentment_reference_date", "customer_email", "customer_name", "customer_company", "customer_address", "customer_vat"},
+			row:        []driver.Value{"INV-1", int64(1375), "USD", "paid", now, retained, now.AddDate(0, -1, 0), now, now.AddDate(0, 0, 14), int64(1250), int64(1000), int64(750), int64(500), false, "1.1000000000", now, "ada@example.test", "Ada", "Example BV", "Utrecht", "NL123"},
+			lines:      true,
+			wantNumber: "INV-1", wantAmount: 1375, wantEUR: 1250, wantContent: []string{
+				"Invoice", "USD 13.75", "Billing period", "2026-07-31 10:00 UTC to 2026-08-31 10:00 UTC", "Due", "2026-09-14", "Ada", "ada@example.test",
+				"Base fee", "Delivered bandwidth", "Subtotal", "EUR 17.50", "Prepaid credit applied", "-EUR 5.00", "Amount due (EUR)", "EUR 12.50",
+				"1 EUR = 1.1 USD", "2026-08-31",
+			},
 		},
 		{
 			kind: "simplified_invoice", query: "-- name: GetSimplifiedInvoiceDocument",
-			columns:    []string{"invoice_number", "gross_amount_cents", "currency", "tax_validation_status", "issued_at", "retention_until", "net_amount_cents", "vat_amount_cents", "vat_rate_bps", "amount_eur_cents", "net_eur_cents", "vat_eur_cents", "fx_units_per_eur", "fx_reference_date", "reference_type", "reference_id", "supplier_name", "supplier_address", "supplier_vat_number", "supplier_registration_number", "service_description", "service_quantity", "service_date", "customer_name", "customer_company", "customer_address", "customer_vat"},
-			row:        []driver.Value{"SI-1", int64(1210), "EUR", "issued", now, retained, int64(1000), int64(210), int32(2100), int64(1210), int64(1000), int64(210), "1", now, "topup", "topup-1", "FrameWorks B.V.", "Amsterdam", "NL000", "123", "Prepaid credit", int32(1), now, "Grace", "Example GmbH", "Berlin", "DE123"},
+			columns:    []string{"invoice_number", "gross_amount_cents", "currency", "tax_validation_status", "issued_at", "retention_until", "net_amount_cents", "vat_amount_cents", "vat_rate_bps", "amount_eur_cents", "net_eur_cents", "vat_eur_cents", "fx_units_per_eur", "fx_reference_date", "reference_type", "reference_id", "supplier_name", "supplier_address", "supplier_vat_number", "supplier_registration_number", "service_description", "service_quantity", "service_date", "customer_email", "customer_name", "customer_company", "customer_address", "customer_vat"},
+			row:        []driver.Value{"SI-1", int64(1210), "EUR", "issued", now, retained, int64(1000), int64(210), int32(2100), int64(1210), int64(1000), int64(210), "1", now, "topup", "topup-1", "FrameWorks B.V.", "Amsterdam", "NL000", "123", "Prepaid credit", int32(1), now, "grace@example.test", "Grace", "Example GmbH", "Berlin", "DE123"},
 			wantNumber: "SI-1", wantAmount: 1210, wantEUR: 1210, wantVAT: true, wantContent: []string{"Simplified invoice", "Net", "EUR 10.00", "VAT", "topup:topup-1", "VAT (EUR)"},
 		},
 		{
 			kind: "crypto_invoice", query: "-- name: GetCryptoInvoiceDocument",
 			columns:    []string{"invoice_number", "gross_amount_cents", "currency", "tax_validation_status", "issued_at", "retention_until", "net_amount_cents", "vat_amount_cents", "vat_rate_bps", "amount_eur_cents", "net_eur_cents", "vat_eur_cents", "fx_units_per_eur", "fx_reference_date", "reference_type", "reference_id", "supplier_name", "supplier_address", "supplier_vat_number", "supplier_registration_number", "service_description", "service_quantity", "service_date", "customer_email", "customer_name", "customer_company", "customer_address", "customer_vat"},
 			row:        []driver.Value{"CI-1", int64(5000), "USD", "reverse_charge", now, retained, int64(5000), int64(0), int32(0), int64(4545), int64(4545), int64(0), "1.1000000000", now, "tx", "0xabc", "FrameWorks B.V.", "Amsterdam", "NL000", "123", "Crypto credit", int32(1), now, "buyer@example.test", "Linus", "Kernel Oy", "Helsinki", "FI123"},
-			wantNumber: "CI-1", wantAmount: 5000, wantEUR: 4545, wantVAT: true, wantContent: []string{"USD 50.00", "buyer@example.test", "tx:0xabc", "Reverse charge", "Net (EUR)", "EUR 45.45", "1 EUR = 1.1000000000 USD"},
+			wantNumber: "CI-1", wantAmount: 5000, wantEUR: 4545, wantVAT: true, wantContent: []string{"USD 50.00", "buyer@example.test", "tx:0xabc", "Reverse charge", "Net (EUR)", "EUR 45.45", "1 EUR = 1.1 USD"},
 		},
 		{
 			kind: "payment_receipt", query: "-- name: GetPaymentReceiptDocument",
-			columns:    []string{"document_number", "amount_cents", "currency", "status", "issued_at", "retention_until", "method", "tx_id", "eur_amount_cents", "fx_units_per_eur", "fx_reference_date", "customer_name", "customer_company", "customer_address", "customer_vat"},
-			row:        []driver.Value{"PAY-1", int64(999), "EUR", "confirmed", now, retained, "stripe_card", "pi_123", int64(999), "1.0000000000", now, "Margaret", "Compiler Ltd", "London", "GB123"},
+			columns:    []string{"document_number", "amount_cents", "currency", "status", "issued_at", "retention_until", "method", "tx_id", "eur_amount_cents", "fx_units_per_eur", "fx_reference_date", "customer_email", "customer_name", "customer_company", "customer_address", "customer_vat"},
+			row:        []driver.Value{"PAY-1", int64(999), "EUR", "confirmed", now, retained, "stripe_card", "pi_123", int64(999), "1.0000000000", now, "margaret@example.test", "Margaret", "Compiler Ltd", "London", "GB123"},
 			wantNumber: "PAY-1", wantAmount: 999, wantEUR: 999, wantContent: []string{"Payment receipt", "EUR 9.99", "stripe_card", "pi_123"},
 		},
 		{
 			kind: "credit_note", query: "-- name: GetCreditNoteDocument",
-			columns:    []string{"credit_note_number", "amount_cents", "currency", "issued_at", "retention_until", "source_document_type", "source_document_id", "reversal_reference_type", "reversal_reference_id", "reason", "customer_name", "customer_company", "customer_address", "customer_vat"},
-			row:        []driver.Value{"CN-1", int64(-250), "EUR", now, retained, "invoice", "inv-1", "refund", "re_1", "customer refund", "Barbara", "COBOL Inc", "New York", "US123"},
-			wantNumber: "CN-1", wantAmount: -250, wantEUR: -1, wantContent: []string{"Credit note", "-2.50", "invoice:inv-1", "refund:re_1", "customer refund"},
+			columns:    []string{"credit_note_number", "amount_cents", "currency", "issued_at", "retention_until", "source_document_type", "source_document_id", "reversal_reference_type", "reversal_reference_id", "reason", "customer_email", "customer_name", "customer_company", "customer_address", "customer_vat"},
+			row:        []driver.Value{"CN-1", int64(-250), "EUR", now, retained, "invoice", "inv-1", "refund", "re_1", "customer refund", "barbara@example.test", "Barbara", "COBOL Inc", "New York", "US123"},
+			wantNumber: "CN-1", wantAmount: -250, wantEUR: -1, wantContent: []string{"Credit note", "-2.50", "invoice:inv-1", "refund:re_1", "customer refund", "Total credited", "barbara@example.test"},
 		},
 	}
 
@@ -166,6 +172,12 @@ func TestGetBillingDocumentRendersEveryMoneyDocumentKind(t *testing.T) { //nolin
 			}
 			defer db.Close()
 			mock.ExpectQuery(test.query).WithArgs(documentID, documentTenantID).WillReturnRows(sqlmock.NewRows(test.columns).AddRow(test.row...))
+			if test.lines {
+				mock.ExpectQuery("-- name: ListInvoiceEmailLineItems").WithArgs(documentID, documentTenantID).WillReturnRows(
+					sqlmock.NewRows([]string{"description", "unit", "dimensions", "cluster_id", "cluster_kind", "quantity", "unit_price", "amount", "currency", "pricing_source"}).
+						AddRow("Base fee", "", []byte(`{}`), "", "", "1.000000", "10.000000000", "10.00", "EUR", "tier").
+						AddRow("Delivered bandwidth", "gibibyte", []byte(`{"region":"eu"}`), "cluster-1", "platform_official", "375.000000", "0.020000000", "7.50", "EUR", "cluster_metered"))
+			}
 			response, err := (&PurserServer{db: db}).GetBillingDocument(serviceTestContext(), &purserpb.GetBillingDocumentRequest{
 				TenantId: documentTenantID, DocumentId: documentID, Kind: test.kind,
 			})
@@ -190,12 +202,7 @@ func TestGetBillingDocumentRendersEveryMoneyDocumentKind(t *testing.T) { //nolin
 			if (document.VatEurCents != nil) != test.wantVAT || (document.NetEurCents != nil) != test.wantVAT {
 				t.Fatalf("EUR net/VAT stated = %v/%v, want %v", document.NetEurCents != nil, document.VatEurCents != nil, test.wantVAT)
 			}
-			content := string(response.GetContent())
-			for _, want := range test.wantContent {
-				if !strings.Contains(content, want) {
-					t.Fatalf("content missing %q: %s", want, content)
-				}
-			}
+			requireRuns(t, pdfTextRuns(t, response.GetContent()), test.wantContent...)
 			if err := mock.ExpectationsWereMet(); err != nil {
 				t.Fatal(err)
 			}

@@ -239,6 +239,8 @@ type Querier interface {
 	GetInitializedPostpaidAccount(ctx context.Context, tenantID string) (GetInitializedPostpaidAccountRow, error)
 	GetInitializedPrepaidAccount(ctx context.Context, arg GetInitializedPrepaidAccountParams) (GetInitializedPrepaidAccountRow, error)
 	GetInternalSubscriptionID(ctx context.Context, tenantID string) (string, error)
+	// An invoice is issued when it is finalized; created_at is when its draft was
+	// first written.
 	GetInvoiceDocument(ctx context.Context, arg GetInvoiceDocumentParams) (GetInvoiceDocumentRow, error)
 	// amount and currency are the EUR invoice total; the presentment fields are
 	// the total charged in the tenant's presentment currency, empty until the
@@ -311,6 +313,8 @@ type Querier interface {
 	GetPrepaidCryptoTopup(ctx context.Context, arg GetPrepaidCryptoTopupParams) (GetPrepaidCryptoTopupRow, error)
 	GetPrepaidDrainRate(ctx context.Context, tenantID string) (int64, error)
 	GetPrepaidStatement(ctx context.Context, arg GetPrepaidStatementParams) (GetPrepaidStatementRow, error)
+	// A statement is issued when it is finalized; a statement converted from a
+	// draft keeps the draft's created_at.
 	GetPrepaidStatementDocument(ctx context.Context, arg GetPrepaidStatementDocumentParams) (GetPrepaidStatementDocumentRow, error)
 	// Balance movements a statement states, read under the prepaid balance lock:
 	// everything posted since the period start and since its end, and the

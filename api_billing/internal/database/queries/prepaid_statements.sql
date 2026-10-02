@@ -264,10 +264,13 @@ WHERE id = sqlc.arg(invoice_id)::text::uuid
   AND document_kind = 'prepaid_statement';
 
 -- name: GetPrepaidStatementDocument :one
+-- A statement is issued when it is finalized; a statement converted from a
+-- draft keeps the draft's created_at.
 SELECT invoice.invoice_number, invoice.status,
-       COALESCE(invoice.created_at, NOW()) AS issued_at, invoice.retention_until,
+       COALESCE(invoice.finalized_at, invoice.created_at, NOW()) AS issued_at, invoice.retention_until,
        invoice.period_start, invoice.period_end,
        invoice.usage_details,
+       COALESCE(subscription.billing_email, '')::text AS customer_email,
        COALESCE(subscription.billing_name, '')::text AS customer_name,
        COALESCE(subscription.billing_company, '')::text AS customer_company,
        COALESCE(subscription.billing_address::text, '')::text AS customer_address,

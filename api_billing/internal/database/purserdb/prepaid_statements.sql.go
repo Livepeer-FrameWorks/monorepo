@@ -400,9 +400,10 @@ func (q *Queries) GetPrepaidStatement(ctx context.Context, arg GetPrepaidStateme
 
 const getPrepaidStatementDocument = `-- name: GetPrepaidStatementDocument :one
 SELECT invoice.invoice_number, invoice.status,
-       COALESCE(invoice.created_at, NOW()) AS issued_at, invoice.retention_until,
+       COALESCE(invoice.finalized_at, invoice.created_at, NOW()) AS issued_at, invoice.retention_until,
        invoice.period_start, invoice.period_end,
        invoice.usage_details,
+       COALESCE(subscription.billing_email, '')::text AS customer_email,
        COALESCE(subscription.billing_name, '')::text AS customer_name,
        COALESCE(subscription.billing_company, '')::text AS customer_company,
        COALESCE(subscription.billing_address::text, '')::text AS customer_address,
@@ -427,12 +428,15 @@ type GetPrepaidStatementDocumentRow struct {
 	PeriodStart     sql.NullTime    `db:"period_start" json:"period_start"`
 	PeriodEnd       sql.NullTime    `db:"period_end" json:"period_end"`
 	UsageDetails    json.RawMessage `db:"usage_details" json:"usage_details"`
+	CustomerEmail   string          `db:"customer_email" json:"customer_email"`
 	CustomerName    string          `db:"customer_name" json:"customer_name"`
 	CustomerCompany string          `db:"customer_company" json:"customer_company"`
 	CustomerAddress string          `db:"customer_address" json:"customer_address"`
 	CustomerVat     string          `db:"customer_vat" json:"customer_vat"`
 }
 
+// A statement is issued when it is finalized; a statement converted from a
+// draft keeps the draft's created_at.
 func (q *Queries) GetPrepaidStatementDocument(ctx context.Context, arg GetPrepaidStatementDocumentParams) (GetPrepaidStatementDocumentRow, error) {
 	row := q.db.QueryRowContext(ctx, getPrepaidStatementDocument, arg.DocumentID, arg.TenantID)
 	var i GetPrepaidStatementDocumentRow
@@ -444,6 +448,7 @@ func (q *Queries) GetPrepaidStatementDocument(ctx context.Context, arg GetPrepai
 		&i.PeriodStart,
 		&i.PeriodEnd,
 		&i.UsageDetails,
+		&i.CustomerEmail,
 		&i.CustomerName,
 		&i.CustomerCompany,
 		&i.CustomerAddress,

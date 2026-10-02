@@ -1172,8 +1172,8 @@ func (jm *JobManager) rateCumulativePrepaidUsage(
 // double-debit even when concurrent transactions probe the ledger before
 // either commits.
 //
-// Used by invoice draft/finalization so the credit deduction commits or rolls
-// back together with the invoice header and line items.
+// Used by invoice finalization so the credit deduction commits or rolls back
+// together with the invoice header and line items.
 func (jm *JobManager) deductPrepaidBalanceForCreditTx(ctx context.Context, tx *sql.Tx, tenantID string, requestCents int64, description string, referenceID *string) (newBalance, appliedCents int64, isDuplicate bool, err error) {
 	return deductPrepaidBalanceForCreditTx(ctx, tx, tenantID, requestCents, description, referenceID)
 }
@@ -1343,21 +1343,14 @@ type invoiceCreditChange struct {
 
 func (c invoiceCreditChange) moved() bool { return c.PreviousCents != c.AppliedCents }
 
-// applyInvoicePrepaidCreditTx sets the prepaid credit the tenant's invoice for
-// the period holds to what that invoice uses. See
-// reconcileInvoicePrepaidCreditTx.
-func (jm *JobManager) applyInvoicePrepaidCreditTx(ctx context.Context, tx *sql.Tx, tenantID string, periodStart time.Time, grossCents int64) (invoiceCreditChange, error) {
-	return reconcileInvoicePrepaidCreditTx(ctx, tx, tenantID, periodStart, grossCents)
-}
-
 // reconcileInvoicePrepaidCreditTx moves prepaid balance so the tenant's
-// billing document starting at periodStart holds exactly the credit it uses:
-// its gross amount, bounded by the credit it already holds plus the positive
-// prepaid balance. When the invoice grows, only the missing amount is
-// debited; when it shrinks (a grant or tier change lowers the base fee, a
-// correction lowers usage, the draft is held for manual review) the excess
-// returns to the balance with its own ledger row. The credit is held under
-// the document's own key (documentInvoiceCreditKey).
+// billing document starting at periodStart holds exactly grossCents of
+// credit, bounded by the credit it already holds plus the positive prepaid
+// balance. Only the missing amount is debited; credit above the target
+// returns to the balance with its own ledger row. A finalized invoice
+// targets its gross amount; drafts, held invoices, statements and switches
+// target zero, so credit is taken only when an invoice is finalized. The
+// credit is held under the document's own key (documentInvoiceCreditKey).
 //
 // The prepaid balance row lock serializes every movement of a tenant's
 // invoice credit, so the held amount read under it is exact.
@@ -3388,41 +3381,30 @@ func (jm *JobManager) updateInvoiceDraft(ctx context.Context, tenantID string) e
 		usageJSON = []byte("{}")
 	}
 
-	// Reconcile prepaid credit, write invoice header + line items in one
-	// transaction so the credit and the invoice always commit together. If any
-	// step fails, the prepaid balance is untouched.
-	//
-	// The period's credit follows the draft: a larger draft takes only the
-	// missing amount up to the balance, a smaller one returns the excess.
+	// The draft holds no prepaid credit: the balance stays on the balance
+	// while the period runs, and the invoice takes the credit it uses when it
+	// is finalized (writePostpaidInvoiceTx). Credit the draft's key still
+	// holds returns to the balance in the transaction that writes the draft,
+	// so the draft states the gross amount.
 	dueDate := periodEnd.AddDate(0, 0, 14)
 	var invoiceID string
-	var prepaidCreditDec decimal.Decimal
-	var netDec decimal.Decimal
 	var creditChange invoiceCreditChange
-	hundred := decimal.NewFromInt(100)
 	err = withTx(ctx, jm.db, func(tx *sql.Tx) error {
 		queries := purserdb.New(tx)
-		grossCents := grossDec.Mul(hundred).Round(0).IntPart()
 		var txErr error
-		creditChange, txErr = jm.applyInvoicePrepaidCreditTx(ctx, tx, tenantID, periodStart, grossCents)
+		creditChange, txErr = reconcileInvoicePrepaidCreditTx(ctx, tx, tenantID, periodStart, 0)
 		if txErr != nil {
 			return txErr
 		}
-		prepaidCreditDec = decimal.NewFromInt(creditChange.AppliedCents).Div(hundred)
-		totalDec := grossDec.Sub(prepaidCreditDec)
-		if totalDec.IsNegative() {
-			totalDec = decimal.Zero
-		}
-		netDec = totalDec
 
 		// Pass decimals as strings into Postgres NUMERIC columns so no float64
 		// rounding can sneak in at the SQL boundary. PG parses '1.99'::numeric
 		// exactly; '1.9900000000000002'::float8 ≠ 1.99.
-		totalAmt := totalDec.Round(2).String()
+		totalAmt := grossDec.Round(2).String()
 		baseAmt := baseDec.Round(2).String()
 		meteredAmt := meteredDec.Round(2).String()
 		grossMeteredAmt := unwaivedMeteredDec.Round(2).String()
-		creditAmt := prepaidCreditDec.Round(2).String()
+		creditAmt := decimal.Zero.String()
 
 		invoiceID, txErr = queries.UpsertInvoiceDraft(ctx, purserdb.UpsertInvoiceDraftParams{
 			TenantID:             tenantID,
@@ -3458,12 +3440,10 @@ func (jm *JobManager) updateInvoiceDraft(ctx context.Context, tenantID string) e
 	}
 	logInvoiceCreditChange(jm.logger, tenantID, invoiceID, periodStart, creditChange)
 	jm.logger.WithFields(logging.Fields{
-		"tenant_id":              tenantID,
-		"invoice_id":             invoiceID,
-		"billing_period":         periodStart.Format("2006-01"),
-		"gross_amount":           grossDec.String(),
-		"prepaid_credit_applied": prepaidCreditDec.String(),
-		"net_amount":             netDec.String(),
+		"tenant_id":      tenantID,
+		"invoice_id":     invoiceID,
+		"billing_period": periodStart.Format("2006-01"),
+		"gross_amount":   grossDec.String(),
 	}).Debug("Updated invoice draft")
 
 	return nil
