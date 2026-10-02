@@ -771,7 +771,7 @@ func HandlePushRewrite(c *gin.Context) {
 		}
 
 		c.String(http.StatusServiceUnavailable, "trigger handler unavailable")
-		settlePushRewriteAnswer(mistTrigger, result, false, c.Request.Context().Err() == nil, logger)
+		settlePushRewriteAfterAnswer(c, mistTrigger, result, false)
 		return
 	}
 
@@ -787,7 +787,7 @@ func HandlePushRewrite(c *gin.Context) {
 		}
 
 		respondMistResult(c, result, ipcpb.MistTriggerAction_MIST_TRIGGER_ACTION_DENY)
-		settlePushRewriteAnswer(mistTrigger, result, false, c.Request.Context().Err() == nil, logger)
+		settlePushRewriteAfterAnswer(c, mistTrigger, result, false)
 		return
 	}
 	logger.WithFields(logging.Fields{
@@ -806,11 +806,21 @@ func HandlePushRewrite(c *gin.Context) {
 	respondMistResult(c, result, ipcpb.MistTriggerAction_MIST_TRIGGER_ACTION_DENY)
 	// The empty-response fallback above answers Mist with a deny.
 	relayedAccept := strings.TrimSpace(result.Response) != "" && result.Action != ipcpb.MistTriggerAction_MIST_TRIGGER_ACTION_DENY
-	settlePushRewriteAnswer(mistTrigger, result, relayedAccept, c.Request.Context().Err() == nil, logger)
+	settlePushRewriteAfterAnswer(c, mistTrigger, result, relayedAccept)
 }
 
 // settlePushRewriteAnswer reports a forwarded PUSH_REWRITE answered without an accept; tests observe it.
 var settlePushRewriteAnswer = control.SettlePushRewriteAnswer
+
+// settlePushRewriteAfterAnswer settles the answer off the request path. The answer reaches Mist
+// only when the handler returns, and settling can wait on a durable WAL write. Held behind that
+// write, the answer can outlast Mist's trigger timeout: Mist then delivers the same execution
+// again while the settle, having seen Mist's request still open, reports it abandoned, and Foghorn
+// refuses the re-delivery as an ended session.
+func settlePushRewriteAfterAnswer(c *gin.Context, mistTrigger *ipcpb.MistTrigger, result *control.MistTriggerResult, relayedAccept bool) {
+	delivered := c.Request.Context().Err() == nil
+	go settlePushRewriteAnswer(mistTrigger, result, relayedAccept, delivered, logger)
+}
 
 // HandlePlayRewrite handles the PLAY_REWRITE trigger from MistServer
 // This is a critical blocking trigger - maps playback IDs to internal stream names for viewing (live streams)
