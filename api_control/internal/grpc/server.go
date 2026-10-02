@@ -6596,8 +6596,7 @@ func (s *CommodoreServer) CreateStream(ctx context.Context, req *commodorepb.Cre
 
 	// Check if tenant is suspended (prepaid balance < -$10)
 	if suspended, suspendErr := s.isTenantSuspended(ctx, tenantID); suspendErr != nil {
-		s.logger.WithError(suspendErr).Warn("Failed to check tenant suspension status")
-		// Continue anyway - don't block on suspension check failure
+		return nil, suspendErr
 	} else if suspended {
 		return nil, status.Error(codes.PermissionDenied, "account suspended - please top up your balance to create new streams")
 	}
@@ -9194,26 +9193,34 @@ func normalizeAPITokenPermissions(permissions []string) ([]string, error) {
 	return normalized, nil
 }
 
-// isTenantSuspended checks if a tenant is suspended due to negative prepaid balance.
-// Returns true if the tenant's subscription status is 'suspended'.
+// isTenantSuspended reports whether the tenant's subscription is suspended.
+// Purser answers it; when Purser cannot, the tenant's current media authority
+// decides while it is valid, because it carries the billing decision Purser
+// last published. Without either answer the decision is unknown, which is an
+// Unavailable error, never "not suspended".
 func (s *CommodoreServer) isTenantSuspended(ctx context.Context, tenantID string) (bool, error) {
-	// Call Purser via gRPC instead of querying purser.* tables directly
+	// Purser not wired up at all is a deployment shape (dev stacks), not a
+	// failed lookup.
 	if s.purserClient == nil {
-		// No Purser client = assume not suspended (graceful degradation)
 		return false, nil
 	}
 
 	billingStatus, err := s.purserClient.GetTenantAdmissionStatus(ctx, tenantID)
-	if err != nil {
-		s.logger.WithFields(logging.Fields{
-			"tenant_id": tenantID,
-			"error":     err,
-		}).Warn("Failed to get billing status from Purser, assuming not suspended")
-		//nolint:nilerr // fail-open: assume not suspended on internal errors
-		return false, nil
+	if err == nil {
+		return billingStatus.GetIsSuspended(), nil
 	}
-
-	return billingStatus.IsSuspended, nil
+	suspended, known, authorityErr := s.lastKnownTenantSuspension(ctx, tenantID)
+	fields := logging.Fields{"tenant_id": tenantID, "error": err}
+	if known {
+		fields["suspended"] = suspended
+		s.logger.WithFields(fields).Warn("Purser admission status unavailable; using the current tenant authority's billing decision")
+		return suspended, nil
+	}
+	if authorityErr != nil {
+		fields["authority_error"] = authorityErr
+	}
+	s.logger.WithFields(fields).Warn("Purser admission status unavailable and no valid tenant authority; suspension is unknown")
+	return false, status.Error(codes.Unavailable, "billing status is temporarily unavailable; retry shortly")
 }
 
 func generateDVRHash() (string, error) {
@@ -9344,7 +9351,7 @@ func (s *CommodoreServer) CreateClip(ctx context.Context, req *sharedpb.CreateCl
 
 	// Check if tenant is suspended (prepaid balance < -$10)
 	if suspended, suspendErr := s.isTenantSuspended(ctx, tenantID); suspendErr != nil {
-		s.logger.WithError(suspendErr).Warn("Failed to check tenant suspension status")
+		return nil, suspendErr
 	} else if suspended {
 		return nil, status.Error(codes.PermissionDenied, "account suspended - please top up your balance to create clips")
 	}
@@ -10336,8 +10343,7 @@ func (s *CommodoreServer) CreateVodUpload(ctx context.Context, req *sharedpb.Cre
 
 	// Check if tenant is suspended (prepaid balance < -$10)
 	if suspended, suspendErr := s.isTenantSuspended(ctx, tenantID); suspendErr != nil {
-		s.logger.WithError(suspendErr).Warn("Failed to check tenant suspension status")
-		// Continue anyway - don't block on suspension check failure
+		return nil, suspendErr
 	} else if suspended {
 		return nil, status.Error(codes.PermissionDenied, "account suspended - please top up your balance to upload videos")
 	}
@@ -10492,7 +10498,7 @@ func (s *CommodoreServer) CompleteVodUpload(ctx context.Context, req *sharedpb.C
 
 	// Check if tenant is suspended (prepaid balance < -$10)
 	if suspended, suspendErr := s.isTenantSuspended(ctx, tenantID); suspendErr != nil {
-		s.logger.WithError(suspendErr).Warn("Failed to check tenant suspension status")
+		return nil, suspendErr
 	} else if suspended {
 		return nil, status.Error(codes.PermissionDenied, "account suspended - please top up your balance to complete uploads")
 	}

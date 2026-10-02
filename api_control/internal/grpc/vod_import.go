@@ -54,7 +54,7 @@ func (s *CommodoreServer) ImportVodAsset(ctx context.Context, req *sharedpb.Impo
 		return nil, err
 	}
 	if suspended, suspendErr := s.isTenantSuspended(ctx, tenantID); suspendErr != nil {
-		s.logger.WithError(suspendErr).Warn("Failed to check tenant suspension status")
+		return nil, suspendErr
 	} else if suspended {
 		return nil, status.Error(codes.PermissionDenied, "account suspended - please top up your balance to import videos")
 	}

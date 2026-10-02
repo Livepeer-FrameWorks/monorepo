@@ -906,6 +906,43 @@ func (s *CommodoreServer) currentTenantServePolicy(ctx context.Context, tenantID
 	return tenant.GetOfficialClusterId(), tenant.GetAllowPlatformSharedPlayback(), peers, true
 }
 
+// lastKnownTenantSuspension reads the suspension decision from the tenant's
+// current media authority. known is false when there is no valid, active
+// authority to read it from.
+func (s *CommodoreServer) lastKnownTenantSuspension(ctx context.Context, tenantID string) (suspended, known bool, err error) {
+	if s.db == nil {
+		return false, false, nil
+	}
+	current, err := commodoredb.New(s.db).GetCurrentMediaAuthorityPayload(ctx, commodoredb.GetCurrentMediaAuthorityPayloadParams{
+		AuthorityKind: "tenant", AuthorityID: tenantID,
+	})
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, false, nil
+	}
+	if err != nil {
+		return false, false, err
+	}
+	if !current.ValidUntil.After(time.Now().UTC()) {
+		return false, false, nil
+	}
+	tenant := &mediaauthoritypb.TenantAuthority{}
+	if err := proto.Unmarshal(current.Payload, tenant); err != nil {
+		return false, false, err
+	}
+	if tenant.GetTenantId() != tenantID || tenant.GetLifecycle() != mediaauthoritypb.AuthorityLifecycle_AUTHORITY_LIFECYCLE_ACTIVE {
+		return false, false, nil
+	}
+	switch tenant.GetBillingDecision() {
+	case mediaauthoritypb.TenantBillingDecision_TENANT_BILLING_DECISION_SUSPENDED:
+		return true, true, nil
+	case mediaauthoritypb.TenantBillingDecision_TENANT_BILLING_DECISION_ALLOW,
+		mediaauthoritypb.TenantBillingDecision_TENANT_BILLING_DECISION_PAYMENT_REQUIRED:
+		return false, true, nil
+	default:
+		return false, false, nil
+	}
+}
+
 func tenantCanServeMediaObjects(tenant *mediaauthoritypb.TenantAuthority, secretTargets []string) bool {
 	return tenant != nil &&
 		tenant.GetLifecycle() == mediaauthoritypb.AuthorityLifecycle_AUTHORITY_LIFECYCLE_ACTIVE &&
