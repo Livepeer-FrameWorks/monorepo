@@ -253,6 +253,12 @@ services:
       CLICKHOUSE_PASSWORD: ${CLICKHOUSE_PASSWORD}
       SERVICE_TOKEN: ${SERVICE_TOKEN}
       JWT_SECRET: ${JWT_SECRET}
+      GRPC_ALLOW_INSECURE: "true"
+      SUPPLIER_NAME: ${SUPPLIER_NAME}
+      SUPPLIER_ADDRESS: ${SUPPLIER_ADDRESS}
+      SUPPLIER_VAT_NUMBER: ${SUPPLIER_VAT_NUMBER}
+      SUPPLIER_REGISTRATION_NUMBER: ${SUPPLIER_REGISTRATION_NUMBER}
+      SUPPLIER_COUNTRY: ${SUPPLIER_COUNTRY}
     volumes:
       - ./:/repo:ro
       - /var/run/docker.sock:/var/run/docker.sock
@@ -315,7 +321,20 @@ services:
   # Ceph RGW is the S3 implementation production's provider runs, pinned as in
   # the storage conformance tests; its demo image is amd64-only, so arm64
   # engines get the pinned SeaweedFS instead. scripts/stack/common.sh enables
-  # exactly one of the two profiles; both answer as s3:8080.
+  # exactly one backend profile. The transparent test proxy answers s3:8080.
+  s3-proxy:
+    image: python:3.13-alpine
+    profiles: ["stack"]
+    command: ["python3", "/app/s3-fault-proxy.py"]
+    environment:
+      STACK_S3_UPSTREAM: s3-${STACK_S3:-ceph}:8080
+      SERVICE_TOKEN: ${SERVICE_TOKEN}
+    volumes:
+      - ./scripts/stack/s3-fault-proxy.py:/app/s3-fault-proxy.py:ro
+    networks:
+      frameworks:
+        aliases: [s3]
+    logging: *stack-logging
   s3-ceph:
     image: quay.io/ceph/demo@sha256:522483cf07cfce6386b8e18a3edfa88a1b32c688dee231d0a6962b1513557723
     profiles: ["stack-s3-ceph"]
@@ -328,18 +347,14 @@ services:
       CEPH_DEMO_UID: frameworks
       CEPH_DEMO_ACCESS_KEY: frameworks
       CEPH_DEMO_SECRET_KEY: frameworks-secret
-    networks:
-      frameworks:
-        aliases: [s3]
+    networks: [frameworks]
     logging: *stack-logging
   s3-seaweed:
     image: chrislusf/seaweedfs@sha256:ce9e796f1fe6f06968f4c04bdaf8f678dad9c8acdfef3d244133d71bfa6bf882
     profiles: ["stack-s3-seaweed"]
     # weed server's volume server defaults to 8080; move it so S3 answers there.
     command: ["server", "-s3", "-dir=/data", "-s3.port=8080", "-volume.port=18081"]
-    networks:
-      frameworks:
-        aliases: [s3]
+    networks: [frameworks]
     logging: *stack-logging
   commodore:
     environment:

@@ -36,6 +36,7 @@ export LIVEPEER_GATEWAY_B_SERVICE="livepeer-gateway-b"
 export WEBHOOK_RECEIVER_URL="http://webhook-receiver:18777"
 export WEBHOOK_TARGET_URL="$WEBHOOK_RECEIVER_URL/hooks"
 export MAILPIT_API_URL="http://mailpit:8025/api/v1"
+export STACK_THUMBNAIL_FAULT_URL="http://s3-proxy:18881"
 
 # Datastores (passwords come from the stack-runner environment)
 export PG_HOST="postgres"

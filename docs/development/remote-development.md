@@ -92,6 +92,20 @@ scripts/remote-dev.sh run stack-1 bash -lc 'STACK_SLOT=1 STACK_REUSE=1 STACK_KEE
 existing slot's Mist build is used. A failed stack run keeps its compose logs
 under the slot's `.stack/` directory for diagnosis.
 
+Scenario 27 uses real API traffic, Periscope reports, operator billing commands,
+and billing PDF downloads. Its stack-only Go driver expires the disposable
+tenant's returned prepaid phase at the last closed metering window, calls
+Purser's production finalizer twice at the following UTC midnight, and checks
+one statement and a full calendar month of advancement. Issued documents, usage timestamps, service
+clocks, and other tenants' metering remain intact. `make verify-stack` builds
+the driver with `make build-stack-billing-runner`; it is never part of Purser.
+
+Manual scenario 29 stalls two response-header attempts for one clip's sprite
+PUT while the transparent S3 proxy forwards sibling files to the real store.
+It checks sibling completion, a successful retry within 30 seconds, thumbnail
+publication, and playback. `make verify-stack-fixtures` checks proxy forwarding
+and fault isolation. The fault is cleared on scenario exit.
+
 ## Requested post-rollout staging smoke
 
 After the maintainer requests staging verification, run the same scenario
@@ -127,6 +141,15 @@ noninteractive `systemctl` access for the selected restart and outage checks.
 Set `STACK_EDGE_A_LOCATION_PREFIX` to the EU edge's public scheme and
 authority (including its trailing slash) so remote-replica checks recognize
 the deployed playback redirect.
+
+For billing scenario 27, export `STACK_BILLING_DATABASE_URL` for Purser's
+tenant-scoped fixture writes, `STACK_BILLING_QM_ADDR`, `SERVICE_TOKEN`, the
+deployed `SUPPLIER_*` identity, and Quartermaster client TLS settings
+(`GRPC_TLS_CA_PATH` and `QUARTERMASTER_GRPC_TLS_SERVER_NAME`). The driver runs
+on the operator runner against those same services. For manual scenario 29,
+`STACK_THUMBNAIL_FAULT_URL` must reach a private fixture proxy used by the
+isolated test tenant's storage; it must not reroute shared staging storage.
+Without that fixture, 29 reports BLOCKED.
 
 `STACK_SCENARIOS` and `STACK_REPEAT` have the same meaning in both target
 modes. The staging runner keeps its assertion evidence under a private

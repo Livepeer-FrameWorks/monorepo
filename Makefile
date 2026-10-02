@@ -675,6 +675,14 @@ cli-embed-assets:
 build-bin-cli: cli-embed-assets
 	cd cli && go build $(GO_TAG_FLAGS) $(call component_ldflags,cli,cli) -o ../bin/cli .
 
+# This driver exists only in the stack test binary; it cannot ship in Purser.
+.PHONY: build-stack-billing-runner verify-stack-fixtures
+build-stack-billing-runner:
+	cd api_billing && go test -tags stack_verify -c -o ../bin/stack-billing-runner ./internal/handlers
+
+verify-stack-fixtures:
+	python3 scripts/stack/test_s3_fault_proxy.py
+
 clean:
 	rm -rf bin/
 	cd pkg/proto && make clean
@@ -778,7 +786,7 @@ verify-media-lifecycle:
 # Run it on a remote-dev slot before a release candidate goes to staging
 # (docs/development/remote-development.md); it is not a CI job.
 .PHONY: verify-stack stack-up stack-down
-verify-stack:
+verify-stack: verify-stack-fixtures
 	@bash $(CURDIR)/scripts/stack/verify.sh
 
 stack-up:

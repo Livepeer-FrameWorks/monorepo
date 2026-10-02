@@ -70,6 +70,9 @@ done < <(STACK_SCENARIOS="${STACK_SCENARIOS:-default}" bash "$here/scenarios/lis
 if printf '%s\n' "${scenarios[@]}" | grep -Eq '/(27|28)-'; then
   make build-bin-cli || exit 1
 fi
+if printf '%s\n' "${scenarios[@]}" | grep -Eq '/27-'; then
+  make build-stack-billing-runner || exit 1
+fi
 
 run_since="$(date -u +%Y-%m-%dT%H:%M:%S.%NZ)"
 failed=0 blocked=0 summary=()

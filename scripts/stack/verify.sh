@@ -76,6 +76,9 @@ if printf '%s\n' "${scenarios[@]}" | grep -Eq '/(27|28)-'; then
   echo 'building the operator CLI for the selected stack scenarios'
   make build-bin-cli || exit 1
 fi
+if printf '%s\n' "${scenarios[@]}" | grep -Eq '/27-'; then
+  make build-stack-billing-runner || exit 1
+fi
 repeat=${STACK_REPEAT:-1}
 case "$repeat" in
   '' | *[!0-9]*) echo "STACK_REPEAT must be an integer from 1 to 100" >&2; exit 1 ;;

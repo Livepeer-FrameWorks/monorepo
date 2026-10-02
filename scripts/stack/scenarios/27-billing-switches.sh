@@ -6,6 +6,7 @@
 . "$(dirname "$0")/../lib.sh"
 
 need jq curl python3 psql || finish
+[ -x "$STACK_REPO/bin/stack-billing-runner" ] || { blocked 'billing driver missing; make build-stack-billing-runner'; finish; }
 [ -x "$STACK_REPO/bin/cli" ] || { blocked 'operator CLI binary missing; make build-bin-cli'; finish; }
 if [ "${STACK_TARGET:-stack}" = staging ]; then
   [ -n "${STACK_CLI_CONTEXT:-}" ] || { blocked 'staging CLI context is missing'; finish; }
@@ -170,11 +171,10 @@ fi
 open_drafts=$(pg purser "SELECT count(*) FROM purser.billing_invoices WHERE tenant_id='$tenant' AND status='draft'")
 check 'no draft invoice remains after return to prepaid' [ "$open_drafts" = 0 ]
 
-for item in "prepaid_statement:$statement" "invoice:$invoice"; do
-  kind=${item%%:*}; id=${item#*:}
-  [ -n "$id" ] || continue
-  headers="$STACK_STATE_DIR/billing-$kind.headers"
-  body="$STACK_STATE_DIR/billing-$kind.pdf"
+download_document() {
+  local kind=$1 id=$2 headers body code digest actual
+  headers="$STACK_STATE_DIR/billing-$kind-$id.headers"
+  body="$STACK_STATE_DIR/billing-$kind-$id.pdf"
   code=$(curl -s -m 20 -D "$headers" -o "$body" -w '%{http_code}' \
     -H "Authorization: Bearer $jwt" "$BRIDGE_URL/v1/billing/documents/$kind/$id")
   check "$kind document download returned 200" [ "$code" = 200 ]
@@ -185,7 +185,9 @@ for item in "prepaid_statement:$statement" "invoice:$invoice"; do
   digest=$(awk 'tolower($1)=="x-document-sha256:"{print $2}' "$headers" | tr -d '\r')
   actual=$(sha256sum "$body" | awk '{print $1}')
   check "$kind document integrity hash matches" [ "$digest" = "$actual" ]
-done
+}
+download_document prepaid_statement "$statement"
+download_document invoice "$invoice"
 
 if revoke=$(cli_json admin billing grant revoke --tenant-id "$tenant" --reason 'stack billing test complete' --output json); then
   pass 'operator revoked billing grant'
@@ -194,6 +196,69 @@ else
 fi
 show=$(cli_json admin billing grant show --tenant-id "$tenant" --output json)
 check 'grant show retains the tier after revoke' json_has "$show" '.tier.tier_name == "payg" and .grant == null'
+# Meter actual traffic in the returned prepaid phase. The driver makes this
+# fixture due at the last closed five-minute window and calls the production
+# finalizer twice. Issued switch documents and global metering stay intact.
+api_before=$(pg purser "SELECT COALESCE(SUM(usage_value),0)::numeric(20,0)
+  FROM purser.usage_records WHERE tenant_id='$tenant' AND usage_type='api_requests'")
+for n in $(seq 1 30); do
+  usage_query=$(gql 'query{streamsConnection(page:{first:1}){nodes{id}}}' '{}' "$jwt")
+  if ! json_has "$usage_query" '.errors == null and (.data.streamsConnection.nodes | type) == "array"'; then
+    fail "returned-prepaid API request $n failed: $usage_query"
+    break
+  fi
+done
+eventually 900 'returned-prepaid traffic reached Purser through Periscope metering' api_usage
+balance_before_month=$(pg purser "SELECT balance_cents FROM purser.prepaid_balances WHERE tenant_id='$tenant' AND currency='EUR'")
+phase_start=$(pg purser "SELECT billing_period_start AT TIME ZONE 'UTC' FROM purser.tenant_subscriptions WHERE tenant_id='$tenant'")
+export STACK_BILLING_TENANT_ID="$tenant" STACK_BILLING_FIXTURE_STATEMENT_ID="$statement"
+if [ -z "${STACK_BILLING_DATABASE_URL:-}" ]; then
+  STACK_BILLING_DATABASE_URL=$(PG_HOST="$PG_HOST" PG_PORT="$PG_PORT" python3 - <<'PYDSN'
+import os, urllib.parse
+print('postgresql://purser:' + urllib.parse.quote(os.environ.get('POSTGRES_PASSWORD',''), safe='') +
+      '@' + os.environ['PG_HOST'] + ':' + os.environ['PG_PORT'] + '/purser?sslmode=disable')
+PYDSN
+  )
+fi
+export STACK_BILLING_DATABASE_URL
+if "$STACK_REPO/bin/stack-billing-runner" -test.run '^TestStackMonthEnd$' -test.v -test.timeout 120s; then
+  pass 'production month-end finalized once and refused duplicate finalization'
+else
+  fail 'production month-end finalization failed'
+  finish
+fi
+monthly=$(pg purser "SELECT id::text FROM purser.billing_invoices WHERE tenant_id='$tenant'
+  AND document_kind='prepaid_statement' AND period_start='$phase_start' AND status='paid'")
+check 'month-end wrote a paid prepaid statement for the last phase' [ -n "$monthly" ]
+[ -n "$monthly" ] || finish
+calendar=$(pg purser "SELECT (s.period_start=i.period_end AND s.period_end=t.billing_period_start
+  AND t.billing_period_end=t.billing_period_start + INTERVAL '1 month')::int
+  FROM purser.billing_invoices s, purser.billing_invoices i, purser.tenant_subscriptions t
+  WHERE s.id='$monthly' AND s.tenant_id='$tenant' AND i.id='$invoice' AND i.tenant_id='$tenant' AND t.tenant_id='$tenant'")
+check 'month-end closed only the prepaid stretch and advanced one full calendar month' [ "$calendar" = 1 ]
+monthly_api=$(pg purser "SELECT COALESCE((usage_details->>'api_requests')::numeric,0)
+  FROM purser.billing_invoices WHERE tenant_id='$tenant' AND id='$monthly'")
+check 'month-end statement contains returned-prepaid metered traffic' awk -v quantity="$monthly_api" 'BEGIN {exit !(quantity >= 30)}'
+conservation=$(pg purser "SELECT (
+  (SELECT COALESCE(SUM((usage_details->>'api_requests')::numeric),0) FROM purser.billing_invoices
+    WHERE tenant_id='$tenant' AND base_fee_period_start IS NULL) =
+  (SELECT COALESCE(SUM(quantity),0) FROM (
+    SELECT usage_value AS quantity FROM purser.usage_records
+    WHERE tenant_id='$tenant' AND usage_type='api_requests' AND value_kind='delta' AND granularity='minute_5'
+      AND period_start < (SELECT period_end FROM purser.billing_invoices WHERE tenant_id='$tenant' AND id='$monthly')
+    UNION ALL
+    SELECT delta_value AS quantity FROM purser.usage_adjustments
+    WHERE tenant_id='$tenant' AND usage_type='api_requests' AND status='applied' AND value_kind='correction_delta'
+      AND period_start < (SELECT period_end FROM purser.billing_invoices WHERE tenant_id='$tenant' AND id='$monthly')
+    ) ledger)
+  )::int")
+check 'all three billing phases account for actual API usage exactly once' [ "$conservation" = 1 ]
+balance_after_month=$(pg purser "SELECT balance_cents FROM purser.prepaid_balances WHERE tenant_id='$tenant' AND currency='EUR'")
+check 'month-end did not charge settled prepaid usage again' [ "$balance_after_month" = "$balance_before_month" ]
+monthly_zero=$(pg purser "SELECT (amount=0 AND prepaid_credit_applied=0)::int
+  FROM purser.billing_invoices WHERE tenant_id='$tenant' AND id='$monthly'")
+check 'prepaid month-end statement has no invoice debt or extra credit' [ "$monthly_zero" = 1 ]
+download_document prepaid_statement "$monthly"
 report=$(cli_json admin billing prepaid-double-charges --tenant-id "$tenant" --output json)
 check 'operator double-charge report completed' [ "$?" = 0 ]
 check 'operator double-charge report has no findings' json_has "$report" '.charges == [] and .total_double_charged_cents == "0"'

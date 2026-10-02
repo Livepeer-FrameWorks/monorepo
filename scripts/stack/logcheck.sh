@@ -31,7 +31,7 @@ since_args=()
 # replaces, which leaves the node without that protocol.
 signatures='core dumped|dumped core|SIGSEGV|SIGABRT|terminate called|^panic:|goroutine [0-9]+ \[running\]|SQLSTATE|exhausted retries|Could not map process-controlled|unrecoverable error|Address already in use'
 case "$scenario" in
-  03-* | 04-* | 05-* | 24-*) scenario_signatures='PROCESS_TRACKS_CHANGED|Failed to load page|header.*not declared|Failed to claim thumbnail attempt|Thumbnail upload denied|freeze failed' ;;
+  03-* | 04-* | 05-* | 24-* | 29-*) scenario_signatures='PROCESS_TRACKS_CHANGED|Failed to load page|header.*not declared|Failed to claim thumbnail attempt|Thumbnail upload denied|freeze failed' ;;
   25-*) scenario_signatures='PROCESS_TRACKS_CHANGED|Failed to load page|header.*not declared|Failed to claim thumbnail attempt|freeze failed|Freeze request: local path not found' ;;
   26-*) scenario_signatures='DUPLICATE_INGEST|duplicate ingest|admission.*abandoned.*active' ;;
   *) scenario_signatures='' ;;

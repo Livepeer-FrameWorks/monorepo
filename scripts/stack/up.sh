@@ -38,7 +38,7 @@ STACK_SERVICES=(
   postgres kafka kafka-init clickhouse
   quartermaster quartermaster-2 commodore commodore-2 purser bridge decklog signalman bosun chandler
   periscope-ingest periscope-query periscope-metering
-  storage-init storage-init-b "s3-$STACK_S3"
+  storage-init storage-init-b "s3-$STACK_S3" s3-proxy
   foghorn foghorn-2 foghorn-redis foghorn-b foghorn-b-2 foghorn-redis-b
   edge edge-b edge-proxy-a edge-proxy-b
   livepeer-orch-a livepeer-gateway-a livepeer-proxy-a
@@ -115,7 +115,7 @@ make --no-print-directory edge-dev-dist
 stack_compose build edge
 
 log "2/7 databases and control plane"
-stack_compose up -d --build postgres foghorn-redis foghorn-redis-b quartermaster purser commodore bridge decklog storage-init "s3-$STACK_S3"
+stack_compose up -d --build postgres foghorn-redis foghorn-redis-b quartermaster purser commodore bridge decklog storage-init "s3-$STACK_S3" s3-proxy
 wait_for 180 "postgres" stack_compose exec -T postgres pg_isready -q
 pg_user="$(sed -n 's/^POSTGRES_USER="\{0,1\}\([^"]*\)"\{0,1\}$/\1/p' "$ENV_FILE" | head -1)"
 stack_compose exec -T postgres psql -U "$pg_user" -d postgres -Atc "SELECT 1 FROM pg_database WHERE datname='foghorn_b'" | grep -q 1 ||
