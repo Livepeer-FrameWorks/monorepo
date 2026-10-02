@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"fmt"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"frameworks/api_billing/internal/database/purserdb"
@@ -54,7 +55,7 @@ func (s *PurserServer) runMediaAuthorityRefreshOutboxWorker(ctx context.Context)
 	ticker := time.NewTicker(mediaAuthorityRefreshPollInterval)
 	defer ticker.Stop()
 	for {
-		if err := s.deliverMediaAuthorityRefreshBatch(ctx, client); err != nil && ctx.Err() == nil {
+		if err := s.drainMediaAuthorityRefreshOutbox(ctx, client); err != nil && ctx.Err() == nil {
 			s.logger.WithError(err).Warn("Media authority refresh outbox delivery failed")
 		}
 		select {
@@ -65,7 +66,22 @@ func (s *PurserServer) runMediaAuthorityRefreshOutboxWorker(ctx context.Context)
 	}
 }
 
-func (s *PurserServer) deliverMediaAuthorityRefreshBatch(ctx context.Context, client mediaAuthorityRefreshClient) error {
+// drainMediaAuthorityRefreshOutbox delivers batches until one comes back short, so delivery keeps up with the
+// enqueue rate instead of being capped at one batch per poll. It continues only while every row of the batch was
+// delivered: a failed row waits out its backoff and a superseded row is due again at once, so either ends the pass
+// until the next tick.
+func (s *PurserServer) drainMediaAuthorityRefreshOutbox(ctx context.Context, client mediaAuthorityRefreshClient) error {
+	for {
+		claimed, delivered, err := s.deliverMediaAuthorityRefreshBatch(ctx, client)
+		if err != nil || claimed < int(mediaAuthorityRefreshBatchSize) || delivered < claimed || ctx.Err() != nil {
+			return err
+		}
+	}
+}
+
+// deliverMediaAuthorityRefreshBatch claims and delivers one batch, reporting how many rows it claimed and how many
+// it delivered.
+func (s *PurserServer) deliverMediaAuthorityRefreshBatch(ctx context.Context, client mediaAuthorityRefreshClient) (claimed, delivered int, err error) {
 	queries := purserdb.New(s.db)
 	s.observeMediaAuthorityRefreshQueue(ctx, queries)
 	rows, err := queries.ClaimMediaAuthorityRefreshBatch(ctx, purserdb.ClaimMediaAuthorityRefreshBatchParams{
@@ -74,28 +90,34 @@ func (s *PurserServer) deliverMediaAuthorityRefreshBatch(ctx context.Context, cl
 	})
 	if err != nil {
 		s.incMediaAuthorityRefreshFailure("claim")
-		return fmt.Errorf("claim refresh batch: %w", err)
+		return 0, 0, fmt.Errorf("claim refresh batch: %w", err)
 	}
 
 	var group sync.WaitGroup
+	var delivers atomic.Int64
 	errorsCh := make(chan error, len(rows))
 	for _, row := range rows {
 		row := row
 		group.Add(1)
 		go func() {
 			defer group.Done()
-			if rowErr := s.deliverMediaAuthorityRefreshRow(ctx, client, row); rowErr != nil {
+			ok, rowErr := s.deliverMediaAuthorityRefreshRow(ctx, client, row)
+			if rowErr != nil {
 				errorsCh <- rowErr
+				return
+			}
+			if ok {
+				delivers.Add(1)
 			}
 		}()
 	}
 	group.Wait()
 	close(errorsCh)
 	for rowErr := range errorsCh {
-		return rowErr
+		return len(rows), int(delivers.Load()), rowErr
 	}
 	s.observeMediaAuthorityRefreshQueue(ctx, queries)
-	return nil
+	return len(rows), int(delivers.Load()), nil
 }
 
 func mediaAuthorityRefreshRequiresEntitlementReconcile(reason string) bool {
@@ -107,11 +129,13 @@ func mediaAuthorityRefreshRequiresEntitlementReconcile(reason string) bool {
 	}
 }
 
-func (s *PurserServer) deliverMediaAuthorityRefreshRow(ctx context.Context, client mediaAuthorityRefreshClient, row purserdb.ClaimMediaAuthorityRefreshBatchRow) error {
+// deliverMediaAuthorityRefreshRow reports whether the refresh was delivered and its row completed. A failed delivery
+// that was rescheduled returns (false, nil).
+func (s *PurserServer) deliverMediaAuthorityRefreshRow(ctx context.Context, client mediaAuthorityRefreshClient, row purserdb.ClaimMediaAuthorityRefreshBatchRow) (bool, error) {
 	queries := purserdb.New(s.db)
 	id, parseErr := uuid.Parse(row.ID)
 	if parseErr != nil {
-		return fmt.Errorf("parse refresh id %q: %w", row.ID, parseErr)
+		return false, fmt.Errorf("parse refresh id %q: %w", row.ID, parseErr)
 	}
 	// Subscription/status changes create this row in the same owner
 	// transaction. Converge Quartermaster before refreshing Commodore and only
@@ -120,7 +144,7 @@ func (s *PurserServer) deliverMediaAuthorityRefreshRow(ctx context.Context, clie
 	if mediaAuthorityRefreshRequiresEntitlementReconcile(row.Reason) {
 		if _, _, reconcileErr := s.reconcileCanonicalTierClusterAccess(ctx, row.TenantID); reconcileErr != nil {
 			s.incMediaAuthorityRefreshFailure("entitlement_reconcile")
-			return s.failMediaAuthorityRefresh(ctx, queries, id, row, fmt.Errorf("reconcile tenant entitlements: %w", reconcileErr))
+			return false, s.failMediaAuthorityRefresh(ctx, queries, id, row, fmt.Errorf("reconcile tenant entitlements: %w", reconcileErr))
 		}
 	}
 	callCtx, cancel := context.WithTimeout(ctx, mediaAuthorityRefreshRPCTimeout)
@@ -128,28 +152,28 @@ func (s *PurserServer) deliverMediaAuthorityRefreshRow(ctx context.Context, clie
 	cancel()
 	if callErr != nil {
 		s.incMediaAuthorityRefreshFailure("commodore_delivery")
-		return s.failMediaAuthorityRefresh(ctx, queries, id, row, callErr)
+		return false, s.failMediaAuthorityRefresh(ctx, queries, id, row, callErr)
 	}
 	completed, err := queries.CompleteMediaAuthorityRefresh(ctx, purserdb.CompleteMediaAuthorityRefreshParams{ID: id, Revision: row.Revision})
 	if err != nil {
 		s.incMediaAuthorityRefreshFailure("complete")
-		return fmt.Errorf("complete refresh delivery: %w", err)
+		return false, fmt.Errorf("complete refresh delivery: %w", err)
 	}
 	if completed == 0 {
 		released, releaseErr := queries.ReleaseSupersededMediaAuthorityRefresh(ctx, purserdb.ReleaseSupersededMediaAuthorityRefreshParams{ID: id, Revision: row.Revision})
 		if releaseErr != nil {
 			s.incMediaAuthorityRefreshFailure("superseded_release")
-			return fmt.Errorf("release superseded refresh delivery: %w", releaseErr)
+			return false, fmt.Errorf("release superseded refresh delivery: %w", releaseErr)
 		}
 		if released == 0 {
 			s.incMediaAuthorityRefreshFailure("completion_fence_miss")
-			return fmt.Errorf("refresh completion fence missed without a superseding revision")
+			return false, fmt.Errorf("refresh completion fence missed without a superseding revision")
 		}
 		s.incMediaAuthorityRefreshCompletion("superseded")
-		return nil
+		return false, nil
 	}
 	s.incMediaAuthorityRefreshCompletion("delivered")
-	return nil
+	return true, nil
 }
 
 func (s *PurserServer) incMediaAuthorityRefreshFailure(stage string) {

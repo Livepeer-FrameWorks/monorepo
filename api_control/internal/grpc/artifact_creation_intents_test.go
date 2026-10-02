@@ -596,3 +596,29 @@ func TestUpsertCreationIntent_DuplicateRequestIDErrors(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+// The ack drain keeps claiming while each batch comes back full and fully discharged, and stops on a
+// short batch or on any undischarged obligation (a failing Foghorn is retried on the next tick).
+func TestDrainUntilShortBatch(t *testing.T) {
+	type pass struct{ claimed, settled int }
+	cases := []struct {
+		name   string
+		passes []pass
+		want   int
+	}{
+		{"backlog drains within one tick", []pass{{3, 3}, {3, 3}, {1, 1}}, 3},
+		{"empty claim ends the pass", []pass{{0, 0}}, 1},
+		{"undischarged obligation ends the pass", []pass{{3, 2}, {3, 3}}, 1},
+	}
+	for _, c := range cases {
+		calls := 0
+		drainUntilShortBatch(context.Background(), 3, func(context.Context) (int, int) {
+			p := c.passes[calls]
+			calls++
+			return p.claimed, p.settled
+		})
+		if calls != c.want {
+			t.Errorf("%s: %d batches, want %d", c.name, calls, c.want)
+		}
+	}
+}

@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"regexp"
+	"sync/atomic"
 	"testing"
 
 	"github.com/DATA-DOG/go-sqlmock"
@@ -104,6 +105,41 @@ func TestWorkerTreatsDeletedTargetAsTerminalTombstone(t *testing.T) {
 
 	if got := testutil.ToFloat64(outcomes.WithLabelValues("terminal_not_found")); got != 1 {
 		t.Fatalf("terminal_not_found metric = %v, want 1", got)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+type countingStatusClient struct{ calls atomic.Int64 }
+
+func (c *countingStatusClient) UpdatePushTargetStatus(context.Context, string, string, string, string, *string) error {
+	c.calls.Add(1)
+	return nil
+}
+
+// A fully delivered full batch means more rows may be due: one drain claims again instead of waiting an interval.
+func TestWorkerDrainsPastFullDeliveredBatch(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	mock.MatchExpectationsInOrder(false)
+	client := &countingStatusClient{}
+	worker := NewWorker(db, client, logging.NewLogger())
+	cols := []string{"id", "target_id", "tenant_id", "status", "reason_code", "last_error", "revision", "attempts"}
+	rows := sqlmock.NewRows(cols)
+	for i := range claimBatchSize {
+		rows.AddRow(int64(i+1), "target-1", "tenant-1", "pushing", ReasonConnected, nil, int64(1), int32(0))
+		mock.ExpectExec(regexp.QuoteMeta("DELETE FROM foghorn.push_target_status_outbox")).
+			WithArgs(int64(i+1), int64(1), worker.leaseOwner).WillReturnResult(sqlmock.NewResult(0, 1))
+	}
+	mock.ExpectQuery(regexp.QuoteMeta("WITH candidates AS")).WithArgs(worker.leaseOwner, int32(claimBatchSize)).WillReturnRows(rows)
+	mock.ExpectQuery(regexp.QuoteMeta("WITH candidates AS")).WithArgs(worker.leaseOwner, int32(claimBatchSize)).WillReturnRows(sqlmock.NewRows(cols))
+	worker.drain(context.Background())
+	if got := client.calls.Load(); got != claimBatchSize {
+		t.Fatalf("delivered %d, want %d", got, claimBatchSize)
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatal(err)

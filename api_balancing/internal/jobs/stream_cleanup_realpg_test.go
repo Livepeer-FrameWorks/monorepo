@@ -372,3 +372,41 @@ func TestStreamCleanupDrainer_FinalizeAtomicOnControlCleanupFailure_RealPG(t *te
 		t.Fatalf("tombstone must persist after cleanup: ts=%v err=%v", ts, err)
 	}
 }
+
+// A full claimed batch means more obligations may be due: one drain keeps claiming until a short batch, so cleanup
+// throughput is not capped at one batch per interval while a backlog builds behind it.
+func TestStreamCleanupDrainer_DrainsPastFullBatch_RealPG(t *testing.T) {
+	conn := startRealPGForCleanup(t)
+	ctx := context.Background()
+	files := []string{"poster.jpg", "sprite.jpg", "sprite.vtt"}
+	assets := []string{"stream-backlog-1", "stream-backlog-2", "stream-backlog-3"}
+	for i, asset := range assets {
+		attempt := "att-backlog-" + strings.TrimPrefix(asset, "stream-backlog-")
+		if ok, err := control.ClaimThumbnailAttempt(ctx, conn, attempt, "tenant-a", asset, "node-1", "local", files, time.Now().Add(time.Hour)); err != nil || !ok {
+			t.Fatalf("claim %d: ok=%v err=%v", i, ok, err)
+		}
+		if err := control.RecordStreamCleanupObligation(ctx, conn, "tenant-a", asset); err != nil {
+			t.Fatalf("record %d: %v", i, err)
+		}
+	}
+	if _, err := conn.ExecContext(ctx, `UPDATE foghorn.stream_cleanup_obligation SET enqueued_at = NOW() - INTERVAL '30 minutes'`); err != nil {
+		t.Fatal(err)
+	}
+
+	job := NewStreamCleanupJob(StreamCleanupConfig{
+		DB:        conn,
+		Cleaner:   &artifacts.Cleaner{LocalCluster: "local", S3: &fakeThumbS3{}, LocalBackendID: testCellBackendID},
+		Logger:    logging.NewLogger(),
+		Interval:  time.Hour,
+		BatchSize: 2,
+	})
+	job.drain()
+
+	var cleaned int
+	if err := conn.QueryRowContext(ctx, `SELECT COUNT(*) FROM foghorn.stream_cleanup_obligation WHERE status = 'cleaned'`).Scan(&cleaned); err != nil {
+		t.Fatalf("count cleaned: %v", err)
+	}
+	if cleaned != len(assets) {
+		t.Fatalf("one drain cleaned %d of %d obligations; want the whole backlog", cleaned, len(assets))
+	}
+}

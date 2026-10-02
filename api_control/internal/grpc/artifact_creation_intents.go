@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"frameworks/api_control/internal/database/commodoredb"
@@ -359,7 +360,29 @@ type ackPendingRow struct {
 // non-discharging outcome pushes the retry backoff (attempts++). The obligation is durable
 // column state, so it survives to the next pass and across restarts. Redundant work across
 // replicas is harmless: the ack, the clear, and the backoff are all idempotent per pass.
+//
+// A pass keeps claiming batches until one comes back short, so discharge keeps up with the
+// creation rate instead of being capped at one batch per interval; it ends early when a batch
+// left any obligation undischarged, so a failing Foghorn is retried on the next tick.
 func (s *CommodoreServer) drainCreationCommandAcks(ctx context.Context) {
+	drainUntilShortBatch(ctx, creationIntentSweepBatch, s.drainCreationCommandAckBatch)
+}
+
+// drainUntilShortBatch runs batch until it claims fewer than batchSize rows, settles fewer rows
+// than it claimed, or ctx ends. Every claimed row leaves the due set (settled, backed off, or
+// leased), so the loop ends once fewer than a batch of rows are due.
+func drainUntilShortBatch(ctx context.Context, batchSize int, batch func(context.Context) (claimed, settled int)) {
+	for {
+		claimed, settled := batch(ctx)
+		if claimed < batchSize || settled < claimed || ctx.Err() != nil {
+			return
+		}
+	}
+}
+
+// drainCreationCommandAckBatch claims and processes one batch of due ack obligations, reporting
+// how many it claimed and how many it discharged.
+func (s *CommodoreServer) drainCreationCommandAckBatch(ctx context.Context) (claimed, discharged int) {
 	scanCtx, cancel := context.WithTimeout(ctx, creationIntentClaimTimeout)
 	defer cancel()
 
@@ -374,7 +397,7 @@ func (s *CommodoreServer) drainCreationCommandAcks(ctx context.Context) {
 	})
 	if err != nil {
 		s.logger.WithError(err).Warn("Failed to claim pending creation-command acks")
-		return
+		return 0, 0
 	}
 	batch := make([]ackPendingRow, 0, len(rows))
 	for _, row := range rows {
@@ -388,6 +411,7 @@ func (s *CommodoreServer) drainCreationCommandAcks(ctx context.Context) {
 	// Process the leased batch CONCURRENTLY (bounded) so it completes within the lease.
 	sem := make(chan struct{}, creationIntentAckWorkers)
 	var wg sync.WaitGroup
+	var discharges atomic.Int64
 	for _, r := range batch {
 		if ctx.Err() != nil {
 			break
@@ -397,17 +421,21 @@ func (s *CommodoreServer) drainCreationCommandAcks(ctx context.Context) {
 		go func(r ackPendingRow) {
 			defer wg.Done()
 			defer func() { <-sem }()
-			s.drainAckForIntent(ctx, r)
+			if s.drainAckForIntent(ctx, r) {
+				discharges.Add(1)
+			}
 		}(r)
 	}
 	wg.Wait()
+	return len(batch), int(discharges.Load())
 }
 
 // drainAckForIntent resolves Foghorn for one ack-pending intent and acks its command. A
 // Foghorn it cannot resolve is a non-discharging failure: it is logged (not silently
 // discarded) and the obligation is backed off (attempts++, retry schedule pushed) so it
-// retries later without blocking newer due obligations.
-func (s *CommodoreServer) drainAckForIntent(ctx context.Context, r ackPendingRow) {
+// retries later without blocking newer due obligations. It reports whether the obligation was
+// discharged.
+func (s *CommodoreServer) drainAckForIntent(ctx context.Context, r ackPendingRow) bool {
 	// rpcCtx bounds the Foghorn resolve + ack RPC ONLY. The settlement writes below take the
 	// parent ctx and self-bind a fresh DB deadline, so a timed-out ack still records its backoff.
 	rpcCtx, cancel := context.WithTimeout(ctx, creationIntentRPCTimeout)
@@ -421,10 +449,10 @@ func (s *CommodoreServer) drainAckForIntent(ctx context.Context, r ackPendingRow
 			"artifact_hash": r.artifactHash,
 		}).Warn("Failed to resolve Foghorn for creation-command ack; backing off obligation")
 		s.backoffAckObligation(ctx, r)
-		return
+		return false
 	}
 	statusClient := sharedpb.NewArtifactCreationStatusServiceClient(foghornClient.Conn())
-	s.ackAndClearCommand(ctx, rpcCtx, statusClient, r)
+	return s.ackAndClearCommand(ctx, rpcCtx, statusClient, r)
 }
 
 // ackAndClearCommand tells Foghorn the terminal command is consumed and branches on the
@@ -437,8 +465,8 @@ func (s *CommodoreServer) drainAckForIntent(ctx context.Context, r ackPendingRow
 // notable). Every other outcome KEEPS the obligation and backs it off (attempts++, retry
 // schedule pushed): ACCEPTED means the command has not terminalized yet; IDENTITY_MISMATCH is
 // an invariant violation — fail closed, never discharge; an RPC error is likewise
-// non-discharging.
-func (s *CommodoreServer) ackAndClearCommand(ctx, rpcCtx context.Context, statusClient sharedpb.ArtifactCreationStatusServiceClient, r ackPendingRow) {
+// non-discharging. It reports whether the obligation was discharged.
+func (s *CommodoreServer) ackAndClearCommand(ctx, rpcCtx context.Context, statusClient sharedpb.ArtifactCreationStatusServiceClient, r ackPendingRow) bool {
 	resp, err := statusClient.AckArtifactCreationCommand(rpcCtx, &sharedpb.AckArtifactCreationCommandRequest{
 		TenantId:     r.tenantID,
 		Kind:         r.kind,
@@ -452,13 +480,13 @@ func (s *CommodoreServer) ackAndClearCommand(ctx, rpcCtx context.Context, status
 			"artifact_hash": r.artifactHash,
 		}).Warn("Creation-command ack RPC failed; backing off obligation")
 		s.backoffAckObligation(ctx, r)
-		return
+		return false
 	}
 
 	switch resp.GetOutcome() {
 	case sharedpb.ArtifactCreationOutcome_ARTIFACT_CREATION_OUTCOME_COMMITTED,
 		sharedpb.ArtifactCreationOutcome_ARTIFACT_CREATION_OUTCOME_REJECTED:
-		s.clearAckObligation(ctx, r)
+		return s.clearAckObligation(ctx, r)
 	case sharedpb.ArtifactCreationOutcome_ARTIFACT_CREATION_OUTCOME_MISSING:
 		// command_ack_pending is only ever set on a TERMINAL local intent, so a MISSING command
 		// means Foghorn already consumed+GC'd it past the retention horizon: an idempotent
@@ -469,7 +497,7 @@ func (s *CommodoreServer) ackAndClearCommand(ctx, rpcCtx context.Context, status
 			"artifact_hash": r.artifactHash,
 			"request_id":    r.requestID,
 		}).Error("Creation-command ack resolved MISSING: Foghorn already consumed+GC'd the terminal command; discharging idempotently (anomaly: a prior clear was lost past retention)")
-		s.clearAckObligation(ctx, r)
+		return s.clearAckObligation(ctx, r)
 	case sharedpb.ArtifactCreationOutcome_ARTIFACT_CREATION_OUTCOME_ACCEPTED:
 		// Foghorn's command has not terminalized yet: NOT discharged, back off and retry later.
 		s.backoffAckObligation(ctx, r)
@@ -491,13 +519,14 @@ func (s *CommodoreServer) ackAndClearCommand(ctx, rpcCtx context.Context, status
 		}).Warn("Creation-command ack resolved inconclusive outcome; backing off obligation")
 		s.backoffAckObligation(ctx, r)
 	}
+	return false
 }
 
 // clearAckObligation discharges the durable ack obligation after a terminal-consumed (or
 // idempotent MISSING) outcome (command_ack_pending=FALSE, command_acked_at set, lease + token
 // cleared). CAS-fenced on command_ack_lease_token: a stale worker whose lease was reclaimed
 // matches zero rows and no-ops. Idempotent; a failed clear leaves the flag set and is retried.
-func (s *CommodoreServer) clearAckObligation(ctx context.Context, r ackPendingRow) {
+func (s *CommodoreServer) clearAckObligation(ctx context.Context, r ackPendingRow) bool {
 	// Settle under a fresh DB context: the ack RPC may have consumed the caller's deadline,
 	// but the discharge must persist so the obligation is not redriven forever.
 	ctx, cancel := settleDBContext(ctx)
@@ -510,7 +539,9 @@ func (s *CommodoreServer) clearAckObligation(ctx context.Context, r ackPendingRo
 			"kind":          r.kind,
 			"artifact_hash": r.artifactHash,
 		}).Warn("Failed to clear creation-command ack obligation after terminal ack; retried next sweep")
+		return false
 	}
+	return true
 }
 
 // backoffAckObligation pushes the RETRY schedule for a non-discharging ack outcome: it

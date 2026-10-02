@@ -6,6 +6,7 @@ import (
 	"errors"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"frameworks/api_balancing/internal/database/foghorndb"
@@ -74,27 +75,46 @@ func (w *Worker) Run(ctx context.Context) {
 	}
 }
 
+const claimBatchSize = 32
+
+// drain claims batches until one comes back short, so delivery keeps up with the enqueue rate instead of being
+// capped at one batch per interval. It continues only while every row of the batch was delivered: a failed or
+// superseded row can be due again at once, so any such outcome ends the pass until the next tick.
 func (w *Worker) drain(ctx context.Context) {
+	for {
+		claimed, delivered := w.drainBatch(ctx)
+		if claimed < claimBatchSize || delivered < claimed || ctx.Err() != nil {
+			return
+		}
+	}
+}
+
+func (w *Worker) drainBatch(ctx context.Context) (claimed, delivered int) {
 	queries := foghorndb.New(w.db)
 	lease := sql.NullString{String: w.leaseOwner, Valid: true}
-	rows, err := queries.ClaimDueManagedStreamPlacements(ctx, foghorndb.ClaimDueManagedStreamPlacementsParams{LeaseOwner: lease, BatchSize: 32})
+	rows, err := queries.ClaimDueManagedStreamPlacements(ctx, foghorndb.ClaimDueManagedStreamPlacementsParams{LeaseOwner: lease, BatchSize: claimBatchSize})
 	if err != nil {
 		w.logger.WithError(err).Warn("Failed to load durable managed-stream placement obligations")
-		return
+		return 0, 0
 	}
 	var group sync.WaitGroup
+	var delivers atomic.Int64
 	for _, row := range rows {
 		row := row
 		group.Add(1)
 		go func() {
 			defer group.Done()
-			w.deliver(ctx, lease, row)
+			if w.deliver(ctx, lease, row) {
+				delivers.Add(1)
+			}
 		}()
 	}
 	group.Wait()
+	return len(rows), int(delivers.Load())
 }
 
-func (w *Worker) deliver(ctx context.Context, lease sql.NullString, row foghorndb.ClaimDueManagedStreamPlacementsRow) {
+// deliver reports whether the placement was delivered and its row settled.
+func (w *Worker) deliver(ctx context.Context, lease sql.NullString, row foghorndb.ClaimDueManagedStreamPlacementsRow) bool {
 	queries := foghorndb.New(w.db)
 	callCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	var err error
@@ -114,14 +134,18 @@ func (w *Worker) deliver(ctx context.Context, lease sql.NullString, row foghornd
 			}
 		}
 		w.logger.WithError(err).WithField("stream_id", row.StreamID).Warn("Managed-stream placement obligation remains pending")
-		return
+		return false
 	}
 	settled, err := queries.DeleteDeliveredManagedStreamPlacement(ctx, foghorndb.DeleteDeliveredManagedStreamPlacementParams{ID: row.ID, Revision: row.Revision, LeaseOwner: lease})
 	if err != nil {
 		w.logger.WithError(err).WithField("stream_id", row.StreamID).Warn("Failed to settle managed-stream placement obligation")
-	} else if settled == 0 {
+		return false
+	}
+	if settled == 0 {
 		if _, releaseErr := queries.ReleaseManagedStreamPlacementLease(ctx, foghorndb.ReleaseManagedStreamPlacementLeaseParams{ID: row.ID, LeaseOwner: lease}); releaseErr != nil {
 			w.logger.WithError(releaseErr).WithField("stream_id", row.StreamID).Warn("Failed to release superseded managed-stream placement lease")
 		}
+		return false
 	}
+	return true
 }

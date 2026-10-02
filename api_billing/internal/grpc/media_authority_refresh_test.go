@@ -3,6 +3,7 @@ package grpc
 import (
 	"context"
 	"errors"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -65,7 +66,8 @@ func TestPurserMediaAuthorityRefreshBatchDeliversConcurrently(t *testing.T) {
 	release := make(chan struct{})
 	done := make(chan error, 1)
 	go func() {
-		done <- (&PurserServer{db: db}).deliverMediaAuthorityRefreshBatch(context.Background(), blockingPurserRefreshClient{arrived: arrived, release: release})
+		_, _, batchErr := (&PurserServer{db: db}).deliverMediaAuthorityRefreshBatch(context.Background(), blockingPurserRefreshClient{arrived: arrived, release: release})
+		done <- batchErr
 	}()
 	for range 2 {
 		select {
@@ -99,11 +101,14 @@ func TestPurserMediaAuthorityRefreshRetainsRowWhenEntitlementReconcileFails(t *t
 
 	client := &recordingRefreshClient{}
 	s := &PurserServer{db: db, tierReconciler: failingRefreshTierReconciler{}}
-	err = s.deliverMediaAuthorityRefreshRow(context.Background(), client, purserdb.ClaimMediaAuthorityRefreshBatchRow{
+	delivered, err := s.deliverMediaAuthorityRefreshRow(context.Background(), client, purserdb.ClaimMediaAuthorityRefreshBatchRow{
 		ID: id.String(), TenantID: "tenant-1", SourceEventID: "event-3", Reason: "subscription_authority_changed", Attempts: 2, Revision: 4,
 	})
 	if err != nil {
 		t.Fatal(err)
+	}
+	if delivered {
+		t.Fatal("a rescheduled refresh must not report delivery")
 	}
 	if client.calls != 0 {
 		t.Fatalf("Commodore refresh calls = %d, want 0 before entitlement convergence", client.calls)
@@ -125,10 +130,10 @@ func TestUsageRefreshDoesNotDependOnQuartermasterEntitlementReconcile(t *testing
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	client := &recordingRefreshClient{}
 	s := &PurserServer{db: db, tierReconciler: failingRefreshTierReconciler{}}
-	if err := s.deliverMediaAuthorityRefreshRow(context.Background(), client, purserdb.ClaimMediaAuthorityRefreshBatchRow{
+	if delivered, err := s.deliverMediaAuthorityRefreshRow(context.Background(), client, purserdb.ClaimMediaAuthorityRefreshBatchRow{
 		ID: id.String(), TenantID: "tenant-1", SourceEventID: "event-4", Reason: "allowance_usage_changed", Attempts: 1, Revision: 1,
-	}); err != nil {
-		t.Fatal(err)
+	}); err != nil || !delivered {
+		t.Fatalf("delivered=%v err=%v, want a delivered refresh", delivered, err)
 	}
 	if client.calls != 1 {
 		t.Fatalf("Commodore refresh calls = %d, want 1 without Quartermaster dependency", client.calls)
@@ -148,10 +153,10 @@ func TestMediaAuthorityRefreshReleasesSupersededCompletionFence(t *testing.T) {
 	mock.ExpectExec(`UPDATE purser\.media_authority_refresh_outbox`).WithArgs(id, int64(2)).WillReturnResult(sqlmock.NewResult(0, 0))
 	mock.ExpectExec(`UPDATE purser\.media_authority_refresh_outbox`).WithArgs(id, int64(2)).WillReturnResult(sqlmock.NewResult(0, 1))
 	client := &recordingRefreshClient{}
-	if err := (&PurserServer{db: db}).deliverMediaAuthorityRefreshRow(context.Background(), client, purserdb.ClaimMediaAuthorityRefreshBatchRow{
+	if delivered, err := (&PurserServer{db: db}).deliverMediaAuthorityRefreshRow(context.Background(), client, purserdb.ClaimMediaAuthorityRefreshBatchRow{
 		ID: id.String(), TenantID: "tenant-1", SourceEventID: "event-5", Reason: "allowance_usage_changed", Attempts: 1, Revision: 2,
-	}); err != nil {
-		t.Fatal(err)
+	}); err != nil || delivered {
+		t.Fatalf("delivered=%v err=%v, want a superseded refresh released without error", delivered, err)
 	}
 	if client.calls != 1 {
 		t.Fatalf("Commodore refresh calls = %d, want 1", client.calls)
@@ -171,5 +176,43 @@ func TestMediaAuthorityRefreshEntitlementDependencyReasons(t *testing.T) {
 		if mediaAuthorityRefreshRequiresEntitlementReconcile(reason) {
 			t.Fatalf("%q must not depend on entitlement reconciliation", reason)
 		}
+	}
+}
+
+type countingRefreshClient struct{ calls atomic.Int64 }
+
+func (c *countingRefreshClient) RequestMediaAuthorityRefresh(context.Context, string, string, string, string) (*commodorepb.RequestMediaAuthorityRefreshResponse, error) {
+	c.calls.Add(1)
+	return &commodorepb.RequestMediaAuthorityRefreshResponse{Accepted: true}, nil
+}
+
+// A fully delivered full batch means more rows may be due: one drain claims again instead of waiting a poll.
+func TestPurserMediaAuthorityRefreshDrainsPastFullDeliveredBatch(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	mock.MatchExpectationsInOrder(false)
+	cols := []string{"id", "source_event_id", "tenant_id", "reason", "attempts", "revision"}
+	claim := `(?s)WITH candidates AS.*UPDATE purser\.media_authority_refresh_outbox`
+	rows := sqlmock.NewRows(cols)
+	for range int(mediaAuthorityRefreshBatchSize) {
+		id := uuid.New()
+		rows.AddRow(id.String(), "event", "tenant-1", "billing_changed", 1, 1)
+		mock.ExpectExec(`UPDATE purser\.media_authority_refresh_outbox`).WithArgs(id, int64(1)).WillReturnResult(sqlmock.NewResult(0, 1))
+	}
+	mock.ExpectQuery(claim).WithArgs(mediaAuthorityRefreshLease.Milliseconds(), mediaAuthorityRefreshBatchSize).WillReturnRows(rows)
+	mock.ExpectQuery(claim).WithArgs(mediaAuthorityRefreshLease.Milliseconds(), mediaAuthorityRefreshBatchSize).WillReturnRows(sqlmock.NewRows(cols))
+
+	client := &countingRefreshClient{}
+	if err := (&PurserServer{db: db}).drainMediaAuthorityRefreshOutbox(context.Background(), client); err != nil {
+		t.Fatal(err)
+	}
+	if got := client.calls.Load(); got != int64(mediaAuthorityRefreshBatchSize) {
+		t.Fatalf("delivered %d, want %d", got, mediaAuthorityRefreshBatchSize)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
 	}
 }

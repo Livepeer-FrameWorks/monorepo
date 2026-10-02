@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"frameworks/api_balancing/internal/database/foghorndb"
@@ -90,27 +91,46 @@ func (w *Worker) Run(ctx context.Context) {
 	}
 }
 
+const claimBatchSize = 32
+
+// drain claims batches until one comes back short, so delivery keeps up with the enqueue rate instead of being
+// capped at one batch per interval. It continues only while every row of the batch was settled: a failed or
+// superseded row can be due again at once, so any such outcome ends the pass until the next tick.
 func (w *Worker) drain(ctx context.Context) {
+	for {
+		claimed, delivered := w.drainBatch(ctx)
+		if claimed < claimBatchSize || delivered < claimed || ctx.Err() != nil {
+			return
+		}
+	}
+}
+
+func (w *Worker) drainBatch(ctx context.Context) (claimed, delivered int) {
 	lease := sql.NullString{String: w.leaseOwner, Valid: true}
-	rows, err := foghorndb.New(w.db).ClaimDuePushTargetStatuses(ctx, foghorndb.ClaimDuePushTargetStatusesParams{LeaseOwner: lease, BatchSize: 32})
+	rows, err := foghorndb.New(w.db).ClaimDuePushTargetStatuses(ctx, foghorndb.ClaimDuePushTargetStatusesParams{LeaseOwner: lease, BatchSize: claimBatchSize})
 	if err != nil {
 		w.observe("claim_error")
 		w.logger.WithError(err).Warn("Failed to load durable push-target status obligations")
-		return
+		return 0, 0
 	}
 	var group sync.WaitGroup
+	var delivers atomic.Int64
 	for _, row := range rows {
 		row := row
 		group.Add(1)
 		go func() {
 			defer group.Done()
-			w.deliver(ctx, lease, row)
+			if w.deliver(ctx, lease, row) {
+				delivers.Add(1)
+			}
 		}()
 	}
 	group.Wait()
+	return len(rows), int(delivers.Load())
 }
 
-func (w *Worker) deliver(ctx context.Context, lease sql.NullString, row foghorndb.ClaimDuePushTargetStatusesRow) {
+// deliver reports whether the status was delivered (or its target is gone) and its row settled.
+func (w *Worker) deliver(ctx context.Context, lease sql.NullString, row foghorndb.ClaimDuePushTargetStatusesRow) bool {
 	var lastError *string
 	if row.LastError.Valid {
 		value := row.LastError.String
@@ -140,20 +160,25 @@ func (w *Worker) deliver(ctx context.Context, lease sql.NullString, row foghornd
 			w.observe("retry")
 		}
 		w.logger.WithError(err).WithField("target_id", row.TargetID).Warn("Push-target status obligation remains pending")
-		return
+		return false
 	}
 	settled, err := queries.DeleteDeliveredPushTargetStatus(ctx, foghorndb.DeleteDeliveredPushTargetStatusParams{ID: row.ID, Revision: row.Revision, LeaseOwner: lease})
 	if err != nil {
 		w.observe("settle_error")
 		w.logger.WithError(err).WithField("target_id", row.TargetID).Warn("Failed to settle delivered push-target status obligation")
-	} else if settled == 0 {
+		return false
+	}
+	if settled == 0 {
 		w.observe("superseded")
 		if _, releaseErr := queries.ReleasePushTargetStatusLease(ctx, foghorndb.ReleasePushTargetStatusLeaseParams{ID: row.ID, LeaseOwner: lease}); releaseErr != nil {
 			w.logger.WithError(releaseErr).WithField("target_id", row.TargetID).Warn("Failed to release superseded push-target status lease")
 		}
-	} else if terminalNotFound {
+		return false
+	}
+	if terminalNotFound {
 		w.observe("terminal_not_found")
 	} else {
 		w.observe("delivered")
 	}
+	return true
 }

@@ -119,18 +119,31 @@ func (j *StreamCleanupJob) drain() {
 	if j.db == nil || j.cleaner == nil {
 		return
 	}
-	claimCtx, claimCancel := context.WithTimeout(context.Background(), 15*time.Second)
-	items, err := j.claimBatch(claimCtx)
-	claimCancel()
-	if err != nil {
-		j.logger.WithError(err).Warn("Failed to claim stream cleanup batch")
-		return
-	}
-
+	// A pass keeps claiming batches until one comes back short, so throughput follows the enqueue rate instead of
+	// being capped at one batch per interval. Each batch carries its own lease and budget, and every claimed
+	// obligation leaves the due set (finalized, re-armed for its second sweep, or backed off), so the loop ends once
+	// fewer than a batch of obligations are due.
 	progressed := 0
-	for _, it := range items {
-		if j.settleObligation(it) {
-			progressed++
+	for {
+		claimCtx, claimCancel := context.WithTimeout(context.Background(), 15*time.Second)
+		items, err := j.claimBatch(claimCtx)
+		claimCancel()
+		if err != nil {
+			j.logger.WithError(err).Warn("Failed to claim stream cleanup batch")
+			break
+		}
+		for _, it := range items {
+			if j.settleObligation(it) {
+				progressed++
+			}
+		}
+		if len(items) < j.batchSize {
+			break
+		}
+		select {
+		case <-j.stopCh:
+			return
+		default:
 		}
 	}
 	if progressed > 0 {

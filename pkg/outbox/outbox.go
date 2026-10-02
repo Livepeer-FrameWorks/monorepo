@@ -88,7 +88,7 @@ func (w *Worker[P]) Run(ctx context.Context) {
 	ticker := time.NewTicker(w.Config.PollPeriod)
 	defer ticker.Stop()
 	for {
-		w.ProcessBatch(ctx)
+		w.Drain(ctx)
 		select {
 		case <-ctx.Done():
 			return
@@ -97,7 +97,27 @@ func (w *Worker[P]) Run(ctx context.Context) {
 	}
 }
 
+// Drain processes batches until a claim comes back short of Config.BatchSize, so throughput follows the enqueue
+// rate instead of being capped at one batch per PollPeriod. It continues only while every claimed row completed:
+// some stores make a failed row due again at once (no backoff column), so a batch with any failure ends the pass
+// and the failed rows are retried on the next tick. Completed rows leave the due set, so the loop ends once fewer
+// than a batch of rows are due.
+func (w *Worker[P]) Drain(ctx context.Context) {
+	for {
+		claimed, completed := w.processBatch(ctx)
+		if claimed < w.Config.BatchSize || completed < claimed || ctx.Err() != nil {
+			return
+		}
+	}
+}
+
+// ProcessBatch claims and settles a single batch.
 func (w *Worker[P]) ProcessBatch(ctx context.Context) {
+	w.processBatch(ctx)
+}
+
+// processBatch claims and settles one batch and reports how many rows it claimed and how many completed.
+func (w *Worker[P]) processBatch(ctx context.Context) (claimed, completed int) {
 	var claims []Claim[P]
 	err := database.RetryPostgres(ctx, database.DefaultRetryAttempts, 25*time.Millisecond, func() error {
 		var claimErr error
@@ -108,7 +128,7 @@ func (w *Worker[P]) ProcessBatch(ctx context.Context) {
 		if w.Logger != nil {
 			w.Logger.WithError(err).Warn("claim outbox batch failed")
 		}
-		return
+		return 0, 0
 	}
 	for _, c := range claims {
 		failed, dispatchErr := w.Dispatcher.Dispatch(ctx, c.Payload)
@@ -118,13 +138,18 @@ func (w *Worker[P]) ProcessBatch(ctx context.Context) {
 				return w.markCompleted(sctx, c.ID, c.LeaseToken)
 			})
 			scancel()
-			if mErr != nil && w.Logger != nil {
-				w.Logger.WithError(mErr).WithField("outbox_id", c.ID).Warn("mark outbox completed failed")
+			if mErr != nil {
+				if w.Logger != nil {
+					w.Logger.WithError(mErr).WithField("outbox_id", c.ID).Warn("mark outbox completed failed")
+				}
+				continue
 			}
+			completed++
 			continue
 		}
 		w.recordFailure(ctx, c.ID, c.Attempts, failed, dispatchErr, c.LeaseToken)
 	}
+	return len(claims), completed
 }
 
 // TryDispatch runs a single dispatch attempt synchronously, intended for the

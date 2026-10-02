@@ -11,6 +11,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"frameworks/api_balancing/internal/database/foghorndb"
@@ -167,37 +168,56 @@ func (w *Worker) Run(ctx context.Context) {
 	}
 }
 
+const claimBatchSize = 32
+
+// drain claims batches until one comes back short, so delivery keeps up with the enqueue rate instead of being
+// capped at one batch per interval. It continues only while every row of the batch was delivered: a failed or
+// superseded row can be due again at once, so any such outcome ends the pass until the next tick.
 func (w *Worker) drain(ctx context.Context) {
+	for {
+		claimed, delivered := w.drainBatch(ctx)
+		if claimed < claimBatchSize || delivered < claimed || ctx.Err() != nil {
+			return
+		}
+	}
+}
+
+func (w *Worker) drainBatch(ctx context.Context) (claimed, delivered int) {
 	queries := foghorndb.New(w.db)
 	lease := sql.NullString{String: w.leaseOwner, Valid: true}
-	rows, err := queries.ClaimDueConfigSeedApplyAcks(ctx, foghorndb.ClaimDueConfigSeedApplyAcksParams{LeaseOwner: lease, BatchSize: 32})
+	rows, err := queries.ClaimDueConfigSeedApplyAcks(ctx, foghorndb.ClaimDueConfigSeedApplyAcksParams{LeaseOwner: lease, BatchSize: claimBatchSize})
 	if err != nil {
 		w.observe("scan_error")
 		w.logger.WithError(err).Warn("Failed to load durable ConfigSeed apply ACKs")
-		return
+		return 0, 0
 	}
 	var group sync.WaitGroup
+	var delivers atomic.Int64
 	for _, row := range rows {
 		row := row
 		group.Add(1)
 		go func() {
 			defer group.Done()
-			w.deliver(ctx, lease, row)
+			if w.deliver(ctx, lease, row) {
+				delivers.Add(1)
+			}
 		}()
 	}
 	group.Wait()
+	return len(rows), int(delivers.Load())
 }
 
-func (w *Worker) deliver(ctx context.Context, lease sql.NullString, row foghorndb.ClaimDueConfigSeedApplyAcksRow) {
+// deliver reports whether the ACK was delivered and its row settled.
+func (w *Worker) deliver(ctx context.Context, lease sql.NullString, row foghorndb.ClaimDueConfigSeedApplyAcksRow) bool {
 	queries := foghorndb.New(w.db)
 	req := &dnspb.ReportConfigSeedApplyResultRequest{}
 	if err := (proto.UnmarshalOptions{DiscardUnknown: false}).Unmarshal(row.RequestPayload, req); err != nil {
 		w.quarantine(ctx, queries, lease, row.ID, row.Revision, row.NodeID, fmt.Errorf("decode ACK: %w", err))
-		return
+		return false
 	}
 	if req.GetNodeId() != row.NodeID || req.GetClusterId() != row.ClusterID || req.GetSeedVersion() != uint64(row.SeedVersion) {
 		w.quarantine(ctx, queries, lease, row.ID, row.Revision, row.NodeID, errors.New("persisted config-seed apply ACK identity/version mismatch"))
-		return
+		return false
 	}
 	signature, err := resultSignature(req.GetSuccess(), req.GetAppliedBundleIds(), req.GetFailedBundleIds(), req.GetBundleVersions())
 	if err != nil || !bytes.Equal(signature, row.ResultSignature) {
@@ -207,7 +227,7 @@ func (w *Worker) deliver(ctx context.Context, lease sql.NullString, row foghornd
 			err = fmt.Errorf("recompute config-seed apply ACK result signature: %w", err)
 		}
 		w.quarantine(ctx, queries, lease, row.ID, row.Revision, row.NodeID, err)
-		return
+		return false
 	}
 	req.DeliverySequence = uint64(row.Revision)
 	callCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
@@ -223,21 +243,24 @@ func (w *Worker) deliver(ctx context.Context, lease sql.NullString, row foghornd
 		// retrying forever. A later ACK at the same or newer seed repairs it.
 		if status.Code(err) == codes.InvalidArgument {
 			w.quarantine(ctx, queries, lease, row.ID, row.Revision, row.NodeID, fmt.Errorf("navigator rejected ACK as invalid: %w", err))
-			return
+			return false
 		}
 		w.retry(ctx, queries, lease, row.ID, row.Revision, row.NodeID, err)
-		return
+		return false
 	}
 	settled, err := queries.SettleDeliveredConfigSeedApplyAck(ctx, foghorndb.SettleDeliveredConfigSeedApplyAckParams{ID: row.ID, Revision: row.Revision, LeaseOwner: lease})
 	if err != nil {
 		w.observe("settle_error")
 		w.logger.WithError(err).WithField("node_id", row.NodeID).Warn("Failed to settle ConfigSeed apply ACK")
-	} else if settled == 0 {
+		return false
+	}
+	if settled == 0 {
 		w.observe("superseded")
 		w.release(ctx, queries, lease, row.ID, row.NodeID)
-	} else {
-		w.observe("delivered")
+		return false
 	}
+	w.observe("delivered")
+	return true
 }
 
 func (w *Worker) quarantine(ctx context.Context, queries *foghorndb.Queries, lease sql.NullString, id, revision int64, nodeID string, invalidErr error) {

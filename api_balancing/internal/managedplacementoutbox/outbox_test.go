@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"regexp"
+	"sync/atomic"
 	"testing"
 
 	"github.com/DATA-DOG/go-sqlmock"
@@ -85,6 +86,46 @@ func TestWorkerDeliversClearThenDeletesExactRevision(t *testing.T) {
 	worker.drain(context.Background())
 	if len(client.cleared) != 1 || len(client.recorded) != 0 {
 		t.Fatalf("delivery calls = record %v clear %v", client.recorded, client.cleared)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+type countingPlacementClient struct{ calls atomic.Int64 }
+
+func (c *countingPlacementClient) RecordStreamActiveCluster(context.Context, string, string, string) (*commodorepb.RecordStreamActiveClusterResponse, error) {
+	c.calls.Add(1)
+	return &commodorepb.RecordStreamActiveClusterResponse{Updated: true}, nil
+}
+
+func (c *countingPlacementClient) ClearStreamActiveCluster(context.Context, string, string, string) (*commodorepb.ClearStreamActiveClusterResponse, error) {
+	c.calls.Add(1)
+	return &commodorepb.ClearStreamActiveClusterResponse{Cleared: true}, nil
+}
+
+// A fully delivered full batch means more rows may be due: one drain claims again instead of waiting an interval.
+func TestWorkerDrainsPastFullDeliveredBatch(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	mock.MatchExpectationsInOrder(false)
+	client := &countingPlacementClient{}
+	worker := NewWorker(db, client, logging.NewLogger())
+	rows := sqlmock.NewRows([]string{"id", "stream_id", "tenant_id", "cluster_id", "desired_active", "revision", "attempts"})
+	for i := range claimBatchSize {
+		rows.AddRow(int64(i+1), "stream-1", "tenant-1", "cluster-1", true, int64(1), int32(0))
+		mock.ExpectExec(regexp.QuoteMeta("DELETE FROM foghorn.managed_stream_active_cluster_outbox")).
+			WithArgs(int64(i+1), int64(1), worker.leaseOwner).WillReturnResult(sqlmock.NewResult(0, 1))
+	}
+	mock.ExpectQuery(regexp.QuoteMeta("WITH candidates AS")).WithArgs(worker.leaseOwner, int32(claimBatchSize)).WillReturnRows(rows)
+	mock.ExpectQuery(regexp.QuoteMeta("WITH candidates AS")).WithArgs(worker.leaseOwner, int32(claimBatchSize)).
+		WillReturnRows(sqlmock.NewRows([]string{"id", "stream_id", "tenant_id", "cluster_id", "desired_active", "revision", "attempts"}))
+	worker.drain(context.Background())
+	if got := client.calls.Load(); got != claimBatchSize {
+		t.Fatalf("delivered %d, want %d", got, claimBatchSize)
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatal(err)

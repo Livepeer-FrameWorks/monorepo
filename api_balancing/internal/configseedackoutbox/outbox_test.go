@@ -5,6 +5,7 @@ import (
 	"errors"
 	"regexp"
 	"slices"
+	"sync/atomic"
 	"testing"
 
 	"github.com/DATA-DOG/go-sqlmock"
@@ -287,4 +288,40 @@ func TestWorkerQuarantinesPayloadWhoseProjectionDoesNotMatchSignature(t *testing
 
 func marshalRequest(req *dnspb.ReportConfigSeedApplyResultRequest) ([]byte, error) {
 	return proto.MarshalOptions{Deterministic: true}.Marshal(req)
+}
+
+type countingAckClient struct{ calls atomic.Int64 }
+
+func (c *countingAckClient) ReportConfigSeedApplyResult(context.Context, *dnspb.ReportConfigSeedApplyResultRequest) (*dnspb.ReportConfigSeedApplyResultResponse, error) {
+	c.calls.Add(1)
+	return &dnspb.ReportConfigSeedApplyResultResponse{Accepted: true}, nil
+}
+
+// A fully delivered full batch means more rows may be due: one drain claims again instead of waiting an interval.
+func TestWorkerDrainsPastFullDeliveredBatch(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	mock.MatchExpectationsInOrder(false)
+	client := &countingAckClient{}
+	worker := NewWorker(db, client, logging.NewLogger())
+	cols := []string{"id", "node_id", "cluster_id", "seed_version", "request_payload", "result_signature", "revision", "attempts"}
+	payload, signature := encodeAckRow(t, "node-1", "cluster-1", 9)
+	rows := sqlmock.NewRows(cols)
+	for i := range claimBatchSize {
+		rows.AddRow(int64(i+1), "node-1", "cluster-1", int64(9), payload, signature, int64(1), int32(0))
+		mock.ExpectExec(`UPDATE foghorn\.config_seed_apply_ack_outbox\s+SET pending = false,[\s\S]*delivered_at = NOW\(\)`).
+			WithArgs(int64(i+1), int64(1), worker.leaseOwner).WillReturnResult(sqlmock.NewResult(0, 1))
+	}
+	mock.ExpectQuery(regexp.QuoteMeta("WITH candidates AS")).WithArgs(worker.leaseOwner, int32(claimBatchSize)).WillReturnRows(rows)
+	mock.ExpectQuery(regexp.QuoteMeta("WITH candidates AS")).WithArgs(worker.leaseOwner, int32(claimBatchSize)).WillReturnRows(sqlmock.NewRows(cols))
+	worker.drain(context.Background())
+	if got := client.calls.Load(); got != claimBatchSize {
+		t.Fatalf("delivered %d, want %d", got, claimBatchSize)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
 }

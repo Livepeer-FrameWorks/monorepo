@@ -6,6 +6,7 @@ import (
 	"errors"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"frameworks/api_balancing/internal/database/foghorndb"
@@ -177,27 +178,46 @@ func (w *Worker) Run(ctx context.Context) {
 	}
 }
 
+const claimBatchSize = 32
+
+// drain claims batches until one comes back short, so delivery keeps up with the enqueue rate instead of being
+// capped at one batch per interval. It continues only while every row of the batch was delivered: a failed or
+// superseded row can be due again at once, so any such outcome ends the pass until the next tick.
 func (w *Worker) drain(ctx context.Context) {
+	for {
+		claimed, delivered := w.drainBatch(ctx)
+		if claimed < claimBatchSize || delivered < claimed || ctx.Err() != nil {
+			return
+		}
+	}
+}
+
+func (w *Worker) drainBatch(ctx context.Context) (claimed, delivered int) {
 	queries := foghorndb.New(w.db)
 	lease := sql.NullString{String: w.leaseOwner, Valid: true}
-	rows, err := queries.ClaimDueSigningKeyUses(ctx, foghorndb.ClaimDueSigningKeyUsesParams{LeaseOwner: lease, BatchSize: 32})
+	rows, err := queries.ClaimDueSigningKeyUses(ctx, foghorndb.ClaimDueSigningKeyUsesParams{LeaseOwner: lease, BatchSize: claimBatchSize})
 	if err != nil {
 		w.logger.WithError(err).Warn("Failed to load durable signing-key use observations")
-		return
+		return 0, 0
 	}
 	var group sync.WaitGroup
+	var delivers atomic.Int64
 	for _, row := range rows {
 		row := row
 		group.Add(1)
 		go func() {
 			defer group.Done()
-			w.deliver(ctx, lease, row)
+			if w.deliver(ctx, lease, row) {
+				delivers.Add(1)
+			}
 		}()
 	}
 	group.Wait()
+	return len(rows), int(delivers.Load())
 }
 
-func (w *Worker) deliver(ctx context.Context, lease sql.NullString, row foghorndb.ClaimDueSigningKeyUsesRow) {
+// deliver reports whether the observation was delivered and its row settled.
+func (w *Worker) deliver(ctx context.Context, lease sql.NullString, row foghorndb.ClaimDueSigningKeyUsesRow) bool {
 	queries := foghorndb.New(w.db)
 	callCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	err := w.client.RecordSigningKeyUse(callCtx, row.TenantID, row.Kid)
@@ -214,16 +234,20 @@ func (w *Worker) deliver(ctx context.Context, lease sql.NullString, row foghornd
 			}
 		}
 		w.logger.WithError(err).WithField("kid", row.Kid).Debug("Signing-key use observation remains pending")
-		return
+		return false
 	}
 	settled, err := queries.DeleteDeliveredSigningKeyUse(ctx, foghorndb.DeleteDeliveredSigningKeyUseParams{
 		ID: row.ID, Revision: row.Revision, LeaseOwner: lease,
 	})
 	if err != nil {
 		w.logger.WithError(err).WithField("kid", row.Kid).Warn("Failed to settle signing-key use observation")
-	} else if settled == 0 {
+		return false
+	}
+	if settled == 0 {
 		if _, releaseErr := queries.ReleaseSigningKeyUseLease(ctx, foghorndb.ReleaseSigningKeyUseLeaseParams{ID: row.ID, LeaseOwner: lease}); releaseErr != nil {
 			w.logger.WithError(releaseErr).WithField("kid", row.Kid).Warn("Failed to release superseded signing-key use lease")
 		}
+		return false
 	}
+	return true
 }

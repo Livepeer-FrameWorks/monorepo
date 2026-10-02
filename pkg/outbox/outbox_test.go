@@ -447,3 +447,91 @@ func TestTryDispatchRetriesRetryableCompletionError(t *testing.T) {
 		t.Fatalf("completed not recorded after retry: %+v", store.completed)
 	}
 }
+
+// queueStore hands out its pending rows batchSize at a time, the way a leasing claim query does: a claimed row
+// leaves the due set, and a failed row is not re-offered within the same pass.
+type queueStore struct {
+	pending    []string
+	claimCalls int
+	completed  []string
+	failed     []string
+}
+
+func (s *queueStore) ClaimBatch(_ context.Context, batchSize int, _ time.Duration) ([]Claim[string], error) {
+	s.claimCalls++
+	n := min(batchSize, len(s.pending))
+	out := make([]Claim[string], 0, n)
+	for _, id := range s.pending[:n] {
+		out = append(out, Claim[string]{ID: id, Payload: id})
+	}
+	s.pending = s.pending[n:]
+	return out, nil
+}
+
+func (s *queueStore) MarkCompleted(_ context.Context, id string) error {
+	s.completed = append(s.completed, id)
+	return nil
+}
+
+func (s *queueStore) RecordFailure(_ context.Context, id string, _ int, _ []string, _ error, _ time.Duration) error {
+	s.failed = append(s.failed, id)
+	return nil
+}
+
+// cancelAfterDispatcher cancels the run once it has dispatched `after` payloads and fails the payload named failOn.
+type cancelAfterDispatcher struct {
+	after  int
+	failOn string
+	n      int
+	cancel context.CancelFunc
+}
+
+func (d *cancelAfterDispatcher) Dispatch(_ context.Context, payload string) ([]string, error) {
+	d.n++
+	if d.n >= d.after {
+		d.cancel()
+	}
+	if payload == d.failOn {
+		return nil, errors.New("target down")
+	}
+	return nil, nil
+}
+
+// A full batch means more rows may be due: one tick keeps claiming until a short batch, so a backlog drains at
+// dispatch speed instead of BatchSize rows per PollPeriod.
+func TestRunDrainsBacklogWithinOneTick(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	store := &queueStore{pending: []string{"o1", "o2", "o3", "o4", "o5"}}
+	disp := &cancelAfterDispatcher{after: 5, cancel: cancel}
+	w := newTestWorker(store, disp)
+	w.Config.BatchSize = 2
+	w.Config.PollPeriod = time.Hour
+
+	done := make(chan struct{})
+	go func() { w.Run(ctx); close(done) }()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatalf("backlog not drained within one tick: dispatched %d of 5 after %d claims", disp.n, store.claimCalls)
+	}
+	if len(store.completed) != 5 {
+		t.Fatalf("completed %v, want all 5 rows", store.completed)
+	}
+}
+
+// A full batch with any failed dispatch ends the pass: stores without a backoff column make a failed row due again
+// at once, so continuing would retry it batch after batch against a failing target instead of on the next tick.
+func TestDrainStopsAfterFullBatchWithFailure(t *testing.T) {
+	store := &queueStore{pending: []string{"o1", "o2", "o3", "o4"}}
+	disp := &cancelAfterDispatcher{after: 1 << 30, failOn: "o2", cancel: func() {}}
+	w := newTestWorker(store, disp)
+	w.Config.BatchSize = 2
+
+	w.Drain(context.Background())
+
+	if store.claimCalls != 1 || len(store.failed) != 1 || len(store.completed) != 1 {
+		t.Fatalf("claims=%d completed=%v failed=%v, want one claim, one completion, one failure",
+			store.claimCalls, store.completed, store.failed)
+	}
+}
