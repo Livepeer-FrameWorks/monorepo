@@ -64,11 +64,24 @@ func (err *placementAuthorityChangedError) GRPCStatus() *status.Status {
 // placementDecisionFactsEqual reports whether two snapshots decide placement
 // identically. Version counters and the authority lifetime advance with every
 // compilation, including the one a publisher's own ownership claim triggers,
-// without changing any fact a decision reads.
+// without changing any fact a decision reads. Each cluster's AuthorityUntil is
+// that same lifetime copied per cluster, so a renewal that re-signs unchanged
+// facts compares equal.
 func placementDecisionFactsEqual(a, b balancer.PlacementAuthority) bool {
-	a.TenantAuthorityVersion, a.ObjectAuthorityVersion, a.ExpiresAt = 0, 0, time.Time{}
-	b.TenantAuthorityVersion, b.ObjectAuthorityVersion, b.ExpiresAt = 0, 0, time.Time{}
-	return reflect.DeepEqual(a, b)
+	return reflect.DeepEqual(placementDecisionFacts(a), placementDecisionFacts(b))
+}
+
+func placementDecisionFacts(authority balancer.PlacementAuthority) balancer.PlacementAuthority {
+	authority.TenantAuthorityVersion, authority.ObjectAuthorityVersion, authority.ExpiresAt = 0, 0, time.Time{}
+	if authority.Clusters != nil {
+		clusters := make(map[string]balancer.PlacementClusterFacts, len(authority.Clusters))
+		for id, facts := range authority.Clusters {
+			facts.AuthorityUntil = time.Time{}
+			clusters[id] = facts
+		}
+		authority.Clusters = clusters
+	}
+	return authority
 }
 
 // PlacementPolicyGate reuses global observation and policy evaluation without
