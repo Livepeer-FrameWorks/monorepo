@@ -1621,7 +1621,10 @@ func ingestPlacementErrorCode(err error) ipcpb.IngestErrorCode {
 	}
 	// Authority that kept changing through every decision round is not a
 	// refusal; the publisher's reconnect decides on the settled snapshot.
-	if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, federation.ErrPlacementAuthorityChanged) {
+	// Authority the cell could not fetch in time is a slow control plane, not a
+	// refusal: a new stream's authority is still arriving.
+	if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, federation.ErrPlacementAuthorityChanged) ||
+		errors.Is(err, localauthority.ErrAuthorityFetchFailed) {
 		return ipcpb.IngestErrorCode_INGEST_ERROR_TIMEOUT
 	}
 	if st, ok := status.FromError(err); ok {
@@ -1872,6 +1875,9 @@ func (p *Processor) handlePushRewrite(trigger *ipcpb.MistTrigger) (_ string, _ b
 		}
 		if code == ipcpb.IngestErrorCode_INGEST_ERROR_PLACEMENT_DENIED {
 			return "", true, ingesterrors.New(code, "publisher is not permitted on this node by placement policy")
+		}
+		if errors.Is(placementErr, localauthority.ErrAuthorityFetchFailed) {
+			return "", true, ingesterrors.New(code, "stream authority has not reached this cell yet; retry")
 		}
 		return "", true, ingesterrors.New(code, "ingest placement is temporarily unavailable; retry")
 	}

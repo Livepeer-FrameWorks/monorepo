@@ -86,7 +86,13 @@ func (s *Store) readPlacementFetchingOnMiss(ctx context.Context, lookup Authorit
 	if !placementPairNeedsFetch(pair, err, s.now().UTC()) {
 		return pair, err
 	}
-	if applied, _ := s.Fetch(ctx, lookup); !applied { //nolint:errcheck // a fetch that cannot be made leaves the read as it was
+	if applied, fetchErr := s.Fetch(ctx, lookup); !applied {
+		// A fetch that could not be made leaves the read as it was. When it
+		// failed rather than found nothing, the failure travels with the read's
+		// error, so a caller can tell a slow control plane from an absent pair.
+		if err != nil && errors.Is(fetchErr, ErrAuthorityFetchFailed) {
+			return pair, errors.Join(err, fetchErr)
+		}
 		return pair, err
 	}
 	return readLocal()

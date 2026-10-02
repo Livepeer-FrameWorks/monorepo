@@ -5,14 +5,18 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	mediaauthoritypb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/media_authority"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/testutil"
+	"github.com/sirupsen/logrus"
+	logrustest "github.com/sirupsen/logrus/hooks/test"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )
@@ -146,6 +150,108 @@ func TestFetchBoundsWhatADecisionWaitsFor(t *testing.T) {
 			t.Fatalf("eight concurrent decisions made %d fetches", calls.Load())
 		}
 	})
+}
+
+// A control plane that answers one fetch too slowly is slow, not unreachable: the
+// decisions about other authorities still ask. Only timeouts that keep coming
+// stop every decision from waiting.
+func TestOneSlowFetchDoesNotStopUnrelatedFetches(t *testing.T) {
+	now := storeFixtureNow
+	store := fetchTestStore(&now)
+	var calls atomic.Int32
+	slow := map[string]bool{"slow-1": true, "slow-2": true, "slow-3": true}
+	store.SetAuthorityFetcher(func(_ context.Context, lookup AuthorityLookup) ([][]byte, error) {
+		calls.Add(1)
+		if slow[lookup.InternalName] {
+			return nil, status.Error(codes.DeadlineExceeded, "context deadline exceeded")
+		}
+		return nil, nil
+	})
+
+	_, err := store.Fetch(context.Background(), AuthorityLookup{InternalName: "slow-1"})
+	if !errors.Is(err, ErrAuthorityFetchFailed) {
+		t.Fatalf("a timed-out fetch = %v, want ErrAuthorityFetchFailed", err)
+	}
+	if _, err = store.Fetch(context.Background(), AuthorityLookup{InternalName: "other"}); err != nil || calls.Load() != 2 {
+		t.Fatalf("an unrelated fetch after one timeout: calls=%d err=%v, want it asked", calls.Load(), err)
+	}
+	// The same authority is asked again too; its own retry is the decision that needs it.
+	if _, err = store.Fetch(context.Background(), AuthorityLookup{InternalName: "slow-1"}); !errors.Is(err, ErrAuthorityFetchFailed) || calls.Load() != 3 {
+		t.Fatalf("retry of the slow authority: calls=%d err=%v, want it asked again", calls.Load(), err)
+	}
+
+	// Timeouts with no answer in between are an unresponsive control plane.
+	_, _ = store.Fetch(context.Background(), AuthorityLookup{InternalName: "slow-2"})
+	_, _ = store.Fetch(context.Background(), AuthorityLookup{InternalName: "slow-3"})
+	asked := calls.Load()
+	_, err = store.Fetch(context.Background(), AuthorityLookup{InternalName: "other-2"})
+	if calls.Load() != asked || !errors.Is(err, ErrAuthorityFetchFailed) {
+		t.Fatalf("after repeated timeouts: calls %d -> %d err=%v, want the backoff to skip the ask as a failed fetch", asked, calls.Load(), err)
+	}
+	now = now.Add(authorityFetchOutageBackoff + time.Second)
+	if _, err := store.Fetch(context.Background(), AuthorityLookup{InternalName: "other-2"}); err != nil || calls.Load() != asked+1 {
+		t.Fatalf("fetching did not resume after the backoff: calls=%d err=%v", calls.Load(), err)
+	}
+}
+
+// Every fetch that fails is logged with its reason, once per ask of the control
+// plane, and a name the control plane does not know is not a failure.
+func TestFailedFetchIsLoggedWithItsReason(t *testing.T) {
+	now := storeFixtureNow
+	store := fetchTestStore(&now)
+	logger := logging.NewLogger()
+	logs := logrustest.NewLocal(logger)
+	store.SetLogger(logger)
+	store.SetAuthorityFetcher(func(_ context.Context, lookup AuthorityLookup) ([][]byte, error) {
+		if lookup.InternalName == "unknown" {
+			return nil, status.Error(codes.NotFound, "media object not found")
+		}
+		return nil, status.Error(codes.DeadlineExceeded, "commodore answered too late")
+	})
+	_, _ = store.Fetch(context.Background(), AuthorityLookup{InternalName: "unknown"})
+	_, _ = store.Fetch(context.Background(), AuthorityLookup{InternalName: "stream"})
+	var failures []*logrus.Entry
+	for _, entry := range logs.AllEntries() {
+		if entry.Message == "Media authority fetch failed" {
+			failures = append(failures, entry)
+		}
+	}
+	if len(failures) != 1 {
+		t.Fatalf("logged %d fetch failures, want 1: %v", len(failures), logs.AllEntries())
+	}
+	cause, _ := failures[0].Data[logrus.ErrorKey].(error)
+	if cause == nil || !strings.Contains(cause.Error(), "commodore answered too late") || failures[0].Data["lookup"] != "internal_name:stream" {
+		t.Fatalf("fetch failure entry = %v, want the reason and the lookup", failures[0].Data)
+	}
+}
+
+// A pair the cell does not hold, whose fetch failed, reports both: callers that
+// decide on absence still see sql.ErrNoRows, and callers that must not turn a
+// slow control plane into a refusal see the failed fetch and its reason.
+func TestPlacementMissWithFailedFetchCarriesTheFetchFailure(t *testing.T) {
+	now := storeFixtureNow
+	store := fetchTestStore(&now)
+	store.SetAuthorityFetcher(func(context.Context, AuthorityLookup) ([][]byte, error) {
+		return nil, status.Error(codes.DeadlineExceeded, "commodore answered too late")
+	})
+	_, err := store.readPlacementFetchingOnMiss(context.Background(), AuthorityLookup{InternalName: "stream"}, func(context.Context) (PlacementPair, error) {
+		return PlacementPair{}, sql.ErrNoRows
+	})
+	if !errors.Is(err, sql.ErrNoRows) || !errors.Is(err, ErrAuthorityFetchFailed) || !strings.Contains(err.Error(), "commodore answered too late") {
+		t.Fatalf("miss with a failed fetch = %v, want sql.ErrNoRows joined with the failed fetch and its reason", err)
+	}
+
+	// A fetch the control plane answered with "not found" is absence alone.
+	store = fetchTestStore(&now)
+	store.SetAuthorityFetcher(func(context.Context, AuthorityLookup) ([][]byte, error) {
+		return nil, status.Error(codes.NotFound, "media object not found")
+	})
+	_, err = store.readPlacementFetchingOnMiss(context.Background(), AuthorityLookup{InternalName: "stream"}, func(context.Context) (PlacementPair, error) {
+		return PlacementPair{}, sql.ErrNoRows
+	})
+	if !errors.Is(err, sql.ErrNoRows) || errors.Is(err, ErrAuthorityFetchFailed) {
+		t.Fatalf("miss the control plane does not know = %v, want sql.ErrNoRows alone", err)
+	}
 }
 
 // Federation discovery, admission and ingest resolution decide on the placement

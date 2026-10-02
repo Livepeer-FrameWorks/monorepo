@@ -320,20 +320,45 @@ wait_publisher() { # wait_publisher <pid> [timeout_seconds]
     sleep 1
   done
 }
+# internal_name_of_key <stream key>: the internal name of the tenant's stream
+# that the key publishes to.
+internal_name_of_key() {
+  pg commodore "SELECT s.internal_name FROM commodore.streams s WHERE s.tenant_id='$STACK_TENANT_ID'
+      AND (s.stream_key='$1' OR s.id IN (SELECT k.stream_id FROM commodore.stream_keys k
+        WHERE k.tenant_id='$STACK_TENANT_ID' AND k.key_value='$1' AND k.is_active))"
+}
+# admitted_generation <foghorn db> <internal name> <since epoch>: the open,
+# projected ingest session Foghorn admitted since then. A session from an
+# earlier publisher of the same stream does not count.
+admitted_generation() {
+  pg "$1" "SELECT id FROM foghorn.ingest_sessions WHERE tenant_id='$STACK_TENANT_ID'
+      AND stream_internal_name IN ('$2', 'live+$2') AND ended_at IS NULL AND projection_state='active'
+      AND started_at >= to_timestamp($3) ORDER BY started_at DESC"
+}
+
 # publish_until_admitted <rtmp base> <stream key> <WxH> <fps> <seconds> [timeout]:
 # scenario setup for a stream whose publisher must be live before a fault is
 # injected. Restarts the publisher while its push is refused (a freshly started
 # stack refuses ingest until placement authority is ready) and prints the PID
-# of the one that stayed connected for 8 s. Not for an admission under test.
+# of the one Foghorn admitted, read from the publishing edge's cell. A
+# connected publisher is not proof: Mist holds it while it retries a slow
+# PUSH_REWRITE and may still refuse it. Not for an admission under test.
 publish_until_admitted() {
-  local deadline=$(($(date +%s) + ${6:-120})) pid
+  local deadline=$(($(date +%s) + ${6:-120})) db=$FOGHORN_A_DB internal pid since
+  [ "$1" = "$EDGE_B_RTMP" ] && db=$FOGHORN_B_DB
+  internal=$(internal_name_of_key "$2")
+  [ -n "$internal" ] || { echo "publish_until_admitted: no stream for the key" >&2; return 1; }
   while [ "$(date +%s)" -lt "$deadline" ]; do
+    since=$(($(date +%s) - 2))
     pid=$(publish "$1" "$2" "$3" "$4" "$5") || return 1
-    for _ in 1 2 3 4 5 6 7 8; do
+    # Mist's PUSH_REWRITE retries end well inside this window; a publisher
+    # still unadmitted at its end is stopped and restarted.
+    for _ in $(seq 30); do
       kill -0 "$pid" 2>/dev/null || break
+      if [ -n "$(admitted_generation "$db" "$internal" "$since")" ]; then echo "$pid"; return 0; fi
       sleep 1
     done
-    if kill -0 "$pid" 2>/dev/null; then echo "$pid"; return 0; fi
+    kill "$pid" 2>/dev/null
     sleep 3
   done
   return 1

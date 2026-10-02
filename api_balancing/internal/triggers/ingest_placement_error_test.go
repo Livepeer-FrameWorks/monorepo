@@ -2,12 +2,14 @@ package triggers
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 	"testing"
 
 	"frameworks/api_balancing/internal/balancer"
 	"frameworks/api_balancing/internal/federation"
+	localauthority "frameworks/api_balancing/internal/mediaauthority"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/mist"
 	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
 	"google.golang.org/grpc/codes"
@@ -28,6 +30,11 @@ func TestIngestPlacementErrorCodeSeparatesDenialFromTransientFailure(t *testing.
 		{"authority_race", status.Error(codes.FailedPrecondition, "placement authority facts changed during revalidation"), ipcpb.IngestErrorCode_INGEST_ERROR_INTERNAL},
 		{"authority_kept_changing", fmt.Errorf("admission: %w", federation.ErrPlacementAuthorityChanged), ipcpb.IngestErrorCode_INGEST_ERROR_TIMEOUT},
 		{"deadline", context.DeadlineExceeded, ipcpb.IngestErrorCode_INGEST_ERROR_TIMEOUT},
+		// A new stream whose authority has not reached this cell because the
+		// fetch failed (here skipped during the outage backoff) is a slow
+		// control plane, not a refusal.
+		{"authority_not_yet_fetched", errors.Join(sql.ErrNoRows, localauthority.ErrAuthorityFetchUnavailable, localauthority.ErrAuthorityFetchFailed), ipcpb.IngestErrorCode_INGEST_ERROR_TIMEOUT},
+		{"authority_absent", sql.ErrNoRows, ipcpb.IngestErrorCode_INGEST_ERROR_INTERNAL},
 		{"generic", errors.New("ingest placement admission is unavailable"), ipcpb.IngestErrorCode_INGEST_ERROR_INTERNAL},
 	} {
 		if got := ingestPlacementErrorCode(tc.err); got != tc.want {

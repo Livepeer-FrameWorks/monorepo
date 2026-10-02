@@ -3,11 +3,12 @@ package mediaauthority
 import (
 	"context"
 	"errors"
+	"fmt"
 	"sync"
 	"time"
 
 	"frameworks/api_balancing/internal/database/foghorndb"
-
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	"github.com/prometheus/client_golang/prometheus"
 	"golang.org/x/sync/singleflight"
 	"google.golang.org/grpc/codes"
@@ -21,10 +22,13 @@ const (
 	// How long "no such object" is remembered, so a scanner guessing names costs
 	// one request per name per window.
 	authorityFetchNotFoundTTL = 30 * time.Second
-	// After a fetch fails for any other reason, decisions stop waiting for a
-	// while. Without this every decision about an object the cell does not hold
-	// would wait out the timeout for as long as the control plane is unreachable.
-	authorityFetchOutageBackoff = 5 * time.Second
+	// After the control plane is unreachable, or has timed out this many fetches
+	// in a row, decisions stop waiting for a while. Without this every decision
+	// about an object the cell does not hold would wait out the timeout for as
+	// long as the control plane is down. A single slow answer is not an outage:
+	// it backs off nothing, so it cannot fail unrelated decisions.
+	authorityFetchOutageBackoff     = 5 * time.Second
+	authorityFetchTimeoutsToBackOff = 3
 	// A soft-expired authority is asked for again at most this often.
 	authorityFetchRefreshCooldown    = time.Minute
 	authorityFetchMemoryLimit        = 20_000
@@ -36,6 +40,13 @@ const (
 // fetcher is installed, the control plane predates fetching, or a recent fetch
 // failed. The caller carries on as it would have without fetching.
 var ErrAuthorityFetchUnavailable = errors.New("media authority fetch is unavailable")
+
+// ErrAuthorityFetchFailed reports that the control plane was asked, or would
+// have been asked but for the outage backoff, and gave no answer: it was
+// unreachable, too slow, or the fetched authority could not be applied. Unlike
+// "not found", it says nothing about whether the authority exists, so a
+// decision that needed it is retryable rather than refused.
+var ErrAuthorityFetchFailed = errors.New("media authority fetch failed")
 
 // AuthorityLookup names the authority a decision needs. Exactly one field is set.
 // TenantID asks for the tenant authority alone.
@@ -59,6 +70,20 @@ func (l AuthorityLookup) key() string {
 	}
 }
 
+// String names the lookup for logs.
+func (l AuthorityLookup) String() string {
+	switch {
+	case l.AuthorityID != "":
+		return "authority_id:" + l.AuthorityID
+	case l.PlaybackID != "":
+		return "playback_id:" + l.PlaybackID
+	case l.InternalName != "":
+		return "internal_name:" + l.InternalName
+	default:
+		return "tenant_id:" + l.TenantID
+	}
+}
+
 func (l AuthorityLookup) empty() bool {
 	return l.AuthorityID == "" && l.PlaybackID == "" && l.InternalName == "" && l.TenantID == ""
 }
@@ -71,6 +96,8 @@ type fetchCoordinator struct {
 	mu          sync.Mutex
 	fetch       AuthorityFetcher
 	outageUntil time.Time
+	// timeouts counts fetches timed out since the control plane last answered.
+	timeouts    int
 	remembered  map[string]time.Time
 	group       singleflight.Group
 	asyncActive int
@@ -138,7 +165,35 @@ var (
 	errAuthorityFetchNotInstalled = errors.Join(ErrAuthorityFetchUnavailable, errors.New("no media authority fetcher is installed"))
 	// A fetch that recently found nothing for this cell is not asked again yet.
 	errAuthorityFetchRemembered = errors.Join(ErrAuthorityFetchUnavailable, errors.New("nothing to fetch for this authority, recently asked"))
+	errAuthorityFetchBackoff    = errors.New("not asked: the control plane recently failed to answer and fetching is backed off")
 )
+
+// fetchAnsweredByControlPlane reports whether a fetch error is the control
+// plane's answer about this authority (unknown, or refused) rather than a
+// failure to get one.
+func fetchAnsweredByControlPlane(err error) bool {
+	switch status.Code(err) {
+	case codes.NotFound, codes.PermissionDenied, codes.InvalidArgument:
+		return true
+	}
+	return false
+}
+
+func (s *Store) logFetchFailure(lookup AuthorityLookup, err error) {
+	if s == nil || s.logger == nil {
+		return
+	}
+	s.logger.WithError(err).WithFields(logging.Fields{"lookup": lookup.String(), "cell_id": s.cellID}).Warn("Media authority fetch failed")
+}
+
+// logFetchRefusal records a refusal; "not found" is the expected answer for a
+// name nobody holds and is counted, not logged.
+func (s *Store) logFetchRefusal(lookup AuthorityLookup, err error) {
+	if s == nil || s.logger == nil || status.Code(err) == codes.NotFound {
+		return
+	}
+	s.logger.WithError(err).WithFields(logging.Fields{"lookup": lookup.String(), "cell_id": s.cellID}).Info("Media authority fetch refused by the control plane")
+}
 
 func (s *Store) fetch(ctx context.Context, lookup AuthorityLookup) (applied bool, err error) {
 	if s == nil || s.fetcher == nil || lookup.empty() {
@@ -153,7 +208,7 @@ func (s *Store) fetch(ctx context.Context, lookup AuthorityLookup) (applied bool
 	case fetch == nil:
 		return false, errAuthorityFetchNotInstalled
 	case outage:
-		return false, ErrAuthorityFetchUnavailable
+		return false, errors.Join(ErrAuthorityFetchUnavailable, ErrAuthorityFetchFailed, errAuthorityFetchBackoff)
 	case remembered:
 		return false, errAuthorityFetchRemembered
 	}
@@ -167,14 +222,25 @@ func (s *Store) fetch(ctx context.Context, lookup AuthorityLookup) (applied bool
 			var clockErr error
 			startedAt, clockErr = foghorndb.New(s.db).BeginMediaAuthorityConfirmation(fetchCtx)
 			if clockErr != nil {
-				return false, clockErr
+				err := errors.Join(ErrAuthorityFetchFailed, fmt.Errorf("begin authority confirmation: %w", clockErr))
+				s.logFetchFailure(lookup, err)
+				return false, err
 			}
 		}
 		envelopes, fetchErr := fetch(fetchCtx, lookup)
 		if fetchErr != nil {
 			s.rememberFetchFailure(key, fetchErr)
-			return false, fetchErr
+			if fetchAnsweredByControlPlane(fetchErr) {
+				s.logFetchRefusal(lookup, fetchErr)
+				return false, fetchErr
+			}
+			err := errors.Join(ErrAuthorityFetchFailed, fetchErr)
+			s.logFetchFailure(lookup, err)
+			return false, err
 		}
+		s.fetcher.mu.Lock()
+		s.fetcher.timeouts = 0
+		s.fetcher.mu.Unlock()
 		advanced := false
 		for _, encoded := range envelopes {
 			applyResult, applyErr := s.apply(fetchCtx, encoded, startedAt, generation)
@@ -183,7 +249,9 @@ func (s *Store) fetch(ctx context.Context, lookup AuthorityLookup) (applied bool
 				if errors.Is(applyErr, ErrRollback) {
 					continue
 				}
-				return advanced, applyErr
+				err := errors.Join(ErrAuthorityFetchFailed, fmt.Errorf("apply fetched authority: %w", applyErr))
+				s.logFetchFailure(lookup, err)
+				return advanced, err
 			}
 			// A current fetch can confirm an already-held version withheld by a
 			// trust barrier. The reread checks whether its start cleared that barrier.
@@ -200,7 +268,7 @@ func (s *Store) fetch(ctx context.Context, lookup AuthorityLookup) (applied bool
 	// for the others waiting on it, and what it applies is there for the next read.
 	select {
 	case <-ctx.Done():
-		return false, errors.Join(ErrAuthorityFetchUnavailable, ctx.Err())
+		return false, errors.Join(ErrAuthorityFetchUnavailable, ErrAuthorityFetchFailed, ctx.Err())
 	case outcome := <-shared:
 		advanced, _ := outcome.Val.(bool) //nolint:errcheck // the group only ever returns a bool
 		if outcome.Err != nil {
@@ -247,6 +315,17 @@ func (s *Store) RefreshAuthorityAsync(lookup AuthorityLookup) {
 }
 
 func (s *Store) rememberFetchFailure(key string, err error) {
+	if status.Code(err) == codes.DeadlineExceeded || errors.Is(err, context.DeadlineExceeded) {
+		// A slow answer for one authority is not an outage; only timeouts
+		// with no answer in between stop every decision from waiting.
+		s.fetcher.mu.Lock()
+		s.fetcher.timeouts++
+		if s.fetcher.timeouts >= authorityFetchTimeoutsToBackOff {
+			s.fetcher.outageUntil = s.now().UTC().Add(authorityFetchOutageBackoff)
+		}
+		s.fetcher.mu.Unlock()
+		return
+	}
 	switch status.Code(err) {
 	case codes.NotFound:
 		s.rememberFetch(key, authorityFetchNotFoundTTL)
