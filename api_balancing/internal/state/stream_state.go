@@ -1570,7 +1570,10 @@ type AbsentNodeStream struct {
 }
 
 // ReconcileNodeStreamPresence clears per-node stream instances that are
-// absent from Helmsman's current Mist stream snapshot.
+// absent from Helmsman's current Mist stream snapshot. It returns every absent
+// instance it cleared, and every absent instance an earlier snapshot listed
+// even when it was already offline, so the caller can release what the node
+// stopped carrying on each snapshot that does not list it.
 func (sm *StreamStateManager) ReconcileNodeStreamPresence(nodeID string, observed map[string]struct{}) []AbsentNodeStream {
 	nodeID = strings.TrimSpace(nodeID)
 	if nodeID == "" {
@@ -1601,6 +1604,13 @@ func (sm *StreamStateManager) ReconcileNodeStreamPresence(nodeID string, observe
 			continue
 		}
 		if inst.Inputs == 0 && inst.TotalConnections == 0 && inst.Status == "offline" && !inst.Replicated {
+			// Trigger bookkeeping (node-local STREAM_END, a lifecycle report
+			// Mist does not flag as replicated) can settle the instance before
+			// the snapshot that drops it; the node's own listing is still what
+			// tells the caller that a copy it carried went away.
+			if !inst.SnapshotPresentAt.IsZero() {
+				cleared = append(cleared, AbsentNodeStream{InternalName: internalName, SnapshotPresentAt: inst.SnapshotPresentAt})
+			}
 			continue
 		}
 

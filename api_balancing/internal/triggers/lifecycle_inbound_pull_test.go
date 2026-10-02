@@ -8,6 +8,7 @@ import (
 	"frameworks/api_balancing/internal/control"
 	"frameworks/api_balancing/internal/state"
 	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
+	logrustest "github.com/sirupsen/logrus/hooks/test"
 )
 
 type lifecyclePullFixture struct {
@@ -131,6 +132,40 @@ func TestLifecycleSnapshotClearsPullTheNodeStoppedCarrying(t *testing.T) {
 	}
 	if got := f.streamSource(t); got != control.OfflineNotPlaced {
 		t.Fatalf("STREAM_SOURCE after the node dropped its replica = %q, want %q", got, control.OfflineNotPlaced)
+	}
+}
+
+// Node-local trigger bookkeeping can mark the instance offline and
+// non-replicated before the snapshot that no longer lists the stream: Mist's
+// lifecycle report does not flag a pulled stream as replicated, and the
+// node-local STREAM_END zeroes its counters. The listing the node already
+// reported still decides that the pull went away, and it is cleared as a
+// stopped replica on that snapshot, not later as one never started.
+func TestLifecycleSnapshotClearsStoppedPullAfterNodeLocalEnd(t *testing.T) {
+	f := newLifecyclePullFixture(t)
+	logs := logrustest.NewLocal(f.processor.logger)
+	f.arrange(t)
+	time.Sleep(time.Millisecond)
+	f.snapshot(t, map[string]*ipcpb.StreamData{"live+stream": {Total: 1, Inputs: 1}})
+	f.state.UpdateNodeStats("stream", "edge", 1, 1, 0, 0, false)
+	f.state.SetOffline("stream", "edge")
+
+	f.snapshot(t, nil)
+
+	if _, active := f.registry.InboundPullForNode("stream", "edge"); active {
+		t.Fatal("pull the node listed and then stopped listing is still active")
+	}
+	var stopped, neverStarted bool
+	for _, entry := range logs.AllEntries() {
+		switch entry.Message {
+		case "Node lifecycle cleared stale replicated stream":
+			stopped = true
+		case "Node lifecycle cleared origin pull the destination never started":
+			neverStarted = true
+		}
+	}
+	if !stopped || neverStarted {
+		t.Fatalf("clear logged stopped=%v neverStarted=%v, want only the stopped-replica clear", stopped, neverStarted)
 	}
 }
 

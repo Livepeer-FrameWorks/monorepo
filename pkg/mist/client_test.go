@@ -333,3 +333,30 @@ func TestSetBandwidthLimitRejectsUnappliedEcho(t *testing.T) {
 		})
 	}
 }
+
+// Mist reads stop_sessions as stream name -> connector; the batch call must
+// name each stream as a key with an empty (every) connector.
+func TestStopSessionsMultipleNamesStreamsAsKeys(t *testing.T) {
+	var command map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		raw := r.URL.Query().Get("command")
+		if strings.Contains(raw, "authorize") {
+			_, _ = w.Write([]byte(`{"authorize":{"status":"OK"}}`))
+			return
+		}
+		if err := json.Unmarshal([]byte(raw), &command); err != nil {
+			t.Errorf("command %q: %v", raw, err)
+		}
+		_, _ = w.Write([]byte(`{}`))
+	}))
+	defer srv.Close()
+
+	client := NewClient(logging.NewLogger(), ClientConfig{BaseURL: srv.URL})
+	if err := client.StopSessionsMultipleContext(context.Background(), []string{"live+alpha", "pull+alpha", " "}); err != nil {
+		t.Fatal(err)
+	}
+	streams, ok := command["stop_sessions"].(map[string]any)
+	if !ok || len(streams) != 2 || streams["live+alpha"] != "" || streams["pull+alpha"] != "" {
+		t.Fatalf("stop_sessions payload = %#v, want each stream as a key with every connector", command["stop_sessions"])
+	}
+}

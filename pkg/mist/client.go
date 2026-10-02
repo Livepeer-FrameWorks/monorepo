@@ -942,13 +942,24 @@ func (c *Client) StopSessions(streamName string) error {
 
 // StopSessionsMultiple stops all sessions for multiple streams
 func (c *Client) StopSessionsMultiple(streamNames []string) error {
-	if len(streamNames) == 0 {
+	return c.StopSessionsMultipleContext(context.Background(), streamNames)
+}
+
+// StopSessionsMultipleContext stops every session of each exactly named
+// stream. Mist reads a stop_sessions object as stream name -> connector, an
+// empty connector meaning all of them; each element of an array would be read
+// as a connector of every stream instead, which stops nothing.
+func (c *Client) StopSessionsMultipleContext(ctx context.Context, streamNames []string) error {
+	streams := make(map[string]interface{}, len(streamNames))
+	for _, name := range streamNames {
+		if name = strings.TrimSpace(name); name != "" {
+			streams[name] = ""
+		}
+	}
+	if len(streams) == 0 {
 		return nil
 	}
-	command := map[string]interface{}{
-		"stop_sessions": streamNames,
-	}
-	_, err := c.makeAPIRequest(command)
+	_, err := c.makeAPIRequestContext(ctx, map[string]interface{}{"stop_sessions": streams})
 	return err
 }
 

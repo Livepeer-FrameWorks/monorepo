@@ -144,7 +144,10 @@ func (r *RedisRegistryStore) SetSourceRevisioned(ctx context.Context, entry Stre
 		if err != nil {
 			return false, err
 		}
-		merged := entry
+		// A replica that never cached the stream writes ownership transitions
+		// knowing only its internal name; the identity another writer bound
+		// stays, so readers never see the tenant erased.
+		merged := fillStreamIdentity(entry, current)
 		merged.Locations = cloneLocations(entry.Locations)
 		for cid, previous := range current.Locations {
 			if len(previous.InboundPulls) == 0 && previous.OutboundRevision == 0 {
@@ -185,6 +188,33 @@ func (r *RedisRegistryStore) compareAndSetSource(ctx context.Context, entry Stre
 		return 0, fmt.Errorf("registry redis: invalid source revision %d", revision)
 	}
 	return result, nil
+}
+
+// fillStreamIdentity takes each stable identity field the write leaves empty
+// from the stored entry. A field the write sets is kept as written.
+func fillStreamIdentity(write, stored StreamEntry) StreamEntry {
+	if write.StreamID == "" {
+		write.StreamID = stored.StreamID
+	}
+	if write.TenantID == "" {
+		write.TenantID = stored.TenantID
+	}
+	if write.PlaybackID == "" {
+		write.PlaybackID = stored.PlaybackID
+	}
+	if write.IngestMode == 0 {
+		write.IngestMode = stored.IngestMode
+	}
+	if write.RuntimeName == "" {
+		write.RuntimeName = stored.RuntimeName
+	}
+	if write.OriginClusterID == "" {
+		write.OriginClusterID = stored.OriginClusterID
+	}
+	if !write.RequiresAuthKnown && stored.RequiresAuthKnown {
+		write.RequiresAuth, write.RequiresAuthKnown = stored.RequiresAuth, true
+	}
+	return write
 }
 
 func (r *RedisRegistryStore) readSourceSnapshot(ctx context.Context, internalName string) (StreamEntry, string, error) {

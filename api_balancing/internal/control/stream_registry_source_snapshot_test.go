@@ -112,3 +112,47 @@ func TestSourceSnapshotCannotUseCacheWhenSharedEvidenceIsMissingOrInvalid(t *tes
 		})
 	}
 }
+
+// A replica that never cached the stream ends its never-started admission with
+// a revisioned inactive write that knows only the internal name. The shared
+// entry keeps the tenant identity another replica bound, so a viewer resolve
+// reads an ended publisher rather than an identity conflict.
+func TestSourceInactiveFromColdReplicaKeepsSharedIdentity(t *testing.T) {
+	store, client, _ := newTestRedis(t)
+	t.Cleanup(func() { _ = client.Close() })
+	ctx := context.Background()
+	admitting := NewStreamRegistry(nil, "cluster-test", time.Minute)
+	cold := NewStreamRegistry(nil, "cluster-test", time.Minute)
+	admitting.redisStore, cold.redisStore = store, store
+	if _, applied, err := admitting.ProjectSource("stream", "publisher", 1, "trigger", "generation", 7); err != nil || !applied {
+		t.Fatalf("project admitted source: %v, %v", applied, err)
+	}
+	admitting.UpsertLocalSource(StreamEntry{TenantID: "tenant", StreamID: "stream-id", PlaybackID: "public", InternalName: "stream", IngestMode: IngestPush})
+
+	if applied, err := cold.PublishSourceInactive("stream", "publisher", "generation", 8); err != nil || !applied {
+		t.Fatalf("cold replica inactive publish: %v, %v", applied, err)
+	}
+
+	got, found, err := cold.SourceSnapshot(ctx, "tenant", "stream")
+	if err != nil || !found {
+		t.Fatalf("source snapshot after cold inactive write: found=%v err=%v", found, err)
+	}
+	loc := got.Locations["cluster-test"]
+	if got.TenantID != "tenant" || got.StreamID != "stream-id" || got.PlaybackID != "public" || got.IngestMode != IngestPush ||
+		loc.SourceActive || loc.SourceRevision != 8 {
+		t.Fatalf("shared entry after cold inactive write = %+v", got)
+	}
+}
+
+// An entry no writer has bound to a tenant is no tenant's publisher: the
+// resolve reads it as absent, not as an identity conflict.
+func TestSourceSnapshotTreatsUnboundEntryAsAbsent(t *testing.T) {
+	r := NewStreamRegistry(nil, "cell", time.Minute)
+	if _, applied, err := r.ProjectSource("stream", "publisher", 1, "trigger", "generation", 3); err != nil || !applied {
+		t.Fatalf("project source: %v, %v", applied, err)
+	}
+	got, found, err := r.SourceSnapshot(context.Background(), "tenant", "stream")
+	if err != nil || found || got.TenantID != "" {
+		t.Fatalf("unbound entry = %+v, found=%v, err=%v; want absent without error", got, found, err)
+	}
+}

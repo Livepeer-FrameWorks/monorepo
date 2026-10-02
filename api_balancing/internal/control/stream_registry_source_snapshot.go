@@ -40,6 +40,11 @@ func (r *StreamRegistry) SourceSnapshot(ctx context.Context, tenantID, internalN
 	if err != nil || !found {
 		return StreamEntry{}, false, err
 	}
+	// An entry no writer has bound to a tenant yet (an ownership transition
+	// recorded before identity) is no tenant's publisher evidence.
+	if e.TenantID == "" {
+		return StreamEntry{}, false, nil
+	}
 	if e.TenantID != tenantID {
 		return StreamEntry{}, false, ErrReplicationConflict
 	}

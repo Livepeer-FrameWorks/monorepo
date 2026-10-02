@@ -93,7 +93,7 @@ func TestHandleStopSessions(t *testing.T) {
 		if len(calls) != 1 {
 			t.Fatalf("expected one stop_sessions call, got %d", len(calls))
 		}
-		if names, ok := calls[0]["stop_sessions"].([]any); !ok || len(names) != 2 {
+		if names, ok := calls[0]["stop_sessions"].(map[string]any); !ok || len(names) != 2 || names["live+a"] != "" || names["live+b"] != "" {
 			t.Fatalf("stop_sessions payload not forwarded: %v", calls[0]["stop_sessions"])
 		}
 	})

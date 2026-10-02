@@ -2,6 +2,7 @@ package playbackgrant
 
 import (
 	"context"
+	"errors"
 	"slices"
 	"sync"
 	"testing"
@@ -15,8 +16,10 @@ import (
 )
 
 type recordingMist struct {
-	mu    sync.Mutex
-	calls [][]string
+	mu      sync.Mutex
+	calls   [][]string
+	live    []mist.ViewerSession
+	stopped [][]string
 }
 
 func (m *recordingMist) InvalidateSessionIDs(_ context.Context, ids []string) error {
@@ -27,7 +30,27 @@ func (m *recordingMist) InvalidateSessionIDs(_ context.Context, ids []string) er
 }
 
 func (m *recordingMist) ViewerSessions(context.Context) ([]mist.ViewerSession, error) {
-	return nil, nil
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return slices.Clone(m.live), nil
+}
+
+func (m *recordingMist) StopSessionsMultipleContext(_ context.Context, streams []string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.stopped = append(m.stopped, slices.Clone(streams))
+	return nil
+}
+
+func (m *recordingMist) stoppedStreams() []string {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	var out []string
+	for _, call := range m.stopped {
+		out = append(out, call...)
+	}
+	slices.Sort(out)
+	return out
 }
 
 func (m *recordingMist) invalidated() []string {
@@ -192,24 +215,50 @@ func TestExpiredGrantAndEndedSessionStopLocalAnswers(t *testing.T) {
 	}
 }
 
-// A revoked grant ends local answers for the stream and sends each of its
-// sessions back to Mist's USER_NEW, which this edge then refuses.
-func TestRevokedGrantInvalidatesTheStreamsSessions(t *testing.T) {
-	m := &recordingMist{}
+// A revoked grant ends local answers for the stream and stops every Mist
+// session of it, under each runtime name Mist lists a viewer of it with,
+// including sessions this store never tied to a Mist session id. Other
+// streams' sessions keep playing.
+func TestRevokedGrantStopsEveryStreamSession(t *testing.T) {
+	m := &recordingMist{live: []mist.ViewerSession{
+		{SessionID: "s1", Host: "192.0.2.1", Stream: "live+s", Protocol: "HLS"},
+		{SessionID: "untracked", Host: "192.0.2.1", Stream: "live+s", Protocol: "HLS"},
+		{SessionID: "relay-name", Host: "192.0.2.9", Stream: "pull+s", Protocol: "HLS"},
+		{SessionID: "s2", Host: "192.0.2.1", Stream: "live+other", Protocol: "HLS"},
+	}}
 	store, _ := newTestStore(t, m, nil)
 	store.ApplyGrant(playbackgranttest.Grant("live+s", ipcpb.PlaybackGrantPolicyKind_PLAYBACK_GRANT_POLICY_KIND_PUBLIC, nil, "pb"))
 	store.AdmitSession(viewer("live+s", "192.0.2.1", "t1", "s1"), false)
 	store.AdmitSession(viewer("live+other", "192.0.2.1", "t2", "s2"), false)
-	store.ApplyGrant(&ipcpb.PlaybackGrant{InternalName: "live+s", Revoked: true, RevokedReason: "tenant suspended"})
-	if got := m.invalidated(); !slices.Equal(got, []string{"s1"}) {
-		t.Fatalf("invalidated %v, want the revoked stream's session", got)
+	store.ApplyGrant(&ipcpb.PlaybackGrant{InternalName: "live+s", Revoked: true, RevokedReason: "stream deleted"})
+	if got := m.stoppedStreams(); !slices.Equal(got, []string{"live+s", "pull+s"}) {
+		t.Fatalf("stopped streams %v, want every runtime name of the revoked stream", got)
 	}
 	if _, refused := store.Refused("s1"); !refused {
-		t.Fatal("the revoked stream's session is not refused on its re-run")
+		t.Fatal("the revoked stream's session is not refused on a re-run")
 	}
 	if _, ok := store.ServeAdmitted("pb", "192.0.2.1", "HLS", "http://e/hls/pb/0.ts?tkn=t1"); ok {
 		t.Fatal("revoked stream still answered locally")
 	}
+}
+
+// When Mist refuses the stop, the tracked sessions are invalidated instead so
+// their re-run USER_NEW meets the local refusal.
+func TestRevokedGrantInvalidatesTrackedSessionsWhenStopFails(t *testing.T) {
+	m := &failingStopMist{}
+	store, _ := newTestStore(t, m, nil)
+	store.ApplyGrant(playbackgranttest.Grant("live+s", ipcpb.PlaybackGrantPolicyKind_PLAYBACK_GRANT_POLICY_KIND_PUBLIC, nil, "pb"))
+	store.AdmitSession(viewer("live+s", "192.0.2.1", "t1", "s1"), false)
+	store.ApplyGrant(&ipcpb.PlaybackGrant{InternalName: "live+s", Revoked: true, RevokedReason: "stream deleted"})
+	if got := m.invalidated(); !slices.Equal(got, []string{"s1"}) {
+		t.Fatalf("invalidated %v after a refused stop, want the tracked session", got)
+	}
+}
+
+type failingStopMist struct{ recordingMist }
+
+func (m *failingStopMist) StopSessionsMultipleContext(context.Context, []string) error {
+	return errors.New("mist unavailable")
 }
 
 // A playback FrameWorks resolved carries its session as Mist's token and the viewer's JWT as

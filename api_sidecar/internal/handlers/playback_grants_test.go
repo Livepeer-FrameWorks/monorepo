@@ -21,6 +21,7 @@ type fakeMistSessions struct {
 	mu          sync.Mutex
 	live        []mist.ViewerSession
 	invalidated []string
+	stopped     []string
 }
 
 func (f *fakeMistSessions) InvalidateSessionIDs(_ context.Context, ids []string) error {
@@ -32,6 +33,21 @@ func (f *fakeMistSessions) InvalidateSessionIDs(_ context.Context, ids []string)
 
 func (f *fakeMistSessions) ViewerSessions(context.Context) ([]mist.ViewerSession, error) {
 	return f.live, nil
+}
+
+func (f *fakeMistSessions) StopSessionsMultipleContext(_ context.Context, streams []string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.stopped = append(f.stopped, streams...)
+	return nil
+}
+
+func (f *fakeMistSessions) stoppedStreams() []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	out := slices.Clone(f.stopped)
+	slices.Sort(out)
+	return out
 }
 
 func (f *fakeMistSessions) invalidatedIDs() []string {
@@ -269,6 +285,42 @@ func TestRevokedKidInvalidatesOnlyItsSessionsWithoutFoghorn(t *testing.T) {
 	}
 	if got := calls.get(string(mist.TriggerUserNew)) + calls.get(string(mist.TriggerPlayRewrite)); got != admitted {
 		t.Fatalf("the revocation asked Foghorn %d times", got-admitted)
+	}
+}
+
+// Deleting a stream revokes its playback authority, which reaches the edge as a
+// revoked grant. Every Mist viewer session of the stream is stopped, also the
+// ones USER_NEW never reported with a token, and a viewer reconnecting is
+// refused here without asking Foghorn.
+func TestRevokedGrantStopsAllViewerSessionsOfTheStream(t *testing.T) {
+	setupTriggerTest(t, "tenant-grant")
+	mistSessions := &fakeMistSessions{live: []mist.ViewerSession{
+		{SessionID: "sess-a", Host: "192.0.2.1", Stream: "live+gone", Protocol: "HLS"},
+		{SessionID: "sess-untracked", Host: "192.0.2.1", Stream: "live+gone", Protocol: "HLS"},
+		{SessionID: "sess-other", Host: "192.0.2.1", Stream: "live+kept", Protocol: "HLS"},
+	}}
+	store := installTestPlaybackGrants(t, mistSessions, noGrantFetch(t))
+	store.ApplyGrant(playbackgranttest.Grant("live+gone", ipcpb.PlaybackGrantPolicyKind_PLAYBACK_GRANT_POLICY_KIND_PUBLIC, nil, "pbgone"))
+	calls := &foghornCalls{}
+	stubSendMistTrigger(t, func(trigger *ipcpb.MistTrigger) (*control.MistTriggerResult, error) {
+		calls.add(trigger.GetTriggerType())
+		return &control.MistTriggerResult{Response: "true", Action: ipcpb.MistTriggerAction_MIST_TRIGGER_ACTION_VALUE}, nil
+	})
+	if code, body, _ := userNew(t, userNewBody("live+gone", "192.0.2.1", "tkn-a", "sess-a")); code != http.StatusOK || body != "true" {
+		t.Fatalf("USER_NEW sess-a = %d %q", code, body)
+	}
+	asked := calls.get(string(mist.TriggerUserNew))
+
+	store.ApplyGrant(&ipcpb.PlaybackGrant{InternalName: "live+gone", Revoked: true, RevokedReason: "signed authority denies playback"})
+
+	if got := mistSessions.stoppedStreams(); !slices.Equal(got, []string{"live+gone"}) {
+		t.Fatalf("stopped streams = %v, want only the revoked stream", got)
+	}
+	if code, body, action := userNew(t, userNewBody("live+gone", "192.0.2.1", "tkn-a", "sess-a")); code != http.StatusOK || body != "false" || action != "deny" {
+		t.Fatalf("reconnect after revocation = %d %q %q, want a local refusal", code, body, action)
+	}
+	if got := calls.get(string(mist.TriggerUserNew)); got != asked {
+		t.Fatalf("the revoked stream's reconnect asked Foghorn %d times", got-asked)
 	}
 }
 

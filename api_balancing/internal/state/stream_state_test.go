@@ -70,6 +70,21 @@ func TestReconcileNodeStreamPresenceReportsLastSnapshotPresence(t *testing.T) {
 	}
 }
 
+func TestReconcileNodeStreamPresenceReportsListedInstanceAlreadyOffline(t *testing.T) {
+	sm := NewStreamStateManager()
+	sm.TouchNode("edge-us-1", true)
+	sm.ObserveNodeSnapshotStream("frameworks-demo", "edge-us-1", 1, 1, 0, 0, true)
+	sm.UpdateNodeStats("frameworks-demo", "edge-us-1", 1, 1, 0, 0, false)
+	sm.SetOffline("frameworks-demo", "edge-us-1")
+	sm.UpdateNodeStats("never-listed", "edge-us-1", 0, 0, 0, 0, false)
+	sm.SetOffline("never-listed", "edge-us-1")
+
+	cleared := sm.ReconcileNodeStreamPresence("edge-us-1", map[string]struct{}{})
+	if len(cleared) != 1 || cleared[0].InternalName != "frameworks-demo" || cleared[0].SnapshotPresentAt.IsZero() {
+		t.Fatalf("cleared = %#v, want only the listed instance with its snapshot presence", cleared)
+	}
+}
+
 func TestReconcileNodeStreamPresenceClearsMissingStreams(t *testing.T) {
 	sm := NewStreamStateManager()
 	sm.TouchNode("edge-us-1", true)

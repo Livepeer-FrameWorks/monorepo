@@ -389,6 +389,26 @@ func TestLivePushSourceStateClassifiesStartingAndOffline(t *testing.T) {
 	}
 }
 
+// The registry can hold an ownership transition for an admitted ingest before
+// any writer bound the stream's tenant. A viewer resolve against the real
+// registry reports that stream offline, never a replication conflict.
+func TestLivePushSourceStateReadsUnboundRegistryEntryAsOffline(t *testing.T) {
+	_, reader, _, authority := liveSourceStateFixture(t)
+	registry := control.NewStreamRegistry(nil, "us-cell", time.Minute)
+	if _, applied, err := registry.ProjectSource("internal", "node-00", 1, "trigger", "source-generation", 9); err != nil || !applied {
+		t.Fatalf("project admitted source: %v, %v", applied, err)
+	}
+	if applied, err := registry.PublishSourceInactive("internal", "node-00", "source-generation", 10); err != nil || !applied {
+		t.Fatalf("end never-started admission: %v, %v", applied, err)
+	}
+	reader.Registry = registry
+
+	generation, _, err := reader.ResolveSourceGeneration(context.Background(), authority)
+	if !errors.Is(err, control.ErrLiveSourceOffline) || errors.Is(err, control.ErrReplicationConflict) || generation != "" {
+		t.Fatalf("unbound registry entry resolved as %q, %v; want %v", generation, err, control.ErrLiveSourceOffline)
+	}
+}
+
 func TestViewerPlacementResolverReportsStartingSourceBeforeRouting(t *testing.T) {
 	f, reader, r, _ := liveSourceStateFixture(t)
 	r.entry.Locations["us-cell"] = control.Location{SourceActive: true, OwnerNodeID: "node-00", SourceGeneration: "source-generation", SourceRevision: 9}
