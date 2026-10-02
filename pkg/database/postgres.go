@@ -63,15 +63,30 @@ func (t postgresContractTracer) TraceQueryEnd(_ context.Context, _ *pgx.Conn, da
 	ObserveDatabaseError(t.service, EnginePostgres, data.Err, false)
 }
 
-// DefaultConfig returns default database configuration
+// DefaultConfig returns default database configuration.
+//
+// MaxIdleConns equals MaxOpenConns because a new YSQL connection starts a
+// backend with a cold catalog cache, and its first query on a table pays for
+// loading that table's catalog entries: about 150 ms against a 1.5 ms warm
+// query on a single local node, and more under concurrent connection starts.
+// A smaller idle limit closes what a burst opened and makes the next burst pay
+// it again on every connection. ConnMaxIdleTime still retires connections an
+// idle service does not use.
 func DefaultConfig() Config {
 	return Config{
 		MaxOpenConns:    25,
-		MaxIdleConns:    5,
+		MaxIdleConns:    25,
 		ConnMaxLifetime: 5 * time.Minute,
 		ConnMaxIdleTime: 5 * time.Minute,
 		PingTimeout:     defaultPingTimeout,
 	}
+}
+
+func configurePool(db *sql.DB, cfg Config) {
+	db.SetMaxOpenConns(cfg.MaxOpenConns)
+	db.SetMaxIdleConns(cfg.MaxIdleConns)
+	db.SetConnMaxLifetime(cfg.ConnMaxLifetime)
+	db.SetConnMaxIdleTime(cfg.ConnMaxIdleTime)
 }
 
 // withPgxExecMode adds default_query_exec_mode=exec to a DSN unless already set.
@@ -136,10 +151,7 @@ func Connect(cfg Config, logger logging.Logger) (PostgresConn, error) {
 
 	// Apply pool settings before probing so the probe borrows a connection
 	// under the same limits the service will use.
-	db.SetMaxOpenConns(cfg.MaxOpenConns)
-	db.SetMaxIdleConns(cfg.MaxIdleConns)
-	db.SetConnMaxLifetime(cfg.ConnMaxLifetime)
-	db.SetConnMaxIdleTime(cfg.ConnMaxIdleTime)
+	configurePool(db, cfg)
 
 	pingTimeout := cfg.PingTimeout
 	if pingTimeout <= 0 {

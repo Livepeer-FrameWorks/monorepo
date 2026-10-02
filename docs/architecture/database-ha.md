@@ -52,7 +52,10 @@ query errors and must be retried by the caller (`database.RetryPostgres` /
 - `connect_timeout` (in the DSN) — a hung/dead node's dial fails fast.
 - Pool recycling — `ConnMaxLifetime` + `ConnMaxIdleTime` (`database.Config`) churn
   connections so the pool rebalances across nodes after a failover, recovery, or
-  node addition, and a connection to a degraded node doesn't linger.
+  node addition, and a connection to a degraded node doesn't linger. The idle
+  limit equals the open limit: a new YSQL connection's first query on a table
+  loads that table's catalog entries (~150 ms against ~1.5 ms warm), so a pool
+  that closes what a burst opened makes every later burst pay that again.
 - Caller context deadlines on queries.
 
 ## Statement caching: we use exec mode
