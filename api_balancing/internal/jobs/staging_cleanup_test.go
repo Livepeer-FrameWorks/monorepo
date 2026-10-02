@@ -177,3 +177,46 @@ func TestStagingCleanup_FailureBacksOffAndReleasesLease(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+// A full claimed batch means more due rows may be waiting: one drain keeps claiming until a short batch, so the
+// worker's throughput is not capped at one batch per interval while a backlog builds behind it.
+func TestStagingCleanup_DrainContinuesPastFullBatch(t *testing.T) {
+	mockDB, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer mockDB.Close()
+
+	del := &stubDeleter{}
+	j := &StagingCleanupJob{
+		db:             mockDB,
+		s3:             del,
+		logger:         logging.NewLogger(),
+		batchSize:      2,
+		backoffBase:    time.Minute,
+		leaseTTL:       2 * time.Minute,
+		itemTimeout:    30 * time.Second,
+		localBackendID: "local-backend",
+		stopCh:         make(chan struct{}),
+	}
+	claim := "UPDATE foghorn.staging_cleanup_queue.*SET leased_until.*FOR UPDATE SKIP LOCKED.*RETURNING"
+	settle := "DELETE FROM foghorn.staging_cleanup_queue WHERE object_key = \\$1 AND lease_token = \\$2"
+	cols := []string{"object_key", "attempts", "lease_token", "backend_id"}
+
+	mock.ExpectQuery(claim).WithArgs(int64((2 * time.Minute).Seconds()), 2).
+		WillReturnRows(sqlmock.NewRows(cols).AddRow("k1", 0, "tok-1", "local-backend").AddRow("k2", 0, "tok-2", "local-backend"))
+	mock.ExpectExec(settle).WithArgs("k1", "tok-1").WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectExec(settle).WithArgs("k2", "tok-2").WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectQuery(claim).WithArgs(int64((2 * time.Minute).Seconds()), 2).
+		WillReturnRows(sqlmock.NewRows(cols).AddRow("k3", 0, "tok-3", "local-backend"))
+	mock.ExpectExec(settle).WithArgs("k3", "tok-3").WillReturnResult(sqlmock.NewResult(0, 1))
+
+	j.drain()
+
+	if fmt.Sprint(del.deleted) != "[k1 k2 k3]" {
+		t.Fatalf("expected one drain to delete the whole backlog, got %v", del.deleted)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}

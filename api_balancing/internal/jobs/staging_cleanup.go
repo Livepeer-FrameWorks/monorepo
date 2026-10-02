@@ -11,8 +11,8 @@ import (
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 )
 
-// StagingCleanupJob drains foghorn.staging_cleanup_queue: it deletes each durably-enqueued object from S3,
-// removing the row on success and applying a capped backoff on failure. The queue holds every kind of freeze
+// StagingCleanupJob drains foghorn.staging_cleanup_queue: every interval it deletes all due, durably-enqueued
+// objects from S3 batch by batch, removing each row on success and applying a capped backoff on failure. The queue holds every kind of freeze
 // garbage — staging objects AND superseded/abandoned published CANDIDATE objects (media + co-located .dtsh) —
 // enqueued transactionally where the object becomes garbage (completion commit, stale-recovery reset, terminal
 // identity-clearing trigger), so a failed/crashed delete is retried from the durable row rather than leaking
@@ -125,22 +125,35 @@ func (j *StagingCleanupJob) drain() {
 	if j.db == nil || j.s3 == nil {
 		return
 	}
-	// Atomically LEASE a batch of due, unleased rows. The lease (+ FOR UPDATE SKIP LOCKED) means HA replicas
-	// never claim the same keys, so a delete is not issued to S3 twice concurrently.
-	claimCtx, claimCancel := context.WithTimeout(context.Background(), 15*time.Second)
-	items, err := j.claimBatch(claimCtx)
-	claimCancel()
-	if err != nil {
-		j.logger.WithError(err).Warn("Failed to claim staging cleanup batch")
-		return
-	}
-
+	// A pass keeps claiming batches until one comes back short, so throughput follows the enqueue rate instead
+	// of being capped at one batch per interval (a capped drain lets a backlog grow without bound and delays
+	// every newly enqueued object behind it). Each claimed row leaves the due set — deleted, or leased and then
+	// backed off on failure — so the loop ends once fewer than a batch of rows are due.
 	deleted := 0
-	for _, it := range items {
-		// Each item gets its OWN fresh, bounded context: one slow/stuck delete cannot starve the rest of the
-		// batch (head-of-line), and the failure-record UPDATE never runs on an already-cancelled context.
-		if j.settleOne(it) {
-			deleted++
+	for {
+		// Atomically LEASE a batch of due, unleased rows. The lease (+ FOR UPDATE SKIP LOCKED) means HA replicas
+		// never claim the same keys, so a delete is not issued to S3 twice concurrently.
+		claimCtx, claimCancel := context.WithTimeout(context.Background(), 15*time.Second)
+		items, err := j.claimBatch(claimCtx)
+		claimCancel()
+		if err != nil {
+			j.logger.WithError(err).Warn("Failed to claim staging cleanup batch")
+			break
+		}
+		for _, it := range items {
+			// Each item gets its OWN fresh, bounded context: one slow/stuck delete cannot starve the rest of the
+			// batch (head-of-line), and the failure-record UPDATE never runs on an already-cancelled context.
+			if j.settleOne(it) {
+				deleted++
+			}
+		}
+		if len(items) < j.batchSize {
+			break
+		}
+		select {
+		case <-j.stopCh:
+			return
+		default:
 		}
 	}
 	if deleted > 0 {

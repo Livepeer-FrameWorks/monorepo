@@ -153,5 +153,9 @@ storage_empty() {
       "thumbnails/$hash/" || return 1
   done
 }
-eventually 900 "all 20 clips' media and thumbnail S3 prefixes are empty" storage_empty
+# Objects known at deletion drain from the cleanup queue within about a minute. A .dtsh attempt dispatched
+# in the same instant as the delete can upload and promote after the deletion enqueued its keys; the
+# publication ledger collects those after its 15-minute grace, on a sweep that runs every 5 minutes, and the
+# cleanup queue drains them on its next 1-minute tick: at most about 21 minutes.
+eventually 1320 "all 20 clips' media and thumbnail S3 prefixes are empty" storage_empty
 finish
