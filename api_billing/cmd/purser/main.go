@@ -305,7 +305,7 @@ func main() {
 
 	// Start Livepeer deposit monitor (optional - requires ARBITRUM_RPC_ENDPOINT)
 	if cfg.LivepeerDepositMonitorEnabled {
-		depositMonitor, err := handlers.NewLivepeerDepositMonitor(logger, db, qmGRPCClient, cfg.ClusterID)
+		depositMonitor, err := handlers.NewLivepeerDepositMonitor(logger, db, qmGRPCClient)
 		if err != nil {
 			logger.WithError(err).Fatal("Invalid Livepeer deposit monitor configuration")
 		}

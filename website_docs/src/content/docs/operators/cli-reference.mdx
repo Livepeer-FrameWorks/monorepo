@@ -2833,15 +2833,15 @@ frameworks edge mist cores analyze ./edge1-mist-core.tar.gz --cache-dir ~/.cache
 
 ## Livepeer Commands
 
-Livepeer wallet reads come from Arbitrum, using the wallet address in Quartermaster discovery and the cluster's configured RPC. The gateway CLI listener remains loopback-only. Routine TicketBroker funding is Purser-owned; exceptional reserve/unlock/withdraw operations SSH to the selected manifest host and require a temporary maintenance-window flag.
+Livepeer wallet reads come from Arbitrum, using the wallet addresses that running gateways advertise in Quartermaster discovery and the cluster's configured RPC. Discovery queries every media cluster the manifest's `livepeer-gateway` services are assigned to. The gateway CLI listener remains loopback-only. Routine TicketBroker funding is Purser-owned; exceptional reserve/unlock/withdraw operations SSH to the selected manifest host and require a temporary maintenance-window flag.
 
 ### frameworks livepeer status
 
-Show the wallet's ETH balance and TicketBroker deposit, reserve, and withdraw round.
+Show each gateway wallet's ETH balance and TicketBroker deposit, reserve, and withdraw round.
 
 ```bash
 frameworks livepeer status
-frameworks livepeer status --cluster media-us-1
+frameworks livepeer status --cluster staging-media-us
 frameworks livepeer status --address 0x... --rpc https://arb1.example
 ```
 
@@ -2849,11 +2849,11 @@ frameworks livepeer status --address 0x... --rpc https://arb1.example
 
 - `--address` - Wallet address; overrides Quartermaster discovery
 - `--rpc` - Arbitrum JSON-RPC URL; overrides cluster shared env
-- `--cluster` - Cluster ID for discovery
+- `--cluster` - Gitops cluster that selects the manifest, or one `livepeer-gateway` cluster to narrow discovery to
 
 ### frameworks livepeer wallet address
 
-Show the gateway's ETH address.
+Show the gateway wallets' ETH addresses.
 
 ```bash
 frameworks livepeer wallet address
@@ -2861,7 +2861,7 @@ frameworks livepeer wallet address
 
 ### frameworks livepeer wallet balance
 
-Show the gateway's ETH balance.
+Show the gateway wallets' ETH balances.
 
 ```bash
 frameworks livepeer wallet balance

@@ -17,7 +17,10 @@ import (
 
 const TicketBrokerAddress = "0xa8bB618B1520E284046F3dFc448851A1Ff26e41B"
 
-var getSenderInfoSelector = common.Hex2Bytes("e7a47fa1")
+// getSenderInfoSelector is keccak256("getSenderInfo(address)")[:4]; the call
+// returns (deposit, withdrawRound) and (fundsRemaining, claimedInCurrentRound)
+// as four static words.
+var getSenderInfoSelector = common.Hex2Bytes("e1a589da")
 
 type SenderInfo struct {
 	Deposit               *big.Int

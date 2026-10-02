@@ -404,6 +404,7 @@ func serviceNativeVars(ctx context.Context, cfg ServiceRoleConfig, host inventor
 		if err != nil {
 			return nil, err
 		}
+		applyLivepeerNativeSecretEnv(envMap)
 	}
 	if cfg.ServiceName == "skipper" {
 		skipperFiles, err := skipperNativeSourceFiles(envMap)
@@ -596,6 +597,38 @@ func livepeerNativeFiles(env map[string]string, stateDirs []string) ([]map[strin
 	return files, keystorePath, keystoreDir, nil
 }
 
+// livepeerNativeSecretFlags are go-livepeer flags whose values can carry
+// credentials: RPC API keys, keystore passwords, auth headers, and URLs with
+// userinfo or token query strings. go-livepeer parses flags with
+// ff.WithEnvVarPrefix("LP"), so each one is read from LP_<flag name in upper
+// case> in the 0600 EnvironmentFile and never appears in the unit file or argv.
+var livepeerNativeSecretFlags = []struct {
+	envKey string
+	flag   string
+}{
+	{"eth_url", "ethUrl"},
+	{"eth_password", "ethPassword"},
+	{"remote_signer_url", "remoteSignerUrl"},
+	{"remote_signer_headers", "remoteSignerHeaders"},
+	{"remote_signer_webhook_url", "remoteSignerWebhookUrl"},
+	{"remote_signer_webhook_headers", "remoteSignerWebhookHeaders"},
+	{"auth_webhook_url", "authWebhookUrl"},
+	{"orch_webhook_url", "orchWebhookUrl"},
+}
+
+// applyLivepeerNativeSecretEnv sets LP_* env vars for the configured
+// secret-bearing flags. go-livepeer ignores an empty env var, so empty
+// settings are skipped like their argv counterparts.
+func applyLivepeerNativeSecretEnv(env map[string]string) {
+	for _, mapping := range livepeerNativeSecretFlags {
+		value := env[mapping.envKey]
+		if strings.TrimSpace(value) == "" {
+			continue
+		}
+		env["LP_"+strings.ToUpper(mapping.flag)] = value
+	}
+}
+
 func livepeerNativeArgs(serviceName string, env map[string]string, stateDirs []string) []string {
 	args := []string{}
 	switch serviceName {
@@ -625,12 +658,7 @@ func livepeerNativeArgs(serviceName string, env map[string]string, stateDirs []s
 		{"rtmp_addr", "rtmpAddr"},
 		{"enable_cli_tx_routes", "enableCliTxRoutes"},
 		{"max_total_ev", "maxTotalEV"},
-		{"remote_signer_url", "remoteSignerUrl"},
-		{"remote_signer_headers", "remoteSignerHeaders"},
-		{"remote_signer_webhook_url", "remoteSignerWebhookUrl"},
-		{"remote_signer_webhook_headers", "remoteSignerWebhookHeaders"},
 		{"remote_signer_allow_no_auth", "remoteSignerAllowNoAuth"},
-		{"auth_webhook_url", "authWebhookUrl"},
 		{"gateway_host", "gatewayHost"},
 		{"max_sessions", "maxSessions"},
 		{"max_price_per_unit", "maxPricePerUnit"},
@@ -639,12 +667,9 @@ func livepeerNativeArgs(serviceName string, env map[string]string, stateDirs []s
 		{"deposit_multiplier", "depositMultiplier"},
 		{"block_polling_interval", "blockPollingInterval"},
 		{"monitor", "monitor"},
-		{"eth_url", "ethUrl"},
 		{"eth_acct_addr", "ethAcctAddr"},
-		{"orch_webhook_url", "orchWebhookUrl"},
 		{"remote_discovery", "remoteDiscovery"},
 		{"keystore_path", "ethKeystorePath"},
-		{"eth_password", "ethPassword"},
 	} {
 		value, configured := env[mapping.envKey]
 		// rtmp_addr deliberately supports an explicit empty value to disable
@@ -841,6 +866,9 @@ func renderGoServiceUnit(serviceName string, args []string, supportsReload, sand
 	}
 	fmt.Fprintf(&b, "Restart=always\n")
 	fmt.Fprintf(&b, "RestartSec=5\n")
+	fmt.Fprintf(&b, "# Covers pkg/server's 65 s pre-stop readiness delay plus its 30 s shutdown\n")
+	fmt.Fprintf(&b, "# timeout (TestPreStopDelayCoversPollersAndFitsStopBudget).\n")
+	fmt.Fprintf(&b, "TimeoutStopSec=120s\n")
 	fmt.Fprintf(&b, "LimitNOFILE=1048576\n")
 	if sandbox {
 		fmt.Fprintf(&b, "NoNewPrivileges=yes\n")

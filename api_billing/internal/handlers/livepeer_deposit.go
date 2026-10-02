@@ -51,7 +51,6 @@ type LivepeerDepositMonitor struct {
 	topupAmountWei      *big.Int // How much ETH Purser sends per top-up (default 0.2 ETH)
 	dailyCapWei         *big.Int
 	pollInterval        time.Duration
-	clusterID           string
 	rpcEndpoint         string
 	receiptTimeout      time.Duration
 	receiptPollInterval time.Duration
@@ -84,16 +83,17 @@ type GatewayDepositState struct {
 }
 
 type livepeerServiceDiscoveryClient interface {
+	ListOfficialClusters(ctx context.Context) (*quartermasterpb.ListClustersResponse, error)
 	DiscoverServices(ctx context.Context, serviceType, clusterID string, pagination *commonpb.CursorPaginationRequest) (*quartermasterpb.ServiceDiscoveryResponse, error)
 }
 
 var fundDepositAndReserveForSelector = common.Hex2Bytes("989f789c")
 
-// NewLivepeerDepositMonitor creates a deposit monitor for clusterID from the
-// runtime configuration. When the monitor is enabled, invalid signing or RPC
+// NewLivepeerDepositMonitor creates a deposit monitor from the runtime
+// configuration. When the monitor is enabled, invalid signing or RPC
 // configuration is fatal at startup rather than silently degrading into
 // read-only monitoring.
-func NewLivepeerDepositMonitor(log logging.Logger, db *sql.DB, qm *qmclient.GRPCClient, clusterID string) (*LivepeerDepositMonitor, error) {
+func NewLivepeerDepositMonitor(log logging.Logger, db *sql.DB, qm *qmclient.GRPCClient) (*LivepeerDepositMonitor, error) {
 	rt := appconfig.Runtime()
 	privKey := rt.X402GasWalletPrivkey
 	address := rt.X402GasWalletAddress
@@ -193,7 +193,6 @@ func NewLivepeerDepositMonitor(log logging.Logger, db *sql.DB, qm *qmclient.GRPC
 		topupAmountWei:      topupWei,
 		dailyCapWei:         ethToWei(dailyCapETH),
 		pollInterval:        5 * time.Minute,
-		clusterID:           clusterID,
 		rpcEndpoint:         rpcEndpoint,
 		receiptTimeout:      2 * time.Minute,
 		receiptPollInterval: 2 * time.Second,
@@ -217,7 +216,6 @@ func (m *LivepeerDepositMonitor) Start(ctx context.Context) {
 	m.logger.WithFields(logging.Fields{
 		"deposit_low_threshold": m.depositLowThreshold,
 		"topup_wei":             m.topupAmountWei.String(),
-		"cluster_id":            m.clusterID,
 	}).Info("Starting Livepeer deposit monitor")
 
 	m.checkAll(ctx)
@@ -311,21 +309,38 @@ type discoveredGateway struct {
 }
 
 // discoverGatewayAddresses finds livepeer-gateway instances via Quartermaster
-// and resolves the shared wallet address from service instance metadata.
+// and resolves each wallet address from service instance metadata. Gateways
+// are pool-assigned to the media clusters they serve, which are not Purser's
+// own cluster, so every platform-official cluster is queried; a cluster whose
+// discovery fails is logged and skipped so the others are still monitored.
 func (m *LivepeerDepositMonitor) discoverGatewayAddresses(ctx context.Context) []discoveredGateway {
 	if m.qm == nil {
 		return nil
 	}
 
-	resp, err := m.qm.DiscoverServices(ctx, "livepeer-gateway", m.clusterID, nil)
+	clusters, err := m.qm.ListOfficialClusters(ctx)
 	if err != nil {
-		m.logger.WithError(err).Error("Failed to discover livepeer-gateway instances")
+		m.logger.WithError(err).Error("Failed to list official clusters for livepeer-gateway discovery")
 		return nil
+	}
+
+	var instances []*quartermasterpb.ServiceInstance
+	for _, cluster := range clusters.GetClusters() {
+		clusterID := cluster.GetClusterId()
+		if clusterID == "" {
+			continue
+		}
+		resp, discoverErr := m.qm.DiscoverServices(ctx, "livepeer-gateway", clusterID, nil)
+		if discoverErr != nil {
+			m.logger.WithError(discoverErr).WithField("cluster_id", clusterID).Error("Failed to discover livepeer-gateway instances")
+			continue
+		}
+		instances = append(instances, resp.GetInstances()...)
 	}
 
 	seen := make(map[string]bool)
 	var gateways []discoveredGateway
-	for _, inst := range resp.Instances {
+	for _, inst := range instances {
 		if inst.Status != "running" {
 			continue
 		}

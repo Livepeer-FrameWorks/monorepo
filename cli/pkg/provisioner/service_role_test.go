@@ -2,7 +2,9 @@ package provisioner
 
 import (
 	"context"
+	"maps"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 
@@ -630,12 +632,7 @@ func TestServiceNativeVarsBuildsLivepeerGatewayArgsAndStateDir(t *testing.T) {
 		"-rtmpAddr=",
 		"-enableCliTxRoutes=true",
 		"-maxTotalEV=9000000000000",
-		"-remoteSignerUrl=http://127.0.0.1:18016",
-		"-remoteSignerHeaders=Authorization: Bearer test",
-		"-remoteSignerWebhookUrl=https://auth.example",
-		"-remoteSignerWebhookHeaders=X-Test: yes",
 		"-remoteSignerAllowNoAuth=false",
-		"-authWebhookUrl=http://foghorn.internal:18008/webhooks/livepeer/auth",
 		"-gatewayHost=livepeer.media.example",
 		"-maxSessions=500",
 		"-maxPricePerUnit=1200",
@@ -644,14 +641,119 @@ func TestServiceNativeVarsBuildsLivepeerGatewayArgsAndStateDir(t *testing.T) {
 		"-depositMultiplier=1",
 		"-blockPollingInterval=20",
 		"-monitor=true",
-		"-ethUrl=https://arb.example",
 		"-ethAcctAddr=0xabc123",
-		"-orchWebhookUrl=https://orch.example",
 		"-remoteDiscovery=true",
 		"-ethKeystorePath=/etc/frameworks/livepeer-keystore",
 	})
+	for key, want := range map[string]string{
+		"LP_ETHURL":                     "https://arb.example",
+		"LP_REMOTESIGNERURL":            "http://127.0.0.1:18016",
+		"LP_REMOTESIGNERHEADERS":        "Authorization: Bearer test",
+		"LP_REMOTESIGNERWEBHOOKURL":     "https://auth.example",
+		"LP_REMOTESIGNERWEBHOOKHEADERS": "X-Test: yes",
+		"LP_AUTHWEBHOOKURL":             "http://foghorn.internal:18008/webhooks/livepeer/auth",
+		"LP_ORCHWEBHOOKURL":             "https://orch.example",
+	} {
+		if got := env[key]; got != want {
+			t.Fatalf("env %s = %v, want %q", key, got, want)
+		}
+	}
 	if got := vars["go_service_sandbox"]; got != true {
 		t.Fatalf("go_service_sandbox got %v, want true", got)
+	}
+}
+
+// go-livepeer reads every flag from LP_<FLAG NAME UPPERCASED> (ff.WithEnvVarPrefix("LP")),
+// so credentials travel in the 0600 env file instead of the world-readable
+// unit file and the process command line.
+func TestLivepeerNativeSecretsStayOutOfExecStart(t *testing.T) {
+	secrets := map[string]string{
+		"eth_url":                       "https://arb-mainnet.example/v2/rpc-api-key-111",
+		"eth_password":                  "keystore-password-222",
+		"remote_signer_url":             "https://signer:signer-pass-333@signer.example",
+		"remote_signer_headers":         "Authorization:Bearer signer-token-444",
+		"remote_signer_webhook_url":     "https://hook.example/auth?token=hook-token-555",
+		"remote_signer_webhook_headers": "Authorization:Bearer hook-token-666",
+		"auth_webhook_url":              "https://foghorn.example/webhooks/livepeer/auth?key=auth-key-777",
+		"orch_webhook_url":              "https://orch.example/discover?key=orch-key-888",
+	}
+	for _, serviceName := range []string{"livepeer-gateway", "livepeer-signer"} {
+		envVars := map[string]string{"network": "arbitrum-one-mainnet", "http_addr": "127.0.0.1:8935"}
+		maps.Copy(envVars, secrets)
+		stateDirs := []string{"/var/lib/frameworks/" + serviceName, "/var/lib/frameworks/" + serviceName + "/keystore"}
+		vars, err := serviceNativeVars(context.Background(), ServiceRoleConfig{
+			ServiceName: serviceName, DefaultPort: 8935, StateDirs: stateDirs,
+		}, inventory.Host{Name: "media-1"}, ServiceConfig{
+			Mode: "native", BinaryURL: "https://example.test/livepeer.tar.gz", EnvVars: envVars, Metadata: map[string]any{},
+		}, RoleBuildHelpers{})
+		if err != nil {
+			t.Fatalf("%s vars: %v", serviceName, err)
+		}
+		args := stringSliceFromAny(vars["go_service_args"])
+		unit := renderGoServiceUnit(serviceName, args, false, true, stateDirs)
+		envFile := renderGoServiceEnvFile(stringMapFromAny(vars["go_service_env"]))
+		for key, secret := range secrets {
+			if strings.Contains(unit, secret) || strings.Contains(strings.Join(args, " "), secret) {
+				t.Fatalf("%s: %s value leaked into ExecStart:\n%s", serviceName, key, unit)
+			}
+			if !strings.Contains(envFile, secret) {
+				t.Fatalf("%s: env file does not carry %s:\n%s", serviceName, key, envFile)
+			}
+		}
+		for _, envKey := range []string{"LP_ETHURL=", "LP_ETHPASSWORD=", "LP_REMOTESIGNERURL=", "LP_REMOTESIGNERHEADERS=", "LP_REMOTESIGNERWEBHOOKURL=", "LP_REMOTESIGNERWEBHOOKHEADERS=", "LP_AUTHWEBHOOKURL=", "LP_ORCHWEBHOOKURL="} {
+			if !strings.Contains(envFile, "\n"+envKey) && !strings.HasPrefix(envFile, envKey) {
+				t.Fatalf("%s: env file missing %s:\n%s", serviceName, envKey, envFile)
+			}
+		}
+		if !slices.Contains(args, "-network=arbitrum-one-mainnet") || !slices.Contains(args, "-httpAddr=127.0.0.1:8935") {
+			t.Fatalf("%s: non-secret flags must stay in argv: %v", serviceName, args)
+		}
+	}
+}
+
+// A rotated credential changes only the env file, which the fingerprint
+// covers, so provisioning restarts the gateway with the new value.
+func TestLivepeerSecretRotationChangesEnvFingerprint(t *testing.T) {
+	render := func(ethURL string) (string, string) {
+		vars, err := serviceNativeVars(context.Background(), ServiceRoleConfig{
+			ServiceName: "livepeer-gateway", DefaultPort: 8935,
+			StateDirs: []string{"/var/lib/frameworks/livepeer-gateway"},
+		}, inventory.Host{Name: "media-1"}, ServiceConfig{
+			Mode: "native", BinaryURL: "https://example.test/livepeer.tar.gz",
+			EnvVars: map[string]string{"eth_url": ethURL}, Metadata: map[string]any{},
+		}, RoleBuildHelpers{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		env := sha256Hex(renderGoServiceEnvFile(stringMapFromAny(vars["go_service_env"])))
+		unit := sha256Hex(renderGoServiceUnit("livepeer-gateway", stringSliceFromAny(vars["go_service_args"]), false, true, nil))
+		return env, unit
+	}
+	envA, unitA := render("https://arb.example/key-a")
+	envB, unitB := render("https://arb.example/key-b")
+	if envA == envB {
+		t.Fatal("rotating eth_url must change the env file fingerprint")
+	}
+	if unitA != unitB {
+		t.Fatal("rotating eth_url must not change the unit file")
+	}
+}
+
+// The fingerprint hashes renderGoServiceUnit against the unit go_service
+// renders on the host, so every literal line of service.j2 must appear in it.
+func TestRenderGoServiceUnitCoversTemplateLiterals(t *testing.T) {
+	template := readRepoFile(t, "ansible/collections/ansible_collections/frameworks/infra/roles/go_service/templates/service.j2")
+	unit := renderGoServiceUnit("livepeer-gateway", []string{"-gateway"}, true, true, []string{"/var/lib/frameworks/livepeer-gateway"})
+	for _, line := range strings.Split(template, "\n") {
+		if line == "" || strings.Contains(line, "{{") || strings.Contains(line, "{%") {
+			continue
+		}
+		if !strings.Contains(unit, line+"\n") {
+			t.Fatalf("renderGoServiceUnit is missing template line %q:\n%s", line, unit)
+		}
+	}
+	if !strings.HasSuffix(unit, "\n[Install]\nWantedBy=multi-user.target\n") {
+		t.Fatalf("unexpected unit tail:\n%s", unit)
 	}
 }
 
@@ -678,7 +780,6 @@ func TestServiceNativeVarsMaterializesLivepeerKeystoreFiles(t *testing.T) {
 		"-gateway",
 		"-dataDir=/var/lib/frameworks/livepeer-gateway",
 		"-ethKeystorePath=/var/lib/frameworks/livepeer-gateway/keystore/key.json",
-		"-ethPassword=/var/lib/frameworks/livepeer-gateway/eth-password",
 	})
 
 	files, ok := vars["go_service_files"].([]map[string]string)
@@ -709,6 +810,9 @@ func TestServiceNativeVarsMaterializesLivepeerKeystoreFiles(t *testing.T) {
 	}
 	if _, ok := env["LIVEPEER_ETH_KEYSTORE_PASSWORD"]; ok {
 		t.Fatal("LIVEPEER_ETH_KEYSTORE_PASSWORD should not remain in service env")
+	}
+	if got := env["LP_ETHPASSWORD"]; got != "/var/lib/frameworks/livepeer-gateway/eth-password" {
+		t.Fatalf("LP_ETHPASSWORD got %v, want the password file path", got)
 	}
 	if got := vars["go_service_livepeer_expected_keystore_path"]; got != "/var/lib/frameworks/livepeer-gateway/keystore/key.json" {
 		t.Fatalf("unexpected expected keystore path: %v", got)

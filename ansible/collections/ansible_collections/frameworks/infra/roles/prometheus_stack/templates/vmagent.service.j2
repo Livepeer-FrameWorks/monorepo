@@ -8,6 +8,9 @@ User={{ prometheus_stack_user }}
 Group={{ prometheus_stack_group }}
 EnvironmentFile={{ vmagent_env_path }}
 {% if vmagent_remote_write_basic_auth_username | length > 0 %}
+# -envflag.enable reads the remote-write basic-auth secret from the
+# EnvironmentFile (remoteWrite_basicAuth_<flag>), so it never appears in the
+# process command line.
 ExecStart={{ vmagent_bin }} \
   -httpListenAddr=:{{ vmagent_port }} \
   -promscrape.config={{ vmagent_config_path }} \
@@ -15,7 +18,7 @@ ExecStart={{ vmagent_bin }} \
   -remoteWrite.maxDiskUsagePerURL=1GB \
   -remoteWrite.url=${VMAGENT_REMOTE_WRITE_URL} \
   -remoteWrite.basicAuth.username=${VMAGENT_REMOTE_WRITE_BASIC_AUTH_USERNAME} \
-  -remoteWrite.basicAuth.password=${VMAGENT_REMOTE_WRITE_BASIC_AUTH_PASSWORD}
+  -envflag.enable
 {% else %}
 ExecStart={{ vmagent_bin }} \
   -httpListenAddr=:{{ vmagent_port }} \

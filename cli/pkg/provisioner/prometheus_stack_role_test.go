@@ -264,6 +264,24 @@ func TestPrometheusStackVMAgentCapsRemoteWriteBuffer(t *testing.T) {
 	}
 }
 
+// systemd expands ${VAR} references in ExecStart into the process argv, which
+// any local user can read; vmagent reads the remote-write password from its
+// env file through -envflag.enable instead.
+func TestPrometheusStackVMAgentPasswordStaysOutOfArgv(t *testing.T) {
+	role := "ansible/collections/ansible_collections/frameworks/infra/roles/prometheus_stack/"
+	unit := readRepoFile(t, role+"templates/vmagent.service.j2")
+	if strings.Contains(unit, "PASSWORD") || strings.Contains(unit, "basicAuth.password") {
+		t.Fatalf("vmagent unit passes the remote-write password on the command line:\n%s", unit)
+	}
+	if !strings.Contains(unit, "-remoteWrite.basicAuth.username=${VMAGENT_REMOTE_WRITE_BASIC_AUTH_USERNAME} \\\n  -envflag.enable\n") {
+		t.Fatalf("vmagent basic-auth unit must read flags from its env file:\n%s", unit)
+	}
+	env := readRepoFile(t, role+"templates/vmagent.env.j2")
+	if !strings.Contains(env, "remoteWrite_basicAuth_password={{ (vmagent_remote_write_basic_auth_password | string | replace('\\r', '') | replace('\\n', '\\\\n')) | quote }}\n") {
+		t.Fatalf("vmagent env file must carry remoteWrite_basicAuth_password:\n%s", env)
+	}
+}
+
 // A config change reaches vmagent, vmalert, and vmauth by SIGHUP after the
 // binary's -dryRun accepted it; only a new binary or unit restarts them.
 func TestPrometheusStackReloadsValidatedConfigs(t *testing.T) {

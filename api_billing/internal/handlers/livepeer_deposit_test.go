@@ -34,7 +34,7 @@ func TestNewLivepeerDepositMonitorValidatesFundingIdentity(t *testing.T) {
 	address := crypto.PubkeyToAddress(key.PublicKey).Hex()
 	appconfigtest.Set(t, "X402_GAS_WALLET_ADDRESS", address)
 
-	monitor, err := NewLivepeerDepositMonitor(logging.NewLogger(), nil, nil, "")
+	monitor, err := NewLivepeerDepositMonitor(logging.NewLogger(), nil, nil)
 	if err != nil {
 		t.Fatalf("valid funding identity rejected: %v", err)
 	}
@@ -43,12 +43,12 @@ func TestNewLivepeerDepositMonitorValidatesFundingIdentity(t *testing.T) {
 	}
 
 	appconfigtest.Set(t, "X402_GAS_WALLET_ADDRESS", "0x1111111111111111111111111111111111111111")
-	if _, err := NewLivepeerDepositMonitor(logging.NewLogger(), nil, nil, ""); err == nil || !strings.Contains(err.Error(), "does not match") {
+	if _, err := NewLivepeerDepositMonitor(logging.NewLogger(), nil, nil); err == nil || !strings.Contains(err.Error(), "does not match") {
 		t.Fatalf("mismatched funding identity accepted: %v", err)
 	}
 
 	appconfigtest.Set(t, "X402_GAS_WALLET_PRIVKEY", "")
-	if _, err := NewLivepeerDepositMonitor(logging.NewLogger(), nil, nil, ""); err == nil {
+	if _, err := NewLivepeerDepositMonitor(logging.NewLogger(), nil, nil); err == nil {
 		t.Fatal("missing funding private key accepted")
 	}
 }
@@ -185,13 +185,134 @@ func TestWeiToETH_Roundtrip(t *testing.T) {
 	}
 }
 
+// fakeLivepeerServiceDiscoveryClient answers pool-assigned discovery like
+// Quartermaster: a gateway is only visible under a cluster it is assigned to.
+// With byCluster unset, resp is served for the single official cluster
+// "media-a".
 type fakeLivepeerServiceDiscoveryClient struct {
-	resp *quartermasterpb.ServiceDiscoveryResponse
-	err  error
+	resp      *quartermasterpb.ServiceDiscoveryResponse
+	err       error
+	clusters  []string
+	byCluster map[string]*quartermasterpb.ServiceDiscoveryResponse
+	errFor    map[string]error
+	queried   []string
 }
 
-func (f *fakeLivepeerServiceDiscoveryClient) DiscoverServices(_ context.Context, _, _ string, _ *commonpb.CursorPaginationRequest) (*quartermasterpb.ServiceDiscoveryResponse, error) {
+func (f *fakeLivepeerServiceDiscoveryClient) ListOfficialClusters(context.Context) (*quartermasterpb.ListClustersResponse, error) {
+	ids := f.clusters
+	if len(ids) == 0 {
+		ids = []string{"media-a"}
+	}
+	out := &quartermasterpb.ListClustersResponse{}
+	for _, id := range ids {
+		out.Clusters = append(out.Clusters, &quartermasterpb.InfrastructureCluster{ClusterId: id})
+	}
+	return out, nil
+}
+
+func (f *fakeLivepeerServiceDiscoveryClient) DiscoverServices(_ context.Context, serviceType, clusterID string, _ *commonpb.CursorPaginationRequest) (*quartermasterpb.ServiceDiscoveryResponse, error) {
+	f.queried = append(f.queried, clusterID)
+	if serviceType != "livepeer-gateway" {
+		return nil, fmt.Errorf("unexpected service type %q", serviceType)
+	}
+	if clusterID == "" {
+		return nil, fmt.Errorf("cluster_id required for pool-assigned service discovery")
+	}
+	if err := f.errFor[clusterID]; err != nil {
+		return nil, err
+	}
+	if f.byCluster != nil {
+		if resp := f.byCluster[clusterID]; resp != nil {
+			return resp, nil
+		}
+		return &quartermasterpb.ServiceDiscoveryResponse{}, nil
+	}
 	return f.resp, f.err
+}
+
+// Gateways are assigned to the media clusters, not to Purser's own control
+// cluster, so discovery must cover every platform-official cluster.
+func TestDiscoverGatewayAddressesCoversEveryOfficialCluster(t *testing.T) {
+	walletEU := "0x" + strings.Repeat("ab", 20)
+	walletUS := "0x" + strings.Repeat("cd", 20)
+	gateway := func(host, wallet string) *quartermasterpb.ServiceDiscoveryResponse {
+		return &quartermasterpb.ServiceDiscoveryResponse{Instances: []*quartermasterpb.ServiceInstance{{
+			Status: "running", Host: stringPtr(host), Port: int32Ptr(8935),
+			Metadata: map[string]string{"wallet_address": wallet},
+		}}}
+	}
+	qm := &fakeLivepeerServiceDiscoveryClient{
+		clusters: []string{"staging-core", "staging-media-eu", "staging-media-us", "staging-media-broken"},
+		byCluster: map[string]*quartermasterpb.ServiceDiscoveryResponse{
+			"staging-media-eu": gateway("10.0.0.1", walletEU),
+			"staging-media-us": gateway("10.0.1.1", walletUS),
+		},
+		errFor: map[string]error{"staging-media-broken": fmt.Errorf("unavailable")},
+	}
+	monitor := &LivepeerDepositMonitor{logger: logging.NewLogger(), qm: qm}
+
+	gateways := monitor.discoverGatewayAddresses(context.Background())
+	got := make([]string, 0, len(gateways))
+	for _, gw := range gateways {
+		got = append(got, gw.address)
+	}
+	if strings.Join(got, ",") != walletEU+","+walletUS {
+		t.Fatalf("discovered wallets %v, want EU and US gateway wallets (queried clusters %v)", got, qm.queried)
+	}
+	if strings.Join(qm.queried, ",") != "staging-core,staging-media-eu,staging-media-us,staging-media-broken" {
+		t.Fatalf("queried clusters %v, want every official cluster", qm.queried)
+	}
+}
+
+// Arbitrum reverts calls to an unknown selector, so the monitor only reads a
+// sender when it calls TicketBroker.getSenderInfo(address) (0xe1a589da).
+func TestQueryGatewayStateReadsTicketBrokerSenderInfo(t *testing.T) {
+	gateway := "0x8c9f0152000000000000000000000000000e3e6f"
+	milliETH := new(big.Int).Exp(big.NewInt(10), big.NewInt(15), nil)
+	word := func(v *big.Int) string { return fmt.Sprintf("%064x", v) }
+	senderInfo := "0x" + word(new(big.Int).Mul(milliETH, big.NewInt(50))) + word(big.NewInt(0)) +
+		word(new(big.Int).Mul(milliETH, big.NewInt(120))) + word(big.NewInt(0))
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req struct {
+			Method string            `json:"method"`
+			Params []json.RawMessage `json:"params"`
+		}
+		if decodeErr := json.NewDecoder(r.Body).Decode(&req); decodeErr != nil {
+			t.Errorf("decode RPC request: %v", decodeErr)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		switch req.Method {
+		case "eth_getBalance":
+			_, _ = w.Write([]byte(`{"jsonrpc":"2.0","id":1,"result":"0xde0b6b3a7640000"}`))
+		case "eth_call":
+			var call map[string]string
+			if err := json.Unmarshal(req.Params[0], &call); err != nil {
+				t.Errorf("decode eth_call: %v", err)
+				return
+			}
+			if !strings.HasPrefix(call["data"], "0xe1a589da") {
+				_, _ = w.Write([]byte(`{"jsonrpc":"2.0","id":1,"error":{"code":-32000,"message":"execution reverted"}}`))
+				return
+			}
+			_, _ = fmt.Fprintf(w, `{"jsonrpc":"2.0","id":1,"result":%q}`, senderInfo)
+		default:
+			t.Errorf("unexpected RPC method %q", req.Method)
+		}
+	}))
+	defer server.Close()
+
+	monitor := &LivepeerDepositMonitor{logger: logging.NewLogger(), rpcEndpoint: server.URL, depositLowThreshold: 0.1, reserveLowThreshold: 0.1}
+	state, err := monitor.queryGatewayState(context.Background(), gateway)
+	if err != nil {
+		t.Fatalf("queryGatewayState: %v", err)
+	}
+	if state.DepositETH != 0.05 || state.ReserveETH != 0.12 || state.BalanceETH != 1 {
+		t.Fatalf("state = %+v, want deposit 0.05 reserve 0.12 balance 1", state)
+	}
+	if !state.DepositLow || state.ReserveLow {
+		t.Fatalf("low flags = deposit %v reserve %v, want deposit low only", state.DepositLow, state.ReserveLow)
+	}
 }
 
 func TestDiscoverGatewayAddressesUsesMetadataAndDeduplicatesWallets(t *testing.T) {

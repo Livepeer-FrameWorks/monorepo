@@ -10,7 +10,20 @@ import (
 	"testing"
 
 	"github.com/ethereum/go-ethereum/common"
+	"github.com/ethereum/go-ethereum/crypto"
 )
+
+// The TicketBroker selector must match the deployed contract ABI
+// (go-livepeer eth/contracts/ticketBroker.go binds getSenderInfo to 0xe1a589da).
+func TestGetSenderInfoSelectorMatchesSignature(t *testing.T) {
+	want := crypto.Keccak256([]byte("getSenderInfo(address)"))[:4]
+	if hex.EncodeToString(want) != "e1a589da" {
+		t.Fatalf("keccak(getSenderInfo(address))[:4] = %x, want e1a589da", want)
+	}
+	if hex.EncodeToString(getSenderInfoSelector) != hex.EncodeToString(want) {
+		t.Fatalf("getSenderInfoSelector = %x, want %x", getSenderInfoSelector, want)
+	}
+}
 
 func TestClientReadsBalanceAndSenderInfo(t *testing.T) {
 	address := "0x1111111111111111111111111111111111111111"
@@ -31,7 +44,7 @@ func TestClientReadsBalanceAndSenderInfo(t *testing.T) {
 			if err := json.Unmarshal(req.Params[0], &call); err != nil {
 				t.Fatal(err)
 			}
-			wantData := "0x" + hex.EncodeToString(append(append([]byte{}, getSenderInfoSelector...), common.LeftPadBytes(common.HexToAddress(address).Bytes(), 32)...))
+			wantData := "0xe1a589da" + hex.EncodeToString(common.LeftPadBytes(common.HexToAddress(address).Bytes(), 32))
 			if call["to"] != TicketBrokerAddress || call["data"] != wantData {
 				t.Fatalf("unexpected eth_call: %#v", call)
 			}

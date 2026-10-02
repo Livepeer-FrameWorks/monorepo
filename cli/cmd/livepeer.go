@@ -14,9 +14,11 @@ import (
 	"time"
 
 	"frameworks/cli/internal/ux"
+	"frameworks/cli/pkg/clusterderive"
 	"frameworks/cli/pkg/inventory"
 	"frameworks/cli/pkg/ssh"
 	livepeerchain "github.com/Livepeer-FrameWorks/monorepo/pkg/livepeer/chain"
+	commonpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/common"
 	quartermasterpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/quartermaster"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/servicedefs"
 
@@ -28,7 +30,7 @@ func newLivepeerCmd() *cobra.Command {
 	lp.PersistentFlags().String("address", "", "gateway wallet address (overrides discovery)")
 	lp.PersistentFlags().String("rpc", "", "Arbitrum JSON-RPC URL (overrides cluster shared env)")
 	lp.PersistentFlags().String("host", "", "gateway manifest host for an exceptional mutation")
-	lp.PersistentFlags().String("cluster", "", "cluster ID for discovery or manifest selection")
+	lp.PersistentFlags().String("cluster", "", "gitops cluster for manifest selection, or one livepeer-gateway cluster to narrow discovery")
 	lp.PersistentFlags().String("manifest", "", "path to a single cluster.yaml")
 	lp.PersistentFlags().String("gitops-dir", "", "path to a local gitops repository")
 	lp.PersistentFlags().String("github-repo", "", "GitHub repository containing the cluster manifest")
@@ -43,48 +45,145 @@ func newLivepeerCmd() *cobra.Command {
 	return lp
 }
 
-func discoverLivepeerWalletAddress(cmd *cobra.Command) (string, error) {
+// livepeerManifest resolves the cluster manifest at most once per command and
+// only when discovery or RPC resolution needs it.
+type livepeerManifest struct {
+	cmd *cobra.Command
+	rc  *resolvedCluster
+}
+
+func (l *livepeerManifest) get() (*resolvedCluster, error) {
+	if l.rc != nil {
+		return l.rc, nil
+	}
+	rc, err := resolveClusterManifest(l.cmd)
+	if err != nil {
+		return nil, err
+	}
+	l.rc = rc
+	return rc, nil
+}
+
+func (l *livepeerManifest) cleanup() {
+	if l.rc != nil && l.rc.Cleanup != nil {
+		l.rc.Cleanup()
+	}
+}
+
+// livepeerWallet is one gateway wallet and the Quartermaster clusters whose
+// running gateways advertise it.
+type livepeerWallet struct {
+	Address    string
+	ClusterIDs []string
+}
+
+type livepeerDiscoveryClient interface {
+	DiscoverServices(ctx context.Context, serviceType, clusterID string, pagination *commonpb.CursorPaginationRequest) (*quartermasterpb.ServiceDiscoveryResponse, error)
+}
+
+// livepeerGatewayClusterIDs lists the Quartermaster clusters the manifest's
+// enabled livepeer-gateway services are assigned to.
+func livepeerGatewayClusterIDs(manifest *inventory.Manifest) []string {
+	var ids []string
+	for _, cfg := range enabledClusterAssignedManifestServices(manifest, "livepeer-gateway") {
+		ids = append(ids, clusterderive.LogicalServiceClusterIDs(cfg.name, cfg.svc, manifest)...)
+	}
+	return sortedUniqueStrings(ids)
+}
+
+// livepeerDiscoveryClusterIDs returns the Quartermaster clusters to discover
+// gateways in. --cluster narrows discovery only when it names one of the
+// gateway clusters; any other value is the gitops cluster that selected the
+// manifest, so every gateway cluster is used.
+func livepeerDiscoveryClusterIDs(manifest *inventory.Manifest, clusterFlag string) ([]string, error) {
+	ids := livepeerGatewayClusterIDs(manifest)
+	if len(ids) == 0 {
+		return nil, fmt.Errorf("manifest has no enabled livepeer-gateway service assigned to a cluster (or pass --address)")
+	}
+	if flag := strings.TrimSpace(clusterFlag); flag != "" && slices.Contains(ids, flag) {
+		return []string{flag}, nil
+	}
+	return ids, nil
+}
+
+// livepeerGatewayMatchesClusterFlag reports whether a gateway service is
+// selected by --cluster, which narrows only when it names a gateway cluster.
+func livepeerGatewayMatchesClusterFlag(manifest *inventory.Manifest, name string, svc inventory.ServiceConfig, clusterFlag string) bool {
+	flag := strings.TrimSpace(clusterFlag)
+	if flag == "" || !slices.Contains(livepeerGatewayClusterIDs(manifest), flag) {
+		return true
+	}
+	return slices.Contains(clusterderive.LogicalServiceClusterIDs(name, svc, manifest), flag)
+}
+
+// discoverLivepeerWallets collects the distinct wallet addresses advertised by
+// running gateways across clusterIDs, in first-seen order.
+func discoverLivepeerWallets(ctx context.Context, client livepeerDiscoveryClient, clusterIDs []string) ([]livepeerWallet, error) {
+	var wallets []livepeerWallet
+	index := map[string]int{}
+	for _, clusterID := range clusterIDs {
+		resp, err := client.DiscoverServices(ctx, "livepeer-gateway", clusterID, nil)
+		if err != nil {
+			return nil, fmt.Errorf("discover livepeer-gateway in cluster %s: %w", clusterID, err)
+		}
+		for _, instance := range resp.GetInstances() {
+			if instance.GetStatus() != "running" {
+				continue
+			}
+			address := strings.TrimSpace(instance.GetMetadata()[servicedefs.LivepeerGatewayMetadataWalletAddress])
+			if address == "" {
+				continue
+			}
+			key := strings.ToLower(address)
+			i, ok := index[key]
+			if !ok {
+				i = len(wallets)
+				index[key] = i
+				wallets = append(wallets, livepeerWallet{Address: address})
+			}
+			if !slices.Contains(wallets[i].ClusterIDs, clusterID) {
+				wallets[i].ClusterIDs = append(wallets[i].ClusterIDs, clusterID)
+			}
+		}
+	}
+	if len(wallets) == 0 {
+		return nil, fmt.Errorf("no running livepeer-gateway with wallet_address metadata found in clusters %s (or pass --address)", strings.Join(clusterIDs, ", "))
+	}
+	return wallets, nil
+}
+
+func resolveLivepeerWallets(cmd *cobra.Command, manifest *livepeerManifest) ([]livepeerWallet, error) {
 	explicit, err := cmd.Flags().GetString("address")
 	if err != nil {
-		return "", err
+		return nil, err
 	}
 	if strings.TrimSpace(explicit) != "" {
-		return strings.TrimSpace(explicit), nil
+		return []livepeerWallet{{Address: strings.TrimSpace(explicit)}}, nil
 	}
-	clusterID, err := cmd.Flags().GetString("cluster")
+	clusterFlag, err := cmd.Flags().GetString("cluster")
 	if err != nil {
-		return "", err
+		return nil, err
+	}
+	rc, err := manifest.get()
+	if err != nil {
+		return nil, fmt.Errorf("resolve livepeer-gateway clusters (or pass --address): %w", err)
+	}
+	clusterIDs, err := livepeerDiscoveryClusterIDs(rc.Manifest, clusterFlag)
+	if err != nil {
+		return nil, err
 	}
 	qc, _, cleanup, err := newQMGRPCClientFromContext(cmd.Context())
 	if err != nil {
-		return "", fmt.Errorf("discover Livepeer wallet (or pass --address): %w", err)
+		return nil, fmt.Errorf("discover Livepeer wallet (or pass --address): %w", err)
 	}
 	defer cleanup()
 	defer func() { _ = qc.Close() }()
 	ctx, cancel := context.WithTimeout(cmd.Context(), 10*time.Second)
 	defer cancel()
-	resp, err := qc.DiscoverServices(ctx, "livepeer-gateway", clusterID, nil)
-	if err != nil {
-		return "", fmt.Errorf("discover Livepeer wallet: %w", err)
-	}
-	return livepeerWalletFromDiscovery(resp)
+	return discoverLivepeerWallets(ctx, qc, clusterIDs)
 }
 
-func livepeerWalletFromDiscovery(resp *quartermasterpb.ServiceDiscoveryResponse) (string, error) {
-	if resp != nil {
-		for _, instance := range resp.GetInstances() {
-			if instance.GetStatus() != "running" {
-				continue
-			}
-			if wallet := strings.TrimSpace(instance.GetMetadata()[servicedefs.LivepeerGatewayMetadataWalletAddress]); wallet != "" {
-				return wallet, nil
-			}
-		}
-	}
-	return "", fmt.Errorf("no running livepeer-gateway with wallet_address metadata found (or pass --address)")
-}
-
-func resolveLivepeerRPC(cmd *cobra.Command) (string, error) {
+func resolveLivepeerRPC(cmd *cobra.Command, manifest *livepeerManifest) (string, error) {
 	explicit, err := cmd.Flags().GetString("rpc")
 	if err != nil {
 		return "", err
@@ -92,11 +191,10 @@ func resolveLivepeerRPC(cmd *cobra.Command) (string, error) {
 	if strings.TrimSpace(explicit) != "" {
 		return strings.TrimSpace(explicit), nil
 	}
-	rc, err := resolveClusterManifest(cmd)
+	rc, err := manifest.get()
 	if err != nil {
 		return "", fmt.Errorf("resolve Arbitrum RPC (or pass --rpc): %w", err)
 	}
-	defer rc.Cleanup()
 	env, err := rc.PreparedSharedEnv()
 	if err != nil {
 		return "", fmt.Errorf("load cluster shared env: %w", err)
@@ -115,62 +213,82 @@ func livepeerRPCFromEnv(env map[string]string) (string, error) {
 
 func newLivepeerStatusCmd() *cobra.Command {
 	return &cobra.Command{Use: "status", Short: "Read wallet, deposit, and reserve state from Arbitrum", RunE: func(cmd *cobra.Command, _ []string) error {
-		address, err := discoverLivepeerWalletAddress(cmd)
+		manifest := &livepeerManifest{cmd: cmd}
+		defer manifest.cleanup()
+		wallets, err := resolveLivepeerWallets(cmd, manifest)
 		if err != nil {
 			return err
 		}
-		rpc, err := resolveLivepeerRPC(cmd)
+		rpc, err := resolveLivepeerRPC(cmd, manifest)
 		if err != nil {
 			return err
 		}
 		ctx, cancel := context.WithTimeout(cmd.Context(), 15*time.Second)
 		defer cancel()
 		client := livepeerchain.NewClient(rpc, nil)
-		balance, err := client.ETHBalance(ctx, address)
-		if err != nil {
-			return fmt.Errorf("read ETH balance: %w", err)
-		}
-		sender, err := client.GetSenderInfo(ctx, address)
-		if err != nil {
-			return fmt.Errorf("read TicketBroker sender info: %w", err)
-		}
 		out := cmd.OutOrStdout()
-		ux.Heading(out, "Livepeer gateway wallet")
-		fmt.Fprintf(out, "Address:        %s\n", address)
-		fmt.Fprintf(out, "ETH Balance:    %s ETH\n", livepeerchain.WeiToETH(balance))
-		fmt.Fprintf(out, "Deposit:        %s ETH\n", livepeerchain.WeiToETH(sender.Deposit))
-		fmt.Fprintf(out, "Reserve:        %s ETH\n", livepeerchain.WeiToETH(sender.Reserve))
-		fmt.Fprintf(out, "Withdraw Round: %s\n", sender.WithdrawRound)
+		for _, wallet := range wallets {
+			balance, err := client.ETHBalance(ctx, wallet.Address)
+			if err != nil {
+				return fmt.Errorf("read ETH balance of %s: %w", wallet.Address, err)
+			}
+			sender, err := client.GetSenderInfo(ctx, wallet.Address)
+			if err != nil {
+				return fmt.Errorf("read TicketBroker sender info of %s: %w", wallet.Address, err)
+			}
+			ux.Heading(out, "Livepeer gateway wallet")
+			fmt.Fprintf(out, "Address:        %s\n", wallet.Address)
+			if len(wallet.ClusterIDs) > 0 {
+				fmt.Fprintf(out, "Clusters:       %s\n", strings.Join(wallet.ClusterIDs, ", "))
+			}
+			fmt.Fprintf(out, "ETH Balance:    %s ETH\n", livepeerchain.WeiToETH(balance))
+			fmt.Fprintf(out, "Deposit:        %s ETH\n", livepeerchain.WeiToETH(sender.Deposit))
+			fmt.Fprintf(out, "Reserve:        %s ETH\n", livepeerchain.WeiToETH(sender.Reserve))
+			fmt.Fprintf(out, "Withdraw Round: %s\n", sender.WithdrawRound)
+		}
 		return nil
 	}}
 }
 
 func newLivepeerWalletCmd() *cobra.Command {
 	wallet := &cobra.Command{Use: "wallet", Short: "Read gateway wallet information from discovery and Arbitrum"}
-	wallet.AddCommand(&cobra.Command{Use: "address", Short: "Show the discovered gateway wallet address", RunE: func(cmd *cobra.Command, _ []string) error {
-		address, err := discoverLivepeerWalletAddress(cmd)
+	wallet.AddCommand(&cobra.Command{Use: "address", Short: "Show the discovered gateway wallet addresses", RunE: func(cmd *cobra.Command, _ []string) error {
+		manifest := &livepeerManifest{cmd: cmd}
+		defer manifest.cleanup()
+		wallets, err := resolveLivepeerWallets(cmd, manifest)
 		if err != nil {
 			return err
 		}
-		fmt.Fprintln(cmd.OutOrStdout(), address)
+		for _, wallet := range wallets {
+			fmt.Fprintln(cmd.OutOrStdout(), wallet.Address)
+		}
 		return nil
 	}})
-	wallet.AddCommand(&cobra.Command{Use: "balance", Short: "Read the gateway wallet ETH balance from Arbitrum", RunE: func(cmd *cobra.Command, _ []string) error {
-		address, err := discoverLivepeerWalletAddress(cmd)
+	wallet.AddCommand(&cobra.Command{Use: "balance", Short: "Read the gateway wallet ETH balances from Arbitrum", RunE: func(cmd *cobra.Command, _ []string) error {
+		manifest := &livepeerManifest{cmd: cmd}
+		defer manifest.cleanup()
+		wallets, err := resolveLivepeerWallets(cmd, manifest)
 		if err != nil {
 			return err
 		}
-		rpc, err := resolveLivepeerRPC(cmd)
+		rpc, err := resolveLivepeerRPC(cmd, manifest)
 		if err != nil {
 			return err
 		}
 		ctx, cancel := context.WithTimeout(cmd.Context(), 15*time.Second)
 		defer cancel()
-		balance, err := livepeerchain.NewClient(rpc, nil).ETHBalance(ctx, address)
-		if err != nil {
-			return err
+		client := livepeerchain.NewClient(rpc, nil)
+		for _, wallet := range wallets {
+			balance, err := client.ETHBalance(ctx, wallet.Address)
+			if err != nil {
+				return fmt.Errorf("read ETH balance of %s: %w", wallet.Address, err)
+			}
+			if len(wallets) == 1 {
+				fmt.Fprintf(cmd.OutOrStdout(), "%s ETH\n", livepeerchain.WeiToETH(balance))
+				continue
+			}
+			fmt.Fprintf(cmd.OutOrStdout(), "%s %s ETH\n", wallet.Address, livepeerchain.WeiToETH(balance))
 		}
-		fmt.Fprintf(cmd.OutOrStdout(), "%s ETH\n", livepeerchain.WeiToETH(balance))
 		return nil
 	}})
 	return wallet
@@ -233,7 +351,7 @@ func resolveLivepeerMutationTarget(cmd *cobra.Command) (livepeerMutationTarget, 
 		if !svc.Enabled || !serviceDeployMatches(name, svc, "livepeer-gateway") {
 			continue
 		}
-		if clusterFlag != "" && svc.Cluster != clusterFlag && !slices.Contains(svc.Clusters, clusterFlag) {
+		if !livepeerGatewayMatchesClusterFlag(rc.Manifest, name, svc, clusterFlag) {
 			continue
 		}
 		hosts := serviceHosts(svc)
