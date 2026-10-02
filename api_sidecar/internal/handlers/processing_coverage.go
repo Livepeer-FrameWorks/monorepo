@@ -16,12 +16,13 @@ import (
 const processingResultRetryable = "retryable"
 
 // recordingEndRetryable reports whether a RECORDING_END exit reason names a
-// failure that a new attempt avoids: a producer replaced after the recording
-// header froze its track list (a Livepeer to local fallback mid-job) leaves
-// this recording unfinishable, while a new attempt declares the new tracks
-// from the start.
+// failure that a new attempt avoids (mist.IsRetryableExitReason): an ending
+// caused by the node, such as a lost stream buffer (SHM_LOST) or a producer
+// replaced after the recording header froze its track list
+// (PROCESS_TRACKS_CHANGED), rather than by the media. This matches a recording
+// output that ends without reporting its end, which is retryable as well.
 func recordingEndRetryable(evt ProcessingRecordingEndEvent) bool {
-	return strings.TrimSpace(evt.ExitReason) == mist.ExitReasonProcessTracksChanged
+	return mist.IsRetryableExitReason(evt.ExitReason)
 }
 
 // renditionStartToleranceMs is how far a rendition may start after its

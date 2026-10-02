@@ -949,3 +949,25 @@ func TestParseTracksFromJSONWrittenSpan(t *testing.T) {
 		t.Fatalf("written span not parsed apart from the buffer window: %+v", tr)
 	}
 }
+
+func TestIsRetryableExitReason(t *testing.T) {
+	retryable := []string{
+		"SHM_LOST", "WRITE_FAILURE", "EXEC_FAILURE", "OUT_OF_MEMORY", "INTERNAL_ERROR",
+		"SEGFAULT", "SIGABRT", "SIGBUS", "SIGFPE", "SIGILL", "SIGTRAP",
+		ExitReasonProcessTracksChanged, "UNKNOWN", "", "SOME_FUTURE_REASON", " SHM_LOST ",
+	}
+	for _, reason := range retryable {
+		if !IsRetryableExitReason(reason) {
+			t.Errorf("exit reason %q must be retryable", reason)
+		}
+	}
+	deterministic := []string{
+		"FORMAT_SPECIFIC", "UNSUPPORTED", "READ_START_FAILURE", "PROCESS_SPECIFIC", "TRIGGER", "UNAUTHORISED",
+		"CLEAN_EOF", "CLEAN_INTENDED_STOP", "CLEAN_SIGNAL",
+	}
+	for _, reason := range deterministic {
+		if IsRetryableExitReason(reason) {
+			t.Errorf("exit reason %q must not be retryable", reason)
+		}
+	}
+}

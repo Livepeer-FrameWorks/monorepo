@@ -95,6 +95,46 @@ func IsCleanExitReason(reason string) bool {
 	return strings.HasPrefix(strings.TrimSpace(reason), CleanExitReasonPrefix)
 }
 
+// deterministicExitReasons are the abnormal machine exit reasons (lib/defines.h
+// ER_*) that Mist logs for a property of the input or of the job's settings,
+// so a fresh attempt on the same input ends the same way:
+//   - FORMAT_SPECIFIC: the container is malformed or uses an unsupported layout.
+//   - UNSUPPORTED: the requested operation or codec is not supported.
+//   - READ_START_FAILURE: the input could not be opened or its header read.
+//   - PROCESS_SPECIFIC: a process (encoder) rejected the media.
+//   - TRIGGER: a trigger handler refused the session or push.
+//   - UNAUTHORISED: the session or push is not allowed.
+var deterministicExitReasons = map[string]struct{}{
+	"FORMAT_SPECIFIC":    {},
+	"UNSUPPORTED":        {},
+	"READ_START_FAILURE": {},
+	"PROCESS_SPECIFIC":   {},
+	"TRIGGER":            {},
+	"UNAUTHORISED":       {},
+}
+
+// IsRetryableExitReason reports whether an abnormal Mist machine exit reason
+// can be avoided by a fresh attempt. Every non-clean reason outside
+// deterministicExitReasons is: SHM_LOST (the stream buffer or its data pages
+// went away), WRITE_FAILURE, EXEC_FAILURE, OUT_OF_MEMORY, INTERNAL_ERROR, the
+// crash signals (SEGFAULT, SIGABRT, SIGBUS, SIGFPE, SIGILL, SIGTRAP) and
+// PROCESS_TRACKS_CHANGED end on the node's state, not on the media.
+//
+// UNKNOWN, an empty reason and any reason this list does not name are
+// retryable too. Mist uses UNKNOWN both as the default for an exit that never
+// logged a reason and for most connection and stream-availability failures,
+// and a crashed output that sends no reason at all is already retried; the
+// caller's retry budget bounds a deterministic failure hidden among them. A
+// clean reason is not a failure and is never retryable.
+func IsRetryableExitReason(reason string) bool {
+	reason = strings.TrimSpace(reason)
+	if strings.HasPrefix(reason, CleanExitReasonPrefix) {
+		return false
+	}
+	_, deterministic := deterministicExitReasons[reason]
+	return !deterministic
+}
+
 // IsPlaybackViewerConnector reports whether a Mist connector represents an actual viewer session.
 func IsPlaybackViewerConnector(connector string) bool {
 	connector = strings.TrimSpace(connector)

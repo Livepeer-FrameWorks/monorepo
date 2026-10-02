@@ -91,7 +91,12 @@ func TestRecordingEndRetryable(t *testing.T) {
 	if err := validateProcessingRecordingEnd(swapped, ""); err == nil {
 		t.Fatal("the swapped recording itself must still fail validation")
 	}
-	for _, reason := range []string{"", "UNKNOWN", "WRITE_FAILURE", "CLEAN_EOF"} {
+	for _, reason := range []string{"SHM_LOST", "WRITE_FAILURE", "UNKNOWN", ""} {
+		if !recordingEndRetryable(ProcessingRecordingEndEvent{ExitReason: reason}) {
+			t.Fatalf("exit reason %q must be retryable", reason)
+		}
+	}
+	for _, reason := range []string{"FORMAT_SPECIFIC", "UNSUPPORTED", "CLEAN_EOF"} {
 		if recordingEndRetryable(ProcessingRecordingEndEvent{ExitReason: reason}) {
 			t.Fatalf("exit reason %q must not be retryable", reason)
 		}
