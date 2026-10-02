@@ -432,6 +432,58 @@ func TestProcessAVFinalVideoReadyRequiresFinalVideoOutput(t *testing.T) {
 	}
 }
 
+// A clip cut from a live stream whose Livepeer rendition went stale carries
+// that rendition as a declared original track with no data, at the source's
+// height. The source passthrough must be the track holding media, whatever
+// order Mist's health map iterates in.
+func TestProcessingSourceSelectorFromHealthPrefersTrackWithData(t *testing.T) {
+	source := mist.SourceMediaInfo{Width: 640, Height: 360}
+	streamData := func(sourceBuffer, renditionBuffer float64) map[string]interface{} {
+		return map[string]interface{}{
+			"health": map[string]interface{}{
+				"tracks": []interface{}{"meta_JSON_0", "video_H264_640x360_0fps_1", "audio_AAC_1ch_48000hz_2", "video_H264_640x360_0fps_3", "audio_opus_1ch_48000hz_4"},
+				"buffer": float64(4000),
+				"meta_JSON_0": map[string]interface{}{
+					"codec": "JSON", "idx": float64(0), "id": float64(0), "buffer": float64(0),
+				},
+				"video_H264_640x360_0fps_1": map[string]interface{}{
+					"codec": "H264", "idx": float64(1), "id": float64(1), "width": float64(640), "height": float64(360), "buffer": sourceBuffer,
+				},
+				"audio_AAC_1ch_48000hz_2": map[string]interface{}{
+					"codec": "AAC", "idx": float64(2), "id": float64(2), "buffer": float64(4000),
+				},
+				"video_H264_640x360_0fps_3": map[string]interface{}{
+					"codec": "H264", "idx": float64(3), "id": float64(3), "width": float64(640), "height": float64(360), "buffer": renditionBuffer,
+				},
+				"audio_opus_1ch_48000hz_4": map[string]interface{}{
+					"codec": "opus", "idx": float64(4), "id": float64(4), "buffer": float64(4000),
+				},
+			},
+		}
+	}
+
+	// Go randomizes map iteration per range, so repeated inspection covers
+	// both orders of the two same-height tracks.
+	for i := 0; i < 64; i++ {
+		tracks := inspectProcessingActiveStream(streamData(4000, 0)).videoTracks
+		if got := processingSourceVideoSelector(tracks, source); got != "i1" {
+			t.Fatalf("iteration %d: source selector = %q, want i1 (the track holding media)", i, got)
+		}
+	}
+	for i := 0; i < 64; i++ {
+		tracks := inspectProcessingActiveStream(streamData(0, 4000)).videoTracks
+		if got := processingSourceVideoSelector(tracks, source); got != "i3" {
+			t.Fatalf("iteration %d: source selector = %q, want i3 (the only track holding media)", i, got)
+		}
+	}
+	for i := 0; i < 64; i++ {
+		tracks := inspectProcessingActiveStream(streamData(0, 0)).videoTracks
+		if got := processingSourceVideoSelector(tracks, source); got != "i1" {
+			t.Fatalf("iteration %d: tied source selector = %q, want i1 (lowest track index)", i, got)
+		}
+	}
+}
+
 func TestInspectProcessingActiveStreamUsesHealthTracks(t *testing.T) {
 	presence := inspectProcessingActiveStream(map[string]interface{}{
 		"lastms": float64(33000),

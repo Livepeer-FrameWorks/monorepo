@@ -2016,6 +2016,11 @@ func inspectProcessingActiveStream(streamData map[string]interface{}) processing
 				if v, ok := track["height"].(float64); ok {
 					t.height = int(v)
 				}
+				// Health carries no firstms/lastms, only the buffered span; a
+				// declared track that never received media reports 0.
+				if v, ok := track["buffer"].(float64); ok && v > 0 {
+					t.lastms = v
+				}
 				if v, ok := track["source"].(string); ok {
 					t.source = v
 				}
@@ -2031,6 +2036,7 @@ func inspectProcessingActiveStream(streamData map[string]interface{}) processing
 			}
 		}
 	}
+	sortProcessingVideoTracks(p.videoTracks)
 	if metaTracks := parseProcessingMetaVideoTracks(streamData); len(metaTracks) > 0 {
 		p.videoTracks = metaTracks
 		for _, t := range metaTracks {
@@ -2393,7 +2399,33 @@ func parseProcessingMetaVideoTracks(meta map[string]interface{}) []processingMet
 		}
 		out = append(out, t)
 	}
+	sortProcessingVideoTracks(out)
 	return out
+}
+
+// sortProcessingVideoTracks orders tracks parsed from Mist's JSON maps by track
+// index, then id, then name. Map iteration order is random, and the source and
+// rendition selection keeps the first of equally good candidates, so the order
+// must be stable. Lowest index first also favours the source: a live buffer
+// registers the ingest's tracks before any process adds a rendition, and a cut
+// of it keeps that order.
+func sortProcessingVideoTracks(tracks []processingMetaVideoTrack) {
+	sort.SliceStable(tracks, func(i, j int) bool {
+		a, b := tracks[i], tracks[j]
+		if a.hasTrackIndex != b.hasTrackIndex {
+			return a.hasTrackIndex
+		}
+		if a.hasTrackIndex && a.trackIndex != b.trackIndex {
+			return a.trackIndex < b.trackIndex
+		}
+		if a.hasTrackID != b.hasTrackID {
+			return a.hasTrackID
+		}
+		if a.hasTrackID && a.trackID != b.trackID {
+			return a.trackID < b.trackID
+		}
+		return a.name < b.name
+	})
 }
 
 func processingTracksFromProto(tracks []*ipcpb.StreamTrack) []processingMetaVideoTrack {
