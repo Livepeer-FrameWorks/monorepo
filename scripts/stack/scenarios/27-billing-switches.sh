@@ -112,6 +112,12 @@ api_usage() {
   [ "$((${quantity:-0} - ${api_before:-0}))" -ge 30 ]
 }
 eventually 900 'paid-phase API traffic reached Purser through Periscope metering' api_usage
+if jwt=$(refresh_session_token "$cookies"); then
+  pass 'billing session renewed after paid-phase settlement'
+else
+  fail 'billing session renewal after paid-phase settlement failed'
+  finish
+fi
 balance_postpaid=$(pg purser "SELECT balance_cents FROM purser.prepaid_balances WHERE tenant_id='$tenant' AND currency='EUR'")
 draft_credit=$(pg purser "SELECT COALESCE(SUM(prepaid_credit_applied), 0)::numeric(12,2) FROM purser.billing_invoices
   WHERE tenant_id='$tenant' AND status='draft'")
@@ -209,6 +215,12 @@ for n in $(seq 1 30); do
   fi
 done
 eventually 900 'returned-prepaid traffic reached Purser through Periscope metering' api_usage
+if jwt=$(refresh_session_token "$cookies"); then
+  pass 'billing session renewed after returned-prepaid settlement'
+else
+  fail 'billing session renewal after returned-prepaid settlement failed'
+  finish
+fi
 balance_before_month=$(pg purser "SELECT balance_cents FROM purser.prepaid_balances WHERE tenant_id='$tenant' AND currency='EUR'")
 phase_start=$(pg purser "SELECT billing_period_start AT TIME ZONE 'UTC' FROM purser.tenant_subscriptions WHERE tenant_id='$tenant'")
 export STACK_BILLING_TENANT_ID="$tenant" STACK_BILLING_FIXTURE_STATEMENT_ID="$statement"

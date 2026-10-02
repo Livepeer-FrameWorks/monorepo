@@ -242,6 +242,15 @@ session_token() { # session_token: the demo user's access JWT from /auth/login (
   [ -s "$cache" ] || { rm -f "$cache"; echo "demo session login failed" >&2; return 1; }
   cat "$cache"
 }
+refresh_session_token() { # refresh_session_token <cookie jar>: rotate the refresh cookie and return its access JWT
+  local jar=$1 code token
+  code=$(curl -s -m 30 -X POST -b "$jar" -c "$jar" -o /dev/null -w '%{http_code}' \
+    "$BRIDGE_URL/auth/refresh") || { echo 'session refresh request failed' >&2; return 1; }
+  [ "$code" = 200 ] || { echo "session refresh returned HTTP $code" >&2; return 1; }
+  token=$(awk '$6 == "access_token" { print $7 }' "$jar" | tail -1)
+  [ -n "$token" ] || { echo 'session refresh returned no access token' >&2; return 1; }
+  printf '%s' "$token"
+}
 gql_session() { # gql_session <query> [variables-json]: as the logged-in demo user
   local jwt
   jwt=$(session_token) || return 1
