@@ -96,8 +96,17 @@ func TestStackMonthEnd(t *testing.T) {
 		if !end.After(start) {
 			return fmt.Errorf("prepaid traffic must reach a complete metering window before month-end")
 		}
-		if completenessErr := jobs.assertMeteringComplete(ctx, tenant, start, end); completenessErr != nil {
-			return fmt.Errorf("real metering is incomplete: %w", completenessErr)
+		// Metering reports a window several minutes after it closes, so the
+		// latest boundaries may not be reported yet; the period ends at the
+		// latest boundary whose windows are all complete.
+		completenessErr := jobs.assertMeteringComplete(ctx, tenant, start, end)
+		for completenessErr != nil {
+			previous := end.Add(-5 * time.Minute)
+			if !previous.After(start) {
+				return fmt.Errorf("real metering is incomplete: %w", completenessErr)
+			}
+			end = previous
+			completenessErr = jobs.assertMeteringComplete(ctx, tenant, start, end)
 		}
 		_, updateErr := tx.ExecContext(ctx, `UPDATE purser.tenant_subscriptions
 			SET billing_period_end = $2, next_billing_date = $2 WHERE tenant_id = $1`, tenant, end)
