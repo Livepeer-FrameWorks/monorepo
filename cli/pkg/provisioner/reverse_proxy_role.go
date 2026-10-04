@@ -252,7 +252,8 @@ const caddyCredentialLogBlock = `    log {
 
 func renderCaddyfile(sites []proxySite) string {
 	var b strings.Builder
-	b.WriteString("{\n    admin localhost:2019\n")
+	// skip_install_trust keeps the internal CA's root out of the host's system trust store.
+	b.WriteString("{\n    admin localhost:2019\n    skip_install_trust\n")
 	b.WriteString(caddyCredentialLogBlock)
 	b.WriteString("}\n\n")
 	if len(sites) == 0 {

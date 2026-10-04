@@ -1,5 +1,7 @@
 {
     admin unix//run/caddy/admin.sock|0660
+    # The internal CA's root stays out of the system trust store.
+    skip_install_trust
     servers {
         protocols h1 h2 h3
     }

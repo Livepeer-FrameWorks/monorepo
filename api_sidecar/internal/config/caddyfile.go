@@ -39,6 +39,8 @@ type CaddyfileParams struct {
 
 const caddyfileTmpl = `{
 	admin {{.CaddyAdminAddr}}
+	# The internal CA's root stays out of the host's system trust store.
+	skip_install_trust
 {{- if .AcmeEmail}}
 	email {{.AcmeEmail}}
 {{- end}}

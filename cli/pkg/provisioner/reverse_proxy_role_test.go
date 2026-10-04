@@ -938,3 +938,29 @@ func TestProxySiteMapsExposeUpstreamGroupForNativeTemplates(t *testing.T) {
 		}
 	}
 }
+
+// Every Caddy configuration we render can use the internal CA ("tls internal"),
+// and Caddy installs that CA's root into the host's system trust store unless
+// told not to; each global block opts out.
+func TestCaddyRenderPathsKeepInternalCAOutOfSystemTrust(t *testing.T) {
+	surfaces := map[string]string{
+		"reverse proxy renderer": renderCaddyfile([]proxySite{{Domains: []string{"bridge.example.com"}, Upstream: "127.0.0.1:18000", TLSMode: "internal"}}),
+	}
+	for _, path := range []string{
+		"ansible/collections/ansible_collections/frameworks/infra/roles/caddy/templates/Caddyfile.j2",
+		"ansible/collections/ansible_collections/frameworks/infra/roles/edge/templates/Caddyfile.native.j2",
+		"edge/rootfs/etc/frameworks/templates/Caddyfile.bootstrap",
+		"cli/internal/templates/edge/Caddyfile.tmpl",
+	} {
+		surfaces[path] = readRepoFile(t, path)
+	}
+	for name, content := range surfaces {
+		global := content
+		if end := strings.Index(content, "\n}\n"); end >= 0 {
+			global = content[:end]
+		}
+		if !strings.Contains(global, "skip_install_trust") {
+			t.Errorf("%s: global options do not set skip_install_trust:\n%s", name, global)
+		}
+	}
+}

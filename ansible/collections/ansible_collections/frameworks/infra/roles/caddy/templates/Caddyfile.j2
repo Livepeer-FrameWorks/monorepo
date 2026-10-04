@@ -3,6 +3,8 @@
     email {{ caddy_global_options.email }}
 {% endif %}
     admin {{ caddy_admin_listen }}
+{# The internal CA's root stays out of the host's system trust store. #}
+    skip_install_trust
 {# Global, not per-site: a site log directive covers access logs only, while
    upstream failures come from the default logger and carry the full request
    URI — which for /webrtc/<streamKey> and /ingest/<streamKey> is a publishing

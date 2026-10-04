@@ -1,5 +1,7 @@
 {
   admin {{CADDY_ADMIN_ADDR}}
+  # The internal CA's root stays out of the host's system trust store.
+  skip_install_trust
   servers {
     protocols h1 h2 h3
   }

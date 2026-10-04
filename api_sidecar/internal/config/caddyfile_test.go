@@ -286,3 +286,19 @@ func TestRenderCaddyfileHasNoRepeatedBlankLines(t *testing.T) {
 		}
 	}
 }
+
+// The edge's Caddy can serve with its internal CA; that CA's root must never be
+// installed into the host's system trust store.
+func TestRenderCaddyfile_KeepsInternalCAOutOfSystemTrust(t *testing.T) {
+	out, err := RenderCaddyfile(baseParams())
+	if err != nil {
+		t.Fatalf("RenderCaddyfile: %v", err)
+	}
+	global := out
+	if end := strings.Index(out, "\n}\n"); end >= 0 {
+		global = out[:end]
+	}
+	if !strings.Contains(global, "skip_install_trust") {
+		t.Fatalf("global options do not set skip_install_trust:\n%s", global)
+	}
+}
