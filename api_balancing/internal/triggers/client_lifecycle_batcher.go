@@ -25,9 +25,10 @@ const (
 )
 
 type clientBatchKey struct {
-	tenantID string
-	streamID string
-	nodeID   string
+	tenantID     string
+	streamID     string
+	artifactHash string
+	nodeID       string
 }
 
 type clientBatchBucket struct {
@@ -36,7 +37,7 @@ type clientBatchBucket struct {
 }
 
 // clientLifecycleBatcher buffers enriched ClientLifecycleUpdate samples
-// per (tenant, stream, node) and flushes them as ClientLifecycleBatch
+// per (tenant, stream, artifact, node) and flushes them as ClientLifecycleBatch
 // MistTriggers. Send failures are treated as lossy QoE telemetry: log,
 // metric, single retry, drop. The trigger processor is never blocked on
 // a flush — a stuck Decklog must not back-pressure into MistServer.
@@ -90,9 +91,10 @@ func (b *clientLifecycleBatcher) Add(clu *ipcpb.ClientLifecycleUpdate) {
 		return
 	}
 	key := clientBatchKey{
-		tenantID: clu.GetTenantId(),
-		streamID: clu.GetStreamId(),
-		nodeID:   clu.GetNodeId(),
+		tenantID:     clu.GetTenantId(),
+		streamID:     clu.GetStreamId(),
+		artifactHash: clu.GetArtifactHash(),
+		nodeID:       clu.GetNodeId(),
 	}
 
 	var toFlush []*ipcpb.ClientLifecycleUpdate
@@ -184,6 +186,10 @@ func (b *clientLifecycleBatcher) sendBatch(key clientBatchKey, samples []*ipcpb.
 		s := key.streamID
 		batch.StreamId = &s
 	}
+	if key.artifactHash != "" {
+		h := key.artifactHash
+		batch.ArtifactHash = &h
+	}
 
 	trigger := &ipcpb.MistTrigger{
 		TriggerType: "CLIENT_LIFECYCLE_BATCH",
@@ -201,6 +207,10 @@ func (b *clientLifecycleBatcher) sendBatch(key clientBatchKey, samples []*ipcpb.
 	if key.streamID != "" {
 		s := key.streamID
 		trigger.StreamId = &s
+	}
+	if key.artifactHash != "" {
+		h := key.artifactHash
+		trigger.ArtifactHash = &h
 	}
 
 	err := b.send(trigger)

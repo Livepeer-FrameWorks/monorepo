@@ -58,6 +58,7 @@ type streamContext struct {
 	TenantID              string
 	UserID                string
 	StreamID              string
+	ArtifactHash          string // content identity of a clip, DVR or VOD; empty for live streams
 	Source                string
 	UpdatedAt             time.Time
 	LastError             string
@@ -4324,6 +4325,9 @@ func (p *Processor) handleUserNew(trigger *ipcpb.MistTrigger) (string, bool, err
 	if streamID := trigger.GetStreamId(); streamID != "" {
 		userNew.StreamId = &streamID
 	}
+	if artifactHash := trigger.GetArtifactHash(); artifactHash != "" {
+		userNew.ArtifactHash = &artifactHash
+	}
 	if info.OriginClusterID != "" {
 		trigger.OriginClusterId = &info.OriginClusterID
 		userNew.OriginClusterId = &info.OriginClusterID
@@ -5156,6 +5160,9 @@ func (p *Processor) handleUserEnd(trigger *ipcpb.MistTrigger) (string, bool, err
 	if streamID := trigger.GetStreamId(); streamID != "" {
 		userEnd.StreamId = &streamID
 	}
+	if artifactHash := trigger.GetArtifactHash(); artifactHash != "" {
+		userEnd.ArtifactHash = &artifactHash
+	}
 	if info.OriginClusterID != "" {
 		trigger.OriginClusterId = &info.OriginClusterID
 		userEnd.OriginClusterId = &info.OriginClusterID
@@ -5758,11 +5765,15 @@ func (p *Processor) handleClientLifecycleUpdate(trigger *ipcpb.MistTrigger) (str
 			clu.StreamId = &streamID
 		}
 	}
-	if clu.StreamId == nil || *clu.StreamId == "" {
+	clu.ArtifactHash = nil
+	if artifactHash := trigger.GetArtifactHash(); artifactHash != "" {
+		clu.ArtifactHash = &artifactHash
+	}
+	if clu.GetStreamId() == "" && clu.GetArtifactHash() == "" {
 		p.logger.WithFields(logging.Fields{
 			"internal_name": internal,
 			"trigger_type":  trigger.GetTriggerType(),
-		}).Debug("Dropping client lifecycle update without stream_id")
+		}).Debug("Dropping client lifecycle update without stream_id or artifact_hash")
 		return "", false, nil
 	}
 
@@ -5782,7 +5793,7 @@ func (p *Processor) handleClientLifecycleUpdate(trigger *ipcpb.MistTrigger) (str
 		}
 	}
 
-	// Buffer the enriched sample. The batcher flushes per (tenant, stream, node)
+	// Buffer the enriched sample. The batcher flushes per (tenant, stream, artifact, node)
 	// on size or age. Add() never blocks the processor; send failures are
 	// dropped as lossy QoE telemetry rather than back-pressuring MistServer
 	// triggers.
@@ -6513,6 +6524,7 @@ func (p *Processor) resolveStreamContext(ctx context.Context, key, tenantIDHint 
 						TenantID:          parentInfo.TenantID,
 						UserID:            parentInfo.UserID,
 						StreamID:          parentInfo.StreamID,
+						ArtifactHash:      artifactInfo.GetClipHash(),
 						Source:            "artifact_parent_cache",
 						UpdatedAt:         time.Now(),
 						OfficialClusterID: parentInfo.OfficialClusterID,
@@ -6573,6 +6585,7 @@ func (p *Processor) resolveStreamContext(ctx context.Context, key, tenantIDHint 
 		TenantID:          resp.GetTenantId(),
 		UserID:            resp.GetUserId(),
 		StreamID:          resp.GetStreamId(),
+		ArtifactHash:      resp.GetArtifactHash(),
 		Source:            "resolve_" + resp.GetIdentifierType(),
 		UpdatedAt:         now,
 		OriginClusterID:   resp.GetOriginClusterId(),
@@ -6732,6 +6745,16 @@ func (p *Processor) applyResolvedStreamContext(trigger *ipcpb.MistTrigger, strea
 	}
 	if info.StreamID != "" && (trigger.StreamId == nil || *trigger.StreamId == "") {
 		trigger.StreamId = &info.StreamID
+	}
+	// Non-live content is identified by its artifact, as resolved here; a node
+	// cannot assert one. processing+ reads are internal transcode inputs, not
+	// playback of the artifact.
+	if info.TenantID != "" {
+		trigger.ArtifactHash = nil
+		if info.ArtifactHash != "" && streamident.Parse(streamName).Kind != streamident.KindArtifactProcessing {
+			artifactHash := info.ArtifactHash
+			trigger.ArtifactHash = &artifactHash
+		}
 	}
 	if info.OriginClusterID != "" {
 		resolved := info.OriginClusterID

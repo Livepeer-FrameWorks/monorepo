@@ -13,7 +13,8 @@ It is written as a “how the system works” reference (vs an audit checklist).
 ## Glossary (Fields That Show Up Everywhere)
 
 - `tenant_id`: Tenant UUID. **All analytics data must be partitioned and queried by tenant_id.**
-- `stream_id`: Public, stable stream identifier exposed via GraphQL (safe to share with tenants/users).
+- `stream_id`: Public, stable stream identifier exposed via GraphQL (safe to share with tenants/users). On non-live content it names the source stream, if the content has one.
+- `artifact_hash`: Content identity of non-live content: uploaded VODs, clips, DVR recordings and DVR chapters. Foghorn resolves it (local media authority, artifact cache, or Commodore) and stamps it on viewer, routing and client QoE events; a node cannot assert it. An uploaded VOD has no stream, so its rows carry the zero `stream_id` and its `artifact_hash`. Viewer connect/disconnect, routing and client QoE events are kept when they name their content by either field; stream health, lifecycle and track events still require `stream_id`, because their tables key one row per stream.
 - `internal_name`: Canonical stream identifier inside FrameWorks (not the external stream key). Some upstream payloads may include prefixes like `live+` / `vod+`; ingest normalizes by stripping those known prefixes via `mist.ExtractInternalName(...)` before storing. This value is **not exposed** publicly.
 - `node_id`: Node identifier (MistServer instance / edge node).
 - `session_id`: Viewer session identifier from MistServer (connect/disconnect lifecycle). Session IDs are node-scoped, so `viewer_sessions_current` keys on `node_id` plus `session_id` to avoid cross-node collisions.
@@ -342,7 +343,7 @@ The client-side QoE pipeline is rate-shaped at two points:
   add lifecycle rows after status/input/output transitions, but never health-only
   samples or viewer-count changes. Uniform 10-second health rollups remain based
   on the authoritative poll path.
-- **Foghorn batches enriched `ClientLifecycleUpdate`s per `(tenant_id, stream_id, node_id)`** into `ClientLifecycleBatch` triggers (flushed at 1 s or 1000 samples). Decklog publishes one Kafka record per batch; Periscope does one ClickHouse `INSERT INTO client_qoe_samples` per batch. A batch flush failure is logged + counted on `foghorn_client_lifecycle_batch_drops_total` and dropped after one retry — QoE telemetry is intentionally lossy at the edge to keep the trigger processor unblocked.
+- **Foghorn batches enriched `ClientLifecycleUpdate`s per `(tenant_id, stream_id, artifact_hash, node_id)`** into `ClientLifecycleBatch` triggers (flushed at 1 s or 1000 samples). Decklog publishes one Kafka record per batch; Periscope does one ClickHouse `INSERT INTO client_qoe_samples` per batch. A batch flush failure is logged + counted on `foghorn_client_lifecycle_batch_drops_total` and dropped after one retry — QoE telemetry is intentionally lossy at the edge to keep the trigger processor unblocked.
 
 This makes `client_qoe_samples` (and the derived `client_qoe_5m` MV) **diagnostic-only**, not the source of truth for viewer counts or billing:
 
@@ -457,8 +458,8 @@ Best-effort support correlation joins that browser session to Mist's connection 
   the tenant and concrete client-session IDs and scans at most one 90-day source-retention
   window ending at the requested range. `viewer_connection_events.client_session_id` has a
   bloom-filter data-skipping index so the page-ID predicate remains selective even for VOD.
-  It does not require `stream_id`: VOD and standalone
-  artifact sessions intentionally leave that field empty. Correlation failure is best-effort: the QoE page is still
+  It does not require `stream_id`: uploaded-VOD sessions carry the zero `stream_id` and
+  their `artifact_hash`. Correlation failure is best-effort: the QoE page is still
   returned without connection enrichment. Sessions without a matched connect row return
   an empty country code rather than ClickHouse's NUL-padded `FixedString(2)` default.
 - The result is diagnostic, not authoritative. Mist can bundle connections under a reused

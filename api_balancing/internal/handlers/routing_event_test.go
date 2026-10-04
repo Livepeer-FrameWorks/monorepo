@@ -80,3 +80,24 @@ func TestMergeRoutingEventIdentityNeverErasesResolvedOrigin(t *testing.T) {
 		t.Fatalf("fallback overwrote authoritative identity: %+v", event)
 	}
 }
+
+// A routing decision for non-live content carries its artifact, and a later
+// identity merge never erases one already set.
+func TestRoutingEventCarriesArtifactHash(t *testing.T) {
+	const hash = "20261004093042f2da667dcd8ab1ee"
+	data := BuildLoadBalancingData(&RoutingEvent{ArtifactHash: hash})
+	if data.GetArtifactHash() != hash {
+		t.Fatalf("artifact_hash = %q, want %q", data.GetArtifactHash(), hash)
+	}
+
+	event := &RoutingEvent{ArtifactHash: hash}
+	mergeRoutingEventIdentity(event, routingEventIdentity{ArtifactHash: "20261004093042aaaaaaaaaaaaaaaa"})
+	if event.ArtifactHash != hash {
+		t.Fatalf("merge replaced artifact_hash with %q", event.ArtifactHash)
+	}
+	event = &RoutingEvent{}
+	mergeRoutingEventIdentity(event, routingEventIdentity{ArtifactHash: hash})
+	if event.ArtifactHash != hash {
+		t.Fatalf("merge did not fill artifact_hash: %q", event.ArtifactHash)
+	}
+}

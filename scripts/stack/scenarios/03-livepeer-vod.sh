@@ -44,6 +44,22 @@ if [ -n "$VID" ]; then
     P=$(job_processes "$VHASH")
     check "processing used Livepeer (no local fallback)" json_has "$P" 'map(.process) | index("Livepeer") != null'
     every_replica "Livepeer VOD plays" "$VPB" media_at
+    # An uploaded VOD has no stream: its viewers are recorded under its
+    # artifact, which is what live analytics and prepaid holds read.
+    vod_viewers_recorded() {
+      local n
+      n=$(ch "SELECT count() FROM periscope.viewer_connection_events WHERE tenant_id = '$STACK_TENANT_ID'
+        AND artifact_hash = '$VHASH' AND stream_id = toUUID('00000000-0000-0000-0000-000000000000') FORMAT TabSeparated")
+      [ "${n:-0}" -gt 0 ] 2>/dev/null
+    }
+    eventually 90 "uploaded-VOD viewer connections are recorded under the artifact" vod_viewers_recorded
+    vod_sessions_current() {
+      local n
+      n=$(ch "SELECT count() FROM periscope.viewer_sessions_current FINAL WHERE tenant_id = '$STACK_TENANT_ID'
+        AND artifact_hash = '$VHASH' FORMAT TabSeparated")
+      [ "${n:-0}" -gt 0 ] 2>/dev/null
+    }
+    eventually 30 "uploaded-VOD viewer sessions carry the artifact" vod_sessions_current
     full_30() { full_length "$1" "$2" 30; }
     every_replica "Livepeer VOD renditions span the whole 30s source" "$VPB" full_30
   fi

@@ -1185,6 +1185,7 @@ message ResolveIdentifierResponse {
   // Source: streams.requires_auth, vod_assets.requires_auth, clips.requires_auth.
   // For DVR (which has no own column) this reflects the source stream's marker.
   bool requires_auth = 10;
+  string artifact_hash = 11;            // Content identity of a clip, DVR or VOD (incl. chapters); empty for streams
 }
 
 // ============================================================================

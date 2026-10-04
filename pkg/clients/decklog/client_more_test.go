@@ -396,3 +396,15 @@ func TestSendDVRLifecycleStreamIDOptional(t *testing.T) {
 		})
 	}
 }
+
+func TestSendLoadBalancingCarriesArtifactHashOnEnvelope(t *testing.T) {
+	hash := "20261004093042f2da667dcd8ab1ee"
+	fake := newCapturingClient()
+	c := newTestClient(fake)
+	if err := c.SendLoadBalancing(&ipcpb.LoadBalancingData{ArtifactHash: &hash}); err != nil {
+		t.Fatalf("SendLoadBalancing: %v", err)
+	}
+	if fake.lastTrigger.GetArtifactHash() != hash {
+		t.Fatalf("envelope artifact_hash = %q, want %q", fake.lastTrigger.GetArtifactHash(), hash)
+	}
+}

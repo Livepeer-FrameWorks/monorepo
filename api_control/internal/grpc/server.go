@@ -4344,6 +4344,7 @@ func (s *CommodoreServer) resolveIdentifierLookup(ctx context.Context, req *comm
 		IsRecordingEnabled: resolved.IsRecordingEnabled,
 		StreamId:           resolved.StreamID,
 		RequiresAuth:       resolved.RequiresAuth,
+		ArtifactHash:       resolved.ArtifactHash,
 	}, nil
 }
 

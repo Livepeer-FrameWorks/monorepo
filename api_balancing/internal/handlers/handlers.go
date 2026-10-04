@@ -1810,6 +1810,7 @@ func emitFederationEvent(data *ipcpb.FederationEventData) {
 type routingEventIdentity struct {
 	TenantID        string
 	StreamID        string
+	ArtifactHash    string
 	InternalName    string
 	OriginClusterID string
 }
@@ -1864,6 +1865,7 @@ func postBalancingEventExWithIdentity(c *gin.Context, streamName, selectedNode s
 	if identity != nil {
 		event.StreamTenantID = identity.TenantID
 		event.StreamID = identity.StreamID
+		event.ArtifactHash = identity.ArtifactHash
 		event.InternalName = identity.InternalName
 		event.OriginClusterID = identity.OriginClusterID
 	}
@@ -1895,6 +1897,9 @@ func mergeRoutingEventIdentity(event *RoutingEvent, resolved routingEventIdentit
 	if event.StreamID == "" {
 		event.StreamID = resolved.StreamID
 	}
+	if event.ArtifactHash == "" {
+		event.ArtifactHash = resolved.ArtifactHash
+	}
 	if event.InternalName == "" {
 		event.InternalName = resolved.InternalName
 	}
@@ -1909,7 +1914,7 @@ func resolveRoutingEventIdentity(streamName string) routingEventIdentity {
 		identity, handled, err := triggerProcessor.ResolveLocalContent(ctx, streamName)
 		cancel()
 		if handled && err == nil && identity != nil {
-			return routingEventIdentity{TenantID: identity.TenantId, StreamID: identity.StreamId, InternalName: identity.InternalName, OriginClusterID: identity.OriginClusterID}
+			return routingEventIdentity{TenantID: identity.TenantId, StreamID: identity.StreamId, ArtifactHash: identity.ArtifactHash, InternalName: identity.InternalName, OriginClusterID: identity.OriginClusterID}
 		}
 	}
 	if control.StreamRegistryInstance == nil {
@@ -1928,7 +1933,7 @@ func resolveRoutingEventIdentity(streamName string) routingEventIdentity {
 }
 
 // emitViewerRoutingEvent submits a viewer decision to the shared bounded queue.
-func emitViewerRoutingEvent(req *sharedpb.ViewerEndpointRequest, primary *sharedpb.ViewerEndpoint, viewerLat, viewerLon, nodeLat, nodeLon float64, internalName, streamTenantID, streamID, originClusterID string, durationMs float32, candidatesCount int32, eventType, source string) {
+func emitViewerRoutingEvent(req *sharedpb.ViewerEndpointRequest, primary *sharedpb.ViewerEndpoint, viewerLat, viewerLon, nodeLat, nodeLon float64, internalName, streamTenantID, streamID, artifactHash, originClusterID string, durationMs float32, candidatesCount int32, eventType, source string) {
 	if decklogClient == nil || primary == nil {
 		return
 	}
@@ -1945,6 +1950,7 @@ func emitViewerRoutingEvent(req *sharedpb.ViewerEndpointRequest, primary *shared
 		StreamName:        req.GetContentId(),
 		InternalName:      internalName,
 		StreamID:          streamID,
+		ArtifactHash:      artifactHash,
 		StreamTenantID:    streamTenantID,
 		OriginClusterID:   originClusterID,
 		ClientLat:         viewerLat,
@@ -2130,7 +2136,7 @@ func resolveLiveViewerEndpoint(ctx context.Context, req *sharedpb.ViewerEndpoint
 	if prepareErr != nil {
 		return nil, prepareErr
 	}
-	emitViewerRoutingEvent(req, response.Primary, lat, lon, 0, 0, internalName, streamTenantID, streamID, originClusterID, float32(time.Since(start).Milliseconds()), 1, "play_rewrite", "http")
+	emitViewerRoutingEvent(req, response.Primary, lat, lon, 0, 0, internalName, streamTenantID, streamID, "", originClusterID, float32(time.Since(start).Milliseconds()), 1, "play_rewrite", "http")
 	return response, nil
 }
 
@@ -2253,11 +2259,13 @@ func resolveArtifactViewerEndpoint(req *sharedpb.ViewerEndpointRequest, lat, lon
 		}
 		internalName := ""
 		originClusterID := ""
+		artifactHash := ""
 		if resolution != nil {
 			internalName = resolution.InternalName
 			originClusterID = resolution.OriginClusterID
+			artifactHash = resolution.ArtifactHash
 		}
-		emitViewerRoutingEvent(req, response.Primary, 0, 0, 0, 0, internalName, response.Metadata.GetTenantId(), response.Metadata.GetStreamId(), originClusterID, durationMs, candidatesCount, "play_rewrite", "http")
+		emitViewerRoutingEvent(req, response.Primary, 0, 0, 0, 0, internalName, response.Metadata.GetTenantId(), response.Metadata.GetStreamId(), artifactHash, originClusterID, durationMs, candidatesCount, "play_rewrite", "http")
 	}
 
 	return response, nil

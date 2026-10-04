@@ -347,6 +347,10 @@ func (c *BatchedClient) SendLoadBalancingContext(ctx context.Context, data *ipcp
 		streamID := data.GetStreamId()
 		trigger.StreamId = &streamID
 	}
+	if data.GetArtifactHash() != "" {
+		artifactHash := data.GetArtifactHash()
+		trigger.ArtifactHash = &artifactHash
+	}
 	if data.GetTenantId() != "" {
 		tenantID := data.GetTenantId()
 		trigger.TenantId = &tenantID

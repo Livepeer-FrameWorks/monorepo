@@ -1071,6 +1071,9 @@ message MistTrigger {
   // deliberately distinct from cluster_id: one Foghorn cell may control
   // authenticated nodes serving several virtual media clusters.
   optional string control_cell_id = 60;
+  // Content identity of non-live content (uploaded VOD, clip, DVR, DVR chapter), enriched by
+  // Foghorn; stream_id on such content only names its source stream, if it has one.
+  optional string artifact_hash = 61;
 
   reserved 20;               // Legacy: removed stream_bandwidth field
   reserved "stream_bandwidth";
@@ -1912,6 +1915,7 @@ message ViewerConnectTrigger {
   // report them.
   optional string origin = 19;
   optional string referer = 20;
+  optional string artifact_hash = 21; // Enriched by Foghorn for non-live content
 }
 
 // ViewerDisconnectTrigger (formerly USER_END) indicates a viewer disconnect.
@@ -1951,6 +1955,7 @@ message ViewerDisconnectTrigger {
   optional string cluster_id = 22;
   optional string origin_cluster_id = 23;
   optional string control_cell_id = 24;
+  optional string artifact_hash = 25; // Enriched by Foghorn for non-live content
 }
 
 // SessionTimeShare is one (name, seconds) entry from a MistServer
@@ -2218,6 +2223,7 @@ message ClientLifecycleUpdate {
   optional double client_longitude = 22;// GeoIP enriched longitude
   optional string stream_id = 23;       // Enriched by Foghorn (UUID); REQUIRED for analytics joins
   optional string event_id = 24;        // Helmsman-generated UUID per sample; row-level dedup key
+  optional string artifact_hash = 25;   // Enriched by Foghorn for non-live content
 }
 
 // ClientLifecycleBatch carries N enriched ClientLifecycleUpdate samples for a
@@ -2232,6 +2238,7 @@ message ClientLifecycleBatch {
   int64 window_start = 5;
   int64 window_end = 6;
   repeated ClientLifecycleUpdate samples = 7;
+  optional string artifact_hash = 8;
 }
 
 // PlaybackBootResource is one Resource Timing entry the player observed during
@@ -2560,6 +2567,7 @@ message LoadBalancingData {
   optional string selected_cluster_id = 26; // Cluster containing the selected node; decision intent, not confirmed delivery
   optional string control_cell_id = 27;     // Foghorn cell that made the decision
   optional string origin_cluster_id = 28;   // Stream/artifact origin when known
+  optional string artifact_hash = 29;       // Content identity of non-live content
 }
 
 // Clip lifecycle specific data (separate from ClipProgress/ClipDone control messages)

@@ -64,8 +64,8 @@ func TestResolveIdentifierRetriesStreamIDLookupOnRetryablePostgresErrors(t *test
 	mock.ExpectQuery("ResolveIdentifierCatalog").
 		WithArgs(true, streamID).
 		WillReturnRows(sqlmock.NewRows([]string{
-			"tenant_id", "user_id", "internal_name", "identifier_type", "is_recording_enabled", "stream_id", "requires_auth",
-		}).AddRow("tenant-1", "user-1", "live+abc", "stream_id", true, streamID, false))
+			"tenant_id", "user_id", "internal_name", "identifier_type", "is_recording_enabled", "stream_id", "requires_auth", "artifact_hash",
+		}).AddRow("tenant-1", "user-1", "live+abc", "stream_id", true, streamID, false, ""))
 
 	server := &CommodoreServer{db: db, dbMaxIdleConns: -1, logger: logrus.New()}
 	resp, err := server.ResolveIdentifier(context.Background(), &commodorepb.ResolveIdentifierRequest{

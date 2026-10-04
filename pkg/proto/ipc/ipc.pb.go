@@ -7291,6 +7291,9 @@ type MistTrigger struct {
 	// deliberately distinct from cluster_id: one Foghorn cell may control
 	// authenticated nodes serving several virtual media clusters.
 	ControlCellId *string `protobuf:"bytes,60,opt,name=control_cell_id,json=controlCellId,proto3,oneof" json:"control_cell_id,omitempty"`
+	// Content identity of non-live content (uploaded VOD, clip, DVR, DVR chapter), enriched by
+	// Foghorn; stream_id on such content only names its source stream, if it has one.
+	ArtifactHash  *string `protobuf:"bytes,61,opt,name=artifact_hash,json=artifactHash,proto3,oneof" json:"artifact_hash,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -7776,6 +7779,13 @@ func (x *MistTrigger) GetTriggerUnixMillis() int64 {
 func (x *MistTrigger) GetControlCellId() string {
 	if x != nil && x.ControlCellId != nil {
 		return *x.ControlCellId
+	}
+	return ""
+}
+
+func (x *MistTrigger) GetArtifactHash() string {
+	if x != nil && x.ArtifactHash != nil {
+		return *x.ArtifactHash
 	}
 	return ""
 }
@@ -12332,6 +12342,7 @@ type ViewerConnectTrigger struct {
 	// report them.
 	Origin        *string `protobuf:"bytes,19,opt,name=origin,proto3,oneof" json:"origin,omitempty"`
 	Referer       *string `protobuf:"bytes,20,opt,name=referer,proto3,oneof" json:"referer,omitempty"`
+	ArtifactHash  *string `protobuf:"bytes,21,opt,name=artifact_hash,json=artifactHash,proto3,oneof" json:"artifact_hash,omitempty"` // Enriched by Foghorn for non-live content
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -12499,6 +12510,13 @@ func (x *ViewerConnectTrigger) GetReferer() string {
 	return ""
 }
 
+func (x *ViewerConnectTrigger) GetArtifactHash() string {
+	if x != nil && x.ArtifactHash != nil {
+		return *x.ArtifactHash
+	}
+	return ""
+}
+
 // ViewerDisconnectTrigger (formerly USER_END) indicates a viewer disconnect.
 type ViewerDisconnectTrigger struct {
 	state      protoimpl.MessageState `protogen:"open.v1"`
@@ -12535,6 +12553,7 @@ type ViewerDisconnectTrigger struct {
 	ClusterId       *string             `protobuf:"bytes,22,opt,name=cluster_id,json=clusterId,proto3,oneof" json:"cluster_id,omitempty"`
 	OriginClusterId *string             `protobuf:"bytes,23,opt,name=origin_cluster_id,json=originClusterId,proto3,oneof" json:"origin_cluster_id,omitempty"`
 	ControlCellId   *string             `protobuf:"bytes,24,opt,name=control_cell_id,json=controlCellId,proto3,oneof" json:"control_cell_id,omitempty"`
+	ArtifactHash    *string             `protobuf:"bytes,25,opt,name=artifact_hash,json=artifactHash,proto3,oneof" json:"artifact_hash,omitempty"` // Enriched by Foghorn for non-live content
 	unknownFields   protoimpl.UnknownFields
 	sizeCache       protoimpl.SizeCache
 }
@@ -12733,6 +12752,13 @@ func (x *ViewerDisconnectTrigger) GetOriginClusterId() string {
 func (x *ViewerDisconnectTrigger) GetControlCellId() string {
 	if x != nil && x.ControlCellId != nil {
 		return *x.ControlCellId
+	}
+	return ""
+}
+
+func (x *ViewerDisconnectTrigger) GetArtifactHash() string {
+	if x != nil && x.ArtifactHash != nil {
+		return *x.ArtifactHash
 	}
 	return ""
 }
@@ -14240,6 +14266,7 @@ type ClientLifecycleUpdate struct {
 	ClientLongitude      *float64 `protobuf:"fixed64,22,opt,name=client_longitude,json=clientLongitude,proto3,oneof" json:"client_longitude,omitempty"` // GeoIP enriched longitude
 	StreamId             *string  `protobuf:"bytes,23,opt,name=stream_id,json=streamId,proto3,oneof" json:"stream_id,omitempty"`                        // Enriched by Foghorn (UUID); REQUIRED for analytics joins
 	EventId              *string  `protobuf:"bytes,24,opt,name=event_id,json=eventId,proto3,oneof" json:"event_id,omitempty"`                           // Helmsman-generated UUID per sample; row-level dedup key
+	ArtifactHash         *string  `protobuf:"bytes,25,opt,name=artifact_hash,json=artifactHash,proto3,oneof" json:"artifact_hash,omitempty"`            // Enriched by Foghorn for non-live content
 	unknownFields        protoimpl.UnknownFields
 	sizeCache            protoimpl.SizeCache
 }
@@ -14435,6 +14462,13 @@ func (x *ClientLifecycleUpdate) GetEventId() string {
 	return ""
 }
 
+func (x *ClientLifecycleUpdate) GetArtifactHash() string {
+	if x != nil && x.ArtifactHash != nil {
+		return *x.ArtifactHash
+	}
+	return ""
+}
+
 // ClientLifecycleBatch carries N enriched ClientLifecycleUpdate samples for a
 // single (tenant_id, stream_id, node_id) key. Foghorn coalesces enriched
 // samples and forwards as one MistTrigger so Decklog/Kafka/ClickHouse handle
@@ -14448,6 +14482,7 @@ type ClientLifecycleBatch struct {
 	WindowStart   int64                    `protobuf:"varint,5,opt,name=window_start,json=windowStart,proto3" json:"window_start,omitempty"`
 	WindowEnd     int64                    `protobuf:"varint,6,opt,name=window_end,json=windowEnd,proto3" json:"window_end,omitempty"`
 	Samples       []*ClientLifecycleUpdate `protobuf:"bytes,7,rep,name=samples,proto3" json:"samples,omitempty"`
+	ArtifactHash  *string                  `protobuf:"bytes,8,opt,name=artifact_hash,json=artifactHash,proto3,oneof" json:"artifact_hash,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -14529,6 +14564,13 @@ func (x *ClientLifecycleBatch) GetSamples() []*ClientLifecycleUpdate {
 		return x.Samples
 	}
 	return nil
+}
+
+func (x *ClientLifecycleBatch) GetArtifactHash() string {
+	if x != nil && x.ArtifactHash != nil {
+		return *x.ArtifactHash
+	}
+	return ""
 }
 
 // PlaybackBootResource is one Resource Timing entry the player observed during
@@ -15856,6 +15898,7 @@ type LoadBalancingData struct {
 	SelectedClusterId *string  `protobuf:"bytes,26,opt,name=selected_cluster_id,json=selectedClusterId,proto3,oneof" json:"selected_cluster_id,omitempty"` // Cluster containing the selected node; decision intent, not confirmed delivery
 	ControlCellId     *string  `protobuf:"bytes,27,opt,name=control_cell_id,json=controlCellId,proto3,oneof" json:"control_cell_id,omitempty"`             // Foghorn cell that made the decision
 	OriginClusterId   *string  `protobuf:"bytes,28,opt,name=origin_cluster_id,json=originClusterId,proto3,oneof" json:"origin_cluster_id,omitempty"`       // Stream/artifact origin when known
+	ArtifactHash      *string  `protobuf:"bytes,29,opt,name=artifact_hash,json=artifactHash,proto3,oneof" json:"artifact_hash,omitempty"`                  // Content identity of non-live content
 	unknownFields     protoimpl.UnknownFields
 	sizeCache         protoimpl.SizeCache
 }
@@ -16082,6 +16125,13 @@ func (x *LoadBalancingData) GetControlCellId() string {
 func (x *LoadBalancingData) GetOriginClusterId() string {
 	if x != nil && x.OriginClusterId != nil {
 		return *x.OriginClusterId
+	}
+	return ""
+}
+
+func (x *LoadBalancingData) GetArtifactHash() string {
+	if x != nil && x.ArtifactHash != nil {
+		return *x.ArtifactHash
 	}
 	return ""
 }
@@ -22585,7 +22635,7 @@ const file_ipc_proto_rawDesc = "" +
 	"\amessage\x18\x02 \x01(\tR\amessage\"\x83\x01\n" +
 	"\tHeartbeat\x12\x17\n" +
 	"\anode_id\x18\x01 \x01(\tR\x06nodeId\x12]\n" +
-	"\x17applied_managed_streams\x18\x02 \x03(\v2%.helmsmancontrol.AppliedManagedStreamR\x15appliedManagedStreams\"\xe0\x1d\n" +
+	"\x17applied_managed_streams\x18\x02 \x03(\v2%.helmsmancontrol.AppliedManagedStreamR\x15appliedManagedStreams\"\x9c\x1e\n" +
 	"\vMistTrigger\x12!\n" +
 	"\ftrigger_type\x18\x01 \x01(\tR\vtriggerType\x12\x17\n" +
 	"\anode_id\x18\x03 \x01(\tR\x06nodeId\x12\x1c\n" +
@@ -22645,7 +22695,8 @@ const file_ipc_proto_rawDesc = "" +
 	"\bevent_id\x189 \x01(\tR\aeventId\x12!\n" +
 	"\ftrigger_uuid\x18: \x01(\tR\vtriggerUuid\x12.\n" +
 	"\x13trigger_unix_millis\x18; \x01(\x03R\x11triggerUnixMillis\x12+\n" +
-	"\x0fcontrol_cell_id\x18< \x01(\tH\x06R\rcontrolCellId\x88\x01\x01B\x11\n" +
+	"\x0fcontrol_cell_id\x18< \x01(\tH\x06R\rcontrolCellId\x88\x01\x01\x12(\n" +
+	"\rartifact_hash\x18= \x01(\tH\aR\fartifactHash\x88\x01\x01B\x11\n" +
 	"\x0ftrigger_payloadB\f\n" +
 	"\n" +
 	"_tenant_idB\n" +
@@ -22655,7 +22706,8 @@ const file_ipc_proto_rawDesc = "" +
 	"_stream_idB\r\n" +
 	"\v_cluster_idB\x14\n" +
 	"\x12_origin_cluster_idB\x12\n" +
-	"\x10_control_cell_idJ\x04\b\x14\x10\x15R\x10stream_bandwidth\"Y\n" +
+	"\x10_control_cell_idB\x10\n" +
+	"\x0e_artifact_hashJ\x04\b\x14\x10\x15R\x10stream_bandwidth\"Y\n" +
 	"\x15RawMistWebhookTrigger\x12\x1f\n" +
 	"\vpayload_raw\x18\x01 \x01(\fR\n" +
 	"payloadRaw\x12\x1f\n" +
@@ -23216,7 +23268,7 @@ const file_ipc_proto_rawDesc = "" +
 	"\n" +
 	"\b_node_idB\f\n" +
 	"\n" +
-	"_stream_id\"\xe0\a\n" +
+	"_stream_id\"\x9c\b\n" +
 	"\x14ViewerConnectTrigger\x12\x1f\n" +
 	"\vstream_name\x18\x01 \x01(\tR\n" +
 	"streamName\x12\x12\n" +
@@ -23244,7 +23296,8 @@ const file_ipc_proto_rawDesc = "" +
 	"\x0fcontrol_cell_id\x18\x12 \x01(\tH\n" +
 	"R\rcontrolCellId\x88\x01\x01\x12\x1b\n" +
 	"\x06origin\x18\x13 \x01(\tH\vR\x06origin\x88\x01\x01\x12\x1d\n" +
-	"\areferer\x18\x14 \x01(\tH\fR\areferer\x88\x01\x01B\n" +
+	"\areferer\x18\x14 \x01(\tH\fR\areferer\x88\x01\x01\x12(\n" +
+	"\rartifact_hash\x18\x15 \x01(\tH\rR\fartifactHash\x88\x01\x01B\n" +
 	"\n" +
 	"\b_node_idB\x11\n" +
 	"\x0f_client_countryB\x0e\n" +
@@ -23260,7 +23313,9 @@ const file_ipc_proto_rawDesc = "" +
 	"\x10_control_cell_idB\t\n" +
 	"\a_originB\n" +
 	"\n" +
-	"\b_refererJ\x04\b\b\x10\t\"\xd5\t\n" +
+	"\b_refererB\x10\n" +
+	"\x0e_artifact_hashJ\x04\b\b\x10\t\"\x91\n" +
+	"\n" +
 	"\x17ViewerDisconnectTrigger\x12\x1d\n" +
 	"\n" +
 	"session_id\x18\x01 \x01(\tR\tsessionId\x12\x1f\n" +
@@ -23293,7 +23348,8 @@ const file_ipc_proto_rawDesc = "" +
 	"cluster_id\x18\x16 \x01(\tH\n" +
 	"R\tclusterId\x88\x01\x01\x12/\n" +
 	"\x11origin_cluster_id\x18\x17 \x01(\tH\vR\x0foriginClusterId\x88\x01\x01\x12+\n" +
-	"\x0fcontrol_cell_id\x18\x18 \x01(\tH\fR\rcontrolCellId\x88\x01\x01B\n" +
+	"\x0fcontrol_cell_id\x18\x18 \x01(\tH\fR\rcontrolCellId\x88\x01\x01\x12(\n" +
+	"\rartifact_hash\x18\x19 \x01(\tH\rR\fartifactHash\x88\x01\x01B\n" +
 	"\n" +
 	"\b_node_idB\x0f\n" +
 	"\r_country_codeB\a\n" +
@@ -23309,7 +23365,8 @@ const file_ipc_proto_rawDesc = "" +
 	"_stream_idB\r\n" +
 	"\v_cluster_idB\x14\n" +
 	"\x12_origin_cluster_idB\x12\n" +
-	"\x10_control_cell_id\"@\n" +
+	"\x10_control_cell_idB\x10\n" +
+	"\x0e_artifact_hash\"@\n" +
 	"\x10SessionTimeShare\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12\x18\n" +
 	"\aseconds\x18\x02 \x01(\rR\aseconds\"\xde\x05\n" +
@@ -23568,7 +23625,7 @@ const file_ipc_proto_rawDesc = "" +
 	"\x1aread_completed_unix_millis\x18\b \x01(\x03R\x17readCompletedUnixMillisB\r\n" +
 	"\v_buffer_pidB\x11\n" +
 	"\x0f_first_media_msB\x10\n" +
-	"\x0e_last_media_ms\"\xc2\t\n" +
+	"\x0e_last_media_ms\"\xfe\t\n" +
 	"\x15ClientLifecycleUpdate\x12\x17\n" +
 	"\anode_id\x18\x01 \x01(\tR\x06nodeId\x12 \n" +
 	"\ttenant_id\x18\x02 \x01(\tH\x00R\btenantId\x88\x01\x01\x12#\n" +
@@ -23596,7 +23653,8 @@ const file_ipc_proto_rawDesc = "" +
 	"\x0fclient_latitude\x18\x15 \x01(\x01H\rR\x0eclientLatitude\x88\x01\x01\x12.\n" +
 	"\x10client_longitude\x18\x16 \x01(\x01H\x0eR\x0fclientLongitude\x88\x01\x01\x12 \n" +
 	"\tstream_id\x18\x17 \x01(\tH\x0fR\bstreamId\x88\x01\x01\x12\x1e\n" +
-	"\bevent_id\x18\x18 \x01(\tH\x10R\aeventId\x88\x01\x01B\f\n" +
+	"\bevent_id\x18\x18 \x01(\tH\x10R\aeventId\x88\x01\x01\x12(\n" +
+	"\rartifact_hash\x18\x19 \x01(\tH\x11R\fartifactHash\x88\x01\x01B\f\n" +
 	"\n" +
 	"_tenant_idB\r\n" +
 	"\v_session_idB\x12\n" +
@@ -23615,7 +23673,8 @@ const file_ipc_proto_rawDesc = "" +
 	"\x11_client_longitudeB\f\n" +
 	"\n" +
 	"_stream_idB\v\n" +
-	"\t_event_idJ\x04\b\x12\x10\x13\"\xb8\x02\n" +
+	"\t_event_idB\x10\n" +
+	"\x0e_artifact_hashJ\x04\b\x12\x10\x13\"\xf4\x02\n" +
 	"\x14ClientLifecycleBatch\x12 \n" +
 	"\ttenant_id\x18\x01 \x01(\tH\x00R\btenantId\x88\x01\x01\x12 \n" +
 	"\tstream_id\x18\x02 \x01(\tH\x01R\bstreamId\x88\x01\x01\x12#\n" +
@@ -23624,11 +23683,13 @@ const file_ipc_proto_rawDesc = "" +
 	"\fwindow_start\x18\x05 \x01(\x03R\vwindowStart\x12\x1d\n" +
 	"\n" +
 	"window_end\x18\x06 \x01(\x03R\twindowEnd\x12@\n" +
-	"\asamples\x18\a \x03(\v2&.helmsmancontrol.ClientLifecycleUpdateR\asamplesB\f\n" +
+	"\asamples\x18\a \x03(\v2&.helmsmancontrol.ClientLifecycleUpdateR\asamples\x12(\n" +
+	"\rartifact_hash\x18\b \x01(\tH\x02R\fartifactHash\x88\x01\x01B\f\n" +
 	"\n" +
 	"_tenant_idB\f\n" +
 	"\n" +
-	"_stream_id\"\xe2\x02\n" +
+	"_stream_idB\x10\n" +
+	"\x0e_artifact_hash\"\xe2\x02\n" +
 	"\x14PlaybackBootResource\x12\x12\n" +
 	"\x04kind\x18\x01 \x01(\tR\x04kind\x12\x10\n" +
 	"\x03url\x18\x02 \x01(\tR\x03url\x12\x17\n" +
@@ -23804,7 +23865,7 @@ const file_ipc_proto_rawDesc = "" +
 	"\x15EdgeProvisionedConfig\x12\x1f\n" +
 	"\vcli_version\x18\x01 \x01(\tR\n" +
 	"cliVersion\x12\x16\n" +
-	"\x06digest\x18\x02 \x01(\tR\x06digest\"\xa4\v\n" +
+	"\x06digest\x18\x02 \x01(\tR\x06digest\"\xe0\v\n" +
 	"\x11LoadBalancingData\x12#\n" +
 	"\rselected_node\x18\x01 \x01(\tR\fselectedNode\x12\x1a\n" +
 	"\blatitude\x18\x02 \x01(\x01R\blatitude\x12\x1c\n" +
@@ -23839,7 +23900,8 @@ const file_ipc_proto_rawDesc = "" +
 	"\x11remote_cluster_id\x18\x19 \x01(\tH\rR\x0fremoteClusterId\x88\x01\x01\x123\n" +
 	"\x13selected_cluster_id\x18\x1a \x01(\tH\x0eR\x11selectedClusterId\x88\x01\x01\x12+\n" +
 	"\x0fcontrol_cell_id\x18\x1b \x01(\tH\x0fR\rcontrolCellId\x88\x01\x01\x12/\n" +
-	"\x11origin_cluster_id\x18\x1c \x01(\tH\x10R\x0foriginClusterId\x88\x01\x01B\x13\n" +
+	"\x11origin_cluster_id\x18\x1c \x01(\tH\x10R\x0foriginClusterId\x88\x01\x01\x12(\n" +
+	"\rartifact_hash\x18\x1d \x01(\tH\x11R\fartifactHash\x88\x01\x01B\x13\n" +
 	"\x11_selected_node_idB\x16\n" +
 	"\x14_routing_distance_kmB\f\n" +
 	"\n" +
@@ -23858,7 +23920,8 @@ const file_ipc_proto_rawDesc = "" +
 	"\x12_remote_cluster_idB\x16\n" +
 	"\x14_selected_cluster_idB\x12\n" +
 	"\x10_control_cell_idB\x14\n" +
-	"\x12_origin_cluster_id\"\xac\x0f\n" +
+	"\x12_origin_cluster_idB\x10\n" +
+	"\x0e_artifact_hash\"\xac\x0f\n" +
 	"\x11ClipLifecycleData\x12>\n" +
 	"\x05stage\x18\x01 \x01(\x0e2(.helmsmancontrol.ClipLifecycleData.StageR\x05stage\x12\x1b\n" +
 	"\tclip_hash\x18\x02 \x01(\tR\bclipHash\x12\"\n" +

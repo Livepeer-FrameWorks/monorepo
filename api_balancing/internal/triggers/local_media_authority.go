@@ -329,6 +329,7 @@ func localStreamContext(object *mediaauthoritypb.MediaObjectAuthority, tenant *m
 		info.StreamID = object.GetLiveStream().GetStreamId()
 	} else if object.GetArtifact() != nil {
 		info.StreamID = object.GetArtifact().GetParentStreamId()
+		info.ArtifactHash = object.GetArtifact().GetArtifactHash()
 	}
 	return info
 }

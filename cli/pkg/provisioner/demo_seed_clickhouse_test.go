@@ -66,6 +66,35 @@ func TestClickHouseDemoSeedAndMeteringQueries(t *testing.T) {
 	if len(fields) != 4 || fields[0] != tenantID || fields[1] != "serving-contract" {
 		t.Fatalf("reservation row = %q, want tenant %s served by serving-contract", out, tenantID)
 	}
+
+	// A viewer of an uploaded VOD has no stream: it is identified by its
+	// artifact, carried into the current session, and held like any viewer.
+	const vodTenantID = "33333333-3333-4333-8333-333333333333"
+	const artifactHash = "20261004093042f2da667dcd8ab1ee"
+	chApply(t, name, fmt.Sprintf(`
+		INSERT INTO periscope.viewer_connection_events (
+			event_id, timestamp, tenant_id, stream_id, artifact_hash, internal_name, session_id,
+			connection_addr, connector, node_id, cluster_id, origin_cluster_id,
+			country_code, city, latitude, longitude, event_type,
+			session_duration, bytes_transferred
+		) VALUES (
+			generateUUIDv4(), now(), '%s', toUUID('00000000-0000-0000-0000-000000000000'), '%s', 'vod-internal', 'vod-session',
+			'127.0.0.1', 'HLS', 'edge-contract', 'serving-vod', 'origin-contract',
+			'US', 'Test', 0, 0, 'connect', 0, 0
+		)
+	`, vodTenantID, artifactHash))
+	assertCHScalar(t, name, fmt.Sprintf(`
+		SELECT artifact_hash
+		FROM periscope.viewer_sessions_current FINAL
+		WHERE tenant_id = '%s' AND session_id = 'vod-session'
+	`, vodTenantID), artifactHash, "uploaded-VOD session artifact")
+	out, err = docker(t, "", "exec", name, "clickhouse-client", "-q", dbqueries.ActiveViewerReservations)
+	if err != nil {
+		t.Fatalf("execute active-viewer reservation query: %v\noutput: %s", err, out)
+	}
+	if !strings.Contains(out, vodTenantID+"\tserving-vod\t") {
+		t.Fatalf("reservations = %q, want the uploaded-VOD viewer held for tenant %s", out, vodTenantID)
+	}
 }
 
 func assertCHScalar(t *testing.T, name, query, want, description string) {

@@ -252,6 +252,9 @@ INSERT INTO commodore.vod_assets (
 		if resolved.StreamID != streamID {
 			t.Fatalf("resolve %s: stream_id = %q, want the chapter's parent %s", identifier, resolved.StreamID, streamID)
 		}
+		if resolved.ArtifactHash != "chapter-artifact-hash" {
+			t.Fatalf("resolve %s: artifact_hash = %q, want the chapter's own artifact", identifier, resolved.ArtifactHash)
+		}
 	}
 }
 
@@ -766,7 +769,7 @@ func TestManualQueryAdapters_RealPG(t *testing.T) {
 	if err != nil {
 		t.Fatalf("resolve stream identifier: %v", err)
 	}
-	if resolvedStream.IdentifierType != "stream_id" || resolvedStream.StreamID != streamID || resolvedStream.TenantID != tenantID {
+	if resolvedStream.IdentifierType != "stream_id" || resolvedStream.StreamID != streamID || resolvedStream.TenantID != tenantID || resolvedStream.ArtifactHash != "" {
 		t.Fatalf("unexpected resolved stream: %+v", resolvedStream)
 	}
 	resolvedVOD, err := queries.ResolveIdentifierCatalog(ctx, ResolveIdentifierCatalogParams{
@@ -775,7 +778,7 @@ func TestManualQueryAdapters_RealPG(t *testing.T) {
 	if err != nil {
 		t.Fatalf("resolve VOD identifier: %v", err)
 	}
-	if resolvedVOD.IdentifierType != "vod" || resolvedVOD.TenantID != tenantID || resolvedVOD.UserID != userID || resolvedVOD.StreamID != "" {
+	if resolvedVOD.IdentifierType != "vod" || resolvedVOD.TenantID != tenantID || resolvedVOD.UserID != userID || resolvedVOD.StreamID != "" || resolvedVOD.ArtifactHash != "adapter-vod" {
 		t.Fatalf("unexpected resolved VOD: %+v", resolvedVOD)
 	}
 	catalog, err := queries.ListStorageArtifactCatalog(ctx, StorageArtifactFilter{

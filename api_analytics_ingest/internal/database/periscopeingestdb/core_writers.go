@@ -236,7 +236,7 @@ func PrepareStreamLifecycleHealth(ctx context.Context, db BatchPreparer) (*Write
 }
 
 const insertViewerConnectionEvent = `INSERT INTO viewer_connection_events (
-	event_id, timestamp, tenant_id, stream_id, internal_name,
+	event_id, timestamp, tenant_id, stream_id, artifact_hash, internal_name,
 	session_id, client_session_id, connection_addr, connector, node_id,
 	cluster_id, origin_cluster_id, control_cell_id,
 	request_url,
@@ -251,6 +251,7 @@ type ViewerConnectionEventRow struct {
 	Timestamp             time.Time
 	TenantID              uuid.UUID
 	StreamID              uuid.UUID
+	ArtifactHash          string
 	InternalName          string
 	SessionID             string
 	ClientSessionID       string
@@ -281,7 +282,7 @@ type ViewerConnectionEventRow struct {
 func PrepareViewerConnectionEvent(ctx context.Context, db BatchPreparer) (*Writer[ViewerConnectionEventRow], error) {
 	return prepare(ctx, db, insertViewerConnectionEvent, func(row ViewerConnectionEventRow) []interface{} {
 		return []interface{}{
-			row.EventID, row.Timestamp, row.TenantID, row.StreamID, row.InternalName,
+			row.EventID, row.Timestamp, row.TenantID, row.StreamID, row.ArtifactHash, row.InternalName,
 			row.SessionID, row.ClientSessionID, row.ConnectionAddr, row.Connector, row.NodeID,
 			row.ClusterID, row.OriginClusterID, row.ControlCellID,
 			row.RequestURL,

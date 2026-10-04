@@ -21,6 +21,7 @@ type RoutingEvent struct {
 	StreamName     string
 	InternalName   string
 	StreamID       string // public UUID
+	ArtifactHash   string // content identity of non-live content
 	StreamTenantID string // stream owner tenant
 	TenantID       string // infra owner (cluster operator) — overrides package-level ownerTenantID if set
 
@@ -113,6 +114,7 @@ func BuildLoadBalancingData(e *RoutingEvent) *ipcpb.LoadBalancingData {
 	data.SelectedNodeId = optStr(e.SelectedNodeID)
 	data.InternalName = optStr(e.InternalName)
 	data.StreamId = optStr(e.StreamID)
+	data.ArtifactHash = optStr(e.ArtifactHash)
 	data.TenantId = optStr(oTenantID)
 	data.StreamTenantId = optStr(e.StreamTenantID)
 	data.ClusterId = optStr(cID)

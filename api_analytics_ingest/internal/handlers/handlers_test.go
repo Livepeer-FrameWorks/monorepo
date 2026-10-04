@@ -1108,11 +1108,11 @@ func TestViewerConnectTenantAttribution(t *testing.T) {
 	if row[2] != uuid.MustParse(tenantID) {
 		t.Fatalf("expected tenant_id %q, got %#v", tenantID, row[2])
 	}
-	if row[4] != "demo" {
-		t.Fatalf("expected internal_name demo, got %#v", row[4])
+	if row[5] != "demo" {
+		t.Fatalf("expected internal_name demo, got %#v", row[5])
 	}
-	if row[22] != "connect" {
-		t.Fatalf("expected event_type connect, got %#v", row[22])
+	if row[23] != "connect" {
+		t.Fatalf("expected event_type connect, got %#v", row[23])
 	}
 }
 
@@ -1138,12 +1138,12 @@ func TestViewerConnectExtractsClientSessionAndRedactsCredentials(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	row := conn.batches["viewer_connection_events"].rows[0]
-	if row[6] != "attach_01" {
-		t.Fatalf("client_session_id = %#v, want attach_01", row[6])
+	if row[7] != "attach_01" {
+		t.Fatalf("client_session_id = %#v, want attach_01", row[7])
 	}
-	stored, ok := row[13].(*string)
+	stored, ok := row[14].(*string)
 	if !ok || stored == nil {
-		t.Fatalf("request_url = %#v, want sanitized URL", row[13])
+		t.Fatalf("request_url = %#v, want sanitized URL", row[14])
 	}
 	if strings.Contains(strings.ToLower(*stored), "jwt=") ||
 		strings.Contains(strings.ToLower(*stored), "tkn=") ||
@@ -1238,11 +1238,11 @@ func TestViewerConnectionPreservesZeroCoordinateWhenPresent(t *testing.T) {
 		t.Fatalf("expected viewer_connection_events row, got %#v", batch)
 	}
 	row := batch.rows[0]
-	if row[16] != lat {
-		t.Fatalf("expected latitude %v, got %#v", lat, row[16])
+	if row[17] != lat {
+		t.Fatalf("expected latitude %v, got %#v", lat, row[17])
 	}
-	if row[17] != lon {
-		t.Fatalf("expected longitude %v, got %#v", lon, row[17])
+	if row[18] != lon {
+		t.Fatalf("expected longitude %v, got %#v", lon, row[18])
 	}
 }
 
@@ -1282,11 +1282,11 @@ func TestViewerDisconnectOutOfOrderStillRecorded(t *testing.T) {
 		t.Fatalf("expected viewer_connection_events row, got %#v", batch)
 	}
 	row := batch.rows[0]
-	if row[22] != "disconnect" {
-		t.Fatalf("expected event_type disconnect, got %#v", row[22])
+	if row[23] != "disconnect" {
+		t.Fatalf("expected event_type disconnect, got %#v", row[23])
 	}
-	if row[23] != uint32(42) {
-		t.Fatalf("expected session_duration 42, got %#v", row[23])
+	if row[24] != uint32(42) {
+		t.Fatalf("expected session_duration 42, got %#v", row[24])
 	}
 }
 
@@ -2518,11 +2518,11 @@ func TestViewerConnectionClusterContextDoesNotFabricateAttribution(t *testing.T)
 			t.Fatalf("expected viewer_connection_events row, got %#v", batch)
 		}
 		row := batch.rows[len(batch.rows)-1]
-		if row[10] != "" {
-			t.Fatalf("expected empty serving cluster without authenticated cluster attribution, got %#v", row[10])
+		if row[11] != "" {
+			t.Fatalf("expected empty serving cluster without authenticated cluster attribution, got %#v", row[11])
 		}
-		if row[11] != clusterFromOrigin {
-			t.Fatalf("expected origin_cluster_id %q, got %#v", clusterFromOrigin, row[11])
+		if row[12] != clusterFromOrigin {
+			t.Fatalf("expected origin_cluster_id %q, got %#v", clusterFromOrigin, row[12])
 		}
 	})
 
@@ -2558,11 +2558,11 @@ func TestViewerConnectionClusterContextDoesNotFabricateAttribution(t *testing.T)
 			t.Fatalf("expected viewer_connection_events row, got %#v", batch)
 		}
 		row := batch.rows[len(batch.rows)-1]
-		if row[10] != clusterID {
-			t.Fatalf("expected cluster_id %q, got %#v", clusterID, row[10])
+		if row[11] != clusterID {
+			t.Fatalf("expected cluster_id %q, got %#v", clusterID, row[11])
 		}
-		if row[11] != "" {
-			t.Fatalf("expected empty origin cluster when no origin attribution was observed, got %#v", row[11])
+		if row[12] != "" {
+			t.Fatalf("expected empty origin cluster when no origin attribution was observed, got %#v", row[12])
 		}
 	})
 }
@@ -2666,8 +2666,8 @@ func TestHandleAnalyticsEventMissingStreamIDDropped(t *testing.T) {
 	if batch == nil || len(batch.rows) != 1 {
 		t.Fatalf("expected ingest_errors row, got %#v", batch)
 	}
-	if reason, ok := batch.rows[0][6].(string); !ok || !strings.Contains(reason, "missing_or_invalid_stream_id") {
-		t.Fatalf("expected missing stream id reason, got %#v", batch.rows[0][6])
+	if reason, ok := batch.rows[0][6].(string); !ok || !strings.Contains(reason, "missing_content_identity") {
+		t.Fatalf("expected missing content identity reason, got %#v", batch.rows[0][6])
 	}
 }
 

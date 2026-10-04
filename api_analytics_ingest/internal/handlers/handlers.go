@@ -847,7 +847,8 @@ func (h *AnalyticsHandler) processViewerConnection(ctx context.Context, event ka
 		return fmt.Errorf("failed to parse MistTrigger: %w", err)
 	}
 	streamID := mistTriggerStreamID(&mt)
-	if err := h.requireStreamID(ctx, event, streamID); err != nil {
+	artifactHash := mistTriggerArtifactHash(&mt)
+	if err := h.requireContentIdentity(ctx, event, streamID, artifactHash); err != nil {
 		return err
 	}
 	if h.isDuplicateEvent(ctx, "viewer_connection_events", parseUUID(event.EventID), event.EventType) {
@@ -975,7 +976,7 @@ func (h *AnalyticsHandler) processViewerConnection(ctx context.Context, event ka
 
 	if err := batch.Append(periscopeingestdb.ViewerConnectionEventRow{
 		EventID: parseUUID(event.EventID), Timestamp: event.Timestamp, TenantID: uuid.MustParse(event.TenantID), StreamID: parseUUID(streamID),
-		InternalName: streamName, SessionID: sessionID, ClientSessionID: clientSessionID,
+		ArtifactHash: artifactHash, InternalName: streamName, SessionID: sessionID, ClientSessionID: clientSessionID,
 		ConnectionAddr: host, Connector: connector, NodeID: nodeID,
 		ClusterID: clusterID, OriginClusterID: originClusterID, ControlCellID: controlCellID, RequestURL: optionalString(requestURL),
 		CountryCode: countryCode, City: city, Latitude: latitude, Longitude: longitude,
@@ -1552,6 +1553,68 @@ func (h *AnalyticsHandler) requireTenantID(ctx context.Context, event kafka.Anal
 	return errMissingTenantID
 }
 
+// mistTriggerArtifactHash returns the content identity Foghorn stamped on
+// non-live content: the envelope first, then the payload copy.
+func mistTriggerArtifactHash(mt *ipcpb.MistTrigger) string {
+	if mt == nil {
+		return ""
+	}
+	if hash := mt.GetArtifactHash(); isValidArtifactHash(hash) {
+		return hash
+	}
+	var hash string
+	switch p := mt.GetTriggerPayload().(type) {
+	case *ipcpb.MistTrigger_ViewerConnect:
+		hash = p.ViewerConnect.GetArtifactHash()
+	case *ipcpb.MistTrigger_ViewerDisconnect:
+		hash = p.ViewerDisconnect.GetArtifactHash()
+	case *ipcpb.MistTrigger_LoadBalancingData:
+		hash = p.LoadBalancingData.GetArtifactHash()
+	case *ipcpb.MistTrigger_ClientLifecycleBatch:
+		hash = p.ClientLifecycleBatch.GetArtifactHash()
+	case *ipcpb.MistTrigger_ClientLifecycleUpdate:
+		hash = p.ClientLifecycleUpdate.GetArtifactHash()
+	}
+	if isValidArtifactHash(hash) {
+		return hash
+	}
+	return ""
+}
+
+// isValidArtifactHash accepts the artifact hashes FrameWorks mints: short
+// alphanumeric identifiers (timestamp plus random hex).
+func isValidArtifactHash(hash string) bool {
+	if hash == "" || len(hash) > 128 {
+		return false
+	}
+	for _, ch := range hash {
+		if (ch >= '0' && ch <= '9') || (ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z') {
+			continue
+		}
+		return false
+	}
+	return true
+}
+
+// requireContentIdentity keeps an event that names its content: a live
+// stream by stream_id, or non-live content by artifact_hash.
+func (h *AnalyticsHandler) requireContentIdentity(ctx context.Context, event kafka.AnalyticsEvent, streamID, artifactHash string) error {
+	if isValidUUIDString(streamID) || isValidArtifactHash(artifactHash) {
+		return nil
+	}
+
+	h.writeIngestError(ctx, event, streamID, "missing_content_identity", nil)
+	h.logger.WithFields(logging.Fields{
+		"event_type": event.EventType,
+		"event_id":   event.EventID,
+		"tenant_id":  event.TenantID,
+	}).Warn("Dropping analytics event: missing stream_id and artifact_hash")
+	if h.metrics != nil {
+		h.metrics.AnalyticsEvents.WithLabelValues(event.EventType, "dropped").Inc()
+	}
+	return errDropped
+}
+
 func (h *AnalyticsHandler) requireStreamID(ctx context.Context, event kafka.AnalyticsEvent, streamID string) error {
 	if isValidUUIDString(streamID) {
 		return nil
@@ -1721,7 +1784,7 @@ func (h *AnalyticsHandler) processLoadBalancing(ctx context.Context, event kafka
 	if err := h.parseProtobufData(event, &mt); err != nil {
 		return fmt.Errorf("failed to parse MistTrigger: %w", err)
 	}
-	if err := h.requireStreamID(ctx, event, mistTriggerStreamID(&mt)); err != nil {
+	if err := h.requireContentIdentity(ctx, event, mistTriggerStreamID(&mt), mistTriggerArtifactHash(&mt)); err != nil {
 		return err
 	}
 	tp, ok := mt.GetTriggerPayload().(*ipcpb.MistTrigger_LoadBalancingData)
@@ -1791,7 +1854,7 @@ func (h *AnalyticsHandler) processLoadBalancing(ctx context.Context, event kafka
 	latencyMS := loadBalancing.GetLatencyMs()
 	if appendErr := batch.Append(periscopeingestdb.RoutingDecisionRow{
 		Timestamp: event.Timestamp, TenantID: uuid.MustParse(event.TenantID), StreamID: parseUUID(mistTriggerStreamID(&mt)),
-		InternalName: internalName, SelectedNode: loadBalancing.GetSelectedNode(), Status: loadBalancing.GetStatus(),
+		ArtifactHash: mistTriggerArtifactHash(&mt), InternalName: internalName, SelectedNode: loadBalancing.GetSelectedNode(), Status: loadBalancing.GetStatus(),
 		Details: loadBalancing.GetDetails(), Score: int64(loadBalancing.GetScore()), ClientIP: loadBalancing.GetClientIp(),
 		ClientCountry: clientCountry, ClientLatitude: loadBalancing.GetLatitude(), ClientLongitude: loadBalancing.GetLongitude(),
 		ClientBucketH3: clientBucketH3, ClientBucketRes: clientBucketRes,
@@ -1851,6 +1914,7 @@ func (h *AnalyticsHandler) processClientLifecycleBatch(ctx context.Context, even
 	}
 
 	batchStreamID := parseUUID(batchPayload.GetStreamId())
+	batchArtifactHash := mistTriggerArtifactHash(&mt)
 	env := analyticsEnvelopeColumns(event)
 
 	batch, err := periscopeingestdb.PrepareClientQOESample(ctx, h.clickhouse)
@@ -1877,11 +1941,18 @@ func (h *AnalyticsHandler) processClientLifecycleBatch(ctx context.Context, even
 		if sid := sample.GetStreamId(); sid != "" {
 			sampleStreamID = parseUUID(sid)
 		}
+		sampleArtifactHash := batchArtifactHash
+		if hash := sample.GetArtifactHash(); isValidArtifactHash(hash) {
+			sampleArtifactHash = hash
+		}
+		if sampleStreamID == uuid.Nil && sampleArtifactHash == "" {
+			continue
+		}
 
 		position := sample.GetPosition()
 		if appendErr := batch.Append(periscopeingestdb.ClientQOESampleRow{
 			Timestamp: event.Timestamp, EventID: optionalUUID(sample.GetEventId()), TenantID: uuid.MustParse(event.TenantID),
-			StreamID: sampleStreamID, InternalName: internalName, SessionID: sample.GetSessionId(), NodeID: sample.GetNodeId(),
+			StreamID: sampleStreamID, ArtifactHash: sampleArtifactHash, InternalName: internalName, SessionID: sample.GetSessionId(), NodeID: sample.GetNodeId(),
 			Protocol: sample.GetProtocol(), Host: sample.GetHost(), ConnectionTime: sample.GetConnectionTime(), Position: &position,
 			BandwidthIn: uint64(sample.GetBandwidthInBps()), BandwidthOut: uint64(sample.GetBandwidthOutBps()),
 			BytesDownloaded: uint64(sample.GetBytesDownloaded()), BytesUploaded: uint64(sample.GetBytesUploaded()),

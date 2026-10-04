@@ -32,7 +32,7 @@ func PreparePushRewriteEvent(ctx context.Context, db BatchPreparer) (*Writer[Pus
 }
 
 const insertRoutingDecision = `INSERT INTO routing_decisions (
-	timestamp, tenant_id, stream_id, internal_name, selected_node, status, details, score,
+	timestamp, tenant_id, stream_id, artifact_hash, internal_name, selected_node, status, details, score,
 	client_ip, client_country, client_latitude, client_longitude, client_bucket_h3, client_bucket_res,
 	node_latitude, node_longitude, node_name, node_bucket_h3, node_bucket_res,
 	selected_node_id, routing_distance_km, stream_tenant_id, cluster_id, remote_cluster_id,
@@ -44,6 +44,7 @@ type RoutingDecisionRow struct {
 	Timestamp             time.Time
 	TenantID              uuid.UUID
 	StreamID              uuid.UUID
+	ArtifactHash          string
 	InternalName          string
 	SelectedNode          string
 	Status                string
@@ -80,12 +81,12 @@ type RoutingDecisionRow struct {
 
 func PrepareRoutingDecision(ctx context.Context, db BatchPreparer) (*Writer[RoutingDecisionRow], error) {
 	return prepare(ctx, db, insertRoutingDecision, func(row RoutingDecisionRow) []interface{} {
-		return []interface{}{row.Timestamp, row.TenantID, row.StreamID, row.InternalName, row.SelectedNode, row.Status, row.Details, row.Score, row.ClientIP, row.ClientCountry, row.ClientLatitude, row.ClientLongitude, row.ClientBucketH3, row.ClientBucketRes, row.NodeLatitude, row.NodeLongitude, row.NodeName, row.NodeBucketH3, row.NodeBucketRes, row.SelectedNodeID, row.RoutingDistanceKM, row.StreamTenantID, row.ClusterID, row.RemoteClusterID, row.SelectedClusterID, row.ControlCellID, row.OriginClusterID, row.LatencyMS, row.CandidatesCount, row.EventType, row.Source, row.SourceRegion, row.StreamOriginRegion, row.StreamOriginClusterID, row.SchemaVersion}
+		return []interface{}{row.Timestamp, row.TenantID, row.StreamID, row.ArtifactHash, row.InternalName, row.SelectedNode, row.Status, row.Details, row.Score, row.ClientIP, row.ClientCountry, row.ClientLatitude, row.ClientLongitude, row.ClientBucketH3, row.ClientBucketRes, row.NodeLatitude, row.NodeLongitude, row.NodeName, row.NodeBucketH3, row.NodeBucketRes, row.SelectedNodeID, row.RoutingDistanceKM, row.StreamTenantID, row.ClusterID, row.RemoteClusterID, row.SelectedClusterID, row.ControlCellID, row.OriginClusterID, row.LatencyMS, row.CandidatesCount, row.EventType, row.Source, row.SourceRegion, row.StreamOriginRegion, row.StreamOriginClusterID, row.SchemaVersion}
 	})
 }
 
 const insertClientQOESample = `INSERT INTO client_qoe_samples (
-	timestamp, event_id, tenant_id, stream_id, internal_name, session_id, node_id, protocol, host,
+	timestamp, event_id, tenant_id, stream_id, artifact_hash, internal_name, session_id, node_id, protocol, host,
 	connection_time, position, bandwidth_in, bandwidth_out, bytes_downloaded, bytes_uploaded,
 	packets_sent, packets_lost, packets_retransmitted, connection_quality,
 	source_region, stream_origin_region, stream_origin_cluster_id, schema_version
@@ -96,6 +97,7 @@ type ClientQOESampleRow struct {
 	EventID               *uuid.UUID
 	TenantID              uuid.UUID
 	StreamID              uuid.UUID
+	ArtifactHash          string
 	InternalName          string
 	SessionID             string
 	NodeID                string
@@ -119,7 +121,7 @@ type ClientQOESampleRow struct {
 
 func PrepareClientQOESample(ctx context.Context, db BatchPreparer) (*Writer[ClientQOESampleRow], error) {
 	return prepare(ctx, db, insertClientQOESample, func(row ClientQOESampleRow) []interface{} {
-		return []interface{}{row.Timestamp, row.EventID, row.TenantID, row.StreamID, row.InternalName, row.SessionID, row.NodeID, row.Protocol, row.Host, row.ConnectionTime, row.Position, row.BandwidthIn, row.BandwidthOut, row.BytesDownloaded, row.BytesUploaded, row.PacketsSent, row.PacketsLost, row.PacketsRetransmitted, row.ConnectionQuality, row.SourceRegion, row.StreamOriginRegion, row.StreamOriginClusterID, row.SchemaVersion}
+		return []interface{}{row.Timestamp, row.EventID, row.TenantID, row.StreamID, row.ArtifactHash, row.InternalName, row.SessionID, row.NodeID, row.Protocol, row.Host, row.ConnectionTime, row.Position, row.BandwidthIn, row.BandwidthOut, row.BytesDownloaded, row.BytesUploaded, row.PacketsSent, row.PacketsLost, row.PacketsRetransmitted, row.ConnectionQuality, row.SourceRegion, row.StreamOriginRegion, row.StreamOriginClusterID, row.SchemaVersion}
 	})
 }
 

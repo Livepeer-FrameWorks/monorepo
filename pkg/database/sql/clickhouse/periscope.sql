@@ -402,6 +402,7 @@ CREATE TABLE IF NOT EXISTS viewer_connection_events (
     timestamp DateTime,
     tenant_id UUID,
     stream_id UUID,
+    artifact_hash String DEFAULT '',
     internal_name String,
     session_id String,
     client_session_id String DEFAULT '',
@@ -438,6 +439,7 @@ TTL timestamp + INTERVAL 90 DAY;
 CREATE TABLE IF NOT EXISTS viewer_sessions_current (
     tenant_id UUID,
     stream_id UUID,
+    artifact_hash SimpleAggregateFunction(any, String),
     internal_name LowCardinality(String),
     session_id String,
     node_id LowCardinality(String),
@@ -464,6 +466,7 @@ CREATE MATERIALIZED VIEW IF NOT EXISTS viewer_sessions_connect_mv TO viewer_sess
 SELECT
     tenant_id,
     stream_id,
+    artifact_hash,
     internal_name,
     session_id,
     node_id,
@@ -485,6 +488,7 @@ CREATE MATERIALIZED VIEW IF NOT EXISTS viewer_sessions_disconnect_mv TO viewer_s
 SELECT
     tenant_id,
     stream_id,
+    artifact_hash,
     internal_name,
     session_id,
     node_id,
@@ -512,6 +516,7 @@ CREATE TABLE IF NOT EXISTS client_qoe_samples (
     event_id Nullable(UUID) DEFAULT NULL,
     tenant_id UUID,
     stream_id UUID,
+    artifact_hash String DEFAULT '',
     internal_name String,
     session_id String,
     node_id LowCardinality(String),
@@ -543,6 +548,7 @@ CREATE TABLE IF NOT EXISTS client_qoe_5m (
     timestamp_5m DateTime,
     tenant_id UUID,
     stream_id UUID,
+    artifact_hash String DEFAULT '',
     internal_name String,
     node_id LowCardinality(String),
     active_sessions UInt32,
@@ -560,6 +566,7 @@ SELECT
     toStartOfInterval(timestamp, INTERVAL 5 MINUTE) AS timestamp_5m,
     tenant_id,
     stream_id,
+    artifact_hash,
     internal_name,
     node_id,
     count(DISTINCT session_id) as active_sessions,
@@ -568,7 +575,7 @@ SELECT
     avg(connection_time) AS avg_connection_time,
     if(sum(packets_sent) > 0, sum(packets_lost) / sum(packets_sent), NULL) AS pkt_loss_rate
 FROM client_qoe_samples
-GROUP BY timestamp_5m, tenant_id, stream_id, internal_name, node_id;
+GROUP BY timestamp_5m, tenant_id, stream_id, artifact_hash, internal_name, node_id;
 
 
 -- ============================================================================
@@ -782,6 +789,7 @@ CREATE TABLE IF NOT EXISTS routing_decisions (
     timestamp DateTime,
     tenant_id UUID,
     stream_id UUID,
+    artifact_hash String DEFAULT '',
     internal_name String,
 
     selected_node LowCardinality(String),

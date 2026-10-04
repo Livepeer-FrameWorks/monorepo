@@ -723,7 +723,7 @@ func (s *FoghornGRPCServer) dvrClusterPolicy() *dvrpolicy.Cluster {
 func (s *FoghornGRPCServer) emitRoutingEvent(
 	primary *sharedpb.ViewerEndpoint,
 	viewerLat, viewerLon, nodeLat, nodeLon float64,
-	internalName, streamTenantID, streamID, originClusterID string,
+	internalName, streamTenantID, streamID, artifactHash, originClusterID string,
 	durationMs float32,
 	candidatesCount int32,
 	eventType, source string,
@@ -743,6 +743,7 @@ func (s *FoghornGRPCServer) emitRoutingEvent(
 		Score:             uint64(primary.LoadScore),
 		InternalName:      internalName,
 		StreamID:          streamID,
+		ArtifactHash:      artifactHash,
 		StreamTenantID:    streamTenantID,
 		OriginClusterID:   originClusterID,
 		ClientLat:         viewerLat,
@@ -2902,7 +2903,7 @@ func (s *FoghornGRPCServer) resolveLiveViewerEndpoint(ctx context.Context, req *
 		}
 		return nil, status.Errorf(codes.Unavailable, "viewer placement unavailable: %v", prepareErr)
 	}
-	s.emitRoutingEvent(response.Primary, lat, lon, 0, 0, internalName, tenantID, streamID, originClusterID, float32(time.Since(start).Milliseconds()), 1, "grpc_resolve", "grpc")
+	s.emitRoutingEvent(response.Primary, lat, lon, 0, 0, internalName, tenantID, streamID, "", originClusterID, float32(time.Since(start).Milliseconds()), 1, "grpc_resolve", "grpc")
 	return response, nil
 }
 
@@ -3063,11 +3064,13 @@ func (s *FoghornGRPCServer) resolveArtifactViewerEndpoint(ctx context.Context, r
 		}
 		internalName := ""
 		originClusterID := ""
+		artifactHash := ""
 		if resolution != nil {
 			internalName = resolution.InternalName
 			originClusterID = resolution.OriginClusterID
+			artifactHash = resolution.ArtifactHash
 		}
-		s.emitRoutingEvent(response.Primary, 0, 0, 0, 0, internalName, response.Metadata.GetTenantId(), response.Metadata.GetStreamId(), originClusterID, durationMs, candidatesCount, "grpc_resolve", "grpc")
+		s.emitRoutingEvent(response.Primary, 0, 0, 0, 0, internalName, response.Metadata.GetTenantId(), response.Metadata.GetStreamId(), artifactHash, originClusterID, durationMs, candidatesCount, "grpc_resolve", "grpc")
 	}
 
 	return response, nil

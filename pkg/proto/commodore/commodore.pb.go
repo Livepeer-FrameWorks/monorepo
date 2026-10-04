@@ -5148,7 +5148,8 @@ type ResolveIdentifierResponse struct {
 	// requires_auth marker for fail-closed playback enforcement.
 	// Source: streams.requires_auth, vod_assets.requires_auth, clips.requires_auth.
 	// For DVR (which has no own column) this reflects the source stream's marker.
-	RequiresAuth  bool `protobuf:"varint,10,opt,name=requires_auth,json=requiresAuth,proto3" json:"requires_auth,omitempty"`
+	RequiresAuth  bool   `protobuf:"varint,10,opt,name=requires_auth,json=requiresAuth,proto3" json:"requires_auth,omitempty"`
+	ArtifactHash  string `protobuf:"bytes,11,opt,name=artifact_hash,json=artifactHash,proto3" json:"artifact_hash,omitempty"` // Content identity of a clip, DVR or VOD (incl. chapters); empty for streams
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -5251,6 +5252,13 @@ func (x *ResolveIdentifierResponse) GetRequiresAuth() bool {
 		return x.RequiresAuth
 	}
 	return false
+}
+
+func (x *ResolveIdentifierResponse) GetArtifactHash() string {
+	if x != nil {
+		return x.ArtifactHash
+	}
+	return ""
 }
 
 // Resolve VOD hash to tenant context
@@ -15457,7 +15465,7 @@ const file_commodore_proto_rawDesc = "" +
 	"\x18ResolveIdentifierRequest\x12\x1e\n" +
 	"\n" +
 	"identifier\x18\x01 \x01(\tR\n" +
-	"identifier\"\x9b\x03\n" +
+	"identifier\"\xc0\x03\n" +
 	"\x19ResolveIdentifierResponse\x12\x14\n" +
 	"\x05found\x18\x01 \x01(\bR\x05found\x12\x1b\n" +
 	"\ttenant_id\x18\x02 \x01(\tR\btenantId\x12\x17\n" +
@@ -15469,7 +15477,8 @@ const file_commodore_proto_rawDesc = "" +
 	"\rcluster_peers\x18\b \x03(\v2\x1f.cluster_peer.TenantClusterPeerR\fclusterPeers\x12*\n" +
 	"\x11origin_cluster_id\x18\t \x01(\tR\x0foriginClusterId\x12#\n" +
 	"\rrequires_auth\x18\n" +
-	" \x01(\bR\frequiresAuth\"2\n" +
+	" \x01(\bR\frequiresAuth\x12#\n" +
+	"\rartifact_hash\x18\v \x01(\tR\fartifactHash\"2\n" +
 	"\x15ResolveVodHashRequest\x12\x19\n" +
 	"\bvod_hash\x18\x01 \x01(\tR\avodHash\"\xd2\x03\n" +
 	"\x16ResolveVodHashResponse\x12\x14\n" +
