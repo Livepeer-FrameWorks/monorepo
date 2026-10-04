@@ -1481,6 +1481,14 @@ func rebuildSourceLeasesFromMist(tracker *leases.Tracker, present map[string]str
 				}
 				prometheusMonitor.mutex.RUnlock()
 			}
+			// A processing or clip output is booted under its vod+ name to write
+			// its header before it is published, so the artifact scan does not
+			// know it yet; its local source override names the file.
+			if localPath == "" {
+				if override, ok := getProcessingSourceOverride(streamName); ok && filepath.IsAbs(override) {
+					localPath = override
+				}
+			}
 			key := leases.AssetKey{Type: "vod", Hash: internalName}
 			if localPath != "" {
 				paths := []string{localPath}
