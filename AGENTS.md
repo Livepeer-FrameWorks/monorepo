@@ -112,8 +112,10 @@ Scripts provide: discoverable defaults, consistent flags, and documentation via 
 ## Code Generation
 
 - `make proto` - safe to run
-- `make graphql` - **DO NOT RUN** (ask user to run locally; has zeroed resolvers in sandbox)
-- After schema changes, ask user to run codegen before editing `api_gateway/graph/schema.resolvers.go`
+- GraphQL codegen: use `make graphql-all` (gateway, frontend Houdini, Mac tray, SDK, reference docs); bare `make graphql` regenerates only the gateway and leaves the other consumers of `pkg/graphql/operations/**` stale.
+  - Safe to run in your own worktree or workspace, and on `master` when you are the only agent working there.
+  - On a `master` checkout that another agent may be editing at the same time, ask the user to run it: gqlgen rewrites `api_gateway/graph/schema.resolvers.go` and generated files across the tree, which can clobber concurrent edits or leave resolvers zeroed.
+- After schema changes, run (or have the user run) codegen before editing `api_gateway/graph/schema.resolvers.go`
 
 ## Never Edit Generated Code
 
