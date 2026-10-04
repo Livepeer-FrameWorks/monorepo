@@ -79,10 +79,13 @@ eventually 30 "a grant arrived for each stream" fetched
 SERVE_TS=$(utc_now) SERVE_S=$(date +%s)
 sleep 12
 check "every viewer session keeps playing after the rebuild" all_play "$SERVE_S"
-# Each grant the restarted Helmsman fetched is applied once; with no new
-# admissions nothing else sends one.
+# Each grant the restarted Helmsman fetched is applied once. Foghorn also
+# pushes a grant when the tenant's authority is renewed, which carries a new
+# authority version; a repeated fetch carries the same versions as the first.
 for in in "${INS[@]}"; do
-  applied=$(log_json "$RESTART_TS" "select(.msg == \"Playback grant applied\" and .internal_name == \"live+$in\") | .time" "$STACK_EDGE_A_SERVICE" | grep -c .)
+  versions=$(log_json "$RESTART_TS" "select(.msg == \"Playback grant applied\" and .internal_name == \"live+$in\") | \"\(.tenant_authority_version)/\(.object_authority_version)\"" "$STACK_EDGE_A_SERVICE")
+  applied=0
+  [ -z "$versions" ] || applied=$(printf '%s\n' "$versions" | grep -cxF "$(printf '%s\n' "$versions" | head -n 1)")
   one_grant() { [ "$applied" = 1 ]; }
   check "one grant fetch for stream $in after the restart (got $applied)" one_grant
 done
