@@ -225,9 +225,9 @@ func (r *Resolver) DoDeleteStream(ctx context.Context, id string) (model.DeleteS
 	// Call Commodore gRPC (context metadata carries auth)
 	resp, err := r.Clients.Commodore.DeleteStream(ctx, id)
 	if err != nil {
-		r.Logger.WithError(err).Error("Failed to delete stream")
-		// Check if it's a not found error
+		// Deleting a stream that no longer exists is answered as NOT_FOUND, not a server failure.
 		if strings.Contains(err.Error(), "not found") {
+			r.Logger.WithField("stream_id", id).Info("Stream to delete not found")
 			return &model.NotFoundError{
 				Message:      "Stream not found",
 				Code:         strPtr("NOT_FOUND"),
@@ -235,6 +235,7 @@ func (r *Resolver) DoDeleteStream(ctx context.Context, id string) (model.DeleteS
 				ResourceID:   id,
 			}, nil
 		}
+		r.Logger.WithError(err).Error("Failed to delete stream")
 		return nil, fmt.Errorf("failed to delete stream: %w", err)
 	}
 
