@@ -736,7 +736,12 @@ func (jm *JobManager) handleUsageReport(ctx context.Context, msg kafka.Message) 
 	} else {
 		// Postpaid: update invoice draft. Same retry contract: propagate.
 		if err := jm.updateInvoiceDraft(ctx, summary.TenantID); err != nil {
-			jm.logger.WithError(err).WithField("tenant_id", summary.TenantID).Error("Failed to update invoice draft")
+			if ctx.Err() != nil {
+				// Shutting down: the report is not committed and Kafka redelivers it.
+				jm.logger.WithError(err).WithField("tenant_id", summary.TenantID).Info("Invoice draft update interrupted by shutdown")
+			} else {
+				jm.logger.WithError(err).WithField("tenant_id", summary.TenantID).Error("Failed to update invoice draft")
+			}
 			return fmt.Errorf("invoice draft update failed: %w", err)
 		}
 	}
