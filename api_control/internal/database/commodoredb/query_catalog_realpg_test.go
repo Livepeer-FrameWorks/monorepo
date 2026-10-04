@@ -242,6 +242,17 @@ INSERT INTO commodore.vod_assets (
 	if row.ContentType != "chapter" || row.ParentStreamInternalName != "chapter-live-parent" {
 		t.Fatalf("chapter hash resolution = kind:%q parent:%q", row.ContentType, row.ParentStreamInternalName)
 	}
+	// The identifier fallback attributes a chapter to its parent stream, as the
+	// signed media authority does, so its playback analytics are kept.
+	for _, identifier := range []string{"chapter-artifact-hash", "chapter-internal", "chapter-playback"} {
+		resolved, err := New(db).ResolveIdentifierCatalog(ctx, ResolveIdentifierCatalogParams{Identifier: identifier})
+		if err != nil {
+			t.Fatalf("resolve %s: %v", identifier, err)
+		}
+		if resolved.StreamID != streamID {
+			t.Fatalf("resolve %s: stream_id = %q, want the chapter's parent %s", identifier, resolved.StreamID, streamID)
+		}
+	}
 }
 
 func TestChapterPlaybackAuthorityDataMigration_RealPG(t *testing.T) {
@@ -764,7 +775,7 @@ func TestManualQueryAdapters_RealPG(t *testing.T) {
 	if err != nil {
 		t.Fatalf("resolve VOD identifier: %v", err)
 	}
-	if resolvedVOD.IdentifierType != "vod" || resolvedVOD.TenantID != tenantID || resolvedVOD.UserID != userID {
+	if resolvedVOD.IdentifierType != "vod" || resolvedVOD.TenantID != tenantID || resolvedVOD.UserID != userID || resolvedVOD.StreamID != "" {
 		t.Fatalf("unexpected resolved VOD: %+v", resolvedVOD)
 	}
 	catalog, err := queries.ListStorageArtifactCatalog(ctx, StorageArtifactFilter{

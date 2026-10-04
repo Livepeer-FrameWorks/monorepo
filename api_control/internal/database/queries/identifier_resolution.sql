@@ -8,7 +8,7 @@ WITH candidates AS (
     WHERE sqlc.arg(include_ids)::boolean AND s.id::text = sqlc.arg(identifier)::text
     UNION ALL
     SELECT 1, v.tenant_id::text, v.user_id::text, ''::text, 'vod_id'::text,
-           false, ''::text, v.requires_auth
+           false, COALESCE(v.stream_id::text, '')::text, v.requires_auth
     FROM commodore.vod_assets v
     WHERE sqlc.arg(include_ids)::boolean AND v.id::text = sqlc.arg(identifier)::text
     UNION ALL
@@ -33,7 +33,7 @@ WITH candidates AS (
     WHERE lower(d.playback_id::text) = lower(sqlc.arg(identifier)::text)
     UNION ALL
     SELECT 6, v.tenant_id::text, v.user_id::text, ''::text, 'vod_playback_id'::text,
-           false, ''::text, v.requires_auth
+           false, COALESCE(v.stream_id::text, '')::text, v.requires_auth
     FROM commodore.vod_assets v
     WHERE lower(v.playback_id::text) = lower(sqlc.arg(identifier)::text)
     UNION ALL
@@ -48,7 +48,7 @@ WITH candidates AS (
     WHERE d.internal_name = sqlc.arg(identifier)::text
     UNION ALL
     SELECT 9, v.tenant_id::text, v.user_id::text, ''::text, 'vod_internal_name'::text,
-           false, ''::text, v.requires_auth
+           false, COALESCE(v.stream_id::text, '')::text, v.requires_auth
     FROM commodore.vod_assets v
     WHERE v.internal_name = sqlc.arg(identifier)::text
     UNION ALL
@@ -63,7 +63,7 @@ WITH candidates AS (
     WHERE d.dvr_hash = sqlc.arg(identifier)::text
     UNION ALL
     SELECT 12, v.tenant_id::text, v.user_id::text, ''::text, 'vod'::text,
-           false, ''::text, v.requires_auth
+           false, COALESCE(v.stream_id::text, '')::text, v.requires_auth
     FROM commodore.vod_assets v
     WHERE v.vod_hash = sqlc.arg(identifier)::text
 )
