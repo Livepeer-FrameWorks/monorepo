@@ -257,14 +257,68 @@ requiring viewer-style `READY` would deadlock a late-starting processor against
 the buffer that is waiting for it. Ordinary live viewers keep their normal
 startup and admission path.
 
-Before writing a recording header, Mist's input buffer publishes the number of
-existing push-visible derived tracks plus each eligible producer's missing
-outputs. Completed thumbnail tracks remain part of this total; they cannot
-satisfy the pending output count of another video rendition. Process inhibition
-uses the supervisor's track-ownership rules, and retired or inhibited producers
-no longer contribute missing outputs. Thumbnail processing contributes sprite
-JPEG, VTT, and preview JPEG tracks; the recording format still determines which
-of those tracks can be embedded.
+**Stable tracks.** A processing stream's track set is fixed before any data
+flows. The feeder of a finished local file indexes the whole file first (the
+`.dtsh` cache records that the index is complete) and registers exactly the
+tracks that will carry data: tracks with at least one frame, and video tracks
+with at least one keyframe. Every declared track it leaves out is logged with
+the reason ("no frames", "no keyframe"), so a cut over a stopped rendition no
+longer turns into an original the recording waits for. This is race-free for
+very short sources, audio that starts after video, and one-frame tracks. Before
+starting a process, the buffer reserves a track index for each output it can
+derive from the configuration (Livepeer profiles that the source does not
+inhibit, AV encodes, the thumbnail sprite, VTT and preview); the process claims
+its reservations by output key. Reserved tracks are invisible to every reader,
+`LIVE_TRACK_LIST` and stream info until claimed, and are released when their
+process retires.
+
+**Output identity and resumption.** Every process output carries a stable key:
+a hash of the configured process (the configuration the buffer starts it with)
+plus the output's name (Livepeer rendition/profile name, AV `video`/`audio`,
+Thumbs `sprite`/`vtt`/`preview`, ONNX `output_id` and role, FFmpeg/exec track
+number). A restarted process continues the tracks with its keys, and only those:
+same index and ID, data after a gap, no `LIVE_TRACK_LIST` change. A process
+whose output changed (another init or resolution, e.g. another orchestrator)
+registers a replacement track under the same key, and the buffer removes the old
+track at once. A replacement configuration (`PROCESS_REPLACE`, Livepeer → CPU
+fallback) has its own identity: it never takes the replaced producer's tracks,
+whose data stays in the stream. In a processing stream a restarted Livepeer run
+starts at the first source keyframe after what its renditions already hold.
+On live streams the buffer keeps a process output whose process is being
+restarted, instead of idle-erasing it, until the restarted process claims it,
+for at most the restart delay plus 30 seconds after the loss; the outputs of a
+retired process, or of one configured without restarts, follow the normal idle
+rule. The buffer publishes this hold per track (`resumeuntil`, already while the
+producer runs), and so does a publisher's track kept for resume, so a bounded
+read (a cut with a stop position, a scheduled recording) waits for a returning
+producer instead of ending the track.
+
+**Header rule.** Before writing a recording header, Mist's input buffer
+publishes the number of existing push-visible derived tracks plus each eligible
+producer's missing outputs, counted by output key (so a restarted producer's
+resumed tracks count, and a reserved output without data is still missing).
+Completed thumbnail tracks remain part of this total; they cannot satisfy the
+pending output count of another video rendition. Process inhibition uses the
+supervisor's track-ownership rules, and retired or inhibited producers no longer
+contribute missing outputs. Thumbnail processing contributes sprite JPEG, VTT,
+and preview JPEG tracks; the recording format still determines which of those
+tracks can be embedded. Original video and audio tracks gate the header until
+they have data; once the source has ended, the originals with data are exactly
+the ones the header needs. No stream state releases the gate early.
+
+**Completion rule.** A processing recording ends only once it played out the
+whole buffer: every track in its header can receive no more data (an original
+once the source ended, a derived track once its producer finished after the
+source ended or was retired) and the recording has read each track to its last
+packet. A buffer that disappears, signals or disconnects the recording before
+that is a failure, reported as `SHM_LOST` (retried by Helmsman), also while
+the recording still waits for its header; a killed buffer, which changes no
+state, is noticed by its heartbeat on the stream state page stopping for 30 s.
+
+**Buffer lifetime.** After source EOF the buffer stays up while a recording
+reading it makes progress; a recording that made no progress for the stale
+window (60 s) no longer keeps it alive. Tracks are not idle-erased while
+processing readers are connected.
 
 The EBML file recorder rejects packets from tracks absent from its header.
 Helmsman's terminal validation remains authoritative for whether the artifact
