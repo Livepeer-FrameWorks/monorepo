@@ -154,11 +154,23 @@ log_json_at() {
 # the whole node while it keeps running, keeps its address and keeps its local
 # (loopback) traffic. A helper container joined to that namespace with
 # NET_ADMIN holds the tools; the rules live in their own chains (FW_FAULT_IN,
-# FW_FAULT_OUT), so clearing them never touches Docker's own rules. The tools
-# are installed before any rule exists, while the namespace still has its
-# network.
-: "${STACK_NETFAULT_IMAGE:=alpine:3.22}"
+# FW_FAULT_OUT), so clearing them never touches Docker's own rules.
+: "${STACK_NETFAULT_BASE:=alpine:3.22}"
+: "${STACK_NETFAULT_IMAGE:=fw-stack-netfault:alpine3.22}"
 netfault_name() { printf '%s-netfault-%s' "$COMPOSE_PROJECT_NAME" "$1"; }
+# The tools are baked into a local image on the host network, with retries, so
+# a fault test never depends on package mirrors being reachable from inside the
+# service's namespace at that moment.
+netfault_image() {
+  local attempt
+  docker image inspect "$STACK_NETFAULT_IMAGE" >/dev/null 2>&1 && return 0
+  for attempt in 1 2 3; do
+    printf 'FROM %s\nRUN apk add --no-cache iptables iproute2\n' "$STACK_NETFAULT_BASE" |
+      docker build -q --network=host -t "$STACK_NETFAULT_IMAGE" - >/dev/null 2>&1 && return 0
+    sleep $((attempt * 5))
+  done
+  return 1
+}
 netfault_start() { # netfault_start <service>
   local cid name deadline
   command -v docker >/dev/null 2>&1 && [ -S /var/run/docker.sock ] && [ -n "${COMPOSE_PROJECT_NAME:-}" ] || {
@@ -169,9 +181,8 @@ netfault_start() { # netfault_start <service>
   [ -n "$cid" ] || { blocked "no running container for $1"; return 1; }
   name=$(netfault_name "$1")
   docker rm -f "$name" >/dev/null 2>&1
-  docker image inspect "$STACK_NETFAULT_IMAGE" >/dev/null 2>&1 || docker pull -q "$STACK_NETFAULT_IMAGE" >/dev/null 2>&1
+  netfault_image || { blocked "could not build the network fault helper image $STACK_NETFAULT_IMAGE"; return 1; }
   docker run -d --name "$name" --net "container:$cid" --cap-add NET_ADMIN "$STACK_NETFAULT_IMAGE" sh -c '
-    apk add --no-cache iptables iproute2 >/dev/null || exit 1
     for c in IN OUT; do iptables -N FW_FAULT_$c || exit 1; done
     iptables -I INPUT -j FW_FAULT_IN && iptables -I OUTPUT -j FW_FAULT_OUT || exit 1
     touch /ready
