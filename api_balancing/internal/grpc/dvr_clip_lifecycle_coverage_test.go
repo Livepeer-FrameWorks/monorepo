@@ -96,6 +96,7 @@ func TestDeleteClip_MismatchedTenantNotFound(t *testing.T) {
 // artifactCleaner is nil so S3 cleanup defers but the soft-delete still succeeds.
 func TestDeleteClip_SoftDeleteIssuesTenantScopedUpdate(t *testing.T) {
 	srv, mock := newLifecycleServer(t)
+	kicks := captureCatalogDirty(t)
 	cleanupRecorded := false
 	srv.recordThumbnailCleanup = func(ctx context.Context, tx *sql.Tx, tenantID, assetKey string) error {
 		cleanupRecorded = tenantID == "tenant-a" && assetKey == "clip-h"
@@ -149,6 +150,9 @@ func TestDeleteClip_SoftDeleteIssuesTenantScopedUpdate(t *testing.T) {
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatalf("unmet SQL expectations: %v", err)
+	}
+	if got := *kicks; got != 1 {
+		t.Fatalf("catalog projection kicks after clip delete = %d, want 1", got)
 	}
 }
 

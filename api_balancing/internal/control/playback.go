@@ -222,6 +222,13 @@ func (r *ContentResolution) ArtifactInternalNameIdentity() *commodorepb.ResolveA
 	}
 }
 
+// ErrPlaybackContentNotFound reports that the requested content has no live
+// artifact in this cell: it was never here or it has been deleted. The catalog
+// projection of a deletion runs after the delete commits, so a viewer can still
+// resolve a deleted artifact's playback ID for a moment; the front doors answer
+// this error as not-found, never as a resolution failure.
+var ErrPlaybackContentNotFound = errors.New("content not found")
+
 // ResolveContent determines content type and resolution strategy for a playback request.
 func ResolveContent(ctx context.Context, input string) (*ContentResolution, error) {
 	if input == "" {
@@ -334,7 +341,7 @@ func ResolveContent(ctx context.Context, input string) (*ContentResolution, erro
 		}
 	}
 
-	return nil, fmt.Errorf("content not found")
+	return nil, ErrPlaybackContentNotFound
 }
 
 func isArtifactHashCandidate(input string) bool {
@@ -478,8 +485,11 @@ func ResolveArtifactPlayback(ctx context.Context, deps *PlaybackDependencies, pl
 	}
 
 	artifactResp, err := CommodoreClient.ResolveArtifactPlaybackID(ctx, playbackID)
-	if err != nil || !artifactResp.Found || artifactResp.ArtifactHash == "" || artifactResp.ContentType == "" {
-		return nil, fmt.Errorf("content not found")
+	if err != nil {
+		return nil, fmt.Errorf("resolve artifact playback id: %w", err)
+	}
+	if !artifactResp.Found || artifactResp.ArtifactHash == "" || artifactResp.ContentType == "" {
+		return nil, ErrPlaybackContentNotFound
 	}
 	return resolveArtifactPlaybackWithResp(ctx, deps, playbackID, artifactResp, true)
 }
@@ -497,7 +507,7 @@ func ResolveArtifactPlaybackWithIdentity(ctx context.Context, deps *PlaybackDepe
 // chapter-synthesized).
 func resolveArtifactPlaybackWithResp(ctx context.Context, deps *PlaybackDependencies, playbackID string, artifactResp *commodorepb.ResolveArtifactPlaybackIDResponse, allowConnectedMetadata bool) (*sharedpb.ViewerEndpointResponse, error) {
 	if artifactResp == nil {
-		return nil, fmt.Errorf("content not found")
+		return nil, ErrPlaybackContentNotFound
 	}
 	if artifactResp.TenantId == "" {
 		return nil, fmt.Errorf("tenant_id missing for artifact")
@@ -534,7 +544,7 @@ func resolveArtifactPlaybackWithResp(ctx context.Context, deps *PlaybackDependen
 			if isRemoteOriginCluster(originClusterID, deps) && deps.FedClient != nil {
 				return resolveRemoteArtifactWithMetadata(ctx, deps, playbackID, artifactResp.ArtifactHash, originClusterID, artifactType, tenantID, allowedClusters, artifactResp, allowConnectedMetadata)
 			}
-			return nil, fmt.Errorf("%s not found", contentType)
+			return nil, fmt.Errorf("%s: %w", contentType, ErrPlaybackContentNotFound)
 		}
 		return nil, fmt.Errorf("failed to query artifact: %w", err)
 	}

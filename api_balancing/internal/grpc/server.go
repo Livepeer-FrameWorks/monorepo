@@ -1483,6 +1483,11 @@ func (s *FoghornGRPCServer) DeleteClip(ctx context.Context, req *sharedpb.Delete
 		return nil, status.Error(codes.NotFound, "clip not found")
 	}
 
+	// The catalog drops this clip's playback IDs only when the artifact
+	// reconciler projects the deletion; kick it now rather than leave the
+	// deleted artifact listed until the next unrelated pass.
+	control.NotifyCatalogDirty()
+
 	// Terminate any not-yet-finished processing job so a deleted clip never processes (e.g. delete
 	// races a freshly-queued job, or registry-write compensation). Best-effort and OUTSIDE the
 	// delete transaction: the dispatcher also skips deleted artifacts, so a failure here only risks
@@ -2558,6 +2563,12 @@ func (s *FoghornGRPCServer) DeleteDVR(ctx context.Context, req *sharedpb.DeleteD
 		return nil, status.Error(codes.Internal, "failed to delete DVR recording")
 	}
 
+	// The catalog drops the DVR's and its chapters' playback IDs only when the
+	// artifact reconciler projects the deletion; kick it now rather than leave
+	// them listed as ready until the next unrelated pass. A repeated delete
+	// that only repaired children needs the projection as well.
+	control.NotifyCatalogDirty()
+
 	// Already-deleted parent (idempotent re-delete, or the losing side of a concurrent delete): the
 	// cascade above still repaired any children that were never soft-deleted, so report
 	// their hashes for the caller's catalog cascade — but return Success=false so the Gateway does
@@ -2793,10 +2804,15 @@ func (s *FoghornGRPCServer) resolveViewerEndpoint(ctx context.Context, req *shar
 	}
 
 	if err != nil {
-		s.logger.WithError(err).WithFields(logging.Fields{
+		entry := s.logger.WithError(err).WithFields(logging.Fields{
 			"content_type": resolvedType,
 			"content_id":   req.ContentId,
-		}).Error("Failed to resolve viewer endpoint")
+		})
+		if status.Code(err) == codes.NotFound {
+			entry.Info("Resolved content has no playable artifact in this cell")
+		} else {
+			entry.Error("Failed to resolve viewer endpoint")
+		}
 		return nil, err
 	}
 
@@ -2954,6 +2970,9 @@ func (s *FoghornGRPCServer) resolveDVRViewerEndpoint(ctx context.Context, req *s
 		overrideActiveDVRMetadata(resp, dispatch)
 		return resp, nil
 	}
+	if dispatch != nil && dispatch.Status == "deleted" {
+		return nil, status.Error(codes.NotFound, "DVR recording not found")
+	}
 	latest, latestErr := s.latestPlayableChapterForDVR(ctx, dispatch)
 	if latestErr != nil {
 		s.logger.WithError(latestErr).WithFields(logging.Fields{
@@ -3047,7 +3066,7 @@ func (s *FoghornGRPCServer) resolveArtifactViewerEndpoint(ctx context.Context, r
 		if errors.Is(err, control.ErrStoredMediaPlacementUnavailable) {
 			return nil, status.Error(codes.Unavailable, err.Error())
 		}
-		if strings.Contains(err.Error(), "not found") {
+		if errors.Is(err, control.ErrPlaybackContentNotFound) || strings.Contains(err.Error(), "not found") {
 			return nil, status.Error(codes.NotFound, err.Error())
 		}
 		if strings.Contains(err.Error(), "not available") || strings.Contains(err.Error(), "unknown") {
@@ -4414,6 +4433,11 @@ func (s *FoghornGRPCServer) DeleteVodAsset(ctx context.Context, req *sharedpb.De
 			Message: "VOD asset is already deleted",
 		}, nil
 	}
+
+	// The catalog drops this artifact's playback IDs only when the artifact
+	// reconciler projects the deletion; kick it now rather than leave the
+	// deleted artifact listed until the next unrelated pass.
+	control.NotifyCatalogDirty()
 
 	s.logger.WithFields(logging.Fields{
 		"artifact_hash": req.ArtifactHash,

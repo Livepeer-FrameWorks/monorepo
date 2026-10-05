@@ -271,6 +271,7 @@ func TestDeleteVodAsset_AlreadyDeletedIsNoOp_RpcHandlers(t *testing.T) {
 // final UPDATE is the durable state transition.
 func TestDeleteVodAsset_SoftDeletesReadyAsset_RpcHandlers(t *testing.T) {
 	srv, mock := newVodRpcHandlers(t, &fakeVodS3Client{})
+	kicks := captureCatalogDirty(t)
 
 	mock.ExpectQuery(`FROM foghorn\.artifacts a`).
 		WithArgs("hash-1", "t1").
@@ -311,6 +312,9 @@ func TestDeleteVodAsset_SoftDeletesReadyAsset_RpcHandlers(t *testing.T) {
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatalf("unmet SQL expectations: %v", err)
+	}
+	if got := *kicks; got != 1 {
+		t.Fatalf("catalog projection kicks after VOD delete = %d, want 1", got)
 	}
 }
 

@@ -2188,6 +2188,9 @@ func resolveDVRViewerEndpoint(ctx context.Context, req *sharedpb.ViewerEndpointR
 	if dispatch == nil || dispatch.DVRHash == "" || db == nil {
 		return nil, errDVRChaptersPending
 	}
+	if dispatch.Status == "deleted" {
+		return nil, fmt.Errorf("dvr: %w", control.ErrPlaybackContentNotFound)
+	}
 	// A DVR owned by another cell has its chapters in that cell's catalog;
 	// the owner reported the latest playable one with the dispatch.
 	pid := sql.NullString{String: dispatch.RemoteLatestChapterID, Valid: dispatch.RemoteLatestChapterID != ""}
@@ -2494,6 +2497,13 @@ func HandleGenericViewerPlayback(c *gin.Context) {
 				"contentType": contentType,
 				"contentId":   contentID,
 			})
+			return
+		}
+		if errors.Is(err, control.ErrPlaybackContentNotFound) {
+			logger.WithError(err).WithFields(logging.Fields{
+				"view_key": viewKey, "internal_name": contentID, "content_type": contentType,
+			}).Info("Resolved content has no playable artifact in this cell")
+			respondPlaybackError(c, http.StatusNotFound, "VIEW_KEY_NOT_FOUND", "Invalid or expired view key", nil)
 			return
 		}
 		if errors.Is(err, control.ErrCrossClusterArtifactUnavailable) {
