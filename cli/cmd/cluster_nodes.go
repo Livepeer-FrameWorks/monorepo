@@ -223,7 +223,7 @@ type clusterReleaseTargetClient interface {
 }
 
 func resolveClusterNodeInstallVersion(cmd *cobra.Command, clusterID, fallbackVersion string) (string, error) {
-	qm, ctxCfg, cleanup, err := clusterNodesQMClientFromContext(cmd.Context())
+	qm, ctxCfg, cleanup, err := clusterNodesQMClient(cmd)
 	if err != nil {
 		return "", err
 	}
@@ -265,7 +265,7 @@ type clusterEnrollmentTokenClient interface {
 }
 
 func createClusterNodeEnrollmentToken(cmd *cobra.Command, clusterID, nodeName, tokenTTL string) (string, error) {
-	qm, ctxCfg, cleanup, err := clusterNodesQMClientFromContext(cmd.Context())
+	qm, ctxCfg, cleanup, err := clusterNodesQMClient(cmd)
 	if err != nil {
 		return "", err
 	}
@@ -376,7 +376,7 @@ func probeEdgeTarget(cmd *cobra.Command, clusterID, sshTarget, sshKey string, fo
 }
 
 func verifyExistingClusterNode(cmd *cobra.Command, clusterID, nodeID, targetVersion, fallbackVersion string) error {
-	qm, ctxCfg, cleanup, err := clusterNodesQMClientFromContext(cmd.Context())
+	qm, ctxCfg, cleanup, err := clusterNodesQMClient(cmd)
 	if err != nil {
 		return err
 	}
@@ -406,7 +406,7 @@ func verifyExistingClusterNode(cmd *cobra.Command, clusterID, nodeID, targetVers
 		return fmt.Errorf("target node %s is registered with status=%s; re-add is not treated as current", nodeID, registered.GetStatus())
 	}
 
-	fh, fhCtxCfg, fhCleanup, err := clusterNodesFoghornClientFromContext(cmd.Context(), firstNonEmpty(registered.GetClusterId(), clusterID))
+	fh, fhCtxCfg, fhCleanup, err := clusterNodesFoghornClientFor(cmd, firstNonEmpty(registered.GetClusterId(), clusterID))
 	if err != nil {
 		return fmt.Errorf("verify existing node health: %w", err)
 	}
@@ -607,7 +607,7 @@ func promptSelectCluster(cmd *cobra.Command) (*quartermasterpb.InfrastructureClu
 	if !isatty.IsTerminal(os.Stdin.Fd()) {
 		return nil, fmt.Errorf("--cluster-id is required when interactive cluster selection is unavailable")
 	}
-	qm, ctxCfg, cleanup, err := clusterNodesQMClientFromContext(cmd.Context())
+	qm, ctxCfg, cleanup, err := clusterNodesQMClient(cmd)
 	if err != nil {
 		return nil, err
 	}
@@ -686,7 +686,7 @@ func newClusterNodesListCmd() *cobra.Command {
 			if guardErr := requireClusterLifecycleContext(active); guardErr != nil {
 				return guardErr
 			}
-			qm, ctxCfg, cleanup, err := clusterNodesQMClientFromContext(cmd.Context())
+			qm, ctxCfg, cleanup, err := clusterNodesQMClient(cmd)
 			if err != nil {
 				return err
 			}
@@ -764,13 +764,12 @@ func runClusterNodesList(ctx context.Context, w io.Writer, qm clusterNodesListQM
 }
 
 func loadNodeHealth(cmd *cobra.Command, nodes []*quartermasterpb.InfrastructureNode) map[string]*foghorncontrolpb.GetNodeHealthResponse {
-	ctxCfg, err := activeClusterLifecycleContextWithAuth(cmd.Context())
+	ctxCfg, resolver, cleanup, err := clusterLifecycleAccess(cmd)
 	if err != nil {
 		_, _ = fmt.Fprintf(cmd.ErrOrStderr(), "warning: health unavailable: %v\n", err)
 		return nil
 	}
-	resolver := controlplane.NewResolver(ctxCfg)
-	defer resolver.Close()
+	defer cleanup()
 	healthByID, dialErrs, _ := collectNodeHealth(cmd.Context(), ctxCfg, nodes, foghornNodeHealthDialer(resolver, ctxCfg))
 	for _, dialErr := range dialErrs {
 		_, _ = fmt.Fprintf(cmd.ErrOrStderr(), "warning: health unavailable: %v\n", dialErr)
@@ -866,7 +865,7 @@ func nodeComponentVersions(versions []*foghorncontrolpb.NodeComponentVersion) st
 }
 
 func resolveClusterNode(cmd *cobra.Command, clusterID, selector string) (*quartermasterpb.InfrastructureNode, string, error) {
-	qm, ctxCfg, cleanup, err := clusterNodesQMClientFromContext(cmd.Context())
+	qm, ctxCfg, cleanup, err := clusterNodesQMClient(cmd)
 	if err != nil {
 		return nil, "", err
 	}
@@ -1106,7 +1105,7 @@ type nodeModeClient interface {
 }
 
 func setClusterNodeMode(cmd *cobra.Command, clusterID, nodeID, mode string) error {
-	fh, ctxCfg, cleanup, err := clusterNodesFoghornClientFromContext(cmd.Context(), clusterID)
+	fh, ctxCfg, cleanup, err := clusterNodesFoghornClientFor(cmd, clusterID)
 	if err != nil {
 		return err
 	}
@@ -1136,7 +1135,7 @@ func runSetNodeMode(ctx context.Context, w io.Writer, fh nodeModeClient, ctxCfg 
 }
 
 func waitForNodeStreams(cmd *cobra.Command, clusterID, nodeID string, timeout time.Duration) error {
-	fh, ctxCfg, cleanup, err := clusterNodesFoghornClientFromContext(cmd.Context(), clusterID)
+	fh, ctxCfg, cleanup, err := clusterNodesFoghornClientFor(cmd, clusterID)
 	if err != nil {
 		return err
 	}
@@ -1167,7 +1166,7 @@ type nodeStatusClient interface {
 }
 
 func updateQuartermasterNodeStatus(cmd *cobra.Command, nodeID, clusterID, statusValue string) error {
-	qm, ctxCfg, cleanup, err := clusterNodesQMClientFromContext(cmd.Context())
+	qm, ctxCfg, cleanup, err := clusterNodesQMClient(cmd)
 	if err != nil {
 		return err
 	}
@@ -1276,21 +1275,24 @@ func activeClusterLifecycleContextWithAuth(ctx context.Context) (fwcfg.Context, 
 	return ctxCfg, nil
 }
 
-func clusterNodesQMClientFromContext(ctx context.Context) (*qmclient.GRPCClient, fwcfg.Context, func(), error) {
-	ctxCfg, err := activeClusterLifecycleContextWithAuth(ctx)
+// clusterNodesQMClient dials Quartermaster for a cluster lifecycle command,
+// through the context and manifest clusterLifecycleAccess selects.
+func clusterNodesQMClient(cmd *cobra.Command) (*qmclient.GRPCClient, fwcfg.Context, func(), error) {
+	ctxCfg, resolver, cleanup, err := clusterLifecycleAccess(cmd)
 	if err != nil {
 		return nil, fwcfg.Context{}, nil, err
 	}
-	ep, err := controlplane.ResolveGRPC(ctx, ctxCfg, "quartermaster")
+	ep, err := resolver.ResolveGRPC(cmd.Context(), "quartermaster")
 	if err != nil {
+		cleanup()
 		return nil, fwcfg.Context{}, nil, err
 	}
 	qm, err := qmclient.NewGRPCClient(clusterNodesQuartermasterGRPCConfig(ep, ctxCfg))
 	if err != nil {
-		ep.Cleanup()
+		cleanup()
 		return nil, fwcfg.Context{}, nil, fmt.Errorf("failed to connect to Quartermaster gRPC: %w", err)
 	}
-	return qm, ctxCfg, ep.Cleanup, nil
+	return qm, ctxCfg, cleanup, nil
 }
 
 func clusterNodesQuartermasterGRPCConfig(ep controlplane.Endpoint, ctxCfg fwcfg.Context) qmclient.GRPCConfig {
@@ -1306,20 +1308,19 @@ func clusterNodesQuartermasterGRPCConfig(ep controlplane.Endpoint, ctxCfg fwcfg.
 	}
 }
 
-// clusterNodesFoghornClientFromContext dials the Foghorn that serves clusterID
-// in the active context's manifest.
-func clusterNodesFoghornClientFromContext(ctx context.Context, clusterID string) (*fhclient.GRPCClient, fwcfg.Context, func(), error) {
-	ctxCfg, err := activeClusterLifecycleContextWithAuth(ctx)
+// clusterNodesFoghornClientFor dials the Foghorn that serves clusterID, through
+// the context and manifest clusterLifecycleAccess selects.
+func clusterNodesFoghornClientFor(cmd *cobra.Command, clusterID string) (*fhclient.GRPCClient, fwcfg.Context, func(), error) {
+	ctxCfg, resolver, cleanup, err := clusterLifecycleAccess(cmd)
 	if err != nil {
 		return nil, fwcfg.Context{}, nil, err
 	}
-	resolver := controlplane.NewResolver(ctxCfg)
-	fh, err := clusterNodesFoghornClient(ctx, resolver, ctxCfg, clusterID)
+	fh, err := clusterNodesFoghornClient(cmd.Context(), resolver, ctxCfg, clusterID)
 	if err != nil {
-		resolver.Close()
+		cleanup()
 		return nil, fwcfg.Context{}, nil, err
 	}
-	return fh, ctxCfg, resolver.Close, nil
+	return fh, ctxCfg, cleanup, nil
 }
 
 // clusterNodesFoghornClient dials, through resolver, the manifest Foghorn
@@ -1441,4 +1442,90 @@ func commandVerbTitle(value string) string {
 		return ""
 	}
 	return strings.ToUpper(value[:1]) + value[1:]
+}
+
+// manifestLifecycleContext is the platform lifecycle context for a manifest
+// the active context did not supply. Endpoints resolve from that manifest and
+// the service token comes from its env_files, so nothing the active context
+// saved (endpoints, cluster scope, token) can point the command at another
+// cluster.
+func manifestLifecycleContext(rc *resolvedCluster) (fwcfg.Context, error) {
+	if rc == nil || rc.Manifest == nil {
+		return fwcfg.Context{}, fmt.Errorf("a resolved cluster manifest is required")
+	}
+	sharedEnv, err := rc.SharedEnv()
+	if err != nil {
+		return fwcfg.Context{}, fmt.Errorf("load manifest env_files: %w", err)
+	}
+	token := strings.TrimSpace(sharedEnv["SERVICE_TOKEN"])
+	if token == "" {
+		return fwcfg.Context{}, fmt.Errorf("SERVICE_TOKEN missing from manifest env_files (%s)", rc.ManifestPath)
+	}
+	ctxCfg := fwcfg.Context{
+		Name:       "manifest-invocation",
+		Persona:    fwcfg.PersonaPlatform,
+		AccessMode: fwcfg.AccessModeSSH,
+		Endpoints:  fwcfg.DefaultEndpoints(),
+	}
+	if isDevProfile(rc.Manifest) {
+		ctxCfg.AccessMode = fwcfg.AccessModeLocal
+	}
+	ctxCfg.Auth.ServiceToken = token
+	return ctxCfg, nil
+}
+
+// lifecycleContextForResolved returns the lifecycle context a command working
+// on rc authenticates with: the active context when it supplied rc for its own
+// cluster, otherwise the manifest's own lifecycle context.
+func lifecycleContextForResolved(ctx context.Context, rc *resolvedCluster) (fwcfg.Context, error) {
+	if rc.manifestFromActiveContext() {
+		return activeClusterLifecycleContextWithAuth(ctx)
+	}
+	return manifestLifecycleContext(rc)
+}
+
+// clusterManifestSelected reports whether flags or env select the manifest
+// (--manifest, --gitops-dir, --github-repo, --cluster) rather than leaving it
+// to the active context.
+func clusterManifestSelected(cmd *cobra.Command) bool {
+	for _, name := range []string{"manifest", "gitops-dir", "github-repo", "cluster"} {
+		if stringFlag(cmd, name).Changed {
+			return true
+		}
+	}
+	return manifestSourceInEnv()
+}
+
+// clusterLifecycleAccess returns the context a cluster lifecycle command
+// authenticates with and the resolver it dials the control plane through.
+// Without a manifest selection it is the active context; with one, both follow
+// the selected manifest. The caller runs the returned cleanup.
+func clusterLifecycleAccess(cmd *cobra.Command) (fwcfg.Context, *controlplane.Resolver, func(), error) {
+	if !clusterManifestSelected(cmd) {
+		ctxCfg, err := activeClusterLifecycleContextWithAuth(cmd.Context())
+		if err != nil {
+			return fwcfg.Context{}, nil, nil, err
+		}
+		r := controlplane.NewResolver(ctxCfg)
+		return ctxCfg, r, r.Close, nil
+	}
+	rc, err := resolveClusterManifest(cmd)
+	if err != nil {
+		return fwcfg.Context{}, nil, nil, err
+	}
+	release := func() {
+		if rc.Cleanup != nil {
+			rc.Cleanup()
+		}
+	}
+	ctxCfg, err := lifecycleContextForResolved(cmd.Context(), rc)
+	if err != nil {
+		release()
+		return fwcfg.Context{}, nil, nil, err
+	}
+	r := controlplane.NewResolverWithManifest(ctxCfg, rc.Manifest, rc.ManifestPath, rc.AgeKey)
+	return ctxCfg, r, func() {
+		r.Close()
+		release()
+	}, nil
 }

@@ -214,32 +214,26 @@ func reconcileContextForResolved(ctx context.Context, rc *resolvedCluster) (fwcf
 	if rc == nil || rc.Manifest == nil {
 		return fwcfg.Context{}, fmt.Errorf("release reconciliation requires a resolved cluster manifest")
 	}
-	cfg, err := fwcfg.Load()
+	// The active context's saved endpoints and cluster scope describe rc only
+	// when that context supplied rc for its own cluster; otherwise everything
+	// resolves from the manifest. The service token always comes from rc.
+	ctxCfg, err := manifestLifecycleContext(rc)
 	if err != nil {
 		return fwcfg.Context{}, err
 	}
-	ctxCfg, err := fwcfg.MaybeActiveContext(fwcfg.GetRuntimeOverrides(), fwcfg.OSEnv{}, cfg)
-	if err != nil {
-		return fwcfg.Context{}, err
-	}
-	if ctxCfg.Persona != fwcfg.PersonaPlatform {
-		ctxCfg = fwcfg.Context{
-			Name:       "manifest-invocation",
-			Persona:    fwcfg.PersonaPlatform,
-			AccessMode: fwcfg.AccessModeSSH,
-			Endpoints:  fwcfg.DefaultEndpoints(),
+	if rc.manifestFromActiveContext() {
+		cfg, loadErr := fwcfg.Load()
+		if loadErr != nil {
+			return fwcfg.Context{}, loadErr
 		}
-		if isDevProfile(rc.Manifest) {
-			ctxCfg.AccessMode = fwcfg.AccessModeLocal
+		active, activeErr := fwcfg.MaybeActiveContext(fwcfg.GetRuntimeOverrides(), fwcfg.OSEnv{}, cfg)
+		if activeErr != nil {
+			return fwcfg.Context{}, activeErr
 		}
-	}
-	sharedEnv, err := rc.SharedEnv()
-	if err != nil {
-		return fwcfg.Context{}, fmt.Errorf("load manifest env_files for reconciliation: %w", err)
-	}
-	ctxCfg.Auth.ServiceToken = strings.TrimSpace(sharedEnv["SERVICE_TOKEN"])
-	if ctxCfg.Auth.ServiceToken == "" {
-		return fwcfg.Context{}, fmt.Errorf("SERVICE_TOKEN missing from manifest env_files (%s)", rc.ManifestPath)
+		if active.Persona == fwcfg.PersonaPlatform {
+			active.Auth.ServiceToken = ctxCfg.Auth.ServiceToken
+			ctxCfg = active
+		}
 	}
 	jwt, err := fwcredentials.ResolveUserAuth(fwcfg.OSEnv{}, fwcredentials.DefaultStore())
 	if err != nil {

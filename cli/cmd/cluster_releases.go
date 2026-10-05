@@ -102,7 +102,7 @@ func newClusterReleasesListCmd() *cobra.Command {
 		Use:   "list",
 		Short: "List edge releases",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			qm, ctxCfg, cleanup, err := clusterNodesQMClientFromContext(cmd.Context())
+			qm, ctxCfg, cleanup, err := clusterNodesQMClient(cmd)
 			if err != nil {
 				return err
 			}
@@ -573,7 +573,7 @@ func releaseTargetControls(target *quartermasterpb.ClusterReleaseTarget) (string
 }
 
 func edgeReleaseQMClientForGitOpsSync(cmd *cobra.Command, rc *resolvedCluster, sharedEnv map[string]string) (*qmclient.GRPCClient, fwcfg.Context, func(), error) {
-	qm, ctxCfg, cleanup, err := clusterNodesQMClientFromContext(cmd.Context())
+	qm, ctxCfg, cleanup, err := clusterNodesQMClient(cmd)
 	if err == nil && rc != nil && contextTargetsManifest(ctxCfg, rc.Manifest) {
 		return qm, ctxCfg, cleanup, nil
 	}
@@ -667,7 +667,7 @@ func contextTargetsManifest(ctxCfg fwcfg.Context, manifest *inventory.Manifest) 
 }
 
 func edgeReleaseQMClientForCommand(cmd *cobra.Command) (*qmclient.GRPCClient, fwcfg.Context, []string, func(), error) {
-	qm, ctxCfg, cleanup, err := clusterNodesQMClientFromContext(cmd.Context())
+	qm, ctxCfg, cleanup, err := clusterNodesQMClient(cmd)
 	if err == nil {
 		return qm, ctxCfg, nil, cleanup, nil
 	}
@@ -715,7 +715,7 @@ func newClusterReleaseTargetGetCmd() *cobra.Command {
 				}
 				clusterID = selected.GetClusterId()
 			}
-			qm, rpcCtxCfg, cleanup, err := clusterNodesQMClientFromContext(cmd.Context())
+			qm, rpcCtxCfg, cleanup, err := clusterNodesQMClient(cmd)
 			if err != nil {
 				return err
 			}

@@ -114,6 +114,11 @@ type resolvedCluster struct {
 	// use it as a cache hint and resolve through Quartermaster when absent.
 	ContextSystemTenantID string
 
+	// ClusterOverridesContext is true when --cluster selected a cluster other
+	// than the one the active context's gitops source names, so a
+	// context-sourced manifest still describes a different cluster.
+	ClusterOverridesContext bool
+
 	// SourcePersistsManifest is true when ManifestPath is a real on-disk file that survives this process (local
 	// manifest/gitops-dir/cwd, or a context pointing at a local checkout). It is FALSE for a GitHub-fetched source,
 	// whose ManifestPath is a temporary checkout removed by Cleanup — so a command that writes to ManifestPath must
@@ -370,18 +375,43 @@ func resolveClusterManifest(cmd *cobra.Command) (*resolvedCluster, error) {
 	}
 
 	return &resolvedCluster{
-		Manifest:               manifest,
-		ManifestPath:           rm.Path,
-		AgeKey:                 rm.AgeKey,
-		Source:                 source,
-		Cluster:                rm.Cluster,
-		ReleaseRepos:           resolveReleaseRepositories(cmd, cfg, ctxCfg, rm, cwd),
-		Cleanup:                rm.Cleanup,
-		Persona:                ctxCfg.Persona,
-		ContextName:            ctxCfg.Name,
-		ContextSystemTenantID:  ctxCfg.SystemTenantID,
-		SourcePersistsManifest: manifestSourcePersistsToDisk(source, ctxCfg),
+		Manifest:                manifest,
+		ManifestPath:            rm.Path,
+		AgeKey:                  rm.AgeKey,
+		Source:                  source,
+		Cluster:                 rm.Cluster,
+		ReleaseRepos:            resolveReleaseRepositories(cmd, cfg, ctxCfg, rm, cwd),
+		Cleanup:                 rm.Cleanup,
+		Persona:                 ctxCfg.Persona,
+		ContextName:             ctxCfg.Name,
+		ContextSystemTenantID:   ctxCfg.SystemTenantID,
+		ClusterOverridesContext: clusterFlagOverridesContext(stringFlag(cmd, "cluster"), ctxCfg),
+		SourcePersistsManifest:  manifestSourcePersistsToDisk(source, ctxCfg),
 	}, nil
+}
+
+// clusterFlagOverridesContext reports whether --cluster names a cluster other
+// than the active context's gitops cluster.
+func clusterFlagOverridesContext(flag inventory.StringFlag, ctxCfg fwcfg.Context) bool {
+	if !flag.Changed || strings.TrimSpace(flag.Value) == "" {
+		return false
+	}
+	if ctxCfg.Gitops == nil {
+		return true
+	}
+	return strings.TrimSpace(flag.Value) != strings.TrimSpace(ctxCfg.Gitops.Cluster)
+}
+
+// manifestFromActiveContext reports whether the active context supplied this
+// manifest for its own cluster. Only then do the context's saved endpoints,
+// cluster scope, system tenant and service token describe the same cluster as
+// the manifest; a manifest from --manifest, --gitops-dir, --github-repo, their
+// env, or another --cluster may belong to a different platform.
+func (rc *resolvedCluster) manifestFromActiveContext() bool {
+	if rc == nil || rc.ClusterOverridesContext {
+		return false
+	}
+	return rc.Source == inventory.SourceContext || rc.Source == inventory.SourceContextLastManifest
 }
 
 // manifestSourcePersistsToDisk reports whether a resolved manifest source is a real on-disk file that outlives this
