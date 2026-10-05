@@ -10,7 +10,6 @@ import (
 	"text/tabwriter"
 	"time"
 
-	fwcfg "frameworks/cli/internal/config"
 	"frameworks/cli/internal/ux"
 	"frameworks/cli/pkg/detect"
 	"frameworks/cli/pkg/gitops"
@@ -220,7 +219,7 @@ func runClusterStatus(cmd *cobra.Command, rc *resolvedCluster, jsonOutput bool) 
 	}
 	printReplicaDiscrepancies(cmd, results)
 
-	printStatusControlPlaneSection(cmd, manifest)
+	printStatusControlPlaneSection(cmd, rc)
 	return nil
 }
 
@@ -339,16 +338,13 @@ func printReplicaDiscrepancies(cmd *cobra.Command, results []serviceStatus) {
 // Checked=false unless endpoint resolution itself fails — in that case
 // buildControlPlaneReport surfaces the failure as a warning and forces
 // Checked=true so the policy gate cannot read silent failure as success.
-func printStatusControlPlaneSection(cmd *cobra.Command, manifest *inventory.Manifest) {
+func printStatusControlPlaneSection(cmd *cobra.Command, rc *resolvedCluster) {
 	out := cmd.OutOrStdout()
-	cfg, err := fwcfg.Load()
-	if err != nil {
+	systemTenantID := doctorContextSystemTenantID(rc)
+	if systemTenantID == "" {
 		return
 	}
-	active, mErr := fwcfg.MaybeActiveContext(fwcfg.GetRuntimeOverrides(), fwcfg.OSEnv{}, cfg)
-	if mErr != nil || active.SystemTenantID == "" {
-		return
-	}
+	manifest := rc.Manifest
 
 	qmAddr, _ := resolveServiceGRPCAddr(manifest, "quartermaster", 19002) //nolint:errcheck // empty on miss is the intent
 
@@ -358,12 +354,12 @@ func printStatusControlPlaneSection(cmd *cobra.Command, manifest *inventory.Mani
 	// Checked=false unless resolution itself fails — and that case still
 	// produces a warning via endpointResolutionWarnings.
 	report := buildControlPlaneReport(cmd.Context(), manifest, map[string]any{
-		"system_tenant_id": active.SystemTenantID,
+		"system_tenant_id": systemTenantID,
 	}, nil)
 
 	fmt.Fprintln(out, "")
 	ux.Subheading(out, "Control Plane:")
-	fmt.Fprintf(out, "  system tenant:  %s\n", active.SystemTenantID)
+	fmt.Fprintf(out, "  system tenant:  %s\n", systemTenantID)
 	if qmAddr != "" {
 		fmt.Fprintf(out, "  quartermaster:  %s\n", qmAddr)
 	}

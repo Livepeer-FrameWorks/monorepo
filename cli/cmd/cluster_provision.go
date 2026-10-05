@@ -27,7 +27,6 @@ import (
 	"sync"
 	"time"
 
-	fwcfg "frameworks/cli/internal/config"
 	"frameworks/cli/internal/internalpki"
 	meshutil "frameworks/cli/internal/mesh"
 	"frameworks/cli/internal/readiness"
@@ -419,7 +418,7 @@ func runProvision(cmd *cobra.Command, rc *resolvedCluster, only, version string,
 		}
 	}
 
-	renderProvisionSummary(ctx, cmd, manifest, only, initRan, seedsRan)
+	renderProvisionSummary(ctx, cmd, rc, only, initRan, seedsRan)
 	return nil
 }
 
@@ -595,14 +594,15 @@ func meshIdentityRemediation(rc *resolvedCluster) string {
 // renderProvisionSummary prints the multi-line Result block and the Next:
 // block for a successful provision. Both degrade cleanly in CI / JSON modes
 // via the ux helpers.
-func renderProvisionSummary(ctx context.Context, cmd *cobra.Command, manifest *inventory.Manifest, only string, initRan, seedsRan bool) {
+func renderProvisionSummary(ctx context.Context, cmd *cobra.Command, rc *resolvedCluster, only string, initRan, seedsRan bool) {
 	out := cmd.OutOrStdout()
+	manifest := rc.Manifest
 
 	// Build a fresh readiness report after post-provision init/seed work.
 	// The earlier validateControlPlane call inside postProvisionFinalize may
 	// have seen pre-init state.
 	adminBootstrapped, _ := cmd.Flags().GetString("bootstrap-admin-email") //nolint:errcheck // flag always exists
-	report := buildControlPlaneReport(ctx, manifest, collectRuntimeForReadinessOnly(cmd, manifest), nil)
+	report := buildControlPlaneReport(ctx, manifest, collectRuntimeForReadinessOnly(rc), nil)
 
 	// If the readiness check couldn't run (no service token), we don't know
 	// whether an admin account exists — report state honestly as "unknown"
@@ -672,20 +672,16 @@ func renderProvisionSummary(ctx context.Context, cmd *cobra.Command, manifest *i
 	ux.PrintNextSteps(out, steps)
 }
 
-func collectRuntimeForReadinessOnly(_ *cobra.Command, manifest *inventory.Manifest) map[string]any {
+func collectRuntimeForReadinessOnly(rc *resolvedCluster) map[string]any {
 	// Re-resolve what we need from manifest + shared env just for the final
 	// readiness recheck. Keep this separate from the provision runtimeData
 	// map so changes to one don't leak into the other.
 	data := map[string]any{}
-	if qmAddr, err := resolveServiceGRPCAddr(manifest, "quartermaster", defaultGRPCPort("quartermaster")); err == nil {
+	if qmAddr, err := resolveServiceGRPCAddr(rc.Manifest, "quartermaster", defaultGRPCPort("quartermaster")); err == nil {
 		data["quartermaster_grpc_addr"] = qmAddr
 	}
-	cfg, err := fwcfg.Load()
-	if err == nil {
-		active, mErr := fwcfg.MaybeActiveContext(fwcfg.GetRuntimeOverrides(), fwcfg.OSEnv{}, cfg)
-		if mErr == nil && active.SystemTenantID != "" {
-			data["system_tenant_id"] = active.SystemTenantID
-		}
+	if id := doctorContextSystemTenantID(rc); id != "" {
+		data["system_tenant_id"] = id
 	}
 	// service_token comes from manifest shared env; we can't read that here
 	// without triggering SOPS decryption. If it's missing, readiness

@@ -185,6 +185,11 @@ func TestDoctorContextSystemTenantIDOnlyFromContextManifest(t *testing.T) {
 			t.Fatalf("source %s: system tenant = %q, want %q", tc.source, got, tc.want)
 		}
 	}
+	// --cluster on the context's own gitops source selects another cluster.
+	rc := &resolvedCluster{Manifest: manifest, Source: inventory.SourceContext, ContextSystemTenantID: "ctx-tenant", ClusterOverridesContext: true}
+	if got := doctorContextSystemTenantID(rc); got != "" {
+		t.Fatalf("--cluster override: system tenant = %q, want none", got)
+	}
 }
 
 // Without a saved system tenant, doctor --deep resolves the bootstrap system

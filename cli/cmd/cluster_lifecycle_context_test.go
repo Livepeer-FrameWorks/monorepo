@@ -177,3 +177,40 @@ func TestClusterLifecycleAccessFollowsSelectedManifest(t *testing.T) {
 		t.Fatalf("no selection = token %q cluster %q, want the active context", got.Auth.ServiceToken, got.ClusterID)
 	}
 }
+
+// The provision summary's readiness recheck reuses the active context's saved
+// system tenant only for that context's own cluster.
+func TestProvisionReadinessSystemTenantFollowsSelectedManifest(t *testing.T) {
+	f := newLifecycleFixture(t)
+	for _, tc := range []struct {
+		label     string
+		source    inventory.ManifestSource
+		overrides bool
+		want      any
+	}{
+		{"context", inventory.SourceContext, false, "production-system-tenant"},
+		{"--gitops-dir", inventory.SourceGitopsDirFlag, false, nil},
+		{"--cluster on the context's gitops", inventory.SourceContext, true, nil},
+	} {
+		if got := collectRuntimeForReadinessOnly(f.stagingRC(tc.source, tc.overrides))["system_tenant_id"]; got != tc.want {
+			t.Fatalf("%s: system_tenant_id = %v, want %v", tc.label, got, tc.want)
+		}
+	}
+}
+
+// An edge manifest's control-plane context is derived from its cluster
+// manifest; the active context's saved endpoints and cluster scope belong to
+// another cluster and must not carry over.
+func TestEdgeManifestControlPlaneContextIgnoresActiveScope(t *testing.T) {
+	f := newLifecycleFixture(t)
+	cfg, err := fwcfg.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	base := cfg.Contexts["production"]
+	got, _, err := edgeManifestControlPlaneContext(context.Background(), base, f.stagingManifest, "")
+	if err != nil {
+		t.Fatalf("derive: %v", err)
+	}
+	f.assertStaging(t, "--cluster-manifest", got)
+}

@@ -76,9 +76,8 @@ func (rc *resolvedCluster) RuntimeData(ctx context.Context, sshKey string) (map[
 		manifestDir := filepath.Dir(rc.ManifestPath)
 		data, err := clusterRuntimeData(ctx, rc.Manifest, sharedEnv, manifestDir, sshKey)
 		if err != nil {
-			remembered := strings.TrimSpace(rc.ContextSystemTenantID)
-			contextSourced := rc.Source == inventory.SourceContext || rc.Source == inventory.SourceContextLastManifest
-			if remembered == "" || !contextSourced || anyClusterRunsLivepeerGateway(rc.Manifest) {
+			remembered := doctorContextSystemTenantID(rc)
+			if remembered == "" || anyClusterRunsLivepeerGateway(rc.Manifest) {
 				rc.runtimeDataErr = err
 				return
 			}

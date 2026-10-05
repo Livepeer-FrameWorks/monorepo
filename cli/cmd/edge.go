@@ -1366,14 +1366,18 @@ func edgeManifestControlPlaneContext(ctx context.Context, base fwcfg.Context, cl
 		return base, caBundlePEM, err
 	}
 
-	derived := base
-	derived.Name = firstNonEmpty(base.Name, "edge-manifest")
-	derived.Persona = fwcfg.PersonaPlatform
-	derived.AccessMode = fwcfg.AccessModeSSH
-	derived.Gitops = &fwcfg.Gitops{
-		Source:       fwcfg.GitopsManifest,
-		ManifestPath: clusterManifestPath,
-		AgeKeyPath:   ageKeyFile,
+	// The cluster manifest may belong to another platform than base, so
+	// nothing base saved (endpoints, cluster scope, system tenant) carries over.
+	derived := fwcfg.Context{
+		Name:       firstNonEmpty(base.Name, "edge-manifest"),
+		Persona:    fwcfg.PersonaPlatform,
+		AccessMode: fwcfg.AccessModeSSH,
+		Endpoints:  fwcfg.DefaultEndpoints(),
+		Gitops: &fwcfg.Gitops{
+			Source:       fwcfg.GitopsManifest,
+			ManifestPath: clusterManifestPath,
+			AgeKeyPath:   ageKeyFile,
+		},
 	}
 	cfg, err := fwcfg.Load()
 	if err != nil {

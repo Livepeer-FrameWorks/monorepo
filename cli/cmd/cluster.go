@@ -1574,14 +1574,15 @@ func doctorControlPlane(cmd *cobra.Command, rc *resolvedCluster, serviceToken st
 }
 
 // doctorContextSystemTenantID is the system tenant UUID the active context
-// saved, used only when that context also supplied the manifest. A manifest
-// passed explicitly (--manifest, --gitops-dir) may name a different platform,
-// so its system tenant is resolved from that platform's Quartermaster.
+// saved, used only when that context also supplied the manifest for its own
+// cluster. A manifest passed explicitly (--manifest, --gitops-dir) or another
+// --cluster may name a different platform, so its system tenant is resolved
+// from that platform's Quartermaster.
 func doctorContextSystemTenantID(rc *resolvedCluster) string {
 	if rc == nil {
 		return ""
 	}
-	if rc.Source != inventory.SourceContext && rc.Source != inventory.SourceContextLastManifest {
+	if !rc.manifestFromActiveContext() {
 		return ""
 	}
 	return strings.TrimSpace(rc.ContextSystemTenantID)

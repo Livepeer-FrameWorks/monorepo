@@ -10,7 +10,6 @@ import (
 	"frameworks/cli/internal/controlplane"
 	fwcredentials "frameworks/cli/internal/credentials"
 	"frameworks/cli/pkg/bootstrap"
-	"frameworks/cli/pkg/inventory"
 	"frameworks/cli/pkg/ssh"
 
 	qmclient "github.com/Livepeer-FrameWorks/monorepo/pkg/clients/quartermaster"
@@ -149,11 +148,9 @@ func (rc *resolvedCluster) ResolveSystemTenantID(ctx context.Context) (string, e
 		// An explicit manifest source may target a different cluster than the
 		// active context. Only trust the remembered identity when that context
 		// also supplied the manifest; explicit inputs resolve their own authority.
-		if rc.Source == inventory.SourceContext || rc.Source == inventory.SourceContextLastManifest {
-			if id := strings.TrimSpace(rc.ContextSystemTenantID); id != "" {
-				rc.systemTenantID = id
-				return
-			}
+		if id := doctorContextSystemTenantID(rc); id != "" {
+			rc.systemTenantID = id
+			return
 		}
 		client, _, cleanup, err := buildReconcileQM(ctx, rc)
 		if err != nil {
