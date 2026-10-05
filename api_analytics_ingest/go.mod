@@ -8,6 +8,7 @@ require (
 	github.com/Livepeer-FrameWorks/monorepo/pkg v0.0.0
 	github.com/google/uuid v1.6.0
 	github.com/prometheus/client_golang v1.23.2
+	github.com/sirupsen/logrus v1.9.4
 	google.golang.org/protobuf v1.36.12
 )
 
@@ -61,7 +62,6 @@ require (
 	github.com/quic-go/quic-go v0.59.0 // indirect
 	github.com/segmentio/asm v1.2.1 // indirect
 	github.com/shopspring/decimal v1.4.0 // indirect
-	github.com/sirupsen/logrus v1.9.4 // indirect
 	github.com/twitchyliquid64/golang-asm v0.15.1 // indirect
 	github.com/twmb/franz-go v1.21.0 // indirect
 	github.com/twmb/franz-go/pkg/kadm v1.18.0 // indirect
