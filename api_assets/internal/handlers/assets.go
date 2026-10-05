@@ -173,18 +173,29 @@ type storeProbeState struct {
 	lastSuccess time.Time
 	lastErr     error
 	failing     bool
+	// lastErrRefused records whether lastErr was the store refusing this instance (see storeRefusedRead) rather
+	// than the store being slow or unreachable.
+	lastErrRefused bool
 }
 
 // StoreReadinessCheck reports whether this Chandler can read its immutable backend, the only thing a static-object
-// server needs to prove before serving. Registered on the service ReadinessChecker, it makes /ready answer 200 while
-// the readiness sentinel was read within storeReadinessWindow and 503 otherwise, including before the first
-// successful read. It answers from the state RunStoreProbe records and never touches the object store itself, so
-// /ready stays fast whatever the store's latency. It involves no resolver, no Foghorn, and no publication state
-// (docs/architecture/thumbnails.md).
+// server needs to prove before serving. Registered on the service ReadinessChecker, it answers from the state
+// RunStoreProbe records and never touches the object store itself, so /ready stays fast whatever the store's
+// latency. It involves no resolver, no Foghorn, and no publication state (docs/architecture/thumbnails.md).
+//
+//   - Before the first successful sentinel read the instance is unhealthy (503): it never proved it can serve.
+//   - Within storeReadinessWindow of a successful read it is healthy, so one stalled read does not flip it.
+//   - Past the window, a store that refuses this instance's reads (storeRefusedRead: denied credentials, wrong
+//     bucket or prefix, missing sentinel) makes it unhealthy, because that is this instance's configuration and
+//     another replica may be configured correctly.
+//   - Past the window, a store that is only slow or unreachable (timeouts, transport errors, 5xx, throttling) makes
+//     it degraded, which /ready still answers 200. Every replica reads the same object store, so failing them would
+//     fail all of them in the same seconds and pull the whole pool out of rotation, including the cached objects
+//     they can still serve; each uncached request reports the backend failure itself.
 func (h *AssetHandler) StoreReadinessCheck() monitoring.HealthCheck {
 	return func() monitoring.CheckResult {
 		h.storeState.mu.Lock()
-		lastSuccess, lastErr := h.storeState.lastSuccess, h.storeState.lastErr
+		lastSuccess, lastErr, refused := h.storeState.lastSuccess, h.storeState.lastErr, h.storeState.lastErrRefused
 		h.storeState.mu.Unlock()
 		if lastSuccess.IsZero() {
 			msg := "readiness sentinel has not been read from the object store yet"
@@ -195,9 +206,15 @@ func (h *AssetHandler) StoreReadinessCheck() monitoring.HealthCheck {
 		}
 		age := h.clock().Sub(lastSuccess)
 		if age > storeReadinessWindow {
+			if refused {
+				return monitoring.CheckResult{
+					Status:  monitoring.StatusUnhealthy,
+					Message: fmt.Sprintf("object store refuses the readiness sentinel read (last read %s ago): %v", age.Round(time.Second), lastErr),
+				}
+			}
 			return monitoring.CheckResult{
-				Status:  monitoring.StatusUnhealthy,
-				Message: fmt.Sprintf("readiness sentinel last read %s ago: %v", age.Round(time.Second), lastErr),
+				Status:  monitoring.StatusDegraded,
+				Message: fmt.Sprintf("object store unavailable, serving cached objects only (sentinel last read %s ago): %v", age.Round(time.Second), lastErr),
 			}
 		}
 		return monitoring.CheckResult{Status: monitoring.StatusHealthy}
@@ -236,7 +253,39 @@ func (h *AssetHandler) recordStoreProbe(err error) {
 		h.logger.WithError(err).WithField("bucket", h.bucket).Warn("Readiness sentinel read from the object store failed")
 	}
 	h.storeState.lastErr = err
+	h.storeState.lastErrRefused = storeRefusedRead(err)
 	h.storeState.failing = true
+}
+
+// errEmptySentinel reports a sentinel object that exists but has no content.
+var errEmptySentinel = errors.New("readiness sentinel is empty")
+
+// errStoreNotConfigured reports an instance started without an object store client.
+var errStoreNotConfigured = errors.New("object store client not configured")
+
+// storeRefusedRead reports whether a sentinel probe failure is the store answering this instance with a refusal: a
+// 4xx API error (AccessDenied, InvalidAccessKeyId, SignatureDoesNotMatch, NoSuchBucket, NoSuchKey), an empty
+// sentinel, or no store client at all. Those come from this instance's credentials, bucket or prefix. Everything
+// else (deadline exceeded, a transport error, a body cut off mid-read, a 5xx, throttling or request timeout) is the
+// store being slow or unreachable, which every replica sharing it sees at once.
+func storeRefusedRead(err error) bool {
+	if errors.Is(err, errEmptySentinel) || errors.Is(err, errStoreNotConfigured) {
+		return true
+	}
+	var apiErr smithy.APIError
+	if !errors.As(err, &apiErr) {
+		return false
+	}
+	switch apiErr.ErrorCode() {
+	case "SlowDown", "Throttling", "ThrottlingException", "RequestTimeout", "RequestTimeTooSkewed", "ServiceUnavailable", "InternalError":
+		return false
+	}
+	var respErr interface{ HTTPStatusCode() int }
+	if errors.As(err, &respErr) {
+		code := respErr.HTTPStatusCode()
+		return code >= 400 && code < 500 && code != http.StatusTooManyRequests && code != http.StatusRequestTimeout
+	}
+	return apiErr.ErrorFault() == smithy.FaultClient
 }
 
 func (h *AssetHandler) clock() time.Time {
@@ -256,7 +305,7 @@ func (h *AssetHandler) probeStore(ctx context.Context) error {
 		return h.storeProbeFn(ctx)
 	}
 	if h.s3 == nil {
-		return errors.New("object store client not configured")
+		return errStoreNotConfigured
 	}
 	probeCtx, cancel := context.WithTimeout(ctx, storeProbeTimeout)
 	defer cancel()
@@ -275,7 +324,7 @@ func (h *AssetHandler) probeStore(ctx context.Context) error {
 	case rErr != nil:
 		return fmt.Errorf("read readiness sentinel body: %w", rErr)
 	case len(data) == 0:
-		return errors.New("readiness sentinel is empty")
+		return errEmptySentinel
 	}
 	return nil
 }

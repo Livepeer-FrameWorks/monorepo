@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -399,18 +400,29 @@ func TestStoreReadinessCheck(t *testing.T) {
 		}
 	})
 
-	t.Run("a store unreadable past the window is not ready until it reads again", func(t *testing.T) {
+	t.Run("a store refusing reads past the window is not ready until it reads again", func(t *testing.T) {
+		h, now := newHandler()
+		h.recordStoreProbe(nil)
+		*now = now.Add(storeReadinessWindow + time.Second)
+		h.recordStoreProbe(&smithy.GenericAPIError{Code: "AccessDenied", Fault: smithy.FaultClient})
+		got := h.StoreReadinessCheck()()
+		if got.Status != monitoring.StatusUnhealthy || !strings.Contains(got.Message, "AccessDenied") {
+			t.Fatalf("expected unhealthy naming the refusal past the window, got %+v", got)
+		}
+		h.recordStoreProbe(nil)
+		if got := h.StoreReadinessCheck()(); got.Status != monitoring.StatusHealthy {
+			t.Fatalf("expected healthy after the sentinel reads again, got %+v", got)
+		}
+	})
+
+	t.Run("a store stalled past the window is degraded, not unhealthy", func(t *testing.T) {
 		h, now := newHandler()
 		h.recordStoreProbe(nil)
 		*now = now.Add(storeReadinessWindow + time.Second)
 		h.recordStoreProbe(stall)
 		got := h.StoreReadinessCheck()()
-		if got.Status != monitoring.StatusUnhealthy || !strings.Contains(got.Message, "deadline exceeded") {
-			t.Fatalf("expected unhealthy naming the probe failure past the window, got %+v", got)
-		}
-		h.recordStoreProbe(nil)
-		if got := h.StoreReadinessCheck()(); got.Status != monitoring.StatusHealthy {
-			t.Fatalf("expected healthy after the sentinel reads again, got %+v", got)
+		if got.Status != monitoring.StatusDegraded || !strings.Contains(got.Message, "deadline exceeded") {
+			t.Fatalf("expected degraded naming the stall past the window, got %+v", got)
 		}
 	})
 
@@ -575,5 +587,68 @@ func TestStaticRouteNotRegistered(t *testing.T) {
 	}
 	if fake.calls != 0 {
 		t.Fatalf("an unregistered route must not hit S3, got %d calls", fake.calls)
+	}
+}
+
+// A sentinel read failure past the readiness window is classified by what the real S3 client returned. A store that
+// is slow or failing server-side (5xx, throttling, a read that outlives the probe deadline) affects every replica
+// reading it, so the instance stays ready as degraded and Quartermaster keeps the pool in rotation. A store that
+// refuses this instance (403 AccessDenied, 404 NoSuchKey/NoSuchBucket) is this instance's configuration and makes
+// it unhealthy.
+func TestStoreReadinessClassifiesRealStoreFailures(t *testing.T) {
+	cases := []struct {
+		name   string
+		status int
+		code   string
+		hang   bool
+		want   string
+	}{
+		{name: "probe deadline exceeded", hang: true, want: monitoring.StatusDegraded},
+		{name: "503 SlowDown", status: http.StatusServiceUnavailable, code: "SlowDown", want: monitoring.StatusDegraded},
+		{name: "500 InternalError", status: http.StatusInternalServerError, code: "InternalError", want: monitoring.StatusDegraded},
+		{name: "403 AccessDenied", status: http.StatusForbidden, code: "AccessDenied", want: monitoring.StatusUnhealthy},
+		{name: "404 NoSuchBucket", status: http.StatusNotFound, code: "NoSuchBucket", want: monitoring.StatusUnhealthy},
+		{name: "404 NoSuchKey", status: http.StatusNotFound, code: "NoSuchKey", want: monitoring.StatusUnhealthy},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			var failing atomic.Bool
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if !failing.Load() {
+					_, _ = w.Write([]byte("ready"))
+					return
+				}
+				if tc.hang {
+					<-r.Context().Done()
+					return
+				}
+				w.Header().Set("Content-Type", "application/xml")
+				w.WriteHeader(tc.status)
+				_, _ = w.Write([]byte(`<?xml version="1.0" encoding="UTF-8"?><Error><Code>` + tc.code + `</Code><Message>x</Message></Error>`))
+			}))
+			defer srv.Close()
+			h, err := NewAssetHandler(S3Config{
+				Bucket: "assets", Region: "us-east-1", Endpoint: srv.URL, AccessKey: "a", SecretKey: "s",
+			}, cache.NewLRU(16, time.Minute), logging.NewLoggerWithService("chandler-test"),
+				prometheus.NewCounter(prometheus.CounterOpts{Name: "classify_hits"}),
+				prometheus.NewCounter(prometheus.CounterOpts{Name: "classify_misses"}),
+				prometheus.NewCounter(prometheus.CounterOpts{Name: "classify_errors"}))
+			if err != nil {
+				t.Fatalf("NewAssetHandler: %v", err)
+			}
+			now := time.Date(2026, 10, 5, 18, 8, 0, 0, time.UTC)
+			h.now = func() time.Time { return now }
+			h.recordStoreProbe(h.probeStore(context.Background()))
+			failing.Store(true)
+			now = now.Add(storeReadinessWindow + time.Second)
+			probeErr := h.probeStore(context.Background())
+			if probeErr == nil {
+				t.Fatal("expected the failing store to fail the probe")
+			}
+			h.recordStoreProbe(probeErr)
+			if got := h.StoreReadinessCheck()(); got.Status != tc.want {
+				t.Fatalf("status = %q (%s), want %q", got.Status, got.Message, tc.want)
+			}
+		})
 	}
 }

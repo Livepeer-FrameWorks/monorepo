@@ -419,7 +419,12 @@ Foghorn fails closed if it cannot establish it — before Foghorn serves; the ob
 read-only. Because a fresh cell's Chandler cannot be ready until that sentinel exists, the planner deploys Chandler
 after the in-cell Foghorn. A background probe reads the sentinel at start and every 5 s (2 s per read); `/ready`
 answers from its result without touching the store, returning 200 while a read succeeded within the last 20 s and 503
-before the first successful read or once the store has stayed unreadable for that window. A single stalled or failed
+before the first successful read. Past that window the failure class decides. A store that refuses this instance
+(a 4xx such as AccessDenied, NoSuchBucket or NoSuchKey, or an empty sentinel) answers 503, because that is this
+instance's credentials, bucket or prefix. A store that is only slow or unreachable (a probe deadline, a transport
+error, a 5xx or throttling) answers 200 with the `store` check degraded: every replica reads the same store, so
+failing them would pull the whole pool out of service discovery in the same seconds, including the cached objects
+they can still serve, and each uncached request already answers 503 on its own. A single stalled or failed
 read therefore neither delays `/ready` past a caller's probe budget nor flips it, and each failure streak is logged
 with its error. Readiness — not liveness — is what gates deployment
 and service discovery (the rollout gate, the doctor probe, and the endpoint Quartermaster advertises all use `/ready`),
