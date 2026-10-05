@@ -14,11 +14,13 @@ import (
 	commodorepb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/commodore"
 	commonpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/common"
 
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 // DoCreateDeveloperToken creates a new developer token
-func (r *Resolver) DoCreateDeveloperToken(ctx context.Context, input model.CreateDeveloperTokenInput) (*commodorepb.APITokenInfo, error) {
+func (r *Resolver) DoCreateDeveloperToken(ctx context.Context, input model.CreateDeveloperTokenInput) (model.CreateDeveloperTokenResult, error) {
 	if ctxkeys.GetAuthType(ctx) == "api_token" {
 		return nil, fmt.Errorf("API tokens cannot manage API tokens")
 	}
@@ -67,6 +69,11 @@ func (r *Resolver) DoCreateDeveloperToken(ctx context.Context, input model.Creat
 	// Call Commodore to create token
 	tokenResp, err := r.Clients.Commodore.CreateAPIToken(ctx, req)
 	if err != nil {
+		// Commodore writes its InvalidArgument messages (expiry window,
+		// permission grammar) for the tenant.
+		if st, ok := status.FromError(err); ok && st.Code() == codes.InvalidArgument {
+			return &model.ValidationError{Message: st.Message()}, nil
+		}
 		r.Logger.WithError(err).Error("Failed to create developer token")
 		return nil, fmt.Errorf("failed to create developer token: %w", err)
 	}

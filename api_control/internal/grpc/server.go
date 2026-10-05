@@ -8506,6 +8506,10 @@ func sanitizePushTargetStatusError(raw string) string {
 // DEVELOPER SERVICE (Gateway → Commodore for API token management)
 // ============================================================================
 
+// maxAPITokenLifetime bounds an API token's expiry. A token that should
+// outlive it is created without an expiry and revoked explicitly.
+const maxAPITokenLifetime = 3650 * 24 * time.Hour
+
 // CreateAPIToken creates a new API token
 func (s *CommodoreServer) CreateAPIToken(ctx context.Context, req *commodorepb.CreateAPITokenRequest) (*commodorepb.CreateAPITokenResponse, error) {
 	userID, tenantID, err := extractInteractiveUserContext(ctx)
@@ -8537,6 +8541,13 @@ func (s *CommodoreServer) CreateAPIToken(ctx context.Context, req *commodorepb.C
 	var expiresAt sql.NullTime
 	if req.GetExpiresAt() != nil {
 		expiresAt = sql.NullTime{Time: req.GetExpiresAt().AsTime(), Valid: true}
+		now := time.Now()
+		if !expiresAt.Time.After(now) {
+			return nil, status.Error(codes.InvalidArgument, "token expiry must be in the future")
+		}
+		if expiresAt.Time.Sub(now) > maxAPITokenLifetime {
+			return nil, status.Errorf(codes.InvalidArgument, "token expiry must be at most %d days from now; omit the expiry for a token that does not expire", int(maxAPITokenLifetime/(24*time.Hour)))
+		}
 	}
 
 	created := &publicv1.ApiTokenCreated{TokenId: tokenID, Name: tokenName, Permissions: permissions}

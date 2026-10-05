@@ -12,6 +12,7 @@ import (
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/ctxkeys"
 	commodorepb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/commodore"
 	"google.golang.org/grpc/codes"
+	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 // captureArg records the bound value so a test can assert on it after the
@@ -86,6 +87,42 @@ func TestCreateAPIToken(t *testing.T) {
 		ctx := context.WithValue(ctxAs("u1", testTenantID, "owner"), ctxkeys.KeyAuthType, "api_token")
 		_, err := s.CreateAPIToken(ctx, &commodorepb.CreateAPITokenRequest{Permissions: []string{"streams:write"}})
 		wantCode(t, err, codes.PermissionDenied)
+	})
+
+	t.Run("expiry_must_be_future_and_bounded", func(t *testing.T) {
+		now := time.Now()
+		for name, expiresAt := range map[string]time.Time{
+			"86400_days":  now.AddDate(0, 0, 86400),
+			"past":        now.Add(-time.Hour),
+			"over_bound":  now.Add(maxAPITokenLifetime + time.Hour),
+			"zero_window": now,
+		} {
+			t.Run(name, func(t *testing.T) {
+				s, _, done := newMockServer(t)
+				defer done()
+				_, err := s.CreateAPIToken(ctxAs("u1", testTenantID, "owner"), &commodorepb.CreateAPITokenRequest{ExpiresAt: timestamppb.New(expiresAt)})
+				wantCode(t, err, codes.InvalidArgument)
+			})
+		}
+	})
+
+	t.Run("expiry_within_bound_is_stored", func(t *testing.T) {
+		s, mock, done := newMockServer(t)
+		defer done()
+		expiresAt := time.Now().Add(maxAPITokenLifetime - time.Hour).UTC().Truncate(time.Microsecond)
+		mock.ExpectBegin()
+		mock.ExpectExec("INSERT INTO commodore.api_tokens").
+			WithArgs(sqlmock.AnyArg(), testTenantID, "u1", sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(),
+				sql.NullTime{Time: expiresAt, Valid: true}).
+			WillReturnResult(sqlmock.NewResult(0, 1))
+		expectDualEventInsert(mock, "api_token.created", eventTokenCreated)
+		mock.ExpectCommit()
+		if _, err := s.CreateAPIToken(ctxAs("u1", testTenantID, "owner"), &commodorepb.CreateAPITokenRequest{ExpiresAt: timestamppb.New(expiresAt)}); err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if err := mock.ExpectationsWereMet(); err != nil {
+			t.Fatalf("expectations: %v", err)
+		}
 	})
 
 	t.Run("wildcard_and_unknown_permissions_are_rejected", func(t *testing.T) {

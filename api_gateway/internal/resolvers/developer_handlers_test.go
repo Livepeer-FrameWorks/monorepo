@@ -11,6 +11,8 @@ import (
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/ctxkeys"
 	commodorepb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/commodore"
 	commonpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/common"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
@@ -33,7 +35,7 @@ func TestDoCreateDeveloperToken(t *testing.T) {
 	}
 	perms := "streams:read, streams:write"
 	expiresIn := 7
-	out, err := commoW2(c).DoCreateDeveloperToken(clientstest.AuthedCtx("t1"), model.CreateDeveloperTokenInput{
+	res, err := commoW2(c).DoCreateDeveloperToken(clientstest.AuthedCtx("t1"), model.CreateDeveloperTokenInput{
 		Name:        "ci-token",
 		Permissions: &perms,
 		ExpiresIn:   &expiresIn,
@@ -54,8 +56,9 @@ func TestDoCreateDeveloperToken(t *testing.T) {
 	if d := time.Until(got.ExpiresAt.AsTime()); d < 6*24*time.Hour || d > 8*24*time.Hour {
 		t.Fatalf("ExpiresAt ~7d expected, got %v", d)
 	}
-	if out.GetTokenValue() != "fwk_secret" || out.Id != "tok1" || out.Status != "active" {
-		t.Fatalf("unexpected output: %+v", out)
+	out, ok := res.(*commodorepb.APITokenInfo)
+	if !ok || out.GetTokenValue() != "fwk_secret" || out.Id != "tok1" || out.Status != "active" {
+		t.Fatalf("unexpected output: %+v", res)
 	}
 
 	fail := commoW2(&clientstest.FakeCommodore{
@@ -65,6 +68,27 @@ func TestDoCreateDeveloperToken(t *testing.T) {
 	})
 	if _, err := fail.DoCreateDeveloperToken(clientstest.AuthedCtx("t1"), model.CreateDeveloperTokenInput{Name: "x"}); err == nil {
 		t.Fatal("backend error should propagate")
+	}
+}
+
+// Commodore owns the token rules (expiry window, permission grammar) and
+// writes their messages for the tenant; the mutation returns them as a
+// ValidationError instead of a raw gRPC error.
+func TestDoCreateDeveloperTokenReturnsCommodoreRuleAsValidationError(t *testing.T) {
+	const rule = "token expiry must be at most 3650 days from now; omit the expiry for a token that does not expire"
+	c := &clientstest.FakeCommodore{
+		CreateAPITokenFn: func(context.Context, *commodorepb.CreateAPITokenRequest) (*commodorepb.CreateAPITokenResponse, error) {
+			return nil, status.Error(codes.InvalidArgument, rule)
+		},
+	}
+	expiresIn := 86400
+	res, err := commoW2(c).DoCreateDeveloperToken(clientstest.AuthedCtx("t1"), model.CreateDeveloperTokenInput{Name: "far", ExpiresIn: &expiresIn})
+	if err != nil {
+		t.Fatalf("err = %v, want a ValidationError result", err)
+	}
+	verr, ok := any(res).(*model.ValidationError)
+	if !ok || verr.Message != rule {
+		t.Fatalf("result = %#v, want ValidationError %q", res, rule)
 	}
 }
 
