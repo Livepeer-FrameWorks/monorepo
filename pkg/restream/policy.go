@@ -31,6 +31,10 @@ type DestinationPolicy struct {
 	AllowedCIDRs []*net.IPNet
 	DeniedCIDRs  []*net.IPNet
 	LookupIP     func(context.Context, string) ([]net.IP, error)
+	// PlatformAddress, when set, reports addresses that belong to the
+	// platform itself. They are refused regardless of AllowPrivate and CIDR
+	// exceptions.
+	PlatformAddress func(net.IP) bool
 }
 
 // DestinationPolicyFromValues builds the policy from the raw values of
@@ -162,6 +166,9 @@ func (p DestinationPolicy) validateIP(ip net.IP) error {
 	}
 	if containsIP(p.DeniedCIDRs, ip) {
 		return errors.New("destination is denied by operator policy")
+	}
+	if p.PlatformAddress != nil && p.PlatformAddress(ip) {
+		return errors.New("platform-internal destinations are not allowed")
 	}
 	// A NAT64 or 6to4 address reaches the IPv4 address it embeds, so that
 	// address decides, unless the operator excepted the IPv6 form itself.

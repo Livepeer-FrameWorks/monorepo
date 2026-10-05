@@ -360,9 +360,10 @@ webhooks:
 **Fields:**
 
 - `allow_private_destinations` (default `false`) - lets webhook receivers use private
-  (RFC 1918 / ULA) addresses, plain `http`, and `.local` or `.internal` host names, for an
-  isolated staging or development cluster whose receivers live on its own network. Loopback,
-  link-local, and cloud metadata addresses stay blocked. The CLI renders it as
+  (RFC 1918 / ULA) addresses, plain `http`, and `.local` host names, for an isolated staging or
+  development cluster whose receivers live on its own network. It never opens the platform
+  itself: loopback, link-local, cloud metadata, `*.internal` mesh names, the service host's own
+  addresses, and addresses routed into the WireGuard mesh stay blocked. The CLI renders it as
   `BOSUN_ALLOW_PRIVATE_DESTINATIONS` on Bosun and `PLAYBACK_WEBHOOK_ALLOW_PRIVATE_DESTINATIONS`
   on Commodore and Foghorn; an env file or a service's `config` map still overrides it.
   Never enable it on a cluster that serves untrusted tenants.

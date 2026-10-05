@@ -38,8 +38,14 @@ func TestURLMapsSharedRules(t *testing.T) {
 	}
 	private := resolverPolicy("192.168.10.40")
 	private.AllowPrivate = true
-	if _, err := URL(context.Background(), private, "http://receiver.internal:9000/x"); err != nil {
+	if _, err := URL(context.Background(), private, "http://receiver.lan:9000/x"); err != nil {
 		t.Fatalf("private receiver with private destinations allowed = %v", err)
+	}
+	// The switch opens customer networks, never the platform's own mesh names.
+	for _, raw := range []string{"http://quartermaster.internal:18002/rc18-ssrf-probe", "https://quartermaster.internal/x"} {
+		if _, err := URL(context.Background(), private, raw); !errors.Is(err, ErrInvalid) {
+			t.Errorf("URL(%q) with private destinations allowed = %v, want ErrInvalid", raw, err)
+		}
 	}
 }
 

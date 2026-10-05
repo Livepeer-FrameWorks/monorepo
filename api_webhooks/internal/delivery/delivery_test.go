@@ -199,3 +199,47 @@ func TestRenderedCreatedAtHasFixedWidth(t *testing.T) {
 		previous = body.CreatedAt
 	}
 }
+
+// With private destinations allowed (an isolated cluster), a receiver on this
+// host's own address is still the platform: the dialer refuses it, so neither
+// a delivery nor the test endpoint (the same Sender) returns its response
+// excerpt to the tenant.
+func TestSenderRefusesPlatformHostWithPrivateDestinationsAllowed(t *testing.T) {
+	addrs, err := net.InterfaceAddrs()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var local net.IP
+	for _, addr := range addrs {
+		if prefix, ok := addr.(*net.IPNet); ok && prefix.IP.To4() != nil && !prefix.IP.IsLoopback() && !prefix.IP.IsLinkLocalUnicast() {
+			local = prefix.IP.To4()
+			break
+		}
+	}
+	if local == nil {
+		t.Skip("host has no non-loopback IPv4 address")
+	}
+	var hits atomic.Int64
+	srv := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		hits.Add(1)
+		w.WriteHeader(http.StatusNotFound)
+		_, _ = w.Write([]byte("404 page not found"))
+	}))
+	listener, err := (&net.ListenConfig{}).Listen(context.Background(), "tcp", net.JoinHostPort(local.String(), "0"))
+	if err != nil {
+		t.Skipf("cannot listen on %s: %v", local, err)
+	}
+	srv.Listener = listener
+	srv.Start()
+	defer srv.Close()
+
+	sender := &Sender{HTTP: NewHTTPClient(ClientOptions{Policy: restream.WebhookDestinationPolicy(true)})}
+	key, _ := webhooksig.GenerateKey()
+	out := sender.Send(context.Background(), srv.URL+"/rc18-ssrf-probe", "e1", []byte(`{}`), []webhooksig.Key{key})
+	if out.Success || out.ErrorClass != ClassBlockedDestination || len(out.Excerpt) != 0 {
+		t.Fatalf("delivery to this host's own address %s = %+v, want blocked_destination with no excerpt", local, out)
+	}
+	if hits.Load() != 0 {
+		t.Fatal("the platform host's receiver was reached")
+	}
+}

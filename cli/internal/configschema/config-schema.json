@@ -237,7 +237,7 @@
           "type": "boolean",
           "default": "false",
           "introduced": "v0.3.11",
-          "description": "Lets webhook endpoints use private (RFC 1918 / ULA) addresses, plain http, and .local or .internal host names, so an isolated staging or development cluster can deliver to a receiver on its own network. Loopback, link-local, and cloud metadata addresses stay blocked. Never set it on a cluster that serves untrusted tenants."
+          "description": "Lets webhook endpoints use private (RFC 1918 / ULA) addresses, plain http, and .local host names, so an isolated staging or development cluster can deliver to a receiver on its own network. It never opens the platform itself: loopback, link-local, cloud metadata, the host's own addresses, mesh-routed addresses, and *.internal names stay blocked. Never set it on a cluster that serves untrusted tenants."
         },
         {
           "key": "SMTP_HOST",
@@ -955,7 +955,7 @@
           "type": "boolean",
           "default": "false",
           "introduced": "v0.3.11",
-          "description": "Lets playback-auth webhook URLs use private (RFC 1918 / ULA) addresses, plain http, and .local or .internal host names, so an isolated staging or development cluster can authorize playback against a receiver on its own network. Loopback, link-local, and cloud metadata addresses stay blocked. Must match Foghorn's setting. Never set it on a cluster that serves untrusted tenants."
+          "description": "Lets playback-auth webhook URLs use private (RFC 1918 / ULA) addresses, plain http, and .local host names, so an isolated staging or development cluster can authorize playback against a receiver on its own network. It never opens the platform itself: loopback, link-local, cloud metadata, the host's own addresses, mesh-routed addresses, and *.internal names stay blocked. Must match Foghorn's setting. Never set it on a cluster that serves untrusted tenants."
         },
         {
           "key": "MEDIA_AUTHORITY_SIGNING_KEY_ID",
@@ -4085,7 +4085,7 @@
           "type": "boolean",
           "default": "false",
           "introduced": "v0.3.11",
-          "description": "Lets playback-auth webhook calls connect to private (RFC 1918 / ULA) addresses, so an isolated staging or development cluster can authorize playback against a receiver on its own network. Loopback, link-local, and cloud metadata addresses stay blocked. Must match Commodore's setting. Never set it on a cluster that serves untrusted tenants."
+          "description": "Lets playback-auth webhook calls connect to private (RFC 1918 / ULA) addresses, so an isolated staging or development cluster can authorize playback against a receiver on its own network. It never opens the platform itself: loopback, link-local, cloud metadata, the host's own addresses, and mesh-routed addresses stay blocked. Must match Commodore's setting. Never set it on a cluster that serves untrusted tenants."
         },
         {
           "key": "FEDERATION_ENABLED",

@@ -113,8 +113,11 @@ migrations of its own yet.
   resolved address of every connection, which is the DNS-rebinding defense. It allows public
   destinations only, unless `BOSUN_ALLOW_PRIVATE_DESTINATIONS` is set. That setting is for
   isolated staging and development clusters: it also admits RFC 1918 / ULA addresses, plain
-  `http`, and `.local`/`.internal` names, while loopback, link-local, metadata, and
-  `*.frameworks.network` stay refused. The cluster manifest's
+  `http`, and `.local` names. It opens customer networks, never the platform: loopback,
+  link-local, metadata, `*.frameworks.network`, `*.internal` (the Privateer mesh namespace),
+  `localhost`, the host's own addresses, and private addresses the host routes through a tunnel
+  interface (the WireGuard mesh, `restream.IsPlatformAddress`) stay refused at creation and at
+  every dial. The cluster manifest's
   `webhooks.allow_private_destinations` renders it together with
   `PLAYBACK_WEBHOOK_ALLOW_PRIVATE_DESTINATIONS` on Commodore and Foghorn. Dev compose enables it. A 2xx is success; any other
   status, including 3xx, is a failure.

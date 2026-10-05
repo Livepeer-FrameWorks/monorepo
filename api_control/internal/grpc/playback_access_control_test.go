@@ -116,7 +116,7 @@ func TestValidateWebhookURL(t *testing.T) {
 		{
 			name:    "internal TLD rejected",
 			url:     "https://something.internal/foo",
-			wantErr: "not a public destination",
+			wantErr: "operator-internal",
 		},
 		{
 			name:    "empty url",

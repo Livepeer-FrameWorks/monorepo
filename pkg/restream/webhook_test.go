@@ -68,7 +68,6 @@ func TestValidateWebhookURLPrivatePolicyAcceptsIsolatedReceivers(t *testing.T) {
 		"http://192.168.10.40:8080/hooks",
 		"https://10.1.2.3/x",
 		"http://receiver.local/x",
-		"http://webhook-receiver.internal:9000/x",
 		"http://webhook-receiver:9000/x",
 	} {
 		if _, err := ValidateWebhookURL(context.Background(), private, raw); err != nil {
@@ -99,9 +98,11 @@ func TestValidateWebhookURLPrivatePolicyAcceptsIsolatedReceivers(t *testing.T) {
 func TestWebhookDestinationPolicy(t *testing.T) {
 	for _, allow := range []bool{false, true} {
 		policy := WebhookDestinationPolicy(allow)
-		if policy.AllowPrivate != allow || len(policy.AllowedCIDRs) != 0 || len(policy.DeniedCIDRs) != 0 || policy.LookupIP == nil {
+		if policy.AllowPrivate != allow || len(policy.AllowedCIDRs) != 0 || len(policy.DeniedCIDRs) != 0 || policy.LookupIP == nil || policy.PlatformAddress == nil {
 			t.Fatalf("WebhookDestinationPolicy(%v) = %+v", allow, policy)
 		}
+		// The test host's own routes (a developer VPN) must not decide.
+		policy.PlatformAddress = func(net.IP) bool { return false }
 		err := policy.ValidateIP(net.ParseIP("10.0.0.8"))
 		if allow != (err == nil) {
 			t.Fatalf("WebhookDestinationPolicy(%v) private address err = %v", allow, err)
@@ -109,5 +110,57 @@ func TestWebhookDestinationPolicy(t *testing.T) {
 		if err := policy.ValidateIP(net.ParseIP("127.0.0.1")); err == nil {
 			t.Fatalf("WebhookDestinationPolicy(%v) admitted loopback", allow)
 		}
+	}
+}
+
+// localUnicastAddress returns a non-loopback address assigned to this host,
+// the kind of address a platform service bound to every interface answers on.
+func localUnicastAddress(t *testing.T) net.IP {
+	t.Helper()
+	addrs, err := net.InterfaceAddrs()
+	if err != nil {
+		t.Fatalf("list interface addresses: %v", err)
+	}
+	for _, addr := range addrs {
+		prefix, ok := addr.(*net.IPNet)
+		if !ok || prefix.IP.IsLoopback() || prefix.IP.IsLinkLocalUnicast() || prefix.IP.To4() == nil {
+			continue
+		}
+		return prefix.IP.To4()
+	}
+	t.Skip("host has no non-loopback IPv4 address")
+	return nil
+}
+
+// The private-destination switch opens customer networks only. Platform
+// names (the Privateer mesh namespace) and the platform host's own addresses
+// stay refused at registration and at every dial.
+func TestWebhookPolicyRefusesPlatformDestinationsWithPrivateAllowed(t *testing.T) {
+	private := webhookResolverPolicy("192.168.10.40")
+	private.AllowPrivate = true
+	for _, raw := range []string{
+		"http://quartermaster.internal:18002/rc18-ssrf-probe",
+		"https://quartermaster.internal/x",
+		"http://webhook-receiver.internal:9000/x",
+		"http://localhost:9000/x",
+		"http://api.localhost/x",
+	} {
+		if _, err := ValidateWebhookURL(context.Background(), private, raw); !errors.Is(err, ErrInvalidWebhookURL) {
+			t.Errorf("ValidateWebhookURL(%q) with private destinations allowed = %v, want ErrInvalidWebhookURL", raw, err)
+		}
+	}
+
+	local := localUnicastAddress(t)
+	policy := WebhookDestinationPolicy(true)
+	if err := policy.ValidateIP(local); err == nil {
+		t.Errorf("WebhookDestinationPolicy(true).ValidateIP(%s) admitted this host's own address", local)
+	}
+	if err := policy.DialControl()("tcp", net.JoinHostPort(local.String(), "18002"), nil); !errors.Is(err, ErrDialBlocked) {
+		t.Errorf("dial to this host's own address %s = %v, want ErrDialBlocked", local, err)
+	}
+	rebinding := policy
+	rebinding.LookupIP = func(context.Context, string) ([]net.IP, error) { return []net.IP{local}, nil }
+	if _, err := ValidateWebhookURL(context.Background(), rebinding, "http://receiver.example.com/x"); !errors.Is(err, ErrInvalidWebhookURL) {
+		t.Errorf("a name resolving to this host's own address %s = %v, want ErrInvalidWebhookURL", local, err)
 	}
 }

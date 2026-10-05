@@ -19,12 +19,32 @@ var ErrInvalidWebhookURL = errors.New("invalid webhook url")
 // webhook endpoints: Bosun's outbound webhooks and playback-auth webhooks.
 // Operator restream CIDR exceptions never apply to it. allowPrivate admits
 // private (RFC 1918 / ULA) addresses for an isolated cluster whose receivers
-// live on its own network; loopback, link-local, and cloud metadata addresses
-// stay blocked either way.
+// live on its own network. It never opens the platform itself: loopback,
+// link-local, cloud metadata, this host's own addresses, and private
+// addresses routed into the service mesh (IsPlatformAddress) stay blocked
+// either way, as do platform host names (isPlatformHostName).
 func WebhookDestinationPolicy(allowPrivate bool) DestinationPolicy {
 	policy := PublicDestinationPolicy()
 	policy.AllowPrivate = allowPrivate
+	policy.PlatformAddress = IsPlatformAddress
 	return policy
+}
+
+// isPlatformHostName reports host names that only ever name the platform:
+// the operator domain, the Privateer mesh namespace (*.internal, where every
+// platform service is registered), and the local host. They are refused
+// whether or not private destinations are allowed, because a customer
+// receiver on an isolated network is never addressed through them.
+func isPlatformHostName(host string) bool {
+	switch {
+	case host == "frameworks.network", strings.HasSuffix(host, ".frameworks.network"):
+		return true
+	case host == "internal", strings.HasSuffix(host, ".internal"):
+		return true
+	case host == "localhost", strings.HasSuffix(host, ".localhost"):
+		return true
+	}
+	return false
 }
 
 func invalidWebhookURL(format string, args ...any) error {
@@ -37,9 +57,9 @@ func invalidWebhookURL(format string, args ...any) error {
 // forbidden address and a host that resolves to one are both rejected. The
 // sender applies the same policy to the address of every connection, so a
 // later change of the DNS answer is refused at send time. A policy that allows
-// private destinations also accepts plain http and local host names, because a
-// receiver on an isolated network rarely has a publicly trusted certificate;
-// the resolved address still decides.
+// private destinations also accepts plain http and mDNS (.local) host names,
+// because a receiver on an isolated network rarely has a publicly trusted
+// certificate; the resolved address still decides.
 func ValidateWebhookURL(ctx context.Context, policy DestinationPolicy, raw string) (string, error) {
 	raw = strings.TrimSpace(raw)
 	if raw == "" {
@@ -65,7 +85,7 @@ func ValidateWebhookURL(ctx context.Context, policy DestinationPolicy, raw strin
 	if host == "" {
 		return "", invalidWebhookURL("url must name a host")
 	}
-	if host == "frameworks.network" || strings.HasSuffix(host, ".frameworks.network") {
+	if isPlatformHostName(host) {
 		return "", invalidWebhookURL("url host is operator-internal")
 	}
 	if port := parsed.Port(); port != "" {
@@ -73,7 +93,7 @@ func ValidateWebhookURL(ctx context.Context, policy DestinationPolicy, raw strin
 			return "", invalidWebhookURL("url port is not valid")
 		}
 	}
-	if !policy.AllowPrivate && (host == "localhost" || strings.HasSuffix(host, ".localhost") || strings.HasSuffix(host, ".local") || strings.HasSuffix(host, ".internal")) {
+	if !policy.AllowPrivate && strings.HasSuffix(host, ".local") {
 		return "", invalidWebhookURL("url host is not a public destination")
 	}
 	if err := policy.ValidateURI(ctx, parsed); err != nil {
