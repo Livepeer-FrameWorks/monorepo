@@ -10,6 +10,7 @@ import (
 	"frameworks/api_balancing/internal/artifactoutbox"
 	"frameworks/api_balancing/internal/database/foghorndb"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/database"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/dvr"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	commodorepb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/commodore"
 	publicv1 "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/events/public/v1"
@@ -457,11 +458,14 @@ func readPersistedRetentionDays(ctx context.Context, dvrHash string) int {
 func waitForOutstandingUploads(ctx context.Context, dvrHash, preferNodeID string, logger logging.Logger) error {
 	const retryBatchSize = 500
 
-	// Light loop: every 2s, list a bounded pending/failed_upload batch, send
-	// RetryDVRSegmentUpload to the recording sidecar, and exit when the batch
-	// list empties or the deadline hits.
+	// Every 2s, list a bounded pending/failed_upload batch and exit when it
+	// empties or the deadline hits. RetryDVRSegmentUpload is re-sent only once
+	// the sidecar's previous attempt has run out its upload timeout: a retry
+	// sent while that PUT can still be running only asks for the same object
+	// again against an object store that is already slow.
 	ticker := time.NewTicker(2 * time.Second)
 	defer ticker.Stop()
+	var lastSent time.Time
 	for {
 		pending, err := ListPendingDVRSegments(ctx, dvrHash, 0, retryBatchSize)
 		if err != nil {
@@ -469,6 +473,14 @@ func waitForOutstandingUploads(ctx context.Context, dvrHash, preferNodeID string
 		}
 		if len(pending) == 0 {
 			return nil
+		}
+		if !lastSent.IsZero() && time.Since(lastSent) < dvr.SegmentRetryUploadTimeout {
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-ticker.C:
+			}
+			continue
 		}
 		names := make([]string, 0, len(pending))
 		refs := make([]*ipcpb.DVRSegmentRef, 0, len(pending))
@@ -489,6 +501,8 @@ func waitForOutstandingUploads(ctx context.Context, dvrHash, preferNodeID string
 			Segments:     refs,
 		}); err != nil {
 			logger.WithError(err).Debug("retry-upload push failed (will retry on next tick)")
+		} else {
+			lastSent = time.Now()
 		}
 		select {
 		case <-ctx.Done():

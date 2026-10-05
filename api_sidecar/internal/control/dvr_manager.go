@@ -182,6 +182,14 @@ type DVRManager struct {
 	// nowFn is the clock (nil = time.Now); tests inject a controllable clock so the
 	// time-based absence grace/interval are deterministic.
 	nowFn func() time.Time
+
+	// uploadsInFlight holds the local segment files with a PUT in progress. The
+	// per-segment trigger, the reconciliation sweep, startup recovery and Foghorn's
+	// finalize retries all upload by file, and a slow object store makes them
+	// overlap; one PUT per file keeps a stall from multiplying into parallel
+	// uploads of the same object. Guarded by uploadsMu.
+	uploadsMu       sync.Mutex
+	uploadsInFlight map[string]struct{}
 }
 
 const (
@@ -599,6 +607,11 @@ func resolveDVRSegmentsDirByHashChecked(dvrHash string) (segmentsDir string, sca
 // release before retrying.
 var ErrDropRefusedByLease = fmt.Errorf("drop refused by active lease")
 
+// ErrSegmentUploadInFlight reports that another caller is already uploading
+// this local segment file. That caller owns the outcome (marking the ledger row
+// uploaded or leaving it pending), so the duplicate request does nothing.
+var ErrSegmentUploadInFlight = errors.New("segment upload already in flight")
+
 // DropLeaseChecker, if set, decides whether DropUnsyncedSegment may proceed
 // for a given reason. Returning true means "lease held" and the drop will be
 // refused for disk_pressure; for retention_expired / operator_cleanup the
@@ -781,6 +794,10 @@ func (dm *DVRManager) syncSpecificSegment(job *DVRJob, filePath string) {
 	}
 
 	if err := dm.uploadSegmentToS3(ctx, filePath, resp.GetPresignedPutUrl()); err != nil {
+		if errors.Is(err, ErrSegmentUploadInFlight) {
+			job.Logger.WithField("segment", segName).Debug("DVR segment upload already in flight")
+			return
+		}
 		job.Logger.WithError(err).WithField("segment", segName).Warn("Failed to upload segment to S3")
 		return
 	}
@@ -2836,6 +2853,10 @@ func (dm *DVRManager) syncNewSegments(job *DVRJob) {
 		}
 		if upErr := dm.uploadSegmentToS3(ctx, segPath, resp.GetPresignedPutUrl()); upErr != nil {
 			cancel()
+			if errors.Is(upErr, ErrSegmentUploadInFlight) {
+				job.Logger.WithField("segment", seg.Name).Debug("Reconciliation: upload already in flight")
+				continue
+			}
 			job.Logger.WithError(upErr).WithField("segment", seg.Name).Warn("Reconciliation: upload failed")
 			continue
 		}
@@ -2951,8 +2972,25 @@ func (dm *DVRManager) stopJobAfterTerminalRejection(job *DVRJob) {
 // the shared HTTP client. Streaming the *os.File body uses constant
 // memory regardless of segment size; Content-Length is set explicitly so
 // the client never falls back to chunked encoding (some S3 endpoints
-// reject chunked PUTs against presigned URLs).
+// reject chunked PUTs against presigned URLs). A second call for a file
+// whose PUT is still running returns ErrSegmentUploadInFlight at once.
 func (dm *DVRManager) uploadSegmentToS3(ctx context.Context, filePath, presignedURL string) error {
+	dm.uploadsMu.Lock()
+	if _, busy := dm.uploadsInFlight[filePath]; busy {
+		dm.uploadsMu.Unlock()
+		return ErrSegmentUploadInFlight
+	}
+	if dm.uploadsInFlight == nil {
+		dm.uploadsInFlight = make(map[string]struct{})
+	}
+	dm.uploadsInFlight[filePath] = struct{}{}
+	dm.uploadsMu.Unlock()
+	defer func() {
+		dm.uploadsMu.Lock()
+		delete(dm.uploadsInFlight, filePath)
+		dm.uploadsMu.Unlock()
+	}()
+
 	file, err := os.Open(filePath)
 	if err != nil {
 		return fmt.Errorf("failed to open segment file: %w", err)

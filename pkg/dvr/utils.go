@@ -7,6 +7,12 @@ import (
 	"time"
 )
 
+// SegmentRetryUploadTimeout bounds one finalize-time retry of a DVR segment on
+// the recording sidecar (presign plus PUT). Foghorn re-sends a retry for a
+// still-pending segment no sooner than this, so a retry is never issued while
+// the previous attempt can still be uploading.
+const SegmentRetryUploadTimeout = 30 * time.Second
+
 // GenerateDVRHash creates a 32-character hex string like clip hashes
 func GenerateDVRHash() (string, error) {
 	bytes := make([]byte, 16)

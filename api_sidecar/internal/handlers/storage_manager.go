@@ -21,6 +21,7 @@ import (
 	"frameworks/api_sidecar/internal/dtsh"
 	"frameworks/api_sidecar/internal/leases"
 	"frameworks/api_sidecar/internal/storage"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/dvr"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
 )
@@ -243,7 +244,7 @@ func InitStorageManager(logger logging.Logger, basePath, nodeID string, threshol
 				}
 				continue
 			}
-			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			ctx, cancel := context.WithTimeout(context.Background(), dvr.SegmentRetryUploadTimeout)
 			// Request a fresh presigned URL. RecordDVRSegment is idempotent
 			// on (artifact_hash, segment_name) but still requires exact
 			// ledger timing so a wrong file with the same name cannot heal a
@@ -260,6 +261,10 @@ func InitStorageManager(logger logging.Logger, basePath, nodeID string, threshol
 			}
 			if upErr := dm.UploadSegmentForRetry(ctx, segPath, resp.GetPresignedPutUrl()); upErr != nil {
 				cancel()
+				if errors.Is(upErr, control.ErrSegmentUploadInFlight) {
+					jobLogger.WithField("segment", name).Debug("Retry skipped; an upload of this segment is already in flight")
+					continue
+				}
 				jobLogger.WithError(upErr).WithField("segment", name).Warn("Retry upload failed; leaving segment pending for next finalize retry tick")
 				continue
 			}
