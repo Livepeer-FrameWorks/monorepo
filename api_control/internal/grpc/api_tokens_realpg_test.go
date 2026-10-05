@@ -164,11 +164,16 @@ func TestAPITokenRepository_RealPG(t *testing.T) {
 		t.Fatalf("revoked token validation=%#v err=%v", invalid, err)
 	}
 
+	// CreateAPIToken refuses a past expiry, so the fixture is a valid token
+	// whose expiry then passes.
 	expired, err := server.CreateAPIToken(userCtx, &commodorepb.CreateAPITokenRequest{
-		TokenName: "expired", ExpiresAt: timestamppb.New(time.Now().Add(-time.Minute)),
+		TokenName: "expired", ExpiresAt: timestamppb.New(time.Now().Add(time.Hour)),
 	})
 	if err != nil {
 		t.Fatalf("create expired fixture: %v", err)
+	}
+	if _, err := db.ExecContext(ctx, `UPDATE commodore.api_tokens SET expires_at = NOW() - INTERVAL '1 minute' WHERE id = $1::uuid AND tenant_id = $2::uuid`, expired.GetId(), tenantID); err != nil {
+		t.Fatalf("expire fixture: %v", err)
 	}
 	expiredResult, err := server.ValidateAPIToken(ctx, &commodorepb.ValidateAPITokenRequest{Token: expired.GetTokenValue()})
 	if err != nil || expiredResult.GetValid() {
