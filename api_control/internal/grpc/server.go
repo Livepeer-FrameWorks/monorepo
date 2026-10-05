@@ -3530,10 +3530,10 @@ func (s *CommodoreServer) StartDVR(ctx context.Context, req *sharedpb.StartDVRRe
 		// pending. The sweep resolves it from Foghorn's command ledger — committed if
 		// the DVR artifact was persisted, otherwise the catalog-only row is removed
 		// and the intent aborted.
-		s.logger.WithError(err).WithFields(logging.Fields{
+		logFoghornCallFailure(s.logger.WithFields(logging.Fields{
 			"tenant_id":     tenantID,
 			"internal_name": internalName,
-		}).Error("Failed to start DVR via Foghorn")
+		}), err, "Failed to start DVR via Foghorn")
 		return nil, grpcutil.PropagateError(ctx, err, trailers)
 	}
 	// A successful response means Foghorn durably inserted its DVR artifact, so
@@ -9581,7 +9581,7 @@ func (s *CommodoreServer) CreateClip(ctx context.Context, req *sharedpb.CreateCl
 				s.logger.WithError(abErr).WithField("clip_hash", clipHash).Warn("Failed to abort clip creation intent")
 			}
 		}
-		s.logger.WithError(err).WithField("clip_hash", clipHash).Error("Failed to create clip artifact via Foghorn")
+		logFoghornCallFailure(s.logger.WithField("clip_hash", clipHash), err, "Failed to create clip artifact via Foghorn")
 		return nil, grpcutil.PropagateError(ctx, err, trailers)
 	}
 
@@ -9725,7 +9725,7 @@ func (s *CommodoreServer) DeleteClip(ctx context.Context, req *sharedpb.DeleteCl
 	// revision can beat a stalled snapshot and resurrect the asset.
 	resp, trailers, err := foghornClient.DeleteClip(ctx, req.ClipHash, &tenantID, userID)
 	if err != nil {
-		s.logger.WithError(err).Error("Failed to delete clip via Foghorn")
+		logFoghornCallFailure(s.logger.WithField("clip_hash", req.ClipHash), err, "Failed to delete clip via Foghorn")
 		return nil, grpcutil.PropagateError(ctx, err, trailers)
 	}
 
@@ -9758,7 +9758,7 @@ func (s *CommodoreServer) StopDVR(ctx context.Context, req *sharedpb.StopDVRRequ
 
 	resp, trailers, err := foghornClient.StopDVR(ctx, req.DvrHash, &tenantID, streamID)
 	if err != nil {
-		s.logger.WithError(err).Error("Failed to stop DVR via Foghorn")
+		logFoghornCallFailure(s.logger.WithField("dvr_hash", req.DvrHash), err, "Failed to stop DVR via Foghorn")
 		return nil, grpcutil.PropagateError(ctx, err, trailers)
 	}
 
@@ -9794,7 +9794,7 @@ func (s *CommodoreServer) DeleteDVR(ctx context.Context, req *sharedpb.DeleteDVR
 	// can resurrect a deleted asset.
 	resp, trailers, err := foghornClient.DeleteDVR(ctx, req.DvrHash, &tenantID, userID)
 	if err != nil {
-		s.logger.WithError(err).Error("Failed to delete DVR via Foghorn")
+		logFoghornCallFailure(s.logger.WithField("dvr_hash", req.DvrHash), err, "Failed to delete DVR via Foghorn")
 		return nil, grpcutil.PropagateError(ctx, err, trailers)
 	}
 
@@ -10463,7 +10463,7 @@ func (s *CommodoreServer) CreateVodUpload(ctx context.Context, req *sharedpb.Cre
 	// Call Foghorn for S3 multipart upload setup
 	resp, trailers, err := foghornClient.CreateVodUpload(ctx, foghornReq)
 	if err != nil {
-		s.logger.WithError(err).WithField("vod_hash", vodHash).Error("Failed to create VOD upload via Foghorn")
+		logFoghornCallFailure(s.logger.WithField("vod_hash", vodHash), err, "Failed to create VOD upload via Foghorn")
 		// An RPC error does NOT prove rejection. Only a DEFINITIVE rejection aborts
 		// now (proven not-created): the shared terminalizer removes the catalog-only
 		// row and aborts the intent atomically. An ambiguous error leaves both the row
@@ -10528,7 +10528,7 @@ func (s *CommodoreServer) CompleteVodUpload(ctx context.Context, req *sharedpb.C
 
 	resp, trailers, err := vodRoute.client.CompleteVodUpload(ctx, foghornReq)
 	if err != nil {
-		s.logger.WithError(err).WithField("upload_id", req.UploadId).Error("Failed to complete VOD upload via Foghorn")
+		logFoghornCallFailure(s.logger.WithField("upload_id", req.UploadId), err, "Failed to complete VOD upload via Foghorn")
 		return nil, grpcutil.PropagateError(ctx, err, trailers)
 	}
 	if resp.GetAsset().GetArtifactHash() != vodRoute.artifactHash {
@@ -10613,7 +10613,7 @@ func (s *CommodoreServer) AbortVodUpload(ctx context.Context, req *sharedpb.Abor
 	// Forward to Foghorn (it manages S3 multipart abort and lifecycle state)
 	resp, trailers, err := vodRoute.client.AbortVodUpload(ctx, tenantID, vodRoute.storageUploadID, s.requestActor(ctx))
 	if err != nil {
-		s.logger.WithError(err).WithField("upload_id", req.UploadId).Error("Failed to abort VOD upload via Foghorn")
+		logFoghornCallFailure(s.logger.WithField("upload_id", req.UploadId), err, "Failed to abort VOD upload via Foghorn")
 		return nil, grpcutil.PropagateError(ctx, err, trailers)
 	}
 
@@ -10858,7 +10858,7 @@ func (s *CommodoreServer) DeleteVodAsset(ctx context.Context, req *sharedpb.Dele
 	// business row and any dvr_chapter_playback mapping. Commodore performs no local catalog mutation.
 	resp, trailers, err := foghornClient.DeleteVodAsset(ctx, tenantID, req.ArtifactHash, userID)
 	if err != nil {
-		s.logger.WithError(err).WithField("artifact_hash", req.ArtifactHash).Error("Failed to delete VOD asset via Foghorn")
+		logFoghornCallFailure(s.logger.WithField("artifact_hash", req.ArtifactHash), err, "Failed to delete VOD asset via Foghorn")
 		return nil, grpcutil.PropagateError(ctx, err, trailers)
 	}
 
