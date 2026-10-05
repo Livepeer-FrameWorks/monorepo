@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -11,11 +12,13 @@ import (
 	"strings"
 	"time"
 
+	fwcfg "frameworks/cli/internal/config"
 	"frameworks/cli/internal/controlplane"
 	"frameworks/cli/internal/releases"
 	"frameworks/cli/internal/ux"
 	"frameworks/cli/internal/xexec"
 	"frameworks/cli/pkg/health"
+	"frameworks/cli/pkg/inventory"
 
 	qmclient "github.com/Livepeer-FrameWorks/monorepo/pkg/clients/quartermaster"
 	foghorncontrolpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/foghorn_control"
@@ -274,14 +277,14 @@ func sudoReadEdgeConfigMarker(cmd *cobra.Command) func(string) (string, bool, er
 // doctorEdgeConfigVersions lists the cluster's edges whose config is older
 // than this CLI's edge config. Endpoints resolve against the doctor's own
 // manifest, and each edge's health is read from the Foghorn serving that
-// edge's cluster. It needs lifecycle (Quartermaster + Foghorn) access from the
-// active context; without it the check reports a warning instead of guessing.
+// edge's cluster. It needs lifecycle (Quartermaster + Foghorn) access for that
+// manifest; without it the check reports a warning instead of guessing.
 func doctorEdgeConfigVersions(cmd *cobra.Command, rc *resolvedCluster) *health.CheckResult {
 	notChecked := func(format string, args ...any) *health.CheckResult {
 		return &health.CheckResult{Name: "edge_config_version", Status: yugabyteLayoutWarning, CheckedAt: time.Now(),
 			Message: "not checked: " + fmt.Sprintf(format, args...)}
 	}
-	ctxCfg, err := activeClusterLifecycleContextWithAuth(cmd.Context())
+	ctxCfg, err := doctorEdgeConfigContext(cmd.Context(), rc)
 	if err != nil {
 		return notChecked("%v", err)
 	}
@@ -304,4 +307,35 @@ func doctorEdgeConfigVersions(cmd *cobra.Command, rc *resolvedCluster) *health.C
 	}
 	healthByID, _, missing := collectNodeHealth(cmd.Context(), ctxCfg, resp.GetNodes(), foghornNodeHealthDialer(resolver, ctxCfg))
 	return evaluateEdgeConfigVersions(edgeConfigNodesFromHealth(resp.GetNodes(), healthByID, missing), fwversion.Version)
+}
+
+// doctorEdgeConfigContext returns the lifecycle context the edge-config check
+// authenticates with. A manifest that came from the active context uses that
+// context. A manifest passed explicitly (--manifest, --gitops-dir,
+// --github-repo or their env) may belong to another cluster, so the check
+// carries that manifest's SERVICE_TOKEN and resolves every endpoint from it,
+// with none of the active context's saved endpoints or cluster scope.
+func doctorEdgeConfigContext(ctx context.Context, rc *resolvedCluster) (fwcfg.Context, error) {
+	if rc.Source == inventory.SourceContext || rc.Source == inventory.SourceContextLastManifest {
+		return activeClusterLifecycleContextWithAuth(ctx)
+	}
+	sharedEnv, err := rc.SharedEnv()
+	if err != nil {
+		return fwcfg.Context{}, fmt.Errorf("load manifest env_files: %w", err)
+	}
+	token := strings.TrimSpace(sharedEnv["SERVICE_TOKEN"])
+	if token == "" {
+		return fwcfg.Context{}, fmt.Errorf("SERVICE_TOKEN missing from manifest env_files (%s)", rc.ManifestPath)
+	}
+	ctxCfg := fwcfg.Context{
+		Name:       "manifest-invocation",
+		Persona:    fwcfg.PersonaPlatform,
+		AccessMode: fwcfg.AccessModeSSH,
+		Endpoints:  fwcfg.DefaultEndpoints(),
+	}
+	if isDevProfile(rc.Manifest) {
+		ctxCfg.AccessMode = fwcfg.AccessModeLocal
+	}
+	ctxCfg.Auth.ServiceToken = token
+	return ctxCfg, nil
 }
