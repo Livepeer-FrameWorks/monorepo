@@ -5426,11 +5426,13 @@ func (p *Processor) handleStreamLifecycleUpdate(trigger *ipcpb.MistTrigger) (str
 			slu.StreamId = &streamID
 		}
 	}
-	if slu.StreamId == nil || *slu.StreamId == "" {
+	// An uploaded VOD has no stream; the artifact resolved above names it, as on
+	// its viewer and QoE events.
+	if slu.GetStreamId() == "" && trigger.GetArtifactHash() == "" {
 		p.logger.WithFields(logging.Fields{
 			"internal_name": internal,
 			"trigger_type":  trigger.GetTriggerType(),
-		}).Warn("StreamLifecycleUpdate missing stream_id")
+		}).Warn("StreamLifecycleUpdate missing stream_id and artifact_hash")
 		if trigger.GetBlocking() && slu.GetStatus() == "offline" {
 			return "", false, fmt.Errorf("acknowledged offline lifecycle could not resolve stream identity for %q", internal)
 		}

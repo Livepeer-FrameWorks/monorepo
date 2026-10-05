@@ -3332,14 +3332,15 @@ func (h *AnalyticsHandler) processStorageLifecycle(ctx context.Context, event ka
 		return fmt.Errorf("unexpected payload for storage_lifecycle")
 	}
 	sld := tp.StorageLifecycleData
+	// The asset hash names the content; an uploaded VOD has no stream.
 	streamID := mistTriggerStreamID(&mt)
-	if !isValidUUIDString(streamID) {
+	if !isValidUUIDString(streamID) && !isValidArtifactHash(sld.GetAssetHash()) {
 		h.logger.WithFields(logging.Fields{
 			"event_id":   event.EventID,
 			"tenant_id":  event.TenantID,
 			"stream_id":  streamID,
 			"asset_hash": sld.GetAssetHash(),
-		}).Warn("Storage lifecycle event missing or invalid stream_id")
+		}).Warn("Storage lifecycle event missing stream_id and asset_hash")
 	}
 
 	// Normalize internal name
