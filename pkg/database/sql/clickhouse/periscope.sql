@@ -55,6 +55,7 @@ CREATE TABLE IF NOT EXISTS stream_event_log (
     timestamp DateTime,
     tenant_id UUID,
     stream_id UUID,
+    artifact_hash String DEFAULT '',        -- non-live content (artifact replay, uploaded VOD); such rows carry the zero stream_id
     internal_name String,
     node_id LowCardinality(String),
     cluster_id LowCardinality(String) DEFAULT '',
@@ -130,7 +131,7 @@ SELECT
     max(total_viewers) AS max_viewers,
     avg(total_viewers) AS avg_viewers
 FROM stream_event_log
-WHERE total_viewers IS NOT NULL
+WHERE total_viewers IS NOT NULL AND artifact_hash = ''
 GROUP BY timestamp_5m, tenant_id, stream_id;
 
 -- ============================================================================
@@ -181,6 +182,7 @@ CREATE TABLE IF NOT EXISTS stream_health_samples (
     timestamp DateTime,
     tenant_id UUID,
     stream_id UUID,
+    artifact_hash String DEFAULT '',        -- non-live content (artifact replay, uploaded VOD); such rows carry the zero stream_id
     internal_name String,
     node_id LowCardinality(String),
 
@@ -274,6 +276,7 @@ SELECT
         timestamp, height > 0
     )) AS quality_tier
 FROM stream_health_samples
+WHERE artifact_hash = ''
 GROUP BY timestamp_5m, tenant_id, stream_id, internal_name, node_id;
 
 -- Rebuffering events derived from health samples
@@ -308,7 +311,7 @@ SELECT
     if(buffer_state = 'DRY' AND prev_state IN ('FULL', 'RECOVER'), 1, 0) AS rebuffer_start,
     if(buffer_state = 'RECOVER' AND prev_state = 'DRY', 1, 0) AS rebuffer_end
 FROM stream_health_samples
-WHERE buffer_state IN ('FULL', 'DRY', 'RECOVER');
+WHERE buffer_state IN ('FULL', 'DRY', 'RECOVER') AND artifact_hash = '';
 
 -- ============================================================================
 -- TRACK LIST EVENTS + QUALITY ROLLUPS
@@ -319,6 +322,7 @@ CREATE TABLE IF NOT EXISTS track_list_events (
     event_id UUID,
     tenant_id UUID,
     stream_id UUID,
+    artifact_hash String DEFAULT '',        -- non-live content (artifact replay, uploaded VOD); such rows carry the zero stream_id
     internal_name String,
     node_id LowCardinality(String),
 
@@ -390,7 +394,7 @@ SELECT
     ifNull(toUInt32(avg(primary_video_bitrate)), 0) AS avg_bitrate,
     ifNull(avgIf(primary_fps, primary_fps > 0), 0) AS avg_fps
 FROM track_list_events
-WHERE track_count > 0
+WHERE track_count > 0 AND artifact_hash = ''
 GROUP BY day, tenant_id, stream_id, internal_name;
 
 -- ============================================================================

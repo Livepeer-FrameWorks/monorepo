@@ -620,7 +620,8 @@ func (h *AnalyticsHandler) processStreamLifecycle(ctx context.Context, event kaf
 		return fmt.Errorf("failed to parse MistTrigger: %w", err)
 	}
 	streamID := mistTriggerStreamID(&mt)
-	if !isValidUUIDString(streamID) {
+	seriesStreamID, artifactHash := streamSeriesIdentity(&mt)
+	if artifactHash == "" && !isValidUUIDString(streamID) {
 		h.logger.WithFields(logging.Fields{
 			"event_id":  event.EventID,
 			"tenant_id": event.TenantID,
@@ -637,22 +638,6 @@ func (h *AnalyticsHandler) processStreamLifecycle(ctx context.Context, event kaf
 	internalName := mist.ExtractInternalName(streamLifecycle.GetInternalName())
 	env := analyticsEnvelopeColumns(event)
 
-	if h.metrics != nil {
-		h.metrics.ClickHouseInserts.WithLabelValues("live_streams", "attempt").Inc()
-	}
-
-	// 1. Write to live_streams (current state - ReplacingMergeTree)
-	// This is the primary source of truth for stream status
-	stateBatch, err := periscopeingestdb.PrepareStreamLifecycleState(ctx, h.clickhouse)
-	if err != nil {
-		h.logger.Errorf("Failed to prepare live_streams batch: %v", err)
-		if h.metrics != nil {
-			h.metrics.ClickHouseInserts.WithLabelValues("live_streams", "error").Inc()
-		}
-		return err
-	}
-	defer func() { _ = stateBatch.Close() }()
-
 	// Derive status from buffer state
 	status := "live"
 	if streamLifecycle.GetStatus() != "" {
@@ -665,53 +650,16 @@ func (h *AnalyticsHandler) processStreamLifecycle(ctx context.Context, event kaf
 	if bufferState == "" && streamLifecycle.GetBufferMs() > 0 {
 		bufferState = "FULL"
 	}
-
-	var startedAt *time.Time
-	if streamLifecycle.StartedAt != nil && *streamLifecycle.StartedAt > 0 {
-		value := time.Unix(*streamLifecycle.StartedAt, 0)
-		startedAt = &value
-	} else if status == "live" {
-		if existingStartedAt, ok := h.lookupCurrentLiveStreamStartedAt(ctx, event.TenantID, parseUUID(streamID)); ok {
-			startedAt = &existingStartedAt
-		} else {
-			startedAt = &event.Timestamp
-		}
-	} else if existingStartedAt, ok := h.lookupCurrentStreamStartedAt(ctx, event.TenantID, parseUUID(streamID)); ok {
-		startedAt = &existingStartedAt
-	}
-
 	tenantUUID := uuid.MustParse(event.TenantID)
-	if appendErr := stateBatch.Append(periscopeingestdb.StreamLifecycleStateRow{
-		TenantID: tenantUUID, StreamID: parseUUID(streamID), InternalName: internalName, NodeID: mt.GetNodeId(),
-		ClusterID: mt.GetClusterId(),
-		Status:    status, BufferState: bufferState, CurrentViewers: streamLifecycle.GetTotalViewers(),
-		TotalInputs: uint16(streamLifecycle.GetTotalInputs()), UploadedBytes: streamLifecycle.GetUploadedBytes(),
-		DownloadedBytes: streamLifecycle.GetDownloadedBytes(), ViewerSeconds: streamLifecycle.GetViewerSeconds(),
-		HasIssues: optionalBoolUInt8(streamLifecycle.GetHasIssues()), IssuesDescription: optionalString(streamLifecycle.GetIssuesDescription()),
-		TrackCount: optionalUint16(streamLifecycle.GetTrackCount()), QualityTier: optionalString(streamLifecycle.GetQualityTier()),
-		PrimaryWidth: optionalUint16(streamLifecycle.GetPrimaryWidth()), PrimaryHeight: optionalUint16(streamLifecycle.GetPrimaryHeight()),
-		PrimaryFPS: optionalFloat32(streamLifecycle.GetPrimaryFps()), PrimaryCodec: optionalString(streamLifecycle.GetPrimaryCodec()),
-		PrimaryBitrate: optionalUint32(uint32(streamLifecycle.GetPrimaryBitrate())), PacketsSent: streamLifecycle.PacketsSent,
-		PacketsLost: streamLifecycle.PacketsLost, PacketsRetransmitted: streamLifecycle.PacketsRetransmitted,
-		StartedAt: startedAt, UpdatedAt: event.Timestamp,
-	}); appendErr != nil {
-		h.logger.Errorf("Failed to append to live_streams batch: %v", appendErr)
-		if h.metrics != nil {
-			h.metrics.ClickHouseInserts.WithLabelValues("live_streams", "error").Inc()
-		}
-		return appendErr
-	}
 
-	if sendErr := stateBatch.Send(); sendErr != nil {
-		h.logger.Errorf("Failed to send live_streams batch: %v", sendErr)
-		if h.metrics != nil {
-			h.metrics.ClickHouseInserts.WithLabelValues("live_streams", "error").Inc()
+	// 1. Write to live_streams (current state - ReplacingMergeTree), the primary source of truth for stream
+	// status. A replay of non-live content is not its source stream's state.
+	if artifactHash == "" {
+		if err := h.writeStreamLifecycleState(ctx, event, &mt, streamLifecycle, streamID, internalName, status, bufferState); err != nil {
+			return err
 		}
-		return sendErr
 	}
-
 	if h.metrics != nil {
-		h.metrics.ClickHouseInserts.WithLabelValues("live_streams", "success").Inc()
 		h.metrics.ClickHouseInserts.WithLabelValues("stream_events", "attempt").Inc()
 	}
 
@@ -731,7 +679,7 @@ func (h *AnalyticsHandler) processStreamLifecycle(ctx context.Context, event kaf
 	totalViewers, totalInputs, totalOutputs := streamLifecycle.GetTotalViewers(), uint16(streamLifecycle.GetTotalInputs()), uint16(0)
 	viewerSeconds := streamLifecycle.GetViewerSeconds()
 	if appendErr := eventBatch.Append(periscopeingestdb.StreamLifecycleEventRow{
-		Timestamp: event.Timestamp, EventID: parseUUID(event.EventID), TenantID: tenantUUID, StreamID: parseUUID(streamID),
+		Timestamp: event.Timestamp, EventID: parseUUID(event.EventID), TenantID: tenantUUID, StreamID: seriesStreamID,
 		InternalName: internalName, NodeID: mt.GetNodeId(), ClusterID: mt.GetClusterId(), EventType: "stream_lifecycle", Status: &statusValue,
 		BufferState: &bufferStateValue, DownloadedBytes: &downloadedBytes, UploadedBytes: &uploadedBytes,
 		TotalViewers: &totalViewers, TotalInputs: &totalInputs, TotalOutputs: &totalOutputs, ViewerSeconds: &viewerSeconds,
@@ -740,7 +688,7 @@ func (h *AnalyticsHandler) processStreamLifecycle(ctx context.Context, event kaf
 		PrimaryWidth: optionalUint16(streamLifecycle.GetPrimaryWidth()), PrimaryHeight: optionalUint16(streamLifecycle.GetPrimaryHeight()),
 		PrimaryFPS: optionalFloat32(streamLifecycle.GetPrimaryFps()), EventData: marshalTypedEventData(&streamLifecycle),
 		SourceRegion: env.sourceRegion, StreamOriginRegion: env.streamOriginRegion,
-		StreamOriginClusterID: env.streamOriginClusterID, SchemaVersion: env.schemaVersion,
+		StreamOriginClusterID: env.streamOriginClusterID, SchemaVersion: env.schemaVersion, ArtifactHash: artifactHash,
 	}); appendErr != nil {
 		h.logger.Errorf("Failed to append to stream_events batch: %v", appendErr)
 		if h.metrics != nil {
@@ -804,7 +752,7 @@ func (h *AnalyticsHandler) processStreamLifecycle(ctx context.Context, event kaf
 	}
 
 	if err := healthBatch.Append(periscopeingestdb.StreamLifecycleHealthRow{
-		Timestamp: event.Timestamp, TenantID: tenantUUID, StreamID: parseUUID(streamID), InternalName: internalName, NodeID: mt.GetNodeId(),
+		Timestamp: event.Timestamp, TenantID: tenantUUID, StreamID: seriesStreamID, InternalName: internalName, NodeID: mt.GetNodeId(),
 		Bitrate: optionalUint32(uint32(streamLifecycle.GetPrimaryBitrate())), FPS: optionalFloat32(streamLifecycle.GetPrimaryFps()),
 		Width: optionalUint16(streamLifecycle.GetPrimaryWidth()), Height: optionalUint16(streamLifecycle.GetPrimaryHeight()),
 		Codec: optionalString(streamLifecycle.GetPrimaryCodec()), QualityTier: optionalString(streamLifecycle.GetQualityTier()),
@@ -816,7 +764,7 @@ func (h *AnalyticsHandler) processStreamLifecycle(ctx context.Context, event kaf
 		AudioChannels: audioChannels, AudioSampleRate: optionalUint32(streamLifecycle.GetAudioSampleRate()),
 		AudioCodec: optionalString(streamLifecycle.GetAudioCodec()), AudioBitrate: optionalUint32(streamLifecycle.GetAudioBitrate()),
 		SourceRegion: env.sourceRegion, StreamOriginRegion: env.streamOriginRegion,
-		StreamOriginClusterID: env.streamOriginClusterID, SchemaVersion: env.schemaVersion,
+		StreamOriginClusterID: env.streamOriginClusterID, SchemaVersion: env.schemaVersion, ArtifactHash: artifactHash,
 	}); err != nil {
 		h.logger.Errorf("Failed to append to stream_health_metrics: %v", err)
 		if h.metrics != nil {
@@ -837,6 +785,70 @@ func (h *AnalyticsHandler) processStreamLifecycle(ctx context.Context, event kaf
 		h.metrics.ClickHouseInserts.WithLabelValues("stream_health_metrics", "success").Inc()
 	}
 
+	return nil
+}
+
+// writeStreamLifecycleState upserts the live stream's current state from its lifecycle report.
+func (h *AnalyticsHandler) writeStreamLifecycleState(ctx context.Context, event kafka.AnalyticsEvent, mt *ipcpb.MistTrigger, streamLifecycle *ipcpb.StreamLifecycleUpdate, streamID, internalName, status, bufferState string) error {
+	if h.metrics != nil {
+		h.metrics.ClickHouseInserts.WithLabelValues("live_streams", "attempt").Inc()
+	}
+	stateBatch, err := periscopeingestdb.PrepareStreamLifecycleState(ctx, h.clickhouse)
+	if err != nil {
+		h.logger.Errorf("Failed to prepare live_streams batch: %v", err)
+		if h.metrics != nil {
+			h.metrics.ClickHouseInserts.WithLabelValues("live_streams", "error").Inc()
+		}
+		return err
+	}
+	defer func() { _ = stateBatch.Close() }()
+
+	var startedAt *time.Time
+	if streamLifecycle.StartedAt != nil && *streamLifecycle.StartedAt > 0 {
+		value := time.Unix(*streamLifecycle.StartedAt, 0)
+		startedAt = &value
+	} else if status == "live" {
+		if existingStartedAt, ok := h.lookupCurrentLiveStreamStartedAt(ctx, event.TenantID, parseUUID(streamID)); ok {
+			startedAt = &existingStartedAt
+		} else {
+			startedAt = &event.Timestamp
+		}
+	} else if existingStartedAt, ok := h.lookupCurrentStreamStartedAt(ctx, event.TenantID, parseUUID(streamID)); ok {
+		startedAt = &existingStartedAt
+	}
+
+	if appendErr := stateBatch.Append(periscopeingestdb.StreamLifecycleStateRow{
+		TenantID: uuid.MustParse(event.TenantID), StreamID: parseUUID(streamID), InternalName: internalName, NodeID: mt.GetNodeId(),
+		ClusterID: mt.GetClusterId(),
+		Status:    status, BufferState: bufferState, CurrentViewers: streamLifecycle.GetTotalViewers(),
+		TotalInputs: uint16(streamLifecycle.GetTotalInputs()), UploadedBytes: streamLifecycle.GetUploadedBytes(),
+		DownloadedBytes: streamLifecycle.GetDownloadedBytes(), ViewerSeconds: streamLifecycle.GetViewerSeconds(),
+		HasIssues: optionalBoolUInt8(streamLifecycle.GetHasIssues()), IssuesDescription: optionalString(streamLifecycle.GetIssuesDescription()),
+		TrackCount: optionalUint16(streamLifecycle.GetTrackCount()), QualityTier: optionalString(streamLifecycle.GetQualityTier()),
+		PrimaryWidth: optionalUint16(streamLifecycle.GetPrimaryWidth()), PrimaryHeight: optionalUint16(streamLifecycle.GetPrimaryHeight()),
+		PrimaryFPS: optionalFloat32(streamLifecycle.GetPrimaryFps()), PrimaryCodec: optionalString(streamLifecycle.GetPrimaryCodec()),
+		PrimaryBitrate: optionalUint32(uint32(streamLifecycle.GetPrimaryBitrate())), PacketsSent: streamLifecycle.PacketsSent,
+		PacketsLost: streamLifecycle.PacketsLost, PacketsRetransmitted: streamLifecycle.PacketsRetransmitted,
+		StartedAt: startedAt, UpdatedAt: event.Timestamp,
+	}); appendErr != nil {
+		h.logger.Errorf("Failed to append to live_streams batch: %v", appendErr)
+		if h.metrics != nil {
+			h.metrics.ClickHouseInserts.WithLabelValues("live_streams", "error").Inc()
+		}
+		return appendErr
+	}
+
+	if sendErr := stateBatch.Send(); sendErr != nil {
+		h.logger.Errorf("Failed to send live_streams batch: %v", sendErr)
+		if h.metrics != nil {
+			h.metrics.ClickHouseInserts.WithLabelValues("live_streams", "error").Inc()
+		}
+		return sendErr
+	}
+
+	if h.metrics != nil {
+		h.metrics.ClickHouseInserts.WithLabelValues("live_streams", "success").Inc()
+	}
 	return nil
 }
 
@@ -1594,6 +1606,18 @@ func isValidArtifactHash(hash string) bool {
 		return false
 	}
 	return true
+}
+
+// streamSeriesIdentity keys a row of a stream's own series (state, event log,
+// health samples, track lists). Non-live content runs as its own Mist stream: a
+// clip, DVR or DVR chapter replay, or an uploaded VOD. Foghorn names the source
+// stream of a replay next to its artifact, but the replay's reports describe the
+// replay, so they are keyed by artifact_hash with the zero stream_id.
+func streamSeriesIdentity(mt *ipcpb.MistTrigger) (uuid.UUID, string) {
+	if artifactHash := mistTriggerArtifactHash(mt); artifactHash != "" {
+		return uuid.Nil, artifactHash
+	}
+	return parseUUID(mistTriggerStreamID(mt)), ""
 }
 
 // requireContentIdentity keeps an event that names its content: a live
@@ -2403,7 +2427,8 @@ func (h *AnalyticsHandler) processStreamBuffer(ctx context.Context, event kafka.
 	if err := h.parseProtobufData(event, &mt); err != nil {
 		return fmt.Errorf("failed to parse MistTrigger: %w", err)
 	}
-	if err := h.requireStreamID(ctx, event, mistTriggerStreamID(&mt)); err != nil {
+	seriesStreamID, artifactHash := streamSeriesIdentity(&mt)
+	if err := h.requireContentIdentity(ctx, event, mistTriggerStreamID(&mt), artifactHash); err != nil {
 		return err
 	}
 	if h.isDuplicateEvent(ctx, "stream_event_log", parseUUID(event.EventID), event.EventType) {
@@ -2540,13 +2565,13 @@ func (h *AnalyticsHandler) processStreamBuffer(ctx context.Context, event kafka.
 	bufferState := streamBuffer.GetBufferState()
 	if appendErr := streamEventsBatch.Append(periscopeingestdb.StreamBufferEventRow{
 		Timestamp: event.Timestamp, EventID: parseUUID(event.EventID), TenantID: parseUUID(event.TenantID),
-		StreamID: parseUUID(mistTriggerStreamID(&mt)), InternalName: internalName, NodeID: mt.GetNodeId(), ClusterID: mt.GetClusterId(),
+		StreamID: seriesStreamID, InternalName: internalName, NodeID: mt.GetNodeId(), ClusterID: mt.GetClusterId(),
 		EventType: "stream_buffer", Status: &status, BufferState: &bufferState,
 		HasIssues: optionalBoolUInt8(streamBuffer.GetHasIssues()), IssuesDescription: optionalString(streamBuffer.GetIssuesDescription()),
 		TrackCount: optionalUint16(streamBuffer.GetTrackCount()), QualityTier: optionalString(streamBuffer.GetQualityTier()),
 		PrimaryWidth: width, PrimaryHeight: height, PrimaryFPS: fps, EventData: marshalTypedEventData(&streamBuffer),
 		SourceRegion: env.sourceRegion, StreamOriginRegion: env.streamOriginRegion,
-		StreamOriginClusterID: env.streamOriginClusterID, SchemaVersion: env.schemaVersion,
+		StreamOriginClusterID: env.streamOriginClusterID, SchemaVersion: env.schemaVersion, ArtifactHash: artifactHash,
 	}); appendErr != nil {
 		h.logger.Errorf("Failed to append to stream_events batch: %v", appendErr)
 		return appendErr
@@ -2574,7 +2599,7 @@ func (h *AnalyticsHandler) processStreamBuffer(ctx context.Context, event kafka.
 	defer healthBatch.Close()
 
 	if appendErr := healthBatch.Append(periscopeingestdb.StreamBufferHealthRow{
-		Timestamp: event.Timestamp, TenantID: parseUUID(event.TenantID), StreamID: parseUUID(mistTriggerStreamID(&mt)),
+		Timestamp: event.Timestamp, TenantID: parseUUID(event.TenantID), StreamID: seriesStreamID,
 		InternalName: internalName, NodeID: mt.GetNodeId(), BufferState: streamBuffer.GetBufferState(),
 		HasIssues: optionalBoolUInt8(streamBuffer.GetHasIssues()), IssuesDescription: optionalString(streamBuffer.GetIssuesDescription()),
 		TrackCount: optionalUint16(streamBuffer.GetTrackCount()), TrackMetadata: trackMetadataJSON,
@@ -2584,7 +2609,7 @@ func (h *AnalyticsHandler) processStreamBuffer(ctx context.Context, event kafka.
 		GOPSize: gopSize, BufferSize: bufferSize, MaxKeepawayMS: optionalUint32FromInt32Pointer(streamBuffer.MaxKeepawayMs), BufferHealth: bufferHealth,
 		AudioChannels: audioChannels, AudioSampleRate: audioSampleRate, AudioCodec: audioCodec, AudioBitrate: audioBitrate,
 		SourceRegion: env.sourceRegion, StreamOriginRegion: env.streamOriginRegion,
-		StreamOriginClusterID: env.streamOriginClusterID, SchemaVersion: env.schemaVersion,
+		StreamOriginClusterID: env.streamOriginClusterID, SchemaVersion: env.schemaVersion, ArtifactHash: artifactHash,
 	}); appendErr != nil {
 		h.logger.Errorf("Failed to append to stream_health_metrics batch: %v", appendErr)
 		return appendErr
@@ -2731,7 +2756,8 @@ func (h *AnalyticsHandler) processTrackList(ctx context.Context, event kafka.Ana
 	if err := h.parseProtobufData(event, &mt); err != nil {
 		return fmt.Errorf("failed to parse MistTrigger: %w", err)
 	}
-	if err := h.requireStreamID(ctx, event, mistTriggerStreamID(&mt)); err != nil {
+	seriesStreamID, artifactHash := streamSeriesIdentity(&mt)
+	if err := h.requireContentIdentity(ctx, event, mistTriggerStreamID(&mt), artifactHash); err != nil {
 		return err
 	}
 	eventID := parseUUID(event.EventID)
@@ -2757,7 +2783,7 @@ func (h *AnalyticsHandler) processTrackList(ctx context.Context, event kafka.Ana
 	defer batch.Close()
 
 	if appendErr := batch.Append(periscopeingestdb.TrackListEventRow{
-		Timestamp: event.Timestamp, EventID: eventID, TenantID: parseUUID(event.TenantID), StreamID: parseUUID(mistTriggerStreamID(&mt)),
+		Timestamp: event.Timestamp, EventID: eventID, TenantID: parseUUID(event.TenantID), StreamID: seriesStreamID,
 		InternalName: internalName, NodeID: mt.GetNodeId(), TrackList: marshalTypedEventData(trackList.GetTracks()),
 		TrackCount: uint16(trackList.GetTotalTracks()), VideoTrackCount: uint16(trackList.GetVideoTrackCount()),
 		AudioTrackCount: uint16(trackList.GetAudioTrackCount()), PrimaryWidth: optionalUint16(trackList.GetPrimaryWidth()),
@@ -2767,7 +2793,7 @@ func (h *AnalyticsHandler) processTrackList(ctx context.Context, event kafka.Ana
 		PrimaryAudioSampleRate: optionalUint32(uint32(trackList.GetPrimaryAudioSampleRate())),
 		PrimaryAudioCodec:      optionalString(trackList.GetPrimaryAudioCodec()), PrimaryAudioBitrate: optionalUint32(uint32(trackList.GetPrimaryAudioBitrate())),
 		SourceRegion: env.sourceRegion, StreamOriginRegion: env.streamOriginRegion,
-		StreamOriginClusterID: env.streamOriginClusterID, SchemaVersion: env.schemaVersion,
+		StreamOriginClusterID: env.streamOriginClusterID, SchemaVersion: env.schemaVersion, ArtifactHash: artifactHash,
 	}); appendErr != nil {
 		h.logger.Errorf("Failed to append track list data: %v", appendErr)
 		return appendErr
@@ -2788,10 +2814,10 @@ func (h *AnalyticsHandler) processTrackList(ctx context.Context, event kafka.Ana
 
 	status := "live"
 	if appendErr := eventBatch.Append(periscopeingestdb.TrackListStreamEventRow{
-		Timestamp: event.Timestamp, EventID: eventID, TenantID: parseUUID(event.TenantID), StreamID: parseUUID(mistTriggerStreamID(&mt)),
+		Timestamp: event.Timestamp, EventID: eventID, TenantID: parseUUID(event.TenantID), StreamID: seriesStreamID,
 		InternalName: internalName, NodeID: mt.GetNodeId(), ClusterID: mt.GetClusterId(), EventType: "track_list_update", Status: &status,
 		EventData: marshalTypedEventData(trackList), SourceRegion: env.sourceRegion, StreamOriginRegion: env.streamOriginRegion,
-		StreamOriginClusterID: env.streamOriginClusterID, SchemaVersion: env.schemaVersion,
+		StreamOriginClusterID: env.streamOriginClusterID, SchemaVersion: env.schemaVersion, ArtifactHash: artifactHash,
 	}); appendErr != nil {
 		h.logger.Errorf("Failed to append stream event (track list): %v", appendErr)
 		return appendErr

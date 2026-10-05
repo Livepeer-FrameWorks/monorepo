@@ -11,7 +11,7 @@ const insertStreamBufferEvent = `INSERT INTO stream_event_log (
 	timestamp, event_id, tenant_id, stream_id, internal_name, node_id, cluster_id, event_type, status,
 	buffer_state, has_issues, issues_description, track_count,
 	quality_tier, primary_width, primary_height, primary_fps, event_data,
-	source_region, stream_origin_region, stream_origin_cluster_id, schema_version
+	source_region, stream_origin_region, stream_origin_cluster_id, schema_version, artifact_hash
 )`
 
 type StreamBufferEventRow struct {
@@ -28,11 +28,12 @@ type StreamBufferEventRow struct {
 	EventData                                               string
 	SourceRegion, StreamOriginRegion, StreamOriginClusterID string
 	SchemaVersion                                           uint8
+	ArtifactHash                                            string
 }
 
 func PrepareStreamBufferEvent(ctx context.Context, db BatchPreparer) (*Writer[StreamBufferEventRow], error) {
 	return prepare(ctx, db, insertStreamBufferEvent, func(row StreamBufferEventRow) []interface{} {
-		return []interface{}{row.Timestamp, row.EventID, row.TenantID, row.StreamID, row.InternalName, row.NodeID, row.ClusterID, row.EventType, row.Status, row.BufferState, row.HasIssues, row.IssuesDescription, row.TrackCount, row.QualityTier, row.PrimaryWidth, row.PrimaryHeight, row.PrimaryFPS, row.EventData, row.SourceRegion, row.StreamOriginRegion, row.StreamOriginClusterID, row.SchemaVersion}
+		return []interface{}{row.Timestamp, row.EventID, row.TenantID, row.StreamID, row.InternalName, row.NodeID, row.ClusterID, row.EventType, row.Status, row.BufferState, row.HasIssues, row.IssuesDescription, row.TrackCount, row.QualityTier, row.PrimaryWidth, row.PrimaryHeight, row.PrimaryFPS, row.EventData, row.SourceRegion, row.StreamOriginRegion, row.StreamOriginClusterID, row.SchemaVersion, row.ArtifactHash}
 	})
 }
 
@@ -43,7 +44,7 @@ const insertStreamBufferHealth = `INSERT INTO stream_health_samples (
 	frame_ms_max, frame_ms_min, keyframe_ms_max, keyframe_ms_min, frame_jitter_ms,
 	frames_max, frames_min, gop_size, buffer_size, max_keepaway_ms, buffer_health,
 	audio_channels, audio_sample_rate, audio_codec, audio_bitrate,
-	source_region, stream_origin_region, stream_origin_cluster_id, schema_version
+	source_region, stream_origin_region, stream_origin_cluster_id, schema_version, artifact_hash
 )`
 
 type StreamBufferHealthRow struct {
@@ -70,11 +71,12 @@ type StreamBufferHealthRow struct {
 	AudioBitrate                                                        *uint32
 	SourceRegion, StreamOriginRegion, StreamOriginClusterID             string
 	SchemaVersion                                                       uint8
+	ArtifactHash                                                        string
 }
 
 func PrepareStreamBufferHealth(ctx context.Context, db BatchPreparer) (*Writer[StreamBufferHealthRow], error) {
 	return prepare(ctx, db, insertStreamBufferHealth, func(row StreamBufferHealthRow) []interface{} {
-		return []interface{}{row.Timestamp, row.TenantID, row.StreamID, row.InternalName, row.NodeID, row.BufferState, row.HasIssues, row.IssuesDescription, row.TrackCount, row.TrackMetadata, row.Bitrate, row.FPS, row.Width, row.Height, row.Codec, row.QualityTier, row.FrameMSMax, row.FrameMSMin, row.KeyframeMSMax, row.KeyframeMSMin, row.FrameJitterMS, row.FramesMax, row.FramesMin, row.GOPSize, row.BufferSize, row.MaxKeepawayMS, row.BufferHealth, row.AudioChannels, row.AudioSampleRate, row.AudioCodec, row.AudioBitrate, row.SourceRegion, row.StreamOriginRegion, row.StreamOriginClusterID, row.SchemaVersion}
+		return []interface{}{row.Timestamp, row.TenantID, row.StreamID, row.InternalName, row.NodeID, row.BufferState, row.HasIssues, row.IssuesDescription, row.TrackCount, row.TrackMetadata, row.Bitrate, row.FPS, row.Width, row.Height, row.Codec, row.QualityTier, row.FrameMSMax, row.FrameMSMin, row.KeyframeMSMax, row.KeyframeMSMin, row.FrameJitterMS, row.FramesMax, row.FramesMin, row.GOPSize, row.BufferSize, row.MaxKeepawayMS, row.BufferHealth, row.AudioChannels, row.AudioSampleRate, row.AudioCodec, row.AudioBitrate, row.SourceRegion, row.StreamOriginRegion, row.StreamOriginClusterID, row.SchemaVersion, row.ArtifactHash}
 	})
 }
 
@@ -108,7 +110,7 @@ const insertTrackListEvent = `INSERT INTO track_list_events (
 	track_list, track_count, video_track_count, audio_track_count,
 	primary_width, primary_height, primary_fps, primary_video_codec, primary_video_bitrate,
 	quality_tier, primary_audio_channels, primary_audio_sample_rate, primary_audio_codec, primary_audio_bitrate,
-	source_region, stream_origin_region, stream_origin_cluster_id, schema_version
+	source_region, stream_origin_region, stream_origin_cluster_id, schema_version, artifact_hash
 )`
 
 type TrackListEventRow struct {
@@ -127,17 +129,18 @@ type TrackListEventRow struct {
 	PrimaryAudioBitrate                                     *uint32
 	SourceRegion, StreamOriginRegion, StreamOriginClusterID string
 	SchemaVersion                                           uint8
+	ArtifactHash                                            string
 }
 
 func PrepareTrackListEvent(ctx context.Context, db BatchPreparer) (*Writer[TrackListEventRow], error) {
 	return prepare(ctx, db, insertTrackListEvent, func(row TrackListEventRow) []interface{} {
-		return []interface{}{row.Timestamp, row.EventID, row.TenantID, row.StreamID, row.InternalName, row.NodeID, row.TrackList, row.TrackCount, row.VideoTrackCount, row.AudioTrackCount, row.PrimaryWidth, row.PrimaryHeight, row.PrimaryFPS, row.PrimaryVideoCodec, row.PrimaryVideoBitrate, row.QualityTier, row.PrimaryAudioChannels, row.PrimaryAudioSampleRate, row.PrimaryAudioCodec, row.PrimaryAudioBitrate, row.SourceRegion, row.StreamOriginRegion, row.StreamOriginClusterID, row.SchemaVersion}
+		return []interface{}{row.Timestamp, row.EventID, row.TenantID, row.StreamID, row.InternalName, row.NodeID, row.TrackList, row.TrackCount, row.VideoTrackCount, row.AudioTrackCount, row.PrimaryWidth, row.PrimaryHeight, row.PrimaryFPS, row.PrimaryVideoCodec, row.PrimaryVideoBitrate, row.QualityTier, row.PrimaryAudioChannels, row.PrimaryAudioSampleRate, row.PrimaryAudioCodec, row.PrimaryAudioBitrate, row.SourceRegion, row.StreamOriginRegion, row.StreamOriginClusterID, row.SchemaVersion, row.ArtifactHash}
 	})
 }
 
 const insertTrackListStreamEvent = `INSERT INTO stream_event_log (
 	timestamp, event_id, tenant_id, stream_id, internal_name, node_id, cluster_id, event_type, status,
-	event_data, source_region, stream_origin_region, stream_origin_cluster_id, schema_version
+	event_data, source_region, stream_origin_region, stream_origin_cluster_id, schema_version, artifact_hash
 )`
 
 type TrackListStreamEventRow struct {
@@ -148,10 +151,11 @@ type TrackListStreamEventRow struct {
 	EventData                                               string
 	SourceRegion, StreamOriginRegion, StreamOriginClusterID string
 	SchemaVersion                                           uint8
+	ArtifactHash                                            string
 }
 
 func PrepareTrackListStreamEvent(ctx context.Context, db BatchPreparer) (*Writer[TrackListStreamEventRow], error) {
 	return prepare(ctx, db, insertTrackListStreamEvent, func(row TrackListStreamEventRow) []interface{} {
-		return []interface{}{row.Timestamp, row.EventID, row.TenantID, row.StreamID, row.InternalName, row.NodeID, row.ClusterID, row.EventType, row.Status, row.EventData, row.SourceRegion, row.StreamOriginRegion, row.StreamOriginClusterID, row.SchemaVersion}
+		return []interface{}{row.Timestamp, row.EventID, row.TenantID, row.StreamID, row.InternalName, row.NodeID, row.ClusterID, row.EventType, row.Status, row.EventData, row.SourceRegion, row.StreamOriginRegion, row.StreamOriginClusterID, row.SchemaVersion, row.ArtifactHash}
 	})
 }

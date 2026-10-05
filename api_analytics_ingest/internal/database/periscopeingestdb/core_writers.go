@@ -134,7 +134,7 @@ const insertStreamLifecycleEvent = `INSERT INTO stream_event_log (
 	buffer_state, downloaded_bytes, uploaded_bytes, total_viewers, total_inputs,
 	total_outputs, viewer_seconds, has_issues, issues_description,
 	track_count, quality_tier, primary_width, primary_height, primary_fps, event_data,
-	source_region, stream_origin_region, stream_origin_cluster_id, schema_version
+	source_region, stream_origin_region, stream_origin_cluster_id, schema_version, artifact_hash
 )`
 
 type StreamLifecycleEventRow struct {
@@ -166,6 +166,7 @@ type StreamLifecycleEventRow struct {
 	StreamOriginRegion    string
 	StreamOriginClusterID string
 	SchemaVersion         uint8
+	ArtifactHash          string
 }
 
 func PrepareStreamLifecycleEvent(ctx context.Context, db BatchPreparer) (*Writer[StreamLifecycleEventRow], error) {
@@ -175,7 +176,7 @@ func PrepareStreamLifecycleEvent(ctx context.Context, db BatchPreparer) (*Writer
 			row.BufferState, row.DownloadedBytes, row.UploadedBytes, row.TotalViewers, row.TotalInputs,
 			row.TotalOutputs, row.ViewerSeconds, row.HasIssues, row.IssuesDescription,
 			row.TrackCount, row.QualityTier, row.PrimaryWidth, row.PrimaryHeight, row.PrimaryFPS, row.EventData,
-			row.SourceRegion, row.StreamOriginRegion, row.StreamOriginClusterID, row.SchemaVersion,
+			row.SourceRegion, row.StreamOriginRegion, row.StreamOriginClusterID, row.SchemaVersion, row.ArtifactHash,
 		}
 	})
 }
@@ -187,7 +188,7 @@ const insertStreamLifecycleHealth = `INSERT INTO stream_health_samples (
 	has_issues, issues_description, track_count,
 	track_metadata,
 	audio_channels, audio_sample_rate, audio_codec, audio_bitrate,
-	source_region, stream_origin_region, stream_origin_cluster_id, schema_version
+	source_region, stream_origin_region, stream_origin_cluster_id, schema_version, artifact_hash
 )`
 
 type StreamLifecycleHealthRow struct {
@@ -219,6 +220,7 @@ type StreamLifecycleHealthRow struct {
 	StreamOriginRegion    string
 	StreamOriginClusterID string
 	SchemaVersion         uint8
+	ArtifactHash          string
 }
 
 func PrepareStreamLifecycleHealth(ctx context.Context, db BatchPreparer) (*Writer[StreamLifecycleHealthRow], error) {
@@ -230,7 +232,7 @@ func PrepareStreamLifecycleHealth(ctx context.Context, db BatchPreparer) (*Write
 			row.HasIssues, row.IssuesDescription, row.TrackCount,
 			row.TrackMetadata,
 			row.AudioChannels, row.AudioSampleRate, row.AudioCodec, row.AudioBitrate,
-			row.SourceRegion, row.StreamOriginRegion, row.StreamOriginClusterID, row.SchemaVersion,
+			row.SourceRegion, row.StreamOriginRegion, row.StreamOriginClusterID, row.SchemaVersion, row.ArtifactHash,
 		}
 	})
 }
