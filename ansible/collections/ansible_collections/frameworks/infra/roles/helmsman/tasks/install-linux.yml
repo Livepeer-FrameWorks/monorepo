@@ -31,6 +31,13 @@
     name: unzip
     state: present
   when: helmsman_is_zip | bool
+  # async kills a stalled apt fetch at the deadline; until re-runs it.
+  register: helmsman_package_attempt
+  until: helmsman_package_attempt is succeeded
+  retries: 1
+  delay: 10
+  async: 600
+  poll: 5
 
 - name: Download Helmsman asset
   ansible.builtin.get_url:

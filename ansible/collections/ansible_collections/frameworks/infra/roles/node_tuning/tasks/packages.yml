@@ -8,3 +8,10 @@
     update_cache: true
     cache_valid_time: 3600
     lock_timeout: 120
+  # async kills a stalled apt fetch at the deadline; until re-runs it.
+  register: node_tuning_package_attempt
+  until: node_tuning_package_attempt is succeeded
+  retries: 1
+  delay: 10
+  async: 600
+  poll: 5

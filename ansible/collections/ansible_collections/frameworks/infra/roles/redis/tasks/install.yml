@@ -40,6 +40,13 @@
     name: "{{ redis_package_name }}"
     state: present
   when: redis_named_instance | bool
+  # async kills a stalled apt fetch at the deadline; until re-runs it.
+  register: redis_package_attempt
+  until: redis_package_attempt is succeeded
+  retries: 1
+  delay: 10
+  async: 600
+  poll: 5
 
 - name: Stop default Redis services for named instance
   ansible.builtin.systemd:

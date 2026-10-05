@@ -151,12 +151,26 @@
     name: "{{ go_service_effective_runtime_packages }}"
     state: present
   when: go_service_effective_runtime_packages | length > 0
+  # async kills a stalled apt fetch at the deadline; until re-runs it.
+  register: go_service_package_attempt
+  until: go_service_package_attempt is succeeded
+  retries: 1
+  delay: 10
+  async: 600
+  poll: 5
 
 - name: Install unzip (zip archives only)
   ansible.builtin.package:
     name: unzip
     state: present
   when: go_service_is_zip | bool
+  # async kills a stalled apt fetch at the deadline; until re-runs it.
+  register: go_service_package_attempt
+  until: go_service_package_attempt is succeeded
+  retries: 1
+  delay: 10
+  async: 600
+  poll: 5
 
 - name: Stat installed binary
   ansible.builtin.stat:

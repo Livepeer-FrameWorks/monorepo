@@ -29,6 +29,13 @@
     - ansible_facts.os_family == "Debian"
     - node_baseline_resolved_packages | length > 0
   tags: [install]
+  # async kills a stalled apt fetch at the deadline; until re-runs it.
+  register: node_baseline_package_attempt
+  until: node_baseline_package_attempt is succeeded
+  retries: 3
+  delay: 10
+  async: 180
+  poll: 5
 
 - name: Node_baseline | install baseline packages
   ansible.builtin.package:
@@ -38,6 +45,13 @@
     - not ansible_check_mode
     - node_baseline_resolved_packages | length > 0
   tags: [install]
+  # async kills a stalled apt fetch at the deadline; until re-runs it.
+  register: node_baseline_package_attempt
+  until: node_baseline_package_attempt is succeeded
+  retries: 1
+  delay: 10
+  async: 600
+  poll: 5
 
 - name: Node_baseline | log retention and SSH protection packages
   ansible.builtin.import_tasks: host_packages.yml

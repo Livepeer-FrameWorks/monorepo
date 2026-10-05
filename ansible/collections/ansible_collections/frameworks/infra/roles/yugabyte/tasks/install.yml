@@ -16,6 +16,13 @@
   when:
     - yugabyte_manage_timesync
     - not yugabyte_timesync_running
+  # async kills a stalled apt fetch at the deadline; until re-runs it.
+  register: yugabyte_package_attempt
+  until: yugabyte_package_attempt is succeeded
+  retries: 1
+  delay: 10
+  async: 600
+  poll: 5
 
 - name: Enable and start time-sync service
   ansible.builtin.systemd:
@@ -31,6 +38,13 @@
     name: python-is-python3
     state: present
   when: ansible_os_family == "Debian"
+  # async kills a stalled apt fetch at the deadline; until re-runs it.
+  register: yugabyte_package_attempt
+  until: yugabyte_package_attempt is succeeded
+  retries: 1
+  delay: 10
+  async: 600
+  poll: 5
 
 # curl is required by yugabyte's post_install.sh; the package name is 'curl'
 # across all supported distro families so a single package task is correct.
@@ -38,6 +52,13 @@
   ansible.builtin.package:
     name: curl
     state: present
+  # async kills a stalled apt fetch at the deadline; until re-runs it.
+  register: yugabyte_package_attempt
+  until: yugabyte_package_attempt is succeeded
+  retries: 1
+  delay: 10
+  async: 600
+  poll: 5
 
 - name: Ensure yugabyte group
   ansible.builtin.group:

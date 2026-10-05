@@ -9,6 +9,13 @@
       - python3-debian
     state: present
   when: ansible_facts.os_family == "Debian"
+  # async kills a stalled apt fetch at the deadline; until re-runs it.
+  register: postgres_package_attempt
+  until: postgres_package_attempt is succeeded
+  retries: 1
+  delay: 10
+  async: 600
+  poll: 5
 
 - name: Postgres | install PGDG repository signing key
   ansible.builtin.get_url:
@@ -37,6 +44,13 @@
   when:
     - ansible_facts.os_family == "Debian"
     - frameworks_postgres_pgdg_repository.changed
+  # async kills a stalled apt fetch at the deadline; until re-runs it.
+  register: postgres_package_attempt
+  until: postgres_package_attempt is succeeded
+  retries: 3
+  delay: 10
+  async: 180
+  poll: 5
 
 - name: Postgres | pin requested PGDG major-version packages
   ansible.builtin.set_fact:
@@ -154,6 +168,13 @@
     name: "{{ frameworks_postgres_extension_packages }}"
     state: present
   when: frameworks_postgres_extension_packages | length > 0
+  # async kills a stalled apt fetch at the deadline; until re-runs it.
+  register: postgres_package_attempt
+  until: postgres_package_attempt is succeeded
+  retries: 1
+  delay: 10
+  async: 600
+  poll: 5
 
 - name: Postgres | check Arch pgvector AUR package state
   ansible.builtin.command:

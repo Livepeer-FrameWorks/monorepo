@@ -36,6 +36,13 @@
      if (mistserver_runtime_package_manager | trim | length == 0
          or mistserver_runtime_package_manager == ansible_facts.pkg_mgr)
      else mistserver_portable_runtime_packages) | length > 0
+  # async kills a stalled apt fetch at the deadline; until re-runs it.
+  register: mistserver_package_attempt
+  until: mistserver_package_attempt is succeeded
+  retries: 1
+  delay: 10
+  async: 600
+  poll: 5
 
 - name: Set install identity
   ansible.builtin.set_fact:

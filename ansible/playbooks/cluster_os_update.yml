@@ -79,6 +79,13 @@
             update_cache: true
             cache_valid_time: 0
             lock_timeout: 120
+          # async kills a stalled apt fetch at the deadline; until re-runs it.
+          register: os_update_refresh_attempt
+          until: os_update_refresh_attempt is succeeded
+          retries: 3
+          delay: 10
+          async: 180
+          poll: 5
 
         - name: Upgrade packages
           ansible.builtin.apt:

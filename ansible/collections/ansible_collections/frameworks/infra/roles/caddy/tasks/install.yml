@@ -37,3 +37,10 @@
     allow_downgrade: true
   notify: caddy restart
   when: not (ansible_check_mode and caddy_deb_download is changed)
+  # async kills a stalled apt fetch at the deadline; until re-runs it.
+  register: caddy_package_attempt
+  until: caddy_package_attempt is succeeded
+  retries: 1
+  delay: 10
+  async: 600
+  poll: 5

@@ -30,6 +30,13 @@
     name: "{{ kafka_java_package_by_family[ansible_facts.os_family] }}"
     state: present
   when: kafka_java_runtime_probe.rc != 0
+  # async kills a stalled apt fetch at the deadline; until re-runs it.
+  register: kafka_package_attempt
+  until: kafka_package_attempt is succeeded
+  retries: 1
+  delay: 10
+  async: 600
+  poll: 5
 
 - name: Ensure kafka group
   ansible.builtin.group:

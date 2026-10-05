@@ -68,6 +68,13 @@
     - compose_stack_manage_docker | bool
     - not (compose_stack_render_only | default(false) | bool)
     - not ansible_check_mode
+  # async kills a stalled apt fetch at the deadline; until re-runs it.
+  register: compose_stack_package_attempt
+  until: compose_stack_package_attempt is succeeded
+  retries: 1
+  delay: 10
+  async: 600
+  poll: 5
 
 - name: Check Docker Compose plugin
   ansible.builtin.command:
@@ -91,6 +98,12 @@
     - not (compose_stack_render_only | default(false) | bool)
     - not ansible_check_mode
     - compose_stack_compose_probe.rc | default(1) != 0
+  # async kills a stalled apt fetch at the deadline; until re-runs it.
+  until: compose_stack_compose_package_install is succeeded
+  retries: 1
+  delay: 10
+  async: 600
+  poll: 5
 
 - name: Re-check Docker Compose plugin after package install
   ansible.builtin.command:

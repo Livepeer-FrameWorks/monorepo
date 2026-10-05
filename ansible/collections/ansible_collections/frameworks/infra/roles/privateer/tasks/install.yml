@@ -6,11 +6,25 @@
   when:
     - not ansible_check_mode
     - ansible_facts.os_family == "Debian"
+  # async kills a stalled apt fetch at the deadline; until re-runs it.
+  register: privateer_package_attempt
+  until: privateer_package_attempt is succeeded
+  retries: 3
+  delay: 10
+  async: 180
+  poll: 5
 
 - name: Privateer | install host networking tools
   ansible.builtin.package:
     name: "{{ privateer_network_packages_by_family[ansible_facts.os_family] | default(privateer_network_packages_by_family.RedHat) }}"
     state: present
+  # async kills a stalled apt fetch at the deadline; until re-runs it.
+  register: privateer_package_attempt
+  until: privateer_package_attempt is succeeded
+  retries: 1
+  delay: 10
+  async: 600
+  poll: 5
 
 - name: Ensure privateer group
   ansible.builtin.group:

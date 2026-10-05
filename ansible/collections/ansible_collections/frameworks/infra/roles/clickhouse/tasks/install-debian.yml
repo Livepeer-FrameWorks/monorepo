@@ -28,6 +28,13 @@
       - python3-debian
     state: present
     update_cache: true
+  # async kills a stalled apt fetch at the deadline; until re-runs it.
+  register: clickhouse_package_attempt
+  until: clickhouse_package_attempt is succeeded
+  retries: 1
+  delay: 10
+  async: 600
+  poll: 5
 
 # The Deb822 source replaces this known legacy source path. Keeping both makes
 # APT query the same repository twice on hosts upgraded in place.
@@ -56,6 +63,13 @@
     state: present
     update_cache: true
     allow_downgrades: true
+  # async kills a stalled apt fetch at the deadline; until re-runs it.
+  register: clickhouse_package_attempt
+  until: clickhouse_package_attempt is succeeded
+  retries: 1
+  delay: 10
+  async: 600
+  poll: 5
 
 - name: ClickHouse | inspect installed server unit
   ansible.builtin.stat:

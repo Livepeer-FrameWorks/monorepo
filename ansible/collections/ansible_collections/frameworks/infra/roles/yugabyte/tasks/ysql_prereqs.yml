@@ -16,3 +16,10 @@
   ansible.builtin.package:
     name: "{{ yugabyte_postgresql_python_packages }}"
     state: present
+  # async kills a stalled apt fetch at the deadline; until re-runs it.
+  register: yugabyte_package_attempt
+  until: yugabyte_package_attempt is succeeded
+  retries: 1
+  delay: 10
+  async: 600
+  poll: 5

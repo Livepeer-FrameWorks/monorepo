@@ -3,8 +3,22 @@
   ansible.builtin.package:
     name: "{{ nginx_package_by_family[ansible_facts.os_family] | default('nginx') }}"
     state: present
+  # async kills a stalled apt fetch at the deadline; until re-runs it.
+  register: nginx_package_attempt
+  until: nginx_package_attempt is succeeded
+  retries: 1
+  delay: 10
+  async: 600
+  poll: 5
 
 - name: Install openssl (placeholder cert generation)
   ansible.builtin.package:
     name: "{{ nginx_openssl_package_by_family[ansible_facts.os_family] | default('openssl') }}"
     state: present
+  # async kills a stalled apt fetch at the deadline; until re-runs it.
+  register: nginx_package_attempt
+  until: nginx_package_attempt is succeeded
+  retries: 1
+  delay: 10
+  async: 600
+  poll: 5

@@ -27,6 +27,13 @@
     - not ansible_check_mode
     - ansible_facts.os_family == "RedHat"
     - ansible_facts.distribution != "Fedora"
+  # async kills a stalled apt fetch at the deadline; until re-runs it.
+  register: node_baseline_package_attempt
+  until: node_baseline_package_attempt is succeeded
+  retries: 1
+  delay: 10
+  async: 600
+  poll: 5
 
 - name: Node_baseline | install log retention and SSH protection packages
   ansible.builtin.package:
@@ -35,6 +42,13 @@
   when:
     - not ansible_check_mode
     - node_baseline_host_packages | length > 0
+  # async kills a stalled apt fetch at the deadline; until re-runs it.
+  register: node_baseline_package_attempt
+  until: node_baseline_package_attempt is succeeded
+  retries: 1
+  delay: 10
+  async: 600
+  poll: 5
 
 - name: Node_baseline | refresh installed packages
   ansible.builtin.package_facts:
