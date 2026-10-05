@@ -6,6 +6,7 @@ import (
 	"io"
 	"strconv"
 	"strings"
+	"time"
 
 	"frameworks/cli/internal/ux"
 	"frameworks/cli/pkg/inventory"
@@ -21,15 +22,26 @@ const privateerDNSProbe = `st=$(resolvectl status wg0 2>/dev/null); ` +
 	`if printf '%s\n' "$st" | grep -qE '\+DefaultRoute|DefaultRoute setting: yes'; then echo wg0_default_route=yes; else echo wg0_default_route=no; fi; ` +
 	`env=$(sudo -n cat /etc/privateer/privateer.env 2>/dev/null || cat /etc/privateer/privateer.env 2>/dev/null); ` +
 	`if printf '%s\n' "$env" | grep -qE '^UPSTREAM_DNS=.+'; then echo upstream=yes; else echo upstream=no; fi; ` +
-	`m=$(curl -fsS --max-time 3 http://127.0.0.1:18012/metrics 2>/dev/null) && ` +
+	privateerDNSForwardCounterProbe
+
+// privateerDNSForwardCounterProbe prints Privateer's cumulative count of
+// non-.internal queries since it started.
+const privateerDNSForwardCounterProbe = `m=$(curl -fsS --max-time 3 http://127.0.0.1:18012/metrics 2>/dev/null) && ` +
 	`printf '%s\n' "$m" | awk '/^privateer_dns_queries_total\{/ && /type="forward"/ {s += $NF} END {printf "forward_queries=%d\n", s}' || echo forward_queries=unknown`
+
+// privateerDNSObservationWindow is how long the check watches the forward
+// counter. The counter is cumulative since Privateer started, so one refused
+// query days ago says nothing about how the resolver routes names now; only
+// growth during the window does.
+const privateerDNSObservationWindow = 15 * time.Second
 
 // privateerDNSState is one host's parsed probe output.
 type privateerDNSState struct {
 	WG0Internal     bool
 	WG0DefaultRoute bool
 	Upstream        bool
-	// ForwardQueries is -1 when Privateer's metrics could not be read.
+	// ForwardQueries is Privateer's cumulative forward counter, -1 when its
+	// metrics could not be read.
 	ForwardQueries int64
 }
 
@@ -57,8 +69,10 @@ func parsePrivateerDNSProbe(stdout string) privateerDNSState {
 }
 
 // problems lists why this host's resolver could send public names to
-// Privateer, or stall them behind it.
-func (s privateerDNSState) problems() []string {
+// Privateer, or stall them behind it. forwardedInWindow is the number of
+// non-.internal queries Privateer answered during the observation window, -1
+// when it is unknown.
+func (s privateerDNSState) problems(forwardedInWindow int64) []string {
 	var out []string
 	if !s.WG0Internal {
 		out = append(out, "wg0 does not route ~internal to Privateer: .internal names do not resolve through the mesh")
@@ -66,23 +80,45 @@ func (s privateerDNSState) problems() []string {
 	if s.WG0DefaultRoute {
 		out = append(out, "wg0 is a default DNS route: public lookups can be sent to Privateer")
 	}
-	if !s.Upstream && s.ForwardQueries > 0 {
-		out = append(out, fmt.Sprintf("Privateer has no upstream but answered %d non-.internal quer(ies): public lookups are routed to it", s.ForwardQueries))
+	if !s.Upstream && forwardedInWindow > 0 {
+		out = append(out, fmt.Sprintf("Privateer has no upstream but answered %d non-.internal quer(ies) during the %s observation window: public lookups are routed to it", forwardedInWindow, privateerDNSObservationWindow))
 	}
 	return out
 }
 
+// forwardedDuring returns how many forward queries Privateer answered between
+// two reads of its cumulative counter, or -1 when either read failed. A lower
+// second read means Privateer restarted, so the second read is all growth.
+func forwardedDuring(start, end int64) int64 {
+	if start < 0 || end < 0 {
+		return -1
+	}
+	if end < start {
+		return end
+	}
+	return end - start
+}
+
 // checkPrivateerDNSScope probes every Privateer host and reports hosts whose
-// resolver routes public names to Privateer. It is read-only and returns the
-// number of hosts with a problem or that could not be probed.
-func checkPrivateerDNSScope(ctx context.Context, out, errOut io.Writer, manifest *inventory.Manifest, runnerFor func(inventory.Host) (ssh.Runner, error)) int {
+// resolver routes public names to Privateer. Hosts without an upstream are
+// read twice, window apart, and judged on the forward queries answered in
+// between. It is read-only and returns the number of hosts with a problem or
+// that could not be probed.
+func checkPrivateerDNSScope(ctx context.Context, out, errOut io.Writer, manifest *inventory.Manifest, runnerFor func(inventory.Host) (ssh.Runner, error), window time.Duration) int {
 	names := meshCheckHostNames(manifest)
 	if len(names) == 0 {
 		fmt.Fprintln(out, "No Privateer hosts in this manifest.")
 		return 0
 	}
 	fmt.Fprintln(out, "\nPrivateer DNS scope:")
+	type probed struct {
+		name   string
+		runner ssh.Runner
+		state  privateerDNSState
+	}
 	failures := 0
+	var hosts []probed
+	watch := false
 	for _, name := range names {
 		host, ok := manifest.GetHost(name)
 		if !ok {
@@ -103,19 +139,42 @@ func checkPrivateerDNSScope(ctx context.Context, out, errOut io.Writer, manifest
 			continue
 		}
 		state := parsePrivateerDNSProbe(result.Stdout)
-		problems := state.problems()
+		hosts = append(hosts, probed{name: name, runner: runner, state: state})
+		if !state.Upstream && state.ForwardQueries >= 0 {
+			watch = true
+		}
+	}
+	if watch {
+		timer := time.NewTimer(window)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+		case <-timer.C:
+		}
+	}
+	for _, h := range hosts {
+		forwarded := int64(-1)
+		if !h.state.Upstream && h.state.ForwardQueries >= 0 && ctx.Err() == nil {
+			if result, err := h.runner.Run(ctx, privateerDNSForwardCounterProbe); err == nil && result != nil {
+				forwarded = forwardedDuring(h.state.ForwardQueries, parsePrivateerDNSProbe(result.Stdout).ForwardQueries)
+			}
+		}
+		problems := h.state.problems(forwarded)
 		if len(problems) > 0 {
 			failures++
 			for _, problem := range problems {
-				ux.Fail(errOut, fmt.Sprintf("%s: %s", name, problem))
+				ux.Fail(errOut, fmt.Sprintf("%s: %s", h.name, problem))
 			}
 			continue
 		}
-		forwarded := "forward counter unreadable"
-		if state.ForwardQueries >= 0 {
-			forwarded = fmt.Sprintf("%d forwarded", state.ForwardQueries)
+		detail := "forward counter unreadable"
+		switch {
+		case h.state.Upstream && h.state.ForwardQueries >= 0:
+			detail = fmt.Sprintf("%d forwarded since start", h.state.ForwardQueries)
+		case forwarded >= 0:
+			detail = fmt.Sprintf("%d forwarded in %s", forwarded, window)
 		}
-		ux.Success(out, fmt.Sprintf("%s: ~internal on wg0 without default route (upstream=%t, %s)", name, state.Upstream, forwarded))
+		ux.Success(out, fmt.Sprintf("%s: ~internal on wg0 without default route (upstream=%t, %s)", h.name, h.state.Upstream, detail))
 	}
 	return failures
 }

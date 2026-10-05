@@ -102,7 +102,7 @@ func runDiagnose(cmd *cobra.Command, rc *resolvedCluster, component string, opts
 	case "dns":
 		failures := checkPrivateerDNSScope(ctx, cmd.OutOrStdout(), cmd.ErrOrStderr(), manifest, func(host inventory.Host) (ssh.Runner, error) {
 			return getRunner(host, sshPool)
-		})
+		}, privateerDNSObservationWindow)
 		if failures > 0 {
 			return fmt.Errorf("privateer dns diagnostics found %d host(s) with a problem", failures)
 		}
