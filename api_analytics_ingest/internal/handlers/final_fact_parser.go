@@ -1326,13 +1326,14 @@ func (h *AnalyticsHandler) lookupStreamStartedAtMSFromEventLogScope(ctx context.
 	return startedAtMS
 }
 
+// normalizeCountryCode keys a session's country for the FixedString(2)
+// column. A viewer without a known country gets "--", the marker viewer
+// connection events and routing decisions store, so viewer-hours and geo
+// rollups agree with viewer sessions.
 func normalizeCountryCode(cc string) string {
 	cc = strings.ToUpper(strings.TrimSpace(cc))
-	if len(cc) == 0 {
-		return "\x00\x00"
-	}
-	if len(cc) == 1 {
-		return cc + "\x00"
+	if len(cc) < 2 {
+		return "--"
 	}
 	return cc[:2]
 }

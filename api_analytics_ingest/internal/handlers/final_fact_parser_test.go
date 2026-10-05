@@ -61,8 +61,9 @@ func TestAbsDelta(t *testing.T) {
 
 func TestNormalizeCountryCode(t *testing.T) {
 	// Intent: produce a stable 2-byte key (ClickHouse FixedString(2)). Upper-
-	// cased, trimmed, padded with NUL for short inputs and truncated to two
-	// bytes for long ones. ASCII country codes only, by contract.
+	// cased, trimmed and truncated to two bytes. A viewer without a known
+	// country gets "--", the marker viewer connection events and routing
+	// decisions store, never ClickHouse's NUL-padded default.
 	cases := []struct {
 		in   string
 		want string
@@ -71,9 +72,10 @@ func TestNormalizeCountryCode(t *testing.T) {
 		{"US", "US"},
 		{" us ", "US"},
 		{"usa", "US"}, // truncated to 2
-		{"u", "U\x00"},
-		{"", "\x00\x00"},
-		{"  ", "\x00\x00"}, // all whitespace trims to empty
+		{"u", "--"},
+		{"", "--"},
+		{"  ", "--"}, // all whitespace trims to empty
+		{"--", "--"},
 	}
 	for _, tc := range cases {
 		if got := normalizeCountryCode(tc.in); got != tc.want {
