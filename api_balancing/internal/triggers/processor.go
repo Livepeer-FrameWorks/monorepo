@@ -5270,13 +5270,16 @@ func (p *Processor) handleLiveTrackList(trigger *ipcpb.MistTrigger) (string, boo
 		liveTrackList.StreamId = &streamID
 	}
 
-	// Send enriched trigger to Decklog
-	if err := p.sendTriggerToDecklog(trigger); err != nil {
-		p.logger.WithFields(logging.Fields{
-			"internal_name": internalName,
-			"trigger_type":  trigger.GetTriggerType(),
-			"error":         err,
-		}).Error("Failed to send track list trigger to Decklog")
+	// A processing+ stream is an artifact's internal transcode input with no
+	// content series of its own, so Periscope has nothing to key its report by.
+	if streamident.Parse(liveTrackList.GetStreamName()).Kind != streamident.KindArtifactProcessing {
+		if err := p.sendTriggerToDecklog(trigger); err != nil {
+			p.logger.WithFields(logging.Fields{
+				"internal_name": internalName,
+				"trigger_type":  trigger.GetTriggerType(),
+				"error":         err,
+			}).Error("Failed to send track list trigger to Decklog")
+		}
 	}
 
 	// Update state track list - using empty JSON string since we have structured data
