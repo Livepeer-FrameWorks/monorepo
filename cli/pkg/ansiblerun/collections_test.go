@@ -8,10 +8,8 @@ import (
 	"testing"
 )
 
-// The pinned collections declare older ansible-core ceilings than current
-// releases ship; ansible-galaxy refuses them unless told to ignore the
-// mismatch, which the release apply's install must do on an operator's
-// up-to-date Ansible.
+// The install itself tolerates a version mismatch so that
+// checkAnsibleCompatibility, not a galaxy warning or refusal, reports it.
 func TestGalaxyInstallIgnoresAnsibleVersionMismatch(t *testing.T) {
 	dir := t.TempDir()
 	envOut := filepath.Join(dir, "env")

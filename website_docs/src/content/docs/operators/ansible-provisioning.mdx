@@ -87,6 +87,12 @@ The CLI's collection-install step is idempotent and keyed on
 `sha256(requirements.yml)` — unchanged inputs skip the `ansible-galaxy` call
 entirely.
 
+Before any playbook runs, the CLI compares the local ansible-core release
+(`ansible-galaxy --version`) with the `requires_ansible` range of every
+installed collection. A release outside a range stops the command with an
+error naming the collection and the range it supports; install an ansible-core
+release inside it.
+
 ## Local testing
 
 - `make provision-hello` — end-to-end smoke against localhost with the

@@ -93,7 +93,7 @@ func (e *CollectionEnsurer) Ensure(ctx context.Context) (EnsureResult, error) {
 		return EnsureResult{}, sentinelErr
 	}
 	if fresh {
-		return EnsureResult{CollectionsPath: collectionsPath, RolesPath: rolesPath}, nil
+		return e.checked(ctx, collectionsPath, rolesPath)
 	}
 
 	lock, err := acquireInstallLock(root)
@@ -107,7 +107,7 @@ func (e *CollectionEnsurer) Ensure(ctx context.Context) (EnsureResult, error) {
 	if fresh, err := sentinelMatches(root, hash); err != nil {
 		return EnsureResult{}, err
 	} else if fresh {
-		return EnsureResult{CollectionsPath: collectionsPath, RolesPath: rolesPath}, nil
+		return e.checked(ctx, collectionsPath, rolesPath)
 	}
 
 	if err := runGalaxyCollectionInstall(ctx, e.galaxyBinary(), e.RequirementsFile, collectionsPath); err != nil {
@@ -118,6 +118,16 @@ func (e *CollectionEnsurer) Ensure(ctx context.Context) (EnsureResult, error) {
 	}
 	if err := writeSentinel(root, hash); err != nil {
 		return EnsureResult{}, fmt.Errorf("write sentinel: %w", err)
+	}
+	return e.checked(ctx, collectionsPath, rolesPath)
+}
+
+// checked returns the cache paths once the operator's ansible-core is inside every installed
+// collection's supported range. It runs on the fresh-cache path too, since ansible-core can be
+// upgraded after the cache was filled.
+func (e *CollectionEnsurer) checked(ctx context.Context, collectionsPath, rolesPath string) (EnsureResult, error) {
+	if err := checkAnsibleCompatibility(ctx, e.galaxyBinary(), collectionsPath); err != nil {
+		return EnsureResult{}, err
 	}
 	return EnsureResult{CollectionsPath: collectionsPath, RolesPath: rolesPath}, nil
 }
@@ -232,9 +242,9 @@ func runGalaxyInstall(ctx context.Context, binary, requirements, cacheDir, kind 
 	}
 	cmd := exec.CommandContext(ctx, binary, args...)
 	cmd.Dir = reqDir
-	// Pinned collections such as prometheus.prometheus declare an ansible-core
-	// ceiling below current releases; galaxy refuses to install them on a newer
-	// Ansible unless the mismatch is ignored, as CI's install does too.
+	// The install tolerates an ansible-core outside a collection's declared
+	// range so that Ensure's compatibility check, which runs next, is the one
+	// that refuses it, naming the collection and the range it supports.
 	cmd.Env = append(os.Environ(), "ANSIBLE_COLLECTIONS_ON_ANSIBLE_VERSION_MISMATCH=ignore")
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
