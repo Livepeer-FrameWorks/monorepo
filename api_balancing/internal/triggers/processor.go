@@ -4596,6 +4596,12 @@ func (p *Processor) handleStreamBuffer(trigger *ipcpb.MistTrigger) (string, bool
 		p.markIngestSessionPlayable(info.TenantID, trigger.GetNodeId(), internalName, trigger.GetTriggerUnixMillis())
 	}
 
+	// A processing+ stream is an artifact's internal transcode input with no
+	// content series of its own, so Periscope has nothing to key its report by.
+	if streamident.Parse(streamBuffer.GetStreamName()).Kind == streamident.KindArtifactProcessing {
+		return "", false, nil
+	}
+
 	// Forward original StreamBufferTrigger to Decklog (preserves all track data and health metrics)
 	// Helmsman already enriched it with has_issues, issues_description, quality_tier, etc.
 	if err := p.sendTriggerToDecklog(trigger); err != nil {
