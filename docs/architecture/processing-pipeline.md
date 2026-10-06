@@ -415,6 +415,12 @@ Commodore catalog by the **artifact reconciler** (the sole catalog writer,
 `api_balancing/internal/jobs/artifact_reconciler.go`) via `UpdateArtifactCatalogSnapshot`. See
 [`clips-dvr.md`](./clips-dvr.md) for the catalog / read path.
 
+A committed lifecycle mutation (delete, sync, finalize, processing exhaustion) triggers an
+immediate pass on the replica that committed it. Projection runs under one cell-wide advisory
+lock, so when a peer Foghorn replica holds it, the triggered replica retries the lock every two
+seconds until it runs a pass; the change reaches the catalog seconds after the peer's pass ends
+rather than on the five-minute fallback pass.
+
 ## Playback resolution
 
 `vod+<internal_name>` and `dvr+<internal_name>` are resolved lazily at playback in the

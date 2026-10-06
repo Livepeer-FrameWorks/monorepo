@@ -39,6 +39,11 @@ type FreezeRequestSender func(nodeID string, req *ipcpb.FreezeRequest) error
 // A full batch self-triggers another pass so the backfill converges without waiting a full interval.
 const catalogBackfillBatch = 500
 
+// catalogLockRetryInterval is how soon a triggered pass that found a peer replica holding the
+// projection lock tries again. A pass holds the lock for seconds, so the owed pass lands shortly
+// after the peer releases it instead of on the fallback interval.
+const catalogLockRetryInterval = 2 * time.Second
+
 // dvrChildRepairBatch bounds the per-pass repair that cascades still-live children of soft-deleted
 // DVR parents. Converges once every such parent's children are cascaded.
 const dvrChildRepairBatch = 200
@@ -92,6 +97,7 @@ type ArtifactReconciler struct {
 	nodeFreezeProtocolOK func(nodeID string) (ok bool, known bool)
 	logger               logging.Logger
 	interval             time.Duration
+	lockRetryInterval    time.Duration
 	batchSize            int
 	clusterID            string
 	servedClusterIDs     func() []string
@@ -198,21 +204,42 @@ func (r *ArtifactReconciler) run() {
 	// a full interval on a quiet process.
 	r.reconcile()
 
+	// A trigger follows a committed lifecycle mutation (a delete, a sync, a finalize). When a peer
+	// replica of this cell holds the projection lock, its pass may have listed its batch before that
+	// commit, so this replica owes the pass: it keeps retrying the lock until it wins one. A pass that
+	// runs under the lock after the commit sees the row, so any acquired pass settles the debt.
+	var owedPass <-chan time.Time
 	for {
 		select {
 		case <-r.triggerCh:
-			r.reconcile()
+			owedPass = r.retryUnlessRan(r.reconcile())
+		case <-owedPass:
+			owedPass = r.retryUnlessRan(r.reconcileUnderLock())
 		case <-ticker.C:
-			r.reconcile()
+			if r.reconcile() {
+				owedPass = nil
+			}
 		case <-r.stopCh:
 			return
 		}
 	}
 }
 
-func (r *ArtifactReconciler) reconcile() {
+func (r *ArtifactReconciler) retryUnlessRan(ran bool) <-chan time.Time {
+	if ran {
+		return nil
+	}
+	retry := r.lockRetryInterval
+	if retry <= 0 {
+		retry = catalogLockRetryInterval
+	}
+	return time.After(retry)
+}
+
+// reconcile runs one full pass and reports whether its projection section ran under the lock.
+func (r *ArtifactReconciler) reconcile() bool {
 	if r.db == nil {
-		return
+		return true
 	}
 
 	// Billing attribution runs FIRST and on its OWN advisory lock + timeout, decoupled from the projection
@@ -226,20 +253,27 @@ func (r *ArtifactReconciler) reconcile() {
 	// (runLedgerSweep) with its own advisory lock, so a cleanup backlog never occupies this reconcile pass's
 	// context and delays catalog projection.
 
+	return r.reconcileUnderLock()
+}
+
+// reconcileUnderLock runs the catalog projection and artifact repair section under the cell-wide
+// 'artifact_reconciler' advisory lock. It reports false when this replica did not get the lock (a
+// peer holds it, or the connection failed), so the caller can retry an owed pass.
+func (r *ArtifactReconciler) reconcileUnderLock() bool {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
 
 	conn, err := r.db.Conn(ctx)
 	if err != nil {
 		r.logger.WithError(err).Warn("Failed to acquire DB connection for reconciler lock")
-		return
+		return false
 	}
 	defer conn.Close()
 
 	queries := foghorndb.New(conn)
 	acquired, err := queries.TryArtifactReconcilerLock(ctx)
 	if err != nil || !acquired {
-		return
+		return false
 	}
 	defer func() { _ = queries.UnlockArtifactReconciler(ctx) }() //nolint:errcheck // best-effort session advisory unlock
 
@@ -276,7 +310,7 @@ func (r *ArtifactReconciler) reconcile() {
 		if projected > 0 {
 			r.logger.WithField("projected", projected).Info("Artifact projection repair pass complete")
 		}
-		return
+		return true
 	}
 	reconciled := r.reconcileOrphaned(ctx)
 	retried := r.retryFailed(ctx)
@@ -290,6 +324,7 @@ func (r *ArtifactReconciler) reconcile() {
 			"projected":  projected,
 		}).Info("Artifact reconciliation pass complete")
 	}
+	return true
 }
 
 // reconcileBillingAttribution runs the recorded-evidence durable_backend_local reconciliation under its OWN
