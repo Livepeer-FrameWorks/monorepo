@@ -52,12 +52,12 @@ func TestDeleteDVR_CommittedDeleteKicksCatalogProjection(t *testing.T) {
 	mock.ExpectExec(`DELETE FROM foghorn.dvr_chapters`).
 		WithArgs("dvr-h", "tenant-a").
 		WillReturnResult(sqlmock.NewResult(0, 0))
-	mock.ExpectExec(`INSERT INTO foghorn\.artifact_event_outbox`).
-		WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectQuery(`FROM foghorn.artifacts\s+WHERE artifact_hash = \$1 AND artifact_type = 'dvr'`).
 		WithArgs("dvr-h").
 		WillReturnRows(sqlmock.NewRows([]string{"tenant_id", "user_id", "stream_id", "stream_internal_name", "retention_until", "started_at"}).
 			AddRow("tenant-a", "user-1", "stream-1", "live+stream-1", nil, nil))
+	mock.ExpectExec(`INSERT INTO foghorn\.artifact_event_outbox`).
+		WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectExec(`INSERT INTO foghorn\.artifact_event_outbox`).
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectCommit()
