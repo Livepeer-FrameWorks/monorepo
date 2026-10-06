@@ -61,6 +61,21 @@
       - libpq-dev
   when: ansible_facts.os_family == "Debian"
 
+# geerlingguy.postgresql installs python3-psycopg2 and postgresql_packages with
+# apt and no deadline. Installing them here first makes those tasks no-ops.
+- name: Postgres | install the packages geerlingguy.postgresql installs
+  ansible.builtin.apt:
+    name: "{{ ['python3-psycopg2'] + postgresql_packages }}"
+    state: present
+  when: ansible_facts.os_family == "Debian"
+  # async kills a stalled apt fetch at the deadline; until re-runs it.
+  register: postgres_package_attempt
+  until: postgres_package_attempt is succeeded
+  retries: 1
+  delay: 10
+  async: 600
+  poll: 5
+
 - name: Postgres | compute effective OS paths for geerlingguy.postgresql
   ansible.builtin.set_fact:
     frameworks_postgres_data_dir: "{{ (postgres_arch_pgroot + '/data') if ansible_facts.os_family == 'Archlinux' else postgres_data_dir }}"

@@ -1,4 +1,21 @@
 ---
+# geerlingguy.redis installs redis_package (redis-server unless overridden) with
+# apt and no deadline. Installing it here first makes that task a no-op.
+- name: Install the Redis package geerlingguy.redis installs
+  ansible.builtin.apt:
+    name: "{{ redis_package | default('redis-server') }}"
+    state: present
+  when:
+    - not (redis_named_instance | bool)
+    - ansible_facts.os_family == 'Debian'
+  # async kills a stalled apt fetch at the deadline; until re-runs it.
+  register: redis_package_attempt
+  until: redis_package_attempt is succeeded
+  retries: 1
+  delay: 10
+  async: 600
+  poll: 5
+
 - name: Install and configure default Redis via geerlingguy.redis
   ansible.builtin.include_role:
     name: geerlingguy.redis

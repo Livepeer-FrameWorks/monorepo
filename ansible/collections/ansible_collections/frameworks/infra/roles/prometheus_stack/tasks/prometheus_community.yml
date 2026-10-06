@@ -1,4 +1,21 @@
 ---
+# The prometheus.prometheus roles' preflight installs python3-apt with apt and
+# no deadline. Installing it here first makes that task a no-op.
+- name: Install the package the prometheus.prometheus preflight installs
+  ansible.builtin.apt:
+    name: python3-apt
+    state: present
+  when:
+    - ansible_facts.pkg_mgr == 'apt'
+    - ('prometheus' in prometheus_stack_components) or ('node_exporter' in prometheus_stack_components)
+  # async kills a stalled apt fetch at the deadline; until re-runs it.
+  register: prometheus_stack_package_attempt
+  until: prometheus_stack_package_attempt is succeeded
+  retries: 1
+  delay: 10
+  async: 600
+  poll: 5
+
 - name: Install Prometheus via prometheus.prometheus.prometheus
   ansible.builtin.include_role:
     name: prometheus.prometheus.prometheus
