@@ -172,13 +172,13 @@ var vendorPackageTasks = []vendorPackages{
 		preinstall:  []string{"redis_package", "redis-server"},
 	},
 	{
-		requirement: "prometheus.prometheus", version: "0.27.0", include: "prometheus.prometheus.prometheus",
+		requirement: "prometheus.prometheus", version: "0.30.1", include: "prometheus.prometheus.prometheus",
 		wrapper: "prometheus_stack/tasks/prometheus_community.yml", vendorFile: "../_common/tasks/preflight.yml",
 		vendorNames: []string{"{{ _common_dependencies }}"},
 		preinstall:  []string{"python3-apt"},
 	},
 	{
-		requirement: "prometheus.prometheus", version: "0.27.0", include: "prometheus.prometheus.node_exporter",
+		requirement: "prometheus.prometheus", version: "0.30.1", include: "prometheus.prometheus.node_exporter",
 		wrapper: "prometheus_stack/tasks/prometheus_community.yml", vendorFile: "../_common/tasks/preflight.yml",
 		vendorNames: []string{"{{ _common_dependencies }}"},
 		preinstall:  []string{"python3-apt"},
