@@ -37,7 +37,7 @@
   ansible.builtin.package:
     name: python-is-python3
     state: present
-  when: ansible_os_family == "Debian"
+  when: ansible_facts.os_family == "Debian"
   # async kills a stalled apt fetch at the deadline; until re-runs it.
   register: yugabyte_package_attempt
   until: yugabyte_package_attempt is succeeded

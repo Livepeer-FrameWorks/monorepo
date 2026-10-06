@@ -373,6 +373,6 @@
   ansible.builtin.import_tasks: config-marker.yml
   vars:
     edge_config_marker_dir: >-
-      {{ (ansible_env.HOME ~ '/.local/var/lib/frameworks/helmsman')
+      {{ (ansible_facts.env.HOME ~ '/.local/var/lib/frameworks/helmsman')
          if edge_darwin_domain == 'user'
          else '/usr/local/var/lib/frameworks/helmsman' }}

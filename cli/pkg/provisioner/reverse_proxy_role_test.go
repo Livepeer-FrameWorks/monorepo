@@ -680,7 +680,7 @@ func TestServiceBootstrapRolePreservesFailedDesiredStateAndDiagnostics(t *testin
 	for _, want := range []string{
 		"rescue:",
 		"preserve failed desired-state file",
-		"bootstrap-failed-{{ ansible_date_time.epoch }}.yaml",
+		"bootstrap-failed-{{ ansible_facts.date_time.epoch }}.yaml",
 		"failed task: {{ ansible_failed_task.name | default('unknown') }}",
 		"{{ ansible_failed_result.stdout | default('(no stdout)') }}",
 		"{{ ansible_failed_result.stderr | default('(no stderr)') }}",

@@ -101,7 +101,7 @@
       ansible.builtin.copy:
         remote_src: true
         src: "{{ service_bootstrap_state_dir }}/bootstrap.yaml"
-        dest: "{{ service_bootstrap_state_dir }}/bootstrap-failed-{{ ansible_date_time.epoch }}.yaml"
+        dest: "{{ service_bootstrap_state_dir }}/bootstrap-failed-{{ ansible_facts.date_time.epoch }}.yaml"
         owner: "{{ service_bootstrap_user }}"
         group: "{{ service_bootstrap_group }}"
         mode: "0600"
@@ -128,7 +128,7 @@
           {{ ansible_failed_result.stderr | default('(no stderr)') }}
 
           failed desired-state file:
-          {{ service_bootstrap_state_dir }}/bootstrap-failed-{{ ansible_date_time.epoch }}.yaml
+          {{ service_bootstrap_state_dir }}/bootstrap-failed-{{ ansible_facts.date_time.epoch }}.yaml
 
 - name: Service_bootstrap | validate
   when: service_bootstrap_mode == "validate"

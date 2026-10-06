@@ -10,7 +10,7 @@
         cache_valid_time: 3600
         update_cache_retries: 5
         update_cache_retry_max_delay: 12
-      when: ansible_os_family == "Debian"
+      when: ansible_facts.os_family == "Debian"
 
     - name: Ensure OpenJDK postinst manpage directory exists
       ansible.builtin.file:
@@ -19,10 +19,10 @@
         owner: root
         group: root
         mode: "0755"
-      when: ansible_os_family == "Debian"
+      when: ansible_facts.os_family == "Debian"
 
     - name: Ensure apt-key compatibility helper is installed
       ansible.builtin.apt:
         name: gpg-agent
         state: present
-      when: ansible_os_family == "Debian"
+      when: ansible_facts.os_family == "Debian"
