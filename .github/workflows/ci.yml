@@ -56,6 +56,8 @@ jobs:
               - 'scripts/run-go-contract-test.sh'
               - 'scripts/check-go-format.sh'
               - 'scripts/verify-db-transactions.sh'
+              - 'scripts/edge-dev-dist.sh'
+              - 'scripts/resolve-mist-release.sh'
               - 'pkg/proto/**'
               - '.golangci.yml'
               - '.golangci-baseline'

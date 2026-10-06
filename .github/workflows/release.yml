@@ -516,41 +516,14 @@ jobs:
           private-key: ${{ secrets.GITOPS_APP_PRIVATE_KEY }}
           repositories: mistserver
 
+      - uses: actions/checkout@v6
+
+      # The dev stack edge (scripts/edge-dev-dist.sh) resolves Mist through the
+      # same script, so the stack runs the Mist this release bakes.
       - name: Fetch latest MistServer release metadata
         env:
-          GH_APP_TOKEN: ${{ steps.mist-token.outputs.token }}
-        run: |
-          set -euo pipefail
-          mkdir -p dist
-          curl -fsSL \
-            -H "Accept: application/vnd.github+json" \
-            -H "Authorization: Bearer ${GH_APP_TOKEN}" \
-            -H "X-GitHub-Api-Version: 2022-11-28" \
-            https://api.github.com/repos/Livepeer-FrameWorks/mistserver/releases/latest \
-            > dist/mistserver-release.json
-          jq -re '.tag_name' dist/mistserver-release.json
-
-          INDEX_URL=$(jq -re '.assets[] | select(.name == "mistserver-release-index.json") | .url' dist/mistserver-release.json)
-          curl -fsSL \
-            -H "Accept: application/octet-stream" \
-            -H "Authorization: Bearer ${GH_APP_TOKEN}" \
-            -H "X-GitHub-Api-Version: 2022-11-28" \
-            "$INDEX_URL" > dist/mistserver-release-index.json
-
-          TAG=$(jq -re '.tag_name' dist/mistserver-release.json)
-          jq -e --arg tag "$TAG" '
-            .schema == "mistserver.release/v1"
-            and .release_tag == $tag
-            and .default_profile == "cpu"
-            and (.source_revision | type == "string" and length > 0)
-          ' dist/mistserver-release-index.json >/dev/null
-
-          jq -e --slurpfile release dist/mistserver-release.json '
-            [.profiles[].platforms[].artifact]
-            | all(. as $artifact
-                | $release[0].assets
-                | any(.name == $artifact.name and .digest == $artifact.checksum))
-          ' dist/mistserver-release-index.json >/dev/null
+          GH_TOKEN: ${{ steps.mist-token.outputs.token }}
+        run: scripts/resolve-mist-release.sh dist
 
       # Publicly downloadable asset URLs are a platform contract, not a CI
       # convenience: edge nodes fetch these SAME browser_download_urls

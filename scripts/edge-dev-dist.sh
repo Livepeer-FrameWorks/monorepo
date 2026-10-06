@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Stages edge/dist for the dev compose edge image (frameworks-edge:dev) through
-# edge/stage-dist.sh: Helmsman built from this working tree, MistServer and Caddy
-# from pinned release tarballs verified by checksum.
+# edge/stage-dist.sh: Helmsman built from this working tree, MistServer from the
+# release scripts/resolve-mist-release.sh resolves (the one a platform release
+# bakes), and Caddy from the infrastructure manifest pin, both verified by checksum.
 #
 #   make edge-dev-dist && docker compose build edge
 #
@@ -14,11 +15,6 @@
 set -euo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-
-# MistServer release pinned for the dev edge (Livepeer-FrameWorks/mistserver).
-mist_version=v0.3.10
-mist_sha256_amd64=95a71d797d31e87ac9b2e1061cbade9cb059667b1029e4b42e61a127c7097d0a
-mist_sha256_arm64=2ff1a7f5ae6aa04831d7a7e6416ae1009a19cff1f8695b6cb73df9c94a27adb4
 
 # The image targets the Docker engine's architecture, which can differ from the host shell's.
 arch="$(docker version --format '{{.Server.Arch}}' 2>/dev/null || uname -m)"
@@ -50,13 +46,19 @@ if [ -n "${EDGE_DEV_MIST_TAR:-}" ]; then
   [ -f "$EDGE_DEV_MIST_TAR" ] || { echo "ERROR: EDGE_DEV_MIST_TAR=$EDGE_DEV_MIST_TAR is not a file" >&2; exit 1; }
   mist_args=(--mist-tar "$EDGE_DEV_MIST_TAR" --mist-version "local-$stamp")
 else
-  case "$arch" in
-    amd64) mist_sha256=$mist_sha256_amd64 ;;
-    arm64) mist_sha256=$mist_sha256_arm64 ;;
-  esac
+  mist_meta="$(mktemp -d)"
+  trap 'rm -rf "$mist_meta"' EXIT
+  mist_version="$("$repo_root/scripts/resolve-mist-release.sh" "$mist_meta")"
+  read -r mist_artifact mist_checksum < <(jq -re --arg platform "linux/$arch" '
+    .profiles[.default_profile].platforms[$platform].artifact | select(.name != null and .checksum != null) | "\(.name) \(.checksum)"
+  ' "$mist_meta/mistserver-release-index.json") || {
+    echo "ERROR: MistServer $mist_version has no default-profile linux/$arch artifact" >&2
+    exit 1
+  }
+  mist_url="$(jq -re --arg name "$mist_artifact" '.assets[] | select(.name == $name) | .browser_download_url' "$mist_meta/mistserver-release.json")"
   mist_args=(
-    --mist-url "https://github.com/Livepeer-FrameWorks/mistserver/releases/download/$mist_version/mistserver-linux-$arch-$mist_version.tar.gz"
-    --mist-sha256 "$mist_sha256"
+    --mist-url "$mist_url"
+    --mist-sha256 "${mist_checksum#sha256:}"
     --mist-version "$mist_version"
   )
 fi

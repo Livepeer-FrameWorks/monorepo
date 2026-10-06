@@ -121,7 +121,7 @@ git clone https://github.com/Livepeer-FrameWorks/monorepo.git
 cd monorepo
 cp config/env/secrets.env.example config/env/secrets.env  # edit values as needed
 make env            # writes .env from config/env, with COMPOSE_PROFILES=edge
-make edge-dev-dist  # stages Helmsman from source plus pinned MistServer and Caddy for the edge image
+make edge-dev-dist  # stages Helmsman from source plus the released MistServer and pinned Caddy for the edge image
 docker compose up --build
 ```
 
