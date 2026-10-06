@@ -2153,6 +2153,9 @@ func resolveLiveViewerEndpoint(ctx context.Context, req *sharedpb.ViewerEndpoint
 func resolveDVRViewerEndpoint(ctx context.Context, req *sharedpb.ViewerEndpointRequest, lat, lon float64, resolution *control.ContentResolution) (*sharedpb.ViewerEndpointResponse, error) {
 	dvrInternalName := mist.ExtractInternalName(resolution.InternalName)
 	dispatch, derr := control.ResolveDVRViewerDispatch(ctx, resolution, federationClient, peerManager)
+	if errors.Is(derr, control.ErrPlaybackContentNotFound) {
+		return nil, fmt.Errorf("dvr: %w", derr)
+	}
 	if derr != nil {
 		logger.WithError(derr).WithFields(logging.Fields{
 			"content_id":    req.GetContentId(),

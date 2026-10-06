@@ -650,6 +650,25 @@ func TestResolveRemoteArtifact_EntitledButUnreachableOriginIsRetryable(t *testin
 	}
 }
 
+type notFoundFedClient struct{}
+
+func (notFoundFedClient) PrepareArtifact(context.Context, string, string, *foghornfederationpb.PrepareArtifactRequest) (*foghornfederationpb.PrepareArtifactResponse, error) {
+	return &foghornfederationpb.PrepareArtifactResponse{Error: PrepareArtifactNotFoundRefusal}, nil
+}
+
+// A clip, VOD or DVR chapter deleted in its origin cell is not found there; the
+// asking cell answers the same not-found instead of a generic origin error.
+func TestResolveRemoteArtifact_OriginNotFoundIsContentNotFound(t *testing.T) {
+	deps := &PlaybackDependencies{FedClient: notFoundFedClient{}, PeerResolver: stubPeerResolver{}, LocalClusterID: "cluster-local"}
+	for _, contentType := range []string{"clip", "vod"} {
+		_, err := resolveRemoteArtifact(context.Background(), deps, "playback-1", "artifact-1", "cluster-origin", contentType, "tenant-1",
+			[]*clusterpeerpb.TenantClusterPeer{{ClusterId: "cluster-origin"}}, nil)
+		if !errors.Is(err, ErrPlaybackContentNotFound) {
+			t.Fatalf("%s deleted at origin: err=%v, want ErrPlaybackContentNotFound", contentType, err)
+		}
+	}
+}
+
 func TestResolveRemoteArtifact_RejectsWhenTenantPeerDataMissing(t *testing.T) {
 	deps := &PlaybackDependencies{
 		FedClient:      stubFedClient{},

@@ -229,6 +229,11 @@ func (r *ContentResolution) ArtifactInternalNameIdentity() *commodorepb.ResolveA
 // this error as not-found, never as a resolution failure.
 var ErrPlaybackContentNotFound = errors.New("content not found")
 
+// PrepareArtifactNotFoundRefusal is the PrepareArtifact refusal an origin cell
+// answers when it holds no live artifact for the hash and tenant, including
+// one it has deleted. The asking cell maps it to ErrPlaybackContentNotFound.
+const PrepareArtifactNotFoundRefusal = "artifact not found"
+
 // ResolveContent determines content type and resolution strategy for a playback request.
 func ResolveContent(ctx context.Context, input string) (*ContentResolution, error) {
 	if input == "" {
@@ -1758,6 +1763,9 @@ func resolveRemoteArtifactWithMetadata(ctx context.Context, deps *PlaybackDepend
 		storageClusterID = redirect
 	}
 
+	if resp.GetError() == PrepareArtifactNotFoundRefusal {
+		return nil, fmt.Errorf("origin cluster %s: %w", originClusterID, ErrPlaybackContentNotFound)
+	}
 	if resp.GetError() != "" {
 		return nil, fmt.Errorf("origin cluster error: %s", resp.GetError())
 	}

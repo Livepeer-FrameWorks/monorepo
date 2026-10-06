@@ -84,6 +84,9 @@ func ResolveDVRViewerDispatch(ctx context.Context, resolution *ContentResolution
 	if err != nil {
 		return nil, fmt.Errorf("DVR recording state: %w", err)
 	}
+	if resp.GetError() == PrepareArtifactNotFoundRefusal {
+		return nil, fmt.Errorf("DVR recording owner %s: %w", origin, ErrPlaybackContentNotFound)
+	}
 	if resp.GetError() != "" || resp.GetRedirectClusterId() != "" || resp.GetDvrStatus() == "" ||
 		resp.GetInternalName() != dispatch.InternalName || resp.GetStreamInternalName() != dispatch.StreamInternalName {
 		return nil, errors.New("DVR recording state differs from signed identity")

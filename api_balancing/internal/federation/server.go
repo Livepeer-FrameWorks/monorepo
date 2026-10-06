@@ -693,7 +693,7 @@ func (s *FederationServer) PrepareArtifact(ctx context.Context, req *foghornfede
 	descriptor, err := foghorndb.New(s.db).GetFederatedArtifactDescriptor(ctx, foghorndb.GetFederatedArtifactDescriptorParams{ArtifactHash: hash, TenantID: tenantID})
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
-			return &foghornfederationpb.PrepareArtifactResponse{Error: "artifact not found"}, nil
+			return &foghornfederationpb.PrepareArtifactResponse{Error: control.PrepareArtifactNotFoundRefusal}, nil
 		}
 		log.WithError(err).Error("PrepareArtifact DB query failed")
 		return nil, status.Error(codes.Internal, "failed to query artifact")

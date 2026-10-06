@@ -3,6 +3,7 @@ package control
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"path/filepath"
 	"regexp"
 	"testing"
@@ -13,6 +14,8 @@ import (
 	clusterpeerpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/cluster_peer"
 	commodorepb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/commodore"
 	federationpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/foghorn_federation"
+	"google.golang.org/grpc/codes"
+	grpcstatus "google.golang.org/grpc/status"
 )
 
 type dvrStateClientFunc func(context.Context, string, string, *federationpb.PrepareArtifactRequest) (*federationpb.PrepareArtifactResponse, error)
@@ -71,6 +74,34 @@ func TestDVRViewerDispatchResolvesOwnerStateWithExactIdentity(t *testing.T) {
 				t.Fatalf("owner state lost: %+v", dispatch)
 			}
 		})
+	}
+}
+
+// A DVR deleted in its owning cell is answered there as not found; the asking
+// cell reports the same not-found, so its front doors answer 404 rather than a
+// routing failure while the catalog still resolves the deleted playback ID.
+func TestDVRViewerDispatchOwnerNotFoundIsContentNotFound(t *testing.T) {
+	previousDB := db
+	db = nil
+	t.Cleanup(func() { db = previousDB })
+	resolution := &ContentResolution{LocalAuthority: true, ContentType: "dvr", ContentId: "public",
+		InternalName: "dvr+recording", ArtifactHash: "hash", ArtifactID: "id", TenantId: "owner",
+		StreamId: "parent-id", ParentStreamInternalName: "parent", OriginClusterID: "recording-cell",
+		ClusterPeers: []*clusterpeerpb.TenantClusterPeer{{ClusterId: "recording-cell"}}}
+	peers := &fakeCrossClusterPeerResolver{addrs: map[string]string{"recording-cell": "owner:443"}}
+
+	notFound := dvrStateClientFunc(func(context.Context, string, string, *federationpb.PrepareArtifactRequest) (*federationpb.PrepareArtifactResponse, error) {
+		return &federationpb.PrepareArtifactResponse{Error: PrepareArtifactNotFoundRefusal}, nil
+	})
+	if _, err := ResolveDVRViewerDispatch(t.Context(), resolution, notFound, peers); !errors.Is(err, ErrPlaybackContentNotFound) {
+		t.Fatalf("owner answered not found: err=%v, want ErrPlaybackContentNotFound", err)
+	}
+
+	unavailable := dvrStateClientFunc(func(context.Context, string, string, *federationpb.PrepareArtifactRequest) (*federationpb.PrepareArtifactResponse, error) {
+		return nil, grpcstatus.Error(codes.Unavailable, "recording state unavailable")
+	})
+	if _, err := ResolveDVRViewerDispatch(t.Context(), resolution, unavailable, peers); err == nil || errors.Is(err, ErrPlaybackContentNotFound) {
+		t.Fatalf("owner unavailable: err=%v, want a routing error that is not not-found", err)
 	}
 }
 

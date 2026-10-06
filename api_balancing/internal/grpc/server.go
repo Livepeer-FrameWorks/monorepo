@@ -2942,6 +2942,13 @@ func (s *FoghornGRPCServer) resolveLiveViewerEndpoint(ctx context.Context, req *
 func (s *FoghornGRPCServer) resolveDVRViewerEndpoint(ctx context.Context, req *sharedpb.ViewerEndpointRequest, lat, lon float64, resolution *control.ContentResolution) (*sharedpb.ViewerEndpointResponse, error) {
 	dvrInternalName := mist.ExtractInternalName(resolution.InternalName)
 	dispatch, derr := control.ResolveDVRViewerDispatch(ctx, resolution, s.federationClient, s.peerManager)
+	if errors.Is(derr, control.ErrPlaybackContentNotFound) {
+		s.logger.WithError(derr).WithFields(logging.Fields{
+			"content_id":    req.GetContentId(),
+			"internal_name": dvrInternalName,
+		}).Info("DVR recording not found in its owning cell")
+		return nil, status.Error(codes.NotFound, "DVR recording not found")
+	}
 	if derr != nil {
 		s.logger.WithError(derr).WithFields(logging.Fields{
 			"content_id":    req.GetContentId(),
