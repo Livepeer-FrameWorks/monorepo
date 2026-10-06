@@ -304,15 +304,22 @@ func (s *Server) fetchAndServe(c *gin.Context, kind, hash, ext, localPath string
 
 func (s *Server) fetchAndServeWithIntent(c *gin.Context, kind, hash, ext, localPath string, res *ResolveResult, intent admission.StorageIntent) string {
 	if c.Request.Method == http.MethodHead {
-		return s.streamRangeNoCache(c, res)
+		var onUpstreamFailure func(error)
+		if intent == admission.IntentProcessingInput {
+			onUpstreamFailure = func(err error) {
+				noteProcessingInputFailure(hash, upstreamFailureCause(c.Request.Context(), err))
+			}
+		}
+		return s.streamRangeNoCache(c, res, onUpstreamFailure)
 	}
 	return s.serveViaBlockCache(c, kind, hash, ext, localPath, res, intent)
 }
 
 // streamRangeNoCache forwards the requested Range to S3, copies the response
 // straight back, and never touches disk. Used for HEAD probes and memory-only
-// playback-cache outcomes.
-func (s *Server) streamRangeNoCache(c *gin.Context, res *ResolveResult) string {
+// playback-cache outcomes. onUpstreamFailure, when set, receives an upstream
+// that failed or answered an error status.
+func (s *Server) streamRangeNoCache(c *gin.Context, res *ResolveResult, onUpstreamFailure func(error)) string {
 	method := c.Request.Method
 	if method == http.MethodHead {
 		method = http.MethodGet
@@ -333,10 +340,16 @@ func (s *Server) streamRangeNoCache(c *gin.Context, res *ResolveResult) string {
 	}
 	resp, err := s.upstreamClient(res).Do(req)
 	if err != nil {
+		if onUpstreamFailure != nil {
+			onUpstreamFailure(err)
+		}
 		s.serverError(c, "upstream fetch", err)
 		return "error"
 	}
 	defer resp.Body.Close()
+	if resp.StatusCode >= http.StatusBadRequest && onUpstreamFailure != nil {
+		onUpstreamFailure(upstreamStatusError{StatusCode: resp.StatusCode})
+	}
 
 	// Mirror status and the headers that Mist cares about. Content-Length,
 	// Content-Range, Accept-Ranges drive seekability detection in

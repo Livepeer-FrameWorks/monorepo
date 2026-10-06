@@ -35,16 +35,25 @@ import (
 // artifacts. The block cache needs a total size; when Foghorn did not provide
 // one, the relay probes byte 0 and uses Content-Range as the source of truth.
 func (s *Server) serveViaBlockCache(c *gin.Context, kind, hash, ext, localPath string, res *ResolveResult, intent admission.StorageIntent) string {
+	strictCache := intent == admission.IntentProcessingInput
+	// A processing input whose upstream fails before Mist got a byte may keep
+	// its input from booting; the processing job reads this note to tell a
+	// storage stall from a bad source.
+	noteUpstreamFailure := func(err error) {
+		if strictCache {
+			noteProcessingInputFailure(hash, upstreamFailureCause(c.Request.Context(), err))
+		}
+	}
 	totalSize := int64(res.ExpectedSizeBytes)
 	if totalSize <= 0 {
 		probedSize, err := s.probeTotalSize(c.Request.Context(), s.upstreamClient(res), res.UpstreamURL(), res.PeerRelayGrantID)
 		if err != nil {
+			noteUpstreamFailure(err)
 			s.respondColdFetchError(c, err)
 			return "error"
 		}
 		totalSize = probedSize
 	}
-	strictCache := intent == admission.IntentProcessingInput
 
 	// Build a BlockStore handle but defer disk-touching setup (mkdir,
 	// EnsureMeta) until after admission.
@@ -107,6 +116,7 @@ func (s *Server) serveViaBlockCache(c *gin.Context, kind, hash, ext, localPath s
 	recordDefrost := s.defrostRecorderFor(kind, hash)
 	if cacheDecision == admission.CacheToDisk && !hasRange {
 		if err := s.preflightFirstColdSpan(c.Request.Context(), upstreamClient, store, spans[0], totalSize, upstreamURL, res.PeerRelayGrantID); err != nil {
+			noteUpstreamFailure(err)
 			s.cache.Delete(kind, hash)
 			s.respondColdFetchError(c, err)
 			return "error"
@@ -161,6 +171,7 @@ func (s *Server) serveViaBlockCache(c *gin.Context, kind, hash, ext, localPath s
 			// Gin defers the status until the first body write. A failed cold
 			// fetch must not commit an empty 200/206 with an advertised length.
 			if !c.Writer.Written() {
+				noteUpstreamFailure(err)
 				c.Writer.Header().Del("Content-Length")
 				c.Writer.Header().Del("Content-Range")
 				s.respondColdFetchError(c, err)
@@ -482,6 +493,11 @@ func (s *Server) respondColdFetchError(c *gin.Context, err error) {
 		case http.StatusUnauthorized, http.StatusForbidden:
 			c.String(http.StatusBadGateway, "source authorization failed")
 		default:
+			if transientUpstreamStatus(statusErr.StatusCode) {
+				c.Writer.Header().Set("Retry-After", "5")
+				c.String(http.StatusServiceUnavailable, "source temporarily unavailable: upstream status %d", statusErr.StatusCode)
+				return
+			}
 			c.String(http.StatusBadGateway, "source fetch failed: upstream status %d", statusErr.StatusCode)
 		}
 		return

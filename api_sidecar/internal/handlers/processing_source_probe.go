@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"strings"
@@ -90,16 +91,30 @@ func probeProcessingSourceStatus(ctx context.Context, sourceURL string) (status 
 	return resp.StatusCode, resp.Status, true
 }
 
+// transientSourceStatus reports whether a source status says the source is
+// unavailable for now rather than wrong: a timeout, rate limit, or server-side
+// failure. The relay answers 502 only for an upstream that refused the read.
+func transientSourceStatus(status int) bool {
+	switch status {
+	case http.StatusRequestTimeout, http.StatusTooManyRequests,
+		http.StatusInternalServerError, http.StatusServiceUnavailable, http.StatusGatewayTimeout:
+		return true
+	}
+	return false
+}
+
 // failProcessingSourceIfUnavailable probes the source Foghorn resolved for a
 // processing+ stream with an active job. An HTTP error status fails the job at
 // once with the status, instead of letting Mist open an error body and leave
-// the job waiting. It reports whether the source was refused.
+// the job waiting; a transient status is left to the job's readiness, which
+// retries the attempt when the relay saw storage fail. It reports whether the
+// source was refused.
 func failProcessingSourceIfUnavailable(ctx context.Context, streamName, sourceURL string) bool {
 	if !strings.HasPrefix(streamName, "processing+") || !HasPendingJob(streamName) {
 		return false
 	}
 	status, statusText, ok := probeProcessingSourceStatus(ctx, sourceURL)
-	if !ok || status < http.StatusBadRequest {
+	if !ok || status < http.StatusBadRequest || transientSourceStatus(status) {
 		return false
 	}
 	if statusText == "" {
@@ -112,4 +127,29 @@ func failProcessingSourceIfUnavailable(ctx context.Context, streamName, sourceUR
 	}).Warn("Processing source probe failed; failing the job")
 	signalProcessingSourceFailure(streamName, failure)
 	return true
+}
+
+// processingSourceStallError is a processing stream that did not boot while
+// the relay could not read its source from upstream storage. Another attempt
+// can succeed once storage answers again.
+type processingSourceStallError struct {
+	boot       error
+	sourceRead string
+}
+
+func (e *processingSourceStallError) Error() string {
+	return fmt.Sprintf("%v (source read failed: %s)", e.boot, e.sourceRead)
+}
+
+func (e *processingSourceStallError) Unwrap() error { return e.boot }
+
+// processingReadinessFailureStatus is the ProcessingJobResult status for a
+// readiness failure: retryable when storage stalled under the source read,
+// failed otherwise.
+func processingReadinessFailureStatus(err error) string {
+	var stall *processingSourceStallError
+	if errors.As(err, &stall) {
+		return processingResultRetryable
+	}
+	return "failed"
 }

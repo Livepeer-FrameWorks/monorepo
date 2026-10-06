@@ -978,6 +978,9 @@ func (h *ProcessingJobHandler) Handle(req *ipcpb.ProcessingJobRequest, send func
 	defer releasePendingJob(streamName, req.GetJobId())
 	defer clearProcessingProcessOverride(streamName, req.GetJobId())
 	defer relay.TakeProcessingInputSize(req.GetArtifactHash())
+	// A source-read failure noted before this attempt says nothing about it.
+	relay.TakeProcessingInputFailure(req.GetArtifactHash())
+	defer relay.TakeProcessingInputFailure(req.GetArtifactHash())
 	processesJSON := strings.TrimSpace(req.GetProcessesJson())
 	if processesJSON == "" {
 		h.sendResult(send, req.GetJobId(), "failed", "processing job is missing processes_json", nil, "", 0)
@@ -1145,7 +1148,7 @@ func (h *ProcessingJobHandler) Handle(req *ipcpb.ProcessingJobRequest, send func
 				outputs, sourceDurationMs, waitErr = h.waitForProcessingStreamReady(context.Background(), log, mistClient, req, streamName, effectiveProcessesJSON, processExitCh, processAVCh, livepeerSegmentCh, ignoredProcessExitBootCounts)
 				if waitErr != nil {
 					h.cleanupFailedProcessing(log, mistClient, streamName, outputPath)
-					h.sendResult(send, req.GetJobId(), "failed", fmt.Sprintf("livepeer fallback readiness: %v", waitErr), nil, "", 0)
+					h.sendResult(send, req.GetJobId(), processingReadinessFailureStatus(waitErr), fmt.Sprintf("livepeer fallback readiness: %v", waitErr), nil, "", 0)
 					return
 				}
 				fallbackAttempted = true
@@ -1155,7 +1158,7 @@ func (h *ProcessingJobHandler) Handle(req *ipcpb.ProcessingJobRequest, send func
 			}
 		} else {
 			h.cleanupFailedProcessing(log, mistClient, streamName, outputPath)
-			h.sendResult(send, req.GetJobId(), "failed", waitErr.Error(), nil, "", 0)
+			h.sendResult(send, req.GetJobId(), processingReadinessFailureStatus(waitErr), waitErr.Error(), nil, "", 0)
 			return
 		}
 	}
@@ -1227,7 +1230,7 @@ func (h *ProcessingJobHandler) Handle(req *ipcpb.ProcessingJobRequest, send func
 		outputs, sourceDurationMs, waitErr = h.waitForProcessingStreamReady(context.Background(), log, mistClient, req, streamName, effectiveProcessesJSON, processExitCh, processAVCh, livepeerSegmentCh, ignoredProcessExitBootCounts)
 		if waitErr != nil {
 			h.cleanupFailedProcessing(log, mistClient, streamName, outputPath)
-			h.sendResult(send, req.GetJobId(), "failed", fmt.Sprintf("livepeer fallback readiness: %v", waitErr), nil, "", 0)
+			h.sendResult(send, req.GetJobId(), processingReadinessFailureStatus(waitErr), fmt.Sprintf("livepeer fallback readiness: %v", waitErr), nil, "", 0)
 			return false
 		}
 		currentPushStartedAt = time.Now().Unix()
@@ -1764,7 +1767,11 @@ func (h *ProcessingJobHandler) waitForProcessingStreamReady(ctx context.Context,
 
 		if time.Now().After(deadline) {
 			if lastErr != nil && len(lastPresence.outputs) == 0 {
-				return nil, 0, fmt.Errorf("processing stream did not boot: %w", lastErr)
+				bootErr := fmt.Errorf("processing stream did not boot: %w", lastErr)
+				if reason, stalled := relay.TakeProcessingInputFailure(req.GetArtifactHash()); stalled {
+					return nil, 0, &processingSourceStallError{boot: bootErr, sourceRead: reason}
+				}
+				return nil, 0, bootErr
 			}
 			if !processingRequiredTracksReady(lastPresence, requirements) {
 				return nil, 0, fmt.Errorf("processing stream missing required tracks: have audio=%v video=%v meta=%v want audio=%v video=%v thumbs=%t",
@@ -2797,11 +2804,12 @@ const (
 	livepeerFallbackRestart livepeerFallbackDecision = "restart"
 )
 
+// processingReadinessWindow bounds how long a processing stream may go without
+// new output before readiness gives up; an in-place replacement gets the same
+// budget to show its first local video output.
+var processingReadinessWindow = 45 * time.Second
+
 const (
-	// processingReadinessWindow bounds how long a processing stream may go
-	// without new output before readiness gives up; an in-place replacement
-	// gets the same budget to show its first local video output.
-	processingReadinessWindow = 45 * time.Second
 	// processReplaceConfirmWindow bounds the wait for Mist's PROCESS_REPLACE
 	// after an unrecoverable Livepeer exit. Mist fires it right after
 	// PROCESS_EXIT; a Mist build without the trigger never does.

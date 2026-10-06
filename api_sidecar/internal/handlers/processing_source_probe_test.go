@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -91,5 +92,25 @@ func TestProcessingSourceProbeSkipsStreamsWithoutJob(t *testing.T) {
 	}
 	if failProcessingSourceIfUnavailable(context.Background(), "live+abc", source.URL) {
 		t.Fatal("live streams are not probed")
+	}
+}
+
+// A source that answers a server-side error is unavailable for now, not gone:
+// the probe leaves it to Mist and the job's own retry classification instead
+// of failing the upload for good.
+func TestProcessingSourceProbeLeavesTransientServerErrorsToTheJob(t *testing.T) {
+	for _, status := range []int{http.StatusInternalServerError, http.StatusServiceUnavailable, http.StatusGatewayTimeout, http.StatusTooManyRequests} {
+		source := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(status)
+		}))
+		stream := "processing+probetransient" + strconv.Itoa(status)
+		claimProbeJob(t, stream)
+		if failProcessingSourceIfUnavailable(context.Background(), stream, source.URL+"/upload.mp4") {
+			t.Fatalf("a %d source must not be refused", status)
+		}
+		if _, ok := takeProcessingSourceFailure(stream); ok {
+			t.Fatalf("no failure may be signalled for a %d source", status)
+		}
+		source.Close()
 	}
 }
