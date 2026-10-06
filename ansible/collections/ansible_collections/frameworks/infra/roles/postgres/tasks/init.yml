@@ -76,7 +76,7 @@
   become_user: postgres
   community.postgresql.postgresql_ext:
     login_unix_socket: /var/run/postgresql
-    db: "{{ item.0.name }}"
+    login_db: "{{ item.0.name }}"
     name: "{{ item.1 }}"
     state: present
   loop: >-

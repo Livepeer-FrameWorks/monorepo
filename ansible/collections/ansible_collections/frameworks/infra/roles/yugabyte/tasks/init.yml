@@ -38,7 +38,7 @@
     login_port: "{{ yugabyte_ysql_port }}"
     login_user: "{{ yugabyte_superuser_role }}"
     login_password: "{{ yugabyte_superuser_password }}"
-    db: yugabyte
+    login_db: yugabyte
     state: present
   loop: "{{ yugabyte_databases }}"
   loop_control:
@@ -71,7 +71,7 @@
     login_port: "{{ yugabyte_ysql_port }}"
     login_user: "{{ yugabyte_superuser_role }}"
     login_password: "{{ yugabyte_superuser_password }}"
-    db: yugabyte
+    login_db: yugabyte
     query: SELECT datname FROM pg_database
   register: yugabyte_existing_databases
   when:
@@ -84,7 +84,7 @@
     login_port: "{{ yugabyte_ysql_port }}"
     login_user: "{{ yugabyte_superuser_role }}"
     login_password: "{{ yugabyte_superuser_password }}"
-    db: yugabyte
+    login_db: yugabyte
     autocommit: true
     query: >-
       CREATE DATABASE "{{ item.name }}"
@@ -123,7 +123,7 @@
     login_port: "{{ yugabyte_ysql_port }}"
     login_user: "{{ yugabyte_superuser_role }}"
     login_password: "{{ yugabyte_superuser_password }}"
-    db: yugabyte
+    login_db: yugabyte
     state: present
   loop: "{{ yugabyte_databases }}"
   loop_control:
@@ -135,7 +135,7 @@
 
 - name: Grant database ownership to owner role
   community.postgresql.postgresql_owner:
-    db: "{{ item.name }}"
+    login_db: "{{ item.name }}"
     new_owner: "{{ item.owner | default(item.name, true) }}"
     obj_type: database
     login_host: 127.0.0.1

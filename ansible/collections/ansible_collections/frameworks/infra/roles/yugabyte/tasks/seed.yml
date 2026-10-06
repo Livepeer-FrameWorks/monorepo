@@ -11,7 +11,7 @@
     login_port: "{{ yugabyte_ysql_port }}"
     login_user: "{{ yugabyte_superuser_role }}"
     login_password: "{{ yugabyte_superuser_password }}"
-    db: "{{ item.db }}"
+    login_db: "{{ item.db }}"
     query: "{{ item.sql }}"
   loop: "{{ yugabyte_seed_items | default([]) }}"
   loop_control:

@@ -13,10 +13,10 @@
 - name: Listmonk | reconcile public root URL in settings
   community.postgresql.postgresql_query:
     login_host: "{{ listmonk_db_host }}"
-    port: "{{ listmonk_db_port }}"
+    login_port: "{{ listmonk_db_port }}"
     login_user: "{{ listmonk_db_user }}"
     login_password: "{{ listmonk_db_password }}"
-    db: "{{ listmonk_db_database }}"
+    login_db: "{{ listmonk_db_database }}"
     query: |-
       WITH upsert AS (
         INSERT INTO settings (key, value, updated_at)

@@ -10,7 +10,7 @@
   become_user: postgres
   community.postgresql.postgresql_query:
     login_unix_socket: /var/run/postgresql
-    db: "{{ item.db }}"
+    login_db: "{{ item.db }}"
     query: "{{ item.sql }}"
   loop: "{{ postgres_seed_items | default([]) }}"
   loop_control:

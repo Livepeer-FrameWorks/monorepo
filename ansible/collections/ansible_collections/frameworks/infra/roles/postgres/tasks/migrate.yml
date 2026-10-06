@@ -19,7 +19,7 @@
   become_user: postgres
   community.postgresql.postgresql_query:
     login_unix_socket: /var/run/postgresql
-    db: "{{ db_entry }}"
+    login_db: "{{ db_entry }}"
     query: "SELECT version || ':' || phase || ':' || seq AS key, checksum FROM _migrations"
   register: postgres_applied_queries
   changed_when: false
@@ -97,7 +97,7 @@
   become_user: postgres
   community.postgresql.postgresql_query:
     login_unix_socket: /var/run/postgresql
-    db: "{{ db_entry }}"
+    login_db: "{{ db_entry }}"
     query: |
       DO $frameworks_migration_ownership$
       DECLARE
@@ -185,7 +185,7 @@
   become_user: postgres
   community.postgresql.postgresql_query:
     login_unix_socket: /var/run/postgresql
-    db: "{{ db_entry }}"
+    login_db: "{{ db_entry }}"
     query: |
       CREATE TABLE IF NOT EXISTS _migrations (
         version    TEXT NOT NULL,

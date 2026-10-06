@@ -22,7 +22,7 @@
     login_port: "{{ yugabyte_ysql_port }}"
     login_user: "{{ yugabyte_superuser_role }}"
     login_password: "{{ yugabyte_superuser_password }}"
-    db: "{{ db_entry }}"
+    login_db: "{{ db_entry }}"
     query: "SELECT version || ':' || phase || ':' || seq AS key, checksum FROM _migrations"
   register: yugabyte_applied_queries
   changed_when: false
@@ -101,7 +101,7 @@
     login_port: "{{ yugabyte_ysql_port }}"
     login_user: "{{ yugabyte_superuser_role }}"
     login_password: "{{ yugabyte_superuser_password }}"
-    db: "{{ db_entry }}"
+    login_db: "{{ db_entry }}"
     query: |
       DO $frameworks_migration_ownership$
       DECLARE
@@ -191,7 +191,7 @@
     login_port: "{{ yugabyte_ysql_port }}"
     login_user: "{{ yugabyte_superuser_role }}"
     login_password: "{{ yugabyte_superuser_password }}"
-    db: "{{ db_entry }}"
+    login_db: "{{ db_entry }}"
     query: |
       CREATE TABLE IF NOT EXISTS _migrations (
         version    TEXT NOT NULL,
