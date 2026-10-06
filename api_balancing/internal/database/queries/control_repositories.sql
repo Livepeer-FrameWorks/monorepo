@@ -144,7 +144,11 @@ UPDATE foghorn.artifacts SET
         ELSE GREATEST(last_accessed_at, to_timestamp(sqlc.arg(last_accessed)::bigint))
     END,
     updated_at = NOW()
-WHERE artifact_hash = $1;
+WHERE artifact_hash = $1
+  -- A node still holding a deleted artifact keeps reporting it until its
+  -- delete completes. The orphan cleanup re-drives that delete once updated_at
+  -- is old enough, so a report must not keep it fresh.
+  AND status <> 'deleted';
 
 -- name: LockArtifactPlacementParent :one
 SELECT artifact_hash FROM foghorn.artifacts WHERE artifact_hash = $1 FOR UPDATE;

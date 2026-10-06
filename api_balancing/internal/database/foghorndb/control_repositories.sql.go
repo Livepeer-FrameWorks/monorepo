@@ -1054,6 +1054,10 @@ UPDATE foghorn.artifacts SET
     END,
     updated_at = NOW()
 WHERE artifact_hash = $1
+  -- A node still holding a deleted artifact keeps reporting it until its
+  -- delete completes. The orphan cleanup re-drives that delete once updated_at
+  -- is old enough, so a report must not keep it fresh.
+  AND status <> 'deleted'
 `
 
 type UpdateArtifactReportMetadataParams struct {
