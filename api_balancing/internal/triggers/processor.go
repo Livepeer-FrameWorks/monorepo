@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -6779,12 +6780,15 @@ func (p *Processor) applyResolvedStreamContext(trigger *ipcpb.MistTrigger, strea
 // with its log tag, keeping the rest of the URL — scheme, host, port, path
 // shape — intact so analytics can still see how and where a publisher
 // connected. Returns the URL unchanged when the key does not appear in it.
+// Mist lowercases the stream name it reports while the URL keeps the key as
+// the publisher sent it, so the key is matched without regard to case.
 func redactStreamKeyInURL(pushURL, streamKey string) string {
 	streamKey = strings.TrimSpace(streamKey)
-	if streamKey == "" || !strings.Contains(pushURL, streamKey) {
+	if streamKey == "" {
 		return pushURL
 	}
-	return strings.ReplaceAll(pushURL, streamKey, logging.RedactSecret(streamKey))
+	key := regexp.MustCompile(`(?i)` + regexp.QuoteMeta(streamKey))
+	return key.ReplaceAllLiteralString(pushURL, logging.RedactSecret(streamKey))
 }
 
 // detectProtocol extracts protocol from push URL

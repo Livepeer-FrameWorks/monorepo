@@ -34,6 +34,20 @@ func TestRedactStreamKeyInURL(t *testing.T) {
 	}
 }
 
+// Mist lowercases the stream name it reports on PUSH_REWRITE while the push URL
+// keeps the key as the publisher sent it, so a mixed-case key must still be
+// masked out of the URL.
+func TestRedactStreamKeyInURLMasksTheKeyMistLowercased(t *testing.T) {
+	const sent = "sk_DeUMivw08DZArnxn8QoigeaIZquH"
+	got := redactStreamKeyInURL("srt://edge:8889/?streamid="+sent, strings.ToLower(sent))
+	if strings.Contains(strings.ToLower(got), strings.ToLower(sent)) {
+		t.Fatalf("mixed-case key survived redaction: %q", got)
+	}
+	if !strings.HasPrefix(got, "srt://edge:8889/?streamid=sk#") {
+		t.Fatalf("URL shape lost: %q", got)
+	}
+}
+
 // A URL that does not contain the key is left exactly as-is — the normal case
 // once the emitting side resolves the credential out first.
 func TestRedactStreamKeyInURLLeavesCleanURLsAlone(t *testing.T) {
