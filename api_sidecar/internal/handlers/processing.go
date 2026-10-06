@@ -2165,7 +2165,7 @@ func livepeerRenditionsCompleteFromTracks(log *logrus.Entry, processesJSON strin
 	if len(expectedHeights) == 0 {
 		return true
 	}
-	return renditionsCompleteFromTracks(log, expectedHeights, tracks, source, sourceSpanMs)
+	return renditionsCompleteFromTracks(log, expectedHeights, tracks, sourceSpanMs)
 }
 
 // renditionsCompleteFromTracks is the pure rendition-completeness decision,
@@ -2173,35 +2173,27 @@ func livepeerRenditionsCompleteFromTracks(log *logrus.Entry, processesJSON strin
 // ladder intent as raw heights (the dimension a Livepeer profile actually
 // specifies; width follows the source aspect and is Mist's authority), so the
 // check never depends on Mist's normalized pixel math. Each requested height must
-// map to a distinct output track. When a source passthrough track can be
-// identified, it is excluded from the candidate pool and its span tightens the
+// map to a distinct output track. Source tracks (by Mist lineage) are
+// excluded from the candidate pool and their span tightens the
 // truncation check.
 //
 // It fails closed on missing/invalid heights and missing tracks. Span validation
 // is applied only when a source-span baseline is known; a normalized output that
 // omits the source track should not be rejected solely because there is no
 // separate source track in the final artifact.
-func renditionsCompleteFromTracks(log *logrus.Entry, expectedHeights []int, videoTracks []processingMetaVideoTrack, source mist.SourceMediaInfo, sourceSpanMs float64) bool {
+func renditionsCompleteFromTracks(log *logrus.Entry, expectedHeights []int, videoTracks []processingMetaVideoTrack, sourceSpanMs float64) bool {
 	if len(videoTracks) == 0 {
 		log.Warn("Finished processing stream exposes no video tracks; renditions incomplete")
 		return false
 	}
 
-	srcIdx := -1
-	if source.Height > 0 {
-		srcIdx = sourceVideoTrackIndex(videoTracks, source)
-	}
 	var sourceTrackSpanMs float64
-	if srcIdx >= 0 {
-		sourceTrackSpanMs = videoTracks[srcIdx].spanMs()
-	}
-	pool := make([]processingMetaVideoTrack, 0, len(videoTracks))
-	for i, t := range videoTracks {
-		if i == srcIdx {
-			continue
+	for _, idx := range sourceVideoTrackIndexes(videoTracks, nil) {
+		if span := videoTracks[idx].spanMs(); span > sourceTrackSpanMs {
+			sourceTrackSpanMs = span
 		}
-		pool = append(pool, t)
 	}
+	pool := nonSourceVideoTracks(videoTracks, nil)
 
 	baseline := sourceSpanMs
 	if sourceTrackSpanMs > baseline {
@@ -2314,30 +2306,47 @@ func authoritativeSourceSpanFromTracks(log *logrus.Entry, tracks []processingMet
 	return sourceTrackSpanMs, true
 }
 
-func sourceVideoTrackIndex(videoTracks []processingMetaVideoTrack, source mist.SourceMediaInfo) int {
-	srcHeight := source.Height
-	if srcHeight <= 0 {
-		for _, t := range videoTracks {
-			if t.height > srcHeight {
-				srcHeight = t.height
-			}
-		}
-	}
-	srcIdx := -1
+// sourceVideoTrackIndexes returns the indexes of the source video tracks,
+// tallest first. sourceIDs, when set, is a clip's cut-time record by track id
+// (its staged file has no lineage); otherwise Mist lineage decides: a track
+// that names its source is a process output, every other track is source.
+// When the recording left the source out (Livepeer masks it for VOD) every
+// track names one and there is no source.
+func sourceVideoTrackIndexes(videoTracks []processingMetaVideoTrack, sourceIDs map[int64]bool) []int {
+	var out []int
 	for i, t := range videoTracks {
-		// A track that names its source is derived, never the source. When
-		// the recording left the source out (Livepeer masks it for VOD) every
-		// track names one and there is no source to exclude.
-		if t.source != "" {
-			continue
+		isSource := t.source == ""
+		if sourceIDs != nil {
+			isSource = t.hasTrackID && sourceIDs[t.trackID]
 		}
-		if srcHeight > 0 && renditionHeightsClose(t.height, srcHeight) {
-			if srcIdx < 0 || t.spanMs() > videoTracks[srcIdx].spanMs() {
-				srcIdx = i
-			}
+		if isSource {
+			out = append(out, i)
 		}
 	}
-	return srcIdx
+	sort.SliceStable(out, func(a, b int) bool {
+		ta, tb := videoTracks[out[a]], videoTracks[out[b]]
+		if ta.height != tb.height {
+			return ta.height > tb.height
+		}
+		return ta.trackID < tb.trackID
+	})
+	return out
+}
+
+// nonSourceVideoTracks returns the rendition candidates: every video track
+// that is not a source track.
+func nonSourceVideoTracks(videoTracks []processingMetaVideoTrack, sourceIDs map[int64]bool) []processingMetaVideoTrack {
+	isSource := map[int]bool{}
+	for _, idx := range sourceVideoTrackIndexes(videoTracks, sourceIDs) {
+		isSource[idx] = true
+	}
+	pool := make([]processingMetaVideoTrack, 0, len(videoTracks))
+	for i, t := range videoTracks {
+		if !isSource[i] {
+			pool = append(pool, t)
+		}
+	}
+	return pool
 }
 
 // parseProcessingMetaVideoTracks extracts renderable video tracks (excluding
@@ -2497,29 +2506,12 @@ func processingLivepeerRenditionsReady(p processingTrackPresence, processesJSON 
 	if len(expectedHeights) == 0 {
 		return true, nil, nil
 	}
-	missing := missingRenditionHeightsForPush(expectedHeights, p.videoTracks, source)
+	missing := missingRenditionHeightsForPush(expectedHeights, p.videoTracks)
 	return len(missing) == 0, missing, nil
 }
 
-func missingRenditionHeightsForPush(expectedHeights []int, videoTracks []processingMetaVideoTrack, source mist.SourceMediaInfo) []int {
-	srcHeight := source.Height
-	if srcHeight <= 0 {
-		for _, t := range videoTracks {
-			if t.height > srcHeight {
-				srcHeight = t.height
-			}
-		}
-	}
-
-	srcIdx := sourceVideoTrackIndex(videoTracks, mist.SourceMediaInfo{Height: srcHeight})
-
-	pool := make([]processingMetaVideoTrack, 0, len(videoTracks))
-	for i, t := range videoTracks {
-		if i == srcIdx {
-			continue
-		}
-		pool = append(pool, t)
-	}
+func missingRenditionHeightsForPush(expectedHeights []int, videoTracks []processingMetaVideoTrack) []int {
+	pool := nonSourceVideoTracks(videoTracks, nil)
 
 	consumed := make([]bool, len(pool))
 	var missing []int

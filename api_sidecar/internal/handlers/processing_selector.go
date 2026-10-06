@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"fmt"
 	"sort"
 	"strings"
 
@@ -20,11 +21,18 @@ import (
 // tracks and returns the `video=` selector to push: the complete requested
 // rendition set when present, otherwise the source passthrough. spanMs is the
 // authoritative source span used to reject truncated renditions.
-func (h *ProcessingJobHandler) processingVideoSelector(log *logrus.Entry, mistClient *mist.Client, streamName, processesJSON string, readinessOutputs map[string]string, spanMs float64) string {
+// identity is the clip's cut-time record of its source tracks; nil means the
+// processing stream's own Mist lineage names them (DVR chapter finalize).
+// An identity that cannot be mapped onto the stream's tracks is an error: the
+// caller fails rather than guess.
+func (h *ProcessingJobHandler) processingVideoSelector(log *logrus.Entry, mistClient *mist.Client, streamName, processesJSON string, readinessOutputs map[string]string, spanMs float64, identity *clipSourceIdentity) (string, error) {
 	presence := processingTrackPresence{outputs: readinessOutputs}
 	if mistClient != nil {
 		streamData, err := h.getActiveProcessingStreamData(mistClient, streamName)
 		if err != nil {
+			if identity != nil {
+				return "", fmt.Errorf("inspect processing tracks: %w", err)
+			}
 			log.WithError(err).Warn("Track selection: could not inspect tracks before push; using source video")
 		} else {
 			presence = inspectProcessingActiveStream(streamData)
@@ -33,23 +41,32 @@ func (h *ProcessingJobHandler) processingVideoSelector(log *logrus.Entry, mistCl
 			}
 		}
 	}
+	var sourceIDs map[int64]bool
+	if identity != nil {
+		ids, err := identity.sourceTrackIDs(presence.videoTracks)
+		if err != nil {
+			return "", fmt.Errorf("staged source track identity: %w", err)
+		}
+		sourceIDs = ids
+	}
 	source, _ := sourceFromReadinessOutputs(presence.outputs)
 	if source.Height <= 0 {
 		source, _ = sourceFromReadinessOutputs(readinessOutputs)
 	}
 	requirements := expectedProcessingTracks(processesJSON)
 	return appendAuxiliaryVideoSelectors(
-		chooseProcessingVideoSelector(log, processesJSON, presence.videoTracks, source, spanMs),
+		chooseProcessingVideoSelector(log, processesJSON, presence.videoTracks, source, spanMs, sourceIDs),
 		requirements.expectThumbs,
-	)
+	), nil
 }
 
 // chooseProcessingVideoSelector is the pure selection decision: the complete
 // requested rendition set if every requested height maps to a distinct track
 // that covers the span, otherwise the source passthrough. It never returns a
-// partial rendition set.
-func chooseProcessingVideoSelector(log *logrus.Entry, processesJSON string, videoTracks []processingMetaVideoTrack, source mist.SourceMediaInfo, spanMs float64) string {
-	sourceSelector := processingSourceVideoSelector(videoTracks, source)
+// partial rendition set. sourceIDs names the source tracks by processing
+// track id; nil means Mist lineage names them.
+func chooseProcessingVideoSelector(log *logrus.Entry, processesJSON string, videoTracks []processingMetaVideoTrack, source mist.SourceMediaInfo, spanMs float64, sourceIDs map[int64]bool) string {
+	sourceSelector := processingSourceVideoSelector(videoTracks, sourceIDs)
 	expectedHeights, err := mist.RequestedRenditionHeights(processesJSON, source)
 	if err != nil {
 		log.WithError(err).Warn("Track selection: cannot determine requested rendition ladder; using source video")
@@ -62,7 +79,7 @@ func chooseProcessingVideoSelector(log *logrus.Entry, processesJSON string, vide
 		log.Warn("Track selection: source span unavailable before push; using source video")
 		return sourceSelector
 	}
-	selected, ok := completeRenditionTracks(expectedHeights, videoTracks, source, spanMs)
+	selected, ok := completeRenditionTracks(expectedHeights, videoTracks, sourceIDs, spanMs)
 	if !ok {
 		log.WithFields(logrus.Fields{
 			"requested_heights": expectedHeights,
@@ -96,15 +113,19 @@ func chooseProcessingVideoSelector(log *logrus.Entry, processesJSON string, vide
 }
 
 // processingSourceVideoSelector returns the selector for the source passthrough
-// video track, falling back to the bare "source" keyword when the track has no
-// usable identity.
-func processingSourceVideoSelector(videoTracks []processingMetaVideoTrack, source mist.SourceMediaInfo) string {
-	if idx := sourceVideoTrackIndex(videoTracks, source); idx >= 0 {
+// video tracks, falling back to the bare "source" keyword when no source track
+// has a usable identity.
+func processingSourceVideoSelector(videoTracks []processingMetaVideoTrack, sourceIDs map[int64]bool) string {
+	var parts []string
+	for _, idx := range sourceVideoTrackIndexes(videoTracks, sourceIDs) {
 		if sel := videoTracks[idx].selector(); sel != "" {
-			return sel
+			parts = append(parts, sel)
 		}
 	}
-	return "source"
+	if len(parts) == 0 {
+		return "source"
+	}
+	return strings.Join(parts, ",")
 }
 
 func appendAuxiliaryVideoSelectors(videoSelector string, expectThumbs bool) string {
@@ -146,18 +167,11 @@ func processingMetaSelector(processesJSON string) string {
 // (each by a distinct track covering the span within tolerance), and false if
 // the set is not fully satisfiable — so the caller never publishes a partial
 // ladder. The source passthrough track is excluded from the candidate pool.
-func completeRenditionTracks(expectedHeights []int, videoTracks []processingMetaVideoTrack, source mist.SourceMediaInfo, spanMs float64) ([]processingMetaVideoTrack, bool) {
+func completeRenditionTracks(expectedHeights []int, videoTracks []processingMetaVideoTrack, sourceIDs map[int64]bool, spanMs float64) ([]processingMetaVideoTrack, bool) {
 	if len(videoTracks) == 0 {
 		return nil, false
 	}
-	sourceIdx := sourceVideoTrackIndex(videoTracks, source)
-	pool := make([]processingMetaVideoTrack, 0, len(videoTracks))
-	for i, track := range videoTracks {
-		if i == sourceIdx {
-			continue
-		}
-		pool = append(pool, track)
-	}
+	pool := nonSourceVideoTracks(videoTracks, sourceIDs)
 
 	consumed := make([]bool, len(pool))
 	selected := make([]processingMetaVideoTrack, 0, len(expectedHeights))

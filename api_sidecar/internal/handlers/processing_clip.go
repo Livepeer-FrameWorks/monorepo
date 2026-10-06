@@ -53,12 +53,25 @@ func (h *ProcessingJobHandler) handleClip(req *ipcpb.ProcessingJobRequest, send 
 		h.sendResult(send, req.GetJobId(), "failed", "clip processing source URL unavailable", nil, "", 0)
 		return
 	}
+	// The staged cut carries no Mist lineage: record which of its tracks are
+	// source tracks now, while the Mist that serves the cut still knows.
+	sourceNumbers, probeErr := probeClipSourceTrackNumbers(context.Background(), sourceURL)
+	if probeErr != nil {
+		h.sendResult(send, req.GetJobId(), "failed", fmt.Sprintf("clip source track probe failed: %v", probeErr), nil, "", 0)
+		return
+	}
 	stagedSourcePath, stageErr := h.stageProcessingSource(log, req, sourceURL)
 	if stageErr != nil {
 		h.sendResult(send, req.GetJobId(), "failed", fmt.Sprintf("clip source stage failed: %v", stageErr), nil, "", 0)
 		return
 	}
 	defer cleanupProcessingStagePath(log, stagedSourcePath)
+	stagedTracks, headerErr := readStagedMKVTracks(stagedSourcePath)
+	if headerErr != nil {
+		h.sendResult(send, req.GetJobId(), "failed", fmt.Sprintf("clip staged source header: %v", headerErr), nil, "", 0)
+		return
+	}
+	sourceIdentity := newClipSourceIdentity(stagedTracks, sourceNumbers)
 	setProcessingSourceOverride(streamName, stagedSourcePath)
 	log.WithField("staged_path", stagedSourcePath).Info("Staged clip source for processing")
 
@@ -119,7 +132,13 @@ func (h *ProcessingJobHandler) handleClip(req *ipcpb.ProcessingJobRequest, send 
 	if clipSpanMs <= 0 {
 		clipSpanMs = clipRequestedSpanMs(req)
 	}
-	videoSelector := h.processingVideoSelector(log, mistClient, streamName, req.GetProcessesJson(), streamOutputs, clipSpanMs)
+	videoSelector, selErr := h.processingVideoSelector(log, mistClient, streamName, req.GetProcessesJson(), streamOutputs, clipSpanMs, sourceIdentity)
+	if selErr != nil {
+		log.WithError(selErr).Error("Clip: track selection failed")
+		h.cleanupFailedProcessing(log, mistClient, streamName, outputPath)
+		h.sendResult(send, req.GetJobId(), "failed", fmt.Sprintf("clip track selection failed: %v", selErr), nil, "", 0)
+		return
+	}
 
 	// Unix-seconds start of the current push; RECORDING_END carries no
 	// generation id, so a delayed event from a retired push is rejected by

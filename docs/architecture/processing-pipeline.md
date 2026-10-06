@@ -99,7 +99,11 @@ the last-good record for the next pass.
 4. A live clip is a **passthrough/remux, never a fresh transcode**: the cut comes from the live
    shm buffer via a Mist `/view` request, and the job selects the complete renditions already in
    the cut (or the source), stripping any Livepeer transcode config
-   (`api_sidecar/internal/handlers/processing_clip.go`).
+   (`api_sidecar/internal/handlers/processing_clip.go`). The staged cut carries no Mist track
+   lineage, so Helmsman records the source tracks when it cuts: it reads the Tracks header of the
+   same cut narrowed to `video=source` (Mist writes each track as stream index + 1) and of the staged
+   file, and maps them onto the processing stream's tracks in file order
+   (`processing_source_identity.go`). A mapping that does not line up fails the clip.
 
 ### VOD upload
 

@@ -29,7 +29,7 @@ func TestClipRecordingWithChangedProcessTracksIsRetryable(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
 		case r.URL.Path == "/source.mkv":
-			_, _ = w.Write([]byte("cut source bytes"))
+			_, _ = w.Write(fakeMistCutBody())
 			return
 		case strings.HasPrefix(r.URL.Path, "/json_"):
 			_, _ = w.Write([]byte("{}"))
@@ -47,8 +47,8 @@ func TestClipRecordingWithChangedProcessTracksIsRetryable(t *testing.T) {
 		if !nuked.Load() {
 			active[streamName] = map[string]any{
 				"health": map[string]any{
-					"video_H264_640x360_15fps_0": map[string]any{"codec": "H264", "width": 640.0, "height": 360.0},
-					"audio_AAC_1ch_48000hz_1":    map[string]any{"codec": "AAC", "channels": 1.0, "rate": 48000.0},
+					"video_H264_640x360_15fps_0": map[string]any{"codec": "H264", "id": 0.0, "idx": 0.0, "width": 640.0, "height": 360.0},
+					"audio_AAC_1ch_48000hz_1":    map[string]any{"codec": "AAC", "id": 1.0, "idx": 1.0, "channels": 1.0, "rate": 48000.0},
 				},
 			}
 		}

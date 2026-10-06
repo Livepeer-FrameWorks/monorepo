@@ -39,7 +39,7 @@ func TestLivepeerRenditionsCompleteFromTracks(t *testing.T) {
 
 	t.Run("requested rendition with matching track is complete", func(t *testing.T) {
 		processes := `[{"process":"Livepeer","target_profiles":[{"height":720}]}]`
-		tracks := []processingMetaVideoTrack{chapterTrack(2, 1280, 720, 30000)}
+		tracks := []processingMetaVideoTrack{renditionTrack(2, 1280, 720, 30000)}
 		if !livepeerRenditionsCompleteFromTracks(log, processes, tracks, source, 30000) {
 			t.Fatal("a 720 request matched by a 720 track must be complete")
 		}

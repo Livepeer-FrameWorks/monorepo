@@ -6,8 +6,6 @@ import (
 	"time"
 
 	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
-
-	"github.com/Livepeer-FrameWorks/monorepo/pkg/mist"
 )
 
 // extractHLSTagURI pulls the URI="..." value out of an HLS tag line. It is used
@@ -128,11 +126,12 @@ func TestVisibleProcessingVideoTracksReady(t *testing.T) {
 // source passthrough — never a partial rendition set" invariant. These exercise
 // the matching algorithm directly (the selector tests only cover it indirectly).
 func TestCompleteRenditionTracks(t *testing.T) {
-	source := mist.SourceMediaInfo{Width: 1920, Height: 1080}
+	// A recorded identity naming no source track: every track is a candidate.
+	noSource := map[int64]bool{}
 
 	t.Run("zero requested height is unsatisfiable", func(t *testing.T) {
 		tracks := []processingMetaVideoTrack{chapterTrack(2, 1280, 720, 30000)}
-		if _, ok := completeRenditionTracks([]int{0}, tracks, source, 30000); ok {
+		if _, ok := completeRenditionTracks([]int{0}, tracks, noSource, 30000); ok {
 			t.Fatal("a zero/negative requested height must fail closed")
 		}
 	})
@@ -142,7 +141,7 @@ func TestCompleteRenditionTracks(t *testing.T) {
 			chapterTrack(2, 1280, 720, 30000),
 			chapterTrack(3, 1280, 720, 30000),
 		}
-		got, ok := completeRenditionTracks([]int{720, 720}, tracks, source, 30000)
+		got, ok := completeRenditionTracks([]int{720, 720}, tracks, noSource, 30000)
 		if !ok || len(got) != 2 {
 			t.Fatalf("two 720 requests should consume two distinct 720 tracks: ok=%v n=%d", ok, len(got))
 		}
@@ -153,7 +152,7 @@ func TestCompleteRenditionTracks(t *testing.T) {
 
 	t.Run("duplicate heights with only one track fails", func(t *testing.T) {
 		tracks := []processingMetaVideoTrack{chapterTrack(2, 1280, 720, 30000)}
-		if _, ok := completeRenditionTracks([]int{720, 720}, tracks, source, 30000); ok {
+		if _, ok := completeRenditionTracks([]int{720, 720}, tracks, noSource, 30000); ok {
 			t.Fatal("two 720 requests cannot be satisfied by one track")
 		}
 	})
@@ -161,14 +160,14 @@ func TestCompleteRenditionTracks(t *testing.T) {
 	t.Run("track without identity cannot satisfy a height", func(t *testing.T) {
 		noID := chapterTrack(0, 1280, 720, 30000)
 		noID.hasTrackID = false
-		if _, ok := completeRenditionTracks([]int{720}, []processingMetaVideoTrack{noID}, source, 30000); ok {
+		if _, ok := completeRenditionTracks([]int{720}, []processingMetaVideoTrack{noID}, noSource, 30000); ok {
 			t.Fatal("a track with no selector identity must not satisfy a rendition")
 		}
 	})
 
 	t.Run("span shortfall rejects a truncated rendition", func(t *testing.T) {
 		short := chapterTrack(2, 1280, 720, 1000) // 29s short of a 30s span
-		if _, ok := completeRenditionTracks([]int{720}, []processingMetaVideoTrack{short}, source, 30000); ok {
+		if _, ok := completeRenditionTracks([]int{720}, []processingMetaVideoTrack{short}, noSource, 30000); ok {
 			t.Fatal("a rendition far short of the source span must be rejected")
 		}
 	})
@@ -177,33 +176,43 @@ func TestCompleteRenditionTracks(t *testing.T) {
 		// The only 1080 track is the source itself; a 1080 rendition request
 		// must not be satisfiable by reusing the source track.
 		src := chapterTrack(1, 1920, 1080, 30000)
-		if _, ok := completeRenditionTracks([]int{1080}, []processingMetaVideoTrack{src}, source, 30000); ok {
+		if _, ok := completeRenditionTracks([]int{1080}, []processingMetaVideoTrack{src}, map[int64]bool{1: true}, 30000); ok {
 			t.Fatal("the source track must not double as a rendition")
 		}
 	})
 
 	t.Run("empty track list fails", func(t *testing.T) {
-		if _, ok := completeRenditionTracks([]int{720}, nil, source, 30000); ok {
+		if _, ok := completeRenditionTracks([]int{720}, nil, noSource, 30000); ok {
 			t.Fatal("no tracks cannot satisfy any rendition")
 		}
 	})
 }
 
 func TestProcessingSourceVideoSelector(t *testing.T) {
-	source := mist.SourceMediaInfo{Width: 1920, Height: 1080}
+	withID := []processingMetaVideoTrack{chapterTrack(7, 1920, 1080, 30000), renditionTrack(8, 1280, 720, 30000)}
+	if got := processingSourceVideoSelector(withID, nil); got != "i7" {
+		t.Errorf("source by lineage = %q, want i7", got)
+	}
 
-	withID := []processingMetaVideoTrack{chapterTrack(7, 1920, 1080, 30000)}
-	if got := processingSourceVideoSelector(withID, source); got != "i7" {
-		t.Errorf("source with identity = %q, want i7", got)
+	// Every original track is source passthrough, tallest first: DVR material
+	// holds only source tracks, and a clip cut from it keeps all of them.
+	twoOriginals := []processingMetaVideoTrack{chapterTrack(3, 1280, 720, 30000), chapterTrack(5, 1920, 1080, 30000)}
+	if got := processingSourceVideoSelector(twoOriginals, nil); got != "i5,i3" {
+		t.Errorf("two original tracks = %q, want i5,i3", got)
+	}
+
+	// A recorded identity overrides absent lineage.
+	if got := processingSourceVideoSelector(twoOriginals, map[int64]bool{3: true}); got != "i3" {
+		t.Errorf("recorded source = %q, want i3", got)
 	}
 
 	noID := chapterTrack(0, 1920, 1080, 30000)
 	noID.hasTrackID = false
-	if got := processingSourceVideoSelector([]processingMetaVideoTrack{noID}, source); got != "source" {
+	if got := processingSourceVideoSelector([]processingMetaVideoTrack{noID}, nil); got != "source" {
 		t.Errorf("source without identity = %q, want \"source\"", got)
 	}
 
-	if got := processingSourceVideoSelector(nil, source); got != "source" {
+	if got := processingSourceVideoSelector(nil, nil); got != "source" {
 		t.Errorf("no tracks = %q, want \"source\"", got)
 	}
 }

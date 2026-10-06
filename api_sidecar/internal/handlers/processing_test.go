@@ -432,58 +432,6 @@ func TestProcessAVFinalVideoReadyRequiresFinalVideoOutput(t *testing.T) {
 	}
 }
 
-// A clip cut from a live stream whose Livepeer rendition went stale carries
-// that rendition as a declared original track with no data, at the source's
-// height. The source passthrough must be the track holding media, whatever
-// order Mist's health map iterates in.
-func TestProcessingSourceSelectorFromHealthPrefersTrackWithData(t *testing.T) {
-	source := mist.SourceMediaInfo{Width: 640, Height: 360}
-	streamData := func(sourceBuffer, renditionBuffer float64) map[string]interface{} {
-		return map[string]interface{}{
-			"health": map[string]interface{}{
-				"tracks": []interface{}{"meta_JSON_0", "video_H264_640x360_0fps_1", "audio_AAC_1ch_48000hz_2", "video_H264_640x360_0fps_3", "audio_opus_1ch_48000hz_4"},
-				"buffer": float64(4000),
-				"meta_JSON_0": map[string]interface{}{
-					"codec": "JSON", "idx": float64(0), "id": float64(0), "buffer": float64(0),
-				},
-				"video_H264_640x360_0fps_1": map[string]interface{}{
-					"codec": "H264", "idx": float64(1), "id": float64(1), "width": float64(640), "height": float64(360), "buffer": sourceBuffer,
-				},
-				"audio_AAC_1ch_48000hz_2": map[string]interface{}{
-					"codec": "AAC", "idx": float64(2), "id": float64(2), "buffer": float64(4000),
-				},
-				"video_H264_640x360_0fps_3": map[string]interface{}{
-					"codec": "H264", "idx": float64(3), "id": float64(3), "width": float64(640), "height": float64(360), "buffer": renditionBuffer,
-				},
-				"audio_opus_1ch_48000hz_4": map[string]interface{}{
-					"codec": "opus", "idx": float64(4), "id": float64(4), "buffer": float64(4000),
-				},
-			},
-		}
-	}
-
-	// Go randomizes map iteration per range, so repeated inspection covers
-	// both orders of the two same-height tracks.
-	for i := 0; i < 64; i++ {
-		tracks := inspectProcessingActiveStream(streamData(4000, 0)).videoTracks
-		if got := processingSourceVideoSelector(tracks, source); got != "i1" {
-			t.Fatalf("iteration %d: source selector = %q, want i1 (the track holding media)", i, got)
-		}
-	}
-	for i := 0; i < 64; i++ {
-		tracks := inspectProcessingActiveStream(streamData(0, 4000)).videoTracks
-		if got := processingSourceVideoSelector(tracks, source); got != "i3" {
-			t.Fatalf("iteration %d: source selector = %q, want i3 (the only track holding media)", i, got)
-		}
-	}
-	for i := 0; i < 64; i++ {
-		tracks := inspectProcessingActiveStream(streamData(0, 0)).videoTracks
-		if got := processingSourceVideoSelector(tracks, source); got != "i1" {
-			t.Fatalf("iteration %d: tied source selector = %q, want i1 (lowest track index)", i, got)
-		}
-	}
-}
-
 func TestInspectProcessingActiveStreamUsesHealthTracks(t *testing.T) {
 	presence := inspectProcessingActiveStream(map[string]interface{}{
 		"lastms": float64(33000),
@@ -566,7 +514,7 @@ func TestProcessingLivepeerRenditionsReadyBlocksUntilRequestedTracksExist(t *tes
 		sourceMedia: true,
 		videoTracks: []processingMetaVideoTrack{
 			{codec: "H264", width: 1920, height: 1080},
-			{codec: "H264", width: 640, height: 360},
+			{codec: "H264", width: 640, height: 360, source: "video_H264_1920x1080_30fps_0"},
 		},
 	}, processesJSON)
 	if err != nil {
@@ -732,114 +680,112 @@ func TestRenditionsCompleteFromTracks(t *testing.T) {
 	log := logrus.New()
 	log.SetLevel(logrus.FatalLevel)
 	entry := logrus.NewEntry(log)
-	source := mist.SourceMediaInfo{Width: 1280, Height: 720}
 	const srcSpan = 9000.0
 	// Ladder intent is raw requested heights (see RequestedRenditionHeights).
 	expected := []int{720, 360}
-	track := func(w, h int, span float64) processingMetaVideoTrack {
+	// RECORDING_END names the source of every process output; the source
+	// passthrough names none.
+	src := func(w, h int, span float64) processingMetaVideoTrack {
 		return processingMetaVideoTrack{codec: "H264", width: w, height: h, firstms: 0, lastms: span}
+	}
+	track := func(w, h int, span float64) processingMetaVideoTrack {
+		tr := src(w, h, span)
+		tr.source = "video_H264_1280x720_30fps_0"
+		return tr
 	}
 
 	// Complete: source (720p) + full-length 720p and 360p renditions.
-	full := []processingMetaVideoTrack{track(1280, 720, srcSpan), track(1280, 720, srcSpan), track(640, 360, srcSpan)}
-	if !renditionsCompleteFromTracks(entry, expected, full, source, srcSpan) {
+	full := []processingMetaVideoTrack{src(1280, 720, srcSpan), track(1280, 720, srcSpan), track(640, 360, srcSpan)}
+	if !renditionsCompleteFromTracks(entry, expected, full, srcSpan) {
 		t.Fatal("expected complete rendition set to pass")
 	}
 
 	// Missing 720p rendition: only the source 720p track exists, so the 720p
 	// profile must NOT be satisfied by the excluded source track.
-	missing720 := []processingMetaVideoTrack{track(1280, 720, srcSpan), track(640, 360, srcSpan)}
-	if renditionsCompleteFromTracks(entry, expected, missing720, source, srcSpan) {
+	missing720 := []processingMetaVideoTrack{src(1280, 720, srcSpan), track(640, 360, srcSpan)}
+	if renditionsCompleteFromTracks(entry, expected, missing720, srcSpan) {
 		t.Fatal("expected missing 720p rendition (only source at 720p) to fail")
 	}
 
 	// Truncated rendition: 360p ends far short of the source span.
-	truncated := []processingMetaVideoTrack{track(1280, 720, srcSpan), track(1280, 720, srcSpan), track(640, 360, 1700)}
-	if renditionsCompleteFromTracks(entry, expected, truncated, source, srcSpan) {
+	truncated := []processingMetaVideoTrack{src(1280, 720, srcSpan), track(1280, 720, srcSpan), track(640, 360, 1700)}
+	if renditionsCompleteFromTracks(entry, expected, truncated, srcSpan) {
 		t.Fatal("expected truncated 360p rendition to fail")
 	}
 
 	// No tracks at all: incomplete (fail toward fallback), not complete.
-	if renditionsCompleteFromTracks(entry, expected, nil, source, srcSpan) {
+	if renditionsCompleteFromTracks(entry, expected, nil, srcSpan) {
 		t.Fatal("expected empty track set to be treated as incomplete")
 	}
 
 	// Within absolute tolerance: a rendition a few hundred ms short still passes.
-	nearFull := []processingMetaVideoTrack{track(1280, 720, srcSpan), track(1280, 720, srcSpan-500), track(640, 360, srcSpan-1500)}
-	if !renditionsCompleteFromTracks(entry, expected, nearFull, source, srcSpan) {
+	nearFull := []processingMetaVideoTrack{src(1280, 720, srcSpan), track(1280, 720, srcSpan-500), track(640, 360, srcSpan-1500)}
+	if !renditionsCompleteFromTracks(entry, expected, nearFull, srcSpan) {
 		t.Fatal("expected renditions within the absolute span tolerance to pass")
 	}
-	roundedHeight := []processingMetaVideoTrack{track(1280, 720, srcSpan), track(1280, 720, srcSpan), track(680, 392, srcSpan)}
-	if !renditionsCompleteFromTracks(entry, expected, roundedHeight, source, srcSpan) {
+	roundedHeight := []processingMetaVideoTrack{src(1280, 720, srcSpan), track(1280, 720, srcSpan), track(680, 392, srcSpan)}
+	if !renditionsCompleteFromTracks(entry, expected, roundedHeight, srcSpan) {
 		t.Fatal("expected renditions within the resolution rounding tolerance to pass")
 	}
 
 	// No independent source span: verify the requested rendition tracks by
 	// height. This is the normalized-output case where the source passthrough is
 	// intentionally absent from the final artifact.
-	if !renditionsCompleteFromTracks(entry, expected, full, source, 0) {
+	if !renditionsCompleteFromTracks(entry, expected, full, 0) {
 		t.Fatal("expected complete rendition set to pass without an independent source span")
 	}
 
 	noSourceOutput := []processingMetaVideoTrack{track(1280, 720, srcSpan), track(640, 360, srcSpan)}
-	if !renditionsCompleteFromTracks(entry, expected, noSourceOutput, mist.SourceMediaInfo{}, 0) {
+	if !renditionsCompleteFromTracks(entry, expected, noSourceOutput, 0) {
 		t.Fatal("expected no-source output to validate by requested rendition heights")
 	}
 
 	// A height that cannot be determined for a requested profile fails closed.
 	undetermined := []int{0}
-	if renditionsCompleteFromTracks(entry, undetermined, full, source, srcSpan) {
+	if renditionsCompleteFromTracks(entry, undetermined, full, srcSpan) {
 		t.Fatal("expected an undeterminable requested rendition height to fail closed")
 	}
 
 	// Partial readiness span must not bless a truncated rendition: readiness fired
 	// early (1700ms snapshot), but the source passthrough track ran to its full 9s,
 	// so the baseline is raised to the source track span and a short 360p still fails.
-	partialReadiness := []processingMetaVideoTrack{track(1280, 720, srcSpan), track(1280, 720, srcSpan), track(640, 360, 1700)}
-	if renditionsCompleteFromTracks(entry, expected, partialReadiness, source, 1700) {
+	partialReadiness := []processingMetaVideoTrack{src(1280, 720, srcSpan), track(1280, 720, srcSpan), track(640, 360, 1700)}
+	if renditionsCompleteFromTracks(entry, expected, partialReadiness, 1700) {
 		t.Fatal("expected a truncated rendition to fail even when readiness captured only a partial span")
 	}
 
 	// Same partial readiness span, but full-length renditions: the source track span
 	// proves the true length, so the complete set passes.
-	partialReadinessFull := []processingMetaVideoTrack{track(1280, 720, srcSpan), track(1280, 720, srcSpan), track(640, 360, srcSpan)}
-	if !renditionsCompleteFromTracks(entry, expected, partialReadinessFull, source, 1700) {
+	partialReadinessFull := []processingMetaVideoTrack{src(1280, 720, srcSpan), track(1280, 720, srcSpan), track(640, 360, srcSpan)}
+	if !renditionsCompleteFromTracks(entry, expected, partialReadinessFull, 1700) {
 		t.Fatal("expected full renditions to pass when the source track proves the full span despite a partial readiness span")
 	}
 
-	// Nondeterministic map order must not let a short same-height rendition be
-	// excluded as the source. The truncated 720p rendition is listed BEFORE the full
-	// 720p source passthrough; the longest-track rule still excludes the source, so
-	// the short 720p stays in the pool and fails coverage. (First-match exclusion
-	// would wrongly drop the short rendition and let the full source satisfy 720p.)
-	shortSameHeightFirst := []processingMetaVideoTrack{track(1280, 720, 1700), track(1280, 720, srcSpan), track(640, 360, srcSpan)}
-	if renditionsCompleteFromTracks(entry, expected, shortSameHeightFirst, source, srcSpan) {
+	// A short same-height rendition listed before the source stays a rendition
+	// and fails coverage; lineage, not order or span, says which is the source.
+	shortSameHeightFirst := []processingMetaVideoTrack{track(1280, 720, 1700), src(1280, 720, srcSpan), track(640, 360, srcSpan)}
+	if renditionsCompleteFromTracks(entry, expected, shortSameHeightFirst, srcSpan) {
 		t.Fatal("expected a truncated same-height rendition listed before the source passthrough to fail")
 	}
 
 	// The recording deselects the source passthrough once renditions exist, so it
-	// can end far short of a complete same-height rendition. RECORDING_END names
-	// each derived track's source; the passthrough is the one without, whatever
-	// its span. Without that field the two are indistinguishable and the check
-	// fails closed on the short one.
-	derived := func(tr processingMetaVideoTrack) processingMetaVideoTrack {
-		tr.source = "video_H264_1280x720_30fps_0"
-		return tr
-	}
-	shortPassthrough := []processingMetaVideoTrack{track(1280, 720, 3000), derived(track(1280, 720, srcSpan)), derived(track(640, 360, srcSpan))}
-	if !renditionsCompleteFromTracks(entry, expected, shortPassthrough, source, srcSpan) {
+	// can end far short of a complete same-height rendition. The passthrough is
+	// the track without a source name, whatever its span.
+	shortPassthrough := []processingMetaVideoTrack{src(1280, 720, 3000), track(1280, 720, srcSpan), track(640, 360, srcSpan)}
+	if !renditionsCompleteFromTracks(entry, expected, shortPassthrough, srcSpan) {
 		t.Fatal("expected complete renditions to pass when the named source passthrough left the recording early")
 	}
 	// Staging: Livepeer masked the source before the recorder selected, so
 	// every recorded track is a rendition naming its source. None of them may
 	// be taken for the source, or the 720p rendition is judged missing.
-	maskedSource := []processingMetaVideoTrack{derived(track(1280, 720, srcSpan)), derived(track(640, 360, srcSpan))}
-	if !renditionsCompleteFromTracks(entry, expected, maskedSource, source, srcSpan) {
+	maskedSource := []processingMetaVideoTrack{track(1280, 720, srcSpan), track(640, 360, srcSpan)}
+	if !renditionsCompleteFromTracks(entry, expected, maskedSource, srcSpan) {
 		t.Fatal("expected a complete ladder without the masked source to pass")
 	}
-	unnamed := []processingMetaVideoTrack{track(1280, 720, 3000), track(1280, 720, srcSpan), track(640, 360, srcSpan)}
-	if renditionsCompleteFromTracks(entry, expected, unnamed, source, srcSpan) {
-		t.Fatal("expected a short same-height track without source names to fail closed")
+	// Without source names no track is provably a rendition: fail closed.
+	unnamed := []processingMetaVideoTrack{src(1280, 720, 3000), src(1280, 720, srcSpan), src(640, 360, srcSpan)}
+	if renditionsCompleteFromTracks(entry, expected, unnamed, srcSpan) {
+		t.Fatal("expected tracks without source names to fail closed")
 	}
 }
 
@@ -1058,10 +1004,10 @@ func TestChooseProcessingVideoSelectorSelectsCompleteRenditions(t *testing.T) {
 	source := mist.SourceMediaInfo{Width: 1920, Height: 1080}
 	tracks := []processingMetaVideoTrack{
 		chapterTrack(1, 1920, 1080, 30000),
-		chapterTrack(2, 1280, 720, 30000),
-		chapterTrack(3, 640, 360, 30000),
+		renditionTrack(2, 1280, 720, 30000),
+		renditionTrack(3, 640, 360, 30000),
 	}
-	got := chooseProcessingVideoSelector(entry, processes, tracks, source, 30000)
+	got := chooseProcessingVideoSelector(entry, processes, tracks, source, 30000, nil)
 	if got != "i2,i3" {
 		t.Fatalf("selector = %q, want rendition tracks", got)
 	}
@@ -1087,10 +1033,10 @@ func TestChooseProcessingVideoSelectorFallsBackToSourceWhenRenditionIncomplete(t
 	source := mist.SourceMediaInfo{Width: 1920, Height: 1080}
 	tracks := []processingMetaVideoTrack{
 		chapterTrack(1, 1920, 1080, 30000),
-		chapterTrack(2, 1280, 720, 30000),
-		chapterTrack(3, 640, 360, 1000),
+		renditionTrack(2, 1280, 720, 30000),
+		renditionTrack(3, 640, 360, 1000),
 	}
-	got := chooseProcessingVideoSelector(entry, processes, tracks, source, 30000)
+	got := chooseProcessingVideoSelector(entry, processes, tracks, source, 30000, nil)
 	if got != "i1" {
 		t.Fatalf("selector = %q, want source track", got)
 	}
@@ -1109,7 +1055,7 @@ func TestChooseProcessingVideoSelectorSameHeightSourceAndRendition(t *testing.T)
 	}
 	tracks[0].source = "video_1"
 	tracks[2].source = "video_1"
-	got := chooseProcessingVideoSelector(entry, processes, tracks, source, 30000)
+	got := chooseProcessingVideoSelector(entry, processes, tracks, source, 30000, nil)
 	if got != "i9,i3" {
 		t.Fatalf("selector = %q, want same-height rendition plus 360p", got)
 	}
@@ -1127,6 +1073,14 @@ func chapterTrack(id int64, width, height int, span float64) processingMetaVideo
 	}
 }
 
+// renditionTrack is a process output as Mist reports it on a processing
+// stream: it names the track it was derived from.
+func renditionTrack(id int64, width, height int, span float64) processingMetaVideoTrack {
+	t := chapterTrack(id, width, height, span)
+	t.source = "video_H264_1920x1080_30fps_0"
+	return t
+}
+
 // Source-only material (a clip cut from an untranscoded stream): renditions are
 // requested but only the source track exists, so the selector publishes source.
 func TestChooseProcessingVideoSelectorSourceOnlyMaterial(t *testing.T) {
@@ -1136,7 +1090,7 @@ func TestChooseProcessingVideoSelectorSourceOnlyMaterial(t *testing.T) {
 	processes := `[{"process":"Livepeer","target_profiles":[{"name":"720p","height":720}]}]`
 	source := mist.SourceMediaInfo{Width: 1920, Height: 1080}
 	tracks := []processingMetaVideoTrack{chapterTrack(1, 1920, 1080, 30000)}
-	got := chooseProcessingVideoSelector(entry, processes, tracks, source, 30000)
+	got := chooseProcessingVideoSelector(entry, processes, tracks, source, 30000, nil)
 	if got != "i1" {
 		t.Fatalf("selector = %q, want source track", got)
 	}
@@ -1973,5 +1927,27 @@ func TestExtractActiveStreamMetadataPrefersSourceTracks(t *testing.T) {
 		if got[k] != v {
 			t.Errorf("%s = %q, want %q", k, got[k], v)
 		}
+	}
+}
+
+// R18-4 (staging rc18): a live clip's staged cut holds the 1080p source and a
+// 1080p rendition; the staged file carries no lineage and the rendition spans
+// longer. The ladder is incomplete, so the clip publishes source passthrough,
+// which must be the source track recorded at cut time, not the rendition.
+func TestClipSelectorPicksRecordedSourceOverLongerSameHeightRendition(t *testing.T) {
+	log := logrus.New()
+	log.SetLevel(logrus.FatalLevel)
+	entry := logrus.NewEntry(log)
+	processes := `[{"process":"Livepeer","target_profiles":[{"name":"1080p","height":1080},{"name":"720p","height":720},{"name":"360p","height":360}]}]`
+	source := mist.SourceMediaInfo{Width: 1920, Height: 1080}
+	tracks := []processingMetaVideoTrack{
+		chapterTrack(0, 1920, 1080, 20000),
+		chapterTrack(9, 1920, 1080, 21370),
+		chapterTrack(2, 1280, 720, 21370),
+		chapterTrack(4, 640, 360, 1000),
+	}
+	got := chooseProcessingVideoSelector(entry, processes, tracks, source, 21370, map[int64]bool{0: true})
+	if got != "i0" {
+		t.Fatalf("selector = %q, want the recorded source track i0", got)
 	}
 }

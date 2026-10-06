@@ -214,7 +214,14 @@ func (h *ProcessingJobHandler) handleChapterFinalize(req *ipcpb.ProcessingJobReq
 	if chapterSpanMs <= 0 {
 		_, chapterSpanMs = sourceFromReadinessOutputs(streamOutputs)
 	}
-	chapterVideoSelector := h.processingVideoSelector(log, mistClient, streamName, originalProcessesJSON, streamOutputs, chapterSpanMs)
+	// DVR segments hold only source tracks (the DVR push selects
+	// video=source) and no transcode runs here, so Mist lineage names the
+	// source tracks of this processing stream.
+	chapterVideoSelector, selErr := h.processingVideoSelector(log, mistClient, streamName, originalProcessesJSON, streamOutputs, chapterSpanMs, nil)
+	if selErr != nil {
+		h.sendResult(send, req.GetJobId(), "failed", fmt.Sprintf("track selection failed: %v", selErr), nil, "", 0)
+		return
+	}
 
 	currentPushStartedAt := time.Now().Unix()
 	_, pushErr := h.startProcessingSelectorPush(log, mistClient, streamName, outputPath, chapterVideoSelector, originalProcessesJSON)
