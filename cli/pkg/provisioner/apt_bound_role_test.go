@@ -158,7 +158,7 @@ type vendorPackages struct {
 
 var vendorPackageTasks = []vendorPackages{
 	{
-		requirement: "geerlingguy.postgresql", version: "3.5.2", include: "geerlingguy.postgresql",
+		requirement: "geerlingguy.postgresql", version: "4.1.0", include: "geerlingguy.postgresql",
 		wrapper: "postgres/tasks/install.yml", vendorFile: "tasks/setup-Debian.yml",
 		vendorNames: []string{"{{ postgresql_python_library }}", "{{ postgresql_packages }}"},
 		// Every Debian/Ubuntu vars file of the pinned role sets postgresql_python_library to
