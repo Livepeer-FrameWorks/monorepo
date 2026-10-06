@@ -287,19 +287,22 @@ var TenantRestreamMetrics = statement("billing.tenant_restream_metrics", `
 	GROUP BY c.cluster_id, c.platform
 `)
 
+// EarliestCanonicalBillingFact reads each source by the timestamp billing
+// cursors on. minOrNull keeps a source without rows for the tenant from
+// contributing 0 and hiding the facts the other sources hold.
 var EarliestCanonicalBillingFact = statement("billing.earliest_canonical_fact", `
 	SELECT min(first_ms)
 	FROM (
-		SELECT toInt64(min(projection_version_ms)) AS first_ms FROM periscope.viewer_sessions_final WHERE tenant_id = ?
+		SELECT minOrNull(projection_version_ms) AS first_ms FROM periscope.viewer_sessions_final WHERE tenant_id = ?
 		UNION ALL
-		SELECT toInt64(min(projection_version_ms)) AS first_ms FROM periscope.restream_sessions_final WHERE tenant_id = ?
+		SELECT minOrNull(projection_version_ms) AS first_ms FROM periscope.restream_sessions_final WHERE tenant_id = ?
 		UNION ALL
-		SELECT toInt64(min(projection_version_ms)) AS first_ms FROM periscope.stream_sessions_final WHERE tenant_id = ?
+		SELECT minOrNull(projection_version_ms) AS first_ms FROM periscope.stream_sessions_final WHERE tenant_id = ?
 		UNION ALL
-		SELECT toInt64(min(projection_version_ms)) AS first_ms FROM periscope.processing_segments_final WHERE tenant_id = ?
+		SELECT minOrNull(projection_version_ms) AS first_ms FROM periscope.processing_segments_final WHERE tenant_id = ?
 		UNION ALL
-		SELECT toInt64(min(projection_version_ms)) AS first_ms FROM periscope.storage_gb_seconds_5m WHERE tenant_id = ?
+		SELECT minOrNull(projection_version_ms) AS first_ms FROM periscope.storage_gb_seconds_5m WHERE tenant_id = ?
 		UNION ALL
-		SELECT toInt64(toUnixTimestamp(min(window_start)) * 1000) AS first_ms FROM periscope.api_usage_5m_v WHERE tenant_id = ?
+		SELECT minOrNull(ingested_at_ms) AS first_ms FROM periscope.api_requests WHERE tenant_id = ?
 	)
 `)

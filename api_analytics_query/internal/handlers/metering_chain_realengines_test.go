@@ -339,3 +339,20 @@ func TestAPIOnlyTenantIsMeteredBeforeTheAPILedgerProjectsIt_RealEngines(t *testi
 		t.Fatalf("api_requests metered for the API-only tenant=%v, want 30 on the first pass", got)
 	}
 }
+
+// A tenant first seen long after the metering source activated starts its
+// cursor at its first billable fact instead of walking every five-minute slice
+// since activation; ledgers the tenant has no rows in must not hide that fact.
+func TestNewTenantCursorStartsAtItsFirstBillableFact_RealEngines(t *testing.T) {
+	ch, queries, _, bs := newMeteringChainSummarizer(t, "fw-metering-first-fact")
+	ctx := context.Background()
+	sliceStart := time.Now().UTC().Add(-billingSettlementLag).Truncate(billingCursorAlignment).Add(-billingCursorAlignment)
+	tenantID := uuid.NewString()
+	insertGatewayAPIRequest(t, ch, tenantID, "bridge-api-first:0", sliceStart.Add(time.Minute), 1)
+
+	activation := sliceStart.Add(-30 * 24 * time.Hour)
+	if err := bs.processTenantPendingUsage(ctx, tenantID, activation, activation); err != nil {
+		t.Fatalf("initialize tenant cursor: %v", err)
+	}
+	assertMeteringCursor(t, queries, bs.sourceID, tenantID, sliceStart)
+}
