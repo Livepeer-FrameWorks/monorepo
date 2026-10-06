@@ -10,7 +10,10 @@
 # Run it through scripts/stack/common.sh, which layers a generated overlay that
 # resets every container_name and host port so several slots can coexist.
 
-x-go-livepeer-image: &go-livepeer-image ${GO_LIVEPEER_IMAGE:-livepeerframeworks/go-livepeer:v0.3.0@sha256:1fb6e6ceb143d2c2d229d7789b1a4b8071f83cb725b66406e58e767d679dca33}
+# scripts/stack/up.sh sets GO_LIVEPEER_IMAGE (in the slot env file) to the go-livepeer release
+# scripts/resolve-golivepeer-release.sh resolves. The fallback only lets commands that create no
+# container (down, logs) interpolate this file on a slot that was never brought up.
+x-go-livepeer-image: &go-livepeer-image ${GO_LIVEPEER_IMAGE:-go-livepeer-unresolved-run-scripts-stack-up}
 
 x-stack-logging: &stack-logging
   driver: "json-file"

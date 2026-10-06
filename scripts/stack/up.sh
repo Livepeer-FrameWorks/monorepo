@@ -91,6 +91,19 @@ if [ ! -s "$ENV_FILE" ]; then
 fi
 grep -qE '^MIST_API_PASSWORD="?[^"[:space:]]' "$ENV_FILE" ||
   fail "$ENV_FILE has no MIST_API_PASSWORD, so the edges' Mist would start without an API account: remove it and rerun to regenerate the slot environment"
+# The stack runs the go-livepeer release the next platform release bakes, unless the
+# caller names an image. It goes into the slot env file so every later compose
+# command of this slot interpolates the same image.
+if [ -z "${GO_LIVEPEER_IMAGE:-}" ]; then
+  glp_tag="$(scripts/resolve-golivepeer-release.sh "$STACK_STATE_DIR/go-livepeer-release.json")" ||
+    fail "could not resolve the latest go-livepeer release"
+  GO_LIVEPEER_IMAGE="livepeerframeworks/go-livepeer:$glp_tag"
+fi
+export GO_LIVEPEER_IMAGE
+grep -v '^GO_LIVEPEER_IMAGE=' "$ENV_FILE" >"$ENV_FILE.tmp" || true
+printf 'GO_LIVEPEER_IMAGE="%s"\n' "$GO_LIVEPEER_IMAGE" >>"$ENV_FILE.tmp"
+mv "$ENV_FILE.tmp" "$ENV_FILE"
+log "go-livepeer image $GO_LIVEPEER_IMAGE"
 command -v openssl >/dev/null || fail "openssl is required for the gateway certificates"
 stack_ensure_gateway_certs
 
