@@ -6695,7 +6695,8 @@ func (p *Processor) applyStreamContextWithContext(ctx context.Context, trigger *
 	}
 
 	internalName := mist.ExtractInternalName(streamName)
-	if local, _, localErr := p.resolveReadyLocalPlayback(ctx, internalName, false); localErr == nil && local.target != nil {
+	local, _, localErr := p.resolveReadyLocalPlayback(ctx, internalName, false)
+	if localErr == nil && local.target != nil {
 		return p.applyResolvedStreamContext(trigger, streamName, local.info)
 	}
 
@@ -6722,7 +6723,11 @@ func (p *Processor) applyStreamContextWithContext(ctx context.Context, trigger *
 		info = full
 	}
 
-	return p.applyResolvedStreamContext(trigger, streamName, info)
+	info = p.applyResolvedStreamContext(trigger, streamName, info)
+	if IsLocalAuthorityDenied(localErr) {
+		stampDeniedContentIdentity(trigger, streamName, local.object.Authority)
+	}
+	return info
 }
 
 func (p *Processor) applyResolvedStreamContext(trigger *ipcpb.MistTrigger, streamName string, info streamContext) streamContext {
@@ -6774,6 +6779,38 @@ func (p *Processor) applyResolvedStreamContext(trigger *ipcpb.MistTrigger, strea
 		trigger.ClusterId = &clusterID
 	}
 	return info
+}
+
+// stampDeniedContentIdentity names the content of a report Mist sends while it
+// winds down a stream or artifact whose local authority is now denied (deleted,
+// or its tenant suspended): viewers closing, buffers draining. The denied
+// authority still identifies that content; only the trigger is stamped, so the
+// returned context, which admission reads, stays unresolved.
+func stampDeniedContentIdentity(trigger *ipcpb.MistTrigger, streamName string, authority *mediaauthoritypb.MediaObjectAuthority) {
+	if trigger == nil || authority == nil || trigger.GetStreamId() != "" || trigger.GetArtifactHash() != "" {
+		return
+	}
+	tenantID := authority.GetTenantId()
+	if tenantID == "" || (trigger.GetTenantId() != "" && trigger.GetTenantId() != tenantID) {
+		return
+	}
+	streamID, artifactHash := authority.GetLiveStream().GetStreamId(), ""
+	if artifact := authority.GetArtifact(); artifact != nil {
+		streamID = artifact.GetParentStreamId()
+		if streamident.Parse(streamName).Kind != streamident.KindArtifactProcessing {
+			artifactHash = artifact.GetArtifactHash()
+		}
+	}
+	if streamID == "" && artifactHash == "" {
+		return
+	}
+	trigger.TenantId = &tenantID
+	if streamID != "" {
+		trigger.StreamId = &streamID
+	}
+	if artifactHash != "" {
+		trigger.ArtifactHash = &artifactHash
+	}
 }
 
 // redactStreamKeyInURL replaces the publishing credential inside an ingest URL
