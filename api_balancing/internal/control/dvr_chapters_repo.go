@@ -719,13 +719,22 @@ func SoftDeleteDVRAndChapters(ctx context.Context, dvrHash, tenantID, requestedB
 			return cascadeErr
 		}
 		if parentTransitioned {
-			dvrData := &ipcpb.DVRLifecycleData{Status: ipcpb.DVRLifecycleData_STATUS_DELETED, DvrHash: dvrHash, TenantId: &tenantID}
-			if enqErr := artifactoutbox.EnqueueDVRLifecycleTx(ctx, tx, dvrData); enqErr != nil {
-				return fmt.Errorf("delete dvr: enqueue dvr lifecycle: %w", enqErr)
-			}
 			recording, ctxErr := q.GetDVRLifecycleContext(ctx, dvrHash)
 			if ctxErr != nil {
 				return fmt.Errorf("delete dvr: read recording context: %w", ctxErr)
+			}
+			dvrData := &ipcpb.DVRLifecycleData{Status: ipcpb.DVRLifecycleData_STATUS_DELETED, DvrHash: dvrHash, TenantId: &tenantID}
+			if recording.StreamID != "" {
+				dvrData.StreamId = &recording.StreamID
+			}
+			if recording.StreamInternalName.String != "" {
+				dvrData.StreamInternalName = &recording.StreamInternalName.String
+			}
+			if recording.UserID != "" {
+				dvrData.UserId = &recording.UserID
+			}
+			if enqErr := artifactoutbox.EnqueueDVRLifecycleTx(ctx, tx, dvrData); enqErr != nil {
+				return fmt.Errorf("delete dvr: enqueue dvr lifecycle: %w", enqErr)
 			}
 			if enqErr := artifactoutbox.EnqueueArtifactDeletedTx(ctx, tx, tenantID, requestedBy,
 				ipcpb.ArtifactEvent_ARTIFACT_TYPE_DVR, dvrHash, recording.StreamID); enqErr != nil {
