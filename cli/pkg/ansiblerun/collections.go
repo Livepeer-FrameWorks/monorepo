@@ -211,9 +211,13 @@ func runGalaxyCollectionInstall(ctx context.Context, binary, requirements, cache
 		[]string{"collection", "install", "-r"})
 }
 
+// runGalaxyRoleInstall passes --force because ansible-galaxy keeps an installed
+// role at its old version otherwise, so a version bump in requirements.yml
+// would never reach an existing cache. It only runs when requirements.yml
+// changed.
 func runGalaxyRoleInstall(ctx context.Context, binary, requirements, cacheDir string) error {
 	return runGalaxyInstall(ctx, binary, requirements, cacheDir, "role",
-		[]string{"role", "install", "-r"})
+		[]string{"role", "install", "--force", "-r"})
 }
 
 // runGalaxyInstall dispatches the shared galaxy-install invocation. argv is

@@ -1963,7 +1963,7 @@ ansible-galaxy-install:
 	@mkdir -p $(ANSIBLE_DIR)/$(ANSIBLE_CACHE_REL) $(ANSIBLE_DIR)/.cache/roles $(ANSIBLE_LOCAL_TEMP) $(ANSIBLE_HOME)
 	cd $(ANSIBLE_DIR) && $(ANSIBLE_ENV) ansible-galaxy collection install -r $(ANSIBLE_REQUIREMENTS_REL) -p $(ANSIBLE_CACHE_REL)
 	@echo "=== Installing Ansible roles ==="
-	cd $(ANSIBLE_DIR) && $(ANSIBLE_ENV) ansible-galaxy role install -r $(ANSIBLE_REQUIREMENTS_REL) --roles-path .cache/roles
+	cd $(ANSIBLE_DIR) && $(ANSIBLE_ENV) ansible-galaxy role install --force -r $(ANSIBLE_REQUIREMENTS_REL) --roles-path .cache/roles
 
 ansible-lint: ansible-galaxy-install
 	@echo "=== Linting frameworks.infra collection ==="

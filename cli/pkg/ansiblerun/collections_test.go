@@ -116,3 +116,31 @@ func TestInstallLockAcquireRelease(t *testing.T) {
 	}
 	releaseInstallLock(second)
 }
+
+// ansible-galaxy keeps an installed role at its old version unless --force is
+// given ("already installed - use --force to change version"), so a role
+// version bump in requirements.yml would never reach an existing cache.
+// Collections are replaced by the pinned version without it.
+func TestGalaxyRoleInstallReplacesInstalledVersions(t *testing.T) {
+	dir := t.TempDir()
+	argsOut := filepath.Join(dir, "args")
+	binary := filepath.Join(dir, "ansible-galaxy")
+	script := "#!/bin/sh\necho \"$@\" > " + argsOut + "\n"
+	if err := os.WriteFile(binary, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	requirements := filepath.Join(dir, "requirements.yml")
+	if err := os.WriteFile(requirements, []byte("roles: []\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := runGalaxyRoleInstall(context.Background(), binary, requirements, filepath.Join(dir, "cache")); err != nil {
+		t.Fatalf("role install: %v", err)
+	}
+	args, err := os.ReadFile(argsOut)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(" "+strings.TrimSpace(string(args))+" ", " --force ") {
+		t.Fatalf("ansible-galaxy role install ran without --force: %s", args)
+	}
+}
