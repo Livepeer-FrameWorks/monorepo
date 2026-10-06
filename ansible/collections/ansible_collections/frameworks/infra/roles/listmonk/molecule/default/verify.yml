@@ -25,7 +25,7 @@
       ansible.builtin.assert:
         that:
           - "'listmonk/listmonk:' in (compose_bytes.content | b64decode)"
-          - "'LISTMONK_app__address' in (compose_bytes.content | b64decode) or ((compose_bytes.content | b64decode) | regex_search('9001:9000'))"
+          - "'LISTMONK_app__address' in (compose_bytes.content | b64decode) or ('9001:9000' in (compose_bytes.content | b64decode))"
         fail_msg: "listmonk compose render missing expected fields"
 
     - name: Live-converge probes (skipped in render-only mode)
