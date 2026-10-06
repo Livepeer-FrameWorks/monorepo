@@ -32,8 +32,10 @@ var ActiveTenants = statement("billing.active_tenants", `
 		SELECT toString(tenant_id) AS tenant_id FROM periscope.stream_runtime_5m
 		WHERE projection_version_ms >= toUnixTimestamp64Milli(now64(3) - INTERVAL 7 DAY)
 		UNION ALL
-		SELECT toString(tenant_id) AS tenant_id FROM periscope.api_usage_5m
-		WHERE projection_version_ms >= toUnixTimestamp64Milli(now64(3) - INTERVAL 7 DAY)
+		-- API usage is billed from api_requests by ingestion time; the
+		-- api_usage_5m ledger lands a rebuild tick later.
+		SELECT toString(tenant_id) AS tenant_id FROM periscope.api_requests
+		WHERE ingested_at_ms >= toUnixTimestamp64Milli(now64(3) - INTERVAL 7 DAY)
 		UNION ALL
 		SELECT JSONExtractString(natural_key_json, 'tenant_id') AS tenant_id
 		FROM periscope.projection_divergences

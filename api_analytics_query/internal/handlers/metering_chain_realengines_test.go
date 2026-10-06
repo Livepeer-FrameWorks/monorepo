@@ -273,3 +273,69 @@ func startMeteringChainPostgres(t *testing.T) *sql.DB {
 	}
 	return db
 }
+
+func newMeteringChainSummarizer(t *testing.T, name string) (*sql.DB, *meteringdb.Queries, *capturedUsageProducer, *BillingSummarizer) {
+	t.Helper()
+	root, err := filepath.Abs("../../..")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ch := dockerch.StartCurrent(t, root, name).SQL
+	queries := meteringdb.New(startMeteringChainPostgres(t))
+	producer := &capturedUsageProducer{}
+	bs := &BillingSummarizer{
+		postgresQueries: queries, clickhouse: ch, logger: logging.NewLogger(), usageProducer: producer,
+		resolvePrimaryCluster: func(string) (string, error) { return "cluster-chain-1", nil },
+		billingTopic:          "billing.usage_reports", sourceID: "chain-source", sourceRegion: "test", systemTenantID: uuid.NewString(),
+	}
+	return ch, queries, producer, bs
+}
+
+func insertGatewayAPIRequest(t *testing.T, ch *sql.DB, tenantID, sourceEventID string, ingestedAt time.Time, requests uint32) {
+	t.Helper()
+	if _, err := ch.ExecContext(context.Background(), `INSERT INTO periscope.api_requests
+		(timestamp,tenant_id,source_node,source_event_id,ingested_at_ms,auth_type,operation_name,operation_type,request_count,error_count,total_duration_ms,total_complexity,user_hashes,token_hashes)
+		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		ingestedAt.Add(-time.Second), tenantID, "bridge", sourceEventID, ingestedAt.UnixMilli(),
+		"jwt", "streamsConnection", "query", requests, uint32(0), uint64(40), uint32(3), []uint64{7}, []uint64{}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func tenantAPIRequests(reports []models.UsageSummary, tenantID string) float64 {
+	var total float64
+	for _, report := range reports {
+		if report.TenantID != tenantID {
+			continue
+		}
+		for _, quantity := range report.Meters {
+			if quantity.Meter == "api_requests" {
+				total += quantity.Quantity
+			}
+		}
+	}
+	return total
+}
+
+// Metering bills API usage straight from api_requests by ingestion time, so a
+// tenant whose only usage is API traffic must be metered on the first pass
+// after that traffic lands, before periscope-ingest projects api_usage_5m.
+func TestAPIOnlyTenantIsMeteredBeforeTheAPILedgerProjectsIt_RealEngines(t *testing.T) {
+	ch, queries, producer, bs := newMeteringChainSummarizer(t, "fw-metering-api-discovery")
+	ctx := context.Background()
+	sliceStart := time.Now().UTC().Add(-billingSettlementLag).Truncate(billingCursorAlignment).Add(-billingCursorAlignment)
+	if _, err := queries.EnsureMeteringSource(ctx, meteringdb.EnsureMeteringSourceParams{
+		SourceID: bs.sourceID, SourceRegion: bs.sourceRegion, ActivatedAt: sliceStart,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	tenantID := uuid.NewString()
+	insertGatewayAPIRequest(t, ch, tenantID, "bridge-api-1:0", sliceStart.Add(time.Minute), 30)
+
+	if err := bs.ProcessPendingUsage(ctx); err != nil {
+		t.Fatalf("process pending usage: %v", err)
+	}
+	if got := tenantAPIRequests(producer.reports, tenantID); got != 30 {
+		t.Fatalf("api_requests metered for the API-only tenant=%v, want 30 on the first pass", got)
+	}
+}
