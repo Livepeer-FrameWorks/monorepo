@@ -3332,7 +3332,7 @@ input CreateDeveloperTokenInput {
   name: String!
   "Comma-separated permission scopes in resource:action form (streams:read, streams:write, analytics:read, etc.)."
   permissions: String
-  "Days until expiration (null = non-expiring)."
+  "Days until expiration, 1-3650 (null = non-expiring)."
   expiresIn: Int
 }
 

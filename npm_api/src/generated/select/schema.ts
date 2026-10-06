@@ -8289,7 +8289,7 @@ export interface CreateDeveloperTokenInput {
 name: Scalars['String'],
 /** Comma-separated permission scopes in resource:action form (streams:read, streams:write, analytics:read, etc.). */
 permissions?: (Scalars['String'] | null),
-/** Days until expiration (null = non-expiring). */
+/** Days until expiration, 1-3650 (null = non-expiring). */
 expiresIn?: (Scalars['Int'] | null)}
 
 export interface CreateDeveloperTokenResultGenqlSelection{

@@ -235,7 +235,7 @@ export type CreateCryptoTopupInput = {
 
 /** Input for creating a developer API token. */
 export type CreateDeveloperTokenInput = {
-  /** Days until expiration (null = non-expiring). */
+  /** Days until expiration, 1-3650 (null = non-expiring). */
   expiresIn?: number | null | undefined;
   /** Human-readable name for the token. */
   name: string;

@@ -322,9 +322,9 @@ class CreateDeveloperTokenInput(BaseModel):
     expires_in: Optional[int] = Field(
         alias="expiresIn",
         default=None,
-        description="Days until expiration (null = non-expiring).",
+        description="Days until expiration, 1-3650 (null = non-expiring).",
     )
-    "Days until expiration (null = non-expiring)."
+    "Days until expiration, 1-3650 (null = non-expiring)."
 
 
 class CreateEdgeClusterInput(BaseModel):

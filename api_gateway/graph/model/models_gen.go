@@ -974,7 +974,7 @@ type CreateDeveloperTokenInput struct {
 	Name string `json:"name"`
 	// Comma-separated permission scopes in resource:action form (streams:read, streams:write, analytics:read, etc.).
 	Permissions *string `json:"permissions,omitempty"`
-	// Days until expiration (null = non-expiring).
+	// Days until expiration, 1-3650 (null = non-expiring).
 	ExpiresIn *int `json:"expiresIn,omitempty"`
 }
 

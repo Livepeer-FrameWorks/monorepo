@@ -1869,7 +1869,7 @@ input CreateDeveloperTokenInput {
   """
   permissions: String
   """
-  Days until expiration (null = non-expiring).
+  Days until expiration, 1-3650 (null = non-expiring).
   """
   expiresIn: Int
 }
