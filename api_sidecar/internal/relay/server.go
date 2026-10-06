@@ -75,8 +75,10 @@ type Server struct {
 	cache       *resolveCache
 	blockSize   int64
 	coldFetch   *blockFetchCoalescer
-	nodeID      string
-	authorizer  RelayPullAuthorizer
+	// sidecarFetches shares one upstream .dtsh fetch among concurrent readers.
+	sidecarFetches sidecarFetchGroup
+	nodeID         string
+	authorizer     RelayPullAuthorizer
 	// trustedCIDRs are RemoteAddr ranges that bypass the authorize gate like
 	// loopback does (still AND-gated by no proxy-forward markers). Only for
 	// the local Mist→Helmsman hop when Mist dials a non-loopback address.

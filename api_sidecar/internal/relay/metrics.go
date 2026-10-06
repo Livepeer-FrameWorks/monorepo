@@ -86,8 +86,10 @@ var (
 	)
 
 	// dtshGeneration counts .dtsh sidecar activity at the relay. source:
-	// "lazy_404" (relay returned 404 so Mist generates one) or "putback"
-	// (Mist wrote a freshly generated sidecar back). status: "ok"/"error".
+	// "lazy_404" (relay returned 404 so Mist generates one), "putback"
+	// (Mist wrote a freshly generated sidecar back) or "fetch" (the upstream
+	// sidecar fetch; status "unavailable" when the relay answered 503).
+	// status: "ok"/"error"/"unavailable".
 	dtshGeneration = promauto.NewCounterVec(
 		prometheus.CounterOpts{
 			Namespace: "helmsman",

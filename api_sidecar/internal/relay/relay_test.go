@@ -904,7 +904,7 @@ func TestDtshGetResolveErrorReturns404GenerationSignal(t *testing.T) {
 	}
 }
 
-func TestDtshGetUpstreamErrorReturns404GenerationSignal(t *testing.T) {
+func TestDtshGetUpstreamErrorAnswersRetryLater(t *testing.T) {
 	dir := t.TempDir()
 	hash := "sidecar500"
 	file := hash + ".mkv.dtsh"
@@ -927,8 +927,11 @@ func TestDtshGetUpstreamErrorReturns404GenerationSignal(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusNotFound {
-		t.Fatalf("expected 404 generation signal for dtsh upstream failure; got %d", resp.StatusCode)
+	if resp.StatusCode != http.StatusServiceUnavailable {
+		t.Fatalf("a failing store is not a missing sidecar: want 503, got %d", resp.StatusCode)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "vod", file)); !os.IsNotExist(err) {
+		t.Fatalf("no sidecar may be cached from a failed fetch, stat err=%v", err)
 	}
 }
 
