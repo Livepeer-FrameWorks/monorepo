@@ -115,7 +115,7 @@ func TestRoutingTelemetryUsesTrustedIdentity(t *testing.T) {
 	}
 	c.Request.Header.Set("CF-IPCountry", "US")
 	c.Request.Header.Set("X-Country-Code", "US")
-	postBalancingEventExWithIdentity(c, "stream", "", 0, math.NaN(), math.NaN(), "success", "", 0, 0, "", 0, "", &routingEventIdentity{TenantID: "tenant"})
+	postBalancingEventExWithIdentity(c, "stream", "", 0, math.NaN(), math.NaN(), "success", "", 0, 0, "", 0, "", &routingEventIdentity{TenantID: "tenant", StreamID: routingTestStreamID})
 	select {
 	case item := <-routingEventQueue:
 		if item.event.ClientIP != "192.0.2.5" || item.event.ClientCountry != "" {

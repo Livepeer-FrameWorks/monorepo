@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"context"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -105,6 +106,16 @@ func enqueueRoutingEvent(client *decklog.BatchedClient, e *RoutingEvent) bool {
 	if e == nil || routingEventQueue == nil {
 		// Queue not started (unit tests, early startup): drop rather than
 		// spawn an unbounded goroutine.
+		return false
+	}
+	// A routing_decisions row names its content: a stream by stream_id, or
+	// non-live content by artifact_hash. A lookup that resolved to no content
+	// (a probe of an unknown stream key or name) has nothing to attribute, so
+	// it is counted here and never sent.
+	if strings.TrimSpace(e.StreamID) == "" && strings.TrimSpace(e.ArtifactHash) == "" {
+		if metrics != nil && metrics.RoutingEventsShed != nil {
+			metrics.RoutingEventsShed.WithLabelValues("no_content_identity").Inc()
+		}
 		return false
 	}
 	select {

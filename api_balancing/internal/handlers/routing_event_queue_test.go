@@ -16,16 +16,17 @@ func TestRoutingEventQueueDropsWhenFull(t *testing.T) {
 
 	before := RoutingEventsDropped()
 
-	if !enqueueRoutingEvent(nil, &RoutingEvent{Status: "success"}) {
+	event := func() *RoutingEvent { return &RoutingEvent{Status: "success", StreamID: routingTestStreamID} }
+	if !enqueueRoutingEvent(nil, event()) {
 		t.Fatal("first event should be accepted")
 	}
-	if !enqueueRoutingEvent(nil, &RoutingEvent{Status: "success"}) {
+	if !enqueueRoutingEvent(nil, event()) {
 		t.Fatal("second event should be accepted")
 	}
-	if enqueueRoutingEvent(nil, &RoutingEvent{Status: "success"}) {
+	if enqueueRoutingEvent(nil, event()) {
 		t.Fatal("third event should be dropped, not queued")
 	}
-	if enqueueRoutingEvent(nil, &RoutingEvent{Status: "success"}) {
+	if enqueueRoutingEvent(nil, event()) {
 		t.Fatal("further events should keep being dropped")
 	}
 
@@ -44,7 +45,31 @@ func TestRoutingEventQueueNoOpBeforeStart(t *testing.T) {
 	routingEventQueue = nil
 	t.Cleanup(func() { routingEventQueue = prevQueue })
 
-	if enqueueRoutingEvent(nil, &RoutingEvent{Status: "success"}) {
+	if enqueueRoutingEvent(nil, &RoutingEvent{Status: "success", StreamID: routingTestStreamID}) {
 		t.Fatal("enqueue must report not-accepted when the queue is not started")
+	}
+}
+
+const routingTestStreamID = "5d0f6c1e-2b8a-4c39-9a51-7e3f0b6d2c41"
+
+// Periscope keeps a routing decision only when it names its content, so a
+// lookup that resolved to no stream or artifact (a probe of an unknown stream
+// key) is never sent; it would otherwise be counted as a dropped event.
+func TestRoutingEventWithoutContentIdentityIsNotSent(t *testing.T) {
+	prevQueue := routingEventQueue
+	routingEventQueue = make(chan queuedRoutingEvent, 4)
+	t.Cleanup(func() { routingEventQueue = prevQueue })
+
+	if enqueueRoutingEvent(nil, &RoutingEvent{Status: "failed", StreamName: "live+unknown-key", StreamTenantID: "tenant"}) {
+		t.Fatal("a routing event with no stream_id or artifact_hash was queued for Decklog")
+	}
+	if len(routingEventQueue) != 0 {
+		t.Fatalf("queue depth: got %d want 0", len(routingEventQueue))
+	}
+	if !enqueueRoutingEvent(nil, &RoutingEvent{Status: "success", StreamID: routingTestStreamID}) {
+		t.Fatal("a routing event naming its stream was not queued")
+	}
+	if !enqueueRoutingEvent(nil, &RoutingEvent{Status: "success", ArtifactHash: "0123456789abcdef0123456789abcdef"}) {
+		t.Fatal("a routing event naming its artifact was not queued")
 	}
 }
