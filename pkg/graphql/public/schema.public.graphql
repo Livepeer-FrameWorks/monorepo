@@ -5676,7 +5676,7 @@ type PlaybackJwtPolicy {
 
 input PlaybackJwtPolicyInput {
   """
-  Allowed signing key IDs. Empty = any active tenant key.
+  Allowed signing key IDs. Empty = any active tenant key. Blank IDs are rejected.
   """
   allowedKids: [String!]
   """

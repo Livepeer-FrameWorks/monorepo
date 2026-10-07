@@ -387,7 +387,7 @@ Structured result of a dry-run policy evaluation. Mirrors Foghorn&#39;s Playback
 
 **input_object**
 
-- **allowedKids**: `[String!]` — Allowed signing key IDs. Empty = any active tenant key.
+- **allowedKids**: `[String!]` — Allowed signing key IDs. Empty = any active tenant key. Blank IDs are rejected.
 - **requiredAudience**: `[String!]` — If set, the viewer JWT&#39;s `aud` claim must contain at least one of these.
 - **requiredClaimsJson**: `[PlaybackJwtClaimRequirementInput!]` ([PlaybackJwtClaimRequirementInput](/builders/api-schema/access/#playbackjwtclaimrequirementinput)) — Required claim constraints. Each entry&#39;s value is JSON-encoded for type flexibility.
 

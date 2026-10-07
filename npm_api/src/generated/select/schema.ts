@@ -11251,7 +11251,7 @@ export interface PlaybackJwtPolicyGenqlSelection{
 }
 
 export interface PlaybackJwtPolicyInput {
-/** Allowed signing key IDs. Empty = any active tenant key. */
+/** Allowed signing key IDs. Empty = any active tenant key. Blank IDs are rejected. */
 allowedKids?: (Scalars['String'][] | null),
 /** If set, the viewer JWT's `aud` claim must contain at least one of these. */
 requiredAudience?: (Scalars['String'][] | null),

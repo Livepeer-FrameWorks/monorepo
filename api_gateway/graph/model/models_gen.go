@@ -2253,7 +2253,7 @@ type PlaybackJwtClaimRequirementInput struct {
 }
 
 type PlaybackJwtPolicyInput struct {
-	// Allowed signing key IDs. Empty = any active tenant key.
+	// Allowed signing key IDs. Empty = any active tenant key. Blank IDs are rejected.
 	AllowedKids []string `json:"allowedKids,omitempty"`
 	// If set, the viewer JWT's `aud` claim must contain at least one of these.
 	RequiredAudience []string `json:"requiredAudience,omitempty"`

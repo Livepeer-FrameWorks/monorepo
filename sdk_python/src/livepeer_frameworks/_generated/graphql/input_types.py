@@ -623,9 +623,9 @@ class PlaybackJwtPolicyInput(BaseModel):
     allowed_kids: Optional[list[str]] = Field(
         alias="allowedKids",
         default=None,
-        description="Allowed signing key IDs. Empty = any active tenant key.",
+        description="Allowed signing key IDs. Empty = any active tenant key. Blank IDs are rejected.",
     )
-    "Allowed signing key IDs. Empty = any active tenant key."
+    "Allowed signing key IDs. Empty = any active tenant key. Blank IDs are rejected."
     required_audience: Optional[list[str]] = Field(
         alias="requiredAudience",
         default=None,
