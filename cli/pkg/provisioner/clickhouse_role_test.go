@@ -230,3 +230,29 @@ func TestClickHouseRoleVarsRespectsExplicitListenHost(t *testing.T) {
 		t.Fatalf("clickhouse_listen_hosts should not be set when listen_host is explicit")
 	}
 }
+
+// idealista.clickhouse appends "(event_date)" to the part_log and
+// query_thread_log partition_by values while its defaults already read
+// toYYYYMM(event_date); ClickHouse then rejects toYYYYMM(event_date)(event_date)
+// on every system.part_log flush and writes the stack trace to the error log.
+func TestClickHouseRoleOverridesBrokenSystemLogPartitionKeys(t *testing.T) {
+	task := roleTaskByName(t, "ansible/collections/ansible_collections/frameworks/infra/roles/clickhouse/tasks/install.yml",
+		"Write managed ClickHouse system log partition keys")
+	spec, ok := moduleSpec(task, "copy")
+	if !ok {
+		t.Fatalf("system log partition override is not a copy task: %v", task)
+	}
+	if spec["dest"] != "/etc/clickhouse-server/config.d/system-log-partitions.xml" {
+		t.Fatalf("override must be a config.d drop-in: %v", spec["dest"])
+	}
+	content, _ := spec["content"].(string)
+	for _, table := range []string{"part_log", "query_thread_log"} {
+		want := "<" + table + ">\n    <partition_by>toYYYYMM(event_date)</partition_by>\n  </" + table + ">"
+		if !strings.Contains(content, want) {
+			t.Errorf("drop-in does not set %s partition_by to toYYYYMM(event_date):\n%s", table, content)
+		}
+	}
+	if task["notify"] != "clickhouse restart" {
+		t.Errorf("system log tables are created at startup; the drop-in must notify clickhouse restart: %v", task["notify"])
+	}
+}

@@ -54,6 +54,27 @@
     mode: "0644"
   notify: clickhouse restart
 
+# idealista.clickhouse renders these two partition keys as
+# "{{ partition_by }}(event_date)" while its defaults already read
+# toYYYYMM(event_date). ClickHouse rejects the doubled expression on every
+# system.part_log flush, so the drop-in replaces both keys.
+- name: Write managed ClickHouse system log partition keys
+  ansible.builtin.copy:
+    dest: /etc/clickhouse-server/config.d/system-log-partitions.xml
+    owner: clickhouse
+    group: clickhouse
+    mode: "0644"
+    content: |
+      <clickhouse>
+        <part_log>
+          <partition_by>toYYYYMM(event_date)</partition_by>
+        </part_log>
+        <query_thread_log>
+          <partition_by>toYYYYMM(event_date)</partition_by>
+        </query_thread_log>
+      </clickhouse>
+  notify: clickhouse restart
+
 # Replicated cluster + coordination. Only when the manifest declares a clustered
 # ClickHouse (clickhouse_keeper_nodes non-empty). A bare singleton skips all of
 # this and the drop-ins are removed, so non-clustered deployments are unaffected.
