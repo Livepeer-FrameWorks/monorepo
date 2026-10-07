@@ -660,7 +660,6 @@ func TestStartRecordingDoesNotAdoptForeignPushOnAmbiguousStart(t *testing.T) {
 // goes to recording with the real PushID.
 func TestStartRecordingConfirmsAcceptedPushByExactIdentity(t *testing.T) {
 	clearConn()
-	useFastInitialPushRetry(t)
 	const (
 		dvrHash      = "hash-confirm"
 		streamID     = "stream-confirm"
@@ -679,6 +678,11 @@ func TestStartRecordingConfirmsAcceptedPushByExactIdentity(t *testing.T) {
 		mistClient:  fake,
 		diskCheck:   func(string, uint64) error { return nil },
 	}
+	// The confirmation windows run on a test clock that only the poll waits
+	// advance, so how long the scheduler takes between polls cannot end them.
+	clock := time.Unix(1_000_000, 0)
+	dm.nowFn = func() time.Time { return clock }
+	dm.sleepFn = func(d time.Duration) { clock = clock.Add(d) }
 	if err := dm.StartRecording(dvrHash, streamID, internalName, runtimeName, "", &ipcpb.DVRConfig{}, nil); err != nil {
 		t.Fatalf("StartRecording: %v", err)
 	}

@@ -180,8 +180,13 @@ type DVRManager struct {
 	absenceEvidence map[string]*dvrAbsenceState
 
 	// nowFn is the clock (nil = time.Now); tests inject a controllable clock so the
-	// time-based absence grace/interval are deterministic.
+	// time-based absence grace/interval and the push-confirmation windows are
+	// deterministic.
 	nowFn func() time.Time
+
+	// sleepFn waits between push-confirmation polls (nil = time.Sleep); a test
+	// clock advances nowFn by the waited duration instead.
+	sleepFn func(time.Duration)
 
 	// uploadsInFlight holds the local segment files with a PUT in progress. The
 	// per-segment trigger, the reconciliation sweep, startup recovery and Foghorn's
@@ -227,6 +232,14 @@ func (dm *DVRManager) now() time.Time {
 		return dm.nowFn()
 	}
 	return time.Now()
+}
+
+func (dm *DVRManager) sleep(d time.Duration) {
+	if dm.sleepFn != nil {
+		dm.sleepFn(d)
+		return
+	}
+	time.Sleep(d)
 }
 
 type dvrStopTombstone struct {
@@ -2575,17 +2588,17 @@ func (dm *DVRManager) createOrRecreatePush(snap pushIdentity) (pushID int, issue
 	}
 
 	// PushStart succeeded — a push exists even if the listing hasn't caught up.
-	deadline := time.Now().Add(pushListVisibilityFor)
+	deadline := dm.now().Add(pushListVisibilityFor)
 	for {
 		if pushes, e := dm.mistClient.PushList(); e == nil {
 			if push, ok := findExactDVRPush(pushes, snap.streamName, snap.targetURI, snap.dvrHash); ok {
 				return push.ID, true, nil
 			}
 		}
-		if time.Now().Add(pushListVisibilityPollFor).After(deadline) {
+		if dm.now().Add(pushListVisibilityPollFor).After(deadline) {
 			break
 		}
-		time.Sleep(pushListVisibilityPollFor)
+		dm.sleep(pushListVisibilityPollFor)
 	}
 
 	return 0, true, fmt.Errorf("push started but not confirmed in push list")
@@ -2653,7 +2666,7 @@ func (dm *DVRManager) ensureInitialPush(snap pushIdentity, logger logging.Logger
 	pushStartAccepted := false
 	var acceptedAt time.Time
 	var lastErr error
-	deadline := time.Now().Add(initialPushRetryFor)
+	deadline := dm.now().Add(initialPushRetryFor)
 	for attempt := 0; ; attempt++ {
 		if pushes, listErr := dm.mistClient.PushList(); listErr == nil {
 			if push, ok := findExactDVRPush(pushes, snap.streamName, snap.targetURI, snap.dvrHash); ok {
@@ -2684,7 +2697,7 @@ func (dm *DVRManager) ensureInitialPush(snap pushIdentity, logger logging.Logger
 				lastErr = startErr
 			}
 		}
-		if time.Now().Add(initialPushRetryEvery).After(deadline) {
+		if dm.now().Add(initialPushRetryEvery).After(deadline) {
 			if pushStartAccepted {
 				return 0, dvrPushAcceptedUnconfirmed, lastErr
 			}
@@ -2696,7 +2709,7 @@ func (dm *DVRManager) ensureInitialPush(snap pushIdentity, logger logging.Logger
 		} else {
 			logger.WithFields(fields).Warn("DVR push start rejected; retrying PushStart")
 		}
-		time.Sleep(initialPushRetryEvery)
+		dm.sleep(initialPushRetryEvery)
 	}
 }
 
