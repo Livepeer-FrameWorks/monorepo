@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -75,27 +76,22 @@ func resolvedGlobalDNSServers(dnsEx string) ([]string, error) {
 	}
 	var global []string
 	for range count {
-		ifindex, err := next()
-		if err != nil {
-			return nil, err
-		}
-		if _, err := next(); err != nil {
-			return nil, err
-		}
-		size, err := next()
-		if err != nil {
+		ifindex, ifErr := next()
+		_, familyErr := next()
+		size, sizeErr := next()
+		if err := errors.Join(ifErr, familyErr, sizeErr); err != nil {
 			return nil, err
 		}
 		addr := make(net.IP, 0, size)
 		for range size {
-			b, err := next()
-			if err != nil {
-				return nil, err
+			b, byteErr := next()
+			if byteErr != nil {
+				return nil, byteErr
 			}
 			addr = append(addr, byte(b))
 		}
-		if _, err := next(); err != nil {
-			return nil, err
+		if _, portErr := next(); portErr != nil {
+			return nil, portErr
 		}
 		if pos >= len(fields) {
 			return nil, fmt.Errorf("truncated DNSEx %q", dnsEx)
