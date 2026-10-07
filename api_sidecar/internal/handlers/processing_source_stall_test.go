@@ -94,8 +94,9 @@ func waitForUnbootedProcessingStream(t *testing.T, hash string) error {
 }
 
 // An upload whose storage stalls while Mist opens it does not boot. That
-// attempt is retryable within the job's retry budget, and its error names the
-// stalled source read, instead of failing the upload for good.
+// attempt is retryable with a source stall as its cause, which Foghorn retries
+// outside the job's retry budget, and its error names the stalled source read,
+// instead of failing the upload for good.
 func TestProcessingBootFailureOnStalledSourceIsRetryable(t *testing.T) {
 	const hash = "stalledupload01"
 	relay.TakeProcessingInputFailure(hash)
@@ -107,6 +108,9 @@ func TestProcessingBootFailureOnStalledSourceIsRetryable(t *testing.T) {
 	err := waitForUnbootedProcessingStream(t, hash)
 	if got := processingReadinessFailureStatus(err); got != processingResultRetryable {
 		t.Fatalf("status = %q (%v), want %q", got, err, processingResultRetryable)
+	}
+	if got := processingReadinessFailureOutputs(err)[mist.ProcessingResultRetryCause]; got != mist.ProcessingRetryCauseSourceStall {
+		t.Fatalf("retry cause = %q, want %q", got, mist.ProcessingRetryCauseSourceStall)
 	}
 	if !strings.Contains(err.Error(), "did not boot") || !strings.Contains(err.Error(), "upstream did not answer") {
 		t.Fatalf("error %q must name the boot failure and the stalled source read", err)
@@ -126,5 +130,8 @@ func TestProcessingBootFailureOnMissingSourceIsTerminal(t *testing.T) {
 	err := waitForUnbootedProcessingStream(t, hash)
 	if got := processingReadinessFailureStatus(err); got != "failed" {
 		t.Fatalf("status = %q (%v), want failed", got, err)
+	}
+	if outputs := processingReadinessFailureOutputs(err); outputs != nil {
+		t.Fatalf("a missing source names no retry cause, got %v", outputs)
 	}
 }

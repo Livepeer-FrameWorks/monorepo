@@ -41,6 +41,7 @@ WITH claimed AS (
         FROM foghorn.processing_jobs AS pj
         LEFT JOIN foghorn.artifacts AS a ON pj.artifact_hash = a.artifact_hash
         WHERE pj.status = 'queued'
+          AND (pj.next_attempt_at IS NULL OR pj.next_attempt_at <= NOW())
           AND (a.status IS NULL OR a.status NOT IN ('ready', 'failed', 'deleted', 'expired', 'aborted'))
         ORDER BY CASE WHEN a.artifact_type = 'clip' THEN 0 ELSE 1 END, pj.updated_at, pj.created_at
         LIMIT 20
@@ -535,6 +536,58 @@ func (q *Queries) RequeueStaleProcessingJobs(ctx context.Context, arg RequeueSta
 		return 0, err
 	}
 	return result.RowsAffected()
+}
+
+const requeueStalledProcessingJob = `-- name: RequeueStalledProcessingJob :one
+WITH requeued AS (
+    UPDATE foghorn.processing_jobs AS job
+    SET status = 'queued', processing_node_id = NULL, updated_at = NOW(),
+        error_message = $1,
+        progress_last_ms = 0, progress_advanced_at = NULL,
+        source_stalled_since = COALESCE(job.source_stalled_since, job.started_at, NOW()),
+        next_attempt_at = LEAST(
+            NOW() + (NOW() - COALESCE(job.source_stalled_since, job.started_at, NOW())),
+            COALESCE(job.source_stalled_since, job.started_at, NOW()) + CAST($2 AS text)::interval)
+    WHERE job.job_id = $3
+      AND job.processing_node_id = $4
+      AND job.status IN ('dispatched', 'processing')
+      AND COALESCE(job.source_stalled_since, job.started_at, NOW()) > NOW() - CAST($2 AS text)::interval
+    RETURNING artifact_hash, tenant_id
+), artifact AS (
+    UPDATE foghorn.artifacts AS a
+    SET status = 'queued', updated_at = NOW()
+    FROM requeued AS r
+    WHERE a.artifact_hash = r.artifact_hash
+      AND a.tenant_id = r.tenant_id
+      AND a.artifact_type IN ('clip', 'vod')
+      AND a.status NOT IN ('ready', 'failed', 'deleted', 'expired', 'aborted')
+    RETURNING a.artifact_hash
+)
+SELECT COUNT(*)::int AS requeued FROM requeued
+`
+
+type RequeueStalledProcessingJobParams struct {
+	ErrorMessage sql.NullString `db:"error_message" json:"error_message"`
+	StallWindow  string         `db:"stall_window" json:"stall_window"`
+	JobID        string         `db:"job_id" json:"job_id"`
+	NodeID       sql.NullString `db:"node_id" json:"node_id"`
+}
+
+// Requeues a job whose node reported its source read stalled in storage or
+// upstream. The attempt does not draw from the retry budget: it is bounded by
+// how long the run of stalls has lasted, measured from the first stalled
+// attempt's start, and backs off by that same elapsed time, never past the end
+// of the window. Bound to the reporting node like every result.
+func (q *Queries) RequeueStalledProcessingJob(ctx context.Context, arg RequeueStalledProcessingJobParams) (int32, error) {
+	row := q.db.QueryRowContext(ctx, requeueStalledProcessingJob,
+		arg.ErrorMessage,
+		arg.StallWindow,
+		arg.JobID,
+		arg.NodeID,
+	)
+	var requeued int32
+	err := row.Scan(&requeued)
+	return requeued, err
 }
 
 const requeueUnreportedNodeProcessingJobs = `-- name: RequeueUnreportedNodeProcessingJobs :execrows

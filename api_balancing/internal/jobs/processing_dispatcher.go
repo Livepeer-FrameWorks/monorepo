@@ -761,7 +761,7 @@ func (d *ProcessingDispatcher) recoverStale() {
 	// artifact + telemetry separately, which could leave a failed job with a live artifact.
 	//
 	// The progress watchdog adds active jobs whose media position has not advanced for
-	// processingProgressStallTimeout. Helmsman's lease heartbeat keeps updated_at fresh for
+	// control.ProcessingProgressStallTimeout. Helmsman's lease heartbeat keeps updated_at fresh for
 	// as long as its job goroutine lives, so without it a wedged job never goes stale.
 	jobIDs, err := queries.ListExhaustedProcessingJobIDs(ctx, foghorndb.ListExhaustedProcessingJobIDsParams{UpdatedAt: sql.NullTime{Time: ttlCutoff, Valid: true}, RetryCount: sql.NullInt32{Int32: int32(d.maxRetries), Valid: true}, CreatedAt: sql.NullTime{Time: queuedCutoff, Valid: true}, ProgressAdvancedAt: sql.NullTime{Time: processingProgressCutoff(time.Now()), Valid: true}})
 	if err != nil {
@@ -773,14 +773,8 @@ func (d *ProcessingDispatcher) recoverStale() {
 	}
 }
 
-// processingProgressStallTimeout is how long an active processing job may report no
-// increase in progress percentage or media position before stale recovery fails it.
-// Helmsman fails its own job after 3 minutes without media progress; this backstop
-// covers a Helmsman whose job goroutine is wedged but still renewing the lease.
-const processingProgressStallTimeout = 20 * time.Minute
-
 func processingProgressCutoff(now time.Time) time.Time {
-	return now.Add(-processingProgressStallTimeout)
+	return now.Add(-control.ProcessingProgressStallTimeout)
 }
 
 // failExhaustedJobAtomic drives one exhausted/stuck job to its terminal failed state as a single

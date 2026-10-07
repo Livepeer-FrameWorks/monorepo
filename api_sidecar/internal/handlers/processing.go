@@ -1148,7 +1148,7 @@ func (h *ProcessingJobHandler) Handle(req *ipcpb.ProcessingJobRequest, send func
 				outputs, sourceDurationMs, waitErr = h.waitForProcessingStreamReady(context.Background(), log, mistClient, req, streamName, effectiveProcessesJSON, processExitCh, processAVCh, livepeerSegmentCh, ignoredProcessExitBootCounts)
 				if waitErr != nil {
 					h.cleanupFailedProcessing(log, mistClient, streamName, outputPath)
-					h.sendResult(send, req.GetJobId(), processingReadinessFailureStatus(waitErr), fmt.Sprintf("livepeer fallback readiness: %v", waitErr), nil, "", 0)
+					h.sendResult(send, req.GetJobId(), processingReadinessFailureStatus(waitErr), fmt.Sprintf("livepeer fallback readiness: %v", waitErr), processingReadinessFailureOutputs(waitErr), "", 0)
 					return
 				}
 				fallbackAttempted = true
@@ -1158,7 +1158,7 @@ func (h *ProcessingJobHandler) Handle(req *ipcpb.ProcessingJobRequest, send func
 			}
 		} else {
 			h.cleanupFailedProcessing(log, mistClient, streamName, outputPath)
-			h.sendResult(send, req.GetJobId(), processingReadinessFailureStatus(waitErr), waitErr.Error(), nil, "", 0)
+			h.sendResult(send, req.GetJobId(), processingReadinessFailureStatus(waitErr), waitErr.Error(), processingReadinessFailureOutputs(waitErr), "", 0)
 			return
 		}
 	}
@@ -1230,7 +1230,7 @@ func (h *ProcessingJobHandler) Handle(req *ipcpb.ProcessingJobRequest, send func
 		outputs, sourceDurationMs, waitErr = h.waitForProcessingStreamReady(context.Background(), log, mistClient, req, streamName, effectiveProcessesJSON, processExitCh, processAVCh, livepeerSegmentCh, ignoredProcessExitBootCounts)
 		if waitErr != nil {
 			h.cleanupFailedProcessing(log, mistClient, streamName, outputPath)
-			h.sendResult(send, req.GetJobId(), processingReadinessFailureStatus(waitErr), fmt.Sprintf("livepeer fallback readiness: %v", waitErr), nil, "", 0)
+			h.sendResult(send, req.GetJobId(), processingReadinessFailureStatus(waitErr), fmt.Sprintf("livepeer fallback readiness: %v", waitErr), processingReadinessFailureOutputs(waitErr), "", 0)
 			return false
 		}
 		currentPushStartedAt = time.Now().Unix()

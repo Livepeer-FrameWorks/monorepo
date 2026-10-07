@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/mist"
 )
 
 // processingSourceProbeTimeout bounds the source check inside the blocking
@@ -152,4 +153,14 @@ func processingReadinessFailureStatus(err error) string {
 		return processingResultRetryable
 	}
 	return "failed"
+}
+
+// processingReadinessFailureOutputs names a source stall as the retry cause, so
+// Foghorn retries it within its stall window instead of its retry budget.
+func processingReadinessFailureOutputs(err error) map[string]string {
+	var stall *processingSourceStallError
+	if errors.As(err, &stall) {
+		return map[string]string{mist.ProcessingResultRetryCause: mist.ProcessingRetryCauseSourceStall}
+	}
+	return nil
 }

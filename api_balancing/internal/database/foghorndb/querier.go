@@ -673,6 +673,12 @@ type Querier interface {
 	// Requeues the jobs assigned to a node before its registration that the node
 	// did not report as running: a restarted sidecar lost them.
 	RequeueUnreportedNodeProcessingJobs(ctx context.Context, arg RequeueUnreportedNodeProcessingJobsParams) (int64, error)
+	// Requeues a job whose node reported its source read stalled in storage or
+	// upstream. The attempt does not draw from the retry budget: it is bounded by
+	// how long the run of stalls has lasted, measured from the first stalled
+	// attempt's start, and backs off by that same elapsed time, never past the end
+	// of the window. Bound to the reporting node like every result.
+	RequeueStalledProcessingJob(ctx context.Context, arg RequeueStalledProcessingJobParams) (int32, error)
 	ResetStaleFreezeAttempts(ctx context.Context, staleSeconds int64) ([]ResetStaleFreezeAttemptsRow, error)
 	ResolveActiveDVRNodes(ctx context.Context, dollar_1 []string) ([]ResolveActiveDVRNodesRow, error)
 	ResolveArtifactTenants(ctx context.Context, dollar_1 []string) ([]ResolveArtifactTenantsRow, error)
@@ -742,7 +748,8 @@ type Querier interface {
 	UpdateCompletedVODMetadata(ctx context.Context, arg UpdateCompletedVODMetadataParams) error
 	UpdateProcessingJobCache(ctx context.Context, arg UpdateProcessingJobCacheParams) (int64, error)
 	// updated_at is the lease; progress_advanced_at moves only when the reported percentage or
-	// media position increases, which is what the stale-recovery watchdog reads.
+	// media position increases, which is what the stale-recovery watchdog reads. The same
+	// advance ends a run of source stalls.
 	UpdateProcessingJobProgress(ctx context.Context, arg UpdateProcessingJobProgressParams) (UpdateProcessingJobProgressRow, error)
 	UpgradeAdmissionPushTargetsEncryption(ctx context.Context, arg UpgradeAdmissionPushTargetsEncryptionParams) (int64, error)
 	// The format of a processing input the relay can serve: an uploaded object in

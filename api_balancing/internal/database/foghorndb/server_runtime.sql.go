@@ -847,6 +847,7 @@ func (q *Queries) UpdateProcessingJobCache(ctx context.Context, arg UpdateProces
 const updateProcessingJobProgress = `-- name: UpdateProcessingJobProgress :one
 UPDATE foghorn.processing_jobs SET progress = GREATEST(progress, $1::int), progress_last_ms = GREATEST(progress_last_ms, $2::bigint),
   progress_advanced_at = CASE WHEN $1::int > COALESCE(progress, 0) OR $2::bigint > progress_last_ms THEN NOW() ELSE progress_advanced_at END,
+  source_stalled_since = CASE WHEN $1::int > COALESCE(progress, 0) OR $2::bigint > progress_last_ms THEN NULL ELSE source_stalled_since END,
   updated_at = NOW()
 WHERE job_id = $3 AND status IN ('dispatched', 'processing') AND processing_node_id = $4 RETURNING artifact_hash, tenant_id::text, progress
 `
@@ -865,7 +866,8 @@ type UpdateProcessingJobProgressRow struct {
 }
 
 // updated_at is the lease; progress_advanced_at moves only when the reported percentage or
-// media position increases, which is what the stale-recovery watchdog reads.
+// media position increases, which is what the stale-recovery watchdog reads. The same
+// advance ends a run of source stalls.
 func (q *Queries) UpdateProcessingJobProgress(ctx context.Context, arg UpdateProcessingJobProgressParams) (UpdateProcessingJobProgressRow, error) {
 	row := q.db.QueryRowContext(ctx, updateProcessingJobProgress,
 		arg.Progress,

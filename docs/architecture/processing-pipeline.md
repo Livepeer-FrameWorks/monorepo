@@ -381,6 +381,14 @@ Foghorn's `processProcessingJobResult` (`api_balancing/internal/control/server.g
   back, leaving the job dispatched/processing so stale recovery retries; a completed job is never
   left with an unready or unregistered artifact. In-memory placement + the reconciler wake are the
   only post-commit (best-effort) side effects.
+- A `retryable` result requeues the job while its retry budget (3, shared with stale-lease and
+  lost-job recovery) lasts. A `retryable` result whose `retry_cause` output is `source_stall` (the
+  stream did not boot while the relay could not read the source from storage or upstream) leaves
+  the budget alone: the run of stalls is bounded by the 20-minute no-progress window the progress
+  watchdog applies to a running attempt, measured from the first stalled attempt's start
+  (`source_stalled_since`), and each requeue waits as long as the run has lasted
+  (`next_attempt_at`), never past the window. Media progress ends the run; a run past the window
+  fails the job as timed out.
 - A malformed completion (no `output_path`) and a `failed` result are BOTH driven to the terminal
   failed state atomically (`failProcessingJobAtomic`): the job and — for clip/VOD — the artifact
   flip to failed and the failure lifecycle enqueues in one committed transaction, so a failed job

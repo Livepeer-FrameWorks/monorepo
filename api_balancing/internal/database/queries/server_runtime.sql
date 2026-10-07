@@ -59,9 +59,11 @@ UPDATE foghorn.processing_jobs SET status = 'failed', error_message = $2, comple
 UPDATE foghorn.artifacts SET status = 'failed', error_message = $2, updated_at = NOW() WHERE artifact_hash = $1 AND tenant_id::text = $3 AND status NOT IN ('ready', 'failed', 'deleted', 'expired', 'aborted');
 -- name: UpdateProcessingJobProgress :one
 -- updated_at is the lease; progress_advanced_at moves only when the reported percentage or
--- media position increases, which is what the stale-recovery watchdog reads.
+-- media position increases, which is what the stale-recovery watchdog reads. The same
+-- advance ends a run of source stalls.
 UPDATE foghorn.processing_jobs SET progress = GREATEST(progress, sqlc.arg(progress)::int), progress_last_ms = GREATEST(progress_last_ms, sqlc.arg(last_ms)::bigint),
   progress_advanced_at = CASE WHEN sqlc.arg(progress)::int > COALESCE(progress, 0) OR sqlc.arg(last_ms)::bigint > progress_last_ms THEN NOW() ELSE progress_advanced_at END,
+  source_stalled_since = CASE WHEN sqlc.arg(progress)::int > COALESCE(progress, 0) OR sqlc.arg(last_ms)::bigint > progress_last_ms THEN NULL ELSE source_stalled_since END,
   updated_at = NOW()
 WHERE job_id = sqlc.arg(job_id) AND status IN ('dispatched', 'processing') AND processing_node_id = sqlc.arg(processing_node_id) RETURNING artifact_hash, tenant_id::text, progress;
 -- name: RecordImportSourceStaged :execrows

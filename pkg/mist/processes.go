@@ -30,6 +30,16 @@ const (
 	ProcessingClassCPUHeavy       = "cpu_heavy"
 )
 
+// ProcessingResultRetryCause is the ProcessingJobResult output that names why a
+// "retryable" attempt failed. ProcessingRetryCauseSourceStall is an attempt whose
+// stream did not boot while its source read stalled in storage or upstream: a
+// condition of the infrastructure, not of the job, so it does not draw from the
+// job's retry budget.
+const (
+	ProcessingResultRetryCause      = "retry_cause"
+	ProcessingRetryCauseSourceStall = "source_stall"
+)
+
 // LivepeerVODSegmentDeadlineMs is the default per-segment gateway response
 // budget for VOD/processing transcodes. It is generous versus realtime so a slow
 // first segment or a momentarily-loaded orchestrator does not trip the client,

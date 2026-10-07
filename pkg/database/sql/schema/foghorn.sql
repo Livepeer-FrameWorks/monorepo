@@ -1569,7 +1569,12 @@ ALTER TABLE foghorn.processing_jobs
   -- or when the attempt was dispatched. Lease heartbeats refresh updated_at but not these, so
   -- stale recovery can fail a job that heartbeats without producing output.
   ADD COLUMN IF NOT EXISTS progress_last_ms BIGINT NOT NULL DEFAULT 0,
-  ADD COLUMN IF NOT EXISTS progress_advanced_at TIMESTAMP;
+  ADD COLUMN IF NOT EXISTS progress_advanced_at TIMESTAMP,
+  -- Source-stall retries. source_stalled_since starts an unbroken run of attempts
+  -- whose source read stalled in storage or upstream, and clears when an attempt's
+  -- media advances; next_attempt_at holds a requeued job back for its backoff.
+  ADD COLUMN IF NOT EXISTS source_stalled_since TIMESTAMP,
+  ADD COLUMN IF NOT EXISTS next_attempt_at TIMESTAMP;
 
 CREATE INDEX IF NOT EXISTS idx_foghorn_processing_jobs_tenant ON foghorn.processing_jobs(tenant_id);
 CREATE INDEX IF NOT EXISTS idx_foghorn_processing_jobs_status ON foghorn.processing_jobs(status);

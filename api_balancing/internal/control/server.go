@@ -8430,6 +8430,10 @@ func processProcessingJobResult(result *ipcpb.ProcessingJobResult, nodeID string
 		failProcessingJobAtomic(ctx, result.GetJobId(), result.GetError(), nodeID, logger, fields)
 
 	case "retryable":
+		if result.GetOutputs()[mist.ProcessingResultRetryCause] == mist.ProcessingRetryCauseSourceStall {
+			requeueStalledProcessingJob(ctx, result.GetJobId(), result.GetError(), nodeID, logger, fields)
+			return
+		}
 		retryProcessingJob(ctx, result.GetJobId(), result.GetError(), nodeID, logger, fields)
 
 	default:
@@ -8465,6 +8469,39 @@ func retryProcessingJob(ctx context.Context, jobID, errMsg, reportingNode string
 	}
 	NotifyCatalogDirty()
 	logger.WithFields(fields).WithField("error", errMsg).Warn("Processing job requeued after a retryable failure")
+}
+
+// ProcessingProgressStallTimeout is how long a processing job may go without media
+// progress before it fails. Stale recovery applies it to an active attempt whose
+// position stops advancing; Helmsman fails its own job after 3 minutes without media
+// progress, and this backstop covers a Helmsman whose job goroutine is wedged but
+// still renewing the lease. A run of attempts whose source read stalled is a run
+// without media progress, so it is bounded by the same window.
+const ProcessingProgressStallTimeout = 20 * time.Minute
+
+// requeueStalledProcessingJob requeues a job whose attempt did not boot because its
+// source read stalled in storage or upstream. Such an attempt says nothing about the
+// job, so it leaves the retry budget alone; the run of stalls is bounded instead by
+// ProcessingProgressStallTimeout from the first stalled attempt's start, and each
+// requeue waits as long as the run has lasted so far, so a long outage is probed
+// ever less often. Past the window the job fails as timed out.
+func requeueStalledProcessingJob(ctx context.Context, jobID, errMsg, reportingNode string, logger logging.Logger, fields logging.Fields) {
+	n, err := foghorndb.New(db).RequeueStalledProcessingJob(ctx, foghorndb.RequeueStalledProcessingJobParams{
+		ErrorMessage: sql.NullString{String: errMsg, Valid: errMsg != ""},
+		StallWindow:  ProcessingProgressStallTimeout.String(),
+		JobID:        jobID,
+		NodeID:       sql.NullString{String: reportingNode, Valid: true},
+	})
+	if err != nil {
+		logger.WithError(err).WithFields(fields).Error("Stalled processing attempt could not be requeued")
+		return
+	}
+	if n == 0 {
+		failProcessingJobAtomic(ctx, jobID, "source stalled for longer than the processing no-progress window: "+errMsg, reportingNode, logger, fields)
+		return
+	}
+	NotifyCatalogDirty()
+	logger.WithFields(fields).WithField("error", errMsg).Warn("Processing job requeued after its source read stalled")
 }
 
 // failProcessingJobAtomic drives a processing job to its terminal failed state as ONE
