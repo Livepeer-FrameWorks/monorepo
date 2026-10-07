@@ -45,7 +45,7 @@ func (r *Resolver) DoCreateBootstrapToken(ctx context.Context, input model.Creat
 
 	// Require service token authentication
 	if !middleware.HasServiceToken(ctx) {
-		return nil, fmt.Errorf("service token authentication required")
+		return nil, middleware.Forbidden("service token authentication required")
 	}
 
 	// Convert GraphQL input to Quartermaster request
@@ -122,7 +122,7 @@ func (r *Resolver) DoGetBootstrapTokens(ctx context.Context) ([]*quartermasterpb
 
 	// Require service token authentication
 	if !middleware.HasServiceToken(ctx) {
-		return nil, fmt.Errorf("service token authentication required")
+		return nil, middleware.Forbidden("service token authentication required")
 	}
 
 	// Call Quartermaster to get tokens (get all types with pagination)
@@ -164,7 +164,7 @@ func (r *Resolver) DoGetBootstrapTokensConnection(ctx context.Context, kind *str
 
 	// Require service token authentication
 	if !middleware.HasServiceToken(ctx) {
-		return nil, fmt.Errorf("service token authentication required")
+		return nil, middleware.Forbidden("service token authentication required")
 	}
 
 	// Build pagination request

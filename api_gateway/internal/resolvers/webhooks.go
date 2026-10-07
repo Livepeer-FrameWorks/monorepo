@@ -461,7 +461,7 @@ func webhookAuthResult[T any](authErr *model.AuthError, err error) (T, error) {
 	if result, ok := any(authErr).(T); ok {
 		return result, nil
 	}
-	return zero, errors.New(authErr.Message)
+	return zero, middleware.Forbidden(authErr.Message)
 }
 
 // webhookMutationError maps a Bosun error to the member of union T that

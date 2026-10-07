@@ -22,7 +22,7 @@ func requireEdgeLifecycleMutation(ctx context.Context, tenantID string) error {
 func (r *Resolver) ownedClusterIDs(ctx context.Context) (map[string]struct{}, error) {
 	tenantID := tenantIDFromContext(ctx)
 	if tenantID == "" {
-		return nil, fmt.Errorf("tenant context required")
+		return nil, middleware.ErrTenantContextRequired
 	}
 
 	resp, err := r.Clients.Quartermaster.ListClustersByOwner(ctx, tenantID, &commonpb.CursorPaginationRequest{First: infraMaxLimit})
@@ -45,7 +45,7 @@ func (r *Resolver) ownedClusterIDs(ctx context.Context) (map[string]struct{}, er
 func (r *Resolver) requireClusterOperatorTenant(ctx context.Context) (string, map[string]struct{}, error) {
 	tenantID := tenantIDFromContext(ctx)
 	if tenantID == "" {
-		return "", nil, fmt.Errorf("tenant context required")
+		return "", nil, middleware.ErrTenantContextRequired
 	}
 	if err := requirePrivateInfrastructureRead(ctx, tenantID); err != nil {
 		return "", nil, err
@@ -56,7 +56,7 @@ func (r *Resolver) requireClusterOperatorTenant(ctx context.Context) (string, ma
 		return "", nil, err
 	}
 	if len(owned) == 0 {
-		return "", nil, fmt.Errorf("cluster owner access required")
+		return "", nil, middleware.Forbidden("cluster owner access required")
 	}
 	return tenantID, owned, nil
 }
@@ -69,7 +69,7 @@ func (r *Resolver) RequireClusterOperatorTenant(ctx context.Context) error {
 func (r *Resolver) requireOwnedCluster(ctx context.Context, clusterID string) error {
 	tenantID := tenantIDFromContext(ctx)
 	if tenantID == "" {
-		return fmt.Errorf("tenant context required")
+		return middleware.ErrTenantContextRequired
 	}
 	if err := requirePrivateInfrastructureRead(ctx, tenantID); err != nil {
 		return err
@@ -85,7 +85,7 @@ func (r *Resolver) requireOwnedCluster(ctx context.Context, clusterID string) er
 		return err
 	}
 	if _, ok := owned[clusterID]; !ok {
-		return fmt.Errorf("cluster owner access required")
+		return middleware.Forbidden("cluster owner access required")
 	}
 	return nil
 }
@@ -93,7 +93,7 @@ func (r *Resolver) requireOwnedCluster(ctx context.Context, clusterID string) er
 func (r *Resolver) requireOwnedNode(ctx context.Context, nodeID string) (*quartermasterpb.InfrastructureNode, error) {
 	tenantID := tenantIDFromContext(ctx)
 	if tenantID == "" {
-		return nil, fmt.Errorf("tenant context required")
+		return nil, middleware.ErrTenantContextRequired
 	}
 	if err := requirePrivateInfrastructureRead(ctx, tenantID); err != nil {
 		return nil, err

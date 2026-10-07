@@ -75,7 +75,7 @@ func (r *Resolver) DoGetRoutingEventsConnection(ctx context.Context, stream *str
 
 	tenantID := tenantIDFromContext(ctx)
 	if tenantID == "" {
-		return nil, fmt.Errorf("tenant context required")
+		return nil, middleware.ErrTenantContextRequired
 	}
 
 	normalizedStreamID, err := normalizeStreamIDPtr(stream)
@@ -180,7 +180,7 @@ func (r *Resolver) DoGetConnectionEventsConnection(ctx context.Context, stream *
 
 	tenantID := tenantIDFromContext(ctx)
 	if tenantID == "" {
-		return nil, fmt.Errorf("tenant context required")
+		return nil, middleware.ErrTenantContextRequired
 	}
 
 	normalizedStreamID, err := normalizeStreamIDPtr(stream)
@@ -279,7 +279,7 @@ func (r *Resolver) DoGetArtifactEventsConnection(ctx context.Context, streamId *
 
 	tenantID := tenantIDFromContext(ctx)
 	if tenantID == "" {
-		return nil, fmt.Errorf("tenant context required")
+		return nil, middleware.ErrTenantContextRequired
 	}
 
 	normalizedStreamID, err := normalizeStreamIDPtr(streamId)
@@ -389,7 +389,7 @@ func (r *Resolver) DoGetNodeMetricsConnection(ctx context.Context, nodeID *strin
 
 	tenantID := tenantIDFromContext(ctx)
 	if tenantID == "" {
-		return nil, fmt.Errorf("tenant context required")
+		return nil, middleware.ErrTenantContextRequired
 	}
 
 	// Build cursor pagination options
@@ -471,7 +471,7 @@ func (r *Resolver) DoGetNodeMetrics1hConnection(ctx context.Context, timeRange *
 
 	tenantID := tenantIDFromContext(ctx)
 	if tenantID == "" {
-		return nil, fmt.Errorf("tenant context required")
+		return nil, middleware.ErrTenantContextRequired
 	}
 
 	// Build cursor pagination options
@@ -553,7 +553,7 @@ func (r *Resolver) DoGetNodeMetricsAggregated(ctx context.Context, timeRange *mo
 
 	tenantID := tenantIDFromContext(ctx)
 	if tenantID == "" {
-		return nil, fmt.Errorf("tenant context required")
+		return nil, middleware.ErrTenantContextRequired
 	}
 	if nodeID != nil && strings.TrimSpace(*nodeID) != "" {
 		if _, err := r.requireOwnedNode(ctx, strings.TrimSpace(*nodeID)); err != nil {
@@ -596,7 +596,7 @@ func (r *Resolver) DoGetStreamHealthMetricsConnection(ctx context.Context, strea
 	}
 
 	if tenantIDFromContext(ctx) == "" {
-		return nil, fmt.Errorf("tenant context required")
+		return nil, middleware.ErrTenantContextRequired
 	}
 
 	normalizedID, err := normalizeStreamID(stream)
@@ -708,7 +708,7 @@ func (r *Resolver) DoGetTrackListEventsConnection(ctx context.Context, stream st
 	}
 
 	if tenantIDFromContext(ctx) == "" {
-		return nil, fmt.Errorf("tenant context required")
+		return nil, middleware.ErrTenantContextRequired
 	}
 
 	// Build cursor pagination options
@@ -805,7 +805,7 @@ func (r *Resolver) DoGetStreamEventsConnection(ctx context.Context, streamId str
 	}
 
 	if tenantIDFromContext(ctx) == "" {
-		return nil, fmt.Errorf("tenant context required")
+		return nil, middleware.ErrTenantContextRequired
 	}
 
 	// Build cursor pagination options
@@ -1021,7 +1021,7 @@ func (r *Resolver) DoGetStreamHealthConnection(ctx context.Context, obj *commodo
 	}
 
 	if tenantIDFromContext(ctx) == "" {
-		return nil, fmt.Errorf("tenant context required")
+		return nil, middleware.ErrTenantContextRequired
 	}
 
 	// Build cursor pagination options
@@ -1101,7 +1101,7 @@ func (r *Resolver) DoGetNodeMetricsConnectionForNode(ctx context.Context, obj *q
 	}
 
 	if tenantIDFromContext(ctx) == "" {
-		return nil, fmt.Errorf("tenant context required")
+		return nil, middleware.ErrTenantContextRequired
 	}
 
 	// Build cursor pagination options
@@ -1175,7 +1175,7 @@ func (r *Resolver) DoGetNodeMetrics1hConnectionForNode(ctx context.Context, obj 
 	}
 
 	if tenantIDFromContext(ctx) == "" {
-		return nil, fmt.Errorf("tenant context required")
+		return nil, middleware.ErrTenantContextRequired
 	}
 
 	// Build cursor pagination options
@@ -1246,7 +1246,7 @@ func (r *Resolver) DoGetLiveNodeState(ctx context.Context, nodeID string) (*peri
 	}
 	tenantID := tenantIDFromContext(ctx)
 	if tenantID == "" {
-		return nil, fmt.Errorf("tenant context required")
+		return nil, middleware.ErrTenantContextRequired
 	}
 	if _, err := r.requireOwnedNode(ctx, nodeID); err != nil {
 		return nil, err
@@ -2349,7 +2349,7 @@ func (r *Resolver) DoGetViewerGeographicsConnection(ctx context.Context, stream 
 	}
 
 	if tenantIDFromContext(ctx) == "" {
-		return nil, fmt.Errorf("tenant context required")
+		return nil, middleware.ErrTenantContextRequired
 	}
 
 	normalizedStreamID, err := normalizeStreamIDPtr(stream)
@@ -3209,7 +3209,7 @@ func (r *Resolver) DoGetRoutingEfficiency(ctx context.Context, streamID *string,
 
 	tenantID := tenantIDFromContext(ctx)
 	if tenantID == "" {
-		return nil, fmt.Errorf("tenant context required")
+		return nil, middleware.ErrTenantContextRequired
 	}
 
 	startTime, endTime := parseTimeRange(timeRange)
@@ -3270,7 +3270,7 @@ func (r *Resolver) DoGetStreamHealthSummary(ctx context.Context, streamID *strin
 
 	tenantID := tenantIDFromContext(ctx)
 	if tenantID == "" {
-		return nil, fmt.Errorf("tenant context required")
+		return nil, middleware.ErrTenantContextRequired
 	}
 
 	startTime, endTime := parseTimeRange(timeRange)
@@ -3332,7 +3332,7 @@ func (r *Resolver) DoGetClientQoeSummary(ctx context.Context, streamID *string, 
 
 	tenantID := tenantIDFromContext(ctx)
 	if tenantID == "" {
-		return nil, fmt.Errorf("tenant context required")
+		return nil, middleware.ErrTenantContextRequired
 	}
 
 	startTime, endTime := parseTimeRange(timeRange)
@@ -3381,7 +3381,7 @@ func (r *Resolver) DoGetArtifactNodeCopies(ctx context.Context, artifactHash str
 	}
 	tenantID := tenantIDFromContext(ctx)
 	if tenantID == "" {
-		return nil, fmt.Errorf("tenant context required")
+		return nil, middleware.ErrTenantContextRequired
 	}
 	if artifactHash == "" {
 		return nil, fmt.Errorf("artifactHash required")
@@ -3497,7 +3497,7 @@ func (r *Resolver) DoGetPlayerBootSummary(ctx context.Context, streamID *string,
 
 	tenantID := tenantIDFromContext(ctx)
 	if tenantID == "" {
-		return nil, fmt.Errorf("tenant context required")
+		return nil, middleware.ErrTenantContextRequired
 	}
 
 	// streamId is a Relay global ID at the API boundary; ClickHouse stores raw UUIDs.
@@ -3594,7 +3594,7 @@ func (r *Resolver) DoGetSessionQoeSummary(ctx context.Context, streamID *string,
 
 	tenantID := tenantIDFromContext(ctx)
 	if tenantID == "" {
-		return nil, fmt.Errorf("tenant context required")
+		return nil, middleware.ErrTenantContextRequired
 	}
 
 	normalizedStreamID, err := normalizeStreamIDPtr(streamID)
@@ -3642,10 +3642,10 @@ func (r *Resolver) DoGetVodRetention(ctx context.Context, artifactHash string, t
 
 	tenantID := tenantIDFromContext(ctx)
 	if tenantID == "" {
-		return nil, fmt.Errorf("tenant context required")
+		return nil, middleware.ErrTenantContextRequired
 	}
 	if artifactHash == "" {
-		return nil, fmt.Errorf("artifactHash is required")
+		return nil, middleware.InvalidInput("artifactHash is required")
 	}
 
 	startTime, endTime := parseTimeRange(timeRange)
@@ -3680,7 +3680,7 @@ func (r *Resolver) DoGetPlayerBootTimeSeries(ctx context.Context, streamID *stri
 
 	tenantID := tenantIDFromContext(ctx)
 	if tenantID == "" {
-		return nil, fmt.Errorf("tenant context required")
+		return nil, middleware.ErrTenantContextRequired
 	}
 
 	normalizedStreamID, err := normalizeStreamIDPtr(streamID)
@@ -3727,7 +3727,7 @@ func (r *Resolver) DoGetSessionQoeTimeSeries(ctx context.Context, streamID *stri
 
 	tenantID := tenantIDFromContext(ctx)
 	if tenantID == "" {
-		return nil, fmt.Errorf("tenant context required")
+		return nil, middleware.ErrTenantContextRequired
 	}
 
 	normalizedStreamID, err := normalizeStreamIDPtr(streamID)
@@ -3793,7 +3793,7 @@ func (r *Resolver) DoListTopAssets(ctx context.Context, timeRange *model.TimeRan
 	}
 	tenantID := tenantIDFromContext(ctx)
 	if tenantID == "" {
-		return nil, fmt.Errorf("tenant context required")
+		return nil, middleware.ErrTenantContextRequired
 	}
 
 	n := int32(10)
@@ -3900,7 +3900,7 @@ func (r *Resolver) DoListVodRetentionAssets(ctx context.Context, first *int, aft
 
 	tenantID := tenantIDFromContext(ctx)
 	if tenantID == "" {
-		return nil, fmt.Errorf("tenant context required")
+		return nil, middleware.ErrTenantContextRequired
 	}
 
 	opts := &periscopeclient.CursorPaginationOpts{First: int32(pagination.DefaultLimit)}
@@ -4094,7 +4094,7 @@ func (r *Resolver) DoGetClusterTrafficMatrix(ctx context.Context, timeRange *mod
 
 	tenantID := tenantIDFromContext(ctx)
 	if tenantID == "" {
-		return nil, fmt.Errorf("tenant context required")
+		return nil, middleware.ErrTenantContextRequired
 	}
 
 	startTime, endTime := parseTimeRange(timeRange)
@@ -4290,7 +4290,7 @@ func (r *Resolver) DoGetFederationEventsConnection(ctx context.Context, timeRang
 
 	tenantID := tenantIDFromContext(ctx)
 	if tenantID == "" {
-		return nil, fmt.Errorf("tenant context required")
+		return nil, middleware.ErrTenantContextRequired
 	}
 
 	startTime, endTime := parseTimeRange(timeRange)
@@ -4357,7 +4357,7 @@ func (r *Resolver) DoGetFederationSummary(ctx context.Context, timeRange *model.
 
 	tenantID := tenantIDFromContext(ctx)
 	if tenantID == "" {
-		return nil, fmt.Errorf("tenant context required")
+		return nil, middleware.ErrTenantContextRequired
 	}
 
 	startTime, endTime := parseTimeRange(timeRange)

@@ -3564,7 +3564,7 @@ func (r *queryResolver) NodesConnection(ctx context.Context, page *model.Connect
 func (r *queryResolver) Node(ctx context.Context, id string) (model.Node, error) {
 	typ, rawID, ok := globalid.Decode(id)
 	if !ok {
-		return nil, fmt.Errorf("invalid global id")
+		return nil, middleware.InvalidInput("invalid global id")
 	}
 	switch typ {
 	case globalid.TypeStream:

@@ -1,7 +1,7 @@
 package resolvers
 
 import (
-	"fmt"
+	"frameworks/api_gateway/internal/middleware"
 
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/globalid"
 
@@ -14,7 +14,7 @@ func normalizeStreamID(streamID string) (string, error) {
 	}
 	if typ, id, ok := globalid.Decode(streamID); ok {
 		if typ != globalid.TypeStream {
-			return "", fmt.Errorf("invalid stream relay ID type: %s", typ)
+			return "", middleware.InvalidInput("invalid stream relay ID type: %s", typ)
 		}
 		return id, nil
 	}
@@ -38,10 +38,10 @@ func normalizeClipHash(input string) (string, error) {
 	}
 	if typ, id, ok := globalid.Decode(input); ok {
 		if typ != globalid.TypeClip {
-			return "", fmt.Errorf("invalid clip relay ID type: %s", typ)
+			return "", middleware.InvalidInput("invalid clip relay ID type: %s", typ)
 		}
 		if _, err := uuid.Parse(id); err == nil {
-			return "", fmt.Errorf("clip relay IDs now encode clipHash; use clipHash instead")
+			return "", middleware.InvalidInput("clip relay IDs now encode clipHash; use clipHash instead")
 		}
 		return id, nil
 	}
@@ -54,10 +54,10 @@ func normalizeVodHash(input string) (string, error) {
 	}
 	if typ, id, ok := globalid.Decode(input); ok {
 		if typ != globalid.TypeVodAsset {
-			return "", fmt.Errorf("invalid VOD relay ID type: %s", typ)
+			return "", middleware.InvalidInput("invalid VOD relay ID type: %s", typ)
 		}
 		if _, err := uuid.Parse(id); err == nil {
-			return "", fmt.Errorf("VOD relay IDs now encode artifactHash; use artifactHash instead")
+			return "", middleware.InvalidInput("VOD relay IDs now encode artifactHash; use artifactHash instead")
 		}
 		return id, nil
 	}

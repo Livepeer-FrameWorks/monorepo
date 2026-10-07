@@ -121,7 +121,7 @@ func (r *Resolver) DoUpdatePushTarget(ctx context.Context, id string, input mode
 
 	rawID, err := globalid.DecodeExpected(id, globalid.TypePushTarget)
 	if err != nil {
-		return nil, fmt.Errorf("invalid push target ID: %w", err)
+		return nil, middleware.InvalidInput("invalid push target ID: %v", err)
 	}
 
 	req := &commodorepb.UpdatePushTargetRequest{
@@ -162,7 +162,7 @@ func (r *Resolver) DoDeletePushTarget(ctx context.Context, id string) (*model.De
 
 	rawID, err := globalid.DecodeExpected(id, globalid.TypePushTarget)
 	if err != nil {
-		return nil, fmt.Errorf("invalid push target ID: %w", err)
+		return nil, middleware.InvalidInput("invalid push target ID: %v", err)
 	}
 
 	_, err = r.Clients.Commodore.DeletePushTarget(ctx, rawID)

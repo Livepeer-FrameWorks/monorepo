@@ -99,7 +99,7 @@ func (r *Resolver) DoGetTenant(ctx context.Context) (*quartermasterpb.Tenant, er
 
 	tenantID := ctxkeys.GetTenantID(ctx)
 	if tenantID == "" {
-		return nil, fmt.Errorf("tenant context required")
+		return nil, middleware.ErrTenantContextRequired
 	}
 
 	r.Logger.WithField("tenant_id", tenantID).Info("Getting tenant info")
@@ -183,7 +183,7 @@ func (r *Resolver) DoGetCluster(ctx context.Context, id string) (*quartermasterp
 	}
 	tenantID := tenantIDFromContext(ctx)
 	if tenantID == "" {
-		return nil, fmt.Errorf("tenant context required")
+		return nil, middleware.ErrTenantContextRequired
 	}
 	if err := requirePrivateInfrastructureRead(ctx, tenantID); err != nil {
 		return nil, err
@@ -523,7 +523,7 @@ func (r *Resolver) DoGetClustersAccess(ctx context.Context, first *int, after *s
 
 	tenantID := ctxkeys.GetTenantID(ctx)
 	if tenantID == "" {
-		return nil, fmt.Errorf("tenant context required")
+		return nil, middleware.ErrTenantContextRequired
 	}
 
 	resp, err := r.Clients.Quartermaster.ListClustersForTenant(ctx, tenantID, buildCursorPagination(first, after, nil, nil))
@@ -626,7 +626,7 @@ func (r *Resolver) DoUpdateTenant(ctx context.Context, input model.UpdateTenantI
 
 	tenantID := ctxkeys.GetTenantID(ctx)
 	if tenantID == "" {
-		return nil, fmt.Errorf("tenant context required")
+		return nil, middleware.ErrTenantContextRequired
 	}
 	if err := middleware.RequireTenantAction(ctx, "settings:write", authz.ActionManageTenantSettings, tenantID); err != nil {
 		return nil, err
@@ -651,7 +651,7 @@ func (r *Resolver) DoUpdateTenant(ctx context.Context, input model.UpdateTenantI
 	if input.Settings != nil {
 		raw, ok := input.Settings.(map[string]any)
 		if !ok {
-			return nil, fmt.Errorf("invalid settings JSON: expected an object")
+			return nil, middleware.InvalidInput("invalid settings JSON: expected an object")
 		}
 
 		if _, present := raw["primaryClusterId"]; present {
@@ -1125,7 +1125,7 @@ func (r *Resolver) DoCreateClusterSubscription(ctx context.Context, clusterID st
 		tenantID = ctxkeys.GetTenantID(ctx)
 	}
 	if tenantID == "" {
-		return nil, fmt.Errorf("tenant context required")
+		return nil, middleware.ErrTenantContextRequired
 	}
 	if err := requireEdgeLifecycleMutation(ctx, tenantID); err != nil {
 		return nil, err
@@ -1168,7 +1168,7 @@ func (r *Resolver) DoUnsubscribeFromCluster(ctx context.Context, clusterID strin
 		tenantID = user.TenantID
 	}
 	if tenantID == "" {
-		return false, fmt.Errorf("tenant context required")
+		return false, middleware.ErrTenantContextRequired
 	}
 	if err := requireEdgeLifecycleMutation(ctx, tenantID); err != nil {
 		return false, err
@@ -1196,7 +1196,7 @@ func (r *Resolver) DoListMySubscriptions(ctx context.Context, first *int, after 
 		tenantID = user.TenantID
 	}
 	if tenantID == "" {
-		return nil, fmt.Errorf("tenant context required")
+		return nil, middleware.ErrTenantContextRequired
 	}
 
 	resp, err := r.Clients.Quartermaster.ListMySubscriptions(ctx, &quartermasterpb.ListMySubscriptionsRequest{
@@ -1743,7 +1743,7 @@ func (r *Resolver) DoListClusterInvites(ctx context.Context, clusterID string) (
 		tenantID = user.TenantID
 	}
 	if tenantID == "" {
-		return nil, fmt.Errorf("tenant context required")
+		return nil, middleware.ErrTenantContextRequired
 	}
 	if err := requirePrivateInfrastructureRead(ctx, tenantID); err != nil {
 		return nil, err
@@ -1773,7 +1773,7 @@ func (r *Resolver) DoListMyClusterInvites(ctx context.Context) ([]*quartermaster
 		tenantID = user.TenantID
 	}
 	if tenantID == "" {
-		return nil, fmt.Errorf("tenant context required")
+		return nil, middleware.ErrTenantContextRequired
 	}
 
 	resp, err := r.Clients.Quartermaster.ListMyClusterInvites(ctx, &quartermasterpb.ListMyClusterInvitesRequest{
@@ -1885,7 +1885,7 @@ func (r *Resolver) DoListPendingSubscriptions(ctx context.Context, clusterID str
 		tenantID = user.TenantID
 	}
 	if tenantID == "" {
-		return nil, fmt.Errorf("tenant context required")
+		return nil, middleware.ErrTenantContextRequired
 	}
 	if err := requirePrivateInfrastructureRead(ctx, tenantID); err != nil {
 		return nil, err
@@ -2028,7 +2028,7 @@ func (r *Resolver) DoGetClustersAccessConnection(ctx context.Context, first *int
 
 	tenantID := ctxkeys.GetTenantID(ctx)
 	if tenantID == "" {
-		return nil, fmt.Errorf("tenant context required")
+		return nil, middleware.ErrTenantContextRequired
 	}
 
 	limit := infraMaxLimit
@@ -2174,7 +2174,7 @@ func (r *Resolver) DoGetMySubscriptionsConnection(ctx context.Context, first *in
 		tenantID = user.TenantID
 	}
 	if tenantID == "" {
-		return nil, fmt.Errorf("tenant context required")
+		return nil, middleware.ErrTenantContextRequired
 	}
 
 	resp, err := r.Clients.Quartermaster.ListMySubscriptions(ctx, &quartermasterpb.ListMySubscriptionsRequest{
@@ -2398,7 +2398,7 @@ func (r *Resolver) DoGetPendingSubscriptionsConnection(ctx context.Context, clus
 		tenantID = user.TenantID
 	}
 	if tenantID == "" {
-		return nil, fmt.Errorf("tenant context required")
+		return nil, middleware.ErrTenantContextRequired
 	}
 	if err := requirePrivateInfrastructureRead(ctx, tenantID); err != nil {
 		return nil, err
@@ -2492,7 +2492,7 @@ func (r *Resolver) DoGetClusterInvitesConnection(ctx context.Context, clusterID 
 		tenantID = user.TenantID
 	}
 	if tenantID == "" {
-		return nil, fmt.Errorf("tenant context required")
+		return nil, middleware.ErrTenantContextRequired
 	}
 	if err := requirePrivateInfrastructureRead(ctx, tenantID); err != nil {
 		return nil, err

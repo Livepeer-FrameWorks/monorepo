@@ -37,7 +37,7 @@ func (r *Resolver) DoCreateVodUpload(ctx context.Context, input model.CreateVodU
 	// Get tenant and user from context
 	tenantID := ctxkeys.GetTenantID(ctx)
 	if tenantID == "" {
-		return nil, fmt.Errorf("tenant context required")
+		return nil, middleware.ErrTenantContextRequired
 	}
 
 	userID := ctxkeys.GetUserID(ctx)
@@ -116,7 +116,7 @@ func (r *Resolver) DoImportVodAsset(ctx context.Context, input model.ImportVodAs
 	}
 	tenantID := ctxkeys.GetTenantID(ctx)
 	if tenantID == "" {
-		return nil, fmt.Errorf("tenant context required")
+		return nil, middleware.ErrTenantContextRequired
 	}
 	req := &sharedpb.ImportVodAssetRequest{
 		TenantId:    tenantID,
@@ -164,7 +164,7 @@ func (r *Resolver) DoCompleteVodUpload(ctx context.Context, input model.Complete
 	// Get tenant from context
 	tenantID := ctxkeys.GetTenantID(ctx)
 	if tenantID == "" {
-		return nil, fmt.Errorf("tenant context required")
+		return nil, middleware.ErrTenantContextRequired
 	}
 
 	// Convert parts from GraphQL to proto
@@ -238,7 +238,7 @@ func (r *Resolver) DoGetVodUploadStatusProto(ctx context.Context, uploadID strin
 	}
 	tenantID := ctxkeys.GetTenantID(ctx)
 	if tenantID == "" {
-		return nil, fmt.Errorf("tenant context required")
+		return nil, middleware.ErrTenantContextRequired
 	}
 	resp, err := r.Clients.Commodore.GetVodUploadStatus(ctx, tenantID, uploadID)
 	if err != nil {
@@ -352,7 +352,7 @@ func (r *Resolver) DoAbortVodUpload(ctx context.Context, uploadID string) (model
 	// Get tenant from context
 	tenantID := ctxkeys.GetTenantID(ctx)
 	if tenantID == "" {
-		return nil, fmt.Errorf("tenant context required")
+		return nil, middleware.ErrTenantContextRequired
 	}
 
 	// Call Foghorn gRPC
@@ -407,7 +407,7 @@ func (r *Resolver) DoDeleteVodAsset(ctx context.Context, id string) (model.Delet
 	// Get tenant from context
 	tenantID := ctxkeys.GetTenantID(ctx)
 	if tenantID == "" {
-		return nil, fmt.Errorf("tenant context required")
+		return nil, middleware.ErrTenantContextRequired
 	}
 
 	// Call Foghorn gRPC
@@ -441,7 +441,7 @@ func (r *Resolver) DoGetVodAsset(ctx context.Context, id string) (*model.VodAsse
 	// Get tenant from context
 	tenantID := ctxkeys.GetTenantID(ctx)
 	if tenantID == "" {
-		return nil, fmt.Errorf("tenant context required")
+		return nil, middleware.ErrTenantContextRequired
 	}
 
 	// Restrict to VOD-kind artifacts. The catalog unions clips/DVRs/chapters/VODs, so without a

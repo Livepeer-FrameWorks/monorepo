@@ -146,6 +146,43 @@ func RequireAuth(ctx context.Context) (*UserContext, error) {
 
 var ErrForbidden = errors.New("insufficient permissions")
 
+// ErrInvalidInput marks a request a resolver refused because of its
+// arguments.
+var ErrInvalidInput = errors.New("invalid input")
+
+// ErrTenantContextRequired refuses a request that carries no tenant.
+var ErrTenantContextRequired = Unauthenticated("tenant context required")
+
+// clientError is a refusal whose message is its reason alone and which
+// matches the sentinel kind, so the GraphQL error presenter classifies it as
+// a client fault without changing the message the caller sees.
+type clientError struct {
+	reason string
+	kind   error
+}
+
+func (e *clientError) Error() string { return e.reason }
+
+func (e *clientError) Unwrap() error { return e.kind }
+
+// Forbidden returns an authorization refusal with reason as its message. It
+// matches ErrForbidden.
+func Forbidden(reason string) error {
+	return &clientError{reason: reason, kind: ErrForbidden}
+}
+
+// Unauthenticated returns a refusal of a request without the identity it
+// needs, with reason as its message. It matches auth.ErrUnauthenticated.
+func Unauthenticated(reason string) error {
+	return &clientError{reason: reason, kind: auth.ErrUnauthenticated}
+}
+
+// InvalidInput returns a refusal of the request's arguments with the
+// formatted reason as its message. It matches ErrInvalidInput.
+func InvalidInput(format string, args ...any) error {
+	return &clientError{reason: fmt.Sprintf(format, args...), kind: ErrInvalidInput}
+}
+
 // RequirePermission checks if the current request has a specific permission.
 func RequirePermission(ctx context.Context, permission string) error {
 	if permission == "" {

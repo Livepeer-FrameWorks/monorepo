@@ -389,6 +389,8 @@ func TestClientFault(t *testing.T) {
 		{"parse", &gqlerror.Error{Message: "Unexpected <EOF>", Extensions: map[string]any{"code": errcode.ParseFailed}}, true},
 		{"unauthenticated", fmt.Errorf("resolve: %w", auth.ErrUnauthenticated), true},
 		{"forbidden", middleware.ErrForbidden, true},
+		{"resolver refusal", fmt.Errorf("platform: %w", middleware.Forbidden("platform operator access required")), true},
+		{"resolver input", middleware.InvalidInput("dvr id is required"), true},
 		{"not found", status.Error(codes.NotFound, "stream"), true},
 		{"precondition", fmt.Errorf("commodore: %w", status.Error(codes.FailedPrecondition, "create a key first")), true},
 		{"unavailable", status.Error(codes.Unavailable, "periscope down"), false},

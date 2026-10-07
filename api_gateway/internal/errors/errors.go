@@ -35,8 +35,10 @@ var grpcCodeMessages = map[codes.Code]string{
 }
 
 // clientFault reports errors caused by the request rather than by the
-// platform: an invalid document, missing auth, or a gRPC status that describes
-// the caller's input or state.
+// platform: an invalid document, a resolver's own refusal (missing identity,
+// authorization, invalid arguments; see middleware.Forbidden,
+// middleware.Unauthenticated and middleware.InvalidInput), or a gRPC status
+// that describes the caller's input or state.
 func clientFault(err error) bool {
 	var gqlErr *gqlerror.Error
 	if errors.As(err, &gqlErr) {
@@ -44,7 +46,7 @@ func clientFault(err error) bool {
 			return true
 		}
 	}
-	if errors.Is(err, auth.ErrUnauthenticated) || errors.Is(err, middleware.ErrForbidden) {
+	if errors.Is(err, auth.ErrUnauthenticated) || errors.Is(err, middleware.ErrForbidden) || errors.Is(err, middleware.ErrInvalidInput) {
 		return true
 	}
 	if st, ok := status.FromError(err); ok {
@@ -84,6 +86,8 @@ func ErrorPresenter(logger logging.Logger) graphql.ErrorPresenterFunc {
 			localCode = PublicCode(codes.Unauthenticated)
 		case errors.Is(err, middleware.ErrForbidden):
 			localCode = PublicCode(codes.PermissionDenied)
+		case errors.Is(err, middleware.ErrInvalidInput):
+			localCode = PublicCode(codes.InvalidArgument)
 		}
 		if localCode != "" {
 			if presented.Extensions == nil {

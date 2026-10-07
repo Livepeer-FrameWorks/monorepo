@@ -94,7 +94,7 @@ func (r *Resolver) ReadCapabilities(ctx context.Context) (*CapabilitiesReading, 
 
 	tenantID := ctxkeys.GetTenantID(ctx)
 	if tenantID == "" {
-		return nil, fmt.Errorf("tenant context required")
+		return nil, middleware.ErrTenantContextRequired
 	}
 	// The sections are cached per tenant, not per caller, so the caller must
 	// pass Quartermaster's placement reader rule here: a cached section must

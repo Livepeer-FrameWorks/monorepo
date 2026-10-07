@@ -51,7 +51,7 @@ func (r *Resolver) RequirePlatformOperator(ctx context.Context) error {
 		id.PlatformOperator = user.PlatformOperator
 	}
 	if !authz.Default.Can(ctx, id, authz.ActionAccessPlatformAdmin, authz.Resource{}).Allow {
-		return fmt.Errorf("platform operator access required")
+		return middleware.Forbidden("platform operator access required")
 	}
 	return nil
 }
@@ -255,7 +255,7 @@ func (r *Resolver) DoPlatformTenant(ctx context.Context, id string) (*markers.Te
 		return &markers.TenantAdminDetail{TenantID: demo.DemoTenantID}, nil
 	}
 	if id == "" {
-		return nil, fmt.Errorf("tenant id is required")
+		return nil, middleware.InvalidInput("tenant id is required")
 	}
 	return &markers.TenantAdminDetail{TenantID: id}, nil
 }

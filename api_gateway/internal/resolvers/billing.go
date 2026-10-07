@@ -13,6 +13,7 @@ import (
 	"frameworks/api_gateway/graph/model"
 	"frameworks/api_gateway/internal/demo"
 	"frameworks/api_gateway/internal/middleware"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/auth"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/authz"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/billing"
 	periscope "github.com/Livepeer-FrameWorks/monorepo/pkg/clients/periscope"
@@ -63,7 +64,7 @@ func (r *Resolver) DoGetInvoicesConnection(ctx context.Context, first *int, afte
 
 	tenantID := ctxkeys.GetTenantID(ctx)
 	if tenantID == "" && !middleware.IsDemoMode(ctx) {
-		return nil, fmt.Errorf("tenant context required")
+		return nil, middleware.ErrTenantContextRequired
 	}
 
 	// Build pagination request
@@ -130,7 +131,7 @@ func (r *Resolver) DoGetPayment(ctx context.Context, id string) (*purserpb.Payme
 		return nil, errDemoUnavailable("Payment")
 	}
 	if ctxkeys.GetTenantID(ctx) == "" {
-		return nil, fmt.Errorf("tenant context required")
+		return nil, middleware.ErrTenantContextRequired
 	}
 	payment, err := r.Clients.Purser.GetPayment(ctx, id)
 	if err != nil {
@@ -169,7 +170,7 @@ func (r *Resolver) DoGetPaymentsConnection(ctx context.Context, first *int, afte
 
 	tenantID := ctxkeys.GetTenantID(ctx)
 	if tenantID == "" && !middleware.IsDemoMode(ctx) {
-		return nil, fmt.Errorf("tenant context required")
+		return nil, middleware.ErrTenantContextRequired
 	}
 	resp, err := r.Clients.Purser.ListPayments(ctx, &purserpb.ListPaymentsRequest{
 		TenantId: tenantID, InvoiceId: invoiceID, Status: paymentStatus, Method: method,
@@ -220,7 +221,7 @@ func (r *Resolver) DoGetUsageRecordsConnection(ctx context.Context, timeRange *m
 
 	tenantID := ctxkeys.GetTenantID(ctx)
 	if tenantID == "" {
-		return nil, fmt.Errorf("tenant context required")
+		return nil, middleware.ErrTenantContextRequired
 	}
 
 	// Build time range (required by Purser)
@@ -435,7 +436,7 @@ func (r *Resolver) DoGetInvoices(ctx context.Context) ([]*purserpb.Invoice, erro
 
 	tenantID := ctxkeys.GetTenantID(ctx)
 	if tenantID == "" {
-		return nil, fmt.Errorf("tenant context required")
+		return nil, middleware.ErrTenantContextRequired
 	}
 
 	r.Logger.WithField("tenant_id", tenantID).Info("Fetching invoices from Purser")
@@ -465,7 +466,7 @@ func (r *Resolver) DoGetInvoice(ctx context.Context, id string) (*purserpb.Invoi
 	}
 	tenantID := ctxkeys.GetTenantID(ctx)
 	if tenantID == "" {
-		return nil, fmt.Errorf("tenant context required")
+		return nil, middleware.ErrTenantContextRequired
 	}
 
 	r.Logger.WithField("tenant_id", tenantID).WithField("invoice_id", id).Info("Fetching invoice from Purser")
@@ -496,7 +497,7 @@ func (r *Resolver) DoGetBillingStatus(ctx context.Context) (*purserpb.BillingSta
 
 	tenantID := ctxkeys.GetTenantID(ctx)
 	if tenantID == "" {
-		return nil, fmt.Errorf("tenant context required")
+		return nil, middleware.ErrTenantContextRequired
 	}
 
 	r.Logger.WithField("tenant_id", tenantID).Info("Getting billing status")
@@ -539,7 +540,7 @@ func (r *Resolver) DoGetInvoicePreview(ctx context.Context) (*purserpb.Invoice, 
 
 	tenantID := ctxkeys.GetTenantID(ctx)
 	if tenantID == "" {
-		return nil, fmt.Errorf("tenant context required")
+		return nil, middleware.ErrTenantContextRequired
 	}
 
 	status := "draft"
@@ -568,7 +569,7 @@ func (r *Resolver) DoGetLiveUsageSummary(ctx context.Context, periodStart, perio
 
 	tenantID := ctxkeys.GetTenantID(ctx)
 	if tenantID == "" {
-		return nil, fmt.Errorf("tenant context required")
+		return nil, middleware.ErrTenantContextRequired
 	}
 
 	now := time.Now().UTC()
@@ -606,7 +607,7 @@ func (r *Resolver) DoGetTenantUsage(ctx context.Context, timeRange *model.TimeRa
 
 	tenantID := ctxkeys.GetTenantID(ctx)
 	if tenantID == "" {
-		return nil, fmt.Errorf("tenant context required")
+		return nil, middleware.ErrTenantContextRequired
 	}
 
 	r.Logger.WithField("tenant_id", tenantID).Info("Getting tenant usage")
@@ -715,7 +716,7 @@ func (r *Resolver) DoGetUsageRecords(ctx context.Context, timeRange *model.TimeR
 
 	tenantID := ctxkeys.GetTenantID(ctx)
 	if tenantID == "" {
-		return nil, fmt.Errorf("tenant context required")
+		return nil, middleware.ErrTenantContextRequired
 	}
 
 	r.Logger.WithField("tenant_id", tenantID).Info("Getting usage records")
@@ -745,7 +746,7 @@ func (r *Resolver) DoGetUsageAggregates(ctx context.Context, timeRange *model.Ti
 
 	tenantID := ctxkeys.GetTenantID(ctx)
 	if tenantID == "" {
-		return nil, fmt.Errorf("tenant context required")
+		return nil, middleware.ErrTenantContextRequired
 	}
 
 	tr := buildUsageTimeRange(timeRange, 30*24*time.Hour)
@@ -913,7 +914,7 @@ func (r *Resolver) DoCreatePayment(ctx context.Context, input model.CreatePaymen
 
 	tenantID := ctxkeys.GetTenantID(ctx)
 	if tenantID == "" {
-		return nil, fmt.Errorf("tenant context required")
+		return nil, middleware.ErrTenantContextRequired
 	}
 
 	r.Logger.WithField("tenant_id", tenantID).
@@ -1506,7 +1507,7 @@ func (r *Resolver) DoListMollieMandates(ctx context.Context) ([]*purserpb.Mollie
 
 	tenantID := ctxkeys.GetTenantID(ctx)
 	if tenantID == "" {
-		return nil, fmt.Errorf("authentication required")
+		return nil, auth.ErrUnauthenticated
 	}
 
 	resp, err := r.Clients.Purser.ListMollieMandates(ctx, tenantID)
@@ -1533,7 +1534,7 @@ func (r *Resolver) DoCreateCardTopup(ctx context.Context, input model.CreateCard
 	}
 	tenantID := ctxkeys.GetTenantID(ctx)
 	if tenantID == "" {
-		return nil, fmt.Errorf("authentication required")
+		return nil, auth.ErrUnauthenticated
 	}
 
 	// Map GraphQL provider enum to proto
@@ -1654,7 +1655,7 @@ func (r *Resolver) DoCreateCryptoTopup(ctx context.Context, input model.CreateCr
 	}
 	tenantID := ctxkeys.GetTenantID(ctx)
 	if tenantID == "" {
-		return nil, fmt.Errorf("authentication required")
+		return nil, auth.ErrUnauthenticated
 	}
 	if int64(input.AmountCents) < billing.CryptoTopupFloorCents || int64(input.AmountCents) > billing.MaximumTopupCents {
 		return nil, fmt.Errorf("amount_cents must be between %d and %d", billing.CryptoTopupFloorCents, billing.MaximumTopupCents)

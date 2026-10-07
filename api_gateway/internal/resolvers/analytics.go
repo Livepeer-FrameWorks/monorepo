@@ -59,7 +59,7 @@ func (r *Resolver) DoGetStreamAnalyticsSummary(ctx context.Context, streamID str
 	// Extract tenant ID from context for data isolation
 	tenantID := ctxkeys.GetTenantID(ctx)
 	if tenantID == "" {
-		return nil, fmt.Errorf("tenant context required")
+		return nil, middleware.ErrTenantContextRequired
 	}
 
 	cacheKey := tenantID + ":" + streamID
@@ -99,7 +99,7 @@ func (r *Resolver) DoGetPlatformOverview(ctx context.Context, timeRange *model.T
 	// Extract tenant ID from context for data isolation
 	tenantID := ctxkeys.GetTenantID(ctx)
 	if tenantID == "" {
-		return nil, fmt.Errorf("tenant context required")
+		return nil, middleware.ErrTenantContextRequired
 	}
 
 	// Get platform overview from Periscope Query
@@ -164,7 +164,7 @@ func (r *Resolver) DoGetViewerCountTimeSeries(ctx context.Context, stream *strin
 	// Extract tenant ID from context for data isolation
 	tenantID := ctxkeys.GetTenantID(ctx)
 	if tenantID == "" {
-		return nil, fmt.Errorf("tenant context required")
+		return nil, middleware.ErrTenantContextRequired
 	}
 
 	// Default interval to 5m if not specified
@@ -221,7 +221,7 @@ func (r *Resolver) DoGetStreamHealthMetrics(ctx context.Context, streamId string
 
 	tenantID := tenantIDFromContext(ctx)
 	if tenantID == "" {
-		return nil, fmt.Errorf("tenant context required")
+		return nil, middleware.ErrTenantContextRequired
 	}
 
 	// Convert time range for Periscope client
@@ -294,7 +294,7 @@ func (r *Resolver) DoGetViewerGeographics(ctx context.Context, stream *string, t
 
 	tenantID := tenantIDFromContext(ctx)
 	if tenantID == "" {
-		return nil, fmt.Errorf("tenant context required")
+		return nil, middleware.ErrTenantContextRequired
 	}
 
 	normalizedStream, err := normalizeStreamIDPtr(stream)
@@ -355,7 +355,7 @@ func (r *Resolver) DoGetGeographicDistribution(ctx context.Context, stream *stri
 	// Extract tenant ID from context for data isolation
 	tenantID := ctxkeys.GetTenantID(ctx)
 	if tenantID == "" {
-		return nil, fmt.Errorf("tenant context required")
+		return nil, middleware.ErrTenantContextRequired
 	}
 
 	// Default topN to 10 if not specified
@@ -444,7 +444,7 @@ func timeKey(t *time.Time) string {
 func (r *Resolver) loadRoutingEvents(ctx context.Context, stream *string, startTime, endTime *time.Time, opts *periscopeclient.CursorPaginationOpts, skipCache bool, relatedTenantIDs []string, subjectTenantID, clusterID *string) (*periscopepb.GetRoutingEventsResponse, error) {
 	tenantID := tenantIDFromContext(ctx)
 	if tenantID == "" {
-		return nil, fmt.Errorf("tenant context required")
+		return nil, middleware.ErrTenantContextRequired
 	}
 
 	streamKey := ""
@@ -496,7 +496,7 @@ func (r *Resolver) loadRoutingEvents(ctx context.Context, stream *string, startT
 func (r *Resolver) loadConnectionEvents(ctx context.Context, stream *string, startTime, endTime *time.Time, opts *periscopeclient.CursorPaginationOpts, skipCache bool) (*periscopepb.GetConnectionEventsResponse, error) {
 	tenantID := tenantIDFromContext(ctx)
 	if tenantID == "" {
-		return nil, fmt.Errorf("tenant context required")
+		return nil, middleware.ErrTenantContextRequired
 	}
 
 	streamKey := ""
@@ -535,7 +535,7 @@ func (r *Resolver) loadConnectionEvents(ctx context.Context, stream *string, sta
 func (r *Resolver) loadNodeMetrics(ctx context.Context, nodeID *string, startTime, endTime *time.Time, opts *periscopeclient.CursorPaginationOpts, skipCache bool) (*periscopepb.GetNodeMetricsResponse, error) {
 	tenantID := tenantIDFromContext(ctx)
 	if tenantID == "" {
-		return nil, fmt.Errorf("tenant context required")
+		return nil, middleware.ErrTenantContextRequired
 	}
 
 	nodeKey := ""
@@ -581,7 +581,7 @@ func (r *Resolver) loadNodeMetrics(ctx context.Context, nodeID *string, startTim
 func (r *Resolver) loadNodeMetrics1h(ctx context.Context, nodeID *string, startTime, endTime *time.Time, opts *periscopeclient.CursorPaginationOpts, skipCache bool) (*periscopepb.GetNodeMetrics1HResponse, error) {
 	tenantID := tenantIDFromContext(ctx)
 	if tenantID == "" {
-		return nil, fmt.Errorf("tenant context required")
+		return nil, middleware.ErrTenantContextRequired
 	}
 
 	nodeKey := ""
@@ -627,7 +627,7 @@ func (r *Resolver) loadNodeMetrics1h(ctx context.Context, nodeID *string, startT
 func (r *Resolver) loadClipEvents(ctx context.Context, streamID, stage, contentType *string, startTime, endTime *time.Time, opts *periscopeclient.CursorPaginationOpts, skipCache bool) (*periscopepb.GetClipEventsResponse, error) {
 	tenantID := tenantIDFromContext(ctx)
 	if tenantID == "" {
-		return nil, fmt.Errorf("tenant context required")
+		return nil, middleware.ErrTenantContextRequired
 	}
 
 	streamIDKey := ""
@@ -674,7 +674,7 @@ func (r *Resolver) loadClipEvents(ctx context.Context, streamID, stage, contentT
 func (r *Resolver) loadStreamEvents(ctx context.Context, streamID string, startTime, endTime *time.Time, opts *periscopeclient.CursorPaginationOpts, skipCache bool) (*periscopepb.GetStreamEventsResponse, error) {
 	tenantID := tenantIDFromContext(ctx)
 	if tenantID == "" {
-		return nil, fmt.Errorf("tenant context required")
+		return nil, middleware.ErrTenantContextRequired
 	}
 
 	// Build cache key including pagination parameters
@@ -708,7 +708,7 @@ func (r *Resolver) loadStreamEvents(ctx context.Context, streamID string, startT
 func (r *Resolver) loadTrackListEvents(ctx context.Context, streamID string, startTime, endTime *time.Time, opts *periscopeclient.CursorPaginationOpts, skipCache bool) (*periscopepb.GetTrackListEventsResponse, error) {
 	tenantID := tenantIDFromContext(ctx)
 	if tenantID == "" {
-		return nil, fmt.Errorf("tenant context required")
+		return nil, middleware.ErrTenantContextRequired
 	}
 
 	// Build cache key including pagination parameters
@@ -742,7 +742,7 @@ func (r *Resolver) loadTrackListEvents(ctx context.Context, streamID string, sta
 func (r *Resolver) loadStreamHealthMetrics(ctx context.Context, stream *string, startTime, endTime *time.Time, opts *periscopeclient.CursorPaginationOpts, skipCache bool) (*periscopepb.GetStreamHealthMetricsResponse, error) {
 	tenantID := tenantIDFromContext(ctx)
 	if tenantID == "" {
-		return nil, fmt.Errorf("tenant context required")
+		return nil, middleware.ErrTenantContextRequired
 	}
 
 	// Build cache key including stream and pagination parameters
@@ -790,7 +790,7 @@ func (r *Resolver) DoGetTenantDailyStats(ctx context.Context, days *int) ([]*per
 
 	tenantID := ctxkeys.GetTenantID(ctx)
 	if tenantID == "" {
-		return nil, fmt.Errorf("tenant context required")
+		return nil, middleware.ErrTenantContextRequired
 	}
 
 	// Default to 7 days if not specified

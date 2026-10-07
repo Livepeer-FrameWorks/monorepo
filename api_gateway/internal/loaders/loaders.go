@@ -6,6 +6,7 @@ import (
 	"sync"
 
 	"frameworks/api_gateway/internal/clients"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/auth"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/ctxkeys"
 	commonpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/common"
 	periscopepb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/periscope"
@@ -264,7 +265,7 @@ func (l *LiveNodeStateLoader) Load(ctx context.Context, nodeID string) (*perisco
 func (l *LiveNodeStateLoader) loadAll(ctx context.Context) {
 	tenantID := ctxkeys.GetTenantID(ctx)
 	if tenantID == "" {
-		l.loadErr = fmt.Errorf("tenant context required for live node state")
+		l.loadErr = fmt.Errorf("live node state: %w", auth.ErrUnauthenticated)
 		return
 	}
 

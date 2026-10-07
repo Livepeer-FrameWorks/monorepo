@@ -19,7 +19,7 @@ import (
 // hash after tenant validation.
 func NormalizeDvrID(input string) (string, error) {
 	if input == "" {
-		return "", fmt.Errorf("dvr id is required")
+		return "", middleware.InvalidInput("dvr id is required")
 	}
 	return input, nil
 }
