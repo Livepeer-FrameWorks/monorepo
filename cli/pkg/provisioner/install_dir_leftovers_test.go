@@ -103,3 +103,41 @@ func TestHelmsmanDownloadsOncePerPin(t *testing.T) {
 		t.Errorf("normalize must record the installed binary's sha256 receipt:\n%s", normalize)
 	}
 }
+
+// The native Linux install narrows the edge PKI and certificate directories to
+// 0750 and 2770; the shared prepare step that creates them must not reset them
+// to 0755 on every run.
+func TestEdgePrepareLeavesTLSDirectoryModesToTheInstall(t *testing.T) {
+	const file = "ansible/collections/ansible_collections/frameworks/infra/roles/edge/tasks/prepare.yml"
+	var tasks []any
+	if err := yaml.Unmarshal([]byte(readRepoFile(t, file)), &tasks); err != nil {
+		t.Fatal(err)
+	}
+	narrowed := map[string]bool{"{{ edge_conf_dir }}/pki": true, "{{ edge_cert_dir }}": true}
+	seen := 0
+	walkRoleBlocks(tasks, nil, func(task map[string]any, _ []map[string]any) {
+		spec, ok := moduleSpec(task, "file")
+		if !ok || spec["state"] != "directory" {
+			return
+		}
+		paths := []string{stringValue(spec["path"])}
+		if loop, ok := task["loop"].([]any); ok {
+			paths = paths[:0]
+			for _, item := range loop {
+				paths = append(paths, stringValue(item))
+			}
+		}
+		for _, path := range paths {
+			if !narrowed[path] {
+				continue
+			}
+			seen++
+			if _, set := spec["mode"]; set {
+				t.Errorf("%s: %q sets a mode on %s, which the native install narrows", file, task["name"], path)
+			}
+		}
+	})
+	if seen != 2 {
+		t.Fatalf("%s must still create both TLS directories; found %d", file, seen)
+	}
+}

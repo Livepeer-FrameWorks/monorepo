@@ -22,6 +22,8 @@ platforms:
       - /tmp
 provisioner:
   name: ansible
+  playbooks:
+    prepare: ../../../../molecule/prepare-apt.yml
   inventory:
     group_vars:
       all:

@@ -3,13 +3,19 @@
 # The role itself owns these so sub-roles don't each reinvent filesystem
 # prep. All paths are controlled by edge_* defaults.
 
-- name: Ensure edge config directories
+- name: Ensure edge config directory
+  ansible.builtin.file:
+    path: "{{ edge_conf_dir }}"
+    state: directory
+    mode: "0755"
+
+# The native Linux install narrows these to their ConfigSeed owners and modes
+# (0750, 2770); setting a mode here would widen them again on every run.
+- name: Ensure edge PKI and certificate directories # noqa: risky-file-permissions
   ansible.builtin.file:
     path: "{{ item }}"
     state: directory
-    mode: "0755"
   loop:
-    - "{{ edge_conf_dir }}"
     - "{{ edge_conf_dir }}/pki"
     - "{{ edge_cert_dir }}"
 
