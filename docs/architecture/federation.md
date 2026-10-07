@@ -270,7 +270,14 @@ identity fields fill blanks only. Adoption and advancement of
 `catalog_synced_rev` commit in one local transaction because origin-owned rows
 are intentionally excluded from this cell's catalog projector. A delivered
 signed artifact tombstone marks the pointer `deleted` and settles the resulting
-local revision in the same authority-apply transaction. A bounded pointer purge
+local revision in the same authority-apply transaction. That tombstone follows the
+origin's catalog projection, so the origin does not wait for it: once its delete
+of a clip, VOD or DVR's chapters commits, and before the delete returns, it sends
+every peer `ForwardArtifactCommand` `retire_artifact_pointer`. A peer holding a live
+pointer asks the pointer's recorded origin `PrepareArtifact` and marks the pointer
+`deleted` only on the origin's `artifact not found`, so the command carries no
+authority of its own. A peer it cannot reach keeps serving until the tombstone
+arrives. A bounded pointer purge
 then removes the routing row after retention while preserving the signed
 object-authority tombstone as the durable version/resurrection fence. A pointer
 can own cell-local thumbnails or disposable cache copies; it does not own the

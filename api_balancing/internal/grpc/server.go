@@ -15,6 +15,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -400,6 +401,47 @@ func (s *FoghornGRPCServer) forwardArtifactDeletionToFederation(ctx context.Cont
 		TenantId:          tenantID,
 		RequestedByUserId: requestedBy,
 	})
+}
+
+// retirePeerArtifactPointers tells every peer cell that this cell committed the
+// deletion of the given artifacts. A peer that adopted one as a federated pointer
+// routes its playback from that pointer until the signed tombstone reaches it,
+// which follows the catalog projection; each peer confirms the deletion with
+// this cell and retires its pointer before the delete returns, so no cell keeps
+// redirecting viewers to a deleted artifact. The tombstone remains the durable
+// path for a peer this call cannot reach.
+func (s *FoghornGRPCServer) retirePeerArtifactPointers(ctx context.Context, tenantID string, artifactHashes ...string) {
+	if s.federationClient == nil || s.peerManager == nil || tenantID == "" || len(artifactHashes) == 0 {
+		return
+	}
+	peers := s.peerManager.GetPeers()
+	var wg sync.WaitGroup
+	for clusterID, addr := range peers {
+		if clusterID == s.clusterID || addr == "" {
+			continue
+		}
+		wg.Add(1)
+		go func(clusterID, addr string) {
+			defer wg.Done()
+			peerCtx, cancel := context.WithTimeout(ctx, artifactForwardPeerTimeout)
+			defer cancel()
+			for _, hash := range artifactHashes {
+				resp, err := s.federationClient.ForwardArtifactCommand(peerCtx, clusterID, addr, &foghornfederationpb.ForwardArtifactCommandRequest{
+					Command:      federation.RetireArtifactPointerCommand,
+					ArtifactHash: hash,
+					TenantId:     tenantID,
+				})
+				fields := logging.Fields{"peer_cluster": clusterID, "artifact_hash": hash, "tenant_id": tenantID}
+				switch {
+				case err != nil:
+					s.logger.WithError(err).WithFields(fields).Warn("Peer cell did not retire its pointer to a deleted artifact; its signed tombstone will")
+				case resp.GetHandled():
+					s.logger.WithFields(fields).Info("Peer cell retired its pointer to a deleted artifact")
+				}
+			}
+		}(clusterID, addr)
+	}
+	wg.Wait()
 }
 
 // deletionRequester is the user an artifact_deleted event is attributed to:
@@ -1487,6 +1529,7 @@ func (s *FoghornGRPCServer) DeleteClip(ctx context.Context, req *sharedpb.Delete
 	// reconciler projects the deletion; kick it now rather than leave the
 	// deleted artifact listed until the next unrelated pass.
 	control.NotifyCatalogDirty()
+	s.retirePeerArtifactPointers(ctx, clipRow.TenantID, req.ClipHash)
 
 	// Terminate any not-yet-finished processing job so a deleted clip never processes (e.g. delete
 	// races a freshly-queued job, or registry-write compensation). Best-effort and OUTSIDE the
@@ -2568,6 +2611,9 @@ func (s *FoghornGRPCServer) DeleteDVR(ctx context.Context, req *sharedpb.DeleteD
 	// them listed as ready until the next unrelated pass. A repeated delete
 	// that only repaired children needs the projection as well.
 	control.NotifyCatalogDirty()
+	// A DVR resolves through its owning cell on every play; its chapters are
+	// the artifacts peers adopt as pointers.
+	s.retirePeerArtifactPointers(ctx, req.GetTenantId(), childHashes...)
 
 	// Already-deleted parent (idempotent re-delete, or the losing side of a concurrent delete): the
 	// cascade above still repaired any children that were never soft-deleted, so report
@@ -4445,6 +4491,7 @@ func (s *FoghornGRPCServer) DeleteVodAsset(ctx context.Context, req *sharedpb.De
 	// reconciler projects the deletion; kick it now rather than leave the
 	// deleted artifact listed until the next unrelated pass.
 	control.NotifyCatalogDirty()
+	s.retirePeerArtifactPointers(ctx, req.GetTenantId(), req.ArtifactHash)
 
 	s.logger.WithFields(logging.Fields{
 		"artifact_hash": req.ArtifactHash,

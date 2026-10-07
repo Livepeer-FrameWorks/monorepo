@@ -130,3 +130,13 @@ FROM foghorn.artifacts
 WHERE federated_pointer = true
   AND updated_at IS NOT NULL
   AND federated_purge_eligible_at > updated_at;
+
+-- A live adopted pointer and the cell that originated it, which alone can say
+-- the artifact was deleted.
+-- name: GetLiveFederatedArtifactPointer :one
+SELECT artifact_type, COALESCE(origin_cluster_id, '')::text AS origin_cluster_id
+FROM foghorn.artifacts
+WHERE artifact_hash = sqlc.arg(artifact_hash)
+  AND tenant_id = sqlc.arg(tenant_id)::uuid
+  AND federated_pointer = true
+  AND status <> 'deleted';

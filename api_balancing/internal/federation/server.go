@@ -16,6 +16,7 @@ import (
 	"frameworks/api_balancing/internal/identity"
 	"frameworks/api_balancing/internal/state"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/ctxkeys"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/database"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/mist"
 	foghornfederationpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/foghorn_federation"
@@ -78,6 +79,7 @@ type FederationServer struct {
 	droppedAdMu     sync.Mutex
 	droppedAdLog    map[string]time.Time
 	fedClient       *FederationClient
+	originPreparer  artifactPreparer
 	placement       PlacementRPC
 	// allowFederationMutations is the central gate for the entire inbound cross-cluster RPC surface. Production
 	// enables it only with FEDERATION_ENABLED, where the shared service token is restricted to provider-operated
@@ -204,9 +206,19 @@ type FederationServerConfig struct {
 	AllowFederationMutations bool
 }
 
+// artifactPreparer asks a peer cell's PrepareArtifact.
+type artifactPreparer interface {
+	PrepareArtifact(ctx context.Context, clusterID, addr string, req *foghornfederationpb.PrepareArtifactRequest) (*foghornfederationpb.PrepareArtifactResponse, error)
+}
+
 // NewFederationServer creates a new federation gRPC server.
 func NewFederationServer(cfg FederationServerConfig) *FederationServer {
+	var originPreparer artifactPreparer
+	if cfg.FedClient != nil {
+		originPreparer = cfg.FedClient
+	}
 	return &FederationServer{
+		originPreparer:    originPreparer,
 		logger:            cfg.Logger,
 		lb:                cfg.LB,
 		clusterID:         cfg.ClusterID,
@@ -2012,6 +2024,9 @@ func (s *FederationServer) ForwardArtifactCommand(ctx context.Context, req *fogh
 	if req.GetTenantId() == "" {
 		return nil, status.Error(codes.InvalidArgument, "tenant_id required")
 	}
+	if req.GetCommand() == RetireArtifactPointerCommand {
+		return s.retireArtifactPointer(ctx, req.GetArtifactHash(), req.GetTenantId())
+	}
 	if err := s.revalidateForwardedArtifact(ctx, req); err != nil {
 		if status.Code(err) == codes.NotFound {
 			return &foghornfederationpb.ForwardArtifactCommandResponse{Handled: false}, nil
@@ -2105,6 +2120,75 @@ func (s *FederationServer) ForwardArtifactCommand(ctx context.Context, req *fogh
 			Error:   "unknown command: " + req.GetCommand(),
 		}, nil
 	}
+}
+
+// RetireArtifactPointerCommand is the ForwardArtifactCommand an origin cell sends
+// its peers once it has committed an artifact's deletion.
+const RetireArtifactPointerCommand = "retire_artifact_pointer"
+
+// retireArtifactPointer retires this cell's adopted pointer to an artifact its
+// origin cell deleted, so playback here stops routing to it at once instead of
+// when the signed tombstone arrives. The command names no authority of its own:
+// the pointer is retired only when its recorded origin cell, asked directly,
+// answers that it holds no such artifact. Handled reports a retired pointer.
+func (s *FederationServer) retireArtifactPointer(ctx context.Context, artifactHash, tenantID string) (*foghornfederationpb.ForwardArtifactCommandResponse, error) {
+	if s.db == nil || s.originPreparer == nil || s.peerManager == nil {
+		return &foghornfederationpb.ForwardArtifactCommandResponse{}, nil
+	}
+	log := s.logger.WithFields(logging.Fields{"artifact_hash": artifactHash, "tenant_id": tenantID})
+	queries := foghorndb.New(s.db)
+	pointer, err := queries.GetLiveFederatedArtifactPointer(ctx, foghorndb.GetLiveFederatedArtifactPointerParams{
+		ArtifactHash: artifactHash, TenantID: tenantID,
+	})
+	if errors.Is(err, sql.ErrNoRows) {
+		return &foghornfederationpb.ForwardArtifactCommandResponse{}, nil
+	}
+	if err != nil {
+		log.WithError(err).Error("Failed to read a federated artifact pointer to retire")
+		return nil, status.Error(codes.Internal, "failed to read artifact pointer")
+	}
+	origin := pointer.OriginClusterID
+	if origin == "" || origin == s.clusterID {
+		return &foghornfederationpb.ForwardArtifactCommandResponse{}, nil
+	}
+	addr := s.peerManager.GetPeerAddr(origin)
+	if addr == "" {
+		return &foghornfederationpb.ForwardArtifactCommandResponse{Error: "origin cluster address unknown"}, nil
+	}
+	resp, err := s.originPreparer.PrepareArtifact(ctx, origin, addr, &foghornfederationpb.PrepareArtifactRequest{
+		ArtifactId:        artifactHash,
+		RequestingCluster: s.clusterID,
+		ArtifactType:      pointer.ArtifactType,
+		TenantId:          tenantID,
+	})
+	if err != nil {
+		return nil, status.Errorf(codes.Unavailable, "origin cluster %s unreachable: %v", origin, err)
+	}
+	if resp.GetError() != control.PrepareArtifactNotFoundRefusal {
+		return &foghornfederationpb.ForwardArtifactCommandResponse{}, nil
+	}
+	retired := false
+	if err := database.WithRetryablePostgresTx(ctx, s.db, nil, func(tx *sql.Tx) error {
+		txq := foghorndb.New(tx)
+		n, txErr := txq.TombstoneFederatedArtifact(ctx, foghorndb.TombstoneFederatedArtifactParams{
+			ArtifactHash: artifactHash, TenantID: tenantID,
+		})
+		if txErr != nil {
+			return txErr
+		}
+		retired = n > 0
+		_, txErr = txq.SettleFederatedArtifactCatalogRevision(ctx, foghorndb.SettleFederatedArtifactCatalogRevisionParams{
+			ArtifactHash: artifactHash, TenantID: tenantID,
+		})
+		return txErr
+	}); err != nil {
+		log.WithError(err).Error("Failed to retire a federated pointer to a deleted artifact")
+		return nil, status.Error(codes.Internal, "failed to retire artifact pointer")
+	}
+	if retired {
+		log.WithField("origin_cluster_id", origin).Info("Retired the federated pointer to an artifact its origin deleted")
+	}
+	return &foghornfederationpb.ForwardArtifactCommandResponse{Handled: retired}, nil
 }
 
 func (s *FederationServer) revalidateForwardedArtifact(ctx context.Context, req *foghornfederationpb.ForwardArtifactCommandRequest) error {

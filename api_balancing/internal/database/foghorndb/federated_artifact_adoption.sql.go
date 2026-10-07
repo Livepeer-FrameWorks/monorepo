@@ -194,6 +194,34 @@ func (q *Queries) CountLegacyFederatedArtifactPointers(ctx context.Context) (int
 	return column_1, err
 }
 
+const getLiveFederatedArtifactPointer = `-- name: GetLiveFederatedArtifactPointer :one
+SELECT artifact_type, COALESCE(origin_cluster_id, '')::text AS origin_cluster_id
+FROM foghorn.artifacts
+WHERE artifact_hash = $1
+  AND tenant_id = $2::uuid
+  AND federated_pointer = true
+  AND status <> 'deleted'
+`
+
+type GetLiveFederatedArtifactPointerParams struct {
+	ArtifactHash string `db:"artifact_hash" json:"artifact_hash"`
+	TenantID     string `db:"tenant_id" json:"tenant_id"`
+}
+
+type GetLiveFederatedArtifactPointerRow struct {
+	ArtifactType    string `db:"artifact_type" json:"artifact_type"`
+	OriginClusterID string `db:"origin_cluster_id" json:"origin_cluster_id"`
+}
+
+// A live adopted pointer and the cell that originated it, which alone can say
+// the artifact was deleted.
+func (q *Queries) GetLiveFederatedArtifactPointer(ctx context.Context, arg GetLiveFederatedArtifactPointerParams) (GetLiveFederatedArtifactPointerRow, error) {
+	row := q.db.QueryRowContext(ctx, getLiveFederatedArtifactPointer, arg.ArtifactHash, arg.TenantID)
+	var i GetLiveFederatedArtifactPointerRow
+	err := row.Scan(&i.ArtifactType, &i.OriginClusterID)
+	return i, err
+}
+
 const settleFederatedArtifactCatalogRevision = `-- name: SettleFederatedArtifactCatalogRevision :execrows
 UPDATE foghorn.artifacts
 SET catalog_synced_rev = catalog_revision

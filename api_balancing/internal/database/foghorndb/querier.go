@@ -307,6 +307,9 @@ type Querier interface {
 	GetIngestSessionAuthoritySnapshot(ctx context.Context, sessionID string) (GetIngestSessionAuthoritySnapshotRow, error)
 	GetLastConfigSeed(ctx context.Context, nodeID string) (GetLastConfigSeedRow, error)
 	GetLatestDVRChapterBefore(ctx context.Context, arg GetLatestDVRChapterBeforeParams) (GetLatestDVRChapterBeforeRow, error)
+	// A live adopted pointer and the cell that originated it, which alone can say
+	// the artifact was deleted.
+	GetLiveFederatedArtifactPointer(ctx context.Context, arg GetLiveFederatedArtifactPointerParams) (GetLiveFederatedArtifactPointerRow, error)
 	GetLiveTranscodeAuthContext(ctx context.Context, arg GetLiveTranscodeAuthContextParams) (GetLiveTranscodeAuthContextRow, error)
 	GetLocalMediaObjectAuthorityByInternalName(ctx context.Context, internalName string) (GetLocalMediaObjectAuthorityByInternalNameRow, error)
 	GetLocalMediaObjectAuthorityByPlaybackID(ctx context.Context, playbackID string) (GetLocalMediaObjectAuthorityByPlaybackIDRow, error)
@@ -427,13 +430,13 @@ type Querier interface {
 	ListDVRSegmentsForRange(ctx context.Context, arg ListDVRSegmentsForRangeParams) ([]FoghornDvrSegment, error)
 	ListDVRSegmentsOwnedByChapter(ctx context.Context, arg ListDVRSegmentsOwnedByChapterParams) ([]FoghornDvrSegment, error)
 	ListDVRTerminalChapterBackfill(ctx context.Context, batchSize int32) ([]ListDVRTerminalChapterBackfillRow, error)
-	ListDeletedClipNodes(ctx context.Context, maxAge string) ([]ListDeletedClipNodesRow, error)
-	ListDeletedDVRNodes(ctx context.Context, maxAge string) ([]ListDeletedDVRNodesRow, error)
-	ListDeletedDVRParentsWithChapters(ctx context.Context, limit int32) ([]ListDeletedDVRParentsWithChaptersRow, error)
 	// The deletes a node still owes: soft-deleted clips, DVRs and VODs whose bytes
 	// it still holds. Re-driven when the node registers, since a delete sent to an
 	// earlier connection, or deferred in its sidecar's memory, did not survive it.
 	ListDeletedArtifactsOnNode(ctx context.Context, nodeID string) ([]ListDeletedArtifactsOnNodeRow, error)
+	ListDeletedClipNodes(ctx context.Context, maxAge string) ([]ListDeletedClipNodesRow, error)
+	ListDeletedDVRNodes(ctx context.Context, maxAge string) ([]ListDeletedDVRNodesRow, error)
+	ListDeletedDVRParentsWithChapters(ctx context.Context, limit int32) ([]ListDeletedDVRParentsWithChaptersRow, error)
 	ListDeletedVODNodes(ctx context.Context, maxAge string) ([]ListDeletedVODNodesRow, error)
 	ListEvictableDVRSegments(ctx context.Context, arg ListEvictableDVRSegmentsParams) ([]string, error)
 	ListExhaustedProcessingJobIDs(ctx context.Context, arg ListExhaustedProcessingJobIDsParams) ([]string, error)
@@ -670,15 +673,15 @@ type Querier interface {
 	// the node's current connection.
 	RequeueSilentNodeProcessingJobs(ctx context.Context, arg RequeueSilentNodeProcessingJobsParams) (int64, error)
 	RequeueStaleProcessingJobs(ctx context.Context, arg RequeueStaleProcessingJobsParams) (int64, error)
-	// Requeues the jobs assigned to a node before its registration that the node
-	// did not report as running: a restarted sidecar lost them.
-	RequeueUnreportedNodeProcessingJobs(ctx context.Context, arg RequeueUnreportedNodeProcessingJobsParams) (int64, error)
 	// Requeues a job whose node reported its source read stalled in storage or
 	// upstream. The attempt does not draw from the retry budget: it is bounded by
 	// how long the run of stalls has lasted, measured from the first stalled
 	// attempt's start, and backs off by that same elapsed time, never past the end
 	// of the window. Bound to the reporting node like every result.
 	RequeueStalledProcessingJob(ctx context.Context, arg RequeueStalledProcessingJobParams) (int32, error)
+	// Requeues the jobs assigned to a node before its registration that the node
+	// did not report as running: a restarted sidecar lost them.
+	RequeueUnreportedNodeProcessingJobs(ctx context.Context, arg RequeueUnreportedNodeProcessingJobsParams) (int64, error)
 	ResetStaleFreezeAttempts(ctx context.Context, staleSeconds int64) ([]ResetStaleFreezeAttemptsRow, error)
 	ResolveActiveDVRNodes(ctx context.Context, dollar_1 []string) ([]ResolveActiveDVRNodesRow, error)
 	ResolveArtifactTenants(ctx context.Context, dollar_1 []string) ([]ResolveArtifactTenantsRow, error)
