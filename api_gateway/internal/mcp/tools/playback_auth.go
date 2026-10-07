@@ -98,7 +98,7 @@ type SetPlaybackPolicyInput struct {
 	ClipID     string `json:"clip_id,omitempty" jsonschema:"Clip ID. Provide exactly one of stream_id, vod_asset_id, or clip_id."`
 	Type       string `json:"type" jsonschema:"Policy type: 'public' | 'jwt' | 'webhook'."`
 	// JWT fields
-	AllowedKids      []string          `json:"allowed_kids,omitempty" jsonschema:"JWT only: signing-key kids that may mint tokens for this resource. Empty = any active key."`
+	AllowedKids      []string          `json:"allowed_kids,omitempty" jsonschema:"JWT only: signing-key kids that may mint tokens for this resource. Empty = any active key; blank kids are rejected."`
 	RequiredAudience []string          `json:"required_audience,omitempty" jsonschema:"JWT only: required aud claim values (token must contain at least one)."`
 	RequiredClaims   map[string]string `json:"required_claims,omitempty" jsonschema:"JWT only: claim name → JSON-encoded expected value. The token's claim must match exactly."`
 	// Webhook fields

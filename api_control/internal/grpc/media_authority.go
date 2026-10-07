@@ -988,6 +988,11 @@ func (s *CommodoreServer) compilePlaybackPolicy(ctx context.Context, tenantID st
 		if doc.JWT == nil {
 			return nil, parkAuthorityCompile("invalid_playback_policy", errors.New("JWT playback policy has no JWT section"))
 		}
+		if hasBlankKid(doc.JWT.AllowedKids) {
+			// Dropping the blank entry would widen the policy to every active key.
+			s.logger.WithField("tenant_id", tenantID).Warn("jwt playback policy has a blank allowed kid; compiling it to deny")
+			return denyPlaybackPolicy(), nil
+		}
 		keys, err := s.fetchActiveSigningKeys(ctx, tenantID)
 		if err != nil {
 			return nil, fmt.Errorf("load active playback signing keys: %w", err)

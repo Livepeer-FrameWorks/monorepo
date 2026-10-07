@@ -95,3 +95,52 @@ func TestCompileJWTPlaybackPolicyWithoutUsableKey(t *testing.T) {
 		})
 	}
 }
+
+// A blank allowed kid names no key, so a policy carrying one is refused as
+// invalid input before the signing keys are read.
+func TestSetPlaybackPolicyJWTRejectsBlankAllowedKid(t *testing.T) {
+	for _, allowed := range [][]string{{""}, {"   "}, {"kid-1", ""}} {
+		t.Run(strings.Join(allowed, "|"), func(t *testing.T) {
+			s, mock, done := newMockServer(t)
+			defer done()
+
+			_, err := s.SetPlaybackPolicy(ctxAs("u1", "t1", "owner"), &commodorepb.SetPlaybackPolicyRequest{
+				StreamId: "stream-1",
+				Type:     "jwt",
+				Jwt:      &commodorepb.PlaybackJwtPolicy{AllowedKids: allowed},
+			})
+			wantCode(t, err, codes.InvalidArgument)
+			if !strings.Contains(status.Convert(err).Message(), "allowed kids must not be blank") {
+				t.Fatalf("message = %q", status.Convert(err).Message())
+			}
+			if err := mock.ExpectationsWereMet(); err != nil {
+				t.Errorf("unmet: %v", err)
+			}
+		})
+	}
+}
+
+// A stored policy with a blank allowed kid compiles to DENY; it never widens
+// to every active key.
+func TestCompileJWTPlaybackPolicyWithBlankAllowedKidDenies(t *testing.T) {
+	for _, policyJSON := range []string{
+		`{"type":"jwt","jwt":{"allowed_kids":[""]}}`,
+		`{"type":"jwt","jwt":{"allowed_kids":["kid-1"," "]}}`,
+	} {
+		t.Run(policyJSON, func(t *testing.T) {
+			s, mock, done := newMockServer(t)
+			defer done()
+			// The tenant holds active keys, so a blank kid dropped from the list
+			// would compile to a JWT policy that admits all of them.
+			expectActiveSigningKeys(mock, jwtKeysTenant, "kid-1", "kid-2")
+
+			policy, err := s.compilePlaybackPolicy(context.Background(), jwtKeysTenant, true, policyJSON)
+			if err != nil {
+				t.Fatalf("compilePlaybackPolicy: %v", err)
+			}
+			if policy.GetKind() != mediaauthoritypb.PlaybackPolicyKind_PLAYBACK_POLICY_KIND_DENY {
+				t.Fatalf("kind = %v, allowed kids = %v, want DENY", policy.GetKind(), policy.GetJwt().GetAllowedKeyIds())
+			}
+		})
+	}
+}

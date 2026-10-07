@@ -52,6 +52,9 @@ func (source playbackAccessSource) localPolicy(previous *mediapb.PlaybackPolicy)
 	if doc.Type != "jwt" || doc.JWT == nil {
 		return nil
 	}
+	if hasBlankKid(doc.JWT.AllowedKids) {
+		return &mediapb.PlaybackPolicy{Kind: mediapb.PlaybackPolicyKind_PLAYBACK_POLICY_KIND_DENY}
+	}
 	return &mediapb.PlaybackPolicy{Kind: mediapb.PlaybackPolicyKind_PLAYBACK_POLICY_KIND_JWT, Jwt: &mediapb.PlaybackJwtPolicy{
 		ActiveKeys: previous.GetJwt().GetActiveKeys(), AllowedKeyIds: sortedUnique(doc.JWT.AllowedKids),
 		RequiredAudiences: sortedUnique(doc.JWT.RequiredAudience), RequiredClaimsJson: cloneStringMap(doc.JWT.RequiredClaimsJSON),

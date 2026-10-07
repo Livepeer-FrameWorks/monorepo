@@ -92,7 +92,8 @@ mutation {
 ```
 
 `allowedKids` empty = any active tenant key. Restricting it to specific kids
-limits which keys can mint tokens for this object.
+limits which keys can mint tokens for this object. Every listed kid must name
+an active signing key; a blank or whitespace-only kid is rejected.
 
 To require an audience or custom claim values, add `requiredAudience` and
 `requiredClaimsJson`. Each `requiredClaimsJson` entry is a

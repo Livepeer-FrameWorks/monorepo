@@ -675,7 +675,10 @@ func buildPolicyJSON(policyType string, req *commodorepb.SetPlaybackPolicyReques
 		// downstream readers can rely on its presence as a type marker.
 		section := &policyJWTSection{}
 		if j != nil {
-			section.AllowedKids = j.GetAllowedKids()
+			if hasBlankKid(j.GetAllowedKids()) {
+				return nil, status.Error(codes.InvalidArgument, "allowed kids must not be blank; omit allowedKids to accept any active signing key")
+			}
+			section.AllowedKids = sortedUnique(j.GetAllowedKids())
 			section.RequiredAudience = j.GetRequiredAudience()
 			section.RequiredClaimsJSON = j.GetRequiredClaimsJson()
 		}
@@ -909,6 +912,18 @@ func (s *CommodoreServer) lookupPolicyByInternalName(ctx context.Context, intern
 		}
 	}
 	return nil, sql.NullString{}, "", status.Errorf(codes.NotFound, "internal name not found")
+}
+
+// hasBlankKid reports an allowed-kid entry that names no key. No token carries
+// a blank kid, so such an entry cannot be satisfied and is never read as "any
+// key".
+func hasBlankKid(kids []string) bool {
+	for _, kid := range kids {
+		if strings.TrimSpace(kid) == "" {
+			return true
+		}
+	}
+	return false
 }
 
 // validateJWTPolicyKeys refuses a JWT policy that no active key could satisfy:

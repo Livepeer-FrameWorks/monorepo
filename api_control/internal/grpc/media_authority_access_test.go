@@ -164,6 +164,7 @@ func TestPlaybackSourceKeepsJWTConstraintDirectionWithoutKeyLookup(t *testing.T)
 		{"wider", `{"type":"jwt","jwt":{"required_audience":["viewer","other"]}}`, false},
 		{"narrower", `{"type":"jwt","jwt":{"required_audience":["other"]}}`, true},
 		{"key removed from allowlist", `{"type":"jwt","jwt":{"allowed_kids":["b"]}}`, true},
+		{"blank allowed kid", `{"type":"jwt","jwt":{"allowed_kids":[""]}}`, true},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			ctx := withPlaybackAccessSource(context.Background(), true, tt.document, "")
