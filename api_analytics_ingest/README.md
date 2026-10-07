@@ -19,7 +19,8 @@ Consumes analytics and service-plane events from Kafka and writes time-series da
 
 - `viewer_connect` / `viewer_disconnect` → `viewer_connection_events`
 - `stream_buffer`, `stream_end`, `push_rewrite` → `stream_event_log`
-- `play_rewrite`, `stream_source`, `push_end`, `push_out_start`, `recording_complete`, `recording_segment` → skipped as non-canonical stream events
+- `play_rewrite`, `stream_source`, `push_end`, `push_out_start`, `recording_complete` → skipped as non-canonical stream events
+- `recording_segment`, `raw_mist_webhook` → skipped; their raw envelopes land in `raw_mist_triggers`
 - `stream_track_list` → `track_list_events`
 - `stream_lifecycle_update` → `stream_state_current` + `stream_event_log`
 - `node_lifecycle_update` → `node_state_current` + `node_metrics_samples`

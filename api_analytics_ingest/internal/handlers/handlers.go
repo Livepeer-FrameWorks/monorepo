@@ -182,83 +182,8 @@ func (h *AnalyticsHandler) HandleAnalyticsEvent(event kafka.AnalyticsEvent) erro
 		return err
 	}
 
-	// Process each trigger using the canonical event names emitted by Decklog.
-	var err error
-	switch event.EventType {
-	case "viewer_connect":
-		err = h.processViewerConnection(ctx, event, true)
-	case "viewer_disconnect":
-		err = h.processViewerConnection(ctx, event, false)
-	case "stream_buffer":
-		err = h.processStreamBuffer(ctx, event)
-	case "stream_end":
-		err = h.processStreamEnd(ctx, event)
-	case "push_rewrite":
-		err = h.processPushRewrite(ctx, event)
-	case "play_rewrite":
-		err = h.skipEvent(event, "non_canonical_stream_event")
-	case "stream_source":
-		err = h.skipEvent(event, "non_canonical_stream_event")
-	case "push_end":
-		err = h.skipEvent(event, "non_canonical_stream_event")
-	case "restream_status_final":
-		// The canonical final fact is projected from the raw durable envelope,
-		// preserving its stable source_event_id and edge receive time.
-		err = h.skipEvent(event, "canonical_raw_final_fact")
-	case "restream_status":
-		err = h.processRestreamStatus(ctx, event)
-	case "push_input_close":
-		// PUSH_INPUT_CLOSE is the source-presence "publisher gone" edge
-		// owned by Foghorn's AdmitAndReserve admission state machine.
-		// It MUST NOT mutate stream_state_current — the ingest session
-		// is owned by accepted PUSH_REWRITE only. Audited at metric/log
-		// level here; no session-state side effect.
-		err = h.skipEvent(event, "source_presence_audit_only")
-	case "push_out_start":
-		err = h.skipEvent(event, "non_canonical_stream_event")
-	case "stream_track_list":
-		err = h.processTrackList(ctx, event)
-	case "recording_complete":
-		err = h.skipEvent(event, "non_canonical_stream_event")
-	case "recording_segment":
-		err = h.skipEvent(event, "non_canonical_stream_event")
-	case "stream_lifecycle_update":
-		err = h.processStreamLifecycle(ctx, event)
-	case "node_lifecycle_update":
-		err = h.processNodeLifecycle(ctx, event)
-	case "client_lifecycle_batch":
-		err = h.processClientLifecycleBatch(ctx, event)
-	case "playback_boot":
-		err = h.processPlaybackBootTrace(ctx, event)
-	case "playback_session_qoe":
-		err = h.processPlaybackSessionQoe(ctx, event)
-	case "load_balancing":
-		err = h.processLoadBalancing(ctx, event)
-	case "clip_lifecycle":
-		err = h.processClipLifecycle(ctx, event)
-	case "dvr_lifecycle":
-		err = h.processDVRLifecycle(ctx, event)
-	case "storage_lifecycle":
-		err = h.processStorageLifecycle(ctx, event)
-	case "storage_snapshot":
-		err = h.processStorageSnapshot(ctx, event)
-	case "process_billing":
-		err = h.processProcessBilling(ctx, event)
-	case "vod_lifecycle":
-		err = h.processVodLifecycle(ctx, event)
-	case "api_request_batch":
-		err = h.processAPIRequestBatch(ctx, event)
-	case "federation_event":
-		err = h.processFederationEvent(ctx, event)
-	case "orchestrator_discovery_observed":
-		err = h.processOrchestratorDiscoveryObserved(ctx, event)
-	case "orchestrator_state_update":
-		err = h.processOrchestratorStateUpdate(ctx, event)
-	case "orchestrator_transcode_outcome":
-		err = h.processOrchestratorTranscodeOutcome(ctx, event)
-	case "orchestrator_ai_outcome":
-		err = h.processOrchestratorAIOutcome(ctx, event)
-	default:
+	handle, known := analyticsEventHandlers[event.EventType]
+	if !known {
 		h.logger.WithFields(logging.Fields{
 			"event_type": event.EventType,
 			"event_id":   event.EventID,
@@ -268,7 +193,7 @@ func (h *AnalyticsHandler) HandleAnalyticsEvent(event kafka.AnalyticsEvent) erro
 		}
 		return nil
 	}
-
+	err := handle(h, ctx, event)
 	if err != nil {
 		if errors.Is(err, errDropped) {
 			return nil
@@ -294,6 +219,64 @@ func (h *AnalyticsHandler) HandleAnalyticsEvent(event kafka.AnalyticsEvent) erro
 	}
 
 	return nil
+}
+
+type analyticsEventHandler func(h *AnalyticsHandler, ctx context.Context, event kafka.AnalyticsEvent) error
+
+func skipAs(reason string) analyticsEventHandler {
+	return func(h *AnalyticsHandler, _ context.Context, event kafka.AnalyticsEvent) error {
+		return h.skipEvent(event, reason)
+	}
+}
+
+// analyticsEventHandlers routes each canonical analytics_events type Decklog
+// publishes (pkg/analyticsevents). Every routed type must have an entry; the
+// contract test in analytics_event_contract_test.go enforces it.
+var analyticsEventHandlers = map[string]analyticsEventHandler{
+	"viewer_connect": func(h *AnalyticsHandler, ctx context.Context, event kafka.AnalyticsEvent) error {
+		return h.processViewerConnection(ctx, event, true)
+	},
+	"viewer_disconnect": func(h *AnalyticsHandler, ctx context.Context, event kafka.AnalyticsEvent) error {
+		return h.processViewerConnection(ctx, event, false)
+	},
+	"stream_buffer":  (*AnalyticsHandler).processStreamBuffer,
+	"stream_end":     (*AnalyticsHandler).processStreamEnd,
+	"push_rewrite":   (*AnalyticsHandler).processPushRewrite,
+	"play_rewrite":   skipAs("non_canonical_stream_event"),
+	"stream_source":  skipAs("non_canonical_stream_event"),
+	"push_end":       skipAs("non_canonical_stream_event"),
+	"push_out_start": skipAs("non_canonical_stream_event"),
+	// The canonical final fact is projected from the raw durable envelope,
+	// preserving its stable source_event_id and edge receive time.
+	"restream_status_final": skipAs("canonical_raw_final_fact"),
+	"restream_status":       (*AnalyticsHandler).processRestreamStatus,
+	"stream_track_list":     (*AnalyticsHandler).processTrackList,
+	"recording_complete":    skipAs("non_canonical_stream_event"),
+	// Recording segments are kept in raw_mist_triggers for reparse; the
+	// segment ledger itself is Foghorn's.
+	"recording_segment": skipAs("raw_journal_only"),
+	// A durable trigger Helmsman could not parse. Decklog journals its raw
+	// body into raw_mist_triggers, the only place it can be reparsed from.
+	"raw_mist_webhook":        skipAs("raw_journal_only"),
+	"stream_lifecycle_update": (*AnalyticsHandler).processStreamLifecycle,
+	"node_lifecycle_update":   (*AnalyticsHandler).processNodeLifecycle,
+	"client_lifecycle_batch":  (*AnalyticsHandler).processClientLifecycleBatch,
+	"playback_boot":           (*AnalyticsHandler).processPlaybackBootTrace,
+	"playback_session_qoe":    (*AnalyticsHandler).processPlaybackSessionQoe,
+	"load_balancing":          (*AnalyticsHandler).processLoadBalancing,
+	"clip_lifecycle":          (*AnalyticsHandler).processClipLifecycle,
+	"dvr_lifecycle":           (*AnalyticsHandler).processDVRLifecycle,
+	"storage_lifecycle":       (*AnalyticsHandler).processStorageLifecycle,
+	"storage_snapshot":        (*AnalyticsHandler).processStorageSnapshot,
+	"process_billing":         (*AnalyticsHandler).processProcessBilling,
+	"vod_lifecycle":           (*AnalyticsHandler).processVodLifecycle,
+	"api_request_batch":       (*AnalyticsHandler).processAPIRequestBatch,
+	"federation_event":        (*AnalyticsHandler).processFederationEvent,
+
+	"orchestrator_discovery_observed": (*AnalyticsHandler).processOrchestratorDiscoveryObserved,
+	"orchestrator_state_update":       (*AnalyticsHandler).processOrchestratorStateUpdate,
+	"orchestrator_transcode_outcome":  (*AnalyticsHandler).processOrchestratorTranscodeOutcome,
+	"orchestrator_ai_outcome":         (*AnalyticsHandler).processOrchestratorAIOutcome,
 }
 
 func (h *AnalyticsHandler) pushRewritePayloadSatisfiesContract(event kafka.AnalyticsEvent) bool {

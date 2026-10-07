@@ -30,7 +30,7 @@ Transport is gRPC-only: TLS plus service-token auth via the shared interceptor (
 
 ## MistTrigger unwrap → typed event
 
-`SendEvent` accepts a single `MistTrigger` envelope whose oneof payload carries the typed proto (viewer connect/disconnect, stream buffer/end, lifecycle updates, clip/DVR/VOD/storage lifecycle, playback boot/session QoE, federation, load balancing, …). The unwrap (`unwrapMistTrigger` in `api_firehose/internal/grpc/server.go`) maps the oneof case to the canonical Kafka `event_type` string — the same strings Periscope Ingest routes on ([analytics-pipeline.md](analytics-pipeline.md) §4) — and pulls tenant attribution from the payload where the payload carries its own `tenant_id` (poller-shaped payloads do; webhook-shaped triggers use the envelope's).
+`SendEvent` accepts a single `MistTrigger` envelope whose oneof payload carries the typed proto (viewer connect/disconnect, stream buffer/end, lifecycle updates, clip/DVR/VOD/storage lifecycle, playback boot/session QoE, federation, load balancing, …). The unwrap (`unwrapMistTrigger` in `api_firehose/internal/grpc/server.go`) maps the oneof case to the canonical Kafka `event_type` string through `pkg/analyticsevents` — the same strings Periscope Ingest routes on ([analytics-pipeline.md](analytics-pipeline.md) §4); a payload listed in `analyticsevents.UnroutedTriggerPayloads` has no analytics consumer and is refused with `InvalidArgument` — and pulls tenant attribution from the payload where the payload carries its own `tenant_id` (poller-shaped payloads do; webhook-shaped triggers use the envelope's).
 
 The Kafka record is the transparent `protojson` serialization of the protobuf message (proto field names, unpopulated fields omitted) in the envelope's `Data` map — no hand-maintained JSON mapping. Consumers get exactly what the proto says.
 
@@ -52,7 +52,7 @@ The derivation contract lives in [trigger-durability.md](trigger-durability.md);
 
 ## Raw-trigger audit republish
 
-For the accounting event set (`USER_END`, `STREAM_END`, `RESTREAM_STATUS_FINAL`, `RECORDING_END`, `RECORDING_SEGMENT`, `LIVEPEER_SEGMENT_COMPLETE`, `PROCESS_AV_VIRTUAL_SEGMENT_COMPLETE`; `PUSH_END` and `PUSH_INPUT_CLOSE` are durable but not raw-journaled), `SendEvent` also publishes the received `MistTrigger` protobuf to `analytics.raw_mist_triggers` (`DECKLOG_RAW_TRIGGERS_TOPIC`; `-` disables). A managed live-restream final reaches Decklog only as `RESTREAM_STATUS_FINAL`, whose protobuf has target identity and bounded outcome/usage fields but no URI or raw Mist logs. Periscope consumes these records into `raw_mist_triggers` for incident recovery and deterministic reparse.
+For the accounting event set (`USER_END`, `STREAM_END`, `RESTREAM_STATUS_FINAL`, `RECORDING_END`, `RECORDING_SEGMENT`, `LIVEPEER_SEGMENT_COMPLETE`, `PROCESS_AV_VIRTUAL_SEGMENT_COMPLETE`; `PUSH_END` and `PUSH_INPUT_CLOSE` are durable but not raw-journaled), and for every `raw_mist_webhook` (a durable trigger Helmsman could not parse, whatever its type), `SendEvent` also publishes the received `MistTrigger` protobuf to `analytics.raw_mist_triggers` (`DECKLOG_RAW_TRIGGERS_TOPIC`; `-` disables). A managed live-restream final reaches Decklog only as `RESTREAM_STATUS_FINAL`, whose protobuf has target identity and bounded outcome/usage fields but no URI or raw Mist logs. Periscope consumes these records into `raw_mist_triggers` for incident recovery and deterministic reparse.
 
 - Records are keyed by `source_event_id` with `trigger_type` / `node_id` / `source_event_id` / `tenant_id` headers.
 - A final trigger without a `source_event_id` **fails the RPC** — an unkeyed accounting fact cannot be deduped downstream, so Decklog refuses to ack it.
@@ -68,7 +68,7 @@ Events carry envelope v2 identity: `source_region` / `source_cluster_id` (where 
 | ----------------------------- | ---------------------------- | ------------------------------------------------------------------------- |
 | `analytics_events`            | `ANALYTICS_KAFKA_TOPIC`      | Typed analytics envelope (JSON) from `SendEvent` / `SendGatewayTelemetry` |
 | `service_events`              | `SERVICE_EVENTS_KAFKA_TOPIC` | Service-plane envelope (JSON) from `SendServiceEvent`                     |
-| `analytics.raw_mist_triggers` | `DECKLOG_RAW_TRIGGERS_TOPIC` | Marshaled `MistTrigger` protobuf, final/accounting triggers only          |
+| `analytics.raw_mist_triggers` | `DECKLOG_RAW_TRIGGERS_TOPIC` | Marshaled `MistTrigger` protobuf, final/accounting and unparsed triggers  |
 | `domain.events`               | none (fixed name)            | Domain event protobuf with CloudEvents headers from `PublishDomainEvents` |
 
 Retention for these (and the DLQ below) is declared in `pkg/topology` and listed in [service-events.md](service-events.md) §7. `billing.usage_reports` is produced by Periscope Query, not Decklog ([meter-contracts.md](meter-contracts.md)).

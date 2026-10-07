@@ -4160,13 +4160,9 @@ func (p *Processor) handlePushInputClose(trigger *ipcpb.MistTrigger) (string, bo
 		return "", false, nil
 	}
 
+	// The close stays inside Foghorn: no analytics consumer handles it, and
+	// stream_end / stream_lifecycle_update record the stream going offline.
 	p.applyStreamContext(trigger, internalName)
-	if streamID := trigger.GetStreamId(); streamID != "" {
-		pic.StreamId = &streamID
-	}
-	if nodeID := trigger.GetNodeId(); nodeID != "" && pic.NodeId == nil {
-		pic.NodeId = &nodeID
-	}
 
 	// End the exact ingest generation this publisher held (event-time fenced against PID
 	// reuse). Its recording keeps running through Mist's resume window, so a reconnect to
@@ -4205,6 +4201,8 @@ func (p *Processor) handlePushInputClose(trigger *ipcpb.MistTrigger) (string, bo
 			p.logger.WithFields(logging.Fields{
 				"internal_name":     internalName,
 				"ingest_generation": fin.EndedSessionID,
+				"binary_name":       pic.GetBinaryName(),
+				"machine_reason":    pic.GetMachineReason(),
 			}).Info("PUSH_INPUT_CLOSE finalized ingest session")
 			// Release THIS session's placement claim whenever it was durably ended — INDEPENDENT of
 			// whether this replica's local registry still holds the projection to flip. The release is
@@ -4216,21 +4214,6 @@ func (p *Processor) handlePushInputClose(trigger *ipcpb.MistTrigger) (string, bo
 		}
 	}
 
-	// Forward to Decklog for audit. Periscope must NOT use this event to
-	// mutate stream_state_current — ingest session ownership stays with
-	// the DB-confirmed source projection (ProjectSource after MintIngestSession).
-	if err := p.sendTriggerToDecklog(trigger); err != nil {
-		p.logger.WithFields(logging.Fields{
-			"internal_name":  internalName,
-			"binary_name":    pic.GetBinaryName(),
-			"machine_reason": pic.GetMachineReason(),
-			"trigger_type":   trigger.GetTriggerType(),
-			"error":          err,
-		}).Error("Failed to send push_input_close trigger to Decklog")
-		if shouldSurfaceDecklogError(trigger) {
-			return "", false, err
-		}
-	}
 	// Surface a finalize failure as a retryable NACK so Helmsman re-sends the durable
 	// close (every effect above is idempotent on the retry) rather than truncating its WAL.
 	if closeFinalizeErr != nil {

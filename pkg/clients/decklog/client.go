@@ -549,63 +549,6 @@ func (c *BatchedClient) Health(ctx context.Context, service string) (grpc_health
 	return resp.GetStatus(), nil
 }
 
-// SendAPIRequestBatch sends aggregated API request metrics to Decklog
-func (c *BatchedClient) SendAPIRequestBatch(data *ipcpb.APIRequestBatch) error {
-	ctx := c.authContext()
-	trigger := &ipcpb.MistTrigger{
-		TriggerType: "API_REQUEST_BATCH",
-		TriggerPayload: &ipcpb.MistTrigger_ApiRequestBatch{
-			ApiRequestBatch: data,
-		},
-	}
-	c.stampTriggerEnvelope(trigger)
-	_, err := c.client.SendEvent(ctx, trigger)
-	if err != nil {
-		c.logger.WithFields(logging.Fields{
-			"source_node":     data.GetSourceNode(),
-			"aggregate_count": len(data.GetAggregates()),
-			"error":           err,
-		}).Error("Failed to send API request batch to Decklog")
-		return fmt.Errorf("failed to send API request batch: %w", err)
-	}
-
-	c.logger.WithFields(logging.Fields{
-		"source_node":     data.GetSourceNode(),
-		"aggregate_count": len(data.GetAggregates()),
-	}).Debug("API request batch sent to Decklog")
-
-	return nil
-}
-
-// SendMessageLifecycle sends messaging lifecycle data to Decklog for real-time UI updates
-func (c *BatchedClient) SendMessageLifecycle(data *ipcpb.MessageLifecycleData) error {
-	ctx := c.authContext()
-	trigger := &ipcpb.MistTrigger{
-		TriggerType: "MESSAGE_LIFECYCLE",
-		TenantId:    data.TenantId,
-		TriggerPayload: &ipcpb.MistTrigger_MessageLifecycleData{
-			MessageLifecycleData: data,
-		},
-	}
-	c.stampTriggerEnvelope(trigger)
-	_, err := c.client.SendEvent(ctx, trigger)
-	if err != nil {
-		c.logger.WithFields(logging.Fields{
-			"conversation_id": data.GetConversationId(),
-			"event_type":      data.GetEventType().String(),
-			"error":           err,
-		}).Error("Failed to send message lifecycle data to Decklog")
-		return fmt.Errorf("failed to send message lifecycle data: %w", err)
-	}
-
-	c.logger.WithFields(logging.Fields{
-		"conversation_id": data.GetConversationId(),
-		"event_type":      data.GetEventType().String(),
-	}).Debug("Message lifecycle data sent to Decklog")
-
-	return nil
-}
-
 // SendFederationEvent sends a federation operation event to Decklog
 func (c *BatchedClient) SendFederationEvent(data *ipcpb.FederationEventData) error {
 	ctx := c.authContext()

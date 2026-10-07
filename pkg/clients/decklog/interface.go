@@ -18,8 +18,6 @@ type Interface interface {
 	SendVodLifecycle(data *ipcpb.VodLifecycleData) error
 	Close() error
 	Health(ctx context.Context, service string) (grpc_health_v1.HealthCheckResponse_ServingStatus, error)
-	SendAPIRequestBatch(data *ipcpb.APIRequestBatch) error
-	SendMessageLifecycle(data *ipcpb.MessageLifecycleData) error
 	SendFederationEvent(data *ipcpb.FederationEventData) error
 	SendGatewayTelemetry(event *ipcpb.GatewayTelemetryEvent) error
 	SendServiceEvent(event *ipcpb.ServiceEvent) error

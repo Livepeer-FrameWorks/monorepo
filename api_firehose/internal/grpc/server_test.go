@@ -11,8 +11,11 @@ import (
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/kafka"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/topology"
 	"github.com/twmb/franz-go/pkg/kgo"
 
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/structpb"
 	"google.golang.org/protobuf/types/known/timestamppb"
@@ -596,6 +599,17 @@ func TestUnwrapMistTriggerAllTypes(t *testing.T) {
 			wantTenantID:  outerTenant,
 		},
 		{
+			name: "RecordingSegment uses outer tenant",
+			trigger: &ipcpb.MistTrigger{
+				TenantId: proto.String(outerTenant),
+				TriggerPayload: &ipcpb.MistTrigger_RecordingSegment{
+					RecordingSegment: &ipcpb.RecordingSegmentTrigger{},
+				},
+			},
+			wantEventType: "recording_segment",
+			wantTenantID:  outerTenant,
+		},
+		{
 			name: "StreamLifecycleUpdate overrides with inner tenant",
 			trigger: &ipcpb.MistTrigger{
 				TenantId: proto.String(outerTenant),
@@ -890,7 +904,9 @@ func TestUnwrapMistTriggerAllTypes(t *testing.T) {
 	}
 }
 
-func TestUnwrapMistTriggerDefaultUnknown(t *testing.T) {
+// A payload no analytics_events consumer handles is refused, never published
+// under a placeholder type that ingest can only log as unknown.
+func TestSendEventRejectsUnroutedPayload(t *testing.T) {
 	producer := &fakeProducer{}
 	server := newTestServer(producer)
 
@@ -903,11 +919,13 @@ func TestUnwrapMistTriggerDefaultUnknown(t *testing.T) {
 			trigger: &ipcpb.MistTrigger{TenantId: proto.String("aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee")},
 		},
 		{
-			name: "unhandled payload type RecordingSegment",
+			name: "PushInputClose",
 			trigger: &ipcpb.MistTrigger{
-				TenantId: proto.String("aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"),
-				TriggerPayload: &ipcpb.MistTrigger_RecordingSegment{
-					RecordingSegment: &ipcpb.RecordingSegmentTrigger{},
+				TriggerType: "PUSH_INPUT_CLOSE",
+				RequestId:   "source-event-pic",
+				TenantId:    proto.String("aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"),
+				TriggerPayload: &ipcpb.MistTrigger_PushInputClose{
+					PushInputClose: &ipcpb.PushInputCloseTrigger{StreamName: "live+demo", Pid: 42},
 				},
 			},
 		},
@@ -933,11 +951,39 @@ func TestUnwrapMistTriggerDefaultUnknown(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			_, eventType, _ := server.unwrapMistTrigger(tt.trigger)
-			if eventType != "unknown" {
-				t.Errorf("eventType = %q, want %q", eventType, "unknown")
+			_, err := server.SendEvent(context.Background(), tt.trigger)
+			if status.Code(err) != codes.InvalidArgument {
+				t.Fatalf("SendEvent error = %v, want InvalidArgument", err)
 			}
 		})
+	}
+	if len(producer.publishCalls) != 0 || len(producer.produceCalls) != 0 {
+		t.Fatalf("unrouted payloads reached Kafka: %d typed, %d raw", len(producer.publishCalls), len(producer.produceCalls))
+	}
+}
+
+// A durable trigger Helmsman could not parse is journaled whatever its type:
+// raw_mist_triggers is the only place its body can be reparsed from.
+func TestSendEventJournalsUnparsedDurableTrigger(t *testing.T) {
+	producer := &fakeProducer{}
+	server := newTestServer(producer)
+
+	trigger := &ipcpb.MistTrigger{
+		TriggerType: "PUSH_INPUT_CLOSE",
+		RequestId:   "source-event-unparsed",
+		TenantId:    proto.String("aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"),
+		TriggerPayload: &ipcpb.MistTrigger_RawMistWebhook{
+			RawMistWebhook: &ipcpb.RawMistWebhookTrigger{PayloadRaw: []byte("garbled"), ParseError: "bad field count"},
+		},
+	}
+	if _, err := server.SendEvent(context.Background(), trigger); err != nil {
+		t.Fatalf("SendEvent: %v", err)
+	}
+	if len(producer.publishCalls) != 1 || producer.publishCalls[0].EventType != "raw_mist_webhook" {
+		t.Fatalf("typed publishes = %+v, want one raw_mist_webhook", producer.publishCalls)
+	}
+	if len(producer.produceCalls) != 1 || producer.produceCalls[0].topic != topology.TopicRawMistTriggers {
+		t.Fatalf("raw journal publishes = %+v, want one to %s", producer.produceCalls, topology.TopicRawMistTriggers)
 	}
 }
 

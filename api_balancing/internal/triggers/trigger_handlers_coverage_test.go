@@ -106,6 +106,31 @@ func TestHandlePushInputClose_PersistsOfflineEffect(t *testing.T) {
 	}
 }
 
+// PUSH_INPUT_CLOSE is Foghorn's source-presence edge; no analytics consumer
+// handles it and Decklog refuses it, so the close never leaves Foghorn.
+func TestHandlePushInputClose_DoesNotForwardToDecklog(t *testing.T) {
+	installRegistryTrigHandlers(t)
+	resetStateTrigHandlers(t)
+	previous := control.GetDB()
+	control.SetDB(nil)
+	t.Cleanup(func() { control.SetDB(previous) })
+	capture, client := startDecklogCapture(t)
+
+	p := minimalProcessorTrigHandlers(t)
+	p.decklogClient = client
+	_, _, _ = p.handlePushInputClose(&ipcpb.MistTrigger{
+		TriggerType: "PUSH_INPUT_CLOSE",
+		NodeId:      "node-A",
+		TenantId:    ptrTrigHandlers("tenant-x"),
+		TriggerPayload: &ipcpb.MistTrigger_PushInputClose{
+			PushInputClose: &ipcpb.PushInputCloseTrigger{StreamName: "live+pic-forward", Pid: 4242, TriggerUnixMillis: 1},
+		},
+	})
+	if got := capture.received(); len(got) != 0 {
+		t.Fatalf("PUSH_INPUT_CLOSE reached Decklog %d time(s): %v", len(got), got[0].GetTriggerPayload())
+	}
+}
+
 func TestHandlePushInputClose_NoDatabaseReturnsRetryableError(t *testing.T) {
 	installRegistryTrigHandlers(t)
 	resetStateTrigHandlers(t)

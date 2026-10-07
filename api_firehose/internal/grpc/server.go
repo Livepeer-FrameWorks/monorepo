@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/analyticsevents"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/grpcutil"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/middleware"
@@ -17,8 +18,10 @@ import (
 
 	fwserver "github.com/Livepeer-FrameWorks/monorepo/pkg/server"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/health"
 	"google.golang.org/grpc/reflection"
+	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/emptypb"
@@ -374,113 +377,72 @@ func protoMessageToMap(msg proto.Message) (map[string]any, error) {
 	return out, nil
 }
 
-// unwrapMistTrigger picks the inner payload and canonical (current-compatible) event type.
-// Note: We publish only the inner payload to Kafka Data to avoid consumer confusion.
+// unwrapMistTrigger returns the envelope with its analytics_events type and
+// tenant. The type is empty for a payload no analytics_events consumer
+// handles (analyticsevents.UnroutedTriggerPayloads).
 func (s *DecklogServer) unwrapMistTrigger(trigger *ipcpb.MistTrigger) (proto.Message, string, string) {
 	tenantID := ""
 	if trigger.TenantId != nil {
 		tenantID = *trigger.TenantId
 	}
-	var eventType string
+	eventType, routed := analyticsevents.TriggerEventType(trigger)
+	if !routed {
+		eventType = ""
+	}
 
 	switch payload := trigger.GetTriggerPayload().(type) {
-	case *ipcpb.MistTrigger_PushRewrite:
-		eventType = "push_rewrite"
-	case *ipcpb.MistTrigger_PlayRewrite:
-		eventType = "play_rewrite"
-	case *ipcpb.MistTrigger_StreamSource:
-		eventType = "stream_source"
-	case *ipcpb.MistTrigger_PushOutStart:
-		eventType = "push_out_start"
-	case *ipcpb.MistTrigger_PushEnd:
-		eventType = "push_end"
-	case *ipcpb.MistTrigger_RestreamStatus:
-		if trigger.GetTriggerType() == string(mist.TriggerRestreamStatusFinal) {
-			eventType = "restream_status_final"
-		} else {
-			eventType = "restream_status"
-		}
-	case *ipcpb.MistTrigger_ViewerConnect:
-		eventType = "viewer_connect"
-	case *ipcpb.MistTrigger_ViewerDisconnect:
-		eventType = "viewer_disconnect"
-	case *ipcpb.MistTrigger_StreamBuffer:
-		eventType = "stream_buffer"
-	case *ipcpb.MistTrigger_StreamEnd:
-		eventType = "stream_end"
-	case *ipcpb.MistTrigger_TrackList:
-		eventType = "stream_track_list"
-	case *ipcpb.MistTrigger_RecordingComplete:
-		eventType = "recording_complete"
 	case *ipcpb.MistTrigger_StreamLifecycleUpdate:
-		eventType = "stream_lifecycle_update"
 		if payload.StreamLifecycleUpdate.TenantId != nil {
 			tenantID = *payload.StreamLifecycleUpdate.TenantId
 		}
 	case *ipcpb.MistTrigger_ClientLifecycleBatch:
-		eventType = "client_lifecycle_batch"
 		if payload.ClientLifecycleBatch.TenantId != nil {
 			tenantID = *payload.ClientLifecycleBatch.TenantId
 		}
 	case *ipcpb.MistTrigger_PlaybackBootTrace:
-		eventType = "playback_boot"
 		if payload.PlaybackBootTrace.TenantId != nil {
 			tenantID = *payload.PlaybackBootTrace.TenantId
 		}
 	case *ipcpb.MistTrigger_PlaybackSessionQoe:
-		eventType = "playback_session_qoe"
 		if payload.PlaybackSessionQoe.TenantId != nil {
 			tenantID = *payload.PlaybackSessionQoe.TenantId
 		}
 	case *ipcpb.MistTrigger_NodeLifecycleUpdate:
-		eventType = "node_lifecycle_update"
 		if payload.NodeLifecycleUpdate.TenantId != nil {
 			tenantID = *payload.NodeLifecycleUpdate.TenantId
 		}
 	case *ipcpb.MistTrigger_LoadBalancingData:
-		eventType = "load_balancing"
 		if payload.LoadBalancingData.TenantId != nil {
 			tenantID = *payload.LoadBalancingData.TenantId
 		}
 	case *ipcpb.MistTrigger_ClipLifecycleData:
-		eventType = "clip_lifecycle"
 		if payload.ClipLifecycleData.TenantId != nil {
 			tenantID = *payload.ClipLifecycleData.TenantId
 		}
 	case *ipcpb.MistTrigger_DvrLifecycleData:
-		eventType = "dvr_lifecycle"
 		if payload.DvrLifecycleData.TenantId != nil {
 			tenantID = *payload.DvrLifecycleData.TenantId
 		}
 	case *ipcpb.MistTrigger_StorageLifecycleData:
-		eventType = "storage_lifecycle"
 		if payload.StorageLifecycleData.TenantId != nil {
 			tenantID = *payload.StorageLifecycleData.TenantId
 		}
 	case *ipcpb.MistTrigger_ProcessBilling:
-		eventType = "process_billing"
 		if payload.ProcessBilling.TenantId != nil {
 			tenantID = *payload.ProcessBilling.TenantId
 		}
-	case *ipcpb.MistTrigger_RawMistWebhook:
-		eventType = "raw_mist_webhook"
 	case *ipcpb.MistTrigger_StorageSnapshot:
-		eventType = "storage_snapshot"
 		if payload.StorageSnapshot.TenantId != nil {
 			tenantID = *payload.StorageSnapshot.TenantId
 		}
 	case *ipcpb.MistTrigger_VodLifecycleData:
-		eventType = "vod_lifecycle"
 		if payload.VodLifecycleData.TenantId != nil {
 			tenantID = *payload.VodLifecycleData.TenantId
 		}
 	case *ipcpb.MistTrigger_FederationEventData:
-		eventType = "federation_event"
 		if payload.FederationEventData.TenantId != nil {
 			tenantID = *payload.FederationEventData.TenantId
 		}
-	default:
-		eventType = "unknown"
 	}
 
 	return trigger, eventType, tenantID
@@ -505,6 +467,19 @@ func (s *DecklogServer) SendEvent(ctx context.Context, trigger *ipcpb.MistTrigge
 
 	// Unwrap inner payload and determine event type + tenant
 	msg, eventType, tenantID := s.unwrapMistTrigger(trigger)
+	if eventType == "" {
+		if s.metrics != nil {
+			if s.metrics.EventsIngested != nil {
+				s.metrics.EventsIngested.WithLabelValues("unrouted", "rejected").Inc()
+			}
+			s.metrics.GRPCRequests.WithLabelValues("SendEvent", "invalid_request").Inc()
+		}
+		s.logger.WithFields(logging.Fields{
+			"trigger_type": trigger.GetTriggerType(),
+			"node_id":      trigger.GetNodeId(),
+		}).Warn("Rejected MistTrigger payload that no analytics_events consumer handles")
+		return nil, status.Errorf(codes.InvalidArgument, "MistTrigger payload %T is not an analytics event", trigger.GetTriggerPayload())
+	}
 	if s.metrics != nil && s.metrics.EventsIngested != nil {
 		s.metrics.EventsIngested.WithLabelValues(eventType, "received").Inc()
 	}
@@ -624,14 +599,16 @@ func sanitizePushLifecycleEnvelope(trigger *ipcpb.MistTrigger) *ipcpb.MistTrigge
 }
 
 // publishRawMistTrigger forwards the original MistTrigger envelope to the
-// audit/replay topic. Scoped to the seven final/accounting trigger types
-// in triggerTypesForRawJournal so the table stays focused.
+// audit/replay topic: the final/accounting trigger types in
+// triggerTypesForRawJournal, and every durable trigger Helmsman could not
+// parse, whose raw body can only be reparsed from this journal.
 func (s *DecklogServer) publishRawMistTrigger(trigger *ipcpb.MistTrigger, tenantID string) error {
 	if s.rawTriggersTopic == "" {
 		return nil
 	}
 	triggerType := trigger.GetTriggerType()
-	if _, ok := triggerTypesForRawJournal[triggerType]; !ok {
+	_, accounting := triggerTypesForRawJournal[triggerType]
+	if !accounting && trigger.GetRawMistWebhook() == nil {
 		return nil
 	}
 	sourceEventID := trigger.GetRequestId()
@@ -710,16 +687,16 @@ func (s *DecklogServer) SendGatewayTelemetry(ctx context.Context, event *ipcpb.G
 
 	var (
 		payload           proto.Message
-		eventType         string
 		effectiveTenantID = clusterOwnerTenantID
 	)
+	eventType, _ := analyticsevents.GatewayTelemetryEventType(event)
 	switch p := event.GetPayload().(type) {
 	case *ipcpb.GatewayTelemetryEvent_Discovery:
-		payload, eventType = p.Discovery, "orchestrator_discovery_observed"
+		payload = p.Discovery
 	case *ipcpb.GatewayTelemetryEvent_State:
-		payload, eventType = p.State, "orchestrator_state_update"
+		payload = p.State
 	case *ipcpb.GatewayTelemetryEvent_Transcode:
-		payload, eventType = p.Transcode, "orchestrator_transcode_outcome"
+		payload = p.Transcode
 		if !isValidUUID(event.GetStreamTenantId()) {
 			s.logger.WithFields(logging.Fields{
 				"gateway_id":              event.GetGatewayId(),
@@ -734,7 +711,7 @@ func (s *DecklogServer) SendGatewayTelemetry(ctx context.Context, event *ipcpb.G
 		}
 		effectiveTenantID = event.GetStreamTenantId()
 	case *ipcpb.GatewayTelemetryEvent_Ai:
-		payload, eventType = p.Ai, "orchestrator_ai_outcome"
+		payload = p.Ai
 		if !isValidUUID(event.GetStreamTenantId()) {
 			s.logger.WithFields(logging.Fields{
 				"gateway_id":              event.GetGatewayId(),
