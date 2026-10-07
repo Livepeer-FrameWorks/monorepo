@@ -464,6 +464,78 @@ func runBackoffAndAutoDisable(t *testing.T, db *sql.DB) {
 	}
 }
 
+// A destination-policy refusal fails its delivery at once and still extends
+// the endpoint's failure streak, so an endpoint whose host keeps resolving to
+// a refused address is disabled once the streak holds 20 failures over five
+// days, and not before.
+func TestBosunPolicyRefusalCountsTowardAutoDisable_RealPG(t *testing.T) {
+	db := startPostgres(t)
+	store := newStore(t, db)
+	ctx := context.Background()
+	recv := newReceiver(t)
+	tenant := newTenant()
+	ep := createEndpoint(t, store, tenant, recv.server.URL+"/hook")
+	backdateEndpoints(t, db)
+	handler := &consumer.Handler{Recorder: store}
+	worker := &delivery.Worker{Store: store, Sender: &delivery.Sender{HTTP: recv.productionClient(t)}, Jitter: fixedJitter}
+	refuse := func() {
+		t.Helper()
+		_, m := streamLiveRecord(t, tenant, topology.TopicDomainEvents)
+		if err := handler.Handle(ctx, m); err != nil {
+			t.Fatal(err)
+		}
+		claims, err := store.Claim(ctx, 10)
+		if err != nil || len(claims) != 1 {
+			t.Fatalf("claim = %d, %v", len(claims), err)
+		}
+		worker.Process(claims[0], time.Now().Add(ledger.Lease))
+		d, attempts, err := store.GetDelivery(ctx, tenant, claims[0].DeliveryID)
+		if err != nil || d.Status != ledger.DeliveryFailed || len(attempts) != 1 || attempts[0].ErrorClass != delivery.ClassBlockedDestination {
+			t.Fatalf("delivery = %+v %+v, %v; want failed with one blocked_destination attempt", d, attempts, err)
+		}
+	}
+
+	refuse()
+	got, err := store.GetEndpoint(ctx, tenant, ep.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Status != ledger.StatusEnabled || got.ConsecutiveFailures != 1 || got.FailingSince == nil {
+		t.Fatalf("after one refusal: %+v; want enabled with a one-failure streak", got)
+	}
+	// Thousands of refusals inside five days leave the endpoint enabled.
+	if _, err := db.Exec(`UPDATE bosun.webhook_endpoints SET consecutive_failures = 2176, failing_since = now() - interval '4 days 23 hours' WHERE id = $1`, ep.ID); err != nil {
+		t.Fatal(err)
+	}
+	refuse()
+	if got, err = store.GetEndpoint(ctx, tenant, ep.ID); err != nil || got.Status != ledger.StatusEnabled || got.ConsecutiveFailures != 2177 {
+		t.Fatalf("2177 refusals over 4 days 23 hours: %+v, %v; want enabled", got, err)
+	}
+	// Past five days the next refusal disables it.
+	if _, err := db.Exec(`UPDATE bosun.webhook_endpoints SET failing_since = now() - interval '5 days 1 hour' WHERE id = $1`, ep.ID); err != nil {
+		t.Fatal(err)
+	}
+	refuse()
+	if got, err = store.GetEndpoint(ctx, tenant, ep.ID); err != nil || got.Status != ledger.StatusDisabled || got.DisabledReason != ledger.DisabledByFailing {
+		t.Fatalf("after a refusal past five days: %+v, %v; want disabled/failing", got, err)
+	}
+	if n := countRows(t, db, `SELECT count(*) FROM bosun.webhook_notification_outbox WHERE tenant_id = $1 AND endpoint_id = $2 AND kind = 'endpoint_disabled'`, tenant, ep.ID); n != 1 {
+		t.Fatalf("notification rows = %d, want 1", n)
+	}
+	var eventType string
+	var payload []byte
+	if err := db.QueryRow(`SELECT event_type, payload FROM bosun.domain_event_outbox WHERE tenant_id = $1 AND aggregate_id = $2`, tenant, ep.ID).Scan(&eventType, &payload); err != nil {
+		t.Fatalf("audit event: %v", err)
+	}
+	_, msgOut, err := events.Decode(eventType, payload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if audit, ok := msgOut.(*internalv1.WebhookEndpointAutoDisabled); eventType != "webhook.endpoint_auto_disabled" || !ok || audit.GetConsecutiveFailures() != 2178 {
+		t.Fatalf("audit event = %s %v", eventType, msgOut)
+	}
+}
+
 func TestBosunReplayKeepsID_RealPG(t *testing.T) {
 	runReplayKeepsID(t, startPostgres(t))
 }

@@ -193,7 +193,8 @@ over 15 minutes), `BosunDomainEventConsumerLag` (over 1,000 records on a topic),
 - Unit tests (`make test-bosun`, plus `pkg/webhooksig`): URL, event type, and description
   validation; Standard Webhooks signer vectors; body rendering; consumer dispositions.
 - `make verify-bosun-db` (`BOSUN_REALPG_TESTS` on PostgreSQL in Docker): mirrored duplicates,
-  tenant isolation, lease reclaim without double delivery, backoff and auto-disable, replay ID,
+  tenant isolation, lease reclaim without double delivery, backoff and auto-disable, auto-disable
+  after destination-policy refusals, replay ID,
   pruning, prune racing a replay, permanent and transient Bosun-side failures, the endpoint limit
   and secrets, offsets committed after the transaction (franz-go
   `kfake`), and delivery to a local TLS receiver through a client pinned to that address.
