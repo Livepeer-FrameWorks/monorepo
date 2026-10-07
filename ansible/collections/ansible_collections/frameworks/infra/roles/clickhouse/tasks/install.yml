@@ -252,11 +252,27 @@
         path: /etc/clickhouse-server/config.d/openssl.xml
         state: absent
 
-    - name: Remove unconditional openSSL block from config.xml when ClickHouse TLS is disabled
-      ansible.builtin.replace:
-        path: /etc/clickhouse-server/config.xml
-        regexp: '(?s)\n  <openSSL>.*?\n  </openSSL>\n'
-        replace: "\n"
+    # idealista.clickhouse renders an unconditional openSSL block into
+    # config.xml on every run; removing it from the merged configuration keeps
+    # config.xml as rendered, so an unchanged apply does not restart ClickHouse.
+    - name: Remove the openSSL block through a drop-in when ClickHouse TLS is disabled
+      ansible.builtin.copy:
+        dest: /etc/clickhouse-server/config.d/no-openssl.xml
+        owner: clickhouse
+        group: clickhouse
+        mode: "0644"
+        content: |
+          <clickhouse>
+            <openSSL remove="remove"/>
+          </clickhouse>
+      notify: clickhouse restart
+
+- name: Remove the openSSL removal drop-in when ClickHouse TLS is enabled
+  ansible.builtin.file:
+    path: /etc/clickhouse-server/config.d/no-openssl.xml
+    state: absent
+  when: clickhouse_enable_ssl | default(false) | bool
+  notify: clickhouse restart
 
 - name: Normalize malformed upstream default quota in users.xml
   ansible.builtin.replace:

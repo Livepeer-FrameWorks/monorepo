@@ -256,3 +256,29 @@ func TestClickHouseRoleOverridesBrokenSystemLogPartitionKeys(t *testing.T) {
 		t.Errorf("system log tables are created at startup; the drop-in must notify clickhouse restart: %v", task["notify"])
 	}
 }
+
+// idealista.clickhouse re-renders config.xml with its openSSL block on every
+// run; stripping the block from config.xml afterwards changed the file, and
+// restarted ClickHouse, on every apply. A config.d drop-in removes the block
+// from the merged configuration instead and leaves config.xml as rendered.
+func TestClickHouseRoleRemovesOpenSSLThroughADropIn(t *testing.T) {
+	const file = "ansible/collections/ansible_collections/frameworks/infra/roles/clickhouse/tasks/install.yml"
+	var tasks []any
+	if err := yaml.Unmarshal([]byte(readRepoFile(t, file)), &tasks); err != nil {
+		t.Fatal(err)
+	}
+	walkRoleBlocks(tasks, nil, func(task map[string]any, _ []map[string]any) {
+		if spec, ok := moduleSpec(task, "replace"); ok && stringValue(spec["path"]) == "/etc/clickhouse-server/config.xml" {
+			t.Errorf("%q edits the config.xml idealista.clickhouse renders", task["name"])
+		}
+	})
+	disabled := roleTaskByName(t, file, "Remove the openSSL block through a drop-in when ClickHouse TLS is disabled")
+	spec, _ := moduleSpec(disabled, "copy")
+	if spec["dest"] != "/etc/clickhouse-server/config.d/no-openssl.xml" || !strings.Contains(stringValue(spec["content"]), `<openSSL remove="remove"/>`) {
+		t.Fatalf("drop-in must remove openSSL from the merged config: %v", spec)
+	}
+	enabled := roleTaskByName(t, file, "Remove the openSSL removal drop-in when ClickHouse TLS is enabled")
+	if spec, _ := moduleSpec(enabled, "file"); spec["state"] != "absent" {
+		t.Fatalf("TLS-enabled hosts must keep openSSL: %v", spec)
+	}
+}
