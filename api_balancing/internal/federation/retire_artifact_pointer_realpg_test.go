@@ -15,6 +15,8 @@ import (
 	clusterpeerpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/cluster_peer"
 	commodorepb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/commodore"
 	foghornfederationpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/foghorn_federation"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 // originCell answers PrepareArtifact as the origin cell would: not found for an
@@ -30,6 +32,12 @@ func (o *originCell) PrepareArtifact(_ context.Context, clusterID, _ string, req
 		return &foghornfederationpb.PrepareArtifactResponse{Error: control.PrepareArtifactNotFoundRefusal}, nil
 	}
 	return &foghornfederationpb.PrepareArtifactResponse{Ready: true, Url: "https://s3.example/" + req.GetArtifactId()}, nil
+}
+
+type unreachableOrigin struct{}
+
+func (unreachableOrigin) PrepareArtifact(context.Context, string, string, *foghornfederationpb.PrepareArtifactRequest) (*foghornfederationpb.PrepareArtifactResponse, error) {
+	return nil, status.Error(codes.Unavailable, "connection refused")
 }
 
 type staticPeers map[string]string
@@ -101,9 +109,30 @@ func TestRetireArtifactPointerOnOriginDeletion_RealPG(t *testing.T) {
 		t.Fatalf("origin asked %v, want each pointer confirmed with cell-eu", origin.asked)
 	}
 
+	// An origin that cannot be reached when asked leaves the pointer serving and
+	// reports the failure; the signed tombstone retires it later.
+	unreachable := "unreachableorigin000000000000001"
+	if _, err := queries.AdoptRemoteArtifact(ctx, foghorndb.AdoptRemoteArtifactParams{
+		ArtifactHash: unreachable, ArtifactType: "vod", TenantID: tenant, InternalName: "vod+" + unreachable,
+		Format: "mp4", SyncStatus: "synced", OriginClusterID: "cell-eu",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	srv.originPreparer = unreachableOrigin{}
+	resp, err := srv.ForwardArtifactCommand(ctx, &foghornfederationpb.ForwardArtifactCommandRequest{
+		Command: RetireArtifactPointerCommand, ArtifactHash: unreachable, TenantId: tenant,
+	})
+	if err == nil || resp.GetHandled() {
+		t.Fatalf("retire with the origin unreachable = %+v, %v; want an error and no retirement", resp, err)
+	}
+	if got := pointerStatus(unreachable); got != "ready" {
+		t.Fatalf("pointer status with the origin unreachable = %q, want ready", got)
+	}
+	srv.originPreparer = origin
+
 	// Playback of the retired pointer now resolves to not found.
 	peer := &clusterpeerpb.TenantClusterPeer{ClusterId: "cell-eu"}
-	_, err := control.ResolveArtifactPlaybackWithIdentity(ctx, &control.PlaybackDependencies{
+	_, err = control.ResolveArtifactPlaybackWithIdentity(ctx, &control.PlaybackDependencies{
 		DB: conn, FedClient: origin, PeerResolver: staticPeers{"cell-eu": "foghorn.eu:18019"}, LocalClusterID: "cell-us",
 	}, "playback-"+deleted, &commodorepb.ResolveArtifactPlaybackIDResponse{
 		Found: true, TenantId: tenant, ContentType: "vod", ArtifactHash: deleted, OriginClusterId: "cell-eu",

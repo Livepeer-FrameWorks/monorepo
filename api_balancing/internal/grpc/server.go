@@ -408,8 +408,11 @@ func (s *FoghornGRPCServer) forwardArtifactDeletionToFederation(ctx context.Cont
 // routes its playback from that pointer until the signed tombstone reaches it,
 // which follows the catalog projection; each peer confirms the deletion with
 // this cell and retires its pointer before the delete returns, so no cell keeps
-// redirecting viewers to a deleted artifact. The tombstone remains the durable
-// path for a peer this call cannot reach.
+// redirecting viewers to a deleted artifact. Peers are asked in parallel, each
+// under the federation forward deadline (artifactForwardPeerTimeout), so a down or
+// partitioned peer delays the delete by at most that deadline and never fails it:
+// the deletion is committed before this runs. A peer that cannot be reached is
+// logged with its error and converges when the signed tombstone reaches it.
 func (s *FoghornGRPCServer) retirePeerArtifactPointers(ctx context.Context, tenantID string, artifactHashes ...string) {
 	if s.federationClient == nil || s.peerManager == nil || tenantID == "" || len(artifactHashes) == 0 {
 		return
