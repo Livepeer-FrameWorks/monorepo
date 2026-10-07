@@ -17,9 +17,10 @@ import (
 func TestHandleStreamAdvertisement_MapsRAMIntoEdgeCandidates(t *testing.T) {
 	cache, _ := setupTestCache(t)
 	srv := NewFederationServer(FederationServerConfig{
-		Logger:    testLogger(),
-		ClusterID: "cluster-a",
-		Cache:     cache,
+		Logger:      testLogger(),
+		ClusterID:   "cluster-a",
+		Cache:       cache,
+		PeerManager: unknownPeers{},
 	})
 
 	prev := control.StreamRegistryInstance
@@ -162,9 +163,10 @@ func TestHandleStreamAdvertisement_RefusesForeignControlCell(t *testing.T) {
 func TestHandleStreamAdvertisement_PinsControlCellToChannel(t *testing.T) {
 	cache, _ := setupTestCache(t)
 	srv := NewFederationServer(FederationServerConfig{
-		Logger:    testLogger(),
-		ClusterID: "cluster-a",
-		Cache:     cache,
+		Logger:      testLogger(),
+		ClusterID:   "cluster-a",
+		Cache:       cache,
+		PeerManager: unknownPeers{},
 	})
 
 	prev := control.StreamRegistryInstance
@@ -213,6 +215,7 @@ func TestHandleStreamAdvertisement_RefusesOwnIdentity(t *testing.T) {
 		ClusterID:     "cluster-a",
 		ControlCellID: "cell-a",
 		Cache:         cache,
+		PeerManager:   unknownPeers{},
 	})
 
 	prev := control.StreamRegistryInstance

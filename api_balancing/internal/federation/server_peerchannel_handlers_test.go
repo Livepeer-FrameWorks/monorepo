@@ -24,9 +24,18 @@ func (noopDVRCreator) StartDVR(context.Context, *sharedpb.StartDVRRequest) (*sha
 	return &sharedpb.StartDVRResponse{}, nil
 }
 
+// unknownPeers is a peer authority with no knowledge of any peer: it excludes no
+// tenant and places no peer in a control cell, the state of a peer manager
+// before discovery.
+type unknownPeers struct{}
+
+func (unknownPeers) GetPeerAddr(string) string              { return "" }
+func (unknownPeers) PeerExcludesTenant(string, string) bool { return false }
+func (unknownPeers) PeerControlCell(string) (string, bool)  { return "", false }
+
 func TestHandleStreamLifecycle_RevisionFencesChannelReordering(t *testing.T) {
 	cache, _ := setupTestCache(t)
-	srv := NewFederationServer(FederationServerConfig{Logger: testLogger(), ClusterID: "cluster-a", Cache: cache})
+	srv := NewFederationServer(FederationServerConfig{Logger: testLogger(), ClusterID: "cluster-a", Cache: cache, PeerManager: unknownPeers{}})
 	event := func(stream string, revision int64, live bool) *foghornfederationpb.StreamLifecycleEvent {
 		return &foghornfederationpb.StreamLifecycleEvent{
 			InternalName: stream, TenantId: "tenant-a", ClusterId: "authenticated-peer",
@@ -64,6 +73,7 @@ func TestPeerChannel_StoresIncomingPayloadsInCache(t *testing.T) {
 		Logger:                   testLogger(),
 		ClusterID:                "cluster-a",
 		Cache:                    cache,
+		PeerManager:              unknownPeers{},
 		AllowFederationMutations: true,
 	})
 
@@ -266,13 +276,13 @@ func TestPeerChannel_HandlerNilPayloadsNoop(t *testing.T) {
 	srv.handleReplicationEvent(ctx, "cluster-b", nil)
 }
 
-func TestFederationServer_SettersAndRegisterServices(t *testing.T) {
+func TestFederationServer_DelegatesAndRegisterServices(t *testing.T) {
 	srv := NewFederationServer(FederationServerConfig{
-		Logger:    testLogger(),
-		ClusterID: "cluster-a",
+		Logger:      testLogger(),
+		ClusterID:   "cluster-a",
+		ClipCreator: noopClipCreator{},
+		DVRCreator:  noopDVRCreator{},
 	})
-	srv.SetClipCreator(noopClipCreator{})
-	srv.SetDVRCreator(noopDVRCreator{})
 	if srv.clipCreator == nil || srv.dvrCreator == nil {
 		t.Fatal("expected clip and dvr creators to be set")
 	}

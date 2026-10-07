@@ -4,7 +4,9 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
 	"io"
+	"reflect"
 	"strings"
 	"sync"
 	"time"
@@ -108,13 +110,6 @@ type FederationServer struct {
 	storageMintCounter *prometheus.CounterVec
 }
 
-// SetStorageMintMetric wires the MintStorageURLs outcome counter (label:
-// result). Production wires this from cmd/foghorn/main.go alongside the
-// other federation metrics; tests can leave it unset.
-func (s *FederationServer) SetStorageMintMetric(c *prometheus.CounterVec) {
-	s.storageMintCounter = c
-}
-
 func (s *FederationServer) recordStorageMint(result string) {
 	if s.storageMintCounter == nil {
 		return
@@ -204,6 +199,66 @@ type FederationServerConfig struct {
 	// AllowFederationMutations enables the entire inbound federation RPC surface for provider-controlled
 	// Foghorns. The entrypoint sets it with FEDERATION_ENABLED; its zero value remains fail-closed.
 	AllowFederationMutations bool
+	// StorageMintCounter records MintStorageURLs outcomes (label: result). Optional.
+	StorageMintCounter *prometheus.CounterVec
+}
+
+// Validate reports the first dependency a server serving the federation surface
+// is missing. A server built for focused tests or for local origin-pull
+// arrangement may omit any of them; one that accepts peer RPCs may not, because
+// each missing dependency turns a peer-authority check or a peer call into a
+// refusal for every request.
+func (cfg FederationServerConfig) Validate() error {
+	if !cfg.AllowFederationMutations {
+		return nil
+	}
+	required := []struct {
+		name  string
+		value any
+	}{
+		{"Logger", cfg.Logger},
+		{"LB", cfg.LB},
+		{"Cache", cfg.Cache},
+		{"DB", cfg.DB},
+		{"PeerManager", cfg.PeerManager},
+		{"FedClient", cfg.FedClient},
+		{"Placement", cfg.Placement},
+		{"ClipCreator", cfg.ClipCreator},
+		{"DVRCreator", cfg.DVRCreator},
+		{"ArtifactHandler", cfg.ArtifactHandler},
+		{"AdvertisedBacking", cfg.AdvertisedBacking},
+		{"IsServedCluster", cfg.IsServedCluster},
+	}
+	for _, dep := range required {
+		if isNilDependency(dep.value) {
+			return fmt.Errorf("federation server requires %s", dep.name)
+		}
+	}
+	if strings.TrimSpace(cfg.ClusterID) == "" {
+		return errors.New("federation server requires ClusterID")
+	}
+	if _, ok := cfg.PeerManager.(PeerTenantAuthority); !ok {
+		return errors.New("federation server PeerManager must answer peer tenant scope")
+	}
+	if _, ok := cfg.PeerManager.(PeerCellAuthority); !ok {
+		return errors.New("federation server PeerManager must answer peer control cells")
+	}
+	return nil
+}
+
+// isNilDependency also catches a nil pointer, map or func held in a non-nil
+// interface, which a plain == nil comparison reads as present.
+func isNilDependency(value any) bool {
+	if value == nil {
+		return true
+	}
+	v := reflect.ValueOf(value)
+	switch v.Kind() {
+	case reflect.Pointer, reflect.Interface, reflect.Map, reflect.Slice, reflect.Func, reflect.Chan:
+		return v.IsNil()
+	default:
+		return false
+	}
 }
 
 // artifactPreparer asks a peer cell's PrepareArtifact.
@@ -237,6 +292,7 @@ func NewFederationServer(cfg FederationServerConfig) *FederationServer {
 		isServedCluster:   cfg.IsServedCluster,
 
 		allowFederationMutations: cfg.AllowFederationMutations,
+		storageMintCounter:       cfg.StorageMintCounter,
 	}
 }
 
@@ -274,17 +330,6 @@ func (s *FederationServer) canLocallyMintFor(ctx context.Context, tenantID, targ
 		return false
 	}
 	return s.localS3Backing.Equal(advertised)
-}
-
-// SetClipCreator wires the clip creation delegate (set after FoghornGRPCServer is created).
-func (s *FederationServer) SetClipCreator(cc ClipCreator) { s.clipCreator = cc }
-
-// SetDVRCreator wires the DVR creation delegate (set after FoghornGRPCServer is created).
-func (s *FederationServer) SetDVRCreator(dc DVRCreator) { s.dvrCreator = dc }
-
-// SetArtifactCommandHandler wires the artifact command delegate (set after FoghornGRPCServer is created).
-func (s *FederationServer) SetArtifactCommandHandler(h ArtifactCommandHandler) {
-	s.artifactHandler = h
 }
 
 // RegisterServices registers the FoghornFederation service on the gRPC server.
@@ -1672,11 +1717,21 @@ func (s *FederationServer) handleStreamLifecycle(ctx context.Context, peerCluste
 		}).Warn("Rejected stream lifecycle with no tenant attribution")
 		return
 	}
-	// Refuse only on positive knowledge that the peer does not carry the tenant.
-	// Not knowing a peer's scope is our own gap, and denying ingest over it would
-	// be worse than accepting an event we cannot corroborate.
-	if authority, ok := s.peerManager.(PeerTenantAuthority); ok && authority != nil &&
-		authority.PeerExcludesTenant(peerClusterID, tenantID) {
+	// Refuse on positive knowledge that the peer does not carry the tenant. Not
+	// knowing one peer's scope is our own gap, and denying ingest over it would be
+	// worse than accepting an event we cannot corroborate. Having no source of
+	// peer scope at all is different: every claim would go unchecked, so every
+	// event is refused, which leaves ingest admitted.
+	authority, ok := s.peerTenantAuthority()
+	if !ok {
+		s.logger.WithFields(logging.Fields{
+			"peer_cluster":  peerClusterID,
+			"tenant_id":     tenantID,
+			"internal_name": ev.GetInternalName(),
+		}).Error("Rejected stream lifecycle: no peer tenant authority is wired")
+		return
+	}
+	if authority.PeerExcludesTenant(peerClusterID, tenantID) {
 		s.logger.WithFields(logging.Fields{
 			"peer_cluster":  peerClusterID,
 			"tenant_id":     tenantID,
@@ -1781,9 +1836,11 @@ func (s *FederationServer) handleStreamAdvertisement(_ context.Context, peerClus
 // still pinned to the channel, so a single connection cannot file records under
 // one cell and then withdraw another's.
 //
-// Absence of knowledge is not refusal. Self-hosted Foghorns are not a day-one
-// deployment, and a peer with no active membership yet is the normal case during
-// discovery; refusing it would drop legitimate advertisements.
+// Absence of knowledge about one peer is not refusal. Self-hosted Foghorns are
+// not a day-one deployment, and a peer with no active membership yet is the
+// normal case during discovery; refusing it would drop legitimate
+// advertisements. A server with no cell authority at all refuses every
+// advertisement that names a cell.
 func (s *FederationServer) advertisedCellIsPeers(peerClusterID, cellID string, channelCell *string) bool {
 	// Our own identity is never something a peer tells us. PeerChannel already
 	// refuses a caller claiming our cluster id; this is the same refusal for the
@@ -1795,15 +1852,21 @@ func (s *FederationServer) advertisedCellIsPeers(peerClusterID, cellID string, c
 		}).Warn("Refusing stream advertisement naming this Foghorn's own identity")
 		return false
 	}
-	if authority, ok := s.peerManager.(PeerCellAuthority); ok && authority != nil {
-		if known, ok := authority.PeerControlCell(peerClusterID); ok && known != cellID {
-			s.logger.WithFields(logging.Fields{
-				"peer_cluster": peerClusterID,
-				"claimed_cell": cellID,
-				"known_cell":   known,
-			}).Warn("Refusing stream advertisement naming a control cell the peer does not belong to")
-			return false
-		}
+	authority, ok := s.peerCellAuthority()
+	if !ok {
+		s.logger.WithFields(logging.Fields{
+			"peer_cluster": peerClusterID,
+			"claimed_cell": cellID,
+		}).Error("Refusing stream advertisement: no peer control-cell authority is wired")
+		return false
+	}
+	if known, ok := authority.PeerControlCell(peerClusterID); ok && known != cellID {
+		s.logger.WithFields(logging.Fields{
+			"peer_cluster": peerClusterID,
+			"claimed_cell": cellID,
+			"known_cell":   known,
+		}).Warn("Refusing stream advertisement naming a control cell the peer does not belong to")
+		return false
 	}
 	if channelCell == nil {
 		return true
@@ -1821,6 +1884,22 @@ func (s *FederationServer) advertisedCellIsPeers(peerClusterID, cellID string, c
 		return false
 	}
 	return true
+}
+
+func (s *FederationServer) peerTenantAuthority() (PeerTenantAuthority, bool) {
+	authority, ok := s.peerManager.(PeerTenantAuthority)
+	if !ok || isNilDependency(authority) {
+		return nil, false
+	}
+	return authority, true
+}
+
+func (s *FederationServer) peerCellAuthority() (PeerCellAuthority, bool) {
+	authority, ok := s.peerManager.(PeerCellAuthority)
+	if !ok || isNilDependency(authority) {
+		return nil, false
+	}
+	return authority, true
 }
 
 // droppedAdvertisementNotice bounds how often one peer's dropped advertisements
@@ -1922,7 +2001,7 @@ func (s *FederationServer) MigrateArtifactMetadata(ctx context.Context, req *fog
 	if s.db == nil {
 		return nil, status.Error(codes.Internal, "database not available")
 	}
-	if s.fedClient == nil || s.peerManager == nil {
+	if s.fedClient == nil || isNilDependency(s.peerManager) {
 		return nil, status.Error(codes.Internal, "federation client not available")
 	}
 
@@ -2130,10 +2209,14 @@ const RetireArtifactPointerCommand = "retire_artifact_pointer"
 // origin cell deleted, so playback here stops routing to it at once instead of
 // when the signed tombstone arrives. The command names no authority of its own:
 // the pointer is retired only when its recorded origin cell, asked directly,
-// answers that it holds no such artifact. Handled reports a retired pointer.
+// answers that it holds no such artifact. Handled reports a retired pointer. A
+// server that cannot read pointers or ask the origin returns an error rather
+// than an empty answer, which the origin would read as no pointer here.
 func (s *FederationServer) retireArtifactPointer(ctx context.Context, artifactHash, tenantID string) (*foghornfederationpb.ForwardArtifactCommandResponse, error) {
-	if s.db == nil || s.originPreparer == nil || s.peerManager == nil {
-		return &foghornfederationpb.ForwardArtifactCommandResponse{}, nil
+	if s.db == nil || isNilDependency(s.originPreparer) || isNilDependency(s.peerManager) {
+		s.logger.WithFields(logging.Fields{"artifact_hash": artifactHash, "tenant_id": tenantID}).
+			Error("Cannot retire a federated artifact pointer: pointer store or origin lookup is not wired")
+		return nil, status.Error(codes.FailedPrecondition, "artifact pointer retirement is not available")
 	}
 	log := s.logger.WithFields(logging.Fields{"artifact_hash": artifactHash, "tenant_id": tenantID})
 	queries := foghorndb.New(s.db)

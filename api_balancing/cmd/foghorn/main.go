@@ -1094,49 +1094,27 @@ func main() {
 		return federation.S3Backing{}, false
 	}
 
+	// The inbound federation server is built from these peers once the gRPC
+	// server it delegates clip, DVR and artifact commands to exists.
+	var fedPeers *federationPeers
 	if federationEnabled && redisClient != nil && qmClient != nil && bootstrapOwnerTenantID != "" {
-		remoteEdgeCache = federation.NewRemoteEdgeCache(redisClient, foghornCfg.ClusterID, logger)
-
-		federationServer = federation.NewFederationServer(federation.FederationServerConfig{
-			Logger:                   logger,
-			LB:                       lb,
-			ClusterID:                foghornCfg.ClusterID,
-			Cache:                    remoteEdgeCache,
-			ControlCellID:            controlCellID,
-			DB:                       db,
-			S3Client:                 s3ForFederation,
-			Placement:                placementDestination,
-			AllowFederationMutations: federationEnabled,
-			LocalS3Backing: federation.S3Backing{
-				Bucket:   localS3Backing.Bucket,
-				Endpoint: localS3Backing.Endpoint,
-				Region:   localS3Backing.Region,
-				Prefix:   localS3Backing.Prefix,
-			},
-			AdvertisedBacking: advertisedBackingForTenant,
-			IsServedCluster:   control.IsServedCluster,
-		})
-
-		fedPool := foghornpool.NewPool(federationFoghornPoolConfig(
-			serviceToken,
-			logger,
-			cfg.AllowInsecure,
-			cfg.CAPath,
-			cfg.FoghornGRPCTLSServerName,
-		))
-		defer fedPool.Close()
-
-		peerManager = federation.NewPeerManager(federation.PeerManagerConfig{
-			ClusterID:           foghornCfg.ClusterID,
-			ControlCellID:       controlCellID,
-			InstanceID:          instanceID,
-			Pool:                fedPool,
-			QM:                  qmClient,
-			Cache:               remoteEdgeCache,
+		fedPeers = newFederationPeers(federationPeersConfig{
+			ClusterID:     foghornCfg.ClusterID,
+			ControlCellID: controlCellID,
+			InstanceID:    instanceID,
+			OwnerTenantID: bootstrapOwnerTenantID,
+			Redis:         redisClient,
+			Discovery:     qmClient,
+			Pool: federationFoghornPoolConfig(
+				serviceToken,
+				logger,
+				cfg.AllowInsecure,
+				cfg.CAPath,
+				cfg.FoghornGRPCTLSServerName,
+			),
+			Decklog:             decklogClient,
 			Logger:              logger,
-			DecklogClient:       decklogClient,
-			OwnerTenantID:       bootstrapOwnerTenantID,
-			SelfGeoFunc:         handlers.GetSelfGeo,
+			SelfGeo:             handlers.GetSelfGeo,
 			CanPurgeMemberships: control.PurgeableAdmissionEffectFences,
 			// Late-bound through the identity facade (wired further down,
 			// after the stream registry exists) so ad attribution shares
@@ -1148,12 +1126,10 @@ func main() {
 				return nil, nil
 			},
 		})
-		defer peerManager.Close()
-
-		fedClient = federation.NewFederationClient(federation.FederationClientConfig{
-			Pool:   fedPool,
-			Logger: logger,
-		})
+		defer fedPeers.Close()
+		remoteEdgeCache = fedPeers.cache
+		peerManager = fedPeers.peerManager
+		fedClient = fedPeers.client
 
 		logger.WithField("cluster_id", foghornCfg.ClusterID).Info("Federation enabled")
 	} else if federationEnabled {
@@ -1766,6 +1742,33 @@ func main() {
 		foghornServer.SetPeerManager(peerManager)
 	}
 
+	if fedPeers != nil {
+		var fedErr error
+		federationServer, fedErr = newFederationServer(federation.FederationServerConfig{
+			Logger:          logger,
+			LB:              lb,
+			ClusterID:       foghornCfg.ClusterID,
+			ControlCellID:   controlCellID,
+			DB:              db,
+			Placement:       placementDestination,
+			ClipCreator:     foghornServer,
+			DVRCreator:      foghornServer,
+			ArtifactHandler: foghornServer,
+			LocalS3Backing: federation.S3Backing{
+				Bucket:   localS3Backing.Bucket,
+				Endpoint: localS3Backing.Endpoint,
+				Region:   localS3Backing.Region,
+				Prefix:   localS3Backing.Prefix,
+			},
+			AdvertisedBacking:  advertisedBackingForTenant,
+			IsServedCluster:    control.IsServedCluster,
+			StorageMintCounter: metrics.StorageMint,
+		}, fedPeers, s3ForFederation)
+		if fedErr != nil {
+			logger.WithError(fedErr).Fatal("Invalid federation server configuration")
+		}
+	}
+
 	// Same-cell pulls share coordination without enabling inbound federation
 	// or making an RPC back into this process.
 	if redisClient != nil {
@@ -1924,13 +1927,6 @@ func main() {
 		}
 		foghornServer.SetArtifactCleaner(artifactCleaner)
 	}
-	if federationServer != nil {
-		federationServer.SetStorageMintMetric(metrics.StorageMint)
-		federationServer.SetClipCreator(foghornServer)
-		federationServer.SetDVRCreator(foghornServer)
-		federationServer.SetArtifactCommandHandler(foghornServer)
-	}
-
 	relayAdvertiseAddr := foghornRelayAdvertiseAddr(cfg, advertiseAddr)
 	if redisStore != nil && relayAdvertiseAddr != "" {
 		relayPool := foghornpool.NewPool(foghornpool.PoolConfig{
