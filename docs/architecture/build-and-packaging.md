@@ -230,8 +230,11 @@ Platform tags are `vX.Y.Z` or lowercase `vX.Y.Z-rcN` (for example,
 `v0.3.11-rc1`). Uppercase `-RC1` and dotted `-rc.1` are not release-pipeline
 spellings. Run `make release-preflight RELEASE_VERSION=v0.3.11-rc1` after
 committing the release inputs and before tagging. The catalog and migration
-directories remain on the base `v0.3.11`; its minimum CLI version must allow
-the first RC (`v0.3.11-rc1`), not demand the later GA binary.
+directories remain on the base `v0.3.11`; its minimum CLI version names an RC,
+not the later GA binary, so every RC tagged from that entry accepts its own CLI.
+Raising it to a later RC is how a release refuses older CLIs: `v0.3.11` requires
+`v0.3.11-rc23`, the first CLI whose YugabyteDB role removes the in-place engine
+tree and whose backups resolve `ysql_dump` from the selected release.
 
 Stable and RC tags form one semantic-version lineage. The baseline is always the newest
 released tag strictly before the new tag, regardless of channel. This makes the latest RC

@@ -15,7 +15,7 @@ import (
 func TestReleaseMetadataV0311AcceptsItsOwnCandidateCLI(t *testing.T) {
 	previous := fwv.Version
 	t.Cleanup(func() { fwv.Version = previous })
-	for _, target := range []string{"v0.3.11-rc1", "v0.3.11-rc2", "v0.3.11"} {
+	for _, target := range []string{"v0.3.11-rc23", "v0.3.11-rc24", "v0.3.11"} {
 		t.Run(target, func(t *testing.T) {
 			cmd := newReleaseMetadataCmd()
 			var buf bytes.Buffer
@@ -29,16 +29,20 @@ func TestReleaseMetadataV0311AcceptsItsOwnCandidateCLI(t *testing.T) {
 				t.Fatal(err)
 			}
 			manifest.PlatformVersion = target
-			if manifest.MinCLIVersion != "v0.3.11-rc1" || !slices.Equal(manifest.RollbackDisabled, []string{"commodore", "purser"}) {
+			if manifest.MinCLIVersion != "v0.3.11-rc23" || !slices.Equal(manifest.RollbackDisabled, []string{"commodore", "purser"}) {
 				t.Fatalf("unexpected candidate metadata: %s", buf.String())
 			}
 			fwv.Version = target
 			if err := validateFetchedReleaseCompatibility(io.Discard, &manifest, false); err != nil {
 				t.Fatalf("release rejects its own CLI: %v", err)
 			}
-			fwv.Version = "v0.3.10"
-			if err := validateFetchedReleaseCompatibility(io.Discard, &manifest, false); err == nil {
-				t.Fatal("previous CLI passed the new release floor")
+			// rc22 and earlier back up YugabyteDB with ysql_dump from the
+			// in-place tree that an rc23+ yugabyte role removes.
+			for _, old := range []string{"v0.3.10", "v0.3.11-rc22"} {
+				fwv.Version = old
+				if err := validateFetchedReleaseCompatibility(io.Discard, &manifest, false); err == nil {
+					t.Fatalf("CLI %s passed the release floor", old)
+				}
 			}
 		})
 	}
