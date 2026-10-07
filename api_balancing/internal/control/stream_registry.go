@@ -411,6 +411,13 @@ type StreamRegistry struct {
 	redisWg     sync.WaitGroup
 	redisLogger logging.Logger
 
+	// sourceLocationLocks serialize this replica's per-stream Location writes.
+	// Each write is an optimistic compare-and-set with bounded retries;
+	// concurrent advertisements from several peers for one stream would
+	// otherwise keep invalidating each other's compare until one exhausts its
+	// retries and drops a live peer's Location.
+	sourceLocationLocks [64]sync.Mutex
+
 	// watermarks tracks per-key changelog positions so stale or replayed
 	// peer entries never roll back a later local write. See
 	// pkgredis.Watermarks.

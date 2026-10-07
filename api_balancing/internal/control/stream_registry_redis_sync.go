@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"sync"
 	"time"
 
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
@@ -481,6 +482,42 @@ func (r *StreamRegistry) publishUpsertSource(e StreamEntry) {
 	if log != nil {
 		log.WithField("internal_name", e.InternalName).Warn("Stream-registry source mutation remained behind concurrent ownership transitions")
 	}
+}
+
+// publishSourceLocation commits only clusterID's Location (nil withdraws it) to the shared store.
+// Caller must NOT hold r.mu. It returns false only on a transient store failure; a write that lost
+// to a newer revisioned transition is settled.
+func (r *StreamRegistry) publishSourceLocation(identity StreamEntry, clusterID string, location *Location) bool {
+	r.mu.RLock()
+	store, instance, log := r.redisStore, r.instanceID, r.redisLogger
+	r.mu.RUnlock()
+	if store == nil {
+		r.notifySourceChanged(identity.InternalName)
+		return true
+	}
+	identity.Locations = nil
+	lock := r.sourceLocationLock(identity.InternalName)
+	lock.Lock()
+	applied, err := store.SetSourceLocation(context.Background(), identity, clusterID, location, instance)
+	lock.Unlock()
+	if err != nil {
+		if log != nil {
+			log.WithError(err).WithField("internal_name", identity.InternalName).WithField("cluster_id", clusterID).Warn("Stream-registry source location publish failed")
+		}
+		return false
+	}
+	if applied {
+		r.notifySourceChanged(identity.InternalName)
+	}
+	return true
+}
+
+func (r *StreamRegistry) sourceLocationLock(internalName string) *sync.Mutex {
+	hash := uint32(2166136261)
+	for i := 0; i < len(internalName); i++ {
+		hash = hash*16777619 ^ uint32(internalName[i])
+	}
+	return &r.sourceLocationLocks[hash%uint32(len(r.sourceLocationLocks))]
 }
 
 // publishDeleteSource publishes the entry's eviction as a revisioned tombstone. revision is the local

@@ -167,6 +167,86 @@ func (r *RedisRegistryStore) SetSourceRevisioned(ctx context.Context, entry Stre
 	return false, errors.New("registry redis: concurrent source mutations exceeded retry limit")
 }
 
+// SetSourceLocation commits one cluster's Location against the latest durable snapshot and keeps
+// every other cluster's Location as stored. A nil location withdraws that cluster; withdrawing the
+// last Location deletes the source under the same snapshot compare. Writers that each own a single
+// Location (peer advertisements) use this instead of a whole-entry write, because a whole-entry
+// snapshot taken before a concurrent writer's commit would erase that writer's Location.
+func (r *RedisRegistryStore) SetSourceLocation(ctx context.Context, identity StreamEntry, clusterID string, location *Location, instance string) (bool, error) {
+	if identity.InternalName == "" || clusterID == "" {
+		return false, errors.New("registry redis: source location write needs internal_name and cluster")
+	}
+	for attempt := 0; attempt < 16; attempt++ {
+		current, raw, err := r.readSourceSnapshot(ctx, identity.InternalName)
+		if err != nil {
+			return false, err
+		}
+		previous, had := current.Locations[clusterID]
+		entry := current
+		entry.Locations = cloneLocations(current.Locations)
+		var result int64
+		switch {
+		case location != nil:
+			entry = fillStreamIdentity(entry, identity)
+			if entry.HydratedAt.IsZero() {
+				entry.HydratedAt = identity.HydratedAt
+			}
+			loc := *location
+			if len(previous.InboundPulls) > 0 || previous.OutboundRevision > 0 {
+				loc = preserveOutbound(previous, loc)
+				loc.InboundPulls = mergeInboundPulls(previous, loc)
+				loc = syncReplicationView(loc)
+			}
+			entry.Locations[clusterID] = loc
+			revision := sourceRevisionForCluster(entry, r.clusterID)
+			change := RegistryChange{InstanceID: instance, Entity: RegistryEntitySource, Operation: RegistryOpUpsert, Key: entry.InternalName, SourceRevision: revision}
+			result, err = r.compareAndSetSource(ctx, entry, change, revision, raw)
+		case !had:
+			return false, nil
+		case len(entry.Locations) > 1:
+			delete(entry.Locations, clusterID)
+			revision := sourceRevisionForCluster(entry, r.clusterID)
+			change := RegistryChange{InstanceID: instance, Entity: RegistryEntitySource, Operation: RegistryOpUpsert, Key: entry.InternalName, SourceRevision: revision}
+			result, err = r.compareAndSetSource(ctx, entry, change, revision, raw)
+		default:
+			// Destination revisions are anti-replay watermarks that an eviction must not discard.
+			if len(previous.InboundPulls) > 0 || previous.OutboundRevision > 0 {
+				return false, nil
+			}
+			// The withdrawn cluster held the last Location, so no Location carries the revision;
+			// the watermark is the newest revision this delete may erase.
+			revision, revErr := r.GetSourceRevision(ctx, identity.InternalName)
+			if revErr != nil {
+				return false, revErr
+			}
+			change := RegistryChange{InstanceID: instance, Entity: RegistryEntitySource, Operation: RegistryOpDelete, Key: identity.InternalName, SourceRevision: revision}
+			result, err = r.compareAndDeleteSource(ctx, identity.InternalName, change, revision, raw)
+		}
+		if err != nil || result != 2 {
+			return result == 1, err
+		}
+	}
+	return false, errors.New("registry redis: concurrent source location mutations exceeded retry limit")
+}
+
+func (r *RedisRegistryStore) compareAndDeleteSource(ctx context.Context, internalName string, change RegistryChange, revision int64, expected string) (int64, error) {
+	changePayload, err := json.Marshal(change)
+	if err != nil {
+		return 0, err
+	}
+	result, err := deleteSourceRevisioned.Run(ctx, r.client,
+		[]string{r.keySource(internalName), r.keySourceRevision(internalName), r.changelog.Key()},
+		revision, changePayload, r.changelog.MaxLen(), strconv.FormatInt(revision, 10), expected,
+	).Int64()
+	if err != nil {
+		return 0, err
+	}
+	if result < 0 {
+		return 0, fmt.Errorf("registry redis: invalid source delete revision %d", revision)
+	}
+	return result, nil
+}
+
 func (r *RedisRegistryStore) compareAndSetSource(ctx context.Context, entry StreamEntry, change RegistryChange, revision int64, expected string) (int64, error) {
 	payload, err := json.Marshal(entry)
 	if err != nil {
@@ -280,10 +360,6 @@ func (r *RedisRegistryStore) DeleteSourceRevisioned(ctx context.Context, interna
 	if internalName == "" {
 		return true, nil
 	}
-	changePayload, err := json.Marshal(change)
-	if err != nil {
-		return false, err
-	}
 	for attempt := 0; attempt < 16; attempt++ {
 		current, raw, readErr := r.readSourceSnapshot(ctx, internalName)
 		if readErr != nil {
@@ -296,15 +372,9 @@ func (r *RedisRegistryStore) DeleteSourceRevisioned(ctx context.Context, interna
 				return false, nil
 			}
 		}
-		result, deleteErr := deleteSourceRevisioned.Run(ctx, r.client,
-			[]string{r.keySource(internalName), r.keySourceRevision(internalName), r.changelog.Key()},
-			revision, changePayload, r.changelog.MaxLen(), strconv.FormatInt(revision, 10), raw,
-		).Int64()
+		result, deleteErr := r.compareAndDeleteSource(ctx, internalName, change, revision, raw)
 		if deleteErr != nil {
 			return false, deleteErr
-		}
-		if result < 0 {
-			return false, fmt.Errorf("registry redis: invalid source delete revision %d", revision)
 		}
 		if result != 2 {
 			return result == 1, nil
