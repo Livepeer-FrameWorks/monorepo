@@ -426,6 +426,8 @@ jobs:
       - run: pnpm lint
       - run: pnpm format:check
       - run: pnpm --dir website_docs check:links
+      - name: Type-check the webapp, player, and StreamCrafter packages
+        run: make check-frontend-types
 
   frontend-test:
     name: Frontend test + coverage

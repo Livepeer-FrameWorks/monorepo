@@ -1,7 +1,7 @@
 .PHONY: verify-prepush verify-frontend-deps verify-go-lint verify-go-build verify-sdks verify-frontend-build verify-yugabyte-contracts verify-yugabyte-contracts-deps verify-frontend-lint verify-generated-contracts test-frontend-components buildbuild-images build-bin-commodore build-bin-quartermaster build-bin-purser build-bin-decklog build-bin-foghorn build-bin-helmsman build-bin-periscope-ingest build-bin-periscope-query build-bin-periscope-metering build-bin-signalman build-bin-bridge build-bin-navigator build-bin-privateer build-bin-deckhand build-bin-steward build-bin-skipper build-bin-chandler build-bin-lookout build-bin-bosun build-bin-cli cli-embed-assets \
 		build-image-commodore build-image-quartermaster build-image-purser build-image-decklog build-image-foghorn build-image-periscope-ingest build-image-periscope-query build-image-periscope-metering build-image-signalman build-image-bridge build-image-logbook test-logbook-image-health build-image-navigator build-image-deckhand build-image-steward build-image-skipper build-image-chandler build-image-lookout build-image-bosun \
 		proto proto-check sqlc sqlc-check graphql graphql-events verify-graphql-events graphql-frontend graphql-tray graphql-all clean version install-tools verify test test-cli test-pkg test-topology test-crypto-evm test-dashboards test-commodore test-quartermaster test-purser test-decklog test-foghorn test-helmsman test-periscope-ingest test-periscope-query test-media-topology-real-clickhouse test-signalman test-bridge test-navigator test-privateer test-deckhand test-steward test-skipper test-chandler test-lookout test-bosun coverage env frontend-env tidy update outdated fmt format \
-		lint lint-go lint-frontend lint-all lint-fix lint-report lint-analyze ci-local ci-local-go ci-local-frontend \
+		lint lint-go lint-frontend check-frontend-types lint-all lint-fix lint-report lint-analyze ci-local ci-local-go ci-local-frontend \
 		validate-migrations verify-release-state test-release-state test-release-preflight release-preflight release-tag verify-schema verify-schema-migrations verify-schema-migrations-core verify-schema-postgres verify-navigator-db verify-lookout-db verify-bosun-db verify-skipper-db verify-periscope-metering-db verify-periscope-ingest-db verify-periscope-query-db verify-periscope-metering-chain verify-commodore-db verify-quartermaster-db verify-quartermaster-yugabyte-db verify-foghorn-db verify-foghorn-valkey verify-foghorn-test-selection verify-schema-yugabyte verify-schema-yugabyte-schema verify-schema-yugabyte-selection-contracts verify-schema-yugabyte-engine-contracts verify-schema-yugabyte-database-contracts verify-yugabyte-contract-lanes verify-yugabyte-service-suites verify-yugabyte-services verify-yugabyte-service verify-yugabyte-database verify-yugabyte-role-engine yugabyte-role-engine-contracts verify-yugabyte-shared-fixture yugabyte-lane-1 yugabyte-lane-2 yugabyte-lane-3 yugabyte-lane-4 yugabyte-lane-5 yugabyte-lane-6 yugabyte-ci-matrix verify-yugabyte-commodore-contracts verify-yugabyte-purser-contracts verify-yugabyte-navigator-contracts verify-yugabyte-skipper-contracts verify-yugabyte-lookout-contracts verify-yugabyte-bosun-contracts verify-yugabyte-quartermaster-contracts verify-yugabyte-periscope-metering-contracts verify-yugabyte-foghorn-contracts verify-yugabyte-foghorn-contracts-a verify-yugabyte-foghorn-contracts-b verify-yugabyte-ha verify-schema-clickhouse verify-feature-registry generate-pricing-catalog verify-pricing-catalog seed-demo seed-demo-postgres seed-demo-clickhouse reset-demo-databases-plan reset-demo-databases release-plan test-release-plan \
 		verify-backup-restore-postgres verify-backup-restore-clickhouse verify-backup-restore-yugabyte \
 		dead-code-install dead-code-go dead-code-ts dead-code-report dead-code \
@@ -448,6 +448,7 @@ verify-frontend-lint:
 	pnpm lint
 	pnpm format:check
 	pnpm --dir website_docs check:links
+	$(MAKE) --no-print-directory check-frontend-types
 
 # The CI "Migration release state" job, step for step (.github/workflows/ci.yml).
 # Needs Docker for the PostgreSQL, ClickHouse, and Valkey contracts.
@@ -1057,10 +1058,22 @@ lint-go:
 
 # Matches CI frontend-lint.
 lint-frontend:
-	@echo "Running frontend lint checks (pnpm lint + pnpm format:check)..."
+	@echo "Running frontend lint checks (pnpm lint + pnpm format:check + type checks)..."
 	pnpm lint
 	pnpm run format:check
 	pnpm --dir website_docs check:links
+	$(MAKE) --no-print-directory check-frontend-types
+
+# Type-checks the webapp (svelte-check) and the player and StreamCrafter
+# packages. Workspace packages publish their types from dist, so the packages
+# they import are built first, and the webapp's Houdini stores are generated
+# before svelte-check reads them.
+check-frontend-types:
+	pnpm --filter "frameworks-frontend^..." --filter "@livepeer-frameworks/player-*^..." --filter "@livepeer-frameworks/streamcrafter-*^..." build
+	pnpm --filter frameworks-frontend gql:codegen
+	pnpm --filter frameworks-frontend check
+	pnpm --dir npm_player type-check
+	pnpm --dir npm_studio type-check
 
 # No baseline: reports every violation, including pre-existing ones. For cleanup work.
 lint-all:
