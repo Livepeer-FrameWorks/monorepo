@@ -137,8 +137,8 @@ func TestSenderSignsAndClassifies(t *testing.T) {
 	// at connect time and never sees a request.
 	production := &Sender{HTTP: NewHTTPClient(rootCAs(srv))}
 	before = hits.Load()
-	if out := production.Send(context.Background(), srv.URL, "e1", body, []webhooksig.Key{key}); out.Success || out.ErrorClass != ClassBlockedDestination {
-		t.Fatalf("production client outcome = %+v, want blocked_destination", out)
+	if out := production.Send(context.Background(), srv.URL, "e1", body, []webhooksig.Key{key}); out.Success || out.ErrorClass != ClassBlockedDestination || !out.Permanent {
+		t.Fatalf("production client outcome = %+v, want a permanent blocked_destination", out)
 	}
 	if hits.Load() != before {
 		t.Fatal("the production client reached the loopback receiver")
@@ -236,8 +236,11 @@ func TestSenderRefusesPlatformHostWithPrivateDestinationsAllowed(t *testing.T) {
 	sender := &Sender{HTTP: NewHTTPClient(ClientOptions{Policy: restream.WebhookDestinationPolicy(true)})}
 	key, _ := webhooksig.GenerateKey()
 	out := sender.Send(context.Background(), srv.URL+"/rc18-ssrf-probe", "e1", []byte(`{}`), []webhooksig.Key{key})
-	if out.Success || out.ErrorClass != ClassBlockedDestination || len(out.Excerpt) != 0 {
-		t.Fatalf("delivery to this host's own address %s = %+v, want blocked_destination with no excerpt", local, out)
+	// No response arrived; the excerpt carries the policy's reason and the
+	// refusal is permanent, so the delivery is not retried.
+	want := "refused by the destination policy: platform-internal destinations are not allowed"
+	if out.Success || out.ErrorClass != ClassBlockedDestination || out.Excerpt != want || !out.Permanent || out.StatusCode != 0 {
+		t.Fatalf("delivery to this host's own address %s = %+v, want a permanent blocked_destination with excerpt %q", local, out, want)
 	}
 	if hits.Load() != 0 {
 		t.Fatal("the platform host's receiver was reached")

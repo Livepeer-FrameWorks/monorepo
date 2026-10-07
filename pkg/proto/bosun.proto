@@ -190,8 +190,9 @@ message WebhookDelivery {
   // HTTP status of the last attempt; 0 when no response arrived.
   int32 last_status_code = 9;
   // Failure class of the last attempt: "" when it succeeded, otherwise one of
-  // http_status, redirect, timeout, connection, tls, dns, blocked_destination,
-  // secret_unavailable.
+  // http_status, redirect, timeout, connection, tls, dns, blocked_destination
+  // (the destination policy refused the address; the delivery fails without a
+  // retry), or internal (Bosun could not sign or render the delivery).
   string last_error_class = 10;
   google.protobuf.Timestamp delivered_at = 11;
   int32 replay_count = 12;
@@ -206,7 +207,8 @@ message WebhookDeliveryAttempt {
   int32 status_code = 3;
   string error_class = 4;
   int32 latency_ms = 5;
-  // At most 1 KiB of the response body.
+  // At most 1 KiB of the response body. For a blocked_destination attempt,
+  // which gets no response, the destination policy's reason.
   string response_excerpt = 6;
   google.protobuf.Timestamp attempted_at = 7;
 }

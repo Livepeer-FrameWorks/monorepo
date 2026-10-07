@@ -50,6 +50,10 @@ mutation CreateEndpoint {
   (`64:ff9b::/96`) or 6to4 (`2002::/16`) address is judged by the IPv4 address it embeds, and
   IPv4-compatible, site-local, Teredo, and local-use NAT64 addresses are rejected. The same check runs again on every connection,
   so a DNS answer that later changes to a private address is refused at send time.
+- The host must resolve. A host that does not exist returns a `ValidationError` with code
+  `INVALID_ARGUMENT`. If the DNS lookup fails in a way that can clear, such as a timeout, the
+  `ValidationError` has code `FAILED_PRECONDITION` and you can retry the request. Updating an
+  endpoint's `url` runs the same checks.
 - `eventTypes` lists exact type names from the catalog, or `"*"` for every type. The
   `webhookEventTypes` query returns the valid names. Wildcards such as `"stream.*"` are rejected.
 - `description` is free text of at most 500 characters.
@@ -354,7 +358,9 @@ A failed delivery is retried on this schedule, each delay varied by up to 10 per
 | 6             | 2 hours         |               |                 |
 
 That is 12 attempts over about 3 days and 4 hours. When the 12th attempt fails, the delivery
-becomes `FAILED` and is not sent again unless you replay it.
+becomes `FAILED` and is not sent again unless you replay it. An attempt refused because your host
+resolves to an address FrameWorks does not send to (error class `blocked_destination`) is not
+retried: the delivery becomes `FAILED` after that attempt.
 
 ## Auto-disable
 
@@ -406,8 +412,16 @@ query FailedClipDeliveries($endpointId: ID!, $since: Time!) {
 `blocked_destination`, or `internal`. `internal` means FrameWorks could not send the delivery for a
 reason of its own: no request was made, no attempt is recorded, and it does not count toward
 disabling the endpoint. A delivery that cannot be sent at all is failed at once and can be replayed
-once the cause is fixed; one that can succeed later is retried after a delay. `webhookDelivery(id)` returns one delivery with `attemptHistory`: status
-code, error class, latency, and the response excerpt of each attempt.
+once the cause is fixed; one that can succeed later is retried after a delay.
+
+`blocked_destination` means your host resolved to an address FrameWorks does not send to, such as a
+private, loopback, or platform address (see the `url` rules above). Every retry would be refused
+the same way, so the delivery is failed at once instead of retried. The attempt is recorded, its
+`responseExcerpt` gives the reason, and it counts toward disabling the endpoint. Point the host at
+a public address, then replay the delivery.
+
+`webhookDelivery(id)` returns one delivery with `attemptHistory`: status code, error class,
+latency, and the response excerpt of each attempt.
 
 `replayWebhookDelivery(id)` sends a finished delivery (succeeded, failed, or skipped) again. The
 receiver gets the same `webhook-id` and body, the attempt count starts over, and the full retry

@@ -11,8 +11,9 @@ import (
 
 const maxWebhookURLLength = 2048
 
-// ErrInvalidWebhookURL wraps every rejection of a tenant-supplied webhook URL.
-// A transient DNS failure is reported with ErrDestinationResolution instead.
+// ErrInvalidWebhookURL wraps every rejection of a tenant-supplied webhook URL,
+// including a host that does not exist. A resolver failure that may clear on
+// retry is reported with ErrDestinationResolution instead.
 var ErrInvalidWebhookURL = errors.New("invalid webhook url")
 
 // WebhookDestinationPolicy is the destination policy for tenant-supplied
@@ -53,7 +54,8 @@ func invalidWebhookURL(format string, args ...any) error {
 
 // ValidateWebhookURL checks a webhook endpoint URL before it is stored and
 // returns its normalized form: https, a host, no credentials or fragment, no
-// platform host name, and a destination the policy allows. A literal
+// platform host name, a host that resolves, and a destination the policy
+// allows. A literal
 // forbidden address and a host that resolves to one are both rejected. The
 // sender applies the same policy to the address of every connection, so a
 // later change of the DNS answer is refused at send time. A policy that allows
@@ -97,6 +99,9 @@ func ValidateWebhookURL(ctx context.Context, policy DestinationPolicy, raw strin
 		return "", invalidWebhookURL("url host is not a public destination")
 	}
 	if err := policy.ValidateURI(ctx, parsed); err != nil {
+		if errors.Is(err, ErrDestinationNotFound) {
+			return "", invalidWebhookURL("url host %s does not resolve to an address", host)
+		}
 		if errors.Is(err, ErrDestinationResolution) {
 			return "", fmt.Errorf("%w: %s", ErrDestinationResolution, host)
 		}

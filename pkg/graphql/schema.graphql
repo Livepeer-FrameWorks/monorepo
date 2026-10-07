@@ -6368,7 +6368,7 @@ type WebhookDelivery {
   nextAttemptAt: Time
   "HTTP status of the last attempt; 0 when no response arrived."
   lastStatusCode: Int!
-  "Failure class of the last attempt: http_status, redirect, timeout, connection, tls, dns, or blocked_destination; internal when FrameWorks could not sign or render the delivery; empty after a success."
+  "Failure class of the last attempt: http_status, redirect, timeout, connection, tls, dns, or blocked_destination; internal when FrameWorks could not sign or render the delivery; empty after a success. A blocked_destination failure (the destination policy refuses the address the host resolves to) fails the delivery without a retry."
   lastErrorClass: String!
   deliveredAt: Time
   replayCount: Int!
@@ -6389,7 +6389,7 @@ type WebhookDeliveryAttempt {
   statusCode: Int!
   errorClass: String!
   latencyMs: Int!
-  "At most 1 KiB of the response body."
+  "At most 1 KiB of the response body. For a blocked_destination attempt, which gets no response, the destination policy's reason."
   responseExcerpt: String!
   attemptedAt: Time!
 }
@@ -6436,7 +6436,7 @@ type WebhookDeliveriesConnection {
 }
 
 input CreateWebhookEndpointInput {
-  "An https URL of a public host."
+  "An https URL of a public host that resolves. A host that does not exist is a ValidationError with code INVALID_ARGUMENT; a DNS lookup that failed in a way that may clear is a ValidationError with code FAILED_PRECONDITION, and the request can be retried."
   url: String!
   description: String
   "Public event types to receive; \"*\" receives every type. See webhookEventTypes."
@@ -6446,6 +6446,7 @@ input CreateWebhookEndpointInput {
 }
 
 input UpdateWebhookEndpointInput {
+  "Checked like CreateWebhookEndpointInput.url."
   url: String
   description: String
   "Replaces the subscribed event types when set."

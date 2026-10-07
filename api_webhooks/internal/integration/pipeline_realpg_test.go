@@ -7,6 +7,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -174,12 +175,16 @@ func TestBosunDeliveryAgainstTLSReceiver_RealPG(t *testing.T) {
 	if recv.hits.Load() != 0 {
 		t.Fatal("the production client reached a loopback receiver")
 	}
+	// A destination-policy refusal is permanent: the delivery fails at once
+	// with the reason on its attempt instead of entering the retry schedule.
 	d, attempts, err := store.GetDelivery(ctx, tenant, claims[0].DeliveryID)
-	if err != nil || len(attempts) != 1 || attempts[0].ErrorClass != delivery.ClassBlockedDestination || d.Status != ledger.DeliveryPending {
-		t.Fatalf("production attempt = %+v %+v, %v; want one blocked_destination failure", d, attempts, err)
+	if err != nil || len(attempts) != 1 || attempts[0].ErrorClass != delivery.ClassBlockedDestination ||
+		!strings.HasPrefix(attempts[0].ResponseExcerpt, "refused by the destination policy: ") ||
+		d.Status != ledger.DeliveryFailed || d.LastErrorClass != delivery.ClassBlockedDestination || d.NextAttemptAt != nil {
+		t.Fatalf("production attempt = %+v %+v, %v; want a failed delivery with one blocked_destination attempt", d, attempts, err)
 	}
 
-	if _, err := db.Exec(`UPDATE bosun.webhook_deliveries SET next_attempt_at = now() WHERE id = $1`, d.ID); err != nil {
+	if _, err := store.ReplayDelivery(ctx, tenant, d.ID); err != nil {
 		t.Fatal(err)
 	}
 	test := &delivery.Worker{Store: store, Sender: &delivery.Sender{HTTP: recv.testClient(t)}, Jitter: fixedJitter}
@@ -216,9 +221,10 @@ func TestBosunDeliveryAgainstTLSReceiver_RealPG(t *testing.T) {
 	if err := json.Unmarshal(got.Data, &data); err != nil || data["streamId"] != ev.AggregateID {
 		t.Fatalf("data = %s, want the protojson StreamLive with streamId %s", got.Data, ev.AggregateID)
 	}
-	d, _, err = store.GetDelivery(ctx, tenant, d.ID)
-	if err != nil || d.Status != ledger.DeliverySucceeded || d.Attempts != 2 || d.LastStatusCode != 200 {
-		t.Fatalf("delivery = %+v, %v", d, err)
+	// The replay restarted the attempt count; the history keeps both attempts.
+	d, attempts, err = store.GetDelivery(ctx, tenant, d.ID)
+	if err != nil || d.Status != ledger.DeliverySucceeded || d.Attempts != 1 || d.ReplayCount != 1 || d.LastStatusCode != 200 || len(attempts) != 2 {
+		t.Fatalf("delivery = %+v %+v, %v", d, attempts, err)
 	}
 
 	// A test delivery: synchronous, rate limited, not part of the streak.

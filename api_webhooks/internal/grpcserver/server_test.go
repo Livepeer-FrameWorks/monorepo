@@ -2,12 +2,15 @@ package grpcserver
 
 import (
 	"context"
+	"net"
+	"strings"
 	"testing"
 
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/auth"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/ctxkeys"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/middleware"
 	bosunpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/bosun"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/restream"
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
@@ -145,5 +148,52 @@ func TestListAttemptsForDeliveriesBoundsTheBatch(t *testing.T) {
 	_, err := (&Server{}).ListAttemptsForDeliveries(ctx, &bosunpb.ListAttemptsForDeliveriesRequest{DeliveryIds: ids})
 	if status.Code(err) != codes.InvalidArgument {
 		t.Fatalf("501 delivery IDs = %v, want InvalidArgument", err)
+	}
+}
+
+// An endpoint URL whose host does not exist is invalid input on create and
+// update, and a resolver failure is a retryable precondition with its own
+// message; neither is reported as a Bosun outage. Validation runs before the
+// store, which is nil here.
+func TestEndpointHostResolutionOutcomes(t *testing.T) {
+	ctx := context.WithValue(context.Background(), ctxkeys.KeyTenantID, "9dd90a31-eef1-4a0c-919c-606142491c92")
+	ctx = context.WithValue(ctx, ctxkeys.KeyAuthType, "jwt")
+	ctx = context.WithValue(ctx, ctxkeys.KeyRole, "owner")
+	for _, tc := range []struct {
+		name    string
+		lookup  func(context.Context, string) ([]net.IP, error)
+		code    codes.Code
+		message string
+	}{
+		{
+			name: "nonexistent host",
+			lookup: func(_ context.Context, host string) ([]net.IP, error) {
+				return nil, &net.DNSError{Err: "no such host", Name: host, IsNotFound: true}
+			},
+			code:    codes.InvalidArgument,
+			message: "foo.local does not resolve",
+		},
+		{
+			name: "resolver failure",
+			lookup: func(_ context.Context, host string) ([]net.IP, error) {
+				return nil, &net.DNSError{Err: "server misbehaving", Name: host, IsTemporary: true}
+			},
+			code:    codes.FailedPrecondition,
+			message: "could not be resolved right now",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s := &Server{Policy: restream.DestinationPolicy{AllowPrivate: true, LookupIP: tc.lookup}}
+			raw := "http://foo.local/hook"
+			for call, err := range map[string]error{
+				"create": errOf(s.CreateWebhookEndpoint(ctx, &bosunpb.CreateWebhookEndpointRequest{Url: raw, EventTypes: []string{"*"}})),
+				"update": errOf(s.UpdateWebhookEndpoint(ctx, &bosunpb.UpdateWebhookEndpointRequest{EndpointId: "e", Url: &raw})),
+			} {
+				st, _ := status.FromError(err)
+				if st.Code() != tc.code || !strings.Contains(st.Message(), tc.message) {
+					t.Errorf("%s = %v, want %v containing %q", call, err, tc.code, tc.message)
+				}
+			}
+		})
 	}
 }

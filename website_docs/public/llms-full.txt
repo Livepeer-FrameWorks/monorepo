@@ -115,7 +115,7 @@ discovery.
 | `billing://payments`                        | Recent invoice payments and outstanding balance         |
 | `billing://payments/{payment_id}`           | One tenant-owned invoice payment and confirmation state |
 | `billing://documents`                       | Retained invoices, receipts, and credit-note metadata   |
-| `billing://documents/{kind}/{document_id}`  | Printable tenant-owned document with integrity hash     |
+| `billing://documents/{kind}/{document_id}`  | Tenant-owned PDF document with integrity hash           |
 | `streams://list`                            | List all streams                                        |
 | `streams://{id}`                            | Stream details (relay ID or stream_id)                  |
 | `streams://{id}/health`                     | Stream health metrics                                   |
@@ -894,8 +894,8 @@ processing and confirmed payments are never blindly retried.
 
 Use `billing://documents` to list retained monthly statements, full crypto invoices, simplified invoices,
 confirmed-payment receipts, and credit notes. Read the returned
-`billing://documents/{kind}/{document_id}` URI for the printable tenant-owned
-document and its SHA-256 integrity metadata. Document reads stay available at
+`billing://documents/{kind}/{document_id}` URI for the tenant-owned document,
+returned as an `application/pdf` blob, and its SHA-256 integrity metadata. Document reads stay available at
 zero prepaid balance.
 
 For postpaid accounts, complete billing identity first and call
@@ -3117,7 +3117,7 @@ Input for creating a developer API token.
 
 - **name**: `String!` — Human-readable name for the token.
 - **permissions**: `String` — Comma-separated permission scopes in resource:action form (streams:read, streams:write, analytics:read, etc.).
-- **expiresIn**: `Int` — Days until expiration (null = non-expiring).
+- **expiresIn**: `Int` — Days until expiration, 1-3650 (null = non-expiring).
 
 ### CreateDeveloperTokenResult
 
@@ -14520,10 +14520,21 @@ the identifier blank when the customer is not VAT registered.
 </Aside>
 
 Authenticated customers can list document metadata at
-`GET /v1/billing/documents` and download a tenant-bound printable HTML attachment
-at `GET /v1/billing/documents/{kind}/{id}`. The response includes
+`GET /v1/billing/documents` and download a tenant-bound PDF attachment
+(`application/pdf`, `<document number>.pdf`) at `GET /v1/billing/documents/{kind}/{id}`.
+An invoice states the supplier, the customer's billing details (name, company,
+address, VAT ID, billing email), the billing period, every line item including
+the base fee for the part of the period it covers, the subtotal, the prepaid
+credit applied, and the amount due in EUR and in the presentment currency.
+Documents are dated with the time they were finalized and state the billing
+details and supplier as they were then: changing your billing address later
+changes the documents issued afterwards, not the ones already issued. The response includes
 `X-Document-SHA256`, uses private/no-store caching, and remains reachable for a
 zero-balance prepaid tenant. The billing dashboard exposes the same downloads.
+
+A postpaid tenant's prepaid balance stays on the balance while the billing
+period runs. Each postpaid invoice takes it as prepaid credit, up to the
+invoice total, when the invoice is finalized at the end of the period.
 
 Invoice notifications link to the exact billing-page invoice. Card payment uses
 the operator-selected Stripe or Mollie hosted checkout; USDC/ETH payment returns
@@ -22987,6 +22998,10 @@ mutation CreateEndpoint {
   (`64:ff9b::/96`) or 6to4 (`2002::/16`) address is judged by the IPv4 address it embeds, and
   IPv4-compatible, site-local, Teredo, and local-use NAT64 addresses are rejected. The same check runs again on every connection,
   so a DNS answer that later changes to a private address is refused at send time.
+- The host must resolve. A host that does not exist returns a `ValidationError` with code
+  `INVALID_ARGUMENT`. If the DNS lookup fails in a way that can clear, such as a timeout, the
+  `ValidationError` has code `FAILED_PRECONDITION` and you can retry the request. Updating an
+  endpoint's `url` runs the same checks.
 - `eventTypes` lists exact type names from the catalog, or `"*"` for every type. The
   `webhookEventTypes` query returns the valid names. Wildcards such as `"stream.*"` are rejected.
 - `description` is free text of at most 500 characters.
@@ -23291,7 +23306,9 @@ A failed delivery is retried on this schedule, each delay varied by up to 10 per
 | 6             | 2 hours         |               |                 |
 
 That is 12 attempts over about 3 days and 4 hours. When the 12th attempt fails, the delivery
-becomes `FAILED` and is not sent again unless you replay it.
+becomes `FAILED` and is not sent again unless you replay it. An attempt refused because your host
+resolves to an address FrameWorks does not send to (error class `blocked_destination`) is not
+retried: the delivery becomes `FAILED` after that attempt.
 
 ## Auto-disable
 
@@ -23343,8 +23360,16 @@ query FailedClipDeliveries($endpointId: ID!, $since: Time!) {
 `blocked_destination`, or `internal`. `internal` means FrameWorks could not send the delivery for a
 reason of its own: no request was made, no attempt is recorded, and it does not count toward
 disabling the endpoint. A delivery that cannot be sent at all is failed at once and can be replayed
-once the cause is fixed; one that can succeed later is retried after a delay. `webhookDelivery(id)` returns one delivery with `attemptHistory`: status
-code, error class, latency, and the response excerpt of each attempt.
+once the cause is fixed; one that can succeed later is retried after a delay.
+
+`blocked_destination` means your host resolved to an address FrameWorks does not send to, such as a
+private, loopback, or platform address (see the `url` rules above). Every retry would be refused
+the same way, so the delivery is failed at once instead of retried. The attempt is recorded, its
+`responseExcerpt` gives the reason, and it counts toward disabling the endpoint. Point the host at
+a public address, then replay the delivery.
+
+`webhookDelivery(id)` returns one delivery with `attemptHistory`: status code, error class,
+latency, and the response excerpt of each attempt.
 
 `replayWebhookDelivery(id)` sends a finished delivery (succeeded, failed, or skipped) again. The
 receiver gets the same `webhook-id` and body, the attempt count starts over, and the full retry
@@ -27092,6 +27117,12 @@ The CLI's collection-install step is idempotent and keyed on
 `sha256(requirements.yml)` — unchanged inputs skip the `ansible-galaxy` call
 entirely.
 
+Before any playbook runs, the CLI compares the local ansible-core release
+(`ansible-galaxy --version`) with the `requires_ansible` range of every
+installed collection. A release outside a range stops the command with an
+error naming the collection and the range it supports; install an ansible-core
+release inside it.
+
 ## Local testing
 
 - `make provision-hello` — end-to-end smoke against localhost with the
@@ -29905,12 +29936,21 @@ or a complete billing profile. Purser refuses a tier that does not exist or is i
 model the tier does not run (level-0 tiers such as `payg` run prepaid, all other tiers run
 postpaid), and a tenant whose account was closed. A tenant without a subscription gets one on the
 assigned tier. Moving to prepaid creates the prepaid balance and returns any credit an open draft
-invoice holds to it; moving from prepaid to postpaid keeps the balance as invoice credit and
-reactivates a subscription suspended for low balance. Moving from prepaid to postpaid also closes
+invoice holds to it; moving from prepaid to postpaid keeps the balance, which each postpaid invoice
+takes as credit when it is finalized, and reactivates a subscription suspended for low balance. Moving from prepaid to postpaid also closes
 the prepaid part of the period with a prepaid statement, emailed to the tenant, and starts the
-postpaid period at the change, so the first postpaid invoice charges only usage from the change on. An invoice takes only the credit it uses: when
-a later draft is smaller, for example after a billing grant lowers the base fee, the difference goes
-back to the balance. A scheduled downgrade is cleared.
+postpaid period at the change, so the first postpaid invoice charges only usage from the change on,
+and the base fee for that part of the period.
+Moving from postpaid to prepaid ends the postpaid plan at the change: its invoice for the period
+up to the change is finalized then, with the usage reported until the change at the postpaid
+tier's prices and the base fee and monthly cluster fees for that part of the period, and collected
+like any invoice (off-session charge through the tenant's provider, or `record-payment` for a bank
+transfer). A base fee charged in advance for the period has its unused part, from the change on,
+returned to the prepaid balance. The prepaid period starts at the change and the prepaid balance
+pays usage reported after it, including late reports for earlier usage. Each plan pays the base fee
+only for its own part of the period, also across several changes. Drafts hold no credit, so the
+balance stays visible while the postpaid period runs; an invoice takes only the credit it uses, up
+to its total, when it is finalized. A scheduled downgrade is cleared.
 
 After the change Purser reconciles cluster access for the new tier and refreshes cached tenant
 limits, the same as a self-serve tier change, and records `billing.subscription_updated` with
@@ -29998,8 +30038,10 @@ frameworks admin billing grant set --tenant-id <UUID> --tier production --base-f
 
 #### frameworks admin billing grant show
 
-Print the tenant's arrangement, including an expired one, and whether its charges can be collected
-and by whom (`stripe`, `mollie` or `operator`).
+Print the tenant's arrangement, including an expired one, the tier and billing model it applies to,
+and whether its charges can be collected and by whom (`stripe`, `mollie` or `operator`). With
+`--output json`, `tier` is the tenant's tier after the command, and `assignment` is set only when
+`grant set --tier` assigned one.
 
 ```bash
 frameworks admin billing grant show --email owner@example.com
@@ -30687,15 +30729,15 @@ frameworks edge mist cores analyze ./edge1-mist-core.tar.gz --cache-dir ~/.cache
 
 ## Livepeer Commands
 
-Livepeer wallet reads come from Arbitrum, using the wallet address in Quartermaster discovery and the cluster's configured RPC. The gateway CLI listener remains loopback-only. Routine TicketBroker funding is Purser-owned; exceptional reserve/unlock/withdraw operations SSH to the selected manifest host and require a temporary maintenance-window flag.
+Livepeer wallet reads come from Arbitrum, using the wallet addresses that running gateways advertise in Quartermaster discovery and the cluster's configured RPC. Discovery queries every media cluster the manifest's `livepeer-gateway` services are assigned to. The gateway CLI listener remains loopback-only. Routine TicketBroker funding is Purser-owned; exceptional reserve/unlock/withdraw operations SSH to the selected manifest host and require a temporary maintenance-window flag.
 
 ### frameworks livepeer status
 
-Show the wallet's ETH balance and TicketBroker deposit, reserve, and withdraw round.
+Show each gateway wallet's ETH balance and TicketBroker deposit, reserve, and withdraw round.
 
 ```bash
 frameworks livepeer status
-frameworks livepeer status --cluster media-us-1
+frameworks livepeer status --cluster staging-media-us
 frameworks livepeer status --address 0x... --rpc https://arb1.example
 ```
 
@@ -30703,11 +30745,11 @@ frameworks livepeer status --address 0x... --rpc https://arb1.example
 
 - `--address` - Wallet address; overrides Quartermaster discovery
 - `--rpc` - Arbitrum JSON-RPC URL; overrides cluster shared env
-- `--cluster` - Cluster ID for discovery
+- `--cluster` - Gitops cluster that selects the manifest, or one `livepeer-gateway` cluster to narrow discovery to
 
 ### frameworks livepeer wallet address
 
-Show the gateway's ETH address.
+Show the gateway wallets' ETH addresses.
 
 ```bash
 frameworks livepeer wallet address
@@ -30715,7 +30757,7 @@ frameworks livepeer wallet address
 
 ### frameworks livepeer wallet balance
 
-Show the gateway's ETH balance.
+Show the gateway wallets' ETH balances.
 
 ```bash
 frameworks livepeer wallet balance
@@ -31998,9 +32040,10 @@ webhooks:
 **Fields:**
 
 - `allow_private_destinations` (default `false`) - lets webhook receivers use private
-  (RFC 1918 / ULA) addresses, plain `http`, and `.local` or `.internal` host names, for an
-  isolated staging or development cluster whose receivers live on its own network. Loopback,
-  link-local, and cloud metadata addresses stay blocked. The CLI renders it as
+  (RFC 1918 / ULA) addresses, plain `http`, and `.local` host names, for an isolated staging or
+  development cluster whose receivers live on its own network. It never opens the platform
+  itself: loopback, link-local, cloud metadata, `*.internal` mesh names, the service host's own
+  addresses, and addresses routed into the WireGuard mesh stay blocked. The CLI renders it as
   `BOSUN_ALLOW_PRIVATE_DESTINATIONS` on Bosun and `PLAYBACK_WEBHOOK_ALLOW_PRIVATE_DESTINATIONS`
   on Commodore and Foghorn; an env file or a service's `config` map still overrides it.
   Never enable it on a cluster that serves untrusted tenants.
@@ -32509,7 +32552,7 @@ Read by `api_webhooks/cmd/bosun`.
 | `KAFKA_CLUSTER_ID` | string | `local` |  | v0.3.11 | Kafka cluster identifier attached to the domain event consumer and the dead-letter producer. |
 | `MIRROR_REGION_PREFIXES` | list |  |  | v0.3.11 | Comma-separated MirrorMaker2 source cluster aliases whose mirrored domain.events copies are also consumed. Empty consumes only the local topic. |
 | `DECKLOG_DLQ_KAFKA_TOPIC` | string | `decklog_events_dlq` |  | v0.3.11 | Kafka topic that receives domain event records whose payload does not decode. |
-| `BOSUN_ALLOW_PRIVATE_DESTINATIONS` | boolean | `false` |  | v0.3.11 | Lets webhook endpoints use private (RFC 1918 / ULA) addresses, plain http, and .local or .internal host names, so an isolated staging or development cluster can deliver to a receiver on its own network. Loopback, link-local, and cloud metadata addresses stay blocked. Never set it on a cluster that serves untrusted tenants. |
+| `BOSUN_ALLOW_PRIVATE_DESTINATIONS` | boolean | `false` |  | v0.3.11 | Lets webhook endpoints use private (RFC 1918 / ULA) addresses, plain http, and .local host names, so an isolated staging or development cluster can deliver to a receiver on its own network. It never opens the platform itself: loopback, link-local, cloud metadata, the host's own addresses, mesh-routed addresses, and *.internal names stay blocked. Never set it on a cluster that serves untrusted tenants. |
 | `SMTP_HOST` | string |  |  | v0.3.11 | SMTP server host for the email sent when an endpoint is disabled automatically. Empty leaves those emails queued and retried. |
 | `SMTP_PORT` | string | `587` |  | v0.3.11 | SMTP server port. |
 | `SMTP_USER` | string |  |  | v0.3.11 | SMTP user. |
@@ -32630,7 +32673,7 @@ Read by `api_control/cmd/commodore`.
 | `RESTREAM_ALLOW_PRIVATE_DESTINATIONS` | string |  |  | v0.3.0 | Allows multistream destinations that resolve to private addresses when set to true or 1. |
 | `RESTREAM_ALLOWED_PRIVATE_CIDRS` | string |  |  | v0.3.0 | Comma-separated CIDRs exempted from the private, loopback, and link-local multistream destination block. |
 | `RESTREAM_DENIED_CIDRS` | string |  |  | v0.3.0 | Comma-separated CIDRs never allowed as multistream destinations. Denials win over allowances. |
-| `PLAYBACK_WEBHOOK_ALLOW_PRIVATE_DESTINATIONS` | boolean | `false` |  | v0.3.11 | Lets playback-auth webhook URLs use private (RFC 1918 / ULA) addresses, plain http, and .local or .internal host names, so an isolated staging or development cluster can authorize playback against a receiver on its own network. Loopback, link-local, and cloud metadata addresses stay blocked. Must match Foghorn's setting. Never set it on a cluster that serves untrusted tenants. |
+| `PLAYBACK_WEBHOOK_ALLOW_PRIVATE_DESTINATIONS` | boolean | `false` |  | v0.3.11 | Lets playback-auth webhook URLs use private (RFC 1918 / ULA) addresses, plain http, and .local host names, so an isolated staging or development cluster can authorize playback against a receiver on its own network. It never opens the platform itself: loopback, link-local, cloud metadata, the host's own addresses, mesh-routed addresses, and *.internal names stay blocked. Must match Foghorn's setting. Never set it on a cluster that serves untrusted tenants. |
 | `MEDIA_AUTHORITY_SIGNING_KEY_ID` | string |  |  | v0.3.0 | Key ID of the Ed25519 signer for media authority envelopes. Required outside development, together with MEDIA_AUTHORITY_SIGNING_PRIVATE_KEY_PEM_B64. |
 | `MEDIA_AUTHORITY_SIGNING_PRIVATE_KEY_PEM_B64` | string |  | secret | v0.3.0 | Base64-wrapped PKCS#8 Ed25519 private key PEM that signs media authority envelopes. |
 | `MEDIA_AUTHORITY_SEAL_RECIPIENTS` | string |  |  | v0.3.0 | Rendered by the CLI. Maps control-cell IDs to X25519 recipient keys and enables sealed-secret delivery in media authority. |
@@ -32757,7 +32800,7 @@ Read by `api_billing/cmd/purser`.
 | `STRIPE_SECRET_KEY` | string |  | secret | v0.3.0 | Stripe API secret key. Enables the Stripe client and billing tier price sync at startup; checkout and provider availability re-read it after an env-file reload. |
 | `STRIPE_WEBHOOK_SECRET` | string |  | secret | v0.3.0 | Signing secret that verifies Stripe webhooks. Empty rejects every Stripe webhook. Re-read after an env-file reload. |
 | `MOLLIE_API_KEY` | string |  | secret | v0.3.0 | Mollie API key. Enables the Mollie client at startup; checkout and provider availability re-read it after an env-file reload. |
-| `SUPPLIER_NAME` | string |  |  | v0.3.0 | Supplier legal name on billing documents and crypto invoices. The complete SUPPLIER_* set is required for x402 and, in production, for crypto deposits. |
+| `SUPPLIER_NAME` | string |  |  | v0.3.0 | Supplier legal name on billing documents and crypto invoices. Outside development Purser refuses to start without the complete SUPPLIER_* set, since every invoice, statement and credit note states it. |
 | `SUPPLIER_ADDRESS` | string |  |  | v0.3.0 | Supplier postal address on billing documents and crypto invoices. |
 | `SUPPLIER_VAT_NUMBER` | string |  |  | v0.3.0 | Supplier VAT number on billing documents and crypto invoices. |
 | `SUPPLIER_REGISTRATION_NUMBER` | string |  |  | v0.3.0 | Supplier company registration number on billing documents and crypto invoices. |
@@ -33190,7 +33233,7 @@ Read by `api_balancing/cmd/foghorn`.
 | `FOGHORN_PLATFORM_SHARED_CLUSTERS` | list |  |  | v0.3.0 | Comma-separated cluster IDs whose tenantless nodes may serve any tenant's durable media, in addition to Quartermaster platform-official clusters. |
 | `BRAND_DOMAIN` | string | `frameworks.network` |  | v0.3.0 | Platform root domain for cluster-scoped Foghorn, edge, telemetry, and certificate host names. |
 | `ACME_EMAIL` | string |  |  | v0.3.0 | Contact email sent to edge nodes in their site configuration for ACME certificate issuance. |
-| `PLAYBACK_WEBHOOK_ALLOW_PRIVATE_DESTINATIONS` | boolean | `false` |  | v0.3.11 | Lets playback-auth webhook calls connect to private (RFC 1918 / ULA) addresses, so an isolated staging or development cluster can authorize playback against a receiver on its own network. Loopback, link-local, and cloud metadata addresses stay blocked. Must match Commodore's setting. Never set it on a cluster that serves untrusted tenants. |
+| `PLAYBACK_WEBHOOK_ALLOW_PRIVATE_DESTINATIONS` | boolean | `false` |  | v0.3.11 | Lets playback-auth webhook calls connect to private (RFC 1918 / ULA) addresses, so an isolated staging or development cluster can authorize playback against a receiver on its own network. It never opens the platform itself: loopback, link-local, cloud metadata, the host's own addresses, and mesh-routed addresses stay blocked. Must match Commodore's setting. Never set it on a cluster that serves untrusted tenants. |
 | `FEDERATION_ENABLED` | string | `false` |  | v0.3.0 | Enables cross-cluster federation when exactly true; any other value leaves it off. Requires Quartermaster, an active platform-official cluster, Redis, and authenticated TLS. |
 | `FEDERATION_ALLOW_INSECURE_DEV` | boolean | `false` |  | v0.3.0 | Allows federation together with GRPC_ALLOW_INSECURE. Isolated development only. |
 | `CPU_WEIGHT` | integer | `500` |  | v0.3.0 | Load balancer CPU score weight. The five balancer weights apply only when all are greater than 0. |
@@ -35489,6 +35532,26 @@ a leased background worker with exponential backoff. Monitor
 `purser.payment_report_invoice_email_outbox_stuck`; rows appear after five
 failed attempts and are not automatically discarded.
 
+### Supplier identity on billing documents
+
+Every invoice, prepaid statement and credit note Purser renders states the
+supplier. A document records the supplier identity configured when it is
+issued, so changing these values affects only documents issued afterwards.
+Outside development Purser refuses to start without the complete
+set, and `frameworks cluster provision` and `upgrade` refuse a non-dev deploy
+that lacks it:
+
+```bash
+SUPPLIER_NAME="Example B.V."
+SUPPLIER_ADDRESS="Street 1, 1000 AA Amsterdam"
+SUPPLIER_VAT_NUMBER="NL000000000B01"
+SUPPLIER_REGISTRATION_NUMBER="00000000"
+SUPPLIER_COUNTRY="NL"   # two-letter ISO country code
+```
+
+These are public company details: keep them in the plaintext GitOps config
+(`config/<cluster>.env`), not in SOPS secrets.
+
 ### x402 facilitator and crypto settlement
 
 Production uses FrameWorks' embedded x402 v2 exact/EIP-3009 facilitator by
@@ -37286,6 +37349,8 @@ For multi-host deployments, you need:
 
 3. **Firewall Rules** - Open the manifest's WireGuard listen port between backend nodes and keep internal service ports private to the mesh.
 
+4. **No DHCP search domains** - FrameWorks resolves only fully qualified names. A search domain from DHCP or a router advertisement makes the resolver retry a name under that suffix when the upstream drops a query, and a wildcard record there returns a wrong address. Provisioning sets `UseDomains=no` for DHCPv4, DHCPv6 and router advertisements on every systemd-networkd link (netplan included) on platform hosts and Linux edges; on hosts under another network manager, turn off DHCP-provided search domains yourself.
+
 ## SSH Access
 
 ### SSH Key Setup
@@ -37941,6 +38006,28 @@ the wait fails its rollout: fix the dependency and rerun the command.
 `cluster apply`, `cluster doctor`, Quartermaster, and Navigator cannot tell which release an
 instance runs, so they check `/health` for every Go service except Chandler. They move to `/ready`
 in the release that requires v0.3.11 as the minimum source.
+
+### Post-rollout staging smoke
+
+After a requested staging rollout, run the stack scenario suite against the
+deployed staging services from an operator checkout on the private network:
+
+```bash
+STACK_TARGET=staging \
+STACK_ENDPOINTS_FILE=/private/path/staging-stack-endpoints.sh \
+STAGING_SERVICE_MAP_FILE=/private/path/staging-service-map.txt \
+make verify-stack
+```
+
+The same scenario scripts and per-scenario log checks run on remotedev before
+the rollout. The private endpoint file supplies the test tenant, credentials,
+mailbox, webhook receiver, and deployed CLI context; the service map connects
+scenario aliases to native hosts and systemd units. A failed or blocked
+scenario is not a passing smoke. `STACK_SCENARIOS` selects an individual
+scenario for diagnosis, and `STACK_REPEAT` repeats a race check. The staging
+target neither provisions nor tears down the cluster. See
+`docs/development/remote-development.md` in the monorepo for the endpoint and
+service-map contract.
 
 ## When to use provision
 

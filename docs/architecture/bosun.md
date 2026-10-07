@@ -54,11 +54,15 @@ must pass `ActionManageWebhooks` (tenant owner/admin or platform operator); API-
 need `developer:write`. A validated internal service token is trusted, but user-supplied metadata
 cannot turn a session JWT into a service call. Bridge performs the same checks before forwarding.
 
-gRPC codes that Bridge maps to GraphQL unions: `INVALID_ARGUMENT` (input validation) and
+gRPC codes that Bridge maps to GraphQL unions: `INVALID_ARGUMENT` (input validation, including an
+endpoint host the resolver reports as nonexistent or that has no addresses) and
 `FAILED_PRECONDITION` (the 10-endpoint limit, replaying a pending or test delivery, replaying on a
-disabled endpoint) become `ValidationError`; `RESOURCE_EXHAUSTED` (a test within 10 seconds of the
-previous one) becomes `RateLimitError`; `NOT_FOUND` becomes `NotFoundError`; `UNAVAILABLE` means
-the endpoint host could not be resolved at validation time.
+disabled endpoint, a resolver failure that may clear, such as SERVFAIL or a timeout) become
+`ValidationError`; `RESOURCE_EXHAUSTED` (a test within 10 seconds of the previous one) becomes
+`RateLimitError`; `NOT_FOUND` becomes `NotFoundError`. A resolver failure is logged at warning, so
+Bosun's own resolver failing for every host shows in its logs without reaching the tenant as an
+outage. The split comes from `restream.ErrDestinationNotFound`, which `ValidateURI` sets for a
+not-found DNS answer and an empty one.
 
 ## Data model
 
@@ -123,6 +127,12 @@ migrations of its own yet.
   status, including 3xx, is a failure.
 - **Retry:** 30 s, 2 min, 10 min, 30 min, 1 h, 2 h, 4 h, 8 h, 12 h, 24 h, 24 h, each ±10 percent;
   12 attempts over about 3.2 days, then `failed`.
+- **Policy refusal:** a connection the dialer's policy refuses is a permanent failure of that
+  delivery: the attempt is recorded with error class `blocked_destination` and the policy's reason
+  (without the address) as its response excerpt, and the delivery is `failed` at once instead of
+  retried. It counts toward the endpoint's failure streak, so an endpoint whose host keeps
+  resolving to a refused address is auto-disabled. The tenant can replay the delivery after fixing
+  the host.
 - **Bosun-side failure:** a delivery Bosun cannot send for a reason of its own settles with
   error class `internal`, releases its lease, writes no attempt, and leaves the endpoint's failure
   streak alone (`Store.SettleInternal`). A permanent cause (a signing secret that does not decrypt

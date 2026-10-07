@@ -240,9 +240,13 @@ func loadDeliveryEvent(ctx context.Context, q interface {
 
 // Outcome is the result of one HTTP attempt.
 type Outcome struct {
-	Success     bool
-	StatusCode  int
-	ErrorClass  string
+	Success    bool
+	StatusCode int
+	ErrorClass string
+	// Permanent marks a failure no retry of the same delivery can clear,
+	// such as a destination the policy refuses. Settle fails the delivery
+	// at once instead of scheduling a retry.
+	Permanent   bool
 	Latency     time.Duration
 	Excerpt     string
 	AttemptedAt time.Time
@@ -265,7 +269,8 @@ type SettleResult struct {
 // Settle records the attempt of a claimed delivery, fenced on its lease
 // token. A success finishes the delivery and ends the endpoint's failure
 // streak. A failure schedules the next retry from RetrySchedule, or fails the
-// delivery when none remains, and extends the streak; when the streak reaches
+// delivery when none remains or the outcome is Permanent, and extends the
+// streak; when the streak reaches
 // AutoDisableFailures attempts over AutoDisableAfter, the endpoint is
 // disabled, its pending deliveries are skipped, the billing contact email is
 // queued, and a webhook.endpoint_auto_disabled audit event is enqueued, all in
@@ -304,7 +309,7 @@ func (s *Store) Settle(ctx context.Context, c Claim, out Outcome, jitter func() 
 				    lease_token = NULL, leased_until = NULL, last_status_code = $4, last_error_class = NULL, updated_at = now()
 				WHERE tenant_id = $1 AND id = $2`, c.TenantID, c.DeliveryID, attempts, out.StatusCode)
 		default:
-			if delay, ok := RetryDelay(attempts, jitter); ok {
+			if delay, ok := RetryDelay(attempts, jitter); ok && !out.Permanent {
 				result.Status = DeliveryPending
 				_, err = tx.ExecContext(ctx, `
 					UPDATE bosun.webhook_deliveries

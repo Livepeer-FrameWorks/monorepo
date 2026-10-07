@@ -102,7 +102,12 @@ func (s *Server) toStatus(err error) error {
 	case errors.Is(err, validate.ErrInvalid):
 		return status.Error(codes.InvalidArgument, err.Error())
 	case errors.Is(err, validate.ErrResolution):
-		return status.Error(codes.Unavailable, err.Error())
+		// The tenant retries the request; the warning lets an operator see
+		// Bosun's resolver failing for every host.
+		if s.Logger != nil {
+			s.Logger.WithError(err).Warn("Webhook endpoint host could not be resolved")
+		}
+		return status.Error(codes.FailedPrecondition, err.Error())
 	case errors.Is(err, context.Canceled), errors.Is(err, context.DeadlineExceeded):
 		return status.FromContextError(err).Err()
 	default:

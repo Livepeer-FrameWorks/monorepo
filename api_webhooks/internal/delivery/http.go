@@ -70,7 +70,7 @@ func NewHTTPClient(opts ClientOptions) *http.Client {
 	policyControl := opts.Policy.DialControl()
 	control := func(network, address string, c syscall.RawConn) error {
 		if opts.OnlyAddress != "" && address != opts.OnlyAddress {
-			return fmt.Errorf("%w: %s is not the pinned address", restream.ErrDialBlocked, address)
+			return &restream.DialBlockedError{Reason: fmt.Errorf("%s is not the pinned address", address)}
 		}
 		return policyControl(network, address, c)
 	}
@@ -127,6 +127,15 @@ func (s *Sender) Send(ctx context.Context, url, msgID string, body []byte, keys 
 	req.Header.Set("User-Agent", UserAgent)
 	resp, err := s.HTTP.Do(req)
 	out.Latency = s.now().Sub(started)
+	if blocked := (*restream.DialBlockedError)(nil); errors.As(err, &blocked) {
+		// The policy refuses the destination, so a retry of the same
+		// delivery is refused again. No response arrived; the excerpt holds
+		// the reason for the tenant.
+		out.ErrorClass = ClassBlockedDestination
+		out.Permanent = true
+		out.Excerpt = "refused by the destination policy: " + blocked.Reason.Error()
+		return out
+	}
 	if err != nil {
 		out.ErrorClass = classify(err)
 		return out
@@ -152,7 +161,8 @@ func (s *Sender) Send(ctx context.Context, url, msgID string, body []byte, keys 
 	return out
 }
 
-// classify maps a transport error to an error class.
+// classify maps a transport error other than a destination-policy refusal,
+// which Send handles, to an error class.
 func classify(err error) string {
 	var dnsErr *net.DNSError
 	var certErr *tls.CertificateVerificationError
@@ -160,8 +170,6 @@ func classify(err error) string {
 	var hostnameErr x509.HostnameError
 	var recordErr tls.RecordHeaderError
 	switch {
-	case errors.Is(err, restream.ErrDialBlocked):
-		return ClassBlockedDestination
 	case errors.As(err, &dnsErr):
 		return ClassDNS
 	case errors.As(err, &certErr), errors.As(err, &unknownAuthority), errors.As(err, &hostnameErr), errors.As(err, &recordErr):

@@ -222,3 +222,23 @@ func TestDestinationPolicyFromValuesParsesAllowAndDenyCIDRs(t *testing.T) {
 		t.Fatal("invalid deny CIDR must fail closed")
 	}
 }
+
+// A nonexistent host keeps the retryable classification for dialing callers,
+// which may see the name published later, and is marked
+// ErrDestinationNotFound so a save-time check can refuse it.
+func TestDestinationNotFoundStaysRetryableAndIsMarked(t *testing.T) {
+	policy := DestinationPolicy{LookupIP: func(_ context.Context, host string) ([]net.IP, error) {
+		return nil, &net.DNSError{Err: "no such host", Name: host, IsNotFound: true}
+	}}
+	parsed, _ := url.Parse("rtmp://missing.example/live")
+	err := policy.ValidateURI(context.Background(), parsed)
+	if !errors.Is(err, ErrDestinationResolution) || !errors.Is(err, ErrDestinationNotFound) {
+		t.Fatalf("nonexistent host = %v, want ErrDestinationResolution and ErrDestinationNotFound", err)
+	}
+	policy.LookupIP = func(_ context.Context, host string) ([]net.IP, error) {
+		return nil, &net.DNSError{Err: "server misbehaving", Name: host, IsTemporary: true}
+	}
+	if err := policy.ValidateURI(context.Background(), parsed); errors.Is(err, ErrDestinationNotFound) {
+		t.Fatalf("temporary resolver failure = %v, must not be ErrDestinationNotFound", err)
+	}
+}

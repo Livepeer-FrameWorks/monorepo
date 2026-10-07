@@ -20,6 +20,12 @@ const (
 // valid destination. Callers should retry it; it is not a policy rejection.
 var ErrDestinationResolution = errors.New("destination resolution unavailable")
 
+// ErrDestinationNotFound marks a host the resolver reports as nonexistent, or
+// that has no addresses. It also matches ErrDestinationResolution, because a
+// caller about to dial may see the name published later; a save-time check
+// refuses it as input the tenant must correct.
+var ErrDestinationNotFound = errors.New("destination host does not resolve")
+
 // DestinationPolicy is the network boundary for tenant-supplied outbound
 // destinations: restream push targets, where operators may add CIDR
 // exceptions, and outbound webhook endpoints, which use the zero policy with
@@ -137,11 +143,14 @@ func (p DestinationPolicy) ValidateURI(ctx context.Context, parsed *url.URL) err
 		return fmt.Errorf("destination DNS resolver is unavailable: %w", ErrDestinationResolution)
 	}
 	addresses, err := p.LookupIP(ctx, host)
+	if dnsErr := (*net.DNSError)(nil); errors.As(err, &dnsErr) && dnsErr.IsNotFound {
+		return fmt.Errorf("resolve destination host: %w: %w: %w", err, ErrDestinationNotFound, ErrDestinationResolution)
+	}
 	if err != nil {
 		return fmt.Errorf("resolve destination host: %w: %w", err, ErrDestinationResolution)
 	}
 	if len(addresses) == 0 {
-		return fmt.Errorf("destination host resolved to no addresses: %w", ErrDestinationResolution)
+		return fmt.Errorf("destination host resolved to no addresses: %w: %w", ErrDestinationNotFound, ErrDestinationResolution)
 	}
 	for _, address := range addresses {
 		if err := p.validateIP(address); err != nil {
@@ -250,6 +259,23 @@ func (p DestinationPolicy) ValidateIP(ip net.IP) error {
 // the name resolved to is forbidden by the policy.
 var ErrDialBlocked = errors.New("dial blocked by destination policy")
 
+// DialBlockedError is the error DialControl returns. It matches
+// ErrDialBlocked, and Reason is the policy's refusal without the address, fit
+// to show the tenant who owns the destination.
+type DialBlockedError struct {
+	Reason error
+}
+
+func (e *DialBlockedError) Error() string {
+	return ErrDialBlocked.Error() + ": " + e.Reason.Error()
+}
+
+// Is reports whether target is ErrDialBlocked.
+func (e *DialBlockedError) Is(target error) bool { return target == ErrDialBlocked }
+
+// Unwrap returns the policy's reason.
+func (e *DialBlockedError) Unwrap() error { return e.Reason }
+
 // DialControl returns a net.Dialer Control hook that applies the policy to the
 // address actually being connected, after DNS resolution. ValidateURI checks a
 // resolution that may differ from the one the dialer makes, so a host that
@@ -259,14 +285,14 @@ func (p DestinationPolicy) DialControl() func(network, address string, c syscall
 	return func(_, address string, _ syscall.RawConn) error {
 		host, _, err := net.SplitHostPort(address)
 		if err != nil {
-			return fmt.Errorf("%w: %w", ErrDialBlocked, err)
+			return &DialBlockedError{Reason: err}
 		}
 		ip := net.ParseIP(host)
 		if ip == nil {
-			return fmt.Errorf("%w: %q is not an address", ErrDialBlocked, host)
+			return &DialBlockedError{Reason: fmt.Errorf("%q is not an address", host)}
 		}
 		if err := p.validateIP(ip); err != nil {
-			return fmt.Errorf("%w: %w", ErrDialBlocked, err)
+			return &DialBlockedError{Reason: err}
 		}
 		return nil
 	}

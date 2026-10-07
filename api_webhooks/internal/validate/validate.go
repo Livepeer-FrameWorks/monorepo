@@ -20,9 +20,9 @@ const maxDescriptionLength = 500
 // ErrInvalid wraps every rejection of tenant input.
 var ErrInvalid = errors.New("invalid webhook endpoint")
 
-// ErrResolution means the endpoint host could not be resolved right now; the
-// request may succeed when retried.
-var ErrResolution = errors.New("the endpoint host could not be resolved")
+// ErrResolution means the resolver failed for the endpoint host in a way that
+// may clear on retry. A host that does not exist is ErrInvalid instead.
+var ErrResolution = errors.New("the endpoint host could not be resolved right now")
 
 func invalid(format string, args ...any) error {
 	return fmt.Errorf("%w: %s", ErrInvalid, fmt.Sprintf(format, args...))
@@ -37,7 +37,7 @@ func URL(ctx context.Context, policy restream.DestinationPolicy, raw string) (st
 	case err == nil:
 		return normalized, nil
 	case errors.Is(err, restream.ErrDestinationResolution):
-		return "", fmt.Errorf("%w: %s", ErrResolution, strings.TrimPrefix(err.Error(), restream.ErrDestinationResolution.Error()+": "))
+		return "", fmt.Errorf("%w: %s; retry the request", ErrResolution, strings.TrimPrefix(err.Error(), restream.ErrDestinationResolution.Error()+": "))
 	default:
 		return "", fmt.Errorf("%w: %s", ErrInvalid, strings.TrimPrefix(err.Error(), restream.ErrInvalidWebhookURL.Error()+": "))
 	}

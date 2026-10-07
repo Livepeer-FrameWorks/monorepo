@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"net"
+	"strings"
 	"testing"
 )
 
@@ -162,5 +163,41 @@ func TestWebhookPolicyRefusesPlatformDestinationsWithPrivateAllowed(t *testing.T
 	rebinding.LookupIP = func(context.Context, string) ([]net.IP, error) { return []net.IP{local}, nil }
 	if _, err := ValidateWebhookURL(context.Background(), rebinding, "http://receiver.example.com/x"); !errors.Is(err, ErrInvalidWebhookURL) {
 		t.Errorf("a name resolving to this host's own address %s = %v, want ErrInvalidWebhookURL", local, err)
+	}
+}
+
+// A host the resolver authoritatively reports as nonexistent, or that has no
+// addresses, is an invalid URL the tenant must fix; only a resolver failure
+// that may clear on retry is reported as ErrDestinationResolution.
+func TestValidateWebhookURLSeparatesNonexistentHostFromResolverFailure(t *testing.T) {
+	private := DestinationPolicy{AllowPrivate: true}
+	for name, lookup := range map[string]func(context.Context, string) ([]net.IP, error){
+		"nxdomain": func(_ context.Context, host string) ([]net.IP, error) {
+			return nil, &net.DNSError{Err: "no such host", Name: host, IsNotFound: true}
+		},
+		"no addresses": func(context.Context, string) ([]net.IP, error) { return nil, nil },
+	} {
+		private.LookupIP = lookup
+		_, err := ValidateWebhookURL(context.Background(), private, "http://foo.local/hook")
+		if !errors.Is(err, ErrInvalidWebhookURL) || errors.Is(err, ErrDestinationResolution) {
+			t.Fatalf("%s: err = %v, want ErrInvalidWebhookURL only", name, err)
+		}
+		if !strings.Contains(err.Error(), "foo.local does not resolve") {
+			t.Fatalf("%s: err = %q, want the host named as not resolving", name, err)
+		}
+	}
+	for name, lookup := range map[string]func(context.Context, string) ([]net.IP, error){
+		"servfail": func(_ context.Context, host string) ([]net.IP, error) {
+			return nil, &net.DNSError{Err: "server misbehaving", Name: host, IsTemporary: true}
+		},
+		"timeout": func(_ context.Context, host string) ([]net.IP, error) {
+			return nil, &net.DNSError{Err: "i/o timeout", Name: host, IsTimeout: true, IsTemporary: true}
+		},
+	} {
+		private.LookupIP = lookup
+		_, err := ValidateWebhookURL(context.Background(), private, "https://hooks.example.com/x")
+		if !errors.Is(err, ErrDestinationResolution) || errors.Is(err, ErrInvalidWebhookURL) {
+			t.Fatalf("%s: err = %v, want ErrDestinationResolution only", name, err)
+		}
 	}
 }

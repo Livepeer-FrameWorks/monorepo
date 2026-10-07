@@ -1075,8 +1075,9 @@ type WebhookDelivery struct {
 	// HTTP status of the last attempt; 0 when no response arrived.
 	LastStatusCode int32 `protobuf:"varint,9,opt,name=last_status_code,json=lastStatusCode,proto3" json:"last_status_code,omitempty"`
 	// Failure class of the last attempt: "" when it succeeded, otherwise one of
-	// http_status, redirect, timeout, connection, tls, dns, blocked_destination,
-	// secret_unavailable.
+	// http_status, redirect, timeout, connection, tls, dns, blocked_destination
+	// (the destination policy refused the address; the delivery fails without a
+	// retry), or internal (Bosun could not sign or render the delivery).
 	LastErrorClass string                 `protobuf:"bytes,10,opt,name=last_error_class,json=lastErrorClass,proto3" json:"last_error_class,omitempty"`
 	DeliveredAt    *timestamppb.Timestamp `protobuf:"bytes,11,opt,name=delivered_at,json=deliveredAt,proto3" json:"delivered_at,omitempty"`
 	ReplayCount    int32                  `protobuf:"varint,12,opt,name=replay_count,json=replayCount,proto3" json:"replay_count,omitempty"`
@@ -1229,7 +1230,8 @@ type WebhookDeliveryAttempt struct {
 	StatusCode    int32                  `protobuf:"varint,3,opt,name=status_code,json=statusCode,proto3" json:"status_code,omitempty"`
 	ErrorClass    string                 `protobuf:"bytes,4,opt,name=error_class,json=errorClass,proto3" json:"error_class,omitempty"`
 	LatencyMs     int32                  `protobuf:"varint,5,opt,name=latency_ms,json=latencyMs,proto3" json:"latency_ms,omitempty"`
-	// At most 1 KiB of the response body.
+	// At most 1 KiB of the response body. For a blocked_destination attempt,
+	// which gets no response, the destination policy's reason.
 	ResponseExcerpt string                 `protobuf:"bytes,6,opt,name=response_excerpt,json=responseExcerpt,proto3" json:"response_excerpt,omitempty"`
 	AttemptedAt     *timestamppb.Timestamp `protobuf:"bytes,7,opt,name=attempted_at,json=attemptedAt,proto3" json:"attempted_at,omitempty"`
 	unknownFields   protoimpl.UnknownFields

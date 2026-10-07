@@ -18,7 +18,7 @@ func resolverPolicy(addr string) restream.DestinationPolicy {
 
 // URL applies the shared webhook URL rules (tested in pkg/restream) and maps
 // their outcome onto this package's sentinels, which the gRPC layer turns into
-// InvalidArgument and Unavailable.
+// InvalidArgument and FailedPrecondition.
 func TestURLMapsSharedRules(t *testing.T) {
 	public := resolverPolicy("93.184.216.34")
 	got, err := URL(context.Background(), public, "  https://hooks.example.com:8443/in?x=1 ")

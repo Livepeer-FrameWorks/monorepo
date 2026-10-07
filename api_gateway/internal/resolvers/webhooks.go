@@ -477,8 +477,9 @@ func webhookMutationError[T any](err error, resourceType, resourceID, op string)
 }
 
 // mapWebhookError maps Bosun's status codes to error union members:
-// InvalidArgument and FailedPrecondition (including the endpoint limit and a
-// replay of a pending or test delivery) are ValidationErrors, NotFound a
+// InvalidArgument and FailedPrecondition (including the endpoint limit, a
+// replay of a pending or test delivery, and an endpoint host DNS could not
+// resolve right now) are ValidationErrors, NotFound a
 // NotFoundError, ResourceExhausted (the test interval) a RateLimitError, and
 // PermissionDenied an AuthError. Other codes are not mapped.
 func mapWebhookError(err error, resourceType, resourceID string) any {
