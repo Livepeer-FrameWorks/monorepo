@@ -289,3 +289,17 @@
   when:
     - not ansible_check_mode
     - (yugabyte_current.stat.lnk_source | default('')) != yugabyte_release_dir
+
+# Superseded releases and the pre-release in-place tree stay while a process
+# or a unit still uses them, so a selection this run made is pruned on a later
+# run, once the restarts moved every process onto it. Check mode lists what
+# apply would remove.
+- name: Remove YugabyteDB engine trees no process runs
+  ansible.builtin.script:
+    cmd: >-
+      yugabyte-prune-releases.sh {{ yugabyte_install_dir | quote }}
+      {{ 'check' if ansible_check_mode else 'apply' }}
+      {{ yugabyte_master_unit_path | quote }} {{ yugabyte_tserver_unit_path | quote }}
+  register: yugabyte_release_prune
+  check_mode: false
+  changed_when: yugabyte_release_prune.stdout | default('') | trim | length > 0
