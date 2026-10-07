@@ -134,6 +134,30 @@ func TestNodeBaselineRoleVarsForwardExtraPackages(t *testing.T) {
 // the name under that suffix, which a wildcard record answers wrongly. Every
 // host path (node_baseline on cluster hosts, the edge role on standalone
 // edges) writes the networkd drop-in that ignores those domains.
+// Standalone `edge provision` does not run node_baseline; without the journald
+// drop-in an edge's journal grows to journald's default cap of 10% of the
+// filesystem (up to 4G) next to the cache it serves from.
+func TestEdgeRoleCapsTheJournal(t *testing.T) {
+	task := roleTaskByName(t, "ansible/collections/ansible_collections/frameworks/infra/roles/edge/tasks/main.yml",
+		"Edge | journald retention")
+	spec, ok := moduleSpec(task, "include_role")
+	if !ok || spec["name"] != "frameworks.infra.node_baseline" || spec["tasks_from"] != "journald.yml" {
+		t.Fatalf("edge role must apply node_baseline's journald.yml: %v", task)
+	}
+	when := strings.Join(func() []string {
+		var out []string
+		for _, w := range task["when"].([]any) {
+			out = append(out, w.(string))
+		}
+		return out
+	}(), "\n")
+	for _, want := range []string{"ansible_facts.os_family != 'Darwin'", "ansible_facts.service_mgr == 'systemd'"} {
+		if !strings.Contains(when, want) {
+			t.Errorf("edge journald task must be gated on %q: %v", want, task["when"])
+		}
+	}
+}
+
 func TestNodeBaselineIgnoresDHCPAndRASearchDomains(t *testing.T) {
 	const role = "ansible/collections/ansible_collections/frameworks/infra/roles/node_baseline/"
 	main := readRepoFile(t, role+"tasks/main.yml")

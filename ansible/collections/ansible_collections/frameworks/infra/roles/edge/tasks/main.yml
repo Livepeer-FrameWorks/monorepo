@@ -26,6 +26,19 @@
     - ansible_facts.service_mgr == 'systemd'
   tags: [install, configure]
 
+# Mist, Helmsman and Caddy log to the journal, which the node_baseline cap
+# bounds on cluster hosts; standalone edges apply the same cap here.
+- name: Edge | journald retention
+  ansible.builtin.include_role:
+    name: frameworks.infra.node_baseline
+    tasks_from: journald.yml
+    apply:
+      tags: [install, configure]
+  when:
+    - ansible_facts.os_family != 'Darwin'
+    - ansible_facts.service_mgr == 'systemd'
+  tags: [install, configure]
+
 - name: Edge | install (container)
   ansible.builtin.import_tasks: install-container.yml
   when: edge_mode != 'native'
