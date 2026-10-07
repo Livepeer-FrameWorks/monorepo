@@ -39,7 +39,26 @@ func activatePushTargetsForTest(t *testing.T, logger logging.Logger, req *ipcpb.
 	handleActivatePushTargets(logger, req, connection.epoch, restreamActivationDispatchSequence.Add(1), respond)
 }
 
+// isolateRestreamRegistry gives the test an empty restream registry and
+// restores the previous one afterwards. The registry is process state keyed by
+// stream name, so a test that reuses stream names would otherwise find the
+// desired state its previous run installed (a higher target revision that
+// supersedes the next run's first activation).
+func isolateRestreamRegistry(t *testing.T) {
+	t.Helper()
+	restreamRegistry.Lock()
+	previous := restreamRegistry.streams
+	restreamRegistry.streams = make(map[string]restreamDesiredState)
+	restreamRegistry.Unlock()
+	t.Cleanup(func() {
+		restreamRegistry.Lock()
+		restreamRegistry.streams = previous
+		restreamRegistry.Unlock()
+	})
+}
+
 func TestHandleActivatePushTargets(t *testing.T) {
+	isolateRestreamRegistry(t)
 	t.Run("nil request is a no-op", func(t *testing.T) {
 		activatePushTargetsForTest(t, logging.NewLogger(), nil, nil)
 	})
