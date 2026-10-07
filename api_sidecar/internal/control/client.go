@@ -2704,15 +2704,32 @@ func handleDVRDelete(logger logging.Logger, req *ipcpb.DVRDeleteRequest, send fu
 
 	// Initialize DVR manager if not already done
 	initDVRManager()
+	deleteDVRRecording(dvrManager, logger, req, send)
+}
+
+// deleteDVRRecording deletes a DVR recording's files on dm once its push is
+// confirmed stopped.
+func deleteDVRRecording(dm *DVRManager, logger logging.Logger, req *ipcpb.DVRDeleteRequest, send func(*ipcpb.ControlMessage)) {
+	dvrHash := req.GetDvrHash()
+	requestID := req.GetRequestId()
 
 	// Confirm the recording's Mist push is stopped BEFORE removing files: deleting
 	// while a writer is live would leave Mist writing into a removed/recreated path.
-	// If it cannot be confirmed (list failure, or a live push that won't stop), defer
-	// the delete — Foghorn re-drives it.
-	if !dvrManager.ConfirmDVRPushStopped(dvrHash) {
+	// A push absent from the list defers the delete until its absence converges;
+	// Helmsman re-runs it on the evidence's own schedule. Any other unconfirmed
+	// stop (list failure, a live push that won't stop) is left for Foghorn to
+	// re-drive.
+	confirmed, awaitingAbsence := dm.confirmDVRPushStopped(dvrHash)
+	if !confirmed {
+		if awaitingAbsence {
+			dm.redriveDeferredDelete(dvrHash, func() { deleteDVRRecording(dm, logger, req, send) })
+			logger.WithField("dvr_hash", dvrHash).Info("DVR delete deferred until the recording's push absence converges")
+			return
+		}
 		logger.WithField("dvr_hash", dvrHash).Warn("DVR delete deferred: recording stop not confirmed; will retry")
 		return
 	}
+	dm.settleDeferredDelete(dvrHash)
 
 	// Use the registered delete handler
 	if deleteDVRFn == nil {

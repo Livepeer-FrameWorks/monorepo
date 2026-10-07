@@ -190,6 +190,15 @@ type DVRManager struct {
 	// uploads of the same object. Guarded by uploadsMu.
 	uploadsMu       sync.Mutex
 	uploadsInFlight map[string]struct{}
+
+	// deferredDeletes holds the DVR deletes deferred while their push absence
+	// converges, each with the token of its one scheduled re-observation.
+	// Guarded by mutex.
+	deferredDeletes     map[string]uint64
+	deferredDeleteToken uint64
+
+	// afterFn schedules a deferred delete's next observation (nil = time.AfterFunc).
+	afterFn func(time.Duration, func())
 }
 
 const (
@@ -315,6 +324,72 @@ func (dm *DVRManager) clearAbsenceEvidence(dvrHash string) {
 	}
 	dm.mutex.Lock()
 	delete(dm.absenceEvidence, dvrHash)
+	dm.mutex.Unlock()
+}
+
+// nextAbsenceObservationLocked is when dvrHash's next absence observation can
+// advance its evidence: the minimum spacing after the last counted one, and for
+// the observation that reaches the threshold, no earlier than the end of the
+// grace. dm.mutex must be held.
+func (dm *DVRManager) nextAbsenceObservationLocked(dvrHash string, now time.Time) time.Duration {
+	st := dm.absenceEvidence[dvrHash]
+	if st == nil || st.lastCountedAt.IsZero() {
+		return dvrAbsenceMinInterval
+	}
+	next := st.lastCountedAt.Add(dvrAbsenceMinInterval)
+	if st.observations+1 >= dvrAbsenceThreshold {
+		if graceEnd := st.firstAbsentAt.Add(dvrAbsenceGrace); graceEnd.After(next) {
+			next = graceEnd
+		}
+	}
+	if d := next.Sub(now); d > 0 {
+		return d
+	}
+	return 0
+}
+
+// redriveDeferredDelete re-runs a delete deferred while its push absence
+// converges at the moment its next observation can count, so the delete
+// completes as soon as the evidence converges instead of waiting for Foghorn to
+// send it again. One re-run is pending per hash; a delete command arriving
+// meanwhile observes on its own and leaves the scheduled one in place.
+func (dm *DVRManager) redriveDeferredDelete(dvrHash string, redrive func()) {
+	dm.mutex.Lock()
+	if _, pending := dm.deferredDeletes[dvrHash]; pending {
+		dm.mutex.Unlock()
+		return
+	}
+	if dm.deferredDeletes == nil {
+		dm.deferredDeletes = make(map[string]uint64)
+	}
+	dm.deferredDeleteToken++
+	token := dm.deferredDeleteToken
+	dm.deferredDeletes[dvrHash] = token
+	delay := dm.nextAbsenceObservationLocked(dvrHash, dm.now())
+	after := dm.afterFn
+	dm.mutex.Unlock()
+	if after == nil {
+		after = func(d time.Duration, f func()) { time.AfterFunc(d, f) }
+	}
+	after(delay, func() {
+		dm.mutex.Lock()
+		current := dm.deferredDeletes[dvrHash] == token
+		if current {
+			delete(dm.deferredDeletes, dvrHash)
+		}
+		dm.mutex.Unlock()
+		if current {
+			redrive()
+		}
+	})
+}
+
+// settleDeferredDelete drops a pending re-run once a delete of dvrHash has
+// confirmed its push stopped, so the re-run does not start a new observation
+// round for files that are already gone.
+func (dm *DVRManager) settleDeferredDelete(dvrHash string) {
+	dm.mutex.Lock()
+	delete(dm.deferredDeletes, dvrHash)
 	dm.mutex.Unlock()
 }
 
@@ -1492,7 +1567,7 @@ func (dm *DVRManager) StopRecording(dvrHash string) error {
 	}, true)
 }
 
-// ConfirmDVRPushStopped stops any live Mist push for dvrHash and reports whether a
+// confirmDVRPushStopped stops any live Mist push for dvrHash and reports whether a
 // DESTRUCTIVE teardown (delete) may proceed. It emits no lifecycle event — the caller
 // sends its own terminal report (e.g. 'deleted'). It returns false — DEFERRING the delete,
 // files retained — when a writer may still be live: the push list could not be read, a
@@ -1500,9 +1575,10 @@ func (dm *DVRManager) StopRecording(dvrHash string) error {
 // bounded-absence has not yet converged (an accepted push can be momentarily unlisted, so
 // an empty list is NOT proof of absence). It returns true only when the push was found and
 // stopped, or its absence converged via observeAbsenceConverged (repeated absence over a
-// real grace with no segment/byte progress). The delete is re-driven by Foghorn's durable
-// stop_pending obligation until convergence.
-func (dm *DVRManager) ConfirmDVRPushStopped(dvrHash string) bool {
+// real grace with no segment/byte progress). awaitingAbsence reports a deferral whose
+// push is absent from a successful list and whose recording was readable, so it
+// resolves once further spaced observations converge.
+func (dm *DVRManager) confirmDVRPushStopped(dvrHash string) (confirmed, awaitingAbsence bool) {
 	dm.mutex.Lock()
 	job, exists := dm.jobs[dvrHash]
 	var streamName, targetURI string
@@ -1520,21 +1596,20 @@ func (dm *DVRManager) ConfirmDVRPushStopped(dvrHash string) bool {
 		// NOT authorize a destructive delete over a possibly-live writer. Defer. (In production
 		// the client is always wired; tests inject a fake instead of relying on this path.)
 		dm.logger.WithField("dvr_hash", dvrHash).Warn("DVR delete: no Mist client to confirm push stopped; deferring (fail closed)")
-		return false
+		return false, false
 	}
 
-	confirmed := false
 	if pushID > 0 {
 		if err := dm.mistClient.PushStop(pushID); err != nil {
 			dm.logger.WithError(err).WithField("dvr_hash", dvrHash).Warn("DVR delete: failed to stop live push; deferring delete")
-			return false
+			return false, false
 		}
 		confirmed = true
 	} else {
 		pushes, listErr := dm.mistClient.PushList()
 		if listErr != nil {
 			dm.logger.WithError(listErr).WithField("dvr_hash", dvrHash).Warn("DVR delete: cannot list pushes to confirm; deferring delete")
-			return false
+			return false, false
 		}
 		// Match by exact identity when we know the stream name, else by the hash in
 		// the target (the in-memory job may be gone after a restart).
@@ -1550,7 +1625,7 @@ func (dm *DVRManager) ConfirmDVRPushStopped(dvrHash string) bool {
 			dm.clearAbsenceEvidence(dvrHash)
 			if err := dm.mistClient.PushStop(push.ID); err != nil {
 				dm.logger.WithError(err).WithFields(logging.Fields{"dvr_hash": dvrHash, "push_id": push.ID}).Warn("DVR delete: failed to stop live push; deferring delete")
-				return false
+				return false, false
 			}
 			confirmed = true
 		} else {
@@ -1562,7 +1637,7 @@ func (dm *DVRManager) ConfirmDVRPushStopped(dvrHash string) bool {
 			fp, readOK := dvrFingerprintByHash(dvrHash)
 			if !dm.observeAbsenceConverged(dvrHash, fp, readOK) {
 				dm.logger.WithField("dvr_hash", dvrHash).Info("DVR delete: push absent from list but absence not yet converged; deferring delete (files retained)")
-				return false
+				return false, readOK
 			}
 			dm.clearAbsenceEvidence(dvrHash)
 			confirmed = true
@@ -1577,7 +1652,7 @@ func (dm *DVRManager) ConfirmDVRPushStopped(dvrHash string) bool {
 		}
 		dm.mutex.Unlock()
 	}
-	return confirmed
+	return confirmed, false
 }
 
 // StopRecordingWithSender stops a DVR recording job on a Foghorn stop command and

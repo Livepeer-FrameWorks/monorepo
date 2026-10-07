@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"path/filepath"
 	"testing"
 	"time"
@@ -316,6 +317,8 @@ func setupTestDVRManager(t *testing.T) {
 		logger:     logging.NewLogger(),
 		jobs:       make(map[string]*DVRJob),
 		mistClient: &fakeMistClient{},
+		// A deferred delete's re-observation runs only when a test drives it.
+		afterFn: func(time.Duration, func()) {},
 	}
 	t.Cleanup(func() {
 		dvrManager = prevDM
@@ -327,7 +330,7 @@ func TestHandleDVRDelete_Success(t *testing.T) {
 	// This test exercises the delete MECHANICS (deleteDVRFn + terminal message), not the
 	// bounded-absence policy (covered by TestObserveAbsenceConverged /
 	// TestHandleDVRDelete_DefersWhilePushAbsent). Give the DVR a live push so
-	// ConfirmDVRPushStopped confirms via the direct pushID>0 stop path — no nil-Mist
+	// confirmDVRPushStopped confirms via the direct pushID>0 stop path — no nil-Mist
 	// fail-open shortcut, which now correctly defers instead of authorizing deletion.
 	dvrManager.mutex.Lock()
 	dvrManager.jobs["dvr-hash-1"] = &DVRJob{DVRHash: "dvr-hash-1", Status: "recording", PushID: 77, Logger: logging.NewLogger()}
@@ -421,7 +424,7 @@ func TestHandleVodDelete_Error(t *testing.T) {
 func TestHandleDVRDelete_StopsRecordingFirst(t *testing.T) {
 	setupTestDVRManager(t)
 
-	// Add an active job with a LIVE push id so ConfirmDVRPushStopped takes the pushID>0 path:
+	// Add an active job with a LIVE push id so confirmDVRPushStopped takes the pushID>0 path:
 	// it stops the push (fake succeeds) and confirms immediately, removing the job — no
 	// bounded-absence deferral (that path is exercised by TestHandleDVRDelete_DefersWhilePushAbsent).
 	dvrManager.mutex.Lock()
@@ -554,5 +557,109 @@ func TestHandleDVRDelete_DefersWhilePushAbsent(t *testing.T) {
 		if len(sent) != 0 {
 			t.Fatalf("no terminal message may be sent while deferring, got %d", len(sent))
 		}
+	}
+}
+
+// A delete deferred because the recording's push is absent but its absence has
+// not converged completes on Helmsman as soon as the evidence converges: each
+// deferral schedules the next observation at the moment it can count, and the
+// converging one deletes the files and reports the DVR deleted. Nothing from
+// Foghorn re-sends the delete here.
+func TestHandleDVRDelete_DeferredDeleteCompletesWhenAbsenceConverges(t *testing.T) {
+	root := t.TempDir()
+	appconfigtest.Setenv(t, "HELMSMAN_STORAGE_LOCAL_PATH", root)
+	const dvrHash = "dvr-ended-deferred"
+	segments := filepath.Join(root, "dvr", "stream-a", dvrHash, "segments")
+	if err := os.MkdirAll(segments, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(segments, "seg1.ts"), []byte("ts"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	setupTestDVRManager(t) // empty PushList: the recording's push is absent
+	now := time.Unix(1_000_000, 0)
+	start := now
+	type scheduled struct {
+		delay time.Duration
+		fn    func()
+	}
+	var queue []scheduled
+	dvrManager.nowFn = func() time.Time { return now }
+	dvrManager.afterFn = func(d time.Duration, f func()) { queue = append(queue, scheduled{d, f}) }
+
+	var deletes int
+	prev := deleteDVRFn
+	deleteDVRFn = func(hash string) (uint64, error) { deletes++; return 16 * 1024, nil }
+	t.Cleanup(func() { deleteDVRFn = prev })
+	var sent []*ipcpb.ControlMessage
+	send := func(m *ipcpb.ControlMessage) { sent = append(sent, m) }
+
+	handleDVRDelete(logging.NewLogger(), &ipcpb.DVRDeleteRequest{DvrHash: dvrHash, RequestId: "req-deferred"}, send)
+	if deletes != 0 || len(sent) != 0 {
+		t.Fatalf("first observation must defer: deletes=%d sent=%d", deletes, len(sent))
+	}
+	for steps := 0; deletes == 0; steps++ {
+		if len(queue) != 1 {
+			t.Fatalf("after %s the deferred delete has %d scheduled re-observations, want 1 (it would wait for Foghorn to re-send it)", now.Sub(start), len(queue))
+		}
+		if steps > dvrAbsenceThreshold+2 {
+			t.Fatalf("deferred delete did not converge after %d re-observations", steps)
+		}
+		next := queue[0]
+		queue = queue[1:]
+		now = now.Add(next.delay)
+		next.fn()
+	}
+
+	if elapsed := now.Sub(start); elapsed != dvrAbsenceGrace {
+		t.Fatalf("deferred delete completed after %s, want exactly the %s absence grace", elapsed, dvrAbsenceGrace)
+	}
+	if len(queue) != 0 {
+		t.Fatalf("a completed delete left %d re-observations scheduled", len(queue))
+	}
+	if len(sent) != 1 || sent[0].GetDvrStopped().GetStatus() != "deleted" || sent[0].GetDvrStopped().GetRequestId() != "req-deferred" {
+		t.Fatalf("want one DVRStopped{deleted} for req-deferred, got %v", sent)
+	}
+}
+
+// A deferred delete that a later delete command completes first leaves its
+// scheduled re-observation with nothing to do: it neither deletes again nor
+// starts a new observation round.
+func TestHandleDVRDelete_DeferredRerunSettledByAnotherDelete(t *testing.T) {
+	root := t.TempDir()
+	appconfigtest.Setenv(t, "HELMSMAN_STORAGE_LOCAL_PATH", root)
+	const dvrHash = "dvr-settled-elsewhere"
+	if err := os.MkdirAll(filepath.Join(root, "dvr", "stream-b", dvrHash, "segments"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	setupTestDVRManager(t)
+	now := time.Unix(2_000_000, 0)
+	var queue []func()
+	dvrManager.nowFn = func() time.Time { return now }
+	dvrManager.afterFn = func(_ time.Duration, f func()) { queue = append(queue, f) }
+	var deletes int
+	prev := deleteDVRFn
+	deleteDVRFn = func(string) (uint64, error) { deletes++; return 0, nil }
+	t.Cleanup(func() { deleteDVRFn = prev })
+	req := &ipcpb.DVRDeleteRequest{DvrHash: dvrHash}
+	send := func(*ipcpb.ControlMessage) {}
+
+	handleDVRDelete(logging.NewLogger(), req, send)
+	if len(queue) != 1 {
+		t.Fatalf("scheduled re-observations = %d, want 1", len(queue))
+	}
+	for i := 0; i < dvrAbsenceThreshold && deletes == 0; i++ {
+		now = now.Add(dvrAbsenceGrace)
+		handleDVRDelete(logging.NewLogger(), req, send)
+	}
+	if deletes != 1 {
+		t.Fatalf("delete commands did not converge: deletes=%d", deletes)
+	}
+	stale := queue[0]
+	queue = nil
+	stale()
+	if deletes != 1 || len(queue) != 0 {
+		t.Fatalf("settled re-observation ran: deletes=%d scheduled=%d, want 1 and 0", deletes, len(queue))
 	}
 }
