@@ -1814,6 +1814,6 @@ func localOriginRelayable(ctx context.Context, deps *PlaybackDependencies, artif
 	if deps.DB == nil || isRemoteOriginCluster(originClusterID, deps) {
 		return false
 	}
-	_, err := foghorndb.New(deps.DB).GetFreshRelayOriginNode(ctx, artifactHash)
+	_, err := foghorndb.New(deps.DB).GetFreshRelayOriginNode(ctx, foghorndb.GetFreshRelayOriginNodeParams{ArtifactHash: artifactHash})
 	return err == nil
 }

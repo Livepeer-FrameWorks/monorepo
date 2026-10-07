@@ -300,7 +300,8 @@ type Querier interface {
 	GetFinalizedArtifactEndedAt(ctx context.Context, arg GetFinalizedArtifactEndedAtParams) (sql.NullTime, error)
 	GetFreezeArtifactMetadata(ctx context.Context, arg GetFreezeArtifactMetadataParams) (GetFreezeArtifactMetadataRow, error)
 	GetFreezePublicationLedgerCursor(ctx context.Context) (string, error)
-	GetFreshRelayOriginNode(ctx context.Context, artifactHash string) (GetFreshRelayOriginNodeRow, error)
+	// The requesting node is never its own peer; an empty requesting_node_id excludes no node.
+	GetFreshRelayOriginNode(ctx context.Context, arg GetFreshRelayOriginNodeParams) (GetFreshRelayOriginNodeRow, error)
 	// An existing import of this hash, for an idempotent retry of ImportVodAsset.
 	GetImportedVodForTenant(ctx context.Context, arg GetImportedVodForTenantParams) (GetImportedVodForTenantRow, error)
 	GetIngestSessionAuthoritySnapshot(ctx context.Context, sessionID string) (GetIngestSessionAuthoritySnapshotRow, error)

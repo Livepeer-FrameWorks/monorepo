@@ -1846,3 +1846,38 @@ func startFoghornCatalogEngine(t *testing.T, name, image, containerPort, user, d
 	}
 	return db
 }
+
+// A node resolving a peer relay must never be handed a URL to itself: the
+// fresh-origin lookup skips the requesting node and falls to the next fresh
+// origin, or to no row when the requester is the only one.
+func TestFreshRelayOriginNodeExcludesRequester_RealPG(t *testing.T) {
+	db := startFoghornCatalogPostgres(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	const tenantID = "10000000-0000-0000-0000-000000000001"
+	const twoOrigins = "relayoriginexcludesrequester01"
+	const soleOrigin = "relayoriginexcludesrequester02"
+	if _, err := db.ExecContext(ctx, `
+INSERT INTO foghorn.artifacts (artifact_hash, artifact_type, tenant_id, status)
+VALUES ($1, 'vod', $3::uuid, 'ready'), ($2, 'vod', $3::uuid, 'ready')`, twoOrigins, soleOrigin, tenantID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.ExecContext(ctx, `
+INSERT INTO foghorn.artifact_nodes (artifact_hash, node_id, role, is_complete, base_url, last_seen_at)
+VALUES ($1, 'requester', 'origin', true, 'https://requester.example/view', NOW()),
+       ($1, 'other-origin', 'origin', true, 'https://other.example/view', NOW() - INTERVAL '10 seconds'),
+       ($2, 'requester', 'origin', true, 'https://requester.example/view', NOW())`, twoOrigins, soleOrigin); err != nil {
+		t.Fatal(err)
+	}
+	q := New(db)
+	row, err := q.GetFreshRelayOriginNode(ctx, GetFreshRelayOriginNodeParams{ArtifactHash: twoOrigins, RequestingNodeID: "requester"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if row.NodeID != "other-origin" {
+		t.Fatalf("fresh origin for the requester = %q, want the other origin", row.NodeID)
+	}
+	if _, err := q.GetFreshRelayOriginNode(ctx, GetFreshRelayOriginNodeParams{ArtifactHash: soleOrigin, RequestingNodeID: "requester"}); !errors.Is(err, sql.ErrNoRows) {
+		t.Fatalf("requester as the only origin: err = %v, want sql.ErrNoRows", err)
+	}
+}

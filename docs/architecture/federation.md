@@ -332,7 +332,8 @@ GET (1h TTL, above the relay's refresh window), a `.dtsh` sidecar GET URL
 stream_internal_name for nested clip paths.
 Resolution reads the **adopted local row only**. Two fallbacks apply before
 404, in order: (1) a local origin node holds the canonical file
-(hot-but-unsynced) → peer-relay grant; (2) the row points at a peer
+(hot-but-unsynced) → peer-relay grant, never naming the requesting node
+itself; (2) the row points at a peer
 cluster → federate via the adopted-row path (nil redirect authorizer: the
 row's clusters were allowlist-checked at adopt time). S3 authority is gated
 on `sync_status='synced'` to close the post-processing race where `s3_url`

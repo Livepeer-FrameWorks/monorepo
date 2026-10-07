@@ -16,10 +16,12 @@ WHERE vm.artifact_hash = sqlc.arg(artifact_hash)
 LIMIT 1;
 
 -- name: GetFreshRelayOriginNode :one
+-- The requesting node is never its own peer; an empty requesting_node_id excludes no node.
 SELECT an.node_id, COALESCE(NULLIF(an.base_url, ''), no.base_url, '')::text AS base_url
 FROM foghorn.artifact_nodes an
 LEFT JOIN foghorn.node_outputs no ON no.node_id = an.node_id
 WHERE an.artifact_hash = sqlc.arg(artifact_hash)
+  AND an.node_id <> sqlc.arg(requesting_node_id)::text
   AND an.role = 'origin'
   AND an.is_complete = true
   AND an.is_orphaned = false

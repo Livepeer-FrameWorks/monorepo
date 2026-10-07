@@ -134,7 +134,7 @@ func fillFileArtifactResolve(ctx context.Context, req *ipcpb.RelayResolveRequest
 		// recently and the S3 sync just hasn't landed; without it the row
 		// would 404 via the cross-cluster path's "originClusterID ==
 		// LocalClusterID → ErrCrossClusterArtifactUnavailable" check.
-		if fillPeerRelayFromLocalOrigin(ctx, req, resp, sizeBytes, format, streamName, logger) {
+		if fillPeerRelayFromLocalOrigin(ctx, req, resp, nodeID, sizeBytes, format, streamName, logger) {
 			return
 		}
 		peerCluster := strings.TrimSpace(storageClusterID.String)
@@ -164,7 +164,7 @@ func fillFileArtifactResolve(ctx context.Context, req *ipcpb.RelayResolveRequest
 		// opaque capability grant instead of falling through to 404. When
 		// no local origin row qualifies, return empty — the resolver path
 		// MUST NOT chain to another peer URL (recursion invariant).
-		if fillPeerRelayFromLocalOrigin(ctx, req, resp, sizeBytes, format, streamName, logger) {
+		if fillPeerRelayFromLocalOrigin(ctx, req, resp, nodeID, sizeBytes, format, streamName, logger) {
 			return
 		}
 		return
@@ -188,7 +188,7 @@ func fillFileArtifactResolve(ctx context.Context, req *ipcpb.RelayResolveRequest
 	_, localParseErr := s3Client.ParseLocalS3URL(s3URL)
 	locallyBacked := durableLocal || (localParseErr == nil && originIsLocal)
 	if !locallyBacked {
-		if fillPeerRelayFromLocalOrigin(ctx, req, resp, sizeBytes, format, streamName, logger) {
+		if fillPeerRelayFromLocalOrigin(ctx, req, resp, nodeID, sizeBytes, format, streamName, logger) {
 			return
 		}
 		peerCluster := strings.TrimSpace(storageClusterID.String)
@@ -319,11 +319,13 @@ func fillImportSourceResolve(req *ipcpb.RelayResolveRequest, resp *ipcpb.RelayRe
 // not a sparse cache.
 //
 // Recursion invariant: this path returns a URL that the requester
-// will hit directly; it never delegates to another peer relay.
+// will hit directly; it never delegates to another peer relay. The
+// requesting node is excluded: it is never handed a peer URL to itself.
 func fillPeerRelayFromLocalOrigin(
 	ctx context.Context,
 	req *ipcpb.RelayResolveRequest,
 	resp *ipcpb.RelayResolveResponse,
+	requestingNodeID string,
 	sizeBytes sql.NullInt64,
 	format sql.NullString,
 	streamName sql.NullString,
@@ -350,7 +352,10 @@ func fillPeerRelayFromLocalOrigin(
 	// produces a brief false negative; viewer falls back to S3 (synced)
 	// or 503 (unsynced), and the next attempt recovers as soon as the
 	// heartbeat resumes.
-	row, err := foghorndb.New(db).GetFreshRelayOriginNode(ctx, req.GetAssetHash())
+	row, err := foghorndb.New(db).GetFreshRelayOriginNode(ctx, foghorndb.GetFreshRelayOriginNodeParams{
+		ArtifactHash:     req.GetAssetHash(),
+		RequestingNodeID: requestingNodeID,
+	})
 	originNodeID, baseURL = row.NodeID, row.BaseUrl
 	if errors.Is(err, sql.ErrNoRows) {
 		return false

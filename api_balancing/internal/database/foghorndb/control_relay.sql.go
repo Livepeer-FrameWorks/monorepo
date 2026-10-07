@@ -15,6 +15,7 @@ SELECT an.node_id, COALESCE(NULLIF(an.base_url, ''), no.base_url, '')::text AS b
 FROM foghorn.artifact_nodes an
 LEFT JOIN foghorn.node_outputs no ON no.node_id = an.node_id
 WHERE an.artifact_hash = $1
+  AND an.node_id <> $2::text
   AND an.role = 'origin'
   AND an.is_complete = true
   AND an.is_orphaned = false
@@ -23,13 +24,19 @@ ORDER BY an.last_seen_at DESC
 LIMIT 1
 `
 
+type GetFreshRelayOriginNodeParams struct {
+	ArtifactHash     string `db:"artifact_hash" json:"artifact_hash"`
+	RequestingNodeID string `db:"requesting_node_id" json:"requesting_node_id"`
+}
+
 type GetFreshRelayOriginNodeRow struct {
 	NodeID  string `db:"node_id" json:"node_id"`
 	BaseUrl string `db:"base_url" json:"base_url"`
 }
 
-func (q *Queries) GetFreshRelayOriginNode(ctx context.Context, artifactHash string) (GetFreshRelayOriginNodeRow, error) {
-	row := q.db.QueryRowContext(ctx, getFreshRelayOriginNode, artifactHash)
+// The requesting node is never its own peer; an empty requesting_node_id excludes no node.
+func (q *Queries) GetFreshRelayOriginNode(ctx context.Context, arg GetFreshRelayOriginNodeParams) (GetFreshRelayOriginNodeRow, error) {
+	row := q.db.QueryRowContext(ctx, getFreshRelayOriginNode, arg.ArtifactHash, arg.RequestingNodeID)
 	var i GetFreshRelayOriginNodeRow
 	err := row.Scan(&i.NodeID, &i.BaseUrl)
 	return i, err

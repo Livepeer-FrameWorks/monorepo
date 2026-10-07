@@ -57,12 +57,12 @@ func TestLocalOriginRelayableReadsFreshCompleteOrigin(t *testing.T) {
 	defer mockDB.Close()
 	deps := &PlaybackDependencies{DB: mockDB, LocalClusterID: "central-primary"}
 
-	mock.ExpectQuery("FROM foghorn.artifact_nodes").WithArgs("hash-1").
+	mock.ExpectQuery("FROM foghorn.artifact_nodes").WithArgs("hash-1", "").
 		WillReturnRows(sqlmock.NewRows([]string{"node_id", "base_url"}).AddRow("edge-node-1", "http://edge:8082"))
 	if !localOriginRelayable(context.Background(), deps, "hash-1", "demo-media") {
 		t.Fatal("a fresh complete origin copy in a served cluster must be relayable")
 	}
-	mock.ExpectQuery("FROM foghorn.artifact_nodes").WithArgs("hash-2").WillReturnError(sql.ErrNoRows)
+	mock.ExpectQuery("FROM foghorn.artifact_nodes").WithArgs("hash-2", "").WillReturnError(sql.ErrNoRows)
 	if localOriginRelayable(context.Background(), deps, "hash-2", "demo-media") {
 		t.Fatal("without a fresh origin copy the relay has nothing to serve")
 	}

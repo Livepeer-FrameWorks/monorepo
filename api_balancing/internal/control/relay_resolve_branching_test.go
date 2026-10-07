@@ -112,13 +112,14 @@ func TestFillFileArtifactResolve(t *testing.T) {
 
 	t.Run("unsynced row falls through to peer relay (and 404s without a local origin)", func(t *testing.T) {
 		mock, _, _ := setupArtifactTestDeps(t)
+		entitlePlatformNode(t, "node-1")
 		// Artifact row present but sync_status is pending: must NOT serve the s3_url.
 		mock.ExpectQuery(`FROM foghorn.artifacts`).WithArgs("h").
 			WillReturnRows(fileArtifactRows().AddRow(
 				"s3://bucket/key.mp4", int64(1234), "mp4", false, "stream1",
 				"pending", "", "", "t1", "vod", "", false))
 		// Peer-relay fallback queries artifact_nodes for a local origin; none here.
-		mock.ExpectQuery(`FROM foghorn.artifact_nodes`).WithArgs("h").WillReturnError(sql.ErrNoRows)
+		mock.ExpectQuery(`FROM foghorn.artifact_nodes`).WithArgs("h", "node-1").WillReturnError(sql.ErrNoRows)
 		resp := &ipcpb.RelayResolveResponse{State: ipcpb.AssetState_ASSET_STATE_SOURCE_MISSING}
 		fillFileArtifactResolve(ctx, &ipcpb.RelayResolveRequest{AssetHash: "h", AssetKind: "vod"}, resp, "node-1", log)
 		if resp.GetMediaPresignedUrl() != "" {
@@ -126,6 +127,9 @@ func TestFillFileArtifactResolve(t *testing.T) {
 		}
 		if resp.GetState() != ipcpb.AssetState_ASSET_STATE_SOURCE_MISSING {
 			t.Fatalf("no local origin must stay source-missing, got %s", resp.GetState())
+		}
+		if err := mock.ExpectationsWereMet(); err != nil {
+			t.Fatal(err)
 		}
 	})
 }
@@ -143,36 +147,36 @@ func TestFillPeerRelayFromLocalOrigin(t *testing.T) {
 		db = nil
 		t.Cleanup(func() { db = prev })
 		resp := &ipcpb.RelayResolveResponse{}
-		if fillPeerRelayFromLocalOrigin(ctx, &ipcpb.RelayResolveRequest{AssetHash: "h"}, resp, sql.NullInt64{}, sql.NullString{}, sql.NullString{}, log) {
+		if fillPeerRelayFromLocalOrigin(ctx, &ipcpb.RelayResolveRequest{AssetHash: "h"}, resp, "requester", sql.NullInt64{}, sql.NullString{}, sql.NullString{}, log) {
 			t.Fatal("nil DB must return false")
 		}
 	})
 
 	t.Run("no origin row returns false", func(t *testing.T) {
 		mock, _, _ := setupArtifactTestDeps(t)
-		mock.ExpectQuery(`FROM foghorn.artifact_nodes`).WithArgs("h").WillReturnError(sql.ErrNoRows)
+		mock.ExpectQuery(`FROM foghorn.artifact_nodes`).WithArgs("h", "requester").WillReturnError(sql.ErrNoRows)
 		resp := &ipcpb.RelayResolveResponse{}
 		req := &ipcpb.RelayResolveRequest{AssetHash: "h", AssetKind: "vod", Ext: ".mp4"}
-		if fillPeerRelayFromLocalOrigin(ctx, req, resp, sql.NullInt64{}, sql.NullString{}, sql.NullString{}, log) {
+		if fillPeerRelayFromLocalOrigin(ctx, req, resp, "requester", sql.NullInt64{}, sql.NullString{}, sql.NullString{}, log) {
 			t.Fatal("no origin row must return false")
 		}
 	})
 
 	t.Run("origin with blank base url returns false", func(t *testing.T) {
 		mock, _, _ := setupArtifactTestDeps(t)
-		mock.ExpectQuery(`FROM foghorn.artifact_nodes`).WithArgs("h").
+		mock.ExpectQuery(`FROM foghorn.artifact_nodes`).WithArgs("h", "requester").
 			WillReturnRows(sqlmock.NewRows([]string{"node_id", "base_url"}).AddRow("node1", ""))
 		mock.ExpectQuery(`FROM foghorn.node_config_seeds`).WithArgs("node1").WillReturnError(sql.ErrNoRows)
 		resp := &ipcpb.RelayResolveResponse{}
 		req := &ipcpb.RelayResolveRequest{AssetHash: "h", AssetKind: "vod", Ext: ".mp4"}
-		if fillPeerRelayFromLocalOrigin(ctx, req, resp, sql.NullInt64{}, sql.NullString{}, sql.NullString{}, log) {
+		if fillPeerRelayFromLocalOrigin(ctx, req, resp, "requester", sql.NullInt64{}, sql.NullString{}, sql.NullString{}, log) {
 			t.Fatal("blank base url must return false")
 		}
 	})
 
 	t.Run("fresh complete origin yields peer relay grant", func(t *testing.T) {
 		mock, _, _ := setupArtifactTestDeps(t)
-		mock.ExpectQuery(`FROM foghorn.artifact_nodes`).WithArgs("h").
+		mock.ExpectQuery(`FROM foghorn.artifact_nodes`).WithArgs("h", "requester").
 			WillReturnRows(sqlmock.NewRows([]string{"node_id", "base_url"}).
 				AddRow("node1", "https://edge.example.com/view"))
 		// No persisted seed: the node has no Caddy relay route, so the front
@@ -180,7 +184,7 @@ func TestFillPeerRelayFromLocalOrigin(t *testing.T) {
 		mock.ExpectQuery(`FROM foghorn.node_config_seeds`).WithArgs("node1").WillReturnError(sql.ErrNoRows)
 		resp := &ipcpb.RelayResolveResponse{}
 		req := &ipcpb.RelayResolveRequest{AssetHash: "h", AssetKind: "vod", Ext: ".mp4"}
-		ok := fillPeerRelayFromLocalOrigin(ctx, req, resp, sql.NullInt64{Int64: 42, Valid: true}, sql.NullString{}, sql.NullString{}, log)
+		ok := fillPeerRelayFromLocalOrigin(ctx, req, resp, "requester", sql.NullInt64{Int64: 42, Valid: true}, sql.NullString{}, sql.NullString{}, log)
 		if !ok {
 			t.Fatal("fresh complete origin must return true")
 		}
@@ -293,7 +297,7 @@ func TestFillPeerRelayFromLocalOriginAddressesSeededEdgeDomain(t *testing.T) {
 	ctx := context.Background()
 	log := logging.NewLogger()
 	mock, _, _ := setupArtifactTestDeps(t)
-	mock.ExpectQuery(`FROM foghorn.artifact_nodes`).WithArgs("h").
+	mock.ExpectQuery(`FROM foghorn.artifact_nodes`).WithArgs("h", "requester").
 		WillReturnRows(sqlmock.NewRows([]string{"node_id", "base_url"}).
 			AddRow("fw-stg-edge-eu", "https://edge-eu.staging-media-eu.frameworks.network/view"))
 	seedRows, seed := seededConfigSeedRow(t, "fw-stg-edge-eu", "staging-media-eu")
@@ -305,7 +309,7 @@ func TestFillPeerRelayFromLocalOriginAddressesSeededEdgeDomain(t *testing.T) {
 	}
 	resp := &ipcpb.RelayResolveResponse{}
 	req := &ipcpb.RelayResolveRequest{AssetHash: "h", AssetKind: "vod", Ext: ".mp4"}
-	if !fillPeerRelayFromLocalOrigin(ctx, req, resp, sql.NullInt64{}, sql.NullString{}, sql.NullString{}, log) {
+	if !fillPeerRelayFromLocalOrigin(ctx, req, resp, "requester", sql.NullInt64{}, sql.NullString{}, sql.NullString{}, log) {
 		t.Fatal("fresh complete origin must return true")
 	}
 	want := "https://" + edgeDomain + "/internal/artifact/vod/h.mp4"
@@ -315,4 +319,39 @@ func TestFillPeerRelayFromLocalOriginAddressesSeededEdgeDomain(t *testing.T) {
 	if resp.GetPeerRelayDtshUrl() != want+".dtsh" {
 		t.Fatalf("peer relay dtsh url = %q, want %q", resp.GetPeerRelayDtshUrl(), want+".dtsh")
 	}
+}
+
+// The resolving node is passed to the fresh-origin lookup, which excludes it,
+// so the peer URL names another origin node and never the requester itself.
+func TestFillFileArtifactResolvePeerRelayExcludesRequester(t *testing.T) {
+	ctx := context.Background()
+	log := logging.NewLogger()
+	mock, _, _ := setupArtifactTestDeps(t)
+	entitlePlatformNode(t, "node-1")
+	mock.ExpectQuery(`FROM foghorn.artifacts`).WithArgs("h").
+		WillReturnRows(fileArtifactRows().AddRow(
+			"s3://bucket/key.mp4", int64(1234), "mp4", false, "stream1",
+			"pending", "", "", "t1", "vod", "", false))
+	mock.ExpectQuery(`FROM foghorn.artifact_nodes`).WithArgs("h", "node-1").
+		WillReturnRows(sqlmock.NewRows([]string{"node_id", "base_url"}).AddRow("node-2", "http://edge-b:8082"))
+	mock.ExpectQuery(`FROM foghorn.node_config_seeds`).WithArgs("node-2").WillReturnError(sql.ErrNoRows)
+	resp := &ipcpb.RelayResolveResponse{State: ipcpb.AssetState_ASSET_STATE_SOURCE_MISSING}
+	fillFileArtifactResolve(ctx, &ipcpb.RelayResolveRequest{AssetHash: "h", AssetKind: "vod"}, resp, "node-1", log)
+	if want := "http://edge-b:8082/internal/artifact/vod/h.mp4"; resp.GetPeerRelayUrl() != want {
+		t.Fatalf("peer relay url = %q, want %q", resp.GetPeerRelayUrl(), want)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// entitlePlatformNode registers nodeID as a platform/shared edge on a cluster
+// this Foghorn operates, so the relay tenant gate admits every tenant.
+func entitlePlatformNode(t *testing.T, nodeID string) {
+	t.Helper()
+	sm := state.ResetDefaultManagerForTests()
+	t.Cleanup(func() { state.ResetDefaultManagerForTests() })
+	sm.SetNodeInfo(nodeID, "n", true, nil, nil, "", "", nil)
+	sm.SetNodeConnectionInfo(context.Background(), nodeID, "n", "", "platform-eu", nil)
+	AddPlatformSharedCluster("platform-eu")
 }
