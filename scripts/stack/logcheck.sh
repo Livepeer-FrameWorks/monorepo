@@ -29,7 +29,13 @@ since_args=()
 
 # "Address already in use": a connector replacement raced the listener it
 # replaces, which leaves the node without that protocol.
-signatures='core dumped|dumped core|SIGSEGV|SIGABRT|terminate called|^panic:|goroutine [0-9]+ \[running\]|SQLSTATE|exhausted retries|Could not map process-controlled|unrecoverable error|Address already in use'
+# Periscope-ingest logs one line per event it counts as skipped-unknown,
+# dropped, or errored (analytics_events_total{status="skipped"|"dropped"|"error"}),
+# so these signatures stand in for a zero check on those counters: Decklog
+# publishes only types ingest handles, and Foghorn forwards only events that
+# name their content.
+analytics_signatures='Unknown event type|Dropping analytics event|Dropping (malformed )?push_rewrite|Failed to process event'
+signatures="core dumped|dumped core|SIGSEGV|SIGABRT|terminate called|^panic:|goroutine [0-9]+ \\[running\\]|SQLSTATE|exhausted retries|Could not map process-controlled|unrecoverable error|Address already in use|$analytics_signatures"
 case "$scenario" in
   03-* | 04-* | 05-* | 24-* | 29-*) scenario_signatures='PROCESS_TRACKS_CHANGED|Failed to load page|header.*not declared|Failed to claim thumbnail attempt|Thumbnail upload denied|freeze failed' ;;
   25-*) scenario_signatures='PROCESS_TRACKS_CHANGED|Failed to load page|header.*not declared|Failed to claim thumbnail attempt|freeze failed|Freeze request: local path not found' ;;
