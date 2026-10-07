@@ -329,7 +329,7 @@
     fi
     test -n "$candidate"
     if [ "$candidate" != "{{ go_service_install_dir }}/{{ go_service_name }}" ]; then
-      cp "$candidate" "{{ go_service_install_dir }}/{{ go_service_name }}"
+      mv "$candidate" "{{ go_service_install_dir }}/{{ go_service_name }}"
     fi
     chmod +x "{{ go_service_install_dir }}/{{ go_service_name }}"
     binary_sha="$(sha256sum "{{ go_service_install_dir }}/{{ go_service_name }}" | awk '{print $1}')"
@@ -351,6 +351,7 @@
     paths: "{{ go_service_install_dir }}"
     file_type: file
     recurse: false
+    hidden: true
     patterns: ".installed-*"
     excludes: "{{ go_service_install_sentinel | basename }}"
   register: go_service_obsolete_install_sentinels

@@ -202,7 +202,7 @@
     fi
     test -n "$candidate"
     if [ "$candidate" != "{{ privateer_bin }}" ]; then
-      cp "$candidate" "{{ privateer_bin }}"
+      mv "$candidate" "{{ privateer_bin }}"
     fi
     chmod +x "{{ privateer_bin }}"
     touch "{{ privateer_install_sentinel }}"
@@ -210,3 +210,22 @@
   args:
     creates: "{{ privateer_install_sentinel }}"
   when: not ansible_check_mode
+
+- name: Find obsolete Privateer install sentinels
+  ansible.builtin.find:
+    paths: "{{ privateer_install_dir }}"
+    file_type: file
+    recurse: false
+    hidden: true
+    patterns: ".installed-*"
+    excludes: "{{ privateer_install_sentinel | basename }}"
+  register: privateer_obsolete_install_sentinels
+  changed_when: false
+
+- name: Remove obsolete Privateer install sentinels
+  ansible.builtin.file:
+    path: "{{ item.path }}"
+    state: absent
+  loop: "{{ privateer_obsolete_install_sentinels.files | default([]) }}"
+  loop_control:
+    label: "{{ item.path }}"
