@@ -8,6 +8,7 @@ import (
 
 	"frameworks/api_gateway/graph/model"
 	"frameworks/api_gateway/internal/demo"
+	gatewayerrors "frameworks/api_gateway/internal/errors"
 	"frameworks/api_gateway/internal/loaders"
 	"frameworks/api_gateway/internal/middleware"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/ctxkeys"
@@ -51,7 +52,6 @@ func (r *Resolver) DoGetStreams(ctx context.Context) ([]*commodorepb.Stream, err
 
 	resp, err := r.Clients.Commodore.ListStreams(ctx, nil, "")
 	if err != nil {
-		r.Logger.WithError(err).Error("Failed to get streams")
 		if r.Metrics != nil {
 			r.Metrics.Operations.WithLabelValues("streams", "error").Inc()
 		}
@@ -111,7 +111,6 @@ func (r *Resolver) DoGetStream(ctx context.Context, id string) (*commodorepb.Str
 		stream, err = r.Clients.Commodore.GetStream(ctx, id)
 	}
 	if err != nil {
-		r.Logger.WithError(err).WithField("stream_id", id).Error("Failed to get stream")
 		if r.Metrics != nil {
 			r.Metrics.Operations.WithLabelValues("stream", "error").Inc()
 		}
@@ -198,14 +197,12 @@ func (r *Resolver) DoCreateStream(ctx context.Context, input model.CreateStreamI
 		if vErr := streamPlacementValidationError(err); vErr != nil {
 			return vErr, nil
 		}
-		r.Logger.WithError(err).Error("Failed to create stream")
 		return nil, fmt.Errorf("failed to create stream: %w", err)
 	}
 
 	// Fetch full stream details after creation
 	stream, err := r.Clients.Commodore.GetStream(ctx, createResp.Id)
 	if err != nil {
-		r.Logger.WithError(err).Error("Failed to get stream after creation")
 		return nil, fmt.Errorf("failed to get stream after creation: %w", err)
 	}
 
@@ -235,7 +232,6 @@ func (r *Resolver) DoDeleteStream(ctx context.Context, id string) (model.DeleteS
 				ResourceID:   id,
 			}, nil
 		}
-		r.Logger.WithError(err).Error("Failed to delete stream")
 		return nil, fmt.Errorf("failed to delete stream: %w", err)
 	}
 
@@ -270,7 +266,6 @@ func (r *Resolver) DoRefreshStreamKey(ctx context.Context, id string) (*commodor
 	// Call Commodore gRPC (context metadata carries auth)
 	_, err := r.Clients.Commodore.RefreshStreamKey(ctx, id)
 	if err != nil {
-		r.Logger.WithError(err).Error("Failed to refresh stream key")
 		return nil, fmt.Errorf("failed to refresh stream key: %w", err)
 	}
 
@@ -306,7 +301,7 @@ func (r *Resolver) DoValidateStreamKey(ctx context.Context, streamKey string) (*
 	// Call Commodore to validate stream key
 	validation, err := r.Clients.Commodore.ValidateStreamKey(ctx, streamKey)
 	if err != nil {
-		r.Logger.WithError(err).Error("Failed to validate stream key")
+		r.Logger.WithError(err).Log(gatewayerrors.LogLevel(err), "Failed to validate stream key")
 		// Return ERROR status instead of failing the whole query
 		errorMsg := err.Error()
 		return &model.StreamValidation{
@@ -493,15 +488,18 @@ func (r *Resolver) DoCreateClip(ctx context.Context, input model.CreateClipInput
 	// Call Commodore gRPC (context metadata carries auth)
 	clipResp, err := r.Clients.Commodore.CreateClip(ctx, req)
 	if err != nil {
-		r.Logger.WithError(err).Error("Failed to create clip")
+		handled := func(result model.CreateClipResult) (model.CreateClipResult, error) {
+			r.Logger.WithError(err).Log(gatewayerrors.LogLevel(err), "Failed to create clip")
+			return result, nil
+		}
 		if st, ok := status.FromError(err); ok {
 			switch st.Code() {
 			case codes.InvalidArgument, codes.FailedPrecondition, codes.Unavailable:
-				return &model.ValidationError{Message: st.Message()}, nil
+				return handled(&model.ValidationError{Message: st.Message()})
 			case codes.NotFound:
-				return &model.NotFoundError{Message: st.Message(), ResourceType: "stream", ResourceID: streamID}, nil
+				return handled(&model.NotFoundError{Message: st.Message(), ResourceType: "stream", ResourceID: streamID})
 			case codes.PermissionDenied, codes.Unauthenticated:
-				return &model.AuthError{Message: st.Message()}, nil
+				return handled(&model.AuthError{Message: st.Message()})
 			}
 		}
 		return nil, fmt.Errorf("failed to create clip: %w", err)
@@ -597,7 +595,6 @@ func (r *Resolver) DoGetStreamKeys(ctx context.Context, streamID string) ([]*com
 	// Call Commodore gRPC (context metadata carries auth)
 	keysResp, err := r.Clients.Commodore.ListStreamKeys(ctx, streamID, nil)
 	if err != nil {
-		r.Logger.WithError(err).Error("Failed to get stream keys")
 		return nil, fmt.Errorf("failed to get stream keys: %w", err)
 	}
 
@@ -629,7 +626,6 @@ func (r *Resolver) DoGetStreamKeysConnection(ctx context.Context, streamID strin
 	// Call Commodore with pagination
 	resp, err := r.Clients.Commodore.ListStreamKeys(ctx, streamID, paginationReq)
 	if err != nil {
-		r.Logger.WithError(err).Error("Failed to get stream keys")
 		return nil, fmt.Errorf("failed to get stream keys: %w", err)
 	}
 
@@ -762,7 +758,6 @@ func (r *Resolver) DoCreateStreamKey(ctx context.Context, streamID string, input
 	// Call Commodore gRPC (context metadata carries auth)
 	keyResp, err := r.Clients.Commodore.CreateStreamKey(ctx, streamID, input.Name)
 	if err != nil {
-		r.Logger.WithError(err).Error("Failed to create stream key")
 		return nil, fmt.Errorf("failed to create stream key: %w", err)
 	}
 
@@ -788,8 +783,8 @@ func (r *Resolver) DoDeleteStreamKey(ctx context.Context, streamID, keyID string
 	// Call Commodore gRPC (context metadata carries auth)
 	err = r.Clients.Commodore.DeactivateStreamKey(ctx, streamID, keyID)
 	if err != nil {
-		r.Logger.WithError(err).Error("Failed to deactivate stream key")
 		if strings.Contains(err.Error(), "not found") {
+			r.Logger.WithError(err).Log(gatewayerrors.LogLevel(err), "Failed to deactivate stream key")
 			return &model.NotFoundError{
 				Message:      "Stream key not found",
 				Code:         strPtr("NOT_FOUND"),
@@ -826,7 +821,6 @@ func (r *Resolver) DoGetClip(ctx context.Context, id string) (*sharedpb.ClipInfo
 	// Call Commodore gRPC (context metadata carries auth)
 	clip, err := r.Clients.Commodore.GetClip(ctx, id)
 	if err != nil {
-		r.Logger.WithError(err).Error("Failed to get clip")
 		return nil, fmt.Errorf("failed to get clip: %w", err)
 	}
 	// hasLocalCopy (the proto's has_local_copy field) is placement-derived and sourced solely from
@@ -872,8 +866,8 @@ func (r *Resolver) DoDeleteClip(ctx context.Context, id string) (model.DeleteCli
 	// Call Commodore gRPC (context metadata carries auth)
 	err := r.Clients.Commodore.DeleteClip(ctx, id)
 	if err != nil {
-		r.Logger.WithError(err).Error("Failed to delete clip")
 		if strings.Contains(err.Error(), "not found") {
+			r.Logger.WithError(err).Log(gatewayerrors.LogLevel(err), "Failed to delete clip")
 			return &model.NotFoundError{
 				Message:      "Clip not found",
 				Code:         strPtr("NOT_FOUND"),
@@ -919,7 +913,6 @@ func (r *Resolver) DoStartDVR(ctx context.Context, streamID string) (*sharedpb.S
 	// Call Commodore gRPC (context metadata carries auth)
 	res, err := r.Clients.Commodore.StartDVR(ctx, req)
 	if err != nil {
-		r.Logger.WithError(err).Error("Failed to start DVR")
 		return nil, fmt.Errorf("failed to start DVR: %w", err)
 	}
 	return res, nil
@@ -937,8 +930,8 @@ func (r *Resolver) DoStopDVR(ctx context.Context, dvrHash string) (model.StopDVR
 
 	// Call Commodore gRPC (context metadata carries auth)
 	if err := r.Clients.Commodore.StopDVR(ctx, dvrHash); err != nil {
-		r.Logger.WithError(err).Error("Failed to stop DVR")
 		if strings.Contains(err.Error(), "not found") {
+			r.Logger.WithError(err).Log(gatewayerrors.LogLevel(err), "Failed to stop DVR")
 			return &model.NotFoundError{
 				Message:      "DVR recording not found",
 				Code:         strPtr("NOT_FOUND"),
@@ -964,8 +957,8 @@ func (r *Resolver) DoDeleteDVR(ctx context.Context, dvrHash string) (model.Delet
 	// Call Commodore gRPC (context metadata carries auth)
 	_, err := r.Clients.Commodore.DeleteDVR(ctx, dvrHash)
 	if err != nil {
-		r.Logger.WithError(err).Error("Failed to delete DVR")
 		if strings.Contains(err.Error(), "not found") {
+			r.Logger.WithError(err).Log(gatewayerrors.LogLevel(err), "Failed to delete DVR")
 			return &model.NotFoundError{
 				Message:      "DVR recording not found",
 				Code:         strPtr("NOT_FOUND"),
@@ -1006,7 +999,6 @@ func (r *Resolver) DoGetStreamsConnection(ctx context.Context, first *int, after
 	// Call Commodore with pagination + optional name search (context carries auth)
 	resp, err := r.Clients.Commodore.ListStreams(ctx, paginationReq, strings.TrimSpace(strValue(search)))
 	if err != nil {
-		r.Logger.WithError(err).Error("Failed to get streams")
 		if r.Metrics != nil {
 			r.Metrics.Operations.WithLabelValues("streamsConnection", "error").Inc()
 		}

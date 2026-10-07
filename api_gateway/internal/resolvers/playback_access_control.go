@@ -50,7 +50,6 @@ func (r *Resolver) DoCreateSigningKey(ctx context.Context, input model.CreateSig
 				return v, nil
 			}
 		}
-		r.Logger.WithError(err).Error("CreateSigningKey gRPC failed")
 		return nil, fmt.Errorf("create signing key: %w", err)
 	}
 
@@ -81,7 +80,6 @@ func (r *Resolver) DoRevokeSigningKey(ctx context.Context, id string) (model.Rev
 				return v, nil
 			}
 		}
-		r.Logger.WithError(err).Error("RevokeSigningKey gRPC failed")
 		return nil, fmt.Errorf("revoke signing key: %w", err)
 	}
 	return sk, nil
@@ -178,7 +176,6 @@ func (r *Resolver) DoSetPlaybackPolicy(ctx context.Context, input model.SetPlayb
 				return v, nil
 			}
 		}
-		r.Logger.WithError(err).Error("SetPlaybackPolicy gRPC failed")
 		return nil, fmt.Errorf("set playback policy: %w", err)
 	}
 

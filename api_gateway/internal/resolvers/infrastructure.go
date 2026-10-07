@@ -12,6 +12,7 @@ import (
 
 	"frameworks/api_gateway/graph/model"
 	"frameworks/api_gateway/internal/demo"
+	gatewayerrors "frameworks/api_gateway/internal/errors"
 	"frameworks/api_gateway/internal/middleware"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/authz"
 	fhclient "github.com/Livepeer-FrameWorks/monorepo/pkg/clients/foghorn"
@@ -107,7 +108,6 @@ func (r *Resolver) DoGetTenant(ctx context.Context) (*quartermasterpb.Tenant, er
 	// Get tenant from Quartermaster gRPC
 	resp, err := r.Clients.Quartermaster.GetTenant(ctx, tenantID)
 	if err != nil {
-		r.Logger.WithError(err).Error("Failed to get tenant")
 		return nil, fmt.Errorf("failed to get tenant: %w", err)
 	}
 
@@ -162,7 +162,6 @@ func (r *Resolver) DoGetClusters(ctx context.Context, first *int, after *string)
 
 	clustersResp, err := r.Clients.Quartermaster.ListClustersByOwner(ctx, tenantID, buildCursorPagination(first, after, nil, nil))
 	if err != nil {
-		r.Logger.WithError(err).Error("Failed to get clusters")
 		return nil, fmt.Errorf("failed to get clusters: %w", err)
 	}
 
@@ -193,7 +192,6 @@ func (r *Resolver) DoGetCluster(ctx context.Context, id string) (*quartermasterp
 
 	clusterResp, err := r.Clients.Quartermaster.GetCluster(ctx, id)
 	if err != nil {
-		r.Logger.WithError(err).Error("Failed to get cluster")
 		return nil, fmt.Errorf("failed to get cluster: %w", err)
 	}
 	if err := r.requireOwnedCluster(ctx, clusterResp.GetCluster().GetClusterId()); err != nil {
@@ -234,7 +232,6 @@ func (r *Resolver) DoGetNodes(ctx context.Context, clusterID *string, status *mo
 	if clusterFilter != "" {
 		nodesResp, listErr := r.Clients.Quartermaster.ListNodes(ctx, clusterFilter, typeFilter, "", buildCursorPagination(first, after, nil, nil))
 		if listErr != nil {
-			r.Logger.WithError(listErr).Error("Failed to get nodes")
 			return nil, fmt.Errorf("failed to get nodes: %w", listErr)
 		}
 		return nodesResp.Nodes, nil
@@ -248,7 +245,6 @@ func (r *Resolver) DoGetNodes(ctx context.Context, clusterID *string, status *mo
 	for ownedClusterID := range owned {
 		nodesResp, listErr := r.Clients.Quartermaster.ListNodes(ctx, ownedClusterID, typeFilter, "", &commonpb.CursorPaginationRequest{First: infraMaxLimit})
 		if listErr != nil {
-			r.Logger.WithError(listErr).WithField("cluster_id", ownedClusterID).Error("Failed to get nodes")
 			return nil, fmt.Errorf("failed to get nodes: %w", listErr)
 		}
 		nodes = append(nodes, nodesResp.GetNodes()...)
@@ -328,7 +324,6 @@ func (r *Resolver) DoGetNode(ctx context.Context, id string) (*quartermasterpb.I
 
 	node, err := r.requireOwnedNode(ctx, id)
 	if err != nil {
-		r.Logger.WithError(err).Error("Failed to get node")
 		return nil, err
 	}
 
@@ -695,7 +690,6 @@ func (r *Resolver) DoUpdateTenant(ctx context.Context, input model.UpdateTenantI
 
 	_, err := r.Clients.Quartermaster.UpdateTenant(ctx, updateReq)
 	if err != nil {
-		r.Logger.WithError(err).WithField("tenant_id", tenantID).Error("Failed to update tenant")
 		return nil, fmt.Errorf("failed to update tenant: %w", err)
 	}
 
@@ -824,7 +818,6 @@ func (r *Resolver) DoUpdateStream(ctx context.Context, id string, input model.Up
 		if nfErr := mapNotFound(err); nfErr != nil {
 			return nfErr, nil
 		}
-		r.Logger.WithError(err).Error("Failed to update stream")
 		return nil, fmt.Errorf("failed to update stream: %w", err)
 	}
 
@@ -848,7 +841,6 @@ func (r *Resolver) DoGetClustersConnection(ctx context.Context, first *int, afte
 
 	resp, err := r.Clients.Quartermaster.ListClustersByOwner(ctx, tenantID, paginationReq)
 	if err != nil {
-		r.Logger.WithError(err).Error("Failed to get clusters")
 		return nil, fmt.Errorf("failed to get clusters: %w", err)
 	}
 
@@ -965,7 +957,6 @@ func (r *Resolver) DoGetNodesConnection(ctx context.Context, clusterID *string, 
 
 	nodes, err := r.DoGetNodes(ctx, clusterID, status, typeArg, nil, nil, nil)
 	if err != nil {
-		r.Logger.WithError(err).Error("Failed to get nodes")
 		return nil, fmt.Errorf("failed to get nodes: %w", err)
 	}
 
@@ -1041,7 +1032,6 @@ func (r *Resolver) DoGetServiceInstancesConnection(ctx context.Context, clusterI
 
 	instances, err := r.DoGetServiceInstances(ctx, clusterID, nodeID, status, nil, nil)
 	if err != nil {
-		r.Logger.WithError(err).Error("Failed to get service instances")
 		return nil, fmt.Errorf("failed to get service instances: %w", err)
 	}
 
@@ -1374,7 +1364,7 @@ func (r *Resolver) DoCreateEdgeCluster(ctx context.Context, input model.CreateEd
 
 	resp, err := r.Clients.Quartermaster.EnableSelfHosting(ctx, req)
 	if err != nil {
-		r.Logger.WithError(err).Error("Failed to create edge cluster")
+		r.Logger.WithError(err).Log(gatewayerrors.LogLevel(err), "Failed to create edge cluster")
 		return &model.ValidationError{
 			Message: fmt.Sprintf("Failed to create edge cluster: %v", err),
 		}, nil
@@ -1469,7 +1459,7 @@ func (r *Resolver) DoCreateEnrollmentToken(ctx context.Context, clusterID string
 
 	resp, err := r.Clients.Quartermaster.CreateEnrollmentToken(ctx, req)
 	if err != nil {
-		r.Logger.WithError(err).Error("Failed to create enrollment token")
+		r.Logger.WithError(err).Log(gatewayerrors.LogLevel(err), "Failed to create enrollment token")
 		return &model.ValidationError{
 			Message: fmt.Sprintf("Failed to create enrollment token: %v", err),
 		}, nil
@@ -1501,7 +1491,7 @@ func (r *Resolver) DoBootstrapEdge(ctx context.Context, input model.BootstrapEdg
 
 	val, err := r.Clients.Quartermaster.ValidateBootstrapToken(ctx, token)
 	if err != nil {
-		r.Logger.WithError(err).Error("ValidateBootstrapToken failed")
+		r.Logger.WithError(err).Log(gatewayerrors.LogLevel(err), "ValidateBootstrapToken failed")
 		return &model.ValidationError{Message: "Failed to validate bootstrap token"}, nil
 	}
 	if !val.GetValid() {
@@ -1525,7 +1515,7 @@ func (r *Resolver) DoBootstrapEdge(ctx context.Context, input model.BootstrapEdg
 		Logger:   r.Logger,
 	})
 	if err != nil {
-		r.Logger.WithError(err).WithField("foghorn_addr", addr).Error("dial Foghorn for bootstrapEdge")
+		r.Logger.WithError(err).WithField("foghorn_addr", addr).Log(gatewayerrors.LogLevel(err), "dial Foghorn for bootstrapEdge")
 		return &model.ValidationError{Message: "Failed to reach assigned Foghorn"}, nil
 	}
 	defer func() { _ = fh.Close() }()
@@ -1540,7 +1530,7 @@ func (r *Resolver) DoBootstrapEdge(ctx context.Context, input model.BootstrapEdg
 
 	preResp, err := fh.PreRegisterEdge(ctx, preReq)
 	if err != nil {
-		r.Logger.WithError(err).Error("Foghorn PreRegisterEdge failed")
+		r.Logger.WithError(err).Log(gatewayerrors.LogLevel(err), "Foghorn PreRegisterEdge failed")
 		return &model.ValidationError{Message: fmt.Sprintf("PreRegisterEdge failed: %v", err)}, nil
 	}
 
@@ -1608,7 +1598,7 @@ func (r *Resolver) DoUpdateClusterMarketplace(ctx context.Context, clusterID str
 
 		_, err := r.Clients.Purser.SetClusterPricing(ctx, pricingReq)
 		if err != nil {
-			r.Logger.WithError(err).Error("Failed to update cluster pricing in Purser")
+			r.Logger.WithError(err).Log(gatewayerrors.LogLevel(err), "Failed to update cluster pricing in Purser")
 			return &model.ValidationError{
 				Message: fmt.Sprintf("Failed to update pricing: %v", err),
 			}, nil
@@ -1632,7 +1622,7 @@ func (r *Resolver) DoUpdateClusterMarketplace(ctx context.Context, clusterID str
 
 	resp, err := r.Clients.Quartermaster.UpdateClusterMarketplace(ctx, req)
 	if err != nil {
-		r.Logger.WithError(err).Error("Failed to update cluster marketplace settings")
+		r.Logger.WithError(err).Log(gatewayerrors.LogLevel(err), "Failed to update cluster marketplace settings")
 		return &model.ValidationError{
 			Message: fmt.Sprintf("Failed to update cluster: %v", err),
 		}, nil
@@ -1689,7 +1679,7 @@ func (r *Resolver) DoCreateClusterInvite(ctx context.Context, input model.Create
 
 	invite, err := r.Clients.Quartermaster.CreateClusterInvite(ctx, req)
 	if err != nil {
-		r.Logger.WithError(err).Error("Failed to create cluster invite")
+		r.Logger.WithError(err).Log(gatewayerrors.LogLevel(err), "Failed to create cluster invite")
 		return &model.ValidationError{
 			Message: fmt.Sprintf("Failed to create invite: %v", err),
 		}, nil
@@ -1722,7 +1712,7 @@ func (r *Resolver) DoRevokeClusterInvite(ctx context.Context, inviteID string) (
 		OwnerTenantId: tenantID,
 	})
 	if err != nil {
-		r.Logger.WithError(err).Error("Failed to revoke cluster invite")
+		r.Logger.WithError(err).Log(gatewayerrors.LogLevel(err), "Failed to revoke cluster invite")
 		return &model.NotFoundError{
 			Message: fmt.Sprintf("Failed to revoke invite: %v", err),
 		}, nil
@@ -1754,7 +1744,6 @@ func (r *Resolver) DoListClusterInvites(ctx context.Context, clusterID string) (
 		OwnerTenantId: tenantID,
 	})
 	if err != nil {
-		r.Logger.WithError(err).Error("Failed to list cluster invites")
 		return nil, fmt.Errorf("failed to list cluster invites: %w", err)
 	}
 
@@ -1780,7 +1769,6 @@ func (r *Resolver) DoListMyClusterInvites(ctx context.Context) ([]*quartermaster
 		TenantId: tenantID,
 	})
 	if err != nil {
-		r.Logger.WithError(err).Error("Failed to list my cluster invites")
 		return nil, fmt.Errorf("failed to list invites: %w", err)
 	}
 
@@ -1823,7 +1811,7 @@ func (r *Resolver) DoRequestClusterSubscription(ctx context.Context, clusterID s
 
 	sub, err := r.Clients.Quartermaster.RequestClusterSubscription(ctx, req)
 	if err != nil {
-		r.Logger.WithError(err).Error("Failed to request cluster subscription")
+		r.Logger.WithError(err).Log(gatewayerrors.LogLevel(err), "Failed to request cluster subscription")
 		return &model.ValidationError{
 			Message: fmt.Sprintf("Failed to request subscription: %v", err),
 		}, nil
@@ -1864,7 +1852,7 @@ func (r *Resolver) DoAcceptClusterInvite(ctx context.Context, inviteToken string
 		TenantId:    tenantID,
 	})
 	if err != nil {
-		r.Logger.WithError(err).Error("Failed to accept cluster invite")
+		r.Logger.WithError(err).Log(gatewayerrors.LogLevel(err), "Failed to accept cluster invite")
 		return &model.ValidationError{
 			Message: fmt.Sprintf("Failed to accept invite: %v", err),
 		}, nil
@@ -1896,7 +1884,6 @@ func (r *Resolver) DoListPendingSubscriptions(ctx context.Context, clusterID str
 		OwnerTenantId: tenantID,
 	})
 	if err != nil {
-		r.Logger.WithError(err).Error("Failed to list pending subscriptions")
 		return nil, fmt.Errorf("failed to list pending subscriptions: %w", err)
 	}
 
@@ -1927,7 +1914,7 @@ func (r *Resolver) DoApproveClusterSubscription(ctx context.Context, subscriptio
 		OwnerTenantId:  tenantID,
 	})
 	if err != nil {
-		r.Logger.WithError(err).Error("Failed to approve cluster subscription")
+		r.Logger.WithError(err).Log(gatewayerrors.LogLevel(err), "Failed to approve cluster subscription")
 		return &model.ValidationError{
 			Message: fmt.Sprintf("Failed to approve subscription: %v", err),
 		}, nil
@@ -2004,7 +1991,7 @@ func (r *Resolver) DoRejectClusterSubscription(ctx context.Context, subscription
 
 	sub, err := r.Clients.Quartermaster.RejectClusterSubscription(ctx, req)
 	if err != nil {
-		r.Logger.WithError(err).Error("Failed to reject cluster subscription")
+		r.Logger.WithError(err).Log(gatewayerrors.LogLevel(err), "Failed to reject cluster subscription")
 		return &model.ValidationError{
 			Message: fmt.Sprintf("Failed to reject subscription: %v", err),
 		}, nil
@@ -2410,7 +2397,6 @@ func (r *Resolver) DoGetPendingSubscriptionsConnection(ctx context.Context, clus
 		Pagination:    buildCursorPagination(first, after, last, before),
 	})
 	if err != nil {
-		r.Logger.WithError(err).Error("Failed to list pending subscriptions")
 		return nil, fmt.Errorf("failed to list pending subscriptions: %w", err)
 	}
 
@@ -2504,7 +2490,6 @@ func (r *Resolver) DoGetClusterInvitesConnection(ctx context.Context, clusterID 
 		Pagination:    buildCursorPagination(first, after, last, before),
 	})
 	if err != nil {
-		r.Logger.WithError(err).Error("Failed to list cluster invites")
 		return nil, fmt.Errorf("failed to list cluster invites: %w", err)
 	}
 
@@ -2600,7 +2585,7 @@ func (r *Resolver) DoSetPreferredCluster(ctx context.Context, clusterID string) 
 		PrimaryClusterId: &clusterID,
 	})
 	if err != nil {
-		r.Logger.WithError(err).Error("Failed to set preferred cluster")
+		r.Logger.WithError(err).Log(gatewayerrors.LogLevel(err), "Failed to set preferred cluster")
 		return &model.ValidationError{
 			Message: fmt.Sprintf("Failed to set preferred cluster: %v", err),
 		}, nil
@@ -2635,7 +2620,6 @@ func (r *Resolver) DoGetMyClusterInvitesConnection(ctx context.Context, first *i
 		Pagination: buildCursorPagination(first, after, last, before),
 	})
 	if err != nil {
-		r.Logger.WithError(err).Error("Failed to list my cluster invites")
 		return nil, fmt.Errorf("failed to list my cluster invites: %w", err)
 	}
 
@@ -2658,7 +2642,6 @@ func (r *Resolver) DoGetStreamingConfig(ctx context.Context) (*model.StreamingCo
 
 	resp, err := r.Clients.Quartermaster.GetClusterRouting(ctx, &quartermasterpb.GetClusterRoutingRequest{TenantId: tenantID})
 	if err != nil {
-		r.Logger.WithError(err).Error("streamingConfig: cluster routing unavailable")
 		return nil, fmt.Errorf("streaming configuration unavailable: %w", err)
 	}
 

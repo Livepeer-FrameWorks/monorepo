@@ -25,7 +25,7 @@ func (r *Resolver) DoLogin(ctx context.Context, req *commodorepb.LoginRequest) (
 	// Call Commodore login endpoint
 	authResp, err := r.Clients.Commodore.Login(ctx, req)
 	if err != nil {
-		r.Logger.WithError(err).Error("Failed to authenticate user")
+		r.Logger.WithError(err).Log(gatewayerrors.LogLevel(err), "Failed to authenticate user")
 		if r.Metrics != nil {
 			r.Metrics.Operations.WithLabelValues("login", "error").Inc()
 		}
@@ -55,7 +55,7 @@ func (r *Resolver) DoRegister(ctx context.Context, email, password, firstName, l
 		LastName:  lastName,
 	})
 	if err != nil {
-		r.Logger.WithError(err).Error("Failed to register user")
+		r.Logger.WithError(err).Log(gatewayerrors.LogLevel(err), "Failed to register user")
 		if r.Metrics != nil {
 			r.Metrics.Operations.WithLabelValues("register", "error").Inc()
 		}
@@ -103,7 +103,7 @@ func (r *Resolver) DoGetMe(ctx context.Context) (*commodorepb.User, error) {
 	// Get user info from Commodore
 	user, err := r.Clients.Commodore.GetMe(ctx)
 	if err != nil {
-		r.Logger.WithError(err).Error("Failed to get user info")
+		r.Logger.WithError(err).Log(gatewayerrors.LogLevel(err), "Failed to get user info")
 		if r.Metrics != nil {
 			r.Metrics.Operations.WithLabelValues("getMe", "error").Inc()
 		}
@@ -132,7 +132,7 @@ func (r *Resolver) DoWalletLogin(ctx context.Context, input model.WalletLoginInp
 	// Call Commodore wallet login
 	authResp, err := r.Clients.Commodore.WalletLogin(ctx, input.Address, input.Message, input.Signature, nil)
 	if err != nil {
-		r.Logger.WithError(err).Error("Wallet login failed")
+		r.Logger.WithError(err).Log(gatewayerrors.LogLevel(err), "Wallet login failed")
 		if r.Metrics != nil {
 			r.Metrics.Operations.WithLabelValues("walletLogin", "error").Inc()
 		}
@@ -187,7 +187,7 @@ func (r *Resolver) DoLinkWallet(ctx context.Context, input model.WalletLoginInpu
 	// Call Commodore link wallet
 	walletPb, err := r.Clients.Commodore.LinkWallet(ctx, input.Address, input.Message, input.Signature)
 	if err != nil {
-		r.Logger.WithError(err).Error("Link wallet failed")
+		r.Logger.WithError(err).Log(gatewayerrors.LogLevel(err), "Link wallet failed")
 		if r.Metrics != nil {
 			r.Metrics.Operations.WithLabelValues("linkWallet", "error").Inc()
 		}
@@ -234,7 +234,7 @@ func (r *Resolver) DoUnlinkWallet(ctx context.Context, walletID string) (model.U
 	// Call Commodore unlink wallet
 	resp, err := r.Clients.Commodore.UnlinkWallet(ctx, walletID)
 	if err != nil {
-		r.Logger.WithError(err).Error("Unlink wallet failed")
+		r.Logger.WithError(err).Log(gatewayerrors.LogLevel(err), "Unlink wallet failed")
 		if r.Metrics != nil {
 			r.Metrics.Operations.WithLabelValues("unlinkWallet", "error").Inc()
 		}
@@ -283,7 +283,7 @@ func (r *Resolver) DoLinkEmail(ctx context.Context, input model.LinkEmailInput) 
 	// Call Commodore to link email
 	resp, err := r.Clients.Commodore.LinkEmail(ctx, input.Email, input.Password)
 	if err != nil {
-		r.Logger.WithError(err).Error("Link email failed")
+		r.Logger.WithError(err).Log(gatewayerrors.LogLevel(err), "Link email failed")
 		if r.Metrics != nil {
 			r.Metrics.Operations.WithLabelValues("linkEmail", "error").Inc()
 		}

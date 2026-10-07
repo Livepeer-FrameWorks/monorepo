@@ -16,7 +16,6 @@ import (
 	commonpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/common"
 	periscopepb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/periscope"
 
-	"github.com/sirupsen/logrus"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
@@ -71,7 +70,6 @@ func (r *Resolver) DoGetStreamAnalyticsSummary(ctx context.Context, streamID str
 		return r.Clients.Periscope.GetStreamAnalyticsSummary(ctx, tenantID, streamID, toTimeRangeOpts(timeRange))
 	})
 	if err != nil {
-		r.Logger.WithError(err).Error("Failed to get stream analytics summary")
 		return nil, fmt.Errorf("failed to get stream analytics summary: %w", err)
 	}
 	resp, ok := val.(*periscopepb.GetStreamAnalyticsSummaryResponse)
@@ -112,7 +110,6 @@ func (r *Resolver) DoGetPlatformOverview(ctx context.Context, timeRange *model.T
 		return r.Clients.Periscope.GetPlatformOverview(ctx, tenantID, tr)
 	})
 	if err != nil {
-		r.Logger.WithError(err).Error("Failed to get platform overview")
 		return nil, fmt.Errorf("failed to get platform overview: %w", err)
 	}
 	resp, ok := val.(*periscopepb.GetPlatformOverviewResponse)
@@ -188,11 +185,6 @@ func (r *Resolver) DoGetViewerCountTimeSeries(ctx context.Context, stream *strin
 		return r.Clients.Periscope.GetViewerCountTimeSeries(ctx, tenantID, stream, toTimeRangeOpts(timeRange), intervalVal)
 	})
 	if err != nil {
-		r.Logger.WithError(err).WithFields(logrus.Fields{
-			"tenant_id": tenantID,
-			"stream":    streamKey,
-			"interval":  intervalVal,
-		}).Error("Failed to get viewer count time series")
 		return nil, fmt.Errorf("failed to get viewer count time series: %w", err)
 	}
 	resp, ok := val.(*periscopepb.GetViewerCountTimeSeriesResponse)
@@ -243,7 +235,6 @@ func (r *Resolver) DoGetStreamHealthMetrics(ctx context.Context, streamId string
 		return r.Clients.Periscope.GetStreamHealthMetrics(ctx, tenantID, streamID, tr, nil)
 	})
 	if err != nil {
-		r.Logger.WithError(err).Error("Failed to get stream health metrics")
 		return nil, fmt.Errorf("failed to get stream health metrics: %w", err)
 	}
 	resp, ok := val.(*periscopepb.GetStreamHealthMetricsResponse)
@@ -316,7 +307,6 @@ func (r *Resolver) DoGetViewerGeographics(ctx context.Context, stream *string, t
 		return r.Clients.Periscope.GetConnectionEvents(ctx, tenantID, stream, tr, nil)
 	})
 	if err != nil {
-		r.Logger.WithError(err).Error("Failed to get connection events for geographics")
 		return nil, fmt.Errorf("failed to fetch geographic data: %w", err)
 	}
 	connResp, ok := val.(*periscopepb.GetConnectionEventsResponse)
@@ -379,11 +369,6 @@ func (r *Resolver) DoGetGeographicDistribution(ctx context.Context, stream *stri
 		return r.Clients.Periscope.GetGeographicDistribution(ctx, tenantID, stream, toTimeRangeOpts(timeRange), topNVal)
 	})
 	if err != nil {
-		r.Logger.WithError(err).WithFields(logrus.Fields{
-			"tenant_id": tenantID,
-			"stream":    streamKey,
-			"topN":      topNVal,
-		}).Error("Failed to get geographic distribution")
 		return nil, fmt.Errorf("failed to get geographic distribution: %w", err)
 	}
 	resp, ok := val.(*periscopepb.GetGeographicDistributionResponse)
@@ -801,7 +786,6 @@ func (r *Resolver) DoGetTenantDailyStats(ctx context.Context, days *int) ([]*per
 
 	response, err := r.Clients.Periscope.GetTenantDailyStats(ctx, tenantID, daysVal)
 	if err != nil {
-		r.Logger.WithError(err).WithField("tenant_id", tenantID).Error("Failed to get tenant daily stats")
 		return nil, fmt.Errorf("failed to get tenant daily stats: %w", err)
 	}
 

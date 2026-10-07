@@ -64,7 +64,6 @@ func (r *Resolver) DoTestPlaybackAccess(ctx context.Context, input model.TestPla
 		if aErr := mapPermissionDenied(err); aErr != nil {
 			return aErr, nil
 		}
-		r.Logger.WithError(err).Error("TestPlaybackAccess: Commodore RPC failed")
 		return nil, fmt.Errorf("test playback access: %w", err)
 	}
 

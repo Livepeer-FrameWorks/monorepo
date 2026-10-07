@@ -150,6 +150,9 @@ var ErrForbidden = errors.New("insufficient permissions")
 // arguments.
 var ErrInvalidInput = errors.New("invalid input")
 
+// ErrNotFound marks a request for a resource the caller does not have.
+var ErrNotFound = errors.New("not found")
+
 // ErrTenantContextRequired refuses a request that carries no tenant.
 var ErrTenantContextRequired = Unauthenticated("tenant context required")
 
@@ -175,6 +178,12 @@ func Forbidden(reason string) error {
 // needs, with reason as its message. It matches auth.ErrUnauthenticated.
 func Unauthenticated(reason string) error {
 	return &clientError{reason: reason, kind: auth.ErrUnauthenticated}
+}
+
+// NotFound returns a refusal of a request for a resource that does not exist
+// for the caller, with reason as its message. It matches ErrNotFound.
+func NotFound(reason string) error {
+	return &clientError{reason: reason, kind: ErrNotFound}
 }
 
 // InvalidInput returns a refusal of the request's arguments with the

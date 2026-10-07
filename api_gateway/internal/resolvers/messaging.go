@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"frameworks/api_gateway/graph/model"
+	gatewayerrors "frameworks/api_gateway/internal/errors"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/globalid"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/middleware"
 	deckhandpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/deckhand"
@@ -36,8 +37,7 @@ func (r *Resolver) ConversationsConnection(ctx context.Context, page *model.Conn
 
 	resp, err := r.Clients.Deckhand.ListConversations(ctx, tenantID, 1, int32(first))
 	if err != nil {
-		r.Logger.WithError(err).Error("Failed to list conversations")
-		return nil, fmt.Errorf("failed to list conversations")
+		return nil, fmt.Errorf("failed to list conversations: %w", err)
 	}
 
 	edges := make([]*model.ConversationEdge, len(resp.Conversations))
@@ -75,8 +75,7 @@ func (r *Resolver) Conversation(ctx context.Context, id string) (*model.Conversa
 		if st, ok := status.FromError(err); ok && st.Code() == codes.NotFound {
 			return nil, nil
 		}
-		r.Logger.WithError(err).Error("Failed to get conversation")
-		return nil, fmt.Errorf("failed to get conversation")
+		return nil, fmt.Errorf("failed to get conversation: %w", err)
 	}
 
 	return protoConversationToModel(conv), nil
@@ -101,8 +100,7 @@ func (r *Resolver) MessagesConnection(ctx context.Context, conversationID string
 
 	resp, err := r.Clients.Deckhand.ListMessages(ctx, convID, 1, int32(first))
 	if err != nil {
-		r.Logger.WithError(err).Error("Failed to list messages")
-		return nil, fmt.Errorf("failed to list messages")
+		return nil, fmt.Errorf("failed to list messages: %w", err)
 	}
 
 	edges := make([]*model.MessageEdge, len(resp.Messages))
@@ -141,8 +139,7 @@ func (r *Resolver) MessageByID(ctx context.Context, conversationID string, messa
 	for {
 		resp, err := r.Clients.Deckhand.ListMessages(ctx, convID, page, perPage)
 		if err != nil {
-			r.Logger.WithError(err).Error("Failed to list messages")
-			return nil, fmt.Errorf("failed to list messages")
+			return nil, fmt.Errorf("failed to list messages: %w", err)
 		}
 
 		if totalCount == -1 {
@@ -188,7 +185,7 @@ func (r *Resolver) CreateConversation(ctx context.Context, input model.CreateCon
 
 	conv, err := r.Clients.Deckhand.CreateConversation(ctx, subject, input.Message, customAttrs)
 	if err != nil {
-		r.Logger.WithError(err).Error("Failed to create conversation")
+		r.Logger.WithError(err).Log(gatewayerrors.LogLevel(err), "Failed to create conversation")
 		return &model.ValidationError{
 			Message: "Failed to create conversation",
 			Code:    strPtr("CREATE_FAILED"),
@@ -223,7 +220,7 @@ func (r *Resolver) SendMessage(ctx context.Context, input model.SendMessageInput
 				ResourceID:   input.ConversationID,
 			}, nil
 		}
-		r.Logger.WithError(err).Error("Failed to send message")
+		r.Logger.WithError(err).Log(gatewayerrors.LogLevel(err), "Failed to send message")
 		return &model.ValidationError{
 			Message: "Failed to send message",
 			Code:    strPtr("SEND_FAILED"),

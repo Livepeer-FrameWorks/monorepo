@@ -109,7 +109,6 @@ func (r *Resolver) DoStorageArtifactsConnection(ctx context.Context, input *mode
 
 	resp, err := r.Clients.Commodore.ListStorageArtifacts(ctx, req)
 	if err != nil {
-		r.Logger.WithError(err).Error("ListStorageArtifacts failed")
 		return nil, fmt.Errorf("list storage artifacts: %w", err)
 	}
 
@@ -158,7 +157,6 @@ func (r *Resolver) DoStorageArtifactsConnection(ctx context.Context, input *mode
 	for _, artifact := range resp.GetArtifacts() {
 		node, nodeErr := r.storageArtifactFromProto(ctx, artifact)
 		if nodeErr != nil {
-			r.Logger.WithError(nodeErr).WithField("artifact_hash", artifact.GetArtifactHash()).Error("storage artifact projection failed")
 			return nil, fmt.Errorf("project storage artifact %s: %w", artifact.GetArtifactHash(), nodeErr)
 		}
 		nodes = append(nodes, node)

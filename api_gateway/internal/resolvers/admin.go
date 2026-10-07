@@ -8,6 +8,7 @@ import (
 
 	"frameworks/api_gateway/graph/model"
 	"frameworks/api_gateway/internal/demo"
+	gatewayerrors "frameworks/api_gateway/internal/errors"
 	"frameworks/api_gateway/internal/middleware"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/pagination"
 	commonpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/common"
@@ -71,7 +72,6 @@ func (r *Resolver) DoCreateBootstrapToken(ctx context.Context, input model.Creat
 	// Call Quartermaster to create token
 	tokenResp, err := r.Clients.Quartermaster.CreateBootstrapToken(ctx, req)
 	if err != nil {
-		r.Logger.WithError(err).Error("Failed to create bootstrap token")
 		return nil, fmt.Errorf("failed to create bootstrap token: %w", err)
 	}
 
@@ -98,8 +98,8 @@ func (r *Resolver) DoRevokeBootstrapToken(ctx context.Context, id string) (model
 	// Call Quartermaster to revoke token
 	err := r.Clients.Quartermaster.RevokeBootstrapToken(ctx, id)
 	if err != nil {
-		r.Logger.WithError(err).Error("Failed to revoke bootstrap token")
 		if strings.Contains(err.Error(), "not found") {
+			r.Logger.WithError(err).Log(gatewayerrors.LogLevel(err), "Failed to revoke bootstrap token")
 			return &model.NotFoundError{
 				Message:      "Bootstrap token not found",
 				Code:         strPtr("NOT_FOUND"),
@@ -128,7 +128,6 @@ func (r *Resolver) DoGetBootstrapTokens(ctx context.Context) ([]*quartermasterpb
 	// Call Quartermaster to get tokens (get all types with pagination)
 	tokensResp, err := r.Clients.Quartermaster.ListBootstrapTokens(ctx, "", "", &commonpb.CursorPaginationRequest{First: 100})
 	if err != nil {
-		r.Logger.WithError(err).Error("Failed to get bootstrap tokens")
 		return nil, fmt.Errorf("failed to get bootstrap tokens: %w", err)
 	}
 
@@ -189,7 +188,6 @@ func (r *Resolver) DoGetBootstrapTokensConnection(ctx context.Context, kind *str
 	}
 	tokensResp, err := r.Clients.Quartermaster.ListBootstrapTokens(ctx, kindFilter, "", paginationReq)
 	if err != nil {
-		r.Logger.WithError(err).Error("Failed to get bootstrap tokens")
 		return nil, fmt.Errorf("failed to get bootstrap tokens: %w", err)
 	}
 

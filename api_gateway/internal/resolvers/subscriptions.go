@@ -70,11 +70,6 @@ func (r *Resolver) DoStreamUpdates(ctx context.Context, streamID *string) (<-cha
 		if r.Metrics != nil {
 			r.Metrics.Operations.WithLabelValues("subscription_streams", "error").Inc()
 		}
-		r.Logger.WithError(err).WithFields(logging.Fields{
-			"user_id":   user.UserID,
-			"tenant_id": user.TenantID,
-			"stream_id": streamID,
-		}).Error("Failed to setup stream events subscription")
 		return nil, fmt.Errorf("failed to setup stream events subscription: %w", err)
 	}
 
@@ -145,11 +140,6 @@ func (r *Resolver) DoAnalyticsUpdates(ctx context.Context, streamID string) (<-c
 	// Use subscription manager to subscribe to analytics updates
 	ch, err := r.SubManager.SubscribeToAnalytics(ctx, config, streamIDPtr)
 	if err != nil {
-		r.Logger.WithError(err).WithFields(logging.Fields{
-			"user_id":   user.UserID,
-			"tenant_id": user.TenantID,
-			"stream_id": streamID,
-		}).Error("Failed to setup analytics subscription")
 		return nil, fmt.Errorf("failed to setup analytics subscription: %w", err)
 	}
 
@@ -208,11 +198,6 @@ func (r *Resolver) DoConnectionEvents(ctx context.Context, streamID *string) (<-
 
 	ch, err := r.SubManager.SubscribeToConnections(ctx, config, streamID)
 	if err != nil {
-		r.Logger.WithError(err).WithFields(logging.Fields{
-			"user_id":   user.UserID,
-			"tenant_id": user.TenantID,
-			"stream_id": streamID,
-		}).Error("Failed to setup connection events subscription")
 		return nil, fmt.Errorf("failed to setup connection events subscription: %w", err)
 	}
 
@@ -270,11 +255,6 @@ func (r *Resolver) DoStorageEvents(ctx context.Context, streamID *string) (<-cha
 
 	ch, err := r.SubManager.SubscribeToStorageEvents(ctx, config, streamID)
 	if err != nil {
-		r.Logger.WithError(err).WithFields(logging.Fields{
-			"user_id":   user.UserID,
-			"tenant_id": user.TenantID,
-			"stream_id": streamID,
-		}).Error("Failed to setup storage events subscription")
 		return nil, fmt.Errorf("failed to setup storage events subscription: %w", err)
 	}
 
@@ -332,11 +312,6 @@ func (r *Resolver) DoProcessingEvents(ctx context.Context, streamID *string) (<-
 
 	ch, err := r.SubManager.SubscribeToProcessingEvents(ctx, config, streamID)
 	if err != nil {
-		r.Logger.WithError(err).WithFields(logging.Fields{
-			"user_id":   user.UserID,
-			"tenant_id": user.TenantID,
-			"stream_id": streamID,
-		}).Error("Failed to setup processing events subscription")
 		return nil, fmt.Errorf("failed to setup processing events subscription: %w", err)
 	}
 
@@ -483,11 +458,6 @@ func (r *Resolver) DoMessageUpdates(ctx context.Context, conversationID string) 
 
 	ch, err := r.SubManager.SubscribeToMessages(ctx, config, rawConversationID)
 	if err != nil {
-		r.Logger.WithError(err).WithFields(logging.Fields{
-			"user_id":         user.UserID,
-			"tenant_id":       user.TenantID,
-			"conversation_id": conversationID,
-		}).Error("Failed to setup message subscription")
 		return nil, fmt.Errorf("failed to setup message subscription: %w", err)
 	}
 
@@ -544,11 +514,6 @@ func (r *Resolver) DoConversationUpdates(ctx context.Context, conversationID *st
 
 	ch, err := r.SubManager.SubscribeToConversations(ctx, config, rawConversationID)
 	if err != nil {
-		r.Logger.WithError(err).WithFields(logging.Fields{
-			"user_id":         user.UserID,
-			"tenant_id":       user.TenantID,
-			"conversation_id": rawConversationID,
-		}).Error("Failed to setup conversation subscription")
 		return nil, fmt.Errorf("failed to setup conversation subscription: %w", err)
 	}
 

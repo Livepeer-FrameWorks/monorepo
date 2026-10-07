@@ -12,6 +12,7 @@ import (
 	"frameworks/api_gateway/graph/model"
 	"frameworks/api_gateway/internal/catalogview"
 	"frameworks/api_gateway/internal/demo"
+	gatewayerrors "frameworks/api_gateway/internal/errors"
 	"frameworks/api_gateway/internal/loaders"
 	"frameworks/api_gateway/internal/middleware"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/ctxkeys"
@@ -62,33 +63,36 @@ func (r *Resolver) DoCreateVodUpload(ctx context.Context, input model.CreateVodU
 	// Call Foghorn gRPC
 	resp, err := r.Clients.Commodore.CreateVodUpload(ctx, req)
 	if err != nil {
-		r.Logger.WithError(err).Error("Failed to create VOD upload")
+		handled := func(result model.CreateVodUploadResult) (model.CreateVodUploadResult, error) {
+			r.Logger.WithError(err).Log(gatewayerrors.LogLevel(err), "Failed to create VOD upload")
+			return result, nil
+		}
 
 		if st, ok := status.FromError(err); ok {
 			switch st.Code() {
 			case codes.FailedPrecondition:
 				if strings.Contains(st.Message(), "S3 storage not configured") {
-					return &model.ValidationError{
+					return handled(&model.ValidationError{
 						Message: "VOD uploads are not available - S3 storage not configured",
 						Field:   strPtr("storage"),
-					}, nil
+					})
 				}
 			case codes.PermissionDenied:
 				if strings.Contains(st.Message(), "account suspended") {
-					return &model.AuthError{Message: "Account suspended - please top up your balance to upload videos"}, nil
+					return handled(&model.AuthError{Message: "Account suspended - please top up your balance to upload videos"})
 				}
 			}
 		}
 
 		// Fallback string matching (in case upstream changes don't propagate gRPC status cleanly)
 		if strings.Contains(err.Error(), "S3 storage not configured") {
-			return &model.ValidationError{
+			return handled(&model.ValidationError{
 				Message: "VOD uploads are not available - S3 storage not configured",
 				Field:   strPtr("storage"),
-			}, nil
+			})
 		}
 		if strings.Contains(err.Error(), "account suspended") {
-			return &model.AuthError{Message: "Account suspended - please top up your balance to upload videos"}, nil
+			return handled(&model.AuthError{Message: "Account suspended - please top up your balance to upload videos"})
 		}
 		return nil, fmt.Errorf("failed to create VOD upload: %w", err)
 	}
@@ -145,7 +149,6 @@ func (r *Resolver) DoImportVodAsset(ctx context.Context, input model.ImportVodAs
 				}
 			}
 		}
-		r.Logger.WithError(err).Error("Failed to import VOD asset")
 		return nil, fmt.Errorf("failed to import VOD asset: %w", err)
 	}
 	return protoToVodAsset(resp.GetAsset()), nil
@@ -186,35 +189,38 @@ func (r *Resolver) DoCompleteVodUpload(ctx context.Context, input model.Complete
 	// Call Foghorn gRPC
 	resp, err := r.Clients.Commodore.CompleteVodUpload(ctx, req)
 	if err != nil {
-		r.Logger.WithError(err).Error("Failed to complete VOD upload")
+		handled := func(result model.CompleteVodUploadResult) (model.CompleteVodUploadResult, error) {
+			r.Logger.WithError(err).Log(gatewayerrors.LogLevel(err), "Failed to complete VOD upload")
+			return result, nil
+		}
 
 		if st, ok := status.FromError(err); ok {
 			switch st.Code() {
 			case codes.NotFound:
-				return &model.NotFoundError{
+				return handled(&model.NotFoundError{
 					Message:      "Upload not found or already completed",
 					Code:         strPtr("NOT_FOUND"),
 					ResourceType: "VodUpload",
 					ResourceID:   input.UploadID,
-				}, nil
+				})
 			case codes.PermissionDenied:
 				if strings.Contains(st.Message(), "account suspended") {
-					return &model.AuthError{Message: "Account suspended - please top up your balance to complete uploads"}, nil
+					return handled(&model.AuthError{Message: "Account suspended - please top up your balance to complete uploads"})
 				}
 			}
 		}
 
 		// Fallback string matching
 		if strings.Contains(err.Error(), "not found") {
-			return &model.NotFoundError{
+			return handled(&model.NotFoundError{
 				Message:      "Upload not found or already completed",
 				Code:         strPtr("NOT_FOUND"),
 				ResourceType: "VodUpload",
 				ResourceID:   input.UploadID,
-			}, nil
+			})
 		}
 		if strings.Contains(err.Error(), "account suspended") {
-			return &model.AuthError{Message: "Account suspended - please top up your balance to complete uploads"}, nil
+			return handled(&model.AuthError{Message: "Account suspended - please top up your balance to complete uploads"})
 		}
 		return nil, fmt.Errorf("failed to complete VOD upload: %w", err)
 	}
@@ -358,35 +364,38 @@ func (r *Resolver) DoAbortVodUpload(ctx context.Context, uploadID string) (model
 	// Call Foghorn gRPC
 	_, err := r.Clients.Commodore.AbortVodUpload(ctx, tenantID, uploadID)
 	if err != nil {
-		r.Logger.WithError(err).Error("Failed to abort VOD upload")
+		handled := func(result model.AbortVodUploadResult) (model.AbortVodUploadResult, error) {
+			r.Logger.WithError(err).Log(gatewayerrors.LogLevel(err), "Failed to abort VOD upload")
+			return result, nil
+		}
 
 		if st, ok := status.FromError(err); ok {
 			switch st.Code() {
 			case codes.NotFound:
-				return &model.NotFoundError{
+				return handled(&model.NotFoundError{
 					Message:      "Upload not found or already completed",
 					Code:         strPtr("NOT_FOUND"),
 					ResourceType: "VodUpload",
 					ResourceID:   uploadID,
-				}, nil
+				})
 			case codes.PermissionDenied:
 				if strings.Contains(st.Message(), "account suspended") {
-					return &model.AuthError{Message: "Account suspended - please top up your balance to manage uploads"}, nil
+					return handled(&model.AuthError{Message: "Account suspended - please top up your balance to manage uploads"})
 				}
 			}
 		}
 
 		// Fallback string matching
 		if strings.Contains(err.Error(), "not found") {
-			return &model.NotFoundError{
+			return handled(&model.NotFoundError{
 				Message:      "Upload not found or already completed",
 				Code:         strPtr("NOT_FOUND"),
 				ResourceType: "VodUpload",
 				ResourceID:   uploadID,
-			}, nil
+			})
 		}
 		if strings.Contains(err.Error(), "account suspended") {
-			return &model.AuthError{Message: "Account suspended - please top up your balance to manage uploads"}, nil
+			return handled(&model.AuthError{Message: "Account suspended - please top up your balance to manage uploads"})
 		}
 		return nil, fmt.Errorf("failed to abort VOD upload: %w", err)
 	}
@@ -413,8 +422,8 @@ func (r *Resolver) DoDeleteVodAsset(ctx context.Context, id string) (model.Delet
 	// Call Foghorn gRPC
 	_, err := r.Clients.Commodore.DeleteVodAsset(ctx, tenantID, id)
 	if err != nil {
-		r.Logger.WithError(err).Error("Failed to delete VOD asset")
 		if strings.Contains(err.Error(), "not found") {
+			r.Logger.WithError(err).Log(gatewayerrors.LogLevel(err), "Failed to delete VOD asset")
 			return &model.NotFoundError{
 				Message:      "VOD asset not found",
 				Code:         strPtr("NOT_FOUND"),
@@ -455,7 +464,6 @@ func (r *Resolver) DoGetVodAsset(ctx context.Context, id string) (*model.VodAsse
 		Limit:          1,
 	})
 	if err != nil {
-		r.Logger.WithError(err).Error("Failed to get VOD asset")
 		return nil, fmt.Errorf("failed to get VOD asset: %w", err)
 	}
 	arts := resp.GetArtifacts()

@@ -46,7 +46,8 @@ func clientFault(err error) bool {
 			return true
 		}
 	}
-	if errors.Is(err, auth.ErrUnauthenticated) || errors.Is(err, middleware.ErrForbidden) || errors.Is(err, middleware.ErrInvalidInput) {
+	if errors.Is(err, auth.ErrUnauthenticated) || errors.Is(err, middleware.ErrForbidden) || errors.Is(err, middleware.ErrInvalidInput) ||
+		errors.Is(err, middleware.ErrNotFound) {
 		return true
 	}
 	if st, ok := status.FromError(err); ok {
@@ -57,6 +58,17 @@ func clientFault(err error) bool {
 		}
 	}
 	return false
+}
+
+// LogLevel is the level Bridge logs err at: info for a client fault, error
+// for a platform fault. The presenter logs every error a resolver returns;
+// a resolver logs an error itself only when it handles the error instead of
+// returning it, and then at this level.
+func LogLevel(err error) logging.Level {
+	if clientFault(err) {
+		return logging.InfoLevel
+	}
+	return logging.ErrorLevel
 }
 
 func ErrorPresenter(logger logging.Logger) graphql.ErrorPresenterFunc {
@@ -88,6 +100,8 @@ func ErrorPresenter(logger logging.Logger) graphql.ErrorPresenterFunc {
 			localCode = PublicCode(codes.PermissionDenied)
 		case errors.Is(err, middleware.ErrInvalidInput):
 			localCode = PublicCode(codes.InvalidArgument)
+		case errors.Is(err, middleware.ErrNotFound):
+			localCode = PublicCode(codes.NotFound)
 		}
 		if localCode != "" {
 			if presented.Extensions == nil {

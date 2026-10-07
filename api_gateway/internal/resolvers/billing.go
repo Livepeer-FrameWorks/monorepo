@@ -12,6 +12,7 @@ import (
 
 	"frameworks/api_gateway/graph/model"
 	"frameworks/api_gateway/internal/demo"
+	gatewayerrors "frameworks/api_gateway/internal/errors"
 	"frameworks/api_gateway/internal/middleware"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/auth"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/authz"
@@ -74,7 +75,6 @@ func (r *Resolver) DoGetInvoicesConnection(ctx context.Context, first *int, afte
 
 	resp, err := r.Clients.Purser.ListInvoices(ctx, tenantID, nil, paginationReq)
 	if err != nil {
-		r.Logger.WithError(err).WithField("tenant_id", tenantID).Error("Failed to load invoices")
 		return nil, fmt.Errorf("failed to load invoices: %w", err)
 	}
 
@@ -135,7 +135,6 @@ func (r *Resolver) DoGetPayment(ctx context.Context, id string) (*purserpb.Payme
 	}
 	payment, err := r.Clients.Purser.GetPayment(ctx, id)
 	if err != nil {
-		r.Logger.WithError(err).WithField("payment_id", id).Error("Failed to load payment")
 		return nil, fmt.Errorf("failed to load payment: %w", err)
 	}
 	return payment, nil
@@ -177,7 +176,6 @@ func (r *Resolver) DoGetPaymentsConnection(ctx context.Context, first *int, afte
 		Pagination: buildBillingPaginationRequest(first, after, last, before),
 	})
 	if err != nil {
-		r.Logger.WithError(err).WithField("tenant_id", tenantID).Error("Failed to list payments")
 		return nil, fmt.Errorf("failed to list payments: %w", err)
 	}
 	edges := make([]*model.InvoicePaymentEdge, 0, len(resp.GetPayments()))
@@ -234,7 +232,6 @@ func (r *Resolver) DoGetUsageRecordsConnection(ctx context.Context, timeRange *m
 
 	resp, err := r.Clients.Purser.GetUsageRecords(ctx, tenantID, "", "", tr, paginationReq)
 	if err != nil {
-		r.Logger.WithError(err).WithField("tenant_id", tenantID).Error("Failed to load usage records")
 		return nil, fmt.Errorf("failed to load usage records: %w", err)
 	}
 
@@ -414,7 +411,6 @@ func (r *Resolver) DoGetBillingTiers(ctx context.Context) ([]*purserpb.BillingTi
 
 	resp, err := r.Clients.Purser.GetBillingTiers(ctx, false, nil)
 	if err != nil {
-		r.Logger.WithError(err).Error("Failed to load billing tiers from Purser")
 		return nil, fmt.Errorf("failed to load billing tiers: %w", err)
 	}
 
@@ -443,7 +439,6 @@ func (r *Resolver) DoGetInvoices(ctx context.Context) ([]*purserpb.Invoice, erro
 
 	resp, err := r.Clients.Purser.ListInvoices(ctx, tenantID, nil, nil)
 	if err != nil {
-		r.Logger.WithError(err).WithField("tenant_id", tenantID).Error("Failed to load invoices")
 		return nil, fmt.Errorf("failed to load invoices: %w", err)
 	}
 
@@ -474,7 +469,6 @@ func (r *Resolver) DoGetInvoice(ctx context.Context, id string) (*purserpb.Invoi
 	// Get the specific invoice by ID
 	resp, err := r.Clients.Purser.GetInvoice(ctx, id)
 	if err != nil {
-		r.Logger.WithError(err).WithField("tenant_id", tenantID).Error("Failed to load invoice")
 		return nil, fmt.Errorf("failed to load invoice: %w", err)
 	}
 
@@ -505,7 +499,6 @@ func (r *Resolver) DoGetBillingStatus(ctx context.Context) (*purserpb.BillingSta
 	// Get full billing status from Purser
 	status, err := r.Clients.Purser.GetBillingStatus(ctx, tenantID)
 	if err != nil {
-		r.Logger.WithError(err).Error("Failed to get billing status from Purser")
 		return nil, fmt.Errorf("failed to get billing status: %w", err)
 	}
 
@@ -546,7 +539,6 @@ func (r *Resolver) DoGetInvoicePreview(ctx context.Context) (*purserpb.Invoice, 
 	status := "draft"
 	resp, err := r.Clients.Purser.ListInvoices(ctx, tenantID, &status, &commonpb.CursorPaginationRequest{First: 1})
 	if err != nil {
-		r.Logger.WithError(err).WithField("tenant_id", tenantID).Error("Failed to load invoice preview")
 		return nil, fmt.Errorf("failed to load invoice preview: %w", err)
 	}
 
@@ -588,7 +580,6 @@ func (r *Resolver) DoGetLiveUsageSummary(ctx context.Context, periodStart, perio
 		EndTime:   *end,
 	})
 	if err != nil {
-		r.Logger.WithError(err).WithField("tenant_id", tenantID).Error("Failed to fetch live usage summary")
 		return nil, fmt.Errorf("failed to fetch live usage summary: %w", err)
 	}
 
@@ -627,7 +618,6 @@ func (r *Resolver) DoGetTenantUsage(ctx context.Context, timeRange *model.TimeRa
 	// Get usage from Purser
 	usage, err := r.Clients.Purser.GetTenantUsage(ctx, tenantID, startDate, endDate)
 	if err != nil {
-		r.Logger.WithError(err).Error("Failed to get tenant usage")
 		return nil, fmt.Errorf("failed to get tenant usage: %w", err)
 	}
 
@@ -726,7 +716,6 @@ func (r *Resolver) DoGetUsageRecords(ctx context.Context, timeRange *model.TimeR
 
 	resp, err := r.Clients.Purser.GetUsageRecords(ctx, tenantID, "", "", tr, &commonpb.CursorPaginationRequest{First: 500})
 	if err != nil {
-		r.Logger.WithError(err).Error("Failed to get usage records")
 		return nil, fmt.Errorf("failed to get usage records: %w", err)
 	}
 
@@ -753,7 +742,6 @@ func (r *Resolver) DoGetUsageAggregates(ctx context.Context, timeRange *model.Ti
 
 	resp, err := r.Clients.Purser.GetUsageAggregates(ctx, tenantID, tr, granularity, usageTypes)
 	if err != nil {
-		r.Logger.WithError(err).Error("Failed to get usage aggregates")
 		return nil, fmt.Errorf("failed to get usage aggregates: %w", err)
 	}
 
@@ -1197,7 +1185,6 @@ func (r *Resolver) DoGetPrepaidBalance(ctx context.Context) (*model.PrepaidBalan
 		if status.Code(err) == codes.NotFound {
 			return nil, nil
 		}
-		r.Logger.WithError(err).Error("Failed to get prepaid balance")
 		return nil, err
 	}
 
@@ -1270,7 +1257,6 @@ func (r *Resolver) DoGetBalanceTransactionsConnection(ctx context.Context, page 
 
 	resp, err := r.Clients.Purser.ListBalanceTransactions(ctx, tenantID, transactionType, pbTimeRange, paginationReq)
 	if err != nil {
-		r.Logger.WithError(err).Error("Failed to list balance transactions")
 		return nil, err
 	}
 
@@ -1357,7 +1343,7 @@ func (r *Resolver) DoCreateStripeCheckout(ctx context.Context, tierID, billingPe
 
 	resp, err := r.Clients.Purser.CreateStripeCheckoutSession(ctx, tenantID, tierID, billingPeriod, successURL, cancelURL)
 	if err != nil {
-		r.Logger.WithError(err).WithField("tenant_id", tenantID).Error("Failed to create Stripe checkout")
+		r.Logger.WithError(err).WithField("tenant_id", tenantID).Log(gatewayerrors.LogLevel(err), "Failed to create Stripe checkout")
 		return &model.ValidationError{Message: "Failed to create checkout session: " + err.Error()}, nil
 	}
 
@@ -1388,7 +1374,7 @@ func (r *Resolver) DoCreateStripeBillingPortal(ctx context.Context, returnURL st
 
 	resp, err := r.Clients.Purser.CreateStripeBillingPortal(ctx, tenantID, returnURL)
 	if err != nil {
-		r.Logger.WithError(err).WithField("tenant_id", tenantID).Error("Failed to create Stripe billing portal")
+		r.Logger.WithError(err).WithField("tenant_id", tenantID).Log(gatewayerrors.LogLevel(err), "Failed to create Stripe billing portal")
 		return &model.ValidationError{Message: "Failed to create billing portal: " + err.Error()}, nil
 	}
 
@@ -1425,7 +1411,7 @@ func (r *Resolver) DoCreateMollieFirstPayment(ctx context.Context, tierID, metho
 
 	resp, err := r.Clients.Purser.CreateMollieFirstPayment(ctx, tenantID, tierID, method, redirectURL)
 	if err != nil {
-		r.Logger.WithError(err).WithField("tenant_id", tenantID).Error("Failed to create Mollie first payment")
+		r.Logger.WithError(err).WithField("tenant_id", tenantID).Log(gatewayerrors.LogLevel(err), "Failed to create Mollie first payment")
 		return &model.ValidationError{Message: "Failed to create payment: " + err.Error()}, nil
 	}
 
@@ -1465,7 +1451,7 @@ func (r *Resolver) DoCreateMollieSubscription(ctx context.Context, tierID, manda
 
 	resp, err := r.Clients.Purser.CreateMollieSubscription(ctx, tenantID, tierID, mandateID, desc)
 	if err != nil {
-		r.Logger.WithError(err).WithField("tenant_id", tenantID).Error("Failed to create Mollie subscription")
+		r.Logger.WithError(err).WithField("tenant_id", tenantID).Log(gatewayerrors.LogLevel(err), "Failed to create Mollie subscription")
 		return &model.ValidationError{Message: "Failed to create subscription: " + err.Error()}, nil
 	}
 
@@ -1512,7 +1498,6 @@ func (r *Resolver) DoListMollieMandates(ctx context.Context) ([]*purserpb.Mollie
 
 	resp, err := r.Clients.Purser.ListMollieMandates(ctx, tenantID)
 	if err != nil {
-		r.Logger.WithError(err).WithField("tenant_id", tenantID).Error("Failed to list Mollie mandates")
 		return nil, err
 	}
 
@@ -1590,7 +1575,6 @@ func (r *Resolver) DoCreateCardTopup(ctx context.Context, input model.CreateCard
 
 	resp, err := r.Clients.Purser.CreateCardTopup(ctx, req)
 	if err != nil {
-		r.Logger.WithError(err).WithField("tenant_id", tenantID).Error("Failed to create card top-up")
 		return nil, fmt.Errorf("failed to create top-up: %w", err)
 	}
 
@@ -1686,7 +1670,6 @@ func (r *Resolver) DoCreateCryptoTopup(ctx context.Context, input model.CreateCr
 
 	resp, err := r.Clients.Purser.CreateCryptoTopup(ctx, req)
 	if err != nil {
-		r.Logger.WithError(err).WithField("tenant_id", tenantID).Error("Failed to create crypto top-up")
 		return nil, fmt.Errorf("failed to create crypto top-up: %w", err)
 	}
 
@@ -1731,7 +1714,6 @@ func (r *Resolver) DoGetCryptoTopupStatus(ctx context.Context, topupID string) (
 
 	resp, err := r.Clients.Purser.GetCryptoTopup(ctx, topupID)
 	if err != nil {
-		r.Logger.WithError(err).WithField("topup_id", topupID).Error("Failed to get crypto top-up status")
 		return nil, fmt.Errorf("failed to get crypto top-up status: %w", err)
 	}
 
@@ -1835,7 +1817,7 @@ func (r *Resolver) DoPromoteToPaid(ctx context.Context, tierID string) (model.Pr
 
 	resp, err := r.Clients.Purser.PromoteToPaid(ctx, tenantID, tierID)
 	if err != nil {
-		r.Logger.WithError(err).WithField("tenant_id", tenantID).Error("Failed to promote to postpaid")
+		r.Logger.WithError(err).WithField("tenant_id", tenantID).Log(gatewayerrors.LogLevel(err), "Failed to promote to postpaid")
 		return &model.ValidationError{
 			Message: err.Error(),
 			Code:    ptrStr("PROMOTION_FAILED"),
@@ -1885,7 +1867,7 @@ func (r *Resolver) DoChangeBillingTier(ctx context.Context, tierID string) (mode
 
 	resp, err := r.Clients.Purser.ChangeBillingTier(ctx, tenantID, tierID)
 	if err != nil {
-		r.Logger.WithError(err).WithField("tenant_id", tenantID).WithField("tier_id", tierID).Error("Failed to change billing tier")
+		r.Logger.WithError(err).WithField("tenant_id", tenantID).WithField("tier_id", tierID).Log(gatewayerrors.LogLevel(err), "Failed to change billing tier")
 		return &model.ValidationError{
 			Message: err.Error(),
 			Code:    ptrStr("TIER_CHANGE_FAILED"),
@@ -1904,7 +1886,6 @@ func (r *Resolver) DoChangeBillingTier(ctx context.Context, tierID string) (mode
 	if appliedID := resp.GetAppliedTierId(); appliedID != "" {
 		tier, tierErr := r.Clients.Purser.GetBillingTier(ctx, appliedID)
 		if tierErr != nil {
-			r.Logger.WithError(tierErr).WithField("tier_id", appliedID).Error("Failed to load applied billing tier")
 			return nil, fmt.Errorf("load applied tier: %w", tierErr)
 		}
 		payload.AppliedTier = tier
@@ -1912,7 +1893,6 @@ func (r *Resolver) DoChangeBillingTier(ctx context.Context, tierID string) (mode
 	if pendingID := resp.GetPendingTierId(); pendingID != "" {
 		tier, tierErr := r.Clients.Purser.GetBillingTier(ctx, pendingID)
 		if tierErr != nil {
-			r.Logger.WithError(tierErr).WithField("tier_id", pendingID).Error("Failed to load pending billing tier")
 			return nil, fmt.Errorf("load pending tier: %w", tierErr)
 		}
 		payload.PendingTier = tier
@@ -1957,7 +1937,6 @@ func (r *Resolver) DoGetBillingDetails(ctx context.Context) (*purserpb.BillingDe
 
 	resp, err := r.Clients.Purser.GetBillingDetails(ctx, tenantID)
 	if err != nil {
-		r.Logger.WithError(err).Error("Failed to get billing details")
 		return nil, err
 	}
 
@@ -2044,7 +2023,6 @@ func (r *Resolver) DoUpdateBillingDetails(ctx context.Context, input model.Updat
 
 	resp, err := r.Clients.Purser.UpdateBillingDetails(ctx, req)
 	if err != nil {
-		r.Logger.WithError(err).Error("Failed to update billing details")
 		return nil, err
 	}
 

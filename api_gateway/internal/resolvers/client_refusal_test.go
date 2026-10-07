@@ -10,11 +10,14 @@ import (
 
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/ctxkeys"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
+	commodorepb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/commodore"
 	commonpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/common"
 	quartermasterpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/quartermaster"
 
 	"github.com/sirupsen/logrus"
 	logtest "github.com/sirupsen/logrus/hooks/test"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 func errOnly[T any](_ T, err error) error { return err }
@@ -61,5 +64,59 @@ func TestResolverRefusalsAreClientFaults(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// A downstream error produces exactly one Bridge log line, at the level its
+// gRPC code deserves: a client fault (NotFound, InvalidArgument, ...) at info,
+// a platform fault (Internal, Unavailable) at error. The line comes from the
+// presenter when the resolver returns the error, and from the resolver when it
+// turns the error into a result.
+func TestDownstreamErrorLogsOnceAtItsClassLevel(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		code  codes.Code
+		level logrus.Level
+	}{
+		{"not found", codes.NotFound, logrus.InfoLevel},
+		{"invalid argument", codes.InvalidArgument, logrus.InfoLevel},
+		{"internal", codes.Internal, logrus.ErrorLevel},
+		{"unavailable", codes.Unavailable, logrus.ErrorLevel},
+	} {
+		downstream := status.Error(tc.code, "dvr not found")
+		if tc.code != codes.NotFound {
+			downstream = status.Error(tc.code, "downstream refused")
+		}
+		commodore := &clientstest.FakeCommodore{
+			ListPushTargetsFn: func(context.Context, string) (*commodorepb.ListPushTargetsResponse, error) {
+				return nil, downstream
+			},
+			DeleteDVRFn: func(context.Context, string) (bool, error) { return false, downstream },
+		}
+		for call, run := range map[string]func(*Resolver) error{
+			"returned": func(r *Resolver) error {
+				return errOnly(r.DoGetStreamPushTargets(clientstest.AuthedCtx("t1"), "s1"))
+			},
+			"returned or mapped to a result": func(r *Resolver) error {
+				return errOnly(r.DoDeleteDVR(clientstest.AuthedCtx("t1"), "dvr1"))
+			},
+		} {
+			t.Run(tc.name+"/"+call, func(t *testing.T) {
+				logger := logging.NewLogger()
+				hook := logtest.NewLocal(logger)
+				r := &Resolver{Clients: clientstest.Clients(clientstest.WithCommodore(commodore)), Logger: logger}
+				if err := run(r); err != nil {
+					gwerrors.ErrorPresenter(logger)(context.Background(), err)
+				}
+				entries := hook.AllEntries()
+				if len(entries) != 1 || entries[0].Level != tc.level {
+					var got []string
+					for _, e := range entries {
+						got = append(got, e.Level.String()+": "+e.Message)
+					}
+					t.Fatalf("log lines = %v, want exactly one at %s", got, tc.level)
+				}
+			})
+		}
 	}
 }

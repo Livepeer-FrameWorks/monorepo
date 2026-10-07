@@ -5716,10 +5716,6 @@ func (r *subscriptionResolver) LiveFirehose(ctx context.Context) (<-chan *model.
 		if r.Metrics != nil {
 			r.Metrics.Operations.WithLabelValues("subscription_firehose", "error").Inc()
 		}
-		r.Logger.WithError(err).WithFields(logging.Fields{
-			"user_id":   user.UserID,
-			"tenant_id": user.TenantID,
-		}).Error("Failed to setup firehose subscription")
 		return nil, fmt.Errorf("failed to setup firehose subscription: %w", err)
 	}
 

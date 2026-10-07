@@ -72,7 +72,6 @@ func (r *Resolver) DoOpenMistAdminSession(ctx context.Context, input model.OpenM
 		if code == codes.NotFound {
 			return &model.NotFoundError{Message: "node not found"}, nil
 		}
-		r.Logger.WithError(err).Error("openMistAdminSession: Commodore RPC failed")
 		return nil, fmt.Errorf("mint mist admin session: %w", err)
 	}
 

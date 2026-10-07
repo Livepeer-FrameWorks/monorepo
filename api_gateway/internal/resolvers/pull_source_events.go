@@ -31,7 +31,6 @@ func (r *Resolver) DoStreamRecentPullSourceEvents(ctx context.Context, stream *c
 		Limit:    n,
 	})
 	if err != nil {
-		r.Logger.WithError(err).Error("ListPullSourceEvents failed")
 		return nil, fmt.Errorf("list pull source events: %w", err)
 	}
 	return resp.GetEvents(), nil

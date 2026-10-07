@@ -8,6 +8,7 @@ import (
 
 	"frameworks/api_gateway/graph/model"
 	"frameworks/api_gateway/internal/demo"
+	gatewayerrors "frameworks/api_gateway/internal/errors"
 	"frameworks/api_gateway/internal/middleware"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/ctxkeys"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/pagination"
@@ -74,7 +75,6 @@ func (r *Resolver) DoCreateDeveloperToken(ctx context.Context, input model.Creat
 		if st, ok := status.FromError(err); ok && st.Code() == codes.InvalidArgument {
 			return &model.ValidationError{Message: st.Message()}, nil
 		}
-		r.Logger.WithError(err).Error("Failed to create developer token")
 		return nil, fmt.Errorf("failed to create developer token: %w", err)
 	}
 
@@ -104,8 +104,8 @@ func (r *Resolver) DoRevokeDeveloperToken(ctx context.Context, id string) (model
 	// User context is propagated via gRPC interceptor from context
 	_, err := r.Clients.Commodore.RevokeAPIToken(ctx, id)
 	if err != nil {
-		r.Logger.WithError(err).Error("Failed to revoke developer token")
 		if strings.Contains(err.Error(), "not found") {
+			r.Logger.WithError(err).Log(gatewayerrors.LogLevel(err), "Failed to revoke developer token")
 			return &model.NotFoundError{
 				Message:      "Developer token not found",
 				Code:         strPtr("NOT_FOUND"),
@@ -132,7 +132,6 @@ func (r *Resolver) DoGetDeveloperTokens(ctx context.Context) ([]*commodorepb.API
 	// User context is propagated via gRPC interceptor from context
 	tokensResp, err := r.Clients.Commodore.ListAPITokens(ctx, nil)
 	if err != nil {
-		r.Logger.WithError(err).Error("Failed to get developer tokens")
 		return nil, fmt.Errorf("failed to get developer tokens: %w", err)
 	}
 
@@ -156,7 +155,6 @@ func (r *Resolver) DoGetDeveloperTokensConnection(ctx context.Context, first *in
 	// Call Commodore with pagination
 	resp, err := r.Clients.Commodore.ListAPITokens(ctx, paginationReq)
 	if err != nil {
-		r.Logger.WithError(err).Error("Failed to get developer tokens")
 		return nil, fmt.Errorf("failed to get developer tokens: %w", err)
 	}
 

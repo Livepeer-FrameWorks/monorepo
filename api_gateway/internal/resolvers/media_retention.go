@@ -34,7 +34,6 @@ func (r *Resolver) DoMediaRetentionPolicy(ctx context.Context) (*model.MediaRete
 	}
 	resp, err := r.Clients.Commodore.GetMediaRetentionPolicy(ctx, &commodorepb.GetMediaRetentionPolicyRequest{})
 	if err != nil {
-		r.Logger.WithError(err).Error("MediaRetentionPolicy: Commodore.GetMediaRetentionPolicy failed")
 		return nil, fmt.Errorf("read retention policy: %w", err)
 	}
 	return mediaRetentionPolicyFromProto(resp), nil
@@ -92,7 +91,6 @@ func (r *Resolver) DoSetMediaRetentionPolicy(ctx context.Context, input model.Se
 		if vErr := mapInvalidArgument(err); vErr != nil {
 			return vErr, nil
 		}
-		r.Logger.WithError(err).Error("SetMediaRetentionPolicy failed")
 		return nil, fmt.Errorf("set retention policy: %w", err)
 	}
 	return mediaRetentionPolicyFromProto(resp.GetPolicy()), nil
@@ -158,7 +156,6 @@ func (r *Resolver) DoSetStreamRetentionOverrides(ctx context.Context, input mode
 		if authErr := mapPermissionDenied(err); authErr != nil {
 			return authErr, nil
 		}
-		r.Logger.WithError(err).Error("SetStreamRetentionOverrides failed")
 		return nil, fmt.Errorf("set stream retention overrides: %w", err)
 	}
 	out := &model.StreamRetentionOverrides{StreamID: resp.GetStreamId()}
@@ -231,7 +228,6 @@ func (r *Resolver) DoUpdateMediaRetention(ctx context.Context, input model.Updat
 		if preErr := mapFailedPrecondition(err); preErr != nil {
 			return preErr, nil
 		}
-		r.Logger.WithError(err).Error("UpdateAssetRetention failed")
 		return nil, fmt.Errorf("update asset retention: %w", err)
 	}
 	return effectiveRetentionFromProto(resp), nil
@@ -270,7 +266,6 @@ func (r *Resolver) DoResetMediaRetentionOverride(ctx context.Context, input mode
 		if preErr := mapFailedPrecondition(err); preErr != nil {
 			return preErr, nil
 		}
-		r.Logger.WithError(err).Error("ResetAssetRetention failed")
 		return nil, fmt.Errorf("reset asset retention: %w", err)
 	}
 	return effectiveRetentionFromProto(resp), nil

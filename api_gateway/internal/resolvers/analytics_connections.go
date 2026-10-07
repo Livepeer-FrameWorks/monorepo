@@ -1254,7 +1254,6 @@ func (r *Resolver) DoGetLiveNodeState(ctx context.Context, nodeID string) (*peri
 
 	response, err := r.Clients.Periscope.GetLiveNodes(ctx, tenantID, &nodeID, nil)
 	if err != nil {
-		r.Logger.WithError(err).Error("Failed to get live node state")
 		return nil, err
 	}
 
@@ -4442,7 +4441,6 @@ func (r *Resolver) DoGetNetworkStatus(ctx context.Context) (*model.NetworkStatus
 
 	if err != nil {
 		if tenantID == "" {
-			r.Logger.WithError(err).Error("networkStatus: Quartermaster unavailable")
 			return nil, fmt.Errorf("network topology unavailable: %w", err)
 		}
 		r.Logger.WithError(err).Warn("networkStatus: failed to list public topology; returning tenant-accessible topology only")
@@ -4465,7 +4463,6 @@ func (r *Resolver) DoGetNetworkStatus(ctx context.Context) (*model.NetworkStatus
 	if operatorView {
 		ownedClustersResp, ownedErr := r.Clients.Quartermaster.ListClustersByOwner(ctx, tenantID, &commonpb.CursorPaginationRequest{First: 500})
 		if ownedErr != nil {
-			r.Logger.WithError(ownedErr).Error("networkStatus: owned cluster topology unavailable")
 			return nil, fmt.Errorf("owned network topology unavailable: %w", ownedErr)
 		}
 		appendClusters(ownedClustersResp.GetClusters(), true, false, true, true)

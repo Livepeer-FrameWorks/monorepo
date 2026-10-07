@@ -23,7 +23,6 @@ func (r *Resolver) DoGetStreamPushTargets(ctx context.Context, streamID string) 
 
 	resp, err := r.Clients.Commodore.ListPushTargets(ctx, streamID)
 	if err != nil {
-		r.Logger.WithError(err).WithField("stream_id", streamID).Error("Failed to list push targets")
 		return nil, fmt.Errorf("failed to list push targets: %w", err)
 	}
 
@@ -74,7 +73,6 @@ func (r *Resolver) DoCreatePushTarget(ctx context.Context, streamID string, inpu
 
 	target, err := r.Clients.Commodore.CreatePushTarget(ctx, req)
 	if err != nil {
-		r.Logger.WithError(err).Error("Failed to create push target")
 		return nil, fmt.Errorf("failed to create push target: %w", err)
 	}
 
@@ -143,7 +141,6 @@ func (r *Resolver) DoUpdatePushTarget(ctx context.Context, id string, input mode
 
 	target, err := r.Clients.Commodore.UpdatePushTarget(ctx, req)
 	if err != nil {
-		r.Logger.WithError(err).WithField("push_target_id", id).Error("Failed to update push target")
 		return nil, fmt.Errorf("failed to update push target: %w", err)
 	}
 
@@ -167,9 +164,8 @@ func (r *Resolver) DoDeletePushTarget(ctx context.Context, id string) (*model.De
 
 	_, err = r.Clients.Commodore.DeletePushTarget(ctx, rawID)
 	if err != nil {
-		r.Logger.WithError(err).WithField("push_target_id", id).Error("Failed to delete push target")
 		if strings.Contains(err.Error(), "not found") {
-			return nil, fmt.Errorf("push target not found")
+			return nil, middleware.NotFound("push target not found")
 		}
 		return nil, fmt.Errorf("failed to delete push target: %w", err)
 	}

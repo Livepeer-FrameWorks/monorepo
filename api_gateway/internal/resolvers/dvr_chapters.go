@@ -59,7 +59,6 @@ func (r *Resolver) DoRetrieveDVRChapter(
 	}
 	resp, err := r.Clients.Commodore.RetrieveDVRChapter(ctx, req)
 	if err != nil {
-		r.Logger.WithError(err).Error("RetrieveDVRChapter failed")
 		return nil, fmt.Errorf("retrieve chapter: %w", err)
 	}
 	state := chapterStateFromString(resp.GetState())
@@ -122,7 +121,6 @@ func (r *Resolver) DoListDVRChapters(
 	}
 	resp, err := r.Clients.Commodore.ListDVRChapters(ctx, req)
 	if err != nil {
-		r.Logger.WithError(err).Error("ListDVRChapters failed")
 		return nil, fmt.Errorf("list chapters: %w", err)
 	}
 	chapters := make([]*model.DVRChapterRef, 0, len(resp.GetChapters()))

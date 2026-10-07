@@ -184,7 +184,6 @@ func (r *Resolver) DoPlatformTenants(ctx context.Context, timeRange *model.TimeR
 	}()
 	wg.Wait()
 	if activityErr != nil {
-		r.Logger.WithError(activityErr).Error("Platform tenants: activity rollup failed")
 		return nil, fmt.Errorf("failed to load tenant activity: %w", activityErr)
 	}
 

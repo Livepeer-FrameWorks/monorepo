@@ -58,7 +58,6 @@ func (r *Resolver) DoSetNodeMode(ctx context.Context, input model.SetNodeModeInp
 		if nfErr := mapNotFound(err); nfErr != nil {
 			return nfErr, nil
 		}
-		r.Logger.WithError(err).Error("SetNodeMode: Commodore RPC failed")
 		return nil, fmt.Errorf("set node mode: %w", err)
 	}
 

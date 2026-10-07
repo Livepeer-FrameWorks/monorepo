@@ -11,7 +11,6 @@ import (
 	"frameworks/api_gateway/internal/middleware"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/ctxkeys"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/events"
-	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	publicv1 "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/events/public/v1"
 	signalmanpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/signalman"
 	"google.golang.org/protobuf/proto"
@@ -209,10 +208,6 @@ func (r *Resolver) DoTenantEvents(ctx context.Context, types []string, streamID 
 	config := ConnectionConfig{UserID: user.UserID, TenantID: user.TenantID, JWT: ctxkeys.GetJWTToken(ctx)}
 	ch, err := r.SubManager.SubscribeToTenantEvents(ctx, config, filter)
 	if err != nil {
-		r.Logger.WithError(err).WithFields(logging.Fields{
-			"user_id":   user.UserID,
-			"tenant_id": user.TenantID,
-		}).Error("Failed to set up tenant events subscription")
 		return nil, fmt.Errorf("failed to set up tenant events subscription: %w", err)
 	}
 	return ch, nil
