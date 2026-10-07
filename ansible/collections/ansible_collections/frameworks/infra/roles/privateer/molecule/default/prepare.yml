@@ -1,0 +1,49 @@
+---
+# Every supported host runs systemd-resolved, which Privateer routes .internal
+# through, and udev, which turns wg0 into the device unit the route unit binds
+# to. The Molecule base image ships neither.
+- name: Prepare
+  hosts: all
+  become: true
+  gather_facts: true
+  tasks:
+    - name: Install systemd-resolved and udev
+      ansible.builtin.apt:
+        name: [systemd-resolved, udev]
+        state: present
+        update_cache: true
+        cache_valid_time: 3600
+
+    # Without networkd no link carries upstream servers; give resolved the
+    # ones the container uses.
+    - name: Ensure resolved drop-in directory
+      ansible.builtin.file:
+        path: /etc/systemd/resolved.conf.d
+        state: directory
+        mode: "0755"
+
+    - name: Configure upstream DNS for systemd-resolved
+      ansible.builtin.copy:
+        dest: /etc/systemd/resolved.conf.d/molecule-upstream.conf
+        content: |
+          [Resolve]
+          DNS=1.1.1.1 8.8.8.8
+        mode: "0644"
+
+    - name: Start systemd-resolved and udev
+      ansible.builtin.systemd:
+        name: "{{ item }}"
+        state: restarted
+        enabled: true
+      loop: [systemd-resolved, systemd-udevd]
+
+    # Docker bind-mounts /etc/resolv.conf, so it cannot become the usual
+    # symlink; pointing it at the resolved stub gives the same lookup path.
+    - name: Resolve through the systemd-resolved stub
+      ansible.builtin.copy:
+        dest: /etc/resolv.conf
+        content: |
+          nameserver 127.0.0.53
+          options edns0 trust-ad
+        mode: "0644"
+        unsafe_writes: true

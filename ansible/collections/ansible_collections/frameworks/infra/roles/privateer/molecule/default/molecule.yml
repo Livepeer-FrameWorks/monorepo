@@ -25,7 +25,10 @@ provisioner:
   inventory:
     group_vars:
       all:
-        privateer_version: "dev"
+        # The version the pinned artifact reports; the role reinstalls any
+        # binary reporting another one.
+        privateer_version: >-
+          {{ lookup('env', 'PRIVATEER_VERSION') | default('dev', true) }}
         # Molecule supplies artifact URL + checksum via env so CI can swap
         # them per matrix entry without editing YAML.
         privateer_artifact_url: >-
@@ -33,5 +36,26 @@ provisioner:
         privateer_artifact_checksum: >-
           {{ lookup('env', 'PRIVATEER_ARTIFACT_CHECKSUM') | default('', true) }}
         privateer_port: 18012
+        # Mesh identity the CLI renders for a cluster host (privateer_role.go).
+        # The key is a throwaway generated for this scenario; no Quartermaster
+        # runs, so Privateer brings wg0 up from the empty static peer list.
+        privateer_wireguard_ip: 10.88.0.1
+        privateer_wireguard_port: 51820
+        privateer_wireguard_private_key: AW5PYbYxjTalcb2/vshOXUehUZkMvFiomXI8cVt8MLQ=
+        # The role's validation resolves quartermaster.internal through the
+        # system resolver, so the seed DNS names it.
+        privateer_static_dns:
+          quartermaster: [10.88.0.1]
+        privateer_env:
+          SERVICE_TOKEN: molecule-test-token
+          CLUSTER_ID: molecule
+          QUARTERMASTER_GRPC_ADDR: 127.0.0.1:19002
+          GRPC_ALLOW_INSECURE: "true"
+          MESH_NODE_NAME: privateer-instance
+          MESH_NODE_TYPE: core
+          MESH_WIREGUARD_IP: 10.88.0.1
+          MESH_LISTEN_PORT: "51820"
+          MESH_PRIVATE_KEY_FILE: /etc/privateer/wg.key
+          PRIVATEER_STATIC_PEERS_FILE: /etc/privateer/static-peers.json
 verifier:
   name: ansible
