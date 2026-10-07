@@ -25,10 +25,10 @@ provisioner:
   inventory:
     group_vars:
       all:
-        # The version the pinned artifact reports; the role reinstalls any
-        # binary reporting another one.
-        privateer_version: >-
-          {{ lookup('env', 'PRIVATEER_VERSION') | default('dev', true) }}
+        # A label other than the version the artifact's binary reports, as for
+        # an artifact a release carries from an earlier one: idempotence then
+        # proves an unchanged artifact is neither reinstalled nor restarted.
+        privateer_version: v0.0.0-carried
         # Molecule supplies artifact URL + checksum via env so CI can swap
         # them per matrix entry without editing YAML.
         privateer_artifact_url: >-

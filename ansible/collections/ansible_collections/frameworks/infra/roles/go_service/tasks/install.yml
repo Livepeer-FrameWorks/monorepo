@@ -219,6 +219,9 @@
   check_mode: false
   when: go_service_bin_stat.stat.exists | default(false)
 
+# The sentinel names the artifact (checksum and URL) and the receipt the binary
+# installed from it. The version label is not compared: a carried artifact is
+# labelled with a later release than the version its binary reports.
 - name: Decide whether service binary reinstall is required
   ansible.builtin.set_fact:
     go_service_reinstall_required: >-
@@ -226,10 +229,6 @@
         not (go_service_bin_stat.stat.exists | default(false))
         or not (go_service_install_sentinel_stat.stat.exists | default(false))
         or (go_service_binary_integrity.rc | default(1)) != 0
-        or (
-          (go_service_version | default('') | length > 0)
-          and (go_service_installed_version.stdout | default('')) != go_service_version
-        )
       }}
 
 - name: Report pending reinstall under --check

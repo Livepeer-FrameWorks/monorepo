@@ -141,3 +141,26 @@ func TestEdgePrepareLeavesTLSDirectoryModesToTheInstall(t *testing.T) {
 		t.Fatalf("%s must still create both TLS directories; found %d", file, seen)
 	}
 }
+
+// A carried artifact keeps the URL and checksum of the release that built it,
+// while the desired version label names a later release; the binary keeps
+// reporting the version it was built as. The reinstall decision therefore
+// compares artifact identity (the sentinel keyed on checksum and URL, and the
+// installed binary's receipt), never the version label, or every release
+// apply reinstalls and restarts every carried service.
+func TestReinstallDecisionsUseArtifactIdentityNotVersionLabels(t *testing.T) {
+	const roles = "ansible/collections/ansible_collections/frameworks/infra/roles/"
+	for _, tc := range []struct{ file, task, fact, sentinel string }{
+		{roles + "go_service/tasks/install.yml", "Decide whether service binary reinstall is required", "go_service_reinstall_required", "go_service_install_sentinel_stat"},
+		{roles + "privateer/tasks/install.yml", "Decide whether Privateer reinstall is required", "privateer_reinstall_required", "privateer_install_sentinel_stat"},
+	} {
+		spec, _ := moduleSpec(roleTaskByName(t, tc.file, tc.task), "set_fact")
+		rule := stringValue(spec[tc.fact])
+		if !strings.Contains(rule, tc.sentinel) {
+			t.Errorf("%s: %s must use the artifact sentinel: %s", tc.file, tc.fact, rule)
+		}
+		if strings.Contains(rule, "_version") {
+			t.Errorf("%s: %s compares a version label, which differs for a carried artifact: %s", tc.file, tc.fact, rule)
+		}
+	}
+}

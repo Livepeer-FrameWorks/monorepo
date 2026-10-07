@@ -89,23 +89,15 @@
   check_mode: false
   when: privateer_bin_stat.stat.exists | default(false)
 
+# The sentinel names the artifact (checksum and URL). The version label is not
+# compared: a carried artifact is labelled with a later release than the
+# version its binary reports.
 - name: Decide whether Privateer reinstall is required
   ansible.builtin.set_fact:
     privateer_reinstall_required: >-
       {{
         not (privateer_bin_stat.stat.exists | default(false))
-        or (
-          not (privateer_install_sentinel_stat.stat.exists | default(false))
-          and (
-            (privateer_version | default('') | length == 0)
-            or (privateer_installed_version.stdout | default('')) != privateer_version
-          )
-        )
-        or (
-          (privateer_version | default('') | length > 0)
-          and (privateer_installed_version.stdout | default('') | length > 0)
-          and (privateer_installed_version.stdout | default('')) != privateer_version
-        )
+        or not (privateer_install_sentinel_stat.stat.exists | default(false))
       }}
 
 - name: Report pending Privateer reinstall under --check
@@ -127,10 +119,8 @@
     - not ansible_check_mode
     - privateer_reinstall_required | default(false)
 
-# A missing sentinel next to a binary that already reports the pinned version
-# needs no archive: the normalize step below re-marks that binary. The always
-# section runs on every pass, so an archive an earlier run left behind is
-# removed (and reported under --check) even when nothing reinstalls.
+# The always section runs on every pass, so an archive an earlier run left
+# behind is removed (and reported under --check) even when nothing reinstalls.
 - name: Install Privateer artifact
   block:
     - name: Download and extract Privateer artifact
