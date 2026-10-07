@@ -1,8 +1,15 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { cleanup, render, screen, waitFor } from "@testing-library/svelte";
+import { resolve } from "$app/paths";
 import { page } from "$app/state";
+import type { ResolvedPathname } from "$app/types";
 import VerifyEmailPage from "../../src/routes/verify-email/+page.svelte";
 import ResetPasswordPage from "../../src/routes/reset-password/+page.svelte";
+
+// The page URL after a navigation to pathname, carrying the current hash.
+function pageURL(pathname: ResolvedPathname): URL & { pathname: ResolvedPathname } {
+  return Object.assign(new URL(window.location.href), { pathname });
+}
 
 afterEach(() => {
   cleanup();
@@ -13,8 +20,9 @@ afterEach(() => {
 describe("email verification link", () => {
   it("posts a fragment token in the request body and removes it from the URL", async () => {
     const token = "test-verification-token";
-    window.history.replaceState({}, "", `/verify-email#token=${token}`);
-    page.url = new URL(window.location.href);
+    const pathname = resolve("/verify-email");
+    window.history.replaceState({}, "", `${pathname}#token=${token}`);
+    page.url = pageURL(pathname);
     const fetch = vi.fn().mockResolvedValue({
       ok: true,
       json: async () => ({ message: "Email verified" }),
@@ -35,8 +43,9 @@ describe("email verification link", () => {
 
   it("accepts a password-reset fragment without leaving its token in the URL", async () => {
     const token = "test-reset-token";
-    window.history.replaceState({}, "", `/reset-password#token=${token}`);
-    page.url = new URL(window.location.href);
+    const pathname = resolve("/reset-password");
+    window.history.replaceState({}, "", `${pathname}#token=${token}`);
+    page.url = pageURL(pathname);
 
     render(ResetPasswordPage);
 
