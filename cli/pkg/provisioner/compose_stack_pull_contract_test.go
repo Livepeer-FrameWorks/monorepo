@@ -164,3 +164,33 @@ func TestAnsibleConfigToleratesSlowConnections(t *testing.T) {
 		t.Fatalf("[ssh_connection] retries = %d, want at least 3", retries)
 	}
 }
+
+// An established multiplexed SSH connection whose flow a router dropped
+// stays silent forever without keepalives; Ansible then waits for the module
+// result until the CLI's precheck deadline (20m) instead of failing the
+// connection and retrying it.
+func TestAnsibleSSHDetectsDeadConnections(t *testing.T) {
+	data, err := os.ReadFile(ansibleTreePath(t, "ansible.cfg"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg := string(data)
+	start := strings.Index(cfg, "[ssh_connection]")
+	if start < 0 {
+		t.Fatal("ansible.cfg has no [ssh_connection] section")
+	}
+	body := cfg[start+len("[ssh_connection]"):]
+	if next := strings.Index(body, "\n["); next >= 0 {
+		body = body[:next]
+	}
+	match := regexp.MustCompile(`(?m)^\s*ssh_args\s*=\s*(.+)$`).FindStringSubmatch(body)
+	if match == nil {
+		t.Fatal("ansible.cfg [ssh_connection] does not set ssh_args, so Ansible's SSH sends no keepalives")
+	}
+	args := match[1]
+	for _, want := range []string{"ServerAliveInterval=", "ServerAliveCountMax=", "ControlMaster=auto", "ControlPersist="} {
+		if !strings.Contains(args, want) {
+			t.Fatalf("ssh_args = %q, missing %s", args, want)
+		}
+	}
+}
