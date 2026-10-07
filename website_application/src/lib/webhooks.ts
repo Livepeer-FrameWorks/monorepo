@@ -103,8 +103,9 @@ const errorClassLabels: Record<string, string> = {
   connection: "Connection failed",
   tls: "TLS handshake failed",
   dns: "DNS lookup failed",
-  blocked_destination: "Blocked destination",
-  secret_unavailable: "Signing secret unavailable",
+  // The attempt's response excerpt carries the policy's reason.
+  blocked_destination: "Refused by the destination policy (not retried)",
+  internal: "Not sent: FrameWorks-side failure",
 };
 
 /** Human description of an attempt's outcome from its status code and error class. */

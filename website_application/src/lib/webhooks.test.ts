@@ -183,6 +183,10 @@ describe("endpoint status", () => {
     expect(attemptOutcome(503, "http_status")).toBe("Non-2xx response (HTTP 503)");
     expect(attemptOutcome(0, "timeout")).toBe("Timed out");
     expect(attemptOutcome(0, "something_new")).toBe("something_new");
+    expect(attemptOutcome(0, "blocked_destination")).toBe(
+      "Refused by the destination policy (not retried)"
+    );
+    expect(attemptOutcome(0, "internal")).toBe("Not sent: FrameWorks-side failure");
   });
 });
 
