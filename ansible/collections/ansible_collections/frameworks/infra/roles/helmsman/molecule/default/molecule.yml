@@ -35,5 +35,7 @@ provisioner:
         helmsman_foghorn_grpc_addr: 127.0.0.1:9090
         helmsman_enrollment_token: molecule-test-token
         helmsman_mist_api_password: molecule-test-password
+        # The verify playbook does not load role defaults.
+        helmsman_port: 18007
 verifier:
   name: ansible

@@ -58,3 +58,48 @@ func TestNativeInstallsLeaveOneBinaryAndOneSentinel(t *testing.T) {
 		}
 	}
 }
+
+// Linux Helmsman downloads its artifact once per pin: the sentinel names the
+// pin, and a receipt of the installed binary's sha256 catches a binary the
+// component updater replaced, so an apply with nothing to change downloads
+// nothing and reports nothing changed.
+func TestHelmsmanDownloadsOncePerPin(t *testing.T) {
+	const file = "ansible/collections/ansible_collections/frameworks/infra/roles/helmsman/tasks/install-linux.yml"
+	var tasks []any
+	if err := yaml.Unmarshal([]byte(readRepoFile(t, file)), &tasks); err != nil {
+		t.Fatal(err)
+	}
+	var download []map[string]any
+	walkRoleBlocks(tasks, nil, func(task map[string]any, enclosing []map[string]any) {
+		if _, ok := moduleSpec(task, "tempfile"); ok {
+			t.Errorf("%s: %q extracts the artifact on every apply to verify it", file, task["name"])
+		}
+		if _, ok := moduleSpec(task, "get_url"); ok {
+			download = enclosing
+		}
+	})
+	gated := false
+	for _, block := range download {
+		conds, _ := block["when"].([]any)
+		for _, cond := range conds {
+			if cond == "helmsman_reinstall_required | bool" {
+				gated = true
+			}
+		}
+	}
+	if !gated {
+		t.Errorf("%s: the download must be gated on helmsman_reinstall_required", file)
+	}
+	decide := roleTaskByName(t, file, "Decide whether Helmsman reinstall is required")
+	spec, _ := moduleSpec(decide, "set_fact")
+	rule := stringValue(spec["helmsman_reinstall_required"])
+	for _, want := range []string{"helmsman_sentinel_stat.stat.exists", "helmsman_binary_receipt_check.rc"} {
+		if !strings.Contains(rule, want) {
+			t.Errorf("reinstall decision must use %s: %s", want, rule)
+		}
+	}
+	normalize := stringValue(roleTaskByName(t, file, "Normalize extracted binary name")["ansible.builtin.shell"])
+	if !strings.Contains(normalize, `> "{{ helmsman_binary_receipt }}"`) {
+		t.Errorf("normalize must record the installed binary's sha256 receipt:\n%s", normalize)
+	}
+}

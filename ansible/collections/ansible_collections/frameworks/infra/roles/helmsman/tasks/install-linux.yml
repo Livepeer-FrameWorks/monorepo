@@ -39,33 +39,62 @@
   async: 600
   poll: 5
 
-- name: Set install sentinel path
+- name: Set install sentinel and binary receipt paths
   ansible.builtin.set_fact:
     helmsman_install_sentinel: "{{ helmsman_install_dir }}/.installed-{{ helmsman_artifact_checksum | default('') | hash('sha1') }}"
+    helmsman_binary_receipt: "{{ helmsman_install_dir }}/.binary-sha256"
 
-# Check mode never downloads; the sentinel names the pinned artifact, so a new
-# pin shows up as the install it causes.
 - name: Inspect Helmsman install sentinel
   ansible.builtin.stat:
     path: "{{ helmsman_install_sentinel }}"
   register: helmsman_sentinel_stat
-  when: ansible_check_mode
+  check_mode: false
+
+# The receipt is the sha256 of the binary this role installed; a binary the
+# component updater replaced no longer matches it.
+- name: Compare installed Helmsman binary with its install receipt
+  ansible.builtin.shell: |
+    set -euo pipefail
+    installed="$(sha256sum "{{ helmsman_install_dir }}/helmsman" | awk '{print $1}')"
+    printf '%s\n' "$installed"
+    test "$installed" = "$(cat "{{ helmsman_binary_receipt }}")"
+  args:
+    executable: /bin/bash
+  register: helmsman_binary_receipt_check
+  changed_when: false
+  failed_when: false
+  check_mode: false
+
+# The sentinel names the pinned artifact, so the archive is fetched once per
+# pin, or again only when the installed binary no longer matches its receipt.
+- name: Decide whether Helmsman reinstall is required
+  ansible.builtin.set_fact:
+    helmsman_reinstall_required: >-
+      {{
+        not (helmsman_sentinel_stat.stat.exists | default(false))
+        or (helmsman_binary_receipt_check.rc | default(1)) != 0
+      }}
 
 - name: Report Helmsman artifact drift in check mode
   ansible.builtin.debug:
     msg: "Helmsman would be installed from {{ helmsman_artifact_url }}"
-  changed_when: not (helmsman_sentinel_stat.stat.exists | default(false))
+  changed_when: helmsman_reinstall_required | bool
   when: ansible_check_mode
 
-# Every apply downloads the pinned artifact to compare its binary with the
-# installed one, which the component updater may have replaced. The always
-# section runs on every pass, so an asset an earlier run left behind is removed
-# (and reported under --check) too.
+# The always section runs on every pass, so an asset an earlier run left
+# behind is removed (and reported under --check) even when nothing installs.
 - name: Install Helmsman artifact
   block:
-    - name: Download, verify and extract Helmsman artifact
-      when: not ansible_check_mode
+    - name: Download and extract Helmsman artifact
+      when:
+        - not ansible_check_mode
+        - helmsman_reinstall_required | bool
       block:
+        - name: Remove stale Helmsman install sentinel before reinstall
+          ansible.builtin.file:
+            path: "{{ helmsman_install_sentinel }}"
+            state: absent
+
         - name: Download Helmsman asset
           ansible.builtin.get_url:
             url: "{{ helmsman_artifact_url }}"
@@ -80,59 +109,6 @@
           retries: 4
           delay: 3
 
-        - name: Create Helmsman artifact verification directory
-          ansible.builtin.tempfile:
-            state: directory
-            suffix: helmsman-verify
-          register: helmsman_verify_dir
-
-        - name: Extract Helmsman artifact for binary verification
-          ansible.builtin.unarchive:
-            src: "/tmp/helmsman.asset"
-            dest: "{{ helmsman_verify_dir.path }}"
-            remote_src: true
-
-        - name: Read desired Helmsman binary checksum
-          ansible.builtin.shell: |
-            set -e
-            desired_binary=""
-            for candidate in \
-              "{{ helmsman_verify_dir.path }}"/frameworks-helmsman-* \
-              "{{ helmsman_verify_dir.path }}/frameworks" \
-              "{{ helmsman_verify_dir.path }}/helmsman"; do
-              if [ -f "$candidate" ]; then
-                desired_binary="$candidate"
-                break
-              fi
-            done
-            if [ -z "$desired_binary" ]; then
-              echo "missing helmsman binary in artifact" >&2
-              exit 1
-            fi
-            sha256sum "$desired_binary"
-          args:
-            executable: /bin/sh
-          register: helmsman_desired_binary_checksum
-          changed_when: false
-
-        - name: Read installed Helmsman binary checksum
-          ansible.builtin.command:
-            argv:
-              - sha256sum
-              - "{{ helmsman_install_dir }}/helmsman"
-          register: helmsman_installed_binary_checksum
-          changed_when: false
-          failed_when: false
-
-        - name: Remove stale Helmsman install sentinel when binary differs from artifact
-          ansible.builtin.file:
-            path: "{{ helmsman_install_sentinel }}"
-            state: absent
-          when:
-            - helmsman_installed_binary_checksum.rc != 0
-              or ((helmsman_installed_binary_checksum.stdout.split() | first) | default(''))
-              != ((helmsman_desired_binary_checksum.stdout.split() | first) | default(''))
-
         - name: Extract Helmsman
           ansible.builtin.unarchive:
             src: "/tmp/helmsman.asset"
@@ -142,24 +118,20 @@
             group: "{{ helmsman_group }}"
             creates: "{{ helmsman_install_sentinel }}"
           register: helmsman_extract_result
-          notify: helmsman restart
   always:
     - name: Remove downloaded Helmsman asset
       ansible.builtin.file:
         path: /tmp/helmsman.asset
         state: absent
 
-    - name: Remove Helmsman artifact verification directory
-      ansible.builtin.file:
-        path: "{{ helmsman_verify_dir.path }}"
-        state: absent
-      when: helmsman_verify_dir.path is defined
-
 # Release archives ship the binary under one of three names; normalize to
-# "helmsman" then mark the sentinel so this block is a true once-per-pin op.
+# "helmsman", record its receipt and mark the sentinel. The task reports a
+# change, and restarts Helmsman, only when the binary differs from the one it
+# replaced, so recording a receipt for an unchanged binary restarts nothing.
 - name: Normalize extracted binary name
   ansible.builtin.shell: |
-    set -e
+    set -eo pipefail
+    previous={{ (helmsman_binary_receipt_check.stdout_lines | default([''], true) | first) | quote }}
     if ls "{{ helmsman_install_dir }}"/frameworks-helmsman-* >/dev/null 2>&1; then
       mv "{{ helmsman_install_dir }}"/frameworks-helmsman-* "{{ helmsman_install_dir }}/helmsman"
     elif [ -f "{{ helmsman_install_dir }}/frameworks" ]; then
@@ -167,10 +139,17 @@
     fi
     chmod 0755 "{{ helmsman_install_dir }}/helmsman"
     chown {{ helmsman_user }}:{{ helmsman_group }} "{{ helmsman_install_dir }}/helmsman"
+    installed="$(sha256sum "{{ helmsman_install_dir }}/helmsman" | awk '{print $1}')"
+    printf '%s\n' "$installed" > "{{ helmsman_binary_receipt }}"
     touch "{{ helmsman_install_sentinel }}"
-    chown {{ helmsman_user }}:{{ helmsman_group }} "{{ helmsman_install_sentinel }}"
+    chown {{ helmsman_user }}:{{ helmsman_group }} "{{ helmsman_install_sentinel }}" "{{ helmsman_binary_receipt }}"
+    if [ "$installed" != "$previous" ]; then echo binary-changed; fi
   args:
     creates: "{{ helmsman_install_sentinel }}"
+    executable: /bin/bash
+  register: helmsman_normalize
+  changed_when: "'binary-changed' in helmsman_normalize.stdout"
+  notify: helmsman restart
   when: not ansible_check_mode
 
 # The component updater (helmsman itself) owns this file at runtime. Stamp
