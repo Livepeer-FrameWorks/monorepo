@@ -242,65 +242,62 @@
   changed_when: go_service_reinstall_required | bool
   when: ansible_check_mode
 
-- name: Download pinned artifact
-  ansible.builtin.get_url:
-    url: "{{ go_service_artifact_url }}"
-    dest: "{{ go_service_asset_path }}"
-    checksum: "{{ go_service_artifact_checksum }}"
-    mode: "0644"
-    timeout: 300
-  register: go_service_artifact_download
-  until: go_service_artifact_download is succeeded
-  retries: 5
-  delay: 10
+- name: Install pinned artifact
   when:
     - not ansible_check_mode
-    - go_service_reinstall_required | default(true)
+    - go_service_reinstall_required | bool
+  block:
+    - name: Download pinned artifact
+      ansible.builtin.get_url:
+        url: "{{ go_service_artifact_url }}"
+        dest: "{{ go_service_asset_path }}"
+        checksum: "{{ go_service_artifact_checksum }}"
+        mode: "0644"
+        timeout: 300
+      register: go_service_artifact_download
+      until: go_service_artifact_download is succeeded
+      retries: 5
+      delay: 10
 
-- name: Remove stale install sentinel before service binary reinstall
-  ansible.builtin.file:
-    path: "{{ go_service_install_sentinel }}"
-    state: absent
-  when:
-    - not ansible_check_mode
-    - go_service_reinstall_required | default(false)
+    - name: Remove stale install sentinel before service binary reinstall
+      ansible.builtin.file:
+        path: "{{ go_service_install_sentinel }}"
+        state: absent
 
-- name: Find existing binary candidates before service binary reinstall
-  ansible.builtin.find:
-    paths: "{{ go_service_install_dir }}"
-    file_type: file
-    recurse: false
-    patterns:
-      - "{{ go_service_name }}"
-      - "frameworks-{{ go_service_name }}"
-      - "{{ go_service_binary_name }}"
-      - frameworks
-  register: go_service_existing_binary_candidates
-  when:
-    - not ansible_check_mode
-    - go_service_reinstall_required | default(false)
+    - name: Find existing binary candidates before service binary reinstall
+      ansible.builtin.find:
+        paths: "{{ go_service_install_dir }}"
+        file_type: file
+        recurse: false
+        patterns:
+          - "{{ go_service_name }}"
+          - "frameworks-{{ go_service_name }}"
+          - "{{ go_service_binary_name }}"
+          - frameworks
+      register: go_service_existing_binary_candidates
 
-- name: Remove existing binary candidates before service binary reinstall
-  ansible.builtin.file:
-    path: "{{ item.path }}"
-    state: absent
-  loop: "{{ go_service_existing_binary_candidates.files | default([]) }}"
-  loop_control:
-    label: "{{ item.path }}"
-  when:
-    - not ansible_check_mode
-    - go_service_reinstall_required | default(false)
+    - name: Remove existing binary candidates before service binary reinstall
+      ansible.builtin.file:
+        path: "{{ item.path }}"
+        state: absent
+      loop: "{{ go_service_existing_binary_candidates.files | default([]) }}"
+      loop_control:
+        label: "{{ item.path }}"
 
-- name: Extract artifact
-  ansible.builtin.unarchive:
-    src: "{{ go_service_asset_path }}"
-    dest: "{{ go_service_install_dir }}"
-    remote_src: true
-    owner: "{{ go_service_user }}"
-    group: "{{ go_service_group }}"
-    creates: "{{ go_service_install_sentinel }}"
-  notify: go_service restart
-  when: not ansible_check_mode
+    - name: Extract artifact
+      ansible.builtin.unarchive:
+        src: "{{ go_service_asset_path }}"
+        dest: "{{ go_service_install_dir }}"
+        remote_src: true
+        owner: "{{ go_service_user }}"
+        group: "{{ go_service_group }}"
+        creates: "{{ go_service_install_sentinel }}"
+      notify: go_service restart
+  always:
+    - name: Remove downloaded artifact
+      ansible.builtin.file:
+        path: "{{ go_service_asset_path }}"
+        state: absent
 
 # Vendor releases use several filename conventions inside the archive;
 # pick whichever shipped, then mark the sentinel.

@@ -15,26 +15,48 @@
     - "{{ edge_darwin_log_dir }}"
     - "{{ edge_darwin_plist_dir }}"
 
-- name: Download Caddy tarball (darwin)
-  ansible.builtin.get_url:
-    url: "{{ edge_caddy_artifact_url }}"
-    dest: "/tmp/caddy.tar.gz"
-    checksum: "{{ edge_caddy_artifact_checksum }}"
-    mode: "0644"
-    timeout: 300
-
 - name: Set caddy install sentinel path (darwin)
   ansible.builtin.set_fact:
     edge_caddy_install_sentinel: "{{ edge_darwin_base_dir }}/caddy/.installed-{{ edge_caddy_artifact_checksum | default('') | hash('sha1') }}"
 
-- name: Extract Caddy (darwin)
-  ansible.builtin.unarchive:
-    src: "/tmp/caddy.tar.gz"
-    dest: "{{ edge_darwin_base_dir }}/caddy"
-    remote_src: true
-    creates: "{{ edge_caddy_install_sentinel }}"
-  register: edge_caddy_extract_result
-  when: not ansible_check_mode
+# The sentinel names the pinned artifact, so the archive is fetched once per
+# pin rather than kept on disk to make the download a no-op.
+- name: Inspect Caddy install sentinel (darwin)
+  ansible.builtin.stat:
+    path: "{{ edge_caddy_install_sentinel }}"
+  register: edge_caddy_sentinel_stat
+
+- name: Report Caddy artifact drift in check mode (darwin)
+  ansible.builtin.debug:
+    msg: "Caddy would be installed from {{ edge_caddy_artifact_url }}"
+  changed_when: not (edge_caddy_sentinel_stat.stat.exists | default(false))
+  when: ansible_check_mode
+
+- name: Install Caddy tarball (darwin)
+  when:
+    - not ansible_check_mode
+    - not (edge_caddy_sentinel_stat.stat.exists | default(false))
+  block:
+    - name: Download Caddy tarball (darwin)
+      ansible.builtin.get_url:
+        url: "{{ edge_caddy_artifact_url }}"
+        dest: "/tmp/caddy.tar.gz"
+        checksum: "{{ edge_caddy_artifact_checksum }}"
+        mode: "0644"
+        timeout: 300
+
+    - name: Extract Caddy (darwin)
+      ansible.builtin.unarchive:
+        src: "/tmp/caddy.tar.gz"
+        dest: "{{ edge_darwin_base_dir }}/caddy"
+        remote_src: true
+        creates: "{{ edge_caddy_install_sentinel }}"
+      register: edge_caddy_extract_result
+  always:
+    - name: Remove downloaded Caddy tarball (darwin)
+      ansible.builtin.file:
+        path: /tmp/caddy.tar.gz
+        state: absent
 
 - name: Mark caddy install sentinel and ensure binary is executable (darwin)
   ansible.builtin.shell: |

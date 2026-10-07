@@ -10,15 +10,6 @@
   ansible.builtin.set_fact:
     victoriametrics_extract_dir: "/tmp/frameworks-victoriametrics-{{ victoriametrics_artifact_checksum | hash('sha1') }}"
 
-- name: Ensure VictoriaMetrics extract directory
-  ansible.builtin.file:
-    path: "{{ victoriametrics_extract_dir }}"
-    state: directory
-    owner: root
-    group: root
-    mode: "0755"
-  when: not ansible_check_mode
-
 - name: Stat VictoriaMetrics binary
   ansible.builtin.stat:
     path: "{{ victoriametrics_bin }}"
@@ -50,39 +41,51 @@
   changed_when: victoriametrics_reinstall_required | bool
   when: ansible_check_mode
 
-- name: Download VictoriaMetrics binary
-  ansible.builtin.get_url:
-    url: "{{ victoriametrics_artifact_url }}"
-    dest: /tmp/victoria-metrics.tar.gz
-    checksum: "{{ victoriametrics_artifact_checksum }}"
-    mode: "0644"
+- name: Install VictoriaMetrics artifact
   when:
     - not ansible_check_mode
-    - victoriametrics_reinstall_required | default(true)
+    - victoriametrics_reinstall_required | bool
+  block:
+    - name: Ensure VictoriaMetrics extract directory
+      ansible.builtin.file:
+        path: "{{ victoriametrics_extract_dir }}"
+        state: directory
+        owner: root
+        group: root
+        mode: "0755"
 
-- name: Extract VictoriaMetrics
-  ansible.builtin.unarchive:
-    src: /tmp/victoria-metrics.tar.gz
-    dest: "{{ victoriametrics_extract_dir }}"
-    remote_src: true
-    mode: "0755"
-    creates: "{{ victoriametrics_extract_dir }}/{{ victoriametrics_artifact_binary }}"
-  when:
-    - not ansible_check_mode
-    - victoriametrics_reinstall_required | default(true)
+    - name: Download VictoriaMetrics binary
+      ansible.builtin.get_url:
+        url: "{{ victoriametrics_artifact_url }}"
+        dest: /tmp/victoria-metrics.tar.gz
+        checksum: "{{ victoriametrics_artifact_checksum }}"
+        mode: "0644"
 
-- name: Install VictoriaMetrics binary
-  ansible.builtin.copy:
-    src: "{{ victoriametrics_extract_dir }}/{{ victoriametrics_artifact_binary }}"
-    dest: "{{ victoriametrics_bin }}"
-    remote_src: true
-    owner: root
-    group: root
-    mode: "0755"
-  notify: victoriametrics restart
-  when:
-    - not ansible_check_mode
-    - victoriametrics_reinstall_required | default(true)
+    - name: Extract VictoriaMetrics
+      ansible.builtin.unarchive:
+        src: /tmp/victoria-metrics.tar.gz
+        dest: "{{ victoriametrics_extract_dir }}"
+        remote_src: true
+        mode: "0755"
+        creates: "{{ victoriametrics_extract_dir }}/{{ victoriametrics_artifact_binary }}"
+
+    - name: Install VictoriaMetrics binary
+      ansible.builtin.copy:
+        src: "{{ victoriametrics_extract_dir }}/{{ victoriametrics_artifact_binary }}"
+        dest: "{{ victoriametrics_bin }}"
+        remote_src: true
+        owner: root
+        group: root
+        mode: "0755"
+      notify: victoriametrics restart
+  always:
+    - name: Remove VictoriaMetrics download and extract directory
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: absent
+      loop:
+        - /tmp/victoria-metrics.tar.gz
+        - "{{ victoriametrics_extract_dir }}"
 
 - name: Record VictoriaMetrics install sentinel
   ansible.builtin.file:

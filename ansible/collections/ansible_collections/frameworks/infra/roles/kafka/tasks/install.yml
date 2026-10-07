@@ -102,31 +102,35 @@
     - not ansible_check_mode
     - kafka_reinstall_required | default(false)
 
-- name: Download Kafka tarball
-  ansible.builtin.get_url:
-    url: "{{ kafka_artifact_url }}"
-    dest: "{{ kafka_tarball_path }}"
-    checksum: "{{ kafka_artifact_checksum }}"
-    mode: "0644"
-    timeout: 300
+- name: Install Kafka tarball
   when:
     - not ansible_check_mode
-    - kafka_reinstall_required | default(true)
+    - kafka_reinstall_required | bool
+  block:
+    - name: Download Kafka tarball
+      ansible.builtin.get_url:
+        url: "{{ kafka_artifact_url }}"
+        dest: "{{ kafka_tarball_path }}"
+        checksum: "{{ kafka_artifact_checksum }}"
+        mode: "0644"
+        timeout: 300
 
-- name: Extract Kafka
-  ansible.builtin.unarchive:
-    src: "{{ kafka_tarball_path }}"
-    dest: "{{ kafka_install_dir }}"
-    remote_src: true
-    owner: "{{ kafka_user }}"
-    group: "{{ kafka_group }}"
-    extra_opts:
-      - --strip-components=1
-    creates: "{{ kafka_install_sentinel }}"
-  notify: kafka restart
-  when:
-    - not ansible_check_mode
-    - kafka_reinstall_required | default(true)
+    - name: Extract Kafka
+      ansible.builtin.unarchive:
+        src: "{{ kafka_tarball_path }}"
+        dest: "{{ kafka_install_dir }}"
+        remote_src: true
+        owner: "{{ kafka_user }}"
+        group: "{{ kafka_group }}"
+        extra_opts:
+          - --strip-components=1
+        creates: "{{ kafka_install_sentinel }}"
+      notify: kafka restart
+  always:
+    - name: Remove downloaded Kafka tarball
+      ansible.builtin.file:
+        path: "{{ kafka_tarball_path }}"
+        state: absent
 
 - name: Record install sentinel
   ansible.builtin.file:

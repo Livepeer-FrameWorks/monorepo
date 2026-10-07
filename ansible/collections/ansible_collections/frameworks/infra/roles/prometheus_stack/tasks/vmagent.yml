@@ -12,15 +12,6 @@
   ansible.builtin.set_fact:
     vmagent_extract_dir: "/tmp/frameworks-vmagent-{{ vmagent_artifact_checksum | hash('sha1') }}"
 
-- name: Ensure vmagent extract directory
-  ansible.builtin.file:
-    path: "{{ vmagent_extract_dir }}"
-    state: directory
-    owner: root
-    group: root
-    mode: "0755"
-  when: not ansible_check_mode
-
 - name: Stat vmagent binary
   ansible.builtin.stat:
     path: "{{ vmagent_bin }}"
@@ -52,39 +43,51 @@
   changed_when: vmagent_reinstall_required | bool
   when: ansible_check_mode
 
-- name: Download vmagent binary
-  ansible.builtin.get_url:
-    url: "{{ vmagent_artifact_url }}"
-    dest: /tmp/vmagent.tar.gz
-    checksum: "{{ vmagent_artifact_checksum }}"
-    mode: "0644"
+- name: Install vmagent artifact
   when:
     - not ansible_check_mode
-    - vmagent_reinstall_required | default(true)
+    - vmagent_reinstall_required | bool
+  block:
+    - name: Ensure vmagent extract directory
+      ansible.builtin.file:
+        path: "{{ vmagent_extract_dir }}"
+        state: directory
+        owner: root
+        group: root
+        mode: "0755"
 
-- name: Extract vmagent
-  ansible.builtin.unarchive:
-    src: /tmp/vmagent.tar.gz
-    dest: "{{ vmagent_extract_dir }}"
-    remote_src: true
-    mode: "0755"
-    creates: "{{ vmagent_extract_dir }}/{{ vmagent_artifact_binary }}"
-  when:
-    - not ansible_check_mode
-    - vmagent_reinstall_required | default(true)
+    - name: Download vmagent binary
+      ansible.builtin.get_url:
+        url: "{{ vmagent_artifact_url }}"
+        dest: /tmp/vmagent.tar.gz
+        checksum: "{{ vmagent_artifact_checksum }}"
+        mode: "0644"
 
-- name: Install vmagent binary
-  ansible.builtin.copy:
-    src: "{{ vmagent_extract_dir }}/{{ vmagent_artifact_binary }}"
-    dest: "{{ vmagent_bin }}"
-    remote_src: true
-    owner: root
-    group: root
-    mode: "0755"
-  notify: vmagent restart
-  when:
-    - not ansible_check_mode
-    - vmagent_reinstall_required | default(true)
+    - name: Extract vmagent
+      ansible.builtin.unarchive:
+        src: /tmp/vmagent.tar.gz
+        dest: "{{ vmagent_extract_dir }}"
+        remote_src: true
+        mode: "0755"
+        creates: "{{ vmagent_extract_dir }}/{{ vmagent_artifact_binary }}"
+
+    - name: Install vmagent binary
+      ansible.builtin.copy:
+        src: "{{ vmagent_extract_dir }}/{{ vmagent_artifact_binary }}"
+        dest: "{{ vmagent_bin }}"
+        remote_src: true
+        owner: root
+        group: root
+        mode: "0755"
+      notify: vmagent restart
+  always:
+    - name: Remove vmagent download and extract directory
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: absent
+      loop:
+        - /tmp/vmagent.tar.gz
+        - "{{ vmagent_extract_dir }}"
 
 - name: Record vmagent install sentinel
   ansible.builtin.file:

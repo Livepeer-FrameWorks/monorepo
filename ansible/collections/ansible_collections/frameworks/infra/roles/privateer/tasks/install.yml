@@ -127,53 +127,55 @@
     - not ansible_check_mode
     - privateer_reinstall_required | default(false)
 
-- name: Download Privateer artifact
-  ansible.builtin.get_url:
-    url: "{{ privateer_artifact_url }}"
-    dest: "{{ privateer_tarball_path }}"
-    checksum: "{{ privateer_artifact_checksum }}"
-    mode: "0644"
-    timeout: 300
+# A missing sentinel next to a binary that already reports the pinned version
+# needs no archive: the normalize step below re-marks that binary.
+- name: Install Privateer artifact
   when:
     - not ansible_check_mode
-    - privateer_reinstall_required | default(true)
+    - privateer_reinstall_required | bool
+  block:
+    - name: Download Privateer artifact
+      ansible.builtin.get_url:
+        url: "{{ privateer_artifact_url }}"
+        dest: "{{ privateer_tarball_path }}"
+        checksum: "{{ privateer_artifact_checksum }}"
+        mode: "0644"
+        timeout: 300
 
-- name: Find existing Privateer binary candidates before changed artifact install
-  ansible.builtin.find:
-    paths: "{{ privateer_install_dir }}"
-    file_type: file
-    recurse: false
-    patterns:
-      - privateer
-      - frameworks-privateer
-      - frameworks-privateer-*
-      - frameworks
-  register: privateer_existing_binary_candidates
-  when:
-    - not ansible_check_mode
-    - privateer_reinstall_required | default(false)
+    - name: Find existing Privateer binary candidates before changed artifact install
+      ansible.builtin.find:
+        paths: "{{ privateer_install_dir }}"
+        file_type: file
+        recurse: false
+        patterns:
+          - privateer
+          - frameworks-privateer
+          - frameworks-privateer-*
+          - frameworks
+      register: privateer_existing_binary_candidates
 
-- name: Remove existing Privateer binary candidates before changed artifact install
-  ansible.builtin.file:
-    path: "{{ item.path }}"
-    state: absent
-  loop: "{{ privateer_existing_binary_candidates.files | default([]) }}"
-  loop_control:
-    label: "{{ item.path }}"
-  when:
-    - not ansible_check_mode
-    - privateer_reinstall_required | default(false)
+    - name: Remove existing Privateer binary candidates before changed artifact install
+      ansible.builtin.file:
+        path: "{{ item.path }}"
+        state: absent
+      loop: "{{ privateer_existing_binary_candidates.files | default([]) }}"
+      loop_control:
+        label: "{{ item.path }}"
 
-- name: Extract Privateer
-  ansible.builtin.unarchive:
-    src: "{{ privateer_tarball_path }}"
-    dest: "{{ privateer_install_dir }}"
-    remote_src: true
-    owner: "{{ privateer_user }}"
-    group: "{{ privateer_group }}"
-    creates: "{{ privateer_install_sentinel }}"
-  notify: privateer restart
-  when: not ansible_check_mode
+    - name: Extract Privateer
+      ansible.builtin.unarchive:
+        src: "{{ privateer_tarball_path }}"
+        dest: "{{ privateer_install_dir }}"
+        remote_src: true
+        owner: "{{ privateer_user }}"
+        group: "{{ privateer_group }}"
+        creates: "{{ privateer_install_sentinel }}"
+      notify: privateer restart
+  always:
+    - name: Remove downloaded Privateer artifact
+      ansible.builtin.file:
+        path: "{{ privateer_tarball_path }}"
+        state: absent
 
 - name: Normalize Privateer binary name
   ansible.builtin.shell: |

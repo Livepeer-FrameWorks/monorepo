@@ -31,27 +31,49 @@
     - "{{ helmsman_darwin_log_dir }}"
     - "{{ helmsman_darwin_plist_dir }}"
 
-- name: Download Helmsman asset
-  ansible.builtin.get_url:
-    url: "{{ helmsman_artifact_url }}"
-    dest: "/tmp/helmsman.asset"
-    checksum: "{{ helmsman_artifact_checksum }}"
-    mode: "0644"
-    timeout: 300
-
 - name: Set install sentinel path
   ansible.builtin.set_fact:
     helmsman_install_sentinel: "{{ helmsman_darwin_base_dir }}/helmsman/.installed-{{ helmsman_artifact_checksum | default('') | hash('sha1') }}"
 
-- name: Extract Helmsman
-  ansible.builtin.unarchive:
-    src: "/tmp/helmsman.asset"
-    dest: "{{ helmsman_darwin_base_dir }}/helmsman"
-    remote_src: true
-    creates: "{{ helmsman_install_sentinel }}"
-  register: helmsman_extract_result
-  notify: helmsman restart
-  when: not ansible_check_mode
+# The sentinel names the pinned artifact, so the archive is fetched once per
+# pin rather than kept on disk to make the download a no-op.
+- name: Inspect Helmsman install sentinel
+  ansible.builtin.stat:
+    path: "{{ helmsman_install_sentinel }}"
+  register: helmsman_sentinel_stat
+
+- name: Report Helmsman artifact drift in check mode
+  ansible.builtin.debug:
+    msg: "Helmsman would be installed from {{ helmsman_artifact_url }}"
+  changed_when: not (helmsman_sentinel_stat.stat.exists | default(false))
+  when: ansible_check_mode
+
+- name: Install Helmsman artifact
+  when:
+    - not ansible_check_mode
+    - not (helmsman_sentinel_stat.stat.exists | default(false))
+  block:
+    - name: Download Helmsman asset
+      ansible.builtin.get_url:
+        url: "{{ helmsman_artifact_url }}"
+        dest: "/tmp/helmsman.asset"
+        checksum: "{{ helmsman_artifact_checksum }}"
+        mode: "0644"
+        timeout: 300
+
+    - name: Extract Helmsman
+      ansible.builtin.unarchive:
+        src: "/tmp/helmsman.asset"
+        dest: "{{ helmsman_darwin_base_dir }}/helmsman"
+        remote_src: true
+        creates: "{{ helmsman_install_sentinel }}"
+      register: helmsman_extract_result
+      notify: helmsman restart
+  always:
+    - name: Remove downloaded Helmsman asset
+      ansible.builtin.file:
+        path: /tmp/helmsman.asset
+        state: absent
 
 - name: Normalize extracted binary name
   ansible.builtin.shell: |

@@ -61,35 +61,36 @@
   changed_when: mistserver_reinstall_required | bool
   when: ansible_check_mode
 
-- name: Download MistServer tarball
-  ansible.builtin.get_url:
-    url: "{{ mistserver_artifact_url }}"
-    dest: "/tmp/mistserver.tar.gz"
-    checksum: "{{ mistserver_artifact_checksum if mistserver_artifact_checksum | length > 0 else omit }}"
-    mode: "0644"
-    timeout: 300
+- name: Install MistServer tarball
   when:
     - not ansible_check_mode
     - mistserver_reinstall_required | bool
+  block:
+    - name: Download MistServer tarball
+      ansible.builtin.get_url:
+        url: "{{ mistserver_artifact_url }}"
+        dest: "/tmp/mistserver.tar.gz"
+        checksum: "{{ mistserver_artifact_checksum if mistserver_artifact_checksum | length > 0 else omit }}"
+        mode: "0644"
+        timeout: 300
 
-- name: Remove stale MistServer install sentinel before reinstall
-  ansible.builtin.file:
-    path: "{{ mistserver_install_sentinel }}"
-    state: absent
-  when:
-    - not ansible_check_mode
-    - mistserver_reinstall_required | bool
+    - name: Remove stale MistServer install sentinel before reinstall
+      ansible.builtin.file:
+        path: "{{ mistserver_install_sentinel }}"
+        state: absent
 
-- name: Extract MistServer
-  ansible.builtin.unarchive:
-    src: "/tmp/mistserver.tar.gz"
-    dest: "{{ mistserver_darwin_base_dir }}/mistserver"
-    remote_src: true
-    creates: "{{ mistserver_install_sentinel }}"
-  notify: mistserver reload
-  when:
-    - not ansible_check_mode
-    - mistserver_reinstall_required | bool
+    - name: Extract MistServer
+      ansible.builtin.unarchive:
+        src: "/tmp/mistserver.tar.gz"
+        dest: "{{ mistserver_darwin_base_dir }}/mistserver"
+        remote_src: true
+        creates: "{{ mistserver_install_sentinel }}"
+      notify: mistserver reload
+  always:
+    - name: Remove downloaded MistServer tarball
+      ansible.builtin.file:
+        path: /tmp/mistserver.tar.gz
+        state: absent
 
 - name: Ensure MistServer binary is executable and mark install sentinel
   ansible.builtin.shell: |
