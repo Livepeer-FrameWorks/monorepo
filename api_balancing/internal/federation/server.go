@@ -889,16 +889,16 @@ func (s *FederationServer) maybePeerRelay(ctx context.Context, artifactHash, for
 		log.WithError(err).Warn("PrepareArtifact peer-relay lookup failed")
 		return peerRelayResult{}, false
 	}
-	// Peer reads traverse the origin's Caddy (@artifact_relay route on the edge
-	// FQDN), so the peer URL is <scheme>://<host> of the advertised base plus
-	// the relay path. base_url is the playback base (carries /view); using it
-	// verbatim would route to Mist via handle_path /view/* instead of Helmsman.
-	origin, ok := control.RelayPeerOrigin(baseURL)
-	if !ok {
-		return peerRelayResult{}, false
-	}
 	path := peerRelayArtifactPath(artifactType, artifactHash, format, streamInternalName)
 	if path == "" {
+		return peerRelayResult{}, false
+	}
+	origin, err := control.PeerRelayOrigin(ctx, s.db, originNodeID, baseURL)
+	if err != nil {
+		log.WithError(err).WithField("origin_node_id", originNodeID).Warn("PrepareArtifact peer-relay origin lookup failed")
+		return peerRelayResult{}, false
+	}
+	if origin == "" {
 		return peerRelayResult{}, false
 	}
 	// One grant authorizes both the media URL and its .dtsh sidecar. Stored on

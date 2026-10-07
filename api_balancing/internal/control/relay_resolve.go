@@ -389,13 +389,12 @@ func fillPeerRelayFromLocalOrigin(
 	default:
 		return false
 	}
-	// Peer reads traverse the origin's Caddy (@artifact_relay route on the
-	// edge FQDN), so the peer URL is <scheme>://<host> of the advertised base
-	// plus the relay path. base_url is the playback base (carries /view); using
-	// it verbatim would route the request to Mist via handle_path /view/*
-	// instead of Helmsman. RelayPeerOrigin drops the path.
-	origin, ok := RelayPeerOrigin(baseURL)
-	if !ok {
+	origin, originErr := PeerRelayOrigin(ctx, db, originNodeID, baseURL)
+	if originErr != nil {
+		logger.WithError(originErr).WithField("origin_node_id", originNodeID).Warn("RelayResolve peer-relay origin lookup failed")
+		return false
+	}
+	if origin == "" {
 		return false
 	}
 	// One grant authorizes both the media URL and its .dtsh sidecar (Mist
@@ -428,12 +427,37 @@ func fillPeerRelayFromLocalOrigin(
 	return true
 }
 
+// PeerRelayOrigin returns the <scheme>://<host> a peer dials to reach
+// nodeID's /internal/artifact/* relay, or "" when the node has no usable
+// relay origin.
+//
+// Helmsman renders Caddy's @artifact_relay route only for the per-node edge
+// FQDN its ConfigSeed carries as Site.EdgeDomain, and that FQDN has its own
+// DNS record, so a node with a seeded edge domain is addressed at
+// https://<edge domain>. The advertised base_url names the EDGE_PUBLIC_URL
+// playback host, which Caddy routes to Mist. A node whose last seed carries no
+// edge domain has no Caddy relay route; the only proxy that can carry one is
+// the front of its advertised base (the two-cell compose fixture's nginx), so
+// the base's origin is used.
+func PeerRelayOrigin(ctx context.Context, conn foghorndb.DBTX, nodeID, baseURL string) (string, error) {
+	seed, err := readLastConfigSeed(ctx, conn, nodeID)
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return "", err
+	}
+	if edgeDomain := strings.TrimSpace(seed.GetSite().GetEdgeDomain()); edgeDomain != "" {
+		return "https://" + edgeDomain, nil
+	}
+	origin, ok := RelayPeerOrigin(baseURL)
+	if !ok {
+		return "", nil
+	}
+	return origin, nil
+}
+
 // RelayPeerOrigin extracts <scheme>://<host> from a node's advertised
 // base_url, dropping any path. node_outputs.base_url is the playback base
-// (e.g. https://<edge>/view); peer artifact relay is served at
-// <origin>/internal/artifact/... behind Caddy's @artifact_relay route, so the
-// playback path must not leak into the peer URL. Returns ok=false when base
-// has no parseable scheme+host.
+// (e.g. https://<edge>/view), so the playback path must not leak into the
+// peer URL. Returns ok=false when base has no parseable scheme+host.
 func RelayPeerOrigin(base string) (string, bool) {
 	u, err := url.Parse(strings.TrimSpace(base))
 	if err != nil || u.Scheme == "" || u.Host == "" {

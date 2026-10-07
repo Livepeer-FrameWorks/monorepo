@@ -3,6 +3,8 @@ package config
 import (
 	"strings"
 	"testing"
+
+	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
 )
 
 func baseParams() CaddyfileParams {
@@ -300,5 +302,51 @@ func TestRenderCaddyfile_KeepsInternalCAOutOfSystemTrust(t *testing.T) {
 	}
 	if !strings.Contains(global, "skip_install_trust") {
 		t.Fatalf("global options do not set skip_install_trust:\n%s", global)
+	}
+}
+
+// artifactRelayHosts returns the host matcher of the rendered @artifact_relay
+// route, the only route that hands /internal/artifact/* to Helmsman.
+func artifactRelayHosts(t *testing.T, caddyfile string) []string {
+	t.Helper()
+	_, block, ok := strings.Cut(caddyfile, "@artifact_relay {")
+	if !ok {
+		t.Fatalf("no @artifact_relay route rendered:\n%s", caddyfile)
+	}
+	block, _, _ = strings.Cut(block, "}")
+	for line := range strings.SplitSeq(block, "\n") {
+		if hosts, found := strings.CutPrefix(strings.TrimSpace(line), "host "); found {
+			return strings.Fields(hosts)
+		}
+	}
+	t.Fatalf("@artifact_relay has no host matcher:\n%s", block)
+	return nil
+}
+
+// Foghorn addresses peer relay reads to the ConfigSeed's Site.EdgeDomain, so
+// the Caddyfile rendered from that seed must route /internal/artifact/* for
+// exactly that host and not for the EDGE_PUBLIC_URL playback host the node
+// advertises as its base URL.
+func TestCaddyfileForSeedRoutesArtifactRelayOnSeededEdgeDomainOnly(t *testing.T) {
+	const edgeDomain = "edge-fw-stg-edge-eu.staging-media-eu.example.com"
+	seed := &ipcpb.ConfigSeed{
+		NodeId: "fw-stg-edge-eu",
+		Site: &ipcpb.SiteConfig{
+			SiteAddress: "*.staging-media-eu.example.com",
+			EdgeDomain:  edgeDomain,
+			PoolDomain:  "edge.staging-media-eu.example.com",
+		},
+		TlsBundles: []*ipcpb.TLSCertBundle{{
+			BundleId:      "cluster_staging-media-eu",
+			SiteAddresses: []string{"*.staging-media-eu.example.com"},
+		}},
+	}
+	out, err := RenderCaddyfile(caddyfileParamsForSeed(seed, composeCaddyBundles(seed)))
+	if err != nil {
+		t.Fatalf("RenderCaddyfile: %v", err)
+	}
+	hosts := artifactRelayHosts(t, out)
+	if len(hosts) != 1 || hosts[0] != edgeDomain {
+		t.Fatalf("@artifact_relay hosts = %v, want exactly [%s]", hosts, edgeDomain)
 	}
 }

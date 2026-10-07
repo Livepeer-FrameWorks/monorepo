@@ -10,6 +10,7 @@ import (
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	commodorepb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/commodore"
 	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
+	"google.golang.org/protobuf/proto"
 )
 
 // fileArtifactRows builds the 12-column row fillFileArtifactResolve scans.
@@ -161,6 +162,7 @@ func TestFillPeerRelayFromLocalOrigin(t *testing.T) {
 		mock, _, _ := setupArtifactTestDeps(t)
 		mock.ExpectQuery(`FROM foghorn.artifact_nodes`).WithArgs("h").
 			WillReturnRows(sqlmock.NewRows([]string{"node_id", "base_url"}).AddRow("node1", ""))
+		mock.ExpectQuery(`FROM foghorn.node_config_seeds`).WithArgs("node1").WillReturnError(sql.ErrNoRows)
 		resp := &ipcpb.RelayResolveResponse{}
 		req := &ipcpb.RelayResolveRequest{AssetHash: "h", AssetKind: "vod", Ext: ".mp4"}
 		if fillPeerRelayFromLocalOrigin(ctx, req, resp, sql.NullInt64{}, sql.NullString{}, sql.NullString{}, log) {
@@ -173,6 +175,9 @@ func TestFillPeerRelayFromLocalOrigin(t *testing.T) {
 		mock.ExpectQuery(`FROM foghorn.artifact_nodes`).WithArgs("h").
 			WillReturnRows(sqlmock.NewRows([]string{"node_id", "base_url"}).
 				AddRow("node1", "https://edge.example.com/view"))
+		// No persisted seed: the node has no Caddy relay route, so the front
+		// of its advertised base is the only candidate.
+		mock.ExpectQuery(`FROM foghorn.node_config_seeds`).WithArgs("node1").WillReturnError(sql.ErrNoRows)
 		resp := &ipcpb.RelayResolveResponse{}
 		req := &ipcpb.RelayResolveRequest{AssetHash: "h", AssetKind: "vod", Ext: ".mp4"}
 		ok := fillPeerRelayFromLocalOrigin(ctx, req, resp, sql.NullInt64{Int64: 42, Valid: true}, sql.NullString{}, sql.NullString{}, log)
@@ -265,4 +270,49 @@ func TestFillCrossClusterArtifactFromCommodore(t *testing.T) {
 			t.Fatal("a tenant-a node must NOT reach a tenant-b federated URL")
 		}
 	})
+}
+
+// seededConfigSeedRow is the node_config_seeds row Foghorn persisted for a node
+// whose ConfigSeed it composed for clusterID.
+func seededConfigSeedRow(t *testing.T, nodeID, clusterID string) (*sqlmock.Rows, *ipcpb.ConfigSeed) {
+	t.Helper()
+	seed, _ := composeConfigSeedCandidate(nodeID, nil, "", ipcpb.NodeOperationalMode_NODE_OPERATIONAL_MODE_NORMAL, clusterID)
+	seed.SeedVersion = 7
+	payload, err := proto.MarshalOptions{Deterministic: true}.Marshal(seed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return sqlmock.NewRows([]string{"seed_version", "seed_payload"}).AddRow(int64(7), payload), seed
+}
+
+// Helmsman renders Caddy's /internal/artifact/* route only for its ConfigSeed's
+// Site.EdgeDomain, the per-node FQDN. The advertised base_url carries the
+// EDGE_PUBLIC_URL playback host, which Caddy hands to Mist (415 for a relay
+// read), so the peer URL must address the seeded edge domain.
+func TestFillPeerRelayFromLocalOriginAddressesSeededEdgeDomain(t *testing.T) {
+	ctx := context.Background()
+	log := logging.NewLogger()
+	mock, _, _ := setupArtifactTestDeps(t)
+	mock.ExpectQuery(`FROM foghorn.artifact_nodes`).WithArgs("h").
+		WillReturnRows(sqlmock.NewRows([]string{"node_id", "base_url"}).
+			AddRow("fw-stg-edge-eu", "https://edge-eu.staging-media-eu.frameworks.network/view"))
+	seedRows, seed := seededConfigSeedRow(t, "fw-stg-edge-eu", "staging-media-eu")
+	mock.ExpectQuery(`FROM foghorn.node_config_seeds`).WithArgs("fw-stg-edge-eu").WillReturnRows(seedRows)
+
+	edgeDomain := seed.GetSite().GetEdgeDomain()
+	if edgeDomain != "edge-fw-stg-edge-eu.staging-media-eu.frameworks.network" {
+		t.Fatalf("seeded edge domain = %q", edgeDomain)
+	}
+	resp := &ipcpb.RelayResolveResponse{}
+	req := &ipcpb.RelayResolveRequest{AssetHash: "h", AssetKind: "vod", Ext: ".mp4"}
+	if !fillPeerRelayFromLocalOrigin(ctx, req, resp, sql.NullInt64{}, sql.NullString{}, sql.NullString{}, log) {
+		t.Fatal("fresh complete origin must return true")
+	}
+	want := "https://" + edgeDomain + "/internal/artifact/vod/h.mp4"
+	if resp.GetPeerRelayUrl() != want {
+		t.Fatalf("peer relay url = %q, want %q", resp.GetPeerRelayUrl(), want)
+	}
+	if resp.GetPeerRelayDtshUrl() != want+".dtsh" {
+		t.Fatalf("peer relay dtsh url = %q, want %q", resp.GetPeerRelayDtshUrl(), want+".dtsh")
+	}
 }

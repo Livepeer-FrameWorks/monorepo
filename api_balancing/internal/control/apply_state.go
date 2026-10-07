@@ -190,7 +190,13 @@ func loadLastConfigSeed(ctx context.Context, nodeID string) (*ipcpb.ConfigSeed, 
 	if db == nil || nodeID == "" {
 		return nil, nil
 	}
-	row, err := foghorndb.New(db).GetLastConfigSeed(ctx, nodeID)
+	return readLastConfigSeed(ctx, db, nodeID)
+}
+
+// readLastConfigSeed returns the last ConfigSeed persisted for nodeID, or
+// sql.ErrNoRows when none was.
+func readLastConfigSeed(ctx context.Context, conn foghorndb.DBTX, nodeID string) (*ipcpb.ConfigSeed, error) {
+	row, err := foghorndb.New(conn).GetLastConfigSeed(ctx, nodeID)
 	if err != nil {
 		return nil, err
 	}

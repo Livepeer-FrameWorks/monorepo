@@ -204,13 +204,20 @@ Viewer requests clip/VOD on Cluster A, artifact lives on Cluster B:
 4. If sync_status='synced': mints presigned S3 GET URL (15min) → returns to A
 5. Else if storage_location is local/freezing and a local origin node has
    the canonical full file on disk (foghorn.artifact_nodes row with
-   role='origin', is_complete=true, not orphaned, last_seen < 90s;
-   base_url via node_outputs): Foghorn B mints a short-lived opaque
+   role='origin', is_complete=true, not orphaned, last_seen < 90s):
+   Foghorn B mints a short-lived opaque
    capability grant (5min TTL, stored in B's Redis, bound to {origin node
    id, artifact_hash, allowed media + .dtsh paths}) and returns
    peer_relay_url + peer_relay_grant_id → A. Cluster A's Helmsman block
    cache fetches blocks directly from origin node's Helmsman with the
-   grant id as Authorization: Bearer. No S3 sync wait.
+   grant id as Authorization: Bearer. No S3 sync wait. The peer URL's
+   host is the origin node's per-node edge FQDN
+   (`edge-<node>.<cluster>.<root>`, the `Site.EdgeDomain` of its persisted
+   ConfigSeed): Caddy routes `/internal/artifact/*` to Helmsman only on that
+   host, while the advertised `base_url` names the `EDGE_PUBLIC_URL`
+   playback host that Caddy hands to Mist. A node whose seed carries no edge
+   domain has no Caddy relay route and is addressed at its `base_url`
+   origin.
 6. Else: returns Ready=false; Foghorn A surfaces 503 to the viewer.
    The freeze pipeline lands the bytes asynchronously; the next viewer
    attempt picks up where the failed one left off.

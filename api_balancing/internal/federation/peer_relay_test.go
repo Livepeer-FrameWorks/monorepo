@@ -9,7 +9,10 @@ import (
 	"testing"
 
 	"github.com/DATA-DOG/go-sqlmock"
+	pkgdns "github.com/Livepeer-FrameWorks/monorepo/pkg/dns"
+	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
 	"github.com/sirupsen/logrus"
+	"google.golang.org/protobuf/proto"
 )
 
 func relayTestLogger() logrus.FieldLogger {
@@ -86,6 +89,8 @@ func TestMaybePeerRelayMintsGrantForOriginRelay(t *testing.T) {
 	mock.ExpectQuery(regexp.QuoteMeta("SELECT an.node_id")).
 		WithArgs("art-1").
 		WillReturnRows(originRows("node-origin", "https://edge-1.example.com/view"))
+	mock.ExpectQuery(regexp.QuoteMeta("FROM foghorn.node_config_seeds")).
+		WithArgs("node-origin").WillReturnError(sql.ErrNoRows)
 
 	srv := NewFederationServer(FederationServerConfig{Logger: testLogger(), ClusterID: "cluster-a", DB: db})
 	got, ok := srv.maybePeerRelay(context.Background(), "art-1", "mp4", "vod", "", "cluster-b", relayTestLogger())
@@ -131,6 +136,8 @@ func TestMaybePeerRelayRefusalsMintNothing(t *testing.T) {
 			arrange: func(mock sqlmock.Sqlmock) {
 				mock.ExpectQuery(regexp.QuoteMeta("SELECT an.node_id")).
 					WithArgs("art-nourl").WillReturnRows(originRows("node-origin", ""))
+				mock.ExpectQuery(regexp.QuoteMeta("FROM foghorn.node_config_seeds")).
+					WithArgs("node-origin").WillReturnError(sql.ErrNoRows)
 			},
 		},
 		{
@@ -138,20 +145,25 @@ func TestMaybePeerRelayRefusalsMintNothing(t *testing.T) {
 			arrange: func(mock sqlmock.Sqlmock) {
 				mock.ExpectQuery(regexp.QuoteMeta("SELECT an.node_id")).
 					WithArgs("art-badurl").WillReturnRows(originRows("node-origin", "edge-1.example.com/view"))
+				mock.ExpectQuery(regexp.QuoteMeta("FROM foghorn.node_config_seeds")).
+					WithArgs("node-origin").WillReturnError(sql.ErrNoRows)
 			},
 		},
 		{
 			name: "unknown format", hash: "art-nofmt", format: "", artType: "vod",
-			arrange: func(mock sqlmock.Sqlmock) {
-				mock.ExpectQuery(regexp.QuoteMeta("SELECT an.node_id")).
-					WithArgs("art-nofmt").WillReturnRows(originRows("node-origin", "https://edge-1.example.com"))
-			},
+			arrange: func(sqlmock.Sqlmock) {},
 		},
 		{
 			name: "clip without a stream", hash: "art-noclip", format: "mp4", artType: "clip",
+			arrange: func(sqlmock.Sqlmock) {},
+		},
+		{
+			name: "origin seed lookup failed", hash: "art-seederr", format: "mp4", artType: "vod",
 			arrange: func(mock sqlmock.Sqlmock) {
 				mock.ExpectQuery(regexp.QuoteMeta("SELECT an.node_id")).
-					WithArgs("art-noclip").WillReturnRows(originRows("node-origin", "https://edge-1.example.com"))
+					WithArgs("art-seederr").WillReturnRows(originRows("node-origin", "https://edge-1.example.com/view"))
+				mock.ExpectQuery(regexp.QuoteMeta("FROM foghorn.node_config_seeds")).
+					WithArgs("node-origin").WillReturnError(sql.ErrConnDone)
 			},
 		},
 		{
@@ -178,6 +190,9 @@ func TestMaybePeerRelayRefusalsMintNothing(t *testing.T) {
 			if got.grantID != "" {
 				t.Fatalf("a refused relay minted grant %q", got.grantID)
 			}
+			if err := mock.ExpectationsWereMet(); err != nil {
+				t.Fatal(err)
+			}
 		})
 	}
 }
@@ -188,5 +203,43 @@ func TestMaybePeerRelayWithoutDatabase(t *testing.T) {
 	srv := NewFederationServer(FederationServerConfig{Logger: testLogger(), ClusterID: "cluster-a"})
 	if _, ok := srv.maybePeerRelay(context.Background(), "art-1", "mp4", "vod", "", "cluster-b", relayTestLogger()); ok {
 		t.Fatal("relay returned without a database")
+	}
+}
+
+// The origin cell's Helmsman renders Caddy's /internal/artifact/* route only
+// for the per-node edge FQDN its ConfigSeed carries; the advertised base_url is
+// the EDGE_PUBLIC_URL playback host, which Caddy hands to Mist. A cross-cluster
+// peer read must therefore address the seeded edge domain.
+func TestMaybePeerRelayAddressesSeededEdgeDomain(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("sqlmock: %v", err)
+	}
+	defer db.Close()
+	edgeDomain := pkgdns.EdgeNodeFQDN("fw-stg-edge-eu", "staging-media-eu", "example.com")
+	seed := &ipcpb.ConfigSeed{
+		NodeId:      "fw-stg-edge-eu",
+		SeedVersion: 4,
+		Site:        &ipcpb.SiteConfig{SiteAddress: "*.staging-media-eu.example.com", EdgeDomain: edgeDomain},
+	}
+	payload, err := proto.Marshal(seed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mock.ExpectQuery(regexp.QuoteMeta("SELECT an.node_id")).
+		WithArgs("art-1").
+		WillReturnRows(originRows("fw-stg-edge-eu", "https://edge-eu.staging-media-eu.example.com/view"))
+	mock.ExpectQuery(regexp.QuoteMeta("FROM foghorn.node_config_seeds")).
+		WithArgs("fw-stg-edge-eu").
+		WillReturnRows(sqlmock.NewRows([]string{"seed_version", "seed_payload"}).AddRow(int64(4), payload))
+
+	srv := NewFederationServer(FederationServerConfig{Logger: testLogger(), ClusterID: "cluster-a", DB: db})
+	got, ok := srv.maybePeerRelay(context.Background(), "art-1", "mp4", "vod", "", "cluster-b", relayTestLogger())
+	if !ok {
+		t.Fatal("seeded origin did not produce a relay")
+	}
+	want := "https://" + edgeDomain + "/internal/artifact/vod/art-1.mp4"
+	if got.url != want || got.dtshURL != want+".dtsh" {
+		t.Fatalf("relay URLs = %q, %q; want %q and its .dtsh", got.url, got.dtshURL, want)
 	}
 }

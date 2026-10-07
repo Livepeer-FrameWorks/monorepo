@@ -1377,22 +1377,7 @@ func (m *Manager) activateCaddy(seed *ipcpb.ConfigSeed, certChanged bool) bool {
 		return true
 	}
 
-	params := CaddyfileParams{
-		Bundles:          bundles,
-		CaddyAdminAddr:   caddyfileAdminAddr(),
-		HelmsmanUpstream: appconfig.Runtime().MistWebhookBaseURL,
-		ChandlerUpstream: appconfig.Runtime().ChandlerUpstream,
-		MistUpstream:     appconfig.Runtime().MistHTTPUpstream,
-	}
-	if site := seed.GetSite(); site != nil {
-		params.AcmeEmail = site.GetAcmeEmail()
-		params.EdgeDomain = site.GetEdgeDomain()
-	}
-	// Strip http:// prefix for Caddy reverse_proxy upstream
-	params.HelmsmanUpstream = strings.TrimPrefix(params.HelmsmanUpstream, "http://")
-	params.MistUpstream = strings.TrimPrefix(params.MistUpstream, "http://")
-
-	rendered, err := RenderCaddyfile(params)
+	rendered, err := RenderCaddyfile(caddyfileParamsForSeed(seed, bundles))
 	if err != nil {
 		m.logger.WithError(err).Warn("Failed to render production Caddyfile")
 		return false
@@ -1421,6 +1406,28 @@ func (m *Manager) activateCaddy(seed *ipcpb.ConfigSeed, certChanged bool) bool {
 		return true
 	}
 	return false
+}
+
+// caddyfileParamsForSeed builds the production Caddyfile parameters for seed's
+// composed bundles. The seed's Site.EdgeDomain is the only host the
+// operator-only routes, /internal/artifact/* included, are rendered for;
+// Foghorn addresses peer relay reads to that same seeded value.
+func caddyfileParamsForSeed(seed *ipcpb.ConfigSeed, bundles []CaddyfileBundle) CaddyfileParams {
+	params := CaddyfileParams{
+		Bundles:          bundles,
+		CaddyAdminAddr:   caddyfileAdminAddr(),
+		HelmsmanUpstream: appconfig.Runtime().MistWebhookBaseURL,
+		ChandlerUpstream: appconfig.Runtime().ChandlerUpstream,
+		MistUpstream:     appconfig.Runtime().MistHTTPUpstream,
+	}
+	if site := seed.GetSite(); site != nil {
+		params.AcmeEmail = site.GetAcmeEmail()
+		params.EdgeDomain = site.GetEdgeDomain()
+	}
+	// Strip http:// prefix for Caddy reverse_proxy upstream
+	params.HelmsmanUpstream = strings.TrimPrefix(params.HelmsmanUpstream, "http://")
+	params.MistUpstream = strings.TrimPrefix(params.MistUpstream, "http://")
+	return params
 }
 
 func repairCaddyTLSFiles(bundles []CaddyfileBundle) error {
