@@ -147,12 +147,7 @@ func parseSSHGHostname(out string) string {
 //   - KnownHostsPath → UserKnownHostsFile=<path>.
 //   - Port → -p <n> only when non-default.
 func BuildSSHArgs(cfg *ConnectionConfig, _ Resolution) []string {
-	args := []string{
-		"-o", "BatchMode=yes",
-		"-o", fmt.Sprintf("ConnectTimeout=%d", connectTimeoutSeconds(cfg)),
-		"-o", "ServerAliveInterval=30",
-		"-o", "ServerAliveCountMax=3",
-	}
+	args := connectionArgs(cfg)
 	args = append(args, hostKeyCheckingArgs(cfg)...)
 	if cfg.KeyPath != "" {
 		args = append(args, "-i", cfg.KeyPath)
@@ -179,10 +174,7 @@ func connectTimeoutSeconds(cfg *ConnectionConfig) int {
 // BuildSCPArgs returns argv for `scp`, including the final source and
 // destination. Caller invokes: exec.Command("scp", BuildSCPArgs(...)...).
 func BuildSCPArgs(cfg *ConnectionConfig, res Resolution, local, remote string) []string {
-	args := []string{
-		"-o", "BatchMode=yes",
-		"-o", fmt.Sprintf("ConnectTimeout=%d", connectTimeoutSeconds(cfg)),
-	}
+	args := connectionArgs(cfg)
 	args = append(args, hostKeyCheckingArgs(cfg)...)
 	if cfg.KeyPath != "" {
 		args = append(args, "-i", cfg.KeyPath)
@@ -193,6 +185,20 @@ func BuildSCPArgs(cfg *ConnectionConfig, res Resolution, local, remote string) [
 	}
 	args = append(args, local, fmt.Sprintf("%s:%s", res.Target, remote))
 	return args
+}
+
+// connectionArgs are the transport options shared by ssh and scp. Every call
+// opens its own connection with keepalives: ControlPath=none keeps an
+// operator's ControlMaster from routing the call through a shared master,
+// whose silently dropped flow would hang every command until its deadline.
+func connectionArgs(cfg *ConnectionConfig) []string {
+	return []string{
+		"-o", "BatchMode=yes",
+		"-o", fmt.Sprintf("ConnectTimeout=%d", connectTimeoutSeconds(cfg)),
+		"-o", "ServerAliveInterval=30",
+		"-o", "ServerAliveCountMax=3",
+		"-o", "ControlPath=none",
+	}
 }
 
 // hostKeyCheckingArgs encodes the known_hosts policy.

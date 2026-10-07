@@ -26,6 +26,25 @@ func TestBuildSSHArgs_DefaultAcceptNew(t *testing.T) {
 	}
 }
 
+// A shared ControlMaster from the operator's ssh config would carry every CLI
+// call over one connection; once its flow is dropped, each call hangs until its
+// deadline. Each call must own its connection and detect a dead peer.
+func TestSSHAndSCPOwnTheirConnectionWithKeepalives(t *testing.T) {
+	t.Parallel()
+	cfg := &ConnectionConfig{Address: "1.2.3.4", User: "root", Port: 22}
+	res := Resolution{Target: "root@1.2.3.4"}
+	for name, args := range map[string][]string{
+		"ssh": BuildSSHArgs(cfg, res),
+		"scp": BuildSCPArgs(cfg, res, "/tmp/a", "/tmp/b"),
+	} {
+		for _, want := range []string{"ControlPath=none", "ServerAliveInterval=30", "ServerAliveCountMax=3"} {
+			if !containsPair(args, "-o", want) {
+				t.Errorf("%s args missing -o %s: %v", name, want, args)
+			}
+		}
+	}
+}
+
 func TestBuildSSHArgs_KeyOverrideAlwaysWins(t *testing.T) {
 	t.Parallel()
 	cfg := &ConnectionConfig{Address: "1.2.3.4", User: "root", KeyPath: "/tmp/id_ed25519"}
