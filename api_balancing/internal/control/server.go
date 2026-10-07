@@ -883,19 +883,16 @@ type NodeOutputs struct {
 	LastUpdate  time.Time
 }
 
+// artifactDeletedHandler retires a node's placement after the node reports it removed the artifact's
+// bytes; both the ArtifactDeleted and the DVRStopped{deleted} reports go through it.
+var artifactDeletedHandler = handleNodeArtifactDeleted
+
 // Optional analytics callbacks set by handlers package
-var artifactDeletedHandler func(context.Context, *ipcpb.ArtifactDeleted)
 var artifactMapUpdatedHandler func(nodeID string)
 var catalogDirtyHandler func()
 var terminalPushTargetActivationHandler func(nodeID string, result *ipcpb.ActivatePushTargetsResult) error
 var pushTargetActivationResultHandler func(nodeID string, result *ipcpb.ActivatePushTargetsResult) error
 var pushTargetDeactivationHandler func(nodeID string, result *ipcpb.DeactivatePushTargetsResult) error
-
-// SetArtifactDeletedHandler registers the callback for node-local
-// artifact deletion/eviction reconciliation + DELETED lifecycle emission.
-func SetArtifactDeletedHandler(onDeleted func(context.Context, *ipcpb.ArtifactDeleted)) {
-	artifactDeletedHandler = onDeleted
-}
 
 // SetTerminalPushTargetActivationHandler registers the durable status and
 // capacity cleanup that must complete before a non-retryable target revision
@@ -2206,7 +2203,7 @@ receiveLoop:
 					x.ArtifactDeleted.DeletedAtMs = msg.GetSentAt().AsTime().UnixMilli()
 				}
 			}
-			if artifactDeletedHandler != nil {
+			if x.ArtifactDeleted != nil {
 				go artifactDeletedHandler(context.Background(), x.ArtifactDeleted)
 			}
 		case *ipcpb.ControlMessage_Heartbeat:
@@ -2282,7 +2279,7 @@ receiveLoop:
 			go processDVRProgress(x.DvrProgress, connSession, registry.log)
 		case *ipcpb.ControlMessage_DvrStopped:
 			// Handle DVR completion from storage Helmsman
-			go processDVRStopped(x.DvrStopped, connSession, registry.log)
+			go processDVRStopped(x.DvrStopped, connSession, msg.GetSentAt(), registry.log)
 		case *ipcpb.ControlMessage_MistTrigger:
 			// Handle MistServer trigger forwarding from Helmsman
 			incMistTrigger(x.MistTrigger.GetTriggerType(), x.MistTrigger.GetBlocking(), "received")
@@ -4989,7 +4986,7 @@ func processDVRProgress(progress *ipcpb.DVRProgress, session NodeSession, logger
 }
 
 // processDVRStopped handles DVR completion from storage Helmsman
-func processDVRStopped(stopped *ipcpb.DVRStopped, session NodeSession, logger logging.Logger) {
+func processDVRStopped(stopped *ipcpb.DVRStopped, session NodeSession, sentAt *timestamppb.Timestamp, logger logging.Logger) {
 	// FinalizeDVR binds the completion to the dispatched recording node (ReportingNodeID); that owner is the
 	// canonical id, so authorize/attribute against the authenticated session, never the raw registry key.
 	storageNodeID := session.NodeID()
@@ -5014,6 +5011,21 @@ func processDVRStopped(stopped *ipcpb.DVRStopped, session NodeSession, logger lo
 	// for the new state machine; "deleted" passes through unchanged so the
 	// retention cleanup path still works.
 	if status == "deleted" {
+		// Helmsman sends this only after removing the recording's local files, so it retires the
+		// reporting node's placement exactly as ArtifactDeleted does. The placement is the authenticated
+		// session's own, so retiring it does not depend on the recording-owner check below: orphan
+		// cleanup re-drives the delete to every node still holding a copy, owner or not.
+		deletion := &ipcpb.ArtifactDeleted{
+			ArtifactHash: dvrHash,
+			ArtifactType: "dvr",
+			Reason:       "manual",
+			NodeId:       storageNodeID,
+		}
+		if sentAt != nil {
+			deletion.DeletedAtMs = sentAt.AsTime().UnixMilli()
+		}
+		artifactDeletedHandler(streamCtx(), deletion)
+
 		// Bind the deleted report to the dispatched recording node (the finalize branch below is bound
 		// inside FinalizeDVR via ReportingNodeID). A report from any other node for an existing recording
 		// is rejected without mutating; a duplicate delete against a genuinely absent row is a safe no-op
@@ -8958,6 +8970,55 @@ func DeleteNodeArtifact(ctx context.Context, artifactHash, nodeID string, nodeCl
 		return state.NodeArtifactDeletionParentMissing, nil
 	}
 	return artifactRepo.DeleteNodeArtifact(ctx, artifactHash, nodeID, nodeClockDeletedAtMs)
+}
+
+// handleNodeArtifactDeleted applies a node's report that it removed an artifact's local bytes. del.NodeId
+// is the authenticated session's node, set by the caller, so a node only ever retires its own placement.
+// The database removes the placement and emits LOST atomically unless a newer node-clock inventory
+// snapshot proves the same node has already reacquired the copy.
+func handleNodeArtifactDeleted(ctx context.Context, del *ipcpb.ArtifactDeleted) {
+	logger := controlLogger()
+	artifactHash := del.GetArtifactHash()
+	nodeID := del.GetNodeId()
+	reason := del.GetReason()
+
+	outcome, err := DeleteNodeArtifact(ctx, artifactHash, nodeID, del.GetDeletedAtMs())
+	if err != nil {
+		ObserveArtifactDeletionOutcome("error")
+		logger.WithError(err).WithField("artifact_hash", artifactHash).Error("Failed to remove artifact node assignment")
+		return
+	}
+	ObserveArtifactDeletionOutcome(string(outcome))
+	if outcome != state.NodeArtifactDeletionApplied {
+		logger.WithFields(logging.Fields{
+			"artifact_hash": artifactHash,
+			"node_id":       nodeID,
+			"outcome":       outcome,
+		}).Info("Artifact deletion did not remove a placement")
+		return
+	}
+	if stateErr := state.DefaultManager().ApplyArtifactDeleted(ctx, artifactHash, nodeID); stateErr != nil {
+		logger.WithError(stateErr).WithField("artifact_hash", artifactHash).Warn("Failed to apply artifact deletion to stream state")
+	}
+	if db == nil {
+		return
+	}
+
+	// A synced artifact with no remaining node copy is now S3-only.
+	hasAnyNodes, nodeErr := foghorndb.New(db).ArtifactHasActiveNodes(ctx, artifactHash)
+	if nodeErr != nil {
+		logger.WithError(nodeErr).WithField("artifact_hash", artifactHash).Warn("Failed to check remaining artifact nodes")
+	} else if !hasAnyNodes {
+		if markErr := foghorndb.New(db).MarkArtifactS3OnlyWhenUnhosted(ctx, artifactHash); markErr != nil {
+			logger.WithError(markErr).WithField("artifact_hash", artifactHash).Warn("Failed to mark artifact as S3-only")
+		}
+	}
+
+	logger.WithFields(logging.Fields{
+		"artifact_hash": artifactHash,
+		"node_id":       nodeID,
+		"reason":        reason,
+	}).Info("Artifact removed from node")
 }
 
 // ReconcileNodeCopies seeds never-emitted present copies and sweeps stale-present rows
