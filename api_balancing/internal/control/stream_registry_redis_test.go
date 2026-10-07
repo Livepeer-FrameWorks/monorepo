@@ -390,7 +390,7 @@ func TestStreamRegistry_PublishDoesNotPanicWithoutRedis(t *testing.T) {
 // BEFORE eviction cleared it. A delete that reads the revision after clearing carries 0, which the
 // versioned watermark rejects — no tombstone is emitted, the durable value survives, and the swept
 // entry resurrects on the next rehydrate. This drives the REAL caller (SweepStaleLocations →
-// publishDeleteSource), not the store API directly.
+// publishSourceRemovals), not the store API directly.
 func TestSweepStaleLocations_EmitsRevisionedDeleteForVersionedSource(t *testing.T) {
 	store, _, _ := newTestRedis(t)
 	const internalName = "swept-versioned-source"
@@ -453,10 +453,9 @@ func TestSweepStaleLocations_EmitsRevisionedDeleteForVersionedSource(t *testing.
 	}
 }
 
-// A federated withdraw evicts an entry whose LOCAL location never existed, so the caller has no
-// revision to carry; publishDeleteSource must resolve the durable watermark and delete at it rather
-// than emitting a revision-0 delete a versioned watermark would reject.
-func TestPublishDeleteSource_FallsBackToDurableWatermark(t *testing.T) {
+// A removal that empties the source carries no Location revision; it must delete at the durable
+// watermark rather than emit a revision-0 delete a versioned watermark would reject.
+func TestPublishSourceRemovals_DeletesAtDurableWatermark(t *testing.T) {
 	store, _, _ := newTestRedis(t)
 	const internalName = "withdrawn-federated-source"
 	durable := StreamEntry{
@@ -475,8 +474,9 @@ func TestPublishDeleteSource_FallsBackToDurableWatermark(t *testing.T) {
 	r.redisStore = store
 	r.instanceID = "withdrawer"
 	r.mu.Unlock()
-	// The evicted entry carries no local Location (the withdraw removed a peer's), revision unknown.
-	r.publishDeleteSource(StreamEntry{InternalName: internalName}, 0)
+	if !r.publishSourceRemovals(StreamEntry{InternalName: internalName}, map[string]time.Time{"cluster-test": {}}) {
+		t.Fatal("removal reported a transient failure")
+	}
 
 	if _, found, err := store.GetSource(context.Background(), internalName); err != nil || found {
 		t.Fatalf("watermark-fallback delete must remove the durable source (found=%v err=%v)", found, err)
@@ -559,7 +559,7 @@ func TestWithdrawFederatedSource_FailedDeleteRetriedBySweep(t *testing.T) {
 
 	durable := StreamEntry{
 		InternalName: internalName,
-		Locations:    map[string]Location{"cluster-test": {ClusterID: "cluster-test", SourceRevision: 4}},
+		Locations:    map[string]Location{"peer-B": {ClusterID: "peer-B", UpdatedAt: time.Now().Add(-time.Minute)}},
 	}
 	seed := RegistryChange{InstanceID: "writer", Entity: RegistryEntitySource, Operation: RegistryOpUpsert, Key: internalName, SourceRevision: 4}
 	if applied, err := store.SetSourceRevisioned(context.Background(), durable, seed, 4); err != nil || !applied {

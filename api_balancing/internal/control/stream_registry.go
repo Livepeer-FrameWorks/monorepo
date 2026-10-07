@@ -436,7 +436,8 @@ type cachedEntry struct {
 	// delete has not yet been published (the tombstone publish failed transiently). The entry is
 	// RETAINED so the sweeper retries the durable delete — evicting it locally first would leave
 	// nothing to retry from, silently leaking the durable value until it resurrects on a rehydrate.
-	// pendingDeleteRevision preserves the revision captured before the locations were cleared.
+	// pendingRemovals preserves the Location removals the retry must publish (see
+	// SourceLocationWrite.Remove); the store deletes the source only if they leave it empty.
 	//
 	// BOUNDED RESIDUAL: the marker is process-local. A restart (or retention-gap rehydration) that
 	// interrupts a pending delete loses the marker — the surviving durable value rehydrates as a
@@ -446,8 +447,8 @@ type cachedEntry struct {
 	// eviction the peer refreshed UpdatedAt just before withdrawing, so the rehydrated entry can
 	// survive up to the full sweep maxAge PLUS one sweep interval before the retry fires. Either
 	// way the exposure is bounded staleness of a routing cache entry, not a permanent leak.
-	pendingSourceDelete   bool
-	pendingDeleteRevision int64
+	pendingSourceDelete bool
+	pendingRemovals     map[string]time.Time
 }
 
 // NewStreamRegistry creates a registry backed by the supplied Commodore
@@ -635,13 +636,12 @@ func (r *StreamRegistry) SweepStaleLocations(maxAge time.Duration) (locationsRem
 		return 0, 0
 	}
 	cutoff := time.Now().Add(-maxAge)
-	var publishUpserts []StreamEntry
-	type revisionedDelete struct {
+	type locationRemoval struct {
 		internalName string
-		entry        StreamEntry
-		revision     int64
+		identity     StreamEntry
+		removals     map[string]time.Time
 	}
-	var publishDeletes []revisionedDelete
+	var publishRemovals, publishDeletes []locationRemoval
 	type expiredOutbound struct {
 		internalName string
 		pull         OutboundPull
@@ -655,21 +655,21 @@ func (r *StreamRegistry) SweepStaleLocations(maxAge time.Duration) (locationsRem
 				// A projection landed while the durable delete was pending — the entry is live again;
 				// the delete decision is obsolete (the new projection's higher revision owns the key).
 				ce.pendingSourceDelete = false
-				ce.pendingDeleteRevision = 0
+				ce.pendingRemovals = nil
 			} else {
-				// Retry the durable delete a previous pass could not publish.
-				publishDeletes = append(publishDeletes, revisionedDelete{internalName: internalName, entry: ce.entry, revision: ce.pendingDeleteRevision})
+				// Retry the durable removal a previous pass could not publish.
+				identity := ce.entry
+				identity.Locations = nil
+				publishDeletes = append(publishDeletes, locationRemoval{internalName: internalName, identity: identity, removals: ce.pendingRemovals})
 				continue
 			}
 		}
 		if len(ce.entry.Locations) == 0 {
 			continue
 		}
-		// Capture the local cluster's source revision BEFORE the eviction loop clears Locations: the
-		// revisioned delete must carry it, and a cleared map reads 0 (which a versioned watermark
-		// rejects — the tombstone would never fire and the durable value would resurrect on rehydrate).
-		localRevision := ce.entry.Locations[r.clusterID].SourceRevision
-		anyChanged := false
+		// Each removal carries the expired Location's UpdatedAt, so a renewal another replica
+		// committed meanwhile survives the durable removal.
+		removed := make(map[string]time.Time)
 		for cid, loc := range ce.entry.Locations {
 			// Expiry is enacted outside the memory lock against the current
 			// durable attempt, so a concurrent peer renewal cannot be erased.
@@ -703,20 +703,25 @@ func (r *StreamRegistry) SweepStaleLocations(maxAge time.Duration) (locationsRem
 			}
 			if loc.UpdatedAt.Before(cutoff) {
 				delete(ce.entry.Locations, cid)
+				removed[cid] = loc.UpdatedAt
 				locationsRemoved++
-				anyChanged = true
 			}
 		}
-		if len(ce.entry.Locations) == 0 && anyChanged {
-			// Do NOT evict the entry yet: publish the durable revisioned delete FIRST, and only
-			// remove the local entry once the tombstone is durably published (below). Evicting first
-			// would leave a failed publish with nothing to retry from.
+		if len(removed) == 0 {
+			continue
+		}
+		identity := ce.entry
+		identity.Locations = nil
+		if len(ce.entry.Locations) == 0 {
+			// Do NOT evict the entry yet: publish the durable removal FIRST, and only remove the
+			// local entry once it is durably published (below). Evicting first would leave a failed
+			// publish with nothing to retry from.
 			ce.pendingSourceDelete = true
-			ce.pendingDeleteRevision = localRevision
-			publishDeletes = append(publishDeletes, revisionedDelete{internalName: internalName, entry: ce.entry, revision: localRevision})
-		} else if anyChanged {
+			ce.pendingRemovals = removed
+			publishDeletes = append(publishDeletes, locationRemoval{internalName: internalName, identity: identity, removals: removed})
+		} else {
 			ce.cached = time.Now()
-			publishUpserts = append(publishUpserts, ce.entry)
+			publishRemovals = append(publishRemovals, locationRemoval{internalName: internalName, identity: identity, removals: removed})
 		}
 	}
 	r.mu.Unlock()
@@ -733,17 +738,17 @@ func (r *StreamRegistry) SweepStaleLocations(maxAge time.Duration) (locationsRem
 			r.redisLogger.WithError(err).Warn("Failed to expire outbound pull")
 		}
 	}
-	for _, e := range publishUpserts {
-		r.publishUpsertSource(e)
+	for _, rm := range publishRemovals {
+		r.publishSourceRemovals(rm.identity, rm.removals)
 	}
 	for _, del := range publishDeletes {
-		if !r.publishDeleteSource(del.entry, del.revision) {
+		if !r.publishSourceRemovals(del.identity, del.removals) {
 			// Transient failure — the entry stays marked pendingSourceDelete and the next sweep
-			// retries the durable delete.
+			// retries the durable removal.
 			continue
 		}
-		// Tombstone durably published (or obsoleted by a newer revision, which owns the key now
-		// either way) — evict the local entry, unless a projection re-populated it meanwhile.
+		// Removal durably published (or obsoleted by a newer write, which owns the key now either
+		// way) — evict the local entry, unless a projection re-populated it meanwhile.
 		r.mu.Lock()
 		if ce, ok := r.byInt[del.internalName]; ok && ce.pendingSourceDelete && len(ce.entry.Locations) == 0 {
 			delete(r.byInt, del.internalName)
@@ -1074,7 +1079,9 @@ func (r *StreamRegistry) store(e StreamEntry) {
 		r.byPlay[ce.entry.PlaybackID] = ce
 	}
 	snapshot = ce.entry
-	snapshot.Locations = cloneLocations(ce.entry.Locations)
+	// Hydration refreshes identity only; the cached Locations may be stale for
+	// their writers, and publishing them would roll back or erase newer ones.
+	snapshot.Locations = nil
 	r.mu.Unlock()
 	r.publishUpsertSource(snapshot)
 }

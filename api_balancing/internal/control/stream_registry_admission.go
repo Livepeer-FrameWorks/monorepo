@@ -120,7 +120,7 @@ func (r *StreamRegistry) projectSourceWithPriorGeneration(internalName, nodeID s
 	ce.entry.Locations[r.clusterID] = loc
 	ce.cached = time.Now()
 	snapshot = ce.entry
-	snapshot.Locations = cloneLocations(ce.entry.Locations)
+	snapshot.Locations = cloneLocations(map[string]Location{r.clusterID: loc})
 	r.mu.Unlock()
 	applied, err = r.publishUpsertSourceFenced(snapshot)
 	if err == nil && applied {
@@ -198,7 +198,7 @@ func (r *StreamRegistry) MarkSourceOwnerIfUnset(internalName, nodeID string) (st
 		ce.entry.Locations[r.clusterID] = loc
 		ce.cached = time.Now()
 		snapshot = ce.entry
-		snapshot.Locations = cloneLocations(ce.entry.Locations)
+		snapshot.Locations = cloneLocations(map[string]Location{r.clusterID: loc})
 		owner = nodeID
 		stamped = true
 	}
@@ -344,7 +344,7 @@ func (r *StreamRegistry) PublishSourceInactiveContext(ctx context.Context, inter
 	ce.entry.Locations[r.clusterID] = loc
 	ce.cached = time.Now()
 	snapshot = ce.entry
-	snapshot.Locations = cloneLocations(ce.entry.Locations)
+	snapshot.Locations = cloneLocations(map[string]Location{r.clusterID: loc})
 	r.mu.Unlock()
 	applied, err := r.publishUpsertSourceFencedContext(ctx, snapshot)
 	if err == nil && applied {

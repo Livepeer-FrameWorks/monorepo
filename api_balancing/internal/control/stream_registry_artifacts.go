@@ -335,7 +335,9 @@ func (r *StreamRegistry) UpsertLocalSource(entry StreamEntry) {
 	} else {
 		// Merge identity. Caller's data wins when previous fields are
 		// empty so a fresh PUSH_REWRITE can fill PlaybackID a prior
-		// internal-name-only resolution missed.
+		// internal-name-only resolution missed. Only identity is published:
+		// the cached Locations may be stale for their writers, and publishing
+		// them would roll back or erase newer ones.
 		if entry.StreamID != "" && ce.entry.StreamID == "" {
 			ce.entry.StreamID = entry.StreamID
 			r.byID[entry.StreamID] = ce
@@ -356,9 +358,7 @@ func (r *StreamRegistry) UpsertLocalSource(entry StreamEntry) {
 		}
 		ce.cached = time.Now()
 		snapshot = ce.entry
-		// The publish marshals outside the lock; sharing the live Locations map
-		// with the next advertisement's write is a fatal map iteration/write race.
-		snapshot.Locations = cloneLocations(ce.entry.Locations)
+		snapshot.Locations = nil
 	}
 	r.mu.Unlock()
 	r.publishUpsertSource(snapshot)
@@ -437,12 +437,9 @@ func (r *StreamRegistry) UpsertFederatedSource(peerClusterID string, entry Strea
 		ce.cached = time.Now()
 		identity = ce.entry
 	}
-	identity.Locations = nil
+	identity.Locations = map[string]Location{peerClusterID: location}
 	r.mu.Unlock()
-	// Only this peer's Location is published. A whole-entry snapshot taken here
-	// could commit after a concurrent advertisement from another peer and erase
-	// that peer's live Location from the shared store.
-	r.publishSourceLocation(identity, peerClusterID, &location)
+	r.publishUpsertSource(identity)
 }
 
 // withdrawFederatedSource removes a peer's Location from an entry. If
@@ -458,16 +455,20 @@ func (r *StreamRegistry) withdrawFederatedSource(peerClusterID, internalName str
 	if ce.entry.Locations != nil {
 		delete(ce.entry.Locations, peerClusterID)
 	}
+	// A durable Location written after this withdrawal (the peer re-advertising through another
+	// replica) is newer than the withdrawal and survives it.
+	removals := map[string]time.Time{peerClusterID: time.Now()}
+	identity := ce.entry
+	identity.Locations = nil
 	if len(ce.entry.Locations) == 0 {
 		// Publish the durable withdrawal BEFORE evicting locally: a failed publish must leave the
 		// (marked) entry behind so the sweeper retries it — evicting first would silently lose the
 		// delete and let the durable value resurrect the entry on a later rehydrate. The store
 		// deletes the source only when the withdrawn peer held its last durable Location.
 		ce.pendingSourceDelete = true
-		identity := ce.entry
-		identity.Locations = nil
+		ce.pendingRemovals = removals
 		r.mu.Unlock()
-		if !r.publishSourceLocation(identity, peerClusterID, nil) {
+		if !r.publishSourceRemovals(identity, removals) {
 			return // retained + marked; SweepStaleLocations retries the durable delete
 		}
 		r.mu.Lock()
@@ -484,10 +485,8 @@ func (r *StreamRegistry) withdrawFederatedSource(peerClusterID, internalName str
 		return
 	}
 	ce.cached = time.Now()
-	identity := ce.entry
-	identity.Locations = nil
 	r.mu.Unlock()
-	r.publishSourceLocation(identity, peerClusterID, nil)
+	r.publishSourceRemovals(identity, removals)
 }
 
 // InvalidateArtifact drops cached artifact entries by any of (hash,

@@ -393,35 +393,43 @@ func (r *StreamRegistry) publishUpsertSourceFenced(e StreamEntry) (bool, error) 
 	return r.publishUpsertSourceFencedContext(context.Background(), e)
 }
 
+// publishUpsertSourceFencedContext publishes e's identity and only the Locations e carries; every
+// other stored Location is kept. Callers pass just the Locations they own, because a cached copy of
+// another writer's Location may be stale. Caller must NOT hold r.mu.
 func (r *StreamRegistry) publishUpsertSourceFencedContext(ctx context.Context, e StreamEntry) (bool, error) {
-	r.mu.RLock()
-	store, instance := r.redisStore, r.instanceID
-	r.mu.RUnlock()
-	if store == nil {
-		r.notifySourceChanged(e.InternalName)
-		return true, nil
-	}
-	payload, err := json.Marshal(e)
-	if err != nil {
-		return false, err
-	}
-	change := RegistryChange{
-		InstanceID:     instance,
-		Entity:         RegistryEntitySource,
-		Operation:      RegistryOpUpsert,
-		Key:            e.InternalName,
-		Payload:        payload,
-		SourceRevision: sourceRevisionForCluster(e, r.clusterID),
-	}
-	applied, err := store.SetSourceRevisioned(ctx, e, change, change.SourceRevision)
-	if err == nil && applied {
-		// Observers run only once the shared CAS has settled: a lost CAS is undone
-		// locally by the caller and must never be advertised.
-		r.notifySourceChanged(e.InternalName)
-	}
+	_, applied, err := r.publishSourceWrite(ctx, SourceLocationWrite{Identity: e, Set: e.Locations}, true)
 	return applied, err
 }
 
+// publishSourceWrite commits w to the shared store, serialized per stream on this replica so
+// concurrent writers do not exhaust each other's compare-and-set retries. Observers run only once
+// the shared CAS has settled: a lost CAS is undone locally by the caller and must never be
+// advertised.
+func (r *StreamRegistry) publishSourceWrite(ctx context.Context, w SourceLocationWrite, notify bool) (RegistryChange, bool, error) {
+	r.mu.RLock()
+	store, instance := r.redisStore, r.instanceID
+	r.mu.RUnlock()
+	name := w.Identity.InternalName
+	if store == nil {
+		if notify {
+			r.notifySourceChanged(name)
+		}
+		return RegistryChange{}, true, nil
+	}
+	w.RevisionCluster = r.clusterID
+	lock := r.sourceLocationLock(name)
+	lock.Lock()
+	change, applied, err := store.WriteSourceLocations(ctx, w, instance)
+	lock.Unlock()
+	if err == nil && applied && notify {
+		r.notifySourceChanged(name)
+	}
+	return change, applied, err
+}
+
+// publishUpsertSource is publishUpsertSourceFencedContext for a mutation that is not a
+// source-ownership transition: when it loses the revision fence it is reconciled onto the newer
+// durable ownership and retried. Caller must NOT hold r.mu.
 func (r *StreamRegistry) publishUpsertSource(e StreamEntry) {
 	applied, err := r.publishUpsertSourceFenced(e)
 	if err != nil && r.redisLogger != nil {
@@ -436,7 +444,7 @@ func (r *StreamRegistry) publishUpsertSource(e StreamEntry) {
 	// behind, retain its newer non-source fields while taking ownership from Redis's higher revision,
 	// then retry. A missing durable value means a newer tombstone won and must not be resurrected.
 	r.mu.RLock()
-	store, instance, log := r.redisStore, r.instanceID, r.redisLogger
+	store, log := r.redisStore, r.redisLogger
 	r.mu.RUnlock()
 	if store == nil {
 		return
@@ -458,16 +466,11 @@ func (r *StreamRegistry) publishUpsertSource(e StreamEntry) {
 			return
 		}
 		reconciled := mergeStreamEntry(latest, e)
-		payload, marshalErr := json.Marshal(reconciled)
-		if marshalErr != nil {
-			return
+		owned := make(map[string]Location, len(e.Locations))
+		for cid := range e.Locations {
+			owned[cid] = reconciled.Locations[cid]
 		}
-		revision := sourceRevisionForCluster(reconciled, r.clusterID)
-		change := RegistryChange{
-			InstanceID: instance, Entity: RegistryEntitySource, Operation: RegistryOpUpsert,
-			Key: reconciled.InternalName, Payload: payload, SourceRevision: revision,
-		}
-		retried, retryErr := store.SetSourceRevisioned(ctx, reconciled, change, revision)
+		change, retried, retryErr := r.publishSourceWrite(ctx, SourceLocationWrite{Identity: reconciled, Set: owned}, false)
 		if retryErr != nil {
 			if log != nil {
 				log.WithError(retryErr).WithField("internal_name", e.InternalName).Warn("Stream-registry reconciled source publish failed")
@@ -484,30 +487,20 @@ func (r *StreamRegistry) publishUpsertSource(e StreamEntry) {
 	}
 }
 
-// publishSourceLocation commits only clusterID's Location (nil withdraws it) to the shared store.
-// Caller must NOT hold r.mu. It returns false only on a transient store failure; a write that lost
-// to a newer revisioned transition is settled.
-func (r *StreamRegistry) publishSourceLocation(identity StreamEntry, clusterID string, location *Location) bool {
-	r.mu.RLock()
-	store, instance, log := r.redisStore, r.instanceID, r.redisLogger
-	r.mu.RUnlock()
-	if store == nil {
-		r.notifySourceChanged(identity.InternalName)
+// publishSourceRemovals withdraws the given Locations from the shared store (see
+// SourceLocationWrite.Remove), deleting the source when none remain. Caller must NOT hold r.mu. It
+// returns false only on a transient store failure; a removal that found nothing to remove, or lost
+// to a newer revisioned transition, is settled.
+func (r *StreamRegistry) publishSourceRemovals(identity StreamEntry, removals map[string]time.Time) bool {
+	if len(removals) == 0 {
 		return true
 	}
-	identity.Locations = nil
-	lock := r.sourceLocationLock(identity.InternalName)
-	lock.Lock()
-	applied, err := store.SetSourceLocation(context.Background(), identity, clusterID, location, instance)
-	lock.Unlock()
+	_, _, err := r.publishSourceWrite(context.Background(), SourceLocationWrite{Identity: identity, Remove: removals}, true)
 	if err != nil {
-		if log != nil {
-			log.WithError(err).WithField("internal_name", identity.InternalName).WithField("cluster_id", clusterID).Warn("Stream-registry source location publish failed")
+		if r.redisLogger != nil {
+			r.redisLogger.WithError(err).WithField("internal_name", identity.InternalName).Warn("Stream-registry source location removal failed; entry retained for retry")
 		}
 		return false
-	}
-	if applied {
-		r.notifySourceChanged(identity.InternalName)
 	}
 	return true
 }
@@ -518,57 +511,6 @@ func (r *StreamRegistry) sourceLocationLock(internalName string) *sync.Mutex {
 		hash = hash*16777619 ^ uint32(internalName[i])
 	}
 	return &r.sourceLocationLocks[hash%uint32(len(r.sourceLocationLocks))]
-}
-
-// publishDeleteSource publishes the entry's eviction as a revisioned tombstone. revision is the local
-// cluster's last-known source revision, captured by the caller BEFORE it cleared the Location (a
-// cleared map always reads 0, which a versioned watermark rejects — the delete would silently never
-// happen and the durable value would resurrect the entry on the next rehydrate). When the caller has
-// no revision (the location was already absent), the durable watermark itself carries the delete:
-// equal-revision deletes are accepted (delete-if-not-superseded), so the watermark is exactly the
-// newest revision this delete is entitled to erase, and a concurrent newer projection still wins the
-// CAS.
-// publishDeleteSource returns true when the delete is SETTLED — the tombstone was durably published,
-// or it lost the revision CAS to a strictly newer transition (which now owns the key, so there is
-// nothing left to retry). It returns false only on a TRANSIENT failure (watermark read or Redis
-// script error); the caller must then RETAIN its local entry so a later sweep retries — this is what
-// makes the retry real rather than a comment (an evicted entry leaves nothing to retry from).
-func (r *StreamRegistry) publishDeleteSource(entry StreamEntry, revision int64) bool {
-	r.mu.RLock()
-	store, instance, log := r.redisStore, r.instanceID, r.redisLogger
-	r.mu.RUnlock()
-	if store == nil || entry.InternalName == "" {
-		// No durable store to reconcile against — nothing to publish, nothing to retry.
-		return true
-	}
-	if revision == 0 {
-		watermark, wErr := store.GetSourceRevision(context.Background(), entry.InternalName)
-		if wErr != nil {
-			if log != nil {
-				log.WithError(wErr).WithField("internal_name", entry.InternalName).Warn("Stream-registry source delete could not read the revision watermark; entry retained for retry")
-			}
-			return false
-		}
-		revision = watermark
-	}
-	change := RegistryChange{
-		InstanceID:     instance,
-		Entity:         RegistryEntitySource,
-		Operation:      RegistryOpDelete,
-		Key:            entry.InternalName,
-		SourceRevision: revision,
-	}
-	applied, err := store.DeleteSourceRevisioned(context.Background(), entry.InternalName, change, revision)
-	if err != nil {
-		if log != nil {
-			log.WithError(err).WithField("internal_name", entry.InternalName).Warn("Stream-registry revisioned source delete failed; entry retained for retry")
-		}
-		return false
-	}
-	if !applied && log != nil {
-		log.WithField("internal_name", entry.InternalName).Debug("Stream-registry source delete lost the revision CAS to a newer transition")
-	}
-	return true
 }
 
 func (r *StreamRegistry) publishUpsertArtifact(e ArtifactEntry) {

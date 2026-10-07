@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"time"
 
 	pkgredis "github.com/Livepeer-FrameWorks/monorepo/pkg/redis"
 	goredis "github.com/redis/go-redis/v9"
@@ -167,66 +168,99 @@ func (r *RedisRegistryStore) SetSourceRevisioned(ctx context.Context, entry Stre
 	return false, errors.New("registry redis: concurrent source mutations exceeded retry limit")
 }
 
-// SetSourceLocation commits one cluster's Location against the latest durable snapshot and keeps
-// every other cluster's Location as stored. A nil location withdraws that cluster; withdrawing the
-// last Location deletes the source under the same snapshot compare. Writers that each own a single
-// Location (peer advertisements) use this instead of a whole-entry write, because a whole-entry
-// snapshot taken before a concurrent writer's commit would erase that writer's Location.
-func (r *RedisRegistryStore) SetSourceLocation(ctx context.Context, identity StreamEntry, clusterID string, location *Location, instance string) (bool, error) {
-	if identity.InternalName == "" || clusterID == "" {
-		return false, errors.New("registry redis: source location write needs internal_name and cluster")
+// SourceLocationWrite is one writer's change to a source: its identity fields plus only the
+// Locations that writer owns. Locations it neither sets nor removes keep their stored value, so a
+// writer whose view of other clusters is stale cannot erase or roll back their Locations.
+type SourceLocationWrite struct {
+	// Identity carries the entry fields; its Locations are ignored. Set identity fields win over
+	// stored ones.
+	Identity StreamEntry
+	// Set replaces these clusters' Locations.
+	Set map[string]Location
+	// Remove withdraws these clusters' Locations. A non-zero time removes the stored Location only
+	// while its UpdatedAt is not after that time, so a newer write from another replica survives.
+	Remove map[string]time.Time
+	// RevisionCluster names the cluster whose Location carries the source revision. A write that
+	// sets it is fenced by that Location's SourceRevision; any other write rides the current
+	// watermark, because it changes no source ownership.
+	RevisionCluster string
+}
+
+// WriteSourceLocations commits w against the latest durable snapshot. Removing the last Location
+// deletes the source under the same snapshot compare, carrying the watermark as its tombstone. It
+// returns the committed change and whether the store changed.
+func (r *RedisRegistryStore) WriteSourceLocations(ctx context.Context, w SourceLocationWrite, instance string) (RegistryChange, bool, error) {
+	internalName := w.Identity.InternalName
+	if internalName == "" {
+		return RegistryChange{}, false, errors.New("registry redis: source location write has empty internal_name")
 	}
+	fenceLoc, fenced := w.Set[w.RevisionCluster]
 	for attempt := 0; attempt < 16; attempt++ {
-		current, raw, err := r.readSourceSnapshot(ctx, identity.InternalName)
+		current, raw, err := r.readSourceSnapshot(ctx, internalName)
 		if err != nil {
-			return false, err
+			return RegistryChange{}, false, err
 		}
-		previous, had := current.Locations[clusterID]
-		entry := current
+		watermark, err := r.GetSourceRevision(ctx, internalName)
+		if err != nil {
+			return RegistryChange{}, false, err
+		}
+		// A missing value under a watermark is a tombstone; only a Location write may recreate it.
+		if raw == "" && len(w.Set) == 0 && (watermark > 0 || len(w.Remove) > 0) {
+			return RegistryChange{}, false, nil
+		}
+		identity := w.Identity
+		identity.Locations = nil
+		entry := fillStreamIdentity(identity, current)
 		entry.Locations = cloneLocations(current.Locations)
-		var result int64
-		switch {
-		case location != nil:
-			entry = fillStreamIdentity(entry, identity)
-			if entry.HydratedAt.IsZero() {
-				entry.HydratedAt = identity.HydratedAt
-			}
-			loc := *location
+		for cid, loc := range w.Set {
+			previous := current.Locations[cid]
 			if len(previous.InboundPulls) > 0 || previous.OutboundRevision > 0 {
 				loc = preserveOutbound(previous, loc)
 				loc.InboundPulls = mergeInboundPulls(previous, loc)
 				loc = syncReplicationView(loc)
 			}
-			entry.Locations[clusterID] = loc
-			revision := sourceRevisionForCluster(entry, r.clusterID)
-			change := RegistryChange{InstanceID: instance, Entity: RegistryEntitySource, Operation: RegistryOpUpsert, Key: entry.InternalName, SourceRevision: revision}
-			result, err = r.compareAndSetSource(ctx, entry, change, revision, raw)
-		case !had:
-			return false, nil
-		case len(entry.Locations) > 1:
-			delete(entry.Locations, clusterID)
-			revision := sourceRevisionForCluster(entry, r.clusterID)
-			change := RegistryChange{InstanceID: instance, Entity: RegistryEntitySource, Operation: RegistryOpUpsert, Key: entry.InternalName, SourceRevision: revision}
-			result, err = r.compareAndSetSource(ctx, entry, change, revision, raw)
-		default:
-			// Destination revisions are anti-replay watermarks that an eviction must not discard.
-			if len(previous.InboundPulls) > 0 || previous.OutboundRevision > 0 {
-				return false, nil
-			}
-			// The withdrawn cluster held the last Location, so no Location carries the revision;
-			// the watermark is the newest revision this delete may erase.
-			revision, revErr := r.GetSourceRevision(ctx, identity.InternalName)
-			if revErr != nil {
-				return false, revErr
-			}
-			change := RegistryChange{InstanceID: instance, Entity: RegistryEntitySource, Operation: RegistryOpDelete, Key: identity.InternalName, SourceRevision: revision}
-			result, err = r.compareAndDeleteSource(ctx, identity.InternalName, change, revision, raw)
+			entry.Locations[cid] = loc
 		}
-		if err != nil || result != 2 {
-			return result == 1, err
+		removed := false
+		for cid, notAfter := range w.Remove {
+			previous, ok := entry.Locations[cid]
+			// Destination revisions are anti-replay watermarks that a removal must not discard.
+			if !ok || len(previous.InboundPulls) > 0 || previous.OutboundRevision > 0 ||
+				(!notAfter.IsZero() && previous.UpdatedAt.After(notAfter)) {
+				continue
+			}
+			delete(entry.Locations, cid)
+			removed = true
 		}
+		if len(w.Set) == 0 && len(w.Remove) > 0 && !removed {
+			return RegistryChange{}, false, nil
+		}
+		revision := watermark
+		if fenced {
+			revision = fenceLoc.SourceRevision
+		}
+		var change RegistryChange
+		var result int64
+		if removed && len(entry.Locations) == 0 {
+			change = RegistryChange{InstanceID: instance, Entity: RegistryEntitySource, Operation: RegistryOpDelete, Key: internalName, SourceRevision: watermark}
+			result, err = r.compareAndDeleteSource(ctx, internalName, change, watermark, raw)
+		} else {
+			change = RegistryChange{InstanceID: instance, Entity: RegistryEntitySource, Operation: RegistryOpUpsert, Key: internalName, SourceRevision: revision}
+			result, err = r.compareAndSetSource(ctx, entry, change, revision, raw)
+			if payload, marshalErr := json.Marshal(entry); marshalErr == nil {
+				change.Payload = payload
+			}
+		}
+		if err != nil {
+			return RegistryChange{}, false, err
+		}
+		// An unfenced write lost only to a watermark that moved after it was read; retry on it.
+		if result == 2 || (result == 0 && !fenced) {
+			continue
+		}
+		return change, result == 1, nil
 	}
-	return false, errors.New("registry redis: concurrent source location mutations exceeded retry limit")
+	return RegistryChange{}, false, errors.New("registry redis: concurrent source location mutations exceeded retry limit")
 }
 
 func (r *RedisRegistryStore) compareAndDeleteSource(ctx context.Context, internalName string, change RegistryChange, revision int64, expected string) (int64, error) {
