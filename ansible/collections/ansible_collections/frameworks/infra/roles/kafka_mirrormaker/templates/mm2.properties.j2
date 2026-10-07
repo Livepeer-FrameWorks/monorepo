@@ -5,10 +5,12 @@
 clusters = {{ kafka_mm_target.alias }}{% for src in kafka_mm_sources %},{{ src.alias }}{% endfor %}
 
 {# Dedicated-mode workers that are not the leader forward reconfigured task
-   configs to the leader over internode REST (KIP-710). Without it a topic
-   that appears after the leader last computed tasks never gets a
-   replication task. The listener binds only the mesh address. #}
-dedicated.mode.enable.internode.rest = true
+   configs to the leader over the internal REST server (KIP-710). Without it
+   a follower logs NotLeaderException on every reconfiguration and a topic or
+   partition that appears after the leader last computed tasks never gets a
+   replication task. MirrorMakerConfig ignores unknown keys, so this exact
+   key is the only switch. The listener binds only the mesh address. #}
+dedicated.mode.enable.internal.rest = true
 listeners = http://{{ kafka_mm_rest_address }}:{{ kafka_mm_rest_port }}
 rest.advertised.host.name = {{ kafka_mm_rest_address }}
 rest.advertised.port = {{ kafka_mm_rest_port }}

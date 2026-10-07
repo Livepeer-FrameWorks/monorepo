@@ -16,7 +16,6 @@ kafka_mm_rest_port: 8083
 # target forward connector task configs to the leader over it, so it must be
 # the mesh IP when a target has several workers; loopback keeps it private.
 kafka_mm_rest_address: "127.0.0.1"
-kafka_mm_validate_rest: false
 kafka_mm_task_count: 2
 kafka_mm_local_cluster_alias: ""
 

@@ -1,0 +1,75 @@
+---
+role_name_check: 1
+prerun: false
+dependency:
+  name: galaxy
+driver:
+  name: docker
+platforms:
+  - name: kafka-mirrormaker-instance
+    image: geerlingguy/docker-ubuntu2404-ansible:latest
+    pre_build_image: true
+    privileged: true
+    command: /usr/sbin/init
+    volumes:
+      - /sys/fs/cgroup:/sys/fs/cgroup:rw
+    cgroupns_mode: host
+    dns_servers:
+      - "1.1.1.1"
+      - "8.8.8.8"
+    tmpfs:
+      - /run
+      - /tmp
+provisioner:
+  name: ansible
+  playbooks:
+    prepare: ../../../../molecule/prepare-apt.yml
+  inventory:
+    group_vars:
+      all:
+        kafka_mm_test_artifact_url: >-
+          {{ lookup('env', 'KAFKA_ARTIFACT_URL') |
+             default('https://archive.apache.org/dist/kafka/4.2.0/kafka_2.13-4.2.0.tgz', true) }}
+        kafka_mm_test_artifact_checksum: >-
+          {{ lookup('env', 'KAFKA_ARTIFACT_CHECKSUM') |
+             default(
+               'sha512:16ce46e590ba915f01b720ea514445e49c88bf129cf4ceab' ~
+               '88878b122d54ef24f0dedb88d0eb178957f58057a6c6a9adbea8b8059307585daea13129b85ba1d8',
+               true) }}
+        # The worker runs beside a combined broker, as on a regional Kafka
+        # host. Source and target aliases name the same broker; the topic
+        # filter keeps the mirrored src.* copies from matching again.
+        kafka_version: "4.2.0"
+        kafka_artifact_url: "{{ kafka_mm_test_artifact_url }}"
+        kafka_artifact_checksum: "{{ kafka_mm_test_artifact_checksum }}"
+        kafka_role: combined
+        kafka_node_id: 1
+        kafka_cluster_id: "MkU3OEVBNTcwNTJENDM2Qk"
+        kafka_controllers:
+          - host: 127.0.0.1
+            id: 1
+        kafka_advertised_host: "127.0.0.1"
+        kafka_heap_opts: "-Xmx768m -Xms768m"
+        kafka_mm_version: "4.2.0"
+        kafka_mm_artifact_url: "{{ kafka_mm_test_artifact_url }}"
+        kafka_mm_artifact_checksum: "{{ kafka_mm_test_artifact_checksum }}"
+        kafka_mm_jmx_exporter_artifact_url: https://github.com/prometheus/jmx_exporter/releases/download/1.6.0/jmx_prometheus_javaagent-1.6.0.jar
+        kafka_mm_jmx_exporter_artifact_checksum: sha256:a95983fd96e865d2bcdf911cc500e7c82808c27ab9fd226bf96732b6c3d8c46e
+        kafka_mm_heap_opts: "-Xmx512m -Xms512m"
+        kafka_mm_rest_address: "127.0.0.1"
+        kafka_mm_local_cluster_alias: dst
+        kafka_mm_exclude_pattern: '^(dst|src)\..*'
+        kafka_mm_target:
+          alias: dst
+          bootstrap_servers: "127.0.0.1:9092"
+          replicas: 1
+        kafka_mm_sources:
+          - alias: src
+            region_id: src
+            bootstrap_servers: "127.0.0.1:9092"
+            topics: 'mirror\\..*'
+            replicas: 1
+            emit_checkpoints: false
+            tasks_max: 1
+verifier:
+  name: ansible

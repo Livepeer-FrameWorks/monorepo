@@ -53,15 +53,27 @@
         timeout: 60
       when: not ansible_check_mode
 
-    - name: Wait for Kafka MirrorMaker REST port
+    - name: Stat Kafka MirrorMaker restart marker
+      ansible.builtin.stat:
+        path: "{{ kafka_mm_restart_pending_path }}"
+      register: kafka_mm_restart_pending_stat
+      check_mode: false
+      changed_when: false
+
+    # The internal REST server only listens when MirrorMaker accepted
+    # dedicated.mode.enable.internal.rest; without it followers cannot hand
+    # reconfigured task configs to the leader. A worker with a deferred
+    # restart still runs its previous config, so it is checked after the
+    # release restarts it.
+    - name: Wait for Kafka MirrorMaker internal REST server
       ansible.builtin.wait_for:
         host: "{{ kafka_mm_rest_address }}"
         port: "{{ kafka_mm_rest_port }}"
         state: started
-        timeout: 60
+        timeout: 120
       when:
         - not ansible_check_mode
-        - kafka_mm_validate_rest | bool
+        - not kafka_mm_restart_pending_stat.stat.exists
   rescue:
     - name: Capture Kafka MirrorMaker systemctl status after failed validation
       ansible.builtin.command: "systemctl status frameworks-kafka-mirrormaker.service --no-pager -l"

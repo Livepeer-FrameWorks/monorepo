@@ -14,7 +14,7 @@ var ServicePorts = map[string]int{
 	"postgres":           5432,
 	"kafka":              9092,
 	"kafka-controller":   9093,
-	"kafka-mirrormaker":  8083,
+	"kafka-mirrormaker":  KafkaMirrorMakerRESTPort,
 	"clickhouse":         9000,
 	"listmonk":           9001,
 	"bridge":             18000,

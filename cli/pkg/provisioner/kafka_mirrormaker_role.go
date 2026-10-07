@@ -19,11 +19,14 @@ const KafkaMirrorMakerJMXPort = 9404
 // entry pinning the Prometheus JMX exporter javaagent jar.
 const kafkaMirrorMakerJMXExporterArtifact = "jmx-prometheus-javaagent"
 
-// kafkaMirrorMakerRESTAddress is where a worker's internode REST server binds
+// KafkaMirrorMakerRESTPort is the port of each worker's internal REST server.
+const KafkaMirrorMakerRESTPort = 8083
+
+// KafkaMirrorMakerRESTAddress is where a worker's internal REST server binds
 // and what it advertises to the other workers of its target: the WireGuard
 // mesh IP, so forwarding works across hosts without exposing the unauthenticated
 // endpoint on a public interface. A host without a mesh IP stays on loopback.
-func kafkaMirrorMakerRESTAddress(host inventory.Host) string {
+func KafkaMirrorMakerRESTAddress(host inventory.Host) string {
 	if ip := strings.TrimSpace(host.WireguardIP); ip != "" {
 		return ip
 	}
@@ -57,8 +60,8 @@ func kafkaMirrorMakerRoleVars(ctx context.Context, host inventory.Host, config S
 		"kafka_mm_artifact_checksum":              art.Checksum,
 		"kafka_mm_version":                        releaseVersion(config.Version, art.Version),
 		"kafka_mm_heap_opts":                      "-Xmx1G -Xms1G",
-		"kafka_mm_rest_port":                      8083,
-		"kafka_mm_rest_address":                   kafkaMirrorMakerRESTAddress(host),
+		"kafka_mm_rest_port":                      KafkaMirrorMakerRESTPort,
+		"kafka_mm_rest_address":                   KafkaMirrorMakerRESTAddress(host),
 		"kafka_mm_task_count":                     2,
 		"kafka_mm_jmx_exporter_artifact_url":      jmxExporter.URL,
 		"kafka_mm_jmx_exporter_artifact_checksum": jmxExporter.Checksum,

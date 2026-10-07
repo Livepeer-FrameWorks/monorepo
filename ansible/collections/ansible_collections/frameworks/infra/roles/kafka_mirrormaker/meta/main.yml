@@ -43,10 +43,6 @@ argument_specs:
         type: int
         required: false
         default: 2
-      kafka_mm_validate_rest:
-        type: bool
-        required: false
-        default: false
       kafka_mm_defer_restart:
         type: bool
         required: false

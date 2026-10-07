@@ -1,0 +1,72 @@
+---
+- name: Verify
+  hosts: all
+  become: true
+  gather_facts: true
+  vars:
+    kafka_topics_cli: /opt/kafka/bin/kafka-topics.sh --bootstrap-server 127.0.0.1:9092
+  tasks:
+    - name: Assert MirrorMaker accepted the internal REST switch
+      ansible.builtin.command:
+        argv:
+          - journalctl
+          - -u
+          - frameworks-kafka-mirrormaker.service
+          - --no-pager
+          - -o
+          - cat
+      register: kafka_mm_journal
+      changed_when: false
+      failed_when: "'dedicated.mode.enable.internal.rest = true' not in kafka_mm_journal.stdout"
+
+    - name: Assert the internal REST server listens on the advertised address
+      ansible.builtin.wait_for:
+        host: 127.0.0.1
+        port: 8083
+        state: started
+        timeout: 30
+
+    # A topic created after the worker started reaches the target only once
+    # the connector recomputes and publishes its task configs.
+    - name: Create a source topic after the worker started
+      ansible.builtin.command: "{{ kafka_topics_cli }} --create --if-not-exists --topic mirror.late --partitions 2 --replication-factor 1"
+      changed_when: true
+
+    - name: Produce records to the late topic
+      ansible.builtin.shell:
+        cmd: |
+          set -o pipefail
+          printf 'a\nb\nc\n' | /opt/kafka/bin/kafka-console-producer.sh --bootstrap-server 127.0.0.1:9092 --topic mirror.late
+        executable: /bin/bash
+      changed_when: true
+
+    - name: Wait for the late topic's records on its remote copy
+      ansible.builtin.shell:
+        cmd: |
+          set -o pipefail
+          /opt/kafka/bin/kafka-get-offsets.sh --bootstrap-server 127.0.0.1:9092 --time -1 --topic src.mirror.late \
+            | awk -F: '{ total += $3 } END { print total + 0 }'
+        executable: /bin/bash
+      register: kafka_mm_remote_offsets
+      changed_when: false
+      until: kafka_mm_remote_offsets.stdout | int >= 3
+      retries: 60
+      delay: 5
+
+    - name: Read the worker journal after reconfiguration
+      ansible.builtin.command:
+        argv:
+          - journalctl
+          - -u
+          - frameworks-kafka-mirrormaker.service
+          - --no-pager
+          - -o
+          - cat
+      register: kafka_mm_journal_after
+      changed_when: false
+
+    - name: Assert no task reconfiguration failed
+      ansible.builtin.assert:
+        that:
+          - '"Failed to reconfigure connector''s tasks" not in kafka_mm_journal_after.stdout'
+          - "'NotLeaderException' not in kafka_mm_journal_after.stdout"

@@ -200,8 +200,8 @@ func mirrorMakerTestHelpers(t *testing.T) RoleBuildHelpers {
 	}
 }
 
-// Dedicated-mode followers forward task configs to the leader over internode
-// REST; that endpoint is unauthenticated, so it binds and advertises the mesh
+// Dedicated-mode followers forward task configs to the leader over the
+// internal REST server; that endpoint is unauthenticated, so it binds and advertises the mesh
 // IP and never a public interface.
 func TestKafkaMirrorMakerRESTBindsMeshAddress(t *testing.T) {
 	config := ServiceConfig{Metadata: map[string]any{"platform_channel": "stable"}}
@@ -254,10 +254,16 @@ func TestKafkaMirrorMakerDeferRestartFlagReachesRole(t *testing.T) {
 	}
 }
 
-func TestKafkaMirrorMakerPropertiesEnableInternodeREST(t *testing.T) {
+// MirrorMakerConfig (Kafka 3.5+) names the switch
+// dedicated.mode.enable.internal.rest and ignores unknown keys, so a misspelt
+// key leaves the REST server off without any error.
+func TestKafkaMirrorMakerPropertiesEnableInternalREST(t *testing.T) {
 	props := readRepoFile(t, "ansible/collections/ansible_collections/frameworks/infra/roles/kafka_mirrormaker/templates/mm2.properties.j2")
+	if strings.Contains(props, "internode.rest") {
+		t.Error("mm2.properties.j2 sets dedicated.mode.enable.internode.rest, which MirrorMaker ignores")
+	}
 	for _, want := range []string{
-		"dedicated.mode.enable.internode.rest = true\n",
+		"dedicated.mode.enable.internal.rest = true\n",
 		"listeners = http://{{ kafka_mm_rest_address }}:{{ kafka_mm_rest_port }}\n",
 		"rest.advertised.host.name = {{ kafka_mm_rest_address }}\n",
 		"rest.advertised.port = {{ kafka_mm_rest_port }}\n",
