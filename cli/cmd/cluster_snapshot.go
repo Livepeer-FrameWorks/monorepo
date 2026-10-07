@@ -372,6 +372,19 @@ func postgresSnapshotBinary(yugabyte bool) string {
 	return "psql"
 }
 
+// sqlClientResolverShell defines resolve_sql_binary for a script that sets
+// BINARY: ysqlsh comes from the node's selected YugabyteDB release, any other
+// client (a path or psql) from PATH.
+const sqlClientResolverShell = provisioner.YugabyteBinaryResolverShell + `
+resolve_sql_binary() {
+  if [ "$BINARY" = "ysqlsh" ]; then
+    fw_yb_bin ysqlsh
+    return $?
+  fi
+  command -v "$BINARY"
+}
+`
+
 func snapshotRunner(pool *ssh.Pool, sshKey string, host inventory.Host, timeout time.Duration) (ssh.Runner, error) {
 	if host.ExternalIP == "" || host.ExternalIP == "localhost" || host.ExternalIP == "127.0.0.1" {
 		return ssh.NewLocalRunner(""), nil

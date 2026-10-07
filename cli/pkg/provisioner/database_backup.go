@@ -28,16 +28,6 @@ const (
 	RestorePreviousSuffix = "__prerestore"
 )
 
-// yugabyteBinaryResolver finds a YugabyteDB client binary in the layouts the yugabyte role and the upstream tarball
-// install.
-const yugabyteBinaryResolver = `fw_yb_bin() {
-  for dir in /opt/yugabyte/postgres/bin /opt/yugabyte/bin /home/yugabyte/postgres/bin /home/yugabyte/bin; do
-    if [ -x "$dir/$1" ]; then echo "$dir/$1"; return 0; fi
-  done
-  command -v "$1"
-}
-`
-
 // DatabaseServer addresses one PostgreSQL or YugabyteDB server from a shell on its host.
 type DatabaseServer struct {
 	Engine string // backup.EnginePostgres or backup.EngineYugabyte
@@ -75,7 +65,7 @@ func (s DatabaseServer) maintenanceDatabase() string {
 func (s DatabaseServer) script(body string) string {
 	prefix := "set -o pipefail\n"
 	if s.Engine == backup.EngineYugabyte {
-		prefix += yugabyteBinaryResolver
+		prefix += YugabyteBinaryResolverShell + "\n"
 	}
 	return "bash -c " + shellQuote(prefix+body)
 }

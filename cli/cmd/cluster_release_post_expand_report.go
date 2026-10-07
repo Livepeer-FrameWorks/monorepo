@@ -148,13 +148,8 @@ func postExpandReportScript(target postgresSnapshotTarget) string {
 	b.WriteString("BINARY=" + ssh.ShellQuote(target.Binary) + "\n")
 	b.WriteString("DB=" + ssh.ShellQuote(postExpandReportDatabase) + "\n")
 	b.WriteString("PEER=" + peer + "\n")
-	b.WriteString(`SQL_BIN=""
-for candidate in "$BINARY" /home/yugabyte/tserver/bin/ysqlsh /opt/yugabyte/bin/ysqlsh /usr/local/bin/ysqlsh; do
-  if command -v "$candidate" >/dev/null 2>&1; then
-    SQL_BIN="$(command -v "$candidate")"
-    break
-  fi
-done
+	b.WriteString(sqlClientResolverShell)
+	b.WriteString(`SQL_BIN="$(resolve_sql_binary)"
 if [ -z "$SQL_BIN" ]; then
   echo "$BINARY not found on the database host"
   exit 127
