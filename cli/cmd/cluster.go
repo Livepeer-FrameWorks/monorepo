@@ -1008,6 +1008,11 @@ func runDoctor(cmd *cobra.Command, rc *resolvedCluster, deep bool) error {
 			checker := &health.KafkaChecker{}
 			runInfraCheck(brokerName, checker.Check(host.ExternalIP, broker.Port))
 		}
+		if result := checkMirrorMakerWorkers(cmd.Context(), manifest, func(host inventory.Host) (fwssh.Runner, error) {
+			return getRunner(host, doctorSSHPool)
+		}); result != nil {
+			runInfraCheck("Kafka MirrorMaker2 workers", result)
+		}
 	}
 
 	fmt.Fprintln(cmd.OutOrStdout(), "")

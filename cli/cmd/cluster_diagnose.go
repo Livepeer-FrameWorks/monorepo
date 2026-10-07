@@ -319,6 +319,15 @@ func diagnoseKafka(ctx context.Context, cmd *cobra.Command, manifest *inventory.
 	failures += checkMirrorMakerTopicCoverage(ctx, cmd.OutOrStdout(), cmd.ErrOrStderr(), manifest, func(host inventory.Host) (ssh.Runner, error) {
 		return getRunner(host, pool)
 	})
+	if result := checkMirrorMakerWorkers(ctx, manifest, func(host inventory.Host) (ssh.Runner, error) {
+		return getRunner(host, pool)
+	}); result != nil {
+		fmt.Fprintln(cmd.OutOrStdout(), "\nMirrorMaker2 workers:")
+		printHealthResult(cmd, "workers", result)
+		if !result.OK {
+			failures++
+		}
+	}
 	if failures > 0 {
 		return fmt.Errorf("kafka diagnostics detected %d failed check(s)", failures)
 	}
