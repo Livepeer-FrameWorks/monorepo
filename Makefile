@@ -1222,6 +1222,7 @@ YUGABYTE_ROLE_ENGINE_TESTS := TestYugabyteRoleAppliesEveryServiceBaseline|TestYu
 NAVIGATOR_QUERY_CATALOG_REALPG_TESTS := TestGeneratedQueryCatalogPrepares_RealPG|TestTenantEdgeApplyAckDeliveryFence_RealPG|TestTenantEdgeApplyAckTeardownSerialization_RealPG|TestTenantEdgeApplyAckClusterRevocationSerialization_RealPG|TestTenantAliasReactivationTeardownSerialization_RealPG|TestTenantBundleAuthoritySerialization_RealPG|TestTenantEdgeApplyAliasFKMigrationCleansOrphans_RealPG|TestNavigatorAutomaticMigrationPhasesConverge_RealPG|TestTenantTLSBundleRevisionExpandReadsLegacyRows_RealPG
 NAVIGATOR_QUERY_CATALOG_REALYB_TESTS := TestGeneratedQueryCatalogPrepares_RealYugabyte|TestTenantEdgeApplyAckDeliveryFence_RealYugabyte|TestTenantEdgeApplyAckTeardownSerialization_RealYugabyte|TestTenantEdgeApplyAckClusterRevocationSerialization_RealYugabyte|TestTenantAliasReactivationTeardownSerialization_RealYugabyte|TestTenantBundleAuthoritySerialization_RealYugabyte|TestTenantEdgeApplyAliasFKMigrationCleansOrphans_RealYugabyte|TestNavigatorAutomaticMigrationPhasesConverge_RealYugabyte|TestTenantTLSBundleRevisionExpandReadsLegacyRows_RealYugabyte
 NAVIGATOR_STORE_REALPG_TESTS := TestNavigatorStoreQueryPack_RealPG|TestNavigatorCustomDomainSingleLifecycle_RealPG|TestNavigatorDomainEventOutbox_RealPG
+NAVIGATOR_WORKER_REALPG_TESTS := TestTenantAliasTeardownCompletesWithDNSRecordsDisabled_RealPG
 PURSER_PRESENTMENT_GRPC_REALPG_TESTS := TestCardTopupsCreditTheEURLockedAtCheckoutCreation_RealPG|TestUSDCDepositQuoteLocksEURAndAssetUnitsOnOneReferenceDate_RealPG|TestListBillingDocumentsUnionStatesChargedAndEURAmounts_RealPG|TestInvoiceDocumentStatesLinesCreditAndBothParties_RealPG|TestFinalizedDocumentKeepsThePartiesItWasIssuedTo_RealPG|TestOnSessionInvoicePaymentRecordsTheInvoiceLockedEUR_RealPG
 PURSER_TIER_FEATURES_REALPG_TESTS := TestTierFeatureFlagRemovalConverges_RealPG
 QUARTERMASTER_CAPABILITIES_REALPG_TESTS := TestTenantClusterCapabilities_RealPG
@@ -1263,6 +1264,7 @@ verify-foghorn-test-selection: verify-commodore-placement-test-selection
 	@FRAMEWORKS_TEST_SELECTION_TAGS=yugabyte_role_engine ./scripts/check-go-test-selection.sh cli ./pkg/provisioner '$(YUGABYTE_ROLE_ENGINE_TESTS)' '^TestYugabyteRole' yugabyte_role_engine
 	@./scripts/check-go-test-selection.sh api_dns ./internal/database/navigatordb '$(NAVIGATOR_QUERY_CATALOG_REALPG_TESTS)' 'RealPG$$'
 	@./scripts/check-go-test-selection.sh api_dns ./internal/store '$(NAVIGATOR_STORE_REALPG_TESTS)' 'RealPG$$'
+	@./scripts/check-go-test-selection.sh api_dns ./internal/worker '$(NAVIGATOR_WORKER_REALPG_TESTS)' 'RealPG$$'
 	@./scripts/check-go-test-selection.sh api_dns ./internal/store '$(NAVIGATOR_STORE_REALYB_TESTS)' 'RealYugabyte$$'
 	@./scripts/check-go-test-selection.sh api_webhooks ./internal/integration '$(BOSUN_REALYB_TESTS)' 'RealYugabyte$$'
 	@./scripts/check-go-test-selection.sh api_tenants ./internal/grpc '$(QUARTERMASTER_CAPABILITIES_REALYB_TESTS)' '^TestTenantClusterCapabilities.*_RealYugabyte$$'
@@ -1334,6 +1336,7 @@ verify-schema-migrations-core: verify-foghorn-test-selection
 	@$(CONTRACT_GO_TEST) api_billing postgres/purser-presentment-handlers -tags schema_verify -run '$(PURSER_PRESENTMENT_HANDLERS_REALPG_TESTS)' -count=1 -timeout 600s ./internal/handlers/
 	@$(CONTRACT_GO_TEST) api_dns postgres/navigator-query-catalog -tags schema_verify -run '$(NAVIGATOR_QUERY_CATALOG_REALPG_TESTS)' -count=1 -timeout 600s ./internal/database/navigatordb/
 	@$(CONTRACT_GO_TEST) api_dns postgres/navigator-store -tags schema_verify -run '$(NAVIGATOR_STORE_REALPG_TESTS)' -count=1 -timeout 600s ./internal/store/
+	@$(CONTRACT_GO_TEST) api_dns postgres/navigator-worker -tags schema_verify -run '$(NAVIGATOR_WORKER_REALPG_TESTS)' -count=1 -timeout 600s ./internal/worker/
 	@$(CONTRACT_GO_TEST) api_incidents postgres/lookout-query-catalog -tags schema_verify -run 'TestGeneratedQueryCatalogPrepares_RealPG' -count=1 -timeout 600s ./internal/database/lookoutdb/
 	@$(CONTRACT_GO_TEST) api_incidents postgres/lookout-incidents -tags schema_verify -run 'TestLookoutIngestStateMachine_RealPG|TestLookoutIncidentActions_RealPG|TestLookoutIncidentRescope_RealPG|TestLookoutOwnershipIngestRace_RealPG' -count=1 -timeout 600s ./internal/incidents/
 	@$(CONTRACT_GO_TEST) api_incidents postgres/lookout-delivery -tags schema_verify -run 'TestLookoutDeliveryOutboxTokenFencing_RealPG|TestLookoutDeliveryTerminalFailure_RealPG|TestLookoutDeliveryRetention_RealPG|TestLookoutOperatorActivityOutbox_RealPG' -count=1 -timeout 600s ./internal/notify/
@@ -1389,6 +1392,7 @@ verify-navigator-db: verify-foghorn-test-selection
 	@echo "Verifying Navigator's generated query catalog and store behavior on PostgreSQL and YugabyteDB (Docker)..."
 	@$(CONTRACT_GO_TEST) api_dns postgres/navigator-query-catalog -tags schema_verify -run '$(NAVIGATOR_QUERY_CATALOG_REALPG_TESTS)' -count=1 -timeout 600s ./internal/database/navigatordb/
 	@$(CONTRACT_GO_TEST) api_dns postgres/navigator-store -tags schema_verify -run '$(NAVIGATOR_STORE_REALPG_TESTS)' -count=1 -timeout 600s ./internal/store/
+	@$(CONTRACT_GO_TEST) api_dns postgres/navigator-worker -tags schema_verify -run '$(NAVIGATOR_WORKER_REALPG_TESTS)' -count=1 -timeout 600s ./internal/worker/
 	@$(YUGABYTE_FIXTURE) $(MAKE) --no-print-directory -k -j1 verify-yugabyte-navigator-contracts verify-yugabyte-distributed-navigator
 
 verify-lookout-db:

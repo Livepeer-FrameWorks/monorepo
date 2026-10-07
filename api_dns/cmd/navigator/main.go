@@ -223,9 +223,8 @@ func main() {
 		tenantZoneLabel,
 		staleSeconds,
 	)
-	if cfg.DNSRecordsEnabled {
-		go aliasWorker.Start(context.Background())
-	}
+	aliasWorker.SetDNSRecordsEnabled(cfg.DNSRecordsEnabled)
+	go aliasWorker.Start(context.Background())
 
 	// Setup monitoring
 	healthChecker := monitoring.NewHealthChecker("navigator", version.Version)

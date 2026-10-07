@@ -91,6 +91,7 @@ type AliasApplyStateWorker struct {
 	rootDomain         string
 	tenantZoneLabel    string
 	healthStaleSeconds int
+	dnsRecordsDisabled bool
 }
 
 // tenantAliasStore is the subset of store.Store this worker uses.
@@ -112,9 +113,8 @@ func NewAliasApplyStateWorker(s tenantAliasStore, bunnyClient *bunny.Client, edg
 	if healthStaleSeconds <= 0 {
 		healthStaleSeconds = 300
 	}
-	return &AliasApplyStateWorker{
+	w := &AliasApplyStateWorker{
 		store:              s,
-		bunny:              bunnyClient,
 		edges:              edges,
 		logger:             logger,
 		interval:           interval,
@@ -122,11 +122,26 @@ func NewAliasApplyStateWorker(s tenantAliasStore, bunnyClient *bunny.Client, edg
 		tenantZoneLabel:    tenantZoneLabel,
 		healthStaleSeconds: healthStaleSeconds,
 	}
+	// A nil *bunny.Client stored in the interface would pass the provider nil
+	// checks and dereference on the first call.
+	if bunnyClient != nil {
+		w.bunny = bunnyClient
+	}
+	return w
+}
+
+// SetDNSRecordsEnabled controls whether the worker calls the DNS provider.
+// Disabled, it still runs: teardowns and label retirements complete against
+// local state only, and publishing is skipped, because Navigator owns no
+// provider records to add or remove.
+func (w *AliasApplyStateWorker) SetDNSRecordsEnabled(enabled bool) {
+	w.dnsRecordsDisabled = !enabled
 }
 
 // Start runs the worker until ctx is cancelled. Runs one pass
 // immediately and then on the configured interval.
 func (w *AliasApplyStateWorker) Start(ctx context.Context) {
+	w.logger.WithField("dns_records_enabled", !w.dnsRecordsDisabled).Info("Starting tenant alias worker")
 	ticker := time.NewTicker(w.interval)
 	defer ticker.Stop()
 	w.runOnce(ctx)
@@ -181,6 +196,9 @@ func (w *AliasApplyStateWorker) reconcileTenantAlias(ctx context.Context, alias 
 // currently applied/in_dns edge rows. It is called both by the periodic
 // worker and immediately after Foghorn reports a new ACK.
 func (w *AliasApplyStateWorker) PublishTenantAlias(ctx context.Context, tenantID string) error {
+	if w.dnsRecordsDisabled {
+		return nil
+	}
 	alias, err := w.store.GetTenantAlias(ctx, tenantID)
 	if err != nil {
 		if errors.Is(err, store.ErrNotFound) {
@@ -263,7 +281,9 @@ func (w *AliasApplyStateWorker) teardown(ctx context.Context, alias store.Tenant
 	}
 	// Clear the label's records first; local state is deleted only after
 	// Bunny accepts the DNS removal.
-	if clearErr := w.clearTenantAliasRecords(ctx, alias.Subdomain); clearErr != nil {
+	if w.dnsRecordsDisabled {
+		log.WithField("subdomain", alias.Subdomain).Info("Public DNS records are disabled; removing tenant alias without clearing provider records")
+	} else if clearErr := w.clearTenantAliasRecords(ctx, alias.Subdomain); clearErr != nil {
 		log.WithError(clearErr).Warn("Failed to clear tenant alias records during teardown")
 		return
 	}
@@ -271,10 +291,13 @@ func (w *AliasApplyStateWorker) teardown(ctx context.Context, alias store.Tenant
 	// per-edge apply rows. Custom-domain credentials with an active independent
 	// intent remain intact.
 	deleted, err := w.store.DeleteTenantAlias(ctx, alias.TenantID)
-	if err != nil && !errors.Is(err, store.ErrNotFound) {
+	switch {
+	case err != nil && !errors.Is(err, store.ErrNotFound):
 		log.WithError(err).Warn("Failed to delete tenant alias during teardown")
-	} else if !deleted {
+	case !deleted:
 		log.Info("Skipped tenant alias teardown because alias authority changed")
+	default:
+		log.WithField("subdomain", alias.Subdomain).Info("Completed tenant alias teardown")
 	}
 }
 
@@ -353,6 +376,17 @@ func (w *AliasApplyStateWorker) processRetirement(ctx context.Context, r store.T
 			"requested_at": r.RequestedAt,
 			"updated_at":   active.UpdatedAt,
 		}).Error("Tenant alias retirement targets the active label but was not superseded; leaving pending (upstream logic bug)")
+		return
+	}
+
+	if w.dnsRecordsDisabled {
+		// No label is served from provider records Navigator published, so the
+		// replacement has no DNS readiness to wait for.
+		if delErr := w.store.DeleteTenantAliasRetirement(ctx, r.TenantID, r.Subdomain); delErr != nil {
+			log.WithError(delErr).Warn("Failed to delete tenant alias retirement")
+			return
+		}
+		log.Info("Public DNS records are disabled; retired tenant alias label without clearing provider records")
 		return
 	}
 

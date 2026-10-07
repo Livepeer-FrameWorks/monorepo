@@ -216,6 +216,20 @@ func TestTeardownDeletesLocalStateAfterDNSClearSucceeds(t *testing.T) {
 	}
 }
 
+func TestTeardownWithoutBunnyClientDeletesLocalState(t *testing.T) {
+	st := newFakeTenantAliasStore()
+	st.alias = &store.TenantAlias{TenantID: "tenant-1", Subdomain: "acme", Status: "tearing_down"}
+	logger := logging.NewLogger()
+	logger.SetOutput(io.Discard)
+	worker := NewAliasApplyStateWorker(st, nil, &fakeTenantEdgeResolver{}, logger, time.Second, "frameworks.network", "cdn", 300)
+
+	worker.teardown(context.Background(), *st.alias)
+
+	if !st.deletedAlias {
+		t.Fatal("alias was not deleted without a Bunny client")
+	}
+}
+
 func TestTeardownRechecksAuthorityBeforeClearingDNS(t *testing.T) {
 	ctx := context.Background()
 	st := newFakeTenantAliasStore()

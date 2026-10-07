@@ -41,7 +41,8 @@ Navigator (`api_dns`) automatically manages DNS based on node inventory from Qua
 Private staging deployments that use split DNS can set
 `NAVIGATOR_DNS_RECORDS_ENABLED=false`. This suppresses public A records, aliases, Bunny records,
 and Cloudflare load-balancer reconciliation while leaving certificate issuance and renewal active.
-Provider credentials are therefore still required for ACME DNS-01. Do not use the switch for a
+Tenant alias removals and label renames still complete in Navigator's own state; provider records
+are neither published nor cleared. Provider credentials are therefore still required for ACME DNS-01. Do not use the switch for a
 public production cluster.
 
 If no nodes are returned for a service type, Navigator skips changes to avoid removing working DNS during a transient outage.
