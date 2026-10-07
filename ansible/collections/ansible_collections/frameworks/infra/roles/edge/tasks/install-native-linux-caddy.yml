@@ -107,27 +107,31 @@
   notify: edge caddy restart
   when: ansible_check_mode
 
+# The always section runs on every pass, so a tarball an earlier run left
+# behind is removed (and reported under --check) even when nothing installs.
 - name: Install Caddy tarball
-  when:
-    - not ansible_check_mode
-    - not (edge_caddy_sentinel_stat.stat.exists | default(false))
   block:
-    - name: Download Caddy tarball
-      ansible.builtin.get_url:
-        url: "{{ edge_caddy_artifact_url }}"
-        dest: "/tmp/caddy.tar.gz"
-        checksum: "{{ edge_caddy_artifact_checksum }}"
-        mode: "0644"
-        timeout: 300
+    - name: Download and extract Caddy tarball
+      when:
+        - not ansible_check_mode
+        - not (edge_caddy_sentinel_stat.stat.exists | default(false))
+      block:
+        - name: Download Caddy tarball
+          ansible.builtin.get_url:
+            url: "{{ edge_caddy_artifact_url }}"
+            dest: "/tmp/caddy.tar.gz"
+            checksum: "{{ edge_caddy_artifact_checksum }}"
+            mode: "0644"
+            timeout: 300
 
-    - name: Extract Caddy
-      ansible.builtin.unarchive:
-        src: "/tmp/caddy.tar.gz"
-        dest: "/opt/frameworks/caddy"
-        remote_src: true
-        creates: "{{ edge_caddy_install_sentinel }}"
-      register: edge_caddy_extract_result
-      notify: edge caddy restart
+        - name: Extract Caddy
+          ansible.builtin.unarchive:
+            src: "/tmp/caddy.tar.gz"
+            dest: "/opt/frameworks/caddy"
+            remote_src: true
+            creates: "{{ edge_caddy_install_sentinel }}"
+          register: edge_caddy_extract_result
+          notify: edge caddy restart
   always:
     - name: Remove downloaded Caddy tarball
       ansible.builtin.file:

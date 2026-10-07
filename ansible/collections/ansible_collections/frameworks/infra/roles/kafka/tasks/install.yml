@@ -102,30 +102,34 @@
     - not ansible_check_mode
     - kafka_reinstall_required | default(false)
 
+# The always section runs on every pass, so a tarball an earlier run left
+# behind is removed (and reported under --check) even when nothing reinstalls.
 - name: Install Kafka tarball
-  when:
-    - not ansible_check_mode
-    - kafka_reinstall_required | bool
   block:
-    - name: Download Kafka tarball
-      ansible.builtin.get_url:
-        url: "{{ kafka_artifact_url }}"
-        dest: "{{ kafka_tarball_path }}"
-        checksum: "{{ kafka_artifact_checksum }}"
-        mode: "0644"
-        timeout: 300
+    - name: Download and extract Kafka tarball
+      when:
+        - not ansible_check_mode
+        - kafka_reinstall_required | bool
+      block:
+        - name: Download Kafka tarball
+          ansible.builtin.get_url:
+            url: "{{ kafka_artifact_url }}"
+            dest: "{{ kafka_tarball_path }}"
+            checksum: "{{ kafka_artifact_checksum }}"
+            mode: "0644"
+            timeout: 300
 
-    - name: Extract Kafka
-      ansible.builtin.unarchive:
-        src: "{{ kafka_tarball_path }}"
-        dest: "{{ kafka_install_dir }}"
-        remote_src: true
-        owner: "{{ kafka_user }}"
-        group: "{{ kafka_group }}"
-        extra_opts:
-          - --strip-components=1
-        creates: "{{ kafka_install_sentinel }}"
-      notify: kafka restart
+        - name: Extract Kafka
+          ansible.builtin.unarchive:
+            src: "{{ kafka_tarball_path }}"
+            dest: "{{ kafka_install_dir }}"
+            remote_src: true
+            owner: "{{ kafka_user }}"
+            group: "{{ kafka_group }}"
+            extra_opts:
+              - --strip-components=1
+            creates: "{{ kafka_install_sentinel }}"
+          notify: kafka restart
   always:
     - name: Remove downloaded Kafka tarball
       ansible.builtin.file:

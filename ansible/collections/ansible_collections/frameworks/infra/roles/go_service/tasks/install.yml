@@ -242,57 +242,61 @@
   changed_when: go_service_reinstall_required | bool
   when: ansible_check_mode
 
+# The always section runs on every pass, so an archive an earlier run left
+# behind is removed (and reported under --check) even when nothing reinstalls.
 - name: Install pinned artifact
-  when:
-    - not ansible_check_mode
-    - go_service_reinstall_required | bool
   block:
-    - name: Download pinned artifact
-      ansible.builtin.get_url:
-        url: "{{ go_service_artifact_url }}"
-        dest: "{{ go_service_asset_path }}"
-        checksum: "{{ go_service_artifact_checksum }}"
-        mode: "0644"
-        timeout: 300
-      register: go_service_artifact_download
-      until: go_service_artifact_download is succeeded
-      retries: 5
-      delay: 10
+    - name: Download and extract pinned artifact
+      when:
+        - not ansible_check_mode
+        - go_service_reinstall_required | bool
+      block:
+        - name: Download pinned artifact
+          ansible.builtin.get_url:
+            url: "{{ go_service_artifact_url }}"
+            dest: "{{ go_service_asset_path }}"
+            checksum: "{{ go_service_artifact_checksum }}"
+            mode: "0644"
+            timeout: 300
+          register: go_service_artifact_download
+          until: go_service_artifact_download is succeeded
+          retries: 5
+          delay: 10
 
-    - name: Remove stale install sentinel before service binary reinstall
-      ansible.builtin.file:
-        path: "{{ go_service_install_sentinel }}"
-        state: absent
+        - name: Remove stale install sentinel before service binary reinstall
+          ansible.builtin.file:
+            path: "{{ go_service_install_sentinel }}"
+            state: absent
 
-    - name: Find existing binary candidates before service binary reinstall
-      ansible.builtin.find:
-        paths: "{{ go_service_install_dir }}"
-        file_type: file
-        recurse: false
-        patterns:
-          - "{{ go_service_name }}"
-          - "frameworks-{{ go_service_name }}"
-          - "{{ go_service_binary_name }}"
-          - frameworks
-      register: go_service_existing_binary_candidates
+        - name: Find existing binary candidates before service binary reinstall
+          ansible.builtin.find:
+            paths: "{{ go_service_install_dir }}"
+            file_type: file
+            recurse: false
+            patterns:
+              - "{{ go_service_name }}"
+              - "frameworks-{{ go_service_name }}"
+              - "{{ go_service_binary_name }}"
+              - frameworks
+          register: go_service_existing_binary_candidates
 
-    - name: Remove existing binary candidates before service binary reinstall
-      ansible.builtin.file:
-        path: "{{ item.path }}"
-        state: absent
-      loop: "{{ go_service_existing_binary_candidates.files | default([]) }}"
-      loop_control:
-        label: "{{ item.path }}"
+        - name: Remove existing binary candidates before service binary reinstall
+          ansible.builtin.file:
+            path: "{{ item.path }}"
+            state: absent
+          loop: "{{ go_service_existing_binary_candidates.files | default([]) }}"
+          loop_control:
+            label: "{{ item.path }}"
 
-    - name: Extract artifact
-      ansible.builtin.unarchive:
-        src: "{{ go_service_asset_path }}"
-        dest: "{{ go_service_install_dir }}"
-        remote_src: true
-        owner: "{{ go_service_user }}"
-        group: "{{ go_service_group }}"
-        creates: "{{ go_service_install_sentinel }}"
-      notify: go_service restart
+        - name: Extract artifact
+          ansible.builtin.unarchive:
+            src: "{{ go_service_asset_path }}"
+            dest: "{{ go_service_install_dir }}"
+            remote_src: true
+            owner: "{{ go_service_user }}"
+            group: "{{ go_service_group }}"
+            creates: "{{ go_service_install_sentinel }}"
+          notify: go_service restart
   always:
     - name: Remove downloaded artifact
       ansible.builtin.file:

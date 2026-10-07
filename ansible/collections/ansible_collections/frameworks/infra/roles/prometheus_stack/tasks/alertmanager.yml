@@ -52,48 +52,52 @@
   changed_when: alertmanager_reinstall_required | bool
   when: ansible_check_mode
 
+# The always section runs on every pass, so files an earlier run left behind
+# are removed (and reported under --check) even when nothing reinstalls.
 - name: Install alertmanager artifact
-  when:
-    - not ansible_check_mode
-    - alertmanager_reinstall_required | bool
   block:
-    - name: Ensure alertmanager extract directory
-      ansible.builtin.file:
-        path: "{{ alertmanager_extract_dir }}"
-        state: directory
-        owner: root
-        group: root
-        mode: "0755"
+    - name: Download, extract and install alertmanager
+      when:
+        - not ansible_check_mode
+        - alertmanager_reinstall_required | bool
+      block:
+        - name: Ensure alertmanager extract directory
+          ansible.builtin.file:
+            path: "{{ alertmanager_extract_dir }}"
+            state: directory
+            owner: root
+            group: root
+            mode: "0755"
 
-    - name: Download alertmanager archive
-      ansible.builtin.get_url:
-        url: "{{ alertmanager_artifact_url }}"
-        dest: /tmp/alertmanager.tar.gz
-        checksum: "{{ alertmanager_artifact_checksum }}"
-        mode: "0644"
+        - name: Download alertmanager archive
+          ansible.builtin.get_url:
+            url: "{{ alertmanager_artifact_url }}"
+            dest: /tmp/alertmanager.tar.gz
+            checksum: "{{ alertmanager_artifact_checksum }}"
+            mode: "0644"
 
-    # The upstream archive nests binaries under alertmanager-<version>.<os>-<arch>/.
-    - name: Extract alertmanager
-      ansible.builtin.unarchive:
-        src: /tmp/alertmanager.tar.gz
-        dest: "{{ alertmanager_extract_dir }}"
-        remote_src: true
-        extra_opts:
-          - --strip-components=1
-        creates: "{{ alertmanager_extract_dir }}/alertmanager"
+        # The upstream archive nests binaries under alertmanager-<version>.<os>-<arch>/.
+        - name: Extract alertmanager
+          ansible.builtin.unarchive:
+            src: /tmp/alertmanager.tar.gz
+            dest: "{{ alertmanager_extract_dir }}"
+            remote_src: true
+            extra_opts:
+              - --strip-components=1
+            creates: "{{ alertmanager_extract_dir }}/alertmanager"
 
-    - name: Install alertmanager binaries
-      ansible.builtin.copy:
-        src: "{{ alertmanager_extract_dir }}/{{ item.name }}"
-        dest: "{{ item.dest }}"
-        remote_src: true
-        owner: root
-        group: root
-        mode: "0755"
-      loop:
-        - { name: alertmanager, dest: "{{ alertmanager_bin }}" }
-        - { name: amtool, dest: "{{ amtool_bin }}" }
-      notify: alertmanager restart
+        - name: Install alertmanager binaries
+          ansible.builtin.copy:
+            src: "{{ alertmanager_extract_dir }}/{{ item.name }}"
+            dest: "{{ item.dest }}"
+            remote_src: true
+            owner: root
+            group: root
+            mode: "0755"
+          loop:
+            - { name: alertmanager, dest: "{{ alertmanager_bin }}" }
+            - { name: amtool, dest: "{{ amtool_bin }}" }
+          notify: alertmanager restart
   always:
     - name: Remove alertmanager download and extract directory
       ansible.builtin.file:

@@ -58,87 +58,91 @@
   when: ansible_check_mode
 
 # Every apply downloads the pinned artifact to compare its binary with the
-# installed one, which the component updater may have replaced.
+# installed one, which the component updater may have replaced. The always
+# section runs on every pass, so an asset an earlier run left behind is removed
+# (and reported under --check) too.
 - name: Install Helmsman artifact
-  when: not ansible_check_mode
   block:
-    - name: Download Helmsman asset
-      ansible.builtin.get_url:
-        url: "{{ helmsman_artifact_url }}"
-        dest: "/tmp/helmsman.asset"
-        checksum: "{{ helmsman_artifact_checksum }}"
-        mode: "0644"
-        timeout: 300
-        headers:
-          Cache-Control: no-cache
-      register: helmsman_download
-      until: helmsman_download is succeeded
-      retries: 4
-      delay: 3
+    - name: Download, verify and extract Helmsman artifact
+      when: not ansible_check_mode
+      block:
+        - name: Download Helmsman asset
+          ansible.builtin.get_url:
+            url: "{{ helmsman_artifact_url }}"
+            dest: "/tmp/helmsman.asset"
+            checksum: "{{ helmsman_artifact_checksum }}"
+            mode: "0644"
+            timeout: 300
+            headers:
+              Cache-Control: no-cache
+          register: helmsman_download
+          until: helmsman_download is succeeded
+          retries: 4
+          delay: 3
 
-    - name: Create Helmsman artifact verification directory
-      ansible.builtin.tempfile:
-        state: directory
-        suffix: helmsman-verify
-      register: helmsman_verify_dir
+        - name: Create Helmsman artifact verification directory
+          ansible.builtin.tempfile:
+            state: directory
+            suffix: helmsman-verify
+          register: helmsman_verify_dir
 
-    - name: Extract Helmsman artifact for binary verification
-      ansible.builtin.unarchive:
-        src: "/tmp/helmsman.asset"
-        dest: "{{ helmsman_verify_dir.path }}"
-        remote_src: true
+        - name: Extract Helmsman artifact for binary verification
+          ansible.builtin.unarchive:
+            src: "/tmp/helmsman.asset"
+            dest: "{{ helmsman_verify_dir.path }}"
+            remote_src: true
 
-    - name: Read desired Helmsman binary checksum
-      ansible.builtin.shell: |
-        set -e
-        desired_binary=""
-        for candidate in \
-          "{{ helmsman_verify_dir.path }}"/frameworks-helmsman-* \
-          "{{ helmsman_verify_dir.path }}/frameworks" \
-          "{{ helmsman_verify_dir.path }}/helmsman"; do
-          if [ -f "$candidate" ]; then
-            desired_binary="$candidate"
-            break
-          fi
-        done
-        if [ -z "$desired_binary" ]; then
-          echo "missing helmsman binary in artifact" >&2
-          exit 1
-        fi
-        sha256sum "$desired_binary"
-      args:
-        executable: /bin/sh
-      register: helmsman_desired_binary_checksum
-      changed_when: false
+        - name: Read desired Helmsman binary checksum
+          ansible.builtin.shell: |
+            set -e
+            desired_binary=""
+            for candidate in \
+              "{{ helmsman_verify_dir.path }}"/frameworks-helmsman-* \
+              "{{ helmsman_verify_dir.path }}/frameworks" \
+              "{{ helmsman_verify_dir.path }}/helmsman"; do
+              if [ -f "$candidate" ]; then
+                desired_binary="$candidate"
+                break
+              fi
+            done
+            if [ -z "$desired_binary" ]; then
+              echo "missing helmsman binary in artifact" >&2
+              exit 1
+            fi
+            sha256sum "$desired_binary"
+          args:
+            executable: /bin/sh
+          register: helmsman_desired_binary_checksum
+          changed_when: false
 
-    - name: Read installed Helmsman binary checksum
-      ansible.builtin.command:
-        argv:
-          - sha256sum
-          - "{{ helmsman_install_dir }}/helmsman"
-      register: helmsman_installed_binary_checksum
-      changed_when: false
-      failed_when: false
+        - name: Read installed Helmsman binary checksum
+          ansible.builtin.command:
+            argv:
+              - sha256sum
+              - "{{ helmsman_install_dir }}/helmsman"
+          register: helmsman_installed_binary_checksum
+          changed_when: false
+          failed_when: false
 
-    - name: Remove stale Helmsman install sentinel when binary differs from artifact
-      ansible.builtin.file:
-        path: "{{ helmsman_install_sentinel }}"
-        state: absent
-      when:
-        - helmsman_installed_binary_checksum.rc != 0
-          or ((helmsman_installed_binary_checksum.stdout.split() | first) | default(''))
-          != ((helmsman_desired_binary_checksum.stdout.split() | first) | default(''))
+        - name: Remove stale Helmsman install sentinel when binary differs from artifact
+          ansible.builtin.file:
+            path: "{{ helmsman_install_sentinel }}"
+            state: absent
+          when:
+            - helmsman_installed_binary_checksum.rc != 0
+              or ((helmsman_installed_binary_checksum.stdout.split() | first) | default(''))
+              != ((helmsman_desired_binary_checksum.stdout.split() | first) | default(''))
 
-    - name: Extract Helmsman
-      ansible.builtin.unarchive:
-        src: "/tmp/helmsman.asset"
-        dest: "{{ helmsman_install_dir }}"
-        remote_src: true
-        owner: "{{ helmsman_user }}"
-        group: "{{ helmsman_group }}"
-        creates: "{{ helmsman_install_sentinel }}"
-      register: helmsman_extract_result
-      notify: helmsman restart
+        - name: Extract Helmsman
+          ansible.builtin.unarchive:
+            src: "/tmp/helmsman.asset"
+            dest: "{{ helmsman_install_dir }}"
+            remote_src: true
+            owner: "{{ helmsman_user }}"
+            group: "{{ helmsman_group }}"
+            creates: "{{ helmsman_install_sentinel }}"
+          register: helmsman_extract_result
+          notify: helmsman restart
   always:
     - name: Remove downloaded Helmsman asset
       ansible.builtin.file:

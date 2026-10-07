@@ -79,33 +79,37 @@
   changed_when: mistserver_reinstall_required | bool
   when: ansible_check_mode
 
+# The always section runs on every pass, so a tarball an earlier run left
+# behind is removed (and reported under --check) even when nothing reinstalls.
 - name: Install MistServer tarball
-  when:
-    - not ansible_check_mode
-    - mistserver_reinstall_required | bool
   block:
-    - name: Download MistServer tarball
-      ansible.builtin.get_url:
-        url: "{{ mistserver_artifact_url }}"
-        dest: "/tmp/mistserver.tar.gz"
-        checksum: "{{ mistserver_artifact_checksum if mistserver_artifact_checksum | length > 0 else omit }}"
-        mode: "0644"
-        timeout: 300
+    - name: Download and extract MistServer tarball
+      when:
+        - not ansible_check_mode
+        - mistserver_reinstall_required | bool
+      block:
+        - name: Download MistServer tarball
+          ansible.builtin.get_url:
+            url: "{{ mistserver_artifact_url }}"
+            dest: "/tmp/mistserver.tar.gz"
+            checksum: "{{ mistserver_artifact_checksum if mistserver_artifact_checksum | length > 0 else omit }}"
+            mode: "0644"
+            timeout: 300
 
-    - name: Remove stale MistServer install sentinel before reinstall
-      ansible.builtin.file:
-        path: "{{ mistserver_install_sentinel }}"
-        state: absent
+        - name: Remove stale MistServer install sentinel before reinstall
+          ansible.builtin.file:
+            path: "{{ mistserver_install_sentinel }}"
+            state: absent
 
-    - name: Extract MistServer
-      ansible.builtin.unarchive:
-        src: "/tmp/mistserver.tar.gz"
-        dest: "{{ mistserver_install_dir }}"
-        remote_src: true
-        owner: "{{ mistserver_user }}"
-        group: "{{ mistserver_group }}"
-        creates: "{{ mistserver_install_sentinel }}"
-      notify: mistserver reload
+        - name: Extract MistServer
+          ansible.builtin.unarchive:
+            src: "/tmp/mistserver.tar.gz"
+            dest: "{{ mistserver_install_dir }}"
+            remote_src: true
+            owner: "{{ mistserver_user }}"
+            group: "{{ mistserver_group }}"
+            creates: "{{ mistserver_install_sentinel }}"
+          notify: mistserver reload
   always:
     - name: Remove downloaded MistServer tarball
       ansible.builtin.file:
@@ -317,35 +321,37 @@
     - not (mistserver_debug_sentinel_stat.stat.exists | default(false))
 
 - name: Install MistServer debug symbols
-  when:
-    - not ansible_check_mode
-    - mistserver_install_debug_symbols | bool
-    - mistserver_debug_artifact_url | trim | length > 0
-    - not (mistserver_debug_sentinel_stat.stat.exists | default(false))
   block:
-    - name: Download MistServer debug symbols
-      ansible.builtin.get_url:
-        url: "{{ mistserver_debug_artifact_url }}"
-        dest: "/tmp/mistserver-debug.tar.gz"
-        checksum: "{{ mistserver_debug_artifact_checksum if mistserver_debug_artifact_checksum | length > 0 else omit }}"
-        mode: "0644"
-        timeout: 300
+    - name: Download and extract MistServer debug symbols
+      when:
+        - not ansible_check_mode
+        - mistserver_install_debug_symbols | bool
+        - mistserver_debug_artifact_url | trim | length > 0
+        - not (mistserver_debug_sentinel_stat.stat.exists | default(false))
+      block:
+        - name: Download MistServer debug symbols
+          ansible.builtin.get_url:
+            url: "{{ mistserver_debug_artifact_url }}"
+            dest: "/tmp/mistserver-debug.tar.gz"
+            checksum: "{{ mistserver_debug_artifact_checksum if mistserver_debug_artifact_checksum | length > 0 else omit }}"
+            mode: "0644"
+            timeout: 300
 
-    - name: Extract MistServer debug symbols
-      ansible.builtin.unarchive:
-        src: "/tmp/mistserver-debug.tar.gz"
-        dest: "{{ mistserver_debug_symbols_dir }}"
-        remote_src: true
-        owner: "{{ mistserver_user }}"
-        group: "{{ mistserver_group }}"
+        - name: Extract MistServer debug symbols
+          ansible.builtin.unarchive:
+            src: "/tmp/mistserver-debug.tar.gz"
+            dest: "{{ mistserver_debug_symbols_dir }}"
+            remote_src: true
+            owner: "{{ mistserver_user }}"
+            group: "{{ mistserver_group }}"
 
-    - name: Mark MistServer debug symbols install
-      ansible.builtin.file:
-        path: "{{ mistserver_debug_install_sentinel }}"
-        state: touch
-        owner: "{{ mistserver_user }}"
-        group: "{{ mistserver_group }}"
-        mode: "0644"
+        - name: Mark MistServer debug symbols install
+          ansible.builtin.file:
+            path: "{{ mistserver_debug_install_sentinel }}"
+            state: touch
+            owner: "{{ mistserver_user }}"
+            group: "{{ mistserver_group }}"
+            mode: "0644"
   always:
     - name: Remove downloaded MistServer debug symbols
       ansible.builtin.file:

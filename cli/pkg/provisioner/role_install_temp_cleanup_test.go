@@ -9,6 +9,8 @@ import (
 // Install archives a role downloads to /tmp, and the /tmp directories it
 // extracts them into, are removed in the always section of the block that
 // creates them, so neither a finished nor a failed install leaves them behind.
+// That block carries no when: its always section also removes, and reports
+// under --check, what an earlier run left behind on runs that install nothing.
 func TestRoleInstallTemporaryFilesAreRemovedInAlways(t *testing.T) {
 	roles := ansibleTreePath(t, "collections", "ansible_collections", "frameworks", "infra", "roles")
 	files := loadRoleTaskFiles(t, roles)
@@ -52,8 +54,11 @@ func TestRoleInstallTemporaryFilesAreRemovedInAlways(t *testing.T) {
 				}
 				where := file.role + "/" + filepath.Base(file.path) + ": " + stringValue(task["name"])
 				checked[where] = true
-				if !removedInAlways(enclosing, raw) {
+				switch block := removedInAlways(enclosing, raw); {
+				case block == nil:
 					t.Errorf("%s writes %s under /tmp but no enclosing block removes it in always", where, raw)
+				case block["when"] != nil:
+					t.Errorf("%s: the block removing %s has a when, so a leftover from an earlier run survives runs that skip it", where, raw)
 				}
 			}
 		})
@@ -116,9 +121,9 @@ func collectSetFacts(tasks []any, vars map[string]any) {
 	})
 }
 
-// removedInAlways reports whether a block in enclosing removes path (by the
+// removedInAlways returns the block in enclosing that removes path (by the
 // same template expression) with a state=absent file task in its always list.
-func removedInAlways(enclosing []map[string]any, path string) bool {
+func removedInAlways(enclosing []map[string]any, path string) map[string]any {
 	want := strings.TrimSpace(path)
 	for _, block := range enclosing {
 		always, ok := block["always"].([]any)
@@ -147,8 +152,8 @@ func removedInAlways(enclosing []map[string]any, path string) bool {
 			}
 		})
 		if found {
-			return true
+			return block
 		}
 	}
-	return false
+	return nil
 }

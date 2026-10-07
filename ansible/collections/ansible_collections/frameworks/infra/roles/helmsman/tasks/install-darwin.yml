@@ -48,27 +48,31 @@
   changed_when: not (helmsman_sentinel_stat.stat.exists | default(false))
   when: ansible_check_mode
 
+# The always section runs on every pass, so an asset an earlier run left
+# behind is removed (and reported under --check) even when nothing installs.
 - name: Install Helmsman artifact
-  when:
-    - not ansible_check_mode
-    - not (helmsman_sentinel_stat.stat.exists | default(false))
   block:
-    - name: Download Helmsman asset
-      ansible.builtin.get_url:
-        url: "{{ helmsman_artifact_url }}"
-        dest: "/tmp/helmsman.asset"
-        checksum: "{{ helmsman_artifact_checksum }}"
-        mode: "0644"
-        timeout: 300
+    - name: Download and extract Helmsman artifact
+      when:
+        - not ansible_check_mode
+        - not (helmsman_sentinel_stat.stat.exists | default(false))
+      block:
+        - name: Download Helmsman asset
+          ansible.builtin.get_url:
+            url: "{{ helmsman_artifact_url }}"
+            dest: "/tmp/helmsman.asset"
+            checksum: "{{ helmsman_artifact_checksum }}"
+            mode: "0644"
+            timeout: 300
 
-    - name: Extract Helmsman
-      ansible.builtin.unarchive:
-        src: "/tmp/helmsman.asset"
-        dest: "{{ helmsman_darwin_base_dir }}/helmsman"
-        remote_src: true
-        creates: "{{ helmsman_install_sentinel }}"
-      register: helmsman_extract_result
-      notify: helmsman restart
+        - name: Extract Helmsman
+          ansible.builtin.unarchive:
+            src: "/tmp/helmsman.asset"
+            dest: "{{ helmsman_darwin_base_dir }}/helmsman"
+            remote_src: true
+            creates: "{{ helmsman_install_sentinel }}"
+          register: helmsman_extract_result
+          notify: helmsman restart
   always:
     - name: Remove downloaded Helmsman asset
       ansible.builtin.file:

@@ -61,31 +61,35 @@
   changed_when: mistserver_reinstall_required | bool
   when: ansible_check_mode
 
+# The always section runs on every pass, so a tarball an earlier run left
+# behind is removed (and reported under --check) even when nothing reinstalls.
 - name: Install MistServer tarball
-  when:
-    - not ansible_check_mode
-    - mistserver_reinstall_required | bool
   block:
-    - name: Download MistServer tarball
-      ansible.builtin.get_url:
-        url: "{{ mistserver_artifact_url }}"
-        dest: "/tmp/mistserver.tar.gz"
-        checksum: "{{ mistserver_artifact_checksum if mistserver_artifact_checksum | length > 0 else omit }}"
-        mode: "0644"
-        timeout: 300
+    - name: Download and extract MistServer tarball
+      when:
+        - not ansible_check_mode
+        - mistserver_reinstall_required | bool
+      block:
+        - name: Download MistServer tarball
+          ansible.builtin.get_url:
+            url: "{{ mistserver_artifact_url }}"
+            dest: "/tmp/mistserver.tar.gz"
+            checksum: "{{ mistserver_artifact_checksum if mistserver_artifact_checksum | length > 0 else omit }}"
+            mode: "0644"
+            timeout: 300
 
-    - name: Remove stale MistServer install sentinel before reinstall
-      ansible.builtin.file:
-        path: "{{ mistserver_install_sentinel }}"
-        state: absent
+        - name: Remove stale MistServer install sentinel before reinstall
+          ansible.builtin.file:
+            path: "{{ mistserver_install_sentinel }}"
+            state: absent
 
-    - name: Extract MistServer
-      ansible.builtin.unarchive:
-        src: "/tmp/mistserver.tar.gz"
-        dest: "{{ mistserver_darwin_base_dir }}/mistserver"
-        remote_src: true
-        creates: "{{ mistserver_install_sentinel }}"
-      notify: mistserver reload
+        - name: Extract MistServer
+          ansible.builtin.unarchive:
+            src: "/tmp/mistserver.tar.gz"
+            dest: "{{ mistserver_darwin_base_dir }}/mistserver"
+            remote_src: true
+            creates: "{{ mistserver_install_sentinel }}"
+          notify: mistserver reload
   always:
     - name: Remove downloaded MistServer tarball
       ansible.builtin.file:

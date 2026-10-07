@@ -44,43 +44,47 @@
   changed_when: vmalert_reinstall_required | bool
   when: ansible_check_mode
 
+# The always section runs on every pass, so files an earlier run left behind
+# are removed (and reported under --check) even when nothing reinstalls.
 - name: Install vmalert artifact
-  when:
-    - not ansible_check_mode
-    - vmalert_reinstall_required | bool
   block:
-    - name: Ensure vmalert extract directory
-      ansible.builtin.file:
-        path: "{{ vmalert_extract_dir }}"
-        state: directory
-        owner: root
-        group: root
-        mode: "0755"
+    - name: Download, extract and install vmalert
+      when:
+        - not ansible_check_mode
+        - vmalert_reinstall_required | bool
+      block:
+        - name: Ensure vmalert extract directory
+          ansible.builtin.file:
+            path: "{{ vmalert_extract_dir }}"
+            state: directory
+            owner: root
+            group: root
+            mode: "0755"
 
-    - name: Download vmalert binary
-      ansible.builtin.get_url:
-        url: "{{ vmalert_artifact_url }}"
-        dest: /tmp/vmalert.tar.gz
-        checksum: "{{ vmalert_artifact_checksum }}"
-        mode: "0644"
+        - name: Download vmalert binary
+          ansible.builtin.get_url:
+            url: "{{ vmalert_artifact_url }}"
+            dest: /tmp/vmalert.tar.gz
+            checksum: "{{ vmalert_artifact_checksum }}"
+            mode: "0644"
 
-    - name: Extract vmalert
-      ansible.builtin.unarchive:
-        src: /tmp/vmalert.tar.gz
-        dest: "{{ vmalert_extract_dir }}"
-        remote_src: true
-        mode: "0755"
-        creates: "{{ vmalert_extract_dir }}/{{ vmalert_artifact_binary }}"
+        - name: Extract vmalert
+          ansible.builtin.unarchive:
+            src: /tmp/vmalert.tar.gz
+            dest: "{{ vmalert_extract_dir }}"
+            remote_src: true
+            mode: "0755"
+            creates: "{{ vmalert_extract_dir }}/{{ vmalert_artifact_binary }}"
 
-    - name: Install vmalert binary
-      ansible.builtin.copy:
-        src: "{{ vmalert_extract_dir }}/{{ vmalert_artifact_binary }}"
-        dest: "{{ vmalert_bin }}"
-        remote_src: true
-        owner: root
-        group: root
-        mode: "0755"
-      notify: vmalert restart
+        - name: Install vmalert binary
+          ansible.builtin.copy:
+            src: "{{ vmalert_extract_dir }}/{{ vmalert_artifact_binary }}"
+            dest: "{{ vmalert_bin }}"
+            remote_src: true
+            owner: root
+            group: root
+            mode: "0755"
+          notify: vmalert restart
   always:
     - name: Remove vmalert download and extract directory
       ansible.builtin.file:

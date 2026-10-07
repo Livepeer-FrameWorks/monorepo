@@ -211,30 +211,34 @@
     - not ansible_check_mode
     - yugabyte_reinstall_required | default(false)
 
+# The always section runs on every pass, so a tarball an earlier run left
+# behind is removed (and reported under --check) even when nothing reinstalls.
 - name: Install pinned YugabyteDB tarball
-  when:
-    - not ansible_check_mode
-    - yugabyte_reinstall_required | bool
   block:
-    - name: Download pinned YugabyteDB tarball
-      ansible.builtin.get_url:
-        url: "{{ yugabyte_artifact_url }}"
-        dest: "{{ yugabyte_tarball_path }}"
-        checksum: "{{ yugabyte_artifact_checksum }}"
-        mode: "0644"
-        timeout: 300
+    - name: Download and extract pinned YugabyteDB tarball
+      when:
+        - not ansible_check_mode
+        - yugabyte_reinstall_required | bool
+      block:
+        - name: Download pinned YugabyteDB tarball
+          ansible.builtin.get_url:
+            url: "{{ yugabyte_artifact_url }}"
+            dest: "{{ yugabyte_tarball_path }}"
+            checksum: "{{ yugabyte_artifact_checksum }}"
+            mode: "0644"
+            timeout: 300
 
-    # Each archive has its own tree. Old processes keep their executable, libraries and catalog files until restarted.
-    - name: Extract YugabyteDB tarball into clean artifact directory
-      ansible.builtin.unarchive:
-        src: "{{ yugabyte_tarball_path }}"
-        dest: "{{ yugabyte_release_dir }}"
-        remote_src: true
-        owner: "{{ yugabyte_user }}"
-        group: "{{ yugabyte_group }}"
-        extra_opts:
-          - --strip-components=1
-        creates: "{{ yugabyte_install_sentinel }}"
+        # Each archive has its own tree. Old processes keep their executable, libraries and catalog files until restarted.
+        - name: Extract YugabyteDB tarball into clean artifact directory
+          ansible.builtin.unarchive:
+            src: "{{ yugabyte_tarball_path }}"
+            dest: "{{ yugabyte_release_dir }}"
+            remote_src: true
+            owner: "{{ yugabyte_user }}"
+            group: "{{ yugabyte_group }}"
+            extra_opts:
+              - --strip-components=1
+            creates: "{{ yugabyte_install_sentinel }}"
   always:
     - name: Remove downloaded YugabyteDB tarball
       ansible.builtin.file:

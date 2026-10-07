@@ -53,40 +53,44 @@
   when: ansible_check_mode
 
 # The vmutils archive carries every vmutils binary; only vmagent is installed.
+# The always section runs on every pass, so a tarball an earlier run left
+# behind is removed (and reported under --check) even when nothing installs.
 - name: Install vmagent from the vmutils tarball
-  when:
-    - not ansible_check_mode
-    - not (edge_vmagent_sentinel_stat.stat.exists | default(false))
   block:
-    - name: Download vmutils tarball
-      ansible.builtin.get_url:
-        url: "{{ edge_vmagent_artifact_url }}"
-        dest: "/tmp/vmagent-edge.tar.gz"
-        checksum: "{{ edge_vmagent_artifact_checksum }}"
-        mode: "0644"
-        timeout: 300
+    - name: Download and extract the vmutils tarball
+      when:
+        - not ansible_check_mode
+        - not (edge_vmagent_sentinel_stat.stat.exists | default(false))
+      block:
+        - name: Download vmutils tarball
+          ansible.builtin.get_url:
+            url: "{{ edge_vmagent_artifact_url }}"
+            dest: "/tmp/vmagent-edge.tar.gz"
+            checksum: "{{ edge_vmagent_artifact_checksum }}"
+            mode: "0644"
+            timeout: 300
 
-    - name: Create vmutils extraction directory
-      ansible.builtin.tempfile:
-        state: directory
-        suffix: vmutils
-      register: edge_vmagent_extract_dir
+        - name: Create vmutils extraction directory
+          ansible.builtin.tempfile:
+            state: directory
+            suffix: vmutils
+          register: edge_vmagent_extract_dir
 
-    - name: Extract vmutils tarball
-      ansible.builtin.unarchive:
-        src: "/tmp/vmagent-edge.tar.gz"
-        dest: "{{ edge_vmagent_extract_dir.path }}"
-        remote_src: true
+        - name: Extract vmutils tarball
+          ansible.builtin.unarchive:
+            src: "/tmp/vmagent-edge.tar.gz"
+            dest: "{{ edge_vmagent_extract_dir.path }}"
+            remote_src: true
 
-    - name: Install vmagent-prod binary and mark sentinel
-      ansible.builtin.shell: |
-        set -e
-        install -m 0755 -o frameworks -g frameworks "{{ edge_vmagent_extract_dir.path }}/vmagent-prod" /opt/frameworks/vmagent-edge/vmagent
-        touch "{{ edge_vmagent_install_sentinel }}"
-        chown frameworks:frameworks "{{ edge_vmagent_install_sentinel }}"
-      args:
-        creates: "{{ edge_vmagent_install_sentinel }}"
-      notify: edge vmagent restart
+        - name: Install vmagent-prod binary and mark sentinel
+          ansible.builtin.shell: |
+            set -e
+            install -m 0755 -o frameworks -g frameworks "{{ edge_vmagent_extract_dir.path }}/vmagent-prod" /opt/frameworks/vmagent-edge/vmagent
+            touch "{{ edge_vmagent_install_sentinel }}"
+            chown frameworks:frameworks "{{ edge_vmagent_install_sentinel }}"
+          args:
+            creates: "{{ edge_vmagent_install_sentinel }}"
+          notify: edge vmagent restart
   always:
     - name: Remove downloaded vmutils tarball
       ansible.builtin.file:
