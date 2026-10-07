@@ -57,3 +57,27 @@ func TestProcessingStreamTrackListStaysOutOfStreamAnalytics(t *testing.T) {
 		t.Fatalf("Foghorn's track state did not follow the processing input's track list")
 	}
 }
+
+// A track list for a live stream that does not resolve names no content, so
+// Periscope would drop it; Foghorn does not forward it.
+func TestUnresolvedLiveStreamTrackListIsNotForwarded(t *testing.T) {
+	state.ResetDefaultManagerForTests()
+	t.Cleanup(func() { state.ResetDefaultManagerForTests() })
+	capture, client := startDecklogCapture(t)
+	p := NewProcessor(logging.NewLogger(), nil, nil, nil, nil)
+	p.decklogClient = client
+	tenantID := "tenant-tracks-unresolved"
+	if _, _, err := p.handleLiveTrackList(&ipcpb.MistTrigger{
+		TriggerType: string(mist.TriggerLiveTrackList),
+		NodeId:      "edge-1",
+		TenantId:    &tenantID,
+		TriggerPayload: &ipcpb.MistTrigger_TrackList{TrackList: &ipcpb.StreamTrackListTrigger{
+			StreamName: "live+unknown-key",
+		}},
+	}); err != nil {
+		t.Fatalf("handleLiveTrackList: %v", err)
+	}
+	if got := capture.received(); len(got) != 0 {
+		t.Fatalf("an unresolved stream's track list reached Decklog: %v", got[0].GetTrackList())
+	}
+}

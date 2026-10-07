@@ -1214,6 +1214,13 @@ func assertedTenantConflicts(assertedTenant, resolvedTenant string) bool {
 	return assertedTenant != "" && resolvedTenant != "" && assertedTenant != resolvedTenant
 }
 
+// triggerNamesContent reports whether stream context resolution gave the
+// trigger the content identity Periscope keys stream reports by: a stream_id
+// for a live stream, or an artifact_hash for non-live content.
+func triggerNamesContent(trigger *ipcpb.MistTrigger) bool {
+	return strings.TrimSpace(trigger.GetStreamId()) != "" || strings.TrimSpace(trigger.GetArtifactHash()) != ""
+}
+
 func (p *Processor) sendTriggerToDecklog(trigger *ipcpb.MistTrigger) error {
 	return p.sendTriggerToDecklogContext(context.Background(), trigger)
 }
@@ -4581,8 +4588,9 @@ func (p *Processor) handleStreamBuffer(trigger *ipcpb.MistTrigger) (string, bool
 	}
 
 	// A processing+ stream is an artifact's internal transcode input with no
-	// content series of its own, so Periscope has nothing to key its report by.
-	if streamident.Parse(streamBuffer.GetStreamName()).Kind == streamident.KindArtifactProcessing {
+	// content series of its own, and an unresolved stream names no content, so
+	// Periscope has nothing to key either report by.
+	if streamident.Parse(streamBuffer.GetStreamName()).Kind == streamident.KindArtifactProcessing || !triggerNamesContent(trigger) {
 		return "", false, nil
 	}
 
@@ -5254,8 +5262,9 @@ func (p *Processor) handleLiveTrackList(trigger *ipcpb.MistTrigger) (string, boo
 	}
 
 	// A processing+ stream is an artifact's internal transcode input with no
-	// content series of its own, so Periscope has nothing to key its report by.
-	if streamident.Parse(liveTrackList.GetStreamName()).Kind != streamident.KindArtifactProcessing {
+	// content series of its own, and an unresolved stream names no content, so
+	// Periscope has nothing to key either report by.
+	if streamident.Parse(liveTrackList.GetStreamName()).Kind != streamident.KindArtifactProcessing && triggerNamesContent(trigger) {
 		if err := p.sendTriggerToDecklog(trigger); err != nil {
 			p.logger.WithFields(logging.Fields{
 				"internal_name": internalName,

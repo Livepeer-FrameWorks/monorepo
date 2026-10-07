@@ -54,3 +54,28 @@ func TestProcessingStreamBufferStaysOutOfStreamAnalytics(t *testing.T) {
 		t.Fatalf("the processing input's buffer report reached Periscope without content identity: %v", forwarded)
 	}
 }
+
+// A live buffer whose stream does not resolve (an unknown key, a stream
+// deleted mid-session, or resolution unavailable) names no content, so
+// Periscope would drop its report; Foghorn does not forward it.
+func TestUnresolvedLiveStreamBufferIsNotForwarded(t *testing.T) {
+	state.ResetDefaultManagerForTests()
+	t.Cleanup(func() { state.ResetDefaultManagerForTests() })
+	capture, client := startDecklogCapture(t)
+	p := NewProcessor(logging.NewLogger(), nil, nil, nil, nil)
+	p.decklogClient = client
+	tenantID := "tenant-buffer-unresolved"
+	if _, _, err := p.handleStreamBuffer(&ipcpb.MistTrigger{
+		TriggerType: string(mist.TriggerStreamBuffer),
+		NodeId:      "edge-1",
+		TenantId:    &tenantID,
+		TriggerPayload: &ipcpb.MistTrigger_StreamBuffer{StreamBuffer: &ipcpb.StreamBufferTrigger{
+			StreamName: "live+unknown-key", BufferState: "EMPTY",
+		}},
+	}); err != nil {
+		t.Fatalf("handleStreamBuffer: %v", err)
+	}
+	if got := capture.received(); len(got) != 0 {
+		t.Fatalf("an unresolved stream's buffer report reached Decklog: %v", got[0].GetStreamBuffer())
+	}
+}
