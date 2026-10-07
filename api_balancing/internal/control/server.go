@@ -2047,6 +2047,7 @@ receiveLoop:
 				}
 				go handler(canonicalNodeID, x.Register.GetActiveProcessingJobIds(), registeredAt, current)
 			}
+			go RedriveNodeDeletions(canonicalNodeID)
 			scheduleNodeIngestReconcile(canonicalNodeID, newConn, x.Register, registry.log)
 
 			// Hydrate the managed-stream lastSent map from the sidecar's
@@ -4830,6 +4831,30 @@ func currentNodeJobInventoryHandler() NodeJobInventoryHandler {
 	nodeJobInventoryHandlerMu.Lock()
 	defer nodeJobInventoryHandlerMu.Unlock()
 	return nodeJobInventoryHandler
+}
+
+var (
+	nodeDeletionRedriveHandlerMu sync.Mutex
+	nodeDeletionRedriveHandler   func(nodeID string)
+)
+
+// SetNodeDeletionRedriveHandler registers the handler that re-sends, after a
+// node registers, the artifact deletes it still owes.
+func SetNodeDeletionRedriveHandler(h func(nodeID string)) {
+	nodeDeletionRedriveHandlerMu.Lock()
+	nodeDeletionRedriveHandler = h
+	nodeDeletionRedriveHandlerMu.Unlock()
+}
+
+// RedriveNodeDeletions hands a node that has just registered to the
+// registered re-drive handler.
+func RedriveNodeDeletions(nodeID string) {
+	nodeDeletionRedriveHandlerMu.Lock()
+	h := nodeDeletionRedriveHandler
+	nodeDeletionRedriveHandlerMu.Unlock()
+	if h != nil {
+		h(nodeID)
+	}
 }
 
 // MinControlProtocolVersion is the HARD minimum a sidecar must declare in Register to connect at all. A registration

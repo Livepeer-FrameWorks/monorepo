@@ -430,6 +430,10 @@ type Querier interface {
 	ListDeletedClipNodes(ctx context.Context, maxAge string) ([]ListDeletedClipNodesRow, error)
 	ListDeletedDVRNodes(ctx context.Context, maxAge string) ([]ListDeletedDVRNodesRow, error)
 	ListDeletedDVRParentsWithChapters(ctx context.Context, limit int32) ([]ListDeletedDVRParentsWithChaptersRow, error)
+	// The deletes a node still owes: soft-deleted clips, DVRs and VODs whose bytes
+	// it still holds. Re-driven when the node registers, since a delete sent to an
+	// earlier connection, or deferred in its sidecar's memory, did not survive it.
+	ListDeletedArtifactsOnNode(ctx context.Context, nodeID string) ([]ListDeletedArtifactsOnNodeRow, error)
 	ListDeletedVODNodes(ctx context.Context, maxAge string) ([]ListDeletedVODNodesRow, error)
 	ListEvictableDVRSegments(ctx context.Context, arg ListEvictableDVRSegmentsParams) ([]string, error)
 	ListExhaustedProcessingJobIDs(ctx context.Context, arg ListExhaustedProcessingJobIDsParams) ([]string, error)

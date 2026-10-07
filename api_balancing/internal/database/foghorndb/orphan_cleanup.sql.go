@@ -23,6 +23,50 @@ func (q *Queries) DeleteStaleOrphanedArtifactNodes(ctx context.Context) (int64, 
 	return result.RowsAffected()
 }
 
+const listDeletedArtifactsOnNode = `-- name: ListDeletedArtifactsOnNode :many
+SELECT a.artifact_hash, a.artifact_type
+FROM foghorn.artifacts a
+JOIN foghorn.artifact_nodes an
+  ON an.artifact_hash = a.artifact_hash AND an.is_orphaned = false
+WHERE an.node_id = $1
+  AND a.artifact_type IN ('clip', 'dvr', 'vod')
+  AND a.status = 'deleted'
+  AND (a.federated_pointer = false OR an.role = 'cache')
+ORDER BY a.artifact_hash
+LIMIT 1000
+`
+
+type ListDeletedArtifactsOnNodeRow struct {
+	ArtifactHash string `db:"artifact_hash" json:"artifact_hash"`
+	ArtifactType string `db:"artifact_type" json:"artifact_type"`
+}
+
+// The deletes a node still owes: soft-deleted clips, DVRs and VODs whose bytes
+// it still holds. Re-driven when the node registers, since a delete sent to an
+// earlier connection, or deferred in its sidecar's memory, did not survive it.
+func (q *Queries) ListDeletedArtifactsOnNode(ctx context.Context, nodeID string) ([]ListDeletedArtifactsOnNodeRow, error) {
+	rows, err := q.db.QueryContext(ctx, listDeletedArtifactsOnNode, nodeID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListDeletedArtifactsOnNodeRow{}
+	for rows.Next() {
+		var i ListDeletedArtifactsOnNodeRow
+		if err := rows.Scan(&i.ArtifactHash, &i.ArtifactType); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listDeletedClipNodes = `-- name: ListDeletedClipNodes :many
 SELECT a.artifact_hash, an.node_id
 FROM foghorn.artifacts a

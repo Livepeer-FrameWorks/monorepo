@@ -23,6 +23,10 @@ type OrphanCleanupJob struct {
 	maxAge   time.Duration // How old a deleted record must be before reconciliation
 	stopCh   chan struct{}
 	wg       sync.WaitGroup
+
+	sendClipDelete func(nodeID string, req *ipcpb.ClipDeleteRequest) error
+	sendDVRDelete  func(nodeID string, req *ipcpb.DVRDeleteRequest) error
+	sendVodDelete  func(nodeID string, req *ipcpb.VodDeleteRequest) error
 }
 
 // OrphanCleanupConfig holds configuration for the cleanup job
@@ -44,16 +48,25 @@ func NewOrphanCleanupJob(cfg OrphanCleanupConfig) *OrphanCleanupJob {
 		maxAge = 30 * time.Minute
 	}
 	return &OrphanCleanupJob{
-		db:       cfg.DB,
-		logger:   cfg.Logger,
-		interval: interval,
-		maxAge:   maxAge,
-		stopCh:   make(chan struct{}),
+		db:             cfg.DB,
+		logger:         cfg.Logger,
+		interval:       interval,
+		maxAge:         maxAge,
+		stopCh:         make(chan struct{}),
+		sendClipDelete: control.SendClipDelete,
+		sendDVRDelete:  control.SendDVRDelete,
+		sendVodDelete:  control.SendVodDelete,
 	}
 }
 
-// Start begins the background reconciliation loop
+// Start begins the background reconciliation loop and re-drives a registering
+// node's owed deletes.
 func (j *OrphanCleanupJob) Start() {
+	control.SetNodeDeletionRedriveHandler(func(nodeID string) {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+		defer cancel()
+		j.RedriveNode(ctx, nodeID)
+	})
 	j.wg.Add(1)
 	go j.run()
 	j.logger.Info("Orphan cleanup job started")
@@ -61,9 +74,37 @@ func (j *OrphanCleanupJob) Start() {
 
 // Stop gracefully stops the job
 func (j *OrphanCleanupJob) Stop() {
+	control.SetNodeDeletionRedriveHandler(nil)
 	close(j.stopCh)
 	j.wg.Wait()
 	j.logger.Info("Orphan cleanup job stopped")
+}
+
+// RedriveNode re-sends every delete nodeID still owes as soon as it registers.
+// A delete sent to its previous connection, or one its sidecar deferred in
+// memory, did not survive the reconnect; without this it would wait for the
+// reconciliation age of the periodic pass. Deletes are idempotent on the node.
+func (j *OrphanCleanupJob) RedriveNode(ctx context.Context, nodeID string) {
+	var rows []foghorndb.ListDeletedArtifactsOnNodeRow
+	err := database.RetryPostgres(ctx, database.DefaultRetryAttempts, 25*time.Millisecond, func() error {
+		var err error
+		rows, err = foghorndb.New(j.db).ListDeletedArtifactsOnNode(ctx, nodeID)
+		return err
+	})
+	if err != nil {
+		j.logger.WithError(err).WithField("node_id", nodeID).Warn("Failed to list the deletes a registering node owes")
+		return
+	}
+	for _, row := range rows {
+		switch row.ArtifactType {
+		case "clip":
+			j.retryClipDeletion(ctx, orphanedClip{ClipHash: row.ArtifactHash, NodeID: nodeID})
+		case "dvr":
+			j.retryDVRDeletion(ctx, orphanedDVR{DVRHash: row.ArtifactHash, NodeID: nodeID})
+		case "vod":
+			j.retryVODDeletion(ctx, orphanedVOD{VODHash: row.ArtifactHash, NodeID: nodeID})
+		}
+	}
 }
 
 func (j *OrphanCleanupJob) run() {
@@ -198,7 +239,7 @@ func (j *OrphanCleanupJob) retryClipDeletion(_ctx context.Context, orphan orphan
 		RequestId: requestID,
 	}
 
-	if err := control.SendClipDelete(orphan.NodeID, deleteReq); err != nil {
+	if err := j.sendClipDelete(orphan.NodeID, deleteReq); err != nil {
 		j.logger.WithFields(logging.Fields{
 			"clip_hash":  orphan.ClipHash,
 			"node_id":    orphan.NodeID,
@@ -222,7 +263,7 @@ func (j *OrphanCleanupJob) retryDVRDeletion(_ctx context.Context, orphan orphane
 		RequestId: requestID,
 	}
 
-	if err := control.SendDVRDelete(orphan.NodeID, deleteReq); err != nil {
+	if err := j.sendDVRDelete(orphan.NodeID, deleteReq); err != nil {
 		j.logger.WithFields(logging.Fields{
 			"dvr_hash":   orphan.DVRHash,
 			"node_id":    orphan.NodeID,
@@ -246,7 +287,7 @@ func (j *OrphanCleanupJob) retryVODDeletion(_ctx context.Context, orphan orphane
 		RequestId: requestID,
 	}
 
-	if err := control.SendVodDelete(orphan.NodeID, deleteReq); err != nil {
+	if err := j.sendVodDelete(orphan.NodeID, deleteReq); err != nil {
 		j.logger.WithFields(logging.Fields{
 			"vod_hash":   orphan.VODHash,
 			"node_id":    orphan.NodeID,

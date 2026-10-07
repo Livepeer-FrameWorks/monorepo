@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"net"
 	"strconv"
 	"strings"
 	"time"
@@ -22,6 +23,7 @@ const privateerDNSProbe = `st=$(resolvectl status wg0 2>/dev/null); ` +
 	`if printf '%s\n' "$st" | grep -qE '\+DefaultRoute|DefaultRoute setting: yes'; then echo wg0_default_route=yes; else echo wg0_default_route=no; fi; ` +
 	`env=$(sudo -n cat /etc/privateer/privateer.env 2>/dev/null || cat /etc/privateer/privateer.env 2>/dev/null); ` +
 	`if printf '%s\n' "$env" | grep -qE '^UPSTREAM_DNS=.+'; then echo upstream=yes; else echo upstream=no; fi; ` +
+	`echo "resolved_dns_ex=$(busctl get-property org.freedesktop.resolve1 /org/freedesktop/resolve1 org.freedesktop.resolve1.Manager DNSEx 2>/dev/null)"; ` +
 	privateerDNSForwardCounterProbe
 
 // privateerDNSForwardCounterProbe prints Privateer's cumulative count of
@@ -43,6 +45,67 @@ type privateerDNSState struct {
 	// ForwardQueries is Privateer's cumulative forward counter, -1 when its
 	// metrics could not be read.
 	ForwardQueries int64
+	// GlobalLoopbackDNS lists the loopback resolvers in resolved's global
+	// scope, which resolved asks for every name no link routing domain claims.
+	GlobalLoopbackDNS []string
+}
+
+// resolvedGlobalDNSServers returns the global-scope servers (ifindex 0) from
+// busctl's rendering of resolve1.Manager.DNSEx, a(iiayqs): ifindex, family,
+// address bytes, port, server name. resolved reports a loopback address set on
+// a link under the loopback ifindex, and resolvectl prints those as "Global";
+// they are still link-scoped and are not returned.
+func resolvedGlobalDNSServers(dnsEx string) ([]string, error) {
+	fields := strings.Fields(strings.TrimSpace(dnsEx))
+	if len(fields) < 2 || fields[0] != "a(iiayqs)" {
+		return nil, fmt.Errorf("unexpected DNSEx %q", dnsEx)
+	}
+	count, err := strconv.Atoi(fields[1])
+	if err != nil {
+		return nil, fmt.Errorf("unexpected DNSEx count %q", fields[1])
+	}
+	pos := 2
+	next := func() (int, error) {
+		if pos >= len(fields) {
+			return 0, fmt.Errorf("truncated DNSEx %q", dnsEx)
+		}
+		n, err := strconv.Atoi(fields[pos])
+		pos++
+		return n, err
+	}
+	var global []string
+	for range count {
+		ifindex, err := next()
+		if err != nil {
+			return nil, err
+		}
+		if _, err := next(); err != nil {
+			return nil, err
+		}
+		size, err := next()
+		if err != nil {
+			return nil, err
+		}
+		addr := make(net.IP, 0, size)
+		for range size {
+			b, err := next()
+			if err != nil {
+				return nil, err
+			}
+			addr = append(addr, byte(b))
+		}
+		if _, err := next(); err != nil {
+			return nil, err
+		}
+		if pos >= len(fields) {
+			return nil, fmt.Errorf("truncated DNSEx %q", dnsEx)
+		}
+		pos++ // server name
+		if ifindex == 0 {
+			global = append(global, addr.String())
+		}
+	}
+	return global, nil
 }
 
 func parsePrivateerDNSProbe(stdout string) privateerDNSState {
@@ -59,6 +122,14 @@ func parsePrivateerDNSProbe(stdout string) privateerDNSState {
 			state.WG0DefaultRoute = value == "yes"
 		case "upstream":
 			state.Upstream = value == "yes"
+		case "resolved_dns_ex":
+			if servers, err := resolvedGlobalDNSServers(value); err == nil {
+				for _, server := range servers {
+					if ip := net.ParseIP(server); ip != nil && ip.IsLoopback() {
+						state.GlobalLoopbackDNS = append(state.GlobalLoopbackDNS, server)
+					}
+				}
+			}
 		case "forward_queries":
 			if n, err := strconv.ParseInt(value, 10, 64); err == nil {
 				state.ForwardQueries = n
@@ -79,6 +150,9 @@ func (s privateerDNSState) problems(forwardedInWindow int64) []string {
 	}
 	if s.WG0DefaultRoute {
 		out = append(out, "wg0 is a default DNS route: public lookups can be sent to Privateer")
+	}
+	if !s.Upstream && len(s.GlobalLoopbackDNS) > 0 {
+		out = append(out, fmt.Sprintf("resolved's global DNS scope sends public names to %s, a loopback resolver, and Privateer has no upstream to forward them: those lookups are refused there and wait on the link servers", strings.Join(s.GlobalLoopbackDNS, ", ")))
 	}
 	if !s.Upstream && forwardedInWindow > 0 {
 		out = append(out, fmt.Sprintf("Privateer has no upstream but answered %d non-.internal quer(ies) during the %s observation window: public lookups are routed to it", forwardedInWindow, privateerDNSObservationWindow))

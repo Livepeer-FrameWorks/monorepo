@@ -65,6 +65,58 @@ func TestPrivateerDNSStateProblems(t *testing.T) {
 	}
 }
 
+// The DNSEx values below are what `busctl get-property ... Manager DNSEx`
+// printed on fw-stg-eu-1 (systemd 255). resolved reports wg0's link server
+// 127.0.0.1 under the loopback ifindex 1, which resolvectl lists as "Global";
+// only an ifindex-0 entry is a real global server.
+const (
+	stagingDNSEx            = `a(iiayqs) 3 1 2 4 127 0 0 1 0 "" 2 2 4 192 168 10 1 0 "" 2 10 16 42 2 34 160 187 186 219 1 0 0 0 0 0 0 0 0 0 ""`
+	globalPrivateerDNSEx    = `a(iiayqs) 2 0 2 4 127 0 0 1 0 "" 2 2 4 192 168 10 1 0 ""`
+	globalPublicServerDNSEx = `a(iiayqs) 1 0 2 4 9 9 9 9 853 "dns.quad9.net"`
+)
+
+func TestPrivateerDNSStateFlagsGlobalLoopbackResolver(t *testing.T) {
+	cases := []struct {
+		name     string
+		dnsEx    string
+		upstream bool
+		want     string
+	}{
+		{"wg0 link server shown as global is not a global route", stagingDNSEx, false, ""},
+		{"global scope points at privateer without upstream", globalPrivateerDNSEx, false, "global DNS scope sends public names to 127.0.0.1"},
+		{"privateer with upstream may be global", globalPrivateerDNSEx, true, ""},
+		{"public global server is the operator's choice", globalPublicServerDNSEx, false, ""},
+	}
+	for _, tc := range cases {
+		probe := "wg0_internal=yes\nwg0_default_route=no\nupstream=" + map[bool]string{true: "yes", false: "no"}[tc.upstream] + "\nforward_queries=0\nresolved_dns_ex=" + tc.dnsEx + "\n"
+		state := parsePrivateerDNSProbe(probe)
+		got := state.problems(0)
+		if tc.want == "" {
+			if len(got) != 0 {
+				t.Fatalf("%s: problems = %q, want none", tc.name, got)
+			}
+			continue
+		}
+		if len(got) != 1 || !strings.Contains(got[0], tc.want) {
+			t.Fatalf("%s: problems = %q, want one mentioning %q", tc.name, got, tc.want)
+		}
+	}
+}
+
+func TestParseResolvedDNSExGlobalServers(t *testing.T) {
+	got, err := resolvedGlobalDNSServers(stagingDNSEx)
+	if err != nil || len(got) != 0 {
+		t.Fatalf("staging DNSEx global servers = %v, %v; want none", got, err)
+	}
+	got, err = resolvedGlobalDNSServers(globalPrivateerDNSEx)
+	if err != nil || len(got) != 1 || got[0] != "127.0.0.1" {
+		t.Fatalf("global servers = %v, %v; want [127.0.0.1]", got, err)
+	}
+	if _, err := resolvedGlobalDNSServers("a(iiayqs) 2 0 2 4 127"); err == nil {
+		t.Fatal("truncated DNSEx parsed without error")
+	}
+}
+
 func TestPrivateerDNSScopeReportsLeakingHostsReadOnly(t *testing.T) {
 	manifest := &inventory.Manifest{
 		Hosts: map[string]inventory.Host{

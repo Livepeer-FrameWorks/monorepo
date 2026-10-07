@@ -501,6 +501,14 @@ JOIN foghorn.artifact_nodes n ON a.artifact_hash = n.artifact_hash
 WHERE a.status = 'deleted' AND NOT n.is_orphaned
 ```
 
+The periodic pass only takes deletes older than 30 minutes. A node that registers
+is sent every delete it still owes at once, whatever its age, because a delete sent
+to its previous connection, or one its Helmsman deferred in memory, did not survive
+the reconnect. A DVR delete Helmsman defers because the recording's push is absent
+from Mist's list but its absence has not converged (three spaced observations over
+30 s with no segment progress) is re-run by Helmsman itself when the next
+observation can count, so the files go as soon as the absence converges.
+
 ### PurgeDeletedJob
 
 Final cleanup of `status IN ('deleted','failed')` artifacts past the retention age,
