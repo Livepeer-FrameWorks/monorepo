@@ -1074,7 +1074,7 @@ type CreateVodUploadInput struct {
 }
 
 type CreateWebhookEndpointInput struct {
-	// An https URL of a public host.
+	// An https URL of a public host that resolves. A host that does not exist is a ValidationError with code INVALID_ARGUMENT; a DNS lookup that failed in a way that may clear is a ValidationError with code FAILED_PRECONDITION, and the request can be retried.
 	URL         string  `json:"url"`
 	Description *string `json:"description,omitempty"`
 	// Public event types to receive; "*" receives every type. See webhookEventTypes.
@@ -3066,6 +3066,7 @@ type UpdateTenantInput struct {
 }
 
 type UpdateWebhookEndpointInput struct {
+	// Checked like CreateWebhookEndpointInput.url.
 	URL         *string `json:"url,omitempty"`
 	Description *string `json:"description,omitempty"`
 	// Replaces the subscribed event types when set.
@@ -3427,7 +3428,7 @@ type WebhookDelivery struct {
 	NextAttemptAt *time.Time `json:"nextAttemptAt,omitempty"`
 	// HTTP status of the last attempt; 0 when no response arrived.
 	LastStatusCode int `json:"lastStatusCode"`
-	// Failure class of the last attempt: http_status, redirect, timeout, connection, tls, dns, or blocked_destination; internal when FrameWorks could not sign or render the delivery; empty after a success.
+	// Failure class of the last attempt: http_status, redirect, timeout, connection, tls, dns, or blocked_destination; internal when FrameWorks could not sign or render the delivery; empty after a success. A blocked_destination failure (the destination policy refuses the address the host resolves to) fails the delivery without a retry.
 	LastErrorClass string     `json:"lastErrorClass"`
 	DeliveredAt    *time.Time `json:"deliveredAt,omitempty"`
 	ReplayCount    int        `json:"replayCount"`
@@ -3448,7 +3449,7 @@ type WebhookDeliveryAttempt struct {
 	StatusCode int    `json:"statusCode"`
 	ErrorClass string `json:"errorClass"`
 	LatencyMs  int    `json:"latencyMs"`
-	// At most 1 KiB of the response body.
+	// At most 1 KiB of the response body. For a blocked_destination attempt, which gets no response, the destination policy's reason.
 	ResponseExcerpt string    `json:"responseExcerpt"`
 	AttemptedAt     time.Time `json:"attemptedAt"`
 }

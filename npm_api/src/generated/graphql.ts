@@ -321,7 +321,7 @@ export type CreateWebhookEndpointInput = {
   description?: string | null | undefined;
   /** Public event types to receive; "*" receives every type. See webhookEventTypes. */
   eventTypes: Array<string>;
-  /** An https URL of a public host. */
+  /** An https URL of a public host that resolves. A host that does not exist is a ValidationError with code INVALID_ARGUMENT; a DNS lookup that failed in a way that may clear is a ValidationError with code FAILED_PRECONDITION, and the request can be retried. */
   url: string;
 };
 
@@ -1256,6 +1256,7 @@ export type UpdateWebhookEndpointInput = {
   description?: string | null | undefined;
   /** Replaces the subscribed event types when set. */
   eventTypes?: Array<string> | null | undefined;
+  /** Checked like CreateWebhookEndpointInput.url. */
   url?: string | null | undefined;
 };
 
@@ -4429,7 +4430,7 @@ id: string, endpointId: string, /** The event ID, sent as webhook-id and as the 
 eventId: string | null, eventType: string, kind: WebhookDeliveryKind, status: WebhookDeliveryStatus, /** Attempts since the delivery was created or last replayed. */
 attempts: number, /** When the next attempt is due; null unless pending. */
 nextAttemptAt: string | null, /** HTTP status of the last attempt; 0 when no response arrived. */
-lastStatusCode: number, /** Failure class of the last attempt: http_status, redirect, timeout, connection, tls, dns, or blocked_destination; internal when FrameWorks could not sign or render the delivery; empty after a success. */
+lastStatusCode: number, /** Failure class of the last attempt: http_status, redirect, timeout, connection, tls, dns, or blocked_destination; internal when FrameWorks could not sign or render the delivery; empty after a success. A blocked_destination failure (the destination policy refuses the address the host resolves to) fails the delivery without a retry. */
 lastErrorClass: string, deliveredAt: string | null, replayCount: number, lastReplayedAt: string | null, createdAt: string, updatedAt: string, /** Every HTTP attempt, oldest first, including attempts before the last replay. */
 attemptHistory: Array<{ id: string, attemptNumber: number, statusCode: number, errorClass: string, latencyMs: number, responseExcerpt: string, attemptedAt: string }> };
 
@@ -4470,10 +4471,10 @@ id: string, endpointId: string, /** The event ID, sent as webhook-id and as the 
 eventId: string | null, eventType: string, kind: WebhookDeliveryKind, status: WebhookDeliveryStatus, /** Attempts since the delivery was created or last replayed. */
 attempts: number, /** When the next attempt is due; null unless pending. */
 nextAttemptAt: string | null, /** HTTP status of the last attempt; 0 when no response arrived. */
-lastStatusCode: number, /** Failure class of the last attempt: http_status, redirect, timeout, connection, tls, dns, or blocked_destination; internal when FrameWorks could not sign or render the delivery; empty after a success. */
+lastStatusCode: number, /** Failure class of the last attempt: http_status, redirect, timeout, connection, tls, dns, or blocked_destination; internal when FrameWorks could not sign or render the delivery; empty after a success. A blocked_destination failure (the destination policy refuses the address the host resolves to) fails the delivery without a retry. */
 lastErrorClass: string, deliveredAt: string | null, replayCount: number, lastReplayedAt: string | null, createdAt: string, updatedAt: string, /** Every HTTP attempt, oldest first, including attempts before the last replay. */
 attemptHistory: Array<{ id: string, attemptNumber: number, statusCode: number, errorClass: string, latencyMs: number, responseExcerpt: string, attemptedAt: string }> }, attempt: { id: string, attemptNumber: number, /** HTTP status; 0 when no response arrived. */
-statusCode: number, errorClass: string, latencyMs: number, /** At most 1 KiB of the response body. */
+statusCode: number, errorClass: string, latencyMs: number, /** At most 1 KiB of the response body. For a blocked_destination attempt, which gets no response, the destination policy's reason. */
 responseExcerpt: string, attemptedAt: string } };
 
 /** Result from submitting an x402 payment for settlement. */
@@ -5170,7 +5171,7 @@ id: string, endpointId: string, /** The event ID, sent as webhook-id and as the 
 eventId: string | null, eventType: string, kind: WebhookDeliveryKind, status: WebhookDeliveryStatus, /** Attempts since the delivery was created or last replayed. */
 attempts: number, /** When the next attempt is due; null unless pending. */
 nextAttemptAt: string | null, /** HTTP status of the last attempt; 0 when no response arrived. */
-lastStatusCode: number, /** Failure class of the last attempt: http_status, redirect, timeout, connection, tls, dns, or blocked_destination; internal when FrameWorks could not sign or render the delivery; empty after a success. */
+lastStatusCode: number, /** Failure class of the last attempt: http_status, redirect, timeout, connection, tls, dns, or blocked_destination; internal when FrameWorks could not sign or render the delivery; empty after a success. A blocked_destination failure (the destination policy refuses the address the host resolves to) fails the delivery without a retry. */
 lastErrorClass: string, deliveredAt: string | null, replayCount: number, lastReplayedAt: string | null, createdAt: string, updatedAt: string, /** Every HTTP attempt, oldest first, including attempts before the last replay. */
 attemptHistory: Array<{ id: string, attemptNumber: number, statusCode: number, errorClass: string, latencyMs: number, responseExcerpt: string, attemptedAt: string }> }
    };
@@ -5445,10 +5446,10 @@ id: string, endpointId: string, /** The event ID, sent as webhook-id and as the 
 eventId: string | null, eventType: string, kind: WebhookDeliveryKind, status: WebhookDeliveryStatus, /** Attempts since the delivery was created or last replayed. */
 attempts: number, /** When the next attempt is due; null unless pending. */
 nextAttemptAt: string | null, /** HTTP status of the last attempt; 0 when no response arrived. */
-lastStatusCode: number, /** Failure class of the last attempt: http_status, redirect, timeout, connection, tls, dns, or blocked_destination; internal when FrameWorks could not sign or render the delivery; empty after a success. */
+lastStatusCode: number, /** Failure class of the last attempt: http_status, redirect, timeout, connection, tls, dns, or blocked_destination; internal when FrameWorks could not sign or render the delivery; empty after a success. A blocked_destination failure (the destination policy refuses the address the host resolves to) fails the delivery without a retry. */
 lastErrorClass: string, deliveredAt: string | null, replayCount: number, lastReplayedAt: string | null, createdAt: string, updatedAt: string, /** Every HTTP attempt, oldest first, including attempts before the last replay. */
 attemptHistory: Array<{ id: string, attemptNumber: number, statusCode: number, errorClass: string, latencyMs: number, responseExcerpt: string, attemptedAt: string }> }, attempt: { id: string, attemptNumber: number, /** HTTP status; 0 when no response arrived. */
-statusCode: number, errorClass: string, latencyMs: number, /** At most 1 KiB of the response body. */
+statusCode: number, errorClass: string, latencyMs: number, /** At most 1 KiB of the response body. For a blocked_destination attempt, which gets no response, the destination policy's reason. */
 responseExcerpt: string, attemptedAt: string } }
    };
 
@@ -8251,7 +8252,7 @@ id: string, endpointId: string, /** The event ID, sent as webhook-id and as the 
 eventId: string | null, eventType: string, kind: WebhookDeliveryKind, status: WebhookDeliveryStatus, /** Attempts since the delivery was created or last replayed. */
 attempts: number, /** When the next attempt is due; null unless pending. */
 nextAttemptAt: string | null, /** HTTP status of the last attempt; 0 when no response arrived. */
-lastStatusCode: number, /** Failure class of the last attempt: http_status, redirect, timeout, connection, tls, dns, or blocked_destination; internal when FrameWorks could not sign or render the delivery; empty after a success. */
+lastStatusCode: number, /** Failure class of the last attempt: http_status, redirect, timeout, connection, tls, dns, or blocked_destination; internal when FrameWorks could not sign or render the delivery; empty after a success. A blocked_destination failure (the destination policy refuses the address the host resolves to) fails the delivery without a retry. */
 lastErrorClass: string, deliveredAt: string | null, replayCount: number, lastReplayedAt: string | null, createdAt: string, updatedAt: string, /** Every HTTP attempt, oldest first, including attempts before the last replay. */
 attemptHistory: Array<{ id: string, attemptNumber: number, statusCode: number, errorClass: string, latencyMs: number, responseExcerpt: string, attemptedAt: string }> } | null };
 

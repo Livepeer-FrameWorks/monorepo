@@ -343,7 +343,7 @@ updateWebhookEndpoint(
 
 **input_object**
 
-- **url**: `String!` — An https URL of a public host.
+- **url**: `String!` — An https URL of a public host that resolves. A host that does not exist is a ValidationError with code INVALID_ARGUMENT; a DNS lookup that failed in a way that may clear is a ValidationError with code FAILED_PRECONDITION, and the request can be retried.
 - **description**: `String`
 - **eventTypes**: `[String!]!` — Public event types to receive; &#34;*&#34; receives every type. See webhookEventTypes.
 - **apiVersion**: `String` — Public event package version; defaults to &#34;v1&#34;.
@@ -403,7 +403,7 @@ updateWebhookEndpoint(
 
 **input_object**
 
-- **url**: `String`
+- **url**: `String` — Checked like CreateWebhookEndpointInput.url.
 - **description**: `String`
 - **eventTypes**: `[String!]` — Replaces the subscribed event types when set.
 
@@ -440,7 +440,7 @@ One delivery of one event to one endpoint, or a test delivery.
 - **attempts**: `Int!` — Attempts since the delivery was created or last replayed.
 - **nextAttemptAt**: `Time` ([Time](/builders/api-schema/shared/#time)) — When the next attempt is due; null unless pending.
 - **lastStatusCode**: `Int!` — HTTP status of the last attempt; 0 when no response arrived.
-- **lastErrorClass**: `String!` — Failure class of the last attempt: http_status, redirect, timeout, connection, tls, dns, or blocked_destination; internal when FrameWorks could not sign or render the delivery; empty after a success.
+- **lastErrorClass**: `String!` — Failure class of the last attempt: http_status, redirect, timeout, connection, tls, dns, or blocked_destination; internal when FrameWorks could not sign or render the delivery; empty after a success. A blocked_destination failure (the destination policy refuses the address the host resolves to) fails the delivery without a retry.
 - **deliveredAt**: `Time` ([Time](/builders/api-schema/shared/#time))
 - **replayCount**: `Int!`
 - **lastReplayedAt**: `Time` ([Time](/builders/api-schema/shared/#time))
@@ -459,7 +459,7 @@ One HTTP attempt of a delivery.
 - **statusCode**: `Int!` — HTTP status; 0 when no response arrived.
 - **errorClass**: `String!`
 - **latencyMs**: `Int!`
-- **responseExcerpt**: `String!` — At most 1 KiB of the response body.
+- **responseExcerpt**: `String!` — At most 1 KiB of the response body. For a blocked_destination attempt, which gets no response, the destination policy&#39;s reason.
 - **attemptedAt**: `Time!` ([Time](/builders/api-schema/shared/#time))
 
 ### WebhookDeliveryEdge

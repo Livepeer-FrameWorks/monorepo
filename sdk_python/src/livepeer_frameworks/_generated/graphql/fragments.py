@@ -18885,9 +18885,9 @@ class WebhookDeliveryDefault(BaseModel):
     "HTTP status of the last attempt; 0 when no response arrived."
     last_error_class: str = Field(
         alias="lastErrorClass",
-        description="Failure class of the last attempt: http_status, redirect, timeout, connection, tls, dns, or blocked_destination; internal when FrameWorks could not sign or render the delivery; empty after a success.",
+        description="Failure class of the last attempt: http_status, redirect, timeout, connection, tls, dns, or blocked_destination; internal when FrameWorks could not sign or render the delivery; empty after a success. A blocked_destination failure (the destination policy refuses the address the host resolves to) fails the delivery without a retry.",
     )
-    "Failure class of the last attempt: http_status, redirect, timeout, connection, tls, dns, or blocked_destination; internal when FrameWorks could not sign or render the delivery; empty after a success."
+    "Failure class of the last attempt: http_status, redirect, timeout, connection, tls, dns, or blocked_destination; internal when FrameWorks could not sign or render the delivery; empty after a success. A blocked_destination failure (the destination policy refuses the address the host resolves to) fails the delivery without a retry."
     delivered_at: Optional[datetime] = Field(alias="deliveredAt")
     replay_count: int = Field(alias="replayCount")
     last_replayed_at: Optional[datetime] = Field(alias="lastReplayedAt")
@@ -18912,9 +18912,10 @@ class WebhookDeliveryDefaultAttemptHistory(BaseModel):
     error_class: str = Field(alias="errorClass")
     latency_ms: int = Field(alias="latencyMs")
     response_excerpt: str = Field(
-        alias="responseExcerpt", description="At most 1 KiB of the response body."
+        alias="responseExcerpt",
+        description="At most 1 KiB of the response body. For a blocked_destination attempt, which gets no response, the destination policy's reason.",
     )
-    "At most 1 KiB of the response body."
+    "At most 1 KiB of the response body. For a blocked_destination attempt, which gets no response, the destination policy's reason."
     attempted_at: datetime = Field(alias="attemptedAt")
 
 
@@ -19083,9 +19084,9 @@ class WebhookTestResultDefaultDelivery(BaseModel):
     "HTTP status of the last attempt; 0 when no response arrived."
     last_error_class: str = Field(
         alias="lastErrorClass",
-        description="Failure class of the last attempt: http_status, redirect, timeout, connection, tls, dns, or blocked_destination; internal when FrameWorks could not sign or render the delivery; empty after a success.",
+        description="Failure class of the last attempt: http_status, redirect, timeout, connection, tls, dns, or blocked_destination; internal when FrameWorks could not sign or render the delivery; empty after a success. A blocked_destination failure (the destination policy refuses the address the host resolves to) fails the delivery without a retry.",
     )
-    "Failure class of the last attempt: http_status, redirect, timeout, connection, tls, dns, or blocked_destination; internal when FrameWorks could not sign or render the delivery; empty after a success."
+    "Failure class of the last attempt: http_status, redirect, timeout, connection, tls, dns, or blocked_destination; internal when FrameWorks could not sign or render the delivery; empty after a success. A blocked_destination failure (the destination policy refuses the address the host resolves to) fails the delivery without a retry."
     delivered_at: Optional[datetime] = Field(alias="deliveredAt")
     replay_count: int = Field(alias="replayCount")
     last_replayed_at: Optional[datetime] = Field(alias="lastReplayedAt")
@@ -19110,9 +19111,10 @@ class WebhookTestResultDefaultDeliveryAttemptHistory(BaseModel):
     error_class: str = Field(alias="errorClass")
     latency_ms: int = Field(alias="latencyMs")
     response_excerpt: str = Field(
-        alias="responseExcerpt", description="At most 1 KiB of the response body."
+        alias="responseExcerpt",
+        description="At most 1 KiB of the response body. For a blocked_destination attempt, which gets no response, the destination policy's reason.",
     )
-    "At most 1 KiB of the response body."
+    "At most 1 KiB of the response body. For a blocked_destination attempt, which gets no response, the destination policy's reason."
     attempted_at: datetime = Field(alias="attemptedAt")
 
 
@@ -19128,9 +19130,10 @@ class WebhookTestResultDefaultAttempt(BaseModel):
     error_class: str = Field(alias="errorClass")
     latency_ms: int = Field(alias="latencyMs")
     response_excerpt: str = Field(
-        alias="responseExcerpt", description="At most 1 KiB of the response body."
+        alias="responseExcerpt",
+        description="At most 1 KiB of the response body. For a blocked_destination attempt, which gets no response, the destination policy's reason.",
     )
-    "At most 1 KiB of the response body."
+    "At most 1 KiB of the response body. For a blocked_destination attempt, which gets no response, the destination policy's reason."
     attempted_at: datetime = Field(alias="attemptedAt")
 
 

@@ -454,8 +454,10 @@ class CreateVodUploadInput(BaseModel):
 
 
 class CreateWebhookEndpointInput(BaseModel):
-    url: str = Field(description="An https URL of a public host.")
-    "An https URL of a public host."
+    url: str = Field(
+        description="An https URL of a public host that resolves. A host that does not exist is a ValidationError with code INVALID_ARGUMENT; a DNS lookup that failed in a way that may clear is a ValidationError with code FAILED_PRECONDITION, and the request can be retried."
+    )
+    "An https URL of a public host that resolves. A host that does not exist is a ValidationError with code INVALID_ARGUMENT; a DNS lookup that failed in a way that may clear is a ValidationError with code FAILED_PRECONDITION, and the request can be retried."
     description: Optional[str] = None
     event_types: list[str] = Field(
         alias="eventTypes",
@@ -1088,7 +1090,10 @@ class UpdateTenantInput(BaseModel):
 
 
 class UpdateWebhookEndpointInput(BaseModel):
-    url: Optional[str] = None
+    url: Optional[str] = Field(
+        default=None, description="Checked like CreateWebhookEndpointInput.url."
+    )
+    "Checked like CreateWebhookEndpointInput.url."
     description: Optional[str] = None
     event_types: Optional[list[str]] = Field(
         alias="eventTypes",

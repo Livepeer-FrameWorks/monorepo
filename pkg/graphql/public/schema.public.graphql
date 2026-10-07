@@ -2033,7 +2033,7 @@ union CreateVodUploadResult = VodUploadSession | ValidationError | AuthError
 
 input CreateWebhookEndpointInput {
   """
-  An https URL of a public host.
+  An https URL of a public host that resolves. A host that does not exist is a ValidationError with code INVALID_ARGUMENT; a DNS lookup that failed in a way that may clear is a ValidationError with code FAILED_PRECONDITION, and the request can be retried.
   """
   url: String!
   description: String
@@ -9111,6 +9111,9 @@ input UpdateTenantInput {
 union UpdateTenantResult = Tenant | ValidationError | AuthError
 
 input UpdateWebhookEndpointInput {
+  """
+  Checked like CreateWebhookEndpointInput.url.
+  """
   url: String
   description: String
   """
@@ -9845,7 +9848,7 @@ type WebhookDelivery {
   """
   lastStatusCode: Int!
   """
-  Failure class of the last attempt: http_status, redirect, timeout, connection, tls, dns, or blocked_destination; internal when FrameWorks could not sign or render the delivery; empty after a success.
+  Failure class of the last attempt: http_status, redirect, timeout, connection, tls, dns, or blocked_destination; internal when FrameWorks could not sign or render the delivery; empty after a success. A blocked_destination failure (the destination policy refuses the address the host resolves to) fails the delivery without a retry.
   """
   lastErrorClass: String!
   deliveredAt: Time
@@ -9872,7 +9875,7 @@ type WebhookDeliveryAttempt {
   errorClass: String!
   latencyMs: Int!
   """
-  At most 1 KiB of the response body.
+  At most 1 KiB of the response body. For a blocked_destination attempt, which gets no response, the destination policy's reason.
   """
   responseExcerpt: String!
   attemptedAt: Time!

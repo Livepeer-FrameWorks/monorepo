@@ -6615,7 +6615,7 @@ export interface WebhookDelivery {
     nextAttemptAt: (Scalars['Time'] | null)
     /** HTTP status of the last attempt; 0 when no response arrived. */
     lastStatusCode: Scalars['Int']
-    /** Failure class of the last attempt: http_status, redirect, timeout, connection, tls, dns, or blocked_destination; internal when FrameWorks could not sign or render the delivery; empty after a success. */
+    /** Failure class of the last attempt: http_status, redirect, timeout, connection, tls, dns, or blocked_destination; internal when FrameWorks could not sign or render the delivery; empty after a success. A blocked_destination failure (the destination policy refuses the address the host resolves to) fails the delivery without a retry. */
     lastErrorClass: Scalars['String']
     deliveredAt: (Scalars['Time'] | null)
     replayCount: Scalars['Int']
@@ -6636,7 +6636,7 @@ export interface WebhookDeliveryAttempt {
     statusCode: Scalars['Int']
     errorClass: Scalars['String']
     latencyMs: Scalars['Int']
-    /** At most 1 KiB of the response body. */
+    /** At most 1 KiB of the response body. For a blocked_destination attempt, which gets no response, the destination policy's reason. */
     responseExcerpt: Scalars['String']
     attemptedAt: Scalars['Time']
     __typename: 'WebhookDeliveryAttempt'
@@ -8454,7 +8454,7 @@ export interface CreateVodUploadResultGenqlSelection{
 }
 
 export interface CreateWebhookEndpointInput {
-/** An https URL of a public host. */
+/** An https URL of a public host that resolves. A host that does not exist is a ValidationError with code INVALID_ARGUMENT; a DNS lookup that failed in a way that may clear is a ValidationError with code FAILED_PRECONDITION, and the request can be retried. */
 url: Scalars['String'],description?: (Scalars['String'] | null),
 /** Public event types to receive; "*" receives every type. See webhookEventTypes. */
 eventTypes: Scalars['String'][],
@@ -14294,7 +14294,9 @@ export interface UpdateTenantResultGenqlSelection{
     __typename?: boolean | number
 }
 
-export interface UpdateWebhookEndpointInput {url?: (Scalars['String'] | null),description?: (Scalars['String'] | null),
+export interface UpdateWebhookEndpointInput {
+/** Checked like CreateWebhookEndpointInput.url. */
+url?: (Scalars['String'] | null),description?: (Scalars['String'] | null),
 /** Replaces the subscribed event types when set. */
 eventTypes?: (Scalars['String'][] | null)}
 
@@ -14950,7 +14952,7 @@ export interface WebhookDeliveryGenqlSelection{
     nextAttemptAt?: boolean | number
     /** HTTP status of the last attempt; 0 when no response arrived. */
     lastStatusCode?: boolean | number
-    /** Failure class of the last attempt: http_status, redirect, timeout, connection, tls, dns, or blocked_destination; internal when FrameWorks could not sign or render the delivery; empty after a success. */
+    /** Failure class of the last attempt: http_status, redirect, timeout, connection, tls, dns, or blocked_destination; internal when FrameWorks could not sign or render the delivery; empty after a success. A blocked_destination failure (the destination policy refuses the address the host resolves to) fails the delivery without a retry. */
     lastErrorClass?: boolean | number
     deliveredAt?: boolean | number
     replayCount?: boolean | number
@@ -14972,7 +14974,7 @@ export interface WebhookDeliveryAttemptGenqlSelection{
     statusCode?: boolean | number
     errorClass?: boolean | number
     latencyMs?: boolean | number
-    /** At most 1 KiB of the response body. */
+    /** At most 1 KiB of the response body. For a blocked_destination attempt, which gets no response, the destination policy's reason. */
     responseExcerpt?: boolean | number
     attemptedAt?: boolean | number
     __typename?: boolean | number
