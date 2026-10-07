@@ -283,6 +283,9 @@ func main() {
 	// Add transport options
 	gqlHandler.AddTransport(transport.POST{})
 	gqlHandler.AddTransport(transport.GET{})
+	// The keepalive interval stays well under the shortest idle timeout in
+	// front of Bridge: Cloudflare proxies the bridge record and closes idle
+	// WebSockets after 100 s, and the control-plane nginx after 300 s.
 	gqlHandler.AddTransport(middleware.GraphQLWebsocketTransport(serviceClients, []byte(jwtSecret), logger, websocket.Upgrader{
 		CheckOrigin: originMatcher.CheckWebsocketOrigin,
 	}, 10*time.Second))

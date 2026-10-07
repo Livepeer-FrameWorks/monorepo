@@ -52,9 +52,17 @@ var (
 // graphql-transport-ws (and legacy graphql-ws) with GraphQLWebsocketInit
 // resolving the caller, and the close code of a rejected connection_init
 // taken from the WebsocketInitError that rejected it.
+//
+// keepAlive is the interval of server keepalives on an idle connection, which
+// must stay under the idle timeout of every proxy in front of Bridge. gqlgen
+// sends them per protocol from separate settings: KeepAlivePingInterval sends
+// "ka" on graphql-ws only, and PingPongInterval sends "ping" on
+// graphql-transport-ws only, closing a connection that sends no "pong" within
+// twice the interval.
 func GraphQLWebsocketTransport(serviceClients *clients.ServiceClients, jwtSecret []byte, logger logging.Logger, upgrader websocket.Upgrader, keepAlive time.Duration) graphql.Transport {
 	return closeCodeWebsocket{Websocket: transport.Websocket{
 		KeepAlivePingInterval: keepAlive,
+		PingPongInterval:      keepAlive,
 		Upgrader:              upgrader,
 		InitFunc:              GraphQLWebsocketInit(serviceClients, jwtSecret, logger),
 	}}

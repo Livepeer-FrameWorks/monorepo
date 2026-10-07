@@ -267,3 +267,82 @@ func TestGraphQLWebsocketInitCookieFallbackAuthenticates(t *testing.T) {
 		t.Fatalf("user = %#v, want tenant-2", user)
 	}
 }
+
+// dialIdleWS connects with subprotocol to a gqlgen server using Bridge's
+// GraphQLWebsocketTransport with keepAlive, and completes connection_init.
+func dialIdleWS(t *testing.T, subprotocol string, keepAlive time.Duration) *websocket.Conn {
+	t.Helper()
+	srv := testserver.New()
+	srv.AddTransport(GraphQLWebsocketTransport(wsInitClients(t), wsInitSecret, nil, websocket.Upgrader{}, keepAlive))
+	httpSrv := httptest.NewServer(srv)
+	t.Cleanup(httpSrv.Close)
+
+	dialer := websocket.Dialer{Subprotocols: []string{subprotocol}}
+	conn, resp, err := dialer.Dial(strings.Replace(httpSrv.URL, "http://", "ws://", 1), nil)
+	if resp != nil && resp.Body != nil {
+		_ = resp.Body.Close()
+	}
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	t.Cleanup(func() { _ = conn.Close() })
+	if conn.Subprotocol() != subprotocol {
+		t.Fatalf("negotiated subprotocol %q, want %q", conn.Subprotocol(), subprotocol)
+	}
+	if err := conn.WriteJSON(map[string]any{"type": "connection_init", "payload": map[string]any{}}); err != nil {
+		t.Fatalf("write init: %v", err)
+	}
+	if got := readWSType(t, conn, 2*time.Second); got != "connection_ack" {
+		t.Fatalf("init answered %q, want connection_ack", got)
+	}
+	return conn
+}
+
+// readWSType reads one message within timeout and returns its type, or
+// "timeout" when none arrived.
+func readWSType(t *testing.T, conn *websocket.Conn, timeout time.Duration) string {
+	t.Helper()
+	_ = conn.SetReadDeadline(time.Now().Add(timeout))
+	_, data, err := conn.ReadMessage()
+	if err != nil {
+		var netErr interface{ Timeout() bool }
+		if errors.As(err, &netErr) && netErr.Timeout() {
+			return "timeout"
+		}
+		t.Fatalf("read: %v", err)
+	}
+	var msg struct {
+		Type string `json:"type"`
+	}
+	if err := json.Unmarshal(data, &msg); err != nil {
+		t.Fatalf("decode %s: %v", data, err)
+	}
+	return msg.Type
+}
+
+// An idle graphql-transport-ws connection carries no traffic unless the
+// server pings, and proxies close it at their idle timeout. The client
+// answers every ping, so the connection must also outlive the server's
+// pong deadline of twice the interval.
+func TestGraphQLWebsocketTransportPingsIdleGraphQLTransportWS(t *testing.T) {
+	const interval = 50 * time.Millisecond
+	conn := dialIdleWS(t, "graphql-transport-ws", interval)
+	for i := range 6 {
+		if got := readWSType(t, conn, 10*interval); got != "ping" {
+			t.Fatalf("idle message %d = %q, want ping", i, got)
+		}
+		if err := conn.WriteJSON(map[string]any{"type": "pong"}); err != nil {
+			t.Fatalf("write pong %d: %v", i, err)
+		}
+	}
+}
+
+func TestGraphQLWebsocketTransportSendsKeepAliveOnIdleGraphQLWS(t *testing.T) {
+	const interval = 50 * time.Millisecond
+	conn := dialIdleWS(t, "graphql-ws", interval)
+	for i := range 3 {
+		if got := readWSType(t, conn, 10*interval); got != "ka" {
+			t.Fatalf("idle message %d = %q, want ka", i, got)
+		}
+	}
+}
