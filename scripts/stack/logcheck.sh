@@ -57,8 +57,8 @@ mist_fail_allow='Could not connect to|Connection refused|Connection reset|Broken
 # shellcheck disable=SC2016 # the backticks are literal Mist log text
 signature_allow='Process `Livepeer` \(PID [0-9]+\) exited with unrecoverable error \(code 2: too many upload failures\)'
 
-out="$(mktemp)"
-trap 'rm -f "$out"' EXIT
+work="$(mktemp -d)"
+trap 'rm -rf "$work"' EXIT
 
 # Two Livepeer HTTP refusals are designed outcomes, each allowlisted only for a stream the
 # refusing side names in its own log; the same status for any other stream, such as the staging
@@ -69,17 +69,15 @@ trap 'rm -f "$out"' EXIT
 #   503: the gateway had no orchestrator session for the stream (ErrNoOrchs: its orchestrator
 #   declined under dynamic capacity management while the host was loaded). Mist gives up on the
 #   gateway and Foghorn records the stream as degraded to local renditions.
+# The refusing side logs before it answers, so its line is read after every
+# service's candidate hits: a refusal that lands while the check runs, as a
+# scenario's teardown settles, is then never missing from its allowlist.
 stream_names_logged_by() { # stream_names_logged_by <service regex> <fixed text> <stream regex>
   stack_services | grep -E "$1" | while IFS= read -r svc; do
     stack_logs ${since_args[@]+"${since_args[@]}"} "$svc"
   done | grep -F "$2" | grep -oE "$3" | sort -u
 }
-ended_session_streams="$(stream_names_logged_by '^foghorn' 'livepeer auth: refused a transcode of an ended ingest session' \
-  '"stream":"live\+[A-Za-z0-9_-]+"' | cut -d'"' -f4)"
-# The gateway's manifest ID is the stream name plus a per-process suffix after the last '-'.
-no_orchestrator_streams="$(stream_names_logged_by '^livepeer-gateway' 'err="ErrNoOrchs"' \
-  'manifestID=[A-Za-z0-9_+]+-[A-Za-z0-9]+' | sed -E 's/^manifestID=//; s/-[A-Za-z0-9]+$//' | sort -u)"
-drop_designed_refusals() { # stdin: log lines; drops each allowlisted refusal of the streams above
+drop_designed_refusals() { # stdin: log lines; drops each allowlisted refusal of the streams named below
   ENDED_SESSION_STREAMS="$ended_session_streams" NO_ORCHESTRATOR_STREAMS="$no_orchestrator_streams" awk '
     BEGIN {
       n403 = split(ENVIRON["ENDED_SESSION_STREAMS"], s403, "\n")
@@ -100,25 +98,41 @@ if [ -z "$sources" ]; then
   echo 'logcheck: FAIL (no log sources)' >&2
   exit 1
 fi
+read_services=()
 while IFS= read -r svc; do
   [ -n "$svc" ] || continue
-  if ! stack_logs ${since_args[@]+"${since_args[@]}"} "$svc" >"$out"; then
+  if ! stack_logs ${since_args[@]+"${since_args[@]}"} "$svc" >"$work/log"; then
     printf 'logcheck: cannot read %s logs\n' "$svc" >&2
     found=1
     continue
   fi
-  hits="$(grep -E "$signatures" "$out" | grep -vE "$signature_allow" | drop_designed_refusals || true)"
+  read_services+=("$svc")
+  grep -E "$signatures" "$work/log" | grep -vE "$signature_allow" >"$work/$svc.hits"
   if [ -n "$scenario_signatures" ]; then
-    scenario_hits="$(grep -iE "$scenario_signatures" "$out" || true)"
-    [ -n "$scenario_hits" ] && hits="${hits}${hits:+$'\n'}${scenario_hits}"
+    grep -iE "$scenario_signatures" "$work/log" >"$work/$svc.scenario"
+  else
+    : >"$work/$svc.scenario"
   fi
-  mist_fails="$(grep -E 'FAIL\|' "$out" | grep -vE "$mist_fail_allow" | drop_designed_refusals || true)"
+  grep -E 'FAIL\|' "$work/log" | grep -vE "$mist_fail_allow" >"$work/$svc.mist"
+done <<<"$sources"
+
+ended_session_streams="$(stream_names_logged_by '^foghorn' 'livepeer auth: refused a transcode of an ended ingest session' \
+  '"stream":"live\+[A-Za-z0-9_-]+"' | cut -d'"' -f4)"
+# The gateway's manifest ID is the stream name plus a per-process suffix after the last '-'.
+no_orchestrator_streams="$(stream_names_logged_by '^livepeer-gateway' 'err="ErrNoOrchs"' \
+  'manifestID=[A-Za-z0-9_+]+-[A-Za-z0-9]+' | sed -E 's/^manifestID=//; s/-[A-Za-z0-9]+$//' | sort -u)"
+
+for svc in ${read_services[@]+"${read_services[@]}"}; do
+  hits="$(drop_designed_refusals <"$work/$svc.hits")"
+  scenario_hits="$(cat "$work/$svc.scenario")"
+  [ -n "$scenario_hits" ] && hits="${hits}${hits:+$'\n'}${scenario_hits}"
+  mist_fails="$(drop_designed_refusals <"$work/$svc.mist")"
   if [ -n "$hits" ] || [ -n "$mist_fails" ]; then
     found=1
     printf '\n== %s\n' "$svc"
     printf '%s\n' "$hits" "$mist_fails" | sed '/^$/d' | sort | uniq -c | sort -rn | head -20
   fi
-done <<<"$sources"
+done
 
 if [ "$found" -ne 0 ]; then
   echo
