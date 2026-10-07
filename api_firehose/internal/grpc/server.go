@@ -468,17 +468,34 @@ func (s *DecklogServer) SendEvent(ctx context.Context, trigger *ipcpb.MistTrigge
 	// Unwrap inner payload and determine event type + tenant
 	msg, eventType, tenantID := s.unwrapMistTrigger(trigger)
 	if eventType == "" {
+		// A declared-unrouted payload is acknowledged without publishing: a
+		// sender from an older release may still forward it during a rollout,
+		// and nothing downstream would consume it.
+		if payload, unrouted := analyticsevents.UnroutedTriggerPayload(trigger); unrouted {
+			if s.metrics != nil {
+				if s.metrics.EventsIngested != nil {
+					s.metrics.EventsIngested.WithLabelValues(payload, "unrouted").Inc()
+				}
+				s.metrics.GRPCRequests.WithLabelValues("SendEvent", "unrouted").Inc()
+			}
+			s.logger.WithFields(logging.Fields{
+				"trigger_type": trigger.GetTriggerType(),
+				"payload":      payload,
+				"node_id":      trigger.GetNodeId(),
+			}).Debug("Acknowledged MistTrigger payload that no analytics_events consumer handles")
+			return &emptypb.Empty{}, nil
+		}
 		if s.metrics != nil {
 			if s.metrics.EventsIngested != nil {
-				s.metrics.EventsIngested.WithLabelValues("unrouted", "rejected").Inc()
+				s.metrics.EventsIngested.WithLabelValues("unknown", "rejected").Inc()
 			}
 			s.metrics.GRPCRequests.WithLabelValues("SendEvent", "invalid_request").Inc()
 		}
 		s.logger.WithFields(logging.Fields{
 			"trigger_type": trigger.GetTriggerType(),
 			"node_id":      trigger.GetNodeId(),
-		}).Warn("Rejected MistTrigger payload that no analytics_events consumer handles")
-		return nil, status.Errorf(codes.InvalidArgument, "MistTrigger payload %T is not an analytics event", trigger.GetTriggerPayload())
+		}).Warn("Rejected MistTrigger with an empty or unknown payload")
+		return nil, status.Error(codes.InvalidArgument, "MistTrigger payload is empty or unknown to this Decklog")
 	}
 	if s.metrics != nil && s.metrics.EventsIngested != nil {
 		s.metrics.EventsIngested.WithLabelValues(eventType, "received").Inc()

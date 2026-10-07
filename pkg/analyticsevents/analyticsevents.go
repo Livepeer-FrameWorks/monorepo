@@ -10,8 +10,8 @@ import (
 )
 
 // TriggerEventType returns the analytics_events event_type of a MistTrigger
-// sent through Decklog's SendEvent. It reports false for a payload no
-// analytics_events consumer handles; UnroutedTriggerPayloads lists those.
+// sent through Decklog's SendEvent. It reports false for an empty payload and
+// for one no analytics_events consumer handles (UnroutedTriggerPayloads).
 func TriggerEventType(trigger *ipcpb.MistTrigger) (string, bool) {
 	switch trigger.GetTriggerPayload().(type) {
 	case *ipcpb.MistTrigger_PushRewrite:
@@ -76,7 +76,9 @@ func TriggerEventType(trigger *ipcpb.MistTrigger) (string, bool) {
 }
 
 // UnroutedTriggerPayloads names, by MistTrigger oneof field, each payload
-// that never reaches analytics_events and why. Decklog refuses these.
+// that never reaches analytics_events and why. Decklog acknowledges these
+// without publishing, so a sender from an older release that still forwards
+// one does not fail during a mixed-version rollout.
 var UnroutedTriggerPayloads = map[string]string{
 	"client_lifecycle_update":    "Foghorn folds per-viewer updates into client_lifecycle_batch",
 	"stream_process":             "Foghorn answers STREAM_PROCESS inline; it records no analytics fact",
@@ -86,6 +88,20 @@ var UnroutedTriggerPayloads = map[string]string{
 	"push_input_close":           "source presence owned by Foghorn's ingest admission; stream_end and stream_lifecycle_update record the stream going offline",
 	"api_request_batch":          "API usage travels on service_events",
 	"message_lifecycle_data":     "messaging events travel on service_events",
+}
+
+// UnroutedTriggerPayload returns the oneof field name of a trigger whose
+// payload is declared in UnroutedTriggerPayloads. It reports false for a
+// routed payload, an empty one, or one this build does not know.
+func UnroutedTriggerPayload(trigger *ipcpb.MistTrigger) (string, bool) {
+	m := trigger.ProtoReflect()
+	field := m.WhichOneof(m.Descriptor().Oneofs().ByName("trigger_payload"))
+	if field == nil {
+		return "", false
+	}
+	name := string(field.Name())
+	_, unrouted := UnroutedTriggerPayloads[name]
+	return name, unrouted
 }
 
 // GatewayTelemetryEventType returns the analytics_events event_type of a

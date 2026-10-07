@@ -16,6 +16,7 @@ import (
 
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/encoding/protowire"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/structpb"
 	"google.golang.org/protobuf/types/known/timestamppb"
@@ -904,9 +905,11 @@ func TestUnwrapMistTriggerAllTypes(t *testing.T) {
 	}
 }
 
-// A payload no analytics_events consumer handles is refused, never published
-// under a placeholder type that ingest can only log as unknown.
-func TestSendEventRejectsUnroutedPayload(t *testing.T) {
+// A payload declared unrouted is never published under a placeholder type that
+// ingest can only log as unknown. It is acknowledged without an error, so a
+// sender from an older release that still forwards it, such as a Foghorn
+// sending PUSH_INPUT_CLOSE, logs no failure during a mixed-version rollout.
+func TestSendEventAcknowledgesKnownUnroutedPayloadWithoutPublishing(t *testing.T) {
 	producer := &fakeProducer{}
 	server := newTestServer(producer)
 
@@ -914,10 +917,6 @@ func TestSendEventRejectsUnroutedPayload(t *testing.T) {
 		name    string
 		trigger *ipcpb.MistTrigger
 	}{
-		{
-			name:    "nil payload",
-			trigger: &ipcpb.MistTrigger{TenantId: proto.String("aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee")},
-		},
 		{
 			name: "PushInputClose",
 			trigger: &ipcpb.MistTrigger{
@@ -951,14 +950,41 @@ func TestSendEventRejectsUnroutedPayload(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			_, err := server.SendEvent(context.Background(), tt.trigger)
+			if _, err := server.SendEvent(context.Background(), tt.trigger); err != nil {
+				t.Fatalf("SendEvent error = %v, want an acknowledgement", err)
+			}
+		})
+	}
+	if len(producer.publishCalls) != 0 || len(producer.produceCalls) != 0 {
+		t.Fatalf("unrouted payloads reached Kafka: %d typed, %d raw", len(producer.publishCalls), len(producer.produceCalls))
+	}
+}
+
+// An empty payload, or one this build does not know, is malformed for this
+// Decklog and is refused.
+func TestSendEventRejectsEmptyOrUnknownPayload(t *testing.T) {
+	producer := &fakeProducer{}
+	server := newTestServer(producer)
+
+	unknown := &ipcpb.MistTrigger{TenantId: proto.String("aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee")}
+	// A payload field number no MistTrigger oneof declares, as a newer producer would send it.
+	unknownField := protowire.AppendTag(nil, 999, protowire.BytesType)
+	unknownField = protowire.AppendBytes(unknownField, []byte{0x0a, 0x01, 'x'})
+	unknown.ProtoReflect().SetUnknown(unknownField)
+
+	for name, trigger := range map[string]*ipcpb.MistTrigger{
+		"empty payload":   {TenantId: proto.String("aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee")},
+		"unknown payload": unknown,
+	} {
+		t.Run(name, func(t *testing.T) {
+			_, err := server.SendEvent(context.Background(), trigger)
 			if status.Code(err) != codes.InvalidArgument {
 				t.Fatalf("SendEvent error = %v, want InvalidArgument", err)
 			}
 		})
 	}
 	if len(producer.publishCalls) != 0 || len(producer.produceCalls) != 0 {
-		t.Fatalf("unrouted payloads reached Kafka: %d typed, %d raw", len(producer.publishCalls), len(producer.produceCalls))
+		t.Fatalf("refused payloads reached Kafka: %d typed, %d raw", len(producer.publishCalls), len(producer.produceCalls))
 	}
 }
 
