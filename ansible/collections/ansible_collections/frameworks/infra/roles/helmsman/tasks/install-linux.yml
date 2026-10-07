@@ -152,6 +152,27 @@
   notify: helmsman restart
   when: not ansible_check_mode
 
+# The component updater writes .installed-<sha1(checksum)> sentinels here too,
+# but nothing reads them back; only the current pin's sentinel decides an
+# install, so every other one is dropped.
+- name: Find obsolete Helmsman install sentinels
+  ansible.builtin.find:
+    paths: "{{ helmsman_install_dir }}"
+    file_type: file
+    recurse: false
+    hidden: true
+    patterns: ".installed-*"
+    excludes: "{{ helmsman_install_sentinel | basename }}"
+  register: helmsman_obsolete_install_sentinels
+
+- name: Remove obsolete Helmsman install sentinels
+  ansible.builtin.file:
+    path: "{{ item.path }}"
+    state: absent
+  loop: "{{ helmsman_obsolete_install_sentinels.files | default([]) }}"
+  loop_control:
+    label: "{{ item.path }}"
+
 # The component updater (helmsman itself) owns this file at runtime. Stamp
 # only when this run actually installed the pinned artifact, or the key was
 # never seeded — never regress a version the updater recorded.

@@ -8,6 +8,20 @@
       ansible.builtin.meta: end_play
       when: helmsman_artifact_url | length == 0
 
+    - name: Find Helmsman install sentinels
+      ansible.builtin.find:
+        paths: /opt/frameworks/helmsman
+        hidden: true
+        patterns: ".installed-*"
+      register: helmsman_sentinels
+
+    - name: Assert only the current pin's sentinel remains
+      ansible.builtin.assert:
+        that:
+          - helmsman_sentinels.files | length == 1
+          - (helmsman_sentinels.files | first).path is not search('0000000000')
+        fail_msg: "install sentinels left: {{ helmsman_sentinels.files | map(attribute='path') | list }}"
+
     - name: Refresh service facts
       ansible.builtin.service_facts:
 

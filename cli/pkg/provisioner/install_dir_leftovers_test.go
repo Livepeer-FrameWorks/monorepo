@@ -47,10 +47,18 @@ func TestNativeInstallsLeaveOneBinaryAndOneSentinel(t *testing.T) {
 	for _, tc := range []struct{ file, find, remove string }{
 		{roles + "go_service/tasks/install.yml", "Find obsolete install sentinels", "Remove obsolete install sentinels"},
 		{roles + "privateer/tasks/install.yml", "Find obsolete Privateer install sentinels", "Remove obsolete Privateer install sentinels"},
+		// Helmsman's component updater writes .installed-<sha1(checksum)>
+		// sentinels into the same directory but never reads them, so only the
+		// current pin's sentinel is kept.
+		{roles + "helmsman/tasks/install-linux.yml", "Find obsolete Helmsman install sentinels", "Remove obsolete Helmsman install sentinels"},
+		{roles + "helmsman/tasks/install-darwin.yml", "Find obsolete Helmsman install sentinels", "Remove obsolete Helmsman install sentinels"},
 	} {
 		spec, _ := moduleSpec(roleTaskByName(t, tc.file, tc.find), "find")
 		if spec["hidden"] != true || spec["patterns"] != ".installed-*" {
 			t.Errorf("%s: %q must set hidden: true to match .installed-* files: %v", tc.file, tc.find, spec)
+		}
+		if !strings.Contains(stringValue(spec["excludes"]), "_install_sentinel | basename") {
+			t.Errorf("%s: %q must keep the current pin's sentinel: %v", tc.file, tc.find, spec)
 		}
 		remove, _ := moduleSpec(roleTaskByName(t, tc.file, tc.remove), "file")
 		if remove["state"] != "absent" {

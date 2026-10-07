@@ -1,0 +1,18 @@
+---
+# A sentinel of an earlier pin, as edges keep one per release they ran.
+- name: Prepare
+  hosts: all
+  become: true
+  gather_facts: false
+  tasks:
+    - name: Ensure Helmsman install directory
+      ansible.builtin.file:
+        path: /opt/frameworks/helmsman
+        state: directory
+        mode: "0755"
+
+    - name: Leave an earlier pin's install sentinel
+      ansible.builtin.copy:
+        dest: /opt/frameworks/helmsman/.installed-0000000000000000000000000000000000000000
+        content: ""
+        mode: "0644"
