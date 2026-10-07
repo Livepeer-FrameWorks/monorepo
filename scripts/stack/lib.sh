@@ -92,14 +92,15 @@ eventually() {
 
 # ---- fault injection ----------------------------------------------------------
 
-# stack_ctl <stop|start|restart|kill> <service>: acts on this stack's own compose
-# project. Needs the docker CLI and socket in stack-runner; BLOCKED otherwise.
+# stack_ctl <stop|start|restart|kill|pause|unpause> <service>...: acts on this
+# stack's own compose project. Needs the docker CLI and socket in stack-runner;
+# BLOCKED otherwise.
 stack_ctl() {
   if ! command -v docker >/dev/null 2>&1 || [ ! -S /var/run/docker.sock ] || [ -z "${COMPOSE_PROJECT_NAME:-}" ]; then
-    blocked "fault injection ($1 $2) needs docker, /var/run/docker.sock and COMPOSE_PROJECT_NAME in stack-runner"
+    blocked "fault injection ($*) needs docker, /var/run/docker.sock and COMPOSE_PROJECT_NAME in stack-runner"
     return 1
   fi
-  docker compose -p "$COMPOSE_PROJECT_NAME" "$1" "$2" >/dev/null 2>&1
+  docker compose -p "$COMPOSE_PROJECT_NAME" "$@" >/dev/null 2>&1
 }
 stack_exec() { # stack_exec <service> <command...>
   command -v docker >/dev/null 2>&1 && [ -S /var/run/docker.sock ] && [ -n "${COMPOSE_PROJECT_NAME:-}" ] || {
