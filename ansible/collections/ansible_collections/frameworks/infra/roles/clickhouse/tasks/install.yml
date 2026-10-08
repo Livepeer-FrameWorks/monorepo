@@ -9,6 +9,11 @@
     tasks_from: config/clickhouse.yml
   tags: [configure]
   vars:
+    # idealista's config.xml and users.xml changes notify this role's restart
+    # handler instead of idealista's own Restart-clickhouse, so a run that
+    # changes both those files and the config.d drop-ins restarts ClickHouse
+    # once, after Keeper.
+    clickhouse_handler_on_config_change: clickhouse restart
     clickhouse_http_port: "{{ clickhouse_port_http }}"
     clickhouse_tcp_port: "{{ clickhouse_port_tcp }}"
     clickhouse_interserver_http_port: "{{ clickhouse_port_interserver }}"

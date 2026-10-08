@@ -282,3 +282,57 @@ func TestClickHouseRoleRemovesOpenSSLThroughADropIn(t *testing.T) {
 		t.Fatalf("TLS-enabled hosts must keep openSSL: %v", spec)
 	}
 }
+
+// idealista.clickhouse notifies its own Restart-clickhouse handler when it
+// renders config.xml or users.xml. Unless that notification is routed to this
+// role's restart handler, a run that changes both idealista's files and a
+// config.d drop-in restarts ClickHouse twice in one flush.
+func TestClickHouseRoleConfigChangesNotifyOneRestartHandler(t *testing.T) {
+	const role = "ansible/collections/ansible_collections/frameworks/infra/roles/clickhouse/"
+	idealista := roleTaskByName(t, role+"tasks/install.yml", "Configure ClickHouse via idealista.clickhouse")
+	vars, _ := idealista["vars"].(map[string]any)
+	if vars["clickhouse_handler_on_config_change"] != "clickhouse restart" {
+		t.Fatalf("idealista.clickhouse config changes must notify clickhouse restart, got %v", vars["clickhouse_handler_on_config_change"])
+	}
+
+	var handlers []any
+	if err := yaml.Unmarshal([]byte(readRepoFile(t, role+"handlers/main.yml")), &handlers); err != nil {
+		t.Fatal(err)
+	}
+	var serverRestarts []map[string]any
+	walkRoleBlocks(handlers, nil, func(handler map[string]any, _ []map[string]any) {
+		if spec, ok := moduleSpec(handler, "systemd"); ok && spec["name"] == "{{ clickhouse_service_name }}" && spec["state"] == "restarted" {
+			serverRestarts = append(serverRestarts, handler)
+		}
+	})
+	if len(serverRestarts) != 1 || serverRestarts[0]["listen"] != "clickhouse restart" {
+		t.Fatalf("want one clickhouse-server restart handler listening on clickhouse restart, got %v", serverRestarts)
+	}
+
+	allowed := map[string]bool{"clickhouse restart": true, "keeper restart": true, "systemd daemon-reload": true}
+	var tasks []any
+	if err := yaml.Unmarshal([]byte(readRepoFile(t, role+"tasks/install.yml")), &tasks); err != nil {
+		t.Fatal(err)
+	}
+	notifying := 0
+	walkRoleBlocks(tasks, nil, func(task map[string]any, _ []map[string]any) {
+		var topics []any
+		switch notify := task["notify"].(type) {
+		case nil:
+			return
+		case string:
+			topics = []any{notify}
+		case []any:
+			topics = notify
+		}
+		notifying++
+		for _, topic := range topics {
+			if !allowed[stringValue(topic)] {
+				t.Errorf("%q notifies %v, which is not a handler of this role", task["name"], topic)
+			}
+		}
+	})
+	if notifying == 0 {
+		t.Fatal("install.yml has no notifying tasks; the scan did not reach the config tasks")
+	}
+}
