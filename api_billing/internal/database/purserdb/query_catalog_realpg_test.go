@@ -383,15 +383,22 @@ func assertTenantAdmissionQueryPlan(t *testing.T, db *sql.DB) {
 		t.Fatalf("analyze reservations: %v", err)
 	}
 
-	rows, err := db.QueryContext(ctx, `
-		EXPLAIN (ANALYZE, BUFFERS, FORMAT TEXT)
-		SELECT COALESCE(SUM(reserved_amount_micro), 0)
-		FROM purser.usage_reservations
-		WHERE tenant_id = $1::uuid
-		  AND currency = 'EUR'
-		  AND updated_at >= NOW() - INTERVAL '3 minutes'`, tenantID)
+	// The generated statements are explained with the currency bound as a
+	// parameter, exactly as the service sends them: the engine infers the
+	// parameter's type from the statement, so a literal would hide a
+	// comparison that casts the indexed column and demotes it to a filter.
+	admissionPlan := explainGeneratedQuery(ctx, t, db, getTenantAdmissionStatus, "EUR", tenantID)
+	assertLookupSeeks(t, "GetTenantAdmissionStatus", admissionPlan, "on usage_reservations", "currency")
+	billingPlan := explainGeneratedQuery(ctx, t, db, getTenantBillingStatus,
+		"EUR", "{dvr_max_window_seconds}", "{max_concurrent_streams}", tenantID)
+	assertLookupSeeks(t, "GetTenantBillingStatus", billingPlan, "on usage_reservations", "currency")
+}
+
+func explainGeneratedQuery(ctx context.Context, t *testing.T, db *sql.DB, query string, args ...any) string {
+	t.Helper()
+	rows, err := db.QueryContext(ctx, "EXPLAIN (ANALYZE, FORMAT TEXT)\n"+query, args...)
 	if err != nil {
-		t.Fatalf("explain admission reservation lookup: %v", err)
+		t.Fatalf("explain generated query: %v", err)
 	}
 	defer rows.Close()
 	var plan strings.Builder
@@ -406,8 +413,38 @@ func assertTenantAdmissionQueryPlan(t *testing.T, db *sql.DB) {
 	if err := rows.Err(); err != nil {
 		t.Fatalf("read explain plan: %v", err)
 	}
-	if !strings.Contains(plan.String(), "idx_usage_reservations_tenant_currency_recent") {
-		t.Fatalf("admission reservation lookup did not use bounded recent index:\n%s", plan.String())
+	return plan.String()
+}
+
+// assertLookupSeeks requires every scan of relation to bound column in its
+// index condition. A predicate the engine can only filter means the scan
+// reads every row under the other bounds, here every reservation the tenant
+// holds in any currency.
+func assertLookupSeeks(t *testing.T, name, plan, relation, column string) {
+	t.Helper()
+	lines := strings.Split(plan, "\n")
+	found := false
+	for index, line := range lines {
+		if !strings.Contains(line, relation) {
+			continue
+		}
+		found = true
+		bounded := false
+		for _, detail := range lines[index+1:] {
+			trimmed := strings.TrimSpace(detail)
+			if strings.HasPrefix(trimmed, "->") || strings.HasPrefix(trimmed, "SubPlan") || strings.HasPrefix(trimmed, "InitPlan") {
+				break
+			}
+			if strings.HasPrefix(trimmed, "Index Cond:") && strings.Contains(trimmed, column) {
+				bounded = true
+			}
+		}
+		if !bounded {
+			t.Fatalf("%s scans %s without bounding %s in the index condition:\n%s", name, relation, column, plan)
+		}
+	}
+	if !found {
+		t.Fatalf("%s plan has no scan %s:\n%s", name, relation, plan)
 	}
 }
 

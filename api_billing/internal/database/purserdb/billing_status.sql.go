@@ -175,7 +175,7 @@ LEFT JOIN LATERAL (
         AS reserved_balance_cents
     FROM purser.usage_reservations
     WHERE tenant_id = ts.tenant_id
-      AND currency = $1
+      AND currency = $1::bpchar
       AND updated_at >= NOW() - INTERVAL '3 minutes'
 ) reservations ON TRUE
 WHERE ts.tenant_id = $2::text::uuid AND ts.status != 'cancelled'
@@ -263,7 +263,7 @@ LEFT JOIN LATERAL (
         AS reserved_balance_cents
     FROM purser.usage_reservations
     WHERE tenant_id = ts.tenant_id
-      AND currency = $1
+      AND currency = $1::bpchar
       AND updated_at >= NOW() - INTERVAL '3 minutes'
 ) reservations ON TRUE
 LEFT JOIN LATERAL (

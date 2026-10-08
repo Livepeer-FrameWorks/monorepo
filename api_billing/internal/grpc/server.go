@@ -277,6 +277,9 @@ type PurserServer struct {
 	// tokenHasher attributes domain events to the calling API token with
 	// Bridge's usage hash, so audit rows join API usage rows.
 	tokenHasher *events.TokenHasher
+	// admissionLastGood answers GetTenantAdmissionStatus when the database
+	// read fails or exceeds its budget.
+	admissionLastGood tenantAdmissionLastGood
 }
 
 // domainActor is the caller of the current RPC as domain events record it.
@@ -568,26 +571,35 @@ func (s *PurserServer) GetTenantAdmissionStatus(ctx context.Context, req *purser
 		return nil, status.Error(codes.InvalidArgument, "tenant_id required")
 	}
 
-	queryCtx, cancel := context.WithTimeout(ctx, tenantAdmissionQueryTimeout)
-	defer cancel()
-
 	var row purserdb.GetTenantAdmissionStatusRow
-	err := fwdb.RetryPostgres(queryCtx, fwdb.DefaultRetryAttempts, 25*time.Millisecond, func() error {
-		var queryErr error
-		row, queryErr = purserdb.New(s.db).GetTenantAdmissionStatus(queryCtx, purserdb.GetTenantAdmissionStatusParams{
-			TenantID: tenantID,
-			Currency: billing.LedgerCurrency,
+	err := context.DeadlineExceeded
+	if budget := tenantAdmissionQueryBudget(ctx); budget > 0 {
+		queryCtx, cancel := context.WithTimeout(ctx, budget)
+		defer cancel()
+		err = fwdb.RetryPostgres(queryCtx, fwdb.DefaultRetryAttempts, 25*time.Millisecond, func() error {
+			var queryErr error
+			row, queryErr = purserdb.New(s.db).GetTenantAdmissionStatus(queryCtx, purserdb.GetTenantAdmissionStatusParams{
+				TenantID: tenantID,
+				Currency: billing.LedgerCurrency,
+			})
+			return queryErr
 		})
-		return queryErr
-	})
+	}
 	if errors.Is(err, sql.ErrNoRows) {
+		s.admissionLastGood.forget(tenantID)
 		return defaultTenantAdmissionStatus(), nil
 	}
 	if err != nil {
+		if lastGood, age, ok := s.admissionLastGood.load(tenantID); ok {
+			s.logger.WithFields(logging.Fields{
+				"tenant_id": tenantID, "error": err, "decision_age": age.String(),
+			}).Warn("Serving last-good tenant admission status after database error")
+			return lastGood, nil
+		}
 		s.logger.WithFields(logging.Fields{"tenant_id": tenantID, "error": err}).Error("Database error getting tenant admission status")
 		return nil, status.Errorf(codes.Internal, "database error: %v", err)
 	}
-	return mapTenantAdmissionStatus(tenantAdmissionData{
+	response := mapTenantAdmissionStatus(tenantAdmissionData{
 		BillingModel: row.BillingModel, SubscriptionStatus: row.SubscriptionStatus,
 		BalanceCents: row.BalanceCents, ReservedBalanceCents: row.ReservedBalanceCents,
 		Collection: postpaidCollectionFacts{
@@ -597,12 +609,15 @@ func (s *PurserServer) GetTenantAdmissionStatus(ctx context.Context, req *purser
 			GrantWaiveUsage: row.GrantWaiveUsage, EffectiveBasePrice: row.EffectiveBasePrice,
 		},
 		TierName: row.TierName, TierLevel: row.TierLevel,
-	}), nil
+	})
+	s.admissionLastGood.store(tenantID, response)
+	return response, nil
 }
 
 // Leave transport and orchestration headroom inside Commodore's 500 ms
-// operation-owned admission budget. A database retry that cannot finish in
-// this window fails closed; it must not consume the caller's entire budget.
+// operation-owned admission budget. A database read that cannot finish in
+// this window answers from the tenant's last-good decision, or fails closed
+// when there is none; it must not consume the caller's entire budget.
 const tenantAdmissionQueryTimeout = 350 * time.Millisecond
 
 // GetTenantBillingStatus returns the full entitlement and pricing snapshot.
