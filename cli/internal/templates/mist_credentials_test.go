@@ -217,16 +217,26 @@ func TestMistControllerReceivesAPIAccountFromEnvironment(t *testing.T) {
 		"darwin env file": mistserverRoleDir + "/tasks/configure-darwin.yml",
 	} {
 		tasks := readFile(t, repositoryPath(t, path))
-		start := strings.Index(tasks, "- name: Render env file\n")
-		if start < 0 {
-			t.Fatalf("%s: no env file task", name)
+		taskNamed := func(taskName string) string {
+			start := strings.Index(tasks, "- name: "+taskName+"\n")
+			if start < 0 {
+				t.Fatalf("%s: no %q task", name, taskName)
+			}
+			task := tasks[start:]
+			if end := strings.Index(task[1:], "\n- name:"); end >= 0 {
+				task = task[:end+1]
+			}
+			return task
 		}
-		task := tasks[start:]
-		if end := strings.Index(task[1:], "\n- name:"); end >= 0 {
-			task = task[:end+1]
+		// The content is composed once so the restart decision can compare it
+		// with the file on the host, then written by the render task.
+		compose := taskNamed("Compose MistServer env file")
+		if !strings.Contains(compose, "    mistserver_env_file_content: |\n") || !strings.Contains(compose, envFileLines) || !strings.Contains(compose, "no_log: true") {
+			t.Errorf("%s must compose MIST_API_USERNAME/MIST_API_PASSWORD without logging them:\n%s", name, compose)
 		}
-		if !strings.Contains(task, envFileLines) || !strings.Contains(task, `mode: "0600"`) || !strings.Contains(task, "no_log: true") {
-			t.Errorf("%s must write MIST_API_USERNAME/MIST_API_PASSWORD owner-only:\n%s", name, task)
+		render := taskNamed("Render env file")
+		if !strings.Contains(render, `content: "{{ mistserver_env_file_content }}"`) || !strings.Contains(render, `mode: "0600"`) || !strings.Contains(render, "no_log: true") {
+			t.Errorf("%s must write the composed MIST_API_USERNAME/MIST_API_PASSWORD owner-only:\n%s", name, render)
 		}
 	}
 
