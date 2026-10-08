@@ -96,27 +96,43 @@ func TestYugabyteRoleFreshInstallAppliesEveryMigration(t *testing.T) {
 }
 
 // TestYugabyteRoleUpgradeAppliesPendingMigrations builds every platform database in its declared layout from the
-// baseline of the latest shipped tag, as an existing cluster holds it, and upgrades it through the role with every
-// migration newer than that tag, one phase at a time. Commodore's v0.3.11 expand 006 inserts a row and then alters a
-// table of the same colocated database, which a single-transaction apply loses to a 40001 abort.
+// baseline of the newest shipped tag older than the release of commodore's expand 006_media_authority_use.sql, as an
+// existing cluster holds it, and upgrades it through the role with every migration newer than that tag, one phase at
+// a time. That file inserts a row and then alters a table of the same colocated database, which a single-transaction
+// apply loses to a 40001 abort. The starting tag follows the file's release, not the latest tag, so the file stays in
+// the upgrade once its own release is tagged.
 func TestYugabyteRoleUpgradeAppliesPendingMigrations(t *testing.T) {
 	repo := ybRoleRepo(t)
-	fromTag := ybRoleShippedTag(t, repo)
-	container := fmt.Sprintf("fw-yb-role-upgrade-%d-%d", os.Getpid(), time.Now().UnixNano())
-	ybRoleStartEngine(t, repo, container)
-
 	services := ybRoleServices(t)
-	ybRoleProvision(t, repo, container, services, ybRoleTaggedSchemaItems(t, repo, fromTag, services.names))
-
 	target := ybRolePendingRelease(t)
-	applied := map[string]int{}
-	for _, phase := range []string{"expand", "postdeploy", "contract"} {
+	phases := []string{"expand", "postdeploy", "contract"}
+	itemsByPhase := map[string][]map[string]any{}
+	for _, phase := range phases {
 		phaseItems, buildErr := BuildMigrationItemsForEngine(services.schemaDatabases, phase, target, SQLEngineYugabyte)
 		if buildErr != nil {
 			t.Fatal(buildErr)
 		}
-		pending := make([]map[string]any, 0, len(phaseItems))
-		for _, item := range phaseItems {
+		itemsByPhase[phase] = phaseItems
+	}
+	var release string
+	for _, item := range itemsByPhase["expand"] {
+		if item["db"] == "commodore" && item["filename"] == "006_media_authority_use.sql" {
+			release = item["version"].(string)
+		}
+	}
+	if release == "" {
+		t.Fatal("commodore expand 006_media_authority_use.sql is not offered; the upgrade proves nothing about colocated DML-then-DDL files")
+	}
+	fromTag := ybRoleShippedTagBefore(t, repo, release)
+
+	container := fmt.Sprintf("fw-yb-role-upgrade-%d-%d", os.Getpid(), time.Now().UnixNano())
+	ybRoleStartEngine(t, repo, container)
+	ybRoleProvision(t, repo, container, services, ybRoleTaggedSchemaItems(t, repo, fromTag, services.names))
+
+	applied := map[string]int{}
+	for _, phase := range phases {
+		pending := make([]map[string]any, 0, len(itemsByPhase[phase]))
+		for _, item := range itemsByPhase[phase] {
 			if compareSemver(item["version"].(string), fromTag) > 0 {
 				pending = append(pending, item)
 				applied[item["db"].(string)]++
@@ -124,10 +140,10 @@ func TestYugabyteRoleUpgradeAppliesPendingMigrations(t *testing.T) {
 		}
 		ybRoleMigrate(t, repo, container, phase, pending)
 	}
-	if applied["commodore"] == 0 {
-		t.Fatalf("no commodore migration is newer than %s; the upgrade proves nothing about colocated DML-then-DDL files", fromTag)
-	}
 	ybRoleRequireApplied(t, container, services.names, applied)
+	if got := ybRoleQuery(t, container, "commodore", "SELECT count(*)::text FROM _migrations WHERE version = '"+release+"' AND phase = 'expand' AND seq = 6"); got != "1" {
+		t.Fatalf("commodore %s expand 006 ledger rows = %s after upgrading from %s, want 1", release, got, fromTag)
+	}
 }
 
 // TestYugabyteRoleMigrationRerunConvergesAfterPartialFailure applies commodore's v0.3.11 expand 019 to a colocated
@@ -343,23 +359,19 @@ func ybRolePendingRelease(t *testing.T) string {
 	return catalog[len(catalog)-1].Version
 }
 
-// ybRoleShippedTag is FRAMEWORKS_SCHEMA_VERIFY_FROM_TAG or, like the Makefile's default, the newest final vX.Y.Z tag
-// reachable from HEAD.
-func ybRoleShippedTag(t *testing.T, repo string) string {
+// ybRoleShippedTagBefore is the newest final vX.Y.Z tag reachable from HEAD that is older than release.
+func ybRoleShippedTagBefore(t *testing.T, repo, release string) string {
 	t.Helper()
-	if tag := strings.TrimSpace(os.Getenv("FRAMEWORKS_SCHEMA_VERIFY_FROM_TAG")); tag != "" {
-		return tag
-	}
 	out, err := exec.CommandContext(t.Context(), "git", "-C", repo, "tag", "--merged", "HEAD", "--sort=-v:refname").Output()
 	if err != nil {
 		t.Fatalf("list tags: %v", err)
 	}
 	for _, tag := range strings.Fields(string(out)) {
-		if releases.ValidateVersion(tag) == nil && releases.BaseVersion(tag) == tag {
+		if releases.ValidateVersion(tag) == nil && releases.BaseVersion(tag) == tag && compareSemver(tag, release) < 0 {
 			return tag
 		}
 	}
-	t.Fatal("no final vX.Y.Z tag is reachable from HEAD")
+	t.Fatalf("no final vX.Y.Z tag older than %s is reachable from HEAD", release)
 	return ""
 }
 
