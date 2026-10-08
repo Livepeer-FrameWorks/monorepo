@@ -62,7 +62,7 @@ func TestDiscoverServices_ProbesUnhealthyRunningGateway(t *testing.T) {
 			now.Add(-20*time.Second), now, now, "Media EU", "frameworks.network")
 	}
 	mock.ExpectQuery(`JOIN quartermaster\.service_cluster_assignments`).WillReturnRows(gatewayRow("unhealthy"))
-	mock.ExpectQuery(`UPDATE quartermaster\.service_instances`).WithArgs("healthy", "inst-lpgw-1").
+	mock.ExpectQuery(`UPDATE quartermaster\.service_instances`).WithArgs("inst-lpgw-1", "healthy", sqlmock.AnyArg()).
 		WillReturnRows(sqlmock.NewRows([]string{"old_status", "service_id"}).AddRow("unhealthy", "livepeer-gateway"))
 	mock.ExpectQuery(`JOIN quartermaster\.service_cluster_assignments`).WillReturnRows(gatewayRow("healthy"))
 

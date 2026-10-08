@@ -135,7 +135,7 @@ type Querier interface {
 	// healthy within the freshness window. ReportAliveNodes maintains these rows.
 	ListFreshEdgeCapabilityServices(ctx context.Context, arg ListFreshEdgeCapabilityServicesParams) ([]ListFreshEdgeCapabilityServicesRow, error)
 	ListGRPCHealthWatchCandidates(ctx context.Context) ([]ListGRPCHealthWatchCandidatesRow, error)
-	ListHealthPollCandidates(ctx context.Context, arg ListHealthPollCandidatesParams) ([]ListHealthPollCandidatesRow, error)
+	ListHealthPollCandidates(ctx context.Context) ([]ListHealthPollCandidatesRow, error)
 	ListIngressSitesForNode(ctx context.Context, nodeID string) ([]ListIngressSitesForNodeRow, error)
 	ListPeerClusters(ctx context.Context, requestingClusterID string) ([]ListPeerClustersRow, error)
 	ListRunningServiceClusterAssignments(ctx context.Context, arg ListRunningServiceClusterAssignmentsParams) ([]string, error)
@@ -180,12 +180,17 @@ type Querier interface {
 	MoveBootstrapNodeIngressSites(ctx context.Context, arg MoveBootstrapNodeIngressSitesParams) error
 	MoveBootstrapNodeServiceInstances(ctx context.Context, arg MoveBootstrapNodeServiceInstancesParams) error
 	MoveBootstrapNodeTLSBundles(ctx context.Context, arg MoveBootstrapNodeTLSBundlesParams) error
-	// Summarizes every input ListPeerClusters reads: tenant reach, cluster identity
-	// and control cell, and which Foghorn instances are assigned and healthy enough
-	// to be addressable. Counts pair with the newest timestamp because a delete
-	// moves no timestamp forward. Detecting change here keeps peer subscriptions
-	// correct no matter which handler performed the mutation.
-	PeerCensusFingerprint(ctx context.Context) (PeerCensusFingerprintRow, error)
+	// Digests exactly the values ListPeerClusters derives a peer set from: active
+	// tenant reach per cluster, active cluster identity and control cell, and the
+	// address of every assigned healthy gRPC Foghorn. Heartbeats and health
+	// refreshes that rewrite a row without changing any of these leave the digest
+	// unchanged, so they do not wake peer subscribers. Expiry is evaluated against
+	// NOW(), so a grant lapsing on its own also changes the digest.
+	PeerCensusFingerprint(ctx context.Context) (string, error)
+	// Writes the verdict only when it differs from the stored one or the stored
+	// check is at least refresh_after_seconds old, so an unchanged instance is
+	// rewritten only as often as the DNS freshness gate needs. The prior status is
+	// returned whether or not the row was written.
 	PersistServiceHealthStatus(ctx context.Context, arg PersistServiceHealthStatusParams) (PersistServiceHealthStatusRow, error)
 	RejectClusterSubscriptionRecord(ctx context.Context, arg RejectClusterSubscriptionRecordParams) error
 	ReleaseSupersededMediaAuthorityRefresh(ctx context.Context, arg ReleaseSupersededMediaAuthorityRefreshParams) (int64, error)

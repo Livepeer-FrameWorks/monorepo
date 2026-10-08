@@ -54,7 +54,7 @@ func TestProbeDiscoveredInstancesSharesOneProbePerInstance(t *testing.T) {
 	}
 	defer func() { _ = mockDB.Close() }()
 	Init(mockDB, logging.NewLogger())
-	mock.ExpectQuery(`UPDATE quartermaster\.service_instances`).WithArgs("healthy", "inst-gw-1").
+	mock.ExpectQuery(`UPDATE quartermaster\.service_instances`).WithArgs("inst-gw-1", "healthy", sqlmock.AnyArg()).
 		WillReturnRows(sqlmock.NewRows([]string{"old_status", "service_id"}).AddRow("unhealthy", "livepeer-gateway"))
 
 	row := gatewayRow(t, gateway, "inst-gw-1")
@@ -100,7 +100,7 @@ func TestProbeDiscoveredInstancesPersistsFailedCheck(t *testing.T) {
 	}
 	defer func() { _ = mockDB.Close() }()
 	Init(mockDB, logging.NewLogger())
-	mock.ExpectQuery(`UPDATE quartermaster\.service_instances`).WithArgs("unhealthy", "inst-gw-2").
+	mock.ExpectQuery(`UPDATE quartermaster\.service_instances`).WithArgs("inst-gw-2", "unhealthy", sqlmock.AnyArg()).
 		WillReturnRows(sqlmock.NewRows([]string{"old_status", "service_id"}).AddRow("unhealthy", "livepeer-gateway"))
 
 	got := ProbeDiscoveredInstances(context.Background(), []quartermasterdb.ServiceDiscoveryRow{gatewayRow(t, gateway, "inst-gw-2")})

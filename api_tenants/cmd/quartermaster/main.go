@@ -361,6 +361,7 @@ func main() {
 		MaxConcurrency:      cfg.HealthMaxConcurrency,
 		BatchSize:           cfg.HealthBatchSize,
 		MinAgeSeconds:       cfg.HealthMinAge(),
+		HealthStaleSeconds:  cfg.PhysicalEndpointStaleSeconds,
 		GRPCWatch:           cfg.HealthGRPCWatch,
 		WatchRefreshSeconds: cfg.HealthWatchRefreshSeconds,
 		WatchBackoffSeconds: cfg.HealthWatchBackoffSeconds,

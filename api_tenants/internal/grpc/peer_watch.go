@@ -2,7 +2,6 @@ package grpc
 
 import (
 	"context"
-	"fmt"
 	"sync"
 	"time"
 
@@ -16,9 +15,9 @@ import (
 )
 
 // peerChangeInterval is how often the process re-reads the fingerprint of the
-// tables a peer set is derived from. It is one small aggregate per interval for
-// the whole process, not per subscriber, and it produces no traffic while
-// nothing changes.
+// values a peer set is derived from. It is one digest read per interval for
+// the whole process, not per subscriber, and it wakes no subscriber while
+// those values stay the same.
 const peerChangeInterval = 2 * time.Second
 
 // maxPeerWatchers bounds concurrent subscriptions. One media cell holds one
@@ -81,20 +80,13 @@ func (hub *peerWatchHub) watcherCount() int {
 	return len(hub.waiters)
 }
 
-// peerCensusFingerprint summarizes every input a peer set is derived from.
+// peerCensusFingerprint digests the values every peer set is derived from.
 // Detecting change centrally keeps correctness independent of which handler
 // performed a mutation, so a new write path cannot silently stop waking
-// subscribers.
+// subscribers; digesting values rather than row timestamps keeps rewrites
+// that change nothing a peer set reads from waking them.
 func (s *QuartermasterServer) peerCensusFingerprint(ctx context.Context) (string, error) {
-	row, err := quartermasterdb.New(s.db).PeerCensusFingerprint(ctx)
-	if err != nil {
-		return "", err
-	}
-	return fmt.Sprintf("%d:%d:%d:%d:%d:%d:%d:%d",
-		row.AccessCount, row.AccessUpdatedAt.UTC().UnixNano(),
-		row.ClusterCount, row.ClusterUpdatedAt.UTC().UnixNano(),
-		row.InstanceCount, row.InstanceUpdatedAt.UTC().UnixNano(),
-		row.AssignmentCount, row.AssignmentUpdatedAt.UTC().UnixNano()), nil
+	return quartermasterdb.New(s.db).PeerCensusFingerprint(ctx)
 }
 
 // RunPeerCensusWatcher wakes peer subscribers when the census changes. It holds

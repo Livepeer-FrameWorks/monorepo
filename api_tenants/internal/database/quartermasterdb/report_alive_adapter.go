@@ -2,6 +2,7 @@ package quartermasterdb
 
 import (
 	"context"
+	"time"
 
 	"github.com/lib/pq"
 )
@@ -76,11 +77,20 @@ func (q *Queries) UpdateReportedNodes(ctx context.Context, arg UpdateReportedNod
 	return err
 }
 
-type UpsertHealthyEdgeInstanceParams struct{ InstanceID, NodeID, ServiceType string }
+type UpsertHealthyEdgeInstanceParams struct {
+	InstanceID, NodeID, ServiceType string
+	// RefreshAfterSeconds is how old last_health_check may grow before an
+	// otherwise unchanged healthy row is rewritten to keep it fresh.
+	RefreshAfterSeconds int32
+}
 
+// UpsertHealthyEdgeInstance records a node's edge capability as healthy. An
+// existing row is rewritten only when a reported field differs or its check
+// is RefreshAfterSeconds old, so repeated reports of an unchanged node leave
+// the row alone.
 func (q *Queries) UpsertHealthyEdgeInstance(ctx context.Context, arg UpsertHealthyEdgeInstanceParams) error {
 	_, err := q.db.ExecContext(ctx, `
-		INSERT INTO quartermaster.service_instances
+		INSERT INTO quartermaster.service_instances AS si
 			(instance_id, cluster_id, node_id, service_id, protocol,
 			 advertise_host, port, status, health_status, started_at,
 			 last_health_check, created_at, updated_at)
@@ -100,12 +110,22 @@ func (q *Queries) UpsertHealthyEdgeInstance(ctx context.Context, arg UpsertHealt
 		    advertise_host = EXCLUDED.advertise_host,
 		    last_health_check = NOW(),
 		    updated_at = NOW()
-	`, arg.InstanceID, arg.NodeID, arg.ServiceType)
+		WHERE si.node_id IS DISTINCT FROM EXCLUDED.node_id
+		   OR si.service_id IS DISTINCT FROM EXCLUDED.service_id
+		   OR si.health_status IS DISTINCT FROM 'healthy'
+		   OR si.status IS DISTINCT FROM 'running'
+		   OR si.advertise_host IS DISTINCT FROM EXCLUDED.advertise_host
+		   OR si.last_health_check IS NULL
+		   OR si.last_health_check <= NOW() - ($4::int * INTERVAL '1 second')
+	`, arg.InstanceID, arg.NodeID, arg.ServiceType, arg.RefreshAfterSeconds)
 	return err
 }
 
 type MarkEdgeInstanceUnhealthyParams struct{ ServiceType, NodeID string }
 
+// MarkEdgeInstanceUnhealthy marks a node's edge capability row unhealthy. A
+// row that is already unhealthy is left alone: DNS publishes only fresh
+// healthy rows, so an unhealthy row needs no freshness refresh.
 func (q *Queries) MarkEdgeInstanceUnhealthy(ctx context.Context, arg MarkEdgeInstanceUnhealthyParams) error {
 	_, err := q.db.ExecContext(ctx, `
 		UPDATE quartermaster.service_instances si
@@ -117,6 +137,21 @@ func (q *Queries) MarkEdgeInstanceUnhealthy(ctx context.Context, arg MarkEdgeIns
 		  AND svc.type = $1
 		  AND si.node_id = $2
 		  AND si.instance_id = 'edge-cap-' || si.node_id || '-' || svc.type
+		  AND si.health_status IS DISTINCT FROM 'unhealthy'
 	`, arg.ServiceType, arg.NodeID)
 	return err
+}
+
+// HealthRefreshAfterSeconds is how old an unchanged health row's
+// last_health_check may grow before a report rewrites it. DNS publishes a
+// healthy row only while its check is younger than staleSeconds, and an
+// unchanged row is next reconsidered up to one report gap later, so the row is
+// rewritten while two full gaps remain: one lost or late report still leaves
+// it fresh. When the stale bound leaves no such room, every report writes.
+func HealthRefreshAfterSeconds(staleSeconds int, reportGap time.Duration) int32 {
+	refresh := time.Duration(staleSeconds)*time.Second - 2*reportGap
+	if refresh <= 0 {
+		return 0
+	}
+	return int32(refresh / time.Second)
 }

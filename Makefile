@@ -1227,6 +1227,8 @@ PURSER_PRESENTMENT_GRPC_REALPG_TESTS := TestCardTopupsCreditTheEURLockedAtChecko
 PURSER_TIER_FEATURES_REALPG_TESTS := TestTierFeatureFlagRemovalConverges_RealPG
 QUARTERMASTER_CAPABILITIES_REALPG_TESTS := TestTenantClusterCapabilities_RealPG
 QUARTERMASTER_CAPABILITIES_REALYB_TESTS := TestTenantClusterCapabilities_RealYugabyte
+QUARTERMASTER_HEALTH_WRITES_REALPG_TESTS := TestUnchangedHealthReportsLeaveRowsAndPeerCensusAlone_RealPG
+QUARTERMASTER_HEALTH_WRITES_REALYB_TESTS := TestUnchangedHealthReportsLeaveRowsAndPeerCensusAlone_RealYugabyte
 QUARTERMASTER_DOMAIN_EVENTS_REALPG_TESTS := TestQuartermasterDomainEventOutbox_RealPG|TestClusterAccessEventsCommitWithAccess_RealPG|TestConcurrentFirstGrantsRecordOneAssignment_RealPG|TestNodeFingerprintOperatorQueries_RealPG
 COMMODORE_DOMAIN_EVENTS_REALPG_TESTS := TestCommodoreDomainEventOutbox_RealPG
 PURSER_DOMAIN_EVENTS_REALPG_TESTS := TestPurserDomainEventOutbox_RealPG|TestMollieBillingEventsCommitWithTheirState_RealPG
@@ -1270,6 +1272,7 @@ verify-foghorn-test-selection: verify-commodore-placement-test-selection
 	@./scripts/check-go-test-selection.sh api_dns ./internal/store '$(NAVIGATOR_STORE_REALYB_TESTS)' 'RealYugabyte$$'
 	@./scripts/check-go-test-selection.sh api_webhooks ./internal/integration '$(BOSUN_REALYB_TESTS)' 'RealYugabyte$$'
 	@./scripts/check-go-test-selection.sh api_tenants ./internal/grpc '$(QUARTERMASTER_CAPABILITIES_REALYB_TESTS)' '^TestTenantClusterCapabilities.*_RealYugabyte$$'
+	@./scripts/check-go-test-selection.sh api_tenants ./internal/grpc '$(QUARTERMASTER_HEALTH_WRITES_REALYB_TESTS)' '^TestUnchangedHealthReports.*_RealYugabyte$$'
 	@./scripts/check-go-test-selection.sh api_balancing ./internal/state '$(FOGHORN_STATE_REALVALKEY_TESTS)' 'RealValkey$$'
 	@./scripts/check-go-test-selection.sh api_balancing ./internal/control '$(FOGHORN_CONTROL_REALVALKEY_TESTS)' 'RealValkey$$'
 	@./scripts/check-go-test-selection.sh api_balancing ./internal/federation '$(FOGHORN_FEDERATION_REALVALKEY_TESTS)' 'RealValkey$$'
@@ -1376,6 +1379,7 @@ verify-schema-migrations-core: verify-foghorn-test-selection
 	@$(CONTRACT_GO_TEST) api_tenants postgres/quartermaster-data-migrations -tags schema_verify -run 'TestTenantDNSEntitlementsRunAndVerifyRealPG|TestNodeIdentityKeyGateUsesRemediationOwnershipRealPG' -count=1 -timeout 600s ./internal/datamigrations/
 	@$(CONTRACT_GO_TEST) api_tenants postgres/quartermaster-dns-entitlement-handoff -tags schema_verify -run 'TestCompleteTenantDNSEntitlementHandoffRealPG|TestCapacityConsentManagement_RealPG|TestPrivateClusterOwnershipLimitSerializes_RealPG' -count=1 -timeout 600s ./internal/grpc/
 	@$(CONTRACT_GO_TEST) api_tenants postgres/quartermaster-capabilities -tags schema_verify -run '$(QUARTERMASTER_CAPABILITIES_REALPG_TESTS)' -count=1 -timeout 600s ./internal/grpc/
+	@$(CONTRACT_GO_TEST) api_tenants postgres/quartermaster-health-writes -tags schema_verify -run '$(QUARTERMASTER_HEALTH_WRITES_REALPG_TESTS)' -count=1 -timeout 600s ./internal/grpc/
 	@$(CONTRACT_GO_TEST) api_tenants postgres/quartermaster-domain-events -tags schema_verify -run '$(QUARTERMASTER_DOMAIN_EVENTS_REALPG_TESTS)' -count=1 -timeout 600s ./internal/grpc/
 	@$(CONTRACT_GO_TEST) api_balancing postgres/foghorn-query-catalog -tags schema_verify -run '$(FOGHORN_QUERY_CATALOG_REALPG_TESTS)' -count=1 -timeout 600s ./internal/database/foghorndb/
 	@$(CONTRACT_GO_TEST) api_balancing postgres/foghorn-control -tags schema_verify -run '$(FOGHORN_CONTROL_REALPG_TESTS)' -count=1 -timeout 600s ./internal/control/
@@ -1476,6 +1480,7 @@ verify-quartermaster-db:
 	@$(CONTRACT_GO_TEST) api_tenants postgres/quartermaster-data-migrations -tags schema_verify -run 'TestTenantDNSEntitlementsRunAndVerifyRealPG|TestNodeIdentityKeyGateUsesRemediationOwnershipRealPG' -count=1 -timeout 600s ./internal/datamigrations/
 	@$(CONTRACT_GO_TEST) api_tenants postgres/quartermaster-dns-entitlement-handoff -tags schema_verify -run 'TestCompleteTenantDNSEntitlementHandoffRealPG|TestCapacityConsentManagement_RealPG|TestPrivateClusterOwnershipLimitSerializes_RealPG' -count=1 -timeout 600s ./internal/grpc/
 	@$(CONTRACT_GO_TEST) api_tenants postgres/quartermaster-capabilities -tags schema_verify -run '$(QUARTERMASTER_CAPABILITIES_REALPG_TESTS)' -count=1 -timeout 600s ./internal/grpc/
+	@$(CONTRACT_GO_TEST) api_tenants postgres/quartermaster-health-writes -tags schema_verify -run '$(QUARTERMASTER_HEALTH_WRITES_REALPG_TESTS)' -count=1 -timeout 600s ./internal/grpc/
 	@$(CONTRACT_GO_TEST) api_tenants postgres/quartermaster-domain-events -tags schema_verify -run '$(QUARTERMASTER_DOMAIN_EVENTS_REALPG_TESTS)' -count=1 -timeout 600s ./internal/grpc/
 
 verify-quartermaster-yugabyte-db:
@@ -1544,6 +1549,7 @@ verify-schema-postgres: verify-foghorn-test-selection
 	@cd api_tenants && go test -tags schema_verify -run 'TestBootstrapRepositoryReplay_RealPG' -count=1 -timeout 600s ./internal/bootstrap/
 	@cd api_tenants && go test -tags schema_verify -run 'TestGeneratedQueryCatalogPrepares_RealPG|TestManualQueryAdapters_RealPG|TestConvertedRuntimeAdapters_RealPG|TestListTenantEffectiveAccessUsesCanonicalActiveGrantPredicate_RealPG|TestMediaPlacementInventory_RealPG|TestMediaCapacityConsent_RealPG|TestMediaAuthorityRefreshCoalescing_RealPG|TestListHealthyServiceNodesConsistentRead_RealPG|TestPrivateClusterControlCellFoghorns_RealPG|TestClusterControlCellReassignment_RealPG|TestServiceEventOutboxScopeAndLeaseToken_RealPG' -count=1 -timeout 600s ./internal/database/quartermasterdb/
 	@cd api_tenants && go test -tags schema_verify -run '$(QUARTERMASTER_CAPABILITIES_REALPG_TESTS)' -count=1 -timeout 600s ./internal/grpc/
+	@cd api_tenants && go test -tags schema_verify -run '$(QUARTERMASTER_HEALTH_WRITES_REALPG_TESTS)' -count=1 -timeout 600s ./internal/grpc/
 	@cd api_tenants && go test -tags schema_verify -run '$(QUARTERMASTER_DOMAIN_EVENTS_REALPG_TESTS)' -count=1 -timeout 600s ./internal/grpc/
 	@cd api_billing && go test -tags schema_verify -run 'TestStripeMeterEventRepository_RealPG' -count=1 -timeout 600s ./internal/stripe/
 	@cd api_billing && go test -tags schema_verify -run 'TestLoadEffectiveTierPartialOverrides_RealPG|TestPlacementTariffSnapshot_RealPG|TestPlacementPriceBoundaries_RealPG|TestPlacementAllowanceUsage_RealPG' -count=1 -timeout 600s ./internal/billing/ ./internal/pricing/
@@ -1745,6 +1751,7 @@ verify-yugabyte-quartermaster-contracts: verify-yugabyte-shared-fixture
 	@$(CONTRACT_GO_TEST) api_tenants yugabyte/quartermaster-consent-management -tags schema_verify -run 'TestCapacityConsentManagement_RealYugabyte|TestPrivateClusterOwnershipLimitSerializes_RealYugabyte' -count=1 -timeout 600s ./internal/grpc/
 	@$(CONTRACT_GO_TEST) api_tenants yugabyte/quartermaster-query-catalog -tags schema_verify -run 'TestGeneratedQueryCatalogPrepares_RealYugabyte|TestConvertedRuntimeAdapters_RealYugabyte|TestMediaPlacementInventory_RealYugabyte|TestMediaCapacityConsent_RealYugabyte|TestMediaAuthorityRefreshCoalescing_RealYugabyte|TestListHealthyServiceNodesConsistentRead_RealYugabyte' -count=1 -timeout 1200s ./internal/database/quartermasterdb/
 	@$(CONTRACT_GO_TEST) api_tenants yugabyte/quartermaster-capabilities -tags schema_verify -run '^($(QUARTERMASTER_CAPABILITIES_REALYB_TESTS))$$' -count=1 -timeout 600s ./internal/grpc/
+	@$(CONTRACT_GO_TEST) api_tenants yugabyte/quartermaster-health-writes -tags schema_verify -run '^($(QUARTERMASTER_HEALTH_WRITES_REALYB_TESTS))$$' -count=1 -timeout 600s ./internal/grpc/
 
 verify-yugabyte-bosun-contracts: verify-yugabyte-shared-fixture
 	@$(CONTRACT_GO_TEST) api_webhooks yugabyte/bosun-ledger -tags schema_verify -run '^($(BOSUN_REALYB_TESTS))$$' -count=1 -timeout 1200s ./internal/integration/

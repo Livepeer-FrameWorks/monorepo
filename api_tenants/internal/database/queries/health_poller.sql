@@ -24,24 +24,32 @@ LEFT JOIN LATERAL (
 WHERE si.status IN ('running', 'starting')
   AND s.type <> 'edge'
   AND s.type NOT LIKE 'edge-%'
-  AND (si.last_health_check IS NULL OR si.last_health_check < sqlc.arg(cutoff)::timestamp)
-ORDER BY COALESCE(si.last_health_check, si.created_at) ASC
-LIMIT sqlc.arg(batch_size)::integer;
+ORDER BY COALESCE(si.last_health_check, si.created_at) ASC, si.instance_id ASC;
 
 -- name: PersistServiceHealthStatus :one
+-- Writes the verdict only when it differs from the stored one or the stored
+-- check is at least refresh_after_seconds old, so an unchanged instance is
+-- rewritten only as often as the DNS freshness gate needs. The prior status is
+-- returned whether or not the row was written.
 WITH previous AS (
     SELECT instance_id, health_status AS old_status, service_id
     FROM quartermaster.service_instances
     WHERE instance_id = sqlc.arg(instance_id)::text
+), written AS (
+    UPDATE quartermaster.service_instances si
+    SET health_status = sqlc.arg(status)::text,
+        last_health_check = NOW(),
+        updated_at = NOW()
+    FROM previous
+    WHERE si.instance_id = previous.instance_id
+      AND (si.health_status IS DISTINCT FROM sqlc.arg(status)::text
+           OR si.last_health_check IS NULL
+           OR si.last_health_check <= NOW() - (sqlc.arg(refresh_after_seconds)::int * INTERVAL '1 second'))
+    RETURNING si.instance_id
 )
-UPDATE quartermaster.service_instances si
-SET health_status = sqlc.arg(status)::text,
-    last_health_check = NOW(),
-    updated_at = NOW()
-FROM previous
-WHERE si.instance_id = previous.instance_id
-RETURNING COALESCE(previous.old_status, '')::text AS old_status,
-          previous.service_id;
+SELECT COALESCE(previous.old_status, '')::text AS old_status,
+       previous.service_id
+FROM previous;
 
 -- name: ListGRPCHealthWatchCandidates :many
 SELECT si.instance_id,

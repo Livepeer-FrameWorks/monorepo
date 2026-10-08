@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"frameworks/api_tenants/internal/database/quartermasterdb"
 	"github.com/DATA-DOG/go-sqlmock"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/servicedefs"
@@ -136,7 +137,7 @@ func TestPollOnceRetriesSchemaVersionMismatch(t *testing.T) {
 	mock.ExpectQuery("SELECT si.instance_id, si.service_id").
 		WillReturnRows(rows)
 
-	if err := pollOnce(&http.Client{Timeout: time.Millisecond}, make(chan struct{}, 1), 10, 0, func(string) HealthWatchTLS { return HealthWatchTLS{} }); err != nil {
+	if err := pollOnce(&http.Client{Timeout: time.Millisecond}, make(chan struct{}, 1), 10, 0, newProbeSchedule(), func(string) HealthWatchTLS { return HealthWatchTLS{} }); err != nil {
 		t.Fatalf("pollOnce returned error after retry: %v", err)
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
@@ -169,7 +170,7 @@ func TestPollOnceExcludesFoghornOwnedEdgeServices(t *testing.T) {
 	})
 	mock.ExpectQuery("poller excludes edge services").WillReturnRows(rows)
 
-	if err := pollOnce(&http.Client{Timeout: time.Millisecond}, make(chan struct{}, 1), 10, 0, func(string) HealthWatchTLS { return HealthWatchTLS{} }); err != nil {
+	if err := pollOnce(&http.Client{Timeout: time.Millisecond}, make(chan struct{}, 1), 10, 0, newProbeSchedule(), func(string) HealthWatchTLS { return HealthWatchTLS{} }); err != nil {
 		t.Fatalf("pollOnce returned error: %v", err)
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
@@ -407,7 +408,7 @@ func TestPersistHealthStatusWakesPoolServiceOnTransition(t *testing.T) {
 
 	expectQuery := func(oldStatus, serviceType, newStatus, instanceID string) {
 		mock.ExpectQuery(`UPDATE quartermaster\.service_instances`).
-			WithArgs(newStatus, instanceID).
+			WithArgs(instanceID, newStatus, sqlmock.AnyArg()).
 			WillReturnRows(sqlmock.NewRows([]string{"old_status", "service_id"}).
 				AddRow(oldStatus, serviceType))
 	}
@@ -474,7 +475,7 @@ func TestPersistHealthTransitionLogsEveryDNSWake(t *testing.T) {
 	transitions := [][2]string{{"unknown", "healthy"}, {"healthy", "skipped"}, {"skipped", "unhealthy"}, {"unhealthy", "unhealthy"}}
 	for _, tr := range transitions {
 		mock.ExpectQuery(`UPDATE quartermaster\.service_instances`).
-			WithArgs(tr[1], "inst-fh-1").
+			WithArgs("inst-fh-1", tr[1], sqlmock.AnyArg()).
 			WillReturnRows(sqlmock.NewRows([]string{"old_status", "service_id"}).AddRow(tr[0], "foghorn"))
 		if _, err := persistHealthTransition(context.Background(), "inst-fh-1", tr[1]); err != nil {
 			t.Fatalf("persistHealthTransition(%v): %v", tr, err)
@@ -496,5 +497,113 @@ func TestPersistHealthTransitionLogsEveryDNSWake(t *testing.T) {
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatalf("unmet sql expectations: %v", err)
+	}
+}
+
+// An unchanged verdict no longer moves last_health_check, so the schedule
+// alone decides which instances are probed. Every instance must still be
+// probed once per minAge however small the batch, and none sooner.
+func TestProbeScheduleProbesEveryInstanceEachMinAge(t *testing.T) {
+	schedule := newProbeSchedule()
+	candidates := []serviceInstance{{id: "a"}, {id: "b"}, {id: "c"}}
+	ids := func(list []serviceInstance) string {
+		out := make([]string, 0, len(list))
+		for _, inst := range list {
+			out = append(out, inst.id)
+		}
+		return strings.Join(out, ",")
+	}
+	start := time.Unix(1_700_000_000, 0)
+	const minAge = 30 * time.Second
+
+	if got := ids(schedule.due(candidates, minAge, 2, start)); got != "a,b" {
+		t.Fatalf("first round = %s, want a,b", got)
+	}
+	if got := ids(schedule.due(candidates, minAge, 2, start.Add(time.Second))); got != "c" {
+		t.Fatalf("second round = %s, want only the unprobed c", got)
+	}
+	if got := ids(schedule.due(candidates, minAge, 2, start.Add(2*time.Second))); got != "" {
+		t.Fatalf("round inside minAge = %s, want none", got)
+	}
+	if got := ids(schedule.due(candidates, minAge, 2, start.Add(minAge+time.Second))); got != "a,b" {
+		t.Fatalf("round after minAge = %s, want the longest-unprobed a,b", got)
+	}
+	if got := ids(schedule.due(candidates, minAge, 2, start.Add(minAge+2*time.Second))); got != "c" {
+		t.Fatalf("next round = %s, want c", got)
+	}
+
+	if got := ids(schedule.due([]serviceInstance{{id: "a"}}, minAge, 2, start.Add(3*minAge))); got != "a" {
+		t.Fatalf("round with b and c gone = %s, want a", got)
+	}
+	if _, kept := schedule.probed["b"]; kept {
+		t.Fatal("schedule kept an instance that is no longer a candidate")
+	}
+}
+
+// Writing an unchanged verdict only once its check is refreshAfter old must
+// keep the stored check younger than the DNS stale bound with a full probe
+// gap to spare, at the slowest probe cadence the poller allows. A stale bound
+// too tight for that writes every verdict, exactly as often as it is probed.
+func TestHealthRefreshKeepsDNSFreshWithAProbeGapToSpare(t *testing.T) {
+	for _, tc := range []struct {
+		staleSeconds, intervalSeconds, minAgeSeconds int
+	}{
+		{300, 30, 30}, // code defaults
+		{90, 30, 30},  // config/env/base.env
+		{300, 30, 60},
+		{600, 30, 30},
+	} {
+		interval := time.Duration(tc.intervalSeconds) * time.Second
+		minAge := time.Duration(tc.minAgeSeconds) * time.Second
+		probeGap := minAge + interval + interval/4
+		stale := time.Duration(tc.staleSeconds) * time.Second
+		refreshAfter := time.Duration(quartermasterdb.HealthRefreshAfterSeconds(tc.staleSeconds, probeGap)) * time.Second
+
+		var now, written, oldest time.Duration
+		for now < time.Hour {
+			now += probeGap
+			age := now - written
+			if age > oldest {
+				oldest = age
+			}
+			if age >= refreshAfter {
+				written = now
+			}
+		}
+		switch {
+		case refreshAfter == 0 && oldest != probeGap:
+			t.Fatalf("stale=%s leaves no room to skip writes, yet the stored check reaches %s instead of one %s probe gap",
+				stale, oldest, probeGap)
+		case refreshAfter > 0 && oldest+probeGap > stale:
+			t.Fatalf("stale=%s interval=%s minAge=%s: stored check reaches %s, leaving less than a %s probe gap before %s",
+				stale, interval, minAge, oldest, probeGap, stale)
+		}
+		if tc.staleSeconds == 300 && tc.minAgeSeconds == 30 && refreshAfter < 2*probeGap {
+			t.Fatalf("default config refreshes after %s; want unchanged rows left alone for at least two probe gaps", refreshAfter)
+		}
+	}
+}
+
+// The poller passes the configured refresh bound with every verdict, so the
+// statement can leave an unchanged, still-fresh row alone.
+func TestPersistHealthTransitionPassesTheRefreshBound(t *testing.T) {
+	mockDB, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherRegexp))
+	if err != nil {
+		t.Fatalf("sqlmock: %v", err)
+	}
+	defer func() { _ = mockDB.Close() }()
+	Init(mockDB, logging.NewLogger())
+	previous := healthRefreshAfterSeconds.Load()
+	defer healthRefreshAfterSeconds.Store(previous)
+	healthRefreshAfterSeconds.Store(165)
+
+	mock.ExpectQuery(`(?s)UPDATE quartermaster\.service_instances.*si\.health_status IS DISTINCT FROM`).
+		WithArgs("inst-br-1", "healthy", int32(165)).
+		WillReturnRows(sqlmock.NewRows([]string{"old_status", "service_id"}).AddRow("healthy", "bridge"))
+	if _, err := persistHealthTransition(context.Background(), "inst-br-1", "healthy"); err != nil {
+		t.Fatalf("persistHealthTransition: %v", err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
 	}
 }

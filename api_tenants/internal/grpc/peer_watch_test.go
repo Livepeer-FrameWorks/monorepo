@@ -81,42 +81,23 @@ func TestPeerWatchHubRefusesUnboundedSubscribers(t *testing.T) {
 	}
 }
 
-func TestPeerCensusFingerprintChangesWithMembershipAndDeletes(t *testing.T) {
+// The watcher reads one value-level digest per interval and hands it through
+// unchanged; which rewrites move it is proven against a real engine by
+// TestUnchangedHealthReportsLeaveRowsAndPeerCensusAlone.
+func TestPeerCensusFingerprintIsTheDigest(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer db.Close()
 	server := &QuartermasterServer{db: db, peerWatch: newPeerWatchHub()}
-
-	stamp := time.Unix(1800000000, 0).UTC()
-	later := stamp.Add(time.Second)
-	rows := func(accessCount int64, accessStamp time.Time) *sqlmock.Rows {
-		return sqlmock.NewRows([]string{"access_count", "access_updated_at", "cluster_count", "cluster_updated_at", "instance_count", "instance_updated_at", "assignment_count", "assignment_updated_at"}).
-			AddRow(accessCount, accessStamp, int64(3), stamp, int64(2), stamp, int64(2), stamp)
+	mock.ExpectQuery("md5").WillReturnRows(sqlmock.NewRows([]string{"fingerprint"}).AddRow("digest-a"))
+	got, err := server.peerCensusFingerprint(context.Background())
+	if err != nil || got != "digest-a" {
+		t.Fatalf("fingerprint = %q, %v; want digest-a", got, err)
 	}
-	mock.ExpectQuery("tenant_cluster_access").WillReturnRows(rows(4, stamp))
-	mock.ExpectQuery("tenant_cluster_access").WillReturnRows(rows(4, later))
-	mock.ExpectQuery("tenant_cluster_access").WillReturnRows(rows(3, later))
-
-	first, err := server.peerCensusFingerprint(context.Background())
-	if err != nil {
+	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatal(err)
-	}
-	updated, err := server.peerCensusFingerprint(context.Background())
-	if err != nil {
-		t.Fatal(err)
-	}
-	if updated == first {
-		t.Fatal("a newer grant timestamp left the census fingerprint unchanged")
-	}
-	// A revoke moves no timestamp forward, so the count has to carry it.
-	deleted, err := server.peerCensusFingerprint(context.Background())
-	if err != nil {
-		t.Fatal(err)
-	}
-	if deleted == updated {
-		t.Fatal("a revoked grant left the census fingerprint unchanged")
 	}
 }
 

@@ -3,6 +3,7 @@ package grpc
 import (
 	"context"
 	"database/sql/driver"
+	"errors"
 	"fmt"
 	"regexp"
 	"strings"
@@ -498,8 +499,8 @@ func TestReportAliveNodesUpsertsEdgeCapabilities(t *testing.T) {
 	// Healthy node: aggregate `edge` upsert plus one upsert per set cap
 	// (ingest, egress). The two unset caps have no prior row, so no statement.
 	for range []int{0, 1, 2} {
-		mock.ExpectExec(`(?s)INSERT INTO quartermaster\.service_instances.*SELECT \$1::varchar\(100\).*WHERE instance_id = \$1::varchar\(100\).*WHERE n\.node_id = \$2::varchar\(100\).*AND n\.node_type = 'edge'.*ON CONFLICT \(instance_id\) DO UPDATE.*updated_at = NOW\(\)\s*$`).
-			WithArgs(sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg()).
+		mock.ExpectExec(`(?s)INSERT INTO quartermaster\.service_instances.*SELECT \$1::varchar\(100\).*WHERE instance_id = \$1::varchar\(100\).*WHERE n\.node_id = \$2::varchar\(100\).*AND n\.node_type = 'edge'.*ON CONFLICT \(instance_id\) DO UPDATE.*updated_at = NOW\(\)\s+WHERE si\.node_id IS DISTINCT FROM EXCLUDED\.node_id.*si\.last_health_check <= NOW\(\) - \(\$4::int \* INTERVAL '1 second'\)\s*$`).
+			WithArgs(sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), int32(180)).
 			WillReturnResult(sqlmock.NewResult(0, 1))
 	}
 	mock.ExpectCommit()
@@ -562,10 +563,10 @@ func TestReportAliveNodesMarksDroppedCapUnhealthy(t *testing.T) {
 	// Aggregate `edge` is unconditional: INSERT upsert (healthy) for the live
 	// node. Processed first because `edge` leads the derivation list.
 	mock.ExpectExec(`(?s)INSERT INTO quartermaster\.service_instances.*ON CONFLICT \(instance_id\) DO UPDATE`).
-		WithArgs(sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg()).
+		WithArgs(sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg()).
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	// edge-egress cap is off + existing healthy row: UPDATE to unhealthy.
-	mock.ExpectExec(`(?s)UPDATE quartermaster\.service_instances si\s+SET health_status = 'unhealthy'`).
+	mock.ExpectExec(`(?s)UPDATE quartermaster\.service_instances si\s+SET health_status = 'unhealthy'.*AND si\.health_status IS DISTINCT FROM 'unhealthy'`).
 		WithArgs("edge-egress", "edge-eu-1").
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectCommit()
@@ -583,6 +584,66 @@ func TestReportAliveNodesMarksDroppedCapUnhealthy(t *testing.T) {
 		t.Fatalf("ReportAliveNodes returned error: %v", err)
 	}
 
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("unmet sql expectations: %v", err)
+	}
+}
+
+// Foghorn reports every second while edges change, so the edge service
+// catalog rows are ensured once per process: each ensure is its own
+// transaction holding an advisory lock, and repeating five of them per report
+// serialized every report behind the catalog.
+func TestReportAliveNodesEnsuresEdgeServicesOncePerProcess(t *testing.T) {
+	db, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherRegexp))
+	if err != nil {
+		t.Fatalf("failed to create sqlmock: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	server := NewQuartermasterServer(db, logging.NewLogger(), nil, nil, nil, nil, nil)
+	report := &quartermasterpb.ReportAliveNodesRequest{Nodes: []*quartermasterpb.NodeAliveness{{
+		NodeId: "edge-eu-1", IsHealthy: true, ClusterId: "cluster-eu", ExternalIp: "203.0.113.10",
+		Capabilities: &quartermasterpb.EdgeCapabilities{},
+	}}}
+	expectReport := func(advisoryLocks int, failUpsert bool) {
+		for range advisoryLocks {
+			mock.ExpectBegin()
+			mock.ExpectExec(`SELECT pg_advisory_xact_lock`).WithArgs(sqlmock.AnyArg()).WillReturnResult(sqlmock.NewResult(0, 0))
+			mock.ExpectQuery(`SELECT service_id FROM quartermaster\.services`).WithArgs(sqlmock.AnyArg()).
+				WillReturnRows(sqlmock.NewRows([]string{"service_id"}).AddRow("edge"))
+			mock.ExpectCommit()
+		}
+		mock.ExpectBegin()
+		mock.ExpectQuery(`FROM quartermaster\.infrastructure_nodes\s+WHERE node_id = ANY\(\$1\)`).WithArgs(sqlmock.AnyArg()).
+			WillReturnRows(sqlmock.NewRows([]string{"node_id", "cluster_id", "ext_ip"}).AddRow("edge-eu-1", "cluster-eu", "203.0.113.10"))
+		mock.ExpectQuery(`(?s)SELECT si\.node_id, svc\.type`).WithArgs(sqlmock.AnyArg()).
+			WillReturnRows(sqlmock.NewRows([]string{"node_id", "type", "cluster_id", "health"}).
+				AddRow("edge-eu-1", "edge", "cluster-eu", "healthy"))
+		mock.ExpectExec(`(?s)UPDATE quartermaster\.infrastructure_nodes n.*FROM unnest`).
+			WithArgs(sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg()).WillReturnResult(sqlmock.NewResult(0, 1))
+		upsert := mock.ExpectExec(`(?s)INSERT INTO quartermaster\.service_instances.*ON CONFLICT \(instance_id\) DO UPDATE`).
+			WithArgs(sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg())
+		if failUpsert {
+			upsert.WillReturnError(errors.New("insert or update violates foreign key constraint"))
+			mock.ExpectRollback()
+			return
+		}
+		upsert.WillReturnResult(sqlmock.NewResult(0, 0))
+		mock.ExpectCommit()
+	}
+
+	expectReport(5, false)
+	expectReport(0, false)
+	expectReport(0, true)
+	// A failed write may mean a catalog row is missing, so the next report
+	// ensures the types again.
+	expectReport(5, false)
+	for i, wantErr := range []bool{false, false, true, false} {
+		_, err := server.ReportAliveNodes(serviceCtx(), report)
+		if (err != nil) != wantErr {
+			t.Fatalf("report %d: err = %v, want error %v", i+1, err, wantErr)
+		}
+	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatalf("unmet sql expectations: %v", err)
 	}

@@ -31,6 +31,11 @@ import (
 
 var pollerInFlight int32
 
+// healthRefreshAfterSeconds is how old an unchanged verdict's
+// last_health_check may grow before it is rewritten. StartHealthPoller sets it
+// from the DNS stale bound; until then every verdict is written.
+var healthRefreshAfterSeconds atomic.Int32
+
 // HealthPollerConfig configures StartHealthPoller. Every value except TLS is
 // read once when the poller starts.
 type HealthPollerConfig struct {
@@ -43,6 +48,11 @@ type HealthPollerConfig struct {
 	// MinAgeSeconds is how old a health result must be before the instance is
 	// polled again. Negative uses the poll interval.
 	MinAgeSeconds int
+	// HealthStaleSeconds is the age after which DNS stops publishing an
+	// instance whose last health check has not been refreshed
+	// (NAVIGATOR_DNS_HEALTH_STALE_SECONDS). An unchanged verdict is rewritten
+	// only as often as this bound requires; non-positive writes every verdict.
+	HealthStaleSeconds int
 
 	GRPCWatch bool
 	// WatchRefreshSeconds must be positive when GRPCWatch is set.
@@ -88,6 +98,11 @@ func StartHealthPoller(cfg HealthPollerConfig) {
 	client := &http.Client{Timeout: timeout}
 	sem := make(chan struct{}, maxConc)
 	minAge := time.Duration(minAgeSeconds) * time.Second
+	// An instance is probed again once minAge has passed and the next round
+	// starts, at most interval + 25% jitter later.
+	probeGap := minAge + interval + interval/4
+	healthRefreshAfterSeconds.Store(quartermasterdb.HealthRefreshAfterSeconds(cfg.HealthStaleSeconds, probeGap))
+	schedule := newProbeSchedule()
 
 	tls := cfg.TLS
 	if tls == nil {
@@ -121,7 +136,7 @@ func StartHealthPoller(cfg HealthPollerConfig) {
 				continue
 			}
 			if leader.lead() {
-				if err := pollOnce(client, sem, batchSize, minAge, tls); err != nil {
+				if err := pollOnce(client, sem, batchSize, minAge, schedule, tls); err != nil {
 					logger.WithError(err).Warn("health poller iteration failed")
 				}
 			}
@@ -216,15 +231,58 @@ func (s *serviceHealthSummary) snapshot() (map[string]serviceHealthCounts, []str
 	return byService, healthyServices, unhealthyServices, skippedServices
 }
 
-func pollOnce(client *http.Client, sem chan struct{}, batchSize int, minAge time.Duration, tls func(serviceID string) HealthWatchTLS) error {
+// probeSchedule remembers when this replica last probed each instance. An
+// unchanged verdict does not move last_health_check, so the stored check time
+// cannot say which instances are due; the schedule does.
+type probeSchedule struct {
+	mu     sync.Mutex
+	probed map[string]time.Time
+}
+
+func newProbeSchedule() *probeSchedule {
+	return &probeSchedule{probed: make(map[string]time.Time)}
+}
+
+// due returns up to batchSize of the candidates not probed within minAge,
+// longest-unprobed first, and records them as probed now. Instances no longer
+// listed are forgotten.
+func (p *probeSchedule) due(candidates []serviceInstance, minAge time.Duration, batchSize int, now time.Time) []serviceInstance {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	listed := make(map[string]struct{}, len(candidates))
+	due := make([]serviceInstance, 0, len(candidates))
+	for _, inst := range candidates {
+		listed[inst.id] = struct{}{}
+		if last, ok := p.probed[inst.id]; ok && now.Sub(last) < minAge {
+			continue
+		}
+		due = append(due, inst)
+	}
+	for id := range p.probed {
+		if _, ok := listed[id]; !ok {
+			delete(p.probed, id)
+		}
+	}
+	// Candidates arrive oldest stored check first; the stable sort keeps that
+	// order among instances this replica has not probed yet.
+	sort.SliceStable(due, func(i, j int) bool {
+		return p.probed[due[i].id].Before(p.probed[due[j].id])
+	})
+	if len(due) > batchSize {
+		due = due[:batchSize]
+	}
+	for _, inst := range due {
+		p.probed[inst.id] = now
+	}
+	return due
+}
+
+func pollOnce(client *http.Client, sem chan struct{}, batchSize int, minAge time.Duration, schedule *probeSchedule, tls func(serviceID string) HealthWatchTLS) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	cutoff := time.Now().Add(-minAge)
 	var list []serviceInstance
 	if err := database.RetryPostgres(ctx, database.DefaultRetryAttempts, 25*time.Millisecond, func() error {
-		rows, err := quartermasterdb.New(db).ListHealthPollCandidates(ctx, quartermasterdb.ListHealthPollCandidatesParams{
-			Cutoff: cutoff, BatchSize: int32(batchSize),
-		})
+		rows, err := quartermasterdb.New(db).ListHealthPollCandidates(ctx)
 		if err != nil {
 			return err
 		}
@@ -246,6 +304,7 @@ func pollOnce(client *http.Client, sem chan struct{}, batchSize int, minAge time
 	}); err != nil {
 		return err
 	}
+	list = schedule.due(list, minAge, batchSize, time.Now())
 
 	logger.WithField("count", len(list)).Debug("Health poller checking instances")
 
@@ -549,11 +608,12 @@ func persistHealthTransition(ctx context.Context, instanceID, status string) (st
 	var oldStatus, serviceType string
 	var scanErr error
 	err := database.RetryPostgres(ctx, database.DefaultRetryAttempts, 25*time.Millisecond, func() error {
-		// One statement: always bump last_health_check (the freshness gate
-		// ListServiceInstancesByType depends on) AND return the prior status, so a
-		// health transition can wake DNS without an extra read.
+		// One statement: write a changed status, or refresh last_health_check
+		// (the freshness gate ListServiceInstancesByType depends on) once it
+		// nears the stale bound, AND return the prior status, so a health
+		// transition can wake DNS without an extra read.
 		row, queryErr := quartermasterdb.New(db).PersistServiceHealthStatus(ctx, quartermasterdb.PersistServiceHealthStatusParams{
-			Status: status, InstanceID: instanceID,
+			Status: status, InstanceID: instanceID, RefreshAfterSeconds: healthRefreshAfterSeconds.Load(),
 		})
 		scanErr = queryErr
 		if queryErr == nil {

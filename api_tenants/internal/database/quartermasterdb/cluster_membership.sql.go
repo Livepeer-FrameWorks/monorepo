@@ -9,7 +9,6 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
-	"time"
 
 	"github.com/lib/pq"
 )
@@ -477,47 +476,35 @@ func (q *Queries) ListPeerClusters(ctx context.Context, requestingClusterID stri
 }
 
 const peerCensusFingerprint = `-- name: PeerCensusFingerprint :one
-SELECT
-    (SELECT count(*) FROM quartermaster.tenant_cluster_access)::bigint AS access_count,
-    (SELECT max(updated_at) FROM quartermaster.tenant_cluster_access)::timestamp AS access_updated_at,
-    (SELECT count(*) FROM quartermaster.infrastructure_clusters)::bigint AS cluster_count,
-    (SELECT max(updated_at) FROM quartermaster.infrastructure_clusters)::timestamp AS cluster_updated_at,
-    (SELECT count(*) FROM quartermaster.service_instances)::bigint AS instance_count,
-    (SELECT max(updated_at) FROM quartermaster.service_instances)::timestamp AS instance_updated_at,
-    (SELECT count(*) FROM quartermaster.service_cluster_assignments)::bigint AS assignment_count,
-    (SELECT max(updated_at) FROM quartermaster.service_cluster_assignments)::timestamp AS assignment_updated_at
+SELECT md5(format('%L|%L|%L',
+    (SELECT string_agg(format('%L/%L', tca.tenant_id, tca.cluster_id), ',' ORDER BY tca.tenant_id, tca.cluster_id)
+     FROM quartermaster.tenant_cluster_access tca
+     WHERE tca.is_active = TRUE AND tca.subscription_status = 'active'
+       AND tca.access_source <> 'unknown'
+       AND (tca.expires_at IS NULL OR tca.expires_at > NOW())),
+    (SELECT string_agg(format('%L/%L/%L/%L/%L', ic.cluster_id, ic.cluster_name, ic.cluster_type, ic.control_cell_id, ic.cell_id), ',' ORDER BY ic.cluster_id)
+     FROM quartermaster.infrastructure_clusters ic
+     WHERE ic.is_active = TRUE),
+    (SELECT string_agg(format('%L/%L/%L', sca.cluster_id, si.advertise_host, si.port), ',' ORDER BY sca.cluster_id, si.advertise_host, si.port, si.id)
+     FROM quartermaster.services svc
+     JOIN quartermaster.service_instances si ON si.service_id = svc.service_id
+     JOIN quartermaster.service_cluster_assignments sca ON sca.service_instance_id = si.id
+     WHERE svc.type = 'foghorn' AND sca.is_active = TRUE
+       AND si.status = 'running' AND si.health_status = 'healthy' AND si.protocol = 'grpc')
+))::text AS fingerprint
 `
 
-type PeerCensusFingerprintRow struct {
-	AccessCount         int64     `db:"access_count" json:"access_count"`
-	AccessUpdatedAt     time.Time `db:"access_updated_at" json:"access_updated_at"`
-	ClusterCount        int64     `db:"cluster_count" json:"cluster_count"`
-	ClusterUpdatedAt    time.Time `db:"cluster_updated_at" json:"cluster_updated_at"`
-	InstanceCount       int64     `db:"instance_count" json:"instance_count"`
-	InstanceUpdatedAt   time.Time `db:"instance_updated_at" json:"instance_updated_at"`
-	AssignmentCount     int64     `db:"assignment_count" json:"assignment_count"`
-	AssignmentUpdatedAt time.Time `db:"assignment_updated_at" json:"assignment_updated_at"`
-}
-
-// Summarizes every input ListPeerClusters reads: tenant reach, cluster identity
-// and control cell, and which Foghorn instances are assigned and healthy enough
-// to be addressable. Counts pair with the newest timestamp because a delete
-// moves no timestamp forward. Detecting change here keeps peer subscriptions
-// correct no matter which handler performed the mutation.
-func (q *Queries) PeerCensusFingerprint(ctx context.Context) (PeerCensusFingerprintRow, error) {
+// Digests exactly the values ListPeerClusters derives a peer set from: active
+// tenant reach per cluster, active cluster identity and control cell, and the
+// address of every assigned healthy gRPC Foghorn. Heartbeats and health
+// refreshes that rewrite a row without changing any of these leave the digest
+// unchanged, so they do not wake peer subscribers. Expiry is evaluated against
+// NOW(), so a grant lapsing on its own also changes the digest.
+func (q *Queries) PeerCensusFingerprint(ctx context.Context) (string, error) {
 	row := q.db.QueryRowContext(ctx, peerCensusFingerprint)
-	var i PeerCensusFingerprintRow
-	err := row.Scan(
-		&i.AccessCount,
-		&i.AccessUpdatedAt,
-		&i.ClusterCount,
-		&i.ClusterUpdatedAt,
-		&i.InstanceCount,
-		&i.InstanceUpdatedAt,
-		&i.AssignmentCount,
-		&i.AssignmentUpdatedAt,
-	)
-	return i, err
+	var fingerprint string
+	err := row.Scan(&fingerprint)
+	return fingerprint, err
 }
 
 const rejectClusterSubscriptionRecord = `-- name: RejectClusterSubscriptionRecord :exec

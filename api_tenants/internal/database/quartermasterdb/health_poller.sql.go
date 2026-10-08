@@ -8,7 +8,6 @@ package quartermasterdb
 import (
 	"context"
 	"database/sql"
-	"time"
 )
 
 const listGRPCHealthWatchCandidates = `-- name: ListGRPCHealthWatchCandidates :many
@@ -103,15 +102,8 @@ LEFT JOIN LATERAL (
 WHERE si.status IN ('running', 'starting')
   AND s.type <> 'edge'
   AND s.type NOT LIKE 'edge-%'
-  AND (si.last_health_check IS NULL OR si.last_health_check < $1::timestamp)
-ORDER BY COALESCE(si.last_health_check, si.created_at) ASC
-LIMIT $2::integer
+ORDER BY COALESCE(si.last_health_check, si.created_at) ASC, si.instance_id ASC
 `
-
-type ListHealthPollCandidatesParams struct {
-	Cutoff    time.Time `db:"cutoff" json:"cutoff"`
-	BatchSize int32     `db:"batch_size" json:"batch_size"`
-}
 
 type ListHealthPollCandidatesRow struct {
 	InstanceID        string        `db:"instance_id" json:"instance_id"`
@@ -127,8 +119,8 @@ type ListHealthPollCandidatesRow struct {
 	AssignedBaseUrl   string        `db:"assigned_base_url" json:"assigned_base_url"`
 }
 
-func (q *Queries) ListHealthPollCandidates(ctx context.Context, arg ListHealthPollCandidatesParams) ([]ListHealthPollCandidatesRow, error) {
-	rows, err := q.db.QueryContext(ctx, listHealthPollCandidates, arg.Cutoff, arg.BatchSize)
+func (q *Queries) ListHealthPollCandidates(ctx context.Context) ([]ListHealthPollCandidatesRow, error) {
+	rows, err := q.db.QueryContext(ctx, listHealthPollCandidates)
 	if err != nil {
 		return nil, err
 	}
@@ -166,21 +158,28 @@ const persistServiceHealthStatus = `-- name: PersistServiceHealthStatus :one
 WITH previous AS (
     SELECT instance_id, health_status AS old_status, service_id
     FROM quartermaster.service_instances
-    WHERE instance_id = $2::text
+    WHERE instance_id = $1::text
+), written AS (
+    UPDATE quartermaster.service_instances si
+    SET health_status = $2::text,
+        last_health_check = NOW(),
+        updated_at = NOW()
+    FROM previous
+    WHERE si.instance_id = previous.instance_id
+      AND (si.health_status IS DISTINCT FROM $2::text
+           OR si.last_health_check IS NULL
+           OR si.last_health_check <= NOW() - ($3::int * INTERVAL '1 second'))
+    RETURNING si.instance_id
 )
-UPDATE quartermaster.service_instances si
-SET health_status = $1::text,
-    last_health_check = NOW(),
-    updated_at = NOW()
+SELECT COALESCE(previous.old_status, '')::text AS old_status,
+       previous.service_id
 FROM previous
-WHERE si.instance_id = previous.instance_id
-RETURNING COALESCE(previous.old_status, '')::text AS old_status,
-          previous.service_id
 `
 
 type PersistServiceHealthStatusParams struct {
-	Status     string `db:"status" json:"status"`
-	InstanceID string `db:"instance_id" json:"instance_id"`
+	InstanceID          string `db:"instance_id" json:"instance_id"`
+	Status              string `db:"status" json:"status"`
+	RefreshAfterSeconds int32  `db:"refresh_after_seconds" json:"refresh_after_seconds"`
 }
 
 type PersistServiceHealthStatusRow struct {
@@ -188,8 +187,12 @@ type PersistServiceHealthStatusRow struct {
 	ServiceID string `db:"service_id" json:"service_id"`
 }
 
+// Writes the verdict only when it differs from the stored one or the stored
+// check is at least refresh_after_seconds old, so an unchanged instance is
+// rewritten only as often as the DNS freshness gate needs. The prior status is
+// returned whether or not the row was written.
 func (q *Queries) PersistServiceHealthStatus(ctx context.Context, arg PersistServiceHealthStatusParams) (PersistServiceHealthStatusRow, error) {
-	row := q.db.QueryRowContext(ctx, persistServiceHealthStatus, arg.Status, arg.InstanceID)
+	row := q.db.QueryRowContext(ctx, persistServiceHealthStatus, arg.InstanceID, arg.Status, arg.RefreshAfterSeconds)
 	var i PersistServiceHealthStatusRow
 	err := row.Scan(&i.OldStatus, &i.ServiceID)
 	return i, err

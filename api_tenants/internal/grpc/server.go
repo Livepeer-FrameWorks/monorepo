@@ -92,6 +92,10 @@ type QuartermasterServer struct {
 	geoipReader                 *geoip.Reader
 	metrics                     *ServerMetrics
 
+	// tenantAdmission answers ValidateTenant's billing lookups from Purser;
+	// nil when no Purser client is configured.
+	tenantAdmission *tenantAdmissionCache
+
 	// quartermasterGRPCAddr is the address enrolling nodes should use to
 	// reach this Quartermaster once they have mesh connectivity. Returned in
 	// BootstrapInfrastructureNodeResponse so enrolling nodes can persist it
@@ -110,6 +114,10 @@ type QuartermasterServer struct {
 	// can't drift and hand Foghorn a hostname Navigator has already pruned.
 	physicalEndpointStaleSeconds       int
 	clusterAccessMaterializationSecret string
+
+	// ensuredEdgeServices holds the edge service types ReportAliveNodes has
+	// already ensured in the service catalog during this process.
+	ensuredEdgeServices sync.Map
 
 	// eventTokenHasher hashes the calling API token for domain event actor
 	// attribution with Bridge's usage hash secret. Emitting a domain event
@@ -141,6 +149,11 @@ const (
 	// NAVIGATOR_DNS_HEALTH_STALE_SECONDS; the configured value (e.g. base.env's 90)
 	// overrides it via SetPhysicalEndpointStaleSeconds.
 	defaultPhysicalEndpointStaleSeconds = 300
+	// foghornEdgeSnapshotInterval is how often Foghorn re-reports every known
+	// edge through ReportAliveNodes (runEdgeQuartermasterPublisher in
+	// api_balancing/cmd/foghorn), the longest gap between reports of an
+	// unchanged edge.
+	foghornEdgeSnapshotInterval = 60 * time.Second
 )
 
 // SetQuartermasterGRPCAddr configures the gRPC address this Quartermaster
@@ -187,7 +200,7 @@ func (s *QuartermasterServer) SetEventTokenHasher(hasher *events.TokenHasher) {
 
 // NewQuartermasterServer creates a new Quartermaster gRPC server
 func NewQuartermasterServer(db *sql.DB, logger logging.Logger, navigatorClient *navigator.Client, decklogClient *decklogclient.BatchedClient, purserClient *purserclient.GRPCClient, geoipReader *geoip.Reader, metrics *ServerMetrics) *QuartermasterServer {
-	return &QuartermasterServer{
+	server := &QuartermasterServer{
 		db:                           db,
 		logger:                       logger,
 		peerWatch:                    newPeerWatchHub(),
@@ -198,6 +211,10 @@ func NewQuartermasterServer(db *sql.DB, logger logging.Logger, navigatorClient *
 		metrics:                      metrics,
 		physicalEndpointStaleSeconds: defaultPhysicalEndpointStaleSeconds,
 	}
+	if purserClient != nil {
+		server.tenantAdmission = newTenantAdmissionCache(purserClient.GetTenantAdmissionStatus, tenantAdmissionFreshFor, tenantAdmissionLastGoodFor)
+	}
+	return server
 }
 
 // mapToStruct converts a map[string]any to a protobuf Struct
@@ -395,8 +412,8 @@ func (s *QuartermasterServer) ValidateTenant(ctx context.Context, req *quarterma
 	var isSuspended, isBalanceNegative, billingStatusUnavailable bool
 	var collectionReady bool
 
-	if s.purserClient != nil {
-		billingStatus, err := s.purserClient.GetTenantAdmissionStatus(ctx, tenantID)
+	if s.tenantAdmission != nil {
+		billingStatus, err := s.tenantAdmission.status(ctx, tenantID)
 		if err != nil {
 			s.logger.WithFields(logging.Fields{
 				"tenant_id": tenantID,
@@ -5523,12 +5540,18 @@ func (s *QuartermasterServer) ReportAliveNodes(ctx context.Context, req *quarter
 	}
 
 	// Ensure edge service rows exist BEFORE the main tx: ensureServiceExists
-	// uses its own transaction with an advisory lock.
+	// uses its own transaction with an advisory lock. Catalog rows are never
+	// deleted, so each type is ensured once per process rather than per report.
 	for _, mapping := range edgeServiceTypeDerivations {
+		if _, ensured := s.ensuredEdgeServices.Load(mapping.serviceType); ensured {
+			continue
+		}
 		if _, err := s.ensureServiceExists(ctx, mapping.serviceType, "http"); err != nil {
 			return nil, err
 		}
+		s.ensuredEdgeServices.Store(mapping.serviceType, struct{}{})
 	}
+	refreshAfter := quartermasterdb.HealthRefreshAfterSeconds(s.physicalEndpointStaleSeconds, foghornEdgeSnapshotInterval)
 
 	var priorNodes map[string]nodeBefore
 	var priorInst map[string]instBefore
@@ -5637,6 +5660,7 @@ func (s *QuartermasterServer) ReportAliveNodes(ctx context.Context, req *quarter
 				instanceID := fmt.Sprintf("edge-cap-%s-%s", c.nodeID, c.serviceType)
 				if execErr := txQueries.UpsertHealthyEdgeInstance(ctx, quartermasterdb.UpsertHealthyEdgeInstanceParams{
 					InstanceID: instanceID, NodeID: c.nodeID, ServiceType: c.serviceType,
+					RefreshAfterSeconds: refreshAfter,
 				}); execErr != nil {
 					return fmt.Errorf("upsert healthy edge instance: %w", execErr)
 				}
@@ -5651,6 +5675,11 @@ func (s *QuartermasterServer) ReportAliveNodes(ctx context.Context, req *quarter
 		return nil
 	})
 	if err != nil {
+		// A failed write may be a missing catalog row; ensure the types again
+		// on the next report rather than trusting this process's memory.
+		for _, mapping := range edgeServiceTypeDerivations {
+			s.ensuredEdgeServices.Delete(mapping.serviceType)
+		}
 		return nil, status.Errorf(codes.Internal, "report alive nodes: %v", err)
 	}
 
