@@ -30,6 +30,8 @@ const (
 	mediaAuthorityLegacyAdoptIdleTicks   = 30
 	mediaAuthorityRenewalRepairBatch     = 500
 	mediaAuthorityRenewalRepairPasses    = 400
+	// One adoption batch is a few hundred statements in one transaction.
+	mediaAuthorityLegacyAdoptTimeout = 30 * time.Second
 )
 
 type authorityCompileClass int
@@ -175,9 +177,11 @@ func (s *CommodoreServer) processMediaAuthorityObligationLane(ctx context.Contex
 			continue
 		}
 		memo := newMediaAuthorityCompileMemo()
-		rows, err := commodoredb.New(s.db).ClaimMediaAuthorityObligations(ctx, commodoredb.ClaimMediaAuthorityObligationsParams{
+		claimCtx, cancel := context.WithTimeout(ctx, mediaAuthorityClaimTimeout)
+		rows, err := commodoredb.New(s.db).ClaimMediaAuthorityObligations(claimCtx, commodoredb.ClaimMediaAuthorityObligationsParams{
 			LeaseMs: lease.Milliseconds(), Lane: lane, BatchSize: int32(available),
 		})
+		cancel()
 		if err != nil {
 			if ctx.Err() == nil {
 				s.logger.WithError(err).WithField("lane", lane).Warn("Failed to claim media authority refresh obligations")
@@ -389,9 +393,13 @@ func (s *CommodoreServer) adoptLegacyMediaAuthorityRefreshInbox(ctx context.Cont
 		return
 	}
 	adopted := 0
-	err := database.WithRetryablePostgresTx(ctx, s.db, nil, func(tx *sql.Tx) error {
+	// The worker context has no deadline. This one bounds the transaction, so a
+	// stalled connection cannot hold it open.
+	txCtx, cancel := context.WithTimeout(ctx, mediaAuthorityLegacyAdoptTimeout)
+	defer cancel()
+	err := database.WithRetryablePostgresTx(txCtx, s.db, nil, func(tx *sql.Tx) error {
 		queries := commodoredb.New(tx)
-		rows, err := queries.AdoptLegacyMediaAuthorityRefreshInbox(ctx, mediaAuthorityLegacyAdoptBatch)
+		rows, err := queries.AdoptLegacyMediaAuthorityRefreshInbox(txCtx, mediaAuthorityLegacyAdoptBatch)
 		if err != nil {
 			return err
 		}
@@ -403,13 +411,13 @@ func (s *CommodoreServer) adoptLegacyMediaAuthorityRefreshInbox(ctx context.Cont
 				continue
 			}
 			target := commodoredb.MediaAuthorityTargetForReason(row.TenantID, row.Reason)
-			if enqueueErr := queries.EnqueueMediaAuthorityEvent(ctx, target, row.TenantID, row.Reason, row.SourceService, row.SourceEventID); enqueueErr != nil {
+			if enqueueErr := queries.EnqueueMediaAuthorityEvent(txCtx, target, row.TenantID, row.Reason, row.SourceService, row.SourceEventID); enqueueErr != nil {
 				return enqueueErr
 			}
 			// The inbox fanned a tenant event out to the tenant's objects when it
 			// completed; an adopted row has not completed, so that fanout is owed.
 			if target.Kind == commodoredb.MediaAuthorityTargetTenant && (row.SourceService != "purser" || purserReasonChangesMediaObjects(row.SourceService, row.Reason)) {
-				if enqueueErr := queries.EnqueueMediaAuthorityEvent(ctx, commodoredb.TenantMediaObjectsAuthorityTarget(row.TenantID), row.TenantID,
+				if enqueueErr := queries.EnqueueMediaAuthorityEvent(txCtx, commodoredb.TenantMediaObjectsAuthorityTarget(row.TenantID), row.TenantID,
 					"tenant_media_objects:"+row.Reason, row.SourceService, row.SourceEventID); enqueueErr != nil {
 					return enqueueErr
 				}

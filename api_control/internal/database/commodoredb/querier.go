@@ -36,8 +36,20 @@ type Querier interface {
 	ClaimInvalidationBatch(ctx context.Context, batchSize int32) ([]ClaimInvalidationBatchRow, error)
 	// short_lease is recorded on the delivery when it is enqueued. Deriving it here
 	// from the version's validity would join the queue to the whole version
-	// history on an expression no index can serve, and this claim runs every
-	// second inside a one-second budget.
+	// history on an expression no index can serve, inside a claim budget of a
+	// couple of seconds.
+	//
+	// The work is per cell, never per queued row: the cells with something due are
+	// found by stepping through the per-cell index, a cell with a delivery in
+	// flight is dropped with one probe, and each remaining cell contributes the
+	// first claimable row of its index range. On YugabyteDB every probe is a
+	// storage round trip, so a check per queued row costs a round trip per row of
+	// the backlog.
+	//
+	// The walk starts after the cell the claimant's previous claim ended at and
+	// wraps around, and stops once the batch is full. A claim reads only the cells
+	// it takes, every cell is reached in turn, and replicas claiming at once start
+	// from different cells instead of contending for the same heads.
 	ClaimMediaAuthorityDeadlineDelivery(ctx context.Context, arg ClaimMediaAuthorityDeadlineDeliveryParams) ([]ClaimMediaAuthorityDeadlineDeliveryRow, error)
 	// Deliveries are claimed one cell at a time, each cell with its own workers, so
 	// a cell that is slow or down cannot take the workers another cell needs. Within
@@ -334,6 +346,11 @@ type Querier interface {
 	// Reads the deliveries that are not settled, through their partial indexes, and
 	// nothing else: a delivery that was acknowledged has no backlog, no age, and no
 	// version lag to report, and those are nearly all of them.
+	//
+	// Each status is read through its own partial index before anything is joined
+	// to it. A single scan over all three statuses lets the planner drive from the
+	// current table instead, one delivery lookup per authority ever issued, which
+	// on YugabyteDB is a storage round trip per authority.
 	ListMediaAuthorityDeliveryStats(ctx context.Context) ([]ListMediaAuthorityDeliveryStatsRow, error)
 	// Cells that may still hold a valid copy: some version between the last one
 	// they acknowledged and the last one they were sent has not expired (see
@@ -527,6 +544,11 @@ type Querier interface {
 	StampResolvedPullStreamPlacement(ctx context.Context, arg StampResolvedPullStreamPlacementParams) error
 	StreamExistsForPushTargetManager(ctx context.Context, arg StreamExistsForPushTargetManagerParams) (bool, error)
 	StreamExistsForUser(ctx context.Context, arg StreamExistsForUserParams) (bool, error)
+	// The sweep starts from the unsettled deliveries, read through their partial
+	// index, so its cost follows the live queue. Starting from the current table
+	// instead reads every authority's whole delivery history, settled rows
+	// included, which on YugabyteDB is one storage round trip per batch of
+	// authorities and grows with retention rather than with the backlog.
 	SupersedeExpiredObsoleteMediaAuthorityDeliveries(ctx context.Context, batchSize int32) (int64, error)
 	SupersedeMediaPlacementChanges(ctx context.Context, arg SupersedeMediaPlacementChangesParams) error
 	SupersedeOlderMediaAuthorityDeliveries(ctx context.Context, arg SupersedeOlderMediaAuthorityDeliveriesParams) (int64, error)

@@ -111,41 +111,94 @@ func (q *Queries) BeginMediaAuthorityCompile(ctx context.Context, scopeKey strin
 }
 
 const claimMediaAuthorityDeadlineDelivery = `-- name: ClaimMediaAuthorityDeadlineDelivery :many
-WITH heads AS (
-    SELECT DISTINCT ON (queued.cell_id)
-           queued.authority_kind, queued.authority_id, queued.authority_version,
-           queued.cell_id, queued.next_attempt_at, queued.created_at
-    FROM commodore.media_authority_deliveries AS queued
-    JOIN commodore.media_authority_current AS current
-      ON current.authority_kind = queued.authority_kind
-     AND current.authority_id = queued.authority_id
-     AND current.authority_version = queued.authority_version
-    WHERE queued.short_lease
-      AND (queued.correction_until IS NULL OR queued.correction_until > NOW())
-      AND queued.status IN ('pending', 'delivering')
-      AND queued.next_attempt_at <= NOW()
-      AND (queued.lease_expires_at IS NULL OR queued.lease_expires_at <= NOW())
-      AND NOT EXISTS (
+WITH RECURSIVE due_after AS (
+    (SELECT queued.cell_id FROM commodore.media_authority_deliveries AS queued
+     WHERE queued.short_lease AND queued.status IN ('pending', 'delivering')
+       AND queued.next_attempt_at <= NOW()
+       AND queued.cell_id > $2::text
+     ORDER BY queued.cell_id LIMIT 1)
+    UNION ALL
+    SELECT (SELECT queued.cell_id FROM commodore.media_authority_deliveries AS queued
+            WHERE queued.short_lease AND queued.status IN ('pending', 'delivering')
+              AND queued.next_attempt_at <= NOW()
+              AND queued.cell_id > due_after.cell_id
+            ORDER BY queued.cell_id LIMIT 1)
+    FROM due_after WHERE due_after.cell_id IS NOT NULL
+), due_before AS (
+    (SELECT queued.cell_id FROM commodore.media_authority_deliveries AS queued
+     WHERE queued.short_lease AND queued.status IN ('pending', 'delivering')
+       AND queued.next_attempt_at <= NOW()
+       AND queued.cell_id <= $2::text
+     ORDER BY queued.cell_id LIMIT 1)
+    UNION ALL
+    SELECT (SELECT queued.cell_id FROM commodore.media_authority_deliveries AS queued
+            WHERE queued.short_lease AND queued.status IN ('pending', 'delivering')
+              AND queued.next_attempt_at <= NOW()
+              AND queued.cell_id > due_before.cell_id
+              AND queued.cell_id <= $2::text
+            ORDER BY queued.cell_id LIMIT 1)
+    FROM due_before WHERE due_before.cell_id IS NOT NULL
+), due_cells AS (
+    SELECT due_after.cell_id FROM due_after
+    UNION ALL
+    SELECT due_before.cell_id FROM due_before
+), heads AS (
+    SELECT head.authority_kind, head.authority_id, head.authority_version,
+           head.cell_id, head.next_attempt_at, head.created_at
+    FROM due_cells
+    CROSS JOIN LATERAL (
+        -- The current-version check is a lookup per visited row rather than a
+        -- join, so the scan stays in index order and stops at the first match
+        -- instead of joining the cell's whole range to the current table.
+        SELECT queued.authority_kind, queued.authority_id, queued.authority_version,
+               queued.cell_id, queued.next_attempt_at, queued.created_at
+        FROM commodore.media_authority_deliveries AS queued
+        WHERE queued.short_lease
+          AND queued.cell_id = due_cells.cell_id
+          AND (queued.correction_until IS NULL OR queued.correction_until > NOW())
+          AND queued.status IN ('pending', 'delivering')
+          AND queued.next_attempt_at <= NOW()
+          AND (queued.lease_expires_at IS NULL OR queued.lease_expires_at <= NOW())
+          AND queued.authority_version = (
+              SELECT current.authority_version
+              FROM commodore.media_authority_current AS current
+              WHERE current.authority_kind = queued.authority_kind
+                AND current.authority_id = queued.authority_id
+          )
+        ORDER BY queued.next_attempt_at, queued.created_at
+        LIMIT 1
+    ) AS head
+    -- A scalar probe, not NOT EXISTS: an anti-join lets the planner batch the
+    -- cells into one primary-key scan that reads the whole table, while the
+    -- probe is one lookup in the cell's range of the short-lease index.
+    WHERE due_cells.cell_id IS NOT NULL
+      AND (
           SELECT 1 FROM commodore.media_authority_deliveries AS inflight
           WHERE inflight.short_lease
-            AND inflight.cell_id = queued.cell_id
+            AND inflight.cell_id = due_cells.cell_id
+            AND inflight.status IN ('pending', 'delivering')
             AND inflight.status = 'delivering' AND inflight.lease_expires_at > NOW()
-      )
-    ORDER BY queued.cell_id, queued.next_attempt_at, queued.created_at,
-             queued.authority_kind, queued.authority_id, queued.authority_version
+          LIMIT 1
+      ) IS NULL
 ), candidates AS (
-    SELECT queued.authority_kind, queued.authority_id, queued.authority_version, queued.cell_id
-    FROM commodore.media_authority_deliveries AS queued
-    JOIN heads ON heads.authority_kind = queued.authority_kind
-              AND heads.authority_id = queued.authority_id
-              AND heads.authority_version = queued.authority_version
-              AND heads.cell_id = queued.cell_id
-    WHERE queued.status IN ('pending', 'delivering')
-      AND queued.next_attempt_at <= NOW()
-      AND (queued.lease_expires_at IS NULL OR queued.lease_expires_at <= NOW())
-    ORDER BY heads.next_attempt_at, heads.created_at, heads.cell_id
-    LIMIT $2
-    FOR UPDATE OF queued SKIP LOCKED
+    -- Each head is locked on its own as the walk reaches it, so the walk stops
+    -- when the batch is full; a join of all heads to the queue would be
+    -- batched, and would compute every cell's head first.
+    SELECT locked.authority_kind, locked.authority_id, locked.authority_version, locked.cell_id
+    FROM heads
+    CROSS JOIN LATERAL (
+        SELECT queued.authority_kind, queued.authority_id, queued.authority_version, queued.cell_id
+        FROM commodore.media_authority_deliveries AS queued
+        WHERE queued.authority_kind = heads.authority_kind
+          AND queued.authority_id = heads.authority_id
+          AND queued.authority_version = heads.authority_version
+          AND queued.cell_id = heads.cell_id
+          AND queued.status IN ('pending', 'delivering')
+          AND queued.next_attempt_at <= NOW()
+          AND (queued.lease_expires_at IS NULL OR queued.lease_expires_at <= NOW())
+        FOR UPDATE SKIP LOCKED
+    ) AS locked
+    LIMIT $3
 )
 UPDATE commodore.media_authority_deliveries AS delivery
 SET status = 'delivering', attempts = delivery.attempts + 1,
@@ -161,8 +214,9 @@ RETURNING delivery.authority_kind, delivery.authority_id, delivery.authority_ver
 `
 
 type ClaimMediaAuthorityDeadlineDeliveryParams struct {
-	LeaseMs   int64 `db:"lease_ms" json:"lease_ms"`
-	BatchSize int32 `db:"batch_size" json:"batch_size"`
+	LeaseMs   int64  `db:"lease_ms" json:"lease_ms"`
+	AfterCell string `db:"after_cell" json:"after_cell"`
+	BatchSize int32  `db:"batch_size" json:"batch_size"`
 }
 
 type ClaimMediaAuthorityDeadlineDeliveryRow struct {
@@ -176,10 +230,22 @@ type ClaimMediaAuthorityDeadlineDeliveryRow struct {
 
 // short_lease is recorded on the delivery when it is enqueued. Deriving it here
 // from the version's validity would join the queue to the whole version
-// history on an expression no index can serve, and this claim runs every
-// second inside a one-second budget.
+// history on an expression no index can serve, inside a claim budget of a
+// couple of seconds.
+//
+// The work is per cell, never per queued row: the cells with something due are
+// found by stepping through the per-cell index, a cell with a delivery in
+// flight is dropped with one probe, and each remaining cell contributes the
+// first claimable row of its index range. On YugabyteDB every probe is a
+// storage round trip, so a check per queued row costs a round trip per row of
+// the backlog.
+//
+// The walk starts after the cell the claimant's previous claim ended at and
+// wraps around, and stops once the batch is full. A claim reads only the cells
+// it takes, every cell is reached in turn, and replicas claiming at once start
+// from different cells instead of contending for the same heads.
 func (q *Queries) ClaimMediaAuthorityDeadlineDelivery(ctx context.Context, arg ClaimMediaAuthorityDeadlineDeliveryParams) ([]ClaimMediaAuthorityDeadlineDeliveryRow, error) {
-	rows, err := q.db.QueryContext(ctx, claimMediaAuthorityDeadlineDelivery, arg.LeaseMs, arg.BatchSize)
+	rows, err := q.db.QueryContext(ctx, claimMediaAuthorityDeadlineDelivery, arg.LeaseMs, arg.AfterCell, arg.BatchSize)
 	if err != nil {
 		return nil, err
 	}
@@ -1926,21 +1992,38 @@ func (q *Queries) ListMediaAuthorityDeliveryCells(ctx context.Context) ([]string
 }
 
 const listMediaAuthorityDeliveryStats = `-- name: ListMediaAuthorityDeliveryStats :many
-WITH current_deliveries AS MATERIALIZED (
-    SELECT current.authority_kind, current.authority_id, current.authority_version,
-           delivery.cell_id, delivery.status, delivery.created_at
+WITH queued AS MATERIALIZED (
+    SELECT delivery.authority_kind, delivery.authority_id, delivery.authority_version,
+           delivery.cell_id, delivery.created_at
     FROM commodore.media_authority_deliveries AS delivery
+    WHERE delivery.status IN ('pending', 'delivering')
+), rejected AS MATERIALIZED (
+    SELECT delivery.authority_kind, delivery.authority_id, delivery.authority_version,
+           delivery.cell_id, delivery.created_at
+    FROM commodore.media_authority_deliveries AS delivery
+    WHERE delivery.status = 'rejected'
+), current_deliveries AS MATERIALIZED (
+    SELECT current.authority_kind, current.authority_id, current.authority_version,
+           queued.cell_id, 'pending'::text AS status, queued.created_at
+    FROM queued
     JOIN commodore.media_authority_current AS current
-      ON current.authority_kind = delivery.authority_kind
-     AND current.authority_id = delivery.authority_id
-     AND current.authority_version = delivery.authority_version
-    WHERE delivery.status IN ('pending', 'delivering', 'rejected')
-      AND (delivery.status <> 'rejected' OR EXISTS (
-          SELECT 1 FROM commodore.media_authority_actionable_rejections AS actionable
-          WHERE actionable.authority_kind = delivery.authority_kind
-            AND actionable.authority_id = delivery.authority_id
-            AND actionable.authority_version = delivery.authority_version
-            AND actionable.cell_id = delivery.cell_id))
+      ON current.authority_kind = queued.authority_kind
+     AND current.authority_id = queued.authority_id
+     AND current.authority_version = queued.authority_version
+    UNION ALL
+    SELECT current.authority_kind, current.authority_id, current.authority_version,
+           rejected.cell_id, 'rejected'::text AS status, rejected.created_at
+    FROM rejected
+    JOIN commodore.media_authority_current AS current
+      ON current.authority_kind = rejected.authority_kind
+     AND current.authority_id = rejected.authority_id
+     AND current.authority_version = rejected.authority_version
+    WHERE EXISTS (
+        SELECT 1 FROM commodore.media_authority_actionable_rejections AS actionable
+        WHERE actionable.authority_kind = rejected.authority_kind
+          AND actionable.authority_id = rejected.authority_id
+          AND actionable.authority_version = rejected.authority_version
+          AND actionable.cell_id = rejected.cell_id)
 )
 SELECT current.authority_kind,
        COUNT(*) FILTER (WHERE current.status IN ('pending', 'delivering'))::bigint AS pending_count,
@@ -1973,6 +2056,11 @@ type ListMediaAuthorityDeliveryStatsRow struct {
 // Reads the deliveries that are not settled, through their partial indexes, and
 // nothing else: a delivery that was acknowledged has no backlog, no age, and no
 // version lag to report, and those are nearly all of them.
+//
+// Each status is read through its own partial index before anything is joined
+// to it. A single scan over all three statuses lets the planner drive from the
+// current table instead, one delivery lookup per authority ever issued, which
+// on YugabyteDB is a storage round trip per authority.
 func (q *Queries) ListMediaAuthorityDeliveryStats(ctx context.Context) ([]ListMediaAuthorityDeliveryStatsRow, error) {
 	rows, err := q.db.QueryContext(ctx, listMediaAuthorityDeliveryStats)
 	if err != nil {
@@ -3174,21 +3262,34 @@ func (q *Queries) SettleExpiredMediaAuthorityDeliveries(ctx context.Context, bat
 }
 
 const supersedeExpiredObsoleteMediaAuthorityDeliveries = `-- name: SupersedeExpiredObsoleteMediaAuthorityDeliveries :execrows
-WITH candidates AS MATERIALIZED (
+WITH queued AS MATERIALIZED (
+    SELECT delivery.authority_kind, delivery.authority_id, delivery.authority_version,
+           delivery.cell_id, delivery.next_attempt_at, delivery.created_at
+    FROM commodore.media_authority_deliveries AS delivery
+    WHERE delivery.status IN ('pending', 'delivering')
+      AND (delivery.status = 'pending' OR delivery.lease_expires_at IS NULL OR delivery.lease_expires_at <= NOW())
+), obsolete AS MATERIALIZED (
+    SELECT queued.authority_kind, queued.authority_id, queued.authority_version, queued.cell_id
+    FROM queued
+    JOIN commodore.media_authority_current AS current
+      ON current.authority_kind = queued.authority_kind
+     AND current.authority_id = queued.authority_id
+     AND current.authority_version > queued.authority_version
+    ORDER BY queued.next_attempt_at, queued.created_at
+    LIMIT $1
+), candidates AS MATERIALIZED (
     SELECT delivery.authority_kind, delivery.authority_id,
            delivery.authority_version, delivery.cell_id
     FROM commodore.media_authority_deliveries AS delivery
-    JOIN commodore.media_authority_current AS current
-      ON current.authority_kind = delivery.authority_kind
-     AND current.authority_id = delivery.authority_id
-     AND current.authority_version > delivery.authority_version
+    JOIN obsolete
+      ON obsolete.authority_kind = delivery.authority_kind
+     AND obsolete.authority_id = delivery.authority_id
+     AND obsolete.authority_version = delivery.authority_version
+     AND obsolete.cell_id = delivery.cell_id
     WHERE (
         delivery.status = 'pending'
         OR (delivery.status = 'delivering' AND (delivery.lease_expires_at IS NULL OR delivery.lease_expires_at <= NOW()))
     )
-    ORDER BY delivery.updated_at, delivery.authority_kind,
-             delivery.authority_id, delivery.authority_version, delivery.cell_id
-    LIMIT $1
     FOR UPDATE OF delivery SKIP LOCKED
 )
 UPDATE commodore.media_authority_deliveries AS delivery
@@ -3201,6 +3302,11 @@ WHERE delivery.authority_kind = candidates.authority_kind
   AND delivery.cell_id = candidates.cell_id
 `
 
+// The sweep starts from the unsettled deliveries, read through their partial
+// index, so its cost follows the live queue. Starting from the current table
+// instead reads every authority's whole delivery history, settled rows
+// included, which on YugabyteDB is one storage round trip per batch of
+// authorities and grows with retention rather than with the backlog.
 func (q *Queries) SupersedeExpiredObsoleteMediaAuthorityDeliveries(ctx context.Context, batchSize int32) (int64, error) {
 	result, err := q.db.ExecContext(ctx, supersedeExpiredObsoleteMediaAuthorityDeliveries, batchSize)
 	if err != nil {

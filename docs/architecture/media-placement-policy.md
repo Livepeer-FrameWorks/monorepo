@@ -744,9 +744,11 @@ claim from ordinary deliveries. Eight independently refilling workers claim one 
 cell. An active short-lease claim excludes that cell's other short deliveries, while long-lived
 delivery to the same cell does not consume the short-lease slots. The outer claim rechecks row
 eligibility after locking; workers cannot skip a locked head to claim another row from that cell.
-Each attempt has a five-second budget, a twenty-second claim lease and a one-second claim-query
+Each attempt has a five-second budget, a twenty-second claim lease and a two-second claim-query
 budget. A healthy worker refills immediately instead of waiting for a slow peer's batch to finish.
-Empty queues return to the regular one-second polling loop.
+Publication and retries wake the worker on the replica that caused them; otherwise it polls, from
+one second backing off to four while claims are empty or failing (see the media authority
+architecture for the latency this gives).
 
 PostgreSQL and isolated single-node Yugabyte tests with simulated cell services over real local gRPC hold long and short deliveries open to one cell while a
 healthy cell drains three signed deliveries and commits distribution state. Concurrent workers

@@ -257,17 +257,46 @@ digest, audience, time, invariant, and monotonic-version checks pass and the
 envelope plus decoded indexes commit to the Foghorn database.
 
 An envelope valid for a minute or less is a short lease and has its own delivery
-worker with a one-second claim budget. `short_lease` is recorded on the delivery
-row when it is enqueued and indexed with the cell and due time; deriving it from
-the version's validity at claim time joins the queue to the whole version history
-on an expression no index can serve.
+worker. `short_lease` is recorded on the delivery row when it is enqueued and
+indexed with the cell and due time; deriving it from the version's validity at
+claim time joins the queue to the whole version history on an expression no
+index can serve. A short lease is renewed a third of the way through its
+validity, so a renewal has at least twenty seconds to reach its cell. The worker
+claims:
+
+- as soon as the publishing transaction commits, on the replica that published,
+  when it has a free delivery slot, and otherwise when a slot frees;
+- at a failed delivery's next attempt time, on the replica that recorded the
+  failure;
+- on a fallback poll that finds everything else (an expired lease, work
+  published by a replica that stopped). The poll starts at one second and backs
+  off to four while claims come back empty or fail, with every wait jittered by
+  up to a fifth, so idle replicas do not read the queue every second in step.
+
+The claim has a two-second budget and costs one index probe per cell it visits,
+never one per queued row: it steps through the cells with something due from
+where the replica's previous claim ended, drops a cell with a delivery in flight
+with one probe, takes the first claimable row of each remaining cell, and stops
+once the batch is full. Replicas claiming at once therefore start at different
+cells. On YugabyteDB a probe per queued row is a storage round trip per row, and
+a few thousand queued rows put the claim past its budget. YugabyteDB logs
+`Skip locking since entity was modified` whenever a claim passes over a head
+another replica has just taken; that is the claim working, not a fault. A claim
+that keeps failing is logged as a warning once and then at most once a minute,
+and its recovery is logged once.
 
 Queue indexes that order by `next_attempt_at` are explicitly range-sharded.
 YugabyteDB otherwise makes the first index key a hash key, which turns a due
 time lookup into a full-table scan even when only a few rows are pending.
-Backlog metrics materialize the small current-authority delivery set first and
-then join distribution state; historical deliveries are never the driving
-side of that observation query.
+Backlog metrics read the unsettled deliveries of each status through that
+status's partial index before joining current and distribution state, and the
+sweep that settles obsolete deliveries starts from the same index, so both cost
+what the live queue holds; historical deliveries are never the driving side.
+Each replica observes the queues once a minute, at a random point of its first
+minute and jittered after that, with every statement bounded by a five-second
+budget. The one-second authority workers start at a random point of their first
+second and jitter every later wait the same way, and every claim and listing on
+those ticks is bounded too.
 
 Foghorn authority apply uses the fixed `maut` two-key advisory namespace and a
 five-second transaction-local `lock_timeout`. Artifact projection first takes

@@ -264,12 +264,14 @@ func (s *CommodoreServer) processPlacementActivationBacklog(ctx context.Context)
 		cursor = placementSweepStart()
 	}
 
-	rows, err := commodoredb.New(s.db).ListAuthoritiesAwaitingActivation(ctx, commodoredb.ListAuthoritiesAwaitingActivationParams{
+	listCtx, cancel := context.WithTimeout(ctx, mediaAuthorityClaimTimeout)
+	rows, err := commodoredb.New(s.db).ListAuthoritiesAwaitingActivation(listCtx, commodoredb.ListAuthoritiesAwaitingActivationParams{
 		MinAgeMs:       placementActivationBacklogMinAge.Milliseconds(),
 		AfterTenantID:  cursor.tenantID,
 		AfterCreatedAt: cursor.createdAt,
 		MaxRows:        placementActivationBacklogBatch,
 	})
+	cancel()
 	if err != nil {
 		if s.logger != nil && ctx.Err() == nil {
 			s.logger.WithError(err).Warn("Failed to list placement activations awaiting convergence")

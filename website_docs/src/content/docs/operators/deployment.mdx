@@ -129,9 +129,13 @@ an old delivery arriving late cannot clear that fence. Failed database enumerati
 `cluster restore postgres` fails the restore rather than reporting that fencing succeeded.
 
 Authority work queues use range-sharded due-time indexes on YugabyteDB, and short-lease deliveries are
-claimed through their own `short_lease` index. If Commodore repeatedly logs `Failed to observe media
-authority delivery backlog` or `Failed to claim short-lease media authority delivery`, verify the
-v0.3.10 and v0.3.11 expand and postdeploy migrations before increasing worker timeouts. Refresh work is
+claimed through their own `short_lease` index. YugabyteDB logs `Skip locking since entity was modified`
+when one Commodore replica's claim passes over a delivery another replica has just taken; that is
+expected. A failing short-lease claim is logged as a warning when it starts failing and then at most
+once a minute, with the count of consecutive failures, and once more when claims recover. If Commodore
+keeps logging `Failed to observe media authority delivery backlog` or `Failed to claim short-lease
+media authority delivery`, verify the v0.3.10 and v0.3.11 expand and postdeploy migrations before
+increasing worker timeouts. Refresh work is
 one obligation per authority, so it does not grow with event volume; the normal retention jobs preserve
 all current and retryable authority while bounding expired terminal history. Operators should not
 delete those tables manually.

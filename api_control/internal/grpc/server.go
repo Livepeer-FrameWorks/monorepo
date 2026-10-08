@@ -180,6 +180,7 @@ type CommodoreServer struct {
 	mediaAuthorityPrivateKey  ed25519.PrivateKey
 	// mediaAuthorityLegacyAdopter is touched only by its own worker goroutine.
 	mediaAuthorityLegacyAdopter mediaAuthorityLegacyAdopter
+	mediaAuthoritySchedule      mediaAuthoritySchedule
 	// placementSweepCursor pages the activation backlog so a permanently
 	// blocked prefix cannot hide the scopes behind it. Guarded because the
 	// worker that advances it is not the only possible reader.

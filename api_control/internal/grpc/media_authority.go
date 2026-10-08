@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"hash/fnv"
+	"math/rand/v2"
 	"sort"
 	"strconv"
 	"strings"
@@ -21,6 +22,7 @@ import (
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/database"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	sharedauthority "github.com/Livepeer-FrameWorks/monorepo/pkg/mediaauthority"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/periodic"
 	clusterpeerpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/cluster_peer"
 	commodorepb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/commodore"
 	foghornpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/foghorn"
@@ -66,9 +68,15 @@ const (
 	mediaAuthorityCompilerRevision = 1
 	// Queue gauges and the sweeps that settle deliveries nothing will ever make.
 	// Neither is needed to deliver, so they run off the one-second delivery tick.
+	// Each replica observes once a minute; the alerts on these gauges wait
+	// five minutes before firing.
 	mediaAuthorityReplayClockTolerance = 5 * time.Minute
-	mediaAuthorityQueueObserveInterval = 30 * time.Second
+	mediaAuthorityQueueObserveInterval = time.Minute
 	mediaAuthorityQueueSweepBatch      = 500
+	// Claims and listings on the one-second worker ticks. A statement held up
+	// on a stalled connection ends here instead of holding its lane, and its
+	// database transaction, open indefinitely.
+	mediaAuthorityClaimTimeout = 5 * time.Second
 )
 
 type mediaAuthorityCompileFence struct {
@@ -1288,9 +1296,9 @@ func (s *CommodoreServer) persistTenantAuthority(ctx context.Context, payload *m
 	tombstone := payload.GetLifecycle() == mediaauthoritypb.AuthorityLifecycle_AUTHORITY_LIFECYCLE_TOMBSTONE
 	// The transaction body may run more than once; only a committed publication
 	// is observed.
-	publishedCause, publishedEarly := "", false
+	publishedCause, publishedEarly, enqueuedShortLease := "", false, false
 	txErr := database.WithRetryablePostgresTx(ctx, s.db, nil, func(tx *sql.Tx) error {
-		publishedCause, publishedEarly = "", false
+		publishedCause, publishedEarly, enqueuedShortLease = "", false, false
 		queries := commodoredb.New(tx)
 		if err := lockMediaAuthorityCompileFence(ctx, queries, "tenant:"+payload.GetTenantId()); err != nil {
 			return err
@@ -1420,9 +1428,11 @@ func (s *CommodoreServer) persistTenantAuthority(ctx context.Context, payload *m
 			}); err != nil {
 				return fmt.Errorf("record tenant authority target cell %q: %w", cell, err)
 			}
+			shortLease := mediaAuthorityShortLease(payload.GetSchemaVersion(), issuedAt, mediaAuthorityRecipientValidity(validUntil, horizons[cell]))
+			enqueuedShortLease = enqueuedShortLease || shortLease
 			rows, err := queries.EnqueueMediaAuthorityDelivery(ctx, commodoredb.EnqueueMediaAuthorityDeliveryParams{
 				AuthorityKind: "tenant", AuthorityID: payload.GetTenantId(), AuthorityVersion: version, CellID: cell, SignedEnvelope: signedByCell[cell],
-				ShortLease: mediaAuthorityShortLease(payload.GetSchemaVersion(), issuedAt, mediaAuthorityRecipientValidity(validUntil, horizons[cell])), CorrectionUntil: horizons[cell],
+				ShortLease: shortLease, CorrectionUntil: horizons[cell],
 			})
 			if err != nil || rows != 1 {
 				return fmt.Errorf("enqueue tenant authority for cell %q: rows=%d: %w", cell, rows, err)
@@ -1464,6 +1474,9 @@ func (s *CommodoreServer) persistTenantAuthority(ctx context.Context, payload *m
 	})
 	if txErr == nil && publishedCause != "" {
 		s.observeMediaAuthorityPublished(ctx, "tenant", publishedCause, publishedEarly)
+	}
+	if txErr == nil && enqueuedShortLease {
+		s.mediaAuthoritySchedule.deadlineWake.notify()
 	}
 	return txErr
 }
@@ -1515,9 +1528,9 @@ func (s *CommodoreServer) publishMediaObjectAuthority(ctx context.Context, autho
 	tombstone := payload.GetLifecycle() == mediaauthoritypb.AuthorityLifecycle_AUTHORITY_LIFECYCLE_TOMBSTONE
 	// The transaction body may run more than once; only a committed publication
 	// is observed.
-	publishedCause, publishedEarly := "", false
+	publishedCause, publishedEarly, enqueuedShortLease := "", false, false
 	txErr := database.WithRetryablePostgresTx(ctx, s.db, nil, func(tx *sql.Tx) error {
-		publishedCause, publishedEarly = "", false
+		publishedCause, publishedEarly, enqueuedShortLease = "", false, false
 		queries := commodoredb.New(tx)
 		if err := lockMediaAuthorityCompileFence(ctx, queries, "media_object:"+authorityID); err != nil {
 			return err
@@ -1665,9 +1678,11 @@ func (s *CommodoreServer) publishMediaObjectAuthority(ctx context.Context, autho
 			}); err != nil {
 				return fmt.Errorf("record media-object authority target cell %q: %w", cell, err)
 			}
+			shortLease := mediaAuthorityShortLease(payload.GetSchemaVersion(), issuedAt, mediaAuthorityRecipientValidity(validUntil, horizons[cell]))
+			enqueuedShortLease = enqueuedShortLease || shortLease
 			rows, err := queries.EnqueueMediaAuthorityDelivery(ctx, commodoredb.EnqueueMediaAuthorityDeliveryParams{
 				AuthorityKind: "media_object", AuthorityID: authorityID, AuthorityVersion: version, CellID: cell, SignedEnvelope: signedByCell[cell],
-				ShortLease: mediaAuthorityShortLease(payload.GetSchemaVersion(), issuedAt, mediaAuthorityRecipientValidity(validUntil, horizons[cell])), CorrectionUntil: horizons[cell],
+				ShortLease: shortLease, CorrectionUntil: horizons[cell],
 			})
 			if err != nil || rows != 1 {
 				return fmt.Errorf("enqueue media-object authority for cell %q: rows=%d: %w", cell, rows, err)
@@ -1690,6 +1705,9 @@ func (s *CommodoreServer) publishMediaObjectAuthority(ctx context.Context, autho
 	if txErr == nil && publishedCause != "" {
 		s.observeMediaAuthorityPublished(ctx, "media_object", publishedCause, publishedEarly)
 	}
+	if txErr == nil && enqueuedShortLease {
+		s.mediaAuthoritySchedule.deadlineWake.notify()
+	}
 	return txErr
 }
 
@@ -1710,11 +1728,19 @@ func (s *CommodoreServer) runMediaAuthorityWorkers(ctx context.Context) {
 		s.processMediaAuthorityObjectRenewals,
 		s.processMediaAuthorityTenantRenewals,
 		s.processMediaAuthorityDeliveryBatch,
-		s.processMediaAuthorityDeadlineDeliveryBatch,
 		s.observeMediaAuthorityQueues,
 		s.processPlacementActivationBacklog,
 	}
+	// Short-lease delivery keeps its own schedule: it is woken by local
+	// publications and retries and polls only as a fallback.
+	var deadline sync.WaitGroup
+	deadline.Add(1)
+	go func() {
+		defer deadline.Done()
+		s.runMediaAuthorityDeadlineDelivery(ctx)
+	}()
 	runMediaAuthorityWorkerGroup(ctx, processes...)
+	deadline.Wait()
 }
 
 func runMediaAuthorityWorkerGroup(ctx context.Context, processes ...func(context.Context)) {
@@ -1730,14 +1756,15 @@ func runMediaAuthorityWorkerGroup(ctx context.Context, processes ...func(context
 }
 
 func runMediaAuthorityWorker(ctx context.Context, process func(context.Context)) {
-	ticker := time.NewTicker(mediaAuthorityWorkerInterval)
-	defer ticker.Stop()
+	timer := time.NewTimer(periodic.StartOffset(mediaAuthorityWorkerInterval, rand.Float64()))
+	defer timer.Stop()
 	for {
 		select {
 		case <-ctx.Done():
 			return
-		case <-ticker.C:
+		case <-timer.C:
 			process(ctx)
+			timer.Reset(periodic.Jittered(mediaAuthorityWorkerInterval, periodic.DefaultJitter, rand.Float64()))
 		}
 	}
 }
@@ -2032,7 +2059,9 @@ func (s *CommodoreServer) processMediaAuthorityDeliveryBatch(ctx context.Context
 	if s.db == nil || s.foghornPool == nil || s.quartermasterClient == nil {
 		return
 	}
-	cells, err := commodoredb.New(s.db).ListMediaAuthorityDeliveryCells(ctx)
+	listCtx, cancel := context.WithTimeout(ctx, mediaAuthorityClaimTimeout)
+	cells, err := commodoredb.New(s.db).ListMediaAuthorityDeliveryCells(listCtx)
+	cancel()
 	if err != nil {
 		if ctx.Err() == nil {
 			s.logger.WithError(err).Warn("Failed to list cells with media authority deliveries waiting")
@@ -2079,9 +2108,11 @@ func (s *CommodoreServer) drainMediaAuthorityDeliveryCell(ctx context.Context, c
 			}
 			continue
 		}
-		rows, err := commodoredb.New(s.db).ClaimMediaAuthorityDeliveries(ctx, commodoredb.ClaimMediaAuthorityDeliveriesParams{
+		claimCtx, cancel := context.WithTimeout(ctx, mediaAuthorityClaimTimeout)
+		rows, err := commodoredb.New(s.db).ClaimMediaAuthorityDeliveries(claimCtx, commodoredb.ClaimMediaAuthorityDeliveriesParams{
 			CellID: cellID, LeaseMs: mediaAuthorityLease.Milliseconds(), BatchSize: int32(available),
 		})
+		cancel()
 		if err != nil {
 			if ctx.Err() == nil {
 				s.logger.WithError(err).WithField("cell_id", cellID).Warn("Failed to claim media authority deliveries")
@@ -2113,21 +2144,25 @@ func (s *CommodoreServer) drainMediaAuthorityDeliveryCell(ctx context.Context, c
 // observeMediaAuthorityQueues settles deliveries that can no longer be made and
 // refreshes the queue gauges. It runs on its own interval, off the delivery
 // tick: none of it is needed to deliver, and at a second's interval it would
-// cost more than the deliveries do.
+// cost more than the deliveries do. The first pass falls at a random point of
+// the first interval and each later one is jittered, so replicas do not sweep
+// the queue in the same second as each other.
 func (s *CommodoreServer) observeMediaAuthorityQueues(ctx context.Context) {
 	if s.db == nil {
 		return
 	}
-	now := time.Now()
-	if last := s.mediaAuthorityQueuesObservedAt.Load(); now.Sub(time.Unix(0, last)) < mediaAuthorityQueueObserveInterval ||
-		!s.mediaAuthorityQueuesObservedAt.CompareAndSwap(last, now.UnixNano()) {
+	if !s.mediaAuthorityQueueObservationDue(time.Now()) {
 		return
 	}
 	queries := commodoredb.New(s.db)
-	if _, err := queries.SupersedeExpiredObsoleteMediaAuthorityDeliveries(ctx, mediaAuthorityQueueSweepBatch); err != nil {
+	if _, err := authorityMetricQuery(ctx, func(ctx context.Context) (int64, error) {
+		return queries.SupersedeExpiredObsoleteMediaAuthorityDeliveries(ctx, mediaAuthorityQueueSweepBatch)
+	}); err != nil {
 		s.logger.WithError(err).Warn("Failed to settle obsolete media authority deliveries")
 	}
-	if _, err := queries.SettleExpiredMediaAuthorityDeliveries(ctx, mediaAuthorityQueueSweepBatch); err != nil {
+	if _, err := authorityMetricQuery(ctx, func(ctx context.Context) (int64, error) {
+		return queries.SettleExpiredMediaAuthorityDeliveries(ctx, mediaAuthorityQueueSweepBatch)
+	}); err != nil {
 		s.logger.WithError(err).Warn("Failed to settle expired media authority deliveries")
 	}
 	statsCtx, statsCancel := context.WithTimeout(ctx, mediaAuthorityStatsTimeout)
@@ -2136,7 +2171,31 @@ func (s *CommodoreServer) observeMediaAuthorityQueues(ctx context.Context) {
 	s.observeMediaAuthorityObligationStats(ctx)
 }
 
-func (s *CommodoreServer) processMediaAuthorityDeliveryRow(ctx context.Context, row commodoredb.ClaimMediaAuthorityDeliveriesRow, timeout time.Duration) {
+// mediaAuthorityQueueObservationDue reports whether the queue observation is
+// due at now and, when it is, records it and draws the wait before the next.
+// The first call only counts the first interval from a random point in the
+// past, so the first observation falls at a random point of that interval.
+func (s *CommodoreServer) mediaAuthorityQueueObservationDue(now time.Time) bool {
+	last := s.mediaAuthorityQueuesObservedAt.Load()
+	if last == 0 {
+		s.mediaAuthorityQueuesObservedAt.CompareAndSwap(0,
+			now.Add(periodic.StartOffset(mediaAuthorityQueueObserveInterval, rand.Float64())-mediaAuthorityQueueObserveInterval).UnixNano())
+		return false
+	}
+	wait := time.Duration(s.mediaAuthoritySchedule.queueObserveWait.Load())
+	if wait == 0 {
+		wait = mediaAuthorityQueueObserveInterval
+	}
+	if now.Sub(time.Unix(0, last)) < wait || !s.mediaAuthorityQueuesObservedAt.CompareAndSwap(last, now.UnixNano()) {
+		return false
+	}
+	s.mediaAuthoritySchedule.queueObserveWait.Store(int64(periodic.Jittered(mediaAuthorityQueueObserveInterval, periodic.DefaultJitter, rand.Float64())))
+	return true
+}
+
+// processMediaAuthorityDeliveryRow delivers one claimed row and settles it. It
+// returns when the row is due again after a failed attempt, or the zero time.
+func (s *CommodoreServer) processMediaAuthorityDeliveryRow(ctx context.Context, row commodoredb.ClaimMediaAuthorityDeliveriesRow, timeout time.Duration) time.Time {
 	deliveryErr := runMediaAuthorityDelivery(ctx, timeout, func(deliveryCtx context.Context) error {
 		return s.deliverMediaAuthority(deliveryCtx, row)
 	})
@@ -2148,11 +2207,12 @@ func (s *CommodoreServer) processMediaAuthorityDeliveryRow(ctx context.Context, 
 	if deliveryErr != nil {
 		s.observeMediaAuthorityDeliveryAttempt(row.AuthorityKind, "failed")
 		settleCtx, settleCancel := context.WithTimeout(context.Background(), mediaAuthoritySettleTimeout)
-		s.failMediaAuthorityDelivery(settleCtx, row, deliveryErr)
+		retryAt := s.failMediaAuthorityDelivery(settleCtx, row, deliveryErr)
 		settleCancel()
-		return
+		return retryAt
 	}
 	s.observeMediaAuthorityDeliveryAttempt(row.AuthorityKind, "acknowledged")
+	return time.Time{}
 }
 
 func runMediaAuthorityDelivery(ctx context.Context, timeout time.Duration, deliver func(context.Context) error) error {
@@ -2298,23 +2358,31 @@ func (s *CommodoreServer) acknowledgeMediaAuthorityDelivery(ctx context.Context,
 	})
 }
 
-func (s *CommodoreServer) failMediaAuthorityDelivery(ctx context.Context, row commodoredb.ClaimMediaAuthorityDeliveriesRow, cause error) {
+// failMediaAuthorityDelivery records a failed attempt and returns when the
+// delivery is due again, or the zero time when it will not be retried.
+func (s *CommodoreServer) failMediaAuthorityDelivery(ctx context.Context, row commodoredb.ClaimMediaAuthorityDeliveriesRow, cause error) time.Time {
 	rejected := mediaAuthorityDeliveryRejected(cause)
-	_, err := commodoredb.New(s.db).RecordMediaAuthorityDeliveryFailure(ctx, commodoredb.RecordMediaAuthorityDeliveryFailureParams{
-		NextAttemptAt: time.Now().Add(authorityBackoff(row.Attempts, row.AuthorityKind, row.AuthorityID, row.CellID)), LastError: sql.NullString{String: cause.Error(), Valid: true},
+	nextAttemptAt := time.Now().Add(authorityBackoff(row.Attempts, row.AuthorityKind, row.AuthorityID, row.CellID))
+	affected, err := commodoredb.New(s.db).RecordMediaAuthorityDeliveryFailure(ctx, commodoredb.RecordMediaAuthorityDeliveryFailureParams{
+		NextAttemptAt: nextAttemptAt, LastError: sql.NullString{String: cause.Error(), Valid: true},
 		AuthorityKind: row.AuthorityKind, AuthorityID: row.AuthorityID, AuthorityVersion: row.AuthorityVersion, CellID: row.CellID,
 		Rejected: rejected,
 	})
 	if err != nil {
 		s.logger.WithError(err).WithField("delivery_error", cause.Error()).Error("Failed to reschedule media authority delivery")
-		return
+		return time.Time{}
 	}
 	if rejected {
 		s.logger.WithError(cause).WithFields(logging.Fields{
 			"authority_kind": row.AuthorityKind, "authority_id": row.AuthorityID,
 			"authority_version": row.AuthorityVersion, "cell_id": row.CellID,
 		}).Warn("Cell rejected signed media authority; delivery will not be retried until the cell requests replay")
+		return time.Time{}
 	}
+	if affected == 0 {
+		return time.Time{}
+	}
+	return nextAttemptAt
 }
 
 // mediaAuthorityDeliveryRejected reports a refusal the cell repeats for every
