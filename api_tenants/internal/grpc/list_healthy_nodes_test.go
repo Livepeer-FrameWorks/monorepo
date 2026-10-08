@@ -78,6 +78,14 @@ func newNodeRow(id, nodeID, clusterID, nodeName, nodeType, externalIP string) []
 	}
 }
 
+// candidateNodeColumns is the row of the single ListHealthyServiceNodes
+// statement: the node columns plus whether that candidate is healthy.
+var candidateNodeColumns = append(append([]string{}, nodeColumns...), "healthy")
+
+func candidateRow(healthy bool, id, nodeID, clusterID, nodeName, nodeType, externalIP string) []driver.Value {
+	return append(newNodeRow(id, nodeID, clusterID, nodeName, nodeType, externalIP), healthy)
+}
+
 func TestListHealthyNodesForDNS_ServiceAuthUsesAllActiveClusters(t *testing.T) {
 	db, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherRegexp))
 	if err != nil {
@@ -91,16 +99,8 @@ func TestListHealthyNodesForDNS_ServiceAuthUsesAllActiveClusters(t *testing.T) {
 	serviceScope := `(?s)WHERE n\.cluster_id IN \(\s*SELECT c\.cluster_id FROM quartermaster\.infrastructure_clusters c\s*WHERE c\.is_active = true\s*\).*AND s\.type = \$1`
 
 	mock.ExpectQuery(serviceScope).
-		WithArgs(svcType).
-		WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(1))
-
-	mock.ExpectQuery(serviceScope).
 		WithArgs(svcType, int32(300)).
-		WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(1))
-
-	mock.ExpectQuery(serviceScope).
-		WithArgs(svcType, int32(300)).
-		WillReturnRows(sqlmock.NewRows(nodeColumns).AddRow(newNodeRow("uuid-1", "node-1", "private-cluster", "node-1", "core", "1.2.3.4")...))
+		WillReturnRows(sqlmock.NewRows(candidateNodeColumns).AddRow(candidateRow(true, "uuid-1", "node-1", "private-cluster", "node-1", "core", "1.2.3.4")...))
 
 	resp, err := server.ListHealthyNodesForDNS(ctx, &quartermasterpb.ListHealthyNodesForDNSRequest{
 		ServiceType: &svcType,
@@ -132,16 +132,8 @@ func TestListHealthyNodesForDNS_PlatformOperatorUsesPublicTopology(t *testing.T)
 	publicScope := `(?s)WHERE n\.cluster_id IN \(\s*SELECT c\.cluster_id FROM quartermaster\.infrastructure_clusters c\s*WHERE c\.public_topology = true AND c\.is_active = true\s*\).*AND s\.type = \$1`
 
 	mock.ExpectQuery(publicScope).
-		WithArgs(svcType).
-		WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(1))
-
-	mock.ExpectQuery(publicScope).
 		WithArgs(svcType, int32(300)).
-		WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(1))
-
-	mock.ExpectQuery(publicScope).
-		WithArgs(svcType, int32(300)).
-		WillReturnRows(sqlmock.NewRows(nodeColumns).AddRow(newNodeRow("uuid-1", "node-1", "platform-cluster", "node-1", "core", "1.2.3.4")...))
+		WillReturnRows(sqlmock.NewRows(candidateNodeColumns).AddRow(candidateRow(true, "uuid-1", "node-1", "platform-cluster", "node-1", "core", "1.2.3.4")...))
 
 	operatorCtx := context.WithValue(context.WithValue(context.Background(), ctxkeys.KeyAuthType, "jwt"), ctxkeys.KeyPlatformOperator, true)
 	resp, err := server.ListHealthyNodesForDNS(operatorCtx, &quartermasterpb.ListHealthyNodesForDNSRequest{
@@ -173,20 +165,10 @@ func TestListHealthyNodesForDNS_ServiceTypeReturnsMatchingNodes(t *testing.T) {
 
 	svcType := "bridge"
 
-	// Total count query (no tenant = public topology path)
-	mock.ExpectQuery(`SELECT COUNT\(DISTINCT n\.id\) FROM quartermaster\.infrastructure_nodes n`).
-		WithArgs(svcType).
-		WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(1))
-
-	// Healthy count query
-	mock.ExpectQuery(`SELECT COUNT\(DISTINCT n\.id\)`).
+	// One statement: candidates grouped per (node, n.cluster_id) with their health.
+	mock.ExpectQuery(`(?s)WITH candidates AS \(\s*SELECT n\.id AS node_pk, n\.cluster_id AS cluster_key.*FROM quartermaster\.infrastructure_nodes n.*GROUP BY n\.id, n\.cluster_id.*oc\.owner_tenant_id::text.*LEFT JOIN quartermaster\.infrastructure_clusters oc ON oc\.cluster_id = cand\.cluster_key`).
 		WithArgs(svcType, int32(300)).
-		WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(1))
-
-	// Main query returning healthy nodes
-	mock.ExpectQuery(`(?s)SELECT DISTINCT n\.id, n\.node_id, n\.cluster_id.*owner_tenant_id::text.*c\.cluster_id = n\.cluster_id`).
-		WithArgs(svcType, int32(300)).
-		WillReturnRows(sqlmock.NewRows(nodeColumns).AddRow(newNodeRow("uuid-1", "node-1", "cluster-1", "node-1", "core", "1.2.3.4")...))
+		WillReturnRows(sqlmock.NewRows(candidateNodeColumns).AddRow(candidateRow(true, "uuid-1", "node-1", "cluster-1", "node-1", "core", "1.2.3.4")...))
 
 	resp, err := server.ListHealthyNodesForDNS(serviceCtx(), &quartermasterpb.ListHealthyNodesForDNSRequest{
 		ServiceType: &svcType,
@@ -227,15 +209,9 @@ func TestListHealthyNodesForDNS_TelemetryUsesVmauthInstances(t *testing.T) {
 	// Pin n.status='active' too: pool-assigned DNS must drop operator-offlined nodes,
 	// matching the non-pool/physical paths.
 	queryShape := `(?s)FROM quartermaster\.service_instances si.*JOIN quartermaster\.service_cluster_assignments sca ON sca\.service_instance_id = si\.id.*sca\.is_active = TRUE.*s\.type = \$1.*n\.status = 'active'`
-	mock.ExpectQuery(`SELECT COUNT\(DISTINCT \(n\.id, sca\.cluster_id\)\) ` + queryShape).
-		WithArgs(lookupType).
-		WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(1))
-	mock.ExpectQuery(`SELECT COUNT\(DISTINCT \(n\.id, sca\.cluster_id\)\) `+queryShape).
+	mock.ExpectQuery(`(?s)WITH candidates AS \(\s*SELECT n\.id AS node_pk, sca\.cluster_id AS cluster_key.*`+queryShape[4:]+`.*GROUP BY n\.id, sca\.cluster_id`).
 		WithArgs(lookupType, int32(300)).
-		WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(1))
-	mock.ExpectQuery(`(?s)SELECT DISTINCT n\.id, n\.node_id, sca\.cluster_id.*owner_tenant_id::text.*c\.cluster_id = sca\.cluster_id.*FROM quartermaster\.service_instances si.*JOIN quartermaster\.service_cluster_assignments sca`).
-		WithArgs(lookupType, int32(300)).
-		WillReturnRows(sqlmock.NewRows(nodeColumns).AddRow(newNodeRow("uuid-1", "regional-eu-1", "media-eu-1", "regional-eu-1", "core", "1.2.3.4")...))
+		WillReturnRows(sqlmock.NewRows(candidateNodeColumns).AddRow(candidateRow(true, "uuid-1", "regional-eu-1", "media-eu-1", "regional-eu-1", "core", "1.2.3.4")...))
 
 	resp, err := server.ListHealthyNodesForDNS(serviceCtx(), &quartermasterpb.ListHealthyNodesForDNSRequest{
 		ServiceType: &publicType,
@@ -266,20 +242,10 @@ func TestListHealthyNodesForDNS_ServiceTypeExcludesOtherServices(t *testing.T) {
 
 	svcType := "bridge"
 
-	// Total: 1 node matching bridge
-	mock.ExpectQuery(`SELECT COUNT\(DISTINCT n\.id\)`).
-		WithArgs(svcType).
-		WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(1))
-
-	// Healthy: 1 node
-	mock.ExpectQuery(`SELECT COUNT\(DISTINCT n\.id\)`).
+	// Only the bridge node is a candidate (commodore-only node excluded by s.type filter)
+	mock.ExpectQuery(`(?s)WITH candidates AS.*AND s\.type = \$1`).
 		WithArgs(svcType, int32(300)).
-		WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(1))
-
-	// Only bridge node returned (commodore-only node excluded by s.type filter)
-	mock.ExpectQuery(`SELECT DISTINCT n\.id`).
-		WithArgs(svcType, int32(300)).
-		WillReturnRows(sqlmock.NewRows(nodeColumns).AddRow(newNodeRow("uuid-1", "node-1", "cluster-1", "bridge-node", "core", "1.2.3.4")...))
+		WillReturnRows(sqlmock.NewRows(candidateNodeColumns).AddRow(candidateRow(true, "uuid-1", "node-1", "cluster-1", "bridge-node", "core", "1.2.3.4")...))
 
 	resp, err := server.ListHealthyNodesForDNS(serviceCtx(), &quartermasterpb.ListHealthyNodesForDNSRequest{
 		ServiceType: &svcType,
@@ -307,20 +273,12 @@ func TestListHealthyNodesForDNS_UnhealthyExcludedFromResultsButCountedInTotal(t 
 
 	svcType := "bridge"
 
-	// Total: 2 nodes have bridge instances (one healthy, one unhealthy)
-	mock.ExpectQuery(`SELECT COUNT\(DISTINCT n\.id\)`).
-		WithArgs(svcType).
-		WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(2))
-
-	// Healthy: only 1 is healthy
-	mock.ExpectQuery(`SELECT COUNT\(DISTINCT n\.id\)`).
+	// Two nodes have bridge instances: one healthy, one unhealthy.
+	mock.ExpectQuery(`WITH candidates AS`).
 		WithArgs(svcType, int32(300)).
-		WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(1))
-
-	// Only the healthy node is returned
-	mock.ExpectQuery(`SELECT DISTINCT n\.id`).
-		WithArgs(svcType, int32(300)).
-		WillReturnRows(sqlmock.NewRows(nodeColumns).AddRow(newNodeRow("uuid-1", "node-1", "cluster-1", "healthy-bridge", "core", "1.2.3.4")...))
+		WillReturnRows(sqlmock.NewRows(candidateNodeColumns).
+			AddRow(candidateRow(true, "uuid-1", "node-1", "cluster-1", "healthy-bridge", "core", "1.2.3.4")...).
+			AddRow(candidateRow(false, "uuid-2", "node-2", "cluster-1", "unhealthy-bridge", "core", "1.2.3.5")...))
 
 	resp, err := server.ListHealthyNodesForDNS(serviceCtx(), &quartermasterpb.ListHealthyNodesForDNSRequest{
 		ServiceType: &svcType,
@@ -334,8 +292,8 @@ func TestListHealthyNodesForDNS_UnhealthyExcludedFromResultsButCountedInTotal(t 
 	if resp.GetHealthyNodes() != 1 {
 		t.Fatalf("expected healthy_nodes=1, got %d", resp.GetHealthyNodes())
 	}
-	if len(resp.GetNodes()) != 1 {
-		t.Fatalf("expected 1 returned node, got %d", len(resp.GetNodes()))
+	if len(resp.GetNodes()) != 1 || resp.GetNodes()[0].GetNodeId() != "node-1" {
+		t.Fatalf("expected only the healthy node-1, got %#v", resp.GetNodes())
 	}
 
 	if err := mock.ExpectationsWereMet(); err != nil {
@@ -354,20 +312,10 @@ func TestListHealthyNodesForDNS_CustomStaleThreshold(t *testing.T) {
 
 	svcType := "bridge"
 
-	// Total
-	mock.ExpectQuery(`SELECT COUNT\(DISTINCT n\.id\)`).
-		WithArgs(svcType).
-		WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(1))
-
-	// Healthy with custom threshold of 60s
-	mock.ExpectQuery(`SELECT COUNT\(DISTINCT n\.id\)`).
+	// One candidate, not healthy under the strict 60s threshold.
+	mock.ExpectQuery(`WITH candidates AS`).
 		WithArgs(svcType, int32(60)).
-		WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(0))
-
-	// No healthy nodes with strict threshold
-	mock.ExpectQuery(`SELECT DISTINCT n\.id`).
-		WithArgs(svcType, int32(60)).
-		WillReturnRows(sqlmock.NewRows(nodeColumns))
+		WillReturnRows(sqlmock.NewRows(candidateNodeColumns).AddRow(candidateRow(false, "uuid-1", "node-1", "cluster-1", "node-1", "core", "1.2.3.4")...))
 
 	resp, err := server.ListHealthyNodesForDNS(serviceCtx(), &quartermasterpb.ListHealthyNodesForDNSRequest{
 		ServiceType:           &svcType,
@@ -409,21 +357,15 @@ func TestListHealthyNodesForDNS_EdgeAggregateUsesServiceInstancePath(t *testing.
 
 	// Service-instance shape: the si/services joins (edge nodes are the FROM
 	// table, service_instances is JOINed), s.type=$1, and the defensive
-	// node_type='edge' guard. The healthy count gates on si.health_status, not
+	// node_type='edge' guard. Health gates on si.health_status, not
 	// n.last_heartbeat.
 	siEdgeShape := `JOIN quartermaster\.service_instances si.*JOIN quartermaster\.services s ON si\.service_id = s\.service_id.*s\.type = \$1.*n\.node_type = 'edge'`
 
-	mock.ExpectQuery(`(?s)SELECT COUNT\(DISTINCT n\.id\).*` + siEdgeShape).
-		WithArgs("edge").
-		WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(2))
-
-	mock.ExpectQuery(`(?s)SELECT COUNT\(DISTINCT n\.id\).*`+siEdgeShape+`.*si\.health_status = 'healthy'`).
+	mock.ExpectQuery(`(?s)WITH candidates AS.*si\.health_status = 'healthy'.*`+siEdgeShape).
 		WithArgs("edge", int32(300)).
-		WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(1))
-
-	mock.ExpectQuery(`(?s)SELECT DISTINCT n\.id, n\.node_id, n\.cluster_id.*`+siEdgeShape).
-		WithArgs("edge", int32(300)).
-		WillReturnRows(sqlmock.NewRows(nodeColumns).AddRow(newNodeRow("uuid-1", "edge-1", "cluster-1", "edge-node-1", "edge", "1.2.3.4")...))
+		WillReturnRows(sqlmock.NewRows(candidateNodeColumns).
+			AddRow(candidateRow(true, "uuid-1", "edge-1", "cluster-1", "edge-node-1", "edge", "1.2.3.4")...).
+			AddRow(candidateRow(false, "uuid-2", "edge-2", "cluster-1", "edge-node-2", "edge", "1.2.3.5")...))
 
 	resp, err := server.ListHealthyNodesForDNS(serviceCtx(), &quartermasterpb.ListHealthyNodesForDNSRequest{
 		ServiceType: &edgeSvc,
@@ -463,18 +405,10 @@ func TestListHealthyNodesForDNS_EdgeSubtypeUsesServiceInstancePath(t *testing.T)
 	// edge-* subtypes are NOT pool-assigned services: an edge node's physical
 	// cluster IS its logical media cluster, so service_instances.cluster_id is
 	// authoritative. Routing therefore goes through the standard
-	// listHealthyServiceNodes path (counts node ids only, no sca join).
-	mock.ExpectQuery(`SELECT COUNT\(DISTINCT n\.id\) FROM quartermaster\.infrastructure_nodes n`).
-		WithArgs(edgeEgress).
-		WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(1))
-
-	mock.ExpectQuery(`SELECT COUNT\(DISTINCT n\.id\)`).
+	// listHealthyServiceNodes path (groups by node and its own cluster, no sca join).
+	mock.ExpectQuery(`(?s)WITH candidates AS.*FROM quartermaster\.infrastructure_nodes n.*GROUP BY n\.id, n\.cluster_id`).
 		WithArgs(edgeEgress, int32(300)).
-		WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(1))
-
-	mock.ExpectQuery(`(?s)SELECT DISTINCT n\.id, n\.node_id, n\.cluster_id.*owner_tenant_id::text.*c\.cluster_id = n\.cluster_id`).
-		WithArgs(edgeEgress, int32(300)).
-		WillReturnRows(sqlmock.NewRows(nodeColumns).AddRow(newNodeRow("uuid-1", "edge-1", "cluster-1", "edge-node-1", "edge", "5.6.7.8")...))
+		WillReturnRows(sqlmock.NewRows(candidateNodeColumns).AddRow(candidateRow(true, "uuid-1", "edge-1", "cluster-1", "edge-node-1", "edge", "5.6.7.8")...))
 
 	resp, err := server.ListHealthyNodesForDNS(serviceCtx(), &quartermasterpb.ListHealthyNodesForDNSRequest{
 		ServiceType: &edgeEgress,
@@ -502,15 +436,9 @@ func TestListHealthyNodesForDNS_FiltersByClusterID(t *testing.T) {
 	serviceType := "edge-egress"
 	clusterID := "cluster-1"
 
-	mock.ExpectQuery(`SELECT COUNT\(DISTINCT n\.id\)`).
-		WithArgs(clusterID, serviceType).
-		WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(1))
-	mock.ExpectQuery(`SELECT COUNT\(DISTINCT n\.id\)`).
+	mock.ExpectQuery(`(?s)WITH candidates AS.*n\.cluster_id = \$1.*s\.type = \$2`).
 		WithArgs(clusterID, serviceType, int32(300)).
-		WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(1))
-	mock.ExpectQuery(`(?s)SELECT DISTINCT n\.id, n\.node_id, n\.cluster_id.*n\.cluster_id = \$1.*s\.type = \$2`).
-		WithArgs(clusterID, serviceType, int32(300)).
-		WillReturnRows(sqlmock.NewRows(nodeColumns).AddRow(newNodeRow("uuid-1", "edge-1", clusterID, "edge-node-1", "edge", "5.6.7.8")...))
+		WillReturnRows(sqlmock.NewRows(candidateNodeColumns).AddRow(candidateRow(true, "uuid-1", "edge-1", clusterID, "edge-node-1", "edge", "5.6.7.8")...))
 
 	resp, err := server.ListHealthyNodesForDNS(serviceCtx(), &quartermasterpb.ListHealthyNodesForDNSRequest{
 		ServiceType: &serviceType,
@@ -680,18 +608,10 @@ func TestListHealthyNodesForDNS_PoolServiceUsesAssignmentClusterForDNS(t *testin
 			// matching the non-pool/physical paths.
 			queryShape := `(?s)FROM quartermaster\.service_instances si.*JOIN quartermaster\.service_cluster_assignments sca ON sca\.service_instance_id = si\.id.*sca\.is_active = TRUE.*s\.type = \$1.*n\.status = 'active'`
 
-			mock.ExpectQuery(queryShape).
-				WithArgs(svcType).
-				WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(1))
-
-			mock.ExpectQuery(queryShape).
+			mock.ExpectQuery(`(?s)WITH candidates AS \(\s*SELECT n\.id AS node_pk, sca\.cluster_id AS cluster_key.*`+queryShape[4:]+`.*GROUP BY n\.id, sca\.cluster_id.*oc\.cluster_id = cand\.cluster_key`).
 				WithArgs(svcType, int32(300)).
-				WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(1))
-
-			mock.ExpectQuery(`(?s)SELECT DISTINCT n\.id, n\.node_id, sca\.cluster_id.*owner_tenant_id::text.*c\.cluster_id = sca\.cluster_id.*FROM quartermaster\.service_instances si.*JOIN quartermaster\.service_cluster_assignments sca`).
-				WithArgs(svcType, int32(300)).
-				WillReturnRows(sqlmock.NewRows(nodeColumns).
-					AddRow(newNodeRow("uuid-1", "core-node-1", "media-central-primary", "core-node-1", "core", "1.2.3.4")...))
+				WillReturnRows(sqlmock.NewRows(candidateNodeColumns).
+					AddRow(candidateRow(true, "uuid-1", "core-node-1", "media-central-primary", "core-node-1", "core", "1.2.3.4")...))
 
 			svc := svcType
 			resp, err := server.ListHealthyNodesForDNS(ctx, &quartermasterpb.ListHealthyNodesForDNSRequest{
@@ -724,18 +644,12 @@ func TestListHealthyNodesForDNS_NoFilterReturnsAllHealthyNodes(t *testing.T) {
 	server := NewQuartermasterServer(db, logging.NewLogger(), nil, nil, nil, nil, nil)
 
 	// No service_type or node_type: returns all nodes with any healthy service instance
-	mock.ExpectQuery(`SELECT COUNT\(DISTINCT n\.id\)`).
-		WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(3))
-
-	mock.ExpectQuery(`SELECT COUNT\(DISTINCT n\.id\)`).
+	mock.ExpectQuery(`WITH candidates AS`).
 		WithArgs(int32(300)).
-		WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(2))
-
-	mock.ExpectQuery(`SELECT DISTINCT n\.id`).
-		WithArgs(int32(300)).
-		WillReturnRows(sqlmock.NewRows(nodeColumns).
-			AddRow(newNodeRow("uuid-1", "node-1", "cluster-1", "node-1", "core", "1.2.3.4")...).
-			AddRow(newNodeRow("uuid-2", "node-2", "cluster-1", "node-2", "edge", "5.6.7.8")...))
+		WillReturnRows(sqlmock.NewRows(candidateNodeColumns).
+			AddRow(candidateRow(true, "uuid-1", "node-1", "cluster-1", "node-1", "core", "1.2.3.4")...).
+			AddRow(candidateRow(true, "uuid-2", "node-2", "cluster-1", "node-2", "edge", "5.6.7.8")...).
+			AddRow(candidateRow(false, "uuid-3", "node-3", "cluster-1", "node-3", "core", "9.9.9.9")...))
 
 	resp, err := server.ListHealthyNodesForDNS(serviceCtx(), &quartermasterpb.ListHealthyNodesForDNSRequest{})
 	if err != nil {
@@ -782,16 +696,8 @@ func TestListHealthyNodesForDNS_QueriesCastInetAddressesForAdvertiseHost(t *test
 	svcType := "bridge"
 
 	mock.ExpectQuery(`(?s)si\.advertise_host = host\(n\.external_ip\).*si\.advertise_host = host\(n\.internal_ip\).*si\.advertise_host = host\(n\.wireguard_ip\)`).
-		WithArgs(svcType).
-		WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(1))
-
-	mock.ExpectQuery(`(?s)si\.advertise_host = host\(n\.external_ip\).*si\.advertise_host = host\(n\.internal_ip\).*si\.advertise_host = host\(n\.wireguard_ip\)`).
 		WithArgs(svcType, int32(300)).
-		WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(1))
-
-	mock.ExpectQuery(`(?s)si\.advertise_host = host\(n\.external_ip\).*si\.advertise_host = host\(n\.internal_ip\).*si\.advertise_host = host\(n\.wireguard_ip\)`).
-		WithArgs(svcType, int32(300)).
-		WillReturnRows(sqlmock.NewRows(nodeColumns).AddRow(newNodeRow("uuid-1", "node-1", "cluster-1", "node-1", "core", "1.2.3.4")...))
+		WillReturnRows(sqlmock.NewRows(candidateNodeColumns).AddRow(candidateRow(true, "uuid-1", "node-1", "cluster-1", "node-1", "core", "1.2.3.4")...))
 
 	if _, err := server.ListHealthyNodesForDNS(serviceCtx(), &quartermasterpb.ListHealthyNodesForDNSRequest{
 		ServiceType: &svcType,

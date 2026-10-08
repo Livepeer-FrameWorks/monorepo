@@ -453,3 +453,48 @@ func TestPersistHealthStatusWakesPoolServiceOnTransition(t *testing.T) {
 		t.Fatalf("unmet sql expectations: %v", err)
 	}
 }
+
+// Every status change that wakes Navigator is logged with the instance and both
+// statuses, including changes the probe transition log does not cover
+// (unknown to healthy, healthy to skipped). Production 2026-10-08: DNS wakes
+// arrived in bursts whose cause the logs could not show.
+func TestPersistHealthTransitionLogsEveryDNSWake(t *testing.T) {
+	mockDB, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherRegexp))
+	if err != nil {
+		t.Fatalf("sqlmock: %v", err)
+	}
+	defer func() { _ = mockDB.Close() }()
+	log, hook := logrustest.NewNullLogger()
+	Init(mockDB, log)
+
+	wakes := 0
+	SetPoolDNSWake(func(instanceID, serviceType string) { wakes++ })
+	defer SetPoolDNSWake(nil)
+
+	transitions := [][2]string{{"unknown", "healthy"}, {"healthy", "skipped"}, {"skipped", "unhealthy"}, {"unhealthy", "unhealthy"}}
+	for _, tr := range transitions {
+		mock.ExpectQuery(`UPDATE quartermaster\.service_instances`).
+			WithArgs(tr[1], "inst-fh-1").
+			WillReturnRows(sqlmock.NewRows([]string{"old_status", "service_id"}).AddRow(tr[0], "foghorn"))
+		if _, err := persistHealthTransition(context.Background(), "inst-fh-1", tr[1]); err != nil {
+			t.Fatalf("persistHealthTransition(%v): %v", tr, err)
+		}
+	}
+
+	var logged [][2]string
+	for _, entry := range hook.AllEntries() {
+		if entry.Message != "Service health transition woke Navigator DNS" {
+			continue
+		}
+		if entry.Data["instance_id"] != "inst-fh-1" || entry.Data["service_type"] != "foghorn" {
+			t.Fatalf("wake log fields = %v, want the instance and its service type", entry.Data)
+		}
+		logged = append(logged, [2]string{fmt.Sprint(entry.Data["previous_status"]), fmt.Sprint(entry.Data["status"])})
+	}
+	if wakes != 3 || !reflect.DeepEqual(logged, transitions[:3]) {
+		t.Fatalf("wakes = %d, logged transitions = %v, want one log per wake %v", wakes, logged, transitions[:3])
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("unmet sql expectations: %v", err)
+	}
+}

@@ -19,6 +19,7 @@ import (
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/database"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/dns"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/grpcutil"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/servicedefs"
 
 	"golang.org/x/sync/singleflight"
@@ -574,6 +575,14 @@ func persistHealthTransition(ctx context.Context, instanceID, status string) (st
 	// on an actual transition so an unchanged poll doesn't spam Navigator.
 	if oldStatus != status && poolDNSWake != nil &&
 		(dns.IsPhysicalEndpointServiceType(serviceType) || dns.IsPoolAssignedServiceType(serviceType)) {
+		// logHealthTransition covers only healthy<->unhealthy; this logs every
+		// change that reaches DNS, including unknown and skipped statuses.
+		logger.WithFields(logging.Fields{
+			"instance_id":     instanceID,
+			"service_type":    serviceType,
+			"previous_status": oldStatus,
+			"status":          status,
+		}).Info("Service health transition woke Navigator DNS")
 		poolDNSWake(instanceID, serviceType)
 	}
 	return oldStatus, nil

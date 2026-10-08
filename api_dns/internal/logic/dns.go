@@ -52,6 +52,17 @@ type DNSManager struct {
 	bunnyZoneCache           map[string]*bunny.Zone
 	bunnyDelegationCheckedAt map[string]time.Time
 	cloudflareCleanupAt      map[string]time.Time
+
+	// syncs serializes Bunny record set syncs per (cluster, service type) and
+	// per global root so concurrent wakes cannot interleave their writes.
+	syncs syncSerializer
+
+	// departingSince holds, per published Bunny member, when it was first seen
+	// published but outside the healthy set. In memory only: an empty map
+	// after a restart restarts every member's removal grace.
+	membershipMu   sync.Mutex
+	departingSince map[string]time.Time
+	now            func() time.Time // nil = time.Now
 }
 
 type cloudflareClient interface {
@@ -328,7 +339,7 @@ func (m *DNSManager) SyncServiceByCluster(ctx context.Context, serviceType strin
 
 	for _, cluster := range clustersResp.Clusters {
 		nodes := dnsNodesFromProto(nodesByCluster[cluster.GetClusterId()])
-		candidateCount := int32(0)
+		candidateCount := unreadCandidateCount
 		if len(nodes) == 0 {
 			clusterNodesResp, clusterErr := m.qmClient.ListHealthyNodesForDNSForCluster(ctx, int(m.staleAge.Seconds()), serviceType, cluster.GetClusterId())
 			if clusterErr != nil {
@@ -336,7 +347,11 @@ func (m *DNSManager) SyncServiceByCluster(ctx context.Context, serviceType strin
 			}
 			candidateCount = clusterNodesResp.GetTotalNodes()
 		}
-		m.syncOneCluster(ctx, serviceType, provider, cluster, nodes, false, candidateCount, partialErrors)
+		if lockErr := m.syncs.exclusive(ctx, clusterSyncKey(cluster.GetClusterId(), serviceType), func() {
+			m.syncOneCluster(ctx, serviceType, provider, cluster, nodes, false, candidateCount, partialErrors)
+		}); lockErr != nil {
+			return nil, lockErr
+		}
 	}
 
 	if provider == pkgdns.ProviderBunny {
@@ -353,12 +368,17 @@ func (m *DNSManager) SyncServiceByCluster(ctx context.Context, serviceType strin
 	return partialErrors, nil
 }
 
-// SyncServiceForCluster reconciles DNS for a single cluster's edge service
-// type. Called by Navigator's SyncDNS RPC when Quartermaster targets a
-// specific (cluster, service_type) wakeup. Authoritative: an empty healthy
-// node set actively clears the cluster service record, unlike the polling
-// path which preserves it (transient QM-failure tolerance).
+// SyncServiceForCluster reconciles DNS for a single cluster's service type.
+// Called by Navigator's SyncDNS RPC when Quartermaster targets a specific
+// (cluster, service_type) wakeup. Calls for one (cluster, service type) run one
+// at a time, and calls that wait behind a running sync share the next one.
 func (m *DNSManager) SyncServiceForCluster(ctx context.Context, serviceType, clusterID string) (map[string]string, error) {
+	return m.syncs.coalesce(ctx, clusterSyncKey(clusterID, serviceType), func() (map[string]string, error) {
+		return m.syncServiceForCluster(ctx, serviceType, clusterID)
+	})
+}
+
+func (m *DNSManager) syncServiceForCluster(ctx context.Context, serviceType, clusterID string) (map[string]string, error) {
 	partialErrors := map[string]string{}
 
 	clusterResp, err := m.qmClient.GetCluster(ctx, clusterID)
@@ -403,18 +423,27 @@ func hasGlobalRootLabel(serviceType string) bool {
 	return ok && strings.TrimSpace(label) != ""
 }
 
+// unreadCandidateCount marks a sync that did not read the cluster's candidate
+// count because the healthy set was non-empty; no decision depends on it then.
+const unreadCandidateCount int32 = -1
+
 // syncOneCluster reconciles DNS for a single cluster's service type (edge or
-// pool-assigned). authoritative controls empty-set handling:
+// pool-assigned).
 //
-//   - false (polling caller): preserve the cluster service record on empty
-//     healthy set. Transient QM unavailability or first-deploy races would
-//     otherwise blow DNS away.
-//   - true (targeted Navigator wakeup from QM): an empty healthy set clears
-//     only when QM saw at least one candidate row. When the candidate count is
-//     zero, preserve the record; service rows and assignments may not have
-//     materialized yet during a reprovision.
+// Records are removed only on structural signals: the cluster is inactive or
+// its type does not publish Bunny cluster DNS. Health never empties a record:
 //
-// Per-node edge-<node_id> records (edge-egress only) are always reconciled.
+//   - healthy set empty, candidates > 0: every node is unhealthy, which is as
+//     likely a control-plane blip (a disconnected Helmsman, a Quartermaster
+//     read racing a health write) as a real outage, and an empty record set
+//     turns either into NXDOMAIN. The published records stay.
+//   - healthy set empty, no candidates: service rows and assignments may not
+//     have materialized yet during a reprovision. The published records stay.
+//   - healthy set non-empty: the record shrinks to the healthy subset, but a
+//     published member is dropped only after it has been out of the healthy
+//     set for the removal grace (see withDepartingMembers).
+//
+// authoritative only selects the log level of the no-candidate decision.
 func (m *DNSManager) syncOneCluster(
 	ctx context.Context,
 	serviceType string,
@@ -429,6 +458,16 @@ func (m *DNSManager) syncOneCluster(
 	rootDomain := fmt.Sprintf("%s.%s", clusterSlug, m.domain)
 	useBunny := provider == pkgdns.ProviderBunny && m.bunnyClient != nil
 	svcFQDN := m.clusterServiceFQDN(serviceType, rootDomain)
+	decisionFields := logging.Fields{
+		"service_type":  serviceType,
+		"cluster":       clusterSlug,
+		"fqdn":          svcFQDN,
+		"healthy_nodes": len(nodes),
+		"authoritative": authoritative,
+	}
+	if candidateCount != unreadCandidateCount {
+		decisionFields["total_nodes"] = candidateCount
+	}
 
 	if useBunny && !pkgdns.UsesBunnyClusterDNS(strings.TrimSpace(cluster.GetClusterType())) {
 		if err := m.clearBunnyClusterService(ctx, svcFQDN, serviceType, rootDomain); err != nil {
@@ -445,11 +484,7 @@ func (m *DNSManager) syncOneCluster(
 		} else if _, err := m.clearDNSConfig(ctx, svcFQDN); err != nil {
 			partialErrors[svcFQDN] = err.Error()
 		} else {
-			m.logger.WithFields(logging.Fields{
-				"service_type": serviceType,
-				"cluster":      clusterSlug,
-				"fqdn":         svcFQDN,
-			}).Info("Cleared DNS for inactive cluster")
+			m.logger.WithFields(decisionFields).Info("Cleared DNS for inactive cluster")
 		}
 		if serviceType == "edge-egress" {
 			maps.Copy(partialErrors, m.clearEdgeNodeRecords(rootDomain))
@@ -457,47 +492,14 @@ func (m *DNSManager) syncOneCluster(
 		return
 	}
 
-	// Authoritative empty-clear runs BEFORE the cert gate: a node leaving the
-	// healthy set must propagate to DNS even if cluster cert state has
-	// regressed since the last create. The cert gate only protects record
-	// creation, not removal.
-	if len(nodes) == 0 && authoritative && candidateCount <= 0 {
-		m.logger.WithFields(logging.Fields{
-			"service_type": serviceType,
-			"cluster":      clusterSlug,
-			"fqdn":         svcFQDN,
-		}).Warn("Authoritative empty set has no registered candidates; preserving cluster service record")
-		return
-	}
-
-	if len(nodes) == 0 && !authoritative && candidateCount <= 0 {
-		m.logger.WithFields(logging.Fields{
-			"service_type": serviceType,
-			"cluster":      clusterSlug,
-			"fqdn":         svcFQDN,
-		}).Debug("No DNS candidates for cluster service; preserving existing DNS")
-		return
-	}
-
-	if len(nodes) == 0 && authoritative {
-		m.logger.WithFields(logging.Fields{
-			"service_type": serviceType,
-			"cluster":      clusterSlug,
-			"fqdn":         svcFQDN,
-		}).Info("Authoritative empty set; clearing cluster service record")
-		if useBunny {
-			if err := m.clearBunnyClusterService(ctx, svcFQDN, serviceType, rootDomain); err != nil {
-				partialErrors[svcFQDN] = err.Error()
-			}
-		} else if _, err := m.clearDNSConfig(ctx, svcFQDN); err != nil {
-			partialErrors[svcFQDN] = err.Error()
-		}
-		if serviceType == "edge-egress" {
-			if provider == pkgdns.ProviderBunny && useBunny {
-				maps.Copy(partialErrors, m.syncBunnyEdgeNodeRecords(ctx, rootDomain, nil))
-			} else {
-				maps.Copy(partialErrors, m.clearEdgeNodeRecords(rootDomain))
-			}
+	if len(nodes) == 0 {
+		switch {
+		case candidateCount > 0:
+			m.logger.WithFields(decisionFields).Warn("No healthy nodes for cluster; preserving existing DNS")
+		case authoritative:
+			m.logger.WithFields(decisionFields).Warn("Authoritative empty set has no registered candidates; preserving cluster service record")
+		default:
+			m.logger.WithFields(decisionFields).Debug("No DNS candidates for cluster service; preserving existing DNS")
 		}
 		return
 	}
@@ -512,25 +514,17 @@ func (m *DNSManager) syncOneCluster(
 		}
 	}
 
-	if len(nodes) == 0 {
-		m.logger.WithFields(logging.Fields{
-			"service_type": serviceType,
-			"cluster":      clusterSlug,
-			"fqdn":         svcFQDN,
-		}).Warn("No healthy nodes for cluster; preserving existing DNS")
+	var svcPartial map[string]string
+	var syncErr error
+	if useBunny {
+		svcPartial, syncErr = m.syncBunnyClusterService(ctx, svcFQDN, serviceType, rootDomain, nodes, decisionFields)
 	} else {
-		var svcPartial map[string]string
-		var syncErr error
-		if useBunny {
-			svcPartial, syncErr = m.syncBunnyClusterService(ctx, svcFQDN, serviceType, rootDomain, nodes)
-		} else {
-			svcPartial, syncErr = m.syncClusterService(ctx, svcFQDN, serviceType, nodes)
-		}
-		if syncErr != nil {
-			partialErrors[svcFQDN] = syncErr.Error()
-		} else {
-			maps.Copy(partialErrors, svcPartial)
-		}
+		svcPartial, syncErr = m.syncClusterService(ctx, svcFQDN, serviceType, nodes)
+	}
+	if syncErr != nil {
+		partialErrors[svcFQDN] = syncErr.Error()
+	} else {
+		maps.Copy(partialErrors, svcPartial)
 	}
 
 	if serviceType != "edge-egress" {
@@ -616,6 +610,12 @@ func (m *DNSManager) syncBunnyEdgeNodeRecords(ctx context.Context, zoneDomain st
 		partialErrors[fmt.Sprintf("edge-nodes.%s", zoneDomain)] = listErr.Error()
 		return partialErrors
 	}
+	// A per-node record of a node outside the healthy set is removed only
+	// after the node has been out for the removal grace, like a member of the
+	// cluster record set.
+	scope := "node:" + bunnyZoneCacheKey(zoneDomain)
+	now := m.clock()
+	departing := map[string]struct{}{}
 	for _, record := range current {
 		if record.Type != bunny.RecordTypeA || !isEdgeNodeRecordLabel(record.Name) {
 			continue
@@ -624,10 +624,22 @@ func (m *DNSManager) syncBunnyEdgeNodeRecords(ctx context.Context, zoneDomain st
 		if _, keep := desiredLabels[label]; keep {
 			continue
 		}
+		key := scope + "|" + label + "|" + record.Value
+		departing[key] = struct{}{}
+		if m.departingWithinGrace(key, now) {
+			continue
+		}
 		if reconcileErr := m.bunnyClient.ReconcileRecordSet(ctx, zone.ID, label, bunny.RecordTypeA, nil); reconcileErr != nil {
 			partialErrors[bunnyRecordFQDN(label, zoneDomain)] = reconcileErr.Error()
+		} else {
+			m.logger.WithFields(logging.Fields{
+				"zone":  zoneDomain,
+				"label": label,
+				"ip":    record.Value,
+			}).Info("Removed edge node record after its node stayed out of the healthy set for the removal grace")
 		}
 	}
+	m.forgetDepartures(scope, departing)
 
 	if len(partialErrors) == 0 {
 		return nil
@@ -806,6 +818,16 @@ func (m *DNSManager) syncBunnyRootService(ctx context.Context, serviceType strin
 	if m.bunnyClient == nil {
 		return nil, nil
 	}
+	return m.syncs.coalesce(ctx, rootSyncKey(serviceType), func() (map[string]string, error) {
+		return m.reconcileBunnyRootService(ctx, serviceType, authoritative)
+	})
+}
+
+// reconcileBunnyRootService follows the syncOneCluster membership rules for
+// the global root: health never empties it, and a published member leaves only
+// after the removal grace. authoritative only selects the log level of the
+// no-candidate decision.
+func (m *DNSManager) reconcileBunnyRootService(ctx context.Context, serviceType string, authoritative bool) (map[string]string, error) {
 	if pkgdns.ProviderForServiceType(serviceType) != pkgdns.ProviderBunny {
 		return nil, fmt.Errorf("%s is not a Bunny-managed service", serviceType)
 	}
@@ -854,45 +876,60 @@ func (m *DNSManager) syncBunnyRootService(ctx context.Context, serviceType strin
 		}
 	}
 	nodes := dnsNodesFromProto(filtered)
+	decisionFields := logging.Fields{
+		"service_type":  serviceType,
+		"zone":          zoneDomain,
+		"scope":         "global_root",
+		"total_nodes":   candidateCount,
+		"healthy_nodes": len(nodes),
+		"authoritative": authoritative,
+	}
 	if len(nodes) == 0 {
-		if authoritative && candidateCount <= 0 {
-			m.logger.WithFields(logging.Fields{
-				"service_type": serviceType,
-				"zone":         zoneDomain,
-				"scope":        "global_root",
-			}).Warn("Authoritative empty set has no registered candidates; preserving global root Bunny DNS")
-			return nil, nil
+		switch {
+		case candidateCount > 0:
+			m.logger.WithFields(decisionFields).Warn("No platform-official healthy nodes for global root service; preserving existing Bunny DNS")
+		case authoritative:
+			m.logger.WithFields(decisionFields).Warn("Authoritative empty set has no registered candidates; preserving global root Bunny DNS")
+		default:
+			m.logger.WithFields(decisionFields).Debug("No platform-official DNS candidates for global root service; preserving existing Bunny DNS")
 		}
-		if authoritative {
-			if err := m.bunnyClient.ReconcileRecordSet(ctx, zone.ID, "", bunny.RecordTypeA, nil); err != nil {
-				return nil, fmt.Errorf("clear root record set: %w", err)
-			}
-			m.logger.WithFields(logging.Fields{
-				"service_type": serviceType,
-				"zone":         zoneDomain,
-				"scope":        "global_root",
-			}).Info("Authoritative empty set; cleared global root Bunny DNS")
-			return nil, nil
-		}
-		m.logger.WithFields(logging.Fields{
-			"service_type": serviceType,
-			"zone":         zoneDomain,
-			"scope":        "global_root",
-		}).Warn("No platform-official healthy nodes for global root service; preserving existing Bunny DNS")
 		return nil, nil
 	}
 
+	published, err := m.bunnyClient.ListRecords(ctx, zone.ID)
+	if err != nil {
+		return nil, fmt.Errorf("list root records in %s: %w", zoneDomain, err)
+	}
 	// Global root records live at the apex of {label}.{root}; record name
 	// is empty (apex).
-	records := m.bunnyRecordsForNodes(nodes, "", zoneDomain)
+	records, change := m.withDepartingMembers(zoneDomain, "", zoneDomain, m.bunnyRecordsForNodes(nodes, "", zoneDomain), published)
 	if err := m.bunnyClient.ReconcileRecordSet(ctx, zone.ID, "", bunny.RecordTypeA, records); err != nil {
 		return nil, fmt.Errorf("reconcile root record set: %w", err)
 	}
+	m.logMembershipChange(decisionFields, zoneDomain, change)
 
 	return nil, nil
 }
 
-func (m *DNSManager) syncBunnyClusterService(ctx context.Context, fqdn, serviceType, zoneDomain string, nodes []dnsNode) (map[string]string, error) {
+// logMembershipChange logs a reconcile that kept or dropped departing members.
+func (m *DNSManager) logMembershipChange(decisionFields logging.Fields, recordFQDN string, change membershipChange) {
+	if len(change.Retained) == 0 && len(change.Dropped) == 0 {
+		return
+	}
+	fields := logging.Fields{}
+	maps.Copy(fields, decisionFields)
+	fields["record"] = recordFQDN
+	fields["removal_grace"] = m.memberRemovalGrace().String()
+	if len(change.Retained) > 0 {
+		fields["retained"] = change.Retained
+	}
+	if len(change.Dropped) > 0 {
+		fields["dropped"] = change.Dropped
+	}
+	m.logger.WithFields(fields).Info("Reconciled DNS members outside the healthy set")
+}
+
+func (m *DNSManager) syncBunnyClusterService(ctx context.Context, fqdn, serviceType, zoneDomain string, nodes []dnsNode, decisionFields logging.Fields) (map[string]string, error) {
 	zone, _, err := m.ensureBunnyZoneDelegation(ctx, zoneDomain, logging.Fields{
 		"service_type": serviceType,
 		"fqdn":         fqdn,
@@ -906,12 +943,19 @@ func (m *DNSManager) syncBunnyClusterService(ctx context.Context, fqdn, serviceT
 		return nil, fmt.Errorf("unknown Bunny service type: %s", serviceType)
 	}
 
+	// The published members decide which departing members are still inside
+	// their removal grace; without them a shrink cannot be applied safely.
+	published, err := m.bunnyClient.ListRecords(ctx, zone.ID)
+	if err != nil {
+		return nil, fmt.Errorf("list Bunny records in %s: %w", zoneDomain, err)
+	}
 	for _, recordName := range recordNames {
 		recordFQDN := bunnyRecordFQDN(recordName, zoneDomain)
-		records := m.bunnyRecordsForNodes(nodes, recordName, recordFQDN)
+		records, change := m.withDepartingMembers(zoneDomain, recordName, recordFQDN, m.bunnyRecordsForNodes(nodes, recordName, recordFQDN), published)
 		if reconcileErr := m.bunnyClient.ReconcileRecordSet(ctx, zone.ID, recordName, bunny.RecordTypeA, records); reconcileErr != nil {
 			return nil, reconcileErr
 		}
+		m.logMembershipChange(decisionFields, recordFQDN, change)
 	}
 
 	cleanupErrors := map[string]string{}

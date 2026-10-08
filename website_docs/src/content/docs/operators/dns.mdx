@@ -134,13 +134,22 @@ cannot follow HTTP redirects.
 Quartermaster is the health source for desired DNS state. Navigator filters
 unhealthy or addressless nodes before reconciling records; provider-side health
 checks are an implementation detail of the authoritative provider integration.
+
+Health only ever shrinks a Bunny record set, never empties it. When every
+candidate node of a cluster (or of the platform-official clusters behind a
+global entrypoint) is unhealthy, Navigator keeps the published records and logs
+a warning with the total and healthy counts. A member that leaves the healthy
+set stays published until it has been out for the removal grace, the larger of
+the record TTL and three minutes; this also applies to `edge-<node>` records. A
+Navigator restart restarts that grace. Records are removed outright only when
+the cluster becomes inactive or stops using Bunny cluster DNS.
 Use `frameworks dns doctor` to compare public DNS with Quartermaster inventory.
 The comparison is provider-aware: Bunny smart DNS may return any non-empty
 geographically selected subset of the healthy authoritative members, while a
 Cloudflare-proxied hostname is validated by successful resolution rather than
 by comparing Cloudflare anycast addresses with origin IPs. An NXDOMAIN response
 or a Bunny address outside Quartermaster's healthy inventory still fails the
-doctor check. Both per-cluster names and platform-official global Bunny
+doctor check, including a departing member inside its removal grace. Both per-cluster names and platform-official global Bunny
 entrypoints are checked.
 
 ### Wildcard TLS Certificates
