@@ -56,6 +56,7 @@ provisioner:
   name: ansible
   playbooks:
     prepare: ../../../../molecule/prepare-apt.yml
+    side_effect: side_effect.yml
   inventory:
     group_vars:
       all:

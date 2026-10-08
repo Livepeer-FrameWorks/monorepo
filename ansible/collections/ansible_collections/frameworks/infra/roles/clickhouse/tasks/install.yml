@@ -59,6 +59,21 @@
     mode: "0644"
   notify: clickhouse restart
 
+# On stop ClickHouse waits shutdown_wait_unfinished seconds (default 5) for
+# open connections, then exits without finishing the rest of its shutdown.
+# The server reads this value at startup, so the drop-in takes effect on the
+# next restart and does not trigger one itself.
+- name: Write managed ClickHouse shutdown wait
+  ansible.builtin.copy:
+    dest: /etc/clickhouse-server/config.d/shutdown.xml
+    owner: clickhouse
+    group: clickhouse
+    mode: "0644"
+    content: |
+      <clickhouse>
+        <shutdown_wait_unfinished>60</shutdown_wait_unfinished>
+      </clickhouse>
+
 # idealista.clickhouse renders these two partition keys as
 # "{{ partition_by }}(event_date)" while its defaults already read
 # toYYYYMM(event_date). ClickHouse rejects the doubled expression on every

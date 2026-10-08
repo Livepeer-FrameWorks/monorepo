@@ -304,6 +304,9 @@ func TestClickHouseRoleConfigChangesNotifyOneRestartHandler(t *testing.T) {
 		if spec, ok := moduleSpec(handler, "systemd"); ok && spec["name"] == "{{ clickhouse_service_name }}" && spec["state"] == "restarted" {
 			serverRestarts = append(serverRestarts, handler)
 		}
+		if includedTasks(handler) == clickhouseRestartTasks {
+			serverRestarts = append(serverRestarts, handler)
+		}
 	})
 	if len(serverRestarts) != 1 || serverRestarts[0]["listen"] != "clickhouse restart" {
 		t.Fatalf("want one clickhouse-server restart handler listening on clickhouse restart, got %v", serverRestarts)
@@ -335,4 +338,156 @@ func TestClickHouseRoleConfigChangesNotifyOneRestartHandler(t *testing.T) {
 	if notifying == 0 {
 		t.Fatal("install.yml has no notifying tasks; the scan did not reach the config tasks")
 	}
+}
+
+const clickhouseRestartTasks = "_restart_server.yml"
+
+// clickhouseUnitRestartSec is RestartSec in the clickhouse-server unit the
+// ClickHouse packages ship.
+const clickhouseUnitRestartSec = 30
+
+func includedTasks(task map[string]any) string {
+	for _, key := range []string{"ansible.builtin.include_tasks", "include_tasks"} {
+		switch v := task[key].(type) {
+		case string:
+			return v
+		case map[string]any:
+			return stringValue(v["file"])
+		}
+	}
+	return ""
+}
+
+// A ClickHouse start that never sends READY=1 fails the systemd start job with
+// result "protocol" while Restart=always brings the server up RestartSec later.
+// The restart must wait on the unit and a local query across that automatic
+// restart instead of failing the apply on the first start job, and must not
+// block on a start job that TimeoutStartSec=0 never times out.
+func TestClickHouseRoleRestartOutlastsSystemdRestartCycle(t *testing.T) {
+	const role = "ansible/collections/ansible_collections/frameworks/infra/roles/clickhouse/"
+
+	var handlers []any
+	if err := yaml.Unmarshal([]byte(readRepoFile(t, role+"handlers/main.yml")), &handlers); err != nil {
+		t.Fatal(err)
+	}
+	restartHandler := false
+	walkRoleBlocks(handlers, nil, func(handler map[string]any, _ []map[string]any) {
+		if spec, ok := moduleSpec(handler, "systemd"); ok && spec["name"] == "{{ clickhouse_service_name }}" && spec["state"] == "restarted" {
+			t.Errorf("handler %q restarts clickhouse-server through the start job instead of %s", handler["name"], clickhouseRestartTasks)
+		}
+		if handler["listen"] == "clickhouse restart" && includedTasks(handler) == clickhouseRestartTasks {
+			restartHandler = true
+		}
+	})
+	if !restartHandler {
+		t.Errorf("the clickhouse restart handler does not run %s", clickhouseRestartTasks)
+	}
+	if !strings.Contains(readRepoFile(t, role+"tasks/restart.yml"), "include_tasks: "+clickhouseRestartTasks) {
+		t.Errorf("tasks/restart.yml does not run %s", clickhouseRestartTasks)
+	}
+
+	var top []map[string]any
+	if err := yaml.Unmarshal([]byte(readRepoFile(t, role+"tasks/"+clickhouseRestartTasks)), &top); err != nil {
+		t.Fatal(err)
+	}
+	if len(top) != 1 {
+		t.Fatalf("%s must be one block with a rescue, got %d top-level tasks", clickhouseRestartTasks, len(top))
+	}
+	block, _ := top[0]["block"].([]any)
+	rescue, _ := top[0]["rescue"].([]any)
+
+	step := map[string]int{}
+	for i, item := range block {
+		task, _ := item.(map[string]any)
+		if spec, ok := moduleSpec(task, "systemd"); ok && spec["name"] == "{{ clickhouse_service_name }}" {
+			switch spec["state"] {
+			case "stopped":
+				step["stop"] = i + 1
+			case "started":
+				if spec["no_block"] != true {
+					t.Errorf("start %q waits on the start job; TimeoutStartSec=0 lets a start that never sends READY=1 block forever", task["name"])
+				}
+				step["start"] = i + 1
+			case "restarted":
+				t.Errorf("%q restarts through the start job", task["name"])
+			}
+		}
+		if spec, ok := moduleSpec(task, "command"); ok {
+			argv, _ := spec["argv"].([]any)
+			waited := asInt(task["retries"]) * asInt(task["delay"])
+			switch {
+			case len(argv) > 1 && argv[0] == "systemctl" && argv[1] == "is-active":
+				if !strings.Contains(stringValue(task["until"]), "'active'") {
+					t.Errorf("%q does not retry until the unit is active: until=%v", task["name"], task["until"])
+				}
+				// A failed first start, RestartSec, and the automatic start.
+				if waited <= 2*clickhouseUnitRestartSec {
+					t.Errorf("%q waits %ds; it must outlast a failed start plus the unit's %ds RestartSec", task["name"], waited, clickhouseUnitRestartSec)
+				}
+				step["active"] = i + 1
+			case len(argv) > 0 && argv[0] == "clickhouse-client":
+				if !strings.Contains(stringValue(task["until"]), "rc == 0") || waited == 0 {
+					t.Errorf("%q does not retry the local query: until=%v retries=%v delay=%v", task["name"], task["until"], task["retries"], task["delay"])
+				}
+				step["query"] = i + 1
+			}
+		}
+		if includedTasks(task) == "_probe_client.yml" {
+			step["probe"] = i + 1
+		}
+	}
+	order := []string{"stop", "start", "active", "query", "probe"}
+	for i, name := range order {
+		if step[name] == 0 {
+			t.Errorf("%s has no %s step", clickhouseRestartTasks, name)
+			continue
+		}
+		if i > 0 && step[order[i-1]] != 0 && step[order[i-1]] > step[name] {
+			t.Errorf("%s runs %s before %s", clickhouseRestartTasks, name, order[i-1])
+		}
+	}
+
+	var diagnostics []string
+	for _, item := range rescue {
+		task, _ := item.(map[string]any)
+		if cmd, ok := task["ansible.builtin.command"].(string); ok {
+			diagnostics = append(diagnostics, cmd)
+		}
+		if spec, ok := moduleSpec(task, "fail"); ok {
+			diagnostics = append(diagnostics, stringValue(spec["msg"]))
+		}
+	}
+	joined := strings.Join(diagnostics, "\n")
+	for _, want := range []string{"systemctl status", "journalctl -u", "clickhouse_restart_status.stdout", "clickhouse_restart_journal.stdout"} {
+		if !strings.Contains(joined, want) {
+			t.Errorf("a failed restart does not report %q:\n%s", want, joined)
+		}
+	}
+}
+
+// ClickHouse waits shutdown_wait_unfinished seconds (default 5) for open
+// connections on stop and then exits without finishing its shutdown.
+func TestClickHouseRoleWaitsForConnectionsOnShutdown(t *testing.T) {
+	task := roleTaskByName(t, "ansible/collections/ansible_collections/frameworks/infra/roles/clickhouse/tasks/install.yml",
+		"Write managed ClickHouse shutdown wait")
+	spec, ok := moduleSpec(task, "copy")
+	if !ok || spec["dest"] != "/etc/clickhouse-server/config.d/shutdown.xml" {
+		t.Fatalf("shutdown wait must be a config.d drop-in: %v", task)
+	}
+	if !strings.Contains(stringValue(spec["content"]), "<shutdown_wait_unfinished>60</shutdown_wait_unfinished>") {
+		t.Fatalf("drop-in does not raise shutdown_wait_unfinished to 60s:\n%v", spec["content"])
+	}
+	if _, ok := task["notify"]; ok {
+		t.Fatalf("the value is read at startup; writing it must not restart ClickHouse: %v", task["notify"])
+	}
+}
+
+func asInt(v any) int {
+	switch n := v.(type) {
+	case int:
+		return n
+	case float64:
+		return int(n)
+	}
+	return 0
 }

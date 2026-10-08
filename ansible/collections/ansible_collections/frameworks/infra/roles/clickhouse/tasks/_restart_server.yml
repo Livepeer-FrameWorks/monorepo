@@ -1,0 +1,99 @@
+---
+# Restarts clickhouse-server and waits until it serves queries. The packaged
+# unit is Type=notify with TimeoutStartSec=0, Restart=always and RestartSec=30:
+# a start that never reaches READY=1 fails the systemd job ("protocol") while
+# systemd itself starts the server again 30s later. The apply waits on the unit
+# state instead of the start job so that automatic restart can still succeed,
+# and starts without blocking so a start that never signals READY=1 cannot
+# hang the play forever.
+- name: Restart clickhouse-server and wait until it serves queries
+  block:
+    - name: Stop clickhouse-server
+      ansible.builtin.systemd:
+        name: "{{ clickhouse_service_name }}"
+        state: stopped
+
+    - name: Start clickhouse-server
+      ansible.builtin.systemd:
+        name: "{{ clickhouse_service_name }}"
+        state: started
+        no_block: true
+
+    # 60 x 5s spans a failed first start, the unit's 30s RestartSec, and the
+    # automatic second start loading its parts.
+    - name: Wait for clickhouse-server to become active
+      ansible.builtin.command:
+        argv:
+          - systemctl
+          - is-active
+          - "{{ clickhouse_service_name }}"
+      register: clickhouse_restart_active
+      changed_when: false
+      failed_when: false
+      until: clickhouse_restart_active.stdout | trim == 'active'
+      retries: 60
+      delay: 5
+      when: not ansible_check_mode
+
+    - name: Assert clickhouse-server became active
+      ansible.builtin.assert:
+        that:
+          - clickhouse_restart_active.stdout | trim == 'active'
+        fail_msg: >-
+          clickhouse-server did not become active within 300s
+          (state={{ clickhouse_restart_active.stdout | default('') | trim }})
+      when: not ansible_check_mode
+
+    - name: Wait for ClickHouse to answer a local query
+      ansible.builtin.command:
+        argv:
+          - clickhouse-client
+          - --host={{ frameworks_clickhouse_probe_host }}
+          - --port={{ clickhouse_port_tcp }}
+          - -q
+          - SELECT 1
+      environment:
+        CLICKHOUSE_PASSWORD: "{{ clickhouse_default_password }}"
+      register: clickhouse_restart_query
+      changed_when: false
+      failed_when: false
+      until: clickhouse_restart_query.rc == 0
+      retries: 12
+      delay: 5
+      no_log: "{{ clickhouse_default_password | length > 0 }}"
+      when: not ansible_check_mode
+
+    - name: Probe ClickHouse locally after restart
+      ansible.builtin.include_tasks: _probe_client.yml
+      when: not ansible_check_mode
+
+    - name: Record that clickhouse-server restarted in this run
+      ansible.builtin.set_fact:
+        clickhouse_restarted: true
+
+  rescue:
+    - name: Capture clickhouse-server systemctl status after failed restart
+      ansible.builtin.command: systemctl status {{ clickhouse_service_name }} --no-pager --full
+      register: clickhouse_restart_status
+      changed_when: false
+      failed_when: false
+      check_mode: false
+
+    - name: Capture clickhouse-server journal after failed restart
+      ansible.builtin.command: journalctl -u {{ clickhouse_service_name }} -n 100 --no-pager
+      register: clickhouse_restart_journal
+      changed_when: false
+      failed_when: false
+      check_mode: false
+
+    # The ClickHouse error log is left out: it can quote statement text that
+    # carries credentials.
+    - name: Fail with ClickHouse restart diagnostics
+      ansible.builtin.fail:
+        msg: |-
+          clickhouse-server did not come back after restart
+          systemctl status:
+          {{ clickhouse_restart_status.stdout | default('(no output)') }}
+
+          journalctl:
+          {{ clickhouse_restart_journal.stdout | default('(no output)') }}

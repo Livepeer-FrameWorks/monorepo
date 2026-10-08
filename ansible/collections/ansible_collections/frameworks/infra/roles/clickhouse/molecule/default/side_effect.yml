@@ -1,0 +1,81 @@
+---
+# Restarts ClickHouse through the role while queries are running and while the
+# first start attempt fails, so the restart has to outlast systemd's own
+# Restart=always cycle (RestartSec=30) instead of failing on the start job.
+- name: Side effect
+  hosts: all
+  become: true
+  gather_facts: false
+  vars:
+    clickhouse_molecule_fail_once_marker: /run/clickhouse-molecule-failed-once
+    clickhouse_molecule_fail_once_dropin: /etc/systemd/system/clickhouse-server.service.d/99-molecule-fail-once.conf
+  tasks:
+    - name: Run long queries against ClickHouse during the restart
+      ansible.builtin.command:
+        argv:
+          - clickhouse-client
+          - --host=127.0.0.1
+          - --port=9000
+          - -q
+          - SELECT count() FROM numbers_mt(10000000000000) SETTINGS max_execution_time = 600
+      environment:
+        CLICKHOUSE_PASSWORD: molecule-test-password
+      async: 600
+      poll: 0
+      changed_when: false
+      loop: [1, 2, 3]
+
+    - name: Ensure clickhouse-server systemd drop-in dir exists
+      ansible.builtin.file:
+        path: /etc/systemd/system/clickhouse-server.service.d
+        state: directory
+        owner: root
+        group: root
+        mode: "0755"
+
+    - name: Fail the next clickhouse-server start once
+      ansible.builtin.copy:
+        dest: "{{ clickhouse_molecule_fail_once_dropin }}"
+        owner: root
+        group: root
+        mode: "0644"
+        content: |
+          [Service]
+          ExecStartPre=+/bin/sh -c 'test -e {{ clickhouse_molecule_fail_once_marker }} || { touch {{ clickhouse_molecule_fail_once_marker }}; exit 1; }'
+
+    - name: Reload systemd units
+      ansible.builtin.systemd:
+        daemon_reload: true
+
+    - name: Restart ClickHouse through the role
+      ansible.builtin.include_role:
+        name: frameworks.infra.clickhouse
+        tasks_from: restart.yml
+
+    - name: Read clickhouse-server restart count
+      ansible.builtin.command:
+        argv:
+          - systemctl
+          - show
+          - --property=NRestarts
+          - --value
+          - clickhouse-server
+      register: clickhouse_molecule_restarts
+      changed_when: false
+
+    - name: Assert systemd restarted ClickHouse after the failed start
+      ansible.builtin.assert:
+        that:
+          - clickhouse_molecule_restarts.stdout | int >= 1
+        fail_msg: >-
+          the first start did not fail (NRestarts={{ clickhouse_molecule_restarts.stdout }}),
+          so the restart did not exercise systemd's automatic restart
+
+    - name: Remove the fail-once drop-in
+      ansible.builtin.file:
+        path: "{{ clickhouse_molecule_fail_once_dropin }}"
+        state: absent
+
+    - name: Reload systemd units after removing the drop-in
+      ansible.builtin.systemd:
+        daemon_reload: true

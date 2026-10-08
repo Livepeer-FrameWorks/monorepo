@@ -42,3 +42,22 @@
           - "'<size>200M</size>' in (clickhouse_config_xml.content | b64decode)"
           - "'<count>10</count>' in (clickhouse_config_xml.content | b64decode)"
         fail_msg: "clickhouse-server logger is not information level with 10 x 200M files"
+
+    - name: Read the shutdown wait the running server loaded
+      ansible.builtin.command:
+        argv:
+          - clickhouse-client
+          - --host=127.0.0.1
+          - --port=9000
+          - --password
+          - molecule-test-password
+          - -q
+          - SELECT value FROM system.server_settings WHERE name = 'shutdown_wait_unfinished'
+      register: clickhouse_shutdown_wait
+      changed_when: false
+
+    - name: Assert the server waits 60s for open connections on shutdown
+      ansible.builtin.assert:
+        that:
+          - clickhouse_shutdown_wait.stdout | trim == '60'
+        fail_msg: "shutdown_wait_unfinished = {{ clickhouse_shutdown_wait.stdout }}, want 60"

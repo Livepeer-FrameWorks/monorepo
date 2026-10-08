@@ -19,10 +19,7 @@
 
 - name: Restart clickhouse
   listen: clickhouse restart
-  ansible.builtin.systemd:
-    name: "{{ clickhouse_service_name }}"
-    state: restarted
-  register: clickhouse_restarted
+  ansible.builtin.include_tasks: _restart_server.yml
 
 - name: Reload clickhouse
   listen: clickhouse reload
