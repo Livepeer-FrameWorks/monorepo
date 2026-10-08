@@ -238,3 +238,31 @@ func TestPostgresDeploymentInitializesBeforeRemainingYugabyteBatches(t *testing.
 		t.Fatal("PostgreSQL initialization is lost when the last SQL batch is Yugabyte")
 	}
 }
+
+func TestDatabaseDeploymentRejectsURLRoutingOverrides(t *testing.T) {
+	m := regionalSQLManifest()
+	view, err := m.WithDatabaseDeployment("us-east")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, query := range []string{"host=eu.internal", "port=5432", "dbname=foghorn_eu"} {
+		t.Run(query, func(t *testing.T) {
+			err := validateServiceDatabaseDeploymentEnv(&orchestrator.Task{Type: "foghorn", ServiceID: "foghorn-us"}, view, map[string]string{"DATABASE_URL": "postgres://foghorn_us@us.internal:5433/foghorn_us?" + query})
+			if err == nil {
+				t.Fatal("URL query parameter bypassed regional database binding")
+			}
+		})
+	}
+}
+
+func TestRegionalLedgerDoctorSkipsForeignPurser(t *testing.T) {
+	m := regionalSQLManifest()
+	m.Services["purser"] = inventory.ServiceConfig{Enabled: true, Host: "eu"}
+	view, err := m.WithDatabaseDeployment("us-east")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, found := purserServiceFor(view); found {
+		t.Fatal("regional doctor resolved Purser outside its deployment")
+	}
+}

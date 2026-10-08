@@ -92,6 +92,9 @@ func purserLedgerCurrencyResult(result *health.CheckResult, rows, tenants int64)
 
 func purserServiceFor(manifest *inventory.Manifest) (string, inventory.ServiceConfig, bool) {
 	for name, svc := range manifest.Services {
+		if manifest.ServiceDatabaseDeployment(name) != inventory.DatabaseDeploymentName(manifest.DatabaseDeployment) {
+			continue
+		}
 		deploy := strings.TrimSpace(svc.Deploy)
 		if deploy == "" {
 			deploy = name

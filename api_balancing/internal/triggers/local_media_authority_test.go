@@ -596,11 +596,19 @@ func expectLocalObject(mock sqlmock.Sqlmock, objectBytes []byte, validUntil time
 			AddRow(objectBytes, localPayloadDigest(objectBytes), time.Now().Add(time.Minute), validUntil, sharedauthority.LiveStreamAuthorityID("30000000-0000-0000-0000-000000000001"), int64(4), ready, false, int64(8)))
 }
 
-// localAuthorityPairQuery is the one-statement object and tenant read an internal-name lookup makes.
-const localAuthorityPairQuery = "GetLocalReadAuthorityPairByInternalName"
+// Both lookup keys read object and tenant authority in one statement.
+const localAuthorityPairQuery = "GetLocalReadAuthorityPairBy(InternalName|PlaybackID)"
 
 func expectLocalPair(mock sqlmock.Sqlmock, objectBytes, tenantBytes []byte, objectValid, tenantValid time.Time, ready bool) {
-	mock.ExpectQuery(localAuthorityPairQuery).
+	expectLocalPairQuery(mock, localAuthorityPairQuery, objectBytes, tenantBytes, objectValid, tenantValid, ready)
+}
+
+func expectLocalPairQuery(mock sqlmock.Sqlmock, query string, objectBytes, tenantBytes []byte, objectValid, tenantValid time.Time, ready bool, tenantReady ...bool) {
+	tenantIsReady := ready
+	if len(tenantReady) > 0 {
+		tenantIsReady = tenantReady[0]
+	}
+	mock.ExpectQuery(query).
 		WillReturnRows(sqlmock.NewRows([]string{
 			"payload", "payload_sha256", "refresh_after", "valid_until", "authority_id", "authority_version", "local_read_ready",
 			"withheld_by_tenant_revival", "tenant_authority_version", "tenant_found", "tenant_id",
@@ -611,7 +619,7 @@ func expectLocalPair(mock sqlmock.Sqlmock, objectBytes, tenantBytes []byte, obje
 			sharedauthority.LiveStreamAuthorityID("30000000-0000-0000-0000-000000000001"), int64(4), ready,
 			false, int64(8), true, "10000000-0000-0000-0000-000000000001",
 			tenantBytes, localPayloadDigest(tenantBytes), time.Now().Add(time.Minute), tenantValid,
-			ready, false, false,
+			tenantIsReady, false, false,
 		))
 }
 
@@ -630,9 +638,26 @@ func TestPlaybackRejectsParentChangedBetweenObjectAndTenantReads(t *testing.T) {
 		"payload", "payload_sha256", "refresh_after", "valid_until", "authority_version",
 		"local_read_ready", "local_ingest_ready", "local_source_ready",
 	}).AddRow(tenantBytes, localPayloadDigest(tenantBytes), time.Now().Add(time.Minute), validUntil, 9, true, true, true))
-	_, found, err := p.readReadyLocalPlayback(context.Background(), "playbackkey", true)
-	if !found || !IsLocalAuthorityExpired(err) {
-		t.Fatalf("mixed parent generations admitted playback: found=%v err=%v", found, err)
+	object, err := p.mediaAuthorityStore.MediaObjectByPlaybackID(context.Background(), "playbackkey")
+	if err != nil {
+		t.Fatal(err)
+	}
+	tenant, err := p.mediaAuthorityStore.TenantForObject(context.Background(), object)
+	if err != nil || tenant.Freshness != localauthority.FreshnessHardExpired {
+		t.Fatalf("mixed parent generations admitted playback: tenant=%+v err=%v", tenant, err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestPlaybackIDReadsAuthorityPairInOneRoundTrip(t *testing.T) {
+	p, mock, closeDB, tenantBytes, objectBytes := localAuthorityFixture(t)
+	defer closeDB()
+	expectLocalPairQuery(mock, "GetLocalReadAuthorityPairByPlaybackID", objectBytes, tenantBytes, time.Now().Add(time.Hour), time.Now().Add(time.Hour), true)
+	result, found, err := p.readReadyLocalPlayback(context.Background(), "playbackkey", true)
+	if err != nil || !found || result.target == nil {
+		t.Fatalf("playback pair = %+v, found=%v, err=%v", result, found, err)
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatal(err)
@@ -643,8 +668,7 @@ func TestReadyLocalAuthorityResolvesWithoutControlPlane(t *testing.T) {
 	validUntil := time.Now().Add(time.Hour)
 	p, mock, closeDB, tenantBytes, objectBytes := localAuthorityFixture(t)
 	defer closeDB()
-	expectLocalObject(mock, objectBytes, validUntil, true)
-	expectLocalTenant(mock, tenantBytes, validUntil, true)
+	expectLocalPair(mock, objectBytes, tenantBytes, validUntil, validUntil, true)
 
 	resolution, handled, err := p.ResolveLocalContent(context.Background(), "playbackkey")
 	if err != nil || !handled {
@@ -665,10 +689,8 @@ func TestUnreadyTenantAuthorityFallsBackToConnectedPlaybackPolicy(t *testing.T) 
 	validUntil := time.Now().Add(time.Hour)
 	p, mock, closeDB, tenantBytes, objectBytes := localAuthorityFixture(t)
 	defer closeDB()
-	expectLocalObject(mock, objectBytes, validUntil, true)
-	expectLocalTenant(mock, tenantBytes, validUntil, false)
-	expectLocalObject(mock, objectBytes, validUntil, true)
-	expectLocalTenant(mock, tenantBytes, validUntil, false)
+	expectLocalPairQuery(mock, localAuthorityPairQuery, objectBytes, tenantBytes, validUntil, validUntil, true, false)
+	expectLocalPairQuery(mock, localAuthorityPairQuery, objectBytes, tenantBytes, validUntil, validUntil, true, false)
 
 	if resolution, handled, err := p.ResolveLocalContent(context.Background(), "playbackkey"); err != nil || handled || resolution != nil {
 		t.Fatalf("unready tenant resolution = %+v, %v, %v; want connected fallback", resolution, handled, err)
@@ -685,7 +707,7 @@ func TestUnreadyTenantAuthorityFallsBackToConnectedPlaybackPolicy(t *testing.T) 
 func TestLocalAuthorityDriverErrorFallsBackInsteadOfDenyingViewer(t *testing.T) {
 	p, mock, closeDB, _, _ := localAuthorityFixture(t)
 	defer closeDB()
-	mock.ExpectQuery(regexp.QuoteMeta("SELECT authority.payload, authority.payload_sha256, authority.refresh_after, authority.valid_until,")).
+	mock.ExpectQuery(localAuthorityPairQuery).
 		WillReturnError(sql.ErrConnDone)
 
 	decision, handled := p.EvaluateLocalPlaybackPolicy(context.Background(), "playbackkey", "stream-internal", &ipcpb.ViewerConnectTrigger{})
@@ -701,7 +723,7 @@ func TestPlayRewriteLocalDriverErrorUsesConnectedResolver(t *testing.T) {
 	p, mock, closeDB, _, _ := localAuthorityFixture(t)
 	defer closeDB()
 	for range 2 {
-		mock.ExpectQuery(regexp.QuoteMeta("SELECT authority.payload, authority.payload_sha256, authority.refresh_after, authority.valid_until,")).
+		mock.ExpectQuery(localAuthorityPairQuery).
 			WillReturnError(sql.ErrConnDone)
 	}
 
@@ -765,8 +787,7 @@ func TestPlayRewriteReadyLocalAuthoritySkipsConnectedEnrichment(t *testing.T) {
 	defer closeDB()
 	p.logger.SetLevel(logrus.DebugLevel)
 	logs := logrustest.NewLocal(p.logger)
-	expectLocalObject(mock, objectBytes, validUntil, true)
-	expectLocalTenant(mock, tenantBytes, validUntil, true)
+	expectLocalPair(mock, objectBytes, tenantBytes, validUntil, validUntil, true)
 	expectLocalTenant(mock, tenantBytes, validUntil, true)
 
 	connected, cleanup, stub := setupCommodoreClientWithStub(t, nil, nil)
@@ -856,10 +877,10 @@ func TestPlayRewriteResolvesRuntimeNameFromLocalAuthorityWithoutControlPlane(t *
 // pull, so PLAY_REWRITE consults the control plane instead. A denial stays
 // terminal and is covered separately.
 func TestPlayRewriteExpiredLocalAuthorityConsultsControlPlaneInsteadOfAborting(t *testing.T) {
-	p, mock, closeDB, _, objectBytes := localAuthorityFixture(t)
+	p, mock, closeDB, tenantBytes, objectBytes := localAuthorityFixture(t)
 	defer closeDB()
 	// Ready, but past valid_until: the freshness gate reports hard expiry.
-	expectLocalObject(mock, objectBytes, time.Now().Add(-time.Minute), true)
+	expectLocalPair(mock, objectBytes, tenantBytes, time.Now().Add(-time.Minute), time.Now().Add(time.Hour), true)
 
 	connected, cleanup, stub := setupCommodoreClientWithStub(t, nil, nil)
 	t.Cleanup(cleanup)
@@ -885,9 +906,9 @@ func TestPlayRewriteExpiredLocalAuthorityConsultsControlPlaneInsteadOfAborting(t
 
 func TestMarkedHardExpiredAuthorityDoesNotFallBack(t *testing.T) {
 	validUntil := time.Now().Add(-time.Minute)
-	p, mock, closeDB, _, objectBytes := localAuthorityFixture(t)
+	p, mock, closeDB, tenantBytes, objectBytes := localAuthorityFixture(t)
 	defer closeDB()
-	expectLocalObject(mock, objectBytes, validUntil, true)
+	expectLocalPair(mock, objectBytes, tenantBytes, validUntil, validUntil, true)
 
 	resolution, handled, err := p.ResolveLocalContent(context.Background(), "PlaybackKey")
 	if err == nil || !handled || resolution != nil {
@@ -911,8 +932,7 @@ func TestMarkedWebhookAuthorityWithoutCellSecretDeniesWithoutCentralFallback(t *
 	if err != nil {
 		t.Fatal(err)
 	}
-	expectLocalObject(mock, objectBytes, validUntil, true)
-	expectLocalTenant(mock, tenantBytes, validUntil, true)
+	expectLocalPair(mock, objectBytes, tenantBytes, validUntil, validUntil, true)
 
 	decision, handled := p.EvaluateLocalPlaybackPolicy(context.Background(), "PlaybackKey", "stream-internal", &ipcpb.ViewerConnectTrigger{})
 	if !handled || decision != "false" {

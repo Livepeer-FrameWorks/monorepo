@@ -328,6 +328,7 @@ type Querier interface {
 	GetLocalPlacementAuthorityPair(ctx context.Context, arg GetLocalPlacementAuthorityPairParams) (GetLocalPlacementAuthorityPairRow, error)
 	GetLocalPlacementAuthorityPairByInternalName(ctx context.Context, arg GetLocalPlacementAuthorityPairByInternalNameParams) (GetLocalPlacementAuthorityPairByInternalNameRow, error)
 	GetLocalReadAuthorityPairByInternalName(ctx context.Context, internalName string) (GetLocalReadAuthorityPairByInternalNameRow, error)
+	GetLocalReadAuthorityPairByPlaybackID(ctx context.Context, playbackID string) (GetLocalReadAuthorityPairByPlaybackIDRow, error)
 	GetLocalTenantAuthority(ctx context.Context, tenantID string) (GetLocalTenantAuthorityRow, error)
 	GetLocalTenantSourceAuthority(ctx context.Context, tenantID string) (GetLocalTenantSourceAuthorityRow, error)
 	GetMediaAuthorityForUpdate(ctx context.Context, arg GetMediaAuthorityForUpdateParams) (GetMediaAuthorityForUpdateRow, error)

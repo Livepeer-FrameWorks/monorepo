@@ -57,10 +57,10 @@ func recordFetches(p *Processor) func() []localauthority.AuthorityLookup {
 // for before it is refused, and when asking brings nothing the refusal is
 // exactly what it was: an expired authority is never decided on.
 func TestHardExpiredPlaybackAsksForTheAuthorityBeforeRefusing(t *testing.T) {
-	p, mock, closeDB, _, objectBytes := localAuthorityFixture(t)
+	p, mock, closeDB, tenantBytes, objectBytes := localAuthorityFixture(t)
 	defer closeDB()
 	asked := recordFetches(p)
-	expectLocalObject(mock, objectBytes, time.Now().Add(-time.Minute), true)
+	expectLocalPair(mock, objectBytes, tenantBytes, time.Now().Add(-time.Minute), time.Now().Add(time.Hour), true)
 	mock.ExpectQuery("BeginMediaAuthorityConfirmation").WillReturnRows(sqlmock.NewRows([]string{"started_at"}).AddRow(time.Now()))
 
 	_, found, err := p.resolveReadyLocalPlayback(context.Background(), "playbackkey", true)
@@ -78,7 +78,7 @@ func TestHardExpiredPlaybackAsksForTheAuthorityBeforeRefusing(t *testing.T) {
 // A tombstone or a denial is an answer. Asking the control plane around it would
 // turn a refusal into a second opinion.
 func TestDeniedPlaybackIsNeverFetchedAround(t *testing.T) {
-	p, mock, closeDB, _, objectBytes := localAuthorityFixture(t)
+	p, mock, closeDB, tenantBytes, objectBytes := localAuthorityFixture(t)
 	defer closeDB()
 	asked := recordFetches(p)
 	object := &mediaauthoritypb.MediaObjectAuthority{}
@@ -93,7 +93,7 @@ func TestDeniedPlaybackIsNeverFetchedAround(t *testing.T) {
 	// Past its validity as well, which every tombstone eventually is: it is never
 	// renewed, and it stays a refusal, not something to ask about again.
 	for _, ready := range []bool{true, false} {
-		expectLocalObject(mock, tombstone, time.Now().Add(-time.Hour), ready)
+		expectLocalPair(mock, tombstone, tenantBytes, time.Now().Add(-time.Hour), time.Now().Add(time.Hour), ready)
 		_, found, err := p.resolveReadyLocalPlayback(context.Background(), "playbackkey", true)
 		if !found || !IsLocalAuthorityDenied(err) {
 			t.Fatalf("ready=%v found=%v err=%v, want denied", ready, found, err)

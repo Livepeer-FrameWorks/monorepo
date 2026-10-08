@@ -584,6 +584,84 @@ func (q *Queries) GetLocalReadAuthorityPairByInternalName(ctx context.Context, i
 	return i, err
 }
 
+const getLocalReadAuthorityPairByPlaybackID = `-- name: GetLocalReadAuthorityPairByPlaybackID :one
+SELECT object_authority.payload, object_authority.payload_sha256,
+       object_authority.refresh_after, object_authority.valid_until,
+       object_projection.authority_id, object_projection.authority_version, object_projection.local_read_ready,
+       COALESCE(tenant_projection.objects_trusted_from > object_authority.confirmed_at, FALSE)::boolean AS withheld_by_tenant_revival,
+       COALESCE(tenant_projection.authority_version, 0)::bigint AS tenant_authority_version,
+       (tenant_authority.authority_id IS NOT NULL)::boolean AS tenant_found,
+       object_projection.tenant_id::text AS tenant_id,
+       tenant_authority.payload AS tenant_payload,
+       tenant_authority.payload_sha256 AS tenant_payload_sha256,
+       tenant_authority.refresh_after AS tenant_refresh_after,
+       tenant_authority.valid_until AS tenant_valid_until,
+       COALESCE(tenant_projection.local_read_ready, FALSE)::boolean AS tenant_read_ready,
+       COALESCE(tenant_projection.local_ingest_ready, FALSE)::boolean AS tenant_ingest_ready,
+       COALESCE(tenant_projection.local_source_ready, FALSE)::boolean AS tenant_source_ready
+FROM foghorn.media_object_authority_projection AS object_projection
+JOIN foghorn.media_authorities AS object_authority
+  ON object_authority.authority_kind = 'media_object'
+ AND object_authority.authority_id = object_projection.authority_id
+ AND object_authority.authority_version = object_projection.authority_version
+LEFT JOIN foghorn.tenant_authority_projection AS tenant_projection
+  ON tenant_projection.tenant_id = object_projection.tenant_id
+LEFT JOIN foghorn.media_authorities AS tenant_authority
+  ON tenant_authority.authority_kind = 'tenant'
+ AND tenant_authority.authority_id = tenant_projection.tenant_id::text
+ AND tenant_authority.authority_version = tenant_projection.authority_version
+WHERE lower(object_projection.playback_id) = lower($1)
+ORDER BY (object_projection.lifecycle = 'active') DESC, object_projection.authority_version DESC
+LIMIT 1
+`
+
+type GetLocalReadAuthorityPairByPlaybackIDRow struct {
+	Payload                 []byte       `db:"payload" json:"payload"`
+	PayloadSha256           []byte       `db:"payload_sha256" json:"payload_sha256"`
+	RefreshAfter            time.Time    `db:"refresh_after" json:"refresh_after"`
+	ValidUntil              time.Time    `db:"valid_until" json:"valid_until"`
+	AuthorityID             string       `db:"authority_id" json:"authority_id"`
+	AuthorityVersion        int64        `db:"authority_version" json:"authority_version"`
+	LocalReadReady          bool         `db:"local_read_ready" json:"local_read_ready"`
+	WithheldByTenantRevival bool         `db:"withheld_by_tenant_revival" json:"withheld_by_tenant_revival"`
+	TenantAuthorityVersion  int64        `db:"tenant_authority_version" json:"tenant_authority_version"`
+	TenantFound             bool         `db:"tenant_found" json:"tenant_found"`
+	TenantID                string       `db:"tenant_id" json:"tenant_id"`
+	TenantPayload           []byte       `db:"tenant_payload" json:"tenant_payload"`
+	TenantPayloadSha256     []byte       `db:"tenant_payload_sha256" json:"tenant_payload_sha256"`
+	TenantRefreshAfter      sql.NullTime `db:"tenant_refresh_after" json:"tenant_refresh_after"`
+	TenantValidUntil        sql.NullTime `db:"tenant_valid_until" json:"tenant_valid_until"`
+	TenantReadReady         bool         `db:"tenant_read_ready" json:"tenant_read_ready"`
+	TenantIngestReady       bool         `db:"tenant_ingest_ready" json:"tenant_ingest_ready"`
+	TenantSourceReady       bool         `db:"tenant_source_ready" json:"tenant_source_ready"`
+}
+
+func (q *Queries) GetLocalReadAuthorityPairByPlaybackID(ctx context.Context, playbackID string) (GetLocalReadAuthorityPairByPlaybackIDRow, error) {
+	row := q.db.QueryRowContext(ctx, getLocalReadAuthorityPairByPlaybackID, playbackID)
+	var i GetLocalReadAuthorityPairByPlaybackIDRow
+	err := row.Scan(
+		&i.Payload,
+		&i.PayloadSha256,
+		&i.RefreshAfter,
+		&i.ValidUntil,
+		&i.AuthorityID,
+		&i.AuthorityVersion,
+		&i.LocalReadReady,
+		&i.WithheldByTenantRevival,
+		&i.TenantAuthorityVersion,
+		&i.TenantFound,
+		&i.TenantID,
+		&i.TenantPayload,
+		&i.TenantPayloadSha256,
+		&i.TenantRefreshAfter,
+		&i.TenantValidUntil,
+		&i.TenantReadReady,
+		&i.TenantIngestReady,
+		&i.TenantSourceReady,
+	)
+	return i, err
+}
+
 const getLocalTenantAuthority = `-- name: GetLocalTenantAuthority :one
 SELECT authority.payload, authority.payload_sha256, authority.refresh_after, authority.valid_until,
        projection.authority_version, projection.local_read_ready,

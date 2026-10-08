@@ -219,6 +219,29 @@ query errors and must be retried by the caller (`database.RetryPostgres` /
   opens new ones, within the lifetime.
 - Caller context deadlines on queries.
 
+## Client round trips and regional latency
+
+A local database removes the client-to-database WAN cost from each sequential
+exchange. The observed US-to-EU RTT was 102–110 ms; one avoided exchange therefore
+saves approximately that transport time, before changes in query execution or
+pool waits. This is not a measured endpoint percentile. A US-West service using
+US-East SQL still pays the inter-region RTT, even though the database quorum and
+catalog are local to US-East.
+
+Playback lookups by either internal name or playback ID read object and tenant
+authority together. Both come from the same database snapshot, with the same
+expiry, revival, identity and restore-fence checks. This removes the separate
+tenant round trip from the normal playback-ID path. The exceptional inconsistent
+payload/projection path retains its fail-closed separate validation.
+
+The pinned smart driver's `database/sql` adapter may ping a reused connection
+after more than one second since its last reset. Longer pool lifetimes do not
+remove that exchange. Its health policy is retained because changing it requires
+driver-level failed-node and reconnect testing. Likewise, node admission retains
+its retryable delete-and-upsert transaction: reducing transport exchanges must
+preserve conflict cleanup and atomic identity replacement. Pooling, batching and
+locality measurements must include these exchanges, not SQL execution time alone.
+
 ## Ordered queries and the real-engine plan gate
 
 A leading timestamp/date index key declares `ASC` or `DESC` explicitly. Yugabyte

@@ -10,6 +10,7 @@ import (
 	"time"
 
 	mediaauthoritypb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/media_authority"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/testutil/dockerpg"
 	"google.golang.org/protobuf/proto"
 )
 
@@ -17,7 +18,19 @@ import (
 // every state the pair can be in: both valid, the object withheld by a tenant revival, the tenant
 // lapsed, and no object at all.
 func TestMediaAuthorityReadPairMatchesSeparateReads_RealPG(t *testing.T) {
-	conn := startMediaAuthorityRealPG(t)
+	testReadPairMatchesSeparateReads(t, startMediaAuthorityRealPG(t))
+}
+
+func TestMediaAuthorityReadPairMatchesSeparateReads_RealYugabyte(t *testing.T) {
+	conn, ok := dockerpg.OpenSharedYugabyteBaseline(t, "foghorn_authority_readpair", "foghorn")
+	if !ok {
+		t.Fatal("requires the shared Yugabyte fixture: run make verify-foghorn-db")
+	}
+	testReadPairMatchesSeparateReads(t, conn)
+}
+
+func testReadPairMatchesSeparateReads(t *testing.T, conn *sql.DB) {
+	t.Helper()
 	_, trust, _ := storeFixture(t, "cell-a")
 	ctx := context.Background()
 	store, err := NewStore(conn, "cell-a", trust)
@@ -33,10 +46,14 @@ func TestMediaAuthorityReadPairMatchesSeparateReads_RealPG(t *testing.T) {
 		}
 	}
 
-	compare := func(state string) {
+	compareLookup := func(state string, byPlaybackID bool) {
 		t.Helper()
 		wantObject, wantObjectErr := store.MediaObjectByInternalName(ctx, "artifact-internal")
 		pair, pairErr := store.ReadPairByInternalName(ctx, "artifact-internal")
+		if byPlaybackID {
+			wantObject, wantObjectErr = store.MediaObjectByPlaybackID(ctx, "ARTIFACT-PLAYBACK")
+			pair, pairErr = store.ReadPairByPlaybackID(ctx, " ARTIFACT-PLAYBACK ")
+		}
 		if (wantObjectErr == nil) != (pairErr == nil) {
 			t.Fatalf("%s: object error %v, pair error %v", state, wantObjectErr, pairErr)
 		}
@@ -62,6 +79,11 @@ func TestMediaAuthorityReadPairMatchesSeparateReads_RealPG(t *testing.T) {
 		}
 	}
 
+	compare := func(state string) {
+		compareLookup(state+" internal name", false)
+		compareLookup(state+" playback ID", true)
+	}
+
 	compare("both valid")
 
 	if _, err = conn.ExecContext(ctx, `
@@ -77,6 +99,9 @@ func TestMediaAuthorityReadPairMatchesSeparateReads_RealPG(t *testing.T) {
 	}
 	compare("object withheld by tenant revival")
 
+	if _, err = store.ReadPairByPlaybackID(ctx, "no-such-playback"); !errors.Is(err, sql.ErrNoRows) {
+		t.Fatalf("absent playback object: %v, want sql.ErrNoRows", err)
+	}
 	if _, err = store.ReadPairByInternalName(ctx, "no-such-internal"); !errors.Is(err, sql.ErrNoRows) {
 		t.Fatalf("absent object: %v, want sql.ErrNoRows", err)
 	}

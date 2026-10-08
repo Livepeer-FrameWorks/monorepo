@@ -220,6 +220,23 @@ func (s *Store) ReadPairByInternalName(ctx context.Context, internalName string)
 	if err != nil {
 		return ReadPair{}, err
 	}
+	return s.readPairSnapshot(ctx, row)
+}
+
+// ReadPairByPlaybackID keeps object and tenant validation in the same database snapshot.
+func (s *Store) ReadPairByPlaybackID(ctx context.Context, playbackID string) (ReadPair, error) {
+	playbackID = strings.TrimSpace(playbackID)
+	if playbackID == "" {
+		return ReadPair{}, errors.New("playback ID is required")
+	}
+	row, err := foghorndb.New(s.db).GetLocalReadAuthorityPairByPlaybackID(ctx, playbackID)
+	if err != nil {
+		return ReadPair{}, err
+	}
+	return s.readPairSnapshot(ctx, foghorndb.GetLocalReadAuthorityPairByInternalNameRow(row))
+}
+
+func (s *Store) readPairSnapshot(ctx context.Context, row foghorndb.GetLocalReadAuthorityPairByInternalNameRow) (ReadPair, error) {
 	object, err := decodeMediaObjectSnapshot(row.Payload, row.PayloadSha256, row.AuthorityID, row.AuthorityVersion, row.LocalReadReady, row.RefreshAfter, row.ValidUntil, s.now().UTC())
 	object.ParentVersion = row.TenantAuthorityVersion
 	object.Freshness = s.fencedFreshness(object.Freshness, "media_object", object.AuthorityID, row.WithheldByTenantRevival)

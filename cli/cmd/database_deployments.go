@@ -137,6 +137,11 @@ func validateServiceDatabaseDeploymentEnv(task *orchestrator.Task, manifest *inv
 	if strings.TrimPrefix(parsed.Path, "/") != db.Name {
 		return fmt.Errorf("service %s: DATABASE_URL does not select declared database %s", task.ServiceID, db.Name)
 	}
+	for _, key := range []string{"host", "port", "dbname"} {
+		if parsed.Query().Has(key) {
+			return fmt.Errorf("service %s: DATABASE_URL query parameter %s overrides the database deployment binding", task.ServiceID, key)
+		}
+	}
 	pg := manifest.Infrastructure.Postgres
 	if inst != nil {
 		pg = &inventory.PostgresConfig{Host: inst.Host, Port: postgresInstancePort(inst)}
