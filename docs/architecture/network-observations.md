@@ -5,6 +5,10 @@ performance at `/network` on the marketing site and web application. Bridge expo
 same projection at `GET /v1/network/livepeer`. The source is FrameWorks gateways and
 trusted external probers. This does not use Livepeer Studio's performance API.
 
+These platform changes target `v0.3.12` and require CLI `v0.3.12-rc1` or later.
+Existing clusters apply the `v0.3.12` ClickHouse expand migration. The new observer
+database is initialized from its baseline by the release's database bootstrap.
+
 ## Ownership
 
 `api_network_observer` contains two Go commands:

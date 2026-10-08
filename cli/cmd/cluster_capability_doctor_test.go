@@ -31,13 +31,20 @@ func TestDoctorCapabilitiesRespectTargetRelease(t *testing.T) {
 	if len(before) != 2 {
 		t.Fatalf("v0.3.10 ClickHouse capabilities = %d, want 2", len(before))
 	}
-	current := doctorCapabilitiesForVersion("periscope-ingest", pkgdatabase.EngineClickHouse, "v0.3.11")
+	shipped := doctorCapabilitiesForVersion("periscope-ingest", pkgdatabase.EngineClickHouse, "v0.3.11")
+	if len(shipped) != 3 {
+		t.Fatalf("shipped v0.3.11 ClickHouse capabilities = %d, want 3", len(shipped))
+	}
+	current := doctorCapabilitiesForVersion("periscope-ingest", pkgdatabase.EngineClickHouse, "v0.3.12")
 	if len(current) != 4 {
-		t.Fatalf("v0.3.11 ClickHouse capabilities = %d, want 4", len(current))
+		t.Fatalf("v0.3.12 ClickHouse capabilities = %d, want 4", len(current))
 	}
 	for _, name := range []string{"domain event projections", "network observations and snapshot rollups"} {
 		if !slices.ContainsFunc(current, func(capability pkgdatabase.Capability) bool { return capability.Name == name }) {
-			t.Errorf("v0.3.11 ClickHouse capabilities lack %q", name)
+			t.Errorf("v0.3.12 ClickHouse capabilities lack %q", name)
 		}
+	}
+	if observer := doctorCapabilitiesForVersion("network-observer", pkgdatabase.EnginePostgres, "v0.3.11"); len(observer) != 0 {
+		t.Fatalf("unshipped observer capabilities applied to v0.3.11: %#v", observer)
 	}
 }

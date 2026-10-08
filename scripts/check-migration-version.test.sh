@@ -100,6 +100,21 @@ expect_pass 'code-only work after a tag needs no future release declaration' --w
 
 git add README.md
 git commit -qm 'code only after release'
+
+printf '%s\n' 'SELECT 3;' > pkg/database/sql/migrations/commodore/v0.2.96/expand/002_unshipped_feature.sql
+git add .
+git commit -qm 'feature migration prepared before learning of release tag'
+printf '%s\n' 'schema_migration_floor: v0.2.95' 'releases:' '  - version: v0.2.96' '  - version: v0.2.97' > cli/internal/releases/catalog.yaml
+git mv pkg/database/sql/migrations/commodore/v0.2.96/expand/002_unshipped_feature.sql pkg/database/sql/migrations/commodore/v0.2.97/expand/001_feature.sql
+git add cli/internal/releases/catalog.yaml
+expect_pass 'the hook permits moving SQL that was never in the shipped tag' pkg/database/sql/migrations/commodore/v0.2.96/expand/002_unshipped_feature.sql pkg/database/sql/migrations/commodore/v0.2.97/expand/001_feature.sql
+expect_pass 'worktree validation uses the final tree when an unshipped migration moves' --worktree
+rm pkg/database/sql/migrations/commodore/v0.2.97/expand/001_feature.sql
+git add -u
+git show HEAD:cli/internal/releases/catalog.yaml > cli/internal/releases/catalog.yaml
+git add cli/internal/releases/catalog.yaml
+git commit -qm 'remove unshipped fixture'
+
 printf '%s\n' 'SELECT 200;' > pkg/database/sql/migrations/commodore/v0.2.96/expand/001_pending.sql
 git add pkg/database/sql/migrations/commodore/v0.2.96/expand/001_pending.sql
 git commit -qm 'badly mutate shipped migration'

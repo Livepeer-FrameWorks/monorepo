@@ -32,6 +32,11 @@ func TestShippedCatalogHasDatabaseOwnershipAndReleaseFloor(t *testing.T) {
 			t.Errorf("MinCLIVersionFor(%s) = %q, want v0.3.11-rc23", target, got)
 		}
 	}
+	for _, target := range []string{"v0.3.12-rc1", "v0.3.12"} {
+		if got := MinCLIVersionFor(target); got != "v0.3.12-rc1" {
+			t.Errorf("MinCLIVersionFor(%s) = %q, want v0.3.12-rc1", target, got)
+		}
+	}
 	if got := SchemaMigrationFloor(); got != "v0.3.0" {
 		t.Errorf("SchemaMigrationFloor() = %q, want v0.3.0", got)
 	}

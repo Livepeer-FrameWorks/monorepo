@@ -68,11 +68,11 @@ Read by `api_gateway/cmd/bridge`.
 
 | Variable | Type | Default | Notes | Since | Description |
 | --- | --- | --- | --- | --- | --- |
-| `NETWORK_OBSERVER_URL` | string |  |  | v0.3.11 | Observer inventory URL; enables public network REST API when configured. |
-| `NETWORK_OBSERVER_SECRET` | string |  | secret | v0.3.11 | Shared internal observer inventory credential. |
-| `NETWORK_PUBLIC_TENANT_IDS` | list |  |  | v0.3.11 | Explicit platform-owned tenant scopes whose public Livepeer observations can be published. |
-| `LIVEPEER_NETWORK_ID` | string | `42161` |  | v0.3.11 | Livepeer production network namespace. |
-| `NETWORK_OBSERVER_ENVIRONMENT` | string | `production` |  | v0.3.11 | Network observation environment. |
+| `NETWORK_OBSERVER_URL` | string |  |  | v0.3.12 | Observer inventory URL; enables public network REST API when configured. |
+| `NETWORK_OBSERVER_SECRET` | string |  | secret | v0.3.12 | Shared internal observer inventory credential. |
+| `NETWORK_PUBLIC_TENANT_IDS` | list |  |  | v0.3.12 | Explicit platform-owned tenant scopes whose public Livepeer observations can be published. |
+| `LIVEPEER_NETWORK_ID` | string | `42161` |  | v0.3.12 | Livepeer production network namespace. |
+| `NETWORK_OBSERVER_ENVIRONMENT` | string | `production` |  | v0.3.12 | Network observation environment. |
 | `PORT` | string | `18000` |  | v0.3.0 | TCP port for the HTTP listener that serves health, readiness, metrics, and HTTP APIs. |
 | `GIN_MODE` | string | `debug` |  | v0.3.0 | Router mode. release enables Gin release mode and restricts CORS to ALLOWED_ORIGINS; any other value runs the router in development mode. |
 | `ALLOWED_ORIGINS` | list |  |  | v0.3.0 | Comma-separated browser origins accepted by CORS when GIN_MODE is release. |
@@ -533,23 +533,23 @@ Read by `api_network_observer/cmd/network-observer`.
 | `GRPC_ALLOW_INSECURE` | boolean | `false` |  | v0.3.0 | Allows plaintext internal gRPC when no TLS material is configured. Development only. |
 | `GRPC_TLS_CERT_PATH` | string |  |  | v0.3.0 | Certificate presented by this service's gRPC listener. |
 | `GRPC_TLS_KEY_PATH` | string |  |  | v0.3.0 | Private key for GRPC_TLS_CERT_PATH. |
-| `NETWORK_OBSERVER_PORT` | string | `18024` |  | v0.3.11 | HTTP port for observer ingest, assignments and candidate feeds. |
-| `NETWORK_OBSERVER_TENANT_ID` | string |  | required | v0.3.11 | Server-owned platform tenant scope for inventory and prober observations. |
-| `NETWORK_OBSERVER_CLUSTER_ID` | string |  | required | v0.3.11 | Platform cluster identity used for probe telemetry. |
-| `NETWORK_OBSERVER_SECRET` | string |  | required, secret | v0.3.11 | Shared bearer secret for trusted external probers and internal candidate readers. |
-| `NETWORK_OBSERVERS_JSON` | string | `[]` |  | v0.3.11 | JSON observer IDs, regions and optional locations; new shared-secret probers can register within the configured limit. |
-| `NETWORK_OBSERVER_MAX_PROBERS` | integer | `32` |  | v0.3.11 | Maximum trusted prober identities. |
-| `NETWORK_OBSERVER_ENVIRONMENT` | string | `production` |  | v0.3.11 | Observation environment; staging data remains separate. |
-| `LIVEPEER_NETWORK_ID` | string | `42161` |  | v0.3.11 | Expected production Livepeer chain ID, verified against the RPC. |
-| `LIVEPEER_ETH_RPC_URL` | string |  | required, secret | v0.3.11 | Ethereum RPC URL for read-only production catalog discovery. |
-| `LIVEPEER_CONTROLLER` | string |  | required | v0.3.11 | Livepeer controller contract used to resolve BondingManager and ServiceRegistry. |
-| `NETWORK_CATALOG_INTERVAL_SECONDS` | integer | `900` |  | v0.3.11 | Contract catalog refresh interval. |
-| `DECKLOG_GRPC_ADDR` | string |  | required | v0.3.11 | Decklog telemetry ingest address. |
-| `SERVICE_TOKEN` | string |  | required, secret | v0.3.11 | Internal service token for Decklog. |
-| `KAFKA_BROKERS` | list |  | required | v0.3.11 | Analytics Kafka brokers for gateway discoveries. |
-| `KAFKA_CLUSTER_ID` | string | `local` |  | v0.3.11 | Kafka cluster identifier. |
-| `GEOIP_MMDB_PATH` | string |  |  | v0.3.11 | Optional MMDB for endpoint/prober location lookup. |
-| `NETWORK_OBSERVER_TRUSTED_PROXY_CIDRS` | list |  |  | v0.3.11 | Trusted HTTPS ingress source CIDRs; only these peers may forward prober source IPs for automatic geography. |
+| `NETWORK_OBSERVER_PORT` | string | `18024` |  | v0.3.12 | HTTP port for observer ingest, assignments and candidate feeds. |
+| `NETWORK_OBSERVER_TENANT_ID` | string |  | required | v0.3.12 | Server-owned platform tenant scope for inventory and prober observations. |
+| `NETWORK_OBSERVER_CLUSTER_ID` | string |  | required | v0.3.12 | Platform cluster identity used for probe telemetry. |
+| `NETWORK_OBSERVER_SECRET` | string |  | required, secret | v0.3.12 | Shared bearer secret for trusted external probers and internal candidate readers. |
+| `NETWORK_OBSERVERS_JSON` | string | `[]` |  | v0.3.12 | JSON observer IDs, regions and optional locations; new shared-secret probers can register within the configured limit. |
+| `NETWORK_OBSERVER_MAX_PROBERS` | integer | `32` |  | v0.3.12 | Maximum trusted prober identities. |
+| `NETWORK_OBSERVER_ENVIRONMENT` | string | `production` |  | v0.3.12 | Observation environment; staging data remains separate. |
+| `LIVEPEER_NETWORK_ID` | string | `42161` |  | v0.3.12 | Expected production Livepeer chain ID, verified against the RPC. |
+| `LIVEPEER_ETH_RPC_URL` | string |  | required, secret | v0.3.12 | Ethereum RPC URL for read-only production catalog discovery. |
+| `LIVEPEER_CONTROLLER` | string |  | required | v0.3.12 | Livepeer controller contract used to resolve BondingManager and ServiceRegistry. |
+| `NETWORK_CATALOG_INTERVAL_SECONDS` | integer | `900` |  | v0.3.12 | Contract catalog refresh interval. |
+| `DECKLOG_GRPC_ADDR` | string |  | required | v0.3.12 | Decklog telemetry ingest address. |
+| `SERVICE_TOKEN` | string |  | required, secret | v0.3.12 | Internal service token for Decklog. |
+| `KAFKA_BROKERS` | list |  | required | v0.3.12 | Analytics Kafka brokers for gateway discoveries. |
+| `KAFKA_CLUSTER_ID` | string | `local` |  | v0.3.12 | Kafka cluster identifier. |
+| `GEOIP_MMDB_PATH` | string |  |  | v0.3.12 | Optional MMDB for endpoint/prober location lookup. |
+| `NETWORK_OBSERVER_TRUSTED_PROXY_CIDRS` | list |  |  | v0.3.12 | Trusted HTTPS ingress source CIDRs; only these peers may forward prober source IPs for automatic geography. |
 
 ## network-prober
 
@@ -557,20 +557,20 @@ Read by `api_network_observer/cmd/network-prober`.
 
 | Variable | Type | Default | Notes | Since | Description |
 | --- | --- | --- | --- | --- | --- |
-| `NETWORK_PROBER_PORT` | string | `18025` |  | v0.3.11 | Local prober health and spool statistics HTTP port. |
+| `NETWORK_PROBER_PORT` | string | `18025` |  | v0.3.12 | Local prober health and spool statistics HTTP port. |
 | `LOG_LEVEL` | string | `info` |  | v0.3.0 | Log level: debug, info, warn, or error. Any other value fails startup. |
-| `NETWORK_OBSERVER_URL` | string |  | required | v0.3.11 | Verified HTTPS observer API, accessible from this external host. |
-| `NETWORK_OBSERVER_SECRET` | string |  | required, secret | v0.3.11 | Shared observer ingest bearer secret. |
-| `NETWORK_PROBER_ID` | string |  | required | v0.3.11 | Stable prober ID; no CLI enrollment required. |
-| `NETWORK_PROBER_REGION` | string |  | required | v0.3.11 | Prober vantage region. |
-| `LIVEPEER_BROADCASTER_ADDRESS` | string |  | required | v0.3.11 | Public broadcaster address for discovery RPC authentication. |
-| `LIVEPEER_BROADCASTER_SIGNATURE` | string |  | required, secret | v0.3.11 | Hex signature over the broadcaster address using the Livepeer protocol. |
-| `LIVEPEER_DISCOVERY_SKIP_TLS_VERIFY` | boolean | `true` |  | v0.3.11 | Accept orchestrator self-signed certificates, matching Livepeer discovery; never changes coordinator TLS verification. |
-| `NETWORK_PROBER_ALLOW_INSECURE` | boolean | `false` |  | v0.3.11 | Allow HTTP coordinator only for isolated local testing. |
-| `NETWORK_PROBER_SPOOL_DIR` | string |  | required | v0.3.11 | Private local durable observation spool directory. |
-| `NETWORK_PROBER_SPOOL_MAX_BYTES` | integer | `67108864` |  | v0.3.11 | Bounded spool byte capacity; overflow is visible in logs and heartbeat reports. |
-| `NETWORK_PROBER_CONCURRENCY` | integer | `8` |  | v0.3.11 | Maximum parallel DNS/discovery checks. |
-| `NETWORK_PROBER_TIMEOUT_SECONDS` | integer | `10` |  | v0.3.11 | Per DNS/RPC operation timeout. |
+| `NETWORK_OBSERVER_URL` | string |  | required | v0.3.12 | Verified HTTPS observer API, accessible from this external host. |
+| `NETWORK_OBSERVER_SECRET` | string |  | required, secret | v0.3.12 | Shared observer ingest bearer secret. |
+| `NETWORK_PROBER_ID` | string |  | required | v0.3.12 | Stable prober ID; no CLI enrollment required. |
+| `NETWORK_PROBER_REGION` | string |  | required | v0.3.12 | Prober vantage region. |
+| `LIVEPEER_BROADCASTER_ADDRESS` | string |  | required | v0.3.12 | Public broadcaster address for discovery RPC authentication. |
+| `LIVEPEER_BROADCASTER_SIGNATURE` | string |  | required, secret | v0.3.12 | Hex signature over the broadcaster address using the Livepeer protocol. |
+| `LIVEPEER_DISCOVERY_SKIP_TLS_VERIFY` | boolean | `true` |  | v0.3.12 | Accept orchestrator self-signed certificates, matching Livepeer discovery; never changes coordinator TLS verification. |
+| `NETWORK_PROBER_ALLOW_INSECURE` | boolean | `false` |  | v0.3.12 | Allow HTTP coordinator only for isolated local testing. |
+| `NETWORK_PROBER_SPOOL_DIR` | string |  | required | v0.3.12 | Private local durable observation spool directory. |
+| `NETWORK_PROBER_SPOOL_MAX_BYTES` | integer | `67108864` |  | v0.3.12 | Bounded spool byte capacity; overflow is visible in logs and heartbeat reports. |
+| `NETWORK_PROBER_CONCURRENCY` | integer | `8` |  | v0.3.12 | Maximum parallel DNS/discovery checks. |
+| `NETWORK_PROBER_TIMEOUT_SECONDS` | integer | `10` |  | v0.3.12 | Per DNS/RPC operation timeout. |
 
 ## periscope-ingest
 
@@ -932,13 +932,13 @@ Read by `api_incidents/cmd/lookout`.
 | `LOOKOUT_NOTIFY_EMAIL_TO` | list |  |  | v0.3.8 | Comma-separated operator addresses that receive critical incident emails. Empty disables the email channel. Re-read after an env-file reload. |
 | `LOOKOUT_SLACK_WEBHOOK_URL` | string |  | secret | v0.3.8 | Slack incoming webhook URL for incident and operator activity notifications. Empty disables the Slack channel. Re-read after an env-file reload. |
 | `LOOKOUT_DISCORD_WEBHOOK_URL` | string |  | secret | v0.3.8 | Discord webhook URL for incident and operator activity notifications. Empty disables the Discord channel. Re-read after an env-file reload. |
-| `LOOKOUT_OPS_SLACK_WEBHOOK_URL` | string |  | secret | v0.3.11 | Slack destination for platform incidents and operational activity. Re-read after env reload. |
-| `LOOKOUT_OPS_DISCORD_WEBHOOK_URL` | string |  | secret | v0.3.11 | Discord destination for platform incidents and operational activity. Re-read after env reload. |
-| `LOOKOUT_BUSINESS_PULSE_SLACK_WEBHOOK_URL` | string |  | secret | v0.3.11 | Slack destination for business pulse activity. Re-read after env reload. |
-| `LOOKOUT_BUSINESS_PULSE_DISCORD_WEBHOOK_URL` | string |  | secret | v0.3.11 | Discord destination for business pulse activity. Re-read after env reload. |
-| `LOOKOUT_NOTIFY_LEGACY_FALLBACK` | boolean | `true` |  | v0.3.11 | Use shared webhook destinations for new notifications lacking a purpose destination. Existing queued legacy rows retain their destination. |
-| `LOOKOUT_OPS_NOTIFICATIONS_DISABLED` | boolean | `false` |  | v0.3.11 | Disable new ops notifications and purpose-specific deliveries without business fallback. |
-| `LOOKOUT_BUSINESS_PULSE_NOTIFICATIONS_DISABLED` | boolean | `false` |  | v0.3.11 | Disable new business pulse notifications and purpose-specific deliveries without ops fallback. |
+| `LOOKOUT_OPS_SLACK_WEBHOOK_URL` | string |  | secret | v0.3.12 | Slack destination for platform incidents and operational activity. Re-read after env reload. |
+| `LOOKOUT_OPS_DISCORD_WEBHOOK_URL` | string |  | secret | v0.3.12 | Discord destination for platform incidents and operational activity. Re-read after env reload. |
+| `LOOKOUT_BUSINESS_PULSE_SLACK_WEBHOOK_URL` | string |  | secret | v0.3.12 | Slack destination for business pulse activity. Re-read after env reload. |
+| `LOOKOUT_BUSINESS_PULSE_DISCORD_WEBHOOK_URL` | string |  | secret | v0.3.12 | Discord destination for business pulse activity. Re-read after env reload. |
+| `LOOKOUT_NOTIFY_LEGACY_FALLBACK` | boolean | `true` |  | v0.3.12 | Use shared webhook destinations for new notifications lacking a purpose destination. Existing queued legacy rows retain their destination. |
+| `LOOKOUT_OPS_NOTIFICATIONS_DISABLED` | boolean | `false` |  | v0.3.12 | Disable new ops notifications and purpose-specific deliveries without business fallback. |
+| `LOOKOUT_BUSINESS_PULSE_NOTIFICATIONS_DISABLED` | boolean | `false` |  | v0.3.12 | Disable new business pulse notifications and purpose-specific deliveries without ops fallback. |
 | `SMTP_HOST` | string |  |  | v0.3.8 | SMTP server host for incident emails. Empty fails every email delivery. Re-read after an env-file reload. |
 | `SMTP_PORT` | string | `587` |  | v0.3.8 | SMTP server port for incident emails. Re-read after an env-file reload. |
 | `SMTP_USER` | string |  |  | v0.3.8 | SMTP user for incident emails. Re-read after an env-file reload. |

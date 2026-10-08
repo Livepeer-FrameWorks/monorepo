@@ -231,14 +231,15 @@ if [ -n "$diff_base" ]; then
   # committed change, even when a subsequent event base would hide it.
   check_name_status_stream < <(git diff --name-status -z "$latest_tag_commit"...HEAD -- "${path_args[@]}")
 elif [ "$worktree" = true ]; then
-  check_name_status_stream < <(git diff --name-status -z "$latest_tag_commit"...HEAD -- "${path_args[@]}")
-  check_name_status_stream < <(git diff --name-status -z HEAD -- "${path_args[@]}")
+  # Compare the final working tree directly with shipped SQL. An intermediate
+  # feature commit can contain a migration moved after a concurrent release.
+  check_name_status_stream < <(git diff --name-status -z "$latest_tag_commit" -- "${path_args[@]}")
   while IFS= read -r -d '' file; do
     check_added_or_modified "$file"
   done < <(git ls-files --others --exclude-standard -z -- "${path_args[@]}")
 else
   # Pre-commit mode: lefthook supplies staged migration paths as path_args.
-  check_name_status_stream < <(git diff --cached --name-status -z -- "${path_args[@]}")
+  check_name_status_stream < <(git diff --cached --name-status -z "$latest_tag_commit" -- "${path_args[@]}")
 fi
 
 if [ "${#violations[@]}" -gt 0 ]; then

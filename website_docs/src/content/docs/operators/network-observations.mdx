@@ -8,6 +8,10 @@ with real gateway transcoding observations. Unknown coverage remains unknown; re
 performance is shown separately. The platform-operator webapp can enable private
 correlation through the authenticated diagnostics route.
 
+This feature requires platform `v0.3.12` and CLI `v0.3.12-rc1` or later. Upgrade
+existing clusters with the release's ClickHouse expand migration and initialize
+the new observer database from its baseline.
+
 ## Coordinator
 
 Build with `make build-bin-network-observer`. Apply the `network_observer` baseline to
