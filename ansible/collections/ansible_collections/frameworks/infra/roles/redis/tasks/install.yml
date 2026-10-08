@@ -125,6 +125,16 @@
     redis_runtime_group: "{{ redis_runtime_user_result.stdout }}"
   when: redis_named_instance | bool
 
+# go_service, helmsman and mistserver own /etc/frameworks (frameworks:frameworks);
+# setting an owner here would flip it back and forth on every apply.
+- name: Ensure /etc/frameworks exists
+  ansible.builtin.file:
+    path: /etc/frameworks
+    state: directory
+    mode: "0755"
+  when:
+    - redis_named_instance | bool
+
 - name: Ensure named Redis directories
   ansible.builtin.file:
     path: "{{ item.path }}"
@@ -133,10 +143,6 @@
     group: "{{ omit if ansible_check_mode else item.group | default(redis_runtime_group) }}"
     mode: "{{ item.mode }}"
   loop:
-    - path: /etc/frameworks
-      owner: root
-      group: root
-      mode: "0755"
     - path: /etc/frameworks/redis
       owner: root
       group: root
