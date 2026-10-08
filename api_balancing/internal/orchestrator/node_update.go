@@ -190,10 +190,7 @@ func cordonNodeForUpdate(ctx context.Context, nodeID string) error {
 }
 
 func fenceNodeAfterUpdateFailure(ctx context.Context, nodeID string) error {
-	if err := state.DefaultManager().SetNodeOperationalMode(ctx, nodeID, state.NodeModeMaintenance, "update-orchestrator"); err != nil {
-		return err
-	}
-	return control.PushOperationalMode(nodeID, ipcpb.NodeOperationalMode_NODE_OPERATIONAL_MODE_MAINTENANCE)
+	return control.FenceNodeAfterUpdateFailure(ctx, nodeID, nil)
 }
 
 func restoreNodeRouting(ctx context.Context, nodeID string) error {
@@ -270,10 +267,14 @@ func persistPhaseWithExpected(ctx context.Context, nodeID, targetRelease, phase,
 		}
 		expectedArg = sql.NullString{String: string(encoded), Valid: true}
 	}
-	return foghorndb.New(db).UpsertNodeUpdateProgress(ctx, foghorndb.UpsertNodeUpdateProgressParams{
+	if err := foghorndb.New(db).UpsertNodeUpdateProgress(ctx, foghorndb.UpsertNodeUpdateProgressParams{
 		NodeID: nodeID, TargetRelease: targetRelease, Phase: phase,
 		Deadline: deadlineArg, ExpectedComponents: expectedArg, LastError: lastError,
-	})
+	}); err != nil {
+		return err
+	}
+	control.LogNodeUpdatePhase(nodeID, targetRelease, phase, lastError, deadline)
+	return nil
 }
 
 func newCordonToken() (string, error) {

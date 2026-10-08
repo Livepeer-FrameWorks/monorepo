@@ -296,6 +296,7 @@ type releaseApplyOptions struct {
 	skipValidation               bool
 	noRollback                   bool
 	completeInterruptedBaselines bool
+	edgeWait                     time.Duration
 }
 
 func newClusterReleaseApplyCmd() *cobra.Command {
@@ -323,6 +324,7 @@ func newClusterReleaseApplyCmd() *cobra.Command {
 	cmd.Flags().BoolVar(&opts.skipValidation, "skip-validation", false, "Skip health validation after each service upgrade")
 	cmd.Flags().BoolVar(&opts.noRollback, "no-rollback", false, "Skip automatic rollback on a service health-check failure")
 	cmd.Flags().BoolVar(&opts.completeInterruptedBaselines, "complete-interrupted-baselines", false, "Reapply and verify baselines for populated databases without migration provenance")
+	cmd.Flags().DurationVar(&opts.edgeWait, "edge-wait", edgeRolloutReleaseWait, "How long to wait for every edge to report the release after syncing the edge target")
 	cmd.Flags().Bool(unsafeCLIFloorFlag, false, "UNSAFE: let a non-concrete (dev/unversioned) CLI bypass the release's min_cli_version floor")
 	return cmd
 }
@@ -557,16 +559,25 @@ func runReleaseApply(cmd *cobra.Command, rc *resolvedCluster, opts releaseApplyO
 	}
 	fmt.Fprintf(out, "  Contract migrations remain deferred. After the rollback window closes, take a fresh backup with `frameworks cluster backup create --to <backup-dir> --all`, then run `frameworks cluster migrate --phase contract --to-version %s --backup <completed-backup-path> --dry-run` and repeat with --yes in place of --dry-run.\n", platformVersion)
 
-	// Keep the edge target pinned to this release's resolved version.
-	if !opts.dryRun {
-		ux.Subheading(out, "Syncing edge release target")
-		if err := syncClusterEdgeReleaseTargetPinned(cmd, rc, releaseChannel, platformVersion, nil); err != nil {
-			return fmt.Errorf("edge release target sync: %w", err)
-		}
-	}
-
 	if opts.dryRun {
 		ux.Success(out, "Dry-run complete: all gates and reconciliation Checks passed; nothing was mutated")
+		return nil
+	}
+
+	// Keep the edge target pinned to this release's resolved version. The
+	// target only tells Foghorn's reconciler what to roll out; the edges have
+	// the release once they report it, which the wait below checks.
+	ux.Subheading(out, "Syncing edge release target")
+	if err := syncClusterEdgeReleaseTargetPinned(cmd, rc, releaseChannel, platformVersion, nil); err != nil {
+		return fmt.Errorf("edge release target sync: %w", err)
+	}
+	ux.Subheading(out, "Waiting for edges to report the release")
+	edgesConverged, edgeErr := releaseVerifyEdgeRolloutFn(cmd, rc, opts.edgeWait)
+	if edgeErr != nil {
+		return fmt.Errorf("release %s applied to the control plane, but the edge rollout failed: %w", version, edgeErr)
+	}
+	if !edgesConverged {
+		ux.Warn(out, fmt.Sprintf("Release %s applied to the control plane; the edge fleet has not converged yet", version))
 		return nil
 	}
 	ux.Success(out, fmt.Sprintf("Release %s applied", version))

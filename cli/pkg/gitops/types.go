@@ -215,6 +215,11 @@ type ServiceInfo struct {
 	Variants  map[string]ServiceVariant
 	Binaries  map[string]Artifact
 	FullImage string
+	// ReleaseVersion is the platform release whose manifest listed this
+	// artifact; CarriedFrom is set when that release carried the artifact
+	// forward from an earlier release instead of rebuilding it.
+	ReleaseVersion string
+	CarriedFrom    string
 }
 
 // ValidateServiceArtifacts verifies each service's native artifacts match that

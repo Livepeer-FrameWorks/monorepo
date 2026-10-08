@@ -11,6 +11,7 @@ import (
 	"frameworks/api_balancing/internal/state"
 
 	"github.com/DATA-DOG/go-sqlmock"
+	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
 )
 
 type recordedModes struct {
@@ -68,6 +69,7 @@ func TestUpdateWarmupSupersededAttemptNeverFences(t *testing.T) {
 
 	sm.SetNodeInfo("edge-1", "https://edge.example", true, nil, nil, "", "", nil)
 	sm.TouchNode("edge-1", false) // never warm, so a current watcher would time out
+	sm.TouchNode("edge-2", true)  // another routable node, so fencing edge-1 keeps the cluster served
 
 	first := updateWarmups.begin("edge-1")
 	second := updateWarmups.begin("edge-1")
@@ -136,5 +138,71 @@ func TestCompleteUpdateWarmupLiftsOnlyOrchestratorFence(t *testing.T) {
 				t.Fatal(err)
 			}
 		})
+	}
+}
+
+// Production v0.3.11: a failed Mist warmup fenced a cluster's only routable
+// node into maintenance, taking the whole cluster offline. The failure is
+// recorded, but the last routable node returns to normal mode.
+func TestUpdateWarmupFailureKeepsClusterLastRoutableNodeNormal(t *testing.T) {
+	sm := state.ResetDefaultManagerForTests()
+	t.Cleanup(func() { state.ResetDefaultManagerForTests() })
+	t.Cleanup(sm.Shutdown)
+	mock, rec := installUpdateWarmupDoubles(t)
+	updateWarmupTimeout, updateWarmupTick = 0, time.Millisecond
+
+	sm.SetNodeInfo("edge-1", "https://edge.example", true, nil, nil, "", "", nil)
+	sm.TouchNode("edge-1", false)
+	if err := sm.SetNodeOperationalMode(context.Background(), "edge-1", state.NodeModeDraining, UpdateOrchestratorModeSetter); err != nil {
+		t.Fatal(err)
+	}
+
+	attempt := updateWarmups.begin("edge-1")
+	mock.ExpectQuery("GetNodeUpdateProgress").WillReturnRows(updateProgressRow("rc:v2", "warming_restore"))
+	mock.ExpectQuery("GetNodeUpdateProgress").WillReturnRows(updateProgressRow("rc:v2", "warming_restore"))
+	mock.ExpectExec("UpsertNodeUpdateProgress").
+		WithArgs("edge-1", "rc:v2", "failed", "warmup probe timed out", sqlmock.AnyArg(), nil).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	completeUpdateWarmup("edge-1", "rc:v2", map[string]string{"mist": "v2"}, time.Now(), attempt, nil)
+
+	got := rec.all()
+	for _, mode := range got {
+		if mode == state.NodeModeMaintenance {
+			t.Fatalf("the cluster's only routable node was fenced into maintenance: modes=%v", got)
+		}
+	}
+	if len(got) != 1 || got[0] != state.NodeModeNormal {
+		t.Fatalf("the cordoned last routable node did not return to normal: modes=%v", got)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// Helmsman reports a successful self-update before it execs the new binary.
+// Recording that result as idle declared the node updated even when the new
+// Helmsman never came back; it must wait for the reconnect instead.
+func TestHelmsmanSelfUpdateResultWaitsForReconnect(t *testing.T) {
+	sm := state.ResetDefaultManagerForTests()
+	t.Cleanup(func() { state.ResetDefaultManagerForTests() })
+	t.Cleanup(sm.Shutdown)
+	mock, rec := installUpdateWarmupDoubles(t)
+
+	mock.ExpectQuery("GetNodeUpdateProgress").WillReturnRows(updateProgressRow("rc:v2", "updating"))
+	mock.ExpectExec("UpsertNodeUpdateProgress").
+		WithArgs("edge-1", "rc:v2", "warming", "", sqlmock.AnyArg(), `{"helmsman":"v2"}`).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+
+	processUpdateApplyResult(&ipcpb.UpdateApplyResult{
+		NodeId:        "edge-1",
+		TargetRelease: "rc:v2",
+		Components:    []*ipcpb.ComponentApplyResult{{Component: "helmsman", Version: "v2", Success: true}},
+	}, "edge-1", nil)
+
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("helmsman self-update result was not held for reconnect: %v", err)
+	}
+	if got := rec.all(); len(got) != 0 {
+		t.Fatalf("helmsman self-update result changed the node mode: %v", got)
 	}
 }

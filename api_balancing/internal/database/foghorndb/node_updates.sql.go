@@ -9,6 +9,8 @@ import (
 	"context"
 	"database/sql"
 	"time"
+
+	"github.com/lib/pq"
 )
 
 const getNodeUpdatePhase = `-- name: GetNodeUpdatePhase :one
@@ -73,6 +75,42 @@ func (q *Queries) GetNodeUpdateProgress(ctx context.Context, nodeID string) (Get
 	return i, err
 }
 
+const listComponentVersionsForNodes = `-- name: ListComponentVersionsForNodes :many
+SELECT node_id, component, COALESCE(current_version, '')::text AS current_version
+FROM foghorn.node_components
+WHERE node_id = ANY($1::text[])
+ORDER BY node_id, component
+`
+
+type ListComponentVersionsForNodesRow struct {
+	NodeID         string `db:"node_id" json:"node_id"`
+	Component      string `db:"component" json:"component"`
+	CurrentVersion string `db:"current_version" json:"current_version"`
+}
+
+func (q *Queries) ListComponentVersionsForNodes(ctx context.Context, nodeIds []string) ([]ListComponentVersionsForNodesRow, error) {
+	rows, err := q.db.QueryContext(ctx, listComponentVersionsForNodes, pq.Array(nodeIds))
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListComponentVersionsForNodesRow{}
+	for rows.Next() {
+		var i ListComponentVersionsForNodesRow
+		if err := rows.Scan(&i.NodeID, &i.Component, &i.CurrentVersion); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listNodeComponents = `-- name: ListNodeComponents :many
 SELECT component, COALESCE(current_version, '')::text AS current_version
 FROM foghorn.node_components
@@ -94,6 +132,56 @@ func (q *Queries) ListNodeComponents(ctx context.Context, nodeID string) ([]List
 	for rows.Next() {
 		var i ListNodeComponentsRow
 		if err := rows.Scan(&i.Component, &i.CurrentVersion); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listNodeUpdateStatuses = `-- name: ListNodeUpdateStatuses :many
+SELECT node_id,
+       COALESCE(target_release, '')::text AS target_release,
+       phase,
+       COALESCE(last_error, '')::text AS last_error,
+       deadline,
+       updated_at
+FROM foghorn.node_update_state
+WHERE node_id = ANY($1::text[])
+`
+
+type ListNodeUpdateStatusesRow struct {
+	NodeID        string       `db:"node_id" json:"node_id"`
+	TargetRelease string       `db:"target_release" json:"target_release"`
+	Phase         string       `db:"phase" json:"phase"`
+	LastError     string       `db:"last_error" json:"last_error"`
+	Deadline      sql.NullTime `db:"deadline" json:"deadline"`
+	UpdatedAt     time.Time    `db:"updated_at" json:"updated_at"`
+}
+
+func (q *Queries) ListNodeUpdateStatuses(ctx context.Context, nodeIds []string) ([]ListNodeUpdateStatusesRow, error) {
+	rows, err := q.db.QueryContext(ctx, listNodeUpdateStatuses, pq.Array(nodeIds))
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListNodeUpdateStatusesRow{}
+	for rows.Next() {
+		var i ListNodeUpdateStatusesRow
+		if err := rows.Scan(
+			&i.NodeID,
+			&i.TargetRelease,
+			&i.Phase,
+			&i.LastError,
+			&i.Deadline,
+			&i.UpdatedAt,
+		); err != nil {
 			return nil, err
 		}
 		items = append(items, i)

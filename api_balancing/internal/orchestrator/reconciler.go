@@ -109,6 +109,11 @@ func reconcileTarget(ctx context.Context, qm *qmclient.GRPCClient, target *quart
 		return err
 	}
 	targetRelease := fmt.Sprintf("%s:%s", release.GetChannel(), release.GetVersion())
+	_, snapshot := state.DefaultManager().GetClusterSnapshot()
+	clusterNodes := nodesInCluster(snapshot, target.GetClusterId())
+	if warmupErr := failDisconnectedWarmups(ctx, clusterNodes, targetRelease); warmupErr != nil {
+		return warmupErr
+	}
 	if rolloutFailed(ctx, target.GetClusterId(), targetRelease, plan) {
 		return nil
 	}
@@ -116,8 +121,6 @@ func reconcileTarget(ctx context.Context, qm *qmclient.GRPCClient, target *quart
 	if err != nil {
 		return err
 	}
-	_, snapshot := state.DefaultManager().GetClusterSnapshot()
-	clusterNodes := nodesInCluster(snapshot, target.GetClusterId())
 	nodes, err := reconcileEligibleNodes(ctx, clusterNodes, target.GetClusterId())
 	if err != nil {
 		return err
@@ -249,6 +252,13 @@ func reconcileTarget(ctx context.Context, qm *qmclient.GRPCClient, target *quart
 		if fenced && progress.Phase == "failed" && progress.TargetRelease == targetRelease {
 			continue
 		}
+		// A failed update on the cluster's last routable node is not fenced
+		// (that would take the cluster offline), so the fence above does not
+		// stop retries. Retrying a Mist swap there would interrupt every
+		// stream of the cluster each pass.
+		if progress.Phase == "failed" && progress.TargetRelease == targetRelease && desiredComponentsInclude(direct, "mist") && control.NodeIsClusterLastRoutable(node.NodeID) {
+			continue
+		}
 		if budget <= 0 {
 			continue
 		}
@@ -277,6 +287,45 @@ func applyReleaseUpdate(ctx context.Context, nodeID, clusterID, targetRelease st
 		TargetRelease: targetRelease,
 		Components:    components,
 	})
+}
+
+func desiredComponentsInclude(components []*ipcpb.DesiredComponent, name string) bool {
+	for _, component := range components {
+		if component != nil && component.GetComponent() == name {
+			return true
+		}
+	}
+	return false
+}
+
+// failDisconnectedWarmups records a failure for each node of the cluster that
+// is disconnected past the deadline of its warmup on the target release. The
+// rollout only drives connected nodes, so without this a node whose new
+// Helmsman never reconnected would keep its warmup phase forever and the
+// rollout would stall with nothing recorded.
+func failDisconnectedWarmups(ctx context.Context, nodes []*state.NodeState, targetRelease string) error {
+	for _, node := range nodes {
+		if node == nil || (node.IsHealthy && !node.IsStale) {
+			continue
+		}
+		progress, err := loadProgress(ctx, node.NodeID)
+		if err != nil {
+			return err
+		}
+		if progress.TargetRelease != targetRelease || (progress.Phase != "warming" && progress.Phase != "warming_restore") || !deadlineExpired(progress.Deadline) {
+			continue
+		}
+		reason := "node did not reconnect before the update warmup deadline"
+		_, helmsman := progress.ExpectedComponents["helmsman"]
+		_, mist := progress.ExpectedComponents["mist"]
+		if helmsman && !mist {
+			reason = control.HelmsmanReconnectFailure
+		}
+		if err := persistPhase(ctx, node.NodeID, targetRelease, "failed", reason, progress.Deadline); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func desiredComponentsRequireDrain(components []*ipcpb.DesiredComponent) bool {
@@ -455,7 +504,7 @@ func eligibleNodes(nodes []*state.NodeState, clusterID string) []*state.NodeStat
 func reconcileEligibleNodes(ctx context.Context, nodes []*state.NodeState, clusterID string) ([]*state.NodeState, error) {
 	out := make([]*state.NodeState, 0, len(nodes))
 	for _, node := range nodes {
-		if node == nil || node.ClusterID != clusterID || !node.IsHealthy || node.IsStale || !nodeSupportsAutomaticReleaseUpdate(node) {
+		if node == nil || node.ClusterID != clusterID || !node.IsHealthy || node.IsStale || !NodeSupportsAutomaticReleaseUpdate(node) {
 			continue
 		}
 		mode := node.OperationalMode
@@ -499,13 +548,16 @@ func nodesInCluster(nodes []*state.NodeState, clusterID string) []*state.NodeSta
 }
 
 func nodeAllowsAutomaticReleaseUpdate(node *state.NodeState) bool {
-	if !nodeSupportsAutomaticReleaseUpdate(node) {
+	if !NodeSupportsAutomaticReleaseUpdate(node) {
 		return false
 	}
 	return node.OperationalMode == "" || node.OperationalMode == state.NodeModeNormal
 }
 
-func nodeSupportsAutomaticReleaseUpdate(node *state.NodeState) bool {
+// NodeSupportsAutomaticReleaseUpdate reports whether the release reconciler
+// can update the node in place: a native or single-image container deploy
+// with a known platform.
+func NodeSupportsAutomaticReleaseUpdate(node *state.NodeState) bool {
 	if node == nil {
 		return false
 	}

@@ -1353,6 +1353,7 @@ var EdgeProvisioningService_ServiceDesc = grpc.ServiceDesc{
 const (
 	NodeControlService_SetNodeOperationalMode_FullMethodName = "/foghorn.NodeControlService/SetNodeOperationalMode"
 	NodeControlService_GetNodeHealth_FullMethodName          = "/foghorn.NodeControlService/GetNodeHealth"
+	NodeControlService_ListNodeUpdateStatus_FullMethodName   = "/foghorn.NodeControlService/ListNodeUpdateStatus"
 )
 
 // NodeControlServiceClient is the client API for NodeControlService service.
@@ -1367,6 +1368,11 @@ type NodeControlServiceClient interface {
 	SetNodeOperationalMode(ctx context.Context, in *foghorn_control.SetNodeModeRequest, opts ...grpc.CallOption) (*foghorn_control.SetNodeModeResponse, error)
 	// GetNodeHealth returns real-time health and routing state for a node.
 	GetNodeHealth(ctx context.Context, in *foghorn_control.GetNodeHealthRequest, opts ...grpc.CallOption) (*foghorn_control.GetNodeHealthResponse, error)
+	// ListNodeUpdateStatus returns, for every node of one cluster this Foghorn
+	// tracks, the edge release update flow's phase and the component versions
+	// the node last reported. A service caller sees every node of the cluster;
+	// a tenant caller sees only the nodes it owns.
+	ListNodeUpdateStatus(ctx context.Context, in *foghorn_control.ListNodeUpdateStatusRequest, opts ...grpc.CallOption) (*foghorn_control.ListNodeUpdateStatusResponse, error)
 }
 
 type nodeControlServiceClient struct {
@@ -1397,6 +1403,16 @@ func (c *nodeControlServiceClient) GetNodeHealth(ctx context.Context, in *foghor
 	return out, nil
 }
 
+func (c *nodeControlServiceClient) ListNodeUpdateStatus(ctx context.Context, in *foghorn_control.ListNodeUpdateStatusRequest, opts ...grpc.CallOption) (*foghorn_control.ListNodeUpdateStatusResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(foghorn_control.ListNodeUpdateStatusResponse)
+	err := c.cc.Invoke(ctx, NodeControlService_ListNodeUpdateStatus_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // NodeControlServiceServer is the server API for NodeControlService service.
 // All implementations must embed UnimplementedNodeControlServiceServer
 // for forward compatibility.
@@ -1409,6 +1425,11 @@ type NodeControlServiceServer interface {
 	SetNodeOperationalMode(context.Context, *foghorn_control.SetNodeModeRequest) (*foghorn_control.SetNodeModeResponse, error)
 	// GetNodeHealth returns real-time health and routing state for a node.
 	GetNodeHealth(context.Context, *foghorn_control.GetNodeHealthRequest) (*foghorn_control.GetNodeHealthResponse, error)
+	// ListNodeUpdateStatus returns, for every node of one cluster this Foghorn
+	// tracks, the edge release update flow's phase and the component versions
+	// the node last reported. A service caller sees every node of the cluster;
+	// a tenant caller sees only the nodes it owns.
+	ListNodeUpdateStatus(context.Context, *foghorn_control.ListNodeUpdateStatusRequest) (*foghorn_control.ListNodeUpdateStatusResponse, error)
 	mustEmbedUnimplementedNodeControlServiceServer()
 }
 
@@ -1424,6 +1445,9 @@ func (UnimplementedNodeControlServiceServer) SetNodeOperationalMode(context.Cont
 }
 func (UnimplementedNodeControlServiceServer) GetNodeHealth(context.Context, *foghorn_control.GetNodeHealthRequest) (*foghorn_control.GetNodeHealthResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method GetNodeHealth not implemented")
+}
+func (UnimplementedNodeControlServiceServer) ListNodeUpdateStatus(context.Context, *foghorn_control.ListNodeUpdateStatusRequest) (*foghorn_control.ListNodeUpdateStatusResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ListNodeUpdateStatus not implemented")
 }
 func (UnimplementedNodeControlServiceServer) mustEmbedUnimplementedNodeControlServiceServer() {}
 func (UnimplementedNodeControlServiceServer) testEmbeddedByValue()                            {}
@@ -1482,6 +1506,24 @@ func _NodeControlService_GetNodeHealth_Handler(srv interface{}, ctx context.Cont
 	return interceptor(ctx, in, info, handler)
 }
 
+func _NodeControlService_ListNodeUpdateStatus_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(foghorn_control.ListNodeUpdateStatusRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(NodeControlServiceServer).ListNodeUpdateStatus(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: NodeControlService_ListNodeUpdateStatus_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(NodeControlServiceServer).ListNodeUpdateStatus(ctx, req.(*foghorn_control.ListNodeUpdateStatusRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // NodeControlService_ServiceDesc is the grpc.ServiceDesc for NodeControlService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -1496,6 +1538,10 @@ var NodeControlService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "GetNodeHealth",
 			Handler:    _NodeControlService_GetNodeHealth_Handler,
+		},
+		{
+			MethodName: "ListNodeUpdateStatus",
+			Handler:    _NodeControlService_ListNodeUpdateStatus_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

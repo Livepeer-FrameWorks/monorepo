@@ -2469,6 +2469,25 @@ Supported rollout-plan controls are limited to implemented scheduler behavior
 such as `batch_size`, `canary`, `canary_count`, `error_abort`, and `max_failed`;
 capacity-floor fields are rejected until disruptive drain rollouts need them.
 
+### frameworks cluster edges rollout status
+
+Compare every edge node's reported component versions with its cluster's edge
+release target and print one line per node: `converged`, `not converged` (with
+the components still behind), `failed` (with the phase and Foghorn's last
+error), `not connected to Foghorn` (enrolled in Quartermaster but absent from
+Foghorn), or `not updated automatically`. Defaults to every manifest cluster;
+`--cluster-id` narrows it to one.
+
+```bash
+frameworks cluster edges rollout status
+frameworks cluster edges rollout status --cluster-id media-eu --wait 15m
+```
+
+`--wait` polls (every `--interval`, default 15s) until every edge converges, a
+node fails, or the wait passes. The command exits non-zero only when a node's
+update failed; unconverged edges are a warning. `cluster release apply` runs
+the same check after syncing the edge target, bounded by `--edge-wait`.
+
 ---
 
 ## Edge Commands

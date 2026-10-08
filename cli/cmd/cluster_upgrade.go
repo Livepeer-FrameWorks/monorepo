@@ -502,7 +502,7 @@ func runUpgrade(cmd *cobra.Command, rc *resolvedCluster, serviceName, version st
 	if err != nil {
 		return result, fmt.Errorf("service %s not found in GitOps manifest: %w", deployName, err)
 	}
-	fmt.Fprintf(cmd.OutOrStdout(), "  New version: %s\n", svcInfo.Version)
+	fmt.Fprintf(cmd.OutOrStdout(), "  New version: %s\n", upgradeTargetLabel(svcInfo))
 
 	// The fetched release manifest may list this service under rollback_disabled: its readiness contract changed such
 	// that a restored previous binary cannot pass the current gate, so automatic rollback is unsafe for this upgrade
@@ -979,7 +979,7 @@ func upgradeServiceOnHost(ctx context.Context, cmd *cobra.Command, rc *resolvedC
 			fmt.Fprintf(cmd.OutOrStdout(), "    [DRY-RUN] Would install %s at %s (mode: %s)\n", host.ExternalIP, svcInfo.Version, config.Mode)
 			result.installed = true
 		} else {
-			fmt.Fprintf(cmd.OutOrStdout(), "    [DRY-RUN] Would upgrade %s from %s to %s (mode: %s)\n", host.ExternalIP, state.Version, svcInfo.Version, state.Mode)
+			fmt.Fprintf(cmd.OutOrStdout(), "    [DRY-RUN] Would upgrade %s from %s to %s (mode: %s)\n", host.ExternalIP, state.Version, upgradeTargetLabel(svcInfo), state.Mode)
 		}
 		checker, ok := prov.(provisioner.CheckDiffer)
 		if !ok {
@@ -1077,11 +1077,26 @@ func upgradeServiceOnHost(ctx context.Context, cmd *cobra.Command, rc *resolvedC
 	}
 
 	if firstInstall {
-		ux.Success(cmd.OutOrStdout(), fmt.Sprintf("  %s installed at %s", host.ExternalIP, svcInfo.Version))
+		ux.Success(cmd.OutOrStdout(), fmt.Sprintf("  %s installed at %s", host.ExternalIP, upgradeTargetLabel(svcInfo)))
 	} else {
-		ux.Success(cmd.OutOrStdout(), fmt.Sprintf("  %s upgraded from %s to %s", host.ExternalIP, previousVersion, svcInfo.Version))
+		ux.Success(cmd.OutOrStdout(), fmt.Sprintf("  %s upgraded from %s to %s", host.ExternalIP, previousVersion, upgradeTargetLabel(svcInfo)))
 	}
 	return upgradeResult{changed: true, installed: firstInstall}, nil
+}
+
+// upgradeTargetLabel names what an upgrade deployed. A carried-forward
+// artifact keeps the build label of the release that built it, which alone
+// reads as if an older or different release was deployed; the label names the
+// release being applied and the unchanged build.
+func upgradeTargetLabel(info *gitops.ServiceInfo) string {
+	if info == nil {
+		return ""
+	}
+	release := strings.TrimSpace(info.ReleaseVersion)
+	if strings.TrimSpace(info.CarriedFrom) == "" || release == "" || info.Version == release {
+		return info.Version
+	}
+	return fmt.Sprintf("release %s (build %s, unchanged since)", release, info.Version)
 }
 
 // currentArtifactNeedsConvergence runs the role's check-mode precheck for a replica that already runs the target

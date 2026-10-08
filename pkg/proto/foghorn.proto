@@ -252,6 +252,11 @@ service NodeControlService {
   rpc SetNodeOperationalMode(foghorn_control.SetNodeModeRequest) returns (foghorn_control.SetNodeModeResponse);
   // GetNodeHealth returns real-time health and routing state for a node.
   rpc GetNodeHealth(foghorn_control.GetNodeHealthRequest) returns (foghorn_control.GetNodeHealthResponse);
+  // ListNodeUpdateStatus returns, for every node of one cluster this Foghorn
+  // tracks, the edge release update flow's phase and the component versions
+  // the node last reported. A service caller sees every node of the cluster;
+  // a tenant caller sees only the nodes it owns.
+  rpc ListNodeUpdateStatus(foghorn_control.ListNodeUpdateStatusRequest) returns (foghorn_control.ListNodeUpdateStatusResponse);
 }
 
 // TenantControlService handles tenant-level operations called by Purser

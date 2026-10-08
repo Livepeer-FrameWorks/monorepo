@@ -4696,6 +4696,7 @@ func jwtCapableMethods() []string {
 	return []string{
 		foghornpb.NodeControlService_SetNodeOperationalMode_FullMethodName,
 		foghornpb.NodeControlService_GetNodeHealth_FullMethodName,
+		foghornpb.NodeControlService_ListNodeUpdateStatus_FullMethodName,
 		foghornpb.DVRControlService_DiagnoseDVR_FullMethodName,
 	}
 }
@@ -6648,6 +6649,27 @@ func processUpdateApplyResult(result *ipcpb.UpdateApplyResult, fallbackNodeID st
 			}).Info("Processed node update apply result")
 		}
 		return
+	} else if updateResultIncludesComponent(result, "helmsman") {
+		// Helmsman reports a successful self-update before it execs the new
+		// binary, so success only means the swap was staged. The update is
+		// complete once the new Helmsman reconnects and reports the target
+		// versions; the reconciler finishes this warmup or records it failed
+		// when the deadline passes without a reconnect.
+		phase = "warming"
+		if updatePhaseRestoresRouting(updateState.Phase) {
+			phase = "warming_restore"
+		}
+		if err := persistNodeUpdateStateWithDeadlineAndExpected(nodeID, targetRelease, phase, "", time.Now().Add(HelmsmanReconnectTimeout), expectedVersions); err != nil && log != nil {
+			log.WithError(err).WithField("node_id", nodeID).Warn("Failed to persist node update reconnect phase")
+		}
+		if log != nil {
+			log.WithFields(logging.Fields{
+				"node_id":        nodeID,
+				"target_release": targetRelease,
+				"phase":          phase,
+			}).Info("Processed node update apply result")
+		}
+		return
 	} else if updatePhaseRestoresRouting(updateState.Phase) {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		if err := state.DefaultManager().SetNodeOperationalMode(ctx, nodeID, state.NodeModeNormal, "update-orchestrator"); err != nil && log != nil {
@@ -6671,13 +6693,27 @@ func processUpdateApplyResult(result *ipcpb.UpdateApplyResult, fallbackNodeID st
 }
 
 func updateResultIncludesMist(result *ipcpb.UpdateApplyResult) bool {
+	return updateResultIncludesComponent(result, "mist")
+}
+
+func updateResultIncludesComponent(result *ipcpb.UpdateApplyResult, name string) bool {
 	for _, component := range result.GetComponents() {
-		if component != nil && strings.EqualFold(strings.TrimSpace(component.GetComponent()), "mist") {
+		if component != nil && strings.EqualFold(strings.TrimSpace(component.GetComponent()), name) {
 			return true
 		}
 	}
 	return false
 }
+
+// HelmsmanReconnectTimeout bounds how long a node may stay disconnected after
+// a successful Helmsman self-update before the update is recorded as failed.
+// It stays below the node-state eviction grace so the reconciler still sees
+// the disconnected node when the deadline passes.
+var HelmsmanReconnectTimeout = 2 * time.Minute
+
+// HelmsmanReconnectFailure is the update failure recorded for a node whose new
+// Helmsman did not reconnect before HelmsmanReconnectTimeout.
+const HelmsmanReconnectFailure = "helmsman did not reconnect after self-update"
 
 // UpdateOrchestratorModeSetter marks operational modes set by the edge update
 // flow. Only modes it set may be lifted by that flow; operator modes are kept.
@@ -6812,9 +6848,50 @@ func completeUpdateWarmup(nodeID, targetRelease string, expectedVersions map[str
 func fenceNodeAfterUpdateWarmupFailure(nodeID string, log logging.Logger) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	if err := applyUpdateNodeMode(ctx, nodeID, state.NodeModeMaintenance); err != nil && log != nil {
+	if err := FenceNodeAfterUpdateFailure(ctx, nodeID, log); err != nil && log != nil {
 		log.WithError(err).WithField("node_id", nodeID).Warn("Failed to fence node after update warmup failure")
 	}
+}
+
+// FenceNodeAfterUpdateFailure takes a node whose update failed out of routing
+// by putting it in maintenance. When no other node of its cluster is routable,
+// fencing it would take the whole cluster offline, so the node stays in (or
+// returns to) normal mode and only the failed phase records the failure. A nil
+// log falls back to the control registry's logger.
+func FenceNodeAfterUpdateFailure(ctx context.Context, nodeID string, log logging.Logger) error {
+	if !NodeIsClusterLastRoutable(nodeID) {
+		return applyUpdateNodeMode(ctx, nodeID, state.NodeModeMaintenance)
+	}
+	if log == nil && registry != nil {
+		log = registry.log
+	}
+	if log != nil {
+		log.WithField("node_id", nodeID).Warn("Kept the cluster's last routable node in normal mode after a failed update")
+	}
+	node := state.DefaultManager().GetNodeState(nodeID)
+	if node == nil || node.OperationalMode == "" || node.OperationalMode == state.NodeModeNormal || node.OperationalModeSetBy != UpdateOrchestratorModeSetter {
+		return nil
+	}
+	return applyUpdateNodeMode(ctx, nodeID, state.NodeModeNormal)
+}
+
+// NodeIsClusterLastRoutable reports whether no other node of nodeID's cluster
+// is healthy, fresh and in normal mode.
+func NodeIsClusterLastRoutable(nodeID string) bool {
+	node := state.DefaultManager().GetNodeState(nodeID)
+	if node == nil {
+		return false
+	}
+	_, nodes := state.DefaultManager().GetClusterSnapshot()
+	for _, other := range nodes {
+		if other == nil || other.NodeID == nodeID || other.ClusterID != node.ClusterID {
+			continue
+		}
+		if other.IsHealthy && !other.IsStale && (other.OperationalMode == "" || other.OperationalMode == state.NodeModeNormal) {
+			return false
+		}
+	}
+	return true
 }
 
 // CompleteUpdateWarmupIfReady completes warmup once health, version reporting,
@@ -6951,10 +7028,34 @@ func persistNodeUpdateStateWithDeadlineAndExpected(nodeID, targetRelease, phase,
 		}
 		expectedArg = sql.NullString{String: string(encoded), Valid: true}
 	}
-	return foghorndb.New(db).UpsertNodeUpdateProgress(ctx, foghorndb.UpsertNodeUpdateProgressParams{
+	if err := foghorndb.New(db).UpsertNodeUpdateProgress(ctx, foghorndb.UpsertNodeUpdateProgressParams{
 		NodeID: nodeID, TargetRelease: targetRelease, Phase: phase, LastError: lastError,
 		Deadline: deadlineArg, ExpectedComponents: expectedArg,
-	})
+	}); err != nil {
+		return err
+	}
+	LogNodeUpdatePhase(nodeID, targetRelease, phase, lastError, deadline)
+	return nil
+}
+
+// LogNodeUpdatePhase records a persisted update phase in the Foghorn log, so a
+// rollout's progress and failures are visible without reading the database.
+func LogNodeUpdatePhase(nodeID, targetRelease, phase, lastError string, deadline time.Time) {
+	if registry == nil || registry.log == nil {
+		return
+	}
+	fields := logging.Fields{
+		"node_id":        nodeID,
+		"target_release": targetRelease,
+		"phase":          phase,
+	}
+	if lastError != "" {
+		fields["last_error"] = lastError
+	}
+	if !deadline.IsZero() {
+		fields["phase_deadline"] = deadline.UTC().Format(time.RFC3339)
+	}
+	registry.log.WithFields(fields).Info("Node update phase recorded")
 }
 
 type nodeUpdateProgress struct {

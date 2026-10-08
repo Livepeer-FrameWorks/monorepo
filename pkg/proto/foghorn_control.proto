@@ -130,6 +130,38 @@ message NodeComponentVersion {
   string version = 2;
 }
 
+message ListNodeUpdateStatusRequest {
+  string cluster_id = 1;
+}
+
+message ListNodeUpdateStatusResponse {
+  repeated NodeUpdateStatus nodes = 1;
+}
+
+// NodeUpdateStatus is one node's edge release update state as Foghorn's
+// release reconciler records it.
+message NodeUpdateStatus {
+  string node_id = 1;
+  string cluster_id = 2;
+  // channel:version the update flow last worked toward; empty when the node
+  // has never been updated by the reconciler.
+  string target_release = 3;
+  // idle, cordoning, draining, drained, updating, updating_restore, warming,
+  // warming_restore or failed; empty when no update state is recorded.
+  string phase = 4;
+  string last_error = 5;
+  // When the current phase expires; empty when the phase has no deadline.
+  string phase_deadline = 6;  // ISO8601
+  string phase_updated_at = 7;  // ISO8601
+  repeated NodeComponentVersion component_versions = 8;
+  // Healthy with a fresh heartbeat on this Foghorn.
+  bool connected = 9;
+  string operational_mode = 10;
+  // Whether the release reconciler updates this node (native or
+  // single-image container deploy with a known platform).
+  bool automatic_updates = 11;
+}
+
 message InvalidateTenantCacheRequest {
   string tenant_id = 1;
   string reason = 2; // e.g., "reactivated", "balance_topped_up"

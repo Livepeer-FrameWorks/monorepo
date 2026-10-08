@@ -632,3 +632,11 @@ func (c *GRPCClient) GetNodeHealth(ctx context.Context, req *foghorncontrolpb.Ge
 	resp, err := c.nodeMgmt.GetNodeHealth(ctx, req, grpc.Trailer(&trailers))
 	return resp, trailers, err
 }
+
+// ListNodeUpdateStatus returns the edge release update state of every node of
+// one cluster this Foghorn tracks.
+func (c *GRPCClient) ListNodeUpdateStatus(ctx context.Context, clusterID string) (*foghorncontrolpb.ListNodeUpdateStatusResponse, error) {
+	ctx, cancel := context.WithTimeout(ctx, c.timeout)
+	defer cancel()
+	return c.nodeMgmt.ListNodeUpdateStatus(ctx, &foghorncontrolpb.ListNodeUpdateStatusRequest{ClusterId: clusterID})
+}

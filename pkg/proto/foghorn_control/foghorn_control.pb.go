@@ -1035,6 +1035,228 @@ func (x *NodeComponentVersion) GetVersion() string {
 	return ""
 }
 
+type ListNodeUpdateStatusRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	ClusterId     string                 `protobuf:"bytes,1,opt,name=cluster_id,json=clusterId,proto3" json:"cluster_id,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ListNodeUpdateStatusRequest) Reset() {
+	*x = ListNodeUpdateStatusRequest{}
+	mi := &file_foghorn_control_proto_msgTypes[10]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ListNodeUpdateStatusRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ListNodeUpdateStatusRequest) ProtoMessage() {}
+
+func (x *ListNodeUpdateStatusRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_foghorn_control_proto_msgTypes[10]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ListNodeUpdateStatusRequest.ProtoReflect.Descriptor instead.
+func (*ListNodeUpdateStatusRequest) Descriptor() ([]byte, []int) {
+	return file_foghorn_control_proto_rawDescGZIP(), []int{10}
+}
+
+func (x *ListNodeUpdateStatusRequest) GetClusterId() string {
+	if x != nil {
+		return x.ClusterId
+	}
+	return ""
+}
+
+type ListNodeUpdateStatusResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Nodes         []*NodeUpdateStatus    `protobuf:"bytes,1,rep,name=nodes,proto3" json:"nodes,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ListNodeUpdateStatusResponse) Reset() {
+	*x = ListNodeUpdateStatusResponse{}
+	mi := &file_foghorn_control_proto_msgTypes[11]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ListNodeUpdateStatusResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ListNodeUpdateStatusResponse) ProtoMessage() {}
+
+func (x *ListNodeUpdateStatusResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_foghorn_control_proto_msgTypes[11]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ListNodeUpdateStatusResponse.ProtoReflect.Descriptor instead.
+func (*ListNodeUpdateStatusResponse) Descriptor() ([]byte, []int) {
+	return file_foghorn_control_proto_rawDescGZIP(), []int{11}
+}
+
+func (x *ListNodeUpdateStatusResponse) GetNodes() []*NodeUpdateStatus {
+	if x != nil {
+		return x.Nodes
+	}
+	return nil
+}
+
+// NodeUpdateStatus is one node's edge release update state as Foghorn's
+// release reconciler records it.
+type NodeUpdateStatus struct {
+	state     protoimpl.MessageState `protogen:"open.v1"`
+	NodeId    string                 `protobuf:"bytes,1,opt,name=node_id,json=nodeId,proto3" json:"node_id,omitempty"`
+	ClusterId string                 `protobuf:"bytes,2,opt,name=cluster_id,json=clusterId,proto3" json:"cluster_id,omitempty"`
+	// channel:version the update flow last worked toward; empty when the node
+	// has never been updated by the reconciler.
+	TargetRelease string `protobuf:"bytes,3,opt,name=target_release,json=targetRelease,proto3" json:"target_release,omitempty"`
+	// idle, cordoning, draining, drained, updating, updating_restore, warming,
+	// warming_restore or failed; empty when no update state is recorded.
+	Phase     string `protobuf:"bytes,4,opt,name=phase,proto3" json:"phase,omitempty"`
+	LastError string `protobuf:"bytes,5,opt,name=last_error,json=lastError,proto3" json:"last_error,omitempty"`
+	// When the current phase expires; empty when the phase has no deadline.
+	PhaseDeadline     string                  `protobuf:"bytes,6,opt,name=phase_deadline,json=phaseDeadline,proto3" json:"phase_deadline,omitempty"`      // ISO8601
+	PhaseUpdatedAt    string                  `protobuf:"bytes,7,opt,name=phase_updated_at,json=phaseUpdatedAt,proto3" json:"phase_updated_at,omitempty"` // ISO8601
+	ComponentVersions []*NodeComponentVersion `protobuf:"bytes,8,rep,name=component_versions,json=componentVersions,proto3" json:"component_versions,omitempty"`
+	// Healthy with a fresh heartbeat on this Foghorn.
+	Connected       bool   `protobuf:"varint,9,opt,name=connected,proto3" json:"connected,omitempty"`
+	OperationalMode string `protobuf:"bytes,10,opt,name=operational_mode,json=operationalMode,proto3" json:"operational_mode,omitempty"`
+	// Whether the release reconciler updates this node (native or
+	// single-image container deploy with a known platform).
+	AutomaticUpdates bool `protobuf:"varint,11,opt,name=automatic_updates,json=automaticUpdates,proto3" json:"automatic_updates,omitempty"`
+	unknownFields    protoimpl.UnknownFields
+	sizeCache        protoimpl.SizeCache
+}
+
+func (x *NodeUpdateStatus) Reset() {
+	*x = NodeUpdateStatus{}
+	mi := &file_foghorn_control_proto_msgTypes[12]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *NodeUpdateStatus) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*NodeUpdateStatus) ProtoMessage() {}
+
+func (x *NodeUpdateStatus) ProtoReflect() protoreflect.Message {
+	mi := &file_foghorn_control_proto_msgTypes[12]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use NodeUpdateStatus.ProtoReflect.Descriptor instead.
+func (*NodeUpdateStatus) Descriptor() ([]byte, []int) {
+	return file_foghorn_control_proto_rawDescGZIP(), []int{12}
+}
+
+func (x *NodeUpdateStatus) GetNodeId() string {
+	if x != nil {
+		return x.NodeId
+	}
+	return ""
+}
+
+func (x *NodeUpdateStatus) GetClusterId() string {
+	if x != nil {
+		return x.ClusterId
+	}
+	return ""
+}
+
+func (x *NodeUpdateStatus) GetTargetRelease() string {
+	if x != nil {
+		return x.TargetRelease
+	}
+	return ""
+}
+
+func (x *NodeUpdateStatus) GetPhase() string {
+	if x != nil {
+		return x.Phase
+	}
+	return ""
+}
+
+func (x *NodeUpdateStatus) GetLastError() string {
+	if x != nil {
+		return x.LastError
+	}
+	return ""
+}
+
+func (x *NodeUpdateStatus) GetPhaseDeadline() string {
+	if x != nil {
+		return x.PhaseDeadline
+	}
+	return ""
+}
+
+func (x *NodeUpdateStatus) GetPhaseUpdatedAt() string {
+	if x != nil {
+		return x.PhaseUpdatedAt
+	}
+	return ""
+}
+
+func (x *NodeUpdateStatus) GetComponentVersions() []*NodeComponentVersion {
+	if x != nil {
+		return x.ComponentVersions
+	}
+	return nil
+}
+
+func (x *NodeUpdateStatus) GetConnected() bool {
+	if x != nil {
+		return x.Connected
+	}
+	return false
+}
+
+func (x *NodeUpdateStatus) GetOperationalMode() string {
+	if x != nil {
+		return x.OperationalMode
+	}
+	return ""
+}
+
+func (x *NodeUpdateStatus) GetAutomaticUpdates() bool {
+	if x != nil {
+		return x.AutomaticUpdates
+	}
+	return false
+}
+
 type InvalidateTenantCacheRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	TenantId      string                 `protobuf:"bytes,1,opt,name=tenant_id,json=tenantId,proto3" json:"tenant_id,omitempty"`
@@ -1045,7 +1267,7 @@ type InvalidateTenantCacheRequest struct {
 
 func (x *InvalidateTenantCacheRequest) Reset() {
 	*x = InvalidateTenantCacheRequest{}
-	mi := &file_foghorn_control_proto_msgTypes[10]
+	mi := &file_foghorn_control_proto_msgTypes[13]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1057,7 +1279,7 @@ func (x *InvalidateTenantCacheRequest) String() string {
 func (*InvalidateTenantCacheRequest) ProtoMessage() {}
 
 func (x *InvalidateTenantCacheRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_foghorn_control_proto_msgTypes[10]
+	mi := &file_foghorn_control_proto_msgTypes[13]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1070,7 +1292,7 @@ func (x *InvalidateTenantCacheRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use InvalidateTenantCacheRequest.ProtoReflect.Descriptor instead.
 func (*InvalidateTenantCacheRequest) Descriptor() ([]byte, []int) {
-	return file_foghorn_control_proto_rawDescGZIP(), []int{10}
+	return file_foghorn_control_proto_rawDescGZIP(), []int{13}
 }
 
 func (x *InvalidateTenantCacheRequest) GetTenantId() string {
@@ -1097,7 +1319,7 @@ type InvalidateTenantCacheResponse struct {
 
 func (x *InvalidateTenantCacheResponse) Reset() {
 	*x = InvalidateTenantCacheResponse{}
-	mi := &file_foghorn_control_proto_msgTypes[11]
+	mi := &file_foghorn_control_proto_msgTypes[14]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1109,7 +1331,7 @@ func (x *InvalidateTenantCacheResponse) String() string {
 func (*InvalidateTenantCacheResponse) ProtoMessage() {}
 
 func (x *InvalidateTenantCacheResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_foghorn_control_proto_msgTypes[11]
+	mi := &file_foghorn_control_proto_msgTypes[14]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1122,7 +1344,7 @@ func (x *InvalidateTenantCacheResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use InvalidateTenantCacheResponse.ProtoReflect.Descriptor instead.
 func (*InvalidateTenantCacheResponse) Descriptor() ([]byte, []int) {
-	return file_foghorn_control_proto_rawDescGZIP(), []int{11}
+	return file_foghorn_control_proto_rawDescGZIP(), []int{14}
 }
 
 func (x *InvalidateTenantCacheResponse) GetEntriesInvalidated() int32 {
@@ -1143,7 +1365,7 @@ type TerminateTenantStreamsRequest struct {
 
 func (x *TerminateTenantStreamsRequest) Reset() {
 	*x = TerminateTenantStreamsRequest{}
-	mi := &file_foghorn_control_proto_msgTypes[12]
+	mi := &file_foghorn_control_proto_msgTypes[15]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1155,7 +1377,7 @@ func (x *TerminateTenantStreamsRequest) String() string {
 func (*TerminateTenantStreamsRequest) ProtoMessage() {}
 
 func (x *TerminateTenantStreamsRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_foghorn_control_proto_msgTypes[12]
+	mi := &file_foghorn_control_proto_msgTypes[15]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1168,7 +1390,7 @@ func (x *TerminateTenantStreamsRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use TerminateTenantStreamsRequest.ProtoReflect.Descriptor instead.
 func (*TerminateTenantStreamsRequest) Descriptor() ([]byte, []int) {
-	return file_foghorn_control_proto_rawDescGZIP(), []int{12}
+	return file_foghorn_control_proto_rawDescGZIP(), []int{15}
 }
 
 func (x *TerminateTenantStreamsRequest) GetTenantId() string {
@@ -1197,7 +1419,7 @@ type TerminateTenantStreamsResponse struct {
 
 func (x *TerminateTenantStreamsResponse) Reset() {
 	*x = TerminateTenantStreamsResponse{}
-	mi := &file_foghorn_control_proto_msgTypes[13]
+	mi := &file_foghorn_control_proto_msgTypes[16]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1209,7 +1431,7 @@ func (x *TerminateTenantStreamsResponse) String() string {
 func (*TerminateTenantStreamsResponse) ProtoMessage() {}
 
 func (x *TerminateTenantStreamsResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_foghorn_control_proto_msgTypes[13]
+	mi := &file_foghorn_control_proto_msgTypes[16]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1222,7 +1444,7 @@ func (x *TerminateTenantStreamsResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use TerminateTenantStreamsResponse.ProtoReflect.Descriptor instead.
 func (*TerminateTenantStreamsResponse) Descriptor() ([]byte, []int) {
-	return file_foghorn_control_proto_rawDescGZIP(), []int{13}
+	return file_foghorn_control_proto_rawDescGZIP(), []int{16}
 }
 
 func (x *TerminateTenantStreamsResponse) GetStreamsTerminated() int32 {
@@ -1278,7 +1500,7 @@ type TestPlaybackAccessRequest struct {
 
 func (x *TestPlaybackAccessRequest) Reset() {
 	*x = TestPlaybackAccessRequest{}
-	mi := &file_foghorn_control_proto_msgTypes[14]
+	mi := &file_foghorn_control_proto_msgTypes[17]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1290,7 +1512,7 @@ func (x *TestPlaybackAccessRequest) String() string {
 func (*TestPlaybackAccessRequest) ProtoMessage() {}
 
 func (x *TestPlaybackAccessRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_foghorn_control_proto_msgTypes[14]
+	mi := &file_foghorn_control_proto_msgTypes[17]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1303,7 +1525,7 @@ func (x *TestPlaybackAccessRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use TestPlaybackAccessRequest.ProtoReflect.Descriptor instead.
 func (*TestPlaybackAccessRequest) Descriptor() ([]byte, []int) {
-	return file_foghorn_control_proto_rawDescGZIP(), []int{14}
+	return file_foghorn_control_proto_rawDescGZIP(), []int{17}
 }
 
 func (x *TestPlaybackAccessRequest) GetTenantId() string {
@@ -1403,7 +1625,7 @@ type TestPlaybackAccessResponse struct {
 
 func (x *TestPlaybackAccessResponse) Reset() {
 	*x = TestPlaybackAccessResponse{}
-	mi := &file_foghorn_control_proto_msgTypes[15]
+	mi := &file_foghorn_control_proto_msgTypes[18]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1415,7 +1637,7 @@ func (x *TestPlaybackAccessResponse) String() string {
 func (*TestPlaybackAccessResponse) ProtoMessage() {}
 
 func (x *TestPlaybackAccessResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_foghorn_control_proto_msgTypes[15]
+	mi := &file_foghorn_control_proto_msgTypes[18]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1428,7 +1650,7 @@ func (x *TestPlaybackAccessResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use TestPlaybackAccessResponse.ProtoReflect.Descriptor instead.
 func (*TestPlaybackAccessResponse) Descriptor() ([]byte, []int) {
-	return file_foghorn_control_proto_rawDescGZIP(), []int{15}
+	return file_foghorn_control_proto_rawDescGZIP(), []int{18}
 }
 
 func (x *TestPlaybackAccessResponse) GetAllowed() bool {
@@ -1601,7 +1823,27 @@ const file_foghorn_control_proto_rawDesc = "" +
 	"_longitude\"N\n" +
 	"\x14NodeComponentVersion\x12\x1c\n" +
 	"\tcomponent\x18\x01 \x01(\tR\tcomponent\x12\x18\n" +
-	"\aversion\x18\x02 \x01(\tR\aversion\"S\n" +
+	"\aversion\x18\x02 \x01(\tR\aversion\"<\n" +
+	"\x1bListNodeUpdateStatusRequest\x12\x1d\n" +
+	"\n" +
+	"cluster_id\x18\x01 \x01(\tR\tclusterId\"W\n" +
+	"\x1cListNodeUpdateStatusResponse\x127\n" +
+	"\x05nodes\x18\x01 \x03(\v2!.foghorn_control.NodeUpdateStatusR\x05nodes\"\xc3\x03\n" +
+	"\x10NodeUpdateStatus\x12\x17\n" +
+	"\anode_id\x18\x01 \x01(\tR\x06nodeId\x12\x1d\n" +
+	"\n" +
+	"cluster_id\x18\x02 \x01(\tR\tclusterId\x12%\n" +
+	"\x0etarget_release\x18\x03 \x01(\tR\rtargetRelease\x12\x14\n" +
+	"\x05phase\x18\x04 \x01(\tR\x05phase\x12\x1d\n" +
+	"\n" +
+	"last_error\x18\x05 \x01(\tR\tlastError\x12%\n" +
+	"\x0ephase_deadline\x18\x06 \x01(\tR\rphaseDeadline\x12(\n" +
+	"\x10phase_updated_at\x18\a \x01(\tR\x0ephaseUpdatedAt\x12T\n" +
+	"\x12component_versions\x18\b \x03(\v2%.foghorn_control.NodeComponentVersionR\x11componentVersions\x12\x1c\n" +
+	"\tconnected\x18\t \x01(\bR\tconnected\x12)\n" +
+	"\x10operational_mode\x18\n" +
+	" \x01(\tR\x0foperationalMode\x12+\n" +
+	"\x11automatic_updates\x18\v \x01(\bR\x10automaticUpdates\"S\n" +
 	"\x1cInvalidateTenantCacheRequest\x12\x1b\n" +
 	"\ttenant_id\x18\x01 \x01(\tR\btenantId\x12\x16\n" +
 	"\x06reason\x18\x02 \x01(\tR\x06reason\"P\n" +
@@ -1662,7 +1904,7 @@ func file_foghorn_control_proto_rawDescGZIP() []byte {
 }
 
 var file_foghorn_control_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
-var file_foghorn_control_proto_msgTypes = make([]protoimpl.MessageInfo, 16)
+var file_foghorn_control_proto_msgTypes = make([]protoimpl.MessageInfo, 19)
 var file_foghorn_control_proto_goTypes = []any{
 	(SetNodeModeStatus)(0),                 // 0: foghorn_control.SetNodeModeStatus
 	(*RetrieveDVRChapterRequest)(nil),      // 1: foghorn_control.RetrieveDVRChapterRequest
@@ -1675,22 +1917,27 @@ var file_foghorn_control_proto_goTypes = []any{
 	(*GetNodeHealthRequest)(nil),           // 8: foghorn_control.GetNodeHealthRequest
 	(*GetNodeHealthResponse)(nil),          // 9: foghorn_control.GetNodeHealthResponse
 	(*NodeComponentVersion)(nil),           // 10: foghorn_control.NodeComponentVersion
-	(*InvalidateTenantCacheRequest)(nil),   // 11: foghorn_control.InvalidateTenantCacheRequest
-	(*InvalidateTenantCacheResponse)(nil),  // 12: foghorn_control.InvalidateTenantCacheResponse
-	(*TerminateTenantStreamsRequest)(nil),  // 13: foghorn_control.TerminateTenantStreamsRequest
-	(*TerminateTenantStreamsResponse)(nil), // 14: foghorn_control.TerminateTenantStreamsResponse
-	(*TestPlaybackAccessRequest)(nil),      // 15: foghorn_control.TestPlaybackAccessRequest
-	(*TestPlaybackAccessResponse)(nil),     // 16: foghorn_control.TestPlaybackAccessResponse
+	(*ListNodeUpdateStatusRequest)(nil),    // 11: foghorn_control.ListNodeUpdateStatusRequest
+	(*ListNodeUpdateStatusResponse)(nil),   // 12: foghorn_control.ListNodeUpdateStatusResponse
+	(*NodeUpdateStatus)(nil),               // 13: foghorn_control.NodeUpdateStatus
+	(*InvalidateTenantCacheRequest)(nil),   // 14: foghorn_control.InvalidateTenantCacheRequest
+	(*InvalidateTenantCacheResponse)(nil),  // 15: foghorn_control.InvalidateTenantCacheResponse
+	(*TerminateTenantStreamsRequest)(nil),  // 16: foghorn_control.TerminateTenantStreamsRequest
+	(*TerminateTenantStreamsResponse)(nil), // 17: foghorn_control.TerminateTenantStreamsResponse
+	(*TestPlaybackAccessRequest)(nil),      // 18: foghorn_control.TestPlaybackAccessRequest
+	(*TestPlaybackAccessResponse)(nil),     // 19: foghorn_control.TestPlaybackAccessResponse
 }
 var file_foghorn_control_proto_depIdxs = []int32{
 	4,  // 0: foghorn_control.ListDVRChaptersResponse.chapters:type_name -> foghorn_control.ChapterRef
 	0,  // 1: foghorn_control.SetNodeModeResponse.status:type_name -> foghorn_control.SetNodeModeStatus
 	10, // 2: foghorn_control.GetNodeHealthResponse.component_versions:type_name -> foghorn_control.NodeComponentVersion
-	3,  // [3:3] is the sub-list for method output_type
-	3,  // [3:3] is the sub-list for method input_type
-	3,  // [3:3] is the sub-list for extension type_name
-	3,  // [3:3] is the sub-list for extension extendee
-	0,  // [0:3] is the sub-list for field type_name
+	13, // 3: foghorn_control.ListNodeUpdateStatusResponse.nodes:type_name -> foghorn_control.NodeUpdateStatus
+	10, // 4: foghorn_control.NodeUpdateStatus.component_versions:type_name -> foghorn_control.NodeComponentVersion
+	5,  // [5:5] is the sub-list for method output_type
+	5,  // [5:5] is the sub-list for method input_type
+	5,  // [5:5] is the sub-list for extension type_name
+	5,  // [5:5] is the sub-list for extension extendee
+	0,  // [0:5] is the sub-list for field type_name
 }
 
 func init() { file_foghorn_control_proto_init() }
@@ -1705,7 +1952,7 @@ func file_foghorn_control_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_foghorn_control_proto_rawDesc), len(file_foghorn_control_proto_rawDesc)),
 			NumEnums:      1,
-			NumMessages:   16,
+			NumMessages:   19,
 			NumExtensions: 0,
 			NumServices:   0,
 		},

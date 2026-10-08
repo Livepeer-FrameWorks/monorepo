@@ -191,7 +191,8 @@ plan` and `release apply --dry-run` list every step and, per host, the role task
 
 After postdeploy, `release apply` checks that every replica of the auth services and the web app
 runs the release's version, since a readiness check cannot detect an older web app bundle. It
-then sets the edge release target, from which Foghorn rolls edge nodes (see [Edge nodes](#edge-nodes)). Contract migrations
+then sets the edge release target, from which Foghorn rolls edge nodes (see [Edge nodes](#edge-nodes)), and waits up to
+`--edge-wait` (default 10 minutes) for every edge to report the release. Contract migrations
 are printed, never run.
 
 A reconciliation transition is a Check, Apply, Verify step that converges a declared invariant
@@ -299,6 +300,20 @@ Deploy and migrate the control plane before the edges. A new Foghorn does not wa
 After the release sets the edge release target, Foghorn updates Helmsman, MistServer, and Caddy
 over the Helmsman control stream on native and single-image container nodes. A component whose
 version did not change is not rolled.
+
+`release apply` then prints one line per edge node and reports the release applied only when
+every edge reports the target versions. A node whose update failed (for example, a new Helmsman
+that did not reconnect within two minutes of its self-update) fails the command with Foghorn's
+recorded reason. Edges still updating when the wait ends produce an `EDGES NOT CONVERGED`
+warning; follow them with:
+
+```bash
+frameworks cluster edges rollout status --wait 15m
+```
+
+A failed MistServer warmup takes the node out of routing (maintenance mode), except on the
+cluster's last routable node, which stays in normal mode so the cluster keeps serving; the
+failure is recorded either way and the update is not retried automatically on that node.
 
 Foghorn rejects a Helmsman whose control-protocol version is below its minimum at registration.
 Such an edge is absent from platform routing and cannot receive an update over the rejected

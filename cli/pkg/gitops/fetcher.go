@@ -555,6 +555,9 @@ func (m *Manifest) GetServiceInfo(serviceName string) (*ServiceInfo, error) {
 				Variants:  svc.Variants,
 				FullImage: fmt.Sprintf("%s@%s", svc.Image, svc.Digest),
 				Binaries:  make(map[string]Artifact),
+
+				ReleaseVersion: strings.TrimSpace(m.PlatformVersion),
+				CarriedFrom:    strings.TrimSpace(svc.CarriedFrom),
 			}
 			m.populateBinaries(info)
 			return info, nil
@@ -582,6 +585,9 @@ func (m *Manifest) GetServiceInfo(serviceName string) (*ServiceInfo, error) {
 				Images:    iface.Images,
 				FullImage: fmt.Sprintf("%s@%s", iface.Image, iface.Digest),
 				Binaries:  make(map[string]Artifact),
+
+				ReleaseVersion: strings.TrimSpace(m.PlatformVersion),
+				CarriedFrom:    strings.TrimSpace(iface.CarriedFrom),
 			}, nil
 		}
 	}
@@ -597,6 +603,9 @@ func (m *Manifest) GetServiceInfo(serviceName string) (*ServiceInfo, error) {
 				Name:     nb.Name,
 				Version:  version,
 				Binaries: make(map[string]Artifact),
+
+				ReleaseVersion: strings.TrimSpace(m.PlatformVersion),
+				CarriedFrom:    strings.TrimSpace(nb.CarriedFrom),
 			}
 			m.populateBinaries(info)
 			return info, nil

@@ -46,3 +46,19 @@ ON CONFLICT (node_id) DO UPDATE SET
     END,
     last_error = EXCLUDED.last_error,
     updated_at = NOW();
+
+-- name: ListNodeUpdateStatuses :many
+SELECT node_id,
+       COALESCE(target_release, '')::text AS target_release,
+       phase,
+       COALESCE(last_error, '')::text AS last_error,
+       deadline,
+       updated_at
+FROM foghorn.node_update_state
+WHERE node_id = ANY(sqlc.arg(node_ids)::text[]);
+
+-- name: ListComponentVersionsForNodes :many
+SELECT node_id, component, COALESCE(current_version, '')::text AS current_version
+FROM foghorn.node_components
+WHERE node_id = ANY(sqlc.arg(node_ids)::text[])
+ORDER BY node_id, component;

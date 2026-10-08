@@ -431,6 +431,7 @@ type Querier interface {
 	// version fence cannot let one back in. A tombstone is never forgotten: it is
 	// what refuses the object's return.
 	ListCollectableMediaAuthorities(ctx context.Context, arg ListCollectableMediaAuthoritiesParams) ([]ListCollectableMediaAuthoritiesRow, error)
+	ListComponentVersionsForNodes(ctx context.Context, nodeIds []string) ([]ListComponentVersionsForNodesRow, error)
 	ListCooledDownRuntimePushTargetEffectsForRearm(ctx context.Context) ([]ListCooledDownRuntimePushTargetEffectsForRearmRow, error)
 	ListDVRChaptersForArtifact(ctx context.Context, arg ListDVRChaptersForArtifactParams) ([]ListDVRChaptersForArtifactRow, error)
 	ListDVRChaptersNeedingFinalization(ctx context.Context, arg ListDVRChaptersNeedingFinalizationParams) ([]ListDVRChaptersNeedingFinalizationRow, error)
@@ -468,6 +469,7 @@ type Querier interface {
 	ListNodeIngestGenerations(ctx context.Context, arg ListNodeIngestGenerationsParams) ([]ListNodeIngestGenerationsRow, error)
 	ListNodeMaintenance(ctx context.Context) ([]ListNodeMaintenanceRow, error)
 	ListNodeProjectedIngestSessionsBefore(ctx context.Context, arg ListNodeProjectedIngestSessionsBeforeParams) ([]ListNodeProjectedIngestSessionsBeforeRow, error)
+	ListNodeUpdateStatuses(ctx context.Context, nodeIds []string) ([]ListNodeUpdateStatusesRow, error)
 	// Node-scoped: the node reports an abandoned execution before it can know the tenant. The trigger
 	// UUID identifies one Mist execution on that node, which minted at most one session per tenant.
 	ListOpenIngestSessionsByTrigger(ctx context.Context, arg ListOpenIngestSessionsByTriggerParams) ([]ListOpenIngestSessionsByTriggerRow, error)
