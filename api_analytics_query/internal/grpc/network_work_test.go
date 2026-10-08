@@ -13,11 +13,14 @@ import (
 
 func TestNetworkWorkAddsExactAmountsAcrossRateGroups(t *testing.T) {
 	server, mock := newTenantActivityServer(t)
-	columns := []string{"resource", "ip", "region", "profile", "charge_denominator", "credit_denominator", "attempts", "unknown", "dispatched", "source", "returned", "pixels", "accepted", "accepted_source", "accepted_pixels", "rendition_ms", "charge_samples", "charge_num", "credit_samples", "credit_num", "tickets", "dispatch_duration_samples", "accepted_duration_samples", "accepted_output_samples"}
+	columns := workTestColumns()
 	rows := sqlmock.NewRows(columns).
-		AddRow("0xabc", "192.0.2.1", "eu", "720p", "3", "2", 1, 0, 1, 2000, 1, 9007199254740993, 0, 0, 0, 0, 1, "1", 1, "7", 2, 1, 0, 0).
-		AddRow("0xabc", "192.0.2.1", "eu", "720p", "3", "3", 1, 0, 1, 2000, 1, 200, 1, 2000, 200, 4000, 1, "2", 1, "5", 1, 1, 1, 1)
+		AddRow("0xabc", "192.0.2.1", "eu", "720p", "3", 1, 0, 1, 2000, 1, 9007199254740993, 0, 0, 0, 0, 1, "1", 1, 2, 1, 0, 0).
+		AddRow("0xabc", "192.0.2.1", "eu", "720p", "6", 1, 0, 1, 2000, 1, 200, 1, 2000, 200, 4000, 1, "4", 1, 1, 1, 1, 1)
 	mock.ExpectQuery("FROM periscope.network_observations FINAL WHERE tenant_id=.*kind IN").WillReturnRows(rows)
+	mock.ExpectQuery("ticket_credit_numerator!='0'").WillReturnRows(sqlmock.NewRows(creditTestColumns()).
+		AddRow("0xabc", "192.0.2.1", "eu", "720p", "2", "7", 1).
+		AddRow("0xabc", "192.0.2.1", "eu", "720p", "3", "5", 1))
 	now := time.Now().UTC()
 	history, err := server.networkWork(context.Background(), "tenant_id=? AND timestamp>=? AND timestamp<?", []any{"scope", now.Add(-time.Hour), now}, now.Add(-time.Hour), now, false)
 	if err != nil {
@@ -69,11 +72,12 @@ func TestNetworkWorkRetainedEndpointScopeHasNoDecisionPredicate(t *testing.T) {
 
 func TestNetworkWorkCountsRepeatedExactTicketCredits(t *testing.T) {
 	server, mock := newTenantActivityServer(t)
-	columns := []string{"resource", "ip", "region", "profile", "charge_denominator", "credit_denominator", "attempts", "unknown", "dispatched", "source", "returned", "pixels", "accepted", "accepted_source", "accepted_pixels", "rendition_ms", "charge_samples", "charge_num", "credit_samples", "credit_num", "tickets", "dispatch_duration_samples", "accepted_duration_samples", "accepted_output_samples"}
+	columns := workTestColumns()
 	numerator := "115792089237316195423570985008687907853269984665640564039457584007913129639934000000000000000000"
 	denominator := "115792089237316195423570985008687907853269984665640564039457584007913129639935"
-	rows := sqlmock.NewRows(columns).AddRow("0xabc", "192.0.2.1", "eu", "720p", "1", denominator, 3, 0, 3, 6000, 0, 0, 0, 0, 0, 0, 0, "0", 3, numerator, 3, 3, 0, 0)
+	rows := sqlmock.NewRows(columns).AddRow("0xabc", "192.0.2.1", "eu", "720p", "1", 3, 0, 3, 6000, 0, 0, 0, 0, 0, 0, 0, "0", 3, 3, 3, 0, 0)
 	mock.ExpectQuery("FROM periscope.network_observations FINAL").WillReturnRows(rows)
+	mock.ExpectQuery("ticket_credit_numerator!='0'").WillReturnRows(sqlmock.NewRows(creditTestColumns()).AddRow("0xabc", "192.0.2.1", "eu", "720p", denominator, numerator, 3))
 	now := time.Now().UTC()
 	history, err := server.networkWork(context.Background(), "tenant_id=?", []any{"scope"}, now.Add(-time.Hour), now, false)
 	if err != nil {
@@ -90,5 +94,36 @@ func TestNetworkWorkCountsRepeatedExactTicketCredits(t *testing.T) {
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func workTestColumns() []string {
+	return []string{"resource", "ip", "region", "profile", "charge_denominator", "attempts", "unknown", "dispatched", "source", "returned", "pixels", "accepted", "accepted_source", "accepted_pixels", "rendition_ms", "charge_samples", "charge_num", "credit_samples", "tickets", "dispatch_duration_samples", "accepted_duration_samples", "accepted_output_samples"}
+}
+
+func creditTestColumns() []string {
+	return []string{"resource", "ip", "region", "profile", "denominator", "numerator", "samples"}
+}
+
+func TestNetworkWorkDistinguishesZeroCreditFromMissingEvidence(t *testing.T) {
+	for _, known := range []uint64{0, 1} {
+		t.Run(fmt.Sprint(known), func(t *testing.T) {
+			server, mock := newTenantActivityServer(t)
+			mock.ExpectQuery("FROM periscope.network_observations FINAL").WillReturnRows(sqlmock.NewRows(workTestColumns()).
+				AddRow("0xabc", "192.0.2.1", "eu", "720p", "1", 1, 0, 1, 2000, 0, 0, 0, 0, 0, 0, 0, "0", known, 0, 1, 0, 0))
+			mock.ExpectQuery("ticket_credit_numerator!='0'").WillReturnRows(sqlmock.NewRows(creditTestColumns()))
+			now := time.Now().UTC()
+			history, err := server.networkWork(context.Background(), "tenant_id=?", []any{"scope"}, now.Add(-time.Hour), now, false)
+			if err != nil {
+				t.Fatal(err)
+			}
+			credit := history.Summaries[0].TicketCreditSent
+			if known == 0 && credit != nil || known == 1 && (credit == nil || credit.Numerator != "0" || credit.Denominator != "1") {
+				t.Fatalf("missing and known-zero credit confused: %+v", credit)
+			}
+			if err := mock.ExpectationsWereMet(); err != nil {
+				t.Fatal(err)
+			}
+		})
 	}
 }

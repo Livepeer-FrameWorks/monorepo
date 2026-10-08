@@ -88,6 +88,7 @@ type WorkSummary struct {
 	ServiceCharge             *Amount `json:"service_charge,omitempty"`
 	TicketCreditSamples       uint64  `json:"ticket_credit_samples"`
 	TicketCreditSent          *Amount `json:"ticket_credit_sent,omitempty"`
+	TicketCreditIncomplete    bool    `json:"ticket_credit_incomplete,omitempty"`
 	TicketsSent               uint64  `json:"tickets_sent,string"`
 	DispatchedDurationSamples uint64  `json:"dispatched_duration_samples"`
 	AcceptedDurationSamples   uint64  `json:"accepted_duration_samples"`
@@ -95,10 +96,11 @@ type WorkSummary struct {
 }
 
 type WorkHistory struct {
-	Scope           string        `json:"scope"`
-	Start           time.Time     `json:"start"`
-	End             time.Time     `json:"end"`
-	IntervalSeconds int           `json:"interval_seconds"`
-	Summaries       []WorkSummary `json:"summaries"`
-	Truncated       bool          `json:"truncated"`
+	Scope                 string        `json:"scope"`
+	Start                 time.Time     `json:"start"`
+	End                   time.Time     `json:"end"`
+	IntervalSeconds       int           `json:"interval_seconds"`
+	Summaries             []WorkSummary `json:"summaries"`
+	Truncated             bool          `json:"truncated"`
+	TicketCreditTruncated bool          `json:"ticket_credit_truncated,omitempty"`
 }

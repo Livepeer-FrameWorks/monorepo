@@ -87,6 +87,41 @@ function mount(data: ReturnType<typeof fixture>) {
   return { container, fetch };
 }
 describe("shared network dashboard", () => {
+  it("keeps work totals visible when ticket credit exceeds its independent query bound", async () => {
+    const base = fixture();
+    const data = {
+      ...base,
+      history: {
+        ...base.history,
+        work: {
+          scope: "frameworks-gateways",
+          start: base.history.start,
+          end: base.history.end,
+          interval_seconds: 0,
+          truncated: false,
+          ticket_credit_truncated: true,
+          summaries: [
+            workFixture({ ticket_credit_sent: undefined, ticket_credit_incomplete: true }),
+          ],
+        },
+      },
+    };
+    const { container } = mount(data);
+    await vi.waitFor(() =>
+      expect(
+        container.querySelector('[aria-label="Orchestrator workload totals"] tbody tr')
+      ).not.toBeNull()
+    );
+    expect(container.textContent).toContain("Ticket-credit totals exceed the query bound");
+    const row = container.querySelector('[aria-label="Orchestrator workload totals"] tbody tr')!;
+    expect(row.textContent).toContain("1.00");
+    (row.querySelector("button") as HTMLButtonElement).click();
+    await vi.waitFor(() =>
+      expect(container.querySelector("aside")?.textContent).toContain(
+        "Expected ticket credit sent: Unknown: query bound"
+      )
+    );
+  });
   it("does not present missing media duration as zero minutes", async () => {
     const base = fixture();
     const data = {

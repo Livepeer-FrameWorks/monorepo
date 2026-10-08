@@ -417,7 +417,7 @@ export function mountNetworkDashboard(container: HTMLElement, options: Options):
       ),
       node(
         "p",
-        `Expected ticket credit sent: ${workAmount(total.ticket_credit_sent)} · tickets: ${total.tickets_sent} · payment observations: ${total.ticket_credit_samples}`
+        `Expected ticket credit sent: ${total.ticket_credit_incomplete ? "Unknown: query bound" : workAmount(total.ticket_credit_sent)} · tickets: ${total.tickets_sent} · payment observations: ${total.ticket_credit_samples}`
       ),
       node(
         "p",
@@ -458,6 +458,14 @@ export function mountNetworkDashboard(container: HTMLElement, options: Options):
       workOrder.wrapper
     );
     const groups = new Map<string, WorkSummary[]>();
+    if (work.ticket_credit_truncated)
+      workPanel.append(
+        node(
+          "p",
+          "Ticket-credit totals exceed the query bound. Narrow the time window or select an orchestrator for credit totals. Work and service-charge totals remain available.",
+          "muted"
+        )
+      );
     for (const entry of workSummaries()) {
       const id = entry.resource_id.toLowerCase();
       groups.set(id, [...(groups.get(id) ?? []), entry]);

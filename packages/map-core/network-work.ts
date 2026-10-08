@@ -23,6 +23,7 @@ export type WorkSummary = {
   service_charge?: Amount;
   ticket_credit_samples: number;
   ticket_credit_sent?: Amount;
+  ticket_credit_incomplete?: boolean;
   tickets_sent: string;
   dispatched_duration_samples: number;
   accepted_duration_samples: number;
@@ -35,6 +36,7 @@ export type WorkHistory = {
   interval_seconds: number;
   summaries: WorkSummary[];
   truncated: boolean;
+  ticket_credit_truncated?: boolean;
 };
 
 function gcd(a: bigint, b: bigint): bigint {
@@ -105,7 +107,9 @@ export function sumWork(values: WorkSummary[]): WorkSummary | undefined {
       total[field] = String(BigInt(total[field]) + BigInt(value[field]));
     total.service_charge = addAmounts(total.service_charge, value.service_charge);
     total.ticket_credit_sent = addAmounts(total.ticket_credit_sent, value.ticket_credit_sent);
+    total.ticket_credit_incomplete ||= value.ticket_credit_incomplete;
   }
+  if (total.ticket_credit_incomplete) total.ticket_credit_sent = undefined;
   return total;
 }
 
@@ -116,6 +120,7 @@ export function workMinutes(milliseconds: string): string {
 
 export function isPartialWork(total: WorkSummary): boolean {
   return (
+    !!total.ticket_credit_incomplete ||
     total.unaccounted_samples > 0 ||
     total.service_charge_samples < total.dispatched_attempts ||
     total.dispatched_duration_samples < total.dispatched_attempts ||

@@ -4,6 +4,16 @@ import { sumWork, workAmount, workMinutes } from "../../packages/map-core/networ
 import { workFixture } from "./fixtures/network-work";
 
 describe("network work accounting", () => {
+  it("discards a partial sibling credit sum without dropping work or service charges", () => {
+    const total = sumWork([
+      workFixture(),
+      workFixture({ ticket_credit_sent: undefined, ticket_credit_incomplete: true }),
+    ])!;
+    expect(total.ticket_credit_incomplete).toBe(true);
+    expect(total.ticket_credit_sent).toBeUndefined();
+    expect(total.accepted_source_ms).toBe("120000");
+    expect(total.service_charge?.numerator).toBe("2");
+  });
   it("keeps pixels above JavaScript precision and combines exact fractional charges", () => {
     const total = sumWork([
       workFixture(),

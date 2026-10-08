@@ -295,8 +295,11 @@ numerator is a known zero. Sample counters and `unaccounted_samples` expose part
 accounting; older events are not repriced from their latest quote.
 
 Work totals are independent of the chart/sample limit. Inspect `history.work.truncated`
-separately: when its internal accounting-group bound is exceeded, no partial work totals
-are returned. Narrow `start`/`end`, `resource` or `region`. Retained long-range work uses
+separately: when its work cohort/service-rate bound is exceeded, no partial work totals
+are returned. Ticket-credit values have their own bound: `ticket_credit_truncated=true`
+preserves work and service-charge totals, omits credit amounts and sets
+`ticket_credit_incomplete=true` on summaries with payment observations. Never treat
+those missing amounts as zero. Narrow `start`/`end`, `resource` or `region`. Retained long-range work uses
 whole hours inside the requested window; use its own `start`, `end` and
 `interval_seconds` when presenting totals. Hourly workload and cost snapshots expire
 after two years, and update every five minutes. The endpoint is an observation API,

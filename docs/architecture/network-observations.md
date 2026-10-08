@@ -140,8 +140,11 @@ fractions using exact rational arithmetic.
 profile independently of bounded chart samples. Consumers can sum sibling endpoints
 for identity totals. Counters that can exceed JavaScript integer precision are decimal
 strings. The shared dashboard uses integer arithmetic for aggregation and sorting.
-If more than 10,000 internal accounting groups are required, `work.truncated=true`
-returns no work summaries rather than incomplete money totals. Narrow the time window,
+If more than 10,000 work cohort/service-rate groups are required, `work.truncated=true`
+returns no work summaries rather than incomplete totals. Exact ticket-credit values
+have a separate 10,000-group bound: `work.ticket_credit_truncated=true` preserves all
+work and service charges, omits credit amounts and marks affected summaries with
+`ticket_credit_incomplete=true`. No partial credit sum is returned. Narrow the time window,
 resource or observer region to reduce the query. Older records without accounting are
 counted as unaccounted; they are not backfilled from advertised price quotes.
 

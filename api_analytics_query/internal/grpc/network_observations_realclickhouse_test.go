@@ -16,6 +16,60 @@ import (
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
+func verifyNetworkWorkCreditVariety(t *testing.T, ctx context.Context, db *sql.DB, server *PeriscopeServer) {
+	t.Helper()
+	now := time.Now().UTC().Truncate(time.Second)
+	for _, retained := range []bool{false, true} {
+		name := "raw"
+		if retained {
+			name = "retained"
+		}
+		t.Run("credit-variety/"+name, func(t *testing.T) {
+			owner := uuid.NewString()
+			start, end := now.Add(-time.Hour), now
+			var statement string
+			var at time.Time
+			if retained {
+				start = now.Add(-45 * 24 * time.Hour)
+				at = now.Truncate(time.Hour).Add(-time.Hour)
+				statement = `INSERT INTO periscope.network_work_rollups
+				(tenant_id,provider,network_id,environment,bucket,interval_seconds,resource_id,resolved_ip,gateway_region,profile_key,
+				service_charge_denominator,ticket_credit_denominator,accounted_attempts,dispatched_attempts,dispatched_source_ms,
+				returned_attempts,returned_pixels,service_charge_samples,service_charge_numerator,ticket_credit_samples,ticket_credit_numerator,tickets_sent,dispatched_duration_samples,snapshot_version)
+				SELECT ?,'livepeer','42161','staging',?,3600,'0xcredit-variety','192.0.2.99','eu','720p',
+				'1','3',1,1,2000,1,100,1,1,1,toString(number+1),1,1,now64(3) FROM numbers(10001)`
+			} else {
+				at = now.Add(-time.Minute)
+				statement = `INSERT INTO periscope.network_observations
+				(tenant_id,provider,network_id,environment,timestamp,event_id,kind,resource_id,resolved_ip,gateway_region,profile_key,
+				accounting_version,request_dispatched,source_duration_ms,returned_pixels_known,returned_pixels,
+				service_charge_known,service_charge_numerator,service_charge_denominator,ticket_credit_known,ticket_credit_numerator,ticket_credit_denominator,tickets_sent)
+				SELECT ?,'livepeer','42161','staging',?,generateUUIDv4(),'attempt','0xcredit-variety','192.0.2.99','eu','720p',
+				1,1,2000,1,100,1,1,'1',1,toString(number+1),'3',1 FROM numbers(10001)`
+			}
+			if _, err := db.ExecContext(ctx, statement, owner, at); err != nil {
+				t.Fatal(err)
+			}
+			where := "tenant_id=? AND provider=? AND network_id=? AND environment=? AND timestamp>=? AND timestamp<?"
+			args := []any{owner, "livepeer", "42161", "staging", start, end}
+			history, err := server.networkWork(ctx, where, args, start, end, retained)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if history.Truncated || len(history.Summaries) != 1 {
+				t.Fatalf("ticket-value variety suppressed complete work/charges: %+v", history)
+			}
+			total := history.Summaries[0]
+			if !history.TicketCreditTruncated || !total.TicketCreditIncomplete || total.TicketCreditSent != nil || total.TicketCreditSamples != 10001 {
+				t.Fatalf("bounded ticket credit was presented as complete: %+v", history)
+			}
+			if total.DispatchedAttempts != 10001 || total.DispatchedSourceMS != 20002000 || total.ReturnedPixels != 1000100 || total.ServiceCharge == nil || total.ServiceCharge.Numerator != "10001" || total.ServiceCharge.Denominator != "1" {
+				t.Fatalf("ticket variety changed work/charges: %+v", total)
+			}
+		})
+	}
+}
+
 func verifyNetworkObservationProjection(t *testing.T, ctx context.Context, db *sql.DB, server *PeriscopeServer) {
 	t.Helper()
 	owner, customer, foreignCustomer := uuid.NewString(), uuid.NewString(), uuid.NewString()
