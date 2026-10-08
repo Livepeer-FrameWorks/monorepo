@@ -49,6 +49,10 @@ RPC authority and TLS. A shared proxy IP is an observed endpoint, not proof of a
 physical GPU worker. Gateway discovery contributes only the socket it actually dialed;
 DNS siblings do not receive credit for its success.
 
+External probes require a pinned public IP. Private, loopback, link-local and
+other non-public destinations are rejected before dialing through the shared
+destination policy. These policy rejections are not orchestrator failures.
+
 The scheduler uses endpoint and prober geolocation when available: assign the nearest
 healthy prober and add the second if its distance is no more than twice the nearest's.
 There is no fixed kilometer exclusion. A distant nearest prober still gives coverage,

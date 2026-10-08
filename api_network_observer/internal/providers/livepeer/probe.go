@@ -13,6 +13,7 @@ import (
 
 	obs "github.com/Livepeer-FrameWorks/monorepo/pkg/networkobservation"
 	lp "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/livepeer_observer"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/restream"
 	"github.com/google/uuid"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
@@ -24,10 +25,11 @@ import (
 )
 
 type Probe struct {
-	Address       []byte
-	Signature     []byte
-	SkipTLSVerify bool
-	Timeout       time.Duration
+	Address           []byte
+	Signature         []byte
+	SkipTLSVerify     bool
+	Timeout           time.Duration
+	destinationPolicy restream.DestinationPolicy
 }
 
 func NewProbe(address, signature string, skipTLS bool, timeout time.Duration) (*Probe, error) {
@@ -52,8 +54,14 @@ func (p *Probe) Check(ctx context.Context, a obs.Assignment) obs.ProbeResult {
 	defer cancel()
 	result := obs.ProbeResult{Assignment: &a, ID: uuid.NewString(), AssignmentID: a.ID, EndpointID: a.Endpoint.ID, Check: obs.Check{ObserverID: a.ObserverID, ObservedAt: start, Qualifying: true}}
 	u, err := url.Parse(a.Endpoint.Resource.URI)
-	if err != nil || u.Hostname() == "" {
+	ip := net.ParseIP(a.Endpoint.IP)
+	if err != nil || u.Hostname() == "" || u.User != nil || (u.Scheme != "http" && u.Scheme != "https") || ip == nil {
 		result.Check.FailureKind = "invalid_endpoint"
+		result.Check.Qualifying = false
+		return result
+	}
+	if p.destinationPolicy.ValidateHost(u.Hostname()) != nil || p.destinationPolicy.ValidateIP(ip) != nil {
+		result.Check.FailureKind = "endpoint_policy"
 		result.Check.Qualifying = false
 		return result
 	}
@@ -75,12 +83,8 @@ func (p *Probe) Check(ctx context.Context, a obs.Assignment) obs.ProbeResult {
 	}
 	// The authority remains the advertised hostname while the socket is pinned.
 	dialer := func(ctx context.Context, _ string) (net.Conn, error) {
-		host := a.Endpoint.IP
-		if host == "" {
-			host = u.Hostname()
-		}
 		var d net.Dialer
-		return d.DialContext(ctx, "tcp", net.JoinHostPort(host, port))
+		return d.DialContext(ctx, "tcp", net.JoinHostPort(ip.String(), port))
 	}
 	conn, err := grpc.NewClient("passthrough:///"+target, grpc.WithTransportCredentials(transport), grpc.WithAuthority(u.Host), grpc.WithContextDialer(dialer))
 	if err != nil {
@@ -106,7 +110,7 @@ func (p *Probe) Check(ctx context.Context, a obs.Assignment) obs.ProbeResult {
 		}
 		return result
 	}
-	if a.Endpoint.IP != "" && result.Check.ActualIP != a.Endpoint.IP {
+	if !ip.Equal(net.ParseIP(result.Check.ActualIP)) {
 		result.Check.FailureKind = "ambiguous_attribution"
 		result.Check.Qualifying = false
 		return result
