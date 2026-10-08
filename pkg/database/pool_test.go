@@ -6,9 +6,11 @@ import (
 	"database/sql/driver"
 	"errors"
 	"io"
+	"math/rand/v2"
 	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 )
 
 // burstDriver counts opened connections and holds every query until the
@@ -92,5 +94,29 @@ func TestDefaultPoolKeepsConnectionsABurstOpened(t *testing.T) {
 	if reopened := drv.opens.Load() - opened; reopened != 0 {
 		t.Fatalf("second burst of %d opened %d new connections; the pool closed connections the first burst left idle (MaxIdleClosed=%d)",
 			burst, reopened, db.Stats().MaxIdleClosed)
+	}
+}
+
+// Connections a burst opened together retire spread over the last quarter of ConnMaxLifetime, never after it.
+func TestConnectionLifetimeSpreadsRetirementWithinTheLastQuarter(t *testing.T) {
+	maxLifetime := DefaultConfig().ConnMaxLifetime
+	t.Cleanup(func() { connectionLifetimeJitter = rand.Float64 })
+	for _, fraction := range []float64{0, 0.5, 0.999999} {
+		connectionLifetimeJitter = func() float64 { return fraction }
+		got := connectionLifetime(maxLifetime)
+		if got > maxLifetime || got <= maxLifetime*3/4 {
+			t.Errorf("jitter %v: lifetime %s outside (%s, %s]", fraction, got, maxLifetime*3/4, maxLifetime)
+		}
+	}
+	connectionLifetimeJitter = rand.Float64
+	seen := map[time.Duration]bool{}
+	for range 32 {
+		seen[connectionLifetime(maxLifetime)] = true
+	}
+	if len(seen) < 2 {
+		t.Fatalf("32 connections drew %d distinct lifetimes", len(seen))
+	}
+	if got := connectionLifetime(0); got != 0 {
+		t.Fatalf("unlimited lifetime became %s", got)
 	}
 }

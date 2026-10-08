@@ -379,7 +379,6 @@ func main() {
 	buildGRPCServer := func(ctx context.Context) (*grpc.Server, error) {
 		return commodoregrpc.NewGRPCServer(ctx, commodoregrpc.CommodoreServerConfig{
 			DB:                              db,
-			DBMaxIdleConns:                  dbConfig.MaxIdleConns,
 			Logger:                          logger,
 			FoghornPool:                     foghornPool,
 			QuartermasterClient:             quartermasterGRPCClient,

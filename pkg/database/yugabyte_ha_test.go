@@ -1,4 +1,4 @@
-//go:build yugabyte_ha
+//go:build yugabyte_ha || yugabyte_measure
 
 package database
 
@@ -23,6 +23,12 @@ type yugabyteHANode struct {
 	hostPort string
 	address  string
 }
+
+// yugabyteHAExtraTServerFlags is appended, comma-separated, to the tserver flags every node of the next cluster starts
+// with.
+var yugabyteHAExtraTServerFlags string
+
+const yugabyteHAMaxOpenConns = 16
 
 type yugabyteHACluster struct {
 	network       string
@@ -62,6 +68,7 @@ CREATE TABLE frameworks_ha_probe (
 	}
 
 	assertYugabyteServerRetry(t, ctx, db)
+	assertYugabyteBackendSurvivesConcurrentDDL(t, ctx, db)
 
 	victim := cluster.nodes[len(cluster.nodes)-1]
 	var victimConnection *sql.Conn
@@ -93,29 +100,49 @@ CREATE TABLE frameworks_ha_probe (
 	}
 	_ = victimConnection.Close()
 
-	db.SetMaxIdleConns(0)
-	eventuallyYugabyte(t, 45*time.Second, func(probe context.Context) error {
+	// The pool keeps the idle connections it holds to the partitioned tserver, as a service's pool does. Each request
+	// that draws one fails its ping and discards it, so the pool converges on the survivors within a few requests.
+	partitioned := time.Now()
+	failedProbes := 0
+	eventuallyYugabyte(t, 60*time.Second, func(probe context.Context) error {
 		_, err := db.ExecContext(probe, "INSERT INTO frameworks_ha_probe (id, value) VALUES (2, 2) ON CONFLICT (id) DO NOTHING")
+		if err != nil {
+			failedProbes++
+		}
 		return err
 	})
+	eventuallyYugabyte(t, 60*time.Second, func(probe context.Context) error {
+		survivors := holdYugabyteConnectionsE(probe, db, 6)
+		if len(survivors) == 0 {
+			failedProbes++
+			return fmt.Errorf("could not hold 6 connections")
+		}
+		defer closeYugabyteConnections(survivors)
+		for _, connection := range survivors {
+			address, err := yugabyteConnectionAddressE(probe, connection)
+			if err != nil {
+				return err
+			}
+			if address == victim.address {
+				return fmt.Errorf("a pooled connection still reaches partitioned tserver %s", victim.name)
+			}
+		}
+		return nil
+	})
+	t.Logf("pool served only surviving tservers %s after the partition, %d failed probes", time.Since(partitioned).Round(time.Second), failedProbes)
 	var uncommittedRows int
-	if err := db.QueryRowContext(ctx, "SELECT COUNT(*) FROM frameworks_ha_probe WHERE id = 999").Scan(&uncommittedRows); err != nil {
-		t.Fatalf("check aborted victim transaction: %v", err)
-	}
+	eventuallyYugabyte(t, 30*time.Second, func(probe context.Context) error {
+		return db.QueryRowContext(probe, "SELECT COUNT(*) FROM frameworks_ha_probe WHERE id = 999").Scan(&uncommittedRows)
+	})
 	if uncommittedRows != 0 {
 		t.Fatalf("partitioned-node transaction leaked %d uncommitted rows", uncommittedRows)
 	}
 
-	survivors := holdYugabyteConnections(t, ctx, db, 6)
-	survivorAddresses := connectionAddresses(t, ctx, survivors)
-	closeYugabyteConnections(survivors)
-	if survivorAddresses[victim.address] != 0 {
-		t.Fatalf("new connection reached partitioned tserver %s: %#v", victim.name, survivorAddresses)
-	}
-
 	cluster.healNode(t, victim)
+	// The pool reuses its idle connections first; only the connections it opens beyond them can land on the rejoined
+	// tserver.
 	eventuallyYugabyte(t, 60*time.Second, func(probe context.Context) error {
-		connections := holdYugabyteConnectionsE(probe, db, 6)
+		connections := holdYugabyteConnectionsE(probe, db, min(db.Stats().Idle+3, yugabyteHAMaxOpenConns))
 		if len(connections) == 0 {
 			return fmt.Errorf("no connections acquired")
 		}
@@ -176,6 +203,59 @@ $$
 	}
 }
 
+// assertYugabyteBackendSurvivesConcurrentDDL proves that a warm backend whose cached catalog a DDL on another tserver
+// made stale reads the changed table again on the same session, through the ordinary statement retry: a schema or
+// catalog version mismatch needs no fresh connection, which would load its whole catalog cold.
+func assertYugabyteBackendSurvivesConcurrentDDL(t *testing.T, ctx context.Context, db *sql.DB) {
+	t.Helper()
+	connections := holdYugabyteConnections(t, ctx, db, 6)
+	defer closeYugabyteConnections(connections)
+	reader, writer := connections[0], (*sql.Conn)(nil)
+	readerAddress := yugabyteConnectionAddress(t, ctx, reader)
+	for _, connection := range connections[1:] {
+		if yugabyteConnectionAddress(t, ctx, connection) != readerAddress {
+			writer = connection
+			break
+		}
+	}
+	if writer == nil {
+		t.Fatal("no connection on a tserver other than the reader's")
+	}
+	var readerPID, value int64
+	if err := reader.QueryRowContext(ctx, "SELECT pg_backend_pid()").Scan(&readerPID); err != nil {
+		t.Fatalf("read reader backend: %v", err)
+	}
+	if err := reader.QueryRowContext(ctx, "SELECT value FROM frameworks_ha_probe WHERE id = 1").Scan(&value); err != nil {
+		t.Fatalf("warm reader: %v", err)
+	}
+	if _, err := writer.ExecContext(ctx, "ALTER TABLE frameworks_ha_probe ADD COLUMN ddl_probe BIGINT NOT NULL DEFAULT 7"); err != nil {
+		t.Fatalf("alter probe table from another tserver: %v", err)
+	}
+	attempts := 0
+	var pid int64
+	err := RetryPostgres(ctx, DefaultRetryAttempts, 25*time.Millisecond, func() error {
+		attempts++
+		return reader.QueryRowContext(ctx, "SELECT value, pg_backend_pid() FROM frameworks_ha_probe WHERE id = 1").Scan(&value, &pid)
+	})
+	if err != nil {
+		t.Fatalf("warm backend did not read the altered table within the retry budget (%d attempts): %v", attempts, err)
+	}
+	if pid != readerPID {
+		t.Fatalf("read on backend %d, want the reader's backend %d", pid, readerPID)
+	}
+	// The other tserver learns the new catalog version from its master heartbeat; until then its backends plan with
+	// the old columns. The same backend sees the new column once it has.
+	var probe int64
+	changed := time.Now()
+	eventuallyYugabyte(t, 15*time.Second, func(probeCtx context.Context) error {
+		return reader.QueryRowContext(probeCtx, "SELECT ddl_probe, pg_backend_pid() FROM frameworks_ha_probe WHERE id = 1").Scan(&probe, &pid)
+	})
+	if probe != 7 || pid != readerPID {
+		t.Fatalf("read ddl_probe=%d on backend %d, want 7 on the reader's backend %d", probe, pid, readerPID)
+	}
+	t.Logf("warm backend read the altered table after %d attempt(s) and its new column after %s", attempts, time.Since(changed).Round(time.Millisecond))
+}
+
 func startYugabyteHACluster(t *testing.T) *yugabyteHACluster {
 	t.Helper()
 	image := yugabyteHAImage(t)
@@ -196,7 +276,7 @@ func startYugabyteHACluster(t *testing.T) *yugabyteHACluster {
 			"run", "-d", "--name", name, "--hostname", name,
 			"--network", cluster.network, "--ip", address, "-P", image,
 			"bin/yugabyted", "start", "--background=false", "--ui=false", "--advertise_address=" + address,
-			"--tserver_flags=yb_enable_read_committed_isolation=true",
+			"--tserver_flags=" + strings.TrimSuffix("yb_enable_read_committed_isolation=true,"+yugabyteHAExtraTServerFlags, ","),
 			fmt.Sprintf("--cloud_location=frameworks.eu.z%d", index),
 		}
 		if index == 1 {
@@ -252,6 +332,11 @@ func createYugabyteHANetwork(t *testing.T, name string) string {
 
 func (cluster *yugabyteHACluster) openSmartDriver(t *testing.T) *sql.DB {
 	t.Helper()
+	return cluster.openSmartDriverAt(t, "yugabyte")
+}
+
+func (cluster *yugabyteHACluster) openSmartDriverAt(t *testing.T, database string) *sql.DB {
+	t.Helper()
 	contactPoints := make([]string, 0, len(cluster.nodes))
 	dialTargets := make(map[string]string, len(cluster.nodes))
 	bridgeAddresses := make(map[string]struct{}, len(cluster.nodes))
@@ -262,8 +347,8 @@ func (cluster *yugabyteHACluster) openSmartDriver(t *testing.T) *sql.DB {
 		bridgeAddresses[node.address] = struct{}{}
 	}
 	dsn := fmt.Sprintf(
-		"postgres://yugabyte@%s/yugabyte?sslmode=disable&load_balance=true&connect_timeout=3&yb_servers_refresh_interval=0&failed_host_reconnect_delay_secs=1",
-		strings.Join(contactPoints, ","),
+		"postgres://yugabyte@%s/%s?sslmode=disable&load_balance=true&connect_timeout=3&yb_servers_refresh_interval=0&failed_host_reconnect_delay_secs=1",
+		strings.Join(contactPoints, ","), database,
 	)
 	dsn, err := withPgxExecMode(dsn)
 	if err != nil {
@@ -294,11 +379,11 @@ func (cluster *yugabyteHACluster) openSmartDriver(t *testing.T) *sql.DB {
 		}
 		return dialer.DialContext(ctx, network, address)
 	}
-	db := ybstdlib.OpenDB(*config)
-	db.SetMaxOpenConns(16)
-	db.SetMaxIdleConns(0)
-	db.SetConnMaxLifetime(5 * time.Minute)
-	db.SetConnMaxIdleTime(5 * time.Minute)
+	// The services' pool policy, with fewer connections.
+	pool := DefaultConfig()
+	pool.MaxOpenConns, pool.MaxIdleConns = yugabyteHAMaxOpenConns, yugabyteHAMaxOpenConns
+	db := ybstdlib.OpenDB(*config, lifetimeOptions(pool.ConnMaxLifetime)...)
+	configurePool(db, pool)
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	if err := db.PingContext(ctx); err != nil {

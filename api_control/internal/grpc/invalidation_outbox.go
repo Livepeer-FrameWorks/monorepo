@@ -219,9 +219,7 @@ func (s *CommodoreServer) runInvalidationOutboxWorker(ctx context.Context) {
 // post-commit races between replicas.
 func (s *CommodoreServer) claimInvalidationOutboxBatch(ctx context.Context) ([]invalidationOutboxRow, error) {
 	var out []invalidationOutboxRow
-	err := database.WithRetryablePostgresTxWithHook(ctx, s.db, nil, func(error, int) {
-		s.recycleIdlePostgresConns()
-	}, func(tx *sql.Tx) error {
+	err := database.WithRetryablePostgresTx(ctx, s.db, nil, func(tx *sql.Tx) error {
 		queries := commodoredb.New(tx)
 		rows, qerr := queries.ClaimInvalidationBatch(ctx, invalidationOutboxBatchSize)
 		if qerr != nil {

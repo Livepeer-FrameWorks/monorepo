@@ -1,2 +1,7 @@
 ---
 postgres_service_name: postgresql
+
+# Session limits init.yml attaches to every runtime role ("Bound runtime role sessions"). They are written as
+# pg_db_role_setting stores them, which is how init.yml recognises a role that already carries them.
+postgres_runtime_statement_timeout: 60s
+postgres_runtime_idle_in_transaction_session_timeout: 60s

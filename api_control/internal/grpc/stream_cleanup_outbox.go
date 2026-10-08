@@ -537,9 +537,7 @@ func (s *CommodoreServer) runStreamCleanupOutboxWorker(ctx context.Context) {
 // guards post-commit races between replicas.
 func (s *CommodoreServer) claimStreamCleanupOutboxBatch(ctx context.Context) ([]streamCleanupOutboxRow, error) {
 	var out []streamCleanupOutboxRow
-	err := database.WithRetryablePostgresTxWithHook(ctx, s.db, nil, func(error, int) {
-		s.recycleIdlePostgresConns()
-	}, func(tx *sql.Tx) error {
+	err := database.WithRetryablePostgresTx(ctx, s.db, nil, func(tx *sql.Tx) error {
 		queries := commodoredb.New(tx)
 		claimed, qerr := queries.ClaimStreamCleanupBatch(ctx, int32(streamCleanupOutboxBatchSize))
 		if qerr != nil {

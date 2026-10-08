@@ -91,7 +91,11 @@ func TestWithSessionLockRunsFnBetweenLockAndUnlock(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer db.Close()
-	mock.ExpectExec(`pg_advisory_lock\(`).WithArgs(sessionLockClass, "sync").WillReturnResult(sqlmock.NewResult(0, 1))
+	// Another session holds the lock on the first ask.
+	mock.ExpectQuery(`pg_try_advisory_lock\(`).WithArgs(sessionLockClass, "sync").
+		WillReturnRows(sqlmock.NewRows([]string{"pg_try_advisory_lock"}).AddRow(false))
+	mock.ExpectQuery(`pg_try_advisory_lock\(`).WithArgs(sessionLockClass, "sync").
+		WillReturnRows(sqlmock.NewRows([]string{"pg_try_advisory_lock"}).AddRow(true))
 	mock.ExpectExec("UPDATE marker").WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectExec("pg_advisory_unlock").WithArgs(sessionLockClass, "sync").WillReturnResult(sqlmock.NewResult(0, 1))
 
@@ -113,7 +117,7 @@ func TestWithSessionLockSkipsFnWhenTheLockIsNotTaken(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer db.Close()
-	mock.ExpectExec(`pg_advisory_lock\(`).WillReturnError(context.DeadlineExceeded)
+	mock.ExpectQuery(`pg_try_advisory_lock\(`).WillReturnError(context.DeadlineExceeded)
 	ran := false
 	err = WithSessionLock(context.Background(), db, "sync", func() error { ran = true; return nil })
 	if err == nil || ran {

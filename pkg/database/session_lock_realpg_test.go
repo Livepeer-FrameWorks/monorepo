@@ -7,6 +7,7 @@ import (
 	"database/sql"
 	"fmt"
 	"os/exec"
+	"strings"
 	"testing"
 	"time"
 
@@ -35,8 +36,8 @@ func TestSessionLeader_RealPG(t *testing.T) {
 		t.Fatal(err)
 	}
 	dsn := fmt.Sprintf("postgres://postgres:harness@127.0.0.1:%s/postgres?sslmode=disable", port)
-	open := func() *sql.DB {
-		db, openErr := sql.Open("pgx", dsn)
+	open := func(params ...string) *sql.DB {
+		db, openErr := sql.Open("pgx", dsn+strings.Join(params, ""))
 		if openErr != nil {
 			t.Fatal(openErr)
 		}
@@ -97,18 +98,28 @@ func TestSessionLeader_RealPG(t *testing.T) {
 		})
 	}()
 	<-held
-	waited := make(chan time.Duration, 1)
+	// The waiter's sessions carry a statement_timeout shorter than the hold, as the runtime roles' sessions carry one
+	// shorter than a long holder: the wait must outlast it.
+	waiter := open("&statement_timeout=200")
+	type waitResult struct {
+		took time.Duration
+		err  error
+	}
+	waited := make(chan waitResult, 1)
 	start := time.Now()
 	go func() {
-		_ = WithSessionLock(ctx, replicaB, "stripe-sync", func() error { return nil })
-		waited <- time.Since(start)
+		err := WithSessionLock(ctx, waiter, "stripe-sync", func() error { return nil })
+		waited <- waitResult{took: time.Since(start), err: err}
 	}()
-	time.Sleep(300 * time.Millisecond)
+	time.Sleep(600 * time.Millisecond)
 	close(releaseHolder)
 	select {
-	case d := <-waited:
-		if d < 300*time.Millisecond {
-			t.Fatalf("second WithSessionLock ran after %s while the first held the lock", d)
+	case result := <-waited:
+		if result.err != nil {
+			t.Fatalf("second WithSessionLock failed while waiting for the holder: %v", result.err)
+		}
+		if result.took < 600*time.Millisecond {
+			t.Fatalf("second WithSessionLock ran after %s while the first held the lock", result.took)
 		}
 	case <-time.After(10 * time.Second):
 		t.Fatal("second WithSessionLock never ran after the first released")

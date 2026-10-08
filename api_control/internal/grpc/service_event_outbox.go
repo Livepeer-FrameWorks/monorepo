@@ -244,9 +244,7 @@ func (s *CommodoreServer) runServiceEventOutboxWorker(ctx context.Context) {
 
 func (s *CommodoreServer) claimCommodoreServiceOutboxBatch(ctx context.Context) ([]commodoreServiceOutboxRow, error) {
 	var out []commodoreServiceOutboxRow
-	err := database.WithRetryablePostgresTxWithHook(ctx, s.db, nil, func(error, int) {
-		s.recycleIdlePostgresConns()
-	}, func(tx *sql.Tx) error {
+	err := database.WithRetryablePostgresTx(ctx, s.db, nil, func(tx *sql.Tx) error {
 		queries := commodoredb.New(tx)
 		rows, qerr := queries.ClaimServiceEventOutboxBatch(ctx, commodoredb.ClaimServiceEventOutboxBatchParams{
 			LeaseInterval: fmt.Sprintf("%d seconds", int(commodoreServiceOutboxLease.Seconds())),

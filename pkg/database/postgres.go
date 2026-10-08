@@ -3,7 +3,9 @@ package database
 import (
 	"context"
 	"database/sql"
+	"database/sql/driver"
 	"fmt"
+	"math/rand/v2"
 	"net/url"
 	"strings"
 	"time"
@@ -65,19 +67,26 @@ func (t postgresContractTracer) TraceQueryEnd(_ context.Context, _ *pgx.Conn, da
 
 // DefaultConfig returns default database configuration.
 //
-// MaxIdleConns equals MaxOpenConns because a new YSQL connection starts a
-// backend with a cold catalog cache, and its first query on a table pays for
-// loading that table's catalog entries: about 150 ms against a 1.5 ms warm
-// query on a single local node, and more under concurrent connection starts.
-// A smaller idle limit closes what a burst opened and makes the next burst pay
-// it again on every connection. ConnMaxIdleTime still retires connections an
-// idle service does not use.
+// A new YSQL connection starts a backend with a cold catalog cache, and its
+// first query on a relation loads that relation's catalog entries one read at a
+// time from the master leader: the Purser admission read issues 638 such reads
+// on a fresh backend, about 140 ms on a three-node cluster with sub-millisecond
+// links and 1.5 s at a 2 ms round trip, against 3 to 16 ms once warm
+// (make measure-yugabyte-connection-warmth). Every connection the pool closes
+// makes some later request pay that again, so connections live long:
+// MaxIdleConns equals MaxOpenConns, so the pool keeps what a burst opened, and
+// a connection retires only after ConnMaxIdleTime unused or near
+// ConnMaxLifetime. A connection to a tserver that died is still replaced at
+// once: database/sql discards a connection whose query fails at the
+// transport, the driver pings a connection reused after more than a second
+// idle and discards it when the ping fails, and TCP keepalive (Go's 15 s probes)
+// closes an idle one whose host stopped answering.
 func DefaultConfig() Config {
 	return Config{
 		MaxOpenConns:    25,
 		MaxIdleConns:    25,
-		ConnMaxLifetime: 5 * time.Minute,
-		ConnMaxIdleTime: 5 * time.Minute,
+		ConnMaxLifetime: 60 * time.Minute,
+		ConnMaxIdleTime: 30 * time.Minute,
 		PingTimeout:     defaultPingTimeout,
 	}
 }
@@ -87,6 +96,47 @@ func configurePool(db *sql.DB, cfg Config) {
 	db.SetMaxIdleConns(cfg.MaxIdleConns)
 	db.SetConnMaxLifetime(cfg.ConnMaxLifetime)
 	db.SetConnMaxIdleTime(cfg.ConnMaxIdleTime)
+}
+
+// retireAtKey holds, in a connection's pgconn custom data, the time after which
+// the pool must not hand that connection out again.
+const retireAtKey = "frameworks.retire_at"
+
+// connectionLifetimeJitter returns a fraction in [0, 1) that places one
+// connection's retirement within the last quarter of ConnMaxLifetime.
+var connectionLifetimeJitter = rand.Float64
+
+// connectionLifetime is how long one connection may serve before it retires.
+// Connections a burst opened together would otherwise all retire together, and
+// every request that follows would pay a cold catalog at the same moment.
+func connectionLifetime(maxLifetime time.Duration) time.Duration {
+	if maxLifetime <= 0 {
+		return 0
+	}
+	return maxLifetime - time.Duration(connectionLifetimeJitter()*float64(maxLifetime)/4)
+}
+
+// lifetimeOptions retires each connection at its own jittered lifetime. The
+// driver calls the reset hook when the pool hands out a connection it used
+// before, and database/sql replaces a connection whose reset returns
+// driver.ErrBadConn without failing the caller. SetConnMaxLifetime still bounds
+// connections that sit idle past their retirement.
+func lifetimeOptions(maxLifetime time.Duration) []stdlib.OptionOpenDB {
+	if maxLifetime <= 0 {
+		return nil
+	}
+	return []stdlib.OptionOpenDB{
+		stdlib.OptionAfterConnect(func(_ context.Context, conn *pgx.Conn) error {
+			conn.PgConn().CustomData()[retireAtKey] = time.Now().Add(connectionLifetime(maxLifetime))
+			return nil
+		}),
+		stdlib.OptionResetSession(func(_ context.Context, conn *pgx.Conn) error {
+			if retireAt, ok := conn.PgConn().CustomData()[retireAtKey].(time.Time); ok && !time.Now().Before(retireAt) {
+				return driver.ErrBadConn
+			}
+			return nil
+		}),
+	}
 }
 
 // withPgxExecMode adds default_query_exec_mode=exec to a DSN unless already set.
@@ -147,7 +197,7 @@ func Connect(cfg Config, logger logging.Logger) (PostgresConn, error) {
 	if cfg.ServiceName != "" {
 		pgxConfig.Tracer = postgresContractTracer{service: cfg.ServiceName}
 	}
-	db := stdlib.OpenDB(*pgxConfig)
+	db := stdlib.OpenDB(*pgxConfig, lifetimeOptions(cfg.ConnMaxLifetime)...)
 
 	// Apply pool settings before probing so the probe borrows a connection
 	// under the same limits the service will use.

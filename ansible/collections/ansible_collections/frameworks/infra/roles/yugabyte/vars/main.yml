@@ -24,6 +24,11 @@ yugabyte_master_tablet_meta_path: "{{ yugabyte_master_root_dir }}/tablet-meta/{{
 # Completion is recorded only after extraction and relocation in the final, artifact-specific directory.
 yugabyte_install_sentinel: "{{ yugabyte_release_dir }}/.installed"
 
+# Session limits init.yml attaches to every runtime role ("Bound runtime role sessions"). They are written as
+# pg_db_role_setting stores them, which is how init.yml recognises a role that already carries them.
+yugabyte_runtime_statement_timeout: 60s
+yugabyte_runtime_idle_in_transaction_session_timeout: 60s
+
 # Time-sync per distro family. chronyd on RHEL/Arch, chrony on Debian.
 yugabyte_timesync_by_family:
   Debian:

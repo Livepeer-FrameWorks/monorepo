@@ -14,21 +14,37 @@ import (
 const (
 	sessionLockClass = "frameworks_session_lock"
 	tryLockSQL       = `SELECT pg_try_advisory_lock(hashtext($1), hashtext($2))`
-	lockSQL          = `SELECT pg_advisory_lock(hashtext($1), hashtext($2))`
 	unlockSQL        = `SELECT pg_advisory_unlock(hashtext($1), hashtext($2))`
 )
 
+// sessionLockPollInterval is how often WithSessionLock asks again for a lock
+// another session holds.
+const sessionLockPollInterval = 250 * time.Millisecond
+
 // WithSessionLock runs fn while holding the session advisory lock name,
-// waiting for another holder to release it first. A replica that dies while
-// holding the lock releases it with its connection.
+// waiting until ctx ends for another holder to release it first. A replica
+// that dies while holding the lock releases it with its connection. The wait
+// polls instead of blocking in one statement, so the runtime roles'
+// statement_timeout bounds each attempt rather than the whole wait.
 func WithSessionLock(ctx context.Context, db *sql.DB, name string, fn func() error) error {
 	conn, err := db.Conn(ctx)
 	if err != nil {
 		return fmt.Errorf("session lock %s: pin connection: %w", name, err)
 	}
 	defer func() { _ = conn.Close() }()
-	if _, err := conn.ExecContext(ctx, lockSQL, sessionLockClass, name); err != nil {
-		return fmt.Errorf("session lock %s: acquire: %w", name, err)
+	for {
+		var acquired bool
+		if err := conn.QueryRowContext(ctx, tryLockSQL, sessionLockClass, name).Scan(&acquired); err != nil {
+			return fmt.Errorf("session lock %s: acquire: %w", name, err)
+		}
+		if acquired {
+			break
+		}
+		select {
+		case <-ctx.Done():
+			return fmt.Errorf("session lock %s: acquire: %w", name, ctx.Err())
+		case <-time.After(sessionLockPollInterval):
+		}
 	}
 	defer func() {
 		unlockCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)

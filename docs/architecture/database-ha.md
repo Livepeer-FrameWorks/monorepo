@@ -50,13 +50,41 @@ query errors and must be retried by the caller (`database.RetryPostgres` /
 `database.SQLState`). Three things are therefore load-bearing, not cosmetic:
 
 - `connect_timeout` (in the DSN) — a hung/dead node's dial fails fast.
-- Pool recycling — `ConnMaxLifetime` + `ConnMaxIdleTime` (`database.Config`) churn
-  connections so the pool rebalances across nodes after a failover, recovery, or
-  node addition, and a connection to a degraded node doesn't linger. The idle
-  limit equals the open limit: a new YSQL connection's first query on a table
-  loads that table's catalog entries (~150 ms against ~1.5 ms warm), so a pool
-  that closes what a burst opened makes every later burst pay that again.
+- Error-driven eviction — database/sql discards a connection whose query fails at
+  the transport, the driver pings a connection reused after more than a second idle
+  and discards it when the ping fails, and TCP keepalive closes an idle connection
+  whose host stopped answering. `make verify-yugabyte-ha` partitions a tserver under
+  the services' pool policy and proves the pool serves only the survivors within a
+  few requests, without dropping its idle connections by hand.
+- Long-lived connections — a new YSQL backend loads each relation's catalog entries
+  one read at a time from the master leader on first use: the Purser admission read
+  issues 638 such reads on a fresh backend, ~140 ms on a backend beside the master
+  leader and ~1.5 s at a 2 ms round trip to it, against 3–16 ms warm
+  (`make measure-yugabyte-connection-warmth`, identical for distributed and
+  colocated databases). Every connection the pool closes makes a later request pay
+  that, so the pool keeps what a burst opened (idle limit = open limit), retires an
+  unused connection after 30 min, and retires each connection at its own point in
+  the last quarter of its 60 min lifetime, so connections opened together do not go
+  cold together. Retries replay on the same pool: a backend refreshes its own catalog
+  after a schema or catalog version mismatch. The cost of long lifetimes is slower
+  rebalancing: a tserver that rejoins or is added receives connections as the pool
+  opens new ones, within the lifetime.
 - Caller context deadlines on queries.
+
+## Runtime session limits
+
+Services log in as their database's runtime role, and nothing else does: migrations,
+backups, restores, relayout and `cluster doctor` connect as the superuser, and
+relayout's probes `SET ROLE`, which does not apply a role's settings. The yugabyte and
+postgres roles' `init.yml` attach `statement_timeout = 60s` and
+`idle_in_transaction_session_timeout = 60s` to every runtime role (`ALTER ROLE … SET`,
+only when the role does not already carry them, because on YugabyteDB the shared-catalog
+change invalidates every backend's catalog cache). A transaction a service leaves open
+holds its row locks and provisional writes until its session ends; with the limit the
+engine ends that session after a minute and writers queued behind it proceed. The
+settings apply at login, so a running service takes them up as its pool opens
+connections. `WithSessionLock` polls `pg_try_advisory_lock` so a wait for another
+holder is bounded by its context, not by the statement limit.
 
 ## Statement caching: we use exec mode
 

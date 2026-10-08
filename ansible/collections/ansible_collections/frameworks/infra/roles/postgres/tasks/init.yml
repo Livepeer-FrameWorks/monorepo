@@ -71,6 +71,58 @@
     - not ansible_check_mode
     - postgres_databases | length > 0
 
+# Services log in as the runtime roles, and nothing else does: migrations, backups and restores connect as postgres.
+# A transaction a service leaves open keeps its locks until its session ends, so a runtime session idle inside a
+# transaction is ended after a minute and a runtime statement is cancelled after a minute. A role's settings apply at
+# login, so a service's pool takes them up as it opens connections. A role is altered only when its settings differ.
+- name: Find runtime roles without session limits
+  become: true
+  become_user: postgres
+  community.postgresql.postgresql_query:
+    login_unix_socket: /var/run/postgresql
+    query: >-
+      SELECT r.rolname FROM pg_roles r
+      WHERE r.rolname = ANY(string_to_array(%(roles)s, ','))
+        AND NOT EXISTS (
+          SELECT 1 FROM pg_db_role_setting s
+          WHERE s.setrole = r.oid AND s.setdatabase = 0 AND s.setconfig @> string_to_array(%(limits)s, ','))
+      ORDER BY r.rolname
+    # Lists are passed joined: the module renders a list argument with its elements' Python quotes inside the array.
+    named_args:
+      roles: "{{ postgres_runtime_role_names | join(',') }}"
+      limits: >-
+        statement_timeout={{ postgres_runtime_statement_timeout }},idle_in_transaction_session_timeout={{
+        postgres_runtime_idle_in_transaction_session_timeout }}
+  register: postgres_runtime_roles_unbounded
+  changed_when: false
+  vars:
+    postgres_runtime_role_names: >-
+      {%- set names = [] -%}
+      {%- for database in postgres_databases -%}
+      {%- set _ = names.append(database.runtime_role | default((database.owner | default(database.name, true)) ~ '_runtime', true)) -%}
+      {%- endfor -%}
+      {{ names | unique | list }}
+  when:
+    - not ansible_check_mode
+    - postgres_databases | length > 0
+
+- name: Bound runtime role sessions
+  become: true
+  become_user: postgres
+  community.postgresql.postgresql_query:
+    login_unix_socket: /var/run/postgresql
+    autocommit: true
+    query:
+      - ALTER ROLE "{{ item.rolname }}" SET statement_timeout = '{{ postgres_runtime_statement_timeout }}'
+      - >-
+        ALTER ROLE "{{ item.rolname }}"
+        SET idle_in_transaction_session_timeout = '{{ postgres_runtime_idle_in_transaction_session_timeout }}'
+  # The module reports no rows as an empty mapping.
+  loop: "{{ postgres_runtime_roles_unbounded.query_result | default([]) | list }}"
+  loop_control:
+    label: "{{ item.rolname }}"
+  when: not ansible_check_mode
+
 - name: Create database extensions
   become: true
   become_user: postgres

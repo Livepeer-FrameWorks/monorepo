@@ -31,7 +31,7 @@ func TestResolveArtifactPlaybackIDRetriesRetryablePostgresErrors(t *testing.T) {
 		WithArgs("playback-1").
 		WillReturnRows(rows)
 
-	server := &CommodoreServer{db: db, dbMaxIdleConns: -1, logger: logrus.New()}
+	server := &CommodoreServer{db: db, logger: logrus.New()}
 	resp, err := server.ResolveArtifactPlaybackID(context.Background(), &commodorepb.ResolveArtifactPlaybackIDRequest{
 		PlaybackId: "playback-1",
 	})
@@ -67,7 +67,7 @@ func TestResolveIdentifierRetriesStreamIDLookupOnRetryablePostgresErrors(t *test
 			"tenant_id", "user_id", "internal_name", "identifier_type", "is_recording_enabled", "stream_id", "requires_auth", "artifact_hash",
 		}).AddRow("tenant-1", "user-1", "live+abc", "stream_id", true, streamID, false, ""))
 
-	server := &CommodoreServer{db: db, dbMaxIdleConns: -1, logger: logrus.New()}
+	server := &CommodoreServer{db: db, logger: logrus.New()}
 	resp, err := server.ResolveIdentifier(context.Background(), &commodorepb.ResolveIdentifierRequest{
 		Identifier: streamID,
 	})

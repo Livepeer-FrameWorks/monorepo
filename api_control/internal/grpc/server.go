@@ -164,7 +164,6 @@ type CommodoreServer struct {
 	commodorepb.UnimplementedPushTargetServiceServer
 	commodorepb.UnimplementedPlaybackAccessControlServiceServer
 	db                        *sql.DB
-	dbMaxIdleConns            int
 	logger                    logging.Logger
 	foghornPool               *foghornclient.FoghornPool
 	quartermasterClient       *qmclient.GRPCClient
@@ -286,24 +285,12 @@ func (s *CommodoreServer) observeFieldDecryptFailure(purpose, stored string) {
 	s.metrics.FieldDecryptFailures.WithLabelValues(purpose, string(fieldcrypt.CiphertextFormat(stored))).Inc()
 }
 
+// retryPostgres replays fn on the same pool. A YSQL backend that hit a schema or
+// catalog version mismatch refreshes its own catalog cache before its next
+// statement, so the replay needs no fresh connection, and a fresh one would pay
+// a cold catalog load on every relation it touches.
 func (s *CommodoreServer) retryPostgres(ctx context.Context, fn func() error) error {
-	return fwdb.RetryPostgresWithHook(ctx, fwdb.DefaultRetryAttempts, 25*time.Millisecond, func(error, int) {
-		s.recycleIdlePostgresConns()
-	}, fn)
-}
-
-func (s *CommodoreServer) recycleIdlePostgresConns() {
-	if s.db == nil || s.dbMaxIdleConns < 0 {
-		return
-	}
-	maxIdleConns := s.dbMaxIdleConns
-	if maxIdleConns <= 0 {
-		maxIdleConns = fwdb.DefaultConfig().MaxIdleConns
-	}
-	// database/sql has no CloseIdleConnections; dropping the idle limit forces
-	// stale Yugabyte catalog-cache connections out before the retry is replayed.
-	s.db.SetMaxIdleConns(0)
-	s.db.SetMaxIdleConns(maxIdleConns)
+	return fwdb.RetryPostgres(ctx, fwdb.DefaultRetryAttempts, 25*time.Millisecond, fn)
 }
 
 // clusterRoute caches the tenant -> cluster -> foghorn mapping.
@@ -808,7 +795,6 @@ func (u commodoreUserRecord) toProtoUser(userID, tenantID string) *commodorepb.U
 // CommodoreServerConfig contains all dependencies for CommodoreServer
 type CommodoreServerConfig struct {
 	DB                   *sql.DB
-	DBMaxIdleConns       int
 	Logger               logging.Logger
 	FoghornPool          *foghornclient.FoghornPool
 	QuartermasterClient  *qmclient.GRPCClient
@@ -919,7 +905,6 @@ func NewCommodoreServer(cfg CommodoreServerConfig) *CommodoreServer {
 
 	srv := &CommodoreServer{
 		db:                       cfg.DB,
-		dbMaxIdleConns:           cfg.DBMaxIdleConns,
 		logger:                   cfg.Logger,
 		foghornPool:              cfg.FoghornPool,
 		quartermasterClient:      cfg.QuartermasterClient,

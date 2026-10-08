@@ -472,6 +472,116 @@ func TestYugabyteRoleMigrationRefusesAbortedConcurrentIndex(t *testing.T) {
 	}
 }
 
+// TestYugabyteRoleBoundsRuntimeSessions provisions a database through the role's init.yml and proves the session
+// limits it attaches to the runtime role: a runtime transaction left idle is ended and releases its row lock to the
+// runtime writer queued behind it, a runtime statement is cancelled, and the superuser sessions migrations, backups,
+// restores and relayout use, and the owner role, carry no limit. A rerun alters no role.
+func TestYugabyteRoleBoundsRuntimeSessions(t *testing.T) {
+	repo := ybRoleRepo(t)
+	container := fmt.Sprintf("fw-yb-role-limits-%d-%d", os.Getpid(), time.Now().UnixNano())
+	ybRoleStartEngine(t, repo, container)
+
+	services := ybRoleServices(t, "purser")
+	initialize := func() string {
+		t.Helper()
+		output, err := ybRoleRunPlaybook(t, repo, container, map[string]any{
+			"yugabyte_databases":           services.databases,
+			"yugabyte_database_placements": services.placements,
+		}, `    - ansible.builtin.include_role:
+        name: frameworks.infra.yugabyte
+        tasks_from: init.yml
+`)
+		if err != nil {
+			t.Fatalf("yugabyte role init failed: %v\n%s", err, ybRoleTail(output, 20000))
+		}
+		return output
+	}
+	initialize()
+	settings := ybRoleQuery(t, container, "yugabyte", "SELECT array_to_string(s.setconfig, ',') FROM pg_db_role_setting s JOIN pg_roles r ON r.oid = s.setrole WHERE r.rolname = 'purser_runtime' AND s.setdatabase = 0")
+	if settings != "statement_timeout=60s,idle_in_transaction_session_timeout=60s" {
+		t.Fatalf("purser_runtime settings = %q", settings)
+	}
+	rerun := initialize()
+	if section := ybRoleTaskOutput(rerun, "Bound runtime role sessions"); strings.Contains(section, "changed:") {
+		t.Fatalf("a rerun altered a runtime role that already carried its limits:\n%s", section)
+	}
+
+	for role, want := range map[string]string{"yugabyte": "0|0", "purser": "0|0", "purser_runtime": "1min|1min"} {
+		if got := ybRoleSessionQuery(t, container, role, "SELECT current_setting('statement_timeout') || '|' || current_setting('idle_in_transaction_session_timeout')"); got != want {
+			t.Errorf("%s session statement_timeout|idle_in_transaction_session_timeout = %s, want %s", role, got, want)
+		}
+	}
+
+	ybRoleQuery(t, container, "purser", "CREATE TABLE public.stall_probe (id INT PRIMARY KEY, v INT NOT NULL)")
+	ybRoleQuery(t, container, "purser", "INSERT INTO public.stall_probe VALUES (1, 0)")
+	ybRoleQuery(t, container, "purser", "GRANT USAGE ON SCHEMA public TO purser_runtime")
+	ybRoleQuery(t, container, "purser", "GRANT SELECT, UPDATE ON public.stall_probe TO purser_runtime")
+
+	type session struct {
+		output string
+		err    error
+		took   time.Duration
+	}
+	run := func(role, script string, delay time.Duration) <-chan session {
+		done := make(chan session, 1)
+		go func() {
+			time.Sleep(delay)
+			started := time.Now()
+			command := exec.Command("docker", "exec", "-i", container, "/home/yugabyte/bin/ysqlsh", "-X", "-h", "127.0.0.1",
+				"-U", role, "-d", "purser", "-v", "ON_ERROR_STOP=1", "-tA")
+			command.Stdin = strings.NewReader(script)
+			output, err := command.CombinedOutput()
+			done <- session{output: string(output), err: err, took: time.Since(started)}
+		}()
+		return done
+	}
+	// The stalled transaction holds the row; the writer queues behind it; the long statements run meanwhile.
+	stalled := run("purser_runtime", "BEGIN;\nUPDATE public.stall_probe SET v = 1 WHERE id = 1;\n\\! sleep 80\nSELECT 'stalled transaction survived';\n", 0)
+	writer := run("purser_runtime", "UPDATE public.stall_probe SET v = 2 WHERE id = 1;\n", 10*time.Second)
+	runtimeLong := run("purser_runtime", "SELECT pg_sleep(75);\n", 0)
+	superuserLong := run("yugabyte", "SELECT pg_sleep(65);\nSELECT 'superuser statement finished';\n", 0)
+
+	if result := <-stalled; result.err == nil || !strings.Contains(result.output, "idle-in-transaction") && !strings.Contains(result.output, "closed the connection") {
+		t.Errorf("stalled runtime transaction was not ended (err=%v):\n%s", result.err, result.output)
+	}
+	if result := <-writer; result.err != nil || result.took > 60*time.Second {
+		t.Errorf("runtime writer queued behind the stalled transaction: err=%v after %s\n%s", result.err, result.took, result.output)
+	}
+	if result := <-runtimeLong; result.err == nil || !strings.Contains(result.output, "statement timeout") {
+		t.Errorf("runtime statement past its limit was not cancelled (err=%v after %s):\n%s", result.err, result.took, result.output)
+	}
+	if result := <-superuserLong; result.err != nil || !strings.Contains(result.output, "superuser statement finished") {
+		t.Errorf("superuser statement was limited (err=%v after %s):\n%s", result.err, result.took, result.output)
+	}
+	if got := ybRoleQuery(t, container, "purser", "SELECT v FROM public.stall_probe WHERE id = 1"); got != "2" {
+		t.Fatalf("stall_probe.v = %s, want the queued writer's 2 over the ended transaction's uncommitted 1", got)
+	}
+}
+
+// ybRoleSessionQuery runs sql in a session that logs in as role.
+func ybRoleSessionQuery(t *testing.T, container, role, sql string) string {
+	t.Helper()
+	out, err := exec.Command("docker", "exec", container, "/home/yugabyte/bin/ysqlsh", "-X", "-h", "127.0.0.1",
+		"-U", role, "-d", "purser", "-v", "ON_ERROR_STOP=1", "-tAc", sql).CombinedOutput()
+	if err != nil {
+		t.Fatalf("%s: %v: %s", role, err, out)
+	}
+	return strings.TrimSpace(string(out))
+}
+
+// ybRoleTaskOutput returns the lines ansible-playbook printed for the task named name, up to the next task.
+func ybRoleTaskOutput(output, name string) string {
+	start := strings.Index(output, ": "+name+"]")
+	if start < 0 {
+		return ""
+	}
+	section := output[start:]
+	if end := strings.Index(section[1:], "\nTASK ["); end >= 0 {
+		section = section[:end+1]
+	}
+	return section
+}
+
 // ybRoleRepo returns the repository root after checking the tools the role tests drive are present.
 func ybRoleRepo(t *testing.T) string {
 	t.Helper()

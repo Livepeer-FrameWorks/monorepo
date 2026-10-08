@@ -234,9 +234,7 @@ func (s *CommodoreServer) deliverAccountEmail(ctx context.Context, row accountEm
 // one transaction.
 func (s *CommodoreServer) claimAccountEmailOutboxBatch(ctx context.Context) ([]accountEmailOutboxRow, error) {
 	var out []accountEmailOutboxRow
-	err := database.WithRetryablePostgresTxWithHook(ctx, s.db, nil, func(error, int) {
-		s.recycleIdlePostgresConns()
-	}, func(tx *sql.Tx) error {
+	err := database.WithRetryablePostgresTx(ctx, s.db, nil, func(tx *sql.Tx) error {
 		queries := commodoredb.New(tx)
 		abandoned, err := queries.AbandonExpiredAccountEmails(ctx, accountEmailOutboxWindow.Milliseconds())
 		if err != nil {
