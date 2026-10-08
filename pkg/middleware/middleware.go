@@ -196,6 +196,8 @@ func isPublicCORSPath(path string) bool {
 	switch path {
 	case "/graphql", "/graphql/", "/graphql/ws", "/graphql/ws/", "/mcp", "/mcp/":
 		return true
+	case "/v1/network/livepeer", "/v1/network/livepeer/":
+		return true
 	case "/SKILL.md", "/heartbeat.md", "/skill.json", "/llms.txt":
 		return true
 	case "/.well-known/mcp.json", "/.well-known/oauth-protected-resource", "/.well-known/did.json":

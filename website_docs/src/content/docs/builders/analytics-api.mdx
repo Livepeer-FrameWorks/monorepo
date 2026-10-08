@@ -10,9 +10,9 @@ import { Aside } from "@astrojs/starlight/components";
 The webapp's `/analytics`, `/analytics/audience`, `/analytics/usage`, and `/streams/:id/analytics` pages are all built on the same GraphQL surface you can query directly. This page maps each view to the operations that drive it so you can replicate or extend them in your own dashboards.
 
 <Aside type="note">
-  All analytics queries are tenant-scoped via the JWT — you don't need to pass a tenant ID, and you
-  can't query across tenants. Bounded time ranges and pagination are enforced server-side; see field
-  definitions in the [GraphQL playground](%APP_URL%/developer/playground).
+  GraphQL analytics queries are tenant-scoped via the JWT — you don't need to pass a tenant ID, and
+  you can't query across tenants. Bounded time ranges and pagination are enforced server-side; see
+  field definitions in the [GraphQL playground](%APP_URL%/developer/playground).
 </Aside>
 
 <Aside type="note" title="Cluster data is scoped by intent">
@@ -221,6 +221,62 @@ query NetworkStatus {
   }
 }
 ```
+
+## Public Livepeer observations
+
+Platform v0.3.12 adds `GET /v1/network/livepeer` on the Bridge API origin when network
+observations are enabled. This REST endpoint powers the Livepeer tab at
+`/network?view=livepeer` and is available to external explorers and import jobs without
+an account, wallet signature or API key. Browser clients can fetch the public route
+from any origin without cookies or other browser credentials.
+
+```bash
+curl --fail --get "https://bridge.frameworks.network/v1/network/livepeer" \
+  --data-urlencode "resource=0xYOUR_ORCHESTRATOR_ADDRESS" \
+  --data-urlencode "region=eu-west" \
+  --data-urlencode "interval=5m"
+```
+
+| Response field         | Meaning                                                                            |
+| ---------------------- | ---------------------------------------------------------------------------------- |
+| `inventory.resources`  | Contract catalog identities and advertised service URIs                            |
+| `inventory.endpoints`  | Observed endpoints, IPs, availability, geography, latest quote and check times     |
+| `inventory.observers`  | Measurement roles, regions, known locations and last-seen times with opaque IDs    |
+| `history.summaries`    | Whole-window comparisons by identity, IP, region, workload, profile and event kind |
+| `history.cohorts`      | Time buckets for charts, with sample counts and latency distributions              |
+| `history.observations` | Bounded discovery, state, price, error and decision observations                   |
+| `history_status`       | Whether historical analytics was available for this response                       |
+
+`start` and `end` accept RFC3339 timestamps; the default window is 24 hours and the
+maximum is 730 days. `resource`, `ip` and `region` filter history. Inventory remains
+the network inventory; filter its resource/endpoint arrays when importing one
+orchestrator. `interval` accepts `1m`, `5m` or `1h`. `include_inactive=true` includes
+endpoints hidden by the default inactivity window. Tenant scopes and publication
+permissions are server-owned and cannot be changed through query parameters.
+
+Discovery comes from external probers and real gateways; workload performance comes
+from FrameWorks production transcodes. An endpoint IP is not proof of a physical
+worker. Preserve region, profile, workload, event kind, sample counts and price units
+when comparing results. `failures / qualified_samples` describes qualifying outcomes;
+unrelated recorded events must not dilute the denominator. Prices are exact rational
+numerator/denominator strings and reflect the observing broadcaster's offered price.
+An observer's successful RPC checks do not establish continuous uptime or a benchmark
+score comparable to another testing system.
+
+Use `inventory.generated_at`, endpoint check/quote timestamps, observer `last_seen`
+and the history window to determine freshness. Polling every few minutes is sufficient
+for typical importers; responses have a short public cache lifetime. On HTTP 429, back
+off; on an outage, retain your last successful import with its original timestamps.
+`history_status=unavailable` can accompany HTTP 200 with valid inventory and empty
+history: that means historical data is unavailable, not zero traffic or zero failures.
+Inspect `history.truncated` and `history.rolled_up` before treating returned chart or
+observation arrays as complete. Raw checks and quotes expire after 30 days; older
+windows use retained hourly aggregates.
+
+The live endpoint depends on Bridge and the inventory coordinator; it currently has
+no independently hosted snapshot fallback. The authenticated
+`/v1/network/livepeer/diagnostics` route is private and must not be used by public
+importers. See [operator setup and retention](/operators/network-observations).
 
 ## Live event firehose
 

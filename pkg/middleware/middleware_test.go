@@ -341,3 +341,40 @@ func TestCORSMiddlewareBlocksWalletLoginPreflightFromUnconfiguredOrigin(t *testi
 		t.Fatalf("expected no CORS origin for wallet login public origin, got %q", got)
 	}
 }
+
+func TestCORSMiddlewarePublicNetworkImports(t *testing.T) {
+	for _, path := range []string{"/v1/network/livepeer", "/v1/network/livepeer/"} {
+		for _, method := range []string{http.MethodGet, http.MethodOptions} {
+			t.Run(method+path, func(t *testing.T) {
+				router := gin.New()
+				router.Use(CORSMiddleware([]string{"https://app.frameworks.network"}, false))
+				router.GET(path, func(c *gin.Context) { c.JSON(200, gin.H{"inventory": "public"}) })
+				req := httptest.NewRequestWithContext(t.Context(), method, path, nil)
+				req.Header.Set("Origin", "https://explorer.livepeer.org")
+				if method == http.MethodOptions {
+					req.Header.Set("Access-Control-Request-Method", http.MethodGet)
+				}
+				response := httptest.NewRecorder()
+				router.ServeHTTP(response, req)
+				if response.Header().Get("Access-Control-Allow-Origin") != "*" || response.Header().Get("Access-Control-Allow-Credentials") != "" {
+					t.Fatalf("public import is not readable without credentials: status=%d headers=%v", response.Code, response.Header())
+				}
+				if method == http.MethodOptions && response.Code != http.StatusNoContent {
+					t.Fatalf("public import preflight status=%d", response.Code)
+				}
+			})
+		}
+	}
+	for _, path := range []string{"/v1/network/livepeer/diagnostics", "/v1/network/livepeer/diagnostics/"} {
+		router := gin.New()
+		router.Use(CORSMiddleware([]string{"https://app.frameworks.network"}, false))
+		req := httptest.NewRequestWithContext(t.Context(), http.MethodOptions, path, nil)
+		req.Header.Set("Origin", "https://explorer.livepeer.org")
+		req.Header.Set("Access-Control-Request-Method", http.MethodGet)
+		response := httptest.NewRecorder()
+		router.ServeHTTP(response, req)
+		if response.Code != http.StatusForbidden || response.Header().Get("Access-Control-Allow-Origin") != "" {
+			t.Fatalf("public import widened private diagnostics CORS: %d %v", response.Code, response.Header())
+		}
+	}
+}
