@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"frameworks/cli/pkg/health"
@@ -31,63 +32,106 @@ type yugabyteLayoutReport struct {
 // before its layout existed, so it is reported but counts as passed.
 const yugabyteLayoutWarning = "warning"
 
+// yugabyteHostRunner opens the SSH runner for one tserver.
+type yugabyteHostRunner func(inventory.Host) (fwssh.Runner, error)
+
+func yugabytePoolRunner(sshPool *fwssh.Pool) yugabyteHostRunner {
+	return func(host inventory.Host) (fwssh.Runner, error) {
+		if sshPool == nil {
+			return nil, fmt.Errorf("ssh pool is nil")
+		}
+		runner, err := sshPool.Get(&fwssh.ConnectionConfig{Address: host.ExternalIP, Port: 22, User: host.User, HostName: host.Name, Timeout: 30 * time.Second})
+		if err != nil {
+			return nil, fmt.Errorf("ssh connect %s: %w", host.Name, err)
+		}
+		return runner, nil
+	}
+}
+
+// yugabyteLayoutTarget is one existing database whose placement is compared with its declared layout.
+type yugabyteLayoutTarget struct {
+	database provisioner.SchemaDatabase
+	layout   *provisioner.DatabaseLayout
+}
+
 // doctorYugabyteLayout compares every platform database's observed YugabyteDB placement with its repository layout
 // and reports distinct tablets and tablet peers per database. Drift is a warning: an existing database keeps its
 // creation-time placement until it is relaid out.
 func doctorYugabyteLayout(ctx context.Context, sshPool *fwssh.Pool, manifest *inventory.Manifest, pg *inventory.PostgresConfig) *health.CheckResult {
-	hosts := postgresCandidateHosts(manifest, pg)
-	primary, ok := firstHealthyYugabyteHost(ctx, sshPool, hosts, pg)
-	if !ok {
-		return &health.CheckResult{Name: "yugabyte_layout", CheckedAt: time.Now(), Status: "unhealthy", Error: "no yugabyte tserver with healthy local YSQL"}
-	}
-	existing, err := yugabyteDatabaseNames(ctx, sshPool, primary, pg)
+	return inspectYugabyteLayouts(ctx, yugabytePoolRunner(sshPool), postgresCandidateHosts(manifest, pg), pg, yugabyteSchemaDatabases(pg.Databases, manifest))
+}
+
+// inspectYugabyteLayouts spends one SSH command on the first tserver that lists its databases, one on that tserver for
+// every database's placement, and one per tserver for the tablets of all databases, whatever the number of databases.
+func inspectYugabyteLayouts(ctx context.Context, runnerFor yugabyteHostRunner, hosts []inventory.Host, pg *inventory.PostgresConfig, databases []provisioner.SchemaDatabase) *health.CheckResult {
+	port := pg.EffectivePort()
+	primary, existing, err := yugabyteLayoutPrimary(ctx, runnerFor, hosts, port)
 	if err != nil {
 		return &health.CheckResult{Name: "yugabyte_layout", CheckedAt: time.Now(), Status: "unhealthy", Error: err.Error()}
 	}
-	// A tserver that cannot be read once is skipped for every later database instead of timing out again.
-	unreachable := map[string]error{}
 	var reports []yugabyteLayoutReport
-	for _, database := range yugabyteSchemaDatabases(pg.Databases, manifest) {
+	var targets []yugabyteLayoutTarget
+	for _, database := range databases {
 		if _, ok := existing[database.Name]; !ok {
 			if layoutSource(database) != "" {
 				reports = append(reports, yugabyteLayoutReport{Database: database.Name, Missing: true})
 			}
 			continue
 		}
-		report, inspectErr := inspectYugabyteLayout(ctx, sshPool, hosts, primary, pg, database, unreachable)
-		if inspectErr != nil {
-			reports = append(reports, yugabyteLayoutReport{Database: database.Name, Err: inspectErr.Error()})
+		layout, layoutErr := provisioner.YugabyteLayoutForDatabase(databaseLayoutSource(database))
+		if layoutErr != nil {
+			reports = append(reports, yugabyteLayoutReport{Database: database.Name, Err: layoutErr.Error()})
 			continue
 		}
-		if report != nil {
-			reports = append(reports, *report)
+		if layout != nil {
+			targets = append(targets, yugabyteLayoutTarget{database: database, layout: layout})
 		}
 	}
+	reports = append(reports, readYugabyteLayouts(ctx, runnerFor, hosts, primary, port, targets)...)
 	return summarizeYugabyteLayout(reports)
+}
+
+func databaseLayoutSource(database provisioner.SchemaDatabase) string {
+	if database.SourceName != "" {
+		return database.SourceName
+	}
+	return database.Name
 }
 
 // layoutSource returns the logical database whose layout a physical database follows, or "" when it declares none.
 func layoutSource(database provisioner.SchemaDatabase) string {
-	source := database.SourceName
-	if source == "" {
-		source = database.Name
-	}
+	source := databaseLayoutSource(database)
 	if layout, err := provisioner.YugabyteLayoutForDatabase(source); err != nil || layout == nil {
 		return ""
 	}
 	return source
 }
 
-func yugabyteDatabaseNames(ctx context.Context, sshPool *fwssh.Pool, host inventory.Host, pg *inventory.PostgresConfig) (map[string]struct{}, error) {
-	executor, err := yugabyteLocalExecutor(sshPool, host)
-	if err != nil {
-		return nil, err
+// yugabyteLayoutPrimary returns the first tserver whose local YSQL lists the cluster's databases, with that list.
+func yugabyteLayoutPrimary(ctx context.Context, runnerFor yugabyteHostRunner, hosts []inventory.Host, port int) (inventory.Host, map[string]struct{}, error) {
+	var lastErr error
+	for _, host := range hosts {
+		names, err := yugabyteDatabaseNames(ctx, runnerFor, host, port)
+		if err == nil {
+			return host, names, nil
+		}
+		lastErr = fmt.Errorf("%s: %w", host.Name, err)
 	}
+	if lastErr == nil {
+		return inventory.Host{}, nil, fmt.Errorf("no yugabyte tserver with healthy local YSQL")
+	}
+	return inventory.Host{}, nil, fmt.Errorf("no yugabyte tserver with healthy local YSQL (last: %w)", lastErr)
+}
+
+func yugabyteDatabaseNames(ctx context.Context, runnerFor yugabyteHostRunner, host inventory.Host, port int) (map[string]struct{}, error) {
 	queryCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
+	results, err := runYugabyteLocalQueries(queryCtx, runnerFor, host, port, []provisioner.YugabyteLocalQuery{{Database: "yugabyte", SQL: "SELECT datname FROM pg_database"}})
+	if err != nil {
+		return nil, fmt.Errorf("list databases: %w", err)
+	}
 	names := map[string]struct{}{}
-	conn := provisioner.ConnParams{Port: pg.EffectivePort(), User: "yugabyte", Database: "yugabyte"}
-	if err = executor.QueryRows(queryCtx, conn, "SELECT datname FROM pg_database", nil, func(scan func(dest ...any) error) error {
+	if err := results[0].Scan(func(scan func(dest ...any) error) error {
 		var name string
 		if scanErr := scan(&name); scanErr != nil {
 			return scanErr
@@ -100,106 +144,129 @@ func yugabyteDatabaseNames(ctx context.Context, sshPool *fwssh.Pool, host invent
 	return names, nil
 }
 
-func inspectYugabyteLayout(ctx context.Context, sshPool *fwssh.Pool, hosts []inventory.Host, primary inventory.Host, pg *inventory.PostgresConfig, database provisioner.SchemaDatabase, unreachable map[string]error) (*yugabyteLayoutReport, error) {
-	source := database.SourceName
-	if source == "" {
-		source = database.Name
-	}
-	layout, err := provisioner.YugabyteLayoutForDatabase(source)
+// inspectYugabyteLayout reads one database's placement and tablets for a relayout plan.
+func inspectYugabyteLayout(ctx context.Context, runnerFor yugabyteHostRunner, hosts []inventory.Host, primary inventory.Host, pg *inventory.PostgresConfig, database provisioner.SchemaDatabase) (*yugabyteLayoutReport, error) {
+	layout, err := provisioner.YugabyteLayoutForDatabase(databaseLayoutSource(database))
 	if err != nil {
 		return nil, err
 	}
 	if layout == nil {
 		return nil, nil
 	}
-	conn := provisioner.ConnParams{Port: pg.EffectivePort(), User: "yugabyte", Database: database.Name}
+	reports := readYugabyteLayouts(ctx, runnerFor, hosts, primary, pg.EffectivePort(), []yugabyteLayoutTarget{{database: database, layout: layout}})
+	if reports[0].Err != "" {
+		return nil, fmt.Errorf("%s", reports[0].Err)
+	}
+	return &reports[0], nil
+}
 
-	executor, err := yugabyteLocalExecutor(sshPool, primary)
+// readYugabyteLayouts reads every target's colocation and relation placement from primary and every tserver's serving
+// tablets, all concurrently and each host in one SSH command. A tserver that cannot be read is listed as unreachable
+// on every report instead of failing the check.
+func readYugabyteLayouts(ctx context.Context, runnerFor yugabyteHostRunner, hosts []inventory.Host, primary inventory.Host, port int, targets []yugabyteLayoutTarget) []yugabyteLayoutReport {
+	if len(targets) == 0 {
+		return nil
+	}
+	queries := make([]provisioner.YugabyteLocalQuery, 0, 2*len(targets))
+	for _, target := range targets {
+		queries = append(queries,
+			provisioner.YugabyteLocalQuery{Database: target.database.Name, SQL: "SELECT yb_is_database_colocated()"},
+			provisioner.YugabyteLocalQuery{Database: target.database.Name, SQL: provisioner.YugabyteRelationPlacementQuery})
+	}
+	var placement []provisioner.YugabyteLocalRows
+	var placementErr error
+	tablets := make([]map[string][]string, len(hosts))
+	tabletErrs := make([]error, len(hosts))
+
+	var wg sync.WaitGroup
+	wg.Go(func() {
+		queryCtx, cancel := context.WithTimeout(ctx, 30*time.Second+time.Duration(len(queries))*5*time.Second)
+		defer cancel()
+		placement, placementErr = runYugabyteLocalQueries(queryCtx, runnerFor, primary, port, queries)
+	})
+	for i, host := range hosts {
+		wg.Go(func() {
+			tablets[i], tabletErrs[i] = yugabyteServingTablets(ctx, runnerFor, host, port)
+		})
+	}
+	wg.Wait()
+
+	reports := make([]yugabyteLayoutReport, 0, len(targets))
+	for t, target := range targets {
+		name := target.database.Name
+		if placementErr != nil {
+			reports = append(reports, yugabyteLayoutReport{Database: name, Err: fmt.Sprintf("read placement on %s: %v", primary.Name, placementErr)})
+			continue
+		}
+		var colocated bool
+		if err := placement[2*t].Scan(func(scan func(dest ...any) error) error { return scan(&colocated) }); err != nil {
+			reports = append(reports, yugabyteLayoutReport{Database: name, Err: fmt.Sprintf("read database colocation: %v", err)})
+			continue
+		}
+		var relations []provisioner.YugabyteRelationPlacement
+		if err := placement[2*t+1].Scan(func(scan func(dest ...any) error) error {
+			var relation provisioner.YugabyteRelationPlacement
+			if scanErr := scan(&relation.Relation, &relation.Kind, &relation.Table, &relation.Colocated, &relation.NumTablets); scanErr != nil {
+				return scanErr
+			}
+			relations = append(relations, relation)
+			return nil
+		}); err != nil {
+			reports = append(reports, yugabyteLayoutReport{Database: name, Err: fmt.Sprintf("read relation placement: %v", err)})
+			continue
+		}
+		report := yugabyteLayoutReport{
+			Database: name,
+			Declared: string(target.layout.Layout),
+			Observed: string(provisioner.DatabaseLayoutDistributed),
+			Drift:    provisioner.YugabytePlacementDrift(target.layout, colocated, relations),
+		}
+		if colocated {
+			report.Observed = string(provisioner.DatabaseLayoutColocated)
+		}
+		distinct := map[string]struct{}{}
+		for i, host := range hosts {
+			if tabletErrs[i] != nil {
+				report.UnreachableNodes = append(report.UnreachableNodes, host.Name)
+				continue
+			}
+			report.Peers += len(tablets[i][name])
+			for _, id := range tablets[i][name] {
+				distinct[id] = struct{}{}
+			}
+		}
+		report.Tablets = len(distinct)
+		reports = append(reports, report)
+	}
+	return reports
+}
+
+// yugabyteServingTablets returns the serving tablet ids the tserver hosts, keyed by database.
+func yugabyteServingTablets(ctx context.Context, runnerFor yugabyteHostRunner, host inventory.Host, port int) (map[string][]string, error) {
+	queryCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+	results, err := runYugabyteLocalQueries(queryCtx, runnerFor, host, port, []provisioner.YugabyteLocalQuery{{Database: "yugabyte", SQL: provisioner.YugabyteServingTabletsQuery}})
 	if err != nil {
 		return nil, err
 	}
-	queryCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
-	defer cancel()
-	var colocated bool
-	if err := executor.QueryRow(queryCtx, conn, "SELECT yb_is_database_colocated()", nil, &colocated); err != nil {
-		return nil, fmt.Errorf("read database colocation: %w", err)
-	}
-	var relations []provisioner.YugabyteRelationPlacement
-	if err := executor.QueryRows(queryCtx, conn, provisioner.YugabyteRelationPlacementQuery, nil, func(scan func(dest ...any) error) error {
-		var relation provisioner.YugabyteRelationPlacement
-		if scanErr := scan(&relation.Relation, &relation.Kind, &relation.Table, &relation.Colocated, &relation.NumTablets); scanErr != nil {
+	byDatabase := map[string][]string{}
+	err = results[0].Scan(func(scan func(dest ...any) error) error {
+		var database, id string
+		if scanErr := scan(&database, &id); scanErr != nil {
 			return scanErr
 		}
-		relations = append(relations, relation)
+		byDatabase[database] = append(byDatabase[database], id)
 		return nil
-	}); err != nil {
-		return nil, fmt.Errorf("read relation placement: %w", err)
-	}
-
-	report := &yugabyteLayoutReport{
-		Database: database.Name,
-		Declared: string(layout.Layout),
-		Observed: string(provisioner.DatabaseLayoutDistributed),
-		Drift:    provisioner.YugabytePlacementDrift(layout, colocated, relations),
-	}
-	if colocated {
-		report.Observed = string(provisioner.DatabaseLayoutColocated)
-	}
-	tablets := map[string]struct{}{}
-	for _, host := range hosts {
-		if _, down := unreachable[host.Name]; down {
-			report.UnreachableNodes = append(report.UnreachableNodes, host.Name)
-			continue
-		}
-		peers, err := yugabyteLocalTabletIDs(ctx, sshPool, host, conn)
-		if err != nil {
-			unreachable[host.Name] = err
-			report.UnreachableNodes = append(report.UnreachableNodes, host.Name)
-			continue
-		}
-		report.Peers += len(peers)
-		for _, id := range peers {
-			tablets[id] = struct{}{}
-		}
-	}
-	report.Tablets = len(tablets)
-	return report, nil
+	})
+	return byDatabase, err
 }
 
-func yugabyteLocalTabletIDs(ctx context.Context, sshPool *fwssh.Pool, host inventory.Host, conn provisioner.ConnParams) ([]string, error) {
-	executor, err := yugabyteLocalExecutor(sshPool, host)
+func runYugabyteLocalQueries(ctx context.Context, runnerFor yugabyteHostRunner, host inventory.Host, port int, queries []provisioner.YugabyteLocalQuery) ([]provisioner.YugabyteLocalRows, error) {
+	runner, err := runnerFor(host)
 	if err != nil {
 		return nil, err
 	}
-	queryCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
-	defer cancel()
-	var ids []string
-	err = executor.QueryRows(queryCtx, conn, provisioner.YugabyteServingTabletsQuery, nil, func(scan func(dest ...any) error) error {
-		var id string
-		if scanErr := scan(&id); scanErr != nil {
-			return scanErr
-		}
-		ids = append(ids, id)
-		return nil
-	})
-	return ids, err
-}
-
-func yugabyteLocalExecutor(sshPool *fwssh.Pool, host inventory.Host) (*provisioner.SSHExecutor, error) {
-	if sshPool == nil {
-		return nil, fmt.Errorf("ssh pool is nil")
-	}
-	runner, err := sshPool.Get(&fwssh.ConnectionConfig{
-		Address:  host.ExternalIP,
-		Port:     22,
-		User:     host.User,
-		HostName: host.Name,
-		Timeout:  30 * time.Second,
-	})
-	if err != nil {
-		return nil, fmt.Errorf("ssh connect %s: %w", host.Name, err)
-	}
-	return &provisioner.SSHExecutor{Runner: runner, UseYugabyteTools: true}, nil
+	return provisioner.RunYugabyteLocalQueries(ctx, runner, port, "yugabyte", queries)
 }
 
 func summarizeYugabyteLayout(reports []yugabyteLayoutReport) *health.CheckResult {

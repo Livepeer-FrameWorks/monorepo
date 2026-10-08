@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -857,8 +858,10 @@ func detectService(ctx context.Context, cmd *cobra.Command, sshPool *fwssh.Pool,
 
 // runDoctor is an observed-state survey. Host-bound HTTP and SQL probes run
 // through SSH so private and loopback-only listeners are checked from the
-// same network namespace that serves them. For a role-level diff of what would change on apply,
-// use `cluster provision --dry-run` (ansible-playbook --check --diff).
+// same network namespace that serves them. Independent checks run
+// concurrently and each result prints as it finishes, grouped by section. For
+// a role-level diff of what would change on apply, use
+// `cluster provision --dry-run` (ansible-playbook --check --diff).
 func runDoctor(cmd *cobra.Command, rc *resolvedCluster, deep bool) error {
 	manifest := rc.Manifest
 	doctorTarget, targetErr := resolveMigrationTarget(rc, "")
@@ -889,296 +892,40 @@ func runDoctor(cmd *cobra.Command, rc *resolvedCluster, deep bool) error {
 		}
 	}
 
+	doctorSSHKey := stringFlag(cmd, "ssh-key").Value
+	doctorSSHPool := fwssh.NewPool(30*time.Second, doctorSSHKey)
+	doctorSSHPool.LimitPerHost(doctorSSHPerHost)
+	defer doctorSSHPool.Close()
+
+	sections := doctorSections(rc, doctorSSHPool, sharedEnv, doctorTarget, doctorSSHKey, deep)
+	outcomes, interrupted := runDoctorSections(cmd.Context(), out, sections, doctorCheckWorkers, func(name string, o doctorOutcome) {
+		switch {
+		case o.result != nil:
+			printHealthResult(cmd, name, o.result)
+		case o.miss != "":
+			ux.Fail(out, fmt.Sprintf("%s: %s", name, o.miss))
+		case o.note != "":
+			ux.Warn(out, o.note)
+		}
+	})
+	if interrupted {
+		return &ExitCodeError{Code: 130, Message: "cluster doctor interrupted"}
+	}
+
 	var remediationSteps []ux.NextStep
 	totalChecks := 0
 	passedChecks := 0
-
-	doctorSSHKey := stringFlag(cmd, "ssh-key").Value
-	doctorSSHPool := fwssh.NewPool(30*time.Second, doctorSSHKey)
-	defer doctorSSHPool.Close()
-
-	fmt.Fprintln(cmd.OutOrStdout(), "Infrastructure Health:")
-	fmt.Fprintln(cmd.OutOrStdout(), "")
-
-	runInfraCheck := func(name string, result *health.CheckResult) {
-		totalChecks++
-		printHealthResult(cmd, name, result)
-		if result.OK {
-			passedChecks++
-			return
-		}
-		if result.Status == yugabyteLayoutWarning {
-			passedChecks++
-		}
-		if step := doctorServiceRemediation(name); step.Cmd != "" || step.Why != "" {
-			remediationSteps = append(remediationSteps, step)
-		}
-	}
-
-	recordMiss := func(name, reason string) {
-		totalChecks++
-		ux.Fail(out, fmt.Sprintf("%s: %s", name, reason))
-		if step := doctorServiceRemediation(name); step.Cmd != "" || step.Why != "" {
-			remediationSteps = append(remediationSteps, step)
-		}
-	}
-	checkServiceReplicas := func(name string, svc inventory.ServiceConfig) {
-		hostNames := doctorServiceHostNames(name, svc, manifest)
-		if len(hostNames) == 0 {
-			recordMiss(name, "no effective hosts found in manifest")
-			return
-		}
-		port, err := resolvePort(name, svc)
-		if err != nil {
-			recordMiss(name, fmt.Sprintf("resolve port: %v", err))
-			return
-		}
-		for _, hostName := range hostNames {
-			label := doctorServiceLabel(name, hostName, len(hostNames))
-			host, ok := manifest.GetHost(hostName)
-			if !ok {
-				recordMiss(label, fmt.Sprintf("host %q not found in manifest", hostName))
-				continue
-			}
-			runInfraCheck(label, checkServiceEndpoint(cmd.Context(), doctorSSHPool, host, name, svc, port))
-		}
-	}
-
-	if deep {
-		result := &health.CheckResult{Name: "shared_platform_secrets", CheckedAt: time.Now(), Metadata: map[string]string{"check_kind": "config"}}
-		if err := credentials.ValidateShared(sharedEnv); err != nil {
-			result.Status = "unhealthy"
-			result.Error = err.Error()
-		} else {
-			result.OK = true
-			result.Status = "healthy"
-			result.Message = "shared platform secrets are present and telemetry signing key is valid"
-		}
-		runInfraCheck("Shared platform secrets", result)
-	}
-
-	if manifest.Infrastructure.Postgres != nil && manifest.Infrastructure.Postgres.Enabled {
-		if manifest.Infrastructure.Postgres.IsYugabyte() {
-			// Any tserver serves YSQL; probe every node and report the first
-			// healthy one rather than pinning the (possibly dead) first node.
-			runInfraCheck("Postgres/Yugabyte", checkYugabyteCluster(cmd.Context(), doctorSSHPool, manifest, manifest.Infrastructure.Postgres))
-			runInfraCheck("Yugabyte master consensus", doctorYugabyteMasterConsensus(cmd.Context(), manifest, doctorSSHPool))
-			runInfraCheck("Yugabyte layout", doctorYugabyteLayout(cmd.Context(), doctorSSHPool, manifest, manifest.Infrastructure.Postgres))
-		} else {
-			pgHostName := manifest.Infrastructure.Postgres.Host
-			host, ok := manifest.GetHost(pgHostName)
-			if !ok {
-				recordMiss("Postgres/Yugabyte", fmt.Sprintf("host %q not found in manifest", pgHostName))
-			} else {
-				password, pwErr := resolveYugabytePassword(manifest.Infrastructure.Postgres, sharedEnv)
-				if pwErr != nil {
-					if manifest.Infrastructure.Postgres.IsYugabyte() && !deep {
-						ux.Warn(out, fmt.Sprintf("Postgres/Yugabyte: authenticated check unavailable without decrypted Yugabyte password (%v); run with --deep to include it", pwErr))
-						remediationSteps = append(remediationSteps, ux.NextStep{
-							Cmd: "frameworks cluster doctor --deep",
-							Why: "Decrypt gitops secrets so doctor can run authenticated Yugabyte probes.",
-						})
-					} else {
-						recordMiss("Postgres/Yugabyte", pwErr.Error())
-					}
-				} else {
-					checker := &health.PostgresChecker{User: postgresDoctorUser(manifest.Infrastructure.Postgres), Password: password, Database: "postgres"}
-					runInfraCheck("Postgres/Yugabyte", checker.Check(host.ExternalIP, manifest.Infrastructure.Postgres.EffectivePort()))
-				}
-			}
-		}
-	}
-
-	if manifest.Infrastructure.ClickHouse != nil && manifest.Infrastructure.ClickHouse.Enabled {
-		host, ok := manifest.GetHost(manifest.Infrastructure.ClickHouse.CoordinatorHost())
-		if !ok {
-			recordMiss("ClickHouse", fmt.Sprintf("host %q not found in manifest", manifest.Infrastructure.ClickHouse.CoordinatorHost()))
-		} else {
-			runInfraCheck("ClickHouse", checkClickHouseLocal(cmd.Context(), doctorSSHPool, host, manifest.Infrastructure.ClickHouse, sharedEnv, deep))
-		}
-	}
-
-	if manifest.Infrastructure.Kafka != nil && manifest.Infrastructure.Kafka.Enabled {
-		for _, broker := range manifest.Infrastructure.Kafka.Brokers {
-			brokerName := fmt.Sprintf("Kafka Broker %d", broker.ID)
-			host, ok := manifest.GetHost(broker.Host)
-			if !ok {
-				recordMiss(brokerName, fmt.Sprintf("host %q not found in manifest", broker.Host))
-				continue
-			}
-			checker := &health.KafkaChecker{}
-			runInfraCheck(brokerName, checker.Check(host.ExternalIP, broker.Port))
-		}
-		if result := checkMirrorMakerWorkers(cmd.Context(), manifest, func(host inventory.Host) (fwssh.Runner, error) {
-			return getRunner(host, doctorSSHPool)
-		}); result != nil {
-			runInfraCheck("Kafka MirrorMaker2 workers", result)
-		}
-	}
-
-	fmt.Fprintln(cmd.OutOrStdout(), "")
-	fmt.Fprintln(cmd.OutOrStdout(), "Application Services:")
-	fmt.Fprintln(cmd.OutOrStdout(), "")
-
-	for name, svc := range manifest.Services {
-		if !svc.Enabled {
-			continue
-		}
-		checkServiceReplicas(name, svc)
-	}
-
-	fmt.Fprintln(cmd.OutOrStdout(), "")
-	fmt.Fprintln(cmd.OutOrStdout(), "Interface Services:")
-	fmt.Fprintln(cmd.OutOrStdout(), "")
-
-	for name, svc := range manifest.Interfaces {
-		if !svc.Enabled {
-			continue
-		}
-		checkServiceReplicas(name, svc)
-	}
-
-	fmt.Fprintln(cmd.OutOrStdout(), "")
-
-	if len(manifest.Observability) > 0 {
-		fmt.Fprintln(cmd.OutOrStdout(), "Observability Services:")
-		fmt.Fprintln(cmd.OutOrStdout(), "")
-		for name, svc := range manifest.Observability {
-			if !svc.Enabled {
-				continue
-			}
-			checkServiceReplicas(name, svc)
-		}
-		fmt.Fprintln(out, "")
-	}
-
-	if manifest.Infrastructure.Postgres != nil && manifest.Infrastructure.Postgres.Enabled {
-		fmt.Fprintln(cmd.OutOrStdout(), "Database Migrations:")
-		fmt.Fprintln(cmd.OutOrStdout(), "")
-		hosts := postgresCandidateHosts(manifest, manifest.Infrastructure.Postgres)
-		if len(hosts) == 0 {
-			recordMiss("Postgres migrations", "no postgres/yugabyte hosts resolvable in manifest")
-		} else {
-			databasePassword := strings.TrimSpace(sharedEnv["DATABASE_PASSWORD"])
-			totalChecks++
-			// Any tserver carries the (cluster-replicated) _migrations table; probe
-			// each node and use the first that responds rather than pinning Nodes[0].
-			var result *health.CheckResult
-			for _, h := range hosts {
-				result = doctorPostgresMigrations(cmd.Context(), doctorSSHPool, manifest, h, databasePassword, doctorTarget)
-				if result.OK {
-					break
-				}
-			}
-			printHealthResult(cmd, "Postgres migrations", result)
-			if result.OK {
-				passedChecks++
-			} else if strings.Contains(result.Error, "--deep") {
-				remediationSteps = append(remediationSteps, ux.NextStep{
-					Cmd: "frameworks cluster doctor --deep",
-					Why: "Decrypt gitops secrets so doctor can query Yugabyte _migrations.",
-				})
-			} else {
-				remediationSteps = append(remediationSteps, ux.NextStep{
-					Cmd: "frameworks cluster migrate --phase expand --dry-run",
-					Why: "Preview pending embedded PostgreSQL/YugabyteDB migrations and checksum drift.",
-				})
-			}
-
-			totalChecks++
-			dmResult := doctorDataMigrations(cmd.Context(), doctorSSHPool, manifest, doctorTarget)
-			printHealthResult(cmd, "Data migrations", dmResult)
-			if dmResult.OK {
-				passedChecks++
-			} else {
-				remediationSteps = append(remediationSteps, ux.NextStep{
-					Cmd: "frameworks cluster data-migrate list",
-					Why: "List required data migrations and their current state.",
-				})
-			}
-
-			totalChecks++
-			authorityResult := doctorMediaAuthorityConvergence(cmd.Context(), rc, doctorSSHPool, stringFlag(cmd, "ssh-key").Value)
-			printHealthResult(cmd, "Media authority convergence", authorityResult)
-			if authorityResult.OK {
-				passedChecks++
-			} else {
-				remediationSteps = append(remediationSteps, ux.NextStep{
-					Cmd: "frameworks cluster diagnose media-authority",
-					Why: "List parked refresh targets, stuck or refused deliveries, and cell apply rejections with their reasons.",
-				})
-			}
-
-			totalChecks++
-			var ledgerResult *health.CheckResult
-			for _, h := range hosts {
-				ledgerResult = doctorPurserLedgerCurrency(cmd.Context(), doctorSSHPool, manifest, h, databasePassword)
-				if ledgerResult.OK || ledgerResult.Metadata["non_eur_balance_rows"] != "" {
-					break
-				}
-			}
-			printHealthResult(cmd, "Purser ledger currency", ledgerResult)
-			if ledgerResult.OK {
-				passedChecks++
-			} else {
-				remediationSteps = append(remediationSteps, ux.NextStep{
-					Cmd: "frameworks cluster data-migrate list",
-					Why: "Check the purser_eur_ledger_conversion_v0_3_11 data migration that converts non-EUR prepaid balances.",
-				})
-			}
-
-			if deep {
+	for _, section := range outcomes {
+		for _, o := range section {
+			if o.counted() {
 				totalChecks++
-				var capabilityResult *health.CheckResult
-				for _, h := range hosts {
-					capabilityResult = doctorPostgresCapabilities(cmd.Context(), doctorSSHPool, manifest, h, databasePassword, doctorTarget)
-					if capabilityResult.OK {
-						break
-					}
-				}
-				printHealthResult(cmd, "Postgres runtime capabilities", capabilityResult)
-				if capabilityResult.OK {
+				if o.passed {
 					passedChecks++
-				} else {
-					remediationSteps = append(remediationSteps, ux.NextStep{
-						Cmd: "frameworks cluster provision --only infrastructure",
-						Why: "Reconcile owner/runtime database roles and grants, then apply pending migrations.",
-					})
 				}
 			}
+			remediationSteps = append(remediationSteps, o.steps...)
 		}
-		fmt.Fprintln(out, "")
 	}
-
-	if deep && manifest.Infrastructure.ClickHouse != nil && manifest.Infrastructure.ClickHouse.Enabled {
-		totalChecks++
-		capabilityResult := doctorClickHouseCapabilities(cmd.Context(), doctorSSHPool, manifest, sharedEnv, doctorTarget)
-		printHealthResult(cmd, "ClickHouse runtime capabilities", capabilityResult)
-		if capabilityResult.OK {
-			passedChecks++
-		} else {
-			remediationSteps = append(remediationSteps, ux.NextStep{
-				Cmd: "frameworks cluster migrate --phase expand --dry-run",
-				Why: "Preview ClickHouse migrations required by the deployed service capabilities.",
-			})
-		}
-		fmt.Fprintln(out, "")
-	}
-
-	fmt.Fprintln(out, "Edge Nodes:")
-	fmt.Fprintln(out, "")
-	edgeConfigResult := doctorEdgeConfigVersions(cmd, rc)
-	totalChecks++
-	printHealthResult(cmd, "Edge config version", edgeConfigResult)
-	if edgeConfigResult.OK || edgeConfigResult.Status == yugabyteLayoutWarning {
-		passedChecks++
-	} else {
-		remediationSteps = append(remediationSteps, ux.NextStep{
-			Cmd: "frameworks edge provision --manifest <edges.yaml> --dry-run",
-			Why: "Show each edge's config drift, then re-run without --dry-run to apply this CLI's edge config one node at a time.",
-		})
-	}
-	fmt.Fprintln(out, "")
 
 	cpReport, cpSteps := doctorControlPlane(cmd, rc, serviceToken, sharedEnv, deep)
 
@@ -1201,6 +948,288 @@ func runDoctor(cmd *cobra.Command, rc *resolvedCluster, deep bool) error {
 		return fmt.Errorf("cluster health checks did not pass")
 	}
 	return nil
+}
+
+// doctorInfraOutcome reports an infrastructure or service probe. Layout drift and unchecked edges are warnings that
+// count as passed; anything not OK gets the service's remediation step.
+func doctorInfraOutcome(name string, result *health.CheckResult) doctorOutcome {
+	o := doctorOutcome{result: result, passed: result.OK || result.Status == yugabyteLayoutWarning}
+	if !result.OK {
+		if step := doctorServiceRemediation(name); step.Cmd != "" || step.Why != "" {
+			o.steps = append(o.steps, step)
+		}
+	}
+	return o
+}
+
+func doctorMissOutcome(name, reason string) doctorOutcome {
+	o := doctorOutcome{miss: reason}
+	if step := doctorServiceRemediation(name); step.Cmd != "" || step.Why != "" {
+		o.steps = append(o.steps, step)
+	}
+	return o
+}
+
+// doctorResultOutcome reports a check that passes only when OK and otherwise suggests step.
+func doctorResultOutcome(result *health.CheckResult, step ux.NextStep) doctorOutcome {
+	o := doctorOutcome{result: result, passed: result.OK}
+	if !result.OK {
+		o.steps = append(o.steps, step)
+	}
+	return o
+}
+
+func doctorStaticCheck(name string, o doctorOutcome) doctorCheck {
+	return doctorCheck{name: name, run: func(context.Context) doctorOutcome { return o }}
+}
+
+// doctorSections lists every doctor check by output section. Each check only reads shared state, so any of them may
+// run concurrently with the others.
+func doctorSections(rc *resolvedCluster, pool *fwssh.Pool, sharedEnv map[string]string, doctorTarget, sshKey string, deep bool) []doctorSection {
+	manifest := rc.Manifest
+	infra := doctorSection{title: "Infrastructure Health"}
+
+	if deep {
+		infra.checks = append(infra.checks, doctorCheck{name: "Shared platform secrets", run: func(context.Context) doctorOutcome {
+			result := &health.CheckResult{Name: "shared_platform_secrets", CheckedAt: time.Now(), Metadata: map[string]string{"check_kind": "config"}}
+			if err := credentials.ValidateShared(sharedEnv); err != nil {
+				result.Status = "unhealthy"
+				result.Error = err.Error()
+			} else {
+				result.OK = true
+				result.Status = "healthy"
+				result.Message = "shared platform secrets are present and telemetry signing key is valid"
+			}
+			return doctorInfraOutcome("Shared platform secrets", result)
+		}})
+	}
+
+	pg := manifest.Infrastructure.Postgres
+	if pg != nil && pg.Enabled {
+		if pg.IsYugabyte() {
+			// Any tserver serves YSQL; probe every node and report the first
+			// healthy one rather than pinning the (possibly dead) first node.
+			infra.checks = append(infra.checks,
+				doctorCheck{name: "Postgres/Yugabyte", run: func(ctx context.Context) doctorOutcome {
+					return doctorInfraOutcome("Postgres/Yugabyte", checkYugabyteCluster(ctx, pool, manifest, pg))
+				}},
+				doctorCheck{name: "Yugabyte master consensus", run: func(ctx context.Context) doctorOutcome {
+					return doctorInfraOutcome("Yugabyte master consensus", doctorYugabyteMasterConsensus(ctx, manifest, pool))
+				}},
+				doctorCheck{
+					name:     "Yugabyte layout",
+					progress: fmt.Sprintf("reading placement and tablets of %d database(s) on %d tserver(s)", len(yugabyteSchemaDatabases(pg.Databases, manifest)), len(postgresCandidateHosts(manifest, pg))),
+					run: func(ctx context.Context) doctorOutcome {
+						return doctorInfraOutcome("Yugabyte layout", doctorYugabyteLayout(ctx, pool, manifest, pg))
+					},
+				})
+		} else {
+			infra.checks = append(infra.checks, doctorCheck{name: "Postgres/Yugabyte", run: func(context.Context) doctorOutcome {
+				host, ok := manifest.GetHost(pg.Host)
+				if !ok {
+					return doctorMissOutcome("Postgres/Yugabyte", fmt.Sprintf("host %q not found in manifest", pg.Host))
+				}
+				password, pwErr := resolveYugabytePassword(pg, sharedEnv)
+				if pwErr != nil {
+					return doctorMissOutcome("Postgres/Yugabyte", pwErr.Error())
+				}
+				checker := &health.PostgresChecker{User: postgresDoctorUser(pg), Password: password, Database: "postgres"}
+				return doctorInfraOutcome("Postgres/Yugabyte", checker.Check(host.ExternalIP, pg.EffectivePort()))
+			}})
+		}
+	}
+
+	if ch := manifest.Infrastructure.ClickHouse; ch != nil && ch.Enabled {
+		host, ok := manifest.GetHost(ch.CoordinatorHost())
+		if !ok {
+			infra.checks = append(infra.checks, doctorStaticCheck("ClickHouse", doctorMissOutcome("ClickHouse", fmt.Sprintf("host %q not found in manifest", ch.CoordinatorHost()))))
+		} else {
+			infra.checks = append(infra.checks, doctorCheck{name: "ClickHouse", run: func(ctx context.Context) doctorOutcome {
+				return doctorInfraOutcome("ClickHouse", checkClickHouseLocal(ctx, pool, host, ch, sharedEnv, deep))
+			}})
+		}
+	}
+
+	if kafka := manifest.Infrastructure.Kafka; kafka != nil && kafka.Enabled {
+		for _, broker := range kafka.Brokers {
+			brokerName := fmt.Sprintf("Kafka Broker %d", broker.ID)
+			host, ok := manifest.GetHost(broker.Host)
+			if !ok {
+				infra.checks = append(infra.checks, doctorStaticCheck(brokerName, doctorMissOutcome(brokerName, fmt.Sprintf("host %q not found in manifest", broker.Host))))
+				continue
+			}
+			infra.checks = append(infra.checks, doctorCheck{name: brokerName, run: func(context.Context) doctorOutcome {
+				checker := &health.KafkaChecker{}
+				return doctorInfraOutcome(brokerName, checker.Check(host.ExternalIP, broker.Port))
+			}})
+		}
+		infra.checks = append(infra.checks, doctorCheck{name: "Kafka MirrorMaker2 workers", run: func(ctx context.Context) doctorOutcome {
+			result := checkMirrorMakerWorkers(ctx, manifest, func(host inventory.Host) (fwssh.Runner, error) {
+				return getRunner(host, pool)
+			})
+			if result == nil {
+				return doctorOutcome{}
+			}
+			return doctorInfraOutcome("Kafka MirrorMaker2 workers", result)
+		}})
+	}
+
+	serviceChecks := func(services map[string]inventory.ServiceConfig) []doctorCheck {
+		names := make([]string, 0, len(services))
+		for name, svc := range services {
+			if svc.Enabled {
+				names = append(names, name)
+			}
+		}
+		sort.Strings(names)
+		var checks []doctorCheck
+		for _, name := range names {
+			svc := services[name]
+			hostNames := doctorServiceHostNames(name, svc, manifest)
+			if len(hostNames) == 0 {
+				checks = append(checks, doctorStaticCheck(name, doctorMissOutcome(name, "no effective hosts found in manifest")))
+				continue
+			}
+			port, err := resolvePort(name, svc)
+			if err != nil {
+				checks = append(checks, doctorStaticCheck(name, doctorMissOutcome(name, fmt.Sprintf("resolve port: %v", err))))
+				continue
+			}
+			for _, hostName := range hostNames {
+				label := doctorServiceLabel(name, hostName, len(hostNames))
+				host, ok := manifest.GetHost(hostName)
+				if !ok {
+					checks = append(checks, doctorStaticCheck(label, doctorMissOutcome(label, fmt.Sprintf("host %q not found in manifest", hostName))))
+					continue
+				}
+				checks = append(checks, doctorCheck{name: label, run: func(ctx context.Context) doctorOutcome {
+					return doctorInfraOutcome(label, checkServiceEndpoint(ctx, pool, host, name, svc, port))
+				}})
+			}
+		}
+		return checks
+	}
+
+	sections := []doctorSection{
+		infra,
+		{title: "Application Services", checks: serviceChecks(manifest.Services)},
+		{title: "Interface Services", checks: serviceChecks(manifest.Interfaces)},
+	}
+	if len(manifest.Observability) > 0 {
+		sections = append(sections, doctorSection{title: "Observability Services", checks: serviceChecks(manifest.Observability)})
+	}
+
+	if pg != nil && pg.Enabled {
+		sections = append(sections, doctorSection{title: "Database Migrations", checks: doctorDatabaseChecks(rc, pool, sharedEnv, doctorTarget, sshKey, deep)})
+	}
+
+	if ch := manifest.Infrastructure.ClickHouse; deep && ch != nil && ch.Enabled {
+		sections = append(sections, doctorSection{checks: []doctorCheck{{name: "ClickHouse runtime capabilities", run: func(ctx context.Context) doctorOutcome {
+			return doctorResultOutcome(doctorClickHouseCapabilities(ctx, pool, manifest, sharedEnv, doctorTarget), ux.NextStep{
+				Cmd: "frameworks cluster migrate --phase expand --dry-run",
+				Why: "Preview ClickHouse migrations required by the deployed service capabilities.",
+			})
+		}}}})
+	}
+
+	sections = append(sections, doctorSection{title: "Edge Nodes", checks: []doctorCheck{{
+		name:     "Edge config version",
+		progress: "reading every edge's config version from its Foghorn",
+		run: func(ctx context.Context) doctorOutcome {
+			result := doctorEdgeConfigVersions(ctx, rc)
+			o := doctorOutcome{result: result, passed: result.OK || result.Status == yugabyteLayoutWarning}
+			if !o.passed {
+				o.steps = append(o.steps, ux.NextStep{
+					Cmd: "frameworks edge provision --manifest <edges.yaml> --dry-run",
+					Why: "Show each edge's config drift, then re-run without --dry-run to apply this CLI's edge config one node at a time.",
+				})
+			}
+			return o
+		},
+	}}})
+	return sections
+}
+
+// doctorDatabaseChecks are the PostgreSQL/YugabyteDB ledger and data checks. Each probes the tservers in order and
+// keeps the first answer, since any tserver serves the cluster-replicated tables.
+func doctorDatabaseChecks(rc *resolvedCluster, pool *fwssh.Pool, sharedEnv map[string]string, doctorTarget, sshKey string, deep bool) []doctorCheck {
+	manifest := rc.Manifest
+	hosts := postgresCandidateHosts(manifest, manifest.Infrastructure.Postgres)
+	if len(hosts) == 0 {
+		return []doctorCheck{doctorStaticCheck("Postgres migrations", doctorMissOutcome("Postgres migrations", "no postgres/yugabyte hosts resolvable in manifest"))}
+	}
+	databasePassword := strings.TrimSpace(sharedEnv["DATABASE_PASSWORD"])
+	checks := []doctorCheck{
+		{
+			name:     "Postgres migrations",
+			progress: "comparing embedded migrations with the _migrations ledger",
+			run: func(ctx context.Context) doctorOutcome {
+				var result *health.CheckResult
+				for _, h := range hosts {
+					result = doctorPostgresMigrations(ctx, pool, manifest, h, databasePassword, doctorTarget)
+					if result.OK {
+						break
+					}
+				}
+				o := doctorOutcome{result: result, passed: result.OK}
+				switch {
+				case result.OK:
+				case strings.Contains(result.Error, "--deep"):
+					o.steps = append(o.steps, ux.NextStep{
+						Cmd: "frameworks cluster doctor --deep",
+						Why: "Decrypt gitops secrets so doctor can query Yugabyte _migrations.",
+					})
+				default:
+					o.steps = append(o.steps, ux.NextStep{
+						Cmd: "frameworks cluster migrate --phase expand --dry-run",
+						Why: "Preview pending embedded PostgreSQL/YugabyteDB migrations and checksum drift.",
+					})
+				}
+				return o
+			},
+		},
+		{name: "Data migrations", run: func(ctx context.Context) doctorOutcome {
+			return doctorResultOutcome(doctorDataMigrations(ctx, pool, manifest, doctorTarget), ux.NextStep{
+				Cmd: "frameworks cluster data-migrate list",
+				Why: "List required data migrations and their current state.",
+			})
+		}},
+		{name: "Media authority convergence", run: func(ctx context.Context) doctorOutcome {
+			return doctorResultOutcome(doctorMediaAuthorityConvergence(ctx, rc, pool, sshKey), ux.NextStep{
+				Cmd: "frameworks cluster diagnose media-authority",
+				Why: "List parked refresh targets, stuck or refused deliveries, and cell apply rejections with their reasons.",
+			})
+		}},
+		{name: "Purser ledger currency", run: func(ctx context.Context) doctorOutcome {
+			var result *health.CheckResult
+			for _, h := range hosts {
+				result = doctorPurserLedgerCurrency(ctx, pool, manifest, h, databasePassword)
+				if result.OK || result.Metadata["non_eur_balance_rows"] != "" {
+					break
+				}
+			}
+			return doctorResultOutcome(result, ux.NextStep{
+				Cmd: "frameworks cluster data-migrate list",
+				Why: "Check the purser_eur_ledger_conversion_v0_3_11 data migration that converts non-EUR prepaid balances.",
+			})
+		}},
+	}
+	if deep {
+		checks = append(checks, doctorCheck{name: "Postgres runtime capabilities", run: func(ctx context.Context) doctorOutcome {
+			var result *health.CheckResult
+			for _, h := range hosts {
+				result = doctorPostgresCapabilities(ctx, pool, manifest, h, databasePassword, doctorTarget)
+				if result.OK {
+					break
+				}
+			}
+			return doctorResultOutcome(result, ux.NextStep{
+				Cmd: "frameworks cluster provision --only infrastructure",
+				Why: "Reconcile owner/runtime database roles and grants, then apply pending migrations.",
+			})
+		}})
+	}
+	return checks
 }
 
 func doctorServiceHostNames(name string, svc inventory.ServiceConfig, manifest *inventory.Manifest) []string {

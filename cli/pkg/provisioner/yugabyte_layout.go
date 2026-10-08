@@ -263,10 +263,12 @@ func yugabyteLayoutForSource(source string) (*DatabaseLayout, error) {
 	return LoadDatabaseLayout(source)
 }
 
-// YugabyteServingTabletsQuery lists the serving tablet replicas of the current database hosted by the tserver that
-// answers; tablets and peers are counted by querying every node and taking distinct tablet ids. A split parent stays
-// listed as TABLET_DATA_SPLIT_COMPLETED until it is cleaned up, so only TABLET_DATA_READY replicas count.
-const YugabyteServingTabletsQuery = "SELECT tablet_id FROM yb_local_tablets WHERE namespace_name = current_database() AND state = 'TABLET_DATA_READY'"
+// YugabyteServingTabletsQuery lists the serving tablet replicas of every database hosted by the tserver that answers,
+// as namespace_name|tablet_id rows; yb_local_tablets covers all namespaces whichever database the session is in, so one
+// query per tserver serves every database. Tablets and peers are counted by querying every node and taking distinct
+// tablet ids. A split parent stays listed as TABLET_DATA_SPLIT_COMPLETED until it is cleaned up, so only
+// TABLET_DATA_READY replicas count.
+const YugabyteServingTabletsQuery = "SELECT namespace_name, tablet_id FROM yb_local_tablets WHERE state = 'TABLET_DATA_READY'"
 
 // YugabyteRelationPlacementQuery lists every table and secondary index outside system schemas with its observed
 // placement, as pipe-separated rows under psql -tA. Primary-key indexes are stored inside their table in YugabyteDB

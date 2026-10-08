@@ -356,7 +356,7 @@ func runRelayoutPlan(ctx context.Context, cmd *cobra.Command, c *relayoutContext
 	}
 	fmt.Fprintf(out, "  tservers with local superuser YSQL: %s\n", strings.Join(environment.ReachableNodes, ", "))
 	fmt.Fprintf(out, "  free space for dumps on %s: %s\n", primary.Name, relayoutBytes(environment.DumpDirFreeKB*1024))
-	report, err := inspectYugabyteLayout(ctx, c.pool, c.hosts, primary, c.pg, c.database, map[string]error{})
+	report, err := inspectYugabyteLayout(ctx, yugabytePoolRunner(c.pool), c.hosts, primary, c.pg, c.database)
 	if err != nil {
 		return err
 	}

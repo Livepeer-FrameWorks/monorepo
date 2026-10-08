@@ -24,6 +24,22 @@ type Client struct {
 	resolution Resolution
 	resolver   Resolver
 	pingFunc   func(ctx context.Context) error
+	// slots, when set, is shared by every client of one host and bounds how many ssh/scp processes run against it.
+	slots chan struct{}
+}
+
+// runProcess runs one ssh or scp process, first waiting for a free slot on the host when the pool limits them. Slots
+// are only held around a single process, never across nested calls, so a caller holding one cannot deadlock.
+func (c *Client) runProcess(ctx context.Context, cmd *exec.Cmd) error {
+	if c.slots != nil {
+		select {
+		case c.slots <- struct{}{}:
+			defer func() { <-c.slots }()
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+	return cmd.Run()
 }
 
 // NewClient resolves the ssh target once (including alias verification via
@@ -75,7 +91,7 @@ func (c *Client) Run(ctx context.Context, command string) (*CommandResult, error
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
 
-	err := cmd.Run()
+	err := c.runProcess(ctx, cmd)
 	return CompleteRun(result, c.resolution.Target, command, stdout.Bytes(), stderr.Bytes(), err)
 }
 
@@ -117,7 +133,7 @@ func (c *Client) RunStream(ctx context.Context, command string, stdin io.Reader,
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
 
-	err := cmd.Run()
+	err := c.runProcess(ctx, cmd)
 	result.Stderr = strings.TrimSpace(stderr.String())
 	if err != nil {
 		var exitErr *exec.ExitError
@@ -165,7 +181,7 @@ func (c *Client) Ping(ctx context.Context) error {
 	args := BuildSSHArgs(c.config, c.resolution)
 	args = append(args, c.resolution.Target, "true")
 	cmd := execCommandContext(pingCtx, "ssh", args...)
-	if err := cmd.Run(); err != nil {
+	if err := c.runProcess(pingCtx, cmd); err != nil {
 		return fmt.Errorf("ssh ping failed: %w", err)
 	}
 	return nil
@@ -225,7 +241,7 @@ func (c *Client) Upload(ctx context.Context, opts UploadOptions) error {
 	cmd := execCommandContext(ctx, "scp", scpArgs...)
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
-	if err := cmd.Run(); err != nil {
+	if err := c.runProcess(ctx, cmd); err != nil {
 		exitCode := -1
 		var exitErr *exec.ExitError
 		if errors.As(err, &exitErr) {

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os/exec"
 	"strings"
 	"sync"
 	"time"
@@ -19,6 +20,8 @@ type Pool struct {
 	timeout        time.Duration
 	defaultKeyPath string
 	newClient      func(config *ConnectionConfig) (*Client, error)
+	perHost        int
+	hostSlots      map[string]chan struct{}
 }
 
 // NewPool creates a new connection pool. keyPath is the default SSH key
@@ -35,6 +38,15 @@ func NewPool(timeout time.Duration, keyPath string) *Pool {
 		defaultKeyPath: keyPath,
 		newClient:      NewClient,
 	}
+}
+
+// LimitPerHost bounds the ssh and scp processes that clients from this pool run against one address at a time, so
+// callers that fan out checks stay under sshd's MaxStartups instead of having handshakes dropped. Zero is unbounded.
+// It applies to clients created after the call.
+func (p *Pool) LimitPerHost(n int) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.perHost = n
 }
 
 // DefaultKeyPath returns the pool's default SSH key path (empty if unset).
@@ -81,6 +93,16 @@ func (p *Pool) Get(config *ConnectionConfig) (*Client, error) {
 		return nil, fmt.Errorf("failed to create SSH client for %s: %w", key, err)
 	}
 
+	if p.perHost > 0 {
+		hostKey := fmt.Sprintf("%s:%d", effective.Address, effective.Port)
+		if p.hostSlots == nil {
+			p.hostSlots = map[string]chan struct{}{}
+		}
+		if p.hostSlots[hostKey] == nil {
+			p.hostSlots[hostKey] = make(chan struct{}, p.perHost)
+		}
+		client.slots = p.hostSlots[hostKey]
+	}
 	p.connections[key] = client
 	return client, nil
 }
@@ -98,25 +120,6 @@ func (p *Pool) effectiveConfig(in *ConnectionConfig) ConnectionConfig {
 	return c
 }
 
-func (p *Pool) getHealthyClient(ctx context.Context, config *ConnectionConfig) (*Client, error) {
-	client, err := p.Get(config)
-	if err != nil {
-		return nil, err
-	}
-
-	pingCtx, cancel := context.WithTimeout(ctx, pingTimeout(config))
-	defer cancel()
-	if err := client.Ping(pingCtx); err != nil {
-		_ = p.CloseHost(config)
-		client, err = p.Get(config)
-		if err != nil {
-			return nil, err
-		}
-	}
-
-	return client, nil
-}
-
 func isConnectionError(err error) bool {
 	if err == nil {
 		return false
@@ -128,14 +131,25 @@ func isConnectionError(err error) bool {
 		return true
 	}
 	errText := err.Error()
-	return strings.Contains(errText, "EOF") ||
+	if strings.Contains(errText, "EOF") ||
 		strings.Contains(errText, "connection reset by peer") ||
-		strings.Contains(errText, "use of closed network connection")
+		strings.Contains(errText, "use of closed network connection") {
+		return true
+	}
+	// OpenSSH exits 255 for its own failures and capitalizes the system error, e.g. "Connection reset by peer" or
+	// "kex_exchange_identification: Connection closed by remote host" when sshd sheds concurrent handshakes.
+	var exitErr *exec.ExitError
+	if !errors.As(err, &exitErr) || exitErr.ExitCode() != 255 {
+		return false
+	}
+	lower := strings.ToLower(errText)
+	return strings.Contains(lower, "connection reset by peer") || strings.Contains(lower, "connection closed by")
 }
 
-// Run executes a command on a host (creates/reuses connection)
+// Run executes a command on a host. Every ssh process opens its own connection, so there is no cached connection to
+// probe first; a command whose connection drops is retried once on a freshly resolved client.
 func (p *Pool) Run(ctx context.Context, config *ConnectionConfig, command string) (*CommandResult, error) {
-	client, err := p.getHealthyClient(ctx, config)
+	client, err := p.Get(config)
 	if err != nil {
 		return nil, err
 	}
@@ -143,7 +157,7 @@ func (p *Pool) Run(ctx context.Context, config *ConnectionConfig, command string
 	result, err := client.Run(ctx, command)
 	if err != nil && isConnectionError(err) {
 		_ = p.CloseHost(config)
-		client, retryErr := p.getHealthyClient(ctx, config)
+		client, retryErr := p.Get(config)
 		if retryErr != nil {
 			return result, retryErr
 		}
@@ -155,7 +169,7 @@ func (p *Pool) Run(ctx context.Context, config *ConnectionConfig, command string
 
 // Upload transfers a file to a host (creates/reuses connection)
 func (p *Pool) Upload(ctx context.Context, config *ConnectionConfig, opts UploadOptions) error {
-	client, err := p.getHealthyClient(ctx, config)
+	client, err := p.Get(config)
 	if err != nil {
 		return err
 	}
@@ -166,7 +180,7 @@ func (p *Pool) Upload(ctx context.Context, config *ConnectionConfig, opts Upload
 		}
 
 		_ = p.CloseHost(config)
-		client, retryErr := p.getHealthyClient(ctx, config)
+		client, retryErr := p.Get(config)
 		if retryErr != nil {
 			return retryErr
 		}

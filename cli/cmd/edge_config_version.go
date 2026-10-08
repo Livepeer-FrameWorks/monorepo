@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -276,18 +277,18 @@ func sudoReadEdgeConfigMarker(cmd *cobra.Command) func(string) (string, bool, er
 // manifest, and each edge's health is read from the Foghorn serving that
 // edge's cluster. It needs lifecycle (Quartermaster + Foghorn) access for that
 // manifest; without it the check reports a warning instead of guessing.
-func doctorEdgeConfigVersions(cmd *cobra.Command, rc *resolvedCluster) *health.CheckResult {
+func doctorEdgeConfigVersions(ctx context.Context, rc *resolvedCluster) *health.CheckResult {
 	notChecked := func(format string, args ...any) *health.CheckResult {
 		return &health.CheckResult{Name: "edge_config_version", Status: yugabyteLayoutWarning, CheckedAt: time.Now(),
 			Message: "not checked: " + fmt.Sprintf(format, args...)}
 	}
-	ctxCfg, err := lifecycleContextForResolved(cmd.Context(), rc)
+	ctxCfg, err := lifecycleContextForResolved(ctx, rc)
 	if err != nil {
 		return notChecked("%v", err)
 	}
 	resolver := controlplane.NewResolverWithManifest(ctxCfg, rc.Manifest, rc.ManifestPath, rc.AgeKey)
 	defer resolver.Close()
-	ep, err := resolver.ResolveGRPC(cmd.Context(), "quartermaster")
+	ep, err := resolver.ResolveGRPC(ctx, "quartermaster")
 	if err != nil {
 		return notChecked("resolve quartermaster: %v", err)
 	}
@@ -296,12 +297,12 @@ func doctorEdgeConfigVersions(cmd *cobra.Command, rc *resolvedCluster) *health.C
 		return notChecked("connect Quartermaster gRPC: %v", err)
 	}
 	defer func() { _ = qm.Close() }()
-	cctx, cancel := clusterNodesRPCContext(cmd.Context(), ctxCfg, 15*time.Second)
+	cctx, cancel := clusterNodesRPCContext(ctx, ctxCfg, 15*time.Second)
 	resp, err := qm.ListNodes(cctx, ctxCfg.ClusterID, "edge", "", nil)
 	cancel()
 	if err != nil {
 		return notChecked("list edge nodes: %v", err)
 	}
-	healthByID, _, missing := collectNodeHealth(cmd.Context(), ctxCfg, resp.GetNodes(), foghornNodeHealthDialer(resolver, ctxCfg))
+	healthByID, _, missing := collectNodeHealth(ctx, ctxCfg, resp.GetNodes(), foghornNodeHealthDialer(resolver, ctxCfg))
 	return evaluateEdgeConfigVersions(edgeConfigNodesFromHealth(resp.GetNodes(), healthByID, missing), fwversion.Version)
 }

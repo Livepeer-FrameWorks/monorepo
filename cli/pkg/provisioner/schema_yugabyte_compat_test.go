@@ -301,6 +301,11 @@ INSERT INTO public.layout_split_probe SELECT g, repeat('x', 200) FROM generate_s
 		serving := strings.Fields(ybQuery(t, name, database, "SELECT tablet_id FROM ("+YugabyteServingTabletsQuery+") s WHERE s.tablet_id IN (SELECT tablet_id FROM yb_local_tablets WHERE "+probeFilter+")"))
 		listed, _ := strconv.Atoi(ybQuery(t, name, database, "SELECT count(*) FROM yb_local_tablets WHERE "+probeFilter))
 		if len(serving) == 2 && serving[0] != serving[1] && serving[0] != tabletID && serving[1] != tabletID {
+			// The doctor reads every database's tablets from one session in the admin database.
+			fromAdmin := strings.Fields(ybQuery(t, name, "yugabyte", "SELECT tablet_id FROM ("+YugabyteServingTabletsQuery+") s WHERE s.namespace_name = '"+database+"' AND s.tablet_id IN ('"+serving[0]+"', '"+serving[1]+"')"))
+			if len(fromAdmin) != 2 {
+				t.Fatalf("serving tablets of %s read from the yugabyte database = %v, want %v", database, fromAdmin, serving)
+			}
 			t.Logf("yugabyte: split probe in %s has two serving children %v replacing %s, %d listed, properties=%s", database, serving, tabletID, listed, properties)
 			break
 		}
