@@ -1781,15 +1781,15 @@ verify-yugabyte-quartermaster-contracts: verify-yugabyte-shared-fixture
 	@$(CONTRACT_GO_TEST) api_tenants yugabyte/quartermaster-capabilities -tags schema_verify -run '^($(QUARTERMASTER_CAPABILITIES_REALYB_TESTS))$$' -count=1 -timeout 600s ./internal/grpc/
 	@$(CONTRACT_GO_TEST) api_tenants yugabyte/quartermaster-health-writes -tags schema_verify -run '^($(QUARTERMASTER_HEALTH_WRITES_REALYB_TESTS))$$' -count=1 -timeout 600s ./internal/grpc/
 
-.PHONY: verify-domain-outbox-engines verify-yugabyte-domain-outbox-contracts
+.PHONY: verify-domain-outbox-engines verify-yugabyte-domain-outbox-engine
 verify-domain-outbox-engines:
 	@$(CONTRACT_GO_TEST) pkg postgres/domain-event-outbox -tags schema_verify -run '$(DOMAIN_EVENT_OUTBOX_REALPG_TESTS)' -count=1 -timeout 600s ./events/outbox/
-	@$(YUGABYTE_FIXTURE) $(MAKE) --no-print-directory verify-yugabyte-domain-outbox-contracts
+	@$(YUGABYTE_FIXTURE) $(MAKE) --no-print-directory verify-yugabyte-domain-outbox-engine
 
-verify-yugabyte-domain-outbox-contracts: verify-yugabyte-shared-fixture
+verify-yugabyte-domain-outbox-engine: verify-yugabyte-shared-fixture
 	@$(CONTRACT_GO_TEST) pkg yugabyte/domain-event-outbox -tags schema_verify -run 'TestDomainEventOutbox_RealYugabyte' -count=1 -timeout 600s ./events/outbox/
 
-verify-yugabyte-bosun-contracts: verify-yugabyte-shared-fixture verify-yugabyte-domain-outbox-contracts
+verify-yugabyte-bosun-contracts: verify-yugabyte-shared-fixture verify-yugabyte-domain-outbox-engine
 	@$(CONTRACT_GO_TEST) api_webhooks yugabyte/bosun-ledger -tags schema_verify -run '^($(BOSUN_REALYB_TESTS))$$' -count=1 -timeout 1200s ./internal/integration/
 
 verify-yugabyte-periscope-metering-contracts: verify-yugabyte-shared-fixture
