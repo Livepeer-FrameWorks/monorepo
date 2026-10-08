@@ -5,6 +5,8 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+
+	"frameworks/cli/pkg/ssh"
 )
 
 type fakeServiceDatabaseProbe struct {
@@ -172,4 +174,31 @@ func schemaDatabaseNamesForTest(databases []SchemaDatabase) []string {
 		out = append(out, database.Name)
 	}
 	return out
+}
+
+// A database that exists but has no tables yet answers the presence query with
+// its aggregate alone. psql/ysqlsh -tA print an empty value as an empty line, the
+// same output as no row at all, so the probe must read that as not initialized,
+// not fail. presenceRunner prints what PostgreSQL 16 printed for each query
+// against a freshly created database.
+func TestProbeDatabaseInitializedEmptyYugabyteDatabase(t *testing.T) {
+	runner := &presenceRunner{}
+	probe := ysqlStateProbe{executor: &SSHExecutor{Runner: runner, UseYugabyteTools: true}, port: 5433}
+	initialized, err := probeDatabaseInitialized(context.Background(), probe, "bosun")
+	if err != nil {
+		t.Fatalf("empty database: %v", err)
+	}
+	if initialized {
+		t.Fatal("a database without tables reported initialized")
+	}
+}
+
+type presenceRunner struct{ mockRunner }
+
+func (r *presenceRunner) Run(ctx context.Context, command string) (*ssh.CommandResult, error) {
+	r.stdout = "\n"
+	if strings.HasPrefix(r.uploadedContent, "SELECT 'tables:' || ") {
+		r.stdout = "tables:\n"
+	}
+	return r.mockRunner.Run(ctx, command)
 }

@@ -137,7 +137,7 @@ func probeDatabaseInitialized(ctx context.Context, reader serviceDatabaseProbe, 
 	if err != nil {
 		return false, err
 	}
-	for _, table := range strings.Split(strings.TrimSpace(present), ",") {
+	for _, table := range strings.Split(strings.TrimPrefix(strings.TrimSpace(present), "tables:"), ",") {
 		switch table {
 		case "_schema_baseline", "_migrations":
 		default:
@@ -169,8 +169,10 @@ func schemaHasTablesQuery(schema string) string {
 }
 
 // initializationTablesQuery lists which of the baseline marker and migration
-// ledger tables exist in the public schema, comma-separated.
-const initializationTablesQuery = "SELECT COALESCE(string_agg(table_name, ',' ORDER BY table_name), '') FROM information_schema.tables WHERE table_schema = 'public' AND table_name IN ('_schema_baseline', '_migrations')"
+// ledger tables exist in the public schema, comma-separated after a leading
+// "tables:". The prefix keeps the value non-empty: ysqlsh -tA prints an empty
+// value as an empty line, which the SSH executor cannot tell apart from no row.
+const initializationTablesQuery = "SELECT 'tables:' || COALESCE(string_agg(table_name, ',' ORDER BY table_name), '') FROM information_schema.tables WHERE table_schema = 'public' AND table_name IN ('_schema_baseline', '_migrations')"
 
 // tableHasRowsQuery is only built for the two fixed table names above. A
 // baseline marker row holding the verification-pending value does not count:
