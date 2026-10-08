@@ -30,8 +30,10 @@ func TestPostgresServiceDatabaseProbeQueries(t *testing.T) {
 	if got := query("lookout", schemaHasTablesQuery("lookout")); got != "f" {
 		t.Fatalf("empty database has tables = %q", got)
 	}
-	if got := query("lookout", initializationTablesQuery); got != "" {
-		t.Fatalf("empty database initialization tables = %q", got)
+	// The SSH executor reads an empty -tA line as no row, so the presence query
+	// must print a non-empty value even when neither table exists.
+	if got := query("lookout", initializationTablesQuery); got != "tables:" {
+		t.Fatalf("empty database initialization tables = %q, want %q", got, "tables:")
 	}
 
 	baseline, err := dbsql.Content.ReadFile("schema/lookout.sql")
@@ -55,7 +57,7 @@ func TestPostgresServiceDatabaseProbeQueries(t *testing.T) {
 	if got := query("partial", schemaHasTablesQuery("lookout")); got != "t" {
 		t.Fatalf("hand-populated database has tables = %q", got)
 	}
-	if got := query("partial", initializationTablesQuery); got != "" {
+	if got := query("partial", initializationTablesQuery); got != "tables:" {
 		t.Fatalf("hand-populated database initialization tables = %q, want none", got)
 	}
 }
