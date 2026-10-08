@@ -60,6 +60,12 @@ type edgeRolloutResult struct {
 	LeftDraining bool
 }
 
+// edgeRolloutNoDrain is set by `edge provision --no-drain`: a node whose apply
+// restarts media services is applied in place instead of drained first. The
+// only edge in a cluster can never drain, because its sessions have nowhere
+// else to go.
+var edgeRolloutNoDrain bool
+
 // runEdgeRollout plans and applies an `edge provision` run. The precheck
 // runs for every live node before anything is applied. Fresh nodes are
 // installed first, up to parallel at a time; live nodes that drifted are
@@ -128,6 +134,11 @@ func runEdgeRollout(ctx context.Context, w io.Writer, nodes []edgeRolloutNode, p
 
 	for _, i := range live {
 		n := nodes[i]
+		if results[i].Action == edgeActionDrainedApply && edgeRolloutNoDrain {
+			fmt.Fprintf(w, "\n[%s] Applying without draining (--no-drain); media services restart and live sessions on this node reconnect...\n", n.Name)
+			results[i].Err = n.Ops.Apply(ctx)
+			continue
+		}
 		if results[i].Action != edgeActionDrainedApply {
 			fmt.Fprintf(w, "\n[%s] Applying (no media restart)...\n", n.Name)
 			results[i].Err = n.Ops.Apply(ctx)

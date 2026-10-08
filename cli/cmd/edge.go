@@ -1143,6 +1143,7 @@ Multi-node manifest example:
 	cmd.Flags().BoolVar(&local, "local", false, "Provision this machine as a user LaunchAgent (no admin required, macOS only)")
 	cmd.Flags().StringVar(&ageKeyFile, "age-key", "", "Path to age private key for SOPS-encrypted host files (default: $SOPS_AGE_KEY_FILE)")
 	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "Check every node in Ansible check mode and print its plan and diff; change nothing")
+	cmd.Flags().BoolVar(&edgeRolloutNoDrain, "no-drain", false, "Apply a change that restarts media services without draining the node first; its live sessions reconnect")
 	cmd.Flags().StringSliceVar(&capabilities, "capability", nil, "Edge capability to enable (repeatable: ingest, edge, storage, processing)")
 	cmd.Flags().IntVar(&bandwidthMbps, "bandwidth-mbps", 0, "Advertised edge bandwidth limit in Mbps")
 	cmd.Flags().IntVar(&maxTranscodes, "max-transcodes", 0, "Maximum local transcodes for Helmsman to report")
