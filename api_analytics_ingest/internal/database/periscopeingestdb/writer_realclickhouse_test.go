@@ -20,6 +20,7 @@ import (
 
 	"github.com/ClickHouse/clickhouse-go/v2"
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/database"
 	dbsql "github.com/Livepeer-FrameWorks/monorepo/pkg/database/sql"
 	"github.com/google/uuid"
 )
@@ -48,6 +49,7 @@ var writerContracts = []writerContract{
 	{"PrepareLedgerRebuildCursor", PrepareLedgerRebuildCursor},
 	{"PrepareNodeMetricsSample", PrepareNodeMetricsSample},
 	{"PrepareNodeState", PrepareNodeState},
+	{"PrepareNetworkObservation", PrepareNetworkObservation},
 	{"PrepareOrchestratorAIOutcome", PrepareOrchestratorAIOutcome},
 	{"PrepareOrchestratorDiscoverySample", PrepareOrchestratorDiscoverySample},
 	{"PrepareOrchestratorInstanceStateCurrent", PrepareOrchestratorInstanceStateCurrent},
@@ -165,6 +167,20 @@ func TestEveryTypedWriterAppendsToCurrentClickHouse(t *testing.T) {
 			writer.MethodByName("Close").Call(nil)
 		})
 	}
+	t.Run("network replay and snapshot rebuilding", func(t *testing.T) {
+		for _, service := range []string{"periscope-ingest", "periscope-query"} {
+			if capabilityErr := database.VerifyCapabilities(ctx, service, database.EngineClickHouse, func(probeCtx context.Context, query string) error {
+				rows, probeErr := conn.Query(probeCtx, query)
+				if probeErr != nil {
+					return probeErr
+				}
+				return rows.Close()
+			}); capabilityErr != nil {
+				t.Fatal(capabilityErr)
+			}
+		}
+		verifyNetworkReplayAndRollups(t, conn)
+	})
 }
 
 func representativeValue(typ reflect.Type, includeNullableValues bool) reflect.Value {

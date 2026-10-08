@@ -8,6 +8,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"frameworks/api_analytics_ingest/internal/database/periscopeingestdb"
@@ -54,9 +55,10 @@ type PeriscopeMetrics struct {
 
 // AnalyticsHandler handles analytics events
 type AnalyticsHandler struct {
-	clickhouse clickhouseConn
-	logger     logging.Logger
-	metrics    *PeriscopeMetrics
+	networkScopes sync.Map
+	clickhouse    clickhouseConn
+	logger        logging.Logger
+	metrics       *PeriscopeMetrics
 }
 
 type clickhouseBatch = periscopeingestdb.Batch
@@ -229,6 +231,15 @@ func skipAs(reason string) analyticsEventHandler {
 	}
 }
 
+func networkObservationOr(legacy analyticsEventHandler) analyticsEventHandler {
+	return func(h *AnalyticsHandler, ctx context.Context, event kafka.AnalyticsEvent) error {
+		if event.SchemaVersion >= 3 {
+			return h.processNetworkObservation(ctx, event)
+		}
+		return legacy(h, ctx, event)
+	}
+}
+
 // analyticsEventHandlers routes each canonical analytics_events type Decklog
 // publishes (pkg/analyticsevents). Every routed type must have an entry; the
 // contract test in analytics_event_contract_test.go enforces it.
@@ -273,10 +284,13 @@ var analyticsEventHandlers = map[string]analyticsEventHandler{
 	"api_request_batch":       (*AnalyticsHandler).processAPIRequestBatch,
 	"federation_event":        (*AnalyticsHandler).processFederationEvent,
 
-	"orchestrator_discovery_observed": (*AnalyticsHandler).processOrchestratorDiscoveryObserved,
-	"orchestrator_state_update":       (*AnalyticsHandler).processOrchestratorStateUpdate,
-	"orchestrator_transcode_outcome":  (*AnalyticsHandler).processOrchestratorTranscodeOutcome,
+	"orchestrator_discovery_observed": networkObservationOr((*AnalyticsHandler).processOrchestratorDiscoveryObserved),
+	"orchestrator_state_update":       networkObservationOr((*AnalyticsHandler).processOrchestratorStateUpdate),
+	"orchestrator_transcode_outcome":  networkObservationOr((*AnalyticsHandler).processOrchestratorTranscodeOutcome),
 	"orchestrator_ai_outcome":         (*AnalyticsHandler).processOrchestratorAIOutcome,
+	"orchestrator_candidate_decision": (*AnalyticsHandler).processNetworkObservation,
+	"orchestrator_segment_result":     (*AnalyticsHandler).processNetworkObservation,
+	"orchestrator_observer_report":    (*AnalyticsHandler).processNetworkObservation,
 }
 
 func (h *AnalyticsHandler) pushRewritePayloadSatisfiesContract(event kafka.AnalyticsEvent) bool {

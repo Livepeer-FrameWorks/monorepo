@@ -1,0 +1,77 @@
+---
+title: Livepeer network observations
+description: Publish network inventory and real gateway performance with external discovery probers.
+---
+
+The public `/network` page and `GET /v1/network/livepeer` API combine Livepeer discovery
+with real gateway transcoding observations. Unknown coverage remains unknown; regional
+performance is shown separately. The platform-operator webapp can enable private
+correlation through the authenticated diagnostics route.
+
+## Coordinator
+
+Build with `make build-bin-network-observer`. Apply the `network_observer` baseline to
+its own database using the normal database tooling. Configure `DATABASE_URL`,
+`NETWORK_OBSERVER_TENANT_ID`, `NETWORK_OBSERVER_CLUSTER_ID`, `NETWORK_OBSERVER_SECRET`,
+`LIVEPEER_ETH_RPC_URL`, `LIVEPEER_CONTROLLER`, `DECKLOG_GRPC_ADDR`, `SERVICE_TOKEN` and
+`KAFKA_BROKERS`. Use the production Arbitrum chain and choose the observation environment
+explicitly. Configure verified internal gRPC TLS as for other services. The optional
+`docker-compose.network-observations.yml` overlay is for isolated local use.
+
+Expose the shared-secret work and ingest routes through verified HTTPS. If behind an
+ingress, set `NETWORK_OBSERVER_TRUSTED_PROXY_CIDRS` to the actual ingress CIDRs before
+using its forwarded source addresses for prober geolocation. Optional `GEOIP_MMDB_PATH`
+provides coordinates; missing geography does not prevent discovery.
+
+Bridge needs `NETWORK_OBSERVER_URL`, `NETWORK_OBSERVER_SECRET`,
+`NETWORK_PUBLIC_TENANT_IDS` and the matching `NETWORK_OBSERVER_ENVIRONMENT`. Publication
+scopes are server configuration, not caller-supplied query parameters. Periscope runs
+the canonical migration and rollup loop as part of its existing ingestion service.
+
+## External probers
+
+Build with `make build-bin-network-prober`. These hosts do not need to run the
+FrameWorks stack or enroll through its CLI. Install the binary manually and use the
+supplied `api_network_observer/deploy/network-prober.service` and environment example.
+Create its dedicated service user, private environment file and persistent state
+directory. Configure a unique stable ID, region, verified HTTPS coordinator URL, shared
+secret and the existing Livepeer broadcaster discovery address/signature pair.
+
+Each process resolves the whole catalog every five minutes and executes only its
+assigned endpoint discovery checks. It does not submit synthetic transcodes or require
+broadcaster funding for synthetic work. Orchestrator self-signed discovery certificates
+are accepted by default, matching Livepeer; the coordinator connection still verifies
+TLS. Keep the spool directory persistent and exclusive to this process.
+
+Local port 18025 exposes `/health` with spool counts and `/ready` with recent coordinator
+connectivity. Bind/firewall that operational endpoint appropriately for the host.
+Observer heartbeat and DNS-cycle reports disclose queue depth and lost observations.
+An unavailable prober does not make the orchestrator unavailable.
+
+## Gateway
+
+Configure a stable `FRAMEWORKS_GATEWAY_ID`, `FRAMEWORKS_GATEWAY_REGION`,
+`FRAMEWORKS_CLUSTER_ID`, `FRAMEWORKS_CLUSTER_OWNER_TENANT_ID`,
+`FRAMEWORKS_DECKLOG_GRPC_ADDR` and the existing service authentication/TLS settings.
+Set `FRAMEWORKS_TELEMETRY_SPOOL_DIR` to persistent private storage when containerizing;
+the default is under the gateway user's `.lpData/frameworks-telemetry` directory.
+Set `FRAMEWORKS_NETWORK_ID=42161` and `FRAMEWORKS_ENVIRONMENT` to the coordinator namespace.
+
+The optional `FRAMEWORKS_NETWORK_OBSERVER_URL` and
+`FRAMEWORKS_NETWORK_OBSERVER_SECRET` enable candidate hints. Keep
+`FRAMEWORKS_CANDIDATE_FEED_MODE=shadow` initially; `supplement` adds fresh hints without
+replacing local discovery or relaxing local eligibility checks. HTTP overrides are for
+isolated local development only.
+
+## API filters
+
+The public route accepts RFC3339 `start`/`end` (maximum 730-day window), `resource`
+(onchain address), `ip`, `region`, `interval` (`1m`, `5m`, `1h`) and
+`include_inactive=true`. Windows beyond raw retention use hourly snapshots and identify
+that in the response. Prices and raw checks retain 30 days. Whole-window summaries and
+bounded chart series are separate fields; inspect `truncated` before treating a series
+as complete.
+
+Livepeer notifications and incident escalation are disabled in this version. Operational
+incidents and business pulse delivery can be routed separately using Lookout's purpose
+settings in the configuration reference.

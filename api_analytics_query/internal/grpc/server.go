@@ -49,6 +49,7 @@ type PeriscopeServer struct {
 	periscopepb.UnimplementedClipAnalyticsServiceServer
 	periscopepb.UnimplementedAggregatedAnalyticsServiceServer
 	periscopepb.UnimplementedOrchestratorAnalyticsServiceServer
+	periscopepb.UnimplementedNetworkObservationServiceServer
 
 	clickhouse database.ClickHouseConn
 	logger     logging.Logger
@@ -8302,6 +8303,7 @@ func NewGRPCServer(ctx context.Context, cfg GRPCServerConfig) (*grpc.Server, err
 	periscopepb.RegisterClipAnalyticsServiceServer(server, periscopeServer)
 	periscopepb.RegisterAggregatedAnalyticsServiceServer(server, periscopeServer)
 	periscopepb.RegisterOrchestratorAnalyticsServiceServer(server, periscopeServer)
+	periscopepb.RegisterNetworkObservationServiceServer(server, periscopeServer)
 
 	// Register gRPC health checking service
 	hs := health.NewServer()

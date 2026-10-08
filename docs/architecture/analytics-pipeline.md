@@ -26,6 +26,11 @@ It is written as a “how the system works” reference (vs an audit checklist).
 
 ## Services (What Each Does)
 
+External Livepeer observations enter through trusted probers and gateway telemetry,
+then follow Decklog → Kafka → Periscope. V3 observations deduplicate before replacement
+rollups and expose a separate public REST projection and private operator diagnostics.
+See [network-observations.md](network-observations.md) for ownership, retention and scopes.
+
 - `api_sidecar` (“Helmsman”): Receives MistServer webhooks + polls MistServer APIs; emits typed protobuf triggers into the platform.
 - `api_balancing` (“Foghorn”): Enriches triggers (tenant/user/geo), applies redaction rules where appropriate, forwards events for storage/broadcast, and handles some orchestration.
 - `api_firehose` (“Decklog”): Normalizes + publishes analytics events to Kafka (`analytics_events` topic).

@@ -76,6 +76,10 @@ var Services = map[string]Service{
 	"privateer": {ID: "privateer", DefaultPort: 18012, HealthPath: "/health", ReadyPath: "/ready", ReadySince: sharedRouterReadySince, HealthProtocol: "http", Role: "mesh"},
 	"lookout":   {ID: "lookout", DefaultPort: 18022, HealthPath: "/health", ReadyPath: "/ready", ReadySince: sharedRouterReadySince, HealthProtocol: "http", Role: "infra", SupportsSIGHUPReload: true},
 
+	// External network observation
+	"network-observer": {ID: "network-observer", DefaultPort: 18024, HealthPath: "/health", ReadyPath: "/ready", ReadySince: sharedRouterReadySince, HealthProtocol: "http", Role: "analytics"},
+	"network-prober":   {ID: "network-prober", DefaultPort: 18025, HealthPath: "/health", HealthProtocol: "http", Role: "analytics"},
+
 	// Tenant integrations
 	"bosun": {ID: "bosun", DefaultPort: 18013, HealthPath: "/health", ReadyPath: "/ready", ReadySince: sharedRouterReadySince, HealthProtocol: "http", Role: "control", SupportsSIGHUPReload: true},
 

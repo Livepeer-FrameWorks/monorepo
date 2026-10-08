@@ -1,6 +1,26 @@
 {
   "services": [
     {
+      "name": "network-observer",
+      "context": "api_network_observer",
+      "cmd": "./cmd/network-observer",
+      "dockerfile": "api_network_observer/Dockerfile",
+      "docker_cmd": "./cmd/network-observer",
+      "health_port": 18024,
+      "cgo": false,
+      "darwin_binary": true
+    },
+    {
+      "name": "network-prober",
+      "context": "api_network_observer",
+      "cmd": "./cmd/network-prober",
+      "dockerfile": "api_network_observer/Dockerfile",
+      "docker_cmd": "./cmd/network-prober",
+      "health_port": 18025,
+      "cgo": false,
+      "darwin_binary": true
+    },
+    {
       "name": "bridge",
       "context": "api_gateway",
       "cmd": "./cmd/bridge",

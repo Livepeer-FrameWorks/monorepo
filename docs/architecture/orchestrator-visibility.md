@@ -1,6 +1,9 @@
 # Orchestrator Visibility
 
-Per-orchestrator discovery, state, and outcome telemetry from FrameWorks-managed Livepeer gateways. Source of truth for the federation map's orchestrator layer and its side-panel breakdown.
+Per-orchestrator current-state telemetry from FrameWorks-managed Livepeer gateways.
+The V3 public dashboard and replay-safe performance history are documented in
+[network-observations.md](network-observations.md); the tables below also retain legacy
+V2 history for existing GraphQL readers.
 
 ## Identity vs instance
 
@@ -36,7 +39,10 @@ Decklog rejects every gateway telemetry event missing `cluster_owner_tenant_id`.
 
 ## Multi-IP observation
 
-DNS round-robin / geo-anycast for an orchestrator hostname is a first-class dimension. Per discovery cycle, the gateway resolves the hostname and emits one `orchestrator_discovery_observed` row per resolved IP — `dialed=true` on the IP the gateway actually dialed (carries `discovery_latency_ms` + `reachable`), `dialed=false` on sibling A-record IPs (geo-only context). Federation map renders one pin per `(gateway, resolved_ip)` so multi-IP orchs are visible.
+DNS round-robin / geo-anycast for an orchestrator hostname is a first-class dimension.
+V3 gateways emit the actual RPC socket IP only. External probers resolve the full catalog
+from every vantage independently and test assigned IPs directly. Legacy V2 discovery
+can contain `dialed=false` DNS siblings; those are context, not tested workers.
 
 ## Geo attachment
 

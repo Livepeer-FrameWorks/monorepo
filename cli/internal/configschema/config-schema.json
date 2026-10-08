@@ -293,6 +293,39 @@
       "command": "api_gateway/cmd/bridge",
       "variables": [
         {
+          "key": "NETWORK_OBSERVER_URL",
+          "type": "string",
+          "introduced": "v0.3.11",
+          "description": "Observer inventory URL; enables public network REST API when configured."
+        },
+        {
+          "key": "NETWORK_OBSERVER_SECRET",
+          "type": "string",
+          "secret": true,
+          "introduced": "v0.3.11",
+          "description": "Shared internal observer inventory credential."
+        },
+        {
+          "key": "NETWORK_PUBLIC_TENANT_IDS",
+          "type": "list",
+          "introduced": "v0.3.11",
+          "description": "Explicit platform-owned tenant scopes whose public Livepeer observations can be published."
+        },
+        {
+          "key": "LIVEPEER_NETWORK_ID",
+          "type": "string",
+          "default": "42161",
+          "introduced": "v0.3.11",
+          "description": "Livepeer production network namespace."
+        },
+        {
+          "key": "NETWORK_OBSERVER_ENVIRONMENT",
+          "type": "string",
+          "default": "production",
+          "introduced": "v0.3.11",
+          "description": "Network observation environment."
+        },
+        {
           "key": "PORT",
           "type": "string",
           "default": "18000",
@@ -2807,6 +2840,291 @@
       ]
     },
     {
+      "service": "network-observer",
+      "command": "api_network_observer/cmd/network-observer",
+      "variables": [
+        {
+          "key": "GIN_MODE",
+          "type": "string",
+          "default": "debug",
+          "introduced": "v0.3.0",
+          "description": "Router mode. release enables Gin release mode and restricts CORS to ALLOWED_ORIGINS; any other value runs the router in development mode."
+        },
+        {
+          "key": "ALLOWED_ORIGINS",
+          "type": "list",
+          "introduced": "v0.3.0",
+          "description": "Comma-separated browser origins accepted by CORS when GIN_MODE is release."
+        },
+        {
+          "key": "LOG_LEVEL",
+          "type": "string",
+          "default": "info",
+          "introduced": "v0.3.0",
+          "description": "Log level: debug, info, warn, or error. Any other value fails startup."
+        },
+        {
+          "key": "DATABASE_URL",
+          "type": "string",
+          "required": true,
+          "secret": true,
+          "introduced": "v0.3.0",
+          "description": "Connection URL for this service's PostgreSQL or YugabyteDB database."
+        },
+        {
+          "key": "GRPC_TLS_CA_PATH",
+          "type": "string",
+          "introduced": "v0.3.0",
+          "description": "CA bundle that internal gRPC clients use to verify servers."
+        },
+        {
+          "key": "GRPC_ALLOW_INSECURE",
+          "type": "boolean",
+          "default": "false",
+          "introduced": "v0.3.0",
+          "description": "Allows plaintext internal gRPC when no TLS material is configured. Development only."
+        },
+        {
+          "key": "GRPC_TLS_CERT_PATH",
+          "type": "string",
+          "introduced": "v0.3.0",
+          "description": "Certificate presented by this service's gRPC listener."
+        },
+        {
+          "key": "GRPC_TLS_KEY_PATH",
+          "type": "string",
+          "introduced": "v0.3.0",
+          "description": "Private key for GRPC_TLS_CERT_PATH."
+        },
+        {
+          "key": "NETWORK_OBSERVER_PORT",
+          "type": "string",
+          "default": "18024",
+          "introduced": "v0.3.11",
+          "description": "HTTP port for observer ingest, assignments and candidate feeds."
+        },
+        {
+          "key": "NETWORK_OBSERVER_TENANT_ID",
+          "type": "string",
+          "required": true,
+          "introduced": "v0.3.11",
+          "description": "Server-owned platform tenant scope for inventory and prober observations."
+        },
+        {
+          "key": "NETWORK_OBSERVER_CLUSTER_ID",
+          "type": "string",
+          "required": true,
+          "introduced": "v0.3.11",
+          "description": "Platform cluster identity used for probe telemetry."
+        },
+        {
+          "key": "NETWORK_OBSERVER_SECRET",
+          "type": "string",
+          "required": true,
+          "secret": true,
+          "introduced": "v0.3.11",
+          "description": "Shared bearer secret for trusted external probers and internal candidate readers."
+        },
+        {
+          "key": "NETWORK_OBSERVERS_JSON",
+          "type": "string",
+          "default": "[]",
+          "introduced": "v0.3.11",
+          "description": "JSON observer IDs, regions and optional locations; new shared-secret probers can register within the configured limit."
+        },
+        {
+          "key": "NETWORK_OBSERVER_MAX_PROBERS",
+          "type": "integer",
+          "default": "32",
+          "introduced": "v0.3.11",
+          "description": "Maximum trusted prober identities."
+        },
+        {
+          "key": "NETWORK_OBSERVER_ENVIRONMENT",
+          "type": "string",
+          "default": "production",
+          "introduced": "v0.3.11",
+          "description": "Observation environment; staging data remains separate."
+        },
+        {
+          "key": "LIVEPEER_NETWORK_ID",
+          "type": "string",
+          "default": "42161",
+          "introduced": "v0.3.11",
+          "description": "Expected production Livepeer chain ID, verified against the RPC."
+        },
+        {
+          "key": "LIVEPEER_ETH_RPC_URL",
+          "type": "string",
+          "required": true,
+          "secret": true,
+          "introduced": "v0.3.11",
+          "description": "Ethereum RPC URL for read-only production catalog discovery."
+        },
+        {
+          "key": "LIVEPEER_CONTROLLER",
+          "type": "string",
+          "required": true,
+          "introduced": "v0.3.11",
+          "description": "Livepeer controller contract used to resolve BondingManager and ServiceRegistry."
+        },
+        {
+          "key": "NETWORK_CATALOG_INTERVAL_SECONDS",
+          "type": "integer",
+          "default": "900",
+          "introduced": "v0.3.11",
+          "description": "Contract catalog refresh interval."
+        },
+        {
+          "key": "DECKLOG_GRPC_ADDR",
+          "type": "string",
+          "required": true,
+          "introduced": "v0.3.11",
+          "description": "Decklog telemetry ingest address."
+        },
+        {
+          "key": "SERVICE_TOKEN",
+          "type": "string",
+          "required": true,
+          "secret": true,
+          "introduced": "v0.3.11",
+          "description": "Internal service token for Decklog."
+        },
+        {
+          "key": "KAFKA_BROKERS",
+          "type": "list",
+          "required": true,
+          "introduced": "v0.3.11",
+          "description": "Analytics Kafka brokers for gateway discoveries."
+        },
+        {
+          "key": "KAFKA_CLUSTER_ID",
+          "type": "string",
+          "default": "local",
+          "introduced": "v0.3.11",
+          "description": "Kafka cluster identifier."
+        },
+        {
+          "key": "GEOIP_MMDB_PATH",
+          "type": "string",
+          "introduced": "v0.3.11",
+          "description": "Optional MMDB for endpoint/prober location lookup."
+        },
+        {
+          "key": "NETWORK_OBSERVER_TRUSTED_PROXY_CIDRS",
+          "type": "list",
+          "introduced": "v0.3.11",
+          "description": "Trusted HTTPS ingress source CIDRs; only these peers may forward prober source IPs for automatic geography."
+        }
+      ]
+    },
+    {
+      "service": "network-prober",
+      "command": "api_network_observer/cmd/network-prober",
+      "variables": [
+        {
+          "key": "NETWORK_PROBER_PORT",
+          "type": "string",
+          "default": "18025",
+          "introduced": "v0.3.11",
+          "description": "Local prober health and spool statistics HTTP port."
+        },
+        {
+          "key": "LOG_LEVEL",
+          "type": "string",
+          "default": "info",
+          "introduced": "v0.3.0",
+          "description": "Log level: debug, info, warn, or error. Any other value fails startup."
+        },
+        {
+          "key": "NETWORK_OBSERVER_URL",
+          "type": "string",
+          "required": true,
+          "introduced": "v0.3.11",
+          "description": "Verified HTTPS observer API, accessible from this external host."
+        },
+        {
+          "key": "NETWORK_OBSERVER_SECRET",
+          "type": "string",
+          "required": true,
+          "secret": true,
+          "introduced": "v0.3.11",
+          "description": "Shared observer ingest bearer secret."
+        },
+        {
+          "key": "NETWORK_PROBER_ID",
+          "type": "string",
+          "required": true,
+          "introduced": "v0.3.11",
+          "description": "Stable prober ID; no CLI enrollment required."
+        },
+        {
+          "key": "NETWORK_PROBER_REGION",
+          "type": "string",
+          "required": true,
+          "introduced": "v0.3.11",
+          "description": "Prober vantage region."
+        },
+        {
+          "key": "LIVEPEER_BROADCASTER_ADDRESS",
+          "type": "string",
+          "required": true,
+          "introduced": "v0.3.11",
+          "description": "Public broadcaster address for discovery RPC authentication."
+        },
+        {
+          "key": "LIVEPEER_BROADCASTER_SIGNATURE",
+          "type": "string",
+          "required": true,
+          "secret": true,
+          "introduced": "v0.3.11",
+          "description": "Hex signature over the broadcaster address using the Livepeer protocol."
+        },
+        {
+          "key": "LIVEPEER_DISCOVERY_SKIP_TLS_VERIFY",
+          "type": "boolean",
+          "default": "true",
+          "introduced": "v0.3.11",
+          "description": "Accept orchestrator self-signed certificates, matching Livepeer discovery; never changes coordinator TLS verification."
+        },
+        {
+          "key": "NETWORK_PROBER_ALLOW_INSECURE",
+          "type": "boolean",
+          "default": "false",
+          "introduced": "v0.3.11",
+          "description": "Allow HTTP coordinator only for isolated local testing."
+        },
+        {
+          "key": "NETWORK_PROBER_SPOOL_DIR",
+          "type": "string",
+          "required": true,
+          "introduced": "v0.3.11",
+          "description": "Private local durable observation spool directory."
+        },
+        {
+          "key": "NETWORK_PROBER_SPOOL_MAX_BYTES",
+          "type": "integer",
+          "default": "67108864",
+          "introduced": "v0.3.11",
+          "description": "Bounded spool byte capacity; overflow is visible in logs and heartbeat reports."
+        },
+        {
+          "key": "NETWORK_PROBER_CONCURRENCY",
+          "type": "integer",
+          "default": "8",
+          "introduced": "v0.3.11",
+          "description": "Maximum parallel DNS/discovery checks."
+        },
+        {
+          "key": "NETWORK_PROBER_TIMEOUT_SECONDS",
+          "type": "integer",
+          "default": "10",
+          "introduced": "v0.3.11",
+          "description": "Per DNS/RPC operation timeout."
+        }
+      ]
+    },
+    {
       "service": "periscope-ingest",
       "command": "api_analytics_ingest/cmd/periscope",
       "variables": [
@@ -4845,6 +5163,55 @@
           "secret": true,
           "introduced": "v0.3.8",
           "description": "Discord webhook URL for incident and operator activity notifications. Empty disables the Discord channel. Re-read after an env-file reload."
+        },
+        {
+          "key": "LOOKOUT_OPS_SLACK_WEBHOOK_URL",
+          "type": "string",
+          "secret": true,
+          "introduced": "v0.3.11",
+          "description": "Slack destination for platform incidents and operational activity. Re-read after env reload."
+        },
+        {
+          "key": "LOOKOUT_OPS_DISCORD_WEBHOOK_URL",
+          "type": "string",
+          "secret": true,
+          "introduced": "v0.3.11",
+          "description": "Discord destination for platform incidents and operational activity. Re-read after env reload."
+        },
+        {
+          "key": "LOOKOUT_BUSINESS_PULSE_SLACK_WEBHOOK_URL",
+          "type": "string",
+          "secret": true,
+          "introduced": "v0.3.11",
+          "description": "Slack destination for business pulse activity. Re-read after env reload."
+        },
+        {
+          "key": "LOOKOUT_BUSINESS_PULSE_DISCORD_WEBHOOK_URL",
+          "type": "string",
+          "secret": true,
+          "introduced": "v0.3.11",
+          "description": "Discord destination for business pulse activity. Re-read after env reload."
+        },
+        {
+          "key": "LOOKOUT_NOTIFY_LEGACY_FALLBACK",
+          "type": "boolean",
+          "default": "true",
+          "introduced": "v0.3.11",
+          "description": "Use shared webhook destinations for new notifications lacking a purpose destination. Existing queued legacy rows retain their destination."
+        },
+        {
+          "key": "LOOKOUT_OPS_NOTIFICATIONS_DISABLED",
+          "type": "boolean",
+          "default": "false",
+          "introduced": "v0.3.11",
+          "description": "Disable new ops notifications and purpose-specific deliveries without business fallback."
+        },
+        {
+          "key": "LOOKOUT_BUSINESS_PULSE_NOTIFICATIONS_DISABLED",
+          "type": "boolean",
+          "default": "false",
+          "introduced": "v0.3.11",
+          "description": "Disable new business pulse notifications and purpose-specific deliveries without ops fallback."
         },
         {
           "key": "SMTP_HOST",

@@ -243,10 +243,17 @@ func main() {
 // of one routing decision or delivery.
 func notifySettings(cfg *appconfig.Lookout) notify.Settings {
 	return notify.Settings{
-		EmailRecipients:   cfg.NotifyEmailTo,
-		SlackWebhookURL:   cfg.SlackWebhookURL,
-		DiscordWebhookURL: cfg.DiscordWebhookURL,
-		WebappURL:         strings.TrimRight(cfg.WebAppURL, "/"),
+		EmailRecipients:                    cfg.NotifyEmailTo,
+		SlackWebhookURL:                    cfg.SlackWebhookURL,
+		DiscordWebhookURL:                  cfg.DiscordWebhookURL,
+		OpsSlackWebhookURL:                 cfg.OpsSlackWebhookURL,
+		OpsDiscordWebhookURL:               cfg.OpsDiscordWebhookURL,
+		BusinessPulseSlackWebhookURL:       cfg.BusinessPulseSlackWebhookURL,
+		BusinessPulseDiscordWebhookURL:     cfg.BusinessPulseDiscordWebhookURL,
+		DisableLegacyFallback:              !cfg.NotifyLegacyFallback,
+		OpsNotificationsDisabled:           cfg.OpsNotificationsDisabled,
+		BusinessPulseNotificationsDisabled: cfg.BusinessPulseNotificationsDisabled,
+		WebappURL:                          strings.TrimRight(cfg.WebAppURL, "/"),
 		SMTP: email.Config{
 			Host:          cfg.SMTPHost,
 			Port:          cfg.SMTPPort,

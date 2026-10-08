@@ -47,7 +47,7 @@ proto-check: proto
 clean:
 	rm -f *.pb.go *_grpc.pb.go
 	rm -f common/*.pb.go shared/*.pb.go cluster_peer/*.pb.go tenant_limits/*.pb.go metering_contract/*.pb.go media_authority/*.pb.go x402/*.pb.go ipc/*.pb.go dns/*.pb.go commodore/*.pb.go quartermaster/*.pb.go purser/*.pb.go periscope/*.pb.go signalman/*.pb.go foghorn_control/*.pb.go foghorn/*.pb.go foghorn_federation/*.pb.go foghorn_relay/*.pb.go deckhand/*.pb.go skipper/*.pb.go
-	rm -f media_placement/*.pb.go lookout/*.pb.go bosun/*.pb.go
+	rm -f media_placement/*.pb.go lookout/*.pb.go bosun/*.pb.go livepeer_observer/*.pb.go
 	rm -f events/*.pb.go events/public/v1/*.pb.go events/internal/v1/*.pb.go events/internalv1/*.pb.go
 
 # Breaking-change check for the domain event contract against a release tag

@@ -3449,6 +3449,9 @@ message GatewayTelemetryEvent {
     OrchestratorStateUpdate       state     = 11;
     OrchestratorTranscodeOutcome  transcode = 12;
     OrchestratorAIOutcome         ai        = 13;
+    OrchestratorCandidateDecision decision = 14;
+    OrchestratorSegmentResult segment_result = 15;
+    OrchestratorObserverReport observer_report = 16;
   }
 
   // ===== Envelope v2 =====
@@ -3462,6 +3465,9 @@ message GatewayTelemetryEvent {
   string correlation_id = 55;
   string causation_id = 56;
   string event_id = 57; // UUIDv7 producer-stamped event identifier (dedupe key)
+  string network_id = 58;
+  string environment = 59;
+  string producer_kind = 60; // gateway or prober
 }
 
 // Per-vantage geo + IP attachment. Emitted as part of every discovery / state
@@ -3493,6 +3499,12 @@ message OrchestratorDiscoveryObserved {
   string failure_reason = 8;
   string failure_kind = 9;          // "dns" | "tcp" | "rpc" | "timeout" | ...
   OrchestratorVantageGeo vantage = 10;
+  string attempt_id = 11;
+  string sampling_source = 12;
+  bool compatibility_known = 13;
+  string target_ip = 14;
+  uint32 scheduled_interval_seconds = 15;
+  bool observer_healthy = 16;
 }
 
 // Vantage-independent facts from a successful OrchestratorInfo response.
@@ -3516,6 +3528,9 @@ message OrchestratorStateUpdate {
   // its own price_per_unit / pixels_per_unit. Empty when the gateway has no
   // per-capability price facts for this instance.
   repeated OrchestratorCapabilityPriceEntry capability_price_entries = 11;
+  bool price_known = 12;
+  string price_currency = 13;
+  string price_unit = 14;
 }
 
 // Per-capability price entry. Either capability (transcode codec, AI model
@@ -3545,6 +3560,12 @@ message OrchestratorTranscodeOutcome {
   string error_code = 13;
   string error_kind = 14;
   string resolved_ip = 15;
+  uint32 source_duration_ms = 16;
+  uint32 response_headers_ms = 17;
+  uint32 response_body_ms = 18;
+  uint32 timing_boundaries_version = 19;
+  string disposition = 20;
+  bool remote_ip_verified = 21;
 }
 
 // Per-AI-job outcome. Same shape as transcode but for AI pipelines, kept
@@ -3563,4 +3584,51 @@ message OrchestratorAIOutcome {
   string error_code = 10;
   string error_kind = 11;
   string resolved_ip = 12;
+}
+
+// Recorded gateway policy decisions are observations, not global eligibility verdicts.
+message OrchestratorCandidateDecision {
+  string orch_addr = 1;
+  string orch_url = 2;
+  string resolved_ip = 3;
+  string stage = 4;
+  string disposition = 5;
+  string reason = 6;
+  string workload = 7;
+  string capability_key = 8;
+  uint32 elapsed_ms = 9;
+  uint32 usable_candidates = 10;
+  string rule_version = 11;
+}
+
+// Final logical-segment outcome separates retries from usable delivered results.
+message OrchestratorSegmentResult {
+  string orch_addr = 1;
+  string orch_url = 2;
+  string resolved_ip = 3;
+  string session_id = 4;
+  string manifest_id_hash = 5;
+  uint64 seq_no = 6;
+  uint32 source_duration_ms = 7;
+  uint32 overall_ms = 8;
+  uint32 attempts = 9;
+  uint32 fallback_count = 10;
+  bool success = 11;
+  bool deadline_exceeded = 12;
+  string error_kind = 13;
+  uint32 replacement_setup_ms = 14;
+  string downstream_status = 15; // unknown unless delivery evidence is available
+  repeated string profiles = 16;
+  string delivery_session_id = 17; // private Mist/gateway protocol correlation
+}
+
+message OrchestratorObserverReport {
+  string report_kind = 1; // heartbeat or dns_cycle
+  uint32 expected = 2;
+  uint32 completed = 3;
+  uint32 failed = 4;
+  uint32 cadence_seconds = 5;
+  uint32 queue_records = 6;
+  uint64 dropped_records = 7;
+  bool healthy = 8;
 }

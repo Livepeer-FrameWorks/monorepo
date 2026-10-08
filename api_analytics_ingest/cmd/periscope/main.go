@@ -304,6 +304,7 @@ func main() {
 	defer runCancel()
 	consumerCtx, consumerCancel := context.WithCancel(context.Background())
 	defer consumerCancel()
+	analyticsHandler.StartNetworkRollups(consumerCtx, handlers.NewPostgresLedgerLease(postgres))
 
 	// Start consuming
 	consumerDone := make(chan struct{})

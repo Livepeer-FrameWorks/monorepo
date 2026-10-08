@@ -2414,3 +2414,25 @@ service OrchestratorAnalyticsService {
   rpc ListOrchestratorVantages(ListOrchestratorVantagesRequest) returns (ListOrchestratorVantagesResponse);
   rpc GetOrchestratorPerformanceSeries(GetOrchestratorPerformanceSeriesRequest) returns (GetOrchestratorPerformanceSeriesResponse);
 }
+
+// Read-only network projections, scoped to explicitly selected owner tenants.
+service NetworkObservationService {
+  rpc GetNetworkObservations(NetworkObservationsRequest) returns (NetworkObservationsResponse);
+}
+message NetworkObservationsRequest {
+  repeated string tenant_ids = 1;
+  string provider = 2;
+  string network_id = 3;
+  string environment = 4;
+  string resource_id = 5;
+  string resolved_ip = 6;
+  string gateway_region = 7;
+  common.TimeRange time_range = 8;
+  uint32 limit = 9;
+  bool include_details = 10;
+  string interval = 11;
+}
+message NetworkObservationsResponse {
+  // JSON uses exact string price ratios, explicit units and nullable absent measurements.
+  bytes json = 1;
+}

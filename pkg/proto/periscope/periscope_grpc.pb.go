@@ -3233,3 +3233,110 @@ var OrchestratorAnalyticsService_ServiceDesc = grpc.ServiceDesc{
 	Streams:  []grpc.StreamDesc{},
 	Metadata: "periscope.proto",
 }
+
+const (
+	NetworkObservationService_GetNetworkObservations_FullMethodName = "/periscope.NetworkObservationService/GetNetworkObservations"
+)
+
+// NetworkObservationServiceClient is the client API for NetworkObservationService service.
+//
+// For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
+//
+// Read-only network projections, scoped to explicitly selected owner tenants.
+type NetworkObservationServiceClient interface {
+	GetNetworkObservations(ctx context.Context, in *NetworkObservationsRequest, opts ...grpc.CallOption) (*NetworkObservationsResponse, error)
+}
+
+type networkObservationServiceClient struct {
+	cc grpc.ClientConnInterface
+}
+
+func NewNetworkObservationServiceClient(cc grpc.ClientConnInterface) NetworkObservationServiceClient {
+	return &networkObservationServiceClient{cc}
+}
+
+func (c *networkObservationServiceClient) GetNetworkObservations(ctx context.Context, in *NetworkObservationsRequest, opts ...grpc.CallOption) (*NetworkObservationsResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(NetworkObservationsResponse)
+	err := c.cc.Invoke(ctx, NetworkObservationService_GetNetworkObservations_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// NetworkObservationServiceServer is the server API for NetworkObservationService service.
+// All implementations must embed UnimplementedNetworkObservationServiceServer
+// for forward compatibility.
+//
+// Read-only network projections, scoped to explicitly selected owner tenants.
+type NetworkObservationServiceServer interface {
+	GetNetworkObservations(context.Context, *NetworkObservationsRequest) (*NetworkObservationsResponse, error)
+	mustEmbedUnimplementedNetworkObservationServiceServer()
+}
+
+// UnimplementedNetworkObservationServiceServer must be embedded to have
+// forward compatible implementations.
+//
+// NOTE: this should be embedded by value instead of pointer to avoid a nil
+// pointer dereference when methods are called.
+type UnimplementedNetworkObservationServiceServer struct{}
+
+func (UnimplementedNetworkObservationServiceServer) GetNetworkObservations(context.Context, *NetworkObservationsRequest) (*NetworkObservationsResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method GetNetworkObservations not implemented")
+}
+func (UnimplementedNetworkObservationServiceServer) mustEmbedUnimplementedNetworkObservationServiceServer() {
+}
+func (UnimplementedNetworkObservationServiceServer) testEmbeddedByValue() {}
+
+// UnsafeNetworkObservationServiceServer may be embedded to opt out of forward compatibility for this service.
+// Use of this interface is not recommended, as added methods to NetworkObservationServiceServer will
+// result in compilation errors.
+type UnsafeNetworkObservationServiceServer interface {
+	mustEmbedUnimplementedNetworkObservationServiceServer()
+}
+
+func RegisterNetworkObservationServiceServer(s grpc.ServiceRegistrar, srv NetworkObservationServiceServer) {
+	// If the following call panics, it indicates UnimplementedNetworkObservationServiceServer was
+	// embedded by pointer and is nil.  This will cause panics if an
+	// unimplemented method is ever invoked, so we test this at initialization
+	// time to prevent it from happening at runtime later due to I/O.
+	if t, ok := srv.(interface{ testEmbeddedByValue() }); ok {
+		t.testEmbeddedByValue()
+	}
+	s.RegisterService(&NetworkObservationService_ServiceDesc, srv)
+}
+
+func _NetworkObservationService_GetNetworkObservations_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(NetworkObservationsRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(NetworkObservationServiceServer).GetNetworkObservations(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: NetworkObservationService_GetNetworkObservations_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(NetworkObservationServiceServer).GetNetworkObservations(ctx, req.(*NetworkObservationsRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+// NetworkObservationService_ServiceDesc is the grpc.ServiceDesc for NetworkObservationService service.
+// It's only intended for direct use with grpc.RegisterService,
+// and not to be introspected or modified (even as a copy)
+var NetworkObservationService_ServiceDesc = grpc.ServiceDesc{
+	ServiceName: "periscope.NetworkObservationService",
+	HandlerType: (*NetworkObservationServiceServer)(nil),
+	Methods: []grpc.MethodDesc{
+		{
+			MethodName: "GetNetworkObservations",
+			Handler:    _NetworkObservationService_GetNetworkObservations_Handler,
+		},
+	},
+	Streams:  []grpc.StreamDesc{},
+	Metadata: "periscope.proto",
+}

@@ -5,6 +5,7 @@ const marketingRoutes = [
   "/about",
   "/contact",
   "/status",
+  "/network",
   "/privacy",
   "/terms",
   "/aup",

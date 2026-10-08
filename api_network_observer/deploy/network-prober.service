@@ -1,0 +1,22 @@
+[Unit]
+Description=Livepeer network discovery observer
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=network-prober
+Group=network-prober
+EnvironmentFile=/etc/frameworks/network-prober.env
+ExecStart=/usr/local/bin/network-prober
+Restart=on-failure
+RestartSec=5
+StateDirectory=frameworks-network-prober
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+ReadWritePaths=/var/lib/frameworks-network-prober
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,113 @@
+package handlers
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"frameworks/api_gateway/internal/middleware"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/auth"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/clients/networkobserver"
+	obs "github.com/Livepeer-FrameWorks/monorepo/pkg/networkobservation"
+	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/periscope"
+	"github.com/gin-gonic/gin"
+	"google.golang.org/grpc/metadata"
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"testing"
+	"time"
+)
+
+type networkReaderStub struct {
+	Request       *pb.NetworkObservationsRequest
+	History       obs.History
+	Err           error
+	Authorization string
+}
+
+func (r *networkReaderStub) GetNetworkObservations(ctx context.Context, req *pb.NetworkObservationsRequest) (*pb.NetworkObservationsResponse, error) {
+	r.Request = req
+	if md, ok := metadata.FromOutgoingContext(ctx); ok {
+		r.Authorization = strings.Join(md.Get("authorization"), ",")
+	}
+	if r.Err != nil {
+		return nil, r.Err
+	}
+	raw, _ := json.Marshal(r.History)
+	return &pb.NetworkObservationsResponse{Json: raw}, nil
+}
+func networkFixture(t *testing.T) (*NetworkHandlers, *networkReaderStub, *gin.Engine) {
+	t.Helper()
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") != "Bearer ingest-secret" {
+			t.Error("inventory did not use private credential")
+		}
+		_ = json.NewEncoder(w).Encode(networkobserver.Inventory{Provider: "livepeer", Network: "42161", Environment: "production", Resources: []obs.Resource{}, Endpoints: []obs.Endpoint{{ID: "node", IP: "192.0.2.1", Checks: []obs.Check{{ObserverID: "private-gateway"}}, AssignedObservers: []string{"private-prober"}}}})
+	}))
+	t.Cleanup(server.Close)
+	client, err := networkobserver.New(server.URL, "ingest-secret", true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reader := &networkReaderStub{History: obs.History{Cohorts: []obs.Cohort{}, Summaries: []obs.Cohort{}, Observations: []obs.Metric{{ObserverID: "private-gateway", Kind: "segment"}}, Details: []json.RawMessage{json.RawMessage(`{"session_id":"customer-session"}`)}}}
+	h := &NetworkHandlers{Observer: client, Analytics: reader, TenantIDs: []string{"2f64c7d0-8c66-4b3b-88c4-421f8a3027f2"}, Token: "internal-token", Network: "42161", Environment: "production", JWTSecret: []byte("test-key")}
+	router := gin.New()
+	router.GET("/network", h.Public)
+	router.GET("/diagnostics", middleware.RequireJWTAuth(h.JWTSecret), h.Diagnostics)
+	return h, reader, router
+}
+func TestPublicNetworkUsesServerScopeAndRemovesPrivateFields(t *testing.T) {
+	_, reader, router := networkFixture(t)
+	response := httptest.NewRecorder()
+	router.ServeHTTP(response, httptest.NewRequestWithContext(context.Background(), "GET", "/network?tenant_id=attacker&details=true", nil))
+	if response.Code != 200 {
+		t.Fatalf("status %d: %s", response.Code, response.Body)
+	}
+	if reader.Request.IncludeDetails || len(reader.Request.TenantIds) != 1 || reader.Request.TenantIds[0] != "2f64c7d0-8c66-4b3b-88c4-421f8a3027f2" {
+		t.Fatal("public caller altered scope or requested private details")
+	}
+	for _, secret := range []string{"customer-session", "private-gateway", "private-prober", "ingest-secret", "internal-token"} {
+		if strings.Contains(response.Body.String(), secret) {
+			t.Fatalf("public response leaked %s", secret)
+		}
+	}
+	if reader.Authorization != "Bearer internal-token" {
+		t.Fatal("analytics did not use internal service auth")
+	}
+}
+func TestNetworkHistoryOutageRetainsInventory(t *testing.T) {
+	_, reader, router := networkFixture(t)
+	reader.Err = errors.New("internal database error")
+	response := httptest.NewRecorder()
+	router.ServeHTTP(response, httptest.NewRequestWithContext(context.Background(), "GET", "/network", nil))
+	if response.Code != 200 || !strings.Contains(response.Body.String(), `"history_status":"unavailable"`) || !strings.Contains(response.Body.String(), "192.0.2.1") {
+		t.Fatalf("inventory lost during analytics outage: %s", response.Body)
+	}
+	if strings.Contains(response.Body.String(), "internal database error") {
+		t.Fatal("public response leaked internal error")
+	}
+}
+func TestNetworkDiagnosticsRequiresPlatformOperator(t *testing.T) {
+	h, reader, router := networkFixture(t)
+	for _, operator := range []bool{false, true} {
+		roles := []string{}
+		if operator {
+			roles = []string{"platform_operator"}
+		}
+		token, err := auth.GenerateSessionJWT("user", "2f64c7d0-8c66-4b3b-88c4-421f8a3027f2", "user@example.com", "admin", roles, time.Now(), h.JWTSecret)
+		if err != nil {
+			t.Fatal(err)
+		}
+		req := httptest.NewRequestWithContext(context.Background(), "GET", "/diagnostics", nil)
+		req.Header.Set("Authorization", "Bearer "+token)
+		response := httptest.NewRecorder()
+		router.ServeHTTP(response, req)
+		if operator {
+			if response.Code != 200 || !reader.Request.IncludeDetails || !strings.Contains(response.Body.String(), "customer-session") || response.Header().Get("Cache-Control") != "no-store" {
+				t.Fatalf("operator diagnostics failed: %d %s", response.Code, response.Body)
+			}
+		} else if response.Code != 403 {
+			t.Fatalf("tenant administrator accessed operator diagnostics: %d", response.Code)
+		}
+	}
+}

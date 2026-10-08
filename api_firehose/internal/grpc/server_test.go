@@ -1431,3 +1431,37 @@ func mapKeys(m map[string]interface{}) []string {
 	}
 	return keys
 }
+
+func TestGatewayTelemetryV3RejectsMissingNamespace(t *testing.T) {
+	producer := &fakeProducer{}
+	server := newTestServer(producer)
+	_, err := server.SendGatewayTelemetry(context.Background(), &ipcpb.GatewayTelemetryEvent{
+		SchemaVersion: 3, EventId: "11111111-1111-4111-8111-111111111111", GatewayId: "gw-eu", ClusterId: "cluster-eu", ClusterOwnerTenantId: "22222222-2222-4222-8222-222222222222",
+		Payload: &ipcpb.GatewayTelemetryEvent_Discovery{Discovery: &ipcpb.OrchestratorDiscoveryObserved{}},
+	})
+	if err == nil || len(producer.publishCalls) != 0 {
+		t.Fatal("v3 telemetry without an explicit network, environment, producer and valid observation timestamp must not publish")
+	}
+}
+
+func TestGatewayTelemetryV3PreservesIDAcrossReplay(t *testing.T) {
+	producer := &fakeProducer{}
+	server := newTestServer(producer)
+	event := &ipcpb.GatewayTelemetryEvent{
+		SchemaVersion: 3, EventId: "11111111-1111-4111-8111-111111111111", GatewayId: "gw-eu", ClusterId: "cluster-eu", ClusterOwnerTenantId: "22222222-2222-4222-8222-222222222222", NetworkId: "42161", Environment: "production", ProducerKind: "gateway", Timestamp: timestamppb.Now(),
+		Payload: &ipcpb.GatewayTelemetryEvent_Discovery{Discovery: &ipcpb.OrchestratorDiscoveryObserved{}},
+	}
+	for i := 0; i < 2; i++ {
+		if _, err := server.SendGatewayTelemetry(context.Background(), event); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if len(producer.publishCalls) != 2 {
+		t.Fatal("both deliveries must reach Kafka")
+	}
+	for _, published := range producer.publishCalls {
+		if published.EventID != event.EventId || !published.Timestamp.Equal(event.Timestamp.AsTime()) {
+			t.Fatal("replay changed source identity or observation time")
+		}
+	}
+}

@@ -68,6 +68,20 @@ The fallback sends through the platform SMTP settings. `ALERTMANAGER_SMTP_SMARTH
 
 Each notification channel is active only while its key is set. Lookout re-reads these keys on
 every use, so an env reload changes routing without a restart.
+
+Use `LOOKOUT_OPS_SLACK_WEBHOOK_URL` / `LOOKOUT_OPS_DISCORD_WEBHOOK_URL` for incidents
+and cluster subscription requests, and `LOOKOUT_BUSINESS_PULSE_SLACK_WEBHOOK_URL` /
+`LOOKOUT_BUSINESS_PULSE_DISCORD_WEBHOOK_URL` for the other existing business activity.
+Each destination uses an incoming webhook for its target channel; Slack can keep the
+same app. Configure both purposes before setting `LOOKOUT_NOTIFY_LEGACY_FALLBACK=false`.
+The per-purpose `*_NOTIFICATIONS_DISABLED` flags disable that purpose explicitly.
+Email retains its existing critical-ops recipients; tenant in-app incidents and
+investigations keep their existing routes. Livepeer/network notifications are disabled.
+
+Upgrade all Lookout replicas before enabling these destinations. Queued delivery IDs
+pin their purpose and target; old unclassified rows continue using the legacy webhook.
+Keep the shared URLs until those rows drain, and drain purpose-routed rows before
+downgrading to a binary that does not understand the destination IDs.
 Slack and Discord also receive Lookout's fixed allowlist of direct signup,
 product, billing, support, and marketing activity events. These activity
 messages are separate from incidents and never page by email.

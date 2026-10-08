@@ -24,6 +24,7 @@ import (
 	"frameworks/api_gateway/internal/resolvers"
 	"frameworks/api_gateway/internal/webhooks"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/cache"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/clients/networkobserver"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/config"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/ctxkeys"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
@@ -449,6 +450,21 @@ func main() {
 		server.HandleOptionalTrailingSlash(authProtected, http.MethodGet, "/me/newsletter", authHandlers.GetNewsletterStatus())
 		server.HandleOptionalTrailingSlash(authProtected, http.MethodPost, "/me/newsletter", authHandlers.UpdateNewsletter())
 	}
+
+	var observerClient *networkobserver.Client
+	if cfg.NetworkObserverURL != "" {
+		observerClient, err = networkobserver.New(cfg.NetworkObserverURL, cfg.NetworkObserverSecret, !cfg.Release())
+		if err != nil {
+			logger.WithError(err).Fatal("Invalid network observer client configuration")
+		}
+	}
+	networkReader, networkReaderOK := serviceClients.Periscope.(handlers.NetworkReader)
+	if observerClient != nil && !networkReaderOK {
+		logger.Fatal("Network observations require a compatible analytics client")
+	}
+	networkHandlers := &handlers.NetworkHandlers{Observer: observerClient, Analytics: networkReader, TenantIDs: cfg.NetworkPublicTenantIDs, Token: serviceToken, Network: cfg.NetworkID, Environment: cfg.NetworkEnvironment, JWTSecret: []byte(jwtSecret), Logger: logger}
+	server.HandleOptionalTrailingSlash(app, http.MethodGet, "/v1/network/livepeer", middleware.PublicOperationRateLimitMiddleware(rateLimiter, trustedProxies, "networkObservations"), networkHandlers.Public)
+	server.HandleOptionalTrailingSlash(app, http.MethodGet, "/v1/network/livepeer/diagnostics", middleware.RequireJWTAuth([]byte(jwtSecret)), networkHandlers.Diagnostics)
 
 	// Public infrastructure-node enrollment endpoint. Takes a bootstrap token
 	// (validated server-side by Quartermaster) and a locally-generated

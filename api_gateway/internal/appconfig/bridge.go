@@ -19,6 +19,12 @@ import (
 //
 //configref:service bridge cmd=cmd/bridge
 type Bridge struct {
+	NetworkObserverURL     string   `env:"NETWORK_OBSERVER_URL" desc:"Observer inventory URL; enables public network REST API when configured." introduced:"v0.3.11"`
+	NetworkObserverSecret  string   `env:"NETWORK_OBSERVER_SECRET" secret:"true" desc:"Shared internal observer inventory credential." introduced:"v0.3.11"`
+	NetworkPublicTenantIDs []string `env:"NETWORK_PUBLIC_TENANT_IDS" desc:"Explicit platform-owned tenant scopes whose public Livepeer observations can be published." introduced:"v0.3.11"`
+	NetworkID              string   `env:"LIVEPEER_NETWORK_ID" default:"42161" desc:"Livepeer production network namespace." introduced:"v0.3.11"`
+	NetworkEnvironment     string   `env:"NETWORK_OBSERVER_ENVIRONMENT" default:"production" desc:"Network observation environment." introduced:"v0.3.11"`
+
 	config.HTTPListen
 	config.HTTPRuntime
 	config.Logging

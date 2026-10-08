@@ -1,0 +1,3 @@
+# Durable observation inventory, assignments and delivery queues have independent tablets.
+database: network_observer
+layout: distributed

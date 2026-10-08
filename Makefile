@@ -39,7 +39,7 @@ define component_build_args
 endef
 
 # All microservices (only services with actual binaries)
-SERVICES = commodore quartermaster purser decklog foghorn helmsman periscope-ingest periscope-query periscope-metering signalman bridge navigator privateer deckhand steward skipper chandler lookout bosun
+SERVICES = network-observer network-prober commodore quartermaster purser decklog foghorn helmsman periscope-ingest periscope-query periscope-metering signalman bridge navigator privateer deckhand steward skipper chandler lookout bosun
 
 # All Go modules (including pkg for testing)
 # The Go modules a CI checkout contains. Tracked files only: agent worktrees and
@@ -67,6 +67,8 @@ SERVICE_DIR_skipper = api_consultant
 SERVICE_DIR_chandler = api_assets
 SERVICE_DIR_lookout = api_incidents
 SERVICE_DIR_bosun = api_webhooks
+SERVICE_DIR_network-observer = api_network_observer
+SERVICE_DIR_network-prober = api_network_observer
 SERVICE_DIR_cli = cli
 SERVICE_DIR_pkg = pkg
 
@@ -1093,6 +1095,11 @@ lint-fix:
 		(cd $$service_dir && golangci-lint run --fix --timeout=5m ./...); \
 	done
 
+.PHONY: format-frontend-files
+format-frontend-files:
+	@test -n "$(FORMAT_FILES)" || { echo "Set FORMAT_FILES to the frontend files to format"; exit 1; }
+	pnpm exec prettier --write $(FORMAT_FILES)
+
 format:
 	@$(MAKE) fmt
 	pnpm format
@@ -2095,3 +2102,14 @@ provision-hello: ansible-galaxy-install
 		-requirements ../$(ANSIBLE_DIR)/$(ANSIBLE_REQUIREMENTS_REL) \
 		-playbook ../$(ANSIBLE_DIR)/playbooks/hello.yml \
 		-cache-dir ../$(ANSIBLE_DIR)/$(ANSIBLE_CACHE_REL)
+
+# Regional probes are manually deployable; the coordinator owns the shared inventory.
+.PHONY: test-network-observer build-bin-network-observer build-bin-network-prober
+test-network-observer:
+	$(call run-go-tests,network-observer,api_network_observer)
+build-bin-network-observer:
+	@mkdir -p bin
+	cd api_network_observer && go build $(GO_TAG_FLAGS) $(call component_ldflags,network-observer,api_network_observer) -o ../bin/network-observer ./cmd/network-observer
+build-bin-network-prober:
+	@mkdir -p bin
+	cd api_network_observer && go build $(GO_TAG_FLAGS) $(call component_ldflags,network-prober,api_network_observer) -o ../bin/network-prober ./cmd/network-prober

@@ -1,0 +1,46 @@
+syntax = "proto3";
+package livepeer_observer;
+option go_package = "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/livepeer_observer;livepeerobserverpb";
+
+// Wire projections for /net.Orchestrator/GetOrchestrator. Tags match the public
+// Livepeer discovery protocol; payment/authentication credentials are not decoded.
+message DiscoveryRequest {
+  bytes address = 1;
+  bytes sig = 2;
+  DiscoveryCapabilities capabilities = 3;
+  bool ignore_capacity_check = 4;
+}
+message DiscoveryCapabilities {
+  repeated uint64 bitstring = 1;
+  repeated uint64 mandatories = 2;
+  map<uint32, uint32> capacities = 3;
+  string version = 4;
+}
+message DiscoveryPrice {
+  int64 price_per_unit = 1;
+  int64 pixels_per_unit = 2;
+  uint32 capability = 3;
+  string constraint = 4;
+}
+message DiscoveryResponse {
+  string transcoder = 1;
+  DiscoveryPrice price_info = 3;
+  bytes address = 4;
+  DiscoveryCapabilities capabilities = 5;
+  repeated DiscoveryHardware hardware = 7;
+  repeated DiscoveryPrice capability_prices = 33;
+  repeated string nodes = 34;
+}
+message DiscoveryGPU {
+  string id = 1;
+  string name = 2;
+  uint32 major = 4;
+  uint32 minor = 5;
+  int64 memory_free = 6;
+  int64 memory_total = 7;
+}
+message DiscoveryHardware {
+  string pipeline = 1;
+  string model_id = 2;
+  map<string, DiscoveryGPU> gpu_info = 3;
+}

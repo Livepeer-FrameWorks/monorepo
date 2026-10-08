@@ -216,8 +216,15 @@ func (s *Service) enqueueOperatorNotification(ctx context.Context, q *lookoutdb.
 	if inc.Scope != ScopePlatform || s.Router == nil {
 		return nil
 	}
-	channels := s.Router.ChannelsFor(inc.Severity)
-	if len(channels) == 0 {
+	var destinations []OperatorRoute
+	if router, ok := s.Router.(OperatorRoutingSnapshot); ok {
+		destinations = router.RoutesFor(inc.Severity)
+	} else {
+		for _, channel := range s.Router.ChannelsFor(inc.Severity) {
+			destinations = append(destinations, OperatorRoute{Channel: channel})
+		}
+	}
+	if len(destinations) == 0 {
 		return nil
 	}
 	payload := DeliveryPayload{
@@ -238,11 +245,14 @@ func (s *Service) enqueueOperatorNotification(ctx context.Context, q *lookoutdb.
 		resolvedAt := inc.ResolvedAt.Time.UTC()
 		payload.ResolvedAt = &resolvedAt
 	}
-	raw, err := json.Marshal(payload)
-	if err != nil {
-		return fmt.Errorf("encode notification payload: %w", err)
-	}
-	for _, channel := range channels {
+	for _, destination := range destinations {
+		channel := destination.Channel
+		payload.Purpose = destination.Purpose
+		payload.DestinationID = destination.DestinationID
+		raw, err := json.Marshal(payload)
+		if err != nil {
+			return fmt.Errorf("encode notification payload: %w", err)
+		}
 		if err := q.EnqueueDelivery(ctx, lookoutdb.EnqueueDeliveryParams{
 			EventID:    eventID,
 			IncidentID: inc.ID,

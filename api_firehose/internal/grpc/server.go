@@ -687,6 +687,14 @@ func (s *DecklogServer) SendGatewayTelemetry(ctx context.Context, event *ipcpb.G
 		}
 		return nil, fmt.Errorf("gateway telemetry event cannot be nil")
 	}
+	if event.GetSchemaVersion() >= 3 {
+		if event.GetNetworkId() == "" || event.GetEnvironment() == "" || (event.GetProducerKind() != "gateway" && event.GetProducerKind() != "prober") || event.GetGatewayId() == "" || event.GetClusterId() == "" {
+			return nil, fmt.Errorf("schema v3 requires an explicit network, environment and producer identity")
+		}
+		if event.GetTimestamp() == nil || event.GetTimestamp().CheckValid() != nil {
+			return nil, fmt.Errorf("schema v3 requires a valid observation timestamp")
+		}
+	}
 
 	clusterOwnerTenantID := event.GetClusterOwnerTenantId()
 	if !isValidUUID(clusterOwnerTenantID) {
@@ -742,11 +750,21 @@ func (s *DecklogServer) SendGatewayTelemetry(ctx context.Context, event *ipcpb.G
 			return nil, fmt.Errorf("gateway telemetry: stream_tenant_id (valid UUID) is required for AI outcomes")
 		}
 		effectiveTenantID = event.GetStreamTenantId()
+	case *ipcpb.GatewayTelemetryEvent_Decision:
+		payload = p.Decision
+	case *ipcpb.GatewayTelemetryEvent_SegmentResult:
+		payload = p.SegmentResult
+		if !isValidUUID(event.GetStreamTenantId()) {
+			return nil, fmt.Errorf("segment result requires stream_tenant_id")
+		}
+		effectiveTenantID = event.GetStreamTenantId()
+	case *ipcpb.GatewayTelemetryEvent_ObserverReport:
+		payload = p.ObserverReport
 	default:
 		if s.metrics != nil {
 			s.metrics.GRPCRequests.WithLabelValues("SendGatewayTelemetry", "unknown_event_type").Inc()
 		}
-		return nil, fmt.Errorf("gateway telemetry: payload oneof must be one of discovery|state|transcode|ai")
+		return nil, fmt.Errorf("gateway telemetry: payload oneof is empty or unknown")
 	}
 	if payload == nil {
 		if s.metrics != nil {
@@ -776,6 +794,9 @@ func (s *DecklogServer) SendGatewayTelemetry(ctx context.Context, event *ipcpb.G
 		}
 		return nil, err
 	}
+	dataMap["network_id"] = event.GetNetworkId()
+	dataMap["environment"] = event.GetEnvironment()
+	dataMap["producer_kind"] = event.GetProducerKind()
 	dataMap["gateway_id"] = event.GetGatewayId()
 	dataMap["gateway_region"] = event.GetGatewayRegion()
 	dataMap["cluster_id"] = event.GetClusterId()
@@ -789,13 +810,29 @@ func (s *DecklogServer) SendGatewayTelemetry(ctx context.Context, event *ipcpb.G
 		ts = event.GetTimestamp().AsTime()
 	}
 
+	eventID := event.GetEventId()
+	if eventID == "" {
+		if event.GetSchemaVersion() >= 3 {
+			return nil, fmt.Errorf("schema v3 requires event_id")
+		}
+		eventID = generateEventID()
+	} else if !isValidUUID(eventID) {
+		return nil, fmt.Errorf("invalid event_id")
+	}
+	producerKind := event.GetProducerKind()
+	if producerKind == "" {
+		producerKind = "gateway"
+	}
 	analyticsEvent := &kafka.AnalyticsEvent{
-		EventID:   generateEventID(),
-		EventType: eventType,
-		Timestamp: ts,
-		Source:    "livepeer-gateway",
-		TenantID:  effectiveTenantID,
-		Data:      dataMap,
+		EventID:         eventID,
+		EventType:       eventType,
+		Timestamp:       ts,
+		Source:          "livepeer-" + producerKind,
+		SchemaVersion:   event.GetSchemaVersion(),
+		SourceRegion:    event.GetGatewayRegion(),
+		SourceClusterID: event.GetClusterId(),
+		TenantID:        effectiveTenantID,
+		Data:            dataMap,
 	}
 
 	kafkaStart := time.Now()

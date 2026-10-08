@@ -129,6 +129,9 @@ func (h *AnalyticsHandler) processOrchestratorStateUpdate(ctx context.Context, e
 	}
 
 	now := time.Now()
+	if event.SchemaVersion >= 3 {
+		now = event.Timestamp
+	}
 	tenantID, ok := parseTenantID(event.TenantID)
 	if !ok {
 		return fmt.Errorf("orchestrator_state_update invalid tenant_id %q", event.TenantID)
@@ -337,6 +340,9 @@ func (h *AnalyticsHandler) upsertOrchestratorVantage(ctx context.Context, event 
 	}
 
 	now := time.Now()
+	if event.SchemaVersion >= 3 {
+		now = event.Timestamp
+	}
 	if err := batch.Append(periscopeingestdb.OrchestratorVantageCurrentRow{
 		TenantID: tenantID, GatewayID: ident.gatewayID, GatewayRegion: ident.gatewayRegion,
 		OrchAddr: orchAddr, ResolvedIP: vantage.GetResolvedIp(), Latitude: vantage.GetLatitude(), Longitude: vantage.GetLongitude(),

@@ -104,6 +104,9 @@ function DeferredNetworkMap() {
       className={`network-viz-deferred${NetworkMapComponent ? "" : " network-viz-pending"}`}
     >
       {NetworkMapComponent ? <NetworkMapComponent /> : null}
+      <a href="/network" className="network-viz-link">
+        Explore the network and Livepeer performance →
+      </a>
     </div>
   );
 }

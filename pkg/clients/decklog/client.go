@@ -600,11 +600,18 @@ func (c *BatchedClient) disabled() bool { return c == nil || c.client == nil }
 // cluster owner); Decklog rejects the RPC otherwise. When the client was
 // constructed in Optional mode without a target, this is a quiet no-op.
 func (c *BatchedClient) SendGatewayTelemetry(event *ipcpb.GatewayTelemetryEvent) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	return c.SendGatewayTelemetryContext(ctx, event)
+}
+
+// SendGatewayTelemetryContext preserves the caller deadline for durable spool workers.
+func (c *BatchedClient) SendGatewayTelemetryContext(parent context.Context, event *ipcpb.GatewayTelemetryEvent) error {
 	if c.disabled() {
 		return nil
 	}
 	c.stampGatewayEnvelope(event)
-	ctx := c.authContext()
+	ctx := c.authContextFrom(parent)
 	_, err := c.client.SendGatewayTelemetry(ctx, event)
 	if err != nil {
 		c.logger.WithFields(logging.Fields{

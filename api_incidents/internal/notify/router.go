@@ -21,7 +21,7 @@ func (r Router) Enabled(channel string) bool {
 	case incidents.ChannelEmail:
 		return len(settings.EmailRecipients) > 0
 	case incidents.ChannelSlack, incidents.ChannelDiscord:
-		return settings.webhookURL(channel) != ""
+		return settings.webhookURL(channel) != "" || settings.purposeWebhook(PurposeOps, channel) != "" || settings.purposeWebhook(PurposeBusinessPulse, channel) != ""
 	case incidents.ChannelKafka:
 		return true
 	default:
@@ -32,15 +32,9 @@ func (r Router) Enabled(channel string) bool {
 // ChannelsFor sends critical incidents to every configured channel and all
 // other severities to the configured chat channels.
 func (r Router) ChannelsFor(severity string) []string {
-	candidates := []string{incidents.ChannelSlack, incidents.ChannelDiscord}
-	if severity == "critical" {
-		candidates = []string{incidents.ChannelEmail, incidents.ChannelSlack, incidents.ChannelDiscord}
-	}
 	var out []string
-	for _, channel := range candidates {
-		if r.Enabled(channel) {
-			out = append(out, channel)
-		}
+	for _, route := range r.RoutesFor(severity) {
+		out = append(out, route.Channel)
 	}
 	return out
 }

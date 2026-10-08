@@ -11,9 +11,16 @@ import (
 // routing decision or delivery.
 type Settings struct {
 	// EmailRecipients are the operator addresses that receive incident emails.
-	EmailRecipients   []string
-	SlackWebhookURL   string
-	DiscordWebhookURL string
+	EmailRecipients                    []string
+	SlackWebhookURL                    string
+	DiscordWebhookURL                  string
+	OpsSlackWebhookURL                 string
+	OpsDiscordWebhookURL               string
+	BusinessPulseSlackWebhookURL       string
+	BusinessPulseDiscordWebhookURL     string
+	DisableLegacyFallback              bool
+	OpsNotificationsDisabled           bool
+	BusinessPulseNotificationsDisabled bool
 	// WebappURL is the public web application base URL without a trailing
 	// slash. Incident links are built under it.
 	WebappURL string

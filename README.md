@@ -62,6 +62,7 @@ API SDKs for TypeScript, Go and Python are generated from one set of operations 
   - Livepeer Gateway (golivepeer): transcoding/AI processing
   - Chandler (`api_assets`): cluster-scoped static media asset server for thumbnails, sprites, VOD metadata, and cached S3 assets
 - Event & Analytics plane
+  - Network Observer / external Network Prober (`api_network_observer`, HTTP 18024 / 18025): public Livepeer inventory, regional discovery and real gateway performance; see [network observations](docs/architecture/network-observations.md)
   - Periscope Ingest (`api_analytics_ingest`): consumes Kafka, writes ClickHouse
   - Periscope Query (`api_analytics_query`): serves analytics queries
   - Periscope Metering (`api_analytics_query/cmd/periscope-metering`): turns regional finalized facts into central usage reports

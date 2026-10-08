@@ -1,0 +1,154 @@
+package livepeer
+
+import (
+	"context"
+	"crypto/tls"
+	"encoding/hex"
+	"fmt"
+	"net"
+	"net/url"
+	"strconv"
+	"strings"
+	"time"
+
+	obs "github.com/Livepeer-FrameWorks/monorepo/pkg/networkobservation"
+	lp "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/livepeer_observer"
+	"github.com/google/uuid"
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/credentials"
+	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/grpc/peer"
+	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/encoding/protojson"
+)
+
+type Probe struct {
+	Address       []byte
+	Signature     []byte
+	SkipTLSVerify bool
+	Timeout       time.Duration
+}
+
+func NewProbe(address, signature string, skipTLS bool, timeout time.Duration) (*Probe, error) {
+	a, err := hex.DecodeString(strings.TrimPrefix(address, "0x"))
+	if err != nil || len(a) != 20 {
+		return nil, fmt.Errorf("invalid Livepeer discovery broadcaster address")
+	}
+	sig, err := hex.DecodeString(strings.TrimPrefix(signature, "0x"))
+	if err != nil || len(sig) != 65 {
+		return nil, fmt.Errorf("invalid Livepeer discovery broadcaster signature")
+	}
+	if timeout <= 0 {
+		timeout = 10 * time.Second
+	}
+	return &Probe{Address: a, Signature: sig, SkipTLSVerify: skipTLS, Timeout: timeout}, nil
+}
+func (p *Probe) Check(ctx context.Context, a obs.Assignment) obs.ProbeResult {
+	start := time.Now().UTC()
+	ctx, deadlineCancel := context.WithDeadline(ctx, a.Deadline)
+	defer deadlineCancel()
+	ctx, cancel := context.WithTimeout(ctx, p.Timeout)
+	defer cancel()
+	result := obs.ProbeResult{Assignment: &a, ID: uuid.NewString(), AssignmentID: a.ID, EndpointID: a.Endpoint.ID, Check: obs.Check{ObserverID: a.ObserverID, ObservedAt: start, Qualifying: true}}
+	u, err := url.Parse(a.Endpoint.Resource.URI)
+	if err != nil || u.Hostname() == "" {
+		result.Check.FailureKind = "invalid_endpoint"
+		result.Check.Qualifying = false
+		return result
+	}
+	port := u.Port()
+	if port == "" {
+		if u.Scheme == "http" {
+			port = "80"
+		} else {
+			port = "443"
+		}
+	}
+	target := u.Host
+	if u.Port() == "" {
+		target = net.JoinHostPort(u.Hostname(), port)
+	}
+	var transport = credentials.NewTLS(&tls.Config{MinVersion: tls.VersionTLS12, ServerName: u.Hostname(), InsecureSkipVerify: p.SkipTLSVerify})
+	if u.Scheme == "http" {
+		transport = insecure.NewCredentials()
+	}
+	// The authority remains the advertised hostname while the socket is pinned.
+	dialer := func(ctx context.Context, _ string) (net.Conn, error) {
+		host := a.Endpoint.IP
+		if host == "" {
+			host = u.Hostname()
+		}
+		var d net.Dialer
+		return d.DialContext(ctx, "tcp", net.JoinHostPort(host, port))
+	}
+	conn, err := grpc.NewClient("passthrough:///"+target, grpc.WithTransportCredentials(transport), grpc.WithAuthority(u.Host), grpc.WithContextDialer(dialer))
+	if err != nil {
+		result.Check.FailureKind = "observer_configuration"
+		result.Check.Qualifying = false
+		return result
+	}
+	defer conn.Close()
+	var response lp.DiscoveryResponse
+	var remote peer.Peer
+	err = conn.Invoke(ctx, "/net.Orchestrator/GetOrchestrator", &lp.DiscoveryRequest{Address: p.Address, Sig: p.Signature, IgnoreCapacityCheck: true}, &response, grpc.Peer(&remote))
+	result.Check.LatencyMS = uint32(time.Since(start).Milliseconds())
+	if remote.Addr != nil {
+		ip, _, e := net.SplitHostPort(remote.Addr.String())
+		if e == nil {
+			result.Check.ActualIP = ip
+		}
+	}
+	if err != nil {
+		result.Check.FailureKind = Classify(err)
+		if result.Check.FailureKind == "observer_cancelled" {
+			result.Check.Qualifying = false
+		}
+		return result
+	}
+	if a.Endpoint.IP != "" && result.Check.ActualIP != a.Endpoint.IP {
+		result.Check.FailureKind = "ambiguous_attribution"
+		result.Check.Qualifying = false
+		return result
+	}
+	addr := "0x" + hex.EncodeToString(response.Address)
+	if response.Transcoder == "" || !strings.EqualFold(addr, a.Endpoint.Resource.ID) {
+		result.Check.FailureKind = "identity_mismatch"
+		return result
+	}
+	result.Check.Success = true
+	if response.PriceInfo != nil && response.PriceInfo.PixelsPerUnit > 0 {
+		result.Quote = &obs.Quote{Numerator: strconv.FormatInt(response.PriceInfo.PricePerUnit, 10), Denominator: strconv.FormatInt(response.PriceInfo.PixelsPerUnit, 10), Currency: "wei", Unit: "pixel", ObservedAt: start}
+	}
+	if response.Capabilities != nil {
+		for i, bits := range response.Capabilities.Bitstring {
+			result.Capabilities = append(result.Capabilities, fmt.Sprintf("caps:%d:%016x", i, bits))
+		}
+	}
+	hardware := []string{}
+	for _, item := range response.Hardware {
+		raw, e := protojson.Marshal(item)
+		if e == nil {
+			hardware = append(hardware, string(raw))
+		}
+	}
+	result.Hardware = "[" + strings.Join(hardware, ",") + "]"
+	result.AdvertisedURIs = response.Nodes
+	return result
+}
+func Classify(err error) string {
+	switch status.Code(err) {
+	case codes.DeadlineExceeded:
+		return "timeout"
+	case codes.Unavailable:
+		return "unavailable"
+	case codes.ResourceExhausted:
+		return "capacity"
+	case codes.Unauthenticated, codes.PermissionDenied:
+		return "authentication"
+	case codes.Canceled:
+		return "observer_cancelled"
+	default:
+		return "rpc"
+	}
+}

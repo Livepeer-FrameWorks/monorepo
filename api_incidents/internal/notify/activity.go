@@ -34,15 +34,18 @@ type ActivityField struct {
 
 // ActivityPayload is the channel-neutral snapshot persisted for delivery.
 type ActivityPayload struct {
-	Headline  string          `json:"headline"`
-	Summary   string          `json:"summary,omitempty"`
-	Category  string          `json:"category"`
-	Fields    []ActivityField `json:"fields,omitempty"`
-	Timestamp time.Time       `json:"timestamp"`
+	Purpose       string          `json:"purpose,omitempty"`
+	DestinationID string          `json:"destination_id,omitempty"`
+	Headline      string          `json:"headline"`
+	Summary       string          `json:"summary,omitempty"`
+	Category      string          `json:"category"`
+	Fields        []ActivityField `json:"fields,omitempty"`
+	Timestamp     time.Time       `json:"timestamp"`
 }
 
 // OperatorActivity carries the source-event identity used for idempotent enqueue.
 type OperatorActivity struct {
+	Destinations  map[string]string
 	SourceEventID string
 	EventType     string
 	TenantID      string
@@ -117,7 +120,21 @@ func (c *ActivityConsumer) Handle(ctx context.Context, msg kafka.Message) error 
 		return nil
 	}
 
+	purpose := PurposeBusinessPulse
+	if event.EventType == "cluster_subscription_requested" {
+		purpose = PurposeOps
+	}
 	channels := activityChannels(c.Channels)
+	destinations := make(map[string]string)
+	if router, ok := c.Channels.(interface {
+		RoutesForPurpose(string) []incidents.OperatorRoute
+	}); ok {
+		channels = nil
+		for _, route := range router.RoutesForPurpose(purpose) {
+			channels = append(channels, route.Channel)
+			destinations[route.Channel] = route.DestinationID
+		}
+	}
 	if len(channels) == 0 {
 		c.observe(event.EventType, "disabled")
 		return nil
@@ -128,6 +145,8 @@ func (c *ActivityConsumer) Handle(ctx context.Context, msg kafka.Message) error 
 		TenantID:      event.TenantID,
 		Payload:       activityPayload(event, definition),
 	}
+	activity.Payload.Purpose = purpose
+	activity.Destinations = destinations
 	if c.Sink == nil {
 		return errors.New("operator activity sink is not configured")
 	}
@@ -304,13 +323,15 @@ var (
 )
 
 func (s *ActivityStore) EnqueueActivity(ctx context.Context, activity OperatorActivity, channels []string) error {
-	raw, err := json.Marshal(activity.Payload)
-	if err != nil {
-		return fmt.Errorf("marshal operator activity: %w", err)
-	}
 	return database.WithRetryablePostgresTx(ctx, s.DB, nil, func(tx *sql.Tx) error {
 		q := lookoutdb.New(tx)
 		for _, channel := range channels {
+			payload := activity.Payload
+			payload.DestinationID = activity.Destinations[channel]
+			raw, err := json.Marshal(payload)
+			if err != nil {
+				return fmt.Errorf("marshal operator activity: %w", err)
+			}
 			if err := q.EnqueueOperatorActivity(ctx, lookoutdb.EnqueueOperatorActivityParams{
 				SourceEventID: activity.SourceEventID,
 				EventType:     activity.EventType,
@@ -434,13 +455,18 @@ func (d *ActivityDispatcher) Dispatch(ctx context.Context, delivery ActivityDeli
 	if d.Webhook == nil {
 		return []string{delivery.Channel}, errors.New("activity webhook dispatcher is not configured")
 	}
-	if d.Webhook.Channels != nil && !d.Webhook.Channels.Enabled(delivery.Channel) {
-		d.Webhook.Metrics.ObserveDelivery(delivery.Channel, "skipped")
-		return nil, nil
-	}
 	var payload ActivityPayload
 	if err := json.Unmarshal(delivery.Payload, &payload); err != nil {
 		return []string{delivery.Channel}, fmt.Errorf("decode operator activity payload: %w", err)
+	}
+	settings := d.Webhook.Settings.current()
+	target := settings.destinationURL(payload.DestinationID, delivery.Channel)
+	if payload.Purpose != "" && settings.disabled(payload.Purpose) {
+		target = ""
+	}
+	if target == "" || (payload.DestinationID == "" && d.Webhook.Channels != nil && !d.Webhook.Channels.Enabled(delivery.Channel)) {
+		d.Webhook.Metrics.ObserveDelivery(delivery.Channel, "skipped")
+		return nil, nil
 	}
 	message := buildActivityMessage(payload)
 	var body []byte
@@ -454,7 +480,7 @@ func (d *ActivityDispatcher) Dispatch(ctx context.Context, delivery ActivityDeli
 		err = fmt.Errorf("unsupported operator activity channel %q", delivery.Channel)
 	}
 	if err == nil {
-		err = d.Webhook.postJSON(ctx, delivery.Channel, d.Webhook.Settings.current().webhookURL(delivery.Channel), body)
+		err = d.Webhook.postJSON(ctx, delivery.Channel, target, body)
 	}
 	if err != nil {
 		d.Webhook.Metrics.ObserveDelivery(delivery.Channel, "error")

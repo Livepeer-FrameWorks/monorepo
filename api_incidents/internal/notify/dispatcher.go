@@ -55,7 +55,24 @@ func (d *Dispatcher) Dispatch(ctx context.Context, delivery Delivery) ([]string,
 	case incidents.ChannelKafka:
 		err = d.publishIncident(delivery)
 	case incidents.ChannelEmail, incidents.ChannelSlack, incidents.ChannelDiscord:
-		if d.Channels != nil && !d.Channels.Enabled(delivery.Channel) {
+		var payload incidents.DeliveryPayload
+		if err = json.Unmarshal(delivery.Payload, &payload); err != nil {
+			return []string{delivery.Channel}, fmt.Errorf("decode notification payload: %w", err)
+		}
+		settings := d.Settings.current()
+		skip := false
+		if delivery.Channel == incidents.ChannelEmail {
+			skip = len(settings.EmailRecipients) == 0 || (payload.DestinationID != "" && (payload.DestinationID != "ops.email.primary" || settings.disabled(PurposeOps)))
+		} else {
+			skip = settings.destinationURL(payload.DestinationID, delivery.Channel) == ""
+		}
+		if payload.DestinationID == "" && d.Channels != nil && !d.Channels.Enabled(delivery.Channel) {
+			skip = true
+		}
+		if payload.Purpose != "" && settings.disabled(payload.Purpose) {
+			skip = true
+		}
+		if skip {
 			d.Metrics.ObserveDelivery(delivery.Channel, "skipped")
 			if d.Logger != nil {
 				d.Logger.WithField("channel", delivery.Channel).WithField("incident_id", delivery.IncidentID).
@@ -88,13 +105,13 @@ func (d *Dispatcher) notify(ctx context.Context, delivery Delivery) error {
 		if err != nil {
 			return err
 		}
-		return d.postJSON(ctx, "slack", settings.SlackWebhookURL, body)
+		return d.postJSON(ctx, "slack", settings.destinationURL(payload.DestinationID, incidents.ChannelSlack), body)
 	case incidents.ChannelDiscord:
 		body, err := discordBody(m)
 		if err != nil {
 			return err
 		}
-		return d.postJSON(ctx, "discord", settings.DiscordWebhookURL, body)
+		return d.postJSON(ctx, "discord", settings.destinationURL(payload.DestinationID, incidents.ChannelDiscord), body)
 	default:
 		return d.sendEmail(ctx, m, settings)
 	}

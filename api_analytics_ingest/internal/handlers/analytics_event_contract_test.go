@@ -1,13 +1,38 @@
 package handlers
 
 import (
+	"context"
+	"strings"
 	"testing"
 
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/analyticsevents"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/kafka"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/mist"
 	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
 	"google.golang.org/protobuf/reflect/protoreflect"
 )
+
+func TestV3GatewayTelemetryUsesReplaySafeProjection(t *testing.T) {
+	for _, eventType := range []string{
+		"orchestrator_discovery_observed", "orchestrator_state_update",
+		"orchestrator_transcode_outcome", "orchestrator_candidate_decision",
+		"orchestrator_segment_result", "orchestrator_observer_report",
+	} {
+		t.Run(eventType, func(t *testing.T) {
+			handle, ok := analyticsEventHandlers[eventType]
+			if !ok {
+				t.Fatal("missing network observation handler")
+			}
+			// Replay-safe facts reject a missing producer ID before any database write.
+			err := handle(&AnalyticsHandler{}, context.Background(), kafka.AnalyticsEvent{
+				EventType: eventType, SchemaVersion: 3,
+			})
+			if err == nil || !strings.Contains(err.Error(), "requires stable event ID") {
+				t.Fatalf("V3 payload bypassed replay-safe projection: %v", err)
+			}
+		})
+	}
+}
 
 // Every analytics_events type Decklog can publish has an ingest handler, so
 // no emitted event reaches the "Unknown event type" branch. A payload with no

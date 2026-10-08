@@ -415,3 +415,36 @@ gRPC API.
     matches the status and cluster filters refetches. Tenant and cluster filters apply on submit,
     and refetches use the applied values. On the operator detail page a `scope_changed` reload
     still finds the incident, so the page keeps showing it.
+
+## Purpose-specific operator destinations
+
+Ops incidents and cluster-request activity can use `LOOKOUT_OPS_SLACK_WEBHOOK_URL`
+and `LOOKOUT_OPS_DISCORD_WEBHOOK_URL`. Business activity uses
+`LOOKOUT_BUSINESS_PULSE_SLACK_WEBHOOK_URL` and
+`LOOKOUT_BUSINESS_PULSE_DISCORD_WEBHOOK_URL`. These values reload with existing
+notification settings. Multiple Slack channel webhooks may belong to the same app;
+Discord destinations use channel-specific incoming webhooks.
+
+To split channels, create an incoming Slack webhook for each target channel under the
+existing Slack app, and a Discord incoming webhook in each target channel. Store their
+URLs in the purpose-specific settings above. Existing senders need no bot invitation
+flow or second app. Ops uses incident notifications and cluster subscription requests;
+the other existing allowlisted activity events use business pulse. Email keeps its
+existing critical-ops recipients. Tenant in-app incidents and Skipper escalations use
+their existing paths, independently of these external destinations.
+
+New deliveries select a stable destination ID and persist it in the existing JSON
+payload. Retries resolve that ID and never select another purpose's current default.
+Old payloads without an ID retain the shared webhook URL. `LOOKOUT_NOTIFY_LEGACY_FALLBACK`
+defaults true for new events without purpose settings; set false after configuring
+separate channels. `LOOKOUT_OPS_NOTIFICATIONS_DISABLED` and
+`LOOKOUT_BUSINESS_PULSE_NOTIFICATIONS_DISABLED` disable a purpose explicitly.
+Queued purpose destinations that are missing or disabled are skipped without rerouting.
+
+Upgrade every Lookout replica before enabling separate destinations: old binaries
+do not understand persisted destination IDs. Drain purpose-routed rows before any
+downgrade. Rotate credentials for an existing destination normally; drain or cancel
+pending rows before changing the channel represented by that destination. Keep the
+shared webhook configured while legacy rows drain. Incident/activity outbox tables
+and their lease/idempotency rules remain unchanged; one target per purpose/transport
+is supported. Network/Livepeer notification routes are not activated.

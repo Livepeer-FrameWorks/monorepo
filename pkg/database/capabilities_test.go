@@ -14,6 +14,7 @@ func TestCapabilityCatalogServices(t *testing.T) {
 		"foghorn",
 		"lookout",
 		"navigator",
+		"network-observer",
 		"periscope-ingest",
 		"periscope-metering",
 		"periscope-query",
@@ -47,8 +48,8 @@ func TestPeriscopeIngestDeclaresBothRuntimeStores(t *testing.T) {
 	if got := len(CapabilitiesFor("periscope-ingest", EnginePostgres)); got != 1 {
 		t.Fatalf("periscope-ingest PostgreSQL capabilities = %d, want 1", got)
 	}
-	if got := len(CapabilitiesFor("periscope-ingest", EngineClickHouse)); got != 3 {
-		t.Fatalf("periscope-ingest ClickHouse capabilities = %d, want 3", got)
+	if got := len(CapabilitiesFor("periscope-ingest", EngineClickHouse)); got != 4 {
+		t.Fatalf("periscope-ingest ClickHouse capabilities = %d, want 4", got)
 	}
 }
 

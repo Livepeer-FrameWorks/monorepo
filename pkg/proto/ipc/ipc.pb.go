@@ -21274,6 +21274,9 @@ type GatewayTelemetryEvent struct {
 	//	*GatewayTelemetryEvent_State
 	//	*GatewayTelemetryEvent_Transcode
 	//	*GatewayTelemetryEvent_Ai
+	//	*GatewayTelemetryEvent_Decision
+	//	*GatewayTelemetryEvent_SegmentResult
+	//	*GatewayTelemetryEvent_ObserverReport
 	Payload isGatewayTelemetryEvent_Payload `protobuf_oneof:"payload"`
 	// ===== Envelope v2 =====
 	// gateway_region (2) plays source_region's role for the gateway-instance
@@ -21286,6 +21289,9 @@ type GatewayTelemetryEvent struct {
 	CorrelationId         string `protobuf:"bytes,55,opt,name=correlation_id,json=correlationId,proto3" json:"correlation_id,omitempty"`
 	CausationId           string `protobuf:"bytes,56,opt,name=causation_id,json=causationId,proto3" json:"causation_id,omitempty"`
 	EventId               string `protobuf:"bytes,57,opt,name=event_id,json=eventId,proto3" json:"event_id,omitempty"` // UUIDv7 producer-stamped event identifier (dedupe key)
+	NetworkId             string `protobuf:"bytes,58,opt,name=network_id,json=networkId,proto3" json:"network_id,omitempty"`
+	Environment           string `protobuf:"bytes,59,opt,name=environment,proto3" json:"environment,omitempty"`
+	ProducerKind          string `protobuf:"bytes,60,opt,name=producer_kind,json=producerKind,proto3" json:"producer_kind,omitempty"` // gateway or prober
 	unknownFields         protoimpl.UnknownFields
 	sizeCache             protoimpl.SizeCache
 }
@@ -21405,6 +21411,33 @@ func (x *GatewayTelemetryEvent) GetAi() *OrchestratorAIOutcome {
 	return nil
 }
 
+func (x *GatewayTelemetryEvent) GetDecision() *OrchestratorCandidateDecision {
+	if x != nil {
+		if x, ok := x.Payload.(*GatewayTelemetryEvent_Decision); ok {
+			return x.Decision
+		}
+	}
+	return nil
+}
+
+func (x *GatewayTelemetryEvent) GetSegmentResult() *OrchestratorSegmentResult {
+	if x != nil {
+		if x, ok := x.Payload.(*GatewayTelemetryEvent_SegmentResult); ok {
+			return x.SegmentResult
+		}
+	}
+	return nil
+}
+
+func (x *GatewayTelemetryEvent) GetObserverReport() *OrchestratorObserverReport {
+	if x != nil {
+		if x, ok := x.Payload.(*GatewayTelemetryEvent_ObserverReport); ok {
+			return x.ObserverReport
+		}
+	}
+	return nil
+}
+
 func (x *GatewayTelemetryEvent) GetStreamOriginRegion() string {
 	if x != nil {
 		return x.StreamOriginRegion
@@ -21447,6 +21480,27 @@ func (x *GatewayTelemetryEvent) GetEventId() string {
 	return ""
 }
 
+func (x *GatewayTelemetryEvent) GetNetworkId() string {
+	if x != nil {
+		return x.NetworkId
+	}
+	return ""
+}
+
+func (x *GatewayTelemetryEvent) GetEnvironment() string {
+	if x != nil {
+		return x.Environment
+	}
+	return ""
+}
+
+func (x *GatewayTelemetryEvent) GetProducerKind() string {
+	if x != nil {
+		return x.ProducerKind
+	}
+	return ""
+}
+
 type isGatewayTelemetryEvent_Payload interface {
 	isGatewayTelemetryEvent_Payload()
 }
@@ -21467,6 +21521,18 @@ type GatewayTelemetryEvent_Ai struct {
 	Ai *OrchestratorAIOutcome `protobuf:"bytes,13,opt,name=ai,proto3,oneof"`
 }
 
+type GatewayTelemetryEvent_Decision struct {
+	Decision *OrchestratorCandidateDecision `protobuf:"bytes,14,opt,name=decision,proto3,oneof"`
+}
+
+type GatewayTelemetryEvent_SegmentResult struct {
+	SegmentResult *OrchestratorSegmentResult `protobuf:"bytes,15,opt,name=segment_result,json=segmentResult,proto3,oneof"`
+}
+
+type GatewayTelemetryEvent_ObserverReport struct {
+	ObserverReport *OrchestratorObserverReport `protobuf:"bytes,16,opt,name=observer_report,json=observerReport,proto3,oneof"`
+}
+
 func (*GatewayTelemetryEvent_Discovery) isGatewayTelemetryEvent_Payload() {}
 
 func (*GatewayTelemetryEvent_State) isGatewayTelemetryEvent_Payload() {}
@@ -21474,6 +21540,12 @@ func (*GatewayTelemetryEvent_State) isGatewayTelemetryEvent_Payload() {}
 func (*GatewayTelemetryEvent_Transcode) isGatewayTelemetryEvent_Payload() {}
 
 func (*GatewayTelemetryEvent_Ai) isGatewayTelemetryEvent_Payload() {}
+
+func (*GatewayTelemetryEvent_Decision) isGatewayTelemetryEvent_Payload() {}
+
+func (*GatewayTelemetryEvent_SegmentResult) isGatewayTelemetryEvent_Payload() {}
+
+func (*GatewayTelemetryEvent_ObserverReport) isGatewayTelemetryEvent_Payload() {}
 
 // Per-vantage geo + IP attachment. Emitted as part of every discovery / state
 // event so multi-IP / multi-region observation is preserved (one event per
@@ -21583,19 +21655,25 @@ func (x *OrchestratorVantageGeo) GetGeoResolvedAt() *timestamppb.Timestamp {
 // (same hostname) come along as additional rows with dialed=false so their
 // geo is recorded.
 type OrchestratorDiscoveryObserved struct {
-	state              protoimpl.MessageState  `protogen:"open.v1"`
-	OrchAddr           string                  `protobuf:"bytes,1,opt,name=orch_addr,json=orchAddr,proto3" json:"orch_addr,omitempty"` // eth address (hex)
-	OrchUrl            string                  `protobuf:"bytes,2,opt,name=orch_url,json=orchUrl,proto3" json:"orch_url,omitempty"`
-	AdvertisedNodeUrl  string                  `protobuf:"bytes,3,opt,name=advertised_node_url,json=advertisedNodeUrl,proto3" json:"advertised_node_url,omitempty"` // when the orch advertises sub-nodes
-	DiscoveryLatencyMs uint32                  `protobuf:"varint,4,opt,name=discovery_latency_ms,json=discoveryLatencyMs,proto3" json:"discovery_latency_ms,omitempty"`
-	Reachable          bool                    `protobuf:"varint,5,opt,name=reachable,proto3" json:"reachable,omitempty"`
-	Compatible         bool                    `protobuf:"varint,6,opt,name=compatible,proto3" json:"compatible,omitempty"`
-	Score              float32                 `protobuf:"fixed32,7,opt,name=score,proto3" json:"score,omitempty"`
-	FailureReason      string                  `protobuf:"bytes,8,opt,name=failure_reason,json=failureReason,proto3" json:"failure_reason,omitempty"`
-	FailureKind        string                  `protobuf:"bytes,9,opt,name=failure_kind,json=failureKind,proto3" json:"failure_kind,omitempty"` // "dns" | "tcp" | "rpc" | "timeout" | ...
-	Vantage            *OrchestratorVantageGeo `protobuf:"bytes,10,opt,name=vantage,proto3" json:"vantage,omitempty"`
-	unknownFields      protoimpl.UnknownFields
-	sizeCache          protoimpl.SizeCache
+	state                    protoimpl.MessageState  `protogen:"open.v1"`
+	OrchAddr                 string                  `protobuf:"bytes,1,opt,name=orch_addr,json=orchAddr,proto3" json:"orch_addr,omitempty"` // eth address (hex)
+	OrchUrl                  string                  `protobuf:"bytes,2,opt,name=orch_url,json=orchUrl,proto3" json:"orch_url,omitempty"`
+	AdvertisedNodeUrl        string                  `protobuf:"bytes,3,opt,name=advertised_node_url,json=advertisedNodeUrl,proto3" json:"advertised_node_url,omitempty"` // when the orch advertises sub-nodes
+	DiscoveryLatencyMs       uint32                  `protobuf:"varint,4,opt,name=discovery_latency_ms,json=discoveryLatencyMs,proto3" json:"discovery_latency_ms,omitempty"`
+	Reachable                bool                    `protobuf:"varint,5,opt,name=reachable,proto3" json:"reachable,omitempty"`
+	Compatible               bool                    `protobuf:"varint,6,opt,name=compatible,proto3" json:"compatible,omitempty"`
+	Score                    float32                 `protobuf:"fixed32,7,opt,name=score,proto3" json:"score,omitempty"`
+	FailureReason            string                  `protobuf:"bytes,8,opt,name=failure_reason,json=failureReason,proto3" json:"failure_reason,omitempty"`
+	FailureKind              string                  `protobuf:"bytes,9,opt,name=failure_kind,json=failureKind,proto3" json:"failure_kind,omitempty"` // "dns" | "tcp" | "rpc" | "timeout" | ...
+	Vantage                  *OrchestratorVantageGeo `protobuf:"bytes,10,opt,name=vantage,proto3" json:"vantage,omitempty"`
+	AttemptId                string                  `protobuf:"bytes,11,opt,name=attempt_id,json=attemptId,proto3" json:"attempt_id,omitempty"`
+	SamplingSource           string                  `protobuf:"bytes,12,opt,name=sampling_source,json=samplingSource,proto3" json:"sampling_source,omitempty"`
+	CompatibilityKnown       bool                    `protobuf:"varint,13,opt,name=compatibility_known,json=compatibilityKnown,proto3" json:"compatibility_known,omitempty"`
+	TargetIp                 string                  `protobuf:"bytes,14,opt,name=target_ip,json=targetIp,proto3" json:"target_ip,omitempty"`
+	ScheduledIntervalSeconds uint32                  `protobuf:"varint,15,opt,name=scheduled_interval_seconds,json=scheduledIntervalSeconds,proto3" json:"scheduled_interval_seconds,omitempty"`
+	ObserverHealthy          bool                    `protobuf:"varint,16,opt,name=observer_healthy,json=observerHealthy,proto3" json:"observer_healthy,omitempty"`
+	unknownFields            protoimpl.UnknownFields
+	sizeCache                protoimpl.SizeCache
 }
 
 func (x *OrchestratorDiscoveryObserved) Reset() {
@@ -21698,6 +21776,48 @@ func (x *OrchestratorDiscoveryObserved) GetVantage() *OrchestratorVantageGeo {
 	return nil
 }
 
+func (x *OrchestratorDiscoveryObserved) GetAttemptId() string {
+	if x != nil {
+		return x.AttemptId
+	}
+	return ""
+}
+
+func (x *OrchestratorDiscoveryObserved) GetSamplingSource() string {
+	if x != nil {
+		return x.SamplingSource
+	}
+	return ""
+}
+
+func (x *OrchestratorDiscoveryObserved) GetCompatibilityKnown() bool {
+	if x != nil {
+		return x.CompatibilityKnown
+	}
+	return false
+}
+
+func (x *OrchestratorDiscoveryObserved) GetTargetIp() string {
+	if x != nil {
+		return x.TargetIp
+	}
+	return ""
+}
+
+func (x *OrchestratorDiscoveryObserved) GetScheduledIntervalSeconds() uint32 {
+	if x != nil {
+		return x.ScheduledIntervalSeconds
+	}
+	return 0
+}
+
+func (x *OrchestratorDiscoveryObserved) GetObserverHealthy() bool {
+	if x != nil {
+		return x.ObserverHealthy
+	}
+	return false
+}
+
 // Vantage-independent facts from a successful OrchestratorInfo response.
 // Emitted for every responding orch, including incompatible / not-selected
 // ones, so ranking can use full state.
@@ -21718,6 +21838,9 @@ type OrchestratorStateUpdate struct {
 	// its own price_per_unit / pixels_per_unit. Empty when the gateway has no
 	// per-capability price facts for this instance.
 	CapabilityPriceEntries []*OrchestratorCapabilityPriceEntry `protobuf:"bytes,11,rep,name=capability_price_entries,json=capabilityPriceEntries,proto3" json:"capability_price_entries,omitempty"`
+	PriceKnown             bool                                `protobuf:"varint,12,opt,name=price_known,json=priceKnown,proto3" json:"price_known,omitempty"`
+	PriceCurrency          string                              `protobuf:"bytes,13,opt,name=price_currency,json=priceCurrency,proto3" json:"price_currency,omitempty"`
+	PriceUnit              string                              `protobuf:"bytes,14,opt,name=price_unit,json=priceUnit,proto3" json:"price_unit,omitempty"`
 	unknownFields          protoimpl.UnknownFields
 	sizeCache              protoimpl.SizeCache
 }
@@ -21822,6 +21945,27 @@ func (x *OrchestratorStateUpdate) GetCapabilityPriceEntries() []*OrchestratorCap
 	return nil
 }
 
+func (x *OrchestratorStateUpdate) GetPriceKnown() bool {
+	if x != nil {
+		return x.PriceKnown
+	}
+	return false
+}
+
+func (x *OrchestratorStateUpdate) GetPriceCurrency() string {
+	if x != nil {
+		return x.PriceCurrency
+	}
+	return ""
+}
+
+func (x *OrchestratorStateUpdate) GetPriceUnit() string {
+	if x != nil {
+		return x.PriceUnit
+	}
+	return ""
+}
+
 // Per-capability price entry. Either capability (transcode codec, AI model
 // id) or position is set; the gateway emits whichever identifier it has.
 type OrchestratorCapabilityPriceEntry struct {
@@ -21895,24 +22039,30 @@ func (x *OrchestratorCapabilityPriceEntry) GetPixelsPerUnit() int64 {
 // Per-segment / per-session transcode outcome. Emitted at the result/error
 // boundary in go-livepeer's segment_rpc path so failures count.
 type OrchestratorTranscodeOutcome struct {
-	state          protoimpl.MessageState `protogen:"open.v1"`
-	OrchAddr       string                 `protobuf:"bytes,1,opt,name=orch_addr,json=orchAddr,proto3" json:"orch_addr,omitempty"`
-	OrchUrl        string                 `protobuf:"bytes,2,opt,name=orch_url,json=orchUrl,proto3" json:"orch_url,omitempty"`
-	SessionId      string                 `protobuf:"bytes,3,opt,name=session_id,json=sessionId,proto3" json:"session_id,omitempty"`
-	ManifestIdHash string                 `protobuf:"bytes,4,opt,name=manifest_id_hash,json=manifestIdHash,proto3" json:"manifest_id_hash,omitempty"`
-	SeqNo          uint64                 `protobuf:"varint,5,opt,name=seq_no,json=seqNo,proto3" json:"seq_no,omitempty"`
-	Success        bool                   `protobuf:"varint,6,opt,name=success,proto3" json:"success,omitempty"`
-	LatencyScore   float32                `protobuf:"fixed32,7,opt,name=latency_score,json=latencyScore,proto3" json:"latency_score,omitempty"`
-	UploadMs       uint32                 `protobuf:"varint,8,opt,name=upload_ms,json=uploadMs,proto3" json:"upload_ms,omitempty"`
-	TranscodeMs    uint32                 `protobuf:"varint,9,opt,name=transcode_ms,json=transcodeMs,proto3" json:"transcode_ms,omitempty"`
-	OverallMs      uint32                 `protobuf:"varint,10,opt,name=overall_ms,json=overallMs,proto3" json:"overall_ms,omitempty"`
-	Pixels         uint64                 `protobuf:"varint,11,opt,name=pixels,proto3" json:"pixels,omitempty"`
-	Profiles       []string               `protobuf:"bytes,12,rep,name=profiles,proto3" json:"profiles,omitempty"`
-	ErrorCode      string                 `protobuf:"bytes,13,opt,name=error_code,json=errorCode,proto3" json:"error_code,omitempty"`
-	ErrorKind      string                 `protobuf:"bytes,14,opt,name=error_kind,json=errorKind,proto3" json:"error_kind,omitempty"`
-	ResolvedIp     string                 `protobuf:"bytes,15,opt,name=resolved_ip,json=resolvedIp,proto3" json:"resolved_ip,omitempty"`
-	unknownFields  protoimpl.UnknownFields
-	sizeCache      protoimpl.SizeCache
+	state                   protoimpl.MessageState `protogen:"open.v1"`
+	OrchAddr                string                 `protobuf:"bytes,1,opt,name=orch_addr,json=orchAddr,proto3" json:"orch_addr,omitempty"`
+	OrchUrl                 string                 `protobuf:"bytes,2,opt,name=orch_url,json=orchUrl,proto3" json:"orch_url,omitempty"`
+	SessionId               string                 `protobuf:"bytes,3,opt,name=session_id,json=sessionId,proto3" json:"session_id,omitempty"`
+	ManifestIdHash          string                 `protobuf:"bytes,4,opt,name=manifest_id_hash,json=manifestIdHash,proto3" json:"manifest_id_hash,omitempty"`
+	SeqNo                   uint64                 `protobuf:"varint,5,opt,name=seq_no,json=seqNo,proto3" json:"seq_no,omitempty"`
+	Success                 bool                   `protobuf:"varint,6,opt,name=success,proto3" json:"success,omitempty"`
+	LatencyScore            float32                `protobuf:"fixed32,7,opt,name=latency_score,json=latencyScore,proto3" json:"latency_score,omitempty"`
+	UploadMs                uint32                 `protobuf:"varint,8,opt,name=upload_ms,json=uploadMs,proto3" json:"upload_ms,omitempty"`
+	TranscodeMs             uint32                 `protobuf:"varint,9,opt,name=transcode_ms,json=transcodeMs,proto3" json:"transcode_ms,omitempty"`
+	OverallMs               uint32                 `protobuf:"varint,10,opt,name=overall_ms,json=overallMs,proto3" json:"overall_ms,omitempty"`
+	Pixels                  uint64                 `protobuf:"varint,11,opt,name=pixels,proto3" json:"pixels,omitempty"`
+	Profiles                []string               `protobuf:"bytes,12,rep,name=profiles,proto3" json:"profiles,omitempty"`
+	ErrorCode               string                 `protobuf:"bytes,13,opt,name=error_code,json=errorCode,proto3" json:"error_code,omitempty"`
+	ErrorKind               string                 `protobuf:"bytes,14,opt,name=error_kind,json=errorKind,proto3" json:"error_kind,omitempty"`
+	ResolvedIp              string                 `protobuf:"bytes,15,opt,name=resolved_ip,json=resolvedIp,proto3" json:"resolved_ip,omitempty"`
+	SourceDurationMs        uint32                 `protobuf:"varint,16,opt,name=source_duration_ms,json=sourceDurationMs,proto3" json:"source_duration_ms,omitempty"`
+	ResponseHeadersMs       uint32                 `protobuf:"varint,17,opt,name=response_headers_ms,json=responseHeadersMs,proto3" json:"response_headers_ms,omitempty"`
+	ResponseBodyMs          uint32                 `protobuf:"varint,18,opt,name=response_body_ms,json=responseBodyMs,proto3" json:"response_body_ms,omitempty"`
+	TimingBoundariesVersion uint32                 `protobuf:"varint,19,opt,name=timing_boundaries_version,json=timingBoundariesVersion,proto3" json:"timing_boundaries_version,omitempty"`
+	Disposition             string                 `protobuf:"bytes,20,opt,name=disposition,proto3" json:"disposition,omitempty"`
+	RemoteIpVerified        bool                   `protobuf:"varint,21,opt,name=remote_ip_verified,json=remoteIpVerified,proto3" json:"remote_ip_verified,omitempty"`
+	unknownFields           protoimpl.UnknownFields
+	sizeCache               protoimpl.SizeCache
 }
 
 func (x *OrchestratorTranscodeOutcome) Reset() {
@@ -22050,6 +22200,48 @@ func (x *OrchestratorTranscodeOutcome) GetResolvedIp() string {
 	return ""
 }
 
+func (x *OrchestratorTranscodeOutcome) GetSourceDurationMs() uint32 {
+	if x != nil {
+		return x.SourceDurationMs
+	}
+	return 0
+}
+
+func (x *OrchestratorTranscodeOutcome) GetResponseHeadersMs() uint32 {
+	if x != nil {
+		return x.ResponseHeadersMs
+	}
+	return 0
+}
+
+func (x *OrchestratorTranscodeOutcome) GetResponseBodyMs() uint32 {
+	if x != nil {
+		return x.ResponseBodyMs
+	}
+	return 0
+}
+
+func (x *OrchestratorTranscodeOutcome) GetTimingBoundariesVersion() uint32 {
+	if x != nil {
+		return x.TimingBoundariesVersion
+	}
+	return 0
+}
+
+func (x *OrchestratorTranscodeOutcome) GetDisposition() string {
+	if x != nil {
+		return x.Disposition
+	}
+	return ""
+}
+
+func (x *OrchestratorTranscodeOutcome) GetRemoteIpVerified() bool {
+	if x != nil {
+		return x.RemoteIpVerified
+	}
+	return false
+}
+
 // Per-AI-job outcome. Same shape as transcode but for AI pipelines, kept
 // separate because pricing meters and consumers differ — AI billing is in
 // pilot and tracked under the processing meter contract, not delivered minutes.
@@ -22185,6 +22377,404 @@ func (x *OrchestratorAIOutcome) GetResolvedIp() string {
 	return ""
 }
 
+// Recorded gateway policy decisions are observations, not global eligibility verdicts.
+type OrchestratorCandidateDecision struct {
+	state            protoimpl.MessageState `protogen:"open.v1"`
+	OrchAddr         string                 `protobuf:"bytes,1,opt,name=orch_addr,json=orchAddr,proto3" json:"orch_addr,omitempty"`
+	OrchUrl          string                 `protobuf:"bytes,2,opt,name=orch_url,json=orchUrl,proto3" json:"orch_url,omitempty"`
+	ResolvedIp       string                 `protobuf:"bytes,3,opt,name=resolved_ip,json=resolvedIp,proto3" json:"resolved_ip,omitempty"`
+	Stage            string                 `protobuf:"bytes,4,opt,name=stage,proto3" json:"stage,omitempty"`
+	Disposition      string                 `protobuf:"bytes,5,opt,name=disposition,proto3" json:"disposition,omitempty"`
+	Reason           string                 `protobuf:"bytes,6,opt,name=reason,proto3" json:"reason,omitempty"`
+	Workload         string                 `protobuf:"bytes,7,opt,name=workload,proto3" json:"workload,omitempty"`
+	CapabilityKey    string                 `protobuf:"bytes,8,opt,name=capability_key,json=capabilityKey,proto3" json:"capability_key,omitempty"`
+	ElapsedMs        uint32                 `protobuf:"varint,9,opt,name=elapsed_ms,json=elapsedMs,proto3" json:"elapsed_ms,omitempty"`
+	UsableCandidates uint32                 `protobuf:"varint,10,opt,name=usable_candidates,json=usableCandidates,proto3" json:"usable_candidates,omitempty"`
+	RuleVersion      string                 `protobuf:"bytes,11,opt,name=rule_version,json=ruleVersion,proto3" json:"rule_version,omitempty"`
+	unknownFields    protoimpl.UnknownFields
+	sizeCache        protoimpl.SizeCache
+}
+
+func (x *OrchestratorCandidateDecision) Reset() {
+	*x = OrchestratorCandidateDecision{}
+	mi := &file_ipc_proto_msgTypes[166]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *OrchestratorCandidateDecision) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*OrchestratorCandidateDecision) ProtoMessage() {}
+
+func (x *OrchestratorCandidateDecision) ProtoReflect() protoreflect.Message {
+	mi := &file_ipc_proto_msgTypes[166]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use OrchestratorCandidateDecision.ProtoReflect.Descriptor instead.
+func (*OrchestratorCandidateDecision) Descriptor() ([]byte, []int) {
+	return file_ipc_proto_rawDescGZIP(), []int{166}
+}
+
+func (x *OrchestratorCandidateDecision) GetOrchAddr() string {
+	if x != nil {
+		return x.OrchAddr
+	}
+	return ""
+}
+
+func (x *OrchestratorCandidateDecision) GetOrchUrl() string {
+	if x != nil {
+		return x.OrchUrl
+	}
+	return ""
+}
+
+func (x *OrchestratorCandidateDecision) GetResolvedIp() string {
+	if x != nil {
+		return x.ResolvedIp
+	}
+	return ""
+}
+
+func (x *OrchestratorCandidateDecision) GetStage() string {
+	if x != nil {
+		return x.Stage
+	}
+	return ""
+}
+
+func (x *OrchestratorCandidateDecision) GetDisposition() string {
+	if x != nil {
+		return x.Disposition
+	}
+	return ""
+}
+
+func (x *OrchestratorCandidateDecision) GetReason() string {
+	if x != nil {
+		return x.Reason
+	}
+	return ""
+}
+
+func (x *OrchestratorCandidateDecision) GetWorkload() string {
+	if x != nil {
+		return x.Workload
+	}
+	return ""
+}
+
+func (x *OrchestratorCandidateDecision) GetCapabilityKey() string {
+	if x != nil {
+		return x.CapabilityKey
+	}
+	return ""
+}
+
+func (x *OrchestratorCandidateDecision) GetElapsedMs() uint32 {
+	if x != nil {
+		return x.ElapsedMs
+	}
+	return 0
+}
+
+func (x *OrchestratorCandidateDecision) GetUsableCandidates() uint32 {
+	if x != nil {
+		return x.UsableCandidates
+	}
+	return 0
+}
+
+func (x *OrchestratorCandidateDecision) GetRuleVersion() string {
+	if x != nil {
+		return x.RuleVersion
+	}
+	return ""
+}
+
+// Final logical-segment outcome separates retries from usable delivered results.
+type OrchestratorSegmentResult struct {
+	state              protoimpl.MessageState `protogen:"open.v1"`
+	OrchAddr           string                 `protobuf:"bytes,1,opt,name=orch_addr,json=orchAddr,proto3" json:"orch_addr,omitempty"`
+	OrchUrl            string                 `protobuf:"bytes,2,opt,name=orch_url,json=orchUrl,proto3" json:"orch_url,omitempty"`
+	ResolvedIp         string                 `protobuf:"bytes,3,opt,name=resolved_ip,json=resolvedIp,proto3" json:"resolved_ip,omitempty"`
+	SessionId          string                 `protobuf:"bytes,4,opt,name=session_id,json=sessionId,proto3" json:"session_id,omitempty"`
+	ManifestIdHash     string                 `protobuf:"bytes,5,opt,name=manifest_id_hash,json=manifestIdHash,proto3" json:"manifest_id_hash,omitempty"`
+	SeqNo              uint64                 `protobuf:"varint,6,opt,name=seq_no,json=seqNo,proto3" json:"seq_no,omitempty"`
+	SourceDurationMs   uint32                 `protobuf:"varint,7,opt,name=source_duration_ms,json=sourceDurationMs,proto3" json:"source_duration_ms,omitempty"`
+	OverallMs          uint32                 `protobuf:"varint,8,opt,name=overall_ms,json=overallMs,proto3" json:"overall_ms,omitempty"`
+	Attempts           uint32                 `protobuf:"varint,9,opt,name=attempts,proto3" json:"attempts,omitempty"`
+	FallbackCount      uint32                 `protobuf:"varint,10,opt,name=fallback_count,json=fallbackCount,proto3" json:"fallback_count,omitempty"`
+	Success            bool                   `protobuf:"varint,11,opt,name=success,proto3" json:"success,omitempty"`
+	DeadlineExceeded   bool                   `protobuf:"varint,12,opt,name=deadline_exceeded,json=deadlineExceeded,proto3" json:"deadline_exceeded,omitempty"`
+	ErrorKind          string                 `protobuf:"bytes,13,opt,name=error_kind,json=errorKind,proto3" json:"error_kind,omitempty"`
+	ReplacementSetupMs uint32                 `protobuf:"varint,14,opt,name=replacement_setup_ms,json=replacementSetupMs,proto3" json:"replacement_setup_ms,omitempty"`
+	DownstreamStatus   string                 `protobuf:"bytes,15,opt,name=downstream_status,json=downstreamStatus,proto3" json:"downstream_status,omitempty"` // unknown unless delivery evidence is available
+	Profiles           []string               `protobuf:"bytes,16,rep,name=profiles,proto3" json:"profiles,omitempty"`
+	DeliverySessionId  string                 `protobuf:"bytes,17,opt,name=delivery_session_id,json=deliverySessionId,proto3" json:"delivery_session_id,omitempty"` // private Mist/gateway protocol correlation
+	unknownFields      protoimpl.UnknownFields
+	sizeCache          protoimpl.SizeCache
+}
+
+func (x *OrchestratorSegmentResult) Reset() {
+	*x = OrchestratorSegmentResult{}
+	mi := &file_ipc_proto_msgTypes[167]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *OrchestratorSegmentResult) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*OrchestratorSegmentResult) ProtoMessage() {}
+
+func (x *OrchestratorSegmentResult) ProtoReflect() protoreflect.Message {
+	mi := &file_ipc_proto_msgTypes[167]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use OrchestratorSegmentResult.ProtoReflect.Descriptor instead.
+func (*OrchestratorSegmentResult) Descriptor() ([]byte, []int) {
+	return file_ipc_proto_rawDescGZIP(), []int{167}
+}
+
+func (x *OrchestratorSegmentResult) GetOrchAddr() string {
+	if x != nil {
+		return x.OrchAddr
+	}
+	return ""
+}
+
+func (x *OrchestratorSegmentResult) GetOrchUrl() string {
+	if x != nil {
+		return x.OrchUrl
+	}
+	return ""
+}
+
+func (x *OrchestratorSegmentResult) GetResolvedIp() string {
+	if x != nil {
+		return x.ResolvedIp
+	}
+	return ""
+}
+
+func (x *OrchestratorSegmentResult) GetSessionId() string {
+	if x != nil {
+		return x.SessionId
+	}
+	return ""
+}
+
+func (x *OrchestratorSegmentResult) GetManifestIdHash() string {
+	if x != nil {
+		return x.ManifestIdHash
+	}
+	return ""
+}
+
+func (x *OrchestratorSegmentResult) GetSeqNo() uint64 {
+	if x != nil {
+		return x.SeqNo
+	}
+	return 0
+}
+
+func (x *OrchestratorSegmentResult) GetSourceDurationMs() uint32 {
+	if x != nil {
+		return x.SourceDurationMs
+	}
+	return 0
+}
+
+func (x *OrchestratorSegmentResult) GetOverallMs() uint32 {
+	if x != nil {
+		return x.OverallMs
+	}
+	return 0
+}
+
+func (x *OrchestratorSegmentResult) GetAttempts() uint32 {
+	if x != nil {
+		return x.Attempts
+	}
+	return 0
+}
+
+func (x *OrchestratorSegmentResult) GetFallbackCount() uint32 {
+	if x != nil {
+		return x.FallbackCount
+	}
+	return 0
+}
+
+func (x *OrchestratorSegmentResult) GetSuccess() bool {
+	if x != nil {
+		return x.Success
+	}
+	return false
+}
+
+func (x *OrchestratorSegmentResult) GetDeadlineExceeded() bool {
+	if x != nil {
+		return x.DeadlineExceeded
+	}
+	return false
+}
+
+func (x *OrchestratorSegmentResult) GetErrorKind() string {
+	if x != nil {
+		return x.ErrorKind
+	}
+	return ""
+}
+
+func (x *OrchestratorSegmentResult) GetReplacementSetupMs() uint32 {
+	if x != nil {
+		return x.ReplacementSetupMs
+	}
+	return 0
+}
+
+func (x *OrchestratorSegmentResult) GetDownstreamStatus() string {
+	if x != nil {
+		return x.DownstreamStatus
+	}
+	return ""
+}
+
+func (x *OrchestratorSegmentResult) GetProfiles() []string {
+	if x != nil {
+		return x.Profiles
+	}
+	return nil
+}
+
+func (x *OrchestratorSegmentResult) GetDeliverySessionId() string {
+	if x != nil {
+		return x.DeliverySessionId
+	}
+	return ""
+}
+
+type OrchestratorObserverReport struct {
+	state          protoimpl.MessageState `protogen:"open.v1"`
+	ReportKind     string                 `protobuf:"bytes,1,opt,name=report_kind,json=reportKind,proto3" json:"report_kind,omitempty"` // heartbeat or dns_cycle
+	Expected       uint32                 `protobuf:"varint,2,opt,name=expected,proto3" json:"expected,omitempty"`
+	Completed      uint32                 `protobuf:"varint,3,opt,name=completed,proto3" json:"completed,omitempty"`
+	Failed         uint32                 `protobuf:"varint,4,opt,name=failed,proto3" json:"failed,omitempty"`
+	CadenceSeconds uint32                 `protobuf:"varint,5,opt,name=cadence_seconds,json=cadenceSeconds,proto3" json:"cadence_seconds,omitempty"`
+	QueueRecords   uint32                 `protobuf:"varint,6,opt,name=queue_records,json=queueRecords,proto3" json:"queue_records,omitempty"`
+	DroppedRecords uint64                 `protobuf:"varint,7,opt,name=dropped_records,json=droppedRecords,proto3" json:"dropped_records,omitempty"`
+	Healthy        bool                   `protobuf:"varint,8,opt,name=healthy,proto3" json:"healthy,omitempty"`
+	unknownFields  protoimpl.UnknownFields
+	sizeCache      protoimpl.SizeCache
+}
+
+func (x *OrchestratorObserverReport) Reset() {
+	*x = OrchestratorObserverReport{}
+	mi := &file_ipc_proto_msgTypes[168]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *OrchestratorObserverReport) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*OrchestratorObserverReport) ProtoMessage() {}
+
+func (x *OrchestratorObserverReport) ProtoReflect() protoreflect.Message {
+	mi := &file_ipc_proto_msgTypes[168]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use OrchestratorObserverReport.ProtoReflect.Descriptor instead.
+func (*OrchestratorObserverReport) Descriptor() ([]byte, []int) {
+	return file_ipc_proto_rawDescGZIP(), []int{168}
+}
+
+func (x *OrchestratorObserverReport) GetReportKind() string {
+	if x != nil {
+		return x.ReportKind
+	}
+	return ""
+}
+
+func (x *OrchestratorObserverReport) GetExpected() uint32 {
+	if x != nil {
+		return x.Expected
+	}
+	return 0
+}
+
+func (x *OrchestratorObserverReport) GetCompleted() uint32 {
+	if x != nil {
+		return x.Completed
+	}
+	return 0
+}
+
+func (x *OrchestratorObserverReport) GetFailed() uint32 {
+	if x != nil {
+		return x.Failed
+	}
+	return 0
+}
+
+func (x *OrchestratorObserverReport) GetCadenceSeconds() uint32 {
+	if x != nil {
+		return x.CadenceSeconds
+	}
+	return 0
+}
+
+func (x *OrchestratorObserverReport) GetQueueRecords() uint32 {
+	if x != nil {
+		return x.QueueRecords
+	}
+	return 0
+}
+
+func (x *OrchestratorObserverReport) GetDroppedRecords() uint64 {
+	if x != nil {
+		return x.DroppedRecords
+	}
+	return 0
+}
+
+func (x *OrchestratorObserverReport) GetHealthy() bool {
+	if x != nil {
+		return x.Healthy
+	}
+	return false
+}
+
 type ThumbnailUploadResponse_PresignedUpload struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	FileName      string                 `protobuf:"bytes,1,opt,name=file_name,json=fileName,proto3" json:"file_name,omitempty"` // e.g. "poster.jpg"
@@ -22197,7 +22787,7 @@ type ThumbnailUploadResponse_PresignedUpload struct {
 
 func (x *ThumbnailUploadResponse_PresignedUpload) Reset() {
 	*x = ThumbnailUploadResponse_PresignedUpload{}
-	mi := &file_ipc_proto_msgTypes[174]
+	mi := &file_ipc_proto_msgTypes[177]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -22209,7 +22799,7 @@ func (x *ThumbnailUploadResponse_PresignedUpload) String() string {
 func (*ThumbnailUploadResponse_PresignedUpload) ProtoMessage() {}
 
 func (x *ThumbnailUploadResponse_PresignedUpload) ProtoReflect() protoreflect.Message {
-	mi := &file_ipc_proto_msgTypes[174]
+	mi := &file_ipc_proto_msgTypes[177]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -24952,7 +25542,7 @@ const file_ipc_proto_rawDesc = "" +
 	"\rthumbnail_key\x18\x01 \x01(\tR\fthumbnailKey\x12\x17\n" +
 	"\as3_keys\x18\x02 \x03(\tR\x06s3Keys\x12\x1d\n" +
 	"\n" +
-	"attempt_id\x18\x03 \x01(\tR\tattemptId\"\xb4\x06\n" +
+	"attempt_id\x18\x03 \x01(\tR\tattemptId\"\x95\t\n" +
 	"\x15GatewayTelemetryEvent\x12\x1d\n" +
 	"\n" +
 	"gateway_id\x18\x01 \x01(\tR\tgatewayId\x12%\n" +
@@ -24966,13 +25556,20 @@ const file_ipc_proto_rawDesc = "" +
 	" \x01(\v2..helmsmancontrol.OrchestratorDiscoveryObservedH\x00R\tdiscovery\x12@\n" +
 	"\x05state\x18\v \x01(\v2(.helmsmancontrol.OrchestratorStateUpdateH\x00R\x05state\x12M\n" +
 	"\ttranscode\x18\f \x01(\v2-.helmsmancontrol.OrchestratorTranscodeOutcomeH\x00R\ttranscode\x128\n" +
-	"\x02ai\x18\r \x01(\v2&.helmsmancontrol.OrchestratorAIOutcomeH\x00R\x02ai\x120\n" +
+	"\x02ai\x18\r \x01(\v2&.helmsmancontrol.OrchestratorAIOutcomeH\x00R\x02ai\x12L\n" +
+	"\bdecision\x18\x0e \x01(\v2..helmsmancontrol.OrchestratorCandidateDecisionH\x00R\bdecision\x12S\n" +
+	"\x0esegment_result\x18\x0f \x01(\v2*.helmsmancontrol.OrchestratorSegmentResultH\x00R\rsegmentResult\x12V\n" +
+	"\x0fobserver_report\x18\x10 \x01(\v2+.helmsmancontrol.OrchestratorObserverReportH\x00R\x0eobserverReport\x120\n" +
 	"\x14stream_origin_region\x184 \x01(\tR\x12streamOriginRegion\x127\n" +
 	"\x18stream_origin_cluster_id\x185 \x01(\tR\x15streamOriginClusterId\x12%\n" +
 	"\x0eschema_version\x186 \x01(\x05R\rschemaVersion\x12%\n" +
 	"\x0ecorrelation_id\x187 \x01(\tR\rcorrelationId\x12!\n" +
 	"\fcausation_id\x188 \x01(\tR\vcausationId\x12\x19\n" +
-	"\bevent_id\x189 \x01(\tR\aeventIdB\t\n" +
+	"\bevent_id\x189 \x01(\tR\aeventId\x12\x1d\n" +
+	"\n" +
+	"network_id\x18: \x01(\tR\tnetworkId\x12 \n" +
+	"\venvironment\x18; \x01(\tR\venvironment\x12#\n" +
+	"\rproducer_kind\x18< \x01(\tR\fproducerKindB\t\n" +
 	"\apayload\"\xa5\x02\n" +
 	"\x16OrchestratorVantageGeo\x12\x1f\n" +
 	"\vresolved_ip\x18\x01 \x01(\tR\n" +
@@ -24984,7 +25581,7 @@ const file_ipc_proto_rawDesc = "" +
 	"\fcountry_code\x18\x06 \x01(\tR\vcountryCode\x12\x1d\n" +
 	"\n" +
 	"geo_source\x18\a \x01(\tR\tgeoSource\x12B\n" +
-	"\x0fgeo_resolved_at\x18\b \x01(\v2\x1a.google.protobuf.TimestampR\rgeoResolvedAt\"\x9a\x03\n" +
+	"\x0fgeo_resolved_at\x18\b \x01(\v2\x1a.google.protobuf.TimestampR\rgeoResolvedAt\"\x99\x05\n" +
 	"\x1dOrchestratorDiscoveryObserved\x12\x1b\n" +
 	"\torch_addr\x18\x01 \x01(\tR\borchAddr\x12\x19\n" +
 	"\borch_url\x18\x02 \x01(\tR\aorchUrl\x12.\n" +
@@ -24998,7 +25595,14 @@ const file_ipc_proto_rawDesc = "" +
 	"\x0efailure_reason\x18\b \x01(\tR\rfailureReason\x12!\n" +
 	"\ffailure_kind\x18\t \x01(\tR\vfailureKind\x12A\n" +
 	"\avantage\x18\n" +
-	" \x01(\v2'.helmsmancontrol.OrchestratorVantageGeoR\avantage\"\xfc\x03\n" +
+	" \x01(\v2'.helmsmancontrol.OrchestratorVantageGeoR\avantage\x12\x1d\n" +
+	"\n" +
+	"attempt_id\x18\v \x01(\tR\tattemptId\x12'\n" +
+	"\x0fsampling_source\x18\f \x01(\tR\x0esamplingSource\x12/\n" +
+	"\x13compatibility_known\x18\r \x01(\bR\x12compatibilityKnown\x12\x1b\n" +
+	"\ttarget_ip\x18\x0e \x01(\tR\btargetIp\x12<\n" +
+	"\x1ascheduled_interval_seconds\x18\x0f \x01(\rR\x18scheduledIntervalSeconds\x12)\n" +
+	"\x10observer_healthy\x18\x10 \x01(\bR\x0fobserverHealthy\"\xe3\x04\n" +
 	"\x17OrchestratorStateUpdate\x12\x1b\n" +
 	"\torch_addr\x18\x01 \x01(\tR\borchAddr\x12#\n" +
 	"\rcanonical_url\x18\x02 \x01(\tR\fcanonicalUrl\x120\n" +
@@ -25010,14 +25614,19 @@ const file_ipc_proto_rawDesc = "" +
 	"\x06source\x18\t \x01(\tR\x06source\x12A\n" +
 	"\avantage\x18\n" +
 	" \x01(\v2'.helmsmancontrol.OrchestratorVantageGeoR\avantage\x12k\n" +
-	"\x18capability_price_entries\x18\v \x03(\v21.helmsmancontrol.OrchestratorCapabilityPriceEntryR\x16capabilityPriceEntriesJ\x04\b\a\x10\bR\x11capability_prices\"\xac\x01\n" +
+	"\x18capability_price_entries\x18\v \x03(\v21.helmsmancontrol.OrchestratorCapabilityPriceEntryR\x16capabilityPriceEntries\x12\x1f\n" +
+	"\vprice_known\x18\f \x01(\bR\n" +
+	"priceKnown\x12%\n" +
+	"\x0eprice_currency\x18\r \x01(\tR\rpriceCurrency\x12\x1d\n" +
+	"\n" +
+	"price_unit\x18\x0e \x01(\tR\tpriceUnitJ\x04\b\a\x10\bR\x11capability_prices\"\xac\x01\n" +
 	" OrchestratorCapabilityPriceEntry\x12\x1e\n" +
 	"\n" +
 	"capability\x18\x01 \x01(\tR\n" +
 	"capability\x12\x1a\n" +
 	"\bposition\x18\x02 \x01(\rR\bposition\x12$\n" +
 	"\x0eprice_per_unit\x18\x03 \x01(\x03R\fpricePerUnit\x12&\n" +
-	"\x0fpixels_per_unit\x18\x04 \x01(\x03R\rpixelsPerUnit\"\xe7\x03\n" +
+	"\x0fpixels_per_unit\x18\x04 \x01(\x03R\rpixelsPerUnit\"\xfb\x05\n" +
 	"\x1cOrchestratorTranscodeOutcome\x12\x1b\n" +
 	"\torch_addr\x18\x01 \x01(\tR\borchAddr\x12\x19\n" +
 	"\borch_url\x18\x02 \x01(\tR\aorchUrl\x12\x1d\n" +
@@ -25039,7 +25648,13 @@ const file_ipc_proto_rawDesc = "" +
 	"\n" +
 	"error_kind\x18\x0e \x01(\tR\terrorKind\x12\x1f\n" +
 	"\vresolved_ip\x18\x0f \x01(\tR\n" +
-	"resolvedIp\"\x83\x03\n" +
+	"resolvedIp\x12,\n" +
+	"\x12source_duration_ms\x18\x10 \x01(\rR\x10sourceDurationMs\x12.\n" +
+	"\x13response_headers_ms\x18\x11 \x01(\rR\x11responseHeadersMs\x12(\n" +
+	"\x10response_body_ms\x18\x12 \x01(\rR\x0eresponseBodyMs\x12:\n" +
+	"\x19timing_boundaries_version\x18\x13 \x01(\rR\x17timingBoundariesVersion\x12 \n" +
+	"\vdisposition\x18\x14 \x01(\tR\vdisposition\x12,\n" +
+	"\x12remote_ip_verified\x18\x15 \x01(\bR\x10remoteIpVerified\"\x83\x03\n" +
 	"\x15OrchestratorAIOutcome\x12\x1b\n" +
 	"\torch_addr\x18\x01 \x01(\tR\borchAddr\x12\x19\n" +
 	"\borch_url\x18\x02 \x01(\tR\aorchUrl\x12\x1d\n" +
@@ -25058,7 +25673,55 @@ const file_ipc_proto_rawDesc = "" +
 	"\n" +
 	"error_kind\x18\v \x01(\tR\terrorKind\x12\x1f\n" +
 	"\vresolved_ip\x18\f \x01(\tR\n" +
-	"resolvedIp*\x94\x02\n" +
+	"resolvedIp\"\xfa\x02\n" +
+	"\x1dOrchestratorCandidateDecision\x12\x1b\n" +
+	"\torch_addr\x18\x01 \x01(\tR\borchAddr\x12\x19\n" +
+	"\borch_url\x18\x02 \x01(\tR\aorchUrl\x12\x1f\n" +
+	"\vresolved_ip\x18\x03 \x01(\tR\n" +
+	"resolvedIp\x12\x14\n" +
+	"\x05stage\x18\x04 \x01(\tR\x05stage\x12 \n" +
+	"\vdisposition\x18\x05 \x01(\tR\vdisposition\x12\x16\n" +
+	"\x06reason\x18\x06 \x01(\tR\x06reason\x12\x1a\n" +
+	"\bworkload\x18\a \x01(\tR\bworkload\x12%\n" +
+	"\x0ecapability_key\x18\b \x01(\tR\rcapabilityKey\x12\x1d\n" +
+	"\n" +
+	"elapsed_ms\x18\t \x01(\rR\telapsedMs\x12+\n" +
+	"\x11usable_candidates\x18\n" +
+	" \x01(\rR\x10usableCandidates\x12!\n" +
+	"\frule_version\x18\v \x01(\tR\vruleVersion\"\xf5\x04\n" +
+	"\x19OrchestratorSegmentResult\x12\x1b\n" +
+	"\torch_addr\x18\x01 \x01(\tR\borchAddr\x12\x19\n" +
+	"\borch_url\x18\x02 \x01(\tR\aorchUrl\x12\x1f\n" +
+	"\vresolved_ip\x18\x03 \x01(\tR\n" +
+	"resolvedIp\x12\x1d\n" +
+	"\n" +
+	"session_id\x18\x04 \x01(\tR\tsessionId\x12(\n" +
+	"\x10manifest_id_hash\x18\x05 \x01(\tR\x0emanifestIdHash\x12\x15\n" +
+	"\x06seq_no\x18\x06 \x01(\x04R\x05seqNo\x12,\n" +
+	"\x12source_duration_ms\x18\a \x01(\rR\x10sourceDurationMs\x12\x1d\n" +
+	"\n" +
+	"overall_ms\x18\b \x01(\rR\toverallMs\x12\x1a\n" +
+	"\battempts\x18\t \x01(\rR\battempts\x12%\n" +
+	"\x0efallback_count\x18\n" +
+	" \x01(\rR\rfallbackCount\x12\x18\n" +
+	"\asuccess\x18\v \x01(\bR\asuccess\x12+\n" +
+	"\x11deadline_exceeded\x18\f \x01(\bR\x10deadlineExceeded\x12\x1d\n" +
+	"\n" +
+	"error_kind\x18\r \x01(\tR\terrorKind\x120\n" +
+	"\x14replacement_setup_ms\x18\x0e \x01(\rR\x12replacementSetupMs\x12+\n" +
+	"\x11downstream_status\x18\x0f \x01(\tR\x10downstreamStatus\x12\x1a\n" +
+	"\bprofiles\x18\x10 \x03(\tR\bprofiles\x12.\n" +
+	"\x13delivery_session_id\x18\x11 \x01(\tR\x11deliverySessionId\"\xa0\x02\n" +
+	"\x1aOrchestratorObserverReport\x12\x1f\n" +
+	"\vreport_kind\x18\x01 \x01(\tR\n" +
+	"reportKind\x12\x1a\n" +
+	"\bexpected\x18\x02 \x01(\rR\bexpected\x12\x1c\n" +
+	"\tcompleted\x18\x03 \x01(\rR\tcompleted\x12\x16\n" +
+	"\x06failed\x18\x04 \x01(\rR\x06failed\x12'\n" +
+	"\x0fcadence_seconds\x18\x05 \x01(\rR\x0ecadenceSeconds\x12#\n" +
+	"\rqueue_records\x18\x06 \x01(\rR\fqueueRecords\x12'\n" +
+	"\x0fdropped_records\x18\a \x01(\x04R\x0edroppedRecords\x12\x18\n" +
+	"\ahealthy\x18\b \x01(\bR\ahealthy*\x94\x02\n" +
 	"\x13ClusterRejectReason\x12%\n" +
 	"!CLUSTER_REJECT_REASON_UNSPECIFIED\x10\x00\x12\"\n" +
 	"\x1eCLUSTER_REJECT_REASON_CAPACITY\x10\x01\x12 \n" +
@@ -25168,7 +25831,7 @@ func file_ipc_proto_rawDescGZIP() []byte {
 }
 
 var file_ipc_proto_enumTypes = make([]protoimpl.EnumInfo, 23)
-var file_ipc_proto_msgTypes = make([]protoimpl.MessageInfo, 175)
+var file_ipc_proto_msgTypes = make([]protoimpl.MessageInfo, 178)
 var file_ipc_proto_goTypes = []any{
 	(ClusterRejectReason)(0),                        // 0: helmsmancontrol.ClusterRejectReason
 	(PlaybackGrantPolicyKind)(0),                    // 1: helmsmancontrol.PlaybackGrantPolicyKind
@@ -25359,25 +26022,28 @@ var file_ipc_proto_goTypes = []any{
 	(*OrchestratorCapabilityPriceEntry)(nil),        // 186: helmsmancontrol.OrchestratorCapabilityPriceEntry
 	(*OrchestratorTranscodeOutcome)(nil),            // 187: helmsmancontrol.OrchestratorTranscodeOutcome
 	(*OrchestratorAIOutcome)(nil),                   // 188: helmsmancontrol.OrchestratorAIOutcome
-	nil,                                             // 189: helmsmancontrol.PlaybackGrantPolicy.RequiredClaimsJsonEntry
-	nil,                                             // 190: helmsmancontrol.FreezeRequest.SegmentUrlsEntry
-	nil,                                             // 191: helmsmancontrol.NodeLifecycleUpdate.StreamsEntry
-	nil,                                             // 192: helmsmancontrol.ProcessMeterQuantity.DimensionsEntry
-	nil,                                             // 193: helmsmancontrol.StreamProcess.ExtraEntry
-	nil,                                             // 194: helmsmancontrol.ConfigSeedApplyResult.BundleVersionsEntry
-	nil,                                             // 195: helmsmancontrol.ProcessingJobRequest.ParamsEntry
-	nil,                                             // 196: helmsmancontrol.ProcessingJobResult.OutputsEntry
-	(*ThumbnailUploadResponse_PresignedUpload)(nil), // 197: helmsmancontrol.ThumbnailUploadResponse.PresignedUpload
-	(*timestamppb.Timestamp)(nil),                   // 198: google.protobuf.Timestamp
-	(*common.SignupAttribution)(nil),                // 199: common.SignupAttribution
-	(*structpb.Struct)(nil),                         // 200: google.protobuf.Struct
-	(*common.EdgeTelemetryConfig)(nil),              // 201: common.EdgeTelemetryConfig
-	(*events.DomainEventBatch)(nil),                 // 202: frameworks.events.DomainEventBatch
-	(*emptypb.Empty)(nil),                           // 203: google.protobuf.Empty
-	(*events.PublishDomainEventsResponse)(nil),      // 204: frameworks.events.PublishDomainEventsResponse
+	(*OrchestratorCandidateDecision)(nil),           // 189: helmsmancontrol.OrchestratorCandidateDecision
+	(*OrchestratorSegmentResult)(nil),               // 190: helmsmancontrol.OrchestratorSegmentResult
+	(*OrchestratorObserverReport)(nil),              // 191: helmsmancontrol.OrchestratorObserverReport
+	nil,                                             // 192: helmsmancontrol.PlaybackGrantPolicy.RequiredClaimsJsonEntry
+	nil,                                             // 193: helmsmancontrol.FreezeRequest.SegmentUrlsEntry
+	nil,                                             // 194: helmsmancontrol.NodeLifecycleUpdate.StreamsEntry
+	nil,                                             // 195: helmsmancontrol.ProcessMeterQuantity.DimensionsEntry
+	nil,                                             // 196: helmsmancontrol.StreamProcess.ExtraEntry
+	nil,                                             // 197: helmsmancontrol.ConfigSeedApplyResult.BundleVersionsEntry
+	nil,                                             // 198: helmsmancontrol.ProcessingJobRequest.ParamsEntry
+	nil,                                             // 199: helmsmancontrol.ProcessingJobResult.OutputsEntry
+	(*ThumbnailUploadResponse_PresignedUpload)(nil), // 200: helmsmancontrol.ThumbnailUploadResponse.PresignedUpload
+	(*timestamppb.Timestamp)(nil),                   // 201: google.protobuf.Timestamp
+	(*common.SignupAttribution)(nil),                // 202: common.SignupAttribution
+	(*structpb.Struct)(nil),                         // 203: google.protobuf.Struct
+	(*common.EdgeTelemetryConfig)(nil),              // 204: common.EdgeTelemetryConfig
+	(*events.DomainEventBatch)(nil),                 // 205: frameworks.events.DomainEventBatch
+	(*emptypb.Empty)(nil),                           // 206: google.protobuf.Empty
+	(*events.PublishDomainEventsResponse)(nil),      // 207: frameworks.events.PublishDomainEventsResponse
 }
 var file_ipc_proto_depIdxs = []int32{
-	198, // 0: helmsmancontrol.ServiceEvent.timestamp:type_name -> google.protobuf.Timestamp
+	201, // 0: helmsmancontrol.ServiceEvent.timestamp:type_name -> google.protobuf.Timestamp
 	173, // 1: helmsmancontrol.ServiceEvent.api_request_batch:type_name -> helmsmancontrol.APIRequestBatch
 	25,  // 2: helmsmancontrol.ServiceEvent.auth_event:type_name -> helmsmancontrol.AuthEvent
 	26,  // 3: helmsmancontrol.ServiceEvent.tenant_event:type_name -> helmsmancontrol.TenantEvent
@@ -25389,13 +26055,13 @@ var file_ipc_proto_depIdxs = []int32{
 	31,  // 9: helmsmancontrol.ServiceEvent.artifact_event:type_name -> helmsmancontrol.ArtifactEvent
 	32,  // 10: helmsmancontrol.ServiceEvent.artifact_node_copy_event:type_name -> helmsmancontrol.ArtifactNodeCopyEvent
 	33,  // 11: helmsmancontrol.ServiceEvent.incident_event:type_name -> helmsmancontrol.IncidentEvent
-	199, // 12: helmsmancontrol.TenantEvent.attribution:type_name -> common.SignupAttribution
+	202, // 12: helmsmancontrol.TenantEvent.attribution:type_name -> common.SignupAttribution
 	0,   // 13: helmsmancontrol.ClusterEvent.reject_reason_code:type_name -> helmsmancontrol.ClusterRejectReason
-	200, // 14: helmsmancontrol.ClusterEvent.before_state:type_name -> google.protobuf.Struct
-	200, // 15: helmsmancontrol.ClusterEvent.after_state:type_name -> google.protobuf.Struct
+	203, // 14: helmsmancontrol.ClusterEvent.before_state:type_name -> google.protobuf.Struct
+	203, // 15: helmsmancontrol.ClusterEvent.after_state:type_name -> google.protobuf.Struct
 	11,  // 16: helmsmancontrol.ArtifactEvent.artifact_type:type_name -> helmsmancontrol.ArtifactEvent.ArtifactType
 	12,  // 17: helmsmancontrol.ArtifactNodeCopyEvent.transition:type_name -> helmsmancontrol.ArtifactNodeCopyEvent.Transition
-	198, // 18: helmsmancontrol.ControlMessage.sent_at:type_name -> google.protobuf.Timestamp
+	201, // 18: helmsmancontrol.ControlMessage.sent_at:type_name -> google.protobuf.Timestamp
 	66,  // 19: helmsmancontrol.ControlMessage.register:type_name -> helmsmancontrol.Register
 	71,  // 20: helmsmancontrol.ControlMessage.error:type_name -> helmsmancontrol.ControlError
 	72,  // 21: helmsmancontrol.ControlMessage.heartbeat:type_name -> helmsmancontrol.Heartbeat
@@ -25470,20 +26136,20 @@ var file_ipc_proto_depIdxs = []int32{
 	35,  // 90: helmsmancontrol.ControlMessage.control_capabilities:type_name -> helmsmancontrol.ControlCapabilities
 	36,  // 91: helmsmancontrol.ControlMessage.durable_delivery_ack:type_name -> helmsmancontrol.DurableDeliveryAck
 	40,  // 92: helmsmancontrol.ApplyManagedStream.placement_admission:type_name -> helmsmancontrol.ManagedStreamAdmission
-	198, // 93: helmsmancontrol.ManagedStreamAdmission.issued_at:type_name -> google.protobuf.Timestamp
-	198, // 94: helmsmancontrol.ManagedStreamAdmission.expires_at:type_name -> google.protobuf.Timestamp
+	201, // 93: helmsmancontrol.ManagedStreamAdmission.issued_at:type_name -> google.protobuf.Timestamp
+	201, // 94: helmsmancontrol.ManagedStreamAdmission.expires_at:type_name -> google.protobuf.Timestamp
 	42,  // 95: helmsmancontrol.RetractManagedStream.placement_retraction:type_name -> helmsmancontrol.ManagedStreamRetraction
-	198, // 96: helmsmancontrol.ManagedStreamRetraction.issued_at:type_name -> google.protobuf.Timestamp
-	198, // 97: helmsmancontrol.ManagedStreamRetraction.expires_at:type_name -> google.protobuf.Timestamp
+	201, // 96: helmsmancontrol.ManagedStreamRetraction.issued_at:type_name -> google.protobuf.Timestamp
+	201, // 97: helmsmancontrol.ManagedStreamRetraction.expires_at:type_name -> google.protobuf.Timestamp
 	9,   // 98: helmsmancontrol.ModeChangeRequest.requested_mode:type_name -> helmsmancontrol.NodeOperationalMode
 	47,  // 99: helmsmancontrol.DesiredStateUpdate.components:type_name -> helmsmancontrol.DesiredComponent
-	198, // 100: helmsmancontrol.DesiredStateUpdate.cordon_token_expires_at:type_name -> google.protobuf.Timestamp
+	201, // 100: helmsmancontrol.DesiredStateUpdate.cordon_token_expires_at:type_name -> google.protobuf.Timestamp
 	49,  // 101: helmsmancontrol.UpdateApplyResult.components:type_name -> helmsmancontrol.ComponentApplyResult
 	54,  // 102: helmsmancontrol.PlaybackGrant.policy:type_name -> helmsmancontrol.PlaybackGrantPolicy
-	198, // 103: helmsmancontrol.PlaybackGrant.valid_until:type_name -> google.protobuf.Timestamp
+	201, // 103: helmsmancontrol.PlaybackGrant.valid_until:type_name -> google.protobuf.Timestamp
 	1,   // 104: helmsmancontrol.PlaybackGrantPolicy.kind:type_name -> helmsmancontrol.PlaybackGrantPolicyKind
 	55,  // 105: helmsmancontrol.PlaybackGrantPolicy.active_keys:type_name -> helmsmancontrol.PlaybackGrantKey
-	189, // 106: helmsmancontrol.PlaybackGrantPolicy.required_claims_json:type_name -> helmsmancontrol.PlaybackGrantPolicy.RequiredClaimsJsonEntry
+	192, // 106: helmsmancontrol.PlaybackGrantPolicy.required_claims_json:type_name -> helmsmancontrol.PlaybackGrantPolicy.RequiredClaimsJsonEntry
 	53,  // 107: helmsmancontrol.PlaybackGrantResponse.grant:type_name -> helmsmancontrol.PlaybackGrant
 	59,  // 108: helmsmancontrol.ActivatePushTargets.targets:type_name -> helmsmancontrol.PushTargetSpec
 	63,  // 109: helmsmancontrol.DeactivatePushTargetsResult.targets:type_name -> helmsmancontrol.PushTargetConvergence
@@ -25494,7 +26160,7 @@ var file_ipc_proto_depIdxs = []int32{
 	69,  // 114: helmsmancontrol.Register.fingerprint:type_name -> helmsmancontrol.NodeFingerprint
 	9,   // 115: helmsmancontrol.Register.requested_mode:type_name -> helmsmancontrol.NodeOperationalMode
 	68,  // 116: helmsmancontrol.Register.applied_managed_streams:type_name -> helmsmancontrol.AppliedManagedStream
-	198, // 117: helmsmancontrol.Register.node_identity_proof_issued_at:type_name -> google.protobuf.Timestamp
+	201, // 117: helmsmancontrol.Register.node_identity_proof_issued_at:type_name -> google.protobuf.Timestamp
 	67,  // 118: helmsmancontrol.Register.live_ingest_generations:type_name -> helmsmancontrol.LiveIngestGeneration
 	40,  // 119: helmsmancontrol.AppliedManagedStream.placement_admission:type_name -> helmsmancontrol.ManagedStreamAdmission
 	13,  // 120: helmsmancontrol.ClipPullRequest.source_kind:type_name -> helmsmancontrol.ClipPullRequest.SourceKind
@@ -25542,7 +26208,7 @@ var file_ipc_proto_depIdxs = []int32{
 	82,  // 162: helmsmancontrol.DVRStartRequest.config:type_name -> helmsmancontrol.DVRConfig
 	103, // 163: helmsmancontrol.RetryDVRSegmentUpload.segments:type_name -> helmsmancontrol.DVRSegmentRef
 	103, // 164: helmsmancontrol.RestoreLocalSegmentIndexResponse.segments:type_name -> helmsmancontrol.DVRSegmentRef
-	190, // 165: helmsmancontrol.FreezeRequest.segment_urls:type_name -> helmsmancontrol.FreezeRequest.SegmentUrlsEntry
+	193, // 165: helmsmancontrol.FreezeRequest.segment_urls:type_name -> helmsmancontrol.FreezeRequest.SegmentUrlsEntry
 	14,  // 166: helmsmancontrol.RelayResolveRequest.hint:type_name -> helmsmancontrol.RelayResolveRequest.RelayHint
 	8,   // 167: helmsmancontrol.RelayResolveResponse.state:type_name -> helmsmancontrol.AssetState
 	15,  // 168: helmsmancontrol.RelayResolveResponse.policy_hint:type_name -> helmsmancontrol.RelayResolveResponse.CacheDecisionHint
@@ -25570,7 +26236,7 @@ var file_ipc_proto_depIdxs = []int32{
 	147, // 190: helmsmancontrol.NodeLifecycleUpdate.capabilities:type_name -> helmsmancontrol.NodeCapabilities
 	151, // 191: helmsmancontrol.NodeLifecycleUpdate.storage:type_name -> helmsmancontrol.StorageInfo
 	153, // 192: helmsmancontrol.NodeLifecycleUpdate.limits:type_name -> helmsmancontrol.NodeLimits
-	191, // 193: helmsmancontrol.NodeLifecycleUpdate.streams:type_name -> helmsmancontrol.NodeLifecycleUpdate.StreamsEntry
+	194, // 193: helmsmancontrol.NodeLifecycleUpdate.streams:type_name -> helmsmancontrol.NodeLifecycleUpdate.StreamsEntry
 	156, // 194: helmsmancontrol.NodeLifecycleUpdate.artifacts:type_name -> helmsmancontrol.StoredArtifact
 	46,  // 195: helmsmancontrol.NodeLifecycleUpdate.component_versions:type_name -> helmsmancontrol.EdgeComponentVersion
 	9,   // 196: helmsmancontrol.NodeLifecycleUpdate.operational_mode:type_name -> helmsmancontrol.NodeOperationalMode
@@ -25584,12 +26250,12 @@ var file_ipc_proto_depIdxs = []int32{
 	127, // 204: helmsmancontrol.VodLifecycleData.processing_speed:type_name -> helmsmancontrol.ProcessingSpeedStats
 	21,  // 205: helmsmancontrol.MessageLifecycleData.event_type:type_name -> helmsmancontrol.MessageLifecycleData.EventType
 	10,  // 206: helmsmancontrol.FederationEventData.event_type:type_name -> helmsmancontrol.FederationEventType
-	192, // 207: helmsmancontrol.ProcessMeterQuantity.dimensions:type_name -> helmsmancontrol.ProcessMeterQuantity.DimensionsEntry
+	195, // 207: helmsmancontrol.ProcessMeterQuantity.dimensions:type_name -> helmsmancontrol.ProcessMeterQuantity.DimensionsEntry
 	149, // 208: helmsmancontrol.ProcessBillingEvent.meter_quantities:type_name -> helmsmancontrol.ProcessMeterQuantity
 	152, // 209: helmsmancontrol.NodeLimits.processing_classes:type_name -> helmsmancontrol.ProcessingClassCapacity
 	11,  // 210: helmsmancontrol.StoredArtifact.artifact_type:type_name -> helmsmancontrol.ArtifactEvent.ArtifactType
 	22,  // 211: helmsmancontrol.StoredArtifact.role:type_name -> helmsmancontrol.StoredArtifact.Role
-	193, // 212: helmsmancontrol.StreamProcess.extra:type_name -> helmsmancontrol.StreamProcess.ExtraEntry
+	196, // 212: helmsmancontrol.StreamProcess.extra:type_name -> helmsmancontrol.StreamProcess.ExtraEntry
 	157, // 213: helmsmancontrol.StreamDef.processes:type_name -> helmsmancontrol.StreamProcess
 	158, // 214: helmsmancontrol.StreamTemplate.def:type_name -> helmsmancontrol.StreamDef
 	159, // 215: helmsmancontrol.ConfigSeed.templates:type_name -> helmsmancontrol.StreamTemplate
@@ -25597,44 +26263,47 @@ var file_ipc_proto_depIdxs = []int32{
 	9,   // 217: helmsmancontrol.ConfigSeed.operational_mode:type_name -> helmsmancontrol.NodeOperationalMode
 	160, // 218: helmsmancontrol.ConfigSeed.tls:type_name -> helmsmancontrol.TLSCertBundle
 	164, // 219: helmsmancontrol.ConfigSeed.site:type_name -> helmsmancontrol.SiteConfig
-	201, // 220: helmsmancontrol.ConfigSeed.telemetry:type_name -> common.EdgeTelemetryConfig
+	204, // 220: helmsmancontrol.ConfigSeed.telemetry:type_name -> common.EdgeTelemetryConfig
 	160, // 221: helmsmancontrol.ConfigSeed.tls_bundles:type_name -> helmsmancontrol.TLSCertBundle
-	198, // 222: helmsmancontrol.ConfigSeedApplyResult.applied_at:type_name -> google.protobuf.Timestamp
-	194, // 223: helmsmancontrol.ConfigSeedApplyResult.bundle_versions:type_name -> helmsmancontrol.ConfigSeedApplyResult.BundleVersionsEntry
+	201, // 222: helmsmancontrol.ConfigSeedApplyResult.applied_at:type_name -> google.protobuf.Timestamp
+	197, // 223: helmsmancontrol.ConfigSeedApplyResult.bundle_versions:type_name -> helmsmancontrol.ConfigSeedApplyResult.BundleVersionsEntry
 	165, // 224: helmsmancontrol.TranscodeJobRequest.profiles:type_name -> helmsmancontrol.TranscodeProfile
-	195, // 225: helmsmancontrol.ProcessingJobRequest.params:type_name -> helmsmancontrol.ProcessingJobRequest.ParamsEntry
+	198, // 225: helmsmancontrol.ProcessingJobRequest.params:type_name -> helmsmancontrol.ProcessingJobRequest.ParamsEntry
 	170, // 226: helmsmancontrol.ProcessingJobRequest.source_segments:type_name -> helmsmancontrol.DVRChapterSegmentRef
-	196, // 227: helmsmancontrol.ProcessingJobResult.outputs:type_name -> helmsmancontrol.ProcessingJobResult.OutputsEntry
+	199, // 227: helmsmancontrol.ProcessingJobResult.outputs:type_name -> helmsmancontrol.ProcessingJobResult.OutputsEntry
 	155, // 228: helmsmancontrol.ProcessingJobResult.tracks:type_name -> helmsmancontrol.StreamTrack
 	174, // 229: helmsmancontrol.APIRequestBatch.aggregates:type_name -> helmsmancontrol.APIRequestAggregate
-	197, // 230: helmsmancontrol.ThumbnailUploadResponse.uploads:type_name -> helmsmancontrol.ThumbnailUploadResponse.PresignedUpload
-	198, // 231: helmsmancontrol.GatewayTelemetryEvent.timestamp:type_name -> google.protobuf.Timestamp
+	200, // 230: helmsmancontrol.ThumbnailUploadResponse.uploads:type_name -> helmsmancontrol.ThumbnailUploadResponse.PresignedUpload
+	201, // 231: helmsmancontrol.GatewayTelemetryEvent.timestamp:type_name -> google.protobuf.Timestamp
 	184, // 232: helmsmancontrol.GatewayTelemetryEvent.discovery:type_name -> helmsmancontrol.OrchestratorDiscoveryObserved
 	185, // 233: helmsmancontrol.GatewayTelemetryEvent.state:type_name -> helmsmancontrol.OrchestratorStateUpdate
 	187, // 234: helmsmancontrol.GatewayTelemetryEvent.transcode:type_name -> helmsmancontrol.OrchestratorTranscodeOutcome
 	188, // 235: helmsmancontrol.GatewayTelemetryEvent.ai:type_name -> helmsmancontrol.OrchestratorAIOutcome
-	198, // 236: helmsmancontrol.OrchestratorVantageGeo.geo_resolved_at:type_name -> google.protobuf.Timestamp
-	183, // 237: helmsmancontrol.OrchestratorDiscoveryObserved.vantage:type_name -> helmsmancontrol.OrchestratorVantageGeo
-	183, // 238: helmsmancontrol.OrchestratorStateUpdate.vantage:type_name -> helmsmancontrol.OrchestratorVantageGeo
-	186, // 239: helmsmancontrol.OrchestratorStateUpdate.capability_price_entries:type_name -> helmsmancontrol.OrchestratorCapabilityPriceEntry
-	154, // 240: helmsmancontrol.NodeLifecycleUpdate.StreamsEntry.value:type_name -> helmsmancontrol.StreamData
-	34,  // 241: helmsmancontrol.HelmsmanControl.Connect:input_type -> helmsmancontrol.ControlMessage
-	79,  // 242: helmsmancontrol.HelmsmanControl.ResolveClipHash:input_type -> helmsmancontrol.ClipHashRequest
-	73,  // 243: helmsmancontrol.DecklogService.SendEvent:input_type -> helmsmancontrol.MistTrigger
-	24,  // 244: helmsmancontrol.DecklogService.SendServiceEvent:input_type -> helmsmancontrol.ServiceEvent
-	182, // 245: helmsmancontrol.DecklogService.SendGatewayTelemetry:input_type -> helmsmancontrol.GatewayTelemetryEvent
-	202, // 246: helmsmancontrol.DecklogService.PublishDomainEvents:input_type -> frameworks.events.DomainEventBatch
-	34,  // 247: helmsmancontrol.HelmsmanControl.Connect:output_type -> helmsmancontrol.ControlMessage
-	80,  // 248: helmsmancontrol.HelmsmanControl.ResolveClipHash:output_type -> helmsmancontrol.ClipHashResponse
-	203, // 249: helmsmancontrol.DecklogService.SendEvent:output_type -> google.protobuf.Empty
-	203, // 250: helmsmancontrol.DecklogService.SendServiceEvent:output_type -> google.protobuf.Empty
-	203, // 251: helmsmancontrol.DecklogService.SendGatewayTelemetry:output_type -> google.protobuf.Empty
-	204, // 252: helmsmancontrol.DecklogService.PublishDomainEvents:output_type -> frameworks.events.PublishDomainEventsResponse
-	247, // [247:253] is the sub-list for method output_type
-	241, // [241:247] is the sub-list for method input_type
-	241, // [241:241] is the sub-list for extension type_name
-	241, // [241:241] is the sub-list for extension extendee
-	0,   // [0:241] is the sub-list for field type_name
+	189, // 236: helmsmancontrol.GatewayTelemetryEvent.decision:type_name -> helmsmancontrol.OrchestratorCandidateDecision
+	190, // 237: helmsmancontrol.GatewayTelemetryEvent.segment_result:type_name -> helmsmancontrol.OrchestratorSegmentResult
+	191, // 238: helmsmancontrol.GatewayTelemetryEvent.observer_report:type_name -> helmsmancontrol.OrchestratorObserverReport
+	201, // 239: helmsmancontrol.OrchestratorVantageGeo.geo_resolved_at:type_name -> google.protobuf.Timestamp
+	183, // 240: helmsmancontrol.OrchestratorDiscoveryObserved.vantage:type_name -> helmsmancontrol.OrchestratorVantageGeo
+	183, // 241: helmsmancontrol.OrchestratorStateUpdate.vantage:type_name -> helmsmancontrol.OrchestratorVantageGeo
+	186, // 242: helmsmancontrol.OrchestratorStateUpdate.capability_price_entries:type_name -> helmsmancontrol.OrchestratorCapabilityPriceEntry
+	154, // 243: helmsmancontrol.NodeLifecycleUpdate.StreamsEntry.value:type_name -> helmsmancontrol.StreamData
+	34,  // 244: helmsmancontrol.HelmsmanControl.Connect:input_type -> helmsmancontrol.ControlMessage
+	79,  // 245: helmsmancontrol.HelmsmanControl.ResolveClipHash:input_type -> helmsmancontrol.ClipHashRequest
+	73,  // 246: helmsmancontrol.DecklogService.SendEvent:input_type -> helmsmancontrol.MistTrigger
+	24,  // 247: helmsmancontrol.DecklogService.SendServiceEvent:input_type -> helmsmancontrol.ServiceEvent
+	182, // 248: helmsmancontrol.DecklogService.SendGatewayTelemetry:input_type -> helmsmancontrol.GatewayTelemetryEvent
+	205, // 249: helmsmancontrol.DecklogService.PublishDomainEvents:input_type -> frameworks.events.DomainEventBatch
+	34,  // 250: helmsmancontrol.HelmsmanControl.Connect:output_type -> helmsmancontrol.ControlMessage
+	80,  // 251: helmsmancontrol.HelmsmanControl.ResolveClipHash:output_type -> helmsmancontrol.ClipHashResponse
+	206, // 252: helmsmancontrol.DecklogService.SendEvent:output_type -> google.protobuf.Empty
+	206, // 253: helmsmancontrol.DecklogService.SendServiceEvent:output_type -> google.protobuf.Empty
+	206, // 254: helmsmancontrol.DecklogService.SendGatewayTelemetry:output_type -> google.protobuf.Empty
+	207, // 255: helmsmancontrol.DecklogService.PublishDomainEvents:output_type -> frameworks.events.PublishDomainEventsResponse
+	250, // [250:256] is the sub-list for method output_type
+	244, // [244:250] is the sub-list for method input_type
+	244, // [244:244] is the sub-list for extension type_name
+	244, // [244:244] is the sub-list for extension extendee
+	0,   // [0:244] is the sub-list for field type_name
 }
 
 func init() { file_ipc_proto_init() }
@@ -25810,6 +26479,9 @@ func file_ipc_proto_init() {
 		(*GatewayTelemetryEvent_State)(nil),
 		(*GatewayTelemetryEvent_Transcode)(nil),
 		(*GatewayTelemetryEvent_Ai)(nil),
+		(*GatewayTelemetryEvent_Decision)(nil),
+		(*GatewayTelemetryEvent_SegmentResult)(nil),
+		(*GatewayTelemetryEvent_ObserverReport)(nil),
 	}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
@@ -25817,7 +26489,7 @@ func file_ipc_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_ipc_proto_rawDesc), len(file_ipc_proto_rawDesc)),
 			NumEnums:      23,
-			NumMessages:   175,
+			NumMessages:   178,
 			NumExtensions: 0,
 			NumServices:   2,
 		},

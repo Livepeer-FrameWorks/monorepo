@@ -26,19 +26,32 @@ type OperatorRouter interface {
 
 // DeliveryPayload is the outbox row payload. It snapshots the incident at the
 // transition so a delivery retried later still describes that transition.
+type OperatorRoute struct {
+	Channel       string
+	Purpose       string
+	DestinationID string
+}
+
+// OperatorRoutingSnapshot selects all destinations from one configuration snapshot.
+type OperatorRoutingSnapshot interface {
+	RoutesFor(severity string) []OperatorRoute
+}
+
 type DeliveryPayload struct {
-	IncidentID string     `json:"incident_id"`
-	TenantID   string     `json:"tenant_id,omitempty"`
-	ClusterID  string     `json:"cluster_id"`
-	Region     string     `json:"region,omitempty"`
-	Alertname  string     `json:"alertname,omitempty"`
-	Severity   string     `json:"severity"`
-	Title      string     `json:"title,omitempty"`
-	Summary    string     `json:"summary"`
-	Event      string     `json:"event"`
-	Resolution string     `json:"resolution,omitempty"`
-	StartedAt  time.Time  `json:"started_at"`
-	ResolvedAt *time.Time `json:"resolved_at,omitempty"`
+	Purpose       string     `json:"purpose,omitempty"`
+	DestinationID string     `json:"destination_id,omitempty"`
+	IncidentID    string     `json:"incident_id"`
+	TenantID      string     `json:"tenant_id,omitempty"`
+	ClusterID     string     `json:"cluster_id"`
+	Region        string     `json:"region,omitempty"`
+	Alertname     string     `json:"alertname,omitempty"`
+	Severity      string     `json:"severity"`
+	Title         string     `json:"title,omitempty"`
+	Summary       string     `json:"summary"`
+	Event         string     `json:"event"`
+	Resolution    string     `json:"resolution,omitempty"`
+	StartedAt     time.Time  `json:"started_at"`
+	ResolvedAt    *time.Time `json:"resolved_at,omitempty"`
 }
 
 // KafkaIncidentMessage is the lookout.incidents record Skipper consumes.

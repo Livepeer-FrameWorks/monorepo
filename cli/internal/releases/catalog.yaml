@@ -3,6 +3,7 @@ service_databases:
   commodore: commodore
   foghorn: foghorn
   lookout: lookout
+  network-observer: network_observer
   navigator: navigator
   periscope-ingest: periscope
   periscope-query: periscope

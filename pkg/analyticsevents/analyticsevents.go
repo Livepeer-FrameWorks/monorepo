@@ -116,6 +116,12 @@ func GatewayTelemetryEventType(event *ipcpb.GatewayTelemetryEvent) (string, bool
 		return "orchestrator_transcode_outcome", true
 	case *ipcpb.GatewayTelemetryEvent_Ai:
 		return "orchestrator_ai_outcome", true
+	case *ipcpb.GatewayTelemetryEvent_Decision:
+		return "orchestrator_candidate_decision", true
+	case *ipcpb.GatewayTelemetryEvent_SegmentResult:
+		return "orchestrator_segment_result", true
+	case *ipcpb.GatewayTelemetryEvent_ObserverReport:
+		return "orchestrator_observer_report", true
 	}
 	return "", false
 }
