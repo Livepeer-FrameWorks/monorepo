@@ -26,10 +26,20 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	"github.com/gin-gonic/gin"
 
 	"frameworks/api_sidecar/internal/admission"
 )
+
+// mistSourceReadTimeout is how long Mist waits for data on an HTTP source
+// read before it abandons the read and reconnects.
+const mistSourceReadTimeout = 5 * time.Second
+
+// slowFirstBodyByteAfter is the first-body-byte latency on a cold block fetch
+// that gets a warning. At half of Mist's read budget the upstream alone has
+// spent enough of it that Mist is at risk of abandoning the read.
+var slowFirstBodyByteAfter = mistSourceReadTimeout / 2
 
 // serveViaBlockCache is the relay's random-access entrypoint for single-file
 // artifacts. The block cache needs a total size; when Foghorn did not provide
@@ -49,7 +59,7 @@ func (s *Server) serveViaBlockCache(c *gin.Context, kind, hash, ext, localPath s
 		probedSize, err := s.probeTotalSize(c.Request.Context(), s.upstreamClient(res), res.UpstreamURL(), res.PeerRelayGrantID)
 		if err != nil {
 			noteUpstreamFailure(err)
-			s.respondColdFetchError(c, err)
+			s.respondColdFetchError(c, "upstream size probe", err)
 			return "error"
 		}
 		totalSize = probedSize
@@ -118,7 +128,7 @@ func (s *Server) serveViaBlockCache(c *gin.Context, kind, hash, ext, localPath s
 		if err := s.preflightFirstColdSpan(c.Request.Context(), upstreamClient, store, spans[0], totalSize, upstreamURL, res.PeerRelayGrantID); err != nil {
 			noteUpstreamFailure(err)
 			s.cache.Delete(kind, hash)
-			s.respondColdFetchError(c, err)
+			s.respondColdFetchError(c, "upstream block preflight", err)
 			return "error"
 		}
 	}
@@ -174,7 +184,7 @@ func (s *Server) serveViaBlockCache(c *gin.Context, kind, hash, ext, localPath s
 				noteUpstreamFailure(err)
 				c.Writer.Header().Del("Content-Length")
 				c.Writer.Header().Del("Content-Range")
-				s.respondColdFetchError(c, err)
+				s.respondColdFetchError(c, "block span serve", err)
 			}
 			if s.logger != nil && !isClientGone(err) {
 				s.logger.WithError(err).WithField("block_idx", span.Idx).Debug("blockcache: span serve aborted")
@@ -296,9 +306,10 @@ func (s *Server) streamBlockFromS3(ctx context.Context, httpc *http.Client, w io
 	resp, err := httpc.Do(req)
 	if err != nil {
 		defrostBlocks.WithLabelValues(source, "error").Inc()
-		return fmt.Errorf("upstream block fetch: %w", err)
+		return upstreamPhaseError{op: "upstream block fetch", err: err}
 	}
-	defrostTTFB.WithLabelValues(source).Observe(time.Since(fetchStart).Seconds())
+	headersAt := time.Now()
+	defrostTTFB.WithLabelValues(source).Observe(headersAt.Sub(fetchStart).Seconds())
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusPartialContent {
 		// 200 OK is acceptable only when the requested range covers the
@@ -360,7 +371,10 @@ func (s *Server) streamBlockFromS3(ctx context.Context, httpc *http.Client, w io
 	// tolerantTee channel headroom (~4 buffers).
 	copyBuf := make([]byte, 256*1024)
 	expected := blockEnd - blockStart + 1
-	n, copyErr := io.CopyBuffer(tee, io.LimitReader(resp.Body, expected), copyBuf)
+	upstreamBody := &firstByteReader{r: resp.Body, onFirst: func() {
+		s.observeFirstBodyByte(req, source, span.Idx, fetchStart, headersAt)
+	}}
+	n, copyErr := io.CopyBuffer(tee, io.LimitReader(upstreamBody, expected), copyBuf)
 	if teeTol != nil {
 		teeTol.Close() // drain the disk worker so SecondaryAlive reflects final state
 	}
@@ -392,11 +406,11 @@ func (s *Server) streamBlockFromS3(ctx context.Context, httpc *http.Client, w io
 
 	if copyErr != nil {
 		defrostBlocks.WithLabelValues(source, "error").Inc()
-		return copyErr
+		return upstreamPhaseError{op: "upstream block copy", err: copyErr}
 	}
 	if n != expected {
 		defrostBlocks.WithLabelValues(source, "error").Inc()
-		return fmt.Errorf("block %d short: copied %d bytes, expected %d", span.Idx, n, expected)
+		return upstreamPhaseError{op: "upstream block copy", err: fmt.Errorf("block %d short: copied %d bytes, expected %d", span.Idx, n, expected)}
 	}
 	defrostBlocks.WithLabelValues(source, "success").Inc()
 	defrostBytes.WithLabelValues(source).Add(float64(n))
@@ -407,6 +421,54 @@ func (s *Server) streamBlockFromS3(ctx context.Context, httpc *http.Client, w io
 	}
 	return nil
 }
+
+// firstByteReader calls onFirst once, when the first non-empty read returns.
+type firstByteReader struct {
+	r       io.Reader
+	onFirst func()
+	seen    bool
+}
+
+func (f *firstByteReader) Read(p []byte) (int, error) {
+	n, err := f.r.Read(p)
+	if n > 0 && !f.seen {
+		f.seen = true
+		f.onFirst()
+	}
+	return n, err
+}
+
+// observeFirstBodyByte records when a cold block fetch's first body byte
+// arrived, and warns when it took longer than slowFirstBodyByteAfter. The log
+// carries the upstream host only: a presigned URL's query is a credential.
+func (s *Server) observeFirstBodyByte(req *http.Request, source string, blockIdx int64, fetchStart, headersAt time.Time) {
+	now := time.Now()
+	elapsed := now.Sub(fetchStart)
+	defrostFirstBodyByte.WithLabelValues(source).Observe(elapsed.Seconds())
+	if elapsed < slowFirstBodyByteAfter || s.logger == nil {
+		return
+	}
+	s.logger.WithFields(logging.Fields{
+		"upstream_host":      req.URL.Host,
+		"range":              req.Header.Get("Range"),
+		"source":             source,
+		"block_idx":          blockIdx,
+		"elapsed_ms":         elapsed.Milliseconds(),
+		"headers_to_body_ms": now.Sub(headersAt).Milliseconds(),
+		"threshold_ms":       slowFirstBodyByteAfter.Milliseconds(),
+	}).Warn("blockcache: upstream first body byte arrived late")
+}
+
+// upstreamPhaseError names the cold-fetch phase an error came from; it becomes
+// the op of the error response when no byte has reached the client yet.
+type upstreamPhaseError struct {
+	op  string
+	err error
+}
+
+func (e upstreamPhaseError) Error() string { return e.op + ": " + e.err.Error() }
+
+func (e upstreamPhaseError) Unwrap() error { return e.err }
 
 type upstreamStatusError struct {
 	StatusCode int
@@ -481,7 +543,10 @@ func (s *Server) preflightFirstColdSpan(ctx context.Context, httpc *http.Client,
 	return upstreamStatusError{StatusCode: resp.StatusCode}
 }
 
-func (s *Server) respondColdFetchError(c *gin.Context, err error) {
+// respondColdFetchError answers a cold fetch that failed before any body byte
+// reached the client. op names the phase that failed; an upstreamPhaseError in
+// err names it more precisely and replaces it.
+func (s *Server) respondColdFetchError(c *gin.Context, op string, err error) {
 	var statusErr upstreamStatusError
 	if errors.As(err, &statusErr) {
 		switch statusErr.StatusCode {
@@ -502,7 +567,11 @@ func (s *Server) respondColdFetchError(c *gin.Context, err error) {
 		}
 		return
 	}
-	s.serverError(c, "upstream block preflight", err)
+	var phaseErr upstreamPhaseError
+	if errors.As(err, &phaseErr) {
+		op, err = phaseErr.op, phaseErr.err
+	}
+	s.serverError(c, op, err)
 }
 
 func isClientGone(err error) bool {

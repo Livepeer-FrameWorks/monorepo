@@ -8287,11 +8287,20 @@
                 "uid": "victoriametrics"
               },
               "expr": "histogram_quantile(0.95, sum(rate(helmsman_defrost_ttfb_seconds_bucket{region=~\"$region\", cluster=~\"$cluster\"}[5m])) by (le, source))",
-              "legendFormat": "{{source}} p95",
+              "legendFormat": "{{source}} headers p95",
               "refId": "A"
+            },
+            {
+              "datasource": {
+                "type": "victoriametrics-metrics-datasource",
+                "uid": "victoriametrics"
+              },
+              "expr": "histogram_quantile(0.95, sum(rate(helmsman_defrost_first_body_byte_seconds_bucket{region=~\"$region\", cluster=~\"$cluster\"}[5m])) by (le, source))",
+              "legendFormat": "{{source}} first body byte p95",
+              "refId": "B"
             }
           ],
-          "title": "Defrost time-to-first-byte (p95)",
+          "title": "Defrost headers and first body byte (p95)",
           "type": "timeseries"
         },
         {

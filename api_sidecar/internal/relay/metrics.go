@@ -62,13 +62,27 @@ var (
 		[]string{"source"},
 	)
 
-	// defrostTTFB is time to response headers on a cold block fetch — the
-	// viewer-visible latency cost of reading a frozen artifact.
+	// defrostTTFB is time from issuing a cold block fetch to its response
+	// headers. An upstream can send headers and then hold the body back;
+	// defrostFirstBodyByte covers that gap.
 	defrostTTFB = promauto.NewHistogramVec(
 		prometheus.HistogramOpts{
 			Namespace: "helmsman",
 			Name:      "defrost_ttfb_seconds",
-			Help:      "Time to first byte on cold block read-through by source",
+			Help:      "Time to upstream response headers on cold block read-through by source",
+			Buckets:   transferDurationBuckets,
+		},
+		[]string{"source"},
+	)
+
+	// defrostFirstBodyByte is time from issuing a cold block fetch to the
+	// first body byte read from the upstream: the earliest moment the relay
+	// can hand Mist any of that block.
+	defrostFirstBodyByte = promauto.NewHistogramVec(
+		prometheus.HistogramOpts{
+			Namespace: "helmsman",
+			Name:      "defrost_first_body_byte_seconds",
+			Help:      "Time to the first upstream body byte on cold block read-through by source",
 			Buckets:   transferDurationBuckets,
 		},
 		[]string{"source"},
