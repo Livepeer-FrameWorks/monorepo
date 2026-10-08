@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"compress/zlib"
 	"io"
+	"regexp"
+	"strconv"
 	"strings"
 	"testing"
 	"unicode/utf16"
@@ -18,21 +20,15 @@ func pdfTextRuns(t *testing.T, document []byte) []string {
 		t.Fatalf("document is not a PDF: %.40q", document)
 	}
 	var runs []string
-	for _, object := range bytes.Split(document, []byte("endobj")) {
-		start := bytes.Index(object, []byte("stream\n"))
-		end := bytes.LastIndex(object, []byte("endstream"))
-		if start < 0 || end < start {
-			continue
-		}
-		dictionary := object[:start]
-		if bytes.Contains(dictionary, []byte("/Length1")) || bytes.Contains(dictionary, []byte("/Subtype")) {
+	for _, stream := range pdfStreams(t, document) {
+		if bytes.Contains(stream.dictionary, []byte("/Length1")) || bytes.Contains(stream.dictionary, []byte("/Subtype")) {
 			continue // embedded font program or image
 		}
-		data := bytes.TrimRight(object[start+len("stream\n"):end], "\r\n")
-		if bytes.Contains(dictionary, []byte("/FlateDecode")) {
+		data := stream.data
+		if bytes.Contains(stream.dictionary, []byte("/FlateDecode")) {
 			reader, err := zlib.NewReader(bytes.NewReader(data))
 			if err != nil {
-				continue
+				t.Fatalf("open content stream: %v", err)
 			}
 			inflated, err := io.ReadAll(reader)
 			if err != nil {
@@ -46,6 +42,67 @@ func pdfTextRuns(t *testing.T, document []byte) []string {
 		runs = append(runs, contentStreamStrings(data)...)
 	}
 	return runs
+}
+
+type pdfStream struct {
+	dictionary []byte
+	data       []byte
+}
+
+var pdfStreamLength = regexp.MustCompile(`/Length\s+(\d+)(\s+\d+\s+R)?`)
+
+// pdfStreams returns every stream object's dictionary and its raw bytes. A
+// stream holds exactly /Length bytes after the EOL that ends the "stream"
+// keyword (PDF 32000-1 7.3.8.1). Compressed data can end in CR or LF bytes and
+// can contain "endstream" or "endobj", so the bytes are counted, never
+// delimited by keywords, and the parser skips over them before searching for
+// the next stream.
+func pdfStreams(t *testing.T, document []byte) []pdfStream {
+	t.Helper()
+	var streams []pdfStream
+	position := 0
+	for {
+		offset := bytes.Index(document[position:], []byte("stream"))
+		if offset < 0 {
+			return streams
+		}
+		keyword := position + offset
+		if !bytes.HasSuffix(bytes.TrimRight(document[position:keyword], " \r\n\t"), []byte(">>")) {
+			position = keyword + len("stream")
+			continue // the word inside a string or name, not a keyword after a stream dictionary
+		}
+		objectStart := bytes.LastIndex(document[position:keyword], []byte(" obj"))
+		if objectStart < 0 {
+			t.Fatalf("PDF stream at byte %d is outside an object", keyword)
+		}
+		dictionary := document[position+objectStart : keyword]
+		match := pdfStreamLength.FindSubmatch(dictionary)
+		if match == nil || len(match[2]) > 0 {
+			t.Fatalf("PDF stream at byte %d has no direct /Length: %q", keyword, dictionary)
+		}
+		length, err := strconv.Atoi(string(match[1]))
+		if err != nil {
+			t.Fatalf("PDF stream /Length %q: %v", match[1], err)
+		}
+		start := keyword + len("stream")
+		switch {
+		case bytes.HasPrefix(document[start:], []byte("\r\n")):
+			start += 2
+		case bytes.HasPrefix(document[start:], []byte("\n")):
+			start++
+		default:
+			t.Fatalf("PDF stream keyword at byte %d is not followed by an EOL", keyword)
+		}
+		end := start + length
+		if end > len(document) {
+			t.Fatalf("PDF stream at byte %d declares /Length %d past the end of the document", keyword, length)
+		}
+		if !bytes.HasPrefix(bytes.TrimLeft(document[end:], "\r\n"), []byte("endstream")) {
+			t.Fatalf("PDF stream at byte %d is not followed by endstream after its /Length %d", keyword, length)
+		}
+		streams = append(streams, pdfStream{dictionary: dictionary, data: document[start:end]})
+		position = end + bytes.Index(document[end:], []byte("endstream")) + len("endstream")
+	}
 }
 
 // contentStreamStrings decodes the literal strings shown with Tj.

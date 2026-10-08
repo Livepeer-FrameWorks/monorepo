@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -140,4 +141,32 @@ func TestRenderBillingDocumentBreaksLongLineTablesAcrossPages(t *testing.T) {
 		t.Fatalf("line table header drawn %d times, want it repeated on each page", headers)
 	}
 	requireRuns(t, runs, "Amount due (EUR)", "Page 2 of")
+}
+
+// A page content stream whose compressed bytes end in a line feed still reads
+// as the text it draws: the stream is the /Length bytes before endstream, and
+// its last byte belongs to the zlib checksum, not to the line break fpdf writes.
+func TestBillingDocumentContentStreamEndingInALineFeedReadsWhole(t *testing.T) {
+	_, data := sampleInvoiceDocument()
+	for i := range 1000 {
+		// Hashed numbers spread the zlib checksum's final byte over all values.
+		data.Number = fmt.Sprintf("INV-%.12x", sha256.Sum256([]byte{byte(i), byte(i >> 8)}))
+		content, err := renderBillingDocumentPDF(data)
+		if err != nil {
+			t.Fatal(err)
+		}
+		endsInLineFeed := false
+		for _, stream := range pdfStreams(t, content) {
+			if bytes.Contains(stream.dictionary, []byte("/FlateDecode")) && !bytes.Contains(stream.dictionary, []byte("/Length1")) &&
+				bytes.HasSuffix(stream.data, []byte("\n")) {
+				endsInLineFeed = true
+			}
+		}
+		if !endsInLineFeed {
+			continue
+		}
+		requireRuns(t, pdfTextRuns(t, content), data.Number, "Ada Lovelace", "USD 83.52")
+		return
+	}
+	t.Fatal("no rendered document has a stream ending in a line feed")
 }
