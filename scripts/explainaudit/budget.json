@@ -640,14 +640,16 @@
     "rows_scanned": 929
   },
   "foghorn:ClaimStagingCleanupItems@declared": {
-    "flags": ["MANY_READ_RPCS"],
+    "flags": ["SEQ_SCAN_LARGE", "MANY_READ_RPCS"],
     "read_requests": 108,
-    "rows_scanned": 10270
+    "rows_scanned": 400,
+    "reason": "Unordered LIMIT stops the sequential scan after 142 candidate rows; 342 total storage rows and 102 requests claim and lock 100 rows. The scan flag describes table cardinality, not a full-table scan. Keep a tight actual-row budget."
   },
   "foghorn:ClaimStagingCleanupItems@distributed": {
-    "flags": ["MANY_READ_RPCS"],
+    "flags": ["SEQ_SCAN_LARGE", "MANY_READ_RPCS"],
     "read_requests": 108,
-    "rows_scanned": 10270
+    "rows_scanned": 400,
+    "reason": "Unordered LIMIT stops the sequential scan after 142 candidate rows; 342 total storage rows and 102 requests claim and lock 100 rows. The scan flag describes table cardinality, not a full-table scan. Keep a tight actual-row budget."
   },
   "foghorn:ClaimStreamCleanupObligations@declared": {
     "flags": ["MANY_READ_RPCS"],
