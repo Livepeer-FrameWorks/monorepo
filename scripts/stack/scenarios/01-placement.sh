@@ -19,8 +19,12 @@ KEY=$(echo "$S" | jq -r '.streamKey // empty')
 PUB=$(publish "$EDGE_A_RTMP" "$KEY" 640x360 15 $((WINDOW + 120)))
 trap 'kill "$PUB" 2>/dev/null; delete_stream "$SID"' EXIT
 
-first_replica=${FOGHORN_A_URLS%% *}
-eventually 90 "stream live and resolvable at $first_replica" media_at "$first_replica" "$PB"
+# The stability window starts after both cells have imported the stream and
+# their followers have the leader's peer connectivity. Scenario 23 separately
+# asserts the first cross-cell play without warming the destination.
+for base in $FOGHORN_A_URLS $FOGHORN_B_URLS; do
+  eventually 90 "stream live and resolvable at $base" media_at "$base" "$PB"
+done
 
 log "strict resolves for ${WINDOW}s through every replica (no retries)"
 declare -A ok_count bad_count
