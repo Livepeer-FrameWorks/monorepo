@@ -189,6 +189,10 @@ func (s *PeriscopeServer) GetNetworkObservations(ctx context.Context, req *pb.Ne
 			s.logger.WithError(deliveryErr).Warn("Network diagnostics have no Mist output enrichment")
 		}
 	}
+	history.Work, err = s.networkWork(queryCtx, where, args, start, end, history.RolledUp)
+	if err != nil {
+		return nil, err
+	}
 	raw, err := json.Marshal(history)
 	if err != nil {
 		return nil, status.Error(codes.Internal, "network projection failed")

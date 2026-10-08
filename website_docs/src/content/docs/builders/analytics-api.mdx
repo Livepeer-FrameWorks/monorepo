@@ -237,15 +237,16 @@ curl --fail --get "https://bridge.frameworks.network/v1/network/livepeer" \
   --data-urlencode "interval=5m"
 ```
 
-| Response field         | Meaning                                                                            |
-| ---------------------- | ---------------------------------------------------------------------------------- |
-| `inventory.resources`  | Contract catalog identities and advertised service URIs                            |
-| `inventory.endpoints`  | Observed endpoints, IPs, availability, geography, latest quote and check times     |
-| `inventory.observers`  | Measurement roles, regions, known locations and last-seen times with opaque IDs    |
-| `history.summaries`    | Whole-window comparisons by identity, IP, region, workload, profile and event kind |
-| `history.cohorts`      | Time buckets for charts, with sample counts and latency distributions              |
-| `history.observations` | Bounded discovery, state, price, error and decision observations                   |
-| `history_status`       | Whether historical analytics was available for this response                       |
+| Response field         | Meaning                                                                                       |
+| ---------------------- | --------------------------------------------------------------------------------------------- |
+| `inventory.resources`  | Contract catalog identities and advertised service URIs                                       |
+| `inventory.endpoints`  | Observed endpoints, IPs, availability, geography, latest quote and check times                |
+| `inventory.observers`  | Measurement roles, regions, known locations and last-seen times with opaque IDs               |
+| `history.summaries`    | Whole-window comparisons by identity, IP, region, workload, profile and event kind            |
+| `history.work`         | Full-window observed work, execution-time service charges and separate expected ticket credit |
+| `history.cohorts`      | Time buckets for charts, with sample counts and latency distributions                         |
+| `history.observations` | Bounded discovery, state, price, error and decision observations                              |
+| `history_status`       | Whether historical analytics was available for this response                                  |
 
 `start` and `end` accept RFC3339 timestamps; the default window is 24 hours and the
 maximum is 730 days. `resource`, `ip` and `region` filter history. Inventory remains
@@ -272,6 +273,34 @@ history: that means historical data is unavailable, not zero traffic or zero fai
 Inspect `history.truncated` and `history.rolled_up` before treating returned chart or
 observation arrays as complete. Raw checks and quotes expire after 30 days; older
 windows use retained hourly aggregates.
+
+`history.work.scope` is `frameworks-gateways`: these are FrameWorks-observed work
+totals, not an orchestrator's total Livepeer activity or earnings. Its summaries retain
+`resource_id`, `ip`, `region` and `profile_key`; sum sibling endpoints when comparing
+onchain identities. `dispatched_source_ms` includes retried and hedged submissions;
+`accepted_source_ms` counts final gateway-accepted segments once. Divide milliseconds
+by 60,000 for source minutes. `accepted_rendition_ms` derives from source duration times
+accepted rendition count. Duration and accepted-output sample counters distinguish
+missing measurements from known zero; compare them with the dispatched/accepted counts
+before treating totals as complete. `returned_pixels` includes returned work that was discarded;
+`accepted_pixels` covers final accepted output. Pixel totals, duration totals and ticket
+counts are decimal strings to preserve integer precision in JavaScript.
+
+`service_charge` uses execution-time session prices and includes priced returned work
+even when it was not finally accepted. `ticket_credit_sent` is separate expected payment
+credit. Amounts have exact `numerator`, `denominator`, `currency="ETH"` and `unit="wei"`;
+use rational arithmetic before converting wei to ETH. Neither amount is redeemed
+earnings or a historical dollar valuation. A missing amount is unknown; a zero
+numerator is a known zero. Sample counters and `unaccounted_samples` expose partial
+accounting; older events are not repriced from their latest quote.
+
+Work totals are independent of the chart/sample limit. Inspect `history.work.truncated`
+separately: when its internal accounting-group bound is exceeded, no partial work totals
+are returned. Narrow `start`/`end`, `resource` or `region`. Retained long-range work uses
+whole hours inside the requested window; use its own `start`, `end` and
+`interval_seconds` when presenting totals. Hourly workload and cost snapshots expire
+after two years, and update every five minutes. The endpoint is an observation API,
+not a settlement ledger.
 
 The live endpoint depends on Bridge and the inventory coordinator; it currently has
 no independently hosted snapshot fallback. The authenticated

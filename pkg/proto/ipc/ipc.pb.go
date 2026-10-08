@@ -22039,28 +22039,29 @@ func (x *OrchestratorCapabilityPriceEntry) GetPixelsPerUnit() int64 {
 // Per-segment / per-session transcode outcome. Emitted at the result/error
 // boundary in go-livepeer's segment_rpc path so failures count.
 type OrchestratorTranscodeOutcome struct {
-	state                   protoimpl.MessageState `protogen:"open.v1"`
-	OrchAddr                string                 `protobuf:"bytes,1,opt,name=orch_addr,json=orchAddr,proto3" json:"orch_addr,omitempty"`
-	OrchUrl                 string                 `protobuf:"bytes,2,opt,name=orch_url,json=orchUrl,proto3" json:"orch_url,omitempty"`
-	SessionId               string                 `protobuf:"bytes,3,opt,name=session_id,json=sessionId,proto3" json:"session_id,omitempty"`
-	ManifestIdHash          string                 `protobuf:"bytes,4,opt,name=manifest_id_hash,json=manifestIdHash,proto3" json:"manifest_id_hash,omitempty"`
-	SeqNo                   uint64                 `protobuf:"varint,5,opt,name=seq_no,json=seqNo,proto3" json:"seq_no,omitempty"`
-	Success                 bool                   `protobuf:"varint,6,opt,name=success,proto3" json:"success,omitempty"`
-	LatencyScore            float32                `protobuf:"fixed32,7,opt,name=latency_score,json=latencyScore,proto3" json:"latency_score,omitempty"`
-	UploadMs                uint32                 `protobuf:"varint,8,opt,name=upload_ms,json=uploadMs,proto3" json:"upload_ms,omitempty"`
-	TranscodeMs             uint32                 `protobuf:"varint,9,opt,name=transcode_ms,json=transcodeMs,proto3" json:"transcode_ms,omitempty"`
-	OverallMs               uint32                 `protobuf:"varint,10,opt,name=overall_ms,json=overallMs,proto3" json:"overall_ms,omitempty"`
-	Pixels                  uint64                 `protobuf:"varint,11,opt,name=pixels,proto3" json:"pixels,omitempty"`
-	Profiles                []string               `protobuf:"bytes,12,rep,name=profiles,proto3" json:"profiles,omitempty"`
-	ErrorCode               string                 `protobuf:"bytes,13,opt,name=error_code,json=errorCode,proto3" json:"error_code,omitempty"`
-	ErrorKind               string                 `protobuf:"bytes,14,opt,name=error_kind,json=errorKind,proto3" json:"error_kind,omitempty"`
-	ResolvedIp              string                 `protobuf:"bytes,15,opt,name=resolved_ip,json=resolvedIp,proto3" json:"resolved_ip,omitempty"`
-	SourceDurationMs        uint32                 `protobuf:"varint,16,opt,name=source_duration_ms,json=sourceDurationMs,proto3" json:"source_duration_ms,omitempty"`
-	ResponseHeadersMs       uint32                 `protobuf:"varint,17,opt,name=response_headers_ms,json=responseHeadersMs,proto3" json:"response_headers_ms,omitempty"`
-	ResponseBodyMs          uint32                 `protobuf:"varint,18,opt,name=response_body_ms,json=responseBodyMs,proto3" json:"response_body_ms,omitempty"`
-	TimingBoundariesVersion uint32                 `protobuf:"varint,19,opt,name=timing_boundaries_version,json=timingBoundariesVersion,proto3" json:"timing_boundaries_version,omitempty"`
-	Disposition             string                 `protobuf:"bytes,20,opt,name=disposition,proto3" json:"disposition,omitempty"`
-	RemoteIpVerified        bool                   `protobuf:"varint,21,opt,name=remote_ip_verified,json=remoteIpVerified,proto3" json:"remote_ip_verified,omitempty"`
+	state                   protoimpl.MessageState         `protogen:"open.v1"`
+	OrchAddr                string                         `protobuf:"bytes,1,opt,name=orch_addr,json=orchAddr,proto3" json:"orch_addr,omitempty"`
+	OrchUrl                 string                         `protobuf:"bytes,2,opt,name=orch_url,json=orchUrl,proto3" json:"orch_url,omitempty"`
+	SessionId               string                         `protobuf:"bytes,3,opt,name=session_id,json=sessionId,proto3" json:"session_id,omitempty"`
+	ManifestIdHash          string                         `protobuf:"bytes,4,opt,name=manifest_id_hash,json=manifestIdHash,proto3" json:"manifest_id_hash,omitempty"`
+	SeqNo                   uint64                         `protobuf:"varint,5,opt,name=seq_no,json=seqNo,proto3" json:"seq_no,omitempty"`
+	Success                 bool                           `protobuf:"varint,6,opt,name=success,proto3" json:"success,omitempty"`
+	LatencyScore            float32                        `protobuf:"fixed32,7,opt,name=latency_score,json=latencyScore,proto3" json:"latency_score,omitempty"`
+	UploadMs                uint32                         `protobuf:"varint,8,opt,name=upload_ms,json=uploadMs,proto3" json:"upload_ms,omitempty"`
+	TranscodeMs             uint32                         `protobuf:"varint,9,opt,name=transcode_ms,json=transcodeMs,proto3" json:"transcode_ms,omitempty"`
+	OverallMs               uint32                         `protobuf:"varint,10,opt,name=overall_ms,json=overallMs,proto3" json:"overall_ms,omitempty"`
+	Pixels                  uint64                         `protobuf:"varint,11,opt,name=pixels,proto3" json:"pixels,omitempty"`
+	Profiles                []string                       `protobuf:"bytes,12,rep,name=profiles,proto3" json:"profiles,omitempty"`
+	ErrorCode               string                         `protobuf:"bytes,13,opt,name=error_code,json=errorCode,proto3" json:"error_code,omitempty"`
+	ErrorKind               string                         `protobuf:"bytes,14,opt,name=error_kind,json=errorKind,proto3" json:"error_kind,omitempty"`
+	ResolvedIp              string                         `protobuf:"bytes,15,opt,name=resolved_ip,json=resolvedIp,proto3" json:"resolved_ip,omitempty"`
+	SourceDurationMs        uint32                         `protobuf:"varint,16,opt,name=source_duration_ms,json=sourceDurationMs,proto3" json:"source_duration_ms,omitempty"`
+	ResponseHeadersMs       uint32                         `protobuf:"varint,17,opt,name=response_headers_ms,json=responseHeadersMs,proto3" json:"response_headers_ms,omitempty"`
+	ResponseBodyMs          uint32                         `protobuf:"varint,18,opt,name=response_body_ms,json=responseBodyMs,proto3" json:"response_body_ms,omitempty"`
+	TimingBoundariesVersion uint32                         `protobuf:"varint,19,opt,name=timing_boundaries_version,json=timingBoundariesVersion,proto3" json:"timing_boundaries_version,omitempty"`
+	Disposition             string                         `protobuf:"bytes,20,opt,name=disposition,proto3" json:"disposition,omitempty"`
+	RemoteIpVerified        bool                           `protobuf:"varint,21,opt,name=remote_ip_verified,json=remoteIpVerified,proto3" json:"remote_ip_verified,omitempty"`
+	Accounting              *OrchestratorAttemptAccounting `protobuf:"bytes,22,opt,name=accounting,proto3" json:"accounting,omitempty"`
 	unknownFields           protoimpl.UnknownFields
 	sizeCache               protoimpl.SizeCache
 }
@@ -22242,6 +22243,166 @@ func (x *OrchestratorTranscodeOutcome) GetRemoteIpVerified() bool {
 	return false
 }
 
+func (x *OrchestratorTranscodeOutcome) GetAccounting() *OrchestratorAttemptAccounting {
+	if x != nil {
+		return x.Accounting
+	}
+	return nil
+}
+
+// Exact amounts retain sub-wei fractions used by Livepeer session balances.
+type NetworkAmount struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Numerator     string                 `protobuf:"bytes,1,opt,name=numerator,proto3" json:"numerator,omitempty"`
+	Denominator   string                 `protobuf:"bytes,2,opt,name=denominator,proto3" json:"denominator,omitempty"`
+	Currency      string                 `protobuf:"bytes,3,opt,name=currency,proto3" json:"currency,omitempty"`
+	Unit          string                 `protobuf:"bytes,4,opt,name=unit,proto3" json:"unit,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *NetworkAmount) Reset() {
+	*x = NetworkAmount{}
+	mi := &file_ipc_proto_msgTypes[165]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *NetworkAmount) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*NetworkAmount) ProtoMessage() {}
+
+func (x *NetworkAmount) ProtoReflect() protoreflect.Message {
+	mi := &file_ipc_proto_msgTypes[165]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use NetworkAmount.ProtoReflect.Descriptor instead.
+func (*NetworkAmount) Descriptor() ([]byte, []int) {
+	return file_ipc_proto_rawDescGZIP(), []int{165}
+}
+
+func (x *NetworkAmount) GetNumerator() string {
+	if x != nil {
+		return x.Numerator
+	}
+	return ""
+}
+
+func (x *NetworkAmount) GetDenominator() string {
+	if x != nil {
+		return x.Denominator
+	}
+	return ""
+}
+
+func (x *NetworkAmount) GetCurrency() string {
+	if x != nil {
+		return x.Currency
+	}
+	return ""
+}
+
+func (x *NetworkAmount) GetUnit() string {
+	if x != nil {
+		return x.Unit
+	}
+	return ""
+}
+
+type OrchestratorAttemptAccounting struct {
+	state               protoimpl.MessageState `protogen:"open.v1"`
+	Version             uint32                 `protobuf:"varint,1,opt,name=version,proto3" json:"version,omitempty"`
+	RequestDispatched   bool                   `protobuf:"varint,2,opt,name=request_dispatched,json=requestDispatched,proto3" json:"request_dispatched,omitempty"`
+	ReturnedPixelsKnown bool                   `protobuf:"varint,3,opt,name=returned_pixels_known,json=returnedPixelsKnown,proto3" json:"returned_pixels_known,omitempty"`
+	ServiceCharge       *NetworkAmount         `protobuf:"bytes,4,opt,name=service_charge,json=serviceCharge,proto3" json:"service_charge,omitempty"`
+	TicketCreditSent    *NetworkAmount         `protobuf:"bytes,5,opt,name=ticket_credit_sent,json=ticketCreditSent,proto3" json:"ticket_credit_sent,omitempty"`
+	TicketsSent         uint64                 `protobuf:"varint,6,opt,name=tickets_sent,json=ticketsSent,proto3" json:"tickets_sent,omitempty"`
+	unknownFields       protoimpl.UnknownFields
+	sizeCache           protoimpl.SizeCache
+}
+
+func (x *OrchestratorAttemptAccounting) Reset() {
+	*x = OrchestratorAttemptAccounting{}
+	mi := &file_ipc_proto_msgTypes[166]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *OrchestratorAttemptAccounting) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*OrchestratorAttemptAccounting) ProtoMessage() {}
+
+func (x *OrchestratorAttemptAccounting) ProtoReflect() protoreflect.Message {
+	mi := &file_ipc_proto_msgTypes[166]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use OrchestratorAttemptAccounting.ProtoReflect.Descriptor instead.
+func (*OrchestratorAttemptAccounting) Descriptor() ([]byte, []int) {
+	return file_ipc_proto_rawDescGZIP(), []int{166}
+}
+
+func (x *OrchestratorAttemptAccounting) GetVersion() uint32 {
+	if x != nil {
+		return x.Version
+	}
+	return 0
+}
+
+func (x *OrchestratorAttemptAccounting) GetRequestDispatched() bool {
+	if x != nil {
+		return x.RequestDispatched
+	}
+	return false
+}
+
+func (x *OrchestratorAttemptAccounting) GetReturnedPixelsKnown() bool {
+	if x != nil {
+		return x.ReturnedPixelsKnown
+	}
+	return false
+}
+
+func (x *OrchestratorAttemptAccounting) GetServiceCharge() *NetworkAmount {
+	if x != nil {
+		return x.ServiceCharge
+	}
+	return nil
+}
+
+func (x *OrchestratorAttemptAccounting) GetTicketCreditSent() *NetworkAmount {
+	if x != nil {
+		return x.TicketCreditSent
+	}
+	return nil
+}
+
+func (x *OrchestratorAttemptAccounting) GetTicketsSent() uint64 {
+	if x != nil {
+		return x.TicketsSent
+	}
+	return 0
+}
+
 // Per-AI-job outcome. Same shape as transcode but for AI pipelines, kept
 // separate because pricing meters and consumers differ — AI billing is in
 // pilot and tracked under the processing meter contract, not delivered minutes.
@@ -22265,7 +22426,7 @@ type OrchestratorAIOutcome struct {
 
 func (x *OrchestratorAIOutcome) Reset() {
 	*x = OrchestratorAIOutcome{}
-	mi := &file_ipc_proto_msgTypes[165]
+	mi := &file_ipc_proto_msgTypes[167]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -22277,7 +22438,7 @@ func (x *OrchestratorAIOutcome) String() string {
 func (*OrchestratorAIOutcome) ProtoMessage() {}
 
 func (x *OrchestratorAIOutcome) ProtoReflect() protoreflect.Message {
-	mi := &file_ipc_proto_msgTypes[165]
+	mi := &file_ipc_proto_msgTypes[167]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -22290,7 +22451,7 @@ func (x *OrchestratorAIOutcome) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use OrchestratorAIOutcome.ProtoReflect.Descriptor instead.
 func (*OrchestratorAIOutcome) Descriptor() ([]byte, []int) {
-	return file_ipc_proto_rawDescGZIP(), []int{165}
+	return file_ipc_proto_rawDescGZIP(), []int{167}
 }
 
 func (x *OrchestratorAIOutcome) GetOrchAddr() string {
@@ -22397,7 +22558,7 @@ type OrchestratorCandidateDecision struct {
 
 func (x *OrchestratorCandidateDecision) Reset() {
 	*x = OrchestratorCandidateDecision{}
-	mi := &file_ipc_proto_msgTypes[166]
+	mi := &file_ipc_proto_msgTypes[168]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -22409,7 +22570,7 @@ func (x *OrchestratorCandidateDecision) String() string {
 func (*OrchestratorCandidateDecision) ProtoMessage() {}
 
 func (x *OrchestratorCandidateDecision) ProtoReflect() protoreflect.Message {
-	mi := &file_ipc_proto_msgTypes[166]
+	mi := &file_ipc_proto_msgTypes[168]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -22422,7 +22583,7 @@ func (x *OrchestratorCandidateDecision) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use OrchestratorCandidateDecision.ProtoReflect.Descriptor instead.
 func (*OrchestratorCandidateDecision) Descriptor() ([]byte, []int) {
-	return file_ipc_proto_rawDescGZIP(), []int{166}
+	return file_ipc_proto_rawDescGZIP(), []int{168}
 }
 
 func (x *OrchestratorCandidateDecision) GetOrchAddr() string {
@@ -22504,31 +22665,34 @@ func (x *OrchestratorCandidateDecision) GetRuleVersion() string {
 
 // Final logical-segment outcome separates retries from usable delivered results.
 type OrchestratorSegmentResult struct {
-	state              protoimpl.MessageState `protogen:"open.v1"`
-	OrchAddr           string                 `protobuf:"bytes,1,opt,name=orch_addr,json=orchAddr,proto3" json:"orch_addr,omitempty"`
-	OrchUrl            string                 `protobuf:"bytes,2,opt,name=orch_url,json=orchUrl,proto3" json:"orch_url,omitempty"`
-	ResolvedIp         string                 `protobuf:"bytes,3,opt,name=resolved_ip,json=resolvedIp,proto3" json:"resolved_ip,omitempty"`
-	SessionId          string                 `protobuf:"bytes,4,opt,name=session_id,json=sessionId,proto3" json:"session_id,omitempty"`
-	ManifestIdHash     string                 `protobuf:"bytes,5,opt,name=manifest_id_hash,json=manifestIdHash,proto3" json:"manifest_id_hash,omitempty"`
-	SeqNo              uint64                 `protobuf:"varint,6,opt,name=seq_no,json=seqNo,proto3" json:"seq_no,omitempty"`
-	SourceDurationMs   uint32                 `protobuf:"varint,7,opt,name=source_duration_ms,json=sourceDurationMs,proto3" json:"source_duration_ms,omitempty"`
-	OverallMs          uint32                 `protobuf:"varint,8,opt,name=overall_ms,json=overallMs,proto3" json:"overall_ms,omitempty"`
-	Attempts           uint32                 `protobuf:"varint,9,opt,name=attempts,proto3" json:"attempts,omitempty"`
-	FallbackCount      uint32                 `protobuf:"varint,10,opt,name=fallback_count,json=fallbackCount,proto3" json:"fallback_count,omitempty"`
-	Success            bool                   `protobuf:"varint,11,opt,name=success,proto3" json:"success,omitempty"`
-	DeadlineExceeded   bool                   `protobuf:"varint,12,opt,name=deadline_exceeded,json=deadlineExceeded,proto3" json:"deadline_exceeded,omitempty"`
-	ErrorKind          string                 `protobuf:"bytes,13,opt,name=error_kind,json=errorKind,proto3" json:"error_kind,omitempty"`
-	ReplacementSetupMs uint32                 `protobuf:"varint,14,opt,name=replacement_setup_ms,json=replacementSetupMs,proto3" json:"replacement_setup_ms,omitempty"`
-	DownstreamStatus   string                 `protobuf:"bytes,15,opt,name=downstream_status,json=downstreamStatus,proto3" json:"downstream_status,omitempty"` // unknown unless delivery evidence is available
-	Profiles           []string               `protobuf:"bytes,16,rep,name=profiles,proto3" json:"profiles,omitempty"`
-	DeliverySessionId  string                 `protobuf:"bytes,17,opt,name=delivery_session_id,json=deliverySessionId,proto3" json:"delivery_session_id,omitempty"` // private Mist/gateway protocol correlation
-	unknownFields      protoimpl.UnknownFields
-	sizeCache          protoimpl.SizeCache
+	state                 protoimpl.MessageState `protogen:"open.v1"`
+	OrchAddr              string                 `protobuf:"bytes,1,opt,name=orch_addr,json=orchAddr,proto3" json:"orch_addr,omitempty"`
+	OrchUrl               string                 `protobuf:"bytes,2,opt,name=orch_url,json=orchUrl,proto3" json:"orch_url,omitempty"`
+	ResolvedIp            string                 `protobuf:"bytes,3,opt,name=resolved_ip,json=resolvedIp,proto3" json:"resolved_ip,omitempty"`
+	SessionId             string                 `protobuf:"bytes,4,opt,name=session_id,json=sessionId,proto3" json:"session_id,omitempty"`
+	ManifestIdHash        string                 `protobuf:"bytes,5,opt,name=manifest_id_hash,json=manifestIdHash,proto3" json:"manifest_id_hash,omitempty"`
+	SeqNo                 uint64                 `protobuf:"varint,6,opt,name=seq_no,json=seqNo,proto3" json:"seq_no,omitempty"`
+	SourceDurationMs      uint32                 `protobuf:"varint,7,opt,name=source_duration_ms,json=sourceDurationMs,proto3" json:"source_duration_ms,omitempty"`
+	OverallMs             uint32                 `protobuf:"varint,8,opt,name=overall_ms,json=overallMs,proto3" json:"overall_ms,omitempty"`
+	Attempts              uint32                 `protobuf:"varint,9,opt,name=attempts,proto3" json:"attempts,omitempty"`
+	FallbackCount         uint32                 `protobuf:"varint,10,opt,name=fallback_count,json=fallbackCount,proto3" json:"fallback_count,omitempty"`
+	Success               bool                   `protobuf:"varint,11,opt,name=success,proto3" json:"success,omitempty"`
+	DeadlineExceeded      bool                   `protobuf:"varint,12,opt,name=deadline_exceeded,json=deadlineExceeded,proto3" json:"deadline_exceeded,omitempty"`
+	ErrorKind             string                 `protobuf:"bytes,13,opt,name=error_kind,json=errorKind,proto3" json:"error_kind,omitempty"`
+	ReplacementSetupMs    uint32                 `protobuf:"varint,14,opt,name=replacement_setup_ms,json=replacementSetupMs,proto3" json:"replacement_setup_ms,omitempty"`
+	DownstreamStatus      string                 `protobuf:"bytes,15,opt,name=downstream_status,json=downstreamStatus,proto3" json:"downstream_status,omitempty"` // unknown unless delivery evidence is available
+	Profiles              []string               `protobuf:"bytes,16,rep,name=profiles,proto3" json:"profiles,omitempty"`
+	DeliverySessionId     string                 `protobuf:"bytes,17,opt,name=delivery_session_id,json=deliverySessionId,proto3" json:"delivery_session_id,omitempty"` // private Mist/gateway protocol correlation
+	WorkAccountingVersion uint32                 `protobuf:"varint,18,opt,name=work_accounting_version,json=workAccountingVersion,proto3" json:"work_accounting_version,omitempty"`
+	AcceptedPixels        uint64                 `protobuf:"varint,19,opt,name=accepted_pixels,json=acceptedPixels,proto3" json:"accepted_pixels,omitempty"`
+	AcceptedRenditions    uint32                 `protobuf:"varint,20,opt,name=accepted_renditions,json=acceptedRenditions,proto3" json:"accepted_renditions,omitempty"`
+	unknownFields         protoimpl.UnknownFields
+	sizeCache             protoimpl.SizeCache
 }
 
 func (x *OrchestratorSegmentResult) Reset() {
 	*x = OrchestratorSegmentResult{}
-	mi := &file_ipc_proto_msgTypes[167]
+	mi := &file_ipc_proto_msgTypes[169]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -22540,7 +22704,7 @@ func (x *OrchestratorSegmentResult) String() string {
 func (*OrchestratorSegmentResult) ProtoMessage() {}
 
 func (x *OrchestratorSegmentResult) ProtoReflect() protoreflect.Message {
-	mi := &file_ipc_proto_msgTypes[167]
+	mi := &file_ipc_proto_msgTypes[169]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -22553,7 +22717,7 @@ func (x *OrchestratorSegmentResult) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use OrchestratorSegmentResult.ProtoReflect.Descriptor instead.
 func (*OrchestratorSegmentResult) Descriptor() ([]byte, []int) {
-	return file_ipc_proto_rawDescGZIP(), []int{167}
+	return file_ipc_proto_rawDescGZIP(), []int{169}
 }
 
 func (x *OrchestratorSegmentResult) GetOrchAddr() string {
@@ -22675,6 +22839,27 @@ func (x *OrchestratorSegmentResult) GetDeliverySessionId() string {
 	return ""
 }
 
+func (x *OrchestratorSegmentResult) GetWorkAccountingVersion() uint32 {
+	if x != nil {
+		return x.WorkAccountingVersion
+	}
+	return 0
+}
+
+func (x *OrchestratorSegmentResult) GetAcceptedPixels() uint64 {
+	if x != nil {
+		return x.AcceptedPixels
+	}
+	return 0
+}
+
+func (x *OrchestratorSegmentResult) GetAcceptedRenditions() uint32 {
+	if x != nil {
+		return x.AcceptedRenditions
+	}
+	return 0
+}
+
 type OrchestratorObserverReport struct {
 	state          protoimpl.MessageState `protogen:"open.v1"`
 	ReportKind     string                 `protobuf:"bytes,1,opt,name=report_kind,json=reportKind,proto3" json:"report_kind,omitempty"` // heartbeat or dns_cycle
@@ -22691,7 +22876,7 @@ type OrchestratorObserverReport struct {
 
 func (x *OrchestratorObserverReport) Reset() {
 	*x = OrchestratorObserverReport{}
-	mi := &file_ipc_proto_msgTypes[168]
+	mi := &file_ipc_proto_msgTypes[170]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -22703,7 +22888,7 @@ func (x *OrchestratorObserverReport) String() string {
 func (*OrchestratorObserverReport) ProtoMessage() {}
 
 func (x *OrchestratorObserverReport) ProtoReflect() protoreflect.Message {
-	mi := &file_ipc_proto_msgTypes[168]
+	mi := &file_ipc_proto_msgTypes[170]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -22716,7 +22901,7 @@ func (x *OrchestratorObserverReport) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use OrchestratorObserverReport.ProtoReflect.Descriptor instead.
 func (*OrchestratorObserverReport) Descriptor() ([]byte, []int) {
-	return file_ipc_proto_rawDescGZIP(), []int{168}
+	return file_ipc_proto_rawDescGZIP(), []int{170}
 }
 
 func (x *OrchestratorObserverReport) GetReportKind() string {
@@ -22787,7 +22972,7 @@ type ThumbnailUploadResponse_PresignedUpload struct {
 
 func (x *ThumbnailUploadResponse_PresignedUpload) Reset() {
 	*x = ThumbnailUploadResponse_PresignedUpload{}
-	mi := &file_ipc_proto_msgTypes[177]
+	mi := &file_ipc_proto_msgTypes[179]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -22799,7 +22984,7 @@ func (x *ThumbnailUploadResponse_PresignedUpload) String() string {
 func (*ThumbnailUploadResponse_PresignedUpload) ProtoMessage() {}
 
 func (x *ThumbnailUploadResponse_PresignedUpload) ProtoReflect() protoreflect.Message {
-	mi := &file_ipc_proto_msgTypes[177]
+	mi := &file_ipc_proto_msgTypes[179]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -25626,7 +25811,7 @@ const file_ipc_proto_rawDesc = "" +
 	"capability\x12\x1a\n" +
 	"\bposition\x18\x02 \x01(\rR\bposition\x12$\n" +
 	"\x0eprice_per_unit\x18\x03 \x01(\x03R\fpricePerUnit\x12&\n" +
-	"\x0fpixels_per_unit\x18\x04 \x01(\x03R\rpixelsPerUnit\"\xfb\x05\n" +
+	"\x0fpixels_per_unit\x18\x04 \x01(\x03R\rpixelsPerUnit\"\xcb\x06\n" +
 	"\x1cOrchestratorTranscodeOutcome\x12\x1b\n" +
 	"\torch_addr\x18\x01 \x01(\tR\borchAddr\x12\x19\n" +
 	"\borch_url\x18\x02 \x01(\tR\aorchUrl\x12\x1d\n" +
@@ -25654,7 +25839,22 @@ const file_ipc_proto_rawDesc = "" +
 	"\x10response_body_ms\x18\x12 \x01(\rR\x0eresponseBodyMs\x12:\n" +
 	"\x19timing_boundaries_version\x18\x13 \x01(\rR\x17timingBoundariesVersion\x12 \n" +
 	"\vdisposition\x18\x14 \x01(\tR\vdisposition\x12,\n" +
-	"\x12remote_ip_verified\x18\x15 \x01(\bR\x10remoteIpVerified\"\x83\x03\n" +
+	"\x12remote_ip_verified\x18\x15 \x01(\bR\x10remoteIpVerified\x12N\n" +
+	"\n" +
+	"accounting\x18\x16 \x01(\v2..helmsmancontrol.OrchestratorAttemptAccountingR\n" +
+	"accounting\"\x7f\n" +
+	"\rNetworkAmount\x12\x1c\n" +
+	"\tnumerator\x18\x01 \x01(\tR\tnumerator\x12 \n" +
+	"\vdenominator\x18\x02 \x01(\tR\vdenominator\x12\x1a\n" +
+	"\bcurrency\x18\x03 \x01(\tR\bcurrency\x12\x12\n" +
+	"\x04unit\x18\x04 \x01(\tR\x04unit\"\xd4\x02\n" +
+	"\x1dOrchestratorAttemptAccounting\x12\x18\n" +
+	"\aversion\x18\x01 \x01(\rR\aversion\x12-\n" +
+	"\x12request_dispatched\x18\x02 \x01(\bR\x11requestDispatched\x122\n" +
+	"\x15returned_pixels_known\x18\x03 \x01(\bR\x13returnedPixelsKnown\x12E\n" +
+	"\x0eservice_charge\x18\x04 \x01(\v2\x1e.helmsmancontrol.NetworkAmountR\rserviceCharge\x12L\n" +
+	"\x12ticket_credit_sent\x18\x05 \x01(\v2\x1e.helmsmancontrol.NetworkAmountR\x10ticketCreditSent\x12!\n" +
+	"\ftickets_sent\x18\x06 \x01(\x04R\vticketsSent\"\x83\x03\n" +
 	"\x15OrchestratorAIOutcome\x12\x1b\n" +
 	"\torch_addr\x18\x01 \x01(\tR\borchAddr\x12\x19\n" +
 	"\borch_url\x18\x02 \x01(\tR\aorchUrl\x12\x1d\n" +
@@ -25688,7 +25888,7 @@ const file_ipc_proto_rawDesc = "" +
 	"elapsed_ms\x18\t \x01(\rR\telapsedMs\x12+\n" +
 	"\x11usable_candidates\x18\n" +
 	" \x01(\rR\x10usableCandidates\x12!\n" +
-	"\frule_version\x18\v \x01(\tR\vruleVersion\"\xf5\x04\n" +
+	"\frule_version\x18\v \x01(\tR\vruleVersion\"\x87\x06\n" +
 	"\x19OrchestratorSegmentResult\x12\x1b\n" +
 	"\torch_addr\x18\x01 \x01(\tR\borchAddr\x12\x19\n" +
 	"\borch_url\x18\x02 \x01(\tR\aorchUrl\x12\x1f\n" +
@@ -25711,7 +25911,10 @@ const file_ipc_proto_rawDesc = "" +
 	"\x14replacement_setup_ms\x18\x0e \x01(\rR\x12replacementSetupMs\x12+\n" +
 	"\x11downstream_status\x18\x0f \x01(\tR\x10downstreamStatus\x12\x1a\n" +
 	"\bprofiles\x18\x10 \x03(\tR\bprofiles\x12.\n" +
-	"\x13delivery_session_id\x18\x11 \x01(\tR\x11deliverySessionId\"\xa0\x02\n" +
+	"\x13delivery_session_id\x18\x11 \x01(\tR\x11deliverySessionId\x126\n" +
+	"\x17work_accounting_version\x18\x12 \x01(\rR\x15workAccountingVersion\x12'\n" +
+	"\x0faccepted_pixels\x18\x13 \x01(\x04R\x0eacceptedPixels\x12/\n" +
+	"\x13accepted_renditions\x18\x14 \x01(\rR\x12acceptedRenditions\"\xa0\x02\n" +
 	"\x1aOrchestratorObserverReport\x12\x1f\n" +
 	"\vreport_kind\x18\x01 \x01(\tR\n" +
 	"reportKind\x12\x1a\n" +
@@ -25831,7 +26034,7 @@ func file_ipc_proto_rawDescGZIP() []byte {
 }
 
 var file_ipc_proto_enumTypes = make([]protoimpl.EnumInfo, 23)
-var file_ipc_proto_msgTypes = make([]protoimpl.MessageInfo, 178)
+var file_ipc_proto_msgTypes = make([]protoimpl.MessageInfo, 180)
 var file_ipc_proto_goTypes = []any{
 	(ClusterRejectReason)(0),                        // 0: helmsmancontrol.ClusterRejectReason
 	(PlaybackGrantPolicyKind)(0),                    // 1: helmsmancontrol.PlaybackGrantPolicyKind
@@ -26021,29 +26224,31 @@ var file_ipc_proto_goTypes = []any{
 	(*OrchestratorStateUpdate)(nil),                 // 185: helmsmancontrol.OrchestratorStateUpdate
 	(*OrchestratorCapabilityPriceEntry)(nil),        // 186: helmsmancontrol.OrchestratorCapabilityPriceEntry
 	(*OrchestratorTranscodeOutcome)(nil),            // 187: helmsmancontrol.OrchestratorTranscodeOutcome
-	(*OrchestratorAIOutcome)(nil),                   // 188: helmsmancontrol.OrchestratorAIOutcome
-	(*OrchestratorCandidateDecision)(nil),           // 189: helmsmancontrol.OrchestratorCandidateDecision
-	(*OrchestratorSegmentResult)(nil),               // 190: helmsmancontrol.OrchestratorSegmentResult
-	(*OrchestratorObserverReport)(nil),              // 191: helmsmancontrol.OrchestratorObserverReport
-	nil,                                             // 192: helmsmancontrol.PlaybackGrantPolicy.RequiredClaimsJsonEntry
-	nil,                                             // 193: helmsmancontrol.FreezeRequest.SegmentUrlsEntry
-	nil,                                             // 194: helmsmancontrol.NodeLifecycleUpdate.StreamsEntry
-	nil,                                             // 195: helmsmancontrol.ProcessMeterQuantity.DimensionsEntry
-	nil,                                             // 196: helmsmancontrol.StreamProcess.ExtraEntry
-	nil,                                             // 197: helmsmancontrol.ConfigSeedApplyResult.BundleVersionsEntry
-	nil,                                             // 198: helmsmancontrol.ProcessingJobRequest.ParamsEntry
-	nil,                                             // 199: helmsmancontrol.ProcessingJobResult.OutputsEntry
-	(*ThumbnailUploadResponse_PresignedUpload)(nil), // 200: helmsmancontrol.ThumbnailUploadResponse.PresignedUpload
-	(*timestamppb.Timestamp)(nil),                   // 201: google.protobuf.Timestamp
-	(*common.SignupAttribution)(nil),                // 202: common.SignupAttribution
-	(*structpb.Struct)(nil),                         // 203: google.protobuf.Struct
-	(*common.EdgeTelemetryConfig)(nil),              // 204: common.EdgeTelemetryConfig
-	(*events.DomainEventBatch)(nil),                 // 205: frameworks.events.DomainEventBatch
-	(*emptypb.Empty)(nil),                           // 206: google.protobuf.Empty
-	(*events.PublishDomainEventsResponse)(nil),      // 207: frameworks.events.PublishDomainEventsResponse
+	(*NetworkAmount)(nil),                           // 188: helmsmancontrol.NetworkAmount
+	(*OrchestratorAttemptAccounting)(nil),           // 189: helmsmancontrol.OrchestratorAttemptAccounting
+	(*OrchestratorAIOutcome)(nil),                   // 190: helmsmancontrol.OrchestratorAIOutcome
+	(*OrchestratorCandidateDecision)(nil),           // 191: helmsmancontrol.OrchestratorCandidateDecision
+	(*OrchestratorSegmentResult)(nil),               // 192: helmsmancontrol.OrchestratorSegmentResult
+	(*OrchestratorObserverReport)(nil),              // 193: helmsmancontrol.OrchestratorObserverReport
+	nil,                                             // 194: helmsmancontrol.PlaybackGrantPolicy.RequiredClaimsJsonEntry
+	nil,                                             // 195: helmsmancontrol.FreezeRequest.SegmentUrlsEntry
+	nil,                                             // 196: helmsmancontrol.NodeLifecycleUpdate.StreamsEntry
+	nil,                                             // 197: helmsmancontrol.ProcessMeterQuantity.DimensionsEntry
+	nil,                                             // 198: helmsmancontrol.StreamProcess.ExtraEntry
+	nil,                                             // 199: helmsmancontrol.ConfigSeedApplyResult.BundleVersionsEntry
+	nil,                                             // 200: helmsmancontrol.ProcessingJobRequest.ParamsEntry
+	nil,                                             // 201: helmsmancontrol.ProcessingJobResult.OutputsEntry
+	(*ThumbnailUploadResponse_PresignedUpload)(nil), // 202: helmsmancontrol.ThumbnailUploadResponse.PresignedUpload
+	(*timestamppb.Timestamp)(nil),                   // 203: google.protobuf.Timestamp
+	(*common.SignupAttribution)(nil),                // 204: common.SignupAttribution
+	(*structpb.Struct)(nil),                         // 205: google.protobuf.Struct
+	(*common.EdgeTelemetryConfig)(nil),              // 206: common.EdgeTelemetryConfig
+	(*events.DomainEventBatch)(nil),                 // 207: frameworks.events.DomainEventBatch
+	(*emptypb.Empty)(nil),                           // 208: google.protobuf.Empty
+	(*events.PublishDomainEventsResponse)(nil),      // 209: frameworks.events.PublishDomainEventsResponse
 }
 var file_ipc_proto_depIdxs = []int32{
-	201, // 0: helmsmancontrol.ServiceEvent.timestamp:type_name -> google.protobuf.Timestamp
+	203, // 0: helmsmancontrol.ServiceEvent.timestamp:type_name -> google.protobuf.Timestamp
 	173, // 1: helmsmancontrol.ServiceEvent.api_request_batch:type_name -> helmsmancontrol.APIRequestBatch
 	25,  // 2: helmsmancontrol.ServiceEvent.auth_event:type_name -> helmsmancontrol.AuthEvent
 	26,  // 3: helmsmancontrol.ServiceEvent.tenant_event:type_name -> helmsmancontrol.TenantEvent
@@ -26055,13 +26260,13 @@ var file_ipc_proto_depIdxs = []int32{
 	31,  // 9: helmsmancontrol.ServiceEvent.artifact_event:type_name -> helmsmancontrol.ArtifactEvent
 	32,  // 10: helmsmancontrol.ServiceEvent.artifact_node_copy_event:type_name -> helmsmancontrol.ArtifactNodeCopyEvent
 	33,  // 11: helmsmancontrol.ServiceEvent.incident_event:type_name -> helmsmancontrol.IncidentEvent
-	202, // 12: helmsmancontrol.TenantEvent.attribution:type_name -> common.SignupAttribution
+	204, // 12: helmsmancontrol.TenantEvent.attribution:type_name -> common.SignupAttribution
 	0,   // 13: helmsmancontrol.ClusterEvent.reject_reason_code:type_name -> helmsmancontrol.ClusterRejectReason
-	203, // 14: helmsmancontrol.ClusterEvent.before_state:type_name -> google.protobuf.Struct
-	203, // 15: helmsmancontrol.ClusterEvent.after_state:type_name -> google.protobuf.Struct
+	205, // 14: helmsmancontrol.ClusterEvent.before_state:type_name -> google.protobuf.Struct
+	205, // 15: helmsmancontrol.ClusterEvent.after_state:type_name -> google.protobuf.Struct
 	11,  // 16: helmsmancontrol.ArtifactEvent.artifact_type:type_name -> helmsmancontrol.ArtifactEvent.ArtifactType
 	12,  // 17: helmsmancontrol.ArtifactNodeCopyEvent.transition:type_name -> helmsmancontrol.ArtifactNodeCopyEvent.Transition
-	201, // 18: helmsmancontrol.ControlMessage.sent_at:type_name -> google.protobuf.Timestamp
+	203, // 18: helmsmancontrol.ControlMessage.sent_at:type_name -> google.protobuf.Timestamp
 	66,  // 19: helmsmancontrol.ControlMessage.register:type_name -> helmsmancontrol.Register
 	71,  // 20: helmsmancontrol.ControlMessage.error:type_name -> helmsmancontrol.ControlError
 	72,  // 21: helmsmancontrol.ControlMessage.heartbeat:type_name -> helmsmancontrol.Heartbeat
@@ -26136,20 +26341,20 @@ var file_ipc_proto_depIdxs = []int32{
 	35,  // 90: helmsmancontrol.ControlMessage.control_capabilities:type_name -> helmsmancontrol.ControlCapabilities
 	36,  // 91: helmsmancontrol.ControlMessage.durable_delivery_ack:type_name -> helmsmancontrol.DurableDeliveryAck
 	40,  // 92: helmsmancontrol.ApplyManagedStream.placement_admission:type_name -> helmsmancontrol.ManagedStreamAdmission
-	201, // 93: helmsmancontrol.ManagedStreamAdmission.issued_at:type_name -> google.protobuf.Timestamp
-	201, // 94: helmsmancontrol.ManagedStreamAdmission.expires_at:type_name -> google.protobuf.Timestamp
+	203, // 93: helmsmancontrol.ManagedStreamAdmission.issued_at:type_name -> google.protobuf.Timestamp
+	203, // 94: helmsmancontrol.ManagedStreamAdmission.expires_at:type_name -> google.protobuf.Timestamp
 	42,  // 95: helmsmancontrol.RetractManagedStream.placement_retraction:type_name -> helmsmancontrol.ManagedStreamRetraction
-	201, // 96: helmsmancontrol.ManagedStreamRetraction.issued_at:type_name -> google.protobuf.Timestamp
-	201, // 97: helmsmancontrol.ManagedStreamRetraction.expires_at:type_name -> google.protobuf.Timestamp
+	203, // 96: helmsmancontrol.ManagedStreamRetraction.issued_at:type_name -> google.protobuf.Timestamp
+	203, // 97: helmsmancontrol.ManagedStreamRetraction.expires_at:type_name -> google.protobuf.Timestamp
 	9,   // 98: helmsmancontrol.ModeChangeRequest.requested_mode:type_name -> helmsmancontrol.NodeOperationalMode
 	47,  // 99: helmsmancontrol.DesiredStateUpdate.components:type_name -> helmsmancontrol.DesiredComponent
-	201, // 100: helmsmancontrol.DesiredStateUpdate.cordon_token_expires_at:type_name -> google.protobuf.Timestamp
+	203, // 100: helmsmancontrol.DesiredStateUpdate.cordon_token_expires_at:type_name -> google.protobuf.Timestamp
 	49,  // 101: helmsmancontrol.UpdateApplyResult.components:type_name -> helmsmancontrol.ComponentApplyResult
 	54,  // 102: helmsmancontrol.PlaybackGrant.policy:type_name -> helmsmancontrol.PlaybackGrantPolicy
-	201, // 103: helmsmancontrol.PlaybackGrant.valid_until:type_name -> google.protobuf.Timestamp
+	203, // 103: helmsmancontrol.PlaybackGrant.valid_until:type_name -> google.protobuf.Timestamp
 	1,   // 104: helmsmancontrol.PlaybackGrantPolicy.kind:type_name -> helmsmancontrol.PlaybackGrantPolicyKind
 	55,  // 105: helmsmancontrol.PlaybackGrantPolicy.active_keys:type_name -> helmsmancontrol.PlaybackGrantKey
-	192, // 106: helmsmancontrol.PlaybackGrantPolicy.required_claims_json:type_name -> helmsmancontrol.PlaybackGrantPolicy.RequiredClaimsJsonEntry
+	194, // 106: helmsmancontrol.PlaybackGrantPolicy.required_claims_json:type_name -> helmsmancontrol.PlaybackGrantPolicy.RequiredClaimsJsonEntry
 	53,  // 107: helmsmancontrol.PlaybackGrantResponse.grant:type_name -> helmsmancontrol.PlaybackGrant
 	59,  // 108: helmsmancontrol.ActivatePushTargets.targets:type_name -> helmsmancontrol.PushTargetSpec
 	63,  // 109: helmsmancontrol.DeactivatePushTargetsResult.targets:type_name -> helmsmancontrol.PushTargetConvergence
@@ -26160,7 +26365,7 @@ var file_ipc_proto_depIdxs = []int32{
 	69,  // 114: helmsmancontrol.Register.fingerprint:type_name -> helmsmancontrol.NodeFingerprint
 	9,   // 115: helmsmancontrol.Register.requested_mode:type_name -> helmsmancontrol.NodeOperationalMode
 	68,  // 116: helmsmancontrol.Register.applied_managed_streams:type_name -> helmsmancontrol.AppliedManagedStream
-	201, // 117: helmsmancontrol.Register.node_identity_proof_issued_at:type_name -> google.protobuf.Timestamp
+	203, // 117: helmsmancontrol.Register.node_identity_proof_issued_at:type_name -> google.protobuf.Timestamp
 	67,  // 118: helmsmancontrol.Register.live_ingest_generations:type_name -> helmsmancontrol.LiveIngestGeneration
 	40,  // 119: helmsmancontrol.AppliedManagedStream.placement_admission:type_name -> helmsmancontrol.ManagedStreamAdmission
 	13,  // 120: helmsmancontrol.ClipPullRequest.source_kind:type_name -> helmsmancontrol.ClipPullRequest.SourceKind
@@ -26208,7 +26413,7 @@ var file_ipc_proto_depIdxs = []int32{
 	82,  // 162: helmsmancontrol.DVRStartRequest.config:type_name -> helmsmancontrol.DVRConfig
 	103, // 163: helmsmancontrol.RetryDVRSegmentUpload.segments:type_name -> helmsmancontrol.DVRSegmentRef
 	103, // 164: helmsmancontrol.RestoreLocalSegmentIndexResponse.segments:type_name -> helmsmancontrol.DVRSegmentRef
-	193, // 165: helmsmancontrol.FreezeRequest.segment_urls:type_name -> helmsmancontrol.FreezeRequest.SegmentUrlsEntry
+	195, // 165: helmsmancontrol.FreezeRequest.segment_urls:type_name -> helmsmancontrol.FreezeRequest.SegmentUrlsEntry
 	14,  // 166: helmsmancontrol.RelayResolveRequest.hint:type_name -> helmsmancontrol.RelayResolveRequest.RelayHint
 	8,   // 167: helmsmancontrol.RelayResolveResponse.state:type_name -> helmsmancontrol.AssetState
 	15,  // 168: helmsmancontrol.RelayResolveResponse.policy_hint:type_name -> helmsmancontrol.RelayResolveResponse.CacheDecisionHint
@@ -26236,7 +26441,7 @@ var file_ipc_proto_depIdxs = []int32{
 	147, // 190: helmsmancontrol.NodeLifecycleUpdate.capabilities:type_name -> helmsmancontrol.NodeCapabilities
 	151, // 191: helmsmancontrol.NodeLifecycleUpdate.storage:type_name -> helmsmancontrol.StorageInfo
 	153, // 192: helmsmancontrol.NodeLifecycleUpdate.limits:type_name -> helmsmancontrol.NodeLimits
-	194, // 193: helmsmancontrol.NodeLifecycleUpdate.streams:type_name -> helmsmancontrol.NodeLifecycleUpdate.StreamsEntry
+	196, // 193: helmsmancontrol.NodeLifecycleUpdate.streams:type_name -> helmsmancontrol.NodeLifecycleUpdate.StreamsEntry
 	156, // 194: helmsmancontrol.NodeLifecycleUpdate.artifacts:type_name -> helmsmancontrol.StoredArtifact
 	46,  // 195: helmsmancontrol.NodeLifecycleUpdate.component_versions:type_name -> helmsmancontrol.EdgeComponentVersion
 	9,   // 196: helmsmancontrol.NodeLifecycleUpdate.operational_mode:type_name -> helmsmancontrol.NodeOperationalMode
@@ -26250,12 +26455,12 @@ var file_ipc_proto_depIdxs = []int32{
 	127, // 204: helmsmancontrol.VodLifecycleData.processing_speed:type_name -> helmsmancontrol.ProcessingSpeedStats
 	21,  // 205: helmsmancontrol.MessageLifecycleData.event_type:type_name -> helmsmancontrol.MessageLifecycleData.EventType
 	10,  // 206: helmsmancontrol.FederationEventData.event_type:type_name -> helmsmancontrol.FederationEventType
-	195, // 207: helmsmancontrol.ProcessMeterQuantity.dimensions:type_name -> helmsmancontrol.ProcessMeterQuantity.DimensionsEntry
+	197, // 207: helmsmancontrol.ProcessMeterQuantity.dimensions:type_name -> helmsmancontrol.ProcessMeterQuantity.DimensionsEntry
 	149, // 208: helmsmancontrol.ProcessBillingEvent.meter_quantities:type_name -> helmsmancontrol.ProcessMeterQuantity
 	152, // 209: helmsmancontrol.NodeLimits.processing_classes:type_name -> helmsmancontrol.ProcessingClassCapacity
 	11,  // 210: helmsmancontrol.StoredArtifact.artifact_type:type_name -> helmsmancontrol.ArtifactEvent.ArtifactType
 	22,  // 211: helmsmancontrol.StoredArtifact.role:type_name -> helmsmancontrol.StoredArtifact.Role
-	196, // 212: helmsmancontrol.StreamProcess.extra:type_name -> helmsmancontrol.StreamProcess.ExtraEntry
+	198, // 212: helmsmancontrol.StreamProcess.extra:type_name -> helmsmancontrol.StreamProcess.ExtraEntry
 	157, // 213: helmsmancontrol.StreamDef.processes:type_name -> helmsmancontrol.StreamProcess
 	158, // 214: helmsmancontrol.StreamTemplate.def:type_name -> helmsmancontrol.StreamDef
 	159, // 215: helmsmancontrol.ConfigSeed.templates:type_name -> helmsmancontrol.StreamTemplate
@@ -26263,47 +26468,50 @@ var file_ipc_proto_depIdxs = []int32{
 	9,   // 217: helmsmancontrol.ConfigSeed.operational_mode:type_name -> helmsmancontrol.NodeOperationalMode
 	160, // 218: helmsmancontrol.ConfigSeed.tls:type_name -> helmsmancontrol.TLSCertBundle
 	164, // 219: helmsmancontrol.ConfigSeed.site:type_name -> helmsmancontrol.SiteConfig
-	204, // 220: helmsmancontrol.ConfigSeed.telemetry:type_name -> common.EdgeTelemetryConfig
+	206, // 220: helmsmancontrol.ConfigSeed.telemetry:type_name -> common.EdgeTelemetryConfig
 	160, // 221: helmsmancontrol.ConfigSeed.tls_bundles:type_name -> helmsmancontrol.TLSCertBundle
-	201, // 222: helmsmancontrol.ConfigSeedApplyResult.applied_at:type_name -> google.protobuf.Timestamp
-	197, // 223: helmsmancontrol.ConfigSeedApplyResult.bundle_versions:type_name -> helmsmancontrol.ConfigSeedApplyResult.BundleVersionsEntry
+	203, // 222: helmsmancontrol.ConfigSeedApplyResult.applied_at:type_name -> google.protobuf.Timestamp
+	199, // 223: helmsmancontrol.ConfigSeedApplyResult.bundle_versions:type_name -> helmsmancontrol.ConfigSeedApplyResult.BundleVersionsEntry
 	165, // 224: helmsmancontrol.TranscodeJobRequest.profiles:type_name -> helmsmancontrol.TranscodeProfile
-	198, // 225: helmsmancontrol.ProcessingJobRequest.params:type_name -> helmsmancontrol.ProcessingJobRequest.ParamsEntry
+	200, // 225: helmsmancontrol.ProcessingJobRequest.params:type_name -> helmsmancontrol.ProcessingJobRequest.ParamsEntry
 	170, // 226: helmsmancontrol.ProcessingJobRequest.source_segments:type_name -> helmsmancontrol.DVRChapterSegmentRef
-	199, // 227: helmsmancontrol.ProcessingJobResult.outputs:type_name -> helmsmancontrol.ProcessingJobResult.OutputsEntry
+	201, // 227: helmsmancontrol.ProcessingJobResult.outputs:type_name -> helmsmancontrol.ProcessingJobResult.OutputsEntry
 	155, // 228: helmsmancontrol.ProcessingJobResult.tracks:type_name -> helmsmancontrol.StreamTrack
 	174, // 229: helmsmancontrol.APIRequestBatch.aggregates:type_name -> helmsmancontrol.APIRequestAggregate
-	200, // 230: helmsmancontrol.ThumbnailUploadResponse.uploads:type_name -> helmsmancontrol.ThumbnailUploadResponse.PresignedUpload
-	201, // 231: helmsmancontrol.GatewayTelemetryEvent.timestamp:type_name -> google.protobuf.Timestamp
+	202, // 230: helmsmancontrol.ThumbnailUploadResponse.uploads:type_name -> helmsmancontrol.ThumbnailUploadResponse.PresignedUpload
+	203, // 231: helmsmancontrol.GatewayTelemetryEvent.timestamp:type_name -> google.protobuf.Timestamp
 	184, // 232: helmsmancontrol.GatewayTelemetryEvent.discovery:type_name -> helmsmancontrol.OrchestratorDiscoveryObserved
 	185, // 233: helmsmancontrol.GatewayTelemetryEvent.state:type_name -> helmsmancontrol.OrchestratorStateUpdate
 	187, // 234: helmsmancontrol.GatewayTelemetryEvent.transcode:type_name -> helmsmancontrol.OrchestratorTranscodeOutcome
-	188, // 235: helmsmancontrol.GatewayTelemetryEvent.ai:type_name -> helmsmancontrol.OrchestratorAIOutcome
-	189, // 236: helmsmancontrol.GatewayTelemetryEvent.decision:type_name -> helmsmancontrol.OrchestratorCandidateDecision
-	190, // 237: helmsmancontrol.GatewayTelemetryEvent.segment_result:type_name -> helmsmancontrol.OrchestratorSegmentResult
-	191, // 238: helmsmancontrol.GatewayTelemetryEvent.observer_report:type_name -> helmsmancontrol.OrchestratorObserverReport
-	201, // 239: helmsmancontrol.OrchestratorVantageGeo.geo_resolved_at:type_name -> google.protobuf.Timestamp
+	190, // 235: helmsmancontrol.GatewayTelemetryEvent.ai:type_name -> helmsmancontrol.OrchestratorAIOutcome
+	191, // 236: helmsmancontrol.GatewayTelemetryEvent.decision:type_name -> helmsmancontrol.OrchestratorCandidateDecision
+	192, // 237: helmsmancontrol.GatewayTelemetryEvent.segment_result:type_name -> helmsmancontrol.OrchestratorSegmentResult
+	193, // 238: helmsmancontrol.GatewayTelemetryEvent.observer_report:type_name -> helmsmancontrol.OrchestratorObserverReport
+	203, // 239: helmsmancontrol.OrchestratorVantageGeo.geo_resolved_at:type_name -> google.protobuf.Timestamp
 	183, // 240: helmsmancontrol.OrchestratorDiscoveryObserved.vantage:type_name -> helmsmancontrol.OrchestratorVantageGeo
 	183, // 241: helmsmancontrol.OrchestratorStateUpdate.vantage:type_name -> helmsmancontrol.OrchestratorVantageGeo
 	186, // 242: helmsmancontrol.OrchestratorStateUpdate.capability_price_entries:type_name -> helmsmancontrol.OrchestratorCapabilityPriceEntry
-	154, // 243: helmsmancontrol.NodeLifecycleUpdate.StreamsEntry.value:type_name -> helmsmancontrol.StreamData
-	34,  // 244: helmsmancontrol.HelmsmanControl.Connect:input_type -> helmsmancontrol.ControlMessage
-	79,  // 245: helmsmancontrol.HelmsmanControl.ResolveClipHash:input_type -> helmsmancontrol.ClipHashRequest
-	73,  // 246: helmsmancontrol.DecklogService.SendEvent:input_type -> helmsmancontrol.MistTrigger
-	24,  // 247: helmsmancontrol.DecklogService.SendServiceEvent:input_type -> helmsmancontrol.ServiceEvent
-	182, // 248: helmsmancontrol.DecklogService.SendGatewayTelemetry:input_type -> helmsmancontrol.GatewayTelemetryEvent
-	205, // 249: helmsmancontrol.DecklogService.PublishDomainEvents:input_type -> frameworks.events.DomainEventBatch
-	34,  // 250: helmsmancontrol.HelmsmanControl.Connect:output_type -> helmsmancontrol.ControlMessage
-	80,  // 251: helmsmancontrol.HelmsmanControl.ResolveClipHash:output_type -> helmsmancontrol.ClipHashResponse
-	206, // 252: helmsmancontrol.DecklogService.SendEvent:output_type -> google.protobuf.Empty
-	206, // 253: helmsmancontrol.DecklogService.SendServiceEvent:output_type -> google.protobuf.Empty
-	206, // 254: helmsmancontrol.DecklogService.SendGatewayTelemetry:output_type -> google.protobuf.Empty
-	207, // 255: helmsmancontrol.DecklogService.PublishDomainEvents:output_type -> frameworks.events.PublishDomainEventsResponse
-	250, // [250:256] is the sub-list for method output_type
-	244, // [244:250] is the sub-list for method input_type
-	244, // [244:244] is the sub-list for extension type_name
-	244, // [244:244] is the sub-list for extension extendee
-	0,   // [0:244] is the sub-list for field type_name
+	189, // 243: helmsmancontrol.OrchestratorTranscodeOutcome.accounting:type_name -> helmsmancontrol.OrchestratorAttemptAccounting
+	188, // 244: helmsmancontrol.OrchestratorAttemptAccounting.service_charge:type_name -> helmsmancontrol.NetworkAmount
+	188, // 245: helmsmancontrol.OrchestratorAttemptAccounting.ticket_credit_sent:type_name -> helmsmancontrol.NetworkAmount
+	154, // 246: helmsmancontrol.NodeLifecycleUpdate.StreamsEntry.value:type_name -> helmsmancontrol.StreamData
+	34,  // 247: helmsmancontrol.HelmsmanControl.Connect:input_type -> helmsmancontrol.ControlMessage
+	79,  // 248: helmsmancontrol.HelmsmanControl.ResolveClipHash:input_type -> helmsmancontrol.ClipHashRequest
+	73,  // 249: helmsmancontrol.DecklogService.SendEvent:input_type -> helmsmancontrol.MistTrigger
+	24,  // 250: helmsmancontrol.DecklogService.SendServiceEvent:input_type -> helmsmancontrol.ServiceEvent
+	182, // 251: helmsmancontrol.DecklogService.SendGatewayTelemetry:input_type -> helmsmancontrol.GatewayTelemetryEvent
+	207, // 252: helmsmancontrol.DecklogService.PublishDomainEvents:input_type -> frameworks.events.DomainEventBatch
+	34,  // 253: helmsmancontrol.HelmsmanControl.Connect:output_type -> helmsmancontrol.ControlMessage
+	80,  // 254: helmsmancontrol.HelmsmanControl.ResolveClipHash:output_type -> helmsmancontrol.ClipHashResponse
+	208, // 255: helmsmancontrol.DecklogService.SendEvent:output_type -> google.protobuf.Empty
+	208, // 256: helmsmancontrol.DecklogService.SendServiceEvent:output_type -> google.protobuf.Empty
+	208, // 257: helmsmancontrol.DecklogService.SendGatewayTelemetry:output_type -> google.protobuf.Empty
+	209, // 258: helmsmancontrol.DecklogService.PublishDomainEvents:output_type -> frameworks.events.PublishDomainEventsResponse
+	253, // [253:259] is the sub-list for method output_type
+	247, // [247:253] is the sub-list for method input_type
+	247, // [247:247] is the sub-list for extension type_name
+	247, // [247:247] is the sub-list for extension extendee
+	0,   // [0:247] is the sub-list for field type_name
 }
 
 func init() { file_ipc_proto_init() }
@@ -26489,7 +26697,7 @@ func file_ipc_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_ipc_proto_rawDesc), len(file_ipc_proto_rawDesc)),
 			NumEnums:      23,
-			NumMessages:   178,
+			NumMessages:   180,
 			NumExtensions: 0,
 			NumServices:   2,
 		},

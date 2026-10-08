@@ -1386,5 +1386,5 @@ func (c *GRPCClient) GetOrchestratorPerformanceSeries(ctx context.Context, tenan
 
 // GetNetworkObservations uses only the internal service credential; public HTTP callers cannot choose its tenant scope.
 func (c *GRPCClient) GetNetworkObservations(ctx context.Context, req *periscopepb.NetworkObservationsRequest) (*periscopepb.NetworkObservationsResponse, error) {
-	return periscopepb.NewNetworkObservationServiceClient(c.conn).GetNetworkObservations(withServiceAuth(ctx), req)
+	return periscopepb.NewNetworkObservationServiceClient(c.conn).GetNetworkObservations(withServiceAuth(ctx), req, grpc.MaxCallRecvMsgSize(16<<20))
 }

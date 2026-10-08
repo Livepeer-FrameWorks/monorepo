@@ -308,3 +308,36 @@ func TestRequireTenantID(t *testing.T) {
 		})
 	}
 }
+
+type networkProjectionSizeStub struct {
+	periscopepb.UnimplementedNetworkObservationServiceServer
+}
+
+func (*networkProjectionSizeStub) GetNetworkObservations(context.Context, *periscopepb.NetworkObservationsRequest) (*periscopepb.NetworkObservationsResponse, error) {
+	return &periscopepb.NetworkObservationsResponse{Json: []byte(strings.Repeat(" ", 6<<20))}, nil
+}
+
+func TestNetworkObservationsReceivesBoundedFullWindowProjection(t *testing.T) {
+	listener, err := (&net.ListenConfig{}).Listen(context.Background(), "tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := grpc.NewServer()
+	periscopepb.RegisterNetworkObservationServiceServer(server, &networkProjectionSizeStub{})
+	go func() { _ = server.Serve(listener) }()
+	t.Cleanup(func() { server.Stop(); _ = listener.Close() })
+	client, err := NewGRPCClient(GRPCConfig{GRPCAddr: listener.Addr().String(), Logger: logging.NewLogger(), ServiceToken: "network-projection-test", AllowInsecure: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = client.Close() })
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	response, err := client.GetNetworkObservations(ctx, &periscopepb.NetworkObservationsRequest{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(response.Json) != 6<<20 {
+		t.Fatalf("truncated full-window projection: %d", len(response.Json))
+	}
+}

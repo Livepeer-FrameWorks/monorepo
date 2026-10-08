@@ -31,5 +31,8 @@ func RebuildNetworkRollups(ctx context.Context, db NetworkRollupExecutor, tenant
  SELECT DISTINCT toStartOfInterval(timestamp,INTERVAL %d SECOND) FROM periscope.network_observations FINAL
  WHERE tenant_id=? AND provider='livepeer' AND network_id=? AND environment=? AND inserted_at>=? AND inserted_at<?)
  GROUP BY tenant_id,provider,network_id,environment,toStartOfInterval(timestamp,INTERVAL %d SECOND),kind,resource_id,resolved_ip,gateway_region,workload,profile_key`, interval, interval, interval, interval, interval, interval)
-	return db.Exec(ctx, query, tenant, network, environment, tenant, network, environment, since, through)
+	if err := db.Exec(ctx, query, tenant, network, environment, tenant, network, environment, since, through); err != nil {
+		return err
+	}
+	return rebuildNetworkWork(ctx, db, tenant, network, environment, since, through, interval)
 }

@@ -52,6 +52,7 @@ type Metric struct {
 	DeadlineExceeded  bool      `json:"deadline_exceeded"`
 	CadenceSeconds    uint32    `json:"cadence_seconds"`
 	Price             *Quote    `json:"price,omitempty"`
+	Work              *WorkFact `json:"work,omitempty"`
 }
 
 func ProfileKey(profiles []string) string {
@@ -82,6 +83,7 @@ type Cohort struct {
 	DeadlineMisses   uint64    `json:"deadline_misses"`
 }
 type History struct {
+	Work            *WorkHistory      `json:"work,omitempty"`
 	RolledUp        bool              `json:"rolled_up"`
 	Truncated       bool              `json:"truncated"`
 	Summaries       []Cohort          `json:"summaries"`

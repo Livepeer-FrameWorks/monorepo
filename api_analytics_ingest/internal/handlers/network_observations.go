@@ -97,6 +97,26 @@ func (h *AnalyticsHandler) processNetworkObservation(ctx context.Context, event 
 		m.ProfileKey = obs.ProfileKey(p.Profiles)
 		m.FailureKind = p.ErrorKind
 		m.Disposition = p.Disposition
+		if a := p.Accounting; a != nil && a.Version == 1 {
+			m.Work = &obs.WorkFact{Version: 1, RequestDispatched: a.RequestDispatched, ReturnedPixelsKnown: a.ReturnedPixelsKnown, ReturnedPixels: p.Pixels, TicketsSent: a.TicketsSent}
+			for _, pair := range []struct {
+				source *pb.NetworkAmount
+				target **obs.Amount
+			}{{a.ServiceCharge, &m.Work.ServiceCharge}, {a.TicketCreditSent, &m.Work.TicketCreditSent}} {
+				if pair.source == nil {
+					continue
+				}
+				amount := obs.Amount{Numerator: pair.source.Numerator, Denominator: pair.source.Denominator, Currency: pair.source.Currency, Unit: pair.source.Unit}
+				rat, amountErr := amount.Rat()
+				if amountErr != nil {
+					return fmt.Errorf("invalid network work amount: %w", amountErr)
+				}
+				if pair.source == a.ServiceCharge && len(rat.Num().String()) > 50 {
+					return fmt.Errorf("service charge outside aggregate precision")
+				}
+				*pair.target = obs.AmountFromRat(rat)
+			}
+		}
 		m.Qualifying = p.Disposition != "input_fault" && p.Disposition != "hedge_loser" && p.Disposition != "local_cancelled"
 		private["session_id"] = p.SessionId
 		private["manifest_id_hash"] = p.ManifestIdHash
@@ -128,6 +148,13 @@ func (h *AnalyticsHandler) processNetworkObservation(ctx context.Context, event 
 		m.FailureKind = p.ErrorKind
 		m.Qualifying = p.ErrorKind != "input_fault" && p.ErrorKind != "canceled" && p.ErrorKind != "local_cancelled"
 		m.ProfileKey = obs.ProfileKey(p.Profiles)
+		if p.WorkAccountingVersion == 1 {
+			m.Work = &obs.WorkFact{Version: 1}
+			if p.Success {
+				m.Work.AcceptedPixels = p.AcceptedPixels
+				m.Work.AcceptedRenditions = p.AcceptedRenditions
+			}
+		}
 		private["session_id"] = p.SessionId
 		private["manifest_id_hash"] = p.ManifestIdHash
 		private["seq_no"] = p.SeqNo

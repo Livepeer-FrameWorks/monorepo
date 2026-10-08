@@ -3566,6 +3566,24 @@ message OrchestratorTranscodeOutcome {
   uint32 timing_boundaries_version = 19;
   string disposition = 20;
   bool remote_ip_verified = 21;
+  OrchestratorAttemptAccounting accounting = 22;
+}
+
+// Exact amounts retain sub-wei fractions used by Livepeer session balances.
+message NetworkAmount {
+  string numerator = 1;
+  string denominator = 2;
+  string currency = 3;
+  string unit = 4;
+}
+
+message OrchestratorAttemptAccounting {
+  uint32 version = 1;
+  bool request_dispatched = 2;
+  bool returned_pixels_known = 3;
+  NetworkAmount service_charge = 4;
+  NetworkAmount ticket_credit_sent = 5;
+  uint64 tickets_sent = 6;
 }
 
 // Per-AI-job outcome. Same shape as transcode but for AI pipelines, kept
@@ -3620,6 +3638,9 @@ message OrchestratorSegmentResult {
   string downstream_status = 15; // unknown unless delivery evidence is available
   repeated string profiles = 16;
   string delivery_session_id = 17; // private Mist/gateway protocol correlation
+  uint32 work_accounting_version = 18;
+  uint64 accepted_pixels = 19;
+  uint32 accepted_renditions = 20;
 }
 
 message OrchestratorObserverReport {

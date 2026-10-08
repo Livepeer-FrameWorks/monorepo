@@ -109,6 +109,49 @@ observed, not seamless viewer delivery. Missing receipts remain unknown. This fe
 creates no Livepeer incidents, orchestrator contacts, emails or other notifications.
 Capacity errors do not establish an unpatched Nvidia driver.
 
+## Observed work and costs
+
+Versioned gateway accounting separates dispatched attempts, returned reported pixels,
+and final gateway-accepted segments. Dispatched source minutes include retries and
+hedges. Accepted source minutes count each final logical segment once against its
+selected orchestrator and socket; failed downloads and discarded responses do not
+contribute accepted minutes. Rendition minutes derive from source duration multiplied
+by the accepted rendition count, rather than independently measured output duration.
+These facts describe work observed through FrameWorks gateways, not the orchestrator's
+other customers, physical GPU utilization, or viewer delivery guarantees.
+
+Service charges use the actual submission session's price multiplied by the pixels
+returned for that attempt. They include charged results subsequently discarded or
+rejected during download. Expected ticket credit sent is a separate observation at
+the gateway's payment-submitted boundary, including non-success HTTP responses; an
+ambiguous transport failure does not establish that credit was sent. Neither quantity
+proves redeemed earnings. Values retain exact rational numerator/denominator strings
+in ETH/wei; no current-price repricing, historical USD conversion or earnings estimate
+is performed. Observations are assigned to windows by their completion timestamp.
+
+Raw records retain optional versioned accounting. Missing accounting, unknown charges
+and known zero charges stay distinct. The gateway's onchain ticket calculation uses a
+256-bit probability fraction, so credit numerators are retained as strings and grouped
+with their occurrence counts. Service-charge numerators have a bounded decimal
+representation and remain grouped by denominator. The query service adds the retained
+fractions using exact rational arithmetic.
+
+`history.work` supplies full-window summaries by identity, observed IP, region and
+profile independently of bounded chart samples. Consumers can sum sibling endpoints
+for identity totals. Counters that can exceed JavaScript integer precision are decimal
+strings. The shared dashboard uses integer arithmetic for aggregation and sorting.
+If more than 10,000 internal accounting groups are required, `work.truncated=true`
+returns no work summaries rather than incomplete money totals. Narrow the time window,
+resource or observer region to reduce the query. Older records without accounting are
+counted as unaccounted; they are not backfilled from advertised price quotes.
+
+Work snapshots use the same stable-ID deduplication, namespace lease and whole-bucket
+replacement as performance snapshots. Five-minute work snapshots retain 180 days and
+hourly work snapshots retain 730 days. Long-range work windows cover only whole hours
+contained in the requested interval, exposed separately in `work.start` and `work.end`.
+Snapshots refresh every five minutes; they are observation analytics, not a billing
+settlement ledger. Existing quote history retains its 30-day bound.
+
 ## Reliability and retention
 
 Gateways and probers assign stable IDs before enqueueing observations. Spools persist

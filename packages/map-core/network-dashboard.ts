@@ -6,6 +6,15 @@ import {
 } from "./index";
 import type { Map as MapLibreMap, GeoJSONSource } from "maplibre-gl";
 import { bindExplorerViewport, type ExplorerViewport } from "./network-explorer";
+import {
+  sumWork,
+  workMinutes,
+  workAmount,
+  compareWorkAmounts,
+  isPartialWork,
+  type WorkHistory,
+  type WorkSummary,
+} from "./network-work";
 
 type Location = {
   known: boolean;
@@ -81,6 +90,7 @@ type Response = {
     }>;
   };
   history: {
+    work?: WorkHistory;
     generated_at: string;
     start: string;
     end: string;
@@ -257,6 +267,15 @@ export function mountNetworkDashboard(container: HTMLElement, options: Options):
     layers.append(wrapper);
   }
   root.append(layers);
+  const workPanel = node("section", undefined, "detail work-accounting");
+  const workOrder = select("Work order", [
+    ["minutes", "Most accepted minutes"],
+    ["cost", "Highest service charges"],
+    ["attempts", "Most submitted attempts"],
+  ]);
+  workOrder.input.setAttribute("aria-label", "Sort orchestrator work");
+  workOrder.input.onchange = () => renderWork();
+  root.append(workPanel);
   const observationSites = node("details", undefined, "detail observation-sites");
   root.append(observationSites);
   const body = node("div", undefined, "body");
@@ -299,6 +318,7 @@ export function mountNetworkDashboard(container: HTMLElement, options: Options):
   const infrastructureController = new AbortController();
   const endpointHistory = new Map<string, Response["history"]>();
   const pendingHistory = new Set<string>();
+  const knownRegions = new Set<string>();
   function persist() {
     const query = new URLSearchParams(window.location.search);
     query.set("view", "livepeer");
@@ -353,6 +373,175 @@ export function mountNetworkDashboard(container: HTMLElement, options: Options):
         ? ((endpointHistory.get(historyKey(p.id)) ?? data?.history)?.summaries ?? [])
         : ((endpointHistory.get(historyKey(p.id)) ?? data?.history)?.cohorts ?? [])
     ).filter((c) => c.resource_id.toLowerCase() === p.resource.id.toLowerCase() && c.ip === p.ip);
+  function workSummaries(): WorkSummary[] {
+    const work = data?.history.work;
+    if (!work || work.truncated) return [];
+    return work.summaries.filter(
+      (entry) =>
+        (!regionChoice.input.value || entry.region === regionChoice.input.value) &&
+        (!profileChoice.input.value || entry.profile_key === profileChoice.input.value)
+    );
+  }
+  function appendWorkDetail(target: HTMLElement, title: string, total?: WorkSummary) {
+    target.append(node("h3", title));
+    if (!total) {
+      target.append(node("p", "No work accounting observations for this selection.", "muted"));
+      return;
+    }
+    const known = total.accounted_attempts > 0 || total.accepted_segments > 0;
+    const acceptedKnown = total.accepted_segments ? total.accepted_duration_samples > 0 : known;
+    const dispatchedKnown = total.dispatched_attempts
+      ? total.dispatched_duration_samples > 0
+      : known;
+    const outputKnown = total.accepted_segments ? total.accepted_output_samples > 0 : known;
+    target.append(
+      node(
+        "p",
+        `Accepted source minutes: ${acceptedKnown ? workMinutes(total.accepted_source_ms) : "Not accounted"} · accepted segments: ${total.accepted_segments} · duration samples: ${total.accepted_duration_samples}`
+      ),
+      node(
+        "p",
+        `Accepted rendition minutes: ${outputKnown && acceptedKnown ? workMinutes(total.accepted_rendition_ms) : "Not accounted"} · accepted output pixels: ${outputKnown ? total.accepted_pixels : "Not accounted"}`
+      ),
+      node(
+        "p",
+        `Submitted source minutes: ${dispatchedKnown ? workMinutes(total.dispatched_source_ms) : "Not accounted"} · submitted attempts: ${total.dispatched_attempts} · duration samples: ${total.dispatched_duration_samples}`
+      ),
+      node(
+        "p",
+        `Returned output pixels: ${total.returned_pixels} from ${total.returned_attempts} responses`
+      ),
+      node(
+        "p",
+        `Known service charges: ${workAmount(total.service_charge)} · priced responses: ${total.service_charge_samples}/${total.returned_attempts}`
+      ),
+      node(
+        "p",
+        `Expected ticket credit sent: ${workAmount(total.ticket_credit_sent)} · tickets: ${total.tickets_sent} · payment observations: ${total.ticket_credit_samples}`
+      ),
+      node(
+        "p",
+        "Accepted work is the final result accepted by the gateway. Submitted work includes retries and hedges. Service charges use execution-time session prices; ticket credit is separate and does not establish redeemed earnings.",
+        "muted"
+      )
+    );
+    if (isPartialWork(total))
+      target.append(
+        node(
+          "p",
+          `${total.unaccounted_samples} observations have no work accounting. Missing duration, output or pricing evidence makes these totals partial; missing amounts are unknown.`,
+          "muted"
+        )
+      );
+  }
+  function renderWork() {
+    workPanel.replaceChildren(node("h3", "Orchestrator work through FrameWorks"));
+    const work = data?.history.work;
+    if (!work || work.truncated) {
+      workPanel.append(
+        node(
+          "p",
+          work?.truncated
+            ? "Work totals exceed the query bound. Narrow the time window or observer region; partial totals are not shown."
+            : "Work accounting is unavailable for this response.",
+          "muted"
+        )
+      );
+      return;
+    }
+    workPanel.append(
+      node(
+        "p",
+        `Observed work from ${time(work.start)} to ${time(work.end)}${work.interval_seconds ? "; retained totals cover whole hours within the selected window" : ""}. Region and profile filters apply. This is FrameWorks traffic, not total Livepeer network activity.`,
+        "muted"
+      ),
+      workOrder.wrapper
+    );
+    const groups = new Map<string, WorkSummary[]>();
+    for (const entry of workSummaries()) {
+      const id = entry.resource_id.toLowerCase();
+      groups.set(id, [...(groups.get(id) ?? []), entry]);
+    }
+    const totals = [...groups.values()].map((group) => sumWork(group)!);
+    totals.sort((a, b) => {
+      if (workOrder.input.value === "cost")
+        return (
+          compareWorkAmounts(a.service_charge, b.service_charge) ||
+          a.resource_id.localeCompare(b.resource_id)
+        );
+      if (workOrder.input.value === "attempts")
+        return (
+          b.dispatched_attempts - a.dispatched_attempts ||
+          a.resource_id.localeCompare(b.resource_id)
+        );
+      const delta = BigInt(b.accepted_source_ms) - BigInt(a.accepted_source_ms);
+      return delta < 0n ? -1 : delta > 0n ? 1 : a.resource_id.localeCompare(b.resource_id);
+    });
+    if (!totals.length) {
+      workPanel.append(
+        node(
+          "p",
+          "No work observations in the selected window and cohorts. This does not establish zero orchestrator activity.",
+          "muted"
+        )
+      );
+      return;
+    }
+    const accepted = totals.reduce((sum, total) => sum + BigInt(total.accepted_source_ms), 0n);
+    const table = node("table"),
+      heading = node("tr"),
+      thead = node("thead"),
+      tbody = node("tbody");
+    table.setAttribute("aria-label", "Orchestrator workload totals");
+    for (const label of [
+      "Orchestrator",
+      "Accepted source minutes",
+      "Submitted source minutes",
+      "Returned output pixels",
+      "Known service charges",
+      "Share of observed accepted work",
+      "Coverage",
+    ])
+      heading.append(node("th", label));
+    thead.append(heading);
+    for (const total of totals) {
+      const row = node("tr"),
+        identity = node("td");
+      const endpoint = data!.inventory.endpoints.find(
+        (entry) => entry.resource.id.toLowerCase() === total.resource_id
+      );
+      if (endpoint) {
+        const button = node("button", total.resource_id);
+        button.type = "button";
+        button.onclick = () => pick(endpoint.id);
+        identity.append(button);
+      } else identity.append(node("code", total.resource_id || "Unattributed"));
+      row.append(identity);
+      const known = total.accounted_attempts > 0 || total.accepted_segments > 0;
+      const acceptedKnown = total.accepted_segments ? total.accepted_duration_samples > 0 : known;
+      const dispatchedKnown = total.dispatched_attempts
+        ? total.dispatched_duration_samples > 0
+        : known;
+      const hundredths =
+        accepted > 0n ? (BigInt(total.accepted_source_ms) * 10000n) / accepted : undefined;
+      for (const value of [
+        acceptedKnown ? workMinutes(total.accepted_source_ms) : "Not accounted",
+        dispatchedKnown ? workMinutes(total.dispatched_source_ms) : "Not accounted",
+        total.returned_attempts ? total.returned_pixels : "Not observed",
+        workAmount(total.service_charge),
+        hundredths === undefined
+          ? "Unknown"
+          : `${hundredths / 100n}.${String(hundredths % 100n).padStart(2, "0")}%`,
+        isPartialWork(total) ? "Partial accounting" : "Observed totals",
+      ])
+        row.append(node("td", value));
+      if (total.service_charge)
+        row.cells[4].title = `${total.service_charge.numerator}/${total.service_charge.denominator} wei; service charges, not redeemed earnings`;
+      tbody.append(row);
+    }
+    table.append(thead, tbody);
+    workPanel.append(table);
+  }
   function renderDetail(p: Endpoint) {
     detail.replaceChildren(
       node("h3", p.ip || "Unknown endpoint"),
@@ -384,6 +573,19 @@ export function mountNetworkDashboard(container: HTMLElement, options: Options):
       instances.append(button);
     }
     detail.append(instances);
+    const orchestratorWork = sumWork(
+      workSummaries().filter(
+        (entry) => entry.resource_id.toLowerCase() === p.resource.id.toLowerCase()
+      )
+    );
+    const endpointWork = sumWork(
+      workSummaries().filter(
+        (entry) =>
+          entry.resource_id.toLowerCase() === p.resource.id.toLowerCase() && entry.ip === p.ip
+      )
+    );
+    appendWorkDetail(detail, "This endpoint's work", endpointWork);
+    appendWorkDetail(detail, "Orchestrator work across all observed endpoints", orchestratorWork);
     const cohorts = endpointCohorts(p);
     const paths = new Set(cohorts.map((c) => `${c.region} | ${c.profile_key || "discovery"}`));
     detail.append(
@@ -735,8 +937,9 @@ export function mountNetworkDashboard(container: HTMLElement, options: Options):
       return left - right || identity(a, b);
     });
   }
-  function render() {
+  function render(loadSelectedHistory = true) {
     if (!data) return;
+    renderWork();
     const endpoints = orderedEndpoints();
     observationSites.replaceChildren(
       node(
@@ -867,7 +1070,11 @@ export function mountNetworkDashboard(container: HTMLElement, options: Options):
         list.append(node("p", `${r.id} · ${r.uri} · availability unknown`, "detail muted"));
     }
     if (!endpoints.length) list.append(node("p", "No endpoints discovered yet.", "detail muted"));
-    if (selected) pick(selected);
+    if (selected && loadSelectedHistory) pick(selected);
+    else if (selected) {
+      const endpoint = data.inventory.endpoints.find((entry) => entry.id === selected);
+      if (endpoint) renderDetail(endpoint);
+    }
     updateMap();
     message.textContent = `Updated ${time(data.inventory.generated_at)}. ${data.history_status === "unavailable" ? "History is temporarily unavailable; current inventory remains visible." : `History ${time(data.history.start)} – ${time(data.history.end)}. ${data.history.rolled_up ? "Hourly rollups refresh every five minutes. Discovery history expires after one year; workload history after two years." : "Comparison totals cover this window."} ${data.history.truncated ? "Returned cohorts and observation samples are truncated; select an endpoint to load its history." : ""}`}`;
   }
@@ -1078,14 +1285,23 @@ export function mountNetworkDashboard(container: HTMLElement, options: Options):
       if (!Array.isArray(next.inventory?.endpoints) || !Array.isArray(next.history?.cohorts))
         throw new Error("Invalid network response");
       data = next;
-      fillOptions(
-        regionChoice.input,
-        [...new Set(data.history.summaries.map((c) => c.region))].sort(),
-        "All regions"
-      );
+      for (const entry of [
+        ...data.history.summaries,
+        ...(data.history.work?.summaries ?? []),
+        ...(data.inventory.observers ?? []),
+      ])
+        if (entry.region) knownRegions.add(entry.region);
+      if (regionChoice.input.value) knownRegions.add(regionChoice.input.value);
+      fillOptions(regionChoice.input, [...knownRegions].sort(), "All regions");
       fillOptions(
         profileChoice.input,
-        [...new Set(data.history.summaries.map((c) => c.profile_key).filter(Boolean))].sort(),
+        [
+          ...new Set(
+            [...data.history.summaries, ...(data.history.work?.summaries ?? [])]
+              .map((c) => c.profile_key)
+              .filter(Boolean)
+          ),
+        ].sort(),
         "All profiles"
       );
       if (restoreFilters) {
@@ -1110,6 +1326,9 @@ export function mountNetworkDashboard(container: HTMLElement, options: Options):
   }
   function requestURL() {
     const api = new URL(options.apiURL, window.location.origin);
+    const region =
+      regionChoice.input.value || (restoreFilters ? initialQuery.get("lp_region") : "");
+    if (region) api.searchParams.set("region", region);
     const end = Date.now();
     api.searchParams.set("end", new Date(end).toISOString());
     api.searchParams.set(
@@ -1132,7 +1351,8 @@ export function mountNetworkDashboard(container: HTMLElement, options: Options):
   regionChoice.input.onchange = () => {
     endpointHistory.clear();
     persist();
-    render();
+    render(false);
+    void fetchData();
   };
   profileChoice.input.onchange = () => {
     persist();

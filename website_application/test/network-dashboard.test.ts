@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { mountNetworkDashboard } from "../../packages/map-core/network-dashboard";
+import { workFixture } from "./fixtures/network-work";
 
 const mapHarness = vi.hoisted(() => ({ module: undefined as object | undefined }));
 vi.mock("../../packages/map-core/index", () => ({
@@ -86,6 +87,106 @@ function mount(data: ReturnType<typeof fixture>) {
   return { container, fetch };
 }
 describe("shared network dashboard", () => {
+  it("does not present missing media duration as zero minutes", async () => {
+    const base = fixture();
+    const data = {
+      ...base,
+      history: {
+        ...base.history,
+        work: {
+          scope: "frameworks-gateways",
+          start: base.history.start,
+          end: base.history.end,
+          interval_seconds: 0,
+          truncated: false,
+          summaries: [
+            workFixture({
+              accepted_source_ms: "0",
+              dispatched_source_ms: "0",
+              accepted_duration_samples: 0,
+              dispatched_duration_samples: 0,
+            }),
+          ],
+        },
+      },
+    };
+    const { container } = mount(data);
+    await vi.waitFor(() =>
+      expect(
+        container.querySelector('[aria-label="Orchestrator workload totals"] tbody tr')
+      ).not.toBeNull()
+    );
+    const row = container.querySelector(
+      '[aria-label="Orchestrator workload totals"] tbody tr'
+    ) as HTMLTableRowElement;
+    expect(row.cells[1].textContent).toBe("Not accounted");
+    expect(row.cells[2].textContent).toBe("Not accounted");
+    expect(row.textContent).toContain("Partial accounting");
+  });
+  it("narrows the server-side work query when the observer region changes", async () => {
+    const base = fixture();
+    const data = {
+      ...base,
+      history: {
+        ...base.history,
+        work: {
+          scope: "frameworks-gateways",
+          start: base.history.start,
+          end: base.history.end,
+          interval_seconds: 0,
+          truncated: true,
+          summaries: [],
+        },
+      },
+    };
+    const { container, fetch } = mount(data);
+    await vi.waitFor(() => expect(container.querySelector("tbody button")).not.toBeNull());
+    const region = container.querySelectorAll("select")[1] as HTMLSelectElement;
+    region.value = "eu";
+    region.dispatchEvent(new Event("change"));
+    await vi.waitFor(() => expect(fetch).toHaveBeenCalledTimes(2));
+    expect((fetch.mock.calls[1][0] as URL).searchParams.get("region")).toBe("eu");
+  });
+  it("aggregates orchestrator work across sibling endpoints independently of truncated charts", async () => {
+    const base = fixture();
+    const data = {
+      ...base,
+      history: {
+        ...base.history,
+        work: {
+          scope: "frameworks-gateways",
+          start: base.history.start,
+          end: base.history.end,
+          interval_seconds: 0,
+          truncated: false,
+          summaries: [
+            workFixture(),
+            workFixture({ ip: "192.0.2.2", accepted_source_ms: "120000", unaccounted_samples: 3 }),
+          ],
+        },
+      },
+    };
+    const { container } = mount(data);
+    await vi.waitFor(() =>
+      expect(
+        container.querySelector('[aria-label="Orchestrator workload totals"] tbody tr')
+      ).not.toBeNull()
+    );
+    const row = container.querySelector('[aria-label="Orchestrator workload totals"] tbody tr')!;
+    expect(row.textContent).toContain("3.00");
+    expect(row.textContent).toContain("18014398509481986");
+    expect(row.textContent).toContain("Partial accounting");
+    (row.querySelector("button") as HTMLButtonElement).click();
+    await vi.waitFor(() =>
+      expect(container.querySelector("aside")?.textContent).toContain(
+        "Orchestrator work across all observed endpoints"
+      )
+    );
+    expect(container.querySelector("aside")?.textContent).toContain(
+      "Accepted source minutes: 3.00"
+    );
+    expect(container.querySelector("aside")?.textContent).toContain("redeemed earnings");
+  });
   it("ranks failures by qualifying outcomes rather than unrelated recorded events", async () => {
     const data = fixture();
     data.inventory.endpoints.push({
@@ -266,6 +367,7 @@ describe("shared network dashboard", () => {
     region.dispatchEvent(new Event("change"));
     expect(fetch).toHaveBeenCalledTimes(3);
     expect((fetch.mock.calls[2][0] as URL).searchParams.get("region")).toBe("us");
+    expect(container.querySelector("aside")?.textContent).not.toContain("eu / 720p");
   });
   it("restores a shared Livepeer view and switches presentation without refetching", async () => {
     window.history.replaceState(

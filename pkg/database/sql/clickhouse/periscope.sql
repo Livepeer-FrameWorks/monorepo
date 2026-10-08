@@ -4228,6 +4228,10 @@ CREATE TABLE IF NOT EXISTS network_observations (
  attempts UInt32, fallback_count UInt32, deadline_exceeded UInt8, cadence_seconds UInt32,
  price_numerator String, price_denominator String, currency LowCardinality(String), price_unit LowCardinality(String),
  public_data String, private_tenant_id UUID, private_data String,
+ accounting_version UInt32, request_dispatched UInt8, returned_pixels_known UInt8, returned_pixels UInt64,
+ accepted_pixels UInt64, accepted_renditions UInt32,
+ service_charge_known UInt8, service_charge_numerator Decimal256(0), service_charge_denominator String DEFAULT '1',
+ ticket_credit_known UInt8, ticket_credit_numerator String DEFAULT '0', ticket_credit_denominator String DEFAULT '1', tickets_sent UInt64,
  inserted_at DateTime64(3) DEFAULT now64(3)
 ) ENGINE = ReplicatedReplacingMergeTree(inserted_at)
 PARTITION BY toYYYYMM(timestamp)
@@ -4247,3 +4251,19 @@ CREATE TABLE IF NOT EXISTS network_observation_rollups (
 PARTITION BY toYYYYMM(bucket)
 ORDER BY (tenant_id,provider,network_id,environment,interval_seconds,bucket,kind,resource_id,resolved_ip,gateway_region,workload,profile_key)
 TTL bucket + toIntervalDay(multiIf(kind IN ('state','coverage'),30,interval_seconds=300,180,kind='discovery',365,730)) DELETE;
+CREATE TABLE IF NOT EXISTS network_work_rollups (
+ tenant_id UUID, provider LowCardinality(String), network_id LowCardinality(String), environment LowCardinality(String),
+ bucket DateTime, interval_seconds UInt32, resource_id String, resolved_ip String,
+ gateway_region LowCardinality(String), profile_key String,
+ service_charge_denominator String, ticket_credit_denominator String,
+ accounted_attempts UInt64, unaccounted_samples UInt64, dispatched_attempts UInt64,
+ dispatched_source_ms UInt64, returned_attempts UInt64, returned_pixels UInt64,
+ accepted_segments UInt64, accepted_source_ms UInt64, accepted_pixels UInt64, accepted_rendition_ms UInt64,
+ service_charge_samples UInt64, service_charge_numerator Decimal256(0),
+ ticket_credit_samples UInt64, ticket_credit_numerator String, tickets_sent UInt64,
+ dispatched_duration_samples UInt64, accepted_duration_samples UInt64, accepted_output_samples UInt64,
+ snapshot_version DateTime64(3)
+) ENGINE = ReplicatedReplacingMergeTree(snapshot_version)
+PARTITION BY toYYYYMM(bucket)
+ORDER BY (tenant_id,provider,network_id,environment,interval_seconds,bucket,resource_id,resolved_ip,gateway_region,profile_key,service_charge_denominator,ticket_credit_denominator,ticket_credit_numerator)
+TTL bucket + toIntervalDay(if(interval_seconds=300,180,730)) DELETE;

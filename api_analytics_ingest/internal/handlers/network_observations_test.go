@@ -75,3 +75,42 @@ func TestNetworkDiscoveryAdmissionDoesNotBecomeDowntime(t *testing.T) {
 		})
 	}
 }
+
+func TestNetworkAttemptPreservesExactWorkAccounting(t *testing.T) {
+	conn := newFakeClickhouseConn()
+	handler := NewAnalyticsHandler(conn, logging.NewLogger(), nil)
+	raw, err := protojson.Marshal(&pb.OrchestratorTranscodeOutcome{
+		OrchAddr: "0xABC", OrchUrl: "https://orch.example", ResolvedIp: "203.0.113.1", RemoteIpVerified: true,
+		Success: true, Pixels: 9007199254740993, SourceDurationMs: 2000, Disposition: "hedge_loser",
+		Accounting: &pb.OrchestratorAttemptAccounting{Version: 1, RequestDispatched: true, ReturnedPixelsKnown: true,
+			ServiceCharge:    &pb.NetworkAmount{Numerator: "2", Denominator: "3", Currency: "ETH", Unit: "wei"},
+			TicketCreditSent: &pb.NetworkAmount{Numerator: "0", Denominator: "1", Currency: "ETH", Unit: "wei"}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	data := map[string]any{}
+	if err := json.Unmarshal(raw, &data); err != nil {
+		t.Fatal(err)
+	}
+	data["cluster_owner_tenant_id"], data["stream_tenant_id"] = uuid.NewString(), uuid.NewString()
+	data["network_id"], data["environment"] = "42161", "staging"
+	data["producer_kind"], data["gateway_id"], data["gateway_region"] = "gateway", "private-gateway", "eu"
+	if err := handler.processNetworkObservation(context.Background(), kafka.AnalyticsEvent{EventID: uuid.NewString(), EventType: "orchestrator_transcode_outcome", SchemaVersion: 3, Timestamp: time.Now().UTC(), Data: data}); err != nil {
+		t.Fatal(err)
+	}
+	batch := conn.batches["network_observations"]
+	if batch == nil || !batch.sent || len(batch.rows) != 1 {
+		t.Fatal("attempt was not retained")
+	}
+	var metric obs.Metric
+	if err := json.Unmarshal([]byte(batch.rows[0][31].(string)), &metric); err != nil {
+		t.Fatal(err)
+	}
+	if metric.Work == nil || metric.Work.ReturnedPixels != 9007199254740993 || !metric.Work.RequestDispatched || metric.Work.ServiceCharge == nil || metric.Work.ServiceCharge.Numerator != "2" || metric.Work.ServiceCharge.Denominator != "3" || metric.Work.TicketCreditSent == nil {
+		t.Fatalf("exact returned work/charge/known zero credit lost: %+v", metric.Work)
+	}
+	if metric.Qualifying || metric.ObserverID != "" {
+		t.Fatal("hedged work changed qualification or exposed gateway identity")
+	}
+}
