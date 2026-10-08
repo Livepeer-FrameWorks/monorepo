@@ -178,12 +178,9 @@ func TestEdgeRolloutDrainsAroundRestartingApply(t *testing.T) {
 // --no-drain applies a restarting change in place: the only edge of a cluster
 // has nowhere to move its sessions, so a drain would wait out its deadline.
 func TestEdgeRolloutNoDrainAppliesRestartingChangeInPlace(t *testing.T) {
-	prev := edgeRolloutNoDrain
-	edgeRolloutNoDrain = true
-	t.Cleanup(func() { edgeRolloutNoDrain = prev })
 	log := &rolloutLog{}
 	restart, _ := liveNode(log, "restart", driftRestart)
-	results := runEdgeRollout(context.Background(), io.Discard, []edgeRolloutNode{restart}, 1, false)
+	results := runEdgeRolloutWith(context.Background(), io.Discard, []edgeRolloutNode{restart}, 1, false, true)
 
 	events := log.snapshot()
 	want := []string{"restart:inspect", "restart:apply"}

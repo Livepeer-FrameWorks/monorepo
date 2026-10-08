@@ -60,18 +60,20 @@ type edgeRolloutResult struct {
 	LeftDraining bool
 }
 
-// edgeRolloutNoDrain is set by `edge provision --no-drain`: a node whose apply
-// restarts media services is applied in place instead of drained first. The
-// only edge in a cluster can never drain, because its sessions have nowhere
-// else to go.
-var edgeRolloutNoDrain bool
-
 // runEdgeRollout plans and applies an `edge provision` run. The precheck
 // runs for every live node before anything is applied. Fresh nodes are
 // installed first, up to parallel at a time; live nodes that drifted are
 // then applied one at a time. dryRun prints each node's plan and diff and
 // changes nothing.
 func runEdgeRollout(ctx context.Context, w io.Writer, nodes []edgeRolloutNode, parallel int, dryRun bool) []edgeRolloutResult {
+	return runEdgeRolloutWith(ctx, w, nodes, parallel, dryRun, false)
+}
+
+// runEdgeRolloutWith is runEdgeRollout with `edge provision --no-drain`: when
+// noDrain is set, a node whose apply restarts media services is applied in
+// place instead of drained first. The only edge in a cluster can never drain,
+// because its sessions have nowhere else to go.
+func runEdgeRolloutWith(ctx context.Context, w io.Writer, nodes []edgeRolloutNode, parallel int, dryRun, noDrain bool) []edgeRolloutResult {
 	results := make([]edgeRolloutResult, len(nodes))
 	for i, n := range nodes {
 		results[i] = edgeRolloutResult{Name: n.Name}
@@ -134,7 +136,7 @@ func runEdgeRollout(ctx context.Context, w io.Writer, nodes []edgeRolloutNode, p
 
 	for _, i := range live {
 		n := nodes[i]
-		if results[i].Action == edgeActionDrainedApply && edgeRolloutNoDrain {
+		if results[i].Action == edgeActionDrainedApply && noDrain {
 			fmt.Fprintf(w, "\n[%s] Applying without draining (--no-drain); media services restart and live sessions on this node reconnect...\n", n.Name)
 			results[i].Err = n.Ops.Apply(ctx)
 			continue

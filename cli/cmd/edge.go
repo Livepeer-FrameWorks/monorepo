@@ -783,6 +783,7 @@ func newEdgeProvisionCmd() *cobra.Command {
 	var local bool
 	var ageKeyFile string
 	var dryRun bool
+	var noDrain bool
 	var telemetryURL string
 	var telemetryToken string
 	var capabilities []string
@@ -839,7 +840,7 @@ Multi-node manifest example:
 
 			// Check if using manifest mode
 			if manifestPath != "" {
-				return runEdgeProvisionFromManifest(cmd, cliCtx, manifestPath, clusterManifestPath, sshKey, enrollmentToken, parallel, timeout, mode, version, onnxProfile, ageKeyFile, dryRun, skipPreflight, forceReenroll)
+				return runEdgeProvisionFromManifest(cmd, cliCtx, manifestPath, clusterManifestPath, sshKey, enrollmentToken, parallel, timeout, mode, version, onnxProfile, ageKeyFile, dryRun, noDrain, skipPreflight, forceReenroll)
 			}
 
 			// Default --cluster-id from context. --foghorn-addr is intentionally
@@ -1097,7 +1098,7 @@ Multi-node manifest example:
 				runningMode = enrollment.Mode
 			}
 			node := newProvisionedEdgeNode(cmd.OutOrStdout(), nodeName, host, epConfig, sshTarget, sshKey, runningMode, enrollment != nil)
-			results := runEdgeRollout(cmd.Context(), cmd.OutOrStdout(), []edgeRolloutNode{node}, 1, dryRun)
+			results := runEdgeRolloutWith(cmd.Context(), cmd.OutOrStdout(), []edgeRolloutNode{node}, 1, dryRun, noDrain)
 			if err := summarizeEdgeRollout(cmd.OutOrStdout(), results, dryRun); err != nil {
 				return err
 			}
@@ -1143,7 +1144,7 @@ Multi-node manifest example:
 	cmd.Flags().BoolVar(&local, "local", false, "Provision this machine as a user LaunchAgent (no admin required, macOS only)")
 	cmd.Flags().StringVar(&ageKeyFile, "age-key", "", "Path to age private key for SOPS-encrypted host files (default: $SOPS_AGE_KEY_FILE)")
 	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "Check every node in Ansible check mode and print its plan and diff; change nothing")
-	cmd.Flags().BoolVar(&edgeRolloutNoDrain, "no-drain", false, "Apply a change that restarts media services without draining the node first; its live sessions reconnect")
+	cmd.Flags().BoolVar(&noDrain, "no-drain", false, "Apply a change that restarts media services without draining the node first; its live sessions reconnect")
 	cmd.Flags().StringSliceVar(&capabilities, "capability", nil, "Edge capability to enable (repeatable: ingest, edge, storage, processing)")
 	cmd.Flags().IntVar(&bandwidthMbps, "bandwidth-mbps", 0, "Advertised edge bandwidth limit in Mbps")
 	cmd.Flags().IntVar(&maxTranscodes, "max-transcodes", 0, "Maximum local transcodes for Helmsman to report")
@@ -1153,7 +1154,7 @@ Multi-node manifest example:
 }
 
 // runEdgeProvisionFromManifest provisions multiple edge nodes from a manifest file
-func runEdgeProvisionFromManifest(cmd *cobra.Command, cliCtx fwcfg.Context, manifestPath, clusterManifestOverride, defaultSSHKey, enrollmentToken string, parallel int, timeout time.Duration, cliMode, cliVersion, cliONNXProfile, ageKeyFile string, dryRun, skipPreflight, forceReenroll bool) error {
+func runEdgeProvisionFromManifest(cmd *cobra.Command, cliCtx fwcfg.Context, manifestPath, clusterManifestOverride, defaultSSHKey, enrollmentToken string, parallel int, timeout time.Duration, cliMode, cliVersion, cliONNXProfile, ageKeyFile string, dryRun, noDrain, skipPreflight, forceReenroll bool) error {
 	// Load manifest (with host inventory merge if hosts_file is set)
 	manifest, err := inventory.LoadEdgeWithHosts(manifestPath, ageKeyFile)
 	if err != nil {
@@ -1279,7 +1280,7 @@ func runEdgeProvisionFromManifest(cmd *cobra.Command, cliCtx fwcfg.Context, mani
 		nodes = append(nodes, node)
 	}
 
-	results := runEdgeRollout(cmd.Context(), cmd.OutOrStdout(), nodes, parallel, dryRun)
+	results := runEdgeRolloutWith(cmd.Context(), cmd.OutOrStdout(), nodes, parallel, dryRun, noDrain)
 	return summarizeEdgeRollout(cmd.OutOrStdout(), append(results, prepareFailures...), dryRun)
 }
 
