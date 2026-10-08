@@ -82,6 +82,33 @@ func TestRedisNamedInstancesLogToJournald(t *testing.T) {
 	}
 }
 
+// A restarted server listens while it loads its dataset or resyncs and answers
+// PING with LOADING until then, so validation must wait for PONG instead of
+// failing on the first reply, and must show the reply when it gives up. The
+// password therefore travels in REDISCLI_AUTH, not argv, so the result needs
+// no no_log.
+func TestRedisValidatePingWaitsForPongAndShowsTheReply(t *testing.T) {
+	validate := readRedisRepoFile(t, "ansible/collections/ansible_collections/frameworks/infra/roles/redis/tasks/validate.yml")
+	start := strings.Index(validate, "- name: PING via redis-cli")
+	if start < 0 {
+		t.Fatal("validate.yml has no redis-cli PING task")
+	}
+	task := validate[start:]
+	if next := strings.Index(task[1:], "\n- name:"); next >= 0 {
+		task = task[:next+1]
+	}
+	for _, want := range []string{"until: \"'PONG' in redis_ping.stdout\"", "retries:", "delay:", "REDISCLI_AUTH"} {
+		if !strings.Contains(task, want) {
+			t.Fatalf("PING task missing %q:\n%s", want, task)
+		}
+	}
+	for _, forbidden := range []string{"no_log", "'-a'", "redis_password]"} {
+		if strings.Contains(task, forbidden) {
+			t.Fatalf("PING task must not contain %q:\n%s", forbidden, task)
+		}
+	}
+}
+
 // Release convergence probes live roles over SSH; the password must be read on
 // the host, never passed on the command line.
 func TestRedisCLICommandTargetsTheInstanceWithoutThePassword(t *testing.T) {

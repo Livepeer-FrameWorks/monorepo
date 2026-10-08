@@ -64,13 +64,15 @@
   register: redis_cli_binary
   changed_when: false
 
+# A restarted server accepts connections while it loads its dataset and answers
+# LOADING until it is done, so wait for PONG. The password goes in
+# REDISCLI_AUTH, so the reply is safe to show when the wait runs out.
 - name: PING via redis-cli (authed when password set)
   ansible.builtin.command:
-    argv: >-
-      {{ [redis_cli_binary.stdout, '-h', redis_ping_host, '-p', redis_listen_port | string]
-         + (['-a', redis_password] if redis_password | length > 0 else [])
-         + ['PING'] }}
+    argv: "{{ [redis_cli_binary.stdout, '-h', redis_ping_host, '-p', redis_listen_port | string, 'PING'] }}"
+  environment: "{{ {'REDISCLI_AUTH': redis_password} if redis_password | length > 0 else {} }}"
   register: redis_ping
   changed_when: false
-  no_log: "{{ redis_password | length > 0 }}"
-  failed_when: "'PONG' not in redis_ping.stdout"
+  until: "'PONG' in redis_ping.stdout"
+  retries: 60
+  delay: 2
