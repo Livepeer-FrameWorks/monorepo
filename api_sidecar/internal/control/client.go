@@ -1904,7 +1904,11 @@ func runClient(endpoint controlEndpoint, logger logging.Logger) error {
 		grpc.WithTransportCredentials(creds),
 		grpc.WithConnectParams(grpc.ConnectParams{MinConnectTimeout: controlConnectTimeout}),
 	}
-	if endpoint.dial != endpoint.addr {
+	// Under TLS the credentials' server name is the authority, so a resolved
+	// dial address still presents the configured name; gRPC refuses a second,
+	// different authority set beside it. Plaintext has no server name, so the
+	// configured entry is set explicitly.
+	if !useTLS && endpoint.dial != endpoint.addr {
 		dialOpts = append(dialOpts, grpc.WithAuthority(endpoint.addr))
 	}
 	conn, err := grpc.NewClient(endpoint.dial, dialOpts...)
