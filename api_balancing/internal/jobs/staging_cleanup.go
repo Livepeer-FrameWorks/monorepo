@@ -3,29 +3,53 @@ package jobs
 import (
 	"context"
 	"database/sql"
+	"math/rand/v2"
 	"sync"
 	"time"
 
 	"frameworks/api_balancing/internal/database/foghorndb"
+	"frameworks/api_balancing/internal/storage"
 
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
+	"github.com/google/uuid"
 )
 
-// StagingCleanupJob drains foghorn.staging_cleanup_queue: every interval it deletes all due, durably-enqueued
-// objects from S3 batch by batch, removing each row on success and applying a capped backoff on failure. The queue holds every kind of freeze
-// garbage — staging objects AND superseded/abandoned published CANDIDATE objects (media + co-located .dtsh) —
-// enqueued transactionally where the object becomes garbage (completion commit, stale-recovery reset, terminal
-// identity-clearing trigger), so a failed/crashed delete is retried from the durable row rather than leaking
+const (
+	stagingCleanupDefaultBatch = 500
+	// stagingCleanupClaimBuckets partitions the queue by key hash. While a backlog is being drained each worker claims
+	// from its own randomly chosen bucket, so the replicas of a cell lock disjoint rows instead of all skipping over the
+	// same locked rows.
+	stagingCleanupClaimBuckets   = 16
+	stagingCleanupBatchesPerPass = 20
+	stagingCleanupBatchPause     = 250 * time.Millisecond
+	stagingCleanupClaimTimeout   = 15 * time.Second
+	stagingCleanupDeleteTimeout  = 2 * time.Minute
+	stagingCleanupSettleTimeout  = 15 * time.Second
+	stagingCleanupLeaseTTL       = 10 * time.Minute
+)
+
+// A claimed batch must finish within its lease, or another worker could re-claim it and send a second delete for the
+// same keys while the first is still in flight. A batch is one claim, one multi-object delete request (the batch never
+// exceeds one request's key limit), and two settlement statements. The conversion below stops compiling if their
+// deadlines add up to more than the lease.
+const _ = uint64(stagingCleanupLeaseTTL - stagingCleanupClaimTimeout - stagingCleanupDeleteTimeout - 2*stagingCleanupSettleTimeout)
+
+// StagingCleanupJob drains foghorn.staging_cleanup_queue: it deletes due, durably-enqueued objects from S3 in
+// multi-object requests, removing each row on success and applying a capped backoff on failure. The queue holds every
+// kind of freeze garbage — staging objects AND superseded/abandoned published CANDIDATE objects (media + co-located
+// .dtsh) — enqueued transactionally where the object becomes garbage (completion commit, stale-recovery reset,
+// terminal identity-clearing trigger), so a failed/crashed delete is retried from the durable row rather than leaking
 // unbilled provider storage. This is the ONLY collector for that garbage.
 type StagingCleanupJob struct {
-	db          *sql.DB
-	s3          StagingObjectDeleter
-	logger      logging.Logger
-	interval    time.Duration
-	batchSize   int
-	backoffBase time.Duration
-	leaseTTL    time.Duration // how long a claimed batch stays leased before another worker may re-claim it
-	itemTimeout time.Duration // per-item S3 delete deadline
+	db             *sql.DB
+	s3             StagingObjectDeleter
+	logger         logging.Logger
+	interval       time.Duration
+	batchSize      int
+	batchesPerPass int
+	batchPause     time.Duration
+	backoffBase    time.Duration
+	leaseTTL       time.Duration // how long a claimed batch stays leased before another worker may re-claim it
 	// localBackendID is this cell's current local backend fingerprint. A queued object is deleted ONLY when its recorded
 	// backend_id EXACTLY equals this; empty (unattributed), unwired (empty localBackendID), and mismatched ownership all
 	// fail closed (the row is retained), never deleted from a guessed store. A cell's backend is immutable (enforced at
@@ -40,8 +64,8 @@ type StagingCleanupConfig struct {
 	DB          *sql.DB
 	S3          StagingObjectDeleter // required for the worker to do anything (nil => no-op drain)
 	Logger      logging.Logger
-	Interval    time.Duration // how often to drain (default: 1 minute)
-	BatchSize   int           // max rows per pass (default: 100)
+	Interval    time.Duration // mean time between drain passes (default: 1 minute)
+	BatchSize   int           // rows per claim and per S3 request (default 500, at most one request's key limit)
 	BackoffBase time.Duration // per-attempt backoff step, capped (default: 1 minute)
 	// LocalBackendID is this cell's current local backend fingerprint. Pass main.go's localBackendFingerprint(localS3)
 	// so a queued object recorded on a repointed backend fails closed instead of deleting from the wrong store.
@@ -51,40 +75,28 @@ type StagingCleanupConfig struct {
 // NewStagingCleanupJob creates a new staging cleanup worker.
 func NewStagingCleanupJob(cfg StagingCleanupConfig) *StagingCleanupJob {
 	interval := cfg.Interval
-	if interval == 0 {
+	if interval <= 0 {
 		interval = 1 * time.Minute
 	}
 	backoffBase := cfg.BackoffBase
 	if backoffBase <= 0 {
 		backoffBase = 1 * time.Minute
 	}
-	// Budget invariant: a claimed batch must PROVABLY finish within its lease, so the lease never expires
-	// mid-batch (which would let another worker re-claim and issue a duplicate S3 delete). The worst-case
-	// per-item wall-clock is the S3 delete deadline PLUS the settlement (row-delete / failure-update) deadline,
-	// and the batch also pays a one-time claim + margin. So: leaseTTL >= claimBudget + batchSize*(itemTimeout +
-	// settleTimeout). With leaseTTL=10m, itemTimeout=15s, settleTimeout=10s, claim+margin≈30s: 40s claim/margin
-	// + 20*(25s) = 530s < 600s.
-	const settleTimeout = 10 * time.Second
-	const claimAndMarginBudget = 40 * time.Second
-	leaseTTL := 10 * time.Minute
-	itemTimeout := 15 * time.Second
-	maxBatch := int((leaseTTL - claimAndMarginBudget) / (itemTimeout + settleTimeout)) // 22
 	batchSize := cfg.BatchSize
 	if batchSize <= 0 {
-		batchSize = 20
+		batchSize = stagingCleanupDefaultBatch
 	}
-	if batchSize > maxBatch {
-		batchSize = maxBatch
-	}
+	batchSize = min(batchSize, storage.MaxDeleteKeysPerRequest)
 	return &StagingCleanupJob{
 		db:             cfg.DB,
 		s3:             cfg.S3,
 		logger:         cfg.Logger,
 		interval:       interval,
 		batchSize:      batchSize,
+		batchesPerPass: stagingCleanupBatchesPerPass,
+		batchPause:     stagingCleanupBatchPause,
 		backoffBase:    backoffBase,
-		leaseTTL:       leaseTTL,
-		itemTimeout:    itemTimeout,
+		leaseTTL:       stagingCleanupLeaseTTL,
 		localBackendID: cfg.LocalBackendID,
 		stopCh:         make(chan struct{}),
 	}
@@ -104,147 +116,155 @@ func (j *StagingCleanupJob) Stop() {
 	j.logger.Info("Staging cleanup job stopped")
 }
 
+// run drains once per jittered interval. Every Foghorn replica of a cell runs this job, and replicas restarted together
+// would otherwise drain in lockstep against the same queue; the first pass starts anywhere in the first interval and
+// each later pass is scheduled after the previous one finished, so a long pass never queues up ticks behind it.
 func (j *StagingCleanupJob) run() {
 	defer j.wg.Done()
-	ticker := time.NewTicker(j.interval)
-	defer ticker.Stop()
-
-	j.drain()
-
+	timer := time.NewTimer(jitterDuration(j.interval, 0, 1))
+	defer timer.Stop()
 	for {
 		select {
-		case <-ticker.C:
+		case <-timer.C:
 			j.drain()
+			timer.Reset(jitterDuration(j.interval, 0.8, 1.2))
 		case <-j.stopCh:
 			return
 		}
 	}
 }
 
+// jitterDuration returns d scaled by a uniformly random factor in [lo, hi).
+func jitterDuration(d time.Duration, lo, hi float64) time.Duration {
+	return time.Duration(float64(d) * (lo + rand.Float64()*(hi-lo)))
+}
+
+// drain runs one bounded pass. It first claims from any bucket; a short claim means fewer than a batch of rows are
+// due, and the pass ends after that one statement. A full claim means a backlog, and the pass moves to a random bucket,
+// keeps claiming it while claims come back full and walks to the next bucket when one comes back short, until every
+// bucket was visited or the pass has processed batchesPerPass batches. Batches are separated by a jittered pause, so
+// a backlog drains at a bounded rate per replica rather than as fast as the database answers.
 func (j *StagingCleanupJob) drain() {
 	if j.db == nil || j.s3 == nil {
 		return
 	}
-	// A pass keeps claiming batches until one comes back short, so throughput follows the enqueue rate instead
-	// of being capped at one batch per interval (a capped drain lets a backlog grow without bound and delays
-	// every newly enqueued object behind it). Each claimed row leaves the due set — deleted, or leased and then
-	// backed off on failure — so the loop ends once fewer than a batch of rows are due.
 	deleted := 0
-	for {
-		// Atomically LEASE a batch of due, unleased rows. The lease (+ FOR UPDATE SKIP LOCKED) means HA replicas
-		// never claim the same keys, so a delete is not issued to S3 twice concurrently.
-		claimCtx, claimCancel := context.WithTimeout(context.Background(), 15*time.Second)
-		items, err := j.claimBatch(claimCtx)
-		claimCancel()
+	bucket, visited := -1, 0
+	for batch := 0; batch < j.batchesPerPass; batch++ {
+		if batch > 0 && !j.pauseBetweenBatches() {
+			return
+		}
+		claimed, n, err := j.processBatch(bucket)
 		if err != nil {
 			j.logger.WithError(err).Warn("Failed to claim staging cleanup batch")
 			break
 		}
-		for _, it := range items {
-			// Each item gets its OWN fresh, bounded context: one slow/stuck delete cannot starve the rest of the
-			// batch (head-of-line), and the failure-record UPDATE never runs on an already-cancelled context.
-			if j.settleOne(it) {
-				deleted++
+		deleted += n
+		if claimed == j.batchSize {
+			if bucket < 0 {
+				bucket = rand.IntN(stagingCleanupClaimBuckets)
 			}
+			continue
 		}
-		if len(items) < j.batchSize {
+		if bucket < 0 {
 			break
 		}
-		select {
-		case <-j.stopCh:
-			return
-		default:
+		visited++
+		if visited == stagingCleanupClaimBuckets {
+			break
 		}
+		bucket = (bucket + 1) % stagingCleanupClaimBuckets
 	}
 	if deleted > 0 {
 		j.logger.WithField("count", deleted).Debug("Drained staging cleanup queue")
 	}
 }
 
-type stagingCleanupItem struct {
-	key       string
-	attempts  int
-	token     string // the lease token this claim minted; every settlement CASes on it
-	backendID string // recorded write-time backend; a repoint mismatch fails closed rather than deleting from the wrong store
+// pauseBetweenBatches waits a jittered batchPause and reports false when the job was stopped meanwhile.
+func (j *StagingCleanupJob) pauseBetweenBatches() bool {
+	if j.batchPause <= 0 {
+		return true
+	}
+	t := time.NewTimer(jitterDuration(j.batchPause, 0.5, 1.5))
+	defer t.Stop()
+	select {
+	case <-t.C:
+		return true
+	case <-j.stopCh:
+		return false
+	}
 }
 
-// claimBatch atomically leases a batch of due, unleased rows with a FRESH per-claim token and returns them.
-// SKIP LOCKED lets concurrent workers/replicas make progress on disjoint rows without blocking or
-// double-claiming. The token fences settlement: a worker whose lease later expires and is re-claimed by
-// another worker cannot settle the row (its stale token no longer matches). The batch is sized so it fits
-// within the lease (batchSize * itemTimeout <= leaseTTL, enforced in the constructor).
-func (j *StagingCleanupJob) claimBatch(ctx context.Context) ([]stagingCleanupItem, error) {
-	rows, err := foghorndb.New(j.db).ClaimStagingCleanupItems(ctx, foghorndb.ClaimStagingCleanupItemsParams{
-		BatchLimit: int32(j.batchSize), LeaseSeconds: int64(j.leaseTTL.Seconds()),
+// processBatch leases one batch under a fresh token, deletes the objects this cell owns in one multi-object request,
+// and settles the batch in at most two statements: one removing the deleted rows and one releasing the rest with a
+// backoff. Both are fenced on the token, so if the lease expired and another worker re-claimed a row (minting a new
+// token), this worker's settlement leaves that row to its current owner. bucket < 0 claims from any bucket.
+func (j *StagingCleanupJob) processBatch(bucket int) (claimed, deleted int, err error) {
+	token := uuid.NewString()
+	claimCtx, claimCancel := context.WithTimeout(context.Background(), stagingCleanupClaimTimeout)
+	rows, err := foghorndb.New(j.db).ClaimStagingCleanupItems(claimCtx, foghorndb.ClaimStagingCleanupItemsParams{
+		LeaseSeconds: int64(j.leaseTTL.Seconds()), LeaseToken: token,
+		ClaimBucket: int64(bucket), ClaimBuckets: stagingCleanupClaimBuckets, BatchLimit: int32(j.batchSize),
 	})
-	if err != nil {
-		return nil, err
+	claimCancel()
+	if err != nil || len(rows) == 0 {
+		return 0, 0, err
 	}
-	var items []stagingCleanupItem
+
+	owned := make([]string, 0, len(rows))
+	var failedKeys, failedErrs []string
 	for _, row := range rows {
-		items = append(items, stagingCleanupItem{key: row.ObjectKey, attempts: int(row.Attempts),
-			token: row.LeaseToken.String, backendID: row.BackendID})
-	}
-	return items, nil
-}
-
-// settleOne deletes one leased staging object and reconciles the queue row, each on its OWN bounded context.
-// Every settlement is FENCED on the lease token: if the lease expired and another worker re-claimed the row
-// (fresh token), this worker's UPDATE/DELETE matches zero rows and is a harmless no-op — no cross-worker
-// clobber, and the current owner settles it.
-func (j *StagingCleanupJob) settleOne(it stagingCleanupItem) (deleted bool) {
-	delCtx, cancel := context.WithTimeout(context.Background(), j.itemTimeout)
-	defer cancel()
-	// OWNERSHIP GUARD (I2): delete ONLY from this cell's recorded store — the object's recorded backend_id must EXACTLY
-	// equal this cell's local fingerprint. Fail closed (backoff + release the lease) otherwise: an EMPTY recorded id
-	// (unattributed — fresh enqueues attribute, and legacy rows are adopted at boot), an unwired localBackendID, or a
-	// mismatch (a store this cell does not control). Never guess the current store. Draining a retained backend is not
-	// supported.
-	if it.backendID == "" || j.localBackendID == "" || it.backendID != j.localBackendID {
-		j.recordRepointDeferral(it)
-		return false
-	}
-	if delErr := j.s3.Delete(delCtx, it.key); delErr != nil {
-		// Capped-linear backoff so a persistently-failing key doesn't spin: base * min(attempts+1, 30). Release
-		// the lease so the row is eligible again after the backoff. Fresh context (delCtx may be spent).
-		backoff := j.backoffBase * time.Duration(min(it.attempts+1, 30))
-		upCtx, upCancel := context.WithTimeout(context.Background(), 10*time.Second)
-		defer upCancel()
-		if upErr := foghorndb.New(j.db).FailStagingCleanupItem(upCtx, foghorndb.FailStagingCleanupItemParams{
-			ObjectKey: it.key, BackoffSeconds: int64(backoff.Seconds()), LastError: delErr.Error(), LeaseToken: it.token,
-		}); upErr != nil {
-			j.logger.WithError(upErr).WithField("object_key", it.key).Debug("Failed to record staging cleanup retry")
+		// OWNERSHIP GUARD (I2): delete ONLY from this cell's recorded store — the object's recorded backend_id must
+		// EXACTLY equal this cell's local fingerprint. Fail closed (backoff + release the lease) otherwise: an EMPTY
+		// recorded id (unattributed — fresh enqueues attribute, and legacy rows are adopted at boot), an unwired
+		// localBackendID, or a mismatch (a store this cell does not control). Never guess the current store.
+		if row.BackendID == "" || j.localBackendID == "" || row.BackendID != j.localBackendID {
+			failedKeys = append(failedKeys, row.ObjectKey)
+			failedErrs = append(failedErrs, "storage backend repointed (recorded "+row.BackendID+" != current "+j.localBackendID+"); refusing to delete from the wrong store")
+			continue
 		}
-		return false
+		owned = append(owned, row.ObjectKey)
 	}
-	// Success: drop the queue row (token-fenced) on a fresh context. If this fails/no-ops the object is already
-	// gone, so a later pass Deletes an already-absent key (idempotent) and removes the row then.
-	rowCtx, rowCancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer rowCancel()
-	n, delRowErr := foghorndb.New(j.db).DeleteStagingCleanupItem(rowCtx, foghorndb.DeleteStagingCleanupItemParams{
-		ObjectKey: it.key, LeaseToken: sql.NullString{String: it.token, Valid: true},
-	})
-	if delRowErr != nil {
-		j.logger.WithError(delRowErr).WithField("object_key", it.key).Debug("Deleted staging object but failed to drop queue row")
-		return false
-	}
-	if n == 0 {
-		return false // lease was stolen (token mismatch) — the current owner will settle it
-	}
-	return true
-}
 
-// recordRepointDeferral applies the same capped backoff + lease release as a failed delete, with a repoint reason, so
-// a queued object whose backend was repointed retries later (safely, never deleting from the wrong store) instead of
-// spinning. Token-fenced: a stolen lease makes it a harmless no-op.
-func (j *StagingCleanupJob) recordRepointDeferral(it stagingCleanupItem) {
-	backoff := j.backoffBase * time.Duration(min(it.attempts+1, 30))
-	upCtx, upCancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer upCancel()
-	msg := "storage backend repointed (recorded " + it.backendID + " != current " + j.localBackendID + "); refusing to delete from the wrong store"
-	if upErr := foghorndb.New(j.db).FailStagingCleanupItem(upCtx, foghorndb.FailStagingCleanupItemParams{
-		ObjectKey: it.key, BackoffSeconds: int64(backoff.Seconds()), LastError: msg, LeaseToken: it.token,
-	}); upErr != nil {
-		j.logger.WithError(upErr).WithField("object_key", it.key).Debug("Failed to record staging cleanup repoint deferral")
+	var done []string
+	if len(owned) > 0 {
+		delCtx, delCancel := context.WithTimeout(context.Background(), stagingCleanupDeleteTimeout)
+		failed := j.s3.DeleteKeys(delCtx, owned)
+		delCancel()
+		done = make([]string, 0, len(owned))
+		for _, key := range owned {
+			if delErr, ok := failed[key]; ok {
+				failedKeys = append(failedKeys, key)
+				failedErrs = append(failedErrs, delErr.Error())
+				continue
+			}
+			done = append(done, key)
+		}
 	}
+
+	if len(done) > 0 {
+		// A failure here leaves the rows leased; after the lease expires a later pass deletes the already-absent
+		// objects again (S3 reports a missing key as deleted) and removes the rows then.
+		ctx, cancel := context.WithTimeout(context.Background(), stagingCleanupSettleTimeout)
+		n, delErr := foghorndb.New(j.db).DeleteStagingCleanupItems(ctx, foghorndb.DeleteStagingCleanupItemsParams{
+			ObjectKeys: done, LeaseToken: token,
+		})
+		cancel()
+		if delErr != nil {
+			j.logger.WithError(delErr).WithField("count", len(done)).Warn("Deleted staging objects but failed to drop their queue rows")
+		}
+		deleted = int(n)
+	}
+	if len(failedKeys) > 0 {
+		ctx, cancel := context.WithTimeout(context.Background(), stagingCleanupSettleTimeout)
+		_, failErr := foghorndb.New(j.db).FailStagingCleanupItems(ctx, foghorndb.FailStagingCleanupItemsParams{
+			BackoffBaseSeconds: int64(j.backoffBase.Seconds()), ObjectKeys: failedKeys, LastErrors: failedErrs,
+			LeaseToken: token,
+		})
+		cancel()
+		if failErr != nil {
+			j.logger.WithError(failErr).WithField("count", len(failedKeys)).Warn("Failed to record staging cleanup retries")
+		}
+	}
+	return len(rows), deleted, nil
 }

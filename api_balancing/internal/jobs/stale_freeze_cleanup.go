@@ -12,10 +12,11 @@ import (
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 )
 
-// StagingObjectDeleter deletes a freeze staging object by key. *storage.S3Client satisfies it.
-// (Used by StagingCleanupJob, the worker that drains the durable cleanup queue.)
+// StagingObjectDeleter deletes freeze garbage objects by key in multi-object requests and returns the keys it could
+// not delete with their errors. *storage.S3Client satisfies it. (Used by StagingCleanupJob, the worker that drains the
+// durable cleanup queue.)
 type StagingObjectDeleter interface {
-	Delete(ctx context.Context, key string) error
+	DeleteKeys(ctx context.Context, keys []string) map[string]error
 }
 
 // StaleFreezeCleanupJob resets artifacts stuck in freezing state.

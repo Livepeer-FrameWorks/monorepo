@@ -249,6 +249,60 @@ func (c *S3Client) Delete(ctx context.Context, key string) error {
 	return nil
 }
 
+// MaxDeleteKeysPerRequest is the S3 multi-object delete limit per request.
+const MaxDeleteKeysPerRequest = 1000
+
+// DeleteKeys removes keys with S3 multi-object deletes, at most MaxDeleteKeysPerRequest per request, and returns the
+// keys that are not known to be deleted with their error. A key absent from the result is gone: S3 reports a missing
+// key as deleted. A failed request fails every key it carried, and an error entry this client cannot map back to a
+// requested key fails its whole request, so no key is reported deleted without S3 saying so.
+func (c *S3Client) DeleteKeys(ctx context.Context, keys []string) map[string]error {
+	failed := make(map[string]error)
+	for start := 0; start < len(keys); start += MaxDeleteKeysPerRequest {
+		chunk := keys[start:min(start+MaxDeleteKeysPerRequest, len(keys))]
+		byFullKey := make(map[string]string, len(chunk))
+		objects := make([]types.ObjectIdentifier, 0, len(chunk))
+		for _, key := range chunk {
+			fullKey := c.fullKey(key)
+			byFullKey[fullKey] = key
+			objects = append(objects, types.ObjectIdentifier{Key: aws.String(fullKey)})
+		}
+		out, err := c.client.DeleteObjects(ctx, &s3.DeleteObjectsInput{
+			Bucket: aws.String(c.config.Bucket),
+			Delete: &types.Delete{Objects: objects, Quiet: aws.Bool(true)},
+		})
+		if err != nil {
+			for _, key := range chunk {
+				failed[key] = fmt.Errorf("failed to delete objects: %w", err)
+			}
+			continue
+		}
+		chunkFailed := 0
+		for _, e := range out.Errors {
+			if aws.ToString(e.Code) == "NoSuchKey" {
+				continue
+			}
+			key, ok := byFullKey[aws.ToString(e.Key)]
+			if !ok {
+				unmapped := fmt.Errorf("delete objects reported an error for unrequested key %q: %s", aws.ToString(e.Key), aws.ToString(e.Message))
+				for _, k := range chunk {
+					failed[k] = unmapped
+				}
+				chunkFailed = len(chunk)
+				break
+			}
+			failed[key] = fmt.Errorf("failed to delete from S3: %s: %s", aws.ToString(e.Code), aws.ToString(e.Message))
+			chunkFailed++
+		}
+		c.logger.WithFields(logging.Fields{
+			"bucket":    c.config.Bucket,
+			"requested": len(chunk),
+			"failed":    chunkFailed,
+		}).Info("Deleted objects from S3")
+	}
+	return failed
+}
+
 // DeletePrefix removes all objects with the given prefix (for DVR directories)
 func (c *S3Client) DeletePrefix(ctx context.Context, prefix string) (int, error) {
 	fullPrefix := c.fullKey(prefix)

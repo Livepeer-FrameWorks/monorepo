@@ -7,38 +7,52 @@ package foghorndb
 
 import (
 	"context"
-	"database/sql"
+
+	"github.com/lib/pq"
 )
 
 const claimStagingCleanupItems = `-- name: ClaimStagingCleanupItems :many
 UPDATE foghorn.staging_cleanup_queue q
 SET leased_until = NOW() + $1::bigint * INTERVAL '1 second',
-    lease_token = gen_random_uuid()::text
+    lease_token = $2::text
 WHERE q.object_key IN (
     SELECT object_key FROM foghorn.staging_cleanup_queue
     WHERE next_attempt_at <= NOW()
       AND (leased_until IS NULL OR leased_until <= NOW())
-    ORDER BY next_attempt_at
-    LIMIT $2
+      AND ($3::bigint < 0
+           OR mod(hashtext(object_key)::bigint + 2147483648, $4::bigint) = $3::bigint)
+    LIMIT $5
     FOR UPDATE SKIP LOCKED
 )
-RETURNING q.object_key, q.attempts, q.lease_token, COALESCE(q.backend_id, '')::text AS backend_id
+RETURNING q.object_key, q.attempts, COALESCE(q.backend_id, '')::text AS backend_id
 `
 
 type ClaimStagingCleanupItemsParams struct {
-	LeaseSeconds int64 `db:"lease_seconds" json:"lease_seconds"`
-	BatchLimit   int32 `db:"batch_limit" json:"batch_limit"`
+	LeaseSeconds int64  `db:"lease_seconds" json:"lease_seconds"`
+	LeaseToken   string `db:"lease_token" json:"lease_token"`
+	ClaimBucket  int64  `db:"claim_bucket" json:"claim_bucket"`
+	ClaimBuckets int64  `db:"claim_buckets" json:"claim_buckets"`
+	BatchLimit   int32  `db:"batch_limit" json:"batch_limit"`
 }
 
 type ClaimStagingCleanupItemsRow struct {
-	ObjectKey  string         `db:"object_key" json:"object_key"`
-	Attempts   int32          `db:"attempts" json:"attempts"`
-	LeaseToken sql.NullString `db:"lease_token" json:"lease_token"`
-	BackendID  string         `db:"backend_id" json:"backend_id"`
+	ObjectKey string `db:"object_key" json:"object_key"`
+	Attempts  int32  `db:"attempts" json:"attempts"`
+	BackendID string `db:"backend_id" json:"backend_id"`
 }
 
+// Leases up to batch_limit due, unleased rows under one caller-minted lease token. A non-negative claim_bucket limits
+// the claim to the rows whose key hashes into that bucket of claim_buckets, so concurrent workers that pick different
+// buckets lock disjoint rows; -1 claims from any bucket. There is no ORDER BY: every due row is eligible, and an
+// unordered LIMIT lets the scan stop once it has the batch instead of reading and sorting every due row.
 func (q *Queries) ClaimStagingCleanupItems(ctx context.Context, arg ClaimStagingCleanupItemsParams) ([]ClaimStagingCleanupItemsRow, error) {
-	rows, err := q.db.QueryContext(ctx, claimStagingCleanupItems, arg.LeaseSeconds, arg.BatchLimit)
+	rows, err := q.db.QueryContext(ctx, claimStagingCleanupItems,
+		arg.LeaseSeconds,
+		arg.LeaseToken,
+		arg.ClaimBucket,
+		arg.ClaimBuckets,
+		arg.BatchLimit,
+	)
 	if err != nil {
 		return nil, err
 	}
@@ -46,12 +60,7 @@ func (q *Queries) ClaimStagingCleanupItems(ctx context.Context, arg ClaimStaging
 	items := []ClaimStagingCleanupItemsRow{}
 	for rows.Next() {
 		var i ClaimStagingCleanupItemsRow
-		if err := rows.Scan(
-			&i.ObjectKey,
-			&i.Attempts,
-			&i.LeaseToken,
-			&i.BackendID,
-		); err != nil {
+		if err := rows.Scan(&i.ObjectKey, &i.Attempts, &i.BackendID); err != nil {
 			return nil, err
 		}
 		items = append(items, i)
@@ -65,45 +74,53 @@ func (q *Queries) ClaimStagingCleanupItems(ctx context.Context, arg ClaimStaging
 	return items, nil
 }
 
-const deleteStagingCleanupItem = `-- name: DeleteStagingCleanupItem :execrows
+const deleteStagingCleanupItems = `-- name: DeleteStagingCleanupItems :execrows
 DELETE FROM foghorn.staging_cleanup_queue
-WHERE object_key = $1 AND lease_token = $2
+WHERE object_key = ANY($1::text[]) AND lease_token = $2::text
 `
 
-type DeleteStagingCleanupItemParams struct {
-	ObjectKey  string         `db:"object_key" json:"object_key"`
-	LeaseToken sql.NullString `db:"lease_token" json:"lease_token"`
+type DeleteStagingCleanupItemsParams struct {
+	ObjectKeys []string `db:"object_keys" json:"object_keys"`
+	LeaseToken string   `db:"lease_token" json:"lease_token"`
 }
 
-func (q *Queries) DeleteStagingCleanupItem(ctx context.Context, arg DeleteStagingCleanupItemParams) (int64, error) {
-	result, err := q.db.ExecContext(ctx, deleteStagingCleanupItem, arg.ObjectKey, arg.LeaseToken)
+// Removes the listed rows once their objects are deleted, fenced on the lease token like FailStagingCleanupItems.
+func (q *Queries) DeleteStagingCleanupItems(ctx context.Context, arg DeleteStagingCleanupItemsParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, deleteStagingCleanupItems, pq.Array(arg.ObjectKeys), arg.LeaseToken)
 	if err != nil {
 		return 0, err
 	}
 	return result.RowsAffected()
 }
 
-const failStagingCleanupItem = `-- name: FailStagingCleanupItem :exec
-UPDATE foghorn.staging_cleanup_queue
-SET attempts = attempts + 1,
-    next_attempt_at = NOW() + $1::bigint * INTERVAL '1 second',
-    leased_until = NULL, lease_token = NULL, last_error = $2::text
-WHERE object_key = $3 AND lease_token = $4::text
+const failStagingCleanupItems = `-- name: FailStagingCleanupItems :execrows
+UPDATE foghorn.staging_cleanup_queue q
+SET attempts = q.attempts + 1,
+    next_attempt_at = NOW() + LEAST(q.attempts + 1, 30) * $1::bigint * INTERVAL '1 second',
+    leased_until = NULL, lease_token = NULL, last_error = f.last_error
+FROM (SELECT unnest($3::text[]) AS object_key,
+             unnest($4::text[]) AS last_error) f
+WHERE q.object_key = f.object_key AND q.lease_token = $2::text
 `
 
-type FailStagingCleanupItemParams struct {
-	BackoffSeconds int64  `db:"backoff_seconds" json:"backoff_seconds"`
-	LastError      string `db:"last_error" json:"last_error"`
-	ObjectKey      string `db:"object_key" json:"object_key"`
-	LeaseToken     string `db:"lease_token" json:"lease_token"`
+type FailStagingCleanupItemsParams struct {
+	BackoffBaseSeconds int64    `db:"backoff_base_seconds" json:"backoff_base_seconds"`
+	LeaseToken         string   `db:"lease_token" json:"lease_token"`
+	ObjectKeys         []string `db:"object_keys" json:"object_keys"`
+	LastErrors         []string `db:"last_errors" json:"last_errors"`
 }
 
-func (q *Queries) FailStagingCleanupItem(ctx context.Context, arg FailStagingCleanupItemParams) error {
-	_, err := q.db.ExecContext(ctx, failStagingCleanupItem,
-		arg.BackoffSeconds,
-		arg.LastError,
-		arg.ObjectKey,
+// Releases the lease on each listed row and schedules its retry after base * min(attempts + 1, 30), recording its
+// error. Fenced on the lease token, so rows another worker re-claimed after this lease expired are left alone.
+func (q *Queries) FailStagingCleanupItems(ctx context.Context, arg FailStagingCleanupItemsParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, failStagingCleanupItems,
+		arg.BackoffBaseSeconds,
 		arg.LeaseToken,
+		pq.Array(arg.ObjectKeys),
+		pq.Array(arg.LastErrors),
 	)
-	return err
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
 }

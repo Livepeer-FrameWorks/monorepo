@@ -39,6 +39,7 @@ type fakeS3API struct {
 	putErr       error
 	deleteErr    error
 	delObjsErr   error
+	delObjsOut   func(*s3.DeleteObjectsInput) *s3.DeleteObjectsOutput
 	copyIn       *s3.CopyObjectInput
 	copyETag     string
 }
@@ -71,6 +72,9 @@ func (f *fakeS3API) DeleteObjects(_ context.Context, params *s3.DeleteObjectsInp
 	f.delObjsIn = append(f.delObjsIn, params)
 	if f.delObjsErr != nil {
 		return nil, f.delObjsErr
+	}
+	if f.delObjsOut != nil {
+		return f.delObjsOut(params), nil
 	}
 	return &s3.DeleteObjectsOutput{}, nil
 }
@@ -297,6 +301,60 @@ func TestDeletePrefix_BatchesAcrossPages(t *testing.T) {
 	}
 	if len(api.delObjsIn) != 2 {
 		t.Fatalf("expected 2 delete batches (one per page), got %d", len(api.delObjsIn))
+	}
+}
+
+// DeleteKeys splits keys into multi-object requests of at most 1000 prefixed keys, maps S3's per-key errors back to
+// the caller's keys, and treats NoSuchKey as deleted.
+func TestDeleteKeys_ChunksAndMapsPerKeyErrors(t *testing.T) {
+	api := &fakeS3API{delObjsOut: func(in *s3.DeleteObjectsInput) *s3.DeleteObjectsOutput {
+		var errs []types.Error
+		for _, obj := range in.Delete.Objects {
+			switch aws.ToString(obj.Key) {
+			case "prod/k-7":
+				errs = append(errs, types.Error{Key: obj.Key, Code: aws.String("AccessDenied"), Message: aws.String("denied")})
+			case "prod/k-1500":
+				errs = append(errs, types.Error{Key: obj.Key, Code: aws.String("NoSuchKey"), Message: aws.String("gone")})
+			}
+		}
+		return &s3.DeleteObjectsOutput{Errors: errs}
+	}}
+	c := newTestClient(t, api, &fakePresigner{})
+	keys := make([]string, 0, 2001)
+	for i := range 2001 {
+		keys = append(keys, fmt.Sprintf("k-%d", i))
+	}
+	failed := c.DeleteKeys(context.Background(), keys)
+	if len(api.delObjsIn) != 3 {
+		t.Fatalf("2001 keys took %d requests, want 3", len(api.delObjsIn))
+	}
+	for i, want := range []int{1000, 1000, 1} {
+		in := api.delObjsIn[i]
+		if got := len(in.Delete.Objects); got != want {
+			t.Fatalf("request %d carried %d keys, want %d", i, got, want)
+		}
+		if !aws.ToBool(in.Delete.Quiet) {
+			t.Fatalf("request %d is not quiet", i)
+		}
+	}
+	if len(failed) != 1 || failed["k-7"] == nil {
+		t.Fatalf("failed = %v, want only k-7", failed)
+	}
+}
+
+// A failed request fails every key it carried, and an error for a key that was not requested fails the whole request
+// rather than letting a requested key read as deleted.
+func TestDeleteKeys_RequestAndUnmappedErrorsFailEveryKey(t *testing.T) {
+	c := newTestClient(t, &fakeS3API{delObjsErr: fmt.Errorf("throttled")}, &fakePresigner{})
+	if failed := c.DeleteKeys(context.Background(), []string{"a", "b"}); len(failed) != 2 {
+		t.Fatalf("request failure left %d failed keys, want 2", len(failed))
+	}
+	api := &fakeS3API{delObjsOut: func(*s3.DeleteObjectsInput) *s3.DeleteObjectsOutput {
+		return &s3.DeleteObjectsOutput{Errors: []types.Error{{Key: aws.String("elsewhere/x"), Code: aws.String("InternalError")}}}
+	}}
+	c = newTestClient(t, api, &fakePresigner{})
+	if failed := c.DeleteKeys(context.Background(), []string{"a", "b"}); len(failed) != 2 {
+		t.Fatalf("unmapped error left %d failed keys, want 2", len(failed))
 	}
 }
 

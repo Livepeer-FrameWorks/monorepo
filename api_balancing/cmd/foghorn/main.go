@@ -2117,13 +2117,13 @@ func main() {
 	defer thumbnailRecoveryJob.Stop()
 
 	// Start the staging cleanup worker: drains foghorn.staging_cleanup_queue (superseded/abandoned freeze
-	// staging objects, enqueued transactionally at completion/recovery), deleting each from S3 with a capped
-	// backoff and removing the row on success. This is the ONLY collector for freeze staging objects; nil S3
-	// makes it a no-op drain.
-	if s3ForReconciler != nil {
+	// staging objects, enqueued transactionally at completion/recovery), deleting them from S3 in multi-object
+	// requests with a capped backoff and removing the rows on success. This is the ONLY collector for freeze
+	// staging objects; without S3 it does not run.
+	if s3ForFederation != nil {
 		stagingCleanupJob := jobs.NewStagingCleanupJob(jobs.StagingCleanupConfig{
 			DB:             db,
-			S3:             s3ForReconciler,
+			S3:             s3ForFederation,
 			Logger:         logger,
 			LocalBackendID: localBackendFingerprint(s3ForFederation),
 		})

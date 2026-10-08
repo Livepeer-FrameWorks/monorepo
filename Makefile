@@ -1200,6 +1200,8 @@ FOGHORN_JOBS_REALPG_TESTS := TestStaleFreezeCleanup_RealPG|TestPurgeOwnershipFil
 FOGHORN_JOBS_REALPG_TESTS := $(FOGHORN_JOBS_REALPG_TESTS)|TestProcessingProgressWatchdogFailsHeartbeatingStall_RealPG|TestReconcileNodeJobInventoryRedispatchesUnreportedWork_RealPG|TestReconcileNodeJobInventoryRequeuesRunningJob_RealPG|TestRequeueSilentNodeJobsRequeuesWorkLostBeforeRegistration_RealPG|TestIngestSessionReaperJobKeepsAbsentNodeSession_RealPG|TestIngestSessionReaperJobEndsLostNodeSession_RealPG|TestIngestSessionReaperJobLostNodeNeedsLease_RealPG
 FOGHORN_JOBS_REALPG_TESTS := $(FOGHORN_JOBS_REALPG_TESTS)|TestCatalogProjectionRetriesRegistrationLagPromptly_RealPG|TestTriggeredProjectionRetriesWhenPeerReplicaHoldsLock_RealPG
 FOGHORN_JOBS_REALPG_TESTS := $(FOGHORN_JOBS_REALPG_TESTS)|TestDeletedDVRDeferredOnEdgeIsRedriven_RealPG|TestRegisteredNodeIsSentTheDeletesItOwes_RealPG
+FOGHORN_JOBS_REALPG_TESTS := $(FOGHORN_JOBS_REALPG_TESTS)|TestStagingCleanupConcurrentReplicas_RealPG
+FOGHORN_JOBS_REALYB_TESTS := TestStagingCleanupConcurrentReplicas_RealYugabyte
 FOGHORN_FEDERATION_REALPG_TESTS := TestMembershipTombstoneCleanup_PostgresProofToRedisPurge_RealPG|TestRetireArtifactPointerOnOriginDeletion_RealPG
 FOGHORN_MEDIA_AUTHORITY_REALPG_TESTS := TestArtifactTombstoneRetiresAPointerThatMissedTheRetire_RealPG|TestMediaAuthorityApplyRejectionsCommitAudit_RealPG|TestMediaAuthorityReadPairMatchesSeparateReads_RealPG|TestMediaAuthorityCollectionAndFetch_RealPG|TestMediaAuthorityRestoreFence_RealPG|TestMediaAuthorityTenantRevivalWithholdsObjects_RealPG|TestMediaAuthorityRecovery_RealPG
 FOGHORN_MEDIA_AUTHORITY_REALYB_TESTS := TestMediaAuthorityRecovery_RealYugabyte
@@ -1257,6 +1259,7 @@ verify-foghorn-test-selection: verify-commodore-placement-test-selection
 	@./scripts/check-go-test-selection.sh api_balancing ./internal/grpc '$(FOGHORN_GRPC_REALPG_TESTS)' 'RealPG$$'
 	@./scripts/check-go-test-selection.sh api_balancing ./internal/triggers '$(FOGHORN_TRIGGERS_REALPG_TESTS)' 'RealPG$$'
 	@./scripts/check-go-test-selection.sh api_balancing ./internal/jobs '$(FOGHORN_JOBS_REALPG_TESTS)' 'RealPG$$'
+	@./scripts/check-go-test-selection.sh api_balancing ./internal/jobs '$(FOGHORN_JOBS_REALYB_TESTS)' 'RealYugabyte$$'
 	@./scripts/check-go-test-selection.sh api_balancing ./internal/federation '$(FOGHORN_FEDERATION_REALPG_TESTS)' 'RealPG$$'
 	@./scripts/check-go-test-selection.sh api_balancing ./internal/mediaauthority '$(FOGHORN_MEDIA_AUTHORITY_REALPG_TESTS)' 'RealPG$$'
 	@./scripts/check-go-test-selection.sh api_balancing ./internal/mediaauthority '$(FOGHORN_MEDIA_AUTHORITY_REALYB_TESTS)' 'RealYugabyte$$'
@@ -1765,7 +1768,11 @@ verify-yugabyte-foghorn-contracts-a: verify-yugabyte-shared-fixture
 verify-yugabyte-foghorn-contracts-b: verify-yugabyte-shared-fixture
 	@$(CONTRACT_GO_TEST) api_balancing yugabyte/foghorn-query-catalog-b -tags schema_verify -run '$(FOGHORN_QUERY_CATALOG_REALYB_TESTS_B)' -count=1 -timeout 1200s ./internal/database/foghorndb/
 
-verify-yugabyte-foghorn-contracts: verify-yugabyte-foghorn-contracts-a verify-yugabyte-foghorn-contracts-b verify-yugabyte-foghorn-authority-contracts
+verify-yugabyte-foghorn-contracts: verify-yugabyte-foghorn-contracts-a verify-yugabyte-foghorn-contracts-b verify-yugabyte-foghorn-authority-contracts verify-yugabyte-foghorn-jobs-contracts
+
+.PHONY: verify-yugabyte-foghorn-jobs-contracts
+verify-yugabyte-foghorn-jobs-contracts: verify-yugabyte-shared-fixture
+	@$(CONTRACT_GO_TEST) api_balancing yugabyte/foghorn-jobs -tags schema_verify -run '^($(FOGHORN_JOBS_REALYB_TESTS))$$' -count=1 -timeout 900s ./internal/jobs/
 
 .PHONY: verify-yugabyte-foghorn-authority-contracts
 verify-yugabyte-foghorn-authority-contracts: verify-yugabyte-shared-fixture

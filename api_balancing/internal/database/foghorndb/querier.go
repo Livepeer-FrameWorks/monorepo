@@ -79,6 +79,10 @@ type Querier interface {
 	ClaimFreezeAttempt(ctx context.Context, arg ClaimFreezeAttemptParams) (int64, error)
 	ClaimOfflineEffects(ctx context.Context, arg ClaimOfflineEffectsParams) ([]ClaimOfflineEffectsRow, error)
 	ClaimQueuedProcessingJobs(ctx context.Context) ([]ClaimQueuedProcessingJobsRow, error)
+	// Leases up to batch_limit due, unleased rows under one caller-minted lease token. A non-negative claim_bucket limits
+	// the claim to the rows whose key hashes into that bucket of claim_buckets, so concurrent workers that pick different
+	// buckets lock disjoint rows; -1 claims from any bucket. There is no ORDER BY: every due row is eligible, and an
+	// unordered LIMIT lets the scan stop once it has the batch instead of reading and sorting every due row.
 	ClaimStagingCleanupItems(ctx context.Context, arg ClaimStagingCleanupItemsParams) ([]ClaimStagingCleanupItemsRow, error)
 	ClaimStaleUploadingVOD(ctx context.Context, arg ClaimStaleUploadingVODParams) (int64, error)
 	ClaimStreamCleanupObligations(ctx context.Context, arg ClaimStreamCleanupObligationsParams) ([]ClaimStreamCleanupObligationsRow, error)
@@ -157,7 +161,8 @@ type Querier interface {
 	DeleteNodeOutputs(ctx context.Context, nodeID string) error
 	DeleteOpenDVRChapters(ctx context.Context, artifactHash string) error
 	DeletePurgedArtifact(ctx context.Context, arg DeletePurgedArtifactParams) error
-	DeleteStagingCleanupItem(ctx context.Context, arg DeleteStagingCleanupItemParams) (int64, error)
+	// Removes the listed rows once their objects are deleted, fenced on the lease token like FailStagingCleanupItems.
+	DeleteStagingCleanupItems(ctx context.Context, arg DeleteStagingCleanupItemsParams) (int64, error)
 	DeleteStaleControlReplicas(ctx context.Context, retentionSeconds int32) (int64, error)
 	DeleteStaleOrphanedArtifactNodes(ctx context.Context) (int64, error)
 	DeleteSupersededThumbnailAttempt(ctx context.Context, arg DeleteSupersededThumbnailAttemptParams) (int64, error)
@@ -213,7 +218,9 @@ type Querier interface {
 	FailExpiredThumbnailAttempt(ctx context.Context, attemptID string) (int64, error)
 	FailMainArtifactSync(ctx context.Context, arg FailMainArtifactSyncParams) error
 	FailOfflineEffect(ctx context.Context, arg FailOfflineEffectParams) error
-	FailStagingCleanupItem(ctx context.Context, arg FailStagingCleanupItemParams) error
+	// Releases the lease on each listed row and schedules its retry after base * min(attempts + 1, 30), recording its
+	// error. Fenced on the lease token, so rows another worker re-claimed after this lease expired are left alone.
+	FailStagingCleanupItems(ctx context.Context, arg FailStagingCleanupItemsParams) (int64, error)
 	FailStreamCleanupObligation(ctx context.Context, arg FailStreamCleanupObligationParams) error
 	FailThumbnailAttempt(ctx context.Context, attemptID string) error
 	FailVodCompletion(ctx context.Context, arg FailVodCompletionParams) (int64, error)
