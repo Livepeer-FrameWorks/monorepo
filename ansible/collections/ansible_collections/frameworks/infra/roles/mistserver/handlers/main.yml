@@ -1,7 +1,54 @@
 ---
+# Unit, env file, plist and launchd wrapper renders notify `mistserver
+# restart pending`. The USR1 rolling reload re-execs MistController with the
+# argv and environment the controller started with, so a change to the start
+# command alone only takes effect at the next start and restarting for it
+# would only drop live streams. systemd learns the new unit now and the
+# marker records, by main PID, that the next start picks it up. A change to
+# the start-time environment itself notifies `mistserver restart` instead
+# (tasks/configure-*.yml).
+# These handlers come before the restart handlers so a restart in the same
+# flush clears the marker after it is written.
+- name: Report mistserver restart pending in check mode
+  listen: mistserver restart pending
+  ansible.builtin.debug:
+    msg: The MistServer unit or environment would change; the running controller keeps its current one until its next start
+  changed_when: true
+  when: ansible_check_mode
+
+- name: Reload systemd units for pending mistserver restart
+  listen: mistserver restart pending
+  ansible.builtin.systemd:
+    daemon_reload: true
+  when:
+    - not ansible_check_mode
+    - ansible_facts.os_family != 'Darwin'
+
+- name: Read running mistserver PID for pending restart
+  listen: mistserver restart pending
+  ansible.builtin.command:
+    argv: "{{ mistserver_main_pid_argv }}"
+  register: mistserver_pending_pid
+  changed_when: false
+  failed_when: false
+  when: not ansible_check_mode
+
+# A controller that is not running starts from the new unit, so nothing is
+# pending for it.
+- name: Record mistserver pending restart
+  listen: mistserver restart pending
+  ansible.builtin.copy:
+    dest: "{{ mistserver_restart_pending_marker }}"
+    content: "main_pid={{ mistserver_pending_pid.stdout | trim }}\n"
+    mode: "0644"
+  when:
+    - not ansible_check_mode
+    - (mistserver_pending_pid.stdout | default('') | trim) not in ['', '0']
+
 # Check mode skips the restart itself; this changed result is how a
 # check-mode plan learns that applying it would restart MistServer (and drop
-# its streams), as opposed to the rolling reload below.
+# its streams), as opposed to the rolling reload below. Only the controller
+# interface/port reconcile and a start-time environment change notify it.
 - name: Report mistserver restart in check mode
   listen: mistserver restart
   ansible.builtin.debug:
@@ -29,6 +76,13 @@
   when:
     - not ansible_check_mode
     - ansible_facts.os_family == 'Darwin'
+
+- name: Clear mistserver pending restart after restart
+  listen: mistserver restart
+  ansible.builtin.file:
+    path: "{{ mistserver_restart_pending_marker }}"
+    state: absent
+  when: not ansible_check_mode
 
 - name: Check mistserver active before reload
   listen: mistserver reload

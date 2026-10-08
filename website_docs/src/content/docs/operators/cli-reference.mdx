@@ -2672,7 +2672,8 @@ frameworks edge provision --manifest edges.yaml
 - `--manifest string` - Path to edge manifest file
 - `--cluster-manifest string` - Cluster manifest used to load platform `SERVICE_TOKEN` for edge manifest `register_qm`
 - `--parallel int` - Number of fresh nodes installed concurrently (default: 1); enrolled nodes are always applied one at a time
-- `--dry-run` - Check every node in Ansible check mode and print its plan (`skip`, `apply`, `drain+apply`, or `install`) and diff; change nothing
+- `--dry-run` - Check every node in Ansible check mode and print its plan (`skip`, `apply`, `drain+apply`, `apply-in-place`, or `install`) and diff; change nothing
+- `--no-drain` - Apply a change that restarts media services without draining the node first, even when another node could take its sessions; its live sessions reconnect
 - `--tune` - Apply sysctl/limits tuning
 - `--register` - Register node in Quartermaster (manual/admin path only — see note below)
 - `--fetch-cert` - Fetch TLS certificate from Navigator
@@ -2682,7 +2683,7 @@ frameworks edge provision --manifest edges.yaml
 - `--max-transcodes int` - Maximum local transcodes reported by Helmsman
 - `--storage-capacity-bytes uint` - Local storage capacity limit reported by Helmsman
 
-Re-running `edge provision` on an enrolled node reuses its identity and re-renders its configuration from this CLI. Enrolled nodes are checked in Ansible check mode first; nodes without drift are skipped. An apply that would restart MistServer or Caddy, or recreate the edge container, is preceded by a drain through Foghorn (the node's sessions end first) and followed by restoring the node's prior mode. See [Running upgrades](/operators/running-upgrades/#edge-configuration).
+Re-running `edge provision` on an enrolled node reuses its identity and re-renders its configuration from this CLI. Enrolled nodes are checked in Ansible check mode first; nodes without drift are skipped. An apply that would restart MistServer or Caddy, or recreate the edge container, is preceded by a drain through Foghorn (the node's sessions end first, within 10 minutes) and followed by restoring the node's prior mode. A node that is the only routable node in its cluster, whose control stream to Foghorn is down, or whose cluster routability the CLI cannot read is applied in place (`apply-in-place`) instead, because its drain could not finish. A MistServer start-command change (such as `ExecStart`) and Caddy unit or env changes do not restart the service: they are installed and listed as a pending restart in the summary. A change to MistServer's start-time environment (env file assignments, unit `Environment=`/`EnvironmentFile=` lines, launchd `EnvironmentVariables`) restarts it, because its rolling reload keeps the environment the running process started with. A node is reported provisioned only once its Helmsman control stream to Foghorn is connected after the apply (polled for up to 90 seconds). `--dry-run` reports the same drain or in-place decision. See [Running upgrades](/operators/running-upgrades/#edge-configuration).
 
 `--register` is for the platform manual provisioning path, where an admin supplies `--pool-domain`/`--node-domain` directly without an enrollment token and wants to create the Quartermaster node row in the same step. It is rejected unless the active context uses the `platform` persona, and it is rejected when combined with `--enrollment-token` because the token path already registers the node through Foghorn's `PreRegisterEdge`. Manifest entries that set `register_qm: true` follow the same platform-only rule and cannot be combined with an enrollment token.
 

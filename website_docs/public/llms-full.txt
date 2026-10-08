@@ -3255,7 +3255,7 @@ Structured result of a dry-run policy evaluation. Mirrors Foghorn&#39;s Playback
 
 **input_object**
 
-- **allowedKids**: `[String!]` — Allowed signing key IDs. Empty = any active tenant key.
+- **allowedKids**: `[String!]` — Allowed signing key IDs. Empty = any active tenant key. Blank IDs are rejected.
 - **requiredAudience**: `[String!]` — If set, the viewer JWT&#39;s `aud` claim must contain at least one of these.
 - **requiredClaimsJson**: `[PlaybackJwtClaimRequirementInput!]` ([PlaybackJwtClaimRequirementInput](/builders/api-schema/access/#playbackjwtclaimrequirementinput)) — Required claim constraints. Each entry&#39;s value is JSON-encoded for type flexibility.
 
@@ -14044,7 +14044,7 @@ updateWebhookEndpoint(
 
 **input_object**
 
-- **url**: `String!` — An https URL of a public host.
+- **url**: `String!` — An https URL of a public host that resolves. A host that does not exist is a ValidationError with code INVALID_ARGUMENT; a DNS lookup that failed in a way that may clear is a ValidationError with code FAILED_PRECONDITION, and the request can be retried.
 - **description**: `String`
 - **eventTypes**: `[String!]!` — Public event types to receive; &#34;*&#34; receives every type. See webhookEventTypes.
 - **apiVersion**: `String` — Public event package version; defaults to &#34;v1&#34;.
@@ -14104,7 +14104,7 @@ updateWebhookEndpoint(
 
 **input_object**
 
-- **url**: `String`
+- **url**: `String` — Checked like CreateWebhookEndpointInput.url.
 - **description**: `String`
 - **eventTypes**: `[String!]` — Replaces the subscribed event types when set.
 
@@ -14141,7 +14141,7 @@ One delivery of one event to one endpoint, or a test delivery.
 - **attempts**: `Int!` — Attempts since the delivery was created or last replayed.
 - **nextAttemptAt**: `Time` ([Time](/builders/api-schema/shared/#time)) — When the next attempt is due; null unless pending.
 - **lastStatusCode**: `Int!` — HTTP status of the last attempt; 0 when no response arrived.
-- **lastErrorClass**: `String!` — Failure class of the last attempt: http_status, redirect, timeout, connection, tls, dns, or blocked_destination; internal when FrameWorks could not sign or render the delivery; empty after a success.
+- **lastErrorClass**: `String!` — Failure class of the last attempt: http_status, redirect, timeout, connection, tls, dns, or blocked_destination; internal when FrameWorks could not sign or render the delivery; empty after a success. A blocked_destination failure (the destination policy refuses the address the host resolves to) fails the delivery without a retry.
 - **deliveredAt**: `Time` ([Time](/builders/api-schema/shared/#time))
 - **replayCount**: `Int!`
 - **lastReplayedAt**: `Time` ([Time](/builders/api-schema/shared/#time))
@@ -14160,7 +14160,7 @@ One HTTP attempt of a delivery.
 - **statusCode**: `Int!` — HTTP status; 0 when no response arrived.
 - **errorClass**: `String!`
 - **latencyMs**: `Int!`
-- **responseExcerpt**: `String!` — At most 1 KiB of the response body.
+- **responseExcerpt**: `String!` — At most 1 KiB of the response body. For a blocked_destination attempt, which gets no response, the destination policy&#39;s reason.
 - **attemptedAt**: `Time!` ([Time](/builders/api-schema/shared/#time))
 
 ### WebhookDeliveryEdge
@@ -18135,7 +18135,8 @@ mutation {
 ```
 
 `allowedKids` empty = any active tenant key. Restricting it to specific kids
-limits which keys can mint tokens for this object.
+limits which keys can mint tokens for this object. Every listed kid must name
+an active signing key; a blank or whitespace-only kid is rejected.
 
 To require an audience or custom claim values, add `requiredAudience` and
 `requiredClaimsJson`. Each `requiredClaimsJson` entry is a
@@ -30365,6 +30366,25 @@ Supported rollout-plan controls are limited to implemented scheduler behavior
 such as `batch_size`, `canary`, `canary_count`, `error_abort`, and `max_failed`;
 capacity-floor fields are rejected until disruptive drain rollouts need them.
 
+### frameworks cluster edges rollout status
+
+Compare every edge node's reported component versions with its cluster's edge
+release target and print one line per node: `converged`, `not converged` (with
+the components still behind), `failed` (with the phase and Foghorn's last
+error), `not connected to Foghorn` (enrolled in Quartermaster but absent from
+Foghorn), or `not updated automatically`. Defaults to every manifest cluster;
+`--cluster-id` narrows it to one.
+
+```bash
+frameworks cluster edges rollout status
+frameworks cluster edges rollout status --cluster-id media-eu --wait 15m
+```
+
+`--wait` polls (every `--interval`, default 15s) until every edge converges, a
+node fails, or the wait passes. The command exits non-zero only when a node's
+update failed; unconverged edges are a warning. `cluster release apply` runs
+the same check after syncing the edge target, bounded by `--edge-wait`.
+
 ---
 
 ## Edge Commands
@@ -30549,7 +30569,8 @@ frameworks edge provision --manifest edges.yaml
 - `--manifest string` - Path to edge manifest file
 - `--cluster-manifest string` - Cluster manifest used to load platform `SERVICE_TOKEN` for edge manifest `register_qm`
 - `--parallel int` - Number of fresh nodes installed concurrently (default: 1); enrolled nodes are always applied one at a time
-- `--dry-run` - Check every node in Ansible check mode and print its plan (`skip`, `apply`, `drain+apply`, or `install`) and diff; change nothing
+- `--dry-run` - Check every node in Ansible check mode and print its plan (`skip`, `apply`, `drain+apply`, `apply-in-place`, or `install`) and diff; change nothing
+- `--no-drain` - Apply a change that restarts media services without draining the node first, even when another node could take its sessions; its live sessions reconnect
 - `--tune` - Apply sysctl/limits tuning
 - `--register` - Register node in Quartermaster (manual/admin path only — see note below)
 - `--fetch-cert` - Fetch TLS certificate from Navigator
@@ -30559,7 +30580,7 @@ frameworks edge provision --manifest edges.yaml
 - `--max-transcodes int` - Maximum local transcodes reported by Helmsman
 - `--storage-capacity-bytes uint` - Local storage capacity limit reported by Helmsman
 
-Re-running `edge provision` on an enrolled node reuses its identity and re-renders its configuration from this CLI. Enrolled nodes are checked in Ansible check mode first; nodes without drift are skipped. An apply that would restart MistServer or Caddy, or recreate the edge container, is preceded by a drain through Foghorn (the node's sessions end first) and followed by restoring the node's prior mode. See [Running upgrades](/operators/running-upgrades/#edge-configuration).
+Re-running `edge provision` on an enrolled node reuses its identity and re-renders its configuration from this CLI. Enrolled nodes are checked in Ansible check mode first; nodes without drift are skipped. An apply that would restart MistServer or Caddy, or recreate the edge container, is preceded by a drain through Foghorn (the node's sessions end first, within 10 minutes) and followed by restoring the node's prior mode. A node that is the only routable node in its cluster, whose control stream to Foghorn is down, or whose cluster routability the CLI cannot read is applied in place (`apply-in-place`) instead, because its drain could not finish. A MistServer start-command change (such as `ExecStart`) and Caddy unit or env changes do not restart the service: they are installed and listed as a pending restart in the summary. A change to MistServer's start-time environment (env file assignments, unit `Environment=`/`EnvironmentFile=` lines, launchd `EnvironmentVariables`) restarts it, because its rolling reload keeps the environment the running process started with. A node is reported provisioned only once its Helmsman control stream to Foghorn is connected after the apply (polled for up to 90 seconds). `--dry-run` reports the same drain or in-place decision. See [Running upgrades](/operators/running-upgrades/#edge-configuration).
 
 `--register` is for the platform manual provisioning path, where an admin supplies `--pool-domain`/`--node-domain` directly without an enrollment token and wants to create the Quartermaster node row in the same step. It is rejected unless the active context uses the `platform` persona, and it is rejected when combined with `--enrollment-token` because the token path already registers the node through Foghorn's `PreRegisterEdge`. Manifest entries that set `register_qm: true` follow the same platform-only rule and cannot be combined with an enrollment token.
 
@@ -34236,9 +34257,13 @@ an old delivery arriving late cannot clear that fence. Failed database enumerati
 `cluster restore postgres` fails the restore rather than reporting that fencing succeeded.
 
 Authority work queues use range-sharded due-time indexes on YugabyteDB, and short-lease deliveries are
-claimed through their own `short_lease` index. If Commodore repeatedly logs `Failed to observe media
-authority delivery backlog` or `Failed to claim short-lease media authority delivery`, verify the
-v0.3.10 and v0.3.11 expand and postdeploy migrations before increasing worker timeouts. Refresh work is
+claimed through their own `short_lease` index. YugabyteDB logs `Skip locking since entity was modified`
+when one Commodore replica's claim passes over a delivery another replica has just taken; that is
+expected. A failing short-lease claim is logged as a warning when it starts failing and then at most
+once a minute, with the count of consecutive failures, and once more when claims recover. If Commodore
+keeps logging `Failed to observe media authority delivery backlog` or `Failed to claim short-lease
+media authority delivery`, verify the v0.3.10 and v0.3.11 expand and postdeploy migrations before
+increasing worker timeouts. Refresh work is
 one obligation per authority, so it does not grow with event volume; the normal retention jobs preserve
 all current and retryable authority while bounding expired terminal history. Operators should not
 delete those tables manually.
@@ -34496,7 +34521,8 @@ Navigator (`api_dns`) automatically manages DNS based on node inventory from Qua
 Private staging deployments that use split DNS can set
 `NAVIGATOR_DNS_RECORDS_ENABLED=false`. This suppresses public A records, aliases, Bunny records,
 and Cloudflare load-balancer reconciliation while leaving certificate issuance and renewal active.
-Provider credentials are therefore still required for ACME DNS-01. Do not use the switch for a
+Tenant alias removals and label renames still complete in Navigator's own state; provider records
+are neither published nor cleared. Provider credentials are therefore still required for ACME DNS-01. Do not use the switch for a
 public production cluster.
 
 If no nodes are returned for a service type, Navigator skips changes to avoid removing working DNS during a transient outage.
@@ -34588,13 +34614,22 @@ cannot follow HTTP redirects.
 Quartermaster is the health source for desired DNS state. Navigator filters
 unhealthy or addressless nodes before reconciling records; provider-side health
 checks are an implementation detail of the authoritative provider integration.
+
+Health only ever shrinks a Bunny record set, never empties it. When every
+candidate node of a cluster (or of the platform-official clusters behind a
+global entrypoint) is unhealthy, Navigator keeps the published records and logs
+a warning with the total and healthy counts. A member that leaves the healthy
+set stays published until it has been out for the removal grace, the larger of
+the record TTL and three minutes; this also applies to `edge-<node>` records. A
+Navigator restart restarts that grace. Records are removed outright only when
+the cluster becomes inactive or stops using Bunny cluster DNS.
 Use `frameworks dns doctor` to compare public DNS with Quartermaster inventory.
 The comparison is provider-aware: Bunny smart DNS may return any non-empty
 geographically selected subset of the healthy authoritative members, while a
 Cloudflare-proxied hostname is validated by successful resolution rather than
 by comparing Cloudflare anycast addresses with origin IPs. An NXDOMAIN response
 or a Bunny address outside Quartermaster's healthy inventory still fails the
-doctor check. Both per-cluster names and platform-official global Bunny
+doctor check, including a departing member inside its removal grace. Both per-cluster names and platform-official global Bunny
 entrypoints are checked.
 
 ### Wildcard TLS Certificates
@@ -37736,7 +37771,8 @@ plan` and `release apply --dry-run` list every step and, per host, the role task
 
 After postdeploy, `release apply` checks that every replica of the auth services and the web app
 runs the release's version, since a readiness check cannot detect an older web app bundle. It
-then sets the edge release target, from which Foghorn rolls edge nodes (see [Edge nodes](#edge-nodes)). Contract migrations
+then sets the edge release target, from which Foghorn rolls edge nodes (see [Edge nodes](#edge-nodes)), and waits up to
+`--edge-wait` (default 10 minutes) for every edge to report the release. Contract migrations
 are printed, never run.
 
 A reconciliation transition is a Check, Apply, Verify step that converges a declared invariant
@@ -37845,6 +37881,20 @@ After the release sets the edge release target, Foghorn updates Helmsman, MistSe
 over the Helmsman control stream on native and single-image container nodes. A component whose
 version did not change is not rolled.
 
+`release apply` then prints one line per edge node and reports the release applied only when
+every edge reports the target versions. A node whose update failed (for example, a new Helmsman
+that did not reconnect within two minutes of its self-update) fails the command with Foghorn's
+recorded reason. Edges still updating when the wait ends produce an `EDGES NOT CONVERGED`
+warning; follow them with:
+
+```bash
+frameworks cluster edges rollout status --wait 15m
+```
+
+A failed MistServer warmup takes the node out of routing (maintenance mode), except on the
+cluster's last routable node, which stays in normal mode so the cluster keeps serving; the
+failure is recorded either way and the update is not retried automatically on that node.
+
 Foghorn rejects a Helmsman whose control-protocol version is below its minimum at registration.
 Such an edge is absent from platform routing and cannot receive an update over the rejected
 stream, so it has to be redeployed out of band:
@@ -37872,8 +37922,10 @@ re-running `edge provision` with it is how that configuration reaches the edges:
    ```
 
    Every node is checked in Ansible check mode. The plan per node is `skip` (no drift),
-   `apply` (changes that keep media running), or `drain+apply`, with the diff and the changed
-   tasks.
+   `apply` (changes that keep media running), `drain+apply`, or `apply-in-place` (a
+   media-restarting change on a node whose drain could not finish, with the reason), with the
+   diff and the changed tasks. Deciding between `drain+apply` and `apply-in-place` only reads
+   Helmsman's metrics and the cluster's node health.
 
 3. Apply it:
 
@@ -37881,16 +37933,38 @@ re-running `edge provision` with it is how that configuration reaches the edges:
    frameworks edge provision --manifest <edge-manifest>
    ```
 
-Re-running provision reuses each node's enrolled identity. Enrolled nodes are prechecked first
-and only nodes that drifted are applied, one at a time; `--parallel` only applies to fresh
+Re-running provision reuses each node's enrolled identity. Enrolled nodes are prechecked first,
+concurrently, and only nodes that drifted are applied, one at a time; `--parallel` only applies to fresh
 installs. A MistServer binary change goes through MistServer's rolling reload and keeps its
-streams. When the apply must restart MistServer or Caddy, or recreate the edge container (a new
-compose file, image, or env file), the CLI first sets the node to `draining` through Foghorn,
-waits until its sessions end (up to 4 hours, as `cluster nodes remove` does), applies, and then
-restores the mode the node had. A node an operator already set to `draining` or `maintenance`
-keeps that mode. If the sessions do not end in time the node is left unchanged and back in
-`normal`; if the apply fails the node stays `draining` until you resume it with
+streams. A change to the MistServer start command (such as its `ExecStart` line) or to the
+Caddy systemd unit or env file is installed without restarting the service: the new values only
+take effect at the service's next start, and the summary lists the service under
+`restart pending` until then. A changed Caddyfile is loaded with `caddy reload`.
+
+MistServer still restarts for a changed controller interface or port and for a changed
+start-time environment: an assignment in its env file (including the API account, so MistServer
+and Helmsman switch to it together), an `Environment=`/`EnvironmentFile=` line of its unit, or
+the launchd `EnvironmentVariables`. Its rolling reload runs the new binary with the environment
+the running process started with, so an environment change that waited (a library path, for
+example) could break the next binary update. Caddy restarts for a new binary; the
+container stack is recreated for a new compose file, image, or env file. For such an apply the
+CLI first sets the node to `draining` through Foghorn, waits up to 10 minutes for its sessions
+to end, printing the remaining session count on every poll, applies, and then restores the mode
+the node had. A node an operator already set to `draining` or `maintenance` keeps that mode. If
+the sessions do not end in time the node is left unchanged and back in `normal`; if the apply
+fails the node stays `draining` until you resume it with
 `frameworks edge mode normal --ssh <target>`.
+
+A drain only runs when it can finish. The node is applied in place (`apply-in-place`, its
+sessions reconnect) when it is the only routable node in its cluster (no other active edge that
+Foghorn reports healthy in `normal` mode), when its Helmsman control stream to Foghorn is down,
+or when the CLI cannot read the cluster's nodes and health (for example without a platform
+context). The output names the reason. `--no-drain` applies in place unconditionally.
+
+A node counts as provisioned only once its Helmsman control stream to Foghorn is connected after
+the apply. The CLI polls it for up to 90 seconds, printing each poll, and fails the node if it
+stays down; a drained node then stays `draining`. A passing HTTPS check alone is not enough,
+because a node Foghorn cannot reach serves no routed traffic.
 
 Self-hosted single edges use the same path: `frameworks edge provision --ssh <user@host> --dry-run`,
 then without `--dry-run`, with the flags the node was provisioned with.

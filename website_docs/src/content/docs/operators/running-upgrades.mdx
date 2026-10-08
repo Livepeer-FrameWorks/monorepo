@@ -342,8 +342,10 @@ re-running `edge provision` with it is how that configuration reaches the edges:
    ```
 
    Every node is checked in Ansible check mode. The plan per node is `skip` (no drift),
-   `apply` (changes that keep media running), or `drain+apply`, with the diff and the changed
-   tasks.
+   `apply` (changes that keep media running), `drain+apply`, or `apply-in-place` (a
+   media-restarting change on a node whose drain could not finish, with the reason), with the
+   diff and the changed tasks. Deciding between `drain+apply` and `apply-in-place` only reads
+   Helmsman's metrics and the cluster's node health.
 
 3. Apply it:
 
@@ -351,16 +353,38 @@ re-running `edge provision` with it is how that configuration reaches the edges:
    frameworks edge provision --manifest <edge-manifest>
    ```
 
-Re-running provision reuses each node's enrolled identity. Enrolled nodes are prechecked first
-and only nodes that drifted are applied, one at a time; `--parallel` only applies to fresh
+Re-running provision reuses each node's enrolled identity. Enrolled nodes are prechecked first,
+concurrently, and only nodes that drifted are applied, one at a time; `--parallel` only applies to fresh
 installs. A MistServer binary change goes through MistServer's rolling reload and keeps its
-streams. When the apply must restart MistServer or Caddy, or recreate the edge container (a new
-compose file, image, or env file), the CLI first sets the node to `draining` through Foghorn,
-waits until its sessions end (up to 4 hours, as `cluster nodes remove` does), applies, and then
-restores the mode the node had. A node an operator already set to `draining` or `maintenance`
-keeps that mode. If the sessions do not end in time the node is left unchanged and back in
-`normal`; if the apply fails the node stays `draining` until you resume it with
+streams. A change to the MistServer start command (such as its `ExecStart` line) or to the
+Caddy systemd unit or env file is installed without restarting the service: the new values only
+take effect at the service's next start, and the summary lists the service under
+`restart pending` until then. A changed Caddyfile is loaded with `caddy reload`.
+
+MistServer still restarts for a changed controller interface or port and for a changed
+start-time environment: an assignment in its env file (including the API account, so MistServer
+and Helmsman switch to it together), an `Environment=`/`EnvironmentFile=` line of its unit, or
+the launchd `EnvironmentVariables`. Its rolling reload runs the new binary with the environment
+the running process started with, so an environment change that waited (a library path, for
+example) could break the next binary update. Caddy restarts for a new binary; the
+container stack is recreated for a new compose file, image, or env file. For such an apply the
+CLI first sets the node to `draining` through Foghorn, waits up to 10 minutes for its sessions
+to end, printing the remaining session count on every poll, applies, and then restores the mode
+the node had. A node an operator already set to `draining` or `maintenance` keeps that mode. If
+the sessions do not end in time the node is left unchanged and back in `normal`; if the apply
+fails the node stays `draining` until you resume it with
 `frameworks edge mode normal --ssh <target>`.
+
+A drain only runs when it can finish. The node is applied in place (`apply-in-place`, its
+sessions reconnect) when it is the only routable node in its cluster (no other active edge that
+Foghorn reports healthy in `normal` mode), when its Helmsman control stream to Foghorn is down,
+or when the CLI cannot read the cluster's nodes and health (for example without a platform
+context). The output names the reason. `--no-drain` applies in place unconditionally.
+
+A node counts as provisioned only once its Helmsman control stream to Foghorn is connected after
+the apply. The CLI polls it for up to 90 seconds, printing each poll, and fails the node if it
+stays down; a drained node then stays `draining`. A passing HTTPS check alone is not enough,
+because a node Foghorn cannot reach serves no routed traffic.
 
 Self-hosted single edges use the same path: `frameworks edge provision --ssh <user@host> --dry-run`,
 then without `--dry-run`, with the flags the node was provisioned with.

@@ -43,6 +43,24 @@ mistserver_unit_path: "/etc/systemd/system/{{ mistserver_systemd_name }}.service
 mistserver_legacy_systemd_name: mistserver
 mistserver_controller_port: 4242
 mistserver_controller_interface: 127.0.0.1
+# Lines that set the controller's start-time environment. A USR1 reload
+# re-execs MistController with the running process's environ, so a change to
+# these restarts MistServer instead of waiting (tasks/configure-*.yml); the
+# CLI's contract test applies the same patterns.
+mistserver_env_assignment_pattern: "(?m)^[A-Za-z_][A-Za-z0-9_]*=.*$"
+mistserver_unit_environment_pattern: '(?m)^[ \t]*(?:Environment|EnvironmentFile)=.*$'
+mistserver_plist_environment_pattern: '(?s)<key>EnvironmentVariables</key>\s*<dict>.*?</dict>'
+# Written when a unit/env change waits for the controller's next start;
+# `edge provision` reads it back for its summary (cli/pkg/provisioner).
+mistserver_restart_pending_marker: >-
+  {{ (mistserver_darwin_base_dir ~ '/mistserver')
+     if ansible_facts.os_family == 'Darwin' else mistserver_install_dir }}/.restart-pending
+# The controller's main PID: the angel process, which keeps its PID across
+# the USR1 re-exec, so a changed PID means the controller was started again.
+mistserver_main_pid_argv: >-
+  {{ ['pgrep', '-o', '-x', 'MistController']
+     if ansible_facts.os_family == 'Darwin'
+     else ['systemctl', 'show', '-p', 'MainPID', '--value', mistserver_systemd_name] }}
 # Bound on the post-reload authenticated api2 check: attempts x (timeout +
 # delay) seconds before validate falls back to a full restart.
 mistserver_api_verify_retries: 6

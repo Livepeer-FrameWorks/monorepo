@@ -32,3 +32,33 @@
   when:
     - not ansible_check_mode
     - ansible_facts.os_family == 'Darwin'
+
+# A pending restart is applied once the controller runs under another main
+# PID (a restart, a reboot, or the start above); the USR1 re-exec keeps it.
+- name: Read MistServer pending restart marker
+  ansible.builtin.slurp:
+    src: "{{ mistserver_restart_pending_marker }}"
+  register: mistserver_pending_marker
+  failed_when: false
+  when: not ansible_check_mode
+
+- name: Read running MistServer PID
+  ansible.builtin.command:
+    argv: "{{ mistserver_main_pid_argv }}"
+  register: mistserver_current_pid
+  changed_when: false
+  failed_when: false
+  when:
+    - not ansible_check_mode
+    - mistserver_pending_marker.content is defined
+
+- name: Clear applied MistServer pending restart
+  ansible.builtin.file:
+    path: "{{ mistserver_restart_pending_marker }}"
+    state: absent
+  when:
+    - not ansible_check_mode
+    - mistserver_pending_marker.content is defined
+    - >-
+      (mistserver_pending_marker.content | b64decode | trim)
+      != ('main_pid=' ~ (mistserver_current_pid.stdout | default('') | trim))

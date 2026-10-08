@@ -17,12 +17,84 @@
   changed_when: true
   when: ansible_check_mode
 
+# A Caddyfile change loads through Caddy's admin API, which swaps the config
+# without closing connections; a stopped Caddy reads it when it starts.
+- name: Report edge caddy reload in check mode
+  listen: edge caddy reload
+  ansible.builtin.debug:
+    msg: Caddy would reload its configuration
+  changed_when: true
+  when: ansible_check_mode
+
+- name: Check edge caddy active before reload
+  listen: edge caddy reload
+  ansible.builtin.command:
+    argv: [systemctl, is-active, --quiet, frameworks-caddy]
+  register: edge_caddy_reload_active
+  changed_when: false
+  failed_when: false
+  when: not ansible_check_mode
+
+- name: Edge caddy reload
+  listen: edge caddy reload
+  ansible.builtin.command:
+    argv:
+      [/opt/frameworks/caddy/caddy, reload, --config, /etc/caddy/Caddyfile, --adapter, caddyfile]
+  changed_when: true
+  when:
+    - not ansible_check_mode
+    - edge_caddy_reload_active.rc | default(1) == 0
+
+# The unit and caddy.env only shape the process systemd starts (the
+# Caddyfiles read no env placeholders), so a change to either waits for
+# Caddy's next start instead of dropping connections now. The marker records
+# the main PID the change was made under. These handlers come before the
+# restart handler so a restart in the same flush clears the marker.
+- name: Report edge caddy restart pending in check mode
+  listen: edge caddy restart pending
+  ansible.builtin.debug:
+    msg: The Caddy unit or environment would change; the running Caddy keeps its current one until its next start
+  changed_when: true
+  when: ansible_check_mode
+
+- name: Reload systemd units for pending edge caddy restart
+  listen: edge caddy restart pending
+  ansible.builtin.systemd:
+    daemon_reload: true
+  when: not ansible_check_mode
+
+- name: Read running edge caddy PID for pending restart
+  listen: edge caddy restart pending
+  ansible.builtin.command:
+    argv: [systemctl, show, -p, MainPID, --value, frameworks-caddy]
+  register: edge_caddy_pending_pid
+  changed_when: false
+  failed_when: false
+  when: not ansible_check_mode
+
+- name: Record edge caddy pending restart
+  listen: edge caddy restart pending
+  ansible.builtin.copy:
+    dest: "{{ edge_caddy_restart_pending_marker }}"
+    content: "main_pid={{ edge_caddy_pending_pid.stdout | trim }}\n"
+    mode: "0644"
+  when:
+    - not ansible_check_mode
+    - (edge_caddy_pending_pid.stdout | default('') | trim) not in ['', '0']
+
 - name: Edge caddy restart
   listen: edge caddy restart
   ansible.builtin.systemd:
     name: frameworks-caddy
     state: restarted
     daemon_reload: true
+  when: not ansible_check_mode
+
+- name: Clear edge caddy pending restart after restart
+  listen: edge caddy restart
+  ansible.builtin.file:
+    path: "{{ edge_caddy_restart_pending_marker }}"
+    state: absent
   when: not ansible_check_mode
 
 - name: Edge vmagent restart

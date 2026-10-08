@@ -270,7 +270,9 @@ func (e *EdgeProvisioner) provision(ctx context.Context, host inventory.Host, co
 		fmt.Println("[7/7] No domain set, skipping HTTPS verification")
 	}
 
-	fmt.Printf("Edge node provisioned successfully on %s (%s mode)\n", host.ExternalIP, mode)
+	// The caller (edge provision) still confirms Helmsman's control stream to
+	// Foghorn before it reports the node as provisioned.
+	fmt.Printf("Edge stack applied on %s (%s mode)\n", host.ExternalIP, mode)
 	return EdgeInspection{}, nil
 }
 

@@ -2,17 +2,40 @@
 # launchd has no native EnvironmentFile equivalent. Pattern: a shell wrapper
 # sources the env file, then execs MistController. The plist loads the wrapper.
 
-- name: Render env file
-  ansible.builtin.copy:
-    dest: "{{ mistserver_darwin_conf_dir }}/mistserver.env"
-    content: |
+- name: Read current MistServer env file (darwin)
+  ansible.builtin.slurp:
+    src: "{{ mistserver_darwin_conf_dir }}/mistserver.env"
+  register: mistserver_current_env
+  failed_when: false
+  no_log: true
+
+- name: Compose MistServer env file
+  ansible.builtin.set_fact:
+    mistserver_env_file_content: |
       # MistServer environment (managed by frameworks.infra.mistserver)
       {% for k, v in (mistserver_env | dictsort) %}
       {{ k }}={{ v }}
       {% endfor %}
       MIST_API_USERNAME={{ mistserver_api_user }}
       MIST_API_PASSWORD={{ mistserver_api_password }}
+  no_log: true
+
+- name: Render env file
+  ansible.builtin.copy:
+    dest: "{{ mistserver_darwin_conf_dir }}/mistserver.env"
+    content: "{{ mistserver_env_file_content }}"
     mode: "0600"
+  no_log: true
+  notify: mistserver restart pending
+
+# Same contract as configure-linux.yml: a changed assignment restarts.
+- name: Report MistServer environment change
+  ansible.builtin.debug:
+    msg: The MistServer environment changes; MistServer restarts to start with it
+  changed_when: >-
+    mistserver_current_env.content is defined
+    and (mistserver_current_env.content | b64decode | regex_findall(mistserver_env_assignment_pattern))
+        != (mistserver_env_file_content | regex_findall(mistserver_env_assignment_pattern))
   no_log: true
   notify: mistserver restart
 
@@ -37,11 +60,28 @@
       done < "{{ mistserver_darwin_conf_dir }}/mistserver.env"
       exec "{{ mistserver_darwin_base_dir }}/mistserver/bin/MistController"
     mode: "0755"
-  notify: mistserver restart
+  notify: mistserver restart pending
+
+- name: Read current MistServer launchd plist
+  ansible.builtin.slurp:
+    src: "{{ mistserver_darwin_plist_dir }}/{{ mistserver_darwin_label }}.plist"
+  register: mistserver_current_plist
+  failed_when: false
 
 - name: Render launchd plist
   ansible.builtin.template:
     src: mistserver.plist.j2
     dest: "{{ mistserver_darwin_plist_dir }}/{{ mistserver_darwin_label }}.plist"
     mode: "0644"
+  notify: mistserver restart pending
+
+# Same contract as the systemd unit: the reloaded controller keeps the old
+# process's environment, so a changed EnvironmentVariables dict restarts.
+- name: Report MistServer launchd environment change
+  ansible.builtin.debug:
+    msg: The MistServer launchd environment changes; MistServer restarts to start with it
+  changed_when: >-
+    mistserver_current_plist.content is defined
+    and (mistserver_current_plist.content | b64decode | regex_findall(mistserver_plist_environment_pattern))
+        != (lookup('ansible.builtin.template', 'mistserver.plist.j2') | regex_findall(mistserver_plist_environment_pattern))
   notify: mistserver restart

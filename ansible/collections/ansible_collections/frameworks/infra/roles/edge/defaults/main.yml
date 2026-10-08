@@ -119,6 +119,9 @@ edge_helmsman_version: ""
 edge_caddy_artifact_url: ""
 edge_caddy_artifact_checksum: ""
 edge_caddy_version: ""
+# Native Linux Caddy: written when a unit/env change waits for Caddy's next
+# start; `edge provision` reads it back for its summary (cli/pkg/provisioner).
+edge_caddy_restart_pending_marker: /opt/frameworks/caddy/.restart-pending
 edge_vmagent_artifact_url: ""
 edge_vmagent_artifact_checksum: ""
 edge_config_schema_version: ""

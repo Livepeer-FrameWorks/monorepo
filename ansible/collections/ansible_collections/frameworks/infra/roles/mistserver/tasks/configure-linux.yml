@@ -52,21 +52,54 @@
     group: "{{ mistserver_group }}"
     mode: "0600"
 
-- name: Render env file
-  ansible.builtin.copy:
-    dest: "{{ mistserver_env_file }}"
-    content: |
+- name: Read current MistServer env file
+  ansible.builtin.slurp:
+    src: "{{ mistserver_env_file }}"
+  register: mistserver_current_env
+  failed_when: false
+  no_log: true
+
+- name: Compose MistServer env file
+  ansible.builtin.set_fact:
+    mistserver_env_file_content: |
       # MistServer environment (managed by frameworks.infra.mistserver)
       {% for k, v in (mistserver_env | dictsort) %}
       {{ k }}={{ v }}
       {% endfor %}
       MIST_API_USERNAME={{ mistserver_api_user }}
       MIST_API_PASSWORD={{ mistserver_api_password }}
+  no_log: true
+
+- name: Render env file
+  ansible.builtin.copy:
+    dest: "{{ mistserver_env_file }}"
+    content: "{{ mistserver_env_file_content }}"
     owner: "{{ mistserver_user }}"
     group: "{{ mistserver_group }}"
     mode: "0600"
   no_log: true
+  notify: mistserver restart pending
+
+# Every variable in this file is environment the controller only reads at
+# start: the USR1 rolling reload execs the new MistController with the old
+# process's environ, and the API account it holds must match the one
+# Helmsman authenticates with. A changed assignment therefore restarts
+# MistServer; a change to the header comment alone waits for the next start.
+- name: Report MistServer environment change
+  ansible.builtin.debug:
+    msg: The MistServer environment changes; MistServer restarts to start with it
+  changed_when: >-
+    mistserver_current_env.content is defined
+    and (mistserver_current_env.content | b64decode | regex_findall(mistserver_env_assignment_pattern))
+        != (mistserver_env_file_content | regex_findall(mistserver_env_assignment_pattern))
+  no_log: true
   notify: mistserver restart
+
+- name: Read current MistServer systemd unit
+  ansible.builtin.slurp:
+    src: "{{ mistserver_unit_path }}"
+  register: mistserver_current_unit
+  failed_when: false
 
 - name: Render systemd unit
   ansible.builtin.template:
@@ -75,4 +108,18 @@
     owner: root
     group: root
     mode: "0644"
+  notify: mistserver restart pending
+
+# The reloaded MistController inherits the old process's environment, not the
+# unit's, so a changed Environment=/EnvironmentFile= line (such as the
+# LD_LIBRARY_PATH that resolves the bundled ONNX libraries) can break a later
+# binary swap if it waits; it restarts MistServer instead. Other directives
+# (ExecStart and friends) only matter at the next start.
+- name: Report MistServer unit environment change
+  ansible.builtin.debug:
+    msg: The MistServer unit environment changes; MistServer restarts to start with it
+  changed_when: >-
+    mistserver_current_unit.content is defined
+    and (mistserver_current_unit.content | b64decode | regex_findall(mistserver_unit_environment_pattern))
+        != (lookup('ansible.builtin.template', 'mistserver.service.j2') | regex_findall(mistserver_unit_environment_pattern))
   notify: mistserver restart

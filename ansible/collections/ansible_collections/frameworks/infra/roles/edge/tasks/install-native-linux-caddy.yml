@@ -188,7 +188,7 @@
     group: caddy
     mode: "0644"
     force: "{{ edge_force_bootstrap_caddyfile | bool }}"
-  notify: edge caddy restart
+  notify: edge caddy reload
 
 - name: Render edge caddy env
   ansible.builtin.copy:
@@ -198,7 +198,7 @@
     owner: caddy
     group: caddy
     mode: "0600"
-  notify: edge caddy restart
+  notify: edge caddy restart pending
 
 - name: Render edge caddy systemd unit
   ansible.builtin.copy:
@@ -226,7 +226,7 @@
 
       [Install]
       WantedBy=multi-user.target
-  notify: edge caddy restart
+  notify: edge caddy restart pending
 
 - name: Chown edge cert for caddy (when present)
   ansible.builtin.file:
@@ -254,3 +254,32 @@
     enabled: true
     daemon_reload: true
   when: not ansible_check_mode
+
+# A pending restart is applied once Caddy runs under another main PID.
+- name: Read edge caddy pending restart marker
+  ansible.builtin.slurp:
+    src: "{{ edge_caddy_restart_pending_marker }}"
+  register: edge_caddy_pending_marker
+  failed_when: false
+  when: not ansible_check_mode
+
+- name: Read running edge caddy PID
+  ansible.builtin.command:
+    argv: [systemctl, show, -p, MainPID, --value, frameworks-caddy]
+  register: edge_caddy_current_pid
+  changed_when: false
+  failed_when: false
+  when:
+    - not ansible_check_mode
+    - edge_caddy_pending_marker.content is defined
+
+- name: Clear applied edge caddy pending restart
+  ansible.builtin.file:
+    path: "{{ edge_caddy_restart_pending_marker }}"
+    state: absent
+  when:
+    - not ansible_check_mode
+    - edge_caddy_pending_marker.content is defined
+    - >-
+      (edge_caddy_pending_marker.content | b64decode | trim)
+      != ('main_pid=' ~ (edge_caddy_current_pid.stdout | default('') | trim))

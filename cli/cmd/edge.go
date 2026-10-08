@@ -808,11 +808,21 @@ node identity and renders this CLI's edge config. Each enrolled node is first
 checked in Ansible check mode; a node without drift is skipped, and nodes
 that drifted are applied one at a time (--parallel only applies to fresh
 installs). A MistServer binary change goes through its rolling reload and
-keeps streams up. When the apply must restart MistServer or Caddy, or
-recreate the edge container, the node is set to draining through Foghorn
-first, the apply waits until its sessions end, and the prior mode is
-restored afterwards. --dry-run prints each node's plan and diff and changes
-nothing.
+keeps streams up; a MistServer start-command change or a Caddy unit/env
+change is installed and reported as a pending restart, and a Caddyfile change
+is reloaded. A MistServer start-time environment change (env file, unit
+Environment lines) restarts it, since its rolling reload keeps the old
+environment. When the
+apply must restart MistServer or Caddy, or recreate the edge container, the
+node is set to draining through Foghorn first, the apply waits (up to 10
+minutes) until its sessions end, and the prior mode is restored afterwards.
+A node that is the only routable node in its cluster, whose control stream
+to Foghorn is down, or whose cluster routability cannot be read is applied
+in place instead, since its drain could not finish. A node counts as
+provisioned only once Helmsman's control stream to Foghorn is connected after
+the apply (polled for up to 90 seconds). Enrolled nodes are prechecked
+concurrently. --dry-run prints each node's plan and diff, including the drain
+or in-place decision, and changes nothing.
 
 Single node example:
   frameworks edge provision --ssh ubuntu@edge-1.example.com \
@@ -1097,7 +1107,7 @@ Multi-node manifest example:
 			if enrollment != nil && enrollment.Mode != "" {
 				runningMode = enrollment.Mode
 			}
-			node := newProvisionedEdgeNode(cmd.OutOrStdout(), nodeName, host, epConfig, sshTarget, sshKey, runningMode, enrollment != nil)
+			node := newProvisionedEdgeNode(cmd.OutOrStdout(), nodeName, host, epConfig, sshTarget, sshKey, runningMode, enrollment != nil, edgeControlAccessFor(cliCtx))
 			results := runEdgeRolloutWith(cmd.Context(), cmd.OutOrStdout(), []edgeRolloutNode{node}, 1, dryRun, noDrain)
 			if err := summarizeEdgeRollout(cmd.OutOrStdout(), results, dryRun); err != nil {
 				return err
@@ -1144,7 +1154,7 @@ Multi-node manifest example:
 	cmd.Flags().BoolVar(&local, "local", false, "Provision this machine as a user LaunchAgent (no admin required, macOS only)")
 	cmd.Flags().StringVar(&ageKeyFile, "age-key", "", "Path to age private key for SOPS-encrypted host files (default: $SOPS_AGE_KEY_FILE)")
 	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "Check every node in Ansible check mode and print its plan and diff; change nothing")
-	cmd.Flags().BoolVar(&noDrain, "no-drain", false, "Apply a change that restarts media services without draining the node first; its live sessions reconnect")
+	cmd.Flags().BoolVar(&noDrain, "no-drain", false, "Apply a change that restarts media services without draining the node first, even when another node could take its sessions; its live sessions reconnect")
 	cmd.Flags().StringSliceVar(&capabilities, "capability", nil, "Edge capability to enable (repeatable: ingest, edge, storage, processing)")
 	cmd.Flags().IntVar(&bandwidthMbps, "bandwidth-mbps", 0, "Advertised edge bandwidth limit in Mbps")
 	cmd.Flags().IntVar(&maxTranscodes, "max-transcodes", 0, "Maximum local transcodes for Helmsman to report")
@@ -1788,7 +1798,7 @@ func prepareManifestEdgeNode(cmd *cobra.Command, cliCtx fwcfg.Context, sshTarget
 	if enrollment != nil && enrollment.Mode != "" {
 		runningMode = enrollment.Mode
 	}
-	return newProvisionedEdgeNode(cmd.OutOrStdout(), nodeName, host, config, sshTarget, sshKey, runningMode, enrollment != nil), nil
+	return newProvisionedEdgeNode(cmd.OutOrStdout(), nodeName, host, config, sshTarget, sshKey, runningMode, enrollment != nil, edgeControlAccessFor(cliCtx)), nil
 }
 
 func firstNonEmpty(values ...string) string {
