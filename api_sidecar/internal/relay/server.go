@@ -92,6 +92,9 @@ type Server struct {
 	// defrost coalesces cold S3 read-through bytes per asset into
 	// ACTION_CACHED lifecycle events for cold-read amplification analytics.
 	defrost *defrostAggregator
+	// writeStallTimeout is how long one response write may block before the
+	// client counts as gone; see writeProgressDeadline.
+	writeStallTimeout time.Duration
 }
 
 // Options configures the relay. basePath is the Helmsman storage root used
@@ -171,6 +174,8 @@ func New(opts Options) *Server {
 		trustedCIDRs: parseTrustedCIDRs(opts.RelayTrustedCIDR, opts.Logger),
 		authzCache:   make(map[string]time.Time),
 		defrost:      newDefrostAggregator(),
+
+		writeStallTimeout: relayWriteStallTimeout,
 	}
 }
 
@@ -278,7 +283,7 @@ func (s *Server) inTrustedCIDR(remoteAddr string) bool {
 // other header — Caddy forwards remote traffic to the same loopback
 // socket and trusting forwarded headers would defeat the auth gate.
 func (s *Server) MountRoutes(r *gin.Engine) {
-	g := r.Group("/internal/artifact", s.peerAuthMiddleware())
+	g := r.Group("/internal/artifact", s.writeProgressDeadline(), s.peerAuthMiddleware())
 
 	// VOD: flat path (storage/vod/<hash>.<ext>). URL preserves the same
 	// shape so Mist sees a stable seekable HTTP source with the right
@@ -302,6 +307,65 @@ func (s *Server) MountRoutes(r *gin.Engine) {
 	g.GET("/upload/:file", s.serveUpload)
 	g.PUT("/upload/:file", func(c *gin.Context) { s.putSidecar(c, "upload") })
 	g.PUT("/upload/:file/", func(c *gin.Context) { s.putSidecar(c, "upload") })
+}
+
+// relayWriteStallTimeout is how long one relay response write may block on a
+// client that stopped reading before the connection is dropped. It matches
+// the listener's whole-response WriteTimeout, which a relay response does not
+// get: an artifact body runs as long as the upstream and the reader take.
+const relayWriteStallTimeout = 30 * time.Second
+
+// writeProgressDeadline replaces the listener's whole-response write deadline
+// with a per-write one. A relay body is bounded by upstream and reader speed,
+// not wall time, so the deadline is cleared on entry and every write gets
+// writeStallTimeout from its own start: a slow but reading client gets the
+// whole body, a client that stopped reading is still cut off. Writers without
+// deadline support (test recorders) keep their default behavior.
+func (s *Server) writeProgressDeadline() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		rc := http.NewResponseController(c.Writer)
+		if err := rc.SetWriteDeadline(time.Time{}); err != nil {
+			c.Next()
+			return
+		}
+		stall := s.writeStallTimeout
+		if stall <= 0 {
+			stall = relayWriteStallTimeout
+		}
+		c.Writer = &progressDeadlineWriter{ResponseWriter: c.Writer, rc: rc, stall: stall}
+		c.Next()
+	}
+}
+
+// progressDeadlineWriter moves the connection's write deadline forward before
+// every body write and flush.
+type progressDeadlineWriter struct {
+	gin.ResponseWriter
+	rc    *http.ResponseController
+	stall time.Duration
+}
+
+// Unwrap lets http.ResponseController reach the connection through this
+// wrapper.
+func (w *progressDeadlineWriter) Unwrap() http.ResponseWriter { return w.ResponseWriter }
+
+func (w *progressDeadlineWriter) extend() {
+	_ = w.rc.SetWriteDeadline(time.Now().Add(w.stall)) //nolint:errcheck // support was confirmed on entry
+}
+
+func (w *progressDeadlineWriter) Write(p []byte) (int, error) {
+	w.extend()
+	return w.ResponseWriter.Write(p)
+}
+
+func (w *progressDeadlineWriter) WriteString(str string) (int, error) {
+	w.extend()
+	return w.ResponseWriter.WriteString(str)
+}
+
+func (w *progressDeadlineWriter) Flush() {
+	w.extend()
+	w.ResponseWriter.Flush()
 }
 
 // peerAuthMiddleware gates /internal/artifact/*.
