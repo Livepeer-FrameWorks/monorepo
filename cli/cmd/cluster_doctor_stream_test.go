@@ -140,8 +140,13 @@ func TestDoctorSectionsAnnounceSlowChecksStillRunning(t *testing.T) {
 	sections := []doctorSection{
 		{title: "First", checks: []doctorCheck{{name: "first", run: block(releaseFirst)}}},
 		{title: "Second", checks: []doctorCheck{
-			{name: "slow", progress: "still reading", run: block(releaseSlow)},
-			{name: "fast", run: func(context.Context) doctorOutcome { close(fastDone); return doctorOutcome{miss: "done"} }},
+			{name: "fast", run: func(context.Context) doctorOutcome { return doctorOutcome{miss: "done"} }},
+			{name: "slow", progress: "still reading", run: func(ctx context.Context) doctorOutcome {
+				// The other worker is blocked in First, so reaching this job proves
+				// the fast result was delivered before First is released.
+				close(fastDone)
+				return block(releaseSlow)(ctx)
+			}},
 		}},
 	}
 	out := &lockedBuffer{}
@@ -151,7 +156,7 @@ func TestDoctorSectionsAnnounceSlowChecksStillRunning(t *testing.T) {
 	}
 	finished := make(chan result, 1)
 	go func() {
-		outcomes, interrupted := runDoctorSections(context.Background(), out, sections, 4, func(name string, _ doctorOutcome) {
+		outcomes, interrupted := runDoctorSections(context.Background(), out, sections, 2, func(name string, _ doctorOutcome) {
 			_, _ = out.Write([]byte("result " + name + "\n"))
 		})
 		finished <- result{outcomes, interrupted}
