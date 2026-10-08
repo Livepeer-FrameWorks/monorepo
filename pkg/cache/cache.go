@@ -109,6 +109,12 @@ func (c *Cache) Get(ctx context.Context, key string, loader Loader) (interface{}
 				refreshCtx := context.WithoutCancel(ctx)
 				// x/sync/singleflight.Group.Do returns (val, err, shared) in this version.
 				_, err, _ := c.sf.Do("refresh:"+key, func() (interface{}, error) {
+					// A reader that saw the stale entry can reach this point after
+					// another refresh already stored a fresh one; it must not start
+					// a second authority load.
+					if _, fresh := c.freshResult(key); fresh {
+						return nil, nil
+					}
 					fence := c.beginLoad(key)
 					defer c.endLoad(key, fence)
 					c.refresh(refreshCtx, key, fence, loader)

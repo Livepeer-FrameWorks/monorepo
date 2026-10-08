@@ -6,8 +6,10 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
+	"math/rand/v2"
 	"net/http"
 	"strconv"
 	"strings"
@@ -15,6 +17,7 @@ import (
 	"time"
 
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/accesspolicy"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/cache"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/ctxkeys"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/globalid"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
@@ -25,6 +28,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
+	"golang.org/x/sync/singleflight"
 	"google.golang.org/grpc/codes"
 	grpcstatus "google.golang.org/grpc/status"
 )
@@ -1370,35 +1374,98 @@ type TenantRateLimits struct {
 	BillingStatusUnavailable bool
 	IsSuspended              bool // true if tenant suspended (balance < -$10)
 	IsBalanceNegative        bool // true if balance <= 0 (should return 402)
-	FetchedAt                time.Time
+	// FetchedAt is when Quartermaster produced the billing fields. A
+	// last-known state served across a failed lookup keeps its original time.
+	FetchedAt time.Time
+
+	// freshFor is how long this answer is served before a background
+	// refresh is due.
+	freshFor time.Duration
 }
 
-// TenantCache caches tenant rate limits from Quartermaster
+// TenantCache caches each tenant's ValidateTenant answer, which carries both
+// rate limits and the Purser admission state Quartermaster read for it.
+//
+// Every gateway request reads it several times (HTTP rate limit and billing
+// check, GraphQL per-operation rate limit, websocket access), on every Bridge
+// replica, so a lookup is shared rather than repeated:
+//   - Concurrent misses for a tenant share one ValidateTenant call.
+//   - An answer is fresh for the TTL with ±20% jitter so tenants, and the
+//     replicas that read them at the same moment, do not all expire together.
+//   - For staleWindow past freshness the cached answer is still served while
+//     one background call refreshes it, so an active tenant sees a policy
+//     change (an authoritative suspension included) within the jittered TTL
+//     plus one lookup; only an idle tenant waits on a synchronous read.
+//
+// A failed lookup (transport error, timeout) is not a policy change:
+//   - With a last authoritative answer no older than lastGoodMaxAge, that
+//     answer keeps being served and the lookup is retried at most once per
+//     errorBackoff.
+//   - Without one, the error is cached for errorBackoff: callers see the
+//     lookup as unavailable and rated work is refused, without each request
+//     retrying Quartermaster.
+//
+// A tenant Quartermaster reports as not valid is authoritative: its last
+// answer is dropped and the refusal is cached for errorBackoff. A "billing
+// status unavailable" answer keeps the last known billing fields and is
+// re-read after billingUnavailableRetryAfter.
 type TenantCache struct {
-	client           TenantValidator
-	logger           logging.Logger
-	cache            sync.Map // map[tenantID]*TenantRateLimits
-	cacheTTLPostpaid time.Duration
-	cacheTTLPrepaid  time.Duration
-	lastRefresh      sync.Map // map[tenantID]time.Time of the last RefreshBillingAccessStatus fetch
+	client      TenantValidator
+	logger      logging.Logger
+	timing      tenantCacheTiming
+	entries     *cache.Cache
+	lastGood    sync.Map // map[tenantID]*TenantRateLimits, last fully authoritative answer
+	refreshes   singleflight.Group
+	lastRefresh sync.Map // map[tenantID]time.Time of the last RefreshBillingAccessStatus fetch
 }
 
-// billingRefreshInterval bounds how often a refused tenant makes the gateway
-// re-read its billing status, so a client retrying a refused request cannot
-// turn every retry into a Quartermaster call.
-const billingRefreshInterval = 5 * time.Second
+type tenantCacheTiming struct {
+	ttl                         time.Duration
+	ttlJitter                   float64
+	staleWindow                 time.Duration
+	errorBackoff                time.Duration
+	billingUnavailableRetry     time.Duration
+	lastGoodMaxAge              time.Duration
+	billingRefreshInterval      time.Duration
+	validateTenantFetchDeadline time.Duration
+}
+
+// Operator tier changes and billing grants reach the gateway only through the
+// TTL when they admit less than before, so every billing model shares it.
+var defaultTenantCacheTiming = tenantCacheTiming{
+	ttl:                     time.Minute,
+	ttlJitter:               0.2,
+	staleWindow:             30 * time.Second,
+	errorBackoff:            5 * time.Second,
+	billingUnavailableRetry: billingUnavailableRetryAfter,
+	// Past this age a last-known answer is no longer authority to admit
+	// rated work while Quartermaster stays unreachable.
+	lastGoodMaxAge: 10 * time.Minute,
+	// Bounds how often a refused tenant makes the gateway re-read its
+	// billing status, so a client retrying a refused request cannot turn
+	// every retry into a Quartermaster call.
+	billingRefreshInterval:      5 * time.Second,
+	validateTenantFetchDeadline: 2 * time.Second,
+}
+
+// errTenantNotValid marks Quartermaster's authoritative "not valid" answer,
+// as opposed to a lookup that failed.
+var errTenantNotValid = errors.New("tenant not valid")
 
 // NewTenantCache creates a new tenant cache
 func NewTenantCache(client TenantValidator, logger logging.Logger) *TenantCache {
-	return &TenantCache{
-		client: client,
-		logger: logger,
-		// Operator tier changes and billing grants reach the gateway only
-		// through this TTL when they admit less than before, so postpaid
-		// tenants are re-read as often as prepaid ones.
-		cacheTTLPostpaid: 1 * time.Minute,
-		cacheTTLPrepaid:  1 * time.Minute, // Prepaid tenants: 1 minute cache (faster enforcement)
-	}
+	return newTenantCache(client, logger, defaultTenantCacheTiming)
+}
+
+func newTenantCache(client TenantValidator, logger logging.Logger, timing tenantCacheTiming) *TenantCache {
+	tc := &TenantCache{client: client, logger: logger, timing: timing}
+	tc.entries = cache.New(cache.Options{
+		NegativeTTL: timing.errorBackoff,
+		ValueLifetime: func(_ string, value interface{}) (time.Duration, time.Duration) {
+			return value.(*TenantRateLimits).freshFor, timing.staleWindow //nolint:errcheck // only *TenantRateLimits is stored
+		},
+	}, cache.MetricsHooks{})
+	return tc
 }
 
 // GetLimits returns the rate limits for a tenant, fetching from Quartermaster if not cached
@@ -1410,41 +1477,75 @@ func (tc *TenantCache) GetLimits(tenantID string) (limit, burst int) {
 	return info.Limit, info.Burst
 }
 
-// getTenantInfo returns cached tenant info, fetching from Quartermaster if stale/missing.
+// getTenantInfo returns the cached tenant answer, sharing one Quartermaster
+// lookup between concurrent callers when it is missing.
 func (tc *TenantCache) getTenantInfo(tenantID string) (*TenantRateLimits, error) {
-	// Check cache first
-	if cached, ok := tc.cache.Load(tenantID); ok {
-		limits := cached.(*TenantRateLimits) //nolint:errcheck // type guaranteed by sync.Map usage
-		// Prepaid tenants use a shorter TTL (faster enforcement).
-		if time.Since(limits.FetchedAt) < tc.ttlFor(limits) {
-			return limits, nil
-		}
+	value, ok, err := tc.entries.Get(context.Background(), tenantID, tc.load)
+	if err != nil {
+		return nil, err
 	}
-	return tc.fetchTenantInfo(tenantID)
+	if !ok {
+		return nil, fmt.Errorf("tenant %q lookup returned no answer", tenantID)
+	}
+	return value.(*TenantRateLimits), nil //nolint:errcheck // only *TenantRateLimits is stored
 }
 
-// fetchTenantInfo reads the tenant from Quartermaster and caches the result.
-func (tc *TenantCache) fetchTenantInfo(tenantID string) (*TenantRateLimits, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+func (tc *TenantCache) load(ctx context.Context, tenantID string) (interface{}, bool, error) {
+	info, err := tc.fetchTenantInfo(ctx, tenantID)
+	if err != nil {
+		return nil, false, err
+	}
+	return info, true, nil
+}
+
+// lastKnown returns the last authoritative answer while it may still stand in
+// for an unreachable Quartermaster.
+func (tc *TenantCache) lastKnown(tenantID string, now time.Time) (*TenantRateLimits, bool) {
+	stored, ok := tc.lastGood.Load(tenantID)
+	if !ok {
+		return nil, false
+	}
+	previous := stored.(*TenantRateLimits) //nolint:errcheck // only *TenantRateLimits is stored
+	if now.Sub(previous.FetchedAt) > tc.timing.lastGoodMaxAge {
+		return nil, false
+	}
+	return previous, true
+}
+
+// fetchTenantInfo reads the tenant from Quartermaster. The caller stores the
+// result; a returned error is either errTenantNotValid or a failed lookup with
+// no usable last-known answer.
+func (tc *TenantCache) fetchTenantInfo(ctx context.Context, tenantID string) (*TenantRateLimits, error) {
+	ctx, cancel := context.WithTimeout(ctx, tc.timing.validateTenantFetchDeadline)
 	defer cancel()
 
 	resp, err := tc.client.ValidateTenant(ctx, tenantID, "")
-	if err != nil {
+	now := time.Now()
+	if err == nil && resp != nil && !resp.Valid {
+		tc.lastGood.Delete(tenantID)
+		return nil, fmt.Errorf("tenant %q: %w", tenantID, errTenantNotValid)
+	}
+	if err != nil || resp == nil {
+		if err == nil {
+			err = errors.New("empty ValidateTenant response")
+		}
+		previous, known := tc.lastKnown(tenantID, now)
 		if tc.logger != nil {
 			tc.logger.WithFields(logging.Fields{
-				"tenant_id": tenantID,
-				"error":     err,
+				"tenant_id":        tenantID,
+				"error":            err,
+				"kept_known_state": known,
+				"retry_in":         tc.timing.errorBackoff.String(),
 			}).Warn("Failed to fetch tenant info from Quartermaster")
 		}
-		return nil, fmt.Errorf("validate tenant: %w", err)
+		if !known {
+			return nil, fmt.Errorf("validate tenant: %w", err)
+		}
+		kept := *previous
+		kept.freshFor = tc.timing.errorBackoff
+		return &kept, nil
 	}
 
-	if resp == nil || !resp.Valid {
-		return nil, fmt.Errorf("tenant %q was not valid", tenantID)
-	}
-
-	// Cache the result with billing info
-	now := time.Now()
 	limits := &TenantRateLimits{
 		Limit:                    int(resp.RateLimitPerMinute),
 		Burst:                    int(resp.RateLimitBurst),
@@ -1457,32 +1558,34 @@ func (tc *TenantCache) fetchTenantInfo(tenantID string) (*TenantRateLimits, erro
 		IsBalanceNegative:        resp.IsBalanceNegative,
 		FetchedAt:                now,
 	}
-	if limits.BillingStatusUnavailable {
-		// An unavailable billing authority is a transient answer, not the
-		// tenant's billing state: keep the last known state if there is one,
-		// and ask again soon instead of refusing rated work for a full TTL.
-		if cached, ok := tc.cache.Load(tenantID); ok {
-			if previous := cached.(*TenantRateLimits); !previous.BillingStatusUnavailable { //nolint:errcheck // type guaranteed by sync.Map usage
-				limits.BillingModel = previous.BillingModel
-				limits.TierName = previous.TierName
-				limits.CollectionReady = previous.CollectionReady
-				limits.CollectionProvider = previous.CollectionProvider
-				limits.BillingStatusUnavailable = false
-				limits.IsSuspended = previous.IsSuspended
-				limits.IsBalanceNegative = previous.IsBalanceNegative
-			}
-		}
-		limits.FetchedAt = now.Add(billingUnavailableRetryAfter - tc.ttlFor(limits))
-		if tc.logger != nil {
-			tc.logger.WithFields(logging.Fields{
-				"tenant_id":        tenantID,
-				"kept_known_state": !limits.BillingStatusUnavailable,
-				"retry_in":         billingUnavailableRetryAfter.String(),
-			}).Warn("Billing status unavailable from Quartermaster")
-		}
+	if !limits.BillingStatusUnavailable {
+		limits.freshFor = tc.jitteredTTL()
+		tc.lastGood.Store(tenantID, limits)
+		return limits, nil
 	}
-	tc.cache.Store(tenantID, limits)
 
+	// An unavailable billing authority is a transient answer, not the
+	// tenant's billing state: keep the last known state if there is one, and
+	// ask again soon instead of refusing rated work for a full TTL. The
+	// rate limits in this answer are current either way.
+	if previous, known := tc.lastKnown(tenantID, now); known {
+		limits.BillingModel = previous.BillingModel
+		limits.TierName = previous.TierName
+		limits.CollectionReady = previous.CollectionReady
+		limits.CollectionProvider = previous.CollectionProvider
+		limits.BillingStatusUnavailable = false
+		limits.IsSuspended = previous.IsSuspended
+		limits.IsBalanceNegative = previous.IsBalanceNegative
+		limits.FetchedAt = previous.FetchedAt
+	}
+	limits.freshFor = tc.timing.billingUnavailableRetry
+	if tc.logger != nil {
+		tc.logger.WithFields(logging.Fields{
+			"tenant_id":        tenantID,
+			"kept_known_state": !limits.BillingStatusUnavailable,
+			"retry_in":         tc.timing.billingUnavailableRetry.String(),
+		}).Warn("Billing status unavailable from Quartermaster")
+	}
 	return limits, nil
 }
 
@@ -1490,11 +1593,9 @@ func (tc *TenantCache) fetchTenantInfo(tenantID string) (*TenantRateLimits, erro
 // could not be read is asked for again.
 const billingUnavailableRetryAfter = 5 * time.Second
 
-func (tc *TenantCache) ttlFor(limits *TenantRateLimits) time.Duration {
-	if limits.BillingModel == "prepaid" {
-		return tc.cacheTTLPrepaid
-	}
-	return tc.cacheTTLPostpaid
+func (tc *TenantCache) jitteredTTL() time.Duration {
+	spread := tc.timing.ttlJitter * (2*rand.Float64() - 1) //nolint:gosec // jitter spreads expiry, not a secret
+	return time.Duration(float64(tc.timing.ttl) * (1 + spread))
 }
 
 // GetBillingAccessStatus returns one coherent snapshot. Lookup failure is
@@ -1505,6 +1606,10 @@ func (tc *TenantCache) GetBillingAccessStatus(tenantID string) (BillingAccessSta
 	if err != nil {
 		return BillingAccessStatus{}, err
 	}
+	return billingAccessStatusFrom(tenantID, info)
+}
+
+func billingAccessStatusFrom(tenantID string, info *TenantRateLimits) (BillingAccessStatus, error) {
 	if info.BillingStatusUnavailable {
 		return BillingAccessStatus{}, fmt.Errorf("billing authority unavailable for tenant %q", tenantID)
 	}
@@ -1519,17 +1624,43 @@ func (tc *TenantCache) GetBillingAccessStatus(tenantID string) (BillingAccessSta
 }
 
 // RefreshBillingAccessStatus re-reads the tenant past its cache TTL, at most
-// once per billingRefreshInterval; within that interval it answers from the
-// cache, which the last refresh just filled.
+// once per billingRefreshInterval across all callers; within that interval it
+// answers from the cache, which the last refresh just filled.
 func (tc *TenantCache) RefreshBillingAccessStatus(tenantID string) (BillingAccessStatus, error) {
-	now := time.Now()
-	if last, ok := tc.lastRefresh.Load(tenantID); !ok || now.Sub(last.(time.Time)) >= billingRefreshInterval { //nolint:errcheck // type guaranteed by sync.Map usage
-		tc.lastRefresh.Store(tenantID, now)
-		if _, err := tc.fetchTenantInfo(tenantID); err != nil {
-			return BillingAccessStatus{}, err
+	if !tc.claimRefresh(tenantID, time.Now()) {
+		return tc.GetBillingAccessStatus(tenantID)
+	}
+	value, err, _ := tc.refreshes.Do(tenantID, func() (interface{}, error) {
+		info, fetchErr := tc.fetchTenantInfo(context.Background(), tenantID)
+		if fetchErr != nil {
+			if errors.Is(fetchErr, errTenantNotValid) {
+				tc.entries.Delete(tenantID)
+			}
+			return nil, fetchErr
+		}
+		tc.entries.SetDefault(tenantID, info)
+		return info, nil
+	})
+	if err != nil {
+		return BillingAccessStatus{}, err
+	}
+	return billingAccessStatusFrom(tenantID, value.(*TenantRateLimits)) //nolint:errcheck // the refresh returns *TenantRateLimits
+}
+
+// claimRefresh reports whether this caller is the one to refresh tenantID now.
+func (tc *TenantCache) claimRefresh(tenantID string, now time.Time) bool {
+	for {
+		previous, loaded := tc.lastRefresh.LoadOrStore(tenantID, now)
+		if !loaded {
+			return true
+		}
+		if now.Sub(previous.(time.Time)) < tc.timing.billingRefreshInterval { //nolint:errcheck // only time.Time is stored
+			return false
+		}
+		if tc.lastRefresh.CompareAndSwap(tenantID, previous, now) {
+			return true
 		}
 	}
-	return tc.GetBillingAccessStatus(tenantID)
 }
 
 // GetLimitsFunc returns a function suitable for use with RateLimitMiddleware

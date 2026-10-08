@@ -317,3 +317,44 @@ func TestCacheInvalidationFenceIsReclaimedAfterCanceledLoad(t *testing.T) {
 		t.Fatalf("active load fences = %d after invalidated load completed, want 0", got)
 	}
 }
+
+// Readers that observed one stale entry spawn their refresh goroutines at
+// different times; one scheduled after the first refresh stored a fresh entry
+// used to start a second authority load for the same generation.
+func TestCacheSWRRefreshesOncePerStaleGeneration(t *testing.T) {
+	for round := range 100 {
+		c := New(Options{TTL: time.Minute, StaleWhileRevalidate: time.Minute}, MetricsHooks{})
+		c.Set("tenant-1", "stale", time.Nanosecond)
+		time.Sleep(time.Millisecond)
+
+		var mu sync.Mutex
+		count := 0
+		loader := func(context.Context, string) (interface{}, bool, error) {
+			mu.Lock()
+			count++
+			mu.Unlock()
+			return "fresh", true, nil
+		}
+		var readers sync.WaitGroup
+		start := make(chan struct{})
+		for range 64 {
+			readers.Add(1)
+			go func() {
+				defer readers.Done()
+				<-start
+				_, _, _ = c.Get(context.Background(), "tenant-1", loader)
+			}()
+		}
+		close(start)
+		readers.Wait()
+		// Let every spawned refresh goroutine run to completion.
+		time.Sleep(5 * time.Millisecond)
+
+		mu.Lock()
+		got := count
+		mu.Unlock()
+		if got != 1 {
+			t.Fatalf("round %d: %d authority loads for one stale generation, want 1", round, got)
+		}
+	}
+}

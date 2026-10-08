@@ -28,30 +28,35 @@ func TestTenantCacheDoesNotHoldBillingUnavailableForTheTTL(t *testing.T) {
 	good := &quartermasterpb.ValidateTenantResponse{Valid: true, BillingModel: "postpaid", CollectionReady: true}
 	unavailable := &quartermasterpb.ValidateTenantResponse{Valid: true, BillingModel: "postpaid", BillingStatusUnavailable: true}
 
+	// Synchronous reads past a short TTL, so each expiry asks Quartermaster.
+	timing := defaultTenantCacheTiming
+	timing.ttl = 20 * time.Millisecond
+	timing.ttlJitter = 0
+	timing.staleWindow = 0
+
 	v := &scriptedTenantValidator{responses: []*quartermasterpb.ValidateTenantResponse{good, unavailable, good}}
-	tc := NewTenantCache(v, logging.NewLogger())
+	tc := newTenantCache(v, logging.NewLogger(), timing)
 	if _, err := tc.GetBillingAccessStatus("t1"); err != nil {
 		t.Fatalf("first lookup: %v", err)
 	}
-	// Force a refresh; Quartermaster now answers unavailable.
-	cached, _ := tc.cache.Load("t1")
-	cached.(*TenantRateLimits).FetchedAt = time.Now().Add(-time.Hour)
+	// Past the TTL Quartermaster answers unavailable.
+	time.Sleep(2 * timing.ttl)
 	if _, err := tc.GetBillingAccessStatus("t1"); err != nil {
 		t.Fatalf("unavailable answer replaced the known billing state: %v", err)
 	}
-	cached, _ = tc.cache.Load("t1")
-	if remaining := tc.ttlFor(cached.(*TenantRateLimits)) - time.Since(cached.(*TenantRateLimits).FetchedAt); remaining > billingUnavailableRetryAfter {
-		t.Fatalf("unavailable answer cached for %s, want at most %s", remaining, billingUnavailableRetryAfter)
+	cached, _ := tc.entries.Peek("t1")
+	if freshFor := cached.(*TenantRateLimits).freshFor; freshFor > billingUnavailableRetryAfter {
+		t.Fatalf("unavailable answer cached for %s, want at most %s", freshFor, billingUnavailableRetryAfter)
 	}
 
 	// With no known state the refusal stands, but only until the retry.
+	timing.billingUnavailableRetry = 20 * time.Millisecond
 	v2 := &scriptedTenantValidator{responses: []*quartermasterpb.ValidateTenantResponse{unavailable, good}}
-	tc2 := NewTenantCache(v2, logging.NewLogger())
+	tc2 := newTenantCache(v2, logging.NewLogger(), timing)
 	if _, err := tc2.GetBillingAccessStatus("t2"); err == nil {
 		t.Fatal("unknown billing state must not admit rated work")
 	}
-	cached, _ = tc2.cache.Load("t2")
-	cached.(*TenantRateLimits).FetchedAt = cached.(*TenantRateLimits).FetchedAt.Add(-billingUnavailableRetryAfter)
+	time.Sleep(2 * timing.billingUnavailableRetry)
 	if _, err := tc2.GetBillingAccessStatus("t2"); err != nil {
 		t.Fatalf("billing state not re-read after the retry delay: %v", err)
 	}
