@@ -275,6 +275,14 @@ the hint and preserves the same claim and locking semantics.
 Budget increases and new coverage exceptions require inspection;
 `make explain-audit-budget` is a review aid, not the normal verification target.
 
+The playback-pair fixture includes a highly duplicated miss: 917 projections share
+one playback ID without matching authority versions. Its accepted hash plan is
+not representative of successful playback. A separate real-Yugabyte contract in
+both layouts checks the generated query against 20,000 objects with a populated
+parent tenant, limits it to 20 storage rows / 15 requests, and compares identical
+duplicate misses with the original object lookup. Both the generic miss budget
+and the successful-lookup contract must pass.
+
 ## Runtime session limits
 
 Services log in as their database's runtime role, and nothing else does: migrations,

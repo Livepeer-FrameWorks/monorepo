@@ -801,6 +801,18 @@
     "read_requests": 1,
     "rows_scanned": 20000
   },
+  "foghorn:GetLocalReadAuthorityPairByPlaybackID@declared": {
+    "flags": ["READ_AMPLIFICATION"],
+    "read_requests": 8,
+    "rows_scanned": 7698,
+    "reason": "Synthetic duplicate miss: 917 projections share this playback ID but lack matching authority versions. The hash plan scans 7698 rows in 8 RPCs. TestMediaAuthorityLookupIndexes_RealYugabyte separately gates a successful object+tenant pair among 20000 objects at <=20 rows / <=15 RPCs and compares identical duplicate misses against the original lookup in both layouts."
+  },
+  "foghorn:GetLocalReadAuthorityPairByPlaybackID@distributed": {
+    "flags": ["READ_AMPLIFICATION"],
+    "read_requests": 8,
+    "rows_scanned": 7698,
+    "reason": "Synthetic duplicate miss: 917 projections share this playback ID but lack matching authority versions. The hash plan scans 7698 rows in 8 RPCs. TestMediaAuthorityLookupIndexes_RealYugabyte separately gates a successful object+tenant pair among 20000 objects at <=20 rows / <=15 RPCs and compares identical duplicate misses against the original lookup in both layouts."
+  },
   "foghorn:HasMediaAuthorityConfirmationRequired@declared": {
     "flags": ["READ_AMPLIFICATION"],
     "read_requests": 7,

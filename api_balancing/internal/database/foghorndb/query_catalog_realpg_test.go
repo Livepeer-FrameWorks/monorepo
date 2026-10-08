@@ -7,6 +7,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"go/ast"
@@ -1414,8 +1415,16 @@ func TestArtifactDeletionRejectsReplayOlderThanPlacement_RealPG(t *testing.T) {
 }
 
 func TestMediaAuthorityLookupIndexes_RealPG(t *testing.T) {
-	db := startFoghornCatalogPostgres(t)
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	verifyMediaAuthorityLookupIndexes(t, startFoghornCatalogPostgres(t), false)
+}
+
+func TestMediaAuthorityLookupIndexes_RealYugabyte(t *testing.T) {
+	verifyMediaAuthorityLookupIndexes(t, startFoghornCatalogYugabyte(t), true)
+}
+
+func verifyMediaAuthorityLookupIndexes(t *testing.T, db *sql.DB, yugabyte bool) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
 
 	if _, err := db.ExecContext(ctx, `
@@ -1437,9 +1446,19 @@ SELECT 'object-' || n, 1, 'live_stream', md5('tenant-' || n)::uuid,
        md5('stream-' || n)::uuid, 'rtmp', NOW() + INTERVAL '2 hours'
 FROM generate_series(1, 20000) AS n;
 
-ANALYZE foghorn.media_object_authority_projection;
-ANALYZE foghorn.media_authorities;
+INSERT INTO foghorn.tenant_authority_projection (
+    tenant_id, authority_version, lifecycle, billing_decision, billing_model, valid_until
+) VALUES (md5('tenant-19999')::uuid, 1, 'active', 'allow', 'postpaid', NOW() + INTERVAL '2 hours');
+INSERT INTO foghorn.media_authorities (
+    authority_kind, authority_id, authority_version, signer_key_id, audience_cell_id,
+    issued_at, refresh_after, valid_until, payload_sha256, signed_envelope, payload
+) VALUES ('tenant', md5('tenant-19999')::uuid::text, 1, 'test-key', 'test-cell',
+    NOW() - INTERVAL '1 hour', NOW() + INTERVAL '1 hour', NOW() + INTERVAL '2 hours',
+    decode(repeat('00', 32), 'hex'), '\x00'::bytea, '\x00'::bytea);
 `); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.ExecContext(ctx, "ANALYZE foghorn.media_object_authority_projection; ANALYZE foghorn.media_authorities"); err != nil {
 		t.Fatal(err)
 	}
 
@@ -1470,6 +1489,56 @@ LIMIT 1`)
 	if !strings.Contains(internalNamePlan, "idx_media_object_authority_internal_name") {
 		t.Fatalf("internal-name authority lookup did not use its non-partial index:\n%s", internalNamePlan)
 	}
+	if !yugabyte {
+		return
+	}
+	// Exercise the generated statement with a successful lookup, then the same
+	// heavily duplicated missing-authority case for both lookup implementations.
+	type planMetrics struct {
+		Rows     float64 `json:"Storage Rows Scanned"`
+		Requests float64 `json:"Storage Read Requests"`
+	}
+	measure := func(query, playbackID string) planMetrics {
+		t.Helper()
+		var raw []byte
+		if err := db.QueryRowContext(ctx, "EXPLAIN (ANALYZE, DIST, FORMAT JSON) "+query, playbackID).Scan(&raw); err != nil {
+			t.Fatal(err)
+		}
+		var plans []planMetrics
+		if err := json.Unmarshal(raw, &plans); err != nil || len(plans) != 1 {
+			t.Fatalf("decode plan: %v: %s", err, raw)
+		}
+		return plans[0]
+	}
+	pair, err := New(db).GetLocalReadAuthorityPairByPlaybackID(ctx, "PLAYBACK-19999")
+	if err != nil || pair.AuthorityID != "object-19999" || !pair.TenantFound {
+		t.Fatalf("positive pair lookup: %+v, %v", pair, err)
+	}
+	positive := measure(getLocalReadAuthorityPairByPlaybackID, "PLAYBACK-19999")
+	if positive.Rows == 0 || positive.Rows > 20 || positive.Requests > 15 {
+		t.Fatalf("positive pair lookup among 20000 objects: %+v", positive)
+	}
+	if _, err := db.ExecContext(ctx, `
+INSERT INTO foghorn.media_object_authority_projection (
+    authority_id, authority_version, object_kind, tenant_id, internal_name, playback_id,
+    lifecycle, playback_policy_kind, playback_policy, stream_id, ingest_mode, valid_until
+)
+SELECT 'missing-' || n, 1, 'live_stream', md5('tenant-' || n)::uuid,
+       'missing-' || n, 'duplicate-miss', 'inactive', 'public', '\x'::bytea,
+       md5('stream-' || n)::uuid, 'rtmp', NOW() + INTERVAL '2 hours'
+FROM generate_series(1, 917) AS n;`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.ExecContext(ctx, "ANALYZE foghorn.media_object_authority_projection"); err != nil {
+		t.Fatal(err)
+	}
+	oldMiss := measure(getLocalMediaObjectAuthorityByPlaybackID, "duplicate-miss")
+	pairMiss := measure(getLocalReadAuthorityPairByPlaybackID, "duplicate-miss")
+	t.Logf("positive pair=%+v; 917 duplicate miss: old=%+v pair=%+v", positive, oldMiss, pairMiss)
+	if pairMiss.Rows > oldMiss.Rows+20 || pairMiss.Requests > oldMiss.Requests+5 {
+		t.Fatalf("joined lookup amplifies the same duplicate miss: old=%+v pair=%+v", oldMiss, pairMiss)
+	}
+
 }
 
 func TestPushTargetStatusRejectsOlderEvent_RealPG(t *testing.T) {
