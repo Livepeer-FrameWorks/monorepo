@@ -1,0 +1,32 @@
+# TLS front of one cell-A Foghorn instance's external control listener
+# (scenario 30). In production that listener serves the Navigator-issued
+# cluster wildcard itself; the stack runs no Navigator, so this front serves a
+# stack-CA certificate for the same kind of name and passes the control stream
+# to its instance as plaintext gRPC. Foghorn resolves the registering node's
+# address from x-forwarded-for before the connection's peer address.
+# The upstream is resolved per request so the front starts, and keeps
+# running, while its instance is down.
+
+resolver 127.0.0.11 valid=5s ipv6=off;
+
+server {
+    listen 18029 ssl;
+    http2 on;
+    server_name ${FOGHORN_CONTROL_FQDN};
+    ssl_certificate /etc/frameworks/certs/foghorn.crt;
+    ssl_certificate_key /etc/frameworks/certs/foghorn.key;
+
+    # The control stream is one long-lived bidirectional call; Helmsman
+    # heartbeats every 30 s.
+    client_body_timeout 3600s;
+    keepalive_timeout 3600s;
+
+    location / {
+        set $foghorn_upstream ${FOGHORN_UPSTREAM};
+        grpc_pass grpc://$foghorn_upstream;
+        grpc_set_header X-Forwarded-For $remote_addr;
+        grpc_connect_timeout 5s;
+        grpc_read_timeout 3600s;
+        grpc_send_timeout 3600s;
+    }
+}

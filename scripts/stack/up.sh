@@ -39,7 +39,7 @@ STACK_SERVICES=(
   quartermaster quartermaster-2 commodore commodore-2 purser bridge decklog signalman bosun chandler
   periscope-ingest periscope-query periscope-metering
   storage-init storage-init-b "s3-$STACK_S3" s3-proxy
-  foghorn foghorn-2 foghorn-redis foghorn-b foghorn-b-2 foghorn-redis-b
+  foghorn foghorn-2 foghorn-redis foghorn-b foghorn-b-2 foghorn-redis-b foghorn-tls-a-1 foghorn-tls-a-2
   edge edge-b edge-proxy-a edge-proxy-b
   livepeer-orch-a livepeer-gateway-a livepeer-proxy-a
   livepeer-orch-b livepeer-gateway-b livepeer-proxy-b
@@ -106,6 +106,7 @@ mv "$ENV_FILE.tmp" "$ENV_FILE"
 log "go-livepeer image $GO_LIVEPEER_IMAGE"
 command -v openssl >/dev/null || fail "openssl is required for the gateway certificates"
 stack_ensure_gateway_certs
+stack_ensure_foghorn_control_certs
 
 log "1/7 edge media stack (slot project $COMPOSE_PROJECT_NAME, subnet $STACK_SUBNET)"
 if [ -n "${MIST_SOURCE_DIR:-}" ]; then

@@ -215,6 +215,40 @@ services:
         aliases: [livepeer-gateway.stack-lp-b.infra.frameworks.network]
     logging: *stack-logging
 
+  # Cell A's public control name in front of each of its Foghorn instances,
+  # for the edge scenario 30 switches to TLS: the name resolves to both fronts,
+  # as a production cell's foghorn.<cluster>.<root> resolves to its instances.
+  # See scripts/stack/foghorn-control-tls.conf.template.
+  foghorn-tls-a-1:
+    image: nginx:1.30.1-alpine@sha256:c819f83c54b0361f5557601bf5eb4943d09360e7a7fdf426afc466570f45874d
+    profiles: ["stack"]
+    environment:
+      FOGHORN_CONTROL_FQDN: foghorn.demo-media.stack.frameworks.network
+      FOGHORN_UPSTREAM: foghorn:18029
+    volumes:
+      - ./scripts/stack/foghorn-control-tls.conf.template:/etc/nginx/templates/default.conf.template:ro
+      - ${STACK_STATE_DIR:-./.stack/slot-1}/certs/foghorn-a.crt:/etc/frameworks/certs/foghorn.crt:ro
+      - ${STACK_STATE_DIR:-./.stack/slot-1}/certs/foghorn-a.key:/etc/frameworks/certs/foghorn.key:ro
+    networks:
+      frameworks:
+        aliases: [foghorn.demo-media.stack.frameworks.network]
+    logging: *stack-logging
+
+  foghorn-tls-a-2:
+    image: nginx:1.30.1-alpine@sha256:c819f83c54b0361f5557601bf5eb4943d09360e7a7fdf426afc466570f45874d
+    profiles: ["stack"]
+    environment:
+      FOGHORN_CONTROL_FQDN: foghorn.demo-media.stack.frameworks.network
+      FOGHORN_UPSTREAM: foghorn-2:18029
+    volumes:
+      - ./scripts/stack/foghorn-control-tls.conf.template:/etc/nginx/templates/default.conf.template:ro
+      - ${STACK_STATE_DIR:-./.stack/slot-1}/certs/foghorn-a.crt:/etc/frameworks/certs/foghorn.crt:ro
+      - ${STACK_STATE_DIR:-./.stack/slot-1}/certs/foghorn-a.key:/etc/frameworks/certs/foghorn.key:ro
+    networks:
+      frameworks:
+        aliases: [foghorn.demo-media.stack.frameworks.network]
+    logging: *stack-logging
+
   webhook-receiver:
     image: python:3.13-alpine
     profiles: ["stack"]

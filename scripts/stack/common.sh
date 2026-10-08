@@ -91,3 +91,28 @@ stack_ensure_gateway_certs() {
       { echo "ERROR: openssl could not create the gateway certificate for $fqdn" >&2; return 1; }
   done
 }
+
+# Cell A's public control name, as production names a cell's Foghorn
+# (foghorn.<cluster>.<root>), and the stack CA that signs the cell wildcard its
+# TLS fronts serve. Unlike Mist, Helmsman verifies the chain and the name, so
+# the edge is given foghorn-ca.crt as GRPC_TLS_CA_PATH.
+stack_ensure_foghorn_control_certs() {
+  local dir="$STACK_STATE_DIR/certs" domain="demo-media.stack.frameworks.network" ext
+  mkdir -p "$dir"
+  [ -s "$dir/foghorn-ca.crt" ] && [ -s "$dir/foghorn-a.crt" ] && [ -s "$dir/foghorn-a.key" ] && return 0
+  ext="$(mktemp)"
+  printf 'subjectAltName=DNS:*.%s\nbasicConstraints=critical,CA:FALSE\nkeyUsage=critical,digitalSignature,keyEncipherment\nextendedKeyUsage=serverAuth\n' \
+    "$domain" >"$ext"
+  if ! openssl req -x509 -newkey rsa:2048 -nodes -days 30 -subj "/CN=FrameWorks stack slot $STACK_SLOT CA" \
+    -addext "basicConstraints=critical,CA:TRUE" -addext "keyUsage=critical,keyCertSign,cRLSign" \
+    -keyout "$dir/foghorn-ca.key" -out "$dir/foghorn-ca.crt" >/dev/null 2>&1 ||
+    ! openssl req -newkey rsa:2048 -nodes -subj "/CN=*.$domain" \
+      -keyout "$dir/foghorn-a.key" -out "$dir/foghorn-a.csr" >/dev/null 2>&1 ||
+    ! openssl x509 -req -in "$dir/foghorn-a.csr" -CA "$dir/foghorn-ca.crt" -CAkey "$dir/foghorn-ca.key" \
+      -CAcreateserial -days 30 -extfile "$ext" -out "$dir/foghorn-a.crt" >/dev/null 2>&1; then
+    rm -f "$ext" "$dir"/foghorn-*
+    echo "ERROR: openssl could not create the Foghorn control certificates for *.$domain" >&2
+    return 1
+  fi
+  rm -f "$ext" "$dir/foghorn-a.csr"
+}

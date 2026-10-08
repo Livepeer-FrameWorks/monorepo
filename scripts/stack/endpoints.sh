@@ -25,6 +25,11 @@ export EDGE_A_RTMP="rtmp://edge:1935/live"
 export EDGE_B_RTMP="rtmp://edge-b:1935/live"
 export CELL_A_CLUSTER="demo-media"
 export CELL_B_CLUSTER="demo-selfhosted"
+# Cell A's control name over TLS: resolves to the TLS front of every cell-A
+# Foghorn instance (foghorn-tls-a-*), verified with the slot's stack CA.
+export FOGHORN_A_CONTROL_TLS_ADDR="foghorn.demo-media.stack.frameworks.network:18029"
+export FOGHORN_A_CONTROL_TLS_FRONTS="foghorn=foghorn-tls-a-1 foghorn-2=foghorn-tls-a-2"
+export STACK_FOGHORN_CA_FILE="/repo/.stack/slot-${STACK_SLOT:-1}/certs/foghorn-ca.crt"
 
 # Livepeer (offchain), per cell
 export LIVEPEER_GATEWAY_A_FQDN="livepeer-gateway.stack-lp-a.infra.frameworks.network"

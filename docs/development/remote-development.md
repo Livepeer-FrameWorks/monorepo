@@ -106,6 +106,27 @@ It checks sibling completion, a successful retry within 30 seconds, thumbnail
 publication, and playback. `make verify-stack-fixtures` checks proxy forwarding
 and fault isolation. The fault is cleared on scenario exit.
 
+Manual scenario 09 stages an edge release inside the stack. It packs edge A's
+image-baked Helmsman binary and Mist tree as release artifacts under new
+version labels and serves them from the runner. It then writes the release and
+cell A's release target into Quartermaster's catalog tables. While a stream is
+live, it asserts that `foghorn.node_components` reaches both target versions,
+that the update ends idle with the node in normal mode, and that the stream
+keeps its publisher, ingest generation and media. Cleanup removes the target
+and restores the edge's image-seeded version labels.
+
+The stack's edges reach Foghorn in plaintext by single-label service names.
+Scenario 30 switches edge A's Helmsman to the production shape: TLS to a
+dotted cell name, `foghorn.demo-media.stack.frameworks.network:18029`, verified
+with the slot's stack CA. That name resolves to both cell-A Foghorn instances.
+Foghorn's own external listener gets TLS certificates only from Navigator,
+which the stack does not run, so each instance has an nginx front
+(`foghorn-tls-a-*`). The front serves a stack-CA certificate for the cell
+wildcard and forwards the stream to its instance. The scenario asserts
+registration, failover when the holding instance and its front are killed,
+and that the connection and a live stream survive. At the end it restores the
+plaintext addresses.
+
 ## Requested post-rollout staging smoke
 
 After the maintainer requests staging verification, run the same scenario
@@ -149,7 +170,10 @@ deployed `SUPPLIER_*` identity, and Quartermaster client TLS settings
 on the operator runner against those same services. For manual scenario 29,
 `STACK_THUMBNAIL_FAULT_URL` must reach a private fixture proxy used by the
 isolated test tenant's storage; it must not reroute shared staging storage.
-Without that fixture, 29 reports BLOCKED.
+Without that fixture, 29 reports BLOCKED. For scenario 09's auto-update,
+`STACK_EDGE_UPDATE_CMD` stages the release target. It goes with
+`STACK_EDGE_UPDATE_HELMSMAN_VERSION` and `STACK_EDGE_UPDATE_MIST_VERSION`, the
+versions that target rolls out. Without all three, that step reports BLOCKED.
 
 `STACK_SCENARIOS` and `STACK_REPEAT` have the same meaning in both target
 modes. The staging runner keeps its assertion evidence under a private
