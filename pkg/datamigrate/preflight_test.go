@@ -289,3 +289,55 @@ func TestLiveStatusReportable(t *testing.T) {
 		})
 	}
 }
+
+// interruptedSource reports what the SSH state source returns when the operator's interrupt kills the ssh child: a
+// transport error, read under a context that has ended.
+func interruptedSource(cancel context.CancelFunc) StateSource {
+	return func(_ context.Context, service, id string) LiveStatus {
+		cancel()
+		return LiveStatus{ID: id, Service: service, FetchError: errors.New("ssh run: Process exited with status 255")}
+	}
+}
+
+func TestPreDeployBlockers_CanceledContextReturnsError(t *testing.T) {
+	reqs := []Requirement{
+		{ID: "m1", Service: "quartermaster", IntroducedIn: "v0.4.0", RequiredBeforeVersion: "v0.5.0"},
+		{ID: "m2", Service: "purser", IntroducedIn: "v0.4.0", RequiredBeforeVersion: "v0.5.0"},
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	got, err := PreDeployBlockers(ctx, interruptedSource(cancel), reqs, "v0.5.0", trivialSemver, trivialBase)
+	if !errors.Is(err, context.Canceled) || len(got) != 0 {
+		t.Fatalf("blockers = %+v, err = %v; an interrupted read must return the context error, not blockers", got, err)
+	}
+}
+
+func TestPrePostdeployBlockers_CanceledContextReturnsError(t *testing.T) {
+	reqs := []Requirement{
+		{ID: "m1", Service: "quartermaster", IntroducedIn: "v0.5.0", RequiredBeforePhase: "postdeploy"},
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	got, err := PrePostdeployBlockers(ctx, interruptedSource(cancel), reqs, "v0.5.0", trivialSemver, trivialBase)
+	if !errors.Is(err, context.Canceled) || len(got) != 0 {
+		t.Fatalf("blockers = %+v, err = %v; an interrupted read must return the context error, not blockers", got, err)
+	}
+}
+
+// TestPreDeployBlockers_FetchErrorReasonSaysUnreadable pins that a blocker caused by an unreadable state says so and
+// names the host, rather than reading like a migration that is not completed.
+func TestPreDeployBlockers_FetchErrorReasonSaysUnreadable(t *testing.T) {
+	reqs := []Requirement{
+		{ID: "m1", Service: "quartermaster", IntroducedIn: "v0.4.0", RequiredBeforeVersion: "v0.5.0"},
+	}
+	src := staticSource(t, map[string]LiveStatus{
+		"quartermaster.m1": {ID: "m1", Service: "quartermaster", Host: "ctrl-1", FetchError: errors.New("ssh run: dial timeout")},
+	})
+	got, err := PreDeployBlockers(context.Background(), src, reqs, "v0.5.0", trivialSemver, trivialBase)
+	if err != nil {
+		t.Fatalf("err = %v", err)
+	}
+	if len(got) != 1 || !got[0].Unreadable() || got[0].Reason != "state could not be read on ctrl-1: ssh run: dial timeout" {
+		t.Fatalf("blockers = %+v; want one unreadable blocker naming the host and error", got)
+	}
+}

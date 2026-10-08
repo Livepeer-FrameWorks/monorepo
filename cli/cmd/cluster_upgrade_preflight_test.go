@@ -5,9 +5,12 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	"frameworks/cli/pkg/gitops"
 	"frameworks/cli/pkg/inventory"
+
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/datamigrate"
 )
 
 // ensurePlannedArtifactsResolvable must run the SAME resolution the provisioner runs at deploy — not a bare
@@ -125,6 +128,42 @@ func TestNativeHostArchProblems(t *testing.T) {
 	}
 }
 
+// TestNativeHostArchProblemsBoundsEachProbe pins that a host whose architecture probe never answers fails that host at
+// hostArchDetectTimeout instead of stalling the preflight, and that every probe is announced on the progress writer.
+func TestNativeHostArchProblemsBoundsEachProbe(t *testing.T) {
+	prev := hostArchDetectTimeout
+	t.Cleanup(func() { hostArchDetectTimeout = prev })
+	hostArchDetectTimeout = 50 * time.Millisecond
+
+	svc := &gitops.ServiceInfo{Name: "foghorn", Binaries: map[string]gitops.Artifact{
+		"linux-amd64": {URL: "https://example/foghorn-amd64", Checksum: "sha256:aaa"},
+	}}
+	hosts := []inventory.Host{{Name: "n1", ExternalIP: "10.0.0.1"}, {Name: "n2", ExternalIP: "10.0.0.2"}}
+	blocking := func(ctx context.Context, _ inventory.Host) (string, string, error) {
+		<-ctx.Done()
+		return "", "", ctx.Err()
+	}
+	var out strings.Builder
+	done := make(chan []string, 1)
+	go func() {
+		done <- nativeHostArchProblems(context.Background(), svc, "foghorn", hosts, progressArchResolver(&out, blocking), map[string]detectedArch{})
+	}()
+	var probs []string
+	select {
+	case probs = <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("nativeHostArchProblems did not return while every architecture probe never answered")
+	}
+	if len(probs) != 2 || !strings.Contains(probs[0], "cannot detect architecture of host 10.0.0.1") || !strings.Contains(probs[0], context.DeadlineExceeded.Error()) {
+		t.Fatalf("problems = %v; want each host failing on the probe deadline", probs)
+	}
+	for _, want := range []string{"[preflight] detecting the architecture of n1\n", "[preflight] detecting the architecture of n2\n"} {
+		if !strings.Contains(out.String(), want) {
+			t.Errorf("progress output does not contain %q:\n%s", want, out.String())
+		}
+	}
+}
+
 // A binaries-only release entry with NO declared mode must FAIL preflight: buildTaskConfig defaults an omitted mode to
 // docker, so deployment would look for an image and find none. Preflight must match that effective mode, not guess
 // "native" from the presence of binaries.
@@ -152,5 +191,29 @@ func TestEnsurePlannedArtifactsResolvable_AllResolvable(t *testing.T) {
 	}
 	if err := ensurePlannedArtifactsResolvable(context.Background(), gm, &inventory.Manifest{}, []string{"a", "b"}, nil); err != nil {
 		t.Fatalf("all services resolve; expected nil, got %v", err)
+	}
+}
+
+// TestDataMigrationRefusalSeparatesUnreadableState pins the gate refusal wording shared by the upgrade, migrate-phase
+// and provision gates: a state that could not be read is refused without the data-migrate remedy, and a migration that
+// is not completed keeps it.
+func TestDataMigrationRefusalSeparatesUnreadableState(t *testing.T) {
+	pending := datamigrate.Blocker{
+		Requirement: datamigrate.Requirement{Service: "commodore", ID: "c1", IntroducedIn: "v0.3.8"},
+		Live:        datamigrate.LiveStatus{Status: datamigrate.StatusPending},
+		Reason:      "pending",
+	}
+	unreadable := datamigrate.Blocker{
+		Requirement: datamigrate.Requirement{Service: "quartermaster", ID: "q1", IntroducedIn: "v0.3.0"},
+		Live:        datamigrate.LiveStatus{Host: "ctrl-1", FetchError: errors.New("ssh run: exit status 255")},
+		Reason:      "state could not be read on ctrl-1: ssh run: exit status 255",
+	}
+	only := dataMigrationRefusal("NOT COMPLETED:", "UNREADABLE:", []datamigrate.Blocker{unreadable}).Error()
+	if strings.Contains(only, "NOT COMPLETED:") || strings.Contains(only, "data-migrate run") || !strings.Contains(only, "UNREADABLE:\n  - quartermaster/q1 (introduced v0.3.0): state could not be read on ctrl-1") {
+		t.Fatalf("unreadable-only refusal:\n%s", only)
+	}
+	both := dataMigrationRefusal("NOT COMPLETED:", "UNREADABLE:", []datamigrate.Blocker{pending, unreadable}).Error()
+	if !strings.Contains(both, "NOT COMPLETED:\n  - commodore/c1 (introduced v0.3.8): pending\n\nrun: frameworks cluster data-migrate run <id>") || !strings.Contains(both, "UNREADABLE:\n  - quartermaster/q1") {
+		t.Fatalf("mixed refusal:\n%s", both)
 	}
 }

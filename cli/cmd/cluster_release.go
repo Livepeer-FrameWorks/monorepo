@@ -367,8 +367,12 @@ func runReleaseApply(cmd *cobra.Command, rc *resolvedCluster, opts releaseApplyO
 	defer sshPool.Close()
 
 	// Resolve every artifact before the first cluster mutation.
-	archResolver := provisioner.NewBaseProvisioner("preflight", sshPool).DetectRemoteArch
+	archResolver := progressArchResolver(out, provisioner.NewBaseProvisioner("preflight", sshPool).DetectRemoteArch)
+	fmt.Fprintf(out, "[preflight] resolving release artifacts for %d planned service(s)\n", len(services))
 	if resolveErr := ensurePlannedArtifactsResolvable(cmd.Context(), gm, manifest, services, archResolver); resolveErr != nil {
+		if interrupted := preflightInterrupted(cmd.Context()); interrupted != nil {
+			return interrupted
+		}
 		return resolveErr
 	}
 

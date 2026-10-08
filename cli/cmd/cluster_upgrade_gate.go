@@ -408,8 +408,10 @@ func runUpgradePreDeployGate(
 					return fmt.Errorf("[gate] check prior data migrations: %w", err)
 				}
 				if len(blockers) > 0 {
-					return fmt.Errorf("[gate] prior data migrations required before deploying %s %s:\n%s\n\nrun: frameworks cluster data-migrate run <id>",
-						serviceName, targetPlatformVersion, formatBlockers(blockers))
+					return dataMigrationRefusal(
+						fmt.Sprintf("[gate] prior data migrations required before deploying %s %s:", serviceName, targetPlatformVersion),
+						fmt.Sprintf("[gate] cannot verify prior data migrations before deploying %s %s: their state could not be read:", serviceName, targetPlatformVersion),
+						blockers)
 				}
 				fmt.Fprintf(cmd.OutOrStdout(), "[gate] %d prior required data migration(s) completed.\n", len(reqs))
 			}
@@ -551,4 +553,32 @@ func formatBlockers(blockers []datamigrate.Blocker) string {
 			blk.Requirement.Service, blk.Requirement.ID, blk.Requirement.IntroducedIn, blk.Reason)
 	}
 	return strings.TrimRight(b.String(), "\n")
+}
+
+// splitUnreadableBlockers separates blockers whose state was read and is not completed from blockers whose state could
+// not be read. Both refuse; they need different remedies.
+func splitUnreadableBlockers(blockers []datamigrate.Blocker) (incomplete, unreadable []datamigrate.Blocker) {
+	for _, blk := range blockers {
+		if blk.Unreadable() {
+			unreadable = append(unreadable, blk)
+		} else {
+			incomplete = append(incomplete, blk)
+		}
+	}
+	return incomplete, unreadable
+}
+
+// dataMigrationRefusal renders a data-migration gate refusal. incompleteHeadline introduces migrations whose state was
+// read and is not completed, followed by the data-migrate remedy; unreadableHeadline introduces migrations whose state
+// could not be read, which the gate also refuses but which `data-migrate run` would not fix.
+func dataMigrationRefusal(incompleteHeadline, unreadableHeadline string, blockers []datamigrate.Blocker) error {
+	incomplete, unreadable := splitUnreadableBlockers(blockers)
+	var sections []string
+	if len(incomplete) > 0 {
+		sections = append(sections, incompleteHeadline+"\n"+formatBlockers(incomplete)+"\n\nrun: frameworks cluster data-migrate run <id>")
+	}
+	if len(unreadable) > 0 {
+		sections = append(sections, unreadableHeadline+"\n"+formatBlockers(unreadable)+"\n\nthe check fails closed until the state can be read; resolve the error above (host reachability, service install) and retry")
+	}
+	return fmt.Errorf("%s", strings.Join(sections, "\n\n"))
 }

@@ -38,6 +38,9 @@ type LiveStatus struct {
 
 	// FetchError is any non-recoverable transport/exec error.
 	FetchError error
+
+	// Host names the host the state was read from, when the source resolved one.
+	Host string
 }
 
 // Reportable returns true when Status reflects retrieved state. False means
@@ -63,6 +66,25 @@ type Blocker struct {
 	Reason string
 }
 
+// Unreadable reports whether the blocker exists because the migration's state could not be read, as opposed to state
+// that was read and is not completed. Both block; only the wording and remedy differ.
+func (b Blocker) Unreadable() bool {
+	return b.Live.FetchError != nil
+}
+
+// readLiveStatus queries src for r and reports ctx's error when ctx ended before or during the query: a state read cut
+// short by cancellation fails as a transport error, which must not be reported as a blocker.
+func readLiveStatus(ctx context.Context, src StateSource, r Requirement) (LiveStatus, error) {
+	if err := ctx.Err(); err != nil {
+		return LiveStatus{}, err
+	}
+	live := src(ctx, r.Service, r.ID)
+	if err := ctx.Err(); err != nil {
+		return LiveStatus{}, err
+	}
+	return live, nil
+}
+
 // PreDeployBlockers returns every required PRIOR data migration that is not completed before deploying targetVersion.
 // "Prior" is TARGET-RELATIVE and does NOT depend on the currently-running version: a requirement blocks when its
 // RequiredBeforeVersion <= targetVersion (or, when unset, when targetVersion > IntroducedIn) AND IntroducedIn !=
@@ -82,6 +104,8 @@ type Blocker struct {
 // migrations completed". An empty result with 0 declared requirements is
 // also honest: "no required prior data migrations declared in this window."
 // Callers must surface these distinctly.
+//
+// When ctx ends before every state is read, it returns ctx's error and no blockers.
 func PreDeployBlockers(ctx context.Context, src StateSource, reqs []Requirement, targetVersion string, semverCompare func(a, b string) int, baseVersion func(v string) string) ([]Blocker, error) {
 	if src == nil {
 		return nil, errors.New("PreDeployBlockers: nil StateSource")
@@ -116,7 +140,10 @@ func PreDeployBlockers(ctx context.Context, src StateSource, reqs []Requirement,
 			continue
 		}
 
-		live := src(ctx, r.Service, r.ID)
+		live, err := readLiveStatus(ctx, src, r)
+		if err != nil {
+			return nil, err
+		}
 		if blocker, blocked := classify(r, live); blocked {
 			out = append(out, blocker)
 		}
@@ -137,6 +164,7 @@ func PrePostdeployBlockers(ctx context.Context, src StateSource, reqs []Requirem
 // completed. Used before postdeploy and contract SQL phases. Versions compare
 // on their BASE (see PreDeployBlockers) so a canary/RC target still gates its
 // own release's postdeploy/contract migration (a raw final > RC would skip it).
+// When ctx ends before every state is read, it returns ctx's error and no blockers.
 func PrePhaseBlockers(ctx context.Context, src StateSource, reqs []Requirement, phase, targetVersion string, semverCompare func(a, b string) int, baseVersion func(v string) string) ([]Blocker, error) {
 	if src == nil {
 		return nil, errors.New("PrePhaseBlockers: nil StateSource")
@@ -159,7 +187,10 @@ func PrePhaseBlockers(ctx context.Context, src StateSource, reqs []Requirement, 
 		if semverCompare(baseVersion(r.IntroducedIn), targetBase) > 0 {
 			continue
 		}
-		live := src(ctx, r.Service, r.ID)
+		live, err := readLiveStatus(ctx, src, r)
+		if err != nil {
+			return nil, err
+		}
 		if blocker, blocked := classify(r, live); blocked {
 			out = append(out, blocker)
 		}
@@ -170,7 +201,11 @@ func PrePhaseBlockers(ctx context.Context, src StateSource, reqs []Requirement, 
 func classify(r Requirement, live LiveStatus) (Blocker, bool) {
 	switch {
 	case live.FetchError != nil:
-		return Blocker{Requirement: r, Live: live, Reason: fmt.Sprintf("fetch failed: %v", live.FetchError)}, true
+		where := ""
+		if live.Host != "" {
+			where = " on " + live.Host
+		}
+		return Blocker{Requirement: r, Live: live, Reason: fmt.Sprintf("state could not be read%s: %v", where, live.FetchError)}, true
 	case live.NotAdopted:
 		return Blocker{Requirement: r, Live: live, Reason: "service binary has not adopted data-migrations"}, true
 	case live.NotRegistered:

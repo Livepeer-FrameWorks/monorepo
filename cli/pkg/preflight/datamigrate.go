@@ -7,6 +7,7 @@ package preflight
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -45,6 +46,23 @@ func CatalogRequirements(catalog []releases.Release, targetVersion string) []dat
 	return out
 }
 
+// serviceDetector reads how a host runs a service.
+type serviceDetector interface {
+	Detect(ctx context.Context, serviceName string) (*detect.ServiceState, error)
+}
+
+// State-read seams. Production probes over SSH; tests substitute scripted probes.
+var (
+	adoptionMarkerPresentFn = dataMigrationAdoptionMarkerPresent
+	newServiceDetectorFn    = func(pool *ssh.Pool, host inventory.Host) serviceDetector {
+		return detect.NewDetector(pool, host)
+	}
+)
+
+// detectTimeout bounds the deployment-mode detection of one state read. Detection runs several SSH commands, none
+// bounded by the pool, so an SSH session that never answers would otherwise stall the gate.
+var detectTimeout = 30 * time.Second
+
 // HostResolver returns the host running serviceName for state queries.
 type HostResolver func(service string) (inventory.Host, bool)
 
@@ -66,12 +84,16 @@ func SSHStateSource(pool *ssh.Pool, hostFor HostResolver, runtimeFor RuntimeReso
 			live.FetchError = fmt.Errorf("no host found for service %q", service)
 			return live
 		}
+		live.Host = host.Name
+		if live.Host == "" {
+			live.Host = host.ExternalIP
+		}
 
 		runtime := service
 		if runtimeFor != nil {
 			runtime = runtimeFor(service)
 		}
-		adopted, err := dataMigrationAdoptionMarkerPresent(ctx, pool, host, runtime)
+		adopted, err := adoptionMarkerPresentFn(ctx, pool, host, runtime)
 		if err != nil {
 			live.FetchError = fmt.Errorf("check data-migrations adoption for %s: %w", runtime, err)
 			return live
@@ -80,8 +102,13 @@ func SSHStateSource(pool *ssh.Pool, hostFor HostResolver, runtimeFor RuntimeReso
 			live.NotAdopted = true
 			return live
 		}
-		detector := detect.NewDetector(pool, host)
-		state, err := detector.Detect(ctx, runtime)
+		detectCtx, cancelDetect := context.WithTimeout(ctx, detectTimeout)
+		state, err := newServiceDetectorFn(pool, host).Detect(detectCtx, runtime)
+		cancelDetect()
+		if err != nil && errors.Is(err, context.DeadlineExceeded) && ctx.Err() == nil {
+			live.FetchError = fmt.Errorf("detect %s on %s: no answer within %s: %w", runtime, live.Host, detectTimeout, err)
+			return live
+		}
 		if err != nil {
 			live.FetchError = fmt.Errorf("detect %s: %w", runtime, err)
 			return live

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"io"
 	"strings"
 	"testing"
 
@@ -123,7 +124,7 @@ func TestSourceFloorRefusal(t *testing.T) {
 }
 
 func TestEnforceSourceFloorSkipsDetectionWithoutDeclaredFloors(t *testing.T) {
-	restore := stubSourceFloor(t, func() bool { return false }, floorsForNextRelease, func(context.Context, *ssh.Pool, *inventory.Manifest) ([]runningInstance, error) {
+	restore := stubSourceFloor(t, func() bool { return false }, floorsForNextRelease, func(context.Context, io.Writer, *ssh.Pool, *inventory.Manifest) ([]runningInstance, error) {
 		t.Fatal("running versions were read although no release declares min_source_version")
 		return nil, nil
 	})
@@ -137,7 +138,7 @@ func TestEnforceSourceFloorSkipsDetectionWithoutDeclaredFloors(t *testing.T) {
 func TestEnforceSourceFloorReadsFleetOncePerTarget(t *testing.T) {
 	reads := 0
 	fleet := []runningInstance{{"bridge", "ctrl-1", "v0.3.11"}}
-	restore := stubSourceFloor(t, func() bool { return true }, floorsForNextRelease, func(context.Context, *ssh.Pool, *inventory.Manifest) ([]runningInstance, error) {
+	restore := stubSourceFloor(t, func() bool { return true }, floorsForNextRelease, func(context.Context, io.Writer, *ssh.Pool, *inventory.Manifest) ([]runningInstance, error) {
 		reads++
 		return fleet, nil
 	})
@@ -166,7 +167,7 @@ func TestEnforceSourceFloorReadsFleetOncePerTarget(t *testing.T) {
 }
 
 func TestEnforceSourceFloorFailsClosedOnDetectionError(t *testing.T) {
-	restore := stubSourceFloor(t, func() bool { return true }, floorsForNextRelease, func(context.Context, *ssh.Pool, *inventory.Manifest) ([]runningInstance, error) {
+	restore := stubSourceFloor(t, func() bool { return true }, floorsForNextRelease, func(context.Context, io.Writer, *ssh.Pool, *inventory.Manifest) ([]runningInstance, error) {
 		return nil, errors.New("ssh: connection refused")
 	})
 	defer restore()
@@ -230,7 +231,7 @@ func TestDetectRunningVersionsCoversEveryPlatformReplica(t *testing.T) {
 	}
 	defer func() { newServiceDetectorFn = prev }()
 
-	got, err := detectRunningVersions(context.Background(), nil, manifest)
+	got, err := detectRunningVersions(context.Background(), io.Discard, nil, manifest)
 	if err != nil {
 		t.Fatalf("detectRunningVersions: %v", err)
 	}
@@ -304,7 +305,7 @@ func TestCheckFetchedSourceFloor(t *testing.T) {
 	}
 }
 
-func stubSourceFloor(t *testing.T, declared func() bool, floorFor func(string) (string, bool), read func(context.Context, *ssh.Pool, *inventory.Manifest) ([]runningInstance, error)) func() {
+func stubSourceFloor(t *testing.T, declared func() bool, floorFor func(string) (string, bool), read func(context.Context, io.Writer, *ssh.Pool, *inventory.Manifest) ([]runningInstance, error)) func() {
 	t.Helper()
 	prevDeclared, prevFloor, prevRead := sourceFloorsDeclaredFn, sourceFloorForFn, detectRunningVersionsFn
 	sourceFloorsDeclaredFn, sourceFloorForFn, detectRunningVersionsFn = declared, floorFor, read

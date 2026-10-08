@@ -51,8 +51,10 @@ func runPhaseDataMigrationGate(
 		return fmt.Errorf("[gate] check %s data migrations: %w", phase, err)
 	}
 	if len(blockers) > 0 {
-		return fmt.Errorf("[gate] %s blocked: required data migrations not completed:\n%s\n\nrun: frameworks cluster data-migrate run <id>",
-			phase, formatBlockers(blockers))
+		return dataMigrationRefusal(
+			fmt.Sprintf("[gate] %s blocked: required data migrations not completed:", phase),
+			fmt.Sprintf("[gate] %s blocked: the state of required data migrations could not be read:", phase),
+			blockers)
 	}
 	fmt.Fprintf(cmd.OutOrStdout(), "[gate] %d required data migration(s) checked for %s.\n", len(reqs), phase)
 	return nil

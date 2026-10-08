@@ -49,7 +49,11 @@ func enforceSourceFloor(ctx context.Context, out io.Writer, rc *resolvedCluster,
 	if rc.sourceFloorVerifiedFor == target {
 		return nil
 	}
-	instances, err := detectRunningVersionsFn(ctx, sshPool, rc.Manifest)
+	fmt.Fprintf(out, "[source floor] reading the release every platform service replica runs before moving to %s\n", target)
+	instances, err := detectRunningVersionsFn(ctx, out, sshPool, rc.Manifest)
+	if interrupted := preflightInterrupted(ctx); interrupted != nil {
+		return interrupted
+	}
 	if err != nil {
 		return fmt.Errorf("[source floor] read running release versions: %w", err)
 	}
@@ -139,7 +143,7 @@ func runningReleaseBase(version string) (string, bool) {
 // detectRunningVersions reads the release every platform-artifact replica in the manifest runs. Managed dependencies
 // and host infrastructure are versioned independently and are skipped. A replica that is not installed contributes
 // nothing; a detection error fails the whole read so the floor check fails closed.
-func detectRunningVersions(ctx context.Context, sshPool *ssh.Pool, manifest *inventory.Manifest) ([]runningInstance, error) {
+func detectRunningVersions(ctx context.Context, out io.Writer, sshPool *ssh.Pool, manifest *inventory.Manifest) ([]runningInstance, error) {
 	var ids []string
 	for id, svc := range manifest.Services {
 		if svc.Enabled {
@@ -163,6 +167,7 @@ func detectRunningVersions(ctx context.Context, sshPool *ssh.Pool, manifest *inv
 		}
 		hosts, _ := resolveUpgradeHosts(manifest, id)
 		for _, host := range hosts {
+			fmt.Fprintf(out, "[source floor] detecting %s on %s\n", deployName, hostLabel(host))
 			state, err := newServiceDetectorFn(sshPool, host).Detect(ctx, deployName)
 			if err != nil {
 				return nil, fmt.Errorf("detect %s on %s: %w", deployName, host.Name, err)

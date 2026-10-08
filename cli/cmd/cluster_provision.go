@@ -287,7 +287,7 @@ func runProvision(cmd *cobra.Command, rc *resolvedCluster, only, version string,
 		return provClassifyErr
 	}
 	preflightPool := ssh.NewPool(30*time.Second, stringFlag(cmd, "ssh-key").Value)
-	preflightArchResolver := provisioner.NewBaseProvisioner("preflight", preflightPool).DetectRemoteArch
+	preflightArchResolver := progressArchResolver(cmd.OutOrStdout(), provisioner.NewBaseProvisioner("preflight", preflightPool).DetectRemoteArch)
 	if resolveErr := ensurePlannedArtifactsResolvable(ctx, provGitops, manifest, provServices, preflightArchResolver); resolveErr != nil {
 		preflightPool.Close()
 		return resolveErr

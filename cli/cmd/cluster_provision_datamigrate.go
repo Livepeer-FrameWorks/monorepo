@@ -97,7 +97,10 @@ func runProvisionDataMigrationPreflight(ctx context.Context, cmd *cobra.Command,
 		return fmt.Errorf("[provision] check prior data migrations: %w", err)
 	}
 	if len(blockers) > 0 {
-		return fmt.Errorf("[provision] required data migrations are incomplete on the preserved database(s) — refusing to deploy applications ahead of them:\n%s\n\nrun: frameworks cluster data-migrate run <id>", formatBlockers(blockers))
+		return dataMigrationRefusal(
+			"[provision] required data migrations are incomplete on the preserved database(s) — refusing to deploy applications ahead of them:",
+			"[provision] cannot verify required data migrations on the preserved database(s) — refusing to deploy applications until their state can be read:",
+			blockers)
 	}
 	fmt.Fprintf(out, "[provision] required data migrations verified for %s (folded/out-of-window migrations skipped).\n", targetVersion)
 	return nil

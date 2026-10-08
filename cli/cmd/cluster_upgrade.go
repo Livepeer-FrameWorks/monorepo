@@ -1253,7 +1253,7 @@ func runUpgradeAll(cmd *cobra.Command, rc *resolvedCluster, version string, dryR
 	// cluster is still untouched rather than mid-sequence after earlier services moved.
 	preflightPool := ssh.NewPool(30*time.Second, stringFlag(cmd, "ssh-key").Value)
 	defer preflightPool.Close()
-	archResolver := provisioner.NewBaseProvisioner("preflight", preflightPool).DetectRemoteArch
+	archResolver := progressArchResolver(cmd.OutOrStdout(), provisioner.NewBaseProvisioner("preflight", preflightPool).DetectRemoteArch)
 	if resolveErr := ensurePlannedArtifactsResolvable(cmd.Context(), gm, manifest, services, archResolver); resolveErr != nil {
 		return resolveErr
 	}
@@ -1487,6 +1487,18 @@ func ensurePlannedArtifactsResolvable(ctx context.Context, gm *gitops.Manifest, 
 // provisioner.BaseProvisioner.DetectRemoteArch, so the preflight resolves architecture exactly as deploy does.
 type hostArchResolver func(ctx context.Context, host inventory.Host) (osName, arch string, err error)
 
+// hostArchDetectTimeout bounds one host's architecture probe, so an SSH session that never answers fails that host
+// instead of stalling the preflight.
+var hostArchDetectTimeout = 30 * time.Second
+
+// progressArchResolver announces each host's architecture probe on out before it runs.
+func progressArchResolver(out io.Writer, resolver hostArchResolver) hostArchResolver {
+	return func(ctx context.Context, host inventory.Host) (string, string, error) {
+		fmt.Fprintf(out, "[preflight] detecting the architecture of %s\n", hostLabel(host))
+		return resolver(ctx, host)
+	}
+}
+
 // detectedArch caches one host's resolution (or its failure) so hosts shared by several services are probed once.
 type detectedArch struct {
 	os, arch string
@@ -1496,7 +1508,8 @@ type detectedArch struct {
 // nativeHostArchProblems confirms the release carries a binary for the detected OS/arch of every host the native
 // service will land on — the same per-host selection deploy performs (resolveGenericBinary → svc.GetBinary), done
 // read-only before mutation. A detection failure is itself a problem (fail closed: an unreachable/unknowable host
-// cannot be proven deployable). With no resolver or no hosts the per-host check is skipped.
+// cannot be proven deployable), and so is a probe that outlives hostArchDetectTimeout. With no resolver or no hosts the
+// per-host check is skipped.
 func nativeHostArchProblems(ctx context.Context, svc *gitops.ServiceInfo, svcID string, hosts []inventory.Host, archResolver hostArchResolver, cache map[string]detectedArch) []string {
 	if archResolver == nil || len(hosts) == 0 {
 		return nil
@@ -1505,7 +1518,9 @@ func nativeHostArchProblems(ctx context.Context, svc *gitops.ServiceInfo, svcID 
 	for _, h := range hosts {
 		da, seen := cache[h.ExternalIP]
 		if !seen {
-			os, arch, err := archResolver(ctx, h)
+			detectCtx, cancel := context.WithTimeout(ctx, hostArchDetectTimeout)
+			os, arch, err := archResolver(detectCtx, h)
+			cancel()
 			da = detectedArch{os: os, arch: arch, err: err}
 			cache[h.ExternalIP] = da
 		}
