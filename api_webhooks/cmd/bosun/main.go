@@ -322,7 +322,7 @@ func newGRPCServer(ctx context.Context, cfg *appconfig.Bosun, logger logging.Log
 	if tlsOpt != nil {
 		serverOpts = append(serverOpts, tlsOpt)
 	}
-	grpcServer := grpc.NewServer(serverOpts...)
+	grpcServer := grpcutil.NewServer(serverOpts...)
 	bosunpb.RegisterBosunServiceServer(grpcServer, srv)
 	hs := health.NewServer()
 	hs.SetServingStatus("", grpc_health_v1.HealthCheckResponse_SERVING)

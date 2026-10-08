@@ -271,7 +271,7 @@ func newGRPCServer(ctx context.Context, cfg *appconfig.Deckhand, logger logging.
 	if tlsOpt != nil {
 		serverOpts = append(serverOpts, tlsOpt)
 	}
-	grpcSrv := grpc.NewServer(serverOpts...)
+	grpcSrv := grpcutil.NewServer(serverOpts...)
 	deckhandpb.RegisterDeckhandServiceServer(grpcSrv, deckhandServer)
 
 	// Register gRPC health checking service

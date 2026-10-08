@@ -4559,7 +4559,6 @@ func NewGRPCServer(ctx context.Context, cfg GRPCServerConfig) (*grpc.Server, err
 			middleware.GRPCStreamAuthInterceptor(purserAuthConfig(cfg)),
 			middleware.DelegatedJWTStreamReplayInterceptor(cfg.DB, "purser"),
 		),
-		grpcutil.ReplicaServerKeepalive(),
 	}
 	tlsCfg := grpcutil.ServerTLSConfig{
 		CertFile:      cfg.CertFile,
@@ -4582,7 +4581,7 @@ func NewGRPCServer(ctx context.Context, cfg GRPCServerConfig) (*grpc.Server, err
 	if cfg.TokenHasher == nil {
 		return nil, errors.New("purser gRPC server needs the usage token hasher for domain event actors")
 	}
-	server := grpc.NewServer(opts...)
+	server := grpcutil.NewServer(opts...)
 	purserServer := NewPurserServer(cfg.DB, cfg.Logger, cfg.Metrics, cfg.StripeClient, cfg.MollieClient, cfg.QuartermasterClient, cfg.CommodoreClient, cfg.DecklogClient, cfg.Billing, cfg.GeoIPReader)
 	purserServer.tokenHasher = cfg.TokenHasher
 

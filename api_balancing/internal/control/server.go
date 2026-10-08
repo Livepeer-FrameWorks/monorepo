@@ -69,7 +69,6 @@ import (
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/health"
 	"google.golang.org/grpc/health/grpc_health_v1"
-	"google.golang.org/grpc/keepalive"
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/peer"
 	"google.golang.org/grpc/reflection"
@@ -4566,7 +4565,7 @@ func BuildInternalGRPCServer(ctx context.Context, cfg GRPCServerConfig) (*grpc.S
 
 	opts = appendCommonInterceptors(opts, cfg)
 
-	srv := grpc.NewServer(opts...)
+	srv := grpcutil.NewServer(opts...)
 	registerHealthAndReflection(srv)
 	for _, reg := range cfg.InternalRegistrars {
 		reg(srv)
@@ -4626,7 +4625,7 @@ func BuildExternalGRPCServer(ctx context.Context, cfg GRPCServerConfig) (*grpc.S
 
 	opts = appendCommonInterceptors(opts, cfg)
 
-	srv := grpc.NewServer(opts...)
+	srv := grpcutil.NewServer(opts...)
 	ipcpb.RegisterHelmsmanControlServer(srv, &Server{})
 	RegisterEdgeProvisioningService(srv)
 	registerHealthAndReflection(srv, ipcpb.HelmsmanControl_ServiceDesc.ServiceName, "foghorn.EdgeProvisioningService")
@@ -4644,15 +4643,6 @@ func registerHealthAndReflection(srv *grpc.Server, serviceNames ...string) {
 }
 
 func appendCommonInterceptors(opts []grpc.ServerOption, cfg GRPCServerConfig) []grpc.ServerOption {
-	// Long-lived streams here (PeerChannel above all) are idle most of the time,
-	// so both ends have to ping to notice a half-open path. MinTime must sit below
-	// the client's 30s interval or the server answers a healthy peer's pings with
-	// a GOAWAY for being too aggressive.
-	opts = append(opts,
-		grpc.KeepaliveParams(keepalive.ServerParameters{Time: 30 * time.Second, Timeout: 10 * time.Second}),
-		grpc.KeepaliveEnforcementPolicy(keepalive.EnforcementPolicy{MinTime: 15 * time.Second}),
-	)
-
 	unaryInterceptors := []grpc.UnaryServerInterceptor{
 		grpcutil.SanitizeUnaryServerInterceptor(),
 	}

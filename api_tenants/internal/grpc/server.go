@@ -60,7 +60,6 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/health"
-	"google.golang.org/grpc/keepalive"
 	"google.golang.org/grpc/peer"
 	"google.golang.org/grpc/reflection"
 	"google.golang.org/grpc/status"
@@ -10870,14 +10869,9 @@ func NewGRPCServer(ctx context.Context, cfg GRPCServerConfig) (*grpc.Server, err
 	}
 	// A peer subscription is silent while the census is unchanged, so a
 	// connection dropped without a FIN would otherwise hold its hub slot for the
-	// life of the process. Pings bound how long that takes to notice, and the
-	// enforcement floor admits the replica-aware clients' pings.
-	opts = append(opts,
-		grpc.KeepaliveParams(keepalive.ServerParameters{Time: 30 * time.Second, Timeout: 10 * time.Second}),
-		grpcutil.ReplicaServerKeepalive(),
-	)
-
-	server := grpc.NewServer(opts...)
+	// life of the process. The shared server keepalive pings bound how long that
+	// takes to notice.
+	server := grpcutil.NewServer(opts...)
 	qmServer := NewQuartermasterServer(cfg.DB, cfg.Logger, cfg.NavigatorClient, cfg.DecklogClient, cfg.PurserClient, cfg.GeoIPReader, cfg.Metrics)
 	if cfg.PeerWatchContext != nil {
 		qmServer.peerWatch.ctx = cfg.PeerWatchContext

@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/grpcutil"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 
 	"google.golang.org/grpc"
@@ -34,6 +35,13 @@ const (
 	// Longest pause before the client waits out its backoff.
 	controlMaxBackoff = 30 * time.Second
 )
+
+// controlKeepalive pings the Foghorn a control stream is open to. Neither the
+// heartbeat Send nor stream.Recv notices a Foghorn whose host died without
+// closing the socket: the Send lands in the kernel buffer and Recv has no
+// deadline. The ping that goes unanswered closes the connection, Recv fails,
+// and the dialer moves on to the next instance of the cell.
+var controlKeepalive = grpcutil.ControlStreamKeepalive()
 
 // parseControlAddrs splits FOGHORN_CONTROL_ADDR into its entries. The value is
 // one host:port or a comma-separated list of them, all instances of one cell.

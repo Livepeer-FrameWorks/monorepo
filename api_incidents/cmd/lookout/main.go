@@ -306,7 +306,7 @@ func newGRPCServer(ctx context.Context, cfg *appconfig.Lookout, logger logging.L
 	if tlsOpt != nil {
 		serverOpts = append(serverOpts, tlsOpt)
 	}
-	grpcServer := grpc.NewServer(serverOpts...)
+	grpcServer := grpcutil.NewServer(serverOpts...)
 	lookoutpb.RegisterLookoutServiceServer(grpcServer, srv)
 	hs := health.NewServer()
 	hs.SetServingStatus("", grpc_health_v1.HealthCheckResponse_SERVING)

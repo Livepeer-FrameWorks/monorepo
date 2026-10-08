@@ -424,7 +424,7 @@ func newGRPCServer(ctx context.Context, cfg *appconfig.Signalman, logger logging
 	if tlsOpt != nil {
 		serverOpts = append(serverOpts, tlsOpt)
 	}
-	grpcSrv := grpc.NewServer(serverOpts...)
+	grpcSrv := grpcutil.NewServer(serverOpts...)
 	signalmanpb.RegisterSignalmanServiceServer(grpcSrv, signalmanServer)
 
 	// gRPC health service so Quartermaster's gRPC probe passes

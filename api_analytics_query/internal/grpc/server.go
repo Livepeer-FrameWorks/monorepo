@@ -8264,7 +8264,6 @@ func NewGRPCServer(ctx context.Context, cfg GRPCServerConfig) (*grpc.Server, err
 			middleware.GRPCStreamAuthInterceptor(grpcAuthCfg),
 			middleware.DelegatedJWTStreamReplayInterceptor(cfg.ReplayDB, "periscope"),
 		),
-		grpcutil.ReplicaServerKeepalive(),
 	}
 	tlsCfg := grpcutil.ServerTLSConfig{
 		CertFile:      cfg.CertFile,
@@ -8284,7 +8283,7 @@ func NewGRPCServer(ctx context.Context, cfg GRPCServerConfig) (*grpc.Server, err
 		opts = append(opts, tlsOpt)
 	}
 
-	server := grpc.NewServer(opts...)
+	server := grpcutil.NewServer(opts...)
 	periscopeServer := &PeriscopeServer{
 		clickhouse: cfg.ClickHouse,
 		logger:     cfg.Logger,

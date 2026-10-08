@@ -657,7 +657,7 @@ func main() {
 		if tlsOpt != nil {
 			opts = append(opts, tlsOpt)
 		}
-		grpcSrv := grpc.NewServer(opts...)
+		grpcSrv := grpcutil.NewServer(opts...)
 		skipperpb.RegisterSkipperChatServiceServer(grpcSrv, grpcChatServer)
 		server.RegisterHealthServer(grpcSrv, health.NewServer())
 		reflection.Register(grpcSrv)

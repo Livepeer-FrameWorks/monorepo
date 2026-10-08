@@ -10164,7 +10164,6 @@ func NewGRPCServer(ctx context.Context, cfg CommodoreServerConfig) (*grpc.Server
 			middleware.GRPCStreamAuthInterceptor(grpcAuthCfg),
 			middleware.DelegatedJWTStreamReplayInterceptor(cfg.DB, "commodore"),
 		),
-		grpcutil.ReplicaServerKeepalive(),
 	}
 	tlsCfg := grpcutil.ServerTLSConfig{
 		CertFile:      cfg.CertFile,
@@ -10184,7 +10183,7 @@ func NewGRPCServer(ctx context.Context, cfg CommodoreServerConfig) (*grpc.Server
 		opts = append(opts, tlsOpt)
 	}
 
-	server := grpc.NewServer(opts...)
+	server := grpcutil.NewServer(opts...)
 	commodoreServer := NewCommodoreServer(cfg)
 
 	// Background worker that replays per-cluster invalidation rows whose

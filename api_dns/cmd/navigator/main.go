@@ -319,7 +319,7 @@ func main() {
 		if grpcTLSOpt != nil {
 			serverOpts = append(serverOpts, grpcTLSOpt)
 		}
-		grpcServer := grpc.NewServer(serverOpts...)
+		grpcServer := grpcutil.NewServer(serverOpts...)
 		dnspb.RegisterNavigatorServiceServer(grpcServer, navigatorServer)
 
 		// gRPC health service so external probes can use gRPC health checks

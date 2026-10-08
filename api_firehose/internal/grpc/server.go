@@ -894,7 +894,7 @@ func NewGRPCServer(ctx context.Context, cfg GRPCServerConfig) (*grpc.Server, err
 	opts = append(opts, grpc.ChainUnaryInterceptor(unaryInterceptor(cfg.Logger), authInterceptor))
 	opts = append(opts, grpc.StreamInterceptor(streamInterceptor(cfg.Logger)))
 
-	server := grpc.NewServer(opts...)
+	server := grpcutil.NewServer(opts...)
 	ipcpb.RegisterDecklogServiceServer(server, NewDecklogServerWithConfig(cfg.Producer, cfg.Logger, cfg.Metrics, DecklogServerConfig{
 		ServiceEventsTopic: cfg.ServiceEventsTopic,
 		RawTriggersTopic:   cfg.RawTriggersTopic,
