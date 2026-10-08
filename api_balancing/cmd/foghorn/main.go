@@ -1388,26 +1388,8 @@ func main() {
 				OriginClusterID: entry.OriginClusterID,
 			}, nil
 		},
-		RegistryArtifact: func(ctx context.Context, artifactHash string) (identity.ArtifactIdentity, error) {
-			entry, resolveErr := streamRegistry.ResolveArtifactByHash(ctx, db, artifactHash)
-			if resolveErr != nil {
-				if errors.Is(resolveErr, control.ErrUnknownArtifact) {
-					return identity.ArtifactIdentity{}, identity.ErrNotFound
-				}
-				return identity.ArtifactIdentity{}, resolveErr
-			}
-			return identity.ArtifactIdentity{
-				ArtifactHash:       entry.ArtifactHash,
-				Kind:               entry.Kind.String(),
-				InternalName:       entry.InternalName,
-				StreamInternalName: entry.StreamInternal,
-				StreamID:           entry.StreamID,
-				TenantID:           entry.TenantID,
-				OriginClusterID:    entry.OriginClusterID,
-				StorageClusterID:   entry.StorageCluster,
-			}, nil
-		},
-		ArtifactTenants: federation.NewDBArtifactTenantResolver(db),
+		RegistryArtifact: streamRegistry.ArtifactIdentityLayer(db),
+		ArtifactTenants:  federation.NewDBArtifactTenantResolver(db),
 		Observe: func(kind, layer, outcome string) {
 			identityResolutions.WithLabelValues(kind, layer, outcome).Inc()
 		},

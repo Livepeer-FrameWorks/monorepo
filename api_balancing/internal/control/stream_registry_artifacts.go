@@ -12,6 +12,7 @@ import (
 
 	"frameworks/api_balancing/internal/artifacts"
 	"frameworks/api_balancing/internal/database/foghorndb"
+	"frameworks/api_balancing/internal/identity"
 )
 
 // ArtifactKind classifies an artifact's lifecycle phase / playback surface.
@@ -152,6 +153,30 @@ func (r *StreamRegistry) ResolveArtifactByHash(ctx context.Context, db artifactD
 	}
 	r.observeResolve("artifact", "error", artifactHash)
 	return ArtifactEntry{}, err
+}
+
+// ArtifactIdentityLayer is the identity facade's registry layer for artifacts: ResolveArtifactByHash over db,
+// with ErrUnknownArtifact reported as the facade's authoritative not-found.
+func (r *StreamRegistry) ArtifactIdentityLayer(db artifactDB) func(context.Context, string) (identity.ArtifactIdentity, error) {
+	return func(ctx context.Context, artifactHash string) (identity.ArtifactIdentity, error) {
+		entry, err := r.ResolveArtifactByHash(ctx, db, artifactHash)
+		if err != nil {
+			if errors.Is(err, ErrUnknownArtifact) {
+				return identity.ArtifactIdentity{}, identity.ErrNotFound
+			}
+			return identity.ArtifactIdentity{}, err
+		}
+		return identity.ArtifactIdentity{
+			ArtifactHash:       entry.ArtifactHash,
+			Kind:               entry.Kind.String(),
+			InternalName:       entry.InternalName,
+			StreamInternalName: entry.StreamInternal,
+			StreamID:           entry.StreamID,
+			TenantID:           entry.TenantID,
+			OriginClusterID:    entry.OriginClusterID,
+			StorageClusterID:   entry.StorageCluster,
+		}, nil
+	}
 }
 
 // ResolveArtifactByInternalName resolves vod+/dvr+/clip artifacts by their

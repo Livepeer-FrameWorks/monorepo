@@ -1231,6 +1231,7 @@ QUARTERMASTER_DOMAIN_EVENTS_REALPG_TESTS := TestQuartermasterDomainEventOutbox_R
 COMMODORE_DOMAIN_EVENTS_REALPG_TESTS := TestCommodoreDomainEventOutbox_RealPG
 PURSER_DOMAIN_EVENTS_REALPG_TESTS := TestPurserDomainEventOutbox_RealPG|TestMollieBillingEventsCommitWithTheirState_RealPG
 FOGHORN_GRPC_REALPG_TESTS := TestRequestedUploadEventsCarryTheCaller_RealPG|TestVodImportRecordsSourceAndQueuesProcessing_RealPG
+FOGHORN_TRIGGERS_REALPG_TESTS := TestStorageEvictionOfDeletedArtifactReachesDecklogWithOwnerTenant_RealPG
 PURSER_HANDLERS_DOMAIN_EVENTS_REALPG_TESTS := TestStripeSubscriptionPaymentFailedRecordedOncePerCharge_RealPG
 PURSER_PRESENTMENT_HANDLERS_REALPG_TESTS := TestUSDCDepositCreditsTheLockedEURAndDocumentsEURVAT_RealPG|TestX402QuoteLocksTheUSDRateForCreditAndDocument_RealPG|TestUSDInvoiceFinalizationPresentsAtTheFinalizationRate_RealPG|TestStripeSettlementFromChargeUpdatedAndRetry_RealPG|TestMollieSettlementReadsBalanceTransactionsBackToTheCursor_RealPG|TestPrepaidTopupReversalLedger_RealPG|TestLatePrepaidCryptoReceiptGoesToReviewWithoutCredit_RealPG|TestX402QuoteExpiryRefusesClaimAndRecordsLateSettlement_RealPG|TestAdvanceBilledTierUpgradeClosesThePeriodAndProratesTheBaseFee_RealPG|TestAdvanceBilledTierDowngradeCreditsTheExcessToThePrepaidBalance_RealPG|TestAdvanceBilledTierChangeReducesAnUnpaidPreviousBaseFeeInvoice_RealPG|TestAdvanceBilledTierChangeWaitsForAPendingPreviousBaseFeeCharge_RealPG|TestOffSessionInvoicePaymentsRecordTheInvoiceLockedEUR_RealPG|TestMollieSettlementRereadsLateRowsWithoutPinningTheCursor_RealPG|TestPurserInvoicedClusterMonthlyFeeProratesByActiveTime_RealPG|TestMollieFirstPaymentUsesThePresentmentCurrencyItWasCreatedUnder_RealPG
 PURSER_PRESENTMENT_HANDLERS_REALPG_TESTS := $(PURSER_PRESENTMENT_HANDLERS_REALPG_TESTS)|TestExpiredCheckoutUnblocksPreviousBaseFee_RealPG|TestMollieCursorAdvancePreservesConcurrentRewind_RealPG
@@ -1252,6 +1253,7 @@ verify-foghorn-test-selection: verify-commodore-placement-test-selection
 	@./scripts/check-go-test-selection.sh api_control ./internal/database/commodoredb '$(COMMODORE_QUERY_CATALOG_REALPG_TESTS)' 'RealPG$$'
 	@./scripts/check-go-test-selection.sh api_balancing ./internal/control '$(FOGHORN_CONTROL_REALPG_TESTS)' 'RealPG$$'
 	@./scripts/check-go-test-selection.sh api_balancing ./internal/grpc '$(FOGHORN_GRPC_REALPG_TESTS)' 'RealPG$$'
+	@./scripts/check-go-test-selection.sh api_balancing ./internal/triggers '$(FOGHORN_TRIGGERS_REALPG_TESTS)' 'RealPG$$'
 	@./scripts/check-go-test-selection.sh api_balancing ./internal/jobs '$(FOGHORN_JOBS_REALPG_TESTS)' 'RealPG$$'
 	@./scripts/check-go-test-selection.sh api_balancing ./internal/federation '$(FOGHORN_FEDERATION_REALPG_TESTS)' 'RealPG$$'
 	@./scripts/check-go-test-selection.sh api_balancing ./internal/mediaauthority '$(FOGHORN_MEDIA_AUTHORITY_REALPG_TESTS)' 'RealPG$$'
@@ -1283,6 +1285,7 @@ verify-schema: verify-foghorn-test-selection
 	@echo "Running real-engine admission-ledger to Redis membership-cleanup proof (Docker: tenant/revision anti-join and exact tombstone purge)..."
 	@cd api_balancing && go test -tags schema_verify -run '$(FOGHORN_FEDERATION_REALPG_TESTS)' -count=1 -timeout 600s ./internal/federation/
 	@cd api_balancing && go test -tags schema_verify -run '$(FOGHORN_MEDIA_AUTHORITY_REALPG_TESTS)' -count=1 -timeout 600s ./internal/mediaauthority/
+	@cd api_balancing && go test -tags schema_verify -run '$(FOGHORN_TRIGGERS_REALPG_TESTS)' -count=1 -timeout 600s ./internal/triggers/
 	@echo "Running real-engine production-path cleanup + purge-ownership + stream-cleanup drainer + thumbnail-lifecycle integration tests (Docker: multipart-vs-stale-freeze cleanup, ownership filter NULL semantics, durable stream-cleanup convergence + local-alias routing, full publish→delete→drain lifecycle)..."
 	@cd api_balancing && go test -tags schema_verify -run '$(FOGHORN_JOBS_REALPG_TESTS)' -count=1 -timeout 600s ./internal/jobs/
 	@echo "Running real-engine Commodore two-phase deletion saga test (Docker: outbox claim/lease/finalize converges a stream deletion through a Foghorn delivery outage — coordination only, Foghorn RPCs faked)..."
@@ -1380,6 +1383,7 @@ verify-schema-migrations-core: verify-foghorn-test-selection
 	@$(CONTRACT_GO_TEST) api_balancing postgres/foghorn-jobs -tags schema_verify -run '$(FOGHORN_JOBS_REALPG_TESTS)' -count=1 -timeout 600s ./internal/jobs/
 	@$(CONTRACT_GO_TEST) api_balancing postgres/foghorn-federation -tags schema_verify -run '$(FOGHORN_FEDERATION_REALPG_TESTS)' -count=1 -timeout 600s ./internal/federation/
 	@$(CONTRACT_GO_TEST) api_balancing postgres/foghorn-media-authority -tags schema_verify -run '$(FOGHORN_MEDIA_AUTHORITY_REALPG_TESTS)' -count=1 -timeout 600s ./internal/mediaauthority/
+	@$(CONTRACT_GO_TEST) api_balancing postgres/foghorn-triggers -tags schema_verify -run '$(FOGHORN_TRIGGERS_REALPG_TESTS)' -count=1 -timeout 600s ./internal/triggers/
 	@$(CONTRACT_GO_TEST) api_billing postgres/purser-stripe -tags schema_verify -run 'TestStripeMeterEventRepository_RealPG' -count=1 -timeout 600s ./internal/stripe/
 	@$(CONTRACT_GO_TEST) api_billing postgres/purser-billing -tags schema_verify -run 'TestLoadEffectiveTierPartialOverrides_RealPG|TestPlacementTariffSnapshot_RealPG|TestPlacementPriceBoundaries_RealPG|TestPlacementAllowanceUsage_RealPG' -count=1 -timeout 600s ./internal/billing/ ./internal/pricing/
 	@$(CONTRACT_GO_TEST) api_billing postgres/purser-tieraccess -tags schema_verify -run 'TestTierAccessEligibilityQuery_RealPG|TestDNSEntitlementUpgradeCatalogAndSuspendedLookup_RealPG' -count=1 -timeout 600s ./internal/tieraccess/
@@ -1488,6 +1492,7 @@ verify-foghorn-db: verify-foghorn-test-selection
 	@$(CONTRACT_GO_TEST) api_balancing postgres/foghorn-jobs -tags schema_verify -run '$(FOGHORN_JOBS_REALPG_TESTS)' -count=1 -timeout 600s ./internal/jobs/
 	@$(CONTRACT_GO_TEST) api_balancing postgres/foghorn-federation -tags schema_verify -run '$(FOGHORN_FEDERATION_REALPG_TESTS)' -count=1 -timeout 600s ./internal/federation/
 	@$(CONTRACT_GO_TEST) api_balancing postgres/foghorn-media-authority -tags schema_verify -run '$(FOGHORN_MEDIA_AUTHORITY_REALPG_TESTS)' -count=1 -timeout 600s ./internal/mediaauthority/
+	@$(CONTRACT_GO_TEST) api_balancing postgres/foghorn-triggers -tags schema_verify -run '$(FOGHORN_TRIGGERS_REALPG_TESTS)' -count=1 -timeout 600s ./internal/triggers/
 	@$(YUGABYTE_FIXTURE) $(MAKE) --no-print-directory -k -j1 verify-yugabyte-foghorn-contracts verify-yugabyte-distributed-foghorn
 
 verify-foghorn-valkey: verify-foghorn-test-selection
@@ -1549,6 +1554,7 @@ verify-schema-postgres: verify-foghorn-test-selection
 	@cd api_balancing && go test -tags schema_verify -run 'TestMembershipTombstoneCleanup_PostgresProofToRedisPurge_RealPG' -count=1 -timeout 600s ./internal/federation/
 	@cd api_balancing && go test -tags schema_verify -run '$(FOGHORN_DOMAIN_EVENTS_REALPG_TESTS)' -count=1 -timeout 600s ./internal/control/
 	@cd api_balancing && go test -tags schema_verify -run '$(FOGHORN_GRPC_REALPG_TESTS)' -count=1 -timeout 600s ./internal/grpc/
+	@cd api_balancing && go test -tags schema_verify -run '$(FOGHORN_TRIGGERS_REALPG_TESTS)' -count=1 -timeout 600s ./internal/triggers/
 
 # Every Yugabyte contract except the RF3 HA and relayout rehearsal clusters runs in one of six lanes. A lane is one
 # single-node engine (YUGABYTE_FIXTURE, data on tmpfs) that runs its contract test processes one after another; the

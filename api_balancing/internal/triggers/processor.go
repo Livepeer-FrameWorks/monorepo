@@ -1508,9 +1508,7 @@ func (p *Processor) handleStorageLifecycleData(trigger *ipcpb.MistTrigger) (stri
 	} else if sld.StreamId != nil && *sld.StreamId != "" {
 		info = p.applyStreamContext(trigger, *sld.StreamId)
 	} else if sld.AssetHash != "" {
-		// Helmsman doesn't have platform context — resolve via Commodore's
-		// unified resolver which accepts clip_hash/dvr_hash/vod_hash.
-		info = p.applyStreamContext(trigger, sld.AssetHash)
+		info = p.applyArtifactHashContext(trigger, sld.AssetHash, "")
 	}
 	if assertedTenantConflicts(assertedTenant, trigger.GetTenantId()) {
 		p.logger.WithFields(logging.Fields{
@@ -1581,8 +1579,7 @@ func (p *Processor) handleDVRLifecycleData(trigger *ipcpb.MistTrigger) (string, 
 		// Fallback: resolve tenant/user context from stream_id (UUID)
 		info = p.applyStreamContext(trigger, *dld.StreamId)
 	} else if dld.DvrHash != "" {
-		// Helmsman may only know the DVR artifact hash at this point.
-		info = p.applyStreamContext(trigger, dld.DvrHash)
+		info = p.applyArtifactHashContext(trigger, dld.DvrHash, "dvr")
 	}
 	if assertedTenantConflicts(assertedTenant, trigger.GetTenantId()) {
 		p.logger.WithFields(logging.Fields{
@@ -6678,6 +6675,41 @@ func (p *Processor) getStreamContext(ctx context.Context, streamName, tenantIDHi
 // which seeds both streamCache and the registry from Commodore.
 func (p *Processor) applyStreamContext(trigger *ipcpb.MistTrigger, streamName string) streamContext {
 	return p.applyStreamContextWithContext(context.Background(), trigger, streamName)
+}
+
+// applyArtifactHashContext enriches a node report that names an artifact only by its hash. The identity facade
+// reads the cell's foghorn.artifacts row before Commodore; a delete tombstones that row with its tenant, so
+// reports a node sends while removing copies of a deleted artifact still resolve the owner Commodore has
+// already forgotten. kindHint pins the facade's Commodore probe. Without a wired facade the Commodore
+// resolver is the only source.
+func (p *Processor) applyArtifactHashContext(trigger *ipcpb.MistTrigger, artifactHash, kindHint string) streamContext {
+	resolver := identity.Default()
+	if resolver == nil {
+		return p.applyStreamContext(trigger, artifactHash)
+	}
+	id, err := resolver.ResolveArtifact(context.Background(), artifactHash, kindHint)
+	if err != nil {
+		p.logger.WithFields(logging.Fields{
+			"artifact_hash": artifactHash,
+			"trigger_type":  trigger.GetTriggerType(),
+			"node_id":       trigger.GetNodeId(),
+			"error":         err,
+		}).Warn("Artifact owner unresolved for node report")
+		return streamContext{}
+	}
+	info := streamContext{
+		TenantID:        id.TenantID,
+		StreamID:        id.StreamID,
+		ArtifactHash:    artifactHash,
+		OriginClusterID: id.OriginClusterID,
+		Source:          "identity_" + id.Source,
+		UpdatedAt:       time.Now(),
+	}
+	// A foghorn.artifacts row without an origin cluster was created by this cell.
+	if info.OriginClusterID == "" && id.Source == "registry" {
+		info.OriginClusterID = p.clusterID
+	}
+	return p.applyResolvedStreamContext(trigger, artifactHash, info)
 }
 
 func (p *Processor) applyStreamContextWithContext(ctx context.Context, trigger *ipcpb.MistTrigger, streamName string) streamContext {
